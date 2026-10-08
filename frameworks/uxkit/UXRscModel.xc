@@ -312,6 +312,10 @@ class UXRscColor : Object
     UXRscIcon* icon;
     UXRscBitblk* bitblk;
     Array<UXRscObject>* children;
+    // A container CLASS (a scroll/split/tab view) holds children though its GEM type says otherwise.
+    // The loader nests by the model tree, so it needs nothing; the editor nests by GEOMETRY and reads
+    // this, set for it when the class is known.
+    bool holdsChildren;
 
     void init(void)
         {
@@ -332,6 +336,7 @@ class UXRscColor : Object
         icon = (UXRscIcon*)0;
         bitblk = (UXRscBitblk*)0;
         children = new Array();
+        holdsChildren = false;
         }
 
     static UXRscObject* make(i32 type, i32 x, i32 y, i32 w, i32 h)
@@ -385,6 +390,11 @@ class UXRscColor : Object
         {
         return type == (i32)UXR_T_BOX || type == (i32)UXR_T_IBOX ||
                type == (i32)UXR_T_BOXCHAR || type == (i32)UXR_T_TITLE;
+        }
+    // The type says it, or the editor marked it a container class.
+    bool canHoldChildren(void)
+        {
+        return self.canHaveChildren() || holdsChildren;
         }
 
     // Give a freshly made object the payload its type needs, so nothing
@@ -647,7 +657,7 @@ class UXRscColor : Object
             for (i32 k = (i32)0; k < n; k = k + (i32)1)
                 {
                 UXRscObject* p = (UXRscObject* ?)all.get((u32)k);
-                if (k == i || !p.canHaveChildren())
+                if (k == i || !p.canHoldChildren())
                     {
                     continue;
                     }

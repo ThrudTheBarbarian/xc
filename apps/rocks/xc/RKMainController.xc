@@ -455,6 +455,7 @@ class RKMainController : Object<UXTableDelegate>
         UXRscTree* t = doc.treeAt(shownTree);
         UXRscObject* o = RKMainController.objectFor(it, cx, cy);
         t.root.addChild(o);
+        self.markContainers(t);
         t.reparentByGeometry();
         doc.ensureLogicalId(t, o);
         if (it.cls != (u8*)0)
@@ -878,6 +879,29 @@ class RKMainController : Object<UXTableDelegate>
         overlay.setHidden(true);
         self.say((u8*)"Choose what to connect");
         }
+    // A container CLASS: a view that holds designed children though its GEM type does not say so.
+    static bool classIsContainer(u8* cls)
+        {
+        return cls != (u8*)0 && (UXRscDoc.seq(cls, (u8*)"UXScrollView") ||
+                                 UXRscDoc.seq(cls, (u8*)"UXSplitView") ||
+                                 UXRscDoc.seq(cls, (u8*)"UXTabView"));
+        }
+    // Tell the model which objects are container classes, so the geometry nesting
+    // (UXRscTree.reparentByGeometry) puts a dropped control inside a scroll/split/tab view the way it
+    // puts one in a box.
+    void markContainers(UXRscTree* t)
+        {
+        if (doc == (UXRscDoc*)0 || t == (UXRscTree*)0)
+            {
+            return;
+            }
+        Array<UXRscObject>* all = t.allObjects();
+        for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+            {
+            UXRscObject* o = (UXRscObject* ?)all.get(i);
+            o.holdsChildren = RKMainController.classIsContainer(doc.classOf(t, o));
+            }
+        }
     // Whether a canvas rect overlaps any control of the layout `t` (its containers excepted).
     bool coversControl(UXRscTree* t, i32 x, i32 y, i32 w, i32 h)
         {
@@ -885,7 +909,7 @@ class RKMainController : Object<UXTableDelegate>
         for (u32 i = (u32)1; i < all.count(); i = i + (u32)1)
             {
             UXRscObject* o = (UXRscObject* ?)all.get(i);
-            if (o.canHaveChildren())
+            if (o.canHoldChildren())
                 {
                 continue;
                 }
@@ -1866,10 +1890,15 @@ class RKMainController : Object<UXTableDelegate>
         // A drop can change what contains what: dropped onto a box it goes in, dragged out it comes
         // out (UXRscTree.reparentByGeometry).  The widgets nest as the model does, so a changed nesting
         // means this form's widgets are rebuilt.
-        if (doc != (UXRscDoc*)0 && doc.treeAt(shownTree).reparentByGeometry() > (i32)0)
+        if (doc != (UXRscDoc*)0)
             {
-            self.rebuildShownPane();
-            dirty = true;
+            UXRscTree* t = doc.treeAt(shownTree);
+            self.markContainers(t);
+            if (t.reparentByGeometry() > (i32)0)
+                {
+                self.rebuildShownPane();
+                dirty = true;
+                }
             }
         sizeCtl.show(o); // the X/Y/W/H fields now read where it landed
         self.placeFrame(o);

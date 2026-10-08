@@ -26,6 +26,7 @@
 #import "UXDatePicker.xc"
 #import "UXBreadcrumb.xc"
 #import "UXTableView.xc"
+#import "UXScrollView.xc"
 #import "UXOutlineView.xc"
 #import "UXCollectionView.xc"
 #import "UXGeometry.xc"
@@ -213,6 +214,10 @@ class UXRsc
             {
             return (Object*)new UXCollectionView();
             }
+        if (UXRscDoc.seq(cls, (u8*)"UXScrollView"))
+            {
+            return (Object*)new UXScrollView();
+            }
         return (Object*)0;
         }
 
@@ -328,6 +333,16 @@ class UXRsc
                 cv.setSpacing((i16)gap, (i16)gap);
                 }
             UXRsc.eachPart(doc.attrIn(formId, logicalId, theme, (u8*)"items"), (pointer)cv, (i32)3);
+            return;
+            }
+        UXScrollView* sc = (UXScrollView* ?)(Object*)v;
+        if (sc != (UXScrollView*)0)
+            {
+            i32 lh = UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"lineHeight", (i32)0);
+            if (lh > (i32)0)
+                {
+                sc.setLineHeight((i16)lh);
+                }
             }
         }
     // ---- autoresizing: how a view follows its container when that is resized ---------------------
@@ -667,9 +682,44 @@ class UXRsc
         v.setAutoresizeMask(UXRsc.autoresizeOf(doc, ni.formId, o.logicalId, (i32)UXRscConnection.themeBit(ni.klass, ni.orient)));
         ni.objs.add(o);
         ni.views.add(v);
+        UXView* inner = UXRsc.childParent(v);
+        i32 extent = (i32)0;
         for (i32 i = (i32)0; i < o.childCount(); i = i + (i32)1)
             {
-            UXRsc.build(doc, ni, order, treeIndex, o.childAt(i), v);
+            UXRscObject* c = o.childAt(i);
+            UXRsc.build(doc, ni, order, treeIndex, c, inner);
+            i32 bottom = (i32)c.y + (i32)c.h;
+            if (bottom > extent)
+                {
+                extent = bottom;
+                }
+            }
+        UXRsc.containerFilled(v, extent);
+        }
+
+    // Where a container's designed children go: a scroll view keeps them in its document, every other
+    // view holds them itself.  (Split and tab views will add their slot routing here.)
+    static UXView* childParent(UXView* v)
+        {
+        UXScrollView* sv = (UXScrollView* ?)(Object*)v;
+        if (sv != (UXScrollView*)0)
+            {
+            UXView* d = sv.document();
+            if (d != (UXView*)0)
+                {
+                return d;
+                }
+            }
+        return v;
+        }
+    // After a container's children are in, tell it how much content it has; a scroll view sizes its
+    // bar from the extent.
+    static void containerFilled(UXView* v, i32 extent)
+        {
+        UXScrollView* sv = (UXScrollView* ?)(Object*)v;
+        if (sv != (UXScrollView*)0)
+            {
+            sv.setDocumentHeight(extent);
             }
         }
 

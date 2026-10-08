@@ -117,11 +117,22 @@ class RKCanvas : Object
             }
         objs.add(o);
         views.add(v);
+        // A container's children go into its content view (a scroll view's document), as the loader
+        // builds them; the container is told the extent once they are all in.
+        UXView* inner = UXRsc.childParent(v);
+        i32 extent = (i32)0;
         i32 n = (i32)1;
         for (i32 i = (i32)0; i < o.childCount(); i = i + (i32)1)
             {
-            n = n + self.realizeInto(o.childAt(i), v);
+            UXRscObject* c = o.childAt(i);
+            n = n + self.realizeInto(c, inner);
+            i32 bottom = c.y + c.h;
+            if (bottom > extent)
+                {
+                extent = bottom;
+                }
             }
+        UXRsc.containerFilled(v, extent);
         return n;
         }
 

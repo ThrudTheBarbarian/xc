@@ -431,6 +431,10 @@ class RKRow : Object
             ks.add(RKChoice.of((u8*)"itemSize"));
             ks.add(RKChoice.of((u8*)"spacing"));
             }
+        else if (UXRscDoc.seq(cls, (u8*)"UXScrollView"))
+            {
+            ks.add(RKChoice.of((u8*)"lineHeight"));
+            }
         return ks;
         }
 

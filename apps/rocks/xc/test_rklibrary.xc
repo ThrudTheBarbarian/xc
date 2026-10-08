@@ -113,6 +113,8 @@ void main(void)
     setAttr(c, (u8*)"columns", (u8*)"Item:180");
     UXRscObject* cvo = place(c, (u8*)"Collection View", (i32)260, (i32)200);
     setAttr(c, (u8*)"items", (u8*)"One|Two|Three");
+    UXRscObject* sco = place(c, (u8*)"Scroll View", (i32)20, (i32)480);
+    UXRscObject* lbo = place(c, (u8*)"Label", (i32)40, (i32)500);
     checkTrue("on the canvas, a UXTextView", (UXTextView* ?)(Object*)c.canvasMap.viewFor(tvo) != (UXTextView*)0);
     checkTrue("a UXDatePicker", (UXDatePicker* ?)(Object*)c.canvasMap.viewFor(dpo) != (UXDatePicker*)0);
     checkTrue("a UXBreadcrumb", (UXBreadcrumb* ?)(Object*)c.canvasMap.viewFor(bco) != (UXBreadcrumb*)0);
@@ -126,6 +128,12 @@ void main(void)
     check("with its column", olw != (UXOutlineView*)0 ? olw.numberOfColumns() : (i32)0, (i32)1);
     checkTrue("a UXCollectionView", cvw != (UXCollectionView*)0);
     check("with its three items", cvw != (UXCollectionView*)0 ? cvw.count() : (i32)0, (i32)3);
+    UXScrollView* scw = (UXScrollView* ?)(Object*)c.canvasMap.viewFor(sco);
+    UXView* lbw = (UXView* ?)c.canvasMap.viewFor(lbo);
+    checkTrue("a UXScrollView", scw != (UXScrollView*)0);
+    check("a control dropped on it becomes its child", sco != (UXRscObject*)0 ? sco.childCount() : (i32)0, (i32)1);
+    checkTrue("and the canvas puts it in the document",
+              scw != (UXScrollView*)0 && lbw != (UXView*)0 && lbw.superview == scw.document());
     checkTrue("a table view is designable", (UXDesignable* ?)(Object*)tblw != (UXDesignable*)0);
     checkTrue("its datasource is an outlet",
               (UXDesignable* ?)(Object*)tblw != (UXDesignable*)0 &&
@@ -161,6 +169,10 @@ void main(void)
     UXCollectionView* cv = (UXCollectionView* ?)(Object*)loadedFor(ni, bt.root.childAt((i32)5));
     checkTrue("the collection view loads as one", cv != (UXCollectionView*)0);
     check("with its three items", cv != (UXCollectionView*)0 ? cv.count() : (i32)0, (i32)3);
+    UXScrollView* scl = (UXScrollView* ?)(Object*)loadedFor(ni, bt.root.childAt((i32)6));
+    checkTrue("the scroll view loads as one", scl != (UXScrollView*)0);
+    check("with the dropped control in its document",
+          scl != (UXScrollView*)0 ? (i32)scl.document().subviews.count() : (i32)0, (i32)1);
     checkTrue("a bad date is no date", UXRsc.dateFrom((u8*)"2026-13-01") == (UXDate*)0 && UXRsc.dateFrom((u8*)"soon") == (UXDate*)0);
 
     win.close();

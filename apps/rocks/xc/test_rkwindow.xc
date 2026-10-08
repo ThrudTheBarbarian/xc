@@ -97,7 +97,7 @@ void main(void)
     checkTrue("Attributes has the rest", c.inspectorCtl.rowNamed((u8*)"Default") != (RKRow*)0 && c.inspectorCtl.rowNamed((u8*)"X") == (RKRow*)0);
 
     Stdio.printf("-- the library\n");
-    check("every item is listed", c.library.count(), (i32)21);
+    check("every item is listed", c.library.count(), (i32)22);
     c.librarySearch.setText((u8*)"FIELD");
     c.onLibrarySearch(c.librarySearch);
     check("a filter narrows it, ignoring case", c.library.count(), (i32)1);
