@@ -149,7 +149,20 @@
   const rgb = (r, g, b) => `rgb(${r},${g},${b})`;
   // alpha is the straight 0..255 value; a == 255 renders as the opaque rgb() form.
   const rgba = (r, g, b, a) => (a >= 255 ? rgb(r, g, b) : `rgba(${r},${g},${b},${a / 255})`);
-  const pixCache = new Map(); // drawPixels: bitmap canvases by address/size/layout
+  const pixCache = new Map(); // drawPixels: bitmap canvases by (address, w, h, format)
+  // drawPixels caches a bitmap canvas by address, but a caller may re-render INTO that address (a
+  // reused buffer, or free + malloc of the same size), and a Canvas2D bitmap built once would show
+  // the first frame forever.  Each entry carries a sampled checksum of the bytes it was built from;
+  // a call re-uploads when they differ.  64 samples spread across the bitmap plus its length, which
+  // is cheap and catches a re-render.
+  const uxBytesum = (src) => {
+    const n = src.length;
+    let s = (2166136261 ^ n) >>> 0;
+    const step = n > 64 ? Math.floor(n / 64) : 1;
+    for (let i = 0; i < n; i += step) s = Math.imul(s ^ src[i], 16777619) >>> 0;
+    if (n > 0) s = Math.imul(s ^ src[n - 1], 16777619) >>> 0;
+    return s >>> 0;
+  };
   const ox = () => (wins.get(target)?.x ?? 0);
   const oy = () => (wins.get(target)?.y ?? 0);
   const font = (fam, size, bold, italic) =>
@@ -448,10 +461,11 @@
     ux_draw_pixels: (p, w, h, fmt, sx, sy, sw, sh, dx, dy, dw, dh, a) => {
       if (w <= 0 || h <= 0 || sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0 || a <= 0) return;
       const key = (p >>> 0) + ':' + w + 'x' + h + ':' + fmt;
-      let c = pixCache.get(key);
-      if (!c) {
-        c = mkCanvas(w, h);
-        const src = U8().subarray(p >>> 0, (p >>> 0) + w * h * 4);
+      const src = U8().subarray(p >>> 0, (p >>> 0) + w * h * 4);
+      const sum = uxBytesum(src);
+      let e = pixCache.get(key);
+      if (!e || e.sum !== sum) {
+        const c = e ? e.c : mkCanvas(w, h);
         const img = new ImageData(w, h);
         if (fmt === 1) {
           for (let i = 0; i < w * h * 4; i += 4) {
@@ -459,13 +473,16 @@
           }
         } else img.data.set(src);
         c.getContext('2d').putImageData(img, 0, 0);
-        if (pixCache.size >= 8) pixCache.delete(pixCache.keys().next().value);
-        pixCache.set(key, c);
+        if (!e) {
+          if (pixCache.size >= 8) pixCache.delete(pixCache.keys().next().value);
+          e = { c: c, sum: sum };
+          pixCache.set(key, e);
+        } else e.sum = sum;
       }
       ctx.save();
       ctx.globalAlpha = a >= 255 ? 1 : a / 255;
       ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(c, sx, sy, sw, sh, ox() + dx, oy() + dy, dw, dh);
+      ctx.drawImage(e.c, sx, sy, sw, sh, ox() + dx, oy() + dy, dw, dh);
       ctx.restore();
     },
     ux_fill_circle: (cx, cy, rad, r, g, b) => {

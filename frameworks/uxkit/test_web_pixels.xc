@@ -108,6 +108,15 @@ void main(void)
     near("...and its right one cyan", (i32)45, (i32)50, (i32)0, (i32)255, (i32)255);
     near("a view paints inside its frame", (i32)140, (i32)62, (i32)255, (i32)0, (i32)0);
     near("...and NOT past it (its drawing is clipped to its frame)", (i32)130, (i32)50, (i32)255, (i32)255, (i32)255);
+    // Re-render into the SAME buffer (same address and size), as a re-drawn view does: the loader
+    // caches the bitmap by address, so it must revalidate or the page would keep the first frame.
+    put((i32)0, (i32)0, (i32)0, (i32)0);
+    put((i32)1, (i32)0, (i32)0, (i32)0);
+    gImg.setPixelRaw((i32)0, (i32)0, (u32)0xFF000000);
+    win.displayAll();
+    wd.webPresentAll();
+    near("a re-render into the same buffer shows (top-left now black)", (i32)15, (i32)15, (i32)0, (i32)0, (i32)0);
+    near("a UXImage re-render shows too", (i32)15, (i32)50, (i32)0, (i32)0, (i32)0);
     if (gFails == (i32)0)
         {
         Stdio.printf("PASS: drawPixels on the web -- region, scale, alpha, both layouts, the right way up\n");
