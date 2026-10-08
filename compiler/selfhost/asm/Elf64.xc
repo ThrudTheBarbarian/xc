@@ -476,6 +476,7 @@ class ElfSharedInfo
         u32 dynsymLink = (u32)0;
         u32 dynOff = (u32)0;
         u32 dynSz = (u32)0;
+        u32 dynLink = (u32)0;
         for (u32 i = (u32)0; i < shnum; i = i + (u32)1)
             {
             u32 sh = shoff + i * shentsize;
@@ -492,11 +493,18 @@ class ElfSharedInfo
                 {
                 dynOff = Elf64.rd32(d, sh + (u32)24);
                 dynSz = Elf64.rd32(d, sh + (u32)32);
+                dynLink = Elf64.rd32(d, sh + (u32)40);
                 }
             }
-        if (dynsymOff == (u32)0 || dynsymLink >= shnum)
+        // The android writer emits .dynamic and .dynstr but no .dynsym section
+        // (its symbols reach the loader through the dynamic segment alone), so
+        // a library of its has a soname to read and no symbol table: the string
+        // table is then the one .dynamic links, and the symbol lists stay empty
+        // (bug 635). A file with neither is not a shared library we can read.
+        u32 strLink = dynsymOff != (u32)0 ? dynsymLink : dynLink;
+        if ((dynsymOff == (u32)0 && dynOff == (u32)0) || strLink >= shnum)
             return (ElfSharedInfo*)0;
-        u32 ls = shoff + dynsymLink * shentsize;
+        u32 ls = shoff + strLink * shentsize;
         u32 strOff = Elf64.rd32(d, ls + (u32)24);
         u32 strSz = Elf64.rd32(d, ls + (u32)32);
 

@@ -11,6 +11,7 @@
 #endif
 #import "XTCommandLineOptions.h"
 #import "XTApkWriter.h"
+#import "XTElfWriter.h"
 #import "XTApkSign.h"
 #import "XTCrypto.h"
 #import "XTMemoryModel.h"
@@ -1585,18 +1586,31 @@ static NSString *androidNeededCsv(XTCommandLineOptions *opts, NSString *base) {
     return [all componentsJoinedByString:@","];
 }
 
+// The name bionic resolves a library by: its DT_SONAME when it has one, else
+// its file name. An android `--emit-lib` records the output's file name as the
+// soname, so the two agree for a library used in place; an installed copy may
+// carry a versioned file name (libUXKit-1-0.so) under the soname libUXKit.so,
+// and naming the file there left dlopen looking for a library that is not in
+// the APK (bug 635).
+static NSString *androidSonameOf(NSString *path) {
+    NSDictionary *info = [XTElfWriter sharedInfoAtPath:path];
+    NSString *sn = info[@"soname"];
+    return sn.length ? sn : path.lastPathComponent;
+}
+
 // The same list with the `.so` libraries the program or library `#import`ed
-// after the base set, each by its file name, which is the soname an android
-// `--emit-lib` records (bug 460). Without them the image had no DT_NEEDED for
-// a library it calls into, and bionic had nothing to resolve those imports in.
+// after the base set, each by its soname (bug 460). Without them the image had
+// no DT_NEEDED for a library it calls into, and bionic had nothing to resolve
+// those imports in.
 static NSString *androidNeededCsvWithImports(XTCommandLineOptions *opts, NSString *base,
                                              NSArray<NSString *> *neededLibs) {
     NSMutableArray<NSString *> *all =
         [[base componentsSeparatedByString:@","] mutableCopy];
-    for (NSString *lib in neededLibs)
-        if ([lib.pathExtension isEqualToString:@"so"]
-            && ![all containsObject:lib.lastPathComponent])
-            [all addObject:lib.lastPathComponent];
+    for (NSString *lib in neededLibs) {
+        if (![lib.pathExtension isEqualToString:@"so"]) continue;
+        NSString *sn = androidSonameOf(lib);
+        if (![all containsObject:sn]) [all addObject:sn];
+    }
     return androidNeededCsv(opts, [all componentsJoinedByString:@","]);
 }
 
@@ -1874,7 +1888,8 @@ static NSDictionary *_Nullable androidDebugKey(void) {
 }
 
 static int linkAndroidApk(const char *argv0, XTCommandLineOptions *opts,
-                          NSString *asmPath, NSString *outPath) {
+                          NSString *asmPath, NSString *outPath,
+                          NSArray<NSString *> *neededLibs) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *support = resolveSupportRoot(argv0, opts);
     if (!support) return 1;
@@ -1930,8 +1945,14 @@ static int linkAndroidApk(const char *argv0, XTCommandLineOptions *opts,
         rc = runChild(ln, @[@"--android", @"so",
                             [NSString stringWithFormat:@"lib%@.so", name],
                             exportsPath,
-                            androidNeededCsv(opts,
-                                @"libc.so,libm.so,libdl.so,liblog.so,libandroid.so"),
+                            // With the libraries the program `#import`s, as the
+                            // --emit-lib image names them: an app built against an
+                            // installed library recorded no DT_NEEDED for it and
+                            // failed at dlopen, "cannot locate symbol UXView$vtbl"
+                            // (bug 635).
+                            androidNeededCsvWithImports(opts,
+                                @"libc.so,libm.so,libdl.so,liblog.so,libandroid.so",
+                                neededLibs),
                             elfPath, soPath]);
         if (rc != 0 && !clangFallbackAllowed())
             return clangFallbackRefused("android in-house --emit-apk link");
@@ -1984,9 +2005,11 @@ static int linkAndroidApk(const char *argv0, XTCommandLineOptions *opts,
                     withLib.UTF8String);
             return 1;
         }
-        NSString *bn = withLib.lastPathComponent;
         // Android loads by soname from lib/<abi>/, so the stored name has to be
-        // the library's own `lib<X>.so` — not a renamed copy of it.
+        // the library's own `lib<X>.so`: its DT_SONAME when it has one (an
+        // installed libUXKit-1-0.so is loaded as libUXKit.so, bug 635), else
+        // the file's name — not a renamed copy of it.
+        NSString *bn = androidSonameOf(withLib);
         if (![bn hasPrefix:@"lib"] || ![bn hasSuffix:@".so"]) {
             fprintf(stderr, "xcc: error: --with-lib '%s' must be named lib<name>.so "
                             "— Android resolves it from lib/arm64-v8a/ by that name\n",
@@ -2075,7 +2098,7 @@ static int linkArm64Executable(const char *argv0, XTCommandLineOptions *opts,
                                NSString *asmPath, NSString *outPath,
                                NSArray<NSString *> *neededLibs) {
     if (opts.androidTarget)
-        return opts.emitApk ? linkAndroidApk(argv0, opts, asmPath, outPath)
+        return opts.emitApk ? linkAndroidApk(argv0, opts, asmPath, outPath, neededLibs)
                             : linkAndroidExecutable(argv0, opts, asmPath, outPath, neededLibs);
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *support = resolveSupportRoot(argv0, opts);
@@ -2322,6 +2345,24 @@ static int linkArm64Shared(const char *argv0, XTCommandLineOptions *opts,
                 [exports addObject:[asmText substringWithRange:[m rangeAtIndex:1]]];
 
             NSString *rtsrc = [NSString stringWithContentsOfFile:rt encoding:NSUTF8StringEncoding error:NULL];
+            // The iOS platform shim rides after the runtime here as it does in
+            // an executable: a library's code calls `_xt_ios_log` and the fetch
+            // functions through Platform.xc, and the app that loads it does not
+            // export its own copy, so a dylib without the shim failed at load
+            // with "symbol not found in flat namespace '__xt_ios_log'" (bug
+            // 634). The shim keeps no state, so every image carrying its own
+            // copy is as sound as every image carrying its own runtime.
+            if (opts.applePlatform) {
+                NSString *ios = [support stringByAppendingPathComponent:
+                                 [opts.applePlatform isEqualToString:@"ios-sim"]
+                                     ? @"ios/runtime/xtios-sim.s" : @"ios/runtime/xtios.s"];
+                NSString *iossrc = [NSString stringWithContentsOfFile:ios encoding:NSUTF8StringEncoding error:NULL];
+                if (!iossrc.length) {
+                    fprintf(stderr, "xcc: error: the iOS runtime shim %s is missing\n", ios.UTF8String);
+                    return 1;
+                }
+                rtsrc = [NSString stringWithFormat:@"%@\n%@", rtsrc, iossrc];
+            }
             NSString *combined = [NSString stringWithFormat:@"%@\n%@\n%@",
                 rtsrc, arm64ClassAllocStubs(asmText), asmText];
             NSString *combinedPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-selfhost-lib.s"];
@@ -2351,6 +2392,12 @@ static int linkArm64Shared(const char *argv0, XTCommandLineOptions *opts,
             resolveUserLinkInputs(opts, fm, libDylibs, libRaw, &libSysLibs);
             NSMutableArray<NSString *> *dylibArgs =
                 [@[@"--dylib", instName, ifacePath, exportsPath, combinedPath, outPath] mutableCopy];
+            // The platform stamp, as the executable and object links pass it:
+            // without it an `-A ios-sim` library carried LC_BUILD_VERSION
+            // platform 1 (macOS) and dyld refused it, "incompatible platform
+            // (have 'macOS', need 'iOS-sim')" (bug 633).
+            if (opts.applePlatform)
+                [dylibArgs addObjectsFromArray:@[@"-platform", opts.applePlatform]];
             // The libraries this one `#import`s (bug 440): the linker records
             // each as an LC_LOAD_DYLIB, so a client that imports only this
             // library still loads them.

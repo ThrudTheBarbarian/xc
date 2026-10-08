@@ -606,9 +606,14 @@ GRP_APK        = src/xtc/link/XTApkWriter.o \
 # drift), which means the driver now has to link it explicitly — this list is
 # hand-picked, not a wildcard.
 GRP_ELFREWRITE = src/xtc/link/XTMachOToElfArm64.o
+# The ELF reader the android link uses to name an imported library by its
+# DT_SONAME (bug 635): XTElfWriter's reader side, and what it links against.
+GRP_ELFREAD    = src/xtc/link/XTElfWriter.o src/xtc/link/XTElfGC.o \
+                 src/xtc/link/XTArArchive.o src/xtc/dwarf/XTDwarfWriter.o \
+                 src/xtc/asm/x86_64/XAX86_64Assembler.o
 
 XTC_OBJS_TRIM = src/xtc/main.o $(GRP_DRV_CORE) $(GRP_DIAG) $(GRP_SRCLOC) $(GRP_APK) \
-                $(GRP_ELFREWRITE)
+                $(GRP_ELFREWRITE) $(GRP_ELFREAD)
 
 $(XTC_BIN): $(XTC_OBJS_TRIM) | $(BIN_DIR)
 	$(CC) $(LDFLAGS) -o $@ $(XTC_OBJS_TRIM)

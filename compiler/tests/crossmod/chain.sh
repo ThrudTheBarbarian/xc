@@ -300,6 +300,39 @@ for pair in libChainSub.so:libChainBase.so libChainUse.so:libChainBase.so \
         || bad "android: ${pair%%:*} has no DT_NEEDED for ${pair#*:}"
 done
 [ $fail = $before ] && echo "PASS  android: libraries import each other, and the two compilers agree"
+
+# ── android: the runtime defines what the macOS runtime defines (bug 634) ──
+# rt-android.s is generated from the same rt.c as rt-macos.s and checked in; a
+# function added to rt.c and regenerated for macOS only is undefined on android,
+# and the app fails at dlopen ("cannot locate symbol _xtc_new_i64").
+before=$fail
+miss=$(comm -23 <(grep -o '^__xtc_[A-Za-z0-9_]*:' "$ROOT/support/arm64/runtime/rt-macos.s" | sed 's/^_//; s/:$//' | sort -u) \
+               <(grep -o '^_xtc_[A-Za-z0-9_]*:' "$ROOT/support/arm64/runtime/rt-android.s" | sed 's/:$//' | sort -u))
+[ -z "$miss" ] || bad "android: rt-android.s lacks runtime functions rt-macos.s defines: $(echo $miss | cut -c1-200)"
+[ $fail = $before ] && echo "PASS  android: the runtime defines every function the macOS runtime defines"
+
+# ── android: an APK names and carries the libraries its program imports (bug 635)
+# The `--emit-apk` payload recorded no DT_NEEDED for an imported library, so
+# dlopen could not resolve its symbols; and `--with-lib` stored a file under
+# its own name when its soname differed (an installed libChainBase-1-0.so is
+# loaded as libChainBase.so). The payload and the stored library must agree
+# between the compilers byte for byte.
+before=$fail
+for c in xcc xcc-xc; do
+    ad="$TMP/apk/$c"; mkdir -p "$ad/v"   # not `d`: the run step below reads it
+    cp "$TMP/android/$c/libChainBase.so" "$ad/v/libChainBase-1-0.so"
+    ( cd "$TMP/android/$c" && "$BIN/$c" -A android --emit-apk -H "$ROOT" -q -L . \
+        --with-lib "$ad/v/libChainBase-1-0.so" -o "$ad/chainrev.apk" "$T/chainrev.xc" ) 2>"$ad.err" \
+        || { bad "android apk: $c could not build chainrev.apk"; sed 's/^/        /' "$ad.err" | head -5; continue; }
+    ( cd "$ad" && unzip -qo chainrev.apk 'lib/arm64-v8a/*' ) 2>/dev/null
+    needed "$ad/lib/arm64-v8a/libchainrev.so" 2>/dev/null | grep -qx libChainBase.so \
+        || bad "android apk: $c's payload has no DT_NEEDED for libChainBase.so"
+    [ -f "$ad/lib/arm64-v8a/libChainBase.so" ] \
+        || bad "android apk: $c stored the versioned --with-lib under its file name, not its soname"
+done
+samefiles "$TMP/apk/xcc/lib/arm64-v8a" "$TMP/apk/xcc-xc/lib/arm64-v8a" libchainrev.so libChainBase.so \
+    || bad "android apk: the two compilers' payloads differ"
+[ $fail = $before ] && echo "PASS  android: an APK names and carries the libraries its program imports"
 before=$fail
 if [ -x "$ADB" ] && [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
     # The printed NUMBERS are compared, not just the labels. They used to be
@@ -319,6 +352,30 @@ if [ -x "$ADB" ] && [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | t
     [ $fail = $before ] && echo "PASS  android: run over adb"
 else
     echo "SKIP  android run: no device or emulator visible to adb"
+fi
+
+# ── ios-sim: a library is stamped for the simulator and carries the shim ─────
+# An `-A ios-sim --emit-lib` library carried LC_BUILD_VERSION platform 1
+# (macOS) and dyld refused to load it (bug 633); and it left out the iOS shim,
+# so its `_xt_ios_log` was "symbol not found in flat namespace" at load (bug
+# 634). Both compilers must agree on the bytes.
+if xcrun --sdk iphonesimulator --show-sdk-path >/dev/null 2>&1; then
+    before=$fail
+    mkdir -p "$TMP/ios-sim"
+    for c in xcc xcc-xc; do
+        d="$TMP/ios-sim/$c"
+        lib ios-sim "$c" "$d" libChainBase.dylib chainbase 2>"$d.err" \
+            || { bad "ios-sim: $c could not build libChainBase.dylib"; sed 's/^/        /' "$d.err" | head -5; continue; }
+        plat=$(otool -l "$d/libChainBase.dylib" | grep -A2 LC_BUILD_VERSION | awk '/platform/ {print $2}')
+        [ "$plat" = 7 ] || bad "ios-sim: $c's library says platform ${plat:-none}, not 7 (iOS simulator)"
+        nm "$d/libChainBase.dylib" 2>/dev/null | grep -q ' [Tt] __xt_ios_log$' \
+            || bad "ios-sim: $c's library does not carry the iOS shim (__xt_ios_log)"
+    done
+    samefiles "$TMP/ios-sim/xcc" "$TMP/ios-sim/xcc-xc" libChainBase.dylib \
+        || bad "ios-sim: the two compilers' libraries differ"
+    [ $fail = $before ] && echo "PASS  ios-sim: a library is stamped for the simulator and carries the shim"
+else
+    echo "SKIP  ios-sim: no iPhoneSimulator SDK"
 fi
 
 echo "--- chain: $fail failing ---"

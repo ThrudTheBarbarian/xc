@@ -92,3 +92,31 @@ if [ "$pass" -eq 0 ]; then
     exit 1
 fi
 
+# The platform stamp of a LIBRARY (bug 633): both writers are told
+# `-platform ios-sim` for one more file, must still agree byte for byte, and the
+# image must say PLATFORM_IOSSIMULATOR (7) — an `-A ios-sim` library carried
+# platform 1 (macOS) and dyld refused to load it. Only the writers are driven
+# here; the drivers' own `-platform` pass is checked by the ios-sim smoke.
+if [ -z "$PATTERN" ]; then
+    f=tests/fixtures/arc_dead_param.xc
+    if "$BIN/xcc-fe" -A arm64 -H . "${RUN_INCS[@]}" -q --emit-lib "$f" -o "$WORK/p.ir" >/dev/null 2>&1 \
+       && "$BIN/xcc-cg-arm64" -O0 -q -o "$WORK/p.s" "$WORK/p.ir" >/dev/null 2>&1; then
+        grep -o '^_[A-Za-z0-9_$]*:' "$WORK/p.s" | tr -d ':' | sort -u > "$WORK/pexp.txt"
+        PIFACE="$WORK/p.ir.iface"; [ -f "$PIFACE" ] || PIFACE=-
+        "$BIN/xcc-ln-arm64" --dylib libX.dylib "$PIFACE" "$WORK/pexp.txt" "$WORK/p.s" "$WORK/pa.dylib" \
+            -platform ios-sim >/dev/null 2>&1
+        "$WORK/xtdylib" libX.dylib "$PIFACE" "$WORK/pexp.txt" "$WORK/p.s" "$WORK/pb.dylib" \
+            -platform ios-sim >/dev/null 2>&1
+        plat=$(otool -l "$WORK/pb.dylib" 2>/dev/null | grep -A2 LC_BUILD_VERSION | awk '/platform/ {print $2}')
+        if cmp -s "$WORK/pa.dylib" "$WORK/pb.dylib" && [ "$plat" = "7" ]; then
+            echo "--- ios-sim library stamp: identical, platform 7"
+        else
+            echo "--- ios-sim library stamp: FAIL (identical=$(cmp -s "$WORK/pa.dylib" "$WORK/pb.dylib" && echo yes || echo no), platform=${plat:-none})"
+            exit 1
+        fi
+    else
+        echo "--- ios-sim library stamp: the oracle could not build $f"
+        exit 1
+    fi
+fi
+

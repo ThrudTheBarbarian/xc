@@ -570,7 +570,7 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     uint16_t shentsize = rd16(58), shnum = rd16(60);
     if (!shnum || shoff + (uint64_t)shnum * shentsize > d.length)
         return nil;
-    uint64_t dynsymOff = 0, dynsymSz = 0, dynsymLink = 0, dynamicOff = 0, dynamicSz = 0;
+    uint64_t dynsymOff = 0, dynsymSz = 0, dynsymLink = 0, dynamicOff = 0, dynamicSz = 0, dynamicLink = 0;
     for (uint16_t i = 0; i < shnum; i++)
         {
         uint64_t s = shoff + (uint64_t)i * shentsize;
@@ -585,11 +585,18 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
             {
             dynamicOff = rd64(s + 24);
             dynamicSz = rd64(s + 32);
+            dynamicLink = rd32(s + 40);
             }
         }
-    if (!dynsymOff || dynsymLink >= shnum)
+    // The android writer emits .dynamic and .dynstr but no .dynsym section (its
+    // symbols reach the loader through the dynamic segment alone), so a
+    // library of its has a soname to read and no symbol table: the string
+    // table is then the one .dynamic links, and the symbol lists stay empty
+    // (bug 635). A file with neither is not a shared library we can read.
+    uint64_t strLink = dynsymOff ? dynsymLink : dynamicLink;
+    if ((!dynsymOff && !dynamicOff) || strLink >= shnum)
         return nil;
-    uint64_t ls = shoff + dynsymLink * shentsize; // .dynstr, the .dynsym's linked strtab
+    uint64_t ls = shoff + strLink * shentsize; // .dynstr, the linked strtab
     uint64_t strOff = rd64(ls + 24), strSz = rd64(ls + 32);
     NSString* (^str)(uint64_t) = ^NSString*(uint64_t off) {
       if (off >= strSz)

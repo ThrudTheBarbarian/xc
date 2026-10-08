@@ -1020,10 +1020,24 @@ Array* androidNeeded(DriverOptions* d, string base)
     return out;
 }
 
+// The name bionic resolves a library by: its DT_SONAME when it has one, else
+// its file name. An android `--emit-lib` records the output's file name as the
+// soname, so the two agree for a library used in place; an installed copy may
+// carry a versioned file name (libUXKit-1-0.so) under the soname libUXKit.so,
+// and naming the file there left dlopen looking for a library that is not in
+// the APK (bug 635).
+String* androidSonameOf(String* path)
+{
+    ElfSharedInfo* info = Elf64.sharedInfo(path);
+    if (info != (ElfSharedInfo*)0 && info.soname() != (String*)0 && info.soname().byteLength() > (u32)0)
+        return info.soname();
+    return path.lastPathComponent();
+}
+
 // The same list with the `.so` libraries the program or library `#import`ed
-// after the base set, each by its file name, which is the soname an android
-// `--emit-lib` records (bug 460). Without them the image had no DT_NEEDED for
-// a library it calls into, and bionic had nothing to resolve those imports in.
+// after the base set, each by its soname (bug 460). Without them the image had
+// no DT_NEEDED for a library it calls into, and bionic had nothing to resolve
+// those imports in.
 Array* androidNeededWithImports(DriverOptions* d, string base)
 {
     String* all = String.withCString(base);
@@ -1031,7 +1045,7 @@ Array* androidNeededWithImports(DriverOptions* d, string base)
     for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
         String* lp = (String*)nl.get(i);
         if (!lp.hasSuffix(String.withCString(".so"))) continue;
-        String* sn = lp.lastPathComponent();
+        String* sn = androidSonameOf(lp);
         Array* have = all.splitOnByte((u8)',');
         bool seen = false;
         for (u32 k = (u32)0; k < have.count(); k = k + (u32)1)
@@ -1085,7 +1099,10 @@ void emitApkPackage(DriverOptions* d, String* prog)
         Stdio.printf("xcc: apk: assembly failed: %s\n", a.why().cString());
         Process.exit((i32)1); return;
     }
-    Array* needed = androidNeeded(d, "libc.so,libm.so,libdl.so,liblog.so,libandroid.so");
+    // With the libraries the program `#import`s, as the --emit-lib image names
+    // them: an app built against an installed library recorded no DT_NEEDED for
+    // it and failed at dlopen, "cannot locate symbol UXView$vtbl" (bug 635).
+    Array* needed = androidNeededWithImports(d, "libc.so,libm.so,libdl.so,liblog.so,libandroid.so");
     Array* exports = new Array();
     exports.add((Object*)String.withCString("ANativeActivity_onCreate"));
     String* soname = String.withCString("lib");
@@ -1148,7 +1165,9 @@ void packageApk(DriverOptions* d, String* name, String* soname, Array* soBytes)
     // An extra prebuilt .so beside the payload (a shim whose onCreate runs
     // first, say), and --lib-name for which of the two the system loads.
     // Android loads from lib/arm64-v8a/ by soname, so the stored name has to
-    // be the library's own lib<X>.so.
+    // be the library's own lib<X>.so: its DT_SONAME when it has one (an
+    // installed libUXKit-1-0.so is loaded as libUXKit.so, bug 635), else the
+    // file's name.
     // Each --with-lib, in the order given (the option repeats).
     Array* extras = new Array();
     for (u32 w = (u32)0; w < c.withLibs().count(); w = w + (u32)1) {
@@ -1158,7 +1177,7 @@ void packageApk(DriverOptions* d, String* name, String* soname, Array* soBytes)
             Stdio.printf("xcc: error: cannot read --with-lib '%s'\n", withLib.cString());
             Process.exit((i32)1); return;
         }
-        String* bn = withLib.lastPathComponent();
+        String* bn = androidSonameOf(withLib);
         if (!bn.hasPrefix(String.withCString("lib")) || !bn.hasSuffix(String.withCString(".so"))) {
             Stdio.printf("xcc: error: --with-lib '%s' must be named lib<name>.so "
                          "— Android resolves it from lib/arm64-v8a/ by that name\n", bn.cString());
@@ -4238,10 +4257,13 @@ void emitModule(DriverOptions* d, IRModule* mod)
     // rt + stubs + program for a dylib and crt + rt + … for an executable.
     if (!d.emitLib()) { combined.append(crt); combined.appendByte((u8)'\n'); }
     combined.append(rt);        combined.appendByte((u8)'\n');
-    // The iOS shim belongs to the PROGRAM, like the crt: a library built for
-    // -A ios/ios-sim is the runtime, stubs and module, the shape the arm64
-    // dylib has.
-    if (isIos(d) && !d.emitLib()) { combined.append(iosRuntimeSource(d)); combined.appendByte((u8)'\n'); }   // stage 4 shim
+    // The iOS shim rides after the runtime in a LIBRARY too: its code calls
+    // `_xt_ios_log` and the fetch functions through Platform.xc, and the app
+    // that loads it does not export its own copy, so a dylib without the shim
+    // failed at load, "symbol not found in flat namespace '__xt_ios_log'" (bug
+    // 634). The shim keeps no state; each image carries its own, as it does
+    // the runtime.
+    if (isIos(d)) { combined.append(iosRuntimeSource(d)); combined.appendByte((u8)'\n'); }   // stage 4 shim
     if (checked != 0) { combined.append(checked); combined.appendByte((u8)'\n'); }
     combined.append(android ? stripLeadingUnderscore(stubs) : stubs);
     combined.appendByte((u8)'\n');
@@ -4336,11 +4358,12 @@ void emitModule(DriverOptions* d, IRModule* mod)
             }
         }
         MachO* m = new MachO();
-        // An EXECUTABLE for -A ios/ios-sim carries the iOS LC_BUILD_VERSION
+        // Every image for -A ios/ios-sim carries the iOS LC_BUILD_VERSION
         // (PLATFORM_IOS 2 / IOSSIMULATOR 7, minos 15.0), as the reference's
-        // xcc-ln-arm64 is told with `-platform`. The dylib path is not stamped
-        // there either, so it is not stamped here (bug 137).
-        if (isIos(d) && !d.emitLib()) m.setApplePlatform(d.arch());
+        // xcc-ln-arm64 is told with `-platform`. The library was left with the
+        // macOS stamp (bug 137 did only the executable), and dyld refused it:
+        // "incompatible platform (have 'macOS', need 'iOS-sim')" (bug 633).
+        if (isIos(d)) m.setApplePlatform(d.arch());
         if (d.emitLib()) {
             // A LIBRARY, not a program: MH_DYLIB, based at 0, with its
             // interface in an `__XTC,__iface` section so `#import <X>` reads
@@ -4372,8 +4395,12 @@ void emitModule(DriverOptions* d, IRModule* mod)
             instName.append(baseNameOf(d.fe().output()));
             // The libraries this one `#import`s (bug 440): each an
             // LC_LOAD_DYLIB, so a client that imports only this library still
-            // loads them, and the imports each exports bind to it.
-            m.setDeps(dylibImportDeps(d, d.fe().neededLibs()));
+            // loads them, and the imports each exports bind to it. Then the
+            // libraries and frameworks on the line and the frameworks the
+            // source imports (bug 591), and on iOS Foundation and libobjc,
+            // which the shim the library now carries calls into (bug 634) —
+            // the same list, in the same order, as an executable's.
+            m.setDeps(arm64LinkDeps(d, d.fe().neededLibs(), new Array()));
             m.dylib(as.textBytes(), instName, exports, iface,
                     as.symbols(), dataBytes, as.dataSyms(), fixups, miLen, objcSects);
         } else {
