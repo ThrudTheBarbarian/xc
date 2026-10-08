@@ -397,6 +397,23 @@ if [ "$XC_PLAT" = osx ]; then
     cmp -s "$TMP/zerobig/xcc" "$TMP/zerobig/xcc-xc" || bad "zerobig: the two compilers' executables differ"
     [ $fail = $before ] && echo "PASS  arm64: a zero-initialised global takes no room in the file"
 fi
+# win64: the same array was 32 MB of `.data` in the file. The assembler now
+# puts `.bss` content after all the data, where the PE writer leaves the
+# trailing zeros out (bug 642).
+if command -v wine >/dev/null 2>&1; then
+    before=$fail
+    mkdir -p "$TMP/zerobig-w64"
+    for c in xcc xcc-xc; do
+        "$BIN/$c" -A win64 -H "$ROOT" -q -o "$TMP/zerobig-w64/$c.exe" "$T/zerobig.xc" 2>"$TMP/zerobig-w64/$c.err" \
+            || { bad "zerobig win64: $c could not build it"; sed 's/^/        /' "$TMP/zerobig-w64/$c.err" | head -5; continue; }
+        sz=$(wc -c < "$TMP/zerobig-w64/$c.exe" | tr -d ' ')
+        [ "$sz" -lt 4000000 ] || bad "zerobig win64: $c's executable is $sz bytes; the zero array should not be in the file"
+        out=$(cd "$TMP/zerobig-w64" && WINEDLLOVERRIDES="winedbg.exe=d" wine "./$c.exe" 2>/dev/null | tr -d '\r')
+        [ "$out" = "1 0 7 2" ] || bad "zerobig win64: $c's program printed '$out', not '1 0 7 2'"
+    done
+    cmp -s "$TMP/zerobig-w64/xcc.exe" "$TMP/zerobig-w64/xcc-xc.exe" || bad "zerobig win64: the two compilers' executables differ"
+    [ $fail = $before ] && echo "PASS  win64: a zero-initialised global takes no room in the file"
+fi
 
 echo "--- chain: $fail failing ---"
 [ "$fail" = 0 ]

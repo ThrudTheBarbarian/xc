@@ -243,6 +243,8 @@ class X86Fixup
     Array* _dataSyms;   // String@
     Array* _globalSyms; // String@
     Map* _commonSyms;   // `.comm` COMMON: name -> [size, byteAlign] (bug 36 x-obj)
+    Array* _bss;        // `.bss` bytes, appended after all the data once the pass is done (bug 642)
+    Array* _bssLabels;  // the labels defined in it, rebased then
     bool _failed;
     String* _why;
     bool _skipSect; // inside a CodeView .debug$ section — emit nothing
@@ -264,6 +266,8 @@ class X86Fixup
         _dataSyms = new Array();
         _globalSyms = new Array();
         _commonSyms = new Map();
+        _bss = new Array();
+        _bssLabels = new Array();
         _failed = false;
         _skipSect = false;
         }
@@ -3124,6 +3128,12 @@ class X86Fixup
                     }
                 if (section == (u32)0)
                     _symbols.set((Hashable*)lbl, (Object*)Number.withU32(_text.count()));
+                else if (section == (u32)2)
+                    {
+                    // bss-relative for now; rebased after the pass (bug 642)
+                    _symbols.set((Hashable*)lbl, (Object*)Number.withU32(_bss.count()));
+                    _bssLabels.add((Object*)lbl);
+                    }
                 else
                     {
                     _symbols.set((Hashable*)lbl, (Object*)Number.withU32(_data.count()));
@@ -3185,6 +3195,24 @@ class X86Fixup
             }
         if (_dwarf != (DwarfWriter*)0 && _dwarf.hasRows())
             DwarfWriter.setPending(_dwarf);
+        // The bss, after all the data (bug 642): its labels become data symbols
+        // at their final offsets. Before the branch resolution, which must see
+        // them as data. Mirrors the reference assembler.
+        if (_bss.count() > (u32)0)
+            {
+            while (_data.count() % (u32)16 != (u32)0)
+                _data.add((Object*)Number.withU32((u32)0));
+            u32 base = _data.count();
+            for (u32 i = (u32)0; i < _bss.count(); i = i + (u32)1)
+                _data.add(_bss.get(i));
+            for (u32 i = (u32)0; i < _bssLabels.count(); i = i + (u32)1)
+                {
+                String* lbl = (String*)_bssLabels.get(i);
+                u32 off = ((Number*)_symbols.get((Hashable*)lbl)).asU32();
+                _symbols.set((Hashable*)lbl, (Object*)Number.withU32(base + off));
+                _dataSyms.add((Object*)lbl);
+                }
+            }
         resolveLocalBranches();
         }
 
@@ -3196,8 +3224,10 @@ class X86Fixup
                                              : l.substringFromByte(sp).trimmed();
         if (d.equals(String.withCString(".text")))
             return (u32)0;
-        if (d.equals(String.withCString(".data")) || d.equals(String.withCString(".bss")))
+        if (d.equals(String.withCString(".data")))
             return (u32)1;
+        if (d.equals(String.withCString(".bss")))
+            return (u32)2;
         // -g: `.file <n> "<path>"` and `.loc <n> <line> [<col>]` are the line
         // table, recorded against the text offset they precede.
         // -g: `.xc_var "<name>" <reg> <offset> "<type>"` (`.xc_param` for a
@@ -3226,7 +3256,8 @@ class X86Fixup
                 _skipSect = true;
                 return section;
                 }
-            return rest.hasPrefix(String.withCString(".text")) ? (u32)0 : (u32)1;
+            return rest.hasPrefix(String.withCString(".text")) ? (u32)0
+                 : (rest.hasPrefix(String.withCString(".bss")) ? (u32)2 : (u32)1);
             }
         if (d.equals(String.withCString(".globl")) || d.equals(String.withCString(".global")))
             {
@@ -3284,6 +3315,9 @@ class X86Fixup
             if (section == (u32)0)
                 while (_text.count() % al != (u32)0)
                     _text.add((Object*)Number.withU32((u32)$90));
+            else if (section == (u32)2)
+                while (_bss.count() % al != (u32)0)
+                    _bss.add((Object*)Number.withU32((u32)0));
             else
                 while (_data.count() % al != (u32)0)
                     _data.add((Object*)Number.withU32((u32)0));
@@ -3297,7 +3331,7 @@ class X86Fixup
     // comparisons builds more temporaries than one frame can hold.
     u32 handleDataDirective(String* d, String* rest, String* l, u32 section)
         {
-        Array* sec = section == (u32)0 ? _text : _data;
+        Array* sec = section == (u32)0 ? _text : (section == (u32)2 ? _bss : _data);
         Array* ops = splitDirectiveOps(rest);
         if (d.equals(String.withCString(".zero")) || d.equals(String.withCString(".space")))
             {
@@ -3362,7 +3396,7 @@ class X86Fixup
                 // read against the wrong section and patch a random address.
                 // The back end only ever emits these in .rodata; say so rather
                 // than corrupt silently if that ever changes.
-                if (section == (u32)0)
+                if (section != (u32)1)
                     {
                     failWith(String.withCString("a symbolic .quad is only supported in data"), l);
                     return section;

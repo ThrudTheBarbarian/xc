@@ -1563,7 +1563,13 @@ static BOOL isPlainIntLiteral(NSString *s) {
     // symbol values, so ONE pass suffices: encode straight through with zeroed
     // fields and record a fixup, rather than iterating to a fixed point the way a
     // branch-relaxing assembler must.
-    int section = 0;                            // 0 = text, 1 = data (.data/.rodata/.bss)
+    int section = 0;                            // 0 = text, 1 = data (.data/.rodata), 2 = bss
+    // `.bss` content is zero and goes LAST in the data blob (bug 642): the
+    // PE writer leaves a trailing run of zeros out of the file, which it
+    // cannot do for zeros that sit between the module's data and the runtime's.
+    // Collected here, appended after everything else once the pass is done.
+    NSMutableData *bss = [NSMutableData data];
+    NSMutableArray<NSString *> *bssLabels = [NSMutableArray array];
     XTDwarfWriter *dwarf = nil;                 // -g: the line table, if the text has one
     NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
 
@@ -1595,7 +1601,8 @@ static BOOL isPlainIntLiteral(NSString *s) {
                 [[l substringFromIndex:sp.location] stringByTrimmingCharactersInSet:ws];
 
             if ([d isEqualToString:@".text"])    { section = 0; continue; }
-            if ([d isEqualToString:@".data"] || [d isEqualToString:@".bss"]) { section = 1; continue; }
+            if ([d isEqualToString:@".data"]) { section = 1; continue; }
+            if ([d isEqualToString:@".bss"])  { section = 2; continue; }
             // -g: `.file <n> "<path>"` and `.loc <n> <line> [<col>]` are the line
             // table, recorded against the text offset they precede.
             // -g: `.xc_var "<name>" <reg> <offset> "<type>"` — a variable of the
@@ -1631,7 +1638,7 @@ static BOOL isPlainIntLiteral(NSString *s) {
             }
             if ([d isEqualToString:@".section"]) {
                 if ([rest hasPrefix:@".debug"]) { skipping = YES; continue; }
-                section = [rest hasPrefix:@".text"] ? 0 : 1; continue;
+                section = [rest hasPrefix:@".text"] ? 0 : ([rest hasPrefix:@".bss"] ? 2 : 1); continue;
             }
             if ([d isEqualToString:@".globl"] || [d isEqualToString:@".global"]) {
                 // Carries no bytes, but names what a shared object exports.
@@ -1670,12 +1677,13 @@ static BOOL isPlainIntLiteral(NSString *s) {
                 // .align is byte-granular on some assemblers but the backend only
                 // ever emits .p2align; treat both as a power of two.
                 uint64_t a = 1ull << n;
-                if (section == 0) { while (text.length % a) emit8(text, 0x90); }   // nop-pad code
-                else              { while (_data.length % a) emit8(_data, 0); }
+                if (section == 0)      { while (text.length % a) emit8(text, 0x90); }   // nop-pad code
+                else if (section == 2) { while (bss.length % a) emit8(bss, 0); }
+                else                   { while (_data.length % a) emit8(_data, 0); }
                 continue;
             }
 
-            NSMutableData *sec = (section == 0) ? text : _data;
+            NSMutableData *sec = (section == 0) ? text : (section == 2 ? bss : _data);
             NSArray<NSString *> *ops = splitDirectiveOps(rest);
             if ([d isEqualToString:@".zero"] || [d isEqualToString:@".space"]) {
                 int64_t n = 0, fill = 0;
@@ -1714,8 +1722,8 @@ static BOOL isPlainIntLiteral(NSString *s) {
                     // offset read against the wrong section and patch a random
                     // address. The backend only ever emits these in .rodata; say
                     // so rather than let it corrupt silently if that changes.
-                    if (section == 0) {
-                        if (error) *error = xerr(@"'%@' in the text section: a symbolic "
+                    if (section != 1) {
+                        if (error) *error = xerr(@"'%@' outside the data section: a symbolic "
                                                   @".quad is only supported in data", l);
                         return nil;
                     }
@@ -1745,6 +1753,7 @@ static BOOL isPlainIntLiteral(NSString *s) {
                 return nil;
             }
             if (section == 0) _symbols[lbl] = @(text.length);
+            else if (section == 2) { _symbols[lbl] = @(bss.length); [bssLabels addObject:lbl]; } // rebased below
             else { _symbols[lbl] = @(_data.length); [_dataSymbolNames addObject:lbl]; }
             continue;
         }
@@ -1794,6 +1803,19 @@ static BOOL isPlainIntLiteral(NSString *s) {
         }
     }
     if (dwarf.hasRows) [XTDwarfWriter setPending:dwarf];
+
+    // The bss, after all the data (bug 642): its labels become data symbols at
+    // their final offsets. Before the branch resolution below, which must see
+    // them as data.
+    if (bss.length) {
+        while (_data.length % 16) emit8(_data, 0);
+        uint64_t base = _data.length;
+        [_data appendData:bss];
+        for (NSString *lbl in bssLabels) {
+            _symbols[lbl] = @(base + _symbols[lbl].unsignedLongLongValue);
+            [_dataSymbolNames addObject:lbl];
+        }
+    }
 
     // Resolve text-local branches here — a `call`/`jcc` to a label in this same
     // __text needs no relocation, and leaving it to the writer would mean every
