@@ -15,7 +15,8 @@
 #import "UXGeometry.xc"
 #import "UXEvent.xc"
 
-#define RK_HANDLE 5 // corner handle, in pixels
+#define RK_HANDLE 7 // corner handle, in pixels
+#define RK_DASH 3   // the marquee frame's on/off run, in pixels
 
 class RKSelectionFrame : UXView
     {
@@ -46,13 +47,22 @@ class RKSelectionFrame : UXView
             return;
             }
 
-        // frame: four 1px fills rather than drawLine, which loses verticals on
-        // the backends whose drawLine is a triangle stand-in (the same reason
-        // UXSplitView draws its divider this way).
-        g.fillRect(UXGeom.make((i16)0, (i16)0, w, (i16)1), (i32)1);
-        g.fillRect(UXGeom.make((i16)0, (i16)(h - (i16)1), w, (i16)1), (i32)1);
-        g.fillRect(UXGeom.make((i16)0, (i16)0, (i16)1, h), (i32)1);
-        g.fillRect(UXGeom.make((i16)(w - (i16)1), (i16)0, (i16)1, h), (i32)1);
+        // frame: a DASHED marquee, lit by short fills rather than drawLine (which loses verticals on
+        // the backends whose drawLine is a triangle stand-in).  The breaks read as "this is a
+        // selection", so a small control's edge is not mistaken for its own border.
+        i16 dash = (i16)RK_DASH;
+        for (i16 x = (i16)0; x < w; x = (i16)((i32)x + (i32)dash * (i32)2))
+            {
+            i16 run = (i16)((i32)x + (i32)dash <= (i32)w ? (i32)dash : (i32)w - (i32)x);
+            g.fillRectRGB(UXGeom.make(x, (i16)0, run, (i16)1), (i32)38, (i32)38, (i32)38);
+            g.fillRectRGB(UXGeom.make(x, (i16)(h - (i16)1), run, (i16)1), (i32)38, (i32)38, (i32)38);
+            }
+        for (i16 y = (i16)0; y < h; y = (i16)((i32)y + (i32)dash * (i32)2))
+            {
+            i16 run = (i16)((i32)y + (i32)dash <= (i32)h ? (i32)dash : (i32)h - (i32)y);
+            g.fillRectRGB(UXGeom.make((i16)0, y, (i16)1, run), (i32)38, (i32)38, (i32)38);
+            g.fillRectRGB(UXGeom.make((i16)(w - (i16)1), y, (i16)1, run), (i32)38, (i32)38, (i32)38);
+            }
 
         i16 s = (i16)RK_HANDLE;
         self.handle(g, (i16)0, (i16)0);
@@ -61,10 +71,15 @@ class RKSelectionFrame : UXView
         self.handle(g, (i16)(w - s), (i16)(h - s));
         }
 
+    // A white square with a dark border, so it stands out on the form AND on the blue canvas.
     void handle(UXGraphics* g, i16 x, i16 y)
         {
         i16 s = (i16)RK_HANDLE;
-        g.fillRect(UXGeom.make(x, y, s, s), (i32)1);
+        g.fillRectRGB(UXGeom.make(x, y, s, s), (i32)255, (i32)255, (i32)255);
+        g.fillRectRGB(UXGeom.make(x, y, s, (i16)1), (i32)38, (i32)38, (i32)38);
+        g.fillRectRGB(UXGeom.make(x, (i16)((i32)y + (i32)s - (i32)1), s, (i16)1), (i32)38, (i32)38, (i32)38);
+        g.fillRectRGB(UXGeom.make(x, y, (i16)1, s), (i32)38, (i32)38, (i32)38);
+        g.fillRectRGB(UXGeom.make((i16)((i32)x + (i32)s - (i32)1), y, (i16)1, s), (i32)38, (i32)38, (i32)38);
         }
 
     // It must never take the keyboard -- that belongs to whatever the

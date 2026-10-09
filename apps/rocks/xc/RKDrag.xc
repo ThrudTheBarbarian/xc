@@ -36,7 +36,9 @@
 #define RK_MODE_MOVE 1
 #define RK_MODE_SIZE 2
 
-#define RK_GRAB 6 // how close to a corner counts as grabbing the handle
+#define RK_GRAB 8 // how close to a corner counts as grabbing the handle (the handle is 7px)
+#define RK_FORM_HANDLE 8 // a form grab handle, in pixels
+#define RK_FORM_OFF 4    // how far outside the form's edge the form handles sit
 
 class RKDrag : Object
     {
@@ -441,6 +443,21 @@ class RKDrag : Object
     i32 lineY1;
     UXRect hot;
 
+    // The form itself, for the four grab handles OUTSIDE its panel.  The controller sets the size on
+    // every show; a press on a handle resizes the form through formResized (the form is the tree
+    // ROOT, which RKDrag will not touch, so this is its own little drag).
+    i32 formW;
+    i32 formH;
+    callback formResized void(i32 w, i32 h, bool done);
+    bool resizing;
+    i32 rCorner;
+    i32 rPressX;
+    i32 rPressY;
+    i32 rStartW;
+    i32 rStartH;
+    i32 rNewW;
+    i32 rNewH;
+
     void init(void)
         {
         super.init();
@@ -453,6 +470,17 @@ class RKDrag : Object
         pressX = (i32)-1;
         pressY = (i32)-1;
         hot = UXGeom.make((i16)0, (i16)0, (i16)0, (i16)0);
+        formW = (i32)0;
+        formH = (i32)0;
+        formResized = (callback void(i32 w, i32 h, bool done))0;
+        resizing = false;
+        rCorner = (i32)-1;
+        rPressX = (i32)0;
+        rPressY = (i32)0;
+        rStartW = (i32)0;
+        rStartH = (i32)0;
+        rNewW = (i32)0;
+        rNewH = (i32)0;
         drag = new RKDrag();
         selection = (UXRscObject*)0;
         tracking = (UXRscObject*)0;
@@ -466,6 +494,18 @@ class RKDrag : Object
     // moved without repainting this one.
     void drawRect(UXGraphics* g, UXRect dirty)
         {
+        // The form's four grab handles, OUTSIDE its panel, drawn whatever else is going on: a view
+        // that covers the form cannot hide them, and a press on one cannot reach a widget underneath.
+        if (formW > (i32)0 && formH > (i32)0)
+            {
+            for (i32 c = (i32)0; c < (i32)4; c = c + (i32)1)
+                {
+                i32 bx = (i32)0;
+                i32 by = (i32)0;
+                RKEditOverlay.formHandle(c, offX, offY, formW, formH, &bx, &by);
+                RKEditOverlay.handle(g, (i16)bx, (i16)by);
+                }
+            }
         if (wiring)
             {
             if (hot.w > (i16)0)
@@ -509,6 +549,14 @@ class RKDrag : Object
         self.toCanvas((i32)e.x, (i32)e.y, &cx, &cy);
         pressX = cx;
         pressY = cy;
+        // A press on a form handle resizes the form, before anything else, since the handles sit
+        // outside the panel and above everything.
+        i32 hc = self.formHandleAt(cx, cy);
+        if (hc >= (i32)0)
+            {
+            self.resizeForm(hc, e);
+            return;
+            }
         if (placeAt && placeAt(cx, cy))
             {
             return;
@@ -612,6 +660,11 @@ class RKDrag : Object
 
     void mouseDragged(UXEvent* e)
         {
+        if (resizing)
+            {
+            self.formStep((i32)e.x, (i32)e.y);
+            return;
+            }
         if (tracking != (UXRscObject*)0)
             {
             self.stepTo(tracking, (i32)e.x, (i32)e.y);
@@ -619,6 +672,12 @@ class RKDrag : Object
         }
     void mouseUp(UXEvent* e)
         {
+        if (resizing)
+            {
+            self.formStep((i32)e.x, (i32)e.y);
+            self.formEnd();
+            return;
+            }
         UXRscObject* o = tracking;
         tracking = (UXRscObject*)0;
         if (o != (UXRscObject*)0)
@@ -669,6 +728,118 @@ class RKDrag : Object
     UXRect onCanvas(UXRect r)
         {
         return UXGeom.make((i16)((i32)r.x + offX), (i16)((i32)r.y + offY), r.w, r.h);
+        }
+
+    // The box of form handle c (0 TL, 1 TR, 2 BL, 3 BR) on the CANVAS, OUTSIDE the panel.  The panel
+    // is at (ox, oy) size (fw, fh); the handle sits offset outside its corner.
+    static void formHandle(i32 c, i32 ox, i32 oy, i32 fw, i32 fh, i32* bx, i32* by)
+        {
+        i32 s = (i32)RK_FORM_HANDLE;
+        i32 off = (i32)RK_FORM_OFF;
+        bx[0] = ox + ((c == (i32)1 || c == (i32)3) ? fw + off : (i32)0 - off - s);
+        by[0] = oy + ((c == (i32)2 || c == (i32)3) ? fh + off : (i32)0 - off - s);
+        }
+    // Which form handle a FORM-RELATIVE point grabs, or -1.
+    i32 formHandleAt(i32 fx, i32 fy)
+        {
+        if (formW <= (i32)0 || formH <= (i32)0)
+            {
+            return (i32)-1;
+            }
+        i32 s = (i32)RK_FORM_HANDLE;
+        i32 off = (i32)RK_FORM_OFF;
+        for (i32 c = (i32)0; c < (i32)4; c = c + (i32)1)
+            {
+            i32 hx = (c == (i32)1 || c == (i32)3) ? formW + off : (i32)0 - off - s;
+            i32 hy = (c == (i32)2 || c == (i32)3) ? formH + off : (i32)0 - off - s;
+            if (fx >= hx && fx < hx + s && fy >= hy && fy < hy + s)
+                {
+                return c;
+                }
+            }
+        return (i32)-1;
+        }
+    // A white square with a dark border, as the selection frame's handles are.
+    static void handle(UXGraphics* g, i16 x, i16 y)
+        {
+        i16 s = (i16)RK_FORM_HANDLE;
+        g.fillRectRGB(UXGeom.make(x, y, s, s), (i32)255, (i32)255, (i32)255);
+        g.fillRectRGB(UXGeom.make(x, y, s, (i16)1), (i32)38, (i32)38, (i32)38);
+        g.fillRectRGB(UXGeom.make(x, (i16)((i32)y + (i32)s - (i32)1), s, (i16)1), (i32)38, (i32)38, (i32)38);
+        g.fillRectRGB(UXGeom.make(x, y, (i16)1, s), (i32)38, (i32)38, (i32)38);
+        g.fillRectRGB(UXGeom.make((i16)((i32)x + (i32)s - (i32)1), y, (i16)1, s), (i32)38, (i32)38, (i32)38);
+        }
+    void setForm(i32 w, i32 h)
+        {
+        formW = w;
+        formH = h;
+        self.setNeedsDisplay();
+        }
+    void setFormResized(callback f void(i32 w, i32 h, bool done))
+        {
+        formResized = f;
+        }
+    // A press on a form handle: resize the form, modally where the toolkit owns the loop.
+    void resizeForm(i32 corner, UXEvent* e)
+        {
+        rCorner = corner;
+        self.toCanvas((i32)e.x, (i32)e.y, &rPressX, &rPressY);
+        rStartW = formW;
+        rStartH = formH;
+        rNewW = formW;
+        rNewH = formH;
+        resizing = true;
+        if (!gDriver.dragTrackingIsModal())
+            {
+            return; // mouseDragged / mouseUp carry it
+            }
+        i32 x = (i32)e.x;
+        i32 y = (i32)e.y;
+        while (gDriver.trackDragStep(&x, &y) != (i32)0)
+            {
+            self.formStep(x, y);
+            }
+        self.formEnd();
+        }
+    void formStep(i32 wx, i32 wy)
+        {
+        if (!resizing)
+            {
+            return;
+            }
+        i32 cx = (i32)0;
+        i32 cy = (i32)0;
+        self.toCanvas(wx, wy, &cx, &cy);
+        i32 dx = cx - rPressX;
+        i32 dy = cy - rPressY;
+        i32 w = (rCorner == (i32)1 || rCorner == (i32)3) ? rStartW + dx : rStartW - dx;
+        i32 h = (rCorner == (i32)2 || rCorner == (i32)3) ? rStartH + dy : rStartH - dy;
+        if (w < (i32)40)
+            {
+            w = (i32)40;
+            }
+        if (h < (i32)40)
+            {
+            h = (i32)40;
+            }
+        rNewW = w;
+        rNewH = h;
+        if (formResized)
+            {
+            formResized(w, h, false);
+            }
+        }
+    void formEnd(void)
+        {
+        if (!resizing)
+            {
+            return;
+            }
+        resizing = false;
+        if (formResized)
+            {
+            formResized(rNewW, rNewH, true);
+            }
         }
 
     UXRscObject* currentSelection(void)

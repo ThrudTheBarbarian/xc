@@ -111,6 +111,18 @@ void main(void)
     checkTrue("the overlay is the canvas's topmost child", isTopmost(c.canvas, (UXView*)c.overlay));
     checkTrue("and a click on it takes the keyboard, for Delete", c.overlay.acceptsFirstResponder());
     checkTrue("it knows which form it is editing", c.overlay.drag.root == root0);
+    // The form's four grab handles sit OUTSIDE its panel, so a view that covers the form cannot hide
+    // them and a press on one cannot reach a widget underneath.
+    check("the top-left form handle is outside the corner", c.overlay.formHandleAt((i32)-6, (i32)-6), (i32)0);
+    check("...the top-right", c.overlay.formHandleAt(root0.w + (i32)6, (i32)-6), (i32)1);
+    check("...the bottom-right", c.overlay.formHandleAt(root0.w + (i32)6, root0.h + (i32)6), (i32)3);
+    check("and nothing in the form's middle", c.overlay.formHandleAt((i32)10, (i32)10), (i32)-1);
+    // A form-handle drag resizes the form (the tree ROOT), which RKDrag never touches.
+    i32 formW0 = root0.w;
+    i32 formH0 = root0.h;
+    c.onFormResized(formW0 + (i32)40, formH0 + (i32)20, true);
+    check("a form-handle drag resizes the form", root0.w, formW0 + (i32)40);
+    check("...its height too", root0.h, formH0 + (i32)20);
     // Asserted HERE, before anything in this test touches them: an editor
     // whose snapping has to be switched on is an editor whose first form is
     // one pixel out everywhere.

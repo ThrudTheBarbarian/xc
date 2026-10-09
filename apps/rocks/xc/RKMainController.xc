@@ -116,6 +116,7 @@ class RKMainController : Object<UXTableDelegate>
     UXRscDoc* pressCopy;
     i32 pressSel;
     bool dragging;
+    bool resizingForm; // a form-handle drag is in progress (one undo snapshot per drag)
 
     // ---- state -------------------------------------------------------------
     // Deliberately not a view: the controller owns MODEL state and asks the
@@ -195,6 +196,7 @@ class RKMainController : Object<UXTableDelegate>
         selKind = (i32)0;
         selTop = (i32)0;
         overlay.placeAt = &self.placeAt;
+        overlay.setFormResized(&self.onFormResized);
         overlay.deleteKey = &self.deleteSelection;
         deviceBar = (UXSegmentedControl*)0;
         inspectorTabs = (UXSegmentedControl*)0;
@@ -204,6 +206,7 @@ class RKMainController : Object<UXTableDelegate>
         pressCopy = (UXRscDoc*)0;
         pressSel = (i32)-1;
         dragging = false;
+        resizingForm = false;
         lastSaid = (Data*)0;
         formOutline = (UXOutlineView*)0;
         canvas = (UXView*)0;
@@ -509,6 +512,7 @@ class RKMainController : Object<UXTableDelegate>
         l.appendBytes(hs, UXRscTree.len(hs));
         l.appendByte((u8)0);
         backdrop.showForm(t.root.w, t.root.h, UXStr.cstr(l));
+        overlay.setForm(t.root.w, t.root.h); // the form's grab handles follow its size
         }
     // A device layout's panel starts the size of a typical one of its kind, not the desktop's.
     static void deviceSize(UXRscTree* t, i32 klass, i32 orient)
@@ -1852,6 +1856,35 @@ class RKMainController : Object<UXTableDelegate>
             }
         self.selectObject(o);
         overlay.setSelection(o);
+        }
+
+    // A form-handle drag: the form is the tree ROOT, so its size lives on root.w/h (RKDrag never
+    // touches the root).  One snapshot per drag, pushed on release, as a widget drag does.
+    void onFormResized(i32 w, i32 h, bool done)
+        {
+        UXRscTree* t = self.shownTreeOrNull();
+        if (doc == (UXRscDoc*)0 || t == (UXRscTree*)0 || t.root == (UXRscObject*)0)
+            {
+            return;
+            }
+        if (!resizingForm)
+            {
+            resizingForm = true;
+            pressCopy = doc.deepCopy();
+            }
+        t.root.w = w;
+        t.root.h = h;
+        dirty = true;
+        self.updatePanel(); // the panel and its label follow the form
+        if (done)
+            {
+            if (pressCopy != (UXRscDoc*)0)
+                {
+                history.push(pressCopy, (u8*)"Resize form", shownTree, (i32)-1);
+                pressCopy = (UXRscDoc*)0;
+                }
+            resizingForm = false;
+            }
         }
 
     // One step of a live drag.  The widget and the frame move; the INSPECTOR
