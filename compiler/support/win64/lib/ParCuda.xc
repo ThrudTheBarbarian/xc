@@ -277,40 +277,59 @@ class ParCuda
             u32 group = (u32)256;
             u32 grid = (u32)((l.threads + (i64)group - (i64)1) / (i64)group);
             ok = _launch(fn, grid, (u32)1, (u32)1, group, (u32)1, (u32)1, (u32)0, (pointer)0, &params[0],
-                         (pointer*)0) == (i32)0 &&
-                 _sync() == (i32)0;
-            gpuUs = ParDevice.nowUs() - gpuStart;
+                         (pointer*)0) == (i32)0;
             }
 
         // The arrays come back; the partials (one per thread, or per
         // workgroup when the kernel reduced on the device) fold in order.
+        // No separate cuCtxSynchronize first (bug 645): a copy from the
+        // device waits for the kernel, and the extra round trip cost about
+        // 30 us a run. A failed kernel's error is sticky, so the first copy
+        // after it fails too: every copy is checked, and nothing is folded
+        // unless all of them worked. With nothing to copy back, the
+        // synchronise stays, so the run is still known to have finished.
+        u8* parts[16];
+        u32 nparts = (u32)0;
         if (ok)
             {
+            u32 copies = (u32)0;
             u32 at = (u32)2;
-            for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            for (u32 i = (u32)0; i < l.nbuf && ok; i = i + (u32)1)
                 {
                 if (l.bufIn[i] == (i64)0)
-                    _toHost(*(pointer*)(obj + l.bufOff[i]), dev[at], (u64)l.bufLen[i]);
+                    {
+                    ok = _toHost(*(pointer*)(obj + l.bufOff[i]), dev[at], (u64)l.bufLen[i]) == (i32)0;
+                    copies = copies + (u32)1;
+                    }
                 at = at + (u32)1;
                 }
-            for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            for (u32 i = (u32)0; i < l.nglob && ok; i = i + (u32)1)
                 {
                 if (l.globIn[i] == (i64)0)
-                    _toHost(l.globPtr[i], dev[at], (u64)l.globLen[i]);
+                    {
+                    ok = _toHost(l.globPtr[i], dev[at], (u64)l.globLen[i]) == (i32)0;
+                    copies = copies + (u32)1;
+                    }
                 at = at + (u32)1;
                 }
-            u8* parts[16];
-            for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)
+            for (u32 i = (u32)0; i < l.nred && ok; i = i + (u32)1)
                 {
                 i64 bytes = l.nback * l.redStride[i];
                 parts[i] = (u8*)malloc((u64)bytes);
-                _toHost((pointer)parts[i], dev[at], (u64)bytes);
+                nparts = i + (u32)1;
+                ok = _toHost((pointer)parts[i], dev[at], (u64)bytes) == (i32)0;
+                copies = copies + (u32)1;
                 at = at + (u32)1;
                 }
-            l.fold(proto, &parts[0]);
-            for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)
-                free((pointer)parts[i]);
+            if (ok && copies == (u32)0)
+                ok = _sync() == (i32)0;
+            // The kernel and what came back: the copies are what waited for it.
+            gpuUs = ParDevice.nowUs() - gpuStart;
+            if (ok)
+                l.fold(proto, &parts[0]);
             }
+        for (u32 i = (u32)0; i < nparts; i = i + (u32)1)
+            free((pointer)parts[i]);
         // The device memory stays for the next run (gParCuDev).
         if (!ok)
             {
