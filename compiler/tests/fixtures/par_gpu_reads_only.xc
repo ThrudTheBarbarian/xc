@@ -9,7 +9,7 @@ i32 main(i32 argc, u8** argv)
     {
     u32 src[4096];
     u32 dst[4096];
-    for (u32 i in 0..4096) { table[i] = i * 7; src[i] = i + (u32)argc; dst[i] = 1; out[i] = 2; }
+    for (u32 i in 0..4096) { table[i] = i * 7; src[i] = i + (u32)1; dst[i] = 1; out[i] = 2; }
     par
         {
         for (u32 i in 0..4096)
