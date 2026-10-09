@@ -120,7 +120,7 @@ void main(void)
     check("a right-anchored control follows the far edge", (i32)far.x, (i32)50);
 
     Stdio.printf("-- the library\n");
-    check("every item is listed", c.library.count(), (i32)25);
+    check("every item is listed", c.library.count(), (i32)28);
     checkTrue("a Group Box is offered", c.library.named((u8*)"Group Box") != (RKLibraryItem*)0);
     c.librarySearch.setText((u8*)"FIELD");
     c.onLibrarySearch(c.librarySearch);

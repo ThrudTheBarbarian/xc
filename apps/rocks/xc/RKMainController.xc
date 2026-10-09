@@ -38,6 +38,7 @@
 #import "RKWiring.xc"
 #import "RKConnect.xc"
 #import "RKVariants.xc"
+#import "RKMenus.xc"
 #import "RKBackdrop.xc"
 #import "UXSegmentedControl.xc"
 
@@ -457,6 +458,17 @@ class RKMainController : Object<UXTableDelegate>
             self.say((u8*)"Added an object: give it a class");
             return;
             }
+        // A menu is a tree, not a control placed on a form: picking it makes a new menu.
+        if (it.type == (i32)RKLIB_MENU)
+            {
+            self.addMenu();
+            return;
+            }
+        if (it.type == (i32)RKLIB_MENU_ITEM || it.type == (i32)RKLIB_MENU_SEP)
+            {
+            self.addMenuItem(it.type == (i32)RKLIB_MENU_SEP);
+            return;
+            }
         placing = it;
         self.sayAbout((u8*)"Click in the form to place a ", it.name);
         }
@@ -489,6 +501,52 @@ class RKMainController : Object<UXTableDelegate>
         overlay.setSelection(o);
         self.sayAbout((u8*)"Added a ", it.name);
         return true;
+        }
+
+    // ---- menus ------------------------------------------------------------------------------
+    // A menu is an ordinary tree (UXR_K_MENU) in the classic GEM shape (see RKMenus.xc).  Picking
+    // "Menu" makes a new one with a File menu and Save/Quit; the shown menu is where "Menu Item" and
+    // "Menu Separator" go.  More than one may live in a document; the MAIN menu is the app-delegate's.
+    void addMenu(void)
+        {
+        if (doc == (UXRscDoc*)0)
+            {
+            return;
+            }
+        self.willEdit((u8*)"Add Menu", (Object*)0);
+        UXRscTree* t = RKMenu.newMenu(doc, (u8*)"Menu");
+        RKMenu.addTitle(t, (u8*)"File");
+        RKMenu.addItem(t, (i32)0, (u8*)"New");
+        RKMenu.addItem(t, (i32)0, (u8*)"-");
+        RKMenu.addItem(t, (i32)0, (u8*)"Quit");
+        dirty = true;
+        self.showResource(doc, doc.indexOfTree(t));
+        self.say((u8*)"Added a menu: it is a tree, so more may be added and one swapped in");
+        }
+    // Append to the shown menu's selected title (else its last): a command, or a separator.
+    void addMenuItem(bool sep)
+        {
+        UXRscTree* t = self.shownTreeOrNull();
+        if (t == (UXRscTree*)0 || !t.isMenu())
+            {
+            self.say((u8*)"Select a menu first, then add items to it");
+            return;
+            }
+        i32 n = RKMenu.titleCount(t);
+        i32 which = n > (i32)0 ? n - (i32)1 : (i32)0;
+        for (i32 i = (i32)0; i < n; i = i + (i32)1)
+            {
+            if (t.root.childAt((i32)0).childAt(i) == selected)
+                {
+                which = i;
+                }
+            }
+        self.willEdit(sep ? (u8*)"Add Separator" : (u8*)"Add Menu Item", (Object*)0);
+        RKMenu.addItem(t, which, sep ? (u8*)"-" : (u8*)"Item");
+        dirty = true;
+        self.rebuildShownPane();
+        self.showResource(doc, shownTree);
+        self.say(sep ? (u8*)"Added a separator" : (u8*)"Added a menu item");
         }
 
     // ---- the backdrop and the form's panel -------------------------------------------------------

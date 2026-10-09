@@ -8,6 +8,9 @@
 #import "UXRscModel.xc"
 
 #define RKLIB_OBJECT -1 // the `type` of the Object entry: not a control
+#define RKLIB_MENU -2      // make a new menu (a menu tree) in the document
+#define RKLIB_MENU_ITEM -3 // append a command to the shown menu's selected title
+#define RKLIB_MENU_SEP -4  // append a separator to it
 
 class RKLibraryItem : Object
     {
@@ -78,6 +81,9 @@ class RKLibrary : Object<UXTableDataSource>
         all.add(RKLibraryItem.make((u8*)"View", (i32)UXR_T_IBOX, (i32)200, (i32)120, (u8*)0, (u8*)"Groups controls, unseen"));
         all.add(RKLibraryItem.make((u8*)"Custom View", (i32)UXR_T_USERDEF, (i32)200, (i32)120, (u8*)0, (u8*)"A view of a class you name"));
         all.add(RKLibraryItem.make((u8*)"Object", (i32)RKLIB_OBJECT, (i32)0, (i32)0, (u8*)0, (u8*)"An object of a class you name: a controller"));
+        all.add(RKLibraryItem.make((u8*)"Menu", (i32)RKLIB_MENU, (i32)0, (i32)0, (u8*)0, (u8*)"A menu bar you can name and fill"));
+        all.add(RKLibraryItem.make((u8*)"Menu Item", (i32)RKLIB_MENU_ITEM, (i32)0, (i32)0, (u8*)0, (u8*)"A command in the shown menu"));
+        all.add(RKLibraryItem.make((u8*)"Menu Separator", (i32)RKLIB_MENU_SEP, (i32)0, (i32)0, (u8*)0, (u8*)"A divider between commands"));
         self.refilter();
         }
 
