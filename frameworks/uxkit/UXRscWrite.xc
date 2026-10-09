@@ -361,7 +361,7 @@ class UXRscWriter : Object
         Data* file = Data.withBytes(out, (u32)(total));
         if (r.formCount() > (i32)0 || r.classOverrides.count() > (u32)0 || r.topObjects.count() > (u32)0 ||
             r.connections.count() > (u32)0 || r.extSections.count() > (u32)0 || UXRscWriter.namesSection(r) != (Data*)0 ||
-            (r.ownerClass != (u8*)0 && r.ownerClass[0] != (u8)0) || r.attrs.count() > (u32)0)
+            (r.ownerClass != (u8*)0 && r.ownerClass[0] != (u8)0) || r.attrs.count() > (u32)0 || r.mainMenu >= (i32)0)
             {
             file.append(self.rscChunk(r));
             }
@@ -584,6 +584,13 @@ class UXRscWriter : Object
                 {
                 graph.appendByte((u8)0);
                 }
+            nExt = nExt + (i32)1;
+            }
+        if (r.mainMenu >= (i32)0)
+            {
+            UXRscWriter.be32(graph, (i32)$4D454E55); // 'MENU': the index of the main-menu tree
+            UXRscWriter.be32(graph, (i32)2);
+            UXRscWriter.be16(graph, r.mainMenu);
             nExt = nExt + (i32)1;
             }
         for (u32 i = (u32)0; i < r.extSections.count(); i = i + (u32)1)

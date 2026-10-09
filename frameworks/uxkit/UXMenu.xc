@@ -17,6 +17,7 @@
 class UXMenuItem : Object
     {
     u8* title;
+    u8* name;      // the action this item carries, by name (the loader's; "" = none)
     bool isSeparator;
     bool enabled;
     bool checked;
@@ -27,12 +28,24 @@ class UXMenuItem : Object
     void init(void)
         {
         title = "";
+        name = (u8*)"";
         isSeparator = false;
         enabled = true;
         checked = false;
         key = (u8)0;
         keyShift = false;
         action = (callback void(UXMenuItem * sender))0;
+        }
+
+    // The action this item carries, by name: a menu item loaded from a document holds the name its
+    // controller wires (a menu item is not a control, so the wiring is the controller's own).
+    void setName(u8* n)
+        {
+        name = n != (u8*)0 ? n : (u8*)"";
+        }
+    u8* actionName(void)
+        {
+        return name;
         }
 
     // A keyboard shortcut: the platform's command key (Command on macOS and iOS, Control
@@ -118,6 +131,37 @@ class UXMenuItem : Object
         items = new Array();
         }
 
+    // The item carrying action `name`, or 0.
+    UXMenuItem* itemNamed(u8* n)
+        {
+        if (n == (u8*)0)
+            {
+            return (UXMenuItem*)0;
+            }
+        for (u32 i = (u32)0; i < items.count(); i = i + (u32)1)
+            {
+            UXMenuItem* it = (UXMenuItem* ?)items.get(i);
+            if (UXMenu.same(it.name, n))
+                {
+                return it;
+                }
+            }
+        return (UXMenuItem*)0;
+        }
+    static bool same(u8* a, u8* b)
+        {
+        if (a == (u8*)0 || b == (u8*)0)
+            {
+            return a == b;
+            }
+        i32 i = (i32)0;
+        while (a[i] != (u8)0 && a[i] == b[i])
+            {
+            i = i + (i32)1;
+            }
+        return a[i] == b[i];
+        }
+
     UXMenuItem* addItem(u8* t, callback a void(UXMenuItem* sender))
         {
         UXMenuItem* it = new UXMenuItem();
@@ -185,6 +229,20 @@ class UXMenuItem : Object
         m.title = title;
         menus.add(m);
         return m;
+        }
+
+    // The item carrying action `name`, wherever it is in the bar, or 0.
+    UXMenuItem* itemNamed(u8* name)
+        {
+        for (u32 i = (u32)0; i < menus.count(); i = i + (u32)1)
+            {
+            UXMenuItem* it = ((UXMenu* ?)menus.get(i)).itemNamed(name);
+            if (it != (UXMenuItem*)0)
+                {
+                return it;
+                }
+            }
+        return (UXMenuItem*)0;
         }
 
     // Hand the model to GEM and show the bar.  From here on the bar is GEM's problem.

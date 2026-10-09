@@ -30,6 +30,7 @@
 #import "UXSplitView.xc"
 #import "UXTabView.xc"
 #import "UXNavigationView.xc"
+#import "UXMenu.xc"
 #import "UXOutlineView.xc"
 #import "UXCollectionView.xc"
 #import "UXGeometry.xc"
@@ -581,6 +582,61 @@ class UXRsc
             orient = gDriver.orientation();
             }
         return UXRsc.loadDocAs(doc, formId, klass, orient, owner, into);
+        }
+
+    // ---- menus ----------------------------------------------------------------------------------
+    // A menu is a tree in the classic GEM shape: a root box holding a bar box of G_TITLEs (one per
+    // menu) and an active box of drop-down boxes (one per menu, same index), each holding its
+    // G_STRING items.  loadMenuBar turns that tree into a UXMenuBar the app can install
+    // (UXApplication.setMenuBar); item i of menu n carries the action its object was named for
+    // (`itemNamed`), which the app's controller wires -- a menu item is not a control, so the wiring
+    // is the controller's own (a generated wireAction for menu items is a compiler matter).
+    static UXMenuBar* loadMenuBar(UXRscDoc* doc, i32 treeIndex)
+        {
+        if (doc == (UXRscDoc*)0 || treeIndex < (i32)0 || treeIndex >= doc.treeCount())
+            {
+            return (UXMenuBar*)0;
+            }
+        UXRscTree* t = doc.treeAt(treeIndex);
+        if (!t.isMenu() || t.root == (UXRscObject*)0 || t.root.childCount() < (i32)2)
+            {
+            return (UXMenuBar*)0;
+            }
+        UXRscObject* bar = t.root.childAt((i32)0);
+        UXRscObject* active = t.root.childAt((i32)1);
+        UXMenuBar* mb = new UXMenuBar();
+        for (i32 i = (i32)0; i < bar.childCount(); i = i + (i32)1)
+            {
+            UXRscObject* ti = bar.childAt(i);
+            UXMenu* m = mb.addMenu(ti.text != (u8*)0 && ti.text[0] != (u8)0 ? ti.text : (u8*)"Menu");
+            if (i >= active.childCount())
+                {
+                continue;
+                }
+            UXRscObject* dd = active.childAt(i);
+            for (i32 k = (i32)0; k < dd.childCount(); k = k + (i32)1)
+                {
+                UXRscObject* io = dd.childAt(k);
+                u8* tx = io.text != (u8*)0 ? io.text : (u8*)"";
+                if (tx[0] == (u8)'-' && tx[1] == (u8)0)
+                    {
+                    m.addSeparator();
+                    continue;
+                    }
+                UXMenuItem* it = m.addItem(tx, (callback void(UXMenuItem * sender))0);
+                if (io.name != (u8*)0 && io.name[0] != (u8)0)
+                    {
+                    it.setName(io.name);
+                    }
+                }
+            }
+        return mb;
+        }
+    // The document's MAIN menu, built (the tree its 'MENU' section names).  0 when it has none.
+    static UXMenuBar* loadMainMenu(UXRscDoc* doc)
+        {
+        UXRscTree* t = doc != (UXRscDoc*)0 ? doc.mainMenuTree() : (UXRscTree*)0;
+        return t != (UXRscTree*)0 ? UXRsc.loadMenuBar(doc, doc.indexOfTree(t)) : (UXMenuBar*)0;
         }
     // For a given theme: what a test, or the designer's preview, asks for.
     static UXRscInstance* loadDocAs(UXRscDoc* doc, i32 formId, i32 klass, i32 orient, UXDesignable* owner,

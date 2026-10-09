@@ -160,7 +160,7 @@ class RKOutlineNode : Object
                     }
                 }
             UXRscTree* st = r.treeAt(shown);
-            RKOutlineNode* n = RKOutlineNode.make((i32)RKON_FORM, RKOutline.treeLabel(f != (UXRscForm*)0 ? tr : st, t));
+            RKOutlineNode* n = RKOutlineNode.make((i32)RKON_FORM, RKOutline.treeLabel(f != (UXRscForm*)0 ? tr : st, t, r.mainMenuTree() == tr));
             n.treeIndex = shown;
             if (st.root != (UXRscObject*)0)
                 {
@@ -207,32 +207,53 @@ class RKOutlineNode : Object
         return to.cls != (u8*)0 && to.cls[0] != (u8)0 ? to.cls : (u8*)"Object";
         }
 
-    // A form's row: its name, else "dialog 3".
-    static u8* treeLabel(UXRscTree* t, i32 i)
+    // A form's row: its name, else "dialog 3".  A menu that is the application's main one says so.
+    static u8* treeLabel(UXRscTree* t, i32 i, bool main)
         {
+        u8* base = (u8*)0;
         if (t.name != (u8*)0 && t.name[0] != (u8)0)
             {
-            return t.name;
+            base = t.name;
             }
-        u8* kind = t.isMenu() ? (u8*)"menu" : (u8*)"dialog";
-        u8* buf = new u8[(u32)32];
-        i32 n = (i32)0;
-        while (kind[n] != (u8)0)
+        else
             {
-            buf[n] = kind[n];
+            u8* kind = t.isMenu() ? (u8*)"menu" : (u8*)"dialog";
+            u8* buf = new u8[(u32)32];
+            i32 n = (i32)0;
+            while (kind[n] != (u8)0)
+                {
+                buf[n] = kind[n];
+                n = n + (i32)1;
+                }
+            buf[n] = (u8)32;
             n = n + (i32)1;
+            if (i >= (i32)10)
+                {
+                buf[n] = (u8)((i32)48 + i / (i32)10);
+                n = n + (i32)1;
+                }
+            buf[n] = (u8)((i32)48 + i % (i32)10);
+            n = n + (i32)1;
+            buf[n] = (u8)0;
+            base = buf;
             }
-        buf[n] = (u8)32;
-        n = n + (i32)1;
-        if (i >= (i32)10)
+        if (!main)
             {
-            buf[n] = (u8)((i32)48 + i / (i32)10);
-            n = n + (i32)1;
+            return base;
             }
-        buf[n] = (u8)((i32)48 + i % (i32)10);
-        n = n + (i32)1;
-        buf[n] = (u8)0;
-        return buf;
+        i32 bl = UXRscTree.len(base);
+        u8* out = new u8[(u32)(bl + (i32)8)];
+        for (i32 k = (i32)0; k < bl; k = k + (i32)1)
+            {
+            out[k] = base[k];
+            }
+        u8* suffix = (u8*)" (main)";
+        for (i32 k = (i32)0; suffix[k] != (u8)0; k = k + (i32)1)
+            {
+            out[bl + k] = suffix[k];
+            }
+        out[bl + (i32)7] = (u8)0;
+        return out;
         }
 
     // The object's name if it has one, its text if it has any, else its type -- so a row reads

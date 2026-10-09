@@ -177,6 +177,7 @@ class RKMainController : Object<UXTableDelegate>
         identityCtl = new RKIdentity();
         identityCtl.willChange = &self.onIdentityWillChange;
         identityCtl.changed = &self.onIdentityEdit;
+        identityCtl.makeMainMenu = &self.onSetMainMenu;
         tabPanes = new Array();
         inspectorScroll = (UXScrollView*)0;
         library = new RKLibrary();
@@ -547,6 +548,29 @@ class RKMainController : Object<UXTableDelegate>
         self.rebuildShownPane();
         self.showResource(doc, shownTree);
         self.say(sep ? (u8*)"Added a separator" : (u8*)"Added a menu item");
+        }
+
+    // Make the shown menu the application's main menu (the app delegate's known menu slot).  More
+    // than one menu may live in a document; this swaps which one fills the slot.  It is a document
+    // setting, not an edit to the menu itself, so it is undoable as one step.
+    void onSetMainMenu(void)
+        {
+        UXRscTree* t = self.shownTreeOrNull();
+        if (doc == (UXRscDoc*)0 || t == (UXRscTree*)0 || !t.isMenu())
+            {
+            return;
+            }
+        self.willEdit((u8*)"Set Main Menu", (Object*)0);
+        doc.setMainMenuTree(t);
+        dirty = true;
+        if (formOutline != (UXOutlineView*)0)
+            {
+            outlineModel.build(doc, viewClass, viewOrient);
+            formOutline.setOutlineSource(outlineModel);
+            formOutline.reloadData();
+            }
+        identityCtl.showForm(doc, t); // its Identity now says it is the main menu
+        self.say((u8*)"This menu is now the application's main menu");
         }
 
     // ---- the backdrop and the form's panel -------------------------------------------------------

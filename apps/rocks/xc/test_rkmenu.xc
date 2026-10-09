@@ -1,14 +1,18 @@
 // test_rkmenu.xc — making menus.  A menu is an ordinary tree in the classic GEM shape; the library
-// makes one, items go into it, and it must survive a save/load still a menu.
+// makes one, items go into it, one menu is the application's MAIN menu (swappable), and all of it
+// survives a save/load.
 #import <Stdio.xc>
 #import "UXAppKitDriver.xc"
 #import "UXWindow.xc"
 #import "UXGeometry.xc"
 #import "UXRscModel.xc"
+#import "UXRsc.xc"
 #import "UXRscRead.xc"
 #import "UXRscWrite.xc"
+#import "UXMenu.xc"
 #import "RKMainController.xc"
 #import "RKMainBuilder.xc"
+#import "RKOutline.xc"
 
 i32 gFails;
 void check(u8* what, i32 got, i32 want)
@@ -48,16 +52,33 @@ bool eqs(u8* a, u8* b)
         }
     return a[i] == b[i];
     }
-UXRscTree* menuIn(UXRscDoc* d)
+UXRscTree* nthMenu(UXRscDoc* d, i32 n)
     {
+    i32 seen = (i32)0;
     for (i32 i = (i32)0; i < d.treeCount(); i = i + (i32)1)
         {
         if (d.treeAt(i).isMenu())
             {
-            return d.treeAt(i);
+            if (seen == n)
+                {
+                return d.treeAt(i);
+                }
+            seen = seen + (i32)1;
             }
         }
     return (UXRscTree*)0;
+    }
+i32 menuCount(UXRscDoc* d)
+    {
+    i32 c = (i32)0;
+    for (i32 i = (i32)0; i < d.treeCount(); i = i + (i32)1)
+        {
+        if (d.treeAt(i).isMenu())
+            {
+            c = c + (i32)1;
+            }
+        }
+    return c;
     }
 
 void main(void)
@@ -87,10 +108,10 @@ void main(void)
     c.showResource(r, (i32)0);
     win.tree.finalise();
 
-    i32 before = r.treeCount();
+    // ---- make a menu, fill it -------------------------------------------------
     c.libraryPick(c.library.named((u8*)"Menu"));
-    check("a menu tree is added", r.treeCount(), before + (i32)1);
-    UXRscTree* mt = menuIn(r);
+    check("a menu tree is added", menuCount(r), (i32)1);
+    UXRscTree* mt = nthMenu(r, (i32)0);
     checkTrue("it is a menu", mt != (UXRscTree*)0);
     check("with one title", mt != (UXRscTree*)0 ? RKMenu.titleCount(mt) : (i32)0, (i32)1);
     UXRscObject* dd = mt != (UXRscTree*)0 ? RKMenu.dropdownAt(mt, (i32)0) : (UXRscObject*)0;
@@ -98,27 +119,53 @@ void main(void)
     checkTrue("the first reads New", dd != (UXRscObject*)0 && eqs(dd.childAt((i32)0).text, (u8*)"New"));
     checkTrue("the second is a separator", dd != (UXRscObject*)0 && eqs(dd.childAt((i32)1).text, (u8*)"-"));
     check("the menu is shown on the canvas", c.shownTree, r.indexOfTree(mt));
-
-    // "Menu Item" appends to the shown menu's title.
     c.libraryPick(c.library.named((u8*)"Menu Item"));
     dd = RKMenu.dropdownAt(mt, (i32)0);
     check("a menu item is appended", dd.childCount(), (i32)4);
 
-    // It must survive a save/load and still BE a menu (the reader detects it by shape).
+    // ---- more than one menu; the main-menu link ---------------------------------
+    c.libraryPick(c.library.named((u8*)"Menu"));
+    check("a second menu", menuCount(r), (i32)2);
+    UXRscTree* mb2 = nthMenu(r, (i32)1);
+    dd = RKMenu.dropdownAt(mb2, (i32)0);
+    if (dd != (UXRscObject*)0 && dd.childCount() > (i32)0)
+        {
+        dd.childAt((i32)0).name = (u8*)"onNew"; // the action this item carries, by name
+        }
+    c.onSetMainMenu(); // the shown menu (the second) becomes the main one
+    checkTrue("the second menu is the main one", r.mainMenuTree() == mb2);
+    check("the document records its index", r.mainMenu, r.indexOfTree(mb2));
+    UXMenuBar* bar = UXRsc.loadMainMenu(r);
+    checkTrue("the main menu builds a bar", bar != (UXMenuBar*)0);
+    check("with one menu on it", bar != (UXMenuBar*)0 ? (i32)bar.menus.count() : (i32)0, (i32)1);
+    checkTrue("and the item carries its action name",
+              bar != (UXMenuBar*)0 && bar.itemNamed((u8*)"onNew") != (UXMenuItem*)0);
+    // the outline marks which menu is the main one
+    u8* lbl = RKOutline.treeLabel(mb2, (i32)1, true);
+    checkTrue("the outline marks the main menu", eqs(lbl, (u8*)"Menu (main)"));
+
+    // swapping: make the first menu the main one
+    c.showResource(r, r.indexOfTree(mt));
+    c.onSetMainMenu();
+    checkTrue("after a swap the first is main", r.mainMenuTree() == mt);
+
+    // ---- it survives a save/load -----------------------------------------------
     Data* b = UXRscWriter.write(r);
     UXRscDoc* back = UXRscReader.reader(b.bytes(), (i32)b.length()).result;
     checkTrue("the document round-trips", back != (UXRscDoc*)0);
-    UXRscTree* m2 = back != (UXRscDoc*)0 ? menuIn(back) : (UXRscTree*)0;
-    checkTrue("the menu comes back a menu", m2 != (UXRscTree*)0);
-    check("with its one title", m2 != (UXRscTree*)0 ? RKMenu.titleCount(m2) : (i32)0, (i32)1);
-    UXRscObject* d2 = m2 != (UXRscTree*)0 ? RKMenu.dropdownAt(m2, (i32)0) : (UXRscObject*)0;
-    check("and its four items", d2 != (UXRscObject*)0 ? d2.childCount() : (i32)0, (i32)4);
-    checkTrue("with the separator intact", d2 != (UXRscObject*)0 && eqs(d2.childAt((i32)1).text, (u8*)"-"));
+    check("two menus come back", back != (UXRscDoc*)0 ? menuCount(back) : (i32)0, (i32)2);
+    UXRscTree* m2 = back != (UXRscDoc*)0 ? nthMenu(back, (i32)1) : (UXRscTree*)0;
+    checkTrue("the second is still the menu with the action item",
+              m2 != (UXRscTree*)0 && RKMenu.dropdownAt(m2, (i32)0) != (UXRscObject*)0 &&
+              eqs(RKMenu.dropdownAt(m2, (i32)0).childAt((i32)0).name, (u8*)"onNew"));
+    checkTrue("and the main-menu link came back", back != (UXRscDoc*)0 && back.mainMenuTree() != (UXRscTree*)0);
+    checkTrue("pointing at the first menu (the swap)", back != (UXRscDoc*)0 && back.mainMenuTree().isMenu() &&
+              !eqs(back.mainMenuTree().name, (u8*)"second"));
 
     win.close();
     if (gFails == (i32)0)
         {
-        Stdio.printf("PASS: menus are made, filled, and survive a save/load\n");
+        Stdio.printf("PASS: menus are made, filled, linked as the main menu, and survive a save/load\n");
         }
     else
         {

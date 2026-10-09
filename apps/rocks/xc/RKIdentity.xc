@@ -42,6 +42,7 @@ class RKIdentity : Object
     // the controller's: before an edit (`key` is the field typed into, so a word is one step), after
     callback willChange void(Object* key);
     callback changed void(void);
+    callback makeMainMenu void(void); // a menu tree: make it the application's main menu
 
     void init(void)
         {
@@ -65,6 +66,7 @@ class RKIdentity : Object
         loading = false;
         willChange = (callback void(Object * key))0;
         changed = (callback void(void))0;
+        makeMainMenu = (callback void(void))0;
         }
     void attach(UXView* p)
         {
@@ -111,7 +113,24 @@ class RKIdentity : Object
             }
         i16 y = (i16)8;
         nameField = self.field((u8*)"Name", t.name != (u8*)0 ? t.name : (u8*)"", (u8*)"none", &y);
+        // A menu tree may be the application's main menu (the app delegate's known menu slot).
+        if (t.isMenu())
+            {
+            bool isMain = doc != (UXRscDoc*)0 && doc.mainMenuTree() == t;
+            self.label((u8*)"", isMain ? (u8*)"This is the application's main menu."
+                                        : (u8*)"Not the application's main menu.", &y);
+            self.button((u8*)"Set as Main Menu", (i16)8, y, &self.onSetMainMenu);
+            y = (i16)((i32)y + (i32)self.rowH() + (i32)6);
+            }
         self.end();
+        }
+    void onSetMainMenu(UXControl* sender) : action
+        {
+        callback c void(void) = makeMainMenu;
+        if (c)
+            {
+            c();
+            }
         }
     void showObject(UXRscDoc* d, i32 id)
         {

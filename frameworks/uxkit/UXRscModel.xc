@@ -880,6 +880,8 @@ class UXRscColor : Object
     Array<UXRscExtSection>* extSections;
     Array<UXRscAttr>* attrs;
     u8* ownerClass; // File's Owner's class, for the designer to list its outlets and actions; "" = unset
+    i32 mainMenu;   // the index of the tree that is the application's MAIN menu, or -1 (the app delegate's
+                    // menu slot: the document names which of its menus fills it; swap by changing this)
     bool bigEndian;              // classic 68000 GEM fidelity
     bool packedCoords;           // char/pixel packing on write
     bool embedIcons;             // embed PAM vs reference an external path
@@ -897,6 +899,7 @@ class UXRscColor : Object
         extSections = new Array();
         attrs = new Array();
         ownerClass = (u8*)"";
+        mainMenu = (i32)-1;
         bigEndian = true;
         packedCoords = true;
         embedIcons = true;
@@ -936,6 +939,16 @@ class UXRscColor : Object
         }
     UXRscForm* formAt(i32 i)
         { return (UXRscForm* ?)forms.get((u32)i);
+        }
+    // The document's MAIN menu (the one the app installs), or 0.  A menu is a tree; the app delegate
+    // has a known menu slot and the document names which tree fills it (Cocoa's NSApplication.mainMenu).
+    UXRscTree* mainMenuTree(void)
+        {
+        return mainMenu >= (i32)0 && mainMenu < self.treeCount() ? self.treeAt(mainMenu) : (UXRscTree*)0;
+        }
+    void setMainMenuTree(UXRscTree* t)
+        {
+        mainMenu = self.indexOfTree(t);
         }
     // The form a tree is a layout of, or 0 for a tree that stands alone.
     UXRscForm* formOf(UXRscTree* t)

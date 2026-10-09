@@ -481,6 +481,10 @@ class UXRscReader : Object
                 oc[size] = (u8)0;
                 res.ownerClass = oc;
                 }
+            else if (self.rd32(q) == (i32)$4D454E55 && size >= (i32)2) // 'MENU': the main-menu tree index
+                {
+                res.mainMenu = self.rd16(q + (i32)8);
+                }
             else
                 {
                 UXRscExtSection* x = new UXRscExtSection();
