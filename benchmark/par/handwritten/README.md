@@ -89,17 +89,22 @@ yourself, and four `__device__` helpers you mark by hand.
 
 - The CUDA launch configuration is the plain one — one thread per work item, or
   a grid-stride loop — with no shared-memory tiling, no `__restrict__` and no
-  async copies. It is deliberately untuned, and that is the point: on the
-  test GPU these plain kernels are FASTER than `xcc`'s generated ones on three of
-  the four programs, by 1.5x to 6.8x (`mandelbrot` 214 us against 1461,
-  `perlin` 697 against 2037), while `nbody` goes the other way now that `xcc`'s
-  `:goal(speed)` issues approximate float maths. So the argument here is
-  EASE, which holds — 223 lines of xc, one source, CPU and four GPU APIs — and
-  not yet performance. The measured gap and what causes it are the compiler's
-  to close; until they are, do not read these tables as a speed claim for `par`.
-- The xc GPU path copies the captured arrays to the device and back on every
-  run, and so do these; that is why `saxpy` loses on every GPU in the tables
-  above, and why 0.74's `auto` keeps it on the CPU.
+  async copies. It is deliberately untuned. With 0.74 these plain kernels were
+  faster than `xcc`'s on three of the four programs, by 1.5x to 6.8x. From
+  0.75, best of five on the test GPU (CUDA, microseconds, hand / xc):
+  `mandelbrot` 211 / 301, `perlin` 675 / 750, `nbody` 1051 / 569, `saxpy`
+  25014 / 25029. `nbody` is faster in xc because `:goal(speed)` issues
+  approximate float maths; `saxpy` is level; `mandelbrot` and `perlin` remain
+  slower, and the difference is in the kernel itself (the escape loop's test is
+  not yet rotated on the GPU). So the argument here is still EASE first — 223
+  lines of xc, one source, CPU and four GPU APIs — with performance now close
+  on three of the four.
+- From 0.75 the xc GPU path copies to the device only the arrays the block
+  reads, and back only the ones it writes; a small table it only reads stays on
+  the device while it is unchanged. These programs copy the same data: each
+  uploads what its kernel reads and copies back what it writes. If xc stops
+  copying something because the program never uses it, the matching program
+  here stops too, so the two keep doing the same work.
 - `perlin` and `mandelbrot` are arithmetic-bound and are the clean comparison.
   `saxpy` is the anti-benchmark: it is in the set to show that more hands on the
   GPU is not always faster, and that `auto` knows it.
