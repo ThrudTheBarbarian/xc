@@ -43,7 +43,8 @@ class RKMember : Object
 class RKClass : Object
     {
     u8* name;
-    u8* parent; // "" for a root
+    u8* parent;   // "" for a root
+    u8* conformsTo; // a protocol it conforms to (`class X : Object<Proto>`), "" for none
     Array<RKMember>* outlets;
     Array<RKMember>* actions;
     i32 origin; // RKC_*
@@ -53,6 +54,7 @@ class RKClass : Object
         {
         name = (u8*)"";
         parent = (u8*)"";
+        conformsTo = (u8*)"";
         outlets = new Array();
         actions = new Array();
         origin = (i32)RKC_UXKIT;
@@ -156,6 +158,27 @@ class RKSourceScan : Object
                     if (parent != (u8*)0)
                         {
                         pending.parent = parent;
+                        }
+                    // `class X : Object<Proto>` — a protocol conformance counts as a kind, so an
+                    // outlet typed `Proto*` (a table's dataSource) can be told a controller that
+                    // conforms.  Only when the base is Object, so a real base is not lost.
+                    u8* lt = self.peekTok();
+                    if (lt != (u8*)0 && RKClassBook.seq(lt, (u8*)"<") && RKClassBook.seq(parent, (u8*)"Object"))
+                        {
+                        self.next(); // <
+                        u8* proto = self.next();
+                        if (proto != (u8*)0 && !RKClassBook.seq(proto, (u8*)">"))
+                            {
+                            pending.conformsTo = proto;
+                            }
+                        while (true)
+                            {
+                            u8* t2 = self.next();
+                            if (t2 == (u8*)0 || RKClassBook.seq(t2, (u8*)">"))
+                                {
+                                break;
+                                }
+                            }
                         }
                     }
                 toks = new Array();
@@ -527,6 +550,10 @@ class RKClassBook : Object
             if (c == (RKClass*)0)
                 {
                 return false;
+                }
+            if (RKClassBook.seq(c.conformsTo, ancestor))
+                {
+                return true; // a protocol conformance is a kind (a table's dataSource holds one)
                 }
             n = c.parent;
             }
@@ -972,6 +999,10 @@ class RKClassBook : Object
         self.ux((u8*)"UXSplitView", (u8*)"UXView");
         self.ux((u8*)"UXTabView", (u8*)"UXView");
         self.ux((u8*)"UXTableView", (u8*)"UXView");
+        // The table's connectable outlets: a controller is wired to them from the canvas or the
+        // Connections tab (the loader binds them through the generated setOutlet).
+        self.uxOutlet((u8*)"UXTableView", (u8*)"dataSource", (u8*)"UXTableDataSource");
+        self.uxOutlet((u8*)"UXTableView", (u8*)"delegate", (u8*)"UXTableDelegate");
         self.ux((u8*)"UXOutlineView", (u8*)"UXTableView");
         self.ux((u8*)"UXGLView", (u8*)"UXView");
         self.ux((u8*)"UXTextView", (u8*)"UXView");
@@ -981,6 +1012,15 @@ class RKClassBook : Object
     void ux(u8* name, u8* parent)
         {
         classes.add(RKClass.make(name, parent, (i32)RKC_UXKIT));
+        }
+    // One connectable outlet on a UXKit class (see addUXKit).
+    void uxOutlet(u8* cls, u8* member, u8* type)
+        {
+        RKClass* c = self.find(cls);
+        if (c != (RKClass*)0)
+            {
+            c.outlets.add(RKMember.make(member, type));
+            }
         }
 
     // ---- strings -------------------------------------------------------------------------------

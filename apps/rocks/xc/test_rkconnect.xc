@@ -201,6 +201,22 @@ void main(void)
     i32 files = tree.loadTree(RKMainController.dirOf(srcPath), (i32)1);
     checkTrue("a whole source folder parses, finding it among the rest", files > (i32)10 && tree.find((u8*)"PlayerController") != (RKClass*)0);
     checkTrue("and the editor's own classes, parents and all", tree.isKindOf((u8*)"RKBackdrop", (u8*)"UXView"));
+    // UXKit's own classes carry the outlets a controller can be wired to — the table's
+    // dataSource/delegate — so the wiring chooser and the Connections tab can offer them.
+    Array<RKMember>* uxtv = c.classBook.outletsOf((u8*)"UXTableView");
+    bool hasDS = false;
+    bool hasDel = false;
+    bool hasOther = false;
+    for (u32 i = (u32)0; i < uxtv.count(); i = i + (u32)1)
+        {
+        RKMember* m = (RKMember* ?)uxtv.get(i);
+        if (streq(m.name, (u8*)"dataSource")) { hasDS = true; }
+        else if (streq(m.name, (u8*)"delegate")) { hasDel = true; }
+        else { hasOther = true; }
+        }
+    checkTrue("the table's dataSource outlet is known", hasDS);
+    checkTrue("the table's delegate outlet is known", hasDel);
+    checkTrue("and nothing else is invented", !hasOther);
 
     Stdio.printf("-- the controller\n");
     c.libraryPick(c.library.named((u8*)"Object"));
