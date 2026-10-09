@@ -73,7 +73,7 @@ class RKLibrary : Object<UXTableDataSource>
         all.add(RKLibraryItem.uxkit((u8*)"Scroll View", (u8*)"UXScrollView", (i32)200, (i32)140, (u8*)"lineHeight=16", (u8*)"A viewport that scrolls its content"));
         all.add(RKLibraryItem.uxkit((u8*)"Split View", (u8*)"UXSplitView", (i32)240, (i32)160, (u8*)"vertical=0;divider=100", (u8*)"Two panes with a draggable divider"));
         all.add(RKLibraryItem.uxkit((u8*)"Tab View", (u8*)"UXTabView", (i32)240, (i32)160, (u8*)"tabs=One|Two|Three", (u8*)"A strip of tabs, each with its own content"));
-        all.add(RKLibraryItem.make((u8*)"Box", (i32)UXR_T_BOX, (i32)200, (i32)120, (u8*)0, (u8*)"Groups controls under a frame"));
+        all.add(RKLibraryItem.make((u8*)"Group Box", (i32)UXR_T_BOX, (i32)200, (i32)120, (u8*)0, (u8*)"Groups controls under a frame"));
         all.add(RKLibraryItem.make((u8*)"View", (i32)UXR_T_IBOX, (i32)200, (i32)120, (u8*)0, (u8*)"Groups controls, unseen"));
         all.add(RKLibraryItem.make((u8*)"Custom View", (i32)UXR_T_USERDEF, (i32)200, (i32)120, (u8*)0, (u8*)"A view of a class you name"));
         all.add(RKLibraryItem.make((u8*)"Object", (i32)RKLIB_OBJECT, (i32)0, (i32)0, (u8*)0, (u8*)"An object of a class you name: a controller"));

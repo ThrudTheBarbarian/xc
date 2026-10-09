@@ -101,6 +101,7 @@ void main(void)
 
     Stdio.printf("-- the library\n");
     check("every item is listed", c.library.count(), (i32)24);
+    checkTrue("a Group Box is offered", c.library.named((u8*)"Group Box") != (RKLibraryItem*)0);
     c.librarySearch.setText((u8*)"FIELD");
     c.onLibrarySearch(c.librarySearch);
     check("a filter narrows it, ignoring case", c.library.count(), (i32)1);

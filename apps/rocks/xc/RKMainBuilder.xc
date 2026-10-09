@@ -72,6 +72,9 @@ class RKMainBuilder : Object
         // ---- the toolbar ---------------------------------------------------
         UXToolbar* tb = new UXToolbar();
         tb.addItem((u8*)"doc.new", (u8*)"New", (i32)RKTB_NEW, (i16)44);
+        // A flexible gap separates New (by the title) from Delete (the bin at the far end), so the
+        // bin is not the thing sitting next to New.
+        tb.addFlexibleSpace();
         tb.addItem((u8*)"trash", (u8*)"Delete", (i32)RKTB_DELETE, (i16)44);
         tb.setItemIcon((i32)RKTB_NEW, (u8*)"new");
         tb.setItemIcon((i32)RKTB_DELETE, (u8*)"delete");
