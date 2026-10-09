@@ -14913,7 +14913,8 @@ class OptProfile
         u32 lw = irWidth(lt);
         if (lw == (u32)0)
             return (VecCand*)0;
-        u32 vw = (u32)16 / lw; // 16 per iteration for u8, 8 for u16
+        u32 wvb = vectorBytes(); // 16, or 32/64 on an x86-64 clone (bug 644)
+        u32 vw = wvb / lw; // 16 per iteration for u8, 8 for u16
         // The trailing test is the non-zero-start refusal (see
         // vecIvStartsAtZero); folded into this condition rather than written as
         // its own statement, because a separate branch costs frame slots and
@@ -14946,6 +14947,7 @@ class OptProfile
         c.setLoop(H, B, E);
         c.setIv(ivPhi, ivNext, _vrGuard, iv);
         c.setLane(String.withCString("U32"), vw);
+        c.setVecBytes(wvb);
         c.setReduction(accPhi, accNext, acc, elemOp.val(),
                        vecEntryOpOf(accPhi, B), vecEntryBlkOf(accPhi, B));
         c.setWidening(lt, load.res(), (IRValue*)0, false);
@@ -15067,7 +15069,8 @@ class OptProfile
         u32 lw = irWidth(lt);
         if (lw == (u32)0)
             return (VecCand*)0;
-        u32 vw = (u32)16 / lw;
+        u32 wvb = vectorBytes(); // 16, or 32/64 on an x86-64 clone (bug 644)
+        u32 vw = wvb / lw;
         // The trailing test is the non-zero-start refusal (see
         // vecIvStartsAtZero); folded into this condition rather than written as
         // its own statement, because a separate branch costs frame slots and
@@ -15093,6 +15096,7 @@ class OptProfile
         c.setLoop(H, B, E);
         c.setIv(ivPhi, ivNext, _vrGuard, iv);
         c.setLane(String.withCString("U32"), vw);
+        c.setVecBytes(wvb);
         c.setReduction(accPhi, accNext, acc, elemOp.val(),
                        vecEntryOpOf(accPhi, B), PH);
         c.setWidening(lt, loadA.res(), loadB.res(), true);
@@ -15798,7 +15802,8 @@ class OptProfile
         u32 lw = irWidth(_vcLaneTy);
         if (lw == (u32)0)
             return (VecCand*)0;
-        u32 vw = (u32)16 / lw;
+        u32 wvb = vectorBytes(); // 16, or 32/64 on an x86-64 clone (bug 644)
+        u32 vw = wvb / lw;
         // No epilogue for this shape yet, matching the original: the trip must be
         // a whole number of vectors.
         i32 dpStart = vecIvStart(ivPhi, L, defOf);
@@ -15839,6 +15844,7 @@ class OptProfile
             }
         else
             c.setLane(_vcLaneTy, vw);
+        c.setVecBytes(wvb);
         c.setReduction(accPhi, _vcAccNext, acc, _vcElem, seedOp, PH);
         c.setCount(_vcCmp, _vcDelta, L);
         c.setEpi(false, n);
@@ -15964,10 +15970,8 @@ class OptProfile
         // keeps its own. They are the same unless the element is narrower,
         // which is what loadLaneTy records — so the 32-bit path is unchanged.
         String* elemLane = c.loadLaneTy() != (String*)0 ? c.loadLaneTy() : c.laneTy();
-        String* vecTy = new String();
-        vecTy.appendFormat("Vec(%s)", elemLane.cString());
-        String* accVecTy = new String();
-        accVecTy.appendFormat("Vec(%s)", c.laneTy().cString());
+        String* vecTy = vecTyOf(elemLane, c.vecBytes());
+        String* accVecTy = vecTyOf(c.laneTy(), c.vecBytes());
 
         Map* defOf = new Map();
         Map* defBlk = new Map();
@@ -16018,8 +16022,7 @@ class OptProfile
             String* nextLane = irWidth(curLane) == (u32)1
                                    ? String.withCString("U16")
                                    : String.withCString("U32");
-            String* wTy = new String();
-            wTy.appendFormat("Vec(%s)", nextLane.cString());
+            String* wTy = vecTyOf(nextLane, c.vecBytes());
             IRValue* w = new IRValue(wTy);
             IRInsn* wi = IRInsn.with(String.withCString("VAddLP"));
             wi.setRes(w);
@@ -16710,9 +16713,8 @@ class OptProfile
         // in a VE landing pad and seeds the clone whenever needEpi() is set.
         vecWidenEpiSetup(fn, c, H, B, PH);
         String* u32t = String.withCString("U32");
-        String* accVecTy = String.withCString("Vec(U32)");
-        String* loadVecTy = new String();
-        loadVecTy.appendFormat("Vec(%s)", c.loadLaneTy().cString());
+        String* accVecTy = vecTyOf(u32t, c.vecBytes());
+        String* loadVecTy = vecTyOf(c.loadLaneTy(), c.vecBytes());
 
         // For a dot product the accumulated element is ZExt(Mul(a,b)); find that
         // scalar multiply so it and its widening can become a VMul of the two
@@ -16768,8 +16770,7 @@ class OptProfile
             String* nextLane = irWidth(curLane) == (u32)1
                                    ? String.withCString("U16")
                                    : u32t;
-            String* wTy = new String();
-            wTy.appendFormat("Vec(%s)", nextLane.cString());
+            String* wTy = vecTyOf(nextLane, c.vecBytes());
             IRValue* w = new IRValue(wTy);
             IRInsn* wi = IRInsn.with(String.withCString("VAddLP"));
             wi.setRes(w);

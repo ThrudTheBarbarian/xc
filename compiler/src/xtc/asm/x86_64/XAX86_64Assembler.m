@@ -1222,7 +1222,9 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
                       @"pmaxud":@[@0x66,@0x3F], @"pminud":@[@0x66,@0x3B],
                       @"pmaxsb":@[@0x66,@0x3C], @"pminsb":@[@0x66,@0x38],
                       @"pmaxuw":@[@0x66,@0x3E], @"pminuw":@[@0x66,@0x3A],
-                      @"pmulld":@[@0x66,@0x40]};
+                      @"pmulld":@[@0x66,@0x40],
+                      // The u8 pair sum the 256-bit widening reductions use (bug 644).
+                      @"pmaddubsw":@[@0x66,@0x04]};
         });
         if (!vr && vex38[base]) { vr = vex38[base]; map = 2; }
         XOperand *src1 = &opv[1];

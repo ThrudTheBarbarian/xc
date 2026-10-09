@@ -2234,6 +2234,28 @@ class X86_64
             return;
         String* inLane = laneOf(o.val().ty());
         u32 iw = inLane == (String*)0 ? (u32)2 : fieldWidth(inLane);
+        // 256 and 512 bits (bug 644): the VEX/EVEX three-operand forms (the
+        // reference explains).
+        if (d.hasPrefix(String.withCString("ymm")) || d.hasPrefix(String.withCString("zmm")))
+            {
+            bool z = d.hasPrefix(String.withCString("zmm"));
+            string k = z ? "zmm0" : "ymm0";
+            // All-ones for a zmm: zero zmm0 first so vpternlogd does not wait
+            // on its last value (the reference explains).
+            if (z)
+                _out.appendCString("\tvpxord\tzmm0, zmm0, zmm0\n\tvpternlogd\tzmm0, zmm0, zmm0, 0xff\n");
+            else
+                _out.appendCString("\tvpcmpeqd\tymm0, ymm0, ymm0\n");
+            if (iw == (u32)1)
+                _out.appendFormat("\tvpabsb\t%s, %s\n", k, k);
+            else
+                _out.appendFormat("\tvpsrlw\t%s, %s, 15\n", k, k);
+            if (iw == (u32)1)
+                _out.appendFormat("\tvpmaddubsw\t%s, %s, %s\n", d.cString(), a.cString(), k);
+            else
+                _out.appendFormat("\tvpmaddwd\t%s, %s, %s\n", d.cString(), a.cString(), k);
+            return;
+            }
         if (!d.equals(a))
             _out.appendFormat("\tmovdqa\t%s, %s\n", d.cString(), a.cString());
         if (iw == (u32)1)

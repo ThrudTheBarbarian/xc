@@ -1952,6 +1952,8 @@ class X86Fixup
         if (m.equals(String.withCString("pmaxuw"))) return (u32)$663E;
         if (m.equals(String.withCString("pminuw"))) return (u32)$663A;
         if (m.equals(String.withCString("pmulld"))) return (u32)$6640;
+        // The u8 pair sum the 256-bit widening reductions use (bug 644).
+        if (m.equals(String.withCString("pmaddubsw"))) return (u32)$6604;
         return (u32)$FFFF_FFFF;
         }
 

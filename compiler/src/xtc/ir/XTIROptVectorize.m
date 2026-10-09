@@ -3557,7 +3557,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
             continue;
 
         XTIROperand* seedOp = (accPhi.operands[0].blockRef == L) ? accPhi.operands[3] : accPhi.operands[1];
-        NSUInteger vw = 16 / laneType.byteWidth;
+        NSUInteger wvb = [self vectorBytes]; // 16, or 32/64 on an x86-64 clone (bug 644)
+        NSUInteger vw = wvb / laneType.byteWidth;
         // The iteration space is [ivStart, N), so it is the trip LENGTH that must
         // be a whole number of vectors — not the bound. Gating on `N % vw` was
         // right only for a zero start, and silently wrong for any other: with
@@ -3599,6 +3600,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         else
             c.laneType = laneType;
         c.vw = vw;
+        c.vecBytes = wvb;
         c.accPhi = accPhi;
         c.accId = accId;
         c.elemId = elemId;
@@ -3620,8 +3622,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     // keeps its own. They are the same type unless the element is narrower,
     // which is what loadLaneType records — so the 32-bit path is unchanged.
     XTIRType* elemLane = c.loadLaneType ?: c.laneType;
-    XTIRType* vecTy = [XTIRType vecWithLane:elemLane];
-    XTIRType* accVecTy = [XTIRType vecWithLane:c.laneType];
+    XTIRType* vecTy = [XTIRType vecWithLane:elemLane bytes:(uint32_t)c.vecBytes];
+    XTIRType* accVecTy = [XTIRType vecWithLane:c.laneType bytes:(uint32_t)c.vecBytes];
     XTIRValue* (^newVal)(XTIRType*) = ^XTIRValue*(XTIRType* ty) {
       XTIRValueId rid = [fn allocateValueId];
       XTIRValue* v = [[XTIRValue alloc] initWithValueId:rid
@@ -3780,7 +3782,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     while (curLane.byteWidth < c.laneType.byteWidth)
         {
         XTIRType* nextLane = (curLane.byteWidth == 1) ? [XTIRType u16Type] : [XTIRType u32Type];
-        XTIRValue* w = newVal([XTIRType vecWithLane:nextLane]);
+        XTIRValue* w = newVal([XTIRType vecWithLane:nextLane bytes:(uint32_t)c.vecBytes]);
         [nb addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVAddLP
                                                 result:w
                                               operands:@[ [XTIROperand useWithValueId:curInc.valueId] ]
@@ -4408,7 +4410,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         if (!ok)
             continue;
 
-        NSUInteger vw = 16 / lt.byteWidth;
+        NSUInteger wvb = [self vectorBytes]; // 16, or 32/64 on an x86-64 clone (bug 644)
+        NSUInteger vw = wvb / lt.byteWidth;
         if (vw < 2)
             continue;
         // A non-zero start is VECTORISED, not refused: the epilogue below works
@@ -4478,6 +4481,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         c.isDotProduct = YES;
         c.loadLaneType = lt;
         c.vw = vw;
+        c.vecBytes = wvb;
         c.loadId = loadA.result.valueId;
         c.loadId2 = loadB.result.valueId;
         c.epiN = N;
@@ -4692,7 +4696,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         if (!ok)
             continue;
 
-        NSUInteger vw = 16 / lt.byteWidth; // 16 (u8) or 8 (u16) per iter
+        NSUInteger wvb = [self vectorBytes]; // 16, or 32/64 on an x86-64 clone (bug 644)
+        NSUInteger vw = wvb / lt.byteWidth; // 16 (u8) or 8 (u16) per iter at 16 bytes
         if (vw < 2)
             continue;
         // A non-zero start is VECTORISED, not refused: the epilogue below works
@@ -4743,6 +4748,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         c.ivId = ivId;
         c.laneType = [XTIRType u32Type];
         c.vw = vw;
+        c.vecBytes = wvb;
         c.accPhi = accPhi;
         c.accId = accId;
         c.accNext = accNext;
@@ -4791,8 +4797,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         [c.guard replaceOperands:gops];
         }
     XTIRType* u32 = [XTIRType u32Type];
-    XTIRType* accVecTy = [XTIRType vecWithLane:u32];
-    XTIRType* loadVecTy = [XTIRType vecWithLane:c.loadLaneType];
+    XTIRType* accVecTy = [XTIRType vecWithLane:u32 bytes:(uint32_t)c.vecBytes];
+    XTIRType* loadVecTy = [XTIRType vecWithLane:c.loadLaneType bytes:(uint32_t)c.vecBytes];
     XTIRValue* (^newVal)(XTIRType*) = ^XTIRValue*(XTIRType* ty) {
       XTIRValueId rid = [fn allocateValueId];
       XTIRValue* v = [[XTIRValue alloc] initWithValueId:rid
@@ -4869,7 +4875,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     while (curLane.byteWidth < 4)
         {
         XTIRType* nextLane = (curLane.byteWidth == 1) ? [XTIRType u16Type] : u32;
-        XTIRValue* w = newVal([XTIRType vecWithLane:nextLane]);
+        XTIRValue* w = newVal([XTIRType vecWithLane:nextLane bytes:(uint32_t)c.vecBytes]);
         [nb addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVAddLP
                                                 result:w
                                               operands:@[ [XTIROperand useWithValueId:cur.valueId] ]

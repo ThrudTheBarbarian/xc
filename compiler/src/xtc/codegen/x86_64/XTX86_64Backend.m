@@ -5251,6 +5251,31 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         NSString *d = sVec[@(res.valueId)], *a = sVec[@(ops[0].valueId)];
         XTIRType* inLane = fn.values[@(ops[0].valueId)].type.pointeeType;
         NSUInteger iw = inLane ? [self fieldWidth:inLane] : 2;
+        // 256 and 512 bits (bug 644): the VEX/EVEX three-operand forms, the +1
+        // constant built in ymm0/zmm0 (all-ones: vpcmpeqd, or vpternlogd 0xff
+        // for a zmm, which vpcmpeqd cannot write).
+        if ([d hasPrefix:@"ymm"] || [d hasPrefix:@"zmm"])
+            {
+            BOOL z = [d hasPrefix:@"zmm"];
+            NSString* k = z ? @"zmm0" : @"ymm0";
+            // All-ones for a zmm: vpternlogd 0xff READS zmm0, and a Zen 5 does
+            // not treat it as dependency-free, so every constant waited on the
+            // last and the whole loop ran at the base level's speed. Zeroing
+            // zmm0 first (vpxord, a rename-time idiom) cuts the chain.
+            if (z)
+                [out appendString:@"\tvpxord\tzmm0, zmm0, zmm0\n\tvpternlogd\tzmm0, zmm0, zmm0, 0xff\n"];
+            else
+                [out appendString:@"\tvpcmpeqd\tymm0, ymm0, ymm0\n"];
+            if (iw == 1)
+                [out appendFormat:@"\tvpabsb\t%@, %@\n", k, k];
+            else
+                [out appendFormat:@"\tvpsrlw\t%@, %@, 15\n", k, k];
+            if (iw == 1)
+                [out appendFormat:@"\tvpmaddubsw\t%@, %@, %@\n", d, a, k];
+            else
+                [out appendFormat:@"\tvpmaddwd\t%@, %@, %@\n", d, a, k];
+            return;
+            }
         if (![d isEqualToString:a])
             [out appendFormat:@"\tmovdqa\t%@, %@\n", d, a];
         // u8 pairs → u16 : pmaddubsw with +1 bytes (xmm0)
