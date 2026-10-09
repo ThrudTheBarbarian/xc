@@ -12,6 +12,15 @@ arrays, shaders, textures, framebuffers, uniforms and their deletes, with
 #import "UXGL.xc"
 ```
 
+A client of the installed library imports it *after* `#use <UXKit>` — the `#use` puts the library's
+`xc/` contract directory on the quote path, where the file ships as `3p/uxkit/xc/UXGL.xc` — and
+links GL itself:
+
+```c
+#use <UXKit>
+#import "UXGL.xc"
+```
+
 ## Overview
 
 On macOS, Linux, iOS, Android and the web the calls are the platform's own. The

@@ -34,6 +34,9 @@ targets=${*:-arm64 win64 x86_64 wasm32 ios-sim android}
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 mkdir -p "$dest/xc"
 cp "$here/UXAbi.xc" "$here/UXVersion.xc" "$dest/xc/"
+# The GL calls a client may make (bug 638): declarations only, so #import "UXGL.xc" compiles and the
+# client links GL itself.
+cp "$here/UXGLProtos.xc" "$dest/xc/UXGL.xc"
 
 for t in $targets; do
   case $t in
