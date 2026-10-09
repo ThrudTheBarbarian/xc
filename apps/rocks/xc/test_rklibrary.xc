@@ -121,6 +121,9 @@ void main(void)
     UXRscObject* tbo = place(c, (u8*)"Tab View", (i32)260, (i32)800);
     UXRscObject* lbo3 = place(c, (u8*)"Label", (i32)280, (i32)850);
     setAttr(c, (u8*)"slot", (u8*)"1");
+    UXRscObject* nvo = place(c, (u8*)"Navigation View", (i32)20, (i32)1000);
+    UXRscObject* lbo4 = place(c, (u8*)"Label", (i32)320, (i32)1050);
+    setAttr(c, (u8*)"slot", (u8*)"1");
     checkTrue("on the canvas, a UXTextView", (UXTextView* ?)(Object*)c.canvasMap.viewFor(tvo) != (UXTextView*)0);
     checkTrue("a UXDatePicker", (UXDatePicker* ?)(Object*)c.canvasMap.viewFor(dpo) != (UXDatePicker*)0);
     checkTrue("a UXBreadcrumb", (UXBreadcrumb* ?)(Object*)c.canvasMap.viewFor(bco) != (UXBreadcrumb*)0);
@@ -152,6 +155,13 @@ void main(void)
     check("a control in its second tab nests", tbo != (UXRscObject*)0 ? tbo.childCount() : (i32)0, (i32)1);
     checkTrue("and the canvas puts it in tab 1",
               tbw != (UXTabView*)0 && lbw3 != (UXView*)0 && lbw3.superview == tbw.contentAt((i32)1));
+    UXNavigationView* nvw = (UXNavigationView* ?)(Object*)c.canvasMap.viewFor(nvo);
+    UXView* lbw4 = (UXView* ?)c.canvasMap.viewFor(lbo4);
+    checkTrue("a UXNavigationView", nvw != (UXNavigationView*)0);
+    check("its two panes", nvw != (UXNavigationView*)0 ? nvw.count() : (i32)0, (i32)2);
+    check("a control in its second pane nests", nvo != (UXRscObject*)0 ? nvo.childCount() : (i32)0, (i32)1);
+    checkTrue("and the canvas puts it in pane 1",
+              nvw != (UXNavigationView*)0 && lbw4 != (UXView*)0 && lbw4.superview == nvw.paneAt((i32)1));
     checkTrue("a table view is designable", (UXDesignable* ?)(Object*)tblw != (UXDesignable*)0);
     checkTrue("its datasource is an outlet",
               (UXDesignable* ?)(Object*)tblw != (UXDesignable*)0 &&
@@ -199,6 +209,11 @@ void main(void)
     checkTrue("the tab view loads as one", tbl != (UXTabView*)0);
     check("with the control in its second tab",
           tbl != (UXTabView*)0 ? (i32)tbl.contentAt((i32)1).subviews.count() : (i32)0, (i32)1);
+    UXNavigationView* nvl = (UXNavigationView* ?)(Object*)loadedFor(ni, bt.root.childAt((i32)9));
+    checkTrue("the navigation view loads as one", nvl != (UXNavigationView*)0);
+    check("with its two panes", nvl != (UXNavigationView*)0 ? nvl.count() : (i32)0, (i32)2);
+    check("and the control in its second pane",
+          nvl != (UXNavigationView*)0 ? (i32)nvl.paneAt((i32)1).subviews.count() : (i32)0, (i32)1);
     checkTrue("a bad date is no date", UXRsc.dateFrom((u8*)"2026-13-01") == (UXDate*)0 && UXRsc.dateFrom((u8*)"soon") == (UXDate*)0);
 
     win.close();

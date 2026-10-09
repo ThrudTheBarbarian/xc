@@ -998,6 +998,7 @@ class RKClassBook : Object
         self.ux((u8*)"UXScrollView", (u8*)"UXView");
         self.ux((u8*)"UXSplitView", (u8*)"UXView");
         self.ux((u8*)"UXTabView", (u8*)"UXView");
+        self.ux((u8*)"UXNavigationView", (u8*)"UXView");
         self.ux((u8*)"UXTableView", (u8*)"UXView");
         // The table's connectable outlets: a controller is wired to them from the canvas or the
         // Connections tab (the loader binds them through the generated setOutlet).

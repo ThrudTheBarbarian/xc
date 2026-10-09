@@ -905,7 +905,8 @@ class RKMainController : Object<UXTableDelegate>
         {
         return cls != (u8*)0 && (UXRscDoc.seq(cls, (u8*)"UXScrollView") ||
                                  UXRscDoc.seq(cls, (u8*)"UXSplitView") ||
-                                 UXRscDoc.seq(cls, (u8*)"UXTabView"));
+                                 UXRscDoc.seq(cls, (u8*)"UXTabView") ||
+                                 UXRscDoc.seq(cls, (u8*)"UXNavigationView"));
         }
     // Tell the model which objects are container classes, so the geometry nesting
     // (UXRscTree.reparentByGeometry) puts a dropped control inside a scroll/split/tab view the way it

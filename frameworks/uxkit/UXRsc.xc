@@ -29,6 +29,7 @@
 #import "UXScrollView.xc"
 #import "UXSplitView.xc"
 #import "UXTabView.xc"
+#import "UXNavigationView.xc"
 #import "UXOutlineView.xc"
 #import "UXCollectionView.xc"
 #import "UXGeometry.xc"
@@ -228,6 +229,10 @@ class UXRsc
             {
             return (Object*)new UXTabView();
             }
+        if (UXRscDoc.seq(cls, (u8*)"UXNavigationView"))
+            {
+            return (Object*)new UXNavigationView();
+            }
         return (Object*)0;
         }
 
@@ -371,6 +376,11 @@ class UXRsc
             {
             UXRsc.eachPart(doc.attrIn(formId, logicalId, theme, (u8*)"tabs"), (pointer)tb, (i32)4);
             tb.selectTab(UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"selected", (i32)0));
+            }
+        UXNavigationView* nv = (UXNavigationView* ?)(Object*)v;
+        if (nv != (UXNavigationView*)0)
+            {
+            nv.setPaneCount(UXRsc.attrInt(doc, formId, logicalId, theme, (u8*)"panes", (i32)2));
             }
         }
     // ---- autoresizing: how a view follows its container when that is resized ---------------------
@@ -732,7 +742,8 @@ class UXRsc
         }
 
     // Where a container's designed children go.  A scroll view keeps them all in its document; a
-    // split view sends each to the pane its `slot` attribute names; every other view holds them itself.
+    // split view sends each to the pane its `slot` attribute names; a tab view to its tab; a
+    // navigation view to its (horizontal) pane; every other view holds them itself.
     // A child's frame is relative to the container, so when it goes into a sub-view whose origin is not
     // the container's, (dx, dy) is that origin, to subtract.
     static UXView* childParent(UXView* v, UXRscDoc* doc, i32 formId, i32 theme, UXRscObject* child,
@@ -773,6 +784,23 @@ class UXRsc
                 slot = UXRsc.attrInt(doc, formId, child.logicalId, theme, (u8*)"slot", (i32)0);
                 }
             UXView* c = tb.contentAt(slot);
+            if (c != (UXView*)0)
+                {
+                UXRect cf = c.frame();
+                dx[0] = (i32)cf.x;
+                dy[0] = (i32)cf.y;
+                return c;
+                }
+            }
+        UXNavigationView* nv = (UXNavigationView* ?)(Object*)v;
+        if (nv != (UXNavigationView*)0)
+            {
+            i32 slot = (i32)0;
+            if (doc != (UXRscDoc*)0)
+                {
+                slot = UXRsc.attrInt(doc, formId, child.logicalId, theme, (u8*)"slot", (i32)0);
+                }
+            UXView* c = nv.paneAt(slot);
             if (c != (UXView*)0)
                 {
                 UXRect cf = c.frame();
