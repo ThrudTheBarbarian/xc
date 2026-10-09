@@ -47,11 +47,11 @@ UXRscObject* childIn(RKMainController* c, i32 tree, i32 i)
     return c.doc.treeAt(tree).root.childAt(i);
     }
 // tick the Size inspector's row
-void tick(RKMainController* c, u8* row, bool on)
+// Toggle one bit on the Size tab's Autosizing widget (a click on its strut or spring); the widget
+// writes it to the model through the inspector.
+void toggleBit(RKMainController* c, i32 bit)
     {
-    RKRow* r = c.sizeCtl.rowNamed(row);
-    r.box.setChecked(on);
-    c.sizeCtl.onToggle((UXControl*)r.box);
+    c.sizeCtl.autoSizing.toggle(bit);
     }
 // the view the loader made for the object at `i` among the form's children
 UXView* loadedChild(UXRscInstance* ni, UXRscObject* o)
@@ -101,26 +101,26 @@ void main(void)
 
     Stdio.printf("-- the Size inspector\n");
     c.selectObject(childIn(c, (i32)0, (i32)0));
-    checkTrue("it offers autoresizing", c.sizeCtl.rowNamed((u8*)"Width stretches") != (RKRow*)0);
-    checkTrue("the Attributes tab does not", c.inspectorCtl.rowNamed((u8*)"Width stretches") == (RKRow*)0);
-    checkTrue("pinned top left to begin with", !c.sizeCtl.rowNamed((u8*)"Width stretches").box.isChecked());
-    tick(c, (u8*)"Width stretches", true);
-    tick(c, (u8*)"Height stretches", true);
+    checkTrue("it offers the Autosizing widget", c.sizeCtl.autoSizing != (RKAutoSizing*)0);
+    checkTrue("the Attributes tab does not", c.inspectorCtl.autoSizing == (RKAutoSizing*)0);
+    checkTrue("pinned top left to begin with", (c.sizeCtl.autoSizing.maskOf() & (i32)UX_FLEX_WIDTH) == (i32)0);
+    toggleBit(c, (i32)UX_FLEX_WIDTH);
+    toggleBit(c, (i32)UX_FLEX_HEIGHT);
     check("the panel stretches", c.doc.autoresizeOf(c.doc.treeAt((i32)0), childIn(c, (i32)0, (i32)0)),
           (i32)(UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
     checkTrue("stored as letters", streq(c.doc.attrIn(c.doc.formIdOf(c.doc.treeAt((i32)0)), childIn(c, (i32)0, (i32)0).logicalId,
           (i32)c.doc.themeOf(c.doc.treeAt((i32)0)), (u8*)"autoresize"), (u8*)"WH"));
     check("the phone's panel does not", c.doc.autoresizeOf(c.doc.treeAt((i32)1), childIn(c, (i32)1, (i32)0)), (i32)0);
     c.selectObject(childIn(c, (i32)0, (i32)1));
-    tick(c, (u8*)"Right margin", true);
-    tick(c, (u8*)"Bottom margin", true);
+    toggleBit(c, (i32)UX_ANCHOR_RIGHT);
+    toggleBit(c, (i32)UX_ANCHOR_BOTTOM);
     check("OK keeps the bottom right corner", c.doc.autoresizeOf(c.doc.treeAt((i32)0), childIn(c, (i32)0, (i32)1)),
           (i32)(UX_ANCHOR_RIGHT | UX_ANCHOR_BOTTOM));
     c.selectObject(childIn(c, (i32)0, (i32)0));
-    checkTrue("re-shown, the boxes say so", c.sizeCtl.rowNamed((u8*)"Height stretches").box.isChecked());
+    checkTrue("re-shown, the widget says so", (c.sizeCtl.autoSizing.maskOf() & (i32)UX_FLEX_HEIGHT) != (i32)0);
 
     Stdio.printf("-- undo\n");
-    tick(c, (u8*)"Height stretches", false);
+    toggleBit(c, (i32)UX_FLEX_HEIGHT);
     check("unticked", c.doc.autoresizeOf(c.doc.treeAt((i32)0), childIn(c, (i32)0, (i32)0)), (i32)UX_FLEX_WIDTH);
     c.onUndo((UXMenuItem*)0);
     check("undo: it stretches both ways again", c.doc.autoresizeOf(c.doc.treeAt((i32)0), childIn(c, (i32)0, (i32)0)),

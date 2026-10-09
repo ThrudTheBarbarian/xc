@@ -26,6 +26,7 @@
 #import "UXPopUpButton.xc"
 #import "RKCanvas.xc"
 #import "RKAutoPreview.xc"
+#import "RKAutoSizing.xc"
 
 // One rendered row: the descriptor it edits, and the widget editing it.
 class RKRow : Object
@@ -84,6 +85,7 @@ class RKRow : Object
     // half-written value straight back into the model.
     bool loading;
     RKAutoPreview* autoPreview; // the Size tab's moving preview (0 when that tab was not built)
+    RKAutoSizing* autoSizing;   // the Size tab's springs-and-struts widget
 
     void init(void)
         {
@@ -102,6 +104,7 @@ class RKRow : Object
         tree = (UXRscTree*)0;
         loading = false;
         autoPreview = (RKAutoPreview*)0;
+        autoSizing = (RKAutoSizing*)0;
         }
 
     void attach(UXView* p, UXLabel* tl)
@@ -312,24 +315,14 @@ class RKRow : Object
             pane.addSubview(hl, UXGeom.make((i16)8, y, (i16)((i32)w - (i32)16), rh));
             y = (i16)((i32)y + (i32)rh + (i32)gap);
             i32 mask = doc.autoresizeOf(tree, o);
-            i16 cw = (i16)(((i32)w - (i32)16) / (i32)2);
-            for (i32 b = (i32)0; b < (i32)6; b = b + (i32)1)
-                {
-                RKRow* r = new RKRow();
-                r.arBit = (i32)1 << b;
-                r.prop = RKProperty.make(RKInspector.arLabel(b), (i32)RKP_FLAG, (i32)0, (u8*)0);
-                UXCheckbox* cb = new UXCheckbox();
-                cb.setTitle(r.prop.label);
-                cb.setChecked((mask & r.arBit) != (i32)0);
-                cb.setAction(&self.onToggle);
-                pane.addSubview(cb, UXGeom.make((i16)((i32)8 + (b % (i32)2) * (i32)cw), y, cw, rh));
-                r.box = cb;
-                rows.add(r);
-                if (b % (i32)2 == (i32)1)
-                    {
-                    y = (i16)((i32)y + (i32)rh + (i32)gap);
-                    }
-                }
+            // The Autosizing widget, the way Interface Builder shows it: a click on a margin's strut
+            // or spring fixes or frees it (the six UX_ANCHOR_* / UX_FLEX_* bits).
+            RKAutoSizing* as = new RKAutoSizing();
+            as.setMask(mask);
+            as.changed = &self.onAutoMask;
+            pane.addSubview(as, UXGeom.make((i16)(((i32)w - (i32)96) / (i32)2), y, (i16)96, (i16)96));
+            self.autoSizing = as;
+            y = (i16)((i32)y + (i32)96 + (i32)gap);
             // The moving preview, on the Size tab only: the box above, being resized while you look
             // at it.  The controller drives whether it runs (hover over it, or over the control).
             if (section == (i32)RKIS_SIZE)
@@ -542,6 +535,18 @@ class RKRow : Object
                 return;
                 }
             }
+        }
+
+    // The Autosizing widget changed the mask: write it to the document (one undo step per click).
+    void onAutoMask(i32 m)
+        {
+        if (loading || target == (UXRscObject*)0)
+            {
+            return;
+            }
+        self.warn((Object*)0);
+        doc.setAutoresizeOf(tree, target, m);
+        self.announce();
         }
 
     void onToggle(UXControl* sender) : action
