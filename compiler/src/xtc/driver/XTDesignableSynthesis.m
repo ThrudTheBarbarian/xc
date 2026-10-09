@@ -69,6 +69,7 @@ static NSString* XTStripTypeQualifiers(NSString* disp)
     NSString* protoName = nil;   // UXDesignable | UIDesignable
     NSString* nibClass = nil;    // UXNib        | XGNib
     NSString* controlType = nil; // UXControl    | XGControl
+    NSString* menuItemType = nil; // UXMenuItem  | XGMenuItem
     for (XTASTNode* d in ast.declarations)
         {
         if ([d isKindOfClass:[XTProtocolDeclNode class]])
@@ -87,6 +88,9 @@ static NSString* XTStripTypeQualifiers(NSString* disp)
             if (!controlType && ([n isEqualToString:@"UXControl"] ||
                                  [n isEqualToString:@"XGControl"]))
                 controlType = n;
+            if (!menuItemType && ([n isEqualToString:@"UXMenuItem"] ||
+                                  [n isEqualToString:@"XGMenuItem"]))
+                menuItemType = n;
             }
         }
     if (!protoName)
@@ -183,11 +187,40 @@ static NSString* XTStripTypeQualifiers(NSString* disp)
             {
             if (!m.isAction)
                 continue;
+            // A menu item is a model, not a control: an action whose sender is
+            // one is bound by wireMenuAction below, not here (bug: the sender
+            // type would not match the control's setAction).
+            NSString* mpd = m.parameters.firstObject.paramType.displayName ?: @"";
+            NSString* mbase = (([mpd hasSuffix:@"*"] || [mpd hasSuffix:@"@"]))
+                                  ? [mpd substringToIndex:mpd.length - 1] : mpd;
+            if (menuItemType && [mbase isEqualToString:menuItemType])
+                continue;
             [src appendFormat:
                      @"    if (_xtc_streq(name, (u8@)\"%@\")) { control.setAction(&self.%@); return true; }\n",
                      m.methodName, m.methodName];
             }
         [src appendString:@"    return false;\n  }\n"];
+        // wireMenuAction(name, item): the same binding for `:action` methods
+        // whose sender is a menu item. Emitted whenever the menu-item class is
+        // in scope, so a designable class conforms whether or not it has one.
+        if (menuItemType)
+            {
+            [src appendFormat:@"  bool wireMenuAction(u8@ name, %@@ item) {\n", menuItemType];
+            for (XTMethodDeclNode* m in c.methods)
+                {
+                if (!m.isAction)
+                    continue;
+                NSString* mpd = m.parameters.firstObject.paramType.displayName ?: @"";
+                NSString* mbase = (([mpd hasSuffix:@"*"] || [mpd hasSuffix:@"@"]))
+                                      ? [mpd substringToIndex:mpd.length - 1] : mpd;
+                if (![mbase isEqualToString:menuItemType])
+                    continue;
+                [src appendFormat:
+                         @"    if (_xtc_streq(name, (u8@)\"%@\")) { item.setAction(&self.%@); return true; }\n",
+                         m.methodName, m.methodName];
+                }
+            [src appendString:@"    return false;\n  }\n"];
+            }
         [src appendString:@"}\n"];
         }
 

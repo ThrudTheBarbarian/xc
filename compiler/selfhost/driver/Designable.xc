@@ -91,6 +91,7 @@ void synthesizeDesignable(Node* program)
     String* protoName = (String*)0;
     String* nibClass = (String*)0;
     String* controlType = (String*)0;
+    String* menuItemType = (String*)0;
     for (u32 i = (u32)0; i < program.kidCount(); i = i + (u32)1)
         {
         Node* d = program.kid(i);
@@ -109,6 +110,9 @@ void synthesizeDesignable(Node* program)
             if (controlType == 0 && nameIsOneOf(n, String.withCString("UXControl"),
                                                 String.withCString("XGControl")))
                 controlType = n;
+            if (menuItemType == 0 && nameIsOneOf(n, String.withCString("UXMenuItem"),
+                                                 String.withCString("XGMenuItem")))
+                menuItemType = n;
             }
         }
     if (protoName == 0)
@@ -242,6 +246,20 @@ void synthesizeDesignable(Node* program)
                 continue;
             if (!m.hasFlag((u32)NF_ACTION))
                 continue;
+            // A menu item is a model, not a control: an action whose sender is
+            // one is bound by wireMenuAction below, not here.
+            String* mst = (String*)0;
+            for (u32 k = (u32)0; k < m.kidCount(); k = k + (u32)1)
+                if (m.kid(k).kind() == (u16)nkParam) { mst = m.kid(k).op(); break; }
+            bool menuAction = false;
+            if (menuItemType != 0 && mst != 0)
+                {
+                String* p1 = String.withString(menuItemType); p1.appendCString("*");
+                String* p2 = String.withString(menuItemType); p2.appendCString("@");
+                menuAction = mst.equals(p1) || mst.equals(p2);
+                }
+            if (menuAction)
+                continue;
             src.appendCString("    if (_xtc_streq(name, (u8*)\"");
             src.append(m.name());
             src.appendCString("\")) { control.setAction(&self.");
@@ -249,6 +267,38 @@ void synthesizeDesignable(Node* program)
             src.appendCString("); return true; }\n");
             }
         src.appendCString("    return false;\n  }\n");
+        if (menuItemType != 0)
+            {
+            src.appendCString("  bool wireMenuAction(u8* name, ");
+            src.append(menuItemType);
+            src.appendCString("* item) {\n");
+            for (u32 j = (u32)0; j < c.kidCount(); j = j + (u32)1)
+                {
+                Node* m = c.kid(j);
+                if (m.kind() != (u16)nkMethodDecl)
+                    continue;
+                if (!m.hasFlag((u32)NF_ACTION))
+                    continue;
+                String* mst = (String*)0;
+                for (u32 k = (u32)0; k < m.kidCount(); k = k + (u32)1)
+                    if (m.kid(k).kind() == (u16)nkParam) { mst = m.kid(k).op(); break; }
+                bool menuAction = false;
+                if (mst != 0)
+                    {
+                    String* p1 = String.withString(menuItemType); p1.appendCString("*");
+                    String* p2 = String.withString(menuItemType); p2.appendCString("@");
+                    menuAction = mst.equals(p1) || mst.equals(p2);
+                    }
+                if (!menuAction)
+                    continue;
+                src.appendCString("    if (_xtc_streq(name, (u8*)\"");
+                src.append(m.name());
+                src.appendCString("\")) { item.setAction(&self.");
+                src.append(m.name());
+                src.appendCString("); return true; }\n");
+                }
+            src.appendCString("    return false;\n  }\n");
+            }
         src.appendCString("}\n");
         }
 
@@ -263,6 +313,8 @@ void synthesizeDesignable(Node* program)
     Parser* parser = Parser.with(lex.tokenise());
     parser.addTypeName(protoName);
     parser.addTypeName(controlType);
+    if (menuItemType != 0)
+        parser.addTypeName(menuItemType);
     if (nibClass != 0)
         parser.addTypeName(nibClass);
     for (u32 i = (u32)0; i < designable.count(); i = i + (u32)1)
