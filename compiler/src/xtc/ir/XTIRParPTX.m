@@ -977,7 +977,14 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
                       @"\t.reg .b32 %gid, %k, %nt, %ct, %tx;\n\t.reg .f32 %fk;\n\t.reg .f64 %dk;\n\t.reg .pred %pz;\n"];
     [out appendString:decls];
     [out appendString:@"\tmov.u64 %stp, st;\n\tld.param.u64 %ga, [args];\n\tcvta.to.global.u64 %ga, %ga;\n"];
-    for (uint32_t q = 0; q < self.objLayout.size; q++)
+    // The block object into the thread's copy, eight bytes at a time (both
+    // sides are 8-byte aligned: a device allocation and `.align 8`), then any
+    // tail byte by byte. It was every byte singly: 32 load/store pairs a
+    // thread for a typical block (bug 645).
+    uint32_t q = 0;
+    for (; q + 8 <= self.objLayout.size; q += 8)
+        [out appendFormat:@"\tld.global.u64 %%x, [%%ga+%u];\n\tst.local.u64 [%%stp+%u], %%x;\n", q, q];
+    for (; q < self.objLayout.size; q++)
         [out appendFormat:@"\tld.global.u8 %%k, [%%ga+%u];\n\tst.local.u8 [%%stp+%u], %%k;\n", q, q];
     [out appendString:@"\tld.param.u64 %gs, [span];\n\tcvta.to.global.u64 %gs, %gs;\n"
                       @"\tmov.u32 %ct, %ctaid.x;\n\tmov.u32 %nt, %ntid.x;\n\tmov.u32 %tx, %tid.x;\n"

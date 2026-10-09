@@ -16996,10 +16996,20 @@ class ClassInfo
         out.appendCString("\t.reg .b32 %gid, %k, %nt, %ct, %tx;\n\t.reg .f32 %fk;\n\t.reg .f64 %dk;\n\t.reg .pred %pz;\n");
         out.append(decls);
         out.appendCString("\tmov.u64 %stp, st;\n\tld.param.u64 %ga, [args];\n\tcvta.to.global.u64 %ga, %ga;\n");
-        for (u32 q = (u32)0; q < _mObj.size(); q = q + (u32)1)
+        // The block object into the thread's copy, eight bytes at a time,
+        // then any tail byte by byte (the reference explains; bug 645).
+        u32 q = (u32)0;
+        while (q + (u32)8 <= _mObj.size())
+            {
+            String* qs = String.withU32(q);
+            out.appendCString("\tld.global.u64 %x, [%ga+"); out.append(qs); out.appendCString("];\n\tst.local.u64 [%stp+"); out.append(qs); out.appendCString("], %x;\n");
+            q = q + (u32)8;
+            }
+        while (q < _mObj.size())
             {
             String* qs = String.withU32(q);
             out.appendCString("\tld.global.u8 %k, [%ga+"); out.append(qs); out.appendCString("];\n\tst.local.u8 [%stp+"); out.append(qs); out.appendCString("], %k;\n");
+            q = q + (u32)1;
             }
         out.appendCString("\tld.param.u64 %gs, [span];\n\tcvta.to.global.u64 %gs, %gs;\n");
         out.appendCString("\tmov.u32 %ct, %ctaid.x;\n\tmov.u32 %nt, %ntid.x;\n\tmov.u32 %tx, %tid.x;\n");
