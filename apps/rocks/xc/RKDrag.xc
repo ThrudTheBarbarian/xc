@@ -842,6 +842,11 @@ class RKDrag : Object
             {
             formResized(w, h, false);
             }
+        // The run loop is parked in trackDragStep, so repaint here to make the resize live.
+        if (gApp != (UXApplication*)0)
+            {
+            gApp.displayIfNeeded();
+            }
         }
     void formEnd(void)
         {

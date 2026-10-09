@@ -1715,6 +1715,8 @@ class RKMainController : Object<UXTableDelegate>
         if (n.kind == (i32)RKON_FORM)
             {
             i32 count = self.showResource(doc, n.treeIndex);
+            // A form's Identity is its name — the label it goes by; editing it re-labels the outline.
+            identityCtl.showForm(doc, doc.treeAt(n.treeIndex));
             self.say(n.label);
             return;
             }
@@ -1998,6 +2000,10 @@ class RKMainController : Object<UXTableDelegate>
         if (sizeCtl.autoPreview != (RKAutoPreview*)0 && sizeCtl.autoPreview.isRunning())
             {
             sizeCtl.autoPreview.tick();
+            if (gApp != (UXApplication*)0)
+                {
+                gApp.displayIfNeeded(); // paint IN the turn: the loop is parked in nextEvent otherwise
+                }
             }
         }
 

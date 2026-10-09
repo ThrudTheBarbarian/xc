@@ -107,24 +107,31 @@ class RKAutoSizing : UXView
         RKAutoSizing.bar(g, inner.x, my, ix1, my, (mask & (i32)UX_FLEX_WIDTH) == 0);
         RKAutoSizing.bar(g, mx, inner.y, mx, iy1, (mask & (i32)UX_FLEX_HEIGHT) == 0);
         }
-    // A strut is a solid line; a spring is the same line with a box in its middle.
+    // A strut (fixed) is a SOLID line; a spring (flexible) is the same line DASHED.  A block in the
+    // middle read as a different KIND of thing, and the two middle ones overlapped at the centre.
     static void bar(UXGraphics* g, i16 x0, i16 y0, i16 x1, i16 y1, bool strut)
         {
         bool horiz = y0 == y1;
-        if (horiz)
+        i32 len = horiz ? (i32)x1 - (i32)x0 : (i32)y1 - (i32)y0;
+        if (len < (i32)0)
             {
-            g.fillRectRGB(UXGeom.make(x0, (i16)(y0 - (i16)1), (i16)((i32)x1 - (i32)x0), (i16)3), (i32)120, (i32)132, (i32)156);
-            if (!strut)
-                {
-                g.fillRectRGB(UXGeom.make((i16)(((i32)x0 + (i32)x1) / (i32)2 - (i32)2), (i16)(y0 - (i32)4), (i16)5, (i16)7), (i32)120, (i32)132, (i32)156);
-                }
+            return;
             }
-        else
+        i32 d = (i32)4; // the dash run
+        for (i32 k = (i32)0; k < len; k = k + (strut ? len : d * (i32)2))
             {
-            g.fillRectRGB(UXGeom.make((i16)(x0 - (i16)1), y0, (i16)3, (i16)((i32)y1 - (i32)y0)), (i32)120, (i32)132, (i32)156);
-            if (!strut)
+            i32 run = strut ? len : (k + d <= len ? d : len - k);
+            if (horiz)
                 {
-                g.fillRectRGB(UXGeom.make((i16)(x0 - (i32)4), (i16)(((i32)y0 + (i32)y1) / (i32)2 - (i32)2), (i16)7, (i16)5), (i32)120, (i32)132, (i32)156);
+                g.fillRectRGB(UXGeom.make((i16)((i32)x0 + k), (i16)((i32)y0 - (i32)1), (i16)run, (i16)3), (i32)120, (i32)132, (i32)156);
+                }
+            else
+                {
+                g.fillRectRGB(UXGeom.make((i16)((i32)x0 - (i32)1), (i16)((i32)y0 + k), (i16)3, (i16)run), (i32)120, (i32)132, (i32)156);
+                }
+            if (strut)
+                {
+                break;
                 }
             }
         }

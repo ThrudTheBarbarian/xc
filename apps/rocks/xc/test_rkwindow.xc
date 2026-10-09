@@ -98,6 +98,12 @@ void main(void)
     // The canvas and the left list are ONE selection: selecting on the canvas highlights its row.
     checkTrue("the selected control's outline row is visible", c.outlineRowFor(ok) >= (i32)0);
     check("...and it is the outline's selected row", c.formOutline.selection(), c.outlineRowFor(ok));
+    // A form is renamed through the Identity tab, and it sticks (it is the tree's name).
+    c.identityCtl.showForm(c.doc, c.doc.treeAt((i32)0));
+    checkTrue("a form shows a Name to edit", c.identityCtl.nameField != (UXTextField*)0);
+    c.identityCtl.nameField.setText((u8*)"test");
+    c.identityCtl.onEdit(c.identityCtl.nameField);
+    checkTrue("the form's name sticks", streq(c.doc.treeAt((i32)0).name, (u8*)"test"));
     // The Size tab's moving preview: built for the selected control, and its frame math follows the
     // mask through the toolkit's own solver (the same one the real layout uses).
     checkTrue("the Size tab has a moving preview", c.sizeCtl.autoPreview != (RKAutoPreview*)0);

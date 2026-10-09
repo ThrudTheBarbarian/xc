@@ -320,9 +320,9 @@ class RKRow : Object
             RKAutoSizing* as = new RKAutoSizing();
             as.setMask(mask);
             as.changed = &self.onAutoMask;
-            pane.addSubview(as, UXGeom.make((i16)(((i32)w - (i32)96) / (i32)2), y, (i16)96, (i16)96));
+            pane.addSubview(as, UXGeom.make((i16)8, y, (i16)((i32)w - (i32)16), (i16)130));
             self.autoSizing = as;
-            y = (i16)((i32)y + (i32)96 + (i32)gap);
+            y = (i16)((i32)y + (i32)130 + (i32)gap);
             // The moving preview, on the Size tab only: the box above, being resized while you look
             // at it.  The controller drives whether it runs (hover over it, or over the control).
             if (section == (i32)RKIS_SIZE)

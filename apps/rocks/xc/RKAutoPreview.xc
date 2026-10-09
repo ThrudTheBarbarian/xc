@@ -92,8 +92,9 @@ class RKAutoPreview : UXView
         {
         UXRect b = self.bounds();
         i16 m = (i16)12; // a margin, so the growth has room
-        i32 baseW = (i32)b.w - (i32)m * (i32)2;
-        i32 baseH = (i32)b.h - (i32)m * (i32)2;
+        // Reserve RK_AUTO_GROW, so the grown parent never runs off the bottom or right of the area.
+        i32 baseW = (i32)b.w - (i32)m * (i32)2 - (i32)RK_AUTO_GROW;
+        i32 baseH = (i32)b.h - (i32)m * (i32)2 - (i32)RK_AUTO_GROW;
         if (baseW < (i32)20 || baseH < (i32)20)
             {
             return;

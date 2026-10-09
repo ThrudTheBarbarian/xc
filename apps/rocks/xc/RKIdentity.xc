@@ -97,6 +97,22 @@ class RKIdentity : Object
         self.classSection(cls, UXRsc.defaultClassFor(o.type), &y);
         self.end();
         }
+    // A form (a tree) itself: just its name, the label it goes by in the outline.
+    void showForm(UXRscDoc* d, UXRscTree* t)
+        {
+        doc = d;
+        tree = t;
+        obj = (UXRscObject*)0;
+        self.begin((i32)RKON_FORM);
+        if (pane == (UXView*)0)
+            {
+            self.end();
+            return;
+            }
+        i16 y = (i16)8;
+        nameField = self.field((u8*)"Name", t.name != (u8*)0 ? t.name : (u8*)"", (u8*)"none", &y);
+        self.end();
+        }
     void showObject(UXRscDoc* d, i32 id)
         {
         doc = d;
@@ -198,6 +214,10 @@ class RKIdentity : Object
                     {
                     to.label = v;
                     }
+                }
+            else if (kind == (i32)RKON_FORM)
+                {
+                tree.name = v;
                 }
             }
         callback c void(void) = changed;
