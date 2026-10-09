@@ -143,8 +143,12 @@ the driver that comes with the GPU:
 | `wasm32` | WebGPU | a browser with WebGPU and JavaScript promise integration (JSPI), such as Chrome (from 0.72) |
 
 Results are the same as on the CPU: integer reductions match exactly, because
-the GPU's partial results are combined in the same order the CPU combines its
-chunks. A block that cannot run on the GPU stays on the CPU, as do all blocks
+each of the seven operators gives the same integer whatever order its values
+are combined in. From 0.75 the GPU combines a block's reductions itself, in
+groups of 256 work items (on CUDA and Metal so far), rather than handing every
+work item's value back to be combined on the CPU. A floating-point reduction can
+therefore differ in its last bits between the CPU and the GPU, as it can between
+two numbers of CPU threads; on one device it gives the same result every run. A block that cannot run on the GPU stays on the CPU, as do all blocks
 when there is no GPU.
 
 A block runs on the GPU when it works on arrays (captured locals or globals),
@@ -252,6 +256,57 @@ include a hash of the machine's GPU and CPU, so a new GPU is measured afresh
 GPU version, so a block that changes is measured afresh too. From 0.75, on
 Windows with both CUDA and Vulkan, the value also names the interface `auto`
 chose (`…,cuda` or `…,vulkan`).
+
+#### How `auto` learns across runs of different sizes
+
+For each block, `auto` keeps two numbers: the largest number of items the CPU
+has won at, and the smallest the GPU has won at. Either may be unknown. Each
+time the block starts, its number of items (`n`) is compared with them:
+
+| `n` is… | the block runs on | and `auto`… |
+|---|---|---|
+| at least the GPU's smallest win | the GPU | measures nothing |
+| at most the CPU's largest win | the CPU | measures nothing |
+| between the two, or either is unknown | the CPU first, then the GPU | measures this size and learns from it |
+
+Measuring a size takes several runs of the block in one run of the program,
+because each device's first run is a warm-up. The block runs on the CPU, and
+the second CPU run is timed. If it took under a millisecond, the CPU wins at
+`n` and the block stays there. Otherwise the block runs on the GPU, its second
+GPU run is timed, and the faster device wins at `n`. A size the block meets once
+and never again is not measured to the end; one it meets repeatedly is.
+
+The win moves the matching number: a CPU win at `n` raises the CPU's largest
+win to `n`, a GPU win lowers the GPU's smallest win to `n`. The two always
+leave a gap between them. A win that contradicts the other number (the GPU
+winning at a size the CPU had won at, say) drops that number, so the newer
+measurement is the one kept. Both numbers are saved straight away.
+
+While a size is being measured, a run more than twice as large, or less than
+half as large, starts the measurement again at the new size. The devices stay
+warm, so no second warm-up is needed. Without this rule, a block whose size
+never repeats would never finish measuring.
+
+An example, for one block whose GPU version is worth it on large inputs:
+
+| program run | sizes it calls the block with | what `auto` does | kept afterwards (CPU up to, GPU from) |
+|---|---|---|---|
+| 1st | 1,000, several times | the CPU takes 0.2 ms: a CPU win | 1,000, unknown |
+| 1st, later | 1,000,000, several times | above the CPU's win, so measured: CPU 40 ms, GPU 8 ms | 1,000, 1,000,000 |
+| 2nd | 1,000 and 1,000,000 | both decided at once, nothing measured | 1,000, 1,000,000 |
+| 2nd, later | 300,000, several times | between the two, so measured: CPU 12 ms, GPU 4 ms | 1,000, 300,000 |
+| 3rd | 2,000,000 | above the GPU's win: the GPU, nothing measured | 1,000, 300,000 |
+
+So the gap between the two numbers narrows only at sizes the program really
+uses, and a size outside it is never measured again. The numbers belong to one
+machine and one version of the block. A new GPU, or a change to the block,
+starts from nothing; the old values stay in the store for when the old GPU or
+block comes back.
+
+To start again, delete the block's `par.learned.…` keys from the settings store,
+or set the block's own setting (below), which `auto` never overrides.
+`XC_PAR_REPORT=1` prints each decision, each measurement and each change to
+the two numbers as it happens.
 
 To choose instead, in order of precedence:
 
