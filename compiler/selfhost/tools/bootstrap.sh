@@ -44,7 +44,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 INCS=(-I support/generic/lib -I support/arm64/lib -I support/xt6502/lib
       -I selfhost/lexer -I selfhost/preproc -I selfhost/parser
-      -I selfhost/sema -I selfhost/ir)
+      -I selfhost/sema -I selfhost/ir -I selfhost/opt)
 SRC=selfhost/tools/xtfe.xc -I selfhost/driver
 
 # Build the front end with the toolchain in $1: the executable as $2 and the

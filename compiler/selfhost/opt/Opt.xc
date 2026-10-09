@@ -1150,6 +1150,32 @@ class OptProfile
         return o;
         }
 
+    // The passes a par block's GPU kernel gets before it is printed (the
+    // reference: XTIRParCheck kernelModuleFrom, bug 645), in its order.
+    void parKernels(IRModule* m)
+        {
+        inlineLeaves(m);
+        if (_failed) return;
+        _cseCrossBlock = true;
+        redundantLoadCSE(m);
+        _cseCrossBlock = false;
+        ifConvert(m);
+        jumpThread(m);
+        deadCode(m);
+        strengthReduce(m);
+        constOperandFold(m);
+        redundantLoadCSE(m);
+        licm(m);
+        _cseCrossBlock = true;
+        _cseLate = true;
+        redundantLoadCSE(m);
+        _cseCrossBlock = false;
+        _cseLate = false;
+        blockMerge(m);
+        loopRotate(m);
+        deadCode(m);
+        }
+
     bool failed(void)
         {
         return _failed;

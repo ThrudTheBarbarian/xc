@@ -29,6 +29,7 @@
 #import "FloatEncoding.xc"
 #import "ParSpirv.xc"
 #import "ParWgsl.xc"
+#import "Opt.xc"
 
 // What the lowering knows about one class: where its instance keeps things,
 // which slot each method dispatches through, and the shape a pointer to it has.
@@ -16179,6 +16180,19 @@ class ClassInfo
 
     String* ptxBinary(IRInsn* ip, String* r, String* rt)
         {
+        // Logic on predicates (the reference explains).
+        if (ptxIs(rt, "Bool") && (ip.op().equals(ptxS("And")) || ip.op().equals(ptxS("Or")) || ip.op().equals(ptxS("Xor")))
+            && ((IROperand*)ip.ops().get((u32)0)).kind() == (u8)OPK_USE && ((IROperand*)ip.ops().get((u32)1)).kind() == (u8)OPK_USE)
+            {
+            String* pa = ptxOp((IROperand*)ip.ops().get((u32)0), rt);
+            String* pb = ptxOp((IROperand*)ip.ops().get((u32)1), rt);
+            if (pa == (String*)0 || pb == (String*)0) return (String*)0;
+            String* pl = ptxS("\t");
+            pl.appendCString(ip.op().equals(ptxS("And")) ? "and" : ip.op().equals(ptxS("Or")) ? "or" : "xor");
+            pl.appendCString(".pred "); pl.append(r); pl.appendCString(", "); pl.append(pa); pl.appendCString(", ");
+            pl.append(pb); pl.appendCString(";\n");
+            return pl;
+            }
         if (ptxNarrow(rt) || ptxIs(rt, "Bool")) return (String*)0; // first cut: no 8/16-bit or bool arithmetic
         String* a = ptxOp((IROperand*)ip.ops().get((u32)0), rt);
         String* b = ptxOp((IROperand*)ip.ops().get((u32)1), rt);
@@ -20713,13 +20727,132 @@ class ClassInfo
     // `__XC_PAR_MSL_<n>__`; give it the kernel's source for the target's GPU
     // (Metal on macOS, PTX for NVIDIA on Windows), or "" when the block
     // stays on the CPU.
+    // The kernels as the optimiser leaves them (the reference explains:
+    // XTIRParCheck kernelModuleFrom, bug 645). 0 when the round trip is not
+    // exact or a pass fails.
+    IRModule* parKernelModule()
+        {
+        String* printed = _m.text();
+        IRModule* copy = IrParser.parseText(printed, new IrParser());
+        if (copy == (IRModule*)0 || !copy.text().equals(printed)) return (IRModule*)0;
+        Map* byName = new Map();
+        for (u32 i = (u32)0; i < copy.funcs().count(); i = i + (u32)1)
+            byName.set((Hashable*)((IRFunc*)copy.funcs().get(i)).name(), copy.funcs().get(i));
+        Array* keep = new Array();
+        Map* seen = new Map();
+        Array* work = new Array();
+        for (u32 i = (u32)0; i < copy.funcs().count(); i = i + (u32)1)
+            {
+            IRFunc* f = (IRFunc*)copy.funcs().get(i);
+            if (f.name().hasPrefix(String.withCString("ParImpl$")) && f.name().hasSuffix(String.withCString("$run")))
+                {
+                work.add((Object*)f);
+                seen.set((Hashable*)f.name(), (Object*)f.name());
+                }
+            }
+        if (work.count() == (u32)0) return (IRModule*)0;
+        while (work.count() > (u32)0)
+            {
+            IRFunc* f = (IRFunc*)work.get(work.count() - (u32)1);
+            work.removeLast();
+            keep.add((Object*)f);
+            for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* blk = (IRBlock*)f.blocks().get(b);
+                for (u32 k = (u32)0; k < blk.insns().count(); k = k + (u32)1)
+                    {
+                    IRInsn* ip = (IRInsn*)blk.insns().get(k);
+                    if (!ip.op().equals(String.withCString("Call")) || ip.ops().count() == (u32)0) continue;
+                    IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
+                    if (o0.kind() != (u8)OPK_SYM) continue;
+                    String* nm = o0.name();
+                    // Not the standard output library (the reference explains).
+                    if (nm != (String*)0 && byName.get((Hashable*)nm) != (Object*)0 && seen.get((Hashable*)nm) == (Object*)0
+                        && !nm.hasPrefix(String.withCString("Stdio$")))
+                        {
+                        seen.set((Hashable*)nm, (Object*)nm);
+                        work.add(byName.get((Hashable*)nm));
+                        }
+                    }
+                }
+            }
+        copy.funcs().removeAll();
+        for (u32 i = (u32)0; i < keep.count(); i = i + (u32)1)
+            copy.funcs().add(keep.get(i));
+        Opt* opt = Opt.atLevel((u32)3, OptProfile.forTarget(String.withCString("arm64")));
+        opt.parKernels(copy);
+        if (opt.failed()) return (IRModule*)0;
+        return copy;
+        }
+
+    // Each printer on the optimised kernel first, then the plain one if that
+    // declines (the reference explains). The printers read _m for context.
+    String* parPtxK(IRFunc* f, IRFunc* kf, IRModule* km)
+        {
+        if (kf != (IRFunc*)0)
+            {
+            IRModule* sm = _m;
+            _m = km;
+            String* r = parPtx(kf);
+            _m = sm;
+            _mWhy = (String*)0;
+            if (r != (String*)0) return r;
+            }
+        return parPtx(f);
+        }
+    Array* parSpirvK(IRFunc* f, IRFunc* kf, IRModule* km)
+        {
+        if (kf != (IRFunc*)0)
+            {
+            IRModule* sm = _m;
+            _m = km;
+            bool ok = parSpirv(kf);
+            _m = sm;
+            _mWhy = (String*)0;
+            if (ok) return _sOut;
+            }
+        return parSpirv(f) ? _sOut : (Array*)0;
+        }
+    String* parMslK(IRFunc* f, IRFunc* kf, IRModule* km)
+        {
+        if (kf != (IRFunc*)0)
+            {
+            IRModule* sm = _m;
+            _m = km;
+            String* r = parMsl(kf);
+            _m = sm;
+            _mWhy = (String*)0;
+            if (r != (String*)0) return r;
+            }
+        return parMsl(f);
+        }
+    String* parWgslK(IRFunc* f, IRFunc* kf, IRModule* km)
+        {
+        if (kf != (IRFunc*)0)
+            {
+            IRModule* sm = _m;
+            _m = km;
+            bool ok = parWgsl(kf);
+            _m = sm;
+            _mWhy = (String*)0;
+            if (ok) return _wgOut;
+            }
+        return parWgsl(f) ? _wgOut : (String*)0;
+        }
+
     void parFillSources()
         {
+        IRModule* kmod = parKernelModule();
+        Map* kfns = new Map();
+        if (kmod != (IRModule*)0)
+            for (u32 i = (u32)0; i < kmod.funcs().count(); i = i + (u32)1)
+                kfns.set((Hashable*)((IRFunc*)kmod.funcs().get(i)).name(), kmod.funcs().get(i));
         for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
             {
             IRFunc* f = (IRFunc*)_m.funcs().get(i);
             if (!f.name().hasPrefix(String.withCString("ParImpl$")) || !f.name().hasSuffix(String.withCString("$run")))
                 continue;
+            IRFunc* kf = (IRFunc*)kfns.get((Hashable*)f.name());
             String* n = f.name().substringBytes((u32)8, f.name().byteLength() - (u32)12);
             String* tag = String.withCString("__XC_PAR_MSL_");
             tag.append(n);
@@ -20776,9 +20909,9 @@ class ClassInfo
                 // Windows: the PTX for NVIDIA's driver, then the SPIR-V for
                 // Vulkan after the PTX's NUL at a 4-byte boundary; either alone
                 // where the other did not print. As the reference.
-                String* ptx = parPtx(f);
+                String* ptx = parPtxK(f, kf, kmod);
                 String* ptxWhy = _mWhy;
-                Array* spv = parSpirv(f) ? _sOut : (Array*)0;
+                Array* spv = parSpirvK(f, kf, kmod);
                 if (ptx != (String*)0)
                     {
                     kernelBytes = new Array();
@@ -20799,16 +20932,13 @@ class ClassInfo
                     _mWhy = ptxWhy;
                 }
             else if (_parSPIRV)
-                {
-                if (parSpirv(f))
-                    kernelBytes = _sOut;
-                }
+                kernelBytes = parSpirvK(f, kf, kmod);
             else if (_parMetal)
-                msl = parMsl(f);
+                msl = parMslK(f, kf, kmod);
             else if (_parPTX)
-                msl = parPtx(f);
+                msl = parPtxK(f, kf, kmod);
             else if (_parWGSL)
-                msl = parWgsl(f) ? _wgOut : (String*)0;
+                msl = parWgslK(f, kf, kmod);
             if (kernelBytes != (Array*)0)
                 msl = String.withCString("");
             if (msl == (String*)0 && (_parMetal || _parPTX || _parSPIRV || _parWGSL))

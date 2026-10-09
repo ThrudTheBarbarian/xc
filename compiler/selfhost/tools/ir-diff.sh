@@ -32,7 +32,7 @@ INCS=(-I support/generic/lib -I support/$XC_HOST_ARCH/lib)
 echo "building xtir (xtc → native arm64)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -o "$WORK/xtir" selfhost/tools/xtir.xc \
     "${INCS[@]}" -I selfhost/lexer -I selfhost/preproc -I selfhost/parser \
-    -I selfhost/sema -I selfhost/ir -I selfhost/driver 2>&1 | grep -E "error" && exit 1
+    -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/driver 2>&1 | grep -E "error" && exit 1
 
 PATTERN=${1:-}
 pass=0; fail=0; unsup=0; oracle=0

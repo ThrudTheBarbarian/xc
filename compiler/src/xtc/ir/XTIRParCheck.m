@@ -8,6 +8,24 @@
 #import "XTIRValue.h"
 #import "XTIRSymbol.h"
 #import "XTDeclNodes.h"
+#import "XTIRPrinter.h"
+#import "XTIRParser.h"
+#import "XTIROptPipeline.h"
+#import "XTIROptTargetProfile.h"
+#import "XTIROptInline.h"
+#import "XTIROptRedundantLoadCSE.h"
+#import "XTIROptIfConvert.h"
+#import "XTIROptJumpThread.h"
+#import "XTIROptDeadCode.h"
+#import "XTIROptStrengthReduce.h"
+#import "XTIROptConstOperandFold.h"
+#import "XTIROptLICM.h"
+#import "XTIROptBlockMerge.h"
+#import "XTIROptLoopRotate.h"
+
+@interface XTIROptPipeline (ParKernels)
+- (instancetype)initAtLevel:(NSInteger)level;
+@end
 #import "XTDiagnosticEngine.h"
 #import "XTIRParMSL.h"
 
@@ -97,14 +115,107 @@ static BOOL gEmitsWGSL = NO;
 // Each block's gpuSource() returns a placeholder literal, `__XC_PAR_MSL_<n>__`;
 // give it the kernel's source for the target's GPU (Metal on macOS, PTX for
 // NVIDIA on Windows), or "" when the block stays on the CPU.
+/****************************************************************************\
+|* The kernels as the optimiser leaves them (bug 645). A kernel is printed in
+|* the front end, before the code generator's optimiser runs, so it got none
+|* of it: mandelbrot's escape test computed x*x and y*y twice an iteration.
+|* This is a copy of the module, by the IR's own print-and-parse round trip
+|* (as XTIROptSimdClone takes its clones), cut down to the run functions and
+|* what they call, with the passes that suit a kernel run over it: inlining,
+|* CSE, if-conversion, jump threading, strength reduction, constant folding,
+|* LICM, block merging, rotation and dead code. No vectorising, cloning or
+|* unrolling. The module itself, and so the CPU path, is not touched. nil when
+|* the round trip is not exact or a pass fails: the kernels print as before.
+\****************************************************************************/
++ (nullable XTIRModule*)kernelModuleFrom:(XTIRModule*)module
+    {
+    NSString* printed = [XTIRPrinter stringFromModule:module];
+    XTIRModule* copy = [XTIRParser moduleFromString:printed sharingLayoutsOf:module error:NULL];
+    if (!copy || ![[XTIRPrinter stringFromModule:copy] isEqualToString:printed])
+        return nil;
+    NSMutableDictionary<NSString*, XTIRFunction*>* byName = [NSMutableDictionary dictionary];
+    for (XTIRFunction* f in copy.functions)
+        byName[f.name] = f;
+    NSMutableArray<XTIRFunction*>* keep = [NSMutableArray array];
+    NSMutableSet<NSString*>* seen = [NSMutableSet set];
+    NSMutableArray<XTIRFunction*>* work = [NSMutableArray array];
+    for (XTIRFunction* f in copy.functions)
+        if ([f.name hasPrefix:@"ParImpl$"] && [f.name hasSuffix:@"$run"])
+            {
+            [work addObject:f];
+            [seen addObject:f.name];
+            }
+    if (!work.count)
+        return nil;
+    while (work.count)
+        {
+        XTIRFunction* f = work.lastObject;
+        [work removeLastObject];
+        [keep addObject:f];
+        for (XTIRBlock* b in f.blocks)
+            for (XTIRInsn* i in b.instructions)
+                {
+                if (i.opcode != XTIROpCall || !i.operands.count || i.operands[0].kind != XTIROperandKindSym)
+                    continue;
+                NSString* nm = [copy symbolForId:i.operands[0].symbolId].name;
+                // Not the standard output library: no kernel calls it, and
+                // its functions do not pass the verifier when run alone.
+                if (nm && byName[nm] && ![seen containsObject:nm] && ![nm hasPrefix:@"Stdio$"])
+                    {
+                    [seen addObject:nm];
+                    [work addObject:byName[nm]];
+                    }
+                }
+        }
+    [copy.functions setArray:keep];
+    XTIROptTargetProfile* prof = [XTIRArm64TargetProfile new];
+    XTIROptPipeline* p = [[XTIROptPipeline alloc] initAtLevel:3];
+    XTIROptInline* inl = [XTIROptInline new];
+    inl.profile = prof;
+    [p addPass:inl];
+    XTIROptRedundantLoadCSE* cse1 = [XTIROptRedundantLoadCSE new];
+    cse1.crossBlock = YES;
+    [p addPass:cse1];
+    XTIROptIfConvert* ifc = [XTIROptIfConvert new];
+    ifc.profile = prof;
+    [p addPass:ifc];
+    [p addPass:[XTIROptJumpThread new]];
+    [p addPass:[XTIROptDeadCode new]];
+    [p addPass:[XTIROptStrengthReduce new]];
+    [p addPass:[XTIROptConstOperandFold new]];
+    [p addPass:[XTIROptRedundantLoadCSE new]];
+    XTIROptLICM* licm = [XTIROptLICM new];
+    licm.profile = prof;
+    [p addPass:licm];
+    XTIROptRedundantLoadCSE* cse2 = [XTIROptRedundantLoadCSE new];
+    cse2.crossBlock = YES;
+    cse2.late = YES;
+    [p addPass:cse2];
+    [p addPass:[XTIROptBlockMerge new]];
+    XTIROptLoopRotate* rot = [XTIROptLoopRotate new];
+    rot.profile = prof;
+    [p addPass:rot];
+    [p addPass:[XTIROptDeadCode new]];
+    if (![p runOnModule:copy errors:NULL])
+        return nil;
+    return copy;
+    }
+
 + (void)fillSourcesIn:(XTIRModule*)module
               classDecls:(NSDictionary<NSString*, XTClassDeclNode*>*)classDecls
              diagnostics:(XTDiagnosticEngine*)diag
     {
+    XTIRModule* kmod = [self kernelModuleFrom:module];
+    NSMutableDictionary<NSString*, XTIRFunction*>* kfns = [NSMutableDictionary dictionary];
+    for (XTIRFunction* g in kmod.functions)
+        kfns[g.name] = g;
     for (XTIRFunction* f in module.functions)
         {
         if (![f.name hasPrefix:@"ParImpl$"] || ![f.name hasSuffix:@"$run"])
             continue;
+        // Each printer tries the optimised kernel first and the plain one if
+        // that declines, so the optimiser never costs a block its GPU path.
+        XTIRFunction* kf = kfns[f.name];
         NSString* n = [f.name substringWithRange:NSMakeRange(8, f.name.length - 12)];
         NSData* plain = [[NSString stringWithFormat:@"__XC_PAR_MSL_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
         NSData* fastTag = [[NSString stringWithFormat:@"__XC_PAR_FAST_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
@@ -144,6 +255,22 @@ static BOOL gEmitsWGSL = NO;
                 redOps[@([pair substringToIndex:eq.location].integerValue)] = [pair substringFromIndex:eq.location + 1];
                 }
             }
+        NSString* (^ptxOf)(NSString* _Nullable* _Nullable) = ^NSString*(NSString* _Nullable* _Nullable w) {
+            NSString* t = kf ? [XTIRParMSL ptxForKernel:kf module:kmod fast:fast redOps:redOps why:NULL] : nil;
+            return t ?: [XTIRParMSL ptxForKernel:f module:module fast:fast redOps:redOps why:w];
+        };
+        NSData* (^spirvOf)(NSString* _Nullable* _Nullable) = ^NSData*(NSString* _Nullable* _Nullable w) {
+            NSData* d = kf ? [XTIRParMSL spirvForKernel:kf module:kmod fast:fast redOps:redOps why:NULL] : nil;
+            return d ?: [XTIRParMSL spirvForKernel:f module:module fast:fast redOps:redOps why:w];
+        };
+        NSString* (^metalOf)(NSString* _Nullable* _Nullable) = ^NSString*(NSString* _Nullable* _Nullable w) {
+            NSString* t = kf ? [XTIRParMSL sourceForKernel:kf module:kmod fast:fast redOps:redOps why:NULL] : nil;
+            return t ?: [XTIRParMSL sourceForKernel:f module:module fast:fast redOps:redOps why:w];
+        };
+        NSString* (^wgslOf)(NSString* _Nullable* _Nullable) = ^NSString*(NSString* _Nullable* _Nullable w) {
+            NSString* t = kf ? [XTIRParMSL wgslForKernel:kf module:kmod fast:fast redOps:redOps why:NULL] : nil;
+            return t ?: [XTIRParMSL wgslForKernel:f module:module fast:fast redOps:redOps why:w];
+        };
         NSString* why = nil;
         NSData* kernel = nil;
         if (gEmitsSPIRV && gEmitsPTX)
@@ -152,8 +279,8 @@ static BOOL gEmitsWGSL = NO;
             // Vulkan (any other GPU), after the PTX's NUL at a 4-byte boundary
             // (ParVulkan.spirvOf). Either alone where the other did not print.
             NSString* ptxWhy = nil;
-            NSString* ptx = [XTIRParMSL ptxForKernel:f module:module fast:fast redOps:redOps why:&ptxWhy];
-            NSData* spv = [XTIRParMSL spirvForKernel:f module:module fast:fast redOps:redOps why:&why];
+            NSString* ptx = ptxOf(&ptxWhy);
+            NSData* spv = spirvOf(&why);
             if (ptx && spv)
                 {
                 NSMutableData* both = [[ptx dataUsingEncoding:NSUTF8StringEncoding] mutableCopy];
@@ -172,12 +299,12 @@ static BOOL gEmitsWGSL = NO;
                 why = ptxWhy ?: why;
             }
         else if (gEmitsSPIRV)
-            kernel = [XTIRParMSL spirvForKernel:f module:module fast:fast redOps:redOps why:&why];
+            kernel = spirvOf(&why);
         else
             {
-            NSString* text = gEmitsMetal ? [XTIRParMSL sourceForKernel:f module:module fast:fast redOps:redOps why:&why]
-                           : gEmitsPTX   ? [XTIRParMSL ptxForKernel:f module:module fast:fast redOps:redOps why:&why]
-                           : gEmitsWGSL  ? [XTIRParMSL wgslForKernel:f module:module fast:fast redOps:redOps why:&why]
+            NSString* text = gEmitsMetal ? metalOf(&why)
+                           : gEmitsPTX   ? ptxOf(&why)
+                           : gEmitsWGSL  ? wgslOf(&why)
                                          : @"";
             kernel = [text dataUsingEncoding:NSUTF8StringEncoding];
             }
@@ -187,7 +314,7 @@ static BOOL gEmitsWGSL = NO;
         if (dump && *dump)
             {
             NSString* dwhy = nil;
-            NSData* d = gEmitsSPIRV ? kernel : [XTIRParMSL spirvForKernel:f module:module fast:fast redOps:redOps why:&dwhy];
+            NSData* d = gEmitsSPIRV ? kernel : spirvOf(&dwhy);
             if (gEmitsSPIRV)
                 dwhy = why;
             NSString* base = [[NSString stringWithUTF8String:dump] stringByAppendingPathComponent:n];

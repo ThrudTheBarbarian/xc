@@ -596,6 +596,20 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
         case XTIROpShl: case XTIROpLShr: case XTIROpAShr:
         case XTIROpFAdd: case XTIROpFSub: case XTIROpFMul: case XTIROpFDiv:
             {
+            // Logic on predicates: what if-conversion makes of `a && b` (the
+            // two tests of a loop such as mandelbrot's escape test). Register
+            // operands only; a constant one still declines the block.
+            if (rt.kind == XTIRTypeKindBool &&
+                (i.opcode == XTIROpAnd || i.opcode == XTIROpOr || i.opcode == XTIROpXor) &&
+                o[0].kind == XTIROperandKindUse && o[1].kind == XTIROperandKindUse)
+                {
+                NSString* a = [self ptxOp:o[0] type:rt];
+                NSString* b = [self ptxOp:o[1] type:rt];
+                if (!a || !b)
+                    return nil;
+                NSString* op = i.opcode == XTIROpAnd ? @"and" : i.opcode == XTIROpOr ? @"or" : @"xor";
+                return [NSString stringWithFormat:@"\t%@.pred %@, %@, %@;\n", op, r, a, b];
+                }
             if (ptxNarrow(rt) || rt.kind == XTIRTypeKindBool)
                 return nil; // first cut: no 8/16-bit or bool arithmetic
             NSString* a = [self ptxOp:o[0] type:rt];

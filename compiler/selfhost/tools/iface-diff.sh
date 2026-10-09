@@ -29,7 +29,7 @@ trap 'rm -rf "$WORK"' EXIT
 echo "building xtfe (xtc → native arm64)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtfe" selfhost/tools/xtfe.xc -I selfhost/driver \
     -I selfhost/lexer -I selfhost/preproc -I selfhost/parser \
-    -I selfhost/sema -I selfhost/ir 2>&1 | grep -E "^[^ ].*error" && exit 1
+    -I selfhost/sema -I selfhost/ir -I selfhost/opt 2>&1 | grep -E "^[^ ].*error" && exit 1
 
 for m in tests/selfhost-iface/mod-*.xc; do
     b="$(basename "$m" .xc)"

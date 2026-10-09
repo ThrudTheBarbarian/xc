@@ -36,9 +36,9 @@ echo "building the ported tools…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$W/xtfe"  selfhost/tools/xtfe.xc -I selfhost/driver \
     -I support/generic/lib -I support/$XC_HOST_ARCH/lib -I support/xt6502/lib \
     -I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema \
-    -I selfhost/ir >/dev/null
+    -I selfhost/ir -I selfhost/opt >/dev/null
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$W/xtcg9" selfhost/tools/xtcg9.xc \
-    -I selfhost/ir -I selfhost/codegen >/dev/null
+    -I selfhost/ir -I selfhost/opt -I selfhost/codegen >/dev/null
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$W/xtas9" selfhost/tools/xtas9.xc \
     -I selfhost/asm >/dev/null
 

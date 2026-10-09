@@ -52,18 +52,18 @@ tool_incs() {
       xtcg65)    echo "-I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/driver";;
       xtcg68|xtcgwasm|xtcgx86)
                  echo "-I selfhost/ir -I selfhost/opt -I selfhost/codegen";;
-      xtcg9)     echo "-I selfhost/ir -I selfhost/codegen";;
+      xtcg9)     echo "-I selfhost/ir -I selfhost/opt -I selfhost/codegen";;
       xtcga64)   echo "-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm";;
       # The front end pulls in the whole chain. The set here was originally
       # lifted from bootstrap.sh, where `-I selfhost/driver` is glued onto a
       # SRC= variable rather than being the whole list — so it built with one
       # include path and failed on the first #import. Extraction from a stale
       # script is not the same as knowing what a tool needs.
-      xtfe)      echo "-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/driver";;
+      xtfe)      echo "-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/driver";;
       xtapk)     echo "-I selfhost/link -I selfhost/asm";;
       xtast)     echo "-I selfhost/lexer -I selfhost/preproc -I selfhost/parser";;
-      xtir)      echo "-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/driver";;
-      xtirp)     echo "-I selfhost/ir";;
+      xtir)      echo "-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/driver";;
+      xtirp)     echo "-I selfhost/ir -I selfhost/opt";;
       xtlex)     echo "-I selfhost/lexer";;
       xtopt)     echo "-I selfhost/ir -I selfhost/opt";;
       xtpp)      echo "-I selfhost/preproc";;
