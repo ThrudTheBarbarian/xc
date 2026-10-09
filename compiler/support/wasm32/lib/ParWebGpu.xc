@@ -86,7 +86,7 @@ class ParWebGpu
         u8* parts[16];
         for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)
             {
-            u32 bytes = (u32)(l.threads * l.redStride[i]);
+            u32 bytes = (u32)(l.nparts * l.redStride[i]);
             parts[i] = new u8[bytes + (u32)4];
             desc[b * (u32)3] = (u32)(pointer)parts[i];
             desc[b * (u32)3 + (u32)1] = bytes;
@@ -94,7 +94,10 @@ class ParWebGpu
             b = b + (u32)1;
             }
         i64 gpuStart = ParDevice.nowUs();
-        i32 rc = _xc_gpu_run(src, parWebGpuLen(src), &desc[0], nb, (u32)((l.threads + (i64)63) / (i64)64));
+        // Workgroups: of 256 for a kernel that reduces on the device (bug 645),
+        // one partial each; else of 64.
+        u32 groups = l.devred != (i64)0 ? (u32)l.nparts : (u32)((l.threads + (i64)63) / (i64)64);
+        i32 rc = _xc_gpu_run(src, parWebGpuLen(src), &desc[0], nb, groups);
         i64 gpuUs = ParDevice.nowUs() - gpuStart;
         if (rc == (i32)1)
             l.fold(proto, &parts[0]);

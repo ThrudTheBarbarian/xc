@@ -2767,6 +2767,16 @@ class Parser
             String* tag = String.withCString(frame.get((Hashable*)String.withCString("fast")) != 0 ? "__XC_PAR_FAST_" : "__XC_PAR_MSL_");
             tag.append(String.withU32(counter));
             tag.appendCString("__");
+            // …then each reduction as `<field>=<op>;` (bug 645), so the kernel
+            // can combine them on the device: field 0 is the object header, 1
+            // and 2 lo and hi, then the captures, then the reductions in order.
+            for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
+                Node* r = (Node*)reds.get(i);
+                tag.append(String.withU32((u32)3 + caps.count() + i));
+                tag.appendCString("=");
+                tag.append(r.op());
+                tag.appendCString(";");
+            }
             Node* ret = mk((u16)nkReturn);
             ret.add(mkNamed((u16)nkStr, tag));
             b.add(ret);

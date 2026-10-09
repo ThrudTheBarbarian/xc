@@ -60,12 +60,14 @@ enum
     SpvOpBitwiseOr = 197, SpvOpBitwiseXor = 198, SpvOpBitwiseAnd = 199, SpvOpNot = 200,
     SpvOpLoopMerge = 246, SpvOpSelectionMerge = 247, SpvOpLabel = 248, SpvOpBranch = 249,
     SpvOpBranchConditional = 250, SpvOpSwitch = 251, SpvOpReturn = 253, SpvOpReturnValue = 254, SpvOpUnreachable = 255,
+    SpvOpTypeArray = 28, SpvOpControlBarrier = 224,
 };
 enum
 {
     SpvStorageInput = 1, SpvStoragePushConstant = 9, SpvStorageStorageBuffer = 12, SpvStorageFunction = 7,
     SpvDecBlock = 2, SpvDecArrayStride = 6, SpvDecNonWritable = 24, SpvDecBuiltIn = 11, SpvDecBinding = 33,
     SpvDecDescriptorSet = 34, SpvDecOffset = 35, SpvBuiltInGlobalInvocationId = 28,
+    SpvStorageWorkgroup = 4, SpvBuiltInWorkgroupId = 26, SpvBuiltInLocalInvocationId = 27,
     SpvCapShader = 1, SpvCapFloat64 = 10, SpvCapInt64 = 11,
     // GLSL.std.450
     GlslFAbs = 4, GlslSAbs = 5, GlslFloor = 8, GlslSin = 13, GlslCos = 14, GlslPow = 26, GlslExp = 27,
@@ -1904,11 +1906,42 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     uint32_t gidV = [m newId];
     spvOp(m.globals, SpvOpVariable, @[ @([m pointer:SpvStorageInput to:uvec3]), @(gidV), @(SpvStorageInput) ]);
     spvOp(m.decos, SpvOpDecorate, @[ @(gidV), @(SpvDecBuiltIn), @(SpvBuiltInGlobalInvocationId) ]);
+    // A device-side reduction (bug 645) when every reduced field is a full
+    // 32- or 64-bit value with an operator its type takes: the workgroup is
+    // 256 threads, its values combined through Workgroup memory.
+    __block BOOL devred = self.redOps != nil && self.reductionFields.count > 0;
+    [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
+        XTIRType* rt = fl[k].type;
+        NSString* op = self.redOps[@(k)];
+        BOOL isF = rt.kind == XTIRTypeKindF32 || rt.kind == XTIRTypeKindF64;
+        BOOL okT = rt.kind == XTIRTypeKindI32 || rt.kind == XTIRTypeKindU32 || rt.kind == XTIRTypeKindI64 ||
+                   rt.kind == XTIRTypeKindU64 || isF;
+        BOOL okOp = [op isEqualToString:@"+"] || [op isEqualToString:@"*"] || [op isEqualToString:@"min"] ||
+                    [op isEqualToString:@"max"] ||
+                    (!isF && ([op isEqualToString:@"&"] || [op isEqualToString:@"|"] || [op isEqualToString:@"^"]));
+        if (!okT || !okOp)
+            devred = NO;
+    }];
+    uint32_t lidV = 0, wgV = 0;
+    if (devred)
+        {
+        lidV = [m newId];
+        spvOp(m.globals, SpvOpVariable, @[ @([m pointer:SpvStorageInput to:uvec3]), @(lidV), @(SpvStorageInput) ]);
+        spvOp(m.decos, SpvOpDecorate, @[ @(lidV), @(SpvDecBuiltIn), @(SpvBuiltInLocalInvocationId) ]);
+        wgV = [m newId];
+        spvOp(m.globals, SpvOpVariable, @[ @([m pointer:SpvStorageInput to:uvec3]), @(wgV), @(SpvStorageInput) ]);
+        spvOp(m.decos, SpvOpDecorate, @[ @(wgV), @(SpvDecBuiltIn), @(SpvBuiltInWorkgroupId) ]);
+        }
 
     // Buffers: captured arrays, globals, reductions, in the header's order.
     NSMutableString* meta = [NSMutableString stringWithFormat:@"// xcpar size=%u lo=%u hi=%u", self.objLayout.size,
                                                               fl[1].byteOffset, fl[2].byteOffset];
     NSMutableArray<NSNumber*>* interface = [NSMutableArray arrayWithObjects:@(gidV), @(argsV), @(spanV), nil];
+    if (devred)
+        {
+        [interface addObject:@(lidV)];
+        [interface addObject:@(wgV)];
+        }
     __block uint32_t binding = 1;
     [self.bufferFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
         XTIRType* et = fl[k].type.pointeeType;
@@ -1953,6 +1986,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         [interface addObject:@(v)];
         }
     NSMutableArray<NSNumber*>* redVars = [NSMutableArray array];
+    NSMutableArray<NSNumber*>* shVars = [NSMutableArray array];
     [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
         uint32_t t = [self spvType:fl[k].type];
         if (!t || !self.memberOf[@(k)])
@@ -1970,6 +2004,18 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
                             : [self spvBuffer:t stride:fl[k].type.byteWidth binding:binding++ readOnly:NO];
         [redVars addObject:@(v)];
         [interface addObject:@(v)];
+        if (devred)
+            {
+            // The workgroup's 256 values of this field.
+            uint32_t n256 = [m u32:256];
+            uint32_t arrT = [m cached:[NSString stringWithFormat:@"arr256_%u", t] op:SpvOpTypeArray
+                                words:@[ @(t), @(n256) ] resultFirst:YES];
+            uint32_t pArr = [m pointer:SpvStorageWorkgroup to:arrT];
+            uint32_t sv = [m newId];
+            spvOp(m.globals, SpvOpVariable, @[ @(pArr), @(sv), @(SpvStorageWorkgroup) ]);
+            [shVars addObject:@(sv)];
+            [interface addObject:@(sv)];
+            }
     }];
     if (bad)
         return nil;
@@ -2028,6 +2074,93 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     uint32_t merge = [self label];
     if (![self spvBodyMerge:merge guard:guard])
         return nil;
+    if (devred)
+        {
+        // Every thread reaches every barrier: one past the range holds its
+        // reductions' starting values, which leave the result unchanged.
+        uint32_t boolT = [m typeBool];
+        uint32_t lidv = [self emit:SpvOpLoad type:uvec3 args:@[ @(lidV) ]];
+        uint32_t lid32 = [self emit:SpvOpCompositeExtract type:u32t args:@[ @(lidv), @0 ]];
+        uint32_t wgv = [self emit:SpvOpLoad type:uvec3 args:@[ @(wgV) ]];
+        uint32_t wg32 = [self emit:SpvOpCompositeExtract type:u32t args:@[ @(wgv), @0 ]];
+        uint32_t scope = [m u32:2];      // Workgroup
+        uint32_t sem = [m u32:0x108];    // AcquireRelease | WorkgroupMemory
+        __block NSUInteger di = 0;
+        [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
+            XTIRType* rt = fl[k].type;
+            NSString* op = self.redOps[@(k)];
+            BOOL isF = rt.kind == XTIRTypeKindF32 || rt.kind == XTIRTypeKindF64;
+            BOOL sgn = rt.kind == XTIRTypeKindI32 || rt.kind == XTIRTypeKindI64;
+            uint32_t t = [self spvType:rt];
+            uint32_t sv = shVars[di].unsignedIntValue;
+            uint32_t pW = [m pointer:SpvStorageWorkgroup to:t];
+            uint32_t src = [self emit:SpvOpAccessChain type:[m pointer:SpvStorageFunction to:t]
+                                 args:@[ @(self.localObj), @([m u32:[self.memberOf[@(k)] unsignedIntValue]]) ]];
+            uint32_t val = [self emit:SpvOpLoad type:t args:@[ @(src) ]];
+            uint32_t mine = [self emit:SpvOpAccessChain type:pW args:@[ @(sv), @(lid32) ]];
+            [self emit:SpvOpStore words:@[ @(mine), @(val) ]];
+            [self emit:SpvOpControlBarrier words:@[ @(scope), @(scope), @(sem) ]];
+            for (uint32_t sw = 128; sw >= 1; sw /= 2)
+                {
+                uint32_t swc = [m u32:sw];
+                uint32_t c = [self emit:SpvOpULessThan type:boolT args:@[ @(lid32), @(swc) ]];
+                uint32_t body = [self label];
+                uint32_t mrg = [self label];
+                [self emit:SpvOpSelectionMerge words:@[ @(mrg), @0 ]];
+                [self emit:SpvOpBranchConditional words:@[ @(c), @(body), @(mrg) ]];
+                [self place:body];
+                uint32_t pa = [self emit:SpvOpAccessChain type:pW args:@[ @(sv), @(lid32) ]];
+                uint32_t a = [self emit:SpvOpLoad type:t args:@[ @(pa) ]];
+                uint32_t other = [self emit:SpvOpIAdd type:u32t args:@[ @(lid32), @(swc) ]];
+                uint32_t pb = [self emit:SpvOpAccessChain type:pW args:@[ @(sv), @(other) ]];
+                uint32_t b = [self emit:SpvOpLoad type:t args:@[ @(pb) ]];
+                uint32_t r = 0;
+                if ([op isEqualToString:@"+"])
+                    r = [self emit:isF ? SpvOpFAdd : SpvOpIAdd type:t args:@[ @(a), @(b) ]];
+                else if ([op isEqualToString:@"*"])
+                    r = [self emit:isF ? SpvOpFMul : SpvOpIMul type:t args:@[ @(a), @(b) ]];
+                else if ([op isEqualToString:@"&"])
+                    r = [self emit:SpvOpBitwiseAnd type:t args:@[ @(a), @(b) ]];
+                else if ([op isEqualToString:@"|"])
+                    r = [self emit:SpvOpBitwiseOr type:t args:@[ @(a), @(b) ]];
+                else if ([op isEqualToString:@"^"])
+                    r = [self emit:SpvOpBitwiseXor type:t args:@[ @(a), @(b) ]];
+                else
+                    {
+                    BOOL isMin = [op isEqualToString:@"min"];
+                    uint32_t cmpOp = isF ? (isMin ? SpvOpFOrdLessThan : SpvOpFOrdGreaterThan)
+                                   : sgn ? (isMin ? SpvOpSLessThan : SpvOpSGreaterThan)
+                                         : (isMin ? SpvOpULessThan : SpvOpUGreaterThan);
+                    uint32_t cmp = [self emit:cmpOp type:boolT args:@[ @(a), @(b) ]];
+                    r = [self emit:SpvOpSelect type:t args:@[ @(cmp), @(a), @(b) ]];
+                    }
+                uint32_t pc = [self emit:SpvOpAccessChain type:pW args:@[ @(sv), @(lid32) ]];
+                [self emit:SpvOpStore words:@[ @(pc), @(r) ]];
+                [self emit:SpvOpBranch words:@[ @(mrg) ]];
+                [self place:mrg];
+                [self emit:SpvOpControlBarrier words:@[ @(scope), @(scope), @(sem) ]];
+                }
+            uint32_t zero = [m u32:0];
+            uint32_t c0 = [self emit:SpvOpIEqual type:boolT args:@[ @(lid32), @(zero) ]];
+            uint32_t wbody = [self label];
+            uint32_t wmrg = [self label];
+            [self emit:SpvOpSelectionMerge words:@[ @(wmrg), @0 ]];
+            [self emit:SpvOpBranchConditional words:@[ @(c0), @(wbody), @(wmrg) ]];
+            [self place:wbody];
+            uint32_t p0 = [self emit:SpvOpAccessChain type:pW args:@[ @(sv), @(zero) ]];
+            uint32_t v0 = [self emit:SpvOpLoad type:t args:@[ @(p0) ]];
+            uint32_t dst = [self emit:SpvOpAccessChain type:[m pointer:SpvStorageStorageBuffer to:t]
+                                 args:@[ redVars[di], @(zero), @(wg32) ]];
+            [self emit:SpvOpStore words:@[ @(dst), @(v0) ]];
+            [self emit:SpvOpBranch words:@[ @(wmrg) ]];
+            [self place:wmrg];
+            di++;
+        }];
+        [self emit:SpvOpReturn words:@[]];
+        [self emit:SpvOpFunctionEnd words:@[]];
+        }
+    else
+    {
     // Threads past the range write no partials.
     uint32_t inRange = [self emit:SpvOpSLessThan type:[m typeBool] args:@[ @(lo), @(spanHi) ]];
     uint32_t write = [self label], done = [self label];
@@ -2054,6 +2187,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     [self place:done];
     [self emit:SpvOpReturn words:@[]];
     [self emit:SpvOpFunctionEnd words:@[]];
+    }
     if (self.why)
         return nil;
 
@@ -2063,12 +2197,14 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     [ep addObjectsFromArray:spvString(@"main")];
     [ep addObjectsFromArray:interface];
     spvOp(m.head, SpvOpEntryPoint, ep);
-    spvOp(m.head, SpvOpExecutionMode, @[ @(mainId), @17, @64, @1, @1 ]);   // LocalSize 64 1 1
+    spvOp(m.head, SpvOpExecutionMode, @[ @(mainId), @17, @(devred ? 256 : 64), @1, @1 ]);   // LocalSize 64 (256: devred) 1 1
     // The kernel function goes after its helpers (already in funcs).
     [m.funcs addObjectsFromArray:header];
     [self spvFinish:self.sf into:m.funcs];
 
     NSData* words = [m words];
+    if (devred)
+        [meta appendString:@" devred"];
     // spirv= before fast: ParDevice.isFast reads the line's last word.
     [meta appendFormat:@" spirv=%lu", (unsigned long)(words.length / 4)];
     if (self.fast)
@@ -2087,10 +2223,18 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
 + (nullable NSData*)spirvForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
                                why:(NSString* _Nullable* _Nullable)why
     {
+    return [self spirvForKernel:run module:module fast:fast redOps:nil why:why];
+    }
+
++ (nullable NSData*)spirvForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
+                            redOps:(nullable NSDictionary<NSNumber*, NSString*>*)redOps
+                               why:(NSString* _Nullable* _Nullable)why
+    {
     XTIRParMSL* p = [XTIRParMSL new];
     p.module = module;
     p.fn = run;
     p.fast = fast;
+    p.redOps = redOps;
     NSData* out = [p spvPrint];
     if (!out && why)
         *why = p.why;

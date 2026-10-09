@@ -151,6 +151,10 @@ class ParMetal
         ParLayout* l = ParDevice.layout(proto, src, lo, hi);
         if (l == (ParLayout*)0)
             return false;
+        // A kernel that reduces on the device runs in threadgroups of 256
+        // (bug 645); a pipeline that cannot hold that many stays on the CPU.
+        if (l.devred != (i64)0 && ((parMsgU_t*)_send)(pso, sel("maxTotalThreadsPerThreadgroup")) < (u64)256)
+            return ParDevice.cpu("its GPU version needs more registers than a 256-thread group has");
         u8* obj = (u8*)(pointer)proto;
         i64 per = l.per;
         i64 threads = l.threads;
@@ -180,7 +184,7 @@ class ParMetal
         for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
             globs[i] = withBytes(_dev, sel("newBufferWithBytes:length:options:"), l.globPtr[i], (u64)l.globLen[i], (u64)0);
         for (u32 i = (u32)0; i < nred; i = i + (u32)1)
-            reds[i] = withLen(_dev, sel("newBufferWithLength:options:"), (u64)(threads * l.redStride[i]), (u64)0);
+            reds[i] = withLen(_dev, sel("newBufferWithLength:options:"), (u64)(l.nparts * l.redStride[i]), (u64)0);
 
         pointer cb = send0(_queue, sel("commandBuffer"));
         pointer enc = send0(cb, sel("computeCommandEncoder"));
@@ -212,7 +216,17 @@ class ParMetal
         group.w = width < (u64)threads ? width : (u64)threads;
         group.h = (u64)1;
         group.d = (u64)1;
-        ((parMsgDispatch_t*)_send)(enc, sel("dispatchThreads:threadsPerThreadgroup:"), &grid, &group);
+        if (l.devred != (i64)0)
+            {
+            // A kernel that reduces on the device (bug 645) needs whole
+            // threadgroups of 256: one partial each, every slot written. The
+            // threads past the range hold their starting values.
+            grid.w = (u64)l.nparts;
+            group.w = (u64)256;
+            ((parMsgDispatch_t*)_send)(enc, sel("dispatchThreadgroups:threadsPerThreadgroup:"), &grid, &group);
+            }
+        else
+            ((parMsgDispatch_t*)_send)(enc, sel("dispatchThreads:threadsPerThreadgroup:"), &grid, &group);
         send0(enc, sel("endEncoding"));
         send0(cb, sel("commit"));
         send0(cb, sel("waitUntilCompleted"));

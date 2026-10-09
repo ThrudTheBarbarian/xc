@@ -1570,6 +1570,12 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
         self.wgBufName[@(-1 - (NSInteger)gi)] = n;
         }
     NSMutableArray<NSString*>* reds = [NSMutableArray array];
+    // A device-side reduction (bug 645) when every reduced field is a 32-bit
+    // value with an operator its type takes: workgroups of 256, combined
+    // through workgroup memory; thread 0 writes the group's partial.
+    __block BOOL devred = self.redOps != nil && self.reductionFields.count > 0;
+    NSMutableString* wgDecls = [NSMutableString string];
+    NSMutableString* wgTail = [NSMutableString string];
     [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
         XTIRType* t = fl[k].type;
         if (!wgType(t) || ![used containsIndex:k])
@@ -1589,6 +1595,26 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
         [reds addObject:t.kind == XTIRTypeKindBool
                             ? [NSString stringWithFormat:@"%@[tid] = select(0u, 1u, f%lu);", n, (unsigned long)k]
                             : [NSString stringWithFormat:@"%@[tid] = f%lu;", n, (unsigned long)k]];
+        NSString* op = self.redOps[@(k)];
+        BOOL isF = t.kind == XTIRTypeKindF32;
+        BOOL okT = t.kind == XTIRTypeKindI32 || t.kind == XTIRTypeKindU32 || isF;
+        NSString* comb = nil;
+        if (okT && ([op isEqualToString:@"min"] || [op isEqualToString:@"max"]))
+            comb = [NSString stringWithFormat:@"%@(w%lu[lid], w%lu[lid + s])", op, (unsigned long)k, (unsigned long)k];
+        else if (okT && ([op isEqualToString:@"+"] || [op isEqualToString:@"*"] ||
+                         (!isF && ([op isEqualToString:@"&"] || [op isEqualToString:@"|"] || [op isEqualToString:@"^"]))))
+            comb = [NSString stringWithFormat:@"w%lu[lid] %@ w%lu[lid + s]", (unsigned long)k, op, (unsigned long)k];
+        if (!comb)
+            devred = NO;
+        else
+            {
+            [wgDecls appendFormat:@"var<workgroup> w%lu: array<%@, 256>;\n", (unsigned long)k, wgType(t)];
+            [wgTail appendFormat:@"  w%lu[lid] = f%lu;\n  workgroupBarrier();\n"
+                                 @"  for (var s = 128u; s > 0u; s = s >> 1u) {\n"
+                                 @"    if (lid < s) { w%lu[lid] = %@; }\n    workgroupBarrier();\n  }\n"
+                                 @"  if (lid == 0u) { %@[wid.x + wid.y * 65535u] = w%lu[0]; }\n",
+                                 (unsigned long)k, (unsigned long)k, (unsigned long)k, comb, n, (unsigned long)k];
+            }
     }];
     if (bad)
         return nil;
@@ -1599,8 +1625,11 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
     NSMutableString* body = [NSMutableString string];
     [body appendString:fieldInit];
     // Past 65535 workgroups the dispatch is two-dimensional (WebGPU's limit
-    // per dimension): rows of 65535 groups of 64.
-    [body appendString:@"  let tid = gid.x + gid.y * 4194240u;\n"];
+    // per dimension): rows of 65535 groups of 64 (of 256 for devred).
+    if (devred)
+        [body appendString:@"  let tid = gid.x + gid.y * 16776960u;\n"];
+    else
+        [body appendString:@"  let tid = gid.x + gid.y * 4194240u;\n"];
     [body appendString:@"  let lo = xc_add64(span[0], xc_mul64(vec2<u32>(tid, 0u), span[2]));\n"];
     [body appendString:@"  let end = xc_add64(lo, span[2]);\n"];
     [body appendString:@"  let hi = select(span[1], end, xc_slt64(end, span[1]));\n"];
@@ -1608,31 +1637,52 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
     if (![self wgBodyGuard:@"xc_slt64(lo, hi)"])
         return nil;
     [body appendString:self.wf.code];
-    if (reds.count)
+    if (devred)
+        // Every thread reaches every barrier: one past the range holds its
+        // reductions' starting values, which leave the result unchanged.
+        [body appendString:wgTail];
+    else if (reds.count)
         [body appendFormat:@"  if (xc_slt64(lo, span[1])) {\n    %@\n  }\n", [reds componentsJoinedByString:@"\n    "]];
     if (self.why)
         return nil;
 
+    if (devred)
+        [meta appendString:@" devred"];
     if (self.fast)
         [meta appendString:@" wgsl fast"];
     else
         [meta appendString:@" wgsl"];
     NSMutableString* out = [NSMutableString stringWithFormat:@"%@\n", meta];
     [out appendString:decls];
+    if (devred)
+        [out appendString:wgDecls];
     [out appendString:kWg64];
     [out appendString:self.wgHelperText];
-    [out appendFormat:@"@compute @workgroup_size(64)\nfn main(@builtin(global_invocation_id) gid: vec3<u32>) {\n%@%@}\n",
-                      self.wf.vars, body];
+    if (devred)
+        [out appendFormat:@"@compute @workgroup_size(256)\nfn main(@builtin(global_invocation_id) gid: vec3<u32>, "
+                          @"@builtin(local_invocation_index) lid: u32, @builtin(workgroup_id) wid: vec3<u32>) {\n%@%@}\n",
+                          self.wf.vars, body];
+    else
+        [out appendFormat:@"@compute @workgroup_size(64)\nfn main(@builtin(global_invocation_id) gid: vec3<u32>) {\n%@%@}\n",
+                          self.wf.vars, body];
     return out;
     }
 
 + (nullable NSString*)wgslForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
                                 why:(NSString* _Nullable* _Nullable)why
     {
+    return [self wgslForKernel:run module:module fast:fast redOps:nil why:why];
+    }
+
++ (nullable NSString*)wgslForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
+                             redOps:(nullable NSDictionary<NSNumber*, NSString*>*)redOps
+                                why:(NSString* _Nullable* _Nullable)why
+    {
     XTIRParMSL* p = [XTIRParMSL new];
     p.module = module;
     p.fn = run;
     p.fast = fast;
+    p.redOps = redOps;
     NSString* out = [p wgPrint];
     if (!out && why)
         *why = p.why;

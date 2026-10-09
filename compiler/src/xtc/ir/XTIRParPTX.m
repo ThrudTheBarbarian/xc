@@ -66,6 +66,38 @@ static NSString* ptxArith(XTIRType* t)
     }
 
 // A load or store's width suffix for a memory value of type t.
+// One step of a device-side reduction (bug 645): d = a <op> b in t's PTX
+// spelling, or nil for an operator t cannot take (a bitwise one on a float).
+// A float is combined exactly rounded (.rn) whatever the block's goal: the
+// tree's order is fixed, so the result is the same run to run.
+static NSString* ptxRedStep(NSString* op, XTIRType* t, NSString* d, NSString* a, NSString* b)
+    {
+    BOOL f = t.kind == XTIRTypeKindF32 || t.kind == XTIRTypeKindF64;
+    BOOL w = t.kind == XTIRTypeKindI64 || t.kind == XTIRTypeKindU64 || t.kind == XTIRTypeKindF64;
+    NSString* bits = w ? @"64" : @"32";
+    NSString* ft = t.kind == XTIRTypeKindF64 ? @"f64" : @"f32";
+    NSString* it = [NSString stringWithFormat:@"%@%@", (t.kind == XTIRTypeKindI8 || t.kind == XTIRTypeKindI16 ||
+                                                         t.kind == XTIRTypeKindI32 || t.kind == XTIRTypeKindI64) ? @"s" : @"u", bits];
+    NSString* ins = nil;
+    if ([op isEqualToString:@"+"])
+        ins = f ? [NSString stringWithFormat:@"add.rn.%@", ft] : [NSString stringWithFormat:@"add.s%@", bits];
+    else if ([op isEqualToString:@"*"])
+        ins = f ? [NSString stringWithFormat:@"mul.rn.%@", ft] : [NSString stringWithFormat:@"mul.lo.s%@", bits];
+    else if ([op isEqualToString:@"&"] && !f)
+        ins = [NSString stringWithFormat:@"and.b%@", bits];
+    else if ([op isEqualToString:@"|"] && !f)
+        ins = [NSString stringWithFormat:@"or.b%@", bits];
+    else if ([op isEqualToString:@"^"] && !f)
+        ins = [NSString stringWithFormat:@"xor.b%@", bits];
+    else if ([op isEqualToString:@"min"])
+        ins = f ? [NSString stringWithFormat:@"min.%@", ft] : [NSString stringWithFormat:@"min.%@", it];
+    else if ([op isEqualToString:@"max"])
+        ins = f ? [NSString stringWithFormat:@"max.%@", ft] : [NSString stringWithFormat:@"max.%@", it];
+    if (!ins)
+        return nil;
+    return [NSString stringWithFormat:@"\t%@ %@, %@, %@;\n", ins, d, a, b];
+    }
+
 static NSString* ptxMem(XTIRType* t)
     {
     switch (t.kind)
@@ -122,7 +154,15 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
 + (nullable NSString*)ptxForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
                                 why:(NSString* _Nullable* _Nullable)why
     {
+    return [self ptxForKernel:run module:module fast:fast redOps:nil why:why];
+    }
+
++ (nullable NSString*)ptxForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
+                             redOps:(nullable NSDictionary<NSNumber*, NSString*>*)redOps
+                                why:(NSString* _Nullable* _Nullable)why
+    {
     XTIRParMSL* p = [XTIRParMSL new];
+    p.redOps = redOps;
     p.module = module;
     p.fn = run;
     p.fast = fast;
@@ -874,6 +914,8 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
         [params addObject:[NSString stringWithFormat:@".param .u64 glob_%lu", (unsigned long)gi]];
         }
     NSMutableString* tail = [NSMutableString string];
+    NSMutableString* dtail = [NSMutableString string];
+    __block BOOL devred = self.redOps != nil && self.reductionFields.count > 0;
     [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
         XTIRType* t = fl[k].type;
         NSString* m = ptxMem(t);
@@ -888,6 +930,29 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
         [params addObject:[NSString stringWithFormat:@".param .u64 red_%lu", (unsigned long)k]];
         NSString* tmp = [rt isEqualToString:@".b64"] ? @"%y" : [rt isEqualToString:@".f32"] ? @"%fk"
                       : [rt isEqualToString:@".f64"] ? @"%dk" : @"%k";
+        // On the device (bug 645): this field's value from every thread of the
+        // workgroup, through shared memory, combined in a fixed tree; thread 0
+        // writes the workgroup's one partial at red_k + ctaid * width.
+        NSString* rop = self.redOps[@(k)];
+        NSString* tmp2 = [tmp stringByAppendingString:@"2"];
+        NSString* step = rop ? ptxRedStep(rop, t, tmp, tmp, tmp2) : nil;
+        if (!step)
+            devred = NO;
+        else
+            {
+            [dtail appendFormat:@"\tld.local.%@ %@, [%%stp+%u];\n\tst.shared.%@ [%%sha], %@;\n\tbar.sync 0;\n", m, tmp,
+                                fl[k].byteOffset, m, tmp];
+            for (unsigned sw = 128; sw >= 1; sw /= 2)
+                [dtail appendFormat:@"\tsetp.ge.u32 %%pz, %%tx, %u;\n\t@%%pz bra RS_%lu_%u;\n"
+                                    @"\tld.shared.%@ %@, [%%sha];\n\tld.shared.%@ %@, [%%sha+%u];\n%@"
+                                    @"\tst.shared.%@ [%%sha], %@;\nRS_%lu_%u:\n\tbar.sync 0;\n",
+                                    sw, (unsigned long)k, sw, m, tmp, m, tmp2, sw * 8, step, m, tmp,
+                                    (unsigned long)k, sw];
+            [dtail appendFormat:@"\tsetp.ne.u32 %%pz, %%tx, 0;\n\t@%%pz bra RN_%lu;\n\tld.shared.%@ %@, [%%shb];\n"
+                                @"\tld.param.u64 %%x, [red_%lu];\n\tcvta.to.global.u64 %%x, %%x;\n"
+                                @"\tmad.lo.u64 %%x, %%cta64, %u, %%x;\n\tst.global.%@ [%%x], %@;\nRN_%lu:\n\tbar.sync 0;\n",
+                                (unsigned long)k, m, tmp, (unsigned long)k, t.byteWidth, m, tmp, (unsigned long)k];
+            }
         [tail appendFormat:@"\tld.local.%@ %@, [%%stp+%u];\n\tld.param.u64 %%x, [red_%lu];\n\tcvta.to.global.u64 %%x, %%x;\n"
                            @"\tmad.lo.u64 %%x, %%tid64, %u, %%x;\n\tst.global.%@ [%%x], %@;\n",
                            m, tmp, fl[k].byteOffset, (unsigned long)k, t.byteWidth, m, tmp];
@@ -896,6 +961,8 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
         return nil;
 
     NSMutableString* out = [NSMutableString string];
+    if (devred)
+        [meta appendString:@" devred"];
     if (self.fast)
         [meta appendString:@" fast"];
     [out appendFormat:@"%@\n.version 7.0\n.target sm_52\n.address_size 64\n", meta];
@@ -903,6 +970,9 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
         [out appendString:h];
     [out appendFormat:@".visible .entry par_kernel(%@)\n{\n", [params componentsJoinedByString:@", "]];
     [out appendFormat:@"\t.local .align 8 .b8 st[%u];\n", self.objLayout.size];
+    if (devred)
+        [out appendString:@"\t.shared .align 8 .b8 sh[2048];\n\t.reg .b64 %sha, %shb, %cta64, %y2;\n"
+                          @"\t.reg .b32 %k2;\n\t.reg .f32 %fk2;\n\t.reg .f64 %dk2;\n"];
     [out appendString:@"\t.reg .b64 %stp, %ga, %gs, %lo, %hi, %end, %per, %tid64, %x, %y;\n"
                       @"\t.reg .b32 %gid, %k, %nt, %ct, %tx;\n\t.reg .f32 %fk;\n\t.reg .f64 %dk;\n\t.reg .pred %pz;\n"];
     [out appendString:decls];
@@ -918,8 +988,19 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
                       fl[2].byteOffset];
     [out appendString:@"\tsetp.ge.s64 %pz, %lo, %hi;\n\t@%pz bra BODY_END;\n"];
     [out appendString:body];
-    [out appendString:@"BODY_END:\n\tsetp.ge.s64 %pz, %lo, %end;\n\t@%pz bra DONE;\n"];
-    [out appendString:tail];
+    if (devred)
+        {
+        // Every thread reaches every barrier: one past the range holds its
+        // reductions' starting values, which leave the result unchanged.
+        [out appendString:@"BODY_END:\n\tmov.u64 %shb, sh;\n\tmul.wide.u32 %sha, %tx, 8;\n\tadd.u64 %sha, %sha, %shb;\n"
+                          @"\tcvt.u64.u32 %cta64, %ct;\n"];
+        [out appendString:dtail];
+        }
+    else
+        {
+        [out appendString:@"BODY_END:\n\tsetp.ge.s64 %pz, %lo, %end;\n\t@%pz bra DONE;\n"];
+        [out appendString:tail];
+        }
     [out appendString:@"DONE:\n\tret;\n}\n"];
     return out;
     }

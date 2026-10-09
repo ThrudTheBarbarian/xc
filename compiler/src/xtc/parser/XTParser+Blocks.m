@@ -1408,10 +1408,14 @@ NS_ASSUME_NONNULL_END
     // when the block cannot run on the GPU); `__XC_PAR_FAST_<n>__` for a
     // block whose goal is speed (the default), whose kernel may use fast maths.
         {
-        XTASTNode* lit = [[XTLiteralStringNode alloc]
-            initWithString:[NSString stringWithFormat:frame[@"fast"] ? @"__XC_PAR_FAST_%lu__" : @"__XC_PAR_MSL_%lu__",
-                                                      (unsigned long)counter]
-                  location:loc];
+        // …then each reduction as `<field>=<op>;` (bug 645), so the kernel can
+        // combine them on the device: field 0 is the object header, 1 and 2
+        // lo and hi, then the captures, then the reductions in order.
+        NSMutableString* tagText = [NSMutableString stringWithFormat:frame[@"fast"] ? @"__XC_PAR_FAST_%lu__" : @"__XC_PAR_MSL_%lu__",
+                                                                    (unsigned long)counter];
+        for (NSUInteger j = 0; j < reductions.count; j++)
+            [tagText appendFormat:@"%lu=%@;", (unsigned long)(3 + caps.count + j), reductions[j][0]];
+        XTASTNode* lit = [[XTLiteralStringNode alloc] initWithString:tagText location:loc];
         XTBlockNode* b = [[XTBlockNode alloc]
             initWithStatements:@[ [[XTReturnNode alloc] initWithValues:@[ lit ] location:loc] ]
                       location:loc];

@@ -110,14 +110,40 @@ static BOOL gEmitsWGSL = NO;
         NSData* fastTag = [[NSString stringWithFormat:@"__XC_PAR_FAST_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
         // Which placeholder the block has says whether its goal is speed.
         NSData* tag = plain;
+        NSData* lit = nil;
         for (XTIRSymbol* sym in module.symbols)
             {
             NSData* b = sym.stringBytes;
-            if (sym.kind == XTIRSymbolKindStringLit && b.length >= fastTag.length &&
-                memcmp(b.bytes, fastTag.bytes, fastTag.length) == 0)
+            if (sym.kind != XTIRSymbolKindStringLit)
+                continue;
+            if (b.length >= fastTag.length && memcmp(b.bytes, fastTag.bytes, fastTag.length) == 0)
+                {
                 tag = fastTag;
+                lit = b;
+                }
+            else if (b.length >= plain.length && memcmp(b.bytes, plain.bytes, plain.length) == 0)
+                lit = b;
             }
         BOOL fast = tag == fastTag;
+        // The block's reductions, after the tag: `<field>=<op>;` each (bug 645).
+        NSMutableDictionary<NSNumber*, NSString*>* redOps = nil;
+        NSUInteger litEnd = lit.length;
+        while (litEnd > tag.length && ((const uint8_t*)lit.bytes)[litEnd - 1] == 0)
+            litEnd--;
+        if (litEnd > tag.length)
+            {
+            NSString* rest = [[NSString alloc] initWithBytes:(const char*)lit.bytes + tag.length
+                                                      length:litEnd - tag.length
+                                                    encoding:NSUTF8StringEncoding];
+            redOps = [NSMutableDictionary dictionary];
+            for (NSString* pair in [rest componentsSeparatedByString:@";"])
+                {
+                NSRange eq = [pair rangeOfString:@"="];
+                if (eq.location == NSNotFound || eq.location == 0)
+                    continue;
+                redOps[@([pair substringToIndex:eq.location].integerValue)] = [pair substringFromIndex:eq.location + 1];
+                }
+            }
         NSString* why = nil;
         NSData* kernel = nil;
         if (gEmitsSPIRV && gEmitsPTX)
@@ -126,8 +152,8 @@ static BOOL gEmitsWGSL = NO;
             // Vulkan (any other GPU), after the PTX's NUL at a 4-byte boundary
             // (ParVulkan.spirvOf). Either alone where the other did not print.
             NSString* ptxWhy = nil;
-            NSString* ptx = [XTIRParMSL ptxForKernel:f module:module fast:fast why:&ptxWhy];
-            NSData* spv = [XTIRParMSL spirvForKernel:f module:module fast:fast why:&why];
+            NSString* ptx = [XTIRParMSL ptxForKernel:f module:module fast:fast redOps:redOps why:&ptxWhy];
+            NSData* spv = [XTIRParMSL spirvForKernel:f module:module fast:fast redOps:redOps why:&why];
             if (ptx && spv)
                 {
                 NSMutableData* both = [[ptx dataUsingEncoding:NSUTF8StringEncoding] mutableCopy];
@@ -146,12 +172,12 @@ static BOOL gEmitsWGSL = NO;
                 why = ptxWhy ?: why;
             }
         else if (gEmitsSPIRV)
-            kernel = [XTIRParMSL spirvForKernel:f module:module fast:fast why:&why];
+            kernel = [XTIRParMSL spirvForKernel:f module:module fast:fast redOps:redOps why:&why];
         else
             {
-            NSString* text = gEmitsMetal ? [XTIRParMSL sourceForKernel:f module:module fast:fast why:&why]
-                           : gEmitsPTX   ? [XTIRParMSL ptxForKernel:f module:module fast:fast why:&why]
-                           : gEmitsWGSL  ? [XTIRParMSL wgslForKernel:f module:module fast:fast why:&why]
+            NSString* text = gEmitsMetal ? [XTIRParMSL sourceForKernel:f module:module fast:fast redOps:redOps why:&why]
+                           : gEmitsPTX   ? [XTIRParMSL ptxForKernel:f module:module fast:fast redOps:redOps why:&why]
+                           : gEmitsWGSL  ? [XTIRParMSL wgslForKernel:f module:module fast:fast redOps:redOps why:&why]
                                          : @"";
             kernel = [text dataUsingEncoding:NSUTF8StringEncoding];
             }
@@ -161,7 +187,7 @@ static BOOL gEmitsWGSL = NO;
         if (dump && *dump)
             {
             NSString* dwhy = nil;
-            NSData* d = gEmitsSPIRV ? kernel : [XTIRParMSL spirvForKernel:f module:module fast:fast why:&dwhy];
+            NSData* d = gEmitsSPIRV ? kernel : [XTIRParMSL spirvForKernel:f module:module fast:fast redOps:redOps why:&dwhy];
             if (gEmitsSPIRV)
                 dwhy = why;
             NSString* base = [[NSString stringWithUTF8String:dump] stringByAppendingPathComponent:n];
@@ -197,8 +223,13 @@ static BOOL gEmitsWGSL = NO;
                 memcmp(b.bytes, tag.bytes, tag.length) != 0)
                 continue;
             NSMutableData* nb = [kernel mutableCopy];
-            if (b.length > tag.length) // keep the terminator the literal had
-                [nb appendBytes:(const uint8_t*)b.bytes + tag.length length:b.length - tag.length];
+            // Keep the terminator the literal had — its trailing NULs only:
+            // the reductions listed after the tag (bug 645) are not the kernel's.
+            NSUInteger z = b.length;
+            while (z > tag.length && ((const uint8_t*)b.bytes)[z - 1] == 0)
+                z--;
+            if (b.length > z)
+                [nb appendBytes:(const uint8_t*)b.bytes + z length:b.length - z];
             [sym setValue:nb forKey:@"stringBytes"];
             }
         }

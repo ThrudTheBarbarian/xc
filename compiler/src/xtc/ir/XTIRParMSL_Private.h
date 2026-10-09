@@ -61,6 +61,10 @@ typedef NS_ENUM(uint8_t, XTParSpace) {
 @property(nonatomic, nullable) NSString* why;
 @property(nonatomic) NSMutableArray<NSString*>* helperText;
 @property(nonatomic) NSMutableSet<NSString*>* helperNames;
+// Each reduction field's operator (+ * & | ^ min max), by field index, from
+// the block's gpuSource placeholder (bug 645). A printer that has them all
+// combines the reductions on the device; nil keeps the per-thread partials.
+@property(nonatomic, nullable) NSDictionary<NSNumber*, NSString*>* redOps;
 @end
 
 @interface XTIRParMSL (Analysis)

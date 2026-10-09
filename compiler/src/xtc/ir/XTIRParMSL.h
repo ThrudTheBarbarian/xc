@@ -26,6 +26,11 @@ NS_ASSUME_NONNULL_BEGIN
 // does not know. A nil block runs on the CPU.
 + (nullable NSString*)sourceForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
                                    why:(NSString* _Nullable* _Nullable)why;
+// As above, given each reduction field's operator by field index (bug 645):
+// the kernel then combines its reductions per threadgroup of 256.
++ (nullable NSString*)sourceForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
+                                redOps:(nullable NSDictionary<NSNumber*, NSString*>*)redOps
+                                   why:(NSString* _Nullable* _Nullable)why;
 
 @end
 
@@ -36,6 +41,9 @@ NS_ASSUME_NONNULL_BEGIN
 // ` spirv=<words>`), a NUL, padding to a 4-byte boundary, then the words.
 + (nullable NSData*)spirvForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
                                why:(NSString* _Nullable* _Nullable)why;
++ (nullable NSData*)spirvForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
+                            redOps:(nullable NSDictionary<NSNumber*, NSString*>*)redOps
+                               why:(NSString* _Nullable* _Nullable)why;
 @end
 
 @interface XTIRParMSL (WGSL)
@@ -43,10 +51,18 @@ NS_ASSUME_NONNULL_BEGIN
 // then ` fast` for a speed block), then the WGSL text.
 + (nullable NSString*)wgslForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
                                 why:(NSString* _Nullable* _Nullable)why;
++ (nullable NSString*)wgslForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
+                             redOps:(nullable NSDictionary<NSNumber*, NSString*>*)redOps
+                                why:(NSString* _Nullable* _Nullable)why;
 @end
 
 @interface XTIRParMSL (PTX)
 + (nullable NSString*)ptxForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
+                                why:(NSString* _Nullable* _Nullable)why;
+// As above, given each reduction field's operator by field index (bug 645):
+// the kernel then combines its reductions per workgroup on the device.
++ (nullable NSString*)ptxForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
+                             redOps:(nullable NSDictionary<NSNumber*, NSString*>*)redOps
                                 why:(NSString* _Nullable* _Nullable)why;
 @end
 

@@ -61,10 +61,18 @@ static NSString* unsignedName(XTIRType* t)
 + (nullable NSString*)sourceForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
                                    why:(NSString* _Nullable* _Nullable)why
     {
+    return [self sourceForKernel:run module:module fast:fast redOps:nil why:why];
+    }
+
++ (nullable NSString*)sourceForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
+                                redOps:(nullable NSDictionary<NSNumber*, NSString*>*)redOps
+                                   why:(NSString* _Nullable* _Nullable)why
+    {
     XTIRParMSL* p = [XTIRParMSL new];
     p.module = module;
     p.fn = run;
     p.fast = fast;
+    p.redOps = redOps;
     NSString* out = [p print];
     if (!out && why)
         *why = p.why;
@@ -1239,6 +1247,9 @@ static NSString* intrinsicFor(NSString* callee)
         [params appendFormat:@", device %@* glob_%lu [[buffer(%lu)]]", en, (unsigned long)gi, (unsigned long)slot++];
         }
     NSMutableString* tail = [NSMutableString string];
+    NSMutableString* dtail = [NSMutableString string];
+    NSMutableString* shared = [NSMutableString string];
+    __block BOOL devred = self.redOps != nil && self.reductionFields.count > 0;
     [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
         NSString* et = scalarName(fl[k].type);
         if (!et)
@@ -1250,11 +1261,38 @@ static NSString* intrinsicFor(NSString* callee)
         [meta appendFormat:@" red=%u:%u", fl[k].byteOffset, fl[k].type.byteWidth];
         [params appendFormat:@", device %@* red_%lu [[buffer(%lu)]]", et, (unsigned long)k, (unsigned long)slot++];
         [tail appendFormat:@"    red_%lu[tid] = *(thread %@*)(st + %u);\n", (unsigned long)k, et, fl[k].byteOffset];
+        // On the device (bug 645): the workgroup's values through threadgroup
+        // memory, combined in a fixed tree; thread 0 writes its one partial.
+        NSString* rop = self.redOps[@(k)];
+        BOOL isFloat = fl[k].type.kind == XTIRTypeKindF32 || fl[k].type.kind == XTIRTypeKindF64;
+        NSString* comb = nil;
+        if ([rop isEqualToString:@"min"] || [rop isEqualToString:@"max"])
+            comb = [NSString stringWithFormat:@"%@(sh_%lu[lid], sh_%lu[lid + s])", rop, (unsigned long)k, (unsigned long)k];
+        else if ([rop isEqualToString:@"+"] || [rop isEqualToString:@"*"] ||
+                 (!isFloat && ([rop isEqualToString:@"&"] || [rop isEqualToString:@"|"] || [rop isEqualToString:@"^"])))
+            comb = [NSString stringWithFormat:@"sh_%lu[lid] %@ sh_%lu[lid + s]", (unsigned long)k, rop, (unsigned long)k];
+        if (!comb)
+            devred = NO;
+        else
+            {
+            [shared appendFormat:@"    threadgroup %@ sh_%lu[256];\n", et, (unsigned long)k];
+            [dtail appendFormat:@"    sh_%lu[lid] = *(thread %@*)(st + %u);\n"
+                                @"    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+                                @"    for (uint s = 128; s > 0; s >>= 1) {\n"
+                                @"        if (lid < s) sh_%lu[lid] = %@;\n"
+                                @"        threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+                                @"    }\n"
+                                @"    if (lid == 0) red_%lu[gid] = sh_%lu[0];\n",
+                                (unsigned long)k, et, fl[k].byteOffset, (unsigned long)k, comb, (unsigned long)k,
+                                (unsigned long)k];
+            }
     }];
     if (bad)
         return nil;
 
     NSMutableString* out = [NSMutableString string];
+    if (devred)
+        [meta appendString:@" devred"];
     // A speed-goal block's runtime compiles it with fast maths (MTLMathModeFast).
     if (self.fast)
         [meta appendString:@" fast"];
@@ -1262,7 +1300,13 @@ static NSString* intrinsicFor(NSString* callee)
     [out appendString:@"#include <metal_stdlib>\nusing namespace metal;\n"];
     for (NSString* h in self.helperText)
         [out appendString:h];
-    [out appendFormat:@"kernel void par_kernel(%@, uint tid [[thread_position_in_grid]])\n{\n", params];
+    if (devred)
+        [out appendFormat:@"kernel void par_kernel(%@, uint tid [[thread_position_in_grid]], "
+                          @"uint lid [[thread_position_in_threadgroup]], uint gid [[threadgroup_position_in_grid]])\n{\n",
+                          params];
+    else
+        [out appendFormat:@"kernel void par_kernel(%@, uint tid [[thread_position_in_grid]])\n{\n", params];
+    [out appendString:shared];
     [out appendFormat:@"    thread uchar st[%u];\n", self.objLayout.size];
     [out appendFormat:@"    for (uint q = 0; q < %uu; q++) st[q] = args[q];\n", self.objLayout.size];
     [out appendString:@"    long lo = span[0] + long(tid) * span[2];\n"];
@@ -1283,8 +1327,15 @@ static NSString* intrinsicFor(NSString* callee)
         [out appendString:body];
         [out appendString:@"        default: pc = 0xffffffffu; continue;\n        }\n    }\n"];
         }
-    [out appendString:@"    if (lo >= span[1]) return;\n"];
-    [out appendString:tail];
+    if (devred)
+        // Every thread reaches every barrier: one past the range holds its
+        // reductions' starting values, which leave the result unchanged.
+        [out appendString:dtail];
+    else
+        {
+        [out appendString:@"    if (lo >= span[1]) return;\n"];
+        [out appendString:tail];
+        }
     [out appendString:@"}\n"];
     return out;
     }

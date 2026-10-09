@@ -111,15 +111,22 @@ class ParLayout : Object
     i64 n;
     i64 per;
     i64 threads;
+    // The kernel reduces on the device (header word `devred`, bug 645): each
+    // workgroup of 256 threads combines its threads' values and writes one
+    // partial, so the host folds `nparts` = workgroups, not threads, and the
+    // block plans as one without reductions — one item per thread.
+    i64 devred;     // 1: the kernel reduced on the device
+    i64 nparts;
 
     void plan(i64 lo, i64 hi)
         {
         n = hi - lo;
         per = (i64)1;
-        i64 most = nred > (u32)0 ? (i64)65536 : (i64)1 << (i64)22;
+        i64 most = nred > (u32)0 && devred == (i64)0 ? (i64)65536 : (i64)1 << (i64)22;
         if (n > most)
             per = (n + most - (i64)1) / most;
         threads = (n + per - (i64)1) / per;
+        nparts = devred != (i64)0 ? (threads + (i64)255) / (i64)256 : threads;
         }
 
     // Each thread's partials, at parts[i] + thread * redStride[i], folded into
@@ -132,7 +139,7 @@ class ParLayout : Object
             return;
         ParChunk* c = proto.copyChunk();
         u8* cb = (u8*)(pointer)c;
-        for (i64 t = (i64)0; t < threads; t = t + (i64)1)
+        for (i64 t = (i64)0; t < nparts; t = t + (i64)1)
             {
             for (u32 i = (u32)0; i < nred; i = i + (u32)1)
                 memcpy((pointer)(cb + redOff[i]), (pointer)(parts[i] + t * redStride[i]), (u64)redSize[i]);
@@ -727,6 +734,14 @@ class ParDevice
                     return (ParLayout*)0;
                     }
                 l.nglob = k + (u32)1;
+                continue;
+                }
+            // devred: the kernel combines its reductions on the device (bug 645).
+            if (src[at] == (u8)'d' && src[at + (u32)1] == (u8)'e' && src[at + (u32)2] == (u8)'v' &&
+                src[at + (u32)3] == (u8)'r' && src[at + (u32)4] == (u8)'e' && src[at + (u32)5] == (u8)'d')
+                {
+                l.devred = (i64)1;
+                at = at + (u32)6;
                 continue;
                 }
             if (src[at] == (u8)'r' && src[at + (u32)1] == (u8)'e' && src[at + (u32)3] == (u8)'=' &&

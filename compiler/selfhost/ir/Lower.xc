@@ -14688,6 +14688,7 @@ class ClassInfo
     // its caller saves and restores it (the reference uses a new printer).
     bool _mHelper;
     bool _mFast;            // the block's goal is speed: fast maths, approximate sin, cos, exp, ln and pow
+    Map* _mRedOps;          // each reduction field's operator, by field index (String), from the placeholder (bug 645), or 0
     // The static-init guard of a class the kernel calls (Math, say): value seq
     // of the AddrOf naming its flag ("1"), its init function or its static
     // data ("0"). The host ran every init before the block started, so the
@@ -15852,6 +15853,15 @@ class ClassInfo
             params.appendCString(" [[buffer("); params.append(String.withU32(slot)); params.appendCString(")]]");
             slot = slot + (u32)1;
             }
+        String* mDtail = new String();
+        String* mShared = new String();
+        bool mDevred = _mRedOps != (Map*)0;
+        bool mAnyRed = false;
+        for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
+            if (_mReds.get((Hashable*)String.withI64((i64)k)) != (Object*)0)
+                mAnyRed = true;
+        if (!mAnyRed)
+            mDevred = false;
         for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
             {
             if (_mReds.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
@@ -15863,14 +15873,42 @@ class ClassInfo
             slot = slot + (u32)1;
             tail.appendCString("    red_"); tail.append(String.withU32(k)); tail.appendCString("[tid] = *(thread "); tail.append(et);
             tail.appendCString("*)(st + "); tail.append(String.withU32(_mObj.offsetAt(k))); tail.appendCString(");\n");
+            // On the device (bug 645): the workgroup's values through
+            // threadgroup memory, combined in a fixed tree; thread 0 writes
+            // its one partial.
+            String* rop = _mRedOps != (Map*)0 ? (String*)_mRedOps.get((Hashable*)String.withU32(k)) : (String*)0;
+            bool isFloat = ptxIs(_mObj.typeAt(k), "F32") || ptxIs(_mObj.typeAt(k), "F64");
+            String* comb = (String*)0;
+            if (rop != (String*)0 && (rop.equals(ptxS("min")) || rop.equals(ptxS("max"))))
+                comb = String.withFormat("%s(sh_%u[lid], sh_%u[lid + s])", rop.cString(), k, k);
+            else if (rop != (String*)0 && (rop.equals(ptxS("+")) || rop.equals(ptxS("*")) ||
+                     (!isFloat && (rop.equals(ptxS("&")) || rop.equals(ptxS("|")) || rop.equals(ptxS("^"))))))
+                comb = String.withFormat("sh_%u[lid] %s sh_%u[lid + s]", k, rop.cString(), k);
+            if (comb == (String*)0)
+                mDevred = false;
+            else
+                {
+                mShared.appendFormat("    threadgroup %s sh_%u[256];\n", et.cString(), k);
+                mDtail.appendFormat("    sh_%u[lid] = *(thread %s*)(st + %u);\n", k, et.cString(), _mObj.offsetAt(k));
+                mDtail.appendCString("    threadgroup_barrier(mem_flags::mem_threadgroup);\n    for (uint s = 128; s > 0; s >>= 1) {\n");
+                mDtail.appendFormat("        if (lid < s) sh_%u[lid] = %s;\n", k, comb.cString());
+                mDtail.appendCString("        threadgroup_barrier(mem_flags::mem_threadgroup);\n    }\n");
+                mDtail.appendFormat("    if (lid == 0) red_%u[gid] = sh_%u[0];\n", k, k);
+                }
             }
+        if (mDevred) meta.appendCString(" devred");
         // A speed-goal block's runtime compiles it with fast maths (MTLMathModeFast).
         if (_mFast) meta.appendCString(" fast");
         String* out = String.withString(meta);
         out.appendCString("\n#include <metal_stdlib>\nusing namespace metal;\n");
         for (u32 i = (u32)0; i < _mHelperText.count(); i = i + (u32)1)
             out.append((String*)_mHelperText.get(i));
-        out.appendCString("kernel void par_kernel("); out.append(params); out.appendCString(", uint tid [[thread_position_in_grid]])\n{\n");
+        out.appendCString("kernel void par_kernel("); out.append(params);
+        if (mDevred)
+            out.appendCString(", uint tid [[thread_position_in_grid]], uint lid [[thread_position_in_threadgroup]], uint gid [[threadgroup_position_in_grid]])\n{\n");
+        else
+            out.appendCString(", uint tid [[thread_position_in_grid]])\n{\n");
+        out.append(mShared);
         out.appendCString("    thread uchar st["); out.append(String.withU32(_mObj.size())); out.appendCString("];\n");
         out.appendCString("    for (uint q = 0; q < "); out.append(String.withU32(_mObj.size())); out.appendCString("u; q++) st[q] = args[q];\n");
         out.appendCString("    long lo = span[0] + long(tid) * span[2];\n");
@@ -15891,8 +15929,15 @@ class ClassInfo
             out.append(body);
             out.appendCString("        default: pc = 0xffffffffu; continue;\n        }\n    }\n");
             }
-        out.appendCString("    if (lo >= span[1]) return;\n");
-        out.append(tail);
+        if (mDevred)
+            // Every thread reaches every barrier: one past the range holds its
+            // reductions' starting values, which leave the result unchanged.
+            out.append(mDtail);
+        else
+            {
+            out.appendCString("    if (lo >= span[1]) return;\n");
+            out.append(tail);
+            }
         out.appendCString("}\n");
         return out;
         }
@@ -16807,6 +16852,37 @@ class ClassInfo
         return out;
         }
 
+    // One step of a device-side reduction (bug 645): d = a <op> b in t's PTX
+    // spelling, or 0 for an operator t cannot take (a bitwise one on a float).
+    // A float is combined exactly rounded (.rn) whatever the block's goal: the
+    // tree's order is fixed, so the result is the same run to run.
+    String* ptxRedStep(String* op, String* t, string d, string a, string b)
+        {
+        bool f = ptxIs(t, "F32") || ptxIs(t, "F64");
+        bool w = ptxIs(t, "I64") || ptxIs(t, "U64") || ptxIs(t, "F64");
+        string bits = w ? "64" : "32";
+        string ft = ptxIs(t, "F64") ? "f64" : "f32";
+        bool sg = ptxIs(t, "I8") || ptxIs(t, "I16") || ptxIs(t, "I32") || ptxIs(t, "I64");
+        String* ins = (String*)0;
+        if (op.equals(ptxS("+")))
+            ins = f ? String.withFormat("add.rn.%s", ft) : String.withFormat("add.s%s", bits);
+        else if (op.equals(ptxS("*")))
+            ins = f ? String.withFormat("mul.rn.%s", ft) : String.withFormat("mul.lo.s%s", bits);
+        else if (op.equals(ptxS("&")) && !f)
+            ins = String.withFormat("and.b%s", bits);
+        else if (op.equals(ptxS("|")) && !f)
+            ins = String.withFormat("or.b%s", bits);
+        else if (op.equals(ptxS("^")) && !f)
+            ins = String.withFormat("xor.b%s", bits);
+        else if (op.equals(ptxS("min")))
+            ins = f ? String.withFormat("min.%s", ft) : String.withFormat("min.%s%s", sg ? "s" : "u", bits);
+        else if (op.equals(ptxS("max")))
+            ins = f ? String.withFormat("max.%s", ft) : String.withFormat("max.%s%s", sg ? "s" : "u", bits);
+        if (ins == (String*)0)
+            return (String*)0;
+        return String.withFormat("\t%s %s, %s, %s;\n", ins.cString(), d, a, b);
+        }
+
     String* parPtx(IRFunc* f)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
@@ -16856,6 +16932,12 @@ class ClassInfo
             params.appendCString(", .param .u64 glob_"); params.append(String.withU32(gi));
             }
         String* tail = ptxS("");
+        String* dtail = ptxS("");
+        bool anyRed = false;
+        for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
+            if (_mReds.get((Hashable*)String.withI64((i64)k)) != (Object*)0)
+                anyRed = true;
+        bool devred = _mRedOps != (Map*)0 && anyRed;
         for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
             {
             if (_mReds.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
@@ -16871,8 +16953,36 @@ class ClassInfo
             tail.append(String.withU32(_mObj.offsetAt(k))); tail.appendCString("];\n\tld.param.u64 %x, [red_"); tail.append(kk);
             tail.appendCString("];\n\tcvta.to.global.u64 %x, %x;\n\tmad.lo.u64 %x, %tid64, "); tail.append(String.withU32(ptxSize(t)));
             tail.appendCString(", %x;\n\tst.global."); tail.append(m); tail.appendCString(" [%x], "); tail.append(tmp); tail.appendCString(";\n");
+            // On the device (bug 645): this field's value from every thread of
+            // the workgroup, through shared memory, combined in a fixed tree;
+            // thread 0 writes the workgroup's one partial at red_k + ctaid * width.
+            String* rop = _mRedOps != (Map*)0 ? (String*)_mRedOps.get((Hashable*)kk) : (String*)0;
+            String* tmp2 = String.withString(tmp);
+            tmp2.appendCString("2");
+            String* step = rop != (String*)0 ? ptxRedStep(rop, t, tmp.cString(), tmp.cString(), tmp2.cString()) : (String*)0;
+            if (step == (String*)0)
+                devred = false;
+            else
+                {
+                dtail.appendFormat("\tld.local.%s %s, [%%stp+%u];\n\tst.shared.%s [%%sha], %s;\n\tbar.sync 0;\n", m.cString(),
+                                   tmp.cString(), _mObj.offsetAt(k), m.cString(), tmp.cString());
+                for (u32 sw = (u32)128; sw >= (u32)1; sw = sw / (u32)2)
+                    {
+                    dtail.appendFormat("\tsetp.ge.u32 %%pz, %%tx, %u;\n\t@%%pz bra RS_%u_%u;\n", sw, k, sw);
+                    dtail.appendFormat("\tld.shared.%s %s, [%%sha];\n\tld.shared.%s %s, [%%sha+%u];\n", m.cString(), tmp.cString(),
+                                       m.cString(), tmp2.cString(), sw * (u32)8);
+                    dtail.append(step);
+                    dtail.appendFormat("\tst.shared.%s [%%sha], %s;\nRS_%u_%u:\n\tbar.sync 0;\n", m.cString(), tmp.cString(), k, sw);
+                    }
+                dtail.appendFormat("\tsetp.ne.u32 %%pz, %%tx, 0;\n\t@%%pz bra RN_%u;\n\tld.shared.%s %s, [%%shb];\n", k, m.cString(),
+                                   tmp.cString());
+                dtail.appendFormat("\tld.param.u64 %%x, [red_%u];\n\tcvta.to.global.u64 %%x, %%x;\n", k);
+                dtail.appendFormat("\tmad.lo.u64 %%x, %%cta64, %u, %%x;\n\tst.global.%s [%%x], %s;\nRN_%u:\n\tbar.sync 0;\n",
+                                   ptxSize(t), m.cString(), tmp.cString(), k);
+                }
             }
 
+        if (devred) meta.appendCString(" devred");
         if (_mFast) meta.appendCString(" fast");
         String* out = String.withString(meta);
         out.appendCString("\n.version 7.0\n.target sm_52\n.address_size 64\n");
@@ -16880,6 +16990,8 @@ class ClassInfo
             out.append((String*)_mHelperText.get(i));
         out.appendCString(".visible .entry par_kernel("); out.append(params); out.appendCString(")\n{\n");
         out.appendCString("\t.local .align 8 .b8 st["); out.append(String.withU32(_mObj.size())); out.appendCString("];\n");
+        if (devred)
+            out.appendCString("\t.shared .align 8 .b8 sh[2048];\n\t.reg .b64 %sha, %shb, %cta64, %y2;\n\t.reg .b32 %k2;\n\t.reg .f32 %fk2;\n\t.reg .f64 %dk2;\n");
         out.appendCString("\t.reg .b64 %stp, %ga, %gs, %lo, %hi, %end, %per, %tid64, %x, %y;\n");
         out.appendCString("\t.reg .b32 %gid, %k, %nt, %ct, %tx;\n\t.reg .f32 %fk;\n\t.reg .f64 %dk;\n\t.reg .pred %pz;\n");
         out.append(decls);
@@ -16898,8 +17010,18 @@ class ClassInfo
         out.appendCString("\tst.local.u64 [%stp+"); out.append(String.withU32(_mObj.offsetAt((u32)2))); out.appendCString("], %hi;\n");
         out.appendCString("\tsetp.ge.s64 %pz, %lo, %hi;\n\t@%pz bra BODY_END;\n");
         out.append(body);
-        out.appendCString("BODY_END:\n\tsetp.ge.s64 %pz, %lo, %end;\n\t@%pz bra DONE;\n");
-        out.append(tail);
+        if (devred)
+            {
+            // Every thread reaches every barrier: one past the range holds its
+            // reductions' starting values, which leave the result unchanged.
+            out.appendCString("BODY_END:\n\tmov.u64 %shb, sh;\n\tmul.wide.u32 %sha, %tx, 8;\n\tadd.u64 %sha, %sha, %shb;\n\tcvt.u64.u32 %cta64, %ct;\n");
+            out.append(dtail);
+            }
+        else
+            {
+            out.appendCString("BODY_END:\n\tsetp.ge.s64 %pz, %lo, %end;\n\t@%pz bra DONE;\n");
+            out.append(tail);
+            }
         out.appendCString("DONE:\n\tret;\n}\n");
         return out;
         }
@@ -18351,6 +18473,38 @@ class ClassInfo
         u32 gidV = m.newId();
         spvOp(m.globals, (u32)SPV_VARIABLE, spvA3(m.ptrType((u32)SPV_ST_INPUT, uvec3), gidV, (u32)SPV_ST_INPUT));
         spvOp(m.decos, (u32)SPV_DECORATE, spvA3(gidV, (u32)SPV_DEC_BUILTIN, (u32)SPV_BUILTIN_GLOBALINVOCATIONID));
+        // A device-side reduction (bug 645) when every reduced field is a full
+        // 32- or 64-bit value with an operator its type takes (the reference
+        // explains).
+        bool devred = _mRedOps != (Map*)0;
+        bool anyRed = false;
+        for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
+            {
+            if (_mReds.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
+            anyRed = true;
+            String* rt = _mObj.typeAt(k);
+            String* op = _mRedOps != (Map*)0 ? (String*)_mRedOps.get((Hashable*)String.withU32(k)) : (String*)0;
+            bool isF = ptxIs(rt, "F32") || ptxIs(rt, "F64");
+            bool okT = ptxIs(rt, "I32") || ptxIs(rt, "U32") || ptxIs(rt, "I64") || ptxIs(rt, "U64") || isF;
+            bool okOp = op != (String*)0 && (op.equals(spvS("+")) || op.equals(spvS("*")) || op.equals(spvS("min")) ||
+                        op.equals(spvS("max")) ||
+                        (!isF && (op.equals(spvS("&")) || op.equals(spvS("|")) || op.equals(spvS("^")))));
+            if (!okT || !okOp)
+                devred = false;
+            }
+        if (!anyRed)
+            devred = false;
+        u32 lidV = (u32)0;
+        u32 wgV = (u32)0;
+        if (devred)
+            {
+            lidV = m.newId();
+            spvOp(m.globals, (u32)SPV_VARIABLE, spvA3(m.ptrType((u32)SPV_ST_INPUT, uvec3), lidV, (u32)SPV_ST_INPUT));
+            spvOp(m.decos, (u32)SPV_DECORATE, spvA3(lidV, (u32)SPV_DEC_BUILTIN, (u32)SPV_BUILTIN_LOCALINVOCATIONID));
+            wgV = m.newId();
+            spvOp(m.globals, (u32)SPV_VARIABLE, spvA3(m.ptrType((u32)SPV_ST_INPUT, uvec3), wgV, (u32)SPV_ST_INPUT));
+            spvOp(m.decos, (u32)SPV_DECORATE, spvA3(wgV, (u32)SPV_DEC_BUILTIN, (u32)SPV_BUILTIN_WORKGROUPID));
+            }
 
         // Buffers: captured arrays, globals, reductions, in the header's order.
         String* meta = spvS("// xcpar size=");
@@ -18360,6 +18514,11 @@ class ClassInfo
         iface.add((Object*)Number.withU32(gidV));
         iface.add((Object*)Number.withU32(argsV));
         iface.add((Object*)Number.withU32(spanV));
+        if (devred)
+            {
+            iface.add((Object*)Number.withU32(lidV));
+            iface.add((Object*)Number.withU32(wgV));
+            }
         u32 binding = (u32)1;
         for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
             {
@@ -18415,6 +18574,7 @@ class ClassInfo
             }
         Array* redVars = new Array();
         Array* redFields = new Array();
+        Array* shVars = new Array();
         for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
             {
             if (_mReds.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
@@ -18435,6 +18595,19 @@ class ClassInfo
             redVars.add((Object*)Number.withU32(v));
             redFields.add((Object*)Number.withU32(k));
             iface.add((Object*)Number.withU32(v));
+            if (devred)
+                {
+                // The workgroup's 256 values of this field.
+                u32 n256 = m.u32c((u32)256);
+                String* akey = spvS("arr256_");
+                akey.append(String.withU32(t));
+                u32 arrT = m.cached(akey, (u32)SPV_TYPEARRAY, spvA2(t, n256), true);
+                u32 pArr = m.ptrType((u32)SPV_ST_WORKGROUP, arrT);
+                u32 sv = m.newId();
+                spvOp(m.globals, (u32)SPV_VARIABLE, spvA3(pArr, sv, (u32)SPV_ST_WORKGROUP));
+                shVars.add((Object*)Number.withU32(sv));
+                iface.add((Object*)Number.withU32(sv));
+                }
             }
 
         // The kernel function.
@@ -18477,6 +18650,93 @@ class ClassInfo
         u32 guard = spvEmitR((u32)SPV_SLESSTHAN, m.typeBool(), spvA2(lo, hi));
         u32 merge = spvLabel();
         if (!spvBody(f, merge, guard)) return false;
+        if (devred)
+            {
+            // Every thread reaches every barrier: one past the range holds its
+            // reductions' starting values, which leave the result unchanged.
+            u32 boolT = m.typeBool();
+            u32 lidv = spvEmitR((u32)SPV_LOAD, uvec3, spvA1(lidV));
+            u32 lid32 = spvEmitR((u32)SPV_COMPOSITEEXTRACT, u32t, spvA2(lidv, (u32)0));
+            u32 wgv = spvEmitR((u32)SPV_LOAD, uvec3, spvA1(wgV));
+            u32 wg32 = spvEmitR((u32)SPV_COMPOSITEEXTRACT, u32t, spvA2(wgv, (u32)0));
+            u32 scope = m.u32c((u32)2);      // Workgroup
+            u32 sem = m.u32c((u32)0x108);    // AcquireRelease | WorkgroupMemory
+            for (u32 di = (u32)0; di < redFields.count(); di = di + (u32)1)
+                {
+                u32 k = ((Number*)redFields.get(di)).asU32();
+                String* rt = _mObj.typeAt(k);
+                String* op = (String*)_mRedOps.get((Hashable*)String.withU32(k));
+                bool isF = ptxIs(rt, "F32") || ptxIs(rt, "F64");
+                bool sgn = ptxIs(rt, "I32") || ptxIs(rt, "I64");
+                u32 t = spvType(rt);
+                u32 sv = ((Number*)shVars.get(di)).asU32();
+                u32 pW = m.ptrType((u32)SPV_ST_WORKGROUP, t);
+                u32 src = spvEmitR((u32)SPV_ACCESSCHAIN, m.ptrType((u32)SPV_ST_FUNCTION, t),
+                                   spvA2(_sLocalObj, m.u32c(((Number*)_sMember.get((Hashable*)String.withU32(k))).asU32())));
+                u32 val = spvEmitR((u32)SPV_LOAD, t, spvA1(src));
+                u32 mine = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, lid32));
+                spvEmit((u32)SPV_STORE, spvA2(mine, val));
+                spvEmit((u32)SPV_CONTROLBARRIER, spvA3(scope, scope, sem));
+                for (u32 lvl = (u32)128; lvl >= (u32)1; lvl = lvl / (u32)2)
+                    {
+                    u32 swc = m.u32c(lvl);
+                    u32 c = spvEmitR((u32)SPV_ULESSTHAN, boolT, spvA2(lid32, swc));
+                    u32 body = spvLabel();
+                    u32 mrg = spvLabel();
+                    spvEmit((u32)SPV_SELECTIONMERGE, spvA2(mrg, (u32)0));
+                    spvEmit((u32)SPV_BRANCHCONDITIONAL, spvA3(c, body, mrg));
+                    spvPlace(body);
+                    u32 pa = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, lid32));
+                    u32 a = spvEmitR((u32)SPV_LOAD, t, spvA1(pa));
+                    u32 other = spvEmitR((u32)SPV_IADD, u32t, spvA2(lid32, swc));
+                    u32 pb = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, other));
+                    u32 b = spvEmitR((u32)SPV_LOAD, t, spvA1(pb));
+                    u32 r = (u32)0;
+                    if (op.equals(spvS("+")))
+                        r = spvEmitR(isF ? (u32)SPV_FADD : (u32)SPV_IADD, t, spvA2(a, b));
+                    else if (op.equals(spvS("*")))
+                        r = spvEmitR(isF ? (u32)SPV_FMUL : (u32)SPV_IMUL, t, spvA2(a, b));
+                    else if (op.equals(spvS("&")))
+                        r = spvEmitR((u32)SPV_BITWISEAND, t, spvA2(a, b));
+                    else if (op.equals(spvS("|")))
+                        r = spvEmitR((u32)SPV_BITWISEOR, t, spvA2(a, b));
+                    else if (op.equals(spvS("^")))
+                        r = spvEmitR((u32)SPV_BITWISEXOR, t, spvA2(a, b));
+                    else
+                        {
+                        bool isMin = op.equals(spvS("min"));
+                        u32 cmpOp = isF ? (isMin ? (u32)SPV_FORDLESSTHAN : (u32)SPV_FORDGREATERTHAN)
+                                  : sgn ? (isMin ? (u32)SPV_SLESSTHAN : (u32)SPV_SGREATERTHAN)
+                                        : (isMin ? (u32)SPV_ULESSTHAN : (u32)SPV_UGREATERTHAN);
+                        u32 cmp = spvEmitR(cmpOp, boolT, spvA2(a, b));
+                        r = spvEmitR((u32)SPV_SELECT, t, spvA3(cmp, a, b));
+                        }
+                    u32 pc = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, lid32));
+                    spvEmit((u32)SPV_STORE, spvA2(pc, r));
+                    spvEmit((u32)SPV_BRANCH, spvA1(mrg));
+                    spvPlace(mrg);
+                    spvEmit((u32)SPV_CONTROLBARRIER, spvA3(scope, scope, sem));
+                    }
+                u32 zero = m.u32c((u32)0);
+                u32 c0 = spvEmitR((u32)SPV_IEQUAL, boolT, spvA2(lid32, zero));
+                u32 wbody = spvLabel();
+                u32 wmrg = spvLabel();
+                spvEmit((u32)SPV_SELECTIONMERGE, spvA2(wmrg, (u32)0));
+                spvEmit((u32)SPV_BRANCHCONDITIONAL, spvA3(c0, wbody, wmrg));
+                spvPlace(wbody);
+                u32 p0 = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, zero));
+                u32 v0 = spvEmitR((u32)SPV_LOAD, t, spvA1(p0));
+                u32 dst = spvEmitR((u32)SPV_ACCESSCHAIN, m.ptrType((u32)SPV_ST_STORAGEBUFFER, t),
+                                   spvA3(((Number*)redVars.get(di)).asU32(), zero, wg32));
+                spvEmit((u32)SPV_STORE, spvA2(dst, v0));
+                spvEmit((u32)SPV_BRANCH, spvA1(wmrg));
+                spvPlace(wmrg);
+                }
+            spvEmit((u32)SPV_RETURN, new Array());
+            spvEmit((u32)SPV_FUNCTIONEND, new Array());
+            }
+        else
+        {
         u32 inRange = spvEmitR((u32)SPV_SLESSTHAN, m.typeBool(), spvA2(lo, spanHi));
         u32 write = spvLabel();
         u32 done = spvLabel();
@@ -18503,6 +18763,7 @@ class ClassInfo
         spvPlace(done);
         spvEmit((u32)SPV_RETURN, new Array());
         spvEmit((u32)SPV_FUNCTIONEND, new Array());
+        }
         if (_mWhy != (String*)0)
             return false;
 
@@ -18515,11 +18776,12 @@ class ClassInfo
         for (u32 i = (u32)0; i < nm.count(); i = i + (u32)1) ep.add(nm.get(i));
         for (u32 i = (u32)0; i < iface.count(); i = i + (u32)1) ep.add(iface.get(i));
         spvOp(m.head, (u32)SPV_ENTRYPOINT, ep);
-        spvOp(m.head, (u32)SPV_EXECUTIONMODE, spvW((u32)5, mainId, (u32)17, (u32)64, (u32)1, (u32)1, (u32)0));
+        spvOp(m.head, (u32)SPV_EXECUTIONMODE, spvW((u32)5, mainId, (u32)17, devred ? (u32)256 : (u32)64, (u32)1, (u32)1, (u32)0));
         for (u32 i = (u32)0; i < header.count(); i = i + (u32)1) m.funcs.add(header.get(i));
         spvFinish(fn, m.funcs);
 
         Array* words = m.bytes();
+        if (devred) meta.appendCString(" devred");
         meta.appendCString(" spirv=");
         meta.append(String.withU32(words.count() / (u32)4));
         if (_mFast) meta.appendCString(" fast");
@@ -19792,9 +20054,16 @@ class ClassInfo
             _wgBufName.set((Hashable*)key, (Object*)n);
             }
         Array* reds = new Array();
+        // A device-side reduction (bug 645) when every reduced field is a
+        // 32-bit value with an operator its type takes (the reference explains).
+        bool devred = _mRedOps != (Map*)0;
+        bool anyRed = false;
+        String* wgDecls = new String();
+        String* wgTail = new String();
         for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
             {
             if (_mReds.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
+            anyRed = true;
             String* t = _mObj.typeAt(k);
             if (wgType(t) == (String*)0 || used.get((Hashable*)String.withU32(k)) == (Object*)0)
                 {
@@ -19811,19 +20080,47 @@ class ClassInfo
             _wgBinding = _wgBinding + (u32)1;
             if (ptxIs(t, "Bool")) reds.add((Object*)String.withFormat("r%u[tid] = select(0u, 1u, f%u);", k, k));
             else reds.add((Object*)String.withFormat("r%u[tid] = f%u;", k, k));
+            String* op = _mRedOps != (Map*)0 ? (String*)_mRedOps.get((Hashable*)String.withU32(k)) : (String*)0;
+            bool isF = ptxIs(t, "F32");
+            bool okT = ptxIs(t, "I32") || ptxIs(t, "U32") || isF;
+            String* comb = (String*)0;
+            if (okT && op != (String*)0 && (op.equals(spvS("min")) || op.equals(spvS("max"))))
+                comb = String.withFormat("%s(w%u[lid], w%u[lid + s])", op.cString(), k, k);
+            else if (okT && op != (String*)0 && (op.equals(spvS("+")) || op.equals(spvS("*")) ||
+                     (!isF && (op.equals(spvS("&")) || op.equals(spvS("|")) || op.equals(spvS("^"))))))
+                comb = String.withFormat("w%u[lid] %s w%u[lid + s]", k, op.cString(), k);
+            if (comb == (String*)0)
+                devred = false;
+            else
+                {
+                wgDecls.append(String.withFormat("var<workgroup> w%u: array<%s, 256>;\n", k, wgType(t).cString()));
+                wgTail.append(String.withFormat("  w%u[lid] = f%u;\n  workgroupBarrier();\n", k, k));
+                wgTail.appendCString("  for (var s = 128u; s > 0u; s = s >> 1u) {\n");
+                wgTail.append(String.withFormat("    if (lid < s) { w%u[lid] = %s; }\n    workgroupBarrier();\n  }\n", k, comb.cString()));
+                wgTail.append(String.withFormat("  if (lid == 0u) { r%u[wid.x + wid.y * 65535u] = w%u[0]; }\n", k, k));
+                }
             }
+        if (!anyRed)
+            devred = false;
 
         if (!wgDeclareValues(f)) return false;
         String* body = new String();
         body.append(fieldInit);
-        body.appendCString("  let tid = gid.x + gid.y * 4194240u;\n");
+        if (devred)
+            body.appendCString("  let tid = gid.x + gid.y * 16776960u;\n");
+        else
+            body.appendCString("  let tid = gid.x + gid.y * 4194240u;\n");
         body.appendCString("  let lo = xc_add64(span[0], xc_mul64(vec2<u32>(tid, 0u), span[2]));\n");
         body.appendCString("  let end = xc_add64(lo, span[2]);\n");
         body.appendCString("  let hi = select(span[1], end, xc_slt64(end, span[1]));\n");
         body.appendCString("  f1 = lo;\n  f2 = hi;\n");
         if (!wgBody(f, spvS("xc_slt64(lo, hi)"))) return false;
         body.append(_wf.code);
-        if (reds.count() > (u32)0)
+        if (devred)
+            // Every thread reaches every barrier: one past the range holds its
+            // reductions' starting values, which leave the result unchanged.
+            body.append(wgTail);
+        else if (reds.count() > (u32)0)
             {
             body.appendCString("  if (xc_slt64(lo, span[1])) {\n    ");
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
@@ -19834,13 +20131,18 @@ class ClassInfo
             body.appendCString("\n  }\n");
             }
         if (_mWhy != (String*)0) return false;
+        if (devred) meta.appendCString(" devred");
         meta.appendCString(_mFast ? " wgsl fast" : " wgsl");
         String* out = String.withString(meta);
         out.appendCString("\n");
         out.append(decls);
+        if (devred) out.append(wgDecls);
         out.append(wgSixtyFour());
         out.append(_wgHelperText);
-        out.appendCString("@compute @workgroup_size(64)\nfn main(@builtin(global_invocation_id) gid: vec3<u32>) {\n");
+        if (devred)
+            out.appendCString("@compute @workgroup_size(256)\nfn main(@builtin(global_invocation_id) gid: vec3<u32>, @builtin(local_invocation_index) lid: u32, @builtin(workgroup_id) wid: vec3<u32>) {\n");
+        else
+            out.appendCString("@compute @workgroup_size(64)\nfn main(@builtin(global_invocation_id) gid: vec3<u32>) {\n");
         out.append(_wf.vars);
         out.append(body);
         out.appendCString("}\n");
@@ -19997,6 +20299,41 @@ class ClassInfo
                 if (parSymHasPrefix((IRSymbol*)_m.syms().get(j), fastTag))
                     _mFast = true;
             if (_mFast) tag = fastTag;
+            // The block's reductions, after the tag: `<field>=<op>;` each (bug 645).
+            _mRedOps = (Map*)0;
+            for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
+                {
+                IRSymbol* ls = (IRSymbol*)_m.syms().get(j);
+                if (!parSymHasPrefix(ls, tag))
+                    continue;
+                u32 end = ls.bytes().count();
+                while (end > tag.byteLength() && ((Number*)ls.bytes().get(end - (u32)1)).asU32() == (u32)0)
+                    end = end - (u32)1;
+                if (end <= tag.byteLength())
+                    continue;
+                _mRedOps = new Map();
+                String* key = new String();
+                String* val = new String();
+                bool inVal = false;
+                for (u32 q = tag.byteLength(); q < end; q = q + (u32)1)
+                    {
+                    u8 c = (u8)((Number*)ls.bytes().get(q)).asU32();
+                    if (c == (u8)';')
+                        {
+                        if (key.byteLength() > (u32)0 && inVal)
+                            _mRedOps.set((Hashable*)key, (Object*)val);
+                        key = new String();
+                        val = new String();
+                        inVal = false;
+                        }
+                    else if (c == (u8)'=' && !inVal)
+                        inVal = true;
+                    else if (inVal)
+                        val.appendByte(c);
+                    else
+                        key.appendByte(c);
+                    }
+                }
             String* msl = (String*)0;
             // A SPIR-V module is bytes (it holds NULs): it goes in as they are.
             Array* kernelBytes = (Array*)0;
@@ -20069,8 +20406,13 @@ class ClassInfo
                     }
                 for (u32 q = (u32)0; q < msl.byteLength(); q = q + (u32)1)
                     nb.add((Object*)Number.withU8(msl.byteAt(q)));
-                for (u32 q = tag.byteLength(); q < sym.bytes().count(); q = q + (u32)1)
-                    nb.add(sym.bytes().get(q)); // keep the terminator the literal had
+                // Keep the terminator the literal had — its trailing NULs only:
+                // the reductions listed after the tag (bug 645) are not the kernel's.
+                u32 z = sym.bytes().count();
+                while (z > tag.byteLength() && ((Number*)sym.bytes().get(z - (u32)1)).asU32() == (u32)0)
+                    z = z - (u32)1;
+                for (u32 q = z; q < sym.bytes().count(); q = q + (u32)1)
+                    nb.add(sym.bytes().get(q));
                 sym.setBytes(nb);
                 }
             }

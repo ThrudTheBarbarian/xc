@@ -646,7 +646,7 @@ class ParVulkan
             }
         for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)
             {
-            sizes[b] = l.threads * l.redStride[i];
+            sizes[b] = l.nparts * l.redStride[i];
             b = b + (u32)1;
             }
         // Whole 32-bit words: an array of 8- or 16-bit values is read and
@@ -797,7 +797,12 @@ class ParVulkan
                 _bindPipeline(cb, (u32)1, gParVkPipe[slot]);
                 _bindSets(cb, (u32)1, gParVkLayout[slot], (u32)0, (u32)1, &set, (u32)0, (pointer)0);
                 _push(cb, gParVkLayout[slot], (u32)0x20, (u32)0, (u32)24, (pointer)&span[0]);
-                _dispatch(cb, (u32)((l.threads + (i64)63) / (i64)64), (u32)1, (u32)1);
+                // A kernel that reduces on the device (bug 645) has workgroups
+                // of 256, one partial each; any other, workgroups of 64.
+                if (l.devred != (i64)0)
+                    _dispatch(cb, (u32)l.nparts, (u32)1, (u32)1);
+                else
+                    _dispatch(cb, (u32)((l.threads + (i64)63) / (i64)64), (u32)1, (u32)1);
                 if (_discrete)
                     {
                     _vk32(&mb[0], (u32)16, (u32)0x40);

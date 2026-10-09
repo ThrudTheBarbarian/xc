@@ -207,7 +207,7 @@ class ParCuda
             }
         for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)
             {
-            dev[nd] = upload(nd, (pointer)0, l.threads * l.redStride[i]);
+            dev[nd] = upload(nd, (pointer)0, l.nparts * l.redStride[i]);
             nd = nd + (u32)1;
             }
         bool ok = true;
@@ -230,7 +230,8 @@ class ParCuda
             gpuUs = ParDevice.nowUs() - gpuStart;
             }
 
-        // The arrays come back; each thread's partials fold in thread order.
+        // The arrays come back; the partials (one per thread, or per
+        // workgroup when the kernel reduced on the device) fold in order.
         if (ok)
             {
             u32 at = (u32)2;
@@ -247,7 +248,7 @@ class ParCuda
             u8* parts[16];
             for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)
                 {
-                i64 bytes = l.threads * l.redStride[i];
+                i64 bytes = l.nparts * l.redStride[i];
                 parts[i] = (u8*)malloc((u64)bytes);
                 _toHost((pointer)parts[i], dev[at], (u64)bytes);
                 at = at + (u32)1;
