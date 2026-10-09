@@ -915,6 +915,7 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
         }
     NSMutableString* tail = [NSMutableString string];
     NSMutableString* dtail = [NSMutableString string];
+    NSMutableString* ftail = [NSMutableString string];
     __block BOOL devred = self.redOps != nil && self.reductionFields.count > 0;
     [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
         XTIRType* t = fl[k].type;
@@ -952,6 +953,31 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
                                 @"\tld.param.u64 %%x, [red_%lu];\n\tcvta.to.global.u64 %%x, %%x;\n"
                                 @"\tmad.lo.u64 %%x, %%cta64, %u, %%x;\n\tst.global.%@ [%%x], %@;\nRN_%lu:\n\tbar.sync 0;\n",
                                 (unsigned long)k, m, tmp, (unsigned long)k, t.byteWidth, m, tmp, (unsigned long)k];
+            // The last workgroup's fold of this field (bug 645): thread tx
+            // combines partials tx, tx+256, … in that order, then the
+            // threads holding one combine in the same fixed tree as above,
+            // so the result does not depend on which workgroup came last.
+            // The partials are other workgroups' writes, so they are read
+            // past the L1 (ld.global.cg).
+            [ftail appendFormat:@"\tld.param.u64 %%x, [red_%lu];\n\tcvta.to.global.u64 %%x, %%x;\n"
+                                @"\tsetp.ge.u32 %%pz, %%tx, %%nc;\n\t@%%pz bra FA_%lu;\n"
+                                @"\tmul.wide.u32 %%fa, %%tx, %u;\n\tadd.u64 %%fa, %%fa, %%x;\n\tld.global.cg.%@ %@, [%%fa];\n"
+                                @"\tadd.u32 %%j, %%tx, 256;\nFL_%lu:\n\tsetp.ge.u32 %%pz, %%j, %%nc;\n\t@%%pz bra FS_%lu;\n"
+                                @"\tmul.wide.u32 %%fa, %%j, %u;\n\tadd.u64 %%fa, %%fa, %%x;\n\tld.global.cg.%@ %@, [%%fa];\n%@"
+                                @"\tadd.u32 %%j, %%j, 256;\n\tbra.uni FL_%lu;\nFS_%lu:\n\tst.shared.%@ [%%sha], %@;\nFA_%lu:\n\tbar.sync 0;\n",
+                                (unsigned long)k, (unsigned long)k, t.byteWidth, m, tmp, (unsigned long)k,
+                                (unsigned long)k, t.byteWidth, m, tmp2, step, (unsigned long)k, (unsigned long)k, m, tmp,
+                                (unsigned long)k];
+            for (unsigned sw = 128; sw >= 1; sw /= 2)
+                [ftail appendFormat:@"\tsetp.ge.u32 %%pz, %%tx, %u;\n\t@%%pz bra FR_%lu_%u;\n"
+                                    @"\tadd.u32 %%j, %%tx, %u;\n\tsetp.ge.u32 %%pz, %%j, %%nv;\n\t@%%pz bra FR_%lu_%u;\n"
+                                    @"\tld.shared.%@ %@, [%%sha];\n\tld.shared.%@ %@, [%%sha+%u];\n%@"
+                                    @"\tst.shared.%@ [%%sha], %@;\nFR_%lu_%u:\n\tbar.sync 0;\n",
+                                    sw, (unsigned long)k, sw, sw, (unsigned long)k, sw, m, tmp, m, tmp2, sw * 8, step, m,
+                                    tmp, (unsigned long)k, sw];
+            [ftail appendFormat:@"\tsetp.ne.u32 %%pz, %%tx, 0;\n\t@%%pz bra FN_%lu;\n\tld.shared.%@ %@, [%%shb];\n"
+                                @"\tst.global.%@ [%%x], %@;\nFN_%lu:\n\tbar.sync 0;\n",
+                                (unsigned long)k, m, tmp, m, tmp, (unsigned long)k];
             }
         [tail appendFormat:@"\tld.local.%@ %@, [%%stp+%u];\n\tld.param.u64 %%x, [red_%lu];\n\tcvta.to.global.u64 %%x, %%x;\n"
                            @"\tmad.lo.u64 %%x, %%tid64, %u, %%x;\n\tst.global.%@ [%%x], %@;\n",
@@ -962,17 +988,21 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
 
     NSMutableString* out = [NSMutableString string];
     if (devred)
-        [meta appendString:@" devred"];
+        [meta appendString:@" devred devlast"];
     if (self.fast)
         [meta appendString:@" fast"];
     [out appendFormat:@"%@\n.version 7.0\n.target sm_52\n.address_size 64\n", meta];
+    // How many workgroups have finished: the last to arrive folds them all,
+    // then puts it back to 0 for the next launch (a module global starts at 0).
+    if (devred)
+        [out appendString:@".global .align 4 .u32 par_done;\n"];
     for (NSString* h in self.helperText)
         [out appendString:h];
     [out appendFormat:@".visible .entry par_kernel(%@)\n{\n", [params componentsJoinedByString:@", "]];
     [out appendFormat:@"\t.local .align 8 .b8 st[%u];\n", self.objLayout.size];
     if (devred)
-        [out appendString:@"\t.shared .align 8 .b8 sh[2048];\n\t.reg .b64 %sha, %shb, %cta64, %y2;\n"
-                          @"\t.reg .b32 %k2;\n\t.reg .f32 %fk2;\n\t.reg .f64 %dk2;\n"];
+        [out appendString:@"\t.shared .align 8 .b8 sh[2056];\n\t.reg .b64 %sha, %shb, %cta64, %y2, %fa;\n"
+                          @"\t.reg .b32 %k2, %nc, %nv, %j;\n\t.reg .f32 %fk2;\n\t.reg .f64 %dk2;\n\t.reg .pred %pl;\n"];
     [out appendString:@"\t.reg .b64 %stp, %ga, %gs, %lo, %hi, %end, %per, %tid64, %x, %y;\n"
                       @"\t.reg .b32 %gid, %k, %nt, %ct, %tx;\n\t.reg .f32 %fk;\n\t.reg .f64 %dk;\n\t.reg .pred %pz;\n"];
     [out appendString:decls];
@@ -1002,6 +1032,18 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
         [out appendString:@"BODY_END:\n\tmov.u64 %shb, sh;\n\tmul.wide.u32 %sha, %tx, 8;\n\tadd.u64 %sha, %sha, %shb;\n"
                           @"\tcvt.u64.u32 %cta64, %ct;\n"];
         [out appendString:dtail];
+        // Thread 0 makes its workgroup's partials visible, then counts it in;
+        // the workgroup that brings the count to the total is the last, and
+        // says so to its threads through the word after the tree's slots.
+        [out appendString:@"\tmov.u32 %nc, %nctaid.x;\n\tmin.u32 %nv, %nc, 256;\n"
+                          @"\tsetp.ne.u32 %pz, %tx, 0;\n\t@%pz bra FW;\n\tmembar.gl;\n"
+                          @"\tmov.u64 %fa, par_done;\n\tatom.global.add.u32 %k, [%fa], 1;\n\tsub.u32 %j, %nc, 1;\n"
+                          @"\tsetp.eq.u32 %pl, %k, %j;\n\tselp.u32 %k, 1, 0, %pl;\n\tst.shared.u32 [%shb+2048], %k;\n"
+                          @"FW:\n\tbar.sync 0;\n\tld.shared.u32 %k, [%shb+2048];\n\tsetp.eq.u32 %pz, %k, 0;\n\t@%pz bra DONE;\n"
+                          @"\tmembar.gl;\n"];
+        [out appendString:ftail];
+        [out appendString:@"\tsetp.ne.u32 %pz, %tx, 0;\n\t@%pz bra DONE;\n\tmov.u64 %fa, par_done;\n"
+                          @"\tst.global.u32 [%fa], 0;\n"];
         }
     else
         {

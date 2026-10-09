@@ -248,7 +248,7 @@ class ParCuda
             u8* parts[16];
             for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)
                 {
-                i64 bytes = l.nparts * l.redStride[i];
+                i64 bytes = l.nback * l.redStride[i];
                 parts[i] = (u8*)malloc((u64)bytes);
                 _toHost((pointer)parts[i], dev[at], (u64)bytes);
                 at = at + (u32)1;

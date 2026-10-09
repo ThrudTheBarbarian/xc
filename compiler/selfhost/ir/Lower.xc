@@ -16933,6 +16933,7 @@ class ClassInfo
             }
         String* tail = ptxS("");
         String* dtail = ptxS("");
+        String* ftail = ptxS("");
         bool anyRed = false;
         for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
             if (_mReds.get((Hashable*)String.withI64((i64)k)) != (Object*)0)
@@ -16979,19 +16980,46 @@ class ClassInfo
                 dtail.appendFormat("\tld.param.u64 %%x, [red_%u];\n\tcvta.to.global.u64 %%x, %%x;\n", k);
                 dtail.appendFormat("\tmad.lo.u64 %%x, %%cta64, %u, %%x;\n\tst.global.%s [%%x], %s;\nRN_%u:\n\tbar.sync 0;\n",
                                    ptxSize(t), m.cString(), tmp.cString(), k);
+                // The last workgroup's fold of this field (the reference
+                // explains; bug 645).
+                ftail.appendFormat("\tld.param.u64 %%x, [red_%u];\n\tcvta.to.global.u64 %%x, %%x;\n", k);
+                ftail.appendFormat("\tsetp.ge.u32 %%pz, %%tx, %%nc;\n\t@%%pz bra FA_%u;\n", k);
+                ftail.appendFormat("\tmul.wide.u32 %%fa, %%tx, %u;\n\tadd.u64 %%fa, %%fa, %%x;\n\tld.global.cg.%s %s, [%%fa];\n",
+                                   ptxSize(t), m.cString(), tmp.cString());
+                ftail.appendFormat("\tadd.u32 %%j, %%tx, 256;\nFL_%u:\n\tsetp.ge.u32 %%pz, %%j, %%nc;\n\t@%%pz bra FS_%u;\n", k, k);
+                ftail.appendFormat("\tmul.wide.u32 %%fa, %%j, %u;\n\tadd.u64 %%fa, %%fa, %%x;\n\tld.global.cg.%s %s, [%%fa];\n",
+                                   ptxSize(t), m.cString(), tmp2.cString());
+                ftail.append(step);
+                ftail.appendFormat("\tadd.u32 %%j, %%j, 256;\n\tbra.uni FL_%u;\nFS_%u:\n\tst.shared.%s [%%sha], %s;\nFA_%u:\n\tbar.sync 0;\n",
+                                   k, k, m.cString(), tmp.cString(), k);
+                for (u32 sw = (u32)128; sw >= (u32)1; sw = sw / (u32)2)
+                    {
+                    ftail.appendFormat("\tsetp.ge.u32 %%pz, %%tx, %u;\n\t@%%pz bra FR_%u_%u;\n", sw, k, sw);
+                    ftail.appendFormat("\tadd.u32 %%j, %%tx, %u;\n\tsetp.ge.u32 %%pz, %%j, %%nv;\n\t@%%pz bra FR_%u_%u;\n", sw, k, sw);
+                    ftail.appendFormat("\tld.shared.%s %s, [%%sha];\n\tld.shared.%s %s, [%%sha+%u];\n", m.cString(), tmp.cString(),
+                                       m.cString(), tmp2.cString(), sw * (u32)8);
+                    ftail.append(step);
+                    ftail.appendFormat("\tst.shared.%s [%%sha], %s;\nFR_%u_%u:\n\tbar.sync 0;\n", m.cString(), tmp.cString(), k, sw);
+                    }
+                ftail.appendFormat("\tsetp.ne.u32 %%pz, %%tx, 0;\n\t@%%pz bra FN_%u;\n\tld.shared.%s %s, [%%shb];\n", k, m.cString(),
+                                   tmp.cString());
+                ftail.appendFormat("\tst.global.%s [%%x], %s;\nFN_%u:\n\tbar.sync 0;\n", m.cString(), tmp.cString(), k);
                 }
             }
 
-        if (devred) meta.appendCString(" devred");
+        if (devred) meta.appendCString(" devred devlast");
         if (_mFast) meta.appendCString(" fast");
         String* out = String.withString(meta);
         out.appendCString("\n.version 7.0\n.target sm_52\n.address_size 64\n");
+        // How many workgroups have finished (the reference explains).
+        if (devred)
+            out.appendCString(".global .align 4 .u32 par_done;\n");
         for (u32 i = (u32)0; i < _mHelperText.count(); i = i + (u32)1)
             out.append((String*)_mHelperText.get(i));
         out.appendCString(".visible .entry par_kernel("); out.append(params); out.appendCString(")\n{\n");
         out.appendCString("\t.local .align 8 .b8 st["); out.append(String.withU32(_mObj.size())); out.appendCString("];\n");
         if (devred)
-            out.appendCString("\t.shared .align 8 .b8 sh[2048];\n\t.reg .b64 %sha, %shb, %cta64, %y2;\n\t.reg .b32 %k2;\n\t.reg .f32 %fk2;\n\t.reg .f64 %dk2;\n");
+            out.appendCString("\t.shared .align 8 .b8 sh[2056];\n\t.reg .b64 %sha, %shb, %cta64, %y2, %fa;\n\t.reg .b32 %k2, %nc, %nv, %j;\n\t.reg .f32 %fk2;\n\t.reg .f64 %dk2;\n\t.reg .pred %pl;\n");
         out.appendCString("\t.reg .b64 %stp, %ga, %gs, %lo, %hi, %end, %per, %tid64, %x, %y;\n");
         out.appendCString("\t.reg .b32 %gid, %k, %nt, %ct, %tx;\n\t.reg .f32 %fk;\n\t.reg .f64 %dk;\n\t.reg .pred %pz;\n");
         out.append(decls);
@@ -17026,6 +17054,17 @@ class ClassInfo
             // reductions' starting values, which leave the result unchanged.
             out.appendCString("BODY_END:\n\tmov.u64 %shb, sh;\n\tmul.wide.u32 %sha, %tx, 8;\n\tadd.u64 %sha, %sha, %shb;\n\tcvt.u64.u32 %cta64, %ct;\n");
             out.append(dtail);
+            // The last workgroup to finish folds them all (the reference
+            // explains; bug 645).
+            out.appendCString("\tmov.u32 %nc, %nctaid.x;\n\tmin.u32 %nv, %nc, 256;\n");
+            out.appendCString("\tsetp.ne.u32 %pz, %tx, 0;\n\t@%pz bra FW;\n\tmembar.gl;\n");
+            out.appendCString("\tmov.u64 %fa, par_done;\n\tatom.global.add.u32 %k, [%fa], 1;\n\tsub.u32 %j, %nc, 1;\n");
+            out.appendCString("\tsetp.eq.u32 %pl, %k, %j;\n\tselp.u32 %k, 1, 0, %pl;\n\tst.shared.u32 [%shb+2048], %k;\n");
+            out.appendCString("FW:\n\tbar.sync 0;\n\tld.shared.u32 %k, [%shb+2048];\n\tsetp.eq.u32 %pz, %k, 0;\n\t@%pz bra DONE;\n");
+            out.appendCString("\tmembar.gl;\n");
+            out.append(ftail);
+            out.appendCString("\tsetp.ne.u32 %pz, %tx, 0;\n\t@%pz bra DONE;\n\tmov.u64 %fa, par_done;\n");
+            out.appendCString("\tst.global.u32 [%fa], 0;\n");
             }
         else
             {

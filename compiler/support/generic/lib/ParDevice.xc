@@ -117,6 +117,12 @@ class ParLayout : Object
     // block plans as one without reductions — one item per thread.
     i64 devred;     // 1: the kernel reduced on the device
     i64 nparts;
+    // And when the header also says `devlast`, the LAST workgroup to finish
+    // folds every workgroup's partial on the device and leaves the result in
+    // slot 0, so one partial comes back instead of `nparts` (bug 645). The
+    // buffers are still `nparts` long: every workgroup writes its own first.
+    i64 devlast;
+    i64 nback;
 
     void plan(i64 lo, i64 hi)
         {
@@ -127,6 +133,7 @@ class ParLayout : Object
             per = (n + most - (i64)1) / most;
         threads = (n + per - (i64)1) / per;
         nparts = devred != (i64)0 ? (threads + (i64)255) / (i64)256 : threads;
+        nback = devlast != (i64)0 ? (i64)1 : nparts;
         }
 
     // Each thread's partials, at parts[i] + thread * redStride[i], folded into
@@ -139,7 +146,7 @@ class ParLayout : Object
             return;
         ParChunk* c = proto.copyChunk();
         u8* cb = (u8*)(pointer)c;
-        for (i64 t = (i64)0; t < nparts; t = t + (i64)1)
+        for (i64 t = (i64)0; t < nback; t = t + (i64)1)
             {
             for (u32 i = (u32)0; i < nred; i = i + (u32)1)
                 memcpy((pointer)(cb + redOff[i]), (pointer)(parts[i] + t * redStride[i]), (u64)redSize[i]);
@@ -734,6 +741,15 @@ class ParDevice
                     return (ParLayout*)0;
                     }
                 l.nglob = k + (u32)1;
+                continue;
+                }
+            // devlast: and its last workgroup folds the workgroups' partials.
+            if (src[at] == (u8)'d' && src[at + (u32)1] == (u8)'e' && src[at + (u32)2] == (u8)'v' &&
+                src[at + (u32)3] == (u8)'l' && src[at + (u32)4] == (u8)'a' && src[at + (u32)5] == (u8)'s' &&
+                src[at + (u32)6] == (u8)'t')
+                {
+                l.devlast = (i64)1;
+                at = at + (u32)7;
                 continue;
                 }
             // devred: the kernel combines its reductions on the device (bug 645).
