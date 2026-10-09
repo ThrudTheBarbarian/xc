@@ -16,6 +16,8 @@ class RKBackdrop : UXView
     i32 formW;
     i32 formH;
     u8* label;
+    i32 offX;  // where the form's panel sits on the canvas: the controller can move the form
+    i32 offY;
 
     void init(void)
         {
@@ -23,6 +25,14 @@ class RKBackdrop : UXView
         formW = (i32)0;
         formH = (i32)0;
         label = (u8*)"";
+        offX = (i32)RK_FORM_X;
+        offY = (i32)RK_FORM_Y;
+        }
+    void setOffset(i32 x, i32 y)
+        {
+        offX = x;
+        offY = y;
+        self.setNeedsDisplay();
         }
     void showForm(i32 w, i32 h, u8* l)
         {
@@ -55,8 +65,8 @@ class RKBackdrop : UXView
             {
             return;
             }
-        i16 x = (i16)RK_FORM_X;
-        i16 y = (i16)RK_FORM_Y;
+        i16 x = (i16)offX;
+        i16 y = (i16)offY;
         // a soft shadow, the panel, its edge
         g.fillRectRGBA(UXGeom.make((i16)((i32)x + (i32)4), (i16)((i32)y + (i32)4), (i16)formW, (i16)formH), (i32)40, (i32)60, (i32)100, (i32)50);
         g.fillRectRGB(UXGeom.make(x, y, (i16)formW, (i16)formH), (i32)246, (i32)246, (i32)246);

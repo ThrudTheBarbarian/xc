@@ -39,6 +39,9 @@
 #define RK_GRAB 8 // how close to a corner counts as grabbing the handle (the handle is 7px)
 #define RK_FORM_HANDLE 8 // a form grab handle, in pixels
 #define RK_FORM_OFF 4    // how far outside the form's edge the form handles sit
+#define RK_MOVE_HANDLE_W 40 // the form's move grip, above the panel's centre
+#define RK_MOVE_HANDLE_H 8
+#define RK_MOVE_HANDLE_GAP 6
 
 class RKDrag : Object
     {
@@ -461,6 +464,16 @@ class RKDrag : Object
     i32 rNewW;
     i32 rNewH;
 
+    // Moving the form on the grid: a press on the move grip above the panel, or on the panel's bare
+    // background, carries the whole form, changing where RKBackdrop draws the panel and where the pane
+    // sits.  formMoved reports the new offset; `done` marks the release (a place to snapshot undo).
+    callback formMoved void(i32 offX, i32 offY, bool done);
+    bool movingForm;
+    i32 mfRefX;  // the press, in raw canvas coordinates (offX/offY excluded, since they move)
+    i32 mfRefY;
+    i32 mfOffX;  // the offset when the move began
+    i32 mfOffY;
+
     void init(void)
         {
         super.init();
@@ -485,6 +498,12 @@ class RKDrag : Object
         rStartH = (i32)0;
         rNewW = (i32)0;
         rNewH = (i32)0;
+        formMoved = (callback void(i32 offX, i32 offY, bool done))0;
+        movingForm = false;
+        mfRefX = (i32)0;
+        mfRefY = (i32)0;
+        mfOffX = (i32)0;
+        mfOffY = (i32)0;
         drag = new RKDrag();
         selection = (UXRscObject*)0;
         tracking = (UXRscObject*)0;
@@ -508,6 +527,19 @@ class RKDrag : Object
                 i32 by = (i32)0;
                 RKEditOverlay.formHandle(c, offX, offY, formW, formH, &bx, &by);
                 RKEditOverlay.handle(g, (i16)bx, (i16)by);
+                }
+            // The move grip: a bar above the panel's centre.  Dragging it (or the panel's background)
+            // carries the form on the grid, so moving it is discoverable rather than a hidden mode.
+            i32 gx = (i32)0;
+            i32 gy = (i32)0;
+            RKEditOverlay.moveHandle(offX, offY, formW, &gx, &gy);
+            g.fillRectRGB(UXGeom.make((i16)gx, (i16)gy, (i16)RK_MOVE_HANDLE_W, (i16)RK_MOVE_HANDLE_H), (i32)255, (i32)255, (i32)255);
+            g.fillRectRGB(UXGeom.make((i16)gx, (i16)gy, (i16)RK_MOVE_HANDLE_W, (i16)1), (i32)110, (i32)120, (i32)140);
+            g.fillRectRGB(UXGeom.make((i16)gx, (i16)((i32)gy + (i32)RK_MOVE_HANDLE_H - (i32)1), (i16)RK_MOVE_HANDLE_W, (i16)1), (i32)110, (i32)120, (i32)140);
+            for (i32 d = (i32)0; d < (i32)3; d = d + (i32)1)
+                {
+                i32 dx = (i32)gx + (i32)12 + d * (i32)8;
+                g.fillRectRGB(UXGeom.make((i16)dx, (i16)((i32)gy + (i32)2), (i16)2, (i16)4), (i32)110, (i32)120, (i32)140);
                 }
             }
         if (wiring)
@@ -565,6 +597,13 @@ class RKDrag : Object
             {
             return;
             }
+        // The move grip sits above the panel, over no control: pressing it carries the form.  It comes
+        // before the selection, so a grip press does not deselect what the designer had selected.
+        if (self.gripAt(cx, cy))
+            {
+            self.formMoveBegin((i32)e.x, (i32)e.y, e);
+            return;
+            }
         UXRscObject* o = drag.begin(drag.root, self.currentSelection(), cx, cy);
         if (picked)
             {
@@ -572,6 +611,12 @@ class RKDrag : Object
             }
         if (o == (UXRscObject*)0)
             {
+            // A press on the panel's bare background (which just selected the form) carries the form
+            // too, so grabbing the form anywhere but a control moves it on the grid.
+            if (self.onPanelBg(cx, cy))
+                {
+                self.formMoveBegin((i32)e.x, (i32)e.y, e);
+                }
             return;
             }
         if (!gDriver.dragTrackingIsModal())
@@ -679,6 +724,11 @@ class RKDrag : Object
             self.formStep((i32)e.x, (i32)e.y);
             return;
             }
+        if (movingForm)
+            {
+            self.formMoveStep((i32)e.x, (i32)e.y);
+            return;
+            }
         if (tracking != (UXRscObject*)0)
             {
             self.stepTo(tracking, (i32)e.x, (i32)e.y);
@@ -686,6 +736,12 @@ class RKDrag : Object
         }
     void mouseUp(UXEvent* e)
         {
+        if (movingForm)
+            {
+            self.formMoveStep((i32)e.x, (i32)e.y);
+            self.formMoveEnd();
+            return;
+            }
         if (resizing)
             {
             self.formStep((i32)e.x, (i32)e.y);
@@ -752,6 +808,29 @@ class RKDrag : Object
         i32 off = (i32)RK_FORM_OFF;
         bx[0] = ox + ((c == (i32)1 || c == (i32)3) ? fw + off : (i32)0 - off - s);
         by[0] = oy + ((c == (i32)2 || c == (i32)3) ? fh + off : (i32)0 - off - s);
+        }
+    // The move grip's box on the CANVAS: centred above the panel's top edge, in the gap the panel's
+    // label leaves.  (fw is the panel's width; the grip is centred on it.)
+    static void moveHandle(i32 ox, i32 oy, i32 fw, i32* bx, i32* by)
+        {
+        bx[0] = ox + (fw - (i32)RK_MOVE_HANDLE_W) / (i32)2;
+        by[0] = oy - (i32)RK_MOVE_HANDLE_H - (i32)RK_MOVE_HANDLE_GAP;
+        }
+    // Is a FORM-RELATIVE point on the move grip?  (The grip is above the panel, so fy < 0.)
+    bool gripAt(i32 fx, i32 fy)
+        {
+        if (formW <= (i32)0 || formH <= (i32)0)
+            {
+            return false;
+            }
+        i32 gx = (formW - (i32)RK_MOVE_HANDLE_W) / (i32)2;
+        i32 gy = (i32)0 - (i32)RK_MOVE_HANDLE_H - (i32)RK_MOVE_HANDLE_GAP;
+        return fx >= gx && fx < gx + (i32)RK_MOVE_HANDLE_W && fy >= gy && fy < gy + (i32)RK_MOVE_HANDLE_H;
+        }
+    // Is a FORM-RELATIVE point on the panel itself (the form's background)?
+    bool onPanelBg(i32 fx, i32 fy)
+        {
+        return formW > (i32)0 && formH > (i32)0 && fx >= (i32)0 && fy >= (i32)0 && fx < formW && fy < formH;
         }
     // Which form handle a FORM-RELATIVE point grabs, or -1.
     i32 formHandleAt(i32 fx, i32 fy)
@@ -859,6 +938,79 @@ class RKDrag : Object
             {
             formResized(rNewW, rNewH, true);
             }
+        }
+
+    // ---- moving the form on the grid ------------------------------------------------------------
+    void setFormMoved(callback f void(i32 offX, i32 offY, bool done))
+        {
+        formMoved = f;
+        }
+    // Window coordinates to RAW canvas coordinates: the overlay's own origin subtracted, but NOT
+    // offX/offY.  A form move changes offX/offY, so it cannot measure its own steps in the form's
+    // frame; it works in the raw canvas frame and reports the offset it lands on.
+    void toCanvasRaw(i32 wx, i32 wy, i32* cx, i32* cy)
+        {
+        UXRect a = self.absoluteFrame();
+        cx[0] = wx - (i32)a.x;
+        cy[0] = wy - (i32)a.y;
+        }
+    // A press on the grip or the panel background: carry the form, modally where the toolkit owns the
+    // loop (a slider, a split divider), else through mouseDragged / mouseUp.
+    void formMoveBegin(i32 wx, i32 wy, UXEvent* e)
+        {
+        i32 rx = (i32)0;
+        i32 ry = (i32)0;
+        self.toCanvasRaw(wx, wy, &rx, &ry);
+        mfRefX = rx;
+        mfRefY = ry;
+        mfOffX = offX;
+        mfOffY = offY;
+        movingForm = true;
+        if (!gDriver.dragTrackingIsModal())
+            {
+            return; // mouseDragged / mouseUp carry it
+            }
+        i32 x = (i32)e.x;
+        i32 y = (i32)e.y;
+        while (gDriver.trackDragStep(&x, &y) != (i32)0)
+            {
+            self.formMoveStep(x, y);
+            }
+        self.formMoveEnd();
+        }
+    void formMoveStep(i32 wx, i32 wy)
+        {
+        if (!movingForm)
+            {
+            return;
+            }
+        i32 rx = (i32)0;
+        i32 ry = (i32)0;
+        self.toCanvasRaw(wx, wy, &rx, &ry);
+        offX = mfOffX + (rx - mfRefX);
+        offY = mfOffY + (ry - mfRefY);
+        if (formMoved)
+            {
+            formMoved(offX, offY, false);
+            }
+        self.setNeedsDisplay();
+        if (gApp != (UXApplication*)0)
+            {
+            gApp.displayIfNeeded();
+            }
+        }
+    void formMoveEnd(void)
+        {
+        if (!movingForm)
+            {
+            return;
+            }
+        movingForm = false;
+        if (formMoved)
+            {
+            formMoved(offX, offY, true);
+            }
+        self.setNeedsDisplay();
         }
 
     UXRscObject* currentSelection(void)

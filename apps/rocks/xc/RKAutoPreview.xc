@@ -19,6 +19,7 @@ class RKAutoPreview : UXView
     i32 mask;  // the selected control's autoresize mask
     i32 phase; // 0..RK_AUTO_STEPS: where in the loop we are
     bool running;
+    bool hovered; // the pointer is over the preview itself (the canvas is the controller's job)
 
     void init(void)
         {
@@ -26,6 +27,7 @@ class RKAutoPreview : UXView
         mask = (i32)(UX_ANCHOR_LEFT | UX_ANCHOR_TOP); // pinned, as a control with no checks
         phase = (i32)0;
         running = false;
+        hovered = false;
         }
     void setMask(i32 m)
         {
@@ -53,6 +55,10 @@ class RKAutoPreview : UXView
     bool isRunning(void)
         {
         return running;
+        }
+    bool isHovered(void)
+        {
+        return hovered;
         }
     // One frame-clock step.
     void tick(void)
@@ -118,10 +124,12 @@ class RKAutoPreview : UXView
     // The loop runs only while the mouse is over the preview; the canvas is the controller's job.
     void mouseMoved(UXEvent* e)
         {
+        hovered = true;
         self.setRunning(true);
         }
     void mouseExited(UXEvent* e)
         {
+        hovered = false;
         self.setRunning(false);
         }
     }

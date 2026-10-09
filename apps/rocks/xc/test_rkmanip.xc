@@ -241,6 +241,22 @@ void main(void)
     Stdio.printf("  ..   the drag read-out says \"%s\"\n", g);
     checkTrue("the read-out starts with the position", g[0] == (u8)49 && g[1] == (u8)50);
 
+    // ---- the form moves on the grid ------------------------------------------
+    // A move grip sits above the panel's centre; a form move slides the panel, the panes and the
+    // backdrop together.  (Tested through onFormMoved, the same callback the overlay's drag reports.)
+    checkTrue("the form has a move grip above its panel",
+              c.overlay.gripAt((root0.w - (i32)RK_MOVE_HANDLE_W) / (i32)2,
+                               (i32)0 - (i32)RK_MOVE_HANDLE_H - (i32)RK_MOVE_HANDLE_GAP + (i32)1));
+    checkTrue("and not on the panel itself", !c.overlay.gripAt((i32)10, (i32)10));
+    i32 ox0 = c.overlay.offX;
+    i32 oy0 = c.overlay.offY;
+    c.onFormMoved(ox0 + (i32)30, oy0 + (i32)20, true);
+    check("the form move shifts the overlay origin, x", c.overlay.offX, ox0 + (i32)30);
+    check("...and y", c.overlay.offY, oy0 + (i32)20);
+    check("the pane follows the form", (i32)((UXView* ?)c.panes.get((u16)0)).frame().x, ox0 + (i32)30);
+    check("the backdrop's panel follows", c.backdrop.offX, ox0 + (i32)30);
+    c.onFormMoved(ox0, oy0, true); // put it back, so nothing after this depends on the move
+
     win.close();
     if (gFails == (i32)0)
         {

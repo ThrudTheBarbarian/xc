@@ -100,6 +100,8 @@ class RKMainController : Object<UXTableDelegate>
     i32 newScopePreset;             // RKSC_*: the scope a new connection gets
     RKVariants* variants;           // which properties each layout varies; the rest are shared
     RKBackdrop* backdrop;           // the grid under the canvas, and the form's panel on it
+    i32 formX;                      // where the form's panel sits on the canvas: the designer can move it
+    i32 formY;
     RKLibraryItem* placing;         // armed by a library pick: the next canvas press places it
     UXView* preview;                // the control a library drag shows over the form, or 0
     bool wireIn;                    // an outline row's drag is over the canvas
@@ -119,6 +121,9 @@ class RKMainController : Object<UXTableDelegate>
     bool resizingForm; // a form-handle drag is in progress (one undo snapshot per drag)
     bool syncingSelection; // set while the canvas drives the outline's selection (the change it fires is then ignored)
     bool turnHooked;       // the app's frame clock is registered (for the Size tab's preview)
+    i32 hoverX;            // the last pointer position over the canvas, in form coordinates
+    i32 hoverY;
+    bool hoverValid;       // the pointer has been over the canvas at least once
 
     // ---- state -------------------------------------------------------------
     // Deliberately not a view: the controller owns MODEL state and asks the
@@ -183,8 +188,10 @@ class RKMainController : Object<UXTableDelegate>
         newScopePreset = (i32)RKSC_ALL;
         variants = new RKVariants();
         backdrop = (RKBackdrop*)0;
-        overlay.offX = (i32)RK_FORM_X;
-        overlay.offY = (i32)RK_FORM_Y;
+        formX = (i32)RK_FORM_X;
+        formY = (i32)RK_FORM_Y;
+        overlay.offX = formX;
+        overlay.offY = formY;
         inspectorCtl.varyState = &self.varyStateOf;
         inspectorCtl.varyToggle = &self.onVaryToggle;
         overlay.wireFrom = &self.onWireFromView;
@@ -199,6 +206,7 @@ class RKMainController : Object<UXTableDelegate>
         selTop = (i32)0;
         overlay.placeAt = &self.placeAt;
         overlay.setFormResized(&self.onFormResized);
+        overlay.setFormMoved(&self.onFormMoved);
         overlay.hovered = &self.onCanvasHover;
         overlay.deleteKey = &self.deleteSelection;
         deviceBar = (UXSegmentedControl*)0;
@@ -212,6 +220,9 @@ class RKMainController : Object<UXTableDelegate>
         resizingForm = false;
         syncingSelection = false;
         turnHooked = false;
+        hoverX = (i32)0;
+        hoverY = (i32)0;
+        hoverValid = false;
         lastSaid = (Data*)0;
         formOutline = (UXOutlineView*)0;
         canvas = (UXView*)0;
@@ -485,7 +496,7 @@ class RKMainController : Object<UXTableDelegate>
     UXRect formArea(void)
         {
         UXRect b = canvas.bounds();
-        return UXGeom.make((i16)RK_FORM_X, (i16)RK_FORM_Y, (i16)((i32)b.w - (i32)RK_FORM_X), (i16)((i32)b.h - (i32)RK_FORM_Y));
+        return UXGeom.make((i16)formX, (i16)formY, (i16)((i32)b.w - formX), (i16)((i32)b.h - formY));
         }
     void ensureBackdrop(void)
         {
@@ -516,6 +527,7 @@ class RKMainController : Object<UXTableDelegate>
         l.appendBytes((u8*)" × ", UXRscTree.len((u8*)" × "));
         l.appendBytes(hs, UXRscTree.len(hs));
         l.appendByte((u8)0);
+        backdrop.setOffset(formX, formY);
         backdrop.showForm(t.root.w, t.root.h, UXStr.cstr(l));
         overlay.setForm(t.root.w, t.root.h); // the form's grab handles follow its size
         }
@@ -1967,6 +1979,43 @@ class RKMainController : Object<UXTableDelegate>
             }
         }
 
+    // A form-move drag: the form's PANEL slides on the grid.  This is editor scaffolding, not the
+    // document (where a form sits on the canvas changes nothing the app runs), so it is not undoable;
+    // the panes, the backdrop and the selection frame all follow the new origin.
+    void onFormMoved(i32 offX, i32 offY, bool done)
+        {
+        self.setFormOrigin(offX, offY);
+        }
+    void setFormOrigin(i32 offX, i32 offY)
+        {
+        if (canvas == (UXView*)0)
+            {
+            return;
+            }
+        formX = offX;
+        formY = offY;
+        overlay.offX = offX;
+        overlay.offY = offY;
+        if (backdrop != (RKBackdrop*)0)
+            {
+            backdrop.setOffset(offX, offY);
+            }
+        UXRect area = self.formArea();
+        for (i32 i = (i32)0; i < (i32)panes.count(); i = i + (i32)1)
+            {
+            ((UXView* ?)panes.get((u32)i)).setFrame(area);
+            }
+        if (selected != (UXRscObject*)0)
+            {
+            self.placeFrame(selected);
+            }
+        overlay.setNeedsDisplay();
+        if (gApp != (UXApplication*)0)
+            {
+            gApp.displayIfNeeded();
+            }
+        }
+
     // ---- the Size tab's moving preview --------------------------------------
     // It runs while the designer is plausibly looking at it, as Interface Builder's does: the Size
     // tab is showing AND the pointer is over the selected control (or over the preview itself, which
@@ -1974,6 +2023,9 @@ class RKMainController : Object<UXTableDelegate>
     void onCanvasHover(i32 cx, i32 cy)
         {
         self.hookTurn();
+        hoverX = cx;
+        hoverY = cy;
+        hoverValid = true;
         if (sizeCtl.autoPreview == (RKAutoPreview*)0)
             {
             return;
@@ -1983,6 +2035,22 @@ class RKMainController : Object<UXTableDelegate>
                        cx >= selected.x && cy >= selected.y &&
                        cx < selected.x + selected.w && cy < selected.y + selected.h;
         sizeCtl.autoPreview.setRunning(sizeShown && overSel);
+        }
+    // The preview's condition, from the state as it is NOW -- the tab showing, the pointer over the
+    // selected control (last seen on the canvas) or over the preview itself.  Re-evaluated on every
+    // turn, not only on a pointer move, so the loop does not depend on the mouse being moved.
+    void updatePreviewRunning(void)
+        {
+        if (sizeCtl.autoPreview == (RKAutoPreview*)0)
+            {
+            return;
+            }
+        bool sizeShown = self.shownTab() == (i32)RKIS_SIZE;
+        bool overSel = hoverValid && selected != (UXRscObject*)0 &&
+                       hoverX >= selected.x && hoverY >= selected.y &&
+                       hoverX < selected.x + selected.w && hoverY < selected.y + selected.h;
+        bool overPreview = sizeCtl.autoPreview.isHovered();
+        sizeCtl.autoPreview.setRunning(sizeShown && (overSel || overPreview));
         }
     // Register the frame clock once, so the preview can advance while the run loop is idle.
     void hookTurn(void)
@@ -1997,6 +2065,7 @@ class RKMainController : Object<UXTableDelegate>
         }
     void tickPreview(void)
         {
+        self.updatePreviewRunning(); // the state as it is now, not as it was at the last pointer move
         if (sizeCtl.autoPreview != (RKAutoPreview*)0 && sizeCtl.autoPreview.isRunning())
             {
             sizeCtl.autoPreview.tick();
