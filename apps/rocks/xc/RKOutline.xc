@@ -166,7 +166,7 @@ class RKOutlineNode : Object
                 {
                 for (i32 i = (i32)0; i < st.root.childCount(); i = i + (i32)1)
                     {
-                    n.kids.add(RKOutline.nodeFor(st.root.childAt(i)));
+                    n.kids.add(RKOutline.nodeFor(r, st, st.root.childAt(i)));
                     }
                 }
             roots.add(n);
@@ -186,13 +186,13 @@ class RKOutlineNode : Object
         return (RKOutlineNode*)0;
         }
 
-    static RKOutlineNode* nodeFor(UXRscObject* o)
+    static RKOutlineNode* nodeFor(UXRscDoc* r, UXRscTree* tr, UXRscObject* o)
         {
-        RKOutlineNode* n = RKOutlineNode.make((i32)RKON_VIEW, RKOutline.objectLabel(o));
+        RKOutlineNode* n = RKOutlineNode.make((i32)RKON_VIEW, RKOutline.objectLabel(r, tr, o));
         n.obj = o;
         for (i32 i = (i32)0; i < o.childCount(); i = i + (i32)1)
             {
-            n.kids.add(RKOutline.nodeFor(o.childAt(i)));
+            n.kids.add(RKOutline.nodeFor(r, tr, o.childAt(i)));
             }
         return n;
         }
@@ -237,7 +237,7 @@ class RKOutlineNode : Object
 
     // The object's name if it has one, its text if it has any, else its type -- so a row reads
     // "playButton" or "OK" rather than "button", and an untitled box still says what it is.
-    static u8* objectLabel(UXRscObject* o)
+    static u8* objectLabel(UXRscDoc* r, UXRscTree* tr, UXRscObject* o)
         {
         if (o.name != (u8*)0 && o.name[0] != (u8)0)
             {
@@ -247,6 +247,15 @@ class RKOutlineNode : Object
         if (t != (u8*)0 && t[0] != (u8)0)
             {
             return t;
+            }
+        // A UXKit view carries no text: show its class (the G_USERDEF's override), not "userdef".
+        if (r != (UXRscDoc*)0 && tr != (UXRscTree*)0)
+            {
+            u8* cls = r.classOf(tr, o);
+            if (cls != (u8*)0 && cls[0] != (u8)0)
+                {
+                return cls;
+                }
             }
         return UXRsc.typeName(o.type);
         }

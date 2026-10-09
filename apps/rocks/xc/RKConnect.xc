@@ -341,7 +341,7 @@ class RKConnectionsPane : Object
                 UXRscObject* o = (UXRscObject* ?)all.get(i);
                 if (o.logicalId == r.b)
                     {
-                    return RKOutline.objectLabel(o);
+                    return RKOutline.objectLabel(d, t, o);
                     }
                 }
             // in another layout of the form only: its name there
@@ -358,7 +358,7 @@ class RKConnectionsPane : Object
                     UXRscObject* o = (UXRscObject* ?)oall.get(i);
                     if (o.logicalId == r.b)
                         {
-                        return RKConnectionsPane.joined(RKOutline.objectLabel(o), (u8*)" (another layout's)");
+                        return RKConnectionsPane.joined(RKOutline.objectLabel(d, ot, o), (u8*)" (another layout's)");
                         }
                     }
                 }

@@ -154,6 +154,17 @@ void main(void)
     check("rebuilding does not duplicate",
           ol.numberOfChildren((UXOutlineView*)0, (Object*)0), (i32)7);
 
+    // A UXKit view is a G_USERDEF with a class: the row must show the CLASS, not "userdef", so a
+    // placed Table/Outline/Scroll View is recognisable in the list.
+    UXRscObject* ukit = UXRscObject.make((i32)UXR_T_USERDEF, (i32)10, (i32)10, (i32)80, (i32)40);
+    t0.root.addChild(ukit);
+    r.setClassOf(t0, ukit, (u8*)"UXOutlineView");
+    ol.build(r, (i32)UXR_V_DESKTOP, (i32)UXR_V_ORIENT_NONE);
+    RKOutlineNode* formRow = (RKOutlineNode* ?)ol.childOfItem((UXOutlineView*)0, (Object*)0, (i32)5);
+    eq("a UXKit view is labelled by its CLASS",
+       ol.valueForItem((UXOutlineView*)0, ol.childOfItem((UXOutlineView*)0, (Object*)formRow, (i32)2), (i32)0),
+       (u8*)"UXOutlineView");
+
     if (gFails == (i32)0)
         {
         Stdio.printf("PASS: the outline shows every tree and its nesting\n");
