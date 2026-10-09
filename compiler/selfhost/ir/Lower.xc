@@ -14702,6 +14702,10 @@ class ClassInfo
     Map* _mParams;          // a helper's parameter value seq -> its index
     Array* _mHelperText;
     Map* _mHelperNames;
+    // PTX inlining (the reference explains; bug 645).
+    Map* _mHelperBodies;
+    Map* _mHelperCalled;
+    u32 _mInlineSerial;
 
     String* mslScalar(String* t)
         {
@@ -16384,8 +16388,20 @@ class ClassInfo
             _mHelperNames.set((Hashable*)callee, (Object*)callee);
             String* text = ptxHelper(target, fn);
             if (text == (String*)0) { parBecause(parCallFailed(callee, _mHelperWhy)); return (String*)0; }
-            _mHelperText.add((Object*)text);
+            _mHelperBodies.set((Hashable*)callee, (Object*)text);
+            // Called while it was being printed: recursive, keeps a real .func.
+            if (_mHelperCalled.get((Hashable*)callee) != (Object*)0)
+                _mHelperText.add((Object*)text);
             }
+        // Inlined (the reference explains; bug 645).
+        String* hbody = (String*)_mHelperBodies.get((Hashable*)callee);
+        if (hbody != (String*)0)
+            {
+            u32 serial = _mInlineSerial;
+            _mInlineSerial = _mInlineSerial + (u32)1;
+            return Lower.ptxInline(hbody, serial, args, isVoid ? (String*)0 : r);
+            }
+        _mHelperCalled.set((Hashable*)callee, (Object*)callee);
         String* s = ptxS("\t{\n");
         String* pnames = ptxS("");
         for (u32 k = (u32)0; k < n; k = k + (u32)1)
@@ -16794,6 +16810,136 @@ class ClassInfo
             }
         }
 
+    static bool ptxIdentStart(u8 c)
+        {
+        return (c >= (u8)'A' && c <= (u8)'Z') || (c >= (u8)'a' && c <= (u8)'z') || c == (u8)'_';
+        }
+
+    static bool ptxIdentChar(u8 c)
+        {
+        return Lower.ptxIdentStart(c) || (c >= (u8)'0' && c <= (u8)'9');
+        }
+
+    // A declared register after `%`, or a label, gets the prefix (the
+    // reference's rename block).
+    static String* ptxRename(String* ln, String* pre, Set* regs, Set* labels)
+        {
+        String* o = String.withCString("");
+        u32 i = (u32)0;
+        u32 n = ln.byteLength();
+        while (i < n)
+            {
+            u8 c = ln.byteAt(i);
+            bool afterDot = i > (u32)0 && ln.byteAt(i - (u32)1) == (u8)'.';
+            if (c == (u8)'%' && i + (u32)1 < n && Lower.ptxIdentStart(ln.byteAt(i + (u32)1)))
+                {
+                u32 e = i + (u32)1;
+                while (e < n && Lower.ptxIdentChar(ln.byteAt(e)))
+                    e = e + (u32)1;
+                String* nm = ln.substringBytes(i + (u32)1, e - i - (u32)1);
+                o.appendByte((u8)'%');
+                if (regs.contains((Hashable*)nm))
+                    o.append(pre);
+                o.append(nm);
+                i = e;
+                }
+            else if (Lower.ptxIdentStart(c) && !afterDot && (i == (u32)0 || !Lower.ptxIdentChar(ln.byteAt(i - (u32)1))))
+                {
+                u32 e = i;
+                while (e < n && Lower.ptxIdentChar(ln.byteAt(e)))
+                    e = e + (u32)1;
+                String* nm = ln.substringBytes(i, e - i);
+                if (labels.contains((Hashable*)nm))
+                    o.append(pre);
+                o.append(nm);
+                i = e;
+                }
+            else
+                {
+                o.appendByte(c);
+                i = i + (u32)1;
+                }
+            }
+        return o;
+        }
+
+    // A printed helper as a block inside the caller (the reference explains;
+    // bug 645).
+    static String* ptxInline(String* text, u32 serial, Array* args, String* result)
+        {
+        String* pre = String.withCString("h");
+        pre.append(String.withU32(serial));
+        pre.appendByte((u8)'_');
+        Array* lines = text.splitOnByte((u8)10);
+        Set* regs = new Set();
+        Set* labels = new Set();
+        for (u32 li = (u32)0; li < lines.count(); li = li + (u32)1)
+            {
+            String* ln = (String*)lines.get(li);
+            if (ln.hasPrefix(String.withCString("\t.reg ")))
+                {
+                u32 at = (u32)6;
+                while (at < ln.byteLength() && ln.byteAt(at) != (u8)' ')
+                    at = at + (u32)1;
+                Array* parts = ln.substringFromByte(at).splitOnByte((u8)',');
+                for (u32 pi = (u32)0; pi < parts.count(); pi = pi + (u32)1)
+                    {
+                    String* nm = ((String*)parts.get(pi)).replacing(String.withCString(";"), String.withCString("")).trimmed();
+                    if (nm.hasPrefix(String.withCString("%")))
+                        regs.add((Hashable*)nm.substringFromByte((u32)1));
+                    }
+                }
+            else if (ln.byteLength() > (u32)1 && ln.hasSuffix(String.withCString(":")) && Lower.ptxIdentStart(ln.byteAt((u32)0)))
+                labels.add((Hashable*)ln.substringBytes((u32)0, ln.byteLength() - (u32)1));
+            }
+        String* out = String.withCString("\t{\n");
+        for (u32 li = (u32)0; li < lines.count(); li = li + (u32)1)
+            {
+            String* ln = (String*)lines.get(li);
+            if (ln.byteLength() == (u32)0 || ln.hasPrefix(String.withCString(".func ")) || ln.equals(String.withCString("{"))
+                || ln.equals(String.withCString("}")))
+                continue;
+            if (ln.hasPrefix(String.withCString("\tld.param")) && ln.contains(String.withCString(", [p")))
+                {
+                u32 sp = ln.indexOfByte((u8)' ');
+                String* ty = ln.substringBytes((u32)9, sp - (u32)9);
+                u32 lb = ln.byteIndexOf(String.withCString("[p"));
+                u32 k = (u32)0;
+                for (u32 q = lb + (u32)2; q < ln.byteLength() && ln.byteAt(q) >= (u8)'0' && ln.byteAt(q) <= (u8)'9'; q = q + (u32)1)
+                    k = k * (u32)10 + (u32)(ln.byteAt(q) - (u8)'0');
+                String* dst = ln.substringBytes(sp + (u32)1, lb - (u32)2 - sp - (u32)1);
+                out.appendCString("\tmov"); out.append(ty); out.appendCString(" ");
+                out.append(Lower.ptxRename(dst, pre, regs, labels)); out.appendCString(", ");
+                if (k < args.count()) out.append((String*)args.get(k)); else out.appendCString("0");
+                out.appendCString(";\n");
+                continue;
+                }
+            if (ln.hasPrefix(String.withCString("\tst.param")) && ln.contains(String.withCString("[rv], ")))
+                {
+                u32 sp = ln.indexOfByte((u8)' ');
+                String* ty = ln.substringBytes((u32)9, sp - (u32)9);
+                u32 rv = ln.byteIndexOf(String.withCString("[rv], "));
+                String* val = ln.substringBytes(rv + (u32)6, ln.byteLength() - rv - (u32)7);
+                if (result != (String*)0)
+                    {
+                    out.appendCString("\tmov"); out.append(ty); out.appendCString(" "); out.append(result);
+                    out.appendCString(", "); out.append(Lower.ptxRename(val, pre, regs, labels)); out.appendCString(";\n");
+                    }
+                continue;
+                }
+            if (ln.equals(String.withCString("\tret;")))
+                {
+                out.appendCString("\tbra.uni "); out.append(pre); out.appendCString("END;\n");
+                continue;
+                }
+            out.append(Lower.ptxRename(ln, pre, regs, labels));
+            out.appendCString("\n");
+            }
+        out.append(pre);
+        out.appendCString("END:\n\t}\n");
+        return out;
+        }
+
     // A helper as a .func: scalars in and out, as .param values. The
     // caller's state comes back afterwards.
     String* ptxHelper(IRFunc* g, String* name)
@@ -16899,6 +17045,9 @@ class ClassInfo
         if (!mslAnalyse(f)) return (String*)0;
         _mHelperText = new Array();
         _mHelperNames = new Map();
+        _mHelperBodies = new Map();
+        _mHelperCalled = new Map();
+        _mInlineSerial = (u32)0;
         ptxOrdinals(f);
         String* decls = ptxDecls(f);
         String* body = ptxBody(f, "BODY_END");

@@ -70,6 +70,127 @@ static NSString* ptxArith(XTIRType* t)
 // spelling, or nil for an operator t cannot take (a bitwise one on a float).
 // A float is combined exactly rounded (.rn) whatever the block's goal: the
 // tree's order is fixed, so the result is the same run to run.
+static BOOL ptxIdentStart(unichar c)
+    {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_';
+    }
+
+static BOOL ptxIdentChar(unichar c)
+    {
+    return ptxIdentStart(c) || (c >= '0' && c <= '9');
+    }
+
+/****************************************************************************\
+|* A printed helper (`.func … { … }`) as a block inside the caller (bug 645):
+|* every register it declares and every label it defines gets the prefix
+|* h<serial>_, each `ld.param %aK, [pK]` becomes a mov from argument K, and a
+|* `st.param [rv], X; ret;` becomes a mov to the result and a branch past the
+|* end. A plain scan, not a regex, so the port's copy can match it exactly.
+\****************************************************************************/
+static NSString* ptxInline(NSString* text, NSUInteger serial, NSArray<NSString*>* args, NSString* _Nullable result)
+    {
+    NSString* pre = [NSString stringWithFormat:@"h%lu_", (unsigned long)serial];
+    NSArray<NSString*>* lines = [text componentsSeparatedByString:@"\n"];
+    NSMutableSet<NSString*>* regs = [NSMutableSet set];
+    NSMutableSet<NSString*>* labels = [NSMutableSet set];
+    for (NSString* ln in lines)
+        {
+        if ([ln hasPrefix:@"\t.reg "])
+            {
+            // `\t.reg .T %a, %b;`: the names after the type.
+            NSUInteger at = 6;
+            while (at < ln.length && [ln characterAtIndex:at] != ' ')
+                at++;
+            for (NSString* part in [[ln substringFromIndex:at] componentsSeparatedByString:@","])
+                {
+                NSString* nm = [[part stringByReplacingOccurrencesOfString:@";" withString:@""]
+                    stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                if ([nm hasPrefix:@"%"])
+                    [regs addObject:[nm substringFromIndex:1]];
+                }
+            }
+        else if (ln.length > 1 && [ln hasSuffix:@":"] && ptxIdentStart([ln characterAtIndex:0]))
+            [labels addObject:[ln substringToIndex:ln.length - 1]];
+        }
+    // Every identifier in a line: a declared register after `%`, or a label.
+    NSString* (^rename)(NSString*) = ^NSString*(NSString* ln) {
+        NSMutableString* o = [NSMutableString string];
+        NSUInteger i = 0;
+        while (i < ln.length)
+            {
+            unichar c = [ln characterAtIndex:i];
+            BOOL afterDot = i > 0 && [ln characterAtIndex:i - 1] == '.';
+            if (c == '%' && i + 1 < ln.length && ptxIdentStart([ln characterAtIndex:i + 1]))
+                {
+                NSUInteger e = i + 1;
+                while (e < ln.length && ptxIdentChar([ln characterAtIndex:e]))
+                    e++;
+                NSString* nm = [ln substringWithRange:NSMakeRange(i + 1, e - i - 1)];
+                [o appendString:@"%"];
+                if ([regs containsObject:nm])
+                    [o appendString:pre];
+                [o appendString:nm];
+                i = e;
+                }
+            else if (ptxIdentStart(c) && !afterDot && (i == 0 || !ptxIdentChar([ln characterAtIndex:i - 1])))
+                {
+                NSUInteger e = i;
+                while (e < ln.length && ptxIdentChar([ln characterAtIndex:e]))
+                    e++;
+                NSString* nm = [ln substringWithRange:NSMakeRange(i, e - i)];
+                if ([labels containsObject:nm])
+                    [o appendString:pre];
+                [o appendString:nm];
+                i = e;
+                }
+            else
+                {
+                [o appendFormat:@"%C", c];
+                i++;
+                }
+            }
+        return o;
+    };
+    NSMutableString* out = [NSMutableString stringWithString:@"\t{\n"];
+    for (NSUInteger li = 0; li < lines.count; li++)
+        {
+        NSString* ln = lines[li];
+        if (ln.length == 0 || [ln hasPrefix:@".func "] || [ln isEqualToString:@"{"] || [ln isEqualToString:@"}"])
+            continue;
+        if ([ln hasPrefix:@"\tld.param"] && [ln rangeOfString:@", [p"].location != NSNotFound)
+            {
+            // `\tld.param.T %aK, [pK];`
+            NSRange sp = [ln rangeOfString:@" "];
+            NSString* ty = [ln substringWithRange:NSMakeRange(9, sp.location - 9)];
+            NSRange lb = [ln rangeOfString:@"[p"];
+            NSUInteger k = (NSUInteger)[[ln substringFromIndex:lb.location + 2] integerValue];
+            NSString* dst = [ln substringWithRange:NSMakeRange(sp.location + 1, lb.location - 2 - sp.location - 1)];
+            [out appendFormat:@"\tmov%@ %@, %@;\n", ty, rename(dst), k < args.count ? args[k] : @"0"];
+            continue;
+            }
+        if ([ln hasPrefix:@"\tst.param"] && [ln rangeOfString:@"[rv], "].location != NSNotFound)
+            {
+            // `\tst.param.T [rv], X;`
+            NSRange sp = [ln rangeOfString:@" "];
+            NSString* ty = [ln substringWithRange:NSMakeRange(9, sp.location - 9)];
+            NSRange rv = [ln rangeOfString:@"[rv], "];
+            NSString* val = [ln substringWithRange:NSMakeRange(rv.location + 6, ln.length - rv.location - 7)];
+            if (result)
+                [out appendFormat:@"\tmov%@ %@, %@;\n", ty, result, rename(val)];
+            continue;
+            }
+        if ([ln isEqualToString:@"\tret;"])
+            {
+            [out appendFormat:@"\tbra.uni %@END;\n", pre];
+            continue;
+            }
+        [out appendString:rename(ln)];
+        [out appendString:@"\n"];
+        }
+    [out appendFormat:@"%@END:\n\t}\n", pre];
+    return out;
+    }
+
 static NSString* ptxRedStep(NSString* op, XTIRType* t, NSString* d, NSString* a, NSString* b)
     {
     BOOL f = t.kind == XTIRTypeKindF32 || t.kind == XTIRTypeKindF64;
@@ -168,6 +289,9 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
     p.fast = fast;
     p.helperText = [NSMutableArray array];
     p.helperNames = [NSMutableSet set];
+    p.helperBodies = [NSMutableDictionary dictionary];
+    p.helperCalled = [NSMutableSet set];
+    p.inlineSerial = [NSMutableArray arrayWithObject:@0];
     NSString* out = [p ptxKernel];
     if (!out && why)
         *why = p.why;
@@ -697,14 +821,32 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
                 h.fast = self.fast;
                 h.helperText = self.helperText;
                 h.helperNames = self.helperNames;
+                h.helperBodies = self.helperBodies;
+                h.helperCalled = self.helperCalled;
+                h.inlineSerial = self.inlineSerial;
                 NSString* text = [h ptxHelper:fn];
                 if (!text)
                     {
                     [self because:[self callFailed:callee helper:h]];
                     return nil;
                     }
-                [self.helperText addObject:text];
+                self.helperBodies[callee] = text;
+                // Called while it was being printed: it is recursive, and
+                // keeps a real .func for that call.
+                if ([self.helperCalled containsObject:callee])
+                    [self.helperText addObject:text];
                 }
+            // Inlined (bug 645): a .func call passes every argument and the
+            // result through parameter memory, and the JIT does not always
+            // inline it back; nvcc inlines a __device__ helper as a rule.
+            NSString* body = self.helperBodies[callee];
+            if (body)
+                {
+                NSUInteger serial = self.inlineSerial[0].unsignedIntegerValue;
+                self.inlineSerial[0] = @(serial + 1);
+                return ptxInline(body, serial, args, isVoid ? nil : r);
+                }
+            [self.helperCalled addObject:callee];
             NSMutableString* s = [NSMutableString stringWithString:@"\t{\n"];
             NSMutableArray<NSString*>* pnames = [NSMutableArray array];
             for (NSUInteger k = 0; k < args.count; k++)

@@ -61,6 +61,12 @@ typedef NS_ENUM(uint8_t, XTParSpace) {
 @property(nonatomic, nullable) NSString* why;
 @property(nonatomic) NSMutableArray<NSString*>* helperText;
 @property(nonatomic) NSMutableSet<NSString*>* helperNames;
+// PTX: each helper's printed .func, to inline at every call (bug 645); the
+// helpers a call reached while still being printed (recursion), which keep a
+// real .func; and the count of inlined bodies, for unique names.
+@property(nonatomic) NSMutableDictionary<NSString*, NSString*>* helperBodies;
+@property(nonatomic) NSMutableSet<NSString*>* helperCalled;
+@property(nonatomic) NSMutableArray<NSNumber*>* inlineSerial;
 // Each reduction field's operator (+ * & | ^ min max), by field index, from
 // the block's gpuSource placeholder (bug 645). A printer that has them all
 // combines the reductions on the device; nil keeps the per-thread partials.
