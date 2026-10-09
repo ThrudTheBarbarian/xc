@@ -117,6 +117,7 @@ class RKMainController : Object<UXTableDelegate>
     i32 pressSel;
     bool dragging;
     bool resizingForm; // a form-handle drag is in progress (one undo snapshot per drag)
+    bool syncingSelection; // set while the canvas drives the outline's selection (the change it fires is then ignored)
 
     // ---- state -------------------------------------------------------------
     // Deliberately not a view: the controller owns MODEL state and asks the
@@ -207,6 +208,7 @@ class RKMainController : Object<UXTableDelegate>
         pressSel = (i32)-1;
         dragging = false;
         resizingForm = false;
+        syncingSelection = false;
         lastSaid = (Data*)0;
         formOutline = (UXOutlineView*)0;
         canvas = (UXView*)0;
@@ -1676,6 +1678,10 @@ class RKMainController : Object<UXTableDelegate>
     // two panes one editor rather than two independent views.
     void tableSelectionDidChange(UXTableView* t, i32 row)
         {
+        if (syncingSelection)
+            {
+            return; // the canvas drove the outline: ignore the change that caused
+            }
         if (libraryTable != (UXTableView*)0 && t == libraryTable)
             {
             self.libraryPick(library.itemAt(row));
@@ -1745,6 +1751,75 @@ class RKMainController : Object<UXTableDelegate>
             }
         self.showConnections();
         self.placeFrame(o);
+        self.syncOutlineSelection(o); // and highlight the row, so the two panes agree
+        }
+
+    // Selecting on the canvas highlights the outline's row for the object (and a click on empty
+    // canvas clears it).  The outline fires a selection change doing this, so `syncingSelection`
+    // makes that echo a no-op — no loop, and no second selectObject.
+    void syncOutlineSelection(UXRscObject* o)
+        {
+        if (formOutline == (UXOutlineView*)0 || syncingSelection)
+            {
+            return;
+            }
+        i32 row = (i32)-1;
+        if (o != (UXRscObject*)0)
+            {
+            self.revealObject(o); // open its ancestors, so its row exists to select
+            row = self.outlineRowFor(o);
+            }
+        syncingSelection = true;
+        formOutline.selectRow(row);
+        syncingSelection = false;
+        }
+    // Open an object's ancestor rows so its own row is visible (IB reveals the selection this way).
+    bool revealObject(UXRscObject* o)
+        {
+        for (u32 i = (u32)0; i < outlineModel.roots.count(); i = i + (u32)1)
+            {
+            if (self.revealIn((RKOutlineNode* ?)outlineModel.roots.get(i), o))
+                {
+                return true;
+                }
+            }
+        return false;
+        }
+    bool revealIn(RKOutlineNode* n, UXRscObject* o)
+        {
+        for (u32 k = (u32)0; k < n.kids.count(); k = k + (u32)1)
+            {
+            RKOutlineNode* c = (RKOutlineNode* ?)n.kids.get(k);
+            if (c.obj == o)
+                {
+                formOutline.setExpanded((Object*)n, true);
+                return true;
+                }
+            if (self.revealIn(c, o))
+                {
+                formOutline.setExpanded((Object*)n, true);
+                return true;
+                }
+            }
+        return false;
+        }
+    // The visible row standing for an object, or -1 (a row under a collapsed parent is not visible).
+    i32 outlineRowFor(UXRscObject* o)
+        {
+        for (i32 r = (i32)0; r < formOutline.countRows(); r = r + (i32)1)
+            {
+            UXOutlineNode* vn = formOutline.nodeAt(r);
+            if (vn == (UXOutlineNode*)0)
+                {
+                continue;
+                }
+            RKOutlineNode* n = (RKOutlineNode* ?)vn.item;
+            if (n != (RKOutlineNode*)0 && n.obj == o)
+                {
+                return r;
+                }
+            }
+        return (i32)-1;
         }
 
     // Position the overlay over an object's widget, without touching the pane.

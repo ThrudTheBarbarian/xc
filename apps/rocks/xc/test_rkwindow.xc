@@ -95,6 +95,9 @@ void main(void)
     c.selectObject(ok);
     checkTrue("Size has the frame", c.sizeCtl.rowNamed((u8*)"X") != (RKRow*)0);
     checkTrue("Attributes has the rest", c.inspectorCtl.rowNamed((u8*)"Default") != (RKRow*)0 && c.inspectorCtl.rowNamed((u8*)"X") == (RKRow*)0);
+    // The canvas and the left list are ONE selection: selecting on the canvas highlights its row.
+    checkTrue("the selected control's outline row is visible", c.outlineRowFor(ok) >= (i32)0);
+    check("...and it is the outline's selected row", c.formOutline.selection(), c.outlineRowFor(ok));
 
     Stdio.printf("-- the library\n");
     check("every item is listed", c.library.count(), (i32)24);
