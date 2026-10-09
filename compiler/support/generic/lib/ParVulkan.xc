@@ -483,7 +483,8 @@ class ParVulkan
         gParVkSrc[slot] = (pointer)src;
         gParVkPipe[slot] = (u64)0;
 
-        // The header: bindings (block, then one per buf=, glob=, red=) and spirv=<words>.
+        // The header: bindings (block, then one per buf=, glob=, red=, and the
+        // devlast counter) and spirv=<words>.
         u32 nb = (u32)1;
         u64 words = (u64)0;
         u32 at = (u32)0;
@@ -491,7 +492,8 @@ class ParVulkan
             {
             if (src[at] == (u8)' ' && ((src[at + (u32)1] == (u8)'b' && src[at + (u32)4] == (u8)'=') ||
                                        (src[at + (u32)1] == (u8)'g' && src[at + (u32)5] == (u8)'=') ||
-                                       (src[at + (u32)1] == (u8)'r' && src[at + (u32)4] == (u8)'=')))
+                                       (src[at + (u32)1] == (u8)'r' && src[at + (u32)4] == (u8)'=') ||
+                                       (src[at + (u32)1] == (u8)'d' && src[at + (u32)4] == (u8)'l')))
                 nb = nb + (u32)1;
             if (src[at] == (u8)'s' && src[at + (u32)1] == (u8)'p' && src[at + (u32)5] == (u8)'=')
                 {
@@ -615,7 +617,7 @@ class ParVulkan
             return false;
         u8* obj = (u8*)(pointer)proto;
         u32 nb = gParVkBindings[slot];
-        if (nb != (u32)1 + l.nbuf + l.nglob + l.nred)
+        if (nb != (u32)1 + l.nbuf + l.nglob + l.nred + (l.devlast != (i64)0 ? (u32)1 : (u32)0))
             return ParDevice.cpu("its GPU version's header does not match");
 
         // The buffers, in binding order, filled from the host.
@@ -647,6 +649,12 @@ class ParVulkan
         for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)
             {
             sizes[b] = l.nparts * l.redStride[i];
+            b = b + (u32)1;
+            }
+        // The devlast counter (bug 645): one 32-bit word the kernel adds to.
+        if (l.devlast != (i64)0)
+            {
+            sizes[b] = (i64)4;
             b = b + (u32)1;
             }
         // Whole 32-bit words: an array of 8- or 16-bit values is read and
@@ -697,6 +705,9 @@ class ParVulkan
                     memcpy((pointer)maps[b], l.globPtr[i], (u64)l.globLen[i]);
                 b = b + (u32)1;
                 }
+            // The devlast counter starts at zero for every dispatch.
+            if (l.devlast != (i64)0)
+                *(u32*)(pointer)maps[b + l.nred] = (u32)0;
             }
 
         // One descriptor set naming them.

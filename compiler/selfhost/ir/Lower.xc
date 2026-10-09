@@ -17564,6 +17564,29 @@ class ClassInfo
     u32 spvLabel(void) { return _sMod.newId(); }
     void spvPlace(u32 l) { spvEmit((u32)SPV_LABEL, spvA1(l)); }
 
+    // a combined with b under the block's reduction operator: the workgroup
+    // tree and the last-workgroup fold both need it, with the same instructions
+    // in the same order (bug 645).
+    u32 spvReduceVal(String* op, bool isF, bool sgn, u32 t, u32 boolT, u32 a, u32 b)
+        {
+        if (op.equals(spvS("+")))
+            return spvEmitR(isF ? (u32)SPV_FADD : (u32)SPV_IADD, t, spvA2(a, b));
+        if (op.equals(spvS("*")))
+            return spvEmitR(isF ? (u32)SPV_FMUL : (u32)SPV_IMUL, t, spvA2(a, b));
+        if (op.equals(spvS("&")))
+            return spvEmitR((u32)SPV_BITWISEAND, t, spvA2(a, b));
+        if (op.equals(spvS("|")))
+            return spvEmitR((u32)SPV_BITWISEOR, t, spvA2(a, b));
+        if (op.equals(spvS("^")))
+            return spvEmitR((u32)SPV_BITWISEXOR, t, spvA2(a, b));
+        bool isMin = op.equals(spvS("min"));
+        u32 cmpOp = isF ? (isMin ? (u32)SPV_FORDLESSTHAN : (u32)SPV_FORDGREATERTHAN)
+                  : sgn ? (isMin ? (u32)SPV_SLESSTHAN : (u32)SPV_SGREATERTHAN)
+                        : (isMin ? (u32)SPV_ULESSTHAN : (u32)SPV_UGREATERTHAN);
+        u32 cmp = spvEmitR(cmpOp, boolT, spvA2(a, b));
+        return spvEmitR((u32)SPV_SELECT, t, spvA3(cmp, a, b));
+        }
+
     // A 32-bit value wrapped to narrow type t, in t's form.
     u32 spvCanon(u32 v, String* t)
         {
@@ -18944,6 +18967,8 @@ class ClassInfo
             devred = false;
         u32 lidV = (u32)0;
         u32 wgV = (u32)0;
+        u32 wgCountV = (u32)0;
+        u32 shLastV = (u32)0;
         if (devred)
             {
             lidV = m.newId();
@@ -18952,6 +18977,14 @@ class ClassInfo
             wgV = m.newId();
             spvOp(m.globals, (u32)SPV_VARIABLE, spvA3(m.ptrType((u32)SPV_ST_INPUT, uvec3), wgV, (u32)SPV_ST_INPUT));
             spvOp(m.decos, (u32)SPV_DECORATE, spvA3(wgV, (u32)SPV_DEC_BUILTIN, (u32)SPV_BUILTIN_WORKGROUPID));
+            // devlast (bug 645): how many workgroups there are, so the last to
+            // finish folds the rest; and a shared word through which it tells
+            // its threads (the reference explains).
+            wgCountV = m.newId();
+            spvOp(m.globals, (u32)SPV_VARIABLE, spvA3(m.ptrType((u32)SPV_ST_INPUT, uvec3), wgCountV, (u32)SPV_ST_INPUT));
+            spvOp(m.decos, (u32)SPV_DECORATE, spvA3(wgCountV, (u32)SPV_DEC_BUILTIN, (u32)SPV_BUILTIN_NUMWORKGROUPS));
+            shLastV = m.newId();
+            spvOp(m.globals, (u32)SPV_VARIABLE, spvA3(m.ptrType((u32)SPV_ST_WORKGROUP, u32t), shLastV, (u32)SPV_ST_WORKGROUP));
             }
 
         // Buffers: captured arrays, globals, reductions, in the header's order.
@@ -18966,6 +18999,8 @@ class ClassInfo
             {
             iface.add((Object*)Number.withU32(lidV));
             iface.add((Object*)Number.withU32(wgV));
+            iface.add((Object*)Number.withU32(wgCountV));
+            iface.add((Object*)Number.withU32(shLastV));
             }
         u32 binding = (u32)1;
         for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
@@ -19056,6 +19091,16 @@ class ClassInfo
                 shVars.add((Object*)Number.withU32(sv));
                 iface.add((Object*)Number.withU32(sv));
                 }
+            }
+        // devlast: the counter the last workgroup to finish finds, so it can
+        // fold the rest. A module-scope mutable global does not exist here, so
+        // it is a small storage buffer the host zeroes before every dispatch.
+        u32 doneV = (u32)0;
+        if (devred)
+            {
+            doneV = spvBuffer(m.typeInt((u32)32), (u32)4, binding);
+            binding = binding + (u32)1;
+            iface.add((Object*)Number.withU32(doneV));
             }
 
         // The kernel function.
@@ -19180,6 +19225,130 @@ class ClassInfo
                 spvEmit((u32)SPV_BRANCH, spvA1(wmrg));
                 spvPlace(wmrg);
                 }
+            // devlast (bug 645): the last workgroup to finish folds every
+            // workgroup's partial on the device and leaves the result in slot
+            // 0, so one partial comes back instead of `nparts`.
+            {
+            u32 dzero = m.u32c((u32)0);
+            u32 done1 = m.u32c((u32)1);
+            u32 scDev = m.u32c((u32)1);
+            u32 scWg = m.u32c((u32)2);
+            u32 semBuf = m.u32c((u32)0x48);
+            u32 semWg = m.u32c((u32)0x108);
+            u32 wgcv = spvEmitR((u32)SPV_LOAD, uvec3, spvA1(wgCountV));
+            u32 nc = spvEmitR((u32)SPV_COMPOSITEEXTRACT, u32t, spvA2(wgcv, (u32)0));
+            u32 ge256 = spvEmitR((u32)SPV_UGREATERTHANEQUAL, boolT, spvA2(nc, m.u32c((u32)256)));
+            u32 nv = spvEmitR((u32)SPV_SELECT, u32t, spvA3(ge256, m.u32c((u32)256), nc));
+            u32 isz = spvEmitR((u32)SPV_IEQUAL, boolT, spvA2(lid32, dzero));
+            u32 cbody = spvLabel();
+            u32 cmrg = spvLabel();
+            spvEmit((u32)SPV_SELECTIONMERGE, spvA2(cmrg, (u32)0));
+            spvEmit((u32)SPV_BRANCHCONDITIONAL, spvA3(isz, cbody, cmrg));
+            spvPlace(cbody);
+            u32 pDone = spvEmitR((u32)SPV_ACCESSCHAIN, m.ptrType((u32)SPV_ST_STORAGEBUFFER, u32t),
+                                 spvA3(doneV, dzero, dzero));
+            u32 cnt = spvEmitR((u32)SPV_ATOMICIADD, u32t, spvW((u32)4, pDone, scDev, semBuf, done1, (u32)0, (u32)0));
+            u32 lastsub = spvEmitR((u32)SPV_ISUB, u32t, spvA2(nc, done1));
+            u32 last = spvEmitR((u32)SPV_IEQUAL, boolT, spvA2(cnt, lastsub));
+            u32 lf = spvEmitR((u32)SPV_SELECT, u32t, spvA3(last, done1, dzero));
+            spvEmit((u32)SPV_STORE, spvA2(shLastV, lf));
+            spvEmit((u32)SPV_BRANCH, spvA1(cmrg));
+            spvPlace(cmrg);
+            spvEmit((u32)SPV_CONTROLBARRIER, spvA3(scWg, scDev, semBuf));
+            u32 lastv = spvEmitR((u32)SPV_LOAD, u32t, spvA1(shLastV));
+            u32 isLast = spvEmitR((u32)SPV_INOTEQUAL, boolT, spvA2(lastv, dzero));
+            u32 fbody = spvLabel();
+            u32 fmrg = spvLabel();
+            spvEmit((u32)SPV_SELECTIONMERGE, spvA2(fmrg, (u32)0));
+            spvEmit((u32)SPV_BRANCHCONDITIONAL, spvA3(isLast, fbody, fmrg));
+            spvPlace(fbody);
+            for (u32 fi = (u32)0; fi < redFields.count(); fi = fi + (u32)1)
+                {
+                u32 kk = ((Number*)redFields.get(fi)).asU32();
+                String* rt = _mObj.typeAt(kk);
+                String* op = (String*)_mRedOps.get((Hashable*)String.withU32(kk));
+                bool isF = ptxIs(rt, "F32") || ptxIs(rt, "F64");
+                bool sgn = ptxIs(rt, "I32") || ptxIs(rt, "I64");
+                u32 t = spvType(rt);
+                u32 sv = ((Number*)shVars.get(fi)).asU32();
+                u32 pW = m.ptrType((u32)SPV_ST_WORKGROUP, t);
+                u32 pRv = m.ptrType((u32)SPV_ST_STORAGEBUFFER, t);
+                u32 accv = spvLocalVar(t);
+                u32 jv = spvLocalVar(u32t);
+                u32 inFill = spvEmitR((u32)SPV_ULESSTHAN, boolT, spvA2(lid32, nc));
+                u32 fb = spvLabel();
+                u32 fmg = spvLabel();
+                spvEmit((u32)SPV_SELECTIONMERGE, spvA2(fmg, (u32)0));
+                spvEmit((u32)SPV_BRANCHCONDITIONAL, spvA3(inFill, fb, fmg));
+                spvPlace(fb);
+                u32 pr = spvEmitR((u32)SPV_ACCESSCHAIN, pRv, spvA3(((Number*)redVars.get(fi)).asU32(), dzero, lid32));
+                spvEmit((u32)SPV_STORE, spvA2(accv, spvEmitR((u32)SPV_LOAD, t, spvA1(pr))));
+                spvEmit((u32)SPV_STORE, spvA2(jv, spvEmitR((u32)SPV_IADD, u32t, spvA2(lid32, m.u32c((u32)256)))));
+                u32 head = spvLabel();
+                u32 hide = spvLabel();
+                u32 lbody = spvLabel();
+                u32 cont = spvLabel();
+                u32 lmerge = spvLabel();
+                spvEmit((u32)SPV_BRANCH, spvA1(head));
+                spvPlace(head);
+                spvEmit((u32)SPV_LOOPMERGE, spvA3(lmerge, cont, (u32)0));
+                spvEmit((u32)SPV_BRANCH, spvA1(hide));
+                spvPlace(hide);
+                u32 more = spvEmitR((u32)SPV_ULESSTHAN, boolT,
+                                    spvA2(spvEmitR((u32)SPV_LOAD, u32t, spvA1(jv)), nc));
+                spvEmit((u32)SPV_BRANCHCONDITIONAL, spvA3(more, lbody, lmerge));
+                spvPlace(lbody);
+                u32 a = spvEmitR((u32)SPV_LOAD, t, spvA1(accv));
+                u32 jl = spvEmitR((u32)SPV_LOAD, u32t, spvA1(jv));
+                u32 pr2 = spvEmitR((u32)SPV_ACCESSCHAIN, pRv, spvA3(((Number*)redVars.get(fi)).asU32(), dzero, jl));
+                u32 b = spvEmitR((u32)SPV_LOAD, t, spvA1(pr2));
+                spvEmit((u32)SPV_STORE, spvA2(accv, spvReduceVal(op, isF, sgn, t, boolT, a, b)));
+                spvEmit((u32)SPV_BRANCH, spvA1(cont));
+                spvPlace(cont);
+                spvEmit((u32)SPV_STORE, spvA2(jv, spvEmitR((u32)SPV_IADD, u32t, spvA2(jl, m.u32c((u32)256)))));
+                spvEmit((u32)SPV_BRANCH, spvA1(head));
+                spvPlace(lmerge);
+                u32 pw = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, lid32));
+                spvEmit((u32)SPV_STORE, spvA2(pw, spvEmitR((u32)SPV_LOAD, t, spvA1(accv))));
+                spvEmit((u32)SPV_BRANCH, spvA1(fmg));
+                spvPlace(fmg);
+                for (u32 lvl = (u32)128; lvl >= (u32)1; lvl = lvl / (u32)2)
+                    {
+                    u32 swc = m.u32c(lvl);
+                    u32 cA = spvEmitR((u32)SPV_ULESSTHAN, boolT, spvA2(lid32, swc));
+                    u32 j2 = spvEmitR((u32)SPV_IADD, u32t, spvA2(lid32, swc));
+                    u32 cB = spvEmitR((u32)SPV_ULESSTHAN, boolT, spvA2(j2, nv));
+                    u32 cc = spvEmitR((u32)SPV_LOGICALAND, boolT, spvA2(cA, cB));
+                    u32 tb = spvLabel();
+                    u32 tm = spvLabel();
+                    spvEmit((u32)SPV_SELECTIONMERGE, spvA2(tm, (u32)0));
+                    spvEmit((u32)SPV_BRANCHCONDITIONAL, spvA3(cc, tb, tm));
+                    spvPlace(tb);
+                    u32 pa = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, lid32));
+                    u32 av = spvEmitR((u32)SPV_LOAD, t, spvA1(pa));
+                    u32 pb = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, j2));
+                    u32 bv = spvEmitR((u32)SPV_LOAD, t, spvA1(pb));
+                    spvEmit((u32)SPV_STORE, spvA2(pa, spvReduceVal(op, isF, sgn, t, boolT, av, bv)));
+                    spvEmit((u32)SPV_BRANCH, spvA1(tm));
+                    spvPlace(tm);
+                    spvEmit((u32)SPV_CONTROLBARRIER, spvA3(scWg, scWg, semWg));
+                    }
+                u32 c0b = spvEmitR((u32)SPV_IEQUAL, boolT, spvA2(lid32, dzero));
+                u32 wb = spvLabel();
+                u32 wm = spvLabel();
+                spvEmit((u32)SPV_SELECTIONMERGE, spvA2(wm, (u32)0));
+                spvEmit((u32)SPV_BRANCHCONDITIONAL, spvA3(c0b, wb, wm));
+                spvPlace(wb);
+                u32 pw0 = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, dzero));
+                u32 v0 = spvEmitR((u32)SPV_LOAD, t, spvA1(pw0));
+                u32 dst2 = spvEmitR((u32)SPV_ACCESSCHAIN, pRv, spvA3(((Number*)redVars.get(fi)).asU32(), dzero, dzero));
+                spvEmit((u32)SPV_STORE, spvA2(dst2, v0));
+                spvEmit((u32)SPV_BRANCH, spvA1(wm));
+                spvPlace(wm);
+                }
+            spvEmit((u32)SPV_BRANCH, spvA1(fmrg));
+            spvPlace(fmrg);
+            }
             spvEmit((u32)SPV_RETURN, new Array());
             spvEmit((u32)SPV_FUNCTIONEND, new Array());
             }
@@ -19229,7 +19398,7 @@ class ClassInfo
         spvFinish(fn, m.funcs);
 
         Array* words = m.bytes();
-        if (devred) meta.appendCString(" devred");
+        if (devred) meta.appendCString(" devred devlast");
         meta.appendCString(" spirv=");
         meta.append(String.withU32(words.count() / (u32)4));
         if (_mFast) meta.appendCString(" fast");
