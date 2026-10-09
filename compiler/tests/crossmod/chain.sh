@@ -397,6 +397,46 @@ if [ "$XC_PLAT" = osx ]; then
     cmp -s "$TMP/zerobig/xcc" "$TMP/zerobig/xcc-xc" || bad "zerobig: the two compilers' executables differ"
     [ $fail = $before ] && echo "PASS  arm64: a zero-initialised global takes no room in the file"
 fi
+# ── arm64: a library named twice is imported once ────────────────────────────
+# `#import <CnLib>` twice in one file, and again in a file that file imports,
+# put the library's interface in three times, and every class of it was a
+# redefinition (bug 636). The shipped compiler now records a library once, as
+# the reference does; both build it, the programs match and run.
+if [ "$XC_PLAT" = osx ]; then
+    before=$fail
+    for c in xcc xcc-xc; do
+        d="$TMP/twice/$c"
+        lib arm64 "$c" "$d" libCnLib.dylib cnlib \
+            || { bad "twice: $c could not build the library"; continue; }
+        ( cd "$d" && "$BIN/$c" -A arm64 -H "$ROOT" -q -L . -I "$T" -o twice "$T/twiceclient.xc" ) 2>"$d/err" \
+            || { bad "twice: $c could not build the client"; sed 's/^/        /' "$d/err" | head -5; continue; }
+        out=$(cd "$d" && ./twice 2>&1)
+        [ "$out" = "4 1" ] || bad "twice: $c's program printed '$out', not '4 1'"
+    done
+    cmp -s "$TMP/twice/xcc/twice" "$TMP/twice/xcc-xc/twice" || bad "twice: the two compilers' programs differ"
+    [ $fail = $before ] && echo "PASS  arm64: a library named twice is imported once"
+fi
+# ── arm64: a library's standard library is the client's, not a redefinition ──
+# libStdLib is built with Number.xc; its interface used to export Number, so a
+# client that also imported Number.xc failed with "Redefinition of class
+# 'Number'" (bug 637). The interface now names the file (`stdImports`) and the
+# client imports it once, as source. Both compilers write the same interface,
+# build the same program, and it runs.
+if [ "$XC_PLAT" = osx ]; then
+    before=$fail
+    for c in xcc xcc-xc; do
+        d="$TMP/stdimp/$c"
+        lib arm64 "$c" "$d" libStdLib.dylib stdlib \
+            || { bad "stdimp: $c could not build the library"; continue; }
+        ( cd "$d" && "$BIN/$c" -A arm64 -H "$ROOT" -q -L . -o stdclient "$T/stdclient.xc" ) 2>"$d/err" \
+            || { bad "stdimp: $c could not build the client"; sed 's/^/        /' "$d/err" | head -5; continue; }
+        out=$(cd "$d" && ./stdclient 2>&1)
+        [ "$out" = "42 1" ] || bad "stdimp: $c's program printed '$out', not '42 1'"
+    done
+    cmp -s "$TMP/stdimp/xcc/libStdLib.dylib" "$TMP/stdimp/xcc-xc/libStdLib.dylib" || bad "stdimp: the two compilers' libraries differ"
+    cmp -s "$TMP/stdimp/xcc/stdclient" "$TMP/stdimp/xcc-xc/stdclient" || bad "stdimp: the two compilers' programs differ"
+    [ $fail = $before ] && echo "PASS  arm64: a library's standard library is imported by the client, not redefined"
+fi
 # win64: the same array was 32 MB of `.data` in the file. The assembler now
 # puts `.bss` content after all the data, where the PE writer leaves the
 # trailing zeros out (bug 642).

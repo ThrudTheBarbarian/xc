@@ -515,6 +515,16 @@ class IfaceWrite
     static String* jsonWithTable(Node* program, Vtable* vt, Set* prelude, Array* cImports,
                                  String* classTable)
     {
+        return IfaceWrite.jsonWithStd(program, vt, prelude, cImports, classTable, (Array*)0);
+    }
+
+    // As jsonWithTable(), naming the standard-library files the module was
+    // built with (`stdImports`, bug 637, sorted): `prelude` then holds their
+    // files too, so their classes are ambient and not exported, and a client
+    // imports each as source. The key is written only when there are any.
+    static String* jsonWithStd(Node* program, Vtable* vt, Set* prelude, Array* cImports,
+                               String* classTable, Array* stdImports)
+    {
         String* out = new String();
         out.appendCString("{\n");
         out.appendCString("\"ifaceVersion\": 1, \"version\": 1,\n");
@@ -924,6 +934,14 @@ class IfaceWrite
         out.appendCString("]");
         if (classTable != (String*)0 && classTable.byteLength() > (u32)0)
             out.appendFormat(", \"classTable\": \"%s\"", IfaceWrite.esc(classTable).cString());
+        if (stdImports != (Array*)0 && stdImports.count() > (u32)0) {
+            out.appendCString(", \"stdImports\": [");
+            for (u32 i = (u32)0; i < stdImports.count(); i = i + (u32)1) {
+                if (i > (u32)0) out.appendCString(", ");
+                out.appendFormat("\"%s\"", IfaceWrite.esc((String*)stdImports.get(i)).cString());
+            }
+            out.appendCString("]");
+        }
         out.appendCString("\n");
         out.appendCString("}\n");
         return JsonVal.canonical(out);

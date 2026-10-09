@@ -140,6 +140,18 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
                     cImports:(NSArray<NSString *> *)cImports
                 excludeFiles:(NSSet<NSString *> *)excludeFiles
                   classTable:(NSString *)classTable {
+    return [self jsonForProgram:program protocolSlots:protocolSlots
+                    methodSlots:methodSlots cImports:cImports
+                   excludeFiles:excludeFiles classTable:classTable stdlibFiles:nil];
+}
+
++ (NSString *)jsonForProgram:(XTProgramNode *)program
+               protocolSlots:(NSDictionary *)protocolSlots
+                 methodSlots:(NSDictionary *)methodSlots
+                    cImports:(NSArray<NSString *> *)cImports
+                excludeFiles:(NSSet<NSString *> *)excludeFiles
+                  classTable:(NSString *)classTable
+                 stdlibFiles:(NSDictionary<NSString *, NSString *> *)stdlibFiles {
     if (!program) return nil;
     NSMutableArray *classes   = [NSMutableArray array];
     NSMutableArray *protocols = [NSMutableArray array];
@@ -165,6 +177,15 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
                 : [cwd stringByAppendingPathComponent:df];
             if ([excludeFiles containsObject:[abs stringByStandardizingPath]])
                 continue;
+        }
+        // …and the standard library imported outside the prelude (bug 637):
+        // every unit can import the same file, so its classes are not this
+        // module's to export. `stdImports` below names the files instead.
+        if (stdlibFiles.count && d.location.filename.length) {
+            NSString *df = d.location.filename;
+            NSString *abs = df.isAbsolutePath ? df
+                : [cwd stringByAppendingPathComponent:df];
+            if (stdlibFiles[[abs stringByStandardizingPath]]) continue;
         }
         if ([d isKindOfClass:[XTClassDeclNode class]]) {
             XTClassDeclNode *c = (XTClassDeclNode *)d;
@@ -402,6 +423,18 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
         NSMutableDictionary *withTable = [root mutableCopy];
         withTable[@"classTable"] = classTable;
         root = withTable;
+    }
+    // The standard-library files this module was built with (bug 637), by
+    // name within the library directory and sorted: the client imports each
+    // as source. Only when there are any, so an interface without them reads
+    // exactly as before. A prelude file is ambient already and not listed.
+    NSMutableSet<NSString *> *stdNames = [NSMutableSet set];
+    for (NSString *path in stdlibFiles)
+        if (![excludeFiles containsObject:path]) [stdNames addObject:stdlibFiles[path]];
+    if (stdNames.count) {
+        NSMutableDictionary *withStd = [root mutableCopy];
+        withStd[@"stdImports"] = [stdNames.allObjects sortedArrayUsingSelector:@selector(compare:)];
+        root = withStd;
     }
     NSMutableString *out = [NSMutableString string];
     appendCanonicalJSON(out, root);

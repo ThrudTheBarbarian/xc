@@ -109,6 +109,18 @@ class IfFrame
     String* _arch;    // of String@
     String* _platformDir; // ios / ios-sim / android: tried before _arch in the third-party tree, or 0
     Array* _warnings; // of String@
+    // The standard library (bug 637). `_stdlibDirs` are support/<plat>/lib and
+    // support/generic/lib; a file #imported from one of them OUTSIDE the
+    // prelude is ambient for the interface, like the prelude, and its name
+    // within the directory goes to `stdImports`. A library's own `stdImports`
+    // are imported here, as source, where the library is named — read
+    // through `_stdImportsOf`, which the front end supplies (the interface
+    // readers are not this file's to import).
+    Array* _stdlibDirs;   // of String@, canonical
+    Set* _stdlibFiles;    // of String@ — canonical keys and #line spellings
+    Array* _stdNames;     // of String@ — names within their directory, first-seen order
+    Array* _pendingStd;   // of String@ — a newly named library's stdImports, to import
+    callback _stdImportsOf Array*(String* lib);
 
     void init(void)
         {
@@ -122,6 +134,11 @@ class IfFrame
         _includePaths = new Array();
         _libraryPaths = new Array();
         _metadataImports = new Array();
+        _stdlibDirs = new Array();
+        _stdlibFiles = new Set();
+        _stdNames = new Array();
+        _pendingStd = new Array();
+        _stdImportsOf = (callback Array*(String* lib))0;
         _thirdPartyRoots = new Array();
         _appleFrameworks = false;
         _appleSdk = (String*)0;
@@ -246,7 +263,7 @@ class IfFrame
                 String* p = adir.appendingPathComponent(cand);
                 if (Files.existsExact(p))
                     {
-                    _metadataImports.add((Object*)p);
+                    noteMetadataImport(p);
                     String* xc = vdir.appendingPathComponent(String.withCString("xc"));
                     if (Files.exists(xc))
                         {
@@ -295,6 +312,51 @@ class IfFrame
         {
         return _warnings;
         }
+    // A library is imported ONCE however often it is named (bug 636): two
+    // `#use <UXKit>` in one build, or in two files of it, otherwise put its
+    // interface in twice and every class of it is a redefinition. The
+    // reference keeps a set of the resolved paths for the same reason.
+    void noteMetadataImport(String* p)
+        {
+        for (u32 i = (u32)0; i < _metadataImports.count(); i = i + (u32)1)
+            if (((String*)_metadataImports.get(i)).equals(p))
+                return;
+        _metadataImports.add((Object*)p);
+        // …and its standard library, imported as source (bug 637).
+        callback f Array*(String* lib) = _stdImportsOf;
+        if (f)
+            {
+            Array* names = f(p);
+            for (u32 i = (u32)0; names != (Array*)0 && i < names.count(); i = i + (u32)1)
+                _pendingStd.add(names.get(i));
+            }
+        }
+
+    void addStdlibDir(String* d)
+        {
+        _stdlibDirs.add((Object*)Preprocessor.canonPath(d));
+        }
+    void setStdImportsReader(callback f Array*(String* lib))
+        {
+        _stdImportsOf = f;
+        }
+    // The prelude's files and the standard library's: what the interface
+    // does not export (bug 637).
+    Set* ambientFiles(void)
+        {
+        return _preludeFiles.unionWith(_stdlibFiles);
+        }
+    // The standard-library files imported outside the prelude, by name within
+    // their directory, sorted — the interface's `stdImports`.
+    Array* stdImports(void)
+        {
+        Array* out = new Array();
+        for (u32 i = (u32)0; i < _stdNames.count(); i = i + (u32)1)
+            out.add(_stdNames.get(i));
+        out.sort();
+        return out;
+        }
+
     Array* metadataImports(void)
         {
         return _metadataImports;
@@ -1369,7 +1431,23 @@ class IfFrame
     // search directory (a library) gets no head start either way, which is what
     // lets generic/lib/Object.xc pick up the TARGET's String rather than its own
     // neighbour.
+    // An #import or #include, and then the standard-library files of any
+    // library it named (bug 637): imported once each, as source, right there.
     void handleInclude(String* content, String* filename, u32 line, String* output, bool onceOnly)
+        {
+        handleIncludeOne(content, filename, line, output, onceOnly);
+        while (_pendingStd.count() > (u32)0)
+            {
+            String* nm = (String*)_pendingStd.get((u32)0);
+            _pendingStd.removeAt((u32)0);
+            String* imp = String.withCString("import <");
+            imp.append(nm);
+            imp.appendCString(">");
+            handleIncludeOne(imp, filename, line, output, true);
+            }
+        }
+
+    void handleIncludeOne(String* content, String* filename, u32 line, String* output, bool onceOnly)
         {
         String* rest = content;
         if (Preprocessor._hasCPrefix(rest, "import"))
@@ -1513,7 +1591,7 @@ class IfFrame
                     String* p = dir.appendingPathComponent(cand);
                     if (Files.existsExact(p))
                         {
-                        _metadataImports.add((Object*)p);
+                        noteMetadataImport(p);
                         return;
                         }
                     }
@@ -1522,7 +1600,7 @@ class IfFrame
                 String* pbare = dir.appendingPathComponent(target);
                 if (Files.existsExact(pbare))
                     {
-                    _metadataImports.add((Object*)pbare);
+                    noteMetadataImport(pbare);
                     return;
                     }
                 String* cand3 = String.withString(target);
@@ -1530,7 +1608,7 @@ class IfFrame
                 String* p3 = dir.appendingPathComponent(cand3);
                 if (Files.existsExact(p3))
                     {
-                    _metadataImports.add((Object*)p3);
+                    noteMetadataImport(p3);
                     return;
                     }
                 }
@@ -1606,6 +1684,28 @@ class IfFrame
                 // needs no path canonicaliser of its own — a second copy of
                 // that rule is a second thing to drift.
                 _preludeFiles.add((Hashable*)String.withString(foundPath));
+                }
+            else
+                {
+                // A standard-library file imported outside the prelude
+                // (bug 637), under both spellings, as the prelude's are.
+                for (u32 i = (u32)0; i < _stdlibDirs.count(); i = i + (u32)1)
+                    {
+                    String* pre = String.withString((String*)_stdlibDirs.get(i));
+                    pre.appendCString("/");
+                    if (key.hasPrefix(pre))
+                        {
+                        _stdlibFiles.add((Hashable*)key);
+                        _stdlibFiles.add((Hashable*)String.withString(foundPath));
+                        String* nm = key.substringFromByte(pre.byteLength());
+                        bool seen = false;
+                        for (u32 j = (u32)0; j < _stdNames.count() && !seen; j = j + (u32)1)
+                            seen = ((String*)_stdNames.get(j)).equals(nm);
+                        if (!seen)
+                            _stdNames.add((Object*)nm);
+                        break;
+                        }
+                    }
                 }
             }
 

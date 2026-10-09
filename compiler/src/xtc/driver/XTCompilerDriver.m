@@ -1057,6 +1057,24 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     XTPreprocessor* pp = [[XTPreprocessor alloc] initWithDiagnostics:_diagnostics];
     pp.includePaths = includePaths;
     pp.libraryPaths = [self resolveLibraryPaths];
+    // The standard library is the include dirs the DRIVER appended after the
+    // user's -I ones, the `lib` trees (not the win64 selfhost-iface stubs).
+    // A file imported from one of them is ambient for the interface (bug 637).
+        {
+        NSMutableArray<NSString*>* std = [NSMutableArray array];
+        for (NSUInteger i = _options.includePaths.count; i < includePaths.count; i++)
+            if ([includePaths[i].lastPathComponent isEqualToString:@"lib"])
+                {
+                // Absolute, as the preprocessor's file keys are: `-H .`
+                // gives a relative support root.
+                NSString* dir = includePaths[i];
+                if (!dir.isAbsolutePath)
+                    dir = [[[NSFileManager defaultManager] currentDirectoryPath]
+                        stringByAppendingPathComponent:dir];
+                [std addObject:[dir stringByStandardizingPath]];
+                }
+        pp.stdlibDirs = std;
+        }
     // Shared-lib resolution order by target object format: arm64 macOS is Mach-O
     // (`.dylib`); win64 is PE (`.dll`, with a `.dll.a` import lib beside it); every
     // other shared-lib target (x86-64 / arm9) is ELF (`.so`). Pin the right one
@@ -1128,6 +1146,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     NSString* expanded = nil;
     expanded = [pp preprocessSource:rawSource filename:inputFile];
     _preludeFiles = pp.preludeFiles;
+    _stdlibFiles = pp.stdlibFiles;
     if (!expanded || _diagnostics.hasFatalError)
         {
         [_diagnostics printAll];

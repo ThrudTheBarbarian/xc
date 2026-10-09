@@ -828,6 +828,46 @@ class JsonVal
         return (u32)d.byteAt(at) | ((u32)d.byteAt(at + (u32)1) << (u32)8);
         }
 
+    // The interface JSON of a library file or a bare `.xtc.iface`, or null.
+    static String* ifaceText(String* path)
+        {
+        String* text = (String*)0;
+        String* lower = path.lowercased();
+        if (path.hasSuffix(String.withCString(".xtc.iface")))
+            return Files.readText(path);
+        text = IfaceImport.elfIfaceSection(path);
+        if (text == 0)
+            text = IfaceImport.machoIfaceSection(path);
+        if (text == 0)
+            text = IfaceImport.peIfaceSection(path);
+        if (text == 0)
+            text = IfaceImport.wasmIfaceSection(path);
+        bool container = lower.hasSuffix(String.withCString(".so")) || lower.hasSuffix(String.withCString(".dylib"))
+            || lower.hasSuffix(String.withCString(".dll")) || lower.hasSuffix(String.withCString(".wasm"));
+        if (text == 0 && !container)
+            text = Files.readText(path);
+        return text;
+        }
+
+    // The standard-library files a library's interface names (`stdImports`,
+    // bug 637), which a client imports as source. Empty when there are none.
+    static Array* stdImportsOf(String* path)
+        {
+        Array* out = new Array();
+        String* text = IfaceImport.ifaceText(path);
+        if (text == 0)
+            return out;
+        JsonVal* root = JsonParser.parse(text);
+        JsonVal* a = root == (JsonVal*)0 ? (JsonVal*)0 : root.member("stdImports");
+        for (u32 i = (u32)0; a != (JsonVal*)0 && i < a.count(); i = i + (u32)1)
+            {
+            String* nm = a.at(i).asStr();
+            if (nm != (String*)0)
+                out.add((Object*)nm);
+            }
+        return out;
+        }
+
     static IfaceImport* read(String* path)
         {
         // A `.wasm` LIBRARY carries its interface inside itself, so there is no
@@ -839,24 +879,7 @@ class JsonVal
         // reader, which found nothing — so the client compiled with no
         // interface and failed far away, on the first use of a class, with
         // "unsupported: assignment target" (bug 583).
-        String* text = (String*)0;
-        String* lower = path.lowercased();
-        if (path.hasSuffix(String.withCString(".xtc.iface")))
-            text = Files.readText(path);
-        else
-            {
-            text = IfaceImport.elfIfaceSection(path);
-            if (text == 0)
-                text = IfaceImport.machoIfaceSection(path);
-            if (text == 0)
-                text = IfaceImport.peIfaceSection(path);
-            if (text == 0)
-                text = IfaceImport.wasmIfaceSection(path);
-            bool container = lower.hasSuffix(String.withCString(".so")) || lower.hasSuffix(String.withCString(".dylib"))
-                || lower.hasSuffix(String.withCString(".dll")) || lower.hasSuffix(String.withCString(".wasm"));
-            if (text == 0 && !container)
-                text = Files.readText(path);
-            }
+        String* text = IfaceImport.ifaceText(path);
         if (text == 0)
             return (IfaceImport*)0;
         JsonVal* root = JsonParser.parse(text);

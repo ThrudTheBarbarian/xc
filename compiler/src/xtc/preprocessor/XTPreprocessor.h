@@ -85,6 +85,16 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) NSSet<NSString*>* preludeFiles;
 
 /****************************************************************************\
+|* The standard library's directories (support/<plat>/lib, support/generic/
+|* lib), standardised. A file #imported from one of them OUTSIDE the prelude
+|* is recorded in `stdlibFiles` (absolute path -> its name within the dir):
+|* the interface treats it as ambient, like the prelude, and lists the names
+|* as `stdImports` for a client to import itself (bug 637).
+\****************************************************************************/
+@property(nonatomic, copy) NSArray<NSString*>* stdlibDirs;
+@property(nonatomic, readonly) NSDictionary<NSString*, NSString*>* stdlibFiles;
+
+/****************************************************************************\
 |* Resolved `.so` paths gathered from library-metadata `#import`s, in first-
 |* seen order and de-duplicated (`#import` is include-once). The driver
 |* consumes these after preprocessing to synthesise typed declarations.

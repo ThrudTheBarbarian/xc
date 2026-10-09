@@ -48,6 +48,7 @@ class FeOptions
     String* _libPlatform; // ios / ios-sim: the platform LAYER searched before the arch tree (iOS.md stage 4)
     String* _home;        // -H, or 0 for the search list
     Array* _incs;
+    Array* _stdlibs; // the standard library's dirs among _incs (bug 637)
     Array* _defs;
     Array* _libs; // -L dirs: `.xtc.iface` side files resolve here
     bool _verbose;
@@ -96,6 +97,7 @@ class FeOptions
         _target = String.withCString("xt6502");
         _libPlatform = (String*)0;
         _incs = new Array();
+        _stdlibs = new Array();
         _defs = new Array();
         _libs = new Array();
         _verbose = false;
@@ -125,6 +127,10 @@ class FeOptions
     Array* incs(void)
         {
         return _incs;
+        }
+    Array* stdlibs(void)
+        {
+        return _stdlibs;
         }
     Array* defs(void)
         {
@@ -806,8 +812,8 @@ class FeOptions
         // The prelude's files are the AMBIENT surface: every unit already has
         // them, so this module does not export them as its own.
         if (o.emitIface())
-            o.setIfaceJson(IfaceWrite.jsonWithTable(program, sema.vtable(), pp.preludeFiles(), cImports,
-                                                    o.classTable()));
+            o.setIfaceJson(IfaceWrite.jsonWithStd(program, sema.vtable(), pp.ambientFiles(), cImports,
+                                                  o.classTable(), pp.stdImports()));
 
         Lower* lower = Lower.make();
         lower.setPointerWidth(pointerWidthOf(o));
@@ -1726,7 +1732,10 @@ void addLibDir(FeOptions* o, String* support, String* plat)
     d.append(plat);
     d.appendCString("/lib");
     if (Files.exists(d))
+        {
         o.incs().add((Object*)d);
+        o.stdlibs().add((Object*)d);
+        }
     }
 
 // The support tree under `base`, in the three spellings an install and a
@@ -1936,6 +1945,12 @@ String* appleSdkFor(FeOptions* o)
     return (String*)0;
     }
 
+// The `stdImports` of a library the preprocessor has just recorded (bug 637).
+Array* stdImportsOfLibrary(String* lib)
+    {
+    return IfaceImport.stdImportsOf(lib);
+    }
+
 Preprocessor* buildPP(FeOptions* o)
     {
     Preprocessor* pp = new Preprocessor();
@@ -1954,6 +1969,11 @@ Preprocessor* buildPP(FeOptions* o)
         pp.addIncludePath((String*)o.incs().get(i));
     for (u32 i = (u32)0; i < o.libs().count(); i = i + (u32)1)
         pp.addLibraryPath((String*)o.libs().get(i));
+    // The standard library, and how to read a library's own stdlib list
+    // (bug 637): the interface treats both as ambient, like the prelude.
+    for (u32 i = (u32)0; i < o.stdlibs().count(); i = i + (u32)1)
+        pp.addStdlibDir((String*)o.stdlibs().get(i));
+    pp.setStdImportsReader(&stdImportsOfLibrary);
     // macOS and iOS: `#import <F>` may name a system framework.
     String* tgt = o.target();
     if (tgt.equals(String.withCString("arm64")) || tgt.equals(String.withCString("ios"))

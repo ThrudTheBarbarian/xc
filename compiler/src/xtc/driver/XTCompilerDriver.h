@@ -35,6 +35,9 @@ NS_ASSUME_NONNULL_BEGIN
 // The implicit prelude's file set (see XTPreprocessor.preludeFiles) — the
 // interface serializer excludes declarations that originate there.
 @property (nonatomic, readonly, nullable) NSSet<NSString *> *preludeFiles;
+// The standard-library files the unit imported outside the prelude, absolute
+// path -> name within its directory (see XTPreprocessor.stdlibFiles, bug 637).
+@property (nonatomic, readonly, nullable) NSDictionary<NSString *, NSString *> *stdlibFiles;
 /****************************************************************************\
 |* The vtable slot indices this build committed to — serialised into the
 |* library's interface under --emit-lib so a client adopts them rather than

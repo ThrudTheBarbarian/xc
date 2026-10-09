@@ -72,6 +72,18 @@ NS_ASSUME_NONNULL_BEGIN
                             cImports:(nullable NSArray<NSString*>*)cImports
                         excludeFiles:(nullable NSSet<NSString*>*)excludeFiles
                           classTable:(nullable NSString*)classTable;
+/****************************************************************************\
+|* As above, also leaving out the standard library the unit imported outside
+|* the prelude (`stdlibFiles`, absolute path -> name in its directory) and
+|* naming those files under `stdImports` for a client to import (bug 637).
+\****************************************************************************/
++ (nullable NSString*)jsonForProgram:(XTProgramNode*)program
+                       protocolSlots:(nullable NSDictionary*)protocolSlots
+                         methodSlots:(nullable NSDictionary*)methodSlots
+                            cImports:(nullable NSArray<NSString*>*)cImports
+                        excludeFiles:(nullable NSSet<NSString*>*)excludeFiles
+                          classTable:(nullable NSString*)classTable
+                         stdlibFiles:(nullable NSDictionary<NSString*, NSString*>*)stdlibFiles;
 @end
 
 NS_ASSUME_NONNULL_END

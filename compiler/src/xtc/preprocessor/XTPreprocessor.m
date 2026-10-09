@@ -1,5 +1,6 @@
 #import "XTPreprocessor.h"
 #import "XTMacroDefinition.h"
+#import "../driver/XTInterfaceImporter.h"
 
 /****************************************************************************\
 |* Per-#if-block state for the conditional-compilation stack. Three
@@ -49,6 +50,7 @@
 \****************************************************************************/
 @property(nonatomic) NSMutableArray<NSString*>* mutableMetadataImports;
 @property(nonatomic) NSMutableSet<NSString*>* metadataImportSet;
+@property(nonatomic) NSMutableDictionary<NSString*, NSString*>* mutableStdlibFiles;
 /****************************************************************************\
 |* Recursion depth of preprocessSource: (0 = the top-level file). Used to
 |* register the ENTRY file in importedFiles, so an import cycle that leads
@@ -81,6 +83,8 @@
         _libraryPaths = @[];
         _mutableMetadataImports = [NSMutableArray array];
         _metadataImportSet = [NSMutableSet set];
+        _mutableStdlibFiles = [NSMutableDictionary dictionary];
+        _stdlibDirs = @[];
         }
     return self;
     }
@@ -88,6 +92,11 @@
 - (NSSet<NSString*>*)preludeFiles
     {
     return _mutablePreludeFiles;
+    }
+
+- (NSDictionary<NSString*, NSString*>*)stdlibFiles
+    {
+    return _mutableStdlibFiles;
     }
 
 - (NSArray<NSString*>*)metadataImports
@@ -1192,6 +1201,23 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
 |* @param output    The mutable output string to append included content to.
 |* @param onceOnly  YES for #import (include-once semantics), NO for #include.
 \****************************************************************************/
+/****************************************************************************\
+|* The `stdImports` an xtc library's interface names (bug 637): the standard-
+|* library files it was built with, which a client imports as source. Empty
+|* for a C library, a framework, or an interface without the key.
+\****************************************************************************/
+- (NSArray<NSString*>*)stdImportsOfLibrary:(NSString*)path
+    {
+    NSString* json = [XTInterfaceImporter interfaceJSONFromLibrary:path];
+    if (!json.length)
+        return @[];
+    NSDictionary* root = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding]
+                                                         options:0
+                                                           error:NULL];
+    NSArray* a = [root isKindOfClass:[NSDictionary class]] ? root[@"stdImports"] : nil;
+    return [a isKindOfClass:[NSArray class]] ? a : @[];
+    }
+
 - (void)handleInclude:(NSString*)content
              location:(XTSourceLocation*)loc
                output:(NSMutableString*)output
@@ -1460,6 +1486,16 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
                 {
                 [_metadataImportSet addObject:abs];
                 [_mutableMetadataImports addObject:abs];
+                // The standard-library files the library was built with
+                // (bug 637). Its interface does not carry their classes, as
+                // it does not carry the prelude's; the client imports the
+                // same sources itself, once only, so a later
+                // `#import <Socket.xc>` is the no-op it should be.
+                for (NSString* std in [self stdImportsOfLibrary:abs])
+                    [self handleInclude:[NSString stringWithFormat:@"import <%@>", std]
+                               location:loc
+                                 output:output
+                               onceOnly:YES];
                 }
             if (vendorXcDir && ![_includePaths containsObject:vendorXcDir])
                 self.includePaths = [_includePaths arrayByAddingObject:vendorXcDir];
@@ -1548,6 +1584,22 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
         }
     if (_inPrelude)
         [_mutablePreludeFiles addObject:absPath];
+    // A standard-library file imported OUTSIDE the prelude (bug 637). Its
+    // declarations are as ambient as the prelude's — every unit can import
+    // the same file — so the interface does not export them; it names the
+    // file instead, and a client imports it itself.
+    if (onceOnly && !_inPrelude)
+        {
+        for (NSString* dir in _stdlibDirs)
+            {
+            NSString* pre = [dir stringByAppendingString:@"/"];
+            if ([absPath hasPrefix:pre])
+                {
+                _mutableStdlibFiles[absPath] = [absPath substringFromIndex:pre.length];
+                break;
+                }
+            }
+        }
 
     NSError* err = nil;
     NSString* includedSource = [NSString stringWithContentsOfFile:foundPath
