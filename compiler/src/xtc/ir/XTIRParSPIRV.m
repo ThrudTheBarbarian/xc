@@ -60,14 +60,13 @@ enum
     SpvOpBitwiseOr = 197, SpvOpBitwiseXor = 198, SpvOpBitwiseAnd = 199, SpvOpNot = 200,
     SpvOpLoopMerge = 246, SpvOpSelectionMerge = 247, SpvOpLabel = 248, SpvOpBranch = 249,
     SpvOpBranchConditional = 250, SpvOpSwitch = 251, SpvOpReturn = 253, SpvOpReturnValue = 254, SpvOpUnreachable = 255,
-    SpvOpTypeArray = 28, SpvOpControlBarrier = 224, SpvOpMemoryBarrier = 225, SpvOpAtomicIAdd = 234,
+    SpvOpTypeArray = 28, SpvOpControlBarrier = 224,
 };
 enum
 {
     SpvStorageInput = 1, SpvStoragePushConstant = 9, SpvStorageStorageBuffer = 12, SpvStorageFunction = 7,
     SpvDecBlock = 2, SpvDecArrayStride = 6, SpvDecNonWritable = 24, SpvDecBuiltIn = 11, SpvDecBinding = 33,
     SpvDecDescriptorSet = 34, SpvDecOffset = 35, SpvBuiltInGlobalInvocationId = 28,
-    SpvBuiltInNumWorkgroups = 24,
     SpvStorageWorkgroup = 4, SpvBuiltInWorkgroupId = 26, SpvBuiltInLocalInvocationId = 27,
     SpvCapShader = 1, SpvCapFloat64 = 10, SpvCapInt64 = 11,
     // GLSL.std.450
@@ -440,29 +439,6 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     [w addObjectsFromArray:a];
     spvOp(self.sf.code, op, w);
     return r;
-    }
-
-// a combined with b under the block's reduction operator: the workgroup tree
-// and the last-workgroup fold both need it, with the same instructions in the
-// same order (bug 645).
-- (uint32_t)spvReduce:(NSString*)op float:(BOOL)isF signed:(BOOL)sgn type:(uint32_t)t a:(uint32_t)a b:(uint32_t)b
-    {
-    if ([op isEqualToString:@"+"])
-        return [self emit:isF ? SpvOpFAdd : SpvOpIAdd type:t args:@[ @(a), @(b) ]];
-    if ([op isEqualToString:@"*"])
-        return [self emit:isF ? SpvOpFMul : SpvOpIMul type:t args:@[ @(a), @(b) ]];
-    if ([op isEqualToString:@"&"])
-        return [self emit:SpvOpBitwiseAnd type:t args:@[ @(a), @(b) ]];
-    if ([op isEqualToString:@"|"])
-        return [self emit:SpvOpBitwiseOr type:t args:@[ @(a), @(b) ]];
-    if ([op isEqualToString:@"^"])
-        return [self emit:SpvOpBitwiseXor type:t args:@[ @(a), @(b) ]];
-    BOOL isMin = [op isEqualToString:@"min"];
-    uint32_t cmpOp = isF ? (isMin ? SpvOpFOrdLessThan : SpvOpFOrdGreaterThan)
-                   : sgn ? (isMin ? SpvOpSLessThan : SpvOpSGreaterThan)
-                         : (isMin ? SpvOpULessThan : SpvOpUGreaterThan);
-    uint32_t cmp = [self emit:cmpOp type:[self.spv typeBool] args:@[ @(a), @(b) ]];
-    return [self emit:SpvOpSelect type:t args:@[ @(cmp), @(a), @(b) ]];
     }
 
 // A Function variable of type t (declared at the head of the entry block).
@@ -1946,7 +1922,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         if (!okT || !okOp)
             devred = NO;
     }];
-    uint32_t lidV = 0, wgV = 0, wgCountV = 0, shLastV = 0;
+    uint32_t lidV = 0, wgV = 0;
     if (devred)
         {
         lidV = [m newId];
@@ -1955,15 +1931,6 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         wgV = [m newId];
         spvOp(m.globals, SpvOpVariable, @[ @([m pointer:SpvStorageInput to:uvec3]), @(wgV), @(SpvStorageInput) ]);
         spvOp(m.decos, SpvOpDecorate, @[ @(wgV), @(SpvDecBuiltIn), @(SpvBuiltInWorkgroupId) ]);
-        // devlast (bug 645): how many workgroups there are, so the last to
-        // finish folds the rest; and a shared word through which it tells its
-        // threads, since SPIR-V has no module-scope counter to keep (that is
-        // the extra storage buffer below).
-        wgCountV = [m newId];
-        spvOp(m.globals, SpvOpVariable, @[ @([m pointer:SpvStorageInput to:uvec3]), @(wgCountV), @(SpvStorageInput) ]);
-        spvOp(m.decos, SpvOpDecorate, @[ @(wgCountV), @(SpvDecBuiltIn), @(SpvBuiltInNumWorkgroups) ]);
-        shLastV = [m newId];
-        spvOp(m.globals, SpvOpVariable, @[ @([m pointer:SpvStorageWorkgroup to:u32t]), @(shLastV), @(SpvStorageWorkgroup) ]);
         }
 
     // Buffers: captured arrays, globals, reductions, in the header's order.
@@ -1974,8 +1941,6 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         {
         [interface addObject:@(lidV)];
         [interface addObject:@(wgV)];
-        [interface addObject:@(wgCountV)];
-        [interface addObject:@(shLastV)];
         }
     __block uint32_t binding = 1;
     [self.bufferFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
@@ -2054,16 +2019,6 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     }];
     if (bad)
         return nil;
-
-    // devlast: the counter the last workgroup to finish finds, so it can fold
-    // the rest. A module-scope mutable global does not exist here, so it is a
-    // small storage buffer the host zeroes before every dispatch (bug 645).
-    uint32_t doneV = 0;
-    if (devred)
-        {
-        doneV = [self spvBuffer:[m typeInt:32] stride:4 binding:binding++ readOnly:NO];
-        [interface addObject:@(doneV)];
-        }
 
     // The kernel function.
     uint32_t voidT = [m typeVoid];
@@ -2201,138 +2156,6 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
             [self place:wmrg];
             di++;
         }];
-        // devlast (bug 645): the last workgroup to finish folds every
-        // workgroup's partial on the device and leaves the result in slot 0,
-        // so one partial comes back instead of `nparts`. The counter is a
-        // storage buffer (there is no module-scope global to hold it); the
-        // host zeroes it before the dispatch.
-        {
-        uint32_t zero = [m u32:0];
-        uint32_t one = [m u32:1];
-        uint32_t scDev = [m u32:1];              // Device
-        uint32_t scWg = [m u32:2];               // Workgroup
-        uint32_t semBuf = [m u32:0x48];          // AcquireRelease | UniformMemory
-        uint32_t semWg = [m u32:0x108];          // AcquireRelease | WorkgroupMemory
-        // nc = numWorkgroups, nv = min(nc, 256).
-        uint32_t wgcv = [self emit:SpvOpLoad type:uvec3 args:@[ @(wgCountV) ]];
-        uint32_t nc = [self emit:SpvOpCompositeExtract type:u32t args:@[ @(wgcv), @0 ]];
-        uint32_t ge256 = [self emit:SpvOpUGreaterThanEqual type:boolT args:@[ @(nc), @([m u32:256]) ]];
-        uint32_t nv = [self emit:SpvOpSelect type:u32t args:@[ @(ge256), @([m u32:256]), @(nc) ]];
-        // Thread 0 counts its workgroup in; the one that brings the count to
-        // the total is the last, and says so through the shared word.
-        uint32_t isz = [self emit:SpvOpIEqual type:boolT args:@[ @(lid32), @(zero) ]];
-        uint32_t cbody = [self label], cmrg = [self label];
-        [self emit:SpvOpSelectionMerge words:@[ @(cmrg), @0 ]];
-        [self emit:SpvOpBranchConditional words:@[ @(isz), @(cbody), @(cmrg) ]];
-        [self place:cbody];
-        uint32_t pDone = [self emit:SpvOpAccessChain type:[m pointer:SpvStorageStorageBuffer to:u32t]
-                             args:@[ @(doneV), @(zero), @(zero) ]];
-        uint32_t cnt = [self emit:SpvOpAtomicIAdd type:u32t args:@[ @(pDone), @(scDev), @(semBuf), @(one) ]];
-        uint32_t last = [self emit:SpvOpIEqual type:boolT
-                            args:@[ @(cnt), @([self emit:SpvOpISub type:u32t args:@[ @(nc), @(one) ]]) ]];
-        [self emit:SpvOpStore words:@[ @(shLastV), @([self emit:SpvOpSelect type:u32t
-                                                            args:@[ @(last), @(one), @(zero) ]]) ]];
-        [self emit:SpvOpBranch words:@[ @(cmrg) ]];
-        [self place:cmrg];
-        // A workgroup barrier at device scope: it releases our partials and
-        // acquires the other workgroups', so every thread here sees them.
-        [self emit:SpvOpControlBarrier words:@[ @(scWg), @(scDev), @(semBuf) ]];
-        uint32_t lastv = [self emit:SpvOpLoad type:u32t args:@[ @(shLastV) ]];
-        uint32_t isLast = [self emit:SpvOpINotEqual type:boolT args:@[ @(lastv), @(zero) ]];
-        uint32_t fbody = [self label], fmrg = [self label];
-        [self emit:SpvOpSelectionMerge words:@[ @(fmrg), @0 ]];
-        [self emit:SpvOpBranchConditional words:@[ @(isLast), @(fbody), @(fmrg) ]];
-        [self place:fbody];
-        __block NSUInteger fi = 0;
-        [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger kk, BOOL* stop) {
-            XTIRType* rt = fl[kk].type;
-            NSString* op = self.redOps[@(kk)];
-            BOOL isF = rt.kind == XTIRTypeKindF32 || rt.kind == XTIRTypeKindF64;
-            BOOL sgn = rt.kind == XTIRTypeKindI32 || rt.kind == XTIRTypeKindI64;
-            uint32_t t = [self spvType:rt];
-            uint32_t sv = shVars[fi].unsignedIntValue;
-            uint32_t pW = [m pointer:SpvStorageWorkgroup to:t];
-            uint32_t pRv = [m pointer:SpvStorageStorageBuffer to:t];
-            uint32_t accv = [self localVar:t];
-            uint32_t jv = [self localVar:u32t];
-            // Threads lid < nc fold partials lid, lid+256, ... into sh_k[lid].
-            uint32_t inFill = [self emit:SpvOpULessThan type:boolT args:@[ @(lid32), @(nc) ]];
-            uint32_t fb = [self label], fmg = [self label];
-            [self emit:SpvOpSelectionMerge words:@[ @(fmg), @0 ]];
-            [self emit:SpvOpBranchConditional words:@[ @(inFill), @(fb), @(fmg) ]];
-            [self place:fb];
-            uint32_t pr = [self emit:SpvOpAccessChain type:pRv args:@[ redVars[fi], @(zero), @(lid32) ]];
-            [self emit:SpvOpStore words:@[ @(accv), @([self emit:SpvOpLoad type:t args:@[ @(pr) ]]) ]];
-            [self emit:SpvOpStore words:@[ @(jv), @([self emit:SpvOpIAdd type:u32t
-                                                       args:@[ @(lid32), @([m u32:256]) ]]) ]];
-            uint32_t head = [self label], hide = [self label], lbody = [self label];
-            uint32_t cont = [self label], lmerge = [self label];
-            [self emit:SpvOpBranch words:@[ @(head) ]];
-            [self place:head];
-            [self emit:SpvOpLoopMerge words:@[ @(lmerge), @(cont), @0 ]];
-            [self emit:SpvOpBranch words:@[ @(hide) ]];
-            [self place:hide];
-            uint32_t more = [self emit:SpvOpULessThan type:boolT
-                                  args:@[ @([self emit:SpvOpLoad type:u32t args:@[ @(jv) ]]), @(nc) ]];
-            [self emit:SpvOpBranchConditional words:@[ @(more), @(lbody), @(lmerge) ]];
-            [self place:lbody];
-            uint32_t a = [self emit:SpvOpLoad type:t args:@[ @(accv) ]];
-            uint32_t jl = [self emit:SpvOpLoad type:u32t args:@[ @(jv) ]];
-            uint32_t pr2 = [self emit:SpvOpAccessChain type:pRv args:@[ redVars[fi], @(zero), @(jl) ]];
-            uint32_t b = [self emit:SpvOpLoad type:t args:@[ @(pr2) ]];
-            [self emit:SpvOpStore words:@[ @(accv), @([self spvReduce:op float:isF signed:sgn
-                                                                     type:t a:a b:b]) ]];
-            [self emit:SpvOpBranch words:@[ @(cont) ]];
-            [self place:cont];
-            [self emit:SpvOpStore words:@[ @(jv), @([self emit:SpvOpIAdd type:u32t
-                                                       args:@[ @(jl), @([m u32:256]) ]]) ]];
-            [self emit:SpvOpBranch words:@[ @(head) ]];
-            [self place:lmerge];
-            uint32_t pw = [self emit:SpvOpAccessChain type:pW args:@[ @(sv), @(lid32) ]];
-            [self emit:SpvOpStore words:@[ @(pw), @([self emit:SpvOpLoad type:t args:@[ @(accv) ]]) ]];
-            [self emit:SpvOpBranch words:@[ @(fmg) ]];
-            [self place:fmg];
-            // The fixed tree over the 256 slots, guarded so a slot past nv (the
-            // workgroups there are) is never read.
-            for (uint32_t lvl = 128; lvl >= 1; lvl /= 2)
-                {
-                uint32_t swc = [m u32:lvl];
-                uint32_t cA = [self emit:SpvOpULessThan type:boolT args:@[ @(lid32), @(swc) ]];
-                uint32_t j2 = [self emit:SpvOpIAdd type:u32t args:@[ @(lid32), @(swc) ]];
-                uint32_t cB = [self emit:SpvOpULessThan type:boolT args:@[ @(j2), @(nv) ]];
-                uint32_t cc = [self emit:SpvOpLogicalAnd type:boolT args:@[ @(cA), @(cB) ]];
-                uint32_t tb = [self label], tm = [self label];
-                [self emit:SpvOpSelectionMerge words:@[ @(tm), @0 ]];
-                [self emit:SpvOpBranchConditional words:@[ @(cc), @(tb), @(tm) ]];
-                [self place:tb];
-                uint32_t pa = [self emit:SpvOpAccessChain type:pW args:@[ @(sv), @(lid32) ]];
-                uint32_t av = [self emit:SpvOpLoad type:t args:@[ @(pa) ]];
-                uint32_t pb = [self emit:SpvOpAccessChain type:pW args:@[ @(sv), @(j2) ]];
-                uint32_t bv = [self emit:SpvOpLoad type:t args:@[ @(pb) ]];
-                [self emit:SpvOpStore words:@[ @(pa), @([self spvReduce:op float:isF signed:sgn
-                                                                    type:t a:av b:bv]) ]];
-                [self emit:SpvOpBranch words:@[ @(tm) ]];
-                [self place:tm];
-                [self emit:SpvOpControlBarrier words:@[ @(scWg), @(scWg), @(semWg) ]];
-                }
-            // Thread 0 leaves the final answer in slot 0, where the host reads
-            // it (nback = 1).
-            uint32_t c0 = [self emit:SpvOpIEqual type:boolT args:@[ @(lid32), @(zero) ]];
-            uint32_t wb = [self label], wm = [self label];
-            [self emit:SpvOpSelectionMerge words:@[ @(wm), @0 ]];
-            [self emit:SpvOpBranchConditional words:@[ @(c0), @(wb), @(wm) ]];
-            [self place:wb];
-            uint32_t pw0 = [self emit:SpvOpAccessChain type:pW args:@[ @(sv), @(zero) ]];
-            uint32_t v0 = [self emit:SpvOpLoad type:t args:@[ @(pw0) ]];
-            uint32_t dst = [self emit:SpvOpAccessChain type:pRv args:@[ redVars[fi], @(zero), @(zero) ]];
-            [self emit:SpvOpStore words:@[ @(dst), @(v0) ]];
-            [self emit:SpvOpBranch words:@[ @(wm) ]];
-            [self place:wm];
-            fi++;
-        }];
-        [self emit:SpvOpBranch words:@[ @(fmrg) ]];
-        [self place:fmrg];
-        }
         [self emit:SpvOpReturn words:@[]];
         [self emit:SpvOpFunctionEnd words:@[]];
         }
@@ -2381,7 +2204,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
 
     NSData* words = [m words];
     if (devred)
-        [meta appendString:@" devred devlast"];
+        [meta appendString:@" devred"];
     // spirv= before fast: ParDevice.isFast reads the line's last word.
     [meta appendFormat:@" spirv=%lu", (unsigned long)(words.length / 4)];
     if (self.fast)
