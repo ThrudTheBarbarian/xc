@@ -191,6 +191,190 @@ static NSString* ptxInline(NSString* text, NSUInteger serial, NSArray<NSString*>
     return out;
     }
 
+/****************************************************************************\
+|* The register a field of type `t` lives in, as `.reg` wants it, and the mov
+|* that copies one: nil for a width this pass leaves alone.
+\****************************************************************************/
+static NSString* ptxFieldReg(NSString* t)
+    {
+    if ([t isEqualToString:@"u64"] || [t isEqualToString:@"s64"] || [t isEqualToString:@"b64"])
+        return @"b64";
+    if ([t isEqualToString:@"u32"] || [t isEqualToString:@"s32"] || [t isEqualToString:@"b32"])
+        return @"b32";
+    if ([t isEqualToString:@"f32"] || [t isEqualToString:@"f64"])
+        return t;
+    return nil;
+    }
+
+// "[A]" in a load or store: the offset into the block object it names, or -1.
+static NSInteger ptxFieldAt(NSString* a, NSDictionary<NSString*, NSNumber*>* addr)
+    {
+    if (addr[a])
+        return addr[a].integerValue;
+    if ([a hasPrefix:@"%stp+"])
+        return [a substringFromIndex:5].integerValue;
+    if ([a isEqualToString:@"%stp"])
+        return 0;
+    return -1;
+    }
+
+/****************************************************************************\
+|* The block object's fields in registers (bug 645). The kernel copies the
+|* object into a .local array and reads and writes its fields there: memory
+|* traffic per item, and a stack frame per thread. When every use of that copy
+|* is a load or store of a field at a constant offset, each field becomes a
+|* register loaded once from the by-value parameter, the copy goes, and each
+|* load or store becomes a mov. Anything else and the kernel is left as it is.
+|* A scan of the printed text, as ptxInline, so the port's copy can match it.
+\****************************************************************************/
+static NSString* ptxScalarReplace(NSString* text)
+    {
+    NSArray<NSString*>* lines = [text componentsSeparatedByString:@"\n"];
+    // `\tadd.u64 %vN, %stp, C;`: the addresses of fields.
+    NSMutableDictionary<NSString*, NSNumber*>* addr = [NSMutableDictionary dictionary];
+    for (NSString* ln in lines)
+        if ([ln hasPrefix:@"\tadd.u64 %v"] && [ln hasSuffix:@";"])
+            {
+            NSRange c = [ln rangeOfString:@", %stp, "];
+            if (c.location != NSNotFound)
+                addr[[ln substringWithRange:NSMakeRange(9, c.location - 9)]] =
+                    @([ln substringWithRange:NSMakeRange(c.location + 8, ln.length - c.location - 9)].integerValue);
+            }
+    // Each field's type; the copy of the object (`ld.param` from args, then
+    // `st.local` to the same offset) is not a use.
+    NSMutableDictionary<NSNumber*, NSString*>* type = [NSMutableDictionary dictionary];
+    NSMutableSet<NSNumber*>* stored = [NSMutableSet set];
+    NSMutableIndexSet* copyLines = [NSMutableIndexSet indexSet];
+    NSMutableIndexSet* defLines = [NSMutableIndexSet indexSet];
+    NSUInteger uses = 0;
+    for (NSUInteger i = 0; i < lines.count; i++)
+        {
+        NSString* ln = lines[i];
+        if ([ln hasPrefix:@"\tld.param."] && [ln rangeOfString:@", [args+"].location != NSNotFound && i + 1 < lines.count &&
+            [lines[i + 1] hasPrefix:@"\tst.local."])
+            {
+            [copyLines addIndex:i];
+            [copyLines addIndex:i + 1];
+            i++;
+            continue;
+            }
+        if ([ln hasPrefix:@"\tadd.u64 %v"] && [ln rangeOfString:@", %stp, "].location != NSNotFound)
+            {
+            [defLines addIndex:i];
+            continue;
+            }
+        BOOL ld = [ln hasPrefix:@"\tld.local."], st = [ln hasPrefix:@"\tst.local."];
+        if (!ld && !st)
+            continue;
+        NSRange sp = [ln rangeOfString:@" "];
+        NSString* t = [ln substringWithRange:NSMakeRange(10, sp.location - 10)];
+        NSRange lb = [ln rangeOfString:@"["], rb = [ln rangeOfString:@"]"];
+        if (lb.location == NSNotFound || rb.location == NSNotFound || !ptxFieldReg(t))
+            return text;
+        NSInteger off = ptxFieldAt([ln substringWithRange:NSMakeRange(lb.location + 1, rb.location - lb.location - 1)], addr);
+        if (off < 0)
+            return text;
+        if (type[@(off)] && ![type[@(off)] isEqualToString:t])
+            return text;
+        type[@(off)] = t;
+        if (st)
+            [stored addObject:@(off)];
+        uses++;
+        }
+    // Every mention of %stp and of each field address must be one of those.
+    NSUInteger stpSeen = 0, addrSeen = 0;
+    for (NSUInteger i = 0; i < lines.count; i++)
+        {
+        NSString* ln = lines[i];
+        // A declaration is not a use.
+        if ([copyLines containsIndex:i] || [ln hasPrefix:@"\t.reg "] || [ln isEqualToString:@"\tmov.u64 %stp, st;"])
+            continue;
+        if ([ln rangeOfString:@"%stp"].location != NSNotFound)
+            stpSeen++;
+        for (NSString* a in addr)
+            {
+            NSRange r = [ln rangeOfString:a];
+            while (r.location != NSNotFound)
+                {
+                NSUInteger e = r.location + r.length;
+                if (e >= ln.length || !ptxIdentChar([ln characterAtIndex:e]))
+                    addrSeen++;
+                r = [ln rangeOfString:a options:0 range:NSMakeRange(e, ln.length - e)];
+                }
+            }
+        }
+    // stpSeen: each definition and each direct [%stp+C] access; addrSeen:
+    // each definition and each access through it.
+    NSUInteger direct = 0, through = 0;
+    for (NSString* ln in lines)
+        if ([ln hasPrefix:@"\tld.local."] || [ln hasPrefix:@"\tst.local."])
+            {
+            if ([ln rangeOfString:@"[%stp"].location != NSNotFound)
+                direct++;
+            else
+                through++;
+            }
+    direct -= copyLines.count / 2;
+    if (stpSeen != defLines.count + direct || addrSeen != defLines.count + through || uses != direct + through)
+        return text;
+    // Only a field the kernel writes (the range, the reductions) lives in a
+    // register for the whole kernel; one it only reads is loaded from the
+    // parameter at each use, which holds no register (a register per field
+    // made nbody slower).
+    NSMutableArray<NSNumber*>* offs = [NSMutableArray array];
+    for (NSNumber* o in [type.allKeys sortedArrayUsingSelector:@selector(compare:)])
+        if ([stored containsObject:o])
+            [offs addObject:o];
+    NSMutableString* out = [NSMutableString string];
+    for (NSUInteger i = 0; i < lines.count; i++)
+        {
+        NSString* ln = lines[i];
+        if ([copyLines containsIndex:i] || [defLines containsIndex:i])
+            continue;
+        if ([ln hasPrefix:@"\t.local .align 8 .b8 st["])
+            {
+            for (NSNumber* o in offs)
+                [out appendFormat:@"\t.reg .%@ %%fd%@;\n", ptxFieldReg(type[o]), o];
+            continue;
+            }
+        if ([ln isEqualToString:@"\tmov.u64 %stp, st;"])
+            {
+            for (NSNumber* o in offs)
+                [out appendFormat:@"\tld.param.%@ %%fd%@, [args+%@];\n", type[o], o, o];
+            continue;
+            }
+        BOOL ld = [ln hasPrefix:@"\tld.local."], st = [ln hasPrefix:@"\tst.local."];
+        if (ld || st)
+            {
+            NSRange sp = [ln rangeOfString:@" "];
+            NSString* t = [ln substringWithRange:NSMakeRange(10, sp.location - 10)];
+            NSRange lb = [ln rangeOfString:@"["], rb = [ln rangeOfString:@"]"];
+            NSInteger off = ptxFieldAt([ln substringWithRange:NSMakeRange(lb.location + 1, rb.location - lb.location - 1)], addr);
+            NSString* mt = ptxFieldReg(t);
+            if (ld)
+                {
+                // `\tld.local.T R, [A];`
+                NSString* r = [ln substringWithRange:NSMakeRange(sp.location + 1, lb.location - 2 - sp.location - 1)];
+                if ([stored containsObject:@(off)])
+                    [out appendFormat:@"\tmov.%@ %@, %%fd%ld;\n", mt, r, (long)off];
+                else
+                    [out appendFormat:@"\tld.param.%@ %@, [args+%ld];\n", t, r, (long)off];
+                }
+            else
+                {
+                // `\tst.local.T [A], R;`
+                NSString* r = [ln substringWithRange:NSMakeRange(rb.location + 3, ln.length - rb.location - 4)];
+                [out appendFormat:@"\tmov.%@ %%fd%ld, %@;\n", mt, (long)off, r];
+                }
+            continue;
+            }
+        [out appendString:ln];
+        if (i + 1 < lines.count)
+            [out appendString:@"\n"];
+        }
+    return out;
+    }
+
 static NSString* ptxRedStep(NSString* op, XTIRType* t, NSString* d, NSString* a, NSString* b)
     {
     BOOL f = t.kind == XTIRTypeKindF32 || t.kind == XTIRTypeKindF64;
@@ -1212,7 +1396,7 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
         [out appendString:tail];
         }
     [out appendString:@"DONE:\n\tret;\n}\n"];
-    return out;
+    return byval ? ptxScalarReplace(out) : out;
     }
 
 @end

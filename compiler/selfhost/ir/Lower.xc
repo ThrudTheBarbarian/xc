@@ -16863,6 +16863,215 @@ class ClassInfo
         return o;
         }
 
+    // ptxFieldReg / ptxFieldAt / ptxScalarReplace: the block object's fields
+    // in registers (the reference explains; bug 645).
+    static String* ptxFieldReg(String* t)
+        {
+        if (t.equals(String.withCString("u64")) || t.equals(String.withCString("s64")) || t.equals(String.withCString("b64")))
+            return String.withCString("b64");
+        if (t.equals(String.withCString("u32")) || t.equals(String.withCString("s32")) || t.equals(String.withCString("b32")))
+            return String.withCString("b32");
+        if (t.equals(String.withCString("f32")) || t.equals(String.withCString("f64")))
+            return String.withString(t);
+        return (String*)0;
+        }
+
+    static i64 ptxDigits(String* s, u32 from)
+        {
+        i64 v = (i64)0;
+        for (u32 q = from; q < s.byteLength() && s.byteAt(q) >= (u8)'0' && s.byteAt(q) <= (u8)'9'; q = q + (u32)1)
+            v = v * (i64)10 + (i64)(s.byteAt(q) - (u8)'0');
+        return v;
+        }
+
+    static i64 ptxFieldAt(String* a, Map* addr)
+        {
+        Number* n = (Number*)addr.get((Hashable*)a);
+        if (n != (Number*)0) return n.asI64();
+        if (a.hasPrefix(String.withCString("%stp+"))) return Lower.ptxDigits(a, (u32)5);
+        if (a.equals(String.withCString("%stp"))) return (i64)0;
+        return (i64)0 - (i64)1;
+        }
+
+    static String* ptxScalarReplace(String* text)
+        {
+        Array* lines = text.splitOnByte((u8)10);
+        u32 nl = lines.count();
+        Map* addr = new Map();
+        Array* addrNames = new Array();
+        for (u32 i = (u32)0; i < nl; i = i + (u32)1)
+            {
+            String* ln = (String*)lines.get(i);
+            if (ln.hasPrefix(String.withCString("\tadd.u64 %v")) && ln.hasSuffix(String.withCString(";")))
+                {
+                u32 c = ln.byteIndexOf(String.withCString(", %stp, "));
+                if (c != String.notFound())
+                    {
+                    String* nm = ln.substringBytes((u32)9, c - (u32)9);
+                    if (addr.get((Hashable*)nm) == (Object*)0) addrNames.add((Object*)nm);
+                    addr.set((Hashable*)nm, (Object*)Number.withI64(Lower.ptxDigits(ln, c + (u32)8)));
+                    }
+                }
+            }
+        Map* type = new Map();          // decimal offset -> type
+        Map* stored = new Map();        // decimal offset -> itself
+        Map* copyLines = new Map();     // decimal line index -> itself
+        Map* defLines = new Map();
+        u32 nCopy = (u32)0;
+        u32 nDef = (u32)0;
+        u32 uses = (u32)0;
+        u32 i = (u32)0;
+        while (i < nl)
+            {
+            String* ln = (String*)lines.get(i);
+            if (ln.hasPrefix(String.withCString("\tld.param.")) && ln.contains(String.withCString(", [args+")) && i + (u32)1 < nl
+                && ((String*)lines.get(i + (u32)1)).hasPrefix(String.withCString("\tst.local.")))
+                {
+                copyLines.set((Hashable*)String.withU32(i), (Object*)String.withU32(i));
+                copyLines.set((Hashable*)String.withU32(i + (u32)1), (Object*)String.withU32(i + (u32)1));
+                nCopy = nCopy + (u32)2;
+                i = i + (u32)2;
+                continue;
+                }
+            if (ln.hasPrefix(String.withCString("\tadd.u64 %v")) && ln.contains(String.withCString(", %stp, ")))
+                {
+                defLines.set((Hashable*)String.withU32(i), (Object*)String.withU32(i));
+                nDef = nDef + (u32)1;
+                i = i + (u32)1;
+                continue;
+                }
+            bool ld = ln.hasPrefix(String.withCString("\tld.local."));
+            bool st = ln.hasPrefix(String.withCString("\tst.local."));
+            if (!ld && !st) { i = i + (u32)1; continue; }
+            u32 sp = ln.indexOfByte((u8)' ');
+            String* t = ln.substringBytes((u32)10, sp - (u32)10);
+            u32 lb = ln.indexOfByte((u8)'[');
+            u32 rb = ln.indexOfByte((u8)']');
+            if (lb == String.notFound() || rb == String.notFound() || Lower.ptxFieldReg(t) == (String*)0) return text;
+            i64 off = Lower.ptxFieldAt(ln.substringBytes(lb + (u32)1, rb - lb - (u32)1), addr);
+            if (off < (i64)0) return text;
+            String* ok = String.withU32((u32)off);
+            String* had = (String*)type.get((Hashable*)ok);
+            if (had != (String*)0 && !had.equals(t)) return text;
+            type.set((Hashable*)ok, (Object*)t);
+            if (st) stored.set((Hashable*)ok, (Object*)ok);
+            uses = uses + (u32)1;
+            i = i + (u32)1;
+            }
+        // Every mention of %stp and of each field address must be one of those.
+        u32 stpSeen = (u32)0;
+        u32 addrSeen = (u32)0;
+        for (u32 li = (u32)0; li < nl; li = li + (u32)1)
+            {
+            String* ln = (String*)lines.get(li);
+            // A declaration is not a use.
+            if (copyLines.get((Hashable*)String.withU32(li)) != (Object*)0 || ln.hasPrefix(String.withCString("\t.reg "))
+                || ln.equals(String.withCString("\tmov.u64 %stp, st;")))
+                continue;
+            if (ln.contains(String.withCString("%stp"))) stpSeen = stpSeen + (u32)1;
+            for (u32 ai = (u32)0; ai < addrNames.count(); ai = ai + (u32)1)
+                {
+                String* a = (String*)addrNames.get(ai);
+                u32 r = ln.byteIndexOf(a);
+                while (r != String.notFound())
+                    {
+                    u32 e = r + a.byteLength();
+                    if (e >= ln.byteLength() || !Lower.ptxIdentChar(ln.byteAt(e))) addrSeen = addrSeen + (u32)1;
+                    if (e >= ln.byteLength()) break;
+                    r = ln.byteIndexOf(a, e);
+                    }
+                }
+            }
+        u32 direct = (u32)0;
+        u32 through = (u32)0;
+        for (u32 li = (u32)0; li < nl; li = li + (u32)1)
+            {
+            String* ln = (String*)lines.get(li);
+            if (ln.hasPrefix(String.withCString("\tld.local.")) || ln.hasPrefix(String.withCString("\tst.local.")))
+                {
+                if (ln.contains(String.withCString("[%stp"))) direct = direct + (u32)1;
+                else through = through + (u32)1;
+                }
+            }
+        direct = direct - nCopy / (u32)2;
+        if (stpSeen != nDef + direct || addrSeen != nDef + through || uses != direct + through) return text;
+        // Only a field the kernel writes lives in a register (the reference).
+        Array* offs = new Array();
+        Array* keys = type.allKeys();
+        for (u32 k = (u32)0; k < keys.count(); k = k + (u32)1)
+            {
+            String* key = (String*)keys.get(k);
+            if (stored.get((Hashable*)key) == (Object*)0) continue;
+            u32 v = (u32)Lower.ptxDigits(key, (u32)0);
+            u32 at = offs.count();
+            while (at > (u32)0 && (u32)Lower.ptxDigits((String*)offs.get(at - (u32)1), (u32)0) > v)
+                at = at - (u32)1;
+            offs.insert(at, (Object*)key);
+            }
+        String* out = String.withCString("");
+        for (u32 li = (u32)0; li < nl; li = li + (u32)1)
+            {
+            String* ln = (String*)lines.get(li);
+            if (copyLines.get((Hashable*)String.withU32(li)) != (Object*)0 || defLines.get((Hashable*)String.withU32(li)) != (Object*)0)
+                continue;
+            if (ln.hasPrefix(String.withCString("\t.local .align 8 .b8 st[")))
+                {
+                for (u32 k = (u32)0; k < offs.count(); k = k + (u32)1)
+                    {
+                    String* o = (String*)offs.get(k);
+                    out.appendCString("\t.reg ."); out.append(Lower.ptxFieldReg((String*)type.get((Hashable*)o)));
+                    out.appendCString(" %fd"); out.append(o); out.appendCString(";\n");
+                    }
+                continue;
+                }
+            if (ln.equals(String.withCString("\tmov.u64 %stp, st;")))
+                {
+                for (u32 k = (u32)0; k < offs.count(); k = k + (u32)1)
+                    {
+                    String* o = (String*)offs.get(k);
+                    out.appendCString("\tld.param."); out.append((String*)type.get((Hashable*)o));
+                    out.appendCString(" %fd"); out.append(o); out.appendCString(", [args+"); out.append(o); out.appendCString("];\n");
+                    }
+                continue;
+                }
+            bool ld = ln.hasPrefix(String.withCString("\tld.local."));
+            bool st = ln.hasPrefix(String.withCString("\tst.local."));
+            if (ld || st)
+                {
+                u32 sp = ln.indexOfByte((u8)' ');
+                String* t = ln.substringBytes((u32)10, sp - (u32)10);
+                u32 lb = ln.indexOfByte((u8)'[');
+                u32 rb = ln.indexOfByte((u8)']');
+                String* o = String.withU32((u32)Lower.ptxFieldAt(ln.substringBytes(lb + (u32)1, rb - lb - (u32)1), addr));
+                String* mt = Lower.ptxFieldReg(t);
+                if (ld)
+                    {
+                    String* r = ln.substringBytes(sp + (u32)1, lb - (u32)2 - sp - (u32)1);
+                    if (stored.get((Hashable*)o) != (Object*)0)
+                        {
+                        out.appendCString("\tmov."); out.append(mt); out.appendCString(" "); out.append(r);
+                        out.appendCString(", %fd"); out.append(o); out.appendCString(";\n");
+                        }
+                    else
+                        {
+                        out.appendCString("\tld.param."); out.append(t); out.appendCString(" "); out.append(r);
+                        out.appendCString(", [args+"); out.append(o); out.appendCString("];\n");
+                        }
+                    }
+                else
+                    {
+                    String* r = ln.substringBytes(rb + (u32)3, ln.byteLength() - rb - (u32)4);
+                    out.appendCString("\tmov."); out.append(mt); out.appendCString(" %fd"); out.append(o);
+                    out.appendCString(", "); out.append(r); out.appendCString(";\n");
+                    }
+                continue;
+                }
+            out.append(ln);
+            if (li + (u32)1 < nl) out.appendCString("\n");
+            }
+        return out;
+        }
+
     // A printed helper as a block inside the caller (the reference explains;
     // bug 645).
     static String* ptxInline(String* text, u32 serial, Array* args, String* result)
@@ -17247,6 +17456,7 @@ class ClassInfo
             out.append(tail);
             }
         out.appendCString("DONE:\n\tret;\n}\n");
+        if (byval) return Lower.ptxScalarReplace(out);
         return out;
         }
 
