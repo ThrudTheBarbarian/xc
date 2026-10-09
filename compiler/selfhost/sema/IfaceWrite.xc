@@ -51,6 +51,16 @@ class IfaceWrite
     static Object* answeringSlot(Node* program, Vtable* vt, Node* c, Node* m)
     {
         if (vt == (Vtable*)0) return (Object*)0;
+        // A method can be a root with a slot of its own AND an override of a
+        // root above it: the override scan records the NEAREST ancestor a
+        // subclass overrides, so in a three-deep chain the middle class's
+        // method gets both (every par block class does this to
+        // ParChunk.description). It then fills two slots of its class's table,
+        // and the reference publishes the HIGHER — its label map is written in
+        // ascending slot order, last write wins. FILE.description: own 0,
+        // Object's 7, publishes 7; ParChunk.description: own 4, Object's 0,
+        // publishes 4 (bug 648).
+        Object* own = vt.slotForLabel(Vtable.label(c.name(), m));
         Object* best = (Object*)0;
         Node* a = c;
         Node* am = m;
@@ -65,6 +75,8 @@ class IfaceWrite
             a = p; am = pm;
             guard = guard + (u32)1;
         }
+        if (own != (Object*)0 && (best == (Object*)0 || ((Number*)own).asU32() > ((Number*)best).asU32()))
+            best = own;
         // TOPMOST match, not the nearest. Returning the FIRST hit instead was
         // tried and MEASURED: ifacewrite-diff went 3 failures -> 15, breaking
         // the whole `class_inherit_*` family. The reference's rule is neither
