@@ -237,12 +237,14 @@ class ParCuda
             u32 at = (u32)2;
             for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
                 {
-                _toHost(*(pointer*)(obj + l.bufOff[i]), dev[at], (u64)l.bufLen[i]);
+                if (l.bufIn[i] == (i64)0)
+                    _toHost(*(pointer*)(obj + l.bufOff[i]), dev[at], (u64)l.bufLen[i]);
                 at = at + (u32)1;
                 }
             for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
                 {
-                _toHost(l.globPtr[i], dev[at], (u64)l.globLen[i]);
+                if (l.globIn[i] == (i64)0)
+                    _toHost(l.globPtr[i], dev[at], (u64)l.globLen[i]);
                 at = at + (u32)1;
                 }
             u8* parts[16];

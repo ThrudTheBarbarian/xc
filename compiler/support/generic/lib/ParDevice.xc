@@ -106,6 +106,9 @@ class ParLayout : Object
     // 1: the kernel overwrites the whole global, so nothing need be copied to
     // the device before it runs; it still comes back (gpuWritesAll, bug 645).
     i64 globOut[16];
+    // 1: the body only reads the global / buffer k, so it is not copied back.
+    i64 globIn[16];
+    i64 bufIn[16];
     u32 nglob;
     i64 redOff[16];
     i64 redSize[16];
@@ -712,6 +715,7 @@ class ParDevice
                 at = at + (u32)1;
                 num(src, &at);
                 l.bufLen[k] = proto.gpuLength((i32)ivar);
+                l.bufIn[k] = proto.gpuReadsOnly((i32)ivar) ? (i64)1 : (i64)0;
                 if (l.bufLen[k] < (i64)0)
                     {
                     cpu("it uses an array whose size is not known");
@@ -746,6 +750,7 @@ class ParDevice
                 // Only when this run's range is the whole array: the body
                 // writes element i for each i in it, and nothing else.
                 l.globOut[k] = (i64)0;
+                l.globIn[k] = proto.gpuReadsOnlyGlobal(&gname[0]) ? (i64)1 : (i64)0;
                 if (proto.gpuWritesAll(&gname[0]) && lo == (i64)0 && (hi - lo) * elem >= l.globLen[k])
                     l.globOut[k] = (i64)1;
                 l.nglob = k + (u32)1;

@@ -912,10 +912,74 @@ NS_ASSUME_NONNULL_END
 \****************************************************************************/
 - (void)parNoteWriteTarget:(nullable XTASTNode*)target
     {
+    [self parNoteMemoryWrite:target];
     NSMutableDictionary* frame = [self blkFrames].lastObject;
     if (!frame[@"par"] || ![target isKindOfClass:[XTIdentifierNode class]])
         return;
     [frame[@"written"] addObject:((XTIdentifierNode*)target).identName];
+    }
+
+/****************************************************************************\
+|* The name an element access is rooted at: `a` for a[i], a[i][j], a[i].f.
+\****************************************************************************/
+static NSString* parRootName(XTASTNode* n)
+    {
+    while (n)
+        {
+        if ([n isKindOfClass:[XTIdentifierNode class]])
+            return ((XTIdentifierNode*)n).identName;
+        if ([n isKindOfClass:[XTSubscriptExprNode class]])
+            n = ((XTSubscriptExprNode*)n).base;
+        else if ([n isKindOfClass:[XTMemberAccessNode class]] && !((XTMemberAccessNode*)n).isArrow)
+            n = ((XTMemberAccessNode*)n).base;
+        else
+            return nil;
+        }
+    return nil;
+    }
+
+/****************************************************************************\
+|* What a `par` body does with each array, so the GPU runtime can leave out a
+|* copy (bug 645). `subBase` counts the uses of a name as the base of a
+|* subscript; `memWritten` holds the names an element of which is assigned or
+|* has its address taken. An array every one of whose uses is an element read
+|* (refs == subBase, not in memWritten) is only read: it need not come back.
+\****************************************************************************/
+- (void)parNoteSubscriptBase:(XTASTNode*)base
+    {
+    if (![base isKindOfClass:[XTIdentifierNode class]])
+        return;
+    NSString* name = ((XTIdentifierNode*)base).identName;
+    for (NSMutableDictionary* f in [self blkFrames])
+        if ([f[@"par"] boolValue])
+            {
+            NSMutableDictionary* sb = f[@"subBase"];
+            if (!sb)
+                f[@"subBase"] = sb = [NSMutableDictionary dictionary];
+            sb[name] = @([sb[name] unsignedIntegerValue] + 1);
+            }
+    }
+
+- (void)parNoteMemoryWrite:(nullable XTASTNode*)target
+    {
+    if ([target isKindOfClass:[XTIdentifierNode class]])
+        return; // a bare name: parNoteWriteTarget's business
+    NSString* root = parRootName(target);
+    if (!root)
+        return;
+    for (NSMutableDictionary* f in [self blkFrames])
+        if ([f[@"par"] boolValue])
+            {
+            NSMutableSet* mw = f[@"memWritten"];
+            if (!mw)
+                f[@"memWritten"] = mw = [NSMutableSet set];
+            [mw addObject:root];
+            }
+    }
+
+- (void)parNoteAddressOf:(XTASTNode*)operand
+    {
+    [self parNoteMemoryWrite:operand];
     }
 
 /****************************************************************************\
@@ -1306,6 +1370,11 @@ NS_ASSUME_NONNULL_END
                                                              body:[[XTBlockNode alloc] initWithStatements:st location:loc]
                                                          location:loc]];
         }
+    // Only read by the body: every use an element read (parNoteSubscriptBase).
+    BOOL (^readsOnly)(NSString*) = ^BOOL(NSString* n) {
+        NSUInteger r = [frame[@"refs"][n] unsignedIntegerValue];
+        return r > 0 && r == [frame[@"subBase"][n] unsignedIntegerValue] && ![frame[@"memWritten"] containsObject:n];
+    };
     // gpuLength(k): the byte length of own ivar k when it is a captured array
     // (a GPU buffer), else -1. The GPU runtime sizes its buffers from this.
         {
@@ -1346,6 +1415,40 @@ NS_ASSUME_NONNULL_END
                                                        parameters:@[ p ] isStatic:NO isVarArgs:NO
                                                              body:[[XTBlockNode alloc] initWithStatements:st location:loc]
                                                          location:loc]];
+        // gpuReadsOnly(k): own ivar k is a captured array the body only reads,
+        // so the runtime need not copy it back (bug 645).
+        NSMutableArray<XTASTNode*>* ro = [NSMutableArray array];
+        j = 0;
+        for (NSString* cn in caps)
+            {
+            if ([frameTypes[cn] isKindOfClass:[XTArrayType class]] && readsOnly(cn))
+                {
+                XTASTNode* test = [[XTBinaryExprNode alloc]
+                    initWithOp:XTBinaryOpEq
+                          left:ident(@"k")
+                         right:cast(i32T, [[XTLiteralIntNode alloc] initWithValue:(int64_t)j location:loc])
+                      location:loc];
+                XTBlockNode* then = [[XTBlockNode alloc]
+                    initWithStatements:@[ [[XTReturnNode alloc]
+                                             initWithValues:@[ [[XTLiteralBoolNode alloc] initWithBool:YES location:loc] ]
+                                                   location:loc] ]
+                              location:loc];
+                [ro addObject:[[XTIfNode alloc] initWithCondition:test thenBlock:then elseBlock:nil location:loc]];
+                }
+            j++;
+            }
+        if (ro.count > 0)
+            {
+            [ro addObject:[[XTReturnNode alloc]
+                              initWithValues:@[ [[XTLiteralBoolNode alloc] initWithBool:NO location:loc] ]
+                                    location:loc]];
+            XTParamNode* pr = [[XTParamNode alloc] initWithType:i32T name:@"k" location:loc];
+            [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuReadsOnly"
+                                                          returnTypes:@[ [self.typeTable typeForName:@"bool"] ]
+                                                           parameters:@[ pr ] isStatic:NO isVarArgs:NO
+                                                                 body:[[XTBlockNode alloc] initWithStatements:ro location:loc]
+                                                             location:loc]];
+            }
         }
     // gpuGlobal(name) / gpuGlobalBytes(name): where each global the body
     // uses lives and how big it is, by the name the Metal kernel's header
@@ -1361,6 +1464,7 @@ NS_ASSUME_NONNULL_END
         NSMutableArray<XTASTNode*>* addrSt = [NSMutableArray array];
         NSMutableArray<XTASTNode*>* sizeSt = [NSMutableArray array];
         NSMutableArray<XTASTNode*>* wallSt = [NSMutableArray array];
+        NSMutableArray<XTASTNode*>* roSt = [NSMutableArray array];
         XTBlockNode* loopBody = [loop.body isKindOfClass:[XTBlockNode class]] ? (XTBlockNode*)loop.body : nil;
         for (NSString* g in globs)
             {
@@ -1417,6 +1521,15 @@ NS_ASSUME_NONNULL_END
                         && [((XTIdentifierNode*)sub.index).identName isEqualToString:iv.varName])
                         wall = YES;
                     }
+            if ([topVars[g] isKindOfClass:[XTArrayType class]] && readsOnly(g))
+                {
+                XTBlockNode* thenR = [[XTBlockNode alloc]
+                    initWithStatements:@[ [[XTReturnNode alloc]
+                                             initWithValues:@[ [[XTLiteralBoolNode alloc] initWithBool:YES location:loc] ]
+                                                   location:loc] ]
+                              location:loc];
+                [roSt addObject:[[XTIfNode alloc] initWithCondition:isName() thenBlock:thenR elseBlock:nil location:loc]];
+                }
             if (wall)
                 {
                 XTBlockNode* thenW = [[XTBlockNode alloc]
@@ -1447,6 +1560,18 @@ NS_ASSUME_NONNULL_END
                                                        parameters:@[ pb ] isStatic:NO isVarArgs:NO
                                                              body:[[XTBlockNode alloc] initWithStatements:sizeSt location:loc]
                                                          location:loc]];
+        if (roSt.count > 0)
+            {
+            [roSt addObject:[[XTReturnNode alloc]
+                                initWithValues:@[ [[XTLiteralBoolNode alloc] initWithBool:NO location:loc] ]
+                                      location:loc]];
+            XTParamNode* pg = [[XTParamNode alloc] initWithType:u8p name:@"name" location:loc];
+            [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuReadsOnlyGlobal"
+                                                          returnTypes:@[ [self.typeTable typeForName:@"bool"] ]
+                                                           parameters:@[ pg ] isStatic:NO isVarArgs:NO
+                                                                 body:[[XTBlockNode alloc] initWithStatements:roSt location:loc]
+                                                             location:loc]];
+            }
         if (wallSt.count > 0)
             {
             [wallSt addObject:[[XTReturnNode alloc]

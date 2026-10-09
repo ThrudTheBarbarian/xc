@@ -87,6 +87,16 @@ class ParChunk : Object
         {
         return false;
         }
+    // Generated too: true for own ivar k / the named global when the body only
+    // reads that array, so it need not be copied back.
+    bool gpuReadsOnly(i32 k)
+        {
+        return false;
+        }
+    bool gpuReadsOnlyGlobal(u8* name)
+        {
+        return false;
+        }
     i64 gpuGlobalBytes(u8* name)
         {
         return (i64)0 - (i64)1;

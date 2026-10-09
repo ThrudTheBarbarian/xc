@@ -2219,8 +2219,69 @@ class Parser
     }
 
     // A write to a bare name inside a `par` body, recorded on the par frame.
+    // The name an element access is rooted at: `a` for a[i], a[i][j], a[i].f.
+    static String* parRootName(Node* n)
+    {
+        while (n != (Node*)0) {
+            if (n.kind() == (u16)nkIdent) return n.name();
+            if (n.kind() == (u16)nkSubscript && n.kidCount() > (u32)0) n = n.kid((u32)0);
+            else if (n.kind() == (u16)nkMember && !n.hasFlag((u32)NF_ARROW) && n.kidCount() > (u32)0) n = n.kid((u32)0);
+            else return (String*)0;
+        }
+        return (String*)0;
+    }
+
+    // What a `par` body does with each array (the reference explains;
+    // bug 645): uses as a subscript base, and element writes.
+    void parNoteSubscriptBase(Node* base)
+    {
+        if (base == (Node*)0 || base.kind() != (u16)nkIdent) return;
+        for (u32 fi = (u32)0; fi < _blkFrames.count(); fi = fi + (u32)1) {
+            Map* pf = (Map*)_blkFrames.get(fi);
+            if (pf.get((Hashable*)String.withCString("par")) == (Object*)0) continue;
+            Map* sb = (Map*)pf.get((Hashable*)String.withCString("subBase"));
+            if (sb == (Map*)0) {
+                sb = new Map();
+                pf.set((Hashable*)String.withCString("subBase"), (Object*)sb);
+            }
+            Number* had = (Number*)sb.get((Hashable*)base.name());
+            u32 c = had == (Number*)0 ? (u32)0 : had.asU32();
+            sb.set((Hashable*)String.withString(base.name()), (Object*)Number.withU32(c + (u32)1));
+        }
+    }
+
+    void parNoteMemoryWrite(Node* t)
+    {
+        if (t == (Node*)0 || t.kind() == (u16)nkIdent) return;
+        String* root = Parser.parRootName(t);
+        if (root == (String*)0) return;
+        for (u32 fi = (u32)0; fi < _blkFrames.count(); fi = fi + (u32)1) {
+            Map* pf = (Map*)_blkFrames.get(fi);
+            if (pf.get((Hashable*)String.withCString("par")) == (Object*)0) continue;
+            Set* mw = (Set*)pf.get((Hashable*)String.withCString("memWritten"));
+            if (mw == (Set*)0) {
+                mw = new Set();
+                pf.set((Hashable*)String.withCString("memWritten"), (Object*)mw);
+            }
+            mw.add((Hashable*)String.withString(root));
+        }
+    }
+
+    // Only read by the body: every use an element read (the reference).
+    static bool parReadsOnly(Map* frame, String* n)
+    {
+        Map* refs = (Map*)frame.get((Hashable*)String.withCString("refs"));
+        Map* sb = (Map*)frame.get((Hashable*)String.withCString("subBase"));
+        Set* mw = (Set*)frame.get((Hashable*)String.withCString("memWritten"));
+        Number* r = refs != (Map*)0 ? (Number*)refs.get((Hashable*)n) : (Number*)0;
+        Number* b = sb != (Map*)0 ? (Number*)sb.get((Hashable*)n) : (Number*)0;
+        if (r == (Number*)0 || b == (Number*)0 || r.asU32() == (u32)0 || r.asU32() != b.asU32()) return false;
+        return mw == (Set*)0 || !mw.contains((Hashable*)n);
+    }
+
     void parNoteWrite(Node* t)
     {
+        parNoteMemoryWrite(t);
         if (t == 0 || _blkFrames.count() == (u32)0) return;
         Map* frame = (Map*)_blkFrames.get(_blkFrames.count() - (u32)1);
         if (frame.get((Hashable*)String.withCString("par")) == 0) return;
@@ -2673,6 +2734,42 @@ class Parser
             b.add(none);
             m.add(b);
             cls.add(m);
+            // gpuReadsOnly(k): own ivar k is a captured array the body only
+            // reads (the reference explains; bug 645).
+            Node* bro = mk((u16)nkBlock);
+            u32 nro = (u32)0;
+            for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
+                String* cn = (String*)caps.get(i);
+                String* t = (String*)frameTypes.get((Hashable*)cn);
+                if (t == (String*)0 || t.indexOfByte((u8)'[') == (u32)$FFFFFFFF || !Parser.parReadsOnly(frame, cn))
+                    continue;
+                Node* n = mk((u16)nkIf);
+                n.add(parBin("==", parIdent(String.withCString("k")),
+                             parCast(String.withCString("i32"), parInt((i64)i))));
+                Node* then = mk((u16)nkBlock);
+                Node* ret = mk((u16)nkReturn);
+                Node* tv = mk((u16)nkBool);
+                tv.setNum((i64)1);
+                ret.add(tv);
+                then.add(ret);
+                n.add(then);
+                bro.add(n);
+                nro = nro + (u32)1;
+            }
+            if (nro > (u32)0) {
+                Node* rf = mk((u16)nkReturn);
+                Node* fv = mk((u16)nkBool);
+                fv.setNum((i64)0);
+                rf.add(fv);
+                bro.add(rf);
+                Node* mr = mkNamed((u16)nkMethodDecl, String.withCString("gpuReadsOnly"));
+                mr.setOp(String.withCString("bool"));
+                Node* pr = mkNamed((u16)nkParam, String.withCString("k"));
+                pr.setOp(String.withCString("i32"));
+                mr.add(pr);
+                mr.add(bro);
+                cls.add(mr);
+            }
         }
         // gpuGlobal(name) / gpuGlobalBytes(name): where each global the body
         // uses lives and how big it is, by the name the Metal kernel's header
@@ -2698,6 +2795,8 @@ class Parser
             Node* bb = mk((u16)nkBlock);
             Node* bw = mk((u16)nkBlock);
             u32 nwall = (u32)0;
+            Node* brg = mk((u16)nkBlock);
+            u32 nrg = (u32)0;
             Map* refs = (Map*)frame.get((Hashable*)String.withCString("refs"));
             bool mayWall = gridDecls.count() == (u32)0 && frame.get((Hashable*)String.withCString("exits")) == (Object*)0
                 && !written.contains((Hashable*)iv.name()) && refs != (Map*)0;
@@ -2722,6 +2821,19 @@ class Parser
                             && sub.kid((u32)1).kind() == (u16)nkIdent && sub.kid((u32)1).name().equals(iv.name()))
                             wall = true;
                     }
+                if (gt.indexOfByte((u8)'[') != (u32)$FFFFFFFF && Parser.parReadsOnly(frame, g)) {
+                    Node* ifR = mk((u16)nkIf);
+                    ifR.add(parSameNameCall(g));
+                    Node* thenR = mk((u16)nkBlock);
+                    Node* retR = mk((u16)nkReturn);
+                    Node* rv = mk((u16)nkBool);
+                    rv.setNum((i64)1);
+                    retR.add(rv);
+                    thenR.add(retR);
+                    ifR.add(thenR);
+                    brg.add(ifR);
+                    nrg = nrg + (u32)1;
+                }
                 if (wall) {
                     Node* ifW = mk((u16)nkIf);
                     ifW.add(parSameNameCall(g));
@@ -2791,6 +2903,20 @@ class Parser
             bb.add(noneB);
             mb.add(bb);
             cls.add(mb);
+            if (nrg > (u32)0) {
+                Node* noneR = mk((u16)nkReturn);
+                Node* fr = mk((u16)nkBool);
+                fr.setNum((i64)0);
+                noneR.add(fr);
+                brg.add(noneR);
+                Node* mg = mkNamed((u16)nkMethodDecl, String.withCString("gpuReadsOnlyGlobal"));
+                mg.setOp(String.withCString("bool"));
+                Node* pg = mkNamed((u16)nkParam, String.withCString("name"));
+                pg.setOp(String.withCString("u8*"));
+                mg.add(pg);
+                mg.add(brg);
+                cls.add(mg);
+            }
             if (nwall > (u32)0) {
                 Node* noneW = mk((u16)nkReturn);
                 Node* fv = mk((u16)nkBool);
@@ -3832,6 +3958,7 @@ class Parser
             if (isPointerSigil(op.type())) n.setOp(String.withCString("*"));
             else                           n.setOp(op.value());
             Node* opnd = parseUnary();
+            if (op.type() == (u16)tokAmpersand) parNoteMemoryWrite(opnd);
             if (op.type() == (u16)tokPlusPlus || op.type() == (u16)tokMinusMinus) parNoteWrite(opnd);
             n.add(opnd);
             return n;
@@ -3893,6 +4020,7 @@ class Parser
                 // `a[..hi]` and `a[lo..]` both carry ONE bound and a missing
                 // child is simply absent, so the open-LOW form says so itself.
                 if (isSlice && startE == 0) n.addFlag((u32)NF_RANGE_HI);
+                if (!isSlice) parNoteSubscriptBase(node);
                 n.add(node);
                 n.add(startE);
                 n.add(endE);

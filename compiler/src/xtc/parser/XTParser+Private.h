@@ -79,6 +79,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSMutableArray*)blkFrames;
 - (void)parNoteWriteTarget:(nullable XTASTNode*)target;
 - (void)parNoteExit;
+- (void)parNoteSubscriptBase:(XTASTNode*)base;
+- (void)parNoteAddressOf:(XTASTNode*)operand;
 - (nullable XTASTNode*)parGridMemberAt:(XTSourceLocation*)loc;
 - (void)parGridLoop:(int)delta;
 - (void)parGridSwitch:(int)delta;

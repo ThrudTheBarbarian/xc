@@ -848,12 +848,14 @@ class ParVulkan
             b = (u32)1;
             for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
                 {
-                memcpy(*(pointer*)(obj + l.bufOff[i]), (pointer)maps[b], (u64)l.bufLen[i]);
+                if (l.bufIn[i] == (i64)0)
+                    memcpy(*(pointer*)(obj + l.bufOff[i]), (pointer)maps[b], (u64)l.bufLen[i]);
                 b = b + (u32)1;
                 }
             for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
                 {
-                memcpy(l.globPtr[i], (pointer)maps[b], (u64)l.globLen[i]);
+                if (l.globIn[i] == (i64)0)
+                    memcpy(l.globPtr[i], (pointer)maps[b], (u64)l.globLen[i]);
                 b = b + (u32)1;
                 }
             u8* parts[16];

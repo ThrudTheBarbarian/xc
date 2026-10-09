@@ -343,7 +343,9 @@ static XTOpInfo operatorInfo(XTTokenType type)
     if (cur.type == XTTokenAmpersand)
         {
         [self advance];
-        return [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpAddrOf operand:[self parseUnary] location:cur.location];
+        XTASTNode* operand = [self parseUnary];
+        [self parNoteAddressOf:operand];
+        return [[XTUnaryExprNode alloc] initWithOp:XTUnaryOpAddrOf operand:operand location:cur.location];
         }
     if (cur.type == XTTokenAt || cur.type == XTTokenStar)
         {
@@ -480,6 +482,7 @@ static XTOpInfo operatorInfo(XTTokenType type)
                 }
             else
                 {
+                [self parNoteSubscriptBase:base];
                 base = [[XTSubscriptExprNode alloc] initWithBase:base index:startExpr location:lbLoc];
                 }
             }

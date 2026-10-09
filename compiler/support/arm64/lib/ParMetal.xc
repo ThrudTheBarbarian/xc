@@ -182,7 +182,9 @@ class ParMetal
             }
         pointer globs[16];
         for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
-            globs[i] = withBytes(_dev, sel("newBufferWithBytes:length:options:"), l.globPtr[i], (u64)l.globLen[i], (u64)0);
+            globs[i] = l.globOut[i] != (i64)0
+                           ? withLen(_dev, sel("newBufferWithLength:options:"), (u64)l.globLen[i], (u64)0)
+                           : withBytes(_dev, sel("newBufferWithBytes:length:options:"), l.globPtr[i], (u64)l.globLen[i], (u64)0);
         for (u32 i = (u32)0; i < nred; i = i + (u32)1)
             reds[i] = withLen(_dev, sel("newBufferWithLength:options:"), (u64)(l.nparts * l.redStride[i]), (u64)0);
 
@@ -235,12 +237,14 @@ class ParMetal
         for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
             {
             pointer host = *(pointer*)(obj + l.bufOff[i]);
-            memcpy(host, send0(bufs[i], sel("contents")), (u64)l.bufLen[i]);
+            if (l.bufIn[i] == (i64)0)
+                memcpy(host, send0(bufs[i], sel("contents")), (u64)l.bufLen[i]);
             send0(bufs[i], sel("release"));
             }
         for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
             {
-            memcpy(l.globPtr[i], send0(globs[i], sel("contents")), (u64)l.globLen[i]);
+            if (l.globIn[i] == (i64)0)
+                memcpy(l.globPtr[i], send0(globs[i], sel("contents")), (u64)l.globLen[i]);
             send0(globs[i], sel("release"));
             }
         u8* parts[16];
