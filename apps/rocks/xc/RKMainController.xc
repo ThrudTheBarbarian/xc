@@ -118,6 +118,7 @@ class RKMainController : Object<UXTableDelegate>
     bool dragging;
     bool resizingForm; // a form-handle drag is in progress (one undo snapshot per drag)
     bool syncingSelection; // set while the canvas drives the outline's selection (the change it fires is then ignored)
+    bool turnHooked;       // the app's frame clock is registered (for the Size tab's preview)
 
     // ---- state -------------------------------------------------------------
     // Deliberately not a view: the controller owns MODEL state and asks the
@@ -198,6 +199,7 @@ class RKMainController : Object<UXTableDelegate>
         selTop = (i32)0;
         overlay.placeAt = &self.placeAt;
         overlay.setFormResized(&self.onFormResized);
+        overlay.hovered = &self.onCanvasHover;
         overlay.deleteKey = &self.deleteSelection;
         deviceBar = (UXSegmentedControl*)0;
         inspectorTabs = (UXSegmentedControl*)0;
@@ -209,6 +211,7 @@ class RKMainController : Object<UXTableDelegate>
         dragging = false;
         resizingForm = false;
         syncingSelection = false;
+        turnHooked = false;
         lastSaid = (Data*)0;
         formOutline = (UXOutlineView*)0;
         canvas = (UXView*)0;
@@ -1962,6 +1965,42 @@ class RKMainController : Object<UXTableDelegate>
             }
         }
 
+    // ---- the Size tab's moving preview --------------------------------------
+    // It runs while the designer is plausibly looking at it, as Interface Builder's does: the Size
+    // tab is showing AND the pointer is over the selected control (or over the preview itself, which
+    // the preview reports on its own).  A pointer move feeds this; the app's frame clock ticks it.
+    void onCanvasHover(i32 cx, i32 cy)
+        {
+        self.hookTurn();
+        if (sizeCtl.autoPreview == (RKAutoPreview*)0)
+            {
+            return;
+            }
+        bool sizeShown = self.shownTab() == (i32)RKIS_SIZE;
+        bool overSel = selected != (UXRscObject*)0 &&
+                       cx >= selected.x && cy >= selected.y &&
+                       cx < selected.x + selected.w && cy < selected.y + selected.h;
+        sizeCtl.autoPreview.setRunning(sizeShown && overSel);
+        }
+    // Register the frame clock once, so the preview can advance while the run loop is idle.
+    void hookTurn(void)
+        {
+        if (turnHooked || gApp == (UXApplication*)0)
+            {
+            return;
+            }
+        turnHooked = true;
+        gAutoPreviewOwner = (pointer)self;
+        gApp.everyTurn(&rkAutoPreviewTurn, (i32)60);
+        }
+    void tickPreview(void)
+        {
+        if (sizeCtl.autoPreview != (RKAutoPreview*)0 && sizeCtl.autoPreview.isRunning())
+            {
+            sizeCtl.autoPreview.tick();
+            }
+        }
+
     // One step of a live drag.  The widget and the frame move; the INSPECTOR
     // does not, because rebuilding its rows mid-drag would throw away the very
     // fields the designer is about to read.  It catches up on release.
@@ -2239,5 +2278,16 @@ class RKMainController : Object<UXTableDelegate>
             {
             statusLabel.setText(msg);
             }
+        }
+    }
+
+// The Size tab's preview animates on the app's frame clock, and turnHook_t is a PLAIN function
+// pointer, not a bound method: the owner is kept here and called on each turn.
+pointer gAutoPreviewOwner;
+void rkAutoPreviewTurn(void)
+    {
+    if (gAutoPreviewOwner != (pointer)0)
+        {
+        ((RKMainController*)gAutoPreviewOwner).tickPreview();
         }
     }

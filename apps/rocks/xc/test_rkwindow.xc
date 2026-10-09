@@ -98,6 +98,20 @@ void main(void)
     // The canvas and the left list are ONE selection: selecting on the canvas highlights its row.
     checkTrue("the selected control's outline row is visible", c.outlineRowFor(ok) >= (i32)0);
     check("...and it is the outline's selected row", c.formOutline.selection(), c.outlineRowFor(ok));
+    // The Size tab's moving preview: built for the selected control, and its frame math follows the
+    // mask through the toolkit's own solver (the same one the real layout uses).
+    checkTrue("the Size tab has a moving preview", c.sizeCtl.autoPreview != (RKAutoPreview*)0);
+    UXRect pin = RKAutoPreview.frameFor((i32)100, (i32)100, UXGeom.make((i16)10, (i16)10, (i16)20, (i16)20),
+                                        (i32)140, (i32)140, (i32)(UX_ANCHOR_LEFT | UX_ANCHOR_TOP));
+    check("a pinned control keeps its x", (i32)pin.x, (i32)10);
+    check("...and its width", (i32)pin.w, (i32)20);
+    UXRect flex = RKAutoPreview.frameFor((i32)100, (i32)100, UXGeom.make((i16)10, (i16)10, (i16)20, (i16)20),
+                                         (i32)140, (i32)140,
+                                         (i32)(UX_ANCHOR_LEFT | UX_ANCHOR_TOP | UX_FLEX_WIDTH | UX_FLEX_HEIGHT));
+    check("a stretching control grows with the parent", (i32)flex.w, (i32)60);
+    UXRect far = RKAutoPreview.frameFor((i32)100, (i32)100, UXGeom.make((i16)10, (i16)10, (i16)20, (i16)20),
+                                        (i32)140, (i32)140, (i32)(UX_ANCHOR_RIGHT | UX_ANCHOR_BOTTOM));
+    check("a right-anchored control follows the far edge", (i32)far.x, (i32)50);
 
     Stdio.printf("-- the library\n");
     check("every item is listed", c.library.count(), (i32)24);

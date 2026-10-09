@@ -25,6 +25,7 @@
 #import "RKProps.xc"
 #import "UXPopUpButton.xc"
 #import "RKCanvas.xc"
+#import "RKAutoPreview.xc"
 
 // One rendered row: the descriptor it edits, and the widget editing it.
 class RKRow : Object
@@ -82,6 +83,7 @@ class RKRow : Object
     // Populating a field fires its change hook, which would write a
     // half-written value straight back into the model.
     bool loading;
+    RKAutoPreview* autoPreview; // the Size tab's moving preview (0 when that tab was not built)
 
     void init(void)
         {
@@ -99,6 +101,7 @@ class RKRow : Object
         doc = (UXRscDoc*)0;
         tree = (UXRscTree*)0;
         loading = false;
+        autoPreview = (RKAutoPreview*)0;
         }
 
     void attach(UXView* p, UXLabel* tl)
@@ -326,6 +329,15 @@ class RKRow : Object
                     {
                     y = (i16)((i32)y + (i32)rh + (i32)gap);
                     }
+                }
+            // The moving preview, on the Size tab only: the box above, being resized while you look
+            // at it.  The controller drives whether it runs (hover over it, or over the control).
+            if (section == (i32)RKIS_SIZE)
+                {
+                RKAutoPreview* pv = new RKAutoPreview();
+                pv.setMask(mask);
+                pane.addSubview(pv, UXGeom.make((i16)8, y, (i16)((i32)w - (i32)16), (i16)84));
+                self.autoPreview = pv;
                 }
             }
         // a UXKit control's settings, which live in the document's attributes
