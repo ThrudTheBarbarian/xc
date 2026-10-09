@@ -38,8 +38,17 @@ pointer gParCuFn[64];
 u32 gParCuKernels;
 // Each kernel parameter slot's device memory from the last runs, and its size
 // (see upload).
+i32 memcmp(pointer a, pointer b, u64 n);
 u64 gParCuDev[52];
 i64 gParCuCap[52];
+// What slot k's device memory holds when a kernel that only reads it put it
+// there: the host address, its length and a copy of the bytes (bug 645). The
+// next upload of the same bytes from the same place is left out. Any other
+// upload to the slot clears it, so the device copy is only trusted while
+// nothing else has written there.
+pointer gParCuShadowHost[52];
+i64 gParCuShadowLen[52];
+u8* gParCuShadow[52];
 
 class ParCuda
     {
@@ -143,6 +152,24 @@ class ParCuda
     // big enough, as allocating device memory costs more than most blocks.
     static u64 upload(u32 k, pointer host, i64 bytes)
         {
+        return uploadKeeping(k, host, bytes, false);
+        }
+
+    // As upload, for data the kernel only reads: up to 64 KB of it is
+    // remembered, and not sent again while it has not changed.
+    static u64 uploadKeeping(u32 k, pointer host, i64 bytes, bool readOnly)
+        {
+        bool keep = readOnly && host != (pointer)0 && bytes > (i64)0 && bytes <= (i64)65536;
+        if (keep && gParCuDev[k] != (u64)0 && gParCuShadow[k] != (u8*)0 && gParCuShadowHost[k] == host &&
+            gParCuShadowLen[k] == bytes && memcmp((pointer)gParCuShadow[k], host, (u64)bytes) == (i32)0)
+            return gParCuDev[k];
+        if (gParCuShadow[k] != (u8*)0)
+            {
+            free((pointer)gParCuShadow[k]);
+            gParCuShadow[k] = (u8*)0;
+            gParCuShadowHost[k] = (pointer)0;
+            gParCuShadowLen[k] = (i64)0;
+            }
         if (gParCuDev[k] == (u64)0 || gParCuCap[k] < bytes)
             {
             if (gParCuDev[k] != (u64)0)
@@ -157,6 +184,16 @@ class ParCuda
             }
         if (host != (pointer)0)
             _toDevice(gParCuDev[k], host, (u64)bytes);
+        if (keep)
+            {
+            gParCuShadow[k] = (u8*)malloc((u64)bytes);
+            if (gParCuShadow[k] != (u8*)0)
+                {
+                memcpy((pointer)gParCuShadow[k], host, (u64)bytes);
+                gParCuShadowHost[k] = host;
+                gParCuShadowLen[k] = bytes;
+                }
+            }
         return gParCuDev[k];
         }
 
@@ -197,12 +234,12 @@ class ParCuda
         nd = nd + (u32)1;
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
-            dev[nd] = upload(nd, *(pointer*)(obj + l.bufOff[i]), l.bufLen[i]);
+            dev[nd] = uploadKeeping(nd, *(pointer*)(obj + l.bufOff[i]), l.bufLen[i], l.bufIn[i] != (i64)0);
             nd = nd + (u32)1;
             }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             {
-            dev[nd] = upload(nd, l.globOut[i] != (i64)0 ? (pointer)0 : l.globPtr[i], l.globLen[i]);
+            dev[nd] = uploadKeeping(nd, l.globOut[i] != (i64)0 ? (pointer)0 : l.globPtr[i], l.globLen[i], l.globIn[i] != (i64)0);
             nd = nd + (u32)1;
             }
         for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)
