@@ -202,7 +202,7 @@ class ParCuda
             }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             {
-            dev[nd] = upload(nd, l.globPtr[i], l.globLen[i]);
+            dev[nd] = upload(nd, l.globOut[i] != (i64)0 ? (pointer)0 : l.globPtr[i], l.globLen[i]);
             nd = nd + (u32)1;
             }
         for (u32 i = (u32)0; i < l.nred; i = i + (u32)1)

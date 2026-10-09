@@ -103,6 +103,9 @@ class ParLayout : Object
     u32 nbuf;
     pointer globPtr[16];
     i64 globLen[16];
+    // 1: the kernel overwrites the whole global, so nothing need be copied to
+    // the device before it runs; it still comes back (gpuWritesAll, bug 645).
+    i64 globOut[16];
     u32 nglob;
     i64 redOff[16];
     i64 redSize[16];
@@ -731,7 +734,7 @@ class ParDevice
                     }
                 gname[n] = (u8)0;
                 at = at + (u32)1;
-                num(src, &at);
+                i64 elem = num(src, &at);
                 u32 k = l.nglob;
                 l.globPtr[k] = proto.gpuGlobal(&gname[0]);
                 l.globLen[k] = proto.gpuGlobalBytes(&gname[0]);
@@ -740,6 +743,11 @@ class ParDevice
                     cpu("it uses a global the block cannot locate");
                     return (ParLayout*)0;
                     }
+                // Only when this run's range is the whole array: the body
+                // writes element i for each i in it, and nothing else.
+                l.globOut[k] = (i64)0;
+                if (proto.gpuWritesAll(&gname[0]) && lo == (i64)0 && (hi - lo) * elem >= l.globLen[k])
+                    l.globOut[k] = (i64)1;
                 l.nglob = k + (u32)1;
                 continue;
                 }

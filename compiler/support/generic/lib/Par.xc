@@ -81,6 +81,12 @@ class ParChunk : Object
         {
         return (pointer)0;
         }
+    // Generated too, for a block that overwrites a global array whole: true
+    // for that global's name, so its old contents need not reach the device.
+    bool gpuWritesAll(u8* name)
+        {
+        return false;
+        }
     i64 gpuGlobalBytes(u8* name)
         {
         return (i64)0 - (i64)1;

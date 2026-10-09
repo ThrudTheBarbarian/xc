@@ -2363,6 +2363,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         }
     case XTTokenReturn:
         {
+        [self parNoteExit];
         XTASTNode* n = [self parseReturn];
         return n ? [self parGridReturn:(XTReturnNode*)n] : nil;
         }
@@ -2371,12 +2372,14 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         [self advance];
         [self expect:XTTokenSemicolon];
         [self parGridBreakAt:cur.location];
+        [self parNoteExit];
         return [[XTBreakNode alloc] initWithLocation:cur.location];
         }
     case XTTokenContinue:
         {
         [self advance];
         [self expect:XTTokenSemicolon];
+        [self parNoteExit];
         return [[XTContinueNode alloc] initWithLocation:cur.location];
         }
     case XTTokenGoto:

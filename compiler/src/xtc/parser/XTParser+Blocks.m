@@ -223,6 +223,18 @@ NS_ASSUME_NONNULL_BEGIN
     if (!frames.count)
         return;
     NSMutableDictionary* frame = frames.lastObject;
+    // Every use of every name, in every enclosing `par` frame (a block
+    // literal inside the body has a frame of its own): a global the body
+    // names exactly once, as the target of its whole-range write, need not
+    // be copied to the device (gpuWritesAll, bug 645).
+    for (NSMutableDictionary* f in frames)
+        if ([f[@"par"] boolValue])
+            {
+            NSMutableDictionary* refs = f[@"refs"];
+            if (!refs)
+                f[@"refs"] = refs = [NSMutableDictionary dictionary];
+            refs[name] = @([refs[name] unsignedIntegerValue] + 1);
+            }
     NSUInteger literalDepth = [frame[@"depth"] unsignedIntegerValue];
     NSUInteger foundDepth = 0;
     NSDictionary* info = [self blkLookup:name depth:&foundDepth];
@@ -907,6 +919,18 @@ NS_ASSUME_NONNULL_END
     }
 
 /****************************************************************************\
+|* A break, continue or return inside a `par` body: every enclosing par frame
+|* notes it, because a body that can leave an iteration early cannot promise
+|* to write every element of anything.
+\****************************************************************************/
+- (void)parNoteExit
+    {
+    for (NSMutableDictionary* f in [self blkFrames])
+        if ([f[@"par"] boolValue])
+            f[@"exits"] = @YES;
+    }
+
+/****************************************************************************\
 |* The innermost capture frame when it is a `par :grid` body's, else nil. A
 |* block literal inside the body has its own frame, so a `return` there is
 |* the literal's.
@@ -1336,6 +1360,8 @@ NS_ASSUME_NONNULL_END
         XTType* ptrT = [self.typeTable typeForName:@"pointer"];
         NSMutableArray<XTASTNode*>* addrSt = [NSMutableArray array];
         NSMutableArray<XTASTNode*>* sizeSt = [NSMutableArray array];
+        NSMutableArray<XTASTNode*>* wallSt = [NSMutableArray array];
+        XTBlockNode* loopBody = [loop.body isKindOfClass:[XTBlockNode class]] ? (XTBlockNode*)loop.body : nil;
         for (NSString* g in globs)
             {
             XTASTNode* (^isName)(void) = ^XTASTNode*(void) {
@@ -1367,6 +1393,39 @@ NS_ASSUME_NONNULL_END
             XTBlockNode* thenS = [[XTBlockNode alloc]
                 initWithStatements:@[ [[XTReturnNode alloc] initWithValues:@[ bytes ] location:loc] ] location:loc];
             [sizeSt addObject:[[XTIfNode alloc] initWithCondition:isName() thenBlock:thenS elseBlock:nil location:loc]];
+            // gpuWritesAll(name): the body overwrites every element of this
+            // array in its range, so the runtime need not copy it to the
+            // device first (bug 645). Only the shape that cannot miss one: a
+            // top-level `g[i] = e;` on the loop variable, the body naming g
+            // nowhere else (so nothing reads it), no way to leave an
+            // iteration early, and i never assigned. The runtime checks the
+            // range covers the whole array.
+            BOOL wall = NO;
+            if (gridDecls.count == 0 && ![frame[@"exits"] boolValue] && ![written containsObject:iv.varName]
+                && [topVars[g] isKindOfClass:[XTArrayType class]]
+                && [frame[@"refs"][g] unsignedIntegerValue] == 1)
+                for (XTASTNode* st in loopBody.statements)
+                    {
+                    XTAssignExprNode* as = [st isKindOfClass:[XTExpressionStatementNode class]]
+                                           && [((XTExpressionStatementNode*)st).expression isKindOfClass:[XTAssignExprNode class]]
+                                               ? (XTAssignExprNode*)((XTExpressionStatementNode*)st).expression : nil;
+                    XTSubscriptExprNode* sub = [as.lhs isKindOfClass:[XTSubscriptExprNode class]] ? (XTSubscriptExprNode*)as.lhs : nil;
+                    if (as && as.assignOp == XTAssignOpAssign && sub
+                        && [sub.base isKindOfClass:[XTIdentifierNode class]]
+                        && [((XTIdentifierNode*)sub.base).identName isEqualToString:g]
+                        && [sub.index isKindOfClass:[XTIdentifierNode class]]
+                        && [((XTIdentifierNode*)sub.index).identName isEqualToString:iv.varName])
+                        wall = YES;
+                    }
+            if (wall)
+                {
+                XTBlockNode* thenW = [[XTBlockNode alloc]
+                    initWithStatements:@[ [[XTReturnNode alloc]
+                                             initWithValues:@[ [[XTLiteralBoolNode alloc] initWithBool:YES location:loc] ]
+                                                   location:loc] ]
+                              location:loc];
+                [wallSt addObject:[[XTIfNode alloc] initWithCondition:isName() thenBlock:thenW elseBlock:nil location:loc]];
+                }
             }
         [addrSt addObject:[[XTReturnNode alloc]
                               initWithValues:@[ cast(ptrT, [[XTLiteralIntNode alloc] initWithValue:0 location:loc]) ]
@@ -1388,6 +1447,18 @@ NS_ASSUME_NONNULL_END
                                                        parameters:@[ pb ] isStatic:NO isVarArgs:NO
                                                              body:[[XTBlockNode alloc] initWithStatements:sizeSt location:loc]
                                                          location:loc]];
+        if (wallSt.count > 0)
+            {
+            [wallSt addObject:[[XTReturnNode alloc]
+                                  initWithValues:@[ [[XTLiteralBoolNode alloc] initWithBool:NO location:loc] ]
+                                        location:loc]];
+            XTParamNode* pw = [[XTParamNode alloc] initWithType:u8p name:@"name" location:loc];
+            [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuWritesAll"
+                                                          returnTypes:@[ [self.typeTable typeForName:@"bool"] ]
+                                                           parameters:@[ pw ] isStatic:NO isVarArgs:NO
+                                                                 body:[[XTBlockNode alloc] initWithStatements:wallSt location:loc]
+                                                             location:loc]];
+            }
         }
     // parName(): what the block is called at run time (its device setting,
     // reports): its source name, or file:line for an unnamed block.

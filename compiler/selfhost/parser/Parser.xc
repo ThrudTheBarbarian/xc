@@ -198,6 +198,20 @@ class Parser
     {
         if (_blkFrames.count() == (u32)0) return;
         Map* frame = (Map*)_blkFrames.get(_blkFrames.count() - (u32)1);
+        // Every use of every name, in every enclosing `par` frame (the
+        // reference explains; gpuWritesAll, bug 645).
+        for (u32 fi = (u32)0; fi < _blkFrames.count(); fi = fi + (u32)1) {
+            Map* pf = (Map*)_blkFrames.get(fi);
+            if (pf.get((Hashable*)String.withCString("par")) == (Object*)0) continue;
+            Map* refs = (Map*)pf.get((Hashable*)String.withCString("refs"));
+            if (refs == (Map*)0) {
+                refs = new Map();
+                pf.set((Hashable*)String.withCString("refs"), (Object*)refs);
+            }
+            Number* had = (Number*)refs.get((Hashable*)name);
+            u32 c = had == (Number*)0 ? (u32)0 : had.asU32();
+            refs.set((Hashable*)String.withString(name), (Object*)Number.withU32(c + (u32)1));
+        }
         u32 literalDepth = ((Number*)frame.get((Hashable*)String.withCString("depth"))).asU32();
         u32 foundDepth = (u32)0;
         Map* info = blkLookup(name, &foundDepth);
@@ -2289,6 +2303,17 @@ class Parser
             _errorAt(String.withCString("'break' would leave the 'par :grid' body; 'return' ends a work item"), parTokNode(at));
     }
 
+    // A break, continue or return inside a `par` body: every enclosing par
+    // frame notes it (the reference explains).
+    void parNoteExit()
+    {
+        for (u32 fi = (u32)0; fi < _blkFrames.count(); fi = fi + (u32)1) {
+            Map* pf = (Map*)_blkFrames.get(fi);
+            if (pf.get((Hashable*)String.withCString("par")) != (Object*)0)
+                pf.set((Hashable*)String.withCString("exits"), (Object*)Number.withU32((u32)1));
+        }
+    }
+
     // `return;` in a `par :grid` body ends the work item: `continue` of the
     // loop over the grid's points. Refused inside a loop of the body's own.
     Node* parGridReturn(Node* ret, Token* at)
@@ -2671,9 +2696,45 @@ class Parser
             pb.setOp(String.withCString("u8*"));
             mb.add(pb);
             Node* bb = mk((u16)nkBlock);
+            Node* bw = mk((u16)nkBlock);
+            u32 nwall = (u32)0;
+            Map* refs = (Map*)frame.get((Hashable*)String.withCString("refs"));
+            bool mayWall = gridDecls.count() == (u32)0 && frame.get((Hashable*)String.withCString("exits")) == (Object*)0
+                && !written.contains((Hashable*)iv.name()) && refs != (Map*)0;
+            Node* loopBody = loop.kid((u32)3);
             for (u32 i = (u32)0; i < globs.count(); i = i + (u32)1) {
                 String* g = (String*)globs.get(i);
                 String* gt = (String*)_parTopVars.get((Hashable*)g);
+                // gpuWritesAll(name): the body overwrites every element of this
+                // array in its range (the reference explains; bug 645).
+                Number* gr = refs != (Map*)0 ? (Number*)refs.get((Hashable*)g) : (Number*)0;
+                bool wall = false;
+                if (mayWall && gt.indexOfByte((u8)'[') != (u32)$FFFFFFFF && gr != (Number*)0 && gr.asU32() == (u32)1
+                    && loopBody != (Node*)0 && loopBody.kind() == (u16)nkBlock)
+                    for (u32 si = (u32)0; si < loopBody.kidCount(); si = si + (u32)1) {
+                        Node* st = loopBody.kid(si);
+                        if (st == (Node*)0 || st.kind() != (u16)nkExprStatement || st.kidCount() == (u32)0) continue;
+                        Node* as = st.kid((u32)0);
+                        if (as.kind() != (u16)nkAssign || !Parser._same(as.op(), "=")) continue;
+                        Node* sub = as.kid((u32)0);
+                        if (sub.kind() != (u16)nkSubscript || sub.kidCount() < (u32)2) continue;
+                        if (sub.kid((u32)0).kind() == (u16)nkIdent && sub.kid((u32)0).name().equals(g)
+                            && sub.kid((u32)1).kind() == (u16)nkIdent && sub.kid((u32)1).name().equals(iv.name()))
+                            wall = true;
+                    }
+                if (wall) {
+                    Node* ifW = mk((u16)nkIf);
+                    ifW.add(parSameNameCall(g));
+                    Node* thenW = mk((u16)nkBlock);
+                    Node* retW = mk((u16)nkReturn);
+                    Node* tv = mk((u16)nkBool);
+                    tv.setNum((i64)1);
+                    retW.add(tv);
+                    thenW.add(retW);
+                    ifW.add(thenW);
+                    bw.add(ifW);
+                    nwall = nwall + (u32)1;
+                }
                 Node* target = parIdent(g);
                 if (gt.indexOfByte((u8)'[') != (u32)$FFFFFFFF) {
                     Node* sub = mk((u16)nkSubscript);
@@ -2730,6 +2791,20 @@ class Parser
             bb.add(noneB);
             mb.add(bb);
             cls.add(mb);
+            if (nwall > (u32)0) {
+                Node* noneW = mk((u16)nkReturn);
+                Node* fv = mk((u16)nkBool);
+                fv.setNum((i64)0);
+                noneW.add(fv);
+                bw.add(noneW);
+                Node* mw = mkNamed((u16)nkMethodDecl, String.withCString("gpuWritesAll"));
+                mw.setOp(String.withCString("bool"));
+                Node* pw = mkNamed((u16)nkParam, String.withCString("name"));
+                pw.setOp(String.withCString("u8*"));
+                mw.add(pw);
+                mw.add(bw);
+                cls.add(mw);
+            }
         }
         // parName(): what the block is called at run time (its device
         // setting, reports): its source name, or file:line when unnamed.
@@ -2874,7 +2949,7 @@ class Parser
         if (check((u16)tokWhile))    { parGridEnter("loops", true); Node* n = parseWhile(); parGridEnter("loops", false); return n; }
         if (check((u16)tokFor))      { parGridEnter("loops", true); Node* n = parseFor(); parGridEnter("loops", false); return n; }
         if (check((u16)tokSwitch))   { parGridEnter("switches", true); Node* n = parseSwitch(); parGridEnter("switches", false); return n; }
-        if (check((u16)tokReturn))   { Token* rt = cur(); return parGridReturn(parseReturn(), rt); }
+        if (check((u16)tokReturn))   { Token* rt = cur(); parNoteExit(); return parGridReturn(parseReturn(), rt); }
         // `defer` takes a BLOCK, as the reference requires: braces keep what
         // is deferred unambiguous, and leave `defer <statement>` free to mean
         // something later. A bare statement was accepted here (bug 596).
@@ -2894,8 +2969,8 @@ class Parser
         if (check((u16)tokTypedef))  return parseTypedef();
         if (check((u16)tokStruct))   return parseStruct(true);
         if (check((u16)tokEnum))     return parseEnum();
-        if (check((u16)tokBreak))    { Token* bt = cur(); advance(); expect((u16)tokSemicolon); parGridBreak(bt); return mk((u16)nkBreak); }
-        if (check((u16)tokContinue)) { advance(); expect((u16)tokSemicolon); return mk((u16)nkContinue); }
+        if (check((u16)tokBreak))    { Token* bt = cur(); advance(); expect((u16)tokSemicolon); parGridBreak(bt); parNoteExit(); return mk((u16)nkBreak); }
+        if (check((u16)tokContinue)) { advance(); expect((u16)tokSemicolon); parNoteExit(); return mk((u16)nkContinue); }
         if (check((u16)tokGoto)) {
             // `goto <label>;` — a C-porting aid (undocumented as a language feature).
             advance();

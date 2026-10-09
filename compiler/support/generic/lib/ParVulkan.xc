@@ -693,7 +693,8 @@ class ParVulkan
                 }
             for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
                 {
-                memcpy((pointer)maps[b], l.globPtr[i], (u64)l.globLen[i]);
+                if (l.globOut[i] == (i64)0)
+                    memcpy((pointer)maps[b], l.globPtr[i], (u64)l.globLen[i]);
                 b = b + (u32)1;
                 }
             }
