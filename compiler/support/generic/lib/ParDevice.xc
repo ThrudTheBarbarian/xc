@@ -128,6 +128,9 @@ class ParLayout : Object
     // slot 0, so one partial comes back instead of `nparts` (bug 645). The
     // buffers are still `nparts` long: every workgroup writes its own first.
     i64 devlast;
+    // 1: the kernel takes the block object and its range as launch parameters
+    // (header word `byval`, bug 645), so they are not copied to the device.
+    i64 byval;
     i64 nback;
 
     void plan(i64 lo, i64 hi)
@@ -754,6 +757,14 @@ class ParDevice
                 if (proto.gpuWritesAll(&gname[0]) && lo == (i64)0 && (hi - lo) * elem >= l.globLen[k])
                     l.globOut[k] = (i64)1;
                 l.nglob = k + (u32)1;
+                continue;
+                }
+            // byval: the object and range are the launch's parameters.
+            if (src[at] == (u8)'b' && src[at + (u32)1] == (u8)'y' && src[at + (u32)2] == (u8)'v' &&
+                src[at + (u32)3] == (u8)'a' && src[at + (u32)4] == (u8)'l')
+                {
+                l.byval = (i64)1;
+                at = at + (u32)5;
                 continue;
                 }
             // devlast: and its last workgroup folds the workgroups' partials.

@@ -17056,7 +17056,16 @@ class ClassInfo
         String* meta = ptxS("// xcpar size=");
         meta.append(String.withU32(_mObj.size())); meta.appendCString(" lo="); meta.append(String.withU32(_mObj.offsetAt((u32)1)));
         meta.appendCString(" hi="); meta.append(String.withU32(_mObj.offsetAt((u32)2)));
+        // The block object and the range by value (the reference explains;
+        // bug 645), when the object fits in parameter space.
+        bool byval = _mObj.size() <= (u32)3072;
         String* params = ptxS(".param .u64 args, .param .u64 span");
+        if (byval)
+            {
+            params = ptxS(".param .align 8 .b8 args[");
+            params.append(String.withU32(_mObj.size()));
+            params.appendCString("], .param .align 8 .b8 span[24]");
+            }
         for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
             {
             if (_mBufs.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
@@ -17157,6 +17166,7 @@ class ClassInfo
             }
 
         if (devred) meta.appendCString(" devred devlast");
+        if (byval) meta.appendCString(" byval");
         if (_mFast) meta.appendCString(" fast");
         String* out = String.withString(meta);
         out.appendCString("\n.version 7.0\n.target sm_52\n.address_size 64\n");
@@ -17172,26 +17182,42 @@ class ClassInfo
         out.appendCString("\t.reg .b64 %stp, %ga, %gs, %lo, %hi, %end, %per, %tid64, %x, %y;\n");
         out.appendCString("\t.reg .b32 %gid, %k, %nt, %ct, %tx;\n\t.reg .f32 %fk;\n\t.reg .f64 %dk;\n\t.reg .pred %pz;\n");
         out.append(decls);
-        out.appendCString("\tmov.u64 %stp, st;\n\tld.param.u64 %ga, [args];\n\tcvta.to.global.u64 %ga, %ga;\n");
+        if (byval)
+            out.appendCString("\tmov.u64 %stp, st;\n");
+        else
+            out.appendCString("\tmov.u64 %stp, st;\n\tld.param.u64 %ga, [args];\n\tcvta.to.global.u64 %ga, %ga;\n");
         // The block object into the thread's copy, eight bytes at a time,
         // then any tail byte by byte (the reference explains; bug 645).
+        string from = byval ? "\tld.param." : "\tld.global.";
+        string base = byval ? "args+" : "%ga+";
         u32 q = (u32)0;
         while (q + (u32)8 <= _mObj.size())
             {
             String* qs = String.withU32(q);
-            out.appendCString("\tld.global.u64 %x, [%ga+"); out.append(qs); out.appendCString("];\n\tst.local.u64 [%stp+"); out.append(qs); out.appendCString("], %x;\n");
+            out.appendCString(from); out.appendCString("u64 %x, ["); out.appendCString(base); out.append(qs);
+            out.appendCString("];\n\tst.local.u64 [%stp+"); out.append(qs); out.appendCString("], %x;\n");
             q = q + (u32)8;
             }
         while (q < _mObj.size())
             {
             String* qs = String.withU32(q);
-            out.appendCString("\tld.global.u8 %k, [%ga+"); out.append(qs); out.appendCString("];\n\tst.local.u8 [%stp+"); out.append(qs); out.appendCString("], %k;\n");
+            out.appendCString(from); out.appendCString("u8 %k, ["); out.appendCString(base); out.append(qs);
+            out.appendCString("];\n\tst.local.u8 [%stp+"); out.append(qs); out.appendCString("], %k;\n");
             q = q + (u32)1;
             }
-        out.appendCString("\tld.param.u64 %gs, [span];\n\tcvta.to.global.u64 %gs, %gs;\n");
-        out.appendCString("\tmov.u32 %ct, %ctaid.x;\n\tmov.u32 %nt, %ntid.x;\n\tmov.u32 %tx, %tid.x;\n");
-        out.appendCString("\tmad.lo.u32 %gid, %ct, %nt, %tx;\n\tcvt.u64.u32 %tid64, %gid;\n");
-        out.appendCString("\tld.global.u64 %lo, [%gs];\n\tld.global.u64 %end, [%gs+8];\n\tld.global.u64 %per, [%gs+16];\n");
+        if (byval)
+            {
+            out.appendCString("\tmov.u32 %ct, %ctaid.x;\n\tmov.u32 %nt, %ntid.x;\n\tmov.u32 %tx, %tid.x;\n");
+            out.appendCString("\tmad.lo.u32 %gid, %ct, %nt, %tx;\n\tcvt.u64.u32 %tid64, %gid;\n");
+            out.appendCString("\tld.param.u64 %lo, [span];\n\tld.param.u64 %end, [span+8];\n\tld.param.u64 %per, [span+16];\n");
+            }
+        else
+            {
+            out.appendCString("\tld.param.u64 %gs, [span];\n\tcvta.to.global.u64 %gs, %gs;\n");
+            out.appendCString("\tmov.u32 %ct, %ctaid.x;\n\tmov.u32 %nt, %ntid.x;\n\tmov.u32 %tx, %tid.x;\n");
+            out.appendCString("\tmad.lo.u32 %gid, %ct, %nt, %tx;\n\tcvt.u64.u32 %tid64, %gid;\n");
+            out.appendCString("\tld.global.u64 %lo, [%gs];\n\tld.global.u64 %end, [%gs+8];\n\tld.global.u64 %per, [%gs+16];\n");
+            }
         out.appendCString("\tmad.lo.u64 %lo, %tid64, %per, %lo;\n\tadd.s64 %hi, %lo, %per;\n\tmin.s64 %hi, %hi, %end;\n");
         out.appendCString("\tst.local.u64 [%stp+"); out.append(String.withU32(_mObj.offsetAt((u32)1))); out.appendCString("], %lo;\n");
         out.appendCString("\tst.local.u64 [%stp+"); out.append(String.withU32(_mObj.offsetAt((u32)2))); out.appendCString("], %hi;\n");

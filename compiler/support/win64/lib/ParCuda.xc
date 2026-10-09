@@ -228,10 +228,20 @@ class ParCuda
         span[2] = l.per;
         u64 dev[52];
         u32 nd = (u32)0;
-        dev[nd] = upload(nd, (pointer)obj, l.size);
-        nd = nd + (u32)1;
-        dev[nd] = upload(nd, (pointer)&span[0], (i64)24);
-        nd = nd + (u32)1;
+        // By value: the launch reads the object and the range from here.
+        if (l.byval != (i64)0)
+            {
+            dev[0] = (u64)1;
+            dev[1] = (u64)1;
+            nd = (u32)2;
+            }
+        else
+            {
+            dev[nd] = upload(nd, (pointer)obj, l.size);
+            nd = nd + (u32)1;
+            dev[nd] = upload(nd, (pointer)&span[0], (i64)24);
+            nd = nd + (u32)1;
+            }
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
             dev[nd] = uploadKeeping(nd, *(pointer*)(obj + l.bufOff[i]), l.bufLen[i], l.bufIn[i] != (i64)0);
@@ -254,6 +264,11 @@ class ParCuda
             if (dev[i] == (u64)0)
                 ok = false;
             params[i] = (pointer)&dev[i];
+            }
+        if (l.byval != (i64)0)
+            {
+            params[0] = (pointer)obj;
+            params[1] = (pointer)&span[0];
             }
         i64 gpuStart = ParDevice.nowUs();
         i64 gpuUs = (i64)-1;

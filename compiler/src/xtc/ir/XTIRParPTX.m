@@ -1032,7 +1032,15 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
     NSArray<XTIRLayoutField*>* fl = self.objLayout.fields;
     NSMutableString* meta = [NSMutableString stringWithFormat:@"// xcpar size=%u lo=%u hi=%u", self.objLayout.size,
                                                               fl[1].byteOffset, fl[2].byteOffset];
-    NSMutableArray<NSString*>* params = [NSMutableArray arrayWithObjects:@".param .u64 args", @".param .u64 span", nil];
+    // The block object and the range by value, as the launch's own
+    // parameters (bug 645): two fewer copies to the device, each a blocking
+    // call, on every run. Parameter space is 4 KB in all, so a large object
+    // still goes the old way, through device memory.
+    BOOL byval = self.objLayout.size <= 3072;
+    NSMutableArray<NSString*>* params = byval
+        ? [NSMutableArray arrayWithObjects:[NSString stringWithFormat:@".param .align 8 .b8 args[%u]", self.objLayout.size],
+                                           @".param .align 8 .b8 span[24]", nil]
+        : [NSMutableArray arrayWithObjects:@".param .u64 args", @".param .u64 span", nil];
     __block BOOL bad = NO;
     [self.bufferFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
         XTIRType* et = fl[k].type.pointeeType;
@@ -1131,6 +1139,8 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
     NSMutableString* out = [NSMutableString string];
     if (devred)
         [meta appendString:@" devred devlast"];
+    if (byval)
+        [meta appendString:@" byval"];
     if (self.fast)
         [meta appendString:@" fast"];
     [out appendFormat:@"%@\n.version 7.0\n.target sm_52\n.address_size 64\n", meta];
@@ -1148,21 +1158,30 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
     [out appendString:@"\t.reg .b64 %stp, %ga, %gs, %lo, %hi, %end, %per, %tid64, %x, %y;\n"
                       @"\t.reg .b32 %gid, %k, %nt, %ct, %tx;\n\t.reg .f32 %fk;\n\t.reg .f64 %dk;\n\t.reg .pred %pz;\n"];
     [out appendString:decls];
-    [out appendString:@"\tmov.u64 %stp, st;\n\tld.param.u64 %ga, [args];\n\tcvta.to.global.u64 %ga, %ga;\n"];
+    [out appendString:byval ? @"\tmov.u64 %stp, st;\n"
+                             : @"\tmov.u64 %stp, st;\n\tld.param.u64 %ga, [args];\n\tcvta.to.global.u64 %ga, %ga;\n"];
     // The block object into the thread's copy, eight bytes at a time (both
     // sides are 8-byte aligned: a device allocation and `.align 8`), then any
     // tail byte by byte. It was every byte singly: 32 load/store pairs a
     // thread for a typical block (bug 645).
     uint32_t q = 0;
+    NSString* from = byval ? @"param" : @"global";
+    NSString* base = byval ? @"args" : @"%ga";
     for (; q + 8 <= self.objLayout.size; q += 8)
-        [out appendFormat:@"\tld.global.u64 %%x, [%%ga+%u];\n\tst.local.u64 [%%stp+%u], %%x;\n", q, q];
+        [out appendFormat:@"\tld.%@.u64 %%x, [%@+%u];\n\tst.local.u64 [%%stp+%u], %%x;\n", from, base, q, q];
     for (; q < self.objLayout.size; q++)
-        [out appendFormat:@"\tld.global.u8 %%k, [%%ga+%u];\n\tst.local.u8 [%%stp+%u], %%k;\n", q, q];
-    [out appendString:@"\tld.param.u64 %gs, [span];\n\tcvta.to.global.u64 %gs, %gs;\n"
-                      @"\tmov.u32 %ct, %ctaid.x;\n\tmov.u32 %nt, %ntid.x;\n\tmov.u32 %tx, %tid.x;\n"
-                      @"\tmad.lo.u32 %gid, %ct, %nt, %tx;\n\tcvt.u64.u32 %tid64, %gid;\n"
-                      @"\tld.global.u64 %lo, [%gs];\n\tld.global.u64 %end, [%gs+8];\n\tld.global.u64 %per, [%gs+16];\n"
-                      @"\tmad.lo.u64 %lo, %tid64, %per, %lo;\n\tadd.s64 %hi, %lo, %per;\n\tmin.s64 %hi, %hi, %end;\n"];
+        [out appendFormat:@"\tld.%@.u8 %%k, [%@+%u];\n\tst.local.u8 [%%stp+%u], %%k;\n", from, base, q, q];
+    if (byval)
+        [out appendString:@"\tmov.u32 %ct, %ctaid.x;\n\tmov.u32 %nt, %ntid.x;\n\tmov.u32 %tx, %tid.x;\n"
+                          @"\tmad.lo.u32 %gid, %ct, %nt, %tx;\n\tcvt.u64.u32 %tid64, %gid;\n"
+                          @"\tld.param.u64 %lo, [span];\n\tld.param.u64 %end, [span+8];\n\tld.param.u64 %per, [span+16];\n"
+                          @"\tmad.lo.u64 %lo, %tid64, %per, %lo;\n\tadd.s64 %hi, %lo, %per;\n\tmin.s64 %hi, %hi, %end;\n"];
+    else
+        [out appendString:@"\tld.param.u64 %gs, [span];\n\tcvta.to.global.u64 %gs, %gs;\n"
+                          @"\tmov.u32 %ct, %ctaid.x;\n\tmov.u32 %nt, %ntid.x;\n\tmov.u32 %tx, %tid.x;\n"
+                          @"\tmad.lo.u32 %gid, %ct, %nt, %tx;\n\tcvt.u64.u32 %tid64, %gid;\n"
+                          @"\tld.global.u64 %lo, [%gs];\n\tld.global.u64 %end, [%gs+8];\n\tld.global.u64 %per, [%gs+16];\n"
+                          @"\tmad.lo.u64 %lo, %tid64, %per, %lo;\n\tadd.s64 %hi, %lo, %per;\n\tmin.s64 %hi, %hi, %end;\n"];
     [out appendFormat:@"\tst.local.u64 [%%stp+%u], %%lo;\n\tst.local.u64 [%%stp+%u], %%hi;\n", fl[1].byteOffset,
                       fl[2].byteOffset];
     [out appendString:@"\tsetp.ge.s64 %pz, %lo, %hi;\n\t@%pz bra BODY_END;\n"];
