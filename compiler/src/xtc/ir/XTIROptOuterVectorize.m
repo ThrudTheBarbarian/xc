@@ -243,7 +243,13 @@ static NSString* ovRoot(XTIRValueId v, NSDictionary<NSNumber*, XTIRInsn*>* defOf
         XTIRType* laneTy = sPhi.result.type;
         if (!laneTy || !XTIRTypeKindIsInteger(laneTy.kind) || laneTy.byteWidth != 4)
             continue;
-        NSUInteger lanes = 16 / laneTy.byteWidth;
+        // The width this function may use: a dispatch clone's own level
+        // (32 bytes for avx2, 64 for avx512), else the target's. It was a
+        // fixed 16, which left x86-64 at four lanes under AVX-512 (bug 644).
+        NSUInteger vb = fn.simdLaneBytes ? fn.simdLaneBytes
+                                         : (self.profile ?: [XTIROptTargetProfile conservativeProfile]).vectorLaneBytes;
+        vb = vb == 64 ? 64 : vb == 32 ? 32 : 16;
+        NSUInteger lanes = vb / laneTy.byteWidth;
         if (trip <= 0 || trip % (int64_t)lanes != 0)
             continue;
         XTIROperand *sInit = nil, *sBack = nil;
@@ -421,7 +427,7 @@ static NSString* ovRoot(XTIRValueId v, NSDictionary<NSNumber*, XTIRInsn*>* defOf
             continue;
 
         // ── Rewrite ──
-        XTIRType* vecTy = [XTIRType vecWithLane:laneTy];
+        XTIRType* vecTy = [XTIRType vecWithLane:laneTy bytes:(uint32_t)(lanes * laneTy.byteWidth)];
         XTIRValue* (^newVal)(XTIRType*, XTIRBlock*) = ^XTIRValue*(XTIRType* ty, XTIRBlock* blk) {
           XTIRValueId rid = [fn allocateValueId];
           XTIRValue* v = [[XTIRValue alloc] initWithValueId:rid

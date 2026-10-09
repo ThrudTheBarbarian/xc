@@ -12442,10 +12442,13 @@ class OptProfile
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            // A dispatch clone carries its own vector width (bug 644).
+            _vecFnBytes = fn.simdLaneBytes();
             u32 guard = (u32)0;
             while (guard < (u32)16 && ovOnce(fn))
                 guard = guard + (u32)1;
             }
+        _vecFnBytes = (u32)0;
         }
 
     Array* ovPreds(IRFunc* fn, IRBlock* b)
@@ -12605,7 +12608,10 @@ class OptProfile
         String* laneTy = sPhi.res().ty();
         if (laneTy == (String*)0 || !(laneTy.equals(String.withCString("U32")) || laneTy.equals(String.withCString("I32"))))
             return false;
-        i64 lanes = (i64)4;
+        // The width this function may use: a dispatch clone's own level, else
+        // the target's (vectorBytes). It was a fixed four lanes, which left
+        // x86-64 at 128 bits under AVX-512 (bug 644).
+        i64 lanes = (i64)(vectorBytes() / (u32)4);
         if (trip <= (i64)0 || trip % lanes != (i64)0)
             return false;
         IROperand* sInit = (IROperand*)0;
@@ -12799,9 +12805,7 @@ class OptProfile
     void ovRewrite(IRFunc* fn, IRBlock* Bj, IRBlock* Hk, IRBlock* Bk, IRBlock* Ek, IRInsn* jPhi, IRInsn* sPhi,
                    IRInsn* jNext, IROperand* sInit, IROperand* sBack, String* laneTy, i64 lanes)
         {
-        String* vecTy = String.withCString("Vec(");
-        vecTy.append(laneTy);
-        vecTy.appendCString(")");
+        String* vecTy = vecTyOf(laneTy, (u32)lanes * (u32)4);
         Map* vmap = new Map();
         IRValue* vInit = new IRValue(vecTy);
         IRInsn* vi = IRInsn.with(String.withCString("VSplat"));
