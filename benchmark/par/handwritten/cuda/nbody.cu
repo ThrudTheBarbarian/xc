@@ -1,5 +1,8 @@
 // nbody — benchmark/par/nbody.xc written by hand in bare CUDA.
 // Same data, same arithmetic, same eight runs, same checksum. GPU only.
+// Build with -use_fast_math: the xc block is :goal(speed), so its div/sqrt are
+// approximate. Without the flag this kernel is precise and the two are not
+// comparable (xc's fast maths then reads as 2x faster when they are level).
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>

@@ -48,9 +48,16 @@ g++ -O3 -march=native -fopenmp -o mandelbrot_omp omp/mandelbrot.cpp -lm
 OMP_NUM_THREADS=$(nproc) ./mandelbrot_omp
 
 # CUDA — GPU only, and only an NVIDIA one
-nvcc -O3 -arch=native -o mandelbrot_cuda cuda/mandelbrot.cu   # or -arch=sm_86
+nvcc -O3 -arch=native -use_fast_math -o mandelbrot_cuda cuda/mandelbrot.cu   # or -arch=sm_86
 ./mandelbrot_cuda
 ```
+
+`-use_fast_math` matches a `par` block, whose default is `:goal(speed)`: the
+block's `div`/`sqrt` are then approximate, as clang's are with `-ffast-math`. It
+is a no-op for `mandelbrot`, `perlin` and `saxpy`, which do no division; on
+`nbody` it is the whole difference. Without it a hand kernel is precise where
+xc's is not, and `nbody` then reads as xc being 2x faster when the two are
+level. Every number below is with it.
 
 On macOS, Apple's clang has no OpenMP; install it (`brew install libomp`) and
 build with `-Xpreprocessor -fopenmp -lomp`, or use the Linux host. CUDA needs
@@ -91,20 +98,23 @@ yourself, and four `__device__` helpers you mark by hand.
   a grid-stride loop — with no shared-memory tiling, no `__restrict__` and no
   async copies. It is deliberately untuned. With 0.74 these plain kernels were
   faster than `xcc`'s on three of the four programs, by 1.5x to 6.8x. From
-  0.75, best of five on the test GPU (CUDA, microseconds, hand / xc):
-  `mandelbrot` 211 / 301, `perlin` 675 / 750, `nbody` 1051 / 569, `saxpy`
-  25014 / 25029. `nbody` is faster in xc because `:goal(speed)` issues
-  approximate float maths; `saxpy` is level; `mandelbrot` and `perlin` remain
-  slower, and the difference is in the kernel itself (the escape loop's test is
-  not yet rotated on the GPU). So the argument here is still EASE first — 223
-  lines of xc, one source, CPU and four GPU APIs — with performance now close
-  on three of the four.
+  0.75, best of five on the test GPU (CUDA, microseconds, hand / xc, both built
+  `-use_fast_math`): `mandelbrot` 216 / 233, `perlin` 677 / 706, `nbody` 512 /
+  507, `saxpy` 25505 / 25053. With the numbers like-for-like, xc is level on
+  `nbody` and `saxpy` and behind on `mandelbrot` and `perlin` by 8% and 4%,
+  which is in the kernel itself (the escape loop's test is not yet rotated on
+  the GPU). So the argument here is still EASE first — 223 lines of xc, one
+  source, CPU and four GPU APIs — with performance now close on all four.
 - From 0.75 the xc GPU path copies to the device only the arrays the block
   reads, and back only the ones it writes; a small table it only reads stays on
   the device while it is unchanged. These programs copy the same data: each
   uploads what its kernel reads and copies back what it writes. If xc stops
   copying something because the program never uses it, the matching program
   here stops too, so the two keep doing the same work.
+- `nbody` was the one case where the hand kernel and xc did not do the same
+  arithmetic: xc's block is `:goal(speed)` (approximate `div`/`sqrt`) and the
+  hand kernel was precise, and the 2x that showed was the maths, not the
+  codegen. Both are now built `-use_fast_math` and the two are level.
 - `perlin` and `mandelbrot` are arithmetic-bound and are the clean comparison.
   `saxpy` is the anti-benchmark: it is in the set to show that more hands on the
   GPU is not always faster, and that `auto` knows it.
