@@ -14560,39 +14560,26 @@ class ClassInfo
             }
         if (iv == (IRValue*)0 || f.params().count() == (u32)0)
             return (String*)0;
-        // The induction variable is the phi the loop's own increment steps by
-        // a CONSTANT, not simply the first phi: a reduction's accumulator is a
-        // phi too and a block with reductions lists one of those first (the
-        // reference's IR does). The increment is an Add/Sub of the phi and a
-        // loop-invariant value; a constant there marks the iv, a per-item value
-        // (a load) the accumulator.
+        // The induction variable is the phi the loop's GUARD compares, not
+        // simply the first phi: a reduction's accumulator is a phi too, and a
+        // block with reductions lists one of those first (the reference's IR
+        // does). An ICmp that takes a phi is the guard (or a min/max test, but
+        // the guard comes first in block order); its phi operand is the iv.
         {
         IRValue* ivGuard = (IRValue*)0;
         for (u32 gb = (u32)0; gb < f.blocks().count() && ivGuard == (IRValue*)0; gb = gb + (u32)1) {
             IRBlock* gbb = (IRBlock*)f.blocks().get(gb);
-            for (u32 gp = (u32)0; gp < gbb.phis().count() && ivGuard == (IRValue*)0; gp = gp + (u32)1) {
-                IRInsn* ph = (IRInsn*)gbb.phis().get(gp);
-                if (ph.res() == (IRValue*)0)
+            for (u32 gi = (u32)0; gi < gbb.insns().count() && ivGuard == (IRValue*)0; gi = gi + (u32)1) {
+                IRInsn* gb2 = (IRInsn*)gbb.insns().get(gi);
+                if (!gb2.op().equals(String.withCString("ICmp")))
                     continue;
-                for (u32 bb2 = (u32)0; bb2 < f.blocks().count() && ivGuard == (IRValue*)0; bb2 = bb2 + (u32)1) {
-                    IRBlock* bb3 = (IRBlock*)f.blocks().get(bb2);
-                    for (u32 ii = (u32)0; ii < bb3.insns().count(); ii = ii + (u32)1) {
-                        IRInsn* ar = (IRInsn*)bb3.insns().get(ii);
-                        if (!ar.op().equals(String.withCString("Add")) && !ar.op().equals(String.withCString("Sub")))
-                            continue;
-                        if (ar.ops().count() < (u32)2)
-                            continue;
-                        IROperand* oa = (IROperand*)ar.ops().get((u32)0);
-                        IROperand* ob = (IROperand*)ar.ops().get((u32)1);
-                        bool aPhi = oa.kind() == (u8)OPK_USE && oa.val() == ph.res();
-                        bool bPhi = ob.kind() == (u8)OPK_USE && ob.val() == ph.res();
-                        if (!aPhi && !bPhi)
-                            continue;
-                        IROperand* other = aPhi ? ob : oa;
-                        ParIdx* px = parIndex(other, ph.res(), def, (u32)0);
-                        if (px.affine && px.k == (i64)0)
-                            { ivGuard = ph.res(); break; }
-                    }
+                for (u32 q = (u32)0; q < gb2.ops().count(); q = q + (u32)1) {
+                    IROperand* o = (IROperand*)gb2.ops().get(q);
+                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                        continue;
+                    IRInsn* dd = (IRInsn*)def.get((Hashable*)String.withU32(o.val().seq()));
+                    if (dd != (IRInsn*)0 && dd.op().equals(String.withCString("Phi")))
+                        { ivGuard = o.val(); break; }
                 }
             }
         }
