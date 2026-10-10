@@ -135,6 +135,19 @@
         [p addPass:[[XTIROptJumpThread alloc] init]];
         [p addPass:[[XTIROptAggExpand alloc] init]];
         [p addPass:[[XTIROptMem2Reg alloc] init]];
+        // SECOND inlining pass, after if-conversion has linearised the small
+        // helpers that lowering gave as BRANCH DIAMONDS. A ternary lowers to a
+        // two-block diamond with a join phi, so the first inline pass (which
+        // refuses a callee that has any phi) never touches a helper that is one
+        // — the classic `a < b ? a : b`. Once if-conversion + mem2reg have
+        // turned those diamonds into Selects the helper is a single-block leaf
+        // and inlines here. perlin's grad() is exactly this shape: four
+        // ternaries, called sixteen times per pixel, and it stayed a real call
+        // through the whole pipeline, which is most of perlin's gap to clang.
+        XTIROptInline* inlLate = [[XTIROptInline alloc] init];
+        inlLate.profile = profile;
+        [p addPass:inlLate];
+        [p addPass:[[XTIROptDeadFunctionElim alloc] init]];
         // Drop redundant static-init guards (profile-gated) before unrolling,
         // so the guard's load/compare/branch is gone from hot bodies.
         XTIROptStaticInitGuard* guards = [[XTIROptStaticInitGuard alloc] init];

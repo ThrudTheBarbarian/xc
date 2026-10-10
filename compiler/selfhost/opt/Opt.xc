@@ -634,6 +634,7 @@ class OptProfile
         _rtTrip = false;
         _bound = (IROperand*)0;
         _ivStart = (i32)0;
+        _ivStartOp = (IROperand*)0;
         }
 
     IRBlock* h(void)
@@ -704,6 +705,11 @@ class OptProfile
     // computed from the trip LENGTH (n - ivStart), not the bound: see
     // vecRuntimeLimit.
     i32 _ivStart;
+    // A RUNTIME iv entry value (a par chunk's `lo`): the loop does not start at
+    // a literal, which used to refuse it outright. When set, the vector loop
+    // begins at this value and the runtime limit is computed from
+    // (bound - start). The value must be loop-invariant.
+    IROperand* _ivStartOp;
     bool rtTrip(void)
         {
         return _rtTrip;
@@ -715,6 +721,14 @@ class OptProfile
     i32 ivStart(void)
         {
         return _ivStart;
+        }
+    IROperand* ivStartOp(void)
+        {
+        return _ivStartOp;
+        }
+    void setIvStartOp(IROperand* o)
+        {
+        _ivStartOp = o;
         }
     void setRuntime(bool r, IROperand* b)
         {
@@ -1278,6 +1292,23 @@ class OptProfile
         if (_level >= (u32)2)
             mem2reg(m);
         if (stopHere(String.withCString("mem2reg")))
+            return;
+        // SECOND inlining pass, after if-conversion has linearised the small
+        // helpers that lowering gave as BRANCH DIAMONDS. A ternary lowers to a
+        // two-block diamond with a join phi, so the first inline pass (which
+        // refuses a callee with any phi) never touches a helper that is one —
+        // the classic `a < b ? a : b`. Once if-conversion + mem2reg have turned
+        // those diamonds into Selects the helper is a single-block leaf and
+        // inlines here. perlin's grad() is exactly this shape.
+        if (_level >= (u32)2)
+            inlineLeaves(m);
+        if (_failed)
+            return;
+        if (stopHere(String.withCString("inline")))
+            return;
+        if (_level >= (u32)2)
+            deadFunctionElim(m);
+        if (stopHere(String.withCString("dead-function-elim")))
             return;
         if (_level >= (u32)2)
             staticInitGuard(m);
@@ -13773,6 +13804,7 @@ class OptProfile
     IRBlock* _vrE;
     i64 _vrN;
     i64 _vrIvStart;        // the induction phi's constant start, -1 if not one
+    IROperand* _vrIvStartOp; // a RUNTIME start (a par chunk's `lo`), else 0
     bool _vrRuntime;       // the bound is a RUNTIME value, not a literal
     bool _vrMapRT;         // ... the same, for the MAP recogniser's own bound check
     u32 _magicM;           // magic multiplier from vecMagicU32
@@ -13801,6 +13833,7 @@ class OptProfile
         _vrE = (IRBlock*)0;
         _vrN = (i64)0;
         _vrIvStart = (i64)-1;
+        _vrIvStartOp = (IROperand*)0;
         _vrRuntime = false;
         _vrMapRT = false;
         _vrBoundOp = (IROperand*)0;
@@ -14010,12 +14043,30 @@ class OptProfile
             return (VecCand*)0;
         u32 vb = vectorBytes();
         u32 vw = vb / lw;
-        // The trailing test is the non-zero-start refusal (see
+        // The trailing test was the non-zero-start refusal (see
         // vecIvStartsAtZero); folded into this condition rather than written as
         // its own statement, because a separate branch costs frame slots and
         // vecWideningAt sits 80 bytes from the arm64 budget.
-        if (vw < (u32)2 || _vrIvStart < (i64)0)
+        if (vw < (u32)2)
             return (VecCand*)0;
+        // A RUNTIME start (a par chunk's `lo`) is vectorisable when the trip is
+        // also runtime and the start is loop-invariant: the vector loop begins
+        // at it and the runtime limit M is computed from (bound - start). This
+        // is the shape of EVERY par loop, which is why the whole CPU path used
+        // to stay scalar. `_vrIvStart` stays 0 and `_vrIvStartOp` carries it.
+        if (_vrIvStart < (i64)0)
+            {
+            IROperand* startOp = vecEntryOpOf(ivPhi, B);
+            if (startOp == (IROperand*)0 || startOp.kind() != (u8)OPK_USE)
+                return (VecCand*)0;
+            Object* sdb = defBlk.get((Hashable*)startOp.val());
+            if (sdb != (Object*)0 && ((IRBlock*)sdb == H || (IRBlock*)sdb == B))
+                return (VecCand*)0;
+            if (!_vrRuntime)
+                return (VecCand*)0;
+            _vrIvStartOp = startOp;
+            _vrIvStart = (i64)0;
+            }
         if (!_vrRuntime && _vrIvStart >= n)
             return (VecCand*)0;
         // Not a whole number of vectors: the vector loop runs to the last whole
@@ -14066,6 +14117,7 @@ class OptProfile
         c.setEpi(_vrRuntime || epiM != n, epiM);
         c.setRuntime(_vrRuntime, _vrBoundOp);
         c.setIvStart(_vrIvStart);
+        c.setIvStartOp(_vrIvStartOp);
         return c;
         }
 
@@ -14329,6 +14381,21 @@ class OptProfile
                         _vrUsesIv = true;
                     }
                 elems.add((Object*)n.res());
+                continue;
+                }
+            // A STORE of an elementwise value to an iv-indexed address, alongside
+            // the reduction: saxpy's `v = 3*xs[i]+ys[i]; ys[i] = v; total += v`.
+            // The stored value is already in the elementwise set; the address is
+            // the only new shape and it must be an iv-indexed ElementAddr, the
+            // same one a Load uses.
+            if (op.equals(String.withCString("Store")))
+                {
+                if (n.ops().count() < (u32)2)
+                    return (String*)0;
+                if (!vecIsElemAddr((IROperand*)n.ops().get((u32)0), iv, defOf))
+                    return (String*)0;
+                if (!vecOperandOK((IROperand*)n.ops().get((u32)1), elems, B, defOf, defBlk))
+                    return (String*)0;
                 continue;
                 }
             return (String*)0; // a store, a call, a per-lane-varying scalar
@@ -17066,14 +17133,19 @@ class OptProfile
     IRValue* vecRuntimeLimit(VecCand* c, IRBlock* PH)
         {
         String* ivTy = c.iv().ty();
+        // The start is an operand: a runtime one (a par chunk's `lo`) when the
+        // recogniser accepted it, else the constant seed as an immediate.
+        IROperand* start = c.ivStartOp();
+        if (start == (IROperand*)0 && c.ivStart() != (i32)0)
+            start = IROperand.immI((i64)c.ivStart(), ivTy);
         IROperand* tl = c.bound();
-        if (c.ivStart() != (i32)0)
+        if (start != (IROperand*)0)
             {
             IRValue* tv = new IRValue(ivTy);
             IRInsn* sb = IRInsn.with(String.withCString("Sub"));
             sb.setRes(tv);
             sb.add(c.bound());
-            sb.add(IROperand.immI((i64)c.ivStart(), ivTy));
+            sb.add(start);
             PH.add(sb);
             tl = IROperand.useVal(tv);
             }
@@ -17103,13 +17175,13 @@ class OptProfile
         an.add(IROperand.useVal(cv));
         an.add(IROperand.immI((i64) ~((i32)c.vw() - (i32)1), ivTy));
         PH.add(an);
-        if (c.ivStart() == (i32)0)
+        if (start == (IROperand*)0)
             return mv;
         IRValue* rv = new IRValue(ivTy);
         IRInsn* ad = IRInsn.with(String.withCString("Add"));
         ad.setRes(rv);
         ad.add(IROperand.useVal(mv));
-        ad.add(IROperand.immI((i64)c.ivStart(), ivTy));
+        ad.add(start);
         PH.add(ad);
         return rv;
         }
@@ -17620,6 +17692,21 @@ class OptProfile
                 vl.setMemRes(n.memRes());
                 _vecBody.add((Object*)vl);
                 _vecMap.set((Hashable*)n.res(), (Object*)vr);
+                continue;
+                }
+            // A store of an elementwise value: the vectorised form writes the
+            // whole vector at once. Mirrors the map applier; the recogniser has
+            // already proved the address is iv-indexed and the value is
+            // elementwise.
+            if (op.equals(String.withCString("Store")))
+                {
+                IROperand* vval = vecSplatOperand((IROperand*)n.ops().get((u32)1));
+                IRInsn* vs = IRInsn.with(String.withCString("VStore"));
+                vs.copyDbg(n);
+                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                    vs.add(k == (u32)1 ? vval : (IROperand*)n.ops().get(k));
+                vs.setMemRes(n.memRes());
+                _vecBody.add((Object*)vs);
                 continue;
                 }
             // `x / d` with d a compile-time constant: mulhu(x, M) >>u s. The

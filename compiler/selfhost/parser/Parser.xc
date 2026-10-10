@@ -2655,13 +2655,24 @@ class Parser
             im.add(decl);
             f.add(im);
             Node* cm = mk((u16)nkMarkerCond);
-            cm.add(parBin("<", parIdent(iv.name()), parCast(ivT, parIdent(String.withCString("hi")))));
+            cm.add(parBin("<", parIdent(iv.name()), parCast(ivT, parIdent(String.withCString("__par_hi")))));
             f.add(cm);
             f.add(loop.kid((u32)2));
             f.add(loop.kid((u32)3));
             // The block's goal holds for the CPU path too. As the reference.
             f.addFlag(frame.get((Hashable*)String.withCString("fast")) != 0 ? (u32)NF_GOAL_SPEED : (u32)NF_GOAL_ACCURACY);
             Node* rb = mk((u16)nkBlock);
+            // The loop's UPPER BOUND is hoisted into a local. `i < self.hi` reads
+            // the ivar in the loop HEADER every iteration, so the header carries
+            // a memory op: the vectoriser requires a pure header, so every par
+            // loop was refused and stayed scalar. Reading `hi` once, before the
+            // loop, makes the header the guard alone. As the reference.
+            {
+                Node* h = mkNamed((u16)nkVariableDecl, String.withCString("__par_hi"));
+                h.setOp(ivT);
+                h.add(parCast(ivT, parIdent(String.withCString("hi"))));
+                rb.add(h);
+            }
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
                 Node* r = (Node*)reds.get(i);
                 Node* d = mkNamed((u16)nkVariableDecl, r.name());

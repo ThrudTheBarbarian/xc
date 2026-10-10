@@ -1338,7 +1338,7 @@ static NSString* parRootName(XTASTNode* n)
                                                                    location:loc];
         XTASTNode* c = [[XTBinaryExprNode alloc] initWithOp:XTBinaryOpLt
                                                        left:ident(iv.varName)
-                                                      right:cast(ivT, ident(@"hi"))
+                                                      right:cast(ivT, ident(@"__par_hi"))
                                                    location:loc];
         XTForCStyleNode* f = [[XTForCStyleNode alloc] initWithLoopInit:init
                                                              condition:c
@@ -1354,7 +1354,17 @@ static NSString* parRootName(XTASTNode* n)
         // declines (the CPU loop stayed scalar); a local is promoted to a phi
         // and vectorises. The write-back keeps the ivar, which merge() folds
         // and the GPU printers read as the per-thread partial.
+        //
+        // The loop's UPPER BOUND is hoisted into a local too. `i < self.hi`
+        // reads the ivar in the loop HEADER every iteration, so the header
+        // carries a memory op: the vectoriser requires a pure header (the
+        // bound is what its guard tests), so every par loop was refused and
+        // stayed scalar while the same loop written by hand — and OpenMP —
+        // vectorised. Reading `hi` once, before the loop, makes the header the
+        // guard alone. `lo` was already evaluated once, in the for-init.
         NSMutableArray<XTASTNode*>* stmts = [NSMutableArray array];
+        [stmts addObject:[[XTVariableDeclNode alloc] initWithName:@"__par_hi" type:ivT
+                                                    initialiser:cast(ivT, ident(@"hi")) location:loc]];
         for (NSArray<NSString*>* r in reductions)
             [stmts addObject:[[XTVariableDeclNode alloc] initWithName:r[1] type:redTypes[r[1]]
                                                        initialiser:member(@"self", r[1]) location:loc]];

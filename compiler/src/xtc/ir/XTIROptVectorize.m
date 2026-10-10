@@ -78,6 +78,11 @@
 // The iv's (constant) entry value. The runtime-trip limit M must be computed
 // from the trip LENGTH (n - ivStart), not the bound: see xtvEmitRuntimeM.
 @property(nonatomic) int64_t ivStart;
+// A RUNTIME iv entry value (a `par` chunk's `lo`): the loop does not start at
+// a literal, which used to refuse it outright. When set, the vector loop begins
+// at this value and the runtime limit M is computed from (bound - start); the
+// constant `ivStart` is then 0. The value must be loop-invariant.
+@property(nonatomic) XTIROperand* ivStartOp;
 @property(nonatomic) XTIRBlock* preheader; // header pred that is not the latch
 // Min/max reduction (isMaxMin = YES): the loop body is a diamond
 //   body: load elem; cmp(elem,acc); CondBranch then, join
@@ -1442,6 +1447,7 @@ static void xtvCloneLoop(XTIRFunction* fn, XTIRBlock* H, XTIRBlock* B,
 // basic-ALU subset every vectorising back end already handles.
 static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                                    XTIROperand* boundOp, int64_t ivStart,
+                                   XTIROperand* startOp,
                                    NSUInteger vw, XTIRType* ivTy)
     {
     XTIROperand* (^emit)(XTIROpcode, NSArray<XTIROperand*>*) =
@@ -1457,11 +1463,10 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                                                                dbgLoc:nil]];
           return [XTIROperand useWithValueId:rid];
         };
-    XTIROperand* tl = boundOp;
-    if (ivStart != 0)
-        tl = emit(XTIROpSub, @[ boundOp,
-                                [XTIROperand immIWithType:ivTy
-                                                    value:ivStart] ]);
+    XTIROperand* start = startOp;
+    if (!start && ivStart != 0)
+        start = [XTIROperand immIWithType:ivTy value:ivStart];
+    XTIROperand* tl = start ? emit(XTIROpSub, @[ boundOp, start ]) : boundOp;
     // max(tl, 0): tl & ~(tl >> (bits-1)) — the sign fills the mask when tl is
     // negative, so the And zeroes it; a non-negative tl is left alone.
     XTIROperand* sgn = emit(XTIROpAShr,
@@ -1472,10 +1477,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     XTIROperand* steps = emit(XTIROpAnd,
                               @[ ctl, [XTIROperand immIWithType:ivTy value:~((int64_t)vw - 1)] ]);
     XTIROperand* m = steps;
-    if (ivStart != 0)
-        m = emit(XTIROpAdd, @[ steps,
-                               [XTIROperand immIWithType:ivTy
-                                                   value:ivStart] ]);
+    if (start)
+        m = emit(XTIROpAdd, @[ steps, start ]);
     return m.valueId;
     }
 
@@ -1511,7 +1514,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         if (c.runtimeTrip)
             {
             XTIRValueId mid = xtvEmitRuntimeM(fn, c.preheader, c.boundOp,
-                                              c.ivStart, c.vw,
+                                              c.ivStart, c.ivStartOp, c.vw,
                                               c.ivPhi.result.type);
             runtimeMId = mid;
             gops[1] = [XTIROperand useWithValueId:mid];
@@ -2107,6 +2110,22 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                 [elemIds addObject:@(insn.result.valueId)];
                 continue;
                 }
+            // A STORE of an elementwise value to an iv-indexed address, alongside
+            // the reduction: saxpy's `v = 3*xs[i]+ys[i]; ys[i] = v; total += v`.
+            // The stored value is already in the elementwise set (it is exactly
+            // what the reduction folds), so the address is the only new shape and
+            // it must be an iv-indexed ElementAddr, the same one a Load uses. The
+            // applier turns this into a VStore; no lane type is taken from it.
+            if (op == XTIROpStore)
+                {
+                if (insn.operands.count < 2 || !isElemAddrAtIv(insn.operands[0]) ||
+                    !elemOperandOK(insn.operands[1]))
+                    {
+                    ok = NO;
+                    break;
+                    }
+                continue;
+                }
             if (op == XTIROpConst || op == XTIROpZExt || op == XTIROpSExt || op == XTIROpTrunc)
                 continue;
             // Unsigned division by a compile-time constant. There is no lane
@@ -2213,8 +2232,32 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         // (it starts at M, and re-analysing it re-clones it, without bound).
         XTIROperand* ivInitOp = entryOp(ivPhi);
         int64_t ivStart = 0;
-        if (!ivInitOp || !resolveConstInt(ivInitOp, defOf, &ivStart))
+        XTIROperand* ivStartOp = nil;
+        if (!ivInitOp)
             continue;
+        if (!resolveConstInt(ivInitOp, defOf, &ivStart))
+            {
+            // The induction variable does not start at a literal. This is the
+            // normal shape of a `par` chunk: the loop runs [lo, hi) and both are
+            // runtime values, so EVERY par loop used to be refused here and the
+            // whole CPU path stayed scalar. A runtime start is vectorisable: the
+            // vector loop begins at it and steps by vw, and the runtime limit is
+            // computed from (bound - start) in the preheader, exactly as a
+            // runtime BOUND already is. What the transform needs is that the
+            // start is loop-INVARIANT (defined outside H and B), because it is
+            // read once, in the preheader, to seed both.
+            if (ivInitOp.kind != XTIROperandKindUse)
+                continue;
+            XTIRBlock* sb = defBlk[@(ivInitOp.valueId)];
+            if (sb == H || sb == B)
+                continue;
+            // The constant-bound epilogue arithmetic below assumes a known
+            // start; with a runtime start, only the runtime-trip path works.
+            if (!runtimeTrip)
+                continue;
+            ivStartOp = ivInitOp;
+            ivStart = 0;
+            }
         if (!runtimeTrip && N <= ivStart)
             continue;
         // A NON-ZERO start is refused outright, and this is a BUG FIX, not a
@@ -2283,6 +2326,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         c.runtimeTrip = runtimeTrip;
         c.boundOp = guard.operands[1];
         c.ivStart = ivStart;
+        c.ivStartOp = ivStartOp;
         return c;
         }
     return nil;
@@ -2315,7 +2359,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         if (c.runtimeTrip)
             {
             XTIRValueId mid = xtvEmitRuntimeM(fn, PH, c.boundOp, c.ivStart,
-                                              c.vw, c.ivPhi.result.type);
+                                              c.ivStartOp, c.vw, c.ivPhi.result.type);
             runtimeMId = mid;
             gops[1] = [XTIROperand useWithValueId:mid];
             }
@@ -2488,6 +2532,22 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
             vl.memoryResult = insn.memoryResult;
             [newBody addObject:vl];
             vmap[@(insn.result.valueId)] = vr;
+            break;
+            }
+        // A store of an elementwise value: the vectorised form writes the whole
+        // vector at once. Mirrors the map applier; the recogniser has already
+        // proved the address is iv-indexed and the value is elementwise.
+        case XTIROpStore:
+            {
+            XTIROperand* vval = vecOperand(insn.operands[1]);
+            NSMutableArray<XTIROperand*>* ops = [insn.operands mutableCopy];
+            ops[1] = vval;
+            XTIRInsn* vs = [[XTIRInsn alloc] initWithOpcode:XTIROpVStore
+                                                     result:nil
+                                                   operands:ops
+                                                     dbgLoc:insn.dbgLoc];
+            vs.memoryResult = insn.memoryResult;
+            [newBody addObject:vs];
             break;
             }
         // `x / d` with d a compile-time constant: mulhu(x, M) >>u s. The
@@ -4786,7 +4846,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         if (c.runtimeTrip)
             {
             XTIRValueId mid = xtvEmitRuntimeM(fn, PH, c.boundOp, c.ivStart,
-                                              c.vw, c.ivPhi.result.type);
+                                              c.ivStartOp, c.vw, c.ivPhi.result.type);
             runtimeMId = mid;
             gops[1] = [XTIROperand useWithValueId:mid];
             }
