@@ -1348,7 +1348,20 @@ static NSString* parRootName(XTASTNode* n)
         // The block's goal holds for the CPU path too: under speed (the
         // default), a matrix multiply in the body may skip its NaN check.
         f.goal = frame[@"fast"] ? 1 : 2;
-        XTBlockNode* rb = [[XTBlockNode alloc] initWithStatements:@[ f ] location:loc];
+        // Each reduction accumulates in a LOCAL of run(), seeded from the
+        // ivar and stored back after the loop. The ivar is object memory, so a
+        // Load/Add/Store each iteration is not a phi and the vectoriser
+        // declines (the CPU loop stayed scalar); a local is promoted to a phi
+        // and vectorises. The write-back keeps the ivar, which merge() folds
+        // and the GPU printers read as the per-thread partial.
+        NSMutableArray<XTASTNode*>* stmts = [NSMutableArray array];
+        for (NSArray<NSString*>* r in reductions)
+            [stmts addObject:[[XTVariableDeclNode alloc] initWithName:r[1] type:redTypes[r[1]]
+                                                       initialiser:member(@"self", r[1]) location:loc]];
+        [stmts addObject:f];
+        for (NSArray<NSString*>* r in reductions)
+            [stmts addObject:assign(member(@"self", r[1]), ident(r[1]))];
+        XTBlockNode* rb = [[XTBlockNode alloc] initWithStatements:stmts location:loc];
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"run" returnTypes:@[ [XTType voidType] ]
                                                        parameters:@[] isStatic:NO isVarArgs:NO body:rb location:loc]];
         }

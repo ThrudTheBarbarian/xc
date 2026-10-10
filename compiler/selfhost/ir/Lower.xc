@@ -14560,6 +14560,45 @@ class ClassInfo
             }
         if (iv == (IRValue*)0 || f.params().count() == (u32)0)
             return (String*)0;
+        // The induction variable is the phi the loop's own increment steps by
+        // a CONSTANT, not simply the first phi: a reduction's accumulator is a
+        // phi too and a block with reductions lists one of those first (the
+        // reference's IR does). The increment is an Add/Sub of the phi and a
+        // loop-invariant value; a constant there marks the iv, a per-item value
+        // (a load) the accumulator.
+        {
+        IRValue* ivGuard = (IRValue*)0;
+        for (u32 gb = (u32)0; gb < f.blocks().count() && ivGuard == (IRValue*)0; gb = gb + (u32)1) {
+            IRBlock* gbb = (IRBlock*)f.blocks().get(gb);
+            for (u32 gp = (u32)0; gp < gbb.phis().count() && ivGuard == (IRValue*)0; gp = gp + (u32)1) {
+                IRInsn* ph = (IRInsn*)gbb.phis().get(gp);
+                if (ph.res() == (IRValue*)0)
+                    continue;
+                for (u32 bb2 = (u32)0; bb2 < f.blocks().count() && ivGuard == (IRValue*)0; bb2 = bb2 + (u32)1) {
+                    IRBlock* bb3 = (IRBlock*)f.blocks().get(bb2);
+                    for (u32 ii = (u32)0; ii < bb3.insns().count(); ii = ii + (u32)1) {
+                        IRInsn* ar = (IRInsn*)bb3.insns().get(ii);
+                        if (!ar.op().equals(String.withCString("Add")) && !ar.op().equals(String.withCString("Sub")))
+                            continue;
+                        if (ar.ops().count() < (u32)2)
+                            continue;
+                        IROperand* oa = (IROperand*)ar.ops().get((u32)0);
+                        IROperand* ob = (IROperand*)ar.ops().get((u32)1);
+                        bool aPhi = oa.kind() == (u8)OPK_USE && oa.val() == ph.res();
+                        bool bPhi = ob.kind() == (u8)OPK_USE && ob.val() == ph.res();
+                        if (!aPhi && !bPhi)
+                            continue;
+                        IROperand* other = aPhi ? ob : oa;
+                        ParIdx* px = parIndex(other, ph.res(), def, (u32)0);
+                        if (px.affine && px.k == (i64)0)
+                            { ivGuard = ph.res(); break; }
+                    }
+                }
+            }
+        }
+        if (ivGuard != (IRValue*)0)
+            iv = ivGuard;
+        }
         IRValue* selfVal = (IRValue*)f.params().get((u32)0);
         Map* writes = new Map();        // buffer -> Array of "affine k c" strings
         Map* wShown = new Map();        // buffer -> its first write's index, as shown

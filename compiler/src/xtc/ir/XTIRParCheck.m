@@ -692,7 +692,7 @@ static NSString* shownIndex(XTParIndex x)
                             scatter:(NSString* _Nullable* _Nonnull)scatter
     {
     NSMutableDictionary<NSNumber*, XTIRInsn*>* def = [NSMutableDictionary dictionary];
-    XTIRValueId iv = 0;
+    XTIRValueId firstPhi = 0;
     BOOL haveIV = NO;
     for (XTIRBlock* b in f.blocks)
         {
@@ -703,7 +703,7 @@ static NSString* shownIndex(XTParIndex x)
             def[@(i.result.valueId)] = i;
             if (!haveIV)
                 {
-                iv = i.result.valueId; // the outer loop's counter: the first phi
+                firstPhi = i.result.valueId;
                 haveIV = YES;
                 }
             }
@@ -713,6 +713,48 @@ static NSString* shownIndex(XTParIndex x)
         }
     if (!haveIV || f.paramTypes.count == 0)
         return nil;
+    // The induction variable is the phi the loop steps by a CONSTANT, not only
+    // the first phi: a reduction's accumulator is a phi too, and a block with
+    // reductions lists one of those first, so "the first phi" reads an
+    // accumulator and every array the loop indexes looks data-indexed. The step
+    // is an Add/Sub of the phi and a loop-invariant value; a constant there is
+    // the iv, a per-item value (a load) an accumulator. Mirrored in the port.
+    XTIRValueId iv = firstPhi;
+    BOOL ivFound = NO;
+    for (XTIRBlock* b in f.blocks)
+        {
+        if (ivFound)
+            break;
+        for (XTIRInsn* ph in b.phiNodes)
+            {
+            if (ivFound || !ph.result)
+                continue;
+            for (XTIRBlock* b2 in f.blocks)
+                {
+                if (ivFound)
+                    break;
+                for (XTIRInsn* ar in b2.instructions)
+                    {
+                    if (ar.opcode != XTIROpAdd && ar.opcode != XTIROpSub)
+                        continue;
+                    if (ar.operands.count < 2)
+                        continue;
+                    BOOL aPhi = ar.operands[0].kind == XTIROperandKindUse && ar.operands[0].valueId == ph.result.valueId;
+                    BOOL bPhi = ar.operands[1].kind == XTIROperandKindUse && ar.operands[1].valueId == ph.result.valueId;
+                    if (!aPhi && !bPhi)
+                        continue;
+                    XTIROperand* other = aPhi ? ar.operands[1] : ar.operands[0];
+                    XTParIndex px = [self indexOf:other iv:ph.result.valueId defs:def depth:0];
+                    if (px.affine && px.k == 0)
+                        {
+                        iv = ph.result.valueId;
+                        ivFound = YES;
+                        break;
+                        }
+                    }
+                }
+            }
+        }
     XTIRValueId selfId = (XTIRValueId)0; // parameter n is value n; self is the first
     NSMutableDictionary<NSString*, NSMutableArray<NSValue*>*>* writes = [NSMutableDictionary dictionary];
     NSMutableArray<NSArray*>* reads = [NSMutableArray array]; // [buffer, NSValue(index)]

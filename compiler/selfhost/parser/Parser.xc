@@ -2662,7 +2662,18 @@ class Parser
             // The block's goal holds for the CPU path too. As the reference.
             f.addFlag(frame.get((Hashable*)String.withCString("fast")) != 0 ? (u32)NF_GOAL_SPEED : (u32)NF_GOAL_ACCURACY);
             Node* rb = mk((u16)nkBlock);
+            for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
+                Node* r = (Node*)reds.get(i);
+                Node* d = mkNamed((u16)nkVariableDecl, r.name());
+                d.setOp((String*)redTypes.get((Hashable*)r.name()));
+                d.add(parMember(String.withCString("self"), r.name()));
+                rb.add(d);
+            }
             rb.add(f);
+            for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
+                Node* r = (Node*)reds.get(i);
+                rb.add(parAssign(parMember(String.withCString("self"), r.name()), parIdent(r.name())));
+            }
             m.add(rb);
             cls.add(m);
         }
