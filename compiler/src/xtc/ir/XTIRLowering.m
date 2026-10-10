@@ -3412,6 +3412,27 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     return v;
     }
 
+// A constant of the target's pointer WORD width. An allocator SIZE (a class's
+// stride, a struct array's element size) can exceed 64 KiB, and the runtime
+// takes it as `unsigned long`. Emitted as a u16 it carried a value larger than
+// its own type: arm64 happened to materialise the whole 32-bit value, but
+// x86-64 put it through a 16-bit register, so a 65544-byte class allocated 8
+// bytes and the object's own init wrote past the block (Monokracy M4: every
+// World is ~75 KB). The width follows the pointer, so 6502/arm9 keep u16.
+- (XTIRValue*)emitWordConst:(uint64_t)value
+    {
+    NSUInteger w = [XTPointerType heapPointerWidth];
+    XTIRType* t = w >= 8 ? [XTIRType u64Type] : w >= 4 ? [XTIRType u32Type] : [XTIRType u16Type];
+    XTIRValue* v = [self allocateValueOfType:t atSite:self.currentBlock];
+    XTIRInsn* c = [[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                            result:v
+                                          operands:@[ [XTIROperand immIWithType:t
+                                                                          value:(int64_t)value] ]
+                                            dbgLoc:nil];
+    [self.currentBlock appendInstruction:c];
+    return v;
+    }
+
 - (void)emitRetain:(XTIRValue*)pointer
     {
     XTIRValue* newMem = [self allocateValueOfType:[XTIRType memoryType]
@@ -8278,7 +8299,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     if (ci)
         {
         uint32_t stride = ci.instanceLayout ? (uint32_t)ci.instanceLayout.size : 0;
-        XTIRValue* strideVal = [self emitU16Const:stride];
+        XTIRValue* strideVal = [self emitWordConst:stride];
         // dealloc pointer: &<Class>$dealloc when one exists (own or synthesised
         // for strong-ivar/inheritance teardown — same test the backends used),
         // else a null pointer. Null via Const#0:U16 → IntToPtr (a direct Const
@@ -8334,7 +8355,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                                : nil;
             XTIRType* pointee = (rt && rt.kind == XTIRTypeKindPtr) ? rt.pointeeType : nil;
             if (pointee && pointee.kind == XTIRTypeKindAgg && pointee.layout && !XTIRIsPrimitiveElemName(node.className))
-                structStride = [self emitU16Const:(uint32_t)pointee.layout.size];
+                structStride = [self emitWordConst:(uint32_t)pointee.layout.size];
             }
         if (structStride)
             {

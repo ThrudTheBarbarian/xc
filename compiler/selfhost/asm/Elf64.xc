@@ -1203,6 +1203,7 @@ class ElfSharedInfo
         names.add((Object*)String.withCString(".rela.dyn"));
         names.add((Object*)String.withCString(".text"));
         names.add((Object*)String.withCString(".data"));
+        names.add((Object*)String.withCString(".bss"));
         names.add((Object*)String.withCString(".got"));
         names.add((Object*)String.withCString(".dynamic"));
         names.add((Object*)String.withCString(".symtab"));
@@ -1247,18 +1248,27 @@ class ElfSharedInfo
         shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)5)), (u32)1, (u32)6,
               textOff, textOff, textLen, (u32)0, (u32)0, (u32)16, (u32)0);
         shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)6)), (u32)1, (u32)3,
-              dataAddr, dataAddr, data.length(), (u32)0, (u32)0, (u32)16, (u32)0);
-        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)7)), (u32)1, (u32)3,
+              dataAddr, dataAddr, dataFileSz, (u32)0, (u32)0, (u32)16, (u32)0);
+        // .bss (SHT_NOBITS) describes the trailing zero run: .data holds only
+        // the bytes in the file, so its header no longer counts bytes past the
+        // file (the x86-64 half of 642). Emitted only when there are such bytes.
+        u32 bssSz = data.length() > dataFileSz ? data.length() - dataFileSz : (u32)0;
+        if (bssSz > (u32)0)
+            shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)7)), (u32)8, (u32)3,
+                  dataAddr + dataFileSz, dataAddr + dataFileSz, bssSz, (u32)0, (u32)0, (u32)16, (u32)0);
+        // The shdr CALL ORDER is the section index, so .bss (index 7 here) shifts
+        // the rest by one: .got is 8, .dynamic 9, .symtab 10, .strtab 11.
+        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)8)), (u32)1, (u32)3,
               gotOff, gotOff, ngot * (u32)8, (u32)0, (u32)0, (u32)8, (u32)8);
-        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)8)), (u32)6, (u32)3,
+        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)9)), (u32)6, (u32)3,
               dynOff, dynOff, nDyn * (u32)DYN_SZ, (u32)2, (u32)0, (u32)8, (u32)DYN_SZ);
-        u32 strtabIdx = (u32)10;
-        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)9)), (u32)2, (u32)0,
+        u32 strtabIdx = (u32)11;
+        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)10)), (u32)2, (u32)0,
               (u32)0, symtabOff, symtab.count(), strtabIdx, (u32)1, (u32)8, (u32)SYM_SZ);
-        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)10)), (u32)3, (u32)0,
+        shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)11)), (u32)3, (u32)0,
               (u32)0, strtabOff, strtab.count(), (u32)0, (u32)0, (u32)1, (u32)0);
         if (hasIface)
-            shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)11)), (u32)1, (u32)0,
+            shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)12)), (u32)1, (u32)0,
                   (u32)0, ifaceOff, iface.count(), (u32)0, (u32)0, (u32)1, (u32)0);
         if (dwarf != (DwarfWriter*)0)
             for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
@@ -1954,6 +1964,8 @@ class ElfSharedInfo
         strInto(shstr, String.withCString(".text"));
         u32 nData = shstr.count();
         strInto(shstr, String.withCString(".data"));
+        u32 nBss = shstr.count();
+        strInto(shstr, String.withCString(".bss"));
         u32 nSymtab = shstr.count();
         strInto(shstr, String.withCString(".symtab"));
         u32 nStrtab = shstr.count();
@@ -1994,12 +2006,22 @@ class ElfSharedInfo
         shdr((u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0);
         shdr(nText, (u32)1, (u32)2 | (u32)4, textAddr, textOff, text.length(),
              (u32)0, (u32)0, (u32)64, (u32)0);
-        shdr(nData, (u32)1, (u32)2 | (u32)1, dataAddr, dataOff, data.length(),
+        // .data holds only the bytes in the file; the trailing zero run is
+        // described by .bss (SHT_NOBITS), so .data's header never counts bytes
+        // past the file. Mirrors the dynamic writer and the reference.
+        u32 dataFileSz = fileSizeOf(data);
+        u32 bssSzS = data.length() > dataFileSz ? data.length() - dataFileSz : (u32)0;
+        shdr(nData, (u32)1, (u32)2 | (u32)1, dataAddr, dataOff, dataFileSz,
              (u32)0, (u32)0, (u32)16, (u32)0);
+        if (bssSzS > (u32)0)
+            shdr(nBss, (u32)8, (u32)2 | (u32)1, dataAddr + dataFileSz, dataOff + dataFileSz,
+                 bssSzS, (u32)0, (u32)0, (u32)16, (u32)0);
         // sh_info is the index of the first non-local symbol; every symbol here
-        // is global, so that is 1 — the entry straight after the null one.
+        // is global, so that is 1 — the entry straight after the null one. The
+        // shdr call order is the section index, so .bss shifts .symtab's own
+        // link (its .strtab) from 4 to 5.
         shdr(nSymtab, (u32)2, (u32)0, (u32)0, symOff, symtab.count(),
-             (u32)4, (u32)1, (u32)8, (u32)24);
+             bssSzS > (u32)0 ? (u32)5 : (u32)4, (u32)1, (u32)8, (u32)24);
         shdr(nStrtab, (u32)3, (u32)0, (u32)0, strOff, strtab.count(),
              (u32)0, (u32)0, (u32)1, (u32)0);
         shdr(nShstr, (u32)3, (u32)0, (u32)0, shstrOff, shstr.count(),
@@ -2018,9 +2040,9 @@ class ElfSharedInfo
         // e_shoff, e_shnum and e_shstrndx were written as zero above.
         for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
             _out.setByteAt((u32)$28 + i, (u8)((shOff >> ((u32)8 * i)) & (u32)$FF));
-        _out.setByteAt((u32)$3C, (u8)((u32)6 + di));
+        _out.setByteAt((u32)$3C, (u8)((u32)(bssSzS > (u32)0 ? 7 : 6) + di));
         _out.setByteAt((u32)$3D, (u8)((u32)0));
-        _out.setByteAt((u32)$3E, (u8)((u32)5));
+        _out.setByteAt((u32)$3E, (u8)(bssSzS > (u32)0 ? (u32)6 : (u32)5));
         _out.setByteAt((u32)$3F, (u8)((u32)0));
         }
 

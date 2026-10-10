@@ -533,6 +533,7 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
         {
         SHT_STRTAB = 3,
         SHT_DYNAMIC = 6,
+        SHT_NOBITS = 8,
         SHT_DYNSYM = 11,
         DT_SONAME = 14,
         STB_GLOBAL = 1,
@@ -1773,6 +1774,7 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
         SHT_RELA = 4,
         SHT_HASH = 5,
         SHT_DYNAMIC = 6,
+        SHT_NOBITS = 8,
         SHT_DYNSYM = 11,
         SHF_WRITE = 1,
         SHF_ALLOC = 2,
@@ -1825,7 +1827,19 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     NSAssert(secs.count == kTextSecIdx, @"kTextSecIdx is out of step with the section list");
     sec(@".text", SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR, textOff, textLen, 0, 0, 16, 0);
     NSAssert(secs.count == kDataSecIdx, @"kDataSecIdx is out of step with the section list");
-    sec(@".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, dataAddr, data.length, 0, 0, 16, 0);
+    // .data is the bytes that are IN THE FILE. A trailing run of zeros (the
+    // zero-initialised globals, laid out last on purpose) is left out of the
+    // file so p_memsz > p_filesz and the kernel zero-fills it, but it still
+    // has to be described: as a .bss (SHT_NOBITS) section. Sizing .data by
+    // data.length made its header count bytes that are not in the file, so
+    // readelf warned and gdb discarded .data ("outside of ELF segments") on
+    // any program with a large zero-init global (Monokracy M4). 642's x86-64
+    // half, the other way up from arm64's.
+    uint64_t dFileSz = fileSizeOf(data);
+    uint64_t bssSz = data.length > dFileSz ? data.length - dFileSz : 0;
+    sec(@".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, dataAddr, dFileSz, 0, 0, 16, 0);
+    if (bssSz)
+        sec(@".bss", SHT_NOBITS, SHF_ALLOC | SHF_WRITE, dataAddr + dFileSz, bssSz, 0, 0, 16, 0);
     sec(@".got", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, gotOff, ngot * 8, 0, 0, 8, 8);
     sec(@".dynamic", SHT_DYNAMIC, SHF_ALLOC | SHF_WRITE, dynOff, nDyn * DYN_SZ, 2, 0, 8, DYN_SZ);
     NSUInteger symtabIdx = secs.count, strtabIdx = symtabIdx + 1;
@@ -2060,6 +2074,7 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
         SHT_PROGBITS = 1,
         SHT_SYMTAB = 2,
         SHT_STRTAB = 3,
+        SHT_NOBITS = 8,
         SHF_WRITE = 1,
         SHF_ALLOC = 2,
         SHF_EXECINSTR = 4,
@@ -2096,7 +2111,7 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     put8v(shstr, 0);
     NSMutableDictionary<NSString*, NSNumber*>* shName = [NSMutableDictionary dictionary];
     NSDictionary<NSString*, NSData*>* dwarfSecs = XTElfDwarfSections(YES, textAddr, text.length, symbols, dataSymbols);
-    NSMutableArray<NSString*>* shNames = [@[ @".text", @".data", @".symtab", @".strtab", @".shstrtab" ] mutableCopy];
+    NSMutableArray<NSString*>* shNames = [@[ @".text", @".data", @".bss", @".symtab", @".strtab", @".shstrtab" ] mutableCopy];
     if (dwarfSecs)
         for (NSString* k in XTElfDwarfOrder())
             [shNames addObject:[@"." stringByAppendingString:k]];
@@ -2144,14 +2159,21 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     shdr(nil, 0, 0, 0, 0, 0, 0, 0, 0, 0); // 0: null
     shdr(@".text", SHT_PROGBITS, SHF_ALLOC | SHF_EXECINSTR, textAddr, textOff,
          text.length, 0, 0, 64, 0); // 1
+    // .data is the bytes IN THE FILE; the trailing zero run (zero-init globals)
+    // is left out of the file and described by .bss (SHT_NOBITS), so .data's
+    // header never counts bytes beyond the file (see the dynamic writer).
+    uint64_t bssSzS = data.length > dataFileSz ? data.length - dataFileSz : 0;
     shdr(@".data", SHT_PROGBITS, SHF_ALLOC | SHF_WRITE, dataAddr, dataOff,
-         data.length, 0, 0, 16, 0); // 2
+         dataFileSz, 0, 0, 16, 0); // 2
+    if (bssSzS)
+        shdr(@".bss", SHT_NOBITS, SHF_ALLOC | SHF_WRITE, dataAddr + dataFileSz,
+             dataOff + dataFileSz, bssSzS, 0, 0, 16, 0); // 3
     // sh_info is the index of the first non-local symbol; every symbol we emit is
     // global, so that is 1 — the entry straight after the null one.
-    shdr(@".symtab", SHT_SYMTAB, 0, 0, symOff, symtab.length, 4, 1, 8, 24);   // 3
-    shdr(@".strtab", SHT_STRTAB, 0, 0, strOff, strtab.length, 0, 0, 1, 0);    // 4
-    shdr(@".shstrtab", SHT_STRTAB, 0, 0, shstrOff, shstr.length, 0, 0, 1, 0); // 5
-    // 6..: -g's debug sections.
+    shdr(@".symtab", SHT_SYMTAB, 0, 0, symOff, symtab.length, bssSzS ? 5 : 4, 1, 8, 24);
+    shdr(@".strtab", SHT_STRTAB, 0, 0, strOff, strtab.length, 0, 0, 1, 0);
+    shdr(@".shstrtab", SHT_STRTAB, 0, 0, shstrOff, shstr.length, 0, 0, 1, 0);
+    // ...: -g's debug sections.
     NSUInteger di = 0;
     if (dwarfSecs)
         for (NSString* k in XTElfDwarfOrder())
@@ -2162,9 +2184,9 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     uint8_t* p = out.mutableBytes;
     for (int i = 0; i < 8; i++)
         p[0x28 + i] = (uint8_t)(shOff >> (8 * i));
-    p[0x3C] = (uint8_t)(6 + di);
+    p[0x3C] = (uint8_t)((bssSzS ? 7 : 6) + di);
     p[0x3D] = 0; // e_shnum
-    p[0x3E] = 5;
+    p[0x3E] = (uint8_t)(bssSzS ? 6 : 5);
     p[0x3F] = 0; // e_shstrndx
     return out;
     }

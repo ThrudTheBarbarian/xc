@@ -10363,7 +10363,7 @@ class ClassInfo
             {
             u32 lid = layoutFor(nm);
             if (lid < _m.layouts().count())
-                sv = u16Const(((IRLayout*)_m.layouts().get(lid)).size());
+                sv = wordConst(((IRLayout*)_m.layouts().get(lid)).size());
             }
         IRInsn* c = IRInsn.with(String.withCString("Call"));
         c.add(IROperand.sym(runtimeHelper(helper)));
@@ -10421,7 +10421,7 @@ class ClassInfo
         IRValue* count = hasCount ? lowerCount(n.kid((u32)0)) : u16Const((u32)1);
         if (_failed)
             return (IRValue*)0;
-        IRValue* stride = u16Const(ci.instSize());
+        IRValue* stride = wordConst(ci.instSize());
         // The dealloc pointer is a runtime ARGUMENT, which is what lets one
         // generic allocator serve every class. It is the class's own
         // destructor where there is one — the runtime writes it into the
@@ -10929,6 +10929,23 @@ class ClassInfo
         Array* ops = new Array();
         ops.add((Object*)IROperand.immI((i32)v, String.withCString("U16")));
         return emit(String.withCString("Const"), String.withCString("U16"), ops);
+        }
+
+    // A constant of the pointer WORD width. An allocator SIZE can exceed
+    // 64 KiB and the runtime takes it as `unsigned long`; emitted as a u16 it
+    // carried a value larger than its type, and x86-64 put it through a 16-bit
+    // register, so a 65544-byte class allocated 8 bytes and corrupted the heap.
+    // Mirrors emitWordConst in the reference.
+    IRValue* wordConst(u64 v)
+        {
+        String* ty = String.withCString("U16");
+        if (_ptrW >= (u32)8)
+            ty = String.withCString("U64");
+        else if (_ptrW >= (u32)4)
+            ty = String.withCString("U32");
+        Array* ops = new Array();
+        ops.add((Object*)IROperand.immI((i64)v, ty));
+        return emit(String.withCString("Const"), ty, ops);
         }
 
     bool symbolExists(String* name)
