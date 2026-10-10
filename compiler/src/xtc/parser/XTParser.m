@@ -1243,6 +1243,29 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     {
     XTSourceLocation* loc = [self currentLocation];
 
+    // Leading storage-class qualifiers at FILE SCOPE, in any order and any
+    // number. parseVarDeclStatement has always consumed these for a statement;
+    // the top-level path did not, so `static void f(void) {}` — which UXKit is
+    // full of, and which the shipped compiler accepts — failed with "Expected
+    // type in declaration". `extern` is handled by parseTopLevelDeclaration
+    // before this is reached, so it is not repeated here.
+    BOOL isVolatile = NO, isRegister = NO, isStatic = NO, isGlobal = NO;
+    while ([self check:XTTokenVolatile] || [self check:XTTokenRegister] ||
+           [self check:XTTokenStatic] || [self check:XTTokenGlobal] ||
+           [self check:XTTokenInline])
+        {
+        if ([self match:XTTokenVolatile])
+            isVolatile = YES;
+        if ([self match:XTTokenRegister])
+            isRegister = YES;
+        if ([self match:XTTokenStatic])
+            isStatic = YES;
+        if ([self match:XTTokenGlobal])
+            isGlobal = YES;
+        if ([self match:XTTokenInline])
+            { /* accepted and consumed; no codegen effect */ }
+        }
+
     NSArray<XTType*>* types = [self parseTypeList];
     if (types.count == 0)
         {
@@ -1342,7 +1365,10 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                                                                         type:varType
                                                                  initialiser:firstInit
                                                                     location:loc];
-    firstDecl.isGlobal = topLevel;
+    firstDecl.isGlobal = topLevel || isGlobal;
+    firstDecl.isStatic = isStatic;
+    firstDecl.isVolatile = isVolatile;
+    firstDecl.isRegister = isRegister;
     [decls addObject:firstDecl];
     [self blkBind:firstDecl.varName type:firstDecl.declaredType]; // task #26
     if (!firstDecl.declaredType || firstDecl.declaredType.kind == XTTypeKindAuto)
@@ -1362,7 +1388,10 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                                                                            type:varType
                                                                     initialiser:nextInit
                                                                        location:nextName.location];
-        nextDecl.isGlobal = topLevel;
+        nextDecl.isGlobal = topLevel || isGlobal;
+        nextDecl.isStatic = isStatic;
+        nextDecl.isVolatile = isVolatile;
+        nextDecl.isRegister = isRegister;
         [decls addObject:nextDecl];
         [self blkBind:nextDecl.varName type:nextDecl.declaredType]; // task #26
         }
