@@ -245,6 +245,20 @@ class SpvMod
         return cached(k, (u32)SPV_TYPEINT, spvW((u32)2, w, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0), true);
         }
 
+    // The signed type of the same width. The module holds one integer type a
+    // width and carries the signedness on the OPERATION (OpSDiv against
+    // OpUDiv): the NVIDIA Vulkan driver reads the operand type's signedness as
+    // the operation's for these, so a signed divide carries this type and the
+    // bits cross by OpBitcast (bug 649; the reference explains).
+    u32 typeIntSigned(u32 w)
+        {
+        if (w == (u32)64)
+            usesInt64 = true;
+        String* k = String.withCString("s");
+        k.append(String.withU32(w));
+        return cached(k, (u32)SPV_TYPEINT, spvW((u32)2, w, (u32)1, (u32)0, (u32)0, (u32)0, (u32)0), true);
+        }
+
     u32 typeFloat(u32 w)
         {
         if (w == (u32)64)

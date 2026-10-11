@@ -169,6 +169,19 @@ static NSArray<NSNumber*>* spvString(NSString* s)
     return [self cached:[NSString stringWithFormat:@"i%u", w] op:SpvOpTypeInt words:@[ @(w), @0 ] resultFirst:YES];
     }
 
+// The signed type of the same width. The module holds one integer type a width
+// and carries the signedness on the OPERATION (OpSDiv against OpUDiv), which
+// every driver here honours — except OpSDiv and OpSRem, where the NVIDIA Vulkan
+// driver reads the operand type's signedness as the operation's (bug 649: a
+// negative divisor divided and remaindered unsigned). These two instructions
+// carry this type instead, and the bits cross by OpBitcast.
+- (uint32_t)typeIntSigned:(uint32_t)w
+    {
+    if (w == 64)
+        self.usesInt64 = YES;
+    return [self cached:[NSString stringWithFormat:@"s%u", w] op:SpvOpTypeInt words:@[ @(w), @1 ] resultFirst:YES];
+    }
+
 - (uint32_t)typeFloat:(uint32_t)w
     {
     if (w == 64)
@@ -747,6 +760,38 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
             op = SpvOpFDiv;
             break;
         default: return NO;
+        }
+    // A signed divide carries the SIGNED type on the instruction: the module
+    // holds one integer type a width and carries the signedness on the
+    // OPERATION (OpSDiv against OpUDiv), which the drivers honour here. The
+    // bits are the same, so the operands and the result cross by OpBitcast and
+    // cost nothing.
+    if (spvSigned(t) && op == SpvOpSDiv)
+        {
+        uint32_t sg = [self.spv typeIntSigned:t.kind == XTIRTypeKindI64 ? 64 : 32];
+        uint32_t sa = [self emit:SpvOpBitcast type:sg args:@[ @(a) ]];
+        uint32_t sb = [self emit:SpvOpBitcast type:sg args:@[ @(b) ]];
+        uint32_t r = [self emit:SpvOpSDiv type:sg args:@[ @(sa), @(sb) ]];
+        [self setResult:i to:[self spvCanon:[self emit:SpvOpBitcast type:ty args:@[ @(r) ]] type:t]];
+        return YES;
+        }
+    // A signed REMAINDER is not OpSRem. The NVIDIA Vulkan driver reads the
+    // operand type's signedness as the operation's and computes the UNSIGNED
+    // remainder: par_gpu_wide_div's `s % sd` with sd negative comes back
+    // 2488825656611424 where the CPU and the CUDA path of the same IR give
+    // 1175, at 32 and at 64 bits, with the division itself right (bug 649).
+    // C defines `a % b` as `a - (a/b)*b`, and the division is right on every
+    // driver measured, so that is what is emitted.
+    if (spvSigned(t) && op == SpvOpSRem)
+        {
+        uint32_t sg = [self.spv typeIntSigned:t.kind == XTIRTypeKindI64 ? 64 : 32];
+        uint32_t sa = [self emit:SpvOpBitcast type:sg args:@[ @(a) ]];
+        uint32_t sb = [self emit:SpvOpBitcast type:sg args:@[ @(b) ]];
+        uint32_t q = [self emit:SpvOpSDiv type:sg args:@[ @(sa), @(sb) ]];
+        uint32_t qu = [self emit:SpvOpBitcast type:ty args:@[ @(q) ]];
+        uint32_t p = [self emit:SpvOpIMul type:ty args:@[ @(qu), @(b) ]];
+        [self setResult:i to:[self spvCanon:[self emit:SpvOpISub type:ty args:@[ @(a), @(p) ]] type:t]];
+        return YES;
         }
     [self setResult:i to:[self spvCanon:[self emit:op type:ty args:@[ @(a), @(b) ]] type:t]];
     return YES;

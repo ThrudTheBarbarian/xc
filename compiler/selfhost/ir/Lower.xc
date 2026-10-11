@@ -17900,6 +17900,25 @@ class ClassInfo
             }
         else
             return false;
+        bool isSgn = ptxIs(t, "I8") || ptxIs(t, "I16") || ptxIs(t, "I32") || ptxIs(t, "I64");
+        // A signed divide carries the SIGNED type on the instruction; a signed
+        // REMAINDER is not OpSRem at all (the reference explains both, bug 649).
+        if (isSgn && (op == (u32)SPV_SDIV || op == (u32)SPV_SREM))
+            {
+            u32 sg = _sMod.typeIntSigned(ptxIs(t, "I64") ? (u32)64 : (u32)32);
+            u32 sa = spvEmitR((u32)SPV_BITCAST, sg, spvA1(a));
+            u32 sb = spvEmitR((u32)SPV_BITCAST, sg, spvA1(b));
+            u32 q = spvEmitR((u32)SPV_SDIV, sg, spvA2(sa, sb));
+            u32 qu = spvEmitR((u32)SPV_BITCAST, ty, spvA1(q));
+            if (op == (u32)SPV_SDIV)
+                {
+                spvSetResult(ip, spvCanon(qu, t));
+                return true;
+                }
+            u32 p = spvEmitR((u32)SPV_IMUL, ty, spvA2(qu, b));
+            spvSetResult(ip, spvCanon(spvEmitR((u32)SPV_ISUB, ty, spvA2(a, p)), t));
+            return true;
+            }
         spvSetResult(ip, spvCanon(spvEmitR(op, ty, spvA2(a, b)), t));
         return true;
         }
