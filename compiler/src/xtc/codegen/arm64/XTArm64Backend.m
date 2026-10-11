@@ -1150,7 +1150,9 @@ static const NSUInteger kArm64VaForwardWords = 16;
             // — extend their live ranges, else the allocator reuses an operand's
             // register for a value defined between the ICmp and the branch (e.g.
             // a short-circuit's false constant) and clobbers it before the cmp.
-            if (insn.opcode == XTIROpCondBranch && insn.operands.count >= 1 &&
+            // A Select that fuses one does the same, for the same reason.
+            if (((insn.opcode == XTIROpCondBranch && insn.operands.count >= 1) ||
+                 (insn.opcode == XTIROpSelect && insn.operands.count >= 1)) &&
                 insn.operands[0].kind == XTIROperandKindUse &&
                 [ctx.fusedCmps containsObject:@(insn.operands[0].valueId)]) {
                 XTIRInsn *icmp = ctx.defOf[@(insn.operands[0].valueId)];
@@ -2977,6 +2979,27 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
     return [self condStringForICmpPredicate:insn.predicate];
 }
 
+// The same for a float/double compare: emit the `fcmp` and return the
+// condition it leaves in the flags. A fused FCmp (its only reader a branch or a
+// select in the same block) is emitted HERE instead of at its own site, so the
+// reader can branch or select on the flags directly.
++ (NSString *)emitCompareForFCmp:(XTIRInsn *)insn ctx:(XTArm64FnCtx *)ctx {    XTIRValue *av = [ctx.fn valueForId:insn.operands[0].valueId];
+    NSString *s0 = [self fregName:0 forType:av.type];
+    NSString *s1 = [self fregName:1 forType:av.type];
+    NSString *a = [self operandReg:insn.operands[0] intoScratch:s0 ctx:ctx];
+    NSString *b = [self operandReg:insn.operands[1] intoScratch:s1 ctx:ctx];
+    [ctx.out appendFormat:@"    fcmp %@, %@\n", a, b];
+    switch (insn.predicate) {
+        case XTIRFCmpOEQ: return @"eq";
+        case XTIRFCmpONE: return @"ne";
+        case XTIRFCmpOLT: return @"mi";
+        case XTIRFCmpOGT: return @"gt";
+        case XTIRFCmpOLE: return @"ls";
+        case XTIRFCmpOGE: return @"ge";
+        default:          return @"eq";
+    }
+}
+
 #pragma mark - Single instruction emission
 
 // If `c` is a Const whose float value is exactly 2^k (k≥1), return k, else 0.
@@ -3313,15 +3336,52 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
 
     // A single-use ICmp feeding its own block's CondBranch fuses into the branch.
     ctx.fusedCmps = [NSMutableSet set];
+    // A comparison whose readers are ALL the condition operand of a CondBranch
+    // or a Select in its own block is never materialised: each reader emits the
+    // `cmp`/`fcmp` itself and consumes the flags. Every other Bool is built 0/1
+    // by `cset` and re-tested with `cmp reg,#0` — three instructions per select
+    // and per branch spent re-deriving flags the comparison already set, and in
+    // perlin's inner body one `t < 0.5` feeds TWO selects, so requiring a single
+    // reader left half of them paying it.
     for (XTIRBlock *bb in fn.blocks) {
+        NSMutableArray<NSNumber *> *conds = [NSMutableArray array];
         XTIRInsn *t = bb.terminator;
-        if (!t || t.opcode != XTIROpCondBranch || t.operands.count < 1) continue;
-        if (t.operands[0].kind != XTIROperandKindUse) continue;
-        NSNumber *cv = @(t.operands[0].valueId);
-        XTIRInsn *cmp = defOf[cv];
-        if (cmp && cmp.opcode == XTIROpICmp && cmp.result &&
-            [uses countForObject:cv] == 1 && [bb.instructions containsObject:cmp])
-            [ctx.fusedCmps addObject:cv];
+        if (t && t.opcode == XTIROpCondBranch && t.operands.count >= 1 &&
+            t.operands[0].kind == XTIROperandKindUse)
+            [conds addObject:@(t.operands[0].valueId)];
+        for (XTIRInsn *ins in bb.instructions) {
+            if (ins.opcode != XTIROpSelect || ins.operands.count < 1) continue;
+            if (ins.operands[0].kind != XTIROperandKindUse) continue;
+            [conds addObject:@(ins.operands[0].valueId)];
+        }
+        for (NSNumber *cv in conds) {
+            XTIRInsn *cmp = defOf[cv];
+            if (!cmp || (cmp.opcode != XTIROpICmp && cmp.opcode != XTIROpFCmp) || !cmp.result) continue;
+            if (![bb.instructions containsObject:cmp]) continue;
+            // Every reference to it in this block must be one of those select
+            // conditions, and there must be no reference anywhere else. A
+            // branch's condition is the terminator, so a comparison read by a
+            // branch lands on zero in-block references and one total use.
+            NSUInteger inBlock = 0; BOOL allConds = YES;
+            for (XTIRInsn *ins in bb.instructions) {
+                for (NSUInteger k = 0; k < ins.operands.count; k++) {
+                    if (ins.operands[k].kind != XTIROperandKindUse) continue;
+                    if (ins.operands[k].valueId != cv.unsignedIntValue) continue;
+                    if (!((k == 0) && ins.opcode == XTIROpSelect)) allConds = NO;
+                    inBlock++;
+                }
+            }
+            NSUInteger all = [uses countForObject:cv];
+            if (allConds && all == inBlock && inBlock > 0)
+                [ctx.fusedCmps addObject:cv];               // selects only
+            else if (all == 1 && inBlock == 0 && cmp.opcode == XTIROpICmp)
+                [ctx.fusedCmps addObject:cv];               // the terminator's
+            // The terminator's path stays ICmp-only: it is written around integer
+            // compares (cbz/cbnz for a zero test, an inversion through
+            // negatePred), and an FCmp's float conditions do not survive that
+            // inversion. An FCmp fuses into a SELECT, where the flags are read
+            // directly and none of it applies.
+        }
     }
 
     for (XTIRBlock *bb in fn.blocks) {
@@ -4547,6 +4607,25 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 NSString *s1 = dbl ? @"d17" : @"s17";
                 NSString *s2 = dbl ? @"d16" : @"s16";
                 NSString *s0 = dbl ? @"d16" : @"s16";
+                // A fused comparison is emitted HERE, and the select reads its
+                // flags: no `cset` at the comparison, no `cmp reg,#0` here. The
+                // operand loads below are movz/movk/ldr/fmov, none of which touch
+                // the flags, so the `fcsel` still sees them.
+                NSString *fcond = nil;
+                if (insn.operands[0].kind == XTIROperandKindUse &&
+                    [ctx.fusedCmps containsObject:@(insn.operands[0].valueId)]) {
+                    XTIRInsn *cmp = ctx.defOf[@(insn.operands[0].valueId)];
+                    if (cmp)
+                        fcond = (cmp.opcode == XTIROpFCmp) ? [self emitCompareForFCmp:cmp ctx:ctx]
+                                                           : [self emitCompareForICmp:cmp ctx:ctx];
+                }
+                if (fcond) {
+                    [self loadFPOperand:insn.operands[1] intoReg:s1 double:dbl ctx:ctx];
+                    [self loadFPOperand:insn.operands[2] intoReg:s2 double:dbl ctx:ctx];
+                    [ctx.out appendFormat:@"    fcsel %@, %@, %@, %@\n", s0, s1, s2, fcond];
+                    [self storeReg:s0 intoValue:insn.result.valueId ctx:ctx];
+                    break;
+                }
                 NSString *cr = [self condRegForOperand:insn.operands[0] ctx:ctx];
                 [self materialiseOperand:insn.operands[0] intoReg:cr ctx:ctx];
                 [self loadFPOperand:insn.operands[1] intoReg:s1 double:dbl ctx:ctx];
@@ -4557,6 +4636,28 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 break;
             }
             BOOL needX = [self irTypeNeedsXReg:insn.result.type];
+            // As for the FP select above: a fused comparison is emitted here and
+            // the csel reads its flags directly.
+            NSString *icond = nil;
+            if (insn.operands[0].kind == XTIROperandKindUse &&
+                [ctx.fusedCmps containsObject:@(insn.operands[0].valueId)]) {
+                XTIRInsn *cmp = ctx.defOf[@(insn.operands[0].valueId)];
+                if (cmp)
+                    icond = (cmp.opcode == XTIROpFCmp) ? [self emitCompareForFCmp:cmp ctx:ctx]
+                                                       : [self emitCompareForICmp:cmp ctx:ctx];
+            }
+            if (icond) {
+                NSString *q1 = [self operandReg:insn.operands[1]
+                                    intoScratch:(needX ? @"x17" : @"w17") ctx:ctx];
+                NSString *q2 = [self operandReg:insn.operands[2]
+                                    intoScratch:(needX ? @"x15" : @"w15") ctx:ctx];
+                NSString *q0 = [self resultReg:insn.result.valueId
+                                       scratch:(needX ? @"x16" : @"w16") ctx:ctx];
+                [ctx.out appendFormat:@"    csel %@, %@, %@, %@\n", q0, q1, q2, icond];
+                [self canonicaliseReg:q0 toType:insn.result.type ctx:ctx];
+                [self storeReg:q0 intoValue:insn.result.valueId ctx:ctx];
+                break;
+            }
             NSString *cr = [self condRegForOperand:insn.operands[0] ctx:ctx];
             [self materialiseOperand:insn.operands[0] intoReg:cr ctx:ctx];
             NSString *r1 = [self operandReg:insn.operands[1]
@@ -5772,22 +5873,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         }
         case XTIROpFCmp: {
             if (insn.operands.count < 2 || !insn.result) break;
-            XTIRValue *av = [ctx.fn valueForId:insn.operands[0].valueId];
-            NSString *s0 = [self fregName:0 forType:av.type];
-            NSString *s1 = [self fregName:1 forType:av.type];
-            NSString *a = [self operandReg:insn.operands[0] intoScratch:s0 ctx:ctx];
-            NSString *b = [self operandReg:insn.operands[1] intoScratch:s1 ctx:ctx];
-            [ctx.out appendFormat:@"    fcmp %@, %@\n", a, b];
-            NSString *cond;
-            switch (insn.predicate) {
-                case XTIRFCmpOEQ: cond = @"eq"; break;
-                case XTIRFCmpONE: cond = @"ne"; break;
-                case XTIRFCmpOLT: cond = @"mi"; break;
-                case XTIRFCmpOGT: cond = @"gt"; break;
-                case XTIRFCmpOLE: cond = @"ls"; break;
-                case XTIRFCmpOGE: cond = @"ge"; break;
-                default:          cond = @"eq"; break;
-            }
+            NSString *cond = [self emitCompareForFCmp:insn ctx:ctx];
             NSString *d = [self resultReg:insn.result.valueId scratch:@"w16" ctx:ctx];
             [ctx.out appendFormat:@"    cset %@, %@\n", d, cond];
             [self storeReg:d intoValue:insn.result.valueId ctx:ctx];

@@ -3828,13 +3828,36 @@ class Arm64
     void emitFCmp(IRInsn* n)
     {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2) { unsupported(n.op()); return; }
+        String* cond = emitCompareF(n);
+        String* d = resultReg(n.res(), String.withCString("w16"));
+        _out.appendFormat("    cset %s, %s\n", d.cString(), cond.cString());
+        storeReg(d, n.res());
+    }
+
+    // The float compare as a condition: emit the `fcmp` and return what it
+    // leaves in the flags. The standalone FCmp materialises a 0/1 with cset;
+    // a fused one — its readers all conditions of a Select in the same block —
+    // is emitted at the reader instead (the reference explains).
+    String* emitCompareF(IRInsn* n)
+    {
         String* at = opType((IROperand*)n.ops().get((u32)0));
         String* a = operandReg((IROperand*)n.ops().get((u32)0), fregName((u32)0, at));
         String* b = operandReg((IROperand*)n.ops().get((u32)1), fregName((u32)1, at));
         _out.appendFormat("    fcmp %s, %s\n", a.cString(), b.cString());
-        String* d = resultReg(n.res(), String.withCString("w16"));
-        _out.appendFormat("    cset %s, %s\n", d.cString(), fcmpCond(n.pred()).cString());
-        storeReg(d, n.res());
+        return fcmpCond(n.pred());
+    }
+
+    // A select's condition that is a fused comparison: the comparison is emitted
+    // here and its condition returned. 0 when the operand does not fuse, and the
+    // caller materialises and tests the value as before.
+    String* fusedCond(IROperand* c)
+    {
+        if (c == (IROperand*)0 || c.kind() != (u8)OPK_USE || c.val() == (IRValue*)0) return (String*)0;
+        if (!inMap(_fusedCmps, c.val())) return (String*)0;
+        IRInsn* cmp = (IRInsn*)_fusedCmps.get((Hashable*)c.val());
+        if (cmp == (IRInsn*)0) return (String*)0;
+        if (cmp.op().equals(String.withCString("FCmp"))) return emitCompareF(cmp);
+        return emitCompare(cmp);
     }
 
     // The AArch64 condition for an ordered float compare. OLT is `mi` and OLE
@@ -6029,6 +6052,18 @@ class Arm64
             String* f1 = fregName((u32)17, ty);
             String* f2 = fregName((u32)16, ty);
             String* f0 = fregName((u32)16, ty);
+            // A fused comparison is emitted HERE and the fcsel reads its flags:
+            // no cset at the comparison, no `cmp reg,#0` here. The operand loads
+            // below are movz/movk/ldr/fmov, none of which touch the flags.
+            String* fcond = fusedCond((IROperand*)n.ops().get((u32)0));
+            if (fcond != (String*)0) {
+                loadFPOperand((IROperand*)n.ops().get((u32)1), f1, dbl);
+                loadFPOperand((IROperand*)n.ops().get((u32)2), f2, dbl);
+                _out.appendFormat("    fcsel %s, %s, %s, %s\n",
+                                  f0.cString(), f1.cString(), f2.cString(), fcond.cString());
+                storeReg(f0, n.res());
+                return;
+            }
             String* cr = condReg((IROperand*)n.ops().get((u32)0));
             materialise((IROperand*)n.ops().get((u32)0), cr);
             loadFPOperand((IROperand*)n.ops().get((u32)1), f1, dbl);
@@ -6040,6 +6075,21 @@ class Arm64
             return;
         }
         bool x = needsXReg(ty);
+        // As for the FP select above: a fused comparison is emitted here and the
+        // csel reads its flags directly.
+        String* icond = fusedCond((IROperand*)n.ops().get((u32)0));
+        if (icond != (String*)0) {
+            String* q1 = operandReg((IROperand*)n.ops().get((u32)1),
+                                    String.withCString(x ? "x17" : "w17"));
+            String* q2 = operandReg((IROperand*)n.ops().get((u32)2),
+                                    String.withCString(x ? "x15" : "w15"));
+            String* q0 = resultReg(n.res(), String.withCString(x ? "x16" : "w16"));
+            _out.appendFormat("    csel %s, %s, %s, %s\n", q0.cString(), q1.cString(), q2.cString(),
+                              icond.cString());
+            canonicalise(q0, ty);
+            storeReg(q0, n.res());
+            return;
+        }
         String* cr = condReg((IROperand*)n.ops().get((u32)0));
         materialise((IROperand*)n.ops().get((u32)0), cr);
         String* r1 = operandReg((IROperand*)n.ops().get((u32)1),
@@ -7375,11 +7425,12 @@ class Arm64
         // something defined before the load, clobbering it.
         Object* fa = _foldInfo.get((Hashable*)p0.val());
         if (fa != (Object*)0) noteOperands((IRInsn*)fa, defs, ue, lastUse, pos);
-        // A CondBranch that fuses its ICmp re-emits the cmp here, so the ICmp's
-        // operands are read at THIS position, not the elided ICmp's. Same
-        // hazard: a value defined between the two would otherwise take an
-        // operand's register.
-        if (n.op().equals(String.withCString("CondBranch")) && inMap(_fusedCmps, p0.val()))
+        // A CondBranch or a Select that fuses its comparison re-emits the
+        // cmp/fcmp here, so its operands are read at THIS position, not the
+        // elided comparison's. Same hazard: a value defined between the two
+        // would otherwise take an operand's register.
+        if ((n.op().equals(String.withCString("CondBranch")) || n.op().equals(String.withCString("Select")))
+         && inMap(_fusedCmps, p0.val()))
             noteOperands((IRInsn*)_fusedCmps.get((Hashable*)p0.val()), defs, ue, lastUse, pos);
     }
 
@@ -8288,23 +8339,60 @@ class Arm64
         _foldInfo = new Map();
         _fusedCmps = new Map();
 
-        // A single-use ICmp feeding its OWN block's CondBranch fuses into the
-        // branch: the cmp sets the flags and the branch reads them, so the
-        // materialised 0/1 bool and its cbnz both disappear.
+        // A comparison whose readers are ALL the condition operand of a
+        // CondBranch or a Select in its own block fuses: each reader emits the
+        // cmp/fcmp itself and reads the flags, so neither the materialised 0/1
+        // bool nor the `cmp reg,#0` re-test it needs is emitted at all. One
+        // `t < 0.5` in perlin's inner body feeds TWO selects, so allowing only a
+        // single reader left half of them paying for it (the reference explains).
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-            IRInsn* t = bb.term();
-            if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch"))) continue;
-            if (t.ops().count() < (u32)1) continue;
-            IROperand* c = (IROperand*)t.ops().get((u32)0);
-            if (c.kind() != (u8)OPK_USE || c.val() == (IRValue*)0) continue;
-            Object* d = _defOf.get((Hashable*)c.val());
-            if (d == (Object*)0) continue;
-            IRInsn* cmp = (IRInsn*)d;
-            if (!cmp.op().equals(String.withCString("ICmp")) || cmp.res() == (IRValue*)0) continue;
-            if (useCountOf(c.val()) != (u32)1) continue;
-            if (!listContains(bb.insns(), cmp)) continue;
-            _fusedCmps.set((Hashable*)c.val(), (Object*)cmp);
+            Array* conds = new Array();
+            IRInsn* t0 = bb.term();
+            if (t0 != (IRInsn*)0 && t0.op().equals(String.withCString("CondBranch")) && t0.ops().count() >= (u32)1) {
+                IROperand* c0 = (IROperand*)t0.ops().get((u32)0);
+                if (c0.kind() == (u8)OPK_USE && c0.val() != (IRValue*)0) conds.add((Object*)c0.val());
+            }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (!n.op().equals(String.withCString("Select")) || n.ops().count() < (u32)1) continue;
+                IROperand* c0 = (IROperand*)n.ops().get((u32)0);
+                if (c0.kind() == (u8)OPK_USE && c0.val() != (IRValue*)0) conds.add((Object*)c0.val());
+            }
+            for (u32 ci = (u32)0; ci < conds.count(); ci = ci + (u32)1) {
+                IRValue* cv = (IRValue*)conds.get(ci);
+                Object* d = _defOf.get((Hashable*)cv);
+                if (d == (Object*)0) continue;
+                IRInsn* cmp = (IRInsn*)d;
+                if (!cmp.op().equals(String.withCString("ICmp")) && !cmp.op().equals(String.withCString("FCmp"))) continue;
+                if (cmp.res() == (IRValue*)0) continue;
+                if (!listContains(bb.insns(), cmp)) continue;
+                // Every reference to it in this block must be one of those
+                // select conditions, and there must be no reference anywhere
+                // else. A branch's condition is the terminator, so a comparison
+                // read by a branch lands on zero in-block references.
+                u32 inBlock = (u32)0;
+                bool allConds = true;
+                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
+                    IRInsn* n = (IRInsn*)bb.insns().get(i);
+                    for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
+                        IROperand* o = (IROperand*)n.ops().get(k);
+                        if (o.kind() != (u8)OPK_USE || o.val() != cv) continue;
+                        if (!(k == (u32)0 && n.op().equals(String.withCString("Select")))) allConds = false;
+                        inBlock = inBlock + (u32)1;
+                    }
+                }
+                u32 all = useCountOf(cv);
+                if (allConds && all == inBlock && inBlock > (u32)0)
+                    _fusedCmps.set((Hashable*)cv, (Object*)cmp);        // selects only
+                else if (all == (u32)1 && inBlock == (u32)0 && cmp.op().equals(String.withCString("ICmp")))
+                    _fusedCmps.set((Hashable*)cv, (Object*)cmp);        // the terminator's
+                // The terminator's path stays ICmp-only: it is written around
+                // integer compares (cbz/cbnz for a zero test, an inversion
+                // through negatePred), and an FCmp's float conditions do not
+                // survive that inversion. An FCmp fuses into a SELECT, where the
+                // flags are read directly and none of it applies.
+            }
         }
 
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
