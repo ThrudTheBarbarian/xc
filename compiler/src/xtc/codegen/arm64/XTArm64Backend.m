@@ -5894,6 +5894,19 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 break;
             }
             NSString *s = [self operandReg:insn.operands[0] intoScratch:@"w16" ctx:ctx];
+            // A FLOAT scalar has no `dup <Vd>.<T>, <Sn>` form — the DUP element
+            // encoding takes a VECTOR element source, so it is `dup vN.4s,
+            // vM.s[0]`. (The in-house assembler refused the s-register form.)
+            XTIRType* lane = insn.result.type.pointeeType;
+            if (lane && XTIRTypeKindIsFloating(lane.kind) &&
+                ([s hasPrefix:@"s"] || [s hasPrefix:@"d"]))
+                {
+                NSString* vn = [@"v" stringByAppendingString:[s substringFromIndex:1]];
+                NSString* elt = [s hasPrefix:@"d"] ? @"d" : @"s";
+                [ctx.out appendFormat:@"    dup v%lu.%@, %@.%@[0]\n",
+                 (unsigned long)n, arr, vn, elt];
+                break;
+                }
             [ctx.out appendFormat:@"    dup v%lu.%@, %@\n", (unsigned long)n, arr, s];
             break;
         }
@@ -5926,6 +5939,32 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             }
             [ctx.out appendFormat:@"    %@ v%lu.%@, v%lu.%@, v%lu.%@\n",
              mnem, (unsigned long)d, arr, (unsigned long)a, arr, (unsigned long)b, arr];
+            break;
+        }
+        case XTIROpVDiv: {   // lane-wise float divide (f32/f64 lanes)
+            if (insn.operands.count < 2 || !insn.result ||
+                insn.operands[0].kind != XTIROperandKindUse ||
+                insn.operands[1].kind != XTIROperandKindUse) break;
+            XTIRType *lane = insn.result.type.pointeeType;
+            if (!lane || !XTIRTypeKindIsFloating(lane.kind)) break;
+            NSString *arr = [self neonArrFor:lane];
+            NSUInteger a = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
+            NSUInteger b = [self vecIndexForValue:insn.operands[1].valueId ctx:ctx];
+            NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+            [ctx.out appendFormat:@"    fdiv v%lu.%@, v%lu.%@, v%lu.%@\n",
+             (unsigned long)d, arr, (unsigned long)a, arr, (unsigned long)b, arr];
+            break;
+        }
+        case XTIROpVSqrt: {  // lane-wise float square root
+            if (insn.operands.count < 1 || !insn.result ||
+                insn.operands[0].kind != XTIROperandKindUse) break;
+            XTIRType *lane = insn.result.type.pointeeType;
+            if (!lane || !XTIRTypeKindIsFloating(lane.kind)) break;
+            NSString *arr = [self neonArrFor:lane];
+            NSUInteger a = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
+            NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+            [ctx.out appendFormat:@"    fsqrt v%lu.%@, v%lu.%@\n",
+             (unsigned long)d, arr, (unsigned long)a, arr];
             break;
         }
         case XTIROpVMax: case XTIROpVMin: {   // lane-wise max/min (u/s from lane)
@@ -6048,6 +6087,28 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             if (insn.operands.count < 1 || insn.operands[0].kind != XTIROperandKindUse ||
                 !insn.result) break;
             NSUInteger v = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
+            // FLOAT lanes (an nbody-style reduction): `faddp` pairs, twice.
+            // There is no fadd-vector-across, so the first folds <v0,v1> and
+            // <v2,v3> into the low two lanes and the second adds those. The
+            // result lands in the low s-element of the result home, which is an
+            // FP register, so no fmov is needed.
+            XTIRValue* src = [ctx.fn valueForId:insn.operands[0].valueId];
+            XTIRType* lane = src.type.pointeeType;
+            if (lane && XTIRTypeKindIsFloating(lane.kind))
+                {
+                NSString* s0 = [self fregName:0 forType:insn.result.type];
+                NSString* d = [self resultReg:insn.result.valueId scratch:s0 ctx:ctx];
+                NSString* sd = [d hasPrefix:@"d"]
+                                   ? [@"s" stringByAppendingString:[d substringFromIndex:1]]
+                                   : d;
+                [ctx.out appendFormat:@"    faddp v%lu.4s, v%lu.4s, v%lu.4s\n",
+                 (unsigned long)v, (unsigned long)v, (unsigned long)v];
+                [ctx.out appendFormat:@"    faddp v%lu.4s, v%lu.4s, v%lu.4s\n",
+                 (unsigned long)v, (unsigned long)v, (unsigned long)v];
+                [ctx.out appendFormat:@"    fmov %@, s%lu\n", sd, (unsigned long)v];
+                [self storeReg:sd intoValue:insn.result.valueId ctx:ctx];
+                break;
+                }
             // addv folds the four lanes into the low s-element of the same
             // register; fmov then moves it into the GP result register.
             [ctx.out appendFormat:@"    addv s%lu, v%lu.4s\n", (unsigned long)v, (unsigned long)v];

@@ -1836,6 +1836,15 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         if (H.phiNodes.count != 2)
             continue; // induction + accumulator
 
+        // FLOAT reductions reassociate the additions, so they are taken only
+        // where the source grants it AND the target can lower the lane ops. A
+        // `par` block is :goal(speed) by default and its run function carries
+        // the loop header in `speedLoopHeaders`; both must be true. This is the
+        // gate that makes nbody's `ax += mass[j]*dx/(d2*sqrt(d2))` legal.
+        BOOL floatRedux = (self.profile ?: [XTIROptTargetProfile conservativeProfile]).vectorizesFloatReduce
+                          && fn.speedLoopHeaders && H.name
+                          && [fn.speedLoopHeaders containsObject:H.name];
+
         // header pure (just the guard)
         BOOL hp = YES;
         for (XTIRInsn* insn in H.instructions)
@@ -1964,7 +1973,10 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         if (!accNextOp || accNextOp.kind != XTIROperandKindUse)
             continue;
         XTIRInsn* accNext = defOf[@(accNextOp.valueId)];
-        if (!accNext || accNext.opcode != XTIROpAdd || defBlk[@(accNextOp.valueId)] != B)
+        // An ADD, or a FLOAT add in a float reduction (the reassociation gate).
+        BOOL accIsAdd = accNext && (accNext.opcode == XTIROpAdd ||
+                                    (floatRedux && accNext.opcode == XTIROpFAdd));
+        if (!accIsAdd || defBlk[@(accNextOp.valueId)] != B)
             continue;
         if ([uses countForObject:@(accNextOp.valueId)] != 1)
             continue;
@@ -2054,6 +2066,12 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
               return NO;
           if ([elemIds containsObject:@(o.valueId)])
               return YES;
+          // A CONSTANT literal, int or FLOAT (a float const's bits are not an
+          // int, so resolveConstInt alone missed `d2 + 0.0001` in a float
+          // reduction). It is loop-invariant whatever block it sits in.
+          XTIRInsn* cd = defOf[@(o.valueId)];
+          if (cd && cd.opcode == XTIROpConst)
+              return YES;
           int64_t kk;
           if (resolveConstInt(o, defOf, &kk))
               return YES;
@@ -2089,13 +2107,22 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                 }
             if (op == XTIROpLoad)
                 {
+                // A fully DEAD load — its value AND its memory token unused
+                // anywhere — has no effect, so skip it rather than refuse the
+                // loop: a static-init guard's leftover flag load can sit in a
+                // loop body, and a body with any non-iv memory op was refused,
+                // which kept nbody's float reduction scalar.
+                if (insn.result && [uses countForObject:@(insn.result.valueId)] == 0 &&
+                    (!insn.memoryResult || [uses countForObject:@(insn.memoryResult.valueId)] == 0))
+                    continue;
                 if (insn.operands.count < 1 || !isElemAddrAtIv(insn.operands[0]) || !insn.result)
                     {
                     ok = NO;
                     break;
                     }
                 XTIRType* lt = insn.result.type;
-                if (!lt || !(lt.kind == XTIRTypeKindI32 || lt.kind == XTIRTypeKindU32))
+                if (!lt || !(lt.kind == XTIRTypeKindI32 || lt.kind == XTIRTypeKindU32 ||
+                             (floatRedux && lt.kind == XTIRTypeKindF32)))
                     {
                     ok = NO;
                     break;
@@ -2175,10 +2202,34 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                 ok = NO;
                 break;
                 }
+            // FLOAT lane ops, only in a float reduction: a lane square root
+            // (nbody's `sqrt(d2)`) and a lane divide (`mass*dx / (d2*sqrt)`).
+            // Both produce f32 lanes, which is what the lane type records.
+            if (floatRedux && (op == XTIROpFSqrt || op == XTIROpFDiv))
+                {
+                if (!insn.result || insn.result.type.kind != XTIRTypeKindF32)
+                    {
+                    ok = NO;
+                    break;
+                    }
+                NSUInteger want = (op == XTIROpFSqrt) ? 1 : 2;
+                BOOL good = insn.operands.count >= want;
+                for (NSUInteger k = 0; good && k < want; k++)
+                    if (!elemOperandOK(insn.operands[k]))
+                        good = NO;
+                if (!good)
+                    {
+                    ok = NO;
+                    break;
+                    }
+                [elemIds addObject:@(insn.result.valueId)];
+                continue;
+                }
             if (elementwiseArith(op))
                 {
                 if (!insn.result || !(insn.result.type.kind == XTIRTypeKindI32 ||
-                                      insn.result.type.kind == XTIRTypeKindU32))
+                                      insn.result.type.kind == XTIRTypeKindU32 ||
+                                      (floatRedux && insn.result.type.kind == XTIRTypeKindF32)))
                     {
                     ok = NO;
                     break;
@@ -2209,9 +2260,11 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         // lane-wise reduction).
         if (![elemIds containsObject:@(elemOp.valueId)])
             continue;
-        // The accumulator lane type must match the loads (i32/u32 add).
+        // The accumulator lane type must match the loads (i32/u32 add, or f32
+        // in a float reduction).
         if (!(accNext.result.type.kind == XTIRTypeKindI32 ||
-              accNext.result.type.kind == XTIRTypeKindU32))
+              accNext.result.type.kind == XTIRTypeKindU32 ||
+              (floatRedux && accNext.result.type.kind == XTIRTypeKindF32)))
             continue;
         if (accNext.result.type.kind != laneType.kind)
             continue;
@@ -2342,6 +2395,24 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         for (XTIRInsn* i in bb.instructions)
             if (i.result)
                 defOf[@(i.result.valueId)] = i;
+    // Value ids used anywhere, so the body walk can drop a fully dead load
+    // exactly as the recogniser skipped it.
+    NSCountedSet<NSNumber*>* vecUsed = [NSCountedSet set];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        for (XTIRInsn* i in bb.instructions)
+            for (XTIROperand* o in i.operands)
+                if (o.kind == XTIROperandKindUse)
+                    [vecUsed addObject:@(o.valueId)];
+        for (XTIRInsn* p in bb.phiNodes)
+            for (XTIROperand* o in p.operands)
+                if (o.kind == XTIROperandKindUse)
+                    [vecUsed addObject:@(o.valueId)];
+        if (bb.terminator)
+            for (XTIROperand* o in bb.terminator.operands)
+                if (o.kind == XTIROperandKindUse)
+                    [vecUsed addObject:@(o.valueId)];
+        }
 
     // ── Epilogue, part 1: clone the scalar loop BEFORE anything below mutates
     // it. The vector transform overwrites B's instructions in place and rewrites
@@ -2524,6 +2595,12 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
             break;
         case XTIROpLoad:
             {
+            // Mirror the recogniser: a load that is fully DEAD (its value and
+            // memory token unused) has no vector form and is dropped, so a
+            // guard's leftover flag load does not become a bogus VLoad.
+            if (insn.result && [vecUsed countForObject:@(insn.result.valueId)] == 0 &&
+                (!insn.memoryResult || [vecUsed countForObject:@(insn.memoryResult.valueId)] == 0))
+                break;
             XTIRValue* vr = newVal(vecTy);
             XTIRInsn* vl = [[XTIRInsn alloc] initWithOpcode:XTIROpVLoad
                                                      result:vr
@@ -2611,6 +2688,31 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
             vmap[@(insn.result.valueId)] = vr;
             break;
             }
+        // A lane square root (one operand) and a lane divide, both float and
+        // both only reachable from a float reduction the recogniser accepted.
+        case XTIROpFSqrt:
+            {
+            XTIROperand* va = vecOperand(insn.operands[0]);
+            XTIRValue* vr = newVal(vecTy);
+            [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVSqrt
+                                                         result:vr
+                                                       operands:@[ va ]
+                                                         dbgLoc:insn.dbgLoc]];
+            vmap[@(insn.result.valueId)] = vr;
+            break;
+            }
+        case XTIROpFDiv:
+            {
+            XTIROperand* va = vecOperand(insn.operands[0]);
+            XTIROperand* vb = vecOperand(insn.operands[1]);
+            XTIRValue* vr = newVal(vecTy);
+            [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVDiv
+                                                         result:vr
+                                                       operands:@[ va, vb ]
+                                                         dbgLoc:insn.dbgLoc]];
+            vmap[@(insn.result.valueId)] = vr;
+            break;
+            }
         // elementwise arith
         default:
             {
@@ -2685,7 +2787,10 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     if (!initIsZero)
         {
         XTIRValue* withInit = newVal(c.laneType);
-        [head addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpAdd
+        // FADD for a float lane: the seed is an f32 (nbody's 0.0f) and an
+        // integer Add with s-registers is not an encodable instruction.
+        BOOL laneF = c.laneType.kind == XTIRTypeKindF32 || c.laneType.kind == XTIRTypeKindF64;
+        [head addObject:[[XTIRInsn alloc] initWithOpcode:(laneF ? XTIROpFAdd : XTIROpAdd)
                                                   result:withInit
                                                 operands:@[ [XTIROperand useWithValueId:red.valueId], c.seedOp ]
                                                   dbgLoc:nil]];

@@ -829,6 +829,7 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
                   @"mulss":@[@0xF3,@0x59], @"mulsd":@[@0xF2,@0x59],
                   @"divss":@[@0xF3,@0x5E], @"divsd":@[@0xF2,@0x5E],
                   @"sqrtss":@[@0xF3,@0x51],@"sqrtsd":@[@0xF2,@0x51],
+                  @"sqrtps":@[@0x00,@0x51],@"sqrtpd":@[@0x66,@0x51],
                   @"ucomiss":@[@0x00,@0x2E],@"ucomisd":@[@0x66,@0x2E],
                   @"comiss":@[@0x00,@0x2F], @"comisd":@[@0x66,@0x2F],
                   @"cvtss2sd":@[@0xF3,@0x5A],@"cvtsd2ss":@[@0xF2,@0x5A],
@@ -1090,7 +1091,9 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
                      @"vpbroadcastd":@[@1,@2,@0x58,@0], @"vpbroadcastq":@[@1,@2,@0x59,@0],
                      @"vbroadcastss":@[@1,@2,@0x18,@0], @"vbroadcastsd":@[@1,@2,@0x19,@0],
                      @"vpabsb":@[@1,@2,@0x1C,@0], @"vpabsw":@[@1,@2,@0x1D,@0],
-                     @"vpabsd":@[@1,@2,@0x1E,@0]};
+                     @"vpabsd":@[@1,@2,@0x1E,@0],
+                     // 2-operand VEX arithmetic: `vsqrtps ymm, ymm` (vvvv=1111).
+                     @"vsqrtps":@[@0,@1,@0x51,@0], @"vsqrtpd":@[@1,@1,@0x51,@0]};
         });
         NSArray *v2 = vex2[mn];
         if (v2 && opCount == 2 && a && b) {

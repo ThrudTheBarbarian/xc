@@ -270,7 +270,15 @@ static BOOL pureHoistable(XTIRInsn* insn)
                       insn.operands[0].kind != XTIROperandKindUse)
                       return NO;
                   XTIRInsn* pd = defOf[@(insn.operands[0].valueId)];
-                  return pd && pd.opcode == XTIROpFieldAddr; // field loads only
+                  // A field load, or an ELEMENT load whose address is invariant
+                  // — the address is one of the operands, so opInvariant below
+                  // checks that it does not depend on this loop's iv. nbody's
+                  // inner loop reads px[i] with i the OUTER loop's iv: that load
+                  // is invariant here and was never hoisted, which kept a
+                  // non-iv load in the body and stopped the reduction
+                  // recogniser from vectorising it.
+                  return pd && (pd.opcode == XTIROpFieldAddr ||
+                                pd.opcode == XTIROpElementAddr);
                   }
               return pureHoistable(insn);
             };

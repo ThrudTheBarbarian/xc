@@ -145,6 +145,13 @@ NS_ASSUME_NONNULL_BEGIN
 /// back ends have no lowering yet, so the pass leaves those loops scalar
 /// rather than emitting an opcode they would drop.
 - (BOOL)vectorizesHighMultiply;
+/// May the vectoriser reassociate a FLOAT reduction (`acc += f(a[i])`, e.g.
+/// nbody's `ax += mass[j]*dx/(d2*sqrt(d2))`)? It changes the order of the
+/// additions, so it is refused unless the SOURCE grants it: a `par` block
+/// defaults to :goal(speed) and its run function carries the loop header in
+/// `speedLoopHeaders`, and the vectoriser requires BOTH that and this knob.
+/// Only the targets that lower VDiv/VSqrt and a float VReduceAdd say yes.
+- (BOOL)vectorizesFloatReduce;
 /// The back end can build the lane-index vector <0,1,2,3>, so a reduction
 /// whose per-lane value is the INDUCTION VARIABLE rather than a loaded
 /// element can vectorise (`acc += f(i)` with no array in sight).

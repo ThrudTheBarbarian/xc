@@ -2012,6 +2012,10 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             return d ? @"subpd" : @"subps";
         case XTIROpVMul:
             return d ? @"mulpd" : @"mulps";
+        case XTIROpVDiv:
+            return d ? @"divpd" : @"divps";
+        case XTIROpVSqrt:
+            return d ? @"sqrtpd" : @"sqrtps";
         case XTIROpVAnd:
             return d ? @"andpd" : @"andps";
         case XTIROpVOr:
@@ -4929,6 +4933,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
     case XTIROpVAdd:
     case XTIROpVSub:
     case XTIROpVMul:
+    case XTIROpVDiv:
     case XTIROpVAnd:
     case XTIROpVOr:
     case XTIROpVXor:
@@ -4961,9 +4966,10 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             return;
             }
         NSString* mov = flt ? @"movaps" : @"movdqa";
-        BOOL commut = (op != XTIROpVSub);
-        // Two-address destructive form: compute in d. Keep whichever source is
-        // already d (commutative), else copy a→d first.
+        // DIV and SUB are NOT commutative: only `d == a` may skip the copy
+        // (`d = d op b` is `a op b`), and `d == b` must not be folded the
+        // other way round.
+        BOOL commut = (op != XTIROpVSub && op != XTIROpVDiv);
         if ([d isEqualToString:a])
             [out appendFormat:@"\t%@\t%@, %@\n", mn, d, b];
         else if (commut && [d isEqualToString:b])
@@ -4973,6 +4979,28 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             [out appendFormat:@"\t%@\t%@, %@\n", mov, d, a];
             [out appendFormat:@"\t%@\t%@, %@\n", mn, d, b];
             }
+        return;
+        }
+    // Lane-wise FLOAT square root, one source (`sqrtps d, a` / `vsqrtps d, a`).
+    case XTIROpVSqrt:
+        {
+        if (!res || ops.count < 1 || ops[0].kind != XTIROperandKindUse)
+            return;
+        NSString *d = sVec[@(res.valueId)], *a = sVec[@(ops[0].valueId)];
+        if (!d || !a)
+            return;
+        XTIRType* lane = res.type.pointeeType;
+        if (!lane || ![self isFloatKind:lane.kind])
+            return;
+        NSString* mn = [self sseMnemForVecOp:op lane:lane];
+        if (!mn)
+            return;
+        if ([d hasPrefix:@"ymm"] || [d hasPrefix:@"zmm"])
+            {
+            [out appendFormat:@"\tv%@\t%@, %@\n", mn, d, a];
+            return;
+            }
+        [out appendFormat:@"\t%@\t%@, %@\n", mn, d, a];
         return;
         }
     // The HIGH half of a 32x32 lane product. SSE2 gives only pmuludq, which
@@ -5054,6 +5082,54 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (!res || ops.count < 1 || ops[0].kind != XTIROperandKindUse || !sVec[@(ops[0].valueId)])
             return;
         NSString* v = sVec[@(ops[0].valueId)];
+        // FLOAT lanes (an nbody-style reduction): fold to xmm with FP adds,
+        // then a shuffle/sq 4-lane add. The result is lane 0 of the destination
+        // float home. `v` is only ever READ (the mask scratch is xmm0), so d may
+        // alias it.
+        if (res.type.kind == XTIRTypeKindF32 || res.type.kind == XTIRTypeKindF64)
+            {
+            BOOL dq = res.type.kind == XTIRTypeKindF64;
+            NSString* add = dq ? @"addpd" : @"addps";
+            NSString* shf = dq ? @"shufpd" : @"shufps";
+            if ([v hasPrefix:@"zmm"])
+                {
+                NSString* y = [@"y" stringByAppendingString:[v substringFromIndex:1]];
+                [out appendFormat:@"\tvextractf64x4\tymm0, %@, 1\n\tv%@\t%@, %@, ymm0\n", v, add, y, y];
+                v = y;
+                }
+            if ([v hasPrefix:@"ymm"])
+                {
+                NSString* x = [@"x" stringByAppendingString:[v substringFromIndex:1]];
+                [out appendFormat:@"\tvextractf128\txmm0, %@, 1\n\tv%@\t%@, %@, xmm0\n", v, add, x, x];
+                v = x;
+                }
+            NSString* Dq = [self fdstFor:res clobbering:nil as:nil];
+            // Pair the lanes EXACTLY as arm64's `faddp` does — (l0+l1)+(l2+l3) —
+            // so the two back ends round identically. `nbody` counts bodies
+            // with a positive force and a handful sit within rounding of zero,
+            // so a different pairing gave a different checksum on one machine;
+            // matching the order keeps Mac and Linux in agreement. Two scratch
+            // registers: `fdstFor` may place the destination in xmm0 itself.
+            if (dq)
+                {
+                [out appendFormat:@"\tmovaps\txmm1, %@\n", v];
+                [out appendFormat:@"\tshufpd\txmm1, xmm1, 0x1\n"];
+                [out appendFormat:@"\t%@\txmm1, %@\n", add, v];
+                [out appendFormat:@"\tmovaps\t%@, xmm1\n", Dq];
+                }
+            else
+                {
+                [out appendFormat:@"\tmovaps\txmm1, %@\n", v];
+                [out appendFormat:@"\tshufps\txmm1, xmm1, 0xB1\n"];
+                [out appendFormat:@"\t%@\txmm1, %@\n", add, v];
+                [out appendFormat:@"\tmovaps\txmm0, xmm1\n"];
+                [out appendFormat:@"\tshufps\txmm0, xmm0, 0x4E\n"];
+                [out appendFormat:@"\t%@\txmm0, xmm1\n", add];
+                [out appendFormat:@"\tmovaps\t%@, xmm0\n", Dq];
+                }
+            [self storeF:Dq into:res slot:slot out:out];
+            return;
+            }
         if ([v hasPrefix:@"zmm"])
             {
             // Fold the high 256 bits onto the low, then the 256-bit fold below.

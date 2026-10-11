@@ -2400,6 +2400,9 @@ class X86Fixup
         else if (mn.equals(String.withCString("vpabsb"))) { pp = (u32)1; map = (u32)2; ld = (u32)$1C; }
         else if (mn.equals(String.withCString("vpabsw"))) { pp = (u32)1; map = (u32)2; ld = (u32)$1D; }
         else if (mn.equals(String.withCString("vpabsd"))) { pp = (u32)1; map = (u32)2; ld = (u32)$1E; }
+        // 2-operand VEX arithmetic (vvvv = 1111): the float square root.
+        else if (mn.equals(String.withCString("vsqrtps"))) { pp = (u32)0; map = (u32)1; ld = (u32)$51; }
+        else if (mn.equals(String.withCString("vsqrtpd"))) { pp = (u32)1; map = (u32)1; ld = (u32)$51; }
         if (map != (u32)0 && _ops.count() == (u32)2 && a != (XOperand*)0 && b != (XOperand*)0)
             {
             bool store = a.kind() == (u32)OP_MEM && st != (u32)0;
@@ -2746,6 +2749,10 @@ class X86Fixup
             return (u32)$F351;
         if (m.equals(String.withCString("sqrtsd")))
             return (u32)$F251;
+        if (m.equals(String.withCString("sqrtps")))
+            return (u32)$0051;
+        if (m.equals(String.withCString("sqrtpd")))
+            return (u32)$6651;
         if (m.equals(String.withCString("ucomiss")))
             return (u32)$002E;
         if (m.equals(String.withCString("ucomisd")))

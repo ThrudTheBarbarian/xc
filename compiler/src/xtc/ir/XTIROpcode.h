@@ -177,6 +177,8 @@ typedef NS_ENUM(uint16_t, XTIROpcode) {
     XTIROpVAdd,
     XTIROpVSub,
     XTIROpVMul,
+    XTIROpVDiv,       // %v:Vec <- a, b   (lane-wise float divide; f32/f64 lanes only)
+    XTIROpVSqrt,      // %v:Vec <- a      (lane-wise float square root)
     XTIROpVAnd,
     XTIROpVOr,
     XTIROpVXor,

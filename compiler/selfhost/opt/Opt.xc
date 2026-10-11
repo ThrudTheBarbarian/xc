@@ -45,6 +45,7 @@ class OptProfile
     bool _highMul;           // back end lowers VMulHi (constant divide)
     bool _laneShift;         // back end lowers VLShr (lane shift by a constant)
     bool _iota;              // back end can build the lane-index vector
+    bool _floatReduce;       // FLOAT reductions may reassociate (arm64/x86-64)
     bool _reductionCollapse; // an invariant reduction nest collapses
     bool _memsetIdiom;       // a byte-fill loop becomes one MemSet
     bool _initGuardElim;     // a redundant static-init guard comes out
@@ -104,6 +105,7 @@ class OptProfile
         _highMul = false;
         _laneShift = false;
         _iota = false;
+        _floatReduce = false;
         _reductionCollapse = false;
         _memsetIdiom = false;
         _initGuardElim = false;
@@ -180,6 +182,10 @@ class OptProfile
         // VLoad the back end already has, so this needs no instruction
         // selection of its own — only somewhere to put the constant.
         p._iota = p._laneShift;
+        // FLOAT reductions (a reassociation): only where the back end lowers
+        // VDiv/VSqrt and a float VReduceAdd — arm64 and x86-64/win64. The
+        // vectoriser also requires the source to grant it (see floatRedux).
+        p._floatReduce = t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
         p._memsetIdiom = !(t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")) || t.equals(String.withCString("atarist")));
         // The 6502 does NOT hoist: an eager init at entry costs it more than
         // the guard it saves.
@@ -318,6 +324,10 @@ class OptProfile
     bool vectorize(void)
         {
         return _vectorize;
+        }
+    bool floatReduce(void)
+        {
+        return _floatReduce;
         }
     bool highMul(void)
         {
@@ -1333,6 +1343,14 @@ class OptProfile
         if (_level >= (u32)2)
             redundantLoadCSE(m);
         if (stopHere(String.withCString("redundant-load-cse")))
+            return;
+        // A run of LICM BEFORE the vectoriser: the reduction recogniser needs a
+        // body free of loads that do not vary with the vectorised iv, and in a
+        // NESTED loop a load indexed by the OUTER iv is exactly that (nbody's
+        // px[i]). The post-vectoriser LICM below stays.
+        if (_level >= (u32)2)
+            licm(m);
+        if (stopHere(String.withCString("licm")))
             return;
         if (_level >= (u32)2)
             simdClone(m);
@@ -6105,6 +6123,56 @@ class OptProfile
     // target an earlier one removed can follow the chain to a live one.
     Map* _sgBypass;
 
+    void sgCountOps(Array* used, Array* ops)
+        {
+        for (u32 i = (u32)0; i < ops.count(); i = i + (u32)1)
+            {
+            IROperand* o = (IROperand*)ops.get(i);
+            if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && !hasValue(used, o.val()))
+                used.add((Object*)o.val());
+            }
+        }
+    void sgCountUses(Array* used, Array* insns)
+        {
+        for (u32 i = (u32)0; i < insns.count(); i = i + (u32)1)
+            sgCountOps(used, ((IRInsn*)insns.get(i)).ops());
+        }
+    void sgDeadStripBlock(IRBlock* blk, IRFunc* fn)
+        {
+        bool removed = true;
+        while (removed)
+            {
+            removed = false;
+            Array* used = new Array();
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                sgCountUses(used, bb.phis());
+                sgCountUses(used, bb.insns());
+                if (bb.term() != (IRInsn*)0)
+                    sgCountOps(used, bb.term().ops());
+                }
+            for (i32 i = (i32)blk.insns().count() - (i32)1; i >= (i32)0; i = i - (i32)1)
+                {
+                IRInsn* n = (IRInsn*)blk.insns().get((u32)i);
+                String* op = n.op();
+                bool pure = op.equals(String.withCString("AddrOf")) || op.equals(String.withCString("Load"))
+                         || op.equals(String.withCString("ICmp")) || op.equals(String.withCString("Const"))
+                         || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt"))
+                         || op.equals(String.withCString("Trunc"));
+                if (!pure)
+                    continue;
+                bool resUsed = n.res() != (IRValue*)0 && hasValue(used, n.res());
+                bool memUsed = n.memRes() != (IRValue*)0 && hasValue(used, n.memRes());
+                if (!resUsed && !memUsed)
+                    {
+                    blk.insns().removeAt((u32)i);
+                    removed = true;
+                    }
+                }
+            }
+        }
+
     void initGuardsInFunc(IRModule* m, IRFunc* fn)
         {
         if (fn.blocks().count() < (u32)2)
@@ -6119,6 +6187,8 @@ class OptProfile
             hoistGuardsToEntry(m, fn);
             recogniseGuards(m, fn);
             }
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            sgDeadStripBlock((IRBlock*)fn.blocks().get(b), fn);
         if (_sgGuards.count() < (u32)2)
             return;
 
@@ -13950,6 +14020,11 @@ class OptProfile
     VecCand* vecReductionAt(IRFunc* fn, IRBlock* H, Map* defOf, Map* defBlk, Map* uses)
         {
         _vrAllowRT = true; // reduction, widening-sum and dot all accept one
+        // FLOAT reductions reassociate the additions, so they are taken only
+        // where the source grants it AND the target can lower the lane ops. A
+        // par block is :goal(speed) and its run function names the loop header
+        // in speedHeaders; both must hold. This is nbody's inner loop.
+        bool floatRedux = _profile.floatReduce() && fn.isSpeedHeader(H.name());
         if (!vecReduxShape(H, defOf, defBlk))
             return (VecCand*)0;
         IRInsn* ivPhi = _vrIvPhi;
@@ -13994,7 +14069,8 @@ class OptProfile
         if (ao == (Object*)0 || ab == (Object*)0 || (IRBlock*)ab != B)
             return (VecCand*)0;
         IRInsn* accNext = (IRInsn*)ao;
-        if (!accNext.op().equals(String.withCString("Add")))
+        if (!(accNext.op().equals(String.withCString("Add"))
+              || (floatRedux && accNext.op().equals(String.withCString("FAdd")))))
             return (VecCand*)0;
         if (countOf(uses, accNextOp.val()) != (u32)1)
             return (VecCand*)0;
@@ -14031,7 +14107,7 @@ class OptProfile
             return (VecCand*)0;
 
         String* laneTy = vecClassifyReduxBody(B, iv, ivNext, accNext, elemOp,
-                                              defOf, defBlk);
+                                              defOf, defBlk, uses, floatRedux);
         if (laneTy == (String*)0)
             return (VecCand*)0;
         // The accumulator's own width must match the loads — this is an i32/u32
@@ -14253,7 +14329,8 @@ class OptProfile
 
     String* vecClassifyReduxBody(IRBlock* B, IRValue* iv, IRInsn* ivNext,
                                  IRInsn* accNext, IROperand* elemOp,
-                                 Map* defOf, Map* defBlk)
+                                 Map* defOf, Map* defBlk, Map* uses,
+                                 bool floatRedux)
         {
         String* laneTy = (String*)0;
         bool sawLoad = false;
@@ -14300,12 +14377,19 @@ class OptProfile
                 }
             if (op.equals(String.withCString("Load")))
                 {
+                // A fully DEAD load — its value AND memory token unused — has no
+                // effect: skip it rather than refuse the loop. A static-init
+                // guard's leftover flag load can sit in a loop body, and a body
+                // with any non-iv memory op was refused.
+                if (n.res() != (IRValue*)0 && countOf(uses, n.res()) == (u32)0
+                    && (n.memRes() == (IRValue*)0 || countOf(uses, n.memRes()) == (u32)0))
+                    continue;
                 if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0)
                     return (String*)0;
                 if (!vecIsElemAddr((IROperand*)n.ops().get((u32)0), iv, defOf))
                     return (String*)0;
                 String* lt = n.res().ty();
-                if (!vecRedux32(lt))
+                if (!vecRedux32(lt) && !(floatRedux && lt.equals(String.withCString("F32"))))
                     return (String*)0;
                 if (laneTy != (String*)0 && !laneTy.equals(lt))
                     return (String*)0;
@@ -14326,7 +14410,7 @@ class OptProfile
                     return (String*)0;
                 if (n.ops().count() < (u32)2)
                     return (String*)0;
-                if (!vecOperandOK((IROperand*)n.ops().get((u32)0), elems, B, defOf, defBlk))
+                if (!vecReduxOperandOK((IROperand*)n.ops().get((u32)0), elems, B, defOf, defBlk))
                     return (String*)0;
                 i32 dv = (i32)0;
                 if (!vecConst((IROperand*)n.ops().get((u32)1), defOf, &dv))
@@ -14351,7 +14435,7 @@ class OptProfile
                     return (String*)0;
                 if (n.ops().count() < (u32)2)
                     return (String*)0;
-                if (!vecOperandOK((IROperand*)n.ops().get((u32)0), elems, B, defOf, defBlk))
+                if (!vecReduxOperandOK((IROperand*)n.ops().get((u32)0), elems, B, defOf, defBlk))
                     return (String*)0;
                 i32 sh = (i32)0;
                 if (!vecConst((IROperand*)n.ops().get((u32)1), defOf, &sh))
@@ -14364,15 +14448,31 @@ class OptProfile
                 elems.add((Object*)n.res());
                 continue;
                 }
+            // FLOAT lane ops, only in a float reduction: a lane square root
+            // (nbody's sqrt(d2)) and a lane divide.
+            if (floatRedux && (op.equals(String.withCString("FSqrt")) || op.equals(String.withCString("FDiv"))))
+                {
+                if (n.res() == (IRValue*)0 || !n.res().ty().equals(String.withCString("F32")))
+                    return (String*)0;
+                u32 want = op.equals(String.withCString("FSqrt")) ? (u32)1 : (u32)2;
+                if (n.ops().count() < want)
+                    return (String*)0;
+                for (u32 k = (u32)0; k < want; k = k + (u32)1)
+                    if (!vecReduxOperandOK((IROperand*)n.ops().get(k), elems, B, defOf, defBlk))
+                        return (String*)0;
+                elems.add((Object*)n.res());
+                continue;
+                }
             if (vecElementwise(op))
                 {
-                if (n.res() == (IRValue*)0 || !vecRedux32(n.res().ty()))
+                if (n.res() == (IRValue*)0
+                    || (!vecRedux32(n.res().ty()) && !(floatRedux && n.res().ty().equals(String.withCString("F32")))))
                     return (String*)0;
                 if (n.ops().count() < (u32)2)
                     return (String*)0;
-                if (!vecOperandOK((IROperand*)n.ops().get((u32)0), elems, B, defOf, defBlk))
+                if (!vecReduxOperandOK((IROperand*)n.ops().get((u32)0), elems, B, defOf, defBlk))
                     return (String*)0;
-                if (!vecOperandOK((IROperand*)n.ops().get((u32)1), elems, B, defOf, defBlk))
+                if (!vecReduxOperandOK((IROperand*)n.ops().get((u32)1), elems, B, defOf, defBlk))
                     return (String*)0;
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
                     {
@@ -14394,7 +14494,7 @@ class OptProfile
                     return (String*)0;
                 if (!vecIsElemAddr((IROperand*)n.ops().get((u32)0), iv, defOf))
                     return (String*)0;
-                if (!vecOperandOK((IROperand*)n.ops().get((u32)1), elems, B, defOf, defBlk))
+                if (!vecReduxOperandOK((IROperand*)n.ops().get((u32)1), elems, B, defOf, defBlk))
                     return (String*)0;
                 continue;
                 }
@@ -14550,6 +14650,17 @@ class OptProfile
         return db != (Object*)0 && (IRBlock*)db != B;
         }
 
+    bool vecReduxOperandOK(IROperand* o, Array* elems, IRBlock* B, Map* defOf, Map* defBlk)
+        {
+        if (o.kind() == (u8)OPK_USE)
+            {
+            Object* cd = defOf.get((Hashable*)o.val());
+            if (cd != 0 && ((IRInsn*)cd).op().equals(String.withCString("Const")))
+                return true;
+            }
+        return vecOperandOK(o, elems, B, defOf, defBlk);
+        }
+
     bool vecElementwise(String* op)
         {
         return op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub")) || op.equals(String.withCString("Mul")) || op.equals(String.withCString("And")) || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor")) || op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub")) || op.equals(String.withCString("FMul"));
@@ -14572,6 +14683,10 @@ class OptProfile
             return String.withCString("VOr");
         if (op.equals(String.withCString("Xor")))
             return String.withCString("VXor");
+        if (op.equals(String.withCString("FSqrt")))
+            return String.withCString("VSqrt");
+        if (op.equals(String.withCString("FDiv")))
+            return String.withCString("VDiv");
         return op;
         }
 
@@ -17571,7 +17686,10 @@ class OptProfile
         if (!initIsZero)
             {
             IRValue* withInit = new IRValue(c.laneTy());
-            IRInsn* ai = IRInsn.with(String.withCString("Add"));
+            // FADD for a float lane: the seed is an f32 (nbody's 0.0f) and an
+            // integer Add with s-registers is not an encodable instruction.
+            bool laneF = c.laneTy() != (String*)0 && c.laneTy().equals(String.withCString("F32"));
+            IRInsn* ai = IRInsn.with(String.withCString(laneF ? "FAdd" : "Add"));
             ai.setRes(withInit);
             ai.add(IROperand.useVal(red));
             ai.add(c.seed());
@@ -17607,6 +17725,41 @@ class OptProfile
     // Rewrite the reduction loop's body into vector form.
     void vecReduxBody(VecCand* c, IRBlock* B, IRValue* vacc)
         {
+        // Value ids used anywhere, so the body walk can drop a fully dead load
+        // exactly as the recogniser skipped it (a guard's leftover flag load).
+        Map* used = new Map();
+        for (u32 b = (u32)0; b < _vecFn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*) _vecFn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.phis().get(i);
+                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)n.ops().get(k);
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                        used.set((Hashable*)o.val(), (Object*)Number.with(countOf(used, o.val()) + (u32)1));
+                    }
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)n.ops().get(k);
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                        used.set((Hashable*)o.val(), (Object*)Number.with(countOf(used, o.val()) + (u32)1));
+                    }
+                }
+            if (bb.term() != 0)
+                for (u32 k = (u32)0; k < bb.term().ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)bb.term().ops().get(k);
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                        used.set((Hashable*)o.val(), (Object*)Number.with(countOf(used, o.val()) + (u32)1));
+                    }
+            }
+
         // IOTA. The per-lane value is derived from the induction variable, so
         // lane l of this iteration must hold i+l, not i. Splatting i would give
         // every lane the same value and compute a different answer.
@@ -17683,6 +17836,11 @@ class OptProfile
                 }
             if (op.equals(String.withCString("Load")))
                 {
+                // Mirror the recogniser: a fully DEAD load is dropped, so a
+                // guard's leftover flag load does not become a bogus VLoad.
+                if (n.res() != (IRValue*)0 && countOf(used, n.res()) == (u32)0
+                    && (n.memRes() == (IRValue*)0 || countOf(used, n.memRes()) == (u32)0))
+                    continue;
                 IRValue* vr = new IRValue(_vecTy);
                 IRInsn* vl = IRInsn.with(String.withCString("VLoad"));
                 vl.copyDbg(n);
@@ -17773,6 +17931,19 @@ class OptProfile
                 sr.add(IROperand.immI(sh, c.laneTy()));
                 _vecBody.add((Object*)sr);
                 _vecMap.set((Hashable*)n.res(), (Object*)qv);
+                continue;
+                }
+            // A lane square root (ONE operand) — the default below reads two.
+            if (op.equals(String.withCString("FSqrt")))
+                {
+                IROperand* va = vecSplatOperand((IROperand*)n.ops().get((u32)0));
+                IRValue* vr = new IRValue(_vecTy);
+                IRInsn* vop = IRInsn.with(String.withCString("VSqrt"));
+                vop.copyDbg(n);
+                vop.setRes(vr);
+                vop.add(va);
+                _vecBody.add((Object*)vop);
+                _vecMap.set((Hashable*)n.res(), (Object*)vr);
                 continue;
                 }
             IROperand* va = vecSplatOperand((IROperand*)n.ops().get((u32)0));
@@ -19704,7 +19875,15 @@ class OptProfile
             if (a.kind() != (u8)OPK_USE)
                 return false;
             Object* pd = defOf.get((Hashable*)a.val());
-            return pd != (Object*)0 && ((IRInsn*)pd).op().equals(String.withCString("FieldAddr"));
+            if (pd == (Object*)0)
+                return false;
+            // A field load, or an ELEMENT load whose address is invariant (the
+            // address is an operand, checked by the caller). nbody's inner loop
+            // reads px[i] with i the OUTER loop's iv; that load is invariant
+            // here and was never hoisted, which kept a non-iv load in the body
+            // and stopped the reduction recogniser vectorising it.
+            String* pdo = ((IRInsn*)pd).op();
+            return pdo.equals(String.withCString("FieldAddr")) || pdo.equals(String.withCString("ElementAddr"));
             }
         return licmPure(n);
         }

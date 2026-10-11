@@ -297,8 +297,20 @@ static NSArray<XTIRBlock*>* successors(XTIRBlock* b)
         [self hoistGuardsToEntry:fn guards:guards module:mod];
         guards = [self recogniseAllIn:fn module:mod preds:&preds];
         }
+    // Sweep dead pure instructions the hoist/fold may have left in a body: an
+    // in-body guard whose ICmp and CondBranch are gone keeps a dead AddrOf/Load
+    // (the hoist single-blocks the guard, but does not re-strip its tail). That
+    // leftover is a MEMORY op in a loop body and the vectoriser refuses a body
+    // with one, so nbody's inner float reduction was never recognised. Only
+    // provably dead pure ops are removed, so this cannot change behaviour.
+    for (XTIRBlock* bb in fn.blocks)
+        [self deadStripBlock:bb inFunction:fn];
+
     if (guards.count < 2)
+        {
+        // Nothing left to fold.
         return;
+        }
 
     NSMapTable<XTIRBlock*, NSMutableSet<XTIRBlock*>*>* dom =
         [self dominatorsOf:fn

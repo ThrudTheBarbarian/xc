@@ -1813,7 +1813,7 @@ class X86_64
             return;
             }
         String* mov = String.withCString(flt ? "movaps" : "movdqa");
-        bool commut = !n.op().equals(String.withCString("VSub"));
+        bool commut = !n.op().equals(String.withCString("VSub")) && !n.op().equals(String.withCString("VDiv"));
         // The two-address destructive form: compute in d, keeping whichever
         // source already sits there when the op allows it.
         if (d.equals(a))
@@ -1844,6 +1844,10 @@ class X86_64
                 return String.withCString(d ? "subpd" : "subps");
             if (op.equals(String.withCString("VMul")))
                 return String.withCString(d ? "mulpd" : "mulps");
+            if (op.equals(String.withCString("VDiv")))
+                return String.withCString(d ? "divpd" : "divps");
+            if (op.equals(String.withCString("VSqrt")))
+                return String.withCString(d ? "sqrtpd" : "sqrtps");
             if (op.equals(String.withCString("VAnd")))
                 return String.withCString(d ? "andpd" : "andps");
             if (op.equals(String.withCString("VOr")))
@@ -1985,6 +1989,26 @@ class X86_64
                           ((IROperand*)n.ops().get((u32)1)).imm());
         }
 
+    // Lane-wise float square root, one source (`sqrtps d, a` / `vsqrtps d, a`).
+    void emitVSqrt(IRInsn* n)
+        {
+        if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
+            { unsupported(n.op()); return; }
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        if (o0.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
+        String* d = vecOf(n.res());
+        String* a = vecOf(o0.val());
+        if (d == (String*)0 || a == (String*)0) { unsupported(n.op()); return; }
+        String* lane = laneOf(n.res().ty());
+        if (!isFloatTy(lane)) { unsupported(n.op()); return; }
+        String* mn = sseMnemFor(n.op(), lane);
+        if (mn == (String*)0) { unsupported(n.op()); return; }
+        if (isYmm(d) || isZmm(d))
+            _out.appendFormat("\tv%s\t%s, %s\n", mn.cString(), d.cString(), a.cString());
+        else
+            _out.appendFormat("\t%s\t%s, %s\n", mn.cString(), d.cString(), a.cString());
+        }
+
     void emitVReduceAdd(IRInsn* n)
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
@@ -1995,6 +2019,52 @@ class X86_64
         String* v = vecOf(o.val());
         if (v == (String*)0)
             return;
+        // FLOAT lanes (an nbody-style reduction): fold to xmm with FP adds, then
+        // a shuffle/square 4-lane add. The lanes are paired EXACTLY as arm64's
+        // `faddp` does — (l0+l1)+(l2+l3) — so the two back ends round
+        // identically; nbody counts bodies with a positive force and a handful
+        // sit within rounding of zero, so a different pairing gave a different
+        // checksum on one machine. Two scratch registers, because fdstFor may
+        // place the destination in xmm0 itself.
+        if (isFloatTy(n.res().ty()))
+            {
+            bool dq = n.res().ty().equals(String.withCString("F64"));
+            String* add = String.withCString(dq ? "addpd" : "addps");
+            if (isZmm(v))
+                {
+                String* y = lowYmm(v);
+                _out.appendFormat("\tvextractf64x4\tymm0, %s, 1\n\tv%s\t%s, %s, ymm0\n",
+                                  v.cString(), add.cString(), y.cString(), y.cString());
+                v = y;
+                }
+            if (isYmm(v))
+                {
+                String* x = lowHalf(v);
+                _out.appendFormat("\tvextractf128\txmm0, %s, 1\n\tv%s\t%s, %s, xmm0\n",
+                                  v.cString(), add.cString(), x.cString(), x.cString());
+                v = x;
+                }
+            String* D = fdstFor(n.res(), (IROperand*)0, (IROperand*)0);
+            if (dq)
+                {
+                _out.appendFormat("\tmovaps\txmm1, %s\n", v.cString());
+                _out.appendFormat("\tshufpd\txmm1, xmm1, 0x1\n");
+                _out.appendFormat("\t%s\txmm1, %s\n", add.cString(), v.cString());
+                _out.appendFormat("\tmovaps\t%s, xmm1\n", D.cString());
+                }
+            else
+                {
+                _out.appendFormat("\tmovaps\txmm1, %s\n", v.cString());
+                _out.appendFormat("\tshufps\txmm1, xmm1, 0xB1\n");
+                _out.appendFormat("\t%s\txmm1, %s\n", add.cString(), v.cString());
+                _out.appendFormat("\tmovaps\txmm0, xmm1\n");
+                _out.appendFormat("\tshufps\txmm0, xmm0, 0x4E\n");
+                _out.appendFormat("\t%s\txmm0, xmm1\n", add.cString());
+                _out.appendFormat("\tmovaps\t%s, xmm0\n", D.cString());
+                }
+            storeF(D, n.res());
+            return;
+            }
         if (isZmm(v))
             {
             // Fold the high 256 bits onto the low, then the 256-bit fold below.
@@ -5996,9 +6066,14 @@ class X86_64
             emitVSplat(n);
             return true;
             }
-        if (op.equals(String.withCString("VAdd")) || op.equals(String.withCString("VSub")) || op.equals(String.withCString("VMul")) || op.equals(String.withCString("VAnd")) || op.equals(String.withCString("VOr")) || op.equals(String.withCString("VXor")) || op.equals(String.withCString("VMax")) || op.equals(String.withCString("VMin")))
+        if (op.equals(String.withCString("VAdd")) || op.equals(String.withCString("VSub")) || op.equals(String.withCString("VMul")) || op.equals(String.withCString("VDiv")) || op.equals(String.withCString("VAnd")) || op.equals(String.withCString("VOr")) || op.equals(String.withCString("VXor")) || op.equals(String.withCString("VMax")) || op.equals(String.withCString("VMin")))
             {
             emitVBin(n);
+            return true;
+            }
+        if (op.equals(String.withCString("VSqrt")))
+            {
+            emitVSqrt(n);
             return true;
             }
         if (op.equals(String.withCString("VMulHi")))

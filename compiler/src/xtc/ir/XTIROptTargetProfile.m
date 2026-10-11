@@ -122,6 +122,10 @@
     {
     return NO;
     }
+- (BOOL)vectorizesFloatReduce
+    {
+    return NO; // reassociation is target- and source-gated; see the header
+    }
 - (BOOL)vectorizesIota
     {
     return NO;
@@ -262,6 +266,11 @@
 // umull/umull2 + uzp2 build the high half of a 32x32 lane product and
 // ushr does the post-shift, so constant division vectorises here.
 - (BOOL)vectorizesHighMultiply
+    {
+    return YES;
+    }
+// fdiv/fsqrt .4s and the faddp horizontal add are all arm64 has natively.
+- (BOOL)vectorizesFloatReduce
     {
     return YES;
     }
@@ -751,6 +760,12 @@
 // pmuludq over both lane pairs plus a re-interleave builds the high half of a
 // 32x32 lane product, so constant division vectorises here too.
 - (BOOL)vectorizesHighMultiply
+    {
+    return YES;
+    }
+// divps/sqrtps and the haddps horizontal add, in the same pool the integer
+// vector ops already use.
+- (BOOL)vectorizesFloatReduce
     {
     return YES;
     }

@@ -739,13 +739,20 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
             // float 3-same — 1-bit sz at bit22 (0 for .2s/.4s, 1 for .2d):
             float3 = @{@"fadd":@0x0E20D400u,@"fsub":@0x0EA0D400u,@"fmul":@0x2E20DC00u,@"fdiv":@0x2E20FC00u,
                        @"fmla":@0x0E20CC00u,@"fmls":@0x0EA0CC00u,@"fmax":@0x0E20F400u,@"fmin":@0x0EA0F400u,
-                       @"fcmeq":@0x0E20E400u,@"fcmgt":@0x2EA0E400u};
+                       @"fcmeq":@0x0E20E400u,@"fcmgt":@0x2EA0E400u,
+                       // FADDP (vector): the P form is the base with bit 29 set,
+                       // so its .4s is 0x6E20D400 (verified against the host
+                       // assembler). Used by the float horizontal reduction.
+                       @"faddp":@0x2E20D400u};
             // 2-reg misc, integer (size<<22):
             misc2i = @{@"neg":@0x2E20B800u,@"abs":@0x0E20B800u,@"not":@0x2E205800u,@"mvn":@0x2E205800u,
                        @"cnt":@0x0E205800u,@"rev64":@0x0E200800u,@"rev16":@0x0E201800u,@"rev32":@0x2E200800u};
             // 2-reg misc, float (1-bit sz at bit22):
             misc2f = @{@"fneg":@0x2EA0F800u,@"fabs":@0x0EA0F800u,@"scvtf":@0x0E21D800u,@"ucvtf":@0x2E21D800u,
-                       @"fcvtzs":@0x0EA1B800u,@"fcvtzu":@0x2EA1B800u,@"frintz":@0x0EA19800u};
+                       @"fcvtzs":@0x0EA1B800u,@"fcvtzu":@0x2EA1B800u,@"frintz":@0x0EA19800u,
+                       // FSQRT (vector): the P form (bit 29 set). Its .4s is
+                       // 0x6EA1F800, verified against the host assembler.
+                       @"fsqrt":@0x2EA1F800u};
             // across-lanes reduction (scalar Vd, vector Vn.T; size<<22):
             red = @{@"addv":@0x0E31B800u,@"saddlv":@0x0E303800u,@"uaddlv":@0x2E303800u,
                     @"smaxv":@0x0E30A800u,@"sminv":@0x0E31A800u,@"umaxv":@0x2E30A800u,@"uminv":@0x2E31A800u};

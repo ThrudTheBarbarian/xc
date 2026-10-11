@@ -3061,9 +3061,11 @@ class Arm64
         if (op.equals(String.withCString("VStore"))) { emitVStore(n); return true; }
         if (op.equals(String.withCString("VSplat"))) { emitVSplat(n); return true; }
         if (op.equals(String.withCString("VAdd")) || op.equals(String.withCString("VSub"))
-         || op.equals(String.withCString("VMul")) || op.equals(String.withCString("VAnd"))
+         || op.equals(String.withCString("VMul")) || op.equals(String.withCString("VDiv"))
+         || op.equals(String.withCString("VAnd"))
          || op.equals(String.withCString("VOr"))  || op.equals(String.withCString("VXor")))
             { emitVBin(n); return true; }
+        if (op.equals(String.withCString("VSqrt"))) { emitVSqrt(n); return true; }
         if (op.equals(String.withCString("VMax")) || op.equals(String.withCString("VMin")))
             { emitVMinMax(n); return true; }
         if (op.equals(String.withCString("VAddLP"))) { emitVAddLP(n); return true; }
@@ -3155,6 +3157,18 @@ class Arm64
             return;
         }
         String* sc = operandReg((IROperand*)n.ops().get((u32)0), String.withCString("w16"));
+        // A FLOAT scalar has no `dup <Vd>.<T>, <Sn>` form — the DUP element
+        // encoding takes a VECTOR element source: `dup vN.4s, vM.s[0]`.
+        String* lane = laneOf(n.res().ty());
+        if (isFloatTy(lane) && (sc.hasPrefix(String.withCString("s")) || sc.hasPrefix(String.withCString("d"))))
+            {
+            String* vn = String.withCString("v");
+            vn.append(sc.substringFromByte((u32)1));
+            String* elt = sc.hasPrefix(String.withCString("d")) ? String.withCString("d") : String.withCString("s");
+            _out.appendFormat("    dup v%lu.%s, %s.%s[0]\n", vecIndex(n.res()), arr.cString(),
+                              vn.cString(), elt.cString());
+            return;
+            }
         _out.appendFormat("    dup v%lu.%s, %s\n", vecIndex(n.res()), arr.cString(), sc.cString());
     }
 
@@ -3175,6 +3189,7 @@ class Arm64
         if (op.equals(String.withCString("VAdd"))) mnem = String.withCString(flt ? "fadd" : "add");
         else if (op.equals(String.withCString("VSub"))) mnem = String.withCString(flt ? "fsub" : "sub");
         else if (op.equals(String.withCString("VMul"))) mnem = String.withCString(flt ? "fmul" : "mul");
+        else if (op.equals(String.withCString("VDiv"))) mnem = String.withCString("fdiv");
         else if (op.equals(String.withCString("VAnd"))) mnem = String.withCString("and");
         else if (op.equals(String.withCString("VOr")))  mnem = String.withCString("orr");
         else mnem = String.withCString("eor");
@@ -3198,6 +3213,20 @@ class Arm64
     {
         _out.appendFormat("    %s v%lu.%s, v%lu.%s, v%lu.%s\n", mnem.cString(),
                           d, arr.cString(), a, arr.cString(), b, arr.cString());
+    }
+
+    // Lane-wise float square root, one source. Only the float reduction path
+    // emits VSqrt.
+    void emitVSqrt(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        if (o0.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
+        String* lane = laneOf(n.res().ty());
+        if (!isFloatTy(lane)) { unsupported(n.op()); return; }
+        _out.appendFormat("    fsqrt v%lu.%s, v%lu.%s\n",
+                          vecIndex(n.res()), neonArr(lane).cString(),
+                          vecIndex(o0.val()), neonArr(lane).cString());
     }
 
     void emitVMinMax(IRInsn* n)
@@ -3306,6 +3335,27 @@ class Arm64
         if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
         IROperand* o0 = (IROperand*)n.ops().get((u32)0);
         if (o0.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
+        // FLOAT lanes (an nbody-style reduction): `faddp` pairs, twice. There is
+        // no fadd-across, so the first folds <l0,l1> and <l2,l3> and the second
+        // adds those — the p-ARING (l0+l1)+(l2+l3), which the x86-64 back end
+        // mirrors so both round identically. The result lands in the low
+        // s-element of the home, which is an FP register, so no fmov is needed.
+        if (isFloatTy(n.res().ty()))
+            {
+            u32 v = vecIndex(o0.val());
+            String* d = resultReg(n.res(), fregName((u32)0, n.res().ty()));
+            String* sd = d;
+            if (d.hasPrefix(String.withCString("d")))
+                {
+                sd = String.withCString("s");
+                sd.append(d.substringFromByte((u32)1));
+                }
+            _out.appendFormat("    faddp v%lu.4s, v%lu.4s, v%lu.4s\n", v, v, v);
+            _out.appendFormat("    faddp v%lu.4s, v%lu.4s, v%lu.4s\n", v, v, v);
+            _out.appendFormat("    fmov %s, s%lu\n", sd.cString(), v);
+            storeReg(sd, n.res());
+            return;
+            }
         bool sgn = isSignedTy(n.res().ty());
         String* op = n.op();
         String* mnem;

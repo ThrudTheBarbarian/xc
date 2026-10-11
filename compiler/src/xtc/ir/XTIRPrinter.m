@@ -423,6 +423,10 @@ static NSString* dbgSuffix(XTIRInsn* insn)
         return @"VSub";
     case XTIROpVMul:
         return @"VMul";
+    case XTIROpVDiv:
+        return @"VDiv";
+    case XTIROpVSqrt:
+        return @"VSqrt";
     case XTIROpVAnd:
         return @"VAnd";
     case XTIROpVOr:

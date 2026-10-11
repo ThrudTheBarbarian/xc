@@ -181,6 +181,17 @@
         // that reloads the same element (e.g. `c[i]=a[i]*b[i]+a[i]`) issues one
         // vector load, not two. (CSE also runs after, for the scalar paths.)
         [p addPass:[[XTIROptRedundantLoadCSE alloc] init]];
+        // A run of LICM BEFORE the vectoriser. The reduction recogniser needs a
+        // body free of loads that do not vary with the vectorised iv, and in a
+        // NESTED loop a load indexed by the OUTER loop's iv is exactly that:
+        // nbody's inner loop reads px[i] (i the outer iv) alongside px[j] (j the
+        // inner iv), and the px[i] load alone made the recogniser refuse the
+        // loop, so its float reduction never vectorised. LICM hoists the
+        // invariant one into the outer body. (The post-vectoriser LICM below
+        // stays: it cleans the spliced vector bodies.)
+        XTIROptLICM* licmPre = [[XTIROptLICM alloc] init];
+        licmPre.profile = profile;
+        [p addPass:licmPre];
         // Auto-vectorise elementwise map loops to NEON SIMD (profile-gated),
         // BEFORE the unrollers (which would otherwise replicate the scalar body
         // and defeat recognition). The unrollers skip vector-op bodies.
