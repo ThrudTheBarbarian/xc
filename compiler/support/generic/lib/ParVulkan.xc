@@ -101,6 +101,8 @@ typedef i32 vkCreateFence_t(pointer dev, pointer info, pointer alloc, u64* out);
 typedef void vkDestroyFence_t(pointer dev, u64 fence, pointer alloc);
 typedef i32 vkQueueSubmit_t(pointer q, u32 n, pointer submits, u64 fence);
 typedef i32 vkWaitForFences_t(pointer dev, u32 n, u64* fences, u32 all, u64 timeout);
+typedef i32 vkResetFences_t(pointer dev, u32 n, u64* fences);
+typedef i32 vkResetCommandBuffer_t(u64 cb, u32 flags);
 
 // The pipelines made so far: each gpuSource() pointer, its pipeline, layout
 // and number of bindings (0 when it did not build).
@@ -110,6 +112,11 @@ u64 gParVkLayout[64];
 u64 gParVkSetLayout[64];
 u32 gParVkBindings[64];
 u32 gParVkKernels;
+// One descriptor pool, descriptor set and command buffer PER SLOT, kept across
+// runs: creating them a run was the bulk of the per-run host cost.
+u64 gParVkDpool[64];
+u64 gParVkDset[64];
+u64 gParVkCb[64];
 
 // The buffers of the last runs, by binding slot, kept for the next: a block
 // run again (or another of the same shape) reuses them where they are big
@@ -178,6 +185,9 @@ class ParVulkan
     static vkDestroyFence_t* _destroyFence;
     static vkQueueSubmit_t* _submit;
     static vkWaitForFences_t* _wait;
+    static vkResetFences_t* _resetFences;
+    static u64 _fence;          // one fence, reset and reused: a create and a destroy a run was latency
+    static vkResetCommandBuffer_t* _resetCmd;
 
 #if ARCH_win64 || LINK_DYNAMIC || PLATFORM_android
     static pointer _lib;
@@ -255,6 +265,8 @@ class ParVulkan
         _destroyFence = (vkDestroyFence_t*)fn("vkDestroyFence");
         _submit = (vkQueueSubmit_t*)fn("vkQueueSubmit");
         _wait = (vkWaitForFences_t*)fn("vkWaitForFences");
+        _resetFences = (vkResetFences_t*)fn("vkResetFences");
+        _resetCmd = (vkResetCommandBuffer_t*)fn("vkResetCommandBuffer");
         if (createInstance == (vkCreateInstance_t*)0 || enumerate == (vkEnumeratePhysicalDevices_t*)0 ||
             props == (vkGetPhysicalDeviceProperties_t*)0 || feats == (vkGetPhysicalDeviceFeatures_t*)0 ||
             memProps == (vkGetPhysicalDeviceMemoryProperties_t*)0 ||
@@ -713,7 +725,9 @@ class ParVulkan
             _vk32(&dpi[0], (u32)20, (u32)1);
             _vk32(&dpi[0], (u32)24, (u32)1);
             _vkp(&dpi[0], (u32)32, (pointer)&ps[0]);
-            ok = _createPool(_dev, (pointer)&dpi[0], (pointer)0, &pool) == (i32)0;
+            if (gParVkDpool[slot] == (u64)0)
+                ok = _createPool(_dev, (pointer)&dpi[0], (pointer)0, &gParVkDpool[slot]) == (i32)0;
+            pool = gParVkDpool[slot];
             }
         if (ok)
             {
@@ -724,7 +738,9 @@ class ParVulkan
             _vk64(&dsa[0], (u32)16, pool);
             _vk32(&dsa[0], (u32)24, (u32)1);
             _vkp(&dsa[0], (u32)32, (pointer)&dsl);
-            ok = _allocateSets(_dev, (pointer)&dsa[0], &set) == (i32)0;
+            if (gParVkDset[slot] == (u64)0)
+                ok = _allocateSets(_dev, (pointer)&dsa[0], &gParVkDset[slot]) == (i32)0;
+            set = gParVkDset[slot];
             }
         if (ok)
             {
@@ -761,7 +777,11 @@ class ParVulkan
             _vk32(&cba[0], (u32)24, (u32)0);
             _vk32(&cba[0], (u32)28, (u32)1);
             pointer cb = (pointer)0;
-            ok = _allocateCommands(_dev, (pointer)&cba[0], &cb) == (i32)0;
+            if (gParVkCb[slot] == (u64)0)
+                ok = _allocateCommands(_dev, (pointer)&cba[0], &gParVkCb[slot]) == (i32)0;
+            else if (_resetCmd != (vkResetCommandBuffer_t*)0)
+                ok = _resetCmd(gParVkCb[slot], (u32)0) == (i32)0;
+            cb = gParVkCb[slot];
             u8 cbb[32];
             memset((pointer)&cbb[0], (i32)0, (u64)32);
             _vk32(&cbb[0], (u32)0, (u32)42);
@@ -827,8 +847,15 @@ class ParVulkan
             u8 fci[24];
             memset((pointer)&fci[0], (i32)0, (u64)24);
             _vk32(&fci[0], (u32)0, (u32)8);
-            if (ok)
-                ok = _createFence(_dev, (pointer)&fci[0], (pointer)0, &fence) == (i32)0;
+            if (ok && _fence == (u64)0)
+                {
+                u64 nf = (u64)0;
+                ok = _createFence(_dev, (pointer)&fci[0], (pointer)0, &nf) == (i32)0;
+                _fence = nf;
+                }
+            fence = _fence;
+            if (ok && _resetFences != (vkResetFences_t*)0)
+                ok = _resetFences(_dev, (u32)1, &fence) == (i32)0;
             if (ok)
                 {
                 u8 si[72];
@@ -866,10 +893,8 @@ class ParVulkan
                 }
             l.fold(proto, &parts[0]);
             }
-        if (fence != (u64)0)
-            _destroyFence(_dev, fence, (pointer)0);
-        if (pool != (u64)0)
-            _destroyPool(_dev, pool, (pointer)0);
+        // The fence is kept for the next run (one create, not one a run).
+        // The descriptor pool, set and command buffer are kept for later runs.
         // The buffers stay for the next run (gParVkBuf…), unless this one failed.
         if (!ok)
             for (u32 i = (u32)0; i < nb; i = i + (u32)1)
