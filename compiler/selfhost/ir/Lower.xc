@@ -17607,6 +17607,29 @@ class ClassInfo
     u32 spvLabel(void) { return _sMod.newId(); }
     void spvPlace(u32 l) { spvEmit((u32)SPV_LABEL, spvA1(l)); }
 
+    // a combined with b under a reduction's operator, as t. The kernel's
+    // workgroup tree and the module's fold entry point (bug 645) both need it,
+    // with the same instructions in the same order.
+    u32 spvReduceVal(String* op, bool isF, bool sgn, u32 t, u32 boolT, u32 a, u32 b)
+        {
+        if (op.equals(spvS("+")))
+            return spvEmitR(isF ? (u32)SPV_FADD : (u32)SPV_IADD, t, spvA2(a, b));
+        if (op.equals(spvS("*")))
+            return spvEmitR(isF ? (u32)SPV_FMUL : (u32)SPV_IMUL, t, spvA2(a, b));
+        if (op.equals(spvS("&")))
+            return spvEmitR((u32)SPV_BITWISEAND, t, spvA2(a, b));
+        if (op.equals(spvS("|")))
+            return spvEmitR((u32)SPV_BITWISEOR, t, spvA2(a, b));
+        if (op.equals(spvS("^")))
+            return spvEmitR((u32)SPV_BITWISEXOR, t, spvA2(a, b));
+        bool isMin = op.equals(spvS("min"));
+        u32 cmpOp = isF ? (isMin ? (u32)SPV_FORDLESSTHAN : (u32)SPV_FORDGREATERTHAN)
+                  : sgn ? (isMin ? (u32)SPV_SLESSTHAN : (u32)SPV_SGREATERTHAN)
+                        : (isMin ? (u32)SPV_ULESSTHAN : (u32)SPV_UGREATERTHAN);
+        u32 cmp = spvEmitR(cmpOp, boolT, spvA2(a, b));
+        return spvEmitR((u32)SPV_SELECT, t, spvA3(cmp, a, b));
+        }
+
     // A 32-bit value wrapped to narrow type t, in t's form.
     u32 spvCanon(u32 v, String* t)
         {
@@ -18948,12 +18971,14 @@ class ClassInfo
         for (u32 i = (u32)0; i < memberTypes.count(); i = i + (u32)1) lw.add(memberTypes.get(i));
         spvOp(m.globals, (u32)SPV_TYPESTRUCT, lw);
 
-        // The span: three i64 push constants.
+        // The span: four i64 push constants — lo, hi, per, and (bug 645) the
+        // number of partials the fold entry point has to combine, which the
+        // kernel itself does not read (the reference explains).
         u32 i64t = m.typeInt((u32)64);
         u32 spanT = m.newId();
-        spvOp(m.globals, (u32)SPV_TYPESTRUCT, spvW((u32)4, spanT, i64t, i64t, i64t, (u32)0, (u32)0));
+        spvOp(m.globals, (u32)SPV_TYPESTRUCT, spvW((u32)5, spanT, i64t, i64t, i64t, i64t, (u32)0));
         spvOp(m.decos, (u32)SPV_DECORATE, spvA2(spanT, (u32)SPV_DEC_BLOCK));
-        for (u32 k = (u32)0; k < (u32)3; k = k + (u32)1)
+        for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
             spvOp(m.decos, (u32)SPV_MEMBERDECORATE, spvW((u32)4, spanT, k, (u32)SPV_DEC_OFFSET, (u32)8 * k, (u32)0, (u32)0));
         u32 spanV = m.newId();
         spvOp(m.globals, (u32)SPV_VARIABLE, spvA3(m.ptrType((u32)SPV_ST_PUSHCONSTANT, spanT), spanV, (u32)SPV_ST_PUSHCONSTANT));
@@ -19182,26 +19207,7 @@ class ClassInfo
                     u32 other = spvEmitR((u32)SPV_IADD, u32t, spvA2(lid32, swc));
                     u32 pb = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, other));
                     u32 b = spvEmitR((u32)SPV_LOAD, t, spvA1(pb));
-                    u32 r = (u32)0;
-                    if (op.equals(spvS("+")))
-                        r = spvEmitR(isF ? (u32)SPV_FADD : (u32)SPV_IADD, t, spvA2(a, b));
-                    else if (op.equals(spvS("*")))
-                        r = spvEmitR(isF ? (u32)SPV_FMUL : (u32)SPV_IMUL, t, spvA2(a, b));
-                    else if (op.equals(spvS("&")))
-                        r = spvEmitR((u32)SPV_BITWISEAND, t, spvA2(a, b));
-                    else if (op.equals(spvS("|")))
-                        r = spvEmitR((u32)SPV_BITWISEOR, t, spvA2(a, b));
-                    else if (op.equals(spvS("^")))
-                        r = spvEmitR((u32)SPV_BITWISEXOR, t, spvA2(a, b));
-                    else
-                        {
-                        bool isMin = op.equals(spvS("min"));
-                        u32 cmpOp = isF ? (isMin ? (u32)SPV_FORDLESSTHAN : (u32)SPV_FORDGREATERTHAN)
-                                  : sgn ? (isMin ? (u32)SPV_SLESSTHAN : (u32)SPV_SGREATERTHAN)
-                                        : (isMin ? (u32)SPV_ULESSTHAN : (u32)SPV_UGREATERTHAN);
-                        u32 cmp = spvEmitR(cmpOp, boolT, spvA2(a, b));
-                        r = spvEmitR((u32)SPV_SELECT, t, spvA3(cmp, a, b));
-                        }
+                    u32 r = spvReduceVal(op, isF, sgn, t, boolT, a, b);
                     u32 pc = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, lid32));
                     spvEmit((u32)SPV_STORE, spvA2(pc, r));
                     spvEmit((u32)SPV_BRANCH, spvA1(mrg));
@@ -19267,12 +19273,139 @@ class ClassInfo
         for (u32 i = (u32)0; i < nm.count(); i = i + (u32)1) ep.add(nm.get(i));
         for (u32 i = (u32)0; i < iface.count(); i = i + (u32)1) ep.add(iface.get(i));
         spvOp(m.head, (u32)SPV_ENTRYPOINT, ep);
+        // A device-side fold (bug 645): the workgroups' partials are combined
+        // by a SECOND entry point of the same module, dispatched after the
+        // kernel (the reference explains why not a counter).
+        u32 foldId = (u32)0;
+        if (devred)
+            {
+            foldId = m.newId();
+            Array* fep = new Array();
+            fep.add((Object*)Number.withU32((u32)5));
+            fep.add((Object*)Number.withU32(foldId));
+            Array* fnm = spvString(spvS("par_fold"));
+            for (u32 i = (u32)0; i < fnm.count(); i = i + (u32)1) fep.add(fnm.get(i));
+            fep.add((Object*)Number.withU32(lidV));
+            fep.add((Object*)Number.withU32(argsV));
+            fep.add((Object*)Number.withU32(spanV));
+            for (u32 i = (u32)0; i < redVars.count(); i = i + (u32)1) fep.add(redVars.get(i));
+            for (u32 i = (u32)0; i < shVars.count(); i = i + (u32)1) fep.add(shVars.get(i));
+            spvOp(m.head, (u32)SPV_ENTRYPOINT, fep);
+            }
         spvOp(m.head, (u32)SPV_EXECUTIONMODE, spvW((u32)5, mainId, (u32)17, devred ? (u32)256 : (u32)64, (u32)1, (u32)1, (u32)0));
+        if (devred)
+            spvOp(m.head, (u32)SPV_EXECUTIONMODE, spvW((u32)5, foldId, (u32)17, (u32)256, (u32)1, (u32)1, (u32)0));
         for (u32 i = (u32)0; i < header.count(); i = i + (u32)1) m.funcs.add(header.get(i));
         spvFinish(fn, m.funcs);
 
+        // The fold function's body (its entry point is already in the head):
+        // one workgroup of 256, each lane accumulating the partials it owns
+        // from the identity the block object holds, then the same workgroup
+        // tree the kernel's own device reduction runs, and the result in slot 0.
+        if (devred)
+            {
+            SpvFn* ffn = new SpvFn();
+            _spvFn = ffn;
+            u32 fi64 = m.typeInt((u32)64);
+            u32 fpI64 = m.ptrType((u32)SPV_ST_PUSHCONSTANT, fi64);
+            u32 fscope = m.u32c((u32)2);      // Workgroup
+            u32 fsem = m.u32c((u32)0x108);    // AcquireRelease | WorkgroupMemory
+            Array* foldHeader = new Array();
+            spvOp(foldHeader, (u32)SPV_FUNCTION, spvW((u32)4, voidT, foldId, (u32)0, fnT, (u32)0, (u32)0));
+            spvPlace(spvLabel());
+            u32 flidv = spvEmitR((u32)SPV_LOAD, uvec3, spvA1(lidV));
+            u32 flid = spvEmitR((u32)SPV_COMPOSITEEXTRACT, u32t, spvA2(flidv, (u32)0));
+            u32 fpn = spvEmitR((u32)SPV_ACCESSCHAIN, fpI64, spvA2(spanV, m.u32c((u32)3)));
+            u32 fnparts = spvEmitR((u32)SPV_UCONVERT, u32t, spvA1(spvEmitR((u32)SPV_LOAD, fi64, spvA1(fpn))));
+            for (u32 di = (u32)0; di < redFields.count(); di = di + (u32)1)
+                {
+                u32 k = ((Number*)redFields.get(di)).asU32();
+                String* rt = _mObj.typeAt(k);
+                String* op = (String*)_mRedOps.get((Hashable*)String.withU32(k));
+                bool isF = ptxIs(rt, "F32") || ptxIs(rt, "F64");
+                bool sgn = ptxIs(rt, "I32") || ptxIs(rt, "I64");
+                u32 t = spvType(rt);
+                u32 bT = m.typeBool();
+                u32 sv = ((Number*)shVars.get(di)).asU32();
+                u32 pW = m.ptrType((u32)SPV_ST_WORKGROUP, t);
+                u32 pRv = m.ptrType((u32)SPV_ST_STORAGEBUFFER, t);
+                // The identity the object holds: a lane with no partial of its
+                // own leaves the answer unchanged.
+                u32 idSrc = spvEmitR((u32)SPV_ACCESSCHAIN, m.ptrType((u32)SPV_ST_STORAGEBUFFER, t),
+                                     spvA2(argsV, m.u32c(((Number*)_sMember.get((Hashable*)String.withU32(k))).asU32())));
+                u32 acc = spvLocalVar(t);
+                spvEmit((u32)SPV_STORE, spvA2(acc, spvEmitR((u32)SPV_LOAD, t, spvA1(idSrc))));
+                u32 jv = spvLocalVar(u32t);
+                spvEmit((u32)SPV_STORE, spvA2(jv, flid));
+                u32 lhead = spvLabel();
+                u32 lcheck = spvLabel();
+                u32 lbody = spvLabel();
+                u32 lcont = spvLabel();
+                u32 lmerge = spvLabel();
+                spvEmit((u32)SPV_BRANCH, spvA1(lhead));
+                spvPlace(lhead);
+                spvEmit((u32)SPV_LOOPMERGE, spvA3(lmerge, lcont, (u32)0));
+                spvEmit((u32)SPV_BRANCH, spvA1(lcheck));
+                spvPlace(lcheck);
+                u32 more = spvEmitR((u32)SPV_ULESSTHAN, bT, spvA2(spvEmitR((u32)SPV_LOAD, u32t, spvA1(jv)), fnparts));
+                spvEmit((u32)SPV_BRANCHCONDITIONAL, spvA3(more, lbody, lmerge));
+                spvPlace(lbody);
+                u32 fa = spvEmitR((u32)SPV_LOAD, t, spvA1(acc));
+                u32 fjl = spvEmitR((u32)SPV_LOAD, u32t, spvA1(jv));
+                u32 fpb = spvEmitR((u32)SPV_ACCESSCHAIN, pRv,
+                                   spvA3(((Number*)redVars.get(di)).asU32(), m.u32c((u32)0), fjl));
+                u32 fb = spvEmitR((u32)SPV_LOAD, t, spvA1(fpb));
+                spvEmit((u32)SPV_STORE, spvA2(acc, spvReduceVal(op, isF, sgn, t, bT, fa, fb)));
+                spvEmit((u32)SPV_BRANCH, spvA1(lcont));
+                spvPlace(lcont);
+                spvEmit((u32)SPV_STORE, spvA2(jv, spvEmitR((u32)SPV_IADD, u32t,
+                                                          spvA2(fjl, m.u32c((u32)256)))));
+                spvEmit((u32)SPV_BRANCH, spvA1(lhead));
+                spvPlace(lmerge);
+                u32 fmine = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, flid));
+                spvEmit((u32)SPV_STORE, spvA2(fmine, spvEmitR((u32)SPV_LOAD, t, spvA1(acc))));
+                spvEmit((u32)SPV_CONTROLBARRIER, spvA3(fscope, fscope, fsem));
+                for (u32 lvl = (u32)128; lvl >= (u32)1; lvl = lvl / (u32)2)
+                    {
+                    u32 swc = m.u32c(lvl);
+                    u32 c = spvEmitR((u32)SPV_ULESSTHAN, bT, spvA2(flid, swc));
+                    u32 tb = spvLabel();
+                    u32 tm = spvLabel();
+                    spvEmit((u32)SPV_SELECTIONMERGE, spvA2(tm, (u32)0));
+                    spvEmit((u32)SPV_BRANCHCONDITIONAL, spvA3(c, tb, tm));
+                    spvPlace(tb);
+                    u32 pa = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, flid));
+                    u32 ta = spvEmitR((u32)SPV_LOAD, t, spvA1(pa));
+                    u32 other = spvEmitR((u32)SPV_IADD, u32t, spvA2(flid, swc));
+                    u32 pbo = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, other));
+                    u32 tbo = spvEmitR((u32)SPV_LOAD, t, spvA1(pbo));
+                    spvEmit((u32)SPV_STORE, spvA2(pa, spvReduceVal(op, isF, sgn, t, bT, ta, tbo)));
+                    spvEmit((u32)SPV_BRANCH, spvA1(tm));
+                    spvPlace(tm);
+                    spvEmit((u32)SPV_CONTROLBARRIER, spvA3(fscope, fscope, fsem));
+                    }
+                u32 zero = m.u32c((u32)0);
+                u32 c0 = spvEmitR((u32)SPV_IEQUAL, bT, spvA2(flid, zero));
+                u32 wb = spvLabel();
+                u32 wm = spvLabel();
+                spvEmit((u32)SPV_SELECTIONMERGE, spvA2(wm, (u32)0));
+                spvEmit((u32)SPV_BRANCHCONDITIONAL, spvA3(c0, wb, wm));
+                spvPlace(wb);
+                u32 s0 = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, zero));
+                u32 dst = spvEmitR((u32)SPV_ACCESSCHAIN, pRv,
+                                   spvA3(((Number*)redVars.get(di)).asU32(), zero, zero));
+                spvEmit((u32)SPV_STORE, spvA2(dst, spvEmitR((u32)SPV_LOAD, t, spvA1(s0))));
+                spvEmit((u32)SPV_BRANCH, spvA1(wm));
+                spvPlace(wm);
+                }
+            spvEmit((u32)SPV_RETURN, new Array());
+            spvEmit((u32)SPV_FUNCTIONEND, new Array());
+            for (u32 i = (u32)0; i < foldHeader.count(); i = i + (u32)1) m.funcs.add(foldHeader.get(i));
+            spvFinish(ffn, m.funcs);
+            }
+
         Array* words = m.bytes();
-        if (devred) meta.appendCString(" devred");
+        if (devred) meta.appendCString(" devred devlast");
         meta.appendCString(" spirv=");
         meta.append(String.withU32(words.count() / (u32)4));
         if (_mFast) meta.appendCString(" fast");

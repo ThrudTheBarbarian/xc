@@ -108,6 +108,10 @@ typedef i32 vkResetCommandBuffer_t(u64 cb, u32 flags);
 // and number of bindings (0 when it did not build).
 pointer gParVkSrc[64];
 u64 gParVkPipe[64];
+// The fold entry point's own pipeline (bug 645), from the same module: 0 when
+// the kernel has none. It is dispatched after the kernel to combine the
+// workgroups' partials on the device.
+u64 gParVkFold[64];
 u64 gParVkLayout[64];
 u64 gParVkSetLayout[64];
 u32 gParVkBindings[64];
@@ -498,6 +502,7 @@ class ParVulkan
         // The header: bindings (block, then one per buf=, glob=, red=) and spirv=<words>.
         u32 nb = (u32)1;
         u64 words = (u64)0;
+        u32 devlast = (u32)0;
         u32 at = (u32)0;
         while (src[at] != (u8)0 && src[at] != (u8)10)
             {
@@ -505,6 +510,12 @@ class ParVulkan
                                        (src[at + (u32)1] == (u8)'g' && src[at + (u32)5] == (u8)'=') ||
                                        (src[at + (u32)1] == (u8)'r' && src[at + (u32)4] == (u8)'=')))
                 nb = nb + (u32)1;
+            // devlast: the module has a fold entry point the run dispatches
+            // after the kernel (bug 645).
+            if (src[at] == (u8)' ' && src[at + (u32)1] == (u8)'d' && src[at + (u32)2] == (u8)'e' &&
+                src[at + (u32)3] == (u8)'v' && src[at + (u32)4] == (u8)'l' && src[at + (u32)5] == (u8)'a' &&
+                src[at + (u32)6] == (u8)'s' && src[at + (u32)7] == (u8)'t')
+                devlast = (u32)1;
             if (src[at] == (u8)'s' && src[at + (u32)1] == (u8)'p' && src[at + (u32)5] == (u8)'=')
                 {
                 u32 k = at + (u32)6;
@@ -540,7 +551,7 @@ class ParVulkan
         u8 pcr[12];
         _vk32(&pcr[0], (u32)0, (u32)0x20);
         _vk32(&pcr[0], (u32)4, (u32)0);
-        _vk32(&pcr[0], (u32)8, (u32)24);
+        _vk32(&pcr[0], (u32)8, (u32)32);   // lo, hi, per, and the fold's partial count
         u8 pli[48];
         memset((pointer)&pli[0], (i32)0, (u64)48);
         _vk32(&pli[0], (u32)0, (u32)30);
@@ -570,6 +581,20 @@ class ParVulkan
         u64 pipe = (u64)0;
         if (rc == (i32)0)
             rc = _createPipelines(_dev, (u64)0, (u32)1, (pointer)&cpi[0], (pointer)0, &pipe);
+        // A module with a fold entry point (bug 645): a second pipeline from
+        // the same module and layout, named par_fold.
+        u64 foldPipe = (u64)0;
+        if (rc == (i32)0 && devlast != (u32)0)
+            {
+            memset((pointer)&cpi[0], (i32)0, (u64)96);
+            _vk32(&cpi[0], (u32)0, (u32)29);
+            _vk32(&cpi[0], (u32)24, (u32)18);                   // the stage
+            _vk32(&cpi[0], (u32)24 + (u32)20, (u32)0x20);
+            _vk64(&cpi[0], (u32)24 + (u32)24, module);
+            _vkp(&cpi[0], (u32)24 + (u32)32, (pointer)"par_fold");
+            _vk64(&cpi[0], (u32)72, layout);
+            rc = _createPipelines(_dev, (u64)0, (u32)1, (pointer)&cpi[0], (pointer)0, &foldPipe);
+            }
         free((pointer)code);
         if (rc != (i32)0)
             {
@@ -577,6 +602,7 @@ class ParVulkan
             return (i32)-1;
             }
         gParVkPipe[slot] = pipe;
+        gParVkFold[slot] = foldPipe;
         gParVkLayout[slot] = layout;
         gParVkSetLayout[slot] = dsl;
         gParVkBindings[slot] = nb;
@@ -790,10 +816,12 @@ class ParVulkan
                 ok = _begin(cb, (pointer)&cbb[0]) == (i32)0;
             if (ok)
                 {
-                i64 span[3];
+                i64 span[4];
                 span[0] = lo;
                 span[1] = hi;
                 span[2] = l.per;
+                // The fold entry point reads it: how many partials to combine.
+                span[3] = l.nparts;
                 // Stages: 0x800 compute, 0x1000 transfer, 0x4000 host. Access:
                 // 0x20/0x40 shader read/write, 0x800/0x1000 transfer read/write,
                 // 0x2000 host read.
@@ -817,13 +845,26 @@ class ParVulkan
                     }
                 _bindPipeline(cb, (u32)1, gParVkPipe[slot]);
                 _bindSets(cb, (u32)1, gParVkLayout[slot], (u32)0, (u32)1, &set, (u32)0, (pointer)0);
-                _push(cb, gParVkLayout[slot], (u32)0x20, (u32)0, (u32)24, (pointer)&span[0]);
+                _push(cb, gParVkLayout[slot], (u32)0x20, (u32)0, (u32)32, (pointer)&span[0]);
                 // A kernel that reduces on the device (bug 645) has workgroups
                 // of 256, one partial each; any other, workgroups of 64.
                 if (l.devred != (i64)0)
                     _dispatch(cb, (u32)l.nparts, (u32)1, (u32)1);
                 else
                     _dispatch(cb, (u32)((l.threads + (i64)63) / (i64)64), (u32)1, (u32)1);
+                // And when the module has a fold entry point, one more dispatch
+                // combines the partials on the device: the dispatch boundary is
+                // the execution dependency, the barrier below the memory one.
+                if (l.devlast != (i64)0)
+                    {
+                    _vk32(&mb[0], (u32)16, (u32)0x40);   // SHADER_WRITE (the partials)
+                    _vk32(&mb[0], (u32)20, (u32)0x60);   // SHADER_READ | SHADER_WRITE
+                    _barrier(cb, (u32)0x800, (u32)0x800, (u32)0, (u32)1, (pointer)&mb[0],
+                             (u32)0, (pointer)0, (u32)0, (pointer)0);
+                    _bindPipeline(cb, (u32)1, gParVkFold[slot]);
+                    _bindSets(cb, (u32)1, gParVkLayout[slot], (u32)0, (u32)1, &set, (u32)0, (pointer)0);
+                    _dispatch(cb, (u32)1, (u32)1, (u32)1);
+                    }
                 if (_discrete)
                     {
                     _vk32(&mb[0], (u32)16, (u32)0x40);
