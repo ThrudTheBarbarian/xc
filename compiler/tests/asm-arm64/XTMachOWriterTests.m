@@ -174,7 +174,7 @@ int runArm64MachOTests(void) {
                     entryOffset:as6.symbols[@"_main"].unsignedLongLongValue
                         symbols:as6.symbols data:as6.data dataSymbols:as6.dataSymbols
                         fixups:as6.fixups dylibs:dylibs rpaths:@[@"@loader_path"]
-                 modInitLength:0 objcSections:@[]];
+                 modInitLength:0 objcSections:@[] bssLength:0];
     const uint8_t *b6 = m6.bytes; uint32_t nc6 = rd32(b6+16); uint64_t o6=32;
     BOOL sawMathxLib=NO, sawRpath=NO; int loadDylibs=0;
     for (uint32_t i=0;i<nc6;i++){ uint32_t cmd=rd32(b6+o6), csz=rd32(b6+o6+4);

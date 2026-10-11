@@ -878,6 +878,15 @@ TEST_SRCS = $(filter-out $(STANDALONE_TESTS), \
 TEST_OBJS = $(TEST_SRCS:.m=.o)
 TEST_BIN  = $(BIN_DIR)/xtc_tests
 
+# The unit suite's own header deps. The compiler objects' are included above;
+# these were not, so a header change rebuilt the compiler and left every test
+# object stale — the suite then linked September's calls against October's
+# writers and died at run time on an "unrecognized selector" for a parameter
+# added since (bug 642's bssLength:). A suite that tests old code is worse than
+# none, and it failed loudly only because a selector was REMOVED; a signature
+# that merely changed behaviour would have gone unnoticed.
+-include $(TEST_OBJS:.o=.d)
+
 # The XT6502 / arm64 codegen suites shell out to the freshly-built xta and
 # xts binaries, so make them prerequisites — otherwise `make test` silently
 # runs against a stale assembler/simulator (e.g. a stale xts missed the
