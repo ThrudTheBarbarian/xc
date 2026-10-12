@@ -82,6 +82,7 @@ class OptProfile
     String* _matMulSuffix;
     String* _matMulFastSuffix;  // appended under `:goal(speed)`: arm64 "_fast"
     bool _loopRotate;      // top-tested loops become bottom-tested
+    bool _loopRotateChain; // and loops whose test is a short-circuit chain
     u32 _inlineMax;        // the largest callee (IR instructions) the inliner splices
     bool _dceTrace;        // name each function dead-function elimination removes
 
@@ -125,6 +126,7 @@ class OptProfile
         _layoutHotPath = false;
         _narrowIV = false;
         _loopRotate = false;
+        _loopRotateChain = false;
         }
 
     u32 vectorLaneBytes(void) { return _vectorLaneBytes; }
@@ -298,6 +300,10 @@ class OptProfile
         p._narrowIV = t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")) || t.equals(String.withCString("atarist"));
         // Every live target rotates except the 6502.
         p._loopRotate = !(t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")));
+        // A test that is a short-circuit chain rotates on x86-64 only: on
+        // arm64 the threaded values cost a run of moves on the back edge, and
+        // the loop measured 1.9x slower.
+        p._loopRotateChain = t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
         return p;
         }
 
@@ -442,6 +448,10 @@ class OptProfile
     bool loopRotate(void)
         {
         return _loopRotate;
+        }
+    bool loopRotateChain(void)
+        {
+        return _loopRotateChain;
         }
     }
 
@@ -18263,6 +18273,14 @@ class OptProfile
             rotApply(fn);
             return true;
             }
+        // Then a loop whose test is a short-circuit chain. Mirrors the original.
+        for (u32 b = (u32)0; _profile.loopRotateChain() && b < fn.blocks().count(); b = b + (u32)1)
+            {
+            if (!rcRecognise(fn, (IRBlock*)fn.blocks().get(b), defBlk))
+                continue;
+            rcApply(fn);
+            return true;
+            }
         return false;
         }
 
@@ -18934,6 +18952,568 @@ class OptProfile
             pivReplaceIn((IRInsn*)bb.insns().get(k), map);
         if (bb.term() != (IRInsn*)0)
             pivReplaceIn(bb.term(), map);
+        }
+
+    // ── loop-rotate: a short-circuit chain ──────────────────────────────
+    //
+    // A top-tested loop whose test is a chain of two or more blocks, as
+    // `while (j > 0 && a[j-1] > v)` lowers:
+    //
+    //     H1:  phi …; <guard 1>; CondBranch c1, H2, E
+    //     H2:  <guard 2>;        CondBranch c2, B, E        (… up to Hk)
+    //     B…L: <body>; Branch H1
+    //
+    // Unlike the one-block case, the body may read what the guard computed (the
+    // loaded `a[j-1]`, and `j-1` as the next `j`): rotation threads those values
+    // into B. Mirrors the original.
+    Array* _rcChain;
+
+    // A block that tests a condition it computes itself and branches on it.
+    bool rcTest(IRBlock* h)
+        {
+        IRInsn* t = h.term();
+        if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() < (u32)3)
+            return false;
+        IROperand* c = (IROperand*)t.ops().get((u32)0);
+        if (c.kind() != (u8)OPK_USE)
+            return false;
+        IRBlock* t0 = ((IROperand*)t.ops().get((u32)1)).blk();
+        IRBlock* t1 = ((IROperand*)t.ops().get((u32)2)).blk();
+        if (t0 == (IRBlock*)0 || t1 == (IRBlock*)0 || t0 == t1)
+            return false;
+        for (u32 i = (u32)0; i < h.insns().count(); i = i + (u32)1)
+            if (((IRInsn*)h.insns().get(i)).res() == c.val())
+                return true;
+        return false;
+        }
+
+    // The target of h's CondBranch that is not E.
+    IRBlock* rcNext(IRBlock* h, IRBlock* E)
+        {
+        IRBlock* t0 = ((IROperand*)h.term().ops().get((u32)1)).blk();
+        IRBlock* t1 = ((IROperand*)h.term().ops().get((u32)2)).blk();
+        return t0 == E ? t1 : t0;
+        }
+
+    bool rcTargets(IRBlock* h, IRBlock* e)
+        {
+        return ((IROperand*)h.term().ops().get((u32)1)).blk() == e || ((IROperand*)h.term().ops().get((u32)2)).blk() == e;
+        }
+
+    bool rcUses(IRInsn* n, Map* vals)
+        {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && vals.get((Hashable*)o.val()) != (Object*)0)
+                return true;
+            }
+        return false;
+        }
+
+    bool rcBlockUses(IRBlock* bb, Map* vals)
+        {
+        for (u32 k = (u32)0; k < bb.phis().count(); k = k + (u32)1)
+            if (rcUses((IRInsn*)bb.phis().get(k), vals))
+                return true;
+        for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
+            if (rcUses((IRInsn*)bb.insns().get(k), vals))
+                return true;
+        return bb.term() != (IRInsn*)0 && rcUses(bb.term(), vals);
+        }
+
+    // Each use of a mapped value becomes the operand it maps to.
+    void rcSubst(IRInsn* n, Map* m)
+        {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() != (u8)OPK_USE)
+                continue;
+            Object* to = m.get((Hashable*)o.val());
+            if (to != (Object*)0)
+                n.ops().set(k, to);
+            }
+        }
+
+    void rcSubstBlock(IRBlock* bb, Map* m)
+        {
+        for (u32 k = (u32)0; k < bb.phis().count(); k = k + (u32)1)
+            rcSubst((IRInsn*)bb.phis().get(k), m);
+        for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
+            rcSubst((IRInsn*)bb.insns().get(k), m);
+        if (bb.term() != (IRInsn*)0)
+            rcSubst(bb.term(), m);
+        }
+
+    bool rcRecognise(IRFunc* fn, IRBlock* H1, Map* defBlk)
+        {
+        _rcChain = (Array*)0;
+        _rotH = (IRBlock*)0;
+        _rotB = (IRBlock*)0;
+        _rotL = (IRBlock*)0;
+        _rotR = (Array*)0;
+        _rotE = (IRBlock*)0;
+        if (H1.phis().count() == (u32)0 || !rcTest(H1))
+            return false;
+        for (u32 i = (u32)0; i < H1.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)H1.phis().get(i);
+            if (p.res() == (IRValue*)0 || p.memRes() != (IRValue*)0 || p.ops().count() != (u32)4 || isVectorType(p.res().ty()))
+                return false;
+            }
+        // E is the target H1 shares with the block it continues to.
+        IRBlock* E = (IRBlock*)0;
+        for (u32 side = (u32)1; side <= (u32)2 && E == (IRBlock*)0; side = side + (u32)1)
+            {
+            IRBlock* n = ((IROperand*)H1.term().ops().get(side)).blk();
+            IRBlock* e = ((IROperand*)H1.term().ops().get((u32)3 - side)).blk();
+            if (n == H1 || e == H1 || n.phis().count() != (u32)0 || !rcTest(n))
+                continue;
+            if (rcTargets(n, e))
+                E = e;
+            }
+        if (E == (IRBlock*)0 || E.phis().count() != (u32)0)
+            return false;
+        Array* chain = new Array();
+        chain.add((Object*)H1);
+        IRBlock* x = rcNext(H1, E);
+        while (chain.count() < (u32)4 && x != H1 && x != E && x.phis().count() == (u32)0 && rcTest(x) && rcTargets(x, E))
+            {
+            Array* xp = predsOfBlock(fn, x);
+            if (xp.count() != (u32)1 || (IRBlock*)xp.get((u32)0) != (IRBlock*)chain.get(chain.count() - (u32)1))
+                break;
+            chain.add((Object*)x);
+            x = rcNext(x, E);
+            }
+        IRBlock* B = x;
+        if (chain.count() < (u32)2 || B == H1 || B == E || B.phis().count() != (u32)0 || hasBlock(chain, B))
+            return false;
+        if (predsOfBlock(fn, B).count() != (u32)1)
+            return false;
+        // The body region, as the one-block case finds it.
+        Array* R = new Array();
+        R.add((Object*)B);
+        Array* work = new Array();
+        work.add((Object*)B);
+        IRBlock* L = (IRBlock*)0;
+        while (work.count() > (u32)0)
+            {
+            IRBlock* w = (IRBlock*)work.get(work.count() - (u32)1);
+            work.removeAt(work.count() - (u32)1);
+            IRInsn* wt = w.term();
+            if (wt == (IRInsn*)0)
+                return false;
+            for (u32 k = (u32)0; k < wt.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)wt.ops().get(k);
+                if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
+                    continue;
+                IRBlock* sb = o.blk();
+                if (sb == H1)
+                    {
+                    if (L != (IRBlock*)0 || !wt.op().equals(String.withCString("Branch")))
+                        return false;
+                    L = w;
+                    continue;
+                    }
+                if (sb == E || hasBlock(chain, sb))
+                    return false;
+                if (!hasBlock(R, sb))
+                    {
+                    R.add((Object*)sb);
+                    work.add((Object*)sb);
+                    }
+                }
+            }
+        if (L == (IRBlock*)0)
+            return false;
+        for (u32 r = (u32)0; r < R.count(); r = r + (u32)1)
+            {
+            IRBlock* rb = (IRBlock*)R.get(r);
+            Array* rp = predsOfBlock(fn, rb);
+            for (u32 q = (u32)0; q < rp.count(); q = q + (u32)1)
+                {
+                IRBlock* pb = (IRBlock*)rp.get(q);
+                if (!hasBlock(R, pb) && !(rb == B && pb == (IRBlock*)chain.get(chain.count() - (u32)1)))
+                    return false;
+                }
+            }
+        Array* hp = predsOfBlock(fn, H1);
+        if (hp.count() != (u32)2 || !hasBlock(hp, L))
+            return false;
+        // E is reached from the chain alone.
+        Array* ep = predsOfBlock(fn, E);
+        if (ep.count() != chain.count())
+            return false;
+        for (u32 q = (u32)0; q < ep.count(); q = q + (u32)1)
+            if (!hasBlock(chain, (IRBlock*)ep.get(q)))
+                return false;
+        // Every guard instruction can be duplicated and reads nothing the body
+        // computes; a value it defines is read only in the chain, the body or
+        // (H1's phis alone) after the loop.
+        Map* chainVals = new Map();
+        for (u32 h = (u32)0; h < chain.count(); h = h + (u32)1)
+            {
+            IRBlock* hb = (IRBlock*)chain.get(h);
+            for (u32 i = (u32)0; i < hb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)hb.insns().get(i);
+                if (!rotDupSafe(n.op()))
+                    return false;
+                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)n.ops().get(k);
+                    if (o.kind() != (u8)OPK_USE)
+                        continue;
+                    Object* db = defBlk.get((Hashable*)o.val());
+                    if (db != (Object*)0 && hasBlock(R, (IRBlock*)db))
+                        return false;
+                    }
+                if (n.res() != (IRValue*)0)
+                    chainVals.set((Hashable*)n.res(), (Object*)Number.with((u32)1));
+                }
+            }
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            if (hasBlock(chain, bb) || hasBlock(R, bb))
+                continue;
+            if (rcBlockUses(bb, chainVals))
+                return false;
+            }
+        _rcChain = chain;
+        _rotH = H1;
+        _rotB = B;
+        _rotL = L;
+        _rotR = R;
+        _rotE = E;
+        return true;
+        }
+
+    // A chain value's mark in `set`, when an operand of n is a chain value.
+    void rcMarkOps(IRInsn* n, Map* chainVals, Map* set)
+        {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && chainVals.get((Hashable*)o.val()) != (Object*)0)
+                set.set((Hashable*)o.val(), (Object*)Number.with((u32)1));
+            }
+        }
+
+    // Each operand mapped through m (operands that are not uses, or unmapped,
+    // as they are).
+    IROperand* rcMapOp(IROperand* o, Map* m)
+        {
+        if (o.kind() != (u8)OPK_USE)
+            return o;
+        Object* to = m.get((Hashable*)o.val());
+        return to == (Object*)0 ? o : (IROperand*)to;
+        }
+
+    IRInsn* rcCopy(IRInsn* n, IRValue* res, Map* m)
+        {
+        IRInsn* cl = IRInsn.with(n.op());
+        cl.copyDbg(n);
+        cl.setPred(n.pred());
+        cl.setCc(n.cc());
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            cl.add(rcMapOp((IROperand*)n.ops().get(k), m));
+        if (res != (IRValue*)0)
+            cl.setRes(res);
+        return cl;
+        }
+
+    // Rotation of a chain loop: H1..Hk become the peeled first test; B gets
+    // the phis and the chain values the body reads; L and new blocks after it
+    // get the chain's copy, on the next values; E gets a phi merging every exit
+    // edge for each carried value read after the loop. A chain value the body
+    // reads is recomputed at the top of B when it is arithmetic, and carried in
+    // by a phi of B when it is a load; one only the back edge reads is
+    // recomputed at the end of L, after the body's last read of the value it
+    // replaces, so the two can share a register.
+    void rcApply(IRFunc* fn)
+        {
+        Array* chain = _rcChain;
+        IRBlock* H1 = _rotH;
+        IRBlock* B = _rotB;
+        IRBlock* L = _rotL;
+        IRBlock* E = _rotE;
+        Array* R = _rotR;
+        IRBlock* Hk = (IRBlock*)chain.get(chain.count() - (u32)1);
+
+        // 1. Each H1 phi's (preheader init, back-edge next), and a B phi value.
+        Array* phis = new Array();
+        Array* initOp = new Array();
+        Array* nextOp = new Array();
+        Array* pbVals = new Array();
+        Map* bMap = new Map(); // value → its B version (an operand)
+        for (u32 i = (u32)0; i < H1.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* phi = (IRInsn*)H1.phis().get(i);
+            phis.add((Object*)phi);
+            IROperand* fromPH = (IROperand*)0;
+            IROperand* fromL = (IROperand*)0;
+            for (u32 k = (u32)0; k + (u32)1 < phi.ops().count(); k = k + (u32)2)
+                {
+                if (((IROperand*)phi.ops().get(k)).blk() == L)
+                    fromL = (IROperand*)phi.ops().get(k + (u32)1);
+                else
+                    fromPH = (IROperand*)phi.ops().get(k + (u32)1);
+                }
+            initOp.add((Object*)fromPH);
+            nextOp.add((Object*)fromL);
+            IRValue* v = new IRValue(phi.res().ty());
+            pbVals.add((Object*)v);
+            bMap.set((Hashable*)phi.res(), (Object*)IROperand.useVal(v));
+            }
+
+        // 2. The chain values B needs.
+        Array* chainInsns = new Array();
+        for (u32 h = (u32)0; h < chain.count(); h = h + (u32)1)
+            {
+            IRBlock* hb = (IRBlock*)chain.get(h);
+            for (u32 i = (u32)0; i < hb.insns().count(); i = i + (u32)1)
+                chainInsns.add(hb.insns().get(i));
+            }
+        Map* chainVals = new Map();
+        for (u32 i = (u32)0; i < chainInsns.count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)chainInsns.get(i);
+            if (n.res() != (IRValue*)0)
+                chainVals.set((Hashable*)n.res(), (Object*)Number.with((u32)1));
+            }
+        Map* needR = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* rb = (IRBlock*)fn.blocks().get(b);
+            if (!hasBlock(R, rb))
+                continue;
+            for (u32 k = (u32)0; k < rb.phis().count(); k = k + (u32)1)
+                rcMarkOps((IRInsn*)rb.phis().get(k), chainVals, needR);
+            for (u32 k = (u32)0; k < rb.insns().count(); k = k + (u32)1)
+                rcMarkOps((IRInsn*)rb.insns().get(k), chainVals, needR);
+            if (rb.term() != (IRInsn*)0)
+                rcMarkOps(rb.term(), chainVals, needR);
+            }
+        Map* need = new Map();
+        for (u32 i = (u32)0; i < nextOp.count(); i = i + (u32)1)
+            {
+            IROperand* o = (IROperand*)nextOp.get(i);
+            if (o.kind() == (u8)OPK_USE && chainVals.get((Hashable*)o.val()) != (Object*)0)
+                need.set((Hashable*)o.val(), (Object*)Number.with((u32)1));
+            }
+        for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1)
+            {
+            Map* set = pass == (u32)0 ? needR : need;
+            u32 q = chainInsns.count();
+            while (q > (u32)0)
+                {
+                q = q - (u32)1;
+                IRInsn* n = (IRInsn*)chainInsns.get(q);
+                if (n.res() == (IRValue*)0 || set.get((Hashable*)n.res()) == (Object*)0 || n.op().equals(String.withCString("Load")))
+                    continue;
+                rcMarkOps(n, chainVals, set);
+                }
+            }
+        for (u32 i = (u32)0; i < chainInsns.count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)chainInsns.get(i);
+            if (n.res() != (IRValue*)0 && needR.get((Hashable*)n.res()) != (Object*)0)
+                need.set((Hashable*)n.res(), (Object*)Number.with((u32)1));
+            }
+
+        // 3. Their B versions, in chain order.
+        Array* remat = new Array();
+        Array* lateRemat = new Array();
+        Array* loadPhis = new Array();
+        Array* loadOrig = new Array();
+        for (u32 i = (u32)0; i < chainInsns.count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)chainInsns.get(i);
+            if (n.res() == (IRValue*)0 || need.get((Hashable*)n.res()) == (Object*)0)
+                continue;
+            IRValue* v = new IRValue(n.res().ty());
+            if (n.op().equals(String.withCString("Load")))
+                {
+                IRInsn* p = IRInsn.with(String.withCString("Phi"));
+                p.copyDbg(n);
+                p.setRes(v);
+                loadPhis.add((Object*)p);
+                loadOrig.add((Object*)n);
+                }
+            else
+                {
+                IRInsn* r = rcCopy(n, v, bMap);
+                if (needR.get((Hashable*)n.res()) != (Object*)0)
+                    remat.add((Object*)r);
+                else
+                    lateRemat.add((Object*)r);
+                }
+            bMap.set((Hashable*)n.res(), (Object*)IROperand.useVal(v));
+            }
+        Array* nextB = new Array();
+        for (u32 i = (u32)0; i < nextOp.count(); i = i + (u32)1)
+            nextB.add((Object*)rcMapOp((IROperand*)nextOp.get(i), bMap));
+
+        // 4. The body reads the B versions.
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* rb = (IRBlock*)fn.blocks().get(b);
+            if (hasBlock(R, rb))
+                rcSubstBlock(rb, bMap);
+            }
+
+        // 5. The chain's copy at the bottom of the body: H1's into L, each
+        //    later block's into a new block after it.
+        for (u32 i = (u32)0; i < lateRemat.count(); i = i + (u32)1)
+            L.insns().add(lateRemat.get(i));
+        Map* gMap = new Map();
+        for (u32 i = (u32)0; i < phis.count(); i = i + (u32)1)
+            gMap.set((Hashable*)((IRInsn*)phis.get(i)).res(), nextB.get(i));
+        Array* clones = new Array();
+        clones.add((Object*)L);
+        for (u32 h = (u32)1; h < chain.count(); h = h + (u32)1)
+            {
+            IRBlock* hb = (IRBlock*)chain.get(h);
+            String* nm = new String();
+            nm.appendFormat("%s_rot", hb.name() == (String*)0 ? "test" : hb.name().cString());
+            clones.add((Object*)new IRBlock(nm));
+            }
+        for (u32 h = (u32)0; h < chain.count(); h = h + (u32)1)
+            {
+            IRBlock* src = (IRBlock*)chain.get(h);
+            IRBlock* dst = (IRBlock*)clones.get(h);
+            for (u32 i = (u32)0; i < src.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)src.insns().get(i);
+                IRValue* nr = (IRValue*)0;
+                if (n.res() != (IRValue*)0)
+                    nr = new IRValue(n.res().ty());
+                IRInsn* cl = rcCopy(n, nr, gMap);
+                if (n.res() != (IRValue*)0)
+                    gMap.set((Hashable*)n.res(), (Object*)IROperand.useVal(nr));
+                if (n.memRes() != (IRValue*)0)
+                    cl.setMemRes(new IRValue(String.withCString("Mem")));
+                dst.insns().add((Object*)cl);
+                }
+            IRInsn* ht = src.term();
+            IRInsn* bt = IRInsn.with(String.withCString("CondBranch"));
+            bt.copyDbg(ht);
+            bt.setPred(ht.pred());
+            bt.add(rcMapOp((IROperand*)ht.ops().get((u32)0), gMap));
+            for (u32 k = (u32)1; k < (u32)3; k = k + (u32)1)
+                {
+                IROperand* to = (IROperand*)ht.ops().get(k);
+                if (h + (u32)1 < chain.count() && to.blk() == (IRBlock*)chain.get(h + (u32)1))
+                    bt.add(IROperand.block((IRBlock*)clones.get(h + (u32)1)));
+                else
+                    bt.add(to);
+                }
+            dst.setTerm(bt);
+            }
+        u32 at = (u32)0;
+        while ((IRBlock*)fn.blocks().get(at) != L)
+            at = at + (u32)1;
+        for (u32 h = (u32)1; h < clones.count(); h = h + (u32)1)
+            fn.blocks().insert(at + h, clones.get(h));
+        IRBlock* Lk = (IRBlock*)clones.get(clones.count() - (u32)1);
+
+        // 6. B's phis and recomputations.
+        Array* bPhis = new Array();
+        for (u32 i = (u32)0; i < phis.count(); i = i + (u32)1)
+            {
+            IRInsn* p = IRInsn.with(String.withCString("Phi"));
+            p.copyDbg((IRInsn*)phis.get(i));
+            p.setRes((IRValue*)pbVals.get(i));
+            p.add(IROperand.block(Hk));
+            p.add((IROperand*)initOp.get(i));
+            p.add(IROperand.block(Lk));
+            p.add((IROperand*)nextB.get(i));
+            bPhis.add((Object*)p);
+            }
+        for (u32 i = (u32)0; i < loadPhis.count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)loadPhis.get(i);
+            IRValue* ov = ((IRInsn*)loadOrig.get(i)).res();
+            p.add(IROperand.block(Hk));
+            p.add(IROperand.useVal(ov));
+            p.add(IROperand.block(Lk));
+            p.add((IROperand*)gMap.get((Hashable*)ov));
+            bPhis.add((Object*)p);
+            }
+        for (u32 i = (u32)0; i < bPhis.count(); i = i + (u32)1)
+            B.phis().insert(i, bPhis.get(i));
+        for (u32 i = (u32)0; i < remat.count(); i = i + (u32)1)
+            B.insns().insert(i, remat.get(i));
+
+        // 7. The chain itself is the peeled test: phi values become the inits.
+        Map* hReplace = new Map();
+        for (u32 i = (u32)0; i < phis.count(); i = i + (u32)1)
+            hReplace.set((Hashable*)((IRInsn*)phis.get(i)).res(), initOp.get(i));
+        for (u32 h = (u32)0; h < chain.count(); h = h + (u32)1)
+            {
+            IRBlock* hb = (IRBlock*)chain.get(h);
+            for (u32 i = (u32)0; i < hb.insns().count(); i = i + (u32)1)
+                rcSubst((IRInsn*)hb.insns().get(i), hReplace);
+            }
+        H1.setPhis(new Array());
+
+        // 8. Exit phis for the carried values read after the loop.
+        Array* exitPhis = new Array();
+        Map* exitMap = new Map();
+        for (u32 i = (u32)0; i < phis.count(); i = i + (u32)1)
+            {
+            IRValue* pid = ((IRInsn*)phis.get(i)).res();
+            Map* one = new Map();
+            one.set((Hashable*)pid, (Object*)Number.with((u32)1));
+            bool esc = false;
+            for (u32 b = (u32)0; b < fn.blocks().count() && !esc; b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                if (hasBlock(chain, bb) || hasBlock(R, bb) || hasBlock(clones, bb))
+                    continue;
+                esc = rcBlockUses(bb, one);
+                }
+            if (!esc)
+                continue;
+            IRValue* v = new IRValue(pid.ty());
+            IRInsn* ep = IRInsn.with(String.withCString("Phi"));
+            ep.setRes(v);
+            for (u32 h = (u32)0; h < chain.count(); h = h + (u32)1)
+                {
+                ep.add(IROperand.block((IRBlock*)chain.get(h)));
+                ep.add((IROperand*)initOp.get(i));
+                }
+            for (u32 h = (u32)0; h < clones.count(); h = h + (u32)1)
+                {
+                ep.add(IROperand.block((IRBlock*)clones.get(h)));
+                ep.add((IROperand*)nextB.get(i));
+                }
+            exitPhis.add((Object*)ep);
+            exitMap.set((Hashable*)pid, (Object*)IROperand.useVal(v));
+            }
+        for (u32 i = (u32)0; i < exitPhis.count(); i = i + (u32)1)
+            E.phis().insert(i, exitPhis.get(i));
+        if (exitPhis.count() == (u32)0)
+            return;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            if (hasBlock(chain, bb) || hasBlock(R, bb) || hasBlock(clones, bb))
+                continue;
+            for (u32 k = (u32)0; k < bb.phis().count(); k = k + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.phis().get(k);
+                if (!hasInsn(exitPhis, n))
+                    rcSubst(n, exitMap);
+                }
+            for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
+                rcSubst((IRInsn*)bb.insns().get(k), exitMap);
+            if (bb.term() != (IRInsn*)0)
+                rcSubst(bb.term(), exitMap);
+            }
         }
 
     // ── narrow-iv ────────────────────────────────────────────────────────

@@ -62,6 +62,8 @@ static NSDictionary<NSNumber*, NSString*>* sVec = nil;
 // ─────────────────────────────────────────────────────────────────────────────
 
 static NSUInteger sArcLabel = 0; // unique ARC skip-label counter (per process)
+// A function's out-of-line edge stubs, emitted after its last block (below).
+static NSMutableString* sEdgeStubs = nil;
 
 // ABI selector. Default is System V AMD64 (Linux/macOS host). When set, the
 // backend emits the Win64 ABI instead: integer args in rcx/rdx/r8/r9 (4, not 6),
@@ -2793,6 +2795,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
       [out appendFormat:@"\t.loc\t%u %u %u\n", d.fileId + 1, d.line, d.column];
       lastLoc = d;
     };
+    sEdgeStubs = [NSMutableString string];
     for (XTIRBlock* bb in fn.blocks)
         {
         if ([loopHeads containsObject:[NSValue valueWithNonretainedObject:bb]])
@@ -2827,6 +2830,8 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             [out appendString:@"\tpop\trbp\n\tret\n"];
             }
         }
+    [out appendString:sEdgeStubs];
+    sEdgeStubs = nil;
     }
 
 // Restore callee-saved home registers before returning (rbp still valid).
@@ -5755,15 +5760,32 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             [out appendFormat:@"\ttest\t%@, %@\n", [self reg:'a' width:cw], [self reg:'a' width:cw]];
             [out appendFormat:@"\tje\t%@\n", flab]; // false → flab
             }
+        NSMutableString* tcopies = [NSMutableString string];
+        NSMutableString* fcopies = [NSMutableString string];
+        if (tb)
+            [self phiEdgesFrom:blk to:tb fn:fn slot:slot out:tcopies];
+        if (fb)
+            [self phiEdgesFrom:blk to:fb fn:fn slot:slot out:fcopies];
+        // The true target is the next block and only the false edge has copies
+        // (a rotated loop's back edge, whose exit feeds a phi): fall into the
+        // true target, and put the false edge's copies after the function, so
+        // the loop does not take a branch every iteration to skip them.
+        NSUInteger bi = [fn.blocks indexOfObjectIdenticalTo:blk];
+        if (tb && fb && sEdgeStubs && tcopies.length == 0 && fcopies.length > 0 && bi != NSNotFound &&
+            bi + 1 < fn.blocks.count && fn.blocks[bi + 1] == tb)
+            {
+            [sEdgeStubs appendFormat:@"%@:\n%@\tjmp\t%@\n", flab, fcopies, [self blockLabel:fb fn:fn]];
+            return;
+            }
         if (tb)
             {
-            [self phiEdgesFrom:blk to:tb fn:fn slot:slot out:out];
+            [out appendString:tcopies];
             [out appendFormat:@"\tjmp\t%@\n", [self blockLabel:tb fn:fn]];
             }
         [out appendFormat:@"%@:\n", flab];
         if (fb)
             {
-            [self phiEdgesFrom:blk to:fb fn:fn slot:slot out:out];
+            [out appendString:fcopies];
             [out appendFormat:@"\tjmp\t%@\n", [self blockLabel:fb fn:fn]];
             }
         return;

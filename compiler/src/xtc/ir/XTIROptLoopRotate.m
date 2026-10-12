@@ -21,6 +21,19 @@
 @implementation XTLoopRotCand
 @end
 
+// A loop whose test is a short-circuit chain, `while (a && b)`: H1 carries the
+// phis and tests `a`, H2..Hk test the rest, and every one of them leaves to the
+// same E.
+@interface XTLoopRotChain : NSObject
+@property(nonatomic) NSArray<XTIRBlock*>* chain; // H1..Hk
+@property(nonatomic) XTIRBlock* B;
+@property(nonatomic) XTIRBlock* L;
+@property(nonatomic) NSSet<XTIRBlock*>* R;
+@property(nonatomic) XTIRBlock* E;
+@end
+@implementation XTLoopRotChain
+@end
+
 @implementation XTIROptLoopRotate
 
 - (NSString*)passName
@@ -170,9 +183,510 @@ static NSArray<XTIRBlock*>* predsOf(XTIRBlock* target, XTIRFunction* fn)
     for (NSUInteger iter = 0; iter < 512; iter++)
         {
         XTLoopRotCand* c = [self recognise:fn];
-        if (!c)
+        if (c)
+            {
+            [self apply:c inFunction:fn];
+            continue;
+            }
+        XTLoopRotChain* cc = self.profile.rotatesChainLoops ? [self recogniseChain:fn] : nil;
+        if (!cc)
             break;
-        [self apply:c inFunction:fn];
+        [self applyChain:cc inFunction:fn];
+        }
+    }
+
+// Every instruction of every block, terminator included.
+static NSArray<XTIRInsn*>* allInsns(XTIRBlock* bb)
+    {
+    NSMutableArray<XTIRInsn*>* all = [NSMutableArray array];
+    [all addObjectsFromArray:bb.phiNodes];
+    [all addObjectsFromArray:bb.instructions];
+    if (bb.terminator)
+        [all addObject:bb.terminator];
+    return all;
+    }
+
+// The chain block a CondBranch continues to: the target that is not E.
+static XTIRBlock* chainNext(XTIRBlock* h, XTIRBlock* E)
+    {
+    XTIRInsn* t = h.terminator;
+    XTIRBlock *t0 = t.operands[1].blockRef, *t1 = t.operands[2].blockRef;
+    return t0 == E ? t1 : t0;
+    }
+
+// A block that tests a condition it computes itself and branches on it.
+static BOOL chainTest(XTIRBlock* h)
+    {
+    XTIRInsn* t = h.terminator;
+    if (!t || t.opcode != XTIROpCondBranch || t.operands.count < 3 || t.operands[0].kind != XTIROperandKindUse)
+        return NO;
+    XTIRBlock *t0 = t.operands[1].blockRef, *t1 = t.operands[2].blockRef;
+    if (!t0 || !t1 || t0 == t1)
+        return NO;
+    for (XTIRInsn* i in h.instructions)
+        if (i.result && i.result.valueId == t.operands[0].valueId)
+            return YES;
+    return NO;
+    }
+
+// A top-tested loop whose test is a chain of two or more blocks, as
+// `while (j > 0 && a[j-1] > v)` lowers:
+//
+//     H1:  phi …; <guard 1>; CondBranch c1, H2, E
+//     H2:  <guard 2>;        CondBranch c2, B, E        (… up to Hk)
+//     B…L: <body>; Branch H1
+//
+// Unlike the one-block case, the body may read what the guard computed (the
+// loaded `a[j-1]`, and `j-1` as the next `j`): rotation threads those values
+// into B.
+- (nullable XTLoopRotChain*)recogniseChain:(XTIRFunction*)fn
+    {
+    NSMutableDictionary<NSNumber*, XTIRBlock*>* defBlk = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        for (XTIRInsn* p in bb.phiNodes)
+            if (p.result)
+                defBlk[@(p.result.valueId)] = bb;
+        for (XTIRInsn* i in bb.instructions)
+            {
+            if (i.result)
+                defBlk[@(i.result.valueId)] = bb;
+            if (i.memoryResult)
+                defBlk[@(i.memoryResult.valueId)] = bb;
+            }
+        }
+    for (XTIRBlock* H1 in fn.blocks)
+        {
+        if (H1.phiNodes.count == 0 || !chainTest(H1))
+            continue;
+        BOOL ok = YES;
+        for (XTIRInsn* p in H1.phiNodes)
+            if (!p.result || p.memoryResult || p.operands.count != 4 || p.result.type.kind == XTIRTypeKindVec)
+                ok = NO;
+        if (!ok)
+            continue;
+        // E is the target H1 shares with the block it continues to.
+        XTIRBlock* E = nil;
+        for (NSUInteger side = 1; side <= 2 && !E; side++)
+            {
+            XTIRBlock* n = H1.terminator.operands[side].blockRef;
+            XTIRBlock* e = H1.terminator.operands[3 - side].blockRef;
+            if (n == H1 || e == H1 || n.phiNodes.count || !chainTest(n))
+                continue;
+            if (n.terminator.operands[1].blockRef == e || n.terminator.operands[2].blockRef == e)
+                E = e;
+            }
+        if (!E || E.phiNodes.count)
+            continue;
+        NSMutableArray<XTIRBlock*>* chain = [NSMutableArray arrayWithObject:H1];
+        XTIRBlock* x = chainNext(H1, E);
+        while (chain.count < 4 && x != H1 && x != E && x.phiNodes.count == 0 && chainTest(x) &&
+               (x.terminator.operands[1].blockRef == E || x.terminator.operands[2].blockRef == E))
+            {
+            NSArray<XTIRBlock*>* xp = predsOf(x, fn);
+            if (xp.count != 1 || xp[0] != chain.lastObject)
+                break;
+            [chain addObject:x];
+            x = chainNext(x, E);
+            }
+        XTIRBlock* B = x;
+        if (chain.count < 2 || B == H1 || B == E || B.phiNodes.count || [chain containsObject:B])
+            continue;
+        if (predsOf(B, fn).count != 1)
+            continue;
+        // The body region, as the one-block case finds it.
+        NSMutableSet<XTIRBlock*>* R = [NSMutableSet setWithObject:B];
+        NSMutableArray<XTIRBlock*>* work = [NSMutableArray arrayWithObject:B];
+        XTIRBlock* L = nil;
+        while (work.count && ok)
+            {
+            XTIRBlock* w = work.lastObject;
+            [work removeLastObject];
+            XTIRInsn* wt = w.terminator;
+            if (!wt)
+                {
+                ok = NO;
+                break;
+                }
+            for (XTIROperand* o in wt.operands)
+                {
+                if (o.kind != XTIROperandKindBlock || !o.blockRef)
+                    continue;
+                XTIRBlock* s = o.blockRef;
+                if (s == H1)
+                    {
+                    if (L || wt.opcode != XTIROpBranch)
+                        ok = NO;
+                    L = w;
+                    continue;
+                    }
+                if (s == E || [chain containsObject:s])
+                    {
+                    ok = NO;
+                    break;
+                    }
+                if (![R containsObject:s])
+                    {
+                    [R addObject:s];
+                    [work addObject:s];
+                    }
+                }
+            }
+        if (!ok || !L)
+            continue;
+        for (XTIRBlock* r in R)
+            for (XTIRBlock* pb in predsOf(r, fn))
+                if (![R containsObject:pb] && !(r == B && pb == chain.lastObject))
+                    ok = NO;
+        NSArray<XTIRBlock*>* hp = predsOf(H1, fn);
+        if (!ok || hp.count != 2 || ![hp containsObject:L])
+            continue;
+        // E is reached from the chain alone.
+        NSArray<XTIRBlock*>* ep = predsOf(E, fn);
+        if (ep.count != chain.count)
+            continue;
+        for (XTIRBlock* p in ep)
+            if (![chain containsObject:p])
+                ok = NO;
+        // Every guard instruction can be duplicated and reads nothing the body
+        // computes; a value it defines is read only in the chain, the body or
+        // (H1's phis alone) after the loop.
+        NSMutableSet<NSNumber*>* chainVals = [NSMutableSet set];
+        for (XTIRBlock* h in chain)
+            for (XTIRInsn* i in h.instructions)
+                {
+                if (!dupSafe(i))
+                    ok = NO;
+                for (XTIROperand* o in i.operands)
+                    if (o.kind == XTIROperandKindUse && [R containsObject:defBlk[@(o.valueId)]])
+                        ok = NO;
+                if (i.result)
+                    [chainVals addObject:@(i.result.valueId)];
+                }
+        if (!ok)
+            continue;
+        for (XTIRBlock* bb in fn.blocks)
+            {
+            if ([chain containsObject:bb] || [R containsObject:bb])
+                continue;
+            for (XTIRInsn* u in allInsns(bb))
+                for (XTIROperand* o in u.operands)
+                    if (o.kind == XTIROperandKindUse && [chainVals containsObject:@(o.valueId)])
+                        ok = NO;
+            }
+        if (!ok)
+            continue;
+        XTLoopRotChain* c = [XTLoopRotChain new];
+        c.chain = chain;
+        c.B = B;
+        c.L = L;
+        c.R = R;
+        c.E = E;
+        return c;
+        }
+    return nil;
+    }
+
+// Rotation of a chain loop:
+//
+//     H1..Hk: the peeled first test, on the preheader's values
+//     B:      phi …; <values of the chain the body reads>; <body>
+//     L:      <guard 1 on the next values>; CondBranch c1', L2', E
+//     L2'…:   <guard 2 …>;                  CondBranch c2', B, E
+//     E:      phi merging every exit edge, for each carried value read after
+//
+// A chain value the body reads is RECOMPUTED at the top of B when it is
+// arithmetic (`j-1` from B's own `j`), which costs one instruction and no
+// carried register; a load is carried in by a phi of B instead.
+- (void)applyChain:(XTLoopRotChain*)c inFunction:(XTIRFunction*)fn
+    {
+    NSArray<XTIRBlock*>* chain = c.chain;
+    XTIRBlock *H1 = chain[0], *B = c.B, *L = c.L, *E = c.E;
+    NSSet<XTIRBlock*>* R = c.R;
+    XTIRBlock* Hk = chain.lastObject;
+    XTIRType* memTy = [XTIRType memoryType];
+
+    // 1. Each H1 phi's (preheader init, back-edge next), and a new B phi value.
+    NSArray<XTIRInsn*>* phis = [H1.phiNodes copy];
+    NSMutableArray<XTIROperand*>* initOp = [NSMutableArray array];
+    NSMutableArray<XTIROperand*>* nextOp = [NSMutableArray array];
+    NSMutableDictionary<NSNumber*, XTIROperand*>* bMap = [NSMutableDictionary dictionary]; // value → its B version
+    NSMutableArray<XTIRValue*>* pbVals = [NSMutableArray array];
+    for (XTIRInsn* phi in phis)
+        {
+        XTIROperand *fromPH = nil, *fromL = nil;
+        for (NSUInteger k = 0; k + 1 < phi.operands.count; k += 2)
+            {
+            if (phi.operands[k].blockRef == L)
+                fromL = phi.operands[k + 1];
+            else
+                fromPH = phi.operands[k + 1];
+            }
+        [initOp addObject:fromPH];
+        [nextOp addObject:fromL];
+        XTIRValue* v = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                     type:phi.result.type
+                                                  defSite:[[XTIRDefSite alloc] initWithBlock:B insnIndex:0]];
+        [fn registerValue:v];
+        [pbVals addObject:v];
+        bMap[@(phi.result.valueId)] = [XTIROperand useWithValueId:v.valueId];
+        }
+
+    // 2. The chain values B needs: those the body or a back-edge value reads,
+    //    and, for one that is recomputed, its own operands.
+    NSMutableArray<XTIRInsn*>* chainInsns = [NSMutableArray array];
+    for (XTIRBlock* h in chain)
+        [chainInsns addObjectsFromArray:h.instructions];
+    NSMutableSet<NSNumber*>* chainVals = [NSMutableSet set];
+    for (XTIRInsn* i in chainInsns)
+        if (i.result)
+            [chainVals addObject:@(i.result.valueId)];
+    //    What the body reads is needed at the top of B; what only the back
+    //    edge reads is recomputed at the end of L, after the body's last read
+    //    of the value it replaces, so the two can share a register.
+    NSMutableSet<NSNumber*>* needR = [NSMutableSet set];
+    for (XTIRBlock* rb in fn.blocks)
+        if ([R containsObject:rb])
+            for (XTIRInsn* u in allInsns(rb))
+                for (XTIROperand* o in u.operands)
+                    if (o.kind == XTIROperandKindUse && [chainVals containsObject:@(o.valueId)])
+                        [needR addObject:@(o.valueId)];
+    NSMutableSet<NSNumber*>* need = [NSMutableSet set];
+    for (XTIROperand* o in nextOp)
+        if (o.kind == XTIROperandKindUse && [chainVals containsObject:@(o.valueId)])
+            [need addObject:@(o.valueId)];
+    for (NSMutableSet<NSNumber*>* set in @[ needR, need ])
+        for (NSInteger q = (NSInteger)chainInsns.count - 1; q >= 0; q--)
+            {
+            XTIRInsn* i = chainInsns[(NSUInteger)q];
+            if (!i.result || ![set containsObject:@(i.result.valueId)] || i.opcode == XTIROpLoad)
+                continue;
+            for (XTIROperand* o in i.operands)
+                if (o.kind == XTIROperandKindUse && [chainVals containsObject:@(o.valueId)])
+                    [set addObject:@(o.valueId)];
+            }
+    [need unionSet:needR];
+
+    // 3. Their B versions, in chain order: a recomputation (at the top of B, or the end of L), or
+    //    (a load) a phi whose incomings are filled once the clones exist.
+    NSMutableArray<XTIRInsn*>* remat = [NSMutableArray array];
+    NSMutableArray<XTIRInsn*>* lateRemat = [NSMutableArray array];
+    NSMutableArray<XTIRInsn*>* loadPhis = [NSMutableArray array];
+    NSMutableArray<XTIRInsn*>* loadOrig = [NSMutableArray array];
+    for (XTIRInsn* i in chainInsns)
+        {
+        if (!i.result || ![need containsObject:@(i.result.valueId)])
+            continue;
+        XTIRValue* v = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                     type:i.result.type
+                                                  defSite:[[XTIRDefSite alloc] initWithBlock:B insnIndex:0]];
+        [fn registerValue:v];
+        if (i.opcode == XTIROpLoad)
+            {
+            XTIRInsn* p = [[XTIRInsn alloc] initWithOpcode:XTIROpPhi result:v operands:@[] dbgLoc:i.dbgLoc];
+            [loadPhis addObject:p];
+            [loadOrig addObject:i];
+            }
+        else
+            {
+            NSMutableArray<XTIROperand*>* ops = [NSMutableArray array];
+            for (XTIROperand* o in i.operands)
+                [ops addObject:(o.kind == XTIROperandKindUse && bMap[@(o.valueId)]) ? bMap[@(o.valueId)] : o];
+            XTIRInsn* r = (i.opcode == XTIROpICmp || i.opcode == XTIROpFCmp)
+                              ? [[XTIRInsn alloc] initWithOpcode:i.opcode result:v operands:ops predicate:i.predicate dbgLoc:i.dbgLoc]
+                              : [[XTIRInsn alloc] initWithOpcode:i.opcode result:v operands:ops dbgLoc:i.dbgLoc];
+            [([needR containsObject:@(i.result.valueId)] ? remat : lateRemat) addObject:r];
+            }
+        bMap[@(i.result.valueId)] = [XTIROperand useWithValueId:v.valueId];
+        }
+
+    // `next` as B sees it.
+    NSMutableArray<XTIROperand*>* nextB = [NSMutableArray array];
+    for (XTIROperand* o in nextOp)
+        [nextB addObject:(o.kind == XTIROperandKindUse && bMap[@(o.valueId)]) ? bMap[@(o.valueId)] : o];
+
+    // 4. The body reads the B versions.
+    for (XTIRBlock* rb in fn.blocks)
+        {
+        if (![R containsObject:rb])
+            continue;
+        for (XTIRInsn* u in allInsns(rb))
+            {
+            BOOL ch = NO;
+            NSMutableArray<XTIROperand*>* ops = [u.operands mutableCopy];
+            for (NSUInteger k = 0; k < ops.count; k++)
+                if (ops[k].kind == XTIROperandKindUse && bMap[@(ops[k].valueId)])
+                    {
+                    ops[k] = bMap[@(ops[k].valueId)];
+                    ch = YES;
+                    }
+            if (ch)
+                [u replaceOperands:ops];
+            }
+        }
+
+    // 5. Clone the chain to the bottom of the body: H1's copy into L, each
+    //    later block's into a new block after it. Phi values read their next
+    //    values; chain values read their clones.
+    [L.instructions addObjectsFromArray:lateRemat];
+    NSMutableDictionary<NSNumber*, XTIROperand*>* gMap = [NSMutableDictionary dictionary];
+    for (NSUInteger i = 0; i < phis.count; i++)
+        gMap[@(phis[i].result.valueId)] = nextB[i];
+    NSMutableArray<XTIRBlock*>* clones = [NSMutableArray arrayWithObject:L];
+    for (NSUInteger h = 1; h < chain.count; h++)
+        {
+        XTIRBlock* nb = [[XTIRBlock alloc] init];
+        nb.name = [NSString stringWithFormat:@"%@_rot", chain[h].name ?: @"test"];
+        [clones addObject:nb];
+        }
+    for (NSUInteger h = 0; h < chain.count; h++)
+        {
+        XTIRBlock* dst = clones[h];
+        for (XTIRInsn* insn in chain[h].instructions)
+            {
+            NSMutableArray<XTIROperand*>* ops = [NSMutableArray array];
+            for (XTIROperand* o in insn.operands)
+                [ops addObject:(o.kind == XTIROperandKindUse && gMap[@(o.valueId)]) ? gMap[@(o.valueId)] : o];
+            XTIRValue *nr = nil, *nm = nil;
+            if (insn.result)
+                {
+                nr = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                   type:insn.result.type
+                                                defSite:[[XTIRDefSite alloc] initWithBlock:dst insnIndex:dst.instructions.count]];
+                [fn registerValue:nr];
+                gMap[@(insn.result.valueId)] = [XTIROperand useWithValueId:nr.valueId];
+                }
+            if (insn.memoryResult)
+                {
+                nm = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                   type:memTy
+                                                defSite:[[XTIRDefSite alloc] initWithBlock:dst insnIndex:dst.instructions.count]];
+                [fn registerValue:nm];
+                }
+            XTIRInsn* cl = (insn.opcode == XTIROpICmp || insn.opcode == XTIROpFCmp)
+                               ? [[XTIRInsn alloc] initWithOpcode:insn.opcode result:nr operands:ops predicate:insn.predicate dbgLoc:insn.dbgLoc]
+                               : [[XTIRInsn alloc] initWithOpcode:insn.opcode result:nr operands:ops dbgLoc:insn.dbgLoc];
+            cl.memoryResult = nm;
+            [dst.instructions addObject:cl];
+            }
+        XTIRInsn* ht = chain[h].terminator;
+        NSMutableArray<XTIROperand*>* tops = [NSMutableArray arrayWithObject:gMap[@(ht.operands[0].valueId)]];
+        for (NSUInteger k = 1; k < 3; k++)
+            {
+            XTIRBlock* t = ht.operands[k].blockRef;
+            [tops addObject:(h + 1 < chain.count && t == chain[h + 1]) ? [XTIROperand blockWithRef:clones[h + 1]]
+                                                                      : ht.operands[k]];
+            }
+        [dst resetTerminator];
+        [dst setTerminator:[[XTIRInsn alloc] initWithOpcode:XTIROpCondBranch
+                                                     result:nil
+                                                   operands:tops
+                                                  predicate:ht.predicate
+                                                     dbgLoc:ht.dbgLoc]];
+        }
+    NSUInteger at = [fn.blocks indexOfObject:L] + 1;
+    [fn.blocks insertObjects:[clones subarrayWithRange:NSMakeRange(1, clones.count - 1)]
+                   atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(at, clones.count - 1)]];
+    XTIRBlock* Lk = clones.lastObject;
+
+    // 6. B's phis and recomputations.
+    NSMutableArray<XTIRInsn*>* bPhis = [NSMutableArray array];
+    for (NSUInteger i = 0; i < phis.count; i++)
+        [bPhis addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpPhi
+                                                   result:pbVals[i]
+                                                 operands:@[ [XTIROperand blockWithRef:Hk], initOp[i],
+                                                             [XTIROperand blockWithRef:Lk], nextB[i] ]
+                                                   dbgLoc:phis[i].dbgLoc]];
+    for (NSUInteger i = 0; i < loadPhis.count; i++)
+        {
+        XTIRValueId ov = loadOrig[i].result.valueId;
+        [loadPhis[i] replaceOperands:@[ [XTIROperand blockWithRef:Hk], [XTIROperand useWithValueId:ov],
+                                        [XTIROperand blockWithRef:Lk], gMap[@(ov)] ]];
+        [bPhis addObject:loadPhis[i]];
+        }
+    [B.phiNodes insertObjects:bPhis atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, bPhis.count)]];
+    [B.instructions insertObjects:remat atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, remat.count)]];
+
+    // 7. The chain itself is the peeled test: phi values become the inits.
+    NSMutableDictionary<NSNumber*, XTIROperand*>* hReplace = [NSMutableDictionary dictionary];
+    for (NSUInteger i = 0; i < phis.count; i++)
+        hReplace[@(phis[i].result.valueId)] = initOp[i];
+    for (XTIRBlock* h in chain)
+        for (XTIRInsn* u in h.instructions)
+            {
+            BOOL ch = NO;
+            NSMutableArray<XTIROperand*>* ops = [u.operands mutableCopy];
+            for (NSUInteger k = 0; k < ops.count; k++)
+                if (ops[k].kind == XTIROperandKindUse && hReplace[@(ops[k].valueId)])
+                    {
+                    ops[k] = hReplace[@(ops[k].valueId)];
+                    ch = YES;
+                    }
+            if (ch)
+                [u replaceOperands:ops];
+            }
+    [H1.phiNodes removeAllObjects];
+
+    // 8. Exit phis for the carried values read after the loop, merging every
+    //    edge into E: the peeled tests carry the init, the clones the next.
+    NSMutableArray<XTIRInsn*>* exitPhis = [NSMutableArray array];
+    NSMutableDictionary<NSNumber*, NSNumber*>* exitMap = [NSMutableDictionary dictionary];
+    for (NSUInteger i = 0; i < phis.count; i++)
+        {
+        XTIRValueId pid = phis[i].result.valueId;
+        BOOL esc = NO;
+        for (XTIRBlock* bb in fn.blocks)
+            {
+            if ([chain containsObject:bb] || [R containsObject:bb] || [clones containsObject:bb])
+                continue;
+            for (XTIRInsn* u in allInsns(bb))
+                for (XTIROperand* o in u.operands)
+                    if (o.kind == XTIROperandKindUse && o.valueId == pid)
+                        esc = YES;
+            }
+        if (!esc)
+            continue;
+        XTIRValue* v = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                     type:phis[i].result.type
+                                                  defSite:[[XTIRDefSite alloc] initWithBlock:E insnIndex:0]];
+        [fn registerValue:v];
+        NSMutableArray<XTIROperand*>* ops = [NSMutableArray array];
+        for (XTIRBlock* h in chain)
+            {
+            [ops addObject:[XTIROperand blockWithRef:h]];
+            [ops addObject:initOp[i]];
+            }
+        for (XTIRBlock* h in clones)
+            {
+            [ops addObject:[XTIROperand blockWithRef:h]];
+            [ops addObject:nextB[i]];
+            }
+        XTIRInsn* ep = [[XTIRInsn alloc] initWithOpcode:XTIROpPhi result:v operands:ops dbgLoc:nil];
+        [exitPhis addObject:ep];
+        exitMap[@(pid)] = @(v.valueId);
+        }
+    [E.phiNodes insertObjects:exitPhis atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, exitPhis.count)]];
+    if (!exitMap.count)
+        return;
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        if ([chain containsObject:bb] || [R containsObject:bb] || [clones containsObject:bb])
+            continue;
+        for (XTIRInsn* u in allInsns(bb))
+            {
+            if ([exitPhis containsObject:u])
+                continue;
+            BOOL ch = NO;
+            NSMutableArray<XTIROperand*>* ops = [u.operands mutableCopy];
+            for (NSUInteger k = 0; k < ops.count; k++)
+                if (ops[k].kind == XTIROperandKindUse && exitMap[@(ops[k].valueId)])
+                    {
+                    ops[k] = [XTIROperand useWithValueId:(XTIRValueId)exitMap[@(ops[k].valueId)].unsignedLongLongValue];
+                    ch = YES;
+                    }
+            if (ch)
+                [u replaceOperands:ops];
+            }
         }
     }
 

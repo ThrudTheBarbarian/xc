@@ -113,6 +113,10 @@
     {
     return NO;
     }
+- (BOOL)rotatesChainLoops
+    {
+    return NO;
+    }
 - (BOOL)vectorizesLoops
     {
     return NO;
@@ -772,6 +776,10 @@
 // Loop transforms the reduction / min-max / count / widening-sum recognisers
 // need to see the loop in canonical (rotated, if-converted) form.
 - (BOOL)rotatesLoops
+    {
+    return YES;
+    }
+- (BOOL)rotatesChainLoops
     {
     return YES;
     }

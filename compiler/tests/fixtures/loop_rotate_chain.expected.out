@@ -1,0 +1,11 @@
+sortU 1986000 28938000
+sortI -98900 -176900
+scan3 all 1045 10
+scan3 limit 135 5
+scan3 zero 231 6
+scan3 empty 0 0
+scan3 first 0 0
+scan3 second 0 0
+branchy 1318392
+branchy stop 479647
+branchy none 0

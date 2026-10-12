@@ -40,6 +40,7 @@ class X86_64
     i32 _arcOverride;
     IRFunc* _fn;
     String* _out;
+    String* _edgeStubs; // a function's out-of-line edge stubs, after its last block
     bool _win64; // the Win64 ABI rather than System V
     u32 _cpFar;  // peepholeCopyProp: the furthest line the current candidate's scans read
     Array* _simdNames; // dispatched functions (-msimd=auto), in emission order
@@ -688,9 +689,12 @@ class X86_64
                         loopHead.set(hb, (Object*)Number.with((u32)1));
                 }
             }
+        _edgeStubs = new String();
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             emitBlock(fn, (IRBlock*)fn.blocks().get(b),
                       ((Number*)loopHead.get(b)).asU32() != (u32)0);
+        _out.append(_edgeStubs);
+        _edgeStubs = (String*)0;
         }
 
     // rbx and r12-r15 are the callee-saved pool; there is no caller-saved tier
@@ -5330,15 +5334,45 @@ class X86_64
             _out.appendFormat("\ttest\t%s, %s\n", reg((u8)'a', cw).cString(), reg((u8)'a', cw).cString());
             _out.appendFormat("\tje\t%s\n", flab.cString());
             }
+        String* saved = _out;
+        String* tcopies = new String();
+        String* fcopies = new String();
         if (tb != (IRBlock*)0)
             {
+            _out = tcopies;
             phiEdges(fn, bb, tb);
+            }
+        if (fb != (IRBlock*)0)
+            {
+            _out = fcopies;
+            phiEdges(fn, bb, fb);
+            }
+        _out = saved;
+        // The true target is the next block and only the false edge has copies
+        // (a rotated loop's back edge, whose exit feeds a phi): fall into the
+        // true target, and put the false edge's copies after the function, so
+        // the loop does not take a branch every iteration to skip them.
+        // Mirrors the original.
+        u32 bi = (u32)0;
+        while (bi < fn.blocks().count() && (IRBlock*)fn.blocks().get(bi) != bb)
+            bi = bi + (u32)1;
+        if (tb != (IRBlock*)0 && fb != (IRBlock*)0 && _edgeStubs != (String*)0 && tcopies.byteLength() == (u32)0 &&
+            fcopies.byteLength() > (u32)0 && bi + (u32)1 < fn.blocks().count() && (IRBlock*)fn.blocks().get(bi + (u32)1) == tb)
+            {
+            _edgeStubs.appendFormat("%s:\n", flab.cString());
+            _edgeStubs.append(fcopies);
+            _edgeStubs.appendFormat("\tjmp\t%s\n", blockLabel(fn, fb).cString());
+            return;
+            }
+        if (tb != (IRBlock*)0)
+            {
+            _out.append(tcopies);
             _out.appendFormat("\tjmp\t%s\n", blockLabel(fn, tb).cString());
             }
         _out.appendFormat("%s:\n", flab.cString());
         if (fb != (IRBlock*)0)
             {
-            phiEdges(fn, bb, fb);
+            _out.append(fcopies);
             _out.appendFormat("\tjmp\t%s\n", blockLabel(fn, fb).cString());
             }
         }

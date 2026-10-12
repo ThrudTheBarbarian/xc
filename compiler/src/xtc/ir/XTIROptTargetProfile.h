@@ -172,6 +172,15 @@ NS_ASSUME_NONNULL_BEGIN
 // duplicated only when side-effect-free.
 - (BOOL)rotatesLoops;
 
+// YES to rotate a loop whose test is a short-circuit chain as well (`while (j >
+// 0 && a[j-1] > v)`): the whole chain is copied to the bottom of the body, and
+// the values it computes that the body reads are threaded into the body. On
+// x86-64 the inner step of an insertion sort went from three taken branches to
+// one (sort_small 1.90 s -> 0.92 s). On arm64 the same shape measured 1.9x
+// SLOWER: its allocator gives the threaded values fresh registers and the back
+// edge becomes a run of moves, so it stays off there until that is fixed.
+- (BOOL)rotatesChainLoops;
+
 // YES to if-convert a short-circuit / predicate diamond into branchless
 // straight-line boolean algebra. A header CondBranch whose taken arm is a
 // single, provably side-effect-free block that only computes values and falls
