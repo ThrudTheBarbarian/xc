@@ -46,7 +46,7 @@ class Worker : Object
     void run(void) { … }            // this runs on the new thread
 }
 
-Worker* a = Worker.withId((i32)2);
+Worker* a = Worker.withId(2);
 Thread* ta = Thread.spawn(&a.run);
 ta.join();
 ```
@@ -71,7 +71,7 @@ class Ledger : Object
 {
     Mutex* lock;
     i32    balance;
-    void init(void) { lock = new Mutex(); balance = (i32)0; }
+    void init(void) { lock = new Mutex(); balance = 0; }
 
     void deposit(i32 amount)
     {
@@ -90,11 +90,11 @@ When the shared state is one word, use an `Atomic`: it needs no lock or scope,
 and there is no unlock to forget.
 
 ```c
-Atomic* hits = Atomic.withValue((i32)0);
-hits.add((i32)5);
+Atomic* hits = Atomic.withValue(0);
+hits.add(5);
 hits.load();
-hits.store((i32)0);
-hits.compareAndSwap((i32)12, (i32)100);      // true if it was 12
+hits.store(0);
+hits.compareAndSwap(12, 100);      // true if it was 12
 ```
 
 ## Cond and Sem
@@ -113,12 +113,12 @@ callback, so it can accumulate into the object it belongs to:
 class Squares : Object
 {
     Atomic* total;
-    void init(void) { total = Atomic.withValue((i32)0); }
+    void init(void) { total = Atomic.withValue(0); }
     void one(i32 i) { total.add(i * i); }
 }
 
 Squares* sq = new Squares();
-Pool.forRange((i32)1, (i32)11, &sq.one);     // 385
+Pool.forRange(1, 11, &sq.one);     // 385
 ```
 
 `Pool.forRangeWithThreads(from, to, body, n)` sets the thread count.
@@ -138,13 +138,13 @@ class Worker : Object
 {
     i32 id;
     i32 result;
-    void init(void) { id = (i32)0; result = (i32)0; }
+    void init(void) { id = 0; result = 0; }
     static Worker* withId(i32 n) { Worker* w = new Worker(); w.id = n; return w; }
 
     void run(void)
     {
-        i32 acc = (i32)0;
-        for (i32 i = (i32)1; i <= (i32)1000; i = i + (i32)1) acc = acc + i * id;
+        i32 acc = 0;
+        for (i32 i = 1; i <= 1000; i = i + 1) acc = acc + i * id;
         result = acc;
     }
 }
@@ -153,7 +153,7 @@ class Ledger : Object
 {
     Mutex* lock;
     i32    balance;
-    void init(void) { lock = new Mutex(); balance = (i32)0; }
+    void init(void) { lock = new Mutex(); balance = 0; }
 
     void deposit(i32 amount)
     {
@@ -168,22 +168,22 @@ class Summer : Object
     void init(void) { ledger = 0; }
     void addMany(void)
     {
-        for (i32 i = (i32)0; i < (i32)500; i = i + (i32)1) ledger.deposit((i32)2);
+        for (i32 i = 0; i < 500; i = i + 1) ledger.deposit(2);
     }
 }
 
 class Squares : Object
 {
     Atomic* total;
-    void init(void) { total = Atomic.withValue((i32)0); }
+    void init(void) { total = Atomic.withValue(0); }
     void one(i32 i) { total.add(i * i); }
 }
 
 i32 main(void)
 {
     // ---- spawn and join ----
-    Worker* a = Worker.withId((i32)2);
-    Worker* b = Worker.withId((i32)3);
+    Worker* a = Worker.withId(2);
+    Worker* b = Worker.withId(3);
     Thread* ta = Thread.spawn(&a.run);
     Thread* tb = Thread.spawn(&b.run);
     ta.join();
@@ -201,17 +201,17 @@ i32 main(void)
     Stdio.printf("balance %ld\n", led.balance);
 
     // ---- atomics without a lock ----
-    Atomic* hits = Atomic.withValue((i32)0);
-    hits.add((i32)5);
-    hits.add((i32)7);
+    Atomic* hits = Atomic.withValue(0);
+    hits.add(5);
+    hits.add(7);
     Stdio.printf("atomic %ld, cas ok %d, after %ld\n",
                  hits.load(),
-                 (i16)(hits.compareAndSwap((i32)12, (i32)100) ? 1 : 0),
+                 (i16)(hits.compareAndSwap(12, 100) ? 1 : 0),
                  hits.load());
 
     // ---- data parallelism ----
     Squares* sq = new Squares();
-    Pool.forRange((i32)1, (i32)11, &sq.one);
+    Pool.forRange(1, 11, &sq.one);
     Stdio.printf("sum of squares 1..10 = %ld\n", sq.total.load());
 
     return 0;

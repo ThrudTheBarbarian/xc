@@ -15,7 +15,7 @@ class Point : Object
 {
     i32 x;
     i32 y;
-    void init(void) { x = (i32)0; y = (i32)0; }
+    void init(void) { x = 0; y = 0; }
     static Point* at(i32 px, i32 py) { Point* p = new Point(); p.x = px; p.y = py; return p; }
 
     // `description` is what `%@` prints. Object supplies a default; override it
@@ -37,7 +37,7 @@ i32 main(void)
 
     // get() returns String*, not Object* — no cast at the use site.
     Stdio.printf("count %d, first %s\n",
-                 (i16)names.count(), names.get((u32)0).cString());
+                 (i16)names.count(), names.get(0).cString());
 
     // for-in walks a container in order. The loop variable is the element type.
     Stdio.print("names:");
@@ -46,8 +46,8 @@ i32 main(void)
 
     // ---- Array of your own class ------------------------------------------
     Array<Point>* path = new Array();
-    path.add(Point.at((i32)0, (i32)0));
-    path.add(Point.at((i32)3, (i32)4));
+    path.add(Point.at(0, 0));
+    path.add(Point.at(3, 4));
     // %@ dispatches description() through the vtable.
     Stdio.printf("last %@\n", path.last());
 
@@ -61,9 +61,9 @@ i32 main(void)
     // `total + scores.get(i)` would NOT unbox — the right operand there is
     // still an Object*, so bind it to a named local first.
     Array<i32>* scores = new Array();
-    scores.add((i32)70);
-    scores.add((i32)95);
-    i32 total = (i32)0;
+    scores.add(70);
+    scores.add(95);
+    i32 total = 0;
     for (i32 v in scores) { total = total + v; }
     Stdio.printf("total %ld\n", total);
 
@@ -72,8 +72,8 @@ i32 main(void)
     // names the value and the key goes unchecked — anything Hashable, which
     // String is. Prefer the pair: an unchecked key is half a typed collection.
     Map<String, Point>* places = new Map();
-    places.set(String.withCString("origin"), Point.at((i32)0, (i32)0));
-    places.set(String.withCString("corner"), Point.at((i32)9, (i32)9));
+    places.set(String.withCString("origin"), Point.at(0, 0));
+    places.set(String.withCString("corner"), Point.at(9, 9));
     Point* corner = places.get(String.withCString("corner"));
     Stdio.printf("corner %@, map holds %d\n", corner, (i16)places.count());
     // A missing key gives 0, not a trap.
@@ -103,19 +103,19 @@ i32 main(void)
                  (i16)longer.byteLength(), longer.uppercased().cString());
 
     Stdio.printf("equal by value: %d, same object: %d\n",
-                 (i16)(String.withCString("ada").equals(names.get((u32)0)) ? 1 : 0),
-                 (i16)(String.withCString("ada") == names.get((u32)0) ? 1 : 0));
+                 (i16)(String.withCString("ada").equals(names.get(0)) ? 1 : 0),
+                 (i16)(String.withCString("ada") == names.get(0) ? 1 : 0));
 
     // Searching and slicing. A miss is String.notFound(), never a negative
     // index — the result type is unsigned.
     Stdio.printf("index of world: %d, prefix hello: %d, slice %s\n",
                  (i16)longer.byteIndexOf(String.withCString("world")),
                  (i16)(longer.hasPrefix(String.withCString("hello")) ? 1 : 0),
-                 longer.substringBytes((u32)7, (u32)5).cString());
+                 longer.substringBytes(7, 5).cString());
 
     // Numbers to strings, including the 64-bit widths.
     Stdio.printf("i32 %s, u64 %s\n",
-                 String.withI32((i32)-42).cString(),
-                 String.withU64((u64)1099511627776).cString());
+                 String.withI32(-42).cString(),
+                 String.withU64(1099511627776).cString());
     return 0;
 }

@@ -5,8 +5,8 @@
 // A block as a parameter: `each` drives it, the caller supplies it.
 u32 each(block cb u32(u32), u32 n)
 {
-    u32 acc = (u32)0;
-    for (u32 i = (u32)0; i < n; i++) { acc = acc + cb(i); }
+    u32 acc = 0;
+    for (u32 i = 0; i < n; i++) { acc = acc + cb(i); }
     return acc;
 }
 
@@ -25,9 +25,9 @@ i32 main(void)
     Stdio.printf("add(2,3)      = %ld\n", add(2, 3));
 
     // Captures are BY-VALUE snapshots, taken when the literal runs.
-    u32 base = (u32)100;
+    u32 base = 100;
     block plus u32(u32 n) = { return base + n; }
-    base = (u32)999;                       // too late: plus still sees 100
+    base = 999;                       // too late: plus still sees 100
     Stdio.printf("plus(7)       = %ld\n", plus(7));
 
     // Re-assignment; a bare body inherits the DECLARED signature.
@@ -38,19 +38,19 @@ i32 main(void)
     Stdio.printf("op={x*y}      = %ld\n", op(6, 7));
 
     // Inline literal in argument position; auto infers block types.
-    Stdio.printf("each(2n)      = %ld\n", each(block u32(u32 v) { return v * (u32)2; }, (u32)5));
-    auto add5 = makeAdder((u32)5);
-    Stdio.printf("add5(10)      = %ld\n", add5((u32)10));
+    Stdio.printf("each(2n)      = %ld\n", each(block u32(u32 v) { return v * 2; }, 5));
+    auto add5 = makeAdder(5);
+    Stdio.printf("add5(10)      = %ld\n", add5(10));
 
     // A NAMED literal can call itself — recursion without a declaration.
-    auto fact = block f u32(u32 n) { if (n <= (u32)1) { return (u32)1; } return n * f(n - (u32)1); };
-    Stdio.printf("fact(5)       = %ld\n", fact((u32)5));
+    auto fact = block f u32(u32 n) { if (n <= 1) { return 1; } return n * f(n - 1); };
+    Stdio.printf("fact(5)       = %ld\n", fact(5));
 
     // `block:` — write-back captures: copy in at creation, copy out at
     // every invocation exit. The loop below never sees the variable; it
     // still holds the total the moment `each` returns.
-    block:u32 total = (u32)0;
-    u32 r = each(block u32(u32 v) { total = total + v; return v; }, (u32)5);
+    block:u32 total = 0;
+    u32 r = each(block u32(u32 v) { total = total + v; return v; }, 5);
     Stdio.printf("total,r       = %ld %ld\n", total, r);
 
     // Null is a first-class block value; test before calling.

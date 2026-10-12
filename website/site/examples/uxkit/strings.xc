@@ -10,7 +10,7 @@
 
 void showParts(u8* label, Array<UXStrItem>* parts) {
     Stdio.printf("%s %d:", label, (i32)parts.count());
-    for (i32 i = (i32)0; i < (i32)parts.count(); i = i + (i32)1) {
+    for (i32 i = 0; i < (i32)parts.count(); i = i + 1) {
         Stdio.printf(" [%s]", UXText.partAt(parts, i));
     }
     Stdio.printf("\n");
@@ -27,9 +27,9 @@ void main(void) {
 
     // ---- split KEEPS empty fields ----------------------------------------
     // A CSV row's empty cell is a cell: "a,,b" is three fields, not two.
-    showParts((u8*)"split a,,b   ->", UXText.split((u8*)"a,,b", (u8)','));
-    showParts((u8*)"split a,b,   ->", UXText.split((u8*)"a,b,", (u8)','));
-    showParts((u8*)"split ''     ->", UXText.split((u8*)"", (u8)','));
+    showParts((u8*)"split a,,b   ->", UXText.split((u8*)"a,,b", ','));
+    showParts((u8*)"split a,b,   ->", UXText.split((u8*)"a,b,", ','));
+    showParts((u8*)"split ''     ->", UXText.split((u8*)"", ','));
 
     // ---- tokenize DROPS them ---------------------------------------------
     // Which is what splitting a command line wants: runs of spaces are one gap.
@@ -39,12 +39,12 @@ void main(void) {
 
     // ---- join ------------------------------------------------------------
     Stdio.printf("join: %s\n",
-                 UXText.join(UXText.split((u8*)"a,,b", (u8)','), (u8*)" | "));
+                 UXText.join(UXText.split((u8*)"a,,b", ','), (u8*)" | "));
 
     // split then join with the same delimiter is the identity, which is only
     // true because split keeps the empties.
     Stdio.printf("round trip: %s\n",
-                 UXText.join(UXText.split((u8*)"a,b,", (u8)','), (u8*)","));
+                 UXText.join(UXText.split((u8*)"a,b,", ','), (u8*)","));
 
     // ---- predicates ------------------------------------------------------
     Stdio.printf("prefix=%d suffix=%d contains=%d\n",
@@ -70,9 +70,9 @@ void main(void) {
     // cat() skips the separator when the left side is empty, so accumulating a
     // list needs no "is this the first one" test.
     u8* list = (u8*)"";
-    list = UXStr.cat(list, (u8)',', (u8*)"red");
-    list = UXStr.cat(list, (u8)',', (u8*)"green");
-    list = UXStr.cat(list, (u8)',', (u8*)"blue");
+    list = UXStr.cat(list, ',', (u8*)"red");
+    list = UXStr.cat(list, ',', (u8*)"green");
+    list = UXStr.cat(list, ',', (u8*)"blue");
     Stdio.printf("accumulated: %s\n", list);
 
     Stdio.printf("label: %s\n",
@@ -83,8 +83,8 @@ void main(void) {
     Stdio.printf("fromInt: %s %s %s\n",
                  UXStr.fromInt(0), UXStr.fromInt(-42), UXStr.fromInt(2147483647));
     Stdio.printf("fromHex: %s %s %s\n",
-                 UXStr.fromHex((u32)0), UXStr.fromHex((u32)255),
-                 UXStr.fromHex((u32)0xDEADBEEF));
+                 UXStr.fromHex(0), UXStr.fromHex(255),
+                 UXStr.fromHex(0xDEADBEEF));
 
     // toInt is a READER, not a validator: it takes what it can and stops.
     Stdio.printf("toInt: '  -17px'=%d 'abc'=%d '12.9'=%d '+8'=%d\n",

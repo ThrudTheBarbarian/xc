@@ -82,7 +82,7 @@ class EditSurface : UXShieldView {
 
     void mouseDown(UXEvent* e) {
         UXRect a = self.absoluteFrame();
-        if (picked) { picked((i16)(e.x - a.x), (i16)(e.y - a.y)); }   // surface-local
+        if (picked) { picked(e.x - a.x, e.y - a.y); }   // surface-local
     }
 }
 ```

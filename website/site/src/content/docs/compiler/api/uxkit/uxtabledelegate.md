@@ -25,7 +25,7 @@ know what was selected.
 ```c
 void tableSelectionDidChange(UXTableView* t, i32 row) {
     if (row < 0) { status.setText((u8*)"nothing selected"); return; }
-    status.setText(((Track* ?)tracks.get((u16)row)).name);
+    status.setText(((Track* ?)tracks.get(row)).name);
 }
 ```
 

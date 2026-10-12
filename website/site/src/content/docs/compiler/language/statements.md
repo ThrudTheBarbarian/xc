@@ -48,10 +48,10 @@ u16 total = 0;                      // file-scope state: a plain top-level globa
 
 void tick(void) {
     volatile u16* dosvec = (u16*)10;  // both stores happen, even at -O3
-    register u16  hot = (u16)0;       // priority on the fast storage class
+    register u16  hot = 0;       // priority on the fast storage class
     static  u16  hits = 0;            // a local that persists across calls
     global static u16 shared = 0;     // persists, and linked to other files
-    hits = hits + (u16)1;
+    hits = hits + 1;
 }
 ```
 
@@ -315,9 +315,9 @@ Multiple defers in one scope run **last-registered-first**, and each defer belon
 Inside a loop body, the defer runs at the end of **each iteration**, including the iteration that `break`s or `continue`s out.
 
 ```c
-for (u32 i = (u32)0; i < (u32)3; i = i + (u32)1) {
+for (u32 i = 0; i < 3; i = i + 1) {
     defer { Stdio.printf("d%d\n", i); }
-    if (i == (u32)1) break;
+    if (i == 1) break;
 }
 // d0
 // d1
@@ -329,7 +329,7 @@ A scope exits by running **its defers first**, then its [ARC teardown](/compiler
 
 ```c
 {
-    Res* r = new Res((u32)7);
+    Res* r = new Res(7);
     defer { Stdio.printf("defer sees id=%d\n", r.id); }
 }
 // defer sees id=7
@@ -424,19 +424,19 @@ i32 main(void)
 {
     // 1. C-style for: init; condition; step.
     Stdio.print("for       ");
-    for (u16 i = (u16)0; i < (u16)5; i = i + (u16)1)
+    for (u16 i = 0; i < 5; i = i + 1)
         Stdio.printf("%d ", i);
     Stdio.print("\n");
 
     // 2. while — the test runs first, so the body may not run at all.
     Stdio.print("while     ");
-    u16 n = (u16)5;
-    while (n > (u16)0) { Stdio.printf("%d ", n); n = n - (u16)1; }
+    u16 n = 5;
+    while (n > 0) { Stdio.printf("%d ", n); n = n - 1; }
     Stdio.print("\n");
 
     // 3. for ... in over an array, with and without the element type.
     u16 squares[5];
-    for (u16 i = (u16)0; i < (u16)5; i = i + (u16)1)
+    for (u16 i = 0; i < 5; i = i + 1)
         squares[i] = i * i;
     Stdio.print("for-in    ");
     for (u16 v in squares)
@@ -450,18 +450,18 @@ i32 main(void)
 
     // 4. break and continue, as in C.
     Stdio.print("evens<=6  ");
-    for (u16 i = (u16)0; i < (u16)10; i = i + (u16)1) {
-        if ((i & (u16)1) != (u16)0) continue;
-        if (i > (u16)6) break;
+    for (u16 i = 0; i < 10; i = i + 1) {
+        if ((i & 1) != 0) continue;
+        if (i > 6) break;
         Stdio.printf("%d ", i);
     }
     Stdio.print("\n");
 
     // 5. Nested: break leaves only the INNERMOST loop.
     Stdio.print("nested    ");
-    for (u16 r = (u16)0; r < (u16)3; r = r + (u16)1)
-        for (u16 c = (u16)0; c < (u16)3; c = c + (u16)1) {
-            if (c == (u16)2) break;
+    for (u16 r = 0; r < 3; r = r + 1)
+        for (u16 c = 0; c < 3; c = c + 1) {
+            if (c == 2) break;
             Stdio.printf("%d%d ", r, c);
         }
     Stdio.print("\n");
@@ -469,7 +469,7 @@ i32 main(void)
     // 6. `: unroll` asks the optimiser to unroll a counted loop fully.
     //    Purely a performance annotation — the result is identical.
     Stdio.print("unrolled  ");
-    for (u16 i = (u16)0; i < (u16)4; i = i + (u16)1) : unroll
+    for (u16 i = 0; i < 4; i = i + 1) : unroll
         Stdio.printf("%d ", i);
     Stdio.print("\n");
     return 0;

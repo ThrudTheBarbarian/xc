@@ -18,9 +18,9 @@ class PrefsController : Object
     outlet UXTextField* nameField;
     outlet UXCheckbox*  showGrid;
 
-    void init(void) { gApplied = (i32)0; }
+    void init(void) { gApplied = 0; }
 
-    void onApply(UXControl* c)  :action { gApplied = gApplied + (i32)1; }
+    void onApply(UXControl* c)  :action { gApplied = gApplied + 1; }
     void onCancel(UXControl* c) :action { }
 }
 

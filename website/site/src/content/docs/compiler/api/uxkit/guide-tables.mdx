@@ -20,10 +20,10 @@ protocol UXTableDataSource {
 That is the whole contract:
 
 ```c
-i32 numberOfRows(UXTableView* t) { return (i32)tracks.count(); }
+i32 numberOfRows(UXTableView* t) { return tracks.count(); }
 
 u8* valueForCell(UXTableView* t, i32 row, i32 col) {
-    Track* tr = (Track* ?)tracks.get((u16)row);
+    Track* tr = (Track* ?)tracks.get(row);
     if (col == 0) { return tr.name; }
     if (col == 1) { return tr.artist; }
     return self.formatMinutes(tr.mins);
@@ -67,7 +67,7 @@ functional. Add a delegate when you need to respond to selection.
 ```c
 void tableSelectionDidChange(UXTableView* t, i32 row) {
     if (row < 0) { status.setText((u8*)"nothing selected"); return; }
-    status.setText(((Track* ?)tracks.get((u16)row)).name);
+    status.setText(((Track* ?)tracks.get(row)).name);
 }
 ```
 
@@ -121,7 +121,7 @@ wrapper type to build and keep in sync.
 ```c
 i32 numberOfChildren(UXOutlineView* o, Object* item) {
     Node* n = item == (Object*)0 ? root : (Node* ?)item;
-    return (i32)n.kids.count();
+    return n.kids.count();
 }
 ```
 
@@ -139,10 +139,10 @@ class Controller : Object <UXApplicationDelegate, UXTableDataSource,
     Node*         root;
     UXLabel*      status;
 
-    i32 numberOfRows(UXTableView* t) { return (i32)tracks.count(); }
+    i32 numberOfRows(UXTableView* t) { return tracks.count(); }
 
     u8* valueForCell(UXTableView* t, i32 row, i32 col) {
-        Track* tr = (Track* ?)tracks.get((u16)row);
+        Track* tr = (Track* ?)tracks.get(row);
         if (col == 0) { return tr.name; }
         if (col == 1) { return tr.artist; }
         return self.minutes(tr.mins);       // a cell returns TEXT
@@ -150,16 +150,16 @@ class Controller : Object <UXApplicationDelegate, UXTableDataSource,
 
     void tableSelectionDidChange(UXTableView* t, i32 row) {
         if (row < 0) { status.setText((u8*)"nothing selected"); return; }
-        status.setText(((Track* ?)tracks.get((u16)row)).name);
+        status.setText(((Track* ?)tracks.get(row)).name);
     }
 
     i32 numberOfChildren(UXOutlineView* o, Object* item) {
         Node* n = item == (Object*)0 ? root : (Node* ?)item;
-        return (i32)n.kids.count();
+        return n.kids.count();
     }
     Object* childOfItem(UXOutlineView* o, Object* item, i32 i) {
         Node* n = item == (Object*)0 ? root : (Node* ?)item;
-        return (Object*)((Node* ?)n.kids.get((u16)i));
+        return (Object*)((Node* ?)n.kids.get(i));
     }
     bool isExpandable(UXOutlineView* o, Object* item) {
         Node* n = item == (Object*)0 ? root : (Node* ?)item;

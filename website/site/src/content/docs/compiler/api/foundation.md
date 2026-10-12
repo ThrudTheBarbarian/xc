@@ -95,9 +95,9 @@ serves every element type, so there is no code-size cost per instantiation.
 ```c
 Array<String>* names = new Array();      // new Array() needs no type argument
 names.add(String.withCString("ada"));
-String* s = names.get((u32)0);           // a String*, no cast
+String* s = names.get(0);           // a String*, no cast
 
-names.add(Number.withU32((u32)7));       // error: Number is not a subclass of String
+names.add(Number.withU32(7));       // error: Number is not a subclass of String
 ```
 
 `Map<V>` names the **value** type; keys are anything conforming to `Hashable`.

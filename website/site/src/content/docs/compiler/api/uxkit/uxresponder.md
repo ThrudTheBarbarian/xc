@@ -79,8 +79,8 @@ the view:
 ```c
 void mouseDown(UXEvent* e) {
     UXRect a = self.absoluteFrame();
-    i16 lx = (i16)(e.x - a.x);
-    i16 ly = (i16)(e.y - a.y);
+    i16 lx = e.x - a.x;
+    i16 ly = e.y - a.y;
 }
 ```
 

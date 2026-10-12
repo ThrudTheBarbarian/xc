@@ -141,12 +141,12 @@ i32 main(void)
     Gfx* g = gfxCreate(GFX_160_192_2, 0);
     if (g == (Gfx*)0) { return 1; }
 
-    g.setFillColor((u8)0);
+    g.setFillColor(0);
     g.clear();
 
-    g.setPen((u8)3);                 // colour index 3
+    g.setPen(3);                 // colour index 3
     g.fillCircle(80, 96, 40);
-    g.setPen((u8)1);
+    g.setPen(1);
     g.rect(0, 0, 159, 191);
 
     return 0;

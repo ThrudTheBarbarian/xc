@@ -370,14 +370,14 @@ correct.
 
 i32 main(void)
 {
-    Number* n = Number.withI16((i16)-42);
+    Number* n = Number.withI16(-42);
     if (n.isInt())   Stdio.printf("%d\n", n.asI16());      // -42
 
     Number* f = Number.withFloat(3.25);
     Stdio.printf("%s\n", f.description().cString());        // 3.250000
 
     // Cross-kind equality: promotes to float.
-    Number* a = Number.with((i16)42);
+    Number* a = Number.with(42);
     Number* b = Number.withFloat(42.0);
     Stdio.printf("%d\n", (i16)a.equals(b));                 // 1 (true)
     return 0;

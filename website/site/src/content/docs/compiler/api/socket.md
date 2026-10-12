@@ -15,10 +15,10 @@ and Windows. **From 0.72.**
 ```c
 try
     {
-    Socket* s = Socket.connect(String.withCString("localhost"), (u16)7070);
+    Socket* s = Socket.connect(String.withCString("localhost"), 7070);
     s.writeString(String.withCString("hello\n"));
-    s.waitReadable((i32)1000);                 // up to a second for a reply
-    Data* reply = s.readAvailable((u32)4096);
+    s.waitReadable(1000);                 // up to a second for a reply
+    Data* reply = s.readAvailable(4096);
     s.close();
     }
 catch (SocketError e)

@@ -17,7 +17,7 @@ parsed-resource cache uses to stay bounded. **From 0.72.**
 
 ```c
 Cache* thumbs = new Cache();
-thumbs.setCapacity((i32)64);
+thumbs.setCapacity(64);
 thumbs.set("a.png", image);
 Image* i = (Image* ?)thumbs.get("a.png");   // null once evicted
 ```

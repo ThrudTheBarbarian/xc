@@ -95,8 +95,8 @@ implementation (exponent −1, random mantissa). The native ports inline the
 expression `0.5 + (random()/2^31)*0.5` so the IR inliner can fold it.
 
 ```c
-u8  d6   = Math.rand((u8)1, (u8)6);   // dice roll, 1..6
-u16 cell = Math.rand((u16)40);        // 0..39
+u8  d6   = Math.rand(1, 6);   // dice roll, 1..6
+u16 cell = Math.rand(40);        // 0..39
 float f  = Math.rand();               // 0.5 <= f < 1.0
 ```
 
@@ -153,7 +153,7 @@ static double pow(double base, u32 power)        // xt6502: ENABLE_DOUBLE
 the integer-typed overload is much cheaper than the float-by-float version.
 
 ```c
-float sq = Math.pow(r, (i16)2);               // squared, integer fast path
+float sq = Math.pow(r, 2);               // squared, integer fast path
 float rt = Math.pow((float)2.0, (float)0.5);  // square root via pow
 ```
 

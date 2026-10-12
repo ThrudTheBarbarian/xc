@@ -17,8 +17,8 @@ can [`post`](#post) to it. The blocks run in order on the thread that calls
 RunLoop* main = RunLoop.main();
 
 main.post(block void(void) { … });                           // from any thread
-main.after((u32)500, block void(void) { … });                // once, in 500 ms
-Timer* t = main.every((u32)1000, block void(void) { … });    // until t.cancel()
+main.after(500, block void(void) { … });                // once, in 500 ms
+Timer* t = main.every(1000, block void(void) { … });    // until t.cancel()
 
 main.run();                                                  // until main.stop()
 ```

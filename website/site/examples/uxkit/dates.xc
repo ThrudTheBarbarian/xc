@@ -13,8 +13,8 @@ void show(u8* label, u8* pattern, UXDate* d) {
 
 void main(void) {
     // ---- components in, string out ---------------------------------------
-    UXDate* d = UXDate.makeTime((i32)2026, (i32)9, (i32)14,
-                                (i32)16, (i32)45, (i32)7);
+    UXDate* d = UXDate.makeTime(2026, 9, 14,
+                                16, 45, 7);
 
     show((u8*)"iso:      ", (u8*)"yyyy-MM-dd", d);
     show((u8*)"time:     ", (u8*)"HH:mm:ss", d);
@@ -28,40 +28,40 @@ void main(void) {
 
     // ---- date arithmetic --------------------------------------------------
     Stdio.printf("weekday index: %d\n", d.weekday());
-    show((u8*)"+1 day:   ", (u8*)"EEE yyyy-MM-dd", d.addingDays((i32)1));
-    show((u8*)"+3 weeks: ", (u8*)"EEE yyyy-MM-dd", d.addingWeeks((i32)3));
-    show((u8*)"+5 months:", (u8*)"yyyy-MM-dd", d.addingMonths((i32)5));
+    show((u8*)"+1 day:   ", (u8*)"EEE yyyy-MM-dd", d.addingDays(1));
+    show((u8*)"+3 weeks: ", (u8*)"EEE yyyy-MM-dd", d.addingWeeks(3));
+    show((u8*)"+5 months:", (u8*)"yyyy-MM-dd", d.addingMonths(5));
 
     // Month arithmetic clamps rather than overflowing into the next month.
-    UXDate* jan31 = UXDate.make((i32)2026, (i32)1, (i32)31);
-    show((u8*)"31 Jan +1m:", (u8*)"yyyy-MM-dd", jan31.addingMonths((i32)1));
+    UXDate* jan31 = UXDate.make(2026, 1, 31);
+    show((u8*)"31 Jan +1m:", (u8*)"yyyy-MM-dd", jan31.addingMonths(1));
 
     // Leap years are exact, across all three rules.
     Stdio.printf("leap: 2024=%d 2025=%d 1900=%d 2000=%d\n",
-                 UXDate.isLeapYear((i32)2024) ? 1 : 0,
-                 UXDate.isLeapYear((i32)2025) ? 1 : 0,
-                 UXDate.isLeapYear((i32)1900) ? 1 : 0,
-                 UXDate.isLeapYear((i32)2000) ? 1 : 0);
+                 UXDate.isLeapYear(2024) ? 1 : 0,
+                 UXDate.isLeapYear(2025) ? 1 : 0,
+                 UXDate.isLeapYear(1900) ? 1 : 0,
+                 UXDate.isLeapYear(2000) ? 1 : 0);
     show((u8*)"29 Feb 24:", (u8*)"EEEE d MMMM yyyy",
-         UXDate.make((i32)2024, (i32)2, (i32)28).addingDays((i32)1));
+         UXDate.make(2024, 2, 28).addingDays(1));
     show((u8*)"28 Feb 25:", (u8*)"EEEE d MMMM yyyy",
-         UXDate.make((i32)2025, (i32)2, (i32)28).addingDays((i32)1));
+         UXDate.make(2025, 2, 28).addingDays(1));
 
     // Differences are in days, and work across a year boundary.
     Stdio.printf("days 2026-01-01 -> 2026-09-14: %d\n",
-                 UXDate.make((i32)2026, (i32)1, (i32)1).daysUntil(d));
+                 UXDate.make(2026, 1, 1).daysUntil(d));
 
     // ---- time zones -------------------------------------------------------
     UXTimeZone* utc  = UXTimeZone.utc();
-    UXTimeZone* ist  = UXTimeZone.make((u8*)"IST", (i32)330);    // +05:30
-    UXTimeZone* pst  = UXTimeZone.make((u8*)"PST", -(i32)480);   // -08:00
+    UXTimeZone* ist  = UXTimeZone.make((u8*)"IST", 330);    // +05:30
+    UXTimeZone* pst  = UXTimeZone.make((u8*)"PST", -480);   // -08:00
 
     Stdio.printf("offsets: %s %s %s\n",
                  utc.offsetString(), ist.offsetString(), pst.offsetString());
 
     // A date's components are EXPRESSED IN its zone; inZone() re-expresses the
     // same instant, so the wall-clock reading changes and the instant does not.
-    UXDate* here  = UXDate.makeTime((i32)2026, (i32)9, (i32)14, (i32)16, (i32)45, (i32)0);
+    UXDate* here  = UXDate.makeTime(2026, 9, 14, 16, 45, 0);
     UXDate* there = here.inZone(pst);
     show((u8*)"utc:      ", (u8*)"yyyy-MM-dd HH:mm", here);
     show((u8*)"in PST:   ", (u8*)"yyyy-MM-dd HH:mm", there);

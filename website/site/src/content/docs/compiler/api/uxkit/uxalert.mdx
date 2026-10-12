@@ -22,12 +22,12 @@ neutral form.
 
 ```c
 UXAlert* a = new UXAlert();
-a.icon = (i32)3;                          // 0 none / 1 note / 2 wait / 3 stop
+a.icon = 3;                          // 0 none / 1 note / 2 wait / 3 stop
 a.addLine((u8*)"Close without saving?");
 a.addButton((u8*)"Save");
 a.addButton((u8*)"Discard");
 a.addButton((u8*)"Cancel");
-a.defaultButton = (i32)1;                 // Return fires it
+a.defaultButton = 1;                 // Return fires it
 i32 pick = a.runModal();                  // 1-based; blocks, modally
 ```
 

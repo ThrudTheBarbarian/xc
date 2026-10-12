@@ -22,7 +22,7 @@ UXText.trimWhitespace((u8*)"   hello world \n");     // "hello world"
 UXText.toUpper((u8*)"Grand Bleu");                   // "GRAND BLEU"
 UXText.hasSuffix((u8*)"system.fnt", (u8*)".fnt");    // true
 
-Array<UXStrItem>* parts = UXText.split((u8*)"a,b,c", (u8)',');
+Array<UXStrItem>* parts = UXText.split((u8*)"a,b,c", ',');
 UXText.partAt(parts, 1);                             // "b"
 UXText.join(parts, (u8*)" | ");                      // "a | b | c"
 ```
@@ -37,9 +37,9 @@ a part, so you rarely name the box.
 The two methods give different answers, and each is correct for a different job.
 
 ```c
-UXText.split((u8*)"a,,b", (u8)',');     // 3: "a"  ""  "b"
-UXText.split((u8*)"a,b,", (u8)',');     // 3: "a"  "b"  ""
-UXText.split((u8*)"", (u8)',');         // 1: ""
+UXText.split((u8*)"a,,b", ',');     // 3: "a"  ""  "b"
+UXText.split((u8*)"a,b,", ',');     // 3: "a"  "b"  ""
+UXText.split((u8*)"", ',');         // 1: ""
 ```
 
 [`split`](#split) is **structural**: a delimiter marks a field boundary, so an

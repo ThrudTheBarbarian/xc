@@ -16,8 +16,8 @@ whose member with the smallest priority is always first.
 
 ```c
 BinaryHeap* q = new BinaryHeap();
-q.insert(taskA, (i32)5);
-q.insert(taskB, (i32)2);
+q.insert(taskA, 5);
+q.insert(taskB, 2);
 Object* next = q.removeMinimum();   // taskB
 ```
 

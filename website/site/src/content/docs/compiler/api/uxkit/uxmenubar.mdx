@@ -129,6 +129,6 @@ view.addItem((u8*)"  Show Ruler  ", &controller.onRuler);
 
 void onRuler(UXMenuItem* sender) {
     showRuler = !showRuler;
-    bar.setChecked((u16)1, (u16)0, showRuler);
+    bar.setChecked(1, 0, showRuler);
 }
 ```

@@ -40,7 +40,7 @@ This convention keeps every method to two lines:
 ```c
 i32 numberOfChildren(UXOutlineView* o, Object* item) {
     Node* n = item == (Object*)0 ? root : (Node* ?)item;
-    return (i32)n.kids.count();
+    return n.kids.count();
 }
 ```
 

@@ -15,9 +15,9 @@ field. **From 0.72.**
 
 ```c
 AttributedString* s = AttributedString.withString(String.withCString("Hello, world"));
-s.setAttribute(String.withCString("bold"), Number.withBool(true), Range.make((i32)0, (i32)5));
+s.setAttribute(String.withCString("bold"), Number.withBool(true), Range.make(0, 5));
 s.runCount();                                  // 2: "Hello" bold, ", world" plain
-s.attribute(String.withCString("bold"), (i32)1);   // true
+s.attribute(String.withCString("bold"), 1);   // true
 ```
 
 **Attributes** are named by `String`s and hold any object: a font, a colour, a

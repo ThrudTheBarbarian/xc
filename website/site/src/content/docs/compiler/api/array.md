@@ -520,9 +520,9 @@ when the last reference goes away; you do not call it directly.
 i32 main(void)
 {
     Array* a = new Array();
-    a.add(Number.with((i32)3));
-    a.add(Number.with((i32)1));
-    a.add(Number.with((i32)2));
+    a.add(Number.with(3));
+    a.add(Number.with(1));
+    a.add(Number.with(2));
 
     a.sort();                       // elements' own Comparable order
 

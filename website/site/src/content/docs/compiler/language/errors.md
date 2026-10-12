@@ -23,7 +23,7 @@ i32 parseDigit(u8 ch) throws
 {
     if (ch < '0' || ch > '9')
         throw new ParseError(String.withCString("not a digit"));
-    return (i32)(ch - '0');
+    return ch - '0';
 }
 
 void main(void)
@@ -79,7 +79,7 @@ This keeps the test-and-branch off every non-throwing call, and the compiler sho
 Propagation needs no syntax. A `throws` function that calls another `throws` function without a `try` forwards the error to its own caller:
 
 ```c
-i32 middle(u32 n) throws { i32 v = inner(n); return v + (i32)1; }
+i32 middle(u32 n) throws { i32 v = inner(n); return v + 1; }
 ```
 
 `throws` works the same on class methods (instance and static) and on free
@@ -136,19 +136,19 @@ Using the `ParseError` class from the top of the page:
 i32 inner(u32 n) throws
 {
     defer { Stdio.printf("  inner-defer\n"); }
-    if (n == (u32)1) throw new ParseError(String.withCString("deep"));
-    return (i32)7;
+    if (n == 1) throw new ParseError(String.withCString("deep"));
+    return 7;
 }
 
 // No try here: the error propagates out to our caller.
-i32 middle(u32 n) throws { i32 v = inner(n); return v + (i32)1; }
+i32 middle(u32 n) throws { i32 v = inner(n); return v + 1; }
 
 void main(void)
 {
-    try { i32 a = middle((u32)0); Stdio.printf("ok a=%d\n", a); }
+    try { i32 a = middle(0); Stdio.printf("ok a=%d\n", a); }
     catch (e) { Stdio.printf("UNEXPECTED\n"); }
 
-    try { i32 b = middle((u32)1); Stdio.printf("UNEXPECTED b=%d\n", b); }
+    try { i32 b = middle(1); Stdio.printf("UNEXPECTED b=%d\n", b); }
     catch (e) { Stdio.printf("caught: %s\n", ((ParseError*)e).message().cString()); }
 }
 ```
@@ -205,9 +205,9 @@ class ParseError <Error>
 // `throws` is part of the signature: the caller can see it can fail.
 u16 parseDigit(u8 c) throws
 {
-    if (c < (u8)'0' || c > (u8)'9')
+    if (c < '0' || c > '9')
         throw ParseError.with(String.withCString("not a digit"));
-    return (u16)(c - (u8)'0');
+    return c - '0';
 }
 
 // A `defer` block runs when the enclosing scope exits — on the normal path
@@ -216,8 +216,8 @@ u16 parseDigit(u8 c) throws
 u16 sumDigits(string s) throws
 {
     defer { Stdio.print("  (defer: sumDigits scope exited)\n"); }
-    u16 total = (u16)0;
-    for (u16 i = (u16)0; s[i] != (u8)0; i = i + (u16)1)
+    u16 total = 0;
+    for (u16 i = 0; s[i] != 0; i = i + 1)
         total = total + parseDigit(s[i]);       // may throw; propagates
     return total;
 }
@@ -246,7 +246,7 @@ i32 main(void)
 
     // 3. The same, catching a throw that happens directly in the block.
     try {
-        u16 d = parseDigit((u8)'!');
+        u16 d = parseDigit('!');
         Stdio.printf("digit %d\n", d);
     } catch (ParseError e) {
         Stdio.printf("caught a ParseError: %s\n", e.message().cString());

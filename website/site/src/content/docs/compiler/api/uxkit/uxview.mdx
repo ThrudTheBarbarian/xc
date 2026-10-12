@@ -302,7 +302,7 @@ class Gauge : UXView {
     void drawRect(UXGraphics* g, UXRect dirty) {
         UXRect b = self.bounds();
         g.fillRect(b, 0);                                        // white track
-        g.fillRectRGB(UXGeom.make(0, 0, (i16)((i32)b.w * value / 100), b.h),
+        g.fillRectRGB(UXGeom.make(0, 0, (i32)b.w * value / 100, b.h),
                       56, 117, 214);                             // filled portion
     }
 }

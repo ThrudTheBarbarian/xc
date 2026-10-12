@@ -42,9 +42,9 @@ or a buffer the data source owns; it must outlive the table.
 
 ```c
 class Contacts : Object <UXTableDataSource> {
-    i32 numberOfRows(UXTableView* t) { return (i32)people.count(); }
+    i32 numberOfRows(UXTableView* t) { return people.count(); }
     u8* valueForCell(UXTableView* t, i32 row, i32 col) {
-        return col == (i32)0 ? nameAt(row) : phoneAt(row);
+        return col == 0 ? nameAt(row) : phoneAt(row);
     }
 }
 

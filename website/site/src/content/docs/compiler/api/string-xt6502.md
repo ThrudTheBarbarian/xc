@@ -26,7 +26,7 @@ String* t = s.trimmed();                             // "Hello, World"
 
 if (t.hasPrefix(String.withCString("Hello"))) { … }
 
-Array* fields = String.withCString("a,b,,c").split((u8)',');   // 4 parts — the gap counts
+Array* fields = String.withCString("a,b,,c").split(',');   // 4 parts — the gap counts
 String* back  = String.join(fields, String.withCString("-"));  // "a-b--c"
 ```
 

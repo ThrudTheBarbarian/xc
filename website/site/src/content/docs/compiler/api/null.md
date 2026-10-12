@@ -18,7 +18,7 @@ sparse row, a JSON `null`, a cleared entry that must keep its place.
 ```c
 Array* row = new Array();
 row.add(Null.null());                   // a gap that keeps its index
-if (Null.isNothing(row.get((u32)0)))    // a null reference or Null.null()
+if (Null.isNothing(row.get(0)))    // a null reference or Null.null()
     …
 ```
 

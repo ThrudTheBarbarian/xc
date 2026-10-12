@@ -24,9 +24,9 @@ class ParseError <Error>
 // `throws` is part of the signature: the caller can see it can fail.
 u16 parseDigit(u8 c) throws
 {
-    if (c < (u8)'0' || c > (u8)'9')
+    if (c < '0' || c > '9')
         throw ParseError.with(String.withCString("not a digit"));
-    return (u16)(c - (u8)'0');
+    return c - '0';
 }
 
 // A `defer` block runs when the enclosing scope exits — on the normal path
@@ -35,8 +35,8 @@ u16 parseDigit(u8 c) throws
 u16 sumDigits(string s) throws
 {
     defer { Stdio.print("  (defer: sumDigits scope exited)\n"); }
-    u16 total = (u16)0;
-    for (u16 i = (u16)0; s[i] != (u8)0; i = i + (u16)1)
+    u16 total = 0;
+    for (u16 i = 0; s[i] != 0; i = i + 1)
         total = total + parseDigit(s[i]);       // may throw; propagates
     return total;
 }
@@ -65,7 +65,7 @@ i32 main(void)
 
     // 3. The same, catching a throw that happens directly in the block.
     try {
-        u16 d = parseDigit((u8)'!');
+        u16 d = parseDigit('!');
         Stdio.printf("digit %d\n", d);
     } catch (ParseError e) {
         Stdio.printf("caught a ParseError: %s\n", e.message().cString());

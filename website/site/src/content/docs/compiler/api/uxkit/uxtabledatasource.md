@@ -28,10 +28,10 @@ class Library : Object <UXTableDataSource>
 {
     Array<Track>* tracks;
 
-    i32 numberOfRows(UXTableView* t) { return (i32)tracks.count(); }
+    i32 numberOfRows(UXTableView* t) { return tracks.count(); }
 
     u8* valueForCell(UXTableView* t, i32 row, i32 col) {
-        Track* tr = (Track* ?)tracks.get((u16)row);
+        Track* tr = (Track* ?)tracks.get(row);
         if (col == 0) { return tr.name; }
         if (col == 1) { return tr.artist; }
         return self.formatMinutes(tr.mins);

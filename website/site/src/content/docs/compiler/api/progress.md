@@ -13,10 +13,10 @@ shape). **From 0.72.**
 ## Overview
 
 ```c
-Progress* whole = Progress.withTotal((i64)10);       // ten units of work
-Progress* files = whole.makeChild((i64)200, (i64)6);  // 200 files, worth 6 of the 10
-files.incrementBy((i64)100);                          // half the files
-whole.incrementBy((i64)2);                            // 2 units of whole's own work
+Progress* whole = Progress.withTotal(10);       // ten units of work
+Progress* files = whole.makeChild(200, 6);  // 200 files, worth 6 of the 10
+files.incrementBy(100);                          // half the files
+whole.incrementBy(2);                            // 2 units of whole's own work
 whole.fractionCompleted();                            // (2 + 0.5 × 6) / 10 = 0.5
 ```
 

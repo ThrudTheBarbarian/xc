@@ -19,8 +19,8 @@ try
     {
     Expression* e = Expression.parse(String.withCString("qty * price + tax"));
     Map* vars = new Map();
-    vars.set(String.withCString("qty"), Number.withI64((i64)3));
-    vars.set(String.withCString("price"), Number.withI64((i64)200));
+    vars.set(String.withCString("qty"), Number.withI64(3));
+    vars.set(String.withCString("price"), Number.withI64(200));
     vars.set(String.withCString("tax"), Number.withDouble(12.5d));
     Stdio.printf("%@\n", e.evaluate(vars));       // 612.500000
     }

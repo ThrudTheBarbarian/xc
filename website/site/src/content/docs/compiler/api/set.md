@@ -280,13 +280,13 @@ the last reference goes away; you do not call it directly.
 i32 main(void)
 {
     Set* a = new Set();
-    a.add(Number.with((i32)1));
-    a.add(Number.with((i32)2));
-    a.add(Number.with((i32)2));     // duplicate value — ignored
+    a.add(Number.with(1));
+    a.add(Number.with(2));
+    a.add(Number.with(2));     // duplicate value — ignored
 
     Set* b = new Set();
-    b.add(Number.with((i32)2));
-    b.add(Number.with((i32)3));
+    b.add(Number.with(2));
+    b.add(Number.with(3));
 
     Set* both = a.intersect(b);     // { 2 }
     Stdio.printf("count(a)=%d  shared=%d\n",

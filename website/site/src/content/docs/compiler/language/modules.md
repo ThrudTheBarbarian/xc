@@ -91,9 +91,9 @@ extern u16 gCounter;      // DEFINED in the library; reserve no storage here
 
 i16 main(void)
 {
-    gCounter = (u16)10;   // the app writes it…
+    gCounter = 10;   // the app writes it…
     bump();               // …the library increments it…
-    return (i16)gCounter; // …and both see the same variable. 11.
+    return gCounter; // …and both see the same variable. 11.
 }
 ```
 

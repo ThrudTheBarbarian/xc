@@ -326,16 +326,16 @@ i32 main(void)
     Gfx* g = gfxCreate(GFX_320_192_1, 0);   // 320x192, 1bpp
     if (g == (Gfx*)0) { return 1; }
 
-    g.setFillColor((u8)0);
+    g.setFillColor(0);
     g.clear();                              // blank the surface
 
-    g.setPen((u8)1);
+    g.setPen(1);
     g.rect(10, 10, 309, 181);               // border
     g.circle(160, 96, 60);                  // centred circle
     g.moveTo(0, 96);
     g.lineTo(319, 96);                       // horizontal diameter
 
-    g.setFillColor((u8)1);
+    g.setFillColor(1);
     g.floodFill(2, 2);                       // fill outside the border
 
     return 0;

@@ -21,7 +21,7 @@ Log.warning(String.withCString("disk nearly full"));
 
 LogChannel* net = Log.forSubsystem(String.withCString("net"));
 net.setMinLevel(Log.levelWarning());
-net.error("timeout after %d s", (i32)30);       // "net: timeout after 30 s"
+net.error("timeout after %d s", 30);       // "net: timeout after 30 s"
 
 Log.addMonitor(&self.onLog);   // void onLog(String* subsystem, u8 level, String* msg)
 ```

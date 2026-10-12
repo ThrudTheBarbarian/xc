@@ -18,9 +18,9 @@ transport behind [`url.fetch`](#install).
 
 ```c
 HttpResponse* r = Http.get(Url.withCString("http://example.com/"));
-if (r.status() == (u32)200)
+if (r.status() == 200)
     Stdio.printf("%s\n", r.bodyString().cString());
-else if (r.status() == (u32)0)
+else if (r.status() == 0)
     Stdio.printf("no response: %s\n", r.error().cString());
 ```
 

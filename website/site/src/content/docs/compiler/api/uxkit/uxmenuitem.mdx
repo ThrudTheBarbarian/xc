@@ -15,8 +15,8 @@ time.
 From 0.7 an item can have a shortcut:
 
 ```c
-edit.addItem((u8*)"Undo", &self.onUndo).setShortcut((u8)'Z', false);
-edit.addItem((u8*)"Redo", &self.onRedo).setShortcut((u8)'Z', true);   // with Shift
+edit.addItem((u8*)"Undo", &self.onUndo).setShortcut('Z', false);
+edit.addItem((u8*)"Redo", &self.onRedo).setShortcut('Z', true);   // with Shift
 ```
 
 The key is pressed with the platform's command key: Command on macOS and iOS,

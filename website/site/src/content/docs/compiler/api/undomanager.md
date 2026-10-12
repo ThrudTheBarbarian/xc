@@ -29,7 +29,7 @@ class Model : Object
         }
     }
 
-model.setX(Number.withI32((i32)5));
+model.setX(Number.withI32(5));
 undo.setActionName(String.withCString("Change X"));
 undo.undo();     // calls setX(old); setX registers setX(5) as the redo
 undo.redo();     // calls setX(5); setX registers setX(old) as the undo again

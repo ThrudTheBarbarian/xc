@@ -16,7 +16,7 @@ form's Submit button. **From 0.72.**
 ```c
 Validator* v = new Validator();
 v.requireNonEmpty(String.withCString("Enter a name."));
-v.requireMaxLength((u32)40, String.withCString("At most 40 characters."));
+v.requireMaxLength(40, String.withCString("At most 40 characters."));
 v.requireMatch(String.withCString("[A-Za-z' -]+"), String.withCString("Letters only."));
 v.firstError(String.withCString(""));       // "Enter a name."
 v.validate(String.withCString("Ada"));       // true

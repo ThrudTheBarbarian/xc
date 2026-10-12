@@ -57,7 +57,7 @@ i32 main(void)
     //    never overlap and you cannot double-free.
     Stdio.print("raw buffer:\n");
     u16* buf = new u16[4];
-    for (u16 i = (u16)0; i < (u16)4; i = i + (u16)1) buf[i] = i * (u16)11;
+    for (u16 i = 0; i < 4; i = i + 1) buf[i] = i * 11;
     Stdio.printf("  buf[3] = %d, length = %d\n", buf[3], (u16)buf.length);
     delete buf;
     Stdio.print("  (deleted)\n");

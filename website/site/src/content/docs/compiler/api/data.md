@@ -358,7 +358,7 @@ do not call it directly.
 i32 main(void)
 {
     u8 raw[4] = { $DE, $AD, $BE, $EF };
-    Data* d = Data.withBytes(&raw[0], (u32)4);
+    Data* d = Data.withBytes(&raw[0], 4);
 
     Stdio.printf("%s\n", d.hexString().cString());     // deadbeef
     Stdio.printf("%s\n", d.description().cString());    // <Data 4: deadbeef>

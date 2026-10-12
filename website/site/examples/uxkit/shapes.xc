@@ -14,9 +14,9 @@ void showBounds(u8* label, UXShapePath* p) {
 void main(void) {
     // ---- straight lines --------------------------------------------------
     UXShapePath* tri = new UXShapePath();
-    tri.moveTo((i16)10, (i16)10);
-    tri.lineTo((i16)90, (i16)10);
-    tri.lineTo((i16)50, (i16)80);
+    tri.moveTo(10, 10);
+    tri.lineTo(90, 10);
+    tri.lineTo(50, 80);
     tri.close();
 
     showBounds((u8*)"triangle: ", tri);
@@ -24,25 +24,25 @@ void main(void) {
 
     // Containment is even-odd ray casting over the edges.
     Stdio.printf("inside (50,30)=%d  outside (5,5)=%d  outside (50,90)=%d\n",
-                 tri.containsPoint((i16)50, (i16)30) ? 1 : 0,
-                 tri.containsPoint((i16)5,  (i16)5)  ? 1 : 0,
-                 tri.containsPoint((i16)50, (i16)90) ? 1 : 0);
+                 tri.containsPoint(50, 30) ? 1 : 0,
+                 tri.containsPoint(5,  5)  ? 1 : 0,
+                 tri.containsPoint(50, 90) ? 1 : 0);
 
     // A subpath is closed IMPLICITLY for containment, so the edge count is the
     // same whether or not close() was called.
     UXShapePath* open = new UXShapePath();
-    open.moveTo((i16)10, (i16)10);
-    open.lineTo((i16)90, (i16)10);
-    open.lineTo((i16)50, (i16)80);
+    open.moveTo(10, 10);
+    open.lineTo(90, 10);
+    open.lineTo(50, 80);
     showBounds((u8*)"unclosed: ", open);
     Stdio.printf("still contains (50,30): %d\n",
-                 open.containsPoint((i16)50, (i16)30) ? 1 : 0);
+                 open.containsPoint(50, 30) ? 1 : 0);
 
     // ---- curves are STORED, not flattened on the way in -------------------
     UXShapePath* blob = new UXShapePath();
-    blob.moveTo((i16)20, (i16)50);
-    blob.curveTo((i16)20, (i16)10, (i16)80, (i16)10, (i16)80, (i16)50);
-    blob.curveTo((i16)80, (i16)90, (i16)20, (i16)90, (i16)20, (i16)50);
+    blob.moveTo(20, 50);
+    blob.curveTo(20, 10, 80, 10, 80, 50);
+    blob.curveTo(80, 90, 20, 90, 20, 50);
 
     Stdio.printf("blob has curves: %d\n", blob.hasCurves() ? 1 : 0);
     showBounds((u8*)"blob:     ", blob);
@@ -57,14 +57,14 @@ void main(void) {
     // Containment on a curved path routes through the flattening, so a curve
     // behaves like the polyline that approximates it.
     Stdio.printf("blob contains (50,50)=%d  (50,5)=%d\n",
-                 blob.containsPoint((i16)50, (i16)50) ? 1 : 0,
-                 blob.containsPoint((i16)50, (i16)5)  ? 1 : 0);
+                 blob.containsPoint(50, 50) ? 1 : 0,
+                 blob.containsPoint(50, 5)  ? 1 : 0);
 
     // A quadratic is elevated to a cubic on the way in — one curve type to
     // flatten, rather than two.
     UXShapePath* q = new UXShapePath();
-    q.moveTo((i16)0, (i16)0);
-    q.quadTo((i16)50, (i16)100, (i16)100, (i16)0);
+    q.moveTo(0, 0);
+    q.quadTo(50, 100, 100, 0);
     Stdio.printf("quad became a curve: %d\n", q.hasCurves() ? 1 : 0);
     showBounds((u8*)"quad:     ", q);
 
@@ -72,33 +72,33 @@ void main(void) {
     // Even-odd fill: a hole inside a shape is a second subpath, and points in
     // the hole are OUTSIDE.
     UXShapePath* ring = new UXShapePath();
-    ring.moveTo((i16)0,   (i16)0);
-    ring.lineTo((i16)100, (i16)0);
-    ring.lineTo((i16)100, (i16)100);
-    ring.lineTo((i16)0,   (i16)100);
+    ring.moveTo(0,   0);
+    ring.lineTo(100, 0);
+    ring.lineTo(100, 100);
+    ring.lineTo(0,   100);
     ring.close();
-    ring.moveTo((i16)40, (i16)40);
-    ring.lineTo((i16)60, (i16)40);
-    ring.lineTo((i16)60, (i16)60);
-    ring.lineTo((i16)40, (i16)60);
+    ring.moveTo(40, 40);
+    ring.lineTo(60, 40);
+    ring.lineTo(60, 60);
+    ring.lineTo(40, 60);
     ring.close();
 
     showBounds((u8*)"ring:     ", ring);
     Stdio.printf("in the wall (10,50)=%d   in the hole (50,50)=%d\n",
-                 ring.containsPoint((i16)10, (i16)50) ? 1 : 0,
-                 ring.containsPoint((i16)50, (i16)50) ? 1 : 0);
+                 ring.containsPoint(10, 50) ? 1 : 0,
+                 ring.containsPoint(50, 50) ? 1 : 0);
 
     // ---- the rect shortcut ------------------------------------------------
-    UXShapePath* r = UXShapePath.rect((i16)5, (i16)5, (i16)20, (i16)10);
+    UXShapePath* r = UXShapePath.rect(5, 5, 20, 10);
     showBounds((u8*)"rect:     ", r);
 
     // ---- caps are a property of the SHAPE ---------------------------------
     UXShapePath* arrow = new UXShapePath();
-    arrow.moveTo((i16)0, (i16)0);
-    arrow.lineTo((i16)100, (i16)0);
-    arrow.setEndCap((i32)UXCAP_ARROW);
-    arrow.setCapWidth((i16)6);
-    UXShapePath* head = arrow.capOutline(false, (i16)6);
+    arrow.moveTo(0, 0);
+    arrow.lineTo(100, 0);
+    arrow.setEndCap(UXCAP_ARROW);
+    arrow.setCapWidth(6);
+    UXShapePath* head = arrow.capOutline(false, 6);
     Stdio.printf("arrowhead outline edges: %d\n",
                  head == (UXShapePath*)0 ? (i32)0 : (i32)head.edges().count());
 
@@ -106,5 +106,5 @@ void main(void) {
     UXShapePath* nothing = new UXShapePath();
     showBounds((u8*)"empty:    ", nothing);
     Stdio.printf("empty contains (0,0): %d\n",
-                 nothing.containsPoint((i16)0, (i16)0) ? 1 : 0);
+                 nothing.containsPoint(0, 0) ? 1 : 0);
 }

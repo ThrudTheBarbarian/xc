@@ -10,7 +10,7 @@ brackets:
 ```c
 Array<String>* names = new Array();
 names.add(String.withCString("ada"));
-String* first = names.get((u32)0);       // a String*, with no cast
+String* first = names.get(0);       // a String*, with no cast
 ```
 
 `Array<String>` stores and returns `String*`. The use site needs no cast, and
@@ -59,10 +59,10 @@ It gives three things. The third catches bugs:
 ```c
 Array<String>* names = new Array();
 
-String* s = names.get((u32)0);        // 1. no cast on the way out
+String* s = names.get(0);        // 1. no cast on the way out
 for (String* n in names) { … }        // 2. the loop variable is typed
 
-names.add(Number.withU32((u32)7));    // 3. error: Number is not a subclass of String
+names.add(Number.withU32(7));    // 3. error: Number is not a subclass of String
 ```
 
 A subclass is accepted wherever the superclass is expected, so an
@@ -95,15 +95,15 @@ to `((Number*)scores.get(i)).asI32()` in every position:
 
 ```c
 Array<i32>* scores = new Array();
-scores.add((i32)70);
-scores.add((i32)95);
+scores.add(70);
+scores.add(95);
 
-i32 v    = scores.get((u32)0);        // 70   declaration
-v        = scores.get((u32)1);        // 95   assignment
-i32 sum  = scores.get(i) + (i32)5;    // 75   arithmetic
-bool hit = scores.get(i) == (i32)70;  // true comparison
+i32 v    = scores.get(0);        // 70   declaration
+v        = scores.get(1);        // 95   assignment
+i32 sum  = scores.get(i) + 5;    // 75   arithmetic
+bool hit = scores.get(i) == 70;  // true comparison
 Stdio.printf("%ld\n", scores.get(i)); // 70   vararg
-i32 pick = c ? scores.get(i) : (i32)0; // 70  ternary arm
+i32 pick = c ? scores.get(i) : 0; // 70  ternary arm
 for (i32 x in scores) { … }           // 70, 95
 ```
 
@@ -192,7 +192,7 @@ class Point : Object
 {
     i32 x;
     i32 y;
-    void init(void) { x = (i32)0; y = (i32)0; }
+    void init(void) { x = 0; y = 0; }
     static Point* at(i32 px, i32 py) { Point* p = new Point(); p.x = px; p.y = py; return p; }
 
     String* description(void) { return String.withFormat("(%ld|%ld)", x, y); }
@@ -207,7 +207,7 @@ i32 main(void)
     names.add(String.withCString("edsger"));
 
     Stdio.printf("count %d, first %s\n",
-                 (i16)names.count(), names.get((u32)0).cString());
+                 (i16)names.count(), names.get(0).cString());
 
     Stdio.print("names:");
     for (String* n in names) { Stdio.printf(" %s", n.cString()); }
@@ -215,23 +215,23 @@ i32 main(void)
 
     // ---- Array of your own class ----
     Array<Point>* path = new Array();
-    path.add(Point.at((i32)0, (i32)0));
-    path.add(Point.at((i32)3, (i32)4));
+    path.add(Point.at(0, 0));
+    path.add(Point.at(3, 4));
     Stdio.printf("last %@\n", path.last());
 
     // ---- Array of a primitive ----
     // A for-in loop variable is a binding, so this reads values, not boxes.
     Array<i32>* scores = new Array();
-    scores.add((i32)70);
-    scores.add((i32)95);
-    i32 total = (i32)0;
+    scores.add(70);
+    scores.add(95);
+    i32 total = 0;
     for (i32 v in scores) { total = total + v; }
     Stdio.printf("total %ld\n", total);
 
     // ---- Map: the type argument is the VALUE type ----
     Map<Point>* places = new Map();
-    places.set(String.withCString("origin"), Point.at((i32)0, (i32)0));
-    places.set(String.withCString("corner"), Point.at((i32)9, (i32)9));
+    places.set(String.withCString("origin"), Point.at(0, 0));
+    places.set(String.withCString("corner"), Point.at(9, 9));
     Point* corner = places.get(String.withCString("corner"));
     Stdio.printf("corner %@, map holds %d\n", corner, (i16)places.count());
     Stdio.printf("missing is null: %d\n",
@@ -255,17 +255,17 @@ i32 main(void)
                  (i16)longer.byteLength(), longer.uppercased().cString());
 
     Stdio.printf("equal by value: %d, same object: %d\n",
-                 (i16)(String.withCString("ada").equals(names.get((u32)0)) ? 1 : 0),
-                 (i16)(String.withCString("ada") == names.get((u32)0) ? 1 : 0));
+                 (i16)(String.withCString("ada").equals(names.get(0)) ? 1 : 0),
+                 (i16)(String.withCString("ada") == names.get(0) ? 1 : 0));
 
     Stdio.printf("index of world: %d, prefix hello: %d, slice %s\n",
                  (i16)longer.byteIndexOf(String.withCString("world")),
                  (i16)(longer.hasPrefix(String.withCString("hello")) ? 1 : 0),
-                 longer.substringBytes((u32)7, (u32)5).cString());
+                 longer.substringBytes(7, 5).cString());
 
     Stdio.printf("i32 %s, u64 %s\n",
-                 String.withI32((i32)-42).cString(),
-                 String.withU64((u64)1099511627776).cString());
+                 String.withI32(-42).cString(),
+                 String.withU64(1099511627776).cString());
     return 0;
 }
 ```

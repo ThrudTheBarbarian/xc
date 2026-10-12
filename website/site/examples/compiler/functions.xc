@@ -34,10 +34,10 @@ u16, u16, bool minMax(u16 a, u16 b)
 // come from somewhere — here a leading argument.
 u32 sumOf(u16 count, ...)
 {
-    u32 total = (u32)0;
+    u32 total = 0;
     u8  ap;
     va_start(ap);
-    for (u16 i = (u16)0; i < count; i = i + (u16)1)
+    for (u16 i = 0; i < count; i = i + 1)
         total = total + (u32)va_arg_u16(ap);
     return total;
 }
@@ -47,8 +47,8 @@ u32 sumOf(u16 count, ...)
 // this costs no stack depth per step.
 u32 factorial(u16 n)
 {
-    if (n <= (u16)1) return (u32)1;
-    return (u32)n * factorial(n - (u16)1);
+    if (n <= 1) return 1;
+    return (u32)n * factorial(n - 1);
 }
 
 // A default-free "out parameter" is just a pointer.
@@ -67,32 +67,32 @@ i32 main(void)
 {
     // Overloads resolve on the argument types.
     Stdio.printf("area square %d, rect %d, circle %f\n",
-                 area((u16)5), area((u16)3, (u16)4), area(2.0));
+                 area(5), area(3, 4), area(2.0));
 
     // Tuple unpacking: declare the variables, then assign the call to them
     // as a parenthesised list.
     u16 q, r;
-    (q, r) = divmod((u16)17, (u16)5);
+    (q, r) = divmod(17, 5);
     Stdio.printf("17/5 = %d rem %d\n", q, r);
 
     u16 lo, hi;
     bool ordered;
-    (lo, hi, ordered) = minMax((u16)9, (u16)4);
+    (lo, hi, ordered) = minMax(9, 4);
     Stdio.printf("minMax(9,4) = %d %d ordered=%d\n",
                  lo, hi, ordered ? (u16)1 : (u16)0);
 
     // Varargs.
-    Stdio.printf("sum %ld\n", sumOf((u16)4, (u16)10, (u16)20, (u16)30, (u16)40));
+    Stdio.printf("sum %ld\n", sumOf(4, 10, 20, 30, 40));
 
     // Forwarding the whole variadic tail — the wrapper C needs a v-variant for.
-    logf("forwarded a=%d s=%s\n", (u16)222, "hi");
+    logf("forwarded a=%d s=%s\n", 222, "hi");
 
     // Recursion.
-    Stdio.printf("10! = %ld\n", factorial((u16)10));
+    Stdio.printf("10! = %ld\n", factorial(10));
 
     // Out parameter.
-    u16 counter = (u16)100;
-    bump(&counter, (u16)5);
+    u16 counter = 100;
+    bump(&counter, 5);
     Stdio.printf("counter %d\n", counter);
     return 0;
 }

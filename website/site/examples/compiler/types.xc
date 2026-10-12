@@ -7,20 +7,20 @@ i32 main(void)
     // Widths are in the name. i = signed, u = unsigned.
     //   i8/u8  i16/u16  i32/u32  i64/u64   bool   float   double
     // `string` is an alias for u8*.
-    u8  small = (u8)200;
-    u16 mid   = (u16)60000;
-    i32 wide  = (i32)-100000;
+    u8  small = 200;
+    u16 mid   = 60000;
+    i32 wide  = -100000;
     u64 huge  = (u64)1 << (u64)40;      // 64-bit works on every target
     // printf follows C: a narrower integer is passed as an int, and with a
     // literal format the compiler sizes each conversion to its argument, so
     // plain %d prints every one of these whole.
     Stdio.printf("u8=%d u16=%d (as i32 %d) i32=%d\n", small, mid, (i32)mid, wide);
-    Stdio.printf("2^40 = %ld:%ld (hi:lo)\n", (u32)(huge >> (u64)32), (u32)huge);
+    Stdio.printf("2^40 = %ld:%ld (hi:lo)\n", (u32)(huge >> 32), (u32)huge);
 
     // Same-width arithmetic stays at that width: u8 + u8 wraps at 8 bits, so
     // 200 + 100 is 44 rather than 300. There is no C-style "promote everything
     // to int" step.
-    u8 a = (u8)200, b = (u8)100;
+    u8 a = 200, b = 100;
     u8  wrapped = a + b;                 // 300 & 0xFF = 44
     // Widening the DESTINATION does not help — `u16 w = a + b;` is still a u8
     // add, and still 44. To get the true sum, widen the OPERANDS.
@@ -34,10 +34,10 @@ i32 main(void)
     Stdio.printf("hex=%ld bin=%d big=%ld\n", (i32)hex, (u16)bin, big);
 
     // Pointers use *, & takes an address, -> is sugar for (*p).field.
-    u16 value = (u16)1234;
+    u16 value = 1234;
     u16* p = &value;
     Stdio.printf("*p = %d\n", *p);
-    *p = (u16)4321;
+    *p = 4321;
     Stdio.printf("value now %d\n", value);
 
     // The sigil binds to the TYPE, so this declares TWO pointers — unlike C,

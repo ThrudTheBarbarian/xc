@@ -98,7 +98,7 @@ void mouseDown(UXEvent* e) {
     pb.writeText(self.label());
     UXDragSession* s = UXDragSession.begin((Object*)self, pb, UX_DRAG_COPY);
 
-    i32 x = (i32)e.x; i32 y = (i32)e.y;
+    i32 x = e.x; i32 y = e.y;
     while (gDriver.trackDragStep(&x, &y) != 0) {
         well.hot = self.over(well, x, y) && (s.enter(well) != UX_DRAG_NONE);
         self.setNeedsDisplay();

@@ -22,7 +22,7 @@ table uses.
 
 ```c
 UXCollectionView* grid = new UXCollectionView();
-for (i32 i = (i32)0; i < docs.count(); i = i + (i32)1) {
+for (i32 i = 0; i < docs.count(); i = i + 1) {
     grid.addItem(docs.get(i), docs.nameAt(i));
 }
 grid.setAction(&controller.onPick);
@@ -255,11 +255,11 @@ content.addSubview(sv, UXGeom.make(8, 8, 400, 260));
 UXCollectionView* grid = new UXCollectionView();
 grid.setItemSize(72, 72);
 grid.setSpacing(20, 20);
-for (i32 i = (i32)0; i < images.count(); i = i + (i32)1) {
+for (i32 i = 0; i < images.count(); i = i + 1) {
     grid.addItem(images.get(i), images.nameAt(i));
 }
 grid.setAction(&controller.onPick);
 i32 h = grid.contentHeightFor(400);
-sv.document().addSubview(grid, UXGeom.make(0, 0, 400, (i16)h));
+sv.document().addSubview(grid, UXGeom.make(0, 0, 400, h));
 sv.setDocumentHeight(h);
 ```

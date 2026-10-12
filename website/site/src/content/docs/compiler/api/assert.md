@@ -94,8 +94,8 @@ static void isNotEqual(u32 a, u32 b)
 Asserts `a != b`.
 
 ```c
-Assert.isEqual(counter, (u16)42);
-Assert.isEqual(timestamp, (u32)1234567);
+Assert.isEqual(counter, 42);
+Assert.isEqual(timestamp, 1234567);
 Assert.isNotEqual(scoreA, scoreB);
 ```
 
@@ -143,8 +143,8 @@ static void isGreater(u16 a, u16 b)
 Asserts `a > b`.
 
 ```c
-Assert.isInRange(angle, (u16)0, (u16)360);
-Assert.isLess(elapsed, (u16)budget);
+Assert.isInRange(angle, 0, 360);
+Assert.isLess(elapsed, budget);
 ```
 
 [↑ Topics](#topics)
@@ -166,8 +166,8 @@ Zeroes both the test and failure counters.
 
 ```c
 void main(void) {
-    Assert.isEqual(1 + 2, (u16)3);
-    Assert.isInRange((u16)50, (u16)0, (u16)100);
+    Assert.isEqual(1 + 2, 3);
+    Assert.isInRange(50, 0, 100);
     Assert.isNotNull("abc");
     Assert.summary();                // DONE 3
 }

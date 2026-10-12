@@ -34,8 +34,8 @@ toolkit window at `y=0` already sits in the safe area on every backend, and
 // a form row, sized to the current realm's standards:
 UXButton* ok = new UXButton();
 ok.setTitle((u8*)"OK");
-content.addSubview(ok, UXMetrics.stdFrame((i32)UXKindButton, 8, y, 0));
-y = y + UXMetrics.stdHeight((i32)UXKindButton) + UXMetrics.rowSpacing();
+content.addSubview(ok, UXMetrics.stdFrame(UXKindButton, 8, y, 0));
+y = y + UXMetrics.stdHeight(UXKindButton) + UXMetrics.rowSpacing();
 ```
 
 The pure `...For(kind, ff)` forms are the unit-testable source of the values

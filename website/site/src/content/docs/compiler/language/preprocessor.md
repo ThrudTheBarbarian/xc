@@ -116,7 +116,7 @@ so one line replaces two:
 
 void main(void) {
     printf("answer = %u\n", 42);    // Stdio.printf
-    u8 r = rand((u8)100);           // Math.rand
+    u8 r = rand(100);           // Math.rand
 }
 ```
 

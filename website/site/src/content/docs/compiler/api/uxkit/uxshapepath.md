@@ -162,9 +162,9 @@ join straight through (`NSLineJoinStyle`, `PS_JOIN_*`, `kCGLineJoin*`).
 
 ```c
 i32 pat[2];
-pat[0] = (i32)8;
-pat[1] = (i32)8;
-outline.setDash(&pat[0], (i32)2, (i32)0);   // 8 on, 8 off, starting at the run's start
+pat[0] = 8;
+pat[1] = 8;
+outline.setDash(&pat[0], 2, 0);   // 8 on, 8 off, starting at the run's start
 ```
 
 An on/off run in whole **device pixels** plus a phase — how far into the run

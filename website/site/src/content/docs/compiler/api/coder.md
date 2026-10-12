@@ -18,7 +18,7 @@ To archive, pass the root object to [`archive`](#archive) or
 [`unarchive`](#unarchive) or [`unarchiveJSON`](#unarchivejson):
 
 ```c
-Data* blob = Coder.archive(root, (u8)6);         // gzip, level 6
+Data* blob = Coder.archive(root, 6);         // gzip, level 6
 try {
     Point* back = (Point* ?)Coder.unarchive(blob);
     ...

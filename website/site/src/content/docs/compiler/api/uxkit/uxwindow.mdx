@@ -265,7 +265,7 @@ image is at the window's own size in points, whatever the screen's scale.
 
 ```c
 UXImage* whole = win.snapshot((UXRect*)0);
-UXRect map = UXGeom.make((i16)0, (i16)40, (i16)1280, (i16)792);
+UXRect map = UXGeom.make(0, 40, 1280, 792);
 UXImage* part = win.snapshot(&map);
 movie.add(part);                      // UXMovie
 ```

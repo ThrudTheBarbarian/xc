@@ -27,9 +27,9 @@ are kept by the string and ignored when drawing. From 0.72.
 
 ```c
 AttributedString* s = AttributedString.withString(String.withCString("The quick fox"));
-UXTextStyle.setBold(s, true, (i32)4, (i32)5);    // "quick"
-UXTextStyle.setPen(s, (i32)2, (i32)10, (i32)3);  // "fox" in red
-UXTextStyle* st = UXTextStyle.at(s, (i32)4);     // st.bold is true
+UXTextStyle.setBold(s, true, 4, 5);    // "quick"
+UXTextStyle.setPen(s, 2, 10, 3);  // "fox" in red
+UXTextStyle* st = UXTextStyle.at(s, 4);     // st.bold is true
 ```
 
 [`UXTextLayout`](/compiler/api/uxkit/uxtextlayout/) measures and wraps each run

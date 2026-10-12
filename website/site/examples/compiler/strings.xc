@@ -14,13 +14,13 @@ i32 main(void)
 
     // Byte in the name = byte semantics; Char = code points.
     Stdio.printf("byteAt(1) %X, charAt(1) U+%04X\n",
-                 s.byteAt((u32)1), s.charAt((u32)1));
+                 s.byteAt(1), s.charAt(1));
 
     Stdio.printf("slice chars '%s'\n",
-                 s.substringChars((u32)1, (u32)2).cString());
+                 s.substringChars(1, 2).cString());
 
     // Walking characters by byte index — no O(n^2) charAt loop.
-    u32 i = (u32)0;
+    u32 i = 0;
     while (i < s.byteLength()) {
         Stdio.printf("U+%04X ", s.charAtByte(i));
         i = s.nextCharByte(i);
@@ -38,8 +38,8 @@ i32 main(void)
 
     // Other encodings transcode at the edge; inside it is always UTF-8.
     u8 latin[3];
-    latin[0] = (u8)'c'; latin[1] = (u8)$E9; latin[2] = (u8)'!';   // "cé!" in Latin-1
-    String* dec = String.withEncodedBytes(&latin[0], (u32)3, ENC_LATIN1);
+    latin[0] = 'c'; latin[1] = (u8)$E9; latin[2] = '!';   // "cé!" in Latin-1
+    String* dec = String.withEncodedBytes(&latin[0], 3, ENC_LATIN1);
     Stdio.printf("latin-1 in: '%s' (%d bytes)\n",
                  dec.cString(), (i16)dec.byteLength());
 

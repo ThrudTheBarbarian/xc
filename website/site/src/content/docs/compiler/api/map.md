@@ -242,9 +242,9 @@ calls it when the last reference goes away; you do not call it directly.
 i32 main(void)
 {
     Map* m = new Map();
-    m.set(String.withCString("one"),   Number.with((i32)1));
-    m.set(String.withCString("two"),   Number.with((i32)2));
-    m.set(String.withCString("three"), Number.with((i32)3));
+    m.set(String.withCString("one"),   Number.with(1));
+    m.set(String.withCString("two"),   Number.with(2));
+    m.set(String.withCString("three"), Number.with(3));
 
     for (Object* k in m) {              // keys, in insertion order
         String* key = (String*)k;

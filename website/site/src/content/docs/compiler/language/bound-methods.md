@@ -16,7 +16,7 @@ the receiver travels with it.
 ```c
 Counter* c = new Counter();
 callback h void(i32 value) = &c.accumulate;   // receiver + code, in one value
-h((i32)10);                                   // calls c.accumulate(10)
+h(10);                                   // calls c.accumulate(10)
 ```
 
 This is the only callback mechanism in xcc. There is no `void*` context
@@ -99,8 +99,8 @@ and compare unequal:
 ```c
 callback hc void(i32 value) = &c.accumulate;
 callback hd void(i32 value) = &d.accumulate;
-hc((i32)1);                     // updates c
-hd((i32)100);                   // updates d
+hc(1);                     // updates c
+hd(100);                   // updates d
 hc == hd                        // false
 ```
 
@@ -163,7 +163,7 @@ i32 productOf(i32 a, i32 b) { return a * b; }
 class Counter : Object
 {
     i32 total;
-    void init(void) { total = (i32)0; }
+    void init(void) { total = 0; }
     void accumulate(i32 v) { total = total + v; }
     void announce(i32 v) { Stdio.printf("  %s got %ld\n", "counter", v); }
 }
@@ -191,7 +191,7 @@ class Button : Object
 i32 reduce(i32* xs, u32 n, i32 seed, callback f i32(i32 a, i32 b))
 {
     i32 acc = seed;
-    for (u32 i = (u32)0; i < n; i = i + (u32)1) { acc = f(acc, xs[i]); }
+    for (u32 i = 0; i < n; i = i + 1) { acc = f(acc, xs[i]); }
     return acc;
 }
 
@@ -200,32 +200,32 @@ i32 main(void)
     Stdio.print("bound to an object:\n");
     Counter* c = new Counter();
     callback h void(i32 value) = &c.accumulate;
-    h((i32)10);
-    h((i32)32);
+    h(10);
+    h(32);
     Stdio.printf("  total %ld\n", c.total);
 
     Stdio.print("a free function widens into the same type:\n");
     h = &logIt;
-    h((i32)7);
+    h(7);
 
     Stdio.print("stored as a field, fired later:\n");
     Button* ok = Button.named("ok");
     Button* mute = Button.named("mute");
     ok.action = &c.announce;
-    ok.click((i32)99);
-    mute.click((i32)99);             // never assigned — guarded, not a crash
+    ok.click(99);
+    mute.click(99);             // never assigned — guarded, not a crash
 
     Stdio.print("passed as a parameter:\n");
     i32 xs[4];
-    xs[0] = (i32)1; xs[1] = (i32)2; xs[2] = (i32)3; xs[3] = (i32)4;
+    xs[0] = 1; xs[1] = 2; xs[2] = 3; xs[3] = 4;
     Stdio.printf("  sum %ld, product %ld\n",
-                 reduce(&xs[0], (u32)4, (i32)0, &sumOf),
-                 reduce(&xs[0], (u32)4, (i32)1, &productOf));
+                 reduce(&xs[0], 4, 0, &sumOf),
+                 reduce(&xs[0], 4, 1, &productOf));
 
     Counter* d = new Counter();
     callback hc void(i32 value) = &c.accumulate;
     callback hd void(i32 value) = &d.accumulate;
-    hc((i32)1); hd((i32)100);
+    hc(1); hd(100);
     Stdio.printf("  c=%ld d=%ld same? %d\n",
                  c.total, d.total, (i16)(hc == hd ? 1 : 0));
     return 0;

@@ -17,7 +17,7 @@ try
     {
     Regex* re = Regex.compile(String.withCString("(\\w+)@(\\w+)\\.com"));
     RegexMatch* m = re.firstMatch(String.withCString("mail ada@example.com now"));
-    m.group((u32)1);                     // "ada"
+    m.group(1);                     // "ada"
     re.replace(String.withCString("ada@example.com"), String.withCString("$2: $1"));
                                          // "example: ada"
     }

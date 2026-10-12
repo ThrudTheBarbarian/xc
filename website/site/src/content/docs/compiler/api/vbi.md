@@ -53,7 +53,7 @@ volatile u8* COLBK = (u8*)$D01A;    // background colour register
 
 void rainbow(void) :vbi
 {
-    *COLBK = *COLBK + (u8)1;         // change border colour every frame
+    *COLBK = *COLBK + 1;         // change border colour every frame
 }
 
 void main(void)

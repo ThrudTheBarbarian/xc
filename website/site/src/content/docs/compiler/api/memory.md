@@ -12,7 +12,7 @@ and cast:
 #import <Memory.xc>
 
 u8 screen[960];
-Memory.memclr((u16)&screen[0], (u16)960);
+Memory.memclr((u16)&screen[0], 960);
 ```
 
 ## Overview

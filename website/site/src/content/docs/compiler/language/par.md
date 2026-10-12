@@ -13,13 +13,13 @@ loop.
 #import "Par.xc"
 
 u32 a[100000];
-u32 sum = (u32)0;
-u32 best = (u32)0;
+u32 sum = 0;
+u32 best = 0;
 par fill :reduce(+ sum) :reduce(max best)
     {
     for (u32 i in 0..100000)
         {
-        a[i] = (i * (u32)3) % (u32)1000;
+        a[i] = (i * 3) % 1000;
         sum = sum + a[i];
         if (a[i] > best)
             best = a[i];

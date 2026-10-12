@@ -40,34 +40,34 @@ class Controller : Object <UXApplicationDelegate, UXTableDataSource,
     void init(void) { tracks = new Array(); }
 
     // ---- UXTableDataSource: two methods, and that is the whole contract ----
-    i32 numberOfRows(UXTableView* t) { return (i32)tracks.count(); }
+    i32 numberOfRows(UXTableView* t) { return tracks.count(); }
 
     u8* valueForCell(UXTableView* t, i32 row, i32 col) {
-        Track* tr = (Track* ?)tracks.get((u16)row);
+        Track* tr = (Track* ?)tracks.get(row);
         if (col == 0) { return tr.name; }
         if (col == 1) { return tr.artist; }
         // Column 2 is a number, and a cell returns TEXT — so format it here.
         i32 v = tr.mins; i32 i = 0;
-        if (v >= 10) { buf[i] = (u8)(48 + v / 10); i = i + 1; }
-        buf[i] = (u8)(48 + v % 10); i = i + 1;
-        buf[i] = (u8)0;
+        if (v >= 10) { buf[i] = 48 + v / 10; i = i + 1; }
+        buf[i] = 48 + v % 10; i = i + 1;
+        buf[i] = 0;
         return &buf[0];
     }
 
     // ---- UXTableDelegate: optional, so the table works without it ---------
     void tableSelectionDidChange(UXTableView* t, i32 row) {
         if (row < 0) { status.setText((u8*)"nothing selected"); return; }
-        status.setText(((Track* ?)tracks.get((u16)row)).name);
+        status.setText(((Track* ?)tracks.get(row)).name);
     }
 
     // ---- UXOutlineDataSource: a TREE, addressed by item not by index ------
     i32 numberOfChildren(UXOutlineView* o, Object* item) {
         Node* n = item == (Object*)0 ? root : (Node* ?)item;
-        return (i32)n.kids.count();
+        return n.kids.count();
     }
     Object* childOfItem(UXOutlineView* o, Object* item, i32 i) {
         Node* n = item == (Object*)0 ? root : (Node* ?)item;
-        return (Object*)((Node* ?)n.kids.get((u16)i));
+        return (Object*)((Node* ?)n.kids.get(i));
     }
     bool isExpandable(UXOutlineView* o, Object* item) {
         Node* n = item == (Object*)0 ? root : (Node* ?)item;

@@ -17,14 +17,14 @@ wants. **From 0.72.**
 
 ```c
 IndexSet* rows = new IndexSet();
-rows.addRange(Range.make((i32)3, (i32)3));   // 3, 4, 5
-rows.addIndex((i32)9);
-rows.addIndex((i32)10);
+rows.addRange(Range.make(3, 3));   // 3, 4, 5
+rows.addIndex(9);
+rows.addIndex(10);
 rows.count();                  // 5
 rows.rangeCount();             // 2: [3,6) and [9,11)
 Stdio.printf("%@\n", rows);    // (3-5, 9-10)
 
-rows.shiftIndexes((i32)4, (i32)2);   // two rows inserted at 4: (3, 6-7, 11-12)
+rows.shiftIndexes(4, 2);   // two rows inserted at 4: (3, 6-7, 11-12)
 ```
 
 Finding the range for an index is a binary search. Indexes are `i32` and at

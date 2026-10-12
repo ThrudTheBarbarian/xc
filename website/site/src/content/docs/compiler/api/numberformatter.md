@@ -16,7 +16,7 @@ and reads such text back (`NSNumberFormatter` in shape): `1234567` as
 
 ```c
 NumberFormatter* f = NumberFormatter.decimal();
-f.format(Number.withI64((i64)1234567));                                   // "1,234,567"
+f.format(Number.withI64(1234567));                                   // "1,234,567"
 NumberFormatter.currency(String.withCString("$")).format(Number.withDouble(1299.5d));  // "$1,299.50"
 NumberFormatter.percent().format(Number.withDouble(0.256d));              // "26%"
 ```

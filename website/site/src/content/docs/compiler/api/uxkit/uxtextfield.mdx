@@ -222,6 +222,6 @@ port.setOnChange(&controller.onPortEdited);
 content.addSubview(port, UXGeom.make(8, 8, 80, 24));
 
 void onPortEdited(UXTextField* sender) {
-    apply.setEnabled(sender.text()[(i32)0] != (u8)0);
+    apply.setEnabled(sender.text()[0] != 0);
 }
 ```

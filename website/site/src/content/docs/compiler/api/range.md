@@ -16,10 +16,10 @@ of styled characters are each a list of ranges. **From 0.72.**
 ## Overview
 
 ```c
-Range* r = Range.make((i32)3, (i32)4);       // [3, 7)
-r.contains((i32)3);                          // true
-r.contains((i32)7);                          // false: end() is not in the range
-Range* both = r.intersection(Range.make((i32)5, (i32)10));   // [5, 7)
+Range* r = Range.make(3, 4);       // [3, 7)
+r.contains(3);                          // true
+r.contains(7);                          // false: end() is not in the range
+Range* both = r.intersection(Range.make(5, 10));   // [5, 7)
 ```
 
 **Half-open is the contract.** `loc` is in the range and [`end`](#end) is not.

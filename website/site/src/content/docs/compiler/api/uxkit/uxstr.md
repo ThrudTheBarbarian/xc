@@ -18,9 +18,9 @@ application would otherwise write this code, so it lives here.
 
 ```c
 UXStr.append((u8*)"Zoom: ", UXStr.fromInt(150));    // "Zoom: 150"
-UXStr.cat((u8*)"Ada", (u8)' ', (u8*)"Lovelace");    // "Ada Lovelace"
+UXStr.cat((u8*)"Ada", ' ', (u8*)"Lovelace");    // "Ada Lovelace"
 UXStr.toInt((u8*)"  -17px");                        // -17
-UXStr.fromHex((u32)0xDEADBEEF);                     // "deadbeef"
+UXStr.fromHex(0xDEADBEEF);                     // "deadbeef"
 ```
 
 All methods are static and return fresh buffers.
@@ -31,9 +31,9 @@ This rule is why the method has three arguments instead of two:
 
 ```c
 u8* list = (u8*)"";
-list = UXStr.cat(list, (u8)',', (u8*)"red");      // "red"       — no leading comma
-list = UXStr.cat(list, (u8)',', (u8*)"green");    // "red,green"
-list = UXStr.cat(list, (u8)',', (u8*)"blue");     // "red,green,blue"
+list = UXStr.cat(list, ',', (u8*)"red");      // "red"       — no leading comma
+list = UXStr.cat(list, ',', (u8*)"green");    // "red,green"
+list = UXStr.cat(list, ',', (u8*)"blue");     // "red,green,blue"
 ```
 
 Accumulating a separated list needs **no "is this the first one" test**, the

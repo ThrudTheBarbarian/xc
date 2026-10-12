@@ -60,7 +60,7 @@ containing an `i64` lays out identically everywhere.
   (`u8 + u16` → `u16`). To get a wider result, widen the operands:
 
 ```c
-u8 a = (u8)200, b = (u8)100;
+u8 a = 200, b = 100;
 u8  narrow = a + b;                  // 44  — 300 & 0xFF
 u16 wide   = a + b;                  // 44  — STILL a u8 add
 u16 real   = (u16)a + (u16)b;        // 300 — widen the OPERANDS
@@ -185,10 +185,10 @@ there is no map entry to answer from. It never yields a wrong number.
 Pointer syntax uses `*`, as C does. `&` takes an address, and `*` dereferences:
 
 ```c
-u16  value = (u16)1234;
+u16  value = 1234;
 u16* p = &value;
 u16  v = *p;                  // load
-*p = (u16)4321;               // store
+*p = 4321;               // store
 ```
 
 :::caution[The sigil binds to the TYPE]
@@ -226,7 +226,7 @@ Passing an `i32*` where an `i64*` is declared would let the callee write eight
 bytes into four, so it is an error:
 
 ```c
-void wide(i64* out) { out[0] = (i64)1; }
+void wide(i64* out) { out[0] = 1; }
 
 i32 narrow = 0;
 wide(&narrow);                // error: argument 1 of 'wide' is a i32* where a i64* is declared
@@ -240,7 +240,7 @@ A hardware register is a pointer to a fixed address, reached by casting:
 
 ```c
 volatile u8* COLBK = (u8*)$D01A;
-*COLBK = *COLBK + (u8)1;      // both accesses happen even at -O3 (volatile)
+*COLBK = *COLBK + 1;      // both accesses happen even at -O3 (volatile)
 ```
 
 ### The null pointer: `nil`
@@ -349,19 +349,19 @@ optional methods are covered on
 
 i32 main(void)
 {
-    u8  small = (u8)200;
-    u16 mid   = (u16)60000;
-    i32 wide  = (i32)-100000;
+    u8  small = 200;
+    u16 mid   = 60000;
+    i32 wide  = -100000;
     u64 huge  = (u64)1 << (u64)40;
 
     // printf follows C: a narrower integer is passed as an int, and with a
     // literal format the compiler sizes each conversion to its argument, so
     // plain %d prints every one of these whole.
     Stdio.printf("u8=%d u16=%d (as i32 %d) i32=%d\n", small, mid, (i32)mid, wide);
-    Stdio.printf("2^40 = %ld:%ld (hi:lo)\n", (u32)(huge >> (u64)32), (u32)huge);
+    Stdio.printf("2^40 = %ld:%ld (hi:lo)\n", (u32)(huge >> 32), (u32)huge);
 
     // Same-width arithmetic stays at that width.
-    u8 a = (u8)200, b = (u8)100;
+    u8 a = 200, b = 100;
     u8  wrapped = a + b;                 // 300 & 0xFF = 44
     // Widening the DESTINATION does not help — `u16 w = a + b;` is still a u8
     // add, and still 44. To get the true sum, widen the OPERANDS.
@@ -375,10 +375,10 @@ i32 main(void)
     Stdio.printf("hex=%ld bin=%d big=%ld\n", (i32)hex, (u16)bin, big);
 
     // Pointers use *, & takes an address.
-    u16 value = (u16)1234;
+    u16 value = 1234;
     u16* p = &value;
     Stdio.printf("*p = %d\n", *p);
-    *p = (u16)4321;
+    *p = 4321;
     Stdio.printf("value now %d\n", value);
 
     // The sigil binds to the TYPE, so this declares TWO pointers.

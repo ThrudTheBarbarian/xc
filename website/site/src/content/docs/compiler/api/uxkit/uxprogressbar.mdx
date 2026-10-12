@@ -136,7 +136,7 @@ UXProgress* p = new UXProgress();
 p.setTotal(steps);
 bar.setProgress(p);
 
-for (i32 i = (i32)0; i < steps; i = i + (i32)1) {
+for (i32 i = 0; i < steps; i = i + 1) {
     doStep(i);
     p.incrementBy(1);
     bar.setNeedsDisplay();

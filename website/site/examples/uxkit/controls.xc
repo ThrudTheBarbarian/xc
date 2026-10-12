@@ -38,7 +38,7 @@ class Panel : Object <UXApplicationDelegate>
 
     void onLevel(UXControl* sender) {
         // The BAR shows a MODEL: move the model, the bar follows.
-        work.setCompletedUnitCount((i64)(level.value));
+        work.setCompletedUnitCount(level.value);
         bar.setNeedsDisplay();
     }
 
@@ -78,8 +78,8 @@ class Panel : Object <UXApplicationDelegate>
         content.addSubview(level, UXGeom.make(12, 142, 180, 22));
 
         work = new Progress();
-        work.setTotalUnitCount((i64)(100));
-        work.setCompletedUnitCount((i64)(40));
+        work.setTotalUnitCount(100);
+        work.setCompletedUnitCount(40);
         bar = new UXProgressBar();
         bar.setProgress(work);
         content.addSubview(bar, UXGeom.make(12, 172, 180, 16));

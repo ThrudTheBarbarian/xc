@@ -178,6 +178,6 @@ A tag entry that completes against the known set:
 ```c
 void onTagKey(UXTextField* sender) {
     combo.setText(sender.text());
-    hint.setText(combo.matchCount() > (i32)0 ? combo.completion() : (u8*)"");
+    hint.setText(combo.matchCount() > 0 ? combo.completion() : (u8*)"");
 }
 ```

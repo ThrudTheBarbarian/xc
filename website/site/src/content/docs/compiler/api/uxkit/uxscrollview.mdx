@@ -240,9 +240,9 @@ every scroll:
 ```c
 void revealRow(i32 row) {
     i32 y = row * rowH;
-    if (y < sv.scrollPx()) { sv.scrollTo((i16)y); }
+    if (y < sv.scrollPx()) { sv.scrollTo(y); }
     else if (y + rowH > sv.scrollPx() + sv.viewportPx()) {
-        sv.scrollTo((i16)(y + rowH - sv.viewportPx()));
+        sv.scrollTo(y + rowH - sv.viewportPx());
     }
 }
 ```

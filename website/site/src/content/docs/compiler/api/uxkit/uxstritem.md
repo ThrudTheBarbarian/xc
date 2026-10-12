@@ -38,7 +38,7 @@ static Array<UXStrItem>* split(u8* s, u8 delim)
 common loop never names the type:
 
 ```c
-Array<UXStrItem>* parts = UXText.split(line, (u8)',');
+Array<UXStrItem>* parts = UXText.split(line, ',');
 for (i32 i = 0; i < (i32)parts.count(); i = i + 1) {
     Stdio.printf("  [%s]\n", UXText.partAt(parts, i));
 }

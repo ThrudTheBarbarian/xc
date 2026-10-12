@@ -31,9 +31,9 @@ Define your own with that signature:
 
 ```c
 i16 ascending(u16 a, u16 b) {
-    if (a < b) { return (i16)-1; }
-    if (a > b) { return (i16)1; }
-    return (i16)0;
+    if (a < b) { return -1; }
+    if (a > b) { return 1; }
+    return 0;
 }
 
 i16 descending(u16 a, u16 b) { return ascending(b, a); }
@@ -67,7 +67,7 @@ fewer than two elements return immediately.
 ```c
 void main(void) {
     u16 arr[8] = {7, 2, 9, 1, 5, 8, 3, 6};
-    Sort.qsort(arr, (u16)8, &ascending);
+    Sort.qsort(arr, 8, &ascending);
     for (u16 v in arr) {
         Stdio.printf("%u ", v);
     }
@@ -98,7 +98,7 @@ and at the default `-O3`:
 u16 g[4] = {4, 1, 3, 2};
 
 void main(void) {
-    Sort.qsort(g, (u16)4, &ascending);   // 1 2 3 4
+    Sort.qsort(g, 4, &ascending);   // 1 2 3 4
 }
 ```
 
