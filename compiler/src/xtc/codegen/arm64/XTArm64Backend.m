@@ -96,6 +96,10 @@
 // the ICmp's emit is skipped and the branch emits `cmp …; b.<cond>` directly
 // (instead of materialising a 0/1 bool and a `cbnz`).
 @property (nonatomic) NSMutableSet<NSNumber *> *fusedCmps;
+// A short-circuit `&&`: the And's result value -> its two comparisons. The And
+// and both comparisons are never materialised; the branch emits each comparison
+// and jumps to the FALSE edge on its inverse.
+@property (nonatomic) NSMutableDictionary<NSNumber *, NSArray<XTIRInsn *> *> *fusedAnds;
 // SIMD: vector value-id → NEON v-register name ("v0".."v15"). Assigned on first
 // def in definition order; vector values are produced and consumed within a
 // single straight-line vectorized loop body (no cross-iteration/-call vector
@@ -1157,6 +1161,14 @@ static const NSUInteger kArm64VaForwardWords = 16;
                 [ctx.fusedCmps containsObject:@(insn.operands[0].valueId)]) {
                 XTIRInsn *icmp = ctx.defOf[@(insn.operands[0].valueId)];
                 if (icmp) for (XTIROperand *o in icmp.operands) recordUse(o);
+            }
+            // And the same for a fused short-circuit `&&`: both comparisons are
+            // emitted at the branch, so THEIR operands are read there too.
+            if (insn.opcode == XTIROpCondBranch && insn.operands.count >= 1 &&
+                insn.operands[0].kind == XTIROperandKindUse &&
+                ctx.fusedAnds[@(insn.operands[0].valueId)]) {
+                for (XTIRInsn *d in ctx.fusedAnds[@(insn.operands[0].valueId)])
+                    for (XTIROperand *o in d.operands) recordUse(o);
             }
         };
         for (XTIRInsn *insn in b.instructions) {
@@ -2983,6 +2995,26 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
 // condition it leaves in the flags. A fused FCmp (its only reader a branch or a
 // select in the same block) is emitted HERE instead of at its own site, so the
 // reader can branch or select on the flags directly.
+// The AArch64 condition that holds when `cc` does NOT: what a `b.` needs to
+// branch the other way. A FLAG inversion, not a relation inversion — which is
+// what a short-circuit `&&` needs, and why `mi`/`pl` and `ls`/`hi` (the float
+// pairs) are not the obvious ones.
++ (NSString *)invertCond:(NSString *)cc {
+    if ([cc isEqualToString:@"eq"]) return @"ne";
+    if ([cc isEqualToString:@"ne"]) return @"eq";
+    if ([cc isEqualToString:@"mi"]) return @"pl";
+    if ([cc isEqualToString:@"pl"]) return @"mi";
+    if ([cc isEqualToString:@"gt"]) return @"le";
+    if ([cc isEqualToString:@"le"]) return @"gt";
+    if ([cc isEqualToString:@"ls"]) return @"hi";
+    if ([cc isEqualToString:@"hi"]) return @"ls";
+    if ([cc isEqualToString:@"ge"]) return @"lt";
+    if ([cc isEqualToString:@"lt"]) return @"ge";
+    if ([cc isEqualToString:@"lo"]) return @"hs";
+    if ([cc isEqualToString:@"hs"]) return @"lo";
+    return @"eq";
+}
+
 + (NSString *)emitCompareForFCmp:(XTIRInsn *)insn ctx:(XTArm64FnCtx *)ctx {    XTIRValue *av = [ctx.fn valueForId:insn.operands[0].valueId];
     NSString *s0 = [self fregName:0 forType:av.type];
     NSString *s1 = [self fregName:1 forType:av.type];
@@ -3023,6 +3055,11 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
 // Only fuses when the consumed intermediates have a single use.
 + (void)computeFusionsForCtx:(XTArm64FnCtx *)ctx {
     ctx.fusedAway = [NSMutableSet set];
+    // The And of a fused short-circuit && is not materialised either. The
+    // decision is made in computeAddrFoldForCtx, because the liveness pass --
+    // which must extend both comparisons' operands to the branch -- runs BEFORE
+    // this one; this pass owns fusedAway, so the skip lands here.
+    for (NSNumber *av in ctx.fusedAnds) [ctx.fusedAway addObject:av];
     ctx.fuseAt = [NSMutableDictionary dictionary];
     XTIRFunction *fn = ctx.fn;
 
@@ -3267,6 +3304,7 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
             prev = insn;
         }
     }
+
 }
 
 // The element stride for an ElementAddr (arm64-native: 8-byte host pointers,
@@ -3336,6 +3374,40 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
 
     // A single-use ICmp feeding its own block's CondBranch fuses into the branch.
     ctx.fusedCmps = [NSMutableSet set];
+    // A short-circuit `&&` fuses as well. If-conversion turns `if (a && b)` into
+    // `And(c1, c2)` — which is the shape of every `while (i < n && a[i] != x)`,
+    // mandelbrot's escape header included — and the And is then materialised
+    // with `and`/`uxtb` and tested with `cmp #0` on top of both comparisons'
+    // own `cset`s. Decided HERE, not at the branch: emission runs in program
+    // order, so the And and both `cset`s are already out by the time the branch
+    // is reached, and marking them there leaves the whole chain in place beside
+    // the fused branches.
+    ctx.fusedAnds = [NSMutableDictionary dictionary];
+    for (XTIRBlock *bb in fn.blocks) {
+        XTIRInsn *t = bb.terminator;
+        if (!t || t.opcode != XTIROpCondBranch || t.operands.count < 3) continue;
+        if (t.operands[0].kind != XTIROperandKindUse) continue;
+        NSNumber *av = @(t.operands[0].valueId);
+        XTIRInsn *an = defOf[av];
+        if (!an || an.opcode != XTIROpAnd || !an.result) continue;
+        if ([ctx.fn valueForId:an.result.valueId].type.kind != XTIRTypeKindBool) continue;
+        if (![bb.instructions containsObject:an]) continue;
+        if ([uses countForObject:av] != 1) continue;
+        if (an.operands.count < 2) continue;
+        NSMutableArray<XTIRInsn *> *both = [NSMutableArray array];
+        for (XTIROperand *o in an.operands) {
+            if (o.kind != XTIROperandKindUse) { [both removeAllObjects]; break; }
+            XTIRInsn *d = defOf[@(o.valueId)];
+            if (!d || (d.opcode != XTIROpICmp && d.opcode != XTIROpFCmp) || !d.result ||
+                ![bb.instructions containsObject:d] ||
+                [uses countForObject:@(o.valueId)] != 1) { [both removeAllObjects]; break; }
+            [both addObject:d];
+        }
+        if (both.count != 2) continue;
+        ctx.fusedAnds[av] = both;
+        for (XTIRInsn *d in both) [ctx.fusedCmps addObject:@(d.result.valueId)];
+        [ctx.fusedAway addObject:@(an.result.valueId)];
+    }
     // A comparison whose readers are ALL the condition operand of a CondBranch
     // or a Select in its own block is never materialised: each reader emits the
     // `cmp`/`fcmp` itself and consumes the flags. Every other Bool is built 0/1
@@ -4808,6 +4880,38 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             XTIROperand *c = insn.operands[0];
             XTIROperand *t = insn.operands[1];
             XTIROperand *f = insn.operands[2];
+            // A fused short-circuit `&&` (computeFusionsForCtx decided it): emit
+            // each comparison here and jump to the FALSE edge on its inverse, so
+            // the `and`/`uxtb` and the `cmp #0` re-test all go, and the flag test
+            // each comparison already made is the one used. The FALSE edge is
+            // reached from two places, so its phi copies get their own stub —
+            // they run on the false path only, and the hot path pays nothing.
+            if (c.kind == XTIROperandKindUse && ctx.fusedAnds[@(c.valueId)]) {
+                NSArray<XTIRInsn *> *both = ctx.fusedAnds[@(c.valueId)];
+                NSUInteger lbl = ctx.labelCounter++;
+                // Namespaced by function: the label counter restarts per function
+                // and one assembly unit carries them all, which the assembler
+                // (rightly) rejects as a duplicate label rather than silently
+                // retargeting a branch.
+                NSString *fnl = [ctx.fn.name stringByReplacingOccurrencesOfString:@"$" withString:@"_"];
+                NSString *L1 = [NSString stringWithFormat:@".L%@_sc1_%lu", fnl, (unsigned long)lbl];
+                NSString *L2 = [NSString stringWithFormat:@".L%@_sc2_%lu", fnl, (unsigned long)lbl];
+                for (NSUInteger k = 0; k < 2; k++) {
+                    XTIRInsn *d = both[k];
+                    NSString *cc = (d.opcode == XTIROpFCmp) ? [self emitCompareForFCmp:d ctx:ctx]
+                                                            : [self emitCompareForICmp:d ctx:ctx];
+                    [ctx.out appendFormat:@"    b.%@ %@\n", [self invertCond:cc], (k == 0 ? L1 : L2)];
+                }
+                [self emitPhiCopiesFrom:block to:t.blockRef ctx:ctx];
+                [ctx.out appendFormat:@"    b %@\n", [self blockLabelForFn:ctx.fn block:t.blockRef]];
+                [ctx.out appendFormat:@"%@:\n", L1];
+                [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
+                [ctx.out appendFormat:@"    b %@\n", [self blockLabelForFn:ctx.fn block:f.blockRef]];
+                [ctx.out appendFormat:@"%@:\n", L2];
+                [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
+                [ctx.out appendFormat:@"    b %@\n", [self blockLabelForFn:ctx.fn block:f.blockRef]];
+                break;
+            }
             // Fused: the condition is a single-use ICmp from this block — emit
             // the `cmp` (setting the flags) and branch on the condition directly,
             // skipping the materialised 0/1 bool + `cbnz`. The cmp runs first;
