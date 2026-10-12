@@ -341,8 +341,10 @@ def standing(cur):
 PAR_MACHINES = (("mac", "Apple MacBook Pro, M4 Max (12 performance and 4 efficiency cores), its GPU through Metal"),
                 ("linux", "AMD Ryzen 9 9955HX (16 cores, 32 threads), Linux, its integrated Radeon 610M "
                           "(2 compute units, 128 shader lanes) through Vulkan"),
-                ("windows", "AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 3090 through CUDA "
-                            "and Vulkan"),
+                # CUDA's default device is the faster card (an RTX 5080 since 2026-10-12), Vulkan's the
+                # first it enumerates (the RTX 3090): the two columns are two cards.
+                ("windows", "AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 through CUDA "
+                            "and an RTX 3090 through Vulkan"),
                 ("browser", "Chrome on the Apple M4 Max: wasm32 (one thread) and WebGPU (from 0.73)"))
 
 
@@ -426,7 +428,8 @@ def vulkan_notes(version):
     if slower:
         parts.append("slower on " + " and ".join(slower))
     said = parts[0] if len(parts) == 1 else ", ".join(parts[:-1]) + " and " + parts[-1]
-    note = "- **Vulkan against CUDA:** on the RTX 3090, Vulkan is " + said + "."
+    note = ("- **Vulkan against CUDA:** the RTX 3090 through Vulkan against the RTX 5080 through CUDA, two cards,"
+            " so this compares the APIs only roughly: Vulkan is " + said + ".")
     if faster:
         note += (" Up to 0.74 `auto` used CUDA on an NVIDIA GPU; from 0.75 it measures"
                  " both and keeps the faster for each block.")

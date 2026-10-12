@@ -197,7 +197,7 @@ and *Vulkan* the same card through Vulkan (`XC_PAR_GPU=vulkan`).
 | [`perlin`](/compiler/benchmark-sources/#perlin) | 299 | 15.0 | 5.8 | 5.8 | 2.6× faster | 30.8 |
 | [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.6 | 2.7 | 22.6 | 2.7 | 8.4× slower | 59.1 |
 
-**AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 3090 through CUDA and Vulkan** (ms; best of eight runs)
+**AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 through CUDA and an RTX 3090 through Vulkan** (ms; best of eight runs)
 
 | benchmark | one thread | all threads | GPU | Vulkan | `auto` | GPU vs all threads | GPU's first run | Vulkan's first run |
 |---|---|---|---|---|---|---|---|---|
@@ -227,7 +227,7 @@ What the tables show:
   threads. It just beats them on `mandelbrot` and `nbody` and loses on the
   other two; its copies of `saxpy`'s arrays are slower still, because the
   runtime does not yet use the CPU's cache for them there.
-- **Vulkan against CUDA:** on the RTX 3090, Vulkan is slower on `mandelbrot` (0.3 ms against 0.2) and `nbody` (0.6 ms against 0.4) and `perlin` (1.1 ms against 0.6) and `saxpy` (30.5 ms against 20.7).
+- **Vulkan against CUDA:** the RTX 3090 through Vulkan against the RTX 5080 through CUDA, two cards, so this compares the APIs only roughly: Vulkan is slower on `mandelbrot` (0.3 ms against 0.2) and `nbody` (0.6 ms against 0.4) and `perlin` (1.1 ms against 0.6) and `saxpy` (30.5 ms against 20.7).
 - **The first run** carries one-off costs (building the kernel, and on NVIDIA
   creating the driver context and compiling the PTX or SPIR-V), so it is shown
   apart: a few tens of milliseconds on Metal and the integrated GPU, and on the
