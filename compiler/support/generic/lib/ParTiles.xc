@@ -10,6 +10,23 @@
 
 class ParTiles
     {
+    // Element range [e0, e1) of a footprinted buffer of `count` elements
+    // that the work items [tlo, thi) touch, clipped to the buffer.
+    static i64 sliceLo(i64 k, i64 flo, i64 tlo, i64 count)
+        {
+        i64 e0 = k * tlo + flo;
+        if (e0 < (i64)0) e0 = (i64)0;
+        if (e0 > count) e0 = count;
+        return e0;
+        }
+    static i64 sliceHi(i64 k, i64 fhi, i64 thi, i64 count)
+        {
+        i64 e1 = k * (thi - (i64)1) + fhi;
+        if (e1 < (i64)0) e1 = (i64)0;
+        if (e1 > count) e1 = count;
+        return e1;
+        }
+
     // The workers for this process, made once: XC_PAR_WORKERS names them
     // ("cpu", "cuda", "cuda,cpu"); empty keeps the old single-device path.
     static Array* _workers;
@@ -44,6 +61,10 @@ class ParTiles
 #if ARCH_win64
             else if (name.equals(String.withCString("cuda")))
                 ParCuda.addWorkers(_workers);
+#endif
+#if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
+            else if (name.equals(String.withCString("metal")))
+                _workers.add((Object*)new ParMetalWorker());
 #endif
             at = end + (u32)1;
             }

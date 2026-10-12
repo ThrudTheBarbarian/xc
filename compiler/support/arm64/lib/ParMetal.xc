@@ -18,6 +18,8 @@
 // block's pipeline are made at the first launch that needs them.
 #import "Foundation.xc"
 #import "ParDevice.xc"
+#define PAR_MTL_DEPTH 3
+#import "ParWorker.xc"
 #import <Metal>
 #import <Foundation>
 
@@ -53,6 +55,11 @@ typedef void parMsgSetU_t(pointer obj, pointer sel, u64 v);
 typedef void parMsgDispatch_t(pointer obj, pointer sel, ParMTLSize* grid, ParMTLSize* group);
 typedef u8* parMsgStr_t(pointer obj, pointer sel);
 typedef double parMsgD_t(pointer obj, pointer sel);
+// The device, queue and objc_msgSend, for the worker below (a class's static
+// ivars are its own).
+pointer gMtlSend;
+pointer gMtlDev;
+pointer gMtlQueue;
 
 class ParMetal
     {
@@ -81,6 +88,9 @@ class ParMetal
         if (_dev == (pointer)0)
             return false;
         _queue = ((parMsg0_t*)_send)(_dev, sel("newCommandQueue"));
+        gMtlSend = _send;
+        gMtlDev = _dev;
+        gMtlQueue = _queue;
         return _queue != (pointer)0;
         }
 
@@ -316,5 +326,263 @@ class ParMetal
         double t1 = ((parMsgD_t*)_send)(cb, sel("GPUEndTime"));
         ParDevice.ranOnGpu(proto, l, took, (i64)((t1 - t0) * 1000000.0));
         return true;
+        }
+    }
+
+// The Metal GPU as a worker on the tile queue (par-tiles-and-devices.md
+// step 3). Apple silicon shares memory with the CPU, so a run copies each
+// buffer into a shared MTLBuffer ONCE (what a single shot does) and each
+// tile is a dispatch over its own span of the same buffers; a tile's
+// written slices are copied back to the host as it finishes, while later
+// tiles run, and its partials fold as a chunk copy. What this buys on a Mac
+// is the GPU and the CPU pool splitting one range, and the read-back
+// overlapping the kernels.
+class ParMetalWorker : ParWorker
+    {
+    bool _ready;
+    pointer _pso;
+    pointer _fpso;
+    ParChunk* _proto;
+    ParLayout* _l;
+    pointer _args;          // the object as it was before any fold
+    pointer _bufs[16];
+    pointer _globs[16];
+    pointer _span[PAR_MTL_DEPTH];
+    pointer _reds[PAR_MTL_DEPTH * 16];
+    pointer _cb[PAR_MTL_DEPTH];
+    ParTile* _slotTile[PAR_MTL_DEPTH];
+    u32 _nextSlot;
+    u32 _oldest;
+    u32 _inFlight;
+
+    String* identity(void)
+        {
+        return ParMetal.identity();
+        }
+    u32 depth(void)
+        {
+        return (u32)PAR_MTL_DEPTH;
+        }
+    i64 floor(void)
+        {
+        return (i64)4096;
+        }
+    bool holds(ParChunk* proto, u8* src, ParLayout* l)
+        {
+        if (src == (u8*)0 || src[0] != (u8)'/' || l == (ParLayout*)0 || !ParMetal.start())
+            return false;
+        pointer pso = ParMetal.pipeline(src);
+        if (pso == (pointer)0)
+            return false;
+        if (l.devred != (i64)0 && ((parMsgU_t*)gMtlSend)(pso, ParMetal.sel("maxTotalThreadsPerThreadgroup")) < (u64)256)
+            return false;
+        // Every written buffer needs a footprint, so a tile knows which slice
+        // to copy back; a read-only one is whole in any case.
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            if (l.bufIn[i] == (i64)0 && l.bufFp[i] == (i64)0)
+                return false;
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            if (l.globIn[i] == (i64)0 && l.globFp[i] == (i64)0)
+                return false;
+        return true;
+        }
+
+    bool prepare(ParChunk* proto, u8* src, ParLayout* l, i64 tile)
+        {
+        parMsgBytes_t* withBytes = (parMsgBytes_t*)gMtlSend;
+        parMsgLen_t* withLen = (parMsgLen_t*)gMtlSend;
+        _proto = proto;
+        _l = l;
+        _pso = ParMetal.pipeline(src);
+        _fpso = l.devlast != (i64)0 ? ParMetal.foldPipeline(src) : (pointer)0;
+        if (_pso == (pointer)0)
+            return false;
+        u8* obj = (u8*)(pointer)proto;
+        _args = withBytes(gMtlDev, ParMetal.sel("newBufferWithBytes:length:options:"), (pointer)obj, (u64)l.size, (u64)0);
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            _bufs[i] = withBytes(gMtlDev, ParMetal.sel("newBufferWithBytes:length:options:"), *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i], (u64)0);
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            _globs[i] = withBytes(gMtlDev, ParMetal.sel("newBufferWithBytes:length:options:"), l.globPtr[i], (u64)l.globLen[i], (u64)0);
+        l.plan(0, tile);
+        for (u32 d = (u32)0; d < (u32)PAR_MTL_DEPTH; d = d + (u32)1)
+            {
+            _span[d] = withLen(gMtlDev, ParMetal.sel("newBufferWithLength:options:"), (u64)32, (u64)0);
+            for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                _reds[d * (u32)16 + r] = withLen(gMtlDev, ParMetal.sel("newBufferWithLength:options:"), (u64)(l.nparts * l.redStride[r]), (u64)0);
+            _slotTile[d] = (ParTile*)0;
+            _cb[d] = (pointer)0;
+            }
+        _nextSlot = (u32)0;
+        _oldest = (u32)0;
+        _inFlight = (u32)0;
+        _ready = true;
+        return true;
+        }
+
+    void finish(void)
+        {
+        parMsg0_t* send0 = (parMsg0_t*)gMtlSend;
+        if (!_ready)
+            return;
+        ParLayout* l = _l;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            send0(_bufs[i], ParMetal.sel("release"));
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            send0(_globs[i], ParMetal.sel("release"));
+        for (u32 d = (u32)0; d < (u32)PAR_MTL_DEPTH; d = d + (u32)1)
+            {
+            send0(_span[d], ParMetal.sel("release"));
+            for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                send0(_reds[d * (u32)16 + r], ParMetal.sel("release"));
+            }
+        send0(_args, ParMetal.sel("release"));
+        _ready = false;
+        _proto = (ParChunk*)0;
+        _l = (ParLayout*)0;
+        }
+
+    bool take(ParTile* t, ParChunk* proto, u8* src, ParLayout* l)
+        {
+        if (!_ready || _inFlight >= (u32)PAR_MTL_DEPTH)
+            return false;
+        parMsg0_t* send0 = (parMsg0_t*)gMtlSend;
+        parMsgSetBuf_t* setBuf = (parMsgSetBuf_t*)gMtlSend;
+        u32 d = _nextSlot;
+        l.plan(t.lo, t.hi);
+        i64* span = (i64*)send0(_span[d], ParMetal.sel("contents"));
+        span[0] = t.lo;
+        span[1] = t.hi;
+        span[2] = l.per;
+        span[3] = l.nparts;
+        pointer cb = send0(gMtlQueue, ParMetal.sel("commandBuffer"));
+        pointer enc = send0(cb, ParMetal.sel("computeCommandEncoder"));
+        ((parMsgP_t*)gMtlSend)(enc, ParMetal.sel("setComputePipelineState:"), _pso);
+        setBuf(enc, ParMetal.sel("setBuffer:offset:atIndex:"), _args, (u64)0, (u64)0);
+        setBuf(enc, ParMetal.sel("setBuffer:offset:atIndex:"), _span[d], (u64)0, (u64)1);
+        u64 slot = (u64)2;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            setBuf(enc, ParMetal.sel("setBuffer:offset:atIndex:"), _bufs[i], (u64)0, slot);
+            slot = slot + (u64)1;
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            setBuf(enc, ParMetal.sel("setBuffer:offset:atIndex:"), _globs[i], (u64)0, slot);
+            slot = slot + (u64)1;
+            }
+        for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+            {
+            setBuf(enc, ParMetal.sel("setBuffer:offset:atIndex:"), _reds[d * (u32)16 + r], (u64)0, slot);
+            slot = slot + (u64)1;
+            }
+        u64 width = ((parMsgU_t*)gMtlSend)(_pso, ParMetal.sel("maxTotalThreadsPerThreadgroup"));
+        ParMTLSize grid;
+        grid.w = (u64)l.threads;
+        grid.h = (u64)1;
+        grid.d = (u64)1;
+        ParMTLSize group;
+        group.w = width < (u64)l.threads ? width : (u64)l.threads;
+        group.h = (u64)1;
+        group.d = (u64)1;
+        if (l.devred != (i64)0)
+            {
+            grid.w = (u64)l.nparts;
+            group.w = (u64)256;
+            ((parMsgDispatch_t*)gMtlSend)(enc, ParMetal.sel("dispatchThreadgroups:threadsPerThreadgroup:"), &grid, &group);
+            }
+        else
+            ((parMsgDispatch_t*)gMtlSend)(enc, ParMetal.sel("dispatchThreads:threadsPerThreadgroup:"), &grid, &group);
+        if (l.devlast != (i64)0 && _fpso != (pointer)0)
+            {
+            ((parMsgP_t*)gMtlSend)(enc, ParMetal.sel("setComputePipelineState:"), _fpso);
+            ((parMsgSetU_t*)gMtlSend)(enc, ParMetal.sel("memoryBarrierWithScope:"), (u64)1);
+            ParMTLSize fgrid;
+            fgrid.w = (u64)1; fgrid.h = (u64)1; fgrid.d = (u64)1;
+            ParMTLSize fgroup;
+            fgroup.w = (u64)256; fgroup.h = (u64)1; fgroup.d = (u64)1;
+            ((parMsgDispatch_t*)gMtlSend)(enc, ParMetal.sel("dispatchThreadgroups:threadsPerThreadgroup:"), &fgrid, &fgroup);
+            }
+        send0(enc, ParMetal.sel("endEncoding"));
+        send0(cb, ParMetal.sel("retain"));
+        send0(cb, ParMetal.sel("commit"));
+        _cb[d] = cb;
+        _slotTile[d] = t;
+        t.worker = (ParWorker*)self;
+        _nextSlot = (d + (u32)1) % (u32)PAR_MTL_DEPTH;
+        _inFlight = _inFlight + (u32)1;
+        return true;
+        }
+
+    // The oldest slot's tile, finished: its written slices back to the host,
+    // its partials into a chunk copy.
+    ParTile* complete(u32 d)
+        {
+        parMsg0_t* send0 = (parMsg0_t*)gMtlSend;
+        ParTile* t = _slotTile[d];
+        ParLayout* l = _l;
+        u8* obj = (u8*)(pointer)_proto;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            if (l.bufIn[i] != (i64)0 || l.bufFp[i] == (i64)0)
+                continue;
+            i64 count = l.bufLen[i] / l.bufElem[i];
+            i64 e0 = ParTiles.sliceLo(l.bufFpK[i], l.bufFpLo[i], t.lo, count);
+            i64 e1 = ParTiles.sliceHi(l.bufFpK[i], l.bufFpHi[i], t.hi, count);
+            if (e1 > e0)
+                memcpy((pointer)(*(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i]),
+                       (pointer)((u8*)send0(_bufs[i], ParMetal.sel("contents")) + e0 * l.bufElem[i]), (u64)((e1 - e0) * l.bufElem[i]));
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            if (l.globIn[i] != (i64)0 || l.globFp[i] == (i64)0)
+                continue;
+            i64 count = l.globLen[i] / l.globElem[i];
+            i64 e0 = ParTiles.sliceLo(l.globFpK[i], l.globFpLo[i], t.lo, count);
+            i64 e1 = ParTiles.sliceHi(l.globFpK[i], l.globFpHi[i], t.hi, count);
+            if (e1 > e0)
+                memcpy((pointer)((u8*)l.globPtr[i] + e0 * l.globElem[i]),
+                       (pointer)((u8*)send0(_globs[i], ParMetal.sel("contents")) + e0 * l.globElem[i]), (u64)((e1 - e0) * l.globElem[i]));
+            }
+        if (l.nred > (u32)0)
+            {
+            l.plan(t.lo, t.hi);
+            u8* parts[16];
+            for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                parts[r] = (u8*)send0(_reds[d * (u32)16 + r], ParMetal.sel("contents"));
+            ParChunk* c = _proto.copyChunk();
+            l.fold(c, &parts[0]);
+            t.partial = c;
+            }
+        send0(_cb[d], ParMetal.sel("release"));
+        _cb[d] = (pointer)0;
+        t.done = true;
+        _slotTile[d] = (ParTile*)0;
+        _oldest = (d + (u32)1) % (u32)PAR_MTL_DEPTH;
+        _inFlight = _inFlight - (u32)1;
+        return t;
+        }
+
+    ParTile* poll(void)
+        {
+        if (_inFlight == (u32)0)
+            return (ParTile*)0;
+        u32 d = _oldest;
+        // MTLCommandBufferStatus: 4 completed, 5 error.
+        u64 st = ((parMsgU_t*)gMtlSend)(_cb[d], ParMetal.sel("status"));
+        if (st < (u64)4)
+            return (ParTile*)0;
+        if (st == (u64)5)
+            Log.error("par: a Metal tile failed");
+        return complete(d);
+        }
+
+    void drain(void)
+        {
+        parMsg0_t* send0 = (parMsg0_t*)gMtlSend;
+        while (_inFlight > (u32)0)
+            {
+            send0(_cb[_oldest], ParMetal.sel("waitUntilCompleted"));
+            complete(_oldest);
+            }
         }
     }
