@@ -84,6 +84,11 @@ u32 gParAllRuns[64];
 i64 gParGpusFrom[64];
 i64 gParAllFrom[64];
 u32 gParGpuWorkers;     // GPU workers in the default set (ParTiles tells)
+// Measurements in progress, kept across processes of the program: up to four
+// size bands a block, each the size measured and the four candidates' times.
+i64 gParProgN[256];
+i64 gParProgUs[1024];
+u32 gParProgCount[64];
 bool gParLearned[64];
 i64 gParMeasN[64];
 i64 gParLastN[64];
@@ -285,6 +290,7 @@ class ParDevice
         gParGpusFrom[i] = (i64)-1;
         gParAllFrom[i] = (i64)-1;
         gParLearned[i] = false;
+        gParProgCount[i] = (u32)0;
         gParMeasN[i] = (i64)0;
         gParLastN[i] = (i64)0;
         gParMeasuring[i] = false;
@@ -530,11 +536,70 @@ class ParDevice
         return key;
         }
 
+    static String* progressKey(u32 i, ParChunk* proto)
+        {
+        String* key = String.withCString("par.measuring.");
+        key.append(_hw);
+        key.appendCString(".");
+        key.appendCString(gParBlock[i]);
+        key.appendFormat(".%08x", hash(proto.gpuSource(), (u32)2166136261));
+        return key;
+        }
+
+    // The measurements an earlier process of this program left unfinished
+    // (<n>,<cpu us>,<gpu us>,<gpus us>,<all us>; entries separated by ';'):
+    // a block run a few times a process still learns in the end. Each
+    // candidate still warms up once in every process.
+    static void readProgress(u32 i, ParChunk* proto)
+        {
+        gParProgCount[i] = (u32)0;
+        String* v = store().get(progressKey(i, proto));
+        if (v == (String*)0)
+            return;
+        u8* c = v.cString();
+        u32 at = (u32)0;
+        while (c[at] != (u8)0 && gParProgCount[i] < (u32)4)
+            {
+            i64 f[5];
+            for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
+                {
+                bool ng = c[at] == (u8)'-';
+                if (ng) at = at + (u32)1;
+                i64 val = num(c, &at);      // always read: "-1" is two characters
+                f[k] = ng ? (i64)-1 : val;
+                if (c[at] == (u8)',') at = at + (u32)1;
+                }
+            if (f[0] > (i64)0)
+                {
+                u32 e = i * (u32)4 + gParProgCount[i];
+                gParProgN[e] = f[0];
+                for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
+                    gParProgUs[e * (u32)4 + k] = f[k + (u32)1];
+                gParProgCount[i] = gParProgCount[i] + (u32)1;
+                }
+            if (c[at] == (u8)';') at = at + (u32)1;
+            else break;
+            }
+        }
+
+    // The saved entry for a size within a factor of two of n, if any.
+    static i32 progressFor(u32 i, i64 n)
+        {
+        for (u32 k = (u32)0; k < gParProgCount[i]; k = k + (u32)1)
+            {
+            i64 pn = gParProgN[i * (u32)4 + k];
+            if (n <= pn * (i64)2 && pn <= n * (i64)2)
+                return (i32)k;
+            }
+        return (i32)-1;
+        }
+
     static void readLearned(u32 i, ParChunk* proto)
         {
         if (gParLearned[i] || _hw == (String*)0)
             return;
         gParLearned[i] = true;
+        readProgress(i, proto);
         String* v = store().get(learnedKey(i, proto));
         if (v == (String*)0)
             return;
@@ -619,17 +684,78 @@ class ParDevice
                      gParBlock[i], choiceName(winner), n, gParCpuUpTo[i], gParGpuFrom[i], gParGpusFrom[i], gParAllFrom[i]);
         }
 
+    // What is measured so far at this size, saved for the next process of
+    // this program: the entry for this size band is replaced, else one is
+    // added (the oldest going when four are kept).
+    static void saveProgress(u32 i, ParChunk* proto)
+        {
+        if (_hw == (String*)0 || gParMeasN[i] <= (i64)0)
+            return;
+        i32 k = progressFor(i, gParMeasN[i]);
+        if (k < (i32)0)
+            {
+            if (gParProgCount[i] < (u32)4)
+                {
+                k = (i32)gParProgCount[i];
+                gParProgCount[i] = gParProgCount[i] + (u32)1;
+                }
+            else
+                {
+                for (u32 j = (u32)1; j < (u32)4; j = j + (u32)1)
+                    {
+                    gParProgN[i * (u32)4 + j - (u32)1] = gParProgN[i * (u32)4 + j];
+                    for (u32 q = (u32)0; q < (u32)4; q = q + (u32)1)
+                        gParProgUs[(i * (u32)4 + j - (u32)1) * (u32)4 + q] = gParProgUs[(i * (u32)4 + j) * (u32)4 + q];
+                    }
+                k = (i32)3;
+                }
+            }
+        u32 e = i * (u32)4 + (u32)k;
+        gParProgN[e] = gParMeasN[i];
+        gParProgUs[e * (u32)4 + (u32)0] = gParCpuUs[i];
+        gParProgUs[e * (u32)4 + (u32)1] = gParGpuUs[i];
+        gParProgUs[e * (u32)4 + (u32)2] = gParGpusUs[i];
+        gParProgUs[e * (u32)4 + (u32)3] = gParAllUs[i];
+        String* v = new String();
+        for (u32 j = (u32)0; j < gParProgCount[i]; j = j + (u32)1)
+            {
+            u32 f = i * (u32)4 + j;
+            if (j > (u32)0) v.appendCString(";");
+            v.appendFormat("%ld,%ld,%ld,%ld,%ld", gParProgN[f], gParProgUs[f * (u32)4], gParProgUs[f * (u32)4 + (u32)1],
+                           gParProgUs[f * (u32)4 + (u32)2], gParProgUs[f * (u32)4 + (u32)3]);
+            }
+        Settings* st = store();
+        st.set(progressKey(i, proto), v);
+        st.save();
+        }
+
+    // Measuring (re)starts at size n: what an earlier process measured at a
+    // size within a factor of two is taken as done.
+    static void loadProgress(u32 i, i64 n)
+        {
+        i32 k = progressFor(i, n);
+        if (k < (i32)0)
+            return;
+        u32 e = i * (u32)4 + (u32)k;
+        gParCpuUs[i] = gParProgUs[e * (u32)4 + (u32)0];
+        gParGpuUs[i] = gParProgUs[e * (u32)4 + (u32)1];
+        gParGpusUs[i] = gParProgUs[e * (u32)4 + (u32)2];
+        gParAllUs[i] = gParProgUs[e * (u32)4 + (u32)3];
+        }
+
     // Once every candidate is timed at the size being measured, the fastest
     // is learned. The queue's sets are candidates only where there are GPU
     // workers (two for "GPUs": one is the GPU again, tiled).
     static void decide(u32 i, ParChunk* proto)
         {
-        if (gParCpuUs[i] < (i64)0 || gParGpuUs[i] < (i64)0)
+        bool pending = gParCpuUs[i] < (i64)0 || gParGpuUs[i] < (i64)0 ||
+                       (gParGpuWorkers >= (u32)2 && gParGpusUs[i] < (i64)0) ||
+                       (gParGpuWorkers >= (u32)1 && gParAllUs[i] < (i64)0);
+        if (pending)
+            {
+            saveProgress(i, proto);
             return;
-        if (gParGpuWorkers >= (u32)2 && gParGpusUs[i] < (i64)0)
-            return;
-        if (gParGpuWorkers >= (u32)1 && gParAllUs[i] < (i64)0)
-            return;
+            }
         i32 winner = gParGpuUs[i] <= gParCpuUs[i] ? (i32)2 : (i32)1;
         i64 best = gParGpuUs[i] <= gParCpuUs[i] ? gParGpuUs[i] : gParCpuUs[i];
         if (gParGpusUs[i] >= (i64)0 && gParGpusUs[i] < best) { winner = (i32)3; best = gParGpusUs[i]; }
@@ -738,9 +864,13 @@ class ParDevice
             gParGpusRuns[i] = gParGpusRuns[i] > (u32)0 ? (u32)1 : (u32)0;
             gParAllRuns[i] = gParAllRuns[i] > (u32)0 ? (u32)1 : (u32)0;
             gParMeasN[i] = n;
+            loadProgress(i, n);
             }
         if (gParMeasN[i] == (i64)0)
+            {
             gParMeasN[i] = n;
+            loadProgress(i, n);
+            }
         gParMeasuring[i] = true;
         if (gParCpuUs[i] < (i64)0 || gParCpuUs[i] < (i64)1000)
             return (i32)1;

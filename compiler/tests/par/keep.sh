@@ -31,8 +31,8 @@ void step(u32 n)
     }
 i32 main(void)
     {
-    for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1) step((u32)2000);
-    for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1) step((u32)BIG);
+    for (u32 k = (u32)0; k < (u32)8; k = k + (u32)1) step((u32)2000);
+    for (u32 k = (u32)0; k < (u32)8; k = k + (u32)1) step((u32)BIG);
     Stdio.printf("done\n");
     return (i32)0;
     }
@@ -50,26 +50,36 @@ conf="$W/st/keep.conf"
 # 2000 items), so the test checks that what was learned is KEPT and USED, not
 # which way it went: the first run must have saved bounds, and the second must
 # put on the GPU exactly the runs those bounds send there, without measuring.
+# The record is cpuUpTo,gpuFrom,gpusFrom,allFrom[,api] (from 0.8: the tile
+# queue's two sets are candidates too, each measured twice after the CPU and
+# the one GPU, which is why a size runs eight times above). A run on the
+# queue reports "items in N tiles across", a single device "items on the GPU".
 learned=$(grep "^par.learned\..*\.heavy\..* = " "$conf" 2>/dev/null | head -1)
 [ -n "$learned" ] || { echo "FAIL keep: first run learned nothing"; cat "$conf" 2>/dev/null; fail=1; }
-bounds=${learned##* = }; cpuUpTo=${bounds%,*}; gpuFrom=${bounds#*,}
+bounds=${learned##* = }
+case "$bounds" in m:*) echo "FAIL keep: the first run did not finish measuring ($bounds)"; fail=1 ;; esac
+IFS=, read -r cpuUpTo gpuFrom gpusFrom allFrom _api <<< "$bounds,"
 want=0
 for n in 2000 4194304; do
-    if [ "$gpuFrom" != -1 ] && [ "$n" -ge "$gpuFrom" ] && { [ "$cpuUpTo" = -1 ] || [ "$n" -gt "$cpuUpTo" ]; }; then
-        want=$((want + 4))
+    gpu=0
+    for from in "$gpuFrom" "$gpusFrom" "$allFrom"; do
+        [ -n "$from" ] && [ "$from" != -1 ] && [ "$n" -ge "$from" ] && gpu=1
+    done
+    if [ "$gpu" = 1 ] && { [ "$cpuUpTo" = -1 ] || [ "$n" -gt "$cpuUpTo" ]; }; then
+        want=$((want + 8))
     fi
 done
 run r2
 if grep -q "learned\|auto picks\|auto keeps" "$W/r2"; then
     echo "FAIL keep: second run measured again"; grep "learned\|auto" "$W/r2"; fail=1
 fi
-got=$(grep -c 'items on the GPU' "$W/r2")
+got=$(grep -c 'items on the GPU\|items in [0-9]* tiles across' "$W/r2")
 [ "$got" = "$want" ] || { echo "FAIL keep: learned $bounds, so $want runs belong on the GPU; $got went there"; fail=1; }
 cp "$conf" "$W/learned"
 echo "par.heavy = cpu" >> "$conf"; run r3
 grep -q "items on the GPU" "$W/r3" && { echo "FAIL keep: par.heavy = cpu still used the GPU"; fail=1; }
 cp "$W/learned" "$conf"; echo "par = 3000000" >> "$conf"; run r4
-[ "$(grep -c 'items on the GPU' "$W/r4")" = 4 ] || { echo "FAIL keep: par = 3000000 did not run only the large size on the GPU"; fail=1; }
+[ "$(grep -c 'items on the GPU' "$W/r4")" = 8 ] || { echo "FAIL keep: par = 3000000 did not run only the large size on the GPU"; fail=1; }
 grep -q "learned" "$W/r4" && { echo "FAIL keep: a user threshold still measured"; fail=1; }
 [ $fail = 0 ] && echo "--- keep: pass ---"
 exit $fail
