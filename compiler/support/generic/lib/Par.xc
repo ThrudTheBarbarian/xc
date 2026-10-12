@@ -28,6 +28,9 @@
 #if ARCH_win64
 #import "ParCuda.xc"
 #endif
+#if !(ARCH_6502 || ARCH_m68k || ARCH_wasm32)
+#import "ParTiles.xc"
+#endif
 #if ARCH_wasm32
 #import "ParWebGpu.xc"
 #endif
@@ -123,6 +126,10 @@ class Par
         // under, asked of the runtime only when choose() will look them up.
         if (ParDevice.needsHardware(proto))
             ParDevice.setHardware(Par.gpuIdentity());
+        // Several devices on one tile queue (par-tiles-and-devices.md step
+        // 3), when XC_PAR_WORKERS names them.
+        if (ParTiles.run(proto, proto.gpuSource(), lo, hi))
+            return;
         if (ParDevice.choose(proto, hi - lo) == (i32)2)
             {
 #if ARCH_wasm32

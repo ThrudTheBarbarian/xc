@@ -46,6 +46,9 @@ typedef i32 cuMemcpyDtoHAsync_t(pointer dst, u64 src, u64 n, pointer stream);
 typedef i32 cuStreamWaitEvent_t(pointer stream, pointer event, u32 flags);
 typedef i32 cuMemHostRegister_t(pointer host, u64 bytes, u32 flags);
 typedef i32 cuMemHostUnregister_t(pointer host);
+typedef i32 cuDeviceGetCount_t(i32* count);
+typedef i32 cuCtxSetCurrent_t(pointer ctx);
+typedef i32 cuEventQuery_t(pointer event);
 // The caller's arrays registered as pinned memory, so a tile's copies go
 // straight between them and the device with no staging copy on the host:
 // registering costs about a millisecond per 64 MB, so only arrays of a
@@ -64,6 +67,28 @@ i64 gParCuRegClock;
 // global, so two of them must not run at once), and per in-flight tile a
 // copy stream, two events and two pinned buffers, uploads and downloads.
 #define PAR_CU_DEPTH 3
+// The driver's entry points, for the workers (a class's static ivars are its own).
+cuMemAlloc_t* gCu_alloc;
+cuDeviceGetAttribute_t* gCu_attr;
+cuCtxCreate_t* gCu_ctxCreate;
+cuCtxSetCurrent_t* gCu_ctxSetCurrent;
+cuDeviceGet_t* gCu_deviceGet;
+cuEventCreate_t* gCu_eventCreate;
+cuEventQuery_t* gCu_eventQuery;
+cuEventRecord_t* gCu_eventRecord;
+cuEventSynchronize_t* gCu_eventSync;
+cuMemFree_t* gCu_free;
+cuModuleGetFunction_t* gCu_getFunction;
+cuDeviceGetName_t* gCu_getName;
+cuMemHostAlloc_t* gCu_hostAlloc;
+cuMemFreeHost_t* gCu_hostFree;
+cuLaunchKernel_t* gCu_launch;
+cuModuleLoadDataEx_t* gCu_load;
+cuStreamCreate_t* gCu_streamCreate;
+cuStreamWaitEvent_t* gCu_streamWait;
+cuMemcpyHtoD_t* gCu_toDevice;
+cuMemcpyHtoDAsync_t* gCu_toDeviceAsync;
+cuMemcpyDtoHAsync_t* gCu_toHostAsync;
 pointer gParCuCompute;
 pointer gParCuCopy[PAR_CU_DEPTH];
 pointer gParCuUpDone[PAR_CU_DEPTH];
@@ -118,6 +143,12 @@ class ParCuda
     static cuStreamWaitEvent_t* _streamWait;
     static cuMemHostRegister_t* _hostRegister;
     static cuMemHostUnregister_t* _hostUnregister;
+    static cuDeviceGet_t* _deviceGet;
+    static cuCtxCreate_t* _ctxCreate;
+    static cuDeviceGetName_t* _getName;
+    static cuDeviceGetCount_t* _deviceGetCount;
+    static cuCtxSetCurrent_t* _ctxSetCurrent;
+    static cuEventQuery_t* _eventQuery;
     static i32 _dev;            // the device ordinal the context is on
     static i32 _sms;            // its multiprocessor count (0: unknown)
     static i32 _engines;        // its copy engines (1: a copy in and a copy out never overlap)
@@ -155,6 +186,12 @@ class ParCuda
         _streamWait = (cuStreamWaitEvent_t*)GetProcAddress(lib, "cuStreamWaitEvent");
         _hostRegister = (cuMemHostRegister_t*)GetProcAddress(lib, "cuMemHostRegister_v2");
         _hostUnregister = (cuMemHostUnregister_t*)GetProcAddress(lib, "cuMemHostUnregister");
+        _deviceGet = deviceGet;
+        _ctxCreate = ctxCreate;
+        _getName = (cuDeviceGetName_t*)GetProcAddress(lib, "cuDeviceGetName");
+        _deviceGetCount = (cuDeviceGetCount_t*)GetProcAddress(lib, "cuDeviceGetCount");
+        _ctxSetCurrent = (cuCtxSetCurrent_t*)GetProcAddress(lib, "cuCtxSetCurrent");
+        _eventQuery = (cuEventQuery_t*)GetProcAddress(lib, "cuEventQuery");
         // Without the whole set the runtime stays single shot; the driver's
         // API has had all of them since CUDA 4, so this is defensive.
         _tiles = _attr != (cuDeviceGetAttribute_t*)0 && _streamCreate != (cuStreamCreate_t*)0 &&
@@ -189,6 +226,27 @@ class ParCuda
         nm[0] = (u8)0;
         if (getName != (cuDeviceGetName_t*)0 && getName(&nm[0], (i32)255, dev) == (i32)0)
             _identity.appendCString(&nm[0]);
+        gCu_alloc = _alloc;
+        gCu_attr = _attr;
+        gCu_ctxCreate = _ctxCreate;
+        gCu_ctxSetCurrent = _ctxSetCurrent;
+        gCu_deviceGet = _deviceGet;
+        gCu_eventCreate = _eventCreate;
+        gCu_eventQuery = _eventQuery;
+        gCu_eventRecord = _eventRecord;
+        gCu_eventSync = _eventSync;
+        gCu_free = _free;
+        gCu_getFunction = _getFunction;
+        gCu_getName = _getName;
+        gCu_hostAlloc = _hostAlloc;
+        gCu_hostFree = _hostFree;
+        gCu_launch = _launch;
+        gCu_load = _load;
+        gCu_streamCreate = _streamCreate;
+        gCu_streamWait = _streamWait;
+        gCu_toDevice = _toDevice;
+        gCu_toDeviceAsync = _toDeviceAsync;
+        gCu_toHostAsync = _toHostAsync;
         _state = (i32)1;
         if (ParDevice.reporting())
             Log.info("par: CUDA device 0 is %s, %d multiprocessors, %d copy engine(s)", _identity.cString(), _sms, _engines);
@@ -382,7 +440,7 @@ class ParCuda
             _hostUnregister(gParCuRegHost[slot]);
             gParCuRegHost[slot] = (pointer)0;
             }
-        if (_hostRegister(host, (u64)bytes, (u32)0) != (i32)0)
+        if (_hostRegister(host, (u64)bytes, (u32)1) != (i32)0)   // CU_MEMHOSTREGISTER_PORTABLE: every context
             return false;
         gParCuRegHost[slot] = host;
         gParCuRegLen[slot] = bytes;
@@ -970,5 +1028,570 @@ class ParCuda
             }
         ParDevice.ranOnGpu(proto, l, ParDevice.nowUs() - started, gpuUs);
         return true;
+        }
+
+    // A worker per CUDA device (par-tiles-and-devices.md step 3), each with
+    // its own context; XC_PAR_CUDA_DEVICES=0,1 keeps only those ordinals.
+    static void addWorkers(Array* into)
+        {
+        if (!start() || !_tiles || _deviceGetCount == (cuDeviceGetCount_t*)0 || _ctxSetCurrent == (cuCtxSetCurrent_t*)0 ||
+            _eventQuery == (cuEventQuery_t*)0)
+            return;
+        i32 count = (i32)0;
+        if (_deviceGetCount(&count) != (i32)0)
+            return;
+        String* only = Platform.env(String.withCString("XC_PAR_CUDA_DEVICES"));
+        for (i32 ord = (i32)0; ord < count; ord = ord + (i32)1)
+            {
+            if (only.byteLength() > (u32)0)
+                {
+                bool named = false;
+                for (u32 i = (u32)0; i < only.byteLength(); i = i + (u32)1)
+                    if (only.byteAt(i) == (u8)('0' + ord))
+                        named = true;
+                if (!named)
+                    continue;
+                }
+            ParCudaWorker* w = new ParCudaWorker();
+            if (w.open(ord))
+                into.add((Object*)w);
+            }
+        _ctxSetCurrent(_ctx);
+        }
+    }
+
+// One CUDA device as a worker: its context, kernel cache, streams, events
+// and staging are its own; the registration cache is shared (portable).
+// take() is step 2's per-tile enqueue, poll() its completion, asked rather
+// than waited for; prepare() and finish() make and free a run's slices.
+class ParCudaWorker : ParWorker
+    {
+    i32 _ordinal;
+    pointer _ctx;
+    String* _identity;
+    i32 _sms;
+    // Kernels compiled on this device.
+    pointer _src[64];
+    pointer _fn[64];
+    u32 _nk;
+    // Blocks this device refused (holds memo).
+    pointer _refused[64];
+    u32 _nrefused;
+    // Streams and events, PAR_CU_DEPTH slots.
+    pointer _compute;
+    pointer _copy[PAR_CU_DEPTH];
+    pointer _upDone[PAR_CU_DEPTH];
+    pointer _kernelDone[PAR_CU_DEPTH];
+    pointer _tileDone[PAR_CU_DEPTH];
+    u8* _up[PAR_CU_DEPTH];
+    i64 _upCap[PAR_CU_DEPTH];
+    u8* _down[PAR_CU_DEPTH];
+    i64 _downCap[PAR_CU_DEPTH];
+    bool _ready;
+    // The run in progress.
+    ParChunk* _proto;
+    ParLayout* _l;
+    pointer _kernel;
+    u8* _snap;
+    u64 _whole[52];
+    u32 _nparams;
+    u32 _q;                 // sliced buffers + globals
+    i64 _sliceMax[32];
+    bool _pin[32];
+    u64 _slice[PAR_CU_DEPTH * 32];
+    u64 _partDev[PAR_CU_DEPTH * 16];
+    i64 _tile;
+    // In flight: the tile in each slot, taken in ring order.
+    ParTile* _slotTile[PAR_CU_DEPTH];
+    i64 _span[PAR_CU_DEPTH * 3];
+    u64 _dev[PAR_CU_DEPTH * 52];
+    pointer _params[PAR_CU_DEPTH * 52];
+    u32 _nextSlot;
+    u32 _oldest;
+    u32 _inFlight;
+
+    bool open(i32 ordinal)
+        {
+        _ordinal = ordinal;
+        i32 dev = (i32)0;
+        pointer ctx = (pointer)0;
+        if (gCu_deviceGet(&dev, ordinal) != (i32)0 || gCu_ctxCreate(&ctx, (u32)0, dev) != (i32)0)
+            return false;
+        _ctx = ctx;
+        _identity = String.withCString("cuda:");
+        u8 nm[256];
+        nm[0] = (u8)0;
+        if (gCu_getName != (cuDeviceGetName_t*)0 && gCu_getName(&nm[0], (i32)255, dev) == (i32)0)
+            _identity.appendCString(&nm[0]);
+        i32 sms = (i32)0;
+        if (gCu_attr != (cuDeviceGetAttribute_t*)0 && gCu_attr(&sms, (i32)16, dev) == (i32)0)
+            _sms = sms;
+        if (gCu_streamCreate(&_compute, (u32)1) != (i32)0)
+            return false;
+        for (u32 d = (u32)0; d < (u32)PAR_CU_DEPTH; d = d + (u32)1)
+            {
+            if (gCu_streamCreate(&_copy[d], (u32)1) != (i32)0)
+                return false;
+            if (gCu_eventCreate(&_upDone[d], (u32)2) != (i32)0 || gCu_eventCreate(&_kernelDone[d], (u32)2) != (i32)0 ||
+                gCu_eventCreate(&_tileDone[d], (u32)2) != (i32)0)
+                return false;
+            }
+        _ready = true;
+        if (ParDevice.reporting())
+            Log.info("par: CUDA worker %d is %s, %d multiprocessors", ordinal, _identity.cString(), _sms);
+        return true;
+        }
+
+    String* identity(void)
+        {
+        return _identity;
+        }
+    u32 depth(void)
+        {
+        return (u32)PAR_CU_DEPTH;
+        }
+    i64 floor(void)
+        {
+        return (i64)256 * (i64)(_sms > (i32)0 ? _sms : (i32)16);
+        }
+    i64 tileItems(ParLayout* l)
+        {
+        i64 perItem = ParCuda.tileBytes(l, (i64)1) - ParCuda.tileBytes(l, (i64)0);
+        if (perItem <= (i64)0)
+            return (i64)0;
+        return (ParDevice.tileMegabytes() << (i64)20) / perItem;
+        }
+
+    // The kernel for a source on this device, compiled once.
+    pointer kernel(u8* src)
+        {
+        for (u32 i = (u32)0; i < _nk; i = i + (u32)1)
+            if (_src[i] == (pointer)src)
+                return _fn[i];
+        pointer mod = (pointer)0;
+        pointer fn = (pointer)0;
+        u8 log[2048];
+        log[0] = (u8)0;
+        u32 opts[2];
+        opts[0] = (u32)5;
+        opts[1] = (u32)6;
+        pointer vals[2];
+        vals[0] = (pointer)&log[0];
+        vals[1] = (pointer)(u64)2048;
+        i32 rc = gCu_load(&mod, (pointer)src, (u32)2, (pointer)&opts[0], (pointer)&vals[0]);
+        if (rc == (i32)0)
+            rc = gCu_getFunction(&fn, mod, "par_kernel");
+        if (rc != (i32)0)
+            fn = (pointer)0;
+        if (_nk < (u32)64)
+            {
+            _src[_nk] = (pointer)src;
+            _fn[_nk] = fn;
+            _nk = _nk + (u32)1;
+            }
+        return fn;
+        }
+
+    bool holds(ParChunk* proto, u8* src, ParLayout* l)
+        {
+        if (!_ready || src == (u8*)0 || src[0] != (u8)'/' || l == (ParLayout*)0)
+            return false;
+        for (u32 at = (u32)0; src[at] != (u8)0 && src[at] != (u8)10; at = at + (u32)1)
+            if (src[at] == (u8)'s' && src[at + (u32)1] == (u8)'p' && src[at + (u32)5] == (u8)'=')
+                return false;   // SPIR-V alone: no PTX printed
+        for (u32 i = (u32)0; i < _nrefused; i = i + (u32)1)
+            if (_refused[i] == (pointer)src)
+                return false;
+        gCu_ctxSetCurrent(_ctx);
+        bool ok = ParCuda.tileable(l) && kernel(src) != (pointer)0;
+        if (!ok && _nrefused < (u32)64)
+            {
+            _refused[_nrefused] = (pointer)src;
+            _nrefused = _nrefused + (u32)1;
+            }
+        return ok;
+        }
+
+    // Pinned staging of at least `bytes` for slot d.
+    u8* staging(u32 d, bool up, i64 bytes)
+        {
+        u8* cur = up ? _up[d] : _down[d];
+        i64 cap = up ? _upCap[d] : _downCap[d];
+        if (cur != (u8*)0 && cap >= bytes)
+            return cur;
+        if (cur != (u8*)0)
+            gCu_hostFree((pointer)cur);
+        pointer p = (pointer)0;
+        if (gCu_hostAlloc(&p, (u64)bytes, (u32)0) != (i32)0)
+            p = (pointer)0;
+        if (up) { _up[d] = (u8*)p; _upCap[d] = p != (pointer)0 ? bytes : (i64)0; }
+        else { _down[d] = (u8*)p; _downCap[d] = p != (pointer)0 ? bytes : (i64)0; }
+        return (u8*)p;
+        }
+
+    bool prepare(ParChunk* proto, u8* src, ParLayout* l, i64 tile)
+        {
+        gCu_ctxSetCurrent(_ctx);
+        _proto = proto;
+        _l = l;
+        _tile = tile;
+        _kernel = kernel(src);
+        if (_kernel == (pointer)0)
+            return false;
+        u8* obj = (u8*)(pointer)proto;
+        _snap = (u8*)malloc((u64)l.size);
+        if (_snap == (u8*)0)
+            return false;
+        memcpy((pointer)_snap, (pointer)obj, (u64)l.size);
+        // The un-footprinted read-only buffers and globals, whole, once per
+        // device per run.
+        u32 nd = (u32)2;
+        bool ok = true;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            _whole[nd] = (u64)0;
+            if (l.bufFp[i] == (i64)0)
+                {
+                u64 dmem = (u64)0;
+                if (gCu_alloc(&dmem, (u64)l.bufLen[i]) != (i32)0 ||
+                    gCu_toDevice(dmem, *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i]) != (i32)0)
+                    ok = false;
+                _whole[nd] = dmem;
+                }
+            nd = nd + (u32)1;
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            _whole[nd] = (u64)0;
+            if (l.globFp[i] == (i64)0)
+                {
+                u64 dmem = (u64)0;
+                if (gCu_alloc(&dmem, (u64)l.globLen[i]) != (i32)0 ||
+                    gCu_toDevice(dmem, l.globPtr[i], (u64)l.globLen[i]) != (i32)0)
+                    ok = false;
+                _whole[nd] = dmem;
+                }
+            nd = nd + (u32)1;
+            }
+        _nparams = nd + l.nred;
+        // Slices per slot, sized for a tile; which buffers are pinned.
+        l.plan(0, tile);
+        i64 upMax = (i64)0;
+        i64 downMax = (i64)0;
+        u32 q = (u32)0;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            _sliceMax[q] = (i64)0;
+            _pin[q] = false;
+            if (l.bufFp[i] != (i64)0)
+                {
+                _sliceMax[q] = (l.bufFpK[i] * tile + (l.bufFpHi[i] - l.bufFpLo[i])) * l.bufElem[i];
+                _pin[q] = ParCuda.pinned(*(pointer*)(obj + l.bufOff[i]), l.bufLen[i]);
+                if (!_pin[q])
+                    {
+                    upMax = upMax + _sliceMax[q];
+                    if (l.bufIn[i] == (i64)0) downMax = downMax + _sliceMax[q];
+                    }
+                }
+            q = q + (u32)1;
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            _sliceMax[q] = (i64)0;
+            _pin[q] = false;
+            if (l.globFp[i] != (i64)0)
+                {
+                _sliceMax[q] = (l.globFpK[i] * tile + (l.globFpHi[i] - l.globFpLo[i])) * l.globElem[i];
+                _pin[q] = ParCuda.pinned(l.globPtr[i], l.globLen[i]);
+                if (!_pin[q])
+                    {
+                    upMax = upMax + _sliceMax[q];
+                    if (l.globIn[i] == (i64)0) downMax = downMax + _sliceMax[q];
+                    }
+                }
+            q = q + (u32)1;
+            }
+        _q = q;
+        for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+            downMax = downMax + l.nback * l.redStride[r];
+        for (u32 d = (u32)0; d < (u32)PAR_CU_DEPTH && ok; d = d + (u32)1)
+            {
+            for (u32 b = (u32)0; b < q; b = b + (u32)1)
+                {
+                _slice[d * (u32)32 + b] = (u64)0;
+                if (_sliceMax[b] > (i64)0 && gCu_alloc(&_slice[d * (u32)32 + b], (u64)_sliceMax[b]) != (i32)0)
+                    ok = false;
+                }
+            for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                {
+                _partDev[d * (u32)16 + r] = (u64)0;
+                if (gCu_alloc(&_partDev[d * (u32)16 + r], (u64)(l.nparts * l.redStride[r])) != (i32)0)
+                    ok = false;
+                }
+            if (ok && upMax > (i64)0 && staging(d, true, upMax) == (u8*)0)
+                ok = false;
+            if (ok && downMax > (i64)0 && staging(d, false, downMax) == (u8*)0)
+                ok = false;
+            _slotTile[d] = (ParTile*)0;
+            }
+        _nextSlot = (u32)0;
+        _oldest = (u32)0;
+        _inFlight = (u32)0;
+        if (!ok)
+            finish();
+        return ok;
+        }
+
+    void finish(void)
+        {
+        gCu_ctxSetCurrent(_ctx);
+        for (u32 d = (u32)0; d < (u32)PAR_CU_DEPTH; d = d + (u32)1)
+            {
+            for (u32 b = (u32)0; b < _q; b = b + (u32)1)
+                if (_slice[d * (u32)32 + b] != (u64)0) { gCu_free(_slice[d * (u32)32 + b]); _slice[d * (u32)32 + b] = (u64)0; }
+            for (u32 r = (u32)0; r < (u32)16; r = r + (u32)1)
+                if (_partDev[d * (u32)16 + r] != (u64)0) { gCu_free(_partDev[d * (u32)16 + r]); _partDev[d * (u32)16 + r] = (u64)0; }
+            }
+        for (u32 i = (u32)2; i < _nparams; i = i + (u32)1)
+            if (_whole[i] != (u64)0) { gCu_free(_whole[i]); _whole[i] = (u64)0; }
+        if (_snap != (u8*)0) { free((pointer)_snap); _snap = (u8*)0; }
+        _proto = (ParChunk*)0;
+        _l = (ParLayout*)0;
+        }
+
+    bool take(ParTile* t, ParChunk* proto, u8* src, ParLayout* l)
+        {
+        if (_inFlight >= (u32)PAR_CU_DEPTH || _l == (ParLayout*)0)
+            return false;
+        gCu_ctxSetCurrent(_ctx);
+        u32 d = _nextSlot;
+        u8* obj = (u8*)(pointer)proto;
+        i64 tlo = t.lo;
+        i64 thi = t.hi;
+        l.plan(tlo, thi);
+        _span[d * (u32)3 + 0] = tlo;
+        _span[d * (u32)3 + 1] = thi;
+        _span[d * (u32)3 + 2] = l.per;
+        bool ok = true;
+        u8* up = _up[d];
+        i64 at = (i64)0;
+        u32 b = (u32)0;
+        _dev[d * (u32)52 + 0] = (u64)1;
+        _dev[d * (u32)52 + 1] = (u64)1;
+        u32 pi = (u32)2;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            if (l.bufFp[i] != (i64)0)
+                {
+                i64 count = l.bufLen[i] / l.bufElem[i];
+                i64 e0 = ParCuda.sliceLo(l.bufFpK[i], l.bufFpLo[i], tlo, count);
+                i64 e1 = ParCuda.sliceHi(l.bufFpK[i], l.bufFpHi[i], thi, count);
+                i64 bytes = (e1 - e0) * l.bufElem[i];
+                pointer srcp = (pointer)(*(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i]);
+                if (bytes > (i64)0 && _pin[b])
+                    {
+                    if (gCu_toDeviceAsync(_slice[d * (u32)32 + b], srcp, (u64)bytes, _copy[d]) != (i32)0)
+                        ok = false;
+                    }
+                else if (bytes > (i64)0)
+                    {
+                    memcpy((pointer)(up + at), srcp, (u64)bytes);
+                    if (gCu_toDeviceAsync(_slice[d * (u32)32 + b], (pointer)(up + at), (u64)bytes, _copy[d]) != (i32)0)
+                        ok = false;
+                    at = at + bytes;
+                    }
+                _dev[d * (u32)52 + pi] = _slice[d * (u32)32 + b] - (u64)(e0 * l.bufElem[i]);
+                }
+            else
+                _dev[d * (u32)52 + pi] = _whole[pi];
+            pi = pi + (u32)1;
+            b = b + (u32)1;
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            if (l.globFp[i] != (i64)0)
+                {
+                i64 count = l.globLen[i] / l.globElem[i];
+                i64 e0 = ParCuda.sliceLo(l.globFpK[i], l.globFpLo[i], tlo, count);
+                i64 e1 = ParCuda.sliceHi(l.globFpK[i], l.globFpHi[i], thi, count);
+                i64 bytes = (e1 - e0) * l.globElem[i];
+                if (l.globAll[i] != (i64)0 && l.globFpK[i] == (i64)1)
+                    bytes = (i64)0;
+                pointer srcp = (pointer)((u8*)l.globPtr[i] + e0 * l.globElem[i]);
+                if (bytes > (i64)0 && _pin[b])
+                    {
+                    if (gCu_toDeviceAsync(_slice[d * (u32)32 + b], srcp, (u64)bytes, _copy[d]) != (i32)0)
+                        ok = false;
+                    }
+                else if (bytes > (i64)0)
+                    {
+                    memcpy((pointer)(up + at), srcp, (u64)bytes);
+                    if (gCu_toDeviceAsync(_slice[d * (u32)32 + b], (pointer)(up + at), (u64)bytes, _copy[d]) != (i32)0)
+                        ok = false;
+                    at = at + bytes;
+                    }
+                _dev[d * (u32)52 + pi] = _slice[d * (u32)32 + b] - (u64)(e0 * l.globElem[i]);
+                }
+            else
+                _dev[d * (u32)52 + pi] = _whole[pi];
+            pi = pi + (u32)1;
+            b = b + (u32)1;
+            }
+        for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+            {
+            _dev[d * (u32)52 + pi] = _partDev[d * (u32)16 + r];
+            pi = pi + (u32)1;
+            }
+        if (!ok)
+            return false;
+        if (gCu_eventRecord(_upDone[d], _copy[d]) != (i32)0 || gCu_streamWait(_compute, _upDone[d], (u32)0) != (i32)0)
+            return false;
+        for (u32 i = (u32)0; i < _nparams; i = i + (u32)1)
+            _params[d * (u32)52 + i] = (pointer)&_dev[d * (u32)52 + i];
+        _params[d * (u32)52 + 0] = (pointer)_snap;
+        _params[d * (u32)52 + 1] = (pointer)&_span[d * (u32)3 + 0];
+        u32 group = (u32)256;
+        u32 grid = (u32)((l.threads + (i64)group - (i64)1) / (i64)group);
+        if (gCu_launch(_kernel, grid, (u32)1, (u32)1, group, (u32)1, (u32)1, (u32)0, _compute, &_params[d * (u32)52 + 0],
+                            (pointer*)0) != (i32)0)
+            return false;
+        if (gCu_eventRecord(_kernelDone[d], _compute) != (i32)0 || gCu_streamWait(_copy[d], _kernelDone[d], (u32)0) != (i32)0)
+            return false;
+        u8* down = _down[d];
+        at = (i64)0;
+        b = (u32)0;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            if (l.bufFp[i] != (i64)0 && l.bufIn[i] == (i64)0)
+                {
+                i64 count = l.bufLen[i] / l.bufElem[i];
+                i64 e0 = ParCuda.sliceLo(l.bufFpK[i], l.bufFpLo[i], tlo, count);
+                i64 e1 = ParCuda.sliceHi(l.bufFpK[i], l.bufFpHi[i], thi, count);
+                i64 bytes = (e1 - e0) * l.bufElem[i];
+                pointer dst = _pin[b] ? (pointer)(*(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i]) : (pointer)(down + at);
+                if (bytes > (i64)0 && gCu_toHostAsync(dst, _slice[d * (u32)32 + b], (u64)bytes, _copy[d]) != (i32)0)
+                    ok = false;
+                if (!_pin[b]) at = at + bytes;
+                }
+            b = b + (u32)1;
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            if (l.globFp[i] != (i64)0 && l.globIn[i] == (i64)0)
+                {
+                i64 count = l.globLen[i] / l.globElem[i];
+                i64 e0 = ParCuda.sliceLo(l.globFpK[i], l.globFpLo[i], tlo, count);
+                i64 e1 = ParCuda.sliceHi(l.globFpK[i], l.globFpHi[i], thi, count);
+                i64 bytes = (e1 - e0) * l.globElem[i];
+                pointer dst = _pin[b] ? (pointer)((u8*)l.globPtr[i] + e0 * l.globElem[i]) : (pointer)(down + at);
+                if (bytes > (i64)0 && gCu_toHostAsync(dst, _slice[d * (u32)32 + b], (u64)bytes, _copy[d]) != (i32)0)
+                    ok = false;
+                if (!_pin[b]) at = at + bytes;
+                }
+            b = b + (u32)1;
+            }
+        for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+            {
+            i64 bytes = l.nback * l.redStride[r];
+            if (gCu_toHostAsync((pointer)(down + at), _partDev[d * (u32)16 + r], (u64)bytes, _copy[d]) != (i32)0)
+                ok = false;
+            at = at + bytes;
+            }
+        if (!ok || gCu_eventRecord(_tileDone[d], _copy[d]) != (i32)0)
+            return false;
+        _slotTile[d] = t;
+        t.worker = (ParWorker*)self;
+        _nextSlot = (d + (u32)1) % (u32)PAR_CU_DEPTH;
+        _inFlight = _inFlight + (u32)1;
+        return true;
+        }
+
+    // Finish the oldest slot's tile: its unpinned downloads to the host, its
+    // partials into a chunk copy.
+    ParTile* complete(u32 d)
+        {
+        ParTile* t = _slotTile[d];
+        ParLayout* l = _l;
+        u8* obj = (u8*)(pointer)_proto;
+        u8* down = _down[d];
+        i64 at = (i64)0;
+        u32 b = (u32)0;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            if (l.bufFp[i] != (i64)0 && l.bufIn[i] == (i64)0 && !_pin[b])
+                {
+                i64 count = l.bufLen[i] / l.bufElem[i];
+                i64 e0 = ParCuda.sliceLo(l.bufFpK[i], l.bufFpLo[i], t.lo, count);
+                i64 e1 = ParCuda.sliceHi(l.bufFpK[i], l.bufFpHi[i], t.hi, count);
+                i64 bytes = (e1 - e0) * l.bufElem[i];
+                if (bytes > (i64)0)
+                    memcpy((pointer)(*(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i]), (pointer)(down + at), (u64)bytes);
+                at = at + bytes;
+                }
+            b = b + (u32)1;
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            if (l.globFp[i] != (i64)0 && l.globIn[i] == (i64)0 && !_pin[b])
+                {
+                i64 count = l.globLen[i] / l.globElem[i];
+                i64 e0 = ParCuda.sliceLo(l.globFpK[i], l.globFpLo[i], t.lo, count);
+                i64 e1 = ParCuda.sliceHi(l.globFpK[i], l.globFpHi[i], t.hi, count);
+                i64 bytes = (e1 - e0) * l.globElem[i];
+                if (bytes > (i64)0)
+                    memcpy((pointer)((u8*)l.globPtr[i] + e0 * l.globElem[i]), (pointer)(down + at), (u64)bytes);
+                at = at + bytes;
+                }
+            b = b + (u32)1;
+            }
+        if (l.nred > (u32)0)
+            {
+            l.plan(t.lo, t.hi);
+            u8* parts[16];
+            for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                {
+                parts[r] = down + at;
+                at = at + l.nback * l.redStride[r];
+                }
+            ParChunk* c = _proto.copyChunk();
+            l.fold(c, &parts[0]);
+            t.partial = c;
+            }
+        t.done = true;
+        _slotTile[d] = (ParTile*)0;
+        _oldest = (d + (u32)1) % (u32)PAR_CU_DEPTH;
+        _inFlight = _inFlight - (u32)1;
+        return t;
+        }
+
+    ParTile* poll(void)
+        {
+        if (_inFlight == (u32)0)
+            return (ParTile*)0;
+        gCu_ctxSetCurrent(_ctx);
+        u32 d = _oldest;
+        i32 rc = gCu_eventQuery(_tileDone[d]);
+        if (rc != (i32)0)
+            return (ParTile*)0;   // not ready (600), or an error the drain will see
+        return complete(d);
+        }
+
+    void drain(void)
+        {
+        gCu_ctxSetCurrent(_ctx);
+        while (_inFlight > (u32)0)
+            {
+            u32 d = _oldest;
+            if (gCu_eventSync(_tileDone[d]) != (i32)0)
+                {
+                Log.error("par: a CUDA tile failed on %s", _identity.cString());
+                _slotTile[d].done = true;
+                _slotTile[d] = (ParTile*)0;
+                _oldest = (d + (u32)1) % (u32)PAR_CU_DEPTH;
+                _inFlight = _inFlight - (u32)1;
+                continue;
+                }
+            complete(d);
+            }
         }
     }
