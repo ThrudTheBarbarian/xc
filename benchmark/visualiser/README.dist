@@ -15,10 +15,16 @@ Run it:
 On macOS the archive is not notarised. If macOS refuses to open it, run
 `xattr -dr com.apple.quarantine .` in this directory once.
 
-On Linux the machine needs GTK 4 (libgtk-4-1 on Ubuntu).
+On Linux the machine needs GTK 4 (libgtk-4-1 on Ubuntu), and the self-test
+needs a display too (xvfb-run works on a machine without one).
 
-The libraries beside the program are the toolkit's shim (libUXAppKit.dylib or
-libUXGtk.so, LGPL-3.0, COPYING.LESSER) and libtls (Mbed TLS, Apache-2.0 or
-GPL-2.0-or-later, LICENSE-mbedtls.txt). The program is GPL-3.0 (COPYING).
+On Windows run visualiser.exe the same way, from a command prompt in this
+folder. The archive is not signed, so SmartScreen may ask before the first
+run. https certificates are checked against the Windows certificate store.
+
+The libraries beside the program are libtls (Mbed TLS, Apache-2.0 or
+GPL-2.0-or-later, LICENSE-mbedtls.txt) and, on macOS and Linux, the toolkit's
+shim (libUXAppKit.dylib or libUXGtk.so, LGPL-3.0, COPYING.LESSER). The program
+is GPL-3.0 (COPYING).
 
 Guides: https://compile-xc.org/compiler/benchmarks/

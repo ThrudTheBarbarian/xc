@@ -5,17 +5,18 @@
 #   xcc-benchviz-<version>-osx.tar.bz2     macOS, built here (run it on a Mac)
 #   xcc-benchviz-<version>-linux.tar.bz2   Linux x86-64, with --linux: cross-linked
 #                                          here, the GTK shim built on XTC_LINUX_HOST
+#   xcc-benchviz-<version>-win64.zip       Windows x86-64, cross-built here
 #   xcc-bench-sources-<version>.tar.bz2    the committed benchmark/ tree
 #
-# Each program archive carries what it loads beside it: the toolkit's shim and
-# libtls (the TLS library, for the corpus over https), with their licences.
-# The programs find them through @loader_path (macOS) and $ORIGIN (Linux).
+# Each program archive carries what it loads beside it: libtls (the TLS
+# library, for the corpus over https) and, on macOS and Linux, the toolkit's
+# shim, with their licences. The programs find them through @loader_path
+# (macOS), $ORIGIN (Linux) and the program's directory (Windows). The Windows
+# toolkit is xc over Win32, so it has no shim.
 #
-# Linux waits for a libtls that loads in a glibc -dynamic program (today's needs
-# the static runtime's _xt_libc_addr), and Windows for a win64 libtls, so
-# --linux builds an archive for testing only.
+# --linux needs XTC_LINUX_HOST (build.env), where the GTK shim is built.
 #
-#   sh package.sh 0.74 [--linux]
+#   sh package.sh 0.75 [--linux]
 set -eu
 ver=${1:?usage: package.sh <version> [--linux]}
 linux=0
@@ -76,6 +77,17 @@ common "$d"
 ( cd "$work" && tar cjf "$out/$name.tar.bz2" "$name" )
 echo "package: $out/$name.tar.bz2"
 fi
+
+# ---- Windows x86-64 ----
+name="xcc-benchviz-$ver-win64"
+d="$work/$name"
+mkdir -p "$d"
+"$XCC" -A win64 -I "$UXKIT" -I "$here" -O2 "$here/Visualiser.xc" -o "$d/visualiser.exe"
+cp "$TLS/win64/libtls.dll" "$d/"
+common "$d"
+rm -f "$out/$name.zip"
+( cd "$work" && zip -qr "$out/$name.zip" "$name" )
+echo "package: $out/$name.zip"
 
 # ---- the benchmark sources, as committed ----
 name="xcc-bench-sources-$ver"

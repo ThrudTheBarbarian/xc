@@ -52,6 +52,21 @@ class Net
         {
         if (_net_tls) { return true; }
         _net_tls = HttpTls.install();
+#if ARCH_win64
+        // HttpTls before xcc 0.76 looks for a PEM bundle only, and Windows has
+        // none: read the certificate store through libtls 1.0.1 directly.
+        if (!_net_tls && tls_require(1))
+            {
+            TlsClient* c = new TlsClient();
+            if (c.initSystem())
+                {
+                _HttpTlsLayer* layer = new _HttpTlsLayer();
+                layer._client = c;
+                Http.setSecureLayer(layer);
+                _net_tls = true;
+                }
+            }
+#endif
         if (!_net_tls && _net_dir != (String*)0 && !_net_dir.isEmpty())
             {
             String* beside = _net_dir.appendingPathComponent(String.withCString("cacert.pem"));

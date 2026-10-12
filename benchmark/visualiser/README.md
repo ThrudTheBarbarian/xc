@@ -37,15 +37,16 @@ The Makefile builds `arm64` on macOS (and its ObjC shim). `UXKIT` defaults to
 
 The corpus is reached over https, which needs the TLS library at
 `/opt/xcc/3p/tls` (`frameworks/3p/tls/install.sh`, with Mbed TLS from
-Homebrew). xcc 0.75's TLS library does not load in a GTK program on Linux and
-has no Windows build, so the visualiser is built for macOS until it does.
+Homebrew, and mingw-w64 for the Windows build). On Windows it verifies
+certificates against the Windows certificate store.
 
 `XC_BENCH_SERVER` points the program at another corpus server, such as a local
 `php -S` over `website/site/public`. With it set, `--selftest` also downloads,
 submits and downloads again.
 
-`sh package.sh <version>` writes the macOS and sources archives the benchmarks
-page links to `website/downloads/`.
+`sh package.sh <version> --linux` writes the macOS, Linux, Windows and sources
+archives the benchmarks page links to `website/downloads/`. Without `--linux` it
+skips Linux, whose GTK shim is built on the Linux host.
 
 ## What it does
 
