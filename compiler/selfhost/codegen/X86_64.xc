@@ -1668,17 +1668,37 @@ class X86_64
         String* d = vecOf(n.res());
         if (d == (String*)0)
             return;
-        loadZX((IROperand*)n.ops().get((u32)0), (u8)'a');
+        // A folded address is the memory operand itself.
+        String* memop = vecMemOp((IROperand*)n.ops().get((u32)0));
         bool flt = isFloatTy(laneOf(n.res().ty()));
         bool W = isYmm(d);
         if (isZmm(d))
             {
             // EVEX moves name their element size; an unmasked one ignores it.
-            _out.appendFormat("\t%s\t%s, zmmword ptr [rax]\n", flt ? "vmovups" : "vmovdqu32", d.cString());
+            _out.appendFormat("\t%s\t%s, zmmword ptr %s\n", flt ? "vmovups" : "vmovdqu32", d.cString(), memop.cString());
             return;
             }
-        _out.appendFormat("\t%s%s\t%s, %s[rax]\n", W ? "v" : "", flt ? "movups" : "movdqu",
-                          d.cString(), W ? "ymmword ptr " : "");
+        _out.appendFormat("\t%s%s\t%s, %s%s\n", W ? "v" : "", flt ? "movups" : "movdqu",
+                          d.cString(), W ? "ymmword ptr " : "", memop.cString());
+        }
+
+    // The memory operand of a vector load or store: its folded address, or
+    // the pointer loaded into rax.
+    String* vecMemOp(IROperand* p)
+        {
+        if (p.kind() == (u8)OPK_USE && isFolded(p.val()))
+            return foldedMemOp((IRInsn*)_fold.get((Hashable*)p.val()));
+        String* ph = p.kind() == (u8)OPK_USE ? homeOf(p.val()) : (String*)0;
+        if (ph != (String*)0 && !isXmmHome(ph))
+            {
+            // A homed pointer, as it is.
+            String* o = String.withCString("[");
+            o.append(regView(ph, (u32)8));
+            o.appendCString("]");
+            return o;
+            }
+        loadZX(p, (u8)'a');
+        return String.withCString("[rax]");
         }
 
     void emitVStore(IRInsn* n)
@@ -1692,15 +1712,15 @@ class X86_64
         if (sv == (String*)0)
             return;
         bool flt = isFloatTy(laneOf(v.val().ty()));
-        loadZX((IROperand*)n.ops().get((u32)0), (u8)'a');
+        String* memop = vecMemOp((IROperand*)n.ops().get((u32)0));
         bool W = isYmm(sv);
         if (isZmm(sv))
             {
-            _out.appendFormat("\t%s\tzmmword ptr [rax], %s\n", flt ? "vmovups" : "vmovdqu32", sv.cString());
+            _out.appendFormat("\t%s\tzmmword ptr %s, %s\n", flt ? "vmovups" : "vmovdqu32", memop.cString(), sv.cString());
             return;
             }
-        _out.appendFormat("\t%s%s\t%s[rax], %s\n", W ? "v" : "", flt ? "movups" : "movdqu",
-                          W ? "ymmword ptr " : "", sv.cString());
+        _out.appendFormat("\t%s%s\t%s%s, %s\n", W ? "v" : "", flt ? "movups" : "movdqu",
+                          W ? "ymmword ptr " : "", memop.cString(), sv.cString());
         }
 
     void emitVSplat(IRInsn* n)
@@ -4297,8 +4317,16 @@ class X86_64
                 IROperand* p0 = (IROperand*)cons.ops().get((u32)0);
                 if (p0.kind() != (u8)OPK_USE || p0.val() != ea.res())
                     continue;
-                // (a) An ADJACENT load folds into its source operand.
-                if (cons.op().equals(String.withCString("Load")) && i + (u32)1 < ins.count() && (IRInsn*)ins.get(i + (u32)1) == cons && !(cons.res() != (IRValue*)0 && isAggTy(cons.res().ty())))
+                // (a) A load IN THE SAME BLOCK folds into its source operand;
+                // a vector load the same. It had to be the next instruction,
+                // which left the first of an unrolled copy's two loads unfolded.
+                if ((cons.op().equals(String.withCString("Load")) || cons.op().equals(String.withCString("VLoad"))) && blockHasInsn(ins, cons) && !(cons.res() != (IRValue*)0 && isAggTy(cons.res().ty())))
+                    {
+                    _fold.set((Hashable*)ea.res(), (Object*)ea);
+                    continue;
+                    }
+                // A vector store likewise; its value is never an aggregate.
+                if (cons.op().equals(String.withCString("VStore")) && cons.ops().count() >= (u32)2)
                     {
                     _fold.set((Hashable*)ea.res(), (Object*)ea);
                     continue;
@@ -4985,6 +5013,14 @@ class X86_64
     // zero- or sign-extended into rcx, because a memory operand uses the whole
     // 64-bit index and dirty high bits from a homed 32-bit one would corrupt
     // the address. Base first, then index.
+    static bool blockHasInsn(Array* ins, IRInsn* n)
+        {
+        for (u32 i = (u32)0; i < ins.count(); i = i + (u32)1)
+            if ((IRInsn*)ins.get(i) == n)
+                return true;
+        return false;
+        }
+
     String* foldedMemOp(IRInsn* ea)
         {
         IROperand* bop = (IROperand*)ea.ops().get((u32)0);
@@ -5028,6 +5064,19 @@ class X86_64
         // huge POSITIVE 64-bit index, addressing outside the object.
         String* idxReg = (String*)0;
         IROperand* iop = (IROperand*)ea.ops().get((u32)1);
+        // A CONSTANT index is a displacement, as the standalone ElementAddr
+        // already makes it; it went through `mov rcx, K` and a scaled index.
+        if (iop.kind() == (u8)OPK_IMMI)
+            {
+            i64 disp = iop.imm() * (i64)stride;
+            String* o = String.withCString("[");
+            o.append(baseReg);
+            if (disp != (i64)0)
+                o.appendFormat("%+lld]", disp);
+            else
+                o.appendCString("]");
+            return o;
+            }
         if (iop.kind() == (u8)OPK_USE && iop.val() != (IRValue*)0)
             {
             IRValue* iv = iop.val();

@@ -348,7 +348,7 @@ class BitSet
                 {
                 IRInsn* insn = (IRInsn*)b.insns().get(i);
                 recordUses(insn, pos, defs, ue);
-                if (_foldInfo != 0 && insn.ops().count() >= (u32)1 && (insn.op().equals(String.withCString("Load")) || insn.op().equals(String.withCString("Store"))))
+                if (_foldInfo != 0 && insn.ops().count() >= (u32)1 && (insn.op().equals(String.withCString("Load")) || insn.op().equals(String.withCString("Store")) || insn.op().equals(String.withCString("VLoad")) || insn.op().equals(String.withCString("VStore"))))
                     {
                     IROperand* p0 = (IROperand*)insn.ops().get((u32)0);
                     if (p0.kind() == (u8)OPK_USE && p0.val() != 0)

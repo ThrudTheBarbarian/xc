@@ -12,24 +12,24 @@
 u32 sortU(u32 seed)
     {
     u32 a[N];
-    for (u32 i = (u32)0; i < (u32)N; i++)
-        a[i] = ((i * (u32)2654435761) ^ seed) % (u32)1000;
-    for (u32 i = (u32)1; i < (u32)N; i++)
+    for (u32 i = 0; i < N; i++)
+        a[i] = ((i * 2654435761) ^ seed) % 1000;
+    for (u32 i = 1; i < N; i++)
         {
         u32 v = a[i];
         u32 j = i;
-        while (j > (u32)0 && a[j - (u32)1] > v)
+        while (j > 0 && a[j - 1] > v)
             {
-            a[j] = a[j - (u32)1];
-            j = j - (u32)1;
+            a[j] = a[j - 1];
+            j = j - 1;
             }
         a[j] = v;
         }
-    u32 bad = (u32)0;
-    for (u32 i = (u32)1; i < (u32)N; i++)
-        if (a[i - (u32)1] > a[i])
+    u32 bad = 0;
+    for (u32 i = 1; i < N; i++)
+        if (a[i - 1] > a[i])
             bad++;
-    return a[0] * (u32)1000000 + a[N - 1] * (u32)1000 + bad;
+    return a[0] * 1000000 + a[N - 1] * 1000 + bad;
     }
 
 i32 sortI(i32 seed)
@@ -58,11 +58,11 @@ i32 sortI(i32 seed)
 // Three tests, and the index read after the loop.
 u32 scan3(u32* a, u32 n, u32 limit, u32* where)
     {
-    u32 i = (u32)0;
-    u32 s = (u32)0;
-    while (i < n && a[i] != (u32)0 && a[i] < limit)
+    u32 i = 0;
+    u32 s = 0;
+    while (i < n && a[i] != 0 && a[i] < limit)
         {
-        s = s + a[i] * (i + (u32)1);
+        s = s + a[i] * (i + 1);
         i++;
         }
     *where = i;
@@ -89,26 +89,26 @@ i32 branchy(i32* a, i32 n)
 
 i32 main(void)
     {
-    Stdio.printf("sortU %u %u\n", sortU((u32)1), sortU((u32)987654321));
+    Stdio.printf("sortU %u %u\n", sortU(1), sortU(987654321));
     Stdio.printf("sortI %d %d\n", sortI(3), sortI(-77));
 
     u32 a[10];
-    for (u32 i = (u32)0; i < (u32)10; i++)
-        a[i] = i * (u32)3 + (u32)1;
-    u32 w = (u32)99;
-    u32 s = scan3(&a[0], (u32)10, (u32)1000, &w);
+    for (u32 i = 0; i < 10; i++)
+        a[i] = i * 3 + 1;
+    u32 w = 99;
+    u32 s = scan3(&a[0], 10, 1000, &w);
     Stdio.printf("scan3 all %u %u\n", s, w);
-    s = scan3(&a[0], (u32)10, (u32)14, &w);
+    s = scan3(&a[0], 10, 14, &w);
     Stdio.printf("scan3 limit %u %u\n", s, w);
-    a[6] = (u32)0;
-    s = scan3(&a[0], (u32)10, (u32)1000, &w);
+    a[6] = 0;
+    s = scan3(&a[0], 10, 1000, &w);
     Stdio.printf("scan3 zero %u %u\n", s, w);
-    s = scan3(&a[0], (u32)0, (u32)1000, &w);
+    s = scan3(&a[0], 0, 1000, &w);
     Stdio.printf("scan3 empty %u %u\n", s, w);
-    s = scan3(&a[0], (u32)10, (u32)1, &w);
+    s = scan3(&a[0], 10, 1, &w);
     Stdio.printf("scan3 first %u %u\n", s, w);
-    a[0] = (u32)0;
-    s = scan3(&a[0], (u32)10, (u32)1000, &w);
+    a[0] = 0;
+    s = scan3(&a[0], 10, 1000, &w);
     Stdio.printf("scan3 second %u %u\n", s, w);
 
     i32 b[12];

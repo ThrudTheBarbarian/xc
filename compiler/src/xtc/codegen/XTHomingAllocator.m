@@ -139,7 +139,7 @@
             // A folded ElementAddr/FieldAddr is elided: its base/index are read at
             // THIS Load/Store, so extend their live ranges here (else the allocator
             // reuses their register for the Load result and corrupts the base).
-            if (foldInfo.count && (insn.opcode == XTIROpLoad || insn.opcode == XTIROpStore) && insn.operands.count >= 1 && insn.operands[0].kind == XTIROperandKindUse)
+            if (foldInfo.count && (insn.opcode == XTIROpLoad || insn.opcode == XTIROpStore || insn.opcode == XTIROpVLoad || insn.opcode == XTIROpVStore) && insn.operands.count >= 1 && insn.operands[0].kind == XTIROperandKindUse)
                 {
                 XTIRInsn* fea = foldInfo[@(insn.operands[0].valueId)];
                 if (fea)

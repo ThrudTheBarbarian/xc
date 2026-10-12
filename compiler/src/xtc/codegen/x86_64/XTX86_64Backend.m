@@ -869,6 +869,16 @@ static NSInteger sWin64SretOff = 0;
     // rather than before it.
     NSString* idxReg = nil;
     XTIROperand* iop = ea.operands[1];
+    // A CONSTANT index is a displacement, as the standalone ElementAddr already
+    // makes it. It went through `mov rcx, K` and a scaled index register: two
+    // instructions in every unrolled copy of a loop (`a[i+2]` after unrolling
+    // is `ElementAddr p, 2`).
+    if (iop.kind == XTIROperandKindImmI)
+        {
+        long long disp = (long long)iop.intValue * (long long)stride;
+        return disp ? [NSString stringWithFormat:@"[%@%+lld]", baseReg, disp]
+                    : [NSString stringWithFormat:@"[%@]", baseReg];
+        }
     if (iop.kind == XTIROperandKindUse)
         {
         XTIRValue* iv = fn.values[@(iop.valueId)];
@@ -2351,8 +2361,19 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                         continue;
                     }
                 XTIRInsn* cons = useOf[@(ea.result.valueId)];
-                // (a) adjacent Load — fold into its source memory operand.
-                if (i + 1 < ins.count && ins[i + 1] == cons && cons.opcode == XTIROpLoad && cons.operands.count >= 1 && cons.operands[0].kind == XTIROperandKindUse && cons.operands[0].valueId == ea.result.valueId && !(cons.result && cons.result.type.kind == XTIRTypeKindAgg))
+                // (a) a Load in the same block — fold into its source memory
+                // operand; the base and index are kept live to it by the
+                // allocator's foldInfo hook, as for a store. It had to be the
+                // NEXT instruction, which left the first of an unrolled copy's
+                // two loads unfolded: a `lea` into a register, then the load
+                // through it. A vector load folds the same way.
+                if ([ins indexOfObjectIdenticalTo:cons] != NSNotFound && (cons.opcode == XTIROpLoad || cons.opcode == XTIROpVLoad) && cons.operands.count >= 1 && cons.operands[0].kind == XTIROperandKindUse && cons.operands[0].valueId == ea.result.valueId && !(cons.result && cons.result.type.kind == XTIRTypeKindAgg))
+                    {
+                    fold[@(ea.result.valueId)] = ea;
+                    continue;
+                    }
+                // A vector store likewise; its value is never an aggregate.
+                if (cons.opcode == XTIROpVStore && cons.operands.count >= 2 && cons.operands[0].kind == XTIROperandKindUse && cons.operands[0].valueId == ea.result.valueId)
                     {
                     fold[@(ea.result.valueId)] = ea;
                     continue;
@@ -4824,18 +4845,30 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         {
         if (!res || ops.count < 1 || !sVec[@(res.valueId)])
             return;
-        [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out]; // rax = pointer
+        // A folded address is the memory operand itself.
+        XTIRInsn* vea = ops[0].kind == XTIROperandKindUse ? sFold[@(ops[0].valueId)] : nil;
+        NSString* memop;
+        NSString* ph = ops[0].kind == XTIROperandKindUse ? sHome[@(ops[0].valueId)] : nil;
+        if (vea)
+            memop = [self foldedMemOp:vea fn:fn slot:slot out:out];
+        else if (ph && ![self isXmmHome:ph])
+            memop = [NSString stringWithFormat:@"[%@]", [self regView:ph width:8]]; // a homed pointer, as it is
+        else
+            {
+            [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out]; // rax = pointer
+            memop = @"[rax]";
+            }
         BOOL flt = res.type.pointeeType && [self isFloatKind:res.type.pointeeType.kind];
         BOOL W = [sVec[@(res.valueId)] hasPrefix:@"ymm"];
         if ([sVec[@(res.valueId)] hasPrefix:@"zmm"])
             {
             // EVEX moves name their element size; an unmasked one ignores it.
-            [out appendFormat:@"\t%@\t%@, zmmword ptr [rax]\n", flt ? @"vmovups" : @"vmovdqu32",
-                              sVec[@(res.valueId)]];
+            [out appendFormat:@"\t%@\t%@, zmmword ptr %@\n", flt ? @"vmovups" : @"vmovdqu32",
+                              sVec[@(res.valueId)], memop];
             return;
             }
-        [out appendFormat:@"\t%@%@\t%@, %@[rax]\n", W ? @"v" : @"", flt ? @"movups" : @"movdqu",
-                          sVec[@(res.valueId)], W ? @"ymmword ptr " : @""];
+        [out appendFormat:@"\t%@%@\t%@, %@%@\n", W ? @"v" : @"", flt ? @"movups" : @"movdqu",
+                          sVec[@(res.valueId)], W ? @"ymmword ptr " : @"", memop];
         return;
         }
     // [ptr] <- %v:Vec
@@ -4845,16 +4878,27 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             return;
         XTIRValue* vv = fn.values[@(ops[1].valueId)];
         BOOL flt = vv.type.pointeeType && [self isFloatKind:vv.type.pointeeType.kind];
-        [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out]; // rax = pointer
+        XTIRInsn* vea = ops[0].kind == XTIROperandKindUse ? sFold[@(ops[0].valueId)] : nil;
+        NSString* memop;
+        NSString* ph = ops[0].kind == XTIROperandKindUse ? sHome[@(ops[0].valueId)] : nil;
+        if (vea)
+            memop = [self foldedMemOp:vea fn:fn slot:slot out:out];
+        else if (ph && ![self isXmmHome:ph])
+            memop = [NSString stringWithFormat:@"[%@]", [self regView:ph width:8]]; // a homed pointer, as it is
+        else
+            {
+            [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out]; // rax = pointer
+            memop = @"[rax]";
+            }
         BOOL W = [sVec[@(ops[1].valueId)] hasPrefix:@"ymm"];
         if ([sVec[@(ops[1].valueId)] hasPrefix:@"zmm"])
             {
-            [out appendFormat:@"\t%@\tzmmword ptr [rax], %@\n", flt ? @"vmovups" : @"vmovdqu32",
-                              sVec[@(ops[1].valueId)]];
+            [out appendFormat:@"\t%@\tzmmword ptr %@, %@\n", flt ? @"vmovups" : @"vmovdqu32",
+                              memop, sVec[@(ops[1].valueId)]];
             return;
             }
-        [out appendFormat:@"\t%@%@\t%@[rax], %@\n", W ? @"v" : @"", flt ? @"movups" : @"movdqu",
-                          W ? @"ymmword ptr " : @"", sVec[@(ops[1].valueId)]];
+        [out appendFormat:@"\t%@%@\t%@%@, %@\n", W ? @"v" : @"", flt ? @"movups" : @"movdqu",
+                          W ? @"ymmword ptr " : @"", memop, sVec[@(ops[1].valueId)]];
         return;
         }
     // %v:Vec <- broadcast(scalar)
