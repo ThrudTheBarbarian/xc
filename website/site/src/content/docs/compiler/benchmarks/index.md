@@ -47,8 +47,8 @@ The visualiser is written in xc and built with UXKit.
 
 | Platform | Visualiser | Size |
 | --- | --- | --- |
-| macOS (Apple silicon) | [xcc-benchviz-0.74-osx.tar.bz2](/downloads/xcc-benchviz-0.74-osx.tar.bz2) | 962 KB |
-| Benchmark sources (any host) | [xcc-bench-sources-0.74.tar.bz2](/downloads/xcc-bench-sources-0.74.tar.bz2) | 94 KB |
+| macOS (Apple silicon) | [xcc-benchviz-0.75-osx.tar.bz2](/downloads/xcc-benchviz-0.75-osx.tar.bz2) | 970 KB |
+| Benchmark sources (any host) | [xcc-bench-sources-0.75.tar.bz2](/downloads/xcc-bench-sources-0.75.tar.bz2) | 93 KB |
 
 Unpack the archive and run `./visualiser`. The archive carries the libraries
 the program loads (the toolkit's shim and the TLS library) beside it. It is not
@@ -56,7 +56,7 @@ notarised: if macOS refuses to open it, run `xattr -dr com.apple.quarantine .`
 in the unpacked directory once.
 
 Linux and Windows builds follow once xcc's TLS library runs there: the
-visualiser reaches the corpus over https, and the 0.74 TLS library supports
+visualiser reaches the corpus over https, and the 0.75 TLS library supports
 neither a GTK program on Linux nor Windows.
 
 The benchmark sources archive is the `benchmark/` tree: the suite sources, the

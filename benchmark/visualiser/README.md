@@ -37,7 +37,7 @@ The Makefile builds `arm64` on macOS (and its ObjC shim). `UXKIT` defaults to
 
 The corpus is reached over https, which needs the TLS library at
 `/opt/xcc/3p/tls` (`frameworks/3p/tls/install.sh`, with Mbed TLS from
-Homebrew). xcc 0.74's TLS library does not load in a GTK program on Linux and
+Homebrew). xcc 0.75's TLS library does not load in a GTK program on Linux and
 has no Windows build, so the visualiser is built for macOS until it does.
 
 `XC_BENCH_SERVER` points the program at another corpus server, such as a local
