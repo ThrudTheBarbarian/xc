@@ -372,7 +372,25 @@ static uint64_t rawSizeOf(NSData* d)
         uint64_t s = 20 + (uint64_t)i * PE_SECT_HDR_SIZE;
         char nm[9] = {0};
         memcpy(nm, b + s, 8);
-        [secs addObject:@{@"name" : @(nm), @"size" : @(r32(s + 16)), @"raw" : @(r32(s + 20)), @"rel" : @(r32(s + 24)), @"nrel" : @(r16(s + 32)), @"chars" : @(r32(s + 36))}];
+        // A name longer than eight bytes is `/<decimal offset>` into the
+        // string table: gcc's .pdata.unlikely is `/35`, and read as is it was
+        // not recognised as unwind data to drop.
+        NSString* sname = @(nm);
+        if (nm[0] == '/' && nm[1])
+            {
+            uint64_t v = 0;
+            BOOL digits = YES;
+            for (int k = 1; nm[k]; k++)
+                {
+                if (nm[k] < '0' || nm[k] > '9')
+                    digits = NO;
+                else
+                    v = v * 10 + (uint64_t)(nm[k] - '0');
+                }
+            if (digits && strOff + v < d.length)
+                sname = [NSString stringWithUTF8String:(const char*)(b + strOff + v)] ?: sname;
+            }
+        [secs addObject:@{@"name" : sname, @"size" : @(r32(s + 16)), @"raw" : @(r32(s + 20)), @"rel" : @(r32(s + 24)), @"nrel" : @(r16(s + 32)), @"chars" : @(r32(s + 36))}];
         }
     // Sections a real toolchain's objects carry that this linker must NOT take.
     // Measured across mingw's libmingwex.a + libmsvcrt.a: every SECREL
@@ -422,6 +440,7 @@ static uint64_t rawSizeOf(NSData* d)
 
     NSMutableData* data = [NSMutableData data];
     NSMutableDictionary<NSNumber*, NSNumber*>* blobOff = [NSMutableDictionary dictionary];
+    uint32_t dataAlign = 8; // the strictest alignment a data section asks for
     for (NSUInteger i = 1; i < secs.count; i++)
         {
         if (textOff[@(i)])
@@ -433,7 +452,16 @@ static uint64_t rawSizeOf(NSData* d)
             continue;
         if (!(ch & (PE_SCN_INITIALIZED_DATA | PE_SCN_UNINIT_DATA)))
             continue;
-        while (data.length & 7)
+        // The header's IMAGE_SCN_ALIGN field (bits 20-23, 2^(n-1) bytes).
+        // gcc's .rdata asks for 32 and loads SSE constants from it with
+        // aligned moves, which fault at an address that is only 8-aligned.
+        uint32_t an = (ch >> 20) & 0xF;
+        uint32_t al = an ? 1u << (an - 1) : 8;
+        if (al < 8)
+            al = 8;
+        if (al > dataAlign)
+            dataAlign = al;
+        while (data.length & (al - 1))
             {
             uint8_t z = 0;
             [data appendBytes:&z length:1];
@@ -527,7 +555,7 @@ static uint64_t rawSizeOf(NSData* d)
                                                   @"addend" : @(addend)}];
             }
         }
-    return @{@"text" : text, @"data" : data, @"symbols" : syms, @"datasyms" : dsyms, @"symnames" : symnames, @"symdefs" : symdefs, @"relocs" : relocs, @"datarelocs" : datarelocs};
+    return @{@"text" : text, @"data" : data, @"symbols" : syms, @"datasyms" : dsyms, @"symnames" : symnames, @"symdefs" : symdefs, @"relocs" : relocs, @"datarelocs" : datarelocs, @"dataAlign" : @(dataAlign)};
     }
 
 + (nullable NSData*)executableFromText:(NSData*)textIn
@@ -927,6 +955,21 @@ static NSInteger byteOrder(id x, id y, void* ctx)
             uint64_t v = target + (uint64_t)f.addend;
             for (int i = 0; i < 8; i++)
                 dp[f.offset + i] = (uint8_t)(v >> (8 * i));
+            continue;
+            }
+        // A slot in data holding the distance from itself to the target (a C
+        // switch's jump table). Relative, so a DLL needs no base relocation.
+        if (f.kind == XAX86FixupPC32Data)
+            {
+            if (f.offset + 4 > data.length)
+                {
+                if (error)
+                    *error = peErr(@"pc32 fixup for '%@' past end of data", f.symbol);
+                return nil;
+                }
+            int64_t drel = (int64_t)target - (int64_t)(dataAddr + f.offset) + f.addend;
+            for (int i = 0; i < 4; i++)
+                dp[f.offset + i] = (uint8_t)((uint64_t)drel >> (8 * i));
             continue;
             }
         if (f.offset + 4 > text.length)

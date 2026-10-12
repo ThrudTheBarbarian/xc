@@ -442,7 +442,8 @@ static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
         uint64_t dbase = mdata.length;
         if (odata.length)
             {
-            while (mdata.length & 7)
+            uint32_t dalign = [obj[@"dataAlign"] unsignedIntValue] ?: 8;
+            while (mdata.length & (dalign - 1))
                 {
                 uint8_t z = 0;
                 [mdata appendBytes:&z length:1];
@@ -528,7 +529,10 @@ static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
             {
             uint32_t rt = [r[@"type"] unsignedIntValue];
             NSUInteger sn = [r[@"sym"] unsignedIntegerValue];
-            if (rt != 0x01 /*IMAGE_REL_AMD64_ADDR64*/ || sn >= snames.count)
+            // A REL32 in data is a slot holding an offset from itself: gcc's
+            // switch jump tables in .rdata, as musl's vfprintf has on ELF.
+            if ((rt != 0x01 /*IMAGE_REL_AMD64_ADDR64*/ && rt != 0x04 /*REL32*/)
+                || sn >= snames.count)
                 {
                 fprintf(stderr, "xcc-ln-win64: error: unhandled data relocation type %u "
                                 "in '%s'\n",
@@ -537,7 +541,7 @@ static BOOL mergeCoffObject(NSDictionary* obj, NSString* whence, NSUInteger oi,
                 }
             XAX86_64Fixup* f = [XAX86_64Fixup new];
             f.offset = dbase + [r[@"off"] unsignedLongLongValue];
-            f.kind = XAX86FixupAbs64;
+            f.kind = rt == 0x04 ? XAX86FixupPC32Data : XAX86FixupAbs64;
             f.symbol = tagged(sn);
             f.addend = [r[@"addend"] longLongValue];
             [mfix addObject:f];

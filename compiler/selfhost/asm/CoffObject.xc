@@ -114,6 +114,7 @@ class CoffSection
     bool _ok;
     Map* _textOffOf; // section index -> offset+1 in the text blob
     Map* _dataOffOf;
+    u32 _dataAlign;  // the strictest alignment a data section asks for
 
     void init(void)
         {
@@ -125,7 +126,15 @@ class CoffSection
         _data = new Data();
         _textOffOf = new Map();
         _dataOffOf = new Map();
+        _dataAlign = (u32)8;
         _ok = false;
+        }
+
+    // What the data blob's start must be aligned to in the image, so each
+    // section in it keeps the alignment its header asks for.
+    u32 dataAlign(void)
+        {
+        return _dataAlign;
         }
 
     bool ok(void)
@@ -152,15 +161,11 @@ class CoffSection
         {
         return _data;
         }
-    // COFF has no separate TLS image and no per-section alignment we honour, so
-    // these answer the way ElfMerge expects for an object that has neither.
+    // COFF has no separate TLS image, so these answer the way ElfMerge
+    // expects for an object that has none (dataAlign is above).
     Data* tls(void)
         {
         return new Data();
-        }
-    u32 dataAlign(void)
-        {
-        return (u32)8;
         }
     u32 tlsAlign(void)
         {
@@ -197,7 +202,7 @@ class CoffSection
             {
             u32 s = (u32)20 + i * (u32)COFF_SECT_HDR_SIZE;
             CoffSection* sec = new CoffSection();
-            sec.set(CoffObject._name8(d, s),
+            sec.set(CoffObject._sectionName(d, s, strOff),
                     CoffObject._rd32(d, s + (u32)16),
                     CoffObject._rd32(d, s + (u32)20),
                     CoffObject._rd32(d, s + (u32)24),
@@ -239,7 +244,16 @@ class CoffSection
             u32 ch = s.chars();
             if ((ch & ((u32)COFF_SCN_INIT_DATA | (u32)COFF_SCN_UNINIT_DATA)) == (u32)0)
                 continue;
-            _padTo(_data, (u32)8);
+            // The header's IMAGE_SCN_ALIGN field (bits 20-23, 2^(n-1) bytes).
+            // gcc's .rdata asks for 32 and loads SSE constants from it with
+            // aligned moves, which fault at an address that is only 8-aligned.
+            u32 an = (ch >> (u32)20) & (u32)$F;
+            u32 al = an == (u32)0 ? (u32)8 : (u32)1 << (an - (u32)1);
+            if (al < (u32)8)
+                al = (u32)8;
+            if (al > _dataAlign)
+                _dataAlign = al;
+            _padTo(_data, al);
             _dataOffOf.set((Hashable*)Number.withU32(i),
                            (Object*)Number.withU32(_data.length() + (u32)1));
             if ((ch & (u32)COFF_SCN_UNINIT_DATA) != (u32)0)
@@ -387,6 +401,27 @@ class CoffSection
         {
         for (u32 i = (u32)0; i < n && off + i < _d.length(); i = i + (u32)1)
             d.appendByte(_d.byteAt(off + i));
+        }
+
+    // A section's name. One longer than eight bytes is `/<decimal offset>`
+    // into the string table: gcc's .pdata.unlikely is `/35`, and read as is it
+    // was not recognised as unwind data to drop.
+    static String* _sectionName(Data* d, u32 o, u32 strOff)
+        {
+        String* n = CoffObject._name8(d, o);
+        if (n.byteLength() < (u32)2 || n.byteAt((u32)0) != (u8)'/')
+            return n;
+        u32 v = (u32)0;
+        for (u32 i = (u32)1; i < n.byteLength(); i = i + (u32)1)
+            {
+            u8 c = n.byteAt(i);
+            if (c < (u8)'0' || c > (u8)'9')
+                return n;
+            v = v * (u32)10 + (u32)(c - (u8)'0');
+            }
+        if (strOff + v >= d.length())
+            return n;
+        return ElfObject._str(d, strOff + v);
         }
 
     // An 8-byte inline name, NUL-padded rather than NUL-terminated when full.

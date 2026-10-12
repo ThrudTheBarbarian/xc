@@ -1020,6 +1020,21 @@ class Pe
                              (Object*)Number.withU32((hi >> ((u32)8 * k)) & (u32)$FF));
                 continue;
                 }
+            // A slot in data holding the distance from itself to the target
+            // (a C switch's jump table). Relative, so a DLL needs no base
+            // relocation for it.
+            if (f.kind() == (u32)X86FIX_PC32DATA)
+                {
+                if (f.offset() + (u32)4 > data.count())
+                    {
+                    failWith(String.withCString("pc32 fixup past the end of data"), f.symbol());
+                    return false;
+                    }
+                i32 drel = (i32)target - (i32)(_dataRVA + f.offset()) + f.addend();
+                for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
+                    data.set(f.offset() + k, (Object*)Number.withU32(((u32)drel >> ((u32)8 * k)) & (u32)$FF));
+                continue;
+                }
             if (f.offset() + (u32)4 > text.count())
                 {
                 failWith(String.withCString("pc32 fixup past the end of text"), f.symbol());

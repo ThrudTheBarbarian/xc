@@ -34,6 +34,12 @@ inputs=""
 for a in libmingwex.a libmsvcrt.a; do
     [ -f "$MINGW/lib/$a" ] && inputs="$inputs $MINGW/lib/$a"
 done
+# gcc's own objects, which mingw's archives do not exercise: long section names
+# (.pdata.unlikely is `/35`), 32-byte-aligned .rdata, and jump tables (REL32 in
+# data). The TLS library's Windows build links them.
+for a in libmbedtls.a libmbedx509.a libtfpsacrypto.a; do
+    [ -f "../frameworks/3p/tls/mbedtls-win64/$a" ] && inputs="$inputs ../frameworks/3p/tls/mbedtls-win64/$a"
+done
 if [ -z "$inputs" ]; then
     echo "--- coffobj-diff: SKIPPED (no mingw sysroot; set XTC_MINGW_ROOT) ---"
     exit 0

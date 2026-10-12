@@ -72,7 +72,7 @@ class PeLink
         u32 dbase = mdata.count();
         if (obj.data().length() > (u32)0)
             {
-            PeLink.padArray(mdata, (u32)7);
+            PeLink.padArray(mdata, obj.dataAlign() - (u32)1);
             dbase = mdata.count();
             PeLink.appendData(mdata, obj.data());
             }
@@ -137,12 +137,18 @@ class PeLink
         for (u32 k = (u32)0; k < dl.count(); k = k + (u32)1)
             {
             ElfReloc* r = (ElfReloc*)dl.get(k);
-            if (r.type() != (u32)COFF_REL_ADDR64 || r.sym() >= sdefs.count())
+            // A REL32 in data is a slot holding an offset from itself: gcc's
+            // switch jump tables in .rdata, as musl's vfprintf has on ELF.
+            u32 kind = (u32)X86FIX_ABS64;
+            if (r.type() == (u32)COFF_REL_REL32)
+                kind = (u32)X86FIX_PC32DATA;
+            if ((r.type() != (u32)COFF_REL_ADDR64 && r.type() != (u32)COFF_REL_REL32)
+                || r.sym() >= sdefs.count())
                 {
                 fail(String.withCString("unhandled data relocation in ").appending(whence));
                 return false;
                 }
-            mfix.add((Object*)X86Fixup.make(dbase + r.off(), (u32)X86FIX_ABS64,
+            mfix.add((Object*)X86Fixup.make(dbase + r.off(), kind,
                                             PeLink.tagged((ElfSymDef*)sdefs.get(r.sym()), oi), (i32)r.addend()));
             }
         return true;

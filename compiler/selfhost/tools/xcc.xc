@@ -2295,6 +2295,16 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
             Process.exit((i32)1); return;
         }
     }
+    // libgcc LAST, as a pool: the helpers C compiled by gcc or clang calls
+    // where the ISA has no instruction (__udivti3, a 128-bit divide, which
+    // Mbed TLS's bignum code needs). A C toolchain's glibc link takes them
+    // from libgcc.a too. A member joins only when something still needs it,
+    // so a link that needs none is unchanged.
+    String* pooldir = muslLibDir(d.fe());
+    if (pooldir != 0) {
+        String* libgcc = String.withString(pooldir); libgcc.appendCString("/libgcc.a");
+        if (Files.exists(libgcc)) ars.add((Object*)libgcc);
+    }
     // Libraries the program #imported (xc-built .so files).
     // Found beside the program ($ORIGIN) or where each was linked from, in
     // that order: DT_RUNPATH as the reference writes it (bug 626).
@@ -4135,12 +4145,15 @@ void emitModule(DriverOptions* d, IRModule* mod)
     if (!d.keepAsm() && !d.compileOnly()) noteLinkFlags(d);
 
     // A link input this target's path does not consume must not be dropped.
-    // arm64 and x86_64 honour them below; anything else says so, because a
-    // library silently missing from a link is a symbol that resolves nowhere
-    // and a failure with no message at run time.
+    // arm64 and x86_64 honour them below, and win64 takes objects and archives
+    // (linkWin64, which refuses anything else by name); anything else says so,
+    // because a library silently missing from a link is a symbol that resolves
+    // nowhere and a failure with no message at run time.
+    bool win64 = d.arch().equals(String.withCString("win64"));
     if ((d.linkInputs().count() > (u32)0 || d.frameworks().count() > (u32)0)
         && !isX86_64(d) && !d.arch().equals(String.withCString("arm64"))
-        && !isAndroid(d) && !isIos(d)) {
+        && !isAndroid(d) && !isIos(d)
+        && !(win64 && d.frameworks().count() == (u32)0)) {
         Stdio.printf("xcc: error: -Xlinker/-l/-framework is not wired for '%s' in "
                      "this driver — the link would silently omit it.\n",
                      d.arch().cString());

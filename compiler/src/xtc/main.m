@@ -2629,6 +2629,10 @@ static int linkX86_64Glibc(const char *argv0, XTCommandLineOptions *opts, NSStri
     [args addObject:stubPath];
     [args addObject:asmPath];
     if (!x86GlibcLinkInputs(opts, fm, args)) return 1;
+    // libgcc as a pool: the helpers C compiled by gcc or clang calls where the
+    // ISA has no instruction (__udivti3, Mbed TLS's 128-bit divide). A member
+    // joins only when something still needs it.
+    { NSString *gcc = x86MuslLibgcc(support); if (gcc) [args addObject:gcc]; }
     // Libraries the program #imported (xc-built .so files): DT_NEEDED, found
     // beside the program or where they were linked from.
     NSMutableArray<NSString *> *depDirs = [NSMutableArray array];
@@ -2811,6 +2815,10 @@ static int linkX86_64GlibcShared(const char *argv0, XTCommandLineOptions *opts, 
     [args addObject:stubPath];
     [args addObject:asmPath];
     if (!x86GlibcLinkInputs(opts, fm, args)) return 1;
+    // libgcc as a pool: the helpers C compiled by gcc or clang calls where the
+    // ISA has no instruction (__udivti3, Mbed TLS's 128-bit divide). A member
+    // joins only when something still needs it.
+    { NSString *gcc = x86MuslLibgcc(support); if (gcc) [args addObject:gcc]; }
     // The libraries this one #imports (xc-built .so files): DT_NEEDED, found
     // beside it through $ORIGIN.
     for (NSString *lib in neededLibs) [args addObject:lib];

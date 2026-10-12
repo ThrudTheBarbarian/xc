@@ -1511,7 +1511,8 @@ ORACLE_COFFOBJ_BIN = $(BIN_DIR)/oracle-coffobj
 .PHONY: oracle-coffobj
 oracle-coffobj: $(ORACLE_COFFOBJ_BIN)
 $(ORACLE_COFFOBJ_BIN): tests/link-coffobj/oracle-diff/harness.m \
-                       src/xtc/link/XTPEWriter.m src/xtc/link/XTArArchive.m | $(BIN_DIR)
+                       src/xtc/link/XTPEWriter.m src/xtc/link/XTArArchive.m \
+                       src/xtc/dwarf/XTDwarfWriter.m | $(BIN_DIR)
 	$(CC) $(CFLAGS) -I src/xtc/link -I src/xtc/asm/x86_64 $(LDFLAGS) -o $@ $^
 
 COFFOBJDUMP_BIN = $(BIN_DIR)/coffobjdump
