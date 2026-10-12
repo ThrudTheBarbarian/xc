@@ -8,7 +8,7 @@
 # Every knob is a variable, so it can be set on the command line:
 #
 #   make OPT=-O0 FLAGS=-g mac        a debuggable macOS build
-#   make XCC=/opt/xcc/0.74/bin/xcc   a particular compiler
+#   make XCC=/opt/xcc/0.75/bin/xcc   a particular compiler
 #   make IOS=ios ios                 the iOS device rather than the simulator
 
 # ── The knobs ──────────────────────────────────────────────────────────────

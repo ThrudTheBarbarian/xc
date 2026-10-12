@@ -3,6 +3,65 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.75 — faster code on x86-64 and arm64, and GPU blocks that fold on the device
+
+The x86-64 code generator closes most of its gap to clang and GCC: loops
+whose test is a short-circuit chain rotate, unrolled bodies address memory
+directly, a splat reads memory, and vectorised sums and matrix loops use the
+full vector width. arm64 code is faster too, and a `par` block's reductions
+are combined on the GPU on every API.
+
+### New
+
+- **`nil`**, the null pointer of every pointer type.
+- **File-scope qualifiers**: a declaration at file scope takes `static` and
+  the other storage-class qualifiers.
+- **Examples**: Hello world and Hello UX built for six platforms from one
+  Makefile, and the Mandelbrot web demo.
+- **`par` on Windows**: `auto` measures CUDA and Vulkan and keeps the
+  faster.
+- **Libraries**: a library is imported once, and the standard library it
+  uses is the client's (636, 637); an interface publishes a method's own
+  slot when it is the higher (648); UXKit ships its GL declarations to
+  clients (638).
+- **Android and iOS**: an APK signing key can be generated on a Windows host
+  (641); iOS simulator libraries, the Android runtime and APK library names
+  resolve from the third-party tree.
+- **wasm32**: the embedded loader follows `loader.js.in`, and the page
+  environment and the program log reach the worker run loop.
+
+### Faster
+
+- **x86-64**: a loop whose test is a short-circuit chain (`while (j > 0 &&
+  a[j-1] > v)`) is rotated like a one-test loop, so its step is one taken
+  branch (`sort_small` 1.90 → 0.92 s). A constant index is a displacement,
+  a load folds its address from anywhere in its block, and vector loads and
+  stores fold theirs (`array_map` 0.42 → 0.33 s, `sieve` 1.11 → 0.97 s). A
+  splat of a loaded value broadcasts from memory (`matrix_mul` 0.18 →
+  0.12 s). The outer-loop vectoriser and the widening byte and short sums
+  use the full vector width (`string_scan` 1.62 → 0.48 s).
+- **arm64**: a float select reads its operands where they are (`perlin`
+  −39%), a comparison read only by selects or branches fuses into them, and
+  a short-circuit `&&` or `||` fuses into its branch (`mandelbrot` −5.5%).
+- **`par`**: every GPU API (CUDA, Vulkan, Metal, WebGPU) folds a block's
+  reductions on the device; the Vulkan host keeps its descriptor pool,
+  command buffer and fence across runs; a CUDA kernel keeps read-only data
+  on the device while it is unchanged, inlines its helpers and keeps its
+  block object in registers; the CPU loops of a block vectorise, float
+  reductions included (`nbody` from 1.9× behind OpenMP to 1.7× ahead).
+- **Benchmarks**: every other compiler is now given the machine's full
+  instruction set, and the C++ programs are measured through GCC as well as
+  clang on x86-64, so the comparison is fair in both directions.
+
+### Fixed
+
+- A zero-initialised global takes no room in a Mach-O or PE file, and on
+  x86-64 an object over 64 KiB is no longer allocated short, with `.data`
+  counting only the bytes in the file (642).
+- A signed remainder in a `par` block is computed as C defines it on
+  Vulkan, whose NVIDIA driver computes `OpSRem` unsigned (649).
+- A `-g` build releases the temporaries of a pinned declaration.
+
 ## Version 0.74 — debugging
 
 `xcc -g` writes DWARF debug information into the executable, so lldb and gdb
