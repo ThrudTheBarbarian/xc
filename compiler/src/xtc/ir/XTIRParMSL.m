@@ -1292,7 +1292,9 @@ static NSString* intrinsicFor(NSString* callee)
 
     NSMutableString* out = [NSMutableString string];
     if (devred)
-        [meta appendString:@" devred"];
+        // devlast: the module carries a fold kernel the host dispatches after
+        // this one, so one partial comes back instead of nparts (bug 645).
+        [meta appendString:@" devred devlast"];
     // A speed-goal block's runtime compiles it with fast maths (MTLMathModeFast).
     if (self.fast)
         [meta appendString:@" fast"];
@@ -1337,6 +1339,58 @@ static NSString* intrinsicFor(NSString* callee)
         [out appendString:tail];
         }
     [out appendString:@"}\n"];
+    // A device-side fold (bug 645), the same shape as the Vulkan path's second
+    // entry point: one workgroup of 256 reads the workgroups' partials, each
+    // lane accumulating the strided ones from the identity the block object
+    // holds, then the same tree the kernel runs, leaving the result in slot 0.
+    // The host dispatches it after the kernel with a buffer barrier between, so
+    // the dispatch boundary is the synchronisation — the cross-workgroup
+    // counter Vulkan first tried is not dependable on these drivers either.
+    if (devred)
+        {
+        [out appendFormat:@"kernel void par_fold(%@, uint lid [[thread_position_in_threadgroup]])\n{\n",
+                          params];
+        [out appendString:shared];
+        [out appendString:@"    long nparts = span[3];\n"];
+        [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
+            NSString* et = scalarName(fl[k].type);
+            NSString* rop = self.redOps[@(k)];
+            BOOL isF = fl[k].type.kind == XTIRTypeKindF32 || fl[k].type.kind == XTIRTypeKindF64;
+            NSString* cmb = nil;
+            NSString* accop = nil;
+            if ([rop isEqualToString:@"min"] || [rop isEqualToString:@"max"])
+                {
+                cmb = [NSString stringWithFormat:@"%@(sh_%lu[lid], sh_%lu[lid + s])",
+                       rop, (unsigned long)k, (unsigned long)k];
+                accop = [NSString stringWithFormat:@"%@(acc_%lu, red_%lu[j])",
+                         rop, (unsigned long)k, (unsigned long)k];
+                }
+            else if ([rop isEqualToString:@"+"] || [rop isEqualToString:@"*"] ||
+                     (!isF && ([rop isEqualToString:@"&"] || [rop isEqualToString:@"|"] || [rop isEqualToString:@"^"])))
+                {
+                cmb = [NSString stringWithFormat:@"sh_%lu[lid] %@ sh_%lu[lid + s]",
+                       (unsigned long)k, rop, (unsigned long)k];
+                accop = [NSString stringWithFormat:@"acc_%lu %@ red_%lu[j]",
+                         (unsigned long)k, rop, (unsigned long)k];
+                }
+            if (!accop)
+                return;
+            [out appendFormat:@"    %@ acc_%lu = *(constant %@*)(args + %u);\n"
+                              @"    for (long j = (long)lid; j < nparts; j += 256) acc_%lu = %@;\n"
+                              @"    sh_%lu[lid] = acc_%lu;\n"
+                              @"    threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+                              @"    for (uint s = 128; s > 0; s >>= 1) {\n"
+                              @"        if (lid < s) sh_%lu[lid] = %@;\n"
+                              @"        threadgroup_barrier(mem_flags::mem_threadgroup);\n"
+                              @"    }\n"
+                              @"    if (lid == 0) red_%lu[0] = sh_%lu[0];\n",
+                              et, (unsigned long)k, et, fl[k].byteOffset,
+                              (unsigned long)k, accop,
+                              (unsigned long)k, (unsigned long)k,
+                              (unsigned long)k, cmb, (unsigned long)k, (unsigned long)k];
+        }];
+        [out appendString:@"}\n"];
+        }
     return out;
     }
 

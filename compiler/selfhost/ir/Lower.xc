@@ -15944,7 +15944,7 @@ class ClassInfo
                 mDtail.appendFormat("    if (lid == 0) red_%u[gid] = sh_%u[0];\n", k, k);
                 }
             }
-        if (mDevred) meta.appendCString(" devred");
+        if (mDevred) meta.appendCString(" devred devlast");
         // A speed-goal block's runtime compiles it with fast maths (MTLMathModeFast).
         if (_mFast) meta.appendCString(" fast");
         String* out = String.withString(meta);
@@ -15987,6 +15987,52 @@ class ClassInfo
             out.append(tail);
             }
         out.appendCString("}\n");
+        // A device-side fold (bug 645), the same shape as the Vulkan path's
+        // second entry point: one workgroup of 256 reads the workgroups'
+        // partials, each lane accumulating the strided ones from the identity
+        // the block object holds, then the same tree the kernel runs, leaving
+        // the result in slot 0. The host dispatches it after the kernel with a
+        // buffer barrier between (the reference explains why not a counter).
+        if (mDevred)
+            {
+            out.appendCString("kernel void par_fold("); out.append(params);
+            out.appendCString(", uint lid [[thread_position_in_threadgroup]])\n{\n");
+            out.append(mShared);
+            out.appendCString("    long nparts = span[3];\n");
+            for (u32 k = (u32)0; k < _mObj.fieldCount(); k = k + (u32)1)
+                {
+                if (_mReds.get((Hashable*)String.withI64((i64)k)) == (Object*)0) continue;
+                String* et = mslScalar(_mObj.typeAt(k));
+                if (et == (String*)0) continue;
+                String* rop = (String*)_mRedOps.get((Hashable*)String.withU32(k));
+                bool isF = ptxIs(_mObj.typeAt(k), "F32") || ptxIs(_mObj.typeAt(k), "F64");
+                String* cmb = (String*)0;
+                String* accop = (String*)0;
+                if (rop != (String*)0 && (rop.equals(ptxS("min")) || rop.equals(ptxS("max"))))
+                    {
+                    cmb = String.withFormat("%s(sh_%u[lid], sh_%u[lid + s])", rop.cString(), k, k);
+                    accop = String.withFormat("%s(acc_%u, red_%u[j])", rop.cString(), k, k);
+                    }
+                else if (rop != (String*)0 && (rop.equals(ptxS("+")) || rop.equals(ptxS("*")) ||
+                         (!isF && (rop.equals(ptxS("&")) || rop.equals(ptxS("|")) || rop.equals(ptxS("^"))))))
+                    {
+                    cmb = String.withFormat("sh_%u[lid] %s sh_%u[lid + s]", k, rop.cString(), k);
+                    accop = String.withFormat("acc_%u %s red_%u[j]", k, rop.cString(), k);
+                    }
+                if (accop == (String*)0)
+                    continue;
+                out.appendFormat("    %s acc_%u = *(constant %s*)(args + %u);\n",
+                                 et.cString(), k, et.cString(), _mObj.offsetAt(k));
+                out.appendFormat("    for (long j = (long)lid; j < nparts; j += 256) acc_%u = %s;\n",
+                                 k, accop.cString());
+                out.appendFormat("    sh_%u[lid] = acc_%u;\n", k, k);
+                out.appendCString("    threadgroup_barrier(mem_flags::mem_threadgroup);\n    for (uint s = 128; s > 0; s >>= 1) {\n");
+                out.appendFormat("        if (lid < s) sh_%u[lid] = %s;\n", k, cmb.cString());
+                out.appendCString("        threadgroup_barrier(mem_flags::mem_threadgroup);\n    }\n");
+                out.appendFormat("    if (lid == 0) red_%u[0] = sh_%u[0];\n", k, k);
+                }
+            out.appendCString("}\n");
+            }
         return out;
         }
 

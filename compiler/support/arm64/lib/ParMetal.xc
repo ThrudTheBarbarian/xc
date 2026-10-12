@@ -35,6 +35,9 @@ struct ParMTLSize
 // The kernels compiled so far: each gpuSource() pointer and its pipeline.
 pointer gParSrc[64];
 pointer gParPso[64];
+// The fold kernel's pipeline, from the same library (bug 645): 0 when the
+// module has none.
+pointer gParPsoFold[64];
 u32 gParKernels;
 
 typedef pointer parObjcName_t(u8* name);
@@ -114,10 +117,19 @@ class ParMetal
         pointer lib = ((parMsgPPP_t*)_send)(_dev, sel("newLibraryWithSource:options:error:"),
                                             nsString(src), opts, (pointer)&err);
         pointer pso = (pointer)0;
+        pointer fpso = (pointer)0;
         if (lib != (pointer)0)
             {
             pointer fn = ((parMsgP_t*)_send)(lib, sel("newFunctionWithName:"), nsString("par_kernel"));
             pso = ((parMsgPP_t*)_send)(_dev, sel("newComputePipelineStateWithFunction:error:"), fn, (pointer)&err);
+            // A module with a fold kernel as well (bug 645): the same library's
+            // second function, dispatched after the kernel to combine the
+            // workgroups' partials on the device instead of on the host.
+            if (hasFold(src))
+                {
+                pointer ffn = ((parMsgP_t*)_send)(lib, sel("newFunctionWithName:"), nsString("par_fold"));
+                fpso = ((parMsgPP_t*)_send)(_dev, sel("newComputePipelineStateWithFunction:error:"), ffn, (pointer)&err);
+                }
             }
         else if (err != (pointer)0)
             {
@@ -129,9 +141,31 @@ class ParMetal
             {
             gParSrc[gParKernels] = (pointer)src;
             gParPso[gParKernels] = pso;
+            gParPsoFold[gParKernels] = fpso;
             gParKernels = gParKernels + (u32)1;
             }
         return pso;
+        }
+
+    // Whether the kernel's header says `devlast`: the module carries a fold
+    // kernel the run dispatches after it, so one partial comes back.
+    static bool hasFold(u8* src)
+        {
+        for (u32 at = (u32)0; src[at] != (u8)0 && src[at] != (u8)10; at = at + (u32)1)
+            if (src[at] == (u8)' ' && src[at + (u32)1] == (u8)'d' && src[at + (u32)2] == (u8)'e' &&
+                src[at + (u32)3] == (u8)'v' && src[at + (u32)4] == (u8)'l' && src[at + (u32)5] == (u8)'a' &&
+                src[at + (u32)6] == (u8)'s' && src[at + (u32)7] == (u8)'t')
+                return true;
+        return false;
+        }
+
+    // The fold kernel's pipeline for a source, or 0.
+    static pointer foldPipeline(u8* src)
+        {
+        for (u32 i = (u32)0; i < gParKernels; i = i + (u32)1)
+            if (gParSrc[i] == (pointer)src)
+                return gParPsoFold[i];
+        return (pointer)0;
         }
 
     // Run [lo, hi) of the block on the GPU. False when the block cannot go
@@ -167,12 +201,14 @@ class ParMetal
         parMsgSetBuf_t* setBuf = (parMsgSetBuf_t*)_send;
         parMsg0_t* send0 = (parMsg0_t*)_send;
 
-        i64 span[3];
+        i64 span[4];
         span[0] = lo;
         span[1] = hi;
         span[2] = per;
+        // The fold kernel reads it: how many partials to combine.
+        span[3] = l.nparts;
         pointer args = withBytes(_dev, sel("newBufferWithBytes:length:options:"), (pointer)obj, (u64)l.size, (u64)0);
-        pointer spanB = withBytes(_dev, sel("newBufferWithBytes:length:options:"), (pointer)&span[0], (u64)24, (u64)0);
+        pointer spanB = withBytes(_dev, sel("newBufferWithBytes:length:options:"), (pointer)&span[0], (u64)32, (u64)0);
         pointer bufs[16];
         pointer reds[16];
         for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
@@ -229,6 +265,24 @@ class ParMetal
             }
         else
             ((parMsgDispatch_t*)_send)(enc, sel("dispatchThreads:threadsPerThreadgroup:"), &grid, &group);
+        // And when the module has a fold kernel, one more dispatch combines the
+        // partials on the device (bug 645). The buffer barrier is the memory
+        // dependency; the dispatch boundary is the execution one. The bindings
+        // stay as they are — Metal keeps them across a pipeline change.
+        if (l.devlast != (i64)0)
+            {
+            pointer fpso = foldPipeline(src);
+            if (fpso != (pointer)0)
+                {
+                ((parMsgP_t*)_send)(enc, sel("setComputePipelineState:"), fpso);
+                ((parMsgSetU_t*)_send)(enc, sel("memoryBarrierWithScope:"), (u64)1);   // MTLBarrierScopeBuffers
+                ParMTLSize fgrid;
+                fgrid.w = (u64)1; fgrid.h = (u64)1; fgrid.d = (u64)1;
+                ParMTLSize fgroup;
+                fgroup.w = (u64)256; fgroup.h = (u64)1; fgroup.d = (u64)1;
+                ((parMsgDispatch_t*)_send)(enc, sel("dispatchThreadgroups:threadsPerThreadgroup:"), &fgrid, &fgroup);
+                }
+            }
         send0(enc, sel("endEncoding"));
         send0(cb, sel("commit"));
         send0(cb, sel("waitUntilCompleted"));
