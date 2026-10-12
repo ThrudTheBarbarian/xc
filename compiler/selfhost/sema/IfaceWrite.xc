@@ -70,9 +70,16 @@ class IfaceWrite
             if (s != (Object*)0) best = s;
             Node* p = IfaceWrite.classNamed(program, Vtable.parentName(a));
             if (p == (Node*)0) break;
+            // An ancestor WITHOUT the method is a gap, not the chain's end:
+            // the reference's override scan walks every ancestor and takes
+            // the first match wherever it is. ParWorker (no integer ivars, so
+            // no synthesised description) sits between ParCpuWorker and
+            // Object, and ParCpuWorker.description still answers at Object's
+            // slot; stopping at the gap published no slot for it (lib-diff,
+            // par_gpu_helpers, 2026-10-12).
             Node* pm = Vtable.matching(p, am);
-            if (pm == (Node*)0) break;
-            a = p; am = pm;
+            a = p;
+            if (pm != (Node*)0) am = pm;
             guard = guard + (u32)1;
         }
         if (own != (Object*)0 && (best == (Object*)0 || ((Number*)own).asU32() > ((Number*)best).asU32()))
