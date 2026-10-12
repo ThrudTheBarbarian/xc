@@ -19,8 +19,9 @@ and `Visualiser.xc` (the window and the controls).
 
 ## What you need
 
-- A Mac with Apple silicon. Linux and Windows builds follow once xcc's TLS
-  library runs there (see [Downloads](/compiler/benchmarks/#downloads)).
+- A Mac with Apple silicon. This guide builds the macOS program; the Linux and
+  Windows [downloads](/compiler/benchmarks/#downloads) are cross-built from a
+  Mac by `benchmark/visualiser/package.sh`.
 - xcc 0.74 or later.
 - The UXKit sources. The [UXKit library archive](/compiler/downloads/#uxkit-library)
   carries them; in a full checkout they are `frameworks/uxkit/`.

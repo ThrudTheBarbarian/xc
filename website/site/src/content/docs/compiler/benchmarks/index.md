@@ -48,16 +48,19 @@ The visualiser is written in xc and built with UXKit.
 | Platform | Visualiser | Size |
 | --- | --- | --- |
 | macOS (Apple silicon) | [xcc-benchviz-0.75-osx.tar.bz2](/downloads/xcc-benchviz-0.75-osx.tar.bz2) | 970 KB |
-| Benchmark sources (any host) | [xcc-bench-sources-0.75.tar.bz2](/downloads/xcc-bench-sources-0.75.tar.bz2) | 93 KB |
+| Linux (x86-64, GTK 4) | [xcc-benchviz-0.75-linux.tar.bz2](/downloads/xcc-benchviz-0.75-linux.tar.bz2) | 1.0 MB |
+| Windows (x86-64) | [xcc-benchviz-0.75-win64.zip](/downloads/xcc-benchviz-0.75-win64.zip) | 941 KB |
+| Benchmark sources (any host) | [xcc-bench-sources-0.75.tar.bz2](/downloads/xcc-bench-sources-0.75.tar.bz2) | 94 KB |
 
-Unpack the archive and run `./visualiser`. The archive carries the libraries
-the program loads (the toolkit's shim and the TLS library) beside it. It is not
-notarised: if macOS refuses to open it, run `xattr -dr com.apple.quarantine .`
-in the unpacked directory once.
+Unpack the archive and run `./visualiser` (`visualiser.exe` on Windows). The
+archive carries the libraries the program loads beside it: the TLS library and,
+on macOS and Linux, the toolkit's shim.
 
-Linux and Windows builds follow once xcc's TLS library runs there: the
-visualiser reaches the corpus over https, and the 0.75 TLS library supports
-neither a GTK program on Linux nor Windows.
+- macOS: the archive is not notarised. If macOS refuses to open it, run
+  `xattr -dr com.apple.quarantine .` in the unpacked directory once.
+- Linux: the machine needs GTK 4 (`libgtk-4-1` on Ubuntu).
+- Windows: the program is not signed, so SmartScreen may ask before the first
+  run. https certificates are checked against the Windows certificate store.
 
 The benchmark sources archive is the `benchmark/` tree: the suite sources, the
 collector, and the visualiser source.
