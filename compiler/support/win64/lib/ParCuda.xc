@@ -120,6 +120,7 @@ class ParCuda
     static cuMemHostUnregister_t* _hostUnregister;
     static i32 _dev;            // the device ordinal the context is on
     static i32 _sms;            // its multiprocessor count (0: unknown)
+    static i32 _engines;        // its copy engines (1: a copy in and a copy out never overlap)
     static bool _tiles;         // the async entry points were all found
 
     static bool start(void)
@@ -178,6 +179,10 @@ class ParCuda
         i32 sms = (i32)0;
         if (_attr != (cuDeviceGetAttribute_t*)0 && _attr(&sms, (i32)16, dev) == (i32)0)   // CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT
             _sms = sms;
+        _engines = (i32)0;
+        i32 eng = (i32)0;
+        if (_attr != (cuDeviceGetAttribute_t*)0 && _attr(&eng, (i32)40, dev) == (i32)0)   // CU_DEVICE_ATTRIBUTE_ASYNC_ENGINE_COUNT
+            _engines = eng;
         _identity = String.withCString("cuda:");
         cuDeviceGetName_t* getName = (cuDeviceGetName_t*)GetProcAddress(lib, "cuDeviceGetName");
         u8 nm[256];
@@ -186,7 +191,7 @@ class ParCuda
             _identity.appendCString(&nm[0]);
         _state = (i32)1;
         if (ParDevice.reporting())
-            Log.info("par: CUDA device 0 is %s, %d multiprocessors", _identity.cString(), _sms);
+            Log.info("par: CUDA device 0 is %s, %d multiprocessors, %d copy engine(s)", _identity.cString(), _sms, _engines);
         return true;
         }
 
@@ -439,6 +444,10 @@ class ParCuda
         i64 floor = (i64)256 * (i64)(_sms > (i32)0 ? _sms : (i32)16);
         if (tile < floor)
             tile = floor;
+        // A multiple of 1024 items, so a slice of a buffer whose footprint
+        // starts at the item (k = 1, lo = 0) begins on a page: the copy
+        // engine moves an aligned slice faster.
+        tile = (tile + (i64)1023) & ~(i64)1023;
         if (n < (i64)3 * tile)
             return false;
         i64 ntiles = (n + tile - (i64)1) / tile;
