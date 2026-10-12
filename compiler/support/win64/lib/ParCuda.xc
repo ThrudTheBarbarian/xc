@@ -31,6 +31,48 @@ typedef i32 cuMemcpyDtoH_t(pointer dst, u64 src, u64 n);
 typedef i32 cuLaunchKernel_t(pointer f, u32 gx, u32 gy, u32 gz, u32 bx, u32 by, u32 bz, u32 shmem,
                              pointer stream, pointer* params, pointer* extra);
 typedef i32 cuCtxSynchronize_t(void);
+// Step 2 of par-tiles-and-devices.md: streams, events and pinned host memory,
+// so a tile's copies overlap another tile's kernel.
+typedef i32 cuDeviceGetAttribute_t(i32* value, i32 attrib, i32 dev);
+typedef i32 cuStreamCreate_t(pointer* stream, u32 flags);
+typedef i32 cuStreamSynchronize_t(pointer stream);
+typedef i32 cuEventCreate_t(pointer* event, u32 flags);
+typedef i32 cuEventRecord_t(pointer event, pointer stream);
+typedef i32 cuEventSynchronize_t(pointer event);
+typedef i32 cuMemHostAlloc_t(pointer* host, u64 bytes, u32 flags);
+typedef i32 cuMemFreeHost_t(pointer host);
+typedef i32 cuMemcpyHtoDAsync_t(u64 dst, pointer src, u64 n, pointer stream);
+typedef i32 cuMemcpyDtoHAsync_t(pointer dst, u64 src, u64 n, pointer stream);
+typedef i32 cuStreamWaitEvent_t(pointer stream, pointer event, u32 flags);
+typedef i32 cuMemHostRegister_t(pointer host, u64 bytes, u32 flags);
+typedef i32 cuMemHostUnregister_t(pointer host);
+// The caller's arrays registered as pinned memory, so a tile's copies go
+// straight between them and the device with no staging copy on the host:
+// registering costs about a millisecond per 64 MB, so only arrays of a
+// megabyte and more are registered, and they stay registered across runs
+// (a block's arrays are usually the same ones every run). Eight entries,
+// the least recently used unregistered to make room.
+#define PAR_CU_REG 8
+pointer gParCuRegHost[PAR_CU_REG];
+i64 gParCuRegLen[PAR_CU_REG];
+i64 gParCuRegUsed[PAR_CU_REG];
+i64 gParCuRegClock;
+
+// The tiled path's streams, events and pinned staging, made on first use and
+// kept: one compute stream the kernels queue on in tile order (a kernel that
+// folds its partials on the device counts its workgroups in a module
+// global, so two of them must not run at once), and per in-flight tile a
+// copy stream, two events and two pinned buffers, uploads and downloads.
+#define PAR_CU_DEPTH 3
+pointer gParCuCompute;
+pointer gParCuCopy[PAR_CU_DEPTH];
+pointer gParCuUpDone[PAR_CU_DEPTH];
+pointer gParCuKernelDone[PAR_CU_DEPTH];
+pointer gParCuTileDone[PAR_CU_DEPTH];
+u8* gParCuUp[PAR_CU_DEPTH];
+i64 gParCuUpCap[PAR_CU_DEPTH];
+u8* gParCuDown[PAR_CU_DEPTH];
+i64 gParCuDownCap[PAR_CU_DEPTH];
 
 // The kernels compiled so far: each gpuSource() pointer and its function.
 pointer gParCuSrc[64];
@@ -63,6 +105,22 @@ class ParCuda
     static cuMemcpyDtoH_t* _toHost;
     static cuLaunchKernel_t* _launch;
     static cuCtxSynchronize_t* _sync;
+    static cuDeviceGetAttribute_t* _attr;
+    static cuStreamCreate_t* _streamCreate;
+    static cuStreamSynchronize_t* _streamSync;
+    static cuEventCreate_t* _eventCreate;
+    static cuEventRecord_t* _eventRecord;
+    static cuEventSynchronize_t* _eventSync;
+    static cuMemHostAlloc_t* _hostAlloc;
+    static cuMemFreeHost_t* _hostFree;
+    static cuMemcpyHtoDAsync_t* _toDeviceAsync;
+    static cuMemcpyDtoHAsync_t* _toHostAsync;
+    static cuStreamWaitEvent_t* _streamWait;
+    static cuMemHostRegister_t* _hostRegister;
+    static cuMemHostUnregister_t* _hostUnregister;
+    static i32 _dev;            // the device ordinal the context is on
+    static i32 _sms;            // its multiprocessor count (0: unknown)
+    static bool _tiles;         // the async entry points were all found
 
     static bool start(void)
         {
@@ -83,6 +141,27 @@ class ParCuda
         _toHost = (cuMemcpyDtoH_t*)GetProcAddress(lib, "cuMemcpyDtoH_v2");
         _launch = (cuLaunchKernel_t*)GetProcAddress(lib, "cuLaunchKernel");
         _sync = (cuCtxSynchronize_t*)GetProcAddress(lib, "cuCtxSynchronize");
+        _attr = (cuDeviceGetAttribute_t*)GetProcAddress(lib, "cuDeviceGetAttribute");
+        _streamCreate = (cuStreamCreate_t*)GetProcAddress(lib, "cuStreamCreate");
+        _streamSync = (cuStreamSynchronize_t*)GetProcAddress(lib, "cuStreamSynchronize");
+        _eventCreate = (cuEventCreate_t*)GetProcAddress(lib, "cuEventCreate");
+        _eventRecord = (cuEventRecord_t*)GetProcAddress(lib, "cuEventRecord");
+        _eventSync = (cuEventSynchronize_t*)GetProcAddress(lib, "cuEventSynchronize");
+        _hostAlloc = (cuMemHostAlloc_t*)GetProcAddress(lib, "cuMemHostAlloc");
+        _hostFree = (cuMemFreeHost_t*)GetProcAddress(lib, "cuMemFreeHost");
+        _toDeviceAsync = (cuMemcpyHtoDAsync_t*)GetProcAddress(lib, "cuMemcpyHtoDAsync_v2");
+        _toHostAsync = (cuMemcpyDtoHAsync_t*)GetProcAddress(lib, "cuMemcpyDtoHAsync_v2");
+        _streamWait = (cuStreamWaitEvent_t*)GetProcAddress(lib, "cuStreamWaitEvent");
+        _hostRegister = (cuMemHostRegister_t*)GetProcAddress(lib, "cuMemHostRegister_v2");
+        _hostUnregister = (cuMemHostUnregister_t*)GetProcAddress(lib, "cuMemHostUnregister");
+        // Without the whole set the runtime stays single shot; the driver's
+        // API has had all of them since CUDA 4, so this is defensive.
+        _tiles = _attr != (cuDeviceGetAttribute_t*)0 && _streamCreate != (cuStreamCreate_t*)0 &&
+                 _streamSync != (cuStreamSynchronize_t*)0 && _eventCreate != (cuEventCreate_t*)0 &&
+                 _eventRecord != (cuEventRecord_t*)0 && _eventSync != (cuEventSynchronize_t*)0 &&
+                 _hostAlloc != (cuMemHostAlloc_t*)0 && _hostFree != (cuMemFreeHost_t*)0 &&
+                 _toDeviceAsync != (cuMemcpyHtoDAsync_t*)0 && _toHostAsync != (cuMemcpyDtoHAsync_t*)0 &&
+                 _streamWait != (cuStreamWaitEvent_t*)0;
         if (init == (cuInit_t*)0 || deviceGet == (cuDeviceGet_t*)0 || ctxCreate == (cuCtxCreate_t*)0 ||
             _load == (cuModuleLoadDataEx_t*)0 || _getFunction == (cuModuleGetFunction_t*)0 ||
             _alloc == (cuMemAlloc_t*)0 || _free == (cuMemFree_t*)0 || _toDevice == (cuMemcpyHtoD_t*)0 ||
@@ -94,6 +173,11 @@ class ParCuda
         if (init((u32)0) != (i32)0 || deviceGet(&dev, (i32)0) != (i32)0 || ctxCreate(&ctx, (u32)0, dev) != (i32)0)
             return false;
         _ctx = ctx;
+        _dev = dev;
+        _sms = (i32)0;
+        i32 sms = (i32)0;
+        if (_attr != (cuDeviceGetAttribute_t*)0 && _attr(&sms, (i32)16, dev) == (i32)0)   // CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT
+            _sms = sms;
         _identity = String.withCString("cuda:");
         cuDeviceGetName_t* getName = (cuDeviceGetName_t*)GetProcAddress(lib, "cuDeviceGetName");
         u8 nm[256];
@@ -101,6 +185,8 @@ class ParCuda
         if (getName != (cuDeviceGetName_t*)0 && getName(&nm[0], (i32)255, dev) == (i32)0)
             _identity.appendCString(&nm[0]);
         _state = (i32)1;
+        if (ParDevice.reporting())
+            Log.info("par: CUDA device 0 is %s, %d multiprocessors", _identity.cString(), _sms);
         return true;
         }
 
@@ -197,6 +283,535 @@ class ParCuda
         return gParCuDev[k];
         }
 
+    // ── tiles (par-tiles-and-devices.md step 2) ────────────────────────────
+    //
+    // A block whose written buffers all have footprints is run as tiles of
+    // the range, each a launch over its own slice with its own copies, so
+    // tile t+1's upload and tile t-1's download overlap tile t's kernel. A
+    // read-only buffer with no footprint is uploaded whole once (the
+    // single-shot path's slot memory); a written one with none keeps the
+    // block single shot.
+
+    // Whether the block can be tiled at all: byval (the object and span are
+    // launch parameters, so each tile needs no copy of them), every written
+    // buffer and global footprinted with k > 0, and every footprinted
+    // buffer's element size known.
+    static bool tileable(ParLayout* l)
+        {
+        if (!_tiles || l.byval == (i64)0)
+            return false;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            if (l.bufFp[i] != (i64)0 && (l.bufFpK[i] <= (i64)0 || l.bufElem[i] <= (i64)0))
+                return false;
+            if (l.bufIn[i] == (i64)0 && l.bufFp[i] == (i64)0)
+                return false;
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            if (l.globFp[i] != (i64)0 && (l.globFpK[i] <= (i64)0 || l.globElem[i] <= (i64)0))
+                return false;
+            if (l.globIn[i] == (i64)0 && l.globFp[i] == (i64)0)
+                return false;
+            }
+        return true;
+        }
+
+    // The bytes a tile of `items` work items moves for footprinted buffers,
+    // both ways.
+    static i64 tileBytes(ParLayout* l, i64 items)
+        {
+        i64 b = (i64)0;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            if (l.bufFp[i] != (i64)0)
+                b = b + (l.bufFpK[i] * items + (l.bufFpHi[i] - l.bufFpLo[i])) * l.bufElem[i] * (l.bufIn[i] != (i64)0 ? (i64)1 : (i64)2);
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            if (l.globFp[i] != (i64)0)
+                b = b + (l.globFpK[i] * items + (l.globFpHi[i] - l.globFpLo[i])) * l.globElem[i] * (l.globIn[i] != (i64)0 ? (i64)1 : (i64)2);
+        return b;
+        }
+
+    // Element range [e0, e1) of a footprinted buffer of `len` bytes that the
+    // work items [tlo, thi) touch, clipped to the buffer.
+    static i64 sliceLo(i64 k, i64 flo, i64 tlo, i64 count)
+        {
+        i64 e0 = k * tlo + flo;
+        if (e0 < (i64)0) e0 = (i64)0;
+        if (e0 > count) e0 = count;
+        return e0;
+        }
+    static i64 sliceHi(i64 k, i64 fhi, i64 thi, i64 count)
+        {
+        i64 e1 = k * (thi - (i64)1) + fhi;
+        if (e1 < (i64)0) e1 = (i64)0;
+        if (e1 > count) e1 = count;
+        return e1;
+        }
+
+    // Whether [host, host+bytes) is registered (pinned), registering it when
+    // it is a megabyte or more and the driver has the call. A range already
+    // inside a registered one counts.
+    static bool pinned(pointer host, i64 bytes)
+        {
+        if (host == (pointer)0 || bytes <= (i64)0)
+            return false;
+        gParCuRegClock = gParCuRegClock + (i64)1;
+        u64 h = (u64)host;
+        for (u32 i = (u32)0; i < (u32)PAR_CU_REG; i = i + (u32)1)
+            if (gParCuRegHost[i] != (pointer)0 && h >= (u64)gParCuRegHost[i] &&
+                h + (u64)bytes <= (u64)gParCuRegHost[i] + (u64)gParCuRegLen[i])
+                {
+                gParCuRegUsed[i] = gParCuRegClock;
+                return true;
+                }
+        if (bytes < ((i64)1 << (i64)20) || _hostRegister == (cuMemHostRegister_t*)0 ||
+            _hostUnregister == (cuMemHostUnregister_t*)0)
+            return false;
+        u32 slot = (u32)0;
+        for (u32 i = (u32)0; i < (u32)PAR_CU_REG; i = i + (u32)1)
+            if (gParCuRegHost[i] == (pointer)0 || gParCuRegUsed[i] < gParCuRegUsed[slot])
+                slot = i;
+        if (gParCuRegHost[slot] != (pointer)0)
+            {
+            _hostUnregister(gParCuRegHost[slot]);
+            gParCuRegHost[slot] = (pointer)0;
+            }
+        if (_hostRegister(host, (u64)bytes, (u32)0) != (i32)0)
+            return false;
+        gParCuRegHost[slot] = host;
+        gParCuRegLen[slot] = bytes;
+        gParCuRegUsed[slot] = gParCuRegClock;
+        return true;
+        }
+
+    static bool tileSetup(void)
+        {
+        if (gParCuCompute != (pointer)0)
+            return true;
+        if (_streamCreate(&gParCuCompute, (u32)1) != (i32)0)   // CU_STREAM_NON_BLOCKING
+            return false;
+        for (u32 d = (u32)0; d < (u32)PAR_CU_DEPTH; d = d + (u32)1)
+            {
+            if (_streamCreate(&gParCuCopy[d], (u32)1) != (i32)0)
+                return false;
+            // CU_EVENT_DISABLE_TIMING (2): these only order work.
+            if (_eventCreate(&gParCuUpDone[d], (u32)2) != (i32)0 || _eventCreate(&gParCuKernelDone[d], (u32)2) != (i32)0 ||
+                _eventCreate(&gParCuTileDone[d], (u32)2) != (i32)0)
+                return false;
+            }
+        return true;
+        }
+
+    // Pinned staging of at least `bytes` for slot d, uploads or downloads.
+    static u8* staging(u32 d, bool up, i64 bytes)
+        {
+        u8* cur = up ? gParCuUp[d] : gParCuDown[d];
+        i64 cap = up ? gParCuUpCap[d] : gParCuDownCap[d];
+        if (cur != (u8*)0 && cap >= bytes)
+            return cur;
+        if (cur != (u8*)0)
+            _hostFree((pointer)cur);
+        pointer p = (pointer)0;
+        if (_hostAlloc(&p, (u64)bytes, (u32)0) != (i32)0)
+            p = (pointer)0;
+        if (up) { gParCuUp[d] = (u8*)p; gParCuUpCap[d] = p != (pointer)0 ? bytes : (i64)0; }
+        else { gParCuDown[d] = (u8*)p; gParCuDownCap[d] = p != (pointer)0 ? bytes : (i64)0; }
+        return (u8*)p;
+        }
+
+    // Run [lo, hi) as tiles. False when something failed before any tile
+    // was launched (the caller falls back as for a single shot); once tiles
+    // are in flight a failure is reported and false returned after the
+    // streams drain, and the host's arrays are then partly written, as a
+    // failed single shot leaves them.
+    static bool runTiled(ParChunk* proto, pointer fn, ParLayout* l, i64 lo, i64 hi, i64 started)
+        {
+        i64 n = hi - lo;
+        // Tile size: about 8 MB moved per tile, at least 256 work items per
+        // multiprocessor so a tile still fills the GPU, and no tiling under
+        // three tiles.
+        i64 perItem = tileBytes(l, (i64)1) - tileBytes(l, (i64)0);
+        if (perItem <= (i64)0)
+            return false;
+        i64 tileMb = ParDevice.tileMegabytes();
+        i64 tile = (tileMb << (i64)20) / perItem;
+        i64 floor = (i64)256 * (i64)(_sms > (i32)0 ? _sms : (i32)16);
+        if (tile < floor)
+            tile = floor;
+        if (n < (i64)3 * tile)
+            return false;
+        i64 ntiles = (n + tile - (i64)1) / tile;
+        if (!tileSetup())
+            return false;
+        u8* obj = (u8*)(pointer)proto;
+
+        // The un-footprinted read-only buffers and globals: whole, once, in
+        // the single-shot path's slot memory. Slots 0 and 1 are the object
+        // and span, which go by value.
+        u64 whole[52];
+        u32 nd = (u32)2;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            whole[nd] = l.bufFp[i] != (i64)0 ? (u64)0
+                      : uploadKeeping(nd, *(pointer*)(obj + l.bufOff[i]), l.bufLen[i], true);
+            if (l.bufFp[i] == (i64)0 && whole[nd] == (u64)0)
+                return false;
+            nd = nd + (u32)1;
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            whole[nd] = l.globFp[i] != (i64)0 ? (u64)0 : uploadKeeping(nd, l.globPtr[i], l.globLen[i], true);
+            if (l.globFp[i] == (i64)0 && whole[nd] == (u64)0)
+                return false;
+            nd = nd + (u32)1;
+            }
+        u32 nparams = nd + l.nred;
+
+        // Per in-flight slot: a device slice per footprinted buffer and per
+        // reduction, sized for the largest tile.
+        i64 sliceMax[32];
+        u64 slice[PAR_CU_DEPTH * 32];
+        i64 partMax[16];
+        u64 partDev[PAR_CU_DEPTH * 16];
+        i64 tileItems = tile;
+        // The layout plans each tile in turn (its threads and partials);
+        // its whole-range plan is put back for the report at the end.
+        l.plan(lo, lo + tileItems);
+        // Which footprinted buffers are pinned in place: their copies go
+        // straight from and to the caller's array; the others go through
+        // the slot's staging buffer.
+        bool pin[32];
+        i64 upMax = (i64)0;
+        i64 downMax = (i64)0;
+        u32 q = (u32)0;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            sliceMax[q] = (i64)0;
+            pin[q] = false;
+            if (l.bufFp[i] != (i64)0)
+                {
+                sliceMax[q] = (l.bufFpK[i] * tileItems + (l.bufFpHi[i] - l.bufFpLo[i])) * l.bufElem[i];
+                pin[q] = pinned(*(pointer*)(obj + l.bufOff[i]), l.bufLen[i]);
+                if (!pin[q])
+                    {
+                    upMax = upMax + sliceMax[q];
+                    if (l.bufIn[i] == (i64)0) downMax = downMax + sliceMax[q];
+                    }
+                }
+            q = q + (u32)1;
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            sliceMax[q] = (i64)0;
+            pin[q] = false;
+            if (l.globFp[i] != (i64)0)
+                {
+                sliceMax[q] = (l.globFpK[i] * tileItems + (l.globFpHi[i] - l.globFpLo[i])) * l.globElem[i];
+                pin[q] = pinned(l.globPtr[i], l.globLen[i]);
+                if (!pin[q])
+                    {
+                    upMax = upMax + sliceMax[q];
+                    if (l.globIn[i] == (i64)0) downMax = downMax + sliceMax[q];
+                    }
+                }
+            q = q + (u32)1;
+            }
+        for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+            {
+            partMax[r] = l.nparts * l.redStride[r];
+            downMax = downMax + l.nback * l.redStride[r];
+            }
+        if (ParDevice.reporting())
+            {
+            u32 npin = (u32)0;
+            u32 nfp = (u32)0;
+            for (u32 b = (u32)0; b < q; b = b + (u32)1)
+                if (sliceMax[b] > (i64)0)
+                    {
+                    nfp = nfp + (u32)1;
+                    if (pin[b]) npin = npin + (u32)1;
+                    }
+            Log.info("par: tiles of %ld items (%ld MB each way at most), %ld tiles, %u of %u sliced buffers pinned in place",
+                     tile, tileMb, ntiles, npin, nfp);
+            }
+        bool ok = true;
+        for (u32 d = (u32)0; d < (u32)PAR_CU_DEPTH && ok; d = d + (u32)1)
+            {
+            for (u32 b = (u32)0; b < q; b = b + (u32)1)
+                {
+                slice[d * (u32)32 + b] = (u64)0;
+                if (sliceMax[b] > (i64)0 && _alloc(&slice[d * (u32)32 + b], (u64)sliceMax[b]) != (i32)0)
+                    ok = false;
+                }
+            for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                {
+                partDev[d * (u32)16 + r] = (u64)0;
+                if (_alloc(&partDev[d * (u32)16 + r], (u64)partMax[r]) != (i32)0)
+                    ok = false;
+                }
+            if (ok && upMax > (i64)0 && staging(d, true, upMax) == (u8*)0)
+                ok = false;
+            if (ok && downMax > (i64)0 && staging(d, false, downMax) == (u8*)0)
+                ok = false;
+            }
+        if (!ok)
+            {
+            for (u32 d = (u32)0; d < (u32)PAR_CU_DEPTH; d = d + (u32)1)
+                {
+                for (u32 b = (u32)0; b < q; b = b + (u32)1)
+                    if (slice[d * (u32)32 + b] != (u64)0) _free(slice[d * (u32)32 + b]);
+                for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                    if (partDev[d * (u32)16 + r] != (u64)0) _free(partDev[d * (u32)16 + r]);
+                }
+            return false;
+            }
+
+        // Every tile is launched from the object as it was before any tile's
+        // partials were folded into it: the kernel's threads start their
+        // reductions from the object's fields, as the single shot does once.
+        u8* snap = (u8*)malloc((u64)l.size);
+        if (snap == (u8*)0)
+            ok = false;
+        else
+            memcpy((pointer)snap, (pointer)obj, (u64)l.size);
+        i64 gpuStart = ParDevice.nowUs();
+        i64 span[PAR_CU_DEPTH * 3];
+        u64 dev[PAR_CU_DEPTH * 52];
+        pointer params[PAR_CU_DEPTH * 52];
+        // What each in-flight tile is, for its completion: its range and
+        // where its downloads went in the staging buffer.
+        i64 tLo[PAR_CU_DEPTH];
+        i64 tHi[PAR_CU_DEPTH];
+        bool launched = false;
+        for (i64 t = (i64)0; t < ntiles + (i64)PAR_CU_DEPTH && ok; t = t + (i64)1)
+            {
+            u32 d = (u32)(t % (i64)PAR_CU_DEPTH);
+            // Complete the tile that used this slot PAR_CU_DEPTH tiles ago, in
+            // tile order: its downloads to the host, its partials folded.
+            if (t >= (i64)PAR_CU_DEPTH)
+                {
+                ok = _eventSync(gParCuTileDone[d]) == (i32)0;
+                if (ok)
+                    {
+                    i64 clo = tLo[d];
+                    i64 chi = tHi[d];
+                    u8* down = gParCuDown[d];
+                    i64 at = (i64)0;
+                    u32 b = (u32)0;
+                    for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+                        {
+                        if (l.bufFp[i] != (i64)0 && l.bufIn[i] == (i64)0)
+                            {
+                            i64 count = l.bufLen[i] / l.bufElem[i];
+                            i64 e0 = sliceLo(l.bufFpK[i], l.bufFpLo[i], clo, count);
+                            i64 e1 = sliceHi(l.bufFpK[i], l.bufFpHi[i], chi, count);
+                            i64 bytes = (e1 - e0) * l.bufElem[i];
+                            if (bytes > (i64)0 && !pin[b])
+                                {
+                                memcpy((pointer)(*(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i]), (pointer)(down + at), (u64)bytes);
+                                at = at + bytes;
+                                }
+                            }
+                        b = b + (u32)1;
+                        }
+                    for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+                        {
+                        if (l.globFp[i] != (i64)0 && l.globIn[i] == (i64)0)
+                            {
+                            i64 count = l.globLen[i] / l.globElem[i];
+                            i64 e0 = sliceLo(l.globFpK[i], l.globFpLo[i], clo, count);
+                            i64 e1 = sliceHi(l.globFpK[i], l.globFpHi[i], chi, count);
+                            i64 bytes = (e1 - e0) * l.globElem[i];
+                            if (bytes > (i64)0 && !pin[b])
+                                {
+                                memcpy((pointer)((u8*)l.globPtr[i] + e0 * l.globElem[i]), (pointer)(down + at), (u64)bytes);
+                                at = at + bytes;
+                                }
+                            }
+                        b = b + (u32)1;
+                        }
+                    if (l.nred > (u32)0)
+                        {
+                        l.plan(clo, chi);
+                        u8* parts[16];
+                        for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                            {
+                            parts[r] = down + at;
+                            at = at + l.nback * l.redStride[r];
+                            }
+                        l.fold(proto, &parts[0]);
+                        }
+                    }
+                }
+            if (t >= ntiles || !ok)
+                continue;
+            i64 tlo = lo + t * tile;
+            i64 thi = tlo + tile;
+            if (thi > hi) thi = hi;
+            tLo[d] = tlo;
+            tHi[d] = thi;
+            l.plan(tlo, thi);
+            span[d * (u32)3 + 0] = tlo;
+            span[d * (u32)3 + 1] = thi;
+            span[d * (u32)3 + 2] = l.per;
+            // Stage the tile's inputs into pinned memory and start them up
+            // on the slot's copy stream; a footprinted buffer's kernel
+            // parameter is its slice less its first element's offset, so
+            // the kernel's index i still lands on element i.
+            u8* up = gParCuUp[d];
+            i64 at = (i64)0;
+            u32 b = (u32)0;
+            dev[d * (u32)52 + 0] = (u64)1;
+            dev[d * (u32)52 + 1] = (u64)1;
+            u32 pi = (u32)2;
+            for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+                {
+                if (l.bufFp[i] != (i64)0)
+                    {
+                    i64 count = l.bufLen[i] / l.bufElem[i];
+                    i64 e0 = sliceLo(l.bufFpK[i], l.bufFpLo[i], tlo, count);
+                    i64 e1 = sliceHi(l.bufFpK[i], l.bufFpHi[i], thi, count);
+                    i64 bytes = (e1 - e0) * l.bufElem[i];
+                    pointer src = (pointer)(*(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i]);
+                    if (bytes > (i64)0 && pin[b])
+                        {
+                        if (_toDeviceAsync(slice[d * (u32)32 + b], src, (u64)bytes, gParCuCopy[d]) != (i32)0)
+                            ok = false;
+                        }
+                    else if (bytes > (i64)0)
+                        {
+                        memcpy((pointer)(up + at), src, (u64)bytes);
+                        if (_toDeviceAsync(slice[d * (u32)32 + b], (pointer)(up + at), (u64)bytes, gParCuCopy[d]) != (i32)0)
+                            ok = false;
+                        at = at + bytes;
+                        }
+                    dev[d * (u32)52 + pi] = slice[d * (u32)32 + b] - (u64)(e0 * l.bufElem[i]);
+                    }
+                else
+                    dev[d * (u32)52 + pi] = whole[pi];
+                pi = pi + (u32)1;
+                b = b + (u32)1;
+                }
+            for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+                {
+                if (l.globFp[i] != (i64)0)
+                    {
+                    i64 count = l.globLen[i] / l.globElem[i];
+                    i64 e0 = sliceLo(l.globFpK[i], l.globFpLo[i], tlo, count);
+                    i64 e1 = sliceHi(l.globFpK[i], l.globFpHi[i], thi, count);
+                    i64 bytes = (e1 - e0) * l.globElem[i];
+                    pointer src = (pointer)((u8*)l.globPtr[i] + e0 * l.globElem[i]);
+                    if (bytes > (i64)0 && pin[b])
+                        {
+                        if (_toDeviceAsync(slice[d * (u32)32 + b], src, (u64)bytes, gParCuCopy[d]) != (i32)0)
+                            ok = false;
+                        }
+                    else if (bytes > (i64)0)
+                        {
+                        memcpy((pointer)(up + at), src, (u64)bytes);
+                        if (_toDeviceAsync(slice[d * (u32)32 + b], (pointer)(up + at), (u64)bytes, gParCuCopy[d]) != (i32)0)
+                            ok = false;
+                        at = at + bytes;
+                        }
+                    dev[d * (u32)52 + pi] = slice[d * (u32)32 + b] - (u64)(e0 * l.globElem[i]);
+                    }
+                else
+                    dev[d * (u32)52 + pi] = whole[pi];
+                pi = pi + (u32)1;
+                b = b + (u32)1;
+                }
+            for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                {
+                dev[d * (u32)52 + pi] = partDev[d * (u32)16 + r];
+                pi = pi + (u32)1;
+                }
+            if (!ok)
+                break;
+            // The kernel, on the compute stream, after this slot's uploads.
+            if (_eventRecord(gParCuUpDone[d], gParCuCopy[d]) != (i32)0 ||
+                _streamWait(gParCuCompute, gParCuUpDone[d], (u32)0) != (i32)0)
+                { ok = false; break; }
+            for (u32 i = (u32)0; i < nparams; i = i + (u32)1)
+                params[d * (u32)52 + i] = (pointer)&dev[d * (u32)52 + i];
+            params[d * (u32)52 + 0] = (pointer)snap;
+            params[d * (u32)52 + 1] = (pointer)&span[d * (u32)3 + 0];
+            u32 group = (u32)256;
+            u32 grid = (u32)((l.threads + (i64)group - (i64)1) / (i64)group);
+            if (_launch(fn, grid, (u32)1, (u32)1, group, (u32)1, (u32)1, (u32)0, gParCuCompute, &params[d * (u32)52 + 0],
+                        (pointer*)0) != (i32)0)
+                { ok = false; break; }
+            launched = true;
+            // Its downloads, on the slot's copy stream, after the kernel.
+            if (_eventRecord(gParCuKernelDone[d], gParCuCompute) != (i32)0 ||
+                _streamWait(gParCuCopy[d], gParCuKernelDone[d], (u32)0) != (i32)0)
+                { ok = false; break; }
+            u8* down = gParCuDown[d];
+            at = (i64)0;
+            b = (u32)0;
+            for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+                {
+                if (l.bufFp[i] != (i64)0 && l.bufIn[i] == (i64)0)
+                    {
+                    i64 count = l.bufLen[i] / l.bufElem[i];
+                    i64 e0 = sliceLo(l.bufFpK[i], l.bufFpLo[i], tlo, count);
+                    i64 e1 = sliceHi(l.bufFpK[i], l.bufFpHi[i], thi, count);
+                    i64 bytes = (e1 - e0) * l.bufElem[i];
+                    pointer dst = pin[b] ? (pointer)(*(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i]) : (pointer)(down + at);
+                    if (bytes > (i64)0 && _toHostAsync(dst, slice[d * (u32)32 + b], (u64)bytes, gParCuCopy[d]) != (i32)0)
+                        ok = false;
+                    if (!pin[b]) at = at + bytes;
+                    }
+                b = b + (u32)1;
+                }
+            for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+                {
+                if (l.globFp[i] != (i64)0 && l.globIn[i] == (i64)0)
+                    {
+                    i64 count = l.globLen[i] / l.globElem[i];
+                    i64 e0 = sliceLo(l.globFpK[i], l.globFpLo[i], tlo, count);
+                    i64 e1 = sliceHi(l.globFpK[i], l.globFpHi[i], thi, count);
+                    i64 bytes = (e1 - e0) * l.globElem[i];
+                    pointer dst = pin[b] ? (pointer)((u8*)l.globPtr[i] + e0 * l.globElem[i]) : (pointer)(down + at);
+                    if (bytes > (i64)0 && _toHostAsync(dst, slice[d * (u32)32 + b], (u64)bytes, gParCuCopy[d]) != (i32)0)
+                        ok = false;
+                    if (!pin[b]) at = at + bytes;
+                    }
+                b = b + (u32)1;
+                }
+            for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                {
+                i64 bytes = l.nback * l.redStride[r];
+                if (_toHostAsync((pointer)(down + at), partDev[d * (u32)16 + r], (u64)bytes, gParCuCopy[d]) != (i32)0)
+                    ok = false;
+                at = at + bytes;
+                }
+            if (_eventRecord(gParCuTileDone[d], gParCuCopy[d]) != (i32)0)
+                ok = false;
+            }
+        // Nothing of the tiles' device memory is kept: the slices are per
+        // run (the staging and streams stay).
+        if (!ok)
+            {
+            _sync();
+            Log.error("par: the GPU run failed, running on the CPU");
+            }
+        for (u32 d = (u32)0; d < (u32)PAR_CU_DEPTH; d = d + (u32)1)
+            {
+            for (u32 b = (u32)0; b < q; b = b + (u32)1)
+                if (slice[d * (u32)32 + b] != (u64)0) _free(slice[d * (u32)32 + b]);
+            for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                if (partDev[d * (u32)16 + r] != (u64)0) _free(partDev[d * (u32)16 + r]);
+            }
+        if (snap != (u8*)0)
+            free((pointer)snap);
+        if (!ok)
+            return false;
+        l.plan(lo, hi);
+        l.tiles = ntiles;
+        ParDevice.ranOnGpu(proto, l, ParDevice.nowUs() - started, ParDevice.nowUs() - gpuStart);
+        return true;
+        }
+
     // Run [lo, hi) of the block on the GPU. False when the block cannot go
     // there (no kernel, a buffer of unknown size, no device): the caller then
     // runs it on the CPU, which gives the same answer.
@@ -218,6 +833,8 @@ class ParCuda
         ParLayout* l = ParDevice.layout(proto, src, lo, hi);
         if (l == (ParLayout*)0)
             return false;
+        if (tileable(l) && ParDevice.tilesWanted() && runTiled(proto, fn, l, lo, hi, started))
+            return true;
         u8* obj = (u8*)(pointer)proto;
 
         // The kernel's parameters, in its order: args, span, buffers,

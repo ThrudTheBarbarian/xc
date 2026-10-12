@@ -101,6 +101,9 @@ class ParLayout : Object
     i64 bufOff[16];
     i64 bufLen[16];
     i64 bufIvar[16];      // the captured array's index among the block's ivars
+    i64 bufElem[16];      // bytes per element
+    i64 globElem[16];
+    i64 tiles;            // how many tiles the last run was cut into (0: one shot)
     u32 nbuf;
     u8 globName[1024];    // each global's name, as the header names it, 64 bytes apart
     pointer globPtr[16];
@@ -182,6 +185,35 @@ class ParDevice
     static i32 _mode;            // XC_PAR: 0 unread, 1 cpu, 2 gpu, 3 auto, 4 unset
     static Settings* _store;     // the program's settings store, opened on first use
     static String* _hw;          // the hardware key (hex), once the GPU is known
+
+    // Whether a GPU run may be cut into tiles (par-tiles-and-devices.md
+    // step 2): XC_PAR_TILES=0 keeps every run single shot, for comparison.
+    static i32 _tilesMode;   // 0 unread, 1 on, 2 off
+    static bool tilesWanted(void)
+        {
+        if (_tilesMode == (i32)0)
+            {
+            String* v = Platform.env(String.withCString("XC_PAR_TILES"));
+            _tilesMode = v.byteLength() > (u32)0 && v.byteAt((u32)0) == (u8)'0' ? (i32)2 : (i32)1;
+            }
+        return _tilesMode == (i32)1;
+        }
+
+    // The bytes a tile moves, in megabytes: XC_PAR_TILE_MB, default 8.
+    static i64 _tileMb;
+    static i64 tileMegabytes(void)
+        {
+        if (_tileMb == (i64)0)
+            {
+            String* v = Platform.env(String.withCString("XC_PAR_TILE_MB"));
+            i64 n = (i64)0;
+            for (u32 i = (u32)0; i < v.byteLength(); i = i + (u32)1)
+                if (v.byteAt(i) >= (u8)'0' && v.byteAt(i) <= (u8)'9')
+                    n = n * (i64)10 + (i64)(v.byteAt(i) - (u8)'0');
+            _tileMb = n > (i64)0 && n <= (i64)1024 ? n : (i64)8;
+            }
+        return _tileMb;
+        }
 
     static i64 nowUs(void)
         {
@@ -663,7 +695,10 @@ class ParDevice
         if (decided && gParCpuUs[bi] >= (i64)0)
             Log.info("par: %s: auto picks the %s (GPU %ld us, CPU %ld us)", gParBlock[bi],
                      gParGpuUs[bi] <= gParCpuUs[bi] ? "GPU" : "CPU", gParGpuUs[bi], gParCpuUs[bi]);
-        if (gpuUs >= (i64)0)
+        if (gpuUs >= (i64)0 && l.tiles > (i64)0)
+            Log.info("par: %s: %ld items on the GPU in %ld tiles, %ld us of GPU time (%ld us in all)",
+                     gParBlock[bi], l.n, l.tiles, gpuUs, took);
+        else if (gpuUs >= (i64)0)
             Log.info("par: %s: %ld items on the GPU, %ld threads, %ld us of GPU time (%ld us in all)",
                      gParBlock[bi], l.n, l.threads, gpuUs, took);
         else
@@ -741,7 +776,7 @@ class ParDevice
                 at = at + (u32)1;
                 i64 ivar = num(src, &at);
                 at = at + (u32)1;
-                num(src, &at);
+                l.bufElem[k] = num(src, &at);
                 l.bufIvar[k] = ivar;
                 l.bufLen[k] = proto.gpuLength((i32)ivar);
                 l.bufIn[k] = proto.gpuReadsOnly((i32)ivar) ? (i64)1 : (i64)0;
@@ -769,6 +804,7 @@ class ParDevice
                 at = at + (u32)1;
                 i64 elem = num(src, &at);
                 u32 k = l.nglob;
+                l.globElem[k] = elem;
                 for (u32 q = (u32)0; q <= n && q < (u32)64; q = q + (u32)1)
                     l.globName[k * (u32)64 + q] = gname[q];
                 l.globPtr[k] = proto.gpuGlobal(&gname[0]);

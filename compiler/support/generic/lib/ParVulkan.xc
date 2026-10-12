@@ -403,6 +403,8 @@ class ParVulkan
             return false;
         _cmdPool = pool;
         _state = (i32)1;
+        if (ParDevice.reporting() && _identity != (String*)0)
+            Log.info("par: Vulkan device is %s", _identity.cString());
         return true;
 #else
         return false;
