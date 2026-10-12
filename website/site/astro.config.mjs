@@ -162,6 +162,15 @@ export default defineConfig({
 						},
 						{ label: 'Performance', slug: 'compiler/performance' },
 						{ label: 'Benchmark sources', slug: 'compiler/benchmark-sources' },
+						{
+							label: 'Benchmarks',
+							collapsed: true,
+							items: [
+								{ label: 'Overview', slug: 'compiler/benchmarks' },
+								{ label: 'How to DIY', slug: 'compiler/benchmarks/how-to-diy' },
+								{ label: 'Build the visualiser', slug: 'compiler/benchmarks/build-the-visualiser' },
+							],
+						},
 						{ label: 'Future work', slug: 'compiler/future-work' },
 						{
 							label: 'Downloads',

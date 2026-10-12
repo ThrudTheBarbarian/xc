@@ -1,0 +1,4 @@
+# The corpus is server data, written by submit.php.  It is not part of the
+# repository; keep the directory (and its contents) across deploys.
+*
+!.gitignore
