@@ -121,6 +121,10 @@ class ParLayout : Object
     i64 bufFpK[16];
     i64 bufFpLo[16];
     i64 bufFpHi[16];
+    // 1: the body writes every element of the global in its range (the
+    // raw gpuWritesAll, whatever the range), so a tile's slice of it need
+    // not be uploaded when the footprint is contiguous (k = 1).
+    i64 globAll[16];
     i64 globFp[16];
     i64 globFpK[16];
     i64 globFpLo[16];
@@ -818,6 +822,7 @@ class ParDevice
                 // writes element i for each i in it, and nothing else.
                 l.globOut[k] = (i64)0;
                 l.globIn[k] = proto.gpuReadsOnlyGlobal(&gname[0]) ? (i64)1 : (i64)0;
+                l.globAll[k] = proto.gpuWritesAll(&gname[0]) ? (i64)1 : (i64)0;
                 if (proto.gpuWritesAll(&gname[0]) && lo == (i64)0 && (hi - lo) * elem >= l.globLen[k])
                     l.globOut[k] = (i64)1;
                 l.nglob = k + (u32)1;

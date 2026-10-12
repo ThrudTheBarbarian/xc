@@ -327,7 +327,8 @@ class ParCuda
                 b = b + (l.bufFpK[i] * items + (l.bufFpHi[i] - l.bufFpLo[i])) * l.bufElem[i] * (l.bufIn[i] != (i64)0 ? (i64)1 : (i64)2);
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             if (l.globFp[i] != (i64)0)
-                b = b + (l.globFpK[i] * items + (l.globFpHi[i] - l.globFpLo[i])) * l.globElem[i] * (l.globIn[i] != (i64)0 ? (i64)1 : (i64)2);
+                b = b + (l.globFpK[i] * items + (l.globFpHi[i] - l.globFpLo[i])) * l.globElem[i] *
+                        (l.globIn[i] != (i64)0 || (l.globAll[i] != (i64)0 && l.globFpK[i] == (i64)1) ? (i64)1 : (i64)2);
         return b;
         }
 
@@ -700,6 +701,11 @@ class ParCuda
                     i64 e0 = sliceLo(l.globFpK[i], l.globFpLo[i], tlo, count);
                     i64 e1 = sliceHi(l.globFpK[i], l.globFpHi[i], thi, count);
                     i64 bytes = (e1 - e0) * l.globElem[i];
+                    // A slice the tile's items overwrite whole (the body
+                    // writes every element it touches, and the footprint has
+                    // no gaps) is not uploaded: the kernel fills it.
+                    if (l.globAll[i] != (i64)0 && l.globFpK[i] == (i64)1)
+                        bytes = (i64)0;
                     pointer src = (pointer)((u8*)l.globPtr[i] + e0 * l.globElem[i]);
                     if (bytes > (i64)0 && pin[b])
                         {
