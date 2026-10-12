@@ -65,8 +65,10 @@ else
   echo "deploy: FEEDBACK_RECIPIENT is empty; the feedback form will refuse messages"
 fi
 
-echo "== publish site -> $HOST:$DOCROOT (archives preserved) =="
-rsync -az --delete --exclude='/downloads/' "$SITE/dist/" "$HOST:$DOCROOT/"
+echo "== publish site -> $HOST:$DOCROOT (archives and the benchmark corpus preserved) =="
+# The corpus is what people have submitted through benchmarks/submit.php: it
+# exists only on the server, so --delete must never reach it.
+rsync -az --delete --exclude='/downloads/' --exclude='/benchmarks/corpus/' "$SITE/dist/" "$HOST:$DOCROOT/"
 
 if ls "$DL"/*.tar.bz2 "$DL"/*.zip >/dev/null 2>&1; then
   echo "== publish archives -> $HOST:$DOCROOT/downloads =="
