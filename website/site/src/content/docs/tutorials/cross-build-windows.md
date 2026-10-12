@@ -49,7 +49,7 @@ Put this beside it as `hello\build.ps1`:
 # Every knob is a parameter, so it can be set on the command line:
 #
 #   .\build.ps1 windows -Opt -O0 -Flags -g               a debuggable Windows build
-#   .\build.ps1 -Xcc C:\xcc\xcc-win64-0.74\bin\xcc.exe   a particular compiler
+#   .\build.ps1 -Xcc C:\xcc\xcc-win64-0.75\bin\xcc.exe   a particular compiler
 #   .\build.ps1 ios -Ios ios                             the iOS device, not the simulator
 #
 # If PowerShell refuses to run scripts: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
@@ -133,16 +133,16 @@ It has the same shape as the Makefile:
 
 ```powershell
 cd hello
-.\build.ps1 -Xcc C:\xcc\xcc-win64-0.74\bin\xcc.exe
+.\build.ps1 -Xcc C:\xcc\xcc-win64-0.75\bin\xcc.exe
 ```
 
 ```
-C:\xcc\xcc-win64-0.74\bin\xcc.exe -A arm64 -O3 -o build\mac\hello hello.xc
-C:\xcc\xcc-win64-0.74\bin\xcc.exe -A x86_64 -O3 -o build\linux\hello hello.xc
-C:\xcc\xcc-win64-0.74\bin\xcc.exe -A win64 -O3 -o build\windows\hello.exe hello.xc
-C:\xcc\xcc-win64-0.74\bin\xcc.exe -A wasm32 -O3 -o build\web\hello.wasm hello.xc
-C:\xcc\xcc-win64-0.74\bin\xcc.exe -A ios-sim -O3 -o build\ios\hello hello.xc
-C:\xcc\xcc-win64-0.74\bin\xcc.exe -A android --emit-apk -O3 -o build\android\hello.apk hello.xc
+C:\xcc\xcc-win64-0.75\bin\xcc.exe -A arm64 -O3 -o build\mac\hello hello.xc
+C:\xcc\xcc-win64-0.75\bin\xcc.exe -A x86_64 -O3 -o build\linux\hello hello.xc
+C:\xcc\xcc-win64-0.75\bin\xcc.exe -A win64 -O3 -o build\windows\hello.exe hello.xc
+C:\xcc\xcc-win64-0.75\bin\xcc.exe -A wasm32 -O3 -o build\web\hello.wasm hello.xc
+C:\xcc\xcc-win64-0.75\bin\xcc.exe -A ios-sim -O3 -o build\ios\hello hello.xc
+C:\xcc\xcc-win64-0.75\bin\xcc.exe -A android --emit-apk -O3 -o build\android\hello.apk hello.xc
 ```
 
 With xcc's `bin` folder on your `PATH`, `-Xcc` can be left out. If PowerShell
@@ -160,11 +160,11 @@ What each platform produced:
 | `ios` | `build\ios\hello` | a Mach-O executable for the iOS simulator |
 | `android` | `build\android\hello.apk` | a signed, installable app |
 
-:::note[Android on Windows, 0.74]
-In 0.74 the Android build fails on Windows with "cannot create a signing key":
-the key generator reads `/dev/urandom`, which Windows does not have. Fixed in
-0.75. Until then build the APK on a Mac or Linux machine, or pass a key made
-there with `-Flags "--sign-key C:\path\android-debug.key.raw"`.
+:::note[Android on Windows before 0.75]
+In 0.74 the Android build failed on Windows with "cannot create a signing key":
+the key generator read `/dev/urandom`, which Windows does not have. From 0.75
+the key is generated on Windows too. With 0.74, build the APK on a Mac or Linux
+machine, or pass a key made there with `-Flags "--sign-key C:\path\android-debug.key.raw"`.
 :::
 
 ## 4. Run each one

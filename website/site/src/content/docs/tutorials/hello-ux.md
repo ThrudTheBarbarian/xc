@@ -12,10 +12,10 @@ repository under `compiler/examples/tutorials/hello-ux/`.
 
 You need xcc 0.74 or later, `make`, and UXKit installed in the third-party
 tree, `/opt/xcc/3p/uxkit/`, from the
-[UXKit library archive](/compiler/downloads/#uxkit-library). The macOS,
-Windows, Linux and web programs run with 0.74; the iOS and Android programs
-build with 0.74 and run from 0.75, which fixes how their libraries are
-stamped and named ([Changelog](/compiler/downloads/changelog/)).
+[UXKit library archive](/compiler/downloads/#uxkit-library). All six
+programs run with 0.75; with 0.74 the iOS and Android ones build but do not
+run, because of how their libraries were stamped and named
+([Changelog](/compiler/downloads/changelog/)).
 
 ## 1. Write the program
 

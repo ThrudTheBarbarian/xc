@@ -25,7 +25,7 @@ because a timing between programs that compute different things means nothing.
 
 - A 64-bit x86-64 Ubuntu. Tested on 24.04. A GPU is optional; without one the
   GPU modes are skipped.
-- xcc 0.74 for Linux, from the [downloads](/compiler/downloads/) page.
+- xcc 0.75 for Linux, from the [downloads](/compiler/downloads/) page.
 - Python 3, which Ubuntu ships, for the collector.
 - For the language suite only: `clang`, `clang++`, `g++`, and `swiftc`, plus
   GNUstep for the Objective-C half. A toolchain that is absent is skipped, not
@@ -36,8 +36,8 @@ because a timing between programs that compute different things means nothing.
 The Linux archive is a static musl build, so it runs as-is.
 
 ```bash
-tar xjf xcc-linux-0.74.tar.bz2
-export PATH="$PWD/xcc-linux-0.74/bin:$PATH"
+tar xjf xcc-linux-0.75.tar.bz2
+export PATH="$PWD/xcc-linux-0.75/bin:$PATH"
 xcc -v
 ```
 
@@ -241,7 +241,7 @@ machine and the toolchains, then one entry per run:
   "machine": { "os": "Ubuntu 24.04.1 LTS", "arch": "x86_64",
                "cpu": "Example 16-core x86-64 CPU",
                "gpu": "Example GPU (CUDA)", "memory_mb": 65536 },
-  "toolchains": { "xcc": "0.74", "clang": "...", "gcc": "...", "swiftc": "..." },
+  "toolchains": { "xcc": "0.75", "clang": "...", "gcc": "...", "swiftc": "..." },
   "repeats": 5,
   "runs": [
     { "suite": "par", "benchmark": "nbody", "target": "xc", "device": "gpu",

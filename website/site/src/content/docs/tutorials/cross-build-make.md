@@ -51,7 +51,7 @@ lines matter to Make.
 # Every knob is a variable, so it can be set on the command line:
 #
 #   make OPT=-O0 FLAGS=-g mac        a debuggable macOS build
-#   make XCC=/opt/xcc/0.74/bin/xcc   a particular compiler
+#   make XCC=/opt/xcc/0.75/bin/xcc   a particular compiler
 #   make IOS=ios ios                 the iOS device rather than the simulator
 
 # ── The knobs ──────────────────────────────────────────────────────────────
@@ -159,7 +159,7 @@ help:
 Three things carry the weight:
 
 - **The knobs are `?=` variables.** `XCC ?= xcc` means "xcc, unless the
-  command line or the environment says otherwise", so `make XCC=/opt/xcc/0.74/bin/xcc`
+  command line or the environment says otherwise", so `make XCC=/opt/xcc/0.75/bin/xcc`
   picks a compiler and `make OPT=-O0 FLAGS=-g mac` builds a debuggable program
   without editing anything. Put a comment above each knob, not after it: Make
   keeps the spaces before a trailing comment as part of the value.
@@ -221,7 +221,7 @@ make OPT=-O0 FLAGS=-g mac           # a debuggable build: lldb shows lines and v
 make FLAGS=-static linux            # a musl binary that runs on any Linux, no glibc needed
 make OPT=-O0 all                    # the quickest builds while iterating
 make IOS=ios ios                    # the iOS device; sign it with xcc-sign before installing
-make XCC=/opt/xcc/0.74/bin/xcc web  # a particular installed compiler
+make XCC=/opt/xcc/0.75/bin/xcc web  # a particular installed compiler
 ```
 
 A knob set on the command line applies to that run only. To make one the

@@ -646,12 +646,16 @@ aggregate copies. The slowest show where xcc's code generation has most to
 gain:
 
 - **Vectorisation.** On arm64, `int_muldiv` and `float_math` are vectorised
-  by both compilers, and clang's loops are tighter. (`matrix_mul` reached
-  clang's speed in 0.73.)
+  by both compilers, and clang's loops are tighter; `matrix_mul` has matched
+  clang there since 0.73. On x86-64 `matrix_mul` is still behind, because
+  clang keeps the second matrix's rows in registers across the outer loop.
 - **Reference counting on x86-64.** `arc_array`, where C++ reads elements
   without retaining them.
-- **x86-64 loops.** `sieve`, `sort_small` and `struct_copy`, where the other
-  compilers' loops are faster.
+- **x86-64 loops and calls.** `sieve` and `sort_small`, where clang's loops
+  are still tighter (in 0.74 `sort_small` was 2.6× behind; 0.75 rotates its
+  inner loop), `call_depth`, where clang's call sequence is shorter, and
+  `int_muldiv`, where GCC hoists the arithmetic that does not depend on the
+  repetition out of it.
 
 ## Matrix multiplies
 

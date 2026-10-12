@@ -34,12 +34,14 @@ are combined on the GPU on every API.
 
 - **x86-64**: a loop whose test is a short-circuit chain (`while (j > 0 &&
   a[j-1] > v)`) is rotated like a one-test loop, so its step is one taken
-  branch (`sort_small` 1.90 → 0.92 s). A constant index is a displacement,
+  branch (`sort_small` 1.85 → 0.93 s). A constant index is a displacement,
   a load folds its address from anywhere in its block, and vector loads and
-  stores fold theirs (`array_map` 0.42 → 0.33 s, `sieve` 1.11 → 0.97 s). A
-  splat of a loaded value broadcasts from memory (`matrix_mul` 0.18 →
-  0.12 s). The outer-loop vectoriser and the widening byte and short sums
-  use the full vector width (`string_scan` 1.62 → 0.48 s).
+  stores fold theirs (`array_map` 0.43 → 0.33 s, `sieve` 1.11 → 0.98 s). A
+  splat of a loaded value broadcasts from memory (`matrix_mul` 0.63 →
+  0.12 s with the wider vectors below). The outer-loop vectoriser and the widening byte and short sums
+  use the full vector width (`string_scan` 1.62 → 0.47 s). Over the
+  nineteen benchmarks xc is 1.05× behind clang on x86-64, where 0.74 was
+  1.20× behind, and 1.03× ahead of GCC.
 - **arm64**: a float select reads its operands where they are (`perlin`
   −39%), a comparison read only by selects or branches fuses into them, and
   a short-circuit `&&` or `||` fuses into its branch (`mandelbrot` −5.5%).
