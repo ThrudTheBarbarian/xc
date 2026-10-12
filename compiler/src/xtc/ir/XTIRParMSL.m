@@ -56,7 +56,18 @@ static NSString* unsignedName(XTIRType* t)
         }
     }
 
+static NSString* gParExtraMeta = nil;
+
 @implementation XTIRParMSL
+
++ (void)setExtraMeta:(nullable NSString*)words
+    {
+    gParExtraMeta = words;
+    }
++ (NSString*)extraMeta
+    {
+    return gParExtraMeta ?: @"";
+    }
 
 + (nullable NSString*)sourceForKernel:(XTIRFunction*)run module:(XTIRModule*)module fast:(BOOL)fast
                                    why:(NSString* _Nullable* _Nullable)why
@@ -1246,6 +1257,7 @@ static NSString* intrinsicFor(NSString* callee)
         [meta appendFormat:@" glob=%@:%u", self.globals[gi], et.byteWidth];
         [params appendFormat:@", device %@* glob_%lu [[buffer(%lu)]]", en, (unsigned long)gi, (unsigned long)slot++];
         }
+    [meta appendString:[XTIRParMSL extraMeta]];
     NSMutableString* tail = [NSMutableString string];
     NSMutableString* dtail = [NSMutableString string];
     NSMutableString* shared = [NSMutableString string];

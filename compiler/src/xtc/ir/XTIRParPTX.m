@@ -1261,6 +1261,7 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
         [meta appendFormat:@" glob=%@:%u", self.globals[gi], et.byteWidth];
         [params addObject:[NSString stringWithFormat:@".param .u64 glob_%lu", (unsigned long)gi]];
         }
+    [meta appendString:[XTIRParMSL extraMeta]];
     NSMutableString* tail = [NSMutableString string];
     NSMutableString* dtail = [NSMutableString string];
     NSMutableString* ftail = [NSMutableString string];

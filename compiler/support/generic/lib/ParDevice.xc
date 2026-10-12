@@ -100,7 +100,9 @@ class ParLayout : Object
     i64 size;
     i64 bufOff[16];
     i64 bufLen[16];
+    i64 bufIvar[16];      // the captured array's index among the block's ivars
     u32 nbuf;
+    u8 globName[1024];    // each global's name, as the header names it, 64 bytes apart
     pointer globPtr[16];
     i64 globLen[16];
     // 1: the kernel overwrites the whole global, so nothing need be copied to
@@ -109,6 +111,17 @@ class ParLayout : Object
     // 1: the body only reads the global / buffer k, so it is not copied back.
     i64 globIn[16];
     i64 bufIn[16];
+    // The elements work item i touches in buffer / global k, from the header's
+    // fp= / gfp= words: [fpK*i + fpLo, fpK*i + fpHi), when known (fp = 1);
+    // else the whole buffer (par-tiles-and-devices.md step 1).
+    i64 bufFp[16];
+    i64 bufFpK[16];
+    i64 bufFpLo[16];
+    i64 bufFpHi[16];
+    i64 globFp[16];
+    i64 globFpK[16];
+    i64 globFpLo[16];
+    i64 globFpHi[16];
     u32 nglob;
     i64 redOff[16];
     i64 redSize[16];
@@ -678,6 +691,18 @@ class ParDevice
         }
 
     // The decimal number at p, and where it ends.
+    // A signed number: a footprint's offsets can be negative (a stencil's
+    // `a[i - 1]`).
+    static i64 snum(u8* p, u32* at)
+        {
+        if (p[*at] == (u8)'-')
+            {
+            *at = *at + (u32)1;
+            return (i64)0 - num(p, at);
+            }
+        return num(p, at);
+        }
+
     static i64 num(u8* p, u32* at)
         {
         i64 v = (i64)0;
@@ -717,6 +742,7 @@ class ParDevice
                 i64 ivar = num(src, &at);
                 at = at + (u32)1;
                 num(src, &at);
+                l.bufIvar[k] = ivar;
                 l.bufLen[k] = proto.gpuLength((i32)ivar);
                 l.bufIn[k] = proto.gpuReadsOnly((i32)ivar) ? (i64)1 : (i64)0;
                 if (l.bufLen[k] < (i64)0)
@@ -743,6 +769,8 @@ class ParDevice
                 at = at + (u32)1;
                 i64 elem = num(src, &at);
                 u32 k = l.nglob;
+                for (u32 q = (u32)0; q <= n && q < (u32)64; q = q + (u32)1)
+                    l.globName[k * (u32)64 + q] = gname[q];
                 l.globPtr[k] = proto.gpuGlobal(&gname[0]);
                 l.globLen[k] = proto.gpuGlobalBytes(&gname[0]);
                 if (l.globPtr[k] == (pointer)0 || l.globLen[k] <= (i64)0)
@@ -757,6 +785,57 @@ class ParDevice
                 if (proto.gpuWritesAll(&gname[0]) && lo == (i64)0 && (hi - lo) * elem >= l.globLen[k])
                     l.globOut[k] = (i64)1;
                 l.nglob = k + (u32)1;
+                continue;
+                }
+            // fp=<buffer>:<k>:<lo>:<hi>: captured array <buffer>'s footprint.
+            if (src[at] == (u8)'f' && src[at + (u32)1] == (u8)'p' && src[at + (u32)2] == (u8)'=')
+                {
+                at = at + (u32)3;
+                i64 which = num(src, &at);
+                at = at + (u32)1;
+                i64 fk = snum(src, &at);
+                at = at + (u32)1;
+                i64 fLo = snum(src, &at);
+                at = at + (u32)1;
+                i64 fHi = snum(src, &at);
+                // The header lists buf= words first, in ivar order, so the
+                // buffer with that ivar index is found among them.
+                for (u32 q = (u32)0; q < l.nbuf; q = q + (u32)1)
+                    if (l.bufIvar[q] == which)
+                        {
+                        l.bufFp[q] = (i64)1;
+                        l.bufFpK[q] = fk;
+                        l.bufFpLo[q] = fLo;
+                        l.bufFpHi[q] = fHi;
+                        }
+                continue;
+                }
+            // gfp=<name>:<k>:<lo>:<hi>: global <name>'s footprint.
+            if (src[at] == (u8)'g' && src[at + (u32)1] == (u8)'f' && src[at + (u32)2] == (u8)'p' && src[at + (u32)3] == (u8)'=')
+                {
+                at = at + (u32)4;
+                u32 n = (u32)0;
+                while (src[at] != (u8)':' && src[at] != (u8)0 && n < (u32)127)
+                    {
+                    gname[n] = src[at];
+                    n = n + (u32)1;
+                    at = at + (u32)1;
+                    }
+                gname[n] = (u8)0;
+                at = at + (u32)1;
+                i64 fk = snum(src, &at);
+                at = at + (u32)1;
+                i64 fLo = snum(src, &at);
+                at = at + (u32)1;
+                i64 fHi = snum(src, &at);
+                for (u32 q = (u32)0; q < l.nglob; q = q + (u32)1)
+                    if (parSameName(&l.globName[q * (u32)64], &gname[0]))
+                        {
+                        l.globFp[q] = (i64)1;
+                        l.globFpK[q] = fk;
+                        l.globFpLo[q] = fLo;
+                        l.globFpHi[q] = fHi;
+                        }
                 continue;
                 }
             // byval: the object and range are the launch's parameters.

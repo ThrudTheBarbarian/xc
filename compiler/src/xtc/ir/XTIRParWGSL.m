@@ -1569,6 +1569,7 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
         [meta appendFormat:@" glob=%@:%u", self.globals[gi], et.byteWidth];
         self.wgBufName[@(-1 - (NSInteger)gi)] = n;
         }
+    [meta appendString:[XTIRParMSL extraMeta]];
     NSMutableArray<NSString*>* reds = [NSMutableArray array];
     // A device-side reduction (bug 645) when every reduced field is a 32-bit
     // value with an operator its type takes: workgroups of 256, combined

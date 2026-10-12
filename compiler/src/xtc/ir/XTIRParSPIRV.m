@@ -2056,6 +2056,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         self.bufVar[@(-1 - (NSInteger)gi)] = @(v);
         [interface addObject:@(v)];
         }
+    [meta appendString:[XTIRParMSL extraMeta]];
     NSMutableArray<NSNumber*>* redVars = [NSMutableArray array];
     NSMutableArray<NSNumber*>* shVars = [NSMutableArray array];
     [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {

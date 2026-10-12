@@ -255,6 +255,12 @@ static BOOL gEmitsWGSL = NO;
                 redOps[@([pair substringToIndex:eq.location].integerValue)] = [pair substringFromIndex:eq.location + 1];
                 }
             }
+        // The buffers' footprints, as words on the header line every printer
+        // writes (step 1 of par-tiles-and-devices.md).
+        XTIRParCheck* fc = [XTIRParCheck new];
+        fc.module = module;
+        NSString* fcls = [f.name substringToIndex:f.name.length - 4];
+        [XTIRParMSL setExtraMeta:[fc footprintWordsIn:f ivarNames:[fc ivarNamesOf:classDecls[fcls] in:classDecls]]];
         NSString* (^ptxOf)(NSString* _Nullable* _Nullable) = ^NSString*(NSString* _Nullable* _Nullable w) {
             NSString* t = kf ? [XTIRParMSL ptxForKernel:kf module:kmod fast:fast redOps:redOps why:NULL] : nil;
             return t ?: [XTIRParMSL ptxForKernel:f module:module fast:fast redOps:redOps why:w];
@@ -684,6 +690,131 @@ static NSString* shownIndex(XTParIndex x)
     return (k >= 1 && (NSUInteger)k <= ivars.count) ? ivars[(NSUInteger)k - 1] : nil;
     }
 
+// The work item's index: the phi the loop's guard compares (not simply the
+// first phi, which may be a reduction's accumulator). Mirrored in the port.
+- (XTIRValueId)inductionVariableOf:(XTIRFunction*)f defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def first:(XTIRValueId)firstPhi
+    {
+    XTIRValueId iv = firstPhi;
+    for (XTIRBlock* b in f.blocks)
+        {
+        BOOL done = NO;
+        for (XTIRInsn* ci in b.instructions)
+            {
+            if (ci.opcode != XTIROpICmp)
+                continue;
+            for (XTIROperand* o in ci.operands)
+                {
+                if (o.kind != XTIROperandKindUse)
+                    continue;
+                XTIRInsn* dd = def[@(o.valueId)];
+                if (dd && dd.opcode == XTIROpPhi)
+                    {
+                    iv = o.valueId;
+                    done = YES;
+                    break;
+                    }
+                }
+            if (done)
+                break;
+            }
+        if (done)
+            break;
+        }
+    return iv;
+    }
+
+// Each buffer's footprint, for the runtime's header line: the elements work
+// item i touches, as `fp=<captured-array>:<k>:<lo>:<hi>` (item i touches
+// elements [k*i + lo, k*i + hi)) for a captured array and `gfp=<name>:…` for
+// a global, when every access to it is affine in i with the same k. A
+// buffer any access indexes from data, or at one element for every item,
+// gets no word: the runtime treats it as all of it. A tile of the range can
+// then move only its slice of each buffer (par-tiles-and-devices.md step 1).
+- (NSString*)footprintWordsIn:(XTIRFunction*)f ivarNames:(NSArray<NSString*>*)ivars
+    {
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* def = [NSMutableDictionary dictionary];
+    XTIRValueId firstPhi = 0;
+    BOOL haveIV = NO;
+    for (XTIRBlock* b in f.blocks)
+        {
+        for (XTIRInsn* i in b.phiNodes)
+            {
+            if (!i.result)
+                continue;
+            def[@(i.result.valueId)] = i;
+            if (!haveIV)
+                {
+                firstPhi = i.result.valueId;
+                haveIV = YES;
+                }
+            }
+        for (XTIRInsn* i in b.instructions)
+            if (i.result)
+                def[@(i.result.valueId)] = i;
+        }
+    if (!haveIV || f.paramTypes.count == 0)
+        return @"";
+    XTIRValueId iv = [self inductionVariableOf:f defs:def first:firstPhi];
+    XTIRValueId selfId = (XTIRValueId)0;
+    // Per buffer: k, the lowest and highest c seen, and whether every access
+    // was affine with that k.
+    NSMutableArray<NSString*>* order = [NSMutableArray array];
+    NSMutableDictionary<NSString*, NSMutableArray<NSNumber*>*>* fp = [NSMutableDictionary dictionary];
+    for (XTIRBlock* b in f.blocks)
+        {
+        for (XTIRInsn* i in b.instructions)
+            {
+            BOOL isStore = (i.opcode == XTIROpStore || i.opcode == XTIROpStoreVolatile);
+            BOOL isLoad = (i.opcode == XTIROpLoad || i.opcode == XTIROpLoadVolatile);
+            if ((!isStore && !isLoad) || !i.operands.count || i.operands[0].kind != XTIROperandKindUse)
+                continue;
+            XTIRInsn* ea = def[@(i.operands[0].valueId)];
+            if (ea.opcode != XTIROpElementAddr || ea.operands.count < 2)
+                continue;
+            NSString* buf = [self bufferOf:ea.operands[0] self:selfId ivars:ivars defs:def];
+            if (!buf)
+                continue;
+            XTParIndex x = [self indexOf:ea.operands[1] iv:iv defs:def depth:0];
+            if (!x.affine)
+                x = [self gridIndexOf:ea.operands[1] iv:iv self:selfId ivars:ivars defs:def];
+            NSMutableArray<NSNumber*>* e = fp[buf];
+            if (!e)
+                {
+                e = [NSMutableArray arrayWithObjects:@(x.k), @(x.c), @(x.c), @(x.affine && x.k != 0), nil];
+                fp[buf] = e;
+                [order addObject:buf];
+                continue;
+                }
+            if (!x.affine || x.k == 0 || x.k != e[0].longLongValue)
+                e[3] = @NO;
+            else
+                {
+                if (x.c < e[1].longLongValue)
+                    e[1] = @(x.c);
+                if (x.c > e[2].longLongValue)
+                    e[2] = @(x.c);
+                }
+            }
+        }
+    NSMutableString* words = [NSMutableString string];
+    for (NSString* buf in order)
+        {
+        NSArray<NSNumber*>* e = fp[buf];
+        if (!e[3].boolValue)
+            continue;
+        NSUInteger at = [ivars indexOfObject:buf];
+        // A captured array is ivar 2 + <index> (after lo and hi); a global
+        // is named as the glob= word names it.
+        if (at != NSNotFound && at >= 2)
+            [words appendFormat:@" fp=%lu:%lld:%lld:%lld", (unsigned long)(at - 2), (long long)e[0].longLongValue,
+                                (long long)e[1].longLongValue, (long long)(e[2].longLongValue + 1)];
+        else if (at == NSNotFound)
+            [words appendFormat:@" gfp=%@:%lld:%lld:%lld", buf, (long long)e[0].longLongValue,
+                                (long long)e[1].longLongValue, (long long)(e[2].longLongValue + 1)];
+        }
+    return words;
+    }
+
 // §4: a read of a buffer the block also writes must be at the element this
 // work item writes. `b[i] = b[i - 1] + …` reads another item's result: that
 // is a scan, not a par. Returns the complaint, or nil.
@@ -719,32 +850,7 @@ static NSString* shownIndex(XTParIndex x)
     // accumulator and every array the loop indexes looks data-indexed. An ICmp
     // taking a phi is the guard (or a min/max test, but the guard comes first
     // in block order); its phi operand is the iv. Mirrored in the port.
-    XTIRValueId iv = firstPhi;
-    for (XTIRBlock* b in f.blocks)
-        {
-        BOOL done = NO;
-        for (XTIRInsn* ci in b.instructions)
-            {
-            if (ci.opcode != XTIROpICmp)
-                continue;
-            for (XTIROperand* o in ci.operands)
-                {
-                if (o.kind != XTIROperandKindUse)
-                    continue;
-                XTIRInsn* dd = def[@(o.valueId)];
-                if (dd && dd.opcode == XTIROpPhi)
-                    {
-                    iv = o.valueId;
-                    done = YES;
-                    break;
-                    }
-                }
-            if (done)
-                break;
-            }
-        if (done)
-            break;
-        }
+    XTIRValueId iv = [self inductionVariableOf:f defs:def first:firstPhi];
     XTIRValueId selfId = (XTIRValueId)0; // parameter n is value n; self is the first
     NSMutableDictionary<NSString*, NSMutableArray<NSValue*>*>* writes = [NSMutableDictionary dictionary];
     NSMutableArray<NSArray*>* reads = [NSMutableArray array]; // [buffer, NSValue(index)]

@@ -14549,6 +14549,141 @@ class ClassInfo
         return ParIdx.of(false, (i64)0, (i64)0);
         }
 
+    // The work item's index: the phi the loop's guard compares (not simply
+    // the first phi, which may be a reduction's accumulator). Mirrors the
+    // original.
+    IRValue* parInductionVariable(IRFunc* f, Map* def, IRValue* firstPhi)
+        {
+        IRValue* ivGuard = (IRValue*)0;
+        for (u32 gb = (u32)0; gb < f.blocks().count() && ivGuard == (IRValue*)0; gb = gb + (u32)1) {
+            IRBlock* gbb = (IRBlock*)f.blocks().get(gb);
+            for (u32 gi = (u32)0; gi < gbb.insns().count() && ivGuard == (IRValue*)0; gi = gi + (u32)1) {
+                IRInsn* gb2 = (IRInsn*)gbb.insns().get(gi);
+                if (!gb2.op().equals(String.withCString("ICmp")))
+                    continue;
+                for (u32 q = (u32)0; q < gb2.ops().count(); q = q + (u32)1) {
+                    IROperand* o = (IROperand*)gb2.ops().get(q);
+                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                        continue;
+                    IRInsn* dd = (IRInsn*)def.get((Hashable*)String.withU32(o.val().seq()));
+                    if (dd != (IRInsn*)0 && dd.op().equals(String.withCString("Phi")))
+                        { ivGuard = o.val(); break; }
+                }
+            }
+        }
+        return ivGuard != (IRValue*)0 ? ivGuard : firstPhi;
+        }
+
+    // Each buffer's footprint, for the runtime's header line:
+    // `fp=<captured-array>:<k>:<lo>:<hi>` (item i touches elements
+    // [k*i + lo, k*i + hi)) for a captured array, `gfp=<name>:…` for a
+    // global, when every access is affine in i with the same k. Mirrors the
+    // original.
+    String* _parExtraMeta;
+    String* parFootprintWords(IRFunc* f, Array* ivars)
+        {
+        Map* def = new Map();
+        IRValue* firstPhi = (IRValue*)0;
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* ph = (IRInsn*)bb.phis().get(i);
+                if (ph.res() == (IRValue*)0)
+                    continue;
+                def.set((Hashable*)String.withU32(ph.res().seq()), (Object*)ph);
+                if (firstPhi == (IRValue*)0)
+                    firstPhi = ph.res();
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                if (ip.res() != (IRValue*)0)
+                    def.set((Hashable*)String.withU32(ip.res().seq()), (Object*)ip);
+                }
+            }
+        if (firstPhi == (IRValue*)0 || f.params().count() == (u32)0)
+            return String.withCString("");
+        IRValue* iv = parInductionVariable(f, def, firstPhi);
+        IRValue* selfVal = (IRValue*)f.params().get((u32)0);
+        // Per buffer, in first-seen order: k, the lowest and highest c, and
+        // whether every access was affine with that k.
+        Array* order = new Array();
+        Map* fpK = new Map();
+        Map* fpLo = new Map();
+        Map* fpHi = new Map();
+        Map* fpOk = new Map();
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                String* op = ip.op();
+                bool isStore = op.equals(String.withCString("Store")) || op.equals(String.withCString("StoreVolatile"));
+                bool isLoad = op.equals(String.withCString("Load")) || op.equals(String.withCString("LoadVolatile"));
+                if ((!isStore && !isLoad) || ip.ops().count() == (u32)0)
+                    continue;
+                IROperand* a0 = (IROperand*)ip.ops().get((u32)0);
+                if (a0.kind() != (u8)OPK_USE)
+                    continue;
+                IRInsn* ea = (IRInsn*)def.get((Hashable*)String.withU32(a0.val().seq()));
+                if (ea == (IRInsn*)0 || !ea.op().equals(String.withCString("ElementAddr")) || ea.ops().count() < (u32)2)
+                    continue;
+                String* buf = parBufferOf((IROperand*)ea.ops().get((u32)0), selfVal, ivars, def);
+                if (buf == (String*)0)
+                    continue;
+                ParIdx* px = parIndex((IROperand*)ea.ops().get((u32)1), iv, def, (u32)0);
+                if (!px.affine)
+                    px = parGridIndex((IROperand*)ea.ops().get((u32)1), iv, ivars, def);
+                if (fpOk.get((Hashable*)buf) == (Object*)0)
+                    {
+                    order.add((Object*)buf);
+                    fpK.set((Hashable*)buf, (Object*)Number.withI64(px.k));
+                    fpLo.set((Hashable*)buf, (Object*)Number.withI64(px.c));
+                    fpHi.set((Hashable*)buf, (Object*)Number.withI64(px.c));
+                    fpOk.set((Hashable*)buf, (Object*)Number.withI64(px.affine && px.k != (i64)0 ? (i64)1 : (i64)0));
+                    continue;
+                    }
+                if (!px.affine || px.k == (i64)0 || px.k != ((Number*)fpK.get((Hashable*)buf)).asI64())
+                    fpOk.set((Hashable*)buf, (Object*)Number.withI64((i64)0));
+                else
+                    {
+                    if (px.c < ((Number*)fpLo.get((Hashable*)buf)).asI64())
+                        fpLo.set((Hashable*)buf, (Object*)Number.withI64(px.c));
+                    if (px.c > ((Number*)fpHi.get((Hashable*)buf)).asI64())
+                        fpHi.set((Hashable*)buf, (Object*)Number.withI64(px.c));
+                    }
+                }
+            }
+        String* words = new String();
+        for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
+            {
+            String* buf = (String*)order.get(i);
+            if (((Number*)fpOk.get((Hashable*)buf)).asI64() == (i64)0)
+                continue;
+            u32 at = (u32)0;
+            bool found = false;
+            for (u32 j = (u32)0; j < ivars.count() && !found; j = j + (u32)1)
+                if (((String*)ivars.get(j)).equals(buf))
+                    { at = j; found = true; }
+            // A captured array is ivar 2 + <index> (after lo and hi); a
+            // global is named as the glob= word names it.
+            if (found && at < (u32)2)
+                continue;
+            words.appendCString(found ? " fp=" : " gfp=");
+            if (found)
+                words.append(String.withU32(at - (u32)2));
+            else
+                words.append(buf);
+            words.appendCString(":"); words.append(String.withI64(((Number*)fpK.get((Hashable*)buf)).asI64()));
+            words.appendCString(":"); words.append(String.withI64(((Number*)fpLo.get((Hashable*)buf)).asI64()));
+            words.appendCString(":"); words.append(String.withI64(((Number*)fpHi.get((Hashable*)buf)).asI64() + (i64)1));
+            }
+        return words;
+        }
+
     // §4: a read of a buffer the block also writes must be at the element
     // this work item writes. `b[i] = b[i - 1] + …` reads another item's
     // result: that is a scan, not a par. Returns the complaint, or 0.
@@ -14582,27 +14717,7 @@ class ClassInfo
         // block with reductions lists one of those first (the reference's IR
         // does). An ICmp that takes a phi is the guard (or a min/max test, but
         // the guard comes first in block order); its phi operand is the iv.
-        {
-        IRValue* ivGuard = (IRValue*)0;
-        for (u32 gb = (u32)0; gb < f.blocks().count() && ivGuard == (IRValue*)0; gb = gb + (u32)1) {
-            IRBlock* gbb = (IRBlock*)f.blocks().get(gb);
-            for (u32 gi = (u32)0; gi < gbb.insns().count() && ivGuard == (IRValue*)0; gi = gi + (u32)1) {
-                IRInsn* gb2 = (IRInsn*)gbb.insns().get(gi);
-                if (!gb2.op().equals(String.withCString("ICmp")))
-                    continue;
-                for (u32 q = (u32)0; q < gb2.ops().count(); q = q + (u32)1) {
-                    IROperand* o = (IROperand*)gb2.ops().get(q);
-                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
-                        continue;
-                    IRInsn* dd = (IRInsn*)def.get((Hashable*)String.withU32(o.val().seq()));
-                    if (dd != (IRInsn*)0 && dd.op().equals(String.withCString("Phi")))
-                        { ivGuard = o.val(); break; }
-                }
-            }
-        }
-        if (ivGuard != (IRValue*)0)
-            iv = ivGuard;
-        }
+        iv = parInductionVariable(f, def, iv);
         IRValue* selfVal = (IRValue*)f.params().get((u32)0);
         Map* writes = new Map();        // buffer -> Array of "affine k c" strings
         Map* wShown = new Map();        // buffer -> its first write's index, as shown
@@ -15901,6 +16016,7 @@ class ClassInfo
             params.appendCString(" [[buffer("); params.append(String.withU32(slot)); params.appendCString(")]]");
             slot = slot + (u32)1;
             }
+        if (_parExtraMeta != (String*)0) meta.append(_parExtraMeta);
         String* mDtail = new String();
         String* mShared = new String();
         bool mDevred = _mRedOps != (Map*)0;
@@ -17401,6 +17517,7 @@ class ClassInfo
             meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(ptxSize(et)));
             params.appendCString(", .param .u64 glob_"); params.append(String.withU32(gi));
             }
+        if (_parExtraMeta != (String*)0) meta.append(_parExtraMeta);
         String* tail = ptxS("");
         String* dtail = ptxS("");
         String* ftail = ptxS("");
@@ -19153,6 +19270,7 @@ class ClassInfo
             _sBufVar.set((Hashable*)key, (Object*)Number.withU32(v));
             iface.add((Object*)Number.withU32(v));
             }
+        if (_parExtraMeta != (String*)0) meta.append(_parExtraMeta);
         Array* redVars = new Array();
         Array* redFields = new Array();
         Array* shVars = new Array();
@@ -20742,6 +20860,7 @@ class ClassInfo
             key.append(String.withU32(gi));
             _wgBufName.set((Hashable*)key, (Object*)n);
             }
+        if (_parExtraMeta != (String*)0) meta.append(_parExtraMeta);
         Array* reds = new Array();
         // A device-side reduction (bug 645) when every reduced field is a
         // 32-bit value with an operator its type takes (the reference explains).
@@ -21142,6 +21261,9 @@ class ClassInfo
                         key.appendByte(c);
                     }
                 }
+            // The buffers' footprints, as words on the header line every
+            // printer writes (step 1 of par-tiles-and-devices.md).
+            _parExtraMeta = parFootprintWords(f, parIvarNames(f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4)));
             String* msl = (String*)0;
             // A SPIR-V module is bytes (it holds NULs): it goes in as they are.
             Array* kernelBytes = (Array*)0;

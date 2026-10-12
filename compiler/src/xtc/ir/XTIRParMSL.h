@@ -20,6 +20,11 @@ NS_ASSUME_NONNULL_BEGIN
 // Buffers are bound from index 2 in field order, then the reductions; 0 is the
 // object's bytes and 1 the span {base, end, per}.
 @interface XTIRParMSL : NSObject
+// Words the check adds to every kernel's header line for the current block
+// (the buffers' footprints, par-tiles-and-devices.md step 1): set before
+// the printers run for a block, cleared after.
++ (void)setExtraMeta:(nullable NSString*)words;
++ (NSString*)extraMeta;
 
 // The kernel's MSL, or nil when this block cannot run on Metal: it uses f64
 // (§7), a global, a call other than the maths intrinsics, or IR the printer
