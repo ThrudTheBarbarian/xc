@@ -209,7 +209,18 @@ def main():
         browser.close()
     outdir = os.path.join(HERE, "v" + a.version)
     os.makedirs(outdir, exist_ok=True)
-    with open(os.path.join(outdir, "results.json"), "w") as fh:
+    # A run restricted with --machines or --bench adds to the results already
+    # in this version's directory instead of replacing them, so one machine
+    # can be measured later without re-timing the others (the language suite's
+    # run.py does the same). A full run still replaces the file.
+    out_path = os.path.join(outdir, "results.json")
+    if (a.bench or a.machines != "mac,linux,windows,browser") and os.path.isfile(out_path):
+        with open(out_path) as fh:
+            prev = json.load(fh)
+        for name, by_machine in results.items():
+            prev.setdefault(name, {}).update(by_machine)
+        results = prev
+    with open(out_path, "w") as fh:
         json.dump(results, fh, indent=1, sort_keys=True)
     print(table(results))
 

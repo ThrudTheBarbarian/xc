@@ -179,6 +179,15 @@ keeps the faster (from 0.73 it remembers the choice, per program and per
 machine, so later runs do not measure again). Every mode's checksum must agree. On Windows *GPU* is CUDA
 and *Vulkan* the same card through Vulkan (`XC_PAR_GPU=vulkan`).
 
+**Apple MacBook Pro, M4 Max (12 performance and 4 efficiency cores), its GPU through Metal** (ms; best of eight runs)
+
+| benchmark | one thread | all threads | GPU | `auto` | GPU vs all threads | GPU's first run |
+|---|---|---|---|---|---|---|
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 444 | 92.1 | 1.1 | 0.6 | 85× faster | 22.8 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 19.4 | 2.1 | 1.1 | 1.0 | 2.00× faster | 24.6 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 78.2 | 9.0 | 1.2 | 1.4 | 7.8× faster | 25.9 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.5 | 0.6 | 12.9 | 0.6 | 22× slower | 34.7 |
+
 **AMD Ryzen 9 9955HX (16 cores, 32 threads), Linux, its integrated Radeon 610M (2 compute units, 128 shader lanes) through Vulkan** (ms; best of eight runs)
 
 | benchmark | one thread | all threads | GPU | `auto` | GPU vs all threads | GPU's first run |
@@ -187,6 +196,24 @@ and *Vulkan* the same card through Vulkan (`XC_PAR_GPU=vulkan`).
 | [`nbody`](/compiler/benchmark-sources/#nbody) | 6.0 | 0.7 | 3.4 | 0.7 | 4.9× slower | 22.5 |
 | [`perlin`](/compiler/benchmark-sources/#perlin) | 299 | 15.0 | 5.8 | 5.8 | 2.6× faster | 30.8 |
 | [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.6 | 2.7 | 22.6 | 2.7 | 8.4× slower | 59.1 |
+
+**AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 3090 through CUDA and Vulkan** (ms; best of eight runs)
+
+| benchmark | one thread | all threads | GPU | Vulkan | `auto` | GPU vs all threads | GPU's first run | Vulkan's first run |
+|---|---|---|---|---|---|---|---|---|
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 445 | 47.3 | 0.2 | 0.3 | 0.2 | 301× faster | 113 | 137 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 142 | 6.1 | 0.4 | 0.6 | 0.4 | 14.1× faster | 146 | 147 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 365 | 19.7 | 0.6 | 1.1 | 0.6 | 33× faster | 116 | 136 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 5.4 | 6.3 | 20.7 | 30.5 | 6.6 | 3.3× slower | 141 | 174 |
+
+**Chrome on the Apple M4 Max: wasm32 (one thread) and WebGPU (from 0.73)** (ms; best of eight runs)
+
+| benchmark | one thread | all threads | GPU | `auto` | GPU vs one thread | GPU's first run |
+|---|---|---|---|---|---|---|
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 364 | – | 1.4 | 1.6 | 260× faster | 10.6 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 53.9 | – | 1.3 | 1.5 | 41× faster | 5.1 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 99.9 | – | 2.3 | 2.3 | 43× faster | 14.4 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 9.3 | – | 26.2 | 9.4 | 2.8× slower | 62.7 |
 
 
 What the tables show:
@@ -200,7 +227,12 @@ What the tables show:
   threads. It just beats them on `mandelbrot` and `nbody` and loses on the
   other two; its copies of `saxpy`'s arrays are slower still, because the
   runtime does not yet use the CPU's cache for them there.
-
+- **Vulkan against CUDA:** on the RTX 3090, Vulkan is slower on `mandelbrot` (0.3 ms against 0.2) and `nbody` (0.6 ms against 0.4) and `perlin` (1.1 ms against 0.6) and `saxpy` (30.5 ms against 20.7).
+- **The first run** carries one-off costs (building the kernel, and on NVIDIA
+  creating the driver context and compiling the PTX or SPIR-V), so it is shown
+  apart: a few tens of milliseconds on Metal and the integrated GPU, and on the
+  3090 113 to 146 ms through CUDA and 136 to 174 ms through Vulkan. `auto` pays it
+  once, while it measures.
 
 ## Release to release
 
