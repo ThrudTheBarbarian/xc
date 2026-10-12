@@ -4607,6 +4607,25 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 NSString *s1 = dbl ? @"d17" : @"s17";
                 NSString *s2 = dbl ? @"d16" : @"s16";
                 NSString *s0 = dbl ? @"d16" : @"s16";
+                // Both candidates in registers already: `fcsel` takes any two FP
+                // registers and reads BOTH before writing, so there is nothing to
+                // stage — read them where they are and select straight into the
+                // result's home. The old form copied both through the fixed
+                // s16/s17 scratch and moved the result out: three `fmov` per
+                // select, and perlin's octave body has 16 of them, which is most
+                // of the 73 extra instructions its inner loop carried against
+                // clang's. An operand that is NOT in a register (an immediate, or
+                // a value the allocator left in its slot) keeps the old path,
+                // which knows the FP immediate forms and owns the scratch.
+                NSString *h1 = (insn.operands[1].kind == XTIROperandKindUse &&
+                                ctx.homeReg[@(insn.operands[1].valueId)])
+                    ? [self homeView:ctx.homeReg[@(insn.operands[1].valueId)]
+                             forType:[ctx.fn valueForId:insn.operands[1].valueId].type] : nil;
+                NSString *h2 = (insn.operands[2].kind == XTIROperandKindUse &&
+                                ctx.homeReg[@(insn.operands[2].valueId)])
+                    ? [self homeView:ctx.homeReg[@(insn.operands[2].valueId)]
+                             forType:[ctx.fn valueForId:insn.operands[2].valueId].type] : nil;
+                BOOL inPlace = (h1 && h2);
                 // A fused comparison is emitted HERE, and the select reads its
                 // flags: no `cset` at the comparison, no `cmp reg,#0` here. The
                 // operand loads below are movz/movk/ldr/fmov, none of which touch
@@ -4619,6 +4638,12 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                         fcond = (cmp.opcode == XTIROpFCmp) ? [self emitCompareForFCmp:cmp ctx:ctx]
                                                            : [self emitCompareForICmp:cmp ctx:ctx];
                 }
+                if (fcond && inPlace) {
+                    NSString *z0 = [self resultReg:insn.result.valueId scratch:s0 ctx:ctx];
+                    [ctx.out appendFormat:@"    fcsel %@, %@, %@, %@\n", z0, h1, h2, fcond];
+                    [self storeReg:z0 intoValue:insn.result.valueId ctx:ctx];
+                    break;
+                }
                 if (fcond) {
                     [self loadFPOperand:insn.operands[1] intoReg:s1 double:dbl ctx:ctx];
                     [self loadFPOperand:insn.operands[2] intoReg:s2 double:dbl ctx:ctx];
@@ -4628,6 +4653,13 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 }
                 NSString *cr = [self condRegForOperand:insn.operands[0] ctx:ctx];
                 [self materialiseOperand:insn.operands[0] intoReg:cr ctx:ctx];
+                if (inPlace) {
+                    NSString *z0 = [self resultReg:insn.result.valueId scratch:s0 ctx:ctx];
+                    [ctx.out appendFormat:@"    cmp %@, #0\n", cr];
+                    [ctx.out appendFormat:@"    fcsel %@, %@, %@, ne\n", z0, h1, h2];
+                    [self storeReg:z0 intoValue:insn.result.valueId ctx:ctx];
+                    break;
+                }
                 [self loadFPOperand:insn.operands[1] intoReg:s1 double:dbl ctx:ctx];
                 [self loadFPOperand:insn.operands[2] intoReg:s2 double:dbl ctx:ctx];
                 [ctx.out appendFormat:@"    cmp %@, #0\n", cr];

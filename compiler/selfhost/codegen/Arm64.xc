@@ -6052,11 +6052,40 @@ class Arm64
             String* f1 = fregName((u32)17, ty);
             String* f2 = fregName((u32)16, ty);
             String* f0 = fregName((u32)16, ty);
+            // Both candidates already in registers: fcsel takes any two FP
+            // registers and reads BOTH before writing, so nothing is staged —
+            // read them where they are and select into the result's home. The
+            // old form copied both through the fixed s16/s17 scratch and moved
+            // the result out: three fmov per select, 16 selects in perlin's
+            // octave body, most of the 73 extra instructions its inner loop
+            // carried against clang's (the reference explains). An operand that
+            // is not in a register keeps the old path, which owns the scratch
+            // and knows the FP immediate forms.
+            IROperand* q1 = (IROperand*)n.ops().get((u32)1);
+            IROperand* q2 = (IROperand*)n.ops().get((u32)2);
+            String* h1 = (String*)0;
+            String* h2 = (String*)0;
+            if (q1.kind() == (u8)OPK_USE && q1.val() != (IRValue*)0) {
+                Object* ho = _home.get((Hashable*)q1.val());
+                if (ho != (Object*)0) h1 = homeView((String*)ho, q1.val().ty());
+            }
+            if (q2.kind() == (u8)OPK_USE && q2.val() != (IRValue*)0) {
+                Object* ho = _home.get((Hashable*)q2.val());
+                if (ho != (Object*)0) h2 = homeView((String*)ho, q2.val().ty());
+            }
+            bool inPlace = h1 != (String*)0 && h2 != (String*)0;
             // A fused comparison is emitted HERE and the fcsel reads its flags:
             // no cset at the comparison, no `cmp reg,#0` here. The operand loads
             // below are movz/movk/ldr/fmov, none of which touch the flags.
             String* fcond = fusedCond((IROperand*)n.ops().get((u32)0));
             if (fcond != (String*)0) {
+                if (inPlace) {
+                    String* z0 = resultReg(n.res(), f0);
+                    _out.appendFormat("    fcsel %s, %s, %s, %s\n",
+                                      z0.cString(), h1.cString(), h2.cString(), fcond.cString());
+                    storeReg(z0, n.res());
+                    return;
+                }
                 loadFPOperand((IROperand*)n.ops().get((u32)1), f1, dbl);
                 loadFPOperand((IROperand*)n.ops().get((u32)2), f2, dbl);
                 _out.appendFormat("    fcsel %s, %s, %s, %s\n",
@@ -6066,6 +6095,14 @@ class Arm64
             }
             String* cr = condReg((IROperand*)n.ops().get((u32)0));
             materialise((IROperand*)n.ops().get((u32)0), cr);
+            if (inPlace) {
+                String* z0 = resultReg(n.res(), f0);
+                _out.appendFormat("    cmp %s, #0\n", cr.cString());
+                _out.appendFormat("    fcsel %s, %s, %s, ne\n",
+                                  z0.cString(), h1.cString(), h2.cString());
+                storeReg(z0, n.res());
+                return;
+            }
             loadFPOperand((IROperand*)n.ops().get((u32)1), f1, dbl);
             loadFPOperand((IROperand*)n.ops().get((u32)2), f2, dbl);
             _out.appendFormat("    cmp %s, #0\n", cr.cString());
