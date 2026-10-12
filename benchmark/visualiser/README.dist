@@ -1,0 +1,24 @@
+xc benchmark visualiser @VERSION@
+
+Draws a benchmark contribution (the JSON benchmark/diy.py writes) and the
+project's published results, compares compilers in a heat map, and moves
+contributions to and from the public corpus.
+
+Run it:
+
+  ./visualiser                  an empty window: Download shows the published
+                                results and everyone's submitted runs
+  ./visualiser results.json     open your own contribution
+  ./visualiser --selftest sample.json
+                                check the program without a window
+
+On macOS the archive is not notarised. If macOS refuses to open it, run
+`xattr -dr com.apple.quarantine .` in this directory once.
+
+On Linux the machine needs GTK 4 (libgtk-4-1 on Ubuntu).
+
+The libraries beside the program are the toolkit's shim (libUXAppKit.dylib or
+libUXGtk.so, LGPL-3.0, COPYING.LESSER) and libtls (Mbed TLS, Apache-2.0 or
+GPL-2.0-or-later, LICENSE-mbedtls.txt). The program is GPL-3.0 (COPYING).
+
+Guides: https://compile-xc.org/compiler/benchmarks/

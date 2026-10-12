@@ -38,3 +38,7 @@ __pycache__/
 # Benchmark: compiled binaries from run.py; results and reports are tracked
 benchmark/build/
 benchmark/par/build/
+# The DIY flow writes one contribution per machine, and the visualiser builds
+# in place; neither is a source artifact.
+benchmark/xc-bench-*.json
+benchmark/visualiser/build/

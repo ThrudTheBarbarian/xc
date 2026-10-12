@@ -11,6 +11,7 @@ than of memory models.
 ```
 python3 benchmark/run.py                 # measure, write v0.6/results.json
 python3 benchmark/report.py              # render v0.6/index.html
+python3 benchmark/diy.py                 # measure this machine, write a contribution JSON
 ```
 
 Useful flags: `--version` picks the output directory, `--bench` restricts to one
@@ -27,8 +28,14 @@ benchmark/
   src/        the benchmark pairs: <name>.xc and <name>.m
   run.py      builds and times every pair, writes results.json
   report.py   renders results.json as a self-contained HTML page
+  diy.py      measures this machine's par and language suites as one contribution JSON
+  visualiser/ an xc/UXKit program that reads a contribution and draws it
   v0.6/       one directory per compiler version: results and report
 ```
+
+`diy.py` and `visualiser/` are the [DIY flow](/compiler/benchmarks/): run the
+published benchmarks on your own machine, then read the JSON as graphs. They do
+not replace `run.py`; the published figures still come from it.
 
 Sources are shared rather than copied per version, so a later version measures
 the same programs and the numbers stay comparable. Only results move into the

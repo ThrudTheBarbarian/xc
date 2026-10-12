@@ -14,6 +14,7 @@ import argparse
 import json
 import math
 import os
+import shutil
 import re
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -521,6 +522,22 @@ def main():
         fh.write(page)
     print("wrote", os.path.relpath(PAGE, REPO))
     sources_page(cur.keys())
+    published(a.current)
+
+
+# The results behind the page, served by the site's corpus.php beside the
+# submitted contributions, so the visualiser's Download shows the project's
+# own figures even before anyone has submitted a run.
+PUBLISHED = os.path.join(REPO, "website", "site", "public", "benchmarks", "published")
+
+
+def published(current):
+    os.makedirs(PUBLISHED, exist_ok=True)
+    for name, src in (("langs.json", os.path.join(ROOT, current, "results.json")),
+                      ("par.json", os.path.join(ROOT, "par", current, "results.json"))):
+        if os.path.exists(src):
+            shutil.copyfile(src, os.path.join(PUBLISHED, name))
+            print("wrote", os.path.relpath(os.path.join(PUBLISHED, name), REPO))
 
 
 SOURCES_HEAD = """---
