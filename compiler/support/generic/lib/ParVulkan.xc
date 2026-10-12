@@ -43,6 +43,8 @@
 // XC_PAR_VULKAN_DEVICE=<n> picks the n-th Vulkan device; by default the first
 // discrete GPU, else the first integrated one, else the first of any kind.
 #import "ParDevice.xc"
+#import "ParWorker.xc"
+#define PAR_VK_DEPTH 3
 #import "ParSoftFloat.xc"   // correctly rounded division and sqrt for accuracy blocks
 
 // The Vulkan loader: vulkan-1.dll on Windows, libvulkan.so on Android, and
@@ -101,6 +103,7 @@ typedef i32 vkCreateFence_t(pointer dev, pointer info, pointer alloc, u64* out);
 typedef void vkDestroyFence_t(pointer dev, u64 fence, pointer alloc);
 typedef i32 vkQueueSubmit_t(pointer q, u32 n, pointer submits, u64 fence);
 typedef i32 vkWaitForFences_t(pointer dev, u32 n, u64* fences, u32 all, u64 timeout);
+typedef i32 vkGetFenceStatus_t(pointer dev, u64 fence);
 typedef i32 vkResetFences_t(pointer dev, u32 n, u64* fences);
 typedef i32 vkResetCommandBuffer_t(u64 cb, u32 flags);
 
@@ -149,6 +152,40 @@ void _vkp(u8* b, u32 at, pointer v)
     {
     *(pointer*)(pointer)(b + at) = v;
     }
+
+// The entry points, device and queue, for the worker below (a class's static
+// ivars are its own).
+vkCreateBuffer_t* gVk_createBuffer;
+vkDestroyBuffer_t* gVk_destroyBuffer;
+vkGetBufferMemoryRequirements_t* gVk_bufferReqs;
+vkAllocateMemory_t* gVk_allocate;
+vkFreeMemory_t* gVk_freeMemory;
+vkBindBufferMemory_t* gVk_bind;
+vkMapMemory_t* gVk_map;
+vkCreateDescriptorPool_t* gVk_createPool;
+vkDestroyDescriptorPool_t* gVk_destroyPool;
+vkAllocateDescriptorSets_t* gVk_allocateSets;
+vkUpdateDescriptorSets_t* gVk_updateSets;
+vkAllocateCommandBuffers_t* gVk_allocateCommands;
+vkBeginCommandBuffer_t* gVk_begin;
+vkEndCommandBuffer_t* gVk_end;
+vkCmdBindPipeline_t* gVk_bindPipeline;
+vkCmdBindDescriptorSets_t* gVk_bindSets;
+vkCmdPushConstants_t* gVk_push;
+vkCmdDispatch_t* gVk_dispatch;
+vkCmdCopyBuffer_t* gVk_copy;
+vkCmdPipelineBarrier_t* gVk_barrier;
+vkCreateFence_t* gVk_createFence;
+vkDestroyFence_t* gVk_destroyFence;
+vkQueueSubmit_t* gVk_submit;
+vkWaitForFences_t* gVk_wait;
+vkResetFences_t* gVk_resetFences;
+vkResetCommandBuffer_t* gVk_resetCmd;
+vkGetFenceStatus_t* gVk_fenceStatus;
+pointer gVkDev;
+pointer gVkQueue;
+u64 gVkCmdPool;
+bool gVkDiscrete;
 
 class ParVulkan
     {
@@ -402,6 +439,37 @@ class ParVulkan
         if (_createCommandPool(dev, (pointer)&cpi[0], (pointer)0, &pool) != (i32)0)
             return false;
         _cmdPool = pool;
+        gVk_createBuffer = _createBuffer;
+        gVk_destroyBuffer = _destroyBuffer;
+        gVk_bufferReqs = _bufferReqs;
+        gVk_allocate = _allocate;
+        gVk_freeMemory = _freeMemory;
+        gVk_bind = _bind;
+        gVk_map = _map;
+        gVk_createPool = _createPool;
+        gVk_destroyPool = _destroyPool;
+        gVk_allocateSets = _allocateSets;
+        gVk_updateSets = _updateSets;
+        gVk_allocateCommands = _allocateCommands;
+        gVk_begin = _begin;
+        gVk_end = _end;
+        gVk_bindPipeline = _bindPipeline;
+        gVk_bindSets = _bindSets;
+        gVk_push = _push;
+        gVk_dispatch = _dispatch;
+        gVk_copy = _copy;
+        gVk_barrier = _barrier;
+        gVk_createFence = _createFence;
+        gVk_destroyFence = _destroyFence;
+        gVk_submit = _submit;
+        gVk_wait = _wait;
+        gVk_resetFences = _resetFences;
+        gVk_resetCmd = _resetCmd;
+        gVk_fenceStatus = (vkGetFenceStatus_t*)fn("vkGetFenceStatus");
+        gVkDev = _dev;
+        gVkQueue = _queue;
+        gVkCmdPool = _cmdPool;
+        gVkDiscrete = _discrete;
         _state = (i32)1;
         if (ParDevice.reporting() && _identity != (String*)0)
             Log.info("par: Vulkan device is %s", _identity.cString());
@@ -950,5 +1018,603 @@ class ParVulkan
         ParDevice.ranOnGpu(proto, l, ParDevice.nowUs() - started, gpuUs);
         return true;
 #endif
+        }
+    }
+
+
+// The Vulkan GPU ParVulkan.start chose, as a worker on the tile queue
+// (par-tiles-and-devices.md step 3). A run makes each buffer whole once —
+// host-visible, mapped, filled from the host, and on a discrete card a copy
+// in the GPU's own memory (the single shot's cost, no more) — and each tile
+// is a dispatch over its own span of the same buffers, with its written
+// slices copied back (through the GPU on a discrete card) as it finishes
+// and its partials folded as a chunk copy. Three tiles in flight, each with
+// its own command buffer, fence, descriptor set and partial buffers.
+class ParVulkanWorker : ParWorker
+    {
+    bool _ready;
+    i32 _slot;              // the kernel's pipeline slot
+    ParChunk* _proto;
+    ParLayout* _l;
+    u32 _nb;                // bindings: args + buffers + globals + reductions
+    // The buffers are kept from run to run and grown when a run needs more
+    // (a host-visible allocation is pages pinned and zeroed: costly a run).
+    u64 _hbuf[49];
+    u64 _hmem[49];
+    u8* _hmap[49];
+    i64 _hcap[49];
+    u64 _dbuf[49];
+    u64 _dmem[49];
+    i64 _dcap[49];
+    i64 _sizes[49];
+    // Per slot: the reductions' buffers, the set, the command buffer, the fence.
+    // A discrete card: a tile's slices go through a staging buffer per slot
+    // (host-visible, mapped) and vkCmdCopyBuffer at their offsets; the
+    // device holds every buffer whole. An integrated one maps the whole
+    // buffers and the kernel reads them in place.
+    u64 _sbuf[PAR_VK_DEPTH];
+    u64 _smem[PAR_VK_DEPTH];
+    u8* _smap[PAR_VK_DEPTH];
+    i64 _scapAlloc[PAR_VK_DEPTH];
+    i64 _scap;              // staging bytes per slot (uploads then downloads)
+    i64 _upMax;
+    u64 _rhbuf[PAR_VK_DEPTH * 16];
+    u64 _rhmem[PAR_VK_DEPTH * 16];
+    u8* _rhmap[PAR_VK_DEPTH * 16];
+    i64 _rhcap[PAR_VK_DEPTH * 16];
+    u64 _rdbuf[PAR_VK_DEPTH * 16];
+    u64 _rdmem[PAR_VK_DEPTH * 16];
+    i64 _rdcap[PAR_VK_DEPTH * 16];
+    i64 _rsize[16];
+    u64 _pool;
+    i32 _poolSlot;          // the pipeline slot the pool's sets were laid out for, -1 none
+    u32 _poolNb;
+    bool _once;             // command buffers and fences made
+    u64 _set[PAR_VK_DEPTH];
+    u64 _cb[PAR_VK_DEPTH];
+    u64 _fence[PAR_VK_DEPTH];
+    ParTile* _slotTile[PAR_VK_DEPTH];
+    u32 _nextSlot;
+    u32 _oldest;
+    u32 _inFlight;
+
+    String* identity(void)
+        {
+        return ParVulkan.identity();
+        }
+    u32 depth(void)
+        {
+        return (u32)PAR_VK_DEPTH;
+        }
+    i64 floor(void)
+        {
+        return (i64)4096;
+        }
+    i64 tileItems(ParLayout* l)
+        {
+        return gVkDiscrete ? ParTiles.tileItemsFor(l) : (i64)0;
+        }
+    bool holds(ParChunk* proto, u8* src, ParLayout* l)
+        {
+        if (l == (ParLayout*)0)
+            return false;
+        u8* spv = ParVulkan.spirvOf(src);
+        if (spv == (u8*)0 || !ParVulkan.start())
+            return false;
+        i32 slot = ParVulkan.pipeline(spv);
+        if (slot < (i32)0 || gParVkBindings[slot] != (u32)1 + l.nbuf + l.nglob + l.nred)
+            return false;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            if (l.bufIn[i] == (i64)0 && l.bufFp[i] == (i64)0)
+                return false;
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            if (l.globIn[i] == (i64)0 && l.globFp[i] == (i64)0)
+                return false;
+        return true;
+        }
+
+    void freeBuf(u64* b, u64* m)
+        {
+        if (*b != (u64)0) gVk_destroyBuffer(gVkDev, *b, (pointer)0);
+        if (*m != (u64)0) gVk_freeMemory(gVkDev, *m, (pointer)0);
+        *b = (u64)0;
+        *m = (u64)0;
+        }
+    // A buffer of at least `need` bytes in the slot: the one there if it is
+    // big enough, else a new one.
+    bool ensure(i64 need, bool device, u64* b, u64* m, u8** map, i64* cap)
+        {
+        if (*b != (u64)0 && *cap >= need)
+            return true;
+        freeBuf(b, m);
+        *cap = (i64)0;
+        if (!ParVulkan.buffer(need, device, b, m, map))
+            return false;
+        *cap = need;
+        return true;
+        }
+
+    bool prepare(ParChunk* proto, u8* src, ParLayout* l, i64 tile)
+        {
+        u8* spv = ParVulkan.spirvOf(src);
+        _slot = spv != (u8*)0 ? ParVulkan.pipeline(spv) : (i32)-1;
+        if (_slot < (i32)0)
+            return false;
+        _proto = proto;
+        _l = l;
+        u8* obj = (u8*)(pointer)proto;
+        u32 nfixed = (u32)1 + l.nbuf + l.nglob;
+        _nb = nfixed + l.nred;
+        for (u32 d = (u32)0; d < (u32)PAR_VK_DEPTH; d = d + (u32)1)
+            _slotTile[d] = (ParTile*)0;
+        // The whole buffers: the object as it is before any fold, every
+        // captured array, every global; words whole as the single shot does.
+        _sizes[0] = l.size;
+        u32 b = (u32)1;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1) { _sizes[b] = l.bufLen[i]; b = b + (u32)1; }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1) { _sizes[b] = l.globLen[i]; b = b + (u32)1; }
+        l.plan(0, tile);
+        for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+            _rsize[r] = (l.nparts * l.redStride[r] + (i64)3) & (i64)-4;
+        bool ok = true;
+        _scap = (i64)0;
+        _upMax = (i64)0;
+        // Which buffers are sliced: footprinted ones on a discrete card go
+        // up and down a tile at a time; the rest are whole (host-visible,
+        // filled once; copied to the device once when it is discrete).
+        bool sliced[49];
+        for (u32 i = (u32)0; i < (u32)49; i = i + (u32)1)
+            sliced[i] = false;
+        if (gVkDiscrete)
+            {
+            u32 bi = (u32)1;
+            i64 downMax = (i64)0;
+            for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+                {
+                if (l.bufFp[i] != (i64)0)
+                    {
+                    sliced[bi] = true;
+                    i64 sl = (l.bufFpK[i] * tile + (l.bufFpHi[i] - l.bufFpLo[i])) * l.bufElem[i];
+                    _upMax = _upMax + sl;
+                    if (l.bufIn[i] == (i64)0) downMax = downMax + sl;
+                    }
+                bi = bi + (u32)1;
+                }
+            for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+                {
+                if (l.globFp[i] != (i64)0)
+                    {
+                    sliced[bi] = true;
+                    i64 sl = (l.globFpK[i] * tile + (l.globFpHi[i] - l.globFpLo[i])) * l.globElem[i];
+                    if (!(l.globAll[i] != (i64)0 && l.globFpK[i] == (i64)1)) _upMax = _upMax + sl;
+                    if (l.globIn[i] == (i64)0) downMax = downMax + sl;
+                    }
+                bi = bi + (u32)1;
+                }
+            _scap = ((_upMax + downMax) + (i64)4095) & (i64)-4096;
+            if (_scap < (i64)4096) _scap = (i64)4096;
+            for (u32 d = (u32)0; d < (u32)PAR_VK_DEPTH && ok; d = d + (u32)1)
+                ok = ensure(_scap, false, &_sbuf[d], &_smem[d], &_smap[d], &_scapAlloc[d]);
+            }
+        for (u32 i = (u32)0; i < nfixed && ok; i = i + (u32)1)
+            {
+            _sizes[i] = (_sizes[i] + (i64)3) & (i64)-4;
+            if (!sliced[i])
+                ok = ensure(_sizes[i], false, &_hbuf[i], &_hmem[i], &_hmap[i], &_hcap[i]);
+            if (ok && gVkDiscrete)
+                ok = ensure(_sizes[i], true, &_dbuf[i], &_dmem[i], (u8**)0, &_dcap[i]);
+            }
+        for (u32 d = (u32)0; d < (u32)PAR_VK_DEPTH && ok; d = d + (u32)1)
+            for (u32 r = (u32)0; r < l.nred && ok; r = r + (u32)1)
+                {
+                ok = ensure(_rsize[r], false, &_rhbuf[d * (u32)16 + r], &_rhmem[d * (u32)16 + r], &_rhmap[d * (u32)16 + r], &_rhcap[d * (u32)16 + r]);
+                if (ok && gVkDiscrete)
+                    ok = ensure(_rsize[r], true, &_rdbuf[d * (u32)16 + r], &_rdmem[d * (u32)16 + r], (u8**)0, &_rdcap[d * (u32)16 + r]);
+                }
+        if (ok)
+            {
+            memcpy((pointer)_hmap[0], (pointer)obj, (u64)l.size);
+            b = (u32)1;
+            for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+                { if (!sliced[b]) memcpy((pointer)_hmap[b], *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i]); b = b + (u32)1; }
+            for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+                { if (!sliced[b]) memcpy((pointer)_hmap[b], l.globPtr[i], (u64)l.globLen[i]); b = b + (u32)1; }
+            }
+        // One descriptor pool, a set per slot naming the whole buffers and
+        // the slot's partials; the pool and sets are kept while the kernel
+        // and binding count stay, the sets rewritten every run.
+        if (ok && _pool != (u64)0 && (_poolSlot != _slot || _poolNb != _nb))
+            {
+            gVk_destroyPool(gVkDev, _pool, (pointer)0);
+            _pool = (u64)0;
+            }
+        if (ok && _pool == (u64)0)
+            {
+            u8 ps[8];
+            _vk32(&ps[0], (u32)0, (u32)7);
+            _vk32(&ps[0], (u32)4, _nb * (u32)PAR_VK_DEPTH);
+            u8 dpi[40];
+            memset((pointer)&dpi[0], (i32)0, (u64)40);
+            _vk32(&dpi[0], (u32)0, (u32)33);
+            _vk32(&dpi[0], (u32)20, (u32)PAR_VK_DEPTH);
+            _vk32(&dpi[0], (u32)24, (u32)1);
+            _vkp(&dpi[0], (u32)32, (pointer)&ps[0]);
+            ok = gVk_createPool(gVkDev, (pointer)&dpi[0], (pointer)0, &_pool) == (i32)0;
+            for (u32 d = (u32)0; d < (u32)PAR_VK_DEPTH && ok; d = d + (u32)1)
+                {
+                u64 dsl = gParVkSetLayout[_slot];
+                u8 dsa[40];
+                memset((pointer)&dsa[0], (i32)0, (u64)40);
+                _vk32(&dsa[0], (u32)0, (u32)34);
+                _vk64(&dsa[0], (u32)16, _pool);
+                _vk32(&dsa[0], (u32)24, (u32)1);
+                _vkp(&dsa[0], (u32)32, (pointer)&dsl);
+                ok = gVk_allocateSets(gVkDev, (pointer)&dsa[0], &_set[d]) == (i32)0;
+                }
+            _poolSlot = _slot;
+            _poolNb = _nb;
+            }
+        for (u32 d = (u32)0; d < (u32)PAR_VK_DEPTH && ok; d = d + (u32)1)
+            {
+            u8* info = (u8*)calloc((u64)_nb, (u64)24);
+            u8* wds = (u8*)calloc((u64)_nb, (u64)64);
+            for (u32 i = (u32)0; i < _nb; i = i + (u32)1)
+                {
+                u64 which = i < nfixed ? (gVkDiscrete ? _dbuf[i] : _hbuf[i])
+                                       : (gVkDiscrete ? _rdbuf[d * (u32)16 + (i - nfixed)] : _rhbuf[d * (u32)16 + (i - nfixed)]);
+                _vk64(info + i * (u32)24, (u32)0, which);
+                _vk64(info + i * (u32)24, (u32)8, (u64)0);
+                _vk64(info + i * (u32)24, (u32)16, (u64)0xFFFFFFFFFFFFFFFF);
+                u8* w = wds + i * (u32)64;
+                _vk32(w, (u32)0, (u32)35);
+                _vk64(w, (u32)16, _set[d]);
+                _vk32(w, (u32)24, i);
+                _vk32(w, (u32)32, (u32)1);
+                _vk32(w, (u32)36, (u32)7);
+                _vkp(w, (u32)48, (pointer)(info + i * (u32)24));
+                }
+            gVk_updateSets(gVkDev, _nb, (pointer)wds, (u32)0, (pointer)0);
+            free((pointer)info);
+            free((pointer)wds);
+            if (_once)
+                continue;
+            // The slot's command buffer and fence, made once.
+            u8 cba[32];
+            memset((pointer)&cba[0], (i32)0, (u64)32);
+            _vk32(&cba[0], (u32)0, (u32)40);
+            _vk64(&cba[0], (u32)16, gVkCmdPool);
+            _vk32(&cba[0], (u32)24, (u32)0);
+            _vk32(&cba[0], (u32)28, (u32)1);
+            ok = gVk_allocateCommands(gVkDev, (pointer)&cba[0], &_cb[d]) == (i32)0;
+            u8 fci[24];
+            memset((pointer)&fci[0], (i32)0, (u64)24);
+            _vk32(&fci[0], (u32)0, (u32)8);
+            if (ok)
+                ok = gVk_createFence(gVkDev, (pointer)&fci[0], (pointer)0, &_fence[d]) == (i32)0;
+            }
+        if (ok)
+            _once = true;
+        // A discrete card: the whole buffers go up once, through the GPU.
+        if (ok && gVkDiscrete)
+            {
+            u8 cbb[32];
+            memset((pointer)&cbb[0], (i32)0, (u64)32);
+            _vk32(&cbb[0], (u32)0, (u32)42);
+            _vk32(&cbb[0], (u32)16, (u32)1);
+            ok = gVk_begin((pointer)_cb[0], (pointer)&cbb[0]) == (i32)0;
+            u8 cr[24];
+            for (u32 i = (u32)0; i < nfixed && ok; i = i + (u32)1)
+                {
+                if (sliced[i])
+                    continue;
+                _vk64(&cr[0], (u32)0, (u64)0);
+                _vk64(&cr[0], (u32)8, (u64)0);
+                _vk64(&cr[0], (u32)16, (u64)_sizes[i]);
+                gVk_copy((pointer)_cb[0], _hbuf[i], _dbuf[i], (u32)1, (pointer)&cr[0]);
+                }
+            if (ok)
+                ok = gVk_end((pointer)_cb[0]) == (i32)0 && submitAndWait((u32)0);
+            }
+        _nextSlot = (u32)0;
+        _oldest = (u32)0;
+        _inFlight = (u32)0;
+        _ready = ok;
+        if (!ok)
+            release();
+        return ok;
+        }
+
+    bool submitAndWait(u32 d)
+        {
+        if (!submit(d))
+            return false;
+        return gVk_wait(gVkDev, (u32)1, &_fence[d], (u32)1, (u64)0xFFFFFFFFFFFFFFFF) == (i32)0;
+        }
+
+    bool submit(u32 d)
+        {
+        if (gVk_resetFences(gVkDev, (u32)1, &_fence[d]) != (i32)0)
+            return false;
+        u8 si[72];
+        memset((pointer)&si[0], (i32)0, (u64)72);
+        _vk32(&si[0], (u32)0, (u32)4);
+        _vk32(&si[0], (u32)40, (u32)1);
+        _vkp(&si[0], (u32)48, (pointer)&_cb[d]);
+        return gVk_submit(gVkQueue, (u32)1, (pointer)&si[0], _fence[d]) == (i32)0;
+        }
+
+    // A run's end: the buffers stay for the next run.
+    void finish(void)
+        {
+        _ready = false;
+        _proto = (ParChunk*)0;
+        _l = (ParLayout*)0;
+        }
+
+    // Everything back to the device, after a failed prepare.
+    void release(void)
+        {
+        for (u32 d = (u32)0; d < (u32)PAR_VK_DEPTH; d = d + (u32)1)
+            {
+            if (_fence[d] != (u64)0) { gVk_destroyFence(gVkDev, _fence[d], (pointer)0); _fence[d] = (u64)0; }
+            for (u32 r = (u32)0; r < (u32)16; r = r + (u32)1)
+                {
+                freeBuf(&_rhbuf[d * (u32)16 + r], &_rhmem[d * (u32)16 + r]);
+                freeBuf(&_rdbuf[d * (u32)16 + r], &_rdmem[d * (u32)16 + r]);
+                _rhcap[d * (u32)16 + r] = (i64)0;
+                _rdcap[d * (u32)16 + r] = (i64)0;
+                }
+            freeBuf(&_sbuf[d], &_smem[d]);
+            _scapAlloc[d] = (i64)0;
+            }
+        for (u32 i = (u32)0; i < (u32)49; i = i + (u32)1)
+            {
+            freeBuf(&_hbuf[i], &_hmem[i]);
+            freeBuf(&_dbuf[i], &_dmem[i]);
+            _hcap[i] = (i64)0;
+            _dcap[i] = (i64)0;
+            }
+        // The pool takes its sets with it; the command buffers stay with
+        // the command pool.
+        if (_pool != (u64)0) { gVk_destroyPool(gVkDev, _pool, (pointer)0); _pool = (u64)0; }
+        _once = false;
+        _ready = false;
+        _proto = (ParChunk*)0;
+        _l = (ParLayout*)0;
+        }
+
+    bool take(ParTile* t, ParChunk* proto, u8* src, ParLayout* l)
+        {
+        if (!_ready || _inFlight >= (u32)PAR_VK_DEPTH)
+            return false;
+        u32 d = _nextSlot;
+        u32 nfixed = (u32)1 + l.nbuf + l.nglob;
+        l.plan(t.lo, t.hi);
+        pointer cb = (pointer)_cb[d];
+        if (gVk_resetCmd != (vkResetCommandBuffer_t*)0 && gVk_resetCmd(cb, (u32)0) != (i32)0)
+            return false;
+        u8 cbb[32];
+        memset((pointer)&cbb[0], (i32)0, (u64)32);
+        _vk32(&cbb[0], (u32)0, (u32)42);
+        _vk32(&cbb[0], (u32)16, (u32)1);
+        if (gVk_begin(cb, (pointer)&cbb[0]) != (i32)0)
+            return false;
+        i64 span[4];
+        span[0] = t.lo;
+        span[1] = t.hi;
+        span[2] = l.per;
+        span[3] = l.nparts;
+        u8 mb[24];
+        u8 cr[24];
+        memset((pointer)&mb[0], (i32)0, (u64)24);
+        _vk32(&mb[0], (u32)0, (u32)46);
+        i64 sat = (i64)0;   // where the next slice sits in the slot's staging
+        if (gVkDiscrete)
+            {
+            u8* obj = (u8*)(pointer)proto;
+            u8* st = _smap[d];
+            u32 b = (u32)1;
+            for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+                {
+                if (l.bufFp[i] != (i64)0)
+                    {
+                    i64 count = l.bufLen[i] / l.bufElem[i];
+                    i64 e0 = ParTiles.sliceLo(l.bufFpK[i], l.bufFpLo[i], t.lo, count);
+                    i64 e1 = ParTiles.sliceHi(l.bufFpK[i], l.bufFpHi[i], t.hi, count);
+                    i64 bytes = (e1 - e0) * l.bufElem[i];
+                    if (bytes > (i64)0)
+                        {
+                        memcpy((pointer)(st + sat), (pointer)(*(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i]), (u64)bytes);
+                        _vk64(&cr[0], (u32)0, (u64)sat);
+                        _vk64(&cr[0], (u32)8, (u64)(e0 * l.bufElem[i]));
+                        _vk64(&cr[0], (u32)16, (u64)bytes);
+                        gVk_copy(cb, _sbuf[d], _dbuf[b], (u32)1, (pointer)&cr[0]);
+                        sat = sat + bytes;
+                        }
+                    }
+                b = b + (u32)1;
+                }
+            for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+                {
+                if (l.globFp[i] != (i64)0 && !(l.globAll[i] != (i64)0 && l.globFpK[i] == (i64)1))
+                    {
+                    i64 count = l.globLen[i] / l.globElem[i];
+                    i64 e0 = ParTiles.sliceLo(l.globFpK[i], l.globFpLo[i], t.lo, count);
+                    i64 e1 = ParTiles.sliceHi(l.globFpK[i], l.globFpHi[i], t.hi, count);
+                    i64 bytes = (e1 - e0) * l.globElem[i];
+                    if (bytes > (i64)0)
+                        {
+                        memcpy((pointer)(st + sat), (pointer)((u8*)l.globPtr[i] + e0 * l.globElem[i]), (u64)bytes);
+                        _vk64(&cr[0], (u32)0, (u64)sat);
+                        _vk64(&cr[0], (u32)8, (u64)(e0 * l.globElem[i]));
+                        _vk64(&cr[0], (u32)16, (u64)bytes);
+                        gVk_copy(cb, _sbuf[d], _dbuf[b], (u32)1, (pointer)&cr[0]);
+                        sat = sat + bytes;
+                        }
+                    }
+                b = b + (u32)1;
+                }
+            // The uploads land before the kernel reads them.
+            _vk32(&mb[0], (u32)16, (u32)0x1000);
+            _vk32(&mb[0], (u32)20, (u32)0x60);
+            gVk_barrier(cb, (u32)0x1000, (u32)0x800, (u32)0, (u32)1, (pointer)&mb[0], (u32)0, (pointer)0, (u32)0, (pointer)0);
+            sat = _upMax;
+            }
+        gVk_bindPipeline(cb, (u32)1, gParVkPipe[_slot]);
+        gVk_bindSets(cb, (u32)1, gParVkLayout[_slot], (u32)0, (u32)1, &_set[d], (u32)0, (pointer)0);
+        gVk_push(cb, gParVkLayout[_slot], (u32)0x20, (u32)0, (u32)32, (pointer)&span[0]);
+        if (l.devred != (i64)0)
+            gVk_dispatch(cb, (u32)l.nparts, (u32)1, (u32)1);
+        else
+            gVk_dispatch(cb, (u32)((l.threads + (i64)63) / (i64)64), (u32)1, (u32)1);
+        if (l.devlast != (i64)0)
+            {
+            _vk32(&mb[0], (u32)16, (u32)0x40);
+            _vk32(&mb[0], (u32)20, (u32)0x60);
+            gVk_barrier(cb, (u32)0x800, (u32)0x800, (u32)0, (u32)1, (pointer)&mb[0], (u32)0, (pointer)0, (u32)0, (pointer)0);
+            gVk_bindPipeline(cb, (u32)1, gParVkFold[_slot]);
+            gVk_bindSets(cb, (u32)1, gParVkLayout[_slot], (u32)0, (u32)1, &_set[d], (u32)0, (pointer)0);
+            gVk_dispatch(cb, (u32)1, (u32)1, (u32)1);
+            }
+        if (gVkDiscrete)
+            {
+            // The tile's written slices and its partials, back to the host-visible side.
+            _vk32(&mb[0], (u32)16, (u32)0x40);
+            _vk32(&mb[0], (u32)20, (u32)0x800);
+            gVk_barrier(cb, (u32)0x800, (u32)0x1000, (u32)0, (u32)1, (pointer)&mb[0], (u32)0, (pointer)0, (u32)0, (pointer)0);
+            u32 b = (u32)1;
+            for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+                {
+                if (l.bufIn[i] == (i64)0)
+                    {
+                    i64 count = l.bufLen[i] / l.bufElem[i];
+                    i64 e0 = ParTiles.sliceLo(l.bufFpK[i], l.bufFpLo[i], t.lo, count);
+                    i64 e1 = ParTiles.sliceHi(l.bufFpK[i], l.bufFpHi[i], t.hi, count);
+                    if (e1 > e0)
+                        {
+                        _vk64(&cr[0], (u32)0, (u64)(e0 * l.bufElem[i]));
+                        _vk64(&cr[0], (u32)8, (u64)sat);
+                        _vk64(&cr[0], (u32)16, (u64)((e1 - e0) * l.bufElem[i]));
+                        gVk_copy(cb, _dbuf[b], _sbuf[d], (u32)1, (pointer)&cr[0]);
+                        sat = sat + (e1 - e0) * l.bufElem[i];
+                        }
+                    }
+                b = b + (u32)1;
+                }
+            for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+                {
+                if (l.globIn[i] == (i64)0)
+                    {
+                    i64 count = l.globLen[i] / l.globElem[i];
+                    i64 e0 = ParTiles.sliceLo(l.globFpK[i], l.globFpLo[i], t.lo, count);
+                    i64 e1 = ParTiles.sliceHi(l.globFpK[i], l.globFpHi[i], t.hi, count);
+                    if (e1 > e0)
+                        {
+                        _vk64(&cr[0], (u32)0, (u64)(e0 * l.globElem[i]));
+                        _vk64(&cr[0], (u32)8, (u64)sat);
+                        _vk64(&cr[0], (u32)16, (u64)((e1 - e0) * l.globElem[i]));
+                        gVk_copy(cb, _dbuf[b], _sbuf[d], (u32)1, (pointer)&cr[0]);
+                        sat = sat + (e1 - e0) * l.globElem[i];
+                        }
+                    }
+                b = b + (u32)1;
+                }
+            for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                {
+                _vk64(&cr[0], (u32)0, (u64)0);
+                _vk64(&cr[0], (u32)8, (u64)0);
+                _vk64(&cr[0], (u32)16, (u64)_rsize[r]);
+                gVk_copy(cb, _rdbuf[d * (u32)16 + r], _rhbuf[d * (u32)16 + r], (u32)1, (pointer)&cr[0]);
+                }
+            _vk32(&mb[0], (u32)16, (u32)0x1000);
+            _vk32(&mb[0], (u32)20, (u32)0x2000);
+            gVk_barrier(cb, (u32)0x1000, (u32)0x4000, (u32)0, (u32)1, (pointer)&mb[0], (u32)0, (pointer)0, (u32)0, (pointer)0);
+            }
+        if (gVk_end(cb) != (i32)0 || !submit(d))
+            return false;
+        _slotTile[d] = t;
+        t.worker = (ParWorker*)self;
+        _nextSlot = (d + (u32)1) % (u32)PAR_VK_DEPTH;
+        _inFlight = _inFlight + (u32)1;
+        return true;
+        }
+
+    ParTile* complete(u32 d)
+        {
+        ParTile* t = _slotTile[d];
+        ParLayout* l = _l;
+        u8* obj = (u8*)(pointer)_proto;
+        i64 sat = _upMax;   // a discrete card's downloads sit after its uploads in the slot's staging
+        u32 b = (u32)1;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            if (l.bufIn[i] == (i64)0)
+                {
+                i64 count = l.bufLen[i] / l.bufElem[i];
+                i64 e0 = ParTiles.sliceLo(l.bufFpK[i], l.bufFpLo[i], t.lo, count);
+                i64 e1 = ParTiles.sliceHi(l.bufFpK[i], l.bufFpHi[i], t.hi, count);
+                i64 bytes = (e1 - e0) * l.bufElem[i];
+                if (bytes > (i64)0)
+                    {
+                    pointer from = gVkDiscrete ? (pointer)(_smap[d] + sat) : (pointer)(_hmap[b] + e0 * l.bufElem[i]);
+                    memcpy((pointer)(*(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i]), from, (u64)bytes);
+                    if (gVkDiscrete) sat = sat + bytes;
+                    }
+                }
+            b = b + (u32)1;
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            if (l.globIn[i] == (i64)0)
+                {
+                i64 count = l.globLen[i] / l.globElem[i];
+                i64 e0 = ParTiles.sliceLo(l.globFpK[i], l.globFpLo[i], t.lo, count);
+                i64 e1 = ParTiles.sliceHi(l.globFpK[i], l.globFpHi[i], t.hi, count);
+                i64 bytes = (e1 - e0) * l.globElem[i];
+                if (bytes > (i64)0)
+                    {
+                    pointer from = gVkDiscrete ? (pointer)(_smap[d] + sat) : (pointer)(_hmap[b] + e0 * l.globElem[i]);
+                    memcpy((pointer)((u8*)l.globPtr[i] + e0 * l.globElem[i]), from, (u64)bytes);
+                    if (gVkDiscrete) sat = sat + bytes;
+                    }
+                }
+            b = b + (u32)1;
+            }
+        if (l.nred > (u32)0)
+            {
+            l.plan(t.lo, t.hi);
+            u8* parts[16];
+            for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                parts[r] = _rhmap[d * (u32)16 + r];
+            ParChunk* c = _proto.copyChunk();
+            l.fold(c, &parts[0]);
+            t.partial = c;
+            }
+        t.done = true;
+        _slotTile[d] = (ParTile*)0;
+        _oldest = (d + (u32)1) % (u32)PAR_VK_DEPTH;
+        _inFlight = _inFlight - (u32)1;
+        return t;
+        }
+
+    ParTile* poll(void)
+        {
+        if (_inFlight == (u32)0 || gVk_fenceStatus == (vkGetFenceStatus_t*)0)
+            return (ParTile*)0;
+        u32 d = _oldest;
+        if (gVk_fenceStatus(gVkDev, _fence[d]) != (i32)0)
+            return (ParTile*)0;   // VK_NOT_READY (1), or a loss the drain reports
+        return complete(d);
+        }
+
+    void drain(void)
+        {
+        while (_inFlight > (u32)0)
+            {
+            u32 d = _oldest;
+            if (gVk_wait(gVkDev, (u32)1, &_fence[d], (u32)1, (u64)0xFFFFFFFFFFFFFFFF) != (i32)0)
+                Log.error("par: a Vulkan tile failed on %s", ParVulkan.identity().cString());
+            complete(d);
+            }
         }
     }

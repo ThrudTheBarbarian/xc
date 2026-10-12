@@ -27,6 +27,29 @@ class ParTiles
         return e1;
         }
 
+    // The bytes a tile of `items` work items moves for a device with its own
+    // memory: every footprinted slice up, the written ones down again.
+    static i64 tileBytes(ParLayout* l, i64 items)
+        {
+        i64 b = (i64)0;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            if (l.bufFp[i] != (i64)0)
+                b = b + (l.bufFpK[i] * items + (l.bufFpHi[i] - l.bufFpLo[i])) * l.bufElem[i] * (l.bufIn[i] != (i64)0 ? (i64)1 : (i64)2);
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            if (l.globFp[i] != (i64)0)
+                b = b + (l.globFpK[i] * items + (l.globFpHi[i] - l.globFpLo[i])) * l.globElem[i] *
+                        (l.globIn[i] != (i64)0 || (l.globAll[i] != (i64)0 && l.globFpK[i] == (i64)1) ? (i64)1 : (i64)2);
+        return b;
+        }
+    // The items that move XC_PAR_TILE_MB per tile; 0 when nothing moves.
+    static i64 tileItemsFor(ParLayout* l)
+        {
+        i64 perItem = ParTiles.tileBytes(l, (i64)1) - ParTiles.tileBytes(l, (i64)0);
+        if (perItem <= (i64)0)
+            return (i64)0;
+        return (ParDevice.tileMegabytes() << (i64)20) / perItem;
+        }
+
     // The workers for this process, made once: XC_PAR_WORKERS names them
     // ("cpu", "cuda", "cuda,cpu"); empty keeps the old single-device path.
     static Array* _workers;
@@ -66,6 +89,10 @@ class ParTiles
             else if (name.equals(String.withCString("metal")))
                 _workers.add((Object*)new ParMetalWorker());
 #endif
+#if ARCH_x86_64 || ARCH_win64 || (ARCH_arm64 && PLATFORM_android)
+            else if (name.equals(String.withCString("vulkan")))
+                _workers.add((Object*)new ParVulkanWorker());
+#endif
             at = end + (u32)1;
             }
         if (cpu)
@@ -78,11 +105,12 @@ class ParTiles
         {
         if (!wanted())
             return false;
+        i64 started = ParDevice.nowUs();
         ParLayout* l = ParDevice.layout(proto, src, lo, hi);
         Array* ws = new Array();
         i64 floor = (i64)1;
         u32 totalDepth = (u32)0;
-        for (u32 i = (u32)0; i < _workers.count(); i = i + (u32)1)
+        for (u32 i = (u32)0; i < _workers.count() && ws.count() < (u32)16; i = i + (u32)1)
             {
             ParWorker* w = (ParWorker*)_workers.get(i);
             if (!w.holds(proto, src, l))
@@ -112,7 +140,6 @@ class ParTiles
         tile = (tile + (i64)1023) & ~(i64)1023;
         if (tile > n)
             tile = n;
-        i64 ntiles = (n + tile - (i64)1) / tile;
         // Each worker readies itself for tiles of this size; one that cannot
         // drops out of this run.
         Array* ready = new Array();
@@ -125,43 +152,102 @@ class ParTiles
         ws = ready;
         if (ws.count() == (u32)0)
             return false;
+        // The tile list: full tiles, then a tail that shrinks towards the
+        // floor, so the last tiles are small and no worker waits long on
+        // another's big one (guided self-scheduling). The fold order is the
+        // list order, which depends on n and the workers alone.
         Array* tiles = new Array();
-        for (i64 t = (i64)0; t < ntiles; t = t + (i64)1)
+        i64 at = lo;
+        i64 t = (i64)0;
+        // The last depth's worth of the range goes as half tiles.
+        i64 tailFrom = (i64)totalDepth * tile;
+        i64 half = ((tile / (i64)2) + (i64)1023) & ~(i64)1023;
+        if (half < floor) half = floor;
+        while (at < hi)
             {
+            i64 left = hi - at;
+            i64 size = tile;
+            if (left <= tailFrom && n > tailFrom)
+                size = half;
+            if (size > left) size = left;
             ParTile* pt = new ParTile();
             pt.index = t;
-            pt.lo = lo + t * tile;
-            pt.hi = pt.lo + tile;
-            if (pt.hi > hi)
-                pt.hi = hi;
+            pt.lo = at;
+            pt.hi = at + size;
             tiles.add((Object*)pt);
+            at = at + size;
+            t = t + (i64)1;
             }
-        i64 started = ParDevice.nowUs();
+        i64 ntiles = t;
         i64 next = (i64)0;      // the next tile to hand out
         i64 folded = (i64)0;    // tiles folded so far, in order
         u32 inFlight = (u32)0;
+        // Each worker's throughput so far (items per us, from its finished
+        // tiles over the time since its first), and the items it holds: a
+        // tile goes to whichever worker with room would finish it first, so
+        // a slow device beside a fast one takes its share and no more, and
+        // is not left holding the last tiles. Until a worker has a rate it
+        // is tried in list order (GPUs first), up to its depth.
+        u32 nw = ws.count();
+        if (nw > (u32)16)
+            nw = (u32)16;
+        i64 inItems[16];
+        i64 doneItems[16];
+        i64 firstTake[16];
+        bool full[16];
+        for (u32 i = (u32)0; i < nw; i = i + (u32)1)
+            {
+            inItems[i] = (i64)0;
+            doneItems[i] = (i64)0;
+            firstTake[i] = (i64)0;
+            }
         while (folded < ntiles)
             {
-            // Hand out tiles to any worker with room, GPUs first.
-            bool gave = true;
-            while (gave && next < ntiles)
+            for (u32 i = (u32)0; i < nw; i = i + (u32)1)
+                full[i] = false;
+            while (next < ntiles)
                 {
-                gave = false;
-                for (u32 i = (u32)0; i < ws.count() && next < ntiles; i = i + (u32)1)
+                ParTile* pt = (ParTile*)tiles.get((u32)next);
+                i64 items = pt.hi - pt.lo;
+                i64 now = ParDevice.nowUs();
+                i64 best = (i64)-1;
+                i64 bestAt = (i64)0;
+                for (u32 i = (u32)0; i < nw; i = i + (u32)1)
                     {
-                    ParWorker* w = (ParWorker*)ws.get(i);
-                    ParTile* pt = (ParTile*)tiles.get((u32)next);
-                    if (w.take(pt, proto, src, l))
+                    if (full[i])
+                        continue;
+                    i64 at;
+                    if (doneItems[i] == (i64)0)
+                        at = inItems[i] == (i64)0 ? (i64)0 : (i64)1;   // unmeasured: try it, lightly loaded first
+                    else
                         {
-                        next = next + (i64)1;
-                        inFlight = inFlight + (u32)1;
-                        gave = true;
+                        i64 elapsed = now - firstTake[i];
+                        if (elapsed < (i64)1) elapsed = (i64)1;
+                        at = (i64)2 + (inItems[i] + items) * elapsed / doneItems[i];
+                        }
+                    if (best < (i64)0 || at < bestAt)
+                        {
+                        best = (i64)i;
+                        bestAt = at;
                         }
                     }
+                if (best < (i64)0)
+                    break;
+                ParWorker* w = (ParWorker*)ws.get((u32)best);
+                if (!w.take(pt, proto, src, l))
+                    {
+                    full[best] = true;
+                    continue;
+                    }
+                if (firstTake[best] == (i64)0)
+                    firstTake[best] = now;
+                inItems[best] = inItems[best] + items;
+                next = next + (i64)1;
+                inFlight = inFlight + (u32)1;
                 }
             // Collect what finished; fold in tile order.
             bool got = false;
-            for (u32 i = (u32)0; i < ws.count(); i = i + (u32)1)
+            for (u32 i = (u32)0; i < nw; i = i + (u32)1)
                 {
                 ParWorker* w = (ParWorker*)ws.get(i);
                 ParTile* d = w.poll();
@@ -169,6 +255,8 @@ class ParTiles
                     {
                     got = true;
                     inFlight = inFlight - (u32)1;
+                    inItems[i] = inItems[i] - (d.hi - d.lo);
+                    doneItems[i] = doneItems[i] + (d.hi - d.lo);
                     d = w.poll();
                     }
                 }
