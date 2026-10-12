@@ -160,13 +160,13 @@ export default defineConfig({
 								{ label: 'Optimisation', slug: 'compiler/usage/optimization' },
 							],
 						},
-						{ label: 'Benchmark sources', slug: 'compiler/benchmark-sources' },
 						{
 							label: 'Benchmarks',
 							collapsed: true,
 							items: [
 								{ label: 'Overview', slug: 'compiler/benchmarks' },
 								{ label: 'Performance', slug: 'compiler/performance' },
+								{ label: 'Sources', slug: 'compiler/benchmark-sources' },
 								{ label: 'How to DIY', slug: 'compiler/benchmarks/how-to-diy' },
 								{ label: 'Build the visualiser', slug: 'compiler/benchmarks/build-the-visualiser' },
 							],
