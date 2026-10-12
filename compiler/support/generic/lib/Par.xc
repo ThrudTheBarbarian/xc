@@ -126,10 +126,13 @@ class Par
         // under, asked of the runtime only when choose() will look them up.
         if (ParDevice.needsHardware(proto))
             ParDevice.setHardware(Par.gpuIdentity());
+#if !ARCH_wasm32
         // Several devices on one tile queue (par-tiles-and-devices.md step
-        // 3), when XC_PAR_WORKERS names them.
+        // 3), when XC_PAR_WORKERS names them. Not on wasm32: its runtime has
+        // no threads, so no CPU worker, and WebGPU is one device.
         if (ParTiles.run(proto, proto.gpuSource(), lo, hi))
             return;
+#endif
         if (ParDevice.choose(proto, hi - lo) == (i32)2)
             {
 #if ARCH_wasm32
