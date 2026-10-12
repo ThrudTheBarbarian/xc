@@ -899,6 +899,10 @@ class ParCuda
                 return false;
         if (!start())
             return ParDevice.cpu("there is no CUDA device");
+        // The workers' contexts may have been current since (their holds):
+        // this path's handles belong to the first device's.
+        if (_ctxSetCurrent != (cuCtxSetCurrent_t*)0)
+            _ctxSetCurrent(_ctx);
         pointer fn = function(src);
         if (fn == (pointer)0)
             return ParDevice.cpu("its GPU version did not compile");
@@ -1094,12 +1098,15 @@ class ParCudaWorker : ParWorker
     pointer _kernel;
     u8* _snap;
     u64 _whole[52];
+    i64 _wholeCap[52];      // device memory is kept from run to run and grown
     u32 _nparams;
     u32 _q;                 // sliced buffers + globals
     i64 _sliceMax[32];
     bool _pin[32];
     u64 _slice[PAR_CU_DEPTH * 32];
+    i64 _sliceCap[PAR_CU_DEPTH * 32];
     u64 _partDev[PAR_CU_DEPTH * 16];
+    i64 _partCap[PAR_CU_DEPTH * 16];
     i64 _tile;
     // In flight: the tile in each slot, taken in ring order.
     ParTile* _slotTile[PAR_CU_DEPTH];
@@ -1229,6 +1236,24 @@ class ParCudaWorker : ParWorker
         return (u8*)p;
         }
 
+    // Device memory of at least `need` bytes at *mem: what is there if it is
+    // big enough, else a new allocation (the old one freed).
+    bool devBuf(u64* mem, i64* cap, i64 need)
+        {
+        if (need < (i64)1)
+            need = (i64)1;
+        if (*mem != (u64)0 && *cap >= need)
+            return true;
+        if (*mem != (u64)0)
+            gCu_free(*mem);
+        *mem = (u64)0;
+        *cap = (i64)0;
+        if (gCu_alloc(mem, (u64)need) != (i32)0)
+            return false;
+        *cap = need;
+        return true;
+        }
+
     bool prepare(ParChunk* proto, u8* src, ParLayout* l, i64 tile)
         {
         gCu_ctxSetCurrent(_ctx);
@@ -1249,27 +1274,21 @@ class ParCudaWorker : ParWorker
         bool ok = true;
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
-            _whole[nd] = (u64)0;
             if (l.bufFp[i] == (i64)0)
                 {
-                u64 dmem = (u64)0;
-                if (gCu_alloc(&dmem, (u64)l.bufLen[i]) != (i32)0 ||
-                    gCu_toDevice(dmem, *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i]) != (i32)0)
+                if (!devBuf(&_whole[nd], &_wholeCap[nd], l.bufLen[i]) ||
+                    gCu_toDevice(_whole[nd], *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i]) != (i32)0)
                     ok = false;
-                _whole[nd] = dmem;
                 }
             nd = nd + (u32)1;
             }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             {
-            _whole[nd] = (u64)0;
             if (l.globFp[i] == (i64)0)
                 {
-                u64 dmem = (u64)0;
-                if (gCu_alloc(&dmem, (u64)l.globLen[i]) != (i32)0 ||
-                    gCu_toDevice(dmem, l.globPtr[i], (u64)l.globLen[i]) != (i32)0)
+                if (!devBuf(&_whole[nd], &_wholeCap[nd], l.globLen[i]) ||
+                    gCu_toDevice(_whole[nd], l.globPtr[i], (u64)l.globLen[i]) != (i32)0)
                     ok = false;
-                _whole[nd] = dmem;
                 }
             nd = nd + (u32)1;
             }
@@ -1317,17 +1336,11 @@ class ParCudaWorker : ParWorker
         for (u32 d = (u32)0; d < (u32)PAR_CU_DEPTH && ok; d = d + (u32)1)
             {
             for (u32 b = (u32)0; b < q; b = b + (u32)1)
-                {
-                _slice[d * (u32)32 + b] = (u64)0;
-                if (_sliceMax[b] > (i64)0 && gCu_alloc(&_slice[d * (u32)32 + b], (u64)_sliceMax[b]) != (i32)0)
+                if (_sliceMax[b] > (i64)0 && !devBuf(&_slice[d * (u32)32 + b], &_sliceCap[d * (u32)32 + b], _sliceMax[b]))
                     ok = false;
-                }
             for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
-                {
-                _partDev[d * (u32)16 + r] = (u64)0;
-                if (gCu_alloc(&_partDev[d * (u32)16 + r], (u64)(l.nparts * l.redStride[r])) != (i32)0)
+                if (!devBuf(&_partDev[d * (u32)16 + r], &_partCap[d * (u32)16 + r], l.nparts * l.redStride[r]))
                     ok = false;
-                }
             if (ok && upMax > (i64)0 && staging(d, true, upMax) == (u8*)0)
                 ok = false;
             if (ok && downMax > (i64)0 && staging(d, false, downMax) == (u8*)0)
@@ -1342,18 +1355,10 @@ class ParCudaWorker : ParWorker
         return ok;
         }
 
+    // A run's end: the device memory stays for the next run (an allocation
+    // and a free a run were most of a small block's time).
     void finish(void)
         {
-        gCu_ctxSetCurrent(_ctx);
-        for (u32 d = (u32)0; d < (u32)PAR_CU_DEPTH; d = d + (u32)1)
-            {
-            for (u32 b = (u32)0; b < _q; b = b + (u32)1)
-                if (_slice[d * (u32)32 + b] != (u64)0) { gCu_free(_slice[d * (u32)32 + b]); _slice[d * (u32)32 + b] = (u64)0; }
-            for (u32 r = (u32)0; r < (u32)16; r = r + (u32)1)
-                if (_partDev[d * (u32)16 + r] != (u64)0) { gCu_free(_partDev[d * (u32)16 + r]); _partDev[d * (u32)16 + r] = (u64)0; }
-            }
-        for (u32 i = (u32)2; i < _nparams; i = i + (u32)1)
-            if (_whole[i] != (u64)0) { gCu_free(_whole[i]); _whole[i] = (u64)0; }
         if (_snap != (u8*)0) { free((pointer)_snap); _snap = (u8*)0; }
         _proto = (ParChunk*)0;
         _l = (ParLayout*)0;

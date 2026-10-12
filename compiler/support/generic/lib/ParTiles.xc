@@ -50,22 +50,109 @@ class ParTiles
         return (ParDevice.tileMegabytes() << (i64)20) / perItem;
         }
 
-    // The workers for this process, made once: XC_PAR_WORKERS names them
-    // ("cpu", "cuda", "cuda,cpu"); empty keeps the old single-device path.
+    // The workers for this process, made once. XC_PAR_WORKERS names them
+    // ("cpu", "cuda", "metal", "vulkan", "cuda,vulkan,cpu") and then every
+    // block runs on the queue, whatever auto would choose; unset, the
+    // default set is every GPU the box has (each CUDA card; Vulkan for a
+    // card CUDA does not reach; Metal) and the CPU pool, and auto measures
+    // the queue's sets against the one GPU and the CPU (ParDevice.choose).
     static Array* _workers;
-    static i32 _state;   // 0 unread, 1 workers, 2 none
+    static i32 _state;   // 0 unread, 1 named, 2 the default set
+    static String* _ids;
 
-    static bool wanted(void)
+    static bool explicit(void)
         {
         if (_state == (i32)0)
             {
             String* v = Platform.env(String.withCString("XC_PAR_WORKERS"));
             _workers = new Array();
             if (v.byteLength() > (u32)0)
+                {
                 ParTiles.makeWorkers(v);
-            _state = _workers.count() > (u32)0 ? (i32)1 : (i32)2;
+                _state = (i32)1;
+                }
+            else
+                {
+                ParTiles.defaultWorkers();
+                _state = (i32)2;
+                }
+            ParTiles.count();
             }
         return _state == (i32)1;
+        }
+
+    // The GPU workers in the set, for auto; and the sorted identities, for
+    // its hardware key.
+    static void count(void)
+        {
+        u32 gpus = (u32)0;
+        Array* ids = new Array();
+        for (u32 i = (u32)0; i < _workers.count(); i = i + (u32)1)
+            {
+            String* id = ((ParWorker*)_workers.get(i)).identity();
+            if (!id.equals(String.withCString("cpu")))
+                gpus = gpus + (u32)1;
+            // Insertion, in byte order.
+            u32 at = (u32)0;
+            while (at < ids.count() && ParTiles.before((String*)ids.get(at), id))
+                at = at + (u32)1;
+            ids.insert(at, (Object*)id);
+            }
+        gParGpuWorkers = gpus;
+        _ids = new String();
+        for (u32 i = (u32)0; i < ids.count(); i = i + (u32)1)
+            {
+            if (i > (u32)0) _ids.appendCString(",");
+            _ids.append((String*)ids.get(i));
+            }
+        }
+    static bool before(String* a, String* b)
+        {
+        u32 n = a.byteLength() < b.byteLength() ? a.byteLength() : b.byteLength();
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            if (a.byteAt(i) != b.byteAt(i))
+                return a.byteAt(i) < b.byteAt(i);
+        return a.byteLength() < b.byteLength();
+        }
+    static String* identities(void)
+        {
+        ParTiles.explicit();
+        return _ids;
+        }
+
+    // Every GPU on the box, then the CPU pool. A card CUDA reaches is not
+    // added again through Vulkan: a Vulkan identity is
+    // "vulkan:<name>:<vendor>:<device>", a CUDA one "cuda:<name>".
+    static void defaultWorkers(void)
+        {
+#if ARCH_win64
+        if (!ParDevice.vulkanOnly())
+            ParCuda.addWorkers(_workers);
+        ParVulkanWorker* vk = new ParVulkanWorker();
+        String* vid = vk.identity();
+        bool seen = false;
+        if (vid.byteLength() > (u32)18)
+            {
+            String* vname = vid.substringBytes((u32)7, vid.byteLength() - (u32)17);
+            for (u32 i = (u32)0; i < _workers.count(); i = i + (u32)1)
+                {
+                String* cid = ((ParWorker*)_workers.get(i)).identity();
+                if (cid.byteLength() > (u32)5 && cid.substringBytes((u32)5, cid.byteLength() - (u32)5).equals(vname))
+                    seen = true;
+                }
+            }
+        if (vid.byteLength() > (u32)0 && !seen)
+            _workers.add((Object*)vk);
+#elif ARCH_x86_64 || (ARCH_arm64 && PLATFORM_android)
+        ParVulkanWorker* vk = new ParVulkanWorker();
+        if (vk.identity().byteLength() > (u32)0)
+            _workers.add((Object*)vk);
+#elif ARCH_arm64 && !PLATFORM_ios
+        ParMetalWorker* mtl = new ParMetalWorker();
+        if (mtl.identity().byteLength() > (u32)0)
+            _workers.add((Object*)mtl);
+#endif
+        _workers.add((Object*)new ParCpuWorker());
         }
 
     // The named workers, GPUs before the CPU pool whatever the order given.
@@ -99,11 +186,13 @@ class ParTiles
             _workers.add((Object*)new ParCpuWorker());
         }
 
-    // Run [lo, hi) of the block as tiles across the workers. False when no
-    // worker holds the block, before anything ran.
-    static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi)
+    // Run [lo, hi) of the block as tiles across the workers: set 0 is the
+    // named list, 3 the GPU workers of the default set, 4 all of it. False
+    // when no worker holds the block, before anything ran.
+    static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi, i32 set)
         {
-        if (!wanted())
+        ParTiles.explicit();
+        if (_workers.count() == (u32)0)
             return false;
         i64 started = ParDevice.nowUs();
         ParLayout* l = ParDevice.layout(proto, src, lo, hi);
@@ -113,6 +202,8 @@ class ParTiles
         for (u32 i = (u32)0; i < _workers.count() && ws.count() < (u32)16; i = i + (u32)1)
             {
             ParWorker* w = (ParWorker*)_workers.get(i);
+            if (set == (i32)3 && w.identity().equals(String.withCString("cpu")))
+                continue;
             if (!w.holds(proto, src, l))
                 continue;
             ws.add((Object*)w);
@@ -135,23 +226,19 @@ class ParTiles
             }
         if (tile == (i64)0)
             tile = n / (i64)(totalDepth * (u32)2);
+        // Several workers: at least two tiles each, so none sits idle.
+        if (ws.count() >= (u32)2)
+            {
+            i64 cap = n / (i64)(ws.count() * (u32)2);
+            cap = (cap + (i64)1023) & ~(i64)1023;
+            if (cap < floor) cap = floor;
+            if (tile > cap) tile = cap;
+            }
         if (tile < floor)
             tile = floor;
         tile = (tile + (i64)1023) & ~(i64)1023;
         if (tile > n)
             tile = n;
-        // Each worker readies itself for tiles of this size; one that cannot
-        // drops out of this run.
-        Array* ready = new Array();
-        for (u32 i = (u32)0; i < ws.count(); i = i + (u32)1)
-            {
-            ParWorker* w = (ParWorker*)ws.get(i);
-            if (w.prepare(proto, src, l, tile))
-                ready.add((Object*)w);
-            }
-        ws = ready;
-        if (ws.count() == (u32)0)
-            return false;
         // The tile list: full tiles, then a tail that shrinks towards the
         // floor, so the last tiles are small and no worker waits long on
         // another's big one (guided self-scheduling). The fold order is the
@@ -179,6 +266,29 @@ class ParTiles
             t = t + (i64)1;
             }
         i64 ntiles = t;
+        // One tile is one device's single shot with the queue's overhead on
+        // top: auto's sets decline it (and learn that), the named list runs.
+        if (ntiles < (i64)2 && set != (i32)0)
+            {
+            ParDevice.setDeclined(proto, set);
+            return false;
+            }
+        // Each worker readies itself for tiles of this size; one that cannot
+        // drops out of this run.
+        Array* ready = new Array();
+        for (u32 i = (u32)0; i < ws.count(); i = i + (u32)1)
+            {
+            ParWorker* w = (ParWorker*)ws.get(i);
+            if (w.prepare(proto, src, l, tile))
+                ready.add((Object*)w);
+            }
+        ws = ready;
+        if (ws.count() == (u32)0)
+            {
+            if (set != (i32)0)
+                ParDevice.setDeclined(proto, set);
+            return false;
+            }
         i64 next = (i64)0;      // the next tile to hand out
         i64 folded = (i64)0;    // tiles folded so far, in order
         u32 inFlight = (u32)0;
@@ -218,7 +328,9 @@ class ParTiles
                         continue;
                     i64 at;
                     if (doneItems[i] == (i64)0)
-                        at = inItems[i] == (i64)0 ? (i64)0 : (i64)1;   // unmeasured: try it, lightly loaded first
+                        // Unmeasured: an idle one is tried before anything; a
+                        // busy one waits its turn behind every measured one.
+                        at = inItems[i] == (i64)0 ? (i64)0 : (i64)1 << (i64)60;
                     else
                         {
                         i64 elapsed = now - firstTake[i];
@@ -276,6 +388,7 @@ class ParTiles
             ((ParWorker*)ws.get(i)).drain();
             ((ParWorker*)ws.get(i)).finish();
             }
+        i64 took = ParDevice.nowUs() - started;
         if (ParDevice.reporting())
             {
             String* names = new String();
@@ -284,9 +397,10 @@ class ParTiles
                 if (i > (u32)0) names.appendCString(", ");
                 names.append(((ParWorker*)ws.get(i)).identity());
                 }
-            Log.info("par: %s: %ld items in %ld tiles across %s (%ld us)", proto.parName(), n, ntiles, names.cString(),
-                     ParDevice.nowUs() - started);
+            Log.info("par: %s: %ld items in %ld tiles across %s (%ld us)", proto.parName(), n, ntiles, names.cString(), took);
             }
+        if (set != (i32)0)
+            ParDevice.ranOnSet(proto, set, took);
         return true;
         }
     }

@@ -6,6 +6,8 @@
 // chunk copy, which the queue folds into the block in tile order whatever
 // order the workers finish in.
 #import "Par.xc"
+#import "Sem.xc"
+#import "Atomic.xc"
 
 class ParTile : Object
     {
@@ -80,14 +82,49 @@ class ParWorker : Object
 // on a thread of its own, one tile in flight. It never refuses a block,
 // which is what makes it the worker of last resort, and the second worker
 // that proves the queue is not shaped like one GPU runtime.
-class ParCpuWorker : ParWorker
+// One of the CPU worker's threads: made once, it waits for a tile, runs the
+// chunk over the tile's range on its own, and flags it done. The pool is not
+// used: its fan-out and join per tile cost more than a small tile's work.
+class ParCpuLane : Object
     {
-    ParTile* _tile;
     Thread* _thread;
+    Sem* _go;
+    Atomic* _done;      // 1 once the tile's chunk has run
+    bool _busy;         // the queue's side: a tile is in the lane
+    bool _quit;
     ParChunk* _chunk;
     i64 _lo;
     i64 _hi;
-    bool _finished;     // set by the thread when its tile is done; poll joins only then
+    ParTile* _tile;
+
+    void start(void)
+        {
+        _go = Sem.withCount((i32)0);
+        _done = Atomic.withValue((i32)0);
+        _thread = Thread.spawn(&self.loop);
+        }
+    void loop(void)
+        {
+        while (true)
+            {
+            _go.wait();
+            if (_quit)
+                return;
+            _chunk.lo = _lo;
+            _chunk.hi = _hi;
+            _chunk.run();
+            _done.store((i32)1);
+            }
+        }
+    }
+
+// The CPU pool as a worker: a lane per core, each tile on one lane, so the
+// CPU holds as many tiles as it has cores and the queue's rate for it is the
+// cores' together. Its lanes outlive the run.
+class ParCpuWorker : ParWorker
+    {
+    Array* _lanes;
+    u32 _busy;
 
     String* identity(void)
         {
@@ -97,50 +134,78 @@ class ParCpuWorker : ParWorker
         {
         return true;
         }
+    u32 depth(void)
+        {
+        return (u32)Par.threads();
+        }
     i64 floor(void)
         {
         return (i64)1024;
         }
-    void go(void)
+    bool prepare(ParChunk* proto, u8* src, ParLayout* l, i64 tile)
         {
-        Par.runCpu(_chunk, _lo, _hi);
-        _finished = true;
+        if (_lanes == (Array*)0)
+            {
+            _lanes = new Array();
+            i32 n = Par.threads();
+            for (i32 i = (i32)0; i < n; i = i + (i32)1)
+                {
+                ParCpuLane* lane = new ParCpuLane();
+                lane.start();
+                _lanes.add((Object*)lane);
+                }
+            }
+        return true;
         }
     bool take(ParTile* t, ParChunk* proto, u8* src, ParLayout* l)
         {
-        if (_tile != (ParTile*)0)
+        if (_lanes == (Array*)0 || _busy >= _lanes.count())
             return false;
-        _chunk = proto.copyChunk();
-        _lo = t.lo;
-        _hi = t.hi;
-        _tile = t;
-        _finished = false;
-        t.worker = (ParWorker*)self;
-        _thread = Thread.spawn(&self.go);
-        return true;
+        for (u32 i = (u32)0; i < _lanes.count(); i = i + (u32)1)
+            {
+            ParCpuLane* lane = (ParCpuLane*)_lanes.get(i);
+            if (lane._busy)
+                continue;
+            lane._chunk = proto.copyChunk();
+            lane._lo = t.lo;
+            lane._hi = t.hi;
+            lane._tile = t;
+            lane._busy = true;
+            lane._done.store((i32)0);
+            t.worker = (ParWorker*)self;
+            _busy = _busy + (u32)1;
+            lane._go.post();
+            return true;
+            }
+        return false;
         }
     // Asked, not waited for: the queue polls every worker in turn, and a
-    // join here would hold the GPUs' feeding until the CPU's tile ended.
+    // wait here would hold the GPUs' feeding until a CPU tile ended.
     ParTile* poll(void)
         {
-        if (_tile == (ParTile*)0 || !_finished)
+        if (_busy == (u32)0)
             return (ParTile*)0;
-        _thread.join();
-        ParTile* t = _tile;
-        t.partial = _chunk;
-        t.done = true;
-        _tile = (ParTile*)0;
-        _thread = (Thread*)0;
-        _chunk = (ParChunk*)0;
-        return t;
+        for (u32 i = (u32)0; i < _lanes.count(); i = i + (u32)1)
+            {
+            ParCpuLane* lane = (ParCpuLane*)_lanes.get(i);
+            if (!lane._busy || lane._done.load() == (i32)0)
+                continue;
+            ParTile* t = lane._tile;
+            t.partial = lane._chunk;
+            t.done = true;
+            lane._chunk = (ParChunk*)0;
+            lane._tile = (ParTile*)0;
+            lane._busy = false;
+            _busy = _busy - (u32)1;
+            return t;
+            }
+        return (ParTile*)0;
         }
     void drain(void)
         {
-        if (_tile == (ParTile*)0)
-            return;
-        _thread.join();
-        _finished = true;
-        poll();
+        while (_busy > (u32)0)
+            if (poll() == (ParTile*)0)
+                Thread.yield();
         }
     }
 #endif

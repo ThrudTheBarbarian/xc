@@ -125,15 +125,28 @@ class Par
         // The GPU's identity, for the hardware key auto keeps its choices
         // under, asked of the runtime only when choose() will look them up.
         if (ParDevice.needsHardware(proto))
-            ParDevice.setHardware(Par.gpuIdentity());
-#if !ARCH_wasm32
+#if ARCH_wasm32
+            ParDevice.setHardware(Par.gpuIdentity(), new String());
+#else
+            ParDevice.setHardware(Par.gpuIdentity(), ParTiles.identities());
         // Several devices on one tile queue (par-tiles-and-devices.md step
-        // 3), when XC_PAR_WORKERS names them. Not on wasm32: its runtime has
-        // no threads, so no CPU worker, and WebGPU is one device.
-        if (ParTiles.run(proto, proto.gpuSource(), lo, hi))
+        // 3): every block when XC_PAR_WORKERS names the workers, else when
+        // auto finds the GPUs (3) or every device (4) the fastest. Not on
+        // wasm32: its runtime has no threads, so no CPU worker, and WebGPU
+        // is one device.
+        if (ParTiles.explicit() && ParTiles.run(proto, proto.gpuSource(), lo, hi, (i32)0))
             return;
 #endif
-        if (ParDevice.choose(proto, hi - lo) == (i32)2)
+        i32 choice = ParDevice.choose(proto, hi - lo);
+#if !ARCH_wasm32
+        if (choice >= (i32)3)
+            {
+            if (ParTiles.run(proto, proto.gpuSource(), lo, hi, choice))
+                return;
+            choice = (i32)2;
+            }
+#endif
+        if (choice == (i32)2)
             {
 #if ARCH_wasm32
             if (ParWebGpu.run(proto, proto.gpuSource(), lo, hi))

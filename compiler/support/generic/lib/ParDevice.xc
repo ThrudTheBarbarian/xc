@@ -74,6 +74,16 @@ i32 gParUser[64];
 i64 gParUserN[64];
 i64 gParCpuUpTo[64];
 i64 gParGpuFrom[64];
+// The tile queue's two sets (par-tiles-and-devices.md step 3): "gpus" is
+// every GPU worker, "all" is those and the CPU pool. Measured after the
+// CPU and the one GPU, learned as the size each wins from.
+i64 gParGpusUs[64];
+i64 gParAllUs[64];
+u32 gParGpusRuns[64];
+u32 gParAllRuns[64];
+i64 gParGpusFrom[64];
+i64 gParAllFrom[64];
+u32 gParGpuWorkers;     // GPU workers in the default set (ParTiles tells)
 bool gParLearned[64];
 i64 gParMeasN[64];
 i64 gParLastN[64];
@@ -242,6 +252,10 @@ class ParDevice
             return (i32)1;
         if (parSameName(c, "gpu"))
             return (i32)2;
+        if (parSameName(c, "gpus"))
+            return (i32)3;
+        if (parSameName(c, "all"))
+            return (i32)4;
         return (i32)0; // "auto", or anything else
         }
 
@@ -264,6 +278,12 @@ class ParDevice
         gParUserN[i] = (i64)0;
         gParCpuUpTo[i] = (i64)-1;
         gParGpuFrom[i] = (i64)-1;
+        gParGpusUs[i] = (i64)-1;
+        gParAllUs[i] = (i64)-1;
+        gParGpusRuns[i] = (u32)0;
+        gParAllRuns[i] = (u32)0;
+        gParGpusFrom[i] = (i64)-1;
+        gParAllFrom[i] = (i64)-1;
         gParLearned[i] = false;
         gParMeasN[i] = (i64)0;
         gParLastN[i] = (i64)0;
@@ -433,7 +453,7 @@ class ParDevice
             return false;
         if (_mode == (i32)0)
             choose(proto, (i64)-1);       // reads XC_PAR
-        if (_mode == (i32)1 || _mode == (i32)2)
+        if (_mode == (i32)1 || _mode == (i32)2 || _mode == (i32)5 || _mode == (i32)6)
             return false;
         u8* src = proto.gpuSource();
         if (src == (u8*)0 || src[0] == (u8)0)
@@ -452,12 +472,19 @@ class ParDevice
         return true;
         }
 
-    // The GPU's identity from its runtime ("" for none): the hardware key.
-    static void setHardware(String* gpu)
+    // The GPU's identity from its runtime ("" for none) and the tile queue's
+    // workers (sorted, "" where there is no queue): the hardware key, so a
+    // box with a second card learns apart from the same box with one.
+    static void setHardware(String* gpu, String* workers)
         {
         String* both = String.withString(gpu);
         both.appendCString("|");
         both.append(cpuIdentity());
+        if (workers.byteLength() > (u32)0)
+            {
+            both.appendCString("|");
+            both.append(workers);
+            }
         _hw = String.withFormat("%08x", hash(both.cString(), (u32)2166136261));
         if (reporting())
             Log.info("par: hardware key %s (%s)", _hw.cString(), both.cString());
@@ -480,6 +507,8 @@ class ParDevice
             if (v.equals(String.withCString("cpu"))) u = (i32)1;
             else if (v.equals(String.withCString("gpu"))) u = (i32)2;
             else if (v.equals(String.withCString("auto"))) u = (i32)3;
+            else if (v.equals(String.withCString("gpus"))) u = (i32)6;
+            else if (v.equals(String.withCString("all"))) u = (i32)7;
             else if (v.byteLength() > (u32)0 && v.byteAt((u32)0) >= (u8)'0' && v.byteAt((u32)0) <= (u8)'9')
                 {
                 u32 at = (u32)0;
@@ -522,6 +551,23 @@ class ParDevice
         if (neg) at = at + (u32)1;
         i64 b = num(c, &at);
         gParGpuFrom[i] = neg ? (i64)-1 : b;
+        // ,gpusFrom,allFrom (a 0.75 record has neither).
+        if (c[at] == (u8)',' && (c[at + (u32)1] == (u8)'-' || (c[at + (u32)1] >= (u8)'0' && c[at + (u32)1] <= (u8)'9')))
+            {
+            at = at + (u32)1;
+            neg = c[at] == (u8)'-';
+            if (neg) at = at + (u32)1;
+            i64 g = num(c, &at);
+            gParGpusFrom[i] = neg ? (i64)-1 : g;
+            if (c[at] == (u8)',' && (c[at + (u32)1] == (u8)'-' || (c[at + (u32)1] >= (u8)'0' && c[at + (u32)1] <= (u8)'9')))
+                {
+                at = at + (u32)1;
+                neg = c[at] == (u8)'-';
+                if (neg) at = at + (u32)1;
+                i64 a2 = num(c, &at);
+                gParAllFrom[i] = neg ? (i64)-1 : a2;
+                }
+            }
 #if ARCH_win64
         // ,cuda or ,vulkan: the interface auto chose (none in a 0.73/0.74 record).
         if (c[at] == (u8)',' && gParApi[i] == (i32)0)
@@ -529,28 +575,39 @@ class ParDevice
 #endif
         }
 
-    // A measured run's verdict at size n: the bounds move to take it in (a
-    // contradicting bound is dropped, the newer evidence kept), and are saved.
-    static void learn(u32 i, ParChunk* proto, i64 n, bool gpuWon)
+    static u8* choiceName(i32 c)
+        {
+        return c == (i32)1 ? "CPU" : c == (i32)2 ? "GPU" : c == (i32)3 ? "GPUs" : "all devices";
+        }
+
+    // A measured run's verdict at size n — winner 1 CPU, 2 the GPU, 3 the
+    // GPUs on the tile queue, 4 every device on it: the winner's bound moves
+    // to take n in, a losing bound n contradicts is dropped (the newer
+    // evidence kept), and they are saved.
+    static void learn(u32 i, ParChunk* proto, i64 n, i32 winner)
         {
         if (_hw == (String*)0 || n <= (i64)0)
             return;
-        if (gpuWon)
+        if (winner == (i32)1 && n > gParCpuUpTo[i])
+            gParCpuUpTo[i] = n;
+        if (winner == (i32)1 && gParCpuUpTo[i] >= (i64)0)
             {
-            if (gParGpuFrom[i] < (i64)0 || n < gParGpuFrom[i])
-                gParGpuFrom[i] = n;
-            if (gParCpuUpTo[i] >= gParGpuFrom[i])
-                gParCpuUpTo[i] = (i64)-1;
+            if (gParGpuFrom[i] >= (i64)0 && gParGpuFrom[i] <= gParCpuUpTo[i]) gParGpuFrom[i] = (i64)-1;
+            if (gParGpusFrom[i] >= (i64)0 && gParGpusFrom[i] <= gParCpuUpTo[i]) gParGpusFrom[i] = (i64)-1;
+            if (gParAllFrom[i] >= (i64)0 && gParAllFrom[i] <= gParCpuUpTo[i]) gParAllFrom[i] = (i64)-1;
             }
-        else
+        if (winner == (i32)2 && (gParGpuFrom[i] < (i64)0 || n < gParGpuFrom[i])) gParGpuFrom[i] = n;
+        if (winner == (i32)3 && (gParGpusFrom[i] < (i64)0 || n < gParGpusFrom[i])) gParGpusFrom[i] = n;
+        if (winner == (i32)4 && (gParAllFrom[i] < (i64)0 || n < gParAllFrom[i])) gParAllFrom[i] = n;
+        if (winner != (i32)1)
             {
-            if (n > gParCpuUpTo[i])
-                gParCpuUpTo[i] = n;
-            if (gParGpuFrom[i] >= (i64)0 && gParGpuFrom[i] <= gParCpuUpTo[i])
-                gParGpuFrom[i] = (i64)-1;
+            if (gParCpuUpTo[i] >= n) gParCpuUpTo[i] = (i64)-1;
+            if (winner != (i32)2 && gParGpuFrom[i] >= (i64)0 && gParGpuFrom[i] <= n) gParGpuFrom[i] = (i64)-1;
+            if (winner != (i32)3 && gParGpusFrom[i] >= (i64)0 && gParGpusFrom[i] <= n) gParGpusFrom[i] = (i64)-1;
+            if (winner != (i32)4 && gParAllFrom[i] >= (i64)0 && gParAllFrom[i] <= n) gParAllFrom[i] = (i64)-1;
             }
         Settings* st = store();
-        String* v = String.withFormat("%ld,%ld", gParCpuUpTo[i], gParGpuFrom[i]);
+        String* v = String.withFormat("%ld,%ld,%ld,%ld", gParCpuUpTo[i], gParGpuFrom[i], gParGpusFrom[i], gParAllFrom[i]);
 #if ARCH_win64
         if (gParApi[i] != (i32)0)
             v.appendCString(gParApi[i] == (i32)2 ? ",vulkan" : ",cuda");
@@ -558,8 +615,67 @@ class ParDevice
         st.set(learnedKey(i, proto), v);
         st.save();
         if (reporting())
-            Log.info("par: %s: learned the %s wins at %ld items (CPU up to %ld, GPU from %ld)", gParBlock[i],
-                     gpuWon ? "GPU" : "CPU", n, gParCpuUpTo[i], gParGpuFrom[i]);
+            Log.info("par: %s: learned the %s wins at %ld items (CPU up to %ld, GPU from %ld, GPUs from %ld, all from %ld)",
+                     gParBlock[i], choiceName(winner), n, gParCpuUpTo[i], gParGpuFrom[i], gParGpusFrom[i], gParAllFrom[i]);
+        }
+
+    // Once every candidate is timed at the size being measured, the fastest
+    // is learned. The queue's sets are candidates only where there are GPU
+    // workers (two for "GPUs": one is the GPU again, tiled).
+    static void decide(u32 i, ParChunk* proto)
+        {
+        if (gParCpuUs[i] < (i64)0 || gParGpuUs[i] < (i64)0)
+            return;
+        if (gParGpuWorkers >= (u32)2 && gParGpusUs[i] < (i64)0)
+            return;
+        if (gParGpuWorkers >= (u32)1 && gParAllUs[i] < (i64)0)
+            return;
+        i32 winner = gParGpuUs[i] <= gParCpuUs[i] ? (i32)2 : (i32)1;
+        i64 best = gParGpuUs[i] <= gParCpuUs[i] ? gParGpuUs[i] : gParCpuUs[i];
+        if (gParGpusUs[i] >= (i64)0 && gParGpusUs[i] < best) { winner = (i32)3; best = gParGpusUs[i]; }
+        if (gParAllUs[i] >= (i64)0 && gParAllUs[i] < best) { winner = (i32)4; best = gParAllUs[i]; }
+        if (reporting())
+            Log.info("par: %s: auto picks the %s (CPU %ld us, GPU %ld us, GPUs %ld us, all %ld us)", gParBlock[i],
+                     choiceName(winner), gParCpuUs[i], gParGpuUs[i], gParGpusUs[i], gParAllUs[i]);
+        learn(i, proto, gParMeasN[i], winner);
+        }
+
+    // The queue would not run a set for the block (one tile, or no worker
+    // holds it): the set is out of the comparison, as if it never ended.
+    static void setDeclined(ParChunk* proto, i32 set)
+        {
+        u32 i = slot(proto.parName());
+        if (!gParMeasuring[i])
+            return;
+        if (set == (i32)3) { gParGpusUs[i] = (i64)1 << (i64)50; gParGpusRuns[i] = (u32)2; }
+        else { gParAllUs[i] = (i64)1 << (i64)50; gParAllRuns[i] = (u32)2; }
+        if (reporting())
+            Log.info("par: %s: the tile queue declines %s for this block", gParBlock[i], choiceName(set));
+        decide(i, proto);
+        }
+
+    // A run on the tile queue's set (3 the GPUs, 4 every device), for auto's
+    // comparison; the second run of each is the one timed, as below.
+    static void ranOnSet(ParChunk* proto, i32 set, i64 us)
+        {
+        u32 i = slot(proto.parName());
+        if (reporting())
+            Log.info("par: %s: %ld us on %s", gParBlock[i], us, choiceName(set));
+        if (!gParMeasuring[i])
+            return;
+        if (set == (i32)3)
+            {
+            gParGpusRuns[i] = gParGpusRuns[i] + (u32)1;
+            if (gParGpusUs[i] < (i64)0 && gParGpusRuns[i] >= (u32)2)
+                gParGpusUs[i] = us;
+            }
+        else
+            {
+            gParAllRuns[i] = gParAllRuns[i] + (u32)1;
+            if (gParAllUs[i] < (i64)0 && gParAllRuns[i] >= (u32)2)
+                gParAllUs[i] = us;
+            }
+        decide(i, proto);
         }
 
     static i32 choose(ParChunk* proto, i64 n)
@@ -569,10 +685,14 @@ class ParDevice
             String* v = Platform.env(String.withCString("XC_PAR"));
             _mode = v.equals(String.withCString("cpu")) ? (i32)1
                   : v.equals(String.withCString("gpu")) ? (i32)2
-                  : v.equals(String.withCString("auto")) ? (i32)3 : (i32)4;
+                  : v.equals(String.withCString("auto")) ? (i32)3
+                  : v.equals(String.withCString("gpus")) ? (i32)5
+                  : v.equals(String.withCString("all")) ? (i32)6 : (i32)4;
             }
         if (_mode == (i32)1 || _mode == (i32)2 || n < (i64)0)
             return _mode;
+        if (_mode == (i32)5 || _mode == (i32)6)
+            return _mode - (i32)2;
         u32 i = slot(proto.parName());
         gParLastN[i] = n;
         gParMeasuring[i] = false;
@@ -589,11 +709,17 @@ class ParDevice
             i32 u = userSetting(i);
             if (u == (i32)1 || u == (i32)2)
                 return u;
+            if (u == (i32)6 || u == (i32)7)
+                return u - (i32)3;
             if (u == (i32)4)
                 return n >= gParUserN[i] ? (i32)2 : (i32)1;
             }
         // The learned bounds decide a size outside them, with no measuring.
         readLearned(i, proto);
+        if (gParAllFrom[i] >= (i64)0 && n >= gParAllFrom[i])
+            return (i32)4;
+        if (gParGpusFrom[i] >= (i64)0 && n >= gParGpusFrom[i])
+            return (i32)3;
         if (gParGpuFrom[i] >= (i64)0 && n >= gParGpuFrom[i])
             return (i32)2;
         if (gParCpuUpTo[i] >= (i64)0 && n <= gParCpuUpTo[i])
@@ -605,8 +731,12 @@ class ParDevice
             {
             gParCpuUs[i] = (i64)-1;
             gParGpuUs[i] = (i64)-1;
+            gParGpusUs[i] = (i64)-1;
+            gParAllUs[i] = (i64)-1;
             gParCpuRuns[i] = (u32)1;
             gParGpuRuns[i] = gParGpuRuns[i] > (u32)0 ? (u32)1 : (u32)0;
+            gParGpusRuns[i] = gParGpusRuns[i] > (u32)0 ? (u32)1 : (u32)0;
+            gParAllRuns[i] = gParAllRuns[i] > (u32)0 ? (u32)1 : (u32)0;
             gParMeasN[i] = n;
             }
         if (gParMeasN[i] == (i64)0)
@@ -616,7 +746,16 @@ class ParDevice
             return (i32)1;
         if (gParGpuUs[i] < (i64)0)
             return (i32)2;
-        return gParGpuUs[i] <= gParCpuUs[i] ? (i32)2 : (i32)1;
+        // Then the tile queue's sets, where there are GPU workers.
+        if (gParGpuWorkers >= (u32)2 && gParGpusUs[i] < (i64)0)
+            return (i32)3;
+        if (gParGpuWorkers >= (u32)1 && gParAllUs[i] < (i64)0)
+            return (i32)4;
+        i32 best = gParGpuUs[i] <= gParCpuUs[i] ? (i32)2 : (i32)1;
+        i64 bestUs = gParGpuUs[i] <= gParCpuUs[i] ? gParGpuUs[i] : gParCpuUs[i];
+        if (gParGpusUs[i] >= (i64)0 && gParGpusUs[i] < bestUs) { best = (i32)3; bestUs = gParGpusUs[i]; }
+        if (gParAllUs[i] >= (i64)0 && gParAllUs[i] < bestUs) { best = (i32)4; bestUs = gParAllUs[i]; }
+        return best;
         }
 
     // What a run took, for auto's comparison. Each device's first run of a
@@ -642,7 +781,9 @@ class ParDevice
                 Log.info("par: %s: auto keeps it on the CPU (%ld us, too short for a GPU to win)", gParBlock[i], us);
             }
         if (measured && us < (i64)1000 && gpuable)
-            learn(i, proto, gParLastN[i], false);
+            learn(i, proto, gParLastN[i], (i32)1);
+        else if (measured)
+            decide(i, proto);
         }
 
     // A GPU run: took is the whole run (copies in and out included, the
@@ -674,7 +815,18 @@ class ParDevice
                 }
             i64 cu = gParCudaUs[bi];
             i64 vk = gParVkUs[bi];
-            if (cu != (i64)-1 && vk != (i64)-1 && (cu >= (i64)0 || vk >= (i64)0))
+            // CUDA ran the block: it is the card's own interface, and the
+            // Vulkan path on the same card is never the faster, so it is not
+            // measured (two runs saved). Vulkan is timed where CUDA cannot.
+            if (cu >= (i64)0 && gParApi[bi] == (i32)0)
+                {
+                gParApi[bi] = (i32)1;
+                measured = cu;
+                decided = gParGpuUs[bi] < (i64)0;
+                if (reporting())
+                    Log.info("par: %s: the GPU is reached through CUDA (%ld us)", gParBlock[bi], cu);
+                }
+            else if (cu != (i64)-1 && vk != (i64)-1 && (cu >= (i64)0 || vk >= (i64)0))
                 {
                 bool useVk = cu < (i64)0 || (vk >= (i64)0 && vk < cu);
                 gParApi[bi] = useVk ? (i32)2 : (i32)1;
@@ -691,14 +843,10 @@ class ParDevice
         if (decided)
             {
             gParGpuUs[bi] = measured;
-            if (gParCpuUs[bi] >= (i64)0)
-                learn(bi, proto, l.n, measured <= gParCpuUs[bi]);
+            decide(bi, proto);
             }
         if (!reporting())
             return;
-        if (decided && gParCpuUs[bi] >= (i64)0)
-            Log.info("par: %s: auto picks the %s (GPU %ld us, CPU %ld us)", gParBlock[bi],
-                     gParGpuUs[bi] <= gParCpuUs[bi] ? "GPU" : "CPU", gParGpuUs[bi], gParCpuUs[bi]);
         if (gpuUs >= (i64)0 && l.tiles > (i64)0)
             Log.info("par: %s: %ld items on the GPU in %ld tiles, %ld us of GPU time (%ld us in all)",
                      gParBlock[bi], l.n, l.tiles, gpuUs, took);
