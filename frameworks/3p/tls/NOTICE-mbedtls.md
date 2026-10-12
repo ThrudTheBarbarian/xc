@@ -1,9 +1,15 @@
 # mbedTLS — third-party
 
-The static libraries in `mbedtls-linux/` are prebuilt **mbedTLS 4.2.0**,
-redistributed unmodified:
+The static libraries in `mbedtls-linux/` (x86-64 Linux, musl) and
+`mbedtls-win64/` (x86-64 Windows, mingw-w64) are prebuilt **mbedTLS 4.2.0**,
+built from the unmodified release:
 
     libmbedtls.a  libmbedcrypto.a  libmbedx509.a  libtfpsacrypto.a
+
+The Windows libraries were configured with CMake's Release build, testing and
+programs off, `-D__USE_MINGW_ANSI_STDIO=0` (so they call the Universal C
+Runtime's printf, which an xc DLL links against), and `-ffile-prefix-map` so
+they name no build directory.
 
 - **Licence:** dual **Apache-2.0 OR GPL-2.0-or-later** — the user chooses.
   Full text in `LICENSE-mbedtls.txt`.
@@ -20,4 +26,5 @@ GPLv3 that covers the rest of this repository — see
 [LICENSING.md](../../../LICENSING.md).
 
 `tlsshim.c`, `tlsshim.h`, `install.sh` and everything under `xc/` are ours and
-are GPLv3; only the `.a` files in `mbedtls-linux/` are mbedTLS.
+are GPLv3; only the `.a` files in `mbedtls-linux/` and `mbedtls-win64/` are
+mbedTLS.

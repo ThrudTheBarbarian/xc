@@ -29,10 +29,10 @@
 // Importing this file links the TLS library (`#use <tls>`), so only a
 // program that wants https pays for it. Certificates are always verified,
 // against a PEM bundle: `install()` looks in the places macOS and the common
-// Linux distributions keep one, and `installWithBundle(path)` takes one
-// explicitly (Android keeps its CAs as a directory and Windows in its
-// certificate store, so neither has a default). There is no mode that
-// accepts any certificate.
+// Linux distributions keep one, and on Windows reads the certificate store;
+// `installWithBundle(path)` takes a bundle explicitly (Android keeps its CAs
+// as a directory, so it has no default). There is no mode that accepts any
+// certificate.
 
 #import "Http.xc"
 #import "Files.xc"
@@ -78,10 +78,22 @@ class _HttpTlsLayer<HttpSecureLayer>
 
 class HttpTls
     {
-    // Register https with Http, verifying against the first CA bundle found
-    // in the usual places. False when there is none (https stays off).
+    // Register https with Http, verifying against the system's trusted roots:
+    // the certificate store on Windows, elsewhere the first CA bundle found in
+    // the usual places. False when there is none (https stays off).
     static bool install(void)
         {
+#if ARCH_win64
+        if (!tls_require((i32)1))
+            return false;
+        TlsClient* sys = new TlsClient();
+        if (!sys.initSystem())
+            return false;
+        _HttpTlsLayer* syslayer = new _HttpTlsLayer();
+        syslayer._client = sys;
+        Http.setSecureLayer(syslayer);
+        return true;
+#endif
         u8* paths[4];
         paths[0] = (u8*)"/etc/ssl/cert.pem";                       // macOS, Alpine
         paths[1] = (u8*)"/etc/ssl/certs/ca-certificates.crt";      // Debian, Ubuntu, Arch

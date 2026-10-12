@@ -15,6 +15,9 @@ extern "C" {
 // TLS client: verify against `ca_path` (a PEM CA bundle) when non-NULL; a NULL
 // CA disables verification (dev only — Route 1 always passes the system bundle).
 void *xt_tls_client_new(const char *ca_path);
+// TLS client verifying against the system's trusted roots where they are not
+// a PEM file (the Windows certificate store); NULL elsewhere or when empty.
+void *xt_tls_client_new_system(void);
 // TLS server (unused by xcc-sign; part of the shared module).
 void *xt_tls_server_new(const char *cert_path, const char *key_path);
 

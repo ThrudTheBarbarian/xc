@@ -16,6 +16,7 @@
 // ── tlsshim C interface ─────────────────────────────────────────────────────
 pointer xt_tls_server_new(u8* certPath, u8* keyPath);
 pointer xt_tls_client_new(u8* caPath);
+pointer xt_tls_client_new_system();                         // the OS trust store, or null
 pointer xt_tls_accept(pointer server, i32 fd);              // blocking
 pointer xt_tls_connect(pointer client, i32 fd, u8* hostname);
 i32     xt_tls_read(pointer conn, u8* buf, i32 len);        // blocking
@@ -114,4 +115,9 @@ class TlsClient : Object
         t.h = c;
         return t;
     }
+
+    // Verify against the operating system's trusted roots where they are not a
+    // PEM file: the Windows certificate store. False on other systems, or when
+    // the store holds no certificate. Appended last, so no offset moves (1.0.1).
+    bool initSystem(void) { h = xt_tls_client_new_system(); return h != (pointer)0; }
 }

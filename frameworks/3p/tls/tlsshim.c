@@ -13,6 +13,10 @@
 #include <mbedtls/net_sockets.h>
 #include <psa/crypto.h>
 #include <stdlib.h>
+#ifdef _WIN32
+#include <windows.h>
+#include <wincrypt.h>
+#endif
 
 static int g_psa = 0;
 static int ensure_psa(void) {
@@ -53,35 +57,77 @@ typedef struct {
     int                have_ca;
 } xt_tls_client;
 
-// ca_path may be NULL. With no CA the spike accepts any certificate
-// (VERIFY_NONE) — a production client MUST pass a CA bundle so verification is
-// REQUIRED. TODO: expose verify mode + hostname checking.
-void *xt_tls_client_new(const char *ca_path) {
+static xt_tls_client *client_alloc(void) {
     if (ensure_psa()) return NULL;
     xt_tls_client *c = calloc(1, sizeof(*c));
     if (!c) return NULL;
     mbedtls_ssl_config_init(&c->conf);
     mbedtls_x509_crt_init(&c->ca);
     if (mbedtls_ssl_config_defaults(&c->conf, MBEDTLS_SSL_IS_CLIENT,
-            MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT) != 0) { free(c); return NULL; }
+            MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT) != 0) {
+        mbedtls_ssl_config_free(&c->conf);
+        free(c);
+        return NULL;
+    }
+    return c;
+}
+
+static void *client_verify(xt_tls_client *c) {
+    mbedtls_ssl_conf_ca_chain(&c->conf, &c->ca, NULL);
+    mbedtls_ssl_conf_authmode(&c->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
+    c->have_ca = 1;
+    return c;
+}
+
+static void *client_fail(xt_tls_client *c) {
+    mbedtls_x509_crt_free(&c->ca);
+    mbedtls_ssl_config_free(&c->conf);
+    free(c);
+    return NULL;
+}
+
+// ca_path may be NULL. With no CA the spike accepts any certificate
+// (VERIFY_NONE) — a production client MUST pass a CA bundle so verification is
+// REQUIRED. TODO: expose verify mode + hostname checking.
+void *xt_tls_client_new(const char *ca_path) {
+    xt_tls_client *c = client_alloc();
+    if (!c) return NULL;
     if (ca_path) {
         // A CA was requested. If it can't be loaded, FAIL — never silently
         // downgrade to no verification (that would MITM-expose the caller who
         // asked for verification, e.g. blewit's agemin status check).
-        if (mbedtls_x509_crt_parse_file(&c->ca, ca_path) != 0) {
-            mbedtls_x509_crt_free(&c->ca);
-            mbedtls_ssl_config_free(&c->conf);
-            free(c);
-            return NULL;
-        }
-        mbedtls_ssl_conf_ca_chain(&c->conf, &c->ca, NULL);
-        mbedtls_ssl_conf_authmode(&c->conf, MBEDTLS_SSL_VERIFY_REQUIRED);
-        c->have_ca = 1;
-    } else {
-        // Explicit null CA = accept any cert (dev/spike only).
-        mbedtls_ssl_conf_authmode(&c->conf, MBEDTLS_SSL_VERIFY_NONE);
+        if (mbedtls_x509_crt_parse_file(&c->ca, ca_path) != 0)
+            return client_fail(c);
+        return client_verify(c);
     }
+    // Explicit null CA = accept any cert (dev/spike only).
+    mbedtls_ssl_conf_authmode(&c->conf, MBEDTLS_SSL_VERIFY_NONE);
     return c;
+}
+
+// A client verifying against the operating system's trusted roots, where the
+// system keeps them somewhere other than a PEM file: on Windows, the
+// certificate store's ROOT collection. NULL elsewhere, and NULL when the store
+// yields no certificate, so a caller can fall back to a bundle.
+void *xt_tls_client_new_system(void) {
+#ifdef _WIN32
+    xt_tls_client *c = client_alloc();
+    if (!c) return NULL;
+    int n = 0;
+    HCERTSTORE st = CertOpenSystemStoreA(0, "ROOT");
+    if (st) {
+        PCCERT_CONTEXT cx = NULL;
+        while ((cx = CertEnumCertificatesInStore(st, cx)) != NULL)
+            if (mbedtls_x509_crt_parse_der(&c->ca, cx->pbCertEncoded, cx->cbCertEncoded) == 0)
+                n++;
+        CertCloseStore(st, 0);
+    }
+    if (n == 0)
+        return client_fail(c);
+    return client_verify(c);
+#else
+    return NULL;
+#endif
 }
 
 // ---- a live TLS connection (server- or client-side) ----

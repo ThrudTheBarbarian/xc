@@ -19,7 +19,7 @@
 
 #define XTLS_MAJOR 1
 #define XTLS_MINOR 0
-#define XTLS_PATCH 0
+#define XTLS_PATCH 1   // 1: TlsClient.initSystem
 
 // Build the symbol name from the numbers. The two-level form is required: CAT2 pastes its
 // arguments RAW, so CAT expands them first — else the name would come out `tls_abi_XTLS_MAJOR`.

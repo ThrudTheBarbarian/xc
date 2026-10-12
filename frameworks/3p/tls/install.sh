@@ -61,5 +61,32 @@ else
     echo "NOTE: no musl Mbed TLS at $MBLIN — skipped x86_64 (arm64 installed)"
 fi
 
+# ── win64 (Windows): shim + vendored static mingw mbedtls, if present ──
+# Windows keeps no symlinks, so the DLL is installed under the one name a
+# program imports it by. The shim reads the Windows certificate store
+# (xt_tls_client_new_system), which is how HttpTls verifies there.
+MBWIN="$HERE/mbedtls-win64"
+if [ -f "$MBWIN/libmbedtls.a" ]; then
+    WINCC=${WIN64_CC:-x86_64-w64-mingw32-gcc}
+    WINAR=${WIN64_AR:-x86_64-w64-mingw32-ar}
+    # mingw's own printf family (__USE_MINGW_ANSI_STDIO, its default) needs
+    # its C runtime start-up, which an xc DLL does not have; the ucrt one is
+    # what xc programs already call. The vendored Mbed TLS is built the same.
+    if "$WINCC" -c -O2 -D__USE_MINGW_ANSI_STDIO=0 -I"$MB/include" tlsshim.c -o "$TMP/tlsshim-win64.o" \
+       && "$WINAR" rcs "$TMP/libtlsshim-win64.a" "$TMP/tlsshim-win64.o" \
+       && "$XCC" --emit-lib -A win64 -I xc -o "$TMP/libtls.dll" xc/tls_lib.xc \
+           -Wl,"$TMP/libtlsshim-win64.a" \
+           -Wl,"$MBWIN/libmbedtls.a" -Wl,"$MBWIN/libmbedx509.a" \
+           -Wl,"$MBWIN/libmbedcrypto.a" -Wl,"$MBWIN/libtfpsacrypto.a"; then
+        mkdir -p "$DEST/win64"
+        cp "$TMP/libtls.dll" "$DEST/win64/libtls.dll"
+        echo "installed: $DEST/win64/libtls.dll"
+    else
+        echo "NOTE: win64 libtls build failed (Windows consumers) — arm64 + host OK"
+    fi
+else
+    echo "NOTE: no mingw Mbed TLS at $MBWIN — skipped win64"
+fi
+
 rm -rf "$TMP"
 echo "done. client preamble:  #use <tls> ; #import \"TlsAbi.xc\" ; tls_require((i32)0)"
