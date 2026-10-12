@@ -1682,6 +1682,25 @@ class X86_64
                           d.cString(), W ? "ymmword ptr " : "", memop.cString());
         }
 
+    // The memory operand a Load reads: its folded address, a homed pointer as
+    // it is, or the pointer loaded into rax.
+    String* loadMemOp(IRInsn* ld)
+        {
+        IROperand* p = (IROperand*)ld.ops().get((u32)0);
+        if (p.kind() == (u8)OPK_USE && isFolded(p.val()) && !((IRInsn*)_fold.get((Hashable*)p.val())).op().equals(String.withCString("Load")))
+            return foldedMemOp((IRInsn*)_fold.get((Hashable*)p.val()));
+        String* ph = p.kind() == (u8)OPK_USE ? homeOf(p.val()) : (String*)0;
+        if (ph != (String*)0 && !isXmmHome(ph))
+            {
+            String* o = String.withCString("[");
+            o.append(regView(ph, (u32)8));
+            o.appendCString("]");
+            return o;
+            }
+        loadZX(p, (u8)'a');
+        return String.withCString("[rax]");
+        }
+
     // The memory operand of a vector load or store: its folded address, or
     // the pointer loaded into rax.
     String* vecMemOp(IROperand* p)
@@ -1737,6 +1756,19 @@ class X86_64
         if (isYmm(d) || isZmm(d))
             {
             String* x = lowHalf(d);
+            if (src.kind() == (u8)OPK_USE && isFolded(src.val()) && ((IRInsn*)_fold.get((Hashable*)src.val())).op().equals(String.withCString("Load")))
+                {
+                // The elided Load's memory operand: its own folded address, a
+                // homed pointer, or the pointer in rax.
+                IRInsn* ld = (IRInsn*)_fold.get((Hashable*)src.val());
+                String* memop = loadMemOp(ld);
+                bool f64 = lane != (String*)0 && lane.equals(String.withCString("F64"));
+                bool f32 = lane != (String*)0 && lane.equals(String.withCString("F32"));
+                bool q = lane != (String*)0 && irWidth(lane) == (u32)8;
+                String* bc = String.withCString(f64 ? "vbroadcastsd" : (f32 ? "vbroadcastss" : (q ? "vpbroadcastq" : "vpbroadcastd")));
+                _out.appendFormat("\t%s\t%s, %s ptr %s\n", bc.cString(), d.cString(), q ? "qword" : "dword", memop.cString());
+                return;
+                }
             if (lane != (String*)0 && lane.equals(String.withCString("F64")))
                 {
                 loadF(src, x);
@@ -4346,6 +4378,44 @@ class X86_64
                     }
                 }
             }
+        // (c) A scalar Load whose only use is a 256- or 512-bit VSplat later
+        // in the block, with nothing that writes memory between them, is
+        // elided: the splat reads memory itself. Mirrors the original.
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            Array* ins = ((IRBlock*)fn.blocks().get(b)).insns();
+            for (u32 i = (u32)0; i < ins.count(); i = i + (u32)1)
+                {
+                IRInsn* ld = (IRInsn*)ins.get(i);
+                if (!ld.op().equals(String.withCString("Load")) || ld.res() == (IRValue*)0 || ld.ops().count() < (u32)1)
+                    continue;
+                if (((IROperand*)ld.ops().get((u32)0)).kind() != (u8)OPK_USE)
+                    continue;
+                if (useCount(uc, ld.res()) != (u32)1)
+                    continue;
+                Object* su = useOf.get((Hashable*)ld.res());
+                if (su == (Object*)0)
+                    continue;
+                IRInsn* sp = (IRInsn*)su;
+                if (!sp.op().equals(String.withCString("VSplat")) || sp.res() == (IRValue*)0 || !(isWideVecTy(sp.res().ty()) || isWide512VecTy(sp.res().ty())))
+                    continue;
+                u32 lw = fieldWidth(ld.res().ty());
+                if (!(lw == (u32)4 || lw == (u32)8) || isAggTy(ld.res().ty()))
+                    continue;
+                u32 j = i + (u32)1;
+                bool clean = true;
+                while (j < ins.count() && (IRInsn*)ins.get(j) != sp)
+                    {
+                    IRInsn* m = (IRInsn*)ins.get(j);
+                    if (m.memRes() != (IRValue*)0 && !m.op().equals(String.withCString("Load")) && !m.op().equals(String.withCString("VLoad")))
+                        clean = false;
+                    j = j + (u32)1;
+                    }
+                if (!clean || j >= ins.count())
+                    continue;
+                _fold.set((Hashable*)ld.res(), (Object*)ld);
+                }
+            }
         // A block ending in a CondBranch whose condition is an ICmp that is the
         // block's LAST instruction — so the flags reach the branch untouched —
         // and is read only by that branch.
@@ -5100,6 +5170,8 @@ class X86_64
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
             return;
+        if (isFolded(n.res()))
+            return; // read by the VSplat it feeds
         IROperand* p = (IROperand*)n.ops().get((u32)0);
         String* rt = n.res().ty();
         if (p.kind() == (u8)OPK_USE && isFolded(p.val()) && !isAggTy(rt))

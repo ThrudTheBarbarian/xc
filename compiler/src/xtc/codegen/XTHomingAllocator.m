@@ -139,12 +139,22 @@
             // A folded ElementAddr/FieldAddr is elided: its base/index are read at
             // THIS Load/Store, so extend their live ranges here (else the allocator
             // reuses their register for the Load result and corrupts the base).
-            if (foldInfo.count && (insn.opcode == XTIROpLoad || insn.opcode == XTIROpStore || insn.opcode == XTIROpVLoad || insn.opcode == XTIROpVStore) && insn.operands.count >= 1 && insn.operands[0].kind == XTIROperandKindUse)
+            // A Load folded into a VSplat is elided too, so the splat reads the
+            // Load's pointer, and through it the base and index of an address
+            // folded into that Load.
+            if (foldInfo.count && (insn.opcode == XTIROpLoad || insn.opcode == XTIROpStore || insn.opcode == XTIROpVLoad || insn.opcode == XTIROpVStore || insn.opcode == XTIROpVSplat) && insn.operands.count >= 1 && insn.operands[0].kind == XTIROperandKindUse)
                 {
                 XTIRInsn* fea = foldInfo[@(insn.operands[0].valueId)];
                 if (fea)
                     for (XTIROperand* fo in fea.operands)
                         recordUse(fo);
+                if (fea && fea.opcode == XTIROpLoad && fea.operands.count >= 1 && fea.operands[0].kind == XTIROperandKindUse)
+                    {
+                    XTIRInsn* fea2 = foldInfo[@(fea.operands[0].valueId)];
+                    if (fea2)
+                        for (XTIROperand* fo in fea2.operands)
+                            recordUse(fo);
+                    }
                 }
             // A Select-fused ICmp is elided and its compare re-issued AT the
             // Select, so the compare's operands are read here — extend them,

@@ -348,14 +348,30 @@ class BitSet
                 {
                 IRInsn* insn = (IRInsn*)b.insns().get(i);
                 recordUses(insn, pos, defs, ue);
-                if (_foldInfo != 0 && insn.ops().count() >= (u32)1 && (insn.op().equals(String.withCString("Load")) || insn.op().equals(String.withCString("Store")) || insn.op().equals(String.withCString("VLoad")) || insn.op().equals(String.withCString("VStore"))))
+                // A Load folded into a VSplat is elided too, so the splat reads
+                // the Load's pointer, and through it the base and index of an
+                // address folded into that Load.
+                if (_foldInfo != 0 && insn.ops().count() >= (u32)1 && (insn.op().equals(String.withCString("Load")) || insn.op().equals(String.withCString("Store")) || insn.op().equals(String.withCString("VLoad")) || insn.op().equals(String.withCString("VStore")) || insn.op().equals(String.withCString("VSplat"))))
                     {
                     IROperand* p0 = (IROperand*)insn.ops().get((u32)0);
                     if (p0.kind() == (u8)OPK_USE && p0.val() != 0)
                         {
                         Object* fea = _foldInfo.get((Hashable*)Number.with(p0.val().pid()));
                         if (fea != 0)
+                            {
                             recordUses((IRInsn*)fea, pos, defs, ue);
+                            IRInsn* fi = (IRInsn*)fea;
+                            if (fi.op().equals(String.withCString("Load")) && fi.ops().count() >= (u32)1)
+                                {
+                                IROperand* q0 = (IROperand*)fi.ops().get((u32)0);
+                                if (q0.kind() == (u8)OPK_USE && q0.val() != 0)
+                                    {
+                                    Object* fea2 = _foldInfo.get((Hashable*)Number.with(q0.val().pid()));
+                                    if (fea2 != 0)
+                                        recordUses((IRInsn*)fea2, pos, defs, ue);
+                                    }
+                                }
+                            }
                         }
                     }
                 if (_selInfo != 0 && insn.ops().count() >= (u32)1 && insn.op().equals(String.withCString("Select")))

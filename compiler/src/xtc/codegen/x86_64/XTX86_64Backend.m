@@ -822,6 +822,23 @@ static NSInteger sWin64SretOff = 0;
 // unhomed base is zero-extended into rax. The INDEX is ALWAYS zero-extended into
 // rcx (a memory operand uses the full 64-bit index, so dirty high bits from a
 // homed 32-bit index would corrupt the address). Base loads first, then index.
+// The memory operand a Load reads: its folded address, a homed pointer as it
+// is, or the pointer loaded into rax.
++ (NSString*)loadMemOp:(XTIRInsn*)ld fn:(XTIRFunction*)fn
+                  slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+                   out:(NSMutableString*)out
+    {
+    XTIROperand* p = ld.operands[0];
+    XTIRInsn* fea = p.kind == XTIROperandKindUse ? sFold[@(p.valueId)] : nil;
+    if (fea && fea.opcode != XTIROpLoad)
+        return [self foldedMemOp:fea fn:fn slot:slot out:out];
+    NSString* ph = p.kind == XTIROperandKindUse ? sHome[@(p.valueId)] : nil;
+    if (ph && ![self isXmmHome:ph])
+        return [NSString stringWithFormat:@"[%@]", [self regView:ph width:8]];
+    [self loadZX:p into:'a' fn:fn slot:slot out:out];
+    return @"[rax]";
+    }
+
 + (NSString*)foldedMemOp:(XTIRInsn*)ea fn:(XTIRFunction*)fn
                     slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
                      out:(NSMutableString*)out
@@ -2394,6 +2411,41 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                     }
                 }
             }
+        // (c) A scalar Load whose only use is a 256- or 512-bit VSplat later in
+        // the block, with nothing that writes memory between them, is elided:
+        // the splat reads memory itself (`vpbroadcastd zmm, dword ptr [..]`),
+        // where it went through a general register, a `vpxor`, a `movd` and
+        // the register broadcast. The matmul idiom splats `a[i,k]` for every
+        // k. The Load's own address fold, if any, is honoured at the splat.
+        for (XTIRBlock* b in fn.blocks)
+            {
+            NSArray<XTIRInsn*>* ins = b.instructions;
+            for (NSUInteger i = 0; i < ins.count; i++)
+                {
+                XTIRInsn* ld = ins[i];
+                if (ld.opcode != XTIROpLoad || !ld.result || ld.operands.count < 1 || ld.operands[0].kind != XTIROperandKindUse)
+                    continue;
+                if (uc[@(ld.result.valueId)].integerValue != 1)
+                    continue;
+                XTIRInsn* sp = useOf[@(ld.result.valueId)];
+                if (!sp || sp.opcode != XTIROpVSplat || !sp.result || sp.result.type.kind != XTIRTypeKindVec || sp.result.type.byteWidth < 32)
+                    continue;
+                XTIRType* lane = ld.result.type;
+                NSUInteger lw = lane ? lane.byteWidth : 0;
+                if (!(lw == 4 || lw == 8) || lane.kind == XTIRTypeKindAgg)
+                    continue;
+                NSUInteger j = [ins indexOfObjectIdenticalTo:sp];
+                if (j == NSNotFound || j <= i)
+                    continue;
+                BOOL clean = YES;
+                for (NSUInteger k = i + 1; k < j && clean; k++)
+                    if (ins[k].memoryResult && ins[k].opcode != XTIROpLoad && ins[k].opcode != XTIROpVLoad)
+                        clean = NO;
+                if (!clean)
+                    continue;
+                fold[@(ld.result.valueId)] = ld;
+                }
+            }
         // Compare-and-branch fusion: a block ending in `CondBranch %c` where %c is
         // an ICmp that is the block's LAST instruction (flags reach the branch
         // untouched) and is used ONLY by that branch.
@@ -3437,6 +3489,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         // [addr, memInput] → result. Deref through the (zero-extended) pointer.
         if (!res || ops.count < 1)
             return;
+        if (sFold[@(res.valueId)])
+            return; // read by the VSplat it feeds
         XTIRInsn* fea = sFold[@(ops[0].valueId)];
         // folded addr → memory operand
         if (fea && res.type.kind != XTIRTypeKindAgg)
@@ -4913,6 +4967,18 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if ([d hasPrefix:@"ymm"] || [d hasPrefix:@"zmm"])
             {
             NSString* x = [@"x" stringByAppendingString:[d substringFromIndex:1]];
+            XTIRInsn* sld = ops[0].kind == XTIROperandKindUse ? sFold[@(ops[0].valueId)] : nil;
+            if (sld && sld.opcode == XTIROpLoad)
+                {
+                // The elided Load's memory operand: its own folded address, a
+                // homed pointer, or the pointer in rax.
+                NSString* memop = [self loadMemOp:sld fn:fn slot:slot out:out];
+                NSString* bc = (lane && lane.kind == XTIRTypeKindF64) ? @"vbroadcastsd"
+                             : (lane && lane.kind == XTIRTypeKindF32) ? @"vbroadcastss"
+                             : (lane && lane.byteWidth == 8) ? @"vpbroadcastq" : @"vpbroadcastd";
+                [out appendFormat:@"\t%@\t%@, %@ ptr %@\n", bc, d, (lane && lane.byteWidth == 8) ? @"qword" : @"dword", memop];
+                return;
+                }
             if (lane && lane.kind == XTIRTypeKindF64)
                 {
                 [self loadF:ops[0] into:x fn:fn slot:slot out:out];
