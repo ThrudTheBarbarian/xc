@@ -16,8 +16,8 @@ cross-build native binaries for every target with **no other toolchain installed
 | Linux (x86_64) | [xcc-linux-0.75.tar.bz2](/downloads/xcc-linux-0.75.tar.bz2) | 6.5 MB |
 | Windows (x64) | [xcc-win64-0.75.zip](/downloads/xcc-win64-0.75.zip) | 7.6 MB |
 | arm9 sysroot (any host) | [xcc-arm9-sysroot-0.75.tar.bz2](/downloads/xcc-arm9-sysroot-0.75.tar.bz2) | 830 KB |
-| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.74.tar.bz2](/downloads/xcc-uxgtk-linux-0.74.tar.bz2) | 110 KB |
-| UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.74.tar.bz2](/downloads/xcc-uxkit-0.74.tar.bz2) | 2.7 MB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.75.tar.bz2](/downloads/xcc-uxgtk-linux-0.75.tar.bz2) | 110 KB |
+| UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.75.tar.bz2](/downloads/xcc-uxkit-0.75.tar.bz2) | 2.9 MB |
 
 Every archive contains the same compiler. Each host build cross-compiles to **all**
 targets, so the platform you download for decides only where the compiler runs.
@@ -67,8 +67,8 @@ program is a glibc executable that loads GTK 4, which is how `-A x86_64` links
 by default from 0.72:
 
 ```bash
-tar xjf xcc-uxgtk-linux-0.74.tar.bz2
-xcc -A x86_64 app.xc -L xcc-uxgtk-linux-0.74 -lUXGtk -lgtk-4 -o app
+tar xjf xcc-uxgtk-linux-0.75.tar.bz2
+xcc -A x86_64 app.xc -L xcc-uxgtk-linux-0.75 -lUXGtk -lgtk-4 -o app
 ```
 
 The machine that runs the program needs glibc 2.34 or later and GTK 4; this
@@ -80,12 +80,12 @@ rebuilds it against any machine's GTK 4.
 ## UXKit library
 
 UXKit built as a library for macOS (arm64), Windows (x64), Linux (x86_64) and the
-web, for xcc 0.74. Put its `3p/` beside the versioned install, so that
-`/opt/xcc/3p/uxkit/` sits next to `/opt/xcc/0.74/`:
+web, for xcc 0.75. Put its `3p/` beside the versioned install, so that
+`/opt/xcc/3p/uxkit/` sits next to `/opt/xcc/0.75/`:
 
 ```bash
-tar xjf xcc-uxkit-0.74.tar.bz2
-sudo cp -R xcc-uxkit-0.74/3p /opt/xcc/
+tar xjf xcc-uxkit-0.75.tar.bz2
+sudo cp -R xcc-uxkit-0.75/3p /opt/xcc/
 ```
 
 A program then names UXKit once, with `#use <UXKit>`, and builds with nothing
