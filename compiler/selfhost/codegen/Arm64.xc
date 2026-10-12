@@ -59,6 +59,7 @@ class Arm64
     Map*      _foldInfo;        // a Load/Store's pointer -> the addr insn to inline
     Map*      _fusedCmps;       // ICmps emitted as part of their block's branch
     Map*      _fusedAnds;       // a short-circuit And's value -> its two comparisons
+    Map*      _fusedOrs;        // the same for a short-circuit Or
     u32       _frame;           // the frame size the prologue reserves
     u32       _maxOutStack;     // AAPCS64 outgoing-argument area, at the bottom
     bool      _failed;          // an opcode this slice does not emit yet
@@ -1913,6 +1914,9 @@ class Arm64
         Array* andKeys = _fusedAnds.allKeys();
         for (u32 i = (u32)0; i < andKeys.count(); i = i + (u32)1)
             _fusedAway.set((Hashable*)andKeys.get(i), andKeys.get(i));
+        Array* orKeys = _fusedOrs.allKeys();
+        for (u32 i = (u32)0; i < orKeys.count(); i = i + (u32)1)
+            _fusedAway.set((Hashable*)orKeys.get(i), orKeys.get(i));
         }
         _fuseSh = new Map();
         _fuseAmt = new Map();
@@ -6197,6 +6201,31 @@ class Arm64
         IROperand* c = (IROperand*)n.ops().get((u32)0);
         IRBlock* t = ((IROperand*)n.ops().get((u32)1)).blk();
         IRBlock* f = ((IROperand*)n.ops().get((u32)2)).blk();
+        // The same for `||` (computeAddrFold decided it): each comparison jumps
+        // to the TRUE edge on its own condition, and the FALSE path - reached
+        // from both - runs its copies once, on its own stub.
+        if (c.kind() == (u8)OPK_USE && c.val() != (IRValue*)0 && inMap(_fusedOrs, c.val())) {
+            Array* both = (Array*)_fusedOrs.get((Hashable*)c.val());
+            u32 lbl = _labelCounter;
+            _labelCounter = _labelCounter + (u32)1;
+            String* LO1 = labelFor(String.withCString("so1"), lbl);
+            String* LO2 = labelFor(String.withCString("so2"), lbl);
+            for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1) {
+                IRInsn* d = (IRInsn*)both.get(k);
+                String* cc = d.op().equals(String.withCString("FCmp")) ? emitCompareF(d) : emitCompare(d);
+                _out.appendFormat("    b.%s %s\n", cc.cString(),
+                                  (k == (u32)0 ? LO1 : LO2).cString());
+            }
+            emitPhiCopies(_bb, f);
+            _out.appendFormat("    b %s\n", blockLabel(f).cString());
+            _out.appendFormat("%s:\n", LO1.cString());
+            emitPhiCopies(_bb, t);
+            _out.appendFormat("    b %s\n", blockLabel(t).cString());
+            _out.appendFormat("%s:\n", LO2.cString());
+            emitPhiCopies(_bb, t);
+            _out.appendFormat("    b %s\n", blockLabel(t).cString());
+            return;
+        }
         // A fused short-circuit `&&` (computeAddrFold decided it): emit each
         // comparison here and jump to the FALSE edge on its inverse, so the
         // and/uxtb and the cmp #0 re-test all go, and the flag test each
@@ -7538,6 +7567,12 @@ class Arm64
             for (u32 k = (u32)0; k < both.count(); k = k + (u32)1)
                 noteOperands((IRInsn*)both.get(k), defs, ue, lastUse, pos);
         }
+        // ...and for a fused ||, whose two comparisons are emitted there too.
+        if (n.op().equals(String.withCString("CondBranch")) && inMap(_fusedOrs, p0.val())) {
+            Array* both = (Array*)_fusedOrs.get((Hashable*)p0.val());
+            for (u32 k = (u32)0; k < both.count(); k = k + (u32)1)
+                noteOperands((IRInsn*)both.get(k), defs, ue, lastUse, pos);
+        }
     }
 
     void noteOperands(IRInsn* n, Array* defs, Array* ue, Map* lastUse, i32 pos)
@@ -8509,6 +8544,7 @@ class Arm64
         // the And and both csets are already out by the time the branch is
         // reached (the reference explains).
         _fusedAnds = new Map();
+        _fusedOrs = new Map();
         for (u32 ab = (u32)0; ab < fn.blocks().count(); ab = ab + (u32)1) {
             IRBlock* abb = (IRBlock*)fn.blocks().get(ab);
             IRInsn* at = abb.term();
@@ -8517,7 +8553,8 @@ class Arm64
             if (ac.kind() != (u8)OPK_USE || ac.val() == (IRValue*)0) continue;
             Object* ad = _defOf.get((Hashable*)ac.val());
             IRInsn* an = ad != (Object*)0 ? (IRInsn*)ad : (IRInsn*)0;
-            if (an == (IRInsn*)0 || !an.op().equals(String.withCString("And")) || an.res() == (IRValue*)0) continue;
+            bool isOr = an != (IRInsn*)0 && an.op().equals(String.withCString("Or"));
+            if (an == (IRInsn*)0 || (!an.op().equals(String.withCString("And")) && !isOr) || an.res() == (IRValue*)0) continue;
             if (!an.res().ty().equals(String.withCString("Bool"))) continue;
             if (!listContains(abb.insns(), an)) continue;
             if (useCountOf(ac.val()) != (u32)1) continue;
@@ -8540,7 +8577,8 @@ class Arm64
             Array* pair = new Array();
             pair.add((Object*)d1);
             pair.add((Object*)d2);
-            _fusedAnds.set((Hashable*)ac.val(), (Object*)pair);
+            if (isOr) _fusedOrs.set((Hashable*)ac.val(), (Object*)pair);
+            else _fusedAnds.set((Hashable*)ac.val(), (Object*)pair);
             _fusedCmps.set((Hashable*)d1.res(), (Object*)d1);
             _fusedCmps.set((Hashable*)d2.res(), (Object*)d2);
         }

@@ -100,6 +100,9 @@
 // and both comparisons are never materialised; the branch emits each comparison
 // and jumps to the FALSE edge on its inverse.
 @property (nonatomic) NSMutableDictionary<NSNumber *, NSArray<XTIRInsn *> *> *fusedAnds;
+// The same for `||`: the Or's result value -> its two comparisons, and the
+// branch jumps to the TRUE edge on each condition.
+@property (nonatomic) NSMutableDictionary<NSNumber *, NSArray<XTIRInsn *> *> *fusedOrs;
 // SIMD: vector value-id → NEON v-register name ("v0".."v15"). Assigned on first
 // def in definition order; vector values are produced and consumed within a
 // single straight-line vectorized loop body (no cross-iteration/-call vector
@@ -1168,6 +1171,13 @@ static const NSUInteger kArm64VaForwardWords = 16;
                 insn.operands[0].kind == XTIROperandKindUse &&
                 ctx.fusedAnds[@(insn.operands[0].valueId)]) {
                 for (XTIRInsn *d in ctx.fusedAnds[@(insn.operands[0].valueId)])
+                    for (XTIROperand *o in d.operands) recordUse(o);
+            }
+            // ...and for a fused `||`, whose two comparisons are emitted there too.
+            if (insn.opcode == XTIROpCondBranch && insn.operands.count >= 1 &&
+                insn.operands[0].kind == XTIROperandKindUse &&
+                ctx.fusedOrs[@(insn.operands[0].valueId)]) {
+                for (XTIRInsn *d in ctx.fusedOrs[@(insn.operands[0].valueId)])
                     for (XTIROperand *o in d.operands) recordUse(o);
             }
         };
@@ -3060,6 +3070,7 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
     // which must extend both comparisons' operands to the branch -- runs BEFORE
     // this one; this pass owns fusedAway, so the skip lands here.
     for (NSNumber *av in ctx.fusedAnds) [ctx.fusedAway addObject:av];
+    for (NSNumber *ov in ctx.fusedOrs) [ctx.fusedAway addObject:ov];
     ctx.fuseAt = [NSMutableDictionary dictionary];
     XTIRFunction *fn = ctx.fn;
 
@@ -3383,13 +3394,15 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
     // is reached, and marking them there leaves the whole chain in place beside
     // the fused branches.
     ctx.fusedAnds = [NSMutableDictionary dictionary];
+    ctx.fusedOrs = [NSMutableDictionary dictionary];
     for (XTIRBlock *bb in fn.blocks) {
         XTIRInsn *t = bb.terminator;
         if (!t || t.opcode != XTIROpCondBranch || t.operands.count < 3) continue;
         if (t.operands[0].kind != XTIROperandKindUse) continue;
         NSNumber *av = @(t.operands[0].valueId);
         XTIRInsn *an = defOf[av];
-        if (!an || an.opcode != XTIROpAnd || !an.result) continue;
+        BOOL isOr = (an != nil) && an.opcode == XTIROpOr;
+        if (!an || (an.opcode != XTIROpAnd && !isOr) || !an.result) continue;
         if ([ctx.fn valueForId:an.result.valueId].type.kind != XTIRTypeKindBool) continue;
         if (![bb.instructions containsObject:an]) continue;
         if ([uses countForObject:av] != 1) continue;
@@ -3404,7 +3417,7 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
             [both addObject:d];
         }
         if (both.count != 2) continue;
-        ctx.fusedAnds[av] = both;
+        if (isOr) ctx.fusedOrs[av] = both; else ctx.fusedAnds[av] = both;
         for (XTIRInsn *d in both) [ctx.fusedCmps addObject:@(d.result.valueId)];
         [ctx.fusedAway addObject:@(an.result.valueId)];
     }
@@ -4880,6 +4893,32 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             XTIROperand *c = insn.operands[0];
             XTIROperand *t = insn.operands[1];
             XTIROperand *f = insn.operands[2];
+            // The same for `||` (computeFusionsForCtx decided it): each
+            // comparison jumps to the TRUE edge on its own condition, and the
+            // FALSE path — reached from both — runs its copies once, on its own
+            // stub.
+            if (c.kind == XTIROperandKindUse && ctx.fusedOrs[@(c.valueId)]) {
+                NSArray<XTIRInsn *> *both = ctx.fusedOrs[@(c.valueId)];
+                NSUInteger lbl = ctx.labelCounter++;
+                NSString *fnl = [ctx.fn.name stringByReplacingOccurrencesOfString:@"$" withString:@"_"];
+                NSString *L1 = [NSString stringWithFormat:@".L%@_so1_%lu", fnl, (unsigned long)lbl];
+                NSString *L2 = [NSString stringWithFormat:@".L%@_so2_%lu", fnl, (unsigned long)lbl];
+                for (NSUInteger k = 0; k < 2; k++) {
+                    XTIRInsn *d = both[k];
+                    NSString *cc = (d.opcode == XTIROpFCmp) ? [self emitCompareForFCmp:d ctx:ctx]
+                                                            : [self emitCompareForICmp:d ctx:ctx];
+                    [ctx.out appendFormat:@"    b.%@ %@\n", cc, (k == 0 ? L1 : L2)];
+                }
+                [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
+                [ctx.out appendFormat:@"    b %@\n", [self blockLabelForFn:ctx.fn block:f.blockRef]];
+                [ctx.out appendFormat:@"%@:\n", L1];
+                [self emitPhiCopiesFrom:block to:t.blockRef ctx:ctx];
+                [ctx.out appendFormat:@"    b %@\n", [self blockLabelForFn:ctx.fn block:t.blockRef]];
+                [ctx.out appendFormat:@"%@:\n", L2];
+                [self emitPhiCopiesFrom:block to:t.blockRef ctx:ctx];
+                [ctx.out appendFormat:@"    b %@\n", [self blockLabelForFn:ctx.fn block:t.blockRef]];
+                break;
+            }
             // A fused short-circuit `&&` (computeFusionsForCtx decided it): emit
             // each comparison here and jump to the FALSE edge on its inverse, so
             // the `and`/`uxtb` and the `cmp #0` re-test all go, and the flag test
