@@ -29,6 +29,20 @@
 // one, then measuring.
 #import "Settings.xc"
 #import "Process.xc"
+// The compiler version, which keys the learned-choice cache below so a new
+// release re-learns (a changed code generator can move the CPU/GPU crossover).
+// A plain source constant, NOT a predefined macro: the self-host differentials
+// build the port compiler without a version define, and a predefine would then
+// differ from the reference and break lib-diff on every par library. Bumped
+// with VERSION each release (release-checklist).
+#define PAR_CACHE_VER "0.8"
+#if !ARCH_wasm32
+// Wall-clock epoch seconds, stamped into each learned record so a future
+// `xcc --par-forget-before <date>` can prune by age. Monotonic clocks (what
+// the timing path uses) cannot date a record; time() can, and is in every
+// native C library. wasm32 has no C library and does not keep the cache.
+i64 time(pointer t);
+#endif
 #if ARCH_wasm32
 // No C library on wasm32: the bytes, one at a time (reduction partials are small).
 pointer memcpy(pointer dst, pointer src, u64 n)
@@ -399,8 +413,38 @@ class ParDevice
                     name = a0;
                 }
             _store = Settings.standard(name);
+            purge(_store);
             }
         return _store;
+        }
+
+    // Once per process, on first open: drop learned/measuring records that are
+    // not this compiler's (a different version prefix), so a release upgrade
+    // re-learns rather than acting on another code generator's crossover, and
+    // the old records do not pile up. XC_PAR_FORGET=1 drops ALL of them, for a
+    // clean re-measure.
+    static void purge(Settings* st)
+        {
+        bool forget = Platform.env(String.withCString("XC_PAR_FORGET")).byteLength() > (u32)0;
+        String* curL = keyHead("learned");
+        String* curM = keyHead("measuring");
+        String* anyL = String.withCString("par.learned.");
+        String* anyM = String.withCString("par.measuring.");
+        Array* ks = st.keys();
+        bool changed = false;
+        for (u32 j = (u32)0; j < ks.count(); j = j + (u32)1)
+            {
+            String* k = (String*)ks.get(j);
+            bool mine = k.hasPrefix(curL) || k.hasPrefix(curM);
+            bool ours = k.hasPrefix(anyL) || k.hasPrefix(anyM);
+            if (ours && (forget || !mine))
+                {
+                st.remove(k);
+                changed = true;
+                }
+            }
+        if (changed)
+            st.save();
         }
 
     // FNV-1a over the bytes of s, from h.
@@ -526,9 +570,23 @@ class ParDevice
         return u;
         }
 
+    // The key prefix for the current compiler: `par.<kind>.v<version>.`. The
+    // version is in the key so a new release's records never collide with an
+    // older one's — what a block learned under a different code generator could
+    // be wrong even with the same record shape (the CPU/GPU crossover moves).
+    // purge() below drops records whose prefix is not the current one.
+    static String* keyHead(u8* kind)
+        {
+        String* p = String.withCString("par.");
+        p.appendCString(kind);
+        p.appendCString(".v");
+        p.appendCString(PAR_CACHE_VER);
+        p.appendCString(".");
+        return p;
+        }
     static String* learnedKey(u32 i, ParChunk* proto)
         {
-        String* key = String.withCString("par.learned.");
+        String* key = keyHead("learned");
         key.append(_hw);
         key.appendCString(".");
         key.appendCString(gParBlock[i]);
@@ -538,7 +596,7 @@ class ParDevice
 
     static String* progressKey(u32 i, ParChunk* proto)
         {
-        String* key = String.withCString("par.measuring.");
+        String* key = keyHead("measuring");
         key.append(_hw);
         key.appendCString(".");
         key.appendCString(gParBlock[i]);
@@ -676,6 +734,11 @@ class ParDevice
 #if ARCH_win64
         if (gParApi[i] != (i32)0)
             v.appendCString(gParApi[i] == (i32)2 ? ",vulkan" : ",cuda");
+#endif
+#if !ARCH_wasm32
+        // When it was learned, in epoch seconds, in its own `;` segment so the
+        // field parser (which stops at the fields it knows) never sees it.
+        v.appendFormat(";%ld", time((pointer)0));
 #endif
         st.set(learnedKey(i, proto), v);
         st.save();
