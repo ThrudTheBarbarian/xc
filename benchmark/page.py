@@ -398,6 +398,20 @@ def par_tables(version):
     return "\n".join(out)
 
 
+def multigpu(version):
+    """The multi-device table (a block across several GPUs and the CPU, from
+    0.8). The device sets are not among run.py's standard modes and a machine
+    with two cards is the only place they differ, so for now the figures are a
+    hand-measured markdown fragment at benchmark/par/<version>/multigpu.md,
+    included verbatim when present. (0.8x: have par/run.py record the sets and
+    render this the way par_tables does the single-device modes.)"""
+    path = os.path.join(ROOT, "par", version, "multigpu.md")
+    if not os.path.exists(path):
+        return ""
+    with open(path) as fh:
+        return fh.read().rstrip() + "\n"
+
+
 def vulkan_notes(version):
     """The notes on CUDA against Vulkan on the Windows machine, from the same
     results as its table, so they follow each release's figures."""
@@ -489,9 +503,9 @@ def sources_page(names):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--current", default="v0.75")
-    ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66,v0.7,v0.71,v0.72,v0.73,v0.74,v0.75")
-    ap.add_argument("--release", default="0.75")
+    ap.add_argument("--current", default="v0.8")
+    ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66,v0.7,v0.71,v0.72,v0.73,v0.74,v0.75,v0.8")
+    ap.add_argument("--release", default="0.8")
     a = ap.parse_args()
     cur = load(a.current)
     versions = a.history.split(",")
@@ -519,6 +533,7 @@ def main():
         hist_list=", ".join(v.lstrip("v") for v in versions),
         changed=", ".join("`%s`" % b for b in sorted(CHANGED_IN)),
         par=par_tables(a.current),
+        multigpu=multigpu(a.current),
         vulkan=vulkan_notes(a.current),
     )
     with open(PAGE, "w") as fh:
@@ -684,40 +699,52 @@ it stays a vectorised loop.)
 ## Parallel blocks and the GPU
 
 A [`par` block](/compiler/language/par/) runs a loop's iterations at once,
-across every CPU thread or on the GPU (from 0.7). The GPU is reached through:
+across every CPU thread, on the GPU (from 0.7), or across several devices at
+once (from 0.8): the block is cut into tiles handed to every GPU the machine
+has, and to the CPU, together. The GPU is reached through:
 
 - **Metal** on Apple silicon;
 - **CUDA** on an NVIDIA GPU under Windows;
 - **Vulkan** on Linux, Windows and Android (from 0.72);
 - **WebGPU** in a browser (from 0.72).
 
-Four programs in `benchmark/par` measure it:
+Six programs in `benchmark/par` measure it:
 
 - `mandelbrot`: a 2048×2048 escape-time image, at most 256 iterations a pixel;
 - `perlin`: 2048×2048 improved noise, four octaves;
 - `nbody`: the force on each of 8192 bodies from all the others;
-- `saxpy`: `y = a·x + y` over 16 million integers, with a sum.
+- `saxpy`: `y = a·x + y` over 16 million integers, with a sum;
+- `md5`, `md5_mask`: the hashcat MD5 workload, hashing 64 million candidates
+  through the full 64-round compression and summing the digests.
 
-Each runs its block eight times and reports the best run, in four modes: *one
-thread* (`XC_PAR=cpu XC_PAR_THREADS=1`), *all threads* (`XC_PAR=cpu`), *GPU*
-(`XC_PAR=gpu`) and `auto`, the default, which times the CPU and the GPU and
-keeps the faster (from 0.73 it remembers the choice, per program and per
-machine, so later runs do not measure again). Every mode's checksum must agree. On Windows *GPU* is CUDA
-and *Vulkan* the same card through Vulkan (`XC_PAR_GPU=vulkan`).
+Each runs its block eight times and reports the best run. The single-device
+modes are *one thread* (`XC_PAR=cpu XC_PAR_THREADS=1`), *all threads*
+(`XC_PAR=cpu`) and *GPU* (`XC_PAR=gpu`). From 0.8 a block can also run on *every
+GPU* (`XC_PAR=gpus`) or on *every device* (`XC_PAR=all`), and `XC_PAR_WORKERS=…`
+names an exact set (`cuda`, `vulkan`, `metal`, `cpu`). `auto`, the default,
+times the sets the machine can form and keeps the fastest; from 0.73 it
+remembers the choice, per program and per machine, so later runs do not measure
+again. Every mode's checksum must agree. On Windows *GPU* is CUDA and *Vulkan*
+the same work through Vulkan (`XC_PAR_GPU=vulkan`).
 
 {par}
+{multigpu}
 
 What the tables show:
 
-- **A discrete GPU wins by a wide margin** on the three programs that do real
-  work per element, and `auto` finds that and uses it.
+- **A discrete GPU wins by a wide margin** on the programs that do real work per
+  element — `md5` hashes 64 million candidates in about a millisecond on one
+  discrete card against hundreds on the CPU — and `auto` finds that and uses it.
 - **`saxpy` stays on the CPU.** It does one multiply-add for every eight bytes
   it moves, so copying to and from the GPU outweighs the arithmetic, and `auto`
   keeps it on the CPU everywhere.
+- **Two cards share a block (from 0.8).** On a compute-bound block a second card
+  roughly halves the one-GPU time, and an NVIDIA card through CUDA runs beside a
+  second through Vulkan; `auto` chooses the device set per block — one GPU, every
+  GPU, or every device — and leaves out a device that would only slow the set.
 - **The Ryzen's integrated Radeon** has 128 shader lanes against the CPU's 32
-  threads. It just beats them on `mandelbrot` and `nbody` and loses on the
-  other two; its copies of `saxpy`'s arrays are slower still, because the
-  runtime does not yet use the CPU's cache for them there.
+  threads. It just beats them on `mandelbrot`, `perlin` and `md5` and loses on
+  `nbody` and `saxpy`, where `auto` keeps the CPU.
 {vulkan}
 
 ## Release to release

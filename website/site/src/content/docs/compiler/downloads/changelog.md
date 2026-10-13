@@ -36,12 +36,12 @@ CPU, one GPU, every GPU, or every device together — and keeps the fastest.
   The hashcat MD5 workload (64M candidates) on the Windows host runs in 1.12 ms
   on one RTX 5080, 0.90 ms on the 5080 and an RTX 3090 together, and 1.02 ms on
   the 5080 through CUDA beside the 3090 through Vulkan; the CPU alone takes
-  297 ms. `auto` picks the two-GPU set (0.98 ms) and leaves the CPU out, because
+  333 ms. `auto` picks the two-GPU set (0.88 ms) and leaves the CPU out, because
   on this block the CPU only slows the set down.
 - **`auto` picks the CPU where the GPUs cannot win**: `saxpy` moves more memory
   than it computes, so the CPU's own DRAM beats sending the data over PCIe
-  (3.1 ms on the CPU, 15–17 ms on one GPU); `auto` keeps it on the CPU. Two GPUs
-  still halve the one-GPU time (7.9 ms), which is the scaling, not a win over the
+  (3.2 ms on the CPU, 15–17 ms on one GPU); `auto` keeps it on the CPU. Two GPUs
+  still halve the one-GPU time (7.8 ms), which is the scaling, not a win over the
   CPU for this block.
 
 ## Version 0.75 — faster code on x86-64 and arm64, and GPU blocks that fold on the device
