@@ -96,6 +96,10 @@ is LGPLv3; the archive carries its source and the script that rebuilds it.
 
 ## Linux
 
+The archives are compressed with bzip2, which a minimal Linux install may not
+have. If `tar` says it cannot run `bzip2`, install it first (on Ubuntu,
+`sudo apt-get install -y bzip2`).
+
 ```bash
 tar xjf xcc-linux-0.8.tar.bz2
 export PATH="$PWD/xcc-linux-0.8/bin:$PATH"
@@ -104,6 +108,11 @@ xcc -v
 
 The binaries are static (musl), so they run on any x86_64 distribution with no
 library dependencies.
+
+A `par` block reaches the GPU on Linux through Vulkan, so running one on the
+GPU needs the Vulkan loader and a driver. A desktop install usually has both.
+[Set up the GPU](/compiler/benchmarks/how-to-diy/#set-up-the-gpu-optional)
+covers a minimal install, NVIDIA, and access over ssh.
 
 ## Windows
 

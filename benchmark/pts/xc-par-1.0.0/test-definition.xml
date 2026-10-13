@@ -1,0 +1,84 @@
+<?xml version="1.0"?>
+<PhoronixTestSuite>
+  <TestInformation>
+    <Title>xc par</Title>
+    <AppVersion>0.8</AppVersion>
+    <Description>The par benchmarks of the xc language: each program is one data-parallel par block that xcc compiles for the CPU and the GPU together, and that runs on one CPU thread, on every CPU thread, on the GPU (Vulkan on Linux), on every GPU, or on every device at once. The program runs its block eight times and the result is the best run; the first run, which carries the one-off costs such as building the GPU kernel, is reported too. Every run must print the benchmark's checksum, and a GPU mode that falls back to the CPU is refused.</Description>
+    <ResultScale>ms</ResultScale>
+    <Proportion>LIB</Proportion>
+    <TimesToRun>3</TimesToRun>
+  </TestInformation>
+  <TestProfile>
+    <Version>1.0.0</Version>
+    <SupportedPlatforms>Linux</SupportedPlatforms>
+    <SoftwareType>Benchmark</SoftwareType>
+    <TestType>System</TestType>
+    <License>Free</License>
+    <Status>Verified</Status>
+    <ExternalDependencies>bzip2</ExternalDependencies>
+    <EnvironmentSize>30</EnvironmentSize>
+    <ProjectURL>https://compile-xc.org/</ProjectURL>
+    <RepositoryURL>https://github.com/ThrudTheBarbarian/xc</RepositoryURL>
+    <InternalTags>SMP, Vulkan, GPU Compute</InternalTags>
+    <Maintainer>compile-xc.org</Maintainer>
+  </TestProfile>
+  <TestSettings>
+    <Option>
+      <DisplayName>Benchmark</DisplayName>
+      <Identifier>bench</Identifier>
+      <Menu>
+        <Entry>
+          <Name>Mandelbrot</Name>
+          <Value>mandelbrot</Value>
+          <Message>2048x2048 escape-time image, up to 256 iterations a pixel</Message>
+        </Entry>
+        <Entry>
+          <Name>Perlin</Name>
+          <Value>perlin</Value>
+          <Message>Perlin noise field</Message>
+        </Entry>
+        <Entry>
+          <Name>N-Body</Name>
+          <Value>nbody</Value>
+          <Message>all-pairs gravity step</Message>
+        </Entry>
+        <Entry>
+          <Name>SAXPY</Name>
+          <Value>saxpy</Value>
+          <Message>y = a*x + y over two arrays; bound by memory, not arithmetic</Message>
+        </Entry>
+      </Menu>
+    </Option>
+    <Option>
+      <DisplayName>Device</DisplayName>
+      <Identifier>device</Identifier>
+      <Menu>
+        <Entry>
+          <Name>CPU, One Thread</Name>
+          <Value>serial</Value>
+        </Entry>
+        <Entry>
+          <Name>CPU, All Threads</Name>
+          <Value>cpu</Value>
+        </Entry>
+        <Entry>
+          <Name>GPU</Name>
+          <Value>gpu</Value>
+        </Entry>
+        <Entry>
+          <Name>Every GPU</Name>
+          <Value>gpus</Value>
+        </Entry>
+        <Entry>
+          <Name>Every Device</Name>
+          <Value>all</Value>
+        </Entry>
+        <Entry>
+          <Name>Auto</Name>
+          <Value>auto</Value>
+          <Message>the program measures the CPU and the GPU and keeps the faster</Message>
+        </Entry>
+      </Menu>
+    </Option>
+  </TestSettings>
+</PhoronixTestSuite>

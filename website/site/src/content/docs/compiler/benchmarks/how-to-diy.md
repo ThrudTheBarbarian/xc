@@ -23,9 +23,9 @@ because a timing between programs that compute different things means nothing.
 
 ## What you need
 
-- A 64-bit x86-64 Ubuntu. Tested on 24.04. A GPU is optional; without one the
-  GPU modes are skipped.
-- xcc 0.75 for Linux, from the [downloads](/compiler/downloads/) page.
+- A 64-bit x86-64 Ubuntu. Tested on 26.04. A GPU is optional; without a
+  usable one the GPU modes are skipped, and the collector says why.
+- xcc 0.8 for Linux, from the [downloads](/compiler/downloads/) page.
 - Python 3, which Ubuntu ships, for the collector.
 - For the language suite only: `clang`, `clang++`, `g++`, and `swiftc`, plus
   GNUstep for the Objective-C half. A toolchain that is absent is skipped, not
@@ -33,16 +33,58 @@ because a timing between programs that compute different things means nothing.
 
 ## 1. Install xcc
 
-The Linux archive is a static musl build, so it runs as-is.
+The Linux archive is a static musl build, so it runs as-is. It is compressed
+with bzip2, which a minimal Ubuntu may not have; if `tar` says it cannot run
+`bzip2`, install it first with `sudo apt-get install -y bzip2`.
 
 ```bash
-tar xjf xcc-linux-0.75.tar.bz2
-export PATH="$PWD/xcc-linux-0.75/bin:$PATH"
+tar xjf xcc-linux-0.8.tar.bz2
+export PATH="$PWD/xcc-linux-0.8/bin:$PATH"
 xcc -v
 ```
 
 The compiler finds its libraries relative to its own binary, so the directory
-can be moved anywhere. Put the `export` in your shell profile to keep it.
+can be moved anywhere. Put the `export` in your shell profile to keep it. The
+collector also finds a compiler installed as `/opt/xcc/0.8/`, with no `PATH`
+change.
+
+### Set up the GPU (optional)
+
+On Linux xc reaches the GPU through Vulkan, so the machine needs the Vulkan
+loader and a Vulkan driver. A desktop Ubuntu usually has both; a minimal or
+server install does not.
+
+```bash
+sudo apt-get install -y libvulkan1 mesa-vulkan-drivers vulkan-tools
+vulkaninfo --summary        # lists each GPU and its driver
+```
+
+- **AMD and Intel:** `mesa-vulkan-drivers` is the driver (RADV for AMD, ANV for
+  Intel). Nothing else is needed; ROCm is not used.
+- **NVIDIA:** install NVIDIA's own driver (`sudo ubuntu-drivers install`),
+  which carries its Vulkan driver. `libvulkan1` is still needed.
+- **Over ssh, or with no desktop session:** the account needs access to the
+  GPU device, which a desktop login grants and ssh does not. Add it to the
+  `render` group and log in again:
+  `sudo usermod -aG render $USER`.
+
+`vulkaninfo --summary` should name the GPU itself. If it lists only
+`llvmpipe`, that is Mesa's software device running on the CPU, and the GPU is
+not reachable yet.
+
+To check that a program really reaches the GPU (with the sources from step
+2), run it with `XC_PAR_REPORT=1`. It names the device it uses; a line saying
+`a block stays on the CPU` gives the reason it could not use the GPU.
+
+```bash
+xcc -O3 -o mandelbrot benchmark/par/mandelbrot.xc
+XC_PAR=gpu XC_PAR_REPORT=1 ./mandelbrot
+# par: Vulkan device is vulkan:… (RADV …)
+```
+
+On macOS the GPU is reached through Metal and needs nothing installed. On
+Windows an NVIDIA GPU needs only NVIDIA's driver, which carries both CUDA and
+Vulkan.
 
 ## 2. Get the benchmark sources
 
@@ -72,7 +114,9 @@ python3 benchmark/diy.py --suite par
 ```
 
 It writes `benchmark/xc-bench-<host>.json`. Add `--repeats 7` for more samples,
-or `--no-gpu` on a machine with no usable GPU.
+or `--no-gpu` to leave the GPU out. Before each GPU mode the collector makes
+one run with `XC_PAR_REPORT=1`. If the block would stay on the CPU, it skips
+that mode and prints the reason, so a CPU time is never recorded as a GPU one.
 
 The exact parameters, per run, are:
 
@@ -102,6 +146,22 @@ The four programs must print these checksums:
 
 A different checksum means the program was not the one being measured, so the
 timing is refused.
+
+### With the Phoronix Test Suite
+
+The par suite is also a [Phoronix Test Suite](https://www.phoronix-test-suite.com/)
+test profile, `benchmark/pts/xc-par-1.0.0/`. It downloads the published Linux
+compiler and benchmark sources, builds the four programs, and offers each one
+on one CPU thread, every CPU thread, the GPU, every GPU, every device, or
+`auto`. Each result is the best of the program's eight runs, and the first run
+is reported beside it. The profile checks the checksum, and it refuses a GPU
+mode that would run on the CPU.
+
+```bash
+mkdir -p ~/.phoronix-test-suite/test-profiles/local
+cp -R benchmark/pts/xc-par-1.0.0 ~/.phoronix-test-suite/test-profiles/local/
+phoronix-test-suite benchmark local/xc-par-1.0.0
+```
 
 ## 4. Comparing against other languages
 
@@ -238,10 +298,10 @@ machine and the toolchains, then one entry per run:
   "schema": "xc-bench/1",
   "id": "6f9c...",
   "collected": "2026-10-10T09:30:00Z",
-  "machine": { "os": "Ubuntu 24.04.1 LTS", "arch": "x86_64",
+  "machine": { "os": "Ubuntu 26.04.1 LTS", "arch": "x86_64",
                "cpu": "Example 16-core x86-64 CPU",
                "gpu": "Example GPU (CUDA)", "memory_mb": 65536 },
-  "toolchains": { "xcc": "0.75", "clang": "...", "gcc": "...", "swiftc": "..." },
+  "toolchains": { "xcc": "0.8", "clang": "...", "gcc": "...", "swiftc": "..." },
   "repeats": 5,
   "runs": [
     { "suite": "par", "benchmark": "nbody", "target": "xc", "device": "gpu",

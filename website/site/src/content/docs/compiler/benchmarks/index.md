@@ -50,7 +50,7 @@ The visualiser is written in xc and built with UXKit.
 | macOS (Apple silicon) | [xcc-benchviz-0.75-osx.tar.bz2](/downloads/xcc-benchviz-0.75-osx.tar.bz2) | 970 KB |
 | Linux (x86-64, GTK 4) | [xcc-benchviz-0.75-linux.tar.bz2](/downloads/xcc-benchviz-0.75-linux.tar.bz2) | 1.0 MB |
 | Windows (x86-64) | [xcc-benchviz-0.75-win64.zip](/downloads/xcc-benchviz-0.75-win64.zip) | 941 KB |
-| Benchmark sources (any host) | [xcc-bench-sources-0.75.tar.bz2](/downloads/xcc-bench-sources-0.75.tar.bz2) | 94 KB |
+| Benchmark sources (any host) | [xcc-bench-sources-0.8.tar.bz2](/downloads/xcc-bench-sources-0.8.tar.bz2) | 94 KB |
 
 Unpack the archive and run `./visualiser` (`visualiser.exe` on Windows). The
 archive carries the libraries the program loads beside it: the TLS library and,

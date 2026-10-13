@@ -12,7 +12,8 @@ Two suites, chosen with --suite:
 
   par     the four par benchmarks (mandelbrot, perlin, nbody, saxpy), each run
           one thread, on every CPU thread, on the GPU, and on auto, exactly as
-          par/run.py does.  Needs only xcc (and a GPU for the GPU modes).
+          par/run.py does.  Needs only xcc (and a GPU for the GPU modes; a
+          GPU mode that would run on the CPU is skipped and says why).
   langs   the language comparison: each benchmark in src/, in xc, Objective-C,
           C++ (clang), C++ (GCC) and Swift, at O0..O3, with run.py's flags.  A
           language whose compiler is absent is skipped, not failed.
@@ -193,6 +194,23 @@ def measure(binary, repeats, env=None, args=("x",), parser=parse_two, label=""):
     return samples, extra, checksum
 
 
+def gpu_refusal(binary, env):
+    """Why a GPU mode would run on the CPU, or None when it reaches the GPU.
+
+    A block asked for the GPU on a machine without a usable one runs on the
+    CPU and says so only under XC_PAR_REPORT, so one reported run is made
+    first; the timed runs would otherwise be CPU figures recorded as GPU ones.
+    """
+    e = dict(os.environ)
+    e.update(env)
+    e["XC_PAR_REPORT"] = "1"
+    r = sh([binary, "x"], env=e)
+    for line in (r.stdout + r.stderr).splitlines():
+        if "stays on the CPU" in line:
+            return line.split("stays on the CPU:", 1)[-1].strip() or "no usable GPU"
+    return None
+
+
 def run_contribution(exe, opt, samples, suite, benchmark, target, device, params, arch, checksum, first=None):
     run = {"suite": suite, "benchmark": benchmark, "target": target, "device": device,
            "opt": opt, "arch": arch, "params": params,
@@ -221,6 +239,11 @@ def suite_par(compiler, work, repeats, want_gpu):
                 continue
             if mode == "vulkan" and platform.system() != "Windows":
                 continue
+            if mode in ("gpu", "vulkan"):
+                why = gpu_refusal(exe, env)
+                if why:
+                    print("  par/%s/%s: skipped, the block would run on the CPU: %s" % (name, mode, why))
+                    continue
             samples, first, checksum = measure(exe, repeats, env=env, parser=parse_three, label=mode)
             if samples is None:
                 print("  par/%s/%s: %s" % (name, mode, checksum))
