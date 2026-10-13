@@ -14,46 +14,58 @@
 #import "XTIRParMSL_Private.h"
 
 
+// Per-thread lane width while emitting a vectorised body (0/1 scalar, 2 uint2);
+// widens the three type helpers so `uint` prints as `uint2`. The emission is
+// serial, and laneEmit sets it only around the body statements, so other
+// callers (buffer and reduction types) see 0.
+static NSUInteger gLaneVecW = 0;
+
 static NSString* scalarName(XTIRType* t)
     {
+    NSString* b;
     switch (t.kind)
         {
-        case XTIRTypeKindI8: return @"char";
-        case XTIRTypeKindU8: return @"uchar";
-        case XTIRTypeKindI16: return @"short";
-        case XTIRTypeKindU16: return @"ushort";
-        case XTIRTypeKindI32: return @"int";
-        case XTIRTypeKindU32: return @"uint";
-        case XTIRTypeKindI64: return @"long";
-        case XTIRTypeKindU64: return @"ulong";
-        case XTIRTypeKindF32: return @"float";
+        case XTIRTypeKindI8: b = @"char"; break;
+        case XTIRTypeKindU8: b = @"uchar"; break;
+        case XTIRTypeKindI16: b = @"short"; break;
+        case XTIRTypeKindU16: b = @"ushort"; break;
+        case XTIRTypeKindI32: b = @"int"; break;
+        case XTIRTypeKindU32: b = @"uint"; break;
+        case XTIRTypeKindI64: b = @"long"; break;
+        case XTIRTypeKindU64: b = @"ulong"; break;
+        case XTIRTypeKindF32: b = @"float"; break;
         case XTIRTypeKindBool: return @"bool";
         default: return nil; // f64 (refused on Metal, §7), aggregates, vectors
         }
+    return gLaneVecW == 2 ? [b stringByAppendingString:@"2"] : b;
     }
 
 static NSString* signedName(XTIRType* t)
     {
+    NSString* b;
     switch (t.kind)
         {
-        case XTIRTypeKindI8: case XTIRTypeKindU8: return @"char";
-        case XTIRTypeKindI16: case XTIRTypeKindU16: return @"short";
-        case XTIRTypeKindI32: case XTIRTypeKindU32: return @"int";
-        case XTIRTypeKindI64: case XTIRTypeKindU64: return @"long";
+        case XTIRTypeKindI8: case XTIRTypeKindU8: b = @"char"; break;
+        case XTIRTypeKindI16: case XTIRTypeKindU16: b = @"short"; break;
+        case XTIRTypeKindI32: case XTIRTypeKindU32: b = @"int"; break;
+        case XTIRTypeKindI64: case XTIRTypeKindU64: b = @"long"; break;
         default: return scalarName(t);
         }
+    return gLaneVecW == 2 ? [b stringByAppendingString:@"2"] : b;
     }
 
 static NSString* unsignedName(XTIRType* t)
     {
+    NSString* b;
     switch (t.kind)
         {
-        case XTIRTypeKindI8: case XTIRTypeKindU8: return @"uchar";
-        case XTIRTypeKindI16: case XTIRTypeKindU16: return @"ushort";
-        case XTIRTypeKindI32: case XTIRTypeKindU32: return @"uint";
-        case XTIRTypeKindI64: case XTIRTypeKindU64: return @"ulong";
+        case XTIRTypeKindI8: case XTIRTypeKindU8: b = @"uchar"; break;
+        case XTIRTypeKindI16: case XTIRTypeKindU16: b = @"ushort"; break;
+        case XTIRTypeKindI32: case XTIRTypeKindU32: b = @"uint"; break;
+        case XTIRTypeKindI64: case XTIRTypeKindU64: b = @"ulong"; break;
         default: return scalarName(t);
         }
+    return gLaneVecW == 2 ? [b stringByAppendingString:@"2"] : b;
     }
 
 static NSString* gParExtraMeta = nil;
@@ -1198,6 +1210,201 @@ static NSString* intrinsicFor(NSString* callee)
     return out;
     }
 
+// ── per-thread lane vectorisation ──────────────────────────────────────────
+// Mirrors Lower.xc's laneDetect + mslLaneBody: the canonical reduce loop (one
+// straight-line body that reads the item index and folds one u32 with +, no
+// memory and no branches inside) runs two items per thread as uint2 lanes,
+// summing the lanes at the end. Anything else prints scalar.
+
+- (BOOL)isLaneOp:(XTIROpcode)op
+    {
+    switch (op)
+        {
+        case XTIROpConst: case XTIROpAdd: case XTIROpSub: case XTIROpMul:
+        case XTIROpAnd: case XTIROpOr: case XTIROpXor: case XTIROpNot:
+        case XTIROpShl: case XTIROpLShr: case XTIROpAShr:
+            return YES;
+        default:
+            return NO;
+        }
+    }
+// A value the body may use: one of the two phis, or defined by a body
+// instruction. A use of anything else is not available in the lane scaffold.
+- (BOOL)laneBody:(XTIRBlock*)body has:(XTIRValueId)v indPhi:(XTIRInsn*)indPhi redPhi:(XTIRInsn*)redPhi
+    {
+    if (v == indPhi.result.valueId || v == redPhi.result.valueId)
+        return YES;
+    for (XTIRInsn* ip in body.instructions)
+        if (ip.result && ip.result.valueId == v)
+            return YES;
+    return NO;
+    }
+// The phi's incoming value from `blk` (match YES) or from the other
+// predecessor (match NO); nil when it is not a plain value.
+- (nullable XTIROperand*)phi:(XTIRInsn*)ph block:(XTIRBlock*)blk match:(BOOL)match
+    {
+    for (NSUInteger k = 0; k + 1 < ph.operands.count; k += 2)
+        if ((ph.operands[k].blockRef == blk) == match)
+            {
+            XTIROperand* v = ph.operands[k + 1];
+            return v.kind == XTIROperandKindUse ? v : nil;
+            }
+    return nil;
+    }
+// The ParChunk field a value loads, following one optional Trunc, else -1.
+- (NSInteger)laneFieldVia:(XTIRValueId)v
+    {
+    XTIRInsn* d = self.def[@(v)];
+    if (!d)
+        return -1;
+    if (d.opcode == XTIROpTrunc)
+        {
+        if (d.operands[0].kind != XTIROperandKindUse)
+            return -1;
+        d = self.def[@(d.operands[0].valueId)];
+        if (!d)
+            return -1;
+        }
+    if (d.opcode != XTIROpLoad || d.operands[0].kind != XTIROperandKindUse)
+        return -1;
+    return [self selfFieldOf:[XTIROperand useWithValueId:d.operands[0].valueId]];
+    }
+// Emit the body's kept instructions (all but the induction increment and the
+// loop compare) at `w` lanes into `out`.
+- (BOOL)laneEmit:(XTIRBlock*)body skipA:(XTIRValueId)skA skipB:(XTIRValueId)skB width:(NSUInteger)w into:(NSMutableString*)out
+    {
+    gLaneVecW = w;
+    for (XTIRInsn* ip in body.instructions)
+        {
+        if (!ip.result || ip.result.valueId == skA || ip.result.valueId == skB)
+            continue;
+        [out appendString:@"    "];
+        [out appendString:[self declOf:ip.result]];
+        }
+    for (XTIRInsn* ip in body.instructions)
+        {
+        if (ip.result && (ip.result.valueId == skA || ip.result.valueId == skB))
+            continue;
+        NSString* st = [self statement:ip];
+        if (!st)
+            {
+            gLaneVecW = 0;
+            return NO;
+            }
+        if (st.length)
+            {
+            [out appendString:@"            "];
+            [out appendString:st];
+            [out appendString:@"\n"];
+            }
+        }
+    gLaneVecW = 0;
+    return YES;
+    }
+- (nullable NSString*)laneBodyOf:(XTIRFunction*)f
+    {
+    XTIRBlock* body = nil;
+    for (XTIRBlock* bb in f.blocks)
+        {
+        XTIRInsn* t = bb.terminator;
+        if (!t || t.opcode != XTIROpCondBranch || t.operands.count < 3)
+            continue;
+        if (t.operands[1].blockRef == bb || t.operands[2].blockRef == bb)
+            {
+            body = bb;
+            break;
+            }
+        }
+    if (!body || body.phiNodes.count != 2)
+        return nil;
+    XTIRInsn* term = body.terminator;
+    if (term.operands[1].blockRef != body)
+        return nil;
+    XTIROperand* condOp = term.operands[0];
+    if (condOp.kind != XTIROperandKindUse)
+        return nil;
+    XTIRInsn* cmp = self.def[@(condOp.valueId)];
+    if (!cmp || cmp.opcode != XTIROpICmp || cmp.predicate != XTIRICmpULT)
+        return nil;
+    XTIROperand* icA = cmp.operands[0];
+    XTIROperand* icB = cmp.operands[1];
+    if (icA.kind != XTIROperandKindUse || icB.kind != XTIROperandKindUse)
+        return nil;
+    XTIRValueId indNext = icA.valueId;
+    XTIRValueId bound = icB.valueId;
+    XTIRInsn* incr = self.def[@(indNext)];
+    if (!incr || incr.opcode != XTIROpAdd)
+        return nil;
+    XTIROperand* a0 = incr.operands[0];
+    XTIROperand* a1 = incr.operands[1];
+    XTIRValueId indPhiVal = 0;
+    if (a0.kind == XTIROperandKindUse && a1.kind == XTIROperandKindImmI && a1.intValue == 1)
+        indPhiVal = a0.valueId;
+    else if (a1.kind == XTIROperandKindUse && a0.kind == XTIROperandKindImmI && a0.intValue == 1)
+        indPhiVal = a1.valueId;
+    else
+        return nil;
+    XTIRInsn* p0 = body.phiNodes[0];
+    XTIRInsn* p1 = body.phiNodes[1];
+    XTIRInsn* indPhi; XTIRInsn* redPhi;
+    if (p0.result.valueId == indPhiVal) { indPhi = p0; redPhi = p1; }
+    else if (p1.result.valueId == indPhiVal) { indPhi = p1; redPhi = p0; }
+    else return nil;
+    if (indPhi.result.type.kind != XTIRTypeKindU32 || redPhi.result.type.kind != XTIRTypeKindU32)
+        return nil;
+    XTIROperand* indStart = [self phi:indPhi block:body match:NO];
+    XTIROperand* redNextOp = [self phi:redPhi block:body match:YES];
+    XTIROperand* redInit = [self phi:redPhi block:body match:NO];
+    if (!indStart || [self laneFieldVia:indStart.valueId] != 1)
+        return nil;
+    if ([self laneFieldVia:bound] != 2)
+        return nil;
+    if (!redNextOp)
+        return nil;
+    XTIRValueId redNext = redNextOp.valueId;
+    if (!redInit)
+        return nil;
+    NSInteger redFld = [self laneFieldVia:redInit.valueId];
+    if (redFld < 0 || ![self.redOps[@(redFld)] isEqualToString:@"+"])
+        return nil;
+    for (XTIRInsn* ip in body.instructions)
+        {
+        if (ip.result && (ip.result.valueId == indNext || ip.result.valueId == cmp.result.valueId))
+            continue;
+        if (![self isLaneOp:ip.opcode])
+            return nil;
+        // Every input must be a lane value (a phi or a body result); a use of a
+        // value defined outside the body (a captured loop-invariant loaded in
+        // the preheader) cannot be vectorised here (bug: par_loop_capture).
+        for (XTIROperand* o in ip.operands)
+            if (o.kind == XTIROperandKindUse &&
+                ![self laneBody:body has:o.valueId indPhi:indPhi redPhi:redPhi])
+                return nil;
+        }
+    uint32_t redOff = self.objLayout.fields[(NSUInteger)redFld].byteOffset;
+    NSString* indName = [self name:indPhi.result.valueId];
+    NSString* accName = [self name:redPhi.result.valueId];
+    NSString* nextName = [self name:redNext];
+    NSMutableString* out = [NSMutableString string];
+    [out appendString:@"    uint2 _vacc = uint2(0);\n"];
+    [out appendString:@"    long _vb = lo;\n"];
+    [out appendString:@"    for (; _vb + 1 < hi; _vb += 2) {\n"];
+    [out appendFormat:@"        uint2 %@ = uint2(uint(_vb), uint(_vb + 1));\n", indName];
+    [out appendFormat:@"        uint2 %@ = _vacc;\n", accName];
+    if (![self laneEmit:body skipA:indNext skipB:cmp.result.valueId width:2 into:out])
+        return nil;
+    [out appendFormat:@"        _vacc = %@;\n    }\n", nextName];
+    [out appendFormat:@"    uint _vtot = *(thread uint*)(st + %u) + _vacc.x + _vacc.y;\n", redOff];
+    [out appendString:@"    if (_vb < hi) {\n"];
+    [out appendFormat:@"        uint %@ = uint(_vb);\n", indName];
+    [out appendFormat:@"        uint %@ = _vtot;\n", accName];
+    if (![self laneEmit:body skipA:indNext skipB:cmp.result.valueId width:1 into:out])
+        return nil;
+    [out appendFormat:@"        _vtot = %@;\n    }\n", nextName];
+    [out appendFormat:@"    *(thread uint*)(st + %u) = _vtot;\n", redOff];
+    return out;
+    }
+
 - (nullable NSString*)print
     {
     self.def = [NSMutableDictionary dictionary];
@@ -1226,6 +1433,9 @@ static NSString* intrinsicFor(NSString* callee)
         return nil;
     if (self.failed)
         return nil;
+    // Two items per thread as uint2 lanes where the body allows it; the header
+    // line, parameters and reduction tail below stay the same.
+    NSString* laneBody = [self laneBodyOf:self.fn];
 
     // The header line the runtime reads, and the kernel's parameters.
     NSArray<XTIRLayoutField*>* fl = self.objLayout.fields;
@@ -1327,19 +1537,24 @@ static NSString* intrinsicFor(NSString* callee)
     [out appendString:@"    long hi = min(lo + span[2], span[1]);\n"];
     [out appendFormat:@"    *(thread long*)(st + %u) = lo;\n    *(thread long*)(st + %u) = hi;\n",
                       fl[1].byteOffset, fl[2].byteOffset];
-    [out appendString:decls];
-    NSString* structured = [self structuredBodyIndent:@"        "];
-    if (structured)
-        {
-        [out appendString:@"    if (lo < hi) do {\n"];
-        [out appendString:structured];
-        [out appendString:@"    } while (false);\n"];
-        }
+    if (laneBody)
+        [out appendString:laneBody];
     else
         {
-        [out appendString:@"    uint pc = 0;\n    while (lo < hi && pc != 0xffffffffu) {\n        switch (pc) {\n"];
-        [out appendString:body];
-        [out appendString:@"        default: pc = 0xffffffffu; continue;\n        }\n    }\n"];
+        [out appendString:decls];
+        NSString* structured = [self structuredBodyIndent:@"        "];
+        if (structured)
+            {
+            [out appendString:@"    if (lo < hi) do {\n"];
+            [out appendString:structured];
+            [out appendString:@"    } while (false);\n"];
+            }
+        else
+            {
+            [out appendString:@"    uint pc = 0;\n    while (lo < hi && pc != 0xffffffffu) {\n        switch (pc) {\n"];
+            [out appendString:body];
+            [out appendString:@"        default: pc = 0xffffffffu; continue;\n        }\n    }\n"];
+            }
         }
     if (devred)
         // Every thread reaches every barrier: one past the range holds its

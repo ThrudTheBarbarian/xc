@@ -14847,6 +14847,16 @@ class ClassInfo
     // its caller saves and restores it (the reference uses a new printer).
     bool _mHelper;
     bool _mFast;            // the block's goal is speed: fast maths, approximate sin, cos, exp, ln and pow
+    u32 _mVecW;             // per-thread lane width while emitting a vectorised body (0/1 scalar, 2 uint2); widens mslScalar
+    // laneDetect's result: the canonical vectorisable reduce loop, shared by
+    // every backend's lane emitter (MSL, WGSL, SPIR-V, PTX).
+    IRBlock* _lnBody;       // the straight-line loop body
+    IRInsn* _lnIndPhi;      // induction phi (the item index)
+    IRInsn* _lnRedPhi;      // reduction accumulator phi
+    IRValue* _lnRedNext;    // the accumulator's next value (end of the + chain)
+    IRValue* _lnIndNext;    // induction + 1 (skipped when emitting the body)
+    IRValue* _lnCmpRes;     // the loop compare (skipped too)
+    u32 _lnRedOff;          // byte offset of the reduction field in the chunk
     Map* _mRedOps;          // each reduction field's operator, by field index (String), from the placeholder (bug 645), or 0
     // The static-init guard of a class the kernel calls (Math, say): value seq
     // of the AddrOf naming its flag ("1"), its init function or its static
@@ -14869,33 +14879,44 @@ class ClassInfo
     String* mslScalar(String* t)
         {
         if (t == (String*)0) return (String*)0;
-        if (t.equals(String.withCString("I8"))) return String.withCString("char");
-        if (t.equals(String.withCString("U8"))) return String.withCString("uchar");
-        if (t.equals(String.withCString("I16"))) return String.withCString("short");
-        if (t.equals(String.withCString("U16"))) return String.withCString("ushort");
-        if (t.equals(String.withCString("I32"))) return String.withCString("int");
-        if (t.equals(String.withCString("U32"))) return String.withCString("uint");
-        if (t.equals(String.withCString("I64"))) return String.withCString("long");
-        if (t.equals(String.withCString("U64"))) return String.withCString("ulong");
-        if (t.equals(String.withCString("F32"))) return String.withCString("float");
-        if (t.equals(String.withCString("Bool"))) return String.withCString("bool");
-        return (String*)0; // f64 (refused on Metal, §7), aggregates, vectors
+        String* base = (String*)0;
+        if (t.equals(String.withCString("I8"))) base = String.withCString("char");
+        else if (t.equals(String.withCString("U8"))) base = String.withCString("uchar");
+        else if (t.equals(String.withCString("I16"))) base = String.withCString("short");
+        else if (t.equals(String.withCString("U16"))) base = String.withCString("ushort");
+        else if (t.equals(String.withCString("I32"))) base = String.withCString("int");
+        else if (t.equals(String.withCString("U32"))) base = String.withCString("uint");
+        else if (t.equals(String.withCString("I64"))) base = String.withCString("long");
+        else if (t.equals(String.withCString("U64"))) base = String.withCString("ulong");
+        else if (t.equals(String.withCString("F32"))) base = String.withCString("float");
+        else if (t.equals(String.withCString("Bool"))) return String.withCString("bool");
+        else return (String*)0; // f64 (refused on Metal, §7), aggregates, vectors
+        // Inside a vectorised body every value is a lane vector: uint -> uint2.
+        if (_mVecW == (u32)2)
+            base.appendCString("2");
+        return base;
         }
     String* mslSigned(String* t)
         {
-        if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8"))) return String.withCString("char");
-        if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))) return String.withCString("short");
-        if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))) return String.withCString("int");
-        if (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"))) return String.withCString("long");
-        return mslScalar(t);
+        String* b = (String*)0;
+        if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8"))) b = String.withCString("char");
+        else if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))) b = String.withCString("short");
+        else if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))) b = String.withCString("int");
+        else if (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"))) b = String.withCString("long");
+        else return mslScalar(t);
+        if (_mVecW == (u32)2) b.appendCString("2");
+        return b;
         }
     String* mslUnsigned(String* t)
         {
-        if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8"))) return String.withCString("uchar");
-        if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))) return String.withCString("ushort");
-        if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))) return String.withCString("uint");
-        if (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"))) return String.withCString("ulong");
-        return mslScalar(t);
+        String* b = (String*)0;
+        if (t.equals(String.withCString("I8")) || t.equals(String.withCString("U8"))) b = String.withCString("uchar");
+        else if (t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"))) b = String.withCString("ushort");
+        else if (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))) b = String.withCString("uint");
+        else if (t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"))) b = String.withCString("ulong");
+        else return mslScalar(t);
+        if (_mVecW == (u32)2) b.appendCString("2");
+        return b;
         }
     u32 mslWidth(String* t)
         {
@@ -15960,11 +15981,213 @@ class ClassInfo
         return out;
         }
 
+    // ── per-thread lane vectorisation ─────────────────────────────────────
+    // The canonical reduce loop (one straight-line body that reads the item
+    // index and folds a U32 with +, no memory and no branches inside) runs two
+    // items per thread as uint2 lanes, summing the lanes at the end. This is
+    // the shape the hashcat-style MD5 block has; anything else prints scalar.
+
+    IRInsn* mslDefVal(IRValue* v)
+        {
+        if (v == (IRValue*)0) return (IRInsn*)0;
+        return (IRInsn*)_mDef.get((Hashable*)mslKey(v));
+        }
+    IRValue* mslPhiFrom(IRInsn* ph, IRBlock* from)
+        {
+        for (u32 k = (u32)0; k + (u32)1 < ph.ops().count(); k = k + (u32)2)
+            if (((IROperand*)ph.ops().get(k)).blk() == from)
+                {
+                IROperand* v = (IROperand*)ph.ops().get(k + (u32)1);
+                return v.kind() == (u8)OPK_USE ? v.val() : (IRValue*)0;
+                }
+        return (IRValue*)0;
+        }
+    // The one phi incoming from a block OTHER than `from` (the preheader edge).
+    IRValue* mslPhiNot(IRInsn* ph, IRBlock* from)
+        {
+        for (u32 k = (u32)0; k + (u32)1 < ph.ops().count(); k = k + (u32)2)
+            if (((IROperand*)ph.ops().get(k)).blk() != from)
+                {
+                IROperand* v = (IROperand*)ph.ops().get(k + (u32)1);
+                return v.kind() == (u8)OPK_USE ? v.val() : (IRValue*)0;
+                }
+        return (IRValue*)0;
+        }
+    // The ParChunk field a value loads, following one optional Trunc: for a
+    // value that is Trunc(Load(FieldAddr self #k)) or Load(FieldAddr self #k),
+    // returns k, else -1. This pins the induction start (lo, field 1), the
+    // bound (hi, field 2) and the reduction field.
+    i64 mslFieldVia(IRValue* v)
+        {
+        IRInsn* d = mslDefVal(v);
+        if (d == (IRInsn*)0) return (i64)-1;
+        if (d.op().equals(String.withCString("Trunc")))
+            {
+            IROperand* o = (IROperand*)d.ops().get((u32)0);
+            if (o.kind() != (u8)OPK_USE) return (i64)-1;
+            d = mslDefVal(o.val());
+            if (d == (IRInsn*)0) return (i64)-1;
+            }
+        if (!d.op().equals(String.withCString("Load"))) return (i64)-1;
+        IROperand* p = (IROperand*)d.ops().get((u32)0);
+        if (p.kind() != (u8)OPK_USE) return (i64)-1;
+        return mslSelfField(mslDefVal(p.val()));
+        }
+    bool mslLaneOp(String* op)
+        {
+        return op.equals(String.withCString("Const")) || op.equals(String.withCString("Add"))
+            || op.equals(String.withCString("Sub")) || op.equals(String.withCString("Mul"))
+            || op.equals(String.withCString("And")) || op.equals(String.withCString("Or"))
+            || op.equals(String.withCString("Xor")) || op.equals(String.withCString("Not"))
+            || op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr"))
+            || op.equals(String.withCString("AShr"));
+        }
+    bool mslSameVal(IRValue* a, IRValue* b)
+        {
+        return a != (IRValue*)0 && b != (IRValue*)0 && a.seq() == b.seq();
+        }
+    // Emit the body's kept instructions (all but the induction increment, the
+    // reduction fold and the loop compare) at `width` (2 uint2, 1 scalar) into
+    // `out`. The induction value is declared by the caller.
+    bool mslLaneEmit(IRBlock* body, IRValue* skA, IRValue* skB, IRValue* skC, u32 width, String* out)
+        {
+        _mVecW = width;
+        for (u32 i = (u32)0; i < body.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* ip = (IRInsn*)body.insns().get(i);
+            IRValue* r = ip.res();
+            if (r == (IRValue*)0 || mslSameVal(r, skA) || mslSameVal(r, skB) || mslSameVal(r, skC)) continue;
+            out.appendCString("    "); out.append(mslDecl(r));
+            }
+        for (u32 i = (u32)0; i < body.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* ip = (IRInsn*)body.insns().get(i);
+            IRValue* r = ip.res();
+            if (r != (IRValue*)0 && (mslSameVal(r, skA) || mslSameVal(r, skB) || mslSameVal(r, skC))) continue;
+            String* st = mslStatement(ip);
+            if (st == (String*)0) { _mVecW = (u32)0; return false; }
+            if (st.byteLength() > (u32)0) { out.appendCString("            "); out.append(st); out.appendCString("\n"); }
+            }
+        _mVecW = (u32)0;
+        return true;
+        }
+    // A value the body may use: one of the two phis, or defined by a body
+    // instruction. A use of anything else (a captured loop-invariant loaded in
+    // the preheader, say) is not available in the lane scaffold, so the loop is
+    // not vectorisable and falls back to the scalar kernel (bug: par_loop_capture).
+    bool mslLaneHas(IRValue* v, IRBlock* body, IRInsn* indPhi, IRInsn* redPhi)
+        {
+        if (v == (IRValue*)0) return true;
+        if (mslSameVal(v, indPhi.res()) || mslSameVal(v, redPhi.res())) return true;
+        for (u32 i = (u32)0; i < body.insns().count(); i = i + (u32)1)
+            if (mslSameVal(((IRInsn*)body.insns().get(i)).res(), v)) return true;
+        return false;
+        }
+    // Detect the canonical vectorisable reduce loop, setting the _ln* fields.
+    // Backend-independent (uses the IR helpers over _mDef, which every par
+    // printer populates through mslAnalyse). True when f is a single
+    // straight-line body that reads the item index over the whole chunk range
+    // and folds one U32 with +, no memory and no branches inside.
+    bool laneDetect(IRFunc* f)
+        {
+        // The loop body is the block whose CondBranch has an edge back to
+        // itself (loopRotate leaves the rotated loop this shape).
+        IRBlock* body = (IRBlock*)0;
+        for (u32 bi = (u32)0; bi < f.blocks().count(); bi = bi + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(bi);
+            IRInsn* t = bb.term();
+            if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() < (u32)3) continue;
+            if (((IROperand*)t.ops().get((u32)1)).blk() == bb || ((IROperand*)t.ops().get((u32)2)).blk() == bb)
+                { body = bb; break; }
+            }
+        if (body == (IRBlock*)0 || body.phis().count() != (u32)2) return false;
+        IRInsn* term = body.term();
+        if (((IROperand*)term.ops().get((u32)1)).blk() != body) return false;           // true edge loops back
+        IROperand* condOp = (IROperand*)term.ops().get((u32)0);
+        if (condOp.kind() != (u8)OPK_USE) return false;
+        IRInsn* cmp = mslDefVal(condOp.val());
+        if (cmp == (IRInsn*)0 || !cmp.op().equals(String.withCString("ICmp")) || !cmp.pred().equals(String.withCString("ULT"))) return false;
+        IROperand* icA = (IROperand*)cmp.ops().get((u32)0);
+        IROperand* icB = (IROperand*)cmp.ops().get((u32)1);
+        if (icA.kind() != (u8)OPK_USE || icB.kind() != (u8)OPK_USE) return false;
+        IRValue* indNext = icA.val();
+        IRValue* bound = icB.val();
+        IRInsn* incr = mslDefVal(indNext);
+        if (incr == (IRInsn*)0 || !incr.op().equals(String.withCString("Add"))) return false;
+        IROperand* a0 = (IROperand*)incr.ops().get((u32)0);
+        IROperand* a1 = (IROperand*)incr.ops().get((u32)1);
+        IRValue* indPhiVal = (IRValue*)0;
+        if (a0.kind() == (u8)OPK_USE && a1.kind() == (u8)OPK_IMMI && a1.imm() == (i64)1) indPhiVal = a0.val();
+        else if (a1.kind() == (u8)OPK_USE && a0.kind() == (u8)OPK_IMMI && a0.imm() == (i64)1) indPhiVal = a1.val();
+        else return false;
+        IRInsn* p0 = (IRInsn*)body.phis().get((u32)0);
+        IRInsn* p1 = (IRInsn*)body.phis().get((u32)1);
+        IRInsn* indPhi = (IRInsn*)0; IRInsn* redPhi = (IRInsn*)0;
+        if (mslSameVal(p0.res(), indPhiVal)) { indPhi = p0; redPhi = p1; }
+        else if (mslSameVal(p1.res(), indPhiVal)) { indPhi = p1; redPhi = p0; }
+        else return false;
+        if (!indPhi.res().ty().equals(String.withCString("U32")) || !redPhi.res().ty().equals(String.withCString("U32"))) return false;
+        // lo/hi must be exactly ParChunk's fields 1 and 2, since the emitted
+        // loop uses the kernel's own lo/hi.
+        if (mslFieldVia(mslPhiNot(indPhi, body)) != (i64)1) return false;               // induction starts at lo
+        if (mslFieldVia(bound) != (i64)2) return false;                                 // bound is hi
+        IRValue* redNext = mslPhiFrom(redPhi, body);
+        if (redNext == (IRValue*)0) return false;
+        i64 redFld = mslFieldVia(mslPhiNot(redPhi, body));
+        if (redFld < (i64)0) return false;
+        String* redOp = _mRedOps != (Map*)0 ? (String*)_mRedOps.get((Hashable*)String.withU32((u32)redFld)) : (String*)0;
+        if (redOp == (String*)0 || !redOp.equals(String.withCString("+"))) return false;
+        for (u32 i = (u32)0; i < body.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* ip = (IRInsn*)body.insns().get(i);
+            IRValue* r = ip.res();
+            if (r != (IRValue*)0 && (mslSameVal(r, indNext) || mslSameVal(r, cmp.res()))) continue;
+            if (!mslLaneOp(ip.op())) return false;
+            // Every input must be a lane value (a phi or a body result); a use
+            // of a value defined outside the body cannot be vectorised here.
+            for (u32 k = (u32)0; k < ip.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)ip.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && !mslLaneHas(o.val(), body, indPhi, redPhi)) return false;
+                }
+            }
+        _lnBody = body; _lnIndPhi = indPhi; _lnRedPhi = redPhi;
+        _lnRedNext = redNext; _lnIndNext = indNext; _lnCmpRes = cmp.res(); _lnRedOff = _mObj.offsetAt((u32)redFld);
+        return true;
+        }
+    String* mslLaneBody(IRFunc* f)
+        {
+        if (!laneDetect(f)) return (String*)0;
+        IRBlock* body = _lnBody;
+        String* indName = mslName(_lnIndPhi.res());
+        String* accName = mslName(_lnRedPhi.res());
+        String* nextName = mslName(_lnRedNext);
+        String* off = String.withU32(_lnRedOff);
+        String* b = new String();
+        b.appendCString("    uint2 _vacc = uint2(0);\n");
+        b.appendCString("    long _vb = lo;\n");
+        b.appendCString("    for (; _vb + 1 < hi; _vb += 2) {\n");
+        b.appendCString("        uint2 "); b.append(indName); b.appendCString(" = uint2(uint(_vb), uint(_vb + 1));\n");
+        b.appendCString("        uint2 "); b.append(accName); b.appendCString(" = _vacc;\n");
+        if (!mslLaneEmit(body, _lnIndNext, _lnCmpRes, (IRValue*)0, (u32)2, b)) return (String*)0;
+        b.appendCString("        _vacc = "); b.append(nextName); b.appendCString(";\n    }\n");
+        b.appendCString("    uint _vtot = *(thread uint*)(st + "); b.append(off); b.appendCString(") + _vacc.x + _vacc.y;\n");
+        b.appendCString("    if (_vb < hi) {\n");
+        b.appendCString("        uint "); b.append(indName); b.appendCString(" = uint(_vb);\n");
+        b.appendCString("        uint "); b.append(accName); b.appendCString(" = _vtot;\n");
+        if (!mslLaneEmit(body, _lnIndNext, _lnCmpRes, (IRValue*)0, (u32)1, b)) return (String*)0;
+        b.appendCString("        _vtot = "); b.append(nextName); b.appendCString(";\n    }\n");
+        b.appendCString("    *(thread uint*)(st + "); b.append(off); b.appendCString(") = _vtot;\n");
+        return b;
+        }
+
     String* parMsl(IRFunc* f)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
         _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0;
         _mHelper = false;
+        _mVecW = (u32)0;
         _mParams = (Map*)0;
         _mGlobals = new Array();
         _mGlobalOf = new Map();
@@ -15980,6 +16203,9 @@ class ClassInfo
         _mHelperNames = new Map();
         if (!mslBody(f, decls, body)) return (String*)0;
         if (_mFailed) return (String*)0;
+        // Two items per thread as uint2 lanes, where the body allows it; the
+        // header line, parameters and reduction tail below stay the same.
+        String* laneBody = mslLaneBody(f);
         // The header line the runtime reads, and the kernel's parameters.
         String* meta = String.withCString("// xcpar size=");
         meta.append(String.withU32(_mObj.size())); meta.appendCString(" lo="); meta.append(String.withU32(_mObj.offsetAt((u32)1)));
@@ -16079,19 +16305,24 @@ class ClassInfo
         out.appendCString("    long hi = min(lo + span[2], span[1]);\n");
         out.appendCString("    *(thread long*)(st + "); out.append(String.withU32(_mObj.offsetAt((u32)1))); out.appendCString(") = lo;\n");
         out.appendCString("    *(thread long*)(st + "); out.append(String.withU32(_mObj.offsetAt((u32)2))); out.appendCString(") = hi;\n");
-        out.append(decls);
-        String* structured = sStructured(f, "        ");
-        if (structured != (String*)0)
-            {
-            out.appendCString("    if (lo < hi) do {\n");
-            out.append(structured);
-            out.appendCString("    } while (false);\n");
-            }
+        if (laneBody != (String*)0)
+            out.append(laneBody);
         else
             {
-            out.appendCString("    uint pc = 0;\n    while (lo < hi && pc != 0xffffffffu) {\n        switch (pc) {\n");
-            out.append(body);
-            out.appendCString("        default: pc = 0xffffffffu; continue;\n        }\n    }\n");
+            out.append(decls);
+            String* structured = sStructured(f, "        ");
+            if (structured != (String*)0)
+                {
+                out.appendCString("    if (lo < hi) do {\n");
+                out.append(structured);
+                out.appendCString("    } while (false);\n");
+                }
+            else
+                {
+                out.appendCString("    uint pc = 0;\n    while (lo < hi && pc != 0xffffffffu) {\n        switch (pc) {\n");
+                out.append(body);
+                out.appendCString("        default: pc = 0xffffffffu; continue;\n        }\n    }\n");
+                }
             }
         if (mDevred)
             // Every thread reaches every barrier: one past the range holds its
