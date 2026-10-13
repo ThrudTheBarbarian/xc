@@ -3,6 +3,47 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.8 — one `par` block, every device at once
+
+A `par` block no longer runs on a single device. It is cut into tiles handed to
+every GPU the machine has, and to the CPU's cores, at the same time, each worker
+taking more of the block as it proves faster. Two graphics cards share a block;
+a block can even run on one NVIDIA card through CUDA beside another through
+Vulkan, on a single machine. `auto` measures the choices for each block — the
+CPU, one GPU, every GPU, or every device together — and keeps the fastest.
+
+### New
+
+- **`par` across several devices**: a block is split into tiles on one queue,
+  handed out by earliest finish and folded back in order, so every GPU and the
+  CPU work on it together. It gives the same answer on CUDA, Vulkan, Metal and
+  the CPU, and across a mixed-vendor pair of cards.
+- **`auto` chooses the device set per block**: it times the CPU, one GPU, every
+  GPU and every device, learns which is fastest, and remembers it for the
+  program (keyed by the machine's hardware). `XC_PAR=gpus` and `XC_PAR=all`,
+  `par.<block> = gpus`/`all`, and `XC_PAR_WORKERS=cuda,vulkan,cpu` force a set.
+- **A GPU reduce runs two items per thread** as `uint2` lanes on Metal, where
+  the block's body is a straight-line integer fold over the item index (the
+  shape the hashcat MD5 kernel has).
+- **Windows C libraries in a DLL**: a DLL bundles a C library built by gcc
+  (a glibc link takes libgcc), and HTTPS on Windows verifies against the
+  system certificate store.
+- **The benchmark visualiser for Windows**.
+
+### Faster
+
+- **`par` on more than one GPU**: a compute-heavy block scales across the cards.
+  The hashcat MD5 workload (64M candidates) on the Windows host runs in 1.12 ms
+  on one RTX 5080, 0.90 ms on the 5080 and an RTX 3090 together, and 1.02 ms on
+  the 5080 through CUDA beside the 3090 through Vulkan; the CPU alone takes
+  297 ms. `auto` picks the two-GPU set (0.98 ms) and leaves the CPU out, because
+  on this block the CPU only slows the set down.
+- **`auto` picks the CPU where the GPUs cannot win**: `saxpy` moves more memory
+  than it computes, so the CPU's own DRAM beats sending the data over PCIe
+  (3.1 ms on the CPU, 15–17 ms on one GPU); `auto` keeps it on the CPU. Two GPUs
+  still halve the one-GPU time (7.9 ms), which is the scaling, not a win over the
+  CPU for this block.
+
 ## Version 0.75 — faster code on x86-64 and arm64, and GPU blocks that fold on the device
 
 The x86-64 code generator closes most of its gap to clang and GCC: loops

@@ -158,53 +158,68 @@ it stays a vectorised loop.)
 ## Parallel blocks and the GPU
 
 A [`par` block](/compiler/language/par/) runs a loop's iterations at once,
-across every CPU thread or on the GPU (from 0.7). The GPU is reached through:
+across every CPU thread, on the GPU (from 0.7), or across several devices at
+once (from 0.8): the block is cut into tiles handed to every GPU the machine
+has, and to the CPU, together. The GPU is reached through:
 
 - **Metal** on Apple silicon;
 - **CUDA** on an NVIDIA GPU under Windows;
 - **Vulkan** on Linux, Windows and Android (from 0.72);
 - **WebGPU** in a browser (from 0.72).
 
-Four programs in `benchmark/par` measure it:
+Six programs in `benchmark/par` measure it:
 
 - `mandelbrot`: a 2048×2048 escape-time image, at most 256 iterations a pixel;
 - `perlin`: 2048×2048 improved noise, four octaves;
 - `nbody`: the force on each of 8192 bodies from all the others;
-- `saxpy`: `y = a·x + y` over 16 million integers, with a sum.
+- `saxpy`: `y = a·x + y` over 16 million integers, with a sum;
+- `md5`, `md5_mask`: the hashcat MD5 workload, hashing 64 million candidates
+  through the full 64-round compression and summing the digests.
 
-Each runs its block eight times and reports the best run, in four modes: *one
-thread* (`XC_PAR=cpu XC_PAR_THREADS=1`), *all threads* (`XC_PAR=cpu`), *GPU*
-(`XC_PAR=gpu`) and `auto`, the default, which times the CPU and the GPU and
-keeps the faster (from 0.73 it remembers the choice, per program and per
-machine, so later runs do not measure again). Every mode's checksum must agree. On Windows *GPU* is CUDA
-and *Vulkan* the same card through Vulkan (`XC_PAR_GPU=vulkan`).
+Each runs its block eight times and reports the best run. The single-device
+modes are *one thread* (`XC_PAR=cpu XC_PAR_THREADS=1`), *all threads*
+(`XC_PAR=cpu`) and *GPU* (`XC_PAR=gpu`). From 0.8 a block can also run on *every
+GPU* (`XC_PAR=gpus`) or on *every device* (`XC_PAR=all`), and `XC_PAR_WORKERS=…`
+names an exact set (`cuda`, `vulkan`, `metal`, `cpu`). `auto`, the default,
+times the sets the machine can form and keeps the fastest; from 0.73 it
+remembers the choice, per program and per machine, so later runs do not measure
+again. Every mode's checksum must agree. On Windows *GPU* is CUDA and *Vulkan*
+the same work through Vulkan (`XC_PAR_GPU=vulkan`).
 
 **Apple MacBook Pro, M4 Max (12 performance and 4 efficiency cores), its GPU through Metal** (ms; best of eight runs)
 
 | benchmark | one thread | all threads | GPU | `auto` | GPU vs all threads | GPU's first run |
 |---|---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 444 | 92.1 | 1.1 | 0.6 | 85× faster | 22.8 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 19.4 | 2.1 | 1.1 | 1.0 | 2.00× faster | 24.6 |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 78.2 | 9.0 | 1.2 | 1.4 | 7.8× faster | 25.9 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.5 | 0.6 | 12.9 | 0.6 | 22× slower | 34.7 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 444 | 93.3 | 1.1 | 1.4 | 85× faster | 22.8 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 18.8 | 2.1 | 1.1 | 1.1 | 1.9× faster | 49.6 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 79.4 | 9.0 | 1.4 | 1.4 | 6.4× faster | 116 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.4 | 0.5 | 11.0 | 0.6 | 20× slower | 31.8 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 6901 | 599 | 4.2 | 4.2 | 143× faster | 110 |
+| [`md5_mask`](/compiler/benchmark-sources/#md5) | 5434 | 467 | 3.6 | 4.1 | 130× faster | 38.0 |
 
 **AMD Ryzen 9 9955HX (16 cores, 32 threads), Linux, its integrated Radeon 610M (2 compute units, 128 shader lanes) through Vulkan** (ms; best of eight runs)
 
 | benchmark | one thread | all threads | GPU | `auto` | GPU vs all threads | GPU's first run |
 |---|---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 395 | 40.0 | 9.7 | 9.7 | 4.1× faster | 29.4 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 6.0 | 0.7 | 3.4 | 0.7 | 4.9× slower | 22.5 |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 299 | 15.0 | 5.8 | 5.8 | 2.6× faster | 30.8 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.6 | 2.7 | 22.6 | 2.7 | 8.4× slower | 59.1 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 395 | 38.7 | 9.7 | 9.7 | 4.0× faster | 31.7 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 5.9 | 0.8 | 3.4 | 0.7 | 4.3× slower | 22.0 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 299 | 17.2 | 5.8 | 5.8 | 3.0× faster | 28.9 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.8 | 2.4 | 21.9 | 2.4 | 9.1× slower | 55.6 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 6405 | 250 | 107 | 108 | 2.3× faster | 143 |
+| [`md5_mask`](/compiler/benchmark-sources/#md5) | 5142 | 209 | 89.1 | 88.7 | 2.3× faster | 119 |
 
-**AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 through CUDA and an RTX 3090 through Vulkan** (ms; best of eight runs)
+**AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 (PCIe ×8 Gen5) and an RTX 3090 (×8 Gen4), each reached through CUDA and the 3090 also through Vulkan** (ms; best of eight runs). The GPU-heavy `mandelbrot`, `perlin` and `nbody` each finish in well under a millisecond on one card, where `auto` keeps them; the two benchmarks that show the device sets apart are the memory-bound `saxpy` and the compute-bound `md5`:
 
-| benchmark | one thread | all threads | GPU | Vulkan | `auto` | GPU vs all threads | GPU's first run | Vulkan's first run |
-|---|---|---|---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 445 | 47.3 | 0.2 | 0.3 | 0.2 | 301× faster | 113 | 137 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 142 | 6.1 | 0.4 | 0.6 | 0.4 | 14.1× faster | 146 | 147 |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 365 | 19.7 | 0.6 | 1.1 | 0.6 | 33× faster | 116 | 136 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 5.4 | 6.3 | 20.7 | 30.5 | 6.6 | 3.3× slower | 141 | 174 |
+| device set | `saxpy` (16M) | `md5` (64M) |
+|---|---|---|
+| CPU, all cores | 3.1 | 297 |
+| RTX 5080, CUDA | 14.9 | 1.12 |
+| RTX 3090, CUDA | 16.3 | 1.85 |
+| RTX 3090, Vulkan | 17.1 | 1.96 |
+| 5080 + 3090, both CUDA | 7.9 | 0.90 |
+| 5080 CUDA + 3090 Vulkan | 9.4 | 1.02 |
+| every device (both GPUs + CPU) | 4.8 | 146 |
+| `auto` | 3.5 | 0.98 |
 
 **Chrome on the Apple M4 Max: wasm32 (one thread) and WebGPU (from 0.73)** (ms; best of eight runs)
 
@@ -218,28 +233,38 @@ and *Vulkan* the same card through Vulkan (`XC_PAR_GPU=vulkan`).
 
 What the tables show:
 
-- **A discrete GPU wins by a wide margin** on the three programs that do real
-  work per element, and `auto` finds that and uses it.
-- **`saxpy` stays on the CPU.** It does one multiply-add for every eight bytes
-  it moves, so copying to and from the GPU outweighs the arithmetic, and `auto`
-  keeps it on the CPU everywhere.
-- **The Ryzen's integrated Radeon** has 128 shader lanes against the CPU's 32
-  threads. It just beats them on `mandelbrot` and `nbody` and loses on the
-  other two; its copies of `saxpy`'s arrays are slower still, because the
-  runtime does not yet use the CPU's cache for them there.
-- **Vulkan against CUDA:** the RTX 3090 through Vulkan against the RTX 5080 through CUDA, two cards, so this compares the APIs only roughly: Vulkan is slower on `mandelbrot` (0.3 ms against 0.2) and `nbody` (0.6 ms against 0.4) and `perlin` (1.1 ms against 0.6) and `saxpy` (30.5 ms against 20.7).
+- **A discrete GPU wins by a wide margin** on the programs that do real work per
+  element. `md5` hashes 64 million candidates in 1.1 ms on one RTX 5080 against
+  297 ms on sixteen CPU cores, and `mandelbrot`, `perlin` and `nbody` each finish
+  in under a millisecond; `auto` finds this and uses it.
+- **`saxpy` stays on the CPU.** It does one multiply-add for every eight bytes it
+  moves, so copying to and from the GPU outweighs the arithmetic, and `auto`
+  keeps it on the CPU everywhere (3.1 ms, against 15 to 17 ms on one GPU).
+- **Two cards share a block.** On the compute-bound `md5`, a second card takes
+  the one-GPU time from 1.12 ms to 0.90 ms; an NVIDIA card through CUDA beside a
+  second NVIDIA card through Vulkan does it in 1.02 ms, so a block spans two GPUs
+  and two graphics APIs at once. Even `saxpy`, which no GPU wins, splits across
+  the two cards as the sum of their PCIe links (7.9 ms against 15).
+- **`auto` chooses the device set, not just one device.** It leaves the CPU out
+  of `md5` (every device together, with the 265×-slower CPU in the set, takes
+  146 ms, and `auto` reaches 0.98 ms without it) and keeps `saxpy` on the CPU
+  alone. The choice is per block and remembered per program and machine.
+- **The integrated Radeon** on the Linux host has 128 shader lanes against the
+  CPU's 32 threads: it wins `mandelbrot`, `perlin` and `md5` and loses `nbody`
+  and `saxpy`, where `auto` keeps the CPU.
 - **The first run** carries one-off costs (building the kernel, and on NVIDIA
   creating the driver context and compiling the PTX or SPIR-V), so it is shown
-  apart: a few tens of milliseconds on Metal and the integrated GPU, and on the
-  3090 113 to 146 ms through CUDA and 136 to 174 ms through Vulkan. `auto` pays it
-  once, while it measures.
+  apart: a few tens of milliseconds on Metal and the integrated GPU, over a
+  hundred on the discrete NVIDIA cards. `auto` pays it once, while it measures.
 
 ## Release to release
 
 How fast xc's code is in each release, relative to 0.62: above 1× is faster.
 The thin lines are single benchmarks (labelled where they moved by more than
 twelve percent), the thick line the geometric mean (without `matrix_mul_f32`). Releases shown: 0.62, 0.63, 0.64, 0.65, 0.66, 0.7, 0.71, 0.72, 0.73, 0.74, 0.75. `arc_alloc`, `method_call` changed in
-0.64's benchmark set and are left out of this history.
+0.64's benchmark set and are left out of this history. 0.8 is a `par` runtime
+release and generates the same CPU code as 0.75, so it is not plotted again
+here; its gains are the GPU and multi-device figures above.
 
 <figure class="xc-chart"><svg viewBox="0 0 720 300" width="100%" role="img" aria-label="arm64: xc's speed relative to 0.62" style="max-width:720px;height:auto;font:12px system-ui,sans-serif"><title>arm64: xc's speed relative to 0.62</title><line x1="60" y1="262.0" x2="560" y2="262.0" stroke="currentColor" stroke-opacity="0.15"/><text x="54" y="266.0" text-anchor="end" fill="currentColor" fill-opacity="0.75">0.80×</text><line x1="60" y1="257.4" x2="560" y2="257.4" stroke="currentColor" stroke-opacity="0.15"/><text x="54" y="261.4" text-anchor="end" fill="currentColor" fill-opacity="0.75">0.90×</text><line x1="60" y1="253.3" x2="560" y2="253.3" stroke="currentColor" stroke-opacity="0.55"/><text x="54" y="257.3" text-anchor="end" fill="currentColor" fill-opacity="0.75">1.00×</text><line x1="60" y1="249.6" x2="560" y2="249.6" stroke="currentColor" stroke-opacity="0.15"/><text x="54" y="253.6" text-anchor="end" fill="currentColor" fill-opacity="0.75">1.10×</text><line x1="60" y1="244.6" x2="560" y2="244.6" stroke="currentColor" stroke-opacity="0.15"/><text x="54" y="248.6" text-anchor="end" fill="currentColor" fill-opacity="0.75">1.25×</text><line x1="60" y1="237.6" x2="560" y2="237.6" stroke="currentColor" stroke-opacity="0.15"/><text x="54" y="241.6" text-anchor="end" fill="currentColor" fill-opacity="0.75">1.50×</text><line x1="60" y1="226.4" x2="560" y2="226.4" stroke="currentColor" stroke-opacity="0.15"/><text x="54" y="230.4" text-anchor="end" fill="currentColor" fill-opacity="0.75">2.00×</text><line x1="60" y1="210.6" x2="560" y2="210.6" stroke="currentColor" stroke-opacity="0.15"/><text x="54" y="214.6" text-anchor="end" fill="currentColor" fill-opacity="0.75">3.00×</text><text x="60.0" y="282" text-anchor="middle" fill="currentColor">0.62</text><text x="110.0" y="282" text-anchor="middle" fill="currentColor">0.63</text><text x="160.0" y="282" text-anchor="middle" fill="currentColor">0.64</text><text x="210.0" y="282" text-anchor="middle" fill="currentColor">0.65</text><text x="260.0" y="282" text-anchor="middle" fill="currentColor">0.66</text><text x="310.0" y="282" text-anchor="middle" fill="currentColor">0.7</text><text x="360.0" y="282" text-anchor="middle" fill="currentColor">0.71</text><text x="410.0" y="282" text-anchor="middle" fill="currentColor">0.72</text><text x="460.0" y="282" text-anchor="middle" fill="currentColor">0.73</text><text x="510.0" y="282" text-anchor="middle" fill="currentColor">0.74</text><text x="560.0" y="282" text-anchor="middle" fill="currentColor">0.75</text><polyline points="60.0,253.3 110.0,253.5 160.0,252.3 210.0,229.1 260.0,229.3 310.0,231.2 360.0,230.8 410.0,229.9 460.0,229.8 510.0,229.5 560.0,230.6" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>arc_array: 1.00, 1.00, 1.03, 1.86, 1.85, 1.77, 1.79, 1.83, 1.83, 1.85, 1.79</title></polyline><polyline points="60.0,253.3 110.0,252.5 160.0,247.9 210.0,235.2 260.0,234.5 310.0,234.9 360.0,236.9 410.0,234.4 460.0,237.5 510.0,234.9 560.0,238.0" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>array_map: 1.00, 1.02, 1.15, 1.59, 1.62, 1.61, 1.52, 1.63, 1.50, 1.61, 1.48</title></polyline><polyline points="60.0,253.3 110.0,253.1 160.0,252.4 210.0,251.8 260.0,252.1 310.0,253.0 360.0,252.7 410.0,252.0 460.0,247.1 510.0,246.8 560.0,248.1" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>array_sum: 1.00, 1.01, 1.02, 1.04, 1.03, 1.01, 1.02, 1.03, 1.17, 1.18, 1.14</title></polyline><polyline points="60.0,253.3 110.0,253.1 160.0,252.2 210.0,243.9 260.0,244.3 310.0,247.2 360.0,245.0 410.0,244.1 460.0,244.2 510.0,243.8 560.0,246.8" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>bit_ops: 1.00, 1.01, 1.03, 1.27, 1.26, 1.17, 1.24, 1.27, 1.26, 1.28, 1.18</title></polyline><polyline points="60.0,253.3 110.0,253.1 160.0,252.3 210.0,244.6 260.0,245.4 310.0,244.8 360.0,245.9 410.0,245.4 460.0,245.1 510.0,245.2 560.0,246.9" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>branch_mix: 1.00, 1.01, 1.03, 1.25, 1.22, 1.24, 1.21, 1.23, 1.23, 1.23, 1.18</title></polyline><polyline points="60.0,253.3 110.0,253.1 160.0,252.1 210.0,249.1 260.0,249.5 310.0,252.4 360.0,250.4 410.0,250.0 460.0,250.3 510.0,250.4 560.0,251.8" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>call_depth: 1.00, 1.01, 1.03, 1.11, 1.10, 1.02, 1.08, 1.09, 1.08, 1.08, 1.04</title></polyline><polyline points="60.0,253.3 110.0,255.4 160.0,254.8 210.0,243.2 260.0,242.7 310.0,243.7 360.0,242.9 410.0,243.0 460.0,243.2 510.0,243.0 560.0,243.7" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>float_math: 1.00, 0.95, 0.96, 1.30, 1.32, 1.28, 1.31, 1.30, 1.30, 1.30, 1.28</title></polyline><polyline points="60.0,253.3 110.0,256.0 160.0,254.9 210.0,249.9 260.0,249.5 310.0,249.7 360.0,250.0 410.0,249.7 460.0,249.8 510.0,249.9 560.0,249.6" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>hash_mix: 1.00, 0.93, 0.96, 1.09, 1.10, 1.10, 1.09, 1.10, 1.10, 1.09, 1.10</title></polyline><polyline points="60.0,253.3 110.0,253.6 160.0,252.1 210.0,244.2 260.0,243.7 310.0,243.9 360.0,244.1 410.0,243.7 460.0,243.9 510.0,243.8 560.0,244.7" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>int_accum: 1.00, 0.99, 1.03, 1.26, 1.28, 1.27, 1.27, 1.28, 1.27, 1.28, 1.25</title></polyline><polyline points="60.0,253.3 110.0,253.3 160.0,252.4 210.0,250.3 260.0,250.7 310.0,251.4 360.0,251.3 410.0,250.7 460.0,250.8 510.0,250.4 560.0,252.1" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>int_muldiv: 1.00, 1.00, 1.02, 1.08, 1.07, 1.05, 1.05, 1.07, 1.07, 1.08, 1.03</title></polyline><polyline points="60.0,253.3 110.0,253.3 160.0,252.2 210.0,192.6 260.0,192.7 310.0,192.9 360.0,193.2 410.0,193.2 460.0,171.9 510.0,171.1 560.0,173.1" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>matrix_mul: 1.00, 1.00, 1.03, 4.76, 4.75, 4.73, 4.70, 4.69, 8.12, 8.29, 7.87</title></polyline><polyline points="60.0,253.3 110.0,252.8 160.0,252.9 210.0,232.3 260.0,232.7 310.0,233.5 360.0,59.0 410.0,25.4 460.0,25.5 510.0,25.5 560.0,25.3" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>matrix_mul_f32: 1.00, 1.01, 1.01, 1.72, 1.70, 1.66, 147.84, 351.04, 349.66, 350.32, 351.44</title></polyline><polyline points="60.0,253.3 110.0,252.8 160.0,251.4 210.0,230.6 260.0,230.7 310.0,230.8 360.0,231.1 410.0,230.5 460.0,231.0 510.0,230.6 560.0,230.9" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>mem_copy: 1.00, 1.01, 1.05, 1.79, 1.79, 1.79, 1.77, 1.80, 1.78, 1.80, 1.78</title></polyline><polyline points="60.0,253.3 110.0,253.6 160.0,252.5 210.0,223.9 260.0,223.5 310.0,224.1 360.0,224.2 410.0,223.8 460.0,216.7 510.0,216.0 560.0,217.4" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>poly_dispatch: 1.00, 0.99, 1.02, 2.13, 2.15, 2.12, 2.11, 2.14, 2.56, 2.61, 2.52</title></polyline><polyline points="60.0,253.3 110.0,253.4 160.0,252.0 210.0,248.8 260.0,248.4 310.0,248.5 360.0,248.6 410.0,251.4 460.0,248.5 510.0,248.4 560.0,249.2" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>sieve: 1.00, 1.00, 1.03, 1.12, 1.14, 1.13, 1.13, 1.05, 1.13, 1.14, 1.11</title></polyline><polyline points="60.0,253.3 110.0,253.4 160.0,253.1 210.0,246.3 260.0,245.9 310.0,247.6 360.0,248.1 410.0,247.9 460.0,244.3 510.0,242.7 560.0,244.4" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>sort_small: 1.00, 1.00, 1.01, 1.20, 1.21, 1.16, 1.14, 1.15, 1.26, 1.31, 1.26</title></polyline><polyline points="60.0,253.3 110.0,253.6 160.0,251.2 210.0,250.4 260.0,249.9 310.0,250.4 360.0,251.0 410.0,250.5 460.0,251.0 510.0,249.9 560.0,251.5" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>string_scan: 1.00, 0.99, 1.05, 1.08, 1.09, 1.08, 1.06, 1.07, 1.06, 1.09, 1.05</title></polyline><polyline points="60.0,253.3 110.0,253.5 160.0,250.7 210.0,227.8 260.0,227.5 310.0,228.2 360.0,228.8 410.0,228.2 460.0,228.4 510.0,227.8 560.0,229.1" fill="none" stroke="currentColor" stroke-opacity="0.28" stroke-width="1.2"><title>struct_copy: 1.00, 1.00, 1.07, 1.93, 1.94, 1.91, 1.88, 1.91, 1.90, 1.93, 1.86</title></polyline><polyline points="60.0,253.3 110.0,253.5 160.0,252.1 210.0,238.9 260.0,238.8 310.0,239.7 360.0,239.7 410.0,239.3 460.0,237.3 510.0,236.7 560.0,238.1" fill="none" stroke="#3b82f6" stroke-width="3"/><circle cx="60.0" cy="253.3" r="4" fill="#3b82f6"/><text x="60.0" y="244.3" text-anchor="middle" fill="#3b82f6" style="font-weight:600">1.00</text><circle cx="110.0" cy="253.5" r="4" fill="#3b82f6"/><text x="110.0" y="244.5" text-anchor="middle" fill="#3b82f6" style="font-weight:600">0.99</text><circle cx="160.0" cy="252.1" r="4" fill="#3b82f6"/><text x="160.0" y="243.1" text-anchor="middle" fill="#3b82f6" style="font-weight:600">1.03</text><circle cx="210.0" cy="238.9" r="4" fill="#3b82f6"/><text x="210.0" y="229.9" text-anchor="middle" fill="#3b82f6" style="font-weight:600">1.45</text><circle cx="260.0" cy="238.8" r="4" fill="#3b82f6"/><text x="260.0" y="229.8" text-anchor="middle" fill="#3b82f6" style="font-weight:600">1.45</text><circle cx="310.0" cy="239.7" r="4" fill="#3b82f6"/><text x="310.0" y="230.7" text-anchor="middle" fill="#3b82f6" style="font-weight:600">1.42</text><circle cx="360.0" cy="239.7" r="4" fill="#3b82f6"/><text x="360.0" y="230.7" text-anchor="middle" fill="#3b82f6" style="font-weight:600">1.42</text><circle cx="410.0" cy="239.3" r="4" fill="#3b82f6"/><text x="410.0" y="230.3" text-anchor="middle" fill="#3b82f6" style="font-weight:600">1.43</text><circle cx="460.0" cy="237.3" r="4" fill="#3b82f6"/><text x="460.0" y="228.3" text-anchor="middle" fill="#3b82f6" style="font-weight:600">1.51</text><circle cx="510.0" cy="236.7" r="4" fill="#3b82f6"/><text x="510.0" y="227.7" text-anchor="middle" fill="#3b82f6" style="font-weight:600">1.53</text><circle cx="560.0" cy="238.1" r="4" fill="#3b82f6"/><text x="560.0" y="229.1" text-anchor="middle" fill="#3b82f6" style="font-weight:600">1.48</text><text x="568" y="29.3" fill="currentColor" fill-opacity="0.8" style="font-family:ui-monospace,monospace">matrix_mul_f32 351.44×</text><text x="568" y="177.1" fill="currentColor" fill-opacity="0.8" style="font-family:ui-monospace,monospace">matrix_mul 7.87×</text><text x="568" y="221.4" fill="currentColor" fill-opacity="0.8" style="font-family:ui-monospace,monospace">poly_dispatch 2.52×</text><text x="568" y="234.4" fill="currentColor" fill-opacity="0.8" style="font-family:ui-monospace,monospace">struct_copy 1.86×</text><text x="568" y="247.4" fill="currentColor" fill-opacity="0.8" style="font-family:ui-monospace,monospace">arc_array 1.79×</text><text x="568" y="260.4" fill="currentColor" fill-opacity="0.8" style="font-family:ui-monospace,monospace">mem_copy 1.78×</text><text x="568" y="273.4" fill="currentColor" fill-opacity="0.8" style="font-family:ui-monospace,monospace">array_map 1.48×</text><text x="568" y="286.4" fill="currentColor" fill-opacity="0.8" style="font-family:ui-monospace,monospace">float_math 1.28×</text><text x="568" y="299.4" fill="currentColor" fill-opacity="0.8" style="font-family:ui-monospace,monospace">sort_small 1.26×</text><text x="568" y="312.4" fill="currentColor" fill-opacity="0.8" style="font-family:ui-monospace,monospace">int_accum 1.25×</text><text x="568" y="325.4" fill="currentColor" fill-opacity="0.8" style="font-family:ui-monospace,monospace">bit_ops 1.18×</text><text x="568" y="338.4" fill="currentColor" fill-opacity="0.8" style="font-family:ui-monospace,monospace">branch_mix 1.18×</text><text x="568" y="351.4" fill="currentColor" fill-opacity="0.8" style="font-family:ui-monospace,monospace">array_sum 1.14×</text><text x="64" y="36" fill="#3b82f6">geometric mean</text></svg><figcaption>arm64: xc's speed relative to 0.62</figcaption></figure>
 
