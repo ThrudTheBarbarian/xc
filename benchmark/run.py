@@ -131,6 +131,8 @@ def toolchains(host):
     tc = {"xcc": COMPILER_VERSION,
           "arm64": {"clang": first_line("clang++ --version"),
                     "swiftc": first_line("swiftc --version 2>&1")}}
+    if gpp():
+        tc["arm64"]["gcc"] = first_line(gpp() + " --version")
     if host:
         tc["x86_64"] = {"clang": first_line("clang++ --version", host),
                         "gcc": first_line("g++ --version", host),
@@ -291,6 +293,29 @@ def compile_cpp(name, opt, out):
     return r.returncode == 0, (r.stderr or r.stdout)
 
 
+_GPP = None
+def gpp():
+    """Real GCC on this host: the Homebrew g++-NN (the bare `g++` on macOS is
+    Apple clang). Highest version wins; None if no real GCC is installed."""
+    global _GPP
+    if _GPP is None:
+        import glob
+        c = sorted(glob.glob("/opt/homebrew/bin/g++-[0-9]*"), reverse=True) or \
+            sorted(glob.glob("/usr/local/bin/g++-[0-9]*"), reverse=True)
+        _GPP = c[0] if c else ""
+    return _GPP
+
+
+def compile_gcc(name, opt, out):
+    g = gpp()
+    if not g:
+        return False, "no real GCC (Homebrew g++-NN) on this host"
+    cmd = [g, "-std=c++17", "-" + opt, "-mcpu=native", "-I", SRC,
+           "-o", out, os.path.join(SRC, name + ".cpp")]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return r.returncode == 0, (r.stderr or r.stdout)
+
+
 def swift_opt(opt):
     """swiftc has -Onone and -O; every optimising level maps to -O. Each
     program is an @main struct (-parse-as-library), so its counters are locals
@@ -377,6 +402,8 @@ def main():
     results, failures, mismatches = {}, [], []
     langs = [("xc", compile_xc), ("objc", compile_objc),
              ("cpp", compile_cpp), ("swift", compile_swift)]
+    if gpp():
+        langs.append(("gcc", compile_gcc))   # real GCC on this host (macOS: Homebrew g++)
     host = env.get("XTC_LINUX_HOST")
     if host:
         langs.append(("xc_x86_64", compile_xc_x86))

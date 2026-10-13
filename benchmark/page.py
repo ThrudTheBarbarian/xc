@@ -24,10 +24,10 @@ SOURCES_PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "
 SOURCES_URL = "/compiler/benchmark-sources/"
 SRC_FILES = (("xc", "xc", "c"), ("m", "Objective-C", "objc"), ("cpp", "C++", "cpp"), ("swift", "Swift", "swift"))
 
-# "gcc" is the C++ source built with GCC on the Linux host; the arm64 side has
-# no figure for it (every reader of that column is an x86-64 Linux reader), and
-# releases before 0.74 measured no GCC at all, so each use guards for a
-# missing entry.
+# "gcc" is the C++ source built with GCC: on the Linux host (g++), and from 0.8
+# on the Mac too (Homebrew g++-NN). Releases before 0.74 measured no GCC at all,
+# and a run may still lack it on a machine without a real GCC, so each use
+# guards for a missing entry.
 LANGS = (("objc", "Objective-C", "#d4a017"), ("cpp", "C++ (clang)", "#3b82f6"),
          ("gcc", "C++ (GCC)", "#16a34a"), ("swift", "Swift", "#e5534b"))
 PLATFORMS = (("arm64", ""), ("x86-64", "_x86_64"))
@@ -63,7 +63,7 @@ def toolchain_notes(v):
         m = re.search(r"Swift version (\d[\d.]*)", s)
         if m:
             return "Swift " + m.group(1)
-        m = re.search(r"^g\+\+ .*?(\d+\.\d+\.\d+)\s*$", s)
+        m = re.search(r"^g\+\+(?:-\d+)? .*?(\d+\.\d+\.\d+)\s*$", s)
         if m:
             return "GCC " + m.group(1)
         m = re.search(r"^(Apple|Ubuntu)? ?clang version (\d[\d.]*)", s)
@@ -71,7 +71,7 @@ def toolchain_notes(v):
             return ("Apple clang " if m.group(1) == "Apple" else "clang ") + m.group(2)
         return s
     out = {}
-    for plat, order in (("arm64", ("clang", "swiftc")), ("x86_64", ("gcc", "clang", "swiftc"))):
+    for plat, order in (("arm64", ("clang", "gcc", "swiftc")), ("x86_64", ("gcc", "clang", "swiftc"))):
         names = [short(tc.get(plat, {}).get(k)) for k in order]
         names = [n for n in names if n]
         out[plat] = ("; " + ", ".join(names[:-1]) + " and " + names[-1]) if len(names) > 1 else ("; " + names[0] if names else "")
@@ -610,8 +610,8 @@ with the same algorithm and the same data. All are built with optimisation
 checksum, and a run only counts if all four checksums agree. Every program, in
 all four languages, is on the [benchmark sources](/compiler/benchmark-sources/)
 page; each benchmark's name below links to its own. On x86-64 the C++ source
-is built twice, with clang and with GCC (`g++ -O3`), so the Linux figures carry
-a column for each compiler.
+is built twice, with clang and with GCC (`g++ -O3`), on both targets, so each
+carries a column for each C++ compiler.
 
 Each figure is measured with the released {release} `xcc` on two machines:
 
