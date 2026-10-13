@@ -8,6 +8,7 @@
 #import "Par.xc"
 #import "Sem.xc"
 #import "Atomic.xc"
+#import "Mutex.xc"
 
 class ParTile : Object
     {
@@ -118,6 +119,87 @@ class ParCpuLane : Object
         }
     }
 
+// The lanes, made once for the process and shared by the CPU worker and the
+// direct CPU path (Par.runCpu): a thread spawned per run cost more than a
+// small block's work.
+Array* gParLanes;
+u32 gParLanesBusy;
+Mutex* gParLanesLock;   // held by whoever runs on the lanes; a loser spawns
+
+class ParCpuLanes
+    {
+    static Mutex* lock(void)
+        {
+        if (gParLanesLock == (Mutex*)0)
+            gParLanesLock = new Mutex();
+        return gParLanesLock;
+        }
+    static Array* lanes(void)
+        {
+        if (gParLanes == (Array*)0)
+            {
+            gParLanes = new Array();
+            i32 n = Par.threads();
+            for (i32 i = (i32)0; i < n; i = i + (i32)1)
+                {
+                ParCpuLane* lane = new ParCpuLane();
+                lane.start();
+                gParLanes.add((Object*)lane);
+                }
+            }
+        return gParLanes;
+        }
+
+    // The direct path: [lo, hi) split across the lanes, the calling thread
+    // taking the first chunk on `proto` itself, the lanes' chunks merged in
+    // order. False when the lanes are taken (a block inside a tile, or a
+    // run on the queue): the caller spawns as before.
+    static bool run(ParChunk* proto, i64 lo, i64 hi, i32 k)
+        {
+        if (gParLanesBusy > (u32)0 || !ParCpuLanes.lock().tryLock())
+            return false;
+        Array* ls = ParCpuLanes.lanes();
+        if ((u32)k > ls.count() + (u32)1)
+            k = (i32)(ls.count() + (u32)1);
+        if (k <= (i32)1)
+            {
+            ParCpuLanes.lock().unlock();
+            return false;
+            }
+        i64 n = hi - lo;
+        gParLanesBusy = (u32)(k - (i32)1);
+        Array* chunks = new Array();
+        for (i32 j = (i32)1; j < k; j = j + (i32)1)
+            {
+            ParCpuLane* lane = (ParCpuLane*)ls.get((u32)(j - (i32)1));
+            ParChunk* c = proto.copyChunk();
+            lane._chunk = c;
+            lane._lo = lo + (n * (i64)j) / (i64)k;
+            lane._hi = lo + (n * (i64)(j + (i32)1)) / (i64)k;
+            lane._busy = true;
+            lane._done.store((i32)0);
+            chunks.add((Object*)c);
+            lane._go.post();
+            }
+        proto.lo = lo;
+        proto.hi = lo + n / (i64)k;
+        proto.run();
+        for (i32 j = (i32)1; j < k; j = j + (i32)1)
+            {
+            ParCpuLane* lane = (ParCpuLane*)ls.get((u32)(j - (i32)1));
+            while (lane._done.load() == (i32)0)
+                Thread.yield();
+            lane._busy = false;
+            lane._chunk = (ParChunk*)0;
+            }
+        gParLanesBusy = (u32)0;
+        ParCpuLanes.lock().unlock();
+        for (u32 j = (u32)0; j < chunks.count(); j = j + (u32)1)
+            proto.merge((ParChunk*)chunks.get(j));
+        return true;
+        }
+    }
+
 // The CPU pool as a worker: a lane per core, each tile on one lane, so the
 // CPU holds as many tiles as it has cores and the queue's rate for it is the
 // cores' together. Its lanes outlive the run.
@@ -145,16 +227,7 @@ class ParCpuWorker : ParWorker
     bool prepare(ParChunk* proto, u8* src, ParLayout* l, i64 tile)
         {
         if (_lanes == (Array*)0)
-            {
-            _lanes = new Array();
-            i32 n = Par.threads();
-            for (i32 i = (i32)0; i < n; i = i + (i32)1)
-                {
-                ParCpuLane* lane = new ParCpuLane();
-                lane.start();
-                _lanes.add((Object*)lane);
-                }
-            }
+            _lanes = ParCpuLanes.lanes();
         return true;
         }
     bool take(ParTile* t, ParChunk* proto, u8* src, ParLayout* l)
@@ -174,6 +247,7 @@ class ParCpuWorker : ParWorker
             lane._done.store((i32)0);
             t.worker = (ParWorker*)self;
             _busy = _busy + (u32)1;
+            gParLanesBusy = gParLanesBusy + (u32)1;
             lane._go.post();
             return true;
             }
@@ -197,6 +271,7 @@ class ParCpuWorker : ParWorker
             lane._tile = (ParTile*)0;
             lane._busy = false;
             _busy = _busy - (u32)1;
+            gParLanesBusy = gParLanesBusy - (u32)1;
             return t;
             }
         return (ParTile*)0;

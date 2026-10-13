@@ -57,7 +57,7 @@ class ParTiles
     // card CUDA does not reach; Metal) and the CPU pool, and auto measures
     // the queue's sets against the one GPU and the CPU (ParDevice.choose).
     static Array* _workers;
-    static i32 _state;   // 0 unread, 1 named, 2 the default set
+    static i32 _state;   // 0 unread, 1 named, 2 the default set (made when first needed)
     static String* _ids;
 
     static bool explicit(void)
@@ -65,20 +65,32 @@ class ParTiles
         if (_state == (i32)0)
             {
             String* v = Platform.env(String.withCString("XC_PAR_WORKERS"));
-            _workers = new Array();
             if (v.byteLength() > (u32)0)
                 {
+                _workers = new Array();
                 ParTiles.makeWorkers(v);
+                ParTiles.count();
                 _state = (i32)1;
                 }
             else
-                {
-                ParTiles.defaultWorkers();
                 _state = (i32)2;
-                }
-            ParTiles.count();
             }
         return _state == (i32)1;
+        }
+
+    // The default set is made the first time auto's key or a queue run
+    // needs it, not at the first par: opening every GPU costs hundreds of
+    // milliseconds, and a block XC_PAR=cpu or a setting keeps on the CPU
+    // never needs them.
+    static void ready(void)
+        {
+        ParTiles.explicit();
+        if (_workers == (Array*)0)
+            {
+            _workers = new Array();
+            ParTiles.defaultWorkers();
+            ParTiles.count();
+            }
         }
 
     // The GPU workers in the set, for auto; and the sorted identities, for
@@ -116,7 +128,7 @@ class ParTiles
         }
     static String* identities(void)
         {
-        ParTiles.explicit();
+        ParTiles.ready();
         return _ids;
         }
 
@@ -191,9 +203,20 @@ class ParTiles
     // when no worker holds the block, before anything ran.
     static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi, i32 set)
         {
-        ParTiles.explicit();
+        ParTiles.ready();
         if (_workers.count() == (u32)0)
             return false;
+        // The CPU lanes are the queue's too: a block inside a tile, or a par
+        // on another thread meanwhile, takes the single-device path.
+        if (!ParCpuLanes.lock().tryLock())
+            return false;
+        bool ran = ParTiles.runLocked(proto, src, lo, hi, set);
+        ParCpuLanes.lock().unlock();
+        return ran;
+        }
+
+    static bool runLocked(ParChunk* proto, u8* src, i64 lo, i64 hi, i32 set)
+        {
         i64 started = ParDevice.nowUs();
         ParLayout* l = ParDevice.layout(proto, src, lo, hi);
         Array* ws = new Array();

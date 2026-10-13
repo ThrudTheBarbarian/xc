@@ -243,6 +243,12 @@ class Par
             proto.run();
             return;
             }
+#if !ARCH_wasm32
+        // The lanes made once for the process, unless they are taken: a
+        // thread spawned per run cost a third of a small block's time.
+        if (ParCpuLanes.run(proto, lo, hi, k))
+            return;
+#endif
         // The calling thread takes the first chunk itself, on `proto`, so a
         // block costs k - 1 spawns and its reductions land in proto directly.
         Array* chunks = new Array();
