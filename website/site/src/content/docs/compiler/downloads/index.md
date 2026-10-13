@@ -3,7 +3,7 @@ title: Downloads
 description: Prebuilt xcc toolchain archives for macOS, Linux and Windows, the arm9 sysroot, and UXKit's GTK 4 library.
 ---
 
-The current release line is **xcc 0.75**. One install contains the whole toolchain: the
+The current release line is **xcc 0.8**. One install contains the whole toolchain: the
 compiler (`xcc`, which runs every stage itself, from parsing through code generation
 for all seven targets to assembly and linking), the signing tool (`xcc-sign`), the
 6502 assembler (`xcc-as`), the simulators (`xcc-sim-6502`, `xcc-sim-68k`), the
@@ -12,10 +12,10 @@ cross-build native binaries for every target with **no other toolchain installed
 
 | Platform | Download | Size |
 | --- | --- | --- |
-| macOS (Apple silicon) | [xcc-osx-0.75.tar.bz2](/downloads/xcc-osx-0.75.tar.bz2) | 9.0 MB |
-| Linux (x86_64) | [xcc-linux-0.75.tar.bz2](/downloads/xcc-linux-0.75.tar.bz2) | 6.5 MB |
-| Windows (x64) | [xcc-win64-0.75.zip](/downloads/xcc-win64-0.75.zip) | 7.6 MB |
-| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.75.tar.bz2](/downloads/xcc-arm9-sysroot-0.75.tar.bz2) | 830 KB |
+| macOS (Apple silicon) | [xcc-osx-0.8.tar.bz2](/downloads/xcc-osx-0.8.tar.bz2) | 9.1 MB |
+| Linux (x86_64) | [xcc-linux-0.8.tar.bz2](/downloads/xcc-linux-0.8.tar.bz2) | 6.6 MB |
+| Windows (x64) | [xcc-win64-0.8.zip](/downloads/xcc-win64-0.8.zip) | 7.7 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.8.tar.bz2](/downloads/xcc-arm9-sysroot-0.8.tar.bz2) | 830 KB |
 | UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.75.tar.bz2](/downloads/xcc-uxgtk-linux-0.75.tar.bz2) | 110 KB |
 | UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.75.tar.bz2](/downloads/xcc-uxkit-0.75.tar.bz2) | 2.9 MB |
 
@@ -30,23 +30,23 @@ in the host archive.
 ## macOS
 
 ```bash
-tar xjf xcc-osx-0.75.tar.bz2
-export PATH="$PWD/xcc-osx-0.75/bin:$PATH"
+tar xjf xcc-osx-0.8.tar.bz2
+export PATH="$PWD/xcc-osx-0.8/bin:$PATH"
 xcc -v
 ```
 
 The compiler finds its libraries **relative to its own binary**, with no flags,
 environment variables or fixed install path, so you can move the directory anywhere.
 The binaries are not notarised, so the first run on a fresh macOS install may need a
-one-time Gatekeeper override (`xattr -dr com.apple.quarantine xcc-osx-0.75/`).
+one-time Gatekeeper override (`xattr -dr com.apple.quarantine xcc-osx-0.8/`).
 
 ## arm9 sysroot
 
 Needed only for `-A arm9`. Unpack it anywhere and point `-L` at it:
 
 ```bash
-tar xjf xcc-arm9-sysroot-0.75.tar.bz2
-xcc -A arm9 -L path/to/xcc-arm9-sysroot-0.75 -o prog.so prog.xc
+tar xjf xcc-arm9-sysroot-0.8.tar.bz2
+xcc -A arm9 -L path/to/xcc-arm9-sysroot-0.8 -o prog.so prog.xc
 ```
 
 It holds one file: `libc.so`, newlib 4.4.0.20231231 rebuilt as position-independent
@@ -80,8 +80,8 @@ rebuilds it against any machine's GTK 4.
 ## UXKit library
 
 UXKit built as a library for macOS (arm64), Windows (x64), Linux (x86_64) and the
-web, for xcc 0.75. Put its `3p/` beside the versioned install, so that
-`/opt/xcc/3p/uxkit/` sits next to `/opt/xcc/0.75/`:
+web, for xcc 0.8. Put its `3p/` beside the versioned install, so that
+`/opt/xcc/3p/uxkit/` sits next to `/opt/xcc/0.8/`:
 
 ```bash
 tar xjf xcc-uxkit-0.75.tar.bz2
@@ -97,8 +97,8 @@ is LGPLv3; the archive carries its source and the script that rebuilds it.
 ## Linux
 
 ```bash
-tar xjf xcc-linux-0.75.tar.bz2
-export PATH="$PWD/xcc-linux-0.75/bin:$PATH"
+tar xjf xcc-linux-0.8.tar.bz2
+export PATH="$PWD/xcc-linux-0.8/bin:$PATH"
 xcc -v
 ```
 
@@ -107,7 +107,7 @@ library dependencies.
 
 ## Windows
 
-Unzip `xcc-win64-0.75.zip` anywhere and add the folder to `PATH` (or invoke
+Unzip `xcc-win64-0.8.zip` anywhere and add the folder to `PATH` (or invoke
 `xcc.exe` by path). The binaries are self-contained; no runtime installer is
 needed.
 
