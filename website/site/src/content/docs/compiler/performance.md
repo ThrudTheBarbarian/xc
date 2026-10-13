@@ -188,60 +188,56 @@ the same work through Vulkan (`XC_PAR_GPU=vulkan`).
 
 **Apple MacBook Pro, M4 Max (12 performance and 4 efficiency cores), its GPU through Metal** (ms; best of eight runs)
 
-| benchmark | one thread | all threads | GPU | `auto` | GPU vs all threads | GPU's first run |
-|---|---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 444 | 93.3 | 1.1 | 1.4 | 88× faster | 22.8 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 6901 | 599 | 4.2 | 4.2 | 144× faster | 110 |
-| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 5434 | 467 | 3.6 | 4.1 | 129× faster | 38.0 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 18.8 | 2.1 | 1.1 | 1.1 | 1.94× faster | 49.6 |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 79.4 | 9.0 | 1.4 | 1.4 | 6.6× faster | 116 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.4 | 0.5 | 11.0 | 0.6 | 20× slower | 31.8 |
+| benchmark | one thread | all threads | GPU | all GPUs | all devices | `auto` | GPU vs all threads | GPU's first run |
+|---|---|---|---|---|---|---|---|---|
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 490 | 94.4 | 0.7 | 0.8 | 42.7 | 0.6 | 126× faster | 22.0 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 6878 | 575 | 4.1 | 4.8 | 265 | 4.1 | 140× faster | 38.3 |
+| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 6070 | 460 | 3.5 | 3.6 | 214 | 3.5 | 131× faster | 23.3 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 20.2 | 2.0 | 0.4 | 1.2 | 10.3 | 1.0 | 5.1× faster | 20.2 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 81.9 | 9.0 | 1.3 | 1.4 | 5.9 | 1.3 | 6.7× faster | 30.2 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.4 | 0.5 | 10.9 | 12.2 | 9.2 | 0.5 | 20× slower | 31.0 |
 
 **AMD Ryzen 9 9955HX (16 cores, 32 threads), Linux, its integrated Radeon 610M (2 compute units, 128 shader lanes) through Vulkan** (ms; best of eight runs)
 
-| benchmark | one thread | all threads | GPU | `auto` | GPU vs all threads | GPU's first run |
-|---|---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 395 | 38.7 | 9.7 | 9.7 | 4.0× faster | 31.7 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 6405 | 250 | 107 | 108 | 2.3× faster | 143 |
-| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 5142 | 209 | 89.1 | 88.7 | 2.3× faster | 119 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 5.9 | 0.8 | 3.4 | 0.7 | 4.5× slower | 22.0 |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 299 | 17.2 | 5.8 | 5.8 | 2.9× faster | 28.9 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.8 | 2.4 | 21.9 | 2.4 | 9.1× slower | 55.6 |
+| benchmark | one thread | all threads | GPU | all GPUs | all devices | `auto` | GPU vs all threads | GPU's first run |
+|---|---|---|---|---|---|---|---|---|
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 395 | 40.7 | 9.7 | 9.7 | 21.6 | 9.7 | 4.2× faster | 29.7 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 6408 | 249 | 108 | 110 | 149 | 108 | 2.3× faster | 135 |
+| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 5143 | 207 | 89.1 | 87.6 | 109 | 88.8 | 2.3× faster | 114 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 5.9 | 0.5 | 3.4 | 3.6 | 3.2 | 0.6 | 7.1× slower | 21.7 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 299 | 17.0 | 5.8 | 5.8 | 11.7 | 5.8 | 2.9× faster | 30.3 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.9 | 2.4 | 21.7 | 15.7 | 11.9 | 2.4 | 9.1× slower | 57.0 |
 
 **AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 through CUDA and an RTX 3090 through Vulkan** (ms; best of eight runs)
 
-| benchmark | one thread | all threads | GPU | Vulkan | `auto` | GPU vs all threads | GPU's first run | Vulkan's first run |
-|---|---|---|---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 445 | 45.4 | 0.1 | 0.3 | 0.1 | 324× faster | 187 | 130 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 6957 | 298 | 0.9 | 1.6 | 0.9 | 342× faster | 81.7 | 293 |
-| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 5623 | 239 | 0.7 | 1.3 | 0.7 | 330× faster | 79.6 | 125 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 141 | 5.3 | 0.4 | 0.5 | 0.4 | 13.4× faster | 100 | 128 |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 352 | 19.0 | 0.5 | 1.0 | 0.4 | 39× faster | 101 | 126 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 5.2 | 3.2 | 16.0 | 30.4 | 3.3 | 5.0× slower | 122 | 160 |
+| benchmark | one thread | all threads | GPU | all GPUs | Vulkan | all devices | `auto` | GPU vs all threads | GPU's first run | Vulkan's first run |
+|---|---|---|---|---|---|---|---|---|---|---|
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 447 | 46.6 | 0.1 | 0.4 | 0.3 | 21.3 | 0.1 | 333× faster | 105 | 125 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 6954 | 299 | 0.9 | 0.9 | 1.6 | 148 | 0.9 | 343× faster | 93.3 | 126 |
+| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 5636 | 275 | 0.7 | 0.8 | 1.3 | 186 | 0.7 | 379× faster | 95.2 | 139 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 142 | 5.3 | 0.4 | 0.4 | 0.5 | 0.4 | 0.4 | 13.3× faster | 97.8 | 127 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 353 | 19.0 | 0.5 | 0.4 | 1.1 | 60.3 | 0.3 | 38× faster | 100 | 131 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 5.2 | 3.2 | 15.9 | 7.8 | 30.4 | 3.3 | 3.4 | 5.1× slower | 110 | 160 |
 
 **Chrome on the Apple M4 Max: wasm32 (one thread) and WebGPU (from 0.73)** (ms; best of eight runs)
 
 | benchmark | one thread | all threads | GPU | `auto` | GPU vs one thread | GPU's first run |
 |---|---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 362 | – | 1.3 | 1.7 | 278× faster | 9.3 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 4573 | – | 4.5 | 4.6 | 1016× faster | 120 |
-| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 3790 | – | 3.7 | 3.7 | 1024× faster | 18.8 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 53.4 | – | 1.4 | 1.3 | 38× faster | 5.3 |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 91.4 | – | 2.3 | 2.3 | 40× faster | 8.4 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 8.7 | – | 21.8 | 8.7 | 2.5× slower | 58.1 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 364 | – | 1.7 | 1.5 | 214× faster | 8.2 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 4584 | – | 4.7 | 4.6 | 975× faster | 18.1 |
+| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 3783 | – | 3.6 | 3.7 | 1051× faster | 16.0 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 53.5 | – | 1.3 | 1.3 | 41× faster | 6.0 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 90.8 | – | 2.3 | 2.3 | 39× faster | 8.4 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 9.0 | – | 21.8 | 8.8 | 2.4× slower | 57.7 |
 
-**AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 and an RTX 3090, both on PCIe ×8 Gen4, each reached through CUDA and the 3090 also through Vulkan** (ms; best of eight runs). The GPU-heavy `mandelbrot`, `perlin` and `nbody` each finish in well under a millisecond on one card, where `auto` keeps them; the two benchmarks that show the device sets apart are the memory-bound `saxpy` and the compute-bound `md5`. Every row here runs through the multi-device tile queue, so a single card is a little slower than the direct single-shot `GPU` column in the table above (for `md5`, 1.12 ms against 0.9 ms): the queue is what lets two devices share a block.
+**Mixing graphics APIs on one machine.** The `all GPUs` column above runs both NVIDIA cards through CUDA. The scheduler does not require one API, though: a block can run the RTX 5080 through CUDA beside the RTX 3090 through Vulkan, through the same tile queue. On the Windows host (ms, best of eight runs):
 
-| device set | `saxpy` (16M) | `md5` (64M) |
+| both cards share a block | `saxpy` (16M) | `md5` (64M) |
 |---|---|---|
-| CPU, all cores | 3.2 | 333 |
-| RTX 5080, CUDA | 14.9 | 1.12 |
-| RTX 3090, CUDA | 16.2 | 1.82 |
-| RTX 3090, Vulkan | 17.1 | 1.96 |
-| 5080 + 3090, both CUDA | 7.8 | 0.90 |
-| 5080 CUDA + 3090 Vulkan | 9.6 | 1.02 |
-| every device (both GPUs + CPU) | 5.1 | 160 |
-| `auto` | 3.5 | 0.88 |
+| through CUDA (the `all GPUs` column) | 7.8 | 0.90 |
+| 5080 through CUDA, 3090 through Vulkan | 9.6 | 1.02 |
+
+The mixed pair is a little slower here only because the 3090 is slower through Vulkan than through CUDA; the point is that it runs at all. Two cards from different vendors — an NVIDIA through CUDA and an AMD through Vulkan — could share a block the same way.
 
 
 What the tables show:
@@ -252,18 +248,26 @@ What the tables show:
 - **`saxpy` stays on the CPU.** It does one multiply-add for every eight bytes
   it moves, so copying to and from the GPU outweighs the arithmetic, and `auto`
   keeps it on the CPU everywhere.
-- **Two cards share a block (from 0.8).** On a compute-bound block a second card
-  roughly halves the one-GPU time, and an NVIDIA card through CUDA runs beside a
-  second through Vulkan; `auto` chooses the device set per block — one GPU, every
-  GPU, or every device — and leaves out a device that would only slow the set.
+- **The tile queue scales a block across GPUs, where that pays (from 0.8).**
+  `saxpy` spreads across both cards as the sum of their PCIe links — one GPU
+  16 ms, both 7.8 — though it is memory-bound, so the CPU still wins and `auto`
+  keeps it there. `md5` at 64 million candidates is already 0.9 ms on one card,
+  too small for a second to help: the queue's per-tile overhead cancels the
+  compute it would save, both cards together are no faster, and `auto` keeps it
+  on the single card. A second GPU pays on a block big enough to need its
+  compute and not bound by the transfer to it.
+- **Mixed graphics APIs (from 0.8).** The scheduler does not require one API: a
+  block can run one card through CUDA beside another through Vulkan (`saxpy`
+  9.6 ms, against 7.8 for both through CUDA). It works across APIs, so an NVIDIA
+  and an AMD card could share a block the same way.
 - **The Ryzen's integrated Radeon** has 128 shader lanes against the CPU's 32
   threads. It just beats them on `mandelbrot`, `perlin` and `md5` and loses on
   `nbody` and `saxpy`, where `auto` keeps the CPU.
-- **Vulkan against CUDA:** the RTX 3090 through Vulkan against the RTX 5080 through CUDA, two cards, so this compares the APIs only roughly: Vulkan is slower on `mandelbrot` (0.3 ms against 0.1) and `md5` (1.6 ms against 0.9) and `md5_mask` (1.3 ms against 0.7) and `nbody` (0.5 ms against 0.4) and `perlin` (1.0 ms against 0.5) and `saxpy` (30.4 ms against 16.0).
+- **Vulkan against CUDA:** the RTX 3090 through Vulkan against the RTX 5080 through CUDA, two cards, so this compares the APIs only roughly: Vulkan is slower on `mandelbrot` (0.3 ms against 0.1) and `md5` (1.6 ms against 0.9) and `md5_mask` (1.3 ms against 0.7) and `nbody` (0.5 ms against 0.4) and `perlin` (1.1 ms against 0.5) and `saxpy` (30.4 ms against 15.9).
 - **The first run** carries one-off costs (building the kernel, and on NVIDIA
   creating the driver context and compiling the PTX or SPIR-V), so it is shown
   apart: a few tens of milliseconds on Metal and the integrated GPU, and on the
-  3090 79 to 187 ms through CUDA and 125 to 293 ms through Vulkan. `auto` pays it
+  3090 93 to 110 ms through CUDA and 125 to 160 ms through Vulkan. `auto` pays it
   once, while it measures.
 
 ## Release to release

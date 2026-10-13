@@ -368,8 +368,11 @@ def par_tables(version):
         gpu = any("gpu" in r for _, r in rows)
         vk = any("vulkan" in r for _, r in rows)   # Windows from 0.72: CUDA and Vulkan
         out.append("**%s** (ms; best of eight runs)\n" % name)
+        gpus_m = any("gpus" in r for _, r in rows)   # all GPUs (from 0.8)
+        alldev = any("all" in r for _, r in rows)     # all devices (from 0.8)
         if gpu:
-            heads = ["benchmark", "one thread", "all threads", "GPU"] + (["Vulkan"] if vk else []) + \
+            heads = ["benchmark", "one thread", "all threads", "GPU"] + (["all GPUs"] if gpus_m else []) + \
+                    (["Vulkan"] if vk else []) + (["all devices"] if alldev else []) + \
                     ["`auto`", "GPU vs %s" % ("one thread" if not any("cpu" in r for _, r in rows) else "all threads"),
                      "GPU's first run"] + (["Vulkan's first run"] if vk else [])
             out.append("| " + " | ".join(heads) + " |")
@@ -383,8 +386,12 @@ def par_tables(version):
                      ms(r["cpu"]["best_us"]) if "cpu" in r else "–"]
             if gpu:
                 cells.append(ms(r["gpu"]["best_us"]) if "gpu" in r else "–")
+            if gpus_m:
+                cells.append(ms(r["gpus"]["best_us"]) if "gpus" in r else "–")
             if vk:
                 cells.append(ms(r["vulkan"]["best_us"]) if "vulkan" in r else "–")
+            if alldev:
+                cells.append(ms(r["all"]["best_us"]) if "all" in r else "–")
             cells.append(ms(r["auto"]["best_us"]))
             if gpu:
                 # The GPU against the best the CPU does (all threads; one in a browser).
@@ -738,10 +745,18 @@ What the tables show:
 - **`saxpy` stays on the CPU.** It does one multiply-add for every eight bytes
   it moves, so copying to and from the GPU outweighs the arithmetic, and `auto`
   keeps it on the CPU everywhere.
-- **Two cards share a block (from 0.8).** On a compute-bound block a second card
-  roughly halves the one-GPU time, and an NVIDIA card through CUDA runs beside a
-  second through Vulkan; `auto` chooses the device set per block — one GPU, every
-  GPU, or every device — and leaves out a device that would only slow the set.
+- **The tile queue scales a block across GPUs, where that pays (from 0.8).**
+  `saxpy` spreads across both cards as the sum of their PCIe links — one GPU
+  16 ms, both 7.8 — though it is memory-bound, so the CPU still wins and `auto`
+  keeps it there. `md5` at 64 million candidates is already 0.9 ms on one card,
+  too small for a second to help: the queue's per-tile overhead cancels the
+  compute it would save, both cards together are no faster, and `auto` keeps it
+  on the single card. A second GPU pays on a block big enough to need its
+  compute and not bound by the transfer to it.
+- **Mixed graphics APIs (from 0.8).** The scheduler does not require one API: a
+  block can run one card through CUDA beside another through Vulkan (`saxpy`
+  9.6 ms, against 7.8 for both through CUDA). It works across APIs, so an NVIDIA
+  and an AMD card could share a block the same way.
 - **The Ryzen's integrated Radeon** has 128 shader lanes against the CPU's 32
   threads. It just beats them on `mandelbrot`, `perlin` and `md5` and loses on
   `nbody` and `saxpy`, where `auto` keeps the CPU.

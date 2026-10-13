@@ -32,17 +32,20 @@ CPU, one GPU, every GPU, or every device together — and keeps the fastest.
 
 ### Faster
 
-- **`par` on more than one GPU**: a compute-heavy block scales across the cards.
-  The hashcat MD5 workload (64M candidates) on the Windows host runs in 1.12 ms
-  on one RTX 5080, 0.90 ms on the 5080 and an RTX 3090 together, and 1.02 ms on
-  the 5080 through CUDA beside the 3090 through Vulkan; the CPU alone takes
-  333 ms. `auto` picks the two-GPU set (0.88 ms) and leaves the CPU out, because
-  on this block the CPU only slows the set down.
-- **`auto` picks the CPU where the GPUs cannot win**: `saxpy` moves more memory
-  than it computes, so the CPU's own DRAM beats sending the data over PCIe
-  (3.2 ms on the CPU, 15–17 ms on one GPU); `auto` keeps it on the CPU. Two GPUs
-  still halve the one-GPU time (7.8 ms), which is the scaling, not a win over the
-  CPU for this block.
+- **`par` across several devices**: the tile queue spreads a block over every
+  GPU and the CPU. On the Windows host (RTX 5080 + RTX 3090), `saxpy` splits
+  across the two cards as the sum of their PCIe links — one GPU 16 ms, both
+  7.8 — the GPU scaling at work; but `saxpy` is memory-bound, so the CPU's own
+  DRAM still wins (3.2 ms) and `auto` keeps it on the CPU.
+- **`auto` adds a device only where it helps**: the hashcat MD5 workload (64M
+  candidates) is already 0.9 ms on one RTX 5080 — a few hundred times the CPU's
+  0.3 s — and too small for a second card to help, so `auto` keeps it on the one
+  card rather than paying the queue's per-tile cost twice. A second GPU wins on
+  a block big enough to need its compute and not bound by the transfer.
+- **Mixed graphics APIs**: a block can run one card through CUDA beside another
+  through Vulkan (`saxpy` 9.6 ms across the 5080 on CUDA and the 3090 on Vulkan,
+  against 7.8 for both through CUDA), so two cards from different vendors can
+  share it.
 
 ## Version 0.75 — faster code on x86-64 and arm64, and GPU blocks that fold on the device
 

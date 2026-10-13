@@ -40,9 +40,14 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 import run as common  # noqa: E402  (../run.py: load waiting, build.env, the shipped xcc)
 
-BENCHES = ["mandelbrot", "perlin", "nbody", "saxpy"]
+BENCHES = ["mandelbrot", "perlin", "nbody", "saxpy", "md5", "md5_mask"]
 REPEATS = 3
 XCC = None   # --xcc: a compiler other than the shipped one (development runs)
+
+# Most benchmarks live beside this script; md5 and md5_mask are the hashcat
+# workloads in apps/hashcat, so run.py builds them from there.
+_HASHCAT = os.path.join(common.REPO, "apps", "hashcat")
+SRC_DIRS = {"md5": _HASHCAT, "md5_mask": _HASHCAT}
 
 
 def build(name, arch, out):
@@ -52,7 +57,7 @@ def build(name, arch, out):
         cmd = [common.xcc_path()] + common.xcc_home_args() + ["-O3"]
     if arch:
         cmd += ["-A", arch]
-    cmd += ["-o", out, os.path.join(HERE, name + ".xc")]
+    cmd += ["-o", out, os.path.join(SRC_DIRS.get(name, HERE), name + ".xc")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit("par/run.py: %s (%s) does not build:\n%s" % (name, arch or "arm64", r.stderr))
@@ -132,17 +137,25 @@ def run_windows(host, binary, env):
 MODES = [("serial", {"XC_PAR": "cpu", "XC_PAR_THREADS": "1"}),
          ("cpu", {"XC_PAR": "cpu"}),
          ("gpu", {"XC_PAR": "gpu"}),
+         ("gpus", {"XC_PAR": "gpus"}),      # every GPU, tiled (from 0.8)
          ("vulkan", {"XC_PAR": "gpu", "XC_PAR_GPU": "vulkan"}),
+         ("all", {"XC_PAR": "all"}),        # every GPU and the CPU (from 0.8)
          ("auto", {})]
 
 
-def measure(runner, binary, gpus, threads=True):
+def measure(runner, binary, gpus, threads=True, multi=True):
     """Best of REPEATS for each mode (gpus: the GPU modes this machine has;
     threads false where there are none, as in a browser's wasm); the checksums
     must all agree."""
     out, sums = {}, set()
     for mode, env in MODES:
         if mode in ("gpu", "vulkan") and mode not in gpus:
+            continue
+        # every-GPU needs a GPU; every-device needs a GPU and the CPU threads
+        # (from 0.8). On a machine with one GPU they equal "gpu" / "gpu+cpu".
+        if mode == "gpus" and (not multi or "gpu" not in gpus):
+            continue
+        if mode == "all" and (not multi or "gpu" not in gpus or not threads):
             continue
         if mode == "cpu" and not threads:
             continue
@@ -203,7 +216,7 @@ def main():
             build(name, "wasm32", os.path.join(web, name))
             if browser is None:
                 browser = Browser(web)
-            results[name]["browser"] = measure(lambda b, e: browser.run(b, e), name, ["gpu"], threads=False)
+            results[name]["browser"] = measure(lambda b, e: browser.run(b, e), name, ["gpu"], threads=False, multi=False)
         print(name, json.dumps(results[name]), flush=True)
     if browser:
         browser.close()
