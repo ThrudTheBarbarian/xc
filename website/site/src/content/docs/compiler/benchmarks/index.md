@@ -59,8 +59,11 @@ on macOS and Linux, the toolkit's shim.
 - macOS: the archive is not notarised. If macOS refuses to open it, run
   `xattr -dr com.apple.quarantine .` in the unpacked directory once.
 - Linux: the machine needs GTK 4 (`libgtk-4-1` on Ubuntu).
-- Windows: the program is not signed, so SmartScreen may ask before the first
-  run. https certificates are checked against the Windows certificate store.
+- Windows: the program is new and not signed, so Chrome may say the file
+  "isn't commonly downloaded"; choose **Download suspicious file**. Windows may
+  then say it "protected your PC" on the first run; choose **More info**, then
+  **Run anyway**. https certificates are checked against the Windows
+  certificate store.
 
 The benchmark sources archive is the `benchmark/` tree: the suite sources, the
 collector, and the visualiser source.
