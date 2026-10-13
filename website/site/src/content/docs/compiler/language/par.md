@@ -308,20 +308,57 @@ or set the block's own setting (below), which `auto` never overrides.
 `XC_PAR_REPORT=1` prints each decision, each measurement and each change to
 the two numbers as it happens.
 
+#### Several devices at once
+
+From 0.8 a block can run on every device the machine has at once: each GPU
+(an NVIDIA card through CUDA, another vendor's through Vulkan, Apple's through
+Metal) and the CPU's cores together. The range is cut into tiles of a few
+megabytes each way, and each device takes the next tile when it has room —
+three in flight on a GPU, so a tile's copies overlap another's kernel — until
+the range is done; a device that finishes sooner takes more. The tiles'
+reductions fold in tile order whichever device ran them, so the answer does
+not depend on which device took what. Two cards split a memory-bound block
+as the sum of their links (on a machine with an RTX 5080 and an RTX 3090,
+`saxpy` over 16 million floats: 16 ms on one card, 10 ms on both); a block
+with compute to hide gains more.
+
+`auto` treats the two sets as two more candidates after the CPU and the one
+GPU: the GPUs together, and the GPUs with the CPU. Each is measured twice
+(the first run a warm-up, as above), and the fastest of the four wins at that
+size. The learned record grows to four numbers — the CPU's largest win and
+the smallest size each of the other three won from — and the hardware key
+takes in every device, so a machine that gains a card is measured afresh. A
+block that would make a single tile, or that no second device can hold, is
+not tried on a set. What is measured so far is saved as it lands, under
+`par.measuring.…`, so a program that runs a block only a few times per run
+still finishes measuring over several runs.
+
+A device slower than the others on a block is not a free gain: it takes its
+share of the tiles, and the CPU's cores compete with the cards' copies for
+the same memory. That is why the sets are measured rather than assumed, and
+why on an Apple-silicon Mac or a machine with an integrated GPU `auto`
+usually keeps a memory-bound block on the CPU.
+
 To choose instead, in order of precedence:
 
-- `XC_PAR=cpu`, `XC_PAR=gpu` or `XC_PAR=auto` in the environment, for every
-  block in one run;
+- `XC_PAR=cpu`, `XC_PAR=gpu`, `XC_PAR=gpus` (from 0.8: every GPU, tiled),
+  `XC_PAR=all` (from 0.8: every GPU and the CPU) or `XC_PAR=auto` in the
+  environment, for every block in one run. From 0.8 `XC_PAR_WORKERS=cuda,
+  vulkan,metal,cpu` names the devices of the set itself (`XC_PAR_CUDA_DEVICES=0,1`
+  picks CUDA cards by ordinal), and then every block runs on that set;
+  `XC_PAR_TILE_MB=<n>` sets the tile size (8 MB each way by default) and
+  `XC_PAR_TILES=0` turns tiling off;
 - `Par.device("name", "gpu")` in the program, for one block by its name (`par
   name { … }`, or `file:line` for an unnamed block), or `Par.device("par", …)`
-  for every block without its own choice;
+  for every block without its own choice; from 0.8 `"gpus"` and `"all"` too;
 - from 0.73, the user's own settings, in the same store: `par.<name> = cpu`,
   `gpu`, `auto`, or a number of items from which the block runs on the GPU (`par.heavy
-  = 200000`), and `par = …` for every block without its own. The program never
-  writes these.
+  = 200000`), and `par = …` for every block without its own; from 0.8 `gpus`
+  and `all` as well. The program never writes these.
 
 `XC_PAR_REPORT=1` prints where each block ran, what it took, why a block stayed
-on the CPU, what `auto` decided and learned, and the hardware key.
+on the CPU, what `auto` decided and learned, the hardware key, and from 0.8
+the tiles and the devices a run on a set used.
 
 ## What a body may contain
 
