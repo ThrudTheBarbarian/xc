@@ -34,6 +34,34 @@ class ParWorker : Object
         {
         return false;
         }
+    // A faster-API worker for the SAME physical device (a card reached by both
+    // CUDA and Vulkan has one CUDA worker set here on the Vulkan one), or null.
+    // The queue runs a device through one back end at a time and prefers the
+    // faster one, so this worker stands aside for a block its peer can take.
+    ParWorker* _preferredPeer;
+    // Whether the queue should use this worker for THIS block: it can run the
+    // block, and no preferred peer for the same device can (else the peer runs
+    // the card). Per block — kernel availability does not change within a run.
+    // So a block with no PTX, which a CUDA worker cannot take, still runs on
+    // that card through its Vulkan worker instead of leaving it idle.
+    bool forBlock(ParChunk* proto, u8* src, ParLayout* l)
+        {
+        if (!holds(proto, src, l))
+            return false;
+        if (_preferredPeer != (ParWorker*)0 && _preferredPeer.holds(proto, src, l))
+            return false;
+        return true;
+        }
+    // Whether the worker can take a tile RIGHT NOW: reachable, and not so
+    // loaded that giving it work would lose time. A local device is always
+    // ready; a remote one answers from a cached load/health probe. Re-asked
+    // every dispatch round, so a worker drops out and rejoins as its load
+    // moves (par-tiles-and-devices.md, dynamic worker eligibility) — the
+    // networked case where a machine's load jumps then falls on a long job.
+    bool ready(i64 now)
+        {
+        return true;
+        }
     // Tiles the worker keeps in flight at once.
     u32 depth(void)
         {

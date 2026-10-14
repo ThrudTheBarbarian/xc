@@ -101,7 +101,16 @@ class ParTiles
         Array* ids = new Array();
         for (u32 i = (u32)0; i < _workers.count(); i = i + (u32)1)
             {
-            String* id = ((ParWorker*)_workers.get(i)).identity();
+            ParWorker* w = (ParWorker*)_workers.get(i);
+            // A worker whose physical device a preferred peer also drives (the
+            // Vulkan view of a card CUDA runs) is a per-block fallback, not a
+            // device of its own: its peer already stands for that card in the
+            // hardware key and the GPU count, so leaving it out keeps the
+            // learned cache valid across this change (it is still in the pool
+            // and dispatched to for a block only its back end can take).
+            if (w._preferredPeer != (ParWorker*)0)
+                continue;
+            String* id = w.identity();
             if (!id.equals(String.withCString("cpu")))
                 gpus = gpus + (u32)1;
             // Insertion, in byte order.
@@ -142,18 +151,22 @@ class ParTiles
             ParCuda.addWorkers(_workers);
         ParVulkanWorker* vk = new ParVulkanWorker();
         String* vid = vk.identity();
-        bool seen = false;
+        // A card CUDA also drives keeps BOTH workers in the pool; the CUDA one
+        // is the Vulkan worker's preferred peer, so CUDA runs the card for any
+        // block it can take and Vulkan only steps in for a block with no PTX.
+        // (It was dropped here before, which left such a card idle.)
         if (vid.byteLength() > (u32)18)
             {
             String* vname = vid.substringBytes((u32)7, vid.byteLength() - (u32)17);
             for (u32 i = (u32)0; i < _workers.count(); i = i + (u32)1)
                 {
-                String* cid = ((ParWorker*)_workers.get(i)).identity();
+                ParWorker* w = (ParWorker*)_workers.get(i);
+                String* cid = w.identity();
                 if (cid.byteLength() > (u32)5 && cid.substringBytes((u32)5, cid.byteLength() - (u32)5).equals(vname))
-                    seen = true;
+                    vk._preferredPeer = w;
                 }
             }
-        if (vid.byteLength() > (u32)0 && !seen)
+        if (vid.byteLength() > (u32)0)
             _workers.add((Object*)vk);
 #elif ARCH_x86_64 || (ARCH_arm64 && PLATFORM_android)
         ParVulkanWorker* vk = new ParVulkanWorker();
@@ -227,7 +240,10 @@ class ParTiles
             ParWorker* w = (ParWorker*)_workers.get(i);
             if (set == (i32)3 && w.identity().equals(String.withCString("cpu")))
                 continue;
-            if (!w.holds(proto, src, l))
+            // forBlock, not holds: a worker whose device a preferred peer runs
+            // for this block stands aside, so the pool can carry both back ends
+            // for one card and pick per block.
+            if (!w.forBlock(proto, src, l))
                 continue;
             ws.add((Object*)w);
             if (w.floor() > floor)
@@ -348,6 +364,10 @@ class ParTiles
                 for (u32 i = (u32)0; i < nw; i = i + (u32)1)
                     {
                     if (full[i])
+                        continue;
+                    // Not available this round (a remote worker too loaded, say):
+                    // skipped now, offered again next round once it is ready.
+                    if (!((ParWorker*)ws.get(i)).ready(now))
                         continue;
                     i64 at;
                     if (doneItems[i] == (i64)0)
