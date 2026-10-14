@@ -60,6 +60,7 @@
 @property(nonatomic, readwrite) BOOL dceTrace;
 @property(nonatomic, readwrite) NSInteger threadSafeARC;
 @property(nonatomic, readwrite) BOOL parKernelsAll;
+@property(nonatomic, readwrite) BOOL parAuto;
 @property(nonatomic, readwrite, nullable) NSString* migrateVersions;
 @property(nonatomic, readwrite) BOOL emitIR;
 @property(nonatomic, readwrite) BOOL emitIROpt;
@@ -1083,6 +1084,10 @@ static NSString* sExecutablePath = nil;
             {
             opts.parKernelsAll = YES;
             }
+        else if ([arg isEqualToString:@"--par-auto"])
+            {
+            opts.parAuto = YES;
+            }
         else if ([arg hasPrefix:@"--migrate="])
             {
             NSString* v = [arg substringFromIndex:10];
@@ -1514,6 +1519,8 @@ static NSString* sExecutablePath = nil;
             "  -fno-thread-safe-arc       Force plain, non-atomic ARC refcounts.\n"
             "  -fpar-kernels=all          Every par block carries every GPU kernel\n"
             "                             form, for workers on other machines (xcd).\n"
+            "  --par-auto                 A plain for (i in a..b) loop becomes a par\n"
+            "                             block where its shape allows (see -Wpar-auto).\n"
             "  -fmalloc=system|mimalloc   Host malloc behind the runtime (hosted\n"
             "                             targets only; mimalloc must link FIRST to\n"
             "                             override, so it is passed as an object)\n"

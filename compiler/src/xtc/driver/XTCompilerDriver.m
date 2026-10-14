@@ -593,6 +593,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     toks = [lexer tokenise];
     XTParser* parser = [[XTParser alloc] initWithTokens:toks typeTable:tt diagnostics:_diagnostics];
     parser.defaultPointerPlacement = arm64 ? XTPointerPlacementMain : XTPointerPlacementHeap;
+    parser.parAuto = _options.parAuto;
     XTProgramNode* synth = nil;
     synth = [parser parse];
     if (!synth || _diagnostics.errorCount > 0)
@@ -772,6 +773,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     NSArray<XTToken*>* toks = [lexer tokenise];
     XTParser* parser = [[XTParser alloc] initWithTokens:toks typeTable:tt diagnostics:_diagnostics];
     parser.defaultPointerPlacement = arm64 ? XTPointerPlacementMain : XTPointerPlacementHeap;
+    parser.parAuto = _options.parAuto;
     XTProgramNode* synth = [parser parse];
     if (!synth || _diagnostics.errorCount > 0)
         return ast;
@@ -1460,6 +1462,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     XTParser* parser = [[XTParser alloc] initWithTokens:tokens
                                               typeTable:tt
                                             diagnostics:_diagnostics];
+    parser.parAuto = _options.parAuto;
     parser.defaultPointerPlacement = arm64
                                          ? XTPointerPlacementMain
                                          : XTPointerPlacementHeap;

@@ -219,6 +219,10 @@ NS_ASSUME_NONNULL_BEGIN
 // PTX, SPIR-V, WGSL), not only its target's, so a worker on another machine
 // (xcd) finds the one its GPU takes.
 @property(nonatomic, readonly) BOOL parKernelsAll;
+// --par-auto — an outermost `for (T i in a..b)` loop in plain code becomes a
+// `par` block when its shape allows; one par-check cannot prove independent,
+// or a GPU cannot run, is demoted to a serial run (warning par-auto).
+@property(nonatomic, readonly) BOOL parAuto;
 // --migrate=<base>:<to> — compile as if the library were still <base>:
 // members annotated since(<v>) with v > base disappear from lookup, so a
 // <base>-era program fails LOUDLY at every renamed/repurposed call site

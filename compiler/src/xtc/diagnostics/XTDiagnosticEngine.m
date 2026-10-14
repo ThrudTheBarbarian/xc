@@ -48,6 +48,8 @@ NSString* XTWarningCategoryName(XTWarningCategory cat)
         return @"return-type";
     case XTWarnParScatter:
         return @"par-scatter";
+    case XTWarnParAuto:
+        return @"par-auto";
     case XTWarnParGpu:
         return @"par-gpu";
         }
@@ -95,6 +97,8 @@ XTWarningCategory XTWarningCategoryFromName(NSString* name)
         return XTWarnReturnType;
     if ([name isEqualToString:@"par-scatter"])
         return XTWarnParScatter;
+    if ([name isEqualToString:@"par-auto"])
+        return XTWarnParAuto;
     if ([name isEqualToString:@"par-gpu"])
         return XTWarnParGpu;
     return XTWarnNone;

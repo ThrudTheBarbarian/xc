@@ -2380,14 +2380,21 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     case XTTokenWhile:
         {
         [self parGridLoop:1];
+        [self parAutoLoop:1];
         XTASTNode* n = [self parseWhile];
+        [self parAutoLoop:-1];
         [self parGridLoop:-1];
         return n;
         }
     case XTTokenFor:
         {
+        // --par-auto: an outermost loop in plain code may become a par block.
+        if (self.parAuto && [self blkFrames].count == 0 && [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0)
+            return [self parAutoFor];
         [self parGridLoop:1];
+        [self parAutoLoop:1];
         XTASTNode* n = [self parseFor];
+        [self parAutoLoop:-1];
         [self parGridLoop:-1];
         return n;
         }
@@ -2947,6 +2954,335 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 |* Parse `par [name] (:reduce(op var))* [:goal(speed|accuracy)] { body }`, the data-parallel
 |* block. The reduction operator is one of + * & | ^ min max.
 \****************************************************************************/
+// --par-auto: a `for` loop in plain code becomes a `par` block when its shape
+// allows — `for (T i in a..b) { … }` whose body writes only its own locals,
+// array elements, and integer reductions (`acc = acc + e` or `acc += e`, with
+// acc used nowhere else in the body), with no break of its own, return, goto,
+// label, and no outer name incremented, taken by address or written through a
+// member. The decision is made on the TOKENS, before parsing, so both parsers
+// decide alike without a trial parse; a loop that qualifies is parsed inside a
+// par frame, as `par autopar_N :reduce(op acc) { for … }` would be. What the
+// tokens cannot tell — a dependence between items, a call the GPU cannot make
+// — par-check decides after lowering, and demotes an auto block to a serial
+// run rather than refusing it. Mirrored in the port (parAutoFor).
+- (void)parAutoLoop:(NSInteger)delta
+    {
+    NSInteger d = [self.blkState[@"loopDepth"] integerValue] + delta;
+    self.blkState[@"loopDepth"] = @(d);
+    }
+
+- (XTTokenType)parTokType:(NSUInteger)i
+    {
+    return i < _tokens.count ? ((XTToken*)_tokens[i]).type : XTTokenEOF;
+    }
+
+- (NSString*)parTokValue:(NSUInteger)i
+    {
+    return i < _tokens.count ? (((XTToken*)_tokens[i]).value ?: @"") : @"";
+    }
+
+static BOOL parAutoAnyAssignOp(XTTokenType t)
+    {
+    return t >= XTTokenAssign && t <= XTTokenCaretAssign;
+    }
+
+// The scan behind parAutoFor: the cursor is at the `for`. Fills `reds`
+// (op, name pairs) and says whether the loop qualifies.
+- (BOOL)parAutoScan:(NSMutableArray<NSArray<NSString*>*>*)reds
+    {
+    NSUInteger at = _pos;
+    NSUInteger n = _tokens.count;
+    if ([self parTokType:at + 1] != XTTokenLParen)
+        return NO;
+    // The header: `( T? i in a .. b )`, exclusive, no step.
+    NSUInteger depth = 0;
+    NSUInteger pe = 0;
+    BOOL sawIn = NO;
+    BOOL sawDots = NO;
+    NSString* var = nil;
+    for (NSUInteger i = at + 1; i < n; i++)
+        {
+        XTTokenType ty = [self parTokType:i];
+        if (ty == XTTokenLParen)
+            depth++;
+        else if (ty == XTTokenRParen)
+            {
+            depth--;
+            if (depth == 0)
+                {
+                pe = i;
+                break;
+                }
+            }
+        else if (depth == 1)
+            {
+            if (ty == XTTokenIn && [self parTokType:i - 1] == XTTokenIdentifier)
+                {
+                sawIn = YES;
+                var = [self parTokValue:i - 1];
+                }
+            else if (ty == XTTokenDotDot)
+                sawDots = YES;
+            else if (ty == XTTokenEllipsis)
+                return NO;
+            else if (ty == XTTokenIdentifier && sawDots && [[self parTokValue:i] isEqualToString:@"step"])
+                return NO;
+            }
+        }
+    if (pe == 0 || !sawIn || !sawDots || !var)
+        return NO;
+    // The body: a block, to its `}`; or one plain statement, to its `;` (a
+    // bare `if`, loop or switch as the body is left alone).
+    NSUInteger bs = 0;
+    NSUInteger be = 0;
+    depth = 0;
+    if ([self parTokType:pe + 1] == XTTokenLBrace)
+        {
+        bs = pe + 2;
+        for (NSUInteger i = pe + 1; i < n; i++)
+            {
+            XTTokenType ty = [self parTokType:i];
+            if (ty == XTTokenLBrace)
+                depth++;
+            else if (ty == XTTokenRBrace)
+                {
+                depth--;
+                if (depth == 0)
+                    {
+                    be = i;
+                    break;
+                    }
+                }
+            }
+        }
+    else
+        {
+        XTTokenType first = [self parTokType:pe + 1];
+        if (first == XTTokenIf || first == XTTokenFor || first == XTTokenWhile || first == XTTokenSwitch ||
+            first == XTTokenSemicolon || first == XTTokenEOF)
+            return NO;
+        bs = pe + 1;
+        for (NSUInteger i = pe + 1; i < n; i++)
+            {
+            XTTokenType ty = [self parTokType:i];
+            if (ty == XTTokenLParen || ty == XTTokenLBracket || ty == XTTokenLBrace)
+                depth++;
+            else if (ty == XTTokenRParen || ty == XTTokenRBracket || ty == XTTokenRBrace)
+                depth--;
+            else if (ty == XTTokenSemicolon && depth == 0)
+                {
+                be = i;
+                break;
+                }
+            }
+        }
+    if (be == 0)
+        return NO;
+    NSMutableSet<NSString*>* declared = [NSMutableSet setWithObject:var];
+    NSMutableDictionary<NSString*, NSString*>* accOps = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString*, NSNumber*>* accWant = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString*, NSNumber*>* uses = [NSMutableDictionary dictionary];
+    NSMutableArray<NSString*>* names = [NSMutableArray array];
+    NSMutableArray<NSNumber*>* innerAt = [NSMutableArray array];
+    BOOL pendingInner = NO;
+    NSUInteger bd = 0;
+    NSUInteger pd = 0;
+    for (NSUInteger i = bs; i < be; i++)
+        {
+        XTTokenType ty = [self parTokType:i];
+        XTTokenType prev = [self parTokType:i - 1];
+        BOOL stmtStart = prev == XTTokenSemicolon || prev == XTTokenLBrace || prev == XTTokenRBrace ||
+                         prev == XTTokenRParen || prev == XTTokenElse;
+        if (ty == XTTokenLBrace)
+            {
+            bd++;
+            if (pendingInner)
+                {
+                [innerAt addObject:@(bd)];
+                pendingInner = NO;
+                }
+            continue;
+            }
+        if (ty == XTTokenRBrace)
+            {
+            if (innerAt.count && innerAt.lastObject.unsignedIntegerValue == bd)
+                [innerAt removeLastObject];
+            bd--;
+            continue;
+            }
+        if (ty == XTTokenLParen || ty == XTTokenLBracket)
+            pd++;
+        if (ty == XTTokenRParen || ty == XTTokenRBracket)
+            pd--;
+        if (ty == XTTokenFor || ty == XTTokenWhile || ty == XTTokenSwitch)
+            pendingInner = YES;
+        if (ty == XTTokenReturn || ty == XTTokenGoto)
+            return NO;
+        if (ty == XTTokenBreak && innerAt.count == 0)
+            return NO;
+        // A declaration: its declarators are the body's own names.
+        BOOL declStart = stmtStart || (prev == XTTokenLParen && [self parTokType:i - 2] == XTTokenFor);
+        if ((declStart && ty != XTTokenIdentifier) ||
+            (declStart && ty == XTTokenIdentifier && [_typeTable isTypeName:[self parTokValue:i]]))
+            {
+            NSUInteger save = _pos;
+            _pos = i;
+            if ([self currentToken].isTypeKeyword || [_typeTable isTypeName:[self currentToken].value])
+                {
+                [self parseTypeListLookahead];
+                NSUInteger j = _pos;
+                while (j < be && [self parTokType:j] == XTTokenIdentifier)
+                    {
+                    [declared addObject:[self parTokValue:j]];
+                    // To the next declarator after a top-level comma, or stop.
+                    NSUInteger d2 = 0;
+                    while (j < be && !(d2 == 0 && ([self parTokType:j] == XTTokenComma || [self parTokType:j] == XTTokenSemicolon)))
+                        {
+                        XTTokenType tj = [self parTokType:j];
+                        if (tj == XTTokenLParen || tj == XTTokenLBracket || tj == XTTokenLBrace)
+                            d2++;
+                        if (tj == XTTokenRParen || tj == XTTokenRBracket || tj == XTTokenRBrace)
+                            d2--;
+                        j++;
+                        }
+                    if ([self parTokType:j] != XTTokenComma)
+                        break;
+                    j++;
+                    }
+                }
+            _pos = save;
+            }
+        if (ty != XTTokenIdentifier)
+            continue;
+        NSString* name = [self parTokValue:i];
+        uses[name] = @([uses[name] unsignedIntegerValue] + 1);
+        XTTokenType next = [self parTokType:i + 1];
+        if (next == XTTokenIn)
+            {
+            [declared addObject:name];
+            continue;
+            }
+        if (stmtStart && next == XTTokenColon)
+            return NO;
+        BOOL own = [declared containsObject:name];
+        if (prev == XTTokenAmpersand && next != XTTokenLBracket && !own)
+            return NO;
+        if ((next == XTTokenPlusPlus || next == XTTokenMinusMinus || prev == XTTokenPlusPlus || prev == XTTokenMinusMinus) && !own)
+            return NO;
+        if (stmtStart && parAutoAnyAssignOp(next))
+            {
+            if ([name isEqualToString:var])
+                return NO;
+            if (own)
+                continue;
+            if (accOps[name])
+                return NO;
+            NSString* sym = nil;
+            NSUInteger want = 1;
+            if (next == XTTokenPlusAssign) sym = @"+";
+            else if (next == XTTokenStarAssign) sym = @"*";
+            else if (next == XTTokenAmpAssign) sym = @"&";
+            else if (next == XTTokenPipeAssign) sym = @"|";
+            else if (next == XTTokenCaretAssign) sym = @"^";
+            else if (next == XTTokenAssign && [self parTokType:i + 2] == XTTokenIdentifier && [[self parTokValue:i + 2] isEqualToString:name])
+                {
+                XTTokenType o = [self parTokType:i + 3];
+                if (o == XTTokenPlus) sym = @"+";
+                else if (o == XTTokenStar) sym = @"*";
+                else if (o == XTTokenAmpersand) sym = @"&";
+                else if (o == XTTokenPipe) sym = @"|";
+                else if (o == XTTokenCaret) sym = @"^";
+                want = 2;
+                }
+            if (!sym)
+                return NO;
+            accOps[name] = sym;
+            accWant[name] = @(want);
+            [names addObject:name];
+            continue;
+            }
+        if (stmtStart && (next == XTTokenDot || next == XTTokenArrow) && !own)
+            {
+            // A member written through an outer name.
+            NSUInteger d2 = 0;
+            for (NSUInteger j = i + 1; j < be; j++)
+                {
+                XTTokenType tj = [self parTokType:j];
+                if (tj == XTTokenLParen || tj == XTTokenLBracket)
+                    d2++;
+                if (tj == XTTokenRParen || tj == XTTokenRBracket)
+                    d2--;
+                if (d2 == 0 && tj == XTTokenSemicolon)
+                    break;
+                if (d2 == 0 && parAutoAnyAssignOp(tj))
+                    return NO;
+                }
+            }
+        }
+    for (NSString* acc in names)
+        {
+        // A local of an integer type: a float reduction reassociates (not the
+        // default), and a global is not a reduction.
+        NSUInteger depth2 = 0;
+        NSDictionary* info = [self blkLookup:acc depth:&depth2];
+        XTType* ty = info[@"type"];
+        if (![ty isKindOfClass:[XTType class]])
+            return NO;
+        XTTypeKind k = ty.kind;
+        if (!(k == XTTypeKindU8 || k == XTTypeKindI8 || k == XTTypeKindU16 || k == XTTypeKindI16 ||
+              k == XTTypeKindU32 || k == XTTypeKindI32 || k == XTTypeKindU64 || k == XTTypeKindI64))
+            return NO;
+        NSNumber* want = accWant[acc];
+        NSNumber* have = uses[acc];
+        if (!have || !want || have.unsignedIntegerValue != want.unsignedIntegerValue)
+            return NO;
+        [reds addObject:@[ accOps[acc], acc ]];
+        }
+    return YES;
+    }
+
+- (nullable XTASTNode*)parAutoFor
+    {
+    NSMutableArray<NSArray<NSString*>*>* reds = [NSMutableArray array];
+    if (![self parAutoScan:reds])
+        {
+        [self parGridLoop:1];
+        [self parAutoLoop:1];
+        XTASTNode* plain = [self parseFor];
+        [self parAutoLoop:-1];
+        [self parGridLoop:-1];
+        return plain;
+        }
+    XTSourceLocation* loc = [self currentLocation];
+    NSMutableDictionary* frame = [NSMutableDictionary dictionary];
+    frame[@"depth"] = @([self blkScopes].count);
+    frame[@"names"] = [NSMutableArray array];
+    frame[@"types"] = [NSMutableDictionary dictionary];
+    frame[@"bases"] = [NSMutableDictionary dictionary];
+    frame[@"wb"] = [NSMutableSet set];
+    frame[@"selfName"] = [NSNull null];
+    frame[@"par"] = @YES;
+    frame[@"written"] = [NSMutableSet set];
+    frame[@"fast"] = @YES;
+    frame[@"auto"] = @YES;
+    [[self blkFrames] addObject:frame];
+    [self blkPushScope];
+    [self parGridLoop:1];
+    [self parAutoLoop:1];
+    XTASTNode* loop = [self parseFor];
+    [self parAutoLoop:-1];
+    [self parGridLoop:-1];
+    [self blkPopScope];
+    [[self blkFrames] removeLastObject];
+    if (!loop)
+        return nil;
+    XTBlockNode* body = [[XTBlockNode alloc] initWithStatements:@[ loop ] location:loc];
+    NSUInteger c = [self.blkState[@"parAutoCounter"] unsignedIntegerValue] + 1;
+    self.blkState[@"parAutoCounter"] = @(c);
+    NSString* name = [NSString stringWithFormat:@"autopar_%lu", (unsigned long)c];
+    return [self parDesugarBody:body frame:frame name:name reductions:reds at:loc];
+    }
+
 - (nullable XTASTNode*)parsePar
     {
     XTSourceLocation* loc = [self currentLocation];

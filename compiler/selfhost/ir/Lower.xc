@@ -14166,6 +14166,7 @@ class ClassInfo
     // every function it calls, transitively, must be something a GPU can run.
     // The rule holds on every target, the CPU included. One error per block, at
     // the block, naming the construct.
+    Set* _parSerial;  // the auto blocks par-check demoted to a serial run
     Map* _parFns;      // function name -> IRFunc
     Map* _parSyms;     // symbol name -> IRSymbol
     Map* _parVerdict;  // function name -> reason ("" = clean)
@@ -14194,6 +14195,9 @@ class ClassInfo
             if (!f.name().hasPrefix(String.withCString("ParImpl$")) || !f.name().hasSuffix(String.withCString("$run")))
                 continue;
             String* cls = f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4);
+            // An auto block (--par-auto made it from a plain loop) the check
+            // would refuse is demoted to a serial run instead, with a warning.
+            bool isAuto = parIsAutoBlock(cls.substringBytes((u32)8, cls.byteLength() - (u32)8));
             String* why = (String*)0;
             // A captured class instance, String, Array, Map or block is an owned
             // ivar of the block's class, so its dealloc releases it.
@@ -14224,16 +14228,76 @@ class ClassInfo
                         }
                     continue;
                     }
+                if (isAuto)
+                    {
+                    if (_parSerial == (Set*)0) _parSerial = new Set();
+                    _parSerial.add((Hashable*)cls);
+                    String* w2 = String.withCString("this loop runs serially, not as a 'par' block (--par-auto): its work items are not independent, since it ");
+                    w2.append(dep);
+                    warnAtNode(String.withCString("par-auto"), w2, (Node*)_classDecls.get((Hashable*)cls));
+                    continue;
+                    }
                 String* m2 = String.withCString("a 'par' block's work items must be independent, but this one ");
                 m2.append(dep);
                 errorAtNode(m2, (Node*)_classDecls.get((Hashable*)cls));
                 return;
+                }
+            if (isAuto)
+                {
+                if (_parSerial == (Set*)0) _parSerial = new Set();
+                _parSerial.add((Hashable*)cls);
+                String* w3 = String.withCString("this loop runs serially, not as a 'par' block (--par-auto): a GPU could not run it, since it ");
+                w3.append(why);
+                warnAtNode(String.withCString("par-auto"), w3, (Node*)_classDecls.get((Hashable*)cls));
+                continue;
                 }
             String* msg = String.withCString("a 'par' block must be able to run on a GPU, but this one ");
             msg.append(why);
             errorAtNode(msg, (Node*)_classDecls.get((Hashable*)cls));
             return;
             }
+        }
+
+    // Whether block <n> (its class ParImpl$<n>) is one --par-auto made from a
+    // plain loop: its GPU placeholder literal carries `auto;` after the tag.
+    // Mirrors the reference's isAutoBlock.
+    bool parIsAutoBlock(String* n)
+        {
+        String* plain = String.withCString("__XC_PAR_MSL_");
+        plain.append(n);
+        plain.appendCString("__");
+        String* fastTag = String.withCString("__XC_PAR_FAST_");
+        fastTag.append(n);
+        fastTag.appendCString("__");
+        for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
+            {
+            IRSymbol* sym = (IRSymbol*)_m.syms().get(j);
+            if (sym.kind() != (u8)SYM_STRINGLIT || sym.bytes() == (Array*)0)
+                continue;
+            String* tag = (String*)0;
+            if (parBytesHavePrefix(sym.bytes(), fastTag)) tag = fastTag;
+            else if (parBytesHavePrefix(sym.bytes(), plain)) tag = plain;
+            if (tag == (String*)0)
+                continue;
+            String* autoWord = String.withCString("auto;");
+            u32 at = tag.byteLength();
+            if (sym.bytes().count() < at + autoWord.byteLength())
+                return false;
+            for (u32 q = (u32)0; q < autoWord.byteLength(); q = q + (u32)1)
+                if (((Number*)sym.bytes().get(at + q)).asU32() != (u32)autoWord.byteAt(q))
+                    return false;
+            return true;
+            }
+        return false;
+        }
+    static bool parBytesHavePrefix(Array* bytes, String* s)
+        {
+        if (bytes.count() < s.byteLength())
+            return false;
+        for (u32 q = (u32)0; q < s.byteLength(); q = q + (u32)1)
+            if (((Number*)bytes.get(q)).asU32() != (u32)s.byteAt(q))
+                return false;
+        return true;
         }
 
     // The block class's ivars in field order (its parents' first), so field #k
@@ -21663,19 +21727,29 @@ class ClassInfo
             String* ptxWhy = (String*)0;
             String* wgslWhy = (String*)0;
             String* spvWhy = (String*)0;
+            // A demoted auto block gets the serial marker instead of a kernel:
+            // Par.run then runs it on one thread, and no GPU sees it.
+            String* fcls = f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4);
+            bool serialBlock = _parSerial != (Set*)0 && _parSerial.contains((Hashable*)fcls);
             _mWhy = (String*)0;
-            String* mslText = _parMetal ? parMslK(f, kf, kmod) : (String*)0;
+            String* mslText = _parMetal && !serialBlock ? parMslK(f, kf, kmod) : (String*)0;
             mslWhy = _mWhy;
             _mWhy = (String*)0;
-            String* ptx = _parPTX ? parPtxK(f, kf, kmod) : (String*)0;
+            String* ptx = _parPTX && !serialBlock ? parPtxK(f, kf, kmod) : (String*)0;
             ptxWhy = _mWhy;
             _mWhy = (String*)0;
-            String* wgsl = _parWGSL ? parWgslK(f, kf, kmod) : (String*)0;
+            String* wgsl = _parWGSL && !serialBlock ? parWgslK(f, kf, kmod) : (String*)0;
             wgslWhy = _mWhy;
             _mWhy = (String*)0;
-            Array* spv = _parSPIRV ? parSpirvK(f, kf, kmod) : (Array*)0;
+            Array* spv = _parSPIRV && !serialBlock ? parSpirvK(f, kf, kmod) : (Array*)0;
             spvWhy = _mWhy;
             Array* all = new Array();
+            if (serialBlock)
+                {
+                String* marker = String.withCString("// xcpar serial\n");
+                for (u32 q = (u32)0; q < marker.byteLength(); q = q + (u32)1)
+                    all.add((Object*)Number.withU8(marker.byteAt(q)));
+                }
             for (u32 t = (u32)0; t < (u32)3; t = t + (u32)1)
                 {
                 String* text = t == (u32)0 ? mslText : t == (u32)1 ? ptx : wgsl;

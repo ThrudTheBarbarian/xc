@@ -395,6 +395,38 @@ To choose instead, in order of precedence:
 on the CPU, what `auto` decided and learned, the hardware key, and from 0.8
 the tiles and the devices a run on a set used.
 
+### Loops that become blocks: `--par-auto`
+
+**From 0.8.1.** With `--par-auto`, an outermost `for (T i in a..b) { … }`
+loop in plain code becomes a `par` block when its shape allows, so an
+existing program takes the GPU and every core without being rewritten:
+
+```c
+for (u32 i in 0..N)
+    a[i] = (u32)3 * x[i] + y[i];            // becomes par autopar_1 { … }
+u32 total = (u32)0;
+for (u32 i in 0..N)
+    total = total + a[i];                   // becomes par autopar_2 :reduce(+ total) { … }
+```
+
+A loop qualifies when its body writes only its own locals, array elements,
+and integer reductions — `acc = acc + e` or `acc += e` with `+`, `*`, `&`,
+`|` or `^`, `acc` an integer local used nowhere else in the body — and has
+no `break` of its own, `return`, `goto` or label, and no outer name
+incremented, taken by address or written through a member. A float
+reduction is left alone (its order would change), as is any other write to
+an outer variable. The decision is made before parsing, from the loop's
+tokens, so it is the same in every build.
+
+What that cannot tell, the compiler's `par` checks decide afterwards —
+whether the items are independent (a scan, `b[i] = b[i - 1] + …`, is not)
+and whether a GPU could run the body. A written `par` block that fails is an
+error; an automatic one is **demoted to a serial run** instead, with a
+`par-auto` warning saying why (`-Wno-par-auto` silences it), so the program
+still means what it did. Blocks the checks pass run as any `par` block does:
+`auto` measures and chooses the device, and `XC_PAR_REPORT=1` names them
+`autopar_<n>`.
+
 ### Across machines: `xcd`
 
 **From 0.8.1.** A GPU on another machine can be a worker on the same tile

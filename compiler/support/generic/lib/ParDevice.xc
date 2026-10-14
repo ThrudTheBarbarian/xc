@@ -1292,6 +1292,20 @@ class ParDevice
         return (u8*)0;
         }
 
+    // Whether a block's kernel source is the marker par-check leaves on an
+    // auto block it demoted: `// xcpar serial`. Such a block runs on one
+    // thread (Par.run) and never on a GPU.
+    static bool serialOnly(u8* src)
+        {
+        if (src == (u8*)0)
+            return false;
+        u8* m = "// xcpar serial";
+        u32 i = (u32)0;
+        while (m[i] != (u8)0 && src[i] == m[i])
+            i = i + (u32)1;
+        return m[i] == (u8)0;
+        }
+
     // Two captured arrays of the block that are one block of memory, or
     // overlap, with one of them written: the compiler's dependence check
     // (§4) holds for a buffer against ITSELF, but two pointers it sees as

@@ -56,6 +56,9 @@ class Parser
     Array*  _blkFrames;     // capture frames for literals being parsed
     Array*  _blkClasses;    // synthesised impl ClassDecl nodes, creation order
     u32     _parCounter;    // ParImpl$N numbering (par blocks)
+    bool    _parAuto;       // --par-auto: a plain loop becomes a par block where its shape allows
+    u32     _parAutoCounter; // autopar_N naming
+    u32     _loopDepth;     // loops open in the code being parsed (an auto par wraps an outermost one)
     Token*  _parTok;        // the `par` being desugared: where its errors point
     // While set, every node mk/mkNamed builds takes THIS token's position: a
     // block literal's synthesised class is built at the literal, as the
@@ -899,6 +902,8 @@ class Parser
     // it stopped at — the shape the reference prints and an editor can jump
     // to. Until task #78 the shipped compiler said `line 4: unexpected token
     // 11 (wanted 85)`: no column, the NEXT token's line, and raw enum numbers.
+    void setParAuto(bool b) { _parAuto = b; }
+
     void _error(String* msg)
     {
         String* out = String.withCString("");
@@ -2089,6 +2094,264 @@ class Parser
     }
 
     // `par [name] (:reduce(op var))* [:goal(speed|accuracy)] { body }`, the data-parallel block.
+    // --par-auto: a `for` loop in plain code becomes a `par` block when its
+    // shape allows — `for (T i in a..b) { … }` whose body writes only its
+    // own locals, array elements, and integer reductions (`acc = acc + e` or
+    // `acc += e`, with acc used nowhere else in the body), with no break of
+    // its own, return, goto, label, and no outer name incremented, taken by
+    // address or written through a member. The decision is made on the
+    // TOKENS, before parsing, so both parsers decide alike without a trial
+    // parse; a loop that qualifies is parsed inside a par frame, as
+    // `par autopar_N :reduce(op acc) { for … }` would be. What the tokens
+    // cannot tell — a dependence between items, a call the GPU cannot make —
+    // par-check decides after lowering, and demotes an auto block to a
+    // serial run rather than refusing it. Mirrors the reference's parAutoFor.
+    Node* parAutoFor(void)
+    {
+        Array* reds = new Array();
+        if (!parAutoScan(reds)) {
+            parGridEnter("loops", true);
+            _loopDepth = _loopDepth + (u32)1;
+            Node* plain = parseFor();
+            _loopDepth = _loopDepth - (u32)1;
+            parGridEnter("loops", false);
+            return plain;
+        }
+        Token* forTok = cur();
+        Map* frame = new Map();
+        frame.set((Hashable*)String.withCString("depth"), (Object*)Number.with(_blkScopes.count()));
+        frame.set((Hashable*)String.withCString("names"), (Object*)new Array());
+        frame.set((Hashable*)String.withCString("types"), (Object*)new Map());
+        frame.set((Hashable*)String.withCString("wbnames"), (Object*)new Array());
+        frame.set((Hashable*)String.withCString("par"), (Object*)Number.with((u32)1));
+        frame.set((Hashable*)String.withCString("written"), (Object*)new Set());
+        frame.set((Hashable*)String.withCString("fast"), (Object*)Number.with((u32)1));
+        frame.set((Hashable*)String.withCString("auto"), (Object*)Number.with((u32)1));
+        Token* savedParTok = _parTok;
+        _parTok = forTok;
+        _blkFrames.add((Object*)frame);
+        blkPushScope();
+        parGridEnter("loops", true);
+        _loopDepth = _loopDepth + (u32)1;
+        Node* loop = parseFor();
+        _loopDepth = _loopDepth - (u32)1;
+        parGridEnter("loops", false);
+        blkPopScope();
+        _blkFrames.removeAt(_blkFrames.count() - (u32)1);
+        if (loop == (Node*)0) { _parTok = savedParTok; return (Node*)0; }
+        Node* body = mk((u16)nkBlock);
+        body.add(loop);
+        _parAutoCounter = _parAutoCounter + (u32)1;
+        String* name = String.withCString("autopar_");
+        name.append(String.withU32(_parAutoCounter));
+        Token* savedMkAt = _mkAt;
+        _mkAt = forTok;
+        Node* out = parDesugar(body, frame, name, reds);
+        _mkAt = savedMkAt;
+        _parTok = savedParTok;
+        return out;
+    }
+
+    u16 parTokType(u32 i)
+    {
+        if (i >= _tokens.count()) return (u16)tokEOF;
+        return ((Token*)_tokens.get(i)).type();
+    }
+    String* parTokValue(u32 i)
+    {
+        if (i >= _tokens.count()) return String.withCString("");
+        return ((Token*)_tokens.get(i)).value();
+    }
+    static bool parAutoAssignOp(u16 t)
+    {
+        return t == (u16)tokAssign || t == (u16)tokPlusAssign || t == (u16)tokStarAssign
+            || t == (u16)tokAmpAssign || t == (u16)tokPipeAssign || t == (u16)tokCaretAssign;
+    }
+    static bool parAutoAnyAssignOp(u16 t)
+    {
+        return t >= (u16)tokAssign && t <= (u16)tokCaretAssign;
+    }
+
+    // The scan behind parAutoFor: the cursor is at the `for`. Fills `reds`
+    // (nkParReduce nodes) and says whether the loop qualifies.
+    bool parAutoScan(Array* reds)
+    {
+        u32 at = _pos;
+        u32 n = _tokens.count();
+        if (parTokType(at + (u32)1) != (u16)tokLParen) return false;
+        // The header: `( T? i in a .. b )`, exclusive, no step.
+        u32 depth = (u32)0;
+        u32 pe = (u32)0;
+        bool sawIn = false;
+        bool sawDots = false;
+        String* var = (String*)0;
+        for (u32 i = at + (u32)1; i < n; i = i + (u32)1) {
+            u16 ty = parTokType(i);
+            if (ty == (u16)tokLParen) depth = depth + (u32)1;
+            else if (ty == (u16)tokRParen) {
+                depth = depth - (u32)1;
+                if (depth == (u32)0) { pe = i; break; }
+            } else if (depth == (u32)1) {
+                if (ty == (u16)tokIn && parTokType(i - (u32)1) == (u16)tokIdentifier) { sawIn = true; var = parTokValue(i - (u32)1); }
+                else if (ty == (u16)tokDotDot) sawDots = true;
+                else if (ty == (u16)tokEllipsis) return false;
+                else if (ty == (u16)tokIdentifier && sawDots && Parser._same(parTokValue(i), "step")) return false;
+            }
+        }
+        if (pe == (u32)0 || !sawIn || !sawDots || var == (String*)0) return false;
+        // The body: a block, to its `}`; or one plain statement, to its `;`
+        // (a bare `if`, loop or switch as the body is left alone).
+        u32 bs = (u32)0;
+        u32 be = (u32)0;
+        depth = (u32)0;
+        if (parTokType(pe + (u32)1) == (u16)tokLBrace) {
+            bs = pe + (u32)2;
+            for (u32 i = pe + (u32)1; i < n; i = i + (u32)1) {
+                u16 ty = parTokType(i);
+                if (ty == (u16)tokLBrace) depth = depth + (u32)1;
+                else if (ty == (u16)tokRBrace) {
+                    depth = depth - (u32)1;
+                    if (depth == (u32)0) { be = i; break; }
+                }
+            }
+        } else {
+            u16 first = parTokType(pe + (u32)1);
+            if (first == (u16)tokIf || first == (u16)tokFor || first == (u16)tokWhile || first == (u16)tokSwitch
+                || first == (u16)tokSemicolon || first == (u16)tokEOF) return false;
+            bs = pe + (u32)1;
+            for (u32 i = pe + (u32)1; i < n; i = i + (u32)1) {
+                u16 ty = parTokType(i);
+                if (ty == (u16)tokLParen || ty == (u16)tokLBracket || ty == (u16)tokLBrace) depth = depth + (u32)1;
+                else if (ty == (u16)tokRParen || ty == (u16)tokRBracket || ty == (u16)tokRBrace) depth = depth - (u32)1;
+                else if (ty == (u16)tokSemicolon && depth == (u32)0) { be = i; break; }
+            }
+        }
+        if (be == (u32)0) return false;
+        Set* declared = new Set();
+        declared.add((Hashable*)var);
+        Map* accOps = new Map();
+        Map* accWant = new Map();
+        Map* uses = new Map();
+        Array* names = new Array();
+        Array* innerAt = new Array();
+        bool pendingInner = false;
+        u32 bd = (u32)0;
+        u32 pd = (u32)0;
+        for (u32 i = bs; i < be; i = i + (u32)1) {
+            u16 ty = parTokType(i);
+            u16 prev = parTokType(i - (u32)1);
+            bool stmtStart = prev == (u16)tokSemicolon || prev == (u16)tokLBrace || prev == (u16)tokRBrace
+                          || prev == (u16)tokRParen || prev == (u16)tokElse;
+            if (ty == (u16)tokLBrace) {
+                bd = bd + (u32)1;
+                if (pendingInner) { innerAt.add((Object*)Number.with(bd)); pendingInner = false; }
+                continue;
+            }
+            if (ty == (u16)tokRBrace) {
+                if (innerAt.count() > (u32)0 && ((Number*)innerAt.last()).asU32() == bd) innerAt.removeAt(innerAt.count() - (u32)1);
+                bd = bd - (u32)1;
+                continue;
+            }
+            if (ty == (u16)tokLParen || ty == (u16)tokLBracket) pd = pd + (u32)1;
+            if (ty == (u16)tokRParen || ty == (u16)tokRBracket) pd = pd - (u32)1;
+            if (ty == (u16)tokFor || ty == (u16)tokWhile || ty == (u16)tokSwitch) pendingInner = true;
+            if (ty == (u16)tokReturn || ty == (u16)tokGoto) return false;
+            if (ty == (u16)tokBreak && innerAt.count() == (u32)0) return false;
+            // A declaration: its declarators are the body's own names.
+            bool declStart = stmtStart || (prev == (u16)tokLParen && parTokType(i - (u32)2) == (u16)tokFor);
+            if (declStart && ty != (u16)tokIdentifier || declStart && ty == (u16)tokIdentifier && isTypeName(parTokValue(i))) {
+                u32 save = _pos;
+                _pos = i;
+                // The reference's test: a type keyword, or a declared type name.
+                if (isTypeKeywordToken(curType()) || (check((u16)tokIdentifier) && isTypeName(cur().value()))) {
+                    parseTypeSpelling();
+                    u32 j = _pos;
+                    while (j < be && parTokType(j) == (u16)tokIdentifier) {
+                        declared.add((Hashable*)parTokValue(j));
+                        // To the next declarator after a top-level comma, or stop.
+                        u32 d2 = (u32)0;
+                        while (j < be && !(d2 == (u32)0 && (parTokType(j) == (u16)tokComma || parTokType(j) == (u16)tokSemicolon))) {
+                            u16 tj = parTokType(j);
+                            if (tj == (u16)tokLParen || tj == (u16)tokLBracket || tj == (u16)tokLBrace) d2 = d2 + (u32)1;
+                            if (tj == (u16)tokRParen || tj == (u16)tokRBracket || tj == (u16)tokRBrace) d2 = d2 - (u32)1;
+                            j = j + (u32)1;
+                        }
+                        if (parTokType(j) != (u16)tokComma) break;
+                        j = j + (u32)1;
+                    }
+                }
+                _pos = save;
+            }
+            if (ty != (u16)tokIdentifier) continue;
+            String* name = parTokValue(i);
+            Number* c = (Number*)uses.get((Hashable*)name);
+            uses.set((Hashable*)name, (Object*)Number.with(c == (Number*)0 ? (u32)1 : c.asU32() + (u32)1));
+            u16 next = parTokType(i + (u32)1);
+            if (next == (u16)tokIn) { declared.add((Hashable*)name); continue; }
+            if (stmtStart && next == (u16)tokColon) return false;
+            bool own = declared.contains((Hashable*)name);
+            if (prev == (u16)tokAmpersand && next != (u16)tokLBracket && !own) return false;
+            if ((next == (u16)tokPlusPlus || next == (u16)tokMinusMinus || prev == (u16)tokPlusPlus || prev == (u16)tokMinusMinus) && !own) return false;
+            if (stmtStart && parAutoAnyAssignOp(next)) {
+                if (name.equals(var)) return false;
+                if (own) continue;
+                if (accOps.get((Hashable*)name) != (Object*)0) return false;
+                String* sym = (String*)0;
+                u32 want = (u32)1;
+                if (next == (u16)tokPlusAssign) sym = String.withCString("+");
+                else if (next == (u16)tokStarAssign) sym = String.withCString("*");
+                else if (next == (u16)tokAmpAssign) sym = String.withCString("&");
+                else if (next == (u16)tokPipeAssign) sym = String.withCString("|");
+                else if (next == (u16)tokCaretAssign) sym = String.withCString("^");
+                else if (next == (u16)tokAssign && parTokType(i + (u32)2) == (u16)tokIdentifier && parTokValue(i + (u32)2).equals(name)) {
+                    u16 o = parTokType(i + (u32)3);
+                    if (o == (u16)tokPlus) sym = String.withCString("+");
+                    else if (o == (u16)tokStar) sym = String.withCString("*");
+                    else if (o == (u16)tokAmpersand) sym = String.withCString("&");
+                    else if (o == (u16)tokPipe) sym = String.withCString("|");
+                    else if (o == (u16)tokCaret) sym = String.withCString("^");
+                    want = (u32)2;
+                }
+                if (sym == (String*)0) return false;
+                accOps.set((Hashable*)name, (Object*)sym);
+                accWant.set((Hashable*)name, (Object*)Number.with(want));
+                names.add((Object*)name);
+                continue;
+            }
+            if (stmtStart && (next == (u16)tokDot || next == (u16)tokArrow) && !own) {
+                // A member written through an outer name.
+                u32 d2 = (u32)0;
+                for (u32 j = i + (u32)1; j < be; j = j + (u32)1) {
+                    u16 tj = parTokType(j);
+                    if (tj == (u16)tokLParen || tj == (u16)tokLBracket) d2 = d2 + (u32)1;
+                    if (tj == (u16)tokRParen || tj == (u16)tokRBracket) d2 = d2 - (u32)1;
+                    if (d2 == (u32)0 && tj == (u16)tokSemicolon) break;
+                    if (d2 == (u32)0 && parAutoAnyAssignOp(tj)) return false;
+                }
+            }
+        }
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1) {
+            String* acc = (String*)names.get(i);
+            // A local of an integer type: a float reduction reassociates (not
+            // the default), and a global is not a reduction.
+            u32 depth2 = (u32)0;
+            Map* info = blkLookup(acc, &depth2);
+            String* ty = blkTyOf(info);
+            if (ty == (String*)0) return false;
+            if (!(Parser._same(ty, "u8") || Parser._same(ty, "i8") || Parser._same(ty, "u16") || Parser._same(ty, "i16")
+                  || Parser._same(ty, "u32") || Parser._same(ty, "i32") || Parser._same(ty, "u64") || Parser._same(ty, "i64")))
+                return false;
+            Number* want = (Number*)accWant.get((Hashable*)acc);
+            Number* have = (Number*)uses.get((Hashable*)acc);
+            if (have == (Number*)0 || want == (Number*)0 || have.asU32() != want.asU32()) return false;
+            Node* r = mk((u16)nkParReduce);
+            r.setOp((String*)accOps.get((Hashable*)acc));
+            r.setName(acc);
+            reds.add((Object*)r);
+        }
+        return true;
+    }
+
     Node* parsePar(void)
     {
         _parTok = cur();
@@ -3027,6 +3290,11 @@ class Parser
             // …then each reduction as `<field>=<op>;` (bug 645), so the kernel
             // can combine them on the device: field 0 is the object header, 1
             // and 2 lo and hi, then the captures, then the reductions in order.
+            // …and `auto;` for a block --par-auto made from a plain loop:
+            // par-check then demotes it to a serial run where it would have
+            // refused a written one.
+            if (frame.get((Hashable*)String.withCString("auto")) != 0)
+                tag.appendCString("auto;");
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
                 Node* r = (Node*)reds.get(i);
                 tag.append(String.withU32((u32)3 + caps.count() + i));
@@ -3128,8 +3396,12 @@ class Parser
                     && (checkAt((u32)2, (u16)tokLBrace) || checkAt((u32)2, (u16)tokColon)))))
             return parsePar();
         if (check((u16)tokIf))       return parseIf();
-        if (check((u16)tokWhile))    { parGridEnter("loops", true); Node* n = parseWhile(); parGridEnter("loops", false); return n; }
-        if (check((u16)tokFor))      { parGridEnter("loops", true); Node* n = parseFor(); parGridEnter("loops", false); return n; }
+        if (check((u16)tokWhile))    { parGridEnter("loops", true); _loopDepth = _loopDepth + (u32)1; Node* n = parseWhile(); _loopDepth = _loopDepth - (u32)1; parGridEnter("loops", false); return n; }
+        if (check((u16)tokFor)) {
+            // --par-auto: an outermost loop in plain code may become a par block.
+            if (_parAuto && _blkFrames.count() == (u32)0 && _loopDepth == (u32)0) return parAutoFor();
+            parGridEnter("loops", true); _loopDepth = _loopDepth + (u32)1; Node* n = parseFor(); _loopDepth = _loopDepth - (u32)1; parGridEnter("loops", false); return n;
+        }
         if (check((u16)tokSwitch))   { parGridEnter("switches", true); Node* n = parseSwitch(); parGridEnter("switches", false); return n; }
         if (check((u16)tokReturn))   { Token* rt = cur(); parNoteExit(); return parGridReturn(parseReturn(), rt); }
         // `defer` takes a BLOCK, as the reference requires: braces keep what

@@ -1648,6 +1648,11 @@ static NSString* parRootName(XTASTNode* n)
         // lo and hi, then the captures, then the reductions in order.
         NSMutableString* tagText = [NSMutableString stringWithFormat:frame[@"fast"] ? @"__XC_PAR_FAST_%lu__" : @"__XC_PAR_MSL_%lu__",
                                                                     (unsigned long)counter];
+        // …and `auto;` for a block --par-auto made from a plain loop: par-check
+        // then demotes it to a serial run where it would have refused a
+        // written one.
+        if (frame[@"auto"])
+            [tagText appendString:@"auto;"];
         for (NSUInteger j = 0; j < reductions.count; j++)
             [tagText appendFormat:@"%lu=%@;", (unsigned long)(3 + caps.count + j), reductions[j][0]];
         XTASTNode* lit = [[XTLiteralStringNode alloc] initWithString:tagText location:loc];

@@ -151,9 +151,18 @@ class Par
         if (ParTiles.explicit() && ParTiles.run(proto, proto.gpuSource(), lo, hi, (i32)0))
             return;
 #endif
-        // Two captured arrays that overlap, one written (par-auto's alias
-        // guard): the items are not independent after all, so the block runs
-        // as its source reads, one item after another, on this thread.
+        // A block --par-auto made from a plain loop that par-check could not
+        // prove independent, or that a GPU could not run: its kernel is the
+        // marker `// xcpar serial`, and it runs as its source reads, one item
+        // after another, on this thread. So do two captured arrays that
+        // overlap, one written (the alias guard).
+        if (ParDevice.serialOnly(proto.gpuSource()))
+            {
+            proto.lo = lo;
+            proto.hi = hi;
+            proto.run();
+            return;
+            }
         if (ParDevice.bufferOverlap(proto, proto.gpuSource()))
             {
             if (ParDevice.reporting())

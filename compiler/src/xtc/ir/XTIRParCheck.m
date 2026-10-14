@@ -204,6 +204,7 @@ static BOOL gEmitsWGSL = NO;
 + (void)fillSourcesIn:(XTIRModule*)module
               classDecls:(NSDictionary<NSString*, XTClassDeclNode*>*)classDecls
              diagnostics:(XTDiagnosticEngine*)diag
+                  serial:(NSSet<NSString*>*)serial
     {
     XTIRModule* kmod = [self kernelModuleFrom:module];
     NSMutableDictionary<NSString*, XTIRFunction*>* kfns = [NSMutableDictionary dictionary];
@@ -291,11 +292,16 @@ static BOOL gEmitsWGSL = NO;
         NSString* ptxWhy = nil;
         NSString* wgslWhy = nil;
         NSString* spvWhy = nil;
-        NSString* msl = gEmitsMetal ? metalOf(&mslWhy) : nil;
-        NSString* ptx = gEmitsPTX ? ptxOf(&ptxWhy) : nil;
-        NSString* wgsl = gEmitsWGSL ? wgslOf(&wgslWhy) : nil;
-        NSData* spv = gEmitsSPIRV ? spirvOf(&spvWhy) : nil;
+        // A demoted auto block gets the serial marker instead of a kernel:
+        // Par.run then runs it on one thread, and no GPU sees it.
+        BOOL serialBlock = [serial containsObject:fcls];
+        NSString* msl = gEmitsMetal && !serialBlock ? metalOf(&mslWhy) : nil;
+        NSString* ptx = gEmitsPTX && !serialBlock ? ptxOf(&ptxWhy) : nil;
+        NSString* wgsl = gEmitsWGSL && !serialBlock ? wgslOf(&wgslWhy) : nil;
+        NSData* spv = gEmitsSPIRV && !serialBlock ? spirvOf(&spvWhy) : nil;
         NSMutableData* all = [NSMutableData data];
+        if (serialBlock)
+            [all appendData:[@"// xcpar serial\n" dataUsingEncoding:NSUTF8StringEncoding]];
         uint8_t zero = 0;
         for (NSString* text in @[ msl ?: @"", ptx ?: @"", wgsl ?: @"" ])
             {
@@ -383,11 +389,15 @@ static BOOL gEmitsWGSL = NO;
         c.fnByName[f.name] = f;
 
     BOOL ok = YES;
+    // The auto blocks (--par-auto made them from plain loops) par-check would
+    // refuse: demoted to a serial run instead, with a warning (par-auto).
+    NSMutableSet<NSString*>* serial = [NSMutableSet set];
     for (XTIRFunction* f in module.functions)
         {
         if (![f.name hasPrefix:@"ParImpl$"] || ![f.name hasSuffix:@"$run"])
             continue;
         NSString* cls = [f.name substringToIndex:f.name.length - 4];
+        BOOL isAuto = [self isAutoBlock:module number:[cls substringFromIndex:8]];
         NSString* why = nil;
         // A captured class instance, String, Array, Map or block is an owned
         // ivar of the block's class, so its dealloc releases it.
@@ -418,10 +428,28 @@ static BOOL gEmitsWGSL = NO;
                                    at:decl.location];
                 continue;
                 }
+            if (isAuto)
+                {
+                [serial addObject:cls];
+                [diag emitWarning:[NSString stringWithFormat:@"this loop runs serially, not as a 'par' block (--par-auto): "
+                                                             @"its work items are not independent, since it %@", dep]
+                         category:XTWarnParAuto
+                               at:decl.location];
+                continue;
+                }
             ok = NO;
             [diag emitError:[NSString stringWithFormat:@"a 'par' block's work items must be independent, "
                                                        @"but this one %@", dep]
                          at:decl.location];
+            continue;
+            }
+        if (isAuto)
+            {
+            [serial addObject:cls];
+            [diag emitWarning:[NSString stringWithFormat:@"this loop runs serially, not as a 'par' block (--par-auto): "
+                                                         @"a GPU could not run it, since it %@", why]
+                     category:XTWarnParAuto
+                           at:decl.location];
             continue;
             }
         ok = NO;
@@ -430,8 +458,34 @@ static BOOL gEmitsWGSL = NO;
         [diag emitError:msg at:decl.location];
         }
     if (ok)
-        [self fillSourcesIn:module classDecls:classDecls diagnostics:diag];
+        [self fillSourcesIn:module classDecls:classDecls diagnostics:diag serial:serial];
     return ok;
+    }
+
+// Whether block <n> (its class ParImpl$<n>) is one --par-auto made from a
+// plain loop: its GPU placeholder literal carries `auto;` after the tag.
++ (BOOL)isAutoBlock:(XTIRModule*)module number:(NSString*)n
+    {
+    NSData* plain = [[NSString stringWithFormat:@"__XC_PAR_MSL_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
+    NSData* fastTag = [[NSString stringWithFormat:@"__XC_PAR_FAST_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
+    for (XTIRSymbol* sym in module.symbols)
+        {
+        NSData* b = sym.stringBytes;
+        if (sym.kind != XTIRSymbolKindStringLit)
+            continue;
+        NSData* tag = nil;
+        if (b.length >= fastTag.length && memcmp(b.bytes, fastTag.bytes, fastTag.length) == 0)
+            tag = fastTag;
+        else if (b.length >= plain.length && memcmp(b.bytes, plain.bytes, plain.length) == 0)
+            tag = plain;
+        if (!tag)
+            continue;
+        NSString* rest = [[NSString alloc] initWithBytes:(const char*)b.bytes + tag.length
+                                                  length:b.length - tag.length
+                                                encoding:NSUTF8StringEncoding];
+        return [rest hasPrefix:@"auto;"];
+        }
+    return NO;
     }
 
 // The block class's ivars in field order (its parents' first), so field #k of

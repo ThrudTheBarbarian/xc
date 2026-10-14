@@ -22,6 +22,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) XTPointerPlacement defaultPointerPlacement;
 
 /****************************************************************************\
+|* --par-auto: an outermost `for (T i in a..b) { … }` in plain code becomes
+|* a `par` block when its shape allows (parAutoFor); par-check later demotes
+|* an auto block it would refuse to a serial run.
+\****************************************************************************/
+@property(nonatomic) BOOL parAuto;
+
+/****************************************************************************\
 |* Initialise the parser with a token stream, a type table for resolving
 |* user-defined type names, and a diagnostic engine for error reporting.
 |* @param tokens       Ordered array of lexer tokens to parse.

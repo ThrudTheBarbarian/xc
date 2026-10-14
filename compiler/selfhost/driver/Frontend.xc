@@ -56,6 +56,7 @@ class FeOptions
     bool _debugInfo;   // -g: source locations on the IR, for the line tables
     i32 _threadSafeArc; // -f[no-]thread-safe-arc: 1 on, 0 off, -1 decide per module
     bool _parKernelsAll; // -fpar-kernels=all: every GPU kernel form in every par block
+    bool _parAuto;       // --par-auto: a plain range loop becomes a par block where its shape allows
     bool _emitIface;   // compute the module interface (--emit-lib, -c, --emit-iface)
     // …and, SEPARATELY, whether this is a LIBRARY build. The two used to be one
     // flag, so `--emit-iface` — which only asks what the source declares —
@@ -108,6 +109,7 @@ class FeOptions
         _debugInfo = false;
         _threadSafeArc = (i32)-1;
         _parKernelsAll = false;
+        _parAuto = false;
         }
 
     String* input(void)
@@ -319,6 +321,14 @@ class FeOptions
         {
         _parKernelsAll = b;
         }
+    bool parAuto(void)
+        {
+        return _parAuto;
+        }
+    void setParAuto(bool b)
+        {
+        _parAuto = b;
+        }
     }
 
     class Frontend
@@ -422,6 +432,7 @@ class FeOptions
             return (IRModule*)0;
             }
         Parser* parser = Parser.with(tokens);
+        parser.setParAuto(o.parAuto());
 
         // Stage 3 of separate compilation: `#import <Mod>` resolved to a bare
         // `.xtc.iface` reconstructs the module's declarations (marked external)

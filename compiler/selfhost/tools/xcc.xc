@@ -5050,6 +5050,8 @@ void capabilityUsage(void)
     Stdio.printf("  -fno-thread-safe-arc       Plain, non-atomic refcounts\n");
     Stdio.printf("  -fpar-kernels=all          Every par block carries every GPU kernel form,\n");
     Stdio.printf("                             for workers on other machines (xcd)\n");
+    Stdio.printf("  --par-auto                 A plain for (i in a..b) loop becomes a par\n");
+    Stdio.printf("                             block where its shape allows (see -Wpar-auto)\n");
     Stdio.printf("  -falloc=bump|heap          Allocator. Every current target uses heap\n");
     Stdio.printf("  -fmalloc=system|mimalloc   The C heap behind the runtime. mimalloc is\n");
     Stdio.printf("                             -A x86_64 only, linked ahead of libc\n");
@@ -5076,7 +5078,7 @@ String* warningCategoryNames(void)
         "unknown-pragma, printf-format, unowned-bound, cloaked-transitive, "
         "unreachable-catch, comment, packed-align, range-init-count, "
         "covariant-return, unguarded-action, toolchain-fallback, return-type, "
-        "par-scatter, par-gpu");
+        "par-scatter, par-auto, par-gpu");
 }
 
 bool isWarningCategory(String* c)
@@ -5547,6 +5549,10 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
     }
     if (a.equals(String.withCString("-fpar-kernels=all"))) {
         d.fe().setParKernelsAll(true);
+        *ip = i + (u32)1; return true;
+    }
+    if (a.equals(String.withCString("--par-auto"))) {
+        d.fe().setParAuto(true);
         *ip = i + (u32)1; return true;
     }
     if (a.equals(String.withCString("-fpic")) || a.equals(String.withCString("-fPIC"))
