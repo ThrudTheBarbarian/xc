@@ -263,6 +263,9 @@ class Conv:
         self.saved_switch = []
         self.inner_loop_depth = 0   # loops inside the innermost lowered switch
         self.needs_rt = False       # c2xc_rt.xc is imported
+        self.do_par = False         # --par: auto-wrap canonical reduction loops
+        self.in_par = False         # inside an emitted par block (no nesting)
+        self.used_par = False       # a par block was emitted (needs Par.xc)
     # ── diagnostics ────────────────────────────────────────────────────────
     def warn(self, node, msg):
         c = getattr(node, "coord", None)
@@ -1393,7 +1396,75 @@ class Conv:
         self.emit("while (%s) {" % c, ind)
         self.body(body, ind + 1)
         self.emit("}", ind)
+    # ── --par: auto-parallelise a canonical reduction loop ──────────────────
+    # A prototype syntactic spotter. It matches the embarrassingly-parallel
+    # shape `for (T i = 0; i < hi; i++) acc += expr(i);` -- a counted loop,
+    # unit stride, a single `+` reduction into a scalar -- and wraps it in a
+    # `par :reduce(+ acc)` with the xc range form. It does NOT prove the arrays
+    # the body touches don't alias `acc` or each other: that is the dependence
+    # /pointer-domain analysis that belongs in the IR. Here --par is opt-in,
+    # the body stays guarded by xcc's own par-check (which rejects a kernel it
+    # cannot run), and the differential suite catches a wrong result.
+    def par_incr(self, nxt, iname):
+        if isinstance(nxt, c_ast.ExprList) and len(nxt.exprs) == 1: nxt = nxt.exprs[0]
+        if isinstance(nxt, c_ast.UnaryOp) and nxt.op in ("p++", "++") \
+           and isinstance(nxt.expr, c_ast.ID) and nxt.expr.name == iname: return True
+        if isinstance(nxt, c_ast.Assignment) and isinstance(nxt.lvalue, c_ast.ID) and nxt.lvalue.name == iname:
+            r = nxt.rvalue
+            if nxt.op == "+=" and isinstance(r, c_ast.Constant) and r.value == "1": return True
+            if nxt.op == "=" and isinstance(r, c_ast.BinaryOp) and r.op == "+" \
+               and isinstance(r.left, c_ast.ID) and r.left.name == iname \
+               and isinstance(r.right, c_ast.Constant) and r.right.value == "1": return True
+        return False
+    def par_reduce(self, s):
+        def _no(why):
+            return None
+        if not isinstance(s.init, c_ast.DeclList) or len(s.init.decls) != 1: return _no("init not single DeclList: %r" % type(s.init).__name__)
+        d = s.init.decls[0]
+        if not d.name or d.init is None: return _no("init decl has no name/init")
+        it = self.type_of_decl(d)
+        if not it.is_int(): return _no("induction not int: %s" % it.kind)
+        iname = d.name
+        c = s.cond
+        if not (isinstance(c, c_ast.BinaryOp) and c.op == "<"
+                and isinstance(c.left, c_ast.ID) and c.left.name == iname): return _no("cond not i<hi: %r" % type(c).__name__)
+        if not self.par_incr(s.next, iname): return _no("next not i++: %r" % type(s.next).__name__)
+        stmts = s.stmt.block_items if isinstance(s.stmt, c_ast.Compound) else ([s.stmt] if s.stmt else [])
+        stmts = [x for x in stmts if not isinstance(x, c_ast.EmptyStatement)]
+        if len(stmts) != 1: return _no("body not single stmt: %d" % len(stmts))
+        a = stmts[0]
+        if not (isinstance(a, c_ast.Assignment) and isinstance(a.lvalue, c_ast.ID)): return _no("body not scalar assign: %r" % type(a).__name__)
+        acc = a.lvalue.name
+        if acc == iname: return _no("acc == induction")
+        if a.op == "+=": op = "+"
+        elif a.op == "=" and isinstance(a.rvalue, c_ast.BinaryOp) and a.rvalue.op == "+" \
+             and isinstance(a.rvalue.left, c_ast.ID) and a.rvalue.left.name == acc: op = "+"
+        else: return _no("not a + reduction: op=%s" % a.op)
+        return (d, iname, it, acc, op, c.right)
+    def emit_par_reduce(self, s, info, ind):
+        d, iname, it, acc, op, hi_node = info
+        lo = self.ex(d.init, it); self.flush_pre(ind)
+        hi = self.ex(hi_node, it); self.flush_pre(ind)
+        name = self.ntmp("cpar")
+        self.locals.append({iname: it})
+        self.in_par = True; self.used_par = True
+        self.emit("par %s :reduce(%s %s)" % (name, op, self.nm(acc)), ind)
+        self.emit("{", ind)
+        self.emit("for (%s %s in %s..%s)" % (it.xc(), self.nm(iname), lo, hi), ind + 1)
+        self.emit("{", ind + 1)
+        self.body(s.stmt, ind + 2)
+        self.emit("}", ind + 1)
+        self.emit("}", ind)
+        self.in_par = False
+        self.locals.pop()
     def loop_for(self, s, ind):
+        if self.do_par and not self.in_par:
+            info = self.par_reduce(s)
+            if info is not None:
+                self.enter_loop()
+                try: self.emit_par_reduce(s, info, ind)
+                finally: self.leave_loop()
+                return
         self.enter_loop()
         try: self.loop_for_(s, ind)
         finally: self.leave_loop()
@@ -1817,6 +1888,7 @@ class Conv:
         head.append("// GENERATED by c2xc from %s. Edit the C, not this." % ", ".join(os.path.basename(f) for f in files))
         head.append('#import "Foundation.xc"')
         if self.needs_rt: head.append('#import "c2xc_rt.xc"')
+        if self.used_par: head.append('#import "Par.xc"')
         # enums as constants
         for k, v in self.enums.items(): head.append("#define %s %d" % (self.nm(k), v))
         # structs in dependency order (a struct used by value must come first)
@@ -2116,6 +2188,7 @@ def main():
     ap.add_argument("--sizes", default=None, help="read extents for extern arrays of unknown extent (JSON from --sizes-out); needed only on xcc builds before 2026-09-07 13:42 (private:xcc-bugs/32)")
     ap.add_argument("--va-wrappers", action="store_true", help="route calls to variadics defined in other units through local forwarding wrappers (private:xcc-bugs/33, builds before 2026-09-07 13:42)")
     ap.add_argument("--hoist-double-varargs", action="store_true", help="hoist non-variable double varargs into locals (private:xcc-bugs/29, builds before 2026-09-07)")
+    ap.add_argument("--par", action="store_true", help="wrap a canonical + reduction loop (for (i = lo; i < hi; i++) acc += f(i);) in a par :reduce block; xcc's par-check then holds the body to what work items may do")
     ap.add_argument("-q", action="store_true")
     a = ap.parse_args()
     parser = c_parser.CParser()
@@ -2130,6 +2203,7 @@ def main():
         conv.array_sizes = json.load(open(a.sizes))
     conv.va_wrappers_on = a.va_wrappers
     conv.hoist_double_varargs = a.hoist_double_varargs
+    conv.do_par = a.par
     text = conv.convert(asts, a.files)
     if a.sizes_out:
         import json

@@ -137,6 +137,18 @@ class Par
         if (ParTiles.explicit() && ParTiles.run(proto, proto.gpuSource(), lo, hi, (i32)0))
             return;
 #endif
+        // Two captured arrays that overlap, one written (par-auto's alias
+        // guard): the items are not independent after all, so the block runs
+        // as its source reads, one item after another, on this thread.
+        if (ParDevice.bufferOverlap(proto, proto.gpuSource()))
+            {
+            if (ParDevice.reporting())
+                Log.info("par: %s: two of its arrays overlap and one is written, so it runs serially", proto.parName());
+            proto.lo = lo;
+            proto.hi = hi;
+            proto.run();
+            return;
+            }
         i32 choice = ParDevice.choose(proto, hi - lo);
 #if !ARCH_wasm32
         if (choice >= (i32)3)

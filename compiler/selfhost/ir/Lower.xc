@@ -14310,6 +14310,61 @@ class ClassInfo
         return ParIdx.of(false, (i64)0, (i64)0);
         }
 
+    // The GCD test, on the "1 k c" / "0 0 0" forms the dependence check
+    // keeps (mirrors parDependent in the reference): a read at r and a write
+    // at w can meet across two work items unless they are the same element
+    // of the same item, or k1*i1 + c1 == k2*i2 + c2 has no integer solution,
+    // which is when gcd(k1, k2) does not divide c2 - c1. A form that is not
+    // affine in i is taken as able to meet anything.
+    static i64 parFormNum(String* s, u32 field)
+        {
+        u32 at = (u32)0;
+        for (u32 f = (u32)0; f < field; f = f + (u32)1)
+            {
+            while (at < s.byteLength() && s.byteAt(at) != (u8)' ')
+                at = at + (u32)1;
+            at = at + (u32)1;
+            }
+        bool neg = at < s.byteLength() && s.byteAt(at) == (u8)'-';
+        if (neg)
+            at = at + (u32)1;
+        i64 v = (i64)0;
+        while (at < s.byteLength() && s.byteAt(at) >= (u8)'0' && s.byteAt(at) <= (u8)'9')
+            {
+            v = v * (i64)10 + (i64)(s.byteAt(at) - (u8)'0');
+            at = at + (u32)1;
+            }
+        return neg ? (i64)0 - v : v;
+        }
+    static i64 parGcd(i64 a, i64 b)
+        {
+        if (a < (i64)0) a = (i64)0 - a;
+        if (b < (i64)0) b = (i64)0 - b;
+        while (b != (i64)0)
+            {
+            i64 t = a % b;
+            a = b;
+            b = t;
+            }
+        return a;
+        }
+    static bool parFormDep(String* r, String* w)
+        {
+        if (!r.hasPrefix(String.withCString("1 ")) || !w.hasPrefix(String.withCString("1 ")))
+            return true;
+        i64 rk = Lower.parFormNum(r, (u32)1);
+        i64 rc = Lower.parFormNum(r, (u32)2);
+        i64 wk = Lower.parFormNum(w, (u32)1);
+        i64 wc = Lower.parFormNum(w, (u32)2);
+        if (rk == wk && rc == wc)
+            return false;
+        i64 g = Lower.parGcd(rk, wk);
+        i64 d = wc - rc;
+        if (g == (i64)0)
+            return false;
+        return d % g == (i64)0;
+        }
+
     String* parShownIndex(bool affine, i64 k, i64 c)
         {
         if (!affine)
@@ -14877,12 +14932,11 @@ class ClassInfo
             Array* ws = (Array*)writes.get((Hashable*)buf);
             if (ws == (Array*)0 || ws.count() == (u32)0)
                 continue;
-            bool same = false;
-            if (form.hasPrefix(String.withCString("1 ")))
-                for (u32 j = (u32)0; j < ws.count(); j = j + (u32)1)
-                    if (((String*)ws.get(j)).equals(form))
-                        same = true;
-            if (same)
+            bool dependent = false;
+            for (u32 j = (u32)0; j < ws.count(); j = j + (u32)1)
+                if (Lower.parFormDep(form, (String*)ws.get(j)))
+                    dependent = true;
+            if (!dependent)
                 continue;
             String* name = parShown(buf);
             String* out = String.withCString("reads ");

@@ -1225,6 +1225,57 @@ class ParDevice
     // The header line of src, read against the block (the arrays' lengths and
     // the globals' places come from it), planned over [lo, hi). Nil, with the
     // reason reported, when the block cannot go to the GPU.
+    // Two captured arrays of the block that are one block of memory, or
+    // overlap, with one of them written: the compiler's dependence check
+    // (§4) holds for a buffer against ITSELF, but two pointers it sees as
+    // two buffers may be one — `u32* b = a;` — and then an item's write is
+    // another item's read. No static test can rule it out, so the run is
+    // checked: such a block runs serially, as its source reads.
+    static bool bufferOverlap(ParChunk* proto, u8* src)
+        {
+        if (src == (u8*)0 || src[0] == (u8)0)
+            return false;
+        u8* obj = (u8*)(pointer)proto;
+        pointer ptr[16];
+        i64 len[16];
+        bool ro[16];
+        u32 nbuf = (u32)0;
+        u32 at = (u32)0;
+        while (src[at] != (u8)0 && src[at] != (u8)10)
+            {
+            if (src[at] == (u8)'b' && src[at + (u32)1] == (u8)'u' && src[at + (u32)3] == (u8)'=' && nbuf < (u32)16)
+                {
+                at = at + (u32)4;
+                i64 off = num(src, &at);
+                at = at + (u32)1;
+                i64 ivar = num(src, &at);
+                at = at + (u32)1;
+                num(src, &at);
+                ptr[nbuf] = *(pointer*)(obj + off);
+                len[nbuf] = proto.gpuLength((i32)ivar);
+                ro[nbuf] = proto.gpuReadsOnly((i32)ivar);
+                nbuf = nbuf + (u32)1;
+                continue;
+                }
+            at = at + (u32)1;
+            }
+        for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
+            for (u32 j = i + (u32)1; j < nbuf; j = j + (u32)1)
+                {
+                if (ptr[i] == (pointer)0 || ptr[j] == (pointer)0 || len[i] <= (i64)0 || len[j] <= (i64)0)
+                    continue;
+                if (ro[i] && ro[j])
+                    continue;
+                u64 a0 = (u64)ptr[i];
+                u64 a1 = a0 + (u64)len[i];
+                u64 b0 = (u64)ptr[j];
+                u64 b1 = b0 + (u64)len[j];
+                if (a0 < b1 && b0 < a1)
+                    return true;
+                }
+        return false;
+        }
+
     static ParLayout* layout(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
         ParLayout* l = new ParLayout();

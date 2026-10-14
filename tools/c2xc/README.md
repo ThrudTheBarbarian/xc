@@ -46,6 +46,19 @@ lacks or does differently:
 libc is a table (`libc.py`): only the names a program uses are declared,
 as natives, with the host's symbol for variables like `stderr`.
 
+## `--par`: a reduction loop becomes a `par` block
+
+`--par` wraps the canonical counted reduction — `for (T i = lo; i < hi; i++)
+acc += f(i);`, unit stride, a single `+` into a scalar — in a
+`par :reduce(+ acc)` block with the xc range form, and imports `Par.xc`. It
+spots the shape only; what the body may do is then held by xcc's own
+par-check (independent work items, no calls it cannot follow), so a loop that
+is not a par fails to build rather than running wrong, and the runtime picks
+the device as for any block. Anything else — a body of more than one
+statement, another operator, a stride — is left as the loop it was. Opt-in;
+`tests/run.py` passes it for a test named `*_par_*`, whose output must still
+agree with clang's.
+
 ## Status
 
 `tests/`: 13 programs agree with clang. Sparse 1.4: the library (14.7k

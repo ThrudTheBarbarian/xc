@@ -21,7 +21,10 @@ for n in names:
     r = subprocess.run(["clang", "-w", "-o", cb, c], capture_output=True, text=True)
     if r.returncode: fail(n, "clang: %s" % r.stderr.strip().splitlines()[0][:120]); continue
     want = subprocess.run([cb], capture_output=True, timeout=20)
-    r = subprocess.run([sys.executable, os.path.join(ROOT, "c2xc.py"), "-q", "-o", xf, c], capture_output=True, text=True)
+    # A test named *_par_* converts with --par: its canonical reduction loops
+    # become par blocks, and the output must still agree with clang's.
+    flags = ["--par"] if "_par_" in n else []
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "c2xc.py"), "-q", "-o", xf, c] + flags, capture_output=True, text=True)
     if r.returncode: fail(n, "c2xc: %s" % (r.stderr or r.stdout).strip().splitlines()[-1][:160]); continue
     r = subprocess.run([XCC, "-q", "-o", xb, xf], capture_output=True, text=True, timeout=120)
     if r.returncode:

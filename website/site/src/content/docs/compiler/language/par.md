@@ -437,6 +437,21 @@ par { for (u32 i in 1..n) { b[i] = a[i] + b[i - 1]; } }   // error: a scan, not 
 Each `b[i - 1]` is another item's result, which may not have been computed yet.
 That loop is a scan (a running sum); write it as an ordinary `for` loop.
 
+The test is the usual one for an index that is linear in the item (`k * i + c`):
+two accesses can meet across items only when the difference of their offsets
+is a multiple of the greatest common divisor of their strides. From 0.8.1 that
+lets `a[2 * i] = a[2 * i + 1] * 3` through — the even elements are written and
+the odd ones only read, so no item sees another's work — where the first rule
+refused every pair with different offsets. An index computed from data is
+taken as able to meet anything.
+
+Two captured pointers the block sees as two arrays may be one block of
+memory (`u32* b = a;`), which no test at compile time can rule out. From
+0.8.1 the runtime checks before each run: where two of a block's arrays
+overlap and one is written, the block runs serially, one item after another,
+as its source reads (`XC_PAR_REPORT=1` says so). Separate arrays are
+unaffected.
+
 ## Errors in the shape
 
 | The compiler refuses | Because |

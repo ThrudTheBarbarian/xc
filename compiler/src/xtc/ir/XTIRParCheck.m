@@ -651,6 +651,38 @@ typedef struct
     return no;
     }
 
+// Whether a read at r and a write at w (k*i + c each) can meet across two
+// work items: the same element of the same item (r == w) is fine; otherwise
+// k1*i1 + c1 == k2*i2 + c2 has an integer solution iff gcd(k1, k2) divides
+// c2 - c1 (the GCD test), so `a[2*i]` written and `a[2*i + 1]` read are
+// independent where equal strides with a nonzero offset are not. An index
+// that is not affine in i is taken as able to meet anything.
+static int64_t parGcd(int64_t a, int64_t b)
+    {
+    if (a < 0) a = -a;
+    if (b < 0) b = -b;
+    while (b != 0)
+        {
+        int64_t t = a % b;
+        a = b;
+        b = t;
+        }
+    return a;
+    }
+
+static BOOL parDependent(XTParIndex r, XTParIndex w)
+    {
+    if (!r.affine || !w.affine)
+        return YES;
+    if (r.k == w.k && r.c == w.c)
+        return NO;
+    int64_t g = parGcd(r.k, w.k);
+    int64_t d = w.c - r.c;
+    if (g == 0)
+        return NO;
+    return d % g == 0;
+    }
+
 static NSString* shownIndex(XTParIndex x)
     {
     if (!x.affine)
@@ -951,14 +983,14 @@ static BOOL parIsComputeOp(XTIROpcode op)
         XTParIndex rx;
         [(NSValue*)r[1] getValue:&rx];
         XTParIndex wx = { NO, 0, 0 };
-        BOOL same = NO;
+        BOOL dependent = NO;
         for (NSValue* wv in ws)
             {
             [wv getValue:&wx];
-            if (rx.affine && wx.affine && rx.k == wx.k && rx.c == wx.c)
-                same = YES;
+            if (parDependent(rx, wx))
+                dependent = YES;
             }
-        if (same)
+        if (!dependent)
             continue;
         [ws[0] getValue:&wx];
         NSString* name = shownName(r[0]);
