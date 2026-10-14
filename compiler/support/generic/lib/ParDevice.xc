@@ -181,6 +181,12 @@ class ParLayout : Object
     // (header word `byval`, bug 645), so they are not copied to the device.
     i64 byval;
     i64 nback;
+    // The static cost model (par-auto-parallelisation.md): `ops` compute ops
+    // per item and `hasLoop` whether the item body has a nested loop. With
+    // bytesPerItem (from the footprints) these give the arithmetic intensity
+    // the runtime uses to prune a hopeless device and seed the partition.
+    i64 ops;
+    i64 hasLoop;
 
     void plan(i64 lo, i64 hi)
         {
@@ -1263,6 +1269,20 @@ class ParDevice
                 l.nred = k + (u32)1;
                 continue;
                 }
+            // ops=<n>: the per-item compute-op count (cost model).
+            if (src[at] == (u8)'o' && src[at + (u32)1] == (u8)'p' && src[at + (u32)2] == (u8)'s' && src[at + (u32)3] == (u8)'=')
+                {
+                at = at + (u32)4;
+                l.ops = num(src, &at);
+                continue;
+                }
+            // loop: the item body has a nested loop (compute-heavy).
+            if (src[at] == (u8)'l' && src[at + (u32)1] == (u8)'o' && src[at + (u32)2] == (u8)'o' && src[at + (u32)3] == (u8)'p')
+                {
+                l.hasLoop = (i64)1;
+                at = at + (u32)4;
+                continue;
+                }
             at = at + (u32)1;
             }
         if (l.size <= (i64)0)
@@ -1271,6 +1291,42 @@ class ParDevice
             return (ParLayout*)0;
             }
         l.plan(lo, hi);
+        if (reporting())
+            {
+            i64 bpi = bytesPerItem(l);
+            Log.info("par: %s: cost ops=%ld loop=%ld bytes/item=%ld -> %s", proto.parName(), l.ops, l.hasLoop, bpi,
+                     computeBound(l) ? "compute-bound" : "bandwidth-bound");
+            }
         return l;
+        }
+
+    // Bytes moved per work item, from the footprints (the coefficient of
+    // `items` in a tile's transfer) — the denominator of arithmetic intensity.
+    static i64 bytesPerItem(ParLayout* l)
+        {
+        i64 b = (i64)0;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            if (l.bufFp[i] != (i64)0)
+                b = b + l.bufFpK[i] * l.bufElem[i] * (l.bufIn[i] != (i64)0 ? (i64)1 : (i64)2);
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            if (l.globFp[i] != (i64)0)
+                b = b + l.globFpK[i] * l.globElem[i] *
+                        (l.globIn[i] != (i64)0 || (l.globAll[i] != (i64)0 && l.globFpK[i] == (i64)1) ? (i64)1 : (i64)2);
+        return b;
+        }
+
+    // The static classification (par-auto-parallelisation.md): a nested loop,
+    // or no data to move, or high arithmetic intensity (>= 4 ops/byte) means
+    // compute-bound — GPU-eligible and worth splitting; otherwise bandwidth-
+    // bound, where a discrete GPU's transfer sinks it and the runtime keeps it
+    // off that device. A block with no GPU header never reaches here.
+    static bool computeBound(ParLayout* l)
+        {
+        if (l.hasLoop != (i64)0)
+            return true;
+        i64 bpi = bytesPerItem(l);
+        if (bpi <= (i64)0)
+            return true;
+        return l.ops >= bpi * (i64)4;
         }
     }

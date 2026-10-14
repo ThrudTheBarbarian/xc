@@ -260,7 +260,8 @@ static BOOL gEmitsWGSL = NO;
         XTIRParCheck* fc = [XTIRParCheck new];
         fc.module = module;
         NSString* fcls = [f.name substringToIndex:f.name.length - 4];
-        [XTIRParMSL setExtraMeta:[fc footprintWordsIn:f ivarNames:[fc ivarNamesOf:classDecls[fcls] in:classDecls]]];
+        [XTIRParMSL setExtraMeta:[[fc footprintWordsIn:f ivarNames:[fc ivarNamesOf:classDecls[fcls] in:classDecls]]
+                                   stringByAppendingString:[fc costWordsIn:f]]];
         NSString* (^ptxOf)(NSString* _Nullable* _Nullable) = ^NSString*(NSString* _Nullable* _Nullable w) {
             NSString* t = kf ? [XTIRParMSL ptxForKernel:kf module:kmod fast:fast redOps:redOps why:NULL] : nil;
             return t ?: [XTIRParMSL ptxForKernel:f module:module fast:fast redOps:redOps why:w];
@@ -813,6 +814,59 @@ static NSString* shownIndex(XTParIndex x)
                                 (long long)e[1].longLongValue, (long long)(e[2].longLongValue + 1)];
         }
     return words;
+    }
+
+// The block's per-item cost, for par-auto's static classifier
+// (par-auto-parallelisation.md): `ops=<n>` the compute-op count and `loop`
+// when the body has an inner loop (a branch back to an earlier block). The
+// runtime has bytes-per-item from the footprints, so intensity is ops/byte; a
+// `loop` makes the item compute-heavy whatever the straight-line count. Mirrors
+// the port's parCostWords exactly — the same IR and the same op set.
+static BOOL parIsComputeOp(XTIROpcode op)
+    {
+    switch (op)
+        {
+        case XTIROpAdd: case XTIROpSub: case XTIROpMul: case XTIROpUDiv:
+        case XTIROpSDiv: case XTIROpURem: case XTIROpSRem: case XTIROpShl:
+        case XTIROpLShr: case XTIROpAShr: case XTIROpAnd: case XTIROpOr:
+        case XTIROpXor: case XTIROpNeg: case XTIROpNot: case XTIROpFAdd:
+        case XTIROpFSub: case XTIROpFMul: case XTIROpFDiv: case XTIROpFNeg:
+        case XTIROpFSqrt: case XTIROpICmp: case XTIROpFCmp: case XTIROpSelect:
+        case XTIROpSIToFp: case XTIROpUIToFp: case XTIROpFpToSI: case XTIROpFpToUI:
+        case XTIROpFpExt: case XTIROpFpTrunc:
+            return YES;
+        default:
+            return NO;
+        }
+    }
+- (NSString*)costWordsIn:(XTIRFunction*)f
+    {
+    long long ops = 0;
+    // Back edges: a branch to an earlier block. The outer parallel loop is
+    // always one of them, so a NESTED loop shows as a second — that is `loop`.
+    long long backEdges = 0;
+    NSArray<XTIRBlock*>* blocks = f.blocks;
+    for (NSUInteger b = 0; b < blocks.count; b++)
+        {
+        XTIRBlock* bb = blocks[b];
+        for (XTIRInsn* i in bb.instructions)
+            if (parIsComputeOp(i.opcode))
+                ops++;
+        XTIRInsn* t = bb.terminator;
+        if (t)
+            for (XTIROperand* o in t.operands)
+                {
+                if (o.kind != XTIROperandKindBlock)
+                    continue;
+                for (NSUInteger j = 0; j < blocks.count; j++)
+                    if (blocks[j] == o.blockRef && j <= b)
+                        backEdges++;
+                }
+        }
+    NSMutableString* w = [NSMutableString stringWithFormat:@" ops=%lld", ops];
+    if (backEdges >= 2)
+        [w appendString:@" loop"];
+    return w;
     }
 
 // §4: a read of a buffer the block also writes must be at the element this

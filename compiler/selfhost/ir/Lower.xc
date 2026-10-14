@@ -14684,6 +14684,66 @@ class ClassInfo
         return words;
         }
 
+    // Arithmetic / compare / convert, the ops that count as per-item compute
+    // for the cost model (not loads, stores, address maths, phis or branches).
+    bool parIsComputeOp(String* op)
+        {
+        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub"))
+            || op.equals(String.withCString("Mul")) || op.equals(String.withCString("UDiv"))
+            || op.equals(String.withCString("SDiv")) || op.equals(String.withCString("URem"))
+            || op.equals(String.withCString("SRem")) || op.equals(String.withCString("Shl"))
+            || op.equals(String.withCString("LShr")) || op.equals(String.withCString("AShr"))
+            || op.equals(String.withCString("And")) || op.equals(String.withCString("Or"))
+            || op.equals(String.withCString("Xor")) || op.equals(String.withCString("Neg"))
+            || op.equals(String.withCString("Not")) || op.equals(String.withCString("FAdd"))
+            || op.equals(String.withCString("FSub")) || op.equals(String.withCString("FMul"))
+            || op.equals(String.withCString("FDiv")) || op.equals(String.withCString("FNeg"))
+            || op.equals(String.withCString("FSqrt")) || op.equals(String.withCString("ICmp"))
+            || op.equals(String.withCString("FCmp")) || op.equals(String.withCString("Select"))
+            || op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp"))
+            || op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI"))
+            || op.equals(String.withCString("FpExt")) || op.equals(String.withCString("FpTrunc"));
+        }
+    // The block's per-item cost, for par-auto's static classifier
+    // (par-auto-parallelisation.md): `ops=<n>` the compute-op count, and `loop`
+    // when the body has an inner loop (a branch back to an earlier block). The
+    // runtime already has bytes-per-item from the footprints, so intensity is
+    // ops/byte; a `loop` makes the item compute-heavy whatever the straight-line
+    // count (its trips are data-dependent), so the runtime does not prune the
+    // GPU for it. Both compilers emit this identically (same IR).
+    String* parCostWords(IRFunc* f)
+        {
+        i64 ops = (i64)0;
+        // Back edges: a branch to an earlier block. The outer parallel loop is
+        // always one of them, so a NESTED loop (mandel_deep's escape iteration,
+        // nbody's inner sum) shows as a second — that is the `loop` signal.
+        i64 backEdges = (i64)0;
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                if (parIsComputeOp(((IRInsn*)bb.insns().get(i)).op()))
+                    ops = ops + (i64)1;
+            IRInsn* t = bb.term();
+            if (t != (IRInsn*)0)
+                for (u32 k = (u32)0; k < t.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)t.ops().get(k);
+                    if (o.kind() != (u8)OPK_BLOCK)
+                        continue;
+                    for (u32 j = (u32)0; j < f.blocks().count(); j = j + (u32)1)
+                        if ((IRBlock*)f.blocks().get(j) == o.blk() && j <= b)
+                            backEdges = backEdges + (i64)1;
+                    }
+            }
+        String* w = new String();
+        w.appendCString(" ops=");
+        w.append(String.withI64(ops));
+        if (backEdges >= (i64)2)
+            w.appendCString(" loop");
+        return w;
+        }
+
     // §4: a read of a buffer the block also writes must be at the element
     // this work item writes. `b[i] = b[i - 1] + …` reads another item's
     // result: that is a scan, not a par. Returns the complaint, or 0.
@@ -21512,6 +21572,7 @@ class ClassInfo
             // The buffers' footprints, as words on the header line every
             // printer writes (step 1 of par-tiles-and-devices.md).
             _parExtraMeta = parFootprintWords(f, parIvarNames(f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4)));
+            _parExtraMeta.append(parCostWords(f));
             String* msl = (String*)0;
             // A SPIR-V module is bytes (it holds NULs): it goes in as they are.
             Array* kernelBytes = (Array*)0;
