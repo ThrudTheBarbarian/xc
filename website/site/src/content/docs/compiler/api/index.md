@@ -31,6 +31,7 @@ support/
     Validator.xc        ← rules a field's text must pass
     SortDescriptor.xc   ← sort records by keys
     Socket.xc           ← a TCP connection
+    WebSocket.xc        ← WebSocket clients and servers over it
     Comparable.xc  Hashable.xc  Enumerable.xc  Copying.xc  Codable.xc  Error.xc   ← protocols
     Coder.xc            ← keyed archiving to JSON, with gzip
     Thread.xc  Mutex.xc  Cond.xc  Sem.xc  Atomic.xc  ThreadLocal.xc  Pool.xc
@@ -143,6 +144,7 @@ and every method grouped by task with a jump-list at the top.
 | [`Validator`](/compiler/api/validator/) | rules a field's text must pass (from 0.72) |
 | [`SortDescriptor`](/compiler/api/sortdescriptor/) | sort records by keys (from 0.72) |
 | [`Socket`](/compiler/api/socket/) | a TCP connection (from 0.72) |
+| [`WebSocket`](/compiler/api/websocket/) | WebSocket (RFC 6455) clients and servers over Socket; wss through the TLS layer (from 0.8.1) |
 | [`CSV`](/compiler/api/csv/) | comma-separated values to rows and back (from 0.72) |
 | [`Coder`](/compiler/api/coder/) | keyed archiving of an object graph to JSON, optionally gzipped |
 

@@ -1,0 +1,8 @@
+server: path /echo?x=1, key 1, version 13
+client: open 1
+client: text 1 'hello'
+client: binary 1
+client: text 1 'after the ping'
+client: nothing more 1
+server: 3 messages, open 0, close 1000 'done'
+client: open 0, close 1000

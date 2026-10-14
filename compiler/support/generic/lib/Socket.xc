@@ -258,6 +258,12 @@ class Socket
         {
         return _open;
         }
+    // The host's descriptor (a SOCKET on Windows), for a layer over the
+    // connection such as TLS; -1 when closed.
+    i64 fd(void)
+        {
+        return _fd;
+        }
 
     // ── Serving ──────────────────────────────────────────────────────────
 

@@ -38,6 +38,8 @@ blocks for as long as the caller chooses. A connection that fails, or that the
 peer closes, is closed here, and reads then report it.
 
 [`Http`](/compiler/api/http/) speaks HTTP over the same declarations.
+[`WebSocket`](/compiler/api/websocket/) runs the WebSocket protocol over a
+Socket, as a client or a server.
 
 :::note[Availability]
 arm64 (macOS, iOS, Android), x86_64 and win64 have TCP. On wasm32, arm9 and
