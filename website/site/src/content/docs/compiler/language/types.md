@@ -264,6 +264,13 @@ pointer as it always has, so existing code is unaffected; `nil` says what is
 meant, and the compiler holds it to that. A class pointer assigned `nil`
 releases what it held, as assigning `0` does.
 
+Among overloads, `nil` chooses a pointer parameter and never an integer one:
+with `f(Node* n)` and `f(u32 x)` declared, `f(nil)` calls the first. It fits
+every pointer parameter alike, so a call that could go to two pointer
+overloads is ambiguous, and a cast picks one: `g((Node*)nil)`. And `nil` is a
+pointer of no particular type, so `auto p = nil` is an error; name the type.
+**From 0.8.1.**
+
 ## Casting
 
 Casting uses C's `(type)` syntax:

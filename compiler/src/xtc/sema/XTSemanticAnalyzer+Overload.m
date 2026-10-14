@@ -804,6 +804,16 @@ static BOOL XTIsErasedKeyType(XTType* t)
         XTType* at = arg.resolvedType;
         BOOL isLit = [arg isKindOfClass:[XTLiteralIntNode class]];
         int64_t lv = isLit ? ((XTLiteralIntNode*)arg).intValue : 0;
+        // nil is the null pointer of any pointer type and nothing else: it
+        // satisfies every pointer parameter alike (two of them tie, which
+        // is an ambiguous call) and no integer one, whatever its carrier
+        // type says.
+        if (isLit && ((XTLiteralIntNode*)arg).isNil)
+            {
+            if (pt.kind != XTTypeKindPointer)
+                return NSIntegerMax;
+            continue;
+            }
         NSInteger r = [self conversionRankFrom:at to:pt isIntLit:isLit litValue:lv];
         if (r == NSIntegerMax)
             return NSIntegerMax;
@@ -1340,7 +1350,12 @@ static BOOL XTIsErasedKeyType(XTType* t)
     {
     NSMutableArray* parts = [NSMutableArray array];
     for (XTASTNode* a in args)
-        [parts addObject:(a.resolvedType.displayName ?: @"?")];
+        {
+        if ([a isKindOfClass:[XTLiteralIntNode class]] && ((XTLiteralIntNode*)a).isNil)
+            [parts addObject:@"nil"];
+        else
+            [parts addObject:(a.resolvedType.displayName ?: @"?")];
+        }
     return [parts componentsJoinedByString:@", "];
     }
 

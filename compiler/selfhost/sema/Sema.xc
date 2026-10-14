@@ -1585,9 +1585,21 @@ class Sema
                                         n.kid((u32)0), "initialiser");
             if (_isOp(n.op(), "auto") && n.kidCount() > (u32)0)
                 {
-                String* inferred = n.kid((u32)0).ty();
-                if (inferred != 0)
-                    n.setOp(inferred);
+                // `auto p = nil` has no type to infer: nil is a pointer of
+                // every type and so of none in particular. Refused, rather
+                // than quietly making the carrier type a `u8`.
+                Node* init = n.kid((u32)0);
+                if (init.kind() == (u16)nkInt && init.nilLit())
+                    {
+                    _errorAt(String.withCString("nil is a pointer of no particular type: 'auto' cannot take it, name the pointer type"), init);
+                    n.setOp(String.withCString("pointer"));
+                    }
+                else
+                    {
+                    String* inferred = init.ty();
+                    if (inferred != 0)
+                        n.setOp(inferred);
+                    }
                 }
             // `u16 v = a.get(0)` — a boxed value arriving in a primitive
             // slot unboxes on the way in.
@@ -3318,6 +3330,17 @@ class Sema
                 return Overload.noMatch();
             Node* a = call.kid(ai);
             bool isLit = a.kind() == (u16)nkInt;
+            // nil is the null pointer of any pointer type and nothing else:
+            // it satisfies every pointer parameter alike (two of them tie,
+            // which is an ambiguous call) and no integer one, whatever its
+            // carrier type says.
+            if (isLit && a.nilLit())
+                {
+                if (!Types.isPointer(Overload._unqualify(p.op())))
+                    return Overload.noMatch();
+                pi = pi + (u32)1;
+                continue;
+                }
             u32 r = Overload.rank(a.ty(), p.op(), isLit, a.num());
             // BOXING is the last resort, below every direct conversion: a
             // primitive can box into a Foundation wrapper (rank 8) and a
@@ -5119,8 +5142,12 @@ class Sema
             {
             if (i > argBase)
                 s.appendCString(", ");
-            String* t = call.kid(i).ty();
-            s.append(t != 0 ? t : String.withCString("?"));
+            Node* a = call.kid(i);
+            String* t = a.ty();
+            if (a.kind() == (u16)nkInt && a.nilLit())
+                s.appendCString("nil");
+            else
+                s.append(t != 0 ? t : String.withCString("?"));
             }
         return s;
         }

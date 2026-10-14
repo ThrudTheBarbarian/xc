@@ -747,7 +747,17 @@
     // Auto type inference
     if (!node.declaredType || node.declaredType.isAuto)
         {
-        if (node.initialiser && node.initialiser.resolvedType)
+        // `auto p = nil` has no type to infer: nil is a pointer of every
+        // type and so of none in particular. Refused, rather than quietly
+        // making the carrier type a `u8`.
+        if (node.initialiser && node.initialiser.nodeKind == XTASTNodeKindLiteralInt
+            && ((XTLiteralIntNode*)node.initialiser).isNil)
+            {
+            [self.diagnostics emitError:@"nil is a pointer of no particular type: 'auto' cannot take it, name the pointer type"
+                                     at:node.initialiser.location];
+            node.declaredType = [XTType pointerType];
+            }
+        else if (node.initialiser && node.initialiser.resolvedType)
             {
             node.declaredType = node.initialiser.resolvedType;
             }
