@@ -1407,14 +1407,28 @@ static NSString* parRootName(XTASTNode* n)
         for (NSString* cn in caps)
             {
             XTType* t = frameTypes[cn];
+            XTASTNode* bytes = nil;
             if ([t isKindOfClass:[XTArrayType class]] && ((XTArrayType*)t).elementCount > 0)
                 {
                 XTArrayType* at = (XTArrayType*)t;
-                XTASTNode* bytes = [[XTBinaryExprNode alloc]
+                bytes = [[XTBinaryExprNode alloc]
                     initWithOp:XTBinaryOpMul
                           left:cast(i64T, [[XTLiteralIntNode alloc] initWithValue:(int64_t)at.elementCount location:loc])
                          right:cast(i64T, [[XTSizeofExprNode alloc] initWithOperand:at.elementType location:loc])
                       location:loc];
+                }
+            else if ([t isKindOfClass:[XTPointerType class]] && ((XTPointerType*)t).isSimd && ((XTPointerType*)t).pointeeType)
+                {
+                // A `simd:` heap pointer (par-blocks.md §3): its length is the
+                // block header's count, read as `.length` is for any heap array.
+                bytes = [[XTBinaryExprNode alloc]
+                    initWithOp:XTBinaryOpMul
+                          left:cast(i64T, [[XTMemberAccessNode alloc] initWithBase:ident(cn) memberName:@"length" isArrow:NO location:loc])
+                         right:cast(i64T, [[XTSizeofExprNode alloc] initWithOperand:((XTPointerType*)t).pointeeType location:loc])
+                      location:loc];
+                }
+            if (bytes)
+                {
                 XTASTNode* test = [[XTBinaryExprNode alloc]
                     initWithOp:XTBinaryOpEq
                           left:ident(@"k")
@@ -1444,7 +1458,9 @@ static NSString* parRootName(XTASTNode* n)
         j = 0;
         for (NSString* cn in caps)
             {
-            if ([frameTypes[cn] isKindOfClass:[XTArrayType class]] && readsOnly(cn))
+            if (([frameTypes[cn] isKindOfClass:[XTArrayType class]] ||
+                 ([frameTypes[cn] isKindOfClass:[XTPointerType class]] && ((XTPointerType*)frameTypes[cn]).isSimd)) &&
+                readsOnly(cn))
                 {
                 XTASTNode* test = [[XTBinaryExprNode alloc]
                     initWithOp:XTBinaryOpEq

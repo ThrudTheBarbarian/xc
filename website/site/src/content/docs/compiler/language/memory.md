@@ -21,6 +21,8 @@ MyClass* mob = new MyClass[8];      // array of class instances
 
 `new T[N]` is the only way to allocate an array on the heap. For arrays of class instances, every element is zero-filled and its `init()` runs. On out-of-memory, `new` returns null, so check the result if you need to.
 
+From 0.8.1, `simd: T* p = new T[N]` allocates a primitive array page-aligned, on whole 16 KB pages, so a GPU can use it in place — see [Arrays the GPU shares](/compiler/language/par/#arrays-the-gpu-shares-simd-pointers). It is otherwise an ordinary heap array: `.length`, `delete` and reference counting are the same. On the 8-, 16- and 32-bit targets the qualifier is accepted and the allocation is a plain one.
+
 ## Automatic reference counting (ARC)
 
 The compiler manages reference counts automatically. ARC is always on. Every heap block has a header immediately before the payload, and the retain count is the last field of it, so a back end reaches the count at a small fixed offset below the object. The header's shape and the count's width are **per target**:

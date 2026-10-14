@@ -275,6 +275,26 @@ static int xtVersionGT(NSString* a, NSString* b)
         XTType* at = args[i].resolvedType;
         if (![pt isKindOfClass:[XTPointerType class]] || ![at isKindOfClass:[XTPointerType class]])
             continue;
+        // `simd:` is part of the parameter's identity (unlike placement or
+        // weak): a pointer that does not promise page-aligned storage cannot
+        // satisfy it, or the callee's no-copy GPU wrap would read unaligned
+        // memory — this is how a library's `simd:` par-block parameter holds
+        // every caller (par-blocks.md). The other direction only drops the
+        // guarantee and is fine. An explicit per-argument check, not an
+        // overload-rank refusal: a lone candidate is never ranked, and the two
+        // compilers must say the same thing.
+        if (((XTPointerType*)pt).isSimd && !((XTPointerType*)at).isSimd)
+            {
+            [self.diagnostics emitError:[NSString stringWithFormat:
+                @"argument %lu of '%@' is not a simd: pointer where a simd: pointer is declared — simd: "
+                @"promises page-aligned storage (a new[] into a simd: pointer, or "
+                @"another simd: pointer), and the callee may hand it to a GPU with no "
+                @"copy. Cast if that is really meant",
+                (unsigned long)(i + 1),
+                [calleeLabel hasPrefix:@"_fn_"] ? [calleeLabel substringFromIndex:4] : calleeLabel]
+                                     at:args[i].location];
+            continue;
+            }
         XTType* pp = ((XTPointerType*)pt).pointeeType;
         XTType* ap = ((XTPointerType*)at).pointeeType;
         if (!pp || !ap || pp.kind == XTTypeKindVoid || ap.kind == XTTypeKindVoid)

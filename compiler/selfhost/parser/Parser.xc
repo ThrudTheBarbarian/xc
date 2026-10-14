@@ -1185,7 +1185,8 @@ class Parser
     {
         return Parser._same(w, "main") || Parser._same(w, "shadow")
             || Parser._same(w, "banked") || Parser._same(w, "raw")
-            || Parser._same(w, "weak") || Parser._same(w, "outlet");
+            || Parser._same(w, "weak") || Parser._same(w, "outlet")
+            || Parser._same(w, "simd");
     }
 
     // Does the current position begin a type? Used to tell a declaration from
@@ -1266,6 +1267,7 @@ class Parser
         String* out = String.withCString("");
         bool sawWeak = false;
         bool sawOutlet = false;
+        bool sawSimd = false;
         String* placement = (String*)0;
         _lastTypeIsOutlet = false;
 
@@ -1277,6 +1279,9 @@ class Parser
         while (check((u16)tokIdentifier) && isQualifierWord(cur().value())) {
             String* q = advance().value();
             if (Parser._same(q, "weak")) sawWeak = true;
+            // `simd`: the pointee's storage is page-aligned and GPU-reachable
+            // (par-blocks.md); like `weak`, a qualifier on the pointer.
+            else if (Parser._same(q, "simd")) sawSimd = true;
             // `main:` IS the default placement, so it adds no prefix — the
             // display name only carries a non-default one. `outlet` is a
             // marker, not a placement.
@@ -1361,6 +1366,7 @@ class Parser
                 String* pfx = String.withCString("");
                 if (sawWeak) pfx.appendCString("weak:");
                 if (placement != 0) { pfx.append(placement); pfx.appendByte((u8)':'); }
+                if (sawSimd) pfx.appendCString("simd:");
                 pfx.append(out);
                 out = pfx;
                 firstPointer = false;
@@ -2268,6 +2274,24 @@ class Parser
     }
 
     // Only read by the body: every use an element read (the reference).
+    // A captured `simd:` pointer's element type (`simd:float*` -> `float`),
+    // or null for any other spelling. Such a capture is a GPU buffer whose
+    // size the heap header gives (par-blocks.md §3); a plain pointer is not.
+    static String* parSimdPointee(String* t)
+    {
+        if (t == (String*)0 || t.byteLength() < (u32)7 || t.byteAt(t.byteLength() - (u32)1) != (u8)'*')
+            return (String*)0;
+        for (u32 i = (u32)0; i + (u32)5 <= t.byteLength(); i = i + (u32)1) {
+            if (t.byteAt(i) == (u8)'s' && t.byteAt(i + (u32)1) == (u8)'i' && t.byteAt(i + (u32)2) == (u8)'m'
+                && t.byteAt(i + (u32)3) == (u8)'d' && t.byteAt(i + (u32)4) == (u8)':') {
+                u32 from = i + (u32)5;
+                u32 to = t.byteLength() - (u32)1;
+                if (to <= from) return (String*)0;
+                return t.substringBytes(from, to - from);
+            }
+        }
+        return (String*)0;
+    }
     static bool parReadsOnly(Map* frame, String* n)
     {
         Map* refs = (Map*)frame.get((Hashable*)String.withCString("refs"));
@@ -2728,18 +2752,27 @@ class Parser
                 String* cn = (String*)caps.get(i);
                 String* t = (String*)frameTypes.get((Hashable*)cn);
                 u32 lb = t.indexOfByte((u8)'[');
-                if (lb == (u32)$FFFFFFFF)
+                Node* bytes = (Node*)0;
+                if (lb != (u32)$FFFFFFFF) {
+                    String* elem = t.substringBytes((u32)0, lb);
+                    i64 count = (i64)0;
+                    for (u32 q = lb + (u32)1; q < t.byteLength() && t.byteAt(q) >= (u8)'0' && t.byteAt(q) <= (u8)'9'; q = q + (u32)1)
+                        count = count * (i64)10 + (i64)(t.byteAt(q) - (u8)'0');
+                    if (count <= (i64)0)
+                        continue;
+                    Node* sz = mk((u16)nkSizeof);
+                    sz.setName(elem);
+                    bytes = parBin("*", parCast(String.withCString("i64"), parInt(count)),
+                                   parCast(String.withCString("i64"), sz));
+                } else if (Parser.parSimdPointee(t) != (String*)0) {
+                    // A `simd:` heap pointer: its length is the block header's
+                    // count, read as `.length` is for any heap array.
+                    Node* sz = mk((u16)nkSizeof);
+                    sz.setName(Parser.parSimdPointee(t));
+                    bytes = parBin("*", parCast(String.withCString("i64"), parMember(cn, String.withCString("length"))),
+                                   parCast(String.withCString("i64"), sz));
+                } else
                     continue;
-                String* elem = t.substringBytes((u32)0, lb);
-                i64 count = (i64)0;
-                for (u32 q = lb + (u32)1; q < t.byteLength() && t.byteAt(q) >= (u8)'0' && t.byteAt(q) <= (u8)'9'; q = q + (u32)1)
-                    count = count * (i64)10 + (i64)(t.byteAt(q) - (u8)'0');
-                if (count <= (i64)0)
-                    continue;
-                Node* sz = mk((u16)nkSizeof);
-                sz.setName(elem);
-                Node* bytes = parBin("*", parCast(String.withCString("i64"), parInt(count)),
-                                     parCast(String.withCString("i64"), sz));
                 Node* n = mk((u16)nkIf);
                 n.add(parBin("==", parIdent(String.withCString("k")),
                              parCast(String.withCString("i32"), parInt((i64)i))));
@@ -2763,7 +2796,8 @@ class Parser
             for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
                 String* cn = (String*)caps.get(i);
                 String* t = (String*)frameTypes.get((Hashable*)cn);
-                if (t == (String*)0 || t.indexOfByte((u8)'[') == (u32)$FFFFFFFF || !Parser.parReadsOnly(frame, cn))
+                if (t == (String*)0 || (t.indexOfByte((u8)'[') == (u32)$FFFFFFFF && Parser.parSimdPointee(t) == (String*)0)
+                    || !Parser.parReadsOnly(frame, cn))
                     continue;
                 Node* n = mk((u16)nkIf);
                 n.add(parBin("==", parIdent(String.withCString("k")),

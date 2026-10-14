@@ -63,6 +63,37 @@ void *_xtc_new_bool(unsigned long n){return _xtc_alloc(n,1,0);}
 void *_xtc_new_float(unsigned long n){return _xtc_alloc(n,4,0);}
 void *_xtc_new_double(unsigned long n){return _xtc_alloc(n,8,0);}
 void *_xtc_new_string(unsigned long n){return _xtc_alloc(n,8,0);}
+/* `simd:` — a PAGE-ALIGNED payload (par-blocks.md): a unified-memory GPU wraps it
+   in place, with no copy. The header still sits at payload-XT_HDR, so .length,
+   release and the weak list read it as any block's; the allocator's own base is
+   kept 8 bytes before the header, and a distinct magic marks the shape so
+   _xtc_dealloc frees that base and not the header. 16 KB covers Apple Silicon's
+   16 KB pages as well as 4 KB ones. */
+#define XT_MAGIC_ALIGNED 0x58544F43U
+#define XT_PAGE 16384UL
+void *_xtc_alloc_aligned(unsigned long count,unsigned long stride,void(*dealloc)(void*)){
+    /* The payload is rounded up to whole pages too: a GPU wrapping it in
+       place (Metal's newBufferWithBytesNoCopy) needs a page-multiple length. */
+    unsigned long b=count*stride;if(b<16)b=16;b=(b+XT_PAGE-1)&~(XT_PAGE-1);
+    uint8_t*raw=(uint8_t*)calloc(1,b+XT_HDR+XT_PAGE+8);
+    if(!raw){fprintf(stderr,"xcc: out of memory allocating %lu x %lu bytes\n",count,stride);abort();}
+    uint8_t*payload=(uint8_t*)(((unsigned long)(raw+XT_HDR+8)+XT_PAGE-1)&~(XT_PAGE-1));uint8_t*p=payload-XT_HDR;
+    *(uint32_t*)(p+XT_MAGIC_OFF)=XT_MAGIC_ALIGNED;*(unsigned long*)(p+XT_STRIDE_OFF)=stride;
+    *(unsigned long*)(p+XT_COUNT_OFF)=count;*(void(**)(void*))(p+XT_DEALLOC_OFF)=dealloc;
+    *(void**)(p+XT_WEAKH_OFF)=0;*(XT_RC_T*)(p+XT_RC_OFF)=1;*(void**)(p-8)=raw;return payload;}
+void *_xtc_new_simd_u8(unsigned long n){return _xtc_alloc_aligned(n,1,0);}
+void *_xtc_new_simd_i8(unsigned long n){return _xtc_alloc_aligned(n,1,0);}
+void *_xtc_new_simd_bool(unsigned long n){return _xtc_alloc_aligned(n,1,0);}
+void *_xtc_new_simd_u16(unsigned long n){return _xtc_alloc_aligned(n,2,0);}
+void *_xtc_new_simd_i16(unsigned long n){return _xtc_alloc_aligned(n,2,0);}
+void *_xtc_new_simd_u32(unsigned long n){return _xtc_alloc_aligned(n,4,0);}
+void *_xtc_new_simd_i32(unsigned long n){return _xtc_alloc_aligned(n,4,0);}
+void *_xtc_new_simd_float(unsigned long n){return _xtc_alloc_aligned(n,4,0);}
+void *_xtc_new_simd_u64(unsigned long n){return _xtc_alloc_aligned(n,8,0);}
+void *_xtc_new_simd_i64(unsigned long n){return _xtc_alloc_aligned(n,8,0);}
+void *_xtc_new_simd_double(unsigned long n){return _xtc_alloc_aligned(n,8,0);}
+void *_xtc_new_simd_pointer(unsigned long n){return _xtc_alloc_aligned(n,8,0);}
+void *_xtc_new_simd_string(unsigned long n){return _xtc_alloc_aligned(n,8,0);}
 void _xtc_weak_zero_for(void*);
 /* The element count of a `new T[N]` allocation, read from the header the
    allocator wrote (count at base+XT_COUNT_OFF, payload at base+XT_HDR). The `.length` of a
@@ -77,7 +108,9 @@ void _xtc_dealloc(void *o){_xtc_weak_zero_for(o);uint8_t*base=(uint8_t*)o-XT_HDR
     unsigned long stride=*(unsigned long*)(base+XT_STRIDE_OFF);
     unsigned long count=*(unsigned long*)(base+XT_COUNT_OFF);
     void(*d)(void*)=*(void(**)(void*))(base+XT_DEALLOC_OFF);
-    if(d){*(XT_RC_T*)((uint8_t*)o-XT_RC_BYTES)=XT_RC_DYING;for(unsigned long i=0;i<count;i++)d((uint8_t*)o+i*stride);}free(base);}
+    if(d){*(XT_RC_T*)((uint8_t*)o-XT_RC_BYTES)=XT_RC_DYING;for(unsigned long i=0;i<count;i++)d((uint8_t*)o+i*stride);}
+    /* A `simd:` block's header is not its allocator base (see _xtc_alloc_aligned). */
+    if(*(uint32_t*)(base+XT_MAGIC_OFF)==XT_MAGIC_ALIGNED)free(*(void**)(base-8));else free(base);}
 #define _XT_WH(o) (*(void***)((uint8_t*)(o)-(XT_HDR-XT_WEAKH_OFF)))
 /* The weak-reference intrusive list (private:docs/Design/weak-refs-intrusive.md) is the
    one piece of runtime state two xtc threads can mutate at once: registering,
@@ -96,7 +129,7 @@ void _xt_rt_lock(void); void _xt_rt_unlock(void);
    a mismatch means the slot was never really linked here, so clear and bail. */
 static void xt_weak_unreg(void **slot){void ***pp=(void***)slot[-2];if(!pp)return;if(*pp!=slot){slot[-2]=0;slot[-1]=0;return;}void **nx=(void**)slot[-1];*pp=nx;if(nx)nx[-2]=(void*)pp;slot[-2]=0;slot[-1]=0;}
 void _xtc_weak_unregister(void **slot){_xt_rt_lock();xt_weak_unreg(slot);_xt_rt_unlock();}
-void _xtc_weak_register(void **slot,void *obj){_xt_rt_lock();xt_weak_unreg(slot);if(!obj||*(uint32_t*)((uint8_t*)obj-XT_HDR+XT_MAGIC_OFF)!=0x58544F42U){_xt_rt_unlock();return;}void **nx=_XT_WH(obj);slot[-2]=(void*)&_XT_WH(obj);slot[-1]=(void*)nx;if(nx)nx[-2]=(void*)&slot[-1];_XT_WH(obj)=slot;_xt_rt_unlock();}
+void _xtc_weak_register(void **slot,void *obj){_xt_rt_lock();xt_weak_unreg(slot);if(!obj||(*(uint32_t*)((uint8_t*)obj-XT_HDR+XT_MAGIC_OFF)!=0x58544F42U&&*(uint32_t*)((uint8_t*)obj-XT_HDR+XT_MAGIC_OFF)!=XT_MAGIC_ALIGNED)){_xt_rt_unlock();return;}void **nx=_XT_WH(obj);slot[-2]=(void*)&_XT_WH(obj);slot[-1]=(void*)nx;if(nx)nx[-2]=(void*)&slot[-1];_XT_WH(obj)=slot;_xt_rt_unlock();}
 void *_xtc_weak_load(void **slot){return *slot;}
 void _xtc_weak_zero_for(void *obj){if(!obj)return;_xt_rt_lock();void **s=_XT_WH(obj);while(s){void **nx=(void**)s[-1];*s=0;s[-2]=0;s[-1]=0;s=nx;}_XT_WH(obj)=0;_xt_rt_unlock();}
 /* `write` comes from <unistd.h>, included below with the file helpers. It used

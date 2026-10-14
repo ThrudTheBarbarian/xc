@@ -248,6 +248,7 @@ class ParCuda
         gCu_toDeviceAsync = _toDeviceAsync;
         gCu_toHostAsync = _toHostAsync;
         _state = (i32)1;
+        gParGpuDiscrete = true;     // a CUDA card is across the bus
         if (ParDevice.reporting())
             Log.info("par: CUDA device 0 is %s, %d multiprocessors, %d copy engine(s)", _identity.cString(), _sms, _engines);
         return true;

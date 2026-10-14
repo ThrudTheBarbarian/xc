@@ -56,6 +56,11 @@ pointer memcpy(pointer dst, pointer src, u64 n)
 #else
 pointer memcpy(pointer dst, pointer src, u64 n);
 #endif
+// The GPU here is across a bus (CUDA, or a discrete Vulkan card): every
+// array a block uses is copied there and back around a run. Set by the
+// device runtimes when they start; a unified-memory GPU (Metal, an
+// integrated Vulkan GPU) leaves it false.
+bool gParGpuDiscrete;
 
 #if ARCH_win64
 i32 QueryPerformanceCounter(i64* count);
@@ -943,6 +948,23 @@ class ParDevice
         gParMeasuring[i] = true;
         if (gParCpuUs[i] < (i64)0 || gParCpuUs[i] < (i64)1000)
             return (i32)1;
+        // A bandwidth-bound block (computeBound: few operations per byte it
+        // moves, and no loop per item) cannot win on a GPU across a bus,
+        // where every byte goes there and back around the run; auto does not
+        // measure it there (par-auto-parallelisation.md, step B.2). A
+        // unified-memory GPU is still measured: a `simd:` array costs it no
+        // copy at all.
+        if (gParGpuUs[i] < (i64)0 && gParGpuDiscrete)
+            {
+            ParLayout* l = layout(proto, src, (i64)0, n);
+            if (l != (ParLayout*)0 && !computeBound(l))
+                {
+                if (reporting())
+                    Log.info("par: %s: auto keeps it on the CPU (bandwidth-bound, and the GPU is across a bus)", gParBlock[i]);
+                learn(i, proto, n, (i32)1);
+                return (i32)1;
+                }
+            }
         if (gParGpuUs[i] < (i64)0)
             return (i32)2;
         // Then the tile queue's sets, where there are GPU workers.
@@ -983,6 +1005,17 @@ class ParDevice
             learn(i, proto, gParLastN[i], (i32)1);
         else if (measured)
             decide(i, proto);
+        }
+
+    // A `simd:` heap block (par-blocks.md §3): page-aligned, a page-multiple
+    // long, and carrying the aligned magic (0x58544F43) at payload-40 — the
+    // head of the 40-byte object header every 64-bit runtime (rt.c,
+    // rt-freestanding.c) keeps before a block. A unified-memory GPU shares
+    // such a block in place instead of copying it.
+    static bool simdBlock(pointer host)
+        {
+        return host != (pointer)0 && ((u64)host & (u64)16383) == (u64)0
+            && *(u32*)((u8*)host - (u64)40) == (u32)0x58544F43;
         }
 
     // A GPU run: took is the whole run (copies in and out included, the

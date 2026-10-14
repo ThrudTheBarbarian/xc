@@ -144,6 +144,10 @@ class External
     // list is the reference's XTIRIsPrimitiveElemName, i64/u64 included.
     static bool isPrimitive(String* s)
     {
+        // `simd_<prim>` is the page-aligned allocator for a `simd:` pointer,
+        // provided by the runtime like the plain one (XTIRIsPrimitiveElemName).
+        if (s.byteLength() > (u32)5 && s.substringBytes((u32)0, (u32)5).equals(String.withCString("simd_")))
+            return isPrimitive(s.substringBytes((u32)5, s.byteLength() - (u32)5));
         string names = "pointer bool i8 u8 i16 u16 i32 u32 i64 u64 float double string";
         Array* p = String.withCString(names).splitOnByte((u8)' ');
         for (u32 i = (u32)0; i < p.count(); i = i + (u32)1)
@@ -235,6 +239,26 @@ class External
         Array* sufs = suffixesAfter(asmText, "__xtc_new_", false);
         for (u32 i = (u32)0; i < sufs.count(); i = i + (u32)1) {
             String* suf = (String*)sufs.get(i);
+            // `simd:` — `new T[n]` into a page-aligned pointer (par-blocks.md):
+            // the primitive helper again, but the PAYLOAD lands on a 16 KB page
+            // so a unified-memory GPU wraps it in place with no copy. The header
+            // sits at payload-38 as any block's (so .length and release read it
+            // unchanged), the allocator's own base is kept 8 bytes before it,
+            // and a distinct magic (0x58544F43) tells _xtc_dealloc to free that
+            // base. Mirrors the reference byte for byte.
+            if (suf.byteLength() > (u32)5 && suf.substringBytes((u32)0, (u32)5).equals(String.withCString("simd_"))
+                && isPrimitive(suf.substringBytes((u32)5, suf.byteLength() - (u32)5))) {
+                String* elem = suf.substringBytes((u32)5, suf.byteLength() - (u32)5);
+                u32 sst = primStride(elem);
+                s.appendCString("void *_xtc_new_simd_"); s.append(elem);
+                s.appendFormat("(unsigned long n){unsigned long b=n*%luUL; if(b<256)b=256;b=(b+16383UL)&~16383UL;", sst);
+                s.appendCString("uint8_t*raw=(uint8_t*)calloc(1,b+38+16384+8);");
+                s.appendCString("if(!raw){fprintf(stderr,\"xcc: out of memory (%lu elements)\\n\",n);abort();}");
+                s.appendCString("uint8_t*q=(uint8_t*)(((unsigned long)(raw+46)+16383UL)&~16383UL);uint8_t*p=q-38;");
+                s.appendFormat("*(uint32_t*)(p+0)=0x58544F43U;*(unsigned long*)(p+4)=%luUL;*(unsigned long*)(p+12)=n;", sst);
+                s.appendCString("*(void(**)(void*))(p+20)=0;*(void**)(p+28)=0;*(uint16_t*)(p+36)=1;*(void**)(p-8)=raw;return q;}\n");
+                continue;
+            }
             if (isPrimitive(suf)) {
                 u32 st = primStride(suf);
                 s.appendCString("void *_xtc_new_"); s.append(suf);
@@ -281,7 +305,10 @@ class External
             s.appendCString("unsigned long stride=*(unsigned long*)(base+4);unsigned long count=*(unsigned long*)(base+12);");
             s.appendCString("void(*d)(void*)=*(void(**)(void*))(base+20);");
             s.appendCString("if(d){*(unsigned short*)((uint8_t*)o-2)=0x8000u;");
-            s.appendCString("for(unsigned long i=0;i<count;i++)d((uint8_t*)o+i*stride);}free(base);}\n");
+            // A `simd:` block (magic 0x58544F43, _xtc_new_simd_<T>) keeps its
+            // allocator base 8 bytes before the header: free that, not the header.
+            s.appendCString("for(unsigned long i=0;i<count;i++)d((uint8_t*)o+i*stride);}");
+            s.appendCString("if(*(uint32_t*)(base+0)==0x58544F43U)free(*(void**)(base-8));else free(base);}\n");
         }
         s.appendCString("#define _XT_WH(o) (*(void***)((uint8_t*)(o)-10))\n");
         s.appendCString("void _xt_rt_lock(void); void _xt_rt_unlock(void);\n");
@@ -296,7 +323,8 @@ class External
         s.appendCString("_xt_rt_lock();");
         s.appendCString("_xt_weak_unreg(slot);");
         s.appendCString("if(!obj) { _xt_rt_unlock(); return; }");
-        s.appendCString("if(*(uint32_t*)((uint8_t*)obj-38)!=0x58544F42U) { _xt_rt_unlock(); return; }");
+        // A `simd:` block carries magic 0x58544F43 (see _xtc_new_simd_<T>).
+        s.appendCString("if(*(uint32_t*)((uint8_t*)obj-38)!=0x58544F42U&&*(uint32_t*)((uint8_t*)obj-38)!=0x58544F43U) { _xt_rt_unlock(); return; }");
         s.appendCString("void **nx=_XT_WH(obj);");
         s.appendCString("slot[-2]=(void*)&_XT_WH(obj); slot[-1]=(void*)nx;");
         s.appendCString("if(nx) nx[-2]=(void*)&slot[-1];");

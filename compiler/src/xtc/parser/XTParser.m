@@ -1806,7 +1806,8 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     NSString* kw = v.lowercaseString;
     return [kw isEqualToString:@"main"] || [kw isEqualToString:@"shadow"] ||
            [kw isEqualToString:@"banked"] || [kw isEqualToString:@"raw"] ||
-           [kw isEqualToString:@"weak"] || [kw isEqualToString:@"outlet"];
+           [kw isEqualToString:@"weak"] || [kw isEqualToString:@"outlet"] ||
+           [kw isEqualToString:@"simd"];
     }
 
 // Forward-scan (no advance): does the current position begin a run of qualifier
@@ -2030,6 +2031,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     BOOL placementExplicit = NO;
     BOOL isWeak = NO;
     BOOL isOutlet = NO;
+    BOOL isSimd = NO;
     // Consume a run of qualifiers, colons optional and order-free
     // (`weak outlet T@`, `weak:outlet:T@`, `banked weak T@`, …). The
     // forward-scan guards against eating a bare identifier that only looks
@@ -2067,6 +2069,10 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
             else if ([kw isEqualToString:@"outlet"])
                 {
                 isOutlet = YES;
+                }
+            else if ([kw isEqualToString:@"simd"])
+                {
+                isSimd = YES;
                 }
             [self advance]; // qualifier
             if ([self currentToken].type == XTTokenColon)
@@ -2247,9 +2253,11 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         // means a weak pointer to a strong pointer to T, not a
         // strong pointer to a weak pointer.
         BOOL weakThisLevel = firstPointer && isWeak;
+        BOOL simdThisLevel = firstPointer && isSimd;
         base = [XTPointerType pointerToType:base
                                   placement:p
-                                     isWeak:weakThisLevel];
+                                     isWeak:weakThisLevel
+                                     isSimd:simdThisLevel];
         firstPointer = NO;
         }
 

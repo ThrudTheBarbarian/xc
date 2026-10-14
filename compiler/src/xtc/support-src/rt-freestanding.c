@@ -472,6 +472,50 @@ void* _xtc_alloc(uint64_t count, uint64_t stride, void (*dealloc)(void*))
     }
 /* One element is its own width, not eight — an 8x waste that also hit the
    (now removed) ceiling eight times sooner than the element count suggested. */
+/* `simd:` — a PAGE-ALIGNED payload (par-blocks.md): a unified-memory GPU then
+   wraps it in place, with no copy. The header still sits at payload-XT_HDR, so
+   .length, release and the weak list read it as any block's; the allocator's
+   own base is kept 8 bytes before the header, and a distinct magic marks the
+   shape so _xtc_dealloc frees that base and not the header. 16 KB covers the
+   16 KB pages of Apple Silicon as well as 4 KB ones. */
+#define XT_MAGIC_ALIGNED 0x58544F43U
+#define XT_PAGE 16384ULL
+void* _xtc_alloc_aligned(uint64_t count, uint64_t stride, void (*dealloc)(void*))
+    {
+    uint64_t b = count * stride;
+    if (b < 16)
+        b = 16;
+    /* The payload is rounded up to whole pages too: a GPU wrapping it in
+       place needs a page-multiple length. */
+    b = (b + XT_PAGE - 1) & ~(XT_PAGE - 1);
+    uint8_t* raw = (uint8_t*)_xt_calloc(b + XT_HDR + XT_PAGE + 8);
+    if (!raw)
+        return 0;
+    uint8_t* payload = (uint8_t*)(((uint64_t)(raw + XT_HDR + 8) + XT_PAGE - 1) & ~(XT_PAGE - 1));
+    uint8_t* p = payload - XT_HDR;
+    *(uint32_t*)(p + 0) = XT_MAGIC_ALIGNED;
+    *(uint64_t*)(p + 4) = stride;
+    *(uint64_t*)(p + 12) = count;
+    *(void (**)(void*))(p + 20) = dealloc;
+    *(void**)(p + 28) = 0;
+    *(XT_RC_T*)(p + XT_RC_OFF) = 1;
+    *(void**)(p - 8) = raw;
+    return payload;
+    }
+void* _xtc_new_simd_u8(uint64_t n) { return _xtc_alloc_aligned(n, 1, 0); }
+void* _xtc_new_simd_i8(uint64_t n) { return _xtc_alloc_aligned(n, 1, 0); }
+void* _xtc_new_simd_bool(uint64_t n) { return _xtc_alloc_aligned(n, 1, 0); }
+void* _xtc_new_simd_u16(uint64_t n) { return _xtc_alloc_aligned(n, 2, 0); }
+void* _xtc_new_simd_i16(uint64_t n) { return _xtc_alloc_aligned(n, 2, 0); }
+void* _xtc_new_simd_u32(uint64_t n) { return _xtc_alloc_aligned(n, 4, 0); }
+void* _xtc_new_simd_i32(uint64_t n) { return _xtc_alloc_aligned(n, 4, 0); }
+void* _xtc_new_simd_float(uint64_t n) { return _xtc_alloc_aligned(n, 4, 0); }
+void* _xtc_new_simd_u64(uint64_t n) { return _xtc_alloc_aligned(n, 8, 0); }
+void* _xtc_new_simd_i64(uint64_t n) { return _xtc_alloc_aligned(n, 8, 0); }
+void* _xtc_new_simd_double(uint64_t n) { return _xtc_alloc_aligned(n, 8, 0); }
+void* _xtc_new_simd_pointer(uint64_t n) { return _xtc_alloc_aligned(n, 8, 0); }
+void* _xtc_new_simd_string(uint64_t n) { return _xtc_alloc_aligned(n, 8, 0); }
+
 void* _xtc_new_u8(uint64_t n)
     {
     return _xtc_alloc(n, 1, 0);
@@ -555,7 +599,11 @@ void _xtc_dealloc(void* o)
         for (uint64_t i = 0; i < count; i++)
             d((uint8_t*)o + i * stride);
         }
-    _xt_free(base);
+    /* A `simd:` block's header is not its allocator base (see _xtc_alloc_aligned). */
+    if (*(uint32_t*)(base + 0) == XT_MAGIC_ALIGNED)
+        _xt_free(*(void**)(base - 8));
+    else
+        _xt_free(base);
     }
 
 #define _XT_WH(o) (*(void***)((uint8_t*)(o) - (XT_HDR - 28)))

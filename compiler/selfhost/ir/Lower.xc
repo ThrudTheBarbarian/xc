@@ -458,6 +458,10 @@ class ClassInfo
     String* _staticSelfClass; // set while lowering a STATIC method's body
     Map* _funcsBySym;         // mangled name -> the declaration it names
     Map* _heapArrayLen;       // a local bound to `new T[N]` -> that N
+    // Set by lowerVarDecl / lowerAssign when the `new T[N]` being lowered lands
+    // in a `simd:` pointer, so lowerNewNonClass picks the page-aligned helper
+    // (`_xtc_new_simd_<T>`, par-blocks.md); consumed by that lowering.
+    bool _newSimd;
     Array* _shadowScopes;     // per arc scope: ShadowSave@ for names it shadowed
     Map* _staticIvar;         // "<Class>.<ivar>" -> its module global's name
     Map* _staticIvarTy;       // …and its declared type
@@ -4906,6 +4910,11 @@ class ClassInfo
     IRValue* lowerAssign(Node* n)
         {
         Node* lhs = n.kid((u32)0);
+        // `p = new T[N]` into a `simd:` pointer: the allocation must be
+        // page-aligned, so the new is lowered through the aligned helper.
+        if (isName(n.op(), "=") && n.kidCount() > (u32)1 && n.kid((u32)1).kind() == (u16)nkNew
+            && lhs.ty() != 0 && Overload._isSimd(lhs.ty()))
+            _newSimd = true;
         // A PROPERTY write is a method call, and the value it stores is the
         // one handed to the setter — not whatever the setter chose to keep.
         if (n.setter() != 0 && lhs.kind() == (u16)nkMember)
@@ -8830,6 +8839,10 @@ class ClassInfo
         if (n.kidCount() > (u32)0 && n.kid((u32)0).kind() == (u16)nkNew)
             {
             Node* ne = n.kid((u32)0);
+            // `simd: T* p = new T[N]` — the allocation lands in a page-aligned
+            // pointer, so the new is lowered through the aligned helper.
+            if (n.ty() != 0 && Overload._isSimd(n.ty()))
+                _newSimd = true;
             if (ne.kidCount() > (u32)ne.num())
                 {
                 _constOk = true;
@@ -10349,6 +10362,14 @@ class ClassInfo
         // object header through the NULL it got back. Bug 027.
         String* nm = stripQual(n.name());
         String* helper = String.withCString("_xtc_new_");
+        // A `new T[N]` landing in a `simd:` pointer takes the page-aligned
+        // helper (par-blocks.md) — on the 64-bit targets, whose runtimes define
+        // `_xtc_new_simd_<T>` (the arm64 stub, rt.c, rt-freestanding.c); a
+        // narrow target has no GPU to feed and keeps the plain one. Primitive
+        // elements only: an aggregate takes the struct helper's shape.
+        if (_newSimd && isPrimElemName(nm) && _ptrW == (u32)8)
+            helper = String.withCString("_xtc_new_simd_");
+        _newSimd = false;
         helper.append(nm);
         // The COUNT is materialised either way — one for a scalar `new`
         // — and only PASSED when the source wrote one. The constant is

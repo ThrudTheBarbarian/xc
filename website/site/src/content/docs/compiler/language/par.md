@@ -197,6 +197,41 @@ double, which Apple GPUs do not have
 `-Wno-par-gpu` turns the warning off, for a program that keeps some blocks on
 the CPU on purpose.
 
+### Arrays the GPU shares: `simd:` pointers
+
+**From 0.8.1.** A block's arrays are copied to the GPU before a run and back
+after it. On a discrete card that is the bus, and unavoidable; on a
+unified-memory GPU — Apple silicon, or an integrated GPU on Linux — it is a
+copy the hardware never needed. A heap array can be declared so that such a
+GPU uses it where it lies:
+
+```c
+simd: u32* xs = new u32[N];
+simd: u32* ys = new u32[N];
+par saxpy
+{
+    for (u32 i in 0..N)
+        ys[i] = (u32)3 * xs[i] + ys[i];
+}
+```
+
+`simd:` is a pointer qualifier, written where `weak:` is. A `new T[N]` into a
+`simd:` pointer allocates the array page-aligned, on whole 16 KB pages, so a
+GPU can map it; `.length`, `delete` and reference counting work as for any
+heap array. A block that indexes a `simd:` pointer takes it as a GPU array,
+sized from the heap header, and on Apple silicon Metal binds the pages in
+place, with no copy either way; so does a Linux integrated GPU whose Vulkan
+driver imports host memory (`VK_EXT_external_memory_host`, which Mesa's
+drivers have). A discrete card copies a `simd:` array as it copies any other,
+and a plain heap pointer is not a GPU array: a block that indexes one runs on
+the CPU, since its size is not known to the block.
+
+Because the promise rides on the type, a `simd:` pointer may hold only what
+`new[]` returned or what another `simd:` pointer holds. Passing a plain
+pointer where a function declares a `simd:` parameter is an error — the callee
+may hand it to a GPU with no copy — and a cast says that is meant. The 8-,
+16- and 32-bit targets accept `simd:` and allocate as plain `new` does.
+
 ### Speed or accuracy
 
 A block's goal says what its GPU version favours: `:goal(speed)`, the default,

@@ -49,7 +49,14 @@ static inline BOOL XTIRIsPrimitiveElemName(NSString* _Nullable name)
                                      @"i16", @"u16", @"i32", @"u32",
                                      @"i64", @"u64", @"float", @"double", @"string" ]];
     });
-    return name != nil && [prims containsObject:name];
+    if (name == nil)
+        return NO;
+    // `simd_<prim>`: the page-aligned allocator for a `simd:` pointer
+    // (par-blocks.md §3), the same one-argument form, provided by every
+    // 64-bit runtime beside the plain one — so no per-program thunk either.
+    if ([name hasPrefix:@"simd_"])
+        return [prims containsObject:[name substringFromIndex:5]];
+    return [prims containsObject:name];
     }
 
 NS_ASSUME_NONNULL_END

@@ -235,6 +235,10 @@
 // and the caller has to use a runtime path. Used for the length_prop
 // and array_slice_heap fixtures.
 @property(nonatomic) NSMutableDictionary<NSString*, NSNumber*>* heapArrayLengthByLocal;
+// Set by lowerVarDecl / lowerAssignExpr when the `new T[N]` being lowered lands
+// in a `simd:` pointer, so lowerNewExpr picks the page-aligned helper
+// (`_xtc_new_simd_<T>`, par-blocks.md); consumed by that lowering.
+@property(nonatomic) BOOL newSimd;
 // ARC 2d self-retain: set by the method-lowering callers when the method
 // must retain `self` on entry (every call site is a heap receiver, and
 // it's an instance method that isn't a destructor). `_lowerCallable`
@@ -5512,6 +5516,13 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
 
 - (nullable XTIRValue*)lowerAssignExpr:(XTAssignExprNode*)node
     {
+    // `p = new T[N]` into a `simd:` pointer: the allocation must be
+    // page-aligned, so the new is lowered through the aligned helper
+    // (consumed there). Mirrors the port's lowerAssign.
+    if (node.assignOp == XTAssignOpAssign && node.rhs && [node.rhs isKindOfClass:[XTNewExprNode class]] &&
+        node.lhs.resolvedType && [node.lhs.resolvedType isKindOfClass:[XTPointerType class]] &&
+        ((XTPointerType*)node.lhs.resolvedType).isSimd)
+        self.newSimd = YES;
     if (node.assignOp != XTAssignOpAssign)
         {
         // Compound assignment (`lhs op= rhs`): rewrite to the plain form
@@ -8365,7 +8376,16 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             {
             allocArgs = node.countExpr ? @[ countVal ] : @[];
             }
-        helperName = [NSString stringWithFormat:@"_xtc_new_%@", node.className];
+        // A `new T[N]` landing in a `simd:` pointer takes the page-aligned
+        // helper (par-blocks.md) — on the 64-bit targets, whose runtimes define
+        // `_xtc_new_simd_<T>` (the arm64 stub, rt.c, rt-freestanding.c); a
+        // narrow target has no GPU to feed and keeps the plain one. Primitive
+        // elements only: an aggregate takes the struct helper's shape.
+        if (self.newSimd && XTIRIsPrimitiveElemName(node.className) && [XTPointerType heapPointerWidth] == 8)
+            helperName = [NSString stringWithFormat:@"_xtc_new_simd_%@", node.className];
+        else
+            helperName = [NSString stringWithFormat:@"_xtc_new_%@", node.className];
+        self.newSimd = NO;
         }
     NSMutableArray<XTIRValue*>* args = [allocArgs mutableCopy];
     XTIRSymbolId sid = [self runtimeHelperSymbolNamed:helperName];
@@ -13811,6 +13831,12 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
 
 - (void)lowerVarDecl:(XTVariableDeclNode*)node
     {
+    // `simd: T* p = new T[N]` — the allocation lands in a page-aligned pointer,
+    // so the new is lowered through the aligned helper (consumed there).
+    if (node.initialiser && [node.initialiser isKindOfClass:[XTNewExprNode class]] &&
+        node.declaredType && [node.declaredType isKindOfClass:[XTPointerType class]] &&
+        ((XTPointerType*)node.declaredType).isSimd)
+        self.newSimd = YES;
     // A declaration REBINDS its name. If an outer scope already bound it,
     // save that binding first so the scope exit can restore it (finding #16).
     if (node.varName && !(node.isStatic && !node.isGlobal))

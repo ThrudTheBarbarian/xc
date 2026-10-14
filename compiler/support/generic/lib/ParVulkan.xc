@@ -70,6 +70,10 @@ typedef void vkGetPhysicalDeviceFeatures_t(pointer pd, pointer feats);
 typedef void vkGetPhysicalDeviceMemoryProperties_t(pointer pd, pointer props);
 typedef void vkGetPhysicalDeviceQueueFamilyProperties_t(pointer pd, u32* count, pointer props);
 typedef i32 vkCreateDevice_t(pointer pd, pointer info, pointer alloc, pointer* out);
+typedef i32 vkEnumerateDeviceExtensionProperties_t(pointer pd, u8* layer, u32* count, pointer props);
+typedef pointer vkGetDeviceProcAddr_t(pointer dev, u8* name);
+// VK_EXT_external_memory_host: a `simd:` block imported as the buffer's memory.
+typedef i32 vkGetMemoryHostPointerPropertiesEXT_t(pointer dev, u32 handleType, pointer host, pointer props);
 typedef void vkGetDeviceQueue_t(pointer dev, u32 family, u32 index, pointer* out);
 typedef i32 vkCreateBuffer_t(pointer dev, pointer info, pointer alloc, u64* out);
 typedef void vkDestroyBuffer_t(pointer dev, u64 buf, pointer alloc);
@@ -186,6 +190,11 @@ pointer gVkDev;
 pointer gVkQueue;
 u64 gVkCmdPool;
 bool gVkDiscrete;
+// An integrated GPU whose driver imports host memory (VK_EXT_external_memory_host):
+// a `simd:` block is bound where it lies, with no copy either way.
+bool gVkHostImport;
+vkGetMemoryHostPointerPropertiesEXT_t* gVk_hostPtrProps;
+pointer gParVkHost[49];     // the `simd:` block binding slot i imports, or 0
 
 class ParVulkan
     {
@@ -195,6 +204,8 @@ class ParVulkan
     static u32 _family;
     static u64 _cmdPool;
     static u8* _memProps;       // VkPhysicalDeviceMemoryProperties (520 bytes)
+    static vkGetMemoryHostPointerPropertiesEXT_t* _hostPtrProps;
+    static bool _hostImport;    // integrated, and the driver imports host memory
     static vkCreateBuffer_t* _createBuffer;
     static vkDestroyBuffer_t* _destroyBuffer;
     static vkGetBufferMemoryRequirements_t* _bufferReqs;
@@ -420,10 +431,51 @@ class ParVulkan
         _vk32(&dci[0], (u32)20, (u32)1);
         _vkp(&dci[0], (u32)24, (pointer)&dq[0]);
         _vkp(&dci[0], (u32)64, (pointer)on);
+        // An integrated GPU works in host memory already: with
+        // VK_EXT_external_memory_host its driver binds a `simd:` block where
+        // it lies (importBuffer), so the block is never copied. Asked for
+        // only where the device lists it; a discrete card would read such
+        // memory across the bus at every access, so it keeps its copies.
+        vkEnumerateDeviceExtensionProperties_t* enumerateExt =
+            (vkEnumerateDeviceExtensionProperties_t*)fn("vkEnumerateDeviceExtensionProperties");
+        vkGetDeviceProcAddr_t* getDevProc = (vkGetDeviceProcAddr_t*)fn("vkGetDeviceProcAddr");
+        u8* extName = "VK_EXT_external_memory_host";
+        pointer extNames[1];
+        extNames[0] = (pointer)extName;
+        bool haveExt = false;
+        if (!_discrete && enumerateExt != (vkEnumerateDeviceExtensionProperties_t*)0 &&
+            getDevProc != (vkGetDeviceProcAddr_t*)0)
+            {
+            u32 ne = (u32)0;
+            enumerateExt(pd, (u8*)0, &ne, (pointer)0);
+            if (ne > (u32)0)
+                {
+                u8* ep = (u8*)malloc((u64)ne * (u64)260);   // VkExtensionProperties: name[256], specVersion
+                if (enumerateExt(pd, (u8*)0, &ne, (pointer)ep) == (i32)0)
+                    for (u32 e = (u32)0; e < ne; e = e + (u32)1)
+                        {
+                        u8* nm = ep + e * (u32)260;
+                        u32 k = (u32)0;
+                        while (k < (u32)27 && nm[k] == extName[k])
+                            k = k + (u32)1;
+                        if (k == (u32)27 && nm[27] == (u8)0)
+                            haveExt = true;
+                        }
+                free((pointer)ep);
+                }
+            }
+        if (haveExt)
+            {
+            _vk32(&dci[0], (u32)48, (u32)1);
+            _vkp(&dci[0], (u32)56, (pointer)&extNames[0]);
+            }
         pointer dev = (pointer)0;
         if (createDevice(pd, (pointer)&dci[0], (pointer)0, &dev) != (i32)0)
             return false;
         _dev = dev;
+        if (haveExt)
+            _hostPtrProps = (vkGetMemoryHostPointerPropertiesEXT_t*)getDevProc(dev, "vkGetMemoryHostPointerPropertiesEXT");
+        _hostImport = _hostPtrProps != (vkGetMemoryHostPointerPropertiesEXT_t*)0;
         _family = fam;
         pointer q = (pointer)0;
         getQueue(dev, fam, (u32)0, &q);
@@ -470,9 +522,14 @@ class ParVulkan
         gVkQueue = _queue;
         gVkCmdPool = _cmdPool;
         gVkDiscrete = _discrete;
+        if (_discrete)
+            gParGpuDiscrete = true;
+        gVk_hostPtrProps = _hostPtrProps;
+        gVkHostImport = _hostImport;
         _state = (i32)1;
         if (ParDevice.reporting() && _identity != (String*)0)
-            Log.info("par: Vulkan device is %s", _identity.cString());
+            Log.info("par: Vulkan device is %s%s", _identity.cString(),
+                     _hostImport ? ", sharing simd: blocks in place" : "");
         return true;
 #else
         return false;
@@ -537,9 +594,86 @@ class ParVulkan
         return true;
         }
 
+    // A buffer over a `simd:` block's own pages (VK_EXT_external_memory_host):
+    // the block is page-aligned and a page-multiple long, so its pages import
+    // whole, and the kernel reads and writes the program's memory directly.
+    // False when the driver declines (an alignment it does not take, say),
+    // and the caller copies as before.
+    static bool importBuffer(pointer host, i64 bytes, u64* buf, u64* mem)
+        {
+        if (!_hostImport)
+            return false;
+        bytes = (bytes + (i64)16383) & (i64)-16384;
+        u8 ext[24];                                     // VkExternalMemoryBufferCreateInfo
+        memset((pointer)&ext[0], (i32)0, (u64)24);
+        _vk32(&ext[0], (u32)0, (u32)1000072000);
+        _vk32(&ext[0], (u32)16, (u32)0x80);             // HOST_ALLOCATION_BIT_EXT
+        u8 bci[56];
+        memset((pointer)&bci[0], (i32)0, (u64)56);
+        _vk32(&bci[0], (u32)0, (u32)12);
+        _vkp(&bci[0], (u32)8, (pointer)&ext[0]);
+        _vk64(&bci[0], (u32)24, (u64)bytes);
+        _vk32(&bci[0], (u32)32, (u32)0x20);             // STORAGE_BUFFER
+        if (_createBuffer(_dev, (pointer)&bci[0], (pointer)0, buf) != (i32)0)
+            return false;
+        u8 req[24];
+        _bufferReqs(_dev, *buf, (pointer)&req[0]);
+        u32 bits = *(u32*)(pointer)(&req[0] + 16);
+        u8 hpp[24];                                     // VkMemoryHostPointerPropertiesEXT
+        memset((pointer)&hpp[0], (i32)0, (u64)24);
+        _vk32(&hpp[0], (u32)0, (u32)1000178001);
+        if (_hostPtrProps(_dev, (u32)0x80, host, (pointer)&hpp[0]) != (i32)0 ||
+            *(u64*)(pointer)&req[0] > (u64)bytes)
+            {
+            _destroyBuffer(_dev, *buf, (pointer)0);
+            *buf = (u64)0;
+            return false;
+            }
+        bits = bits & *(u32*)(pointer)(&hpp[0] + 16);
+        i32 type = memoryWith(bits, (u32)14);
+        if (type < (i32)0)
+            type = memoryWith(bits, (u32)6);
+        if (type < (i32)0)
+            type = memoryWith(bits, (u32)2);
+        if (type < (i32)0)
+            {
+            _destroyBuffer(_dev, *buf, (pointer)0);
+            *buf = (u64)0;
+            return false;
+            }
+        u8 imp[32];                                     // VkImportMemoryHostPointerInfoEXT
+        memset((pointer)&imp[0], (i32)0, (u64)32);
+        _vk32(&imp[0], (u32)0, (u32)1000178000);
+        _vk32(&imp[0], (u32)16, (u32)0x80);
+        _vkp(&imp[0], (u32)24, host);
+        u8 mai[32];
+        memset((pointer)&mai[0], (i32)0, (u64)32);
+        _vk32(&mai[0], (u32)0, (u32)5);
+        _vkp(&mai[0], (u32)8, (pointer)&imp[0]);
+        _vk64(&mai[0], (u32)16, (u64)bytes);
+        _vk32(&mai[0], (u32)24, (u32)type);
+        if (_allocate(_dev, (pointer)&mai[0], (pointer)0, mem) != (i32)0)
+            {
+            _destroyBuffer(_dev, *buf, (pointer)0);
+            *buf = (u64)0;
+            *mem = (u64)0;
+            return false;
+            }
+        if (_bind(_dev, *buf, *mem, (u64)0) != (i32)0)
+            {
+            _freeMemory(_dev, *mem, (pointer)0);
+            _destroyBuffer(_dev, *buf, (pointer)0);
+            *buf = (u64)0;
+            *mem = (u64)0;
+            return false;
+            }
+        return true;
+        }
+
     // Frees binding slot i's kept buffers, if any.
     static void drop(u32 i)
         {
+        gParVkHost[i] = (pointer)0;
         if (gParVkBuf[i] != (u64)0)
             _destroyBuffer(_dev, gParVkBuf[i], (pointer)0);
         if (gParVkMem[i] != (u64)0)
@@ -765,7 +899,17 @@ class ParVulkan
         bool ok = true;
         for (u32 i = (u32)0; i < nb && ok; i = i + (u32)1)
             {
-            if (gParVkBuf[i] == (u64)0 || gParVkCap[i] < sizes[i])
+            // A captured `simd:` block on an integrated GPU that imports host
+            // memory is bound in place; the slot is remade when the block
+            // bound there changes.
+            pointer want = (pointer)0;
+            if (_hostImport && i >= (u32)1 && i <= l.nbuf)
+                {
+                pointer h = *(pointer*)(obj + l.bufOff[i - (u32)1]);
+                if (ParDevice.simdBlock(h))
+                    want = h;
+                }
+            if (gParVkBuf[i] == (u64)0 || gParVkCap[i] < sizes[i] || gParVkHost[i] != want)
                 {
                 drop(i);
                 u64 hb = (u64)0;
@@ -773,7 +917,18 @@ class ParVulkan
                 u8* hp = (u8*)0;
                 u64 db = (u64)0;
                 u64 dm = (u64)0;
-                ok = buffer(sizes[i], false, &hb, &hm, &hp);
+                ok = false;
+                if (want != (pointer)0)
+                    {
+                    ok = importBuffer(want, sizes[i], &hb, &hm);
+                    if (ok)
+                        hp = (u8*)want;
+                    else
+                        want = (pointer)0;
+                    }
+                if (!ok)
+                    ok = buffer(sizes[i], false, &hb, &hm, &hp);
+                gParVkHost[i] = want;
                 if (ok && _discrete)
                     ok = buffer(sizes[i], true, &db, &dm, (u8**)0);
                 // Kept even when half made, so drop() frees what was made.
@@ -796,7 +951,9 @@ class ParVulkan
             b = (u32)1;
             for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
                 {
-                memcpy((pointer)maps[b], *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i]);
+                // An imported `simd:` block IS the mapping: nothing to copy.
+                if ((pointer)maps[b] != *(pointer*)(obj + l.bufOff[i]))
+                    memcpy((pointer)maps[b], *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i]);
                 b = b + (u32)1;
                 }
             for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
@@ -986,7 +1143,7 @@ class ParVulkan
             b = (u32)1;
             for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
                 {
-                if (l.bufIn[i] == (i64)0)
+                if (l.bufIn[i] == (i64)0 && (pointer)maps[b] != *(pointer*)(obj + l.bufOff[i]))
                     memcpy(*(pointer*)(obj + l.bufOff[i]), (pointer)maps[b], (u64)l.bufLen[i]);
                 b = b + (u32)1;
                 }
@@ -1043,6 +1200,7 @@ class ParVulkanWorker : ParWorker
     u64 _hmem[49];
     u8* _hmap[49];
     i64 _hcap[49];
+    pointer _hhost[49];     // the `simd:` block slot i imports in place, or 0
     u64 _dbuf[49];
     u64 _dmem[49];
     i64 _dcap[49];
@@ -1104,8 +1262,12 @@ class ParVulkanWorker : ParWorker
         i32 slot = ParVulkan.pipeline(spv);
         if (slot < (i32)0 || gParVkBindings[slot] != (u32)1 + l.nbuf + l.nglob + l.nred)
             return false;
+        // Every written buffer needs a footprint, so a tile knows which slice
+        // to copy back — unless it is a `simd:` block an integrated GPU binds
+        // in place, which has nothing to copy.
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
-            if (l.bufIn[i] == (i64)0 && l.bufFp[i] == (i64)0)
+            if (l.bufIn[i] == (i64)0 && l.bufFp[i] == (i64)0
+                && !(gVkHostImport && !gVkDiscrete && ParDevice.simdBlock(*(pointer*)((u8*)(pointer)proto + l.bufOff[i]))))
                 return false;
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             if (l.globIn[i] == (i64)0 && l.globFp[i] == (i64)0)
@@ -1129,6 +1291,30 @@ class ParVulkanWorker : ParWorker
         freeBuf(b, m);
         *cap = (i64)0;
         if (!ParVulkan.buffer(need, device, b, m, map))
+            return false;
+        *cap = need;
+        return true;
+        }
+
+    // ensure(), for a host slot that may hold an imported `simd:` block
+    // (`want`, or 0 for an ordinary buffer): kept while the same block is
+    // bound there, remade when it changes, and an import the driver declines
+    // falls back to a copied buffer.
+    bool ensureHost(pointer want, i64 need, u64* b, u64* m, u8** map, i64* cap, pointer* host)
+        {
+        if (*b != (u64)0 && *host == want && (want != (pointer)0 || *cap >= need))
+            return true;
+        freeBuf(b, m);
+        *cap = (i64)0;
+        *host = (pointer)0;
+        if (want != (pointer)0 && ParVulkan.importBuffer(want, need, b, m))
+            {
+            *map = (u8*)want;
+            *host = want;
+            *cap = need;
+            return true;
+            }
+        if (!ParVulkan.buffer(need, false, b, m, map))
             return false;
         *cap = need;
         return true;
@@ -1200,7 +1386,16 @@ class ParVulkanWorker : ParWorker
             {
             _sizes[i] = (_sizes[i] + (i64)3) & (i64)-4;
             if (!sliced[i])
-                ok = ensure(_sizes[i], false, &_hbuf[i], &_hmem[i], &_hmap[i], &_hcap[i]);
+                {
+                pointer want = (pointer)0;
+                if (gVkHostImport && !gVkDiscrete && i >= (u32)1 && i <= l.nbuf)
+                    {
+                    pointer h = *(pointer*)(obj + l.bufOff[i - (u32)1]);
+                    if (ParDevice.simdBlock(h))
+                        want = h;
+                    }
+                ok = ensureHost(want, _sizes[i], &_hbuf[i], &_hmem[i], &_hmap[i], &_hcap[i], &_hhost[i]);
+                }
             if (ok && gVkDiscrete)
                 ok = ensure(_sizes[i], true, &_dbuf[i], &_dmem[i], (u8**)0, &_dcap[i]);
             }
@@ -1216,7 +1411,7 @@ class ParVulkanWorker : ParWorker
             memcpy((pointer)_hmap[0], (pointer)obj, (u64)l.size);
             b = (u32)1;
             for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
-                { if (!sliced[b]) memcpy((pointer)_hmap[b], *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i]); b = b + (u32)1; }
+                { if (!sliced[b] && (pointer)_hmap[b] != *(pointer*)(obj + l.bufOff[i])) memcpy((pointer)_hmap[b], *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i]); b = b + (u32)1; }
             for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
                 { if (!sliced[b]) memcpy((pointer)_hmap[b], l.globPtr[i], (u64)l.globLen[i]); b = b + (u32)1; }
             }
@@ -1554,7 +1749,8 @@ class ParVulkanWorker : ParWorker
                 i64 e0 = ParTiles.sliceLo(l.bufFpK[i], l.bufFpLo[i], t.lo, count);
                 i64 e1 = ParTiles.sliceHi(l.bufFpK[i], l.bufFpHi[i], t.hi, count);
                 i64 bytes = (e1 - e0) * l.bufElem[i];
-                if (bytes > (i64)0)
+                // An imported `simd:` block was written in place: nothing comes back.
+                if (bytes > (i64)0 && !(!gVkDiscrete && (pointer)_hmap[b] == *(pointer*)(obj + l.bufOff[i])))
                     {
                     pointer from = gVkDiscrete ? (pointer)(_smap[d] + sat) : (pointer)(_hmap[b] + e0 * l.bufElem[i]);
                     memcpy((pointer)(*(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i]), from, (u64)bytes);

@@ -261,6 +261,32 @@ static NSString *arm64StubSourceEx(NSString *asmText, BOOL forLibrary) {
         NSString *suffix = [asmText substringWithRange:[m rangeAtIndex:1]];
         if ([seen containsObject:suffix]) continue;
         [seen addObject:suffix];
+        // `simd:` — `new T[n]` into a page-aligned pointer (par-blocks.md): the
+        // primitive helper again, but the PAYLOAD lands on a 16 KB page so a
+        // unified-memory GPU wraps it in place with no copy. The header sits at
+        // payload-38 as any block's (so .length and release read it unchanged),
+        // the allocator's own base is kept 8 bytes before it, and a distinct
+        // magic (0x58544F43) tells _xtc_dealloc to free that base.
+        if ([suffix hasPrefix:@"simd_"] && XTIRIsPrimitiveElemName([suffix substringFromIndex:5])) {
+            NSString *elem = [suffix substringFromIndex:5];
+            NSDictionary<NSString *, NSNumber *> *simdStride = @{
+                @"u8": @1, @"i8": @1, @"bool": @1,
+                @"u16": @2, @"i16": @2,
+                @"u32": @4, @"i32": @4, @"float": @4,
+                @"i64": @8, @"u64": @8,
+                @"double": @8, @"pointer": @8, @"string": @8,
+            };
+            NSUInteger sst = simdStride[elem] ? simdStride[elem].unsignedIntegerValue : 8;
+            [s appendFormat:
+                @"void *_xtc_new_simd_%@(unsigned long n){unsigned long b=n*%luUL; if(b<256)b=256;b=(b+16383UL)&~16383UL;"
+                @"uint8_t*raw=(uint8_t*)calloc(1,b+38+16384+8);"
+                @"if(!raw){fprintf(stderr,\"xcc: out of memory (%%lu elements)\\n\",n);abort();}"
+                @"uint8_t*q=(uint8_t*)(((unsigned long)(raw+46)+16383UL)&~16383UL);uint8_t*p=q-38;"
+                @"*(uint32_t*)(p+0)=0x58544F43U;*(unsigned long*)(p+4)=%luUL;*(unsigned long*)(p+12)=n;"
+                @"*(void(**)(void*))(p+20)=0;*(void**)(p+28)=0;*(uint16_t*)(p+36)=1;*(void**)(p-8)=raw;return q;}\n",
+                elem, (unsigned long)sst, (unsigned long)sst];
+            continue;
+        }
         if (XTIRIsPrimitiveElemName(suffix)) {
             // One element is its own WIDTH, not eight. Every primitive array
             // allocated 8 bytes per element — an 8x waste that also hit the
@@ -348,7 +374,10 @@ static NSString *arm64StubSourceEx(NSString *asmText, BOOL forLibrary) {
             // (the self-retain bracket a method keeps around an opaque call) can't
             // fall back to 0 and re-dispatch dealloc on the object being freed.
             @"if(d){*(unsigned short*)((uint8_t*)o-2)=0x8000u;"
-            @"for(unsigned long i=0;i<count;i++)d((uint8_t*)o+i*stride);}free(base);}\n"];
+            // A `simd:` block (magic 0x58544F43, _xtc_new_simd_<T>) keeps its
+            // allocator base 8 bytes before the header: free that, not the header.
+            @"for(unsigned long i=0;i<count;i++)d((uint8_t*)o+i*stride);}"
+            @"if(*(uint32_t*)(base+0)==0x58544F43U)free(*(void**)(base-8));else free(base);}\n"];
     }
     if (usesWeak) {
         // Real weak side-table: register records (obj → slot-address) so the
@@ -405,7 +434,8 @@ static NSString *arm64StubSourceEx(NSString *asmText, BOOL forLibrary) {
             // The magic makes the test value-based instead of address-based, so it
             // cannot be fooled by a foreign module's trampoline, a stale `^`, or
             // any other non-object. Failing it means "not one of ours" — skip.
-            @"if(*(uint32_t*)((uint8_t*)obj-38)!=0x58544F42U) { _xt_rt_unlock(); return; }"
+            // A `simd:` block carries magic 0x58544F43 (see _xtc_new_simd_<T>).
+            @"if(*(uint32_t*)((uint8_t*)obj-38)!=0x58544F42U&&*(uint32_t*)((uint8_t*)obj-38)!=0x58544F43U) { _xt_rt_unlock(); return; }"
             @"void **nx=_XT_WH(obj);"
             @"slot[-2]=(void*)&_XT_WH(obj); slot[-1]=(void*)nx;"
             @"if(nx) nx[-2]=(void*)&slot[-1];"

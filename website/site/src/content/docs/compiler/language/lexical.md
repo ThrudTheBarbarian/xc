@@ -134,7 +134,7 @@ The parser also rejects the **C reserved words** as variable names, even where x
 
 ### Contextual words
 
-A third group is meaningful only in a particular position, and is an ordinary identifier everywhere else: `self` and `super` inside a method body; `init` and `dealloc` as method names; `weak:`, `banked:`, `block:`, `main:` and `shadow:` as declaration qualifiers; `va_start` / `va_arg` / `va_end` inside a variadic; `clobbers` after an `asm` block; and the function annotations (`:naked`, `:hwStack`, `:irq`, `:vbi`, …) documented on the [Functions](/compiler/language/functions/) page. Using one of these as a variable name is legal but confusing to read.
+A third group is meaningful only in a particular position, and is an ordinary identifier everywhere else: `self` and `super` inside a method body; `init` and `dealloc` as method names; `weak:`, `simd:`, `banked:`, `block:`, `main:` and `shadow:` as declaration qualifiers; `va_start` / `va_arg` / `va_end` inside a variadic; `clobbers` after an `asm` block; and the function annotations (`:naked`, `:hwStack`, `:irq`, `:vbi`, …) documented on the [Functions](/compiler/language/functions/) page. Using one of these as a variable name is legal but confusing to read.
 
 ## Block delimiters
 

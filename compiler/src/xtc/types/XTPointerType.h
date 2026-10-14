@@ -60,6 +60,14 @@ typedef NS_ENUM(NSInteger, XTPointerPlacement) {
 @property(nonatomic, readonly) BOOL isWeak;
 
 /****************************************************************************\
+|* YES when the pointee's storage is page-aligned and GPU-reachable — the
+|* `simd:` qualifier (par-blocks.md). `new T[n]` into it allocates
+|* page-aligned, and a par block wrapping it reaches the GPU with no copy on
+|* unified memory. Display name picks up a `simd:` prefix after any placement.
+\****************************************************************************/
+@property(nonatomic, readonly) BOOL isSimd;
+
+/****************************************************************************\
 |* Create a typed pointer (e.g. u8@, i16@). Display name is "<pointee>@".
 |* Placement defaults to main (2-byte pointer). Use
 |* `pointerToType:placement:` for a non-default placement.
@@ -90,6 +98,16 @@ typedef NS_ENUM(NSInteger, XTPointerPlacement) {
 + (instancetype)pointerToType:(XTType*)pointee
                     placement:(XTPointerPlacement)placement
                        isWeak:(BOOL)isWeak;
+
+/****************************************************************************\
+|* As above, plus the `simd:` (page-aligned / GPU-reachable) qualifier. The
+|* simpler factories forward here with isSimd=NO, so existing call sites are
+|* unchanged. Display name becomes `simd:<pointee>@` (after weak/placement).
+\****************************************************************************/
++ (instancetype)pointerToType:(XTType*)pointee
+                    placement:(XTPointerPlacement)placement
+                       isWeak:(BOOL)isWeak
+                       isSimd:(BOOL)isSimd;
 
 /****************************************************************************\
 |* Width of a Heap-placement pointer, in bytes. Default 2 — the

@@ -50,6 +50,7 @@ typedef pointer parMsgPP_t(pointer obj, pointer sel, pointer a, pointer b);
 typedef pointer parMsgPPP_t(pointer obj, pointer sel, pointer a, pointer b, pointer c);
 typedef pointer parMsgBytes_t(pointer obj, pointer sel, pointer bytes, u64 len, u64 opts);
 typedef pointer parMsgLen_t(pointer obj, pointer sel, u64 len, u64 opts);
+typedef pointer parMsgNoCopy_t(pointer obj, pointer sel, pointer bytes, u64 len, u64 opts, pointer dealloc);
 typedef void parMsgSetBuf_t(pointer obj, pointer sel, pointer buf, u64 offset, u64 index);
 typedef void parMsgSetU_t(pointer obj, pointer sel, u64 v);
 typedef void parMsgDispatch_t(pointer obj, pointer sel, ParMTLSize* grid, ParMTLSize* group);
@@ -111,6 +112,33 @@ class ParMetal
     static pointer nsString(u8* c)
         {
         return ((parMsgP_t*)_send)(_cls("NSString"), sel("stringWithUTF8String:"), (pointer)c);
+        }
+
+    // A `simd:` heap block (ParDevice.simdBlock): the GPU shares it in place.
+    static bool isShared(pointer host)
+        {
+        return ParDevice.simdBlock(host);
+        }
+
+    // A captured array's device buffer. A `simd:` block is wrapped where it
+    // lies (newBufferWithBytesNoCopy: the unified memory the CPU already
+    // holds), and *shared says so, so its result is not copied back either;
+    // anything else is copied in as before.
+    static pointer bufferFor(pointer host, u64 len, bool* shared)
+        {
+        *shared = false;
+        if (isShared(host))
+            {
+            u64 pages = ((len + (u64)16383) / (u64)16384) * (u64)16384;
+            pointer b = ((parMsgNoCopy_t*)_send)(_dev, sel("newBufferWithBytesNoCopy:length:options:deallocator:"),
+                                                 host, pages, (u64)0, (pointer)0);
+            if (b != (pointer)0)
+                {
+                *shared = true;
+                return b;
+                }
+            }
+        return ((parMsgBytes_t*)_send)(_dev, sel("newBufferWithBytes:length:options:"), host, len, (u64)0);
         }
 
     // The compiled pipeline for a kernel source, made once.
@@ -220,11 +248,12 @@ class ParMetal
         pointer args = withBytes(_dev, sel("newBufferWithBytes:length:options:"), (pointer)obj, (u64)l.size, (u64)0);
         pointer spanB = withBytes(_dev, sel("newBufferWithBytes:length:options:"), (pointer)&span[0], (u64)32, (u64)0);
         pointer bufs[16];
+        bool bufShared[16];
         pointer reds[16];
         for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
             {
             pointer host = *(pointer*)(obj + l.bufOff[i]);
-            bufs[i] = withBytes(_dev, sel("newBufferWithBytes:length:options:"), host, (u64)l.bufLen[i], (u64)0);
+            bufs[i] = bufferFor(host, (u64)l.bufLen[i], &bufShared[i]);
             }
         pointer globs[16];
         for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
@@ -301,7 +330,7 @@ class ParMetal
         for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
             {
             pointer host = *(pointer*)(obj + l.bufOff[i]);
-            if (l.bufIn[i] == (i64)0)
+            if (l.bufIn[i] == (i64)0 && !bufShared[i])
                 memcpy(host, send0(bufs[i], sel("contents")), (u64)l.bufLen[i]);
             send0(bufs[i], sel("release"));
             }
@@ -354,6 +383,7 @@ class ParMetalWorker : ParWorker
     u32 _nextSlot;
     u32 _oldest;
     u32 _inFlight;
+    bool _bufShared[16];      // captured array i is a `simd:` block the GPU shares in place
 
     String* identity(void)
         {
@@ -377,9 +407,11 @@ class ParMetalWorker : ParWorker
         if (l.devred != (i64)0 && ((parMsgU_t*)gMtlSend)(pso, ParMetal.sel("maxTotalThreadsPerThreadgroup")) < (u64)256)
             return false;
         // Every written buffer needs a footprint, so a tile knows which slice
-        // to copy back; a read-only one is whole in any case.
+        // to copy back; a read-only one is whole in any case, and a `simd:`
+        // block the GPU shares in place has nothing to copy.
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
-            if (l.bufIn[i] == (i64)0 && l.bufFp[i] == (i64)0)
+            if (l.bufIn[i] == (i64)0 && l.bufFp[i] == (i64)0
+                && !ParMetal.isShared(*(pointer*)((u8*)(pointer)proto + l.bufOff[i])))
                 return false;
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             if (l.globIn[i] == (i64)0 && l.globFp[i] == (i64)0)
@@ -400,7 +432,7 @@ class ParMetalWorker : ParWorker
         u8* obj = (u8*)(pointer)proto;
         _args = withBytes(gMtlDev, ParMetal.sel("newBufferWithBytes:length:options:"), (pointer)obj, (u64)l.size, (u64)0);
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
-            _bufs[i] = withBytes(gMtlDev, ParMetal.sel("newBufferWithBytes:length:options:"), *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i], (u64)0);
+            _bufs[i] = ParMetal.bufferFor(*(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i], &_bufShared[i]);
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             _globs[i] = withBytes(gMtlDev, ParMetal.sel("newBufferWithBytes:length:options:"), l.globPtr[i], (u64)l.globLen[i], (u64)0);
         l.plan(0, tile);
@@ -523,7 +555,7 @@ class ParMetalWorker : ParWorker
         u8* obj = (u8*)(pointer)_proto;
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
-            if (l.bufIn[i] != (i64)0 || l.bufFp[i] == (i64)0)
+            if (l.bufIn[i] != (i64)0 || l.bufFp[i] == (i64)0 || _bufShared[i])
                 continue;
             i64 count = l.bufLen[i] / l.bufElem[i];
             i64 e0 = ParTiles.sliceLo(l.bufFpK[i], l.bufFpLo[i], t.lo, count);

@@ -64,9 +64,20 @@ static NSString* prefixForPlacement(XTPointerPlacement p)
                           placement:(XTPointerPlacement)placement
                              isWeak:(BOOL)isWeak
     {
-    NSString* name = [NSString stringWithFormat:@"%@%@%@*",
+    return [self initWithPointeeType:pointee placement:placement isWeak:isWeak isSimd:NO];
+    }
+
+- (instancetype)initWithPointeeType:(XTType*)pointee
+                          placement:(XTPointerPlacement)placement
+                             isWeak:(BOOL)isWeak
+                             isSimd:(BOOL)isSimd
+    {
+    // `simd:` sits after weak and placement, before the pointee — matching the
+    // port's spelling (`weak:<placement>simd:<pointee>*`) byte for byte.
+    NSString* name = [NSString stringWithFormat:@"%@%@%@%@*",
                                                 isWeak ? @"weak:" : @"",
                                                 prefixForPlacement(placement),
+                                                isSimd ? @"simd:" : @"",
                                                 pointee.displayName];
     self = [super initWithKind:XTTypeKindPointer displayName:name];
     if (self)
@@ -74,6 +85,7 @@ static NSString* prefixForPlacement(XTPointerPlacement p)
         _pointeeType = pointee;
         _placement = placement;
         _isWeak = isWeak;
+        _isSimd = isSimd;
         }
     return self;
     }
@@ -103,6 +115,17 @@ static NSString* prefixForPlacement(XTPointerPlacement p)
     return [[self alloc] initWithPointeeType:pointee
                                    placement:placement
                                       isWeak:isWeak];
+    }
+
++ (instancetype)pointerToType:(XTType*)pointee
+                    placement:(XTPointerPlacement)placement
+                       isWeak:(BOOL)isWeak
+                       isSimd:(BOOL)isSimd
+    {
+    return [[self alloc] initWithPointeeType:pointee
+                                   placement:placement
+                                      isWeak:isWeak
+                                      isSimd:isSimd];
     }
 
 /****************************************************************************\

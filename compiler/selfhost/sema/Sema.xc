@@ -4035,6 +4035,27 @@ class Sema
             return;
         if (!Types.isPointer(pty) || !Types.isPointer(a.ty()))
             return;
+        // `simd:` is part of the parameter's identity (unlike placement or
+        // weak): a pointer that does not promise page-aligned storage cannot
+        // satisfy it, or the callee's no-copy GPU wrap would read unaligned
+        // memory — this is how a library's `simd:` par-block parameter holds
+        // every caller (par-blocks.md). The other direction only drops the
+        // guarantee and is fine. An explicit per-argument check, not an
+        // overload-rank refusal: a lone candidate is never ranked, and the two
+        // compilers must say the same thing.
+        if (Overload._isSimd(pty) && !Overload._isSimd(a.ty()))
+            {
+            String* m = String.withCString("argument ");
+            m.append(String.withU32(argNo));
+            m.appendCString(" of '");
+            m.append(callee);
+            m.appendCString("' is not a simd: pointer where a simd: pointer is declared — simd: "
+                            "promises page-aligned storage (a new[] into a simd: pointer, or "
+                            "another simd: pointer), and the callee may hand it to a GPU with no "
+                            "copy. Cast if that is really meant");
+            _errorAt(m, a);
+            return;
+            }
         String* pp = ptrPointee(pty);
         String* ap = ptrPointee(a.ty());
         if (pp == 0 || ap == 0)

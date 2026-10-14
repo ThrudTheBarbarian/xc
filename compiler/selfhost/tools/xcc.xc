@@ -527,6 +527,11 @@ String* classAllocStubs(String* prog)
 // thunk that collides with the runtime's own symbol.
 bool isPrimitiveName(String* s)
 {
+    // `simd_<prim>`: the page-aligned allocator for a `simd:` pointer
+    // (par-blocks.md §3), the same one-argument form, provided by every
+    // 64-bit runtime beside the plain one — so no per-program thunk either.
+    if (s.byteLength() > (u32)5 && s.substringBytes((u32)0, (u32)5).equals(String.withCString("simd_")))
+        return isPrimitiveName(s.substringBytes((u32)5, s.byteLength() - (u32)5));
     Array* p = new Array();
     p.add((Object*)String.withCString("u8"));   p.add((Object*)String.withCString("i8"));
     p.add((Object*)String.withCString("u16"));  p.add((Object*)String.withCString("i16"));

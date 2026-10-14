@@ -1559,7 +1559,7 @@ Two calling-convention rules:
 
 Under ARC, the manual `retain` / `release` / `delete` statements
 on class instances are **rejected during semantic analysis**
-(§9.5).
+(§9.6).
 
 ### 9.3 The dealloc callback
 
@@ -1620,7 +1620,32 @@ class Observer {
 255. Each entry costs 6 bytes (obj lo/hi/bank, slot lo/hi/bank).
 Raise the cap with `[weak] entries = 128` in the linker script.
 
-### 9.5 Freeing what ARC does not own
+### 9.5 `simd:` pointers
+
+`simd:T*` is a pointer qualifier, written where `weak:` is, that
+promises page-aligned storage: a `new T[N]` into a `simd:` pointer
+allocates the array on whole 16 KB pages, with the usual object
+header just before the payload, so `.length`, `delete` and
+refcounting are unchanged. A `par` block that indexes a `simd:`
+pointer takes it as a GPU array sized from that header, and a
+unified-memory GPU maps the pages in place rather than copying them
+(see the `par` chapter).
+
+```c
+simd: u32* xs = new u32[N];      // page-aligned heap array
+simd: u32* ys;
+ys = new u32[N];                 // the assignment form too
+```
+
+Because the promise rides on the type, a `simd:` pointer may hold
+only what `new[]` returned or what another `simd:` pointer holds.
+An argument that is a plain pointer where the parameter is a
+`simd:` pointer is a sema error (the callee may hand it to a GPU
+with no copy); a cast says it is meant. The qualifier is accepted
+on every target; the 8-, 16- and 32-bit targets allocate as plain
+`new` does.
+
+### 9.6 Freeing what ARC does not own
 
 ARC owns **class instances**, both single objects and arrays of
 them. The compiler manages their lifetime: `retain`, `release`
@@ -1639,7 +1664,7 @@ There is no manual-lifecycle mode. The `-farc=off` flag is
 accepted and warns that it has no effect; the build emits the
 same retains and releases as without it.
 
-### 9.6 Introspection (`Heap` library)
+### 9.7 Introspection (`Heap` library)
 
 | Method | Type | Meaning |
 |--------|------|---------|
@@ -1647,7 +1672,7 @@ same retains and releases as without it.
 | `Heap.largest()` | `u16` | size of the biggest single free extent |
 | `Heap.totalSize()` | `u32` | compile-time heap capacity |
 
-### 9.7 Limits
+### 9.8 Limits
 
 Language-level limits that apply across all targets:
 

@@ -228,6 +228,20 @@ class Overload
         return (a > b) ? a : b;
         }
 
+    // Whether a type spelling carries the `simd:` qualifier (a prefix before
+    // the base type, so the literal "simd:" never occurs inside a pointee).
+    static bool _isSimd(String* t)
+        {
+        if (t == 0 || t.byteLength() < (u32)5)
+            return false;
+        for (u32 i = (u32)0; i + (u32)5 <= t.byteLength(); i = i + (u32)1)
+            if (t.byteAt(i) == (u8)'s' && t.byteAt(i + (u32)1) == (u8)'i'
+                && t.byteAt(i + (u32)2) == (u8)'m' && t.byteAt(i + (u32)3) == (u8)'d'
+                && t.byteAt(i + (u32)4) == (u8)':')
+                return true;
+        return false;
+        }
+
     static String* _unqualify(String* t)
         {
         String* s = t;
