@@ -215,6 +215,7 @@ int main(int argc, const char* argv[])
             XTIRArm64TargetProfile* armProfile = [XTIRArm64TargetProfile new];
             armProfile.matMulPrefix = matMul ? @"__xt_sme_gemm_" : nil;
             armProfile.matMulFastSuffix = matMul ? @"_fast" : nil;
+            armProfile.matMulInts = matMul;
             XTIROptPipeline* pipe =
                 [XTIROptPipeline standardPipelineAtLevel:optLevel
                                                  profile:armProfile];

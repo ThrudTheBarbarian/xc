@@ -5369,6 +5369,7 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
     if (matMul && d.arch().equals(String.withCString("arm64")) && !isIos(d)) {
         p.setMatMul(String.withCString("__xt_sme_gemm_"), String.withCString(""));
         p.setMatMulFastSuffix(String.withCString("_fast"));
+        p.setMatMulInts(true);
     }
     // The vector level only ever reaches an x86-64 profile (checkCapabilities
     // refuses it elsewhere): avx2 gives the vectoriser 32-byte vectors, which

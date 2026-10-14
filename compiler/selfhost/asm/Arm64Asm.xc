@@ -1496,6 +1496,122 @@ class Arm64Asm
             _hit = true;
             return (u32)$04090000 | (z0.b() << (u32)22) | (pg.a() << (u32)10) | (zm.a() << (u32)5) | z0.a();
         }
+        // The integer kernel's forms (private:docs/Design/simd-sme-plan.md).
+        // Base opcodes from clang's assembler, fields OR'd in.
+        {
+            // smopa/umopa/usmopa/sumopa ZAda.s, Pn/m, Pm/m, Zn.b, Zm.b (four to a
+            // word); smopa/umopa ZAda.s, …, Zn.h, Zm.h (SME2, two to a word);
+            // smopa/umopa ZAda.d, …, Zn.h, Zm.h (I16I64)
+            u32 kind = mn.equals(String.withCString("smopa")) ? (u32)0 : mn.equals(String.withCString("umopa")) ? (u32)1
+                     : mn.equals(String.withCString("usmopa")) ? (u32)2 : mn.equals(String.withCString("sumopa")) ? (u32)3 : (u32)4;
+            if (kind < (u32)4) {
+                if (ops.count() != (u32)5) return smeBad(mn, String.withCString("needs 5 operands"));
+                String* t = opAt(ops, (u32)0).lowercased();
+                u32 dot = t.byteIndexOf(String.withCString("."));
+                if (!t.hasPrefix(String.withCString("za")) || dot == (u32)$FFFF_FFFF) return smeBad(mn, String.withCString("bad tile"));
+                u32 tile = smeDigits(t.substringBytes((u32)2, dot - (u32)2));
+                if (tile == (u32)$FFFF_FFFF) return smeBad(mn, String.withCString("bad tile"));
+                String* e = t.substringFromByte(dot + (u32)1);
+                u32 tsz = e.equals(String.withCString("d")) ? (u32)3 : (e.equals(String.withCString("s")) ? (u32)2 : (u32)$FFFF_FFFF);
+                SmeRef* pn = smePReg(opAt(ops, (u32)1));
+                SmeRef* pm = smePReg(opAt(ops, (u32)2));
+                SmeRef* zn = smeZReg(opAt(ops, (u32)3));
+                SmeRef* zm = smeZReg(opAt(ops, (u32)4));
+                if (tsz == (u32)$FFFF_FFFF || tile > (tsz == (u32)2 ? (u32)3 : (u32)7) || !pn.ok() || !pm.ok()
+                    || pn.a() > (u32)7 || pm.a() > (u32)7 || !zn.ok() || !zm.ok() || zn.b() != zm.b())
+                    return smeBad(mn, String.withCString("bad operands"));
+                u32 base = (u32)0;
+                if (tsz == (u32)2 && zn.b() == (u32)0)
+                    base = kind == (u32)0 ? (u32)$A0800000 : kind == (u32)1 ? (u32)$A1A00000 : kind == (u32)2 ? (u32)$A1800000 : (u32)$A0A00000;
+                else if (tsz == (u32)2 && zn.b() == (u32)1 && kind < (u32)2)
+                    base = kind == (u32)1 ? (u32)$A1800008 : (u32)$A0800008;
+                else if (tsz == (u32)3 && zn.b() == (u32)1 && kind < (u32)2)
+                    base = kind == (u32)1 ? (u32)$A1E00000 : (u32)$A0C00000;
+                else
+                    return smeBad(mn, String.withCString("no such form"));
+                _hit = true;
+                return base | (zm.a() << (u32)16) | (pm.a() << (u32)13) | (pn.a() << (u32)10) | (zn.a() << (u32)5) | tile;
+            }
+            // uzp1/uzp2/zip1/zip2 Zd.T, Zn.T, Zm.T (the SVE forms; NEON's name v registers)
+            u32 perm = mn.equals(String.withCString("uzp1")) ? (u32)$05206800 : mn.equals(String.withCString("uzp2")) ? (u32)$05206C00
+                     : mn.equals(String.withCString("zip1")) ? (u32)$05206000 : mn.equals(String.withCString("zip2")) ? (u32)$05206400 : (u32)0;
+            if (perm != (u32)0 && firstZ && ops.count() == (u32)3) {
+                SmeRef* zn = smeZReg(opAt(ops, (u32)1));
+                SmeRef* zm = smeZReg(opAt(ops, (u32)2));
+                if (!zn.ok() || !zm.ok() || zn.b() != z0.b() || zm.b() != z0.b()) return smeBad(mn, String.withCString("bad operands"));
+                _hit = true;
+                return perm | (z0.b() << (u32)22) | (zm.a() << (u32)16) | (zn.a() << (u32)5) | z0.a();
+            }
+            // orr Zd.d, Zn.d, Zm.d (unpredicated, bitwise)
+            if (mn.equals(String.withCString("orr")) && firstZ && ops.count() == (u32)3) {
+                SmeRef* zn = smeZReg(opAt(ops, (u32)1));
+                SmeRef* zm = smeZReg(opAt(ops, (u32)2));
+                if (!zn.ok() || !zm.ok() || z0.b() != (u32)3 || zn.b() != (u32)3 || zm.b() != (u32)3)
+                    return smeBad(mn, String.withCString("bad vector operands"));
+                _hit = true;
+                return (u32)$04603000 | (zm.a() << (u32)16) | (zn.a() << (u32)5) | z0.a();
+            }
+            // lsl Zd.T, Zn.T, #shift (unpredicated)
+            if (mn.equals(String.withCString("lsl")) && firstZ && ops.count() == (u32)3 && opAt(ops, (u32)2).hasPrefix(String.withCString("#"))) {
+                SmeRef* zn = smeZReg(opAt(ops, (u32)1));
+                U64* v = parseImm(opAt(ops, (u32)2));
+                if (!zn.ok() || zn.b() != z0.b() || !_immOk || v.hi() != (u32)0 || v.lo() >= ((u32)8 << z0.b()))
+                    return smeBad(mn, String.withCString("bad vector operands"));
+                u32 tsz = ((u32)8 << z0.b()) + v.lo();  // tszh:tszl:imm3 = element size + shift
+                _hit = true;
+                return (u32)$04209C00 | ((tsz >> (u32)5) << (u32)22) | (((tsz >> (u32)3) & (u32)3) << (u32)19) | ((tsz & (u32)7) << (u32)16)
+                     | (zn.a() << (u32)5) | z0.a();
+            }
+            // smax/smin Zdn.T, Pg/m, Zdn.T, Zm.T (umax is above, with the NaN scan's forms)
+            bool isSmax = mn.equals(String.withCString("smax"));
+            if ((isSmax || mn.equals(String.withCString("smin"))) && firstZ && ops.count() == (u32)4) {
+                SmeRef* pg = smePReg(opAt(ops, (u32)1));
+                SmeRef* zn = smeZReg(opAt(ops, (u32)2));
+                SmeRef* zm = smeZReg(opAt(ops, (u32)3));
+                if (!pg.ok() || pg.a() > (u32)7 || !opAt(ops, (u32)1).lowercased().hasSuffix(String.withCString("/m"))
+                    || !zn.ok() || zn.a() != z0.a() || zn.b() != z0.b() || !zm.ok() || zm.b() != z0.b())
+                    return smeBad(mn, String.withCString("bad operands"));
+                _hit = true;
+                return (isSmax ? (u32)$04080000 : (u32)$040A0000) | (z0.b() << (u32)22) | (pg.a() << (u32)10) | (zm.a() << (u32)5) | z0.a();
+            }
+            // umaxv/smaxv/sminv Vd, Pg, Zn.T: the reduction to a scalar
+            u32 redv = mn.equals(String.withCString("umaxv")) ? (u32)$04092000 : mn.equals(String.withCString("smaxv")) ? (u32)$04082000
+                     : mn.equals(String.withCString("sminv")) ? (u32)$040A2000 : (u32)0;
+            if (redv != (u32)0 && ops.count() == (u32)3) {
+                String* vd = opAt(ops, (u32)0).lowercased();
+                u8 c0 = vd.byteLength() > (u32)1 ? vd.byteAt((u32)0) : (u8)0;
+                u32 vs = c0 == (u8)'b' ? (u32)0 : c0 == (u8)'h' ? (u32)1 : c0 == (u8)'s' ? (u32)2 : c0 == (u8)'d' ? (u32)3 : (u32)$FFFF_FFFF;
+                u32 rd = vd.byteLength() > (u32)1 ? smeDigits(vd.substringFromByte((u32)1)) : (u32)$FFFF_FFFF;
+                SmeRef* pg = smePReg(opAt(ops, (u32)1));
+                SmeRef* zn = smeZReg(opAt(ops, (u32)2));
+                if (vs == (u32)$FFFF_FFFF || rd == (u32)$FFFF_FFFF || rd > (u32)31 || !pg.ok() || pg.b() != (u32)$FFFF_FFFF || pg.a() > (u32)7
+                    || !zn.ok() || zn.b() != vs)
+                    return smeBad(mn, String.withCString("bad operands"));
+                _hit = true;
+                return redv | (zn.b() << (u32)22) | (pg.a() << (u32)10) | (zn.a() << (u32)5) | rd;
+            }
+            // dup Zd.T, Wn|Xn (a scalar broadcast)
+            if (mn.equals(String.withCString("dup")) && firstZ && ops.count() == (u32)2 && !opAt(ops, (u32)1).hasPrefix(String.withCString("#"))) {
+                RegRef* rn = parseReg(opAt(ops, (u32)1));
+                if (!rn.ok() || rn.isSP()) return smeBad(mn, String.withCString("bad scalar operand"));
+                _hit = true;
+                return (u32)$05203800 | (z0.b() << (u32)22) | (rn.num() << (u32)5) | z0.a();
+            }
+            // mov|mova ZA<t><h|v>.T[Ws, off], Pg/m, Zn.T  (vector to tile slice)
+            if ((mn.equals(String.withCString("mov")) || mn.equals(String.withCString("mova"))) && ops.count() == (u32)3
+                && opAt(ops, (u32)0).lowercased().hasPrefix(String.withCString("za"))) {
+                SmeRef* za = smeZASlice(opAt(ops, (u32)0));
+                SmeRef* pg = smePReg(opAt(ops, (u32)1));
+                SmeRef* zn = smeZReg(opAt(ops, (u32)2));
+                if (!za.ok() || !pg.ok() || pg.a() > (u32)7 || !opAt(ops, (u32)1).lowercased().hasSuffix(String.withCString("/m"))
+                    || !zn.ok() || zn.b() != za.c())
+                    return smeBad(mn, String.withCString("bad operands"));
+                u32 zf = za.c() == (u32)3 ? ((za.a() << (u32)1) | za.e()) : ((za.a() << (u32)2) | za.e());
+                _hit = true;
+                return (u32)$C0800000 | (za.c() << (u32)22) | (za.b() << (u32)15) | (za.d() << (u32)13) | (pg.a() << (u32)10)
+                     | (zn.a() << (u32)5) | zf;
+            }
+        }
         if (mn.equals(String.withCString("cmphi"))) {
             if (ops.count() != (u32)4) return smeBad(mn, String.withCString("bad operands"));
             SmeRef* pd = smePReg(opAt(ops, (u32)0));

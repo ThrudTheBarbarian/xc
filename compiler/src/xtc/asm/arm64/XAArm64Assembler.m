@@ -671,6 +671,100 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
         *out = 0x2550C000u | ((uint32_t)pg << 10) | ((uint32_t)pn << 5);
         return 1;
     }
+    // The integer kernel's forms (private:docs/Design/simd-sme-plan.md).
+    // Base opcodes from clang's assembler, fields OR'd in.
+    {
+        // smopa/umopa/usmopa/sumopa ZAda.s, Pn/m, Pm/m, Zn.b, Zm.b (four to a
+        // word); smopa/umopa ZAda.s, …, Zn.h, Zm.h (SME2, two to a word);
+        // smopa/umopa ZAda.d, …, Zn.h, Zm.h (I16I64)
+        NSDictionary *mopa = @{@"smopa":@0, @"umopa":@1, @"usmopa":@2, @"sumopa":@3};
+        if (mopa[mn]) {
+            if (ops.count != 5) SMEBAD(@"%@ needs 5 operands", mn);
+            NSString *t = [ops[0] lowercaseString];
+            NSRange dot = [t rangeOfString:@"."];
+            if (![t hasPrefix:@"za"] || dot.location == NSNotFound) SMEBAD(@"%@: bad tile %@", mn, ops[0]);
+            int tile;
+            if (!xaDigits([t substringWithRange:NSMakeRange(2, dot.location - 2)], &tile)) SMEBAD(@"%@: bad tile %@", mn, ops[0]);
+            NSString *te = [t substringFromIndex:dot.location + 1];
+            int tsz = [te isEqualToString:@"d"] ? 3 : [te isEqualToString:@"s"] ? 2 : -1;
+            int pn, pm, zn, zm, s1, s2, s3, s4;
+            if (tsz < 0 || tile > (tsz == 2 ? 3 : 7) || !xaPReg(ops[1], &pn, &s1) || !xaPReg(ops[2], &pm, &s2) || pn > 7 || pm > 7
+                || !xaZReg(ops[3], &zn, &s3) || !xaZReg(ops[4], &zm, &s4) || s3 != s4)
+                SMEBAD(@"%@: bad operands", mn);
+            int kind = [mopa[mn] intValue];
+            uint32_t base;
+            if (tsz == 2 && s3 == 0) base = (uint32_t[]){0xA0800000u, 0xA1A00000u, 0xA1800000u, 0xA0A00000u}[kind];
+            else if (tsz == 2 && s3 == 1 && kind < 2) base = kind ? 0xA1800008u : 0xA0800008u;
+            else if (tsz == 3 && s3 == 1 && kind < 2) base = kind ? 0xA1E00000u : 0xA0C00000u;
+            else SMEBAD(@"%@: no such form", mn);
+            *out = base | ((uint32_t)zm << 16) | ((uint32_t)pm << 13) | ((uint32_t)pn << 10) | ((uint32_t)zn << 5) | (uint32_t)tile;
+            return 1;
+        }
+        int z0n, z0s;
+        BOOL firstZ = ops.count >= 2 && xaZReg(ops[0], &z0n, &z0s) && ![[ops[0] lowercaseString] hasPrefix:@"za"];
+        // uzp1/uzp2/zip1/zip2 Zd.T, Zn.T, Zm.T (the SVE forms; NEON's name v registers)
+        NSDictionary *perm = @{@"uzp1":@0x05206800u, @"uzp2":@0x05206C00u, @"zip1":@0x05206000u, @"zip2":@0x05206400u};
+        if (perm[mn] && firstZ && ops.count == 3) {
+            int zn, zm, s1, s2;
+            if (!xaZReg(ops[1], &zn, &s1) || !xaZReg(ops[2], &zm, &s2) || s1 != z0s || s2 != z0s) SMEBAD(@"%@: bad operands", mn);
+            *out = [perm[mn] unsignedIntValue] | ((uint32_t)z0s << 22) | ((uint32_t)zm << 16) | ((uint32_t)zn << 5) | (uint32_t)z0n;
+            return 1;
+        }
+        // orr Zd.d, Zn.d, Zm.d (unpredicated, bitwise)
+        if ([mn isEqualToString:@"orr"] && firstZ && ops.count == 3) {
+            int zn, zm, s1, s2;
+            if (!xaZReg(ops[1], &zn, &s1) || !xaZReg(ops[2], &zm, &s2) || z0s != 3 || s1 != 3 || s2 != 3) SMEBAD(@"orr: bad vector operands");
+            *out = 0x04603000u | ((uint32_t)zm << 16) | ((uint32_t)zn << 5) | (uint32_t)z0n;
+            return 1;
+        }
+        // lsl Zd.T, Zn.T, #shift (unpredicated)
+        if ([mn isEqualToString:@"lsl"] && firstZ && ops.count == 3 && [ops[2] hasPrefix:@"#"]) {
+            int zn, s1; int64_t v;
+            if (!xaZReg(ops[1], &zn, &s1) || s1 != z0s || !parseImm(ops[2], &v) || v < 0 || v >= (8 << z0s)) SMEBAD(@"lsl: bad vector operands");
+            uint32_t tsz = (uint32_t)((8 << z0s) + v);  // tszh:tszl:imm3 = element size + shift
+            *out = 0x04209C00u | ((tsz >> 5) << 22) | (((tsz >> 3) & 3u) << 19) | ((tsz & 7u) << 16) | ((uint32_t)zn << 5) | (uint32_t)z0n;
+            return 1;
+        }
+        // smax/smin Zdn.T, Pg/m, Zdn.T, Zm.T (umax is below, with the NaN scan's forms)
+        if (([mn isEqualToString:@"smax"] || [mn isEqualToString:@"smin"]) && firstZ && ops.count == 4) {
+            int pg, ps, zn, zs, zm, ms;
+            if (!xaPReg(ops[1], &pg, &ps) || pg > 7 || ![[ops[1] lowercaseString] hasSuffix:@"/m"]
+                || !xaZReg(ops[2], &zn, &zs) || zn != z0n || zs != z0s || !xaZReg(ops[3], &zm, &ms) || ms != z0s)
+                SMEBAD(@"%@: bad operands", mn);
+            *out = ([mn isEqualToString:@"smax"] ? 0x04080000u : 0x040A0000u) | ((uint32_t)z0s << 22) | ((uint32_t)pg << 10) | ((uint32_t)zm << 5) | (uint32_t)z0n;
+            return 1;
+        }
+        // umaxv/smaxv/sminv Vd, Pg, Zn.T: the reduction to a scalar
+        NSDictionary *redv = @{@"umaxv":@0x04092000u, @"smaxv":@0x04082000u, @"sminv":@0x040A2000u};
+        if (redv[mn] && ops.count == 3) {
+            NSString *vd = [ops[0] lowercaseString];
+            int pg, ps, zn, zs, rd, vs;
+            vs = [vd hasPrefix:@"b"] ? 0 : [vd hasPrefix:@"h"] ? 1 : [vd hasPrefix:@"s"] ? 2 : [vd hasPrefix:@"d"] ? 3 : -1;
+            if (vs < 0 || !xaDigits([vd substringFromIndex:1], &rd) || rd > 31 || !xaPReg(ops[1], &pg, &ps) || ps != -1 || pg > 7
+                || !xaZReg(ops[2], &zn, &zs) || zs != vs)
+                SMEBAD(@"%@: bad operands", mn);
+            *out = [redv[mn] unsignedIntValue] | ((uint32_t)zs << 22) | ((uint32_t)pg << 10) | ((uint32_t)zn << 5) | (uint32_t)rd;
+            return 1;
+        }
+        // dup Zd.T, Wn|Xn (a scalar broadcast)
+        if ([mn isEqualToString:@"dup"] && firstZ && ops.count == 2 && ![ops[1] hasPrefix:@"#"]) {
+            int rn; BOOL r64, sp;
+            if (!parseReg(ops[1], &rn, &r64, &sp) || sp) SMEBAD(@"dup: bad scalar operand");
+            *out = 0x05203800u | ((uint32_t)z0s << 22) | ((uint32_t)rn << 5) | (uint32_t)z0n;
+            return 1;
+        }
+        // mov|mova ZA<t><h|v>.T[Ws, off], Pg/m, Zn.T  (vector to tile slice)
+        if (([mn isEqualToString:@"mov"] || [mn isEqualToString:@"mova"]) && ops.count == 3 && [[ops[0] lowercaseString] hasPrefix:@"za"]) {
+            int tile, vert, tsz, rs, off, pg, psz, zn, zsz;
+            if (!xaZASlice(ops[0], &tile, &vert, &tsz, &rs, &off) || !xaPReg(ops[1], &pg, &psz) || pg > 7
+                || ![[ops[1] lowercaseString] hasSuffix:@"/m"] || !xaZReg(ops[2], &zn, &zsz) || zsz != tsz)
+                SMEBAD(@"%@: bad operands", mn);
+            uint32_t za = tsz == 3 ? ((uint32_t)tile << 1 | (uint32_t)off) : ((uint32_t)tile << 2 | (uint32_t)off);
+            *out = 0xC0800000u | ((uint32_t)tsz << 22) | ((uint32_t)vert << 15) | ((uint32_t)rs << 13) | ((uint32_t)pg << 10)
+                 | ((uint32_t)zn << 5) | za;
+            return 1;
+        }
+    }
     if ([mn isEqualToString:@"fmopa"]) {
         // fmopa ZAda.T, Pn/m, Pm/m, Zn.T, Zm.T  (T = s or d)
         if (ops.count != 5) SMEBAD(@"fmopa needs 5 operands");

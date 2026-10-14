@@ -129,6 +129,7 @@ void main(void)
         {
         prof.setMatMul(String.withCString("__xt_sme_gemm_"), String.withCString(""));
         prof.setMatMulFastSuffix(String.withCString("_fast"));
+        prof.setMatMulInts(true);
         }
     else if (matMul && target.equals(String.withCString("x86_64")))
         {

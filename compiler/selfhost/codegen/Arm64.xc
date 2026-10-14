@@ -183,12 +183,25 @@ class Arm64
         if (smeF64) _out.append(smeGemmKernel(true, true));
         if (smeF32f) _out.append(smeGemmKernel(false, false));
         if (smeF64f) _out.append(smeGemmKernel(true, false));
-        if (smeF32 || smeF64 || smeF32f || smeF64f) {
+        // The integer kernels probe SME2 as well, for their 16-bit form.
+        bool smeU32 = referencesSymbol(m, String.withCString("__xt_sme_gemm_u32"));
+        bool smeI32 = referencesSymbol(m, String.withCString("__xt_sme_gemm_i32"));
+        if (smeU32) _out.append(smeGemmIntKernel(false));
+        if (smeI32) _out.append(smeGemmIntKernel(true));
+        if (smeF32 || smeF64 || smeF32f || smeF64f || smeU32 || smeI32) {
             _out.appendCString("\n    .section __DATA,__data\n___xt_sme_state:\n    .byte 0x00\n___xt_sme_feat:\n");
             String* feat = String.withCString("hw.optional.arm.FEAT_SME");
             for (u32 i = (u32)0; i <= feat.byteLength(); i = i + (u32)1) {
                 u32 c = i < feat.byteLength() ? (u32)feat.byteAt(i) : (u32)0;
                 _out.append(String.withFormat("    .byte 0x%02X\n", c));
+            }
+            if (smeU32 || smeI32) {
+                _out.appendCString("___xt_sme2_state:\n    .byte 0x00\n___xt_sme2_feat:\n");
+                String* feat2 = String.withCString("hw.optional.arm.FEAT_SME2");
+                for (u32 i = (u32)0; i <= feat2.byteLength(); i = i + (u32)1) {
+                    u32 c = i < feat2.byteLength() ? (u32)feat2.byteAt(i) : (u32)0;
+                    _out.append(String.withFormat("    .byte 0x%02X\n", c));
+                }
             }
             _out.appendCString("    .text\n");
         }
@@ -346,6 +359,227 @@ class Arm64
     }
 
     // One function: the slot table, then the body.
+    // The integer SME matrix kernel (u32 and i32 nests). Text identical to
+    // the reference's xtArm64SmeGemmIntKernel, which carries the contract:
+    // the values are scanned, packed to bytes (four to a word, UMOPA/SMOPA)
+    // or halves (two to a word, SME2) when they fit, else the loop runs; the
+    // 32-bit tile wraps exactly as the loop's u32 arithmetic does.
+    String* smeIntLoads(u8* p)
+    {
+        // The packed words of one row of A, 4 (b) or 2 (h) elements to a word,
+        // from k0 (x8): the loads zero-fill past K, uzp1 keeps the low bytes.
+        if (p[0] == (u8)'b')
+            return String.withCString("    whilelt p6.s, x8, x24\n    ld1w {z0.s}, p6/z, [x15]\n"
+                "    add x16, x8, x9\n    whilelt p6.s, x16, x24\n    ld1w {z1.s}, p6/z, [x15, x9, lsl #2]\n"
+                "    add x11, x15, x9, lsl #3\n    add x16, x16, x9\n    whilelt p6.s, x16, x24\n    ld1w {z2.s}, p6/z, [x11]\n"
+                "    add x16, x16, x9\n    whilelt p6.s, x16, x24\n    ld1w {z3.s}, p6/z, [x11, x9, lsl #2]\n"
+                "    uzp1 z0.h, z0.h, z1.h\n    uzp1 z1.h, z2.h, z3.h\n    uzp1 z0.b, z0.b, z1.b\n");
+        return String.withCString("    whilelt p6.s, x8, x24\n    ld1w {z0.s}, p6/z, [x15]\n"
+            "    add x16, x8, x9\n    whilelt p6.s, x16, x24\n    ld1w {z1.s}, p6/z, [x15, x9, lsl #2]\n"
+            "    uzp1 z0.h, z0.h, z1.h\n");
+    }
+
+    String* smeIntMainLoop(u8* L, u8* p, u8* MOPA)
+    {
+        i32 sh = p[0] == (u8)'b' ? (i32)2 : (i32)1;
+        String* o = new String();
+        o.append(String.withFormat("%smain%s:\n    rdsvl x17, #2\n    mov x10, #0\n", L, p));
+        // Row predicates at the element width of the outer product: 4 (2) bits
+        // per row of the 32-bit tile; ld1w and st1w read the first of each group.
+        o.append(String.withFormat("%si%s:\n    lsl x8, x10, #%d\n    lsl x14, x22, #%d\n    whilelt p0.%s, x8, x14\n    add x8, x8, x9, lsl #%d\n    whilelt p3.%s, x8, x14\n    mov x12, #0\n",
+                                   L, p, sh, sh, p, sh, p));
+        o.append(String.withFormat("%st%s:\n    cmp x12, x26\n    b.hs %std%s\n    whilelt p2.s, x12, x26\n    zero {za2.s, za3.s}\n", L, p, L, p));
+        o.appendCString("    sub x14, x22, x10\n    cmp x14, x9\n    csel x14, x14, x9, lo\n");
+        o.append(String.withFormat("    lsl x8, x12, #%d\n    madd x15, x10, x25, x8\n    add x15, x19, x15, lsl #2\n    mov w13, #0\n", sh));
+        o.append(String.withFormat("%sa%s:\n", L, p));
+        o.append(smeIntLoads(p));
+        o.appendCString("    mova za2h.s[w13, 0], p2/m, z0.s\n");
+        o.append(String.withFormat("    add x15, x15, x25, lsl #2\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %sa%s\n", L, p));
+        o.append(String.withFormat("    add x11, x10, x9\n    cmp x11, x22\n    b.hs %stc0%s\n", L, p));
+        o.appendCString("    sub x14, x22, x11\n    cmp x14, x9\n    csel x14, x14, x9, lo\n");
+        o.appendCString("    madd x15, x11, x25, x8\n    add x15, x19, x15, lsl #2\n    mov w13, #0\n");
+        o.append(String.withFormat("%sa2%s:\n", L, p));
+        o.append(smeIntLoads(p));
+        o.appendCString("    mova za3h.s[w13, 0], p2/m, z0.s\n");
+        o.append(String.withFormat("    add x15, x15, x25, lsl #2\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %sa2%s\n", L, p));
+        o.append(String.withFormat("%stc0%s:\n    sub x14, x26, x12\n    cmp x14, x9\n    csel x14, x14, x9, lo\n    madd x15, x12, x17, x28\n    mov w13, #0\n", L, p));
+        o.append(String.withFormat("%stc%s:\n    st1w {za2v.s[w13, 0]}, p0, [x15]\n    st1w {za3v.s[w13, 0]}, p3, [x15, x9, lsl #2]\n", L, p));
+        o.append(String.withFormat("    add x15, x15, x17\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %stc%s\n", L, p));
+        o.append(String.withFormat("    add x12, x12, x9\n    b %st%s\n", L, p));
+        o.append(String.withFormat("%std%s:\n    mov x11, #0\n%sj%s:\n    lsl x8, x11, #%d\n    lsl x14, x23, #%d\n    whilelt p1.%s, x8, x14\n    add x8, x8, x9, lsl #%d\n    whilelt p4.%s, x8, x14\n"
+                                   "    zero {za0.s, za1.s, za2.s, za3.s}\n", L, p, L, p, sh, sh, p, sh, p));
+        o.append(String.withFormat("    cbz x26, %sst%s\n    mov x15, x28\n    add x16, x20, x11, lsl #2\n    mov x12, #0\n", L, p));
+        o.append(String.withFormat("%skk%s:\n    ld1w {z0.s}, p0/z, [x15]\n    ld1w {z2.s}, p3/z, [x15, x9, lsl #2]\n    ld1w {z1.s}, p1/z, [x16]\n"
+                                   "    ld1w {z3.s}, p4/z, [x16, x9, lsl #2]\n", L, p));
+        o.append(String.withFormat("    %s za0.s, p0/m, p1/m, z0.%s, z1.%s\n    %s za1.s, p3/m, p1/m, z2.%s, z1.%s\n", MOPA, p, p, MOPA, p, p));
+        o.append(String.withFormat("    %s za2.s, p0/m, p4/m, z0.%s, z3.%s\n    %s za3.s, p3/m, p4/m, z2.%s, z3.%s\n", MOPA, p, p, MOPA, p, p));
+        o.append(String.withFormat("    add x15, x15, x17\n    add x16, x16, x23, lsl #2\n    add x12, x12, #1\n    cmp x12, x26\n    b.lo %skk%s\n", L, p));
+        o.append(String.withFormat("%sst%s:\n    sub x14, x22, x10\n    cmp x14, x9\n    csel x14, x14, x9, lo\n", L, p));
+        o.appendCString("    madd x15, x10, x27, x11\n    add x15, x21, x15, lsl #2\n    mov w13, #0\n");
+        o.append(String.withFormat("%ss%s:\n    st1w {za0h.s[w13, 0]}, p1, [x15]\n    st1w {za2h.s[w13, 0]}, p4, [x15, x9, lsl #2]\n", L, p));
+        o.append(String.withFormat("    add x15, x15, x27, lsl #2\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %ss%s\n", L, p));
+        o.append(String.withFormat("    add x8, x10, x9\n    cmp x8, x22\n    b.hs %sjn%s\n", L, p));
+        o.appendCString("    sub x14, x22, x8\n    cmp x14, x9\n    csel x14, x14, x9, lo\n");
+        o.appendCString("    madd x15, x8, x27, x11\n    add x15, x21, x15, lsl #2\n    mov w13, #0\n");
+        o.append(String.withFormat("%ss2%s:\n    st1w {za1h.s[w13, 0]}, p1, [x15]\n    st1w {za3h.s[w13, 0]}, p4, [x15, x9, lsl #2]\n", L, p));
+        o.append(String.withFormat("    add x15, x15, x27, lsl #2\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %ss2%s\n", L, p));
+        o.append(String.withFormat("%sjn%s:\n    add x11, x11, x9, lsl #1\n    cmp x11, x23\n    b.lo %sj%s\n", L, p, L, p));
+        o.append(String.withFormat("    add x10, x10, x9, lsl #1\n    cmp x10, x22\n    b.lo %si%s\n    b %sok\n", L, p, L));
+        return o;
+    }
+
+    String* smeIntPackB(u8* L, u8* p, bool signedK)
+    {
+        // Bq[kq][j] = the 4 (2) rows of B at kq, a row to a byte (half); rows past
+        // K read as zeros (whilelt against a bound of 0). ldb is in x1.
+        String* o = new String();
+        if (p[0] == (u8)'b') {
+            o.append(String.withFormat("%spb%s:\n    lsl x12, x10, #2\n    mul x14, x12, x1\n    add x14, x20, x14, lsl #2\n    add x15, x14, x1, lsl #2\n"
+                                       "    add x0, x15, x1, lsl #2\n    add x3, x0, x1, lsl #2\n", L, p));
+            o.appendCString("    add x8, x12, #1\n    cmp x8, x24\n    csel x2, x23, xzr, lo\n    add x8, x12, #2\n    cmp x8, x24\n    csel x4, x23, xzr, lo\n"
+                            "    add x8, x12, #3\n    cmp x8, x24\n    csel x5, x23, xzr, lo\n    mov x11, #0\n");
+            o.append(String.withFormat("%spb%sj:\n    whilelt p1.s, x11, x23\n    ld1w {z0.s}, p1/z, [x14, x11, lsl #2]\n"
+                                       "    whilelt p2.s, x11, x2\n    ld1w {z1.s}, p2/z, [x15, x11, lsl #2]\n"
+                                       "    whilelt p2.s, x11, x4\n    ld1w {z2.s}, p2/z, [x0, x11, lsl #2]\n"
+                                       "    whilelt p2.s, x11, x5\n    ld1w {z3.s}, p2/z, [x3, x11, lsl #2]\n", L, p));
+            if (signedK)
+                o.appendCString("    and z0.s, z0.s, #0xff\n    and z1.s, z1.s, #0xff\n    and z2.s, z2.s, #0xff\n    and z3.s, z3.s, #0xff\n");
+            o.appendCString("    lsl z1.s, z1.s, #8\n    lsl z2.s, z2.s, #16\n    lsl z3.s, z3.s, #24\n"
+                            "    orr z0.d, z0.d, z1.d\n    orr z2.d, z2.d, z3.d\n    orr z0.d, z0.d, z2.d\n");
+        } else {
+            o.append(String.withFormat("%spb%s:\n    lsl x12, x10, #1\n    mul x14, x12, x1\n    add x14, x20, x14, lsl #2\n    add x15, x14, x1, lsl #2\n", L, p));
+            o.appendCString("    add x8, x12, #1\n    cmp x8, x24\n    csel x2, x23, xzr, lo\n    mov x11, #0\n");
+            o.append(String.withFormat("%spb%sj:\n    whilelt p1.s, x11, x23\n    ld1w {z0.s}, p1/z, [x14, x11, lsl #2]\n"
+                                       "    whilelt p2.s, x11, x2\n    ld1w {z1.s}, p2/z, [x15, x11, lsl #2]\n", L, p));
+            if (signedK)
+                o.appendCString("    and z0.s, z0.s, #0xffff\n    and z1.s, z1.s, #0xffff\n");
+            o.appendCString("    lsl z1.s, z1.s, #16\n    orr z0.d, z0.d, z1.d\n");
+        }
+        o.append(String.withFormat("    st1w {z0.s}, p1, [x16, x11, lsl #2]\n    add x11, x11, x9\n    cmp x11, x23\n    b.lo %spb%sj\n", L, p));
+        o.append(String.withFormat("    add x16, x16, x23, lsl #2\n    add x10, x10, #1\n    cmp x10, x26\n    b.lo %spb%s\n", L, p));
+        o.appendCString("    rdsvl x17, #2\n    madd x20, x17, x26, x28\n");
+        return o;
+    }
+
+    // The sysctl probe of one feature into its state byte: 0 unknown, 1 yes, 2 no.
+    String* smeProbe(u8* which)
+    {
+        return String.withFormat(
+            "    sub sp, sp, #16\n    str wzr, [sp]\n    mov x9, #4\n    str x9, [sp, #8]\n"
+            "    adrp x0, ___xt_%s_feat@PAGE\n    add x0, x0, ___xt_%s_feat@PAGEOFF\n"
+            "    mov x1, sp\n    add x2, sp, #8\n    mov x3, #0\n    mov x4, #0\n"
+            "    bl _sysctlbyname\n    ldr w9, [sp]\n    add sp, sp, #16\n"
+            "    cmp w0, #0\n    ccmp w9, #0, #4, eq\n"
+            "    mov w9, #2\n    mov w10, #1\n    csel w9, w10, w9, ne\n"
+            "    adrp x8, ___xt_%s_state@PAGE\n"
+            "    strb w9, [x8, ___xt_%s_state@PAGEOFF]\n", which, which, which, which);
+    }
+
+    // One scan: the largest (and, signed, the smallest) value of a matrix.
+    String* smeIntScan(u8* L, u8* lab, u8* rows, u8* cols, u8* base, u8* ld, bool signedK)
+    {
+        String* o = new String();
+        o.appendCString("    mov x10, #0\n");
+        o.append(String.withFormat("%s%sr:\n    mul x15, x10, %s\n    add x15, %s, x15, lsl #2\n    mov x12, #0\n", L, lab, ld, base));
+        o.append(String.withFormat("%s%sc:\n    whilelt p0.s, x12, %s\n    ld1w {z0.s}, p0/z, [x15, x12, lsl #2]\n", L, lab, cols));
+        if (signedK)
+            o.appendCString("    smax z4.s, p0/m, z4.s, z0.s\n    smin z5.s, p0/m, z5.s, z0.s\n");
+        else
+            o.appendCString("    umax z4.s, p0/m, z4.s, z0.s\n");
+        o.append(String.withFormat("    add x12, x12, x9\n    cmp x12, %s\n    b.lo %s%sc\n", cols, L, lab));
+        o.append(String.withFormat("    add x10, x10, #1\n    cmp x10, %s\n    b.lo %s%sr\n", rows, L, lab));
+        return o;
+    }
+
+    String* smeGemmIntKernel(bool signedK)
+    {
+        u8* T = signedK ? "i32" : "u32";
+        u8* L = signedK ? "Lsmei32_" : "Lsmeu32_";
+        u8* MOPA = signedK ? "smopa" : "umopa";
+        String* o = new String();
+        o.append(String.withFormat("\n// SME matrix kernel (%s)\n    .p2align 2\n", T));
+        o.append(String.withFormat("___xt_sme_gemm_%s:\n", T));
+        o.appendCString("    stp x29, x30, [sp, #-160]!\n    mov x29, sp\n"
+                        "    stp x19, x20, [sp, #16]\n    stp x21, x22, [sp, #32]\n"
+                        "    stp x23, x24, [sp, #48]\n    stp x25, x26, [sp, #64]\n"
+                        "    stp x27, x28, [sp, #80]\n    stp d8, d9, [sp, #96]\n"
+                        "    stp d10, d11, [sp, #112]\n    stp d12, d13, [sp, #128]\n"
+                        "    stp d14, d15, [sp, #144]\n");
+        o.appendCString("    mov x19, x0\n    mov x20, x1\n    mov x21, x2\n"
+                        "    mov w22, w3\n    lsr x23, x3, #32\n    mov w24, w4\n"
+                        "    mov w25, w5\n    mov w26, w6\n    mov w27, w7\n");
+        // SME present? probed once, as the float kernel does
+        o.appendCString("    adrp x8, ___xt_sme_state@PAGE\n    ldrb w9, [x8, ___xt_sme_state@PAGEOFF]\n");
+        o.append(String.withFormat("    cbnz w9, %sknown\n", L));
+        o.append(smeProbe("sme"));
+        o.append(String.withFormat("%sknown:\n    mov w0, #0\n    cmp w9, #1\n    b.ne %sret\n", L, L));
+        // SME2 (the 16-bit form) too, before streaming mode: sysctlbyname cannot
+        // be called from inside it
+        o.appendCString("    adrp x8, ___xt_sme2_state@PAGE\n    ldrb w9, [x8, ___xt_sme2_state@PAGEOFF]\n");
+        o.append(String.withFormat("    cbnz w9, %sknown2\n", L));
+        o.append(smeProbe("sme2"));
+        o.append(String.withFormat("%sknown2:\n", L));
+        o.append(String.withFormat("    cbz x22, %sdone\n    cbz x23, %sdone\n", L, L));
+        o.append(String.withFormat("    cmp x27, x23\n    b.lo %sret\n", L));
+        o.appendCString("    sub x9, x22, #1\n    madd x10, x9, x27, x23\n");
+        o.append(String.withFormat("    sub x11, x10, #1\n    lsr x11, x11, #32\n    cbnz x11, %sret\n", L));
+        o.appendCString("    add x10, x21, x10, lsl #2\n");
+        o.append(String.withFormat("    cbz x24, %sgo\n", L));
+        o.appendCString("    madd x11, x9, x25, x24\n    sub x12, x11, #1\n    lsr x12, x12, #32\n");
+        o.append(String.withFormat("    cbnz x12, %sret\n", L));
+        o.appendCString("    add x11, x19, x11, lsl #2\n");
+        o.append(String.withFormat("    cmp x21, x11\n    ccmp x19, x10, #2, lo\n    b.lo %sret\n", L));
+        o.appendCString("    sub x12, x24, #1\n    madd x11, x12, x26, x23\n    sub x12, x11, #1\n    lsr x12, x12, #32\n");
+        o.append(String.withFormat("    cbnz x12, %sret\n", L));
+        o.appendCString("    add x11, x20, x11, lsl #2\n");
+        o.append(String.withFormat("    cmp x21, x11\n    ccmp x20, x10, #2, lo\n    b.lo %sret\n", L));
+        // One buffer: A's panel (Kq rows of 2 vectors) then all of B packed (Kq
+        // rows of N words), sized for the 16-bit form's Kq = (K + 1) / 2, the
+        // larger. None when K == 0 (nothing is read).
+        o.append(String.withFormat("%sgo:\n    mov x28, #0\n    cbz x24, %sgo2\n", L, L));
+        o.append(String.withFormat("    add x8, x24, #1\n    lsr x8, x8, #1\n    rdsvl x0, #2\n    mul x0, x0, x8\n"
+                                   "    mul x1, x8, x23\n    add x0, x0, x1, lsl #2\n    bl _malloc\n    cbz x0, %sret\n    mov x28, x0\n", L));
+        // K == 0: nothing to scan or pack; Kq = 0 and the loop writes zeros
+        o.append(String.withFormat("%sgo2:\n    smstart\n    cntw x9\n    cbnz x24, %sscan\n    mov x26, #0\n    b %smainb\n%sscan:\n", L, L, L, L));
+        // ── the width: the largest (and, signed, the smallest) value in A and B ──
+        if (signedK)
+            o.appendCString("    mov w8, #0x80000000\n    dup z4.s, w8\n    mvn w8, w8\n    dup z5.s, w8\n");
+        else
+            o.appendCString("    mov z4.s, #0\n");
+        o.append(smeIntScan(L, "sa", "x22", "x24", "x19", "x25", signedK));
+        o.append(smeIntScan(L, "sb", "x24", "x23", "x20", "x26", signedK));
+        o.appendCString("    ptrue p5.s\n    mov x1, x26\n");   // ldb, kept for the packing of B
+        if (signedK) {
+            o.appendCString("    smaxv s0, p5, z4.s\n    sminv s1, p5, z5.s\n    fmov w10, s0\n    fmov w11, s1\n");
+            o.append(String.withFormat("    cmp w10, #127\n    b.gt %swide\n    cmn w11, #128\n    b.ge %spathb\n%swide:\n", L, L, L));
+        } else {
+            o.append(String.withFormat("    umaxv s0, p5, z4.s\n    fmov w10, s0\n    cmp w10, #256\n    b.lo %spathb\n", L));
+        }
+        // 16-bit values: SME2's two-way form
+        o.append(String.withFormat("    adrp x8, ___xt_sme2_state@PAGE\n    ldrb w8, [x8, ___xt_sme2_state@PAGEOFF]\n    cmp w8, #1\n    b.ne %sfail\n", L));
+        if (signedK)
+            o.append(String.withFormat("    mov w8, #32767\n    cmp w10, w8\n    b.gt %sfail\n    mov w8, #-32768\n    cmp w11, w8\n    b.lt %sfail\n", L, L));
+        else
+            o.append(String.withFormat("    cmp w10, #0x10000\n    b.hs %sfail\n", L));
+        o.appendCString("    add x26, x24, #1\n    lsr x26, x26, #1\n    rdsvl x17, #2\n    madd x16, x17, x26, x28\n    mov x10, #0\n");
+        o.append(smeIntPackB(L, "h", signedK));
+        o.append(String.withFormat("    b %smainh\n", L));
+        // 8-bit values: four to a word
+        o.append(String.withFormat("%spathb:\n    add x26, x24, #3\n    lsr x26, x26, #2\n    rdsvl x17, #2\n    madd x16, x17, x26, x28\n    mov x10, #0\n", L));
+        o.append(smeIntPackB(L, "b", signedK));
+        o.append(smeIntMainLoop(L, "b", MOPA));
+        o.append(smeIntMainLoop(L, "h", MOPA));
+        o.append(String.withFormat("%sok:\n    smstop\n    mov w22, #1\n    b %sfree\n", L, L));
+        o.append(String.withFormat("%sfail:\n    smstop\n    mov w22, #0\n%sfree:\n    cbz x28, %sfreed\n    mov x0, x28\n    bl _free\n", L, L, L));
+        o.append(String.withFormat("%sfreed:\n    mov w0, w22\n    b %sret\n%sdone:\n    mov w0, #1\n%sret:\n", L, L, L, L));
+        o.appendCString("    ldp d14, d15, [sp, #144]\n    ldp d12, d13, [sp, #128]\n"
+                        "    ldp d10, d11, [sp, #112]\n    ldp d8, d9, [sp, #96]\n"
+                        "    ldp x27, x28, [sp, #80]\n    ldp x25, x26, [sp, #64]\n"
+                        "    ldp x23, x24, [sp, #48]\n    ldp x21, x22, [sp, #32]\n"
+                        "    ldp x19, x20, [sp, #16]\n    ldp x29, x30, [sp], #160\n    ret\n");
+        return o;
+    }
+
     void emitFunction(IRFunc* fn)
     {
         _fn = fn;

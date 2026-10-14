@@ -81,6 +81,7 @@ class OptProfile
     String* _matMulPrefix;
     String* _matMulSuffix;
     String* _matMulFastSuffix;  // appended under `:goal(speed)`: arm64 "_fast"
+    bool _matMulInts;           // integer kernels too (prefix + "u32"/"i32"): arm64
     bool _loopRotate;      // top-tested loops become bottom-tested
     bool _loopRotateChain; // and loops whose test is a short-circuit chain
     u32 _inlineMax;        // the largest callee (IR instructions) the inliner splices
@@ -93,6 +94,7 @@ class OptProfile
         _matMulPrefix = (String*)0;
         _matMulSuffix = String.withCString("");
         _matMulFastSuffix = (String*)0;
+        _matMulInts = false;
         _inlineMax = (u32)64;
         _dceTrace = false;
         _nativeVarargs = false;
@@ -140,6 +142,8 @@ class OptProfile
     void setMatMul(String* prefix, String* suffix) { _matMulPrefix = prefix; _matMulSuffix = suffix; }
     String* matMulFastSuffix(void) { return _matMulFastSuffix; }
     void setMatMulFastSuffix(String* s) { _matMulFastSuffix = s; }
+    bool matMulInts(void) { return _matMulInts; }
+    void setMatMulInts(bool b) { _matMulInts = b; }
 
     static OptProfile* forTarget(String* t)
         {
@@ -7421,6 +7425,7 @@ class OptProfile
     IRBlock* _mxHead;
     IRBlock* _mxExit;
     bool _mmF64;
+    String* _mmElem;     // "f32", "f64", "u32" or "i32": the element type, and the kernel's name
     IROperand* _mxM;
     IROperand* _mxN;
     IROperand* _mxK;
@@ -7726,17 +7731,26 @@ class OptProfile
                 continue;
             String* fty = sPhi.res().ty();
             bool f64 = fty.equals(String.withCString("F64"));
-            if (!f64 && !fty.equals(String.withCString("F32")))
+            // An integer nest (u32 or i32 elements, Add and Mul) goes to the
+            // target's integer kernel, where it has one. As the reference.
+            bool isInt = fty.equals(String.withCString("U32")) || fty.equals(String.withCString("I32"));
+            if (!f64 && !isInt && !fty.equals(String.withCString("F32")))
                 continue;
-            if (mmIncoming(sPhi, Pk) == 0 || mmIncoming(sPhi, Bk) == 0 || !mmPlusZero(mmIncoming(sPhi, Pk), defOf, fty))
+            if (isInt && !_profile.matMulInts())
                 continue;
-            IRInsn* fadd = mmDefWith(mmIncoming(sPhi, Bk), String.withCString("FAdd"), defOf);
+            if (mmIncoming(sPhi, Pk) == 0 || mmIncoming(sPhi, Bk) == 0)
+                continue;
+            i64 zero = (i64)0;
+            if (isInt ? !(constValue(defOf, mmIncoming(sPhi, Pk), &zero) && zero == (i64)0)
+                      : !mmPlusZero(mmIncoming(sPhi, Pk), defOf, fty))
+                continue;
+            IRInsn* fadd = mmDefWith(mmIncoming(sPhi, Bk), String.withCString(isInt ? "Add" : "FAdd"), defOf);
             if (fadd == 0 || fadd.ops().count() != (u32)2 || defBlk.get((Hashable*)fadd.res()) != (Object*)Bk)
                 continue;
             IROperand* f0 = (IROperand*)fadd.ops().get((u32)0);
             IROperand* f1 = (IROperand*)fadd.ops().get((u32)1);
             IROperand* prodOp = mmIsUse(f0, sPhi.res()) ? f1 : (mmIsUse(f1, sPhi.res()) ? f0 : (IROperand*)0);
-            IRInsn* fmul = prodOp != 0 ? mmDefWith(prodOp, String.withCString("FMul"), defOf) : (IRInsn*)0;
+            IRInsn* fmul = prodOp != 0 ? mmDefWith(prodOp, String.withCString(isInt ? "Mul" : "FMul"), defOf) : (IRInsn*)0;
             if (fmul == 0 || fmul.ops().count() != (u32)2 || defBlk.get((Hashable*)fmul.res()) != (Object*)Bk)
                 continue;
             IRInsn* l0 = mmDefWith((IROperand*)fmul.ops().get((u32)0), String.withCString("Load"), defOf);
@@ -7903,7 +7917,9 @@ class OptProfile
                     u32s = false;
             if (!u32s)
                 continue;
-            String* ptrPre = String.withCString(f64 ? "Ptr(F64," : "Ptr(F32,");
+            String* ptrPre = String.withCString("Ptr(");
+            ptrPre.append(fty);
+            ptrPre.appendCString(",");
             if (eaA.res() == 0 || eaB.res() == 0 || eaC.res() == 0 || !eaA.res().ty().hasPrefix(ptrPre)
                 || !eaB.res().ty().hasPrefix(ptrPre) || !eaC.res().ty().hasPrefix(ptrPre))
                 continue;
@@ -7926,6 +7942,11 @@ class OptProfile
             _mxHead = Hi;
             _mxExit = Ei;
             _mmF64 = f64;
+            _mmElem = String.withCString(f64 ? "f64" : "f32");
+            if (fty.equals(String.withCString("U32")))
+                _mmElem = String.withCString("u32");
+            else if (fty.equals(String.withCString("I32")))
+                _mmElem = String.withCString("i32");
             _mxM = M; _mxN = N; _mxK = K;
             _mxLda = lda; _mxLdb = ldb; _mxLdc = ldc;
             _mxA = Aop; _mxB = Bop; _mxC = Cop;
@@ -8025,11 +8046,12 @@ class OptProfile
         {
         String* name = new String();
         name.append(_profile.matMulPrefix());
-        name.appendCString(_mmF64 ? "f64" : "f32");
+        name.append(_mmElem);
         name.append(_profile.matMulSuffix());
         // Under `:goal(speed)` (the i loop's header was lowered as one), the
         // target's kernel that may skip its exactness check. As the reference.
-        if (_profile.matMulFastSuffix() != (String*)0 && _mxHead.name() != (String*)0
+        // An integer kernel has no check to skip.
+        if (_mmElem.byteAt((u32)0) == (u8)'f' && _profile.matMulFastSuffix() != (String*)0 && _mxHead.name() != (String*)0
             && fn.isSpeedHeader(_mxHead.name()))
             name.append(_profile.matMulFastSuffix());
         bool have = false;

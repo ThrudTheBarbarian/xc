@@ -18,6 +18,8 @@
 @property(nonatomic) XTIRBlock* header;    // Hi
 @property(nonatomic) XTIRBlock* exit;      // Ei
 @property(nonatomic) BOOL f64;
+// "f32", "f64", "u32" or "i32": the element type, and the kernel's name.
+@property(nonatomic, copy) NSString* elem;
 @property(nonatomic) XTIROperand* M;
 @property(nonatomic) XTIROperand* N;
 @property(nonatomic) XTIROperand* K;
@@ -366,18 +368,28 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
         if (!sPhi.result || sPhi.operands.count != 4)
             continue;
         XTIRTypeKind fk = sPhi.result.type.kind;
-        if (fk != XTIRTypeKindF32 && fk != XTIRTypeKindF64)
+        // An integer nest (u32 or i32 elements, Add and Mul) goes to the
+        // target's integer kernel, where it has one: arm64's packs the values
+        // to bytes or halves when they fit (XTArm64Backend, the integer
+        // kernel). The float nest is the original.
+        BOOL isInt = (fk == XTIRTypeKindU32 || fk == XTIRTypeKindI32);
+        if (fk != XTIRTypeKindF32 && fk != XTIRTypeKindF64 && !isInt)
             continue;
-        if (!incoming(sPhi, Pk) || !incoming(sPhi, Bk) || !isPlusZero(incoming(sPhi, Pk), d, fk))
+        if (isInt && !self.profile.matMulInts)
             continue;
-        // s' = FAdd(s, FMul(x, y)) in either order, in Bk
-        XTIRInsn* fadd = defWith(incoming(sPhi, Bk), XTIROpFAdd, d);
+        int64_t zero;
+        if (!incoming(sPhi, Pk) || !incoming(sPhi, Bk))
+            continue;
+        if (isInt ? !(intConst(incoming(sPhi, Pk), d, &zero) && zero == 0) : !isPlusZero(incoming(sPhi, Pk), d, fk))
+            continue;
+        // s' = FAdd(s, FMul(x, y)) in either order, in Bk (Add and Mul for ints)
+        XTIRInsn* fadd = defWith(incoming(sPhi, Bk), isInt ? XTIROpAdd : XTIROpFAdd, d);
         if (!fadd || fadd.operands.count != 2 || d.defBlk[@(fadd.result.valueId)] != Bk)
             continue;
         XTIROperand* prodOp = isUse(fadd.operands[0], sPhi.result.valueId)   ? fadd.operands[1]
                               : isUse(fadd.operands[1], sPhi.result.valueId) ? fadd.operands[0]
                                                                              : nil;
-        XTIRInsn* fmul = prodOp ? defWith(prodOp, XTIROpFMul, d) : nil;
+        XTIRInsn* fmul = prodOp ? defWith(prodOp, isInt ? XTIROpMul : XTIROpFMul, d) : nil;
         if (!fmul || fmul.operands.count != 2 || d.defBlk[@(fmul.result.valueId)] != Bk)
             continue;
         XTIRInsn* l0 = defWith(fmul.operands[0], XTIROpLoad, d);
@@ -589,6 +601,7 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
         c.header = Hi;
         c.exit = Ei;
         c.f64 = (fk == XTIRTypeKindF64);
+        c.elem = fk == XTIRTypeKindF64 ? @"f64" : fk == XTIRTypeKindF32 ? @"f32" : fk == XTIRTypeKindU32 ? @"u32" : @"i32";
         c.M = M, c.N = N, c.K = K;
         c.lda = lda, c.ldb = ldb, c.ldc = ldc;
         c.A = Aop, c.B = Bop, c.C = Cop;
@@ -647,12 +660,14 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
     {
     XTIRBlock* P = c.preheader;
     XTIRType* u64 = [XTIRType u64Type];
-    NSString* name = [NSString stringWithFormat:@"%@%@%@", self.profile.matMulPrefix, c.f64 ? @"f64" : @"f32",
+    NSString* name = [NSString stringWithFormat:@"%@%@%@", self.profile.matMulPrefix, c.elem,
                                                  self.profile.matMulSuffix ?: @""];
     // Under `:goal(speed)` (the i loop's header was lowered as one), the
     // target's kernel that may skip its exactness check, where it has one:
-    // arm64's skips the NaN check of C (only NaN payloads can differ).
-    if (self.profile.matMulFastSuffix && c.header.name && [fn.speedLoopHeaders containsObject:c.header.name])
+    // arm64's skips the NaN check of C (only NaN payloads can differ). An
+    // integer kernel has no check to skip.
+    BOOL isFloat = [c.elem hasPrefix:@"f"];
+    if (isFloat && self.profile.matMulFastSuffix && c.header.name && [fn.speedLoopHeaders containsObject:c.header.name])
         name = [name stringByAppendingString:self.profile.matMulFastSuffix];
     XTIRSymbol* sym = [mod symbolForName:name];
     if (!sym)

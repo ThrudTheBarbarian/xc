@@ -255,6 +255,9 @@ NS_ASSUME_NONNULL_BEGIN
 // Appended for a nest under `:goal(speed)`, when the target has a kernel that
 // may skip an exactness check: arm64 `_fast` (no NaN check of C). nil: none.
 @property(nonatomic, copy, nullable) NSString* matMulFastSuffix;
+// The target has integer kernels too (prefix + "u32"/"i32" + suffix): arm64,
+// whose SME kernel packs the values to bytes or halves when they fit.
+@property(nonatomic) BOOL matMulInts;
 
 + (instancetype)conservativeProfile;
 
