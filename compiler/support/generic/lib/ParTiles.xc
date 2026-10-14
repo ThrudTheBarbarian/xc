@@ -244,7 +244,11 @@ class ParTiles
             // for this block stands aside, so the pool can carry both back ends
             // for one card and pick per block.
             if (!w.forBlock(proto, src, l))
+                {
+                if (ParDevice.reporting())
+                    Log.info("par: %s: %s does not take the block as tiles", proto.parName(), w.identity().cString());
                 continue;
+                }
             ws.add((Object*)w);
             if (w.floor() > floor)
                 floor = w.floor();
@@ -320,6 +324,8 @@ class ParTiles
             ParWorker* w = (ParWorker*)ws.get(i);
             if (w.prepare(proto, src, l, tile))
                 ready.add((Object*)w);
+            else if (ParDevice.reporting())
+                Log.info("par: %s: %s could not prepare for tiles of %ld items", proto.parName(), w.identity().cString(), tile);
             }
         ws = ready;
         if (ws.count() == (u32)0)
@@ -350,6 +356,31 @@ class ParTiles
             doneItems[i] = (i64)0;
             firstTake[i] = (i64)0;
             }
+        // The workers' rates are seeded from auto's measurements of the block
+        // at this size, where it has them (the CPU's and the single GPU's; a
+        // second card takes the first's and corrects itself from its tiles).
+        // Unmeasured, an idle worker is given a tile before anything and a
+        // busy one waits behind every measured one — and the CPU pool runs
+        // each tile on ONE lane, so a GPU-sized tile there is a run of its
+        // own: mandel_deep's 2M items took 10 s on a lane beside the GPUs'
+        // 15 ms for the rest, every run of the all-devices set. Seeded, the
+        // pool is offered a tile only when it would finish it before the
+        // GPUs' queues would, which for a block the GPU wins by a hundredfold
+        // is never.
+        u32 bi = ParDevice.slot(proto.parName());
+        bool isCpuW[16];
+        for (u32 i = (u32)0; i < nw; i = i + (u32)1)
+            isCpuW[i] = ((ParWorker*)ws.get(i)).identity().equals(String.withCString("cpu"));
+        if (gParMeasN[bi] > (i64)0)
+            for (u32 i = (u32)0; i < nw; i = i + (u32)1)
+                {
+                i64 us = isCpuW[i] ? gParCpuUs[bi] : gParGpuUs[bi];
+                if (us > (i64)0)
+                    {
+                    doneItems[i] = gParMeasN[bi];
+                    firstTake[i] = ParDevice.nowUs() - us;
+                    }
+                }
         while (folded < ntiles)
             {
             for (u32 i = (u32)0; i < nw; i = i + (u32)1)
@@ -361,16 +392,45 @@ class ParTiles
                 i64 now = ParDevice.nowUs();
                 i64 best = (i64)-1;
                 i64 bestAt = (i64)0;
+                // The soonest a worker already at its depth would finish this
+                // tile: when that beats every worker with room, the tile waits
+                // for it rather than going to a slower one. Without this the
+                // CPU pool, last in the list, was handed a tile the moment
+                // both GPUs were full — a run of its own on one lane.
+                i64 fullAt = (i64)-1;
+                // The best measured rate among the GPU workers, as us per
+                // item scaled by 2^20, for the CPU pool's prior below.
+                i64 gpuUsPerItem = (i64)-1;
+                for (u32 i = (u32)0; i < nw; i = i + (u32)1)
+                    if (!isCpuW[i] && doneItems[i] != (i64)0)
+                        {
+                        i64 elapsed = now - firstTake[i];
+                        if (elapsed < (i64)1) elapsed = (i64)1;
+                        i64 r = (elapsed << (i64)20) / doneItems[i];
+                        if (gpuUsPerItem < (i64)0 || r < gpuUsPerItem)
+                            gpuUsPerItem = r;
+                        }
                 for (u32 i = (u32)0; i < nw; i = i + (u32)1)
                     {
-                    if (full[i])
-                        continue;
                     // Not available this round (a remote worker too loaded, say):
                     // skipped now, offered again next round once it is ready.
                     if (!((ParWorker*)ws.get(i)).ready(now))
                         continue;
                     i64 at;
-                    if (doneItems[i] == (i64)0)
+                    if (doneItems[i] == (i64)0 && isCpuW[i] && nw > (u32)1)
+                        {
+                        // The CPU pool unmeasured beside GPUs: never first (a
+                        // GPU-sized tile on one lane is a run of its own), and
+                        // until a GPU is measured not at all; then it is taken
+                        // as a hundred times slower than the best GPU for a
+                        // block that computes, twice as slow for one that
+                        // moves memory, until its own tiles say otherwise.
+                        if (gpuUsPerItem < (i64)0)
+                            continue;
+                        i64 k = ParDevice.computeBound(l) ? (i64)100 : (i64)2;
+                        at = (i64)2 + (((inItems[i] + items) * gpuUsPerItem) >> (i64)20) * k;
+                        }
+                    else if (doneItems[i] == (i64)0)
                         // Unmeasured: an idle one is tried before anything; a
                         // busy one waits its turn behind every measured one.
                         at = inItems[i] == (i64)0 ? (i64)0 : (i64)1 << (i64)60;
@@ -380,6 +440,12 @@ class ParTiles
                         if (elapsed < (i64)1) elapsed = (i64)1;
                         at = (i64)2 + (inItems[i] + items) * elapsed / doneItems[i];
                         }
+                    if (full[i])
+                        {
+                        if (doneItems[i] != (i64)0 && (fullAt < (i64)0 || at < fullAt))
+                            fullAt = at;
+                        continue;
+                        }
                     if (best < (i64)0 || at < bestAt)
                         {
                         best = (i64)i;
@@ -387,6 +453,8 @@ class ParTiles
                         }
                     }
                 if (best < (i64)0)
+                    break;
+                if (fullAt >= (i64)0 && fullAt < bestAt)
                     break;
                 ParWorker* w = (ParWorker*)ws.get((u32)best);
                 if (!w.take(pt, proto, src, l))

@@ -112,6 +112,13 @@ bool gParLearned[64];
 i64 gParMeasN[64];
 i64 gParLastN[64];
 bool gParMeasuring[64]; // this run is one auto measures (not decided by a setting or the bounds)
+// Warm measurement of a GPU candidate (warmTime below), per block and
+// candidate: 0 the GPU (through CUDA on Windows), 1 the GPU through Vulkan,
+// 2 the GPUs set, 3 the all-devices set.
+u32 gParWarmRuns[256];
+i64 gParWarmBusy[256];  // the candidate's run time so far, us
+i64 gParWarmFirst[256]; // wall at its first run
+i64 gParWarmPrev[256];  // the run before this one, or -1
 #if ARCH_win64
 // Windows reaches an NVIDIA GPU two ways, CUDA and Vulkan, and auto measures
 // both: per block, the interface kept (0 none yet, 1 CUDA, 2 Vulkan), the
@@ -863,17 +870,18 @@ class ParDevice
             Log.info("par: %s: %ld us on %s", gParBlock[i], us, choiceName(set));
         if (!gParMeasuring[i])
             return;
+        i64 warm = (i64)0;
         if (set == (i32)3)
             {
             gParGpusRuns[i] = gParGpusRuns[i] + (u32)1;
-            if (gParGpusUs[i] < (i64)0 && gParGpusRuns[i] >= (u32)2)
-                gParGpusUs[i] = us;
+            if (gParGpusUs[i] < (i64)0 && warmTime(i, (u32)2, us, &warm))
+                gParGpusUs[i] = warm;
             }
         else
             {
             gParAllRuns[i] = gParAllRuns[i] + (u32)1;
-            if (gParAllUs[i] < (i64)0 && gParAllRuns[i] >= (u32)2)
-                gParAllUs[i] = us;
+            if (gParAllUs[i] < (i64)0 && warmTime(i, (u32)3, us, &warm))
+                gParAllUs[i] = warm;
             }
         decide(i, proto);
         }
@@ -937,6 +945,7 @@ class ParDevice
             gParGpuRuns[i] = gParGpuRuns[i] > (u32)0 ? (u32)1 : (u32)0;
             gParGpusRuns[i] = gParGpusRuns[i] > (u32)0 ? (u32)1 : (u32)0;
             gParAllRuns[i] = gParAllRuns[i] > (u32)0 ? (u32)1 : (u32)0;
+            warmReset(i);
             gParMeasN[i] = n;
             loadProgress(i, n);
             }
@@ -1018,6 +1027,62 @@ class ParDevice
             && *(u32*)((u8*)host - (u64)40) == (u32)0x58544F43;
         }
 
+    // A GPU candidate's time, for auto's comparison, is not its second
+    // run's. A card idle through the CPU's measurement sits at its idle
+    // clocks, and the driver raises them only after sustained work — the
+    // 5080 under Windows after some 300 ms of it, mandel_deep's run going
+    // 55 ms → 47 → 19.5 — so a second run is as cold as the first, and auto
+    // measured a cold GPU against a warm CPU (and the two GPUs against a cold
+    // one). A run counts once the candidate has been busy 300 ms in all, or
+    // its first run was 2 s ago (a block that runs rarely never warms the
+    // card, and its cold time is the one it will see), AND it is no longer
+    // improving on the run before by a tenth; the time kept is the better
+    // of those two. The first run stays the warm-up (kernel build), never
+    // counted. Each run is the program's own: the runtime never repeats one.
+    static bool warmTime(u32 i, u32 cand, i64 us, i64* out)
+        {
+        u32 e = i * (u32)4 + cand;
+        i64 now = nowUs();
+        gParWarmRuns[e] = gParWarmRuns[e] + (u32)1;
+        if (gParWarmRuns[e] == (u32)1)
+            {
+            gParWarmFirst[e] = now;
+            gParWarmPrev[e] = (i64)-1;
+            return false;
+            }
+        // The busy time is per set of cards, not per candidate: the single
+        // GPU through CUDA and through Vulkan is one card, and the GPUs and
+        // all-devices sets are the same cards — but the sets bring in cards
+        // the single GPU never warmed (the 3090 beside the 5080: measured
+        // cold, the GPUs set read 60 ms for 12), so they warm on their own.
+        u32 b = i * (u32)4 + (cand < (u32)2 ? (u32)0 : (u32)2);
+        gParWarmBusy[b] = gParWarmBusy[b] + us;
+        i64 prev = gParWarmPrev[e];
+        gParWarmPrev[e] = us;
+        if (prev < (i64)0)
+            return false;
+        if (gParWarmBusy[b] < (i64)300000 && now - gParWarmFirst[e] < (i64)2000000)
+            return false;
+        if (us * (i64)10 < prev * (i64)9)
+            return false;
+        *out = us < prev ? us : prev;
+        return true;
+        }
+
+    // Measuring starts again at another size: a candidate that has run keeps
+    // its warm-up, and measures afresh.
+    static void warmReset(u32 i)
+        {
+        for (u32 c = (u32)0; c < (u32)4; c = c + (u32)1)
+            {
+            u32 e = i * (u32)4 + c;
+            gParWarmRuns[e] = gParWarmRuns[e] > (u32)0 ? (u32)1 : (u32)0;
+            gParWarmBusy[e] = (i64)0;
+            gParWarmPrev[e] = (i64)-1;
+            gParWarmFirst[e] = nowUs();
+            }
+        }
+
     // A GPU run: took is the whole run (copies in and out included, the
     // one-off kernel build left out), gpuUs the GPU's own time (-1: not known).
     static void ranOnGpu(ParChunk* proto, ParLayout* l, i64 took, i64 gpuUs)
@@ -1025,25 +1090,25 @@ class ParDevice
         u32 bi = slot(proto.parName());
         if (gParMeasuring[bi])
             gParGpuRuns[bi] = gParGpuRuns[bi] + (u32)1;
-        bool decided = gParMeasuring[bi] && gParGpuUs[bi] < (i64)0 && gParGpuRuns[bi] >= (u32)2;
+        bool decided = false;
         i64 measured = took;
+        i64 warm = (i64)0;
 #if ARCH_win64
         // Neither interface kept yet: each is warmed up and timed on its own,
         // and the GPU's time is the faster one's once both are known.
         if (gParMeasuring[bi] && gParApi[bi] == (i32)0 && forcedApi() == (i32)0)
             {
-            decided = false;
             if (gParRanApi == (i32)1)
                 {
                 gParCudaRuns[bi] = gParCudaRuns[bi] + (u32)1;
-                if (gParCudaRuns[bi] >= (u32)2 && gParCudaUs[bi] == (i64)-1)
-                    gParCudaUs[bi] = took;
+                if (gParCudaUs[bi] == (i64)-1 && warmTime(bi, (u32)0, took, &warm))
+                    gParCudaUs[bi] = warm;
                 }
             else
                 {
                 gParVkRuns[bi] = gParVkRuns[bi] + (u32)1;
-                if (gParVkRuns[bi] >= (u32)2 && gParVkUs[bi] == (i64)-1)
-                    gParVkUs[bi] = took;
+                if (gParVkUs[bi] == (i64)-1 && warmTime(bi, (u32)1, took, &warm))
+                    gParVkUs[bi] = warm;
                 }
             i64 cu = gParCudaUs[bi];
             i64 vk = gParVkUs[bi];
@@ -1070,6 +1135,17 @@ class ParDevice
                 else if (reporting())
                     Log.info("par: %s: the GPU is reached through %s only", gParBlock[bi], useVk ? "Vulkan" : "CUDA");
                 }
+            }
+        else if (gParMeasuring[bi] && gParGpuUs[bi] < (i64)0 && warmTime(bi, (u32)0, took, &warm))
+            {
+            decided = true;
+            measured = warm;
+            }
+#else
+        if (gParMeasuring[bi] && gParGpuUs[bi] < (i64)0 && warmTime(bi, (u32)0, took, &warm))
+            {
+            decided = true;
+            measured = warm;
             }
 #endif
         if (decided)
