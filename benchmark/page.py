@@ -338,14 +338,17 @@ def standing(cur):
     return " ".join(parts)
 
 
-PAR_MACHINES = (("mac", "Apple MacBook Pro, M4 Max (12 performance and 4 efficiency cores), its GPU through Metal"),
+# (key, description, multi_gpu): multi_gpu is True only where the machine has
+# two or more GPUs, so the "all GPUs" column (combining them) means something.
+# On a one-GPU machine it would just repeat the "GPU" column, so it is dropped.
+PAR_MACHINES = (("mac", "Apple MacBook Pro, M4 Max (12 performance and 4 efficiency cores), its GPU through Metal", False),
                 ("linux", "AMD Ryzen 9 9955HX (16 cores, 32 threads), Linux, its integrated Radeon 610M "
-                          "(2 compute units, 128 shader lanes) through Vulkan"),
+                          "(2 compute units, 128 shader lanes) through Vulkan", False),
                 # CUDA's default device is the faster card (an RTX 5080 since 2026-10-12), Vulkan's the
                 # first it enumerates (the RTX 3090): the two columns are two cards.
                 ("windows", "AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 through CUDA "
-                            "and an RTX 3090 through Vulkan"),
-                ("browser", "Chrome on the Apple M4 Max: wasm32 (one thread) and WebGPU (from 0.73)"))
+                            "and an RTX 3090 through Vulkan", True),
+                ("browser", "Chrome on the Apple M4 Max: wasm32 (one thread) and WebGPU (from 0.73)", False))
 
 
 def ms(us):
@@ -361,14 +364,16 @@ def par_tables(version):
     with open(path) as fh:
         res = json.load(fh)
     out = []
-    for m, name in PAR_MACHINES:
-        rows = [(b, r[m]) for b, r in sorted(res.items()) if m in r]
+    for m, name, multi_gpu in PAR_MACHINES:
+        # GPU-saturation benchmarks (no CPU figures) have their own section.
+        rows = [(b, r[m]) for b, r in sorted(res.items()) if m in r and "serial" in r[m]]
         if not rows:
             continue
         gpu = any("gpu" in r for _, r in rows)
         vk = any("vulkan" in r for _, r in rows)   # Windows from 0.72: CUDA and Vulkan
         out.append("**%s** (ms; best of eight runs)\n" % name)
-        gpus_m = any("gpus" in r for _, r in rows)   # all GPUs (from 0.8)
+        # "all GPUs" only where there are two or more to combine (0.8).
+        gpus_m = multi_gpu and any("gpus" in r for _, r in rows)
         alldev = any("all" in r for _, r in rows)     # all devices (from 0.8)
         if gpu:
             heads = ["benchmark", "one thread", "all threads", "GPU"] + (["all GPUs"] if gpus_m else []) + \
@@ -400,6 +405,71 @@ def par_tables(version):
                 cells.append(ms(r["gpu"]["first_us"]) if "gpu" in r else "–")
             if vk:
                 cells.append(ms(r["vulkan"]["first_us"]) if "vulkan" in r else "–")
+            out.append("| " + " | ".join(cells) + " |")
+        out.append("")
+    return "\n".join(out)
+
+
+GPU_SAT_INTRO = """### GPU-saturation benchmarks
+
+These blocks are sized so that a single GPU stays busy for tens of milliseconds
+— long enough that the tile queue's fixed per-tile cost is amortised and
+spreading the block across a **second GPU** cuts the wall-clock time. The
+benchmarks above each finish on one modern card in around a millisecond, too
+little for a second card to help; these are the opposite case. There are no
+*one thread*, *all threads* or *all devices* columns: at this size a single CPU
+thread takes minutes per run, and `auto` would never put a saturating GPU block
+on the CPU, so only the GPU paths are measured. On a one-GPU machine *all GPUs*
+is the same device as *GPU* and is dropped; the point is the machine with two.
+
+These figures are from the **development compiler for 0.8.1**, not released 0.8:
+they need two fixes landing in that release — a narrow integer now converts to
+float in a CUDA (PTX) kernel instead of dropping the kernel to a Vulkan
+fallback, and the tile queue keeps a card's second back end in reach so a block
+can spread across both NVIDIA cards. On released 0.8 this block stays on one
+card. The two cards are not a matched pair — an RTX 5080 and an older RTX 3090
+— so the gain is not 2×; read it from the slower card, which is the fairer
+baseline: the 3090 alone against the two together. `auto` still keeps this
+block on the single faster card for now — the per-tile cost during its short
+probe hides the second card's gain — so the two-card figure is the `all GPUs`
+column (`XC_PAR=gpus`); teaching `auto` to choose it is the next step.
+"""
+
+
+def gpu_saturation(version):
+    """The GPU-saturation benchmarks (run.py GPU_BENCHES, from 0.8x): a block
+    big enough to keep a GPU busy, so a second GPU pays off. They record only the
+    GPU paths (no serial/all-threads/all-devices), which is how they are told
+    apart here — a benchmark with no "serial" figure belongs in this section."""
+    path = os.path.join(ROOT, "par", version, "results.json")
+    if not os.path.exists(path):
+        return ""
+    with open(path) as fh:
+        res = json.load(fh)
+    gpu_benches = [b for b in res if not any("serial" in mv for mv in res[b].values())]
+    if not gpu_benches:
+        return ""
+    out = [GPU_SAT_INTRO]
+    for m, name, multi_gpu in PAR_MACHINES:
+        rows = [(b, res[b][m]) for b in sorted(gpu_benches) if m in res[b]]
+        if not rows:
+            continue
+        vk = any("vulkan" in r for _, r in rows)
+        gpus_m = multi_gpu and any("gpus" in r for _, r in rows)
+        out.append("**%s** (ms; best of eight runs)\n" % name)
+        heads = ["benchmark", "GPU"] + (["all GPUs"] if gpus_m else []) + \
+                (["Vulkan"] if vk else []) + ["`auto`", "GPU's first run"]
+        out.append("| " + " | ".join(heads) + " |")
+        out.append("|" + "---|" * len(heads))
+        for b, r in rows:
+            cells = ["[`%s`](%s#%s)" % (b, SOURCES_URL, b),
+                     ms(r["gpu"]["best_us"]) if "gpu" in r else "–"]
+            if gpus_m:
+                cells.append(ms(r["gpus"]["best_us"]) if "gpus" in r else "–")
+            if vk:
+                cells.append(ms(r["vulkan"]["best_us"]) if "vulkan" in r else "–")
+            cells.append(ms(r["auto"]["best_us"]))
+            cells.append(ms(r["gpu"]["first_us"]) if "gpu" in r else "–")
             out.append("| " + " | ".join(cells) + " |")
         out.append("")
     return "\n".join(out)
@@ -541,6 +611,7 @@ def main():
         changed=", ".join("`%s`" % b for b in sorted(CHANGED_IN)),
         par=par_tables(a.current),
         multigpu=multigpu(a.current),
+        gpu_saturation=gpu_saturation(a.current),
         vulkan=vulkan_notes(a.current),
     )
     with open(PAGE, "w") as fh:
@@ -736,6 +807,7 @@ the same work through Vulkan (`XC_PAR_GPU=vulkan`).
 
 {par}
 {multigpu}
+{gpu_saturation}
 
 What the tables show:
 

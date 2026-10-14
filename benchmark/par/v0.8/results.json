@@ -1,4 +1,40 @@
 {
+ "mandel_deep": {
+  "mac": {
+   "auto": {
+    "best_us": 48829,
+    "first_us": 72469
+   },
+   "checksum": "2738",
+   "gpu": {
+    "best_us": 48270,
+    "first_us": 74697
+   },
+   "gpus": {
+    "best_us": 46884,
+    "first_us": 72759
+   }
+  },
+  "windows": {
+   "auto": {
+    "best_us": 19335,
+    "first_us": 386137
+   },
+   "checksum": "2738",
+   "gpu": {
+    "best_us": 19287,
+    "first_us": 111348
+   },
+   "gpus": {
+    "best_us": 11959,
+    "first_us": 344650
+   },
+   "vulkan": {
+    "best_us": 34160,
+    "first_us": 188512
+   }
+  }
+ },
  "mandelbrot": {
   "browser": {
    "auto": {

@@ -188,25 +188,25 @@ the same work through Vulkan (`XC_PAR_GPU=vulkan`).
 
 **Apple MacBook Pro, M4 Max (12 performance and 4 efficiency cores), its GPU through Metal** (ms; best of eight runs)
 
-| benchmark | one thread | all threads | GPU | all GPUs | all devices | `auto` | GPU vs all threads | GPU's first run |
-|---|---|---|---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 490 | 94.4 | 0.7 | 0.8 | 42.7 | 0.6 | 126× faster | 22.0 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 6878 | 575 | 4.1 | 4.8 | 265 | 4.1 | 140× faster | 38.3 |
-| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 6070 | 460 | 3.5 | 3.6 | 214 | 3.5 | 131× faster | 23.3 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 20.2 | 2.0 | 0.4 | 1.2 | 10.3 | 1.0 | 5.1× faster | 20.2 |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 81.9 | 9.0 | 1.3 | 1.4 | 5.9 | 1.3 | 6.7× faster | 30.2 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.4 | 0.5 | 10.9 | 12.2 | 9.2 | 0.5 | 20× slower | 31.0 |
+| benchmark | one thread | all threads | GPU | all devices | `auto` | GPU vs all threads | GPU's first run |
+|---|---|---|---|---|---|---|---|
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 490 | 94.4 | 0.7 | 42.7 | 0.6 | 126× faster | 22.0 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 6878 | 575 | 4.1 | 265 | 4.1 | 140× faster | 38.3 |
+| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 6070 | 460 | 3.5 | 214 | 3.5 | 131× faster | 23.3 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 20.2 | 2.0 | 0.4 | 10.3 | 1.0 | 5.1× faster | 20.2 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 81.9 | 9.0 | 1.3 | 5.9 | 1.3 | 6.7× faster | 30.2 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.4 | 0.5 | 10.9 | 9.2 | 0.5 | 20× slower | 31.0 |
 
 **AMD Ryzen 9 9955HX (16 cores, 32 threads), Linux, its integrated Radeon 610M (2 compute units, 128 shader lanes) through Vulkan** (ms; best of eight runs)
 
-| benchmark | one thread | all threads | GPU | all GPUs | all devices | `auto` | GPU vs all threads | GPU's first run |
-|---|---|---|---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 395 | 40.7 | 9.7 | 9.7 | 21.6 | 9.7 | 4.2× faster | 29.7 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 6408 | 249 | 108 | 110 | 149 | 108 | 2.3× faster | 135 |
-| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 5143 | 207 | 89.1 | 87.6 | 109 | 88.8 | 2.3× faster | 114 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 5.9 | 0.5 | 3.4 | 3.6 | 3.2 | 0.6 | 7.1× slower | 21.7 |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 299 | 17.0 | 5.8 | 5.8 | 11.7 | 5.8 | 2.9× faster | 30.3 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.9 | 2.4 | 21.7 | 15.7 | 11.9 | 2.4 | 9.1× slower | 57.0 |
+| benchmark | one thread | all threads | GPU | all devices | `auto` | GPU vs all threads | GPU's first run |
+|---|---|---|---|---|---|---|---|
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 395 | 40.7 | 9.7 | 21.6 | 9.7 | 4.2× faster | 29.7 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 6408 | 249 | 108 | 149 | 108 | 2.3× faster | 135 |
+| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 5143 | 207 | 89.1 | 109 | 88.8 | 2.3× faster | 114 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 5.9 | 0.5 | 3.4 | 3.2 | 0.6 | 7.1× slower | 21.7 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 299 | 17.0 | 5.8 | 11.7 | 5.8 | 2.9× faster | 30.3 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.9 | 2.4 | 21.7 | 11.9 | 2.4 | 9.1× slower | 57.0 |
 
 **AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 through CUDA and an RTX 3090 through Vulkan** (ms; best of eight runs)
 
@@ -239,6 +239,42 @@ the same work through Vulkan (`XC_PAR_GPU=vulkan`).
 
 The mixed pair is a little slower here only because the 3090 is slower through Vulkan than through CUDA; the point is that it runs at all. Two cards from different vendors — an NVIDIA through CUDA and an AMD through Vulkan — could share a block the same way.
 
+### GPU-saturation benchmarks
+
+These blocks are sized so that a single GPU stays busy for tens of milliseconds
+— long enough that the tile queue's fixed per-tile cost is amortised and
+spreading the block across a **second GPU** cuts the wall-clock time. The
+benchmarks above each finish on one modern card in around a millisecond, too
+little for a second card to help; these are the opposite case. There are no
+*one thread*, *all threads* or *all devices* columns: at this size a single CPU
+thread takes minutes per run, and `auto` would never put a saturating GPU block
+on the CPU, so only the GPU paths are measured. On a one-GPU machine *all GPUs*
+is the same device as *GPU* and is dropped; the point is the machine with two.
+
+These figures are from the **development compiler for 0.8.1**, not released 0.8:
+they need two fixes landing in that release — a narrow integer now converts to
+float in a CUDA (PTX) kernel instead of dropping the kernel to a Vulkan
+fallback, and the tile queue keeps a card's second back end in reach so a block
+can spread across both NVIDIA cards. On released 0.8 this block stays on one
+card. The two cards are not a matched pair — an RTX 5080 and an older RTX 3090
+— so the gain is not 2×; read it from the slower card, which is the fairer
+baseline: the 3090 alone against the two together. `auto` still keeps this
+block on the single faster card for now — the per-tile cost during its short
+probe hides the second card's gain — so the two-card figure is the `all GPUs`
+column (`XC_PAR=gpus`); teaching `auto` to choose it is the next step.
+
+**Apple MacBook Pro, M4 Max (12 performance and 4 efficiency cores), its GPU through Metal** (ms; best of eight runs)
+
+| benchmark | GPU | `auto` | GPU's first run |
+|---|---|---|---|
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 48.3 | 48.8 | 74.7 |
+
+**AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 through CUDA and an RTX 3090 through Vulkan** (ms; best of eight runs)
+
+| benchmark | GPU | all GPUs | Vulkan | `auto` | GPU's first run |
+|---|---|---|---|---|---|
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 19.3 | 12.0 | 34.2 | 19.3 | 111 |
+
 
 What the tables show:
 
@@ -263,11 +299,11 @@ What the tables show:
 - **The Ryzen's integrated Radeon** has 128 shader lanes against the CPU's 32
   threads. It just beats them on `mandelbrot`, `perlin` and `md5` and loses on
   `nbody` and `saxpy`, where `auto` keeps the CPU.
-- **Vulkan against CUDA:** the RTX 3090 through Vulkan against the RTX 5080 through CUDA, two cards, so this compares the APIs only roughly: Vulkan is slower on `mandelbrot` (0.3 ms against 0.1) and `md5` (1.6 ms against 0.9) and `md5_mask` (1.3 ms against 0.7) and `nbody` (0.5 ms against 0.4) and `perlin` (1.1 ms against 0.5) and `saxpy` (30.4 ms against 15.9).
+- **Vulkan against CUDA:** the RTX 3090 through Vulkan against the RTX 5080 through CUDA, two cards, so this compares the APIs only roughly: Vulkan is slower on `mandel_deep` (34.2 ms against 19.3) and `mandelbrot` (0.3 ms against 0.1) and `md5` (1.6 ms against 0.9) and `md5_mask` (1.3 ms against 0.7) and `nbody` (0.5 ms against 0.4) and `perlin` (1.1 ms against 0.5) and `saxpy` (30.4 ms against 15.9).
 - **The first run** carries one-off costs (building the kernel, and on NVIDIA
   creating the driver context and compiling the PTX or SPIR-V), so it is shown
   apart: a few tens of milliseconds on Metal and the integrated GPU, and on the
-  3090 93 to 110 ms through CUDA and 125 to 160 ms through Vulkan. `auto` pays it
+  3090 93 to 111 ms through CUDA and 125 to 189 ms through Vulkan. `auto` pays it
   once, while it measures.
 
 ## Release to release

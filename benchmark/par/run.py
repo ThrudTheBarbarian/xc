@@ -41,6 +41,12 @@ sys.path.insert(0, os.path.dirname(HERE))
 import run as common  # noqa: E402  (../run.py: load waiting, build.env, the shipped xcc)
 
 BENCHES = ["mandelbrot", "perlin", "nbody", "saxpy", "md5", "md5_mask"]
+# GPU-saturation benchmarks (from 0.8x): sized so one GPU is busy for tens of
+# milliseconds, long enough that spreading the block across a second GPU pays
+# off. That size makes a single CPU thread minutes per run and `auto` would
+# never pick the CPU, so these run only the GPU paths — no serial/all-threads/
+# all-devices — and the page keeps them in their own section.
+GPU_BENCHES = ["mandel_deep"]
 REPEATS = 3
 XCC = None   # --xcc: a compiler other than the shipped one (development runs)
 
@@ -143,12 +149,15 @@ MODES = [("serial", {"XC_PAR": "cpu", "XC_PAR_THREADS": "1"}),
          ("auto", {})]
 
 
-def measure(runner, binary, gpus, threads=True, multi=True):
+def measure(runner, binary, gpus, threads=True, multi=True, gpu_only=False):
     """Best of REPEATS for each mode (gpus: the GPU modes this machine has;
     threads false where there are none, as in a browser's wasm); the checksums
-    must all agree."""
+    must all agree. gpu_only drops the CPU-bound modes for a GPU-saturation
+    benchmark (serial/all-threads/all-devices), leaving the GPU paths and auto."""
     out, sums = {}, set()
     for mode, env in MODES:
+        if gpu_only and mode in ("serial", "cpu", "all"):
+            continue
         if mode in ("gpu", "vulkan") and mode not in gpus:
             continue
         # every-GPU needs a GPU; every-device needs a GPU and the CPU threads
@@ -183,7 +192,7 @@ def main():
     a = ap.parse_args()
     global XCC
     XCC = a.xcc
-    benches = a.bench or BENCHES
+    benches = a.bench or (BENCHES + GPU_BENCHES)
     machines = a.machines.split(",")
     env = common.build_env()
     work = os.path.join(HERE, "build")
@@ -192,25 +201,33 @@ def main():
     browser = None
     for name in benches:
         results[name] = {}
+        gpu_only = name in GPU_BENCHES
         if "mac" in machines:
             exe = os.path.join(work, name)
             build(name, None, exe)
-            results[name]["mac"] = measure(run_mac, exe, ["gpu"])
-        if "linux" in machines and env.get("XTC_LINUX_HOST"):
+            results[name]["mac"] = measure(run_mac, exe, ["gpu"], gpu_only=gpu_only)
+        # The GPU-saturation benchmarks target a discrete GPU kept busy for tens
+        # of milliseconds; the Linux host's integrated Radeon takes seconds on
+        # one, which does not fit the premise and makes the suite slow, so they
+        # skip it (its CPU would be measured as "—" anyway for a GPU-only bench).
+        if "linux" in machines and env.get("XTC_LINUX_HOST") and not gpu_only:
             host = env["XTC_LINUX_HOST"]
             exe = os.path.join(work, name + ".x86")
             build(name, "x86_64", exe)
             subprocess.run(["scp", "-q", exe, "%s:/tmp/par-%s" % (host, name)], check=True)
             results[name]["linux"] = measure(lambda b, e: run_linux(host, b, e), "/tmp/par-" + name,
-                                             ["gpu"] if a.version >= "0.72" else [])
+                                             ["gpu"] if a.version >= "0.72" else [], gpu_only=gpu_only)
         if "windows" in machines and env.get("XTC_WIN_GPU_HOST"):
             host = env["XTC_WIN_GPU_HOST"]
             exe = os.path.join(work, name + ".exe")
             build(name, "win64", exe)
             subprocess.run(["scp", "-q", exe, "%s:par-%s.exe" % (host, name)], check=True)
             results[name]["windows"] = measure(lambda b, e: run_windows(host, b, e), ".\\par-%s.exe" % name,
-                                               ["gpu", "vulkan"] if a.version >= "0.72" else ["gpu"])
-        if "browser" in machines and a.version >= "0.73" and os.path.exists(Browser.CHROME):
+                                               ["gpu", "vulkan"] if a.version >= "0.72" else ["gpu"], gpu_only=gpu_only)
+        # The GPU-saturation blocks are a two-GPU story; the browser has one
+        # WebGPU device and a long kernel there is only harness flakiness, so
+        # they skip it.
+        if "browser" in machines and not gpu_only and a.version >= "0.73" and os.path.exists(Browser.CHROME):
             web = os.path.join(work, "web")
             os.makedirs(web, exist_ok=True)
             build(name, "wasm32", os.path.join(web, name))
@@ -259,7 +276,9 @@ def table(results):
         for n, r in rows:
             gpu = ms(r["gpu"]["best_us"]) if "gpu" in r else "—"
             v = (" %s |" % ms(r["vulkan"]["best_us"])) if vk else ""
-            lines.append("| %s | %s | %s | %s |%s %s |" % (n, ms(r["serial"]["best_us"]),
+            # GPU-saturation benchmarks have no serial/all-threads figures.
+            serial = ms(r["serial"]["best_us"]) if "serial" in r else "—"
+            lines.append("| %s | %s | %s | %s |%s %s |" % (n, serial,
                                                        ms(r["cpu"]["best_us"]) if "cpu" in r else "—",
                                                        gpu, v, ms(r["auto"]["best_us"])))
     return "\n".join(lines)
