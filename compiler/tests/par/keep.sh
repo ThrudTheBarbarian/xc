@@ -57,6 +57,8 @@ conf="$W/st/keep.conf"
 learned=$(grep "^par.learned\..*\.heavy\..* = " "$conf" 2>/dev/null | head -1)
 [ -n "$learned" ] || { echo "FAIL keep: first run learned nothing"; cat "$conf" 2>/dev/null; fail=1; }
 bounds=${learned##* = }
+# From 0.8.1 the record ends in ;<timestamp> (the learned cache's age).
+bounds=${bounds%%;*}
 case "$bounds" in m:*) echo "FAIL keep: the first run did not finish measuring ($bounds)"; fail=1 ;; esac
 IFS=, read -r cpuUpTo gpuFrom gpusFrom allFrom _api <<< "$bounds,"
 want=0

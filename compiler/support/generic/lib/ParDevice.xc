@@ -973,8 +973,6 @@ class ParDevice
             loadProgress(i, n);
             }
         gParMeasuring[i] = true;
-        if (gParCpuUs[i] < (i64)0 || gParCpuUs[i] < (i64)1000)
-            return (i32)1;
         // A bandwidth-bound block (computeBound: few operations per byte it
         // moves, and no loop per item) cannot win on a GPU across a bus,
         // where every byte goes there and back around the run; auto does not
@@ -992,13 +990,19 @@ class ParDevice
                 return (i32)1;
                 }
             }
+        // The GPU candidates first, the CPU last: a card measured after the
+        // CPU's runs has cooled to its idle clocks, which the driver raises
+        // only after sustained work (warmTime); measured straight after the
+        // hardware probe made its context, it runs at speed. The single GPU,
+        // then the tile queue's sets where there are GPU workers.
         if (gParGpuUs[i] < (i64)0)
             return (i32)2;
-        // Then the tile queue's sets, where there are GPU workers.
         if (gParGpuWorkers >= (u32)2 && gParGpusUs[i] < (i64)0)
             return (i32)3;
         if (gParGpuWorkers >= (u32)1 && gParAllUs[i] < (i64)0)
             return (i32)4;
+        if (gParCpuUs[i] < (i64)0)
+            return (i32)1;
         i32 best = gParGpuUs[i] <= gParCpuUs[i] ? (i32)2 : (i32)1;
         i64 bestUs = gParGpuUs[i] <= gParCpuUs[i] ? gParGpuUs[i] : gParCpuUs[i];
         if (gParGpusUs[i] >= (i64)0 && gParGpusUs[i] < bestUs) { best = (i32)3; bestUs = gParGpusUs[i]; }
@@ -1025,10 +1029,13 @@ class ParDevice
         if (reporting())
             {
             Log.info("par: %s: %ld us on the CPU", gParBlock[i], us);
-            if (measured && us < (i64)1000 && gpuable)
+            if (measured && us < (i64)1000 && gpuable && gParGpuUs[i] < (i64)0)
                 Log.info("par: %s: auto keeps it on the CPU (%ld us, too short for a GPU to win)", gParBlock[i], us);
             }
-        if (measured && us < (i64)1000 && gpuable)
+        // Under a millisecond the CPU keeps the block without a GPU trial
+        // where none has been made (the GPU's fixed costs alone are more);
+        // once the GPU is measured, the faster wins as usual.
+        if (measured && us < (i64)1000 && gpuable && gParGpuUs[i] < (i64)0)
             learn(i, proto, gParLastN[i], (i32)1);
         else if (measured)
             decide(i, proto);
@@ -1045,45 +1052,33 @@ class ParDevice
             && *(u32*)((u8*)host - (u64)40) == (u32)0x58544F43;
         }
 
-    // A GPU candidate's time, for auto's comparison, is not its second
-    // run's. A card idle through the CPU's measurement sits at its idle
-    // clocks, and the driver raises them only after sustained work — the
-    // 5080 under Windows after some 300 ms of it, mandel_deep's run going
-    // 55 ms → 47 → 19.5 — so a second run is as cold as the first, and auto
-    // measured a cold GPU against a warm CPU (and the two GPUs against a cold
-    // one). A run counts once the candidate has been busy 300 ms in all, or
-    // its first run was 2 s ago (a block that runs rarely never warms the
-    // card, and its cold time is the one it will see), AND it is no longer
-    // improving on the run before by a tenth; the time kept is the better
-    // of those two. The first run stays the warm-up (kernel build), never
-    // counted. Each run is the program's own: the runtime never repeats one.
+    // A GPU candidate's time for auto's comparison: the first run is the
+    // warm-up (the kernel build), the second is timed. A card measured AFTER
+    // the CPU's runs had cooled to its idle clocks, which the driver raises
+    // only after sustained work (the 5080 under Windows: 55 ms a run where
+    // the warm card does 19.5, for some 300 ms), so auto measured a cold GPU
+    // against a warm CPU; the GPU candidates are therefore measured first,
+    // straight after the hardware probe made the card's context, while the
+    // driver still holds it at speed (choose). Each run is the program's
+    // own: the runtime never repeats one.
     static bool warmTime(u32 i, u32 cand, i64 us, i64* out)
         {
+        // Two runs a candidate, the second timed: the contract every size's
+        // eight runs rest on (tests/par/keep.sh). The cold card is met by
+        // the ORDER instead (choose: the GPU candidates before the CPU), so
+        // the threshold rules this once carried are not needed; the state
+        // stays, for a run count a future tuning may want.
         u32 e = i * (u32)4 + cand;
-        i64 now = nowUs();
         gParWarmRuns[e] = gParWarmRuns[e] + (u32)1;
+        gParWarmBusy[e] = gParWarmBusy[e] + us;
         if (gParWarmRuns[e] == (u32)1)
             {
-            gParWarmFirst[e] = now;
+            gParWarmFirst[e] = nowUs();
             gParWarmPrev[e] = (i64)-1;
             return false;
             }
-        // The busy time is per set of cards, not per candidate: the single
-        // GPU through CUDA and through Vulkan is one card, and the GPUs and
-        // all-devices sets are the same cards — but the sets bring in cards
-        // the single GPU never warmed (the 3090 beside the 5080: measured
-        // cold, the GPUs set read 60 ms for 12), so they warm on their own.
-        u32 b = i * (u32)4 + (cand < (u32)2 ? (u32)0 : (u32)2);
-        gParWarmBusy[b] = gParWarmBusy[b] + us;
-        i64 prev = gParWarmPrev[e];
         gParWarmPrev[e] = us;
-        if (prev < (i64)0)
-            return false;
-        if (gParWarmBusy[b] < (i64)300000 && now - gParWarmFirst[e] < (i64)2000000)
-            return false;
-        if (us * (i64)10 < prev * (i64)9)
-            return false;
-        *out = us < prev ? us : prev;
+        *out = us;
         return true;
         }
 
