@@ -361,6 +361,28 @@ endif
 
 # The self-hosted signer (iOS.md stage 1 / signing.md, bug 144): identity code
 # signing in xtc.
+# xcd — the par worker daemon (ParRemote.xc): this machine's GPUs served to
+# programs on other machines. Its own archive per platform later; built
+# here with the production compiler, like the signer.
+XCD_BIN       = $(BIN_DIR)/xcd
+XCD_LINUX_BIN = bin/linux/xcd
+XCD_WIN64_BIN = bin/win64/xcd.exe
+XCD_DEPS = $(XCC_XC2_BIN) selfhost/tools/xcd.xc $(wildcard support/generic/lib/*.xc) \
+           $(wildcard support/arm64/lib/*.xc) $(wildcard support/win64/lib/*.xc)
+$(XCD_BIN): $(XCD_DEPS)
+	@echo "  xc   building xcd (the par worker daemon)"
+	@$(XCC_XC2_BIN) -q -O2 -A arm64 -H . -o $@ selfhost/tools/xcd.xc
+$(XCD_LINUX_BIN): $(XCD_DEPS)
+	@echo "  xc   building xcd for linux"
+	@mkdir -p $(dir $@)
+	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -H . -o $@ selfhost/tools/xcd.xc
+$(XCD_WIN64_BIN): $(XCD_DEPS)
+	@echo "  xc   building xcd for win64"
+	@mkdir -p $(dir $@)
+	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -o $@ selfhost/tools/xcd.xc
+.PHONY: xcd
+xcd: $(XCD_BIN) $(XCD_LINUX_BIN) $(XCD_WIN64_BIN)
+
 XCC_SIGN_XC_BIN = $(BIN_DIR)/xcc-sign-xc
 $(XCC_SIGN_XC_BIN): $(XCC_SIGN_XC_DEPS) $(XCC_SIGN_XC_TLS_DEPS)
 	@echo "  xc   building the production signer (stage 2)"

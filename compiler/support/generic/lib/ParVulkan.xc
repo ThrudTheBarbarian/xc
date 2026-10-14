@@ -821,21 +821,7 @@ class ParVulkan
     // the PTX's NUL, at the next 4-byte offset; 0 when there is none.
     static u8* spirvOf(u8* src)
         {
-        if (src == (u8*)0 || src[0] != (u8)'/')
-            return (u8*)0;
-        u32 at = (u32)0;
-        while (src[at] != (u8)0 && src[at] != (u8)10)
-            {
-            if (src[at] == (u8)'s' && src[at + (u32)1] == (u8)'p' && src[at + (u32)5] == (u8)'=')
-                return src;
-            at = at + (u32)1;
-            }
-        while (src[at] != (u8)0)
-            at = at + (u32)1;
-        // Counted from the kernel's start, as the compiler pads it: a string
-        // literal itself need not sit on a 4-byte boundary.
-        u8* s2 = src + ((at + (u32)4) & ~(u32)3);
-        return s2[0] == (u8)'/' && s2[1] == (u8)'/' ? s2 : (u8*)0;
+        return ParDevice.sectionOf(src, "spirv", false);
         }
 
     static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi)
@@ -855,7 +841,7 @@ class ParVulkan
         ParLayout* l = ParDevice.layout(proto, src, lo, hi);
         if (l == (ParLayout*)0)
             return false;
-        u8* obj = (u8*)(pointer)proto;
+        u8* obj = proto.objBytes();
         u32 nb = gParVkBindings[slot];
         if (nb != (u32)1 + l.nbuf + l.nglob + l.nred)
             return ParDevice.cpu("its GPU version's header does not match");
@@ -1244,6 +1230,10 @@ class ParVulkanWorker : ParWorker
         {
         return (u32)PAR_VK_DEPTH;
         }
+    u8* section(u8* src)
+        {
+        return ParVulkan.spirvOf(src);
+        }
     i64 floor(void)
         {
         return (i64)4096;
@@ -1259,6 +1249,11 @@ class ParVulkanWorker : ParWorker
         u8* spv = ParVulkan.spirvOf(src);
         if (spv == (u8*)0 || !ParVulkan.start())
             return false;
+        // The block laid out from this worker's own section (its header may
+        // differ from the first section's in what the kernel form needs).
+        l = ParDevice.layout(proto, spv, (i64)0, l.n);
+        if (l == (ParLayout*)0)
+            return false;
         i32 slot = ParVulkan.pipeline(spv);
         if (slot < (i32)0 || gParVkBindings[slot] != (u32)1 + l.nbuf + l.nglob + l.nred)
             return false;
@@ -1267,7 +1262,7 @@ class ParVulkanWorker : ParWorker
         // in place, which has nothing to copy.
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             if (l.bufIn[i] == (i64)0 && l.bufFp[i] == (i64)0
-                && !(gVkHostImport && !gVkDiscrete && ParDevice.simdBlock(*(pointer*)((u8*)(pointer)proto + l.bufOff[i]))))
+                && !(gVkHostImport && !gVkDiscrete && ParDevice.simdBlock(*(pointer*)(proto.objBytes() + l.bufOff[i]))))
                 return false;
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             if (l.globIn[i] == (i64)0 && l.globFp[i] == (i64)0)
@@ -1327,8 +1322,11 @@ class ParVulkanWorker : ParWorker
         if (_slot < (i32)0)
             return false;
         _proto = proto;
-        _l = l;
-        u8* obj = (u8*)(pointer)proto;
+        _l = ParDevice.layout(proto, spv, (i64)0, l.n);
+        if (_l == (ParLayout*)0)
+            return false;
+        l = _l;
+        u8* obj = proto.objBytes();
         u32 nfixed = (u32)1 + l.nbuf + l.nglob;
         _nb = nfixed + l.nred;
         for (u32 d = (u32)0; d < (u32)PAR_VK_DEPTH; d = d + (u32)1)
@@ -1582,6 +1580,7 @@ class ParVulkanWorker : ParWorker
         {
         if (!_ready || _inFlight >= (u32)PAR_VK_DEPTH)
             return false;
+        l = _l;
         u32 d = _nextSlot;
         u32 nfixed = (u32)1 + l.nbuf + l.nglob;
         l.plan(t.lo, t.hi);
@@ -1606,7 +1605,7 @@ class ParVulkanWorker : ParWorker
         i64 sat = (i64)0;   // where the next slice sits in the slot's staging
         if (gVkDiscrete)
             {
-            u8* obj = (u8*)(pointer)proto;
+            u8* obj = proto.objBytes();
             u8* st = _smap[d];
             u32 b = (u32)1;
             for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
@@ -1738,7 +1737,7 @@ class ParVulkanWorker : ParWorker
         {
         ParTile* t = _slotTile[d];
         ParLayout* l = _l;
-        u8* obj = (u8*)(pointer)_proto;
+        u8* obj = _proto.objBytes();
         i64 sat = _upMax;   // a discrete card's downloads sit after its uploads in the slot's staging
         u32 b = (u32)1;
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
@@ -1782,9 +1781,18 @@ class ParVulkanWorker : ParWorker
             u8* parts[16];
             for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
                 parts[r] = _rhmap[d * (u32)16 + r];
-            ParChunk* c = _proto.copyChunk();
-            l.fold(c, &parts[0]);
-            t.partial = c;
+            if (_proto.rawPartials())
+                {
+                t.raw = Data.withLength((u32)0);
+                for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                    t.raw.appendBytes(parts[r], (u32)(l.nback * l.redStride[r]));
+                }
+            else
+                {
+                ParChunk* c = _proto.copyChunk();
+                l.fold(c, &parts[0]);
+                t.partial = c;
+                }
             }
         t.done = true;
         _slotTile[d] = (ParTile*)0;

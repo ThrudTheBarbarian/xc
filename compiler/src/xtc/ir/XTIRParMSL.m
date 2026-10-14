@@ -1439,7 +1439,7 @@ static NSString* intrinsicFor(NSString* callee)
 
     // The header line the runtime reads, and the kernel's parameters.
     NSArray<XTIRLayoutField*>* fl = self.objLayout.fields;
-    NSMutableString* meta = [NSMutableString stringWithFormat:@"// xcpar size=%u lo=%u hi=%u", self.objLayout.size,
+    NSMutableString* meta = [NSMutableString stringWithFormat:@"// xcpar msl size=%u lo=%u hi=%u", self.objLayout.size,
                                                               fl[1].byteOffset, fl[2].byteOffset];
     NSMutableString* params = [NSMutableString stringWithString:
         @"constant uchar* args [[buffer(0)]], constant long* span [[buffer(1)]]"];

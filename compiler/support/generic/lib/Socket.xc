@@ -111,6 +111,16 @@ i32 poll(pointer fds, u32 n, i32 timeout);
 
 i32 getaddrinfo(u8* node, u8* service, _HttpAddr* hints, _HttpAddr** res);
 void freeaddrinfo(_HttpAddr* res);
+// The server side: bind, listen, accept (Socket.listen / accept below).
+#if ARCH_win64
+i32 bind(u64 s, u8* addr, i32 len);
+i32 listen(u64 s, i32 backlog);
+u64 accept(u64 s, u8* addr, i32* len);
+#else
+i32 bind(i32 fd, u8* addr, u32 len);
+i32 listen(i32 fd, i32 backlog);
+i32 accept(i32 fd, u8* addr, u32* len);
+#endif
 
 bool _socket_winsock_ready = false;
 
@@ -247,6 +257,120 @@ class Socket
     bool isOpen(void)
         {
         return _open;
+        }
+
+    // ── Serving ──────────────────────────────────────────────────────────
+
+    // A listening socket on every IPv4 address, port `port` (the address is
+    // reusable at once, so a restarted server binds again). Throws a
+    // SocketError saying why when it cannot be. accept() takes connections.
+    static Socket* listen(u16 port) throws
+        {
+#if _SOCKET_NO_TCP
+        throw new SocketError(String.withCString("no TCP sockets on this platform"));
+        return (Socket*)0;
+#else
+        if (!_socket_startup())
+            throw new SocketError(String.withCString("Winsock would not start"));
+        // sockaddr_in: 16 bytes. BSD puts a length byte first; Linux and
+        // Windows a 16-bit family. AF_INET is 2, the port is big-endian.
+        u8 sa[16];
+        for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
+            sa[i] = (u8)0;
+#if ARCH_win64 || ARCH_x86_64 || PLATFORM_android
+        sa[0] = (u8)2;
+#else
+        sa[0] = (u8)16;
+        sa[1] = (u8)2;
+#endif
+        sa[2] = (u8)(port >> (u16)8);
+        sa[3] = (u8)(port & (u16)255);
+        i32 one = (i32)1;
+#if ARCH_win64
+        u64 h = socket((i32)2, (i32)1, (i32)0);
+        if (h == (u64)0xFFFFFFFFFFFFFFFF)
+            throw new SocketError(String.withCString("cannot make a socket"));
+        setsockopt(h, (i32)0xFFFF, (i32)4, (u8*)&one, (i32)4);               // SO_REUSEADDR
+        if (bind(h, &sa[0], (i32)16) != (i32)0 || listen(h, (i32)16) != (i32)0)
+            {
+            closesocket(h);
+            throw new SocketError(String.withCString("cannot listen on the port"));
+            }
+        i64 fd = (i64)h;
+#else
+        i32 h = socket((i32)2, (i32)1, (i32)0);
+        if (h < (i32)0)
+            throw new SocketError(String.withCString("cannot make a socket"));
+#if ARCH_x86_64 || PLATFORM_android
+        setsockopt(h, (i32)1, (i32)2, (u8*)&one, (u32)4);                    // SOL_SOCKET, SO_REUSEADDR
+#else
+        setsockopt(h, (i32)0xFFFF, (i32)4, (u8*)&one, (u32)4);
+#endif
+        if (bind(h, &sa[0], (u32)16) != (i32)0 || listen(h, (i32)16) != (i32)0)
+            {
+            _socket_closeFd((i64)h);
+            throw new SocketError(String.withCString("cannot listen on the port"));
+            }
+        i64 fd = (i64)h;
+#endif
+        Socket* s = new Socket();
+        s._fd = fd;
+        s._open = true;
+        return s;
+#endif
+        }
+
+    // The next connection to a listening socket, waiting up to `ms` for one
+    // (-1: as long as it takes); null when none came in time, or on failure.
+    Socket* accept(i32 ms)
+        {
+#if _SOCKET_NO_TCP
+        return (Socket*)0;
+#else
+        if (!_open || !waitReadable(ms))
+            return (Socket*)0;
+        u8 sa[128];
+#if ARCH_win64
+        i32 len = (i32)128;
+        u64 h = accept((u64)_fd, &sa[0], &len);
+        if (h == (u64)0xFFFFFFFFFFFFFFFF)
+            return (Socket*)0;
+        i64 fd = (i64)h;
+#else
+        u32 len = (u32)128;
+        i32 h = accept((i32)_fd, &sa[0], &len);
+        if (h < (i32)0)
+            return (Socket*)0;
+        i64 fd = (i64)h;
+#endif
+        Socket* s = new Socket();
+        s._fd = fd;
+        s._open = true;
+#if !ARCH_win64 && !ARCH_x86_64 && !PLATFORM_android
+        i32 one = (i32)1;
+        setsockopt((i32)fd, (i32)0xFFFF, (i32)0x1022, (u8*)&one, (u32)4);  // SO_NOSIGPIPE
+#endif
+        return s;
+#endif
+        }
+
+    // Exactly n bytes, waiting up to `ms` for each piece to arrive (-1: as
+    // long as it takes); false when the connection closed or time ran out.
+    bool readExact(u8* p, u32 n, i32 ms)
+        {
+        u32 got = (u32)0;
+        while (got < n)
+            {
+            if (!waitReadable(ms))
+                return false;
+            i32 r = read(p + got, n - got);
+            if (r < (i32)0)
+                return false;
+            if (r == (i32)0 && !_open)
+                return false;
+            got = got + (u32)r;
+            }
+        return true;
         }
 
     // ── Writing ──────────────────────────────────────────────────────────

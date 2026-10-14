@@ -105,6 +105,20 @@ class ParChunk : Object
         return (i64)0 - (i64)1;
         }
 
+    // The bytes a GPU kernel takes the block object as: this object's own,
+    // for a generated block; a worker on another machine (ParRemote.xc)
+    // holds the object it was sent as bytes beside a stand-in chunk.
+    u8* objBytes(void)
+        {
+        return (u8*)(pointer)self;
+        }
+    // Whether a worker should hand a tile's reduction partials back raw, as
+    // bytes, instead of folding them into a chunk copy: the remote worker,
+    // whose fold happens where the block's class is.
+    bool rawPartials(void)
+        {
+        return false;
+        }
     // What a thread runs: a bound method that is never overridden, so the
     // binding is unambiguous, and whose call to run() dispatches to the block.
     void go(void)

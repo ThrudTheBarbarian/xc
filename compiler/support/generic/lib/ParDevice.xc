@@ -222,11 +222,18 @@ class ParLayout : Object
     // reads them: no allocation per thread.
     void fold(ParChunk* proto, u8** parts)
         {
+        foldN(proto, parts, nback);
+        }
+    // The same over `count` partials each: a worker on another machine
+    // folds by its own layout's count, which its kernel form may set
+    // differently (device-side reduction or not), and says so with the tile.
+    void foldN(ParChunk* proto, u8** parts, i64 count)
+        {
         if (nred == (u32)0)
             return;
         ParChunk* c = proto.copyChunk();
         u8* cb = (u8*)(pointer)c;
-        for (i64 t = (i64)0; t < nback; t = t + (i64)1)
+        for (i64 t = (i64)0; t < count; t = t + (i64)1)
             {
             for (u32 i = (u32)0; i < nred; i = i + (u32)1)
                 memcpy((pointer)(cb + redOff[i]), (pointer)(parts[i] + t * redStride[i]), (u64)redSize[i]);
@@ -1225,6 +1232,71 @@ class ParDevice
     // The header line of src, read against the block (the arrays' lengths and
     // the globals' places come from it), planned over [lo, hi). Nil, with the
     // reason reported, when the block cannot go to the GPU.
+    // A block's kernel source is sections, one per GPU interface: the MSL,
+    // PTX and WGSL text each ended by a NUL with the next on a 4-byte
+    // boundary, and the SPIR-V module last (par-check assembles them, every
+    // form under -fpar-kernels=all so a worker on another machine finds its
+    // own). Each header names its kind — `// xcpar ptx …` — and this finds
+    // the section for `kind` ("msl", "ptx", "wgsl", or "spirv", whose header
+    // says `spirv=<words>` instead). A program built by an earlier compiler
+    // has no kind words: its first section is its target's own form, which
+    // `native` takes; the SPIR-V behind a PTX section is still found.
+    static u8* sectionOf(u8* src, u8* kind, bool native)
+        {
+        if (src == (u8*)0 || src[0] != (u8)'/')
+            return (u8*)0;
+        bool wantSpv = kind[0] == (u8)'s';
+        u8* s = src;
+        while (true)
+            {
+            u32 h = (u32)0;
+            bool spv = false;
+            bool hasKind = false;
+            bool isKind = false;
+            while (s[h] != (u8)0 && s[h] != (u8)10)
+                {
+                if (s[h] == (u8)' ')
+                    {
+                    if (s[h + (u32)1] == (u8)'s' && s[h + (u32)2] == (u8)'p' && s[h + (u32)6] == (u8)'=')
+                        spv = true;
+                    u32 k = (u32)0;
+                    while (kind[k] != (u8)0 && s[h + (u32)1 + k] == kind[k])
+                        k = k + (u32)1;
+                    bool word = kind[k] == (u8)0 && (s[h + (u32)1 + k] == (u8)' ' || s[h + (u32)1 + k] == (u8)10);
+                    if (word && !wantSpv)
+                        isKind = true;
+                    u8 c1 = s[h + (u32)1];
+                    u8 c2 = s[h + (u32)2];
+                    u8 c3 = s[h + (u32)3];
+                    u8 c4 = s[h + (u32)4];
+                    if ((c1 == (u8)'m' && c2 == (u8)'s' && c3 == (u8)'l' && c4 == (u8)' ') ||
+                        (c1 == (u8)'p' && c2 == (u8)'t' && c3 == (u8)'x' && c4 == (u8)' ') ||
+                        (c1 == (u8)'w' && c2 == (u8)'g' && c3 == (u8)'s' && c4 == (u8)'l' && s[h + (u32)5] == (u8)' '))
+                        hasKind = true;
+                    }
+                h = h + (u32)1;
+                }
+            if (spv)
+                return wantSpv ? s : (u8*)0;
+            if (hasKind)
+                {
+                if (isKind)
+                    return s;
+                }
+            else if (!wantSpv)
+                return native ? s : (u8*)0;
+            // The next section, past this one's NUL.
+            u32 e = h;
+            while (s[e] != (u8)0)
+                e = e + (u32)1;
+            u8* n = s + ((e + (u32)4) & ~(u32)3);
+            if (!(n[0] == (u8)'/' && n[1] == (u8)'/'))
+                return (u8*)0;
+            s = n;
+            }
+        return (u8*)0;
+        }
+
     // Two captured arrays of the block that are one block of memory, or
     // overlap, with one of them written: the compiler's dependence check
     // (§4) holds for a buffer against ITSELF, but two pointers it sees as

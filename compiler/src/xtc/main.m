@@ -4747,6 +4747,7 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // fix turned off.
     if (opts.threadSafeARC == 1)      [feArgs addObject:@"-fthread-safe-arc"];
     else if (opts.threadSafeARC == 0) [feArgs addObject:@"-fno-thread-safe-arc"];
+    if (opts.parKernelsAll)           [feArgs addObject:@"-fpar-kernels=all"];
     if (opts.migrateVersions.length)
         [feArgs addObject:[NSString stringWithFormat:@"--migrate=%@",
                            opts.migrateVersions]];

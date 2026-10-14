@@ -395,6 +395,43 @@ To choose instead, in order of precedence:
 on the CPU, what `auto` decided and learned, the hardware key, and from 0.8
 the tiles and the devices a run on a set used.
 
+### Across machines: `xcd`
+
+**From 0.8.1.** A GPU on another machine can be a worker on the same tile
+queue. The other machine runs `xcd`, the par worker daemon, and the program
+names it:
+
+```
+# on the machine with the GPU
+XC_PAR_SECRET=… xcd -port 7227
+
+# where the program runs
+XC_PAR_SECRET=… XC_PAR_REMOTE=<that machine>:7227 ./prog
+```
+
+`XC_PAR_REMOTE` is a comma-separated list of `host[:port]`; each becomes a
+worker named `remote:<host>:<device>` in `auto`'s hardware key, so the choice
+learned with a remote present is kept apart from the one without. A run that
+`auto` (or `XC_PAR=gpus` / `all`) sends to the set splits its tiles across the
+local devices and the remote ones by their measured throughput, as it does
+between two cards in one box; a tile travels as its range, the block's
+arrays travel once per run, and the written slices and the reduction partials
+come back, folded in tile order, so the result is the one a local run gives.
+
+The daemon runs GPU kernels only (it has none of the program's compiled code),
+and it needs the kernel form its GPU takes: build the program with
+`-fpar-kernels=all`, which puts every form — Metal, PTX, SPIR-V, WGSL — in
+every block, so a Mac program's blocks can run on an NVIDIA card across the
+room. Both sides must be the same xcc version. `XC_PAR_SECRET` is a pool
+secret the program proves to the daemon (SHA-256 over a nonce); a daemon
+started without one takes any program on its network. The link is plain TCP
+on one subnet for now; `XC_PAR_REPORT=1` on either side says what is sent and
+run.
+
+What pays: blocks with a lot of work per byte moved (deep fractals, searches,
+batched scoring) on a fast link. A streaming block moves more than it computes
+and loses to the link, and `auto` measures that and keeps the local devices.
+
 ## What a body may contain
 
 The compiler holds every block to what a GPU can run, on every target, even

@@ -7,6 +7,7 @@
 // hold the block is skipped; if none can, the caller runs the block its old
 // way.
 #import "ParWorker.xc"
+#import "ParRemote.xc"
 
 class ParTiles
     {
@@ -177,7 +178,27 @@ class ParTiles
         if (mtl.identity().byteLength() > (u32)0)
             _workers.add((Object*)mtl);
 #endif
+        // GPUs on other machines (ParRemote.xc), named by XC_PAR_REMOTE;
+        // before the CPU pool, after the local devices.
+        ParRemote.addWorkers(_workers);
         _workers.add((Object*)new ParCpuWorker());
+        }
+
+    // The local GPU workers, for a daemon that serves them to other machines
+    // (xcd): the default set less the CPU pool and less the remote ones.
+    static Array* gpuWorkers(void)
+        {
+        ParTiles.ready();
+        Array* out = new Array();
+        for (u32 i = (u32)0; i < _workers.count(); i = i + (u32)1)
+            {
+            ParWorker* w = (ParWorker*)_workers.get(i);
+            String* id = w.identity();
+            if (id.equals(String.withCString("cpu")) || id.hasPrefix(String.withCString("remote:")))
+                continue;
+            out.add((Object*)w);
+            }
+        return out;
         }
 
     // The named workers, GPUs before the CPU pool whatever the order given.

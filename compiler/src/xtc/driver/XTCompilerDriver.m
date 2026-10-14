@@ -1858,16 +1858,19 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // alone is not enough to tell (an Android build carried Metal kernels the
     // shipped compiler, keyed on the define, rightly left out).
     BOOL androidBuild = _options.androidTarget || _options.defines[@"PLATFORM_android"] != nil;
-    [XTIRParCheck setEmitsMetal:(_options.useArm64Backend && !_options.applePlatform && !androidBuild)];
-    [XTIRParCheck setEmitsPTX:_options.useWin64Backend];
+    // -fpar-kernels=all: every form, whatever the target, so a worker on
+    // another machine (xcd, ParRemote.xc) finds the one its GPU takes.
+    BOOL allK = _options.parKernelsAll;
+    [XTIRParCheck setEmitsMetal:(allK || (_options.useArm64Backend && !_options.applePlatform && !androidBuild))];
+    [XTIRParCheck setEmitsPTX:(allK || _options.useWin64Backend)];
     // Vulkan on x86-64 Linux, in a program that can load it (-dynamic, which
     // the driver passes on as LINK_DYNAMIC): a static one gets no kernels.
     // Vulkan on x86-64 Linux, in a program that can load it (LINK_DYNAMIC);
     // on Windows beside the PTX (AMD, Intel); on Android, the only GPU path.
-    [XTIRParCheck setEmitsSPIRV:((_options.useX86_64Backend && _options.defines[@"LINK_DYNAMIC"] != nil) ||
+    [XTIRParCheck setEmitsSPIRV:(allK || (_options.useX86_64Backend && _options.defines[@"LINK_DYNAMIC"] != nil) ||
                                  _options.useWin64Backend || androidBuild)];
     // WGSL for WebGPU on wasm32 (the browser's GPU, through the loader).
-    [XTIRParCheck setEmitsWGSL:_options.useWasm32Backend];
+    [XTIRParCheck setEmitsWGSL:(allK || _options.useWasm32Backend)];
     [XTIRLowering setDebugInfo:_options.debugInfo];
     [XTIRDbgLoc resetFiles];
     // -g: the program's own source is file 1, which names the compile unit

@@ -215,6 +215,10 @@ NS_ASSUME_NONNULL_BEGIN
 |* correctness option.
 \****************************************************************************/
 @property(nonatomic, readonly) NSInteger threadSafeARC;
+// -fpar-kernels=all — every `par` block carries every GPU kernel form (MSL,
+// PTX, SPIR-V, WGSL), not only its target's, so a worker on another machine
+// (xcd) finds the one its GPU takes.
+@property(nonatomic, readonly) BOOL parKernelsAll;
 // --migrate=<base>:<to> — compile as if the library were still <base>:
 // members annotated since(<v>) with v > base disappear from lookup, so a
 // <base>-era program fails LOUDLY at every renamed/repurposed call site

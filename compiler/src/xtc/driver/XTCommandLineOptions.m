@@ -59,6 +59,7 @@
 @property(nonatomic, readwrite) BOOL allocatorExplicit;
 @property(nonatomic, readwrite) BOOL dceTrace;
 @property(nonatomic, readwrite) NSInteger threadSafeARC;
+@property(nonatomic, readwrite) BOOL parKernelsAll;
 @property(nonatomic, readwrite, nullable) NSString* migrateVersions;
 @property(nonatomic, readwrite) BOOL emitIR;
 @property(nonatomic, readwrite) BOOL emitIROpt;
@@ -1078,6 +1079,10 @@ static NSString* sExecutablePath = nil;
             {
             opts.threadSafeARC = 0;
             }
+        else if ([arg isEqualToString:@"-fpar-kernels=all"])
+            {
+            opts.parKernelsAll = YES;
+            }
         else if ([arg hasPrefix:@"--migrate="])
             {
             NSString* v = [arg substringFromIndex:10];
@@ -1507,6 +1512,8 @@ static NSString* sExecutablePath = nil;
             "                             share an object. Default: on exactly when\n"
             "                             the program spawns a thread.\n"
             "  -fno-thread-safe-arc       Force plain, non-atomic ARC refcounts.\n"
+            "  -fpar-kernels=all          Every par block carries every GPU kernel\n"
+            "                             form, for workers on other machines (xcd).\n"
             "  -fmalloc=system|mimalloc   Host malloc behind the runtime (hosted\n"
             "                             targets only; mimalloc must link FIRST to\n"
             "                             override, so it is passed as an object)\n"

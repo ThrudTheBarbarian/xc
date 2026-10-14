@@ -1521,7 +1521,7 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
         return nil;
 
     // Bindings: the object (0), the span (1), then buffers in the header's order.
-    NSMutableString* meta = [NSMutableString stringWithFormat:@"// xcpar size=%u lo=%u hi=%u", self.objLayout.size,
+    NSMutableString* meta = [NSMutableString stringWithFormat:@"// xcpar wgsl size=%u lo=%u hi=%u", self.objLayout.size,
                                                               fl[1].byteOffset, fl[2].byteOffset];
     NSMutableString* decls = [NSMutableString string];
     [decls appendString:@"@group(0) @binding(0) var<storage, read> args: array<u32>;\n"];

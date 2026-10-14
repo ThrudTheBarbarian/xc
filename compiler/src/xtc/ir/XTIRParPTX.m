@@ -1239,7 +1239,7 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
         return nil;
 
     NSArray<XTIRLayoutField*>* fl = self.objLayout.fields;
-    NSMutableString* meta = [NSMutableString stringWithFormat:@"// xcpar size=%u lo=%u hi=%u", self.objLayout.size,
+    NSMutableString* meta = [NSMutableString stringWithFormat:@"// xcpar ptx size=%u lo=%u hi=%u", self.objLayout.size,
                                                               fl[1].byteOffset, fl[2].byteOffset];
     // The block object and the range by value, as the launch's own
     // parameters (bug 645): two fewer copies to the device, each a blocking

@@ -280,50 +280,51 @@ static BOOL gEmitsWGSL = NO;
         };
         NSString* why = nil;
         NSData* kernel = nil;
-        if (gEmitsSPIRV && gEmitsPTX)
+        // The forms this target asked for (every one under -fpar-kernels=all,
+        // so a worker on another machine finds its own: ParRemote.xc), in a
+        // fixed order — the MSL, PTX and WGSL text sections, each ended by a
+        // NUL with the next on a 4-byte boundary, and the SPIR-V module last.
+        // Each header names its kind (`// xcpar ptx …`), and a runtime finds
+        // its section by that (ParDevice.sectionOf). A block with no form at
+        // all stays on the CPU, with the first printer's reason.
+        NSString* mslWhy = nil;
+        NSString* ptxWhy = nil;
+        NSString* wgslWhy = nil;
+        NSString* spvWhy = nil;
+        NSString* msl = gEmitsMetal ? metalOf(&mslWhy) : nil;
+        NSString* ptx = gEmitsPTX ? ptxOf(&ptxWhy) : nil;
+        NSString* wgsl = gEmitsWGSL ? wgslOf(&wgslWhy) : nil;
+        NSData* spv = gEmitsSPIRV ? spirvOf(&spvWhy) : nil;
+        NSMutableData* all = [NSMutableData data];
+        uint8_t zero = 0;
+        for (NSString* text in @[ msl ?: @"", ptx ?: @"", wgsl ?: @"" ])
             {
-            // Windows: the PTX for NVIDIA's driver, then the SPIR-V for
-            // Vulkan (any other GPU), after the PTX's NUL at a 4-byte boundary
-            // (ParVulkan.spirvOf). Either alone where the other did not print.
-            NSString* ptxWhy = nil;
-            NSString* ptx = ptxOf(&ptxWhy);
-            NSData* spv = spirvOf(&why);
-            if (ptx && spv)
-                {
-                NSMutableData* both = [[ptx dataUsingEncoding:NSUTF8StringEncoding] mutableCopy];
-                uint8_t zero = 0;
-                [both appendBytes:&zero length:1];
-                while (both.length % 4)
-                    [both appendBytes:&zero length:1];
-                [both appendData:spv];
-                kernel = both;
-                }
-            else if (ptx)
-                kernel = [ptx dataUsingEncoding:NSUTF8StringEncoding];
-            else
-                kernel = spv;
-            if (!kernel)
-                why = ptxWhy ?: why;
+            if (!text.length)
+                continue;
+            while (all.length % 4)
+                [all appendBytes:&zero length:1];
+            [all appendData:[text dataUsingEncoding:NSUTF8StringEncoding]];
+            [all appendBytes:&zero length:1];
             }
-        else if (gEmitsSPIRV)
-            kernel = spirvOf(&why);
+        if (spv)
+            {
+            while (all.length % 4)
+                [all appendBytes:&zero length:1];
+            [all appendData:spv];
+            }
+        if (all.length)
+            kernel = all;
         else
-            {
-            NSString* text = gEmitsMetal ? metalOf(&why)
-                           : gEmitsPTX   ? ptxOf(&why)
-                           : gEmitsWGSL  ? wgslOf(&why)
-                                         : @"";
-            kernel = [text dataUsingEncoding:NSUTF8StringEncoding];
-            }
+            why = gEmitsMetal ? mslWhy : gEmitsPTX ? ptxWhy : gEmitsSPIRV ? spvWhy : wgslWhy;
         // XC_PAR_SPIRV_DUMP=<dir>: every block's SPIR-V module, on any target,
         // as <dir>/<block>.spv (for spirv-val), or <block>.why when it has none.
         const char* dump = getenv("XC_PAR_SPIRV_DUMP");
         if (dump && *dump)
             {
             NSString* dwhy = nil;
-            NSData* d = gEmitsSPIRV ? kernel : spirvOf(&dwhy);
+            NSData* d = gEmitsSPIRV ? spv : spirvOf(&dwhy);
             if (gEmitsSPIRV)
-                dwhy = why;
+                dwhy = spvWhy;
             NSString* base = [[NSString stringWithUTF8String:dump] stringByAppendingPathComponent:n];
             if (d)
                 {

@@ -16,6 +16,7 @@ class ParTile : Object
     i64 lo;
     i64 hi;
     ParChunk* partial;  // the tile's reductions, a chunk copy, once finished
+    Data* raw;          // or the partials as bytes, for a chunk that asks (rawPartials)
     bool done;
     ParWorker* worker;  // who took it
     }
@@ -66,6 +67,15 @@ class ParWorker : Object
     u32 depth(void)
         {
         return (u32)1;
+        }
+    // The section of a block's kernel source this worker runs (its own
+    // form: MSL, PTX, SPIR-V), or null when the source has none; the queue's
+    // layout is read from the source's first section, and a worker lays the
+    // block out again from its own, whose header may differ in what the
+    // kernel form needs (by-value arguments, device-side reduction).
+    u8* section(u8* src)
+        {
+        return src;
         }
     // The tile size this worker would choose for the block, in work items,
     // or 0 for no preference (the queue takes the smallest preference).

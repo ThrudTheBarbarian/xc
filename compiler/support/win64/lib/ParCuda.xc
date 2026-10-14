@@ -512,7 +512,7 @@ class ParCuda
         i64 ntiles = (n + tile - (i64)1) / tile;
         if (!tileSetup())
             return false;
-        u8* obj = (u8*)(pointer)proto;
+        u8* obj = proto.objBytes();
 
         // The un-footprinted read-only buffers and globals: whole, once, in
         // the single-shot path's slot memory. Slots 0 and 1 are the object
@@ -891,13 +891,11 @@ class ParCuda
     // runs it on the CPU, which gives the same answer.
     static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
-        if (src == (u8*)0 || src[0] != (u8)'/')
-            return ParDevice.cpu("it has no GPU version");
-        // A kernel whose header names spirv= is SPIR-V alone (the PTX did not
-        // print): that is for Vulkan, which Par tries next.
-        for (u32 at = (u32)0; src[at] != (u8)0 && src[at] != (u8)10; at = at + (u32)1)
-            if (src[at] == (u8)'s' && src[at + (u32)1] == (u8)'p' && src[at + (u32)5] == (u8)'=')
-                return false;
+        // The PTX section, or none (SPIR-V alone, say: that is for Vulkan,
+        // which Par tries next).
+        src = ParDevice.sectionOf(src, "ptx", true);
+        if (src == (u8*)0)
+            return false;
         if (!start())
             return ParDevice.cpu("there is no CUDA device");
         // The workers' contexts may have been current since (their holds):
@@ -913,7 +911,7 @@ class ParCuda
             return false;
         if (tileable(l) && ParDevice.tilesWanted() && runTiled(proto, fn, l, lo, hi, started))
             return true;
-        u8* obj = (u8*)(pointer)proto;
+        u8* obj = proto.objBytes();
 
         // The kernel's parameters, in its order: args, span, buffers,
         // globals, reductions. Each is a device address, passed by pointer.
@@ -1160,6 +1158,10 @@ class ParCudaWorker : ParWorker
         {
         return (u32)PAR_CU_DEPTH;
         }
+    u8* section(u8* src)
+        {
+        return ParDevice.sectionOf(src, "ptx", true);
+        }
     i64 floor(void)
         {
         return (i64)256 * (i64)(_sms > (i32)0 ? _sms : (i32)16);
@@ -1204,16 +1206,18 @@ class ParCudaWorker : ParWorker
 
     bool holds(ParChunk* proto, u8* src, ParLayout* l)
         {
-        if (!_ready || src == (u8*)0 || src[0] != (u8)'/' || l == (ParLayout*)0)
+        if (!_ready || l == (ParLayout*)0)
             return false;
-        for (u32 at = (u32)0; src[at] != (u8)0 && src[at] != (u8)10; at = at + (u32)1)
-            if (src[at] == (u8)'s' && src[at + (u32)1] == (u8)'p' && src[at + (u32)5] == (u8)'=')
-                return false;   // SPIR-V alone: no PTX printed
+        src = ParDevice.sectionOf(src, "ptx", true);
+        if (src == (u8*)0)
+            return false;   // no PTX printed (SPIR-V alone, say)
         for (u32 i = (u32)0; i < _nrefused; i = i + (u32)1)
             if (_refused[i] == (pointer)src)
                 return false;
         gCu_ctxSetCurrent(_ctx);
-        bool ok = ParCuda.tileable(l) && kernel(src) != (pointer)0;
+        // The block laid out from this worker's own section (`byval`).
+        ParLayout* ml = ParDevice.layout(proto, src, (i64)0, l.n);
+        bool ok = ml != (ParLayout*)0 && ParCuda.tileable(ml) && kernel(src) != (pointer)0;
         if (!ok && _nrefused < (u32)64)
             {
             _refused[_nrefused] = (pointer)src;
@@ -1260,13 +1264,19 @@ class ParCudaWorker : ParWorker
     bool prepare(ParChunk* proto, u8* src, ParLayout* l, i64 tile)
         {
         gCu_ctxSetCurrent(_ctx);
+        src = ParDevice.sectionOf(src, "ptx", true);
+        if (src == (u8*)0)
+            return false;
         _proto = proto;
-        _l = l;
+        _l = ParDevice.layout(proto, src, (i64)0, l.n);
+        if (_l == (ParLayout*)0)
+            return false;
+        l = _l;
         _tile = tile;
         _kernel = kernel(src);
         if (_kernel == (pointer)0)
             return false;
-        u8* obj = (u8*)(pointer)proto;
+        u8* obj = proto.objBytes();
         _snap = (u8*)malloc((u64)l.size);
         if (_snap == (u8*)0)
             return false;
@@ -1371,10 +1381,11 @@ class ParCudaWorker : ParWorker
         {
         if (_inFlight >= (u32)PAR_CU_DEPTH || _l == (ParLayout*)0)
             return false;
+        l = _l;
         gCu_ctxSetCurrent(_ctx);
         u32 d = _nextSlot;
         _tTake[d] = ParDevice.nowUs();
-        u8* obj = (u8*)(pointer)proto;
+        u8* obj = proto.objBytes();
         i64 tlo = t.lo;
         i64 thi = t.hi;
         l.plan(tlo, thi);
@@ -1522,7 +1533,7 @@ class ParCudaWorker : ParWorker
         {
         ParTile* t = _slotTile[d];
         ParLayout* l = _l;
-        u8* obj = (u8*)(pointer)_proto;
+        u8* obj = _proto.objBytes();
         u8* down = _down[d];
         i64 at = (i64)0;
         u32 b = (u32)0;
@@ -1563,9 +1574,18 @@ class ParCudaWorker : ParWorker
                 parts[r] = down + at;
                 at = at + l.nback * l.redStride[r];
                 }
-            ParChunk* c = _proto.copyChunk();
-            l.fold(c, &parts[0]);
-            t.partial = c;
+            if (_proto.rawPartials())
+                {
+                t.raw = Data.withLength((u32)0);
+                for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                    t.raw.appendBytes(parts[r], (u32)(l.nback * l.redStride[r]));
+                }
+            else
+                {
+                ParChunk* c = _proto.copyChunk();
+                l.fold(c, &parts[0]);
+                t.partial = c;
+                }
             }
         t.done = true;
         _slotTile[d] = (ParTile*)0;

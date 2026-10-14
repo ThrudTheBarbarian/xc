@@ -211,8 +211,9 @@ class ParMetal
     // runs it on the CPU, which gives the same answer.
     static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
-        if (src == (u8*)0 || src[0] != (u8)'/')
-            return ParDevice.cpu("it has no GPU version");
+        src = ParDevice.sectionOf(src, "msl", true);
+        if (src == (u8*)0)
+            return ParDevice.cpu("it has no Metal version");
         if (!start())
             return ParDevice.cpu("there is no Metal device");
         pointer pso = pipeline(src);
@@ -227,7 +228,7 @@ class ParMetal
         // (bug 645); a pipeline that cannot hold that many stays on the CPU.
         if (l.devred != (i64)0 && ((parMsgU_t*)_send)(pso, sel("maxTotalThreadsPerThreadgroup")) < (u64)256)
             return ParDevice.cpu("its GPU version needs more registers than a 256-thread group has");
-        u8* obj = (u8*)(pointer)proto;
+        u8* obj = proto.objBytes();
         i64 per = l.per;
         i64 threads = l.threads;
         u32 nbuf = l.nbuf;
@@ -393,13 +394,22 @@ class ParMetalWorker : ParWorker
         {
         return (u32)PAR_MTL_DEPTH;
         }
+    u8* section(u8* src)
+        {
+        return ParDevice.sectionOf(src, "msl", true);
+        }
     i64 floor(void)
         {
         return (i64)4096;
         }
     bool holds(ParChunk* proto, u8* src, ParLayout* l)
         {
-        if (src == (u8*)0 || src[0] != (u8)'/' || l == (ParLayout*)0 || !ParMetal.start())
+        src = ParDevice.sectionOf(src, "msl", true);
+        if (src == (u8*)0 || l == (ParLayout*)0 || !ParMetal.start())
+            return false;
+        // The block laid out from this worker's own section.
+        l = ParDevice.layout(proto, src, (i64)0, l.n);
+        if (l == (ParLayout*)0)
             return false;
         pointer pso = ParMetal.pipeline(src);
         if (pso == (pointer)0)
@@ -411,7 +421,7 @@ class ParMetalWorker : ParWorker
         // block the GPU shares in place has nothing to copy.
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             if (l.bufIn[i] == (i64)0 && l.bufFp[i] == (i64)0
-                && !ParMetal.isShared(*(pointer*)((u8*)(pointer)proto + l.bufOff[i])))
+                && !ParMetal.isShared(*(pointer*)(proto.objBytes() + l.bufOff[i])))
                 return false;
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             if (l.globIn[i] == (i64)0 && l.globFp[i] == (i64)0)
@@ -423,13 +433,19 @@ class ParMetalWorker : ParWorker
         {
         parMsgBytes_t* withBytes = (parMsgBytes_t*)gMtlSend;
         parMsgLen_t* withLen = (parMsgLen_t*)gMtlSend;
+        src = ParDevice.sectionOf(src, "msl", true);
+        if (src == (u8*)0)
+            return false;
         _proto = proto;
-        _l = l;
+        _l = ParDevice.layout(proto, src, (i64)0, l.n);
+        if (_l == (ParLayout*)0)
+            return false;
+        l = _l;
         _pso = ParMetal.pipeline(src);
         _fpso = l.devlast != (i64)0 ? ParMetal.foldPipeline(src) : (pointer)0;
         if (_pso == (pointer)0)
             return false;
-        u8* obj = (u8*)(pointer)proto;
+        u8* obj = proto.objBytes();
         _args = withBytes(gMtlDev, ParMetal.sel("newBufferWithBytes:length:options:"), (pointer)obj, (u64)l.size, (u64)0);
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             _bufs[i] = ParMetal.bufferFor(*(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i], &_bufShared[i]);
@@ -477,6 +493,7 @@ class ParMetalWorker : ParWorker
         {
         if (!_ready || _inFlight >= (u32)PAR_MTL_DEPTH)
             return false;
+        l = _l;
         parMsg0_t* send0 = (parMsg0_t*)gMtlSend;
         parMsgSetBuf_t* setBuf = (parMsgSetBuf_t*)gMtlSend;
         u32 d = _nextSlot;
@@ -552,7 +569,7 @@ class ParMetalWorker : ParWorker
         parMsg0_t* send0 = (parMsg0_t*)gMtlSend;
         ParTile* t = _slotTile[d];
         ParLayout* l = _l;
-        u8* obj = (u8*)(pointer)_proto;
+        u8* obj = _proto.objBytes();
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
             if (l.bufIn[i] != (i64)0 || l.bufFp[i] == (i64)0 || _bufShared[i])
@@ -581,9 +598,18 @@ class ParMetalWorker : ParWorker
             u8* parts[16];
             for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
                 parts[r] = (u8*)send0(_reds[d * (u32)16 + r], ParMetal.sel("contents"));
-            ParChunk* c = _proto.copyChunk();
-            l.fold(c, &parts[0]);
-            t.partial = c;
+            if (_proto.rawPartials())
+                {
+                t.raw = Data.withLength((u32)0);
+                for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
+                    t.raw.appendBytes(parts[r], (u32)(l.nback * l.redStride[r]));
+                }
+            else
+                {
+                ParChunk* c = _proto.copyChunk();
+                l.fold(c, &parts[0]);
+                t.partial = c;
+                }
             }
         send0(_cb[d], ParMetal.sel("release"));
         _cb[d] = (pointer)0;

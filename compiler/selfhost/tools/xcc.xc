@@ -5048,6 +5048,8 @@ void capabilityUsage(void)
     Stdio.printf("  -fthread-safe-arc          Atomic ARC refcounts. Default: on when the\n");
     Stdio.printf("                             program spawns a thread\n");
     Stdio.printf("  -fno-thread-safe-arc       Plain, non-atomic refcounts\n");
+    Stdio.printf("  -fpar-kernels=all          Every par block carries every GPU kernel form,\n");
+    Stdio.printf("                             for workers on other machines (xcd)\n");
     Stdio.printf("  -falloc=bump|heap          Allocator. Every current target uses heap\n");
     Stdio.printf("  -fmalloc=system|mimalloc   The C heap behind the runtime. mimalloc is\n");
     Stdio.printf("                             -A x86_64 only, linked ahead of libc\n");
@@ -5541,6 +5543,10 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
     }
     if (a.equals(String.withCString("-fno-thread-safe-arc"))) {
         d.fe().setThreadSafeArc((i32)0); c.setThreadFlag(true);
+        *ip = i + (u32)1; return true;
+    }
+    if (a.equals(String.withCString("-fpar-kernels=all"))) {
+        d.fe().setParKernelsAll(true);
         *ip = i + (u32)1; return true;
     }
     if (a.equals(String.withCString("-fpic")) || a.equals(String.withCString("-fPIC"))

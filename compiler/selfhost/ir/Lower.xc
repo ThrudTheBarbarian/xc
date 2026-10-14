@@ -16342,7 +16342,7 @@ class ClassInfo
         // header line, parameters and reduction tail below stay the same.
         String* laneBody = mslLaneBody(f);
         // The header line the runtime reads, and the kernel's parameters.
-        String* meta = String.withCString("// xcpar size=");
+        String* meta = String.withCString("// xcpar msl size=");
         meta.append(String.withU32(_mObj.size())); meta.appendCString(" lo="); meta.append(String.withU32(_mObj.offsetAt((u32)1)));
         meta.appendCString(" hi="); meta.append(String.withU32(_mObj.offsetAt((u32)2)));
         String* params = String.withCString("constant uchar* args [[buffer(0)]], constant long* span [[buffer(1)]]");
@@ -17864,7 +17864,7 @@ class ClassInfo
         String* body = ptxBody(f, "BODY_END");
         if (decls == (String*)0 || body == (String*)0 || _mFailed) return (String*)0;
 
-        String* meta = ptxS("// xcpar size=");
+        String* meta = ptxS("// xcpar ptx size=");
         meta.append(String.withU32(_mObj.size())); meta.appendCString(" lo="); meta.append(String.withU32(_mObj.offsetAt((u32)1)));
         meta.appendCString(" hi="); meta.append(String.withU32(_mObj.offsetAt((u32)2)));
         // The block object and the range by value (the reference explains;
@@ -21196,7 +21196,7 @@ class ClassInfo
             fieldInit.append(String.withFormat("  f%u = %s;\n", k, from.cString()));
             }
 
-        String* meta = spvS("// xcpar size=");
+        String* meta = spvS("// xcpar wgsl size=");
         meta.append(String.withU32(_mObj.size())); meta.appendCString(" lo="); meta.append(String.withU32(_mObj.offsetAt((u32)1)));
         meta.appendCString(" hi="); meta.append(String.withU32(_mObj.offsetAt((u32)2)));
         String* decls = new String();
@@ -21651,43 +21651,56 @@ class ClassInfo
             String* msl = (String*)0;
             // A SPIR-V module is bytes (it holds NULs): it goes in as they are.
             Array* kernelBytes = (Array*)0;
-            if (_parSPIRV && _parPTX)
+            // The forms this target asked for (every one under
+            // -fpar-kernels=all, so a worker on another machine finds its
+            // own: ParRemote.xc), in a fixed order — the MSL, PTX and WGSL
+            // text sections, each ended by a NUL with the next on a 4-byte
+            // boundary, and the SPIR-V module last. Each header names its
+            // kind, and a runtime finds its section by that
+            // (ParDevice.sectionOf). A block with no form at all stays on the
+            // CPU, with the first printer's reason. As the reference.
+            String* mslWhy = (String*)0;
+            String* ptxWhy = (String*)0;
+            String* wgslWhy = (String*)0;
+            String* spvWhy = (String*)0;
+            _mWhy = (String*)0;
+            String* mslText = _parMetal ? parMslK(f, kf, kmod) : (String*)0;
+            mslWhy = _mWhy;
+            _mWhy = (String*)0;
+            String* ptx = _parPTX ? parPtxK(f, kf, kmod) : (String*)0;
+            ptxWhy = _mWhy;
+            _mWhy = (String*)0;
+            String* wgsl = _parWGSL ? parWgslK(f, kf, kmod) : (String*)0;
+            wgslWhy = _mWhy;
+            _mWhy = (String*)0;
+            Array* spv = _parSPIRV ? parSpirvK(f, kf, kmod) : (Array*)0;
+            spvWhy = _mWhy;
+            Array* all = new Array();
+            for (u32 t = (u32)0; t < (u32)3; t = t + (u32)1)
                 {
-                // Windows: the PTX for NVIDIA's driver, then the SPIR-V for
-                // Vulkan after the PTX's NUL at a 4-byte boundary; either alone
-                // where the other did not print. As the reference.
-                String* ptx = parPtxK(f, kf, kmod);
-                String* ptxWhy = _mWhy;
-                Array* spv = parSpirvK(f, kf, kmod);
-                if (ptx != (String*)0)
-                    {
-                    kernelBytes = new Array();
-                    for (u32 q = (u32)0; q < ptx.byteLength(); q = q + (u32)1)
-                        kernelBytes.add((Object*)Number.withU8(ptx.byteAt(q)));
-                    if (spv != (Array*)0)
-                        {
-                        kernelBytes.add((Object*)Number.withU8((u8)0));
-                        while (kernelBytes.count() % (u32)4 != (u32)0)
-                            kernelBytes.add((Object*)Number.withU8((u8)0));
-                        for (u32 q = (u32)0; q < spv.count(); q = q + (u32)1)
-                            kernelBytes.add(spv.get(q));
-                        }
-                    }
-                else
-                    kernelBytes = spv;
-                if (kernelBytes == (Array*)0 && ptxWhy != (String*)0)
-                    _mWhy = ptxWhy;
+                String* text = t == (u32)0 ? mslText : t == (u32)1 ? ptx : wgsl;
+                if (text == (String*)0 || text.byteLength() == (u32)0)
+                    continue;
+                while (all.count() % (u32)4 != (u32)0)
+                    all.add((Object*)Number.withU8((u8)0));
+                for (u32 q = (u32)0; q < text.byteLength(); q = q + (u32)1)
+                    all.add((Object*)Number.withU8(text.byteAt(q)));
+                all.add((Object*)Number.withU8((u8)0));
                 }
-            else if (_parSPIRV)
-                kernelBytes = parSpirvK(f, kf, kmod);
-            else if (_parMetal)
-                msl = parMslK(f, kf, kmod);
-            else if (_parPTX)
-                msl = parPtxK(f, kf, kmod);
-            else if (_parWGSL)
-                msl = parWgslK(f, kf, kmod);
-            if (kernelBytes != (Array*)0)
+            if (spv != (Array*)0)
+                {
+                while (all.count() % (u32)4 != (u32)0)
+                    all.add((Object*)Number.withU8((u8)0));
+                for (u32 q = (u32)0; q < spv.count(); q = q + (u32)1)
+                    all.add(spv.get(q));
+                }
+            if (all.count() > (u32)0)
+                {
+                kernelBytes = all;
                 msl = String.withCString("");
+                }
+            else
+                _mWhy = _parMetal ? mslWhy : _parPTX ? ptxWhy : _parSPIRV ? spvWhy : wgslWhy;
             if (msl == (String*)0 && (_parMetal || _parPTX || _parSPIRV || _parWGSL))
                 {
                 // On a target with a GPU, say why this block stays on the CPU.

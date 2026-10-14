@@ -55,6 +55,7 @@ class FeOptions
     bool _boundsCheck; // -fbounds-check
     bool _debugInfo;   // -g: source locations on the IR, for the line tables
     i32 _threadSafeArc; // -f[no-]thread-safe-arc: 1 on, 0 off, -1 decide per module
+    bool _parKernelsAll; // -fpar-kernels=all: every GPU kernel form in every par block
     bool _emitIface;   // compute the module interface (--emit-lib, -c, --emit-iface)
     // …and, SEPARATELY, whether this is a LIBRARY build. The two used to be one
     // flag, so `--emit-iface` — which only asks what the source declares —
@@ -106,6 +107,7 @@ class FeOptions
         _boundsCheck = false;
         _debugInfo = false;
         _threadSafeArc = (i32)-1;
+        _parKernelsAll = false;
         }
 
     String* input(void)
@@ -308,6 +310,14 @@ class FeOptions
     void setThreadSafeArc(i32 mode)
         {
         _threadSafeArc = mode;
+        }
+    bool parKernelsAll(void)
+        {
+        return _parKernelsAll;
+        }
+    void setParKernelsAll(bool b)
+        {
+        _parKernelsAll = b;
         }
     }
 
@@ -856,8 +866,11 @@ class FeOptions
         // iOS is arm64 with the iOS platform layer (see PLATFORM_ios below):
         // its par runtime has no Metal path yet.
         bool ios = o.libPlatform() != (String*)0 && o.libPlatform().hasPrefix(String.withCString("ios"));
-        lower.setParMetal(o.target().equals(String.withCString("arm64")) && !android && !ios);
-        lower.setParPTX(o.target().equals(String.withCString("win64")));
+        // -fpar-kernels=all: every form, whatever the target, so a worker on
+        // another machine (xcd, ParRemote.xc) finds the one its GPU takes.
+        bool allK = o.parKernelsAll();
+        lower.setParMetal(allK || (o.target().equals(String.withCString("arm64")) && !android && !ios));
+        lower.setParPTX(allK || o.target().equals(String.withCString("win64")));
         // Vulkan on x86-64 Linux, in a program that can load it (-dynamic, which
         // the driver passes on as LINK_DYNAMIC): a static one gets no kernels.
         bool linkDynamic = false;
@@ -865,10 +878,10 @@ class FeOptions
             if (((String*)o.defs().get(i)).hasPrefix(String.withCString("LINK_DYNAMIC")))
                 linkDynamic = true;
         // On Windows beside the PTX (AMD, Intel); on Android, the only GPU path.
-        lower.setParSPIRV((o.target().equals(String.withCString("x86_64")) && linkDynamic) ||
+        lower.setParSPIRV(allK || (o.target().equals(String.withCString("x86_64")) && linkDynamic) ||
                           o.target().equals(String.withCString("win64")) || android);
         // WGSL for WebGPU on wasm32 (the browser's GPU, through the loader).
-        lower.setParWGSL(o.target().equals(String.withCString("wasm32")));
+        lower.setParWGSL(allK || o.target().equals(String.withCString("wasm32")));
         lower.setVtable(sema.vtable());
         IRModule* mod = lower.run(program, moduleNameOf(o.input()));
         // Instructions an optimisation pass makes later carry no location of
