@@ -280,6 +280,39 @@ class ParTiles
         if (tile < floor)
             tile = floor;
         tile = (tile + (i64)1023) & ~(i64)1023;
+        // A tile costs the queue a fixed amount — submit, fences, the host
+        // round trip, some 25-40 us through CUDA under Windows — so a block
+        // the single GPU runs in a few hundred microseconds must not be cut
+        // into dozens of them (mandelbrot: 140 us of kernel in 18 tiles took
+        // 575 us). Where auto has the single GPU's time for this size, the
+        // tile count is capped so the fixed costs stay under a tenth of the
+        // run, with at least two tiles a worker.
+        u32 bi = ParDevice.slot(proto.parName());
+        if (gParGpuUs[bi] > (i64)0 && gParMeasN[bi] > (i64)0)
+            {
+            i64 expect = gParGpuUs[bi] * n / gParMeasN[bi];
+            i64 most = expect / (i64)(10 * 40);
+            if (most < (i64)(ws.count() * (u32)2))
+                most = (i64)(ws.count() * (u32)2);
+            if (n / tile > most)
+                {
+                tile = (n + most - (i64)1) / most;
+                tile = (tile + (i64)1023) & ~(i64)1023;
+                }
+            }
+        // And where the queue itself has run the block, the fastest worker's
+        // rate then sets the least a tile may be worth: 400 us of its work,
+        // ten times the fixed cost. A block too small for two such tiles is
+        // one the queue declines (below), and the single GPU runs it — the
+        // 140 us mandelbrot kernel, 18 tiles and 575 us on the first run,
+        // 250 us single-shot on every run after.
+        if (gParTileRate[bi] > (i64)0)
+            {
+            i64 least = (gParTileRate[bi] * (i64)400) >> (i64)10;
+            least = (least + (i64)1023) & ~(i64)1023;
+            if (tile < least)
+                tile = least;
+            }
         if (tile > n)
             tile = n;
         // The tile list: full tiles, then a tail that shrinks towards the
@@ -367,7 +400,6 @@ class ParTiles
         // pool is offered a tile only when it would finish it before the
         // GPUs' queues would, which for a block the GPU wins by a hundredfold
         // is never.
-        u32 bi = ParDevice.slot(proto.parName());
         bool isCpuW[16];
         for (u32 i = (u32)0; i < nw; i = i + (u32)1)
             isCpuW[i] = ((ParWorker*)ws.get(i)).identity().equals(String.withCString("cpu"));
@@ -464,6 +496,9 @@ class ParTiles
                     }
                 if (firstTake[best] == (i64)0)
                     firstTake[best] = now;
+                if (ParDevice.tracing())
+                    Log.info("par: tile %ld [%ld, %ld) -> %s (would finish in %ld us) at +%ld us",
+                             pt.index, pt.lo, pt.hi, w.identity().cString(), bestAt, now - started);
                 inItems[best] = inItems[best] + items;
                 next = next + (i64)1;
                 inFlight = inFlight + (u32)1;
@@ -500,6 +535,15 @@ class ParTiles
             ((ParWorker*)ws.get(i)).finish();
             }
         i64 took = ParDevice.nowUs() - started;
+        // The fastest worker's rate, for the next run's tile sizing.
+        i64 ended = ParDevice.nowUs();
+        for (u32 i = (u32)0; i < nw; i = i + (u32)1)
+            if (doneItems[i] > (i64)0 && ended > firstTake[i])
+                {
+                i64 r = (doneItems[i] << (i64)10) / (ended - firstTake[i]);
+                if (r > gParTileRate[bi])
+                    gParTileRate[bi] = r;
+                }
         if (ParDevice.reporting())
             {
             String* names = new String();

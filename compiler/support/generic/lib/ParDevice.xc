@@ -115,6 +115,10 @@ bool gParMeasuring[64]; // this run is one auto measures (not decided by a setti
 // Warm measurement of a GPU candidate (warmTime below), per block and
 // candidate: 0 the GPU (through CUDA on Windows), 1 the GPU through Vulkan,
 // 2 the GPUs set, 3 the all-devices set.
+// The fastest worker's rate on the tile queue's last run of the block, in
+// items per us scaled by 1024: the next run sizes its tiles so each is worth
+// well over the queue's fixed cost per tile (ParTiles).
+i64 gParTileRate[64];
 u32 gParWarmRuns[256];
 i64 gParWarmBusy[256];  // the candidate's run time so far, us
 i64 gParWarmFirst[256]; // wall at its first run
@@ -406,6 +410,13 @@ class ParDevice
     static bool reporting(void)
         {
         return Platform.env(String.withCString("XC_PAR_REPORT")).byteLength() > (u32)0;
+        }
+
+    // XC_PAR_REPORT=2: the tile queue's timeline as well — each tile's
+    // worker and its submit-to-done time — for placing the per-tile cost.
+    static bool tracing(void)
+        {
+        return Platform.env(String.withCString("XC_PAR_REPORT")).equals(String.withCString("2"));
         }
 
     // 1 CPU, 2 GPU. XC_PAR first, then the block's own setting, then the one

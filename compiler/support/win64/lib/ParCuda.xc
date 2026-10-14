@@ -1111,6 +1111,8 @@ class ParCudaWorker : ParWorker
     i64 _tile;
     // In flight: the tile in each slot, taken in ring order.
     ParTile* _slotTile[PAR_CU_DEPTH];
+    i64 _tTake[PAR_CU_DEPTH];       // the timeline (XC_PAR_REPORT=2): when the slot's tile was taken
+    i64 _tLaunched[PAR_CU_DEPTH];   // and when its launch had been issued
     i64 _span[PAR_CU_DEPTH * 3];
     u64 _dev[PAR_CU_DEPTH * 52];
     pointer _params[PAR_CU_DEPTH * 52];
@@ -1371,6 +1373,7 @@ class ParCudaWorker : ParWorker
             return false;
         gCu_ctxSetCurrent(_ctx);
         u32 d = _nextSlot;
+        _tTake[d] = ParDevice.nowUs();
         u8* obj = (u8*)(pointer)proto;
         i64 tlo = t.lo;
         i64 thi = t.hi;
@@ -1461,6 +1464,7 @@ class ParCudaWorker : ParWorker
         if (gCu_launch(_kernel, grid, (u32)1, (u32)1, group, (u32)1, (u32)1, (u32)0, _compute, &_params[d * (u32)52 + 0],
                             (pointer*)0) != (i32)0)
             return false;
+        _tLaunched[d] = ParDevice.nowUs();
         if (gCu_eventRecord(_kernelDone[d], _compute) != (i32)0 || gCu_streamWait(_copy[d], _kernelDone[d], (u32)0) != (i32)0)
             return false;
         u8* down = _down[d];
@@ -1567,6 +1571,12 @@ class ParCudaWorker : ParWorker
         _slotTile[d] = (ParTile*)0;
         _oldest = (d + (u32)1) % (u32)PAR_CU_DEPTH;
         _inFlight = _inFlight - (u32)1;
+        if (ParDevice.tracing())
+            {
+            i64 now = ParDevice.nowUs();
+            Log.info("par: tile %ld [%ld, %ld) on %s: issue %ld us, done %ld us after taking it",
+                     t.index, t.lo, t.hi, _identity.cString(), _tLaunched[d] - _tTake[d], now - _tTake[d]);
+            }
         return t;
         }
 
