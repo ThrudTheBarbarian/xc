@@ -58,6 +58,24 @@ for f in tests/fixtures/par_*.xc; do
             fi
             i=$((i+1))
         done
+        # The PTX kernels too (win64 carries one before each SPIR-V module): the
+        # two printers must agree byte for byte, and a block must not silently
+        # lose its PTX — a narrow int<->float conversion once dropped the whole
+        # kernel to a SPIR-V-only fallback, costing the CUDA card.
+        pref=$(python3 "$(dirname "$0")/ptx-extract.py" "$W/$b.$A.ref/prog"  "$W/$b.$A.ref"  2>/dev/null)
+        pport=$(python3 "$(dirname "$0")/ptx-extract.py" "$W/$b.$A.port/prog" "$W/$b.$A.port" 2>/dev/null)
+        if [ "${pref:-0}" != "${pport:-0}" ]; then
+            echo "FAIL $b ($A): the reference carries ${pref:-0} PTX kernel(s), the port ${pport:-0}"
+            bad=1
+        fi
+        j=0
+        while [ "$j" -lt "${pref:-0}" ]; do
+            if ! cmp -s "$W/$b.$A.ref/$j.ptx" "$W/$b.$A.port/$j.ptx"; then
+                echo "FAIL $b ($A): PTX kernel $j differs ($(wc -c < "$W/$b.$A.ref/$j.ptx") against $(wc -c < "$W/$b.$A.port/$j.ptx") bytes)"
+                bad=1
+            fi
+            j=$((j+1))
+        done
         if [ "$bad" -eq 0 ]; then pass=$((pass+1)); else fail=$((fail+1)); fi
     done
 done

@@ -16951,7 +16951,16 @@ class ClassInfo
         String* op = ip.op();
         String* st = o0.kind() == (u8)OPK_USE ? mslTypeOf(o0) : rt;
         String* a = ptxOp(o0, st);
-        if (a == (String*)0 || ptxNarrow(st) || ptxNarrow(rt)) return (String*)0;
+        if (a == (String*)0) return (String*)0;
+        // A narrow integer sits in its 32-bit register extended by its own
+        // signedness (as ZExt/SExt above rely on), so an int-to-float
+        // conversion reads it in the 32-bit u32/s32 form the UIToFp/SIToFp
+        // cases below already pick, and a narrow float-to-int result is masked
+        // back afterwards, the way Trunc does. Without this a `(float)<u16>` —
+        // e.g. `1.5f / (float)W` with a `#define W` that fits in 16 bits — sank
+        // the whole PTX kernel to a silent SPIR-V fallback, and the CUDA cards
+        // then could not run or tile the block. FpExt/FpTrunc are float to
+        // float, never narrow.
         String* d = ptxArith(rt);
         String* s = ptxArith(st);
         if (op.equals(ptxS("UIToFp"))) s = ptxS(ptxWide(st) ? "u64" : "u32");
@@ -16963,7 +16972,15 @@ class ClassInfo
         if (op.equals(ptxS("FpToSI")) || op.equals(ptxS("FpToUI"))) c.appendCString(".rzi");
         else if (!op.equals(ptxS("FpExt"))) c.appendCString(".rn");
         c.appendCString("."); c.append(d); c.appendCString("."); c.append(s);
-        return ptx2(c, r, a);
+        String* out = ptx2(c, r, a);
+        if ((op.equals(ptxS("FpToUI")) || op.equals(ptxS("FpToSI"))) && ptxNarrow(rt))
+            {
+            if (ptxIs(rt, "U8")) out.append(ptx3(ptxS("and.b32"), r, r, ptxS("255")));
+            else if (ptxIs(rt, "U16")) out.append(ptx3(ptxS("and.b32"), r, r, ptxS("65535")));
+            else if (ptxIs(rt, "I8")) out.append(ptxBfe(r, "8"));
+            else if (ptxIs(rt, "I16")) out.append(ptxBfe(r, "16"));
+            }
+        return out;
         }
 
     String* ptxStatement(IRInsn* ip)

@@ -822,8 +822,16 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
             {
             XTIRType* st = o[0].kind == XTIROperandKindUse ? [self typeOf:o[0].valueId] : rt;
             NSString* a = [self ptxOp:o[0] type:st];
-            if (!a || ptxNarrow(st) || ptxNarrow(rt))
+            if (!a)
                 return nil;
+            // A narrow integer sits in its 32-bit register extended by its own
+            // signedness, so an int-to-float conversion reads it in the u32/s32
+            // form below, and a narrow float-to-int result is masked back the
+            // way Trunc does (ptxNarrowFix). Without this a `(float)<u16>` — a
+            // `1.5f / (float)W` with a `#define W` that fits in 16 bits — sank
+            // the whole PTX kernel to a silent SPIR-V fallback, so the CUDA
+            // cards could not run or tile the block. FpExt/FpTrunc are float to
+            // float, never narrow.
             NSString* d = ptxArith(rt);
             NSString* s = ptxArith(st);
             if (i.opcode == XTIROpUIToFp)
@@ -838,7 +846,10 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
                 return nil;
             NSString* mode = (i.opcode == XTIROpFpToSI || i.opcode == XTIROpFpToUI) ? @".rzi"
                            : i.opcode == XTIROpFpExt ? @"" : @".rn";
-            return [NSString stringWithFormat:@"\tcvt%@.%@.%@ %@, %@;\n", mode, d, s, r, a];
+            NSString* cvt = [NSString stringWithFormat:@"\tcvt%@.%@.%@ %@, %@;\n", mode, d, s, r, a];
+            if ((i.opcode == XTIROpFpToSI || i.opcode == XTIROpFpToUI) && ptxNarrow(rt))
+                cvt = [cvt stringByAppendingString:ptxNarrowFix(rt, r)];
+            return cvt;
             }
         case XTIROpSelect:
             {
