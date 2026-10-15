@@ -8,6 +8,9 @@
 // way.
 #import "ParWorker.xc"
 #import "ParRemote.xc"
+#if !(ARCH_6502 || ARCH_m68k)
+#import "Thread.xc"
+#endif
 
 class ParTiles
     {
@@ -549,6 +552,11 @@ class ParTiles
                 }
             if (!got && inFlight == (u32)0 && next >= ntiles && folded < ntiles)
                 break; // nothing in flight and nothing finishing: cannot happen, but do not spin
+            // Tiles remain, nothing is in flight and no worker is ready (every
+            // remote in its nimby window, say): wait a little rather than
+            // spin, and ask again.
+            if (!got && inFlight == (u32)0 && next < ntiles)
+                Thread.sleepMs((u32)1);
             }
         for (u32 i = (u32)0; i < ws.count(); i = i + (u32)1)
             {

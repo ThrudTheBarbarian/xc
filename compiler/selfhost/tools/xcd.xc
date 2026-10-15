@@ -2,6 +2,7 @@
 // other machines as workers on their tile queue (ParRemote.xc).
 //
 //     xcd [-port N]            listen on port N (default 7227)
+//         [-nimby hh:mm-hh:mm]  take no work in these local hours (the window may cross midnight)
 //     XC_PAR_SECRET=…          the pool secret a program must prove
 //     XC_PAR_REPORT=1          say what each block and tile does
 //
@@ -31,9 +32,40 @@ i32 main(void)
             port = (u16)n;
             i = i + (u32)1;
         }
+        else if (a.equals(String.withCString("-nimby")) && i + (u32)1 < av.count())
+        {
+            // hh:mm-hh:mm, as minutes of the day.
+            String* v = (String*)av.get(i + (u32)1);
+            i32 parts[4];
+            u32 np = (u32)0;
+            i32 n = (i32)0;
+            bool okWindow = v.byteLength() == (u32)11;
+            for (u32 k = (u32)0; okWindow && k < v.byteLength(); k = k + (u32)1)
+            {
+                u8 c = v.byteAt(k);
+                if (c >= (u8)'0' && c <= (u8)'9')
+                    n = n * (i32)10 + (i32)(c - (u8)'0');
+                else if ((c == (u8)':' || c == (u8)'-') && np < (u32)3)
+                {
+                    parts[np] = n;
+                    np = np + (u32)1;
+                    n = (i32)0;
+                }
+                else
+                    okWindow = false;
+            }
+            parts[3] = n;
+            if (!okWindow || np != (u32)3 || parts[0] > (i32)23 || parts[2] > (i32)23 || parts[1] > (i32)59 || parts[3] > (i32)59)
+            {
+                Stdio.printf("xcd: -nimby wants hh:mm-hh:mm, not '%s'\n", v.cString());
+                return 1;
+            }
+            ParRemoteServe.setNimby(parts[0] * (i32)60 + parts[1], parts[2] * (i32)60 + parts[3]);
+            i = i + (u32)1;
+        }
         else if (a.equals(String.withCString("-h")) || a.equals(String.withCString("--help")))
         {
-            Stdio.printf("xcd [-port N]   serve this machine's GPUs to par programs (XC_PAR_SECRET, XC_PAR_REPORT)\n");
+            Stdio.printf("xcd [-port N] [-nimby hh:mm-hh:mm]   serve this machine's GPUs to par programs (XC_PAR_SECRET, XC_PAR_REPORT)\n");
             return 0;
         }
     }
@@ -54,7 +86,8 @@ i32 main(void)
         Stdio.printf("xcd: %s\n", e.message().cString());
         return 1;
     }
-    Stdio.printf("xcd: serving %s on port %u\n", identity.cString(), (u32)port);
+    Stdio.printf("xcd: serving %s on port %u%s\n", identity.cString(), (u32)port,
+                 ParRemoteServe.hasNimby() ? (ParRemoteServe.nimbyNow() ? " (nimby now)" : " (nimby window set)") : "");
     while (true)
     {
         Socket* c = ls.accept((i32)-1);

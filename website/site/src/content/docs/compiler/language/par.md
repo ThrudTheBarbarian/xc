@@ -547,6 +547,15 @@ started without one takes any program on its network. The link is plain TCP
 on one subnet for now; `XC_PAR_REPORT=1` on either side says what is sent and
 run.
 
+A heartbeat measures the link when the program connects (its round trip, and
+its bandwidth from a one-megabyte ping) and then asks the daemon every second,
+while tiles are being handed out, whether it takes work now. The round trip
+sets the smallest tile the program sends that daemon, so the latency is a few
+percent of each tile's transfer at most. `xcd -nimby 09:00-17:00` keeps the
+daemon's hours free: inside the window it takes no block from a new program
+and tells a running one to send its tiles elsewhere, and the program's answer
+is the same either way. The window may cross midnight (`-nimby 23:00-07:00`).
+
 What pays: blocks with a lot of work per byte moved (deep fractals, searches,
 batched scoring) on a fast link. A streaming block moves more than it computes
 and loses to the link, and `auto` measures that and keeps the local devices.

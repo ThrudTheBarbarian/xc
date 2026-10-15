@@ -34,6 +34,24 @@ done
 kill $XCD 2> /dev/null
 wait $XCD 2> /dev/null
 grep -q 'taken' "$L/xcd.log" || { echo "FAIL remote: the daemon took no block"; cat "$L/xcd.log" | head -5; rc=1; }
+grep -q 'round trip' "$L/par_footprint.out" || { echo "FAIL remote: no link measurement reported"; head -3 "$L/par_footprint.out"; rc=1; }
+# A daemon inside its nimby window declines every block: the program runs
+# without it and gets the same answer.
+PORT2=$((PORT + 1))
+XC_PAR_REPORT=1 "$L/xcd" -port $PORT2 -nimby 00:00-23:59 > "$L/xcd2.log" 2>&1 &
+XCD2=$!
+sleep 1
+f=par_simd_buffers
+mkdir -p "$L/st_nimby"
+XCC_SETTINGS_DIR="$L/st_nimby" XC_PAR_REMOTE=127.0.0.1:$PORT2 XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/nimby.out" 2> "$L/nimby.err"
+if grep -v '^par:' "$L/nimby.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && grep -q 'does not take' "$L/nimby.out"; then
+    echo "PASS remote nimby"
+else
+    echo "FAIL remote nimby"; grep -v '^par:' "$L/nimby.out" | diff - "tests/fixtures/$f.expected.out" | head -3; grep -i 'remote' "$L/nimby.out" | head -3; rc=1
+fi
+kill $XCD2 2> /dev/null
+wait $XCD2 2> /dev/null
+grep -q 'declined (nimby)' "$L/xcd2.log" || { echo "FAIL remote: the nimby daemon did not decline"; head -4 "$L/xcd2.log"; rc=1; }
 [ $rc = 0 ] && rm -rf "$L"
 echo "--- remote: $([ $rc = 0 ] && echo pass || echo FAIL) ---"
 exit $rc

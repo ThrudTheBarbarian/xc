@@ -43,9 +43,18 @@
 // code, which stays where the program is. The reduction fold stays with
 // the program too, in tile order, so a run is bit-equal to a local one.
 //
+// A heartbeat (PING/PONG) measures the link once at connect — its round
+// trip, and its upload bandwidth from a 1 MB ping — and then, every second
+// while the queue asks, whether the daemon may take tiles now: `ready()` is
+// the daemon's last word, false when the daemon is inside its nimby window
+// (`xcd -nimby hh:mm-hh:mm`, the owner's hours) or has not answered a ping
+// for five seconds. The link's latency sets the block's tile floor on this
+// worker: a tile's transfer is at least twenty round trips long, so the
+// latency costs five percent at most.
+//
 // Not yet: TLS and TOFU worker certificates, mDNS discovery, the GPU-RAM
-// cache, nimby windows, load-aware ready() — the daemon answers ready()
-// with its connection being open. An array whose footprint the compiler
+// cache, a load check at tile acceptance (GPU utilisation, free VRAM) and
+// a refusal of tiles that would run past the window's end. An array whose footprint the compiler
 // knows travels as the slices each tile reads, with the tile (as to a
 // discrete card); the rest go over whole once per run at PREPARE.
 #import "Par.xc"
@@ -68,6 +77,9 @@
 #define PRM_TILE 8       // program -> daemon: index, lo, hi, then each sliced array's and global's slice
 #define PRM_DONE 9       // daemon -> program: index, written slices, partials
 #define PRM_FINISH 10    // program -> daemon: the run is over
+#define PRM_PING 11      // program -> daemon: sent-at (its own clock), kind (0 heartbeat, 1 bandwidth probe), padding
+#define PRM_PONG 12      // daemon -> program: sent-at and kind echoed, available (1 = takes tiles now), tiles queued
+#define PAR_REMOTE_PROBE_BYTES (1024 * 1024)
 
 // A little-endian byte writer and reader over Data.
 class ParWire
@@ -252,6 +264,14 @@ class ParRemoteWorker : ParWorker
     u32 _depth;
     i64 _floor;
     bool _tried;
+    // The link and the daemon's availability, from the heartbeat.
+    i64 _rttUs;             // the round trip, from the last heartbeat
+    i64 _bwBytesPerUs;      // upload bandwidth, from the probe at connect; 0 unknown
+    i64 _lastPing;          // when the last ping went (this clock, us); 0 none
+    i64 _lastPong;          // when the last pong came
+    bool _available;        // the daemon's last word
+    i64 _sizedFloor;        // the tile floor the link's latency asks for this block
+    Array* _finished;       // tiles completed while reading for a pong, for poll()
     // The run in progress.
     ParChunk* _proto;
     ParLayout* _l;
@@ -269,6 +289,8 @@ class ParRemoteWorker : ParWorker
         _floor = (i64)1024;
         _identity = new String();
         _tiles = new Array();
+        _finished = new Array();
+        _available = true;
         }
 
     // Connect and shake hands, once. The identity is "" after a failure.
@@ -325,7 +347,111 @@ class ParRemoteWorker : ParWorker
         _identity.append(ident);
         if (ParDevice.reporting())
             Log.info("par: remote worker %s, depth %u", _identity.cString(), _depth);
+        _available = true;
+        _lastPong = ParDevice.nowUs();
+        return probeLink();
+        }
+    // The link, measured once: a heartbeat's round trip, then a ping padded
+    // to a megabyte for the upload bandwidth (the daemon echoes the stamp
+    // alone, so the second round trip less the first is the upload).
+    bool probeLink(void)
+        {
+        i64 t0 = ParDevice.nowUs();
+        if (!ping((u8)0, (u32)0) || !awaitPong())
+            return fail("no heartbeat");
+        i64 t1 = ParDevice.nowUs();
+        _rttUs = t1 - t0;
+        if (_rttUs < (i64)1)
+            _rttUs = (i64)1;
+        if (!ping((u8)1, (u32)PAR_REMOTE_PROBE_BYTES) || !awaitPong())
+            return fail("no heartbeat");
+        i64 up = (ParDevice.nowUs() - t1) - _rttUs;
+        if (up < (i64)1)
+            up = (i64)1;
+        _bwBytesPerUs = (i64)PAR_REMOTE_PROBE_BYTES / up;
+        if (ParDevice.reporting())
+            Log.info("par: remote %s: %ld us round trip, %ld MB/s up", _host.cString(), _rttUs, _bwBytesPerUs);
         return true;
+        }
+    bool ping(u8 kind, u32 pad)
+        {
+        Data* d = new Data();
+        ParWire.putI64(d, ParDevice.nowUs());
+        ParWire.putU8(d, kind);
+        if (pad > (u32)0)
+            {
+            Data* z = Data.withLength(pad);
+            d.appendBytes(z.bytes(), pad);
+            }
+        _lastPing = ParDevice.nowUs();
+        return ParWire.send(_s, (u32)PRM_PING, d);
+        }
+    // Frames until a pong (a DONE on the way is completed and kept for poll()).
+    bool awaitPong(void)
+        {
+        i64 before = _lastPong;
+        while (_lastPong == before && _s != (Socket*)0 && _s.isOpen())
+            {
+            if (!_s.waitReadable((i32)5000))
+                return false;
+            if (!readFrame())
+                return false;
+            }
+        return _lastPong != before;
+        }
+    void pong(Data* f)
+        {
+        u8* p = f.bytes();
+        u32 at = (u32)0;
+        i64 sent = ParWire.rdI64(p, &at);
+        u8 kind = ParWire.rdU8(p, &at);
+        _available = ParWire.rdU8(p, &at) != (u8)0;
+        _lastPong = ParDevice.nowUs();
+        if (kind == (u8)0 && _lastPong - sent > (i64)0)
+            _rttUs = _lastPong - sent;
+        }
+    // One frame: a pong, or a finished tile completed and kept. False when
+    // the connection is lost.
+    bool readFrame(void)
+        {
+        u32 type = (u32)0;
+        Data* f = ParWire.recv(_s, &type, (i32)-1);
+        if (f == (Data*)0)
+            {
+            fail("lost the connection");
+            return false;
+            }
+        if (type == (u32)PRM_PONG)
+            {
+            pong(f);
+            return true;
+            }
+        if (type == (u32)PRM_DONE)
+            {
+            ParTile* t = complete(f);
+            if (t != (ParTile*)0)
+                _finished.add((Object*)t);
+            return true;
+            }
+        fail("an unexpected frame mid-run");
+        return false;
+        }
+    // The daemon's last word, re-asked by a heartbeat every second while the
+    // queue is dispatching; not ready either when a ping has gone unanswered
+    // for five seconds (the queue then hands its tiles elsewhere; the ones
+    // in flight are waited for by drain()).
+    bool ready(i64 now)
+        {
+        if (_s == (Socket*)0 || !_s.isOpen())
+            return false;
+        while (_s.waitReadable((i32)0))
+            if (!readFrame())
+                return false;
+        if (now - _lastPing > (i64)1000000)
+            ping((u8)0, (u32)0);
+        if (_lastPing > _lastPong && now - _lastPing > (i64)5000000)
+            return false;
+        return _available;
         }
     bool fail(u8* why)
         {
@@ -348,11 +474,7 @@ class ParRemoteWorker : ParWorker
         }
     i64 floor(void)
         {
-        return _floor;
-        }
-    bool ready(i64 now)
-        {
-        return _s != (Socket*)0 && _s.isOpen();
+        return _sizedFloor > _floor ? _sizedFloor : _floor;
         }
     bool holds(ParChunk* proto, u8* src, ParLayout* l)
         {
@@ -369,6 +491,22 @@ class ParRemoteWorker : ParWorker
         _held = a != (Data*)0 && type == (u32)PRM_ANSWER && a.length() == (u32)1 && a.byteAt((u32)0) == (u8)1;
         if (ParDevice.reporting() && !_held)
             Log.info("par: %s does not take %s", _identity.cString(), proto.parName());
+        // The tile floor the link asks for: a tile's bytes (each sliced
+        // array's and global's element, there or back) take at least twenty
+        // round trips to move, so the latency is five percent of it at most.
+        _sizedFloor = (i64)0;
+        if (_held && _rttUs > (i64)0 && _bwBytesPerUs > (i64)0)
+            {
+            i64 per = (i64)0;
+            for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+                if (l.bufFp[i] != (i64)0)
+                    per = per + l.bufElem[i];
+            for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+                if (l.globFp[i] != (i64)0)
+                    per = per + l.globElem[i];
+            if (per > (i64)0)
+                _sizedFloor = (((i64)20 * _rttUs * _bwBytesPerUs) / per + (i64)1023) & ~(i64)1023;
+            }
         return _held;
         }
     bool prepare(ParChunk* proto, u8* src, ParLayout* l, i64 tile)
@@ -500,23 +638,21 @@ class ParRemoteWorker : ParWorker
         }
     ParTile* poll(void)
         {
-        if (_inFlight == (u32)0 || _s == (Socket*)0 || !_s.isOpen() || !_s.waitReadable((i32)0))
+        while (_finished.count() == (u32)0 && _inFlight > (u32)0 && _s != (Socket*)0 && _s.isOpen() && _s.waitReadable((i32)0))
+            if (!readFrame())
+                break;
+        if (_finished.count() == (u32)0)
             return (ParTile*)0;
-        u32 type = (u32)0;
-        Data* f = ParWire.recv(_s, &type, (i32)-1);
-        if (f == (Data*)0 || type != (u32)PRM_DONE)
-            {
-            fail("lost the connection mid-run");
-            return (ParTile*)0;
-            }
-        return complete(f);
+        ParTile* t = (ParTile*)_finished.get((u32)0);
+        _finished.removeAt((u32)0);
+        return t;
         }
     void drain(void)
         {
         while (_inFlight > (u32)0 && _s != (Socket*)0 && _s.isOpen())
             {
             _s.waitReadable((i32)-1);
-            if (poll() == (ParTile*)0 && !_s.isOpen())
+            if (!readFrame())
                 break;
             }
         // Tiles a dead connection never returned are not done: the queue's
@@ -758,8 +894,54 @@ class ParRemoteChunk : ParChunk
         }
     }
 
+#if ARCH_win64
+void GetLocalTime(u16* systemTime);
+#elif !ARCH_wasm32
+pointer localtime_r(i64* t, i32* tm);
+#endif
+
 class ParRemoteServe
     {
+    // The nimby window (`xcd -nimby hh:mm-hh:mm`): minutes of the local day
+    // the daemon takes no block and tells a heartbeat it is unavailable;
+    // from -1 means no window. A window may cross midnight.
+    static i32 _nimbyFrom;
+    static i32 _nimbyTo;
+    static void setNimby(i32 fromMinutes, i32 toMinutes)
+        {
+        _nimbyFrom = fromMinutes;
+        _nimbyTo = toMinutes;
+        }
+    static bool hasNimby(void)
+        {
+        return _nimbyFrom >= (i32)0;
+        }
+    // The local time of day in minutes.
+    static i32 localMinutes(void)
+        {
+#if ARCH_win64
+        u16 st[8];
+        GetLocalTime(&st[0]);
+        return (i32)st[4] * (i32)60 + (i32)st[5];
+#elif !ARCH_wasm32
+        i64 t = time((pointer)0);
+        i32 tm[16];
+        localtime_r(&t, &tm[0]);
+        return tm[2] * (i32)60 + tm[1];
+#else
+        return (i32)0;
+#endif
+        }
+    static bool nimbyNow(void)
+        {
+        if (_nimbyFrom < (i32)0)
+            return false;
+        i32 m = localMinutes();
+        if (_nimbyFrom <= _nimbyTo)
+            return m >= _nimbyFrom && m < _nimbyTo;
+        return m >= _nimbyFrom || m < _nimbyTo;
+        }
+
     // One connection, start to end: the handshake, then blocks and tiles
     // until the program goes away. The GPU workers are the daemon's own.
     static void serve(Socket* s, Array* workers, String* identity)
@@ -857,7 +1039,8 @@ class ParRemoteServe
                 {
                 ParRemoteChunk* c = ParRemoteChunk.from(p, &at, false);
                 bool held = false;
-                for (u32 i = (u32)0; i < workers.count() && !held; i = i + (u32)1)
+                bool nimby = ParRemoteServe.nimbyNow();
+                for (u32 i = (u32)0; i < workers.count() && !held && !nimby; i = i + (u32)1)
                     {
                     // Each worker lays the block out from its own section.
                     ParWorker* cand = (ParWorker*)workers.get(i);
@@ -869,7 +1052,18 @@ class ParRemoteServe
                 Data* a = new Data();
                 ParWire.putU8(a, held ? (u8)1 : (u8)0);
                 ParWire.send(s, (u32)PRM_ANSWER, a);
-                Log.info("xcd: %s %s", c.parName(), held ? "taken" : "declined");
+                Log.info("xcd: %s %s", c.parName(), held ? "taken" : nimby ? "declined (nimby)" : "declined");
+                }
+            else if (type == (u32)PRM_PING)
+                {
+                // The heartbeat: the stamp and kind echoed, whether tiles are
+                // welcome now, and how many wait here.
+                Data* a = new Data();
+                ParWire.putI64(a, ParWire.rdI64(p, &at));
+                ParWire.putU8(a, ParWire.rdU8(p, &at));
+                ParWire.putU8(a, ParRemoteServe.nimbyNow() ? (u8)0 : (u8)1);
+                ParWire.putU32(a, (u32)pending.count() + inFlight);
+                ParWire.send(s, (u32)PRM_PONG, a);
                 }
             else if (type == (u32)PRM_PREPARE)
                 {
