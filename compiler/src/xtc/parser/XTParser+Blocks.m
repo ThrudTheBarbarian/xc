@@ -1213,14 +1213,34 @@ static NSString* parRootName(XTASTNode* n)
                                  ? (XTVariableDeclNode*)loop.loopInit : nil;
     XTBinaryExprNode* cond = [loop.condition isKindOfClass:[XTBinaryExprNode class]]
                                  ? (XTBinaryExprNode*)loop.condition : nil;
-    XTAssignExprNode* step = [loop.increment isKindOfClass:[XTAssignExprNode class]]
-                                 ? (XTAssignExprNode*)loop.increment : nil;
+    // The step: `i += 1` (what a range loop desugars to), and from 0.8.1 the
+    // C-style spellings too — `i++`, `++i`, `i = i + 1` — so --par-auto can
+    // take a C-style loop as it takes a range loop.
+    BOOL stepOk = NO;
+    XTASTNode* inc = loop.increment;
+    BOOL (^isIv)(XTASTNode*) = ^BOOL(XTASTNode* e) {
+        return [e isKindOfClass:[XTIdentifierNode class]] && [((XTIdentifierNode*)e).identName isEqualToString:iv.varName];
+    };
+    if ([inc isKindOfClass:[XTAssignExprNode class]])
+        {
+        XTAssignExprNode* a = (XTAssignExprNode*)inc;
+        BOOL one = [a.rhs isKindOfClass:[XTLiteralIntNode class]] && ((XTLiteralIntNode*)a.rhs).intValue == 1;
+        if (a.assignOp == XTAssignOpAdd && one)
+            stepOk = YES;
+        else if (a.assignOp == XTAssignOpAssign && isIv(a.lhs) && [a.rhs isKindOfClass:[XTBinaryExprNode class]])
+            {
+            XTBinaryExprNode* b = (XTBinaryExprNode*)a.rhs;
+            stepOk = b.op == XTBinaryOpAdd && isIv(b.left) && [b.right isKindOfClass:[XTLiteralIntNode class]] &&
+                     ((XTLiteralIntNode*)b.right).intValue == 1;
+            }
+        }
+    else if ([inc isKindOfClass:[XTPostfixExprNode class]])
+        stepOk = ((XTPostfixExprNode*)inc).postfixOp == XTPostfixOpInc && isIv(((XTPostfixExprNode*)inc).operand);
+    else if ([inc isKindOfClass:[XTUnaryExprNode class]])
+        stepOk = ((XTUnaryExprNode*)inc).op == XTUnaryOpPreInc && isIv(((XTUnaryExprNode*)inc).operand);
     BOOL ok = loop && iv && iv.initialiser && iv.declaredType && cond
               && (cond.op == XTBinaryOpLt || cond.op == XTBinaryOpLe)
-              && [cond.left isKindOfClass:[XTIdentifierNode class]]
-              && [((XTIdentifierNode*)cond.left).identName isEqualToString:iv.varName]
-              && step && step.assignOp == XTAssignOpAdd
-              && [step.rhs isKindOfClass:[XTLiteralIntNode class]] && ((XTLiteralIntNode*)step.rhs).intValue == 1;
+              && isIv(cond.left) && stepOk;
     if (!ok)
         {
         [self.diagnostics emitError:[NSString stringWithFormat:@"a '%@' block's body is one ascending loop: "

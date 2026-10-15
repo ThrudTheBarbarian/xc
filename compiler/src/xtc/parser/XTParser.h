@@ -32,6 +32,10 @@ NS_ASSUME_NONNULL_BEGIN
 // accuracy — from #goal, else -fgoal=. Under an explicit speed, --par-auto
 // also wraps float reductions (their sum may reassociate).
 @property(nonatomic) NSUInteger goalDefault;
+// The files --par-auto leaves alone: the standard library's and the
+// prelude's, as the preprocessor names them (XTPreprocessor.libraryFiles).
+// The runtime's own loops wrapped in blocks re-entered it.
+@property(nonatomic, nullable) NSSet<NSString*>* libraryFiles;
 
 /****************************************************************************\
 |* Initialise the parser with a token stream, a type table for resolving

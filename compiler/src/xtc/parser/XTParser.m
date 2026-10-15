@@ -2997,18 +2997,27 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
     *goalOut = self.goalDefault;
     if ([self parTokType:at + 1] != XTTokenLParen)
         return NO;
-    // The header: `( T? i in a .. b )`, exclusive, no step.
+    // Not in the standard library or the prelude: a loop of the par runtime
+    // itself, wrapped and demoted, called the runtime from inside the runtime.
+    NSString* file = [self currentToken].location.filename;
+    if (file && [self.libraryFiles containsObject:file])
+        return NO;
+    // The header: `( T? i in a .. b )` or `( T? i in a ... b )`, no step; or
+    // the C-style `( T? i = a; i < b; i++ )` with `<=`, `++i`, `i += 1` or
+    // `i = i + 1` as well (what the desugaring takes as a step).
     NSUInteger depth = 0;
     NSUInteger pe = 0;
     BOOL sawIn = NO;
     BOOL sawDots = NO;
     NSString* var = nil;
+    NSUInteger semi1 = 0;
+    NSUInteger semi2 = 0;
     for (NSUInteger i = at + 1; i < n; i++)
         {
         XTTokenType ty = [self parTokType:i];
-        if (ty == XTTokenLParen)
+        if (ty == XTTokenLParen || ty == XTTokenLBracket)
             depth++;
-        else if (ty == XTTokenRParen)
+        else if (ty == XTTokenRParen || ty == XTTokenRBracket)
             {
             depth--;
             if (depth == 0)
@@ -3024,15 +3033,55 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
                 sawIn = YES;
                 var = [self parTokValue:i - 1];
                 }
-            else if (ty == XTTokenDotDot)
+            else if (ty == XTTokenDotDot || ty == XTTokenEllipsis)
                 sawDots = YES;
-            else if (ty == XTTokenEllipsis)
-                return NO;
             else if (ty == XTTokenIdentifier && sawDots && [[self parTokValue:i] isEqualToString:@"step"])
                 return NO;
+            else if (ty == XTTokenSemicolon)
+                {
+                if (semi1 == 0) semi1 = i;
+                else if (semi2 == 0) semi2 = i;
+                else return NO;
+                }
             }
         }
-    if (pe == 0 || !sawIn || !sawDots || !var)
+    if (pe == 0)
+        return NO;
+    if (!sawIn)
+        {
+        // C-style: `T? i = a` ; `i < b` or `i <= b` ; the step.
+        if (semi1 == 0 || semi2 == 0 || semi1 < at + 3 || [self parTokType:semi1 - 1] == XTTokenAssign)
+            return NO;
+        NSUInteger eq = 0;
+        for (NSUInteger i = at + 2; i < semi1; i++)
+            if ([self parTokType:i] == XTTokenAssign) { eq = i; break; }
+        if (eq == 0 || [self parTokType:eq - 1] != XTTokenIdentifier)
+            return NO;
+        var = [self parTokValue:eq - 1];
+        if ([self parTokType:semi1 + 1] != XTTokenIdentifier || ![[self parTokValue:semi1 + 1] isEqualToString:var] ||
+            ([self parTokType:semi1 + 2] != XTTokenLess && [self parTokType:semi1 + 2] != XTTokenLessEq))
+            return NO;
+        NSUInteger s = semi2 + 1;
+        BOOL stepOk = NO;
+        if ([self parTokType:s] == XTTokenIdentifier && [[self parTokValue:s] isEqualToString:var])
+            {
+            if ([self parTokType:s + 1] == XTTokenPlusPlus && s + 2 == pe)
+                stepOk = YES;
+            else if ([self parTokType:s + 1] == XTTokenPlusAssign && [self parTokType:s + 2] == XTTokenIntLiteral &&
+                     [[self parTokValue:s + 2] isEqualToString:@"1"] && s + 3 == pe)
+                stepOk = YES;
+            else if ([self parTokType:s + 1] == XTTokenAssign && [self parTokType:s + 2] == XTTokenIdentifier &&
+                     [[self parTokValue:s + 2] isEqualToString:var] && [self parTokType:s + 3] == XTTokenPlus &&
+                     [self parTokType:s + 4] == XTTokenIntLiteral && [[self parTokValue:s + 4] isEqualToString:@"1"] && s + 5 == pe)
+                stepOk = YES;
+            }
+        else if ([self parTokType:s] == XTTokenPlusPlus && [self parTokType:s + 1] == XTTokenIdentifier &&
+                 [[self parTokValue:s + 1] isEqualToString:var] && s + 2 == pe)
+            stepOk = YES;
+        if (!stepOk)
+            return NO;
+        }
+    else if (!sawDots || !var || semi1 != 0)
         return NO;
     // The loop's annotations, `: a, goal(speed), …` after the header: `serial`
     // keeps the loop as it is, and a `goal` is the block's goal, over the
@@ -3195,6 +3244,15 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         BOOL own = [declared containsObject:name];
         if (prev == XTTokenAmpersand && next != XTTokenLBracket && !own)
             return NO;
+        // `acc++;` as a statement of its own: a `+` reduction (from 0.8.1).
+        if (stmtStart && next == XTTokenPlusPlus && [self parTokType:i + 2] == XTTokenSemicolon && !own &&
+            ![name isEqualToString:var] && !accOps[name])
+            {
+            accOps[name] = @"+";
+            accWant[name] = @1;
+            [names addObject:name];
+            continue;
+            }
         if ((next == XTTokenPlusPlus || next == XTTokenMinusMinus || prev == XTTokenPlusPlus || prev == XTTokenMinusMinus) && !own)
             return NO;
         if (stmtStart && parAutoAnyAssignOp(next))

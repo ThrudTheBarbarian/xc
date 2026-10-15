@@ -43,6 +43,7 @@
 @implementation XTCompilerDriver
     {
     NSUInteger _goalDirective;   // the unit's #goal, read after preprocessing
+    NSSet<NSString*>* _libraryFiles;   // the library's files, which --par-auto leaves alone
     }
 
 - (instancetype)initWithOptions:(XTCommandLineOptions*)options
@@ -602,6 +603,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     parser.defaultPointerPlacement = arm64 ? XTPointerPlacementMain : XTPointerPlacementHeap;
     parser.parAuto = _options.parAuto;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
+    parser.libraryFiles = _libraryFiles;
     XTProgramNode* synth = nil;
     synth = [parser parse];
     if (!synth || _diagnostics.errorCount > 0)
@@ -783,6 +785,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     parser.defaultPointerPlacement = arm64 ? XTPointerPlacementMain : XTPointerPlacementHeap;
     parser.parAuto = _options.parAuto;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
+    parser.libraryFiles = _libraryFiles;
     XTProgramNode* synth = [parser parse];
     if (!synth || _diagnostics.errorCount > 0)
         return ast;
@@ -1157,6 +1160,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     NSString* expanded = nil;
     expanded = [pp preprocessSource:rawSource filename:inputFile];
     _goalDirective = pp.goalDirective;
+    _libraryFiles = pp.libraryFiles;
     _preludeFiles = pp.preludeFiles;
     _stdlibFiles = pp.stdlibFiles;
     if (!expanded || _diagnostics.hasFatalError)
@@ -1474,6 +1478,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                                             diagnostics:_diagnostics];
     parser.parAuto = _options.parAuto;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
+    parser.libraryFiles = _libraryFiles;
     parser.defaultPointerPlacement = arm64
                                          ? XTPointerPlacementMain
                                          : XTPointerPlacementHeap;

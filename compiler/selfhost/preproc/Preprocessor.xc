@@ -373,6 +373,20 @@ class IfFrame
         {
         _prelude = p;
         }
+    // Every standard-library and prelude file this unit imported, in both
+    // spellings (the canonical key and the #line form the tokens carry):
+    // --par-auto leaves loops in these alone. As the reference's libraryFiles.
+    Set* libraryFiles(void)
+        {
+        Set* all = new Set();
+        Array* p = _preludeFiles.allObjects();
+        for (u32 i = (u32)0; i < p.count(); i = i + (u32)1)
+            all.add((Hashable*)p.get(i));
+        Array* l = _stdlibFiles.allObjects();
+        for (u32 i = (u32)0; i < l.count(); i = i + (u32)1)
+            all.add((Hashable*)l.get(i));
+        return all;
+        }
     Set* preludeFiles(void)
         {
         return _preludeFiles;

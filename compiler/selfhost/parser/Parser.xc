@@ -60,6 +60,7 @@ class Parser
     u32     _parAutoCounter; // autopar_N naming
     u32     _loopDepth;     // loops open in the code being parsed (an auto par wraps an outermost one)
     u32     _goalDefault;   // the unit's default goal: 0 built-in, 1 speed, 2 accuracy (#goal, else -fgoal=)
+    Set*    _libFiles;      // the standard library's and prelude's files, which --par-auto leaves alone
     Token*  _parTok;        // the `par` being desugared: where its errors point
     // While set, every node mk/mkNamed builds takes THIS token's position: a
     // block literal's synthesised class is built at the literal, as the
@@ -905,6 +906,7 @@ class Parser
     // 11 (wanted 85)`: no column, the NEXT token's line, and raw enum numbers.
     void setParAuto(bool b) { _parAuto = b; }
     void setGoalDefault(u32 g) { _goalDefault = g; }
+    void setLibraryFiles(Set* files) { _libFiles = files; }
 
     void _error(String* msg)
     {
@@ -2185,26 +2187,63 @@ class Parser
         u32 n = _tokens.count();
         *goalOut = _goalDefault;
         if (parTokType(at + (u32)1) != (u16)tokLParen) return false;
-        // The header: `( T? i in a .. b )`, exclusive, no step.
+        // Not in the standard library or the prelude (the reference explains).
+        if (_libFiles != (Set*)0 && _libFiles.contains((Hashable*)cur().file())) return false;
+        // The header: `( T? i in a .. b )` or `( T? i in a ... b )`, no step;
+        // or the C-style `( T? i = a; i < b; i++ )` with `<=`, `++i`,
+        // `i += 1` or `i = i + 1` as well. As the reference.
         u32 depth = (u32)0;
         u32 pe = (u32)0;
         bool sawIn = false;
         bool sawDots = false;
         String* var = (String*)0;
+        u32 semi1 = (u32)0;
+        u32 semi2 = (u32)0;
         for (u32 i = at + (u32)1; i < n; i = i + (u32)1) {
             u16 ty = parTokType(i);
-            if (ty == (u16)tokLParen) depth = depth + (u32)1;
-            else if (ty == (u16)tokRParen) {
+            if (ty == (u16)tokLParen || ty == (u16)tokLBracket) depth = depth + (u32)1;
+            else if (ty == (u16)tokRParen || ty == (u16)tokRBracket) {
                 depth = depth - (u32)1;
                 if (depth == (u32)0) { pe = i; break; }
             } else if (depth == (u32)1) {
                 if (ty == (u16)tokIn && parTokType(i - (u32)1) == (u16)tokIdentifier) { sawIn = true; var = parTokValue(i - (u32)1); }
-                else if (ty == (u16)tokDotDot) sawDots = true;
-                else if (ty == (u16)tokEllipsis) return false;
+                else if (ty == (u16)tokDotDot || ty == (u16)tokEllipsis) sawDots = true;
                 else if (ty == (u16)tokIdentifier && sawDots && Parser._same(parTokValue(i), "step")) return false;
+                else if (ty == (u16)tokSemicolon) {
+                    if (semi1 == (u32)0) semi1 = i;
+                    else if (semi2 == (u32)0) semi2 = i;
+                    else return false;
+                }
             }
         }
-        if (pe == (u32)0 || !sawIn || !sawDots || var == (String*)0) return false;
+        if (pe == (u32)0) return false;
+        if (!sawIn) {
+            // C-style: `T? i = a` ; `i < b` or `i <= b` ; the step.
+            if (semi1 == (u32)0 || semi2 == (u32)0 || semi1 < at + (u32)3 || parTokType(semi1 - (u32)1) == (u16)tokAssign) return false;
+            u32 eq = (u32)0;
+            for (u32 i = at + (u32)2; i < semi1; i = i + (u32)1)
+                if (parTokType(i) == (u16)tokAssign) { eq = i; break; }
+            if (eq == (u32)0 || parTokType(eq - (u32)1) != (u16)tokIdentifier) return false;
+            var = parTokValue(eq - (u32)1);
+            if (parTokType(semi1 + (u32)1) != (u16)tokIdentifier || !parTokValue(semi1 + (u32)1).equals(var)
+                || (parTokType(semi1 + (u32)2) != (u16)tokLess && parTokType(semi1 + (u32)2) != (u16)tokLessEq))
+                return false;
+            u32 sx = semi2 + (u32)1;
+            bool stepOk = false;
+            if (parTokType(sx) == (u16)tokIdentifier && parTokValue(sx).equals(var)) {
+                if (parTokType(sx + (u32)1) == (u16)tokPlusPlus && sx + (u32)2 == pe) stepOk = true;
+                else if (parTokType(sx + (u32)1) == (u16)tokPlusAssign && parTokType(sx + (u32)2) == (u16)tokIntLiteral
+                         && Parser._same(parTokValue(sx + (u32)2), "1") && sx + (u32)3 == pe) stepOk = true;
+                else if (parTokType(sx + (u32)1) == (u16)tokAssign && parTokType(sx + (u32)2) == (u16)tokIdentifier
+                         && parTokValue(sx + (u32)2).equals(var) && parTokType(sx + (u32)3) == (u16)tokPlus
+                         && parTokType(sx + (u32)4) == (u16)tokIntLiteral && Parser._same(parTokValue(sx + (u32)4), "1")
+                         && sx + (u32)5 == pe) stepOk = true;
+            } else if (parTokType(sx) == (u16)tokPlusPlus && parTokType(sx + (u32)1) == (u16)tokIdentifier
+                       && parTokValue(sx + (u32)1).equals(var) && sx + (u32)2 == pe)
+                stepOk = true;
+            if (!stepOk) return false;
+        } else if (!sawDots || var == (String*)0 || semi1 != (u32)0)
+            return false;
         // The loop's annotations after the header: `serial` keeps the loop as
         // it is, a `goal` is the block's goal over the unit's default.
         if (parTokType(pe + (u32)1) == (u16)tokColon) {
@@ -2315,6 +2354,14 @@ class Parser
             if (stmtStart && next == (u16)tokColon) return false;
             bool own = declared.contains((Hashable*)name);
             if (prev == (u16)tokAmpersand && next != (u16)tokLBracket && !own) return false;
+            // `acc++;` as a statement of its own: a `+` reduction.
+            if (stmtStart && next == (u16)tokPlusPlus && parTokType(i + (u32)2) == (u16)tokSemicolon && !own
+                && !name.equals(var) && accOps.get((Hashable*)name) == (Object*)0) {
+                accOps.set((Hashable*)name, (Object*)String.withCString("+"));
+                accWant.set((Hashable*)name, (Object*)Number.with((u32)1));
+                names.add((Object*)name);
+                continue;
+            }
             if ((next == (u16)tokPlusPlus || next == (u16)tokMinusMinus || prev == (u16)tokPlusPlus || prev == (u16)tokMinusMinus) && !own) return false;
             if (stmtStart && parAutoAnyAssignOp(next)) {
                 if (name.equals(var)) return false;
@@ -2927,12 +2974,28 @@ class Parser
             if (loop.kid((u32)1).kidCount() > (u32)0) cond = loop.kid((u32)1).kid((u32)0);
             if (loop.kid((u32)2).kidCount() > (u32)0) step = loop.kid((u32)2).kid((u32)0);
         }
+        // The step: `i += 1` (a range loop's), and the C-style spellings too —
+        // `i++`, `++i`, `i = i + 1` — as the reference takes them.
+        bool stepOk = false;
+        if (step != 0 && iv != 0) {
+            if (step.kind() == (u16)nkAssign && Parser._same(step.op(), "+=")
+                && step.kid((u32)1).kind() == (u16)nkInt && step.kid((u32)1).num() == (i64)1)
+                stepOk = true;
+            else if (step.kind() == (u16)nkAssign && Parser._same(step.op(), "=")
+                && step.kid((u32)0).kind() == (u16)nkIdent && step.kid((u32)0).name().equals(iv.name())
+                && step.kid((u32)1).kind() == (u16)nkBinary && Parser._same(step.kid((u32)1).op(), "+")
+                && step.kid((u32)1).kid((u32)0).kind() == (u16)nkIdent && step.kid((u32)1).kid((u32)0).name().equals(iv.name())
+                && step.kid((u32)1).kid((u32)1).kind() == (u16)nkInt && step.kid((u32)1).kid((u32)1).num() == (i64)1)
+                stepOk = true;
+            else if ((step.kind() == (u16)nkPostfix || step.kind() == (u16)nkUnary) && Parser._same(step.op(), "++")
+                && step.kidCount() > (u32)0 && step.kid((u32)0).kind() == (u16)nkIdent && step.kid((u32)0).name().equals(iv.name()))
+                stepOk = true;
+        }
         bool ok = iv != 0 && iv.kind() == (u16)nkVariableDecl && iv.kidCount() > (u32)0 && iv.op() != 0
             && cond != 0 && cond.kind() == (u16)nkBinary
             && (Parser._same(cond.op(), "<") || Parser._same(cond.op(), "<="))
             && cond.kid((u32)0).kind() == (u16)nkIdent && cond.kid((u32)0).name().equals(iv.name())
-            && step != 0 && step.kind() == (u16)nkAssign && Parser._same(step.op(), "+=")
-            && step.kid((u32)1).kind() == (u16)nkInt && step.kid((u32)1).num() == (i64)1;
+            && stepOk;
         if (!ok) {
             _errorAt(String.withFormat("a '%s' block's body is one ascending loop: par { for (T i in a..b) { ... } }", label.cString()), parKeywordNode());
             return (Node*)0;

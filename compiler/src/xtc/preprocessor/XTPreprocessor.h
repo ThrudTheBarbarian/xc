@@ -98,6 +98,13 @@ NS_ASSUME_NONNULL_BEGIN
 |* consumed, like #define.
 \****************************************************************************/
 @property(nonatomic, readonly) NSUInteger goalDirective;
+/****************************************************************************\
+|* Every file of the standard library and the prelude this unit imported, in
+|* both spellings: the standardised absolute path and the path as the #line
+|* directives (and so the tokens) name it. --par-auto leaves loops in these
+|* files alone: the runtime's own loops wrapped in blocks re-entered it.
+\****************************************************************************/
+@property(nonatomic, readonly) NSSet<NSString*>* libraryFiles;
 
 @property(nonatomic, copy) NSArray<NSString*>* stdlibDirs;
 @property(nonatomic, readonly) NSDictionary<NSString*, NSString*>* stdlibFiles;

@@ -453,8 +453,10 @@ the tiles and the devices a run on a set used.
 ### Loops that become blocks: `--par-auto`
 
 **From 0.8.1.** With `--par-auto`, an outermost `for (T i in a..b) { … }`
-loop in plain code becomes a `par` block when its shape allows, so an
-existing program takes the GPU and every core without being rewritten:
+loop in plain code — or `a...b`, or the C-style `for (T i = a; i < b; i++)`
+with `<=`, `++i`, `i += 1` or `i = i + 1` — becomes a `par` block when its
+shape allows, so an existing program takes the GPU and every core without
+being rewritten:
 
 ```c
 for (u32 i in 0..N)
@@ -466,8 +468,9 @@ for (u32 i in 0..N)
 
 A loop qualifies when its body writes only its own locals, array elements,
 and integer reductions — `acc = acc + e` or `acc += e` with `+`, `*`, `&`,
-`|` or `^`, `acc` an integer local used nowhere else in the body — and has
-no `break` of its own, `return`, `goto` or label, and no outer name
+`|` or `^`, or a count `acc++;`, `acc` an integer local used nowhere else in
+the body — and is in the program's own files: loops in the standard library
+are never wrapped. It must also have no `break` of its own, `return`, `goto` or label, and no outer name
 incremented, taken by address or written through a member. A float
 reduction is left alone (its sum would reassociate across the items) unless
 the goal is speed, as is any other write to an outer variable. The decision

@@ -51,6 +51,7 @@
 @property(nonatomic) NSMutableArray<NSString*>* mutableMetadataImports;
 @property(nonatomic) NSMutableSet<NSString*>* metadataImportSet;
 @property(nonatomic) NSMutableDictionary<NSString*, NSString*>* mutableStdlibFiles;
+@property(nonatomic) NSMutableSet<NSString*>* mutableLibraryFiles;
 /****************************************************************************\
 |* Recursion depth of preprocessSource: (0 = the top-level file). Used to
 |* register the ENTRY file in importedFiles, so an import cycle that leads
@@ -84,6 +85,7 @@
         _mutableMetadataImports = [NSMutableArray array];
         _metadataImportSet = [NSMutableSet set];
         _mutableStdlibFiles = [NSMutableDictionary dictionary];
+        _mutableLibraryFiles = [NSMutableSet set];
         _stdlibDirs = @[];
         }
     return self;
@@ -97,6 +99,11 @@
 - (NSDictionary<NSString*, NSString*>*)stdlibFiles
     {
     return _mutableStdlibFiles;
+    }
+
+- (NSSet<NSString*>*)libraryFiles
+    {
+    return _mutableLibraryFiles;
     }
 
 - (NSArray<NSString*>*)metadataImports
@@ -1596,7 +1603,11 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
         [_importedFiles addObject:absPath];
         }
     if (_inPrelude)
+        {
         [_mutablePreludeFiles addObject:absPath];
+        [_mutableLibraryFiles addObject:absPath];
+        [_mutableLibraryFiles addObject:foundPath];
+        }
     // A standard-library file imported OUTSIDE the prelude (bug 637). Its
     // declarations are as ambient as the prelude's — every unit can import
     // the same file — so the interface does not export them; it names the
@@ -1609,6 +1620,8 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
             if ([absPath hasPrefix:pre])
                 {
                 _mutableStdlibFiles[absPath] = [absPath substringFromIndex:pre.length];
+                [_mutableLibraryFiles addObject:absPath];
+                [_mutableLibraryFiles addObject:foundPath];
                 break;
                 }
             }

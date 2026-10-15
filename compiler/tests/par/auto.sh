@@ -25,6 +25,7 @@ cat > "$W/auto.xc" <<'XC'
 u32 a[N];
 u32 b[N];
 float f[N];
+u32 c[N];
 i32 main(void)
     {
     for (u32 i in 0..N)                     // an element map: a block
@@ -49,7 +50,18 @@ i32 main(void)
         }
     for (u32 i in 0..N) : serial            // marked serial: left alone
         a[i] = a[i] ^ (u32)1;
-    Stdio.printf("%u %u %u %u %u %u\n", total, bits, b[N - 1], (u32)fs, last, (u32)f[N - 1]);
+    for (u32 i = (u32)0; i < N; i++)         // C-style: a block (from 0.8.1)
+        c[i] = a[i] + (u32)7;
+    u32 inc = (u32)0;
+    for (u32 i in 0...N - 1)                 // an inclusive range: a block
+        inc = inc + (c[i] & (u32)3);
+    u32 count = (u32)0;
+    for (u32 i = (u32)0; i <= N - (u32)1; i += 1)        // <= and += 1
+        {
+        if ((c[i] & (u32)1) != (u32)0)
+            count++;                         // acc++: a + reduction
+        }
+    Stdio.printf("%u %u %u %u %u %u %u %u %u\n", total, bits, b[N - 1], (u32)fs, last, (u32)f[N - 1], c[N - 1], inc, count);
     return (i32)0;
     }
 XC
@@ -65,12 +77,15 @@ want=$("$W/plain")
 XC_PAR_REPORT=1 "$W/auto" > "$W/rep" 2>&1      # the report shares stdout with the result
 got=$(grep -v '^par: ' "$W/rep" | tail -1)
 [ "$want" = "$got" ] || { echo "FAIL auto: outputs differ: plain '$want', --par-auto '$got'"; fail=1; }
-# Three blocks ran (the map, the two reductions); the scan ran serially and
-# is not reported as a run on any device.
+# Six blocks ran (the map, the two reductions, the C-style map, the inclusive
+# reduction and the count); the scan ran serially and is not reported as a
+# run on any device, and the :serial loop is no block at all, so the blocks
+# are numbered 1-4 and 5-7.
 n=$(grep -cE 'par: autopar_[0-9]+:' "$W/rep")
-[ "$n" -ge 3 ] || { echo "FAIL auto: expected the auto blocks in the report, saw $n lines"; cat "$W/rep"; fail=1; }
+[ "$n" -ge 6 ] || { echo "FAIL auto: expected the auto blocks in the report, saw $n lines"; cat "$W/rep"; fail=1; }
 grep -q 'autopar_4' "$W/rep" && { echo "FAIL auto: the scan ran as a block"; fail=1; }
-grep -q 'autopar_5' "$W/rep" && { echo "FAIL auto: the :serial loop ran as a block"; fail=1; }
+for k in 5 6 7; do grep -q "autopar_$k:" "$W/rep" || { echo "FAIL auto: block autopar_$k (C-style / inclusive / acc++) did not run"; fail=1; }; done
+grep -q 'autopar_8' "$W/rep" && { echo "FAIL auto: an eighth block ran (the :serial loop?)"; fail=1; }
 # Under `#goal speed` the float reduction is a block too (its sum may
 # reassociate; the goal says that is wanted), and the result still agrees.
 { echo '#goal speed'; cat "$W/auto.xc"; } > "$W/speed.xc"

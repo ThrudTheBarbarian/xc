@@ -289,6 +289,8 @@ static int XTDumpAST(int argc, const char* argv[])
 
     XTDiagnosticEngine* diag = [[XTDiagnosticEngine alloc] init];
     NSString* source = nil;
+    NSUInteger dumpGoal = 0;            // the file's #goal, as a compile honours it
+    NSSet<NSString*>* dumpLibFiles = nil;
     if (raw)
         {
         source = [NSString stringWithContentsOfFile:input
@@ -310,6 +312,8 @@ static int XTDumpAST(int argc, const char* argv[])
                           value:[d substringFromIndex:eq.location + 1]];
             }
         source = [pp preprocessFile:input error:NULL];
+        dumpGoal = pp.goalDirective;
+        dumpLibFiles = pp.libraryFiles;
         }
     // Same silent-failure trap as --dump-pp: a missing `#import` yields a
     // partial expansion plus a diagnostic. Parsing it produced an EMPTY
@@ -329,6 +333,8 @@ static int XTDumpAST(int argc, const char* argv[])
     XTParser* parser = [[XTParser alloc] initWithTokens:tokens
                                               typeTable:types
                                             diagnostics:diag];
+    parser.goalDefault = dumpGoal;
+    parser.libraryFiles = dumpLibFiles;
     XTProgramNode* program = [parser parse];
     if (!program)
         {
@@ -427,6 +433,8 @@ static int XTDumpSema(int argc, const char* argv[])
     XTParser* parser = [[XTParser alloc] initWithTokens:tokens
                                               typeTable:types
                                             diagnostics:diag];
+    parser.goalDefault = pp.goalDirective;     // a #goal in the file, as a compile honours it
+    parser.libraryFiles = pp.libraryFiles;
     XTProgramNode* program = [parser parse];
     if (!program)
         {

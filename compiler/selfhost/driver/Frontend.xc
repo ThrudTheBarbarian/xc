@@ -459,6 +459,7 @@ class FeOptions
         Parser* parser = Parser.with(tokens);
         parser.setParAuto(o.parAuto());
         parser.setGoalDefault(pp.goal() != (u32)0 ? pp.goal() : o.goalDefault());
+        parser.setLibraryFiles(pp.libraryFiles());
 
         // Stage 3 of separate compilation: `#import <Mod>` resolved to a bare
         // `.xtc.iface` reconstructs the module's declarations (marked external)
