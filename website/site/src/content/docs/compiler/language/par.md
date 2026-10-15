@@ -223,7 +223,10 @@ sized from the block the pointer points into, and on Apple silicon Metal binds
 the pages in place, with no copy either way; so does a Linux integrated GPU
 whose Vulkan driver imports host memory (`VK_EXT_external_memory_host`, which
 Mesa's drivers have). A discrete card copies a `simd:` array as it copies any
-other.
+other; from 0.8.1 a CUDA card pins a page-aligned block of a megabyte or more
+where it lies for as long as the block exists, so every copy is a transfer
+straight from the program's memory rather than a copy into the driver's own
+buffer first.
 
 **Most arrays need no qualifier.** From 0.8.1 the runtime keeps a registry of
 its page-aligned blocks, and allocates every numeric array of 64 KB or more

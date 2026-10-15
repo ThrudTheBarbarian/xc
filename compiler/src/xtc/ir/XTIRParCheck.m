@@ -926,19 +926,39 @@ static BOOL parIsComputeOp(XTIROpcode op)
             return NO;
         }
     }
-- (NSString*)costWordsIn:(XTIRFunction*)f
+// The cost of f and of every function of the program it calls, once each
+// (a kernel inlines its helpers, so their work is the item's work): ops
+// summed, and `loop` when f has a nested loop (its outer parallel loop is
+// one back edge, so a second is a nested one) or any helper has a loop at
+// all (a helper has no outer loop of its own). A block whose work sat in a
+// called helper counted as a few ops and no loop, and auto kept it off a
+// discrete GPU as bandwidth-bound (par_pin_free). Intrinsics and runtime
+// calls add nothing. Mirrors the port's parCostOf.
+- (void)costOf:(XTIRFunction*)f
+       visited:(NSMutableSet<NSString*>*)visited
+           ops:(long long*)ops
+          loop:(BOOL*)loop
+           top:(BOOL)top
     {
-    long long ops = 0;
-    // Back edges: a branch to an earlier block. The outer parallel loop is
-    // always one of them, so a NESTED loop shows as a second — that is `loop`.
+    [visited addObject:f.name];
     long long backEdges = 0;
     NSArray<XTIRBlock*>* blocks = f.blocks;
     for (NSUInteger b = 0; b < blocks.count; b++)
         {
         XTIRBlock* bb = blocks[b];
         for (XTIRInsn* i in bb.instructions)
+            {
             if (parIsComputeOp(i.opcode))
-                ops++;
+                (*ops)++;
+            if ((i.opcode == XTIROpCall || i.opcode == XTIROpCallBanked || i.opcode == XTIROpCallCloaked) &&
+                i.operands.count > 0 && i.operands[0].kind == XTIROperandKindSym)
+                {
+                XTIRSymbol* sym = [self.module symbolForId:i.operands[0].symbolId];
+                XTIRFunction* callee = sym.name ? self.fnByName[sym.name] : nil;
+                if (callee && ![visited containsObject:sym.name])
+                    [self costOf:callee visited:visited ops:ops loop:loop top:NO];
+                }
+            }
         XTIRInsn* t = bb.terminator;
         if (t)
             for (XTIROperand* o in t.operands)
@@ -950,8 +970,17 @@ static BOOL parIsComputeOp(XTIROpcode op)
                         backEdges++;
                 }
         }
+    if (backEdges >= (top ? 2 : 1))
+        *loop = YES;
+    }
+
+- (NSString*)costWordsIn:(XTIRFunction*)f
+    {
+    long long ops = 0;
+    BOOL loop = NO;
+    [self costOf:f visited:[NSMutableSet set] ops:&ops loop:&loop top:YES];
     NSMutableString* w = [NSMutableString stringWithFormat:@" ops=%lld", ops];
-    if (backEdges >= 2)
+    if (loop)
         [w appendString:@" loop"];
     return w;
     }

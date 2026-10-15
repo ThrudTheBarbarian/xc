@@ -690,6 +690,19 @@ void _xtc_dealloc(void* o)
     uint64_t stride = *(uint64_t*)(base + 4);
     uint64_t count = *(uint64_t*)(base + 12);
     void (*d)(void*) = *(void (**)(void*))(base + 20);
+    /* A page-aligned block holds numbers, never objects, so its dealloc slot
+       is free for a ONCE hook: a GPU runtime that pinned the block for its
+       copies (ParCuda.pinned) stores the unpin there, and it is called once
+       with the payload before the block goes. The block's header is not its
+       allocator base either (see _xtc_alloc_aligned). */
+    if (*(uint32_t*)(base + 0) == XT_MAGIC_ALIGNED)
+        {
+        if (d)
+            d(o);
+        xt_simd_unreg((uint8_t*)o);
+        _xt_free(*(void**)(base - 8));
+        return;
+        }
     if (d)
         {
         // Mark the refcount as "in teardown" so a release inside the destructor
@@ -698,14 +711,7 @@ void _xtc_dealloc(void* o)
         for (uint64_t i = 0; i < count; i++)
             d((uint8_t*)o + i * stride);
         }
-    /* A `simd:` block's header is not its allocator base (see _xtc_alloc_aligned). */
-    if (*(uint32_t*)(base + 0) == XT_MAGIC_ALIGNED)
-        {
-        xt_simd_unreg((uint8_t*)o);
-        _xt_free(*(void**)(base - 8));
-        }
-    else
-        _xt_free(base);
+    _xt_free(base);
     }
 
 #define _XT_WH(o) (*(void***)((uint8_t*)(o) - (XT_HDR - 28)))

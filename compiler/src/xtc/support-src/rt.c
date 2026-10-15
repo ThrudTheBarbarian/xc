@@ -138,9 +138,14 @@ void _xtc_dealloc(void *o){_xtc_weak_zero_for(o);uint8_t*base=(uint8_t*)o-XT_HDR
     unsigned long stride=*(unsigned long*)(base+XT_STRIDE_OFF);
     unsigned long count=*(unsigned long*)(base+XT_COUNT_OFF);
     void(*d)(void*)=*(void(**)(void*))(base+XT_DEALLOC_OFF);
+    /* A page-aligned block holds numbers, never objects, so its dealloc slot
+       is free for a ONCE hook: a GPU runtime that pinned the block for its
+       copies (ParCuda.pinned) stores the unpin there, and it is called once
+       with the payload before the block goes. The block's header is not its
+       allocator base either (see _xtc_alloc_aligned). */
+    if(*(uint32_t*)(base+XT_MAGIC_OFF)==XT_MAGIC_ALIGNED){if(d)d(o);xt_simd_unreg((uint8_t*)o);free(*(void**)(base-8));return;}
     if(d){*(XT_RC_T*)((uint8_t*)o-XT_RC_BYTES)=XT_RC_DYING;for(unsigned long i=0;i<count;i++)d((uint8_t*)o+i*stride);}
-    /* A `simd:` block's header is not its allocator base (see _xtc_alloc_aligned). */
-    if(*(uint32_t*)(base+XT_MAGIC_OFF)==XT_MAGIC_ALIGNED){xt_simd_unreg((uint8_t*)o);free(*(void**)(base-8));}else free(base);}
+    free(base);}
 #define _XT_WH(o) (*(void***)((uint8_t*)(o)-(XT_HDR-XT_WEAKH_OFF)))
 /* The weak-reference intrusive list (private:docs/Design/weak-refs-intrusive.md) is the
    one piece of runtime state two xtc threads can mutate at once: registering,

@@ -14851,19 +14851,37 @@ class ClassInfo
     // ops/byte; a `loop` makes the item compute-heavy whatever the straight-line
     // count (its trips are data-dependent), so the runtime does not prune the
     // GPU for it. Both compilers emit this identically (same IR).
-    String* parCostWords(IRFunc* f)
+    // The cost of f and of every function of the program it calls, once
+    // each (a kernel inlines its helpers, so their work is the item's work):
+    // ops summed, and `loop` when f has a nested loop (its outer parallel
+    // loop is one back edge, so a second is a nested one) or any helper has
+    // a loop at all. Intrinsics and runtime calls add nothing. As the
+    // reference (costOf:).
+    void parCostOf(IRFunc* f, Map* visited, i64* ops, bool* loop, bool top)
         {
-        i64 ops = (i64)0;
-        // Back edges: a branch to an earlier block. The outer parallel loop is
-        // always one of them, so a NESTED loop (mandel_deep's escape iteration,
-        // nbody's inner sum) shows as a second — that is the `loop` signal.
+        visited.set((Hashable*)f.name(), (Object*)f.name());
         i64 backEdges = (i64)0;
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)f.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
-                if (parIsComputeOp(((IRInsn*)bb.insns().get(i)).op()))
-                    ops = ops + (i64)1;
+                {
+                IRInsn* ins = (IRInsn*)bb.insns().get(i);
+                if (parIsComputeOp(ins.op()))
+                    *ops = *ops + (i64)1;
+                if ((ins.op().equals(String.withCString("Call")) || ins.op().equals(String.withCString("CallBanked"))
+                     || ins.op().equals(String.withCString("CallCloaked")))
+                    && ins.ops().count() > (u32)0 && ((IROperand*)ins.ops().get((u32)0)).kind() == (u8)OPK_SYM)
+                    {
+                    String* callee = ((IROperand*)ins.ops().get((u32)0)).name();
+                    IRFunc* target = (IRFunc*)0;
+                    for (u32 q = (u32)0; q < _m.funcs().count(); q = q + (u32)1)
+                        if (((IRFunc*)_m.funcs().get(q)).name().equals(callee))
+                            target = (IRFunc*)_m.funcs().get(q);
+                    if (target != (IRFunc*)0 && visited.get((Hashable*)callee) == (Object*)0)
+                        parCostOf(target, visited, ops, loop, false);
+                    }
+                }
             IRInsn* t = bb.term();
             if (t != (IRInsn*)0)
                 for (u32 k = (u32)0; k < t.ops().count(); k = k + (u32)1)
@@ -14876,10 +14894,19 @@ class ClassInfo
                             backEdges = backEdges + (i64)1;
                     }
             }
+        if (backEdges >= (top ? (i64)2 : (i64)1))
+            *loop = true;
+        }
+
+    String* parCostWords(IRFunc* f)
+        {
+        i64 ops = (i64)0;
+        bool loop = false;
+        parCostOf(f, new Map(), &ops, &loop, true);
         String* w = new String();
         w.appendCString(" ops=");
         w.append(String.withI64(ops));
-        if (backEdges >= (i64)2)
+        if (loop)
             w.appendCString(" loop");
         return w;
         }

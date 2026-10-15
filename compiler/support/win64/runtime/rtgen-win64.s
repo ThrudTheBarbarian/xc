@@ -1548,57 +1548,63 @@ _xtc_dealloc:                           # @_xtc_dealloc
 	mov	dword ptr [rip + xt_rt_spin], 0
 .LBB39_9:
 	mov	rbx, qword ptr [rsi - 20]
-	test	rbx, rbx
-	je	.LBB39_13
+	cmp	dword ptr [rsi - 40], 1481920323
+	jne	.LBB39_30
 # %bb.10:
+	test	rbx, rbx
+	je	.LBB39_12
+# %bb.11:
+	mov	rcx, rsi
+	call	rbx
+.LBB39_12:
+	cmp	dword ptr [rip + _xt_threads_active], 0
+	je	.LBB39_15
+	.p2align	4, 0x90
+.LBB39_13:                              # =>This Loop Header: Depth=1
+                                        #     Child Loop BB39_14 Depth 2
+	mov	eax, 1
+	xchg	dword ptr [rip + xt_rt_spin], eax
+	test	eax, eax
+	je	.LBB39_15
+.LBB39_14:                              #   Parent Loop BB39_13 Depth=1
+                                        # =>  This Inner Loop Header: Depth=2
+	mov	eax, dword ptr [rip + xt_rt_spin]
+	test	eax, eax
+	jne	.LBB39_14
+	jmp	.LBB39_13
+.LBB39_30:
+	test	rbx, rbx
+	je	.LBB39_34
+# %bb.31:
 	mov	r14, qword ptr [rsi - 36]
 	mov	r15, qword ptr [rsi - 28]
 	mov	dword ptr [rsi - 4], -2147483648
 	test	r15, r15
-	je	.LBB39_13
-# %bb.11:
+	je	.LBB39_34
+# %bb.32:
 	mov	rdi, rsi
 	.p2align	4, 0x90
-.LBB39_12:                              # =>This Inner Loop Header: Depth=1
+.LBB39_33:                              # =>This Inner Loop Header: Depth=1
 	mov	rcx, rdi
 	call	rbx
 	add	rdi, r14
 	dec	r15
-	jne	.LBB39_12
-.LBB39_13:
-	cmp	dword ptr [rsi - 40], 1481920323
-	jne	.LBB39_32
-# %bb.14:
-	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB39_17
-	.p2align	4, 0x90
-.LBB39_15:                              # =>This Loop Header: Depth=1
-                                        #     Child Loop BB39_16 Depth 2
-	mov	eax, 1
-	xchg	dword ptr [rip + xt_rt_spin], eax
-	test	eax, eax
-	je	.LBB39_17
-.LBB39_16:                              #   Parent Loop BB39_15 Depth=1
-                                        # =>  This Inner Loop Header: Depth=2
-	mov	eax, dword ptr [rip + xt_rt_spin]
-	test	eax, eax
-	jne	.LBB39_16
-	jmp	.LBB39_15
-.LBB39_32:
+	jne	.LBB39_33
+.LBB39_34:
 	call	GetProcessHeap
 	add	rsi, -48
-	jmp	.LBB39_31
-.LBB39_17:
+	jmp	.LBB39_29
+.LBB39_15:
 	mov	rax, qword ptr [rip + xt_simd_n]
 	test	rax, rax
-	je	.LBB39_18
-# %bb.19:
+	je	.LBB39_16
+# %bb.17:
 	mov	rdx, qword ptr [rip + xt_simd_tab]
 	xor	ecx, ecx
 	movabs	r8, 2305843009213693950
 	mov	r9, rax
 	.p2align	4, 0x90
-.LBB39_20:                              # =>This Inner Loop Header: Depth=1
+.LBB39_18:                              # =>This Inner Loop Header: Depth=1
 	lea	r10, [r9 + rcx]
 	mov	r11, r10
 	shr	r11
@@ -1608,50 +1614,50 @@ _xtc_dealloc:                           # @_xtc_dealloc
 	cmova	r9, r11
 	cmovbe	rcx, r10
 	cmp	rcx, r9
-	jb	.LBB39_20
-# %bb.21:
+	jb	.LBB39_18
+# %bb.19:
 	test	rcx, rcx
-	jne	.LBB39_22
-	jmp	.LBB39_27
-.LBB39_18:
+	jne	.LBB39_20
+	jmp	.LBB39_25
+.LBB39_16:
 	xor	ecx, ecx
 	test	rcx, rcx
-	je	.LBB39_27
-.LBB39_22:
+	je	.LBB39_25
+.LBB39_20:
 	mov	rdx, qword ptr [rip + xt_simd_tab]
 	mov	r9, rcx
 	shl	r9, 4
 	cmp	qword ptr [rdx + r9 - 16], rsi
-	jne	.LBB39_27
-# %bb.23:
+	jne	.LBB39_25
+# %bb.21:
 	mov	r8, rax
 	sub	r8, rcx
-	jbe	.LBB39_26
-# %bb.24:
+	jbe	.LBB39_24
+# %bb.22:
 	add	rdx, r9
 	.p2align	4, 0x90
-.LBB39_25:                              # =>This Inner Loop Header: Depth=1
+.LBB39_23:                              # =>This Inner Loop Header: Depth=1
 	movups	xmm0, xmmword ptr [rdx]
 	movups	xmmword ptr [rdx - 16], xmm0
 	add	rdx, 16
 	dec	r8
-	jne	.LBB39_25
-.LBB39_26:
+	jne	.LBB39_23
+.LBB39_24:
 	dec	rax
 	mov	qword ptr [rip + xt_simd_n], rax
-.LBB39_27:
+.LBB39_25:
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB39_29
-# %bb.28:
+	je	.LBB39_27
+# %bb.26:
 	mov	dword ptr [rip + xt_rt_spin], 0
-.LBB39_29:
+.LBB39_27:
 	mov	rsi, qword ptr [rsi - 48]
 	test	rsi, rsi
-	je	.LBB39_33
-# %bb.30:
+	je	.LBB39_35
+# %bb.28:
 	call	GetProcessHeap
 	add	rsi, -8
-.LBB39_31:
+.LBB39_29:
 	mov	rcx, rax
 	xor	edx, edx
 	mov	r8, rsi
@@ -1662,7 +1668,7 @@ _xtc_dealloc:                           # @_xtc_dealloc
 	pop	r14
 	pop	r15
 	jmp	HeapFree                        # TAILCALL
-.LBB39_33:
+.LBB39_35:
 	add	rsp, 32
 	pop	rbx
 	pop	rdi

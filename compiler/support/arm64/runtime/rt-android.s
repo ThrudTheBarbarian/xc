@@ -1247,15 +1247,14 @@ _xtc_count:                             // @_xtc_count
 	.type	_xtc_dealloc,@function
 _xtc_dealloc:                           // @_xtc_dealloc
 // %bb.0:
-	stp	x30, x25, [sp, #-64]!           // 16-byte Folded Spill
-	stp	x22, x21, [sp, #32]             // 16-byte Folded Spill
-	adrp	x22, _xt_threads_active
-	stp	x20, x19, [sp, #48]             // 16-byte Folded Spill
+	stp	x30, x23, [sp, #-48]!           // 16-byte Folded Spill
+	stp	x20, x19, [sp, #32]             // 16-byte Folded Spill
 	mov	x19, x0
-	stp	x24, x23, [sp, #16]             // 16-byte Folded Spill
+	adrp	x20, _xt_threads_active
+	stp	x22, x21, [sp, #16]             // 16-byte Folded Spill
 	cbz	x0, .Lrt_BB33_7
 // %bb.1:
-	ldr	w8, [x22, :lo12:_xt_threads_active]
+	ldr	w8, [x20, :lo12:_xt_threads_active]
 	cbz	w8, .Lrt_BB33_3
 // %bb.2:
 	adrp	x0, xt_rt_mtx
@@ -1271,7 +1270,7 @@ _xtc_dealloc:                           // @_xtc_dealloc
 	mov	x8, x9
 	cbnz	x9, .Lrt_BB33_4
 .Lrt_BB33_5:
-	ldr	w8, [x22, :lo12:_xt_threads_active]
+	ldr	w8, [x20, :lo12:_xt_threads_active]
 	stur	xzr, [x19, #-12]
 	cbz	w8, .Lrt_BB33_7
 // %bb.6:
@@ -1279,46 +1278,35 @@ _xtc_dealloc:                           // @_xtc_dealloc
 	add	x0, x0, :lo12:xt_rt_mtx
 	bl	pthread_mutex_unlock
 .Lrt_BB33_7:
-	ldur	x23, [x19, #-20]
-	sub	x20, x19, #40
-	cbz	x23, .Lrt_BB33_11
-// %bb.8:
-	ldur	x24, [x19, #-28]
-	ldur	x25, [x19, #-36]
-	mov	w8, #-2147483648                // =0x80000000
-	stur	w8, [x19, #-4]
-	cbz	x24, .Lrt_BB33_11
-// %bb.9:
-	mov	x21, x19
-.Lrt_BB33_10:                              // =>This Inner Loop Header: Depth=1
-	mov	x0, x21
-	blr	x23
-	subs	x24, x24, #1
-	add	x21, x21, x25
-	b.ne	.Lrt_BB33_10
-.Lrt_BB33_11:
-	ldr	w8, [x20]
+	mov	x0, x19
 	mov	w9, #20291                      // =0x4f43
+	ldr	w8, [x0, #-40]!
 	movk	w9, #22612, lsl #16
+	ldur	x21, [x0, #20]
 	cmp	w8, w9
-	b.ne	.Lrt_BB33_25
-// %bb.12:
-	ldr	w8, [x22, :lo12:_xt_threads_active]
-	cbz	w8, .Lrt_BB33_14
-// %bb.13:
+	b.ne	.Lrt_BB33_23
+// %bb.8:
+	cbz	x21, .Lrt_BB33_10
+// %bb.9:
+	mov	x0, x19
+	blr	x21
+.Lrt_BB33_10:
+	ldr	w8, [x20, :lo12:_xt_threads_active]
+	cbz	w8, .Lrt_BB33_12
+// %bb.11:
 	adrp	x0, xt_rt_mtx
 	add	x0, x0, :lo12:xt_rt_mtx
 	bl	pthread_mutex_lock
-.Lrt_BB33_14:
+.Lrt_BB33_12:
 	adrp	x8, xt_simd_n
 	adrp	x11, xt_simd_tab
 	mov	x10, xzr
 	ldr	x9, [x8, :lo12:xt_simd_n]
-	cbz	x9, .Lrt_BB33_17
-// %bb.15:
+	cbz	x9, .Lrt_BB33_15
+// %bb.13:
 	ldr	x12, [x11, :lo12:xt_simd_tab]
 	mov	x13, x9
-.Lrt_BB33_16:                              // =>This Inner Loop Header: Depth=1
+.Lrt_BB33_14:                              // =>This Inner Loop Header: Depth=1
 	add	x14, x13, x10
 	and	x15, x14, #0x1ffffffffffffffe
 	lsr	x14, x14, #1
@@ -1327,42 +1315,59 @@ _xtc_dealloc:                           // @_xtc_dealloc
 	csel	x13, x14, x13, hi
 	csinc	x10, x10, x14, hi
 	cmp	x10, x13
-	b.lo	.Lrt_BB33_16
-.Lrt_BB33_17:
-	cbz	x10, .Lrt_BB33_22
-// %bb.18:
+	b.lo	.Lrt_BB33_14
+.Lrt_BB33_15:
+	cbz	x10, .Lrt_BB33_20
+// %bb.16:
 	ldr	x11, [x11, :lo12:xt_simd_tab]
 	add	x11, x11, x10, lsl #4
 	ldur	x12, [x11, #-16]
 	cmp	x12, x19
-	b.ne	.Lrt_BB33_22
-// %bb.19:
+	b.ne	.Lrt_BB33_20
+// %bb.17:
 	subs	x10, x9, x10
-	b.ls	.Lrt_BB33_21
-.Lrt_BB33_20:                              // =>This Inner Loop Header: Depth=1
+	b.ls	.Lrt_BB33_19
+.Lrt_BB33_18:                              // =>This Inner Loop Header: Depth=1
 	ldp	x12, x13, [x11]
 	subs	x10, x10, #1
 	stp	x12, x13, [x11, #-16]
 	add	x11, x11, #16
-	b.ne	.Lrt_BB33_20
-.Lrt_BB33_21:
+	b.ne	.Lrt_BB33_18
+.Lrt_BB33_19:
 	sub	x9, x9, #1
 	str	x9, [x8, :lo12:xt_simd_n]
-.Lrt_BB33_22:
-	ldr	w8, [x22, :lo12:_xt_threads_active]
-	cbz	w8, .Lrt_BB33_24
-// %bb.23:
+.Lrt_BB33_20:
+	ldr	w8, [x20, :lo12:_xt_threads_active]
+	cbz	w8, .Lrt_BB33_22
+// %bb.21:
 	adrp	x0, xt_rt_mtx
 	add	x0, x0, :lo12:xt_rt_mtx
 	bl	pthread_mutex_unlock
-.Lrt_BB33_24:
-	ldur	x20, [x19, #-48]
-.Lrt_BB33_25:
-	mov	x0, x20
-	ldp	x20, x19, [sp, #48]             // 16-byte Folded Reload
-	ldp	x22, x21, [sp, #32]             // 16-byte Folded Reload
-	ldp	x24, x23, [sp, #16]             // 16-byte Folded Reload
-	ldp	x30, x25, [sp], #64             // 16-byte Folded Reload
+.Lrt_BB33_22:
+	ldur	x0, [x19, #-48]
+	b	.Lrt_BB33_28
+.Lrt_BB33_23:
+	cbz	x21, .Lrt_BB33_28
+// %bb.24:
+	ldur	x20, [x0, #12]
+	ldur	x22, [x0, #4]
+	mov	w8, #-2147483648                // =0x80000000
+	stur	w8, [x19, #-4]
+	cbz	x20, .Lrt_BB33_28
+// %bb.25:
+	mov	x23, x0
+.Lrt_BB33_26:                              // =>This Inner Loop Header: Depth=1
+	mov	x0, x19
+	blr	x21
+	subs	x20, x20, #1
+	add	x19, x19, x22
+	b.ne	.Lrt_BB33_26
+// %bb.27:
+	mov	x0, x23
+.Lrt_BB33_28:
+	ldp	x20, x19, [sp, #32]             // 16-byte Folded Reload
+	ldp	x22, x21, [sp, #16]             // 16-byte Folded Reload
+	ldp	x30, x23, [sp], #48             // 16-byte Folded Reload
 	b	free
 .Lrt_func_end33:
 	.size	_xtc_dealloc, .Lrt_func_end33-_xtc_dealloc

@@ -60,6 +60,15 @@ pointer gParCuRegHost[PAR_CU_REG];
 i64 gParCuRegLen[PAR_CU_REG];
 i64 gParCuRegUsed[PAR_CU_REG];
 i64 gParCuRegClock;
+// A page-aligned heap block (ParDevice.simdBase: a `simd:` array, or any
+// numeric array of 64 KB and more) is registered WHOLE, and its header's
+// dealloc slot is given parCudaUnpin, which the runtime calls once with the
+// payload before the block goes (rt-freestanding.c, _xtc_dealloc): the
+// registration never outlives the memory, where a range held only by this
+// cache did. The single-shot path pins its arrays the same way, so its
+// copies are DMA rather than a copy into the driver's staging first.
+typedef void parUnpin_t(pointer payload);
+void parCudaUnpin(pointer payload);
 
 // The tiled path's streams, events and pinned staging, made on first use and
 // kept: one compute stream the kernels queue on in tile order (a kernel that
@@ -333,7 +342,13 @@ class ParCuda
             gParCuCap[k] = bytes;
             }
         if (host != (pointer)0)
+            {
+            // Pinned where it is a page-aligned block of a megabyte or more:
+            // the copy is then a DMA from the caller's memory, not a copy
+            // into the driver's staging buffer first.
+            pinned(host, bytes);
             _toDevice(gParCuDev[k], host, (u64)bytes);
+            }
         if (keep)
             {
             gParCuShadow[k] = (u8*)malloc((u64)bytes);
@@ -432,6 +447,15 @@ class ParCuda
         if (bytes < ((i64)1 << (i64)20) || _hostRegister == (cuMemHostRegister_t*)0 ||
             _hostUnregister == (cuMemHostUnregister_t*)0)
             return false;
+        // A page-aligned heap block is registered whole, from its start, and
+        // unpinned by the hook when it is freed (parCudaUnpin); a range in
+        // anything else (a global) is held by this cache alone.
+        pointer base = ParDevice.simdBase(host);
+        if (base != (pointer)0)
+            {
+            host = base;
+            bytes = Par.spanOf(base, (i64)1, true);
+            }
         u32 slot = (u32)0;
         for (u32 i = (u32)0; i < (u32)PAR_CU_REG; i = i + (u32)1)
             if (gParCuRegHost[i] == (pointer)0 || gParCuRegUsed[i] < gParCuRegUsed[slot])
@@ -446,7 +470,26 @@ class ParCuda
         gParCuRegHost[slot] = host;
         gParCuRegLen[slot] = bytes;
         gParCuRegUsed[slot] = gParCuRegClock;
+        if (base != (pointer)0)
+            {
+            parUnpin_t* hook = &parCudaUnpin;
+            *(pointer*)((u8*)base - (u64)20) = (pointer)hook;
+            }
         return true;
+        }
+
+    // The block at payload is going (its once hook, rt-freestanding.c): its
+    // registration goes with it.
+    static void unpin(pointer payload)
+        {
+        for (u32 i = (u32)0; i < (u32)PAR_CU_REG; i = i + (u32)1)
+            if (gParCuRegHost[i] == payload)
+                {
+                if (_hostUnregister != (cuMemHostUnregister_t*)0)
+                    _hostUnregister(payload);
+                gParCuRegHost[i] = (pointer)0;
+                gParCuRegLen[i] = (i64)0;
+                }
         }
 
     static bool tileSetup(void)
@@ -1630,4 +1673,10 @@ class ParCudaWorker : ParWorker
             complete(d);
             }
         }
+    }
+
+// The once hook a pinned block's header carries (ParCuda.pinned).
+void parCudaUnpin(pointer payload)
+    {
+    ParCuda.unpin(payload);
     }
