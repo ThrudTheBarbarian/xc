@@ -1107,8 +1107,12 @@ class Sema
         {
         _rcVisited.set((Hashable*)cls.name(), (Object*)cls);
         String* rootName = ((Node*)_rcClasses.get(rootIndex)).name();
-        for (Node* c = cls; c != 0; c = parentOf(c))
+        // each ancestor once: an inheritance cycle is an error reported
+        // elsewhere, and the walk must not follow it round and round
+        Map* seen = new Map();
+        for (Node* c = cls; c != 0 && seen.get((Hashable*)c.name()) == 0; c = parentOf(c))
             {
+            seen.set((Hashable*)c.name(), (Object*)c);
             for (u32 j = (u32)0; j < c.kidCount(); j = j + (u32)1)
                 {
                 Node* f = c.kid(j);

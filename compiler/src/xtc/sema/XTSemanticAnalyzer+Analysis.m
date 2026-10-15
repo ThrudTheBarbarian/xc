@@ -3403,9 +3403,13 @@ static NSUInteger sumParamBytes(NSArray<XTParamNode*>* params)
     {
     [visited addObject:cls.className];
     NSUInteger rootIndex = indexOf[root.className].unsignedIntegerValue;
-    // the fields: the class's own, then each ancestor's
-    for (XTClassDeclNode* c = cls; c; c = c.parentName ? self.classesByName[c.parentName] : nil)
+    // the fields: the class's own, then each ancestor's, each ancestor once
+    // (an inheritance cycle is an error reported elsewhere; the walk must
+    // not follow it round and round)
+    NSMutableSet<NSString*>* seen = [NSMutableSet set];
+    for (XTClassDeclNode* c = cls; c && ![seen containsObject:c.className]; c = c.parentName ? self.classesByName[c.parentName] : nil)
         {
+        [seen addObject:c.className];
         for (XTVariableDeclNode* f in c.ivars)
             {
             XTType* t = f.declaredType;
