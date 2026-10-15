@@ -2159,9 +2159,12 @@ class Parser
         Node* iv1 = (Node*)0;
         Node* cond1 = (Node*)0;
         if (!Parser.parAutoAscending(node, &iv1, &cond1)) return (Node*)0;
-        Node* outerBody = node.kid((u32)3);
-        if (outerBody.kind() != (u16)nkBlock || outerBody.kidCount() != (u32)1) return (Node*)0;
-        Node* inner = outerBody.kid((u32)0);
+        // The inner loop: the outer body's one statement, braced or not.
+        Node* inner = node.kid((u32)3);
+        if (inner.kind() == (u16)nkBlock) {
+            if (inner.kidCount() != (u32)1) return (Node*)0;
+            inner = inner.kid((u32)0);
+        }
         Node* iv2 = (Node*)0;
         Node* cond2 = (Node*)0;
         if (!Parser.parAutoAscending(inner, &iv2, &cond2)) return (Node*)0;
@@ -2274,6 +2277,47 @@ class Parser
         return t >= (u16)tokAssign && t <= (u16)tokCaretAssign;
     }
 
+    // The index just past the statement that starts at `from`: a block, an
+    // `if` with its `else`, a `for`, `while` or `switch` and its body, else
+    // the `;` at depth 0; 0 when the tokens run out. As the reference.
+    u32 parAutoStatementEnd(u32 from, u32 n)
+    {
+        u16 t = parTokType(from);
+        if (t == (u16)tokLBrace) {
+            u32 d = (u32)0;
+            for (u32 i = from; i < n; i = i + (u32)1) {
+                u16 ty = parTokType(i);
+                if (ty == (u16)tokLBrace) d = d + (u32)1;
+                else if (ty == (u16)tokRBrace) { d = d - (u32)1; if (d == (u32)0) return i; }
+            }
+            return (u32)0;
+        }
+        if (t == (u16)tokIf || t == (u16)tokFor || t == (u16)tokWhile || t == (u16)tokSwitch) {
+            if (parTokType(from + (u32)1) != (u16)tokLParen) return (u32)0;
+            u32 d = (u32)0;
+            u32 i = from + (u32)1;
+            while (i < n) {
+                u16 ty = parTokType(i);
+                if (ty == (u16)tokLParen) d = d + (u32)1;
+                else if (ty == (u16)tokRParen) { d = d - (u32)1; if (d == (u32)0) break; }
+                i = i + (u32)1;
+            }
+            if (i >= n) return (u32)0;
+            u32 e = parAutoStatementEnd(i + (u32)1, n);
+            if (e == (u32)0) return (u32)0;
+            if (t == (u16)tokIf && parTokType(e + (u32)1) == (u16)tokElse) return parAutoStatementEnd(e + (u32)2, n);
+            return e;
+        }
+        u32 d = (u32)0;
+        for (u32 i = from; i < n; i = i + (u32)1) {
+            u16 ty = parTokType(i);
+            if (ty == (u16)tokLParen || ty == (u16)tokLBracket || ty == (u16)tokLBrace) d = d + (u32)1;
+            else if (ty == (u16)tokRParen || ty == (u16)tokRBracket || ty == (u16)tokRBrace) d = d - (u32)1;
+            else if (ty == (u16)tokSemicolon && d == (u32)0) return i;
+        }
+        return (u32)0;
+    }
+
     // The scan behind parAutoFor: the cursor is at the `for`. Fills `reds`
     // (nkParReduce nodes) and says whether the loop qualifies.
     bool parAutoScan(Array* reds, u32* goalOut)
@@ -2373,16 +2417,13 @@ class Parser
                 }
             }
         } else {
+            // One statement, to its end (the reference explains).
             u16 first = parTokType(pe + (u32)1);
-            if (first == (u16)tokIf || first == (u16)tokFor || first == (u16)tokWhile || first == (u16)tokSwitch
-                || first == (u16)tokSemicolon || first == (u16)tokEOF) return false;
+            if (first == (u16)tokSemicolon || first == (u16)tokEOF) return false;
             bs = pe + (u32)1;
-            for (u32 i = pe + (u32)1; i < n; i = i + (u32)1) {
-                u16 ty = parTokType(i);
-                if (ty == (u16)tokLParen || ty == (u16)tokLBracket || ty == (u16)tokLBrace) depth = depth + (u32)1;
-                else if (ty == (u16)tokRParen || ty == (u16)tokRBracket || ty == (u16)tokRBrace) depth = depth - (u32)1;
-                else if (ty == (u16)tokSemicolon && depth == (u32)0) { be = i; break; }
-            }
+            u32 end = parAutoStatementEnd(pe + (u32)1, n);
+            if (end == (u32)0) return false;
+            be = end;
         }
         if (be == (u32)0) return false;
         Set* declared = new Set();
@@ -2730,6 +2771,26 @@ class Parser
     // A captured `simd:` pointer's element type (`simd:float*` -> `float`),
     // or null for any other spelling. Such a capture is a GPU buffer whose
     // size the heap header gives (par-blocks.md §3); a plain pointer is not.
+    // The value of an expression of integer literals, casts and + - *, else
+    // *ok stays false. As the reference.
+    static i64 parFoldConstant(Node* e, bool* ok)
+    {
+        if (e == (Node*)0) { *ok = false; return (i64)0; }
+        if (e.kind() == (u16)nkInt) { *ok = true; return e.num(); }
+        if (e.kind() == (u16)nkCast && e.kidCount() > (u32)0) return Parser.parFoldConstant(e.kid((u32)0), ok);
+        if (e.kind() == (u16)nkBinary && e.kidCount() == (u32)2) {
+            bool okl = false;
+            bool okr = false;
+            i64 l = Parser.parFoldConstant(e.kid((u32)0), &okl);
+            i64 r = Parser.parFoldConstant(e.kid((u32)1), &okr);
+            if (okl && okr && (Parser._same(e.op(), "+") || Parser._same(e.op(), "-") || Parser._same(e.op(), "*"))) {
+                *ok = true;
+                return Parser._same(e.op(), "+") ? l + r : Parser._same(e.op(), "-") ? l - r : l * r;
+            }
+        }
+        *ok = false;
+        return (i64)0;
+    }
     static String* parSimdPointee(String* t)
     {
         if (t == (String*)0 || t.byteLength() < (u32)7 || t.byteAt(t.byteLength() - (u32)1) != (u8)'*')
@@ -3590,6 +3651,22 @@ class Parser
                         tag.append(String.withU32((u32)3 + q));
                         tag.appendCString(";");
                     }
+            }
+            // …and a grid's width and height when they are constants (the
+            // reference explains).
+            Array* gridExprs = (Array*)frame.get((Hashable*)String.withCString("grid"));
+            if (gridExprs != (Array*)0 && gridExprs.count() >= (u32)2) {
+                bool okW = false;
+                bool okH = false;
+                i64 gw = Parser.parFoldConstant((Node*)gridExprs.get((u32)0), &okW);
+                i64 gh = Parser.parFoldConstant((Node*)gridExprs.get((u32)1), &okH);
+                if (okW && okH && gw > (i64)0 && gh > (i64)0) {
+                    tag.appendCString("gw=");
+                    tag.append(String.withI64(gw));
+                    tag.appendCString(";gh=");
+                    tag.append(String.withI64(gh));
+                    tag.appendCString(";");
+                }
             }
             Node* ret = mk((u16)nkReturn);
             ret.add(mkNamed((u16)nkStr, tag));

@@ -48,6 +48,33 @@
 #import "XTTypeTable.h"
 #import <objc/runtime.h>
 
+// The value of an expression made of integer literals, casts and + - *, else
+// `*ok` stays NO: a grid's extent when it is a constant. Mirrored in the port.
+static int64_t parFoldConstant(XTASTNode* e, BOOL* ok)
+    {
+    if ([e isKindOfClass:[XTLiteralIntNode class]])
+        {
+        *ok = YES;
+        return ((XTLiteralIntNode*)e).intValue;
+        }
+    if ([e isKindOfClass:[XTCastExprNode class]])
+        return parFoldConstant(((XTCastExprNode*)e).operand, ok);
+    if ([e isKindOfClass:[XTBinaryExprNode class]])
+        {
+        XTBinaryExprNode* b = (XTBinaryExprNode*)e;
+        BOOL okl = NO, okr = NO;
+        int64_t l = parFoldConstant(b.left, &okl);
+        int64_t r = parFoldConstant(b.right, &okr);
+        if (okl && okr && (b.op == XTBinaryOpAdd || b.op == XTBinaryOpSub || b.op == XTBinaryOpMul))
+            {
+            *ok = YES;
+            return b.op == XTBinaryOpAdd ? l + r : b.op == XTBinaryOpSub ? l - r : l * r;
+            }
+        }
+    *ok = NO;
+    return 0;
+    }
+
 // The element type when t is a pointer to numbers (an integer, float, double
 // or bool; not an enum, which the port knows by name only), else nil. Such a
 // capture, `simd:` or plain, is a GPU buffer sized at run time by the block it
@@ -1742,6 +1769,18 @@ static NSString* parRootName(XTASTNode* n)
         // printer binds in the constant address space.
         for (NSString* cn in constants)
             [tagText appendFormat:@"c%lu;", (unsigned long)(3 + [caps indexOfObject:cn])];
+        // …and a grid's width and height when they are constants (`gw=640;
+        // gh=480;`): par-check then reads `640 * y + x` as the point's flat
+        // index, which `W * y + x` with the captured width already is.
+        NSArray<XTASTNode*>* gridExprs = frame[@"grid"];
+        if (gridExprs.count >= 2)
+            {
+            BOOL okW = NO, okH = NO;
+            int64_t gw = parFoldConstant(gridExprs[0], &okW);
+            int64_t gh = parFoldConstant(gridExprs[1], &okH);
+            if (okW && okH && gw > 0 && gh > 0)
+                [tagText appendFormat:@"gw=%lld;gh=%lld;", gw, gh];
+            }
         XTASTNode* lit = [[XTLiteralStringNode alloc] initWithString:tagText location:loc];
         XTBlockNode* b = [[XTBlockNode alloc]
             initWithStatements:@[ [[XTReturnNode alloc] initWithValues:@[ lit ] location:loc] ]

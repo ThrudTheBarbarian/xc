@@ -2991,6 +2991,64 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
     return t >= XTTokenAssign && t <= XTTokenCaretAssign;
     }
 
+// The index just past the statement that starts at `from` (its `;`, or the
+// `}` of its block): a block, an `if` with its `else`, a `for`, `while` or
+// `switch` and its body, `do S while (…);`, else the `;` at depth 0. 0 when
+// the tokens run out. Mirrored in the port.
+- (NSUInteger)parAutoStatementEnd:(NSUInteger)from limit:(NSUInteger)n
+    {
+    XTTokenType t = [self parTokType:from];
+    if (t == XTTokenLBrace)
+        {
+        NSUInteger d = 0;
+        for (NSUInteger i = from; i < n; i++)
+            {
+            XTTokenType ty = [self parTokType:i];
+            if (ty == XTTokenLBrace)
+                d++;
+            else if (ty == XTTokenRBrace && --d == 0)
+                return i;
+            }
+        return 0;
+        }
+    if (t == XTTokenIf || t == XTTokenFor || t == XTTokenWhile || t == XTTokenSwitch)
+        {
+        // The parenthesised head, then the statement; `if` may go on with `else`.
+        if ([self parTokType:from + 1] != XTTokenLParen)
+            return 0;
+        NSUInteger d = 0;
+        NSUInteger i = from + 1;
+        for (; i < n; i++)
+            {
+            XTTokenType ty = [self parTokType:i];
+            if (ty == XTTokenLParen)
+                d++;
+            else if (ty == XTTokenRParen && --d == 0)
+                break;
+            }
+        if (i >= n)
+            return 0;
+        NSUInteger e = [self parAutoStatementEnd:i + 1 limit:n];
+        if (e == 0)
+            return 0;
+        if (t == XTTokenIf && [self parTokType:e + 1] == XTTokenElse)
+            return [self parAutoStatementEnd:e + 2 limit:n];
+        return e;
+        }
+    NSUInteger d = 0;
+    for (NSUInteger i = from; i < n; i++)
+        {
+        XTTokenType ty = [self parTokType:i];
+        if (ty == XTTokenLParen || ty == XTTokenLBracket || ty == XTTokenLBrace)
+            d++;
+        else if (ty == XTTokenRParen || ty == XTTokenRBracket || ty == XTTokenRBrace)
+            d--;
+        else if (ty == XTTokenSemicolon && d == 0)
+            return i;
+        }
+    return 0;
+    }
+
 // The scan behind parAutoFor: the cursor is at the `for`. Fills `reds`
 // (op, name pairs) and says whether the loop qualifies.
 - (BOOL)parAutoScan:(NSMutableArray<NSArray<NSString*>*>*)reds goal:(NSUInteger*)goalOut
@@ -3137,24 +3195,16 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         }
     else
         {
+        // One statement, to its end: `if (…) S [else S]`, `for (…) S`,
+        // `while (…) S` and `switch (…) {…}` as well as `…;` (from 0.8.1).
         XTTokenType first = [self parTokType:pe + 1];
-        if (first == XTTokenIf || first == XTTokenFor || first == XTTokenWhile || first == XTTokenSwitch ||
-            first == XTTokenSemicolon || first == XTTokenEOF)
+        if (first == XTTokenSemicolon || first == XTTokenEOF)
             return NO;
         bs = pe + 1;
-        for (NSUInteger i = pe + 1; i < n; i++)
-            {
-            XTTokenType ty = [self parTokType:i];
-            if (ty == XTTokenLParen || ty == XTTokenLBracket || ty == XTTokenLBrace)
-                depth++;
-            else if (ty == XTTokenRParen || ty == XTTokenRBracket || ty == XTTokenRBrace)
-                depth--;
-            else if (ty == XTTokenSemicolon && depth == 0)
-                {
-                be = i;
-                break;
-                }
-            }
+        NSUInteger end = [self parAutoStatementEnd:pe + 1 limit:n];
+        if (end == 0)
+            return NO;
+        be = end;
         }
     if (be == 0)
         return NO;
@@ -3401,11 +3451,19 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
     XTVariableDeclNode* iv1 = nil;
     XTBinaryExprNode* cond1 = nil;
     XTForCStyleNode* outer = parAutoAscending(node, &iv1, &cond1);
-    if (!outer || ![outer.body isKindOfClass:[XTBlockNode class]] || ((XTBlockNode*)outer.body).statements.count != 1)
+    if (!outer)
         return nil;
+    // The inner loop: the outer body's one statement, braced or not.
+    XTASTNode* innerNode = outer.body;
+    if ([innerNode isKindOfClass:[XTBlockNode class]])
+        {
+        if (((XTBlockNode*)innerNode).statements.count != 1)
+            return nil;
+        innerNode = ((XTBlockNode*)innerNode).statements[0];
+        }
     XTVariableDeclNode* iv2 = nil;
     XTBinaryExprNode* cond2 = nil;
-    XTForCStyleNode* inner = parAutoAscending(((XTBlockNode*)outer.body).statements[0], &iv2, &cond2);
+    XTForCStyleNode* inner = parAutoAscending(innerNode, &iv2, &cond2);
     if (!inner || !parAutoBoundFree(iv2.initialiser, iv1.varName) || !parAutoBoundFree(cond2.right, iv1.varName))
         return nil;
     XTType* i64T = [self.typeTable typeForName:@"i64"];

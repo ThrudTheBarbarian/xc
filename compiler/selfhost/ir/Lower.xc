@@ -14198,6 +14198,7 @@ class ClassInfo
             // An auto block (--par-auto made it from a plain loop) the check
             // would refuse is demoted to a serial run instead, with a warning.
             bool isAuto = parIsAutoBlock(cls.substringBytes((u32)8, cls.byteLength() - (u32)8));
+            parReadGridWords(cls.substringBytes((u32)8, cls.byteLength() - (u32)8));
             String* why = (String*)0;
             // A captured class instance, String, Array, Map or block is an owned
             // ivar of the block's class, so its dealloc releases it.
@@ -14265,6 +14266,55 @@ class ClassInfo
     // Whether block <n> (its class ParImpl$<n>) is one --par-auto made from a
     // plain loop: its GPU placeholder literal carries `auto;` after the tag.
     // Mirrors the reference's isAutoBlock.
+    // The grid's constant width and height for block n, from its placeholder's
+    // `gw=`/`gh=` words (0 when absent): set for the dependence test, which
+    // runs before the printers' pass reads the words again. As the reference.
+    void parReadGridWords(String* n)
+        {
+        _mGridW = (i64)0;
+        _mGridH = (i64)0;
+        String* plain = String.withCString("__XC_PAR_MSL_");
+        plain.append(n);
+        plain.appendCString("__");
+        String* fastTag = String.withCString("__XC_PAR_FAST_");
+        fastTag.append(n);
+        fastTag.appendCString("__");
+        for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
+            {
+            IRSymbol* sym = (IRSymbol*)_m.syms().get(j);
+            if (sym.kind() != (u8)SYM_STRINGLIT || sym.bytes() == (Array*)0)
+                continue;
+            String* tag = (String*)0;
+            if (parBytesHavePrefix(sym.bytes(), fastTag)) tag = fastTag;
+            else if (parBytesHavePrefix(sym.bytes(), plain)) tag = plain;
+            if (tag == (String*)0)
+                continue;
+            String* key = new String();
+            String* val = new String();
+            bool inVal = false;
+            for (u32 q = tag.byteLength(); q < sym.bytes().count(); q = q + (u32)1)
+                {
+                u8 c = (u8)((Number*)sym.bytes().get(q)).asU32();
+                if (c == (u8)0)
+                    break;
+                if (c == (u8)';')
+                    {
+                    if (inVal && key.equals(String.withCString("gw"))) _mGridW = parWordI64(val);
+                    if (inVal && key.equals(String.withCString("gh"))) _mGridH = parWordI64(val);
+                    key = new String();
+                    val = new String();
+                    inVal = false;
+                    }
+                else if (c == (u8)'=' && !inVal)
+                    inVal = true;
+                else if (inVal)
+                    val.appendByte(c);
+                else
+                    key.appendByte(c);
+                }
+            return;
+            }
+        }
     bool parIsAutoBlock(String* n)
         {
         String* plain = String.withCString("__XC_PAR_MSL_");
@@ -14524,6 +14574,16 @@ class ClassInfo
         return out;
         }
 
+    // The decimal value of a placeholder word (`gw=640`).
+    static i64 parWordI64(String* s)
+        {
+        i64 v = (i64)0;
+        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
+            if (s.byteAt(i) >= (u8)'0' && s.byteAt(i) <= (u8)'9')
+                v = v * (i64)10 + (i64)(s.byteAt(i) - (u8)'0');
+        return v;
+        }
+
     i64 parCoef(Map* p, String* m)
         {
         Number* v = (Number*)p.get((Hashable*)m);
@@ -14679,6 +14739,29 @@ class ClassInfo
             return ParIdx.of(false, (i64)0, (i64)0);
         i64 c = parCoef(p, String.withCString(""));
         p.remove((Hashable*)String.withCString(""));
+        // A constant grid: `640 * y + x` is the flat index as `W * y + x` is
+        // (the reference's parRenameConstantGrid).
+        if (_mGridW > (i64)0)
+            {
+            i64 cy = parCoef(p, String.withCString("y"));
+            if (cy != (i64)0 && cy % _mGridW == (i64)0)
+                {
+                p.set((Hashable*)String.withCString("Wy"), (Object*)Number.with(parCoef(p, String.withCString("Wy")) + cy / _mGridW));
+                p.remove((Hashable*)String.withCString("y"));
+                }
+            i64 cq = parCoef(p, String.withCString("q"));
+            if (cq != (i64)0 && cq % _mGridW == (i64)0)
+                {
+                p.set((Hashable*)String.withCString("Wq"), (Object*)Number.with(parCoef(p, String.withCString("Wq")) + cq / _mGridW));
+                p.remove((Hashable*)String.withCString("q"));
+                }
+            i64 cz = parCoef(p, String.withCString("z"));
+            if (threeD && _mGridH > (i64)0 && cz != (i64)0 && cz % (_mGridW * _mGridH) == (i64)0)
+                {
+                p.set((Hashable*)String.withCString("HWz"), (Object*)Number.with(parCoef(p, String.withCString("HWz")) + cz / (_mGridW * _mGridH)));
+                p.remove((Hashable*)String.withCString("z"));
+                }
+            }
         Array* forms = new Array();
         forms.add((Object*)parForm("i", (string)0, (string)0));
         forms.add((Object*)parForm("Wq", "x", (string)0));
@@ -15089,6 +15172,8 @@ class ClassInfo
     u32 _lnRedOff;          // byte offset of the reduction field in the chunk
     Map* _mRedOps;          // each reduction field's operator, by field index (String), from the placeholder (bug 645), or 0
     Map* _mConst;           // the :constant capture fields, by field index (String), from the placeholder's `c<field>;` words
+    i64 _mGridW;            // a grid's constant width and height from the placeholder's `gw=`/`gh=` words, else 0
+    i64 _mGridH;
     // The static-init guard of a class the kernel calls (Math, say): value seq
     // of the AddrOf naming its flag ("1"), its init function or its static
     // data ("0"). The host ran every init before the block started, so the
@@ -21720,6 +21805,8 @@ class ClassInfo
             // The block's reductions, after the tag: `<field>=<op>;` each (bug 645).
             _mRedOps = (Map*)0;
             _mConst = new Map();
+            _mGridW = (i64)0;
+            _mGridH = (i64)0;
             for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
                 {
                 IRSymbol* ls = (IRSymbol*)_m.syms().get(j);
@@ -21739,7 +21826,11 @@ class ClassInfo
                     u8 c = (u8)((Number*)ls.bytes().get(q)).asU32();
                     if (c == (u8)';')
                         {
-                        if (key.byteLength() > (u32)0 && inVal)
+                        if (key.byteLength() > (u32)0 && inVal && key.equals(String.withCString("gw")))
+                            _mGridW = parWordI64(val);
+                        else if (key.byteLength() > (u32)0 && inVal && key.equals(String.withCString("gh")))
+                            _mGridH = parWordI64(val);
+                        else if (key.byteLength() > (u32)0 && inVal)
                             _mRedOps.set((Hashable*)key, (Object*)val);
                         // `c<field>`: a :constant capture (storage hints).
                         else if (key.byteLength() > (u32)1 && !inVal && key.byteAt((u32)0) == (u8)'c')

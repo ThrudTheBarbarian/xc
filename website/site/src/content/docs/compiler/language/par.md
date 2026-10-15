@@ -89,7 +89,9 @@ Points are numbered with `x` changing fastest, so `par.y * par.width + par.x`
 (or `(par.z * par.height + par.y) * par.width + par.x` in 3-D) is the work
 item's own element of a row-major array. The compiler knows that index is
 different for every work item, so writing through it needs no warning (see
-[Independent work items](#independent-work-items)).
+[Independent work items](#independent-work-items)); from 0.8.1 the same holds
+when the grid's size is a constant and the index spells it out, as
+`par.y * 640 + par.x` under `:grid(640, 480)` does.
 
 A grid block has the same limits as the loop form (see
 [What a body may contain](#what-a-body-may-contain)). It runs on the CPU's threads or on the GPU in the same way.

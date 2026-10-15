@@ -183,6 +183,13 @@ echo "----------------------------------------------------------------"
 echo "PASS $PASS / $((PASS+FAIL)) applicable-and-built   (N/A $NA, no-oracle $NOORACLE)"
 [ -n "$CFAILS" ] && echo "compile-fail:$CFAILS"
 [ -n "$FAILS" ]  && echo "run-fail:$FAILS"
+# What a failing run printed, so a gate log says WHY and not only which (the
+# build directory is gone by the time anyone reads it).
+for b in $FAILS; do
+  echo "--- $b: rc=$(tr -d '\r\n ' < "$BUILD/out/$b.rc" 2>/dev/null) ---"
+  tr -d '\r' < "$BUILD/out/$b.out" 2>/dev/null | head -12
+  [ -s "$BUILD/out/$b.err" ] && { echo "--- $b stderr ---"; tr -d '\r' < "$BUILD/out/$b.err" | head -6; }
+done
 [ -n "$CRLF" ]   && echo "crlf (C printf, text mode):$CRLF"
 KEEP="${KEEP_BUILD:-}"; [ -n "$KEEP" ] && echo "build kept at $BUILD" || rm -rf "$BUILD"
 [ $FAIL -eq 0 ] && [ $CFAIL -eq 0 ]

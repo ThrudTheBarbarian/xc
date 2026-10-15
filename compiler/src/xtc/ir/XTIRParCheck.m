@@ -85,6 +85,11 @@ static NSString* shownName(NSString* irName)
 @property(nonatomic) NSMutableDictionary<NSString*, NSString*>* verdict; // fn -> reason, @"" = clean
 @end
 
+// A grid's constant width and height for the block being checked (its
+// placeholder's `gw=`/`gh=` words), read by readGridWords: below.
+static int64_t gParGridW = 0;
+static int64_t gParGridH = 0;
+
 @implementation XTIRParCheck
 
 static BOOL gEmitsMetal = NO;
@@ -240,6 +245,8 @@ static BOOL gEmitsWGSL = NO;
         // The block's reductions, after the tag: `<field>=<op>;` each (bug 645).
         NSMutableDictionary<NSNumber*, NSString*>* redOps = nil;
         NSMutableIndexSet* constFields = [NSMutableIndexSet indexSet];
+        gParGridW = 0;
+        gParGridH = 0;
         NSUInteger litEnd = lit.length;
         while (litEnd > tag.length && ((const uint8_t*)lit.bytes)[litEnd - 1] == 0)
             litEnd--;
@@ -257,6 +264,9 @@ static BOOL gEmitsWGSL = NO;
                     [constFields addIndex:(NSUInteger)[pair substringFromIndex:1].integerValue];
                     continue;
                     }
+                // `gw=<n>` / `gh=<n>`: a grid's constant width and height.
+                if ([pair hasPrefix:@"gw="]) { gParGridW = [pair substringFromIndex:3].longLongValue; continue; }
+                if ([pair hasPrefix:@"gh="]) { gParGridH = [pair substringFromIndex:3].longLongValue; continue; }
                 NSRange eq = [pair rangeOfString:@"="];
                 if (eq.location == NSNotFound || eq.location == 0)
                     continue;
@@ -406,6 +416,7 @@ static BOOL gEmitsWGSL = NO;
             continue;
         NSString* cls = [f.name substringToIndex:f.name.length - 4];
         BOOL isAuto = [self isAutoBlock:module number:[cls substringFromIndex:8]];
+        [self readGridWords:module number:[cls substringFromIndex:8]];
         NSString* why = nil;
         // A captured class instance, String, Array, Map or block is an owned
         // ivar of the block's class, so its dealloc releases it.
@@ -473,6 +484,42 @@ static BOOL gEmitsWGSL = NO;
     if (ok)
         [self fillSourcesIn:module classDecls:classDecls diagnostics:diag serial:serial];
     return ok;
+    }
+
+// The grid's constant width and height for block <n>, from its placeholder's
+// `gw=`/`gh=` words (0 when absent): set for the dependence test, which runs
+// before the printers' pass reads the words again.
++ (void)readGridWords:(XTIRModule*)module number:(NSString*)n
+    {
+    gParGridW = 0;
+    gParGridH = 0;
+    NSData* plain = [[NSString stringWithFormat:@"__XC_PAR_MSL_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
+    NSData* fastTag = [[NSString stringWithFormat:@"__XC_PAR_FAST_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
+    for (XTIRSymbol* sym in module.symbols)
+        {
+        NSData* b = sym.stringBytes;
+        if (sym.kind != XTIRSymbolKindStringLit)
+            continue;
+        NSData* tag = nil;
+        if (b.length >= fastTag.length && memcmp(b.bytes, fastTag.bytes, fastTag.length) == 0)
+            tag = fastTag;
+        else if (b.length >= plain.length && memcmp(b.bytes, plain.bytes, plain.length) == 0)
+            tag = plain;
+        if (!tag)
+            continue;
+        NSUInteger end = b.length;
+        while (end > tag.length && ((const uint8_t*)b.bytes)[end - 1] == 0)
+            end--;
+        NSString* rest = end > tag.length ? [[NSString alloc] initWithBytes:(const char*)b.bytes + tag.length
+                                                                      length:end - tag.length
+                                                                    encoding:NSUTF8StringEncoding] : @"";
+        for (NSString* pair in [rest componentsSeparatedByString:@";"])
+            {
+            if ([pair hasPrefix:@"gw="]) gParGridW = [pair substringFromIndex:3].longLongValue;
+            if ([pair hasPrefix:@"gh="]) gParGridH = [pair substringFromIndex:3].longLongValue;
+            }
+        return;
+        }
     }
 
 // Whether block <n> (its class ParImpl$<n>) is one --par-auto made from a
@@ -686,6 +733,31 @@ typedef struct
         }
     }
 
+// A grid's width and height when the block's placeholder says they are
+// constants (`gw=`, `gh=`): `640 * y + x` is then the point's flat index as
+// `W * y + x` with the captured width is, so the term is renamed before the
+// forms are matched. Mirrored in the port.
+static void parRenameConstantGrid(NSMutableDictionary<NSString*, NSNumber*>* p, BOOL threeD)
+    {
+    if (gParGridW <= 0)
+        return;
+    for (NSArray<NSString*>* m in @[ @[ @"y", @"W.y" ], @[ @"q", @"W.q" ] ])
+        {
+        int64_t c = [p[m[0]] longLongValue];
+        if (c != 0 && c % gParGridW == 0)
+            {
+            p[m[1]] = @([p[m[1]] longLongValue] + c / gParGridW);
+            [p removeObjectForKey:m[0]];
+            }
+        }
+    int64_t cz = [p[@"z"] longLongValue];
+    if (threeD && gParGridH > 0 && cz != 0 && cz % (gParGridW * gParGridH) == 0)
+        {
+        p[@"H.W.z"] = @([p[@"H.W.z"] longLongValue] + cz / (gParGridW * gParGridH));
+        [p removeObjectForKey:@"z"];
+        }
+    }
+
 // The index as k*i + c when its polynomial is k times the flat index of the
 // point, plus a constant: i itself, or x + W*q, and x + W*y in a 2-D grid
 // (y == q there) or x + W*y + W*H*z in a 3-D one (q == y + H*z). A block with
@@ -702,6 +774,7 @@ typedef struct
     int64_t c = [p[@""] longLongValue];
     [p removeObjectForKey:@""];
     BOOL threeD = [ivars containsObject:@"par$d"];
+    parRenameConstantGrid(p, threeD);
     NSArray<NSArray<NSString*>*>* forms = threeD ? @[ @[ @"i" ], @[ @"W.q", @"x" ], @[ @"H.W.z", @"W.y", @"x" ] ]
                                                  : @[ @[ @"i" ], @[ @"W.q", @"x" ], @[ @"W.y", @"x" ] ];
     for (NSArray<NSString*>* form in forms)
