@@ -566,6 +566,10 @@ program that names no remote sends nothing on the network. `xcd -no-mdns`
 keeps a daemon off the air; it is still reachable by address. One subnet
 only: multicast does not cross routers or VPNs.
 
+A daemon that goes away mid-run costs the run nothing but time: the tiles it
+held are handed to the other workers, and a tile is the same wherever it
+runs, so the answer is the one a local run gives.
+
 What pays: blocks with a lot of work per byte moved (deep fractals, searches,
 batched scoring) on a fast link. A streaming block moves more than it computes
 and loses to the link, and `auto` measures that and keeps the local devices.

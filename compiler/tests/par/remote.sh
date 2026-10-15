@@ -69,6 +69,21 @@ else
 fi
 kill $XCD3 2> /dev/null
 wait $XCD3 2> /dev/null
+# A daemon that dies mid-run: its tiles are re-issued to the other workers
+# and the answer is still the local run's.
+PORT4=$((PORT + 3))
+XC_PAR_REPORT=1 XC_PAR_DIE_AFTER=2 "$L/xcd" -port $PORT4 -no-mdns > "$L/xcd4.log" 2>&1 &
+XCD4=$!
+sleep 1
+mkdir -p "$L/st_die"
+XCC_SETTINGS_DIR="$L/st_die" XC_PAR_REMOTE=127.0.0.1:$PORT4 XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/die.out" 2>&1
+if grep -v '^par:' "$L/die.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && grep -q "re-issued" "$L/die.out"; then
+    echo "PASS remote lost worker"
+else
+    echo "FAIL remote lost worker"; grep -v '^par:' "$L/die.out" | diff - "tests/fixtures/$f.expected.out" | head -3; grep -i 'remote\|re-issued\|lost' "$L/die.out" | head -4; rc=1
+fi
+kill $XCD4 2> /dev/null
+wait $XCD4 2> /dev/null
 [ $rc = 0 ] && rm -rf "$L"
 echo "--- remote: $([ $rc = 0 ] && echo pass || echo FAIL) ---"
 exit $rc

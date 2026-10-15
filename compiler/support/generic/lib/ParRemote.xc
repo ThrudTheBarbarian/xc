@@ -278,6 +278,8 @@ class ParRemoteWorker : ParWorker
     ParLayout* _l;
     u32 _inFlight;
     Array* _tiles;          // ParTile, by their order of taking
+    Array* _lostTiles;      // tiles in flight when the connection died, for lost()
+    bool _dead;             // the connection died
     // What the daemon last answered holds() for, so a block is asked once.
     pointer _heldSrc;
     bool _held;
@@ -461,7 +463,30 @@ class ParRemoteWorker : ParWorker
         if (_s != (Socket*)0)
             _s.close();
         _identity = new String();
+        _dead = true;
+        // The tiles it was running are never coming back: the queue
+        // re-issues them (a tile is idempotent: its writes are its own
+        // slices, its partials are folded only once it is done).
+        if (_tiles != (Array*)0 && _tiles.count() > (u32)0)
+            {
+            if (_lostTiles == (Array*)0)
+                _lostTiles = new Array();
+            for (u32 i = (u32)0; i < _tiles.count(); i = i + (u32)1)
+                _lostTiles.add(_tiles.get(i));
+            _tiles = new Array();
+            }
+        _inFlight = (u32)0;
         return false;
+        }
+    Array* lost(void)
+        {
+        Array* l = _lostTiles;
+        _lostTiles = (Array*)0;
+        return l;
+        }
+    bool dead(void)
+        {
+        return _dead;
         }
 
     String* identity(void)
@@ -1022,6 +1047,17 @@ class ParRemoteServe
         ParWorker* w = (ParWorker*)0;
         Array* pending = new Array();   // tiles sent and not yet taken
         u32 inFlight = (u32)0;
+        // XC_PAR_DIE_AFTER=<n>: the connection is dropped after n tiles have
+        // been taken — the test of a program surviving a lost worker.
+        i64 dieAfter = (i64)-1;
+        String* dieV = Platform.env(String.withCString("XC_PAR_DIE_AFTER"));
+        if (dieV.byteLength() > (u32)0)
+            {
+            dieAfter = (i64)0;
+            for (u32 i = (u32)0; i < dieV.byteLength(); i = i + (u32)1)
+                dieAfter = dieAfter * (i64)10 + (i64)(dieV.byteAt(i) - (u8)'0');
+            }
+        i64 taken = (i64)0;
         while (s.isOpen())
             {
             // Hand pending tiles to the worker while it has room; collect
@@ -1036,6 +1072,13 @@ class ParRemoteServe
                         break;
                     pending.removeAt((u32)0);
                     inFlight = inFlight + (u32)1;
+                    taken = taken + (i64)1;
+                    if (dieAfter >= (i64)0 && taken >= dieAfter)
+                        {
+                        Log.info("xcd: dropping the connection after %ld tiles (XC_PAR_DIE_AFTER)", taken);
+                        s.close();
+                        break;
+                        }
                     }
                 ParTile* d = w.poll();
                 while (d != (ParTile*)0)

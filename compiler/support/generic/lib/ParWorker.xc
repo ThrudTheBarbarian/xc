@@ -114,6 +114,19 @@ class ParWorker : Object
     void drain(void)
         {
         }
+    // Tiles this worker took and will never finish (its connection died),
+    // handed back once for the queue to give to another worker; null when
+    // none. A local worker loses none.
+    Array* lost(void)
+        {
+        return (Array*)0;
+        }
+    // Whether the worker is gone for good (a remote whose connection died):
+    // the queue stops waiting on it.
+    bool dead(void)
+        {
+        return false;
+        }
     }
 
 #if !(ARCH_6502 || ARCH_m68k || ARCH_wasm32)

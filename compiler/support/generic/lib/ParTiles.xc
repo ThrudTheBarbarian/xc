@@ -437,13 +437,34 @@ class ParTiles
                     firstTake[i] = ParDevice.nowUs() - us;
                     }
                 }
+        // Tiles a worker took and lost (its connection died) go out again,
+        // before the ones not yet handed out: a tile is idempotent.
+        Array* again = new Array();
+        i64 reissued = (i64)0;
         while (folded < ntiles)
             {
             for (u32 i = (u32)0; i < nw; i = i + (u32)1)
-                full[i] = false;
-            while (next < ntiles)
                 {
-                ParTile* pt = (ParTile*)tiles.get((u32)next);
+                full[i] = false;
+                Array* lostT = ((ParWorker*)ws.get(i)).lost();
+                if (lostT == (Array*)0)
+                    continue;
+                for (u32 k = (u32)0; k < lostT.count(); k = k + (u32)1)
+                    {
+                    ParTile* lt = (ParTile*)lostT.get(k);
+                    lt.done = false;
+                    lt.worker = (ParWorker*)0;
+                    lt.partial = (ParChunk*)0;
+                    inFlight = inFlight - (u32)1;
+                    inItems[i] = inItems[i] - (lt.hi - lt.lo);
+                    again.add((Object*)lt);
+                    reissued = reissued + (i64)1;
+                    }
+                }
+            while (next < ntiles || again.count() > (u32)0)
+                {
+                bool fromAgain = again.count() > (u32)0;
+                ParTile* pt = fromAgain ? (ParTile*)again.get((u32)0) : (ParTile*)tiles.get((u32)next);
                 i64 items = pt.hi - pt.lo;
                 i64 now = ParDevice.nowUs();
                 i64 best = (i64)-1;
@@ -524,7 +545,10 @@ class ParTiles
                     Log.info("par: tile %ld [%ld, %ld) -> %s (would finish in %ld us) at +%ld us",
                              pt.index, pt.lo, pt.hi, w.identity().cString(), bestAt, now - started);
                 inItems[best] = inItems[best] + items;
-                next = next + (i64)1;
+                if (fromAgain)
+                    again.removeAt((u32)0);
+                else
+                    next = next + (i64)1;
                 inFlight = inFlight + (u32)1;
                 }
             // Collect what finished; fold in tile order.
@@ -550,13 +574,21 @@ class ParTiles
                 d.partial = (ParChunk*)0;
                 folded = folded + (i64)1;
                 }
-            if (!got && inFlight == (u32)0 && next >= ntiles && folded < ntiles)
+            if (!got && inFlight == (u32)0 && next >= ntiles && again.count() == (u32)0 && folded < ntiles)
                 break; // nothing in flight and nothing finishing: cannot happen, but do not spin
             // Tiles remain, nothing is in flight and no worker is ready (every
             // remote in its nimby window, say): wait a little rather than
-            // spin, and ask again.
-            if (!got && inFlight == (u32)0 && next < ntiles)
+            // spin, and ask again — unless every worker is gone for good.
+            if (!got && inFlight == (u32)0 && (next < ntiles || again.count() > (u32)0))
+                {
+                bool anyAlive = false;
+                for (u32 i = (u32)0; i < nw; i = i + (u32)1)
+                    if (!((ParWorker*)ws.get(i)).dead())
+                        anyAlive = true;
+                if (!anyAlive)
+                    break;
                 Thread.sleepMs((u32)1);
+                }
             }
         for (u32 i = (u32)0; i < ws.count(); i = i + (u32)1)
             {
@@ -564,6 +596,8 @@ class ParTiles
             ((ParWorker*)ws.get(i)).finish();
             }
         i64 took = ParDevice.nowUs() - started;
+        if (reissued > (i64)0 && ParDevice.reporting())
+            Log.info("par: %s: %ld tile(s) re-issued after a worker was lost", proto.parName(), reissued);
         // The fastest worker's rate, for the next run's tile sizing.
         i64 ended = ParDevice.nowUs();
         for (u32 i = (u32)0; i < nw; i = i + (u32)1)
