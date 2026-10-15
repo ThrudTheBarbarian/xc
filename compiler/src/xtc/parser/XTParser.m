@@ -3296,6 +3296,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         [self advance];
         }
     NSMutableArray<NSArray<NSString*>*>* reductions = [NSMutableArray array];
+    NSMutableArray<NSString*>* constants = [NSMutableArray array];   // :constant(a, b): captured arrays the GPU reads as constants
     // :goal(speed) (the default) or :goal(accuracy): what the block's GPU
     // version favours.
     BOOL accuracy = NO;
@@ -3354,11 +3355,32 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
                 return nil;
             continue;
             }
+        // :constant(a, b): the named captured arrays are read-only data the
+        // GPU may hold in its constant memory (par-blocks.md §3, storage
+        // hints): a hint, never a change of meaning; the CPU path ignores it.
+        if ([dec.value isEqualToString:@"constant"])
+            {
+            if (![self expect:XTTokenLParen])
+                return nil;
+            for (;;)
+                {
+                XTToken* nm = [self expect:XTTokenIdentifier];
+                if (!nm)
+                    return nil;
+                [constants addObject:nm.value];
+                if ([self currentToken].type != XTTokenComma)
+                    break;
+                [self advance];
+                }
+            if (![self expect:XTTokenRParen])
+                return nil;
+            continue;
+            }
         if (![dec.value isEqualToString:@"reduce"])
             {
             [_diagnostics emitError:[NSString stringWithFormat:@"'par' has no decorator ':%@' "
-                                                                 "(it takes :reduce(op var), :grid(w, h[, d]) "
-                                                                 "and :goal(speed|accuracy))",
+                                                                 "(it takes :reduce(op var), :grid(w, h[, d]), "
+                                                                 ":goal(speed|accuracy) and :constant(a, b))",
                                                                dec.value]
                                  at:dec.location];
             return nil;
@@ -3429,6 +3451,8 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
     // desugaring marks the block's GPU placeholder with it.
     if (!accuracy)
         frame[@"fast"] = @YES;
+    if (constants.count > 0)
+        frame[@"constant"] = constants;
     return [self parDesugarBody:body frame:frame name:name reductions:reductions at:loc];
     }
 

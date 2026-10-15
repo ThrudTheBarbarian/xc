@@ -572,7 +572,8 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
 // An address: device pointers are global, the block's own copy local.
 - (NSString*)ptxSpaceOf:(XTIROperand*)addr
     {
-    return [self.space[@(addr.valueId)] unsignedIntegerValue] == XTParSpaceDevice ? @"global" : @"local";
+    XTParSpace sp = (XTParSpace)[self.space[@(addr.valueId)] unsignedIntegerValue];
+    return sp == XTParSpaceDevice || sp == XTParSpaceConstant ? @"global" : @"local";
     }
 
 - (nullable NSString*)ptxStatement:(XTIRInsn*)i

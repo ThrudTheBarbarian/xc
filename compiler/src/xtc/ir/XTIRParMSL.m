@@ -69,12 +69,25 @@ static NSString* unsignedName(XTIRType* t)
     }
 
 static NSString* gParExtraMeta = nil;
+// The block's :constant captures, by field index (par-check reads them from
+// the placeholder's `c<field>;` words): bound in Metal's constant address
+// space, which is read-only and broadcast to every thread.
+static NSIndexSet* gParConstFields = nil;
+// How a pointer's address space is spelt.
+static NSString* spaceName(XTParSpace s)
+    {
+    return s == XTParSpaceDevice ? @"device" : s == XTParSpaceConstant ? @"constant" : @"thread";
+    }
 
 @implementation XTIRParMSL
 
 + (void)setExtraMeta:(nullable NSString*)words
     {
     gParExtraMeta = words;
+    }
++ (void)setConstantFields:(nullable NSIndexSet*)fields
+    {
+    gParConstFields = fields;
     }
 + (NSString*)extraMeta
     {
@@ -225,7 +238,7 @@ static BOOL isTranscendental(NSString* callee)
     NSString* inner = scalarName(t.pointeeType);
     if (!inner)
         return nil;
-    return [NSString stringWithFormat:@"%@ %@*", s == XTParSpaceDevice ? @"device" : @"thread", inner];
+    return [NSString stringWithFormat:@"%@ %@*", spaceName(s), inner];
     }
 
 // The field of the block object an address names, when it is `FieldAddr self, #k`.
@@ -289,7 +302,7 @@ static BOOL isTranscendental(NSString* callee)
                         return NO;
                         }
                     [self.bufferFields addIndex:(NSUInteger)k];
-                    self.space[@(r)] = @(XTParSpaceDevice);
+                    self.space[@(r)] = @([gParConstFields containsIndex:(NSUInteger)k] ? XTParSpaceConstant : XTParSpaceDevice);
                     self.bufferOf[@(r)] = @(k);
                     break;
                     }
@@ -960,7 +973,7 @@ static NSString* intrinsicFor(NSString* callee)
             if (!l || f < 0 || (NSUInteger)f >= l.fields.count)
                 return nil;
             return [NSString stringWithFormat:@"%@ = (%@)((%@ uchar*)%@ + %u);", r, pt,
-                                              s == XTParSpaceDevice ? @"device" : @"thread",
+                                              spaceName(s),
                                               [self name:i.operands[0].valueId], l.fields[(NSUInteger)f].byteOffset];
             }
         case XTIROpElementAddr:
@@ -1454,7 +1467,8 @@ static NSString* intrinsicFor(NSString* callee)
             return;
             }
         [meta appendFormat:@" buf=%u:%lu:%u", fl[k].byteOffset, (unsigned long)(k - 3), fl[k].type.pointeeType.byteWidth];
-        [params appendFormat:@", device %@* buf_%lu [[buffer(%lu)]]", et, (unsigned long)k, (unsigned long)slot++];
+        [params appendFormat:@", %@ %@* buf_%lu [[buffer(%lu)]]", [gParConstFields containsIndex:k] ? @"constant" : @"device",
+                             et, (unsigned long)k, (unsigned long)slot++];
     }];
     for (NSUInteger gi = 0; gi < self.globals.count; gi++)
         {

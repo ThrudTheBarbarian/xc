@@ -24,6 +24,8 @@ NS_ASSUME_NONNULL_BEGIN
 // (the buffers' footprints, par-tiles-and-devices.md step 1): set before
 // the printers run for a block, cleared after.
 + (void)setExtraMeta:(nullable NSString*)words;
+// The block's :constant captures by field index, for the next kernel printed.
++ (void)setConstantFields:(nullable NSIndexSet*)fields;
 + (NSString*)extraMeta;
 
 // The kernel's MSL, or nil when this block cannot run on Metal: it uses f64

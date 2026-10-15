@@ -2366,6 +2366,8 @@ class Parser
         // :grid(w, h[, d]): the work items are the points of a 2-D or 3-D
         // grid, and the body is any code, run once per point.
         Array* grid = (Array*)0;
+        // :constant(a, b): captured arrays the GPU reads as constants.
+        Array* constants = new Array();
         while (check((u16)tokColon)) {
             advance();
             if (!check((u16)tokIdentifier)) {
@@ -2412,10 +2414,27 @@ class Parser
                 expect((u16)tokRParen);
                 continue;
             }
+            // :constant(a, b): a hint, never a change of meaning (the
+            // reference explains); the CPU path ignores it.
+            if (dec.equals(String.withCString("constant"))) {
+                expect((u16)tokLParen);
+                for (;;) {
+                    if (!check((u16)tokIdentifier)) {
+                        _error(String.withCString("Expected identifier"));
+                        return (Node*)0;
+                    }
+                    constants.add((Object*)cur().value());
+                    advance();
+                    if (!check((u16)tokComma)) break;
+                    advance();
+                }
+                expect((u16)tokRParen);
+                continue;
+            }
             if (!dec.equals(String.withCString("reduce"))) {
                 String* m = String.withCString("'par' has no decorator ':");
                 m.append(dec);
-                m.appendCString("' (it takes :reduce(op var), :grid(w, h[, d]) and :goal(speed|accuracy))");
+                m.appendCString("' (it takes :reduce(op var), :grid(w, h[, d]), :goal(speed|accuracy) and :constant(a, b))");
                 _error(m);
                 return (Node*)0;
             }
@@ -2470,6 +2489,8 @@ class Parser
         // marks the block's GPU placeholder with it.
         if ((flags & (u32)1) == (u32)0)
             frame.set((Hashable*)String.withCString("fast"), (Object*)Number.with((u32)1));
+        if (constants.count() > (u32)0)
+            frame.set((Hashable*)String.withCString("constant"), (Object*)constants);
         _blkFrames.add((Object*)frame);
         blkPushScope();
         Node* body = parseBlock();
@@ -2923,6 +2944,23 @@ class Parser
                 return (Node*)0;
             }
         }
+        // :constant(a, b): each name a captured array, or pointer to numbers,
+        // the body only reads. As the reference.
+        Array* constants = (Array*)frame.get((Hashable*)String.withCString("constant"));
+        if (constants == (Array*)0) constants = new Array();
+        for (u32 i = (u32)0; i < constants.count(); i = i + (u32)1) {
+            String* cn = (String*)constants.get(i);
+            String* ct = (String*)frameTypes.get((Hashable*)cn);
+            bool isCap = false;
+            for (u32 q = (u32)0; q < caps.count(); q = q + (u32)1)
+                if (((String*)caps.get(q)).equals(cn)) isCap = true;
+            bool isArr = isCap && ct != (String*)0 && (ct.indexOfByte((u8)'[') != (u32)$FFFFFFFF || Parser.parPrimPointee(ct) != (String*)0);
+            if (!isArr || !Parser.parReadsOnly(frame, cn)) {
+                _errorAt(String.withFormat("':constant(%s)': '%s' is not an array the '%s' block only reads (a captured array or pointer to numbers, indexed and never written)",
+                                           cn.cString(), cn.cString(), label.cString()), parKeywordNode());
+                return (Node*)0;
+            }
+        }
 
         u32 counter = _parCounter;
         _parCounter = _parCounter + (u32)1;
@@ -3356,6 +3394,17 @@ class Parser
                 tag.appendCString("=");
                 tag.append(r.op());
                 tag.appendCString(";");
+            }
+            // …and `c<field>;` for each :constant capture (the Metal printer
+            // binds it in the constant address space).
+            for (u32 i = (u32)0; i < constants.count(); i = i + (u32)1) {
+                String* cn = (String*)constants.get(i);
+                for (u32 q = (u32)0; q < caps.count(); q = q + (u32)1)
+                    if (((String*)caps.get(q)).equals(cn)) {
+                        tag.appendCString("c");
+                        tag.append(String.withU32((u32)3 + q));
+                        tag.appendCString(";");
+                    }
             }
             Node* ret = mk((u16)nkReturn);
             ret.add(mkNamed((u16)nkStr, tag));

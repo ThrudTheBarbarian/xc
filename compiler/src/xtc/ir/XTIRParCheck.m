@@ -239,6 +239,7 @@ static BOOL gEmitsWGSL = NO;
         BOOL fast = tag == fastTag;
         // The block's reductions, after the tag: `<field>=<op>;` each (bug 645).
         NSMutableDictionary<NSNumber*, NSString*>* redOps = nil;
+        NSMutableIndexSet* constFields = [NSMutableIndexSet indexSet];
         NSUInteger litEnd = lit.length;
         while (litEnd > tag.length && ((const uint8_t*)lit.bytes)[litEnd - 1] == 0)
             litEnd--;
@@ -250,12 +251,19 @@ static BOOL gEmitsWGSL = NO;
             redOps = [NSMutableDictionary dictionary];
             for (NSString* pair in [rest componentsSeparatedByString:@";"])
                 {
+                // `c<field>`: a :constant capture (par-blocks.md §3, storage hints).
+                if (pair.length > 1 && [pair hasPrefix:@"c"] && [pair rangeOfString:@"="].location == NSNotFound)
+                    {
+                    [constFields addIndex:(NSUInteger)[pair substringFromIndex:1].integerValue];
+                    continue;
+                    }
                 NSRange eq = [pair rangeOfString:@"="];
                 if (eq.location == NSNotFound || eq.location == 0)
                     continue;
                 redOps[@([pair substringToIndex:eq.location].integerValue)] = [pair substringFromIndex:eq.location + 1];
                 }
             }
+        [XTIRParMSL setConstantFields:constFields];
         // The buffers' footprints, as words on the header line every printer
         // writes (step 1 of par-tiles-and-devices.md).
         XTIRParCheck* fc = [XTIRParCheck new];

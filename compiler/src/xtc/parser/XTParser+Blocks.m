@@ -1437,6 +1437,23 @@ static NSString* parRootName(XTASTNode* n)
         NSUInteger r = [frame[@"refs"][n] unsignedIntegerValue];
         return r > 0 && r == [frame[@"subBase"][n] unsignedIntegerValue] && ![frame[@"memWritten"] containsObject:n];
     };
+    // :constant(a, b): each name a captured array, or pointer to numbers,
+    // the body only reads — the GPU may then hold it in constant memory.
+    NSArray<NSString*>* constants = frame[@"constant"] ?: @[];
+    for (NSString* cn in constants)
+        {
+        XTType* ct = frameTypes[cn];
+        BOOL isArr = [caps containsObject:cn] && ([ct isKindOfClass:[XTArrayType class]] || parPrimPointee(ct) != nil);
+        if (!isArr || !readsOnly(cn))
+            {
+            [self.diagnostics emitError:[NSString stringWithFormat:@"':constant(%@)': '%@' is not an array the '%@' block only "
+                                                                     @"reads (a captured array or pointer to numbers, indexed "
+                                                                     @"and never written)",
+                                                                   cn, cn, label]
+                                     at:loc];
+            return nil;
+            }
+        }
     // gpuLength(k): the byte length of own ivar k when it is a captured array
     // (a GPU buffer), else -1. The GPU runtime sizes its buffers from this.
         {
@@ -1701,6 +1718,10 @@ static NSString* parRootName(XTASTNode* n)
             [tagText appendString:@"auto;"];
         for (NSUInteger j = 0; j < reductions.count; j++)
             [tagText appendFormat:@"%lu=%@;", (unsigned long)(3 + caps.count + j), reductions[j][0]];
+        // …and `c<field>;` for each :constant capture, which the Metal
+        // printer binds in the constant address space.
+        for (NSString* cn in constants)
+            [tagText appendFormat:@"c%lu;", (unsigned long)(3 + [caps indexOfObject:cn])];
         XTASTNode* lit = [[XTLiteralStringNode alloc] initWithString:tagText location:loc];
         XTBlockNode* b = [[XTBlockNode alloc]
             initWithStatements:@[ [[XTReturnNode alloc] initWithValues:@[ lit ] location:loc] ]

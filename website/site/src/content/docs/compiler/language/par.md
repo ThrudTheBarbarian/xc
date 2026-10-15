@@ -197,6 +197,29 @@ double, which Apple GPUs do not have
 `-Wno-par-gpu` turns the warning off, for a program that keeps some blocks on
 the CPU on purpose.
 
+### Read-only data the GPU broadcasts: `:constant`
+
+**From 0.8.1.** A block's header may name captured arrays the body only reads
+as constant data:
+
+```c
+u32 table[256];
+par lookup :constant(table)
+{
+    for (u32 i in 0..n)
+        ys[i] = table[xs[i] & (u32)255];
+}
+```
+
+A `:constant` array is bound in Metal's constant address space, which is
+read-only, cached and broadcast to every thread, the right home for a small
+table every item reads; the other GPU forms and the CPU path take it as any
+other read-only array. It is a hint, never a change of meaning: the result is
+the same with or without it. Each name must be a captured array, or a pointer
+to numbers, that the body indexes and never writes; anything else is refused
+at the `par`. Keep it small, a few kilobytes to a few tens: a constant buffer
+is cached, not streamed.
+
 ### Arrays the GPU shares: `simd:` pointers
 
 **From 0.8.1.** A block's arrays are copied to the GPU before a run and back

@@ -19,6 +19,7 @@ typedef NS_ENUM(uint8_t, XTParSpace) {
     XTParSpaceNone,
     XTParSpaceThread,
     XTParSpaceDevice,
+    XTParSpaceConstant,   // a :constant capture: read-only, broadcast (Metal `constant`)
 };
 
 @interface XTIRParMSL ()

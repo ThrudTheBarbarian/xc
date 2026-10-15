@@ -15084,6 +15084,7 @@ class ClassInfo
     IRValue* _lnCmpRes;     // the loop compare (skipped too)
     u32 _lnRedOff;          // byte offset of the reduction field in the chunk
     Map* _mRedOps;          // each reduction field's operator, by field index (String), from the placeholder (bug 645), or 0
+    Map* _mConst;           // the :constant capture fields, by field index (String), from the placeholder's `c<field>;` words
     // The static-init guard of a class the kernel calls (Math, say): value seq
     // of the AddrOf naming its flag ("1"), its init function or its static
     // data ("0"). The host ran every init before the block started, so the
@@ -15254,7 +15255,7 @@ class ClassInfo
         if (!mslIsPtr(t)) return (String*)0;
         String* inner = mslScalar(mslPointee(t));
         if (inner == (String*)0) return (String*)0;
-        String* s = String.withString(space != (String*)0 && space.equals(String.withCString("device")) ? String.withCString("device") : String.withCString("thread"));
+        String* s = mslSpaceName(space);
         s.appendCString(" ");
         s.append(inner);
         s.appendCString("*");
@@ -15272,6 +15273,18 @@ class ClassInfo
         if (b.kind() != (u8)OPK_USE || b.val() == (IRValue*)0 || _mDef.get((Hashable*)mslKey(b.val())) != (Object*)0 || k.kind() != (u8)OPK_IMMI)
             return (i64)-1;
         return k.imm();
+        }
+    // A :constant capture field (the placeholder's `c<field>;` words).
+    bool mslIsConst(i64 k)
+        {
+        return _mConst != (Map*)0 && _mConst.get((Hashable*)String.withI64(k)) != (Object*)0;
+        }
+    // How a pointer's address space is spelt: device, constant, else thread.
+    String* mslSpaceName(String* space)
+        {
+        if (space != (String*)0 && (space.equals(String.withCString("device")) || space.equals(String.withCString("constant"))))
+            return String.withString(space);
+        return String.withCString("thread");
         }
     String* mslSpaceOfOp(IROperand* op)
         {
@@ -15322,7 +15335,7 @@ class ClassInfo
                     i64 k = mslSelfField(mslDefOf((IROperand*)ip.ops().get((u32)0)));
                     if (k <= (i64)0) { parBecause(String.withCString("it reads a pointer from memory, which its GPU version cannot follow")); return false; }
                     _mBufs.set((Hashable*)String.withI64(k), (Object*)String.withCString("1"));
-                    _mSpace.set((Hashable*)mslKey(r), (Object*)String.withCString("device"));
+                    _mSpace.set((Hashable*)mslKey(r), (Object*)String.withCString(mslIsConst(k) ? "constant" : "device"));
                     _mBufOf.set((Hashable*)mslKey(r), (Object*)String.withI64(k));
                     }
                 else if (op.equals(String.withCString("ElementAddr")) || op.equals(String.withCString("Bitcast")))
@@ -15958,7 +15971,7 @@ class ClassInfo
             IROperand* fo = (IROperand*)ip.ops().get((u32)1);
             if (l == (IRLayout*)0 || fo.kind() != (u8)OPK_IMMI || fo.imm() < (i64)0 || fo.imm() >= (i64)l.fieldCount()) return (String*)0;
             String* e = String.withCString("("); e.append(pt); e.appendCString(")((");
-            e.appendCString(sp != (String*)0 && sp.equals(String.withCString("device")) ? "device" : "thread");
+            e.append(mslSpaceName(sp));
             e.appendCString(" uchar*)"); e.append(mslName(o0.val())); e.appendCString(" + "); e.append(String.withU32(l.offsetAt((u32)fo.imm()))); e.appendCString(")");
             return mslAssign(r, e);
             }
@@ -16447,7 +16460,7 @@ class ClassInfo
             if (et == (String*)0) return (String*)0;
             meta.appendCString(" buf="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":");
             meta.append(String.withU32(k - (u32)3)); meta.appendCString(":"); meta.append(String.withU32(mslWidth(pe)));
-            params.appendCString(", device "); params.append(et); params.appendCString("* buf_"); params.append(String.withU32(k));
+            params.appendCString(mslIsConst((i64)k) ? ", constant " : ", device "); params.append(et); params.appendCString("* buf_"); params.append(String.withU32(k));
             params.appendCString(" [[buffer("); params.append(String.withU32(slot)); params.appendCString(")]]");
             slot = slot + (u32)1;
             }
@@ -16817,7 +16830,7 @@ class ClassInfo
     String* ptxSpaceOf(IROperand* addr)
         {
         String* sp = mslSpaceOfOp(addr);
-        return sp != (String*)0 && sp.equals(ptxS("device")) ? ptxS("global") : ptxS("local");
+        return sp != (String*)0 && (sp.equals(ptxS("device")) || sp.equals(ptxS("constant"))) ? ptxS("global") : ptxS("local");
         }
 
     // "\t<op> <r>, <a>, <b>;\n"
@@ -21702,6 +21715,7 @@ class ClassInfo
             if (_mFast) tag = fastTag;
             // The block's reductions, after the tag: `<field>=<op>;` each (bug 645).
             _mRedOps = (Map*)0;
+            _mConst = new Map();
             for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
                 {
                 IRSymbol* ls = (IRSymbol*)_m.syms().get(j);
@@ -21723,6 +21737,9 @@ class ClassInfo
                         {
                         if (key.byteLength() > (u32)0 && inVal)
                             _mRedOps.set((Hashable*)key, (Object*)val);
+                        // `c<field>`: a :constant capture (storage hints).
+                        else if (key.byteLength() > (u32)1 && !inVal && key.byteAt((u32)0) == (u8)'c')
+                            _mConst.set((Hashable*)key.substringFromByte((u32)1), (Object*)String.withCString("1"));
                         key = new String();
                         val = new String();
                         inVal = false;
