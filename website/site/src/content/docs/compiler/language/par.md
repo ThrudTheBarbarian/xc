@@ -531,9 +531,11 @@ worker named `remote:<host>:<device>` in `auto`'s hardware key, so the choice
 learned with a remote present is kept apart from the one without. A run that
 `auto` (or `XC_PAR=gpus` / `all`) sends to the set splits its tiles across the
 local devices and the remote ones by their measured throughput, as it does
-between two cards in one box; a tile travels as its range, the block's
-arrays travel once per run, and the written slices and the reduction partials
-come back, folded in tile order, so the result is the one a local run gives.
+between two cards in one box; a tile travels as its range plus the slices it
+reads of every array whose footprint the compiler knows (as a discrete card's
+tile loop stages them), an array with no footprint travels once per run, and
+the written slices and the reduction partials come back, folded in tile
+order, so the result is the one a local run gives.
 
 The daemon runs GPU kernels only (it has none of the program's compiled code),
 and it needs the kernel form its GPU takes: build the program with

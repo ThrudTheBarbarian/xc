@@ -1,0 +1,39 @@
+#!/bin/bash
+# remote.sh — the par worker daemon on this machine, serving its GPU to two
+# programs over the loopback in turn (XC_PAR_REMOTE), each run on every
+# device at once (XC_PAR=all): the local GPU, the remote one and the CPU
+# pool. The answers must be the local run's. The second program is the one
+# that matters: the daemon has held a different block by then, and a worker
+# that remembered a compiled kernel by its source's address ran the first
+# program's kernel on the second's data (every remote tile wrong, 0.8.1).
+#
+#   XC=bin/osx/xcc-xc bash tests/par/remote.sh
+set -u
+XC=${XC:-bin/osx/xcc-xc}
+L=$(mktemp -d "${TMPDIR:-/tmp}/par-remote.XXXX")
+PORT=$((7300 + RANDOM % 500))
+rc=0
+if ! $XC -q -O2 -H . -o "$L/xcd" selfhost/tools/xcd.xc > "$L/xcd.build" 2>&1; then
+    echo "FAIL remote: xcd does not build"; cat "$L/xcd.build" | head -5; exit 1
+fi
+XC_PAR_REPORT=1 "$L/xcd" -port $PORT > "$L/xcd.log" 2>&1 &
+XCD=$!
+sleep 1
+for f in par_footprint par_simd_buffers par_grid_constant; do
+    if ! $XC -q -O2 -H . -fpar-kernels=all -o "$L/$f" "tests/fixtures/$f.xc" > "$L/$f.build" 2>&1; then
+        echo "FAIL remote: $f does not build"; rc=1; continue
+    fi
+    mkdir -p "$L/st_$f"
+    XCC_SETTINGS_DIR="$L/st_$f" XC_PAR_REMOTE=127.0.0.1:$PORT XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/$f.out" 2> "$L/$f.err"
+    if grep -v '^par:' "$L/$f.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null; then
+        echo "PASS remote $f"
+    else
+        echo "FAIL remote $f"; grep -v '^par:' "$L/$f.out" | diff - "tests/fixtures/$f.expected.out" | head -4; rc=1
+    fi
+done
+kill $XCD 2> /dev/null
+wait $XCD 2> /dev/null
+grep -q 'taken' "$L/xcd.log" || { echo "FAIL remote: the daemon took no block"; cat "$L/xcd.log" | head -5; rc=1; }
+[ $rc = 0 ] && rm -rf "$L"
+echo "--- remote: $([ $rc = 0 ] && echo pass || echo FAIL) ---"
+exit $rc

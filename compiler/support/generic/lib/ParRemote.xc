@@ -45,14 +45,15 @@
 //
 // Not yet: TLS and TOFU worker certificates, mDNS discovery, the GPU-RAM
 // cache, nimby windows, load-aware ready() — the daemon answers ready()
-// with its connection being open. The whole arrays go over once per run
-// (as to a discrete card); a tile carries its range only.
+// with its connection being open. An array whose footprint the compiler
+// knows travels as the slices each tile reads, with the tile (as to a
+// discrete card); the rest go over whole once per run at PREPARE.
 #import "Par.xc"
 #import "ParWorker.xc"
 #import "Socket.xc"
 #import "Sha256.xc"
 
-#define PAR_REMOTE_PROTO 1
+#define PAR_REMOTE_PROTO 2
 #define PAR_REMOTE_PORT 7227
 #define PAR_REMOTE_DEPTH 3
 
@@ -64,7 +65,7 @@
 #define PRM_HOLDS 5      // program -> daemon: the block described (no data); reply OK (1) or BYE... no: PRM_ANSWER
 #define PRM_ANSWER 6     // daemon -> program: one byte
 #define PRM_PREPARE 7    // program -> daemon: the block with its data, and the tile size
-#define PRM_TILE 8       // program -> daemon: index, lo, hi
+#define PRM_TILE 8       // program -> daemon: index, lo, hi, then each sliced array's and global's slice
 #define PRM_DONE 9       // daemon -> program: index, written slices, partials
 #define PRM_FINISH 10    // program -> daemon: the run is over
 
@@ -217,7 +218,10 @@ class ParWire
             ParWire.putI64(d, l.bufIvar[i]);
             ParWire.putI64(d, l.bufLen[i]);
             ParWire.putU8(d, l.bufIn[i] != (i64)0 ? (u8)1 : (u8)0);
-            if (data)
+            // Sliced: its footprint is known, so each tile brings the
+            // elements it reads and the whole array stays home.
+            ParWire.putU8(d, l.bufFp[i] != (i64)0 ? (u8)1 : (u8)0);
+            if (data && l.bufFp[i] == (i64)0)
                 d.appendBytes(*(u8**)(obj + l.bufOff[i]), (u32)l.bufLen[i]);
             }
         ParWire.putU32(d, l.nglob);
@@ -227,7 +231,8 @@ class ParWire
             ParWire.putI64(d, l.globLen[i]);
             ParWire.putU8(d, l.globIn[i] != (i64)0 ? (u8)1 : (u8)0);
             ParWire.putU8(d, l.globAll[i] != (i64)0 ? (u8)1 : (u8)0);
-            if (data)
+            ParWire.putU8(d, l.globFp[i] != (i64)0 ? (u8)1 : (u8)0);
+            if (data && l.globFp[i] == (i64)0)
                 d.appendBytes((u8*)l.globPtr[i], (u32)l.globLen[i]);
             }
         return d;
@@ -398,6 +403,33 @@ class ParRemoteWorker : ParWorker
         ParWire.putI64(d, t.index);
         ParWire.putI64(d, t.lo);
         ParWire.putI64(d, t.hi);
+        // Each sliced array's and global's slice for this tile: its byte
+        // offset, then the bytes — none for a global the tile's items
+        // overwrite whole (the kernel fills it), as a discrete card's
+        // tile loop stages them.
+        u8* obj = proto.objBytes();
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            if (l.bufFp[i] == (i64)0)
+                continue;
+            i64 count = l.bufLen[i] / l.bufElem[i];
+            i64 e0 = ParTiles.sliceLo(l.bufFpK[i], l.bufFpLo[i], t.lo, count);
+            i64 e1 = ParTiles.sliceHi(l.bufFpK[i], l.bufFpHi[i], t.hi, count);
+            ParWire.putI64(d, e0 * l.bufElem[i]);
+            ParWire.putBytes(d, *(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i], e1 > e0 ? (u32)((e1 - e0) * l.bufElem[i]) : (u32)0);
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            if (l.globFp[i] == (i64)0)
+                continue;
+            i64 count = l.globLen[i] / l.globElem[i];
+            i64 e0 = ParTiles.sliceLo(l.globFpK[i], l.globFpLo[i], t.lo, count);
+            i64 e1 = ParTiles.sliceHi(l.globFpK[i], l.globFpHi[i], t.hi, count);
+            if (l.globAll[i] != (i64)0 && l.globFpK[i] == (i64)1)
+                e1 = e0;
+            ParWire.putI64(d, e0 * l.globElem[i]);
+            ParWire.putBytes(d, (u8*)l.globPtr[i] + e0 * l.globElem[i], e1 > e0 ? (u32)((e1 - e0) * l.globElem[i]) : (u32)0);
+            }
         if (!ParWire.send(_s, (u32)PRM_TILE, d))
             return false;
         t.worker = (ParWorker*)self;
@@ -552,6 +584,7 @@ class ParRemoteChunk : ParChunk
     Array* _bufs;           // Data, per captured array
     i64 _bufLen[16];
     bool _bufRo[16];
+    bool _bufSliced[16];    // its slices come with each tile
     i64 _bufIvar[16];
     u32 _nbuf;
     Array* _globs;          // Data, per global
@@ -559,8 +592,56 @@ class ParRemoteChunk : ParChunk
     i64 _globLen[16];
     bool _globRo[16];
     bool _globAll[16];
+    bool _globSliced[16];
     u32 _nglob;
 
+    u32 bufCount(void) { return _nbuf; }
+    u32 globCount(void) { return _nglob; }
+    bool bufSliced(u32 i) { return _bufSliced[i]; }
+    bool globSliced(u32 i) { return _globSliced[i]; }
+    // A tile's slice of array (glob = false) or global i, n bytes at byte
+    // offset off, into the daemon's copy; refused when it does not fit.
+    bool takeSlice(bool glob, u32 i, i64 off, u8* p, u32 n)
+        {
+        i64 len = glob ? _globLen[i] : _bufLen[i];
+        if (off < (i64)0 || (i64)n < (i64)0 || off + (i64)n > len)
+            return false;
+        Data* b = (Data*)(glob ? _globs.get(i) : _bufs.get(i));
+        if (n > (u32)0)
+            memcpy((pointer)(b.bytes() + off), (pointer)p, (u64)n);
+        return true;
+        }
+
+    static Array* _sources;  // every kernel source the daemon has seen, kept
+
+    // The kernel source as one copy per distinct text, never freed: the
+    // workers remember a compiled kernel by its source's ADDRESS (a program's
+    // sources sit in its binary and never move), so a source the daemon
+    // freed and a different one allocated at the same address would run the
+    // old kernel on the new block's data. A later program with the same
+    // kernel finds it compiled already. The source is read beyond its length
+    // by the section scan (a NUL then the next section's "//"), so each copy
+    // keeps a few spare zero bytes.
+    static Data* internSource(u8* s, u32 n)
+        {
+        if (_sources == (Array*)0)
+            _sources = new Array();
+        for (u32 i = (u32)0; i < _sources.count(); i = i + (u32)1)
+            {
+            Data* d = (Data*)_sources.get(i);
+            if (d.length() != n + (u32)8)
+                continue;
+            u32 q = (u32)0;
+            while (q < n && d.bytes()[q] == s[q])
+                q = q + (u32)1;
+            if (q == n)
+                return d;
+            }
+        Data* d = Data.withLength(n + (u32)8);
+        memcpy((pointer)d.bytes(), (pointer)s, (u64)n);
+        _sources.add((Object*)d);
+        return d;
+        }
     u8* objBytes(void)
         {
         return _obj.bytes();
@@ -626,10 +707,7 @@ class ParRemoteChunk : ParChunk
         c._name = ParWire.rdStr(p, at);
         u8* s = (u8*)0;
         u32 n = ParWire.rdBytes(p, at, &s);
-        // The source is read beyond its length by the section scan (a NUL
-        // then the next section's "//"), so it keeps a few spare zero bytes.
-        c._src = Data.withLength(n + (u32)8);
-        memcpy((pointer)c._src.bytes(), (pointer)s, (u64)n);
+        c._src = ParRemoteChunk.internSource(s, n);
         u32 size = ParWire.rdU32(p, at);
         c._obj = Data.withLength(size);
         if (data)
@@ -645,11 +723,15 @@ class ParRemoteChunk : ParChunk
             c._bufIvar[i] = ParWire.rdI64(p, at);
             c._bufLen[i] = ParWire.rdI64(p, at);
             c._bufRo[i] = ParWire.rdU8(p, at) != (u8)0;
+            c._bufSliced[i] = ParWire.rdU8(p, at) != (u8)0;
             Data* b = Data.withLength((u32)c._bufLen[i] + (u32)16);
             if (data)
                 {
-                memcpy((pointer)b.bytes(), (pointer)(p + *at), (u64)c._bufLen[i]);
-                *at = *at + (u32)c._bufLen[i];
+                if (!c._bufSliced[i])
+                    {
+                    memcpy((pointer)b.bytes(), (pointer)(p + *at), (u64)c._bufLen[i]);
+                    *at = *at + (u32)c._bufLen[i];
+                    }
                 *(pointer*)(c._obj.bytes() + off) = (pointer)b.bytes();
                 }
             c._bufs.add((Object*)b);
@@ -663,8 +745,9 @@ class ParRemoteChunk : ParChunk
             c._globLen[i] = ParWire.rdI64(p, at);
             c._globRo[i] = ParWire.rdU8(p, at) != (u8)0;
             c._globAll[i] = ParWire.rdU8(p, at) != (u8)0;
+            c._globSliced[i] = ParWire.rdU8(p, at) != (u8)0;
             Data* g = Data.withLength((u32)c._globLen[i] + (u32)16);
-            if (data)
+            if (data && !c._globSliced[i])
                 {
                 memcpy((pointer)g.bytes(), (pointer)(p + *at), (u64)c._globLen[i]);
                 *at = *at + (u32)c._globLen[i];
@@ -819,6 +902,35 @@ class ParRemoteServe
                 t1.index = ParWire.rdI64(p, &at);
                 t1.lo = ParWire.rdI64(p, &at);
                 t1.hi = ParWire.rdI64(p, &at);
+                // The slices it brought, into the daemon's arrays. A tile
+                // still in flight reads other elements, or the same bytes
+                // where footprints overlap (a stencil's halo).
+                bool fits = true;
+                for (u32 i = (u32)0; i < chunk.bufCount() && at <= f.length(); i = i + (u32)1)
+                    {
+                    if (!chunk.bufSliced(i))
+                        continue;
+                    i64 off = ParWire.rdI64(p, &at);
+                    u8* b = (u8*)0;
+                    u32 n = ParWire.rdBytes(p, &at, &b);
+                    if (at > f.length() || !chunk.takeSlice(false, i, off, b, n))
+                        fits = false;
+                    }
+                for (u32 i = (u32)0; i < chunk.globCount() && at <= f.length(); i = i + (u32)1)
+                    {
+                    if (!chunk.globSliced(i))
+                        continue;
+                    i64 off = ParWire.rdI64(p, &at);
+                    u8* b = (u8*)0;
+                    u32 n = ParWire.rdBytes(p, &at, &b);
+                    if (at > f.length() || !chunk.takeSlice(true, i, off, b, n))
+                        fits = false;
+                    }
+                if (!fits)
+                    {
+                    Log.info("xcd: a tile's slices do not fit its block; closing");
+                    break;
+                    }
                 pending.add((Object*)t1);
                 }
             else if (type == (u32)PRM_FINISH)
