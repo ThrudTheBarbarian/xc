@@ -5049,7 +5049,8 @@ void capabilityUsage(void)
     Stdio.printf("                             program spawns a thread\n");
     Stdio.printf("  -fno-thread-safe-arc       Plain, non-atomic refcounts\n");
     Stdio.printf("  -fpar-kernels=all          Every par block carries every GPU kernel form,\n");
-    Stdio.printf("                             for workers on other machines (xcd)\n");
+    Stdio.printf("                             for workers on other machines (xcd); on by\n");
+    Stdio.printf("                             itself where XC_PAR_REMOTE is set\n");
     Stdio.printf("  --par-auto                 A plain for (i in a..b) loop becomes a par\n");
     Stdio.printf("                             block where its shape allows (see -Wpar-auto)\n");
     Stdio.printf("  -fgoal=speed|accuracy      The default goal of loops and par blocks\n");
@@ -5729,6 +5730,11 @@ DriverOptions* parseDriverArgs(void)
     DriverOptions* d = new DriverOptions();
     FeOptions* o = d.fe();
     u32 argc = Process.argumentCount();
+    // A program built where a remote worker is named (XC_PAR_REMOTE in the
+    // environment) carries every GPU kernel form, as -fpar-kernels=all (the
+    // reference explains).
+    if (Platform.env(String.withCString("XC_PAR_REMOTE")).byteLength() > (u32)0)
+        d.fe().setParKernelsAll(true);
     u32 i = (u32)1;
     while (i < argc) {
         if (parseCapabilityFlag(d, &i, argc)) continue;

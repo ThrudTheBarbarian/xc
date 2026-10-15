@@ -120,6 +120,14 @@ Unzip `xcc-win64-0.8.zip` anywhere and add the folder to `PATH` (or invoke
 `xcc.exe` by path). The binaries are self-contained; no runtime installer is
 needed.
 
+## xcd, the par worker daemon (from 0.8.1)
+
+A machine that only lends its GPUs to `par` programs on the network needs no
+compiler: from 0.8.1 each release also ships `xcd-osx-<version>.tar.bz2`,
+`xcd-linux-<version>.tar.bz2` and `xcd-win64-<version>.zip`, holding the
+daemon alone. Unpack it and run `bin/xcd` (see
+[Across machines](/compiler/language/par/#across-machines-xcd)).
+
 ## First build
 
 ```c

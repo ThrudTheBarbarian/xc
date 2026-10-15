@@ -1489,6 +1489,14 @@ static NSString* sExecutablePath = nil;
             }
         }
 
+    // A program built where a remote worker is named (XC_PAR_REMOTE in the
+    // environment) carries every GPU kernel form, as -fpar-kernels=all: the
+    // daemon across the room runs whatever its GPU takes, and the programs
+    // that never leave the box pay nothing.
+    const char* remote = getenv("XC_PAR_REMOTE");
+    if (!opts.parKernelsAll && remote && remote[0])
+        opts.parKernelsAll = YES;
+
     return opts;
     }
 
@@ -1534,7 +1542,8 @@ static NSString* sExecutablePath = nil;
             "                             the program spawns a thread.\n"
             "  -fno-thread-safe-arc       Force plain, non-atomic ARC refcounts.\n"
             "  -fpar-kernels=all          Every par block carries every GPU kernel\n"
-            "                             form, for workers on other machines (xcd).\n"
+            "                             form, for workers on other machines (xcd);\n"
+            "                             on by itself where XC_PAR_REMOTE is set.\n"
             "  --par-auto                 A plain for (i in a..b) loop becomes a par\n"
             "                             block where its shape allows (see -Wpar-auto).\n"
             "  -fgoal=speed|accuracy      The default goal of loops and par blocks\n"

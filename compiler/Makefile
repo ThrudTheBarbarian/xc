@@ -1476,11 +1476,39 @@ $(WIN64_ARCHIVE): $(SHIP_WIN64)
 	cd $(DIST_STAGE) && zip -qr $(abspath $@) xcc-win64-$(VERSION)
 	@echo "dist -> $@"
 
-.PHONY: dist dist-osx dist-linux dist-win64
+# xcd, the par worker daemon, as an archive of its own per platform: a node
+# that only serves its GPUs needs no compiler. bin/xcd (.exe) and COPYING.
+XCD_OSX_ARCHIVE   = $(DIST_DIR)/xcd-osx-$(VERSION).tar.bz2
+XCD_LINUX_ARCHIVE = $(DIST_DIR)/xcd-linux-$(VERSION).tar.bz2
+XCD_WIN64_ARCHIVE = $(DIST_DIR)/xcd-win64-$(VERSION).zip
+define STAGE_XCD
+@rm -rf $(DIST_STAGE)/xcd-$(1)-$(VERSION)
+@mkdir -p $(DIST_STAGE)/xcd-$(1)-$(VERSION)/bin $(DIST_DIR)
+@$(CP) $(2) $(DIST_STAGE)/xcd-$(1)-$(VERSION)/bin/xcd$(3)
+@if [ -n "$(4)" ]; then $(4) $(DIST_STAGE)/xcd-$(1)-$(VERSION)/bin/xcd$(3); fi
+@$(CP) ../COPYING $(DIST_STAGE)/xcd-$(1)-$(VERSION)/COPYING
+endef
+$(XCD_OSX_ARCHIVE): $(XCD_BIN)
+	$(call STAGE_XCD,osx,$(XCD_BIN),,)
+	@rm -f $@
+	tar -cjf $@ -C $(DIST_STAGE) xcd-osx-$(VERSION)
+	@echo "dist -> $@"
+$(XCD_LINUX_ARCHIVE): $(XCD_LINUX_BIN)
+	$(call STAGE_XCD,linux,$(XCD_LINUX_BIN),,/opt/homebrew/opt/llvm/bin/llvm-strip)
+	@rm -f $@
+	tar -cjf $@ -C $(DIST_STAGE) xcd-linux-$(VERSION)
+	@echo "dist -> $@"
+$(XCD_WIN64_ARCHIVE): $(XCD_WIN64_BIN)
+	$(call STAGE_XCD,win64,$(XCD_WIN64_BIN),.exe,/opt/homebrew/opt/llvm/bin/llvm-strip)
+	@rm -f $@
+	cd $(DIST_STAGE) && zip -qr $(abspath $@) xcd-win64-$(VERSION)
+	@echo "dist -> $@"
+.PHONY: dist dist-osx dist-linux dist-win64 dist-xcd
 dist-osx:   $(OSX_ARCHIVE)
 dist-linux: $(LINUX_ARCHIVE)
 dist-win64: $(WIN64_ARCHIVE)
-dist:       dist-osx dist-linux dist-win64
+dist-xcd:   $(XCD_OSX_ARCHIVE) $(XCD_LINUX_ARCHIVE) $(XCD_WIN64_ARCHIVE)
+dist:       dist-osx dist-linux dist-win64 dist-xcd
 
 endif   # macOS-only cross-builds + distribution archives
 
