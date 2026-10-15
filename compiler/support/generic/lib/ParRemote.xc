@@ -61,6 +61,7 @@
 #import "ParWorker.xc"
 #import "Socket.xc"
 #import "Sha256.xc"
+#import "Mdns.xc"
 
 #define PAR_REMOTE_PROTO 2
 #define PAR_REMOTE_PORT 7227
@@ -676,7 +677,11 @@ class ParRemote
         return Sha256.of(d.bytes(), d.length());
         }
 
-    // XC_PAR_REMOTE=host[:port],host[:port],…: a worker per entry.
+    // XC_PAR_REMOTE=host[:port],host[:port],…: a worker per entry. An entry
+    // `mdns` is every daemon on this subnet that answers within 300 ms and
+    // is of the pool XC_PAR_POOL names (none when unset) and this xcc
+    // version. Discovery is asked for, not automatic: every par program
+    // would otherwise send a multicast query and wait for the answers.
     static void addWorkers(Array* into)
         {
         String* v = Platform.env(String.withCString("XC_PAR_REMOTE"));
@@ -690,6 +695,21 @@ class ParRemote
             at = end + (u32)1;
             if (entry.byteLength() == (u32)0)
                 continue;
+            if (entry.equals(String.withCString("mdns")))
+                {
+                String* pool = Platform.env(String.withCString("XC_PAR_POOL"));
+                Array* found = Mdns.browse(pool.cString(), PAR_CACHE_VER, (i32)300);
+                if (ParDevice.reporting())
+                    Log.info("par: mdns: %u daemon(s) of pool '%s' on this subnet", found.count(), pool.cString());
+                for (u32 i = (u32)0; i < found.count(); i = i + (u32)1)
+                    {
+                    MdnsService* svc = (MdnsService*)found.get(i);
+                    ParRemoteWorker* w = new ParRemoteWorker(svc.host, svc.port);
+                    if (w.identity().byteLength() > (u32)0)
+                        into.add((Object*)w);
+                    }
+                continue;
+                }
             u32 colon = entry.indexOfByte((u8)':');
             String* host = entry;
             u16 port = (u16)PAR_REMOTE_PORT;

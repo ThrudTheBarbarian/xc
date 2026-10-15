@@ -556,6 +556,16 @@ daemon's hours free: inside the window it takes no block from a new program
 and tells a running one to send its tiles elsewhere, and the program's answer
 is the same either way. The window may cross midnight (`-nimby 23:00-07:00`).
 
+A daemon advertises itself on its subnet (multicast DNS, as `_xcd._tcp`),
+and `xcd -pool NAME` names the pool it belongs to, so projects on one network
+keep separate host sets. A program asks for discovery with `mdns` as an entry
+of `XC_PAR_REMOTE`; it then takes every daemon that answers within a moment,
+of the pool `XC_PAR_POOL` names (daemons with no pool when it is unset) and of
+its own xcc version. Discovery is asked for rather than automatic, so a
+program that names no remote sends nothing on the network. `xcd -no-mdns`
+keeps a daemon off the air; it is still reachable by address. One subnet
+only: multicast does not cross routers or VPNs.
+
 What pays: blocks with a lot of work per byte moved (deep fractals, searches,
 batched scoring) on a fast link. A streaming block moves more than it computes
 and loses to the link, and `auto` measures that and keeps the local devices.

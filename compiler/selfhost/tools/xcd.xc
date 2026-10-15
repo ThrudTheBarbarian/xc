@@ -3,6 +3,8 @@
 //
 //     xcd [-port N]            listen on port N (default 7227)
 //         [-nimby hh:mm-hh:mm]  take no work in these local hours (the window may cross midnight)
+//         [-pool NAME]          advertise as a member of this pool (programs with XC_PAR_POOL=NAME find it)
+//         [-no-mdns]            do not advertise on the subnet
 //     XC_PAR_SECRET=…          the pool secret a program must prove
 //     XC_PAR_REPORT=1          say what each block and tile does
 //
@@ -15,10 +17,13 @@
 #import "Par.xc"
 #import "ParRemote.xc"
 #import "Process.xc"
+#import "Thread.xc"
 
 i32 main(void)
 {
     u16 port = (u16)PAR_REMOTE_PORT;
+    String* pool = new String();
+    bool mdns = true;
     Array* av = Process.arguments();
     for (u32 i = (u32)1; av != (Array*)0 && i < av.count(); i = i + (u32)1)
     {
@@ -63,9 +68,16 @@ i32 main(void)
             ParRemoteServe.setNimby(parts[0] * (i32)60 + parts[1], parts[2] * (i32)60 + parts[3]);
             i = i + (u32)1;
         }
+        else if (a.equals(String.withCString("-pool")) && i + (u32)1 < av.count())
+        {
+            pool = (String*)av.get(i + (u32)1);
+            i = i + (u32)1;
+        }
+        else if (a.equals(String.withCString("-no-mdns")))
+            mdns = false;
         else if (a.equals(String.withCString("-h")) || a.equals(String.withCString("--help")))
         {
-            Stdio.printf("xcd [-port N] [-nimby hh:mm-hh:mm]   serve this machine's GPUs to par programs (XC_PAR_SECRET, XC_PAR_REPORT)\n");
+            Stdio.printf("xcd [-port N] [-nimby hh:mm-hh:mm] [-pool NAME] [-no-mdns]   serve this machine's GPUs to par programs (XC_PAR_SECRET, XC_PAR_REPORT)\n");
             return 0;
         }
     }
@@ -88,6 +100,13 @@ i32 main(void)
     }
     Stdio.printf("xcd: serving %s on port %u%s\n", identity.cString(), (u32)port,
                  ParRemoteServe.hasNimby() ? (ParRemoteServe.nimbyNow() ? " (nimby now)" : " (nimby window set)") : "");
+    if (mdns)
+    {
+        // Advertised on the subnet as _xcd._tcp, on a thread of its own.
+        MdnsResponder* r = new MdnsResponder(port, pool, String.withCString(PAR_CACHE_VER));
+        Thread.spawn(&r.run);
+        Stdio.printf("xcd: advertising _xcd._tcp%s%s\n", pool.byteLength() > (u32)0 ? " in pool " : "", pool.cString());
+    }
     while (true)
     {
         Socket* c = ls.accept((i32)-1);

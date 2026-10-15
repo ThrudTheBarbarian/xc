@@ -52,6 +52,23 @@ fi
 kill $XCD2 2> /dev/null
 wait $XCD2 2> /dev/null
 grep -q 'declined (nimby)' "$L/xcd2.log" || { echo "FAIL remote: the nimby daemon did not decline"; head -4 "$L/xcd2.log"; rc=1; }
+# Discovery: a daemon advertising in a pool is found by XC_PAR_REMOTE=mdns
+# with that pool, and not by another pool.
+PORT3=$((PORT + 2))
+XC_PAR_REPORT=1 "$L/xcd" -port $PORT3 -pool gate > "$L/xcd3.log" 2>&1 &
+XCD3=$!
+sleep 1
+mkdir -p "$L/st_mdns" "$L/st_mdns2"
+XCC_SETTINGS_DIR="$L/st_mdns" XC_PAR_REMOTE=mdns XC_PAR_POOL=gate XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/mdns.out" 2>&1
+XCC_SETTINGS_DIR="$L/st_mdns2" XC_PAR_REMOTE=mdns XC_PAR_POOL=other XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/mdns2.out" 2>&1
+if grep -v '^par:' "$L/mdns.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && grep -q "remote worker remote:" "$L/mdns.out" \
+   && grep -v '^par:' "$L/mdns2.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && ! grep -q "remote worker remote:" "$L/mdns2.out"; then
+    echo "PASS remote mdns"
+else
+    echo "FAIL remote mdns"; grep -i 'mdns\|remote' "$L/mdns.out" "$L/mdns2.out" | head -4; rc=1
+fi
+kill $XCD3 2> /dev/null
+wait $XCD3 2> /dev/null
 [ $rc = 0 ] && rm -rf "$L"
 echo "--- remote: $([ $rc = 0 ] && echo pass || echo FAIL) ---"
 exit $rc
