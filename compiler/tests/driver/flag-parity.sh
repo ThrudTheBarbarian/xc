@@ -633,6 +633,12 @@ cover -mavx2 -msimd= -mnative -mavx512 -mavx512f
 same "SME matmul (-A arm64 -O3)"              -q -A arm64 -O3 -o @OUT@ $ROOT/tests/fixtures/sme_matmul_exact.xc
 same "-fno-matmul (-A arm64 -O3)"                -q -A arm64 -O3 -fno-matmul -o @OUT@ $ROOT/tests/fixtures/sme_matmul_exact.xc
 cover -fno-matmul
+
+# par: every GPU kernel form in the binary (a remote worker's GPU may differ),
+# and a plain loop that becomes a par block where its shape allows.
+same "-fpar-kernels=all (-A arm64 -O2)"   -q -A arm64 -O2 -fpar-kernels=all -o @OUT@ $ROOT/tests/fixtures/par_simd_buffers.xc
+same "--par-auto (-A arm64 -O2)"          -q -A arm64 -O2 --par-auto -o @OUT@ $ROOT/tests/fixtures/outer_vectorize_matmul.xc
+cover -fpar-kernels= --par-auto
 same "an undefined C symbol is a link error (580)" $A -o @OUT@ nothere.xc
 xcconly "  ...naming it (580)" 1 "undefined symbol 'nothere'" $A -o @OUT@ nothere.xc
 xcconly "--link-libs (-A arm64, refused)" 1 "applies to -A wasm32" -q -A arm64 --link-libs -o @OUT@ ret.xc
