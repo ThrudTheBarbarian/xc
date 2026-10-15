@@ -1000,7 +1000,21 @@ class ParDevice
         if (gParGpuWorkers >= (u32)2 && gParGpusUs[i] < (i64)0)
             return (i32)3;
         if (gParGpuWorkers >= (u32)1 && gParAllUs[i] < (i64)0)
-            return (i32)4;
+            {
+            // The CPU and a GPU that is not across a bus draw on ONE memory
+            // bus (the shares-bandwidth-with-CPU device bit of the design
+            // note): on a bandwidth-bound block the two together move no
+            // more bytes a second than the faster of them alone, so "all
+            // devices" cannot win there and is not measured. The set is out
+            // of the comparison as the queue's own decline leaves it.
+            ParLayout* l = gParGpuDiscrete ? (ParLayout*)0 : layout(proto, src, (i64)0, n);
+            if (l == (ParLayout*)0 || computeBound(l))
+                return (i32)4;
+            gParAllUs[i] = (i64)1 << (i64)50;
+            gParAllRuns[i] = (u32)2;
+            if (reporting())
+                Log.info("par: %s: auto does not try all devices (bandwidth-bound, and the CPU and GPU share one memory bus)", gParBlock[i]);
+            }
         if (gParCpuUs[i] < (i64)0)
             return (i32)1;
         i32 best = gParGpuUs[i] <= gParCpuUs[i] ? (i32)2 : (i32)1;

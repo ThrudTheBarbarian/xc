@@ -364,7 +364,11 @@ size. The learned record grows to four numbers — the CPU's largest win and
 the smallest size each of the other three won from — and the hardware key
 takes in every device, so a machine that gains a card is measured afresh. A
 block that would make a single tile, or that no second device can hold, is
-not tried on a set. What is measured so far is saved as it lands, under
+not tried on a set. From 0.8.1, neither is the CPU with a GPU that shares its
+memory (Apple silicon, an integrated GPU) when the block is bandwidth-bound:
+the two draw on one memory bus, so together they move no more bytes a second
+than the faster of them alone, and `XC_PAR_REPORT=1` says so. What is
+measured so far is saved as it lands, under
 `par.measuring.…`, so a program that runs a block only a few times per run
 still finishes measuring over several runs.
 
