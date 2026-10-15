@@ -14226,6 +14226,10 @@ class ClassInfo
                         w.appendCString(", so the compiler cannot prove two work items never write the same element; if they can, the result depends on which runs last");
                         warnAtNode(String.withCString("par-scatter"), w, (Node*)_classDecls.get((Hashable*)cls));
                         }
+                    // -Wpar-auto says what was wrapped as well as what was demoted.
+                    if (isAuto)
+                        warnAtNode(String.withCString("par-auto"), String.withCString("this loop became a 'par' block (--par-auto)"),
+                                   (Node*)_classDecls.get((Hashable*)cls));
                     continue;
                     }
                 if (isAuto)

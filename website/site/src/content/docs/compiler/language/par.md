@@ -492,6 +492,14 @@ for (u32 i in 0..N) : serial            // left as it is
     order[i] = order[i - 1] + 1;
 ```
 
+**Nests and block literals.** A loop whose body is nothing but a second
+ascending loop, with bounds that do not depend on the outer index, becomes
+one block over the whole `W × H` grid (the `:grid` form), so a small outer
+count no longer limits the work items: `for (i in 0..480) for (j in 0..640)
+… ` is 307200 items in one dispatch. Any other loop inside the body stays as
+it is, run serially by each work item. A loop inside a block literal is
+wrapped like any other; a loop inside a written `par` block is left alone.
+
 What the tokens cannot tell, the compiler's `par` checks decide afterwards —
 whether the items are independent (a scan, `b[i] = b[i - 1] + …`, is not)
 and whether a GPU could run the body. A written `par` block that fails is an

@@ -2388,8 +2388,11 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         }
     case XTTokenFor:
         {
-        // --par-auto: an outermost loop in plain code may become a par block.
-        if (self.parAuto && [self blkFrames].count == 0 && [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0)
+        // --par-auto: an outermost loop in plain code may become a par block —
+        // inside a block literal too (its captures are captured again), but
+        // not inside a par body, which is a block already.
+        if (self.parAuto && ![[self blkFrames].lastObject[@"par"] boolValue] &&
+            [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0)
             return [self parAutoFor];
         [self parGridLoop:1];
         [self parAutoLoop:1];
@@ -3333,6 +3336,112 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
     return YES;
     }
 
+// An expression made of literals, casts, arithmetic and names other than
+// `avoid`: a bound of an inner loop that does not depend on the outer index.
+static BOOL parAutoBoundFree(XTASTNode* e, NSString* avoid)
+    {
+    if ([e isKindOfClass:[XTLiteralIntNode class]])
+        return YES;
+    if ([e isKindOfClass:[XTIdentifierNode class]])
+        return ![((XTIdentifierNode*)e).identName isEqualToString:avoid];
+    if ([e isKindOfClass:[XTCastExprNode class]])
+        return parAutoBoundFree(((XTCastExprNode*)e).operand, avoid);
+    if ([e isKindOfClass:[XTBinaryExprNode class]])
+        return parAutoBoundFree(((XTBinaryExprNode*)e).left, avoid) && parAutoBoundFree(((XTBinaryExprNode*)e).right, avoid);
+    return NO;
+    }
+
+// The parts of an ascending loop `for (T v = a; v < b | v <= b; v++)`, as the
+// desugaring takes it (the range form desugars to this): nil when it is not one.
+static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDeclNode* _Nonnull* _Nonnull ivOut,
+                                                    XTBinaryExprNode* _Nonnull* _Nonnull condOut)
+    {
+    if (![node isKindOfClass:[XTForCStyleNode class]])
+        return nil;
+    XTForCStyleNode* loop = (XTForCStyleNode*)node;
+    XTVariableDeclNode* iv = [loop.loopInit isKindOfClass:[XTVariableDeclNode class]] ? (XTVariableDeclNode*)loop.loopInit : nil;
+    XTBinaryExprNode* cond = [loop.condition isKindOfClass:[XTBinaryExprNode class]] ? (XTBinaryExprNode*)loop.condition : nil;
+    if (!iv || !iv.initialiser || !iv.declaredType || !cond || (cond.op != XTBinaryOpLt && cond.op != XTBinaryOpLe) ||
+        ![cond.left isKindOfClass:[XTIdentifierNode class]] ||
+        ![((XTIdentifierNode*)cond.left).identName isEqualToString:iv.varName])
+        return nil;
+    XTASTNode* inc = loop.increment;
+    BOOL stepOk = NO;
+    if ([inc isKindOfClass:[XTAssignExprNode class]])
+        {
+        XTAssignExprNode* a = (XTAssignExprNode*)inc;
+        stepOk = a.assignOp == XTAssignOpAdd && [a.rhs isKindOfClass:[XTLiteralIntNode class]] &&
+                 ((XTLiteralIntNode*)a.rhs).intValue == 1;
+        if (!stepOk && a.assignOp == XTAssignOpAssign && [a.rhs isKindOfClass:[XTBinaryExprNode class]])
+            {
+            XTBinaryExprNode* b = (XTBinaryExprNode*)a.rhs;
+            stepOk = b.op == XTBinaryOpAdd && [b.left isKindOfClass:[XTIdentifierNode class]] &&
+                     [((XTIdentifierNode*)b.left).identName isEqualToString:iv.varName] &&
+                     [b.right isKindOfClass:[XTLiteralIntNode class]] && ((XTLiteralIntNode*)b.right).intValue == 1;
+            }
+        }
+    else if ([inc isKindOfClass:[XTPostfixExprNode class]])
+        stepOk = ((XTPostfixExprNode*)inc).postfixOp == XTPostfixOpInc;
+    else if ([inc isKindOfClass:[XTUnaryExprNode class]])
+        stepOk = ((XTUnaryExprNode*)inc).op == XTUnaryOpPreInc;
+    if (!stepOk)
+        return nil;
+    *ivOut = iv;
+    *condOut = cond;
+    return loop;
+    }
+
+// A perfect two-deep nest — the outer loop's body is one ascending inner loop
+// whose bounds do not mention the outer index — as a grid block's body: the
+// two indices declared from the point (`par$y` the outer, `par$x` the inner),
+// then the inner body; the frame gets the grid's W and H, evaluated once at
+// the site. nil when the loop is not such a nest. Mirrored in the port.
+- (nullable XTBlockNode*)parAutoGridNest:(XTASTNode*)node frame:(NSMutableDictionary*)frame at:(XTSourceLocation*)loc
+    {
+    XTVariableDeclNode* iv1 = nil;
+    XTBinaryExprNode* cond1 = nil;
+    XTForCStyleNode* outer = parAutoAscending(node, &iv1, &cond1);
+    if (!outer || ![outer.body isKindOfClass:[XTBlockNode class]] || ((XTBlockNode*)outer.body).statements.count != 1)
+        return nil;
+    XTVariableDeclNode* iv2 = nil;
+    XTBinaryExprNode* cond2 = nil;
+    XTForCStyleNode* inner = parAutoAscending(((XTBlockNode*)outer.body).statements[0], &iv2, &cond2);
+    if (!inner || !parAutoBoundFree(iv2.initialiser, iv1.varName) || !parAutoBoundFree(cond2.right, iv1.varName))
+        return nil;
+    XTType* i64T = [self.typeTable typeForName:@"i64"];
+    XTASTNode* (^ident)(NSString*) = ^XTASTNode*(NSString* n) {
+      return [[XTIdentifierNode alloc] initWithName:n location:loc];
+    };
+    XTASTNode* (^cast)(XTType*, XTASTNode*) = ^XTASTNode*(XTType* t, XTASTNode* e) {
+      return [[XTCastExprNode alloc] initWithType:t operand:e location:loc];
+    };
+    XTASTNode* (^bin)(XTBinaryOp, XTASTNode*, XTASTNode*) = ^XTASTNode*(XTBinaryOp op, XTASTNode* l, XTASTNode* r) {
+      return [[XTBinaryExprNode alloc] initWithOp:op left:l right:r location:loc];
+    };
+    XTASTNode* (^extent)(XTVariableDeclNode*, XTBinaryExprNode*) = ^XTASTNode*(XTVariableDeclNode* iv, XTBinaryExprNode* cond) {
+      XTASTNode* n = bin(XTBinaryOpSub, cast(i64T, cond.right), cast(i64T, iv.initialiser));
+      if (cond.op == XTBinaryOpLe)
+          n = bin(XTBinaryOpAdd, n, [[XTLiteralIntNode alloc] initWithValue:1 location:loc]);
+      return n;
+    };
+    frame[@"grid"] = @[ extent(iv2, cond2), extent(iv1, cond1) ];
+    frame[@"gridUsed"] = [NSMutableSet setWithObjects:@"par$x", @"par$y", nil];
+    NSMutableArray<XTASTNode*>* st = [NSMutableArray array];
+    [st addObject:[[XTVariableDeclNode alloc] initWithName:iv1.varName type:iv1.declaredType
+                                               initialiser:cast(iv1.declaredType, bin(XTBinaryOpAdd, cast(iv1.declaredType, iv1.initialiser),
+                                                                                       cast(iv1.declaredType, ident(@"par$y"))))
+                                                  location:loc]];
+    [st addObject:[[XTVariableDeclNode alloc] initWithName:iv2.varName type:iv2.declaredType
+                                               initialiser:cast(iv2.declaredType, bin(XTBinaryOpAdd, cast(iv2.declaredType, iv2.initialiser),
+                                                                                       cast(iv2.declaredType, ident(@"par$x"))))
+                                                  location:loc]];
+    if ([inner.body isKindOfClass:[XTBlockNode class]])
+        [st addObjectsFromArray:((XTBlockNode*)inner.body).statements];
+    else
+        [st addObject:inner.body];
+    return [[XTBlockNode alloc] initWithStatements:st location:loc];
+    }
+
 - (nullable XTASTNode*)parAutoFor
     {
     NSMutableArray<NSArray<NSString*>*>* reds = [NSMutableArray array];
@@ -3372,7 +3481,12 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
     [[self blkFrames] removeLastObject];
     if (!loop)
         return nil;
-    XTBlockNode* body = [[XTBlockNode alloc] initWithStatements:@[ loop ] location:loc];
+    // A perfect two-deep nest becomes one block over the W*H grid (the
+    // :grid form): W*H work items in one dispatch rather than H items each
+    // running W serially, which matters when H is small.
+    XTBlockNode* body = [self parAutoGridNest:loop frame:frame at:loc];
+    if (!body)
+        body = [[XTBlockNode alloc] initWithStatements:@[ loop ] location:loc];
     NSUInteger c = [self.blkState[@"parAutoCounter"] unsignedIntegerValue] + 1;
     self.blkState[@"parAutoCounter"] = @(c);
     NSString* name = [NSString stringWithFormat:@"autopar_%lu", (unsigned long)c];

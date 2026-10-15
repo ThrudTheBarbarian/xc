@@ -1047,7 +1047,7 @@ class ParDevice
         bool gpuable = proto.gpuSource() != (u8*)0 && proto.gpuSource()[0] != (u8)0;
         if (reporting())
             {
-            Log.info("par: %s: %ld us on the CPU", gParBlock[i], us);
+            Log.info("par: %s: %ld items on the CPU, %ld us", gParBlock[i], gParLastN[i], us);
             if (measured && us < (i64)1000 && gpuable && gParGpuUs[i] < (i64)0)
                 Log.info("par: %s: auto keeps it on the CPU (%ld us, too short for a GPU to win)", gParBlock[i], us);
             }

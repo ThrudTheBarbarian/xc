@@ -2110,6 +2110,93 @@ class Parser
     // cannot tell — a dependence between items, a call the GPU cannot make —
     // par-check decides after lowering, and demotes an auto block to a
     // serial run rather than refusing it. Mirrors the reference's parAutoFor.
+    // An expression made of literals, casts, arithmetic and names other than
+    // `avoid`: an inner bound that does not depend on the outer index.
+    static bool parAutoBoundFree(Node* e, String* avoid)
+    {
+        if (e == (Node*)0) return false;
+        if (e.kind() == (u16)nkInt) return true;
+        if (e.kind() == (u16)nkIdent) return !e.name().equals(avoid);
+        if (e.kind() == (u16)nkCast) return e.kidCount() > (u32)0 && Parser.parAutoBoundFree(e.kid((u32)0), avoid);
+        if (e.kind() == (u16)nkBinary)
+            return e.kidCount() == (u32)2 && Parser.parAutoBoundFree(e.kid((u32)0), avoid) && Parser.parAutoBoundFree(e.kid((u32)1), avoid);
+        return false;
+    }
+    // The ascending-loop shape the desugaring takes (`for (T v = a; v < b | v <= b; v++)`):
+    // fills the declaration and the condition, or returns false.
+    static bool parAutoAscending(Node* node, Node** ivOut, Node** condOut)
+    {
+        if (node == (Node*)0 || node.kind() != (u16)nkForCStyle || node.kidCount() != (u32)4) return false;
+        Node* iv = node.kid((u32)0).kidCount() > (u32)0 ? node.kid((u32)0).kid((u32)0) : (Node*)0;
+        Node* cond = node.kid((u32)1).kidCount() > (u32)0 ? node.kid((u32)1).kid((u32)0) : (Node*)0;
+        Node* step = node.kid((u32)2).kidCount() > (u32)0 ? node.kid((u32)2).kid((u32)0) : (Node*)0;
+        if (iv == (Node*)0 || iv.kind() != (u16)nkVariableDecl || iv.kidCount() == (u32)0 || iv.op() == (String*)0) return false;
+        if (cond == (Node*)0 || cond.kind() != (u16)nkBinary || !(Parser._same(cond.op(), "<") || Parser._same(cond.op(), "<="))
+            || cond.kid((u32)0).kind() != (u16)nkIdent || !cond.kid((u32)0).name().equals(iv.name())) return false;
+        bool stepOk = false;
+        if (step != (Node*)0) {
+            if (step.kind() == (u16)nkAssign && Parser._same(step.op(), "+=")
+                && step.kid((u32)1).kind() == (u16)nkInt && step.kid((u32)1).num() == (i64)1)
+                stepOk = true;
+            else if (step.kind() == (u16)nkAssign && Parser._same(step.op(), "=")
+                && step.kid((u32)1).kind() == (u16)nkBinary && Parser._same(step.kid((u32)1).op(), "+")
+                && step.kid((u32)1).kid((u32)0).kind() == (u16)nkIdent && step.kid((u32)1).kid((u32)0).name().equals(iv.name())
+                && step.kid((u32)1).kid((u32)1).kind() == (u16)nkInt && step.kid((u32)1).kid((u32)1).num() == (i64)1)
+                stepOk = true;
+            else if ((step.kind() == (u16)nkPostfix || step.kind() == (u16)nkUnary) && Parser._same(step.op(), "++"))
+                stepOk = true;
+        }
+        if (!stepOk) return false;
+        *ivOut = iv;
+        *condOut = cond;
+        return true;
+    }
+    // A perfect two-deep nest as a grid block's body: the two indices from the
+    // point (`par$y` the outer, `par$x` the inner), then the inner body; the
+    // frame gets the grid's W and H. 0 when the loop is not such a nest.
+    Node* parAutoGridNest(Node* node, Map* frame)
+    {
+        Node* iv1 = (Node*)0;
+        Node* cond1 = (Node*)0;
+        if (!Parser.parAutoAscending(node, &iv1, &cond1)) return (Node*)0;
+        Node* outerBody = node.kid((u32)3);
+        if (outerBody.kind() != (u16)nkBlock || outerBody.kidCount() != (u32)1) return (Node*)0;
+        Node* inner = outerBody.kid((u32)0);
+        Node* iv2 = (Node*)0;
+        Node* cond2 = (Node*)0;
+        if (!Parser.parAutoAscending(inner, &iv2, &cond2)) return (Node*)0;
+        if (!Parser.parAutoBoundFree(iv2.kid((u32)0), iv1.name()) || !Parser.parAutoBoundFree(cond2.kid((u32)1), iv1.name())) return (Node*)0;
+        String* i64T = String.withCString("i64");
+        Array* grid = new Array();
+        Node* w = parBin("-", parCast(i64T, cond2.kid((u32)1)), parCast(i64T, iv2.kid((u32)0)));
+        if (Parser._same(cond2.op(), "<=")) w = parBin("+", w, parInt((i64)1));
+        Node* h = parBin("-", parCast(i64T, cond1.kid((u32)1)), parCast(i64T, iv1.kid((u32)0)));
+        if (Parser._same(cond1.op(), "<=")) h = parBin("+", h, parInt((i64)1));
+        grid.add((Object*)w);
+        grid.add((Object*)h);
+        frame.set((Hashable*)String.withCString("grid"), (Object*)grid);
+        Set* used = new Set();
+        used.add((Hashable*)String.withCString("par$x"));
+        used.add((Hashable*)String.withCString("par$y"));
+        frame.set((Hashable*)String.withCString("gridUsed"), (Object*)used);
+        Node* body = mk((u16)nkBlock);
+        Node* d1 = mkNamed((u16)nkVariableDecl, iv1.name());
+        d1.setOp(iv1.op());
+        d1.add(parCast(iv1.op(), parBin("+", parCast(iv1.op(), iv1.kid((u32)0)), parCast(iv1.op(), parIdent(String.withCString("par$y"))))));
+        body.add(d1);
+        Node* d2 = mkNamed((u16)nkVariableDecl, iv2.name());
+        d2.setOp(iv2.op());
+        d2.add(parCast(iv2.op(), parBin("+", parCast(iv2.op(), iv2.kid((u32)0)), parCast(iv2.op(), parIdent(String.withCString("par$x"))))));
+        body.add(d2);
+        Node* innerBody = inner.kid((u32)3);
+        if (innerBody.kind() == (u16)nkBlock) {
+            for (u32 i = (u32)0; i < innerBody.kidCount(); i = i + (u32)1)
+                body.add(innerBody.kid(i));
+        } else
+            body.add(innerBody);
+        return body;
+    }
+
     Node* parAutoFor(void)
     {
         Array* reds = new Array();
@@ -2146,8 +2233,16 @@ class Parser
         blkPopScope();
         _blkFrames.removeAt(_blkFrames.count() - (u32)1);
         if (loop == (Node*)0) { _parTok = savedParTok; return (Node*)0; }
-        Node* body = mk((u16)nkBlock);
-        body.add(loop);
+        // A perfect two-deep nest becomes one block over the W*H grid (the
+        // reference explains).
+        Token* savedMkAt0 = _mkAt;
+        _mkAt = forTok;
+        Node* body = parAutoGridNest(loop, frame);
+        _mkAt = savedMkAt0;
+        if (body == (Node*)0) {
+            body = mk((u16)nkBlock);
+            body.add(loop);
+        }
         _parAutoCounter = _parAutoCounter + (u32)1;
         String* name = String.withCString("autopar_");
         name.append(String.withU32(_parAutoCounter));
@@ -3592,8 +3687,12 @@ class Parser
         if (check((u16)tokIf))       return parseIf();
         if (check((u16)tokWhile))    { parGridEnter("loops", true); _loopDepth = _loopDepth + (u32)1; Node* n = parseWhile(); _loopDepth = _loopDepth - (u32)1; parGridEnter("loops", false); return n; }
         if (check((u16)tokFor)) {
-            // --par-auto: an outermost loop in plain code may become a par block.
-            if (_parAuto && _blkFrames.count() == (u32)0 && _loopDepth == (u32)0) return parAutoFor();
+            // --par-auto: an outermost loop in plain code may become a par block —
+            // inside a block literal too, but not inside a par body (the reference explains).
+            if (_parAuto && _loopDepth == (u32)0
+                && (_blkFrames.count() == (u32)0
+                    || ((Map*)_blkFrames.get(_blkFrames.count() - (u32)1)).get((Hashable*)String.withCString("par")) == (Object*)0))
+                return parAutoFor();
             parGridEnter("loops", true); _loopDepth = _loopDepth + (u32)1; Node* n = parseFor(); _loopDepth = _loopDepth - (u32)1; parGridEnter("loops", false); return n;
         }
         if (check((u16)tokSwitch))   { parGridEnter("switches", true); Node* n = parseSwitch(); parGridEnter("switches", false); return n; }

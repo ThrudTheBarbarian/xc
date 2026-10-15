@@ -26,6 +26,9 @@ u32 a[N];
 u32 b[N];
 float f[N];
 u32 c[N];
+#define W 640
+#define H 480
+u32 g[W * H];
 i32 main(void)
     {
     for (u32 i in 0..N)                     // an element map: a block
@@ -61,7 +64,19 @@ i32 main(void)
         if ((c[i] & (u32)1) != (u32)0)
             count++;                         // acc++: a + reduction
         }
-    Stdio.printf("%u %u %u %u %u %u %u %u %u\n", total, bits, b[N - 1], (u32)fs, last, (u32)f[N - 1], c[N - 1], inc, count);
+    block void(void) inBlock = block void(void)   // a loop inside a block literal: a block too
+        {
+        for (u32 i in 0..N)
+            b[i] = b[i] ^ (u32)5;
+        };
+    inBlock();
+    for (u32 i in 0..H)                     // a perfect nest: one block over the W*H grid
+        for (u32 j in 0..W)
+            g[i * W + j] = (u32)(i * 3) ^ (u32)j;
+    u32 gs = (u32)0;
+    for (u32 i in 0..H * W)
+        gs = gs ^ g[i];
+    Stdio.printf("%u %u %u %u %u %u %u %u %u %u\n", total, bits, b[N - 1], (u32)fs, last, (u32)f[N - 1], c[N - 1], inc, count, gs);
     return (i32)0;
     }
 XC
@@ -82,10 +97,13 @@ got=$(grep -v '^par: ' "$W/rep" | tail -1)
 # run on any device, and the :serial loop is no block at all, so the blocks
 # are numbered 1-4 and 5-7.
 n=$(grep -cE 'par: autopar_[0-9]+:' "$W/rep")
-[ "$n" -ge 6 ] || { echo "FAIL auto: expected the auto blocks in the report, saw $n lines"; cat "$W/rep"; fail=1; }
+[ "$n" -ge 9 ] || { echo "FAIL auto: expected the auto blocks in the report, saw $n lines"; cat "$W/rep"; fail=1; }
 grep -q 'autopar_4' "$W/rep" && { echo "FAIL auto: the scan ran as a block"; fail=1; }
-for k in 5 6 7; do grep -q "autopar_$k:" "$W/rep" || { echo "FAIL auto: block autopar_$k (C-style / inclusive / acc++) did not run"; fail=1; }; done
-grep -q 'autopar_8' "$W/rep" && { echo "FAIL auto: an eighth block ran (the :serial loop?)"; fail=1; }
+for k in 5 6 7 8 9; do grep -q "autopar_$k:" "$W/rep" || { echo "FAIL auto: block autopar_$k (C-style / inclusive / acc++ / block literal / nest) did not run"; fail=1; }; done
+grep -q 'autopar_11' "$W/rep" && { echo "FAIL auto: an eleventh block ran (the :serial loop?)"; fail=1; }
+# The nest ran as ONE block over the whole grid (640*480 items), not as 480
+# blocks of 640, and the reduction after it (autopar_10) is a block of its own.
+grep -q 'autopar_9: 307200 items' "$W/rep" || { echo "FAIL auto: the perfect nest did not run as one 307200-item grid block"; grep autopar_9 "$W/rep" | head -3; fail=1; }
 # Under `#goal speed` the float reduction is a block too (its sum may
 # reassociate; the goal says that is wanted), and the result still agrees.
 { echo '#goal speed'; cat "$W/auto.xc"; } > "$W/speed.xc"

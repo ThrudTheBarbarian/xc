@@ -434,6 +434,11 @@ static BOOL gEmitsWGSL = NO;
                                                                  @"on which runs last", scatter]
                              category:XTWarnParScatter
                                    at:decl.location];
+                // -Wpar-auto says what was wrapped as well as what was demoted.
+                if (isAuto)
+                    [diag emitWarning:@"this loop became a 'par' block (--par-auto)"
+                             category:XTWarnParAuto
+                                   at:decl.location];
                 continue;
                 }
             if (isAuto)
