@@ -38,9 +38,14 @@ i32 main(void)
     return (i32)0;
     }
 XC
-"$XC" -q -H . -O2 -A arm64 -S -o "$W/hoist.s" "$W/hoist.xc" >"$W/build" 2>&1 || { echo "FAIL hoist: build"; head -3 "$W/build"; exit 1; }
+# The arm64 code: the host's own target on a Mac, and Android's elsewhere
+# (the same back end; the macOS support tree imports frameworks a Linux
+# host cannot see).
+ARCH=$( [ "$(uname -s)" = Darwin ] && echo arm64 || echo android )
+"$XC" -q -H . -O2 -A $ARCH -S -o "$W/hoist.s" "$W/hoist.xc" >"$W/build" 2>&1 || { echo "FAIL hoist: build"; head -3 "$W/build"; exit 1; }
 # run() from its first loop label to its return.
-awk '/^_ParImpl\$0\$run:/{on=1} on && /_bb_1_for_header:/{loop=1} on && loop{print} on && /^[[:space:]]*ret$/{exit}' "$W/hoist.s" > "$W/loop.s"
+# (Mach-O spells the symbol _ParImpl$0$run, ELF spells it without the underscore.)
+awk '/^_?ParImpl\$0\$run:/{on=1} on && /_bb_1_for_header:/{loop=1} on && loop{print} on && /^[[:space:]]*ret$/{exit}' "$W/hoist.s" > "$W/loop.s"
 [ -s "$W/loop.s" ] || { echo "FAIL hoist: no par loop in the arm64 output"; exit 1; }
 reloads=$(grep -cE '^\s*ldr\s+x[0-9]+,\s*\[x[0-9]+(,\s*#[0-9]+)?\]' "$W/loop.s")
 if [ "$reloads" != 0 ]; then
