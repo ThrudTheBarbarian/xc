@@ -296,7 +296,14 @@ class Socket
         u64 h = socket((i32)2, (i32)1, (i32)0);
         if (h == (u64)0xFFFFFFFFFFFFFFFF)
             throw new SocketError(String.withCString("cannot make a socket"));
-        setsockopt(h, (i32)0xFFFF, (i32)4, (u8*)&one, (i32)4);               // SO_REUSEADDR
+        // SO_EXCLUSIVEADDRUSE, not SO_REUSEADDR: on Windows the latter lets a
+        // SECOND process bind the same port while a listener holds it, and
+        // connections then reach either server (two sweeps running the
+        // websocket fixture at once shared one port). Exclusive use is what
+        // SO_REUSEADDR means on every other platform, and a port whose last
+        // connection is in TIME_WAIT can still be bound.
+        i32 exclusive = (i32)1;
+        setsockopt(h, (i32)0xFFFF, (i32)0 - (i32)5, (u8*)&exclusive, (i32)4);   // SO_EXCLUSIVEADDRUSE (~SO_REUSEADDR)
         if (bind(h, &sa[0], (i32)16) != (i32)0 || listen(h, (i32)16) != (i32)0)
             {
             closesocket(h);
