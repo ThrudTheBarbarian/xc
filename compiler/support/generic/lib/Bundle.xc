@@ -65,6 +65,8 @@
 u32 GetModuleFileNameA(pointer module, u8* buf, u32 size);
 #elif ARCH_arm64 && !PLATFORM_android
 i32 _NSGetExecutablePath(u8* buf, u32* size);
+#elif ARCH_x86_64 || PLATFORM_android
+i64 readlink(u8* path, u8* buf, u64 size);
 #endif
 
 class Bundle
@@ -119,7 +121,8 @@ class Bundle
         }
 
     // Where the running executable is. The OS says on Windows
-    // (GetModuleFileNameA) and on Apple platforms (_NSGetExecutablePath).
+    // (GetModuleFileNameA), on Apple platforms (_NSGetExecutablePath) and on
+    // Linux and Android (/proc/self/exe, bundles-and-plugins.md §6 step 1).
     // Elsewhere argv[0] is the answer when it names a directory, and when it
     // does not (`myapp`, started from PATH) the PATH is searched as the shell
     // did. It used to be argv[0] alone, so a program started from PATH looked
@@ -139,6 +142,13 @@ class Bundle
         u32 msize = (u32)1024;
         if (_NSGetExecutablePath(&mbuf[0], &msize) == (i32)0)
             return String.withCString(&mbuf[0]);
+#elif ARCH_x86_64 || PLATFORM_android
+        // Linux and Android: the kernel's own answer, exact whatever argv[0]
+        // says (a symlink, a relative start, an exec by a launcher).
+        u8 lbuf[1024];
+        i64 ln = readlink((u8*)"/proc/self/exe", &lbuf[0], (u64)1023);
+        if (ln > (i64)0)
+            return String.withBytes(&lbuf[0], (u32)ln);
 #endif
         String* a0 = Process.argument((u32)0);
         if (a0 == 0 || a0.byteLength() == (u32)0)

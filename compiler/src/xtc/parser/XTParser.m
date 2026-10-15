@@ -2680,6 +2680,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                                                                         type:varType
                                                                  initialiser:firstInit
                                                                     location:loc];
+    firstDecl.nameLocation = nameTok.location;
     firstDecl.isVolatile = isVolatile;
     firstDecl.isRegister = isRegister;
     firstDecl.isStatic = isStatic;
@@ -2708,6 +2709,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                                                                            type:varType
                                                                     initialiser:nextInit
                                                                        location:nextName.location];
+        nextDecl.nameLocation = nextName.location;
         nextDecl.isRegister = isRegister;
         nextDecl.isStatic = isStatic;
         nextDecl.isGlobal = isGlobal;

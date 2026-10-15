@@ -52,6 +52,8 @@ NSString* XTWarningCategoryName(XTWarningCategory cat)
         return @"par-auto";
     case XTWarnParGpu:
         return @"par-gpu";
+    case XTWarnRetainCycle:
+        return @"retain-cycle";
         }
     return @"";
     }
@@ -101,6 +103,8 @@ XTWarningCategory XTWarningCategoryFromName(NSString* name)
         return XTWarnParAuto;
     if ([name isEqualToString:@"par-gpu"])
         return XTWarnParGpu;
+    if ([name isEqualToString:@"retain-cycle"])
+        return XTWarnRetainCycle;
     return XTWarnNone;
     }
 
@@ -131,6 +135,9 @@ NSArray<NSString*>* XTWarningCategoryAllNames(void)
         @"unguarded-action",
         @"return-type",
         @"par-scatter",
+        @"par-auto",
+        @"par-gpu",
+        @"retain-cycle"
     ];
     }
 

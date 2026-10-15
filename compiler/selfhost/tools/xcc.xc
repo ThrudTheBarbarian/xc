@@ -5078,7 +5078,7 @@ String* warningCategoryNames(void)
         "unknown-pragma, printf-format, unowned-bound, cloaked-transitive, "
         "unreachable-catch, comment, packed-align, range-init-count, "
         "covariant-return, unguarded-action, toolchain-fallback, return-type, "
-        "par-scatter, par-auto, par-gpu");
+        "par-scatter, par-auto, par-gpu, retain-cycle");
 }
 
 bool isWarningCategory(String* c)

@@ -272,6 +272,7 @@ Suppress a category with `-Wno-<category>`. All are on by default.
 | `par-scatter` | (from 0.7) a `par` block writes a buffer at an index that is not `k*i + c` in the item's index, so two items might write the same element |
 | `par-gpu` | (from 0.7) compiling for a target with a GPU, a `par` block that cannot run there, and why: it runs on the CPU's threads instead |
 | `range-init-count` | a range initialiser (`u8 a[10] = 0..9;`) that supplies fewer or more values than the array holds |
+| `retain-cycle` | (from 0.8.1) a class whose strong class-pointer fields, its own or inherited, lead back to it through another class (`Parent.kids` holds `Child` and `Child.dad` holds `Parent`): ARC can free none of them. Named at the field that closes the cycle; mark one side `weak:`. A field of the class's own type (a list's `next`) is not a cycle, and typed collections are not followed. |
 
 `xcc --help` prints the full category list, including any checks added after this
 page.

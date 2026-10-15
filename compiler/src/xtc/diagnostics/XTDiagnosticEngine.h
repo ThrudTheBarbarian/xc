@@ -96,6 +96,8 @@ typedef NS_ENUM(NSInteger, XTWarningCategory) {
                              // on the CPU's threads instead, which a reader
                              // expecting the GPU would otherwise only find by
                              // timing it.
+    XTWarnRetainCycle,       // -Wno-retain-cycle — a class whose strong class-pointer
+                             // fields lead back to itself (sema, whole program)
 };
 
 /****************************************************************************\

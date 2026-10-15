@@ -598,6 +598,7 @@
     [self validateCloakedDecls];
     [self validateVariadicNonReentrance];
     [self checkCovariantReturnOpportunities];
+    [self checkRetainCycles:program];
     [self computeStaticFrameEligibility];
     [self computeMaxCallDepths];
     [self inferCloakSafety:program];
@@ -3360,4 +3361,99 @@ static NSUInteger sumParamBytes(NSArray<XTParamNode*>* params)
         }
     }
 
+/****************************************************************************\
+|* Retain cycles: a class whose strong class-pointer fields (its own and its
+|* ancestors', `weak:` ones aside) lead back to itself can never be freed by
+|* ARC. Every class is a root in declaration order; from a root the walk
+|* follows edges only into classes declared at or after it, so each cycle is
+|* reported once, at the field that closes it into the earliest of its
+|* classes. A class is expanded once per root. A field of the class's own
+|* type (a list's next, a tree's children) is not a cycle: only loops through
+|* two or more classes are reported. Typed collections (an Array<Child*> held
+|* strongly) are not edges here.
+|* @param program  The unit, for the classes in declaration order.
+\****************************************************************************/
+- (void)checkRetainCycles:(XTProgramNode*)program
+    {
+    NSMutableArray<XTClassDeclNode*>* classes = [NSMutableArray array];
+    NSMutableDictionary<NSString*, NSNumber*>* indexOf = [NSMutableDictionary dictionary];
+    for (XTASTNode* decl in program.declarations)
+        {
+        if (![decl isKindOfClass:[XTClassDeclNode class]])
+            continue;
+        XTClassDeclNode* cls = (XTClassDeclNode*)decl;
+        if (!cls.className || indexOf[cls.className])
+            continue;
+        indexOf[cls.className] = @(classes.count);
+        [classes addObject:cls];
+        }
+    for (XTClassDeclNode* root in classes)
+        {
+        NSMutableArray<NSString*>* path = [NSMutableArray array];
+        NSMutableSet<NSString*>* visited = [NSMutableSet set];
+        [self retainCycleFrom:root root:root index:indexOf path:path visited:visited];
+        }
+    }
+
+- (void)retainCycleFrom:(XTClassDeclNode*)cls
+                   root:(XTClassDeclNode*)root
+                  index:(NSDictionary<NSString*, NSNumber*>*)indexOf
+                   path:(NSMutableArray<NSString*>*)path
+                visited:(NSMutableSet<NSString*>*)visited
+    {
+    [visited addObject:cls.className];
+    NSUInteger rootIndex = indexOf[root.className].unsignedIntegerValue;
+    // the fields: the class's own, then each ancestor's
+    for (XTClassDeclNode* c = cls; c; c = c.parentName ? self.classesByName[c.parentName] : nil)
+        {
+        for (XTVariableDeclNode* f in c.ivars)
+            {
+            XTType* t = f.declaredType;
+            if (![t isKindOfClass:[XTPointerType class]] || ((XTPointerType*)t).isWeak)
+                continue;
+            XTType* pe = ((XTPointerType*)t).pointeeType;
+            if (!pe || pe.kind != XTTypeKindClass)
+                continue;
+            NSString* target = pe.displayName;
+            NSNumber* ti = indexOf[target];
+            if (!ti || ti.unsignedIntegerValue < rootIndex)
+                continue;
+            NSString* part = [NSString stringWithFormat:@"%@.%@ holds %@", c.className, f.varName, target];
+            if ([target isEqualToString:root.className])
+                {
+                // A field of the class's own type is a list or a tree, the
+                // normal thing, not a cycle; only a loop through two or more
+                // classes is reported.
+                if (path.count == 0)
+                    continue;
+                NSMutableArray<NSString*>* parts = [NSMutableArray arrayWithArray:path];
+                [parts addObject:part];
+                NSString* chain;
+                if (parts.count == 1)
+                    chain = parts[0];
+                else
+                    chain = [NSString stringWithFormat:@"%@ and %@",
+                             [[parts subarrayWithRange:NSMakeRange(0, parts.count - 1)] componentsJoinedByString:@", "],
+                             parts.lastObject];
+                NSString* msg;
+                if (parts.count == 2)
+                    msg = [NSString stringWithFormat:@"a strong reference cycle: %@, so ARC can free neither; mark one side weak:", chain];
+                else
+                    msg = [NSString stringWithFormat:@"a strong reference cycle: %@, so ARC can free none of them; mark one side weak:", chain];
+                [self.diagnostics emitWarning:msg category:XTWarnRetainCycle at:(f.nameLocation ?: f.location)];
+                continue;
+                }
+            if ([visited containsObject:target])
+                continue;
+            XTClassDeclNode* next = self.classesByName[target];
+            if (!next)
+                continue;
+            [path addObject:part];
+            [self retainCycleFrom:next root:root index:indexOf path:path visited:visited];
+            [path removeLastObject];
+            }
+        }
+    }
+
 @end
+

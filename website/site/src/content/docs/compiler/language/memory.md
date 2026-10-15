@@ -127,6 +127,8 @@ class Parent {
 }
 ```
 
+**From 0.8.1** the compiler finds the obvious cycles for you: a class whose strong class-pointer fields (its own or inherited) lead back to it through another class gets a `retain-cycle` warning at the field that closes the loop, naming the chain (`Parent.kids holds Child and Child.dad holds Parent`). A field of the class's own type is a list or a tree, not a cycle, and typed collections are not followed, so a `Parent` holding an `Array<Child*>` is yours to check. `-Wno-retain-cycle` silences it.
+
 A `weak:T*` slot holds a raw pointer but is **invisible to refcounting**: assigning to it does not retain, and releasing the pointee does not consult it. Each live weak slot is linked onto a chain that hangs off the referent's own heap header. When a refcount reaches zero, the dealloc path walks that object's chain and writes `$00` through every slot pointing at the dying block. Later reads of the slot return null.
 
 ```c

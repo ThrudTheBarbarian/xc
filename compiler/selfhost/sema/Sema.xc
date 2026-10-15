@@ -1044,6 +1044,123 @@ class Sema
         collectFormatWrappers(program);
         typeProgram(program);
         checkVariadicReentrance();
+        checkRetainCycles(program);
+        }
+
+    // ── retain cycles ───────────────────────────────────────────────────
+    // As the reference's checkRetainCycles: every class a root in declaration
+    // order, strong class-pointer fields (its own, then its ancestors') as
+    // edges, edges only into classes declared at or after the root, each
+    // class expanded once per root; a cycle is reported at the field that
+    // closes it. A field of the class's own type is not a cycle; `weak:`
+    // fields are not edges; typed collections are not either.
+    Array* _rcClasses;
+    Array* _rcPath;
+    Map* _rcVisited;
+    u32 rcIndexOf(String* name)
+        {
+        for (u32 i = (u32)0; i < _rcClasses.count(); i = i + (u32)1)
+            if (((Node*)_rcClasses.get(i)).name().equals(name))
+                return i;
+        return (u32)$FFFFFFFF;
+        }
+    void checkRetainCycles(Node* program)
+        {
+        _rcClasses = new Array();
+        for (u32 i = (u32)0; i < program.kidCount(); i = i + (u32)1)
+            {
+            Node* cls = program.kid(i);
+            if (cls.kind() != (u16)nkClassDecl || cls.name() == 0)
+                continue;
+            if (rcIndexOf(cls.name()) != (u32)$FFFFFFFF)
+                continue;
+            _rcClasses.add((Object*)cls);
+            }
+        for (u32 r = (u32)0; r < _rcClasses.count(); r = r + (u32)1)
+            {
+            _rcPath = new Array();
+            _rcVisited = new Map();
+            retainCycleFrom((Node*)_rcClasses.get(r), r);
+            }
+        }
+    // The class a strong field's spelling points at, or 0: a pointer, not
+    // weak:, one sigil, and a class of this unit.
+    String* rcTargetOf(String* t)
+        {
+        if (t == 0 || !Types.isPointer(t))
+            return (String*)0;
+        if (t.byteIndexOf(String.withCString("weak:")) != (u32)$FFFFFFFF)
+            return (String*)0;
+        String* q = Overload._unqualify(t);
+        u32 n = q.byteLength();
+        if (n < (u32)2)
+            return (String*)0;
+        u8 last = q.byteAt(n - (u32)1);
+        if (last != (u8)'*' && last != (u8)'@')
+            return (String*)0;
+        String* name = q.substringBytes((u32)0, n - (u32)1);
+        if (_classes.get((Hashable*)name) == 0)
+            return (String*)0;
+        return name;
+        }
+    void retainCycleFrom(Node* cls, u32 rootIndex)
+        {
+        _rcVisited.set((Hashable*)cls.name(), (Object*)cls);
+        String* rootName = ((Node*)_rcClasses.get(rootIndex)).name();
+        for (Node* c = cls; c != 0; c = parentOf(c))
+            {
+            for (u32 j = (u32)0; j < c.kidCount(); j = j + (u32)1)
+                {
+                Node* f = c.kid(j);
+                if (f.kind() == (u16)nkMethodDecl || f.name() == 0)
+                    continue;
+                String* target = rcTargetOf(f.op());
+                if (target == 0)
+                    continue;
+                u32 ti = rcIndexOf(target);
+                if (ti == (u32)$FFFFFFFF || ti < rootIndex)
+                    continue;
+                String* part = String.withString(c.name());
+                part.appendByte((u8)'.');
+                part.append(f.name());
+                part.appendCString(" holds ");
+                part.append(target);
+                if (target.equals(rootName))
+                    {
+                    // A field of the class's own type is a list or a tree,
+                    // not a cycle: only loops through two or more classes.
+                    if (_rcPath.count() == (u32)0)
+                        continue;
+                    u32 n = _rcPath.count() + (u32)1;
+                    String* chain = new String();
+                    for (u32 i = (u32)0; i < _rcPath.count(); i = i + (u32)1)
+                        {
+                        if (i > (u32)0)
+                            chain.appendCString(", ");
+                        chain.append((String*)_rcPath.get(i));
+                        }
+                    if (n > (u32)1)
+                        chain.appendCString(" and ");
+                    chain.append(part);
+                    String* msg = String.withCString("a strong reference cycle: ");
+                    msg.append(chain);
+                    if (n == (u32)2)
+                        msg.appendCString(", so ARC can free neither; mark one side weak:");
+                    else
+                        msg.appendCString(", so ARC can free none of them; mark one side weak:");
+                    _warnAt(String.withCString("retain-cycle"), msg, f);
+                    continue;
+                    }
+                if (_rcVisited.get((Hashable*)target) != 0)
+                    continue;
+                Node* next = (Node*)_classes.get((Hashable*)target);
+                if (next == 0)
+                    continue;
+                _rcPath.add((Object*)part);
+                retainCycleFrom(next, rootIndex);
+                _rcPath.removeLast();
+                }
+            }
         }
 
     // ── Pass 2: types ───────────────────────────────────────────────────

@@ -211,6 +211,12 @@ typedef NS_ENUM(NSInteger, XTPlacement) {
 @interface XTVariableDeclNode : XTASTNode
 @property(nonatomic, readonly) NSString* varName;
 /****************************************************************************\
+|* Where the NAME is, when the parser noted it (`location` is the start of
+|* the declaration, its type). A diagnostic about the variable itself, such
+|* as the retain-cycle warning, points here.
+\****************************************************************************/
+@property(nonatomic, nullable) XTSourceLocation* nameLocation;
+/****************************************************************************\
 |* nil when declared with 'auto'.
 \****************************************************************************/
 @property(nonatomic, nullable) XTType* declaredType;
