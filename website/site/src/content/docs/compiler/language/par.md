@@ -570,6 +570,11 @@ A daemon that goes away mid-run costs the run nothing but time: the tiles it
 held are handed to the other workers, and a tile is the same wherever it
 runs, so the answer is the one a local run gives.
 
+Several programs may use one daemon at once. Its GPUs serve one program's run
+at a time: while one runs, another's heartbeat is told "not now" and it sends
+its tiles elsewhere, and a run that waits too long for the GPUs is declined
+for that run and asks again on the next.
+
 What pays: blocks with a lot of work per byte moved (deep fractals, searches,
 batched scoring) on a fast link. A streaming block moves more than it computes
 and loses to the link, and `auto` measures that and keeps the local devices.

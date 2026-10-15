@@ -84,6 +84,26 @@ else
 fi
 kill $XCD4 2> /dev/null
 wait $XCD4 2> /dev/null
+# Two programs on one daemon at once: the GPUs serve one run at a time and
+# both answers are right.
+PORT5=$((PORT + 4))
+XC_PAR_REPORT=1 "$L/xcd" -port $PORT5 -no-mdns > "$L/xcd5.log" 2>&1 &
+XCD5=$!
+sleep 1
+mkdir -p "$L/st_two_a" "$L/st_two_b"
+XCC_SETTINGS_DIR="$L/st_two_a" XC_PAR_REMOTE=127.0.0.1:$PORT5 XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/two_a.out" 2>&1 &
+PA=$!
+XCC_SETTINGS_DIR="$L/st_two_b" XC_PAR_REMOTE=127.0.0.1:$PORT5 XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/two_b.out" 2>&1 &
+PB=$!
+wait $PA; wait $PB
+if grep -v '^par:' "$L/two_a.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && grep -v '^par:' "$L/two_b.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null \
+   && [ "$(grep -c 'a program connected' "$L/xcd5.log")" = 2 ]; then
+    echo "PASS remote two programs"
+else
+    echo "FAIL remote two programs"; grep -v '^par:' "$L/two_a.out" "$L/two_b.out" | head -4; grep -c 'connected' "$L/xcd5.log"; rc=1
+fi
+kill $XCD5 2> /dev/null
+wait $XCD5 2> /dev/null
 [ $rc = 0 ] && rm -rf "$L"
 echo "--- remote: $([ $rc = 0 ] && echo pass || echo FAIL) ---"
 exit $rc

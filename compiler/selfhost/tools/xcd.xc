@@ -100,20 +100,39 @@ i32 main(void)
     }
     Stdio.printf("xcd: serving %s on port %u%s\n", identity.cString(), (u32)port,
                  ParRemoteServe.hasNimby() ? (ParRemoteServe.nimbyNow() ? " (nimby now)" : " (nimby window set)") : "");
+    // Advertised on the subnet as _xcd._tcp, on a thread of its own. The
+    // responder and its thread live as long as main does: a thread never
+    // owns its receiver.
+    MdnsResponder* responder = (MdnsResponder*)0;
+    Thread* responderThread = (Thread*)0;
     if (mdns)
     {
-        // Advertised on the subnet as _xcd._tcp, on a thread of its own.
-        MdnsResponder* r = new MdnsResponder(port, pool, String.withCString(PAR_CACHE_VER));
-        Thread.spawn(&r.run);
+        responder = new MdnsResponder(port, pool, String.withCString(PAR_CACHE_VER));
+        responderThread = Thread.spawn(&responder.run);
         Stdio.printf("xcd: advertising _xcd._tcp%s%s\n", pool.byteLength() > (u32)0 ? " in pool " : "", pool.cString());
     }
+    ParRemoteServe.setup();
+    // Each program on a thread of its own; the GPUs serve one run at a time
+    // (ParRemoteServe). A thread never owns its receiver, so the connection
+    // objects are kept here until their programs have gone.
+    Array* conns = new Array();
     while (true)
     {
         Socket* c = ls.accept((i32)-1);
         if (c == (Socket*)0)
             continue;
-        ParRemoteServe.serve(c, workers, identity);
-        c.close();
+        u32 i = (u32)0;
+        while (i < conns.count())
+        {
+            if (((ParRemoteConnection*)conns.get(i)).done())
+                conns.removeAt(i);
+            else
+                i = i + (u32)1;
+        }
+        ParRemoteConnection* conn = new ParRemoteConnection(c, workers, identity);
+        conns.add((Object*)conn);
+        Thread* t = Thread.spawn(&conn.run);
+        t.detach();
     }
     return 0;
 }

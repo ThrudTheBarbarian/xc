@@ -184,12 +184,19 @@ class Stdio
 
     static void _emitStr(string s)
     {
-        u8 c = *s;
-        while (c != (u8)0)
+        // One write for the whole string (as _putString): a line from one
+        // thread never lands inside another's, and it is one system call.
+        i32 left = (i32)0;
+        while (s[(u32)left] != (u8)0)
+            left = left + (i32)1;
+        u8* p = s;
+        while (left > (i32)0)
         {
-            _putc(c);
-            s = s + 1;
-            c = *s;
+            i32 n = write((i32)1, p, left);
+            if (n <= (i32)0)
+                break;
+            p = p + n;
+            left = left - n;
         }
     }
 

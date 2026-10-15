@@ -488,6 +488,11 @@ class Mdns
             if (n <= (i32)0)
                 continue;
             MdnsService* svc = Mdns.parseAnswer(&buf[0], (u32)n, &ip[0], version);
+            if (ParDevice.reporting())
+                {
+                Log.info("par: mdns: %d bytes from %s:%u, %s", n, Mdns.dotted(&ip[0]).cString(), (u32)port,
+                         svc == (MdnsService*)0 ? "not a daemon's answer" : "a daemon");
+                }
             if (svc == (MdnsService*)0 || !svc.pool.equals(String.withCString(pool)))
                 continue;
             bool seen = false;
@@ -530,7 +535,10 @@ class MdnsResponder : Object
         {
         MdnsSocket* s = MdnsSocket.open(true);
         if (s == (MdnsSocket*)0)
+            {
+            Log.info("xcd: mdns: cannot open port 5353, not advertising");
             return;
+            }
         Data* a = Mdns.answer("xcd", _port, _pool.cString(), _version.cString());
         u8 group[4];
         group[0] = (u8)224;
@@ -547,7 +555,11 @@ class MdnsResponder : Object
             if (n <= (i32)0)
                 continue;
             if (Mdns.asksForService(&buf[0], (u32)n))
+                {
+                if (ParDevice.reporting())
+                    Log.info("xcd: mdns: query from %s:%u, answered", Mdns.dotted(&ip[0]).cString(), (u32)port);
                 s.send(a.bytes(), a.length(), &ip[0], port);
+                }
             }
         s.close();
         }

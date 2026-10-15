@@ -62,6 +62,8 @@
 #import "Socket.xc"
 #import "Sha256.xc"
 #import "Mdns.xc"
+#import "Mutex.xc"
+#import "Thread.xc"
 
 #define PAR_REMOTE_PROTO 2
 #define PAR_REMOTE_PORT 7227
@@ -515,8 +517,13 @@ class ParRemoteWorker : ParWorker
         u32 type = (u32)0;
         Data* a = ParWire.recv(_s, &type, (i32)30000);
         _held = a != (Data*)0 && type == (u32)PRM_ANSWER && a.length() == (u32)1 && a.byteAt((u32)0) == (u8)1;
+        // 2: the daemon's GPUs are another program's just now — not a
+        // verdict on the block, so it is asked again next run.
+        if (a != (Data*)0 && type == (u32)PRM_ANSWER && a.length() == (u32)1 && a.byteAt((u32)0) == (u8)2)
+            _heldSrc = (pointer)0;
         if (ParDevice.reporting() && !_held)
-            Log.info("par: %s does not take %s", _identity.cString(), proto.parName());
+            Log.info("par: %s does not take %s%s", _identity.cString(), proto.parName(),
+                     _heldSrc == (pointer)0 ? " just now (busy)" : "");
         // The tile floor the link asks for: a tile's bytes (each sliced
         // array's and global's element, there or back) take at least twenty
         // round trips to move, so the latency is five percent of it at most.
@@ -684,6 +691,32 @@ class ParRemoteWorker : ParWorker
         // Tiles a dead connection never returned are not done: the queue's
         // loop ends with them pending and the run fails on, which is the
         // honest outcome until tiles are re-issued (idempotent tiles, step 3).
+        }
+    }
+
+// One connection on a thread of the daemon's (xcd spawns one per accept).
+class ParRemoteConnection : Object
+    {
+    Socket* _s;
+    Array* _workers;
+    String* _identity;
+    Atomic* _done;      // 1 once the program has gone: the daemon may drop the object
+    void init(Socket* s, Array* workers, String* identity)
+        {
+        _s = s;
+        _workers = workers;
+        _identity = identity;
+        _done = new Atomic();
+        }
+    bool done(void)
+        {
+        return _done.load() != (i32)0;
+        }
+    void run(void)
+        {
+        ParRemoteServe.serve(_s, _workers, _identity);
+        _s.close();
+        _done.store((i32)1);
         }
     }
 
@@ -952,14 +985,16 @@ class ParRemoteServe
     // from -1 means no window. A window may cross midnight.
     static i32 _nimbyFrom;
     static i32 _nimbyTo;
+    static bool _nimbySet;    // a static's default is 0, which is a valid minute
     static void setNimby(i32 fromMinutes, i32 toMinutes)
         {
         _nimbyFrom = fromMinutes;
         _nimbyTo = toMinutes;
+        _nimbySet = true;
         }
     static bool hasNimby(void)
         {
-        return _nimbyFrom >= (i32)0;
+        return _nimbySet;
         }
     // The local time of day in minutes.
     static i32 localMinutes(void)
@@ -979,7 +1014,7 @@ class ParRemoteServe
         }
     static bool nimbyNow(void)
         {
-        if (_nimbyFrom < (i32)0)
+        if (!_nimbySet)
             return false;
         i32 m = localMinutes();
         if (_nimbyFrom <= _nimbyTo)
@@ -987,10 +1022,75 @@ class ParRemoteServe
         return m >= _nimbyFrom || m < _nimbyTo;
         }
 
+    // The GPUs serve one program's RUN at a time. Several programs may be
+    // connected, each on a thread of its own (xcd spawns one per
+    // connection): their heartbeats are answered meanwhile — "not now"
+    // while another program holds the GPUs, so they send their tiles
+    // elsewhere — and a HOLDS or PREPARE that finds the GPUs held waits a
+    // while, then answers 2 (busy), which the program asks again next run.
+    // A FINISH, or the connection going away, hands the GPUs on.
+    static Mutex* _gpus;
+    static Mutex* _state;     // over _holder and _nextConn
+    static i64 _holder;       // the connection holding the GPUs; 0 none
+    static i64 _nextConn;
+    static void setup(void)
+        {
+        _gpus = new Mutex();
+        _state = new Mutex();
+        _holder = (i64)0;
+        _nextConn = (i64)0;
+        }
+    static i64 newConnection(void)
+        {
+        _state.lock();
+        _nextConn = _nextConn + (i64)1;
+        i64 id = _nextConn;
+        _state.unlock();
+        return id;
+        }
+    static bool gpusFree(i64 me)
+        {
+        _state.lock();
+        bool free = _holder == (i64)0 || _holder == me;
+        _state.unlock();
+        return free;
+        }
+    // The GPUs for connection me, waiting up to ms for them: false when
+    // another program kept them that long.
+    static bool takeGpus(i64 me, i32 ms)
+        {
+        if (gpusFree(me) && _holder == me)
+            return true;
+        i64 until = ParDevice.nowUs() + (i64)ms * (i64)1000;
+        while (!_gpus.tryLock())
+            {
+            if (ParDevice.nowUs() > until)
+                return false;
+            Thread.sleepMs((u32)5);
+            }
+        _state.lock();
+        _holder = me;
+        _state.unlock();
+        return true;
+        }
+    static void releaseGpus(i64 me)
+        {
+        _state.lock();
+        bool mine = _holder == me;
+        if (mine)
+            _holder = (i64)0;
+        _state.unlock();
+        if (mine)
+            _gpus.unlock();
+        }
+
     // One connection, start to end: the handshake, then blocks and tiles
     // until the program goes away. The GPU workers are the daemon's own.
     static void serve(Socket* s, Array* workers, String* identity)
         {
+        if (_gpus == (Mutex*)0)
+            ParRemoteServe.setup();
+        i64 me = ParRemoteServe.newConnection();
         // HELLO.
         Data* hello = new Data();
         hello.appendBytes((u8*)"XCD1", (u32)4);
@@ -1103,7 +1203,11 @@ class ParRemoteServe
                 ParRemoteChunk* c = ParRemoteChunk.from(p, &at, false);
                 bool held = false;
                 bool nimby = ParRemoteServe.nimbyNow();
-                for (u32 i = (u32)0; i < workers.count() && !held && !nimby; i = i + (u32)1)
+                // Compiling the block's kernel touches the workers: the GPUs
+                // are taken for it, briefly, and given back unless this
+                // connection is mid-run.
+                bool busy = !nimby && !ParRemoteServe.takeGpus(me, (i32)20000);
+                for (u32 i = (u32)0; i < workers.count() && !held && !nimby && !busy; i = i + (u32)1)
                     {
                     // Each worker lays the block out from its own section.
                     ParWorker* cand = (ParWorker*)workers.get(i);
@@ -1112,10 +1216,12 @@ class ParRemoteServe
                     if (lc != (ParLayout*)0 && cand.forBlock((ParChunk*)c, c.gpuSource(), lc))
                         held = true;
                     }
+                if (w == (ParWorker*)0)
+                    ParRemoteServe.releaseGpus(me);
                 Data* a = new Data();
-                ParWire.putU8(a, held ? (u8)1 : (u8)0);
+                ParWire.putU8(a, held ? (u8)1 : busy ? (u8)2 : (u8)0);
                 ParWire.send(s, (u32)PRM_ANSWER, a);
-                Log.info("xcd: %s %s", c.parName(), held ? "taken" : nimby ? "declined (nimby)" : "declined");
+                Log.info("xcd: %s %s", c.parName(), held ? "taken" : nimby ? "declined (nimby)" : busy ? "busy" : "declined");
                 }
             else if (type == (u32)PRM_PING)
                 {
@@ -1124,7 +1230,7 @@ class ParRemoteServe
                 Data* a = new Data();
                 ParWire.putI64(a, ParWire.rdI64(p, &at));
                 ParWire.putU8(a, ParWire.rdU8(p, &at));
-                ParWire.putU8(a, ParRemoteServe.nimbyNow() ? (u8)0 : (u8)1);
+                ParWire.putU8(a, ParRemoteServe.nimbyNow() || !ParRemoteServe.gpusFree(me) ? (u8)0 : (u8)1);
                 ParWire.putU32(a, (u32)pending.count() + inFlight);
                 ParWire.send(s, (u32)PRM_PONG, a);
                 }
@@ -1135,7 +1241,10 @@ class ParRemoteServe
                 i64 n = ParWire.rdI64(p, &at);
                 w = (ParWorker*)0;
                 l = (ParLayout*)0;
-                for (u32 i = (u32)0; i < workers.count() && w == (ParWorker*)0; i = i + (u32)1)
+                // The GPUs for the run: waited for up to 50 s (the program
+                // waits 60 for the answer), else busy.
+                bool busyRun = !ParRemoteServe.takeGpus(me, (i32)50000);
+                for (u32 i = (u32)0; i < workers.count() && w == (ParWorker*)0 && !busyRun; i = i + (u32)1)
                     {
                     ParWorker* cand = (ParWorker*)workers.get(i);
                     u8* sec = cand.section(chunk.gpuSource());
@@ -1147,9 +1256,13 @@ class ParRemoteServe
                         l = lc;
                         }
                     }
+                if (w == (ParWorker*)0)
+                    ParRemoteServe.releaseGpus(me);
                 Data* a = new Data();
-                ParWire.putU8(a, w != (ParWorker*)0 ? (u8)1 : (u8)0);
+                ParWire.putU8(a, w != (ParWorker*)0 ? (u8)1 : busyRun ? (u8)2 : (u8)0);
                 ParWire.send(s, (u32)PRM_ANSWER, a);
+                if (busyRun)
+                    Log.info("xcd: %s: busy, another program has the GPUs", chunk.parName());
                 pending = new Array();
                 inFlight = (u32)0;
                 }
@@ -1204,6 +1317,7 @@ class ParRemoteServe
                     w.finish();
                     }
                 w = (ParWorker*)0;
+                ParRemoteServe.releaseGpus(me);
                 }
             }
         if (w != (ParWorker*)0)
@@ -1211,6 +1325,7 @@ class ParRemoteServe
             w.drain();
             w.finish();
             }
+        ParRemoteServe.releaseGpus(me);
         Log.info("xcd: the program went away");
         }
 

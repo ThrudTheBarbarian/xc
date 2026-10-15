@@ -99,13 +99,17 @@ class ConsoleLogger<Logger>
 
     void _emit(string pre, string post, string tag, String* msg)
         {
+        // The whole line in one print: two threads logging at once then
+        // never interleave their lines (the daemon's connection threads).
+        String* line = new String();
         if (_tty())
-            Stdio.print(pre);
-        Stdio.print(tag);
-        Stdio.print(msg.cString()); // print(string) exists on EVERY platform Stdio
+            line.appendCString(pre);
+        line.appendCString(tag);
+        line.append(msg);
         if (_tty())
-            Stdio.print(post);
-        Stdio.print("\n");
+            line.appendCString(post);
+        line.appendCString("\n");
+        Stdio.print(line.cString()); // print(string) exists on EVERY platform Stdio
         }
 
     void error(String* msg)
