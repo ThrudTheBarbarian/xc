@@ -6303,12 +6303,35 @@ class Sema
                 continue;
             Map* seen = new Map();
             seen.set((Hashable*)n, (Object*)String.withCString("y"));
+            // `class A : A`: parentOf already answers 0 for it, so the walk
+            // below would never see the cycle; the reference reports it.
+            String* ownParent = Vtable.parentName(cls);
+            if (ownParent != 0 && ownParent.equals(n))
+                {
+                String* m = String.withCString("Circular inheritance: '");
+                m.append(n);
+                m.appendCString("' eventually inherits from itself via '");
+                m.append(n);
+                m.appendCString("'");
+                _errorAt(m, cls);
+                _cyclic.set((Hashable*)n, (Object*)String.withCString("y"));
+                continue;
+                }
             Node* cur = parentOf(cls);
             while (cur != 0)
                 {
                 String* cn = cur.name();
                 if (cn != 0 && seen.get((Hashable*)cn) != 0)
                     {
+                    // The reference's error, at the severed class: without
+                    // it the driver went on to lower the cycle and the
+                    // layout scan recursed off the stack.
+                    String* m = String.withCString("Circular inheritance: '");
+                    m.append(n);
+                    m.appendCString("' eventually inherits from itself via '");
+                    m.append(cn);
+                    m.appendCString("'");
+                    _errorAt(m, cls);
                     _cyclic.set((Hashable*)n, (Object*)String.withCString("y"));
                     cur = (Node*)0;
                     }
