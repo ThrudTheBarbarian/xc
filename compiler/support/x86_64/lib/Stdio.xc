@@ -353,8 +353,20 @@ class Stdio
     // Stdio.printf and String.withFormat always agree — and written out.
     static void _putString(String* s)
         {
-        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            _putc(s.byteAt(i));
+        // One write for the whole string, not one per byte: a line printed by
+        // one thread then never lands byte by byte inside another's (two
+        // threads' lines interleaved on a loaded host), and a printf is one
+        // system call rather than one per character.
+        u8* p = s.cString();
+        i32 left = (i32)s.byteLength();
+        while (left > (i32)0)
+            {
+            i32 n = write((i32)1, p, left);
+            if (n <= (i32)0)
+                break;
+            p = p + n;
+            left = left - n;
+            }
         }
 
     static void printf(string fmt, ...)
