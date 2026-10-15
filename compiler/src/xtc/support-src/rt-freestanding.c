@@ -480,6 +480,96 @@ void* _xtc_alloc(uint64_t count, uint64_t stride, void (*dealloc)(void*))
    16 KB pages of Apple Silicon as well as 4 KB ones. */
 #define XT_MAGIC_ALIGNED 0x58544F43U
 #define XT_PAGE 16384ULL
+/* Every page-aligned block, so that a pointer INTO one can be traced to it:
+   par's runtime sizes a captured pointer from the block it points into and
+   shares the block with a unified-memory GPU in place (par-blocks.md §3), and
+   a `simd:` pointer may be offset by arithmetic. A table of (payload, end)
+   pairs sorted by payload, kept under the runtime lock; a lookup is a binary
+   search. _xtc_simd_base gives the block's payload (0 outside every block),
+   _xtc_simd_span the bytes from the pointer to the block's end (-1 outside).
+   The same code as rt.c's, over this runtime's own allocator. */
+static uint8_t** xt_simd_tab;
+static uint64_t xt_simd_n, xt_simd_cap;
+/* The first entry whose payload is above p. */
+static uint64_t xt_simd_find(const uint8_t* p)
+    {
+    uint64_t lo = 0, hi = xt_simd_n;
+    while (lo < hi)
+        {
+        uint64_t m = (lo + hi) / 2;
+        if (xt_simd_tab[2 * m] <= p)
+            lo = m + 1;
+        else
+            hi = m;
+        }
+    return lo;
+    }
+static void xt_simd_reg(uint8_t* payload, uint64_t bytes)
+    {
+    _xt_rt_lock();
+    if (xt_simd_n == xt_simd_cap)
+        {
+        uint64_t c = xt_simd_cap ? xt_simd_cap * 2 : 64;
+        uint8_t** t = (uint8_t**)_xt_calloc(2 * c * sizeof(uint8_t*));
+        if (!t)
+            {
+            _xt_rt_unlock();
+            return;
+            }
+        for (uint64_t k = 0; k < 2 * xt_simd_n; k++)
+            t[k] = xt_simd_tab[k];
+        if (xt_simd_tab)
+            _xt_free(xt_simd_tab);
+        xt_simd_tab = t;
+        xt_simd_cap = c;
+        }
+    uint64_t i = xt_simd_find(payload);
+    for (uint64_t k = xt_simd_n; k > i; k--)
+        {
+        xt_simd_tab[2 * k] = xt_simd_tab[2 * k - 2];
+        xt_simd_tab[2 * k + 1] = xt_simd_tab[2 * k - 1];
+        }
+    xt_simd_tab[2 * i] = payload;
+    xt_simd_tab[2 * i + 1] = payload + bytes;
+    xt_simd_n++;
+    _xt_rt_unlock();
+    }
+static void xt_simd_unreg(uint8_t* payload)
+    {
+    _xt_rt_lock();
+    uint64_t i = xt_simd_find(payload);
+    if (i > 0 && xt_simd_tab[2 * (i - 1)] == payload)
+        {
+        i--;
+        for (uint64_t k = i; k + 1 < xt_simd_n; k++)
+            {
+            xt_simd_tab[2 * k] = xt_simd_tab[2 * k + 2];
+            xt_simd_tab[2 * k + 1] = xt_simd_tab[2 * k + 3];
+            }
+        xt_simd_n--;
+        }
+    _xt_rt_unlock();
+    }
+void* _xtc_simd_base(void* p)
+    {
+    _xt_rt_lock();
+    uint64_t i = xt_simd_find((uint8_t*)p);
+    uint8_t* b = 0;
+    if (i > 0 && (uint8_t*)p < xt_simd_tab[2 * (i - 1) + 1])
+        b = xt_simd_tab[2 * (i - 1)];
+    _xt_rt_unlock();
+    return b;
+    }
+int64_t _xtc_simd_span(void* p)
+    {
+    _xt_rt_lock();
+    uint64_t i = xt_simd_find((uint8_t*)p);
+    int64_t s = -1;
+    if (i > 0 && (uint8_t*)p < xt_simd_tab[2 * (i - 1) + 1])
+        s = (int64_t)(xt_simd_tab[2 * (i - 1) + 1] - (uint8_t*)p);
+    _xt_rt_unlock();
+    return s;
+    }
 void* _xtc_alloc_aligned(uint64_t count, uint64_t stride, void (*dealloc)(void*))
     {
     uint64_t b = count * stride;
@@ -500,8 +590,17 @@ void* _xtc_alloc_aligned(uint64_t count, uint64_t stride, void (*dealloc)(void*)
     *(void**)(p + 28) = 0;
     *(XT_RC_T*)(p + XT_RC_OFF) = 1;
     *(void**)(p - 8) = raw;
+    xt_simd_reg(payload, count * stride);
     return payload;
     }
+/* A numeric array of XT_SIMD_FROM bytes or more is page-aligned without being
+   asked (par-blocks.md §3, "auto-simd"): a par block that captures it is then
+   sized from the block and shared with a unified-memory GPU in place, as a
+   `simd:` array is. Below that the GPU is never chosen, and the alignment's
+   waste (up to two pages) would be out of proportion. Pointer and string
+   arrays are never GPU data and stay as they were. */
+#define XT_SIMD_FROM 65536ULL
+#define XT_NEW_PRIM(n, st) ((n) * (st) >= XT_SIMD_FROM ? _xtc_alloc_aligned((n), (st), 0) : _xtc_alloc((n), (st), 0))
 void* _xtc_new_simd_u8(uint64_t n) { return _xtc_alloc_aligned(n, 1, 0); }
 void* _xtc_new_simd_i8(uint64_t n) { return _xtc_alloc_aligned(n, 1, 0); }
 void* _xtc_new_simd_bool(uint64_t n) { return _xtc_alloc_aligned(n, 1, 0); }
@@ -518,27 +617,27 @@ void* _xtc_new_simd_string(uint64_t n) { return _xtc_alloc_aligned(n, 8, 0); }
 
 void* _xtc_new_u8(uint64_t n)
     {
-    return _xtc_alloc(n, 1, 0);
+    return XT_NEW_PRIM(n, 1);
     }
 void* _xtc_new_i8(uint64_t n)
     {
-    return _xtc_alloc(n, 1, 0);
+    return XT_NEW_PRIM(n, 1);
     }
 void* _xtc_new_u16(uint64_t n)
     {
-    return _xtc_alloc(n, 2, 0);
+    return XT_NEW_PRIM(n, 2);
     }
 void* _xtc_new_i16(uint64_t n)
     {
-    return _xtc_alloc(n, 2, 0);
+    return XT_NEW_PRIM(n, 2);
     }
 void* _xtc_new_u32(uint64_t n)
     {
-    return _xtc_alloc(n, 4, 0);
+    return XT_NEW_PRIM(n, 4);
     }
 void* _xtc_new_i32(uint64_t n)
     {
-    return _xtc_alloc(n, 4, 0);
+    return XT_NEW_PRIM(n, 4);
     }
 void* _xtc_new_pointer(uint64_t n)
     {
@@ -546,23 +645,23 @@ void* _xtc_new_pointer(uint64_t n)
     }
 void* _xtc_new_u64(uint64_t n)
     {
-    return _xtc_alloc(n, 8, 0);
+    return XT_NEW_PRIM(n, 8);
     }
 void* _xtc_new_i64(uint64_t n)
     {
-    return _xtc_alloc(n, 8, 0);
+    return XT_NEW_PRIM(n, 8);
     }
 void* _xtc_new_bool(uint64_t n)
     {
-    return _xtc_alloc(n, 1, 0);
+    return XT_NEW_PRIM(n, 1);
     }
 void* _xtc_new_float(uint64_t n)
     {
-    return _xtc_alloc(n, 4, 0);
+    return XT_NEW_PRIM(n, 4);
     }
 void* _xtc_new_double(uint64_t n)
     {
-    return _xtc_alloc(n, 8, 0);
+    return XT_NEW_PRIM(n, 8);
     }
 void* _xtc_new_string(uint64_t n)
     {
@@ -601,7 +700,10 @@ void _xtc_dealloc(void* o)
         }
     /* A `simd:` block's header is not its allocator base (see _xtc_alloc_aligned). */
     if (*(uint32_t*)(base + 0) == XT_MAGIC_ALIGNED)
+        {
+        xt_simd_unreg((uint8_t*)o);
         _xt_free(*(void**)(base - 8));
+        }
     else
         _xt_free(base);
     }

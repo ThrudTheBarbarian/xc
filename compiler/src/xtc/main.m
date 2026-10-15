@@ -250,6 +250,16 @@ static NSString *arm64StubSourceEx(NSString *asmText, BOOL forLibrary) {
         [s appendString:
             @"unsigned long _xtc_count(void*o){return *(unsigned long*)((uint8_t*)o-26);}\n"];
     }
+    // par's runtime sizes a captured pointer from the page-aligned block it
+    // points into (rt.c keeps a registry of them). This stub has no registry:
+    // a pointer that IS a `simd:` block's start answers from the header, as
+    // the shipped runtime did before the registry; any other pointer is in no
+    // block. Mirrored byte for byte in the port (External.xc).
+    if ([asmText containsString:@"_xtc_simd_"]) {
+        [s appendString:
+            @"void *_xtc_simd_base(void*p){uint8_t*q=(uint8_t*)p;return (q&&((unsigned long)q&16383UL)==0&&*(uint32_t*)(q-38)==0x58544F43U)?p:0;}\n"
+            @"long _xtc_simd_span(void*p){return _xtc_simd_base(p)?(long)(*(unsigned long*)((uint8_t*)p-34)**(unsigned long*)((uint8_t*)p-26)):-1;}\n"];
+    }
     // Per-class / per-type heap allocators, one per `_xtc_new_<T>` the asm calls.
     // Object header [stride:8][count:8][dealloc-fnptr:8][refcount:1]; the returned
     // pointer is base+25, refcount at obj-1 (matching the backend's [obj,#-1]).

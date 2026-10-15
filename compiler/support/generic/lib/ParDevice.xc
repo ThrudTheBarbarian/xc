@@ -242,6 +242,11 @@ class ParLayout : Object
         }
     }
 
+#if ARCH_arm64 || ARCH_x86_64 || ARCH_win64
+// The start of the page-aligned heap block p points into, or 0 (rt.c).
+pointer _xtc_simd_base(pointer p);
+#endif
+
 class ParDevice
     {
     static i32 _mode;            // XC_PAR: 0 unread, 1 cpu, 2 gpu, 3 auto, 4 unset
@@ -1055,15 +1060,25 @@ class ParDevice
             decide(i, proto);
         }
 
-    // A `simd:` heap block (par-blocks.md §3): page-aligned, a page-multiple
-    // long, and carrying the aligned magic (0x58544F43) at payload-40 — the
-    // head of the 40-byte object header every 64-bit runtime (rt.c,
-    // rt-freestanding.c) keeps before a block. A unified-memory GPU shares
-    // such a block in place instead of copying it.
+    // A page-aligned heap block (par-blocks.md §3): a `simd:` array, or a
+    // numeric array of 64 KB and more, which the 64-bit runtimes (rt.c,
+    // rt-freestanding.c) align unasked and keep in a registry. simdBase is
+    // the block a pointer points INTO (its start, or 0 outside every such
+    // block), so a pointer offset by arithmetic still finds its block;
+    // simdBlock says the pointer IS a block's start. A unified-memory GPU
+    // shares such a block in place instead of copying it.
+    static pointer simdBase(pointer host)
+        {
+#if ARCH_arm64 || ARCH_x86_64 || ARCH_win64
+        return host != (pointer)0 ? _xtc_simd_base(host) : (pointer)0;
+#else
+        return (pointer)0;
+#endif
+        }
+
     static bool simdBlock(pointer host)
         {
-        return host != (pointer)0 && ((u64)host & (u64)16383) == (u64)0
-            && *(u32*)((u8*)host - (u64)40) == (u32)0x58544F43;
+        return host != (pointer)0 && simdBase(host) == host;
         }
 
     // A GPU candidate's time for auto's comparison: the first run is the

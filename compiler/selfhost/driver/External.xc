@@ -236,6 +236,13 @@ class External
 
         if (asmText.contains(String.withCString("_xtc_count")))
             s.appendCString("unsigned long _xtc_count(void*o){return *(unsigned long*)((uint8_t*)o-26);}\n");
+        // par's runtime sizes a captured pointer from the page-aligned block
+        // it points into; this stub has no registry and answers from the
+        // header for a block's start only. As the reference, byte for byte.
+        if (asmText.contains(String.withCString("_xtc_simd_"))) {
+            s.appendCString("void *_xtc_simd_base(void*p){uint8_t*q=(uint8_t*)p;return (q&&((unsigned long)q&16383UL)==0&&*(uint32_t*)(q-38)==0x58544F43U)?p:0;}\n");
+            s.appendCString("long _xtc_simd_span(void*p){return _xtc_simd_base(p)?(long)(*(unsigned long*)((uint8_t*)p-34)**(unsigned long*)((uint8_t*)p-26)):-1;}\n");
+        }
         Array* sufs = suffixesAfter(asmText, "__xtc_new_", false);
         for (u32 i = (u32)0; i < sufs.count(); i = i + (u32)1) {
             String* suf = (String*)sufs.get(i);

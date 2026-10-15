@@ -655,12 +655,33 @@ class Sema
         checkClassPointerAssignAt(lhs, rhs, rhsNode, site, rhsNode);
         }
 
-    // The same, reported at `at`: a call argument is placed at the CALL, as
-    // the reference places it.
+    // The same, reported at `at`: a call argument is placed at the CALL, and
+    // an initialiser, assignment or return at its STATEMENT, as the reference
+    // places them.
     void checkClassPointerAssignAt(String* lhs, String* rhs, Node* rhsNode, string site, Node* at)
         {
         if (lhs == 0 || rhs == 0)
             return;
+
+        // A `simd:` pointer may hold only what `new[]` returned or what
+        // another `simd:` pointer holds: the qualifier promises a page-aligned
+        // block the runtime can find (the reference explains). nil and 0 are
+        // fine, and a cast says it is meant; the argument form has its own
+        // check (checkPtrArgWidth).
+        String* siteName = String.withCString(site);
+        if ((siteName.equals(String.withCString("initialiser")) || siteName.equals(String.withCString("assignment"))
+             || siteName.equals(String.withCString("return")))
+            && Types.isPointer(lhs) && Overload._isSimd(lhs) && Types.isPointer(rhs) && !Overload._isSimd(rhs)
+            && rhsNode != 0 && rhsNode.kind() != (u16)nkNew && rhsNode.kind() != (u16)nkInt)
+            {
+            String* e = String.withCString(site);
+            e.appendCString(": a plain pointer cannot be stored in a simd: pointer — simd: ");
+            e.appendCString("promises page-aligned storage (a new[] into a simd: pointer, or ");
+            e.appendCString("another simd: pointer), and a par block that captures it is sized ");
+            e.appendCString("from that block. Cast if that is really meant");
+            _errorAt(e, at);
+            return;
+            }
 
         bool lBound = isBoundSignature(lhs);
         bool rBound = isBoundSignature(rhs);
@@ -1702,8 +1723,8 @@ class Sema
             // `String* s = arr;` / `act_t^ a = someBlock;` — an initialiser is
             // an assignment and is checked as one.
             if (n.kidCount() > (u32)0 && !_isOp(n.op(), "auto"))
-                checkClassPointerAssign(n.op(), n.kid((u32)0).ty(),
-                                        n.kid((u32)0), "initialiser");
+                checkClassPointerAssignAt(n.op(), n.kid((u32)0).ty(),
+                                          n.kid((u32)0), "initialiser", n);
             if (_isOp(n.op(), "auto") && n.kidCount() > (u32)0)
                 {
                 // `auto p = nil` has no type to infer: nil is a pointer of
@@ -1921,7 +1942,7 @@ class Sema
                                                                               : (String*)0);
                     if (want == 0)
                         continue;
-                    checkClassPointerAssign(want, n.kid(i).ty(), n.kid(i), "return");
+                    checkClassPointerAssignAt(want, n.kid(i).ty(), n.kid(i), "return", n);
                     }
                 }
             return;
@@ -2045,8 +2066,8 @@ class Sema
             // assignment is a read-modify-write on a value that already has
             // the slot's type, so there is nothing to check there.
             if (_isOp(n.op(), "="))
-                checkClassPointerAssign(n.kid((u32)0).ty(), n.kid((u32)1).ty(),
-                                        n.kid((u32)1), "assignment");
+                checkClassPointerAssignAt(n.kid((u32)0).ty(), n.kid((u32)1).ty(),
+                                          n.kid((u32)1), "assignment", n);
             return;
             }
         // A printf VARARG is typed with the format's expectation in hand:
@@ -2278,8 +2299,8 @@ class Sema
             // `b = &c.m;` where b is a block compiled clean, tested TRUE, and
             // then the call did NOTHING — the button that does nothing.
             if (n.kidCount() >= (u32)2)
-                checkClassPointerAssign(n.kid((u32)0).ty(), n.kid((u32)1).ty(),
-                                        n.kid((u32)1), "assignment");
+                checkClassPointerAssignAt(n.kid((u32)0).ty(), n.kid((u32)1).ty(),
+                                          n.kid((u32)1), "assignment", n);
             return;
             }
         }

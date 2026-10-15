@@ -35,6 +35,12 @@
 #import "ParWebGpu.xc"
 #endif
 
+#if ARCH_arm64 || ARCH_x86_64 || ARCH_win64
+// The bytes from p to the end of the page-aligned heap block it points into,
+// or -1 outside every such block (the runtime's registry, rt.c).
+i64 _xtc_simd_span(pointer p);
+#endif
+
 // Two C strings equal: how a block's generated gpuGlobal() finds a global by
 // the name its Metal kernel gives it.
 bool parSameName(u8* a, u8* b)
@@ -129,6 +135,32 @@ class ParChunk : Object
 
 class Par
     {
+    // The byte length a block's generated gpuLength() reports for a captured
+    // pointer to numbers: the bytes from p to the end of the page-aligned
+    // heap block it points into (a `simd:` array, or any numeric array of
+    // 64 KB and more, which the runtime aligns unasked), or -1 when p is in
+    // no such block — a pointer into a small array, a stack array, a global —
+    // and the block runs on the CPU as before. On a target without the
+    // aligned allocator a `simd:` pointer is trusted to be its block's start
+    // and sized from the header, as it was; elem is the element's size.
+    static i64 spanOf(pointer p, i64 elem, bool simdType)
+        {
+        if (p == (pointer)0)
+            return (i64)0 - (i64)1;
+#if ARCH_arm64 || ARCH_x86_64 || ARCH_win64
+        return _xtc_simd_span(p);
+#else
+#if ARCH_6502
+        // No GPU, and no element count in a primitive array's header.
+        return (i64)0 - (i64)1;
+#else
+        if (!simdType)
+            return (i64)0 - (i64)1;
+        return (i64)((u8*)p).length * elem;
+#endif
+#endif
+        }
+
     // Run a block over [lo, hi), on the device chosen for it: the GPU or the
     // CPU, by XC_PAR, Par.device, or (auto) by measuring both (ParDevice.xc).
     static void run(ParChunk* proto, i64 lo, i64 hi)

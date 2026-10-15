@@ -114,27 +114,35 @@ class ParMetal
         return ((parMsgP_t*)_send)(_cls("NSString"), sel("stringWithUTF8String:"), (pointer)c);
         }
 
-    // A `simd:` heap block (ParDevice.simdBlock): the GPU shares it in place.
+    // A captured array's device buffer. A pointer into a page-aligned heap
+    // block (ParDevice.simdBase: a `simd:` array, or any numeric array of
+    // 64 KB and more) has its block wrapped where it lies
+    // (newBufferWithBytesNoCopy: the unified memory the CPU already holds),
+    // bound at the pointer's offset into it, and *shared says so, so its
+    // result is not copied back either; anything else is copied in as
+    // before. An offset that is not a multiple of 256 bytes — finer than any
+    // GPU's buffer-offset rule — is copied too.
     static bool isShared(pointer host)
         {
-        return ParDevice.simdBlock(host);
+        pointer base = ParDevice.simdBase(host);
+        return base != (pointer)0 && (((u64)host - (u64)base) & (u64)255) == (u64)0;
         }
 
-    // A captured array's device buffer. A `simd:` block is wrapped where it
-    // lies (newBufferWithBytesNoCopy: the unified memory the CPU already
-    // holds), and *shared says so, so its result is not copied back either;
-    // anything else is copied in as before.
-    static pointer bufferFor(pointer host, u64 len, bool* shared)
+    static pointer bufferFor(pointer host, u64 len, bool* shared, u64* offset)
         {
         *shared = false;
+        *offset = (u64)0;
+        pointer base = ParDevice.simdBase(host);
         if (isShared(host))
             {
-            u64 pages = ((len + (u64)16383) / (u64)16384) * (u64)16384;
+            u64 off = (u64)host - (u64)base;
+            u64 pages = ((off + len + (u64)16383) / (u64)16384) * (u64)16384;
             pointer b = ((parMsgNoCopy_t*)_send)(_dev, sel("newBufferWithBytesNoCopy:length:options:deallocator:"),
-                                                 host, pages, (u64)0, (pointer)0);
+                                                 base, pages, (u64)0, (pointer)0);
             if (b != (pointer)0)
                 {
                 *shared = true;
+                *offset = off;
                 return b;
                 }
             }
@@ -250,11 +258,12 @@ class ParMetal
         pointer spanB = withBytes(_dev, sel("newBufferWithBytes:length:options:"), (pointer)&span[0], (u64)32, (u64)0);
         pointer bufs[16];
         bool bufShared[16];
+        u64 bufAt[16];
         pointer reds[16];
         for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
             {
             pointer host = *(pointer*)(obj + l.bufOff[i]);
-            bufs[i] = bufferFor(host, (u64)l.bufLen[i], &bufShared[i]);
+            bufs[i] = bufferFor(host, (u64)l.bufLen[i], &bufShared[i], &bufAt[i]);
             }
         pointer globs[16];
         for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
@@ -272,7 +281,7 @@ class ParMetal
         u64 slot = (u64)2;
         for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
             {
-            setBuf(enc, sel("setBuffer:offset:atIndex:"), bufs[i], (u64)0, slot);
+            setBuf(enc, sel("setBuffer:offset:atIndex:"), bufs[i], bufAt[i], slot);
             slot = slot + (u64)1;
             }
         for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
@@ -384,7 +393,8 @@ class ParMetalWorker : ParWorker
     u32 _nextSlot;
     u32 _oldest;
     u32 _inFlight;
-    bool _bufShared[16];      // captured array i is a `simd:` block the GPU shares in place
+    bool _bufShared[16];      // captured array i is a page-aligned block the GPU shares in place
+    u64 _bufAt[16];           // and the pointer's offset into that block
 
     String* identity(void)
         {
@@ -448,7 +458,7 @@ class ParMetalWorker : ParWorker
         u8* obj = proto.objBytes();
         _args = withBytes(gMtlDev, ParMetal.sel("newBufferWithBytes:length:options:"), (pointer)obj, (u64)l.size, (u64)0);
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
-            _bufs[i] = ParMetal.bufferFor(*(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i], &_bufShared[i]);
+            _bufs[i] = ParMetal.bufferFor(*(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i], &_bufShared[i], &_bufAt[i]);
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             _globs[i] = withBytes(gMtlDev, ParMetal.sel("newBufferWithBytes:length:options:"), l.globPtr[i], (u64)l.globLen[i], (u64)0);
         l.plan(0, tile);
@@ -511,7 +521,7 @@ class ParMetalWorker : ParWorker
         u64 slot = (u64)2;
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
-            setBuf(enc, ParMetal.sel("setBuffer:offset:atIndex:"), _bufs[i], (u64)0, slot);
+            setBuf(enc, ParMetal.sel("setBuffer:offset:atIndex:"), _bufs[i], _bufAt[i], slot);
             slot = slot + (u64)1;
             }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)

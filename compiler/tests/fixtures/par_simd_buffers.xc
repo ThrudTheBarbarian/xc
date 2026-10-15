@@ -1,9 +1,9 @@
 // par_simd_buffers — a par block over `simd:` heap pointers. A captured
-// `simd:` pointer is a device buffer sized from its heap header (the block's
-// generated gpuLength reads `.length`), where a plain pointer kept the block
-// on the CPU as "an array whose size is not known". On a unified-memory GPU
-// (Metal) the page-aligned block is shared in place, with no copy either
-// way. The body is an integer hash chain — exact wherever it runs — and
+// `simd:` pointer is a device buffer sized from the page-aligned block it
+// points into (the block's generated gpuLength asks the runtime's registry;
+// par_auto_simd.xc is the same over plain pointers the runtime aligned
+// unasked). On a unified-memory GPU (Metal) the block is shared in place,
+// with no copy either way. The body is an integer hash chain — exact wherever it runs — and
 // heavy enough per item that auto measures the GPU; the check recomputes
 // every element on the CPU, so a stale or half-copied buffer shows as bad.
 //

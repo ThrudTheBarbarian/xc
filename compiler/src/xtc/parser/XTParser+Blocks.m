@@ -48,6 +48,20 @@
 #import "XTTypeTable.h"
 #import <objc/runtime.h>
 
+// The element type when t is a pointer to numbers (an integer, float, double
+// or bool; not an enum, which the port knows by name only), else nil. Such a
+// capture, `simd:` or plain, is a GPU buffer sized at run time by the block it
+// points into (par-blocks.md §3). Mirrored in the port (parPrimPointee).
+static XTType* _Nullable parPrimPointee(XTType* t)
+    {
+    if (![t isKindOfClass:[XTPointerType class]])
+        return nil;
+    XTType* e = ((XTPointerType*)t).pointeeType;
+    if (!e || e.kind == XTTypeKindEnum)
+        return nil;
+    return (e.isInteger || e.isFloating || e.kind == XTTypeKindBool) ? e : nil;
+    }
+
 NS_ASSUME_NONNULL_BEGIN
 
 // ── parser-side block state (associated storage lives in XTParser via the
@@ -1442,15 +1456,23 @@ static NSString* parRootName(XTASTNode* n)
                          right:cast(i64T, [[XTSizeofExprNode alloc] initWithOperand:at.elementType location:loc])
                       location:loc];
                 }
-            else if ([t isKindOfClass:[XTPointerType class]] && ((XTPointerType*)t).isSimd && ((XTPointerType*)t).pointeeType)
+            else if (parPrimPointee(t))
                 {
-                // A `simd:` heap pointer (par-blocks.md §3): its length is the
-                // block header's count, read as `.length` is for any heap array.
-                bytes = [[XTBinaryExprNode alloc]
-                    initWithOp:XTBinaryOpMul
-                          left:cast(i64T, [[XTMemberAccessNode alloc] initWithBase:ident(cn) memberName:@"length" isArrow:NO location:loc])
-                         right:cast(i64T, [[XTSizeofExprNode alloc] initWithOperand:((XTPointerType*)t).pointeeType location:loc])
-                      location:loc];
+                // A pointer to numbers, `simd:` or plain (par-blocks.md §3):
+                // its length is asked of the runtime, which knows every
+                // page-aligned block — a `simd:` array, or any numeric array
+                // of 64 KB and more — and the bytes from the pointer to its
+                // block's end, so a pointer offset by arithmetic is sized
+                // right. A pointer into no such block answers -1 and keeps the
+                // block on the CPU, as a plain pointer always did.
+                XTType* pointerT = [self.typeTable typeForName:@"pointer"];
+                bytes = [[XTMethodCallExprNode alloc]
+                    initWithReceiver:ident(@"Par")
+                          methodName:@"spanOf"
+                           arguments:@[ cast(pointerT, ident(cn)),
+                                        cast(i64T, [[XTSizeofExprNode alloc] initWithOperand:parPrimPointee(t) location:loc]),
+                                        [[XTLiteralBoolNode alloc] initWithBool:((XTPointerType*)t).isSimd location:loc] ]
+                            location:loc];
                 }
             if (bytes)
                 {
@@ -1483,8 +1505,7 @@ static NSString* parRootName(XTASTNode* n)
         j = 0;
         for (NSString* cn in caps)
             {
-            if (([frameTypes[cn] isKindOfClass:[XTArrayType class]] ||
-                 ([frameTypes[cn] isKindOfClass:[XTPointerType class]] && ((XTPointerType*)frameTypes[cn]).isSimd)) &&
+            if (([frameTypes[cn] isKindOfClass:[XTArrayType class]] || parPrimPointee(frameTypes[cn])) &&
                 readsOnly(cn))
                 {
                 XTASTNode* test = [[XTBinaryExprNode alloc]

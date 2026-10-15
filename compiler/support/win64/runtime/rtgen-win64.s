@@ -314,6 +314,183 @@ _xtc_alloc:                             # @_xtc_alloc
 	pop	r14
 	ret
                                         # -- End function
+	.def	_xtc_simd_base;
+	.scl	2;
+	.type	32;
+	.endef
+	.globl	_xtc_simd_base                  # -- Begin function _xtc_simd_base
+	.p2align	4, 0x90
+_xtc_simd_base:                         # @_xtc_simd_base
+# %bb.0:
+	cmp	dword ptr [rip + _xt_threads_active], 0
+	je	.LBB7_3
+	.p2align	4, 0x90
+.LBB7_1:                                # =>This Loop Header: Depth=1
+                                        #     Child Loop BB7_2 Depth 2
+	mov	eax, 1
+	xchg	dword ptr [rip + xt_rt_spin], eax
+	test	eax, eax
+	je	.LBB7_3
+.LBB7_2:                                #   Parent Loop BB7_1 Depth=1
+                                        # =>  This Inner Loop Header: Depth=2
+	mov	eax, dword ptr [rip + xt_rt_spin]
+	test	eax, eax
+	jne	.LBB7_2
+	jmp	.LBB7_1
+.LBB7_3:
+	mov	rdx, qword ptr [rip + xt_simd_n]
+	test	rdx, rdx
+	je	.LBB7_9
+# %bb.4:
+	mov	r8, qword ptr [rip + xt_simd_tab]
+	xor	eax, eax
+	movabs	r9, 2305843009213693950
+	.p2align	4, 0x90
+.LBB7_5:                                # =>This Inner Loop Header: Depth=1
+	lea	r10, [rdx + rax]
+	mov	r11, r10
+	shr	r11
+	and	r10, r9
+	cmp	qword ptr [r8 + 8*r10], rcx
+	lea	r10, [r11 + 1]
+	cmova	rdx, r11
+	cmovbe	rax, r10
+	cmp	rax, rdx
+	jb	.LBB7_5
+# %bb.6:
+	test	rax, rax
+	jne	.LBB7_7
+	jmp	.LBB7_10
+.LBB7_9:
+	xor	eax, eax
+	test	rax, rax
+	je	.LBB7_10
+.LBB7_7:
+	mov	rdx, qword ptr [rip + xt_simd_tab]
+	shl	rax, 4
+	cmp	qword ptr [rdx + rax - 8], rcx
+	jbe	.LBB7_10
+# %bb.8:
+	mov	rax, qword ptr [rdx + rax - 16]
+	cmp	dword ptr [rip + _xt_threads_active], 0
+	jne	.LBB7_11
+	jmp	.LBB7_12
+.LBB7_10:
+	xor	eax, eax
+	cmp	dword ptr [rip + _xt_threads_active], 0
+	je	.LBB7_12
+.LBB7_11:
+	mov	dword ptr [rip + xt_rt_spin], 0
+.LBB7_12:
+	ret
+                                        # -- End function
+	.def	_xt_rt_lock;
+	.scl	2;
+	.type	32;
+	.endef
+	.globl	_xt_rt_lock                     # -- Begin function _xt_rt_lock
+	.p2align	4, 0x90
+_xt_rt_lock:                            # @_xt_rt_lock
+# %bb.0:
+	cmp	dword ptr [rip + _xt_threads_active], 0
+	je	.LBB8_3
+	.p2align	4, 0x90
+.LBB8_1:                                # =>This Loop Header: Depth=1
+                                        #     Child Loop BB8_2 Depth 2
+	mov	eax, 1
+	xchg	dword ptr [rip + xt_rt_spin], eax
+	test	eax, eax
+	je	.LBB8_3
+.LBB8_2:                                #   Parent Loop BB8_1 Depth=1
+                                        # =>  This Inner Loop Header: Depth=2
+	mov	eax, dword ptr [rip + xt_rt_spin]
+	test	eax, eax
+	jne	.LBB8_2
+	jmp	.LBB8_1
+.LBB8_3:
+	ret
+                                        # -- End function
+	.def	_xt_rt_unlock;
+	.scl	2;
+	.type	32;
+	.endef
+	.globl	_xt_rt_unlock                   # -- Begin function _xt_rt_unlock
+	.p2align	4, 0x90
+_xt_rt_unlock:                          # @_xt_rt_unlock
+# %bb.0:
+	cmp	dword ptr [rip + _xt_threads_active], 0
+	je	.LBB9_2
+# %bb.1:
+	mov	dword ptr [rip + xt_rt_spin], 0
+.LBB9_2:
+	ret
+                                        # -- End function
+	.def	_xtc_simd_span;
+	.scl	2;
+	.type	32;
+	.endef
+	.globl	_xtc_simd_span                  # -- Begin function _xtc_simd_span
+	.p2align	4, 0x90
+_xtc_simd_span:                         # @_xtc_simd_span
+# %bb.0:
+	cmp	dword ptr [rip + _xt_threads_active], 0
+	je	.LBB10_3
+	.p2align	4, 0x90
+.LBB10_1:                               # =>This Loop Header: Depth=1
+                                        #     Child Loop BB10_2 Depth 2
+	mov	eax, 1
+	xchg	dword ptr [rip + xt_rt_spin], eax
+	test	eax, eax
+	je	.LBB10_3
+.LBB10_2:                               #   Parent Loop BB10_1 Depth=1
+                                        # =>  This Inner Loop Header: Depth=2
+	mov	eax, dword ptr [rip + xt_rt_spin]
+	test	eax, eax
+	jne	.LBB10_2
+	jmp	.LBB10_1
+.LBB10_3:
+	mov	rax, qword ptr [rip + xt_simd_n]
+	test	rax, rax
+	je	.LBB10_4
+# %bb.5:
+	mov	r8, qword ptr [rip + xt_simd_tab]
+	xor	edx, edx
+	movabs	r9, 2305843009213693950
+	.p2align	4, 0x90
+.LBB10_6:                               # =>This Inner Loop Header: Depth=1
+	lea	r10, [rax + rdx]
+	mov	r11, r10
+	shr	r11
+	and	r10, r9
+	cmp	qword ptr [r8 + 8*r10], rcx
+	lea	r10, [r11 + 1]
+	cmova	rax, r11
+	cmovbe	rdx, r10
+	cmp	rdx, rax
+	jb	.LBB10_6
+	jmp	.LBB10_7
+.LBB10_4:
+	xor	edx, edx
+.LBB10_7:
+	mov	rax, -1
+	test	rdx, rdx
+	je	.LBB10_10
+# %bb.8:
+	mov	r8, qword ptr [rip + xt_simd_tab]
+	shl	rdx, 4
+	mov	rdx, qword ptr [r8 + rdx - 8]
+	sub	rdx, rcx
+	jbe	.LBB10_10
+# %bb.9:
+	mov	rax, rdx
+.LBB10_10:
+	cmp	dword ptr [rip + _xt_threads_active], 0
+	je	.LBB10_12
+# %bb.11:
+	mov	dword ptr [rip + xt_rt_spin], 0
+.LBB10_12:
+	ret
+                                        # -- End function
 	.def	_xtc_alloc_aligned;
 	.scl	2;
 	.type	32;
@@ -322,7 +499,9 @@ _xtc_alloc:                             # @_xtc_alloc
 	.p2align	4, 0x90
 _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 # %bb.0:
+	push	r15
 	push	r14
+	push	r12
 	push	rsi
 	push	rdi
 	push	rbx
@@ -330,11 +509,11 @@ _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 	mov	rsi, r8
 	mov	rbx, rdx
 	mov	rdi, rcx
-	mov	rax, rdx
-	imul	rax, rcx
-	cmp	rax, 17
+	mov	r15, rdx
+	imul	r15, rcx
+	cmp	r15, 17
 	mov	r14d, 16
-	cmovae	r14, rax
+	cmovae	r14, r15
 	add	r14, 16383
 	and	r14, -16384
 	call	GetProcessHeap
@@ -344,7 +523,7 @@ _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 	mov	r8, r14
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB7_1
+	je	.LBB11_1
 # %bb.2:
 	lea	rcx, [rax + 8]
 	add	rax, 16439
@@ -356,15 +535,147 @@ _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 	mov	qword ptr [rax - 12], 0
 	mov	dword ptr [rax - 4], 1
 	mov	qword ptr [rax - 48], rcx
-	jmp	.LBB7_3
-.LBB7_1:
+	cmp	dword ptr [rip + _xt_threads_active], 0
+	je	.LBB11_5
+	.p2align	4, 0x90
+.LBB11_3:                               # =>This Loop Header: Depth=1
+                                        #     Child Loop BB11_4 Depth 2
+	mov	ecx, 1
+	xchg	dword ptr [rip + xt_rt_spin], ecx
+	test	ecx, ecx
+	je	.LBB11_5
+.LBB11_4:                               #   Parent Loop BB11_3 Depth=1
+                                        # =>  This Inner Loop Header: Depth=2
+	mov	ecx, dword ptr [rip + xt_rt_spin]
+	test	ecx, ecx
+	jne	.LBB11_4
+	jmp	.LBB11_3
+.LBB11_5:
+	mov	rcx, qword ptr [rip + xt_simd_cap]
+	cmp	qword ptr [rip + xt_simd_n], rcx
+	jne	.LBB11_16
+# %bb.6:
+	mov	rbx, rax
+	lea	rax, [rcx + rcx]
+	test	rcx, rcx
+	mov	r14d, 64
+	cmovne	r14, rax
+	mov	rsi, r14
+	shl	rsi, 4
+	call	GetProcessHeap
+	or	rsi, 8
+	mov	rcx, rax
+	mov	edx, 8
+	mov	r8, rsi
+	call	HeapAlloc
+	mov	rsi, rax
+	lea	r12, [rax + 8]
+	test	rax, rax
+	cmove	r12, rax
+	je	.LBB11_13
+# %bb.7:
+	mov	rax, qword ptr [rip + xt_simd_n]
+	add	rax, rax
+	je	.LBB11_10
+# %bb.8:
+	mov	rcx, qword ptr [rip + xt_simd_tab]
+	xor	edx, edx
+	.p2align	4, 0x90
+.LBB11_9:                               # =>This Inner Loop Header: Depth=1
+	mov	r8, qword ptr [rcx + 8*rdx]
+	mov	qword ptr [r12 + 8*rdx], r8
+	inc	rdx
+	cmp	rax, rdx
+	jne	.LBB11_9
+.LBB11_10:
+	mov	rdi, qword ptr [rip + xt_simd_tab]
+	test	rdi, rdi
+	je	.LBB11_12
+# %bb.11:
+	call	GetProcessHeap
+	add	rdi, -8
+	mov	rcx, rax
+	xor	edx, edx
+	mov	r8, rdi
+	call	HeapFree
+.LBB11_12:
+	mov	qword ptr [rip + xt_simd_tab], r12
+	mov	qword ptr [rip + xt_simd_cap], r14
+	jmp	.LBB11_15
+.LBB11_1:
 	xor	eax, eax
-.LBB7_3:
+	jmp	.LBB11_25
+.LBB11_13:
+	cmp	dword ptr [rip + _xt_threads_active], 0
+	je	.LBB11_15
+# %bb.14:
+	mov	dword ptr [rip + xt_rt_spin], 0
+.LBB11_15:
+	test	rsi, rsi
+	mov	rax, rbx
+	je	.LBB11_25
+.LBB11_16:
+	mov	rcx, qword ptr [rip + xt_simd_n]
+	test	rcx, rcx
+	je	.LBB11_17
+# %bb.18:
+	mov	r8, qword ptr [rip + xt_simd_tab]
+	xor	edx, edx
+	movabs	r9, 2305843009213693950
+	mov	r10, rcx
+	.p2align	4, 0x90
+.LBB11_19:                              # =>This Inner Loop Header: Depth=1
+	lea	r11, [r10 + rdx]
+	mov	rsi, r11
+	shr	rsi
+	and	r11, r9
+	cmp	qword ptr [r8 + 8*r11], rax
+	lea	r11, [rsi + 1]
+	cmova	r10, rsi
+	cmovbe	rdx, r11
+	cmp	rdx, r10
+	jb	.LBB11_19
+# %bb.20:
+	cmp	rcx, rdx
+	ja	.LBB11_21
+	jmp	.LBB11_23
+.LBB11_17:
+	xor	edx, edx
+	cmp	rcx, rdx
+	jbe	.LBB11_23
+.LBB11_21:
+	mov	r8, rcx
+	shl	r8, 4
+	add	r8, qword ptr [rip + xt_simd_tab]
+	mov	r9, rcx
+	.p2align	4, 0x90
+.LBB11_22:                              # =>This Inner Loop Header: Depth=1
+	movups	xmm0, xmmword ptr [r8 - 16]
+	movups	xmmword ptr [r8], xmm0
+	add	r8, -16
+	dec	r9
+	cmp	r9, rdx
+	ja	.LBB11_22
+.LBB11_23:
+	mov	r8, qword ptr [rip + xt_simd_tab]
+	shl	rdx, 4
+	mov	qword ptr [r8 + rdx], rax
+	add	r15, rax
+	mov	qword ptr [r8 + rdx + 8], r15
+	inc	rcx
+	mov	qword ptr [rip + xt_simd_n], rcx
+	cmp	dword ptr [rip + _xt_threads_active], 0
+	je	.LBB11_25
+# %bb.24:
+	mov	dword ptr [rip + xt_rt_spin], 0
+.LBB11_25:
 	add	rsp, 40
 	pop	rbx
 	pop	rdi
 	pop	rsi
+	pop	r12
 	pop	r14
+	pop	r15
 	ret
                                         # -- End function
 	.def	_xtc_new_simd_u8;
@@ -375,42 +686,9 @@ _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 	.p2align	4, 0x90
 _xtc_new_simd_u8:                       # @_xtc_new_simd_u8
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	mov	rsi, rcx
-	cmp	rcx, 17
-	mov	edi, 16
-	cmovae	rdi, rcx
-	add	rdi, 16383
-	and	rdi, -16384
-	call	GetProcessHeap
-	add	rdi, 16440
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rdi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB8_1
-# %bb.2:
-	lea	rcx, [rax + 8]
-	add	rax, 16439
-	and	rax, -16384
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 1
-	mov	qword ptr [rax - 28], rsi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
-	mov	qword ptr [rax - 48], rcx
-	jmp	.LBB8_3
-.LBB8_1:
-	xor	eax, eax
-.LBB8_3:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
+	mov	edx, 1
+	xor	r8d, r8d
+	jmp	_xtc_alloc_aligned              # TAILCALL
                                         # -- End function
 	.def	_xtc_new_simd_i8;
 	.scl	2;
@@ -420,42 +698,9 @@ _xtc_new_simd_u8:                       # @_xtc_new_simd_u8
 	.p2align	4, 0x90
 _xtc_new_simd_i8:                       # @_xtc_new_simd_i8
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	mov	rsi, rcx
-	cmp	rcx, 17
-	mov	edi, 16
-	cmovae	rdi, rcx
-	add	rdi, 16383
-	and	rdi, -16384
-	call	GetProcessHeap
-	add	rdi, 16440
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rdi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB9_1
-# %bb.2:
-	lea	rcx, [rax + 8]
-	add	rax, 16439
-	and	rax, -16384
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 1
-	mov	qword ptr [rax - 28], rsi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
-	mov	qword ptr [rax - 48], rcx
-	jmp	.LBB9_3
-.LBB9_1:
-	xor	eax, eax
-.LBB9_3:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
+	mov	edx, 1
+	xor	r8d, r8d
+	jmp	_xtc_alloc_aligned              # TAILCALL
                                         # -- End function
 	.def	_xtc_new_simd_bool;
 	.scl	2;
@@ -465,42 +710,9 @@ _xtc_new_simd_i8:                       # @_xtc_new_simd_i8
 	.p2align	4, 0x90
 _xtc_new_simd_bool:                     # @_xtc_new_simd_bool
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	mov	rsi, rcx
-	cmp	rcx, 17
-	mov	edi, 16
-	cmovae	rdi, rcx
-	add	rdi, 16383
-	and	rdi, -16384
-	call	GetProcessHeap
-	add	rdi, 16440
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rdi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB10_1
-# %bb.2:
-	lea	rcx, [rax + 8]
-	add	rax, 16439
-	and	rax, -16384
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 1
-	mov	qword ptr [rax - 28], rsi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
-	mov	qword ptr [rax - 48], rcx
-	jmp	.LBB10_3
-.LBB10_1:
-	xor	eax, eax
-.LBB10_3:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
+	mov	edx, 1
+	xor	r8d, r8d
+	jmp	_xtc_alloc_aligned              # TAILCALL
                                         # -- End function
 	.def	_xtc_new_simd_u16;
 	.scl	2;
@@ -510,43 +722,9 @@ _xtc_new_simd_bool:                     # @_xtc_new_simd_bool
 	.p2align	4, 0x90
 _xtc_new_simd_u16:                      # @_xtc_new_simd_u16
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	mov	rsi, rcx
-	lea	rax, [rcx + rcx]
-	cmp	rax, 17
-	mov	edi, 16
-	cmovae	rdi, rax
-	add	rdi, 16383
-	and	rdi, -16384
-	call	GetProcessHeap
-	add	rdi, 16440
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rdi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB11_1
-# %bb.2:
-	lea	rcx, [rax + 8]
-	add	rax, 16439
-	and	rax, -16384
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 2
-	mov	qword ptr [rax - 28], rsi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
-	mov	qword ptr [rax - 48], rcx
-	jmp	.LBB11_3
-.LBB11_1:
-	xor	eax, eax
-.LBB11_3:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
+	mov	edx, 2
+	xor	r8d, r8d
+	jmp	_xtc_alloc_aligned              # TAILCALL
                                         # -- End function
 	.def	_xtc_new_simd_i16;
 	.scl	2;
@@ -556,43 +734,9 @@ _xtc_new_simd_u16:                      # @_xtc_new_simd_u16
 	.p2align	4, 0x90
 _xtc_new_simd_i16:                      # @_xtc_new_simd_i16
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	mov	rsi, rcx
-	lea	rax, [rcx + rcx]
-	cmp	rax, 17
-	mov	edi, 16
-	cmovae	rdi, rax
-	add	rdi, 16383
-	and	rdi, -16384
-	call	GetProcessHeap
-	add	rdi, 16440
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rdi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB12_1
-# %bb.2:
-	lea	rcx, [rax + 8]
-	add	rax, 16439
-	and	rax, -16384
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 2
-	mov	qword ptr [rax - 28], rsi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
-	mov	qword ptr [rax - 48], rcx
-	jmp	.LBB12_3
-.LBB12_1:
-	xor	eax, eax
-.LBB12_3:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
+	mov	edx, 2
+	xor	r8d, r8d
+	jmp	_xtc_alloc_aligned              # TAILCALL
                                         # -- End function
 	.def	_xtc_new_simd_u32;
 	.scl	2;
@@ -602,43 +746,9 @@ _xtc_new_simd_i16:                      # @_xtc_new_simd_i16
 	.p2align	4, 0x90
 _xtc_new_simd_u32:                      # @_xtc_new_simd_u32
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	mov	rsi, rcx
-	lea	rax, [4*rcx]
-	cmp	rax, 17
-	mov	edi, 16
-	cmovae	rdi, rax
-	add	rdi, 16383
-	and	rdi, -16384
-	call	GetProcessHeap
-	add	rdi, 16440
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rdi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB13_1
-# %bb.2:
-	lea	rcx, [rax + 8]
-	add	rax, 16439
-	and	rax, -16384
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 4
-	mov	qword ptr [rax - 28], rsi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
-	mov	qword ptr [rax - 48], rcx
-	jmp	.LBB13_3
-.LBB13_1:
-	xor	eax, eax
-.LBB13_3:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
+	mov	edx, 4
+	xor	r8d, r8d
+	jmp	_xtc_alloc_aligned              # TAILCALL
                                         # -- End function
 	.def	_xtc_new_simd_i32;
 	.scl	2;
@@ -648,43 +758,9 @@ _xtc_new_simd_u32:                      # @_xtc_new_simd_u32
 	.p2align	4, 0x90
 _xtc_new_simd_i32:                      # @_xtc_new_simd_i32
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	mov	rsi, rcx
-	lea	rax, [4*rcx]
-	cmp	rax, 17
-	mov	edi, 16
-	cmovae	rdi, rax
-	add	rdi, 16383
-	and	rdi, -16384
-	call	GetProcessHeap
-	add	rdi, 16440
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rdi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB14_1
-# %bb.2:
-	lea	rcx, [rax + 8]
-	add	rax, 16439
-	and	rax, -16384
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 4
-	mov	qword ptr [rax - 28], rsi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
-	mov	qword ptr [rax - 48], rcx
-	jmp	.LBB14_3
-.LBB14_1:
-	xor	eax, eax
-.LBB14_3:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
+	mov	edx, 4
+	xor	r8d, r8d
+	jmp	_xtc_alloc_aligned              # TAILCALL
                                         # -- End function
 	.def	_xtc_new_simd_float;
 	.scl	2;
@@ -694,43 +770,9 @@ _xtc_new_simd_i32:                      # @_xtc_new_simd_i32
 	.p2align	4, 0x90
 _xtc_new_simd_float:                    # @_xtc_new_simd_float
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	mov	rsi, rcx
-	lea	rax, [4*rcx]
-	cmp	rax, 17
-	mov	edi, 16
-	cmovae	rdi, rax
-	add	rdi, 16383
-	and	rdi, -16384
-	call	GetProcessHeap
-	add	rdi, 16440
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rdi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB15_1
-# %bb.2:
-	lea	rcx, [rax + 8]
-	add	rax, 16439
-	and	rax, -16384
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 4
-	mov	qword ptr [rax - 28], rsi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
-	mov	qword ptr [rax - 48], rcx
-	jmp	.LBB15_3
-.LBB15_1:
-	xor	eax, eax
-.LBB15_3:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
+	mov	edx, 4
+	xor	r8d, r8d
+	jmp	_xtc_alloc_aligned              # TAILCALL
                                         # -- End function
 	.def	_xtc_new_simd_u64;
 	.scl	2;
@@ -740,43 +782,9 @@ _xtc_new_simd_float:                    # @_xtc_new_simd_float
 	.p2align	4, 0x90
 _xtc_new_simd_u64:                      # @_xtc_new_simd_u64
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	mov	rsi, rcx
-	lea	rax, [8*rcx]
-	cmp	rax, 17
-	mov	edi, 16
-	cmovae	rdi, rax
-	add	rdi, 16383
-	and	rdi, -16384
-	call	GetProcessHeap
-	add	rdi, 16440
-	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB16_1
-# %bb.2:
-	lea	rcx, [rax + 8]
-	add	rax, 16439
-	and	rax, -16384
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 8
-	mov	qword ptr [rax - 28], rsi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
-	mov	qword ptr [rax - 48], rcx
-	jmp	.LBB16_3
-.LBB16_1:
-	xor	eax, eax
-.LBB16_3:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
+	xor	r8d, r8d
+	jmp	_xtc_alloc_aligned              # TAILCALL
                                         # -- End function
 	.def	_xtc_new_simd_i64;
 	.scl	2;
@@ -786,43 +794,9 @@ _xtc_new_simd_u64:                      # @_xtc_new_simd_u64
 	.p2align	4, 0x90
 _xtc_new_simd_i64:                      # @_xtc_new_simd_i64
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	mov	rsi, rcx
-	lea	rax, [8*rcx]
-	cmp	rax, 17
-	mov	edi, 16
-	cmovae	rdi, rax
-	add	rdi, 16383
-	and	rdi, -16384
-	call	GetProcessHeap
-	add	rdi, 16440
-	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB17_1
-# %bb.2:
-	lea	rcx, [rax + 8]
-	add	rax, 16439
-	and	rax, -16384
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 8
-	mov	qword ptr [rax - 28], rsi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
-	mov	qword ptr [rax - 48], rcx
-	jmp	.LBB17_3
-.LBB17_1:
-	xor	eax, eax
-.LBB17_3:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
+	xor	r8d, r8d
+	jmp	_xtc_alloc_aligned              # TAILCALL
                                         # -- End function
 	.def	_xtc_new_simd_double;
 	.scl	2;
@@ -832,43 +806,9 @@ _xtc_new_simd_i64:                      # @_xtc_new_simd_i64
 	.p2align	4, 0x90
 _xtc_new_simd_double:                   # @_xtc_new_simd_double
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	mov	rsi, rcx
-	lea	rax, [8*rcx]
-	cmp	rax, 17
-	mov	edi, 16
-	cmovae	rdi, rax
-	add	rdi, 16383
-	and	rdi, -16384
-	call	GetProcessHeap
-	add	rdi, 16440
-	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB18_1
-# %bb.2:
-	lea	rcx, [rax + 8]
-	add	rax, 16439
-	and	rax, -16384
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 8
-	mov	qword ptr [rax - 28], rsi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
-	mov	qword ptr [rax - 48], rcx
-	jmp	.LBB18_3
-.LBB18_1:
-	xor	eax, eax
-.LBB18_3:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
+	xor	r8d, r8d
+	jmp	_xtc_alloc_aligned              # TAILCALL
                                         # -- End function
 	.def	_xtc_new_simd_pointer;
 	.scl	2;
@@ -878,43 +818,9 @@ _xtc_new_simd_double:                   # @_xtc_new_simd_double
 	.p2align	4, 0x90
 _xtc_new_simd_pointer:                  # @_xtc_new_simd_pointer
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	mov	rsi, rcx
-	lea	rax, [8*rcx]
-	cmp	rax, 17
-	mov	edi, 16
-	cmovae	rdi, rax
-	add	rdi, 16383
-	and	rdi, -16384
-	call	GetProcessHeap
-	add	rdi, 16440
-	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB19_1
-# %bb.2:
-	lea	rcx, [rax + 8]
-	add	rax, 16439
-	and	rax, -16384
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 8
-	mov	qword ptr [rax - 28], rsi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
-	mov	qword ptr [rax - 48], rcx
-	jmp	.LBB19_3
-.LBB19_1:
-	xor	eax, eax
-.LBB19_3:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
+	xor	r8d, r8d
+	jmp	_xtc_alloc_aligned              # TAILCALL
                                         # -- End function
 	.def	_xtc_new_simd_string;
 	.scl	2;
@@ -924,43 +830,9 @@ _xtc_new_simd_pointer:                  # @_xtc_new_simd_pointer
 	.p2align	4, 0x90
 _xtc_new_simd_string:                   # @_xtc_new_simd_string
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	mov	rsi, rcx
-	lea	rax, [8*rcx]
-	cmp	rax, 17
-	mov	edi, 16
-	cmovae	rdi, rax
-	add	rdi, 16383
-	and	rdi, -16384
-	call	GetProcessHeap
-	add	rdi, 16440
-	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB20_1
-# %bb.2:
-	lea	rcx, [rax + 8]
-	add	rax, 16439
-	and	rax, -16384
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 8
-	mov	qword ptr [rax - 28], rsi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
-	mov	qword ptr [rax - 48], rcx
-	jmp	.LBB20_3
-.LBB20_1:
-	xor	eax, eax
-.LBB20_3:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
+	xor	r8d, r8d
+	jmp	_xtc_alloc_aligned              # TAILCALL
                                         # -- End function
 	.def	_xtc_new_u8;
 	.scl	2;
@@ -973,30 +845,40 @@ _xtc_new_u8:                            # @_xtc_new_u8
 	push	rsi
 	push	rdi
 	sub	rsp, 40
-	mov	rsi, rcx
+	cmp	rcx, 65536
+	jb	.LBB25_1
+# %bb.5:
+	mov	edx, 1
+	xor	r8d, r8d
+	add	rsp, 40
+	pop	rdi
+	pop	rsi
+	jmp	_xtc_alloc_aligned              # TAILCALL
+.LBB25_1:
 	cmp	rcx, 257
-	mov	edi, 256
-	cmovae	rdi, rcx
+	mov	esi, 256
+	mov	rdi, rcx
+	cmovae	rsi, rcx
 	call	GetProcessHeap
-	add	rdi, 48
+	add	rsi, 48
 	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
+	mov	r8, rsi
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB21_1
-# %bb.2:
+	je	.LBB25_2
+# %bb.3:
 	mov	dword ptr [rax + 8], 1481920322
 	mov	qword ptr [rax + 12], 1
-	mov	qword ptr [rax + 20], rsi
+	mov	qword ptr [rax + 20], rdi
 	xorps	xmm0, xmm0
 	movups	xmmword ptr [rax + 28], xmm0
 	mov	dword ptr [rax + 44], 1
 	add	rax, 48
-	jmp	.LBB21_3
-.LBB21_1:
+	jmp	.LBB25_4
+.LBB25_2:
 	xor	eax, eax
-.LBB21_3:
+.LBB25_4:
 	add	rsp, 40
 	pop	rdi
 	pop	rsi
@@ -1013,30 +895,40 @@ _xtc_new_i8:                            # @_xtc_new_i8
 	push	rsi
 	push	rdi
 	sub	rsp, 40
-	mov	rsi, rcx
+	cmp	rcx, 65536
+	jb	.LBB26_1
+# %bb.5:
+	mov	edx, 1
+	xor	r8d, r8d
+	add	rsp, 40
+	pop	rdi
+	pop	rsi
+	jmp	_xtc_alloc_aligned              # TAILCALL
+.LBB26_1:
 	cmp	rcx, 257
-	mov	edi, 256
-	cmovae	rdi, rcx
+	mov	esi, 256
+	mov	rdi, rcx
+	cmovae	rsi, rcx
 	call	GetProcessHeap
-	add	rdi, 48
+	add	rsi, 48
 	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
+	mov	r8, rsi
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB22_1
-# %bb.2:
+	je	.LBB26_2
+# %bb.3:
 	mov	dword ptr [rax + 8], 1481920322
 	mov	qword ptr [rax + 12], 1
-	mov	qword ptr [rax + 20], rsi
+	mov	qword ptr [rax + 20], rdi
 	xorps	xmm0, xmm0
 	movups	xmmword ptr [rax + 28], xmm0
 	mov	dword ptr [rax + 44], 1
 	add	rax, 48
-	jmp	.LBB22_3
-.LBB22_1:
+	jmp	.LBB26_4
+.LBB26_2:
 	xor	eax, eax
-.LBB22_3:
+.LBB26_4:
 	add	rsp, 40
 	pop	rdi
 	pop	rsi
@@ -1053,31 +945,42 @@ _xtc_new_u16:                           # @_xtc_new_u16
 	push	rsi
 	push	rdi
 	sub	rsp, 40
-	mov	rsi, rcx
+	movabs	rax, 9223372036854743040
+	test	rcx, rax
+	je	.LBB27_1
+# %bb.5:
+	mov	edx, 2
+	xor	r8d, r8d
+	add	rsp, 40
+	pop	rdi
+	pop	rsi
+	jmp	_xtc_alloc_aligned              # TAILCALL
+.LBB27_1:
+	mov	rdi, rcx
 	lea	rax, [rcx + rcx]
 	cmp	rax, 257
-	mov	edi, 256
-	cmovae	rdi, rax
+	mov	esi, 256
+	cmovae	rsi, rax
 	call	GetProcessHeap
-	add	rdi, 48
+	add	rsi, 48
 	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
+	mov	r8, rsi
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB23_1
-# %bb.2:
+	je	.LBB27_2
+# %bb.3:
 	mov	dword ptr [rax + 8], 1481920322
 	mov	qword ptr [rax + 12], 2
-	mov	qword ptr [rax + 20], rsi
+	mov	qword ptr [rax + 20], rdi
 	xorps	xmm0, xmm0
 	movups	xmmword ptr [rax + 28], xmm0
 	mov	dword ptr [rax + 44], 1
 	add	rax, 48
-	jmp	.LBB23_3
-.LBB23_1:
+	jmp	.LBB27_4
+.LBB27_2:
 	xor	eax, eax
-.LBB23_3:
+.LBB27_4:
 	add	rsp, 40
 	pop	rdi
 	pop	rsi
@@ -1094,31 +997,42 @@ _xtc_new_i16:                           # @_xtc_new_i16
 	push	rsi
 	push	rdi
 	sub	rsp, 40
-	mov	rsi, rcx
+	movabs	rax, 9223372036854743040
+	test	rcx, rax
+	je	.LBB28_1
+# %bb.5:
+	mov	edx, 2
+	xor	r8d, r8d
+	add	rsp, 40
+	pop	rdi
+	pop	rsi
+	jmp	_xtc_alloc_aligned              # TAILCALL
+.LBB28_1:
+	mov	rdi, rcx
 	lea	rax, [rcx + rcx]
 	cmp	rax, 257
-	mov	edi, 256
-	cmovae	rdi, rax
+	mov	esi, 256
+	cmovae	rsi, rax
 	call	GetProcessHeap
-	add	rdi, 48
+	add	rsi, 48
 	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
+	mov	r8, rsi
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB24_1
-# %bb.2:
+	je	.LBB28_2
+# %bb.3:
 	mov	dword ptr [rax + 8], 1481920322
 	mov	qword ptr [rax + 12], 2
-	mov	qword ptr [rax + 20], rsi
+	mov	qword ptr [rax + 20], rdi
 	xorps	xmm0, xmm0
 	movups	xmmword ptr [rax + 28], xmm0
 	mov	dword ptr [rax + 44], 1
 	add	rax, 48
-	jmp	.LBB24_3
-.LBB24_1:
+	jmp	.LBB28_4
+.LBB28_2:
 	xor	eax, eax
-.LBB24_3:
+.LBB28_4:
 	add	rsp, 40
 	pop	rdi
 	pop	rsi
@@ -1135,31 +1049,42 @@ _xtc_new_u32:                           # @_xtc_new_u32
 	push	rsi
 	push	rdi
 	sub	rsp, 40
-	mov	rsi, rcx
+	movabs	rax, 4611686018427371520
+	test	rcx, rax
+	je	.LBB29_1
+# %bb.5:
+	mov	edx, 4
+	xor	r8d, r8d
+	add	rsp, 40
+	pop	rdi
+	pop	rsi
+	jmp	_xtc_alloc_aligned              # TAILCALL
+.LBB29_1:
+	mov	rdi, rcx
 	lea	rax, [4*rcx]
 	cmp	rax, 257
-	mov	edi, 256
-	cmovae	rdi, rax
+	mov	esi, 256
+	cmovae	rsi, rax
 	call	GetProcessHeap
-	add	rdi, 48
+	add	rsi, 48
 	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
+	mov	r8, rsi
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB25_1
-# %bb.2:
+	je	.LBB29_2
+# %bb.3:
 	mov	dword ptr [rax + 8], 1481920322
 	mov	qword ptr [rax + 12], 4
-	mov	qword ptr [rax + 20], rsi
+	mov	qword ptr [rax + 20], rdi
 	xorps	xmm0, xmm0
 	movups	xmmword ptr [rax + 28], xmm0
 	mov	dword ptr [rax + 44], 1
 	add	rax, 48
-	jmp	.LBB25_3
-.LBB25_1:
+	jmp	.LBB29_4
+.LBB29_2:
 	xor	eax, eax
-.LBB25_3:
+.LBB29_4:
 	add	rsp, 40
 	pop	rdi
 	pop	rsi
@@ -1176,31 +1101,42 @@ _xtc_new_i32:                           # @_xtc_new_i32
 	push	rsi
 	push	rdi
 	sub	rsp, 40
-	mov	rsi, rcx
+	movabs	rax, 4611686018427371520
+	test	rcx, rax
+	je	.LBB30_1
+# %bb.5:
+	mov	edx, 4
+	xor	r8d, r8d
+	add	rsp, 40
+	pop	rdi
+	pop	rsi
+	jmp	_xtc_alloc_aligned              # TAILCALL
+.LBB30_1:
+	mov	rdi, rcx
 	lea	rax, [4*rcx]
 	cmp	rax, 257
-	mov	edi, 256
-	cmovae	rdi, rax
+	mov	esi, 256
+	cmovae	rsi, rax
 	call	GetProcessHeap
-	add	rdi, 48
+	add	rsi, 48
 	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
+	mov	r8, rsi
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB26_1
-# %bb.2:
+	je	.LBB30_2
+# %bb.3:
 	mov	dword ptr [rax + 8], 1481920322
 	mov	qword ptr [rax + 12], 4
-	mov	qword ptr [rax + 20], rsi
+	mov	qword ptr [rax + 20], rdi
 	xorps	xmm0, xmm0
 	movups	xmmword ptr [rax + 28], xmm0
 	mov	dword ptr [rax + 44], 1
 	add	rax, 48
-	jmp	.LBB26_3
-.LBB26_1:
+	jmp	.LBB30_4
+.LBB30_2:
 	xor	eax, eax
-.LBB26_3:
+.LBB30_4:
 	add	rsp, 40
 	pop	rdi
 	pop	rsi
@@ -1229,7 +1165,7 @@ _xtc_new_pointer:                       # @_xtc_new_pointer
 	mov	r8, rdi
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB27_1
+	je	.LBB31_1
 # %bb.2:
 	mov	dword ptr [rax + 8], 1481920322
 	mov	qword ptr [rax + 12], 8
@@ -1238,10 +1174,10 @@ _xtc_new_pointer:                       # @_xtc_new_pointer
 	movups	xmmword ptr [rax + 28], xmm0
 	mov	dword ptr [rax + 44], 1
 	add	rax, 48
-	jmp	.LBB27_3
-.LBB27_1:
+	jmp	.LBB31_3
+.LBB31_1:
 	xor	eax, eax
-.LBB27_3:
+.LBB31_3:
 	add	rsp, 40
 	pop	rdi
 	pop	rsi
@@ -1258,31 +1194,42 @@ _xtc_new_u64:                           # @_xtc_new_u64
 	push	rsi
 	push	rdi
 	sub	rsp, 40
-	mov	rsi, rcx
+	movabs	rax, 2305843009213685760
+	test	rcx, rax
+	je	.LBB32_1
+# %bb.5:
+	mov	edx, 8
+	xor	r8d, r8d
+	add	rsp, 40
+	pop	rdi
+	pop	rsi
+	jmp	_xtc_alloc_aligned              # TAILCALL
+.LBB32_1:
+	mov	rdi, rcx
 	lea	rax, [8*rcx]
 	cmp	rax, 257
-	mov	edi, 256
-	cmovae	rdi, rax
+	mov	esi, 256
+	cmovae	rsi, rax
 	call	GetProcessHeap
-	add	rdi, 48
+	add	rsi, 48
 	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
+	mov	r8, rsi
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB28_1
-# %bb.2:
+	je	.LBB32_2
+# %bb.3:
 	mov	dword ptr [rax + 8], 1481920322
 	mov	qword ptr [rax + 12], 8
-	mov	qword ptr [rax + 20], rsi
+	mov	qword ptr [rax + 20], rdi
 	xorps	xmm0, xmm0
 	movups	xmmword ptr [rax + 28], xmm0
 	mov	dword ptr [rax + 44], 1
 	add	rax, 48
-	jmp	.LBB28_3
-.LBB28_1:
+	jmp	.LBB32_4
+.LBB32_2:
 	xor	eax, eax
-.LBB28_3:
+.LBB32_4:
 	add	rsp, 40
 	pop	rdi
 	pop	rsi
@@ -1299,31 +1246,42 @@ _xtc_new_i64:                           # @_xtc_new_i64
 	push	rsi
 	push	rdi
 	sub	rsp, 40
-	mov	rsi, rcx
+	movabs	rax, 2305843009213685760
+	test	rcx, rax
+	je	.LBB33_1
+# %bb.5:
+	mov	edx, 8
+	xor	r8d, r8d
+	add	rsp, 40
+	pop	rdi
+	pop	rsi
+	jmp	_xtc_alloc_aligned              # TAILCALL
+.LBB33_1:
+	mov	rdi, rcx
 	lea	rax, [8*rcx]
 	cmp	rax, 257
-	mov	edi, 256
-	cmovae	rdi, rax
+	mov	esi, 256
+	cmovae	rsi, rax
 	call	GetProcessHeap
-	add	rdi, 48
+	add	rsi, 48
 	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
+	mov	r8, rsi
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB29_1
-# %bb.2:
+	je	.LBB33_2
+# %bb.3:
 	mov	dword ptr [rax + 8], 1481920322
 	mov	qword ptr [rax + 12], 8
-	mov	qword ptr [rax + 20], rsi
+	mov	qword ptr [rax + 20], rdi
 	xorps	xmm0, xmm0
 	movups	xmmword ptr [rax + 28], xmm0
 	mov	dword ptr [rax + 44], 1
 	add	rax, 48
-	jmp	.LBB29_3
-.LBB29_1:
+	jmp	.LBB33_4
+.LBB33_2:
 	xor	eax, eax
-.LBB29_3:
+.LBB33_4:
 	add	rsp, 40
 	pop	rdi
 	pop	rsi
@@ -1340,30 +1298,40 @@ _xtc_new_bool:                          # @_xtc_new_bool
 	push	rsi
 	push	rdi
 	sub	rsp, 40
-	mov	rsi, rcx
+	cmp	rcx, 65536
+	jb	.LBB34_1
+# %bb.5:
+	mov	edx, 1
+	xor	r8d, r8d
+	add	rsp, 40
+	pop	rdi
+	pop	rsi
+	jmp	_xtc_alloc_aligned              # TAILCALL
+.LBB34_1:
 	cmp	rcx, 257
-	mov	edi, 256
-	cmovae	rdi, rcx
+	mov	esi, 256
+	mov	rdi, rcx
+	cmovae	rsi, rcx
 	call	GetProcessHeap
-	add	rdi, 48
+	add	rsi, 48
 	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
+	mov	r8, rsi
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB30_1
-# %bb.2:
+	je	.LBB34_2
+# %bb.3:
 	mov	dword ptr [rax + 8], 1481920322
 	mov	qword ptr [rax + 12], 1
-	mov	qword ptr [rax + 20], rsi
+	mov	qword ptr [rax + 20], rdi
 	xorps	xmm0, xmm0
 	movups	xmmword ptr [rax + 28], xmm0
 	mov	dword ptr [rax + 44], 1
 	add	rax, 48
-	jmp	.LBB30_3
-.LBB30_1:
+	jmp	.LBB34_4
+.LBB34_2:
 	xor	eax, eax
-.LBB30_3:
+.LBB34_4:
 	add	rsp, 40
 	pop	rdi
 	pop	rsi
@@ -1380,31 +1348,42 @@ _xtc_new_float:                         # @_xtc_new_float
 	push	rsi
 	push	rdi
 	sub	rsp, 40
-	mov	rsi, rcx
+	movabs	rax, 4611686018427371520
+	test	rcx, rax
+	je	.LBB35_1
+# %bb.5:
+	mov	edx, 4
+	xor	r8d, r8d
+	add	rsp, 40
+	pop	rdi
+	pop	rsi
+	jmp	_xtc_alloc_aligned              # TAILCALL
+.LBB35_1:
+	mov	rdi, rcx
 	lea	rax, [4*rcx]
 	cmp	rax, 257
-	mov	edi, 256
-	cmovae	rdi, rax
+	mov	esi, 256
+	cmovae	rsi, rax
 	call	GetProcessHeap
-	add	rdi, 48
+	add	rsi, 48
 	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
+	mov	r8, rsi
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB31_1
-# %bb.2:
+	je	.LBB35_2
+# %bb.3:
 	mov	dword ptr [rax + 8], 1481920322
 	mov	qword ptr [rax + 12], 4
-	mov	qword ptr [rax + 20], rsi
+	mov	qword ptr [rax + 20], rdi
 	xorps	xmm0, xmm0
 	movups	xmmword ptr [rax + 28], xmm0
 	mov	dword ptr [rax + 44], 1
 	add	rax, 48
-	jmp	.LBB31_3
-.LBB31_1:
+	jmp	.LBB35_4
+.LBB35_2:
 	xor	eax, eax
-.LBB31_3:
+.LBB35_4:
 	add	rsp, 40
 	pop	rdi
 	pop	rsi
@@ -1421,31 +1400,42 @@ _xtc_new_double:                        # @_xtc_new_double
 	push	rsi
 	push	rdi
 	sub	rsp, 40
-	mov	rsi, rcx
+	movabs	rax, 2305843009213685760
+	test	rcx, rax
+	je	.LBB36_1
+# %bb.5:
+	mov	edx, 8
+	xor	r8d, r8d
+	add	rsp, 40
+	pop	rdi
+	pop	rsi
+	jmp	_xtc_alloc_aligned              # TAILCALL
+.LBB36_1:
+	mov	rdi, rcx
 	lea	rax, [8*rcx]
 	cmp	rax, 257
-	mov	edi, 256
-	cmovae	rdi, rax
+	mov	esi, 256
+	cmovae	rsi, rax
 	call	GetProcessHeap
-	add	rdi, 48
+	add	rsi, 48
 	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
+	mov	r8, rsi
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB32_1
-# %bb.2:
+	je	.LBB36_2
+# %bb.3:
 	mov	dword ptr [rax + 8], 1481920322
 	mov	qword ptr [rax + 12], 8
-	mov	qword ptr [rax + 20], rsi
+	mov	qword ptr [rax + 20], rdi
 	xorps	xmm0, xmm0
 	movups	xmmword ptr [rax + 28], xmm0
 	mov	dword ptr [rax + 44], 1
 	add	rax, 48
-	jmp	.LBB32_3
-.LBB32_1:
+	jmp	.LBB36_4
+.LBB36_2:
 	xor	eax, eax
-.LBB32_3:
+.LBB36_4:
 	add	rsp, 40
 	pop	rdi
 	pop	rsi
@@ -1474,7 +1464,7 @@ _xtc_new_string:                        # @_xtc_new_string
 	mov	r8, rdi
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB33_1
+	je	.LBB37_1
 # %bb.2:
 	mov	dword ptr [rax + 8], 1481920322
 	mov	qword ptr [rax + 12], 8
@@ -1483,10 +1473,10 @@ _xtc_new_string:                        # @_xtc_new_string
 	movups	xmmword ptr [rax + 28], xmm0
 	mov	dword ptr [rax + 44], 1
 	add	rax, 48
-	jmp	.LBB33_3
-.LBB33_1:
+	jmp	.LBB37_3
+.LBB37_1:
 	xor	eax, eax
-.LBB33_3:
+.LBB37_3:
 	add	rsp, 40
 	pop	rdi
 	pop	rsi
@@ -1519,77 +1509,149 @@ _xtc_dealloc:                           # @_xtc_dealloc
 	sub	rsp, 32
 	mov	rsi, rcx
 	test	rcx, rcx
-	je	.LBB35_9
+	je	.LBB39_9
 # %bb.1:
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB35_4
+	je	.LBB39_4
 	.p2align	4, 0x90
-.LBB35_2:                               # =>This Loop Header: Depth=1
-                                        #     Child Loop BB35_3 Depth 2
+.LBB39_2:                               # =>This Loop Header: Depth=1
+                                        #     Child Loop BB39_3 Depth 2
 	mov	eax, 1
 	xchg	dword ptr [rip + xt_rt_spin], eax
 	test	eax, eax
-	je	.LBB35_4
-.LBB35_3:                               #   Parent Loop BB35_2 Depth=1
+	je	.LBB39_4
+.LBB39_3:                               #   Parent Loop BB39_2 Depth=1
                                         # =>  This Inner Loop Header: Depth=2
 	mov	eax, dword ptr [rip + xt_rt_spin]
 	test	eax, eax
-	jne	.LBB35_3
-	jmp	.LBB35_2
-.LBB35_4:
+	jne	.LBB39_3
+	jmp	.LBB39_2
+.LBB39_4:
 	mov	rax, qword ptr [rsi - 12]
 	test	rax, rax
-	je	.LBB35_7
+	je	.LBB39_7
 # %bb.5:
 	xorps	xmm0, xmm0
 	.p2align	4, 0x90
-.LBB35_6:                               # =>This Inner Loop Header: Depth=1
+.LBB39_6:                               # =>This Inner Loop Header: Depth=1
 	mov	rcx, qword ptr [rax - 8]
 	movups	xmmword ptr [rax - 16], xmm0
 	mov	qword ptr [rax], 0
 	mov	rax, rcx
 	test	rcx, rcx
-	jne	.LBB35_6
-.LBB35_7:
+	jne	.LBB39_6
+.LBB39_7:
 	mov	qword ptr [rsi - 12], 0
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB35_9
+	je	.LBB39_9
 # %bb.8:
 	mov	dword ptr [rip + xt_rt_spin], 0
-.LBB35_9:
+.LBB39_9:
 	mov	rbx, qword ptr [rsi - 20]
 	test	rbx, rbx
-	je	.LBB35_13
+	je	.LBB39_13
 # %bb.10:
 	mov	r14, qword ptr [rsi - 36]
 	mov	r15, qword ptr [rsi - 28]
 	mov	dword ptr [rsi - 4], -2147483648
 	test	r15, r15
-	je	.LBB35_13
+	je	.LBB39_13
 # %bb.11:
 	mov	rdi, rsi
 	.p2align	4, 0x90
-.LBB35_12:                              # =>This Inner Loop Header: Depth=1
+.LBB39_12:                              # =>This Inner Loop Header: Depth=1
 	mov	rcx, rdi
 	call	rbx
 	add	rdi, r14
 	dec	r15
-	jne	.LBB35_12
-.LBB35_13:
+	jne	.LBB39_12
+.LBB39_13:
 	cmp	dword ptr [rsi - 40], 1481920323
-	jne	.LBB35_17
+	jne	.LBB39_32
 # %bb.14:
-	mov	rsi, qword ptr [rsi - 48]
-	test	rsi, rsi
-	je	.LBB35_18
-# %bb.15:
-	call	GetProcessHeap
-	add	rsi, -8
-	jmp	.LBB35_16
-.LBB35_17:
+	cmp	dword ptr [rip + _xt_threads_active], 0
+	je	.LBB39_17
+	.p2align	4, 0x90
+.LBB39_15:                              # =>This Loop Header: Depth=1
+                                        #     Child Loop BB39_16 Depth 2
+	mov	eax, 1
+	xchg	dword ptr [rip + xt_rt_spin], eax
+	test	eax, eax
+	je	.LBB39_17
+.LBB39_16:                              #   Parent Loop BB39_15 Depth=1
+                                        # =>  This Inner Loop Header: Depth=2
+	mov	eax, dword ptr [rip + xt_rt_spin]
+	test	eax, eax
+	jne	.LBB39_16
+	jmp	.LBB39_15
+.LBB39_32:
 	call	GetProcessHeap
 	add	rsi, -48
-.LBB35_16:
+	jmp	.LBB39_31
+.LBB39_17:
+	mov	rax, qword ptr [rip + xt_simd_n]
+	test	rax, rax
+	je	.LBB39_18
+# %bb.19:
+	mov	rdx, qword ptr [rip + xt_simd_tab]
+	xor	ecx, ecx
+	movabs	r8, 2305843009213693950
+	mov	r9, rax
+	.p2align	4, 0x90
+.LBB39_20:                              # =>This Inner Loop Header: Depth=1
+	lea	r10, [r9 + rcx]
+	mov	r11, r10
+	shr	r11
+	and	r10, r8
+	cmp	qword ptr [rdx + 8*r10], rsi
+	lea	r10, [r11 + 1]
+	cmova	r9, r11
+	cmovbe	rcx, r10
+	cmp	rcx, r9
+	jb	.LBB39_20
+# %bb.21:
+	test	rcx, rcx
+	jne	.LBB39_22
+	jmp	.LBB39_27
+.LBB39_18:
+	xor	ecx, ecx
+	test	rcx, rcx
+	je	.LBB39_27
+.LBB39_22:
+	mov	rdx, qword ptr [rip + xt_simd_tab]
+	mov	r9, rcx
+	shl	r9, 4
+	cmp	qword ptr [rdx + r9 - 16], rsi
+	jne	.LBB39_27
+# %bb.23:
+	mov	r8, rax
+	sub	r8, rcx
+	jbe	.LBB39_26
+# %bb.24:
+	add	rdx, r9
+	.p2align	4, 0x90
+.LBB39_25:                              # =>This Inner Loop Header: Depth=1
+	movups	xmm0, xmmword ptr [rdx]
+	movups	xmmword ptr [rdx - 16], xmm0
+	add	rdx, 16
+	dec	r8
+	jne	.LBB39_25
+.LBB39_26:
+	dec	rax
+	mov	qword ptr [rip + xt_simd_n], rax
+.LBB39_27:
+	cmp	dword ptr [rip + _xt_threads_active], 0
+	je	.LBB39_29
+# %bb.28:
+	mov	dword ptr [rip + xt_rt_spin], 0
+.LBB39_29:
+	mov	rsi, qword ptr [rsi - 48]
+	test	rsi, rsi
+	je	.LBB39_33
+# %bb.30:
+	call	GetProcessHeap
+	add	rsi, -8
+.LBB39_31:
 	mov	rcx, rax
 	xor	edx, edx
 	mov	r8, rsi
@@ -1600,7 +1662,7 @@ _xtc_dealloc:                           # @_xtc_dealloc
 	pop	r14
 	pop	r15
 	jmp	HeapFree                        # TAILCALL
-.LBB35_18:
+.LBB39_33:
 	add	rsp, 32
 	pop	rbx
 	pop	rdi
@@ -1618,44 +1680,44 @@ _xtc_dealloc:                           # @_xtc_dealloc
 _xtc_weak_zero_for:                     # @_xtc_weak_zero_for
 # %bb.0:
 	test	rcx, rcx
-	je	.LBB36_9
+	je	.LBB40_9
 # %bb.1:
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB36_4
+	je	.LBB40_4
 	.p2align	4, 0x90
-.LBB36_2:                               # =>This Loop Header: Depth=1
-                                        #     Child Loop BB36_3 Depth 2
+.LBB40_2:                               # =>This Loop Header: Depth=1
+                                        #     Child Loop BB40_3 Depth 2
 	mov	eax, 1
 	xchg	dword ptr [rip + xt_rt_spin], eax
 	test	eax, eax
-	je	.LBB36_4
-.LBB36_3:                               #   Parent Loop BB36_2 Depth=1
+	je	.LBB40_4
+.LBB40_3:                               #   Parent Loop BB40_2 Depth=1
                                         # =>  This Inner Loop Header: Depth=2
 	mov	eax, dword ptr [rip + xt_rt_spin]
 	test	eax, eax
-	jne	.LBB36_3
-	jmp	.LBB36_2
-.LBB36_4:
+	jne	.LBB40_3
+	jmp	.LBB40_2
+.LBB40_4:
 	mov	rax, qword ptr [rcx - 12]
 	test	rax, rax
-	je	.LBB36_7
+	je	.LBB40_7
 # %bb.5:
 	xorps	xmm0, xmm0
 	.p2align	4, 0x90
-.LBB36_6:                               # =>This Inner Loop Header: Depth=1
+.LBB40_6:                               # =>This Inner Loop Header: Depth=1
 	mov	rdx, qword ptr [rax - 8]
 	movups	xmmword ptr [rax - 16], xmm0
 	mov	qword ptr [rax], 0
 	mov	rax, rdx
 	test	rdx, rdx
-	jne	.LBB36_6
-.LBB36_7:
+	jne	.LBB40_6
+.LBB40_7:
 	mov	qword ptr [rcx - 12], 0
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB36_9
+	je	.LBB40_9
 # %bb.8:
 	mov	dword ptr [rip + xt_rt_spin], 0
-.LBB36_9:
+.LBB40_9:
 	ret
                                         # -- End function
 	.def	_xtc_weak_unregister;
@@ -1667,85 +1729,44 @@ _xtc_weak_zero_for:                     # @_xtc_weak_zero_for
 _xtc_weak_unregister:                   # @_xtc_weak_unregister
 # %bb.0:
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB37_3
+	je	.LBB41_3
 	.p2align	4, 0x90
-.LBB37_1:                               # =>This Loop Header: Depth=1
-                                        #     Child Loop BB37_2 Depth 2
+.LBB41_1:                               # =>This Loop Header: Depth=1
+                                        #     Child Loop BB41_2 Depth 2
 	mov	eax, 1
 	xchg	dword ptr [rip + xt_rt_spin], eax
 	test	eax, eax
-	je	.LBB37_3
-.LBB37_2:                               #   Parent Loop BB37_1 Depth=1
+	je	.LBB41_3
+.LBB41_2:                               #   Parent Loop BB41_1 Depth=1
                                         # =>  This Inner Loop Header: Depth=2
 	mov	eax, dword ptr [rip + xt_rt_spin]
 	test	eax, eax
-	jne	.LBB37_2
-	jmp	.LBB37_1
-.LBB37_3:
+	jne	.LBB41_2
+	jmp	.LBB41_1
+.LBB41_3:
 	mov	rax, qword ptr [rcx - 16]
 	test	rax, rax
-	je	.LBB37_8
+	je	.LBB41_8
 # %bb.4:
 	lea	rdx, [rcx - 16]
 	cmp	qword ptr [rax], rcx
-	jne	.LBB37_7
+	jne	.LBB41_7
 # %bb.5:
 	mov	rcx, qword ptr [rcx - 8]
 	mov	qword ptr [rax], rcx
 	test	rcx, rcx
-	je	.LBB37_7
+	je	.LBB41_7
 # %bb.6:
 	mov	qword ptr [rcx - 16], rax
-.LBB37_7:
+.LBB41_7:
 	xorps	xmm0, xmm0
 	movups	xmmword ptr [rdx], xmm0
-.LBB37_8:
+.LBB41_8:
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB37_10
+	je	.LBB41_10
 # %bb.9:
 	mov	dword ptr [rip + xt_rt_spin], 0
-.LBB37_10:
-	ret
-                                        # -- End function
-	.def	_xt_rt_lock;
-	.scl	2;
-	.type	32;
-	.endef
-	.globl	_xt_rt_lock                     # -- Begin function _xt_rt_lock
-	.p2align	4, 0x90
-_xt_rt_lock:                            # @_xt_rt_lock
-# %bb.0:
-	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB38_3
-	.p2align	4, 0x90
-.LBB38_1:                               # =>This Loop Header: Depth=1
-                                        #     Child Loop BB38_2 Depth 2
-	mov	eax, 1
-	xchg	dword ptr [rip + xt_rt_spin], eax
-	test	eax, eax
-	je	.LBB38_3
-.LBB38_2:                               #   Parent Loop BB38_1 Depth=1
-                                        # =>  This Inner Loop Header: Depth=2
-	mov	eax, dword ptr [rip + xt_rt_spin]
-	test	eax, eax
-	jne	.LBB38_2
-	jmp	.LBB38_1
-.LBB38_3:
-	ret
-                                        # -- End function
-	.def	_xt_rt_unlock;
-	.scl	2;
-	.type	32;
-	.endef
-	.globl	_xt_rt_unlock                   # -- Begin function _xt_rt_unlock
-	.p2align	4, 0x90
-_xt_rt_unlock:                          # @_xt_rt_unlock
-# %bb.0:
-	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB39_2
-# %bb.1:
-	mov	dword ptr [rip + xt_rt_spin], 0
-.LBB39_2:
+.LBB41_10:
 	ret
                                         # -- End function
 	.def	_xtc_weak_register;
@@ -1757,62 +1778,62 @@ _xt_rt_unlock:                          # @_xt_rt_unlock
 _xtc_weak_register:                     # @_xtc_weak_register
 # %bb.0:
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB40_3
+	je	.LBB42_3
 	.p2align	4, 0x90
-.LBB40_1:                               # =>This Loop Header: Depth=1
-                                        #     Child Loop BB40_2 Depth 2
+.LBB42_1:                               # =>This Loop Header: Depth=1
+                                        #     Child Loop BB42_2 Depth 2
 	mov	eax, 1
 	xchg	dword ptr [rip + xt_rt_spin], eax
 	test	eax, eax
-	je	.LBB40_3
-.LBB40_2:                               #   Parent Loop BB40_1 Depth=1
+	je	.LBB42_3
+.LBB42_2:                               #   Parent Loop BB42_1 Depth=1
                                         # =>  This Inner Loop Header: Depth=2
 	mov	eax, dword ptr [rip + xt_rt_spin]
 	test	eax, eax
-	jne	.LBB40_2
-	jmp	.LBB40_1
-.LBB40_3:
+	jne	.LBB42_2
+	jmp	.LBB42_1
+.LBB42_3:
 	mov	rax, qword ptr [rcx - 16]
 	test	rax, rax
-	je	.LBB40_8
+	je	.LBB42_8
 # %bb.4:
 	lea	r8, [rcx - 16]
 	cmp	qword ptr [rax], rcx
-	jne	.LBB40_7
+	jne	.LBB42_7
 # %bb.5:
 	mov	r9, qword ptr [rcx - 8]
 	mov	qword ptr [rax], r9
 	test	r9, r9
-	je	.LBB40_7
+	je	.LBB42_7
 # %bb.6:
 	mov	qword ptr [r9 - 16], rax
-.LBB40_7:
+.LBB42_7:
 	xorps	xmm0, xmm0
 	movups	xmmword ptr [r8], xmm0
-.LBB40_8:
+.LBB42_8:
 	test	rdx, rdx
-	je	.LBB40_13
+	je	.LBB42_13
 # %bb.9:
 	cmp	dword ptr [rdx - 40], 1481920322
-	jne	.LBB40_13
+	jne	.LBB42_13
 # %bb.10:
 	mov	rax, qword ptr [rdx - 12]
 	add	rdx, -12
 	mov	qword ptr [rcx - 16], rdx
 	mov	qword ptr [rcx - 8], rax
 	test	rax, rax
-	je	.LBB40_12
+	je	.LBB42_12
 # %bb.11:
 	lea	r8, [rcx - 8]
 	mov	qword ptr [rax - 16], r8
-.LBB40_12:
+.LBB42_12:
 	mov	qword ptr [rdx], rcx
-.LBB40_13:
+.LBB42_13:
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB40_15
+	je	.LBB42_15
 # %bb.14:
 	mov	dword ptr [rip + xt_rt_spin], 0
-.LBB40_15:
+.LBB42_15:
 	ret
                                         # -- End function
 	.def	_xtc_weak_load;
@@ -1920,9 +1941,9 @@ _xt_rand_u32:                           # @_xt_rand_u32
 	.endef
 	.section	.rdata,"dr"
 	.p2align	2, 0x0                          # -- Begin function _xt_rand_f
-.LCPI46_0:
+.LCPI48_0:
 	.long	0x30000000                      # float 4.65661287E-10
-.LCPI46_1:
+.LCPI48_1:
 	.long	0x3f000000                      # float 0.5
 	.text
 	.globl	_xt_rand_f
@@ -1943,8 +1964,8 @@ _xt_rand_f:                             # @_xt_rand_f
 	shr	rcx, 17
 	and	ecx, 2147483647
 	cvtsi2ss	xmm0, ecx
-	mulss	xmm0, dword ptr [rip + .LCPI46_0]
-	movss	xmm1, dword ptr [rip + .LCPI46_1] # xmm1 = [5.0E-1,0.0E+0,0.0E+0,0.0E+0]
+	mulss	xmm0, dword ptr [rip + .LCPI48_0]
+	movss	xmm1, dword ptr [rip + .LCPI48_1] # xmm1 = [5.0E-1,0.0E+0,0.0E+0,0.0E+0]
 	mulss	xmm0, xmm1
 	addss	xmm0, xmm1
 	ret
@@ -1955,9 +1976,9 @@ _xt_rand_f:                             # @_xt_rand_f
 	.endef
 	.section	.rdata,"dr"
 	.p2align	3, 0x0                          # -- Begin function _xt_rand_d
-.LCPI47_0:
+.LCPI49_0:
 	.quad	0x3e00000000000000              # double 4.6566128730773926E-10
-.LCPI47_1:
+.LCPI49_1:
 	.quad	0x3fe0000000000000              # double 0.5
 	.text
 	.globl	_xt_rand_d
@@ -1978,8 +1999,8 @@ _xt_rand_d:                             # @_xt_rand_d
 	shr	rcx, 17
 	and	ecx, 2147483647
 	cvtsi2sd	xmm0, ecx
-	mulsd	xmm0, qword ptr [rip + .LCPI47_0]
-	movsd	xmm1, qword ptr [rip + .LCPI47_1] # xmm1 = [5.0E-1,0.0E+0]
+	mulsd	xmm0, qword ptr [rip + .LCPI49_0]
+	movsd	xmm1, qword ptr [rip + .LCPI49_1] # xmm1 = [5.0E-1,0.0E+0]
 	mulsd	xmm0, xmm1
 	addsd	xmm0, xmm1
 	ret
@@ -1990,15 +2011,15 @@ _xt_rand_d:                             # @_xt_rand_d
 	.endef
 	.section	.rdata,"dr"
 	.p2align	4, 0x0                          # -- Begin function _xt_clk_reset
-.LCPI48_0:
+.LCPI50_0:
 	.long	1127219200                      # 0x43300000
 	.long	1160773632                      # 0x45300000
 	.long	0                               # 0x0
 	.long	0                               # 0x0
-.LCPI48_1:
+.LCPI50_1:
 	.quad	0x4330000000000000              # double 4503599627370496
 	.quad	0x4530000000000000              # double 1.9342813113834067E+25
-.LCPI48_2:
+.LCPI50_2:
 	.quad	0x3e7ad7f29abcaf48              # double 9.9999999999999995E-8
 	.text
 	.globl	_xt_clk_reset
@@ -2010,12 +2031,12 @@ _xt_clk_reset:                          # @_xt_clk_reset
 	lea	rcx, [rsp + 32]
 	call	GetSystemTimeAsFileTime
 	movsd	xmm0, qword ptr [rsp + 32]      # xmm0 = mem[0],zero
-	unpcklps	xmm0, xmmword ptr [rip + .LCPI48_0] # xmm0 = xmm0[0],mem[0],xmm0[1],mem[1]
-	subpd	xmm0, xmmword ptr [rip + .LCPI48_1]
+	unpcklps	xmm0, xmmword ptr [rip + .LCPI50_0] # xmm0 = xmm0[0],mem[0],xmm0[1],mem[1]
+	subpd	xmm0, xmmword ptr [rip + .LCPI50_1]
 	movapd	xmm1, xmm0
 	unpckhpd	xmm1, xmm0                      # xmm1 = xmm1[1],xmm0[1]
 	addsd	xmm1, xmm0
-	mulsd	xmm1, qword ptr [rip + .LCPI48_2]
+	mulsd	xmm1, qword ptr [rip + .LCPI50_2]
 	movsd	qword ptr [rip + xt_clk_origin], xmm1
 	add	rsp, 40
 	ret
@@ -2026,17 +2047,17 @@ _xt_clk_reset:                          # @_xt_clk_reset
 	.endef
 	.section	.rdata,"dr"
 	.p2align	4, 0x0                          # -- Begin function _xt_clk_ticks
-.LCPI49_0:
+.LCPI51_0:
 	.long	1127219200                      # 0x43300000
 	.long	1160773632                      # 0x45300000
 	.long	0                               # 0x0
 	.long	0                               # 0x0
-.LCPI49_1:
+.LCPI51_1:
 	.quad	0x4330000000000000              # double 4503599627370496
 	.quad	0x4530000000000000              # double 1.9342813113834067E+25
-.LCPI49_2:
+.LCPI51_2:
 	.quad	0x3e7ad7f29abcaf48              # double 9.9999999999999995E-8
-.LCPI49_3:
+.LCPI51_3:
 	.quad	0x412e848000000000              # double 1.0E+6
 	.text
 	.globl	_xt_clk_ticks
@@ -2048,14 +2069,14 @@ _xt_clk_ticks:                          # @_xt_clk_ticks
 	lea	rcx, [rsp + 32]
 	call	GetSystemTimeAsFileTime
 	movsd	xmm0, qword ptr [rsp + 32]      # xmm0 = mem[0],zero
-	unpcklps	xmm0, xmmword ptr [rip + .LCPI49_0] # xmm0 = xmm0[0],mem[0],xmm0[1],mem[1]
-	subpd	xmm0, xmmword ptr [rip + .LCPI49_1]
+	unpcklps	xmm0, xmmword ptr [rip + .LCPI51_0] # xmm0 = xmm0[0],mem[0],xmm0[1],mem[1]
+	subpd	xmm0, xmmword ptr [rip + .LCPI51_1]
 	movapd	xmm1, xmm0
 	unpckhpd	xmm1, xmm0                      # xmm1 = xmm1[1],xmm0[1]
 	addsd	xmm1, xmm0
-	mulsd	xmm1, qword ptr [rip + .LCPI49_2]
+	mulsd	xmm1, qword ptr [rip + .LCPI51_2]
 	subsd	xmm1, qword ptr [rip + xt_clk_origin]
-	mulsd	xmm1, qword ptr [rip + .LCPI49_3]
+	mulsd	xmm1, qword ptr [rip + .LCPI51_3]
 	cvttsd2si	rax, xmm1
                                         # kill: def $eax killed $eax killed $rax
 	add	rsp, 40
@@ -2067,11 +2088,11 @@ _xt_clk_ticks:                          # @_xt_clk_ticks
 	.endef
 	.section	.rdata,"dr"
 	.p2align	3, 0x0                          # -- Begin function _xt_clk_delay
-.LCPI50_0:
+.LCPI52_0:
 	.quad	0x404e000000000000              # double 60
-.LCPI50_1:
+.LCPI52_1:
 	.quad	0x41cdcd6500000000              # double 1.0E+9
-.LCPI50_2:
+.LCPI52_2:
 	.quad	0x43e0000000000000              # double 9.2233720368547758E+18
 	.text
 	.globl	_xt_clk_delay
@@ -2080,12 +2101,12 @@ _xt_clk_delay:                          # @_xt_clk_delay
 # %bb.0:
 	mov	eax, ecx
 	cvtsi2sd	xmm0, rax
-	divsd	xmm0, qword ptr [rip + .LCPI50_0]
-	mulsd	xmm0, qword ptr [rip + .LCPI50_1]
+	divsd	xmm0, qword ptr [rip + .LCPI52_0]
+	mulsd	xmm0, qword ptr [rip + .LCPI52_1]
 	cvttsd2si	rcx, xmm0
 	mov	rdx, rcx
 	sar	rdx, 63
-	subsd	xmm0, qword ptr [rip + .LCPI50_2]
+	subsd	xmm0, qword ptr [rip + .LCPI52_2]
 	cvttsd2si	rax, xmm0
 	and	rax, rdx
 	or	rax, rcx
@@ -2107,11 +2128,11 @@ _xtc_bank:                              # @_xtc_bank
 	push	rsi
 	sub	rsp, 32
 	cmp	cl, 1
-	jbe	.LBB51_2
+	jbe	.LBB53_2
 # %bb.1:
 	xor	eax, eax
-	jmp	.LBB51_5
-.LBB51_2:
+	jmp	.LBB53_5
+.LBB53_2:
 	movzx	eax, cl
 	shl	eax, 11
 	lea	rcx, [rip + xt_bank_regions]
@@ -2119,7 +2140,7 @@ _xtc_bank:                              # @_xtc_bank
 	movzx	eax, dl
 	lea	rsi, [rcx + 8*rax]
 	cmp	qword ptr [rcx + 8*rax], 0
-	jne	.LBB51_4
+	jne	.LBB53_4
 # %bb.3:
 	call	GetProcessHeap
 	mov	r8d, 12296
@@ -2130,9 +2151,9 @@ _xtc_bank:                              # @_xtc_bank
 	test	rax, rax
 	cmove	rcx, rax
 	mov	qword ptr [rsi], rcx
-.LBB51_4:
+.LBB53_4:
 	mov	rax, qword ptr [rsi]
-.LBB51_5:
+.LBB53_5:
 	add	rsp, 32
 	pop	rsi
 	ret
@@ -2157,21 +2178,21 @@ _xt_threads_multi:                      # @_xt_threads_multi
 _xt_alloc_lock:                         # @_xt_alloc_lock
 # %bb.0:
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB53_3
+	je	.LBB55_3
 	.p2align	4, 0x90
-.LBB53_1:                               # =>This Loop Header: Depth=1
-                                        #     Child Loop BB53_2 Depth 2
+.LBB55_1:                               # =>This Loop Header: Depth=1
+                                        #     Child Loop BB55_2 Depth 2
 	mov	eax, 1
 	xchg	dword ptr [rip + xt_alloc_spin], eax
 	test	eax, eax
-	je	.LBB53_3
-.LBB53_2:                               #   Parent Loop BB53_1 Depth=1
+	je	.LBB55_3
+.LBB55_2:                               #   Parent Loop BB55_1 Depth=1
                                         # =>  This Inner Loop Header: Depth=2
 	mov	eax, dword ptr [rip + xt_alloc_spin]
 	test	eax, eax
-	jne	.LBB53_2
-	jmp	.LBB53_1
-.LBB53_3:
+	jne	.LBB55_2
+	jmp	.LBB55_1
+.LBB55_3:
 	ret
                                         # -- End function
 	.def	_xt_alloc_unlock;
@@ -2183,10 +2204,10 @@ _xt_alloc_lock:                         # @_xt_alloc_lock
 _xt_alloc_unlock:                       # @_xt_alloc_unlock
 # %bb.0:
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB54_2
+	je	.LBB56_2
 # %bb.1:
 	mov	dword ptr [rip + xt_alloc_spin], 0
-.LBB54_2:
+.LBB56_2:
 	ret
                                         # -- End function
 	.def	_xt_thread_create;
@@ -2202,7 +2223,7 @@ _xt_thread_create:                      # @_xt_thread_create
 	push	rbx
 	sub	rsp, 48
 	test	rcx, rcx
-	je	.LBB55_4
+	je	.LBB57_4
 # %bb.1:
 	mov	rdi, rdx
 	mov	rbx, rcx
@@ -2215,7 +2236,7 @@ _xt_thread_create:                      # @_xt_thread_create
 	lea	rsi, [rax + 8]
 	test	rax, rax
 	cmove	rsi, rax
-	je	.LBB55_4
+	je	.LBB57_4
 # %bb.2:
 	mov	qword ptr [rsi], rbx
 	mov	qword ptr [rsi + 8], rdi
@@ -2227,7 +2248,7 @@ _xt_thread_create:                      # @_xt_thread_create
 	mov	r9, rsi
 	call	CreateThread
 	test	rax, rax
-	jne	.LBB55_5
+	jne	.LBB57_5
 # %bb.3:
 	call	GetProcessHeap
 	add	rsi, -8
@@ -2235,9 +2256,9 @@ _xt_thread_create:                      # @_xt_thread_create
 	xor	edx, edx
 	mov	r8, rsi
 	call	HeapFree
-.LBB55_4:
+.LBB57_4:
 	xor	eax, eax
-.LBB55_5:
+.LBB57_5:
 	add	rsp, 48
 	pop	rbx
 	pop	rdi
@@ -2265,11 +2286,11 @@ xt_thread_entry:                        # @xt_thread_entry
 	mov	r8, rdi
 	call	HeapFree
 	test	rbx, rbx
-	je	.LBB56_2
+	je	.LBB58_2
 # %bb.1:
 	mov	rcx, rsi
 	call	rbx
-.LBB56_2:
+.LBB58_2:
 	xor	eax, eax
 	add	rsp, 32
 	pop	rbx
@@ -2288,7 +2309,7 @@ _xt_thread_join:                        # @_xt_thread_join
 	push	rsi
 	sub	rsp, 32
 	test	rcx, rcx
-	je	.LBB57_1
+	je	.LBB59_1
 # %bb.2:
 	mov	rsi, rcx
 	mov	edx, -1
@@ -2296,10 +2317,10 @@ _xt_thread_join:                        # @_xt_thread_join
 	mov	rcx, rsi
 	call	CloseHandle
 	xor	eax, eax
-	jmp	.LBB57_3
-.LBB57_1:
+	jmp	.LBB59_3
+.LBB59_1:
 	mov	eax, -1
-.LBB57_3:
+.LBB59_3:
 	add	rsp, 32
 	pop	rsi
 	ret
@@ -2387,11 +2408,11 @@ _xt_mutex_new:                          # @_xt_mutex_new
 	lea	rsi, [rax + 8]
 	test	rax, rax
 	cmove	rsi, rax
-	je	.LBB63_2
+	je	.LBB65_2
 # %bb.1:
 	mov	rcx, rsi
 	call	InitializeSRWLock
-.LBB63_2:
+.LBB65_2:
 	mov	rax, rsi
 	add	rsp, 32
 	pop	rsi
@@ -2408,7 +2429,7 @@ _xt_mutex_free:                         # @_xt_mutex_free
 	push	rsi
 	sub	rsp, 32
 	test	rcx, rcx
-	je	.LBB64_1
+	je	.LBB66_1
 # %bb.2:
 	mov	rsi, rcx
 	call	GetProcessHeap
@@ -2419,7 +2440,7 @@ _xt_mutex_free:                         # @_xt_mutex_free
 	add	rsp, 32
 	pop	rsi
 	jmp	HeapFree                        # TAILCALL
-.LBB64_1:
+.LBB66_1:
 	add	rsp, 32
 	pop	rsi
 	ret
@@ -2460,7 +2481,7 @@ _xt_mutex_trylock:                      # @_xt_mutex_trylock
 # %bb.0:
 	sub	rsp, 40
 	test	rcx, rcx
-	je	.LBB67_1
+	je	.LBB69_1
 # %bb.2:
 	call	TryAcquireSRWLockExclusive
 	mov	ecx, eax
@@ -2469,7 +2490,7 @@ _xt_mutex_trylock:                      # @_xt_mutex_trylock
 	setne	al
 	add	rsp, 40
 	ret
-.LBB67_1:
+.LBB69_1:
 	xor	eax, eax
 	add	rsp, 40
 	ret
@@ -2492,11 +2513,11 @@ _xt_cond_new:                           # @_xt_cond_new
 	lea	rsi, [rax + 8]
 	test	rax, rax
 	cmove	rsi, rax
-	je	.LBB68_2
+	je	.LBB70_2
 # %bb.1:
 	mov	rcx, rsi
 	call	InitializeConditionVariable
-.LBB68_2:
+.LBB70_2:
 	mov	rax, rsi
 	add	rsp, 32
 	pop	rsi
@@ -2513,7 +2534,7 @@ _xt_cond_free:                          # @_xt_cond_free
 	push	rsi
 	sub	rsp, 32
 	test	rcx, rcx
-	je	.LBB69_1
+	je	.LBB71_1
 # %bb.2:
 	mov	rsi, rcx
 	call	GetProcessHeap
@@ -2524,7 +2545,7 @@ _xt_cond_free:                          # @_xt_cond_free
 	add	rsp, 32
 	pop	rsi
 	jmp	HeapFree                        # TAILCALL
-.LBB69_1:
+.LBB71_1:
 	add	rsp, 32
 	pop	rsi
 	ret
@@ -2542,12 +2563,12 @@ _xt_cond_wait:                          # @_xt_cond_wait
 	test	rdx, rdx
 	sete	r8b
 	or	r8b, al
-	jne	.LBB70_1
+	jne	.LBB72_1
 # %bb.2:
 	mov	r8d, -1
 	xor	r9d, r9d
 	jmp	SleepConditionVariableSRW       # TAILCALL
-.LBB70_1:
+.LBB72_1:
 	ret
                                         # -- End function
 	.def	_xt_cond_signal;
@@ -2615,11 +2636,11 @@ _xt_sem_free:                           # @_xt_sem_free
 _xt_sem_wait:                           # @_xt_sem_wait
 # %bb.0:
 	test	rcx, rcx
-	je	.LBB75_1
+	je	.LBB77_1
 # %bb.2:
 	mov	edx, -1
 	jmp	WaitForSingleObject             # TAILCALL
-.LBB75_1:
+.LBB77_1:
 	ret
                                         # -- End function
 	.def	_xt_sem_post;
@@ -2631,12 +2652,12 @@ _xt_sem_wait:                           # @_xt_sem_wait
 _xt_sem_post:                           # @_xt_sem_post
 # %bb.0:
 	test	rcx, rcx
-	je	.LBB76_1
+	je	.LBB78_1
 # %bb.2:
 	mov	edx, 1
 	xor	r8d, r8d
 	jmp	ReleaseSemaphore                # TAILCALL
-.LBB76_1:
+.LBB78_1:
 	ret
                                         # -- End function
 	.def	_xt_sem_trywait;
@@ -2649,7 +2670,7 @@ _xt_sem_trywait:                        # @_xt_sem_trywait
 # %bb.0:
 	sub	rsp, 40
 	test	rcx, rcx
-	je	.LBB77_1
+	je	.LBB79_1
 # %bb.2:
 	xor	edx, edx
 	call	WaitForSingleObject
@@ -2659,7 +2680,7 @@ _xt_sem_trywait:                        # @_xt_sem_trywait
 	sete	al
 	add	rsp, 40
 	ret
-.LBB77_1:
+.LBB79_1:
 	xor	eax, eax
 	add	rsp, 40
 	ret
@@ -2703,11 +2724,11 @@ _xt_tls_get:                            # @_xt_tls_get
 _xt_atomic_load_i32:                    # @_xt_atomic_load_i32
 # %bb.0:
 	test	rcx, rcx
-	je	.LBB81_1
+	je	.LBB83_1
 # %bb.2:
 	mov	eax, dword ptr [rcx]
 	ret
-.LBB81_1:
+.LBB83_1:
 	xor	eax, eax
 	ret
                                         # -- End function
@@ -2720,10 +2741,10 @@ _xt_atomic_load_i32:                    # @_xt_atomic_load_i32
 _xt_atomic_store_i32:                   # @_xt_atomic_store_i32
 # %bb.0:
 	test	rcx, rcx
-	je	.LBB82_2
+	je	.LBB84_2
 # %bb.1:
 	xchg	dword ptr [rcx], edx
-.LBB82_2:
+.LBB84_2:
 	ret
                                         # -- End function
 	.def	_xt_atomic_add_i32;
@@ -2735,13 +2756,13 @@ _xt_atomic_store_i32:                   # @_xt_atomic_store_i32
 _xt_atomic_add_i32:                     # @_xt_atomic_add_i32
 # %bb.0:
 	test	rcx, rcx
-	je	.LBB83_1
+	je	.LBB85_1
 # %bb.2:
 	mov	eax, edx
 	lock		xadd	dword ptr [rcx], eax
 	add	eax, edx
 	ret
-.LBB83_1:
+.LBB85_1:
 	xor	eax, eax
 	ret
                                         # -- End function
@@ -2754,12 +2775,12 @@ _xt_atomic_add_i32:                     # @_xt_atomic_add_i32
 _xt_atomic_xchg_i32:                    # @_xt_atomic_xchg_i32
 # %bb.0:
 	test	rcx, rcx
-	je	.LBB84_1
+	je	.LBB86_1
 # %bb.2:
 	mov	eax, edx
 	xchg	dword ptr [rcx], eax
 	ret
-.LBB84_1:
+.LBB86_1:
 	xor	eax, eax
 	ret
                                         # -- End function
@@ -2772,14 +2793,14 @@ _xt_atomic_xchg_i32:                    # @_xt_atomic_xchg_i32
 _xt_atomic_cas_i32:                     # @_xt_atomic_cas_i32
 # %bb.0:
 	test	rcx, rcx
-	je	.LBB85_1
+	je	.LBB87_1
 # %bb.2:
 	mov	eax, edx
 	lock		cmpxchg	dword ptr [rcx], r8d
 	mov	eax, 0
 	sete	al
 	ret
-.LBB85_1:
+.LBB87_1:
 	xor	eax, eax
 	ret
                                         # -- End function
@@ -2792,11 +2813,11 @@ _xt_atomic_cas_i32:                     # @_xt_atomic_cas_i32
 _xt_atomic_load_ptr:                    # @_xt_atomic_load_ptr
 # %bb.0:
 	test	rcx, rcx
-	je	.LBB86_1
+	je	.LBB88_1
 # %bb.2:
 	mov	rax, qword ptr [rcx]
 	ret
-.LBB86_1:
+.LBB88_1:
 	xor	eax, eax
 	ret
                                         # -- End function
@@ -2809,10 +2830,10 @@ _xt_atomic_load_ptr:                    # @_xt_atomic_load_ptr
 _xt_atomic_store_ptr:                   # @_xt_atomic_store_ptr
 # %bb.0:
 	test	rcx, rcx
-	je	.LBB87_2
+	je	.LBB89_2
 # %bb.1:
 	xchg	qword ptr [rcx], rdx
-.LBB87_2:
+.LBB89_2:
 	ret
                                         # -- End function
 	.def	_xt_atomic_cas_ptr;
@@ -2824,14 +2845,14 @@ _xt_atomic_store_ptr:                   # @_xt_atomic_store_ptr
 _xt_atomic_cas_ptr:                     # @_xt_atomic_cas_ptr
 # %bb.0:
 	test	rcx, rcx
-	je	.LBB88_1
+	je	.LBB90_1
 # %bb.2:
 	mov	rax, rdx
 	lock		cmpxchg	qword ptr [rcx], r8
 	mov	eax, 0
 	sete	al
 	ret
-.LBB88_1:
+.LBB90_1:
 	xor	eax, eax
 	ret
                                         # -- End function
@@ -2861,7 +2882,7 @@ _xt_simd_select:                        # @_xt_simd_select
 	xor	ebp, ebp
 	not	ecx
 	test	ecx, 402653184
-	jne	.LBB89_4
+	jne	.LBB91_4
 # %bb.1:
 	xor	ebp, ebp
 	xor	ecx, ecx
@@ -2875,7 +2896,7 @@ _xt_simd_select:                        # @_xt_simd_select
 	mov	r8d, eax
 	not	r8d
 	test	r8b, 6
-	jne	.LBB89_4
+	jne	.LBB91_4
 # %bb.2:
 	xor	ebp, ebp
 	mov	eax, 7
@@ -2887,7 +2908,7 @@ _xt_simd_select:                        # @_xt_simd_select
 
 	#NO_APP
 	test	bl, 32
-	je	.LBB89_4
+	je	.LBB91_4
 # %bb.3:
 	not	ebx
 	and	ebx, -1073545216
@@ -2896,7 +2917,7 @@ _xt_simd_select:                        # @_xt_simd_select
 	or	r8d, ebx
 	sete	bpl
 	inc	ebp
-.LBB89_4:
+.LBB91_4:
 	lea	rcx, [rip + .L.str]
 	lea	rbx, [rip + xt_env.buf]
 	mov	rdx, rbx
@@ -2906,61 +2927,61 @@ _xt_simd_select:                        # @_xt_simd_select
 	xor	ecx, ecx
 	cmp	eax, -31
 	cmovae	rcx, rbx
-	jae	.LBB89_5
-.LBB89_27:
+	jae	.LBB91_5
+.LBB91_27:
 	mov	r8d, ebp
-	jmp	.LBB89_28
-.LBB89_5:
+	jmp	.LBB91_28
+.LBB91_5:
 	movzx	eax, byte ptr [rcx]
 	test	al, al
-	je	.LBB89_6
+	je	.LBB91_6
 # %bb.7:
 	lea	r8, [rcx + 1]
 	lea	rdx, [rip + .L.str.1]
 	mov	r9d, eax
 	.p2align	4, 0x90
-.LBB89_8:                               # =>This Inner Loop Header: Depth=1
+.LBB91_8:                               # =>This Inner Loop Header: Depth=1
 	cmp	r9b, byte ptr [rdx]
-	jne	.LBB89_10
-# %bb.9:                                #   in Loop: Header=BB89_8 Depth=1
+	jne	.LBB91_10
+# %bb.9:                                #   in Loop: Header=BB91_8 Depth=1
 	inc	rdx
 	movzx	r9d, byte ptr [r8]
 	inc	r8
 	test	r9b, r9b
-	jne	.LBB89_8
-	jmp	.LBB89_10
-.LBB89_6:
+	jne	.LBB91_8
+	jmp	.LBB91_10
+.LBB91_6:
 	lea	rdx, [rip + .L.str.1]
 	mov	r9d, eax
-.LBB89_10:
+.LBB91_10:
 	xor	r8d, r8d
 	cmp	r9b, byte ptr [rdx]
 	cmovne	r8d, ebp
-	je	.LBB89_28
+	je	.LBB91_28
 # %bb.11:
 	test	al, al
-	je	.LBB89_12
+	je	.LBB91_12
 # %bb.13:
 	lea	r9, [rcx + 1]
 	lea	rdx, [rip + .L.str.2]
 	mov	r8d, eax
 	.p2align	4, 0x90
-.LBB89_14:                              # =>This Inner Loop Header: Depth=1
+.LBB91_14:                              # =>This Inner Loop Header: Depth=1
 	cmp	r8b, byte ptr [rdx]
-	jne	.LBB89_16
-# %bb.15:                               #   in Loop: Header=BB89_14 Depth=1
+	jne	.LBB91_16
+# %bb.15:                               #   in Loop: Header=BB91_14 Depth=1
 	inc	rdx
 	movzx	r8d, byte ptr [r9]
 	inc	r9
 	test	r8b, r8b
-	jne	.LBB89_14
-.LBB89_16:
+	jne	.LBB91_14
+.LBB91_16:
 	cmp	r8b, byte ptr [rdx]
-	jne	.LBB89_19
-.LBB89_17:
+	jne	.LBB91_19
+.LBB91_17:
 	mov	r8d, 1
 	test	ebp, ebp
-	jne	.LBB89_28
+	jne	.LBB91_28
 # %bb.18:
 	mov	dword ptr [rsp + 48], 0
 	mov	ecx, -12
@@ -2972,13 +2993,13 @@ _xt_simd_select:                        # @_xt_simd_select
 	mov	r8d, 66
 	call	WriteFile
 	xor	r8d, r8d
-.LBB89_28:
+.LBB91_28:
 	xor	eax, eax
 	test	r8d, r8d
 	setne	al
 	mov	dword ptr [rip + _xt_simd_level], eax
 	test	edi, edi
-	je	.LBB89_31
+	je	.LBB91_31
 # %bb.29:
 	cmp	r8d, 1
 	mov	eax, 1
@@ -2987,7 +3008,7 @@ _xt_simd_select:                        # @_xt_simd_select
 	lea	rcx, [rcx + 2*rcx]
 	xor	edx, edx
 	.p2align	4, 0x90
-.LBB89_30:                              # =>This Inner Loop Header: Depth=1
+.LBB91_30:                              # =>This Inner Loop Header: Depth=1
 	mov	r8d, edx
 	mov	r8, qword ptr [rsi + 8*r8]
 	lea	r9d, [rax + rdx]
@@ -2995,44 +3016,44 @@ _xt_simd_select:                        # @_xt_simd_select
 	mov	qword ptr [r8], r9
 	add	rdx, 3
 	cmp	rcx, rdx
-	jne	.LBB89_30
-.LBB89_31:
+	jne	.LBB91_30
+.LBB91_31:
 	add	rsp, 56
 	pop	rbx
 	pop	rbp
 	pop	rdi
 	pop	rsi
 	ret
-.LBB89_12:
+.LBB91_12:
 	lea	rdx, [rip + .L.str.2]
 	mov	r8d, eax
 	cmp	r8b, byte ptr [rdx]
-	je	.LBB89_17
-.LBB89_19:
+	je	.LBB91_17
+.LBB91_19:
 	test	al, al
-	je	.LBB89_20
+	je	.LBB91_20
 # %bb.21:
 	inc	rcx
 	lea	rdx, [rip + .L.str.3]
 	.p2align	4, 0x90
-.LBB89_22:                              # =>This Inner Loop Header: Depth=1
+.LBB91_22:                              # =>This Inner Loop Header: Depth=1
 	cmp	al, byte ptr [rdx]
-	jne	.LBB89_24
-# %bb.23:                               #   in Loop: Header=BB89_22 Depth=1
+	jne	.LBB91_24
+# %bb.23:                               #   in Loop: Header=BB91_22 Depth=1
 	inc	rdx
 	movzx	eax, byte ptr [rcx]
 	inc	rcx
 	test	al, al
-	jne	.LBB89_22
-	jmp	.LBB89_24
-.LBB89_20:
+	jne	.LBB91_22
+	jmp	.LBB91_24
+.LBB91_20:
 	lea	rdx, [rip + .L.str.3]
-.LBB89_24:
+.LBB91_24:
 	cmp	ebp, 1
-	ja	.LBB89_27
+	ja	.LBB91_27
 # %bb.25:
 	cmp	al, byte ptr [rdx]
-	jne	.LBB89_27
+	jne	.LBB91_27
 # %bb.26:
 	mov	dword ptr [rsp + 52], 0
 	mov	ecx, -12
@@ -3043,7 +3064,7 @@ _xt_simd_select:                        # @_xt_simd_select
 	mov	rcx, rax
 	mov	r8d, 82
 	call	WriteFile
-	jmp	.LBB89_27
+	jmp	.LBB91_27
                                         # -- End function
 	.def	_xt_simd_select4;
 	.scl	2;
@@ -3071,7 +3092,7 @@ _xt_simd_select4:                       # @_xt_simd_select4
 	xor	ebp, ebp
 	not	ecx
 	test	ecx, 402653184
-	jne	.LBB90_4
+	jne	.LBB92_4
 # %bb.1:
 	xor	ebp, ebp
 	xor	ecx, ecx
@@ -3085,7 +3106,7 @@ _xt_simd_select4:                       # @_xt_simd_select4
 	mov	r8d, eax
 	not	r8d
 	test	r8b, 6
-	jne	.LBB90_4
+	jne	.LBB92_4
 # %bb.2:
 	xor	ebp, ebp
 	mov	eax, 7
@@ -3097,7 +3118,7 @@ _xt_simd_select4:                       # @_xt_simd_select4
 
 	#NO_APP
 	test	bl, 32
-	je	.LBB90_4
+	je	.LBB92_4
 # %bb.3:
 	not	ebx
 	and	ebx, -1073545216
@@ -3106,7 +3127,7 @@ _xt_simd_select4:                       # @_xt_simd_select4
 	or	r8d, ebx
 	sete	bpl
 	inc	ebp
-.LBB90_4:
+.LBB92_4:
 	lea	rcx, [rip + .L.str]
 	lea	rbx, [rip + xt_env.buf]
 	mov	rdx, rbx
@@ -3116,61 +3137,61 @@ _xt_simd_select4:                       # @_xt_simd_select4
 	xor	ecx, ecx
 	cmp	eax, -31
 	cmovae	rcx, rbx
-	jae	.LBB90_5
-.LBB90_27:
+	jae	.LBB92_5
+.LBB92_27:
 	mov	r8d, ebp
-	jmp	.LBB90_28
-.LBB90_5:
+	jmp	.LBB92_28
+.LBB92_5:
 	movzx	eax, byte ptr [rcx]
 	test	al, al
-	je	.LBB90_6
+	je	.LBB92_6
 # %bb.7:
 	lea	r8, [rcx + 1]
 	lea	rdx, [rip + .L.str.1]
 	mov	r9d, eax
 	.p2align	4, 0x90
-.LBB90_8:                               # =>This Inner Loop Header: Depth=1
+.LBB92_8:                               # =>This Inner Loop Header: Depth=1
 	cmp	r9b, byte ptr [rdx]
-	jne	.LBB90_10
-# %bb.9:                                #   in Loop: Header=BB90_8 Depth=1
+	jne	.LBB92_10
+# %bb.9:                                #   in Loop: Header=BB92_8 Depth=1
 	inc	rdx
 	movzx	r9d, byte ptr [r8]
 	inc	r8
 	test	r9b, r9b
-	jne	.LBB90_8
-	jmp	.LBB90_10
-.LBB90_6:
+	jne	.LBB92_8
+	jmp	.LBB92_10
+.LBB92_6:
 	lea	rdx, [rip + .L.str.1]
 	mov	r9d, eax
-.LBB90_10:
+.LBB92_10:
 	xor	r8d, r8d
 	cmp	r9b, byte ptr [rdx]
 	cmovne	r8d, ebp
-	je	.LBB90_28
+	je	.LBB92_28
 # %bb.11:
 	test	al, al
-	je	.LBB90_12
+	je	.LBB92_12
 # %bb.13:
 	lea	r9, [rcx + 1]
 	lea	rdx, [rip + .L.str.2]
 	mov	r8d, eax
 	.p2align	4, 0x90
-.LBB90_14:                              # =>This Inner Loop Header: Depth=1
+.LBB92_14:                              # =>This Inner Loop Header: Depth=1
 	cmp	r8b, byte ptr [rdx]
-	jne	.LBB90_16
-# %bb.15:                               #   in Loop: Header=BB90_14 Depth=1
+	jne	.LBB92_16
+# %bb.15:                               #   in Loop: Header=BB92_14 Depth=1
 	inc	rdx
 	movzx	r8d, byte ptr [r9]
 	inc	r9
 	test	r8b, r8b
-	jne	.LBB90_14
-.LBB90_16:
+	jne	.LBB92_14
+.LBB92_16:
 	cmp	r8b, byte ptr [rdx]
-	jne	.LBB90_19
-.LBB90_17:
+	jne	.LBB92_19
+.LBB92_17:
 	mov	r8d, 1
 	test	ebp, ebp
-	jne	.LBB90_28
+	jne	.LBB92_28
 # %bb.18:
 	mov	dword ptr [rsp + 48], 0
 	mov	ecx, -12
@@ -3182,10 +3203,10 @@ _xt_simd_select4:                       # @_xt_simd_select4
 	mov	r8d, 66
 	call	WriteFile
 	xor	r8d, r8d
-.LBB90_28:
+.LBB92_28:
 	mov	dword ptr [rip + _xt_simd_level], r8d
 	test	edi, edi
-	je	.LBB90_31
+	je	.LBB92_31
 # %bb.29:
 	mov	eax, edi
 	mov	ecx, r8d
@@ -3193,7 +3214,7 @@ _xt_simd_select4:                       # @_xt_simd_select4
 	shl	rax, 2
 	xor	edx, edx
 	.p2align	4, 0x90
-.LBB90_30:                              # =>This Inner Loop Header: Depth=1
+.LBB92_30:                              # =>This Inner Loop Header: Depth=1
 	mov	r8d, edx
 	mov	r8, qword ptr [rsi + 8*r8]
 	lea	r9d, [rcx + rdx]
@@ -3201,44 +3222,44 @@ _xt_simd_select4:                       # @_xt_simd_select4
 	mov	qword ptr [r8], r9
 	add	rdx, 4
 	cmp	rax, rdx
-	jne	.LBB90_30
-.LBB90_31:
+	jne	.LBB92_30
+.LBB92_31:
 	add	rsp, 56
 	pop	rbx
 	pop	rbp
 	pop	rdi
 	pop	rsi
 	ret
-.LBB90_12:
+.LBB92_12:
 	lea	rdx, [rip + .L.str.2]
 	mov	r8d, eax
 	cmp	r8b, byte ptr [rdx]
-	je	.LBB90_17
-.LBB90_19:
+	je	.LBB92_17
+.LBB92_19:
 	test	al, al
-	je	.LBB90_20
+	je	.LBB92_20
 # %bb.21:
 	inc	rcx
 	lea	rdx, [rip + .L.str.3]
 	.p2align	4, 0x90
-.LBB90_22:                              # =>This Inner Loop Header: Depth=1
+.LBB92_22:                              # =>This Inner Loop Header: Depth=1
 	cmp	al, byte ptr [rdx]
-	jne	.LBB90_24
-# %bb.23:                               #   in Loop: Header=BB90_22 Depth=1
+	jne	.LBB92_24
+# %bb.23:                               #   in Loop: Header=BB92_22 Depth=1
 	inc	rdx
 	movzx	eax, byte ptr [rcx]
 	inc	rcx
 	test	al, al
-	jne	.LBB90_22
-	jmp	.LBB90_24
-.LBB90_20:
+	jne	.LBB92_22
+	jmp	.LBB92_24
+.LBB92_20:
 	lea	rdx, [rip + .L.str.3]
-.LBB90_24:
+.LBB92_24:
 	cmp	ebp, 1
-	ja	.LBB90_27
+	ja	.LBB92_27
 # %bb.25:
 	cmp	al, byte ptr [rdx]
-	jne	.LBB90_27
+	jne	.LBB92_27
 # %bb.26:
 	mov	dword ptr [rsp + 52], 0
 	mov	ecx, -12
@@ -3249,7 +3270,7 @@ _xt_simd_select4:                       # @_xt_simd_select4
 	mov	rcx, rax
 	mov	r8d, 82
 	call	WriteFile
-	jmp	.LBB90_27
+	jmp	.LBB92_27
                                         # -- End function
 	.def	_xtc_sinit_run;
 	.scl	2;
@@ -3266,155 +3287,155 @@ _xtc_sinit_run:                         # @_xtc_sinit_run
 	push	rbx
 	sub	rsp, 32
 	test	rcx, rcx
-	je	.LBB91_35
+	je	.LBB93_35
 # %bb.1:
 	mov	rbx, r8
 	mov	rdi, rdx
 	mov	rsi, rcx
 	lea	r14, [rip + xt_sinit_flag]
 	lea	r15, [rip + xt_sinit_owner]
-	jmp	.LBB91_2
+	jmp	.LBB93_2
 	.p2align	4, 0x90
-.LBB91_14:                              #   in Loop: Header=BB91_2 Depth=1
+.LBB93_14:                              #   in Loop: Header=BB93_2 Depth=1
 	call	SwitchToThread
 	xor	eax, eax
-.LBB91_21:                              #   in Loop: Header=BB91_2 Depth=1
+.LBB93_21:                              #   in Loop: Header=BB93_2 Depth=1
 	test	eax, eax
-	jne	.LBB91_22
-.LBB91_2:                               # =>This Loop Header: Depth=1
-                                        #     Child Loop BB91_3 Depth 2
-                                        #       Child Loop BB91_4 Depth 3
-                                        #     Child Loop BB91_9 Depth 2
+	jne	.LBB93_22
+.LBB93_2:                               # =>This Loop Header: Depth=1
+                                        #     Child Loop BB93_3 Depth 2
+                                        #       Child Loop BB93_4 Depth 3
+                                        #     Child Loop BB93_9 Depth 2
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB91_5
+	je	.LBB93_5
 	.p2align	4, 0x90
-.LBB91_3:                               #   Parent Loop BB91_2 Depth=1
+.LBB93_3:                               #   Parent Loop BB93_2 Depth=1
                                         # =>  This Loop Header: Depth=2
-                                        #       Child Loop BB91_4 Depth 3
+                                        #       Child Loop BB93_4 Depth 3
 	mov	eax, 1
 	xchg	dword ptr [rip + xt_rt_spin], eax
 	test	eax, eax
-	je	.LBB91_5
-.LBB91_4:                               #   Parent Loop BB91_2 Depth=1
-                                        #     Parent Loop BB91_3 Depth=2
+	je	.LBB93_5
+.LBB93_4:                               #   Parent Loop BB93_2 Depth=1
+                                        #     Parent Loop BB93_3 Depth=2
                                         # =>    This Inner Loop Header: Depth=3
 	mov	eax, dword ptr [rip + xt_rt_spin]
 	test	eax, eax
-	jne	.LBB91_4
-	jmp	.LBB91_3
+	jne	.LBB93_4
+	jmp	.LBB93_3
 	.p2align	4, 0x90
-.LBB91_5:                               #   in Loop: Header=BB91_2 Depth=1
+.LBB93_5:                               #   in Loop: Header=BB93_2 Depth=1
 	movzx	eax, byte ptr [rsi]
 	test	eax, eax
-	je	.LBB91_15
-# %bb.6:                                #   in Loop: Header=BB91_2 Depth=1
+	je	.LBB93_15
+# %bb.6:                                #   in Loop: Header=BB93_2 Depth=1
 	cmp	eax, 2
-	jne	.LBB91_7
-.LBB91_18:                              #   in Loop: Header=BB91_2 Depth=1
+	jne	.LBB93_7
+.LBB93_18:                              #   in Loop: Header=BB93_2 Depth=1
 	mov	eax, 1
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	jne	.LBB91_20
-	jmp	.LBB91_21
+	jne	.LBB93_20
+	jmp	.LBB93_21
 	.p2align	4, 0x90
-.LBB91_15:                              #   in Loop: Header=BB91_2 Depth=1
+.LBB93_15:                              #   in Loop: Header=BB93_2 Depth=1
 	mov	byte ptr [rsi], 1
 	movsxd	rax, dword ptr [rip + xt_sinit_n]
 	cmp	rax, 31
-	jg	.LBB91_17
-# %bb.16:                               #   in Loop: Header=BB91_2 Depth=1
+	jg	.LBB93_17
+# %bb.16:                               #   in Loop: Header=BB93_2 Depth=1
 	mov	qword ptr [r14 + 8*rax], rsi
 	call	GetCurrentThreadId
 	movsxd	rcx, dword ptr [rip + xt_sinit_n]
 	mov	dword ptr [r15 + 4*rcx], eax
 	lea	eax, [rcx + 1]
 	mov	dword ptr [rip + xt_sinit_n], eax
-.LBB91_17:                              #   in Loop: Header=BB91_2 Depth=1
+.LBB93_17:                              #   in Loop: Header=BB93_2 Depth=1
 	mov	eax, 2
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB91_21
-.LBB91_20:                              #   in Loop: Header=BB91_2 Depth=1
+	je	.LBB93_21
+.LBB93_20:                              #   in Loop: Header=BB93_2 Depth=1
 	mov	dword ptr [rip + xt_rt_spin], 0
-	jmp	.LBB91_21
+	jmp	.LBB93_21
 	.p2align	4, 0x90
-.LBB91_7:                               #   in Loop: Header=BB91_2 Depth=1
+.LBB93_7:                               #   in Loop: Header=BB93_2 Depth=1
 	call	GetCurrentThreadId
 	movsxd	rcx, dword ptr [rip + xt_sinit_n]
 	test	rcx, rcx
-	jle	.LBB91_12
-# %bb.8:                                #   in Loop: Header=BB91_2 Depth=1
+	jle	.LBB93_12
+# %bb.8:                                #   in Loop: Header=BB93_2 Depth=1
 	shl	rcx, 3
 	xor	edx, edx
 	mov	r8, r15
-	jmp	.LBB91_9
+	jmp	.LBB93_9
 	.p2align	4, 0x90
-.LBB91_11:                              #   in Loop: Header=BB91_9 Depth=2
+.LBB93_11:                              #   in Loop: Header=BB93_9 Depth=2
 	add	r8, 4
 	add	rdx, 8
 	cmp	rcx, rdx
-	je	.LBB91_12
-.LBB91_9:                               #   Parent Loop BB91_2 Depth=1
+	je	.LBB93_12
+.LBB93_9:                               #   Parent Loop BB93_2 Depth=1
                                         # =>  This Inner Loop Header: Depth=2
 	cmp	qword ptr [rdx + r14], rsi
-	jne	.LBB91_11
-# %bb.10:                               #   in Loop: Header=BB91_9 Depth=2
+	jne	.LBB93_11
+# %bb.10:                               #   in Loop: Header=BB93_9 Depth=2
 	cmp	dword ptr [r8], eax
-	jne	.LBB91_11
-	jmp	.LBB91_18
+	jne	.LBB93_11
+	jmp	.LBB93_18
 	.p2align	4, 0x90
-.LBB91_12:                              #   in Loop: Header=BB91_2 Depth=1
+.LBB93_12:                              #   in Loop: Header=BB93_2 Depth=1
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB91_14
-# %bb.13:                               #   in Loop: Header=BB91_2 Depth=1
+	je	.LBB93_14
+# %bb.13:                               #   in Loop: Header=BB93_2 Depth=1
 	mov	dword ptr [rip + xt_rt_spin], 0
-	jmp	.LBB91_14
-.LBB91_22:
+	jmp	.LBB93_14
+.LBB93_22:
 	cmp	eax, 1
-	je	.LBB91_35
+	je	.LBB93_35
 # %bb.23:
 	test	rdi, rdi
-	je	.LBB91_25
+	je	.LBB93_25
 # %bb.24:
 	mov	rcx, rbx
 	call	rdi
-.LBB91_25:
+.LBB93_25:
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB91_28
+	je	.LBB93_28
 	.p2align	4, 0x90
-.LBB91_26:                              # =>This Loop Header: Depth=1
-                                        #     Child Loop BB91_27 Depth 2
+.LBB93_26:                              # =>This Loop Header: Depth=1
+                                        #     Child Loop BB93_27 Depth 2
 	mov	eax, 1
 	xchg	dword ptr [rip + xt_rt_spin], eax
 	test	eax, eax
-	je	.LBB91_28
-.LBB91_27:                              #   Parent Loop BB91_26 Depth=1
+	je	.LBB93_28
+.LBB93_27:                              #   Parent Loop BB93_26 Depth=1
                                         # =>  This Inner Loop Header: Depth=2
 	mov	eax, dword ptr [rip + xt_rt_spin]
 	test	eax, eax
-	jne	.LBB91_27
-	jmp	.LBB91_26
-.LBB91_28:
+	jne	.LBB93_27
+	jmp	.LBB93_26
+.LBB93_28:
 	mov	byte ptr [rsi], 2
 	movsxd	rax, dword ptr [rip + xt_sinit_n]
 	test	rax, rax
-	jle	.LBB91_33
+	jle	.LBB93_33
 # %bb.29:
 	lea	rdx, [4*rax]
 	xor	ecx, ecx
 	.p2align	4, 0x90
-.LBB91_31:                              # =>This Inner Loop Header: Depth=1
+.LBB93_31:                              # =>This Inner Loop Header: Depth=1
 	cmp	qword ptr [r14], rsi
-	je	.LBB91_32
-# %bb.30:                               #   in Loop: Header=BB91_31 Depth=1
+	je	.LBB93_32
+# %bb.30:                               #   in Loop: Header=BB93_31 Depth=1
 	add	rcx, 4
 	add	r14, 8
 	cmp	rdx, rcx
-	jne	.LBB91_31
-.LBB91_33:
+	jne	.LBB93_31
+.LBB93_33:
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB91_35
-.LBB91_34:
+	je	.LBB93_35
+.LBB93_34:
 	mov	dword ptr [rip + xt_rt_spin], 0
-.LBB91_35:
+.LBB93_35:
 	add	rsp, 32
 	pop	rbx
 	pop	rdi
@@ -3422,7 +3443,7 @@ _xtc_sinit_run:                         # @_xtc_sinit_run
 	pop	r14
 	pop	r15
 	ret
-.LBB91_32:
+.LBB93_32:
 	lea	edx, [rax - 1]
 	mov	dword ptr [rip + xt_sinit_n], edx
 	lea	rdx, [rip + xt_sinit_flag]
@@ -3432,8 +3453,8 @@ _xtc_sinit_run:                         # @_xtc_sinit_run
 	mov	eax, dword ptr [rdx + 4*rax - 4]
 	mov	dword ptr [rcx + rdx], eax
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	jne	.LBB91_34
-	jmp	.LBB91_35
+	jne	.LBB93_34
+	jmp	.LBB93_35
                                         # -- End function
 	.def	_xt_thread_exiting;
 	.scl	2;
@@ -3445,6 +3466,7 @@ _xt_thread_exiting:                     # @_xt_thread_exiting
 # %bb.0:
 	ret
                                         # -- End function
+	.lcomm	xt_simd_tab,8,8                 # @xt_simd_tab
 	.data
 	.p2align	3, 0x0                          # @xt_rand_state
 xt_rand_state:
@@ -3469,6 +3491,8 @@ _xt_simd_level:
 	.lcomm	xt_sinit_n,4,4                  # @xt_sinit_n
 	.lcomm	xt_sinit_flag,256,16            # @xt_sinit_flag
 	.lcomm	xt_sinit_owner,128,16           # @xt_sinit_owner
+	.lcomm	xt_simd_n,8,8                   # @xt_simd_n
+	.lcomm	xt_simd_cap,8,8                 # @xt_simd_cap
 	.section	.rdata,"dr"
 .L.str:                                 # @.str
 	.asciz	"XC_SIMD"

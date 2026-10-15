@@ -50,18 +50,27 @@ void *_xtc_alloc(unsigned long count,unsigned long stride,void(*dealloc)(void*))
 /* One element is its own width, not eight. Every primitive array used to
    allocate 8 bytes per element — an 8x waste that also hit the (now removed)
    size ceiling eight times sooner than the element count suggested. */
-void *_xtc_new_u8(unsigned long n){return _xtc_alloc(n,1,0);}
-void *_xtc_new_i8(unsigned long n){return _xtc_alloc(n,1,0);}
-void *_xtc_new_u16(unsigned long n){return _xtc_alloc(n,2,0);}
-void *_xtc_new_i16(unsigned long n){return _xtc_alloc(n,2,0);}
-void *_xtc_new_u32(unsigned long n){return _xtc_alloc(n,4,0);}
-void *_xtc_new_i32(unsigned long n){return _xtc_alloc(n,4,0);}
-void *_xtc_new_u64(unsigned long n){return _xtc_alloc(n,8,0);}
-void *_xtc_new_i64(unsigned long n){return _xtc_alloc(n,8,0);}
+void *_xtc_alloc_aligned(unsigned long count,unsigned long stride,void(*dealloc)(void*));
+/* A numeric array of XT_SIMD_FROM bytes or more is page-aligned without being
+   asked (par-blocks.md §3, "auto-simd"): a par block that captures it is then
+   sized from the block and shared with a unified-memory GPU in place, as a
+   `simd:` array is. Below that the GPU is never chosen, and the alignment's
+   waste (up to two pages) would be out of proportion. Pointer and string
+   arrays are never GPU data and stay as they were. */
+#define XT_SIMD_FROM 65536UL
+#define XT_NEW_PRIM(n,st) ((n)*(st)>=XT_SIMD_FROM?_xtc_alloc_aligned((n),(st),0):_xtc_alloc((n),(st),0))
+void *_xtc_new_u8(unsigned long n){return XT_NEW_PRIM(n,1);}
+void *_xtc_new_i8(unsigned long n){return XT_NEW_PRIM(n,1);}
+void *_xtc_new_u16(unsigned long n){return XT_NEW_PRIM(n,2);}
+void *_xtc_new_i16(unsigned long n){return XT_NEW_PRIM(n,2);}
+void *_xtc_new_u32(unsigned long n){return XT_NEW_PRIM(n,4);}
+void *_xtc_new_i32(unsigned long n){return XT_NEW_PRIM(n,4);}
+void *_xtc_new_u64(unsigned long n){return XT_NEW_PRIM(n,8);}
+void *_xtc_new_i64(unsigned long n){return XT_NEW_PRIM(n,8);}
 void *_xtc_new_pointer(unsigned long n){return _xtc_alloc(n,8,0);}
-void *_xtc_new_bool(unsigned long n){return _xtc_alloc(n,1,0);}
-void *_xtc_new_float(unsigned long n){return _xtc_alloc(n,4,0);}
-void *_xtc_new_double(unsigned long n){return _xtc_alloc(n,8,0);}
+void *_xtc_new_bool(unsigned long n){return XT_NEW_PRIM(n,1);}
+void *_xtc_new_float(unsigned long n){return XT_NEW_PRIM(n,4);}
+void *_xtc_new_double(unsigned long n){return XT_NEW_PRIM(n,8);}
 void *_xtc_new_string(unsigned long n){return _xtc_alloc(n,8,0);}
 /* `simd:` — a PAGE-ALIGNED payload (par-blocks.md): a unified-memory GPU wraps it
    in place, with no copy. The header still sits at payload-XT_HDR, so .length,
@@ -71,6 +80,27 @@ void *_xtc_new_string(unsigned long n){return _xtc_alloc(n,8,0);}
    16 KB pages as well as 4 KB ones. */
 #define XT_MAGIC_ALIGNED 0x58544F43U
 #define XT_PAGE 16384UL
+/* Every page-aligned block, so that a pointer INTO one can be traced to it:
+   par's runtime sizes a captured pointer from the block it points into and
+   shares the block with a unified-memory GPU in place (par-blocks.md §3), and
+   a `simd:` pointer may be offset by arithmetic. A table of (payload, end)
+   pairs sorted by payload, kept under the runtime lock; a lookup is a binary
+   search. _xtc_simd_base gives the block's payload (0 outside every block),
+   _xtc_simd_span the bytes from the pointer to the block's end (-1 outside). */
+void _xt_rt_lock(void); void _xt_rt_unlock(void);
+static uint8_t **xt_simd_tab; static unsigned long xt_simd_n, xt_simd_cap;
+/* The first entry whose payload is above p. */
+static unsigned long xt_simd_find(const uint8_t *p){unsigned long lo=0,hi=xt_simd_n;while(lo<hi){unsigned long m=(lo+hi)/2;if(xt_simd_tab[2*m]<=p)lo=m+1;else hi=m;}return lo;}
+static void xt_simd_reg(uint8_t *payload,unsigned long bytes){_xt_rt_lock();
+    if(xt_simd_n==xt_simd_cap){unsigned long c=xt_simd_cap?xt_simd_cap*2:64;uint8_t**t=(uint8_t**)calloc(2*c,sizeof(uint8_t*));if(!t){_xt_rt_unlock();return;}
+        for(unsigned long k=0;k<2*xt_simd_n;k++)t[k]=xt_simd_tab[k];free(xt_simd_tab);xt_simd_tab=t;xt_simd_cap=c;}
+    unsigned long i=xt_simd_find(payload);for(unsigned long k=xt_simd_n;k>i;k--){xt_simd_tab[2*k]=xt_simd_tab[2*k-2];xt_simd_tab[2*k+1]=xt_simd_tab[2*k-1];}
+    xt_simd_tab[2*i]=payload;xt_simd_tab[2*i+1]=payload+bytes;xt_simd_n++;_xt_rt_unlock();}
+static void xt_simd_unreg(uint8_t *payload){_xt_rt_lock();unsigned long i=xt_simd_find(payload);
+    if(i>0&&xt_simd_tab[2*(i-1)]==payload){i--;for(unsigned long k=i;k+1<xt_simd_n;k++){xt_simd_tab[2*k]=xt_simd_tab[2*k+2];xt_simd_tab[2*k+1]=xt_simd_tab[2*k+3];}xt_simd_n--;}
+    _xt_rt_unlock();}
+void *_xtc_simd_base(void *p){_xt_rt_lock();unsigned long i=xt_simd_find((uint8_t*)p);uint8_t*b=0;if(i>0&&(uint8_t*)p<xt_simd_tab[2*(i-1)+1])b=xt_simd_tab[2*(i-1)];_xt_rt_unlock();return b;}
+long _xtc_simd_span(void *p){_xt_rt_lock();unsigned long i=xt_simd_find((uint8_t*)p);long s=-1;if(i>0&&(uint8_t*)p<xt_simd_tab[2*(i-1)+1])s=(long)(xt_simd_tab[2*(i-1)+1]-(uint8_t*)p);_xt_rt_unlock();return s;}
 void *_xtc_alloc_aligned(unsigned long count,unsigned long stride,void(*dealloc)(void*)){
     /* The payload is rounded up to whole pages too: a GPU wrapping it in
        place (Metal's newBufferWithBytesNoCopy) needs a page-multiple length. */
@@ -80,7 +110,7 @@ void *_xtc_alloc_aligned(unsigned long count,unsigned long stride,void(*dealloc)
     uint8_t*payload=(uint8_t*)(((unsigned long)(raw+XT_HDR+8)+XT_PAGE-1)&~(XT_PAGE-1));uint8_t*p=payload-XT_HDR;
     *(uint32_t*)(p+XT_MAGIC_OFF)=XT_MAGIC_ALIGNED;*(unsigned long*)(p+XT_STRIDE_OFF)=stride;
     *(unsigned long*)(p+XT_COUNT_OFF)=count;*(void(**)(void*))(p+XT_DEALLOC_OFF)=dealloc;
-    *(void**)(p+XT_WEAKH_OFF)=0;*(XT_RC_T*)(p+XT_RC_OFF)=1;*(void**)(p-8)=raw;return payload;}
+    *(void**)(p+XT_WEAKH_OFF)=0;*(XT_RC_T*)(p+XT_RC_OFF)=1;*(void**)(p-8)=raw;xt_simd_reg(payload,count*stride);return payload;}
 void *_xtc_new_simd_u8(unsigned long n){return _xtc_alloc_aligned(n,1,0);}
 void *_xtc_new_simd_i8(unsigned long n){return _xtc_alloc_aligned(n,1,0);}
 void *_xtc_new_simd_bool(unsigned long n){return _xtc_alloc_aligned(n,1,0);}
@@ -110,7 +140,7 @@ void _xtc_dealloc(void *o){_xtc_weak_zero_for(o);uint8_t*base=(uint8_t*)o-XT_HDR
     void(*d)(void*)=*(void(**)(void*))(base+XT_DEALLOC_OFF);
     if(d){*(XT_RC_T*)((uint8_t*)o-XT_RC_BYTES)=XT_RC_DYING;for(unsigned long i=0;i<count;i++)d((uint8_t*)o+i*stride);}
     /* A `simd:` block's header is not its allocator base (see _xtc_alloc_aligned). */
-    if(*(uint32_t*)(base+XT_MAGIC_OFF)==XT_MAGIC_ALIGNED)free(*(void**)(base-8));else free(base);}
+    if(*(uint32_t*)(base+XT_MAGIC_OFF)==XT_MAGIC_ALIGNED){xt_simd_unreg((uint8_t*)o);free(*(void**)(base-8));}else free(base);}
 #define _XT_WH(o) (*(void***)((uint8_t*)(o)-(XT_HDR-XT_WEAKH_OFF)))
 /* The weak-reference intrusive list (private:docs/Design/weak-refs-intrusive.md) is the
    one piece of runtime state two xtc threads can mutate at once: registering,

@@ -219,17 +219,30 @@ par saxpy
 `simd:` pointer allocates the array page-aligned, on whole 16 KB pages, so a
 GPU can map it; `.length`, `delete` and reference counting work as for any
 heap array. A block that indexes a `simd:` pointer takes it as a GPU array,
-sized from the heap header, and on Apple silicon Metal binds the pages in
-place, with no copy either way; so does a Linux integrated GPU whose Vulkan
-driver imports host memory (`VK_EXT_external_memory_host`, which Mesa's
-drivers have). A discrete card copies a `simd:` array as it copies any other,
-and a plain heap pointer is not a GPU array: a block that indexes one runs on
-the CPU, since its size is not known to the block.
+sized from the block the pointer points into, and on Apple silicon Metal binds
+the pages in place, with no copy either way; so does a Linux integrated GPU
+whose Vulkan driver imports host memory (`VK_EXT_external_memory_host`, which
+Mesa's drivers have). A discrete card copies a `simd:` array as it copies any
+other.
+
+**Most arrays need no qualifier.** From 0.8.1 the runtime keeps a registry of
+its page-aligned blocks, and allocates every numeric array of 64 KB or more
+(`new u32[N]`, no qualifier) page-aligned and registered as well, at a cost of
+at most two pages per array. A block that indexes any pointer to numbers asks
+the registry for the block it points into, so a plain `new u32[1 << 20]` is a
+GPU array like a `simd:` one, and a pointer offset into either (`xs + 4096`)
+is sized from where it points to the block's end; Metal binds the block at
+that offset when the offset is a multiple of 256 bytes, and copies otherwise.
+A pointer into no registered block — a small array, a stack array, a global —
+keeps the block on the CPU, as a plain pointer always did. `simd:` is for
+arrays under 64 KB that a GPU should still share, and for the contract below.
 
 Because the promise rides on the type, a `simd:` pointer may hold only what
-`new[]` returned or what another `simd:` pointer holds. Passing a plain
-pointer where a function declares a `simd:` parameter is an error — the callee
-may hand it to a GPU with no copy — and a cast says that is meant. The 8-,
+`new[]` returned or what another `simd:` pointer holds, and arithmetic on one
+keeps the qualifier. A plain pointer stored into one — passed where a function
+declares a `simd:` parameter, or as an initialiser, an assignment or a return
+value — is an error, since the holder may hand it to a GPU with no copy, and a
+cast says that is meant; `nil` is fine. The 8-,
 16- and 32-bit targets accept `simd:` and allocate as plain `new` does.
 
 ### Speed or accuracy

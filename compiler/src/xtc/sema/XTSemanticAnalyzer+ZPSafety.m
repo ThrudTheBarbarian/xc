@@ -1407,6 +1407,30 @@
     if (!lhsType || !rhsType)
         return;
 
+    // A `simd:` pointer may hold only what `new[]` returned or what another
+    // `simd:` pointer holds (par-blocks.md §3): the qualifier promises a
+    // page-aligned block the runtime can find, and a par block that captures
+    // the pointer is sized from that block. A plain pointer stored into one
+    // at a declaration, an assignment or a return breaks the promise with no
+    // sign at the site; the argument form has its own check
+    // (checkPointerArgWidths:). nil and 0 are fine, and a cast says it is
+    // meant.
+    if (([site isEqualToString:@"initialiser"] || [site isEqualToString:@"assignment"] ||
+         [site isEqualToString:@"return"]) &&
+        [lhsType isKindOfClass:[XTPointerType class]] && ((XTPointerType*)lhsType).isSimd &&
+        [rhsType isKindOfClass:[XTPointerType class]] && !((XTPointerType*)rhsType).isSimd &&
+        rhsNode.nodeKind != XTASTNodeKindNewExpr && rhsNode.nodeKind != XTASTNodeKindLiteralInt)
+        {
+        [self.diagnostics emitError:[NSString stringWithFormat:
+                                                  @"%@: a plain pointer cannot be stored in a simd: pointer — simd: "
+                                                  @"promises page-aligned storage (a new[] into a simd: pointer, or "
+                                                  @"another simd: pointer), and a par block that captures it is sized "
+                                                  @"from that block. Cast if that is really meant",
+                                                  site]
+                                 at:loc];
+        return;
+        }
+
     // A BLOCK is not a bound method (uxkit/030). Blocks desugar to a class
     // pointer `Blk$<sig>*`; a `^` is a two-word (receiver, code) pair. Storing
     // the one in the other type-checked and then failed in two different silent

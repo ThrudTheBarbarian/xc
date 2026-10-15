@@ -1639,11 +1639,24 @@ ys = new u32[N];                 // the assignment form too
 
 Because the promise rides on the type, a `simd:` pointer may hold
 only what `new[]` returned or what another `simd:` pointer holds.
-An argument that is a plain pointer where the parameter is a
-`simd:` pointer is a sema error (the callee may hand it to a GPU
-with no copy); a cast says it is meant. The qualifier is accepted
-on every target; the 8-, 16- and 32-bit targets allocate as plain
-`new` does.
+A plain pointer stored into one — as an argument, an initialiser,
+an assignment or a return value — is a sema error (the holder may
+hand it to a GPU with no copy); `nil` is fine, and a cast says it
+is meant. Pointer arithmetic keeps the qualifier: `p + n` is still
+a `simd:` pointer, into the same block, and the runtime finds the
+block from it (below). The qualifier is accepted on every target;
+the 8-, 16- and 32-bit targets allocate as plain `new` does.
+
+On the 64-bit targets the runtime keeps a registry of its
+page-aligned blocks, and every numeric array of 64 KB or more
+(`new u32[N]` with no qualifier) is allocated page-aligned and
+registered as well. A `par` block that indexes any pointer to
+numbers, `simd:` or plain, asks the registry for the block the
+pointer points into and the bytes from the pointer to its end; a
+pointer into no such block (a small array, a stack array, a global)
+keeps the block on the CPU. `simd:` therefore matters for arrays
+under 64 KB, and as a contract at a function boundary; the
+alignment itself comes unasked above it.
 
 ### 9.6 Freeing what ARC does not own
 

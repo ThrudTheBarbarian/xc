@@ -2555,6 +2555,28 @@ class Parser
         }
         return (String*)0;
     }
+    // The element type when t is a pointer to numbers (an integer, float,
+    // double or bool; not an enum, known by name only), `simd:` or plain,
+    // else none. Such a capture is a GPU buffer sized at run time by the
+    // block it points into (par-blocks.md §3). As the reference.
+    static String* parPrimPointee(String* t)
+    {
+        if (t == (String*)0 || t.byteLength() < (u32)3 || t.byteAt(t.byteLength() - (u32)1) != (u8)'*')
+            return (String*)0;
+        u32 from = (u32)0;
+        for (u32 i = (u32)0; i + (u32)1 < t.byteLength(); i = i + (u32)1)
+            if (t.byteAt(i) == (u8)':')
+                from = i + (u32)1;
+        u32 to = t.byteLength() - (u32)1;
+        if (to <= from)
+            return (String*)0;
+        String* e = t.substringBytes(from, to - from);
+        if (Parser._same(e, "i8") || Parser._same(e, "u8") || Parser._same(e, "i16") || Parser._same(e, "u16")
+            || Parser._same(e, "i32") || Parser._same(e, "u32") || Parser._same(e, "i64") || Parser._same(e, "u64")
+            || Parser._same(e, "float") || Parser._same(e, "double") || Parser._same(e, "bool"))
+            return e;
+        return (String*)0;
+    }
     static bool parReadsOnly(Map* frame, String* n)
     {
         Map* refs = (Map*)frame.get((Hashable*)String.withCString("refs"));
@@ -3051,13 +3073,22 @@ class Parser
                     sz.setName(elem);
                     bytes = parBin("*", parCast(String.withCString("i64"), parInt(count)),
                                    parCast(String.withCString("i64"), sz));
-                } else if (Parser.parSimdPointee(t) != (String*)0) {
-                    // A `simd:` heap pointer: its length is the block header's
-                    // count, read as `.length` is for any heap array.
+                } else if (Parser.parPrimPointee(t) != (String*)0) {
+                    // A pointer to numbers, `simd:` or plain: its length is
+                    // asked of the runtime, which knows every page-aligned
+                    // block and the bytes from the pointer to its end (the
+                    // reference explains).
                     Node* sz = mk((u16)nkSizeof);
-                    sz.setName(Parser.parSimdPointee(t));
-                    bytes = parBin("*", parCast(String.withCString("i64"), parMember(cn, String.withCString("length"))),
-                                   parCast(String.withCString("i64"), sz));
+                    sz.setName(Parser.parPrimPointee(t));
+                    Node* call = mkNamed((u16)nkMethodCall, String.withCString("spanOf"));
+                    call.add(parIdent(String.withCString("Par")));
+                    call.add(parCast(String.withCString("pointer"), parIdent(cn)));
+                    call.add(parCast(String.withCString("i64"), sz));
+                    Node* simd = mk((u16)nkBool);
+                    simd.setNum(Parser.parSimdPointee(t) != (String*)0 ? (i64)1 : (i64)0);
+                    call.add(simd);
+                    call.setNum((i64)3);
+                    bytes = call;
                 } else
                     continue;
                 Node* n = mk((u16)nkIf);
@@ -3083,7 +3114,7 @@ class Parser
             for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
                 String* cn = (String*)caps.get(i);
                 String* t = (String*)frameTypes.get((Hashable*)cn);
-                if (t == (String*)0 || (t.indexOfByte((u8)'[') == (u32)$FFFFFFFF && Parser.parSimdPointee(t) == (String*)0)
+                if (t == (String*)0 || (t.indexOfByte((u8)'[') == (u32)$FFFFFFFF && Parser.parPrimPointee(t) == (String*)0)
                     || !Parser.parReadsOnly(frame, cn))
                     continue;
                 Node* n = mk((u16)nkIf);
