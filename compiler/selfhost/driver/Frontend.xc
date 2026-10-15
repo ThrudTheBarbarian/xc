@@ -57,6 +57,7 @@ class FeOptions
     i32 _threadSafeArc; // -f[no-]thread-safe-arc: 1 on, 0 off, -1 decide per module
     bool _parKernelsAll; // -fpar-kernels=all: every GPU kernel form in every par block
     bool _parAuto;       // --par-auto: a plain range loop becomes a par block where its shape allows
+    u32 _goalDefault;    // -fgoal=: the unit's default goal (0 built-in, 1 speed, 2 accuracy); a #goal overrides it
     bool _emitIface;   // compute the module interface (--emit-lib, -c, --emit-iface)
     // …and, SEPARATELY, whether this is a LIBRARY build. The two used to be one
     // flag, so `--emit-iface` — which only asks what the source declares —
@@ -110,6 +111,10 @@ class FeOptions
         _threadSafeArc = (i32)-1;
         _parKernelsAll = false;
         _parAuto = false;
+        _goalDefault = (u32)0;
+        // par-auto is opt-in (-Wpar-auto): what --par-auto wrapped or demoted
+        // is useful to see once, and noise in every build after.
+        suppressWarning(String.withCString("par-auto"));
         }
 
     String* input(void)
@@ -188,6 +193,18 @@ class FeOptions
         if (_wno == (Array*)0)
             _wno = new Array();
         _wno.add((Object*)String.withString(cat));
+        }
+    // -W<category>: a category that is off by default (par-auto) turned on.
+    void enableWarning(String* cat)
+        {
+        if (_wno == (Array*)0)
+            return;
+        for (u32 i = (u32)0; i < _wno.count(); i = i + (u32)1)
+            if (((String*)_wno.get(i)).equals(cat))
+                {
+                _wno.removeAt(i);
+                return;
+                }
         }
     bool warningSuppressed(String* cat)
         {
@@ -329,6 +346,14 @@ class FeOptions
         {
         _parAuto = b;
         }
+    u32 goalDefault(void)
+        {
+        return _goalDefault;
+        }
+    void setGoalDefault(u32 g)
+        {
+        _goalDefault = g;
+        }
     }
 
     class Frontend
@@ -433,6 +458,7 @@ class FeOptions
             }
         Parser* parser = Parser.with(tokens);
         parser.setParAuto(o.parAuto());
+        parser.setGoalDefault(pp.goal() != (u32)0 ? pp.goal() : o.goalDefault());
 
         // Stage 3 of separate compilation: `#import <Mod>` resolved to a bare
         // `.xtc.iface` reconstructs the module's declarations (marked external)

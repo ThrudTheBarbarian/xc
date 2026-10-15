@@ -170,6 +170,12 @@ defined on the command line with `-D NAME[=VALUE]`.
 `#warning` issues a warning and lets the build continue;
 `#error` fails the build.
 
+`#goal speed` or `#goal accuracy` sets the file's default goal for its
+loops and `par` blocks (see the `par` chapter): a `:goal(…)` on a loop or
+block overrides it, and it overrides the driver's `-fgoal=`. The directive
+produces no output. Without any of the three, loops favour accuracy and
+`par` blocks speed.
+
 ---
 
 ## 3. Types

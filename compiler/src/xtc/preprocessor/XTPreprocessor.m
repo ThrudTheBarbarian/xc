@@ -1090,6 +1090,19 @@
             stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         [_diagnostics emitError:(msg.length ? msg : @"#error") at:loc];
         }
+    else if ([content hasPrefix:@"goal"] && (content.length == 4 || ![self isIdentChar:[content characterAtIndex:4]]))
+        {
+        // The unit's default goal (par-auto-parallelisation.md): what a loop or
+        // par block without its own :goal(…) favours. Mirrored in the port.
+        NSString* g = [[content substringFromIndex:4]
+            stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if ([g isEqualToString:@"speed"])
+            _goalDirective = 1;
+        else if ([g isEqualToString:@"accuracy"])
+            _goalDirective = 2;
+        else
+            [_diagnostics emitError:[NSString stringWithFormat:@"'#goal' takes speed or accuracy, not '%@'", g] at:loc];
+        }
     else if ([content hasPrefix:@"ifdef"] && (content.length == 5 || ![self isIdentChar:[content characterAtIndex:5]]))
         {
         NSString* rest = [[content substringFromIndex:5]

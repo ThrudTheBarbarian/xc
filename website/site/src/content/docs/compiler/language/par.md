@@ -469,18 +469,35 @@ and integer reductions — `acc = acc + e` or `acc += e` with `+`, `*`, `&`,
 `|` or `^`, `acc` an integer local used nowhere else in the body — and has
 no `break` of its own, `return`, `goto` or label, and no outer name
 incremented, taken by address or written through a member. A float
-reduction is left alone (its order would change), as is any other write to
-an outer variable. The decision is made before parsing, from the loop's
-tokens, so it is the same in every build.
+reduction is left alone (its sum would reassociate across the items) unless
+the goal is speed, as is any other write to an outer variable. The decision
+is made before parsing, from the loop's tokens, so it is the same in every
+build.
 
-What that cannot tell, the compiler's `par` checks decide afterwards —
+**The goal.** A loop's `:goal(speed)` or `:goal(accuracy)` holds for the block
+it becomes. Without one, the file's `#goal speed` or `#goal accuracy` line
+sets the default, and without that the build's `-fgoal=`; under an explicit
+speed, from any of the three, a `+` reduction over a `float` or `double` is
+wrapped too. A loop marked `:serial` is never wrapped:
+
+```c
+#goal speed
+float sum = 0.0f;
+for (u32 i in 0..N)                     // becomes par autopar_1 :reduce(+ sum) :goal(speed)
+    sum = sum + x[i] * y[i];
+for (u32 i in 0..N) : serial            // left as it is
+    order[i] = order[i - 1] + 1;
+```
+
+What the tokens cannot tell, the compiler's `par` checks decide afterwards —
 whether the items are independent (a scan, `b[i] = b[i - 1] + …`, is not)
 and whether a GPU could run the body. A written `par` block that fails is an
-error; an automatic one is **demoted to a serial run** instead, with a
-`par-auto` warning saying why (`-Wno-par-auto` silences it), so the program
-still means what it did. Blocks the checks pass run as any `par` block does:
-`auto` measures and chooses the device, and `XC_PAR_REPORT=1` names them
-`autopar_<n>`.
+error; an automatic one is **demoted to a serial run** instead, so the program
+still means what it did. `-Wpar-auto` reports what was wrapped and what was
+demoted, and why; it is off by default, since the report is useful once and
+noise in every build after. Blocks the checks pass run as any `par` block
+does: `auto` measures and chooses the device, and `XC_PAR_REPORT=1` names
+them `autopar_<n>`.
 
 ### Across machines: `xcd`
 

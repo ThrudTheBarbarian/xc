@@ -27,6 +27,11 @@ NS_ASSUME_NONNULL_BEGIN
 |* an auto block it would refuse to a serial run.
 \****************************************************************************/
 @property(nonatomic) BOOL parAuto;
+// The unit's default goal for loops and par blocks without a :goal(…) of
+// their own: 0 the built-in (loops accuracy, par blocks speed), 1 speed, 2
+// accuracy — from #goal, else -fgoal=. Under an explicit speed, --par-auto
+// also wraps float reductions (their sum may reassociate).
+@property(nonatomic) NSUInteger goalDefault;
 
 /****************************************************************************\
 |* Initialise the parser with a token stream, a type table for resolving

@@ -223,6 +223,12 @@ NS_ASSUME_NONNULL_BEGIN
 // `par` block when its shape allows; one par-check cannot prove independent,
 // or a GPU cannot run, is demoted to a serial run (warning par-auto).
 @property(nonatomic, readonly) BOOL parAuto;
+// -fgoal=speed|accuracy: the default goal for loops and par blocks (0 none,
+// 1 speed, 2 accuracy); a #goal directive overrides it, a :goal(...) both.
+@property(nonatomic, readonly) NSUInteger goalDefault;
+// -Wpar-auto: report what --par-auto wrapped and what it demoted (off by
+// default: the warnings are useful once, then noise).
+@property(nonatomic, readonly) BOOL warnParAuto;
 // --migrate=<base>:<to> — compile as if the library were still <base>:
 // members annotated since(<v>) with v > base disappear from lookup, so a
 // <base>-era program fails LOUDLY at every renamed/repurposed call site

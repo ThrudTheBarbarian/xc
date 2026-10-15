@@ -91,6 +91,14 @@ NS_ASSUME_NONNULL_BEGIN
 |* the interface treats it as ambient, like the prelude, and lists the names
 |* as `stdImports` for a client to import itself (bug 637).
 \****************************************************************************/
+/****************************************************************************\
+|* `#goal speed` / `#goal accuracy`: the compilation unit's default goal for
+|* its loops and par blocks (0 none, 1 speed, 2 accuracy). A `:goal(…)` in the
+|* code overrides it; it overrides the driver's -fgoal=. The directive is
+|* consumed, like #define.
+\****************************************************************************/
+@property(nonatomic, readonly) NSUInteger goalDirective;
+
 @property(nonatomic, copy) NSArray<NSString*>* stdlibDirs;
 @property(nonatomic, readonly) NSDictionary<NSString*, NSString*>* stdlibFiles;
 

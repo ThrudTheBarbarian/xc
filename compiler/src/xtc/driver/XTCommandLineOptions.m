@@ -61,6 +61,8 @@
 @property(nonatomic, readwrite) NSInteger threadSafeARC;
 @property(nonatomic, readwrite) BOOL parKernelsAll;
 @property(nonatomic, readwrite) BOOL parAuto;
+@property(nonatomic, readwrite) NSUInteger goalDefault;
+@property(nonatomic, readwrite) BOOL warnParAuto;
 @property(nonatomic, readwrite, nullable) NSString* migrateVersions;
 @property(nonatomic, readwrite) BOOL emitIR;
 @property(nonatomic, readwrite) BOOL emitIROpt;
@@ -1088,6 +1090,20 @@ static NSString* sExecutablePath = nil;
             {
             opts.parAuto = YES;
             }
+        else if ([arg hasPrefix:@"-fgoal="])
+            {
+            NSString* val = [[arg substringFromIndex:7] lowercaseString];
+            if (![val isEqualToString:@"speed"] && ![val isEqualToString:@"accuracy"])
+                {
+                fprintf(stderr, "xcc: -fgoal= expects 'speed' or 'accuracy', got '%s'\n", val.UTF8String);
+                return nil;
+                }
+            opts.goalDefault = [val isEqualToString:@"speed"] ? 1 : 2;
+            }
+        else if ([arg isEqualToString:@"-Wpar-auto"])
+            {
+            opts.warnParAuto = YES;
+            }
         else if ([arg hasPrefix:@"--migrate="])
             {
             NSString* v = [arg substringFromIndex:10];
@@ -1521,6 +1537,9 @@ static NSString* sExecutablePath = nil;
             "                             form, for workers on other machines (xcd).\n"
             "  --par-auto                 A plain for (i in a..b) loop becomes a par\n"
             "                             block where its shape allows (see -Wpar-auto).\n"
+            "  -fgoal=speed|accuracy      The default goal of loops and par blocks\n"
+            "                             (#goal in a file overrides it, :goal(...) both)\n"
+            "  -Wpar-auto                 Say what --par-auto wrapped and what it demoted\n"
             "  -fmalloc=system|mimalloc   Host malloc behind the runtime (hosted\n"
             "                             targets only; mimalloc must link FIRST to\n"
             "                             override, so it is passed as an object)\n"

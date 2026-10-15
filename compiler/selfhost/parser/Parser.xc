@@ -59,6 +59,7 @@ class Parser
     bool    _parAuto;       // --par-auto: a plain loop becomes a par block where its shape allows
     u32     _parAutoCounter; // autopar_N naming
     u32     _loopDepth;     // loops open in the code being parsed (an auto par wraps an outermost one)
+    u32     _goalDefault;   // the unit's default goal: 0 built-in, 1 speed, 2 accuracy (#goal, else -fgoal=)
     Token*  _parTok;        // the `par` being desugared: where its errors point
     // While set, every node mk/mkNamed builds takes THIS token's position: a
     // block literal's synthesised class is built at the literal, as the
@@ -903,6 +904,7 @@ class Parser
     // to. Until task #78 the shipped compiler said `line 4: unexpected token
     // 11 (wanted 85)`: no column, the NEXT token's line, and raw enum numbers.
     void setParAuto(bool b) { _parAuto = b; }
+    void setGoalDefault(u32 g) { _goalDefault = g; }
 
     void _error(String* msg)
     {
@@ -2109,7 +2111,8 @@ class Parser
     Node* parAutoFor(void)
     {
         Array* reds = new Array();
-        if (!parAutoScan(reds)) {
+        u32 goal = (u32)0;
+        if (!parAutoScan(reds, &goal)) {
             parGridEnter("loops", true);
             _loopDepth = _loopDepth + (u32)1;
             Node* plain = parseFor();
@@ -2125,7 +2128,9 @@ class Parser
         frame.set((Hashable*)String.withCString("wbnames"), (Object*)new Array());
         frame.set((Hashable*)String.withCString("par"), (Object*)Number.with((u32)1));
         frame.set((Hashable*)String.withCString("written"), (Object*)new Set());
-        frame.set((Hashable*)String.withCString("fast"), (Object*)Number.with((u32)1));
+        // The block's goal: the loop's own, else the unit's, else speed.
+        if (goal != (u32)2)
+            frame.set((Hashable*)String.withCString("fast"), (Object*)Number.with((u32)1));
         frame.set((Hashable*)String.withCString("auto"), (Object*)Number.with((u32)1));
         Token* savedParTok = _parTok;
         _parTok = forTok;
@@ -2174,10 +2179,11 @@ class Parser
 
     // The scan behind parAutoFor: the cursor is at the `for`. Fills `reds`
     // (nkParReduce nodes) and says whether the loop qualifies.
-    bool parAutoScan(Array* reds)
+    bool parAutoScan(Array* reds, u32* goalOut)
     {
         u32 at = _pos;
         u32 n = _tokens.count();
+        *goalOut = _goalDefault;
         if (parTokType(at + (u32)1) != (u16)tokLParen) return false;
         // The header: `( T? i in a .. b )`, exclusive, no step.
         u32 depth = (u32)0;
@@ -2199,6 +2205,24 @@ class Parser
             }
         }
         if (pe == (u32)0 || !sawIn || !sawDots || var == (String*)0) return false;
+        // The loop's annotations after the header: `serial` keeps the loop as
+        // it is, a `goal` is the block's goal over the unit's default.
+        if (parTokType(pe + (u32)1) == (u16)tokColon) {
+            u32 i = pe + (u32)2;
+            while (parTokType(i) == (u16)tokIdentifier) {
+                String* an = parTokValue(i);
+                if (Parser._same(an, "serial")) return false;
+                if (Parser._same(an, "goal") && parTokType(i + (u32)1) == (u16)tokLParen
+                    && parTokType(i + (u32)2) == (u16)tokIdentifier && parTokType(i + (u32)3) == (u16)tokRParen) {
+                    *goalOut = Parser._same(parTokValue(i + (u32)2), "speed") ? (u32)1 : (u32)2;
+                    i = i + (u32)4;
+                } else
+                    i = i + (u32)1;
+                if (parTokType(i) != (u16)tokComma) break;
+                i = i + (u32)1;
+            }
+            pe = i - (u32)1;
+        }
         // The body: a block, to its `}`; or one plain statement, to its `;`
         // (a bare `if`, loop or switch as the body is left alone).
         u32 bs = (u32)0;
@@ -2338,9 +2362,12 @@ class Parser
             Map* info = blkLookup(acc, &depth2);
             String* ty = blkTyOf(info);
             if (ty == (String*)0) return false;
-            if (!(Parser._same(ty, "u8") || Parser._same(ty, "i8") || Parser._same(ty, "u16") || Parser._same(ty, "i16")
-                  || Parser._same(ty, "u32") || Parser._same(ty, "i32") || Parser._same(ty, "u64") || Parser._same(ty, "i64")))
-                return false;
+            bool isInt = Parser._same(ty, "u8") || Parser._same(ty, "i8") || Parser._same(ty, "u16") || Parser._same(ty, "i16")
+                  || Parser._same(ty, "u32") || Parser._same(ty, "i32") || Parser._same(ty, "u64") || Parser._same(ty, "i64");
+            // A float reduction only under an EXPLICIT speed goal, and only +.
+            bool isFloat = (Parser._same(ty, "float") || Parser._same(ty, "double")) && *goalOut == (u32)1
+                  && Parser._same((String*)accOps.get((Hashable*)acc), "+");
+            if (!isInt && !isFloat) return false;
             Number* want = (Number*)accWant.get((Hashable*)acc);
             Number* have = (Number*)uses.get((Hashable*)acc);
             if (have == (Number*)0 || want == (Number*)0 || have.asU32() != want.asU32()) return false;
@@ -2362,7 +2389,7 @@ class Parser
             p.setName(cur().value());
             advance();
         }
-        u32 flags = (u32)0;
+        u32 flags = _goalDefault == (u32)2 ? (u32)1 : (u32)0;   // the unit's #goal / -fgoal= sets the default
         // :grid(w, h[, d]): the work items are the points of a 2-D or 3-D
         // grid, and the body is any code, run once per point.
         Array* grid = (Array*)0;
@@ -4044,6 +4071,8 @@ class Parser
             Token* tok = advance();
             if (tok != (Token*)0 && Parser._same(tok.value(), "unroll")) {
                 annots = annots | (u32)1;
+            } else if (tok != (Token*)0 && Parser._same(tok.value(), "serial")) {
+                annots = annots | (u32)8;    // --par-auto leaves the loop alone (parAutoScan reads it)
             } else if (tok != (Token*)0 && Parser._same(tok.value(), "goal")) {
                 expect((u16)tokLParen);
                 Token* g = check((u16)tokIdentifier) ? advance() : (Token*)0;
@@ -4073,7 +4102,9 @@ class Parser
     {
         if ((annots & (u32)1) != (u32)0) n.addFlag((u32)NF_UNROLL);
         if ((annots & (u32)2) != (u32)0) n.addFlag((u32)NF_GOAL_SPEED);
-        if ((annots & (u32)4) != (u32)0) n.addFlag((u32)NF_GOAL_ACCURACY);
+        else if ((annots & (u32)4) != (u32)0) n.addFlag((u32)NF_GOAL_ACCURACY);
+        else if (_goalDefault == (u32)1) n.addFlag((u32)NF_GOAL_SPEED);
+        else if (_goalDefault == (u32)2) n.addFlag((u32)NF_GOAL_ACCURACY);
     }
 
     Node* parseReturn(void)

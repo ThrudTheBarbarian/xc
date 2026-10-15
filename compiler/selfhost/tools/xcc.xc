@@ -5052,6 +5052,9 @@ void capabilityUsage(void)
     Stdio.printf("                             for workers on other machines (xcd)\n");
     Stdio.printf("  --par-auto                 A plain for (i in a..b) loop becomes a par\n");
     Stdio.printf("                             block where its shape allows (see -Wpar-auto)\n");
+    Stdio.printf("  -fgoal=speed|accuracy      The default goal of loops and par blocks\n");
+    Stdio.printf("                             (#goal in a file overrides it, :goal(...) both)\n");
+    Stdio.printf("  -Wpar-auto                 Say what --par-auto wrapped and what it demoted\n");
     Stdio.printf("  -falloc=bump|heap          Allocator. Every current target uses heap\n");
     Stdio.printf("  -fmalloc=system|mimalloc   The C heap behind the runtime. mimalloc is\n");
     Stdio.printf("                             -A x86_64 only, linked ahead of libc\n");
@@ -5554,6 +5557,20 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
     }
     if (a.equals(String.withCString("--par-auto"))) {
         d.fe().setParAuto(true);
+        *ip = i + (u32)1; return true;
+    }
+    if (a.hasPrefix(String.withCString("-fgoal="))) {
+        String* v = a.substringFromByte((u32)7).lowercased();
+        if (!v.equals(String.withCString("speed")) && !v.equals(String.withCString("accuracy"))) {
+            Stdio.printf("xcc: -fgoal= expects 'speed' or 'accuracy', got '%s'\n", v.cString());
+            Process.exit((i32)1);
+            return false;
+        }
+        d.fe().setGoalDefault(v.equals(String.withCString("speed")) ? (u32)1 : (u32)2);
+        *ip = i + (u32)1; return true;
+    }
+    if (a.equals(String.withCString("-Wpar-auto"))) {
+        d.fe().enableWarning(String.withCString("par-auto"));
         *ip = i + (u32)1; return true;
     }
     if (a.equals(String.withCString("-fpic")) || a.equals(String.withCString("-fPIC"))

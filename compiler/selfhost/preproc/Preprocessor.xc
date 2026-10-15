@@ -109,6 +109,7 @@ class IfFrame
     String* _arch;    // of String@
     String* _platformDir; // ios / ios-sim / android: tried before _arch in the third-party tree, or 0
     Array* _warnings; // of String@
+    u32 _goal;        // #goal: 0 none, 1 speed, 2 accuracy (the unit's default goal)
     // The standard library (bug 637). `_stdlibDirs` are support/<plat>/lib and
     // support/generic/lib; a file #imported from one of them OUTSIDE the
     // prelude is ambient for the interface, like the prelude, and its name
@@ -147,6 +148,7 @@ class IfFrame
         _arch = (String*)0;
         _platformDir = (String*)0;
         _warnings = new Array();
+        _goal = (u32)0;
         }
 
     // ── Configuration ────────────────────────────────────────────
@@ -308,6 +310,11 @@ class IfFrame
     // Each warning is "<category>\t<file:line:1: warning: text>". The
     // category is what `-Wno-<category>` names; it is empty for `#warning`,
     // which cannot be switched off.
+    // The unit's default goal from `#goal speed|accuracy`: 0 none, 1 speed, 2 accuracy.
+    u32 goal(void)
+        {
+        return _goal;
+        }
     Array* warnings(void)
         {
         return _warnings;
@@ -1374,6 +1381,23 @@ class IfFrame
             if (msg.byteLength() == (u32)0)
                 msg = String.withCString("#error");
             _error(Preprocessor.positionedAs(filename, lineNumber, "error", msg));
+            return;
+            }
+        // #goal speed|accuracy: the unit's default goal. As the reference.
+        if (Preprocessor._hasCPrefix(content, "goal") && (content.byteLength() == (u32)4 || !Preprocessor.isIdentChar(content.byteAt((u32)4))))
+            {
+            String* g = content.substringFromByte((u32)4).trimmed();
+            if (g.equals(String.withCString("speed")))
+                _goal = (u32)1;
+            else if (g.equals(String.withCString("accuracy")))
+                _goal = (u32)2;
+            else
+                {
+                String* m = String.withCString("'#goal' takes speed or accuracy, not '");
+                m.append(g);
+                m.appendCString("'");
+                _error(Preprocessor.positionedAs(filename, lineNumber, "error", m));
+                }
             return;
             }
         if (Preprocessor._hasCPrefix(content, "ifdef") && (content.byteLength() == (u32)5 || !Preprocessor.isIdentChar(content.byteAt((u32)5))))

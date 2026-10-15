@@ -158,6 +158,7 @@ void main(void)
     Lexer* lex = Lexer.with(source, input);
     Array* tokens = lex.tokenise();
     Parser* parser = Parser.with(tokens);
+    parser.setGoalDefault(pp.goal());   // a #goal in the file, as the front end honours it
     Node* program = parser.parse();
     // uxkit/026: the oracle for this harness is `xcc-fe`, and xcc-fe
     // synthesises the designable bodies before sema. Without the same call

@@ -638,7 +638,10 @@ cover -fno-matmul
 # and a plain loop that becomes a par block where its shape allows.
 same "-fpar-kernels=all (-A arm64 -O2)"   -q -A arm64 -O2 -fpar-kernels=all -o @OUT@ $ROOT/tests/fixtures/par_simd_buffers.xc
 same "--par-auto (-A arm64 -O2)"          -q -A arm64 -O2 --par-auto -o @OUT@ $ROOT/tests/fixtures/outer_vectorize_matmul.xc
-cover -fpar-kernels= --par-auto
+same "-fgoal=speed (-A arm64 -O2)"        -q -A arm64 -O2 -fgoal=speed -o @OUT@ $ROOT/tests/fixtures/par_simd_buffers.xc
+same "-fgoal=accuracy (-A arm64 -O2)"     -q -A arm64 -O2 -fgoal=accuracy -o @OUT@ $ROOT/tests/fixtures/par_simd_buffers.xc
+same "-Wpar-auto --par-auto (-A arm64)"   -q -A arm64 -O2 --par-auto -Wpar-auto -o @OUT@ $ROOT/tests/fixtures/outer_vectorize_matmul.xc
+cover -fpar-kernels= --par-auto -fgoal= -Wpar-auto
 same "an undefined C symbol is a link error (580)" $A -o @OUT@ nothere.xc
 xcconly "  ...naming it (580)" 1 "undefined symbol 'nothere'" $A -o @OUT@ nothere.xc
 xcconly "--link-libs (-A arm64, refused)" 1 "applies to -A wasm32" -q -A arm64 --link-libs -o @OUT@ ret.xc

@@ -111,6 +111,7 @@ void main(void)
     Lexer* lex = Lexer.with(source, input);
     Array* tokens = lex.tokenise();
     Parser* parser = Parser.with(tokens);
+    parser.setGoalDefault(pp.goal());   // a #goal in the file, as the front end honours it
     Node* program = parser.parse();
 
     String* out = String.withCString("");

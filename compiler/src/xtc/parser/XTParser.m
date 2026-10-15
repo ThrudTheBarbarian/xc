@@ -2990,10 +2990,11 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
 
 // The scan behind parAutoFor: the cursor is at the `for`. Fills `reds`
 // (op, name pairs) and says whether the loop qualifies.
-- (BOOL)parAutoScan:(NSMutableArray<NSArray<NSString*>*>*)reds
+- (BOOL)parAutoScan:(NSMutableArray<NSArray<NSString*>*>*)reds goal:(NSUInteger*)goalOut
     {
     NSUInteger at = _pos;
     NSUInteger n = _tokens.count;
+    *goalOut = self.goalDefault;
     if ([self parTokType:at + 1] != XTTokenLParen)
         return NO;
     // The header: `( T? i in a .. b )`, exclusive, no step.
@@ -3033,6 +3034,31 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         }
     if (pe == 0 || !sawIn || !sawDots || !var)
         return NO;
+    // The loop's annotations, `: a, goal(speed), …` after the header: `serial`
+    // keeps the loop as it is, and a `goal` is the block's goal, over the
+    // unit's default.
+    if ([self parTokType:pe + 1] == XTTokenColon)
+        {
+        NSUInteger i = pe + 2;
+        while ([self parTokType:i] == XTTokenIdentifier)
+            {
+            NSString* an = [self parTokValue:i];
+            if ([an isEqualToString:@"serial"])
+                return NO;
+            if ([an isEqualToString:@"goal"] && [self parTokType:i + 1] == XTTokenLParen &&
+                [self parTokType:i + 2] == XTTokenIdentifier && [self parTokType:i + 3] == XTTokenRParen)
+                {
+                *goalOut = [[self parTokValue:i + 2] isEqualToString:@"speed"] ? 1 : 2;
+                i += 4;
+                }
+            else
+                i++;
+            if ([self parTokType:i] != XTTokenComma)
+                break;
+            i++;
+            }
+        pe = i - 1;
+        }
     // The body: a block, to its `}`; or one plain statement, to its `;` (a
     // bare `if`, loop or switch as the body is left alone).
     NSUInteger bs = 0;
@@ -3231,8 +3257,14 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         if (![ty isKindOfClass:[XTType class]])
             return NO;
         XTTypeKind k = ty.kind;
-        if (!(k == XTTypeKindU8 || k == XTTypeKindI8 || k == XTTypeKindU16 || k == XTTypeKindI16 ||
-              k == XTTypeKindU32 || k == XTTypeKindI32 || k == XTTypeKindU64 || k == XTTypeKindI64))
+        BOOL isInt = k == XTTypeKindU8 || k == XTTypeKindI8 || k == XTTypeKindU16 || k == XTTypeKindI16 ||
+                     k == XTTypeKindU32 || k == XTTypeKindI32 || k == XTTypeKindU64 || k == XTTypeKindI64;
+        // A float reduction only under an EXPLICIT speed goal (the unit's, or
+        // the loop's): its sum reassociates across the items, and + is its
+        // only shape.
+        BOOL isFloat = (k == XTTypeKindFloat || k == XTTypeKindDouble) && *goalOut == 1 &&
+                       [accOps[acc] isEqualToString:@"+"];
+        if (!isInt && !isFloat)
             return NO;
         NSNumber* want = accWant[acc];
         NSNumber* have = uses[acc];
@@ -3246,7 +3278,8 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
 - (nullable XTASTNode*)parAutoFor
     {
     NSMutableArray<NSArray<NSString*>*>* reds = [NSMutableArray array];
-    if (![self parAutoScan:reds])
+    NSUInteger goal = 0;
+    if (![self parAutoScan:reds goal:&goal])
         {
         [self parGridLoop:1];
         [self parAutoLoop:1];
@@ -3265,7 +3298,10 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
     frame[@"selfName"] = [NSNull null];
     frame[@"par"] = @YES;
     frame[@"written"] = [NSMutableSet set];
-    frame[@"fast"] = @YES;
+    // The block's goal: the loop's own, else the unit's, else speed as a
+    // written block's.
+    if (goal != 2)
+        frame[@"fast"] = @YES;
     frame[@"auto"] = @YES;
     [[self blkFrames] addObject:frame];
     [self blkPushScope];
@@ -3298,8 +3334,8 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
     NSMutableArray<NSArray<NSString*>*>* reductions = [NSMutableArray array];
     NSMutableArray<NSString*>* constants = [NSMutableArray array];   // :constant(a, b): captured arrays the GPU reads as constants
     // :goal(speed) (the default) or :goal(accuracy): what the block's GPU
-    // version favours.
-    BOOL accuracy = NO;
+    // version favours; the unit's #goal / -fgoal= sets the default.
+    BOOL accuracy = self.goalDefault == 2;
     // :grid(w, h[, d]): the work items are the points of a 2-D or 3-D grid,
     // and the body is any code, run once per point.
     NSMutableArray<XTASTNode*>* grid = nil;
@@ -3614,6 +3650,12 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
             {
             annots |= 1;
             }
+        else if ([annotName isEqualToString:@"serial"])
+            {
+            // --par-auto leaves this loop alone (parAutoScan reads it from
+            // the tokens); otherwise it means nothing.
+            annots |= 8;
+            }
         else if ([annotName isEqualToString:@"goal"])
             {
             [self expect:XTTokenLParen];
@@ -3880,7 +3922,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
                                                                               body:body
                                                                           location:loc];
             rangeNode.forceUnroll = (rangeAnnots & 1) != 0;
-            rangeNode.goal = (rangeAnnots & 2) ? 1 : (rangeAnnots & 4) ? 2 : 0;
+            rangeNode.goal = (rangeAnnots & 2) ? 1 : (rangeAnnots & 4) ? 2 : (NSUInteger)self.goalDefault;
             return rangeNode;
             }
 
@@ -3936,7 +3978,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
 
     XTForCStyleNode* node = [[XTForCStyleNode alloc] initWithLoopInit:init condition:cond increment:incr body:body location:loc];
     node.forceUnroll = (annots & 1) != 0;
-    node.goal = (annots & 2) ? 1 : (annots & 4) ? 2 : 0;
+    node.goal = (annots & 2) ? 1 : (annots & 4) ? 2 : (NSUInteger)self.goalDefault;
     return node;
     }
 

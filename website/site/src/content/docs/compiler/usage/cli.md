@@ -158,6 +158,7 @@ Full discussion on [Optimisation](/compiler/usage/optimization/).
 | `-falloc=bump` | Accepted for older build scripts. No supported target uses the bump allocator, so `xcc` warns and builds with the heap. |
 | `-farc[=on\|off]` | Retired. ARC is always on. `xcc` accepts the flag and warns that it does nothing. |
 | `-fthread-safe-arc` | Force atomic ARC refcounts, so two threads can share an object. |
+| `-fgoal=speed\|accuracy` | From 0.8.1: the default goal of every loop and `par` block in the build. A `#goal speed` or `#goal accuracy` line in a file overrides it for that file, and a `:goal(…)` on a loop or block overrides both. Without any, loops favour accuracy and `par` blocks speed. |
 | `-fno-thread-safe-arc` | Force plain, non-atomic refcounts. |
 
 Atomic refcounts are decided **per module** and switch on when the module spawns a
@@ -255,7 +256,7 @@ The flag is implemented for arm64 so far. On a target that does not have it
 
 ## Warnings
 
-Suppress a category with `-Wno-<category>`. All are on by default.
+Suppress a category with `-Wno-<category>`. All are on by default except `par-auto`, which `-Wpar-auto` turns on: it says what `--par-auto` wrapped and what it demoted, useful once and noise after.
 
 | Category | Triggered by |
 |----------|--------------|
