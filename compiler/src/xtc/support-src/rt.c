@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
+#include <signal.h>
+#include <sys/mman.h>
 /* An allocation too large to satisfy FAILS — it does not quietly become a
    small one. This used to read `if (b < 256 || b > (16UL<<20)) b = 256;`, so a
    request over 16 MB returned a 256-byte block and the caller wrote straight
@@ -88,19 +90,61 @@ void *_xtc_new_string(unsigned long n){return _xtc_alloc(n,8,0);}
    search. _xtc_simd_base gives the block's payload (0 outside every block),
    _xtc_simd_span the bytes from the pointer to the block's end (-1 outside). */
 void _xt_rt_lock(void); void _xt_rt_unlock(void);
-static uint8_t **xt_simd_tab; static unsigned long xt_simd_n, xt_simd_cap;
+static uint8_t **xt_simd_tab; static unsigned char *xt_simd_flag; static unsigned long xt_simd_n, xt_simd_cap;
+#define XT_SIMD_WATCHED 1
 /* The first entry whose payload is above p. */
 static unsigned long xt_simd_find(const uint8_t *p){unsigned long lo=0,hi=xt_simd_n;while(lo<hi){unsigned long m=(lo+hi)/2;if(xt_simd_tab[2*m]<=p)lo=m+1;else hi=m;}return lo;}
 static void xt_simd_reg(uint8_t *payload,unsigned long bytes){_xt_rt_lock();
-    if(xt_simd_n==xt_simd_cap){unsigned long c=xt_simd_cap?xt_simd_cap*2:64;uint8_t**t=(uint8_t**)calloc(2*c,sizeof(uint8_t*));if(!t){_xt_rt_unlock();return;}
-        for(unsigned long k=0;k<2*xt_simd_n;k++)t[k]=xt_simd_tab[k];free(xt_simd_tab);xt_simd_tab=t;xt_simd_cap=c;}
-    unsigned long i=xt_simd_find(payload);for(unsigned long k=xt_simd_n;k>i;k--){xt_simd_tab[2*k]=xt_simd_tab[2*k-2];xt_simd_tab[2*k+1]=xt_simd_tab[2*k-1];}
-    xt_simd_tab[2*i]=payload;xt_simd_tab[2*i+1]=payload+bytes;xt_simd_n++;_xt_rt_unlock();}
+    if(xt_simd_n==xt_simd_cap){unsigned long c=xt_simd_cap?xt_simd_cap*2:64;uint8_t**t=(uint8_t**)calloc(2*c,sizeof(uint8_t*));unsigned char*g=(unsigned char*)calloc(c,1);if(!t||!g){free(t);free(g);_xt_rt_unlock();return;}
+        for(unsigned long k=0;k<2*xt_simd_n;k++)t[k]=xt_simd_tab[k];for(unsigned long k=0;k<xt_simd_n;k++)g[k]=xt_simd_flag[k];free(xt_simd_tab);free(xt_simd_flag);xt_simd_tab=t;xt_simd_flag=g;xt_simd_cap=c;}
+    unsigned long i=xt_simd_find(payload);for(unsigned long k=xt_simd_n;k>i;k--){xt_simd_tab[2*k]=xt_simd_tab[2*k-2];xt_simd_tab[2*k+1]=xt_simd_tab[2*k-1];xt_simd_flag[k]=xt_simd_flag[k-1];}
+    xt_simd_tab[2*i]=payload;xt_simd_tab[2*i+1]=payload+bytes;xt_simd_flag[i]=0;xt_simd_n++;_xt_rt_unlock();}
 static void xt_simd_unreg(uint8_t *payload){_xt_rt_lock();unsigned long i=xt_simd_find(payload);
-    if(i>0&&xt_simd_tab[2*(i-1)]==payload){i--;for(unsigned long k=i;k+1<xt_simd_n;k++){xt_simd_tab[2*k]=xt_simd_tab[2*k+2];xt_simd_tab[2*k+1]=xt_simd_tab[2*k+3];}xt_simd_n--;}
+    if(i>0&&xt_simd_tab[2*(i-1)]==payload){i--;for(unsigned long k=i;k+1<xt_simd_n;k++){xt_simd_tab[2*k]=xt_simd_tab[2*k+2];xt_simd_tab[2*k+1]=xt_simd_tab[2*k+3];xt_simd_flag[k]=xt_simd_flag[k+1];}xt_simd_n--;}
     _xt_rt_unlock();}
 void *_xtc_simd_base(void *p){_xt_rt_lock();unsigned long i=xt_simd_find((uint8_t*)p);uint8_t*b=0;if(i>0&&(uint8_t*)p<xt_simd_tab[2*(i-1)+1])b=xt_simd_tab[2*(i-1)];_xt_rt_unlock();return b;}
 long _xtc_simd_span(void *p){_xt_rt_lock();unsigned long i=xt_simd_find((uint8_t*)p);long s=-1;if(i>0&&(uint8_t*)p<xt_simd_tab[2*(i-1)+1])s=(long)(xt_simd_tab[2*(i-1)+1]-(uint8_t*)p);_xt_rt_unlock();return s;}
+/* Dirty tracking for a GPU runtime's resident copies (par-blocks.md §3,
+   "resident data"). After an upload the runtime WATCHES the block: its pages
+   are made read-only, and the first host write faults, which the handler
+   absorbs — the block is marked written and made writable again — so a
+   watched block that never faulted is one the host has not touched since,
+   and need not be sent again. One fault per block per upload, from any code
+   at all (a library, a memcpy), with no compiler involvement. A fault
+   anywhere else is not ours: the action that was installed before is put
+   back and the instruction re-run, so it lands where it always did. macOS
+   reports a protection fault as SIGBUS, Linux as SIGSEGV; both are taken.
+   The header (payload-40) is in the page before the payload and stays
+   writable, so reference counts and the weak list are unaffected. */
+static struct sigaction xt_simd_old[2]; static int xt_simd_installed;
+static unsigned long xt_simd_pages(unsigned long i){return ((unsigned long)(xt_simd_tab[2*i+1]-xt_simd_tab[2*i])+XT_PAGE-1)&~(XT_PAGE-1);}
+static void xt_simd_fault(int sig,siginfo_t*si,void*uc){(void)uc;uint8_t*a=(uint8_t*)si->si_addr;int ours=0;
+    _xt_rt_lock();unsigned long i=xt_simd_find(a);
+    if(i>0&&a<xt_simd_tab[2*(i-1)+1]&&(xt_simd_flag[i-1]&XT_SIMD_WATCHED)){ours=1;xt_simd_flag[i-1]&=(unsigned char)~XT_SIMD_WATCHED;mprotect(xt_simd_tab[2*(i-1)],xt_simd_pages(i-1),PROT_READ|PROT_WRITE);}
+    _xt_rt_unlock();
+    if(!ours)sigaction(sig,&xt_simd_old[sig==SIGSEGV?0:1],0);}
+/* Watch the block at payload p (its start): 1 when it is one and its pages
+   could be protected, else 0. */
+int _xtc_simd_watch(void *p){int ok=0;_xt_rt_lock();unsigned long i=xt_simd_find((uint8_t*)p);
+    if(i>0&&xt_simd_tab[2*(i-1)]==(uint8_t*)p){
+        /* Field by field, not a memset: the NDK's clang zeroes a struct with `movi`, which XAArm64Assembler does not take. */
+        if(!xt_simd_installed){struct sigaction sa;sa.sa_sigaction=xt_simd_fault;sa.sa_flags=SA_SIGINFO|SA_NODEFER;sigemptyset(&sa.sa_mask);
+#ifdef __linux__
+            sa.sa_restorer=0;
+#endif
+            sigaction(SIGSEGV,&sa,&xt_simd_old[0]);sigaction(SIGBUS,&sa,&xt_simd_old[1]);xt_simd_installed=1;}
+        if(mprotect(p,xt_simd_pages(i-1),PROT_READ)==0){xt_simd_flag[i-1]|=XT_SIMD_WATCHED;ok=1;}}
+    _xt_rt_unlock();return ok;}
+/* The block is about to be written by the runtime itself (a copy back): its
+   pages are made writable and it reads as written until watched again. */
+void _xtc_simd_unwatch(void *p){_xt_rt_lock();unsigned long i=xt_simd_find((uint8_t*)p);
+    if(i>0&&xt_simd_tab[2*(i-1)]==(uint8_t*)p&&(xt_simd_flag[i-1]&XT_SIMD_WATCHED)){xt_simd_flag[i-1]&=(unsigned char)~XT_SIMD_WATCHED;mprotect(p,xt_simd_pages(i-1),PROT_READ|PROT_WRITE);}
+    _xt_rt_unlock();}
+/* 0 when the block at p is watched and no write has faulted since; 1 when it
+   has been written, is not watched, or is no block at all. */
+int _xtc_simd_dirty(void *p){int d=1;_xt_rt_lock();unsigned long i=xt_simd_find((uint8_t*)p);
+    if(i>0&&xt_simd_tab[2*(i-1)]==(uint8_t*)p&&(xt_simd_flag[i-1]&XT_SIMD_WATCHED))d=0;
+    _xt_rt_unlock();return d;}
 void *_xtc_alloc_aligned(unsigned long count,unsigned long stride,void(*dealloc)(void*)){
     /* The payload is rounded up to whole pages too: a GPU wrapping it in
        place (Metal's newBufferWithBytesNoCopy) needs a page-multiple length. */
@@ -143,7 +187,7 @@ void _xtc_dealloc(void *o){_xtc_weak_zero_for(o);uint8_t*base=(uint8_t*)o-XT_HDR
        copies (ParCuda.pinned) stores the unpin there, and it is called once
        with the payload before the block goes. The block's header is not its
        allocator base either (see _xtc_alloc_aligned). */
-    if(*(uint32_t*)(base+XT_MAGIC_OFF)==XT_MAGIC_ALIGNED){if(d)d(o);xt_simd_unreg((uint8_t*)o);free(*(void**)(base-8));return;}
+    if(*(uint32_t*)(base+XT_MAGIC_OFF)==XT_MAGIC_ALIGNED){if(d)d(o);_xtc_simd_unwatch(o);xt_simd_unreg((uint8_t*)o);free(*(void**)(base-8));return;}
     if(d){*(XT_RC_T*)((uint8_t*)o-XT_RC_BYTES)=XT_RC_DYING;for(unsigned long i=0;i<count;i++)d((uint8_t*)o+i*stride);}
     free(base);}
 #define _XT_WH(o) (*(void***)((uint8_t*)(o)-(XT_HDR-XT_WEAKH_OFF)))

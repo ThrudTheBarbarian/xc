@@ -228,6 +228,18 @@ where it lies for as long as the block exists, so every copy is a transfer
 straight from the program's memory rather than a copy into the driver's own
 buffer first.
 
+**Resident data.** From 0.8.1 a CUDA card also keeps what it was sent: a
+block's array that the program has not written since its last upload is not
+sent again, so a block run over the same arrays again uploads nothing, and
+`XC_PAR_REPORT=1` says "already on the GPU". The runtime sees a write by
+making the array's pages read-only after an upload and absorbing the first
+write's page fault, whoever writes (a library, a `memcpy`), so there is nothing
+to declare. One fault per array per upload is the cost. Under a debugger that
+fault is reported as an access violation, or as SIGBUS on macOS and SIGSEGV on
+Linux, before the runtime handles it: tell lldb `process handle SIGBUS SIGSEGV
+-s false -n false`, gdb `handle SIGSEGV nostop noprint`, and in Visual Studio
+continue past the first-chance exception.
+
 **Most arrays need no qualifier.** From 0.8.1 the runtime keeps a registry of
 its page-aligned blocks, and allocates every numeric array of 64 KB or more
 (`new u32[N]`, no qualifier) page-aligned and registered as well, at a cost of

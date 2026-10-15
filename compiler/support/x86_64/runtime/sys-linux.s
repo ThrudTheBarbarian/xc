@@ -58,6 +58,21 @@ _sys_mmap:				# mmap(addr, len, prot, flags, fd, off)
 	syscall
 	ret
 
+	.globl	_sys_mprotect
+	.type	_sys_mprotect, @function
+_sys_mprotect:				# mprotect(addr, len, prot)
+	mov	eax, 10
+	syscall
+	ret
+
+	.globl	_sys_rt_sigaction
+	.type	_sys_rt_sigaction, @function
+_sys_rt_sigaction:			# rt_sigaction(sig, act, oact, sigsetsize)
+	mov	r10, rcx		# 4th arg: syscall ABI wants r10, not rcx
+	mov	eax, 13
+	syscall
+	ret
+
 	.globl	_sys_munmap
 	.type	_sys_munmap, @function
 _sys_munmap:				# munmap(addr, len)

@@ -69,6 +69,17 @@ i64 gParCuRegClock;
 // copies are DMA rather than a copy into the driver's staging first.
 typedef void parUnpin_t(pointer payload);
 void parCudaUnpin(pointer payload);
+// Resident data (par-blocks.md §3): after an upload the runtime WATCHES the
+// block — its pages read-only, the first host write faulting and absorbed —
+// so a slot that already holds this very block, unwritten since, is not
+// sent again, and a run of the same block over the same arrays uploads
+// nothing. The host and device copies agree after a copy back as well, so
+// the block is watched again then.
+i32 _xtc_simd_watch(pointer p);
+void _xtc_simd_unwatch(pointer p);
+i32 _xtc_simd_dirty(pointer p);
+pointer gParCuUpHost[52];      // the host block slot k holds a copy of
+i64 gParCuUpLen[52];
 
 // The tiled path's streams, events and pinned staging, made on first use and
 // kept: one compute stream the kernels queue on in tile order (a kernel that
@@ -329,6 +340,17 @@ class ParCuda
             gParCuShadowHost[k] = (pointer)0;
             gParCuShadowLen[k] = (i64)0;
             }
+        // Resident: the slot already holds this block, and the host has not
+        // written it since (the runtime watched its pages): nothing to send.
+        if (host != (pointer)0 && gParCuDev[k] != (u64)0 && gParCuUpHost[k] == host && gParCuUpLen[k] == bytes &&
+            _xtc_simd_dirty(host) == (i32)0)
+            {
+            if (ParDevice.reporting())
+                Log.info("par: %ld bytes already on the GPU, unchanged since", bytes);
+            return gParCuDev[k];
+            }
+        gParCuUpHost[k] = (pointer)0;
+        gParCuUpLen[k] = (i64)0;
         if (gParCuDev[k] == (u64)0 || gParCuCap[k] < bytes)
             {
             if (gParCuDev[k] != (u64)0)
@@ -348,6 +370,12 @@ class ParCuda
             // into the driver's staging buffer first.
             pinned(host, bytes);
             _toDevice(gParCuDev[k], host, (u64)bytes);
+            // Watched from here: a block (its start) of 64 KB and more.
+            if (bytes >= (i64)65536 && _xtc_simd_watch(host) != (i32)0)
+                {
+                gParCuUpHost[k] = host;
+                gParCuUpLen[k] = bytes;
+                }
             }
         if (keep)
             {
@@ -1034,7 +1062,11 @@ class ParCuda
                 {
                 if (l.bufIn[i] == (i64)0)
                     {
-                    ok = _toHost(*(pointer*)(obj + l.bufOff[i]), dev[at], (u64)l.bufLen[i]) == (i32)0;
+                    pointer h = *(pointer*)(obj + l.bufOff[i]);
+                    _xtc_simd_unwatch(h);
+                    ok = _toHost(h, dev[at], (u64)l.bufLen[i]) == (i32)0;
+                    if (ok && gParCuUpHost[at] == h)
+                        _xtc_simd_watch(h);
                     copies = copies + (u32)1;
                     }
                 at = at + (u32)1;

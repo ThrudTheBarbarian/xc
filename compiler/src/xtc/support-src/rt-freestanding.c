@@ -489,7 +489,9 @@ void* _xtc_alloc(uint64_t count, uint64_t stride, void (*dealloc)(void*))
    _xtc_simd_span the bytes from the pointer to the block's end (-1 outside).
    The same code as rt.c's, over this runtime's own allocator. */
 static uint8_t** xt_simd_tab;
+static uint8_t* xt_simd_flag;
 static uint64_t xt_simd_n, xt_simd_cap;
+#define XT_SIMD_WATCHED 1
 /* The first entry whose payload is above p. */
 static uint64_t xt_simd_find(const uint8_t* p)
     {
@@ -511,16 +513,24 @@ static void xt_simd_reg(uint8_t* payload, uint64_t bytes)
         {
         uint64_t c = xt_simd_cap ? xt_simd_cap * 2 : 64;
         uint8_t** t = (uint8_t**)_xt_calloc(2 * c * sizeof(uint8_t*));
-        if (!t)
+        uint8_t* g = (uint8_t*)_xt_calloc(c);
+        if (!t || !g)
             {
+            if (t) _xt_free(t);
+            if (g) _xt_free(g);
             _xt_rt_unlock();
             return;
             }
         for (uint64_t k = 0; k < 2 * xt_simd_n; k++)
             t[k] = xt_simd_tab[k];
+        for (uint64_t k = 0; k < xt_simd_n; k++)
+            g[k] = xt_simd_flag[k];
         if (xt_simd_tab)
             _xt_free(xt_simd_tab);
+        if (xt_simd_flag)
+            _xt_free(xt_simd_flag);
         xt_simd_tab = t;
+        xt_simd_flag = g;
         xt_simd_cap = c;
         }
     uint64_t i = xt_simd_find(payload);
@@ -528,9 +538,11 @@ static void xt_simd_reg(uint8_t* payload, uint64_t bytes)
         {
         xt_simd_tab[2 * k] = xt_simd_tab[2 * k - 2];
         xt_simd_tab[2 * k + 1] = xt_simd_tab[2 * k - 1];
+        xt_simd_flag[k] = xt_simd_flag[k - 1];
         }
     xt_simd_tab[2 * i] = payload;
     xt_simd_tab[2 * i + 1] = payload + bytes;
+    xt_simd_flag[i] = 0;
     xt_simd_n++;
     _xt_rt_unlock();
     }
@@ -545,6 +557,7 @@ static void xt_simd_unreg(uint8_t* payload)
             {
             xt_simd_tab[2 * k] = xt_simd_tab[2 * k + 2];
             xt_simd_tab[2 * k + 1] = xt_simd_tab[2 * k + 3];
+            xt_simd_flag[k] = xt_simd_flag[k + 1];
             }
         xt_simd_n--;
         }
@@ -569,6 +582,155 @@ int64_t _xtc_simd_span(void* p)
         s = (int64_t)(xt_simd_tab[2 * (i - 1) + 1] - (uint8_t*)p);
     _xt_rt_unlock();
     return s;
+    }
+
+/* Dirty tracking for a GPU runtime's resident copies (par-blocks.md §3,
+   "resident data"). After an upload the runtime WATCHES the block: its pages
+   are made read-only, and the first host write faults, which the handler
+   absorbs — the block is marked written and made writable again — so a
+   watched block that never faulted is one the host has not touched since,
+   and need not be sent again. One fault per block per upload, from any code
+   at all, with no compiler involvement. A fault anywhere else is not ours:
+   on Windows the vectored handler passes it on; on Linux the action that was
+   installed before is put back and the instruction re-run. The header
+   (payload-40) is in the page before the payload and stays writable. Same
+   contract as rt.c's. */
+static uint64_t xt_simd_pages(uint64_t i)
+    {
+    return ((uint64_t)(xt_simd_tab[2 * i + 1] - xt_simd_tab[2 * i]) + XT_PAGE - 1) & ~(XT_PAGE - 1);
+    }
+#ifdef XT_WIN64
+extern int VirtualProtect(void* addr, uint64_t size, uint32_t prot, uint32_t* old);
+extern void* AddVectoredExceptionHandler(uint32_t first, void* handler);
+static int xt_simd_protect(uint8_t* p, uint64_t n, int ro)
+    {
+    uint32_t old = 0;
+    return VirtualProtect(p, n, ro ? 2u : 4u, &old) ? 0 : -1;   /* PAGE_READONLY : PAGE_READWRITE */
+    }
+#else
+/* The kernel's own sigaction, with a restorer of our own (the libc wrapper
+   is what adds one; the glibc build goes through syscall() too, so one
+   layout serves both). */
+struct xt_ksa { void* handler; uint64_t flags; void* restorer; uint64_t mask; };
+#ifdef XT_GLIBC
+extern int mprotect(void* addr, uint64_t len, int prot);
+extern long syscall(long n, ...);
+static long xt_sys_mprotect(void* p, uint64_t n, long prot) { return mprotect(p, n, (int)prot); }
+static long xt_sys_rt_sigaction(long sig, void* act, void* oact) { return syscall(13, sig, act, oact, (long)8); }
+#else
+extern long _sys_mprotect(void* addr, uint64_t len, long prot);
+extern long _sys_rt_sigaction(long sig, void* act, void* oact, long setsize);
+static long xt_sys_mprotect(void* p, uint64_t n, long prot) { return _sys_mprotect(p, n, prot); }
+static long xt_sys_rt_sigaction(long sig, void* act, void* oact) { return _sys_rt_sigaction(sig, act, oact, 8); }
+#endif
+__asm__(".globl xt_sigrestore\n.type xt_sigrestore, @function\nxt_sigrestore:\n\tmov eax, 15\n\tsyscall\n");
+extern void xt_sigrestore(void);
+static struct xt_ksa xt_simd_old[2];
+static int xt_simd_protect(uint8_t* p, uint64_t n, int ro)
+    {
+    return xt_sys_mprotect(p, n, ro ? 1 : 3) == 0 ? 0 : -1;   /* PROT_READ : PROT_READ|PROT_WRITE */
+    }
+#endif
+static int xt_simd_installed;
+/* A write at a: when it is inside a watched block, the block is marked
+   written and made writable, and 1 is returned; else 0. */
+static int xt_simd_hit(uint8_t* a)
+    {
+    int ours = 0;
+    _xt_rt_lock();
+    uint64_t i = xt_simd_find(a);
+    if (i > 0 && a < xt_simd_tab[2 * (i - 1) + 1] && (xt_simd_flag[i - 1] & XT_SIMD_WATCHED))
+        {
+        ours = 1;
+        xt_simd_flag[i - 1] &= (uint8_t)~XT_SIMD_WATCHED;
+        xt_simd_protect(xt_simd_tab[2 * (i - 1)], xt_simd_pages(i - 1), 0);
+        }
+    _xt_rt_unlock();
+    return ours;
+    }
+#ifdef XT_WIN64
+static long xt_simd_veh(void* ep)
+    {
+    uint8_t* rec = *(uint8_t**)ep;                     /* EXCEPTION_POINTERS.ExceptionRecord */
+    if (*(uint32_t*)rec != 0xC0000005u)                /* EXCEPTION_ACCESS_VIOLATION */
+        return 0;                                      /* EXCEPTION_CONTINUE_SEARCH */
+    uint64_t* info = (uint64_t*)(rec + 32);            /* ExceptionInformation: 1 = a write, then the address */
+    if (info[0] != 1)
+        return 0;
+    return xt_simd_hit((uint8_t*)info[1]) ? -1 : 0;    /* EXCEPTION_CONTINUE_EXECUTION */
+    }
+static void xt_simd_install(void)
+    {
+    if (xt_simd_installed)
+        return;
+    AddVectoredExceptionHandler(1, (void*)&xt_simd_veh);
+    xt_simd_installed = 1;
+    }
+#else
+static void xt_simd_fault(int sig, void* si, void* uc)
+    {
+    (void)uc;
+    uint8_t* a = *(uint8_t**)((uint8_t*)si + 16);     /* siginfo_t.si_addr */
+    if (!xt_simd_hit(a))
+        xt_sys_rt_sigaction(sig, &xt_simd_old[sig == 11 ? 0 : 1], 0);
+    }
+static void xt_simd_install(void)
+    {
+    if (xt_simd_installed)
+        return;
+    struct xt_ksa sa;
+    sa.handler = (void*)&xt_simd_fault;
+    sa.flags = 4 | 0x40000000 | 0x04000000;            /* SA_SIGINFO | SA_NODEFER | SA_RESTORER */
+    sa.restorer = (void*)&xt_sigrestore;
+    sa.mask = 0;
+    xt_sys_rt_sigaction(11, &sa, &xt_simd_old[0]);     /* SIGSEGV */
+    xt_sys_rt_sigaction(7, &sa, &xt_simd_old[1]);      /* SIGBUS */
+    xt_simd_installed = 1;
+    }
+#endif
+/* Watch the block at payload p (its start): 1 when it is one and its pages
+   could be protected, else 0. */
+int _xtc_simd_watch(void* p)
+    {
+    int ok = 0;
+    _xt_rt_lock();
+    uint64_t i = xt_simd_find((uint8_t*)p);
+    if (i > 0 && xt_simd_tab[2 * (i - 1)] == (uint8_t*)p)
+        {
+        xt_simd_install();
+        if (xt_simd_protect((uint8_t*)p, xt_simd_pages(i - 1), 1) == 0)
+            {
+            xt_simd_flag[i - 1] |= XT_SIMD_WATCHED;
+            ok = 1;
+            }
+        }
+    _xt_rt_unlock();
+    return ok;
+    }
+/* The block is about to be written by the runtime itself (a copy back): its
+   pages are made writable and it reads as written until watched again. */
+void _xtc_simd_unwatch(void* p)
+    {
+    _xt_rt_lock();
+    uint64_t i = xt_simd_find((uint8_t*)p);
+    if (i > 0 && xt_simd_tab[2 * (i - 1)] == (uint8_t*)p && (xt_simd_flag[i - 1] & XT_SIMD_WATCHED))
+        {
+        xt_simd_flag[i - 1] &= (uint8_t)~XT_SIMD_WATCHED;
+        xt_simd_protect((uint8_t*)p, xt_simd_pages(i - 1), 0);
+        }
+    _xt_rt_unlock();
+    }
+/* 0 when the block at p is watched and no write has faulted since; 1 when it
+   has been written, is not watched, or is no block at all. */
+int _xtc_simd_dirty(void* p)
+    {
+    int d = 1;
+    _xt_rt_lock();
+    uint64_t i = xt_simd_find((uint8_t*)p);
+    if (i > 0 && xt_simd_tab[2 * (i - 1)] == (uint8_t*)p && (xt_simd_flag[i - 1] & XT_SIMD_WATCHED))
+        d = 0;
+    _xt_rt_unlock();
+    return d;
     }
 void* _xtc_alloc_aligned(uint64_t count, uint64_t stride, void (*dealloc)(void*))
     {
@@ -699,6 +861,7 @@ void _xtc_dealloc(void* o)
         {
         if (d)
             d(o);
+        _xtc_simd_unwatch(o);
         xt_simd_unreg((uint8_t*)o);
         _xt_free(*(void**)(base - 8));
         return;
