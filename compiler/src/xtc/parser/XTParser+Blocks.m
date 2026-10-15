@@ -1365,6 +1365,31 @@ static NSString* parRootName(XTASTNode* n)
         NSMutableArray<XTASTNode*>* stmts = [NSMutableArray array];
         [stmts addObject:[[XTVariableDeclNode alloc] initWithName:@"__par_hi" type:ivT
                                                     initialiser:cast(ivT, ident(@"hi")) location:loc]];
+        // Every CAPTURE is read into a local of run() once, too. The body
+        // names a capture as the ivar, so each use was a load from the block
+        // object inside the loop, and with a store in the loop (an element
+        // written) the hoister cannot move any load: the CPU path reloaded
+        // every captured pointer for every element and ran a third slower
+        // than the same loop over globals. A capture never changes inside the
+        // body (a scalar is refused above, an array's elements are written
+        // through the pointer), so the local is the ivar's value throughout,
+        // and shadows it: the body is unchanged. The GPU printers read the
+        // load from the entry block as they read it from the body (a Load
+        // of `FieldAddr self, k` is buffer k wherever it is). Pointers and
+        // scalars only: a struct local is an aggregate copy, which the GPU
+        // printers cannot express, and the body reads its fields through
+        // the ivar as before.
+        for (NSString* cn in caps)
+            {
+            XTType* t = frameTypes[cn];
+            if ([t isKindOfClass:[XTArrayType class]])
+                t = [XTPointerType pointerToType:((XTArrayType*)t).elementType];
+            if ((t.kind != XTTypeKindPointer && !t.isInteger && !t.isFloating && t.kind != XTTypeKindBool) ||
+                t.kind == XTTypeKindEnum)
+                continue; // an enum counts as an integer here; the port knows it by name only
+            [stmts addObject:[[XTVariableDeclNode alloc] initWithName:cn type:t
+                                                       initialiser:member(@"self", cn) location:loc]];
+            }
         for (NSArray<NSString*>* r in reductions)
             [stmts addObject:[[XTVariableDeclNode alloc] initWithName:r[1] type:redTypes[r[1]]
                                                        initialiser:member(@"self", r[1]) location:loc]];

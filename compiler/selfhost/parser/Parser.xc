@@ -2960,6 +2960,30 @@ class Parser
                 h.add(parCast(ivT, parIdent(String.withCString("hi"))));
                 rb.add(h);
             }
+            // Every capture is read into a local of run() once: the body
+            // named it as the ivar, a load inside the loop for every use,
+            // which a store in the loop keeps the hoister from moving. The
+            // local shadows the ivar, so the body is unchanged. Pointers and
+            // scalars only, as the reference (a struct local is an aggregate
+            // copy the GPU printers cannot express).
+            for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
+                String* cn = (String*)caps.get(i);
+                String* t = String.withString((String*)frameTypes.get((Hashable*)cn));
+                u32 lb = t.indexOfByte((u8)'[');
+                if (lb != (u32)$FFFFFFFF) { t = t.substringBytes((u32)0, lb); t.appendByte((u8)'*'); }
+                bool isPtr = t.byteLength() > (u32)0 && t.byteAt(t.byteLength() - (u32)1) == (u8)'*';
+                bool isScalar = Parser._same(t, "i8") || Parser._same(t, "u8") || Parser._same(t, "i16")
+                    || Parser._same(t, "u16") || Parser._same(t, "i32") || Parser._same(t, "u32")
+                    || Parser._same(t, "i64") || Parser._same(t, "u64") || Parser._same(t, "float")
+                    || Parser._same(t, "double") || Parser._same(t, "bool") || Parser._same(t, "pointer")
+                    || Parser._same(t, "string");
+                if (!isPtr && !isScalar)
+                    continue;
+                Node* d = mkNamed((u16)nkVariableDecl, cn);
+                d.setOp(t);
+                d.add(parMember(String.withCString("self"), cn));
+                rb.add(d);
+            }
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
                 Node* r = (Node*)reds.get(i);
                 Node* d = mkNamed((u16)nkVariableDecl, r.name());
