@@ -71,6 +71,11 @@ class TlsConn : Object
     // >0 = bytes accepted; -1 = error; -2 = want read; -3 = want write.
     i32 send(u8* buf, i32 len) { return (h != (pointer)0) ? xt_tls_send(h, buf, len) : (i32)(-1); }
 
+    // Plaintext bytes already decrypted and waiting inside the connection:
+    // a caller that polls the socket must read these first, the socket
+    // says nothing about them.
+    i32 pending(void) { return (h != (pointer)0) ? xt_tls_pending(h) : (i32)0; }
+
     void close(void) { if (h != (pointer)0) { xt_tls_close(h); h = (pointer)0; } }
     bool live(void)  { return h != (pointer)0; }
 }

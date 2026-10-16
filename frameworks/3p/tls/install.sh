@@ -13,6 +13,9 @@
 # │ chain) to a live host through the installed libtls — no clang.                │
 # └────────────────────────────────────────────────────────────────────────────┘
 set -e
+# Every library is installed as a NEW file (copy beside, then rename): macOS
+# caches a dylib's code signature by inode and kills, with SIGKILL and no
+# message, every program that loads one rewritten in place (2026-10-16).
 cd "$(dirname "$0")"
 HERE=$(pwd)
 XCC=${XCC:-xcc}
@@ -32,7 +35,7 @@ ar rcs "$TMP/libtlsshim-arm64.a" "$TMP/tlsshim-arm64.o"
     -Wl,"$TMP/libtlsshim-arm64.a" \
     -Wl,"$MB/lib/libmbedtls.a" -Wl,"$MB/lib/libmbedx509.a" \
     -Wl,"$MB/lib/libmbedcrypto.a" -Wl,"$MB/lib/libtfpsacrypto.a"
-cp "$TMP/libtls.dylib" "$DEST/arm64/libtls-$MAJ-$MIN.dylib"
+cp "$TMP/libtls.dylib" "$DEST/arm64/libtls-$MAJ-$MIN.dylib".new && mv -f "$DEST/arm64/libtls-$MAJ-$MIN.dylib".new "$DEST/arm64/libtls-$MAJ-$MIN.dylib"
 ln -sf "libtls-$MAJ-$MIN.dylib" "$DEST/arm64/libtls.dylib"
 echo "installed: $DEST/arm64/libtls.dylib -> libtls-$MAJ-$MIN.dylib"
 
@@ -51,7 +54,7 @@ if [ -f "$MBLIN/libmbedtls.a" ]; then
            -Wl,"$TMP/libtlsshim-musl.a" \
            -Wl,"$MBLIN/libmbedtls.a" -Wl,"$MBLIN/libmbedx509.a" \
            -Wl,"$MBLIN/libmbedcrypto.a" -Wl,"$MBLIN/libtfpsacrypto.a"; then
-        cp "$TMP/libtls.so" "$DEST/x86_64/libtls-$MAJ-$MIN.so"
+        cp "$TMP/libtls.so" "$DEST/x86_64/libtls-$MAJ-$MIN.so".new && mv -f "$DEST/x86_64/libtls-$MAJ-$MIN.so".new "$DEST/x86_64/libtls-$MAJ-$MIN.so"
         ln -sf "libtls-$MAJ-$MIN.so" "$DEST/x86_64/libtls.so"
         echo "installed: $DEST/x86_64/libtls.so -> libtls-$MAJ-$MIN.so"
     else
@@ -79,7 +82,7 @@ if [ -f "$MBWIN/libmbedtls.a" ]; then
            -Wl,"$MBWIN/libmbedtls.a" -Wl,"$MBWIN/libmbedx509.a" \
            -Wl,"$MBWIN/libmbedcrypto.a" -Wl,"$MBWIN/libtfpsacrypto.a"; then
         mkdir -p "$DEST/win64"
-        cp "$TMP/libtls.dll" "$DEST/win64/libtls.dll"
+        cp "$TMP/libtls.dll" "$DEST/win64/libtls.dll".new && mv -f "$DEST/win64/libtls.dll".new "$DEST/win64/libtls.dll"
         echo "installed: $DEST/win64/libtls.dll"
     else
         echo "NOTE: win64 libtls build failed (Windows consumers) — arm64 + host OK"
@@ -102,7 +105,7 @@ if [ -f "$MBIOS/libmbedtls.a" ] && [ -n "$IOSSDK" ]; then
            -Wl,"$MBIOS/libmbedtls.a" -Wl,"$MBIOS/libmbedx509.a" \
            -Wl,"$MBIOS/libmbedcrypto.a" -Wl,"$MBIOS/libtfpsacrypto.a"; then
         mkdir -p "$DEST/ios"
-        cp "$TMP/libtls-ios.dylib" "$DEST/ios/libtls.dylib"
+        cp "$TMP/libtls-ios.dylib" "$DEST/ios/libtls.dylib".new && mv -f "$DEST/ios/libtls.dylib".new "$DEST/ios/libtls.dylib"
         echo "installed: $DEST/ios/libtls.dylib"
     else
         echo "NOTE: ios libtls build failed (iOS consumers) — the rest installed"
@@ -134,7 +137,7 @@ if [ -f "$MBAND/libmbedtls.a" ] && [ -x "$NDKBIN/clang" ]; then
            -Wl,"$MBAND/libmbedtls.a" -Wl,"$MBAND/libmbedx509.a" \
            -Wl,"$MBAND/libmbedcrypto.a" -Wl,"$RTB"; then
         mkdir -p "$DEST/android"
-        cp "$TMP/libtls-android.so" "$DEST/android/libtls.so"
+        cp "$TMP/libtls-android.so" "$DEST/android/libtls.so".new && mv -f "$DEST/android/libtls.so".new "$DEST/android/libtls.so"
         echo "installed: $DEST/android/libtls.so"
     else
         echo "NOTE: android libtls build failed (Android consumers) — the rest installed"
