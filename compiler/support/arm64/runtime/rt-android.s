@@ -23,7 +23,7 @@
 
 // rt-android.s — the self-hosted arm64/Android runtime (ARC/heap/weak +
 // print + math + threads + files). GENERATED from src/xtc/support-src/rt.c
-// by support/arm64/runtime/gen-rt-android.sh — do not hand-edit; regenerate.
+// by tools/regen-runtimes.py (android) — do not hand-edit; regenerate.
 //
 // The Android twin of rt-macos.s, and generated the same way: clang runs
 // ONCE, here, and never during a user compile — XAArm64Assembler assembles
@@ -37,6 +37,7 @@
 // weak head at obj-10 — the same contract every other target uses. Imports
 // (bionic): libc.so for calloc/free/stdio/pthread, libm.so for the _xm_*
 // wrappers' tail calls.
+// regenerated with: Android (12027248, +pgo, -bolt, +lto, -mlgo, based on r522817) clang version 18.0.1 (https://android.googlesource.com/toolchain/llvm-project d8003a456d14a3deb8054cdaa529ffbf02d9b262)
 	.text
 	.file	"rt.c"
 	.globl	_xtc_alloc                      // -- Begin function _xtc_alloc

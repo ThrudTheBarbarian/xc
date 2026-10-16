@@ -24,7 +24,7 @@
 
 # Regenerate glue-android.s from android-glue.c. Needs $ANDROID_HOME with an NDK.
 #
-# Same arrangement as gen-rt-android.sh: clang runs ONCE, here, and the output is
+# Same arrangement as tools/regen-runtimes.py: clang runs ONCE, here, and the output is
 # checked in, so a user compile assembles this text with XAArm64Assembler and
 # never needs the NDK. The .c stays checked in too — the clang link path compiles
 # it directly — so the two paths cannot drift apart.

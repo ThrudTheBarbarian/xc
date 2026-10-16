@@ -21,9 +21,9 @@
 // ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
 // FITNESS FOR A PARTICULAR PURPOSE.
 
-// rt-checked-macos.s — GENERATED from src/xtc/support-src/rt-checked.c with
-//   clang -S -O0 -fno-omit-frame-pointer -fno-stack-protector -arch arm64
-// then LBB -> Lchk_BB and l_.str -> l_chk.str.
+// rt-checked-macos.s — GENERATED from src/xtc/support-src/rt-checked.c by
+// tools/regen-runtimes.py (checked; the recipe: clang -S -O0 -fno-omit-frame-pointer
+// -fno-stack-protector -arch arm64, then LBB -> Lchk_BB and l_.str -> l_chk.str).
 //
 // Linked ONLY into a checked build (-fbounds-check), concatenated with
 // rt-macos.s into ONE assembly unit — so its clang-generated local labels MUST
@@ -34,6 +34,7 @@
 // The flags are load-bearing: -fno-omit-frame-pointer because the reporter
 // walks from its own frame; -O0 because at -O1 its helpers inline and the
 // frame-skip goes wrong.
+// regenerated with: Apple clang version 17.0.0 (clang-1700.3.19.1)
 	.section	__TEXT,__text,regular,pure_instructions
 	.build_version macos, 15, 0	sdk_version 26, 0
 	.globl	__xt_trap_bounds_n              ; -- Begin function _xt_trap_bounds_n

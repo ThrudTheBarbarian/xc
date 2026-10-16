@@ -22,8 +22,8 @@
 // FITNESS FOR A PARTICULAR PURPOSE.
 
 // rt-macos.s — the self-hosted arm64/macOS runtime (ARC/heap/weak + print + math
-// + threads). GENERATED from src/xtc/support-src/rt.c with
-//   clang -S -O1 -fno-stack-protector -fomit-frame-pointer -arch arm64
+// + threads). GENERATED from src/xtc/support-src/rt.c by tools/regen-runtimes.py
+// (macos; the recipe: clang -S -O1 -fno-stack-protector -fomit-frame-pointer -arch arm64)
 // then checked in. clang never touches a USER compile — this .s is assembled by
 // XAArm64Assembler like any other, so the toolchain stays self-hosted. Regenerate
 // from src/xtc/support-src/rt.c if the object layout / runtime contract changes.
@@ -32,6 +32,7 @@
 // atomic/tls primitives (from support/arm64/runtime/xt-threads.c, which the
 // clang-path libxt.c includes too). Object header = 40 bytes, magic 0x58544F42
 // at base, refcount u32 at obj-4, weak head at obj-12.
+// regenerated with: Apple clang version 17.0.0 (clang-1700.3.19.1)
 	.section	__TEXT,__text,regular,pure_instructions
 	.build_version macos, 15, 0	sdk_version 26, 0
 	.globl	__xtc_alloc                     ; -- Begin function _xtc_alloc

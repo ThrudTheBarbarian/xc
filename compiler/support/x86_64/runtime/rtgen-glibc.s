@@ -24,6 +24,7 @@
 # rtgen-glibc.s — GENERATED from src/xtc/support-src/rt-freestanding.c by the
 # glibc recipe at the top of that file (Apple clang version 17.0.0), for
 # `xcc -A x86_64 -dynamic`. No hand-applied pieces: regenerate and keep this header.
+// regenerated with: Apple clang version 17.0.0 (clang-1700.3.19.1)
 	.text
 	.intel_syntax noprefix
 	.file	"rt-freestanding.c"

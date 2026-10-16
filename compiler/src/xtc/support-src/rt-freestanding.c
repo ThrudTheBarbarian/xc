@@ -3,7 +3,9 @@
 // by hand, and the .s files are checked in; a user compile never runs clang.
 // Same arrangement as support/arm64/runtime/rt-macos.s, generated from rt.c.
 //
-// Regenerate BOTH after any edit:
+// Regenerate after any edit with `python3 tools/regen-runtimes.py` (linux,
+// glibc and win64; `--check` says whether the checked-in files still match).
+// The recipes it runs:
 //   clang -S -O1 -masm=intel -target x86_64-unknown-linux-gnu \
 //         -fno-stack-protector -fomit-frame-pointer \
 //         -fno-asynchronous-unwind-tables -fno-jump-tables \

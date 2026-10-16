@@ -29,6 +29,7 @@
 # the process-heap allocator (HeapAlloc/HeapFree, shared by a program and its
 # DLLs), _xtc_sinit_run, getpid. To change the win64 runtime, change the C and
 # regenerate; then put this header and the licence back on top.
+// regenerated with: Apple clang version 17.0.0 (clang-1700.3.19.1)
 	.text
 	.def	@feat.00;
 	.scl	3;

@@ -26,6 +26,7 @@
 # -DXT_SINIT_C_INCLUDED=1 -DXT_NO_WEAK_SEAM=1), plus two hand-applied pieces:
 #   * _xt_main_tls_pad — 240 reserved bytes below the main tcb (static TLS)
 #   * the _xtc_sinit_run tail, appended per the convention documented there
+// regenerated with: Apple clang version 17.0.0 (clang-1700.3.19.1)
 	.text
 	.intel_syntax noprefix
 	.file	"rt-freestanding.c"
