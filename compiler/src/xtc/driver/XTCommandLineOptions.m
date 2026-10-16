@@ -1492,9 +1492,12 @@ static NSString* sExecutablePath = nil;
     // A program built where a remote worker is named (XC_PAR_REMOTE in the
     // environment) carries every GPU kernel form, as -fpar-kernels=all: the
     // daemon across the room runs whatever its GPU takes, and the programs
-    // that never leave the box pay nothing.
+    // that never leave the box pay nothing. `none` names no remote (it is
+    // the opt-out from discovery), so it does not count: the gate exports
+    // it for every section, and gate 165 saw the two front ends disagree on
+    // a kernel string for that alone.
     const char* remote = getenv("XC_PAR_REMOTE");
-    if (!opts.parKernelsAll && remote && remote[0])
+    if (!opts.parKernelsAll && remote && remote[0] && strcmp(remote, "none") != 0)
         opts.parKernelsAll = YES;
 
     return opts;

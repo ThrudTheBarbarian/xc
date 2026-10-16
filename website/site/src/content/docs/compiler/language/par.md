@@ -607,7 +607,11 @@ subnet once, waits a moment, and takes every daemon that answered, of the
 pool `XC_PAR_POOL` names (daemons with no pool when it is unset) and of its
 own xcc version. `XC_PAR_REMOTE=none` keeps a program on its own machine,
 as does `XC_PAR=cpu`; `XC_PAR_REMOTE=mdns` says the default in so many
-words, and may be combined with addresses. `xcd -no-mdns` keeps a daemon
+words, and may be combined with addresses. A program carries the kernel
+form of its own target's GPU unless it was built with `-fpar-kernels=all`
+(or with `XC_PAR_REMOTE` naming a remote at build time, which means the
+same), so a daemon of another kind takes a block only from a program built
+that way; the daemon says so in its log. `xcd -no-mdns` keeps a daemon
 off the air; it is still reachable by address. One subnet only: multicast
 does not cross routers or VPNs.
 

@@ -5765,8 +5765,9 @@ DriverOptions* parseDriverArgs(void)
     u32 argc = Process.argumentCount();
     // A program built where a remote worker is named (XC_PAR_REMOTE in the
     // environment) carries every GPU kernel form, as -fpar-kernels=all (the
-    // reference explains).
-    if (Platform.env(String.withCString("XC_PAR_REMOTE")).byteLength() > (u32)0)
+    // reference explains). `none` names no remote.
+    String* remote = Platform.env(String.withCString("XC_PAR_REMOTE"));
+    if (remote.byteLength() > (u32)0 && !remote.equals(String.withCString("none")))
         d.fe().setParKernelsAll(true);
     u32 i = (u32)1;
     while (i < argc) {
