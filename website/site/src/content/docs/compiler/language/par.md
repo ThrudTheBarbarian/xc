@@ -590,6 +590,13 @@ by the time a tile names it is simply sent again. The report shows, per
 daemon, the bytes not sent, and the daemon's log what it served from the
 cache.
 
+A daemon checks its device memory before it takes work (from 0.8.1): a
+block whose arrays and tiles in flight would not fit the memory its GPU
+reports free is declined, and a tile that would not fit when it arrives
+goes back to the program's queue for another device. The program's report
+names the figures. A GPU that reports no free figure, as Vulkan devices do
+not, is not checked.
+
 A heartbeat measures the link when the program connects (its round trip, and
 its bandwidth from a one-megabyte ping) and then asks the daemon every second,
 while tiles are being handed out, whether it takes work now. The round trip

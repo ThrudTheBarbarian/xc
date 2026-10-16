@@ -796,6 +796,7 @@ class ParRemoteWorker : ParWorker
     Map* _view;
     u8* _src;
     bool _resend;           // the tile being taken again after a MISS: bytes regardless
+    bool _noRoom;           // the daemon refused a tile this run for want of device memory
     i64 _savedBytes;        // this run: bytes the view let us leave out
     i64 _savedSlices;
     i64 _sentSlices;
@@ -1040,6 +1041,26 @@ class ParRemoteWorker : ParWorker
             fail("lost the results link");
             return false;
             }
+        if (ParWire.getU8(f, "REFUSED", (u8)0) != (u8)0)
+            {
+            // The daemon's device memory is full: the tile goes back to the
+            // queue for another worker, and this one takes no more this run.
+            i64 index = ParWire.getI64(f, "INDEX", (i64)-1);
+            for (u32 i = (u32)0; i < _tiles.count(); i = i + (u32)1)
+                if (((ParTile*)_tiles.get(i)).index == index)
+                    {
+                    if (_lostTiles == (Array*)0)
+                        _lostTiles = new Array();
+                    _lostTiles.add(_tiles.get(i));
+                    _tiles.removeAt(i);
+                    _inFlight = _inFlight - (u32)1;
+                    break;
+                    }
+            if (!_noRoom && ParDevice.reporting())
+                Log.info("par: remote %s: tile %ld refused, the daemon's device memory is full; it goes elsewhere", _host.cString(), index);
+            _noRoom = true;
+            return true;
+            }
         if (ParWire.getU8(f, "MISS", (u8)0) != (u8)0)
             {
             // The daemon's cache had dropped a slice the view said it held:
@@ -1090,7 +1111,7 @@ class ParRemoteWorker : ParWorker
             ping((u8)0, (u32)0);
         if (_lastPing > _lastPong && now - _lastPing > (i64)5000000)
             return false;
-        return _available;
+        return _available && !_noRoom;
         }
     bool fail(u8* why)
         {
@@ -1196,6 +1217,7 @@ class ParRemoteWorker : ParWorker
         _kernelUs = (i64)0;
         _kernelItems = (i64)0;
         _src = src;
+        _noRoom = false;
         _savedBytes = (i64)0;
         _savedSlices = (i64)0;
         _sentSlices = (i64)0;
@@ -1265,7 +1287,13 @@ class ParRemoteWorker : ParWorker
         if (!ParWire.send(_s, "DATA", dd))
             return false;
         Data* a = ParWire.recv(_s, &tag[0], (i32)60000);
-        return a != (Data*)0 && ParWire.tagIs(&tag[0], "ANSWER") && ParWire.getU8(a, "TAKEN", (u8)0) == (u8)1;
+        if (a == (Data*)0 || !ParWire.tagIs(&tag[0], "ANSWER"))
+            return false;
+        u8 taken = ParWire.getU8(a, "TAKEN", (u8)0);
+        if (taken == (u8)3 && ParDevice.reporting())
+            Log.info("par: remote %s does not take %s: it needs %ld MB of device memory there, %ld MB are free",
+                     _host.cString(), proto.parName(), ParWire.getI64(a, "NEEDMB", (i64)0), ParWire.getI64(a, "FREEMB", (i64)0));
+        return taken == (u8)1;
         }
     void finish(void)
         {
@@ -2216,6 +2244,7 @@ class ParRemoteServe
             return;
             }
         i64 me = ParRemoteServe.newConnection();
+        i64 runTile = (i64)0;       // the run's tile size, from PREPARE
         i64 cacheHits = (i64)0;     // this run's slices found in the cache
         i64 cacheBytes = (i64)0;
         i64 recvBytes = (i64)0;     // and the bytes that had to come
@@ -2476,13 +2505,29 @@ class ParRemoteServe
                 // The GPUs for the run: waited for up to 50 s (the program
                 // waits 60 for the answer), else busy.
                 bool busyRun = !ParRemoteServe.takeGpus(me, (i32)50000);
+                bool noRoom = false;
+                i64 needMb = (i64)0;
+                i64 freeMb = (i64)0;
+                runTile = tile;
                 for (u32 i = (u32)0; i < workers.count() && w == (ParWorker*)0 && !busyRun; i = i + (u32)1)
                     {
                     ParWorker* cand = (ParWorker*)workers.get(i);
                     u8* sec = cand.section(chunk.gpuSource());
                     ParLayout* lc = sec != (u8*)0 ? ParDevice.layout((ParChunk*)chunk, sec, (i64)0, n) : (ParLayout*)0;
-                    if (lc != (ParLayout*)0 && cand.forBlock((ParChunk*)chunk, chunk.gpuSource(), lc)
-                        && cand.prepare((ParChunk*)chunk, chunk.gpuSource(), lc, tile))
+                    if (lc == (ParLayout*)0 || !cand.forBlock((ParChunk*)chunk, chunk.gpuSource(), lc))
+                        continue;
+                    i64 devNeed = ParRemoteServe.blockBytes(lc, tile, cand.depth());
+                    i64 freeB = (i64)0;
+                    if (!ParRemoteServe.fits(cand, devNeed, &freeB))
+                        {
+                        Log.info("xcd: %s: %s declines it: needs %ld MB of device memory, %ld MB free",
+                                 chunk.parName(), cand.identity().cString(), devNeed >> (i64)20, freeB >> (i64)20);
+                        noRoom = true;
+                        needMb = devNeed >> (i64)20;
+                        freeMb = freeB >> (i64)20;
+                        continue;
+                        }
+                    if (cand.prepare((ParChunk*)chunk, chunk.gpuSource(), lc, tile))
                         {
                         w = cand;
                         l = lc;
@@ -2491,7 +2536,13 @@ class ParRemoteServe
                 if (w == (ParWorker*)0)
                     ParRemoteServe.releaseGpus(me);
                 Data* a = new Data();
-                ParWire.fieldU8(a, "TAKEN", w != (ParWorker*)0 ? (u8)1 : busyRun ? (u8)2 : (u8)0);
+                // TAKEN 3: no worker has the device memory for it now.
+                ParWire.fieldU8(a, "TAKEN", w != (ParWorker*)0 ? (u8)1 : busyRun ? (u8)2 : noRoom ? (u8)3 : (u8)0);
+                if (noRoom && w == (ParWorker*)0)
+                    {
+                    ParWire.fieldI64(a, "NEEDMB", needMb);
+                    ParWire.fieldI64(a, "FREEMB", freeMb);
+                    }
                 ParWire.send(s, "ANSWER", a);
                 if (busyRun)
                     Log.info("xcd: %s: busy, another program has the GPUs", chunk.parName());
@@ -2531,7 +2582,22 @@ class ParRemoteServe
                     Log.info("xcd: a tile's slices do not fit its block; closing");
                     break;
                     }
-                if (missing)
+                // The load check per tile: what this tile brings, against the
+                // device memory free now (another program may have taken it
+                // since PREPARE). Refused, it goes back to the program's
+                // queue, as a lost tile does.
+                i64 tileFree = (i64)0;
+                i64 tileNeed = l != (ParLayout*)0 ? ParRemoteServe.blockBytes(l, t1.hi - t1.lo, (u32)1) - ParRemoteServe.blockBytes(l, (i64)0, (u32)0) : (i64)0;
+                if (!missing && tileNeed > (i64)0 && !ParRemoteServe.fits(w, tileNeed * (i64)((u32)pending.count() + inFlight + (u32)1), &tileFree))
+                    {
+                    Log.info("xcd: %s: tile %ld refused: %ld MB in flight would not fit %ld MB free",
+                             chunk.parName(), t1.index, (tileNeed * (i64)((u32)pending.count() + inFlight + (u32)1)) >> (i64)20, tileFree >> (i64)20);
+                    Data* m = new Data();
+                    ParWire.fieldI64(m, "INDEX", t1.index);
+                    ParWire.fieldU8(m, "REFUSED", (u8)1);
+                    session.push(m);
+                    }
+                else if (missing)
                     {
                     // A slice the program thought held was evicted: the tile
                     // goes back on the results link as a MISS, and comes
@@ -2577,6 +2643,49 @@ class ParRemoteServe
 
     // A finished tile for the program: its index, the written slices of
     // every footprinted array and global, and the partials.
+    // The device memory a block needs on worker w: its whole arrays and
+    // globals, resident for the run, and `depth` tiles' slices in flight.
+    static i64 blockBytes(ParLayout* l, i64 tile, u32 depth)
+        {
+        i64 whole = (i64)0;
+        i64 per = (i64)0;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            if (l.bufFp[i] == (i64)0) whole = whole + l.bufLen[i];
+            else per = per + l.bufElem[i];
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            if (l.globFp[i] == (i64)0) whole = whole + l.globLen[i];
+            else per = per + l.globElem[i];
+            }
+        return whole + (i64)depth * tile * per;
+        }
+    // The load check (owner 2026-10-16: VRAM only for now): need bytes
+    // against the worker's free device memory. A worker that reports no
+    // figure (0: Vulkan has no portable free count) is not refused.
+    static bool fits(ParWorker* w, i64 need, i64* freeOut)
+        {
+        u64 total = (u64)0;
+        u64 free = (u64)0;
+        w.memory(&total, &free);
+        // XCD_VRAM_FREE_MB: the free figure to check against, for the tests
+        // (no machine here has a card small enough to refuse a fixture).
+        String* fake = Platform.env(String.withCString("XCD_VRAM_FREE_MB"));
+        if (fake.byteLength() > (u32)0)
+            {
+            u64 mb = (u64)0;
+            for (u32 k = (u32)0; k < fake.byteLength(); k = k + (u32)1)
+                if (fake.byteAt(k) >= (u8)'0' && fake.byteAt(k) <= (u8)'9')
+                    mb = mb * (u64)10 + (u64)(fake.byteAt(k) - (u8)'0');
+            free = mb << (u64)20;
+            if (free == (u64)0) free = (u64)1;
+            }
+        *freeOut = (i64)free;
+        if (free == (u64)0 || Platform.env(String.withCString("XCD_VRAM_IGNORE")).byteLength() > (u32)0)
+            return true;
+        return need <= (i64)free;
+        }
     // One slice of a TILE frame: offset, length, hash, then a flag and the
     // bytes when the program sent them (kept in the cache), else the cache's
     // copy at that hash — or, evicted, *missing.

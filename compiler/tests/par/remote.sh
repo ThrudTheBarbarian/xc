@@ -156,6 +156,23 @@ fi
 kill $XCD6 $XCD7 2> /dev/null
 wait $XCD6 2> /dev/null
 wait $XCD7 2> /dev/null
+# The load check: a daemon told it has 1 MB of device memory free declines
+# the block with the figures, stays up, and the answer is the local run's.
+PORT8=$((PORT + 7))
+XCD_HOME="$L/home1" XCD_VRAM_FREE_MB=1 XC_PAR_REPORT=1 "$L/xcd" -port $PORT8 -no-mdns > "$L/xcd8.log" 2>&1 &
+XCD8=$!
+sleep 1
+mkdir -p "$L/st_vram"
+XCC_SETTINGS_DIR="$L/st_vram" XC_PAR_REMOTE=127.0.0.1:$PORT8 XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/vram.out" 2>&1
+sleep 1
+if grep -v '^par:' "$L/vram.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null \
+   && grep -q 'needs .* MB of device memory there' "$L/vram.out" && kill -0 $XCD8 2> /dev/null; then
+    echo "PASS remote vram check"
+else
+    echo "FAIL remote vram check"; grep 'device memory' "$L/vram.out" "$L/xcd8.log" | head -3; kill -0 $XCD8 2> /dev/null || echo "    the daemon died"; rc=1
+fi
+kill $XCD8 2> /dev/null
+wait $XCD8 2> /dev/null
 [ $rc = 0 ] && rm -rf "$L"
 echo "--- remote: $([ $rc = 0 ] && echo pass || echo FAIL) ---"
 exit $rc
