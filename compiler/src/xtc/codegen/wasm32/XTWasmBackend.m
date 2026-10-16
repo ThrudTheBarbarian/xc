@@ -119,6 +119,8 @@ static BOOL sLinkLibs = NO;
 
 + (NSUInteger)wasmAggSize:(XTIRLayout *)layout {
     if (!layout) return 0;
+    if (layout.isArray)
+        return MAX((NSUInteger)layout.elementCount * [self wasmFieldWidth:layout.elementType], (NSUInteger)layout.size);
     NSUInteger total = layout.size;
     for (XTIRLayoutField *f in layout.fields) {
         NSUInteger end = f.byteOffset + [self wasmFieldWidth:f.type];

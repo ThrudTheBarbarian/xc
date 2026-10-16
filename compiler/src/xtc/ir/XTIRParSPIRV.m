@@ -2039,7 +2039,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         {
         XTIRSymbol* g = [self.module symbolForName:self.globals[gi]];
         XTIRType* gt = g.globalType;
-        XTIRType* et = gt.kind == XTIRTypeKindAgg ? gt.layout.fields.firstObject.type : gt;
+        XTIRType* et = gt.kind == XTIRTypeKindAgg ? [gt.layout fieldTypeAt:0] : gt;
         uint32_t t = [self spvType:et];
         if (!t)
             {

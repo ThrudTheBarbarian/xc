@@ -454,7 +454,7 @@ class IrParser
         giveUpAt("unknown module item");
         }
 
-    // `layout N: size=S align=A [fields=[(off:TYPE), …]]`
+    // `layout N: size=S align=A [fields=[(off:TYPE), …] | array=(TYPE x N)]`
     void layout(void)
         {
         number();
@@ -466,7 +466,17 @@ class IrParser
         expectChar((u8)'=');
         u32 align = (u32)number();
         IRLayout* L = IRLayout.with(size, align);
-        if (expectWord("fields"))
+        if (expectWord("array"))
+            {
+            expectChar((u8)'=');
+            expectChar((u8)'(');
+            String* ty = typeSpelling();
+            expectWord("x");
+            u32 n = (u32)number();
+            expectChar((u8)')');
+            L = IRLayout.array(ty == 0 ? String.withCString("Void") : ty, n, n > (u32)0 ? size / n : (u32)0, align);
+            }
+        else if (expectWord("fields"))
             {
             expectChar((u8)'=');
             expectChar((u8)'[');

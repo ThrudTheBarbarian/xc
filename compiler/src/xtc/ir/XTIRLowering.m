@@ -1068,16 +1068,11 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     if (cached)
         return cached;
 
-    NSMutableArray<XTIRLayoutField*>* fields = [NSMutableArray array];
-    for (NSUInteger i = 0; i < at.elementCount; i++)
-        {
-        [fields addObject:[[XTIRLayoutField alloc]
-                              initWithOffset:(uint32_t)(i * elemW)
-                                        type:elemIR]];
-        }
-    XTIRLayout* L = [[XTIRLayout alloc] initWithSize:(uint32_t)(elemW * at.elementCount)
-                                           alignment:1
-                                              fields:fields];
+    // The array form: one element type and a count, no field objects.
+    XTIRLayout* L = [[XTIRLayout alloc] initArrayOf:elemIR
+                                              count:(uint32_t)at.elementCount
+                                             stride:elemW
+                                          alignment:1];
     [self.module addLayout:L];
     self.structLayouts[key] = L;
     return L;

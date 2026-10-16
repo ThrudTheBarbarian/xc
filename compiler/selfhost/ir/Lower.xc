@@ -1395,11 +1395,12 @@ class ClassInfo
         Array* offs = new Array();
         Array* tys = new Array();
         u32 size = (u32)0;
+        IRLayout* arrayL = (IRLayout*)0;
         if (isArrayLike(spelling))
             {
-            // Every element is a field, packed at `i * elementWidth`. This is
-            // the array's STORAGE; a subscript decays to a pointer and strides
-            // by the element, so it never reads the per-field info.
+            // The array form: the element and the count, each element at
+            // `i * elementWidth`. This is the array's STORAGE; a subscript
+            // decays to a pointer and strides by the element.
             String* elem = elementOf(spelling);
             u32 n = arrayCount(spelling);
             // An array of AUTO-ZEROING elements is an array of SLOTS: each
@@ -1408,11 +1409,7 @@ class ClassInfo
             bool weakElem = isWeakSlot(elem);
             String* eIr = weakElem ? preElem : irType(elem);
             u32 w = weakElem ? layoutSizeOf(eIr) : sizeOf(elem);
-            for (u32 i = (u32)0; i < n; i = i + (u32)1)
-                {
-                offs.add((Object*)Number.with(i * w));
-                tys.add((Object*)eIr);
-                }
+            arrayL = IRLayout.array(eIr, n, w, (u32)1);
             size = w * n;
             }
         else
@@ -1471,9 +1468,10 @@ class ClassInfo
         if (_failed)
             return (u32)0;
 
-        IRLayout* L = IRLayout.with(size, (u32)1);
-        for (u32 i = (u32)0; i < offs.count(); i = i + (u32)1)
-            L.addField(((Number*)offs.get(i)).asU32(), (String*)tys.get(i));
+        IRLayout* L = arrayL != (IRLayout*)0 ? arrayL : IRLayout.with(size, (u32)1);
+        if (arrayL == (IRLayout*)0)
+            for (u32 i = (u32)0; i < offs.count(); i = i + (u32)1)
+                L.addField(((Number*)offs.get(i)).asU32(), (String*)tys.get(i));
         u32 id = _m.addLayout(L);
         _layoutIds.set((Hashable*)spelling, (Object*)Number.with(id));
         _layoutPending.remove((Hashable*)spelling);
@@ -1509,7 +1507,9 @@ class ClassInfo
         for (u32 i = (u32)0; i < ls.count(); i = i + (u32)1)
             {
             IRLayout* L = (IRLayout*)ls.get(i);
-            for (u32 k = (u32)0; k < L.fieldCount(); k = k + (u32)1)
+            // An array has one element type: patched once, not once per element.
+            u32 nk = L.isArray() ? (L.fieldCount() > (u32)0 ? (u32)1 : (u32)0) : L.fieldCount();
+            for (u32 k = (u32)0; k < nk; k = k + (u32)1)
                 {
                 String* t = L.typeAt(k);
                 if (t == 0)
@@ -21668,6 +21668,17 @@ class ClassInfo
     // exact or a pass fails.
     IRModule* parKernelModule()
         {
+        // Nothing to render without a block: the round trip prints and
+        // reparses the whole module, and a program with a 64M-element global
+        // took two minutes and 23 GB in it for no kernel at all.
+        bool any = false;
+        for (u32 i = (u32)0; i < _m.funcs().count() && !any; i = i + (u32)1)
+            {
+            IRFunc* f = (IRFunc*)_m.funcs().get(i);
+            if (f.name().hasPrefix(String.withCString("ParImpl$")) && f.name().hasSuffix(String.withCString("$run")))
+                any = true;
+            }
+        if (!any) return (IRModule*)0;
         String* printed = _m.text();
         IRModule* copy = IrParser.parseText(printed, new IrParser());
         if (copy == (IRModule*)0 || !copy.text().equals(printed)) return (IRModule*)0;

@@ -391,6 +391,8 @@ static NSInteger sWin64SretOff = 0;
     {
     if (!layout)
         return 0;
+    if (layout.isArray)
+        return MAX((NSUInteger)layout.elementCount * [self fieldWidth:layout.elementType], (NSUInteger)layout.size);
     NSUInteger total = 0;
     for (XTIRLayoutField* f in layout.fields)
         total += [self fieldWidth:f.type];

@@ -1558,7 +1558,7 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
         {
         XTIRSymbol* g = [self.module symbolForName:self.globals[gi]];
         XTIRType* gt = g.globalType;
-        XTIRType* et = gt.kind == XTIRTypeKindAgg ? gt.layout.fields.firstObject.type : gt;
+        XTIRType* et = gt.kind == XTIRTypeKindAgg ? [gt.layout fieldTypeAt:0] : gt;
         NSString* n = declare([NSString stringWithFormat:@"g%lu", (unsigned long)gi], et);
         if (!n)
             {

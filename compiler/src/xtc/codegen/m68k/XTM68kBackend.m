@@ -1687,6 +1687,8 @@ static NSString* m68kSym(NSString* name)
     }
 + (NSUInteger)m68kAggSize:(XTIRLayout*)lay
     {
+    if (lay.isArray)
+        return MAX((NSUInteger)lay.elementCount * [self m68kFieldWidth:lay.elementType], (NSUInteger)lay.size) ?: 1;
     NSUInteger s = 0;
     for (XTIRLayoutField* f in lay.fields)
         s += [self m68kFieldWidth:f.type];

@@ -3149,7 +3149,11 @@ class Arm64
         if (l == (IRLayout*)0) return src;
         // The full layout footprint, tail pad included.
         u32 total = l.size();
-        for (u32 i = (u32)0; i < l.fieldCount(); i = i + (u32)1) {
+        if (l.isArray()) {
+            u32 a = l.elemCount() * fieldWidth(l.elemType());
+            if (a > total) total = a;
+        }
+        for (u32 i = (u32)0; !l.isArray() && i < l.fieldCount(); i = i + (u32)1) {
             u32 fend = l.offsetAt(i) + fieldWidth(l.typeAt(i));
             if (fend > total) total = fend;
         }
@@ -4319,6 +4323,7 @@ class Arm64
     u32 aggHFA(IRLayout* l, bool* outIsDouble)
     {
         if (l == (IRLayout*)0 || l.fieldCount() == (u32)0) return (u32)0;
+        if (l.isArray() && l.fieldCount() > (u32)4) return (u32)0;   // more than four leaves is never an HFA
         String* ek = (String*)0;
         u32 count = (u32)0;
         for (u32 i = (u32)0; i < l.fieldCount(); i = i + (u32)1) {
@@ -5633,6 +5638,10 @@ class Arm64
     u32 aggSize(IRLayout* l)
     {
         if (l == (IRLayout*)0) return (u32)0;
+        if (l.isArray()) {
+            u32 a = l.elemCount() * fieldWidth(l.elemType());
+            return a < l.size() ? l.size() : a;
+        }
         u32 total = (u32)0;
         for (u32 i = (u32)0; i < l.fieldCount(); i = i + (u32)1)
             total = total + fieldWidth(l.typeAt(i));

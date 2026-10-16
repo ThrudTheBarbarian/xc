@@ -169,6 +169,12 @@ class M68k
         {
         if (l == (IRLayout*)0)
             return (u32)1;
+        if (l.isArray())
+            {
+            u32 a = l.elemCount() * fieldWidth(l.elemType());
+            if (a < l.size()) a = l.size();
+            return a == (u32)0 ? (u32)1 : a;
+            }
         u32 s = (u32)0;
         for (u32 i = (u32)0; i < l.fieldCount(); i = i + (u32)1)
             s = s + fieldWidth(l.typeAt(i));
@@ -4636,7 +4642,12 @@ class M68k
         // the source (blewit #5), and the extent is the full layout footprint
         // — tail pad included, matching the reference's relay.
         u32 total = l.size();
-        for (u32 i = (u32)0; i < l.fieldCount(); i = i + (u32)1)
+        if (l.isArray())
+            {
+            u32 a = l.elemCount() * fieldWidth(l.elemType());
+            if (a > total) total = a;
+            }
+        for (u32 i = (u32)0; !l.isArray() && i < l.fieldCount(); i = i + (u32)1)
             {
             u32 fend = l.offsetAt(i) + fieldWidth(l.typeAt(i));
             if (fend > total)

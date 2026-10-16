@@ -2402,6 +2402,8 @@ static BOOL arm64LogicalImm(uint64_t v, int width) {
 // (FieldAddr offsets, struct-global data emission, MemCopy).
 + (NSUInteger)arm64AggSize:(XTIRLayout *)layout {
     if (!layout) return 0;
+    if (layout.isArray)
+        return MAX((NSUInteger)layout.elementCount * [self arm64FieldWidth:layout.elementType], (NSUInteger)layout.size);
     NSUInteger total = 0;
     for (XTIRLayoutField *f in layout.fields) {
         total += [self arm64FieldWidth:f.type];

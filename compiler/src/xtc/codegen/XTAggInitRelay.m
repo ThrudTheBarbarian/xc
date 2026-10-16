@@ -12,6 +12,9 @@
     {
     if (t.kind == XTIRTypeKindAgg && t.layout)
         {
+        if (t.layout.isArray)
+            return MAX((NSUInteger)t.layout.elementCount * [self backendSizeOf:t.layout.elementType widthOfLeaf:widthOfLeaf],
+                       (NSUInteger)t.layout.size);
         NSUInteger total = 0;
         for (XTIRLayoutField* f in t.layout.fields)
             total += [self backendSizeOf:f.type widthOfLeaf:widthOfLeaf];
@@ -117,12 +120,15 @@
     // while including it for NESTED aggregates; with recorded offsets the
     // layout.size is authoritative for both).
     NSUInteger total = layout.size;
-    for (XTIRLayoutField* f in layout.fields)
-        {
-        NSUInteger end = f.byteOffset + [self backendSizeOf:f.type widthOfLeaf:widthOfLeaf];
-        if (end > total)
-            total = end;
-        }
+    if (layout.isArray)
+        total = MAX(total, (NSUInteger)layout.elementCount * [self backendSizeOf:layout.elementType widthOfLeaf:widthOfLeaf]);
+    else
+        for (XTIRLayoutField* f in layout.fields)
+            {
+            NSUInteger end = f.byteOffset + [self backendSizeOf:f.type widthOfLeaf:widthOfLeaf];
+            if (end > total)
+                total = end;
+            }
     if (total == 0)
         return src;
 

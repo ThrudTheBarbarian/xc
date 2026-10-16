@@ -178,7 +178,9 @@ class Arm9
             return (u32)0;
         IRLayout* L = (IRLayout*)_m.layouts().get(layoutIndex);
         u32 total = (u32)0;
-        for (u32 i = (u32)0; i < L.fieldCount(); i = i + (u32)1)
+        if (L.isArray())
+            total = L.elemCount() * fieldWidth(L.elemType());
+        for (u32 i = (u32)0; !L.isArray() && i < L.fieldCount(); i = i + (u32)1)
             total = total + fieldWidth(L.typeAt(i));
         if (total < L.size())
             total = L.size();

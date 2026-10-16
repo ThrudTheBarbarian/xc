@@ -131,7 +131,7 @@ static NSArray<XTIRInsn*>* allInsns(XTIRFunction* fn)
               userOf:(NSDictionary<NSNumber*, NSArray<XTIRInsn*>*>*)userOf
     {
     XTIRType* ty = pl.type;
-    if (!ty || ty.kind != XTIRTypeKindAgg || !ty.layout || ty.layout.fields.count == 0)
+    if (!ty || ty.kind != XTIRTypeKindAgg || !ty.layout || ty.layout.fieldCount == 0)
         return;
     XTIRLayout* lay = ty.layout;
 

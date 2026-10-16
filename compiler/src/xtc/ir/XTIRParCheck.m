@@ -134,6 +134,18 @@ static BOOL gEmitsWGSL = NO;
 \****************************************************************************/
 + (nullable XTIRModule*)kernelModuleFrom:(XTIRModule*)module
     {
+    // Nothing to render without a block: the round trip prints and reparses
+    // the whole module, and a program with a 64M-element global took two
+    // minutes and 23 GB in it for no kernel at all.
+    BOOL any = NO;
+    for (XTIRFunction* f in module.functions)
+        if ([f.name hasPrefix:@"ParImpl$"] && [f.name hasSuffix:@"$run"])
+            {
+            any = YES;
+            break;
+            }
+    if (!any)
+        return nil;
     NSString* printed = [XTIRPrinter stringFromModule:module];
     XTIRModule* copy = [XTIRParser moduleFromString:printed sharingLayoutsOf:module error:NULL];
     if (!copy || ![[XTIRPrinter stringFromModule:copy] isEqualToString:printed])

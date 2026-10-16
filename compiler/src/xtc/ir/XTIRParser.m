@@ -1505,7 +1505,7 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
         return YES;
         }
 
-    // layout N: size=<S> align=<A> [fields=[(off:T), ...]]
+    // layout N: size=<S> align=<A> [fields=[(off:T), ...] | array=(T x N)]
     // Emitted by the printer before any function so layoutTable[N] is
     // populated by the time Agg(N) appears in an instruction or frame
     // declaration. Tolerant of slight token shapes so it survives
@@ -1522,9 +1522,35 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
         uint32_t size = 0;
         uint8_t align = 1;
         NSMutableArray<XTIRLayoutField*>* fields = [NSMutableArray array];
+        XTIRType* arrayElem = nil;
+        uint32_t arrayCount = 0;
+        BOOL isArray = NO;
         while (pos < tokens.count)
             {
             XTIRTok* t = [self tok:tokens at:pos];
+            if (t.kind == XTIRTokWord && [t.text isEqualToString:@"array"])
+                {
+                // `array=(TYPE x N)`
+                pos++;
+                if ([self tok:tokens at:pos].kind == XTIRTokEquals)
+                    pos++;
+                if ([self tok:tokens at:pos].kind == XTIRTokLParen)
+                    pos++;
+                arrayElem = [self parseTypeAt:&pos tokens:tokens state:state];
+                XTIRTok* xt = [self tok:tokens at:pos];
+                if (xt.kind == XTIRTokWord && [xt.text isEqualToString:@"x"])
+                    pos++;
+                XTIRTok* nt = [self tok:tokens at:pos];
+                if (nt.kind == XTIRTokNumInt)
+                    {
+                    arrayCount = (uint32_t)nt.intValue;
+                    pos++;
+                    }
+                if ([self tok:tokens at:pos].kind == XTIRTokRParen)
+                    pos++;
+                isArray = arrayElem != nil;
+                continue;
+                }
             if (t.kind == XTIRTokWord && [t.text isEqualToString:@"size"])
                 {
                 pos++;
@@ -1619,15 +1645,20 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
         XTIRLayout* slot = (idx < state.module.layoutTable.count)
                                ? state.module.layoutTable[idx]
                                : nil;
-        if (slot && slot.fields.count == 0 && slot.size == 0)
+        if (slot && !isArray && slot.fieldCount == 0 && slot.size == 0)
             {
             [slot fillWithSize:size fields:fields];
             }
         else
             {
-            XTIRLayout* layout = [[XTIRLayout alloc] initWithSize:size
-                                                        alignment:align
-                                                           fields:fields];
+            XTIRLayout* layout = isArray
+                ? [[XTIRLayout alloc] initArrayOf:arrayElem
+                                            count:arrayCount
+                                           stride:(arrayCount > 0 ? size / arrayCount : 0)
+                                        alignment:align]
+                : [[XTIRLayout alloc] initWithSize:size
+                                         alignment:align
+                                            fields:fields];
             // A shared table already holds this layout's object; keep it, so
             // types in the parsed module are the original module's types.
             if (!state.sharedLayouts || idx >= state.sharedLayouts.count)

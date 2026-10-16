@@ -1,5 +1,5 @@
 module "byte-list-aggregate" {
-  layout 0: size=3 align=1 fields=[(0:U8), (1:U8), (2:U8)]
+  layout 0: size=3 align=1 array=(U8 x 3)
   layout 1: size=4 align=1 fields=[(0:U16), (2:U16)]
   symbol run: function () -> U16
     attributes: { banked: false, cabi: false, cloaked: false, variadic: false }

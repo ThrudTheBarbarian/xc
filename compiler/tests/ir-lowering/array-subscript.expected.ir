@@ -1,5 +1,5 @@
 module "array-subscript" {
-  layout 0: size=4 align=1 fields=[(0:U8), (1:U8), (2:U8), (3:U8)]
+  layout 0: size=4 align=1 array=(U8 x 4)
   symbol sa: function () -> U8
     attributes: { banked: false, cabi: false, cloaked: false, variadic: false }
   function sa(%0: Mem) -> (U8, Mem) {

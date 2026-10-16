@@ -1891,12 +1891,21 @@ class IRValue
     }
 
     // An aggregate's layout, referred to from a type as `Agg(N)`.
+    // An aggregate's layout: a struct's fields at their offsets, or an ARRAY
+    // (`u32 xs[N]`): N elements of one type, each at i * width, kept as the
+    // element and the count alone. The field accessors answer for both, so a
+    // reader never sees the difference; a 64M-element global used to be 64M
+    // field entries, a two-minute, 23 GB compile.
     class IRLayout
     {
     u32 _size;
     u32 _align;
-    Array* _offs;  // Number@ byte offsets
-    Array* _types; // String@ field type spellings
+    Array* _offs;  // Number@ byte offsets (struct form)
+    Array* _types; // String@ field type spellings (struct form)
+    bool _isArray;
+    String* _elemType;
+    u32 _elemCount;
+    u32 _elemWidth;
 
     void init(void)
         {
@@ -1913,6 +1922,17 @@ class IRValue
         l._align = align;
         return l;
         }
+    static IRLayout* array(String* elemType, u32 count, u32 width, u32 align)
+        {
+        IRLayout* l = new IRLayout();
+        l._size = width * count;
+        l._align = align;
+        l._isArray = true;
+        l._elemType = elemType;
+        l._elemCount = count;
+        l._elemWidth = width;
+        return l;
+        }
 
     void addField(u32 off, String* ty)
         {
@@ -1924,16 +1944,32 @@ class IRValue
         {
         return _size;
         }
+    bool isArray(void)
+        {
+        return _isArray;
+        }
+    String* elemType(void)
+        {
+        return _elemType;
+        }
+    u32 elemCount(void)
+        {
+        return _elemCount;
+        }
     u32 fieldCount(void)
         {
-        return _offs.count();
+        return _isArray ? _elemCount : _offs.count();
         }
     String* typeAt(u32 i)
         {
+        if (_isArray)
+            return i < _elemCount ? _elemType : (String*)0;
         return i < _types.count() ? (String*)_types.get(i) : (String*)0;
         }
     u32 offsetAt(u32 i)
         {
+        if (_isArray)
+            return i * _elemWidth;
         return i < _offs.count() ? ((Number*)_offs.get(i)).asU32() : (u32)0;
         }
     void setSize(u32 v)
@@ -1945,6 +1981,12 @@ class IRValue
     // patches it once that index exists.
     void setTypeAt(u32 i, String* ty)
         {
+        if (_isArray)
+            {
+            if (i < _elemCount)
+                _elemType = ty;
+            return;
+            }
         if (i < _types.count())
             _types.set(i, (Object*)ty);
         }
@@ -1953,7 +1995,12 @@ class IRValue
         {
         String* out = String.withCString("  layout ");
         out.appendFormat("%ld: size=%ld align=%ld", (i32)index, (i32)_size, (i32)_align);
-        if (_offs.count() > (u32)0)
+        if (_isArray)
+            {
+            // `array=(TYPE x N)`: the width is size / N.
+            out.appendFormat(" array=(%s x %ld)", _elemType.cString(), (i32)_elemCount);
+            }
+        else if (_offs.count() > (u32)0)
             {
             out.appendCString(" fields=[");
             for (u32 i = (u32)0; i < _offs.count(); i = i + (u32)1)

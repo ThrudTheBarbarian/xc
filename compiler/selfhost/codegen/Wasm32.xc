@@ -331,6 +331,10 @@ class Wasm32
     {
         if (lay == (IRLayout*)0) return (u32)0;
         u32 total = lay.size();
+        if (lay.isArray()) {
+            u32 a = lay.elemCount() * fieldWidth(lay.elemType());
+            return a > total ? a : total;
+        }
         for (u32 i = (u32)0; i < lay.fieldCount(); i = i + (u32)1) {
             u32 end = lay.offsetAt(i) + fieldWidth(lay.typeAt(i));
             if (end > total) total = end;

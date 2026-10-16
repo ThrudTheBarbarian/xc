@@ -248,7 +248,7 @@ static void replaceUses(XTIRFunction* fn, XTIRValueId from, XTIROperand* to)
         if (si == NSNotFound || si <= i)
             continue;
         XTIRLayout* lay = ld.result.type.layout;
-        if (!lay || lay.fields.count == 0 || lay.fields.count > kMaxFields)
+        if (!lay || lay.fieldCount == 0 || lay.fieldCount > kMaxFields)
             continue;
         // A field address needs a pointer to the aggregate itself. A copy into
         // a byte buffer (the variadic pack) stores through a U8 pointer, where

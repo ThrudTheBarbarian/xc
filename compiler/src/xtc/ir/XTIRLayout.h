@@ -15,11 +15,31 @@ NS_ASSUME_NONNULL_BEGIN
 @interface XTIRLayout : NSObject <NSCopying>
 @property(nonatomic, readonly) uint32_t size;
 @property(nonatomic, readonly) uint8_t alignment;
+
+/****************************************************************************\
+|* The fields. An ARRAY layout (`u32 xs[N]`: N elements of one type, each at
+|* i * stride) keeps no field objects: it answers fieldCount, fieldTypeAt:
+|* and fieldOffsetAt: from its element and count, and `fields` is built on
+|* demand for the consumers that walk a list. A 64M-element global used to
+|* be 64M field objects — a two-minute, 23 GB compile — so a reader that
+|* needs a count, a type or an offset takes the accessors and never builds it.
+\****************************************************************************/
 @property(nonatomic, readonly) NSArray<XTIRLayoutField*>* fields;
+@property(nonatomic, readonly) BOOL isArray;
+@property(nonatomic, readonly, nullable) XTIRType* elementType;  // array form only
+@property(nonatomic, readonly) uint32_t elementCount;            // array form only
+@property(nonatomic, readonly) uint32_t elementStride;           // array form only
+@property(nonatomic, readonly) NSUInteger fieldCount;
+- (nullable XTIRType*)fieldTypeAt:(NSUInteger)idx;
+- (uint32_t)fieldOffsetAt:(NSUInteger)idx;
 
 - (instancetype)initWithSize:(uint32_t)size
                    alignment:(uint8_t)alignment
                       fields:(NSArray<XTIRLayoutField*>*)fields;
+- (instancetype)initArrayOf:(XTIRType*)elementType
+                      count:(uint32_t)count
+                     stride:(uint32_t)stride
+                  alignment:(uint8_t)alignment;
 
 /****************************************************************************\
 |* Fill in a layout's size and fields after construction. Used ONLY to break

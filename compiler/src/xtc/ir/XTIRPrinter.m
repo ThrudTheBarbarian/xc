@@ -969,7 +969,7 @@ static NSString* dbgSuffix(XTIRInsn* insn)
 
 // Emit each layout in the module's layoutTable as
 //   layout N: size=<size> align=<align> fields=[(off:<type>), ...]
-// One per line. Empty fields list is allowed (anonymous byte-block
+// or, for an array, `array=(<type> x <count>)`. One per line. Empty fields list is allowed (anonymous byte-block
 // aggregates such as `u8 vals[6]` have size 6, alignment 1, no fields).
 // The parser reads these in order so layoutTable[N] matches the index
 // the rest of the IR uses in `Agg(N)`.
@@ -982,7 +982,13 @@ static NSString* dbgSuffix(XTIRInsn* insn)
         XTIRLayout* layout = mod.layoutTable[i];
         [out appendFormat:@"  layout %lu: size=%u align=%u",
                           (unsigned long)i, (unsigned)layout.size, (unsigned)layout.alignment];
-        if (layout.fields.count > 0)
+        if (layout.isArray)
+            {
+            // `array=(TYPE x N)`: the stride is size / N.
+            [out appendFormat:@" array=(%@ x %u)",
+                              [self stringFromType:layout.elementType module:mod], (unsigned)layout.elementCount];
+            }
+        else if (layout.fields.count > 0)
             {
             [out appendString:@" fields=["];
             BOOL first = YES;
