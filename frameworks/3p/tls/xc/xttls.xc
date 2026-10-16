@@ -27,6 +27,26 @@ pointer xt_tls_wrap_client(pointer client, i32 fd, u8* hostname);
 i32     xt_tls_handshake(pointer conn);                     // 0 done / 1 want-read / 2 want-write / -1 err
 i32     xt_tls_recv(pointer conn, u8* buf, i32 len);        // >0 / 0 close / -1 err / -2 wr / -3 ww
 i32     xt_tls_send(pointer conn, u8* buf, i32 len);        // >0 / -1 err / -2 wr / -3 ww
+i32     xt_tls_make_self_signed(u8* certPath, u8* keyPath, u8* cn);  // 0 ok
+i32     xt_tls_peer_fingerprint(pointer conn, u8* out32);              // 0 ok / -1 none
+i32     xt_tls_pending(pointer conn);                                  // decrypted bytes waiting
+
+// ── C-ABI entry points for a lazy loader (ABI 1.0.2) ───────────────────────
+// A program that may or may not need TLS — every par program, for the worker
+// daemon across the room — loads this library at run time (dlopen /
+// LoadLibrary) and resolves these by name, so it links nothing and needs the
+// library only when it talks to a daemon. Plain functions, never removed or
+// renamed; new ones are appended with a patch bump.
+i32 xctls_make_self_signed(u8* certPath, u8* keyPath, u8* cn) { return xt_tls_make_self_signed(certPath, keyPath, cn); }
+pointer xctls_server(u8* certPath, u8* keyPath) { return xt_tls_server_new(certPath, keyPath); }
+pointer xctls_client_pinning(void) { return xt_tls_client_new((u8*)0); }   // verifies no chain: the caller pins the fingerprint
+pointer xctls_accept(pointer server, i32 fd) { return xt_tls_accept(server, fd); }
+pointer xctls_connect(pointer client, i32 fd, u8* hostname) { return xt_tls_connect(client, fd, hostname); }
+i32 xctls_fingerprint(pointer conn, u8* out32) { return xt_tls_peer_fingerprint(conn, out32); }
+i32 xctls_pending(pointer conn) { return xt_tls_pending(conn); }
+i32 xctls_read(pointer conn, u8* buf, i32 len) { return xt_tls_read(conn, buf, len); }
+i32 xctls_write(pointer conn, u8* buf, i32 len) { return xt_tls_write(conn, buf, len); }
+void xctls_close(pointer conn) { xt_tls_close(conn); }
 
 // A live TLS connection (server- or client-side). Wraps an fd whose handshake
 // has already completed; read/write move plaintext, the module does the crypto.

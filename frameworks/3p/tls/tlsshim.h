@@ -36,6 +36,11 @@ int   xt_tls_send(void *conn, const unsigned char *buf, int len);
 int   xt_tls_read(void *conn, unsigned char *buf, int len);   // fill (loops)
 int   xt_tls_write(void *conn, const unsigned char *buf, int len);  // all
 void  xt_tls_close(void *conn);
+// xcd: a self-signed certificate + key as PEM files (0 ok); the peer's
+// certificate's SHA-256 (32 bytes; -1 none); decrypted bytes waiting inside.
+int   xt_tls_make_self_signed(const char *cert_path, const char *key_path, const char *cn);
+int   xt_tls_peer_fingerprint(void *conn, unsigned char *out32);
+int   xt_tls_pending(void *conn);
 
 #ifdef __cplusplus
 }

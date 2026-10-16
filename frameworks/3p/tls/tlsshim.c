@@ -13,6 +13,7 @@
 #include <mbedtls/net_sockets.h>
 #include <psa/crypto.h>
 #include <stdlib.h>
+#include <string.h>
 #ifdef _WIN32
 #include <windows.h>
 #include <wincrypt.h>
@@ -229,6 +230,87 @@ int xt_tls_write(void *conn, const unsigned char *buf, int len) {
         off += r;
     }
     return off;
+}
+// ---- the par worker daemon (xcd): its own certificate, and a client that
+// pins the peer's fingerprint rather than verifying a chain ----
+#include <mbedtls/x509_crt.h>
+#include <stdio.h>
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
+static int write_whole(const char *path, const unsigned char *buf, size_t n, int private) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    int ok = fwrite(buf, 1, n, f) == n;
+    fclose(f);
+#ifndef _WIN32
+    if (private) chmod(path, 0600);
+#else
+    (void)private;
+#endif
+    return ok ? 0 : -1;
+}
+// A self-signed certificate (EC P-256, SHA-256, twenty years) and its key,
+// written as PEM to the two paths; the key file is private to the user.
+// 0 on success.
+int xt_tls_make_self_signed(const char *cert_path, const char *key_path, const char *cn) {
+    if (ensure_psa()) return -1;
+    psa_key_attributes_t attr = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&attr, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
+    psa_set_key_bits(&attr, 256);
+    psa_set_key_usage_flags(&attr, PSA_KEY_USAGE_SIGN_HASH | PSA_KEY_USAGE_SIGN_MESSAGE | PSA_KEY_USAGE_EXPORT);
+    psa_set_key_algorithm(&attr, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
+    mbedtls_svc_key_id_t id = MBEDTLS_SVC_KEY_ID_INIT;
+    if (psa_generate_key(&attr, &id) != PSA_SUCCESS) return -1;
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int rc = -1;
+    mbedtls_x509write_cert crt;
+    mbedtls_x509write_crt_init(&crt);
+    unsigned char *buf = malloc(8192);
+    if (!buf) goto out;
+    if (mbedtls_pk_copy_from_psa(id, &pk) != 0) goto out;
+    char name[256];
+    snprintf(name, sizeof name, "CN=%s", cn && cn[0] ? cn : "xcd");
+    unsigned char serial[16];
+    if (psa_generate_random(serial, sizeof serial) != PSA_SUCCESS) goto out;
+    serial[0] &= 0x7f;
+    mbedtls_x509write_crt_set_version(&crt, MBEDTLS_X509_CRT_VERSION_3);
+    mbedtls_x509write_crt_set_md_alg(&crt, MBEDTLS_MD_SHA256);
+    mbedtls_x509write_crt_set_subject_key(&crt, &pk);
+    mbedtls_x509write_crt_set_issuer_key(&crt, &pk);
+    if (mbedtls_x509write_crt_set_subject_name(&crt, name) != 0) goto out;
+    if (mbedtls_x509write_crt_set_issuer_name(&crt, name) != 0) goto out;
+    if (mbedtls_x509write_crt_set_serial_raw(&crt, serial, sizeof serial) != 0) goto out;
+    if (mbedtls_x509write_crt_set_validity(&crt, "20260101000000", "20460101000000") != 0) goto out;
+    if (mbedtls_x509write_crt_set_basic_constraints(&crt, 0, -1) != 0) goto out;
+    if (mbedtls_x509write_crt_pem(&crt, buf, 8192) != 0) goto out;
+    if (write_whole(cert_path, buf, strlen((char *)buf), 0) != 0) goto out;
+    if (mbedtls_pk_write_key_pem(&pk, buf, 8192) != 0) goto out;
+    if (write_whole(key_path, buf, strlen((char *)buf), 1) != 0) goto out;
+    rc = 0;
+out:
+    if (buf) { memset(buf, 0, 8192); free(buf); }
+    mbedtls_x509write_crt_free(&crt);
+    mbedtls_pk_free(&pk);
+    psa_destroy_key(id);
+    return rc;
+}
+// The SHA-256 of the peer's certificate (DER), 32 bytes; -1 when the peer
+// sent none.
+int xt_tls_peer_fingerprint(void *conn, unsigned char *out32) {
+    const mbedtls_x509_crt *c = mbedtls_ssl_get_peer_cert(&((xt_tls_conn *)conn)->ssl);
+    if (!c || !c->raw.p) return -1;
+    size_t n = 0;
+    if (psa_hash_compute(PSA_ALG_SHA_256, c->raw.p, c->raw.len, out32, 32, &n) != PSA_SUCCESS || n != 32)
+        return -1;
+    return 0;
+}
+// Plaintext bytes already decrypted and waiting inside the connection: a
+// caller polling the socket must read these first, the socket says nothing
+// about them.
+int xt_tls_pending(void *conn) {
+    return (int)mbedtls_ssl_get_bytes_avail(&((xt_tls_conn *)conn)->ssl);
 }
 void xt_tls_close(void *conn) {
     xt_tls_conn *co = conn;
