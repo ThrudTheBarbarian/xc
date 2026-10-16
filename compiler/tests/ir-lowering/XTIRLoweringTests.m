@@ -45,6 +45,14 @@ static int runFixture(NSString* path)
         fprintf(stderr, "  FAIL [%s]: cannot read source\n", base.UTF8String);
         return 1;
         }
+    // This harness has no preprocessor: a fixture that #imports (par-reduce-lanes,
+    // there for ir-diff's sake, which runs xcc-fe) cannot parse here, and a
+    // failure that says "lex/parse error" about it was a standing confusion.
+    if ([source containsString:@"#import"])
+        {
+        fprintf(stderr, "  SKIP [%s]: needs the preprocessor (selfhost/tools/ir-diff.sh runs it)\n", base.UTF8String);
+        return 0;
+        }
     XTDiagnosticEngine* diag = [[XTDiagnosticEngine alloc] init];
     XTLexer* lexer = [[XTLexer alloc] initWithSource:source filename:base diagnostics:diag];
     NSArray<XTToken*>* tokens = [lexer tokenise];

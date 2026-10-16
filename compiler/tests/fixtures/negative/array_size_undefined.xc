@@ -4,7 +4,7 @@
 // memory. Parser now rejects any non-literal size expression so
 // typos and missing #defines surface before the first codegen
 // byte.
-// xtc: error "Array size must be a compile-time integer literal"
+// xtc: error "Array size must constant-fold to a non-negative integer"
 
 bool flags[sizep];    // sizep never declared — was silently 0
 
