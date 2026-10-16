@@ -260,11 +260,42 @@ class Sema
     // dynamic class is checked at run time. The 6502 and m68k carry no such
     // list, so there the class must declare the protocol, as the reference
     // requires; letting it through lowered a check nothing could make.
+    // Whether class `a` is `b` or inherits from it.
+    bool classInheritsOrEquals(String* a, String* b)
+        {
+        Object* d = _classes.get((Hashable*)a);
+        for (Node* c = (Node*)d; c != 0; c = parentOf(c))
+            if (c.name().equals(b))
+                return true;
+        return false;
+        }
+
     void checkProtocolCast(Node* n)
         {
-        if (_chainCapable || n.kidCount() == (u32)0)
+        if (n.kidCount() == (u32)0)
             return;
         String* tc = classNameOf(n.name());
+        // A cast between two classes of this unit that are not on one line
+        // of descent can never succeed, as the reference refuses it: `(B*)a`
+        // where neither is the other's ancestor.
+        if (tc != 0 && _classes.get((Hashable*)tc) != 0 && Types.isPointer(n.name()))
+            {
+            String* opT = n.kid((u32)0).ty();
+            String* oc = opT == 0 ? (String*)0 : (Types.isPointer(opT) ? classNameOf(opT) : (String*)0);
+            if (oc != 0 && _classes.get((Hashable*)oc) != 0
+                && !classInheritsOrEquals(oc, tc) && !classInheritsOrEquals(tc, oc))
+                {
+                String* e = String.withCString("'");
+                e.append(oc);
+                e.appendCString("' and '");
+                e.append(tc);
+                e.appendCString("' are unrelated classes — the cast can never succeed");
+                _errorAt(e, n);
+                return;
+                }
+            }
+        if (_chainCapable)
+            return;
         if (tc == 0 || _protocols.get((Hashable*)tc) == 0)
             return;
         String* opT = n.kid((u32)0).ty();
@@ -1104,6 +1135,35 @@ class Sema
             retainCycleFrom((Node*)_rcClasses.get(r), r);
             }
         }
+    // `weak:` is for class pointers alone — a scalar or a function pointer
+    // has no reference count to watch — as the reference's
+    // validateWeakQualifierOnType says at every declaration: a local, an
+    // ivar, a parameter. An array of weak pointers is judged by its element.
+    void checkWeakSpelling(String* t, Node* at)
+        {
+        if (t == 0 || t.byteIndexOf(String.withCString("weak:")) == (u32)$FFFFFFFF)
+            return;
+        String* e = t;
+        u32 lb = e.indexOfByte((u8)'[');
+        if (lb != String.notFound())
+            e = e.substringBytes((u32)0, lb);
+        String* q = Overload._unqualify(e);
+        bool ok = false;
+        u32 n = q.byteLength();
+        if (n >= (u32)2 && (q.byteAt(n - (u32)1) == (u8)'*' || q.byteAt(n - (u32)1) == (u8)'@'))
+            {
+            String* name = q.substringBytes((u32)0, n - (u32)1);
+            ok = _classes.get((Hashable*)name) != 0 || _protocols.get((Hashable*)name) != 0;
+            }
+        if (!ok)
+            {
+            String* m = String.withCString("`weak:` requires a class pointer, not `");
+            m.append(t);
+            m.appendCString("`");
+            _errorAt(m, at);
+            }
+        }
+
     // The class a strong field's spelling points at, or 0: a pointer, not
     // weak:, one sigil, and a class of this unit.
     String* rcTargetOf(String* t)
@@ -1288,6 +1348,25 @@ class Sema
                     Node* m = d.kid(j);
                     if (m.kind() == (u16)nkMethodDecl)
                         typeCallable(m, d);
+                    else if (m.kind() == (u16)nkVariableDecl)
+                        {
+                        checkWeakSpelling(m.op(), m);
+                        // An ivar with an inherited name is refused, as the
+                        // reference refuses it: two slots one name, and a
+                        // method of either class reading the wrong one.
+                        bool shadowed = false;
+                        for (Node* c = parentOf(d); c != 0 && !shadowed; c = parentOf(c))
+                            for (u32 q = (u32)0; q < c.kidCount() && !shadowed; q = q + (u32)1)
+                                {
+                                Node* a = c.kid(q);
+                                if (a.kind() == (u16)nkVariableDecl && a.name().equals(m.name()))
+                                    {
+                                    _errorAt(String.withFormat("Subclass '%s' redeclares ivar '%s' inherited from '%s'",
+                                                               d.name().cString(), m.name().cString(), c.name().cString()), m);
+                                    shadowed = true;
+                                    }
+                                }
+                        }
                     }
                 }
             }
@@ -1351,7 +1430,10 @@ class Sema
             {
             Node* p = decl.kid(i);
             if (p.kind() == (u16)nkParam)
+                {
+                checkWeakSpelling(p.op(), p);
                 define(p.name(), p.op());
+                }
             }
         // A C-ABI callee (a C import, or a bodyless variadic — the two forms
         // XTFnIsCABI recognises) cannot take a `callback`. A callback is a
@@ -1701,6 +1783,7 @@ class Sema
             }
         if (k == (u16)nkVariableDecl)
             {
+            checkWeakSpelling(n.op(), n);
             // `auto` is INFERRED from the initialiser, and the inference is
             // written back onto the declaration — the dump prints `type=u16`
             // where the source said `auto`, because by then that is what the
@@ -5779,31 +5862,70 @@ class Sema
             Node* parent = parentOf(cls);
             if (parent == 0)
                 continue;
-            bool ancestorInit = false;
-            for (Node* a = parent; a != 0; a = parentOf(a))
-                {
-                Node* ai = Vtable.zeroArgNamed(a, "init");
-                if (ai != 0)
+            // Whether the nearest ancestor that has an init at all has one
+            // with no arguments: that is the one the chain can run unasked.
+            // The reference stops at that ancestor; a no-arg init further up
+            // is not reachable through an init that takes arguments.
+            bool anyAncestorInit = false;
+            bool noArgInit = false;
+            for (Node* a = parent; a != 0 && !anyAncestorInit; a = parentOf(a))
+                for (u32 q = (u32)0; q < a.kidCount(); q = q + (u32)1)
                     {
-                    ancestorInit = true;
+                    Node* pm = a.kid(q);
+                    if (pm.kind() != (u16)nkMethodDecl || pm.name() == 0 || !_isOp(pm.name(), "init") || pm.hasFlag((u32)NF_STATIC))
+                        continue;
+                    anyAncestorInit = true;
+                    if (Vtable.zeroArgNamed(a, "init") == pm)
+                        noArgInit = true;
                     }
-                }
-            if (!ancestorInit)
-                continue;
             for (u32 j = (u32)0; j < cls.kidCount(); j = j + (u32)1)
                 {
                 Node* m = cls.kid(j);
                 if (m.kind() != (u16)nkMethodDecl)
                     continue;
-                if (m.name() == 0 || !_isOp(m.name(), "init"))
-                    continue;
                 if (m.hasFlag((u32)NF_STATIC))
                     continue;
-                if (callsSuperInit(m))
+                // dealloc: one super.dealloc at most (the runtime adds the
+                // chain where the author wrote none).
+                if (m.name() != 0 && _isOp(m.name(), "dealloc"))
+                    {
+                    if (countSuperCalls(m, "dealloc") > (u32)1)
+                        _errorAt(String.withFormat("duplicate super.dealloc call in '%s.dealloc'", cls.name().cString()), m);
                     continue;
-                m.setAutoSuperInit();
+                    }
+                if (m.name() == 0 || !_isOp(m.name(), "init"))
+                    continue;
+                u32 calls = countSuperCalls(m, "init");
+                if (calls > (u32)1)
+                    {
+                    _errorAt(String.withFormat("duplicate super.init call in '%s.init'", cls.name().cString()), m);
+                    continue;
+                    }
+                if (calls == (u32)1)
+                    continue;
+                if (noArgInit)
+                    m.setAutoSuperInit();
+                else if (anyAncestorInit)
+                    _errorAt(String.withFormat("init on '%s' must call super.init(...) — parent chain has no no-arg init", cls.name().cString()), m);
                 }
             }
+        }
+
+    // How many `super.<name>(...)` calls a body holds, at any depth.
+    u32 countSuperCalls(Node* n, string name)
+        {
+        if (n == 0)
+            return (u32)0;
+        u32 c = (u32)0;
+        if (n.kind() == (u16)nkMethodCall && n.name() != 0 && _isOp(n.name(), name) && n.kidCount() > (u32)0)
+            {
+            Node* r = n.kid((u32)0);
+            if (r.kind() == (u16)nkIdent && r.name() != 0 && _isOp(r.name(), "super"))
+                c = c + (u32)1;
+            }
+        for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+            c = c + countSuperCalls(n.kid(i), name);
+        return c;
         }
 
     bool callsSuperInit(Node* n)
