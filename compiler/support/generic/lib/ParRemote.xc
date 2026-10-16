@@ -74,24 +74,24 @@
 #import "Base64.xc"
 #import "Bundle.xc"
 
-#define PAR_REMOTE_PROTO 3
+#define PAR_REMOTE_PROTO 4
 #define PAR_REMOTE_PORT 7227
 #define PAR_REMOTE_DEPTH 3
 
 // Frame types.
-#define PRM_HELLO 1      // daemon -> program: magic, proto, nonce, version, identity, depth, floor
-#define PRM_AUTH 2       // program -> daemon: proto, version, proof
-#define PRM_OK 3         // daemon -> program: after AUTH, the session token the results link names
-#define PRM_BYE 4        // either way: the reason, then the connection closes
-#define PRM_HOLDS 5      // program -> daemon: the block described (no data); reply OK (1) or BYE... no: PRM_ANSWER
-#define PRM_ANSWER 6     // daemon -> program: one byte
-#define PRM_PREPARE 7    // program -> daemon: the block with its data, and the tile size
-#define PRM_TILE 8       // program -> daemon: index, lo, hi, then each sliced array's and global's slice
-#define PRM_DONE 9       // daemon -> program: index, written slices, partials
-#define PRM_FINISH 10    // program -> daemon: the run is over
-#define PRM_PING 11      // program -> daemon: sent-at (its own clock), kind (0 heartbeat, 1 bandwidth probe), padding
-#define PRM_PONG 12      // daemon -> program: sent-at and kind echoed, available (1 = takes tiles now), tiles queued
-#define PRM_RESULTS 13   // program -> daemon, first on its second link: the session token; reply OK, then DONE frames
+// The frames (protocol 4): a tag of 8 bytes of ASCII, NUL-padded, a u32
+// length and a body of fields of the same shape, read by tag (ParWire).
+//   HELLO    daemon -> program: PROTO, NONCE, VERSION, IDENT, DEPTH, FLOOR,
+//            VRAMTOT, VRAMFREE, RAMTOT, RAMFREE
+//   AUTH     program -> daemon: PROTO, VERSION, PROOF; reply OK (TOKEN) or BYE (WHY)
+//   RESULTS  program -> daemon, first on its second link: TOKEN; reply OK
+//   HOLDS    program -> daemon: BLOCK (no data); reply ANSWER (TAKEN: 1 yes, 0 no, 2 busy)
+//   PREPARE  program -> daemon: BLOCK (with data), TILE, N; reply ANSWER
+//   TILE     program -> daemon: INDEX, LO, HI, SLICES
+//   DONE     daemon -> program, on the results link: INDEX, SLICES, PARTS, NBACK, KERNELUS
+//   FINISH   program -> daemon: the run is over
+//   PING     program -> daemon: SENT, KIND (0 heartbeat, 1 bandwidth probe), PAD
+//   PONG     daemon -> program: SENT, KIND, AVAILABLE, QUEUED
 #define PAR_REMOTE_PROBE_BYTES (1024 * 1024)
 
 // ── TLS: the library, loaded when a daemon is first spoken to ────────────
@@ -467,26 +467,169 @@ class ParWire
         return r;
         }
 
-    // One frame out: the header then the payload.
-    static bool send(ParLink* s, u32 type, Data* payload)
+    // ── tag, length, value ───────────────────────────────────────────
+    // A tag is 8 bytes of ASCII, NUL-padded (`DONE` reads as itself in a
+    // capture); a field is a tag, a u32 length and the bytes; a frame is the
+    // same with its body made of fields. A reader takes a field by tag and
+    // skips what it does not know, so the two sides may differ by a field.
+    static void tag8(Data* d, u8* tag)
         {
-        u8 hdr[8];
-        u32 n = payload != (Data*)0 ? payload.length() : (u32)0;
-        hdr[0] = (u8)type; hdr[1] = (u8)(type >> (u32)8); hdr[2] = (u8)(type >> (u32)16); hdr[3] = (u8)(type >> (u32)24);
-        hdr[4] = (u8)n; hdr[5] = (u8)(n >> (u32)8); hdr[6] = (u8)(n >> (u32)16); hdr[7] = (u8)(n >> (u32)24);
-        if (!s.write(&hdr[0], (u32)8))
-            return false;
-        return n == (u32)0 || s.write(payload.bytes(), n);
+        u32 i = (u32)0;
+        while (i < (u32)8 && tag[i] != (u8)0)
+            {
+            d.appendByte(tag[i]);
+            i = i + (u32)1;
+            }
+        while (i < (u32)8)
+            {
+            d.appendByte((u8)0);
+            i = i + (u32)1;
+            }
         }
-    // One frame in, waiting up to ms for it: the payload, with *type set;
-    // null when the connection closed or time ran out.
-    static Data* recv(ParLink* s, u32* type, i32 ms)
+    static bool tagIs(u8* have8, u8* tag)
         {
-        u8 hdr[8];
-        if (!s.readExact(&hdr[0], (u32)8, ms))
-            return (Data*)0;
+        u32 i = (u32)0;
+        while (i < (u32)8 && tag[i] != (u8)0)
+            {
+            if (have8[i] != tag[i])
+                return false;
+            i = i + (u32)1;
+            }
+        while (i < (u32)8)
+            {
+            if (have8[i] != (u8)0)
+                return false;
+            i = i + (u32)1;
+            }
+        return true;
+        }
+    static void field(Data* d, u8* tag, u8* p, u32 n)
+        {
+        ParWire.tag8(d, tag);
+        ParWire.putU32(d, n);
+        if (n > (u32)0)
+            d.appendBytes(p, n);
+        }
+    static void fieldU8(Data* d, u8* tag, u8 v)
+        {
+        u8 b[1];
+        b[0] = v;
+        ParWire.field(d, tag, &b[0], (u32)1);
+        }
+    static void fieldU32(Data* d, u8* tag, u32 v)
+        {
+        Data* x = new Data();
+        ParWire.putU32(x, v);
+        ParWire.field(d, tag, x.bytes(), (u32)4);
+        }
+    static void fieldI64(Data* d, u8* tag, i64 v)
+        {
+        Data* x = new Data();
+        ParWire.putI64(x, v);
+        ParWire.field(d, tag, x.bytes(), (u32)8);
+        }
+    static void fieldStr(Data* d, u8* tag, u8* s)
+        {
+        u32 n = (u32)0;
+        while (s[n] != (u8)0)
+            n = n + (u32)1;
+        ParWire.field(d, tag, s, n);
+        }
+    static void fieldData(Data* d, u8* tag, Data* v)
+        {
+        ParWire.field(d, tag, v.bytes(), v.length());
+        }
+    // The field `tag` of a body: its bytes and length, or false.
+    static bool find(Data* body, u8* tag, u8** p, u32* n)
+        {
+        if (body == (Data*)0)
+            return false;
+        u8* b = body.bytes();
+        u32 len = body.length();
         u32 at = (u32)0;
-        *type = ParWire.rdU32(&hdr[0], &at);
+        while (at + (u32)12 <= len)
+            {
+            u32 q = at + (u32)8;
+            u32 fl = ParWire.rdU32(b, &q);
+            if (q + fl > len)
+                return false;
+            if (ParWire.tagIs(b + at, tag))
+                {
+                *p = b + q;
+                *n = fl;
+                return true;
+                }
+            at = q + fl;
+            }
+        return false;
+        }
+    static u8 getU8(Data* body, u8* tag, u8 dflt)
+        {
+        u8* p = (u8*)0;
+        u32 n = (u32)0;
+        if (!ParWire.find(body, tag, &p, &n) || n < (u32)1)
+            return dflt;
+        return p[0];
+        }
+    static u32 getU32(Data* body, u8* tag, u32 dflt)
+        {
+        u8* p = (u8*)0;
+        u32 n = (u32)0;
+        if (!ParWire.find(body, tag, &p, &n) || n < (u32)4)
+            return dflt;
+        u32 at = (u32)0;
+        return ParWire.rdU32(p, &at);
+        }
+    static i64 getI64(Data* body, u8* tag, i64 dflt)
+        {
+        u8* p = (u8*)0;
+        u32 n = (u32)0;
+        if (!ParWire.find(body, tag, &p, &n) || n < (u32)8)
+            return dflt;
+        u32 at = (u32)0;
+        return ParWire.rdI64(p, &at);
+        }
+    static String* getStr(Data* body, u8* tag)
+        {
+        u8* p = (u8*)0;
+        u32 n = (u32)0;
+        if (!ParWire.find(body, tag, &p, &n))
+            return (String*)0;
+        String* r = new String();
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            r.appendByte(p[i]);
+        return r;
+        }
+    static Data* getData(Data* body, u8* tag)
+        {
+        u8* p = (u8*)0;
+        u32 n = (u32)0;
+        if (!ParWire.find(body, tag, &p, &n))
+            return (Data*)0;
+        return Data.withBytes(p, n);
+        }
+
+    // One frame out: the tag, the length, the body.
+    static bool send(ParLink* s, u8* tag, Data* body)
+        {
+        Data* h = new Data();
+        ParWire.tag8(h, tag);
+        u32 n = body != (Data*)0 ? body.length() : (u32)0;
+        ParWire.putU32(h, n);
+        if (!s.write(h.bytes(), (u32)12))
+            return false;
+        return n == (u32)0 || s.write(body.bytes(), n);
+        }
+    // One frame in, waiting up to ms for it: the body, with its tag copied
+    // into `tag8`; null when the connection closed or time ran out.
+    static Data* recv(ParLink* s, u8* tag8, i32 ms)
+        {
+        u8 hdr[12];
+        if (!s.readExact(&hdr[0], (u32)12, ms))
+            return (Data*)0;
+        for (u32 i = (u32)0; i < (u32)8; i = i + (u32)1)
+            tag8[i] = hdr[i];
+        u32 at = (u32)8;
         u32 n = ParWire.rdU32(&hdr[0], &at);
         Data* d = Data.withLength(n);
         if (n > (u32)0 && !s.readExact(d.bytes(), n, (i32)-1))
@@ -586,6 +729,12 @@ class ParRemoteWorker : ParWorker
     u16 _port;
     ParLink* _s;            // the command link: tiles and requests out, answers back
     ParLink* _r;            // the results link: finished tiles, written by a thread of the daemon's
+    i64 _vramTotal;         // the daemon's figures from HELLO, bytes; 0 unknown
+    i64 _vramFree;
+    i64 _ramTotal;
+    i64 _ramFree;
+    i64 _kernelUs;          // the daemon's time on this run's tiles, summed from DONE
+    i64 _kernelItems;
     String* _identity;      // "remote:<host>:<the daemon's device>", "" when unreachable
     u32 _depth;
     i64 _floor;
@@ -695,55 +844,67 @@ class ParRemoteWorker : ParWorker
         _s = open();
         if (_s == (ParLink*)0)
             return false;
-        u32 type = (u32)0;
-        Data* hello = ParWire.recv(_s, &type, (i32)5000);
-        if (hello == (Data*)0 || type != (u32)PRM_HELLO || hello.length() < (u32)44)
+        u8 tag[8];
+        Data* hello = ParWire.recv(_s, &tag[0], (i32)5000);
+        if (hello == (Data*)0 || !ParWire.tagIs(&tag[0], "HELLO"))
             return fail("no greeting");
-        u8* p = hello.bytes();
-        u32 at = (u32)0;
-        if (p[0] != (u8)'X' || p[1] != (u8)'C' || p[2] != (u8)'D' || p[3] != (u8)'1')
+        u32 proto = ParWire.getU32(hello, "PROTO", (u32)0);
+        u8* nonce = (u8*)0;
+        u32 nn = (u32)0;
+        if (!ParWire.find(hello, "NONCE", &nonce, &nn) || nn != (u32)32)
             return fail("not an xcd");
-        at = (u32)4;
-        u32 proto = ParWire.rdU32(p, &at);
-        u8* nonce = p + at;
-        at = at + (u32)32;
-        String* version = ParWire.rdStr(p, &at);
-        String* ident = ParWire.rdStr(p, &at);
-        _depth = ParWire.rdU32(p, &at);
-        _floor = ParWire.rdI64(p, &at);
+        String* version = ParWire.getStr(hello, "VERSION");
+        String* ident = ParWire.getStr(hello, "IDENT");
+        _depth = ParWire.getU32(hello, "DEPTH", (u32)PAR_REMOTE_DEPTH);
+        _floor = ParWire.getI64(hello, "FLOOR", (i64)1024);
+        _vramTotal = ParWire.getI64(hello, "VRAMTOT", (i64)0);
+        _vramFree = ParWire.getI64(hello, "VRAMFREE", (i64)0);
+        _ramTotal = ParWire.getI64(hello, "RAMTOT", (i64)0);
+        _ramFree = ParWire.getI64(hello, "RAMFREE", (i64)0);
         if (proto != (u32)PAR_REMOTE_PROTO)
             return fail("another protocol version");
-        if (!version.equals(String.withCString(PAR_CACHE_VER)))
+        if (version == (String*)0 || ident == (String*)0 || !version.equals(String.withCString(PAR_CACHE_VER)))
             return fail("another xcc version");
         Data* auth = new Data();
-        ParWire.putU32(auth, (u32)PAR_REMOTE_PROTO);
-        ParWire.putStr(auth, PAR_CACHE_VER);
+        ParWire.fieldU32(auth, "PROTO", (u32)PAR_REMOTE_PROTO);
+        ParWire.fieldStr(auth, "VERSION", PAR_CACHE_VER);
         Data* proof = ParRemote.proof(nonce);
-        auth.appendBytes(proof.bytes(), (u32)32);
-        if (!ParWire.send(_s, (u32)PRM_AUTH, auth))
+        ParWire.field(auth, "PROOF", proof.bytes(), (u32)32);
+        if (!ParWire.send(_s, "AUTH", auth))
             return fail("the daemon went away");
-        Data* ok = ParWire.recv(_s, &type, (i32)5000);
-        if (ok == (Data*)0 || type != (u32)PRM_OK || ok.length() != (u32)32)
+        Data* ok = ParWire.recv(_s, &tag[0], (i32)5000);
+        u8* token = (u8*)0;
+        u32 tn = (u32)0;
+        if (ok == (Data*)0 || !ParWire.tagIs(&tag[0], "OK") || !ParWire.find(ok, "TOKEN", &token, &tn) || tn != (u32)32)
             return fail("the daemon declined the pool secret");
+        Data* tokenD = Data.withBytes(token, (u32)32);
         // The results link, named to the daemon by the session token it
         // answered with.
         _r = open();
         if (_r == (ParLink*)0)
             return fail("no results link");
-        Data* hello2 = ParWire.recv(_r, &type, (i32)5000);
-        if (hello2 == (Data*)0 || type != (u32)PRM_HELLO)
+        Data* hello2 = ParWire.recv(_r, &tag[0], (i32)5000);
+        if (hello2 == (Data*)0 || !ParWire.tagIs(&tag[0], "HELLO"))
             return fail("no greeting on the results link");
-        if (!ParWire.send(_r, (u32)PRM_RESULTS, ok))
+        Data* rq = new Data();
+        ParWire.field(rq, "TOKEN", tokenD.bytes(), (u32)32);
+        if (!ParWire.send(_r, "RESULTS", rq))
             return fail("the daemon went away");
-        Data* ok2 = ParWire.recv(_r, &type, (i32)5000);
-        if (ok2 == (Data*)0 || type != (u32)PRM_OK)
+        Data* ok2 = ParWire.recv(_r, &tag[0], (i32)5000);
+        if (ok2 == (Data*)0 || !ParWire.tagIs(&tag[0], "OK"))
             return fail("the daemon declined the results link");
         _identity = String.withCString("remote:");
         _identity.append(_host);
         _identity.appendCString(":");
         _identity.append(ident);
         if (ParDevice.reporting())
-            Log.info("par: remote worker %s, depth %u", _identity.cString(), _depth);
+            {
+            if (_vramTotal > (i64)0)
+                Log.info("par: remote worker %s, depth %u, %ld MB of %ld MB VRAM free, %ld MB of %ld MB RAM free", _identity.cString(), _depth,
+                         _vramFree >> (i64)20, _vramTotal >> (i64)20, _ramFree >> (i64)20, _ramTotal >> (i64)20);
+            else
+                Log.info("par: remote worker %s, depth %u", _identity.cString(), _depth);
+            }
         _available = true;
         _lastPong = ParDevice.nowUs();
         return probeLink();
@@ -773,17 +934,17 @@ class ParRemoteWorker : ParWorker
     bool ping(u8 kind, u32 pad)
         {
         Data* d = new Data();
-        ParWire.putI64(d, ParDevice.nowUs());
-        ParWire.putU8(d, kind);
+        ParWire.fieldI64(d, "SENT", ParDevice.nowUs());
+        ParWire.fieldU8(d, "KIND", kind);
         if (pad > (u32)0)
             {
             Data* z = Data.withLength(pad);
-            d.appendBytes(z.bytes(), pad);
+            ParWire.fieldData(d, "PAD", z);
             }
         _lastPing = ParDevice.nowUs();
-        return ParWire.send(_s, (u32)PRM_PING, d);
+        return ParWire.send(_s, "PING", d);
         }
-    // Frames until a pong (a DONE on the way is completed and kept for poll()).
+    // Frames until a pong.
     bool awaitPong(void)
         {
         i64 before = _lastPong;
@@ -798,11 +959,9 @@ class ParRemoteWorker : ParWorker
         }
     void pong(Data* f)
         {
-        u8* p = f.bytes();
-        u32 at = (u32)0;
-        i64 sent = ParWire.rdI64(p, &at);
-        u8 kind = ParWire.rdU8(p, &at);
-        _available = ParWire.rdU8(p, &at) != (u8)0;
+        i64 sent = ParWire.getI64(f, "SENT", (i64)0);
+        u8 kind = ParWire.getU8(f, "KIND", (u8)0);
+        _available = ParWire.getU8(f, "AVAILABLE", (u8)1) != (u8)0;
         _lastPong = ParDevice.nowUs();
         if (kind == (u8)0 && _lastPong - sent > (i64)0)
             _rttUs = _lastPong - sent;
@@ -811,14 +970,14 @@ class ParRemoteWorker : ParWorker
     // lost.
     bool readFrame(void)
         {
-        u32 type = (u32)0;
-        Data* f = ParWire.recv(_s, &type, (i32)-1);
+        u8 tag[8];
+        Data* f = ParWire.recv(_s, &tag[0], (i32)-1);
         if (f == (Data*)0)
             {
             fail("lost the connection");
             return false;
             }
-        if (type == (u32)PRM_PONG)
+        if (ParWire.tagIs(&tag[0], "PONG"))
             {
             pong(f);
             return true;
@@ -830,9 +989,9 @@ class ParRemoteWorker : ParWorker
     // poll(). False when the link is lost.
     bool readResult(void)
         {
-        u32 type = (u32)0;
-        Data* f = ParWire.recv(_r, &type, (i32)-1);
-        if (f == (Data*)0 || type != (u32)PRM_DONE)
+        u8 tag[8];
+        Data* f = ParWire.recv(_r, &tag[0], (i32)-1);
+        if (f == (Data*)0 || !ParWire.tagIs(&tag[0], "DONE"))
             {
             fail("lost the results link");
             return false;
@@ -915,14 +1074,17 @@ class ParRemoteWorker : ParWorker
             return _held;
         _heldSrc = (pointer)src;
         _held = false;
-        if (!ParWire.send(_s, (u32)PRM_HOLDS, ParWire.describe(proto, src, l, false)))
+        Data* q = new Data();
+        ParWire.fieldData(q, "BLOCK", ParWire.describe(proto, src, l, false));
+        if (!ParWire.send(_s, "HOLDS", q))
             return false;
-        u32 type = (u32)0;
-        Data* a = ParWire.recv(_s, &type, (i32)30000);
-        _held = a != (Data*)0 && type == (u32)PRM_ANSWER && a.length() == (u32)1 && a.byteAt((u32)0) == (u8)1;
+        u8 tag[8];
+        Data* a = ParWire.recv(_s, &tag[0], (i32)30000);
+        u8 taken = a != (Data*)0 && ParWire.tagIs(&tag[0], "ANSWER") ? ParWire.getU8(a, "TAKEN", (u8)0) : (u8)0;
+        _held = taken == (u8)1;
         // 2: the daemon's GPUs are another program's just now — not a
         // verdict on the block, so it is asked again next run.
-        if (a != (Data*)0 && type == (u32)PRM_ANSWER && a.length() == (u32)1 && a.byteAt((u32)0) == (u8)2)
+        if (taken == (u8)2)
             _heldSrc = (pointer)0;
         if (ParDevice.reporting() && !_held)
             Log.info("par: %s does not take %s%s", _identity.cString(), proto.parName(),
@@ -953,19 +1115,25 @@ class ParRemoteWorker : ParWorker
         _l = l;
         _inFlight = (u32)0;
         _tiles = new Array();
-        Data* d = ParWire.describe(proto, src, l, true);
-        ParWire.putI64(d, tile);
-        ParWire.putI64(d, l.n);
-        if (!ParWire.send(_s, (u32)PRM_PREPARE, d))
+        _kernelUs = (i64)0;
+        _kernelItems = (i64)0;
+        Data* d = new Data();
+        ParWire.fieldData(d, "BLOCK", ParWire.describe(proto, src, l, true));
+        ParWire.fieldI64(d, "TILE", tile);
+        ParWire.fieldI64(d, "N", l.n);
+        if (!ParWire.send(_s, "PREPARE", d))
             return false;
-        u32 type = (u32)0;
-        Data* a = ParWire.recv(_s, &type, (i32)60000);
-        return a != (Data*)0 && type == (u32)PRM_ANSWER && a.length() == (u32)1 && a.byteAt((u32)0) == (u8)1;
+        u8 tag[8];
+        Data* a = ParWire.recv(_s, &tag[0], (i32)60000);
+        return a != (Data*)0 && ParWire.tagIs(&tag[0], "ANSWER") && ParWire.getU8(a, "TAKEN", (u8)0) == (u8)1;
         }
     void finish(void)
         {
         if (_s != (ParLink*)0 && _s.isOpen())
-            ParWire.send(_s, (u32)PRM_FINISH, (Data*)0);
+            ParWire.send(_s, "FINISH", (Data*)0);
+        if (ParDevice.reporting() && _kernelItems > (i64)0)
+            Log.info("par: remote %s: %ld items in %ld us on the daemon's GPU (%ld ns an item)", _host.cString(),
+                     _kernelItems, _kernelUs, _kernelUs * (i64)1000 / _kernelItems);
         _proto = (ParChunk*)0;
         _l = (ParLayout*)0;
         }
@@ -974,13 +1142,14 @@ class ParRemoteWorker : ParWorker
         if (_inFlight >= _depth || _s == (ParLink*)0 || !_s.isOpen())
             return false;
         Data* d = new Data();
-        ParWire.putI64(d, t.index);
-        ParWire.putI64(d, t.lo);
-        ParWire.putI64(d, t.hi);
+        ParWire.fieldI64(d, "INDEX", t.index);
+        ParWire.fieldI64(d, "LO", t.lo);
+        ParWire.fieldI64(d, "HI", t.hi);
         // Each sliced array's and global's slice for this tile: its byte
         // offset, then the bytes — none for a global the tile's items
         // overwrite whole (the kernel fills it), as a discrete card's
         // tile loop stages them.
+        Data* sl = new Data();
         u8* obj = proto.objBytes();
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
@@ -989,8 +1158,8 @@ class ParRemoteWorker : ParWorker
             i64 count = l.bufLen[i] / l.bufElem[i];
             i64 e0 = ParTiles.sliceLo(l.bufFpK[i], l.bufFpLo[i], t.lo, count);
             i64 e1 = ParTiles.sliceHi(l.bufFpK[i], l.bufFpHi[i], t.hi, count);
-            ParWire.putI64(d, e0 * l.bufElem[i]);
-            ParWire.putBytes(d, *(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i], e1 > e0 ? (u32)((e1 - e0) * l.bufElem[i]) : (u32)0);
+            ParWire.putI64(sl, e0 * l.bufElem[i]);
+            ParWire.putBytes(sl, *(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i], e1 > e0 ? (u32)((e1 - e0) * l.bufElem[i]) : (u32)0);
             }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             {
@@ -1001,10 +1170,11 @@ class ParRemoteWorker : ParWorker
             i64 e1 = ParTiles.sliceHi(l.globFpK[i], l.globFpHi[i], t.hi, count);
             if (l.globAll[i] != (i64)0 && l.globFpK[i] == (i64)1)
                 e1 = e0;
-            ParWire.putI64(d, e0 * l.globElem[i]);
-            ParWire.putBytes(d, (u8*)l.globPtr[i] + e0 * l.globElem[i], e1 > e0 ? (u32)((e1 - e0) * l.globElem[i]) : (u32)0);
+            ParWire.putI64(sl, e0 * l.globElem[i]);
+            ParWire.putBytes(sl, (u8*)l.globPtr[i] + e0 * l.globElem[i], e1 > e0 ? (u32)((e1 - e0) * l.globElem[i]) : (u32)0);
             }
-        if (!ParWire.send(_s, (u32)PRM_TILE, d))
+        ParWire.fieldData(d, "SLICES", sl);
+        if (!ParWire.send(_s, "TILE", d))
             return false;
         t.worker = (ParWorker*)self;
         _tiles.add((Object*)t);
@@ -1012,12 +1182,11 @@ class ParRemoteWorker : ParWorker
         return true;
         }
     // A finished tile's frame: its written slices into the program's arrays
-    // and globals, its partials folded into a chunk copy.
+    // and globals, its partials folded into a chunk copy, and the daemon's
+    // time on it.
     ParTile* complete(Data* f)
         {
-        u8* p = f.bytes();
-        u32 at = (u32)0;
-        i64 index = ParWire.rdI64(p, &at);
+        i64 index = ParWire.getI64(f, "INDEX", (i64)-1);
         ParTile* t = (ParTile*)0;
         for (u32 i = (u32)0; i < _tiles.count(); i = i + (u32)1)
             if (((ParTile*)_tiles.get(i)).index == index)
@@ -1030,7 +1199,11 @@ class ParRemoteWorker : ParWorker
             return (ParTile*)0;
         ParLayout* l = _l;
         u8* obj = _proto.objBytes();
-        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+        u8* p = (u8*)0;
+        u32 pn = (u32)0;
+        ParWire.find(f, "SLICES", &p, &pn);
+        u32 at = (u32)0;
+        for (u32 i = (u32)0; i < l.nbuf && p != (u8*)0; i = i + (u32)1)
             {
             if (l.bufIn[i] != (i64)0 || l.bufFp[i] == (i64)0)
                 continue;
@@ -1041,7 +1214,7 @@ class ParRemoteWorker : ParWorker
             if (e1 > e0 && n == (u32)((e1 - e0) * l.bufElem[i]))
                 memcpy((pointer)(*(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i]), (pointer)b, (u64)n);
             }
-        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+        for (u32 i = (u32)0; i < l.nglob && p != (u8*)0; i = i + (u32)1)
             {
             if (l.globIn[i] != (i64)0 || l.globFp[i] == (i64)0)
                 continue;
@@ -1055,8 +1228,9 @@ class ParRemoteWorker : ParWorker
         if (l.nred > (u32)0)
             {
             u8* raw = (u8*)0;
-            ParWire.rdBytes(p, &at, &raw);
-            i64 nback = ParWire.rdI64(p, &at);
+            u32 rn = (u32)0;
+            ParWire.find(f, "PARTS", &raw, &rn);
+            i64 nback = ParWire.getI64(f, "NBACK", (i64)0);
             u8* parts[16];
             u32 off = (u32)0;
             for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
@@ -1068,6 +1242,9 @@ class ParRemoteWorker : ParWorker
             l.foldN(c, &parts[0], nback);
             t.partial = c;
             }
+        t.usTaken = ParWire.getI64(f, "KERNELUS", (i64)0);
+        _kernelUs = _kernelUs + t.usTaken;
+        _kernelItems = _kernelItems + (t.hi - t.lo);
         t.done = true;
         _inFlight = _inFlight - (u32)1;
         return t;
@@ -1559,18 +1736,18 @@ class ParRemoteServe
         if (session == (ParRemoteSession*)0 || !session.attach())
             {
             Data* why = new Data();
-            ParWire.putStr(why, "no such session");
-            ParWire.send(s, (u32)PRM_BYE, why);
+            ParWire.fieldStr(why, "WHY", "no such session");
+            ParWire.send(s, "BYE", why);
             return;
             }
-        if (!ParWire.send(s, (u32)PRM_OK, (Data*)0))
+        if (!ParWire.send(s, "OK", (Data*)0))
             return;
         while (s.isOpen())
             {
             Data* f = session.pop();
             if (f != (Data*)0)
                 {
-                if (!ParWire.send(s, (u32)PRM_DONE, f))
+                if (!ParWire.send(s, "DONE", f))
                     break;
                 continue;
                 }
@@ -1635,10 +1812,10 @@ class ParRemoteServe
             return;
             }
         i64 me = ParRemoteServe.newConnection();
-        // HELLO.
+        // HELLO: the protocol, a nonce for the proof, the versions and what
+        // this daemon is and has.
         Data* hello = new Data();
-        hello.appendBytes((u8*)"XCD1", (u32)4);
-        ParWire.putU32(hello, (u32)PAR_REMOTE_PROTO);
+        ParWire.fieldU32(hello, "PROTO", (u32)PAR_REMOTE_PROTO);
         u8 nonce[32];
         i64 t = ParDevice.nowUs();
         for (u32 i = (u32)0; i < (u32)32; i = i + (u32)1)
@@ -1646,9 +1823,9 @@ class ParRemoteServe
             t = t * (i64)6364136223846793005 + (i64)1442695040888963407;
             nonce[i] = (u8)((u64)t >> (u64)33);
             }
-        hello.appendBytes(&nonce[0], (u32)32);
-        ParWire.putStr(hello, PAR_CACHE_VER);
-        ParWire.putStr(hello, identity.cString());
+        ParWire.field(hello, "NONCE", &nonce[0], (u32)32);
+        ParWire.fieldStr(hello, "VERSION", PAR_CACHE_VER);
+        ParWire.fieldStr(hello, "IDENT", identity.cString());
         u32 depth = (u32)PAR_REMOTE_DEPTH;
         i64 floor = (i64)1024;
         for (u32 i = (u32)0; i < workers.count(); i = i + (u32)1)
@@ -1657,46 +1834,63 @@ class ParRemoteServe
             if (w.depth() < depth) depth = w.depth();
             if (w.floor() > floor) floor = w.floor();
             }
-        ParWire.putU32(hello, depth);
-        ParWire.putI64(hello, floor);
-        if (!ParWire.send(s, (u32)PRM_HELLO, hello))
+        ParWire.fieldU32(hello, "DEPTH", depth);
+        ParWire.fieldI64(hello, "FLOOR", floor);
+        // The first worker's card, which the identity names, and the host.
+        u64 vt = (u64)0;
+        u64 vf = (u64)0;
+        if (workers.count() > (u32)0)
+            ((ParWorker*)workers.get((u32)0)).memory(&vt, &vf);
+        u64 rt = (u64)0;
+        u64 rf = (u64)0;
+        ParDevice.systemMemory(&rt, &rf);
+        ParWire.fieldI64(hello, "VRAMTOT", (i64)vt);
+        ParWire.fieldI64(hello, "VRAMFREE", (i64)vf);
+        ParWire.fieldI64(hello, "RAMTOT", (i64)rt);
+        ParWire.fieldI64(hello, "RAMFREE", (i64)rf);
+        if (!ParWire.send(s, "HELLO", hello))
             return;
-        u32 type = (u32)0;
-        Data* auth = ParWire.recv(s, &type, (i32)10000);
+        u8 tag[8];
+        Data* auth = ParWire.recv(s, &tag[0], (i32)10000);
         if (auth == (Data*)0)
             return;
-        if (type == (u32)PRM_RESULTS)
+        if (ParWire.tagIs(&tag[0], "RESULTS"))
             {
-            ParRemoteServe.sendResults(s, auth);
+            Data* token = ParWire.getData(auth, "TOKEN");
+            if (token != (Data*)0)
+                ParRemoteServe.sendResults(s, token);
             return;
             }
-        if (type != (u32)PRM_AUTH)
+        if (!ParWire.tagIs(&tag[0], "AUTH"))
             return;
-        u8* p = auth.bytes();
-        u32 at = (u32)0;
-        u32 proto = ParWire.rdU32(p, &at);
-        String* version = ParWire.rdStr(p, &at);
+        u32 proto = ParWire.getU32(auth, "PROTO", (u32)0);
+        String* version = ParWire.getStr(auth, "VERSION");
+        u8* proof = (u8*)0;
+        u32 pn = (u32)0;
         Data* want = ParRemote.proof(&nonce[0]);
-        bool ok = proto == (u32)PAR_REMOTE_PROTO && version.equals(String.withCString(PAR_CACHE_VER))
-               && auth.length() == at + (u32)32;
+        bool ok = proto == (u32)PAR_REMOTE_PROTO && version != (String*)0 && version.equals(String.withCString(PAR_CACHE_VER))
+               && ParWire.find(auth, "PROOF", &proof, &pn) && pn == (u32)32;
         for (u32 i = (u32)0; ok && i < (u32)32; i = i + (u32)1)
-            if (p[at + i] != want.byteAt(i))
+            if (proof[i] != want.byteAt(i))
                 ok = false;
         if (!ok)
             {
             Data* why = new Data();
-            ParWire.putStr(why, "version or pool secret");
-            ParWire.send(s, (u32)PRM_BYE, why);
-            Log.info("xcd: a program declined: version %s, protocol %u", version.cString(), proto);
+            ParWire.fieldStr(why, "WHY", "version or pool secret");
+            ParWire.send(s, "BYE", why);
+            Log.info("xcd: a program declined: version %s, protocol %u", version != (String*)0 ? version.cString() : "?", proto);
             return;
             }
         // The session token the program names its results link by: known
         // to the two of them alone (the proof is the secret's, and the
         // link is TLS).
         Data* tk = Data.withBytes(&nonce[0], (u32)32);
-        tk.appendBytes(p + at, (u32)32);
-        ParRemoteSession* session = ParRemoteServe.newSession(Sha256.of(tk.bytes(), tk.length()));
-        ParWire.send(s, (u32)PRM_OK, Sha256.of(tk.bytes(), tk.length()));
+        tk.appendBytes(proof, (u32)32);
+        Data* token = Sha256.of(tk.bytes(), tk.length());
+        ParRemoteSession* session = ParRemoteServe.newSession(token);
+        Data* okd = new Data();
+        ParWire.field(okd, "TOKEN", token.bytes(), (u32)32);
+        ParWire.send(s, "OK", okd);
         Log.info("xcd: a program connected");
 
         ParRemoteChunk* chunk = (ParRemoteChunk*)0;
@@ -1718,8 +1912,7 @@ class ParRemoteServe
         while (s.isOpen())
             {
             // Hand pending tiles to the worker while it has room; collect
-            // what finished and send it back.
-            bool busy = false;
+            // what finished and queue it for the results link.
             if (w != (ParWorker*)0)
                 {
                 while (pending.count() > (u32)0)
@@ -1740,7 +1933,6 @@ class ParRemoteServe
                 ParTile* d = w.poll();
                 while (d != (ParTile*)0)
                     {
-                    busy = true;
                     inFlight = inFlight - (u32)1;
                     session.push(ParRemoteServe.doneFrame(chunk, l, d));
                     d = w.poll();
@@ -1750,14 +1942,17 @@ class ParRemoteServe
             // are in flight, else as long as it takes).
             if (!s.waitReadable(inFlight > (u32)0 || pending.count() > (u32)0 ? (i32)1 : (i32)1000))
                 continue;
-            Data* f = ParWire.recv(s, &type, (i32)-1);
+            Data* f = ParWire.recv(s, &tag[0], (i32)-1);
             if (f == (Data*)0)
                 break;
-            p = f.bytes();
-            at = (u32)0;
-            if (type == (u32)PRM_HOLDS)
+            if (ParWire.tagIs(&tag[0], "HOLDS"))
                 {
-                ParRemoteChunk* c = ParRemoteChunk.from(p, &at, false);
+                u8* bp = (u8*)0;
+                u32 bn = (u32)0;
+                if (!ParWire.find(f, "BLOCK", &bp, &bn))
+                    break;
+                u32 at = (u32)0;
+                ParRemoteChunk* c = ParRemoteChunk.from(bp, &at, false);
                 bool held = false;
                 bool nimby = ParRemoteServe.nimbyNow();
                 // Compiling the block's kernel touches the workers: the GPUs
@@ -1776,26 +1971,31 @@ class ParRemoteServe
                 if (w == (ParWorker*)0)
                     ParRemoteServe.releaseGpus(me);
                 Data* a = new Data();
-                ParWire.putU8(a, held ? (u8)1 : busy ? (u8)2 : (u8)0);
-                ParWire.send(s, (u32)PRM_ANSWER, a);
+                ParWire.fieldU8(a, "TAKEN", held ? (u8)1 : busy ? (u8)2 : (u8)0);
+                ParWire.send(s, "ANSWER", a);
                 Log.info("xcd: %s %s", c.parName(), held ? "taken" : nimby ? "declined (nimby)" : busy ? "busy" : "declined");
                 }
-            else if (type == (u32)PRM_PING)
+            else if (ParWire.tagIs(&tag[0], "PING"))
                 {
                 // The heartbeat: the stamp and kind echoed, whether tiles are
                 // welcome now, and how many wait here.
                 Data* a = new Data();
-                ParWire.putI64(a, ParWire.rdI64(p, &at));
-                ParWire.putU8(a, ParWire.rdU8(p, &at));
-                ParWire.putU8(a, ParRemoteServe.nimbyNow() || !ParRemoteServe.gpusFree(me) ? (u8)0 : (u8)1);
-                ParWire.putU32(a, (u32)pending.count() + inFlight);
-                ParWire.send(s, (u32)PRM_PONG, a);
+                ParWire.fieldI64(a, "SENT", ParWire.getI64(f, "SENT", (i64)0));
+                ParWire.fieldU8(a, "KIND", ParWire.getU8(f, "KIND", (u8)0));
+                ParWire.fieldU8(a, "AVAILABLE", ParRemoteServe.nimbyNow() || !ParRemoteServe.gpusFree(me) ? (u8)0 : (u8)1);
+                ParWire.fieldU32(a, "QUEUED", (u32)pending.count() + inFlight);
+                ParWire.send(s, "PONG", a);
                 }
-            else if (type == (u32)PRM_PREPARE)
+            else if (ParWire.tagIs(&tag[0], "PREPARE"))
                 {
-                chunk = ParRemoteChunk.from(p, &at, true);
-                i64 tile = ParWire.rdI64(p, &at);
-                i64 n = ParWire.rdI64(p, &at);
+                u8* bp = (u8*)0;
+                u32 bn = (u32)0;
+                if (!ParWire.find(f, "BLOCK", &bp, &bn))
+                    break;
+                u32 at = (u32)0;
+                chunk = ParRemoteChunk.from(bp, &at, true);
+                i64 tile = ParWire.getI64(f, "TILE", (i64)0);
+                i64 n = ParWire.getI64(f, "N", (i64)0);
                 w = (ParWorker*)0;
                 l = (ParLayout*)0;
                 // The GPUs for the run: waited for up to 50 s (the program
@@ -1816,41 +2016,44 @@ class ParRemoteServe
                 if (w == (ParWorker*)0)
                     ParRemoteServe.releaseGpus(me);
                 Data* a = new Data();
-                ParWire.putU8(a, w != (ParWorker*)0 ? (u8)1 : busyRun ? (u8)2 : (u8)0);
-                ParWire.send(s, (u32)PRM_ANSWER, a);
+                ParWire.fieldU8(a, "TAKEN", w != (ParWorker*)0 ? (u8)1 : busyRun ? (u8)2 : (u8)0);
+                ParWire.send(s, "ANSWER", a);
                 if (busyRun)
                     Log.info("xcd: %s: busy, another program has the GPUs", chunk.parName());
                 pending = new Array();
                 inFlight = (u32)0;
                 }
-            else if (type == (u32)PRM_TILE && w != (ParWorker*)0)
+            else if (ParWire.tagIs(&tag[0], "TILE") && w != (ParWorker*)0)
                 {
                 ParTile* t1 = new ParTile();
-                t1.index = ParWire.rdI64(p, &at);
-                t1.lo = ParWire.rdI64(p, &at);
-                t1.hi = ParWire.rdI64(p, &at);
+                t1.index = ParWire.getI64(f, "INDEX", (i64)0);
+                t1.lo = ParWire.getI64(f, "LO", (i64)0);
+                t1.hi = ParWire.getI64(f, "HI", (i64)0);
                 // The slices it brought, into the daemon's arrays. A tile
                 // still in flight reads other elements, or the same bytes
                 // where footprints overlap (a stencil's halo).
-                bool fits = true;
-                for (u32 i = (u32)0; i < chunk.bufCount() && at <= f.length(); i = i + (u32)1)
+                u8* p = (u8*)0;
+                u32 pn2 = (u32)0;
+                bool fits = ParWire.find(f, "SLICES", &p, &pn2);
+                u32 at = (u32)0;
+                for (u32 i = (u32)0; fits && i < chunk.bufCount() && at <= pn2; i = i + (u32)1)
                     {
                     if (!chunk.bufSliced(i))
                         continue;
                     i64 off = ParWire.rdI64(p, &at);
                     u8* b = (u8*)0;
                     u32 n = ParWire.rdBytes(p, &at, &b);
-                    if (at > f.length() || !chunk.takeSlice(false, i, off, b, n))
+                    if (at > pn2 || !chunk.takeSlice(false, i, off, b, n))
                         fits = false;
                     }
-                for (u32 i = (u32)0; i < chunk.globCount() && at <= f.length(); i = i + (u32)1)
+                for (u32 i = (u32)0; fits && i < chunk.globCount() && at <= pn2; i = i + (u32)1)
                     {
                     if (!chunk.globSliced(i))
                         continue;
                     i64 off = ParWire.rdI64(p, &at);
                     u8* b = (u8*)0;
                     u32 n = ParWire.rdBytes(p, &at, &b);
-                    if (at > f.length() || !chunk.takeSlice(true, i, off, b, n))
+                    if (at > pn2 || !chunk.takeSlice(true, i, off, b, n))
                         fits = false;
                     }
                 if (!fits)
@@ -1860,7 +2063,7 @@ class ParRemoteServe
                     }
                 pending.add((Object*)t1);
                 }
-            else if (type == (u32)PRM_FINISH)
+            else if (ParWire.tagIs(&tag[0], "FINISH"))
                 {
                 if (w != (ParWorker*)0)
                     {
@@ -1891,8 +2094,9 @@ class ParRemoteServe
     // every footprinted array and global, and the partials.
     static Data* doneFrame(ParRemoteChunk* chunk, ParLayout* l, ParTile* t)
         {
+        Data* f = new Data();
+        ParWire.fieldI64(f, "INDEX", t.index);
         Data* d = new Data();
-        ParWire.putI64(d, t.index);
         u8* obj = chunk.objBytes();
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
@@ -1916,19 +2120,23 @@ class ParRemoteServe
             ParWire.putI64(d, e1);
             ParWire.putBytes(d, (u8*)l.globPtr[i] + e0 * l.globElem[i], e1 > e0 ? (u32)((e1 - e0) * l.globElem[i]) : (u32)0);
             }
+        ParWire.fieldData(f, "SLICES", d);
         if (l.nred > (u32)0)
             {
             if (t.raw != (Data*)0)
-                ParWire.putBytes(d, t.raw.bytes(), t.raw.length());
+                ParWire.field(f, "PARTS", t.raw.bytes(), t.raw.length());
             else
-                ParWire.putU32(d, (u32)0);
+                ParWire.field(f, "PARTS", (u8*)0, (u32)0);
             // How many partials each reduction has, by this worker's layout
             // (its kernel form may reduce on the device): the program folds
             // by this count, not its own.
             l.plan(t.lo, t.hi);
-            ParWire.putI64(d, l.nback);
+            ParWire.fieldI64(f, "NBACK", l.nback);
             }
-        return d;
+        // The daemon's time on the tile, from take to completion, so the
+        // program separates the link from the compute.
+        ParWire.fieldI64(f, "KERNELUS", t.usTaken);
+        return f;
         }
     }
 #endif

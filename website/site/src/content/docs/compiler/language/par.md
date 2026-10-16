@@ -559,6 +559,14 @@ a daemon is first spoken to, from the toolchain's third-party tree
 precedence). A machine without it reports the daemon unreachable and the
 program runs on; the daemon itself does not start without it.
 
+The daemon's greeting says what it has: its GPU's memory and what is free
+of it, and the machine's RAM, which the report shows (`par: remote worker …,
+14761 MB of 16275 MB VRAM free`); each finished tile comes back with the
+daemon's own time on it, summed in the report at the end of a run (`… items
+in … us on the daemon's GPU`), so the link's share of a tile's time is
+visible beside the compute's. The frames are tagged fields, read by tag, so
+a side may carry a field the other does not know.
+
 A heartbeat measures the link when the program connects (its round trip, and
 its bandwidth from a one-megabyte ping) and then asks the daemon every second,
 while tiles are being handed out, whether it takes work now. The round trip

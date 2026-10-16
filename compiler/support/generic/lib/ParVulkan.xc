@@ -191,6 +191,7 @@ pointer gVkDev;
 pointer gVkQueue;
 u64 gVkCmdPool;
 bool gVkDiscrete;
+u8* gVkMemProps;        // VkPhysicalDeviceMemoryProperties, for the workers' memory()
 // An integrated GPU whose driver imports host memory (VK_EXT_external_memory_host):
 // a `simd:` block is bound where it lies, with no copy either way.
 bool gVkHostImport;
@@ -545,6 +546,7 @@ class ParVulkan
         gVk_resetCmd = _resetCmd;
         gVk_fenceStatus = (vkGetFenceStatus_t*)fn("vkGetFenceStatus");
         gVkDev = _dev;
+        gVkMemProps = _memProps;
         gVkQueue = _queue;
         gVkCmdPool = _cmdPool;
         gVkDiscrete = _discrete;
@@ -1253,6 +1255,7 @@ class ParVulkanWorker : ParWorker
     u64 _cb[PAR_VK_DEPTH];
     u64 _fence[PAR_VK_DEPTH];
     ParTile* _slotTile[PAR_VK_DEPTH];
+    i64 _slotStart[PAR_VK_DEPTH];
     u32 _nextSlot;
     u32 _oldest;
     u32 _inFlight;
@@ -1611,6 +1614,25 @@ class ParVulkanWorker : ParWorker
         _l = (ParLayout*)0;
         }
 
+    // The device-local heaps summed (VkPhysicalDeviceMemoryProperties:
+    // heap count at 260, sixteen heaps of size u64 + flags u32 from 264);
+    // free is unknown without VK_EXT_memory_budget, and says 0.
+    void memory(u64* total, u64* free)
+        {
+        *total = (u64)0;
+        *free = (u64)0;
+        if (gVkMemProps == (u8*)0)
+            return;
+        u32 heaps = *(u32*)(pointer)(gVkMemProps + 260);
+        if (heaps > (u32)16)
+            heaps = (u32)16;
+        for (u32 i = (u32)0; i < heaps; i = i + (u32)1)
+            {
+            u8* h = gVkMemProps + 264 + i * (u32)16;
+            if ((*(u32*)(pointer)(h + 8) & (u32)1) != (u32)0)   // DEVICE_LOCAL
+                *total = *total + *(u64*)(pointer)h;
+            }
+        }
     bool take(ParTile* t, ParChunk* proto, u8* src, ParLayout* l)
         {
         if (!_ready || _inFlight >= (u32)PAR_VK_DEPTH)
@@ -1762,6 +1784,7 @@ class ParVulkanWorker : ParWorker
         if (gVk_end(cb) != (i32)0 || !submit(d))
             return false;
         _slotTile[d] = t;
+        _slotStart[d] = ParDevice.nowUs();
         t.worker = (ParWorker*)self;
         _nextSlot = (d + (u32)1) % (u32)PAR_VK_DEPTH;
         _inFlight = _inFlight + (u32)1;
@@ -1830,6 +1853,7 @@ class ParVulkanWorker : ParWorker
                 }
             }
         t.done = true;
+        t.usTaken = ParDevice.nowUs() - _slotStart[d];
         _slotTile[d] = (ParTile*)0;
         _oldest = (d + (u32)1) % (u32)PAR_VK_DEPTH;
         _inFlight = _inFlight - (u32)1;

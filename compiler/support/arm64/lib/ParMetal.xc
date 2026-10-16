@@ -390,6 +390,7 @@ class ParMetalWorker : ParWorker
     pointer _reds[PAR_MTL_DEPTH * 16];
     pointer _cb[PAR_MTL_DEPTH];
     ParTile* _slotTile[PAR_MTL_DEPTH];
+    i64 _slotStart[PAR_MTL_DEPTH];
     u32 _nextSlot;
     u32 _oldest;
     u32 _inFlight;
@@ -499,6 +500,18 @@ class ParMetalWorker : ParWorker
         _l = (ParLayout*)0;
         }
 
+    // Metal's working-set figure and what it has allocated now.
+    void memory(u64* total, u64* free)
+        {
+        *total = (u64)0;
+        *free = (u64)0;
+        if (gMtlDev == (pointer)0)
+            return;
+        u64 max = ((parMsgU_t*)gMtlSend)(gMtlDev, ParMetal.sel("recommendedMaxWorkingSetSize"));
+        u64 used = ((parMsgU_t*)gMtlSend)(gMtlDev, ParMetal.sel("currentAllocatedSize"));
+        *total = max;
+        *free = used < max ? max - used : (u64)0;
+        }
     bool take(ParTile* t, ParChunk* proto, u8* src, ParLayout* l)
         {
         if (!_ready || _inFlight >= (u32)PAR_MTL_DEPTH)
@@ -566,6 +579,7 @@ class ParMetalWorker : ParWorker
         send0(cb, ParMetal.sel("commit"));
         _cb[d] = cb;
         _slotTile[d] = t;
+        _slotStart[d] = ParDevice.nowUs();
         t.worker = (ParWorker*)self;
         _nextSlot = (d + (u32)1) % (u32)PAR_MTL_DEPTH;
         _inFlight = _inFlight + (u32)1;
@@ -624,6 +638,7 @@ class ParMetalWorker : ParWorker
         send0(_cb[d], ParMetal.sel("release"));
         _cb[d] = (pointer)0;
         t.done = true;
+        t.usTaken = ParDevice.nowUs() - _slotStart[d];
         _slotTile[d] = (ParTile*)0;
         _oldest = (d + (u32)1) % (u32)PAR_MTL_DEPTH;
         _inFlight = _inFlight - (u32)1;

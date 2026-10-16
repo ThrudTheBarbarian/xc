@@ -65,10 +65,16 @@ bool gParGpuDiscrete;
 #if ARCH_win64
 i32 QueryPerformanceCounter(i64* count);
 i32 QueryPerformanceFrequency(i64* perSecond);
+i32 GlobalMemoryStatusEx(pointer status);
+pointer memset(pointer dst, i32 c, u64 n);
 #elif ARCH_x86_64 || ARCH_wasm32 || PLATFORM_android
 // Linux's monotonic clock (on wasm32, the loader's, in the same form).
 struct _ParTimespec { i64 sec; i64 nsec; }
 i32 clock_gettime(i32 clock, u8* ts);
+#if !ARCH_wasm32
+i32 sysinfo(pointer info);
+pointer memset(pointer dst, i32 c, u64 n);
+#endif
 #else
 // Darwin's monotonic clock, in nanoseconds, and the CPU's model for the
 // hardware key.
@@ -418,6 +424,40 @@ class ParDevice
             gParVkUs[i] = (i64)-2;
         }
 #endif
+
+    // The host's RAM, bytes: total and free now (free 0 where the host does
+    // not say cheaply). For a daemon's greeting.
+    static void systemMemory(u64* total, u64* free)
+        {
+        *total = (u64)0;
+        *free = (u64)0;
+#if ARCH_win64
+        u8 st[64];                      // MEMORYSTATUSEX
+        memset((pointer)&st[0], (i32)0, (u64)64);
+        *(u32*)(pointer)&st[0] = (u32)64;
+        if (GlobalMemoryStatusEx((pointer)&st[0]) != (i32)0)
+            {
+            *total = *(u64*)(pointer)(&st[0] + 8);
+            *free = *(u64*)(pointer)(&st[0] + 16);
+            }
+#elif ARCH_x86_64 || PLATFORM_android
+        u8 si[128];                     // struct sysinfo: totalram at 32, freeram at 40, mem_unit at 104
+        memset((pointer)&si[0], (i32)0, (u64)128);
+        if (sysinfo((pointer)&si[0]) == (i32)0)
+            {
+            u64 unit = (u64)*(u32*)(pointer)(&si[0] + 104);
+            if (unit == (u64)0)
+                unit = (u64)1;
+            *total = *(u64*)(pointer)(&si[0] + 32) * unit;
+            *free = *(u64*)(pointer)(&si[0] + 40) * unit;
+            }
+#elif ARCH_arm64
+        u64 mem = (u64)0;
+        u64 len = (u64)8;
+        if (sysctlbyname("hw.memsize", (pointer)&mem, &len, (pointer)0, (u64)0) == (i32)0)
+            *total = mem;
+#endif
+        }
 
     static bool reporting(void)
         {

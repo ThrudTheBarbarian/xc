@@ -19,6 +19,7 @@ class ParTile : Object
     Data* raw;          // or the partials as bytes, for a chunk that asks (rawPartials)
     bool done;
     ParWorker* worker;  // who took it
+    i64 usTaken;        // on a GPU worker: from take() to completion, the daemon's "kernel time" for a tile
     }
 
 class ParWorker : Object
@@ -60,6 +61,14 @@ class ParWorker : Object
         if (_preferredPeer != (ParWorker*)0 && _preferredPeer.holds(proto, src, l) && holds(proto, src, l))
             return _preferredPeer;
         return (ParWorker*)0;
+        }
+    // The device's memory, bytes: what it has and what is free now; 0 for
+    // either the worker cannot tell. A daemon puts the first worker's in its
+    // greeting, so a program caps a tile's footprint per worker.
+    void memory(u64* total, u64* free)
+        {
+        *total = (u64)0;
+        *free = (u64)0;
         }
     // Whether the worker can take a tile RIGHT NOW: reachable, and not so
     // loaded that giving it work would lose time. A local device is always

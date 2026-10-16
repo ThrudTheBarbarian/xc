@@ -48,6 +48,7 @@ typedef i32 cuMemHostRegister_t(pointer host, u64 bytes, u32 flags);
 typedef i32 cuMemHostUnregister_t(pointer host);
 typedef i32 cuDeviceGetCount_t(i32* count);
 typedef i32 cuCtxSetCurrent_t(pointer ctx);
+typedef i32 cuMemGetInfo_t(u64* free, u64* total);
 typedef i32 cuEventQuery_t(pointer event);
 // The caller's arrays registered as pinned memory, so a tile's copies go
 // straight between them and the device with no staging copy on the host:
@@ -92,6 +93,7 @@ cuMemAlloc_t* gCu_alloc;
 cuDeviceGetAttribute_t* gCu_attr;
 cuCtxCreate_t* gCu_ctxCreate;
 cuCtxSetCurrent_t* gCu_ctxSetCurrent;
+cuMemGetInfo_t* gCu_memGetInfo;
 cuDeviceGet_t* gCu_deviceGet;
 cuEventCreate_t* gCu_eventCreate;
 cuEventQuery_t* gCu_eventQuery;
@@ -211,6 +213,7 @@ class ParCuda
         _getName = (cuDeviceGetName_t*)GetProcAddress(lib, "cuDeviceGetName");
         _deviceGetCount = (cuDeviceGetCount_t*)GetProcAddress(lib, "cuDeviceGetCount");
         _ctxSetCurrent = (cuCtxSetCurrent_t*)GetProcAddress(lib, "cuCtxSetCurrent");
+        gCu_memGetInfo = (cuMemGetInfo_t*)GetProcAddress(lib, "cuMemGetInfo_v2");
         _eventQuery = (cuEventQuery_t*)GetProcAddress(lib, "cuEventQuery");
         // Without the whole set the runtime stays single shot; the driver's
         // API has had all of them since CUDA 4, so this is defensive.
@@ -1184,6 +1187,7 @@ class ParCudaWorker : ParWorker
     i64 _tile;
     // In flight: the tile in each slot, taken in ring order.
     ParTile* _slotTile[PAR_CU_DEPTH];
+    i64 _slotStart[PAR_CU_DEPTH];
     i64 _tTake[PAR_CU_DEPTH];       // the timeline (XC_PAR_REPORT=2): when the slot's tile was taken
     i64 _tLaunched[PAR_CU_DEPTH];   // and when its launch had been issued
     i64 _span[PAR_CU_DEPTH * 3];
@@ -1452,6 +1456,22 @@ class ParCudaWorker : ParWorker
         _l = (ParLayout*)0;
         }
 
+    // The card's memory, by the driver, with this worker's context current.
+    void memory(u64* total, u64* free)
+        {
+        *total = (u64)0;
+        *free = (u64)0;
+        if (gCu_memGetInfo == (cuMemGetInfo_t*)0 || _ctx == (pointer)0)
+            return;
+        gCu_ctxSetCurrent(_ctx);
+        u64 f = (u64)0;
+        u64 tt = (u64)0;
+        if (gCu_memGetInfo(&f, &tt) == (i32)0)
+            {
+            *total = tt;
+            *free = f;
+            }
+        }
     bool take(ParTile* t, ParChunk* proto, u8* src, ParLayout* l)
         {
         if (_inFlight >= (u32)PAR_CU_DEPTH || _l == (ParLayout*)0)
@@ -1596,6 +1616,7 @@ class ParCudaWorker : ParWorker
         if (!ok || gCu_eventRecord(_tileDone[d], _copy[d]) != (i32)0)
             return false;
         _slotTile[d] = t;
+        _slotStart[d] = ParDevice.nowUs();
         t.worker = (ParWorker*)self;
         _nextSlot = (d + (u32)1) % (u32)PAR_CU_DEPTH;
         _inFlight = _inFlight + (u32)1;
@@ -1663,6 +1684,7 @@ class ParCudaWorker : ParWorker
                 }
             }
         t.done = true;
+        t.usTaken = ParDevice.nowUs() - _slotStart[d];
         _slotTile[d] = (ParTile*)0;
         _oldest = (d + (u32)1) % (u32)PAR_CU_DEPTH;
         _inFlight = _inFlight - (u32)1;
