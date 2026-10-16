@@ -1,0 +1,4 @@
+client: open 1
+client: text 1 'echo: over tls'
+server: open 0, close 1000 'bye'
+client: open 0, close 1000

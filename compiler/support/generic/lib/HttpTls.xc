@@ -54,9 +54,31 @@ class _HttpTlsConn<HttpSecureConnection>
         return _c.read(p, (i32)n);
         }
 
+    i32 pending(void)
+        {
+        return _c.pending();
+        }
+
     void close(void)
         {
         _c.close();
+        }
+    }
+
+// The server half: one certificate and key, every accepted socket shaken
+// hands with through it.
+class _HttpTlsAcceptor<HttpSecureAcceptor>
+    {
+    TlsServer* _server;
+
+    HttpSecureConnection* accept(i64 fd)
+        {
+        TlsConn* c = _server.accept((i32)fd);
+        if (c == (TlsConn*)0)
+            return (HttpSecureConnection*)0;
+        _HttpTlsConn* w = new _HttpTlsConn();
+        w._c = c;
+        return w;
         }
     }
 
@@ -78,6 +100,18 @@ class _HttpTlsLayer<HttpSecureLayer>
 
 class HttpTls
     {
+    // A server's side of TLS from its certificate and key (PEM files), for
+    // WebSocketServer.listenSecure; null when they do not load.
+    static HttpSecureAcceptor* serverWith(String* certPath, String* keyPath)
+        {
+        TlsServer* s = new TlsServer();
+        if (!s.listen(certPath.cString(), keyPath.cString()))
+            return (HttpSecureAcceptor*)0;
+        _HttpTlsAcceptor* a = new _HttpTlsAcceptor();
+        a._server = s;
+        return a;
+        }
+
     // Register https with Http, verifying against the system's trusted roots:
     // the certificate store on Windows, elsewhere the first CA bundle found in
     // the usual places. False when there is none (https stays off).

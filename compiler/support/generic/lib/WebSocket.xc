@@ -34,8 +34,8 @@
 // inside `receive`, and a close from the peer is answered and reported by
 // `closeCode`. `wss:` goes through the TLS layer Http uses: import HttpTls.xc
 // and call HttpTls.install() first, and connect verifies the certificate as
-// https does. A server takes plain `ws:` connections; put a TLS-terminating
-// proxy in front of it for `wss:`.
+// https does. A server serves `wss:` with `listenSecure(port,
+// HttpTls.serverWith(cert, key))`, from 0.8.1; `listen(port)` is plain `ws:`.
 //
 // Reading blocks only for as long as `receive` is told to; a connection the
 // peer closes, or that fails, reads as closed from then on (isOpen).
@@ -91,6 +91,8 @@ class _WsLink
     HttpSecureConnection* _tls;
     bool waitReadable(i32 ms)
         {
+        if (_tls != (HttpSecureConnection*)0 && _tls.pending() > (i32)0)
+            return true;
         return _sock.waitReadable(ms);
         }
     // Exactly n bytes, or false (the connection is then closed).
@@ -528,6 +530,14 @@ class WebSocket
 
     WebSocketMessage* _message(bool text, Data* d)
         {
+        // A text message must be UTF-8 (RFC 6455 §8.1): one that is not
+        // fails the connection with 1007, as a browser would, rather than
+        // handing the bytes on as a string.
+        if (text && !String.withBytes(d.bytes(), d.length()).isValidUtf8())
+            {
+            _abort((u16)1007);
+            return (WebSocketMessage*)0;
+            }
         WebSocketMessage* m = new WebSocketMessage();
         m._text = text;
         m._data = d;
@@ -623,11 +633,23 @@ class WebSocket
 class WebSocketServer
     {
     Socket* _listener;
+    HttpSecureAcceptor* _tls;   // `wss:`: every accepted connection shakes hands through it
 
     static WebSocketServer* listen(u16 port) throws
         {
         WebSocketServer* s = new WebSocketServer();
         s._listener = Socket.listen(port);
+        return s;
+        }
+
+    // A `wss:` server: `tls` is HttpTls.serverWith(cert, key) (import
+    // HttpTls.xc, which links the TLS library). A client that cannot
+    // complete the handshake is dropped before the HTTP upgrade.
+    static WebSocketServer* listenSecure(u16 port, HttpSecureAcceptor* tls) throws
+        {
+        WebSocketServer* s = new WebSocketServer();
+        s._listener = Socket.listen(port);
+        s._tls = tls;
         return s;
         }
 
@@ -641,6 +663,15 @@ class WebSocketServer
             return (WebSocket*)0;
         _WsLink* link = new _WsLink();
         link._sock = c;
+        if (_tls != (HttpSecureAcceptor*)0)
+            {
+            link._tls = _tls.accept(c.fd());
+            if (link._tls == (HttpSecureConnection*)0)
+                {
+                c.close();
+                return (WebSocket*)0;
+                }
+            }
         WebSocket* ws = new WebSocket();
         ws._link = link;
         ws._client = false;

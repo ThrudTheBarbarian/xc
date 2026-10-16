@@ -274,12 +274,23 @@ protocol HttpSecureConnection
     {
     bool write(u8* p, u32 n);
     i32 read(u8* p, u32 n);
+    // Bytes decrypted and waiting inside the connection, which a poll on
+    // the socket cannot see: a reader waits on the socket only when this is 0.
+    i32 pending(void);
     void close(void);
     }
 
 protocol HttpSecureLayer
     {
     HttpSecureConnection* connect(i64 fd, String* host);
+    }
+
+// The server half: a connection over a socket this side accepted, with the
+// server's certificate (HttpTls.serverWith). WebSocketServer.listenSecure
+// takes one.
+protocol HttpSecureAcceptor
+    {
+    HttpSecureConnection* accept(i64 fd);
     }
 
 // ── the response ────────────────────────────────────────────────────────
