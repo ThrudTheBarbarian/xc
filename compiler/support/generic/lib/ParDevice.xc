@@ -115,6 +115,7 @@ i64 gParProgN[256];
 i64 gParProgUs[1024];
 u32 gParProgCount[64];
 bool gParLearned[64];
+bool gParProbed[64];    // XC_PAR_PROBE: the block's first run was the sweep
 i64 gParMeasN[64];
 i64 gParLastN[64];
 bool gParMeasuring[64]; // this run is one auto measures (not decided by a setting or the bounds)
@@ -673,6 +674,81 @@ class ParDevice
         key.appendCString(gParBlock[i]);
         key.appendFormat(".%08x", hash(proto.gpuSource(), (u32)2166136261));
         return key;
+        }
+
+    // ── the probe (XC_PAR_PROBE=1) ─────────────────────────────────────
+    // A block's first run sweeps tile sizes per worker and writes what it
+    // found as PRIORS: the device crossover into the learned record, the
+    // per-worker boundaries here, `<ident>:<knee>:<saturation>:<rate>;…`
+    // (rate in items per us times 1024). Run-time learning starts from
+    // them and keeps adjusting; the probe only says where to begin.
+    static bool probing(void)
+        {
+        return Platform.env(String.withCString("XC_PAR_PROBE")).byteLength() > (u32)0;
+        }
+    static bool probed(ParChunk* proto)
+        {
+        return gParProbed[slot(proto.parName())];
+        }
+    static void setProbed(ParChunk* proto)
+        {
+        gParProbed[slot(proto.parName())] = true;
+        }
+    static String* probeKey(u32 i, ParChunk* proto)
+        {
+        String* key = keyHead("probe");
+        key.append(_hw);
+        key.appendCString(".");
+        key.appendCString(gParBlock[i]);
+        key.appendFormat(".%08x", hash(proto.gpuSource(), (u32)2166136261));
+        return key;
+        }
+    static void saveProbe(ParChunk* proto, String* record)
+        {
+        if (_hw == (String*)0)
+            return;
+        Settings* st = store();
+        st.set(probeKey(slot(proto.parName()), proto), record);
+        st.save();
+        }
+    // The probe's boundaries for one worker of a block, or false.
+    static bool probePrior(ParChunk* proto, String* ident, i64* knee, i64* saturation, i64* rate)
+        {
+        if (_hw == (String*)0)
+            return false;
+        String* v = store().get(probeKey(slot(proto.parName()), proto));
+        if (v == (String*)0)
+            return false;
+        Array* entries = v.splitOnByte((u8)';');
+        for (u32 e = (u32)0; e < entries.count(); e = e + (u32)1)
+            {
+            String* en = (String*)entries.get(e);
+            // ident:knee:sat:rate — the ident itself may hold ':' (remote:host:…),
+            // so the three numbers are read from the END.
+            u32 c3 = (u32)$FFFFFFFF;
+            u32 c2 = (u32)$FFFFFFFF;
+            u32 c1 = (u32)$FFFFFFFF;
+            for (u32 k = en.byteLength(); k > (u32)0; k = k - (u32)1)
+                if (en.byteAt(k - (u32)1) == (u8)':')
+                    {
+                    if (c3 == (u32)$FFFFFFFF) c3 = k - (u32)1;
+                    else if (c2 == (u32)$FFFFFFFF) c2 = k - (u32)1;
+                    else if (c1 == (u32)$FFFFFFFF) { c1 = k - (u32)1; break; }
+                    }
+            if (c1 == (u32)$FFFFFFFF)
+                continue;
+            if (!en.substringBytes((u32)0, c1).equals(ident))
+                continue;
+            u8* s = en.cString();
+            u32 at = c1 + (u32)1;
+            *knee = num(s, &at);
+            at = c2 + (u32)1;
+            *saturation = num(s, &at);
+            at = c3 + (u32)1;
+            *rate = num(s, &at);
+            return true;
+            }
+        return false;
         }
 
     static String* progressKey(u32 i, ParChunk* proto)

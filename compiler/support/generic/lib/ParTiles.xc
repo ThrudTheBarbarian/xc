@@ -252,6 +252,142 @@ class ParTiles
         return ran;
         }
 
+    // The probe's pass: one worker alone, one tile size, set by probe()
+    // around a run and cleared after it.
+    static ParWorker* _probeWorker;
+    static i64 _probeTile;
+
+    // XC_PAR_PROBE=1: the block's first run as a sweep. Every worker that
+    // takes the block runs it alone at tile sizes from its floor up by
+    // powers of two to half the range, a pass each; the written arrays and
+    // globals are copied aside first and put back before every pass, since
+    // a block that reads what it writes (`ys[i] = xs[i] + ys[i]`) is not the
+    // same twice; reductions fold into a throwaway chunk. The KNEE is the
+    // smallest size at nine tenths of the best rate, the SATURATION the
+    // size of the best. The findings are saved as priors (ParDevice.
+    // saveProbe, learn) and reported; the caller then runs the block for
+    // real, from them. Owner 2026-10-16: boundaries found, not evolved.
+    static bool probe(ParChunk* proto, u8* src, i64 lo, i64 hi)
+        {
+        ParDevice.setProbed(proto);
+        ParTiles.ready();
+        if (_workers.count() == (u32)0 || src == (u8*)0 || src[0] == (u8)0)
+            return false;
+        ParLayout* l = ParDevice.layout(proto, src, lo, hi);
+        if (l == (ParLayout*)0)
+            return false;
+        i64 n = hi - lo;
+        Array* ws = new Array();
+        for (u32 i = (u32)0; i < _workers.count(); i = i + (u32)1)
+            {
+            ParWorker* w = (ParWorker*)_workers.get(i);
+            if (w.forBlock(proto, src, l))
+                ws.add((Object*)w);
+            }
+        if (ws.count() == (u32)0 || n < (i64)2048)
+            return false;
+        // What the block writes, kept aside.
+        u8* obj = proto.objBytes();
+        Array* keptBuf = new Array();
+        Array* keptGlob = new Array();
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            keptBuf.add(l.bufIn[i] == (i64)0 && l.bufLen[i] > (i64)0
+                        ? (Object*)Data.withBytes(*(u8**)(obj + l.bufOff[i]), (u32)l.bufLen[i]) : (Object*)0);
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            keptGlob.add(l.globIn[i] == (i64)0 && l.globLen[i] > (i64)0
+                         ? (Object*)Data.withBytes((u8*)l.globPtr[i], (u32)l.globLen[i]) : (Object*)0);
+        String* record = new String();
+        i64 bestCpuUs = (i64)-1;
+        i64 bestGpuUs = (i64)-1;
+        for (u32 k = (u32)0; k < ws.count(); k = k + (u32)1)
+            {
+            ParWorker* w = (ParWorker*)ws.get(k);
+            i64 floor = w.floor() < (i64)1024 ? (i64)1024 : w.floor();
+            i64 sizes[32];
+            i64 rates[32];
+            u32 np = (u32)0;
+            i64 best = (i64)0;
+            i64 bestS = (i64)0;
+            i64 bestUs = (i64)-1;
+            i64 linkUs = (i64)-1;
+            for (i64 s = floor; s * (i64)2 <= n && np < (u32)32; s = s * (i64)2)
+                {
+                ParTiles.restore(l, obj, keptBuf, keptGlob);
+                ParChunk* scratch = proto.copyChunk();
+                _probeWorker = w;
+                _probeTile = s;
+                i64 t0 = ParDevice.nowUs();
+                bool ok = ParTiles.run(scratch, src, lo, hi, (i32)0);
+                i64 us = ParDevice.nowUs() - t0;
+                _probeWorker = (ParWorker*)0;
+                _probeTile = (i64)0;
+                if (!ok)
+                    break;
+                if (us < (i64)1)
+                    us = (i64)1;
+                i64 rate = (n << (i64)10) / us;
+                sizes[np] = s;
+                rates[np] = rate;
+                np = np + (u32)1;
+                if (ParDevice.reporting())
+                    Log.info("par: probe: %s: %s: tiles of %ld: %ld us (%ld items/ms)", proto.parName(), w.identity().cString(), s, us, rate * (i64)1000 >> (i64)10);
+                if (rate > best)
+                    {
+                    best = rate;
+                    bestS = s;
+                    bestUs = us;
+                    linkUs = w.kernelUs() >= (i64)0 ? us - w.kernelUs() : (i64)-1;
+                    }
+                }
+            if (np == (u32)0)
+                continue;
+            i64 knee = bestS;
+            for (u32 q = (u32)0; q < np; q = q + (u32)1)
+                if (rates[q] * (i64)10 >= best * (i64)9)
+                    {
+                    knee = sizes[q];
+                    break;
+                    }
+            if (ParDevice.reporting())
+                {
+                if (linkUs >= (i64)0)
+                    Log.info("par: probe: %s: %s: knee %ld, saturation %ld, %ld items/ms, link %ld us of %ld", proto.parName(), w.identity().cString(), knee, bestS, best * (i64)1000 >> (i64)10, linkUs, bestUs);
+                else
+                    Log.info("par: probe: %s: %s: knee %ld, saturation %ld, %ld items/ms", proto.parName(), w.identity().cString(), knee, bestS, best * (i64)1000 >> (i64)10);
+                }
+            record.append(w.identity());
+            record.appendFormat(":%ld:%ld:%ld;", knee, bestS, best);
+            bool cpu = w.identity().equals(String.withCString("cpu"));
+            if (cpu && (bestCpuUs < (i64)0 || bestUs < bestCpuUs))
+                bestCpuUs = bestUs;
+            if (!cpu && (bestGpuUs < (i64)0 || bestUs < bestGpuUs))
+                bestGpuUs = bestUs;
+            }
+        ParTiles.restore(l, obj, keptBuf, keptGlob);
+        if (record.byteLength() > (u32)0)
+            ParDevice.saveProbe(proto, record);
+        // The device crossover at this size, as a prior for auto: the CPU
+        // pool against the best single GPU.
+        if (bestCpuUs >= (i64)0 && bestGpuUs >= (i64)0)
+            ParDevice.learn(ParDevice.slot(proto.parName()), proto, n, bestCpuUs <= bestGpuUs ? (i32)1 : (i32)2);
+        return true;
+        }
+    static void restore(ParLayout* l, u8* obj, Array* keptBuf, Array* keptGlob)
+        {
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            Data* d = (Data*)keptBuf.get(i);
+            if (d != (Data*)0)
+                memcpy((pointer)*(u8**)(obj + l.bufOff[i]), (pointer)d.bytes(), (u64)d.length());
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            Data* d = (Data*)keptGlob.get(i);
+            if (d != (Data*)0)
+                memcpy((pointer)l.globPtr[i], (pointer)d.bytes(), (u64)d.length());
+            }
+        }
+
     static bool runLocked(ParChunk* proto, u8* src, i64 lo, i64 hi, i32 set)
         {
         i64 started = ParDevice.nowUs();
@@ -283,6 +419,14 @@ class ParTiles
             if (w.floor() > floor)
                 floor = w.floor();
             totalDepth = totalDepth + w.depth();
+            }
+        if (_probeWorker != (ParWorker*)0)
+            {
+            // The probe's pass: that worker alone.
+            ws = new Array();
+            ws.add((Object*)_probeWorker);
+            floor = _probeWorker.floor();
+            totalDepth = _probeWorker.depth();
             }
         if (ws.count() == (u32)0)
             return false;
@@ -342,6 +486,24 @@ class ParTiles
             least = (least + (i64)1023) & ~(i64)1023;
             if (tile < least)
                 tile = least;
+            }
+        // The probe's pass sets the size outright; a probed block's knee is
+        // the least a tile may be on a later run (the prior).
+        if (_probeTile > (i64)0)
+            tile = _probeTile;
+        else
+            {
+            i64 kneeMax = (i64)0;
+            for (u32 i = (u32)0; i < ws.count(); i = i + (u32)1)
+                {
+                i64 pk = (i64)0;
+                i64 ps = (i64)0;
+                i64 pr = (i64)0;
+                if (ParDevice.probePrior(proto, ((ParWorker*)ws.get(i)).identity(), &pk, &ps, &pr) && pk > kneeMax)
+                    kneeMax = pk;
+                }
+            if (kneeMax > (i64)0 && tile < kneeMax && kneeMax * (i64)2 * (i64)ws.count() <= n)
+                tile = kneeMax;
             }
         if (tile > n)
             tile = n;
@@ -443,6 +605,23 @@ class ParTiles
                     firstTake[i] = ParDevice.nowUs() - us;
                     }
                 }
+        // A probed block's rates seed the workers auto never measured (every
+        // remote, a second card): the prior the probe left.
+        for (u32 i = (u32)0; i < nw; i = i + (u32)1)
+            {
+            if (doneItems[i] != (i64)0 || _probeWorker != (ParWorker*)0)
+                continue;
+            i64 pk = (i64)0;
+            i64 ps = (i64)0;
+            i64 pr = (i64)0;
+            if (ParDevice.probePrior(proto, ((ParWorker*)ws.get(i)).identity(), &pk, &ps, &pr) && pr > (i64)0)
+                {
+                doneItems[i] = n;
+                firstTake[i] = ParDevice.nowUs() - ((n << (i64)10) / pr);
+                if (ParDevice.tracing())
+                    Log.info("par: %s: %s seeded from the probe (%ld items/ms)", proto.parName(), ((ParWorker*)ws.get(i)).identity().cString(), pr * (i64)1000 >> (i64)10);
+                }
+            }
         // Tiles a worker took and lost (its connection died) go out again,
         // before the ones not yet handed out: a tile is idempotent.
         Array* again = new Array();

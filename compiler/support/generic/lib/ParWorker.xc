@@ -62,6 +62,13 @@ class ParWorker : Object
             return _preferredPeer;
         return (ParWorker*)0;
         }
+    // A remote worker's sum of the daemon's time on this run's tiles (DONE's
+    // KERNELUS), or -1 for a local one: the probe reads the link's share as
+    // the pass's wall time less this.
+    i64 kernelUs(void)
+        {
+        return (i64)-1;
+        }
     // The device's memory, bytes: what it has and what is free now; 0 for
     // either the worker cannot tell. A daemon puts the first worker's in its
     // greeting, so a program caps a tile's footprint per worker.

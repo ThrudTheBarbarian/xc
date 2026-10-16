@@ -1042,6 +1042,10 @@ class ParRemoteWorker : ParWorker
         _inFlight = (u32)0;
         return false;
         }
+    i64 kernelUs(void)
+        {
+        return _kernelUs;
+        }
     Array* lost(void)
         {
         Array* l = _lostTiles;

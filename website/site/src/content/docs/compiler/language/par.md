@@ -567,6 +567,17 @@ in … us on the daemon's GPU`), so the link's share of a tile's time is
 visible beside the compute's. The frames are tagged fields, read by tag, so
 a side may carry a field the other does not know.
 
+`XC_PAR_PROBE=1` makes a block's first run a probe (from 0.8.1): every
+worker that takes the block, local or remote, runs it alone at tile sizes
+from its floor up by powers of two, the arrays the block writes are put
+back between passes, and the report prints each worker's curve, its knee
+(the smallest tile at nine tenths of its best rate) and where it saturates,
+and for a remote the link's share of the time. What it found is kept in the
+program's settings as a starting point: the next run begins from those tile
+sizes and rates and keeps adjusting as it goes. Use it once on a machine or
+a network to find the boundaries rather than letting them be learned over
+many runs.
+
 A heartbeat measures the link when the program connects (its round trip, and
 its bandwidth from a one-megabyte ping) and then asks the daemon every second,
 while tiles are being handed out, whether it takes work now. The round trip

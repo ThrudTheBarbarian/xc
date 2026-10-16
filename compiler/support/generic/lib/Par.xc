@@ -204,6 +204,12 @@ class Par
             proto.run();
             return;
             }
+#if !ARCH_wasm32
+        // XC_PAR_PROBE=1: the block's first run is a sweep of tile sizes per
+        // worker, written as priors (ParTiles.probe); the run itself follows.
+        if (ParDevice.probing() && !ParDevice.probed(proto))
+            ParTiles.probe(proto, proto.gpuSource(), lo, hi);
+#endif
         i32 choice = ParDevice.choose(proto, hi - lo);
 #if !ARCH_wasm32
         if (choice >= (i32)3)
