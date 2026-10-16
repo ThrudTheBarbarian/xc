@@ -74,7 +74,7 @@
 #import "Base64.xc"
 #import "Bundle.xc"
 
-#define PAR_REMOTE_PROTO 4
+#define PAR_REMOTE_PROTO 5
 #define PAR_REMOTE_PORT 7227
 #define PAR_REMOTE_DEPTH 3
 
@@ -409,6 +409,34 @@ class ParLink
 // A little-endian byte writer and reader over Data.
 class ParWire
     {
+    // A content hash for the daemon's slice cache: 64 bits over the bytes as
+    // words in two lanes (rotate, multiply by odd constants), the tail by
+    // byte, the length folded in. Memory speed; the link is the slow part.
+    static u64 hash64(u8* p, u32 n)
+        {
+        u64 a = (u64)0x9E3779B97F4A7C15 ^ (u64)n;
+        u64 b = (u64)0xC2B2AE3D27D4EB4F;
+        u32 i = (u32)0;
+        while (i + (u32)16 <= n)
+            {
+            u64 x = *(u64*)(p + i);
+            u64 y = *(u64*)(p + i + (u32)8);
+            a = ((a ^ x) * (u64)0x9FB21C651E98DF25);
+            a = (a << (u64)27) | (a >> (u64)37);
+            b = ((b ^ y) * (u64)0x9E6C63D0676A9A99);
+            b = (b << (u64)31) | (b >> (u64)33);
+            i = i + (u32)16;
+            }
+        while (i < n)
+            {
+            a = (a ^ (u64)p[i]) * (u64)0x100000001B3;
+            i = i + (u32)1;
+            }
+        u64 h = a ^ (b * (u64)0x9E3779B97F4A7C15);
+        h = h ^ (h >> (u64)29);
+        h = h * (u64)0xBF58476D1CE4E5B9;
+        return h ^ (h >> (u64)32);
+        }
     static void putU8(Data* d, u8 v) { d.appendByte(v); }
     static void putU32(Data* d, u32 v)
         {
@@ -682,7 +710,11 @@ class ParWire
     // The block described for the far side: its name, its kernel source,
     // and its arrays and globals — lengths and flags, and with `data`, the
     // object's bytes and every array's and global's bytes.
-    static Data* describe(ParChunk* proto, u8* src, ParLayout* l, bool data)
+    // data: the chunk's object bytes go too; arrays: so do the whole (not
+    // sliced) arrays' and globals' bytes. PREPARE sends the object and the
+    // arrays' hashes (field HASHES), the bytes only for what the daemon's
+    // cache lacks (frame DATA); HOLDS sends neither.
+    static Data* describe(ParChunk* proto, u8* src, ParLayout* l, bool data, bool arrays)
         {
         Data* d = new Data();
         ParWire.putStr(d, proto.parName());
@@ -701,7 +733,7 @@ class ParWire
             // Sliced: its footprint is known, so each tile brings the
             // elements it reads and the whole array stays home.
             ParWire.putU8(d, l.bufFp[i] != (i64)0 ? (u8)1 : (u8)0);
-            if (data && l.bufFp[i] == (i64)0)
+            if (arrays && l.bufFp[i] == (i64)0)
                 d.appendBytes(*(u8**)(obj + l.bufOff[i]), (u32)l.bufLen[i]);
             }
         ParWire.putU32(d, l.nglob);
@@ -712,7 +744,7 @@ class ParWire
             ParWire.putU8(d, l.globIn[i] != (i64)0 ? (u8)1 : (u8)0);
             ParWire.putU8(d, l.globAll[i] != (i64)0 ? (u8)1 : (u8)0);
             ParWire.putU8(d, l.globFp[i] != (i64)0 ? (u8)1 : (u8)0);
-            if (data && l.globFp[i] == (i64)0)
+            if (arrays && l.globFp[i] == (i64)0)
                 d.appendBytes((u8*)l.globPtr[i], (u32)l.globLen[i]);
             }
         return d;
@@ -757,6 +789,16 @@ class ParRemoteWorker : ParWorker
     // What the daemon last answered holds() for, so a block is asked once.
     pointer _heldSrc;
     bool _held;
+    // The daemon's slice cache as this side knows it: slice key -> the hash
+    // last sent or returned, per connection. A slice whose hash matches is
+    // sent as its hash alone; a MISS (evicted) brings the tile back with
+    // its bytes.
+    Map* _view;
+    u8* _src;
+    bool _resend;           // the tile being taken again after a MISS: bytes regardless
+    i64 _savedBytes;        // this run: bytes the view let us leave out
+    i64 _savedSlices;
+    i64 _sentSlices;
 
     void init(String* host, u16 port)
         {
@@ -767,6 +809,7 @@ class ParRemoteWorker : ParWorker
         _identity = new String();
         _tiles = new Array();
         _finished = new Array();
+        _view = new Map();
         _available = true;
         }
 
@@ -844,6 +887,7 @@ class ParRemoteWorker : ParWorker
         _s = open();
         if (_s == (ParLink*)0)
             return false;
+        _view = new Map();
         u8 tag[8];
         Data* hello = ParWire.recv(_s, &tag[0], (i32)5000);
         if (hello == (Data*)0 || !ParWire.tagIs(&tag[0], "HELLO"))
@@ -996,6 +1040,36 @@ class ParRemoteWorker : ParWorker
             fail("lost the results link");
             return false;
             }
+        if (ParWire.getU8(f, "MISS", (u8)0) != (u8)0)
+            {
+            // The daemon's cache had dropped a slice the view said it held:
+            // the tile goes again with every byte.
+            i64 index = ParWire.getI64(f, "INDEX", (i64)-1);
+            ParTile* m = (ParTile*)0;
+            for (u32 i = (u32)0; i < _tiles.count(); i = i + (u32)1)
+                if (((ParTile*)_tiles.get(i)).index == index)
+                    {
+                    m = (ParTile*)_tiles.get(i);
+                    _tiles.removeAt(i);
+                    break;
+                    }
+            if (m == (ParTile*)0)
+                return true;
+            _inFlight = _inFlight - (u32)1;
+            _resend = true;
+            bool ok = take(m, _proto, _src, _l);
+            _resend = false;
+            if (!ok)
+                {
+                _tiles.add((Object*)m);
+                _inFlight = _inFlight + (u32)1;
+                fail("could not send a tile again after the daemon's cache dropped its slices");
+                return false;
+                }
+            if (ParDevice.tracing())
+                Log.info("par: remote %s: tile %ld sent again, its slices gone from the daemon's cache", _host.cString(), index);
+            return true;
+            }
         ParTile* t = complete(f);
         if (t != (ParTile*)0)
             _finished.add((Object*)t);
@@ -1079,7 +1153,7 @@ class ParRemoteWorker : ParWorker
         _heldSrc = (pointer)src;
         _held = false;
         Data* q = new Data();
-        ParWire.fieldData(q, "BLOCK", ParWire.describe(proto, src, l, false));
+        ParWire.fieldData(q, "BLOCK", ParWire.describe(proto, src, l, false, false));
         if (!ParWire.send(_s, "HOLDS", q))
             return false;
         u8 tag[8];
@@ -1121,13 +1195,75 @@ class ParRemoteWorker : ParWorker
         _tiles = new Array();
         _kernelUs = (i64)0;
         _kernelItems = (i64)0;
+        _src = src;
+        _savedBytes = (i64)0;
+        _savedSlices = (i64)0;
+        _sentSlices = (i64)0;
         Data* d = new Data();
-        ParWire.fieldData(d, "BLOCK", ParWire.describe(proto, src, l, true));
+        ParWire.fieldData(d, "BLOCK", ParWire.describe(proto, src, l, true, false));
         ParWire.fieldI64(d, "TILE", tile);
         ParWire.fieldI64(d, "N", l.n);
+        // The whole arrays by hash; the daemon says which it lacks.
+        Data* hs = new Data();
+        u8* obj = proto.objBytes();
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            if (l.bufFp[i] == (i64)0)
+                {
+                ParWire.putU8(hs, (u8)0);
+                ParWire.putU32(hs, i);
+                ParWire.putI64(hs, l.bufLen[i]);
+                ParWire.putI64(hs, (i64)ParWire.hash64(*(u8**)(obj + l.bufOff[i]), (u32)l.bufLen[i]));
+                }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            if (l.globFp[i] == (i64)0)
+                {
+                ParWire.putU8(hs, (u8)1);
+                ParWire.putU32(hs, i);
+                ParWire.putI64(hs, l.globLen[i]);
+                ParWire.putI64(hs, (i64)ParWire.hash64((u8*)l.globPtr[i], (u32)l.globLen[i]));
+                }
+        ParWire.fieldData(d, "HASHES", hs);
         if (!ParWire.send(_s, "PREPARE", d))
             return false;
         u8 tag[8];
+        Data* nd = ParWire.recv(_s, &tag[0], (i32)60000);
+        if (nd == (Data*)0 || !ParWire.tagIs(&tag[0], "NEED"))
+            return false;
+        Data* arrays = new Data();
+        u8* np = (u8*)0;
+        u32 nn = (u32)0;
+        u32 na = (u32)0;
+        i64 wholeBytes = (i64)0;
+        i64 wholeSent = (i64)0;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            if (l.bufFp[i] == (i64)0) wholeBytes = wholeBytes + l.bufLen[i];
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            if (l.globFp[i] == (i64)0) wholeBytes = wholeBytes + l.globLen[i];
+        if (ParWire.find(nd, "LIST", &np, &nn))
+            while (na + (u32)5 <= nn)
+                {
+                u8 kind = ParWire.rdU8(np, &na);
+                u32 idx = ParWire.rdU32(np, &na);
+                ParWire.putU8(arrays, kind);
+                ParWire.putU32(arrays, idx);
+                if (kind == (u8)0 && idx < l.nbuf)
+                    {
+                    ParWire.putBytes(arrays, *(u8**)(obj + l.bufOff[idx]), (u32)l.bufLen[idx]);
+                    wholeSent = wholeSent + l.bufLen[idx];
+                    }
+                else if (kind != (u8)0 && idx < l.nglob)
+                    {
+                    ParWire.putBytes(arrays, (u8*)l.globPtr[idx], (u32)l.globLen[idx]);
+                    wholeSent = wholeSent + l.globLen[idx];
+                    }
+                else
+                    ParWire.putBytes(arrays, (u8*)0, (u32)0);
+                }
+        _savedBytes = _savedBytes + (wholeBytes - wholeSent);
+        Data* dd = new Data();
+        ParWire.fieldData(dd, "ARRAYS", arrays);
+        if (!ParWire.send(_s, "DATA", dd))
+            return false;
         Data* a = ParWire.recv(_s, &tag[0], (i32)60000);
         return a != (Data*)0 && ParWire.tagIs(&tag[0], "ANSWER") && ParWire.getU8(a, "TAKEN", (u8)0) == (u8)1;
         }
@@ -1138,8 +1274,118 @@ class ParRemoteWorker : ParWorker
         if (ParDevice.reporting() && _kernelItems > (i64)0)
             Log.info("par: remote %s: %ld items in %ld us on the daemon's GPU (%ld ns an item)", _host.cString(),
                      _kernelItems, _kernelUs, _kernelUs * (i64)1000 / _kernelItems);
+        if (ParDevice.reporting() && _savedBytes > (i64)0)
+            Log.info("par: remote %s: %ld KB not sent, cached on the daemon (%ld of %ld slices)", _host.cString(),
+                     _savedBytes >> (i64)10, _savedSlices, _savedSlices + _sentSlices);
         _proto = (ParChunk*)0;
         _l = (ParLayout*)0;
+        }
+    // The tile's slice hashes, once per tile (every remote reads them).
+    static void hashTile(ParTile* t, ParChunk* proto, ParLayout* l)
+        {
+        if (t.hashed)
+            return;
+        u32 hk = (u32)0;
+        u8* obj = proto.objBytes();
+        for (u32 i = (u32)0; i < l.nbuf && hk < (u32)32; i = i + (u32)1)
+            {
+            if (l.bufFp[i] == (i64)0)
+                continue;
+            i64 count = l.bufLen[i] / l.bufElem[i];
+            i64 e0 = ParTiles.sliceLo(l.bufFpK[i], l.bufFpLo[i], t.lo, count);
+            i64 e1 = ParTiles.sliceHi(l.bufFpK[i], l.bufFpHi[i], t.hi, count);
+            u32 n = e1 > e0 ? (u32)((e1 - e0) * l.bufElem[i]) : (u32)0;
+            t.sliceHash[hk] = n > (u32)0 ? ParWire.hash64(*(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i], n) : (u64)0;
+            hk = hk + (u32)1;
+            }
+        for (u32 i = (u32)0; i < l.nglob && hk < (u32)32; i = i + (u32)1)
+            {
+            if (l.globFp[i] == (i64)0)
+                continue;
+            i64 count = l.globLen[i] / l.globElem[i];
+            i64 e0 = ParTiles.sliceLo(l.globFpK[i], l.globFpLo[i], t.lo, count);
+            i64 e1 = ParTiles.sliceHi(l.globFpK[i], l.globFpHi[i], t.hi, count);
+            if (l.globAll[i] != (i64)0 && l.globFpK[i] == (i64)1)
+                e1 = e0;
+            u32 n = e1 > e0 ? (u32)((e1 - e0) * l.globElem[i]) : (u32)0;
+            t.sliceHash[hk] = n > (u32)0 ? ParWire.hash64((u8*)l.globPtr[i] + e0 * l.globElem[i], n) : (u64)0;
+            hk = hk + (u32)1;
+            }
+        t.sliceCount = hk;
+        t.hashed = true;
+        }
+    static String* viewKey(bool glob, u32 i, i64 off, u32 n)
+        {
+        return String.withFormat("%ld:%ld:%ld:%ld", glob ? (i64)1 : (i64)0, (i64)i, off, (i64)n);
+        }
+    bool viewHolds(bool glob, u32 i, i64 off, u32 n, u64 h)
+        {
+        String* v = (String*)_view.get((Hashable*)ParRemoteWorker.viewKey(glob, i, off, n));
+        return v != (String*)0 && v.equals(String.withFormat("%ld", (i64)h));
+        }
+    // One slice into a TILE frame: offset, length, hash, then whether the
+    // bytes follow — not when the view says the daemon holds them.
+    void putSlice(Data* sl, bool glob, u32 i, i64 off, u8* p, u32 n, u64 h)
+        {
+        ParWire.putI64(sl, off);
+        ParWire.putI64(sl, (i64)n);
+        ParWire.putI64(sl, (i64)h);
+        if (n > (u32)0 && !_resend && viewHolds(glob, i, off, n, h))
+            {
+            if (ParDevice.tracing())
+                Log.info("par: remote %s: slice %s held at %ld, not sent", _host.cString(), ParRemoteWorker.viewKey(glob, i, off, n).cString(), (i64)h);
+            ParWire.putU8(sl, (u8)0);
+            _savedBytes = _savedBytes + (i64)n;
+            _savedSlices = _savedSlices + (i64)1;
+            return;
+            }
+        ParWire.putU8(sl, (u8)1);
+        ParWire.putBytes(sl, p, n);
+        if (n > (u32)0)
+            {
+            _view.set((Hashable*)ParRemoteWorker.viewKey(glob, i, off, n), (Object*)String.withFormat("%ld", (i64)h));
+            _sentSlices = _sentSlices + (i64)1;
+            }
+        }
+    // The upload this tile would not need, when the daemon holds every
+    // slice of it: its bytes over the link's bandwidth.
+    i64 cachedSaving(ParTile* t)
+        {
+        if (_bwBytesPerUs <= (i64)0 || _proto == (ParChunk*)0 || _l == (ParLayout*)0)
+            return (i64)0;
+        ParLayout* l = _l;
+        ParRemoteWorker.hashTile(t, _proto, l);
+        u32 hk = (u32)0;
+        i64 bytes = (i64)0;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            if (l.bufFp[i] == (i64)0)
+                continue;
+            i64 count = l.bufLen[i] / l.bufElem[i];
+            i64 e0 = ParTiles.sliceLo(l.bufFpK[i], l.bufFpLo[i], t.lo, count);
+            i64 e1 = ParTiles.sliceHi(l.bufFpK[i], l.bufFpHi[i], t.hi, count);
+            u32 n = e1 > e0 ? (u32)((e1 - e0) * l.bufElem[i]) : (u32)0;
+            if (n > (u32)0 && !viewHolds(false, i, e0 * l.bufElem[i], n, t.sliceHash[hk]))
+                return (i64)0;
+            bytes = bytes + (i64)n;
+            hk = hk + (u32)1;
+            }
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            {
+            if (l.globFp[i] == (i64)0)
+                continue;
+            i64 count = l.globLen[i] / l.globElem[i];
+            i64 e0 = ParTiles.sliceLo(l.globFpK[i], l.globFpLo[i], t.lo, count);
+            i64 e1 = ParTiles.sliceHi(l.globFpK[i], l.globFpHi[i], t.hi, count);
+            if (l.globAll[i] != (i64)0 && l.globFpK[i] == (i64)1)
+                e1 = e0;
+            u32 n = e1 > e0 ? (u32)((e1 - e0) * l.globElem[i]) : (u32)0;
+            if (n > (u32)0 && !viewHolds(true, i, e0 * l.globElem[i], n, t.sliceHash[hk]))
+                return (i64)0;
+            bytes = bytes + (i64)n;
+            hk = hk + (u32)1;
+            }
+        return bytes / _bwBytesPerUs;
         }
     bool take(ParTile* t, ParChunk* proto, u8* src, ParLayout* l)
         {
@@ -1154,6 +1400,8 @@ class ParRemoteWorker : ParWorker
         // overwrite whole (the kernel fills it), as a discrete card's
         // tile loop stages them.
         Data* sl = new Data();
+        ParRemoteWorker.hashTile(t, proto, l);
+        u32 hk = (u32)0;
         u8* obj = proto.objBytes();
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
@@ -1162,8 +1410,9 @@ class ParRemoteWorker : ParWorker
             i64 count = l.bufLen[i] / l.bufElem[i];
             i64 e0 = ParTiles.sliceLo(l.bufFpK[i], l.bufFpLo[i], t.lo, count);
             i64 e1 = ParTiles.sliceHi(l.bufFpK[i], l.bufFpHi[i], t.hi, count);
-            ParWire.putI64(sl, e0 * l.bufElem[i]);
-            ParWire.putBytes(sl, *(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i], e1 > e0 ? (u32)((e1 - e0) * l.bufElem[i]) : (u32)0);
+            putSlice(sl, false, i, e0 * l.bufElem[i], *(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i],
+                     e1 > e0 ? (u32)((e1 - e0) * l.bufElem[i]) : (u32)0, t.sliceHash[hk]);
+            hk = hk + (u32)1;
             }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             {
@@ -1174,8 +1423,9 @@ class ParRemoteWorker : ParWorker
             i64 e1 = ParTiles.sliceHi(l.globFpK[i], l.globFpHi[i], t.hi, count);
             if (l.globAll[i] != (i64)0 && l.globFpK[i] == (i64)1)
                 e1 = e0;
-            ParWire.putI64(sl, e0 * l.globElem[i]);
-            ParWire.putBytes(sl, (u8*)l.globPtr[i] + e0 * l.globElem[i], e1 > e0 ? (u32)((e1 - e0) * l.globElem[i]) : (u32)0);
+            putSlice(sl, true, i, e0 * l.globElem[i], (u8*)l.globPtr[i] + e0 * l.globElem[i],
+                     e1 > e0 ? (u32)((e1 - e0) * l.globElem[i]) : (u32)0, t.sliceHash[hk]);
+            hk = hk + (u32)1;
             }
         ParWire.fieldData(d, "SLICES", sl);
         if (!ParWire.send(_s, "TILE", d))
@@ -1217,6 +1467,9 @@ class ParRemoteWorker : ParWorker
             u32 n = ParWire.rdBytes(p, &at, &b);
             if (e1 > e0 && n == (u32)((e1 - e0) * l.bufElem[i]))
                 memcpy((pointer)(*(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i]), (pointer)b, (u64)n);
+            i64 wh = ParWire.rdI64(p, &at);
+            if (n > (u32)0)
+                _view.set((Hashable*)ParRemoteWorker.viewKey(false, i, e0 * l.bufElem[i], n), (Object*)String.withFormat("%ld", wh));
             }
         for (u32 i = (u32)0; i < l.nglob && p != (u8*)0; i = i + (u32)1)
             {
@@ -1228,6 +1481,9 @@ class ParRemoteWorker : ParWorker
             u32 n = ParWire.rdBytes(p, &at, &b);
             if (e1 > e0 && n == (u32)((e1 - e0) * l.globElem[i]))
                 memcpy((pointer)((u8*)l.globPtr[i] + e0 * l.globElem[i]), (pointer)b, (u64)n);
+            i64 wh = ParWire.rdI64(p, &at);
+            if (n > (u32)0)
+                _view.set((Hashable*)ParRemoteWorker.viewKey(true, i, e0 * l.globElem[i], n), (Object*)String.withFormat("%ld", wh));
             }
         if (l.nred > (u32)0)
             {
@@ -1412,6 +1668,13 @@ class ParRemoteChunk : ParChunk
 
     u32 bufCount(void) { return _nbuf; }
     u32 globCount(void) { return _nglob; }
+    i64 bufLength(u32 i) { return _bufLen[i]; }
+    i64 globLength(u32 i) { return _globLen[i]; }
+    // The kernel source's hash: the cache's key names the block by it.
+    u32 srcHash(void)
+        {
+        return ParDevice.hash(gpuSource(), (u32)2166136261);
+        }
     bool bufSliced(u32 i) { return _bufSliced[i]; }
     bool globSliced(u32 i) { return _globSliced[i]; }
     // A tile's slice of array (glob = false) or global i, n bytes at byte
@@ -1516,7 +1779,7 @@ class ParRemoteChunk : ParChunk
         }
 
     // From a HOLDS or PREPARE payload (data: the bytes are there too).
-    static ParRemoteChunk* from(u8* p, u32* at, bool data)
+    static ParRemoteChunk* from(u8* p, u32* at, bool data, bool arrays)
         {
         ParRemoteChunk* c = new ParRemoteChunk();
         c._name = ParWire.rdStr(p, at);
@@ -1540,15 +1803,12 @@ class ParRemoteChunk : ParChunk
             c._bufRo[i] = ParWire.rdU8(p, at) != (u8)0;
             c._bufSliced[i] = ParWire.rdU8(p, at) != (u8)0;
             Data* b = Data.withLength((u32)c._bufLen[i] + (u32)16);
-            if (data)
+            if (arrays && !c._bufSliced[i])
                 {
-                if (!c._bufSliced[i])
-                    {
-                    memcpy((pointer)b.bytes(), (pointer)(p + *at), (u64)c._bufLen[i]);
-                    *at = *at + (u32)c._bufLen[i];
-                    }
-                *(pointer*)(c._obj.bytes() + off) = (pointer)b.bytes();
+                memcpy((pointer)b.bytes(), (pointer)(p + *at), (u64)c._bufLen[i]);
+                *at = *at + (u32)c._bufLen[i];
                 }
+            *(pointer*)(c._obj.bytes() + off) = (pointer)b.bytes();
             c._bufs.add((Object*)b);
             }
         c._globs = new Array();
@@ -1562,7 +1822,7 @@ class ParRemoteChunk : ParChunk
             c._globAll[i] = ParWire.rdU8(p, at) != (u8)0;
             c._globSliced[i] = ParWire.rdU8(p, at) != (u8)0;
             Data* g = Data.withLength((u32)c._globLen[i] + (u32)16);
-            if (data && !c._globSliced[i])
+            if (arrays && !c._globSliced[i])
                 {
                 memcpy((pointer)g.bytes(), (pointer)(p + *at), (u64)c._globLen[i]);
                 *at = *at + (u32)c._globLen[i];
@@ -1643,6 +1903,129 @@ class ParRemoteSession : Object
         bool e = _ended;
         _lock.unlock();
         return e;
+        }
+    }
+
+// ── The daemon's slice cache ────────────────────────────────────────────
+// Every whole array and every tile slice a program sends is kept, keyed by
+// the block (its kernel source's hash), the array, the byte offset and the
+// length, with the content hash the program computed (ParWire.hash64). A
+// later run — of the same program, or another with the same block — sends
+// hashes first and bytes only for what the cache lacks; a written slice's
+// result is kept too, hashed here, so a stencil's next pass finds what the
+// last wrote. Host RAM; LRU by bytes under `xcd -cache <MB>` (default half
+// of the first card's VRAM). Owner 2026-10-16: key per slice, affinity
+// (ParWorker.cachedSaving), default eviction.
+class ParRemoteSlice : Object
+    {
+    String* _key;
+    u64 _code;      // the content hash (`hash` is every object's method: an ivar of that name reads as it)
+    Data* _bytes;
+    i64 _used;      // the tick it was last hit
+    }
+
+class ParRemoteCache
+    {
+    static Map* _slices;
+    static Array* _list;        // every slice, for the eviction scan
+    static Mutex* _lock;
+    static i64 _bytes;
+    static i64 _cap;
+    static i64 _tick;
+    static void setup(void)
+        {
+        if (_lock == (Mutex*)0)
+            {
+            _lock = new Mutex();
+            _slices = new Map();
+            _list = new Array();
+            if (_cap == (i64)0)
+                _cap = (i64)1 << (i64)30;
+            }
+        }
+    static void setCap(i64 bytes)
+        {
+        ParRemoteCache.setup();
+        _cap = bytes;
+        }
+    static i64 cap(void)
+        {
+        return _cap;
+        }
+    static String* key(u32 src, bool glob, u32 i, i64 off, i64 len)
+        {
+        return String.withFormat("%ld:%ld:%ld:%ld:%ld", (i64)src, glob ? (i64)1 : (i64)0, (i64)i, off, len);
+        }
+    // The bytes under key, when the cache holds them at that content hash.
+    static Data* get(String* k, u64 hash)
+        {
+        ParRemoteCache.setup();
+        _lock.lock();
+        ParRemoteSlice* s = (ParRemoteSlice*)_slices.get((Hashable*)k);
+        Data* d = (Data*)0;
+        if (s != (ParRemoteSlice*)0 && s._code == hash)
+            {
+            _tick = _tick + (i64)1;
+            s._used = _tick;
+            d = s._bytes;
+            }
+        _lock.unlock();
+        return d;
+        }
+    static void put(String* k, u64 hash, u8* p, u32 n)
+        {
+        ParRemoteCache.setup();
+        if ((i64)n > _cap)
+            return;
+        _lock.lock();
+        ParRemoteSlice* s = (ParRemoteSlice*)_slices.get((Hashable*)k);
+        if (s != (ParRemoteSlice*)0)
+            {
+            _bytes = _bytes - (i64)s._bytes.length();
+            s._bytes = Data.withBytes(p, n);
+            s._code = hash;
+            }
+        else
+            {
+            s = new ParRemoteSlice();
+            s._key = k;
+            s._code = hash;
+            s._bytes = Data.withBytes(p, n);
+            _slices.set((Hashable*)k, (Object*)s);
+            _list.add((Object*)s);
+            }
+        _tick = _tick + (i64)1;
+        s._used = _tick;
+        _bytes = _bytes + (i64)n;
+        // Over the cap: the least recently hit go first.
+        while (_bytes > _cap && _list.count() > (u32)1)
+            {
+            u32 oldest = (u32)0;
+            for (u32 i = (u32)1; i < _list.count(); i = i + (u32)1)
+                if (((ParRemoteSlice*)_list.get(i))._used < ((ParRemoteSlice*)_list.get(oldest))._used)
+                    oldest = i;
+            ParRemoteSlice* o = (ParRemoteSlice*)_list.get(oldest);
+            if (o == s)
+                break;
+            _bytes = _bytes - (i64)o._bytes.length();
+            _slices.remove((Hashable*)o._key);
+            _list.removeAt(oldest);
+            }
+        _lock.unlock();
+        }
+    static i64 bytes(void)
+        {
+        return _bytes;
+        }
+    // The hash held under key, or 0: for the trace.
+    static i64 heldHash(String* k)
+        {
+        ParRemoteCache.setup();
+        _lock.lock();
+        ParRemoteSlice* s = (ParRemoteSlice*)_slices.get((Hashable*)k);
+        i64 h = s != (ParRemoteSlice*)0 ? (i64)s._code : (i64)0;
+        _lock.unlock();
+        return h;
         }
     }
 
@@ -1833,6 +2216,9 @@ class ParRemoteServe
             return;
             }
         i64 me = ParRemoteServe.newConnection();
+        i64 cacheHits = (i64)0;     // this run's slices found in the cache
+        i64 cacheBytes = (i64)0;
+        i64 recvBytes = (i64)0;     // and the bytes that had to come
         // HELLO: the protocol, a nonce for the proof, the versions and what
         // this daemon is and has.
         Data* hello = new Data();
@@ -1973,7 +2359,7 @@ class ParRemoteServe
                 if (!ParWire.find(f, "BLOCK", &bp, &bn))
                     break;
                 u32 at = (u32)0;
-                ParRemoteChunk* c = ParRemoteChunk.from(bp, &at, false);
+                ParRemoteChunk* c = ParRemoteChunk.from(bp, &at, false, false);
                 bool held = false;
                 bool nimby = ParRemoteServe.nimbyNow();
                 // Compiling the block's kernel touches the workers: the GPUs
@@ -2014,9 +2400,77 @@ class ParRemoteServe
                 if (!ParWire.find(f, "BLOCK", &bp, &bn))
                     break;
                 u32 at = (u32)0;
-                chunk = ParRemoteChunk.from(bp, &at, true);
+                chunk = ParRemoteChunk.from(bp, &at, true, false);
                 i64 tile = ParWire.getI64(f, "TILE", (i64)0);
                 i64 n = ParWire.getI64(f, "N", (i64)0);
+                // The whole arrays: each one's hash looked up in the cache,
+                // and NEED names the ones to send; DATA brings them.
+                u32 sh = chunk.srcHash();
+                u8* hp = (u8*)0;
+                u32 hn = (u32)0;
+                Data* need = new Data();
+                u32 nneed = (u32)0;
+                u64 wantHash[32];
+                cacheHits = (i64)0;
+                cacheBytes = (i64)0;
+                recvBytes = (i64)0;
+                if (ParWire.find(f, "HASHES", &hp, &hn))
+                    {
+                    u32 ha = (u32)0;
+                    while (ha + (u32)21 <= hn)
+                        {
+                        u8 kind = ParWire.rdU8(hp, &ha);
+                        u32 idx = ParWire.rdU32(hp, &ha);
+                        i64 len = ParWire.rdI64(hp, &ha);
+                        u64 h = (u64)ParWire.rdI64(hp, &ha);
+                        Data* have = ParRemoteCache.get(ParRemoteCache.key(sh, kind != (u8)0, idx, (i64)0, len), h);
+                        if (have != (Data*)0 && (i64)have.length() == len && chunk.takeSlice(kind != (u8)0, idx, (i64)0, have.bytes(), (u32)len))
+                            {
+                            cacheHits = cacheHits + (i64)1;
+                            cacheBytes = cacheBytes + len;
+                            }
+                        else if (nneed < (u32)32)
+                            {
+                            ParWire.putU8(need, kind);
+                            ParWire.putU32(need, idx);
+                            wantHash[nneed] = h;
+                            nneed = nneed + (u32)1;
+                            }
+                        }
+                    }
+                Data* nd = new Data();
+                ParWire.fieldData(nd, "LIST", need);
+                if (!ParWire.send(s, "NEED", nd))
+                    break;
+                Data* dd = ParWire.recv(s, &tag[0], (i32)60000);
+                if (dd == (Data*)0 || !ParWire.tagIs(&tag[0], "DATA"))
+                    break;
+                u8* dp = (u8*)0;
+                u32 dn = (u32)0;
+                bool fitsData = true;
+                if (ParWire.find(dd, "ARRAYS", &dp, &dn))
+                    {
+                    u32 da = (u32)0;
+                    for (u32 k = (u32)0; k < nneed && da < dn; k = k + (u32)1)
+                        {
+                        u8 kind = ParWire.rdU8(dp, &da);
+                        u32 idx = ParWire.rdU32(dp, &da);
+                        u8* b = (u8*)0;
+                        u32 bn = ParWire.rdBytes(dp, &da, &b);
+                        if (da > dn || !chunk.takeSlice(kind != (u8)0, idx, (i64)0, b, bn))
+                            {
+                            fitsData = false;
+                            break;
+                            }
+                        ParRemoteCache.put(ParRemoteCache.key(sh, kind != (u8)0, idx, (i64)0, (i64)bn), wantHash[k], b, bn);
+                        recvBytes = recvBytes + (i64)bn;
+                        }
+                    }
+                if (!fitsData)
+                    {
+                    Log.info("xcd: a block's arrays do not fit its description; closing");
+                    break;
+                    }
                 w = (ParWorker*)0;
                 l = (ParLayout*)0;
                 // The GPUs for the run: waited for up to 50 s (the program
@@ -2056,25 +2510,20 @@ class ParRemoteServe
                 u8* p = (u8*)0;
                 u32 pn2 = (u32)0;
                 bool fits = ParWire.find(f, "SLICES", &p, &pn2);
+                bool missing = false;
                 u32 at = (u32)0;
                 for (u32 i = (u32)0; fits && i < chunk.bufCount() && at <= pn2; i = i + (u32)1)
                     {
                     if (!chunk.bufSliced(i))
                         continue;
-                    i64 off = ParWire.rdI64(p, &at);
-                    u8* b = (u8*)0;
-                    u32 n = ParWire.rdBytes(p, &at, &b);
-                    if (at > pn2 || !chunk.takeSlice(false, i, off, b, n))
+                    if (!ParRemoteServe.takeTileSlice(chunk, false, i, p, &at, pn2, &cacheHits, &cacheBytes, &recvBytes, &missing))
                         fits = false;
                     }
                 for (u32 i = (u32)0; fits && i < chunk.globCount() && at <= pn2; i = i + (u32)1)
                     {
                     if (!chunk.globSliced(i))
                         continue;
-                    i64 off = ParWire.rdI64(p, &at);
-                    u8* b = (u8*)0;
-                    u32 n = ParWire.rdBytes(p, &at, &b);
-                    if (at > pn2 || !chunk.takeSlice(true, i, off, b, n))
+                    if (!ParRemoteServe.takeTileSlice(chunk, true, i, p, &at, pn2, &cacheHits, &cacheBytes, &recvBytes, &missing))
                         fits = false;
                     }
                 if (!fits)
@@ -2082,10 +2531,25 @@ class ParRemoteServe
                     Log.info("xcd: a tile's slices do not fit its block; closing");
                     break;
                     }
-                pending.add((Object*)t1);
+                if (missing)
+                    {
+                    // A slice the program thought held was evicted: the tile
+                    // goes back on the results link as a MISS, and comes
+                    // again with its bytes.
+                    Data* m = new Data();
+                    ParWire.fieldI64(m, "INDEX", t1.index);
+                    ParWire.fieldU8(m, "MISS", (u8)1);
+                    session.push(m);
+                    }
+                else
+                    pending.add((Object*)t1);
                 }
             else if (ParWire.tagIs(&tag[0], "FINISH"))
                 {
+                if (w != (ParWorker*)0 && (cacheHits > (i64)0 || recvBytes > (i64)0))
+                    Log.info("xcd: %s: %ld slice(s) from the cache (%ld KB), %ld KB received; cache holds %ld MB of %ld",
+                             chunk.parName(), cacheHits, cacheBytes >> (i64)10, recvBytes >> (i64)10,
+                             ParRemoteCache.bytes() >> (i64)20, ParRemoteCache.cap() >> (i64)20);
                 if (w != (ParWorker*)0)
                     {
                     w.drain();
@@ -2113,6 +2577,47 @@ class ParRemoteServe
 
     // A finished tile for the program: its index, the written slices of
     // every footprinted array and global, and the partials.
+    // One slice of a TILE frame: offset, length, hash, then a flag and the
+    // bytes when the program sent them (kept in the cache), else the cache's
+    // copy at that hash — or, evicted, *missing.
+    static bool takeTileSlice(ParRemoteChunk* chunk, bool glob, u32 i, u8* p, u32* at, u32 pn, i64* hits, i64* hitBytes, i64* recv, bool* missing)
+        {
+        i64 off = ParWire.rdI64(p, at);
+        i64 len = ParWire.rdI64(p, at);
+        u64 h = (u64)ParWire.rdI64(p, at);
+        u8 sent = ParWire.rdU8(p, at);
+        if (*at > pn || len < (i64)0)
+            return false;
+        if (sent != (u8)0)
+            {
+            u8* b = (u8*)0;
+            u32 n = ParWire.rdBytes(p, at, &b);
+            if (*at > pn || (i64)n != len || !chunk.takeSlice(glob, i, off, b, n))
+                return false;
+            if (n > (u32)0)
+                ParRemoteCache.put(ParRemoteCache.key(chunk.srcHash(), glob, i, off, len), h, b, n);
+            if (ParDevice.tracing() && n > (u32)0)
+                Log.info("xcd: cache: %s received at %ld", ParRemoteCache.key(chunk.srcHash(), glob, i, off, len).cString(), (i64)h);
+            *recv = *recv + (i64)n;
+            return true;
+            }
+        if (len == (i64)0)
+            return true;
+        Data* have = ParRemoteCache.get(ParRemoteCache.key(chunk.srcHash(), glob, i, off, len), h);
+        if (have == (Data*)0 || (i64)have.length() != len)
+            {
+            if (ParDevice.tracing())
+                Log.info("xcd: cache: %s wanted at %ld, held at %ld", ParRemoteCache.key(chunk.srcHash(), glob, i, off, len).cString(), (i64)h,
+                         ParRemoteCache.heldHash(ParRemoteCache.key(chunk.srcHash(), glob, i, off, len)));
+            *missing = true;
+            return true;
+            }
+        if (!chunk.takeSlice(glob, i, off, have.bytes(), (u32)len))
+            return false;
+        *hits = *hits + (i64)1;
+        *hitBytes = *hitBytes + len;
+        return true;
+        }
     static Data* doneFrame(ParRemoteChunk* chunk, ParLayout* l, ParTile* t)
         {
         Data* f = new Data();
@@ -2128,7 +2633,18 @@ class ParRemoteServe
             i64 e1 = ParTiles.sliceHi(l.bufFpK[i], l.bufFpHi[i], t.hi, count);
             ParWire.putI64(d, e0);
             ParWire.putI64(d, e1);
-            ParWire.putBytes(d, *(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i], e1 > e0 ? (u32)((e1 - e0) * l.bufElem[i]) : (u32)0);
+            u8* wb = *(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i];
+            u32 wn = e1 > e0 ? (u32)((e1 - e0) * l.bufElem[i]) : (u32)0;
+            ParWire.putBytes(d, wb, wn);
+            // What it wrote stays cached under its new hash, and the program
+            // is told it, so the next run's tile over the same elements
+            // need not bring them.
+            u64 wh = wn > (u32)0 ? ParWire.hash64(wb, wn) : (u64)0;
+            if (wn > (u32)0)
+                ParRemoteCache.put(ParRemoteCache.key(chunk.srcHash(), false, i, e0 * l.bufElem[i], (i64)wn), wh, wb, wn);
+            if (ParDevice.tracing() && wn > (u32)0)
+                Log.info("xcd: cache: %s written at %ld", ParRemoteCache.key(chunk.srcHash(), false, i, e0 * l.bufElem[i], (i64)wn).cString(), (i64)wh);
+            ParWire.putI64(d, (i64)wh);
             }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             {
@@ -2139,7 +2655,13 @@ class ParRemoteServe
             i64 e1 = ParTiles.sliceHi(l.globFpK[i], l.globFpHi[i], t.hi, count);
             ParWire.putI64(d, e0);
             ParWire.putI64(d, e1);
-            ParWire.putBytes(d, (u8*)l.globPtr[i] + e0 * l.globElem[i], e1 > e0 ? (u32)((e1 - e0) * l.globElem[i]) : (u32)0);
+            u8* wb = (u8*)l.globPtr[i] + e0 * l.globElem[i];
+            u32 wn = e1 > e0 ? (u32)((e1 - e0) * l.globElem[i]) : (u32)0;
+            ParWire.putBytes(d, wb, wn);
+            u64 wh = wn > (u32)0 ? ParWire.hash64(wb, wn) : (u64)0;
+            if (wn > (u32)0)
+                ParRemoteCache.put(ParRemoteCache.key(chunk.srcHash(), true, i, e0 * l.globElem[i], (i64)wn), wh, wb, wn);
+            ParWire.putI64(d, (i64)wh);
             }
         ParWire.fieldData(f, "SLICES", d);
         if (l.nred > (u32)0)

@@ -126,6 +126,36 @@ else
 fi
 kill $XCD5 2> /dev/null
 wait $XCD5 2> /dev/null
+# The daemon's slice cache (protocol 5): a block run again sends hashes, not
+# bytes, and the report says so on both sides; a daemon with a 1 MB cache
+# evicts under the program's feet, and the tiles come again with their
+# bytes, the answer unchanged.
+PORT6=$((PORT + 5))
+PORT7=$((PORT + 6))
+XCD_HOME="$L/home1" XC_PAR_REPORT=1 "$L/xcd" -port $PORT6 -no-mdns > "$L/xcd6.log" 2>&1 &
+XCD6=$!
+XCD_HOME="$L/home1" XC_PAR_REPORT=1 "$L/xcd" -port $PORT7 -no-mdns -cache 1 > "$L/xcd7.log" 2>&1 &
+XCD7=$!
+sleep 1
+f=par_simd_buffers
+mkdir -p "$L/st_cache" "$L/st_cache_small"
+XCC_SETTINGS_DIR="$L/st_cache" XC_PAR_REMOTE=127.0.0.1:$PORT6 XC_PAR=all XC_PAR_REPORT=2 "$L/$f" > "$L/cache.out" 2>&1
+if grep -v '^par:' "$L/cache.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null \
+   && grep -q 'not sent, cached on the daemon' "$L/cache.out" && grep -q ' slice(s) from the cache' "$L/xcd6.log"; then
+    echo "PASS remote cache"
+else
+    echo "FAIL remote cache"; grep -v '^par:' "$L/cache.out" | diff - "tests/fixtures/$f.expected.out" | head -3; grep 'cache' "$L/cache.out" "$L/xcd6.log" | head -4; rc=1
+fi
+XCC_SETTINGS_DIR="$L/st_cache_small" XC_PAR_REMOTE=127.0.0.1:$PORT7 XC_PAR=all XC_PAR_REPORT=2 "$L/$f" > "$L/cache_small.out" 2>&1
+if grep -v '^par:' "$L/cache_small.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null \
+   && grep -q 'sent again, its slices gone' "$L/cache_small.out"; then
+    echo "PASS remote cache evicted"
+else
+    echo "FAIL remote cache evicted"; grep -v '^par:' "$L/cache_small.out" | diff - "tests/fixtures/$f.expected.out" | head -3; grep -c 'sent again' "$L/cache_small.out"; rc=1
+fi
+kill $XCD6 $XCD7 2> /dev/null
+wait $XCD6 2> /dev/null
+wait $XCD7 2> /dev/null
 [ $rc = 0 ] && rm -rf "$L"
 echo "--- remote: $([ $rc = 0 ] && echo pass || echo FAIL) ---"
 exit $rc

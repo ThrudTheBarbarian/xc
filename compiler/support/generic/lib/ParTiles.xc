@@ -701,6 +701,10 @@ class ParTiles
                         i64 elapsed = now - firstTake[i];
                         if (elapsed < (i64)1) elapsed = (i64)1;
                         at = (i64)2 + (inItems[i] + items) * elapsed / doneItems[i];
+                        // A remote whose daemon holds this tile's slices
+                        // already skips their upload (its cache).
+                        at = at - ((ParWorker*)ws.get(i)).cachedSaving(pt);
+                        if (at < (i64)2) at = (i64)2;
                         }
                     if (full[i])
                         {

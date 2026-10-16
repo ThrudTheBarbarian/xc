@@ -20,6 +20,12 @@ class ParTile : Object
     bool done;
     ParWorker* worker;  // who took it
     i64 usTaken;        // on a GPU worker: from take() to completion, the daemon's "kernel time" for a tile
+    // Its sliced inputs' content hashes (ParWire.hash64), one per sliced
+    // array then global, computed once by the first remote worker asked
+    // and read by every remote's cache view (the daemon's slice cache).
+    u64 sliceHash[32];
+    u32 sliceCount;
+    bool hashed;
     }
 
 class ParWorker : Object
@@ -68,6 +74,13 @@ class ParWorker : Object
     i64 kernelUs(void)
         {
         return (i64)-1;
+        }
+    // The time a remote worker would save on this tile because the daemon
+    // holds its slices already (its cache): subtracted from the queue's
+    // estimate, so a tile goes where its data is. 0 for a local worker.
+    i64 cachedSaving(ParTile* t)
+        {
+        return (i64)0;
         }
     // The device's memory, bytes: what it has and what is free now; 0 for
     // either the worker cannot tell. A daemon puts the first worker's in its

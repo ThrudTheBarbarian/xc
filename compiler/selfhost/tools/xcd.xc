@@ -24,6 +24,7 @@ i32 main(void)
 {
     u16 port = (u16)PAR_REMOTE_PORT;
     String* pool = new String();
+    i64 cacheMb = (i64)0;
     bool mdns = true;
     Array* av = Process.arguments();
     for (u32 i = (u32)1; av != (Array*)0 && i < av.count(); i = i + (u32)1)
@@ -76,9 +77,19 @@ i32 main(void)
         }
         else if (a.equals(String.withCString("-no-mdns")))
             mdns = false;
+        else if (a.equals(String.withCString("-cache")) && i + (u32)1 < av.count())
+        {
+            String* v = (String*)av.get(i + (u32)1);
+            i64 mb = (i64)0;
+            for (u32 k = (u32)0; k < v.byteLength(); k = k + (u32)1)
+                if (v.byteAt(k) >= (u8)'0' && v.byteAt(k) <= (u8)'9')
+                    mb = mb * (i64)10 + (i64)(v.byteAt(k) - (u8)'0');
+            cacheMb = mb;
+            i = i + (u32)1;
+        }
         else if (a.equals(String.withCString("-h")) || a.equals(String.withCString("--help")))
         {
-            Stdio.printf("xcd [-port N] [-nimby hh:mm-hh:mm] [-pool NAME] [-no-mdns]   serve this machine's GPUs to par programs (XC_PAR_SECRET, XC_PAR_REPORT)\n");
+            Stdio.printf("xcd [-port N] [-nimby hh:mm-hh:mm] [-pool NAME] [-no-mdns] [-cache MB]   serve this machine's GPUs to par programs (XC_PAR_SECRET, XC_PAR_REPORT)\n");
             return 0;
         }
     }
@@ -90,6 +101,17 @@ i32 main(void)
         return 1;
     }
     String* identity = ((ParWorker*)workers.get((u32)0)).identity();
+    // The slice cache: -cache MB, else half of the first card's VRAM, else
+    // a gigabyte.
+    if (cacheMb <= (i64)0)
+    {
+        u64 vt = (u64)0;
+        u64 vf = (u64)0;
+        ((ParWorker*)workers.get((u32)0)).memory(&vt, &vf);
+        cacheMb = vt > (u64)0 ? (i64)(vt >> (u64)21) : (i64)1024;
+    }
+    ParRemoteCache.setCap(cacheMb << (i64)20);
+    Log.info("xcd: slice cache %ld MB", cacheMb);
     // Its certificate, made at first start under $XCD_HOME or ~/.xcc/xcd and
     // kept: a program pins its fingerprint on first sight. Every connection
     // is TLS, so a daemon with no TLS library does not start.

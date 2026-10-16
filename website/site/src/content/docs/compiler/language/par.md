@@ -578,6 +578,18 @@ sizes and rates and keeps adjusting as it goes. Use it once on a machine or
 a network to find the boundaries rather than letting them be learned over
 many runs.
 
+A daemon keeps what it is sent (from 0.8.1): every whole array and every
+tile's slice, by block, array, offset and length, with a hash of the bytes.
+A later run of the block, by the same program or another, sends the hashes
+first and the bytes only for what the daemon does not hold; a slice the
+daemon wrote stays held too, so a pass over the last pass's result sends
+nothing. The queue prefers, for a tile, a daemon that holds its slices. The
+cache lives in the daemon's memory, least recently used out first, under
+`xcd -cache MB` (half of the first card's memory by default); a slice gone
+by the time a tile names it is simply sent again. The report shows, per
+daemon, the bytes not sent, and the daemon's log what it served from the
+cache.
+
 A heartbeat measures the link when the program connects (its round trip, and
 its bandwidth from a one-megabyte ping) and then asks the daemon every second,
 while tiles are being handed out, whether it takes work now. The round trip
