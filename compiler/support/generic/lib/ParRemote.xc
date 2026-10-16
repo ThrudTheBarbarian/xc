@@ -194,9 +194,12 @@ class ParTls
             _lib = openLib("C:/Program Files/3p/tls/win64/libtls.dll");
         if (_lib == (pointer)0)
             _lib = openLib("libtls.dll");
-#elif PLATFORM_android || PLATFORM_ios
+#elif PLATFORM_android
         if (_lib == (pointer)0)
             _lib = openLib("libtls.so");
+#elif PLATFORM_ios
+        if (_lib == (pointer)0)
+            _lib = openLib("libtls.dylib");
 #elif ARCH_arm64
         if (_lib == (pointer)0)
             _lib = openLib("/opt/xcc/3p/tls/arm64/libtls.dylib");
