@@ -36,7 +36,7 @@ echo "building xtir (xtc → native arm64)…"
 
 PATTERN=${1:-}
 pass=0; fail=0; unsup=0; oracle=0
-declare -a FAILED
+declare -a FAILED=()
 
 for f in tests/ir-lowering/*.xc; do
     [ -n "$PATTERN" ] && [[ "$f" != *"$PATTERN"* ]] && continue
@@ -58,6 +58,11 @@ for f in tests/ir-lowering/*.xc; do
     else
         fail=$((fail+1))
         FAILED+=("$f ($(diff "$WORK/oracle.ir" "$WORK/port.ir" | grep -c '^[<>]') lines)")
+        # The lines themselves, since the work directory is gone by the time
+        # anyone reads the log: gate 165 saw par-reduce-lanes differ by two
+        # lines once, and 360 runs after could not show which two.
+        echo "--- $f: oracle (<) vs port (>):"
+        diff "$WORK/oracle.ir" "$WORK/port.ir" | head -40
     fi
 done
 
