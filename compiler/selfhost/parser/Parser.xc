@@ -2267,6 +2267,56 @@ class Parser
         if (i >= _tokens.count()) return String.withCString("");
         return ((Token*)_tokens.get(i)).value();
     }
+    // At `acc = E;` (token i is acc, at a statement's start): "min" or "max"
+    // when the statement is the whole body of `if (E cmp acc)` or
+    // `if (acc cmp E)` with the same E and no else, else 0 (as the
+    // reference's parAutoMinMaxAt).
+    String* parAutoMinMax(u32 i, String* name, u32 be)
+    {
+        if (i < (u32)4 || parTokType(i - (u32)1) != (u16)tokRParen) return (String*)0;
+        u32 p = i - (u32)1;
+        i32 d = (i32)0;
+        while (p > (u32)0) {
+            u16 t = parTokType(p);
+            if (t == (u16)tokRParen) d = d + (i32)1;
+            if (t == (u16)tokLParen) d = d - (i32)1;
+            if (d == (i32)0) break;
+            p = p - (u32)1;
+        }
+        if (d != (i32)0 || p == (u32)0 || parTokType(p - (u32)1) != (u16)tokIf) return (String*)0;
+        u32 cmp = (u32)0;
+        d = (i32)0;
+        for (u32 j = p + (u32)1; j < i - (u32)1; j = j + (u32)1) {
+            u16 t = parTokType(j);
+            if (t == (u16)tokLParen || t == (u16)tokLBracket) d = d + (i32)1;
+            if (t == (u16)tokRParen || t == (u16)tokRBracket) d = d - (i32)1;
+            if (d == (i32)0 && (t == (u16)tokLess || t == (u16)tokGreater || t == (u16)tokLessEq || t == (u16)tokGreaterEq)) {
+                if (cmp != (u32)0) return (String*)0;
+                cmp = j;
+            }
+        }
+        if (cmp == (u32)0) return (String*)0;
+        bool accLeft = cmp == p + (u32)2 && parTokType(p + (u32)1) == (u16)tokIdentifier && parTokValue(p + (u32)1).equals(name);
+        bool accRight = cmp + (u32)2 == i - (u32)1 && parTokType(cmp + (u32)1) == (u16)tokIdentifier && parTokValue(cmp + (u32)1).equals(name);
+        if (accLeft == accRight) return (String*)0;
+        u32 es = accLeft ? cmp + (u32)1 : p + (u32)1;
+        u32 ee = accLeft ? i - (u32)1 : cmp;
+        u32 r = i + (u32)2;
+        for (u32 j = es; j < ee; j = j + (u32)1) {
+            if (r >= be || parTokType(r) != parTokType(j)) return (String*)0;   // (a bare body's range ends AT its semicolon, below)
+            String* vj = parTokValue(j);
+            String* vr = parTokValue(r);
+            u32 lj = vj == (String*)0 ? (u32)0 : vj.byteLength();
+            u32 lr = vr == (String*)0 ? (u32)0 : vr.byteLength();
+            if ((lj > (u32)0 || lr > (u32)0) && (vj == (String*)0 || vr == (String*)0 || !vj.equals(vr))) return (String*)0;
+            r = r + (u32)1;
+        }
+        if (r > be || parTokType(r) != (u16)tokSemicolon || parTokType(r + (u32)1) == (u16)tokElse) return (String*)0;
+        u16 c = parTokType(cmp);
+        bool less = c == (u16)tokLess || c == (u16)tokLessEq;
+        return String.withCString(less != accLeft ? "min" : "max");
+    }
+
     static bool parAutoAssignOp(u16 t)
     {
         return t == (u16)tokAssign || t == (u16)tokPlusAssign || t == (u16)tokStarAssign
@@ -2517,6 +2567,11 @@ class Parser
                     else if (o == (u16)tokAmpersand) sym = String.withCString("&");
                     else if (o == (u16)tokPipe) sym = String.withCString("|");
                     else if (o == (u16)tokCaret) sym = String.withCString("^");
+                    want = (u32)2;
+                }
+                // `if (x < acc) acc = x;`: a min (or max) reduction (as the reference).
+                if (sym == (String*)0 && next == (u16)tokAssign) {
+                    sym = parAutoMinMax(i, name, be);
                     want = (u32)2;
                 }
                 if (sym == (String*)0) return false;

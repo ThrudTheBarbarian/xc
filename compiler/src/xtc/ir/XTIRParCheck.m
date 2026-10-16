@@ -1,4 +1,6 @@
 #import "XTIRParCheck.h"
+#import "XTIRType.h"
+#import "XTIRLayout.h"
 #import "XTIRModule.h"
 #import "XTIRFunction.h"
 #import "XTIRBlock.h"
@@ -291,8 +293,9 @@ static BOOL gEmitsWGSL = NO;
         XTIRParCheck* fc = [XTIRParCheck new];
         fc.module = module;
         NSString* fcls = [f.name substringToIndex:f.name.length - 4];
-        [XTIRParMSL setExtraMeta:[[fc footprintWordsIn:f ivarNames:[fc ivarNamesOf:classDecls[fcls] in:classDecls]]
-                                   stringByAppendingString:[fc costWordsIn:f]]];
+        [XTIRParMSL setExtraMeta:[[[fc footprintWordsIn:f ivarNames:[fc ivarNamesOf:classDecls[fcls] in:classDecls]]
+                                   stringByAppendingString:[fc costWordsIn:f]]
+                                   stringByAppendingString:[fc guardWordsIn:f guards:gParGuards[fcls]]]];
         NSString* (^ptxOf)(NSString* _Nullable* _Nullable) = ^NSString*(NSString* _Nullable* _Nullable w) {
             NSString* t = kf ? [XTIRParMSL ptxForKernel:kf module:kmod fast:fast redOps:redOps why:NULL] : nil;
             return t ?: [XTIRParMSL ptxForKernel:f module:module fast:fast redOps:redOps why:w];
@@ -348,6 +351,10 @@ static BOOL gEmitsWGSL = NO;
                 [all appendBytes:&zero length:1];
             [all appendData:spv];
             }
+        // A block the run must check (guard= words) and no form to carry the
+        // check runs serially: its threads could otherwise meet.
+        if (!all.length && gParGuards[fcls].count)
+            [all appendData:[@"// xcpar serial\n" dataUsingEncoding:NSUTF8StringEncoding]];
         if (all.length)
             kernel = all;
         else
@@ -419,6 +426,7 @@ static BOOL gEmitsWGSL = NO;
         c.fnByName[f.name] = f;
 
     BOOL ok = YES;
+    gParGuards = [NSMutableDictionary dictionary];
     // The auto blocks (--par-auto made them from plain loops) par-check would
     // refuse: demoted to a serial run instead, with a warning (par-auto).
     NSMutableSet<NSString*>* serial = [NSMutableSet set];
@@ -447,7 +455,10 @@ static BOOL gEmitsWGSL = NO;
             {
             // §4: the work items must not touch each other's data.
             NSString* scatter = nil;
-            NSString* dep = [c dependenceIn:f ivarNames:[c ivarNamesOf:decl in:classDecls] scatter:&scatter];
+            NSMutableArray<NSString*>* guards = [NSMutableArray array];
+            NSString* dep = [c dependenceIn:f ivarNames:[c ivarNamesOf:decl in:classDecls] scatter:&scatter guards:guards];
+            if (!dep && guards.count)
+                gParGuards[cls] = guards;
             if (!dep)
                 {
                 if (scatter)
@@ -584,6 +595,35 @@ typedef struct
     int64_t k, c;
     } XTParIndex;
 
+// Per block class: the runtime checks par-check left it (parGuardFor), as
+// "slot:m:d0:k" strings, for its header's guard= words.
+static NSMutableDictionary<NSString*, NSArray<NSString*>*>* gParGuards = nil;
+
+// An index with one symbolic term besides i: k*i + c + m*v, where v is a
+// captured integer of the block (field `slot` of its object). `a[i + off]`
+// is such a form; the plain test above cannot say whether it meets `a[i]`,
+// but the run can, once it knows off. Mirrored in the port.
+typedef struct
+    {
+    BOOL affine;
+    int64_t k, c;
+    NSInteger slot;   // the field, or -1 when there is no symbolic term
+    int64_t m;
+    } XTParSym;
+
+static BOOL parIntKind(XTIRType* t)
+    {
+    switch (t.kind)
+        {
+        case XTIRTypeKindI8: case XTIRTypeKindU8: case XTIRTypeKindI16: case XTIRTypeKindU16:
+        case XTIRTypeKindI32: case XTIRTypeKindU32: case XTIRTypeKindI64: case XTIRTypeKindU64:
+            return YES;
+        default:
+            return NO;
+        }
+    }
+
+
 - (XTParIndex)indexOf:(XTIROperand*)op iv:(XTIRValueId)iv defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def depth:(int)depth
     {
     XTParIndex no = { NO, 0, 0 };
@@ -628,6 +668,83 @@ typedef struct
             if (b.k == 0)
                 return (XTParIndex){ YES, b.c * a.k, b.c * a.c };
             return no;
+            }
+        default:
+            return no;
+        }
+    }
+
+- (XTParSym)symIndexOf:(XTIROperand*)op iv:(XTIRValueId)iv self:(XTIRValueId)selfId
+                  defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def depth:(int)depth
+    {
+    XTParSym no = { NO, 0, 0, -1, 0 };
+    if (depth > 32)
+        return no;
+    if (op.kind == XTIROperandKindImmI)
+        return (XTParSym){ YES, 0, op.intValue, -1, 0 };
+    if (op.kind != XTIROperandKindUse)
+        return no;
+    if (op.valueId == iv)
+        return (XTParSym){ YES, 1, 0, -1, 0 };
+    XTIRInsn* d = def[@(op.valueId)];
+    if (!d || !d.operands.count)
+        return no;
+    switch (d.opcode)
+        {
+        case XTIROpConst:
+            return d.operands[0].kind == XTIROperandKindImmI ? (XTParSym){ YES, 0, d.operands[0].intValue, -1, 0 } : no;
+        case XTIROpZExt:
+        case XTIROpSExt:
+        case XTIROpTrunc:
+        case XTIROpCopy:
+            return [self symIndexOf:d.operands[0] iv:iv self:selfId defs:def depth:depth + 1];
+        case XTIROpLoad:
+            {
+            // A captured integer: a load of one of the block object's fields.
+            if (d.operands[0].kind != XTIROperandKindUse || !d.result || !parIntKind(d.result.type))
+                return no;
+            XTIRInsn* fa = def[@(d.operands[0].valueId)];
+            if (fa.opcode != XTIROpFieldAddr || fa.operands.count < 2 || fa.operands[0].kind != XTIROperandKindUse ||
+                fa.operands[0].valueId != selfId || fa.operands[1].kind != XTIROperandKindImmI || fa.operands[1].intValue < 3)
+                return no;
+            return (XTParSym){ YES, 0, 0, (NSInteger)fa.operands[1].intValue, 1 };
+            }
+        case XTIROpAdd:
+        case XTIROpSub:
+        case XTIROpMul:
+            {
+            if (d.operands.count < 2)
+                return no;
+            XTParSym a = [self symIndexOf:d.operands[0] iv:iv self:selfId defs:def depth:depth + 1];
+            XTParSym b = [self symIndexOf:d.operands[1] iv:iv self:selfId defs:def depth:depth + 1];
+            if (!a.affine || !b.affine)
+                return no;
+            XTParSym r = no;
+            r.affine = YES;
+            if (d.opcode == XTIROpMul)
+                {
+                // Only by a constant: k*i times v is not a form.
+                BOOL aConst = a.k == 0 && a.slot < 0;
+                BOOL bConst = b.k == 0 && b.slot < 0;
+                if (!aConst && !bConst)
+                    return no;
+                XTParSym s = aConst ? b : a;
+                int64_t f = aConst ? a.c : b.c;
+                r = (XTParSym){ YES, s.k * f, s.c * f, s.slot, s.m * f };
+                }
+            else
+                {
+                int64_t sign = d.opcode == XTIROpSub ? -1 : 1;
+                if (a.slot >= 0 && b.slot >= 0 && a.slot != b.slot)
+                    return no;
+                r.k = a.k + sign * b.k;
+                r.c = a.c + sign * b.c;
+                r.slot = a.slot >= 0 ? a.slot : b.slot;
+                r.m = (a.slot >= 0 ? a.m : 0) + sign * (b.slot >= 0 ? b.m : 0);
+                }
+            if (r.m == 0)
+                r.slot = -1;
+            return r;
             }
         default:
             return no;
@@ -836,6 +953,25 @@ static BOOL parDependent(XTParIndex r, XTParIndex w)
     return d % g == 0;
     }
 
+// Whether a read at r and a write at w (symbolic forms) can be settled by the
+// run: the same stride k != 0 both sides and one captured integer between
+// them. Then items i1 != i2 meet iff k*(i1 - i2) == d, where d = d0 + m*v is
+// the write's offset less the read's, so the run checks d == 0, or d not a
+// multiple of k, or |d| >= |k|*n. Writes the guard as "slot:m:d0:k".
+static BOOL parGuardFor(XTParSym r, XTParSym w, NSString* _Nullable* _Nonnull guard)
+    {
+    if (!r.affine || !w.affine || r.k != w.k || r.k == 0)
+        return NO;
+    if (r.slot >= 0 && w.slot >= 0 && r.slot != w.slot)
+        return NO;
+    NSInteger slot = w.slot >= 0 ? w.slot : r.slot;
+    int64_t m = (w.slot >= 0 ? w.m : 0) - (r.slot >= 0 ? r.m : 0);
+    if (slot < 0 || m == 0)
+        return NO;
+    *guard = [NSString stringWithFormat:@"%ld:%lld:%lld:%lld", (long)slot, (long long)m, (long long)(w.c - r.c), (long long)r.k];
+    return YES;
+    }
+
 static NSString* shownIndex(XTParIndex x)
     {
     if (!x.affine)
@@ -916,6 +1052,29 @@ static NSString* shownIndex(XTParIndex x)
 // buffer any access indexes from data, or at one element for every item,
 // gets no word: the runtime treats it as all of it. A tile of the range can
 // then move only its slice of each buffer (par-tiles-and-devices.md step 1).
+// The guards as header words, `guard=<offset>:<bytes>:<m>:<d0>:<k>`: the
+// captured integer v at <offset> in the block's object (<bytes> wide,
+// signed), and the run is parallel only when d = d0 + m*v is 0, or not a
+// multiple of k, or |d| >= |k|*n (ParDevice.guardsHold).
+- (NSString*)guardWordsIn:(XTIRFunction*)f guards:(nullable NSArray<NSString*>*)guards
+    {
+    if (!guards.count)
+        return @"";
+    XTIRType* selfT = f.paramTypes.count ? f.paramTypes[0] : nil;
+    XTIRLayout* lay = selfT.kind == XTIRTypeKindPtr ? selfT.pointeeType.layout : nil;
+    NSMutableString* words = [NSMutableString string];
+    for (NSString* g in guards)
+        {
+        NSArray<NSString*>* p = [g componentsSeparatedByString:@":"];
+        NSInteger slot = p[0].integerValue;
+        if (!lay || slot < 0 || (NSUInteger)slot >= lay.fieldCount)
+            continue;
+        [words appendFormat:@" guard=%u:%u:%@:%@:%@", [lay fieldOffsetAt:(NSUInteger)slot],
+                            [lay fieldTypeAt:(NSUInteger)slot].byteWidth, p[1], p[2], p[3]];
+        }
+    return words;
+    }
+
 - (NSString*)footprintWordsIn:(XTIRFunction*)f ivarNames:(NSArray<NSString*>*)ivars
     {
     NSMutableDictionary<NSNumber*, XTIRInsn*>* def = [NSMutableDictionary dictionary];
@@ -1090,6 +1249,17 @@ static BOOL parIsComputeOp(XTIROpcode op)
                           ivarNames:(NSArray<NSString*>*)ivars
                             scatter:(NSString* _Nullable* _Nonnull)scatter
     {
+    return [self dependenceIn:f ivarNames:ivars scatter:scatter guards:nil];
+    }
+
+// The same, collecting into `guards` the pairs the run can settle (a captured
+// integer in the offset, parGuardFor) rather than calling them dependent; a
+// nil `guards` keeps the plain test.
+- (nullable NSString*)dependenceIn:(XTIRFunction*)f
+                          ivarNames:(NSArray<NSString*>*)ivars
+                            scatter:(NSString* _Nullable* _Nonnull)scatter
+                             guards:(nullable NSMutableArray<NSString*>*)guards
+    {
     NSMutableDictionary<NSNumber*, XTIRInsn*>* def = [NSMutableDictionary dictionary];
     XTIRValueId firstPhi = 0;
     BOOL haveIV = NO;
@@ -1140,10 +1310,18 @@ static BOOL parIsComputeOp(XTIROpcode op)
             if (!x.affine)
                 x = [self gridIndexOf:ea.operands[1] iv:iv self:selfId ivars:ivars defs:def];
             NSValue* xv = [NSValue valueWithBytes:&x objCType:@encode(XTParIndex)];
+            XTParSym sx = { NO, 0, 0, -1, 0 };
+            if (guards)
+                sx = x.affine ? (XTParSym){ YES, x.k, x.c, -1, 0 }
+                              : [self symIndexOf:ea.operands[1] iv:iv self:selfId defs:def depth:0];
+            NSValue* sv = [NSValue valueWithBytes:&sx objCType:@encode(XTParSym)];
+            // A symbolic write with stride k != 0 is no scatter: items write
+            // distinct elements, and the guard settles it against the reads.
+            BOOL symStrided = sx.affine && sx.k != 0;
             // §4: a write the shapes above do not cover (a scatter, or every
             // item writing one element) is legal but unprovable: a warning,
             // the first one per block.
-            if (isStore && !*scatter && (!x.affine || x.k == 0))
+            if (isStore && !*scatter && !symStrided && (!x.affine || x.k == 0))
                 *scatter = x.affine
                                ? [NSString stringWithFormat:@"'%@%@' from every work item", shownName(buf), shownIndex(x)]
                                : [NSString stringWithFormat:@"'%@' at an index computed from data", shownName(buf)];
@@ -1151,30 +1329,42 @@ static BOOL parIsComputeOp(XTIROpcode op)
                 {
                 if (!writes[buf])
                     writes[buf] = [NSMutableArray array];
-                [writes[buf] addObject:xv];
+                [writes[buf] addObject:@[ xv, sv ]];
                 }
             else
-                [reads addObject:@[ buf, xv ]];
+                [reads addObject:@[ buf, xv, sv ]];
             }
         }
     for (NSArray* r in reads)
         {
-        NSArray<NSValue*>* ws = writes[r[0]];
+        NSArray<NSArray*>* ws = writes[r[0]];
         if (!ws.count)
             continue;
         XTParIndex rx;
         [(NSValue*)r[1] getValue:&rx];
+        XTParSym rs;
+        [(NSValue*)r[2] getValue:&rs];
         XTParIndex wx = { NO, 0, 0 };
         BOOL dependent = NO;
-        for (NSValue* wv in ws)
+        for (NSArray* wp in ws)
             {
-            [wv getValue:&wx];
-            if (parDependent(rx, wx))
-                dependent = YES;
+            [(NSValue*)wp[0] getValue:&wx];
+            if (!parDependent(rx, wx))
+                continue;
+            XTParSym wsx;
+            [(NSValue*)wp[1] getValue:&wsx];
+            NSString* g = nil;
+            if (guards && parGuardFor(rs, wsx, &g))
+                {
+                if (![guards containsObject:g])
+                    [guards addObject:g];
+                continue;
+                }
+            dependent = YES;
             }
         if (!dependent)
             continue;
-        [ws[0] getValue:&wx];
+        [(NSValue*)ws[0][0] getValue:&wx];
         NSString* name = shownName(r[0]);
         return [NSString stringWithFormat:@"reads %@%@ while writing %@%@, so an item would read another "
                                           @"item's result; that is a scan, not a par",

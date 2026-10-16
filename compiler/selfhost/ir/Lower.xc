@@ -319,12 +319,23 @@ class ClassInfo
     bool affine;
     i64 k;
     i64 c;
+    i64 slot;   // the symbolic form's captured integer (a field of the block's object), or -1
+    i64 m;
     static ParIdx* of(bool a, i64 k0, i64 c0)
         {
         ParIdx* x = new ParIdx();
         x.affine = a;
         x.k = k0;
         x.c = c0;
+        x.slot = (i64)-1;
+        x.m = (i64)0;
+        return x;
+        }
+    static ParIdx* sym(bool a, i64 k0, i64 c0, i64 s, i64 m0)
+        {
+        ParIdx* x = ParIdx.of(a, k0, c0);
+        x.slot = m0 == (i64)0 ? (i64)-1 : s;
+        x.m = m0;
         return x;
         }
     }
@@ -14191,9 +14202,12 @@ class ClassInfo
     Map* _parVerdict;  // function name -> reason ("" = clean)
     Map* _parOnStack;  // function names being scanned
     String* _parScatter; // the first unprovable write of the block being checked
+    Array* _parGuardList; // the run's checks parDependence collects ("slot:m:d0:k"), or 0
+    Map* _parGuards;      // block class -> its guard list, for the header's guard= words
 
     void parCheck(void)
         {
+        _parGuards = new Map();
         _parFns = new Map();
         _parSyms = new Map();
         _parVerdict = new Map();
@@ -14236,7 +14250,11 @@ class ClassInfo
                 {
                 // §4: the work items must not touch each other's data.
                 _parScatter = (String*)0;
+                _parGuardList = new Array();
                 String* dep = parDependence(f, parIvarNames(cls));
+                if (dep == (String*)0 && _parGuardList.count() > (u32)0)
+                    _parGuards.set((Hashable*)cls, (Object*)_parGuardList);
+                _parGuardList = (Array*)0;
                 if (dep == (String*)0)
                     {
                     if (_parScatter != (String*)0)
@@ -14445,6 +14463,97 @@ class ClassInfo
         if (bk == (i64)0)
             return ParIdx.of(true, bc * ak, bc * ac);
         return ParIdx.of(false, (i64)0, (i64)0);
+        }
+
+    // An index with one symbolic term besides i: k*i + c + m*v, where v is a
+    // captured integer of the block (a field of its object). As the reference.
+    ParIdx* parSymIndex(IROperand* op, IRValue* iv, IRValue* selfVal, Map* def, u32 depth)
+        {
+        ParIdx* no = ParIdx.of(false, (i64)0, (i64)0);
+        if (depth > (u32)32)
+            return no;
+        if (op.kind() == (u8)OPK_IMMI)
+            return ParIdx.of(true, (i64)0, op.imm());
+        if (op.kind() != (u8)OPK_USE)
+            return no;
+        if (op.val() != (IRValue*)0 && op.val().seq() == iv.seq())
+            return ParIdx.of(true, (i64)1, (i64)0);
+        IRInsn* d = (IRInsn*)def.get((Hashable*)String.withU32(op.val().seq()));
+        if (d == (IRInsn*)0 || d.ops().count() == (u32)0)
+            return no;
+        String* o = d.op();
+        IROperand* o0 = (IROperand*)d.ops().get((u32)0);
+        if (o.equals(String.withCString("Const")))
+            return o0.kind() == (u8)OPK_IMMI ? ParIdx.of(true, (i64)0, o0.imm()) : no;
+        if (o.equals(String.withCString("ZExt")) || o.equals(String.withCString("SExt")) || o.equals(String.withCString("Trunc")) || o.equals(String.withCString("Copy")))
+            return parSymIndex(o0, iv, selfVal, def, depth + (u32)1);
+        if (o.equals(String.withCString("Load")))
+            {
+            if (o0.kind() != (u8)OPK_USE || d.res() == (IRValue*)0 || !Lower.parIntType(d.res().ty()))
+                return no;
+            IRInsn* fa = (IRInsn*)def.get((Hashable*)String.withU32(o0.val().seq()));
+            if (fa == (IRInsn*)0 || !fa.op().equals(String.withCString("FieldAddr")) || fa.ops().count() < (u32)2)
+                return no;
+            IROperand* f0 = (IROperand*)fa.ops().get((u32)0);
+            IROperand* f1 = (IROperand*)fa.ops().get((u32)1);
+            if (f0.kind() != (u8)OPK_USE || f0.val() == (IRValue*)0 || selfVal == (IRValue*)0 || f0.val().seq() != selfVal.seq()
+                || f1.kind() != (u8)OPK_IMMI || f1.imm() < (i64)3)
+                return no;
+            return ParIdx.sym(true, (i64)0, (i64)0, f1.imm(), (i64)1);
+            }
+        bool isAdd = o.equals(String.withCString("Add"));
+        bool isSub = o.equals(String.withCString("Sub"));
+        bool isMul = o.equals(String.withCString("Mul"));
+        if ((!isAdd && !isSub && !isMul) || d.ops().count() < (u32)2)
+            return no;
+        ParIdx* a = parSymIndex(o0, iv, selfVal, def, depth + (u32)1);
+        ParIdx* b = parSymIndex((IROperand*)d.ops().get((u32)1), iv, selfVal, def, depth + (u32)1);
+        if (!a.affine || !b.affine)
+            return no;
+        if (isMul)
+            {
+            // Only by a constant: k*i times v is not a form.
+            bool aConst = a.k == (i64)0 && a.slot < (i64)0;
+            bool bConst = b.k == (i64)0 && b.slot < (i64)0;
+            if (!aConst && !bConst)
+                return no;
+            ParIdx* s = aConst ? b : a;
+            i64 fct = aConst ? a.c : b.c;
+            return ParIdx.sym(true, s.k * fct, s.c * fct, s.slot, s.m * fct);
+            }
+        i64 sign = isSub ? (i64)-1 : (i64)1;
+        if (a.slot >= (i64)0 && b.slot >= (i64)0 && a.slot != b.slot)
+            return no;
+        i64 sl = a.slot >= (i64)0 ? a.slot : b.slot;
+        i64 mm = (a.slot >= (i64)0 ? a.m : (i64)0) + sign * (b.slot >= (i64)0 ? b.m : (i64)0);
+        return ParIdx.sym(true, a.k + sign * b.k, a.c + sign * b.c, sl, mm);
+        }
+    static bool parIntType(String* t)
+        {
+        if (t == (String*)0)
+            return false;
+        return t.equals(String.withCString("I8")) || t.equals(String.withCString("U8")) || t.equals(String.withCString("I16"))
+            || t.equals(String.withCString("U16")) || t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
+            || t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"));
+        }
+    // Whether a read at r and a write at w (symbolic forms) can be settled by
+    // the run, and the guard "slot:m:d0:k" if so (as the reference's
+    // parGuardFor), else 0.
+    static String* parGuardFor(ParIdx* r, ParIdx* w)
+        {
+        if (!r.affine || !w.affine || r.k != w.k || r.k == (i64)0)
+            return (String*)0;
+        if (r.slot >= (i64)0 && w.slot >= (i64)0 && r.slot != w.slot)
+            return (String*)0;
+        i64 sl = w.slot >= (i64)0 ? w.slot : r.slot;
+        i64 mm = (w.slot >= (i64)0 ? w.m : (i64)0) - (r.slot >= (i64)0 ? r.m : (i64)0);
+        if (sl < (i64)0 || mm == (i64)0)
+            return (String*)0;
+        String* g = String.withI64(sl);
+        g.appendCString(":"); g.append(String.withI64(mm));
+        g.appendCString(":"); g.append(String.withI64(w.c - r.c));
+        g.appendCString(":"); g.append(String.withI64(r.k));
+        return g;
         }
 
     // The GCD test, on the "1 k c" / "0 0 0" forms the dependence check
@@ -14826,6 +14935,37 @@ class ClassInfo
     // global, when every access is affine in i with the same k. Mirrors the
     // original.
     String* _parExtraMeta;
+    // The guards as header words, `guard=<offset>:<bytes>:<m>:<d0>:<k>` (as
+    // the reference's guardWordsIn).
+    String* parGuardWords(IRFunc* f, Array* guards)
+        {
+        String* words = String.withCString("");
+        if (guards == (Array*)0 || guards.count() == (u32)0 || f.params().count() == (u32)0)
+            return words;
+        IRLayout* lay = mslLayoutOf(mslPointee(((IRValue*)f.params().get((u32)0)).ty()));
+        if (lay == (IRLayout*)0)
+            return words;
+        for (u32 i = (u32)0; i < guards.count(); i = i + (u32)1)
+            {
+            String* g = (String*)guards.get(i);
+            u32 c1 = (u32)0;
+            i64 sl = (i64)0;
+            while (c1 < g.byteLength() && g.byteAt(c1) != (u8)':')
+                {
+                sl = sl * (i64)10 + (i64)(g.byteAt(c1) - (u8)'0');
+                c1 = c1 + (u32)1;
+                }
+            if (sl >= (i64)lay.fieldCount())
+                continue;
+            words.appendCString(" guard=");
+            words.append(String.withU32(lay.offsetAt((u32)sl)));
+            words.appendCString(":");
+            words.append(String.withU32(mslWidth(lay.typeAt((u32)sl))));
+            words.append(g.substringBytes(c1, g.byteLength() - c1));
+            }
+        return words;
+        }
+
     String* parFootprintWords(IRFunc* f, Array* ivars)
         {
         Map* def = new Map();
@@ -15054,6 +15194,7 @@ class ClassInfo
         IRValue* selfVal = (IRValue*)f.params().get((u32)0);
         Map* writes = new Map();        // buffer -> Array of "affine k c" strings
         Map* wShown = new Map();        // buffer -> its first write's index, as shown
+        Map* wSym = new Map();          // buffer -> Array of its writes' symbolic forms (ParIdx)
         Array* reads = new Array();     // [buffer, form, shown]
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
             {
@@ -15079,6 +15220,11 @@ class ClassInfo
                 if (!px.affine)
                     px = parGridIndex((IROperand*)ea.ops().get((u32)1), iv, ivars, def);
                 bool af = px.affine; i64 k = px.k; i64 c = px.c;
+                ParIdx* sx = ParIdx.of(false, (i64)0, (i64)0);
+                if (_parGuardList != (Array*)0)
+                    sx = af ? ParIdx.of(true, k, c) : parSymIndex((IROperand*)ea.ops().get((u32)1), iv, selfVal, def, (u32)0);
+                // A symbolic write with stride k != 0 is no scatter (as the reference).
+                bool symStrided = sx.affine && sx.k != (i64)0;
                 String* form = String.withCString(af ? "1 " : "0 ");
                 form.append(String.withI64(af ? k : (i64)0));
                 form.appendCString(" ");
@@ -15087,7 +15233,7 @@ class ClassInfo
                 // §4: a write the shapes above do not cover (a scatter, or
                 // every item writing one element) is legal but unprovable: a
                 // warning, the first one per block.
-                if (isStore && _parScatter == (String*)0 && (!af || k == (i64)0))
+                if (isStore && _parScatter == (String*)0 && !symStrided && (!af || k == (i64)0))
                     {
                     String* sc = String.withCString("'");
                     sc.append(parShown(buf));
@@ -15108,8 +15254,10 @@ class ClassInfo
                         ws = new Array();
                         writes.set((Hashable*)buf, (Object*)ws);
                         wShown.set((Hashable*)buf, (Object*)shown);
+                        wSym.set((Hashable*)buf, (Object*)new Array());
                         }
                     ws.add((Object*)form);
+                    ((Array*)wSym.get((Hashable*)buf)).add((Object*)sx);
                     }
                 else
                     {
@@ -15117,6 +15265,7 @@ class ClassInfo
                     r.add((Object*)buf);
                     r.add((Object*)form);
                     r.add((Object*)shown);
+                    r.add((Object*)sx);
                     reads.add((Object*)r);
                     }
                 }
@@ -15130,9 +15279,24 @@ class ClassInfo
             if (ws == (Array*)0 || ws.count() == (u32)0)
                 continue;
             bool dependent = false;
+            Array* wsy = (Array*)wSym.get((Hashable*)buf);
             for (u32 j = (u32)0; j < ws.count(); j = j + (u32)1)
-                if (Lower.parFormDep(form, (String*)ws.get(j)))
-                    dependent = true;
+                {
+                if (!Lower.parFormDep(form, (String*)ws.get(j)))
+                    continue;
+                String* g = _parGuardList != (Array*)0 ? Lower.parGuardFor((ParIdx*)r.get((u32)3), (ParIdx*)wsy.get(j)) : (String*)0;
+                if (g != (String*)0)
+                    {
+                    bool have = false;
+                    for (u32 q = (u32)0; q < _parGuardList.count(); q = q + (u32)1)
+                        if (((String*)_parGuardList.get(q)).equals(g))
+                            have = true;
+                    if (!have)
+                        _parGuardList.add((Object*)g);
+                    continue;
+                    }
+                dependent = true;
+                }
             if (!dependent)
                 continue;
             String* name = parShown(buf);
@@ -21881,6 +22045,7 @@ class ClassInfo
             // printer writes (step 1 of par-tiles-and-devices.md).
             _parExtraMeta = parFootprintWords(f, parIvarNames(f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4)));
             _parExtraMeta.append(parCostWords(f));
+            _parExtraMeta.append(parGuardWords(f, (Array*)_parGuards.get((Hashable*)f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4))));
             String* msl = (String*)0;
             // A SPIR-V module is bytes (it holds NULs): it goes in as they are.
             Array* kernelBytes = (Array*)0;
@@ -21936,6 +22101,15 @@ class ClassInfo
                     all.add((Object*)Number.withU8((u8)0));
                 for (u32 q = (u32)0; q < spv.count(); q = q + (u32)1)
                     all.add(spv.get(q));
+                }
+            // A block the run must check and no form to carry the check runs
+            // serially (as the reference).
+            Array* fg = (Array*)_parGuards.get((Hashable*)fcls);
+            if (all.count() == (u32)0 && fg != (Array*)0 && fg.count() > (u32)0)
+                {
+                String* marker2 = String.withCString("// xcpar serial\n");
+                for (u32 q = (u32)0; q < marker2.byteLength(); q = q + (u32)1)
+                    all.add((Object*)Number.withU8(marker2.byteAt(q)));
                 }
             if (all.count() > (u32)0)
                 {

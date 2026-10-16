@@ -81,7 +81,15 @@ i32 main(void)
     for (u32 i in 0..N)                     // a bare if as the body (no braces): a block
         if ((a[i] & (u32)1) != (u32)0)
             odd++;
-    Stdio.printf("%u %u %u %u %u %u %u %u %u %u %u\n", total, bits, b[N - 1], (u32)fs, last, (u32)f[N - 1], c[N - 1], inc, count, gs, odd);
+    u32 least = (u32)$FFFFFFFF;
+    for (u32 i in 0..N)                     // keeps the smallest: a min reduction (0.8.1)
+        if (a[i] < least)
+            least = a[i];
+    u32 most = (u32)0;
+    for (u32 i in 0..N)                     // the accumulator on the left: a max
+        if (most < c[i])
+            most = c[i];
+    Stdio.printf("%u %u %u %u %u %u %u %u %u %u %u %u %u\n", total, bits, b[N - 1], (u32)fs, last, (u32)f[N - 1], c[N - 1], inc, count, gs, odd, least, most);
     return (i32)0;
     }
 XC
@@ -105,7 +113,8 @@ n=$(grep -cE 'par: autopar_[0-9]+:' "$W/rep")
 [ "$n" -ge 10 ] || { echo "FAIL auto: expected the auto blocks in the report, saw $n lines"; cat "$W/rep"; fail=1; }
 grep -q 'autopar_4' "$W/rep" && { echo "FAIL auto: the scan ran as a block"; fail=1; }
 for k in 5 6 7 8 9 10 11; do grep -q "autopar_$k:" "$W/rep" || { echo "FAIL auto: block autopar_$k (C-style / inclusive / acc++ / block literal / nest / xor / bare if) did not run"; fail=1; }; done
-grep -q 'autopar_12' "$W/rep" && { echo "FAIL auto: a twelfth block ran (the :serial loop?)"; fail=1; }
+for k in 12 13; do grep -q "autopar_$k:" "$W/rep" || { echo "FAIL auto: block autopar_$k (min / max) did not run"; fail=1; }; done
+grep -q 'autopar_14' "$W/rep" && { echo "FAIL auto: a fourteenth block ran (the :serial loop?)"; fail=1; }
 # The nest ran as ONE block over the whole grid (640*480 items), not as 480
 # blocks of 640, and the reduction after it (autopar_10) is a block of its own.
 grep -q 'autopar_9: 307200 items' "$W/rep" || { echo "FAIL auto: the perfect nest did not run as one 307200-item grid block"; grep autopar_9 "$W/rep" | head -3; fail=1; }

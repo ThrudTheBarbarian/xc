@@ -1454,6 +1454,62 @@ class ParDevice
         return m[i] == (u8)0;
         }
 
+    // The checks par-check left the run (guard= words on the header line):
+    // the block writes and reads one array at offsets that differ by a
+    // captured integer, `a[i + off] = f(a[i])`, which no static test can
+    // settle. Each word is <offset>:<bytes>:<m>:<d0>:<k> — the integer v at
+    // <offset> in the block's object — and two items meet iff k*(i1 - i2)
+    // == d, d = d0 + m*v, for items of [lo, hi). False when they can: the
+    // block then runs serially, as its source reads.
+    static bool guardsHold(ParChunk* proto, u8* src, i64 lo, i64 hi)
+        {
+        if (src == (u8*)0 || src[0] != (u8)'/')
+            return true;
+        u8* obj = (u8*)(pointer)proto;
+        u8* g = "guard=";
+        u32 at = (u32)0;
+        while (src[at] != (u8)0 && src[at] != (u8)10)
+            {
+            u32 k = (u32)0;
+            while (g[k] != (u8)0 && src[at + k] == g[k])
+                k = k + (u32)1;
+            if (g[k] != (u8)0 || (at > (u32)0 && src[at - (u32)1] != (u8)' '))
+                {
+                at = at + (u32)1;
+                continue;
+                }
+            at = at + k;
+            i64 f[5];
+            for (u32 q = (u32)0; q < (u32)5; q = q + (u32)1)
+                {
+                bool neg = src[at] == (u8)'-';
+                if (neg) at = at + (u32)1;
+                i64 v = (i64)0;
+                while (src[at] >= (u8)'0' && src[at] <= (u8)'9')
+                    {
+                    v = v * (i64)10 + (i64)(src[at] - (u8)'0');
+                    at = at + (u32)1;
+                    }
+                f[q] = neg ? (i64)0 - v : v;
+                if (src[at] == (u8)':') at = at + (u32)1;
+                }
+            i64 v = (i64)0;
+            u8* p = obj + f[0];
+            if (f[1] == (i64)1) v = (i64)*(i8*)p;
+            else if (f[1] == (i64)2) v = (i64)*(i16*)p;
+            else if (f[1] == (i64)4) v = (i64)*(i32*)p;
+            else v = *(i64*)p;
+            // An unsigned capture wider than its sign bit reads negative
+            // here; its true value is larger still, so |d| only grows.
+            i64 d = f[3] + f[2] * v;
+            i64 kk = f[4] < (i64)0 ? (i64)0 - f[4] : f[4];
+            i64 ad = d < (i64)0 ? (i64)0 - d : d;
+            if (d != (i64)0 && kk != (i64)0 && d % kk == (i64)0 && ad < kk * (hi - lo))
+                return false;
+            }
+        return true;
+        }
+
     // Two captured arrays of the block that are one block of memory, or
     // overlap, with one of them written: the compiler's dependence check
     // (§4) holds for a buffer against ITSELF, but two pointers it sees as

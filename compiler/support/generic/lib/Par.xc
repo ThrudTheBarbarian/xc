@@ -195,6 +195,15 @@ class Par
             proto.run();
             return;
             }
+        if (!ParDevice.guardsHold(proto, proto.gpuSource(), lo, hi))
+            {
+            if (ParDevice.reporting())
+                Log.info("par: %s: at this run's offset two work items touch the same element, so it runs serially", proto.parName());
+            proto.lo = lo;
+            proto.hi = hi;
+            proto.run();
+            return;
+            }
         if (ParDevice.bufferOverlap(proto, proto.gpuSource()))
             {
             if (ParDevice.reporting())

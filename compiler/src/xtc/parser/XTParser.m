@@ -3355,6 +3355,12 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
                 else if (o == XTTokenCaret) sym = @"^";
                 want = 2;
                 }
+            // `if (x < acc) acc = x;`: a min (or max) reduction (from 0.8.1).
+            if (!sym && next == XTTokenAssign)
+                {
+                sym = [self parAutoMinMaxAt:i name:name limit:be];
+                want = 2;
+                }
             if (!sym)
                 return NO;
             accOps[name] = sym;
@@ -3406,6 +3412,70 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         [reds addObject:@[ accOps[acc], acc ]];
         }
     return YES;
+    }
+
+// At `acc = E;` (the cursor's token i is acc, at a statement's start): "min"
+// or "max" when the statement is the whole body of `if (E cmp acc)` or
+// `if (acc cmp E)` with the same E, token for token, and no else, else nil.
+// `E < acc` keeps the smaller, a min; `E > acc` the larger; reversed when
+// acc is on the left. Mirrored in the port (parAutoMinMax).
+- (nullable NSString*)parAutoMinMaxAt:(NSUInteger)i name:(NSString*)name limit:(NSUInteger)be
+    {
+    if (i < 4 || [self parTokType:i - 1] != XTTokenRParen)
+        return nil;
+    // The condition's parentheses.
+    NSUInteger p = i - 1;
+    NSInteger d = 0;
+    while (p > 0)
+        {
+        XTTokenType t = [self parTokType:p];
+        if (t == XTTokenRParen) d++;
+        if (t == XTTokenLParen) d--;
+        if (d == 0)
+            break;
+        p--;
+        }
+    if (d != 0 || p == 0 || [self parTokType:p - 1] != XTTokenIf)
+        return nil;
+    // The one comparison at depth 0 inside.
+    NSUInteger cmp = 0;
+    d = 0;
+    for (NSUInteger j = p + 1; j < i - 1; j++)
+        {
+        XTTokenType t = [self parTokType:j];
+        if (t == XTTokenLParen || t == XTTokenLBracket) d++;
+        if (t == XTTokenRParen || t == XTTokenRBracket) d--;
+        if (d == 0 && (t == XTTokenLess || t == XTTokenGreater || t == XTTokenLessEq || t == XTTokenGreaterEq))
+            {
+            if (cmp)
+                return nil;
+            cmp = j;
+            }
+        }
+    if (!cmp)
+        return nil;
+    BOOL accLeft = cmp == p + 2 && [self parTokType:p + 1] == XTTokenIdentifier && [[self parTokValue:p + 1] isEqualToString:name];
+    BOOL accRight = cmp + 2 == i - 1 && [self parTokType:cmp + 1] == XTTokenIdentifier && [[self parTokValue:cmp + 1] isEqualToString:name];
+    if (accLeft == accRight)
+        return nil;
+    NSUInteger es = accLeft ? cmp + 1 : p + 1;
+    NSUInteger ee = accLeft ? i - 1 : cmp;
+    // The right-hand side: E again, to the statement's end.
+    NSUInteger r = i + 2;
+    for (NSUInteger j = es; j < ee; j++, r++)
+        {
+        if (r >= be || [self parTokType:r] != [self parTokType:j])
+            return nil;   // (a bare body's range ends AT its semicolon, below)
+        NSString* vj = [self parTokValue:j];
+        NSString* vr = [self parTokValue:r];
+        if ((vj.length || vr.length) && ![vj ?: @"" isEqualToString:vr ?: @""])
+            return nil;
+        }
+    if (r > be || [self parTokType:r] != XTTokenSemicolon || [self parTokType:r + 1] == XTTokenElse)
+        return nil;
+    XTTokenType c = [self parTokType:cmp];
+    BOOL less = c == XTTokenLess || c == XTTokenLessEq;
+    return (less != accLeft) ? @"min" : @"max";
     }
 
 // An expression made of literals, casts, arithmetic and names other than
