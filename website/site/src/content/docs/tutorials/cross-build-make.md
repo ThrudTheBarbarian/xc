@@ -8,7 +8,7 @@ machine, with a Makefile short enough to read in a minute. It takes about ten
 minutes. The same program and Makefile are in the repository under
 `compiler/examples/tutorials/hello/`.
 
-You need xcc 0.74 or later on your `PATH` (or know where it is) and `make`.
+You need xcc on your `PATH` (or know where it is) and `make`.
 Nothing else: xcc carries every target's runtime and linker, so a Mac builds
 the Linux, Windows, web, iOS and Android programs without another toolchain.
 To *run* what you build you need the platform, which is covered in step 4.

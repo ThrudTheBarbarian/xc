@@ -4,8 +4,7 @@ description: "Read a .rsc file, classic GEM body and rsc chunk, into a UXRscDoc.
 ---
 
 `UXRscReader` reads a GEM resource into a
-[`UXRscDoc`](/compiler/api/uxkit/uxrscdoc/), on every backend. From 0.7
-(earlier it was part of Rocks).
+[`UXRscDoc`](/compiler/api/uxkit/uxrscdoc/), on every backend. (earlier it was part of Rocks).
 
 ```c
 #import "UXRscRead.xc"

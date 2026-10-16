@@ -1,0 +1,126 @@
+---
+title: UXMenuBar
+description: "The app's menu bar as a model: describe the menus, install once, and selections come back as callback calls. The platform does all the tracking."
+slug: versions/0.66/compiler/api/uxkit/uxmenubar
+banner:
+  content: 'This is the documentation for xc 0.66. <a href="/compiler/">The current documentation</a> describes the newest version.'
+pagefind: false
+---
+
+`UXMenuBar` is the app-level menu model. A menu is **not a widget**: the
+platform assembles it, draws it, tracks the pull-down, highlights the
+hover, and hit-tests the pick. GEM does this inside `evnt_multi`, AppKit
+as a real `NSMenu`, Win32 as a per-window `HMENU`, GTK as a per-window
+`GtkPopoverMenuBar`, the web as a DOM menu bar on the page. The model contains no
+drawing, no tracking and no hit-testing. It describes the menu, hands
+that description to the driver in [`install`](#install), and turns the
+resulting selection back into a callback call. This follows the same
+approach as [`UXButton`](/versions/0.66/compiler/api/uxkit/uxbutton/) (no drawing) and
+[`UXTextField`](/versions/0.66/compiler/api/uxkit/uxtextfield/) (no editing).
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXMenuBar* bar = new UXMenuBar();
+UXMenu* file = bar.addMenu((u8*)" File ");
+file.addItem((u8*)"  Open...  ", &controller.onOpen);
+file.addSeparator();
+file.addItem((u8*)"  Quit  ", &controller.onQuit);
+bar.install(screenW);              // from here on the bar is the platform's
+```
+
+A handler receives the item, so one method can serve several:
+
+```c
+void onOpen(UXMenuItem* sender) { ... }
+```
+
+## Topics
+
+**Building** · [addMenu](#addmenu) · [install](#install)
+**Selections** · [handleSelection](#handleselection)
+**Live state** · [setChecked](#setchecked) · [setEnabled](#setenabled)
+
+### addMenu
+
+```c
+UXMenu* addMenu(u8* title)
+```
+
+Appends a titled menu (see [`UXMenu`](/versions/0.66/compiler/api/uxkit/uxmenu/)) and
+returns it for item building.
+
+### install
+
+```c
+void install(i32 screenW)
+```
+
+Hands the whole model to the driver and shows the bar. Build the model
+completely first, because the platform realizes it once.
+
+### handleSelection
+
+```c
+void handleSelection(i32 titleObj, i32 itemObj)
+```
+
+The selection decoder the run loop calls with the platform's message
+(GEM's `MN_SELECTED` shape). It resolves the ordinals and fires the
+item's action. Separators never fire, and stale indices fire nothing.
+App code never calls this directly.
+
+### setChecked
+
+```c
+void setChecked(u16 mi, u16 ii, bool on)
+```
+
+Sets the item's tick in the model and the live menu together. The
+platform redraws.
+
+### setEnabled
+
+```c
+void setEnabled(u16 mi, u16 ii, bool on)
+```
+
+Enables or greys the item in the model and the live menu together.
+
+## Platform notes
+
+One neutral model has several realizations. GEM builds a bar of `G_TITLE`s
+with dropdown boxes and delivers `MN_SELECTED`. AppKit builds a real
+`NSMenu` on the system bar. Win32 has no screen bar, so it attaches the
+same model as an `HMENU` to **every** window, and a window opened after
+`install` still gets it. GTK does the same with a `GtkPopoverMenuBar` over a
+`GMenu`, one action per item, placed above the content. The window grows by
+the bar's height, so the content keeps the size it was opened at. On the web
+the canvas is the widget layer, but a menu is a native service: the driver
+hands the page the whole bar, and `ux_web_page.js` (loaded on the page) builds
+it above the canvas as DOM. A pull-down opens on a click, follows the pointer
+from title to title while open, and closes on a pick, a click elsewhere or
+Escape. A phone or a tablet has no menu bar at all, so on iOS and Android the
+bar hangs from a button at the top right of the screen, above every window: a
+"⋯" that opens a `UIMenu` on iOS, and the overflow "⋮" that opens a
+`PopupMenu` on Android. Each title is a submenu, and separators divide the
+items. Checked and disabled states show the way each platform shows them,
+and a pick fires the item's action just as a click in a desktop's bar does.
+
+## Example
+
+A checkable view option:
+
+```c
+UXMenu* view = bar.addMenu((u8*)" View ");
+view.addItem((u8*)"  Show Ruler  ", &controller.onRuler);
+
+void onRuler(UXMenuItem* sender) {
+    showRuler = !showRuler;
+    bar.setChecked((u16)1, (u16)0, showRuler);
+}
+```

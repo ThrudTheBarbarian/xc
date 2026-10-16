@@ -285,7 +285,6 @@ class Cat : Animal
     // whisper() deliberately NOT implemented.
 }
 
-
 // Taking the PROTOCOL as the parameter type means this works for anything that
 // conforms, including classes written later.
 void introduce(Speaker* s)

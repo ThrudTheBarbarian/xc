@@ -4,7 +4,7 @@ description: "One loaded form: its root view, its views by logical id, its top-l
 ---
 
 A `UXRscInstance` is what [`UXRsc.load`](/compiler/api/uxkit/uxrsc/#load)
-returns. From 0.7.
+returns.
 
 ```c
 #import "UXRsc.xc"

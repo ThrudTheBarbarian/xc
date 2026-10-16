@@ -1,9 +1,9 @@
 ---
 title: OperationQueue
-description: "Operation and OperationQueue (from 0.7): units of work with dependencies, priorities, cancellation and completion blocks, run by queues on worker threads, serially, or on the main run loop. A complete method reference."
+description: "Operation and OperationQueue: units of work with dependencies, priorities, cancellation and completion blocks, run by queues on worker threads, serially, or on the main run loop. A complete method reference."
 ---
 
-**From 0.7.** An `Operation` is a unit of work. An `OperationQueue` runs
+ An `Operation` is a unit of work. An `OperationQueue` runs
 operations: several at once on worker threads, one at a time, or on the main
 run loop. Operations can depend on each other, across queues, and can be
 cancelled.

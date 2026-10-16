@@ -245,7 +245,6 @@ void drawRectRGB(UXRect r, i32 lineWidth, i32 red, i32 green, i32 blue)
 The OUTLINE of `r`, `lineWidth` pixels thick, drawn inside it: `drawRectRGB` in
 true color, `drawRect` in a pen index. A rubber band, a frame, a focus ring. It
 is four filled bars, so no backend needs a native stroke and they all agree.
-From 0.75.
 
 ### clearRect
 

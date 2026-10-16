@@ -2,6 +2,207 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import uxkitSidebar from './uxkit-sidebar.mjs';
+import previousVersions from './versions-sidebar.mjs';
+
+// The site's sidebar. The "Previous versions" group (versions-sidebar.mjs) is
+// added at the bottom of Language, mirroring this structure for each release.
+const SIDEBAR = [
+		{ label: 'Introduction', slug: 'index' },
+		{
+			label: 'Compiler (xcc)',
+			items: [
+				{ label: 'Overview', slug: 'compiler' },
+				{
+					label: 'Language',
+					collapsed: true,
+					items: [
+						{ label: 'Overview', slug: 'compiler/language' },
+						{ label: 'Lexical structure', slug: 'compiler/language/lexical' },
+						{ label: 'Preprocessor', slug: 'compiler/language/preprocessor' },
+						{ label: 'Types', slug: 'compiler/language/types' },
+						{ label: 'Operators', slug: 'compiler/language/operators' },
+						{ label: 'Statements & control flow', slug: 'compiler/language/statements' },
+						{ label: 'Functions', slug: 'compiler/language/functions' },
+						{ label: 'Classes', slug: 'compiler/language/classes' },
+						{ label: 'Inheritance & protocols', slug: 'compiler/language/inheritance' },
+						{ label: 'Bound methods & callbacks', slug: 'compiler/language/bound-methods' },
+						{ label: 'Blocks', slug: 'compiler/language/blocks' },
+						{ label: 'Errors (throws / try / catch)', slug: 'compiler/language/errors' },
+						{ label: 'Heap, ARC & weak refs', slug: 'compiler/language/memory' },
+						{ label: 'Collections & strings', slug: 'compiler/language/collections' },
+						{ label: 'Threading', slug: 'compiler/language/threading' },
+						{ label: 'Parallel blocks (par)', slug: 'compiler/language/par' },
+						{ label: 'Modules & shared libraries', slug: 'compiler/language/modules' },
+						{ label: 'Inline assembly', slug: 'compiler/language/inline-asm' },
+						{ label: 'Grammar', slug: 'compiler/language/grammar' },
+					],
+				},
+				{
+					label: 'Standard library',
+					collapsed: true,
+					items: [
+						{ label: 'Overview', slug: 'compiler/api' },
+						{
+							label: 'Foundation',
+							items: [
+								{ label: 'Overview', slug: 'compiler/api/foundation' },
+								{ label: 'Array', slug: 'compiler/api/array' },
+								{ label: 'AttributedString', slug: 'compiler/api/attributedstring' },
+								{ label: 'Bag', slug: 'compiler/api/bag' },
+								{ label: 'BinaryHeap', slug: 'compiler/api/binaryheap' },
+								{ label: 'Cache', slug: 'compiler/api/cache' },
+								{ label: 'CharacterSet', slug: 'compiler/api/characterset' },
+								{ label: 'Coder', slug: 'compiler/api/coder' },
+								{ label: 'CSV', slug: 'compiler/api/csv' },
+								{ label: 'Data', slug: 'compiler/api/data' },
+								{ label: 'Expression', slug: 'compiler/api/expression' },
+								{ label: 'IndexSet', slug: 'compiler/api/indexset' },
+								{ label: 'JSON', slug: 'compiler/api/json' },
+								{ label: 'Map', slug: 'compiler/api/map' },
+								{ label: 'NotificationCenter', slug: 'compiler/api/notificationcenter' },
+								{ label: 'Null', slug: 'compiler/api/null' },
+								{ label: 'Number', slug: 'compiler/api/number' },
+								{ label: 'NumberFormatter', slug: 'compiler/api/numberformatter' },
+								{ label: 'Object', slug: 'compiler/api/object' },
+								{ label: 'OperationQueue', slug: 'compiler/api/operationqueue' },
+								{ label: 'Predicate', slug: 'compiler/api/predicate' },
+								{ label: 'Progress', slug: 'compiler/api/progress' },
+								{ label: 'Range', slug: 'compiler/api/range' },
+								{ label: 'Regex', slug: 'compiler/api/regex' },
+								{ label: 'RunLoop', slug: 'compiler/api/runloop' },
+								{ label: 'SearchIndex', slug: 'compiler/api/searchindex' },
+								{ label: 'Set', slug: 'compiler/api/set' },
+								{ label: 'Socket', slug: 'compiler/api/socket' },
+								{ label: 'SortDescriptor', slug: 'compiler/api/sortdescriptor' },
+								{ label: 'StateMachine', slug: 'compiler/api/statemachine' },
+								{ label: 'String', slug: 'compiler/api/string' },
+								{ label: 'UndoManager', slug: 'compiler/api/undomanager' },
+								{ label: 'Validator', slug: 'compiler/api/validator' },
+							],
+						},
+						{
+							label: 'Protocols',
+							items: [
+								{ label: 'Codable', slug: 'compiler/api/codable' },
+								{ label: 'Comparable', slug: 'compiler/api/comparable' },
+								{ label: 'Copying', slug: 'compiler/api/copying' },
+								{ label: 'Enumerable', slug: 'compiler/api/enumerable' },
+								{ label: 'Error', slug: 'compiler/api/error' },
+								{ label: 'Hashable', slug: 'compiler/api/hashable' },
+							],
+						},
+						{
+							label: 'System utilities',
+							items: [
+								{ label: 'Assert', slug: 'compiler/api/assert' },
+								{ label: 'AsyncFiles', slug: 'compiler/api/asyncfiles' },
+								{ label: 'Bundle', slug: 'compiler/api/bundle' },
+								{ label: 'FILE', slug: 'compiler/api/file' },
+								{ label: 'Files', slug: 'compiler/api/files' },
+								{ label: 'Http', slug: 'compiler/api/http' },
+								{ label: 'Log', slug: 'compiler/api/log' },
+								{ label: 'Math', slug: 'compiler/api/math' },
+								{ label: 'Settings', slug: 'compiler/api/settings' },
+								{ label: 'Sort', slug: 'compiler/api/sort' },
+								{ label: 'Stdio', slug: 'compiler/api/stdio' },
+								{ label: 'Url', slug: 'compiler/api/url' },
+							],
+						},
+						{
+							label: '6502 (8-bit)',
+							items: [
+								{ label: 'Overview', slug: 'compiler/api/6502' },
+								{ label: 'Bank switching', slug: 'compiler/api/mapdata' },
+								{ label: 'Gfx', slug: 'compiler/api/gfx' },
+								{ label: 'GfxFactory', slug: 'compiler/api/gfxfactory' },
+								{ label: 'Heap', slug: 'compiler/api/heap' },
+								{ label: 'Memory', slug: 'compiler/api/memory' },
+								{ label: 'Platform symbols', slug: 'compiler/api/symbols' },
+								{ label: 'Stdio (xt6502)', slug: 'compiler/api/stdio-xt6502' },
+								{ label: 'String (xt6502)', slug: 'compiler/api/string-xt6502' },
+								{ label: 'System', slug: 'compiler/api/system' },
+								{ label: 'Time', slug: 'compiler/api/time' },
+								{ label: 'Vbi', slug: 'compiler/api/vbi' },
+							],
+						},
+					],
+				},
+				uxkitSidebar,
+				{
+					label: 'Compiler usage',
+					collapsed: true,
+					items: [
+						{ label: 'Overview', slug: 'compiler/usage' },
+						{ label: 'Allocator & ARC', slug: 'compiler/usage/allocator-arc' },
+						{ label: 'CLI flag reference', slug: 'compiler/usage/cli' },
+						{ label: 'Debugging', slug: 'compiler/usage/debugging' },
+						{ label: 'Install', slug: 'compiler/usage/install' },
+						{ label: 'Linker scripts (.lnk)', slug: 'compiler/usage/linker-scripts' },
+						{ label: 'Memory models', slug: 'compiler/usage/memory-models' },
+						{ label: 'Optimisation', slug: 'compiler/usage/optimization' },
+					],
+				},
+				{
+					label: 'Benchmarks',
+					collapsed: true,
+					items: [
+						{ label: 'Overview', slug: 'compiler/benchmarks' },
+						{ label: 'Performance', slug: 'compiler/performance' },
+						{ label: 'Sources', slug: 'compiler/benchmark-sources' },
+						{ label: 'How to DIY', slug: 'compiler/benchmarks/how-to-diy' },
+						{ label: 'Build the visualiser', slug: 'compiler/benchmarks/build-the-visualiser' },
+					],
+				},
+				{ label: 'Future work', slug: 'compiler/future-work' },
+				{
+					label: 'Downloads',
+					collapsed: true,
+					items: [
+						{ label: 'Most Recent Release', slug: 'compiler/downloads' },
+						{ label: 'Historical Releases', slug: 'compiler/downloads/historical' },
+						{ label: 'ChangeLog', slug: 'compiler/downloads/changelog' },
+					],
+				},
+			],
+		},
+		{
+			label: 'Rocks (interface editor)',
+			collapsed: true,
+			items: [
+				{ label: 'Rocks', slug: 'rocks' },
+			],
+		},
+		{
+			label: 'Tutorials',
+			collapsed: true,
+			items: [
+				{ label: 'One program, six platforms (Make)', slug: 'tutorials/cross-build-make' },
+				{ label: 'One program, six platforms (Windows)', slug: 'tutorials/cross-build-windows' },
+				{ label: 'Hello UX: a window on every platform', slug: 'tutorials/hello-ux' },
+				{ label: 'A GPU Mandelbrot you can zoom', slug: 'tutorials/mandelbrot' },
+				{ label: 'A music player in Rocks', slug: 'rocks/tutorial' },
+			],
+		},
+		{ label: 'Report a bug', slug: 'feedback' },
+	];
+
+function withVersions(sidebar) {
+	const prev = previousVersions(sidebar);
+	if (!prev) return sidebar;
+	const copy = structuredClone(sidebar);
+	const find = (items) => {
+		for (const it of items) {
+			if (it.label === 'Language' && it.items) return it;
+			if (it.items) {
+				const f = find(it.items);
+				if (f) return f;
+			}
+		}
+		return null;
+	};
+	find(copy).items.push(prev);
+	return copy;
+}
 
 // https://astro.build/config
 export default defineConfig({
@@ -12,6 +213,8 @@ export default defineConfig({
 			description:
 				'xcc, the compiler and toolchain for xc — a modern, typed, class-based C-like language — compiled through a shared SSA intermediate representation to multiple backends: native arm64, x86-64, arm9 and win64, WebAssembly, and a banked-6502 target.',
 			customCss: ['./src/styles/xtc.css'],
+			// Each page's sidebar trimmed to its own tree (versions-sidebar.mjs).
+			routeMiddleware: './src/routeData.ts',
 			// Browser-tab icon, cropped to the golden jigsaw piece (see public/).
 			favicon: '/favicon.png',
 			head: [
@@ -24,185 +227,7 @@ export default defineConfig({
 			// required even though the underlying type is optional; pass an
 			// empty array to satisfy validation.
 			social: [],
-			sidebar: [
-				{ label: 'Introduction', slug: 'index' },
-				{
-					label: 'Compiler (xcc)',
-					items: [
-						{ label: 'Overview', slug: 'compiler' },
-						{
-							label: 'Language',
-							collapsed: true,
-							items: [
-								{ label: 'Overview', slug: 'compiler/language' },
-								{ label: 'Lexical structure', slug: 'compiler/language/lexical' },
-								{ label: 'Preprocessor', slug: 'compiler/language/preprocessor' },
-								{ label: 'Types', slug: 'compiler/language/types' },
-								{ label: 'Operators', slug: 'compiler/language/operators' },
-								{ label: 'Statements & control flow', slug: 'compiler/language/statements' },
-								{ label: 'Functions', slug: 'compiler/language/functions' },
-								{ label: 'Classes', slug: 'compiler/language/classes' },
-								{ label: 'Inheritance & protocols', slug: 'compiler/language/inheritance' },
-								{ label: 'Bound methods & callbacks', slug: 'compiler/language/bound-methods' },
-								{ label: 'Blocks', slug: 'compiler/language/blocks' },
-								{ label: 'Errors (throws / try / catch)', slug: 'compiler/language/errors' },
-								{ label: 'Heap, ARC & weak refs', slug: 'compiler/language/memory' },
-								{ label: 'Collections & strings', slug: 'compiler/language/collections' },
-								{ label: 'Threading', slug: 'compiler/language/threading' },
-								{ label: 'Parallel blocks (par)', slug: 'compiler/language/par' },
-								{ label: 'Modules & shared libraries', slug: 'compiler/language/modules' },
-								{ label: 'Inline assembly', slug: 'compiler/language/inline-asm' },
-								{ label: 'Grammar', slug: 'compiler/language/grammar' },
-							],
-						},
-						{
-							label: 'Standard library',
-							collapsed: true,
-							items: [
-								{ label: 'Overview', slug: 'compiler/api' },
-								{
-									label: 'Foundation',
-									items: [
-										{ label: 'Overview', slug: 'compiler/api/foundation' },
-										{ label: 'Array', slug: 'compiler/api/array' },
-										{ label: 'AttributedString', slug: 'compiler/api/attributedstring' },
-										{ label: 'Bag', slug: 'compiler/api/bag' },
-										{ label: 'BinaryHeap', slug: 'compiler/api/binaryheap' },
-										{ label: 'Cache', slug: 'compiler/api/cache' },
-										{ label: 'CharacterSet', slug: 'compiler/api/characterset' },
-										{ label: 'Coder', slug: 'compiler/api/coder' },
-										{ label: 'CSV', slug: 'compiler/api/csv' },
-										{ label: 'Data', slug: 'compiler/api/data' },
-										{ label: 'Expression', slug: 'compiler/api/expression' },
-										{ label: 'IndexSet', slug: 'compiler/api/indexset' },
-										{ label: 'JSON', slug: 'compiler/api/json' },
-										{ label: 'Map', slug: 'compiler/api/map' },
-										{ label: 'NotificationCenter', slug: 'compiler/api/notificationcenter' },
-										{ label: 'Null', slug: 'compiler/api/null' },
-										{ label: 'Number', slug: 'compiler/api/number' },
-										{ label: 'NumberFormatter', slug: 'compiler/api/numberformatter' },
-										{ label: 'Object', slug: 'compiler/api/object' },
-										{ label: 'OperationQueue', slug: 'compiler/api/operationqueue' },
-										{ label: 'Predicate', slug: 'compiler/api/predicate' },
-										{ label: 'Progress', slug: 'compiler/api/progress' },
-										{ label: 'Range', slug: 'compiler/api/range' },
-										{ label: 'Regex', slug: 'compiler/api/regex' },
-										{ label: 'RunLoop', slug: 'compiler/api/runloop' },
-										{ label: 'SearchIndex', slug: 'compiler/api/searchindex' },
-										{ label: 'Set', slug: 'compiler/api/set' },
-										{ label: 'Socket', slug: 'compiler/api/socket' },
-										{ label: 'SortDescriptor', slug: 'compiler/api/sortdescriptor' },
-										{ label: 'StateMachine', slug: 'compiler/api/statemachine' },
-										{ label: 'String', slug: 'compiler/api/string' },
-										{ label: 'UndoManager', slug: 'compiler/api/undomanager' },
-										{ label: 'Validator', slug: 'compiler/api/validator' },
-									],
-								},
-								{
-									label: 'Protocols',
-									items: [
-										{ label: 'Codable', slug: 'compiler/api/codable' },
-										{ label: 'Comparable', slug: 'compiler/api/comparable' },
-										{ label: 'Copying', slug: 'compiler/api/copying' },
-										{ label: 'Enumerable', slug: 'compiler/api/enumerable' },
-										{ label: 'Error', slug: 'compiler/api/error' },
-										{ label: 'Hashable', slug: 'compiler/api/hashable' },
-									],
-								},
-								{
-									label: 'System utilities',
-									items: [
-										{ label: 'Assert', slug: 'compiler/api/assert' },
-										{ label: 'AsyncFiles', slug: 'compiler/api/asyncfiles' },
-										{ label: 'Bundle', slug: 'compiler/api/bundle' },
-										{ label: 'FILE', slug: 'compiler/api/file' },
-										{ label: 'Files', slug: 'compiler/api/files' },
-										{ label: 'Http', slug: 'compiler/api/http' },
-										{ label: 'Log', slug: 'compiler/api/log' },
-										{ label: 'Math', slug: 'compiler/api/math' },
-										{ label: 'Settings', slug: 'compiler/api/settings' },
-										{ label: 'Sort', slug: 'compiler/api/sort' },
-										{ label: 'Stdio', slug: 'compiler/api/stdio' },
-										{ label: 'Url', slug: 'compiler/api/url' },
-									],
-								},
-								{
-									label: '6502 (8-bit)',
-									items: [
-										{ label: 'Overview', slug: 'compiler/api/6502' },
-										{ label: 'Bank switching', slug: 'compiler/api/mapdata' },
-										{ label: 'Gfx', slug: 'compiler/api/gfx' },
-										{ label: 'GfxFactory', slug: 'compiler/api/gfxfactory' },
-										{ label: 'Heap', slug: 'compiler/api/heap' },
-										{ label: 'Memory', slug: 'compiler/api/memory' },
-										{ label: 'Platform symbols', slug: 'compiler/api/symbols' },
-										{ label: 'Stdio (xt6502)', slug: 'compiler/api/stdio-xt6502' },
-										{ label: 'String (xt6502)', slug: 'compiler/api/string-xt6502' },
-										{ label: 'System', slug: 'compiler/api/system' },
-										{ label: 'Time', slug: 'compiler/api/time' },
-										{ label: 'Vbi', slug: 'compiler/api/vbi' },
-									],
-								},
-							],
-						},
-						uxkitSidebar,
-						{
-							label: 'Compiler usage',
-							collapsed: true,
-							items: [
-								{ label: 'Overview', slug: 'compiler/usage' },
-								{ label: 'Allocator & ARC', slug: 'compiler/usage/allocator-arc' },
-								{ label: 'CLI flag reference', slug: 'compiler/usage/cli' },
-								{ label: 'Debugging', slug: 'compiler/usage/debugging' },
-								{ label: 'Install', slug: 'compiler/usage/install' },
-								{ label: 'Linker scripts (.lnk)', slug: 'compiler/usage/linker-scripts' },
-								{ label: 'Memory models', slug: 'compiler/usage/memory-models' },
-								{ label: 'Optimisation', slug: 'compiler/usage/optimization' },
-							],
-						},
-						{
-							label: 'Benchmarks',
-							collapsed: true,
-							items: [
-								{ label: 'Overview', slug: 'compiler/benchmarks' },
-								{ label: 'Performance', slug: 'compiler/performance' },
-								{ label: 'Sources', slug: 'compiler/benchmark-sources' },
-								{ label: 'How to DIY', slug: 'compiler/benchmarks/how-to-diy' },
-								{ label: 'Build the visualiser', slug: 'compiler/benchmarks/build-the-visualiser' },
-							],
-						},
-						{ label: 'Future work', slug: 'compiler/future-work' },
-						{
-							label: 'Downloads',
-							collapsed: true,
-							items: [
-								{ label: 'Most Recent Release', slug: 'compiler/downloads' },
-								{ label: 'Historical Releases', slug: 'compiler/downloads/historical' },
-								{ label: 'ChangeLog', slug: 'compiler/downloads/changelog' },
-							],
-						},
-					],
-				},
-				{
-					label: 'Rocks (interface editor)',
-					collapsed: true,
-					items: [
-						{ label: 'Rocks', slug: 'rocks' },
-					],
-				},
-				{
-					label: 'Tutorials',
-					collapsed: true,
-					items: [
-						{ label: 'One program, six platforms (Make)', slug: 'tutorials/cross-build-make' },
-						{ label: 'One program, six platforms (Windows)', slug: 'tutorials/cross-build-windows' },
-						{ label: 'Hello UX: a window on every platform', slug: 'tutorials/hello-ux' },
-						{ label: 'A GPU Mandelbrot you can zoom', slug: 'tutorials/mandelbrot' },
-						{ label: 'A music player in Rocks', slug: 'rocks/tutorial' },
-					],
-				},
-				{ label: 'Report a bug', slug: 'feedback' },
-			],
+			sidebar: withVersions(SIDEBAR),
 		}),
 	],
 });

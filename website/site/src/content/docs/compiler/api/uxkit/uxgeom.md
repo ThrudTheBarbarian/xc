@@ -214,7 +214,6 @@ The comments show what it prints. The program is
 `website/site/examples/uxkit/geometry.xc`, and the `doc-examples` gate
 compiles it.
 
-
 ## Conforms to
 
 - Inherits [`Object`](/compiler/api/object/)

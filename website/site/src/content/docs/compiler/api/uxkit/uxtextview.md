@@ -6,7 +6,7 @@ description: "An editable, multi-line rich-text view: the content is a Foundatio
 `UXTextView` is an editable, multi-line view of styled text. Its content is a
 Foundation [`AttributedString`](/compiler/api/attributedstring/), styled with
 the attributes [`UXTextStyle`](/compiler/api/uxkit/uxtextstyle/) names: bold,
-italic, underline, monospace, colour, size and paragraph alignment. From 0.72.
+italic, underline, monospace, colour, size and paragraph alignment.
 
 ```c
 #import "UXTextView.xc"

@@ -21,7 +21,7 @@ MyClass* mob = new MyClass[8];      // array of class instances
 
 `new T[N]` is the only way to allocate an array on the heap. For arrays of class instances, every element is zero-filled and its `init()` runs. On out-of-memory, `new` returns null, so check the result if you need to.
 
-From 0.8.1, `simd: T* p = new T[N]` allocates a primitive array page-aligned, on whole 16 KB pages, so a GPU can use it in place — see [Arrays the GPU shares](/compiler/language/par/#arrays-the-gpu-shares-simd-pointers). It is otherwise an ordinary heap array: `.length`, `delete` and reference counting are the same. On the 64-bit targets a numeric array of 64 KB or more is allocated page-aligned without the qualifier, too, and a `par` block finds such a block from any pointer into it; the alignment costs at most two pages per array. On the 8-, 16- and 32-bit targets the qualifier is accepted and every allocation is a plain one.
+`simd: T* p = new T[N]` allocates a primitive array page-aligned, on whole 16 KB pages, so a GPU can use it in place — see [Arrays the GPU shares](/compiler/language/par/#arrays-the-gpu-shares-simd-pointers). It is otherwise an ordinary heap array: `.length`, `delete` and reference counting are the same. On the 64-bit targets a numeric array of 64 KB or more is allocated page-aligned without the qualifier, too, and a `par` block finds such a block from any pointer into it; the alignment costs at most two pages per array. On the 8-, 16- and 32-bit targets the qualifier is accepted and every allocation is a plain one.
 
 ## Automatic reference counting (ARC)
 
@@ -127,7 +127,7 @@ class Parent {
 }
 ```
 
-**From 0.8.1** the compiler finds the obvious cycles for you: a class whose strong class-pointer fields (its own or inherited) lead back to it through another class gets a `retain-cycle` warning at the field that closes the loop, naming the chain (`Parent.kids holds Child and Child.dad holds Parent`). A field of the class's own type is a list or a tree, not a cycle, and typed collections are not followed, so a `Parent` holding an `Array<Child*>` is yours to check. `-Wno-retain-cycle` silences it.
+The compiler finds the obvious cycles for you: a class whose strong class-pointer fields (its own or inherited) lead back to it through another class gets a `retain-cycle` warning at the field that closes the loop, naming the chain (`Parent.kids holds Child and Child.dad holds Parent`). A field of the class's own type is a list or a tree, not a cycle, and typed collections are not followed, so a `Parent` holding an `Array<Child*>` is yours to check. `-Wno-retain-cycle` silences it.
 
 A `weak:T*` slot holds a raw pointer but is **invisible to refcounting**: assigning to it does not retain, and releasing the pointee does not consult it. Each live weak slot is linked onto a chain that hangs off the referent's own heap header. When a refcount reaches zero, the dealloc path walks that object's chain and writes `$00` through every slot pointing at the dying block. Later reads of the slot return null.
 

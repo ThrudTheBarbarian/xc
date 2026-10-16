@@ -47,3 +47,22 @@ All commands are run from the root of the project, from a terminal:
 ## 👀 Want to learn more?
 
 Check out [Starlight’s docs](https://starlight.astro.build/), read [the Astro documentation](https://docs.astro.build), or jump into the [Astro Discord server](https://astro.build/chat).
+
+## Versioned documentation
+
+Each public release has its own documentation tree under
+`src/content/docs/versions/<ver>/`, made from the docs as they stood at the
+release's tag; the default tree is always the current documentation, and
+"Previous versions" at the bottom of the Language sidebar group lists the
+releases. No tree says "from 0.72" or "(new in 0.8)": each documents one
+version, and a feature a version lacks is absent from its tree.
+
+    python3 tools/docversions.py strip --check    # the current tree has no version marks (0 left)
+    python3 tools/docversions.py snapshot v0.9    # a release's tree, after tagging it
+
+`tools/docfixes.py` holds the history prose the automatic rewrite cannot
+handle, as exact before/after pairs. `versions-sidebar.mjs` builds each
+release's sidebar from the current one, and `src/routeData.ts` trims every
+page's sidebar to its own tree. The site is deployed from a release tag
+(`tools/release/deploy-website.sh` refuses otherwise), because the current
+tree describes what is on main as if it were released.

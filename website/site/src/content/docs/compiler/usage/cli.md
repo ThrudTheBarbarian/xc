@@ -78,7 +78,7 @@ Output containers on the non-native targets:
 | `arm64` | macOS / Linux on 64-bit ARM | Mach-O / ELF; run it |
 | `ios` / `ios-sim` | iOS device / simulator (arm64) | Mach-O; sign with `xcc-sign`, install on device/simulator |
 | `android` | Android (arm64) | with `--emit-apk`, a signed `.apk` |
-| `x86_64` | Linux | dynamically linked glibc ELF that can load GTK 4, libGL and other system libraries; run it. With `-static`, a static ELF over musl that runs on any distribution. (From 0.72; up to 0.71 the static ELF is the default and `-dynamic`, from 0.66, gives the glibc one.) |
+| `x86_64` | Linux | dynamically linked glibc ELF that can load GTK 4, libGL and other system libraries; run it. With `-static`, a static ELF over musl that runs on any distribution. |
 | `win64` | Windows | PE/COFF `.exe`, or a DLL (see `--emit-lib`) |
 | `arm9` | AArch32 / **XTOS** | ELF, or a `.so` (see `--emit-lib`) |
 | `m68k` | Motorola 68000 | GEMDOS `.prg`/`.tos`; run under `xcc-sim-68k`. `-A 68000` is the same target, and `-A 68030` builds for the 68030 (run with `xcc-sim-68k --cpu 68030`). |
@@ -97,11 +97,11 @@ linker or `clang`.
 | Flag | Effect |
 |------|--------|
 | `-l<name>` | Link a system library, for example `-lobjc`. On `-A x86_64` the dynamic link takes `lib<name>.so` (or `.a`) from the `-L` path and the standard system library directories; a `-static` link takes `lib<name>.a` from the `-L` path. `-lc`, `-lm`, `-lpthread`, `-ldl` and `-lrt` name the C library itself and need no file. |
-| `-static` | **From 0.72.** On `-A x86_64`, link the executable statically over musl instead of dynamically against glibc: one file with no dependencies, which runs on any x86-64 Linux, musl-based distributions included. It cannot load shared system libraries such as GTK 4. From 0.73, with `--emit-lib` it builds the musl library earlier releases made, for programs linked `-static`. |
-| `-dynamic` | **From 0.66.** On `-A x86_64`, link the executable dynamically against glibc: what a program needs to load GTK 4, libGL or any other shared system library. From 0.72 this is the default and `-dynamic` only names it; up to 0.71 the default is the static musl link. Still linked in-house: `xcc` knows glibc's exports from a table in its support tree, so a Mac can link for Linux, and an `-l` library is read for its exports. A symbol that neither glibc nor an `-l` library defines is a link error. Cross-linking names a copy of the libraries with `-L`. From 0.73 a library built with `--emit-lib` follows the same rule (see `--emit-lib`); up to 0.72, executables only. |
+| `-static` | On `-A x86_64`, link the executable statically over musl instead of dynamically against glibc: one file with no dependencies, which runs on any x86-64 Linux, musl-based distributions included. It cannot load shared system libraries such as GTK 4. With `--emit-lib` it builds the musl library earlier releases made, for programs linked `-static`. |
+| `-dynamic` | On `-A x86_64`, link the executable dynamically against glibc: what a program needs to load GTK 4, libGL or any other shared system library. This is the default and `-dynamic` only names it. Still linked in-house: `xcc` knows glibc's exports from a table in its support tree, so a Mac can link for Linux, and an `-l` library is read for its exports. A symbol that neither glibc nor an `-l` library defines is a link error. Cross-linking names a copy of the libraries with `-L`. A library built with `--emit-lib` follows the same rule (see `--emit-lib`). |
 | `-framework <F>` | Link a macOS framework, for example `-framework AppKit`. |
 | `-Xlinker <file>` | Link a library or object file named by path. |
-| `-Wl,<arg>[,<arg>…]` | The same, in the form clang users write. `xcc` links in-house: a file is linked (on `android`, from 0.8.1, an aarch64 ELF object or archive built by the NDK's clang), `-rpath <dir>` adds a run-path entry on arm64 and iOS, and any other linker flag is ignored with a note. `-Xlinker` takes the same arguments. |
+| `-Wl,<arg>[,<arg>…]` | The same, in the form clang users write. `xcc` links in-house: a file is linked (on `android`, an aarch64 ELF object or archive built by the NDK's clang), `-rpath <dir>` adds a run-path entry on arm64 and iOS, and any other linker flag is ignored with a note. `-Xlinker` takes the same arguments. |
 | `--self-host` | In-house assemble + link + sign. This is the default; the flag is accepted but has no effect. |
 | `--no-self-host` | Hand the link to the platform toolchain instead: `clang` for arm64 macOS, the Android NDK's `clang` for `-A android` (executables and `--emit-apk`), and `arm-none-eabi-gcc` for arm9. Those tools must be installed. x86_64, win64, iOS and arm64 libraries link in-house only; m68k, 6502 and wasm32 images are always written in-house. |
 | `-fpic`, `-fPIC`, `-mpic` | Position-independent code. On m68k it selects the GOT/`a5` model, which lifts the 32 KB limit on a 68000 program. arm64, android and arm9 code is always position-independent, and `--emit-lib` implies it. |
@@ -110,7 +110,7 @@ linker or `clang`.
 
 | Flag | Effect |
 |------|--------|
-| `--emit-lib` | Emit a **shared library** instead of an executable, together with a sibling `.xtc.iface` describing the classes, protocols, structs and enums it exports. Implies `-fpic`. From 0.73, on `-A x86_64` the library links against glibc, as an executable does: each `-l` library it names becomes one of its dependencies, so a program that imports it loads them too, and it exports only its own API. A program that imports it links against glibc. |
+| `--emit-lib` | Emit a **shared library** instead of an executable, together with a sibling `.xtc.iface` describing the classes, protocols, structs and enums it exports. Implies `-fpic`. On `-A x86_64` the library links against glibc, as an executable does: each `-l` library it names becomes one of its dependencies, so a program that imports it loads them too, and it exports only its own API. A program that imports it links against glibc. |
 | `-L <path>` | Add a search path for `#import <Lib>`, which resolves to `lib<Lib>.so` and reads its interface (or, for a C library, its DWARF). Repeatable. The long form is `--library-path`. |
 
 ```bash
@@ -158,9 +158,9 @@ Full discussion on [Optimisation](/compiler/usage/optimization/).
 | `-falloc=bump` | Accepted for older build scripts. No supported target uses the bump allocator, so `xcc` warns and builds with the heap. |
 | `-farc[=on\|off]` | Retired. ARC is always on. `xcc` accepts the flag and warns that it does nothing. |
 | `-fthread-safe-arc` | Force atomic ARC refcounts, so two threads can share an object. |
-| `-fgoal=speed\|accuracy` | From 0.8.1: the default goal of every loop and `par` block in the build. A `#goal speed` or `#goal accuracy` line in a file overrides it for that file, and a `:goal(…)` on a loop or block overrides both. Without any, loops favour accuracy and `par` blocks speed. |
+| `-fgoal=speed\|accuracy` | The default goal of every loop and `par` block in the build. A `#goal speed` or `#goal accuracy` line in a file overrides it for that file, and a `:goal(…)` on a loop or block overrides both. Without any, loops favour accuracy and `par` blocks speed. |
 | `-fno-thread-safe-arc` | Force plain, non-atomic refcounts. |
-| `-fpar-kernels=all` | Every `par` block carries every GPU kernel form (Metal, PTX, SPIR-V, WGSL), for workers on other machines (see [Across machines](/compiler/language/par/#across-machines-xcd)). From 0.8.1 a build made where `XC_PAR_REMOTE` is set does this by itself. |
+| `-fpar-kernels=all` | Every `par` block carries every GPU kernel form (Metal, PTX, SPIR-V, WGSL), for workers on other machines (see [Across machines](/compiler/language/par/#across-machines-xcd)). A build made where `XC_PAR_REMOTE` is set does this by itself. |
 
 Atomic refcounts are decided **per module** and switch on when the module spawns a
 thread. These flags override that choice. See
@@ -208,19 +208,19 @@ is reported and ignored.
 | `--sign <identity.pem>` | Sign the output with a developer identity (iOS/macOS); pair with `--sign-entitlements <plist>`. See also the standalone `xcc-sign`. |
 | `--emit-apk` | On `-A android`, package a signed `.apk`. `--sign-key <path>` names the signing key. |
 | `--needed <soname>` | On `-A android`, add a `DT_NEEDED` entry naming `<soname>`. Repeatable. A payload that calls into a companion `.so` must name it. |
-| `--with-lib <path>` | With `--emit-apk`, store a prebuilt `lib<name>.so` in `lib/arm64-v8a/` beside the payload. From 0.73 it may be given more than once, one library each time; up to 0.72 only the last one is stored. |
+| `--with-lib <path>` | With `--emit-apk`, store a prebuilt `lib<name>.so` in `lib/arm64-v8a/` beside the payload. It may be given more than once, one library each time. |
 | `--lib-name <name>` | With `--emit-apk`, the library the system loads first (`android.app.lib_name`). Default: the payload. |
 | `--with-dex <path>` | With `--emit-apk`, package this `classes.dex` and mark the manifest `hasCode="true"`. |
-| `--manifest-attr <name>=<value>` | (from 0.7) With `--emit-apk`, set an attribute on the manifest's `<application>`; repeatable. `label` (which also names the activity the launcher shows), and the booleans `debuggable`, `allowBackup`, `hardwareAccelerated`, `largeHeap`, `usesCleartextTraffic`, `resizeableActivity`, `requestLegacyExternalStorage` and `enableOnBackInvokedCallback`. |
+| `--manifest-attr <name>=<value>` | With `--emit-apk`, set an attribute on the manifest's `<application>`; repeatable. `label` (which also names the activity the launcher shows), and the booleans `debuggable`, `allowBackup`, `hardwareAccelerated`, `largeHeap`, `usesCleartextTraffic`, `resizeableActivity`, `requestLegacyExternalStorage` and `enableOnBackInvokedCallback`. |
 | `--emit-iface` | Write the module interface (the `.xtc.iface` description) to the `-o` path, or to standard output with no `-o`, and stop. `-c` and `--emit-lib` produce the interface as part of their output without this flag. |
-| `-mavx2`, `-msimd=avx2` | **From 0.66.** On `-A x86_64` and `-A win64`, vectorise with 256-bit AVX2 instead of the 128-bit SSE2 baseline. The program then needs an AVX2 CPU (Intel Haswell, AMD Zen and later). |
-| `-mavx512`, `-mavx512f`, `-msimd=avx512` | **From 0.71.** On `-A x86_64` and `-A win64`, vectorise with 512-bit AVX-512: F, DQ, BW and VL, which every AVX-512 CPU since Intel Skylake-SP and AMD Zen 4 has. The program then needs such a CPU. |
-| `-msimd=auto` | **From 0.66, the default** on `-A x86_64` and `-A win64`. Each function the vectoriser widens is built for SSE2 and for AVX2, and from 0.71 for AVX-512 too, and the program picks one at load from what the CPU and OS support, so one binary runs the widest unit the machine has and still runs everywhere. Setting `XC_SIMD=base`, `XC_SIMD=avx2` or `XC_SIMD=avx512` in the environment forces a level for one run; forcing one the machine lacks falls back to the best it has, with a note on stderr. |
+| `-mavx2`, `-msimd=avx2` | On `-A x86_64` and `-A win64`, vectorise with 256-bit AVX2 instead of the 128-bit SSE2 baseline. The program then needs an AVX2 CPU (Intel Haswell, AMD Zen and later). |
+| `-mavx512`, `-mavx512f`, `-msimd=avx512` | On `-A x86_64` and `-A win64`, vectorise with 512-bit AVX-512: F, DQ, BW and VL, which every AVX-512 CPU since Intel Skylake-SP and AMD Zen 4 has. The program then needs such a CPU. |
+| `-msimd=auto` | **The default** on `-A x86_64` and `-A win64`. Each function the vectoriser widens is built for SSE2, AVX2 and AVX-512, and the program picks one at load from what the CPU and OS support, so one binary runs the widest unit the machine has and still runs everywhere. Setting `XC_SIMD=base`, `XC_SIMD=avx2` or `XC_SIMD=avx512` in the environment forces a level for one run; forcing one the machine lacks falls back to the best it has, with a note on stderr. |
 | `-msimd=base` | SSE2 only, one version of every function: the smallest binary. |
-| `-mnative` | The vector level of the machine running `xcc`: `avx512` (from 0.71) or `avx2` where the CPU and OS support it, otherwise the baseline. Refused when `xcc` is not running on x86-64, where there is no host level to read. |
-| `-fno-matmul` | **From 0.71.** At `-O2` and above, a dense `float` or `double` matrix multiply (`C[i][j] = Σ A[i][k] · B[k][j]` written as three loops) runs as a matrix kernel: on Apple Silicon macOS on the SME matrix unit when the CPU has one (Apple M4 and later), on x86-64 Linux with SSE2, AVX2 or AVX-512 vectors, picked like the rest of the program's vector code. The results are the loops', bit for bit. When the matrices overlap or hold a NaN, or on a Mac without SME, the loops run as written. **From 0.8.1** a `u32` or `i32` multiply runs on the SME unit too: the kernel scans both matrices, and when every value fits a byte it multiplies four to a word with the 8-bit outer product, when every value fits a half two to a word with SME2's 16-bit form; wider values run the loops. The 32-bit result wraps exactly as the loops' arithmetic does, whatever the inner dimension. This turns it off. |
-| `-fmalloc=system\|mimalloc` | Choose the C heap behind the runtime. `mimalloc` is `-A x86_64` only, and from 0.72 needs `-static`: the mimalloc object is linked ahead of libc, so its `malloc` family replaces musl's. |
-| `-g` | Write DWARF debug information (line table, functions, call frames) into the executable, for lldb and gdb (from 0.74; arm64, x86-64 and win64). See [Debugging](/compiler/usage/debugging/). |
+| `-mnative` | The vector level of the machine running `xcc`: `avx512` or `avx2` where the CPU and OS support it, otherwise the baseline. Refused when `xcc` is not running on x86-64, where there is no host level to read. |
+| `-fno-matmul` | At `-O2` and above, a dense `float` or `double` matrix multiply (`C[i][j] = Σ A[i][k] · B[k][j]` written as three loops) runs as a matrix kernel: on Apple Silicon macOS on the SME matrix unit when the CPU has one (Apple M4 and later), on x86-64 Linux with SSE2, AVX2 or AVX-512 vectors, picked like the rest of the program's vector code. The results are the loops', bit for bit. When the matrices overlap or hold a NaN, or on a Mac without SME, the loops run as written. A `u32` or `i32` multiply runs on the SME unit too: the kernel scans both matrices, and when every value fits a byte it multiplies four to a word with the 8-bit outer product, when every value fits a half two to a word with SME2's 16-bit form; wider values run the loops. The 32-bit result wraps exactly as the loops' arithmetic does, whatever the inner dimension. This turns it off. |
+| `-fmalloc=system\|mimalloc` | Choose the C heap behind the runtime. `mimalloc` is `-A x86_64` only, and needs `-static`: the mimalloc object is linked ahead of libc, so its `malloc` family replaces musl's. |
+| `-g` | Write DWARF debug information (line table, functions, call frames) into the executable, for lldb and gdb (arm64, x86-64 and win64). See [Debugging](/compiler/usage/debugging/). |
 
 `xcc --help` prints the complete flag list.
 
@@ -271,10 +271,10 @@ Suppress a category with `-Wno-<category>`. All are on by default except `par-au
 | `unknown-pragma` | an unrecognised `#` directive |
 | `toolchain-fallback` | the build fell back from the in-house assembler/linker to an external tool |
 | `return-type` | a non-`void` function that can reach its closing brace without returning — its body traps at run time, so the missing `return` is named at compile time |
-| `par-scatter` | (from 0.7) a `par` block writes a buffer at an index that is not `k*i + c` in the item's index, so two items might write the same element |
-| `par-gpu` | (from 0.7) compiling for a target with a GPU, a `par` block that cannot run there, and why: it runs on the CPU's threads instead |
+| `par-scatter` | a `par` block writes a buffer at an index that is not `k*i + c` in the item's index, so two items might write the same element |
+| `par-gpu` | compiling for a target with a GPU, a `par` block that cannot run there, and why: it runs on the CPU's threads instead |
 | `range-init-count` | a range initialiser (`u8 a[10] = 0..9;`) that supplies fewer or more values than the array holds |
-| `retain-cycle` | (from 0.8.1) a class whose strong class-pointer fields, its own or inherited, lead back to it through another class (`Parent.kids` holds `Child` and `Child.dad` holds `Parent`): ARC can free none of them. Named at the field that closes the cycle; mark one side `weak:`. A field of the class's own type (a list's `next`) is not a cycle, and typed collections are not followed. |
+| `retain-cycle` | a class whose strong class-pointer fields, its own or inherited, lead back to it through another class (`Parent.kids` holds `Child` and `Child.dad` holds `Parent`): ARC can free none of them. Named at the field that closes the cycle; mark one side `weak:`. A field of the class's own type (a list's `next`) is not a cycle, and typed collections are not followed. |
 
 `xcc --help` prints the full category list, including any checks added after this
 page.

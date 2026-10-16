@@ -77,10 +77,11 @@ a registry `DWORD`) reads back in decimal or as `true`/`false`. A value with
 no text form (an array, binary data) is not read, and [`save`](#save) leaves it
 where it is.
 
-:::note[Upgrading from 0.64]
-0.64's `standard` used the text file `$HOME/.config/xcc/<name>.conf` on every
-platform. From 0.65, where that file exists and the new one does not, it is
-read, and the next [`save`](#save) writes to the new location.
+:::note[An older settings file]
+Where the text file `$HOME/.config/xcc/<name>.conf` exists, from a program
+built when `standard` used it on every platform, and the platform's own store
+does not, the file is read, and the next [`save`](#save) writes to the
+platform's store.
 :::
 
 :::note[Availability]

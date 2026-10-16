@@ -1,0 +1,20 @@
+---
+title: UXSplitDivider
+description: "The grab band of a UXSplitView: a wide hit target painting only a hairline seam, whose press starts the modal divider drag."
+slug: versions/0.61/compiler/api/uxkit/uxsplitdivider
+banner:
+  content: 'This is the documentation for xc 0.61. <a href="/compiler/">The current documentation</a> describes the newest version.'
+pagefind: false
+---
+
+`UXSplitDivider` is the divider of a
+[`UXSplitView`](/versions/0.61/compiler/api/uxkit/uxsplitview/). It has two sizes. Its
+*bounds* are a wide grab band, because a thin one is too hard to hit. It
+*paints* only the hairline seam at its centre, because the panes abut
+underneath and the Cocoa look is a line, not a bar. It is drawn last, so it
+wins the hit test.
+
+A press calls the split view's `beginDragDivider`, which waits in the driver's
+modal `trackDragStep` and re-lays the panes live on each step.
+
+The split view constructs and wires one in `attachTo`; nothing else does.

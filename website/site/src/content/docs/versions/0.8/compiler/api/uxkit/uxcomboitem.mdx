@@ -1,0 +1,13 @@
+---
+title: UXComboItem
+description: "One suggestion of a UXComboBox: a string, held so the list can grow without copying."
+slug: versions/0.8/compiler/api/uxkit/uxcomboitem
+banner:
+  content: 'This is the documentation for xc 0.8. <a href="/compiler/">The current documentation</a> describes the newest version.'
+pagefind: false
+---
+
+`UXComboItem` is one suggestion of a
+[`UXComboBox`](/versions/0.8/compiler/api/uxkit/uxcombobox/): a single string field
+`s`, boxed so the suggestion array holds objects. `addItem(s)` makes
+them and `itemAt(i)` unwraps them. The matching logic lives on the combo box.

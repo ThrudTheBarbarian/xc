@@ -4,9 +4,9 @@ description: "On GEM, a .rsc file is the rsc, and it is live: there is no inflat
 ---
 
 `UXRscGem` loads an interface from a `.rsc` file on GEM. The rest of the design
-follows from one property: **there is no inflation step**. Until 0.7 this
-class was `UXRsc`; [`UXRsc`](/compiler/api/uxkit/uxrsc/) is now the loader for
-every backend, GEM included, and reads layout themes and scoped connections,
+follows from one property: **there is no inflation step**.
+[`UXRsc`](/compiler/api/uxkit/uxrsc/) is the loader for every backend, GEM
+included, and reads layout themes and scoped connections,
 which this one does not.
 
 ```c

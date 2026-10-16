@@ -13,7 +13,7 @@ designed in a file: the window is built in code. (Designing the same window in
 Rocks is a later tutorial.)
 
 The program is `website/site/examples/uxkit/mandelbrot.xc`, and the
-`doc-examples` gate compiles it. You need xcc 0.74 or later. If you have not
+`doc-examples` gate compiles it. If you have not
 built a UXKit program before, [Hello UX](/tutorials/hello-ux/) explains the
 shape of one.
 
@@ -643,4 +643,4 @@ page that loads them, served with the two cross-origin isolation headers. The
 page the demo above runs in is `website/site/public/demo/mandelbrot/index.html`;
 it shows the window's content, 720 by 520, out of the canvas that is the
 program's screen, and gives the program `XC_PAR_REPORT` through
-`globalThis.xccEnv`, which reaches the worker from 0.75.
+`globalThis.xccEnv`, which reaches the worker.

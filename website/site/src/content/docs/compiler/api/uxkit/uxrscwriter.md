@@ -3,8 +3,7 @@ title: UXRscWriter
 description: "Write a UXRscDoc as a classic .rsc any GEM AES reads, with the rsc chunk after it."
 ---
 
-`UXRscWriter` writes a [`UXRscDoc`](/compiler/api/uxkit/uxrscdoc/). From 0.7
-(earlier it was part of Rocks).
+`UXRscWriter` writes a [`UXRscDoc`](/compiler/api/uxkit/uxrscdoc/). (earlier it was part of Rocks).
 
 ```c
 #import "UXRscWrite.xc"

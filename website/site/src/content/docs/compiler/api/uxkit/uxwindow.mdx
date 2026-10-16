@@ -143,8 +143,8 @@ void setMinimumSize(i32 w, i32 h)
 ```
 
 The smallest the window's content may be made by hand. AppKit and GTK keep to
-it, and Windows from 0.71; on a backend whose windows are not
-resized by hand it does nothing. From 0.7.
+it, and Windows; on a backend whose windows are not
+resized by hand it does nothing.
 
 ### toolbarInChrome
 
@@ -154,7 +154,7 @@ static bool toolbarInChrome(void)
 
 Whether a [`UXToolbar`](/compiler/api/uxkit/uxtoolbar/) is drawn in the
 window's own chrome, as AppKit draws it in the title bar, so the content need
-leave no room for it. From 0.7.
+leave no room for it.
 
 ### showLine / hideLine
 
@@ -166,8 +166,7 @@ void hideLine(void)
 A line between two points of the content, drawn above everything in the
 window, native controls included, with `hot` framed when it is not empty: the
 guide for a drag, such as a connection being drawn. `showLine` returns false
-where the backend cannot draw one, and the app then draws its own. From 0.7
-on AppKit, and on GTK, Windows and the web from 0.71.
+where the backend cannot draw one, and the app then draws its own. On AppKit, and on GTK, Windows and the web.
 
 ### setContentSize
 

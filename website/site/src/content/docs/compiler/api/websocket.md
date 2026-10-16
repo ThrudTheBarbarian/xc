@@ -5,7 +5,7 @@ description: "WebSocket clients and servers over Socket: the handshake, text and
 
 `WebSocket` is a WebSocket connection (RFC 6455), as a client or as one of a
 `WebSocketServer`'s clients, with the same calls on macOS, iOS, Android, Linux
-and Windows. **From 0.8.1.**
+and Windows.
 
 ```c
 #import "WebSocket.xc"     // not in the Foundation umbrella: import it by name

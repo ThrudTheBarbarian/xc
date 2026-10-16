@@ -40,6 +40,32 @@ DOCROOT=${DEPLOY_DOCROOT:-}
   exit 1
 }
 
+# The documentation is versioned (website/site/tools/docversions.py): the
+# default tree describes one version with no "from 0.72" marks, and each
+# release keeps its own tree under versions/<ver>/. So a deploy publishes the
+# docs of the commit it is built from as if they were released: from a release
+# tag only, unless DEPLOY_UNRELEASED=1 says to publish unreleased docs anyway.
+TAG=$(git describe --exact-match --tags --match 'v*' HEAD 2>/dev/null || true)
+if [ -z "$TAG" ] && [ "${DEPLOY_UNRELEASED:-0}" != 1 ]; then
+  echo "deploy: HEAD is not a release tag, so its docs would go live as released."
+  echo "  Deploy from the release's tag (a clean worktree), or set DEPLOY_UNRELEASED=1."
+  exit 1
+fi
+python3 "$SITE/tools/docversions.py" strip --check >/dev/null || {
+  echo "deploy: the current docs mention versions; run:"
+  echo "    python3 website/site/tools/docversions.py strip --check"
+  exit 1
+}
+LATEST=$(git tag --list 'v*' | sed 's/^v//' | python3 -c "import sys
+def k(s):
+    p=s.split('.'); m=p[1]; return (int(p[0]), int(m)*(10 if len(m)==1 else 1), int(p[2]) if len(p)>2 else 0)
+print(max(sys.stdin.read().split(), key=k))")
+[ -d "$SITE/src/content/docs/versions/$LATEST" ] || {
+  echo "deploy: release $LATEST has no documentation tree of its own; run:"
+  echo "    python3 website/site/tools/docversions.py snapshot v$LATEST"
+  exit 1
+}
+
 echo "== build =="
 ( cd "$SITE" && npm run build )
 

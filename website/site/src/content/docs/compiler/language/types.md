@@ -248,7 +248,6 @@ volatile u8* COLBK = (u8*)$D01A;
 `nil` is the null pointer, of whatever pointer type the place it is used in
 has: a class pointer, a pointer to a scalar, a `string` or the raw `pointer`.
 It is written wherever a pointer is wanted and compared with `==` and `!=`.
-**From 0.75.**
 
 ```c
 Node* head = nil;
@@ -269,7 +268,6 @@ with `f(Node* n)` and `f(u32 x)` declared, `f(nil)` calls the first. It fits
 every pointer parameter alike, so a call that could go to two pointer
 overloads is ambiguous, and a cast picks one: `g((Node*)nil)`. And `nil` is a
 pointer of no particular type, so `auto p = nil` is an error; name the type.
-**From 0.8.1.**
 
 ## Casting
 

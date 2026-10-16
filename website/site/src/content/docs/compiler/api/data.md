@@ -268,7 +268,6 @@ like any other byte, so the length is preserved, but `cString()` on the result
 stops at that NUL (a limit of the C representation).
 
 ### withStringEncoded
-*(0.4)*
 ```c
 static Data* withStringEncoded(String* s, StrEncoding enc)
 ```

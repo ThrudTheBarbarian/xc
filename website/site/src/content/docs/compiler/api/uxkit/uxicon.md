@@ -13,7 +13,7 @@ and each backend shows the platform's own picture for it:
 | Android | the system drawable |
 | Windows, GTK, GEM, the web | UXKit's 16-pixel glyph |
 
-A name with no picture on a platform shows the item's label alone. From 0.73.
+A name with no picture on a platform shows the item's label alone.
 
 ```c
 #use <UXKit>     // or #import "UXIcon.xc"

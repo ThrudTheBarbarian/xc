@@ -4,7 +4,6 @@ description: "One outlet or action in an rsc file, and the layout themes it bind
 ---
 
 A connection from a [`UXRscDoc`](/compiler/api/uxkit/uxrscdoc/)'s rsc graph.
-From 0.7.
 
 ```c
 #import "UXRscModel.xc"

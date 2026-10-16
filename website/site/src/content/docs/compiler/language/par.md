@@ -1,9 +1,9 @@
 ---
 title: Parallel blocks
-description: par blocks — a loop whose iterations run in parallel, with reductions — on the CPU's threads, and from 0.7 on the GPU (Metal, CUDA, and from 0.72 Vulkan and WebGPU).
+description: par blocks — a loop whose iterations run in parallel, with reductions — on the CPU's threads and on the GPU (Metal, CUDA, Vulkan and WebGPU).
 ---
 
-**From 0.7.** A `par` block marks a loop whose iterations are independent, so
+ A `par` block marks a loop whose iterations are independent, so
 the compiler may run them in parallel: on the CPU's threads, or on the GPU
 where there is one (see below). The same source has to run on both, which is
 why the rules about what a block may contain are stricter than for an ordinary
@@ -33,7 +33,7 @@ A program that uses `par` imports `Par.xc`, its runtime.
 
 `par [name] (:reduce(op variable))* { for (T i in a..b) { … } }`
 
-or, from 0.72, `par [name] :grid(w, h[, d]) (:reduce(op variable))* { … }`
+or, `par [name] :grid(w, h[, d]) (:reduce(op variable))* { … }`
 over the points of a grid (see [Grids](#grids)).
 
 - The body is **one ascending loop** over a range: `a..b` (up to but not
@@ -47,7 +47,7 @@ over the points of a grid (see [Grids](#grids)).
 
 ## Grids
 
-**From 0.72.** `:grid(w, h)` or `:grid(w, h, d)` makes the
+ `:grid(w, h)` or `:grid(w, h, d)` makes the
 work items the points of a 2-D or 3-D grid, and the body is then any code,
 run once for each point, rather than one loop:
 
@@ -89,7 +89,7 @@ Points are numbered with `x` changing fastest, so `par.y * par.width + par.x`
 (or `(par.z * par.height + par.y) * par.width + par.x` in 3-D) is the work
 item's own element of a row-major array. The compiler knows that index is
 different for every work item, so writing through it needs no warning (see
-[Independent work items](#independent-work-items)); from 0.8.1 the same holds
+[Independent work items](#independent-work-items)); the same holds
 when the grid's size is a constant and the index spells it out, as
 `par.y * 640 + par.x` under `:grid(640, 480)` does.
 
@@ -130,8 +130,7 @@ the calling thread.
 
 ## Running on the GPU
 
-**From 0.7: macOS on Apple silicon, and Windows with an NVIDIA GPU. From 0.72
-also Linux, Windows with any GPU, Android, and the browser.** A block that can
+**macOS on Apple silicon, and Windows with an NVIDIA GPU. Also Linux, Windows with any GPU, Android, and the browser.** A block that can
 run on the GPU does so when that is faster. The compiler gives each block a GPU
 version of its loop, and a program needs no extra flags, libraries or SDKs, only
 the driver that comes with the GPU:
@@ -139,14 +138,14 @@ the driver that comes with the GPU:
 | Target | GPU interface | Needs |
 |---|---|---|
 | `arm64` (macOS) | Metal | Apple silicon |
-| `win64` | NVIDIA's driver (CUDA), else Vulkan | an NVIDIA GPU, or any GPU with a Vulkan driver (from 0.72) |
-| `x86_64` (Linux) | Vulkan | a Vulkan driver (`libvulkan.so.1`); a program linked with `-static` stays on the CPU (from 0.72) |
-| `android` | Vulkan | a device whose Vulkan driver has 64-bit integers (from 0.72) |
-| `wasm32` | WebGPU | a browser with WebGPU and JavaScript promise integration (JSPI), such as Chrome (from 0.72) |
+| `win64` | NVIDIA's driver (CUDA), else Vulkan | an NVIDIA GPU, or any GPU with a Vulkan driver |
+| `x86_64` (Linux) | Vulkan | a Vulkan driver (`libvulkan.so.1`); a program linked with `-static` stays on the CPU |
+| `android` | Vulkan | a device whose Vulkan driver has 64-bit integers |
+| `wasm32` | WebGPU | a browser with WebGPU and JavaScript promise integration (JSPI), such as Chrome |
 
 Results are the same as on the CPU: integer reductions match exactly, because
 each of the seven operators gives the same integer whatever order its values
-are combined in. From 0.75 the GPU combines a block's reductions itself, in
+are combined in. The GPU combines a block's reductions itself, in
 groups of 256 work items (on CUDA and Metal so far), rather than handing every
 work item's value back to be combined on the CPU. A floating-point reduction can
 therefore differ in its last bits between the CPU and the GPU, as it can between
@@ -164,19 +163,17 @@ uses a global itself, runs on the CPU. What else each GPU can hold:
   still keeps the block on the CPU.
 - Through Vulkan the GPU must have 64-bit integers, which desktop GPUs have;
   `double` is used where the GPU has it. 8- and 16-bit values and `bool`s,
-  alone or in arrays, are exact on every Vulkan GPU, and from 0.73 they can be
-  reduced there and through WebGPU too (up to 0.72 such a block runs on the
-  CPU).
+  alone or in arrays, are exact on every Vulkan GPU, and they can be reduced
+  there and through WebGPU too.
 - Through WebGPU, which has only 32-bit numbers, 64-bit integers are worked in
   two halves and 8- and 16-bit values exactly, as through Vulkan; a block that
-  uses `double` runs on the CPU. From 0.73, 64-bit integers are divided and
-  converted to and from `float` there too, with the CPU's results (up to 0.72
-  such a block runs on the CPU). A block that needs more arrays, or a larger
+  uses `double` runs on the CPU. 64-bit integers are divided and
+  converted to and from `float` there too, with the CPU's results. A block that needs more arrays, or a larger
   one, than the device can hold runs on the CPU.
 
 On Windows with an NVIDIA GPU, a block can reach it through CUDA or Vulkan.
-From 0.75 `auto` measures both and keeps the faster for each block (see
-[Which device](#which-device)); up to 0.74 it used CUDA.
+`auto` measures both and keeps the faster for each block (see
+[Which device](#which-device)).
 `XC_PAR_GPU=vulkan` or `XC_PAR_GPU=cuda` in the environment picks one
 interface where both work, and `XC_PAR=gpu` uses CUDA unless
 `XC_PAR_GPU=vulkan` is set. Where a machine has more than one Vulkan GPU,
@@ -201,7 +198,7 @@ the CPU on purpose.
 
 ### Read-only data the GPU broadcasts: `:constant`
 
-**From 0.8.1.** A block's header may name captured arrays the body only reads
+ A block's header may name captured arrays the body only reads
 as constant data:
 
 ```c
@@ -224,7 +221,7 @@ is cached, not streamed.
 
 ### Arrays the GPU shares: `simd:` pointers
 
-**From 0.8.1.** A block's arrays are copied to the GPU before a run and back
+ A block's arrays are copied to the GPU before a run and back
 after it. On a discrete card that is the bus, and unavoidable; on a
 unified-memory GPU — Apple silicon, or an integrated GPU on Linux — it is a
 copy the hardware never needed. A heap array can be declared so that such a
@@ -248,12 +245,12 @@ sized from the block the pointer points into, and on Apple silicon Metal binds
 the pages in place, with no copy either way; so does a Linux integrated GPU
 whose Vulkan driver imports host memory (`VK_EXT_external_memory_host`, which
 Mesa's drivers have). A discrete card copies a `simd:` array as it copies any
-other; from 0.8.1 a CUDA card pins a page-aligned block of a megabyte or more
+other; a CUDA card pins a page-aligned block of a megabyte or more
 where it lies for as long as the block exists, so every copy is a transfer
 straight from the program's memory rather than a copy into the driver's own
 buffer first.
 
-**Resident data.** From 0.8.1 a CUDA card also keeps what it was sent: a
+**Resident data.** A CUDA card also keeps what it was sent: a
 block's array that the program has not written since its last upload is not
 sent again, so a block run over the same arrays again uploads nothing, and
 `XC_PAR_REPORT=1` says "already on the GPU". The runtime sees a write by
@@ -265,7 +262,7 @@ Linux, before the runtime handles it: tell lldb `process handle SIGBUS SIGSEGV
 -s false -n false`, gdb `handle SIGSEGV nostop noprint`, and in Visual Studio
 continue past the first-chance exception.
 
-**Most arrays need no qualifier.** From 0.8.1 the runtime keeps a registry of
+**Most arrays need no qualifier.** The runtime keeps a registry of
 its page-aligned blocks, and allocates every numeric array of 64 KB or more
 (`new u32[N]`, no qualifier) page-aligned and registered as well, at a cost of
 at most two pages per array. A block that indexes any pointer to numbers asks
@@ -306,17 +303,16 @@ the CPU's in the last few bits; integer results are the same either way.
 With accuracy, the maths is precise and float results land within about one
 ULP of the CPU's. NVIDIA GPUs have no precise `sin`, `cos`, `exp`, `ln` or
 `pow`, so there a block that calls them runs on the CPU. Vulkan and WebGPU
-round `+`, `-` and `*` exactly but not division or square roots; from 0.73 a
+round `+`, `-` and `*` exactly but not division or square roots; a
 block whose goal is accuracy divides and takes square roots of `float`s there
-in integer arithmetic, correctly rounded, so its results are the CPU's (up to
-0.72 such a block runs on the CPU). They have no precise `sin`, `cos`, `exp`,
+in integer arithmetic, correctly rounded, so its results are the CPU's. They have no precise `sin`, `cos`, `exp`,
 `ln` or `pow`, so a block whose goal is accuracy and that calls them runs on
 the CPU. Apple GPUs flush subnormal `float`s (below about 1.2e-38) to zero, so
 results that pass through them can differ from the CPU's there. Choose
 accuracy for a block that depends on NaN or infinity, or on exact float
 results.
 
-On the CPU, both goals run the same code, except that from 0.72 the block's goal also holds for the loops in its body, as
+On the CPU, both goals run the same code, except that the block's goal also holds for the loops in its body, as
 [`:goal` on a `for` loop](/compiler/language/statements/#speed-or-accuracy-goal)
 does.
 
@@ -332,7 +328,7 @@ the GPU, however few items it has. Each device's first run of a block is a
 warm-up and is not counted: it pays one-off costs, such as building the GPU
 version and starting threads, that later runs do not.
 
-From 0.73 what `auto` measures is kept, so a program measures once on a machine
+What `auto` measures is kept, so a program measures once on a machine
 rather than on every run. It is kept in the program's own settings store (see
 [Settings](/compiler/api/settings/): the system's store on macOS, Windows and
 the web, else `~/.config/<program>.conf`), under `par.learned.…` keys, as a
@@ -341,7 +337,7 @@ the smallest the GPU won at. A run whose size falls outside those is decided
 without measuring; one between them is measured once and narrows them. The keys
 include a hash of the machine's GPU and CPU, so a new GPU is measured afresh
 (and the old one's values wait for it to come back), and a hash of the block's
-GPU version, so a block that changes is measured afresh too. From 0.75, on
+GPU version, so a block that changes is measured afresh too. On
 Windows with both CUDA and Vulkan, the value also names the interface `auto`
 chose (`…,cuda` or `…,vulkan`).
 
@@ -398,7 +394,7 @@ the two numbers as it happens.
 
 #### Several devices at once
 
-From 0.8 a block can run on every device the machine has at once: each GPU
+A block can run on every device the machine has at once: each GPU
 (an NVIDIA card through CUDA, another vendor's through Vulkan, Apple's through
 Metal) and the CPU's cores together. The range is cut into tiles of a few
 megabytes each way, and each device takes the next tile when it has room —
@@ -417,7 +413,7 @@ size. The learned record grows to four numbers — the CPU's largest win and
 the smallest size each of the other three won from — and the hardware key
 takes in every device, so a machine that gains a card is measured afresh. A
 block that would make a single tile, or that no second device can hold, is
-not tried on a set. From 0.8.1, neither is the CPU with a GPU that shares its
+not tried on a set. Neither is the CPU with a GPU that shares its
 memory (Apple silicon, an integrated GPU) when the block is bandwidth-bound:
 the two draw on one memory bus, so together they move no more bytes a second
 than the faster of them alone, and `XC_PAR_REPORT=1` says so. What is
@@ -433,28 +429,28 @@ usually keeps a memory-bound block on the CPU.
 
 To choose instead, in order of precedence:
 
-- `XC_PAR=cpu`, `XC_PAR=gpu`, `XC_PAR=gpus` (from 0.8: every GPU, tiled),
-  `XC_PAR=all` (from 0.8: every GPU and the CPU) or `XC_PAR=auto` in the
-  environment, for every block in one run. From 0.8 `XC_PAR_WORKERS=cuda,
+- `XC_PAR=cpu`, `XC_PAR=gpu`, `XC_PAR=gpus` (every GPU, tiled),
+  `XC_PAR=all` (every GPU and the CPU) or `XC_PAR=auto` in the
+  environment, for every block in one run. `XC_PAR_WORKERS=cuda,
   vulkan,metal,cpu` names the devices of the set itself (`XC_PAR_CUDA_DEVICES=0,1`
   picks CUDA cards by ordinal), and then every block runs on that set;
   `XC_PAR_TILE_MB=<n>` sets the tile size (8 MB each way by default) and
   `XC_PAR_TILES=0` turns tiling off;
 - `Par.device("name", "gpu")` in the program, for one block by its name (`par
   name { … }`, or `file:line` for an unnamed block), or `Par.device("par", …)`
-  for every block without its own choice; from 0.8 `"gpus"` and `"all"` too;
-- from 0.73, the user's own settings, in the same store: `par.<name> = cpu`,
+  for every block without its own choice; `"gpus"` and `"all"` too;
+- the user's own settings, in the same store: `par.<name> = cpu`,
   `gpu`, `auto`, or a number of items from which the block runs on the GPU (`par.heavy
-  = 200000`), and `par = …` for every block without its own; from 0.8 `gpus`
+  = 200000`), and `par = …` for every block without its own; `gpus`
   and `all` as well. The program never writes these.
 
 `XC_PAR_REPORT=1` prints where each block ran, what it took, why a block stayed
-on the CPU, what `auto` decided and learned, the hardware key, and from 0.8
+on the CPU, what `auto` decided and learned, the hardware key, and
 the tiles and the devices a run on a set used.
 
 ### Loops that become blocks: `--par-auto`
 
-**From 0.8.1.** With `--par-auto`, an outermost `for (T i in a..b) { … }`
+ With `--par-auto`, an outermost `for (T i in a..b) { … }`
 loop in plain code — or `a...b`, or the C-style `for (T i = a; i < b; i++)`
 with `<=`, `++i`, `i += 1` or `i = i + 1` — becomes a `par` block when its
 shape allows, so an existing program takes the GPU and every core without
@@ -470,8 +466,10 @@ for (u32 i in 0..N)
 
 A loop qualifies when its body writes only its own locals, array elements,
 and integer reductions — `acc = acc + e` or `acc += e` with `+`, `*`, `&`,
-`|` or `^`, or a count `acc++;`, `acc` an integer local used nowhere else in
-the body — and is in the program's own files: loops in the standard library
+`|` or `^`, a count `acc++;`, or the smallest or largest value seen,
+`if (e < acc) acc = e;` (any of `<`, `>`, `<=`, `>=`, `acc` on either side,
+the same `e` twice and no `else`), `acc` an integer local used nowhere else
+in the body — and is in the program's own files: loops in the standard library
 are never wrapped. It must also have no `break` of its own, `return`, `goto` or label, and no outer name
 incremented, taken by address or written through a member. A float
 reduction is left alone (its sum would reassociate across the items) unless
@@ -514,7 +512,7 @@ them `autopar_<n>`.
 
 ### Across machines: `xcd`
 
-**From 0.8.1.** A GPU on another machine can be a worker on the same tile
+ A GPU on another machine can be a worker on the same tile
 queue. The other machine runs `xcd`, the par worker daemon, and the program
 names it:
 
@@ -541,8 +539,7 @@ The daemon runs GPU kernels only (it has none of the program's compiled code),
 and it needs the kernel form its GPU takes: build the program with
 `-fpar-kernels=all`, which puts every form — Metal, PTX, SPIR-V, WGSL — in
 every block, so a Mac program's blocks can run on an NVIDIA card across the
-room; a build made where `XC_PAR_REMOTE` is set does this by itself (from
-0.8.1). Both sides must be the same xcc version. `XC_PAR_SECRET` is a pool
+room; a build made where `XC_PAR_REMOTE` is set does this by itself. Both sides must be the same xcc version. `XC_PAR_SECRET` is a pool
 secret the program proves to the daemon (SHA-256 over a nonce); a daemon
 started without one takes any program on its network. `XC_PAR_REPORT=1` on
 either side says what is sent and run.
@@ -567,13 +564,13 @@ in … us on the daemon's GPU`), so the link's share of a tile's time is
 visible beside the compute's. The frames are tagged fields, read by tag, so
 a side may carry a field the other does not know.
 
-`XC_PAR_TRACE=<file>` records every run on the tile queue (from 0.8.1): each
+`XC_PAR_TRACE=<file>` records every run on the tile queue: each
 tile as it was handed out, to which device, what the queue expected it to
 take, when it came back and how long the device itself spent on it. Open
 the file with `tools/par-trace.html` in the compiler's source tree, a page
 that draws each run as a timeline per device.
 
-`XC_PAR_PROBE=1` makes a block's first run a probe (from 0.8.1): every
+`XC_PAR_PROBE=1` makes a block's first run a probe: every
 worker that takes the block, local or remote, runs it alone at tile sizes
 from its floor up by powers of two, the arrays the block writes are put
 back between passes, and the report prints each worker's curve, its knee
@@ -584,7 +581,7 @@ sizes and rates and keeps adjusting as it goes. Use it once on a machine or
 a network to find the boundaries rather than letting them be learned over
 many runs.
 
-A daemon keeps what it is sent (from 0.8.1): every whole array and every
+A daemon keeps what it is sent: every whole array and every
 tile's slice, by block, array, offset and length, with a hash of the bytes.
 A later run of the block, by the same program or another, sends the hashes
 first and the bytes only for what the daemon does not hold; a slice the
@@ -596,7 +593,7 @@ by the time a tile names it is simply sent again. The report shows, per
 daemon, the bytes not sent, and the daemon's log what it served from the
 cache.
 
-A daemon checks its device memory before it takes work (from 0.8.1): a
+A daemon checks its device memory before it takes work: a
 block whose arrays and tiles in flight would not fit the memory its GPU
 reports free is declined, and a tile that would not fit when it arrives
 goes back to the program's queue for another device. The program's report
@@ -615,7 +612,7 @@ is the same either way. The window may cross midnight (`-nimby 23:00-07:00`).
 A daemon advertises itself on its subnet (multicast DNS, as `_xcd._tcp`),
 and `xcd -pool NAME` names the pool it belongs to, so projects on one network
 keep separate host sets. A program with no `XC_PAR_REMOTE` setting looks
-for daemons by itself (from 0.8.1): at its first `par` run it asks the
+for daemons by itself: at its first `par` run it asks the
 subnet once, waits a moment, and takes every daemon that answered, of the
 pool `XC_PAR_POOL` names (daemons with no pool when it is unset) and of its
 own xcc version. `XC_PAR_REMOTE=none` keeps a program on its own machine,
@@ -685,15 +682,26 @@ That loop is a scan (a running sum); write it as an ordinary `for` loop.
 
 The test is the usual one for an index that is linear in the item (`k * i + c`):
 two accesses can meet across items only when the difference of their offsets
-is a multiple of the greatest common divisor of their strides. From 0.8.1 that
+is a multiple of the greatest common divisor of their strides. That
 lets `a[2 * i] = a[2 * i + 1] * 3` through — the even elements are written and
 the odd ones only read, so no item sees another's work — where the first rule
 refused every pair with different offsets. An index computed from data is
 taken as able to meet anything.
 
+An offset held in a variable the block captures, `a[i + off] = a[i] * 3`,
+cannot be settled when the program is built: an `off` of `n` keeps every
+item to its own elements, and an `off` of `1` makes each item read the one
+before it. Such a block is accepted with a check the runtime
+makes before each run, using the variable's value then: where two items
+could meet, the block runs serially, as its source reads, and
+`XC_PAR_REPORT=1` says so. The check covers one captured integer, added
+to or scaled into the index, with the same stride on both sides; anything
+else is refused as before. A block whose GPU form cannot be built, so has
+nowhere to carry the check, runs serially.
+
 Two captured pointers the block sees as two arrays may be one block of
-memory (`u32* b = a;`), which no test at compile time can rule out. From
-0.8.1 the runtime checks before each run: where two of a block's arrays
+memory (`u32* b = a;`), which no test at compile time can rule out. The
+runtime checks before each run: where two of a block's arrays
 overlap and one is written, the block runs serially, one item after another,
 as its source reads (`XC_PAR_REPORT=1` says so). Separate arrays are
 unaffected.

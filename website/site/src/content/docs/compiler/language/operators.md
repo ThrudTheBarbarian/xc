@@ -44,7 +44,7 @@ u8 c = a << 1;    // arithmetic left shift; bit 7 lost
 `==` and `!=` compare a pointer of any type with [`nil`](/compiler/language/types/#the-null-pointer-nil),
 the null pointer: `if (p == nil)`, `while (node != nil)`. `nil` goes into no
 other operator (`nil + 1`, `nil < p`) and is not compared with an integer; the
-compiler refuses both. **From 0.75.**
+compiler refuses both.
 
 ### Pointer dereference and address-of
 

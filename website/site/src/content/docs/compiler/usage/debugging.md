@@ -3,7 +3,7 @@ title: Debugging
 description: Building with -g for lldb and gdb, what the debug information holds on each target, and what a build without it keeps.
 ---
 
-From 0.74, `xcc -g` writes DWARF debug information into the executable, so
+`xcc -g` writes DWARF debug information into the executable, so
 lldb and gdb can stop on a source line, step line by line and show a backtrace
 with the file and line of every frame.
 

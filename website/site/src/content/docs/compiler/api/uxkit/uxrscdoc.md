@@ -4,7 +4,7 @@ description: "A .rsc document in memory: its trees, its forms and their layout t
 ---
 
 `UXRscDoc` is a GEM resource held as objects: what Rocks edits and what
-[`UXRsc`](/compiler/api/uxkit/uxrsc/) loads from. From 0.7 (earlier it was
+[`UXRsc`](/compiler/api/uxkit/uxrsc/) loads from. (earlier it was
 part of Rocks).
 
 ```c

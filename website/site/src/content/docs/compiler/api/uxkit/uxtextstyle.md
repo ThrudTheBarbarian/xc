@@ -17,7 +17,7 @@ attributes UXKit draws and reads them as one value:
 
 [`UXTextView`](/compiler/api/uxkit/uxtextview/) applies `alignment` to whole
 paragraphs and draws `color`; the drawn text views use `pen`. Other attributes
-are kept by the string and ignored when drawing. From 0.72.
+are kept by the string and ignored when drawing.
 
 ```c
 #import "UXTextStyle.xc"

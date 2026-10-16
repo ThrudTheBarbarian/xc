@@ -25,7 +25,7 @@ f.filePath();             // "/Users/ada/My Docs/notes.txt"
 
 The accessors scan the text; nothing is parsed ahead of time.
 
-**File URLs** (from 0.72): [`fileURL`](#fileurl) escapes
+**File URLs**: [`fileURL`](#fileurl) escapes
 every byte of a path that is not a letter, digit or one of `- . _ ~ /`, and a
 Windows path (`C:\Work\notes.md`) becomes `file:///C:/Work/notes.md`.
 [`filePath`](#filepath) undoes both.
@@ -61,7 +61,7 @@ The text as it is: nothing is checked or escaped.
 static Url* fileURL(String* path)
 ```
 The file URL for `path`. A relative path is taken as it stands; Url does not
-know the working directory. **From 0.72.**
+know the working directory.
 
 ### toString
 ```c
@@ -105,13 +105,12 @@ The text after `?`, or `""`.
 ```c
 String* lastPathComponent(void)
 ```
-The last component of the decoded path; `""` for `/`. **From 0.72.**
+The last component of the decoded path; `""` for `/`.
 
 ### pathExtension
 ```c
 String* pathExtension(void)
 ```
-**From 0.72.**
 
 [↑ Topics](#topics)
 
@@ -121,21 +120,21 @@ String* pathExtension(void)
 ```c
 bool isFileURL(void)
 ```
-Whether the scheme is `file`, in any case. **From 0.72.**
+Whether the scheme is `file`, in any case.
 
 ### filePath
 ```c
 String* filePath(void)
 ```
 A file URL's path with its escapes decoded (and `/C:/x` as `C:/x`), or null for
-any other URL. **From 0.72.**
+any other URL.
 
 ### percentDecode
 ```c
 static String* percentDecode(String* s)
 ```
 `s` with each `%XX` replaced by its byte; a `%` not followed by two hex digits
-is kept as it is. **From 0.72.**
+is kept as it is.
 
 [↑ Topics](#topics)
 

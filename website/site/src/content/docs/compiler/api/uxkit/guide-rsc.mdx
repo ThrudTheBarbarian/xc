@@ -27,7 +27,7 @@ There are two loaders:
 
 | | |
 | --- | --- |
-| [`UXRsc`](/compiler/api/uxkit/uxrsc/) | every backend, from 0.7. Builds UXKit views from the document, for this device's layout |
+| [`UXRsc`](/compiler/api/uxkit/uxrsc/) | every backend. Builds UXKit views from the document, for this device's layout |
 | [`UXRscGem`](/compiler/api/uxkit/uxrscgem/) | GEM only. Binds views onto libGEM's own `OBJECT` array, so the AES walks the resource in place; one layout, unscoped connections |
 
 Rocks draws its canvas with `UXRsc`'s own view mapping, so what you drag is
@@ -154,7 +154,7 @@ This has two consequences:
 | --- | --- |
 | **v1** (`XGNB`) | class overrides, top-level objects, connections |
 | **v2** (`UXNB`) | adds forms with a layout per form factor, and logical ids |
-| **v3** (`UXNB`) | adds a scope to each connection, labels for top-level objects, and extension sections. From 0.7 |
+| **v3** (`UXNB`) | adds a scope to each connection, labels for top-level objects, and extension sections. |
 
 `UXRsc` reads all three, in portable code, on every backend. A v1 file reads
 under the compatibility rule: every tree is its own form, with one layout for
@@ -195,7 +195,7 @@ handles geometry.
 
 ### Connections can differ per layout
 
-From 0.7 each connection has a **scope**: the layout themes it binds in. The
+Each connection has a **scope**: the layout themes it binds in. The
 default is all of them. A phone that fires `showDetail` from a toolbar button
 and a desktop that fires it from a list's selection have two connections to
 the same action, one scoped to the phone and one to the desktop and tablet.

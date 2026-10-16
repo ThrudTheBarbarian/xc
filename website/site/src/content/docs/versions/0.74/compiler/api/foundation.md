@@ -1,0 +1,129 @@
+---
+title: Foundation
+description: "xcc's standard object library: value wrappers, containers, and the Comparable / Hashable / Enumerable / Copying / Error protocols behind them. One API, two implementations."
+slug: versions/0.74/compiler/api/foundation
+banner:
+  content: 'This is the documentation for xc 0.74. <a href="/compiler/">The current documentation</a> describes the newest version.'
+pagefind: false
+---
+
+Foundation is xcc's standard object library: the root [`Object`](/versions/0.74/compiler/api/object/),
+value wrappers ([`Number`](/versions/0.74/compiler/api/number/), [`String`](/versions/0.74/compiler/api/string/),
+[`Data`](/versions/0.74/compiler/api/data/)), containers ([`Array`](/versions/0.74/compiler/api/array/),
+[`Map`](/versions/0.74/compiler/api/map/), [`Set`](/versions/0.74/compiler/api/set/)), and the protocols they
+are built on.
+
+```c
+#import "Foundation.xc"        // the umbrella
+```
+
+The umbrella pulls in `Object`, `Comparable`, `Hashable`, `Enumerable`, `Copying`, `CharacterSet`,
+`Number`, `String`, `Data`, `Array`, `Map`, `Set`, `Bag`, `Range`, `BinaryHeap`, `Cache` and `Null`, and `Codable` through `Object`.
+That is everything below except [`Coder`](/versions/0.74/compiler/api/coder/) and the
+[`Error`](/versions/0.74/compiler/api/error/) protocol, which you import by name
+(`#import <Coder.xc>`, `#import <Error.xc>`).
+
+All of it needs a real heap (**`-falloc=heap`**), which is the default on the
+6502 `xt` layouts and on every native backend.
+
+## Members
+
+| | |
+|---|---|
+| [`Object`](/versions/0.74/compiler/api/object/) | The universal root class — pointer-identity `equals`, an address-derived `hash`, and the `description` hook every class inherits and overrides. |
+| [`Number`](/versions/0.74/compiler/api/number/) | Wraps any sized integer or float; cross-kind conversion is lazy and cached. The box a typed collection stores a primitive in. |
+| [`String`](/versions/0.74/compiler/api/string/) | A heap-owned, NUL-terminated **UTF-8** string. Methods name their unit — `byteAt` counts bytes, `charAt` counts code points. |
+| [`Data`](/versions/0.74/compiler/api/data/) | An owned heap byte block — opaque bytes, no trailing NUL, with growth, slicing, hex, and the String-encoding bridge. |
+| [`Array`](/versions/0.74/compiler/api/array/) | An ordered, resizable list of `Object*` with sorting and the callback-based functional methods (`filtered`, `mapped`, …). |
+| [`Map`](/versions/0.74/compiler/api/map/) | A hash map keyed by anything `Hashable` + `Comparable`; iterates in insertion order. |
+| [`Set`](/versions/0.74/compiler/api/set/) | A hash set with set algebra (`unionWith`, `intersect`, `subtract`, …). |
+| [`Bag`](/versions/0.74/compiler/api/bag/) | A counted set: each member carries a count. |
+| [`Range`](/versions/0.74/compiler/api/range/) | A half-open index range `[loc, loc + len)`, equal by value. |
+| [`BinaryHeap`](/versions/0.74/compiler/api/binaryheap/) | A priority queue, smallest priority first. |
+| [`Cache`](/versions/0.74/compiler/api/cache/) | A bounded least-recently-used cache under string keys. |
+| [`Null`](/versions/0.74/compiler/api/null/) | The one shared object meaning "nothing here" in a collection. |
+| [`JSON`](/versions/0.74/compiler/api/json/) | JSON text to Foundation objects and back. **Not** in the umbrella — import by name. |
+| [`Expression`](/versions/0.74/compiler/api/expression/) | An arithmetic expression parsed once and evaluated against variables. **Not** in the umbrella — import by name. |
+| [`NumberFormatter`](/versions/0.74/compiler/api/numberformatter/) | Numbers to display text and back: grouping, currency, percent. **Not** in the umbrella — import by name. |
+| [`NotificationCenter`](/versions/0.74/compiler/api/notificationcenter/) | A publish/subscribe bus with weakly held observers. **Not** in the umbrella — import by name. |
+| [`UndoManager`](/versions/0.74/compiler/api/undomanager/) | Undo and redo through self-registering changes, in named groups. **Not** in the umbrella — import by name. |
+| [`Progress`](/versions/0.74/compiler/api/progress/) | How far work has got, as a tree of child progresses. **Not** in the umbrella — import by name. |
+| [`StateMachine`](/versions/0.74/compiler/api/statemachine/) | A finite state machine of named states and events. **Not** in the umbrella — import by name. |
+| [`SearchIndex`](/versions/0.74/compiler/api/searchindex/) | A small full-text index with ranked and prefix search. **Not** in the umbrella — import by name. |
+| [`IndexSet`](/versions/0.74/compiler/api/indexset/) | A set of indexes kept as merged ranges: a table's selection. **Not** in the umbrella — import by name. |
+| [`AttributedString`](/versions/0.74/compiler/api/attributedstring/) | Text with named attributes over ranges, as merged runs. **Not** in the umbrella — import by name. |
+| [`Regex`](/versions/0.74/compiler/api/regex/) | Regular expressions: captures, lazy and counted quantifiers, replace, split. **Not** in the umbrella — import by name. |
+| [`Predicate`](/versions/0.74/compiler/api/predicate/) | Conditions over records, built in code or parsed from text. **Not** in the umbrella — import by name. |
+| [`Validator`](/versions/0.74/compiler/api/validator/) | Rules a field's text must pass, with a message for each. **Not** in the umbrella — import by name. |
+| [`SortDescriptor`](/versions/0.74/compiler/api/sortdescriptor/) | A stable sort of records by one key and then the next. **Not** in the umbrella — import by name. |
+| [`Socket`](/versions/0.74/compiler/api/socket/) | A TCP connection, the same calls on every hosted target. **Not** in the umbrella — import by name. |
+| [`CSV`](/versions/0.74/compiler/api/csv/) | Comma-separated values to rows of strings and back. **Not** in the umbrella — import by name. |
+| [`Coder`](/versions/0.74/compiler/api/coder/) | Keyed archiving of an object graph to JSON, optionally gzipped. **Not** in the umbrella — import by name. |
+
+### Protocols
+
+| | |
+|---|---|
+| [`Comparable`](/versions/0.74/compiler/api/comparable/) | Required `equals`; **optional** `compare` (`<0`/`0`/`>0`). Every value has equality but not every value has an order, so a class may have one without the other. |
+| [`Hashable`](/versions/0.74/compiler/api/hashable/) | `hash` + `equals`: equal keys must hash equally. Required for a value to be a `Map`/`Set` key. |
+| [`Enumerable`](/versions/0.74/compiler/api/enumerable/) | `enumLength` + `enumAt` — the two methods `for (x in collection)` dispatches through. The loop variable is borrowed. |
+| [`Copying`](/versions/0.74/compiler/api/copying/) | `copy` — an independent duplicate. `String` and `Data` conform. |
+| [`Codable`](/versions/0.74/compiler/api/codable/) | `encodeWithCoder` + `initWithCoder`, the pair a [`Coder`](/versions/0.74/compiler/api/coder/) calls. `Object` conforms, so every class does (not on xt6502). |
+| [`Error`](/versions/0.74/compiler/api/error/) | A single `message()`, so anything [`throw`](/versions/0.74/compiler/language/errors/)n can describe itself. **Not** in the umbrella — import by name. |
+
+Every parentless `class X` inherits from the runtime's built-in
+[`Object`](/versions/0.74/compiler/api/object/) root, so a `Number*`, a `String*`, or any
+class of your own fits wherever an `Object*` is expected. No `: Object`
+annotation is needed.
+
+## Two implementations, one API
+
+Foundation exists twice. `support/generic/lib/` is the **32-bit build** (arm64,
+arm9, m68k, x86_64), with `u32` indices and a `u32` hash, bounded only by
+memory. `support/xt6502/lib/` is the **6502 build**, with `u16` indices and a
+`u8` hash, because four-byte index arithmetic on every compare is too costly on
+an 8-bit CPU.
+
+Portable source compiles against both builds. A narrower caller index widens at
+the call boundary, so `for (u16 i = 0; i < a.count(); i++)` behaves the same on
+either target. The per-class pages list anything that differs. The most visible
+difference is `Array<i64>` / `Array<double>`, which need `-DENABLE_64BIT=1` on
+xt6502 (see [Number § availability](/versions/0.74/compiler/api/number/)).
+
+## Element types are erased generics
+
+Every container takes an optional **element type** in angle brackets. It is a
+compile-time check that is *erased* at run time: one `Array` implementation
+serves every element type, so there is no code-size cost per instantiation.
+
+```c
+Array<String>* names = new Array();      // new Array() needs no type argument
+names.add(String.withCString("ada"));
+String* s = names.get((u32)0);           // a String*, no cast
+
+names.add(Number.withU32((u32)7));       // error: Number is not a subclass of String
+```
+
+`Map<V>` names the **value** type; keys are anything conforming to `Hashable`.
+Each collection takes one type argument; there is no `Map<K,V>` spelling yet. A
+primitive element type works and is enforced (`Array<i32>` refuses a `float`),
+but the value is stored boxed in a [`Number`](/versions/0.74/compiler/api/number/), and
+unboxing happens in **assignment context**: `i32 v = a.get(i)`. Untyped
+`Array*` / `Map*` / `Set*` remain valid everywhere. See
+[Collections & strings](/versions/0.74/compiler/language/collections/) for the full
+discussion and the `for … in` caveat.
+
+## Ownership
+
+Containers hold a **strong** reference to everything they store, and release it
+when the element is removed or the container is deallocated. Sorting and
+reversing move pointers only, with no refcount changes. `sorted()`, `filtered()`,
+`mapped()`, `subarray()` and the Set algebra all return **new** containers and
+leave the originals untouched.
+
+The default [`Object.hash`](/versions/0.74/compiler/api/object/#hash) is derived from an
+instance's **address**, so hash order is not reproducible for a `Map` or `Set`
+keyed by objects of your own classes. For this reason both enumerate in
+**insertion order**. Override `equals`/`hash` together to give your class value
+semantics, as [`Number`](/versions/0.74/compiler/api/number/),
+[`String`](/versions/0.74/compiler/api/string/) and [`Data`](/versions/0.74/compiler/api/data/) do.

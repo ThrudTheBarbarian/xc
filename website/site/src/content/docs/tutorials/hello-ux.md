@@ -10,12 +10,9 @@ a console program does not: the toolkit's library for its platform, shipped
 beside it. It takes about fifteen minutes, and the files are in the
 repository under `compiler/examples/tutorials/hello-ux/`.
 
-You need xcc 0.74 or later, `make`, and UXKit installed in the third-party
-tree, `/opt/xcc/3p/uxkit/`, from the
-[UXKit library archive](/compiler/downloads/#uxkit-library). All six
-programs run with 0.75; with 0.74 the iOS and Android ones build but do not
-run, because of how their libraries were stamped and named
-([Changelog](/compiler/downloads/changelog/)).
+You need xcc, `make`, and UXKit installed in the third-party tree,
+`/opt/xcc/3p/uxkit/`, from the
+[UXKit library archive](/compiler/downloads/#uxkit-library).
 
 ## 1. Write the program
 
@@ -157,7 +154,7 @@ $(BUILD)/web/$(NAME).wasm: $(SRC) index.html
 	rm -f $(@D)/$(NAME).html    # xcc's console page; index.html is the app's
 
 # iOS: an app bundle, which is a folder: the program, an Info.plist and
-# libUXKit.dylib. Needs xcc 0.75 for the simulator library's platform stamp.
+# libUXKit.dylib.
 $(BUILD)/ios/$(NAME).app/$(NAME): $(SRC)
 	@mkdir -p $(@D)
 	$(XCC) -A $(IOS) $(OPT) $(FLAGS) -o $@ $<
@@ -175,8 +172,7 @@ $(BUILD)/ios/$(NAME).app/$(NAME): $(SRC)
 	  '</dict></plist>' > $(@D)/Info.plist
 
 # Android: the APK carries UXKit's two libraries and its Java shim; the shim
-# is the activity the system starts, and it loads the program. Needs xcc 0.75
-# for the library names the APK records.
+# is the activity the system starts, and it loads the program.
 $(BUILD)/android/$(NAME).apk: $(SRC)
 	@mkdir -p $(@D)
 	$(XCC) -A android --emit-apk $(OPT) $(FLAGS) \
@@ -259,14 +255,12 @@ memory worker needs; without them the browser shows an empty canvas.
 import http.server
 import sys
 
-
 class Handler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self.send_header("Cross-Origin-Opener-Policy", "same-origin")
         self.send_header("Cross-Origin-Embedder-Policy", "require-corp")
         self.send_header("Cache-Control", "no-store")
         super().end_headers()
-
 
 port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
 print(f"serving on http://localhost:{port}/")
@@ -299,8 +293,8 @@ Each platform's folder is then complete:
 | `make run-web` | this machine, then open `http://localhost:8000/` | the window on the page's canvas; the printf lines in the browser console |
 | `make run-linux` | a Linux machine with GTK 4 | the window |
 | `make run-windows` | a Windows machine, or Wine | the window |
-| `make run-ios` | a Mac with a booted iPhone simulator (0.75) | the window in the simulator; the printf lines in the terminal |
-| `make run-android` | a device or emulator visible to `adb` (0.75) | the window; the printf lines in logcat |
+| `make run-ios` | a Mac with a booted iPhone simulator | the window in the simulator; the printf lines in the terminal |
+| `make run-android` | a device or emulator visible to `adb` | the window; the printf lines in logcat |
 
 Press the button: the label changes and `pressed 1` is printed, on every
 platform, from the same source.

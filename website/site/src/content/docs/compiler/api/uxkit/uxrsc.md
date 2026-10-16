@@ -4,7 +4,7 @@ description: "Load a form from a .rsc document as UXKit views on every backend: 
 ---
 
 `UXRsc` loads a form designed in Rocks and gives you its views, already wired
-to your code. It runs on every backend. From 0.7.
+to your code. It runs on every backend.
 
 ```c
 #import "UXRsc.xc"
@@ -193,8 +193,8 @@ static Object* makeUXKit(u8* cls)
 ```
 
 UXKit's controls that GEM has no type for, by class name: `UXSlider`,
-`UXStepper`, `UXProgressBar`, `UXSegmentedControl`, `UXComboBox`, and from
-0.75 `UXTextView`, `UXDatePicker`, `UXBreadcrumb`, `UXTableView`,
+`UXStepper`, `UXProgressBar`, `UXSegmentedControl`, `UXComboBox`,
+`UXTextView`, `UXDatePicker`, `UXBreadcrumb`, `UXTableView`,
 `UXOutlineView`, `UXCollectionView`, `UXScrollView`, `UXSplitView` and
 `UXTabView`. A `UXScrollView`, `UXSplitView` and `UXTabView` are containers: a
 scroll view builds its designed children into its document view, a split view
@@ -202,7 +202,7 @@ sends each child to the pane its `slot` attribute names (0 or 1), and a tab view
 to the tab its `slot` names (0, 1, 2…, counted from the `tabs` attribute). A
 document holds one as a `G_USERDEF` of that class, with its settings in
 [attributes](/compiler/api/uxkit/uxrscdoc/#uxrscattr). `make` falls back to
-this when no registered factory knows the name. From 0.7.
+this when no registered factory knows the name.
 
 ### applyAttrs
 

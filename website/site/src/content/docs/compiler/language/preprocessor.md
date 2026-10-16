@@ -30,8 +30,8 @@ none, as a **library**:
 | a `.xc` source file | its text is compiled as part of this file (once, for `#import`) |
 | an xcc shared library (`--emit-lib`) | nothing is pasted in: the library's classes, protocols, structs, enums and functions are read from the interface embedded in the binary, and the program links against it |
 | a separately compiled module's `Name.xtc.iface` | the same, for an object built with `xcc -c` |
-| a C shared library | its functions, types and enum constants are read from its DWARF debug information. From 0.72 that includes a stripped library's separate debug file, as a Linux distribution installs it with the library's debug package (`-dbgsym`, `-debuginfo`): found by build ID or `.gnu_debuglink` under `/usr/lib/debug`, or under the directories in `XCC_DEBUG_DIR` (colon-separated) when that is set. From 0.73, on `-A win64`, a DLL built by a MinGW toolchain with `-g` is read the same way (its DWARF is in the DLL; build it with `-fno-eliminate-unused-debug-types` to keep enum constants). A library with no debug information anywhere gets a warning, and the functions you call from it then need declaring |
-| a macOS or iOS system framework (from 0.65) | the program is linked against it, as `-framework` does; it declares nothing, so its functions are declared in your source without bodies |
+| a C shared library | its functions, types and enum constants are read from its DWARF debug information. That includes a stripped library's separate debug file, as a Linux distribution installs it with the library's debug package (`-dbgsym`, `-debuginfo`): found by build ID or `.gnu_debuglink` under `/usr/lib/debug`, or under the directories in `XCC_DEBUG_DIR` (colon-separated) when that is set. On `-A win64`, a DLL built by a MinGW toolchain with `-g` is read the same way (its DWARF is in the DLL; build it with `-fno-eliminate-unused-debug-types` to keep enum constants). A library with no debug information anywhere gets a warning, and the functions you call from it then need declaring |
+| a macOS or iOS system framework | the program is linked against it, as `-framework` does; it declares nothing, so its functions are declared in your source without bodies |
 
 So `#import <Xtg>` and `#import <Stdio>` look alike but do different things: the
 first finds `libXtg.dylib` and imports its interface, the second finds
@@ -69,7 +69,7 @@ directory hides the real one.
    When one is found, the vendor's `3p/<vendor>/xc` directory of xc sources is
    added to the **end** of the search path, so its helper files can be
    imported but never hide the standard library's.
-3. **A system framework** (from 0.65), on macOS and iOS only, for a name with
+3. **A system framework**, on macOS and iOS only, for a name with
    no `.` or `/`: `CoreFoundation.framework` in the SDK when one is installed, else in
    `/System/Library/Frameworks`. `#import <CoreFoundation>` is then the same
    as `-framework CoreFoundation` on the command line:

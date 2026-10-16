@@ -8,7 +8,6 @@ description: The callback type — a receiver and a code address travelling toge
 > Use a bound method to "call this method on that object", and a block
 > when the callback needs more context.
 
-
 `&obj.method` yields a **bound method**: a two-word value carrying the receiver
 and the code address together. You can store it, pass it and call it later, and
 the receiver travels with it.

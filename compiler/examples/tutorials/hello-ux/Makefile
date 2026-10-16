@@ -71,7 +71,7 @@ $(BUILD)/web/$(NAME).wasm: $(SRC) index.html
 	rm -f $(@D)/$(NAME).html    # xcc's console page; index.html is the app's
 
 # iOS: an app bundle, which is a folder: the program, an Info.plist and
-# libUXKit.dylib. Needs xcc 0.75 for the simulator library's platform stamp.
+# libUXKit.dylib.
 $(BUILD)/ios/$(NAME).app/$(NAME): $(SRC)
 	@mkdir -p $(@D)
 	$(XCC) -A $(IOS) $(OPT) $(FLAGS) -o $@ $<
@@ -89,8 +89,7 @@ $(BUILD)/ios/$(NAME).app/$(NAME): $(SRC)
 	  '</dict></plist>' > $(@D)/Info.plist
 
 # Android: the APK carries UXKit's two libraries and its Java shim; the shim
-# is the activity the system starts, and it loads the program. Needs xcc 0.75
-# for the library names the APK records.
+# is the activity the system starts, and it loads the program.
 $(BUILD)/android/$(NAME).apk: $(SRC)
 	@mkdir -p $(@D)
 	$(XCC) -A android --emit-apk $(OPT) $(FLAGS) \

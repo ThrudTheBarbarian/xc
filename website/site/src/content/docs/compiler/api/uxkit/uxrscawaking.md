@@ -3,7 +3,7 @@ title: UXRscAwaking
 description: "awakeFromRsc: called on each object an rsc file load made, and on File's Owner, once every outlet is connected."
 ---
 
-A protocol for objects that finish setting up after an rsc file load. From 0.7.
+A protocol for objects that finish setting up after an rsc file load.
 
 ```c
 #import "UXRsc.xc"

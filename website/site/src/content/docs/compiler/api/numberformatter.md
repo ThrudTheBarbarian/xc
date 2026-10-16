@@ -6,7 +6,6 @@ description: "Numbers to display text and back: grouping, fraction digits, curre
 `NumberFormatter` turns a [`Number`](/compiler/api/number/) into display text
 and reads such text back (`NSNumberFormatter` in shape): `1234567` as
 `1,234,567`, `1299.5` as `$1,299.50`, `0.25` as `25%`.
-**From 0.72.**
 
 ```c
 #import "NumberFormatter.xc"   // not in the Foundation umbrella: import it by name

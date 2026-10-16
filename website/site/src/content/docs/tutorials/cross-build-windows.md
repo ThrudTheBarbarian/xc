@@ -11,7 +11,7 @@ Makefile, because Windows has PowerShell and does not have Make. It takes
 about ten minutes. The files are in the repository under
 `compiler/examples/tutorials/hello/`.
 
-You need xcc 0.74 or later, unpacked from `xcc-win64-<version>.zip`, and
+You need xcc, unpacked from `xcc-win64-<version>.zip`, and
 PowerShell, which every Windows has. Nothing else: xcc carries every target's
 runtime and linker, so the PC builds the macOS, Linux, web, iOS and Android
 programs without another toolchain. To *run* what you build you need the
@@ -159,13 +159,6 @@ What each platform produced:
 | `web` | `build\web\hello.wasm`, `hello.js`, `hello.html` | the module, a runner for node and the browser, and a page that loads it |
 | `ios` | `build\ios\hello` | a Mach-O executable for the iOS simulator |
 | `android` | `build\android\hello.apk` | a signed, installable app |
-
-:::note[Android on Windows before 0.75]
-In 0.74 the Android build failed on Windows with "cannot create a signing key":
-the key generator read `/dev/urandom`, which Windows does not have. From 0.75
-the key is generated on Windows too. With 0.74, build the APK on a Mac or Linux
-machine, or pass a key made there with `-Flags "--sign-key C:\path\android-debug.key.raw"`.
-:::
 
 ## 4. Run each one
 

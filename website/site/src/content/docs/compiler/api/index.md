@@ -124,28 +124,28 @@ and every method grouped by task with a jump-list at the top.
 | [`Array`](/compiler/api/array/) | an ordered, growable list with map / filter / reduce and sort |
 | [`Map`](/compiler/api/map/) | an insertion-ordered hash map |
 | [`Set`](/compiler/api/set/) | a hash set with union / intersection / difference |
-| [`Bag`](/compiler/api/bag/) | a counted set (from 0.72) |
-| [`Range`](/compiler/api/range/) | a half-open index range (from 0.72) |
-| [`BinaryHeap`](/compiler/api/binaryheap/) | a priority queue (from 0.72) |
-| [`Cache`](/compiler/api/cache/) | a bounded LRU cache (from 0.72) |
-| [`Null`](/compiler/api/null/) | the shared "nothing here" object (from 0.72) |
-| [`JSON`](/compiler/api/json/) | JSON text to Foundation objects and back (from 0.72) |
-| [`Expression`](/compiler/api/expression/) | arithmetic expressions evaluated against variables (from 0.72) |
-| [`NumberFormatter`](/compiler/api/numberformatter/) | numbers to display text and back (from 0.72) |
-| [`NotificationCenter`](/compiler/api/notificationcenter/) | a publish/subscribe bus (from 0.72) |
-| [`UndoManager`](/compiler/api/undomanager/) | undo and redo (from 0.72) |
-| [`Progress`](/compiler/api/progress/) | how far work has got (from 0.72) |
-| [`StateMachine`](/compiler/api/statemachine/) | named states driven by events (from 0.72) |
-| [`SearchIndex`](/compiler/api/searchindex/) | a small full-text index (from 0.72) |
-| [`IndexSet`](/compiler/api/indexset/) | a set of indexes kept as ranges (from 0.72) |
-| [`AttributedString`](/compiler/api/attributedstring/) | text with attributes over ranges (from 0.72) |
-| [`Regex`](/compiler/api/regex/) | regular expressions (from 0.72) |
-| [`Predicate`](/compiler/api/predicate/) | conditions over records (from 0.72) |
-| [`Validator`](/compiler/api/validator/) | rules a field's text must pass (from 0.72) |
-| [`SortDescriptor`](/compiler/api/sortdescriptor/) | sort records by keys (from 0.72) |
-| [`Socket`](/compiler/api/socket/) | a TCP connection (from 0.72) |
-| [`WebSocket`](/compiler/api/websocket/) | WebSocket (RFC 6455) clients and servers over Socket; wss through the TLS layer (from 0.8.1) |
-| [`CSV`](/compiler/api/csv/) | comma-separated values to rows and back (from 0.72) |
+| [`Bag`](/compiler/api/bag/) | a counted set |
+| [`Range`](/compiler/api/range/) | a half-open index range |
+| [`BinaryHeap`](/compiler/api/binaryheap/) | a priority queue |
+| [`Cache`](/compiler/api/cache/) | a bounded LRU cache |
+| [`Null`](/compiler/api/null/) | the shared "nothing here" object |
+| [`JSON`](/compiler/api/json/) | JSON text to Foundation objects and back |
+| [`Expression`](/compiler/api/expression/) | arithmetic expressions evaluated against variables |
+| [`NumberFormatter`](/compiler/api/numberformatter/) | numbers to display text and back |
+| [`NotificationCenter`](/compiler/api/notificationcenter/) | a publish/subscribe bus |
+| [`UndoManager`](/compiler/api/undomanager/) | undo and redo |
+| [`Progress`](/compiler/api/progress/) | how far work has got |
+| [`StateMachine`](/compiler/api/statemachine/) | named states driven by events |
+| [`SearchIndex`](/compiler/api/searchindex/) | a small full-text index |
+| [`IndexSet`](/compiler/api/indexset/) | a set of indexes kept as ranges |
+| [`AttributedString`](/compiler/api/attributedstring/) | text with attributes over ranges |
+| [`Regex`](/compiler/api/regex/) | regular expressions |
+| [`Predicate`](/compiler/api/predicate/) | conditions over records |
+| [`Validator`](/compiler/api/validator/) | rules a field's text must pass |
+| [`SortDescriptor`](/compiler/api/sortdescriptor/) | sort records by keys |
+| [`Socket`](/compiler/api/socket/) | a TCP connection |
+| [`WebSocket`](/compiler/api/websocket/) | WebSocket (RFC 6455) clients and servers over Socket; wss through the TLS layer |
+| [`CSV`](/compiler/api/csv/) | comma-separated values to rows and back |
 | [`Coder`](/compiler/api/coder/) | keyed archiving of an object graph to JSON, optionally gzipped |
 
 **Protocols**: [`Comparable`](/compiler/api/comparable/), [`Hashable`](/compiler/api/hashable/), [`Enumerable`](/compiler/api/enumerable/), [`Copying`](/compiler/api/copying/), [`Codable`](/compiler/api/codable/) and [`Error`](/compiler/api/error/), the small interfaces the classes conform to.
@@ -167,7 +167,6 @@ and every method grouped by task with a jump-list at the top.
 | [`RunLoop`](/compiler/api/runloop/) | a queue of blocks run on one thread, posted to from any thread, and timers |
 
 **[6502 (8-bit)](/compiler/api/6502/)**: the utilities the 8-bit target provides in place of an OS: [`Time`](/compiler/api/time/), [`Heap`](/compiler/api/heap/), [`Vbi`](/compiler/api/vbi/), [`System`](/compiler/api/system/). On the native targets these are thin wrappers over the host. On the 6502 they are target-specific implementations.
-
 
 Also documented: the 6502's graphics classes ([`Gfx`](/compiler/api/gfx/), [`GfxFactory`](/compiler/api/gfxfactory/)), [`FILE`](/compiler/api/file/) (a `stdio`-shaped file layer), [`CharacterSet`](/compiler/api/characterset/), [`string-xt6502`](/compiler/api/string-xt6502/), and the [`symbols`](/compiler/api/symbols/) / [`mapData`](/compiler/api/mapdata/) helpers.
 
