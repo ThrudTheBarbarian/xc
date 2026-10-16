@@ -920,12 +920,15 @@ class ParDevice
                   : v.equals(String.withCString("gpus")) ? (i32)5
                   : v.equals(String.withCString("all")) ? (i32)6 : (i32)4;
             }
+        // The item count is kept for the report whatever decides the device:
+        // a forced XC_PAR=cpu run said "0 items" before.
+        if (n >= (i64)0)
+            gParLastN[slot(proto.parName())] = n;
         if (_mode == (i32)1 || _mode == (i32)2 || n < (i64)0)
             return _mode;
         if (_mode == (i32)5 || _mode == (i32)6)
             return _mode - (i32)2;
         u32 i = slot(proto.parName());
-        gParLastN[i] = n;
         gParMeasuring[i] = false;
         i32 dev = gParSet[i];
         if (_mode == (i32)4 && dev < (i32)0 && gParAll > (i32)0)

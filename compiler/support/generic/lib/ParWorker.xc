@@ -53,6 +53,14 @@ class ParWorker : Object
             return false;
         return true;
         }
+    // The peer this worker stands aside for on a block, or null: the report
+    // says which it was, rather than that the block was declined.
+    ParWorker* standsAsideFor(ParChunk* proto, u8* src, ParLayout* l)
+        {
+        if (_preferredPeer != (ParWorker*)0 && _preferredPeer.holds(proto, src, l) && holds(proto, src, l))
+            return _preferredPeer;
+        return (ParWorker*)0;
+        }
     // Whether the worker can take a tile RIGHT NOW: reachable, and not so
     // loaded that giving it work would lose time. A local device is always
     // ready; a remote one answers from a cached load/health probe. Re-asked
@@ -257,7 +265,9 @@ class ParCpuLanes
 class ParCpuWorker : ParWorker
     {
     Array* _lanes;
-    u32 _busy;
+    u32 _busy;          // lanes running a part of the tile in flight
+    u32 _parts;         // the parts the tile was cut into (lanes 0..parts-1)
+    ParTile* _tile;     // the tile in flight, or null
 
     String* identity(void)
         {
@@ -267,9 +277,16 @@ class ParCpuWorker : ParWorker
         {
         return true;
         }
+    // One tile at a time, spread over every lane: a GPU-sized tile on ONE
+    // lane was a run of its own (mandel_deep's 2M items: 10 s on a lane
+    // beside the GPUs' 15 ms), and the queue's estimate for the pool — its
+    // throughput over all its lanes — said otherwise. Cut across the lanes
+    // the way the direct CPU path cuts a whole block (Par.runCpu: k equal
+    // parts, partials merged in order, so the fold is the same one), a tile
+    // takes what the estimate says.
     u32 depth(void)
         {
-        return (u32)Par.threads();
+        return (u32)1;
         }
     i64 floor(void)
         {
@@ -283,53 +300,69 @@ class ParCpuWorker : ParWorker
         }
     bool take(ParTile* t, ParChunk* proto, u8* src, ParLayout* l)
         {
-        if (_lanes == (Array*)0 || _busy >= _lanes.count())
+        if (_lanes == (Array*)0 || _tile != (ParTile*)0)
             return false;
-        for (u32 i = (u32)0; i < _lanes.count(); i = i + (u32)1)
+        i64 n = t.hi - t.lo;
+        if (n <= (i64)0)
+            return false;
+        u32 k = _lanes.count();
+        if ((i64)k > n)
+            k = (u32)n;
+        for (u32 j = (u32)0; j < k; j = j + (u32)1)
+            if (((ParCpuLane*)_lanes.get(j))._busy)
+                return false;   // the direct path has a lane: not now
+        _tile = t;
+        _parts = k;
+        t.worker = (ParWorker*)self;
+        for (u32 j = (u32)0; j < k; j = j + (u32)1)
             {
-            ParCpuLane* lane = (ParCpuLane*)_lanes.get(i);
-            if (lane._busy)
-                continue;
+            ParCpuLane* lane = (ParCpuLane*)_lanes.get(j);
             lane._chunk = proto.copyChunk();
-            lane._lo = t.lo;
-            lane._hi = t.hi;
+            lane._lo = t.lo + (n * (i64)j) / (i64)k;
+            lane._hi = t.lo + (n * (i64)(j + (u32)1)) / (i64)k;
             lane._tile = t;
             lane._busy = true;
             lane._done.store((i32)0);
-            t.worker = (ParWorker*)self;
             _busy = _busy + (u32)1;
             gParLanesBusy = gParLanesBusy + (u32)1;
             lane._go.post();
-            return true;
             }
-        return false;
+        return true;
         }
     // Asked, not waited for: the queue polls every worker in turn, and a
-    // wait here would hold the GPUs' feeding until a CPU tile ended.
+    // wait here would hold the GPUs' feeding until a CPU tile ended. The
+    // tile is done when its last part is; the parts' partials are folded
+    // into the first in lane order, as the direct path folds its chunks.
     ParTile* poll(void)
         {
-        if (_busy == (u32)0)
+        if (_tile == (ParTile*)0)
             return (ParTile*)0;
-        for (u32 i = (u32)0; i < _lanes.count(); i = i + (u32)1)
+        for (u32 j = (u32)0; j < _parts; j = j + (u32)1)
+            if (((ParCpuLane*)_lanes.get(j))._done.load() == (i32)0)
+                return (ParTile*)0;
+        ParCpuLane* first = (ParCpuLane*)_lanes.get((u32)0);
+        ParChunk* whole = first._chunk;
+        for (u32 j = (u32)1; j < _parts; j = j + (u32)1)
+            whole.merge(((ParCpuLane*)_lanes.get(j))._chunk);
+        ParTile* t = _tile;
+        t.partial = whole;
+        t.done = true;
+        for (u32 j = (u32)0; j < _parts; j = j + (u32)1)
             {
-            ParCpuLane* lane = (ParCpuLane*)_lanes.get(i);
-            if (!lane._busy || lane._done.load() == (i32)0)
-                continue;
-            ParTile* t = lane._tile;
-            t.partial = lane._chunk;
-            t.done = true;
+            ParCpuLane* lane = (ParCpuLane*)_lanes.get(j);
             lane._chunk = (ParChunk*)0;
             lane._tile = (ParTile*)0;
             lane._busy = false;
-            _busy = _busy - (u32)1;
-            gParLanesBusy = gParLanesBusy - (u32)1;
-            return t;
             }
-        return (ParTile*)0;
+        gParLanesBusy = gParLanesBusy - _busy;
+        _busy = (u32)0;
+        _parts = (u32)0;
+        _tile = (ParTile*)0;
+        return t;
         }
     void drain(void)
         {
-        while (_busy > (u32)0)
+        while (_tile != (ParTile*)0)
             if (poll() == (ParTile*)0)
                 Thread.yield();
         }

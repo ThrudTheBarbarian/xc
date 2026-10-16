@@ -66,6 +66,7 @@ u8* getenv(u8* name);
 typedef i32 vkCreateInstance_t(pointer info, pointer alloc, pointer* out);
 typedef i32 vkEnumeratePhysicalDevices_t(pointer inst, u32* count, pointer* devices);
 typedef void vkGetPhysicalDeviceProperties_t(pointer pd, pointer props);
+typedef void vkGetPhysicalDeviceProperties2_t(pointer pd, pointer props);
 typedef void vkGetPhysicalDeviceFeatures_t(pointer pd, pointer feats);
 typedef void vkGetPhysicalDeviceMemoryProperties_t(pointer pd, pointer props);
 typedef void vkGetPhysicalDeviceQueueFamilyProperties_t(pointer pd, u32* count, pointer props);
@@ -206,6 +207,7 @@ class ParVulkan
     static u8* _memProps;       // VkPhysicalDeviceMemoryProperties (520 bytes)
     static vkGetMemoryHostPointerPropertiesEXT_t* _hostPtrProps;
     static bool _hostImport;    // integrated, and the driver imports host memory
+    static u64 _hostAlign;      // the driver's minImportedHostPointerAlignment; a page-aligned `simd:` block meets 16 KB
     static vkCreateBuffer_t* _createBuffer;
     static vkDestroyBuffer_t* _destroyBuffer;
     static vkGetBufferMemoryRequirements_t* _bufferReqs;
@@ -476,6 +478,30 @@ class ParVulkan
         if (haveExt)
             _hostPtrProps = (vkGetMemoryHostPointerPropertiesEXT_t*)getDevProc(dev, "vkGetMemoryHostPointerPropertiesEXT");
         _hostImport = _hostPtrProps != (vkGetMemoryHostPointerPropertiesEXT_t*)0;
+        // The alignment the driver imports at (VkPhysicalDeviceExternalMemoryHostPropertiesEXT,
+        // through vkGetPhysicalDeviceProperties2): a `simd:` block is 16 KB aligned,
+        // which every driver so far takes, but one asking for more gets a copy
+        // rather than a failed import.
+        _hostAlign = (u64)16384;
+        if (_hostImport)
+            {
+            vkGetPhysicalDeviceProperties2_t* props2 = (vkGetPhysicalDeviceProperties2_t*)fn("vkGetPhysicalDeviceProperties2");
+            if (props2 != (vkGetPhysicalDeviceProperties2_t*)0)
+                {
+                u8 hostProps[24];                       // VkPhysicalDeviceExternalMemoryHostPropertiesEXT
+                memset((pointer)&hostProps[0], (i32)0, (u64)24);
+                _vk32(&hostProps[0], (u32)0, (u32)1000178002);
+                u8* p2 = (u8*)malloc((u64)840);         // VkPhysicalDeviceProperties2
+                memset((pointer)p2, (i32)0, (u64)840);
+                _vk32(p2, (u32)0, (u32)1000059001);
+                _vkp(p2, (u32)8, (pointer)&hostProps[0]);
+                props2(pd, (pointer)p2);
+                u64 a = *(u64*)(pointer)(&hostProps[0] + 16);
+                if (a > (u64)0 && (a & (a - (u64)1)) == (u64)0)
+                    _hostAlign = a;
+                free((pointer)p2);
+                }
+            }
         _family = fam;
         pointer q = (pointer)0;
         getQueue(dev, fam, (u32)0, &q);
@@ -528,8 +554,13 @@ class ParVulkan
         gVkHostImport = _hostImport;
         _state = (i32)1;
         if (ParDevice.reporting() && _identity != (String*)0)
-            Log.info("par: Vulkan device is %s%s", _identity.cString(),
-                     _hostImport ? ", sharing simd: blocks in place" : "");
+            {
+            if (_hostImport)
+                Log.info("par: Vulkan device is %s, sharing simd: blocks in place (imports at %lu-byte alignment)",
+                         _identity.cString(), _hostAlign);
+            else
+                Log.info("par: Vulkan device is %s", _identity.cString());
+            }
         return true;
 #else
         return false;
@@ -603,7 +634,11 @@ class ParVulkan
         {
         if (!_hostImport)
             return false;
-        bytes = (bytes + (i64)16383) & (i64)-16384;
+        // The block must sit and end on the driver's import alignment; a
+        // `simd:` block is 16 KB aligned and a page-multiple long.
+        if (((u64)host & (_hostAlign - (u64)1)) != (u64)0)
+            return false;
+        bytes = (i64)(((u64)bytes + _hostAlign - (u64)1) & ~(_hostAlign - (u64)1));
         u8 ext[24];                                     // VkExternalMemoryBufferCreateInfo
         memset((pointer)&ext[0], (i32)0, (u64)24);
         _vk32(&ext[0], (u32)0, (u32)1000072000);

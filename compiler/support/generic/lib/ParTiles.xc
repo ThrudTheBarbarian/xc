@@ -270,7 +270,13 @@ class ParTiles
             if (!w.forBlock(proto, src, l))
                 {
                 if (ParDevice.reporting())
-                    Log.info("par: %s: %s does not take the block as tiles", proto.parName(), w.identity().cString());
+                    {
+                    ParWorker* peer = w.standsAsideFor(proto, src, l);
+                    if (peer != (ParWorker*)0)
+                        Log.info("par: %s: %s stands aside, %s runs the same card", proto.parName(), w.identity().cString(), peer.identity().cString());
+                    else
+                        Log.info("par: %s: %s does not take the block as tiles", proto.parName(), w.identity().cString());
+                    }
                 continue;
                 }
             ws.add((Object*)w);
