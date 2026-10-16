@@ -82,6 +82,7 @@ i32 main(void)
             return 0;
         }
     }
+    ParRemote.noRemotes();      // a daemon serves its own GPUs, never another's
     Array* workers = ParTiles.gpuWorkers();
     if (workers.count() == (u32)0)
     {

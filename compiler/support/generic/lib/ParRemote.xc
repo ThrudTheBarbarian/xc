@@ -1322,11 +1322,28 @@ class ParRemote
     // XC_PAR_REMOTE=host[:port],host[:port],…: a worker per entry. An entry
     // `mdns` is every daemon on this subnet that answers within 300 ms and
     // is of the pool XC_PAR_POOL names (none when unset) and this xcc
-    // version. Discovery is asked for, not automatic: every par program
-    // would otherwise send a multicast query and wait for the answers.
+    // version. With no setting at all, discovery is ON (owner 2026-10-16:
+    // it simplifies people's lives): the program browses once, at its first
+    // par run, and takes what it finds; `XC_PAR_REMOTE=none` turns it off,
+    // as does a forced XC_PAR=cpu. A daemon never browses for its peers.
+    static bool _off;
+    static void noRemotes(void)
+        {
+        _off = true;
+        }
     static void addWorkers(Array* into)
         {
+        if (_off)
+            return;
         String* v = Platform.env(String.withCString("XC_PAR_REMOTE"));
+        if (v.equals(String.withCString("none")))
+            return;
+        if (v.byteLength() == (u32)0)
+            {
+            if (Platform.env(String.withCString("XC_PAR")).equals(String.withCString("cpu")))
+                return;
+            v = String.withCString("mdns");
+            }
         u32 at = (u32)0;
         while (at < v.byteLength())
             {

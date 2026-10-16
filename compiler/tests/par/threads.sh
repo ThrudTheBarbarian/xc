@@ -15,6 +15,7 @@
 #
 # Run from compiler/. Exits non-zero when any run differs.
 set -u
+export XC_PAR_REMOTE=none     # discovery is on by default; this test names no daemon
 cd "$(dirname "$0")/../.." || exit 2
 case "$(uname -s)" in Darwin) PLAT=osx ;; *) PLAT=linux ;; esac
 XCC=${XCC:-bin/$PLAT/xcc-xc}

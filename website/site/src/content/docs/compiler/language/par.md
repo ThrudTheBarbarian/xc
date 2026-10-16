@@ -589,13 +589,15 @@ is the same either way. The window may cross midnight (`-nimby 23:00-07:00`).
 
 A daemon advertises itself on its subnet (multicast DNS, as `_xcd._tcp`),
 and `xcd -pool NAME` names the pool it belongs to, so projects on one network
-keep separate host sets. A program asks for discovery with `mdns` as an entry
-of `XC_PAR_REMOTE`; it then takes every daemon that answers within a moment,
-of the pool `XC_PAR_POOL` names (daemons with no pool when it is unset) and of
-its own xcc version. Discovery is asked for rather than automatic, so a
-program that names no remote sends nothing on the network. `xcd -no-mdns`
-keeps a daemon off the air; it is still reachable by address. One subnet
-only: multicast does not cross routers or VPNs.
+keep separate host sets. A program with no `XC_PAR_REMOTE` setting looks
+for daemons by itself (from 0.8.1): at its first `par` run it asks the
+subnet once, waits a moment, and takes every daemon that answered, of the
+pool `XC_PAR_POOL` names (daemons with no pool when it is unset) and of its
+own xcc version. `XC_PAR_REMOTE=none` keeps a program on its own machine,
+as does `XC_PAR=cpu`; `XC_PAR_REMOTE=mdns` says the default in so many
+words, and may be combined with addresses. `xcd -no-mdns` keeps a daemon
+off the air; it is still reachable by address. One subnet only: multicast
+does not cross routers or VPNs.
 
 A daemon that goes away mid-run costs the run nothing but time: the tiles it
 held are handed to the other workers, and a tile is the same wherever it

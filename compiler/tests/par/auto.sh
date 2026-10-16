@@ -14,6 +14,7 @@
 #
 #   bash tests/par/auto.sh
 set -u
+export XC_PAR_REMOTE=none     # discovery is on by default; this test names no daemon
 cd "$(dirname "$0")/../.." || exit 1
 PLAT=$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )
 XC=${XC:-bin/$PLAT/xcc-xc}
