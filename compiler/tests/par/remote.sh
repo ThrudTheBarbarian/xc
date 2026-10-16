@@ -7,6 +7,11 @@
 # that remembered a compiled kernel by its source's address ran the first
 # program's kernel on the second's data (every remote tile wrong, 0.8.1).
 #
+# Every connection is TLS: each daemon has its own certificate directory
+# here (XCD_HOME), and a program pins the certificate it sees first; a
+# daemon with another certificate on a pinned address is refused and the
+# program runs on without it.
+#
 #   XC=bin/osx/xcc-xc bash tests/par/remote.sh
 set -u
 XC=${XC:-bin/osx/xcc-xc}
@@ -16,7 +21,8 @@ rc=0
 if ! $XC -q -O2 -H . -o "$L/xcd" selfhost/tools/xcd.xc > "$L/xcd.build" 2>&1; then
     echo "FAIL remote: xcd does not build"; cat "$L/xcd.build" | head -5; exit 1
 fi
-XC_PAR_REPORT=1 "$L/xcd" -port $PORT > "$L/xcd.log" 2>&1 &
+mkdir -p "$L/home1" "$L/home2"
+XCD_HOME="$L/home1" XC_PAR_REPORT=1 "$L/xcd" -port $PORT > "$L/xcd.log" 2>&1 &
 XCD=$!
 sleep 1
 for f in par_footprint par_simd_buffers par_grid_constant; do
@@ -35,10 +41,26 @@ kill $XCD 2> /dev/null
 wait $XCD 2> /dev/null
 grep -q 'taken' "$L/xcd.log" || { echo "FAIL remote: the daemon took no block"; cat "$L/xcd.log" | head -5; rc=1; }
 grep -q 'round trip' "$L/par_footprint.out" || { echo "FAIL remote: no link measurement reported"; head -3 "$L/par_footprint.out"; rc=1; }
+grep -q 'certificate .* pinned' "$L/par_footprint.out" || { echo "FAIL remote: no certificate pinned"; grep -i 'remote' "$L/par_footprint.out" | head -3; rc=1; }
+grep -q '^tls.pin.127.0.0.1:'$PORT' = ' "$L/st_par_footprint/par.conf" || { echo "FAIL remote: no pin in the settings"; cat "$L/st_par_footprint/par.conf"; rc=1; }
+# Another daemon with another certificate on the pinned address: refused,
+# and the answer is the local run's.
+XCD_HOME="$L/home2" XC_PAR_REPORT=1 "$L/xcd" -port $PORT -no-mdns > "$L/xcd_pin.log" 2>&1 &
+XCDP=$!
+sleep 1
+f=par_footprint
+XCC_SETTINGS_DIR="$L/st_$f" XC_PAR_REMOTE=127.0.0.1:$PORT XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/pin.out" 2> "$L/pin.err"
+if grep -v '^par:' "$L/pin.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && grep -q 'certificate changed' "$L/pin.out"; then
+    echo "PASS remote certificate changed"
+else
+    echo "FAIL remote certificate changed"; grep -v '^par:' "$L/pin.out" | diff - "tests/fixtures/$f.expected.out" | head -3; grep -i 'remote\|certificate' "$L/pin.out" | head -3; rc=1
+fi
+kill $XCDP 2> /dev/null
+wait $XCDP 2> /dev/null
 # A daemon inside its nimby window declines every block: the program runs
 # without it and gets the same answer.
 PORT2=$((PORT + 1))
-XC_PAR_REPORT=1 "$L/xcd" -port $PORT2 -nimby 00:00-23:59 > "$L/xcd2.log" 2>&1 &
+XCD_HOME="$L/home1" XC_PAR_REPORT=1 "$L/xcd" -port $PORT2 -nimby 00:00-23:59 > "$L/xcd2.log" 2>&1 &
 XCD2=$!
 sleep 1
 f=par_simd_buffers
@@ -55,7 +77,7 @@ grep -q 'declined (nimby)' "$L/xcd2.log" || { echo "FAIL remote: the nimby daemo
 # Discovery: a daemon advertising in a pool is found by XC_PAR_REMOTE=mdns
 # with that pool, and not by another pool.
 PORT3=$((PORT + 2))
-XC_PAR_REPORT=1 "$L/xcd" -port $PORT3 -pool gate > "$L/xcd3.log" 2>&1 &
+XCD_HOME="$L/home1" XC_PAR_REPORT=1 "$L/xcd" -port $PORT3 -pool gate > "$L/xcd3.log" 2>&1 &
 XCD3=$!
 sleep 1
 mkdir -p "$L/st_mdns" "$L/st_mdns2"
@@ -72,7 +94,7 @@ wait $XCD3 2> /dev/null
 # A daemon that dies mid-run: its tiles are re-issued to the other workers
 # and the answer is still the local run's.
 PORT4=$((PORT + 3))
-XC_PAR_REPORT=1 XC_PAR_DIE_AFTER=2 "$L/xcd" -port $PORT4 -no-mdns > "$L/xcd4.log" 2>&1 &
+XCD_HOME="$L/home1" XC_PAR_REPORT=1 XC_PAR_DIE_AFTER=2 "$L/xcd" -port $PORT4 -no-mdns > "$L/xcd4.log" 2>&1 &
 XCD4=$!
 sleep 1
 mkdir -p "$L/st_die"
@@ -87,7 +109,7 @@ wait $XCD4 2> /dev/null
 # Two programs on one daemon at once: the GPUs serve one run at a time and
 # both answers are right.
 PORT5=$((PORT + 4))
-XC_PAR_REPORT=1 "$L/xcd" -port $PORT5 -no-mdns > "$L/xcd5.log" 2>&1 &
+XCD_HOME="$L/home1" XC_PAR_REPORT=1 "$L/xcd" -port $PORT5 -no-mdns > "$L/xcd5.log" 2>&1 &
 XCD5=$!
 sleep 1
 mkdir -p "$L/st_two_a" "$L/st_two_b"

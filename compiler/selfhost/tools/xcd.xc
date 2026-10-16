@@ -6,6 +6,7 @@
 //         [-pool NAME]          advertise as a member of this pool (programs with XC_PAR_POOL=NAME find it)
 //         [-no-mdns]            do not advertise on the subnet
 //     XC_PAR_SECRET=…          the pool secret a program must prove
+//     XCD_HOME=dir             where its certificate lives (default ~/.xcc/xcd)
 //     XC_PAR_REPORT=1          say what each block and tile does
 //
 // A program names its workers with XC_PAR_REMOTE=host[:port],…; a run then
@@ -88,6 +89,49 @@ i32 main(void)
         return 1;
     }
     String* identity = ((ParWorker*)workers.get((u32)0)).identity();
+    // Its certificate, made at first start under $XCD_HOME or ~/.xcc/xcd and
+    // kept: a program pins its fingerprint on first sight. Every connection
+    // is TLS, so a daemon with no TLS library does not start.
+    if (!ParTls.load())
+    {
+        Stdio.printf("xcd: no TLS library: install the xcc third-party libraries, or name the library file in XC_TLS_LIB\n");
+        return 1;
+    }
+    String* dir = Platform.env(String.withCString("XCD_HOME"));
+    if (dir.byteLength() == (u32)0)
+    {
+        String* home = Platform.home();
+        if (home.byteLength() == (u32)0)
+            home = Platform.env(String.withCString("USERPROFILE"));
+        if (home.byteLength() == (u32)0)
+        {
+            Stdio.printf("xcd: no home directory for the certificate: set XCD_HOME\n");
+            return 1;
+        }
+        dir = home.appending(String.withCString("/.xcc"));
+        Files.createDirectory(dir);
+        dir = dir.appending(String.withCString("/xcd"));
+    }
+    Files.createDirectory(dir);
+    String* certPath = dir.appending(String.withCString("/cert.pem"));
+    String* keyPath = dir.appending(String.withCString("/key.pem"));
+    if (!Files.exists(certPath) || !Files.exists(keyPath))
+    {
+        if (!ParTls.makeSelfSigned(certPath, keyPath, "xcd"))
+        {
+            Stdio.printf("xcd: cannot write a certificate under %s\n", dir.cString());
+            return 1;
+        }
+        Stdio.printf("xcd: made a certificate under %s\n", dir.cString());
+    }
+    pointer tls = ParTls.server(certPath, keyPath);
+    if (tls == (pointer)0)
+    {
+        Stdio.printf("xcd: the certificate under %s does not load; remove it and a new one is made\n", dir.cString());
+        return 1;
+    }
+    ParRemoteServe.setTls(tls);
+    String* fingerprint = ParTls.certFingerprint(certPath);
     Socket* ls = (Socket*)0;
     try
     {
@@ -98,7 +142,7 @@ i32 main(void)
         Stdio.printf("xcd: %s\n", e.message().cString());
         return 1;
     }
-    Stdio.printf("xcd: serving %s on port %u%s\n", identity.cString(), (u32)port,
+    Stdio.printf("xcd: serving %s on port %u, certificate %s%s\n", identity.cString(), (u32)port, fingerprint.cString(),
                  ParRemoteServe.hasNimby() ? (ParRemoteServe.nimbyNow() ? " (nimby now)" : " (nimby window set)") : "");
     // Advertised on the subnet as _xcd._tcp, on a thread of its own. The
     // responder and its thread live as long as main does: a thread never

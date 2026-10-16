@@ -34,7 +34,12 @@
 //                     stands a chunk in for the class it has no code for,
 //                     and runs the tiles on its own GPU workers.
 //
-// The frames: u32 type, u32 length, payload, little-endian throughout. The
+// The frames: u32 type, u32 length, payload, little-endian throughout, over
+// TLS (ParTls, ParLink: the daemon's certificate, pinned by the program on
+// first sight). A program holds two links to a daemon: it writes tiles on
+// the first and the daemon writes finished tiles on the second, from a
+// thread of its own, so neither side ever waits on a write the other is
+// not reading (both writing a large frame at once would wait for ever). The
 // handshake carries the protocol version and the runtime's version (the
 // par.learned lesson: never act on a mismatched peer) and proves a pool
 // secret (XC_PAR_SECRET on both sides) by SHA-256 over a nonce the daemon
@@ -52,11 +57,11 @@
 // worker: a tile's transfer is at least twenty round trips long, so the
 // latency costs five percent at most.
 //
-// Not yet: TLS and TOFU worker certificates, mDNS discovery, the GPU-RAM
-// cache, a load check at tile acceptance (GPU utilisation, free VRAM) and
-// a refusal of tiles that would run past the window's end. An array whose footprint the compiler
-// knows travels as the slices each tile reads, with the tile (as to a
-// discrete card); the rest go over whole once per run at PREPARE.
+// Not yet: the GPU-RAM cache, a load check at tile acceptance (GPU
+// utilisation, free VRAM) and a refusal of tiles that would run past the
+// window's end. An array whose footprint the compiler knows travels as the
+// slices each tile reads, with the tile (as to a discrete card); the rest go
+// over whole once per run at PREPARE.
 #import "Par.xc"
 #import "ParWorker.xc"
 #import "Socket.xc"
@@ -64,15 +69,19 @@
 #import "Mdns.xc"
 #import "Mutex.xc"
 #import "Thread.xc"
+#import "Settings.xc"
+#import "Files.xc"
+#import "Base64.xc"
+#import "Bundle.xc"
 
-#define PAR_REMOTE_PROTO 2
+#define PAR_REMOTE_PROTO 3
 #define PAR_REMOTE_PORT 7227
 #define PAR_REMOTE_DEPTH 3
 
 // Frame types.
 #define PRM_HELLO 1      // daemon -> program: magic, proto, nonce, version, identity, depth, floor
 #define PRM_AUTH 2       // program -> daemon: proto, version, proof
-#define PRM_OK 3         // daemon -> program
+#define PRM_OK 3         // daemon -> program: after AUTH, the session token the results link names
 #define PRM_BYE 4        // either way: the reason, then the connection closes
 #define PRM_HOLDS 5      // program -> daemon: the block described (no data); reply OK (1) or BYE... no: PRM_ANSWER
 #define PRM_ANSWER 6     // daemon -> program: one byte
@@ -82,7 +91,317 @@
 #define PRM_FINISH 10    // program -> daemon: the run is over
 #define PRM_PING 11      // program -> daemon: sent-at (its own clock), kind (0 heartbeat, 1 bandwidth probe), padding
 #define PRM_PONG 12      // daemon -> program: sent-at and kind echoed, available (1 = takes tiles now), tiles queued
+#define PRM_RESULTS 13   // program -> daemon, first on its second link: the session token; reply OK, then DONE frames
 #define PAR_REMOTE_PROBE_BYTES (1024 * 1024)
+
+// ── TLS: the library, loaded when a daemon is first spoken to ────────────
+// A daemon takes TLS only, and ParRemote links nothing for it: libtls (the
+// shared TLS module, frameworks/3p/tls) is loaded by name the first time a
+// program speaks to a daemon, as ParVulkan loads its driver, and its plain
+// xctls_* entry points are resolved by name. A program on a machine with no
+// library reports the daemon unreachable and runs on; the daemon itself
+// refuses to start. The library is looked for as the file XC_TLS_LIB names,
+// beside the executable (the xcd archive puts it there), in the toolchain's
+// third-party tree, then by its bare name through the system's loader.
+#if ARCH_win64
+pointer LoadLibraryA(u8* name);
+pointer GetProcAddress(pointer module, u8* name);
+#define PAR_TLS_LOADER 1
+#elif ARCH_arm64 || LINK_DYNAMIC || PLATFORM_android
+pointer dlopen(u8* path, i32 mode);
+pointer dlsym(pointer handle, u8* name);
+#define PAR_TLS_LOADER 1
+#else
+#define PAR_TLS_LOADER 0
+#endif
+typedef i32 xctlsMakeSelfSigned_t(u8* certPath, u8* keyPath, u8* cn);
+typedef pointer xctlsServer_t(u8* certPath, u8* keyPath);
+typedef pointer xctlsClient_t(void);
+typedef pointer xctlsAccept_t(pointer server, i32 fd);
+typedef pointer xctlsConnect_t(pointer client, i32 fd, u8* hostname);
+typedef i32 xctlsFingerprint_t(pointer conn, u8* out32);
+typedef i32 xctlsPending_t(pointer conn);
+typedef i32 xctlsRead_t(pointer conn, u8* buf, i32 len);
+typedef i32 xctlsWrite_t(pointer conn, u8* buf, i32 len);
+typedef void xctlsClose_t(pointer conn);
+
+class ParTls
+    {
+    static i32 _state;      // 0 not tried, 1 loaded, 2 not there
+    static pointer _lib;
+    static pointer _client; // one pinning client configuration per process
+    static xctlsMakeSelfSigned_t* _makeSelfSigned;
+    static xctlsServer_t* _server;
+    static xctlsClient_t* _clientNew;
+    static xctlsAccept_t* _accept;
+    static xctlsConnect_t* _connect;
+    static xctlsFingerprint_t* _fingerprint;
+    static xctlsPending_t* _pending;
+    static xctlsRead_t* _read;
+    static xctlsWrite_t* _write;
+    static xctlsClose_t* _close;
+
+#if PAR_TLS_LOADER
+    static pointer openLib(u8* path)
+        {
+#if ARCH_win64
+        return LoadLibraryA(path);
+#else
+        return dlopen(path, (i32)2);   // RTLD_NOW
+#endif
+        }
+    static pointer fn(u8* name)
+        {
+#if ARCH_win64
+        return GetProcAddress(_lib, name);
+#else
+        return dlsym(_lib, name);
+#endif
+        }
+#endif
+
+    // The library, once: XC_TLS_LIB, beside the executable, the toolchain's
+    // third-party tree, then the system loader's own search.
+    static bool load(void)
+        {
+        if (_state != (i32)0)
+            return _state == (i32)1;
+        _state = (i32)2;
+#if PAR_TLS_LOADER
+        String* env = Platform.env(String.withCString("XC_TLS_LIB"));
+        if (env.byteLength() > (u32)0)
+            _lib = openLib(env.cString());
+        String* exe = Bundle.executablePath();
+        if (_lib == (pointer)0 && exe != (String*)0 && exe.byteLength() > (u32)0)
+            {
+            u32 cut = exe.byteLength();
+            while (cut > (u32)0 && exe.byteAt(cut - (u32)1) != (u8)'/' && exe.byteAt(cut - (u32)1) != (u8)'\\')
+                cut = cut - (u32)1;
+#if ARCH_win64
+            String* beside = exe.substringBytes((u32)0, cut).appending(String.withCString("libtls.dll"));
+#elif ARCH_arm64 && !PLATFORM_android
+            String* beside = exe.substringBytes((u32)0, cut).appending(String.withCString("libtls.dylib"));
+#else
+            String* beside = exe.substringBytes((u32)0, cut).appending(String.withCString("libtls.so"));
+#endif
+            if (cut > (u32)0 && Files.exists(beside))
+                _lib = openLib(beside.cString());
+            }
+#if ARCH_win64
+        if (_lib == (pointer)0)
+            _lib = openLib("C:/Program Files/xcc/3p/tls/win64/libtls.dll");
+        if (_lib == (pointer)0)
+            _lib = openLib("C:/Program Files/3p/tls/win64/libtls.dll");
+        if (_lib == (pointer)0)
+            _lib = openLib("libtls.dll");
+#elif PLATFORM_android || PLATFORM_ios
+        if (_lib == (pointer)0)
+            _lib = openLib("libtls.so");
+#elif ARCH_arm64
+        if (_lib == (pointer)0)
+            _lib = openLib("/opt/xcc/3p/tls/arm64/libtls.dylib");
+        if (_lib == (pointer)0)
+            _lib = openLib("libtls.dylib");
+#else
+        if (_lib == (pointer)0)
+            _lib = openLib("/opt/xcc/3p/tls/x86_64/libtls.so");
+        if (_lib == (pointer)0)
+            _lib = openLib("libtls.so");
+#endif
+        if (_lib == (pointer)0)
+            return false;
+        _makeSelfSigned = (xctlsMakeSelfSigned_t*)fn("xctls_make_self_signed");
+        _server = (xctlsServer_t*)fn("xctls_server");
+        _clientNew = (xctlsClient_t*)fn("xctls_client_pinning");
+        _accept = (xctlsAccept_t*)fn("xctls_accept");
+        _connect = (xctlsConnect_t*)fn("xctls_connect");
+        _fingerprint = (xctlsFingerprint_t*)fn("xctls_fingerprint");
+        _pending = (xctlsPending_t*)fn("xctls_pending");
+        _read = (xctlsRead_t*)fn("xctls_read");
+        _write = (xctlsWrite_t*)fn("xctls_write");
+        _close = (xctlsClose_t*)fn("xctls_close");
+        // A library from before these entry points is no use.
+        if (_makeSelfSigned == (pointer)0 || _server == (pointer)0 || _clientNew == (pointer)0
+            || _accept == (pointer)0 || _connect == (pointer)0 || _fingerprint == (pointer)0
+            || _pending == (pointer)0 || _read == (pointer)0 || _write == (pointer)0 || _close == (pointer)0)
+            return false;
+        _state = (i32)1;
+#endif
+        return _state == (i32)1;
+        }
+
+    // A self-signed certificate and its key, as PEM files; false when they
+    // could not be written.
+    static bool makeSelfSigned(String* certPath, String* keyPath, u8* cn)
+        {
+        return load() && _makeSelfSigned(certPath.cString(), keyPath.cString(), cn) == (i32)0;
+        }
+    // A server configuration from a certificate and key, or null.
+    static pointer server(String* certPath, String* keyPath)
+        {
+        return load() ? _server(certPath.cString(), keyPath.cString()) : (pointer)0;
+        }
+    // The server's side of a handshake on a connected socket, or null.
+    static pointer accept(pointer server, i32 fd)
+        {
+        return load() && server != (pointer)0 ? _accept(server, fd) : (pointer)0;
+        }
+    // The program's side: the daemon's certificate is taken as it comes,
+    // and the caller pins its fingerprint. Null when the handshake failed.
+    static pointer connect(i32 fd, u8* host)
+        {
+        if (!load())
+            return (pointer)0;
+        if (_client == (pointer)0)
+            _client = _clientNew();
+        return _client != (pointer)0 ? _connect(_client, fd, host) : (pointer)0;
+        }
+    // The peer's certificate's SHA-256 as lowercase hex, or "" when it sent none.
+    static String* fingerprint(pointer conn)
+        {
+        u8 fp[32];
+        if (conn == (pointer)0 || _fingerprint(conn, &fp[0]) != (i32)0)
+            return String.withCString("");
+        return Data.withBytes(&fp[0], (u32)32).hexString();
+        }
+    // A certificate file's SHA-256 (of its DER) as hex, the value a program
+    // pins, or "" when the file is not a PEM certificate.
+    static String* certFingerprint(String* certPath)
+        {
+        String* pem = Files.readText(certPath);
+        if (pem == (String*)0)
+            return String.withCString("");
+        Array* lines = pem.splitOnByte((u8)'\n');
+        String* b64 = new String();
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            {
+            String* line = ((String*)lines.get(i)).trimmed();
+            if (line.byteLength() == (u32)0 || line.hasPrefix(String.withCString("-----")))
+                continue;
+            b64.append(line);
+            }
+        Data* der = Base64.decode(b64);
+        if (der == (Data*)0 || der.length() == (u32)0)
+            return String.withCString("");
+        return Sha256.of(der.bytes(), der.length()).hexString();
+        }
+    static i32 pending(pointer conn)
+        {
+        return _pending(conn);
+        }
+    static i32 read(pointer conn, u8* buf, i32 len)
+        {
+        return _read(conn, buf, len);
+        }
+    static i32 write(pointer conn, u8* buf, i32 len)
+        {
+        return _write(conn, buf, len);
+        }
+    static void close(pointer conn)
+        {
+        _close(conn);
+        }
+    }
+
+// A connection between a program and a daemon: the socket, and the TLS
+// session over it. Every frame goes through the session; a link whose
+// handshake has not happened carries nothing, so no frame ever travels in
+// the clear.
+class ParLink
+    {
+    Socket* _s;
+    pointer _tls;
+
+    void init(Socket* s)
+        {
+        _s = s;
+        }
+    bool isOpen(void)
+        {
+        return _s != (Socket*)0 && _s.isOpen();
+        }
+    // The program's side of the handshake; false when it failed (the link
+    // is then closed).
+    bool connect(u8* host)
+        {
+        if (!isOpen())
+            return false;
+        _tls = ParTls.connect((i32)_s.fd(), host);
+        if (_tls == (pointer)0)
+            close();
+        return _tls != (pointer)0;
+        }
+    // The daemon's side.
+    bool accept(pointer server)
+        {
+        if (!isOpen())
+            return false;
+        _tls = ParTls.accept(server, (i32)_s.fd());
+        if (_tls == (pointer)0)
+            close();
+        return _tls != (pointer)0;
+        }
+    // The peer's certificate's SHA-256 as hex, "" when there is none.
+    String* fingerprint(void)
+        {
+        return ParTls.fingerprint(_tls);
+        }
+    bool write(u8* p, u32 n)
+        {
+        if (_tls == (pointer)0 || !isOpen())
+            return false;
+        if (n > (u32)0 && ParTls.write(_tls, p, (i32)n) != (i32)n)
+            {
+            close();
+            return false;
+            }
+        return true;
+        }
+    // Exactly n bytes, waiting up to `ms` for the first (-1: as long as it
+    // takes); false when the connection closed or time ran out.
+    bool readExact(u8* p, u32 n, i32 ms)
+        {
+        if (_tls == (pointer)0 || !isOpen())
+            return false;
+        u32 got = (u32)0;
+        while (got < n)
+            {
+            if (!waitReadable(ms))
+                return false;
+            i32 r = ParTls.read(_tls, p + got, (i32)(n - got));
+            if (r <= (i32)0)
+                {
+                close();
+                return false;
+                }
+            got = got + (u32)r;
+            }
+        return true;
+        }
+    // Whether a read would return something now: bytes the session has
+    // decrypted and holds (the socket says nothing about those), or bytes
+    // on the socket, waited for up to `ms` (0: not at all, -1: as long as
+    // it takes); true as well when the peer has gone.
+    bool waitReadable(i32 ms)
+        {
+        if (!isOpen())
+            return true;
+        if (_tls != (pointer)0 && ParTls.pending(_tls) > (i32)0)
+            return true;
+        return _s.waitReadable(ms);
+        }
+    void close(void)
+        {
+        if (_tls != (pointer)0)
+            {
+            ParTls.close(_tls);
+            _tls = (pointer)0;
+            }
+        if (_s != (Socket*)0)
+            _s.close();
+        }
+    }
+
 
 // A little-endian byte writer and reader over Data.
 class ParWire
@@ -146,7 +465,7 @@ class ParWire
         }
 
     // One frame out: the header then the payload.
-    static bool send(Socket* s, u32 type, Data* payload)
+    static bool send(ParLink* s, u32 type, Data* payload)
         {
         u8 hdr[8];
         u32 n = payload != (Data*)0 ? payload.length() : (u32)0;
@@ -158,7 +477,7 @@ class ParWire
         }
     // One frame in, waiting up to ms for it: the payload, with *type set;
     // null when the connection closed or time ran out.
-    static Data* recv(Socket* s, u32* type, i32 ms)
+    static Data* recv(ParLink* s, u32* type, i32 ms)
         {
         u8 hdr[8];
         if (!s.readExact(&hdr[0], (u32)8, ms))
@@ -262,7 +581,8 @@ class ParRemoteWorker : ParWorker
     {
     String* _host;
     u16 _port;
-    Socket* _s;
+    ParLink* _s;            // the command link: tiles and requests out, answers back
+    ParLink* _r;            // the results link: finished tiles, written by a thread of the daemon's
     String* _identity;      // "remote:<host>:<the daemon's device>", "" when unreachable
     u32 _depth;
     i64 _floor;
@@ -298,24 +618,80 @@ class ParRemoteWorker : ParWorker
         _available = true;
         }
 
-    // Connect and shake hands, once. The identity is "" after a failure.
-    bool connect(void)
+    // A TLS link to the daemon, its certificate checked against the pin
+    // kept in the par settings under tls.pin.<host>:<port>: the fingerprint
+    // seen first is kept, and a daemon showing another one later is refused
+    // until the user removes the pin. Null, with the reason reported, when
+    // the link could not be made.
+    ParLink* open(void)
         {
-        if (_s != (Socket*)0 && _s.isOpen())
-            return true;
-        if (_tried)
-            return false;
-        _tried = true;
+        Socket* sock = (Socket*)0;
         try
             {
-            _s = Socket.connect(_host, _port);
+            sock = Socket.connect(_host, _port);
             }
         catch (SocketError e)
             {
             if (ParDevice.reporting())
                 Log.info("par: remote %s: %s", _host.cString(), e.message().cString());
-            return false;
+            return (ParLink*)0;
             }
+        ParLink* link = new ParLink(sock);
+        String* why = (String*)0;
+        if (!ParTls.load())
+            why = String.withCString("no TLS library here (a daemon takes TLS only)");
+        else if (!link.connect(_host.cString()))
+            why = String.withCString("the TLS handshake failed");
+        if (why == (String*)0)
+            {
+            String* fp = link.fingerprint();
+            String* key = String.withCString("tls.pin.");
+            key.append(_host);
+            key.appendCString(":");
+            key.append(String.withU32((u32)_port));
+            Settings* st = Settings.standard(String.withCString("par"));
+            String* known = st.get(key);
+            if (fp.byteLength() == (u32)0)
+                why = String.withCString("the daemon sent no certificate");
+            else if (known == (String*)0)
+                {
+                st.set(key, fp);
+                st.save();
+                if (ParDevice.reporting())
+                    Log.info("par: remote %s: certificate %s pinned as %s", _host.cString(), fp.cString(), key.cString());
+                }
+            else if (!known.equals(fp))
+                {
+                why = String.withCString("certificate changed (now ");
+                why.append(fp);
+                why.appendCString("): remove ");
+                why.append(key);
+                why.appendCString(" from ");
+                why.append(st.path() != (String*)0 ? st.path() : String.withCString("the par settings"));
+                why.appendCString(" to trust it again");
+                }
+            }
+        if (why != (String*)0)
+            {
+            if (ParDevice.reporting())
+                Log.info("par: remote %s: %s", _host.cString(), why.cString());
+            link.close();
+            return (ParLink*)0;
+            }
+        return link;
+        }
+
+    // Connect and shake hands, once. The identity is "" after a failure.
+    bool connect(void)
+        {
+        if (_s != (ParLink*)0 && _s.isOpen())
+            return true;
+        if (_tried)
+            return false;
+        _tried = true;
+        _s = open();
+        if (_s == (ParLink*)0)
+            return false;
         u32 type = (u32)0;
         Data* hello = ParWire.recv(_s, &type, (i32)5000);
         if (hello == (Data*)0 || type != (u32)PRM_HELLO || hello.length() < (u32)44)
@@ -344,8 +720,21 @@ class ParRemoteWorker : ParWorker
         if (!ParWire.send(_s, (u32)PRM_AUTH, auth))
             return fail("the daemon went away");
         Data* ok = ParWire.recv(_s, &type, (i32)5000);
-        if (ok == (Data*)0 || type != (u32)PRM_OK)
+        if (ok == (Data*)0 || type != (u32)PRM_OK || ok.length() != (u32)32)
             return fail("the daemon declined the pool secret");
+        // The results link, named to the daemon by the session token it
+        // answered with.
+        _r = open();
+        if (_r == (ParLink*)0)
+            return fail("no results link");
+        Data* hello2 = ParWire.recv(_r, &type, (i32)5000);
+        if (hello2 == (Data*)0 || type != (u32)PRM_HELLO)
+            return fail("no greeting on the results link");
+        if (!ParWire.send(_r, (u32)PRM_RESULTS, ok))
+            return fail("the daemon went away");
+        Data* ok2 = ParWire.recv(_r, &type, (i32)5000);
+        if (ok2 == (Data*)0 || type != (u32)PRM_OK)
+            return fail("the daemon declined the results link");
         _identity = String.withCString("remote:");
         _identity.append(_host);
         _identity.appendCString(":");
@@ -395,7 +784,7 @@ class ParRemoteWorker : ParWorker
     bool awaitPong(void)
         {
         i64 before = _lastPong;
-        while (_lastPong == before && _s != (Socket*)0 && _s.isOpen())
+        while (_lastPong == before && _s != (ParLink*)0 && _s.isOpen())
             {
             if (!_s.waitReadable((i32)5000))
                 return false;
@@ -415,8 +804,8 @@ class ParRemoteWorker : ParWorker
         if (kind == (u8)0 && _lastPong - sent > (i64)0)
             _rttUs = _lastPong - sent;
         }
-    // One frame: a pong, or a finished tile completed and kept. False when
-    // the connection is lost.
+    // One frame on the command link: a pong. False when the connection is
+    // lost.
     bool readFrame(void)
         {
         u32 type = (u32)0;
@@ -431,15 +820,24 @@ class ParRemoteWorker : ParWorker
             pong(f);
             return true;
             }
-        if (type == (u32)PRM_DONE)
-            {
-            ParTile* t = complete(f);
-            if (t != (ParTile*)0)
-                _finished.add((Object*)t);
-            return true;
-            }
         fail("an unexpected frame mid-run");
         return false;
+        }
+    // One finished tile from the results link, completed and kept for
+    // poll(). False when the link is lost.
+    bool readResult(void)
+        {
+        u32 type = (u32)0;
+        Data* f = ParWire.recv(_r, &type, (i32)-1);
+        if (f == (Data*)0 || type != (u32)PRM_DONE)
+            {
+            fail("lost the results link");
+            return false;
+            }
+        ParTile* t = complete(f);
+        if (t != (ParTile*)0)
+            _finished.add((Object*)t);
+        return true;
         }
     // The daemon's last word, re-asked by a heartbeat every second while the
     // queue is dispatching; not ready either when a ping has gone unanswered
@@ -447,7 +845,7 @@ class ParRemoteWorker : ParWorker
     // in flight are waited for by drain()).
     bool ready(i64 now)
         {
-        if (_s == (Socket*)0 || !_s.isOpen())
+        if (_s == (ParLink*)0 || !_s.isOpen() || _r == (ParLink*)0 || !_r.isOpen())
             return false;
         while (_s.waitReadable((i32)0))
             if (!readFrame())
@@ -462,8 +860,10 @@ class ParRemoteWorker : ParWorker
         {
         if (ParDevice.reporting())
             Log.info("par: remote %s: %s", _host.cString(), why);
-        if (_s != (Socket*)0)
+        if (_s != (ParLink*)0)
             _s.close();
+        if (_r != (ParLink*)0)
+            _r.close();
         _identity = new String();
         _dead = true;
         // The tiles it was running are never coming back: the queue
@@ -561,14 +961,14 @@ class ParRemoteWorker : ParWorker
         }
     void finish(void)
         {
-        if (_s != (Socket*)0 && _s.isOpen())
+        if (_s != (ParLink*)0 && _s.isOpen())
             ParWire.send(_s, (u32)PRM_FINISH, (Data*)0);
         _proto = (ParChunk*)0;
         _l = (ParLayout*)0;
         }
     bool take(ParTile* t, ParChunk* proto, u8* src, ParLayout* l)
         {
-        if (_inFlight >= _depth || _s == (Socket*)0 || !_s.isOpen())
+        if (_inFlight >= _depth || _s == (ParLink*)0 || !_s.isOpen())
             return false;
         Data* d = new Data();
         ParWire.putI64(d, t.index);
@@ -671,8 +1071,8 @@ class ParRemoteWorker : ParWorker
         }
     ParTile* poll(void)
         {
-        while (_finished.count() == (u32)0 && _inFlight > (u32)0 && _s != (Socket*)0 && _s.isOpen() && _s.waitReadable((i32)0))
-            if (!readFrame())
+        while (_finished.count() == (u32)0 && _inFlight > (u32)0 && _r != (ParLink*)0 && _r.isOpen() && _r.waitReadable((i32)0))
+            if (!readResult())
                 break;
         if (_finished.count() == (u32)0)
             return (ParTile*)0;
@@ -682,10 +1082,10 @@ class ParRemoteWorker : ParWorker
         }
     void drain(void)
         {
-        while (_inFlight > (u32)0 && _s != (Socket*)0 && _s.isOpen())
+        while (_inFlight > (u32)0 && _r != (ParLink*)0 && _r.isOpen())
             {
-            _s.waitReadable((i32)-1);
-            if (!readFrame())
+            _r.waitReadable((i32)-1);
+            if (!readResult())
                 break;
             }
         // Tiles a dead connection never returned are not done: the queue's
@@ -697,13 +1097,13 @@ class ParRemoteWorker : ParWorker
 // One connection on a thread of the daemon's (xcd spawns one per accept).
 class ParRemoteConnection : Object
     {
-    Socket* _s;
+    ParLink* _s;
     Array* _workers;
     String* _identity;
     Atomic* _done;      // 1 once the program has gone: the daemon may drop the object
     void init(Socket* s, Array* workers, String* identity)
         {
-        _s = s;
+        _s = new ParLink(s);
         _workers = workers;
         _identity = identity;
         _done = new Atomic();
@@ -978,6 +1378,73 @@ void GetLocalTime(u16* systemTime);
 pointer localtime_r(i64* t, i32* tm);
 #endif
 
+// A program's session on the daemon: the finished tiles the serve loop
+// queues, which the thread of the program's results link writes out, so
+// the loop never waits on a write.
+class ParRemoteSession : Object
+    {
+    Data* _token;
+    Array* _queue;
+    Mutex* _lock;
+    bool _ended;
+    bool _attached;
+    void init(Data* token)
+        {
+        _token = token;
+        _queue = new Array();
+        _lock = new Mutex();
+        }
+    bool matches(Data* token)
+        {
+        if (token == (Data*)0 || token.length() != _token.length())
+            return false;
+        for (u32 i = (u32)0; i < _token.length(); i = i + (u32)1)
+            if (token.byteAt(i) != _token.byteAt(i))
+                return false;
+        return true;
+        }
+    void push(Data* frame)
+        {
+        _lock.lock();
+        _queue.add((Object*)frame);
+        _lock.unlock();
+        }
+    Data* pop(void)
+        {
+        Data* d = (Data*)0;
+        _lock.lock();
+        if (_queue.count() > (u32)0)
+            {
+            d = (Data*)_queue.get((u32)0);
+            _queue.removeAt((u32)0);
+            }
+        _lock.unlock();
+        return d;
+        }
+    // The results link is taken once.
+    bool attach(void)
+        {
+        _lock.lock();
+        bool first = !_attached;
+        _attached = true;
+        _lock.unlock();
+        return first;
+        }
+    void end(void)
+        {
+        _lock.lock();
+        _ended = true;
+        _lock.unlock();
+        }
+    bool ended(void)
+        {
+        _lock.lock();
+        bool e = _ended;
+        _lock.unlock();
+        return e;
+        }
+    }
+
 class ParRemoteServe
     {
     // The nimby window (`xcd -nimby hh:mm-hh:mm`): minutes of the local day
@@ -986,6 +1453,13 @@ class ParRemoteServe
     static i32 _nimbyFrom;
     static i32 _nimbyTo;
     static bool _nimbySet;    // a static's default is 0, which is a valid minute
+    // The daemon's TLS server configuration (its certificate and key), from
+    // xcd at start; a connection is served only through it.
+    static pointer _tls;
+    static void setTls(pointer server)
+        {
+        _tls = server;
+        }
     static void setNimby(i32 fromMinutes, i32 toMinutes)
         {
         _nimbyFrom = fromMinutes;
@@ -1039,6 +1513,68 @@ class ParRemoteServe
         _state = new Mutex();
         _holder = (i64)0;
         _nextConn = (i64)0;
+        _sessions = new Array();
+        }
+    // The live sessions, by token (ParRemoteSession).
+    static Array* _sessions;
+    static ParRemoteSession* newSession(Data* token)
+        {
+        ParRemoteSession* s = new ParRemoteSession(token);
+        _state.lock();
+        _sessions.add((Object*)s);
+        _state.unlock();
+        return s;
+        }
+    static ParRemoteSession* findSession(Data* token)
+        {
+        ParRemoteSession* found = (ParRemoteSession*)0;
+        _state.lock();
+        for (u32 i = (u32)0; i < _sessions.count() && found == (ParRemoteSession*)0; i = i + (u32)1)
+            if (((ParRemoteSession*)_sessions.get(i)).matches(token))
+                found = (ParRemoteSession*)_sessions.get(i);
+        _state.unlock();
+        return found;
+        }
+    static void endSession(ParRemoteSession* s)
+        {
+        s.end();
+        _state.lock();
+        for (u32 i = (u32)0; i < _sessions.count(); i = i + (u32)1)
+            if (_sessions.get(i) == (Object*)s)
+                {
+                _sessions.removeAt(i);
+                break;
+                }
+        _state.unlock();
+        }
+    // A session's results link, on the thread of that connection: the
+    // finished tiles the serve loop queues go out here until the session
+    // ends, and the program reads them in its own time.
+    static void sendResults(ParLink* s, Data* token)
+        {
+        ParRemoteSession* session = ParRemoteServe.findSession(token);
+        if (session == (ParRemoteSession*)0 || !session.attach())
+            {
+            Data* why = new Data();
+            ParWire.putStr(why, "no such session");
+            ParWire.send(s, (u32)PRM_BYE, why);
+            return;
+            }
+        if (!ParWire.send(s, (u32)PRM_OK, (Data*)0))
+            return;
+        while (s.isOpen())
+            {
+            Data* f = session.pop();
+            if (f != (Data*)0)
+                {
+                if (!ParWire.send(s, (u32)PRM_DONE, f))
+                    break;
+                continue;
+                }
+            if (session.ended())
+                break;
+            Thread.sleepMs((u32)1);
+            }
         }
     static i64 newConnection(void)
         {
@@ -1086,10 +1622,15 @@ class ParRemoteServe
 
     // One connection, start to end: the handshake, then blocks and tiles
     // until the program goes away. The GPU workers are the daemon's own.
-    static void serve(Socket* s, Array* workers, String* identity)
+    static void serve(ParLink* s, Array* workers, String* identity)
         {
         if (_gpus == (Mutex*)0)
             ParRemoteServe.setup();
+        if (_tls == (pointer)0 || !s.accept(_tls))
+            {
+            Log.info("xcd: a connection failed the TLS handshake");
+            return;
+            }
         i64 me = ParRemoteServe.newConnection();
         // HELLO.
         Data* hello = new Data();
@@ -1119,7 +1660,14 @@ class ParRemoteServe
             return;
         u32 type = (u32)0;
         Data* auth = ParWire.recv(s, &type, (i32)10000);
-        if (auth == (Data*)0 || type != (u32)PRM_AUTH)
+        if (auth == (Data*)0)
+            return;
+        if (type == (u32)PRM_RESULTS)
+            {
+            ParRemoteServe.sendResults(s, auth);
+            return;
+            }
+        if (type != (u32)PRM_AUTH)
             return;
         u8* p = auth.bytes();
         u32 at = (u32)0;
@@ -1139,7 +1687,13 @@ class ParRemoteServe
             Log.info("xcd: a program declined: version %s, protocol %u", version.cString(), proto);
             return;
             }
-        ParWire.send(s, (u32)PRM_OK, (Data*)0);
+        // The session token the program names its results link by: known
+        // to the two of them alone (the proof is the secret's, and the
+        // link is TLS).
+        Data* tk = Data.withBytes(&nonce[0], (u32)32);
+        tk.appendBytes(p + at, (u32)32);
+        ParRemoteSession* session = ParRemoteServe.newSession(Sha256.of(tk.bytes(), tk.length()));
+        ParWire.send(s, (u32)PRM_OK, Sha256.of(tk.bytes(), tk.length()));
         Log.info("xcd: a program connected");
 
         ParRemoteChunk* chunk = (ParRemoteChunk*)0;
@@ -1185,7 +1739,7 @@ class ParRemoteServe
                     {
                     busy = true;
                     inFlight = inFlight - (u32)1;
-                    ParWire.send(s, (u32)PRM_DONE, ParRemoteServe.doneFrame(chunk, l, d));
+                    session.push(ParRemoteServe.doneFrame(chunk, l, d));
                     d = w.poll();
                     }
                 }
@@ -1311,7 +1865,7 @@ class ParRemoteServe
                     ParTile* d2 = w.poll();
                     while (d2 != (ParTile*)0)
                         {
-                        ParWire.send(s, (u32)PRM_DONE, ParRemoteServe.doneFrame(chunk, l, d2));
+                        session.push(ParRemoteServe.doneFrame(chunk, l, d2));
                         d2 = w.poll();
                         }
                     w.finish();
@@ -1326,6 +1880,7 @@ class ParRemoteServe
             w.finish();
             }
         ParRemoteServe.releaseGpus(me);
+        ParRemoteServe.endSession(session);
         Log.info("xcd: the program went away");
         }
 

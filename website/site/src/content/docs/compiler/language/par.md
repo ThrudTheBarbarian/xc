@@ -544,9 +544,20 @@ every block, so a Mac program's blocks can run on an NVIDIA card across the
 room; a build made where `XC_PAR_REMOTE` is set does this by itself (from
 0.8.1). Both sides must be the same xcc version. `XC_PAR_SECRET` is a pool
 secret the program proves to the daemon (SHA-256 over a nonce); a daemon
-started without one takes any program on its network. The link is plain TCP
-on one subnet for now; `XC_PAR_REPORT=1` on either side says what is sent and
-run.
+started without one takes any program on its network. `XC_PAR_REPORT=1` on
+either side says what is sent and run.
+
+Every connection is TLS. The daemon makes itself a certificate the first
+time it starts, under `~/.xcc/xcd` (or the directory `XCD_HOME` names), and
+prints its fingerprint on its serving line. The program keeps the fingerprint
+it sees first for each daemon, in its `par` settings under
+`tls.pin.<host>:<port>`, and refuses a daemon that later shows another one,
+saying which pin to remove when the change is expected (a reinstalled
+daemon, say). The TLS library is not linked into a program: it is loaded when
+a daemon is first spoken to, from the toolchain's third-party tree
+(`/opt/xcc/3p/tls` on macOS and Linux; the file `XC_TLS_LIB` names takes
+precedence). A machine without it reports the daemon unreachable and the
+program runs on; the daemon itself does not start without it.
 
 A heartbeat measures the link when the program connects (its round trip, and
 its bandwidth from a one-megabyte ping) and then asks the daemon every second,
