@@ -38,6 +38,7 @@
 #import "CodeSign.xc"
 #import "Iface.xc"
 #import "ElfArm64.xc"
+#import "ElfLinkArm64.xc"
 #import "Apk.xc"
 #import "ApkSign.xc"
 #import "RsaKeygen.xc"
@@ -3612,6 +3613,36 @@ Array* mergeLinkObjects(DriverOptions* d, Array* mtext, Array* mdata, Map* msyms
     return MachOLink.repartitionObjc(mdata, mObjc, msyms, mdataSyms, mfix);
 }
 
+// The android link's twin of mergeLinkObjects: `-Wl,x.o` / `-Xlinker lib.a`
+// are aarch64 ELF objects and archives (the NDK's clang built them), merged
+// into the assembler's model before the image is written. It used to drop
+// them without a word, so a library bundling C code came out with that code
+// undefined.
+void mergeElfLinkObjects(DriverOptions* d, Array* mtext, Array* mdata, Map* msyms,
+                         Array* mdataSyms, Array* mfix, Array* extra)
+{
+    Array* objs = new Array();
+    Array* ars = new Array();
+    for (u32 i = (u32)0; i < extra.count(); i = i + (u32)1) {
+        String* op = (String*)extra.get(i);
+        if (op.hasSuffix(String.withCString(".a"))) ars.add((Object*)op); else objs.add((Object*)op);
+    }
+    Array* li = d.linkInputs();
+    for (u32 i = (u32)0; li != (Array*)0 && i < li.count(); i = i + (u32)1) {
+        String* lp = resolveLinkInput(d, (String*)li.get(i));
+        if (lp == (String*)0) continue;
+        if (lp.hasSuffix(String.withCString(".o"))) objs.add((Object*)lp);
+        else if (lp.hasSuffix(String.withCString(".a"))) ars.add((Object*)lp);
+    }
+    if (objs.count() == (u32)0 && ars.count() == (u32)0) return;
+    ElfLinkArm64* el = new ElfLinkArm64();
+    el.merge(objs, ars, mtext, mdata, msyms, mdataSyms, mfix);
+    if (el.rc() != (u32)0) {
+        Stdio.printf("xcc: error: android link: %s\n", el.why() == 0 ? "?" : el.why().cString());
+        Process.exit((i32)1); return;
+    }
+}
+
 // The `#import <Lib>` list each object recorded when it was compiled
 // (`<obj>.xtc.needs`, one library path per line). An object link has no
 // front end, so this sidecar is the only way it learns the program needs a
@@ -4312,9 +4343,11 @@ void emitModule(DriverOptions* d, IRModule* mod)
     Array* image = (Array*)0;
     if (android) {
         Array* needed = androidNeededWithImports(d, "libc.so,libm.so,libdl.so");
-        // Bug 124: as above — append the constructor array before linking.
+        // Bug 124: as above — append the constructor array before linking,
+        // and the C objects and archives of the command line before that.
         Array* aData = as.dataBytes();
         Array* aFix  = as.fixups();
+        mergeElfLinkObjects(d, as.textBytes(), aData, as.symbols(), as.dataSyms(), aFix, new Array());
         u32 aMi = Arm64Asm.appendModInit(as, aData, aFix);
         ElfArm64* w = new ElfArm64();
         if (d.emitLib()) {

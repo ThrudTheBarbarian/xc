@@ -281,6 +281,11 @@ class ElfArm64
                     wordCand.add((Object*)f.symbol());
                 continue;
                 }
+            if (f.kind() == (u32)FIXUP_PREL32)
+                {
+                failWith(String.withCString("a PC-relative data word names an undefined symbol:"), f.symbol());
+                return;
+                }
             if (f.kind() != (u32)FIXUP_BRANCH26 && !isGot)
                 {
                 failWith(String.withCString(
@@ -444,6 +449,19 @@ class ElfArm64
                              (Object*)Number.withU32(b < (u32)4
                                                          ? ((v >> ((u32)8 * b)) & (u32)$FF)
                                                          : (u32)0));
+                continue;
+                }
+            if (f.kind() == (u32)FIXUP_PREL32)
+                {
+                // A relative word in data: settled here, no dynamic relocation.
+                if (f.offset() + (u32)4 > data.count())
+                    {
+                    failWith(String.withCString("prel32 fixup past end of data:"), f.symbol());
+                    return;
+                    }
+                u32 v = target - (dataAddr + f.offset());
+                for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
+                    data.set(f.offset() + b, (Object*)Number.withU32((v >> ((u32)8 * b)) & (u32)$FF));
                 continue;
                 }
             if (f.offset() + (u32)4 > text.count())

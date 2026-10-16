@@ -111,11 +111,37 @@ else
     echo "NOTE: no iOS Mbed TLS at $MBIOS or no iOS SDK — skipped ios"
 fi
 
-# ── android (arm64): vendored static mbedtls built with the NDK ──
-# Not installed yet: an android `--emit-lib` link takes no C objects today
-# (the Mach-O and x86-64 links merge them, the android ELF writer does not),
-# so the shim and Mbed TLS cannot be bundled into libtls.so in-house. The
-# archives in mbedtls-android/ wait for that merge.
+# ── android (arm64): shim via the NDK's clang + vendored static mbedtls ──
+# The NDK is $ANDROID_NDK_HOME, else the newest one under the SDK, as the
+# compiler finds it. Its compiler-rt builtins join the link: bionic exports
+# none, and Mbed TLS's 128-bit division wants __udivti3. The library is a
+# plain .so a program loads beside itself or from the APK (ParTls).
+MBAND="$HERE/mbedtls-android"
+NDK=${ANDROID_NDK_HOME:-}
+if [ -z "$NDK" ]; then
+    for root in "${ANDROID_HOME:-}" "${ANDROID_SDK_ROOT:-}" "$HOME/Library/Android/sdk"; do
+        [ -n "$root" ] && [ -d "$root/ndk" ] && NDK="$root/ndk/$(ls -1 "$root/ndk" | LC_ALL=C sort | tail -1)" && break
+    done
+fi
+NDKBIN="$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin"
+if [ -f "$MBAND/libmbedtls.a" ] && [ -x "$NDKBIN/clang" ]; then
+    RTB=$(ls "$NDK"/toolchains/llvm/prebuilt/darwin-x86_64/lib/clang/*/lib/linux/libclang_rt.builtins-aarch64-android.a 2>/dev/null | tail -1)
+    if "$NDKBIN/clang" --target=aarch64-linux-android21 -c -O2 -fPIC -I"$MB/include" \
+           tlsshim.c -o "$TMP/tlsshim-android.o" \
+       && "$NDKBIN/llvm-ar" rcs "$TMP/libtlsshim-android.a" "$TMP/tlsshim-android.o" \
+       && "$XCC" --emit-lib -A android -I xc -o "$TMP/libtls-android.so" xc/tls_lib.xc \
+           -Wl,"$TMP/libtlsshim-android.a" \
+           -Wl,"$MBAND/libmbedtls.a" -Wl,"$MBAND/libmbedx509.a" \
+           -Wl,"$MBAND/libmbedcrypto.a" -Wl,"$RTB"; then
+        mkdir -p "$DEST/android"
+        cp "$TMP/libtls-android.so" "$DEST/android/libtls.so"
+        echo "installed: $DEST/android/libtls.so"
+    else
+        echo "NOTE: android libtls build failed (Android consumers) — the rest installed"
+    fi
+else
+    echo "NOTE: no Android Mbed TLS at $MBAND or no NDK — skipped android"
+fi
 
 rm -rf "$TMP"
 echo "done. client preamble:  #use <tls> ; #import \"TlsAbi.xc\" ; tls_require((i32)0)"

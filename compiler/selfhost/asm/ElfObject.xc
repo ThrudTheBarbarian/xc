@@ -277,6 +277,20 @@ class ElfSymDef
         {
         return ElfObject._starts(_dataOffOf);
         }
+    // The name of the input section a data-blob offset falls in, or 0.
+    String* dataSectionNameAt(u32 off)
+        {
+        Array* ks = _dataOffOf.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            {
+            u32 idx = ((Number*)ks.get(i)).asU32();
+            u32 start = ((Number*)_dataOffOf.get((Hashable*)ks.get(i))).asU32() - (u32)1;
+            ElfSection* s = (ElfSection*)_sections.get(idx);
+            if (off >= start && off < start + s.size())
+                return s.name();
+            }
+        return (String*)0;
+        }
     static Array* _starts(Map* m)
         {
         Array* out = new Array();
