@@ -12,6 +12,7 @@
 // arrays and globals are copied in and back; each thread's reductions come
 // back as partials, folded in thread order (ParLayout.fold).
 #import "ParDevice.xc"
+#import "ParWorker.xc"     // ParTile and ParWorker: the file stands alone (sema-diff, ast-diff read it so)
 
 pointer LoadLibraryA(u8* name);
 pointer GetProcAddress(pointer module, u8* name);

@@ -4212,6 +4212,11 @@ class Sema
         String* elem = Node.elemOf(e.kid((u32)0).ty());
         if (elem == 0 || numberAccessorFor(elem) == 0)
             return e.ty();
+        // Without the Number class the element is not unboxed (that is
+        // refused, unboxCollectionElement), so the format keeps its spelling,
+        // as the reference's does.
+        if (_classes.get((Hashable*)String.withCString("Number")) == 0)
+            return e.ty();
         return elem;
         }
 
