@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>par trace</title>
+<!--
+  par-trace.html: draws a file written by a par program run with
+  XC_PAR_TRACE=<file>. Open this page in a browser, then choose or drop the
+  file. Each tile queue run is a timeline with a row per worker: a bar from
+  the tile's hand-out to its result, the darker part the device's own time
+  on it (the daemon's, for a remote worker). The record format is described
+  above class ParTrace in support/generic/lib/ParTiles.xc.
+-->
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1d1d1f; --muted: #6b6b70; --line: #dcdcd8;
+    --panel: #ffffff; --accent: #2f6fdb; --bar: #9cb9ec; --dev: #2f6fdb;
+    --again: #d9573b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161618; --fg: #ececee; --muted: #9a9aa0; --line: #33333a;
+      --panel: #1f1f23; --accent: #7aa7ff; --bar: #34507f; --dev: #7aa7ff;
+      --again: #ff8a6e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 1200px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  p.lede { margin: 0 0 16px; color: var(--muted); }
+  #drop { border: 1.5px dashed var(--line); border-radius: 8px; padding: 18px;
+          text-align: center; color: var(--muted); background: var(--panel); }
+  #drop.over { border-color: var(--accent); color: var(--fg); }
+  #controls { display: none; gap: 12px; align-items: center; flex-wrap: wrap; margin: 16px 0 8px; }
+  select { font: inherit; padding: 4px 6px; background: var(--panel); color: var(--fg);
+           border: 1px solid var(--line); border-radius: 6px; max-width: 100%; }
+  #summary { color: var(--muted); }
+  .chart { position: relative; background: var(--panel); border: 1px solid var(--line);
+           border-radius: 8px; overflow-x: auto; }
+  canvas { display: block; }
+  #tip { position: fixed; pointer-events: none; display: none; background: var(--panel);
+         border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; font-size: 12px;
+         box-shadow: 0 2px 10px rgba(0,0,0,.15); white-space: pre; z-index: 2; }
+  table { border-collapse: collapse; margin-top: 16px; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 4px 10px; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  .wrap { overflow-x: auto; }
+  .err { color: var(--again); margin-top: 12px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>par trace</h1>
+  <p class="lede">A par program run with <code>XC_PAR_TRACE=&lt;file&gt;</code> writes every tile queue run; open that file here.</p>
+  <div id="drop">Drop a trace file here, or <input type="file" id="file"></div>
+  <div id="err" class="err"></div>
+  <div id="controls">
+    <label>Run <select id="run"></select></label>
+    <span id="summary"></span>
+  </div>
+  <div class="chart" id="chartWrap" style="display:none"><canvas id="chart"></canvas></div>
+  <div class="wrap"><table id="workers" style="display:none"></table></div>
+</main>
+<div id="tip"></div>
+<script>
+"use strict";
+const UNTRIED = 2n ** 60n;
+let runs = [];
+
+function parse(buf) {
+  const dv = new DataView(buf);
+  const magic = new TextDecoder().decode(new Uint8Array(buf, 0, 8));
+  if (magic !== "XCPTRACE") throw new Error("not a par trace (it does not start with XCPTRACE)");
+  const version = dv.getUint32(8, true);
+  if (version !== 1) throw new Error("trace version " + version + "; this page reads version 1");
+  const byRun = new Map();
+  const get = id => {
+    if (!byRun.has(id)) byRun.set(id, { id, block: "?", workers: [], takes: new Map(), dones: [], again: [], items: 0, tiles: 0, start: 0, took: 0, end: 0 });
+    return byRun.get(id);
+  };
+  const td = new TextDecoder();
+  for (let o = 16; o + 48 <= buf.byteLength; o += 48) {
+    const kind = dv.getUint8(o), worker = dv.getUint8(o + 1), run = dv.getUint32(o + 4, true);
+    const v = i => dv.getBigInt64(o + 8 + i * 8, true);
+    const text = () => td.decode(new Uint8Array(buf, o + 8, 40)).replace(/\0+$/, "");
+    const r = get(run);
+    switch (kind) {
+      case 1: r.items = Number(v(0)); r.tiles = Number(v(1)); r.start = Number(v(2)); break;
+      case 2: r.workers[worker] = text(); break;
+      case 3: r.block = text(); break;
+      case 4: r.takes.set(Number(v(0)) + ":" + r.takes.size, { tile: Number(v(0)), worker, lo: Number(v(1)), hi: Number(v(2)), at: Number(v(3)), est: v(4) }); break;
+      case 5: r.dones.push({ tile: Number(v(0)), worker, at: Number(v(1)), dev: Number(v(2)), items: Number(v(3)) }); break;
+      case 6: r.again.push({ tile: Number(v(0)), at: Number(v(1)) }); break;
+      case 7: r.took = Number(v(0)); r.end = Number(v(1)); break;
+    }
+  }
+  // Pair each result with the latest hand-out of that tile to that worker.
+  for (const r of byRun.values()) {
+    const takes = [...r.takes.values()];
+    r.bars = r.dones.map(d => {
+      let t = null;
+      for (const k of takes) if (k.tile === d.tile && k.worker === d.worker && k.at <= d.at && (!t || k.at > t.at)) t = k;
+      return t ? { ...t, done: d.at, dev: d.dev, items: d.items } : null;
+    }).filter(Boolean);
+    r.t0 = Math.min(r.start, ...takes.map(k => k.at));
+  }
+  return [...byRun.values()].filter(r => r.bars.length);
+}
+
+function us(x) { return x >= 10000 ? (x / 1000).toFixed(1) + " ms" : Math.round(x) + " us"; }
+
+function show(i) {
+  const r = runs[i];
+  document.getElementById("summary").textContent =
+    `${r.block}: ${r.items.toLocaleString()} items in ${r.tiles} tiles, ${us(r.took)}` +
+    (r.again.length ? `, ${r.again.length} re-issued` : "");
+  draw(r);
+  table(r);
+}
+
+function draw(r) {
+  const cv = document.getElementById("chart"), wrap = document.getElementById("chartWrap");
+  wrap.style.display = "block";
+  const css = getComputedStyle(document.documentElement);
+  const col = n => css.getPropertyValue(n).trim();
+  const rowH = 30, left = 190, top = 26, bottom = 8;
+  const width = Math.max(wrap.clientWidth - 2, 600);
+  const height = top + r.workers.length * rowH + bottom;
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = width * dpr; cv.height = height * dpr;
+  cv.style.width = width + "px"; cv.style.height = height + "px";
+  const g = cv.getContext("2d");
+  g.scale(dpr, dpr);
+  g.font = "12px -apple-system, BlinkMacSystemFont, sans-serif";
+  const t0 = r.t0, t1 = Math.max(r.end, ...r.bars.map(b => b.done));
+  const span = Math.max(t1 - t0, 1);
+  const x = t => left + (t - t0) / span * (width - left - 12);
+  // Axis.
+  g.strokeStyle = col("--line"); g.fillStyle = col("--muted");
+  const step = niceStep(span / 8);
+  for (let t = 0; t <= span; t += step) {
+    const px = x(t0 + t);
+    g.beginPath(); g.moveTo(px, top - 6); g.lineTo(px, height - bottom); g.stroke();
+    g.fillText(us(t), px + 3, 14);
+  }
+  // Rows.
+  r.workers.forEach((w, k) => {
+    const y = top + k * rowH;
+    g.fillStyle = col("--fg");
+    const label = w.length > 26 ? w.slice(0, 25) + "…" : w;
+    g.fillText(label, 8, y + rowH / 2 + 4);
+  });
+  r.hit = [];
+  for (const b of r.bars) {
+    const y = top + b.worker * rowH + 5, h = rowH - 10;
+    const xa = x(b.at), xb = Math.max(x(b.done), xa + 1);
+    g.fillStyle = col("--bar"); g.fillRect(xa, y, xb - xa, h);
+    if (b.dev > 0) {
+      const xd = Math.max(xb - (b.dev / span) * (width - left - 12), xa);
+      g.fillStyle = col("--dev"); g.fillRect(xd, y + 3, xb - xd, h - 6);
+    }
+    r.hit.push({ x0: xa, x1: xb, y0: y, y1: y + h, b });
+  }
+  for (const a of r.again) {
+    g.strokeStyle = col("--again");
+    const px = x(a.at);
+    g.beginPath(); g.moveTo(px, top - 4); g.lineTo(px, height - bottom); g.stroke();
+  }
+  cv.onmousemove = e => {
+    const rc = cv.getBoundingClientRect(), mx = e.clientX - rc.left, my = e.clientY - rc.top;
+    const h = r.hit.find(q => mx >= q.x0 - 1 && mx <= q.x1 + 1 && my >= q.y0 && my <= q.y1);
+    const tip = document.getElementById("tip");
+    if (!h) { tip.style.display = "none"; return; }
+    const b = h.b;
+    tip.textContent =
+      `tile ${b.tile}  [${b.lo.toLocaleString()}, ${b.hi.toLocaleString()})  ${b.items.toLocaleString()} items\n` +
+      `${r.workers[b.worker]}\n` +
+      `handed out at ${us(b.at - t0)}, back at ${us(b.done - t0)}: ${us(b.done - b.at)}\n` +
+      (b.dev > 0 ? `on the device ${us(b.dev)}, the rest queueing and the link\n` : "") +
+      (b.est >= UNTRIED ? "the queue had not measured this worker yet" : `the queue estimated ${us(Number(b.est))}`);
+    tip.style.display = "block";
+    tip.style.left = Math.min(e.clientX + 12, window.innerWidth - tip.offsetWidth - 8) + "px";
+    tip.style.top = (e.clientY + 12) + "px";
+  };
+  cv.onmouseleave = () => { document.getElementById("tip").style.display = "none"; };
+}
+
+function niceStep(x) {
+  const p = Math.pow(10, Math.floor(Math.log10(Math.max(x, 1))));
+  for (const m of [1, 2, 5, 10]) if (m * p >= x) return m * p;
+  return 10 * p;
+}
+
+function table(r) {
+  const t = document.getElementById("workers");
+  t.style.display = "table";
+  const span = Math.max(r.took, 1);
+  let html = "<tr><th>Worker</th><th>Tiles</th><th>Items</th><th>Busy</th><th>Device time</th><th>Items/ms</th></tr>";
+  r.workers.forEach((w, k) => {
+    const bs = r.bars.filter(b => b.worker === k);
+    const items = bs.reduce((s, b) => s + b.items, 0);
+    // Busy: the union of its bars, so overlapping tiles in flight count once.
+    const iv = bs.map(b => [b.at, b.done]).sort((a, b) => a[0] - b[0]);
+    let busy = 0, cs = -1, ce = -1;
+    for (const [a, b] of iv) { if (a > ce) { busy += ce - cs; cs = a; ce = b; } else ce = Math.max(ce, b); }
+    busy += ce - cs;
+    const dev = bs.reduce((s, b) => s + Math.max(b.dev, 0), 0);
+    const rate = busy > 0 ? Math.round(items / busy * 1000) : 0;
+    html += `<tr><td>${esc(w)}</td><td>${bs.length}</td><td>${items.toLocaleString()}</td>` +
+            `<td>${Math.round(busy / span * 100)}%</td><td>${dev ? us(dev) : "–"}</td><td>${rate.toLocaleString()}</td></tr>`;
+  });
+  t.innerHTML = html;
+}
+
+function esc(s) { return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
+
+function load(file) {
+  const err = document.getElementById("err");
+  err.textContent = "";
+  file.arrayBuffer().then(buf => {
+    runs = parse(buf);
+    if (!runs.length) throw new Error("the trace has no finished tile queue runs");
+    const sel = document.getElementById("run");
+    sel.innerHTML = runs.map((r, i) => `<option value="${i}">${i + 1}: ${esc(r.block)} (${us(r.took)})</option>`).join("");
+    document.getElementById("controls").style.display = "flex";
+    show(0);
+  }).catch(e => { err.textContent = e.message; });
+}
+
+document.getElementById("file").onchange = e => { if (e.target.files[0]) load(e.target.files[0]); };
+document.getElementById("run").onchange = e => show(+e.target.value);
+const drop = document.getElementById("drop");
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files[0]) load(e.dataTransfer.files[0]); };
+window.onresize = () => { const s = document.getElementById("run"); if (runs.length) show(+s.value); };
+</script>
+</body>
+</html>

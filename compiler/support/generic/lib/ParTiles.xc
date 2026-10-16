@@ -10,7 +10,125 @@
 #import "ParRemote.xc"
 #if !(ARCH_6502 || ARCH_m68k)
 #import "Thread.xc"
+#import "Files.xc"
 #endif
+
+// XC_PAR_TRACE=<file>: every tile queue run as fixed binary records, for
+// tools/par-trace.html to draw. The file starts "XCPTRACE", a u32 version
+// (1) and a u32 0; then 48-byte records, little-endian: u8 kind, u8 worker,
+// u16 0, u32 run, five i64 a..e. Times are microseconds from the trace's
+// start. Kinds:
+//   1 RUN     a items, b tiles, c start, d workers
+//   2 WORKER  (worker) a..e: its identity, NUL-padded to 40 bytes
+//   3 BLOCK   a..e: the block's name, NUL-padded
+//   4 TAKE    (worker) a tile, b lo, c hi, d when, e the queue's estimate of
+//             when the worker would finish it (us from now)
+//   5 DONE    (worker) a tile, b when, c the device's own time on it (the
+//             daemon's for a remote; -1 unknown), d items
+//   6 AGAIN   a tile, b when: re-issued (its worker lost or refused it)
+//   7 END     a the run's time, b when
+// The whole trace is rewritten at the end of each run (a few dozen records
+// a run), so a program killed mid-run leaves the runs before it.
+class ParTrace
+    {
+    static Data* _buf;
+    static String* _path;
+    static i64 _t0;
+    static u32 _run;
+    static bool _read;
+    static bool on(void)
+        {
+        if (!_read)
+            {
+            _read = true;
+            String* p = Platform.env(String.withCString("XC_PAR_TRACE"));
+            if (p.byteLength() > (u32)0)
+                {
+                _path = p;
+                _buf = new Data();
+                _buf.appendBytes("XCPTRACE", (u32)8);
+                ParTrace.u32le((u32)1);
+                ParTrace.u32le((u32)0);
+                _t0 = ParDevice.nowUs();
+                }
+            }
+        return _path != (String*)0;
+        }
+    static i64 now(void)
+        {
+        return ParDevice.nowUs() - _t0;
+        }
+    static void u32le(u32 v)
+        {
+        for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
+            _buf.appendByte((u8)(v >> (k * (u32)8)));
+        }
+    static void i64le(i64 v)
+        {
+        u64 u = (u64)v;
+        for (u64 k = (u64)0; k < (u64)8; k = k + (u64)1)
+            _buf.appendByte((u8)(u >> (k * (u64)8)));
+        }
+    static void rec(u8 kind, u32 worker, i64 a, i64 b, i64 c, i64 d, i64 e)
+        {
+        _buf.appendByte(kind);
+        _buf.appendByte((u8)worker);
+        _buf.appendByte((u8)0);
+        _buf.appendByte((u8)0);
+        ParTrace.u32le(_run);
+        ParTrace.i64le(a);
+        ParTrace.i64le(b);
+        ParTrace.i64le(c);
+        ParTrace.i64le(d);
+        ParTrace.i64le(e);
+        }
+    static void text(u8 kind, u32 worker, u8* s)
+        {
+        _buf.appendByte(kind);
+        _buf.appendByte((u8)worker);
+        _buf.appendByte((u8)0);
+        _buf.appendByte((u8)0);
+        ParTrace.u32le(_run);
+        u32 n = (u32)0;
+        while (s[n] != (u8)0 && n < (u32)40)
+            n = n + (u32)1;
+        _buf.appendBytes(s, n);
+        for (u32 k = n; k < (u32)40; k = k + (u32)1)
+            _buf.appendByte((u8)0);
+        }
+    static void begin(u8* block, Array* ws, i64 n, i64 ntiles)
+        {
+        if (!ParTrace.on())
+            return;
+        _run = _run + (u32)1;
+        ParTrace.rec((u8)1, (u32)0, n, ntiles, ParTrace.now(), (i64)ws.count(), (i64)0);
+        ParTrace.text((u8)3, (u32)0, block);
+        for (u32 i = (u32)0; i < ws.count(); i = i + (u32)1)
+            ParTrace.text((u8)2, i, ((ParWorker*)ws.get(i)).identity().cString());
+        }
+    static void take(u32 worker, ParTile* t, i64 estimate)
+        {
+        if (ParTrace.on())
+            ParTrace.rec((u8)4, worker, t.index, t.lo, t.hi, ParTrace.now(), estimate);
+        }
+    static void done(u32 worker, ParTile* t)
+        {
+        if (ParTrace.on())
+            ParTrace.rec((u8)5, worker, t.index, ParTrace.now(), t.usTaken > (i64)0 ? t.usTaken : (i64)-1, t.hi - t.lo, (i64)0);
+        }
+    static void again(ParTile* t)
+        {
+        if (ParTrace.on())
+            ParTrace.rec((u8)6, (u32)0, t.index, ParTrace.now(), (i64)0, (i64)0, (i64)0);
+        }
+    static void end(i64 took)
+        {
+        if (!ParTrace.on())
+            return;
+        ParTrace.rec((u8)7, (u32)0, took, ParTrace.now(), (i64)0, (i64)0, (i64)0);
+        Files.writeData(_path, _buf);
+        }
+    }
 
 class ParTiles
     {
@@ -622,6 +740,7 @@ class ParTiles
                     Log.info("par: %s: %s seeded from the probe (%ld items/ms)", proto.parName(), ((ParWorker*)ws.get(i)).identity().cString(), pr * (i64)1000 >> (i64)10);
                 }
             }
+        ParTrace.begin(proto.parName(), ws, n, ntiles);
         // Tiles a worker took and lost (its connection died) go out again,
         // before the ones not yet handed out: a tile is idempotent.
         Array* again = new Array();
@@ -643,6 +762,7 @@ class ParTiles
                     inFlight = inFlight - (u32)1;
                     inItems[i] = inItems[i] - (lt.hi - lt.lo);
                     again.add((Object*)lt);
+                    ParTrace.again(lt);
                     reissued = reissued + (i64)1;
                     }
                 }
@@ -730,6 +850,7 @@ class ParTiles
                     }
                 if (firstTake[best] == (i64)0)
                     firstTake[best] = now;
+                ParTrace.take((u32)best, pt, bestAt);
                 if (ParDevice.tracing())
                     Log.info("par: tile %ld [%ld, %ld) -> %s (would finish in %ld us) at +%ld us",
                              pt.index, pt.lo, pt.hi, w.identity().cString(), bestAt, now - started);
@@ -749,6 +870,7 @@ class ParTiles
                 while (d != (ParTile*)0)
                     {
                     got = true;
+                    ParTrace.done(i, d);
                     inFlight = inFlight - (u32)1;
                     inItems[i] = inItems[i] - (d.hi - d.lo);
                     doneItems[i] = doneItems[i] + (d.hi - d.lo);
@@ -785,6 +907,7 @@ class ParTiles
             ((ParWorker*)ws.get(i)).finish();
             }
         i64 took = ParDevice.nowUs() - started;
+        ParTrace.end(took);
         if (reissued > (i64)0 && ParDevice.reporting())
             Log.info("par: %s: %ld tile(s) re-issued after a worker was lost", proto.parName(), reissued);
         // The fastest worker's rate, for the next run's tile sizing.
