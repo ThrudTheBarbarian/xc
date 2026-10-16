@@ -88,5 +88,34 @@ else
     echo "NOTE: no mingw Mbed TLS at $MBWIN — skipped win64"
 fi
 
+# ── ios (arm64 device): shim via the iOS SDK + vendored static mbedtls ──
+# A plain dylib an app embeds (Frameworks/ or beside its executable: that is
+# where a par program's lazy loader, ParTls in ParRemote.xc, looks first).
+MBIOS="$HERE/mbedtls-ios"
+IOSSDK=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || true)
+if [ -f "$MBIOS/libmbedtls.a" ] && [ -n "$IOSSDK" ]; then
+    if clang -isysroot "$IOSSDK" -target arm64-apple-ios15.0 -c -O2 -I"$MB/include" \
+           tlsshim.c -o "$TMP/tlsshim-ios.o" \
+       && ar rcs "$TMP/libtlsshim-ios.a" "$TMP/tlsshim-ios.o" \
+       && "$XCC" --emit-lib -A ios -I xc -o "$TMP/libtls-ios.dylib" xc/tls_lib.xc \
+           -Wl,"$TMP/libtlsshim-ios.a" \
+           -Wl,"$MBIOS/libmbedtls.a" -Wl,"$MBIOS/libmbedx509.a" \
+           -Wl,"$MBIOS/libmbedcrypto.a" -Wl,"$MBIOS/libtfpsacrypto.a"; then
+        mkdir -p "$DEST/ios"
+        cp "$TMP/libtls-ios.dylib" "$DEST/ios/libtls.dylib"
+        echo "installed: $DEST/ios/libtls.dylib"
+    else
+        echo "NOTE: ios libtls build failed (iOS consumers) — the rest installed"
+    fi
+else
+    echo "NOTE: no iOS Mbed TLS at $MBIOS or no iOS SDK — skipped ios"
+fi
+
+# ── android (arm64): vendored static mbedtls built with the NDK ──
+# Not installed yet: an android `--emit-lib` link takes no C objects today
+# (the Mach-O and x86-64 links merge them, the android ELF writer does not),
+# so the shim and Mbed TLS cannot be bundled into libtls.so in-house. The
+# archives in mbedtls-android/ wait for that merge.
+
 rm -rf "$TMP"
 echo "done. client preamble:  #use <tls> ; #import \"TlsAbi.xc\" ; tls_require((i32)0)"
