@@ -114,6 +114,9 @@ pointer dlsym(pointer handle, u8* name);
 #else
 #define PAR_TLS_LOADER 0
 #endif
+#if ARCH_x86_64 || PLATFORM_android
+pointer signal(i32 sig, pointer handler);
+#endif
 typedef i32 xctlsMakeSelfSigned_t(u8* certPath, u8* keyPath, u8* cn);
 typedef pointer xctlsServer_t(u8* certPath, u8* keyPath);
 typedef pointer xctlsClient_t(void);
@@ -167,6 +170,14 @@ class ParTls
         if (_state != (i32)0)
             return _state == (i32)1;
         _state = (i32)2;
+#if ARCH_x86_64 || PLATFORM_android
+        // The library writes to the socket itself, so a peer that has gone
+        // raises SIGPIPE, which kills the process (exit 141) where the write
+        // should fail and the tiles be re-issued. Socket's own writes say
+        // MSG_NOSIGNAL and Apple's sockets SO_NOSIGPIPE; this covers the TLS
+        // writes on Linux and Android.
+        signal((i32)13, (pointer)1);    // SIGPIPE, SIG_IGN
+#endif
 #if PAR_TLS_LOADER
         String* env = Platform.env(String.withCString("XC_TLS_LIB"));
         if (env.byteLength() > (u32)0)
@@ -694,8 +705,16 @@ class ParWire
                     }
                 h = h + (u32)1;
                 }
+            // The words start at the 4-byte boundary after the header's NUL,
+            // where ParVulkan.pipeline reads them. Counting from the NUL alone
+            // cut the copy a far daemon got by up to three bytes: its module
+            // ended in whatever followed, and RADV crashed compiling it.
             if (spirv)
-                return h + (u32)1 + words * (u32)4;
+                {
+                while (src[h] != (u8)0)
+                    h = h + (u32)1;
+                return ((h + (u32)4) & ~(u32)3) + words * (u32)4;
+                }
             // A text section: to its NUL.
             while (src[at] != (u8)0)
                 at = at + (u32)1;
@@ -832,6 +851,8 @@ class ParRemoteWorker : ParWorker
                 Log.info("par: remote %s: %s", _host.cString(), e.message().cString());
             return (ParLink*)0;
             }
+        // Small frames, each answered: no Nagle wait on them.
+        sock.setNoDelay();
         ParLink* link = new ParLink(sock);
         String* why = (String*)0;
         if (!ParTls.load())

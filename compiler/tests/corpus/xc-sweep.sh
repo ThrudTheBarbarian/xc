@@ -122,8 +122,11 @@ if [ "${1:-}" = "--one" ]; then
                 then rc=1; else rc=0; fi
         fi
     else
+        # `//xtc-flags: --par-auto`: the one driver flag a fixture may ask for.
+        aflags=()
+        grep -m1 -qE '^//[ ]*xtc-flags:.*--par-auto' "$f" && aflags+=(--par-auto)
         if ! $XC_DRIVER_LAUNCH "$XCWORK/xcc-xc" -A "$XC_ARM64_SCOPE" -H . -I support/arm64/lib -I support/generic/lib \
-                "-O$XCOPT" "$src" -o "$XCWORK/bin/$b" > "$XCWORK/log/$b.build" 2>&1; then
+                "-O$XCOPT" ${aflags[@]+"${aflags[@]}"} "$src" -o "$XCWORK/bin/$b" > "$XCWORK/log/$b.build" 2>&1; then
             printf 'COMPILE\t%s\n' "$b" > "$XCWORK/res/$b"; exit 0
         fi
         if [ ! -x "$XCWORK/bin/$b" ]; then

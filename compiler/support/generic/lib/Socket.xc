@@ -258,6 +258,24 @@ class Socket
         {
         return _open;
         }
+
+    // TCP_NODELAY: a write leaves at once instead of waiting until the last
+    // one is acknowledged. For a request/answer protocol of small frames:
+    // against the peer's delayed acknowledgement that wait is ~40 ms a
+    // round trip on Linux.
+    void setNoDelay(void)
+        {
+#if !_SOCKET_NO_TCP
+        if (!_open)
+            return;
+        i32 one = (i32)1;
+#if ARCH_win64
+        setsockopt((u64)_fd, (i32)6, (i32)1, (u8*)&one, (i32)4);    // IPPROTO_TCP, TCP_NODELAY
+#else
+        setsockopt((i32)_fd, (i32)6, (i32)1, (u8*)&one, (u32)4);    // IPPROTO_TCP, TCP_NODELAY
+#endif
+#endif
+        }
     // The host's descriptor (a SOCKET on Windows), for a layer over the
     // connection such as TLS; -1 when closed.
     i64 fd(void)

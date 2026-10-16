@@ -1516,7 +1516,12 @@
         // Object* / Hashable* parameter) is not a raw pointer passed as a class
         // reference: the conversion builds one. The shipped compiler boxes
         // before this check sees it (bug 544).
-        if (lp.kind == XTTypeKindClass
+        // Only at a call's argument: an initialiser, an assignment or a
+        // return builds no box, so `String* a = raw;` is the raw pointer
+        // passed as a class reference this check exists for.
+        BOOL storeSite = [site isEqualToString:@"initialiser"] || [site isEqualToString:@"assignment"] ||
+                         [site isEqualToString:@"return"];
+        if (lp.kind == XTTypeKindClass && !storeSite
             && [self autoboxClassNameForArgType:rhsType toParamType:lhsType])
             return;
         if (lp.kind == XTTypeKindClass)

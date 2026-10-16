@@ -7921,7 +7921,13 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     // no-arg method limps along on whatever happens to be in x0, but a method
     // WITH arguments takes its first argument in self's register and dereferences
     // it as the object pointer — a wild store / SIGSEGV.
-    if (isStaticCall && [receiver isKindOfClass:[XTIdentifierNode class]] && self.locals[((XTIdentifierNode*)receiver).identName] != nil)
+    // A PINNED local is a variable too: a function with a goto pins every
+    // local, and `Pool p = new Pool; p.submit()` there called submit with no
+    // self (bug 632's fixture, which printed right only because x0 still held
+    // the allocation).
+    if (isStaticCall && [receiver isKindOfClass:[XTIdentifierNode class]] &&
+        (self.locals[((XTIdentifierNode*)receiver).identName] != nil ||
+         self.pinnedLocals[((XTIdentifierNode*)receiver).identName] != nil))
         {
         isStaticCall = NO;
         }
@@ -12242,15 +12248,17 @@ static const NSUInteger kVarargSlotBytes = 8;
     // not emit here nothing ever does — which is exactly how a strong local
     // declared in a loop body used to leak on the break path.
     NSNumber* bDepth = frame[@"arcDepth"];
-    if (bDepth)
-        [self releaseScopesDownToDepth:bDepth.unsignedIntegerValue];
+    NSDictionary* inner = bDepth ? [self unwindScopesToDepth:bDepth.unsignedIntegerValue] : nil;
     // Record this break edge (source block + local values) so the loop
     // can build exit phis: a local mutated before the break must reach
     // post-loop code with its break-point value, not the loop-carried
-    // header value.
+    // header value. Taken with the scopes unwound: a name an inner local
+    // shadows carries the OUTER value to the exit.
     NSMutableArray* breaks = frame[@"breaks"];
     [breaks addObject:@{@"block" : self.currentBlock,
                         @"locals" : [self snapshotLocals]}];
+    if (inner)
+        [self restoreBindingTables:inner];
     [self emitTerminator:XTIROpBranch
                 operands:@[ [XTIROperand blockWithRef:exit] ]];
     }
@@ -12280,8 +12288,7 @@ static const NSUInteger kVarargSlotBytes = 8;
     // control variable, which lives in the enclosing scope and so is untouched
     // by this, while the body's strong locals are dead from here on.
     NSNumber* cDepth = frame[@"arcDepth"];
-    if (cDepth)
-        [self releaseScopesDownToDepth:cDepth.unsignedIntegerValue];
+    NSDictionary* inner = cDepth ? [self unwindScopesToDepth:cDepth.unsignedIntegerValue] : nil;
     // A C-style `for` runs its increment on `continue` before
     // retesting the condition (skipping it would leave the counter
     // unadvanced — an infinite loop). The frame carries the increment
@@ -12317,9 +12324,14 @@ static const NSUInteger kVarargSlotBytes = 8;
     // loop can add a matching operand to each header phi — the header
     // gains a predecessor here, and §12.4 requires one phi operand per
     // predecessor.
+    // The scopes are unwound here, so a name an inner local shadows carries
+    // the OUTER value to the header (it took the inner one, and the outer
+    // object's release then released an integer).
     NSMutableArray* continues = frame[@"continues"];
     [continues addObject:@{@"block" : self.currentBlock,
                            @"locals" : [self snapshotLocals]}];
+    if (inner)
+        [self restoreBindingTables:inner];
     [self emitTerminator:XTIROpBranch
                 operands:@[ [XTIROperand blockWithRef:header] ]];
     }
@@ -12612,8 +12624,20 @@ static const NSUInteger kVarargSlotBytes = 8;
 // break or continue rather than by falling off the end.
 - (void)releaseScopesDownToDepth:(NSUInteger)depth
     {
+    [self restoreBindingTables:[self unwindScopesToDepth:depth]];
+    }
+
+// The teardown of releaseScopesDownToDepth:, leaving the name tables as the
+// scopes' pops would: between two scopes, the bindings the inner one shadowed
+// come back, so an outer scope releases ITS local and a jump's snapshot
+// carries the outer value of a shadowed name. Returns the tables as they were,
+// for restoreBindingTables: once the jump is emitted — the lowering itself is
+// still inside those scopes.
+- (NSDictionary*)unwindScopesToDepth:(NSUInteger)depth
+    {
+    NSDictionary* saved = [self captureBindingTables];
     if (!self.arcScopeStack)
-        return;
+        return saved;
     for (NSInteger i = (NSInteger)self.arcScopeStack.count - 1;
          i >= (NSInteger)depth && i >= 0; i--)
         {
@@ -12622,9 +12646,59 @@ static const NSUInteger kVarargSlotBytes = 8;
         // same order a normal fall-off-the-end exit produces.
         [self emitDefersForScopeIndex:(NSUInteger)i];
         if (self.aborted)
-            return;
+            return saved;
         [self emitReleasesForScopeFrame:self.arcScopeStack[(NSUInteger)i]];
+        [self unshadowScopeAtIndex:(NSUInteger)i];
         }
+    return saved;
+    }
+
+// What popArcScopeEmittingReleases: does to the tables after the releases,
+// for a scope a jump leaves without popping it.
+- (void)unshadowScopeAtIndex:(NSUInteger)si
+    {
+    for (NSString* name in self.arcScopeStack[si])
+        [self.strongLocals removeObject:name];
+    if (si < self.shadowSaveStack.count)
+        [self restoreShadowedBindingsFromFrame:self.shadowSaveStack[si]];
+    }
+
+// The name tables a shadow restore touches, copied; put back IN PLACE, since
+// other code holds the table objects.
+- (NSDictionary*)captureBindingTables
+    {
+    NSMutableDictionary* t = [NSMutableDictionary dictionary];
+    t[@"locals"] = [self.locals copy] ?: @{};
+    t[@"strong"] = [self.strongLocals copy] ?: [NSSet set];
+    t[@"weakPinned"] = [self.weakPinnedLocals copy] ?: [NSSet set];
+    t[@"arrayNames"] = [self.arrayLocalNames copy] ?: [NSSet set];
+    t[@"strongArr"] = [self.strongArrayLocals copy] ?: @{};
+    t[@"weakArr"] = [self.weakArrayLocals copy] ?: @{};
+    t[@"strongStruct"] = [self.strongStructLocals copy] ?: @{};
+    t[@"strongStructArr"] = [self.strongStructArrayLocals copy] ?: @{};
+    t[@"pinned"] = [self.pinnedLocals copy] ?: @{};
+    t[@"pinnedAST"] = [self.pinnedLocalASTType copy] ?: @{};
+    t[@"strongPin"] = [self.strongPinnedLocals copy] ?: @{};
+    t[@"heapLen"] = [self.heapArrayLengthByLocal copy] ?: @{};
+    t[@"arrElem"] = [self.arrayLocalElementType copy] ?: @{};
+    return t;
+    }
+
+- (void)restoreBindingTables:(NSDictionary*)t
+    {
+    [self.locals setDictionary:t[@"locals"]];
+    [self.strongLocals setSet:t[@"strong"]];
+    [self.weakPinnedLocals setSet:t[@"weakPinned"]];
+    [self.arrayLocalNames setSet:t[@"arrayNames"]];
+    [self.strongArrayLocals setDictionary:t[@"strongArr"]];
+    [self.weakArrayLocals setDictionary:t[@"weakArr"]];
+    [self.strongStructLocals setDictionary:t[@"strongStruct"]];
+    [self.strongStructArrayLocals setDictionary:t[@"strongStructArr"]];
+    [self.pinnedLocals setDictionary:t[@"pinned"]];
+    [self.pinnedLocalASTType setDictionary:t[@"pinnedAST"]];
+    [self.strongPinnedLocals setDictionary:t[@"strongPin"]];
+    [self.heapArrayLengthByLocal setDictionary:t[@"heapLen"]];
+    [self.arrayLocalElementType setDictionary:t[@"arrElem"]];
     }
 
 // Release every element of a strong class-pointer ARRAY local
@@ -13024,6 +13098,9 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
 
 - (void)releaseStrongLocalsAlongReturnExcept:(nullable XTIRValue*)retainExempt
     {
+    // Each scope's names unshadowed after its teardown, as at a pop, so an
+    // outer local releases its own value and not an inner one of its name.
+    NSDictionary* bindings = [self captureBindingTables];
     if (self.arcScopeStack)
         {
         for (NSInteger si = (NSInteger)self.arcScopeStack.count - 1; si >= 0; si--)
@@ -13089,8 +13166,10 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                     continue;
                 [self emitRelease:v];
                 }
+            [self unshadowScopeAtIndex:(NSUInteger)si];
             }
         }
+    [self restoreBindingTables:bindings];
     // ARC 2d: release the `self` retained on method entry — ALWAYS, even when
     // self is the return value. The +1 the caller receives from `return self`
     // is the RETURN path's own retain (self is a borrowed expression there,
@@ -13474,6 +13553,11 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
     if (end < s)
         end = s;
     NSUInteger count = (NSUInteger)(end - s);
+    // A range longer than the array: the extras are dropped, as the warning
+    // says (they were stored past the array's end — `u8 b[3] = 0...4;` wrote
+    // b[3] and b[4] over whatever followed it).
+    if (at.elementCount > 0 && count > at.elementCount)
+        count = at.elementCount;
     XTIRType* elemPtrIR = [XTIRType ptrToType:elemIR window:XTIRWindowUnbanked];
     XTIRValue* base = [self emitInsnOpcode:XTIROpAddrOf
                                     result:elemPtrIR
@@ -14440,6 +14524,7 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
             {
             [exemptIds addObject:@(rv.valueId)];
             }
+        NSDictionary* bindings = [self captureBindingTables];
         for (NSInteger si = (NSInteger)self.arcScopeStack.count - 1; si >= 0; si--)
             {
             NSMutableArray<NSString*>* frame = self.arcScopeStack[si];
@@ -14495,7 +14580,9 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                     continue;
                 [self emitRelease:v];
                 }
+            [self unshadowScopeAtIndex:(NSUInteger)si];
             }
+        [self restoreBindingTables:bindings];
         // Build the aggregate from the individual return values.
         XTIRValue* agg = [self allocateValueOfType:retTy atSite:self.currentBlock];
         NSMutableArray<XTIROperand*>* aggOps = [NSMutableArray array];
@@ -18455,6 +18542,18 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
     // there is no layout to hand out.
     self.classesByName[cls.className] = info;
     [self.preScanInProgress removeObject:cls.className];
+    // A static ivar of the class's own pointer type was registered before the
+    // class had a selfPtrType, and typed Ptr(Void) for want of it (a static
+    // of any class registered earlier got its Agg). Typed again now, so the
+    // global's type does not depend on the order classes are met in.
+    for (NSString* sv in info.staticIvarSymbol)
+        {
+        XTType* svAst = info.ivarASTType[sv];
+        XTIRType* svTy = svAst ? [self irTypeForASTTypeQuiet:svAst] : nil;
+        XTIRSymbol* sym = svTy ? self.module.symbols[info.staticIvarSymbol[sv].unsignedIntegerValue] : nil;
+        if (sym && sym.kind == XTIRSymbolKindDataGlobal)
+            [sym setValue:svTy forKey:@"globalType"];
+        }
     return info;
     }
 

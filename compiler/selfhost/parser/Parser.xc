@@ -910,8 +910,14 @@ class Parser
 
     void _error(String* msg)
     {
+        _errorAtTok(msg, cur());
+    }
+
+    // As `_error`, at a given token: the statement's own keyword, say, where
+    // the reference reports it rather than where parsing stopped.
+    void _errorAtTok(String* msg, Token* t)
+    {
         String* out = String.withCString("");
-        Token* t = cur();
         if (t != (Token*)0 && t.line() != (u32)0) {
             if (t.file() != (String*)0) { out.append(t.file()); } else { out.appendCString("?"); }
             out.appendByte((u8)':');
@@ -1706,6 +1712,9 @@ class Parser
             break;
         }
 
+        // Where the member starts (its type): where a diagnostic about it is
+        // reported, as the reference reports one.
+        Token* memberTok = cur();
         String* ty = parseTypeSpelling();
         // A method may be NAMED `release` / `retain` / `delete`: the class's own
         // override of the reference-op it will be called through. The lexer
@@ -1726,6 +1735,7 @@ class Parser
             Node* m = mkNamed((u16)nkMethodDecl, name);
             m.setOp(ty);
             m.setFlags(flags);
+            m.setStmtPos(memberTok.fileId(), memberTok.line(), memberTok.col());
             if (sinceVersion != (String*)0) m.setSince(sinceVersion);
             parseParamList(m);
             if (match((u16)tokThrows)) m.addFlag((u32)NF_THROWS);
@@ -1757,6 +1767,7 @@ class Parser
         Node* v = mkNamed((u16)nkVariableDecl, name);
         v.setOp(memberTypeSuffix(ty));
         v.setFlags(ivarFlags);
+        v.setStmtPos(memberTok.fileId(), memberTok.line(), memberTok.col());
         blkBind(name, v.op(), _lastBlkParams);       // class scope (task #26)
         _blkIvarNames.add((Hashable*)String.withString(name));
         if (match((u16)tokAssign)) v.add(parseExpression());
@@ -1926,7 +1937,9 @@ class Parser
         while (true) {
             if (match((u16)tokStatic))   { flags = flags | (u32)NF_STATIC;   continue; }
             if (match((u16)tokGlobal))   { flags = flags | (u32)NF_GLOBAL;   continue; }
-            if (match((u16)tokExtern))   { flags = flags | (u32)NF_EXTERN;   continue; }
+            // The reference takes `extern` before the declaration begins, so
+            // the declaration's position is the token after it.
+            if (match((u16)tokExtern))   { flags = flags | (u32)NF_EXTERN; declTok = cur(); continue; }
             if (match((u16)tokVolatile)) { flags = flags | (u32)NF_VOLATILE; continue; }
             if (match((u16)tokRegister)) { flags = flags | (u32)NF_REGISTER; continue; }
             if (match((u16)tokInline))   { continue; }
@@ -1983,6 +1996,7 @@ class Parser
             Node* f = mkNamed((u16)nkFunctionDecl, name);
             f.setOp(ty);
             f.setFlags(flags);
+            f.setStmtPos(declTok.fileId(), declTok.line(), declTok.col());
             _blkFnRet.set((Hashable*)String.withString(name), (Object*)ty);
             parseParamList(f);
             if (match((u16)tokThrows)) f.addFlag((u32)NF_THROWS);
@@ -2200,6 +2214,160 @@ class Parser
         return body;
     }
 
+    // --par-auto's `while` form (the reference's parAutoWhileToFor explains):
+    // `while (v < B) { …; v++; }` becomes, in the token stream,
+    //     for (T __autopar_w = v; __autopar_w < B; __autopar_w += 1)
+    //         { T v = __autopar_w; …the body without the increment… }
+    //     if (v < B) v = B;            (<= B: v = B + 1)
+    bool parAutoWhileToFor(void)
+    {
+        u32 at = _pos;
+        u32 n = _tokens.count();
+        if (parTokType(at + (u32)1) != (u16)tokLParen || parTokType(at + (u32)2) != (u16)tokIdentifier) return false;
+        String* v = parTokValue(at + (u32)2);
+        u16 cmp = parTokType(at + (u32)3);
+        if (cmp != (u16)tokLess && cmp != (u16)tokLessEq) return false;
+        // The bound: names, integer literals, + - * /, casts and parentheses,
+        // up to the `)` that closes the condition.
+        u32 pe = at + (u32)4;
+        u32 pd = (u32)0;
+        while (pe < n) {
+            u16 t = parTokType(pe);
+            if (t == (u16)tokRParen && pd == (u32)0) break;
+            if (t == (u16)tokLParen) pd = pd + (u32)1;
+            else if (t == (u16)tokRParen) pd = pd - (u32)1;
+            else if (t != (u16)tokIdentifier && t != (u16)tokIntLiteral && t != (u16)tokPlus && t != (u16)tokMinus
+                && t != (u16)tokStar && t != (u16)tokSlash && !Parser.parIntTypeTok(t)) return false;
+            if (t == (u16)tokIdentifier && parTokValue(pe).equals(v)) return false;
+            pe = pe + (u32)1;
+        }
+        if (pe >= n || pe == at + (u32)4 || parTokType(pe + (u32)1) != (u16)tokLBrace) return false;
+        u32 be = (u32)0;
+        u32 depth = (u32)0;
+        for (u32 i = pe + (u32)1; i < n; i = i + (u32)1) {
+            u16 t = parTokType(i);
+            if (t == (u16)tokLBrace) depth = depth + (u32)1;
+            else if (t == (u16)tokRBrace) {
+                depth = depth - (u32)1;
+                if (depth == (u32)0) { be = i; break; }
+            }
+        }
+        if (be == (u32)0) return false;
+        u32 inc = (u32)0;
+        if (parTokType(be - (u32)1) != (u16)tokSemicolon) return false;
+        if (be >= pe + (u32)5 && parTokType(be - (u32)3) == (u16)tokIdentifier && parTokValue(be - (u32)3).equals(v)
+            && parTokType(be - (u32)2) == (u16)tokPlusPlus)
+            inc = be - (u32)3;
+        else if (be >= pe + (u32)5 && parTokType(be - (u32)3) == (u16)tokPlusPlus && parTokType(be - (u32)2) == (u16)tokIdentifier
+                 && parTokValue(be - (u32)2).equals(v))
+            inc = be - (u32)3;
+        else if (be >= pe + (u32)6 && parTokType(be - (u32)4) == (u16)tokIdentifier && parTokValue(be - (u32)4).equals(v)
+                 && parTokType(be - (u32)3) == (u16)tokPlusAssign && parTokType(be - (u32)2) == (u16)tokIntLiteral
+                 && Parser._same(parTokValue(be - (u32)2), "1"))
+            inc = be - (u32)4;
+        else if (be >= pe + (u32)8 && parTokType(be - (u32)6) == (u16)tokIdentifier && parTokValue(be - (u32)6).equals(v)
+                 && parTokType(be - (u32)5) == (u16)tokAssign && parTokType(be - (u32)4) == (u16)tokIdentifier
+                 && parTokValue(be - (u32)4).equals(v) && parTokType(be - (u32)3) == (u16)tokPlus
+                 && parTokType(be - (u32)2) == (u16)tokIntLiteral && Parser._same(parTokValue(be - (u32)2), "1"))
+            inc = be - (u32)6;
+        if (inc == (u32)0 || inc <= pe + (u32)1) return false;
+        u16 before = parTokType(inc - (u32)1);
+        if (before != (u16)tokSemicolon && before != (u16)tokRBrace && before != (u16)tokLBrace) return false;
+        for (u32 i = pe + (u32)2; i < inc; i = i + (u32)1) {
+            u16 t = parTokType(i);
+            if (t == (u16)tokBreak || t == (u16)tokContinue || t == (u16)tokReturn || t == (u16)tokGoto) return false;
+            if (t == (u16)tokIdentifier && parTokValue(i).equals(v)) {
+                u16 nx = parTokType(i + (u32)1);
+                u16 pv = parTokType(i - (u32)1);
+                if (Parser.parAutoAnyAssignOp(nx) || nx == (u16)tokPlusPlus || nx == (u16)tokMinusMinus
+                    || pv == (u16)tokPlusPlus || pv == (u16)tokMinusMinus || pv == (u16)tokAmpersand) return false;
+            }
+        }
+        // v: a local of an integer type, spelt as its keyword.
+        u32 d = (u32)0;
+        String* vt = blkTyOf(blkLookup(v, &d));
+        u16 tt = (u16)0;
+        bool known = false;
+        if (vt != (String*)0) {
+            if (Parser._same(vt, "u8")) { tt = (u16)tokU8; known = true; }
+            else if (Parser._same(vt, "i8")) { tt = (u16)tokI8; known = true; }
+            else if (Parser._same(vt, "u16")) { tt = (u16)tokU16; known = true; }
+            else if (Parser._same(vt, "i16")) { tt = (u16)tokI16; known = true; }
+            else if (Parser._same(vt, "u32")) { tt = (u16)tokU32; known = true; }
+            else if (Parser._same(vt, "i32")) { tt = (u16)tokI32; known = true; }
+            else if (Parser._same(vt, "u64")) { tt = (u16)tokU64; known = true; }
+            else if (Parser._same(vt, "i64")) { tt = (u16)tokI64; known = true; }
+        }
+        if (!known) return false;
+        Token* w0 = (Token*)_tokens.get(at);
+        String* w = String.withCString("__autopar_w");
+        Array* bound = _tokens.subarray(at + (u32)4, pe - (at + (u32)4));
+        Array* out = new Array();
+        out.add((Object*)parSynTok((u16)tokFor, String.withCString("for"), w0));
+        out.add((Object*)parSynTok((u16)tokLParen, String.withCString("("), w0));
+        out.add((Object*)parSynTok(tt, vt, w0));
+        out.add((Object*)parSynTok((u16)tokIdentifier, w, w0));
+        out.add((Object*)parSynTok((u16)tokAssign, String.withCString("="), w0));
+        out.add((Object*)parSynTok((u16)tokIdentifier, v, w0));
+        out.add((Object*)parSynTok((u16)tokSemicolon, String.withCString(";"), w0));
+        out.add((Object*)parSynTok((u16)tokIdentifier, w, w0));
+        out.add(_tokens.get(at + (u32)3));
+        out.addAll(bound);
+        out.add((Object*)parSynTok((u16)tokSemicolon, String.withCString(";"), w0));
+        out.add((Object*)parSynTok((u16)tokIdentifier, w, w0));
+        out.add((Object*)parSynTok((u16)tokPlusAssign, String.withCString("+="), w0));
+        out.add((Object*)parSynInt((i64)1, w0));
+        out.add((Object*)parSynTok((u16)tokRParen, String.withCString(")"), w0));
+        out.add((Object*)parSynTok((u16)tokLBrace, String.withCString("{"), w0));
+        out.add((Object*)parSynTok(tt, vt, w0));
+        out.add((Object*)parSynTok((u16)tokIdentifier, v, w0));
+        out.add((Object*)parSynTok((u16)tokAssign, String.withCString("="), w0));
+        out.add((Object*)parSynTok((u16)tokIdentifier, w, w0));
+        out.add((Object*)parSynTok((u16)tokSemicolon, String.withCString(";"), w0));
+        out.addAll(_tokens.subarray(pe + (u32)2, inc - (pe + (u32)2)));
+        out.add((Object*)parSynTok((u16)tokRBrace, String.withCString("}"), w0));
+        out.add((Object*)parSynTok((u16)tokIf, String.withCString("if"), w0));
+        out.add((Object*)parSynTok((u16)tokLParen, String.withCString("("), w0));
+        out.add((Object*)parSynTok((u16)tokIdentifier, v, w0));
+        out.add(_tokens.get(at + (u32)3));
+        out.addAll(bound);
+        out.add((Object*)parSynTok((u16)tokRParen, String.withCString(")"), w0));
+        out.add((Object*)parSynTok((u16)tokIdentifier, v, w0));
+        out.add((Object*)parSynTok((u16)tokAssign, String.withCString("="), w0));
+        out.addAll(bound);
+        if (cmp == (u16)tokLessEq) {
+            out.add((Object*)parSynTok((u16)tokPlus, String.withCString("+"), w0));
+            out.add((Object*)parSynInt((i64)1, w0));
+        }
+        out.add((Object*)parSynTok((u16)tokSemicolon, String.withCString(";"), w0));
+        _tokens.removeRange(at, be + (u32)1 - at);
+        _tokens.insertAll(at, out);
+        return true;
+    }
+
+    // A type keyword a cast in a bound may name (the reference asks the
+    // token isTypeKeyword).
+    static bool parIntTypeTok(u16 t)
+    {
+        return t == (u16)tokU8 || t == (u16)tokI8 || t == (u16)tokU16 || t == (u16)tokI16 || t == (u16)tokU32
+            || t == (u16)tokI32 || t == (u16)tokU64 || t == (u16)tokI64 || t == (u16)tokBool || t == (u16)tokFloat
+            || t == (u16)tokDouble || t == (u16)tokVoid || t == (u16)tokPointer || t == (u16)tokString || t == (u16)tokAuto;
+    }
+
+    // A token made by a rewrite, at the place of `at`.
+    Token* parSynTok(u16 type, String* value, Token* at)
+    {
+        Token* t = Token.with(type, String.withString(value), at.line(), at.col());
+        t.setFileId(at.fileId());
+        return t;
+    }
+    Token* parSynInt(i64 v, Token* at)
+    {
+        Token* t = Token.withInt((u16)tokIntLiteral, String.withI64(v), v, at.line(), at.col());
+        t.setFileId(at.fileId());
+        return t;
+    }
+
     Node* parAutoFor(void)
     {
         Array* reds = new Array();
@@ -2378,9 +2546,10 @@ class Parser
         if (parTokType(at + (u32)1) != (u16)tokLParen) return false;
         // Not in the standard library or the prelude (the reference explains).
         if (_libFiles != (Set*)0 && _libFiles.contains((Hashable*)cur().file())) return false;
-        // The header: `( T? i in a .. b )` or `( T? i in a ... b )`, no step;
-        // or the C-style `( T? i = a; i < b; i++ )` with `<=`, `++i`,
-        // `i += 1` or `i = i + 1` as well. As the reference.
+        // The header: `( T? i in a .. b )` or `( T? i in a ... b )`, with a
+        // positive literal `step` or none; or the C-style
+        // `( T? i = a; i < b; i++ )` with `<=`, `++i`, `i += 1` or
+        // `i = i + 1` as well. As the reference.
         u32 depth = (u32)0;
         u32 pe = (u32)0;
         bool sawIn = false;
@@ -2397,7 +2566,8 @@ class Parser
             } else if (depth == (u32)1) {
                 if (ty == (u16)tokIn && parTokType(i - (u32)1) == (u16)tokIdentifier) { sawIn = true; var = parTokValue(i - (u32)1); }
                 else if (ty == (u16)tokDotDot || ty == (u16)tokEllipsis) sawDots = true;
-                else if (ty == (u16)tokIdentifier && sawDots && Parser._same(parTokValue(i), "step")) return false;
+                else if (ty == (u16)tokIdentifier && sawDots && Parser._same(parTokValue(i), "step")
+                         && (parTokType(i + (u32)1) != (u16)tokIntLiteral || Parser._same(parTokValue(i + (u32)1), "0"))) return false;
                 else if (ty == (u16)tokSemicolon) {
                     if (semi1 == (u32)0) semi1 = i;
                     else if (semi2 == (u32)0) semi2 = i;
@@ -3095,6 +3265,93 @@ class Parser
         return decls;
     }
 
+    // A `par` loop with a stride, `for (T i in a..b step s)` (s a literal
+    // above 1, ascending): the work items are its iterations, counted from 0
+    // — a loop over par$k in 0..par$n with `T i = par$a + par$k * s` at the
+    // top of each. The start, end and count are declared before the block
+    // (par$a and par$n captured), returned for the site as the grid's sizes
+    // are; the new body goes back through frame.gridBody. As the
+    // reference's parStepLoopFor.
+    Array* parStepLoop(Node* body, Map* frame)
+    {
+        Array* decls = new Array();
+        Node* loop = (body.kidCount() == (u32)1 && body.kid((u32)0).kind() == (u16)nkForCStyle) ? body.kid((u32)0) : (Node*)0;
+        if (loop == (Node*)0 || loop.kidCount() != (u32)4) return decls;
+        Node* iv = loop.kid((u32)0).kidCount() > (u32)0 ? loop.kid((u32)0).kid((u32)0) : (Node*)0;
+        Node* cond = loop.kid((u32)1).kidCount() > (u32)0 ? loop.kid((u32)1).kid((u32)0) : (Node*)0;
+        Node* inc = loop.kid((u32)2).kidCount() > (u32)0 ? loop.kid((u32)2).kid((u32)0) : (Node*)0;
+        Node* lbody = loop.kid((u32)3);
+        if (iv == (Node*)0 || iv.kind() != (u16)nkVariableDecl || iv.kidCount() == (u32)0 || iv.op() == (String*)0) return decls;
+        if (cond == (Node*)0 || cond.kind() != (u16)nkBinary || (!Parser._same(cond.op(), "<") && !Parser._same(cond.op(), "<="))) return decls;
+        if (cond.kid((u32)0).kind() != (u16)nkIdent || !cond.kid((u32)0).name().equals(iv.name())) return decls;
+        if (inc == (Node*)0 || inc.kind() != (u16)nkAssign || !Parser._same(inc.op(), "+=")
+            || inc.kid((u32)0).kind() != (u16)nkIdent || !inc.kid((u32)0).name().equals(iv.name())
+            || inc.kid((u32)1).kind() != (u16)nkInt || inc.kid((u32)1).num() < (i64)2) return decls;
+        i64 st = inc.kid((u32)1).num();
+        String* T = iv.op();
+        // par$n: none when the range is empty, else ceil((b - a) / s) for `<`
+        // and (b - a) / s + 1 for `<=`.
+        bool incl = Parser._same(cond.op(), "<=");
+        Node* span = parBin("-", parIdent(String.withCString("par$b")), parIdent(String.withCString("par$a")));
+        Node* count = incl ? parBin("+", parBin("/", span, parInt(st)), parInt((i64)1))
+                           : parBin("/", parBin("+", span, parInt(st - (i64)1)), parInt(st));
+        Node* some = parBin(incl ? ">=" : ">", parIdent(String.withCString("par$b")), parIdent(String.withCString("par$a")));
+        Node* tern = mk((u16)nkTernary);
+        tern.add(some);
+        tern.add(count);
+        tern.add(parCast(T, parInt((i64)0)));
+        decls.add((Object*)parTypedDecl(String.withCString("par$a"), T, parCast(T, iv.kid((u32)0))));
+        decls.add((Object*)parTypedDecl(String.withCString("par$b"), T, parCast(T, cond.kid((u32)1))));
+        decls.add((Object*)parTypedDecl(String.withCString("par$n"), T, tern));
+        Array* names = (Array*)frame.get((Hashable*)String.withCString("names"));
+        Map* types = (Map*)frame.get((Hashable*)String.withCString("types"));
+        Array* caps = new Array();
+        caps.add((Object*)String.withCString("par$a"));
+        caps.add((Object*)String.withCString("par$n"));
+        for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
+            String* n = (String*)caps.get(i);
+            bool have = false;
+            for (u32 j = (u32)0; j < names.count(); j = j + (u32)1)
+                if (((String*)names.get(j)).equals(n)) have = true;
+            if (!have) names.add((Object*)n);
+            types.set((Hashable*)n, (Object*)String.withString(T));
+        }
+        Node* item = mk((u16)nkBlock);
+        item.add(parTypedDecl(iv.name(), T, parBin("+", parIdent(String.withCString("par$a")),
+                                                     parBin("*", parIdent(String.withCString("par$k")), parInt(st)))));
+        if (lbody.kind() == (u16)nkBlock) {
+            for (u32 i = (u32)0; i < lbody.kidCount(); i = i + (u32)1) item.add(lbody.kid(i));
+        } else
+            item.add(lbody);
+        Node* f = mk((u16)nkForCStyle);
+        Node* im = mk((u16)nkMarkerInit);
+        im.add(parTypedDecl(String.withCString("par$k"), T, parCast(T, parInt((i64)0))));
+        f.add(im);
+        Node* cm = mk((u16)nkMarkerCond);
+        cm.add(parBin("<", parIdent(String.withCString("par$k")), parIdent(String.withCString("par$n"))));
+        f.add(cm);
+        Node* sm = mk((u16)nkMarkerStep);
+        Node* step = mk((u16)nkAssign);
+        step.setOp(String.withCString("+="));
+        step.add(parIdent(String.withCString("par$k")));
+        step.add(parInt((i64)1));
+        sm.add(step);
+        f.add(sm);
+        f.add(item);
+        Node* nb = mk((u16)nkBlock);
+        nb.add(f);
+        frame.set((Hashable*)String.withCString("gridBody"), (Object*)nb);
+        return decls;
+    }
+
+    Node* parTypedDecl(String* n, String* t, Node* e)
+    {
+        Node* d = mkNamed((u16)nkVariableDecl, String.withString(n));
+        d.setOp(String.withString(t));
+        d.add(e);
+        return d;
+    }
+
     // ── par → ParChunk subclass + run (the reference's parDesugarBody) ──
     Node* parIdent(String* n) { return mkNamed((u16)nkIdent, String.withString(n)); }
     Node* parMember(String* b, String* m)
@@ -3173,6 +3430,8 @@ class Parser
         String* label = String.withCString("par");
         if (parName != 0) { label.appendCString(" "); label.append(parName); }
         Array* gridDecls = parGridLoop(body, frame);
+        if (gridDecls.count() == (u32)0)
+            gridDecls = parStepLoop(body, frame);
         if (frame.get((Hashable*)String.withCString("gridBody")) != 0)
             body = (Node*)frame.get((Hashable*)String.withCString("gridBody"));
         // The loop form: exactly one ascending `for (T i in a..b)`.
@@ -3836,6 +4095,13 @@ class Parser
                     && (checkAt((u32)2, (u16)tokLBrace) || checkAt((u32)2, (u16)tokColon)))))
             return parsePar();
         if (check((u16)tokIf))       return parseIf();
+        // --par-auto: a counted while loop becomes the `for` it amounts to,
+        // which parAutoFor then takes or leaves (parAutoWhileToFor).
+        if (check((u16)tokWhile) && _parAuto && _loopDepth == (u32)0
+            && (_blkFrames.count() == (u32)0
+                || ((Map*)_blkFrames.get(_blkFrames.count() - (u32)1)).get((Hashable*)String.withCString("par")) == (Object*)0)
+            && parAutoWhileToFor())
+            return parAutoFor();
         if (check((u16)tokWhile))    { parGridEnter("loops", true); _loopDepth = _loopDepth + (u32)1; Node* n = parseWhile(); _loopDepth = _loopDepth - (u32)1; parGridEnter("loops", false); return n; }
         if (check((u16)tokFor)) {
             // --par-auto: an outermost loop in plain code may become a par block —
@@ -4445,7 +4711,7 @@ class Parser
         // v2 (task #29): returning a block that carries `block:` captures
         // hands the caller a write into this (dead) frame — checked below
         // after each value parses.
-        advance();
+        Token* retTok = advance();
         Node* n = mk((u16)nkReturn);
         if (!check((u16)tokSemicolon)) {
             n.add(parseExpression());
@@ -4453,7 +4719,7 @@ class Parser
         }
         for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1) {
             if (blkIsWbValue(n.kid(i)))
-                _error(String.withCString("a block with `block:` captures cannot be returned — its write-back targets this frame. Write results into an object (an ivar, a box) instead"));
+                _errorAtTok(String.withCString("a block with `block:` captures cannot be returned — its write-back targets this frame. Write results into an object (an ivar, a box) instead"), retTok);
         }
         expect((u16)tokSemicolon);
         return n;
@@ -4662,6 +4928,9 @@ class Parser
 
             if (isAssignTok(opType)) {
                 Node* a = mk((u16)nkAssign);
+                // At its operator, where the reference puts an assignment
+                // (a diagnostic about it points at the `=`).
+                a.setPos(opTok.fileId(), opTok.line(), opTok.col());
                 a.setOp(opTok.value());
                 Node* rhs = (Node*)0;
                 // Blocks (task #26): `b = { body };` re-binds a block variable;
@@ -4823,7 +5092,7 @@ class Parser
                 node = n;
             } else if (t == (u16)tokDot || t == (u16)tokArrow) {
                 bool arrow = (t == (u16)tokArrow);
-                advance();
+                Token* dotTok = advance();
                 String* member = String.withCString("?");
                 if (check((u16)tokIdentifier) || check((u16)tokRelease)
                     || check((u16)tokRetain) || check((u16)tokDelete)) {
@@ -4832,6 +5101,8 @@ class Parser
                     expect((u16)tokIdentifier);
                 }
                 Node* n = mkNamed((u16)nkMember, member);
+                // At its `.`, where the reference puts a member access.
+                n.setPos(dotTok.fileId(), dotTok.line(), dotTok.col());
                 if (arrow) n.addFlag((u32)NF_ARROW);
                 n.add(node);
                 node = n;

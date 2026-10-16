@@ -2444,6 +2444,14 @@ static BOOL corpusFrontend(NSString *rawSource, NSString *xtPath,
     XTParser *parser = [[XTParser alloc] initWithTokens:tokens
                                               typeTable:tt diagnostics:diag];
     parser.defaultPointerPlacement = defaultPlacement;
+    // `//xtc-flags: --par-auto`: plain loops become `par` blocks where their
+    // shape allows, as the driver's --par-auto does.
+    for (NSString *line in [rawSource componentsSeparatedByString:@"\n"]) {
+        NSString *t = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if (([t hasPrefix:@"//xtc-flags:"] || [t hasPrefix:@"// xtc-flags:"]) &&
+            [t rangeOfString:@"--par-auto"].location != NSNotFound)
+            parser.parAuto = YES;
+    }
     XTProgramNode *ast = nil;
     @try {
         ast = [parser parse];

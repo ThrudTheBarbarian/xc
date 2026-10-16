@@ -3963,6 +3963,12 @@ static int linkWasm32Module(const char *argv0, XTCommandLineOptions *opts,
     NSMutableArray<NSString *> *args =
         [NSMutableArray arrayWithObjects:watPath, outPath, nil];
     if (opts.quiet) [args addObject:@"-q"];
+    // The loader template the shipped driver reads too, so the two emit the
+    // same loader from one file.
+    NSString *support = resolveSupportRoot(argv0, opts);
+    NSString *tmpl = [support stringByAppendingPathComponent:@"wasm32/runtime/loader.js.in"];
+    if (tmpl && [[NSFileManager defaultManager] fileExistsAtPath:tmpl])
+        [args addObjectsFromArray:@[@"--loader", tmpl]];
     NSString *ifaceTmp = nil;
     if (opts.emitLib) {
         // Library build (W2): the interface JSON is embedded in the .wasm as

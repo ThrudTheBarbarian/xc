@@ -167,6 +167,18 @@ class Par
         {
         if (hi <= lo)
             return;
+        // A block --par-auto made from a plain loop that par-check could not
+        // prove independent, or that a GPU could not run: its kernel is the
+        // marker `// xcpar serial`, and it runs as its source reads, one item
+        // after another, on this thread. First, before anything asks the
+        // hardware: that cost a demoted loop 15 % over the plain one.
+        if (ParDevice.serialOnly(proto.gpuSource()))
+            {
+            proto.lo = lo;
+            proto.hi = hi;
+            proto.run();
+            return;
+            }
 #if (ARCH_arm64 && !PLATFORM_ios) || ARCH_x86_64 || ARCH_wasm32
         // The GPU's identity, for the hardware key auto keeps its choices
         // under, asked of the runtime only when choose() will look them up.
@@ -183,18 +195,8 @@ class Par
         if (ParTiles.explicit() && ParTiles.run(proto, proto.gpuSource(), lo, hi, (i32)0))
             return;
 #endif
-        // A block --par-auto made from a plain loop that par-check could not
-        // prove independent, or that a GPU could not run: its kernel is the
-        // marker `// xcpar serial`, and it runs as its source reads, one item
-        // after another, on this thread. So do two captured arrays that
-        // overlap, one written (the alias guard).
-        if (ParDevice.serialOnly(proto.gpuSource()))
-            {
-            proto.lo = lo;
-            proto.hi = hi;
-            proto.run();
-            return;
-            }
+        // Two captured arrays that overlap, one written, run serially too
+        // (the alias guard).
         if (!ParDevice.guardsHold(proto, proto.gpuSource(), lo, hi))
             {
             if (ParDevice.reporting())

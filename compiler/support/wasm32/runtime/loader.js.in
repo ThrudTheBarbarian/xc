@@ -316,6 +316,7 @@
   const bdec = new TextDecoder();
   const bmem = () => new Uint8Array(XCC.memory.buffer);
   const bstr = (p, n) => bdec.decode(bmem().subarray(p, p + n));
+  const wsOpen = {};
   imports.browser = Object.assign({
     _b_fetch(tok, url, n) {
       const u = bstr(url, n);            // decode BEFORE awaiting: the
@@ -329,6 +330,43 @@
           e._xt_browser_dispatch(tok, r.status, p, b.length);
         }))
         .catch(() => XCC.instance.exports._xt_browser_dispatch(tok, 0, 0, 0));
+    },
+    // WebSocket (wasm32 WebSocket.xc): the host's own client. Events go back
+    // through the module's _xt_ws_event(token, kind, code, bytes, length):
+    // 1 text, 2 binary, 3 closed (its code and reason), 4 failed. What the
+    // program sends before the socket opens waits here until it does.
+    _b_ws_open(tok, url, n) {
+      const u = bstr(url, n);
+      const give = (kind, code, bytes) => {
+        const e = XCC.instance.exports;
+        let p = 0;
+        if (bytes && bytes.length) { p = e._xt_browser_alloc(bytes.length); bmem().set(bytes, p); }
+        e._xt_ws_event(tok, kind, code, p, bytes ? bytes.length : 0);
+      };
+      let ws;
+      try { ws = new WebSocket(u); } catch (err) { queueMicrotask(() => give(4, 1006, null)); return; }
+      ws.binaryType = "arraybuffer";
+      const c = { ws, q: [], opened: false };
+      wsOpen[tok] = c;
+      ws.onopen = () => { c.opened = true; for (const m of c.q) ws.send(m); c.q.length = 0; };
+      ws.onmessage = (ev) => typeof ev.data === "string"
+        ? give(1, 0, new TextEncoder().encode(ev.data)) : give(2, 0, new Uint8Array(ev.data));
+      ws.onclose = (ev) => {
+        delete wsOpen[tok];
+        give(c.opened ? 3 : 4, ev.code, new TextEncoder().encode(ev.reason || ""));
+      };
+    },
+    _b_ws_send(tok, text, p, n) {
+      const c = wsOpen[tok];
+      if (!c) return;
+      const b = bmem().slice(p, p + n);
+      const m = text ? bdec.decode(b) : b;
+      if (c.ws.readyState === 1) c.ws.send(m); else c.q.push(m);
+    },
+    _b_ws_close(tok, code, p, n) {
+      const c = wsOpen[tok];
+      if (!c) return;
+      try { c.ws.close(code, bstr(p, n)); } catch (err) { c.ws.close(); }
     },
     _b_inject(sp, sn, hp, hn) {
       if (typeof document === "undefined") return;

@@ -1,0 +1,4 @@
+main returns
+text 'hello'
+binary 3 bytes, last 3
+closed 1000 '' after 2

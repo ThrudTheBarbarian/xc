@@ -65,10 +65,33 @@ server's certificate as https does. A `WebSocketServer` takes plain `ws:`
 connections; put a TLS-terminating proxy in front of it for `wss:`.
 
 :::note[Availability]
-arm64 (macOS, iOS, Android), x86_64 and win64. On wasm32, arm9 and m68k the
-file compiles and `connect` and `listen` throw `no TCP sockets on this
-platform`, as [`Socket`](/compiler/api/socket/) does. Not on xt6502.
+arm64 (macOS, iOS, Android), x86_64 and win64. On arm9 and m68k the file
+compiles and `connect` and `listen` throw `no TCP sockets on this platform`,
+as [`Socket`](/compiler/api/socket/) does. Not on xt6502. wasm32 has the
+client only, described below.
 :::
+
+## In a browser (wasm32)
+
+On wasm32 the client is the host's own WebSocket: the browser's, or Node's.
+A page's thread cannot block, so what waits is different:
+
+- `connect` returns at once with the connection still opening. What you send
+  before it opens is queued and goes when it does. A connection that fails is
+  not a throw: the delivery's last call is `nil` and `closeCode` is 1006.
+- Messages arrive through [`deliver`](#deliveron), called from the host's
+  event loop after `main` has returned. `receive` hands back only a message
+  that has already arrived.
+- There is no `WebSocketServer`: a page cannot listen.
+
+```c
+WebSocket* ws = WebSocket.connect(Url.withString(String.withCString("wss://example.com/feed")));
+ws.sendText(String.withCString("hello"));
+ws.deliver(block void(WebSocketMessage* m) {
+    if (m == nil) { Stdio.printf("closed %u\n", (u32)ws.closeCode()); return; }
+    Stdio.printf("%s\n", m.text().cString());
+    });
+```
 
 ## Topics
 
@@ -76,7 +99,7 @@ platform`, as [`Socket`](/compiler/api/socket/) does. Not on xt6502.
 
 **Sending** · [sendText](#sendtext) · [sendData](#senddata) · [sendBytes](#sendbytes) · [ping](#ping)
 
-**Receiving** · [receive](#receive) · [WebSocketMessage](#websocketmessage)
+**Receiving** · [receive](#receive) · [deliverOn](#deliveron) · [WebSocketMessage](#websocketmessage)
 
 **After a close** · [closeCode](#closecode) · [closeReason](#closereason)
 
@@ -161,6 +184,26 @@ long as it takes) for one to start; `nil` when none starts in time, and `nil`
 once the connection is closed — [`isOpen`](#isopen) tells which. Pings are
 answered and pongs consumed on the way. A frame over 64 MB, or a frame that
 breaks the protocol, closes the connection with code 1009 or 1002.
+
+### deliverOn
+```c
+void deliverOn(RunLoop* loop, block onMessage void(WebSocketMessage*))
+void deliver(block onMessage void(WebSocketMessage*))
+```
+Messages as callbacks. `receive` runs on a thread of its own, and each
+message is handed to `onMessage` on the thread running `loop`, in order. The
+last call has `nil`: the connection has closed. Do not call `receive` on the
+socket once it is delivering. `deliver` does the same without a run loop: the
+calls come on the receive thread itself, or on wasm32 from the host's event
+loop (the only form there).
+```c
+RunLoop* loop = RunLoop.main();
+ws.deliverOn(loop, block void(WebSocketMessage* m) {
+    if (m == nil) { loop.stop(); return; }
+    Stdio.printf("%s\n", m.text().cString());
+    });
+loop.run();
+```
 
 ### WebSocketMessage
 ```c

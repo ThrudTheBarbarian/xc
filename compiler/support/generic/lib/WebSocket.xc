@@ -622,10 +622,83 @@ class WebSocket
         {
         return (String*)_headers.get((Hashable*)name.lowercased());
         }
+    // Messages as callbacks: receive() runs on a thread of its own and each
+    // message reaches `onMessage` on the thread running `loop` (RunLoop.run),
+    // in order; null comes last, once the connection has closed. The
+    // delivery holds the socket until then. Call receive() no more after.
+    void deliverOn(RunLoop* loop, block onMessage void(WebSocketMessage*))
+        {
+        _WsDelivery* d = new _WsDelivery();
+        d.ws = self;
+        d.loop = loop;
+        d.onMessage = onMessage;
+        _WsDelivery.start(d);
+        }
+    // The same with no run loop: `onMessage` is called on the receive thread
+    // itself (on wasm32, from the browser's event loop).
+    void deliver(block onMessage void(WebSocketMessage*))
+        {
+        _WsDelivery* d = new _WsDelivery();
+        d.ws = self;
+        d.loop = (RunLoop*)0;
+        d.onMessage = onMessage;
+        _WsDelivery.start(d);
+        }
     void dealloc(void)
         {
         if (_open)
             _link.drop();
+        }
+    }
+
+// One deliverOn: the receive loop, on its thread. A thread never owns its
+// receiver, so the running deliveries are kept in a list until they end.
+Mutex* _ws_deliveries_lock;
+Array* _ws_deliveries;
+
+class _WsDelivery
+    {
+    WebSocket* ws;
+    RunLoop* loop;
+    block onMessage void(WebSocketMessage*);
+    bool done;
+
+    static void start(_WsDelivery* d)
+        {
+        if (_ws_deliveries_lock == (Mutex*)0)
+            {
+            _ws_deliveries_lock = new Mutex();
+            _ws_deliveries = new Array();
+            }
+        _ws_deliveries_lock.lock();
+        Array* keep = new Array();
+        for (u32 i = (u32)0; i < _ws_deliveries.count(); i = i + (u32)1)
+            if (!((_WsDelivery*)_ws_deliveries.get(i)).done)
+                keep.add(_ws_deliveries.get(i));
+        keep.add((Object*)d);
+        _ws_deliveries = keep;
+        _ws_deliveries_lock.unlock();
+        Thread* t = Thread.spawn(&d.run);
+        t.detach();
+        }
+
+    void run(void)
+        {
+        block cb void(WebSocketMessage*) = onMessage;
+        while (true)
+            {
+            WebSocketMessage* m = ws.receive((i32)-1);
+            if (loop != (RunLoop*)0)
+                loop.post(block void(void) { cb(m); });
+            else
+                cb(m);
+            if (m == (WebSocketMessage*)0)
+                break;
+            }
+        _ws_deliveries_lock.lock();
+        done = true;
+        ws = (WebSocket*)0;
+        _ws_deliveries_lock.unlock();
         }
     }
 

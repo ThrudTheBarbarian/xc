@@ -1,0 +1,4 @@
+strides off=100000 same=1
+strides off=3 same=1
+shifts w=100000 same=1
+shifts w=5 same=1

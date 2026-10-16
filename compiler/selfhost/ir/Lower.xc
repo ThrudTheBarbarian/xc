@@ -10070,7 +10070,12 @@ class ClassInfo
         // loop's own scope is not one of them: its control variable is still
         // live on the other side of the jump.
         flushOwnedTemps();
-        releaseScopesDownTo(((Number*)_loopArcDepth.get(top)).asU32());
+        // Unwound, so the edge below carries the OUTER value of a name an
+        // inner local shadows (it carried the inner one, and the outer
+        // object's release then released an integer).
+        Array* inner = unwindScopesTo(((Number*)_loopArcDepth.get(top)).asU32());
+        if (_failed)
+            return;
         if (k == (u16)nkContinue)
             {
             Node* step = (Node*)_loopSteps.get(top);
@@ -10098,6 +10103,7 @@ class ClassInfo
                 }
             ((Array*)_loopContBlocks.get(top)).add((Object*)_blk);
             ((Array*)_loopContLocals.get(top)).add((Object*)snapshot());
+            restoreBindings(inner);
             IRInsn* c = IRInsn.with(String.withCString("Branch"));
             c.add(IROperand.block((IRBlock*)_loopHeaders.get(top)));
             _blk.setTerm(c);
@@ -10105,6 +10111,7 @@ class ClassInfo
             }
         ((Array*)_loopBreakBlocks.get(top)).add((Object*)_blk);
         ((Array*)_loopBreakLocals.get(top)).add((Object*)snapshot());
+        restoreBindings(inner);
         IRInsn* b = IRInsn.with(String.withCString("Branch"));
         b.add(IROperand.block((IRBlock*)_loopExits.get(top)));
         _blk.setTerm(b);
@@ -12224,6 +12231,9 @@ class ClassInfo
 
     void releaseAlongExit(void)
         {
+        // Each scope's names unshadowed after its teardown, as at a pop, so an
+        // outer local releases its own value and not an inner one of its name.
+        Array* bindings = captureBindings();
         for (u32 si = _arcScopes.count(); si > (u32)0; si = si - (u32)1)
             {
             emitDefersForScope(si - (u32)1);
@@ -12232,7 +12242,9 @@ class ClassInfo
             Array* frame = (Array*)_arcScopes.get(si - (u32)1);
             for (u32 i = frame.count(); i > (u32)0; i = i - (u32)1)
                 tearDownLocal((String*)frame.get(i - (u32)1));
+            unshadowScope(si - (u32)1);
             }
+        restoreBindings(bindings);
         // …and the `self` retained on entry, which the body has been holding
         // for the same reason: the caller may have dropped its only reference
         // mid-call.
@@ -12472,15 +12484,89 @@ class ClassInfo
     // popping them — the jump leaves them, but the lowering has not.
     void releaseScopesDownTo(u32 depth)
         {
+        restoreBindings(unwindScopesTo(depth));
+        }
+
+    // releaseScopesDownTo's teardown, leaving the name tables as the scopes'
+    // pops would: between two scopes, the bindings the inner one shadowed
+    // come back, so an outer scope releases ITS local and a jump's snapshot
+    // carries the outer value of a shadowed name. Returns the tables as they
+    // were, for restoreBindings once the jump is emitted.
+    Array* unwindScopesTo(u32 depth)
+        {
+        Array* saved = captureBindings();
         for (u32 si = _arcScopes.count(); si > depth; si = si - (u32)1)
             {
             emitDefersForScope(si - (u32)1);
             if (_failed)
-                return;
+                return saved;
             Array* frame = (Array*)_arcScopes.get(si - (u32)1);
             for (u32 i = frame.count(); i > (u32)0; i = i - (u32)1)
                 tearDownLocal((String*)frame.get(i - (u32)1));
+            unshadowScope(si - (u32)1);
             }
+        return saved;
+        }
+
+    // What popArcScope does to the tables after the releases, for a scope a
+    // jump leaves without popping it.
+    void unshadowScope(u32 si)
+        {
+        Array* frame = (Array*)_arcScopes.get(si);
+        for (u32 i = (u32)0; i < frame.count(); i = i + (u32)1)
+            removeName(_strongLocals, (String*)frame.get(i));
+        if (si < _shadowScopes.count())
+            restoreShadows((Array*)_shadowScopes.get(si));
+        }
+
+    // The name tables a shadow restore touches, copied; put back IN PLACE.
+    Array* captureBindings(void)
+        {
+        Array* t = new Array();
+        t.add((Object*)_locals.copy());
+        t.add((Object*)_localTypes.copy());
+        t.add((Object*)_strongLocals.copy());
+        t.add((Object*)_weakLocals.copy());
+        t.add((Object*)_strongArray.copy());
+        t.add((Object*)_weakArray.copy());
+        t.add((Object*)_strongStruct.copy());
+        t.add((Object*)_pins.copy());
+        t.add((Object*)_pinAst.copy());
+        t.add((Object*)_strongPins.copy());
+        t.add((Object*)_heapArrayLen.copy());
+        t.add((Object*)_arrayElem.copy());
+        return t;
+        }
+
+    void restoreBindings(Array* t)
+        {
+        refillMap(_locals, (Map*)t.get((u32)0));
+        refillMap(_localTypes, (Map*)t.get((u32)1));
+        refillArray(_strongLocals, (Array*)t.get((u32)2));
+        refillArray(_weakLocals, (Array*)t.get((u32)3));
+        refillMap(_strongArray, (Map*)t.get((u32)4));
+        refillMap(_weakArray, (Map*)t.get((u32)5));
+        refillMap(_strongStruct, (Map*)t.get((u32)6));
+        refillMap(_pins, (Map*)t.get((u32)7));
+        refillMap(_pinAst, (Map*)t.get((u32)8));
+        refillMap(_strongPins, (Map*)t.get((u32)9));
+        refillMap(_heapArrayLen, (Map*)t.get((u32)10));
+        refillMap(_arrayElem, (Map*)t.get((u32)11));
+        }
+
+    void refillMap(Map* m, Map* from)
+        {
+        m.removeAll();
+        Array* ks = from.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            m.set((Hashable*)ks.get(i), from.get((Hashable*)ks.get(i)));
+        }
+
+    void refillArray(Array* a, Array* from)
+        {
+        a.removeAll();
+        for (u32 i = (u32)0; i < from.count(); i = i + (u32)1)
+            a.add(from.get(i));
         }
 
     void popArcScope(void)
@@ -12673,6 +12759,21 @@ class ClassInfo
         // fire for signature lookups mid-recursion, collapsing them to
         // Ptr(Void) — the very hole task #20 closes.
         _classes.set((Hashable*)cls.name(), (Object*)info);
+        // The class's own static ivars, typed again now that it is registered
+        // (as the reference's preScanClassLayout does).
+        for (u32 i = (u32)0; i < cls.kidCount(); i = i + (u32)1)
+            {
+            Node* iv = cls.kid(i);
+            if (iv.kind() != (u16)nkVariableDecl || !iv.hasFlag((u32)NF_STATIC))
+                continue;
+            String* sn = String.withCString("__sivar_");
+            sn.append(cls.name());
+            sn.appendByte((u8)'_');
+            sn.append(iv.name());
+            IRSymbol* sym = symbolNamed(sn);
+            if (sym != (IRSymbol*)0)
+                sym.setGlobalTy(irType(iv.op()));
+            }
         return info;
         }
 
@@ -13763,19 +13864,13 @@ class ClassInfo
             // class's aggregate — `irType` would give the reference type,
             // which is a pointer and the wrong size entirely.
             Object* vco = _valueClass.get((Hashable*)name);
-            String* irTy = vco != 0 ? ((ClassInfo*)vco).agg() : irType(ast);
-            if (_failed)
-                return;
             // An auto-zeroing local's slot carries its two link words, so the
             // slot's TYPE is the whole [prev, next, payload] — not merely a
             // wider byte offset. The backends size a pinned slot from its
             // type and never read the offset, so reserving space by advancing
             // the offset would let the links land on a neighbour.
             if (isWeakSlot(ast))
-                {
-                irTy = weakSlotAgg(irTy);
                 addUnique(_weakLocals, name);
-                }
             // An `&`-taken local, a va cursor, and an array all escape: the
             // pointer reaches a callee, which reads and writes through it. The
             // backend has to give them storage a call cannot reuse.
@@ -13809,6 +13904,19 @@ class ClassInfo
             // as: its slot is sized by the class's own aggregate, which the
             // per-declaration loop below does not reproduce.
             bool oneSlot = hasName(aggNames, name) && (vco != (Object*)0 || decls == (Array*)0 || decls.count() <= (u32)1);
+            // The aggregate walk's own type, only where its one slot takes it:
+            // made before the declarations' own, it put the LAST declaration's
+            // array layout first in the module where the reference makes them
+            // in declaration order.
+            String* irTy = (String*)0;
+            if (oneSlot || decls == 0)
+                {
+                irTy = vco != 0 ? ((ClassInfo*)vco).agg() : irType(ast);
+                if (_failed)
+                    return;
+                if (isWeakSlot(ast))
+                    irTy = weakSlotAgg(irTy);
+                }
             u32 count = (decls == 0 || oneSlot) ? (u32)1 : decls.count();
             if (count == (u32)0)
                 count = (u32)1;
@@ -14556,6 +14664,32 @@ class ClassInfo
         return g;
         }
 
+    // The general form where parGuardFor cannot settle a pair (unequal
+    // strides, or a captured integer on each side): the run checks the
+    // written and the read elements are disjoint ranges, or, with one stride,
+    // the parGuardFor test. "x:<kw>:<cw>:<slotw>:<mw>:<kr>:<cr>:<slotr>:<mr>",
+    // slot -1 (m 0) for a side with none. As the reference's
+    // parIntervalGuardFor.
+    static String* parIntervalGuardFor(ParIdx* r, ParIdx* w)
+        {
+        if (!r.affine || !w.affine || (r.k == (i64)0 && w.k == (i64)0))
+            return (String*)0;
+        if (r.k == w.k && r.slot < (i64)0 && w.slot < (i64)0)
+            return (String*)0;
+        if (r.k == w.k && r.slot >= (i64)0 && r.slot == w.slot && r.m == w.m)
+            return (String*)0;
+        String* g = String.withCString("x:");
+        g.append(String.withI64(w.k)); g.appendCString(":");
+        g.append(String.withI64(w.c)); g.appendCString(":");
+        g.append(String.withI64(w.slot >= (i64)0 ? w.slot : (i64)-1)); g.appendCString(":");
+        g.append(String.withI64(w.slot >= (i64)0 ? w.m : (i64)0)); g.appendCString(":");
+        g.append(String.withI64(r.k)); g.appendCString(":");
+        g.append(String.withI64(r.c)); g.appendCString(":");
+        g.append(String.withI64(r.slot >= (i64)0 ? r.slot : (i64)-1)); g.appendCString(":");
+        g.append(String.withI64(r.slot >= (i64)0 ? r.m : (i64)0));
+        return g;
+        }
+
     // The GCD test, on the "1 k c" / "0 0 0" forms the dependence check
     // keeps (mirrors parDependent in the reference): a read at r and a write
     // at w can meet across two work items unless they are the same element
@@ -14937,6 +15071,46 @@ class ClassInfo
     String* _parExtraMeta;
     // The guards as header words, `guard=<offset>:<bytes>:<m>:<d0>:<k>` (as
     // the reference's guardWordsIn).
+    Array* parSplitColons(String* g)
+        {
+        Array* out = new Array();
+        String* cur = new String();
+        for (u32 i = (u32)0; i < g.byteLength(); i = i + (u32)1)
+            {
+            if (g.byteAt(i) == (u8)':')
+                {
+                out.add((Object*)cur);
+                cur = new String();
+                }
+            else
+                cur.appendByte(g.byteAt(i));
+            }
+        out.add((Object*)cur);
+        return out;
+        }
+
+    // One side of a guardx word: k:c:offset:bytes:m, offset -1 when the
+    // side has no captured integer.
+    void parGuardSide(String* words, IRLayout* lay, Array* p, u32 at)
+        {
+        String* sl = (String*)p.get(at + (u32)2);
+        i64 q = sl.byteLength() > (u32)0 && sl.byteAt((u32)0) == (u8)'-' ? (i64)-1 : parWordI64(sl);
+        words.append((String*)p.get(at));
+        words.appendCString(":");
+        words.append((String*)p.get(at + (u32)1));
+        if (q < (i64)0 || q >= (i64)lay.fieldCount())
+            {
+            words.appendCString(":-1:0:0");
+            return;
+            }
+        words.appendCString(":");
+        words.append(String.withU32(lay.offsetAt((u32)q)));
+        words.appendCString(":");
+        words.append(String.withU32(mslWidth(lay.typeAt((u32)q))));
+        words.appendCString(":");
+        words.append((String*)p.get(at + (u32)3));
+        }
+
     String* parGuardWords(IRFunc* f, Array* guards)
         {
         String* words = String.withCString("");
@@ -14948,6 +15122,18 @@ class ClassInfo
         for (u32 i = (u32)0; i < guards.count(); i = i + (u32)1)
             {
             String* g = (String*)guards.get(i);
+            // `guardx=<kw>:<cw>:<offw>:<bytesw>:<mw>:<kr>:<cr>:<offr>:<bytesr>:<mr>`.
+            if (g.hasPrefix(String.withCString("x:")))
+                {
+                Array* p = parSplitColons(g);
+                if (p.count() != (u32)9)
+                    continue;
+                words.appendCString(" guardx=");
+                parGuardSide(words, lay, p, (u32)1);
+                words.appendCString(":");
+                parGuardSide(words, lay, p, (u32)5);
+                continue;
+                }
             u32 c1 = (u32)0;
             i64 sl = (i64)0;
             while (c1 < g.byteLength() && g.byteAt(c1) != (u8)':')
@@ -15144,6 +15330,46 @@ class ClassInfo
             *loop = true;
         }
 
+    // ` merge=<n>,…` (or nothing; n counts the red= words from 0): the
+    // reductions a node may fold before
+    // the coordinator does — integer + * & | ^, min and max always; float +
+    // and * only under :goal(speed); float min and max always. In field
+    // order. As the reference's mergeWordsIn.
+    String* parMergeWords(IRFunc* f)
+        {
+        String* w = String.withCString("");
+        if (_mRedOps == (Map*)0 || f.params().count() == (u32)0)
+            return w;
+        IRLayout* lay = mslLayoutOf(mslPointee(((IRValue*)f.params().get((u32)0)).ty()));
+        if (lay == (IRLayout*)0)
+            return w;
+        bool first = true;
+        u32 ord = (u32)0;
+        for (u32 k = (u32)0; k < lay.fieldCount(); k = k + (u32)1)
+            {
+            String* op = (String*)_mRedOps.get((Hashable*)String.withU32(k));
+            if (op == (String*)0)
+                continue;
+            u32 at = ord;
+            ord = ord + (u32)1;
+            String* t = lay.typeAt(k);
+            bool isFloat = t != (String*)0 && (t.equals(String.withCString("F32")) || t.equals(String.withCString("F64")));
+            bool m = op.equals(String.withCString("min")) || op.equals(String.withCString("max"));
+            bool arith = op.equals(String.withCString("+")) || op.equals(String.withCString("*"));
+            if (!isFloat)
+                m = m || arith || op.equals(String.withCString("&")) || op.equals(String.withCString("|"))
+                    || op.equals(String.withCString("^"));
+            else if (_mFast)
+                m = m || arith;
+            if (!m)
+                continue;
+            w.appendCString(first ? " merge=" : ",");
+            w.append(String.withU32(at));
+            first = false;
+            }
+        return w;
+        }
+
     String* parCostWords(IRFunc* f)
         {
         i64 ops = (i64)0;
@@ -15285,6 +15511,8 @@ class ClassInfo
                 if (!Lower.parFormDep(form, (String*)ws.get(j)))
                     continue;
                 String* g = _parGuardList != (Array*)0 ? Lower.parGuardFor((ParIdx*)r.get((u32)3), (ParIdx*)wsy.get(j)) : (String*)0;
+                if (g == (String*)0 && _parGuardList != (Array*)0)
+                    g = Lower.parIntervalGuardFor((ParIdx*)r.get((u32)3), (ParIdx*)wsy.get(j));
                 if (g != (String*)0)
                     {
                     bool have = false;
@@ -22046,6 +22274,7 @@ class ClassInfo
             _parExtraMeta = parFootprintWords(f, parIvarNames(f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4)));
             _parExtraMeta.append(parCostWords(f));
             _parExtraMeta.append(parGuardWords(f, (Array*)_parGuards.get((Hashable*)f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4))));
+            _parExtraMeta.append(parMergeWords(f));
             String* msl = (String*)0;
             // A SPIR-V module is bytes (it holds NULs): it goes in as they are.
             Array* kernelBytes = (Array*)0;

@@ -210,6 +210,10 @@ class ParLayout : Object
     // the runtime uses to prune a hopeless device and seed the partition.
     i64 ops;
     i64 hasLoop;
+    // merge=<n>,…: bit n set when the n-th reduction may be folded on a node
+    // before the coordinator folds it (the order cannot change its bits).
+    // Read for a daemon that merges partials; the coordinator folds them all.
+    u32 mergeMask;
 
     void plan(i64 lo, i64 hi)
         {
@@ -1461,11 +1465,77 @@ class ParDevice
     // <offset> in the block's object — and two items meet iff k*(i1 - i2)
     // == d, d = d0 + m*v, for items of [lo, hi). False when they can: the
     // block then runs serially, as its source reads.
+    // A captured integer of the block: `bytes` wide at `off` in its object,
+    // read signed (0 when there is none).
+    static i64 guardValue(u8* obj, i64 off, i64 bytes)
+        {
+        if (off < (i64)0)
+            return (i64)0;
+        u8* p = obj + off;
+        if (bytes == (i64)1) return (i64)*(i8*)p;
+        if (bytes == (i64)2) return (i64)*(i16*)p;
+        if (bytes == (i64)4) return (i64)*(i32*)p;
+        return *(i64*)p;
+        }
+
+    // guardx=<kw>:<cw>:<offw>:<bytesw>:<mw>:<kr>:<cr>:<offr>:<bytesr>:<mr>: a
+    // write at kw*i + cw + mw*vw and a read at kr*i + cr + mr*vr meet in no two
+    // items of [lo, hi) when the two ranges of elements are disjoint, or, with
+    // one stride k, when d (the write's offset less the read's) is 0, not a
+    // multiple of k, or at least |k| times the items apart.
+    static bool intervalHolds(u8* obj, i64* f, i64 lo, i64 hi)
+        {
+        i64 ow = f[1] + f[4] * ParDevice.guardValue(obj, f[2], f[3]);
+        i64 orr = f[6] + f[9] * ParDevice.guardValue(obj, f[7], f[8]);
+        i64 w0 = f[0] * lo + ow;
+        i64 w1 = f[0] * (hi - (i64)1) + ow;
+        i64 r0 = f[5] * lo + orr;
+        i64 r1 = f[5] * (hi - (i64)1) + orr;
+        i64 wmin = w0 < w1 ? w0 : w1;
+        i64 wmax = w0 < w1 ? w1 : w0;
+        i64 rmin = r0 < r1 ? r0 : r1;
+        i64 rmax = r0 < r1 ? r1 : r0;
+        if (wmax < rmin || rmax < wmin)
+            return true;
+        if (f[0] != f[5] || f[0] == (i64)0)
+            return false;
+        i64 d = ow - orr;
+        i64 kk = f[0] < (i64)0 ? (i64)0 - f[0] : f[0];
+        i64 ad = d < (i64)0 ? (i64)0 - d : d;
+        return d == (i64)0 || d % kk != (i64)0 || ad >= kk * (hi - lo);
+        }
+
     static bool guardsHold(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
         if (src == (u8*)0 || src[0] != (u8)'/')
             return true;
         u8* obj = (u8*)(pointer)proto;
+        u8* gx = "guardx=";
+        for (u32 at = (u32)0; src[at] != (u8)0 && src[at] != (u8)10; at = at + (u32)1)
+            {
+            u32 k = (u32)0;
+            while (gx[k] != (u8)0 && src[at + k] == gx[k])
+                k = k + (u32)1;
+            if (gx[k] != (u8)0 || (at > (u32)0 && src[at - (u32)1] != (u8)' '))
+                continue;
+            u32 q = at + k;
+            i64 f[10];
+            for (u32 n = (u32)0; n < (u32)10; n = n + (u32)1)
+                {
+                bool neg = src[q] == (u8)'-';
+                if (neg) q = q + (u32)1;
+                i64 v = (i64)0;
+                while (src[q] >= (u8)'0' && src[q] <= (u8)'9')
+                    {
+                    v = v * (i64)10 + (i64)(src[q] - (u8)'0');
+                    q = q + (u32)1;
+                    }
+                f[n] = neg ? (i64)0 - v : v;
+                if (src[q] == (u8)':') q = q + (u32)1;
+                }
+            if (!ParDevice.intervalHolds(obj, &f[0], lo, hi))
+                return false;
+            }
         u8* g = "guard=";
         u32 at = (u32)0;
         while (src[at] != (u8)0 && src[at] != (u8)10)
@@ -1730,6 +1800,22 @@ class ParDevice
                 {
                 at = at + (u32)4;
                 l.ops = num(src, &at);
+                continue;
+                }
+            // merge=<n>,<n>…: the reductions a node may fold itself.
+            if (src[at] == (u8)'m' && src[at + (u32)1] == (u8)'e' && src[at + (u32)2] == (u8)'r' && src[at + (u32)3] == (u8)'g'
+                && src[at + (u32)4] == (u8)'e' && src[at + (u32)5] == (u8)'=')
+                {
+                at = at + (u32)6;
+                while (true)
+                    {
+                    i64 k = num(src, &at);
+                    if (k >= (i64)0 && k < (i64)32)
+                        l.mergeMask = l.mergeMask | ((u32)1 << (u32)k);
+                    if (src[at] != (u8)',')
+                        break;
+                    at = at + (u32)1;
+                    }
                 continue;
                 }
             // loop: the item body has a nested loop (compute-heavy).

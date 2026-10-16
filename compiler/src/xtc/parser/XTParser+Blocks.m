@@ -1217,6 +1217,92 @@ static NSString* parRootName(XTASTNode* n)
     }
 
 /****************************************************************************\
+|* A `par` loop with a stride, `for (T i in a..b step s)` (s a literal above
+|* 1, ascending): the work items are its iterations, counted from 0, so the
+|* loop becomes one over par$k in 0..par$n with `T i = par$a + par$k * s` at
+|* the top of each. The start, the end and the count are evaluated once,
+|* before the block, into locals (par$a and par$n captured): returned for the
+|* site to declare first, as the grid's sizes are. Any other loop is left
+|* alone (and gets no declarations). Mirrored in the port (parStepLoop).
+\****************************************************************************/
+- (NSArray<XTASTNode*>*)parStepLoopFor:(XTBlockNode* _Nonnull* _Nonnull)bodyRef
+                                 frame:(NSDictionary*)frame
+                                    at:(XTSourceLocation*)loc
+    {
+    XTBlockNode* body = *bodyRef;
+    XTForCStyleNode* loop = body.statements.count == 1 && [body.statements[0] isKindOfClass:[XTForCStyleNode class]]
+                                ? (XTForCStyleNode*)body.statements[0] : nil;
+    XTVariableDeclNode* iv = [loop.loopInit isKindOfClass:[XTVariableDeclNode class]]
+                                 ? (XTVariableDeclNode*)loop.loopInit : nil;
+    XTBinaryExprNode* cond = [loop.condition isKindOfClass:[XTBinaryExprNode class]]
+                                 ? (XTBinaryExprNode*)loop.condition : nil;
+    XTAssignExprNode* inc = [loop.increment isKindOfClass:[XTAssignExprNode class]]
+                                ? (XTAssignExprNode*)loop.increment : nil;
+    if (!iv || !iv.initialiser || !iv.declaredType || !cond || !inc || !loop.body)
+        return @[];
+    if (cond.op != XTBinaryOpLt && cond.op != XTBinaryOpLe)
+        return @[];
+    if (![cond.left isKindOfClass:[XTIdentifierNode class]] ||
+        ![((XTIdentifierNode*)cond.left).identName isEqualToString:iv.varName])
+        return @[];
+    if (inc.assignOp != XTAssignOpAdd || ![inc.lhs isKindOfClass:[XTIdentifierNode class]] ||
+        ![((XTIdentifierNode*)inc.lhs).identName isEqualToString:iv.varName] ||
+        ![inc.rhs isKindOfClass:[XTLiteralIntNode class]] || ((XTLiteralIntNode*)inc.rhs).intValue < 2)
+        return @[];
+    int64_t st = ((XTLiteralIntNode*)inc.rhs).intValue;
+    XTType* T = iv.declaredType;
+    XTASTNode* (^ident)(NSString*) = ^XTASTNode*(NSString* n) {
+      return [[XTIdentifierNode alloc] initWithName:n location:loc];
+    };
+    XTASTNode* (^lit)(int64_t) = ^XTASTNode*(int64_t v) {
+      return [[XTLiteralIntNode alloc] initWithValue:v location:loc];
+    };
+    XTASTNode* (^cast)(XTASTNode*) = ^XTASTNode*(XTASTNode* e) {
+      return [[XTCastExprNode alloc] initWithType:T operand:e location:loc];
+    };
+    XTASTNode* (^bin)(XTBinaryOp, XTASTNode*, XTASTNode*) = ^XTASTNode*(XTBinaryOp op, XTASTNode* l, XTASTNode* r) {
+      return [[XTBinaryExprNode alloc] initWithOp:op left:l right:r location:loc];
+    };
+    XTASTNode* (^decl)(NSString*, XTASTNode*) = ^XTASTNode*(NSString* n, XTASTNode* e) {
+      return [[XTVariableDeclNode alloc] initWithName:n type:T initialiser:e location:loc];
+    };
+    // par$n: none when the range is empty, else ceil((b - a) / s) for `<`
+    // and (b - a) / s + 1 for `<=`.
+    BOOL incl = cond.op == XTBinaryOpLe;
+    XTASTNode* span = bin(XTBinaryOpSub, ident(@"par$b"), ident(@"par$a"));
+    XTASTNode* count = incl ? bin(XTBinaryOpAdd, bin(XTBinaryOpDiv, span, lit(st)), lit(1))
+                            : bin(XTBinaryOpDiv, bin(XTBinaryOpAdd, span, lit(st - 1)), lit(st));
+    XTASTNode* some = bin(incl ? XTBinaryOpGe : XTBinaryOpGt, ident(@"par$b"), ident(@"par$a"));
+    NSArray<XTASTNode*>* decls = @[
+        decl(@"par$a", cast(iv.initialiser)),
+        decl(@"par$b", cast(cond.right)),
+        decl(@"par$n", [[XTTernaryExprNode alloc] initWithCondition:some thenExpr:count elseExpr:cast(lit(0)) location:loc]),
+    ];
+    NSMutableArray* names = frame[@"names"];
+    NSMutableDictionary* types = frame[@"types"];
+    for (NSString* n in @[ @"par$a", @"par$n" ])
+        {
+        if (![names containsObject:n])
+            [names addObject:n];
+        types[n] = T;
+        }
+    NSMutableArray<XTASTNode*>* item = [NSMutableArray array];
+    [item addObject:decl(iv.varName, bin(XTBinaryOpAdd, ident(@"par$a"), bin(XTBinaryOpMul, ident(@"par$k"), lit(st))))];
+    if ([loop.body isKindOfClass:[XTBlockNode class]])
+        [item addObjectsFromArray:((XTBlockNode*)loop.body).statements];
+    else
+        [item addObject:loop.body];
+    XTForCStyleNode* k = [[XTForCStyleNode alloc]
+        initWithLoopInit:decl(@"par$k", cast(lit(0)))
+               condition:bin(XTBinaryOpLt, ident(@"par$k"), ident(@"par$n"))
+               increment:[[XTAssignExprNode alloc] initWithOp:XTAssignOpAdd lhs:ident(@"par$k") rhs:lit(1) location:loc]
+                    body:[[XTBlockNode alloc] initWithStatements:item location:loc]
+                location:loc];
+    *bodyRef = [[XTBlockNode alloc] initWithStatements:@[ k ] location:loc];
+    return decls;
+    }
+
+/****************************************************************************\
 |* `par [name] (:reduce(op var))* { for (T i in a..b) { … } }` → a ParChunk
 |* subclass and its run, the way a block literal becomes a class
 |* (private: docs/Design/par-phase1-plan.md, P3). The class's ivars are the
@@ -1233,6 +1319,8 @@ static NSString* parRootName(XTASTNode* n)
     {
     NSString* label = parName ? [NSString stringWithFormat:@"par %@", parName] : @"par";
     NSArray<XTASTNode*>* gridDecls = [self parGridLoopFor:&body frame:frame at:loc];
+    if (gridDecls.count == 0)
+        gridDecls = [self parStepLoopFor:&body frame:frame at:loc];
     // ── the loop form: exactly one ascending `for (T i in a..b)` ──
     XTForCStyleNode* loop = body.statements.count == 1 && [body.statements[0] isKindOfClass:[XTForCStyleNode class]]
                                 ? (XTForCStyleNode*)body.statements[0] : nil;

@@ -51,6 +51,7 @@ class Sema
     // fails loudly instead of resolving to the new one.
     String* _migrateBase;
     String* _fnPackingCallee; // the first packing call seen, or 0
+    Node* _fnPackingCall;     // …and the call, where the clash is reported
     bool _fnForwardsVarargs;  // a `...` forward was seen
     // The variadic non-reentrance check (checkVariadicReentrance). A variadic
     // that runs va_start reads its arguments from the ONE shared pack buffer,
@@ -66,6 +67,27 @@ class Sema
     Array* _variadicDecls;    // their declarations, in program order
     Array* _variadicDeclLabels;
     Array* _variadicDeclNames;
+    // The :cloaked check (checkCloaked). A body that pushes to the xtc stack
+    // (new, delete/retain/release, a large local, a struct returned by value,
+    // inline asm naming the stack pointer) is a LOCAL user; anything that
+    // calls one becomes a user too; a :cloaked function that ends up a user
+    // is refused with the chain that reaches the stack.
+    Map* _stackUsing;          // label -> reason (locally) or "" (by a call)
+    Map* _stackLocal;          // the locally-using labels, before propagation
+    Array* _cloakedLabels;     // the :cloaked declarations, in program order
+    Array* _cloakedNames;
+    Array* _cloakedDecls;
+    bool _cloakedWarn;         // -Wno-cloaked-transitive: a warning, not an error
+    // The escape walk (escWalkStmt), per body: stack class locals by the
+    // block depth that declared them, and pointer locals by the stack local
+    // whose address they hold.
+    Map* _escDepth;
+    Map* _escAlias;
+    u32 _escBlock;
+    // A call to a `throws` callee must be inside a try's guarded block or in a
+    // `throws` function (checkThrowsCall).
+    u32 _tryDepth;
+    bool _curThrows;
     bool _rangeIsInitialiser; // inside an ARRAY declaration's initialiser,
                               // the one position a range survives the parser
     Array* _errors;           // of String@
@@ -140,6 +162,12 @@ class Sema
         _variadicDecls = new Array();
         _variadicDeclLabels = new Array();
         _variadicDeclNames = new Array();
+        _stackUsing = new Map();
+        _stackLocal = new Map();
+        _cloakedLabels = new Array();
+        _cloakedNames = new Array();
+        _cloakedDecls = new Array();
+        _cloakedWarn = false;
         _scopes = new Array();
         _globals = new Map();
         _structs = new Map();
@@ -209,6 +237,11 @@ class Sema
     void setNativeVarargs(bool v)
         {
         _nativeVarargs = v;
+        }
+
+    void setCloakedTransitiveWarns(bool v)
+        {
+        _cloakedWarn = v;
         }
 
     // §4.3b: record a category name on an external host — the sorted names
@@ -416,13 +449,28 @@ class Sema
             {
             out.appendCString("?");
             }
+        // A statement (a declaration, a return, a member) is reported where
+        // it starts — its type, its keyword — as the reference reports it;
+        // the node's own position is the name or the value.
+        bool atStmt = Sema.reportsAtStatement(n);
         out.appendByte((u8)':');
-        out.append(String.withU32(n.line()));
+        out.append(String.withU32(atStmt ? n.stmtLine() : n.line()));
         out.appendByte((u8)':');
-        out.append(String.withU32(n.col()));
+        out.append(String.withU32(atStmt ? n.stmtCol() : n.col()));
         out.appendCString(": error: ");
         out.append(msg);
         _errors.add((Object*)out);
+        }
+
+    // A declaration, a return or a member is reported where it starts (its
+    // type, its keyword), as the reference reports one; the node's own
+    // position is its name or its value. Everything else at the node.
+    static bool reportsAtStatement(Node* n)
+        {
+        if (n.stmtLine() == (u32)0)
+            return false;
+        u16 k = n.kind();
+        return k == (u16)nkVariableDecl || k == (u16)nkReturn || k == (u16)nkMethodDecl || k == (u16)nkFunctionDecl;
         }
 
     // A WARNING from sema, positioned and CATEGORISED. Same wire shape as the
@@ -437,9 +485,10 @@ class Sema
             {
             out.append(n.file() != 0 ? n.file() : String.withCString("?"));
             out.appendByte((u8)':');
-            out.append(String.withU32(n.line()));
+            bool atStmt = Sema.reportsAtStatement(n);
+            out.append(String.withU32(atStmt ? n.stmtLine() : n.line()));
             out.appendByte((u8)':');
-            out.append(String.withU32(n.col()));
+            out.append(String.withU32(atStmt ? n.stmtCol() : n.col()));
             out.appendCString(": ");
             }
         out.appendCString("warning: ");
@@ -671,6 +720,7 @@ class Sema
             }
         nm.append(call.name());
         _fnPackingCallee = nm;
+        _fnPackingCall = call;
         }
 
     // A class-pointer assignment is CHECKED. One function, six sites (an
@@ -1007,7 +1057,7 @@ class Sema
                     e.appendByte((u8)'.');
                     e.append(am.name());
                     e.appendCString("' — it is declared 'final'");
-                    _error(e);
+                    _errorAt(e, m);
                     }
                 if (!m.hasFlag((u32)NF_FINAL))
                     continue;
@@ -1034,7 +1084,7 @@ class Sema
                         e.append(pn);
                         e.appendCString("', and a protocol call dispatches through a ");
                         e.appendCString("vtable slot that 'final' removes");
-                        _error(e);
+                        _errorAt(e, m);
                         }
                     }
                 }
@@ -1095,6 +1145,7 @@ class Sema
         checkConformance();
         collectFormatWrappers(program);
         typeProgram(program);
+        checkCloaked();
         checkVariadicReentrance();
         checkRetainCycles(program);
         }
@@ -1366,6 +1417,25 @@ class Sema
                                     shadowed = true;
                                     }
                                 }
+                        // An ivar named like a method an ANCESTOR declares:
+                        // `s.hash` resolves to the method, so a load calls
+                        // Object.hash() while a store writes the ivar.
+                        bool clash = false;
+                        u32 hops = (u32)0;
+                        for (Node* c = parentOf(d); c != 0 && c != d && !clash && hops < (u32)64; c = parentOf(c))
+                            {
+                            hops = hops + (u32)1;
+                            for (u32 q = (u32)0; q < c.kidCount() && !clash; q = q + (u32)1)
+                                {
+                                Node* a = c.kid(q);
+                                if (a.kind() == (u16)nkMethodDecl && a.name() != 0 && a.name().equals(m.name()))
+                                    {
+                                    _errorAt(String.withFormat("ivar '%s' of '%s' has the name of a method of '%s' — 'x.%s' would call the method; rename the ivar",
+                                                               m.name().cString(), d.name().cString(), c.name().cString(), m.name().cString()), m);
+                                    clash = true;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -1393,6 +1463,8 @@ class Sema
         _curMethod = decl;
         _curReturn = decl.op();
         _curLabel = callableLabel(decl, owner);
+        _curThrows = decl.hasFlag((u32)NF_THROWS);
+        _tryDepth = (u32)0;
         pushScope();
         // `self` is the receiver: a pointer to the class whose method this is.
         if (owner != 0 && owner.name() != 0)
@@ -1459,7 +1531,7 @@ class Sema
                         String* em = String.withCString("a C-ABI function cannot take a `callback` parameter ('");
                         em.append(cbp.name());
                         em.appendCString("') — a callback is a two-word pair with no C representation; use `pointer`");
-                        _errorAt(em, cbp);
+                        _errorAt(em, decl);
                         }
                     }
                 }
@@ -1508,8 +1580,11 @@ class Sema
             e.appendCString("call overwrites the arguments being forwarded. Move the packing call ");
             e.appendCString("into a separate function, or build the text with String.withFormat ");
             e.appendCString("and print that");
-            _error(e);
+            _errorAt(e, _fnPackingCall);
             }
+        if (fnBody != 0)
+            escapeWalkBody(fnBody);
+        noteStackUse(decl, owner, fnBody);
         noteCallable(decl, owner);
         popScope();
         _curLabel = (String*)0;
@@ -1517,6 +1592,589 @@ class Sema
         _getterOwner = (String*)0;
         _setterOwner = (String*)0;
         _curReturn = (String*)0;
+        }
+
+    // ── Stack instances whose address escapes ────────────────────────────
+    // As the reference's escWalk*: a stack class local dies at its block's
+    // closing brace, so returning its address (or a pointer local holding it)
+    // is refused, and storing it in a global, a heap object's field or an
+    // OUTER stack instance's field is warned about. Only `&p`, `&p.f` and a
+    // pointer local tagged as an alias carry the origin; `p.x` is a value.
+    void escapeWalkBody(Node* body)
+        {
+        _escDepth = new Map();
+        _escAlias = new Map();
+        _escBlock = (u32)0;
+        escWalk(body);
+        _escDepth = (Map*)0;
+        _escAlias = (Map*)0;
+        }
+
+    bool isStackClassType(String* t)
+        {
+        if (t == 0 || Types.isPointer(t) || isArrayLike(t))
+            return false;
+        return _classes.get((Hashable*)t) != 0;
+        }
+
+    String* escOrigin(Node* e)
+        {
+        if (e == 0)
+            return (String*)0;
+        u16 k = e.kind();
+        if (k == (u16)nkUnary)
+            {
+            if (_isOp(e.op(), "&") && e.kidCount() > (u32)0)
+                return escRootOf(e.kid((u32)0));
+            return (String*)0;
+            }
+        if (k == (u16)nkIdent)
+            return e.name() != 0 ? (String*)_escAlias.get((Hashable*)e.name()) : (String*)0;
+        if (k == (u16)nkCast && e.kidCount() > (u32)0)
+            return escOrigin(e.kid((u32)0));
+        return (String*)0;
+        }
+
+    // `&c`, `&c.x`, `&c.x.y` all root at `c`; an arrow leaves the stack.
+    String* escRootOf(Node* e)
+        {
+        if (e == 0)
+            return (String*)0;
+        if (e.kind() == (u16)nkIdent)
+            {
+            if (e.name() != 0 && _escDepth.get((Hashable*)e.name()) != 0)
+                return e.name();
+            return (String*)0;
+            }
+        if (e.kind() == (u16)nkMember && !e.hasFlag((u32)NF_ARROW) && e.kidCount() > (u32)0)
+            return escRootOf(e.kid((u32)0));
+        return (String*)0;
+        }
+
+    void escWalk(Node* n)
+        {
+        if (n == 0)
+            return;
+        u16 k = n.kind();
+        // The reference walks neither a switch nor a try/defer body.
+        if (k == (u16)nkSwitch || k == (u16)nkTry || k == (u16)nkDefer)
+            return;
+        if (k == (u16)nkBlock && !n.hasFlag((u32)NF_DECLLIST))
+            {
+            _escBlock = _escBlock + (u32)1;
+            u32 depth = _escBlock;
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+                escWalk(n.kid(i));
+            // Drop the stack locals this block declared, and every alias of one.
+            Array* dk = _escDepth.allKeys();
+            for (u32 i = (u32)0; i < dk.count(); i = i + (u32)1)
+                {
+                Number* d = (Number*)_escDepth.get((Hashable*)dk.get(i));
+                if (d != 0 && d.asU32() == depth)
+                    _escDepth.remove((Hashable*)dk.get(i));
+                }
+            Array* ak = _escAlias.allKeys();
+            for (u32 i = (u32)0; i < ak.count(); i = i + (u32)1)
+                {
+                String* orig = (String*)_escAlias.get((Hashable*)ak.get(i));
+                if (orig != 0 && _escDepth.get((Hashable*)orig) == 0)
+                    _escAlias.remove((Hashable*)ak.get(i));
+                }
+            _escBlock = _escBlock - (u32)1;
+            return;
+            }
+        if (k == (u16)nkVariableDecl)
+            {
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+                escWalk(n.kid(i));
+            String* t = n.op();
+            if (n.name() == 0)
+                return;
+            if (isStackClassType(t))
+                {
+                _escDepth.set((Hashable*)n.name(), (Object*)Number.with(_escBlock));
+                return;
+                }
+            if (t != 0 && Types.isPointer(t) && isStackClassType(pointeeOf(t)) && n.kidCount() > (u32)0)
+                {
+                String* origin = escOrigin(n.kid((u32)0));
+                if (origin != 0)
+                    _escAlias.set((Hashable*)n.name(), (Object*)origin);
+                }
+            return;
+            }
+        if (k == (u16)nkReturn)
+            {
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+                {
+                escWalk(n.kid(i));
+                String* origin = escOrigin(n.kid(i));
+                if (origin != 0)
+                    {
+                    String* m = String.withCString("cannot return address or value derived from stack-allocated instance '");
+                    m.append(origin);
+                    m.appendCString("' — its storage dies when the enclosing block ends");
+                    _errorAt(m, n);
+                    }
+                }
+            return;
+            }
+        if (k == (u16)nkAssign && n.kidCount() >= (u32)2)
+            {
+            escWalk(n.kid((u32)1));
+            if (_isOp(n.op(), "="))
+                {
+                String* origin = escOrigin(n.kid((u32)1));
+                if (origin != 0)
+                    escAssignTarget(n.kid((u32)0), origin, n);
+                }
+            escWalk(n.kid((u32)0));
+            return;
+            }
+        for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+            escWalk(n.kid(i));
+        }
+
+    void escAssignTarget(Node* lhs, String* origin, Node* at)
+        {
+        if (lhs.kind() == (u16)nkIdent && lhs.name() != 0)
+            {
+            String* nm = lhs.name();
+            // A tracked local takes the alias; a local is no diagnostic.
+            if (_escDepth.get((Hashable*)nm) != 0 || _escAlias.get((Hashable*)nm) != 0)
+                {
+                _escAlias.set((Hashable*)nm, (Object*)origin);
+                return;
+                }
+            // The walk runs after the body's own scopes are gone, so what the
+            // name can still reach is a parameter or a global — and only a
+            // global outlives the instance.
+            Map* fnScope = _scopes.count() > (u32)0 ? (Map*)_scopes.get(_scopes.count() - (u32)1) : (Map*)0;
+            if (fnScope != 0 && fnScope.get((Hashable*)nm) != 0)
+                return;
+            if (_globals.get((Hashable*)nm) != 0)
+                {
+                String* w = String.withCString("storing address of stack-allocated '");
+                w.append(origin);
+                w.appendCString("' in global '");
+                w.append(nm);
+                w.appendCString("' may outlive its storage");
+                _warnAt(String.withCString("escape"), w, at);
+                }
+            return;
+            }
+        if (lhs.kind() == (u16)nkMember && lhs.kidCount() > (u32)0)
+            {
+            if (lhs.hasFlag((u32)NF_ARROW))
+                {
+                String* w = String.withCString("storing address of stack-allocated '");
+                w.append(origin);
+                w.appendCString("' in heap-reachable field '");
+                w.append(lhs.name());
+                w.appendCString("' may outlive its storage");
+                _warnAt(String.withCString("escape"), w, at);
+                return;
+                }
+            String* baseOrigin = escOrigin(lhs.kid((u32)0));
+            if (baseOrigin != 0 && !baseOrigin.equals(origin))
+                {
+                Number* bd = (Number*)_escDepth.get((Hashable*)baseOrigin);
+                Number* od = (Number*)_escDepth.get((Hashable*)origin);
+                if (bd != 0 && od != 0 && bd.asU32() < od.asU32())
+                    {
+                    String* w = String.withCString("storing address of inner stack-allocated '");
+                    w.append(origin);
+                    w.appendCString("' into outer stack-instance field '");
+                    w.append(baseOrigin);
+                    w.appendByte((u8)'.');
+                    w.append(lhs.name());
+                    w.appendCString("' — outer outlives inner");
+                    _warnAt(String.withCString("escape"), w, at);
+                    }
+                }
+            }
+        }
+
+    // `sink(&p)` where `sink` takes a strong class pointer: the callee would
+    // retain an address that is not on the heap. As the reference's
+    // checkStackInstanceStrongParamArgs, at the same call shapes.
+    void checkStackStrongArgs(Node* call, Node* decl, u32 argBase, String* desc)
+        {
+        u32 pi = (u32)0;
+        for (u32 i = (u32)0; i < decl.kidCount(); i = i + (u32)1)
+            {
+            Node* p = decl.kid(i);
+            if (p.kind() != (u16)nkParam)
+                continue;
+            u32 ai = argBase + pi;
+            pi = pi + (u32)1;
+            if (ai >= call.kidCount())
+                return;
+            String* pt = p.op();
+            if (pt == 0 || !Types.isPointer(pt) || _classes.get((Hashable*)classNameOf(pt)) == 0)
+                continue;
+            Node* a = call.kid(ai);
+            if (a.kind() != (u16)nkUnary || !_isOp(a.op(), "&") || a.kidCount() == (u32)0)
+                continue;
+            Node* operand = a.kid((u32)0);
+            if (!isStackClassType(operand.ty()))
+                continue;
+            String* inst = operand.kind() == (u16)nkIdent ? operand.name() : String.withCString("<stack instance>");
+            String* m = String.withCString("cannot pass stack-allocated instance '");
+            m.append(inst);
+            m.appendCString("' as strong pointer parameter of ");
+            m.append(desc);
+            m.appendCString(" — the callee would retain a non-heap address; use `new ");
+            m.append(classNameOf(pt));
+            m.appendCString("(...)` or `");
+            m.append(inst);
+            m.appendCString(".clone()` instead");
+            _errorAt(m, call);
+            }
+        }
+
+    // A callee declared `throws`, called outside a try's guarded block from a
+    // function that is not `throws` itself. The reference refuses it in sema;
+    // left to the lowering it read "unsupported: raising call".
+    void checkThrowsCall(Node* callee, Node* call, String* name)
+        {
+        if (callee == 0 || !callee.hasFlag((u32)NF_THROWS) || _tryDepth != (u32)0 || _curThrows)
+            return;
+        String* m = String.withCString("'");
+        m.append(name);
+        m.appendCString("' is declared 'throws' — wrap the call in try { } catch (e) { }, or declare the caller 'throws' to propagate");
+        _errorAt(m, call);
+        }
+
+    String* quotedName(String* owner, String* name, string tail)
+        {
+        String* d = String.withCString("'");
+        if (owner != 0)
+            {
+            d.append(owner);
+            d.appendByte((u8)'.');
+            }
+        d.append(name);
+        d.appendCString("'");
+        d.appendCString(tail);
+        return d;
+        }
+
+    // ── :cloaked and the xtc software stack ──────────────────────────────
+    // Pass A: what this body does that pushes to the xtc stack, if anything.
+    // The first reason found, in walk order, as the reference's
+    // bodyStackSignalReason.
+    String* stackSignal(Node* n)
+        {
+        if (n == 0)
+            return (String*)0;
+        u16 k = n.kind();
+        if (k == (u16)nkNew)
+            return String.withCString("allocates with 'new' (heap helper pushes to xtc stack)");
+        if (k == (u16)nkDelete)
+            {
+            String* r = String.withCString("uses '");
+            r.append(n.op() != 0 ? n.op() : String.withCString("delete"));
+            r.appendCString("' (refcount helper pushes to xtc stack)");
+            return r;
+            }
+        if (k == (u16)nkAsmBlock)
+            {
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+                if (asmLineTouchesStack(n.kid(i).name()))
+                    return String.withCString("inline asm references the xtc software-stack pointer");
+            return (String*)0;
+            }
+        if (k == (u16)nkVariableDecl)
+            {
+            u32 w = semaWidth(n.op());
+            if (w > (u32)16)
+                {
+                String* r = String.withCString("declares local '");
+                r.append(n.name());
+                r.appendCString("' of ");
+                r.append(String.withU32(w));
+                r.appendCString(" bytes (spills past the ZP budget)");
+                return r;
+                }
+            }
+        if (k == (u16)nkTry || k == (u16)nkDefer)
+            return (String*)0;
+        for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+            {
+            String* r = stackSignal(n.kid(i));
+            if (r != 0)
+                return r;
+            }
+        return (String*)0;
+        }
+
+    // `$82`/`$83` (xl, xe), `$89`/`$8A` (xt) or an XTC_SP macro, outside a
+    // `;` comment.
+    bool asmLineTouchesStack(String* raw)
+        {
+        if (raw == 0)
+            return false;
+        u32 end = (u32)0;
+        while (end < raw.byteLength() && raw.byteAt(end) != (u8)';')
+            end = end + (u32)1;
+        String* line = raw.substringBytes((u32)0, end).lowercased();
+        return line.contains(String.withCString("$82")) || line.contains(String.withCString("$83"))
+            || line.contains(String.withCString("$89")) || line.contains(String.withCString("$8a"))
+            || line.contains(String.withCString("xtc_sp"));
+        }
+
+    // The front end's width of a local: scalars, arrays of them, structs by
+    // their fields. A class instance has no width here.
+    u32 semaWidth(String* t)
+        {
+        if (t == 0)
+            return (u32)0;
+        if (isArrayLike(t))
+            {
+            u32 open = (u32)0;
+            while (open < t.byteLength() && t.byteAt(open) != (u8)'[')
+                open = open + (u32)1;
+            u32 count = (u32)0;
+            for (u32 i = open + (u32)1; i < t.byteLength(); i = i + (u32)1)
+                {
+                u8 c = t.byteAt(i);
+                if (c < (u8)'0' || c > (u8)'9')
+                    break;
+                count = count * (u32)10 + (u32)(c - (u8)'0');
+                }
+            return semaWidth(t.substringBytes((u32)0, open)) * count;
+            }
+        Node* st = (Node*)_structs.get((Hashable*)t);
+        if (st != 0)
+            {
+            u32 total = (u32)0;
+            for (u32 i = (u32)0; i < st.kidCount(); i = i + (u32)1)
+                total = total + semaWidth(st.kid(i).op());
+            return total;
+            }
+        return Types.byteWidth(t);
+        }
+
+    void noteStackUse(Node* decl, Node* owner, Node* body)
+        {
+        if (_curLabel == 0)
+            return;
+        if (decl.hasFlag((u32)NF_CLOAKED))
+            {
+            String* shown = String.withCString("");
+            if (owner != 0)
+                {
+                shown.append(owner.name() != 0 ? owner.name() : String.withCString("?"));
+                shown.appendByte((u8)'.');
+                }
+            shown.append(decl.name());
+            if (body != 0)
+                scanCloaked(body, shown);
+            _cloakedLabels.add((Object*)_curLabel);
+            _cloakedNames.add((Object*)shown);
+            _cloakedDecls.add((Object*)decl);
+            }
+        String* reason = (String*)0;
+        if (decl.op() != 0)
+            {
+            Node* st = (Node*)_structs.get((Hashable*)firstReturn(decl.op()));
+            u32 w = st != 0 ? semaWidth(firstReturn(decl.op())) : (u32)0;
+            if (w > (u32)4)
+                {
+                reason = String.withCString("returns a ");
+                reason.append(String.withU32(w));
+                reason.appendCString("-byte struct by value (retbuf pointer pushed to xtc stack)");
+                }
+            }
+        if (reason == 0 && body != 0)
+            reason = stackSignal(body);
+        if (reason != 0)
+            {
+            _stackUsing.set((Hashable*)_curLabel, (Object*)reason);
+            _stackLocal.set((Hashable*)_curLabel, (Object*)reason);
+            }
+        }
+
+    // The direct violations, reported where they are written.
+    void scanCloaked(Node* n, String* name)
+        {
+        if (n == 0)
+            return;
+        u16 k = n.kind();
+        if (k == (u16)nkNew)
+            {
+            String* m = String.withCString(":cloaked '");
+            m.append(name);
+            m.appendCString("' cannot use 'new' (heap allocation needs the xtc stack, hidden while PORTB = $30)");
+            _errorAt(m, n);
+            return;
+            }
+        if (k == (u16)nkDelete)
+            {
+            String* m = String.withCString(":cloaked '");
+            m.append(name);
+            m.appendCString("' cannot use '");
+            m.append(n.op() != 0 ? n.op() : String.withCString("delete"));
+            m.appendCString("' (refcount helpers push to the xtc stack)");
+            _errorAt(m, n);
+            return;
+            }
+        if (k == (u16)nkTry || k == (u16)nkDefer)
+            return;
+        for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+            scanCloaked(n.kid(i), name);
+        }
+
+    // Pass B and C: callers of a stack user become users, to a fixed point;
+    // then every :cloaked declaration that became one is refused, with the
+    // shortest chain (five calls at most) to a local user.
+    void checkCloaked(void)
+        {
+        if (_cloakedLabels.count() == (u32)0)
+            return;
+        Map* callers = new Map();
+        Array* from = _callEdges.allKeys();
+        Vtable.sortStrings(from);
+        for (u32 i = (u32)0; i < from.count(); i = i + (u32)1)
+            {
+            String* caller = (String*)from.get(i);
+            Array* edges = (Array*)_callEdges.get((Hashable*)caller);
+            for (u32 j = (u32)0; j < edges.count(); j = j + (u32)1)
+                {
+                Array* up = (Array*)callers.get((Hashable*)edges.get(j));
+                if (up == 0)
+                    {
+                    up = new Array();
+                    callers.set((Hashable*)edges.get(j), (Object*)up);
+                    }
+                Vtable.addUnique(up, caller);
+                }
+            }
+        Array* work = _stackUsing.allKeys();
+        while (work.count() > (u32)0)
+            {
+            String* victim = (String*)work.get(work.count() - (u32)1);
+            work.removeAt(work.count() - (u32)1);
+            Array* up = (Array*)callers.get((Hashable*)victim);
+            if (up == 0)
+                continue;
+            for (u32 i = (u32)0; i < up.count(); i = i + (u32)1)
+                {
+                String* c = (String*)up.get(i);
+                if (_stackUsing.get((Hashable*)c) == 0)
+                    {
+                    _stackUsing.set((Hashable*)c, (Object*)String.withCString(""));
+                    work.add((Object*)c);
+                    }
+                }
+            }
+        for (u32 d = (u32)0; d < _cloakedLabels.count(); d = d + (u32)1)
+            {
+            String* label = (String*)_cloakedLabels.get(d);
+            if (_stackUsing.get((Hashable*)label) == 0)
+                continue;
+            Array* chain = stackChain(label, (u32)5);
+            if (chain.count() == (u32)0)
+                continue;
+            String* own = (String*)_stackLocal.get((Hashable*)label);
+            // The body's own new/delete was reported where it is written.
+            if (chain.count() == (u32)1 && own != 0
+                && (own.hasPrefix(String.withCString("allocates with 'new'")) || own.hasPrefix(String.withCString("uses '"))))
+                continue;
+            String* msg = String.withCString(":cloaked '");
+            msg.append((String*)_cloakedNames.get(d));
+            msg.appendCString("' transitively uses the xtc software stack");
+            for (u32 i = (u32)1; i < chain.count(); i = i + (u32)1)
+                {
+                String* step = (String*)chain.get(i);
+                msg.appendCString("\n  note: calls '");
+                msg.append(displayOf(step));
+                msg.appendCString("' which");
+                if (i == chain.count() - (u32)1)
+                    {
+                    String* why = (String*)_stackLocal.get((Hashable*)step);
+                    msg.appendByte((u8)' ');
+                    msg.append(why != 0 ? why : String.withCString("reaches the xtc stack"));
+                    }
+                }
+            if (chain.count() == (u32)1 && own != 0)
+                {
+                msg.appendCString("\n  note: ");
+                msg.append(own);
+                }
+            if (_stackLocal.get((Hashable*)chain.get(chain.count() - (u32)1)) == 0)
+                msg.appendCString("\n  note: (chain continues)");
+            if (_cloakedWarn)
+                _warnAt(String.withCString(""), msg, (Node*)_cloakedDecls.get(d));
+            else
+                _errorAt(msg, (Node*)_cloakedDecls.get(d));
+            }
+        }
+
+    // Breadth first over stack-using callees, in sorted order, to the nearest
+    // local user; the chain runs start..leaf, or to the deepest frontier when
+    // the cap is reached first.
+    Array* stackChain(String* start, u32 cap)
+        {
+        Array* chain = new Array();
+        if (_stackLocal.get((Hashable*)start) != 0)
+            {
+            chain.add((Object*)start);
+            return chain;
+            }
+        Map* parent = new Map();
+        parent.set((Hashable*)start, (Object*)String.withCString(""));
+        Array* frontier = new Array();
+        frontier.add((Object*)start);
+        String* leaf = (String*)0;
+        String* last = start;
+        for (u32 h = (u32)0; h < cap && leaf == 0 && frontier.count() > (u32)0; h = h + (u32)1)
+            {
+            Array* next = new Array();
+            for (u32 f = (u32)0; f < frontier.count() && leaf == 0; f = f + (u32)1)
+                {
+                Array* edges = (Array*)_callEdges.get((Hashable*)frontier.get(f));
+                if (edges == 0)
+                    continue;
+                Array* callees = new Array();
+                for (u32 c = (u32)0; c < edges.count(); c = c + (u32)1)
+                    callees.add(edges.get(c));
+                Vtable.sortStrings(callees);
+                for (u32 c = (u32)0; c < callees.count(); c = c + (u32)1)
+                    {
+                    String* callee = (String*)callees.get(c);
+                    if (_stackUsing.get((Hashable*)callee) == 0 || parent.get((Hashable*)callee) != 0)
+                        continue;
+                    parent.set((Hashable*)callee, frontier.get(f));
+                    if (_stackLocal.get((Hashable*)callee) != 0)
+                        {
+                        leaf = callee;
+                        break;
+                        }
+                    next.add((Object*)callee);
+                    }
+                }
+            if (next.count() > (u32)0)
+                last = (String*)next.get(next.count() - (u32)1);
+            frontier = next;
+            }
+        String* cur = leaf != 0 ? leaf : last;
+        Array* rev = new Array();
+        while (cur != 0 && cur.byteLength() > (u32)0)
+            {
+            rev.add((Object*)cur);
+            if (cur.equals(start))
+                break;
+            cur = (String*)parent.get((Hashable*)cur);
+            }
+        u32 k = rev.count();
+        while (k > (u32)0)
+            {
+            k = k - (u32)1;
+            chain.add(rev.get(k));
+            }
+        return chain;
         }
 
     // ── The variadic non-reentrance check ────────────────────────────────
@@ -1938,6 +2596,20 @@ class Sema
                 }
             return;
             }
+        if (k == (u16)nkTry)
+            {
+            // The guarded block may call what throws; the arms may not.
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+                {
+                bool guarded = n.kid(i).kind() != (u16)nkCatch;
+                if (guarded)
+                    _tryDepth = _tryDepth + (u32)1;
+                typeStmt(n.kid(i));
+                if (guarded)
+                    _tryDepth = _tryDepth - (u32)1;
+                }
+            return;
+            }
         if (k == (u16)nkCatch)
             {
             // `catch (e)` binds `e` for the arm's body. An untyped arm catches
@@ -2248,6 +2920,14 @@ class Sema
                 return;
             // Nothing declares it. That is an error, and an error still leaves
             // a type — u8 — behind for the passes that walk the tree next.
+            // Reported here, as the reference does: left to the lowering it
+            // came out as "unsupported: unbound identifier" or, for an
+            // undeclared TYPE (`Data* d = …` parses as a product), as
+            // "unsupported: assignment target".
+            String* um = String.withCString("Undefined identifier '");
+            um.append(n.name());
+            um.appendCString("'");
+            _errorAt(um, n);
             n.setTy(String.withCString("u8"));
             return;
             }
@@ -3096,6 +3776,8 @@ class Sema
                 // `use`-promoted bare call (below) does not — measured, not
                 // assumed: marking both cost 81 files.
                 m.setStackRecv();
+                checkStackStrongArgs(n, m, (u32)0, quotedName(mOwner.name(), m.name(), ""));
+                checkThrowsCall(m, n, m.name());
                 applyBoxing(n, m, (u32)0);
                 return;
                 }
@@ -3209,6 +3891,8 @@ class Sema
                 n.setTy(firstReturn(fn.op()));
                 n.setSym(fn.sym());
                 noteCallEdge(fnLabel(fn.sym() != 0 ? fn.sym() : n.name()));
+                checkStackStrongArgs(n, fn, (u32)0, quotedName((String*)0, n.name(), ""));
+                checkThrowsCall(fn, n, n.name());
                 applyBoxing(n, fn, (u32)0);
                 if (fn.hasFlag((u32)NF_VARARGS))
                     {
@@ -3242,6 +3926,8 @@ class Sema
             // (`printf`), so the lowering is told which class answered.
             if (demotedC)
                 n.setCls(cls.name());
+            checkStackStrongArgs(n, m, (u32)0, quotedName(cls.name(), m.name(), " (via use)"));
+            checkThrowsCall(m, n, m.name());
             applyBoxing(n, m, (u32)0);
             // The bare spelling gets the SAME format treatment as the explicit
             // one (finding #8) — no receiver kid, so the format sits one
@@ -3770,6 +4456,7 @@ class Sema
                     n.setSym(best.sym());
                     n.setCls(p.name());
                     noteCallEdge(clsLabel(p.name(), best.sym() != 0 ? best.sym() : best.name()));
+                    checkThrowsCall(best, n, n.name());
                     return;
                     }
                 p = parentOf(p);
@@ -3997,7 +4684,7 @@ class Sema
                     String* want = String.withString(Node.stripElem(elem));
                     want.appendByte((u8)'*');
                     if (_classes.get((Hashable*)Node.stripElem(elem)) != 0 || _protocols.get((Hashable*)Node.stripElem(elem)) != 0)
-                        checkClassPointerAssign(want, arg.ty(), arg, site.cString());
+                        checkClassPointerAssignAt(want, arg.ty(), arg, site.cString(), n);
                     }
                 else if (key != 0 && _isOp(pc, "Hashable*"))
                     {
@@ -4009,7 +4696,7 @@ class Sema
                     String* want = String.withString(Node.stripElem(key));
                     want.appendByte((u8)'*');
                     if (_classes.get((Hashable*)Node.stripElem(key)) != 0 || _protocols.get((Hashable*)Node.stripElem(key)) != 0)
-                        checkClassPointerAssign(want, arg.ty(), arg, site.cString());
+                        checkClassPointerAssignAt(want, arg.ty(), arg, site.cString(), n);
                     }
                 }
             }
@@ -4045,6 +4732,8 @@ class Sema
             m.setHeapRecv();
         else
             m.setStackRecv();
+        checkStackStrongArgs(n, m, (u32)1, quotedName(owner, m.name(), ""));
+        checkThrowsCall(m, n, m.name());
         applyBoxing(n, m, (u32)1);
         }
 
@@ -7146,7 +7835,7 @@ class Sema
                         firstExp = fn;
                         continue;
                         }
-                    _error(String.withFormat("Cannot export two overloads of '%s' — `extern` promises the name itself to the outside, and both cannot own it. Keep `extern` on one overload", fn.name().cString()));
+                    _errorAt(String.withFormat("Cannot export two overloads of '%s' — `extern` promises the name itself to the outside, and both cannot own it. Keep `extern` on one overload", fn.name().cString()), fn);
                     }
                 }
             bool overloaded = group.count() > (u32)1;

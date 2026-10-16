@@ -1299,6 +1299,36 @@
                 }
             }
         }
+    // An ivar named like a method an ANCESTOR declares: `s.hash` resolves to
+    // the method, so a store goes to the ivar and a load calls Object.hash().
+    // A class's own getter of the same name is left alone; it reads the ivar.
+    for (XTClassDeclNode* cls in self.classesByName.allValues)
+        {
+        for (XTVariableDeclNode* ivar in cls.ivars)
+            {
+            for (XTClassDeclNode* c = cls.parentClass; c != nil && c != cls; c = c.parentClass)
+                {
+                BOOL clash = NO;
+                for (XTMethodDeclNode* m in c.methods)
+                    {
+                    if ([m.methodName isEqualToString:ivar.varName])
+                        {
+                        clash = YES;
+                        break;
+                        }
+                    }
+                if (clash)
+                    {
+                    [self.diagnostics emitError:[NSString stringWithFormat:
+                                                              @"ivar '%@' of '%@' has the name of a method of '%@' — "
+                                                              @"'x.%@' would call the method; rename the ivar",
+                                                              ivar.varName, cls.className, c.className, ivar.varName]
+                                             at:ivar.location ?: cls.location];
+                    break;
+                    }
+                }
+            }
+        }
     }
 
 /****************************************************************************\

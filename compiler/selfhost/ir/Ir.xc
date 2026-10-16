@@ -1403,6 +1403,13 @@ class IRValue
         }
     // A dataglobal's declared type, which is what a back end sizes its
     // reservation from.
+    // A static ivar of its class's own pointer type is typed again once the
+    // class's layout exists (as the reference does), so the global's type
+    // does not depend on the order the classes are met in.
+    void setGlobalTy(String* t)
+        {
+        _ty = t;
+        }
     String* globalTy(void)
         {
         return _ty;

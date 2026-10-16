@@ -1175,8 +1175,15 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                     [self advance]; // optional ':'
                 }
             }
+        // An undeclared name followed by a pointer sigil is an opaque handle,
+        // as parseType takes it, so `Missing* find(u32 d)` is a method here
+        // as it is in the self-hosted parser. Judged "not a function" it was
+        // read as fields and every token after it reported as an error.
+        BOOL opaquePtr = [self currentToken].type == XTTokenIdentifier &&
+                         ![_typeTable isTypeName:[self currentToken].value] &&
+                         XTIsPointerSigil([self peekToken:1].type);
         if (!([self currentToken].isTypeKeyword ||
-              [_typeTable isTypeName:[self currentToken].value]))
+              [_typeTable isTypeName:[self currentToken].value]) && !opaquePtr)
             {
             break;
             }
@@ -2379,6 +2386,11 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         return [self parseIf];
     case XTTokenWhile:
         {
+        // --par-auto: a counted while loop becomes the `for` it amounts to,
+        // which parAutoFor then takes or leaves (parAutoWhileToFor).
+        if (self.parAuto && ![[self blkFrames].lastObject[@"par"] boolValue] &&
+            [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0 && [self parAutoWhileToFor])
+            return [self parAutoFor];
         [self parGridLoop:1];
         [self parAutoLoop:1];
         XTASTNode* n = [self parseWhile];
@@ -3085,9 +3097,11 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
     NSString* file = [self currentToken].location.filename;
     if (file && [self.libraryFiles containsObject:file])
         return NO;
-    // The header: `( T? i in a .. b )` or `( T? i in a ... b )`, no step; or
-    // the C-style `( T? i = a; i < b; i++ )` with `<=`, `++i`, `i += 1` or
-    // `i = i + 1` as well (what the desugaring takes as a step).
+    // The header: `( T? i in a .. b )` or `( T? i in a ... b )`, with a
+    // positive literal `step` or none (the desugaring counts a stride's
+    // iterations from 0); or the C-style `( T? i = a; i < b; i++ )` with
+    // `<=`, `++i`, `i += 1` or `i = i + 1` as well (what the desugaring takes
+    // as a step).
     NSUInteger depth = 0;
     NSUInteger pe = 0;
     BOOL sawIn = NO;
@@ -3118,7 +3132,8 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
                 }
             else if (ty == XTTokenDotDot || ty == XTTokenEllipsis)
                 sawDots = YES;
-            else if (ty == XTTokenIdentifier && sawDots && [[self parTokValue:i] isEqualToString:@"step"])
+            else if (ty == XTTokenIdentifier && sawDots && [[self parTokValue:i] isEqualToString:@"step"] &&
+                     ([self parTokType:i + 1] != XTTokenIntLiteral || [[self parTokValue:i + 1] isEqualToString:@"0"]))
                 return NO;
             else if (ty == XTTokenSemicolon)
                 {
@@ -3590,6 +3605,144 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
     else
         [st addObject:inner.body];
     return [[XTBlockNode alloc] initWithStatements:st location:loc];
+    }
+
+/****************************************************************************\
+|* --par-auto's `while` form: `while (v < B) { …; v++; }`, v a local of an
+|* integer type, B names and integer literals only, the increment the body's
+|* last statement and v written nowhere else, no break, continue, return or
+|* goto. The tokens become
+|*     for (T __autopar_w = v; __autopar_w < B; __autopar_w += 1)
+|*         { T v = __autopar_w; …the body without the increment… }
+|*     if (v < B) v = B;            (<= B: v = B + 1)
+|* — the loop's own iterations with v's final value after it — and the
+|* parser goes on at the `for`. YES when it rewrote. Mirrored in the port.
+\****************************************************************************/
+- (BOOL)parAutoWhileToFor
+    {
+    NSUInteger at = _pos, n = _tokens.count;
+    if ([self parTokType:at + 1] != XTTokenLParen || [self parTokType:at + 2] != XTTokenIdentifier)
+        return NO;
+    NSString* v = [self parTokValue:at + 2];
+    XTTokenType cmp = [self parTokType:at + 3];
+    if (cmp != XTTokenLess && cmp != XTTokenLessEq)
+        return NO;
+    // The bound: names, integer literals, + - * /, casts and parentheses,
+    // up to the `)` that closes the condition.
+    NSUInteger pe = at + 4, pd = 0;
+    while (pe < n)
+        {
+        XTTokenType t = [self parTokType:pe];
+        if (t == XTTokenRParen && pd == 0)
+            break;
+        if (t == XTTokenLParen)
+            pd++;
+        else if (t == XTTokenRParen)
+            pd--;
+        else if (t != XTTokenIdentifier && t != XTTokenIntLiteral && t != XTTokenPlus && t != XTTokenMinus &&
+                 t != XTTokenStar && t != XTTokenSlash && !((XTToken*)_tokens[pe]).isTypeKeyword)
+            return NO;
+        if (t == XTTokenIdentifier && [[self parTokValue:pe] isEqualToString:v])
+            return NO;
+        pe++;
+        }
+    if (pe >= n || pe == at + 4 || [self parTokType:pe + 1] != XTTokenLBrace)
+        return NO;
+    NSUInteger be = 0, depth = 0;
+    for (NSUInteger i = pe + 1; i < n; i++)
+        {
+        XTTokenType t = [self parTokType:i];
+        if (t == XTTokenLBrace)
+            depth++;
+        else if (t == XTTokenRBrace && --depth == 0)
+            {
+            be = i;
+            break;
+            }
+        }
+    if (be == 0)
+        return NO;
+    // The increment, the last statement: `v++;`, `++v;`, `v += 1;` or `v = v + 1;`.
+    NSUInteger inc = 0;
+    if ([self parTokType:be - 1] != XTTokenSemicolon)
+        return NO;
+    if (be >= pe + 5 && [self parTokType:be - 3] == XTTokenIdentifier && [[self parTokValue:be - 3] isEqualToString:v] &&
+        [self parTokType:be - 2] == XTTokenPlusPlus)
+        inc = be - 3;
+    else if (be >= pe + 5 && [self parTokType:be - 3] == XTTokenPlusPlus && [self parTokType:be - 2] == XTTokenIdentifier &&
+             [[self parTokValue:be - 2] isEqualToString:v])
+        inc = be - 3;
+    else if (be >= pe + 6 && [self parTokType:be - 4] == XTTokenIdentifier && [[self parTokValue:be - 4] isEqualToString:v] &&
+             [self parTokType:be - 3] == XTTokenPlusAssign && [self parTokType:be - 2] == XTTokenIntLiteral &&
+             [[self parTokValue:be - 2] isEqualToString:@"1"])
+        inc = be - 4;
+    else if (be >= pe + 8 && [self parTokType:be - 6] == XTTokenIdentifier && [[self parTokValue:be - 6] isEqualToString:v] &&
+             [self parTokType:be - 5] == XTTokenAssign && [self parTokType:be - 4] == XTTokenIdentifier &&
+             [[self parTokValue:be - 4] isEqualToString:v] && [self parTokType:be - 3] == XTTokenPlus &&
+             [self parTokType:be - 2] == XTTokenIntLiteral && [[self parTokValue:be - 2] isEqualToString:@"1"])
+        inc = be - 6;
+    if (inc == 0 || inc <= pe + 1)
+        return NO;
+    // Before the increment's statement starts, the previous one ended.
+    XTTokenType before = [self parTokType:inc - 1];
+    if (before != XTTokenSemicolon && before != XTTokenRBrace && before != XTTokenLBrace)
+        return NO;
+    for (NSUInteger i = pe + 2; i < inc; i++)
+        {
+        XTTokenType t = [self parTokType:i];
+        if (t == XTTokenBreak || t == XTTokenContinue || t == XTTokenReturn || t == XTTokenGoto)
+            return NO;
+        if (t == XTTokenIdentifier && [[self parTokValue:i] isEqualToString:v])
+            {
+            XTTokenType nx = [self parTokType:i + 1];
+            XTTokenType pv = [self parTokType:i - 1];
+            if (parAutoAnyAssignOp(nx) || nx == XTTokenPlusPlus || nx == XTTokenMinusMinus ||
+                pv == XTTokenPlusPlus || pv == XTTokenMinusMinus || pv == XTTokenAmpersand)
+                return NO;
+            }
+        }
+    // v: a local of an integer type, spelt as its keyword.
+    NSUInteger d = 0;
+    NSDictionary* info = [self blkLookup:v depth:&d];
+    XTType* vt = [info[@"type"] isKindOfClass:[XTType class]] ? info[@"type"] : nil;
+    NSDictionary<NSString*, NSNumber*>* kw = @{ @"u8" : @(XTTokenU8), @"i8" : @(XTTokenI8), @"u16" : @(XTTokenU16),
+                                                @"i16" : @(XTTokenI16), @"u32" : @(XTTokenU32), @"i32" : @(XTTokenI32),
+                                                @"u64" : @(XTTokenU64), @"i64" : @(XTTokenI64) };
+    NSNumber* tt = vt ? kw[vt.displayName] : nil;
+    if (!tt)
+        return NO;
+    XTSourceLocation* loc = ((XTToken*)_tokens[at]).location;
+    NSString* w = @"__autopar_w";
+    XTToken* (^T)(XTTokenType, NSString*) = ^XTToken*(XTTokenType ty, NSString* val) {
+      return [[XTToken alloc] initWithType:ty value:val location:loc];
+    };
+    XTToken* (^I)(int64_t) = ^XTToken*(int64_t x) {
+      return [[XTToken alloc] initWithType:XTTokenIntLiteral value:[NSString stringWithFormat:@"%lld", (long long)x]
+                                  intValue:x location:loc];
+    };
+    NSArray* bound = [_tokens subarrayWithRange:NSMakeRange(at + 4, pe - (at + 4))];
+    NSMutableArray* out = [NSMutableArray array];
+    [out addObjectsFromArray:@[ T(XTTokenFor, @"for"), T(XTTokenLParen, @"("), T(tt.integerValue, vt.displayName),
+                                T(XTTokenIdentifier, w), T(XTTokenAssign, @"="), T(XTTokenIdentifier, v),
+                                T(XTTokenSemicolon, @";"), T(XTTokenIdentifier, w), _tokens[at + 3] ]];
+    [out addObjectsFromArray:bound];
+    [out addObjectsFromArray:@[ T(XTTokenSemicolon, @";"), T(XTTokenIdentifier, w), T(XTTokenPlusAssign, @"+="), I(1),
+                                T(XTTokenRParen, @")"), T(XTTokenLBrace, @"{"), T(tt.integerValue, vt.displayName),
+                                T(XTTokenIdentifier, v), T(XTTokenAssign, @"="), T(XTTokenIdentifier, w),
+                                T(XTTokenSemicolon, @";") ]];
+    [out addObjectsFromArray:[_tokens subarrayWithRange:NSMakeRange(pe + 2, inc - (pe + 2))]];
+    [out addObjectsFromArray:@[ T(XTTokenRBrace, @"}"), T(XTTokenIf, @"if"), T(XTTokenLParen, @"("),
+                                T(XTTokenIdentifier, v), _tokens[at + 3] ]];
+    [out addObjectsFromArray:bound];
+    [out addObjectsFromArray:@[ T(XTTokenRParen, @")"), T(XTTokenIdentifier, v), T(XTTokenAssign, @"=") ]];
+    [out addObjectsFromArray:bound];
+    if (cmp == XTTokenLessEq)
+        [out addObjectsFromArray:@[ T(XTTokenPlus, @"+"), I(1) ]];
+    [out addObject:T(XTTokenSemicolon, @";")];
+    NSMutableArray<XTToken*>* spliced = [_tokens mutableCopy];
+    [spliced replaceObjectsInRange:NSMakeRange(at, be + 1 - at) withObjectsFromArray:out];
+    _tokens = spliced;
+    return YES;
     }
 
 - (nullable XTASTNode*)parAutoFor

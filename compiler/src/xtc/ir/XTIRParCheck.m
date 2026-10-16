@@ -292,10 +292,17 @@ static BOOL gEmitsWGSL = NO;
         // writes (step 1 of par-tiles-and-devices.md).
         XTIRParCheck* fc = [XTIRParCheck new];
         fc.module = module;
+        // The helpers by name, so the cost words count a called helper's
+        // work as the port's do (without them a `mix` with a loop read as 3
+        // ops and no loop).
+        fc.fnByName = [NSMutableDictionary dictionary];
+        for (XTIRFunction* hf in module.functions)
+            fc.fnByName[hf.name] = hf;
         NSString* fcls = [f.name substringToIndex:f.name.length - 4];
         [XTIRParMSL setExtraMeta:[[[fc footprintWordsIn:f ivarNames:[fc ivarNamesOf:classDecls[fcls] in:classDecls]]
                                    stringByAppendingString:[fc costWordsIn:f]]
-                                   stringByAppendingString:[fc guardWordsIn:f guards:gParGuards[fcls]]]];
+                                   stringByAppendingString:[[fc guardWordsIn:f guards:gParGuards[fcls]]
+                                                               stringByAppendingString:[fc mergeWordsIn:f redOps:redOps fast:fast]]]];
         NSString* (^ptxOf)(NSString* _Nullable* _Nullable) = ^NSString*(NSString* _Nullable* _Nullable w) {
             NSString* t = kf ? [XTIRParMSL ptxForKernel:kf module:kmod fast:fast redOps:redOps why:NULL] : nil;
             return t ?: [XTIRParMSL ptxForKernel:f module:module fast:fast redOps:redOps why:w];
@@ -972,6 +979,31 @@ static BOOL parGuardFor(XTParSym r, XTParSym w, NSString* _Nullable* _Nonnull gu
     return YES;
     }
 
+// The general form, where parGuardFor cannot settle a pair (unequal strides,
+// or a captured integer on each side): the run checks that the elements the
+// tile's items write and the elements they read are two disjoint ranges —
+// each index is affine in i, so its range over [lo, hi) runs between its
+// values at lo and hi - 1 — or, with one stride, the parGuardFor test.
+// Writes "x:<kw>:<cw>:<slotw>:<mw>:<kr>:<cr>:<slotr>:<mr>", slot -1 (m 0)
+// where a side has no captured integer.
+static BOOL parIntervalGuardFor(XTParSym r, XTParSym w, NSString* _Nullable* _Nonnull guard)
+    {
+    if (!r.affine || !w.affine || (r.k == 0 && w.k == 0))
+        return NO;
+    // One stride and no captured integer: the static test has decided (a
+    // scan stays a scan, reported where it is written).
+    if (r.k == w.k && r.slot < 0 && w.slot < 0)
+        return NO;
+    // …nor where both sides carry the same captured integer, which cancels.
+    if (r.k == w.k && r.slot >= 0 && r.slot == w.slot && r.m == w.m)
+        return NO;
+    *guard = [NSString stringWithFormat:@"x:%lld:%lld:%ld:%lld:%lld:%lld:%ld:%lld",
+                                        (long long)w.k, (long long)w.c, (long)(w.slot >= 0 ? w.slot : -1),
+                                        (long long)(w.slot >= 0 ? w.m : 0), (long long)r.k, (long long)r.c,
+                                        (long)(r.slot >= 0 ? r.slot : -1), (long long)(r.slot >= 0 ? r.m : 0)];
+    return YES;
+    }
+
 static NSString* shownIndex(XTParIndex x)
     {
     if (!x.affine)
@@ -1066,6 +1098,21 @@ static NSString* shownIndex(XTParIndex x)
     for (NSString* g in guards)
         {
         NSArray<NSString*>* p = [g componentsSeparatedByString:@":"];
+        // `guardx=<kw>:<cw>:<offw>:<bytesw>:<mw>:<kr>:<cr>:<offr>:<bytesr>:<mr>`,
+        // offset -1 (bytes 0) for a side with no captured integer.
+        if ([p[0] isEqualToString:@"x"] && p.count == 9)
+            {
+            NSString* (^side)(NSString*, NSString*, NSString*, NSString*) =
+                ^NSString*(NSString* k, NSString* c, NSString* sl, NSString* m) {
+                  NSInteger q = sl.integerValue;
+                  if (!lay || q < 0 || (NSUInteger)q >= lay.fieldCount)
+                      return [NSString stringWithFormat:@"%@:%@:-1:0:0", k, c];
+                  return [NSString stringWithFormat:@"%@:%@:%u:%u:%@", k, c, [lay fieldOffsetAt:(NSUInteger)q],
+                                                    [lay fieldTypeAt:(NSUInteger)q].byteWidth, m];
+                };
+            [words appendFormat:@" guardx=%@:%@", side(p[1], p[2], p[3], p[4]), side(p[5], p[6], p[7], p[8])];
+            continue;
+            }
         NSInteger slot = p[0].integerValue;
         if (!lay || slot < 0 || (NSUInteger)slot >= lay.fieldCount)
             continue;
@@ -1231,6 +1278,40 @@ static BOOL parIsComputeOp(XTIROpcode op)
         *loop = YES;
     }
 
+// ` merge=<n>,…` (or nothing; n counts the red= words from 0): the
+// reductions a node may fold before
+// the coordinator does, because the order cannot change the bits — integer
+// + * & | ^, min and max always; float + and * only under :goal(speed);
+// float min and max always. In field order. The coordinator folds every
+// tile's partial itself today; the word is there for a daemon that merges.
+- (NSString*)mergeWordsIn:(XTIRFunction*)f redOps:(nullable NSDictionary<NSNumber*, NSString*>*)redOps fast:(BOOL)fast
+    {
+    XTIRType* selfT = f.paramTypes.count ? f.paramTypes[0] : nil;
+    XTIRLayout* lay = selfT.kind == XTIRTypeKindPtr ? selfT.pointeeType.layout : nil;
+    if (!lay || redOps.count == 0)
+        return @"";
+    NSMutableArray<NSString*>* ok = [NSMutableArray array];
+    NSUInteger ord = 0;
+    for (NSNumber* k in [redOps.allKeys sortedArrayUsingSelector:@selector(compare:)])
+        {
+        if (k.unsignedIntegerValue >= lay.fieldCount)
+            continue;
+        NSUInteger at = ord++;
+        XTIRType* t = lay.fields[k.unsignedIntegerValue].type;
+        BOOL isFloat = t.kind == XTIRTypeKindF32 || t.kind == XTIRTypeKindF64;
+        NSString* op = redOps[k];
+        BOOL m = [op isEqualToString:@"min"] || [op isEqualToString:@"max"];
+        if (!isFloat)
+            m = m || [op isEqualToString:@"+"] || [op isEqualToString:@"*"] || [op isEqualToString:@"&"] ||
+                [op isEqualToString:@"|"] || [op isEqualToString:@"^"];
+        else if (fast)
+            m = m || [op isEqualToString:@"+"] || [op isEqualToString:@"*"];
+        if (m)
+            [ok addObject:[NSString stringWithFormat:@"%lu", (unsigned long)at]];
+        }
+    return ok.count ? [@" merge=" stringByAppendingString:[ok componentsJoinedByString:@","]] : @"";
+    }
+
 - (NSString*)costWordsIn:(XTIRFunction*)f
     {
     long long ops = 0;
@@ -1354,7 +1435,7 @@ static BOOL parIsComputeOp(XTIROpcode op)
             XTParSym wsx;
             [(NSValue*)wp[1] getValue:&wsx];
             NSString* g = nil;
-            if (guards && parGuardFor(rs, wsx, &g))
+            if (guards && (parGuardFor(rs, wsx, &g) || parIntervalGuardFor(rs, wsx, &g)))
                 {
                 if (![guards containsObject:g])
                     [guards addObject:g];

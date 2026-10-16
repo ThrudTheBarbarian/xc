@@ -117,9 +117,12 @@ void synthesizeDesignable(Node* program)
         }
     if (protoName == 0)
         {
-        Stdio.printf("xc-fe: error: a class with an `outlet` field or `:action` method "
+        // At the class, as the reference reports it.
+        Node* at = (Node*)designable.get((u32)0);
+        Stdio.printf("%s:%u:%u: error: a class with an `outlet` field or `:action` method "
                      "must import the UI framework — it auto-conforms to the "
-                     "UXDesignable protocol declared there\n");
+                     "UXDesignable protocol declared there\n",
+                     at.file() != 0 ? at.file().cString() : "?", at.line(), at.col());
         Process.exit((i32)1);
         return;
         }

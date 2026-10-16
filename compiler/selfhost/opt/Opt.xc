@@ -7435,6 +7435,17 @@ class OptProfile
     IROperand* _mxA;
     IROperand* _mxB;
     IROperand* _mxC;
+    // A base that is a global's address taken inside the nest: the call in the
+    // preheader takes its own AddrOf (the reference's addrA/B/C), or 0.
+    IRInsn* _mxAddrA;
+    IRInsn* _mxAddrB;
+    IRInsn* _mxAddrC;
+    // Where the i loop starts when that is not 0 (a par tile's lo), else 0;
+    // the element pointer type, for advancing A and C to that row.
+    IROperand* _mxStart;
+    String* _mxPtrTy;
+    bool _mxTakeStart;   // mmCountedHeader may accept a nonzero start (into _mxStartOf)
+    IROperand* _mxStartOf;
     IRValue* _mxMem;
     // The constant value of each of M, N, K, lda, ldb, ldc, or -1 (a value).
     i64* _mxConsts;
@@ -7517,6 +7528,22 @@ class OptProfile
         return false;
         }
 
+    // `AddrOf @g` of a global symbol: invariant wherever it is taken.
+    IRInsn* mmGlobalAddr(IROperand* o, Map* defOf)
+        {
+        IRInsn* a = mmDefWith(o, String.withCString("AddrOf"), defOf);
+        if (a == 0 || a.ops().count() != (u32)1 || ((IROperand*)a.ops().get((u32)0)).kind() != (u8)OPK_SYM)
+            return (IRInsn*)0;
+        return a;
+        }
+
+    // Mul(p, q), or Shl(p, #n) — a constant stride that is a power of two.
+    IRInsn* mmScaleOf(IROperand* o, Map* defOf)
+        {
+        IRInsn* m = mmDefWith(o, String.withCString("Mul"), defOf);
+        return m != 0 ? m : mmDefWith(o, String.withCString("Shl"), defOf);
+        }
+
     // index = Add(Mul(p, q), r) in either order: the Mul, and the addend in _mxAddend.
     IROperand* _mxAddend;
     IRInsn* mmSplitIndex(IROperand* idx, Map* defOf)
@@ -7526,8 +7553,8 @@ class OptProfile
             return (IRInsn*)0;
         IROperand* a0 = (IROperand*)add.ops().get((u32)0);
         IROperand* a1 = (IROperand*)add.ops().get((u32)1);
-        IRInsn* m0 = mmDefWith(a0, String.withCString("Mul"), defOf);
-        IRInsn* m1 = mmDefWith(a1, String.withCString("Mul"), defOf);
+        IRInsn* m0 = mmScaleOf(a0, defOf);
+        IRInsn* m1 = mmScaleOf(a1, defOf);
         if (m0 != 0 && m0.ops().count() == (u32)2)
             {
             _mxAddend = a1;
@@ -7541,11 +7568,22 @@ class OptProfile
         return (IRInsn*)0;
         }
 
-    // Mul(v, other) in either order: the operand that is not v, or 0.
-    IROperand* mmMulOther(IRInsn* mul, IRValue* v)
+    // Mul(v, other) in either order: the operand that is not v, or 0. For
+    // Shl(v, #n) the stride 1 << n, as a U32 immediate; the amount may come
+    // narrowed (`i << 9` lowers it as Trunc(ZExt(Const))).
+    IROperand* mmMulOther(IRInsn* mul, IRValue* v, Map* defOf)
         {
         IROperand* a0 = (IROperand*)mul.ops().get((u32)0);
         IROperand* a1 = (IROperand*)mul.ops().get((u32)1);
+        if (mul.op().equals(String.withCString("Shl")))
+            {
+            i64 n = (i64)0;
+            IRInsn* tr = mmDefWith(a1, String.withCString("Trunc"), defOf);
+            bool amt = tr != 0 ? constValue(defOf, (IROperand*)tr.ops().get((u32)0), &n) : constValue(defOf, a1, &n);
+            if (mmIsUse(a0, v) && amt && n >= (i64)0 && n < (i64)32)
+                return IROperand.immI((i64)1 << n, String.withCString("U32"));
+            return (IROperand*)0;
+            }
         if (mmIsUse(a0, v) && !mmIsUse(a1, v))
             return a1;
         if (mmIsUse(a1, v) && !mmIsUse(a0, v))
@@ -7638,9 +7676,13 @@ class OptProfile
                 pre = ((IROperand*)iv.ops().get(i)).blk();
         if (pre == 0 || mmIncoming(iv, latch) == 0)
             return false;
+        // The init is 0, or — where the caller takes a start — any value,
+        // which the caller checks is made outside the nest.
         i64 init = (i64)0;
-        if (!constValue(defOf, mmIncoming(iv, pre), &init) || init != (i64)0)
+        bool zero = constValue(defOf, mmIncoming(iv, pre), &init) && init == (i64)0;
+        if (!zero && !_mxTakeStart)
             return false;
+        _mxStartOf = zero ? (IROperand*)0 : mmIncoming(iv, pre);
         if (!mmIncOf(mmIncoming(iv, latch), iv.res(), defOf))
             return false;
         _mxIv = iv;
@@ -7673,6 +7715,8 @@ class OptProfile
         i64 v = (i64)0;
         if (constValue(defOf, o, &v))
             return true; // a constant is invariant wherever it is spelled
+        if (mmGlobalAddr(o, defOf) != 0)
+            return true; // so is a global's address; the call takes its own
         if (o.kind() != (u8)OPK_USE || o.val() == 0)
             return false;
         Object* b = defBlk.get((Hashable*)o.val());
@@ -7685,7 +7729,9 @@ class OptProfile
         if (op.equals(String.withCString("Const")) || op.equals(String.withCString("ZExt"))
             || op.equals(String.withCString("Add")))
             return true;
-        if (set >= (u32)1 && (op.equals(String.withCString("Mul")) || op.equals(String.withCString("ElementAddr"))))
+        if (set >= (u32)1 && (op.equals(String.withCString("Mul")) || op.equals(String.withCString("ElementAddr"))
+                              || op.equals(String.withCString("Shl")) || op.equals(String.withCString("Trunc"))
+                              || op.equals(String.withCString("AddrOf"))))
             return true;
         if (set >= (u32)2 && (op.equals(String.withCString("FMul")) || op.equals(String.withCString("FAdd"))))
             return true;
@@ -7780,19 +7826,19 @@ class OptProfile
             IRInsn* loadA;
             IRInsn* loadB;
             IROperand* bCol;
-            if (mmIsUse(add0, kv) && mmMulOther(mul1, kv) != 0 && !mmIsUse(add1, kv))
+            if (mmIsUse(add0, kv) && mmMulOther(mul1, kv, defOf) != 0 && !mmIsUse(add1, kv))
                 {
                 eaA = ea0; mulA = mul0; loadA = l0;
                 eaB = ea1; mulB = mul1; loadB = l1; bCol = add1;
                 }
-            else if (mmIsUse(add1, kv) && mmMulOther(mul0, kv) != 0 && !mmIsUse(add0, kv))
+            else if (mmIsUse(add1, kv) && mmMulOther(mul0, kv, defOf) != 0 && !mmIsUse(add0, kv))
                 {
                 eaA = ea1; mulA = mul1; loadA = l1;
                 eaB = ea0; mulB = mul0; loadB = l0; bCol = add0;
                 }
             else
                 continue;
-            IROperand* ldb = mmMulOther(mulB, kv);
+            IROperand* ldb = mmMulOther(mulB, kv, defOf);
             bool bkClean = true;
             for (u32 i = (u32)0; i < Bk.insns().count(); i = i + (u32)1)
                 {
@@ -7867,8 +7913,14 @@ class OptProfile
             IRBlock* Hi = ejS.count() == (u32)1 ? (IRBlock*)ejS.get((u32)0) : (IRBlock*)0;
             if (Hi == 0 || !mmBranchesTo(Ej, Hi))
                 continue;
-            if (!mmCountedHeader(Hi, (u32)0, Ej, defOf))
+            // The i loop may start anywhere: a matrix product in a `par`
+            // block runs rows lo..hi of it.
+            _mxTakeStart = true;
+            bool hiOk = mmCountedHeader(Hi, (u32)0, Ej, defOf);
+            _mxTakeStart = false;
+            if (!hiOk)
                 continue;
+            IROperand* iStart = _mxStartOf;
             IRInsn* iPhi = _mxIv;
             IROperand* M = _mxBound;
             IRBlock* Bi = _mxBody;
@@ -7890,8 +7942,8 @@ class OptProfile
             if (!ejClean)
                 continue;
             IRValue* iv = iPhi.res();
-            IROperand* lda = mmMulOther(mulA, iv);
-            IROperand* ldc = mmMulOther(mulC, iv);
+            IROperand* lda = mmMulOther(mulA, iv, defOf);
+            IROperand* ldc = mmMulOther(mulC, iv, defOf);
             if (lda == 0 || ldc == 0 || ldb == 0)
                 continue;
 
@@ -7909,6 +7961,8 @@ class OptProfile
             for (u32 i = (u32)0; i < inputs.count(); i = i + (u32)1)
                 if (!mmOutside((IROperand*)inputs.get(i), defOf, defBlk, nest))
                     inv = false;
+            if (iStart != 0 && (!mmOutside(iStart, defOf, defBlk, nest) || !mmU32(iStart, defOf)))
+                inv = false;
             if (!inv)
                 continue;
             bool u32s = true;
@@ -7950,6 +8004,11 @@ class OptProfile
             _mxM = M; _mxN = N; _mxK = K;
             _mxLda = lda; _mxLdb = ldb; _mxLdc = ldc;
             _mxA = Aop; _mxB = Bop; _mxC = Cop;
+            _mxAddrA = mmGlobalAddr(Aop, defOf);
+            _mxAddrB = mmGlobalAddr(Bop, defOf);
+            _mxAddrC = mmGlobalAddr(Cop, defOf);
+            _mxStart = iStart;
+            _mxPtrTy = eaA.res().ty();
             _mxMem = mem;
             if (_mxConsts == 0)
                 _mxConsts = new i64[6];
@@ -8063,6 +8122,30 @@ class OptProfile
         String* tyU64 = String.withCString("U64");
         // In the reference's order: value creation order is frame-slot order.
         IROperand* M = mmU32Value(_mxM, _mxConsts[0]);
+        // An i loop from `s`: the kernel runs its M - s rows (none when
+        // s >= M), from A and C advanced by s rows (below).
+        IROperand* S = _mxStart;
+        if (S != 0)
+            {
+            String* tyU = String.withCString("U32");
+            IRValue* lt = new IRValue(String.withCString("Bool"));
+            IRInsn* cmp = IRInsn.with(String.withCString("ICmp"));
+            cmp.setRes(lt);
+            cmp.setPred(String.withCString("ULT"));
+            cmp.add(S);
+            cmp.add(M);
+            _mxPre.add(cmp);
+            IRValue* rows = mmEmit(String.withCString("Sub"), tyU, M, S);
+            IRValue* none = mmEmit(String.withCString("Const"), tyU, IROperand.immI((i64)0, tyU), (IROperand*)0);
+            IRValue* sel = new IRValue(tyU);
+            IRInsn* sn = IRInsn.with(String.withCString("Select"));
+            sn.setRes(sel);
+            sn.add(IROperand.useVal(lt));
+            sn.add(IROperand.useVal(rows));
+            sn.add(IROperand.useVal(none));
+            _mxPre.add(sn);
+            M = IROperand.useVal(sel);
+            }
         IROperand* N = mmU32Value(_mxN, _mxConsts[1]);
         IRValue* zm = mmEmit(String.withCString("ZExt"), tyU64, M, (IROperand*)0);
         IRValue* zn = mmEmit(String.withCString("ZExt"), tyU64, N, (IROperand*)0);
@@ -8072,15 +8155,28 @@ class OptProfile
         IROperand* lda = mmU32Value(_mxLda, _mxConsts[3]);
         IROperand* ldb = mmU32Value(_mxLdb, _mxConsts[4]);
         IROperand* ldc = mmU32Value(_mxLdc, _mxConsts[5]);
+        // A global's address taken inside the nest is taken again here, A
+        // then B then C, so the call reads no value the nest defines.
+        IROperand* A = _mxAddrA != 0 ? IROperand.useVal(mmEmit(String.withCString("AddrOf"), _mxAddrA.res().ty(), (IROperand*)_mxAddrA.ops().get((u32)0), (IROperand*)0)) : _mxA;
+        IROperand* B = _mxAddrB != 0 ? IROperand.useVal(mmEmit(String.withCString("AddrOf"), _mxAddrB.res().ty(), (IROperand*)_mxAddrB.ops().get((u32)0), (IROperand*)0)) : _mxB;
+        IROperand* Cb = _mxAddrC != 0 ? IROperand.useVal(mmEmit(String.withCString("AddrOf"), _mxAddrC.res().ty(), (IROperand*)_mxAddrC.ops().get((u32)0), (IROperand*)0)) : _mxC;
+        if (S != 0)
+            {
+            String* u32b = String.withCString("U32");
+            IRValue* offA = mmEmit(String.withCString("Mul"), u32b, S, lda);
+            A = IROperand.useVal(mmEmit(String.withCString("ElementAddr"), _mxPtrTy, A, IROperand.useVal(offA)));
+            IRValue* offC = mmEmit(String.withCString("Mul"), u32b, S, ldc);
+            Cb = IROperand.useVal(mmEmit(String.withCString("ElementAddr"), _mxPtrTy, Cb, IROperand.useVal(offC)));
+            }
         IRValue* done = new IRValue(String.withCString("Bool"));
         IRValue* mem = new IRValue(String.withCString("Mem"));
         IRInsn* call = IRInsn.with(String.withCString("Call"));
         call.setRes(done);
         call.setMemRes(mem);
         call.add(IROperand.sym(name));
-        call.add(_mxA);
-        call.add(_mxB);
-        call.add(_mxC);
+        call.add(A);
+        call.add(B);
+        call.add(Cb);
         call.add(IROperand.useVal(mn));
         call.add(K);
         call.add(lda);

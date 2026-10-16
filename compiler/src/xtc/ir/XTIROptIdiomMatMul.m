@@ -29,6 +29,15 @@
 @property(nonatomic) XTIROperand* A;
 @property(nonatomic) XTIROperand* B;
 @property(nonatomic) XTIROperand* C;
+// A base that is a global's address taken INSIDE the nest (AddrOf @A in the
+// k body): the call in the preheader takes its own AddrOf, or nil.
+@property(nonatomic, nullable) XTIRInsn* addrA;
+@property(nonatomic, nullable) XTIRInsn* addrB;
+@property(nonatomic, nullable) XTIRInsn* addrC;
+// Where the i loop starts when that is not 0 (a par tile's lo), else nil; the
+// element pointer type, for advancing A and C to that row.
+@property(nonatomic, nullable) XTIROperand* start;
+@property(nonatomic) XTIRType* ptrType;
 @property(nonatomic) XTIRValueId memIn;
 // The constant value of each of M, N, K, lda, ldb, ldc, or -1 (a value).
 @property(nonatomic, copy) NSArray<NSNumber*>* consts;
@@ -160,6 +169,21 @@ static BOOL isIncOf(XTIROperand* o, XTIRValueId x, XTMatMulDefs* d)
     return NO;
     }
 
+// `AddrOf @g` of a global symbol: invariant wherever it is taken.
+static XTIRInsn* globalAddr(XTIROperand* o, XTMatMulDefs* d)
+    {
+    XTIRInsn* a = defWith(o, XTIROpAddrOf, d);
+    return (a && a.operands.count == 1 && a.operands[0].kind == XTIROperandKindSym) ? a : nil;
+    }
+
+// Mul(p, q), or Shl(p, #n) — a constant stride that is a power of two, as
+// `i << 10` spells it.
+static XTIRInsn* scaleOf(XTIROperand* o, XTMatMulDefs* d)
+    {
+    XTIRInsn* m = defWith(o, XTIROpMul, d);
+    return m ? m : defWith(o, XTIROpShl, d);
+    }
+
 // index = Add(Mul(p, q), r) in any operand order. Returns the Mul and the
 // addend; the caller decides which Mul operand is which.
 static BOOL splitIndex(XTIROperand* idx, XTMatMulDefs* d, XTIRInsn** mulOut, XTIROperand** addendOut)
@@ -167,8 +191,8 @@ static BOOL splitIndex(XTIROperand* idx, XTMatMulDefs* d, XTIRInsn** mulOut, XTI
     XTIRInsn* add = defWith(idx, XTIROpAdd, d);
     if (!add || add.operands.count != 2)
         return NO;
-    XTIRInsn* m0 = defWith(add.operands[0], XTIROpMul, d);
-    XTIRInsn* m1 = defWith(add.operands[1], XTIROpMul, d);
+    XTIRInsn* m0 = scaleOf(add.operands[0], d);
+    XTIRInsn* m1 = scaleOf(add.operands[1], d);
     if (m0 && m0.operands.count == 2)
         {
         *mulOut = m0;
@@ -184,9 +208,21 @@ static BOOL splitIndex(XTIROperand* idx, XTMatMulDefs* d, XTIRInsn** mulOut, XTI
     return NO;
     }
 
-// Mul(v, other) in either order: the operand that is not v, or nil.
-static XTIROperand* mulOther(XTIRInsn* mul, XTIRValueId v)
+// Mul(v, other) in either order: the operand that is not v, or nil. For
+// Shl(v, #n) the stride 1 << n, as a U32 immediate.
+static XTIROperand* mulOther(XTIRInsn* mul, XTIRValueId v, XTMatMulDefs* d)
     {
+    if (mul.opcode == XTIROpShl)
+        {
+        int64_t n;
+        // The amount is a constant, possibly narrowed (`i << 9` lowers it as
+        // Trunc(ZExt(Const)) to the shift's U8).
+        XTIRInsn* tr = defWith(mul.operands[1], XTIROpTrunc, d);
+        BOOL amt = tr ? intConst(tr.operands[0], d, &n) : intConst(mul.operands[1], d, &n);
+        if (isUse(mul.operands[0], v) && amt && n >= 0 && n < 32)
+            return [XTIROperand immIWithType:[XTIRType u32Type] value:(1LL << n)];
+        return nil;
+        }
     if (isUse(mul.operands[0], v) && !isUse(mul.operands[1], v))
         return mul.operands[1];
     if (isUse(mul.operands[1], v) && !isUse(mul.operands[0], v))
@@ -200,7 +236,7 @@ static XTIROperand* mulOther(XTIRInsn* mul, XTIRValueId v)
 // preheader (the phi's non-latch incoming block, whose init must be 0).
 static BOOL countedHeader(XTIRBlock* H, NSUInteger extraPhis, XTIRBlock* latch, XTMatMulDefs* d,
                           XTIRInsn** ivOut, XTIROperand** boundOut, XTIRBlock** bodyOut,
-                          XTIRBlock** exitOut, XTIRBlock** preOut)
+                          XTIRBlock** exitOut, XTIRBlock** preOut, XTIROperand** startOut)
     {
     if (H.phiNodes.count != 1 + extraPhis || H.instructions.count < 1)
         return NO;
@@ -240,9 +276,14 @@ static BOOL countedHeader(XTIRBlock* H, NSUInteger extraPhis, XTIRBlock* latch, 
             pre = iv.operands[i].blockRef;
     if (!pre || !incoming(iv, latch))
         return NO;
+    // The init is 0, or — where the caller takes a start — any value, which
+    // the caller checks is made outside the nest.
     int64_t init;
-    if (!intConst(incoming(iv, pre), d, &init) || init != 0)
+    BOOL zero = intConst(incoming(iv, pre), d, &init) && init == 0;
+    if (!zero && !startOut)
         return NO;
+    if (startOut)
+        *startOut = zero ? nil : incoming(iv, pre);
     if (!isIncOf(incoming(iv, latch), iv.result.valueId, d))
         return NO;
     *ivOut = iv;
@@ -360,7 +401,7 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
         XTIRInsn* kPhi;
         XTIROperand* K;
         XTIRBlock *bodyK, *Ek, *Pk;
-        if (!countedHeader(Hk, 1, Bk, d, &kPhi, &K, &bodyK, &Ek, &Pk) || bodyK != Bk)
+        if (!countedHeader(Hk, 1, Bk, d, &kPhi, &K, &bodyK, &Ek, &Pk, NULL) || bodyK != Bk)
             continue;
         if (preds(Hk).count != 2 || preds(Ek).count != 1 || Ek.phiNodes.count != 0 || Bk.phiNodes.count != 0)
             continue;
@@ -410,19 +451,19 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
             continue;
         XTIRInsn *eaA, *eaB, *mulA, *mulB, *loadA, *loadB;
         XTIROperand* bCol;
-        if (isUse(add0, kv) && mulOther(mul1, kv) && !isUse(add1, kv))
+        if (isUse(add0, kv) && mulOther(mul1, kv, d) && !isUse(add1, kv))
             {
             eaA = ea0, mulA = mul0, loadA = l0;
             eaB = ea1, mulB = mul1, loadB = l1, bCol = add1;
             }
-        else if (isUse(add1, kv) && mulOther(mul0, kv) && !isUse(add0, kv))
+        else if (isUse(add1, kv) && mulOther(mul0, kv, d) && !isUse(add0, kv))
             {
             eaA = ea1, mulA = mul1, loadA = l1;
             eaB = ea0, mulB = mul0, loadB = l0, bCol = add0;
             }
         else
             continue;
-        XTIROperand* ldb = mulOther(mulB, kv);
+        XTIROperand* ldb = mulOther(mulB, kv, d);
         // Bk holds exactly: the two loads, their ElementAddrs, the products and
         // the k increment, plus index arithmetic and constants (nothing that
         // writes memory or calls).
@@ -442,6 +483,9 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
             case XTIROpZExt:
             case XTIROpAdd:
             case XTIROpMul:
+            case XTIROpShl:
+            case XTIROpTrunc:
+            case XTIROpAddrOf:
             case XTIROpElementAddr:
             case XTIROpFMul:
             case XTIROpFAdd:
@@ -485,7 +529,9 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
                 continue;
             if (insn.memoryResult ||
                 !(insn.opcode == XTIROpConst || insn.opcode == XTIROpZExt || insn.opcode == XTIROpAdd ||
-                  insn.opcode == XTIROpMul || insn.opcode == XTIROpElementAddr))
+                  insn.opcode == XTIROpMul || insn.opcode == XTIROpShl || insn.opcode == XTIROpTrunc ||
+                  insn.opcode == XTIROpAddrOf ||
+                  insn.opcode == XTIROpElementAddr))
                 {
                 ekClean = NO;
                 break;
@@ -498,7 +544,7 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
         XTIRInsn* jPhi;
         XTIROperand* N;
         XTIRBlock *Bj, *Ej, *Pj;
-        if (!countedHeader(Hj, 0, Ek, d, &jPhi, &N, &Bj, &Ej, &Pj))
+        if (!countedHeader(Hj, 0, Ek, d, &jPhi, &N, &Bj, &Ej, &Pj, NULL))
             continue;
         if (Bj != Pk || !branchesTo(Bj, Hk) || Bj.phiNodes.count != 0 || preds(Bj).count != 1 ||
             preds(Hj).count != 2 || preds(Ej).count != 1 || Ej.phiNodes.count != 0)
@@ -512,10 +558,13 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
         XTIRBlock* Hi = succs(Ej).count == 1 ? succs(Ej)[0] : nil;
         if (!Hi || !branchesTo(Ej, Hi))
             continue;
+        // The i loop may start anywhere: a matrix product in a `par` block
+        // runs rows lo..hi of it.
         XTIRInsn* iPhi;
         XTIROperand* M;
+        XTIROperand* iStart = nil;
         XTIRBlock *Bi, *Ei, *Pi;
-        if (!countedHeader(Hi, 0, Ej, d, &iPhi, &M, &Bi, &Ei, &Pi))
+        if (!countedHeader(Hi, 0, Ej, d, &iPhi, &M, &Bi, &Ei, &Pi, &iStart))
             continue;
         if (Bi != Pj || !branchesTo(Bi, Hj) || Bi.phiNodes.count != 0 || preds(Bi).count != 1 ||
             preds(Hi).count != 2 || preds(Ei).count != 1 || Ei.phiNodes.count != 0)
@@ -530,8 +579,8 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
         if (!ejClean)
             continue;
         XTIRValueId iv = iPhi.result.valueId;
-        XTIROperand* lda = mulOther(mulA, iv);
-        XTIROperand* ldc = mulOther(mulC, iv);
+        XTIROperand* lda = mulOther(mulA, iv, d);
+        XTIROperand* ldc = mulOther(mulC, iv, d);
         if (!lda || !ldc || !ldb)
             continue;
 
@@ -541,6 +590,8 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
           int64_t v;
           if (intConst(o, d, &v))
               return YES; // a constant is invariant wherever it is spelled
+          if (globalAddr(o, d))
+              return YES; // so is a global's address; the call takes its own
           if (o.kind != XTIROperandKindUse)
               return NO;
           XTIRBlock* b = d.defBlk[@(o.valueId)];
@@ -552,6 +603,8 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
         for (XTIROperand* o in inputs)
             if (!outside(o))
                 inv = NO;
+        if (iStart && (!outside(iStart) || !u32Op(iStart)))
+            inv = NO;
         if (!inv)
             continue;
         BOOL u32s = YES;
@@ -605,6 +658,11 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
         c.M = M, c.N = N, c.K = K;
         c.lda = lda, c.ldb = ldb, c.ldc = ldc;
         c.A = Aop, c.B = Bop, c.C = Cop;
+        c.addrA = globalAddr(Aop, d);
+        c.addrB = globalAddr(Bop, d);
+        c.addrC = globalAddr(Cop, d);
+        c.start = iStart;
+        c.ptrType = eaA.result.type;
         NSMutableArray<NSNumber*>* cv = [NSMutableArray array];
         for (XTIROperand* o in @[ M, N, K, lda, ldb, ldc ])
             {
@@ -656,6 +714,11 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
                                           operands:@[ [XTIROperand immIWithType:u32 value:k.longLongValue] ]]];
     }
 
+- (XTIROperand*)addrOf:(XTIRInsn*)a in:(XTIRBlock*)P fn:(XTIRFunction*)fn
+    {
+    return [XTIROperand useWithValueId:[self value:a.result.type in:P fn:fn op:XTIROpAddrOf operands:@[ a.operands[0] ]]];
+    }
+
 - (void)apply:(XTMatMulCand*)c inFunction:(XTIRFunction*)fn module:(XTIRModule*)mod
     {
     XTIRBlock* P = c.preheader;
@@ -683,6 +746,29 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
 
     // M | N << 32 as one U64.
     XTIROperand* M = [self u32Value:c.M konst:c.consts[0] in:P fn:fn];
+    // An i loop from `s`: the kernel runs its M - s rows (none when s >= M),
+    // from A and C advanced by s rows (below).
+    XTIROperand* S = c.start;
+    if (S)
+        {
+        XTIRType* u32 = [XTIRType u32Type];
+        XTIRValueId lt = [fn allocateValueId];
+        XTIRValue* ltv = [[XTIRValue alloc] initWithValueId:lt
+                                                       type:[XTIRType boolType]
+                                                    defSite:[[XTIRDefSite alloc] initWithBlock:P insnIndex:P.instructions.count]];
+        [fn registerValue:ltv];
+        [P.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpICmp
+                                                            result:ltv
+                                                          operands:@[ S, M ]
+                                                         predicate:(uint8_t)XTIRICmpULT
+                                                            dbgLoc:nil]];
+        XTIRValueId rows = [self value:u32 in:P fn:fn op:XTIROpSub operands:@[ M, S ]];
+        XTIRValueId none = [self value:u32 in:P fn:fn op:XTIROpConst
+                              operands:@[ [XTIROperand immIWithType:u32 value:0] ]];
+        M = [XTIROperand useWithValueId:[self value:u32 in:P fn:fn op:XTIROpSelect
+                                              operands:@[ [XTIROperand useWithValueId:lt], [XTIROperand useWithValueId:rows],
+                                                          [XTIROperand useWithValueId:none] ]]];
+        }
     XTIROperand* N = [self u32Value:c.N konst:c.consts[1] in:P fn:fn];
     XTIRValueId zm = [self value:u64 in:P fn:fn op:XTIROpZExt operands:@[ M ]];
     XTIRValueId zn = [self value:u64 in:P fn:fn op:XTIROpZExt operands:@[ N ]];
@@ -696,8 +782,23 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
     XTIROperand* lda = [self u32Value:c.lda konst:c.consts[3] in:P fn:fn];
     XTIROperand* ldb = [self u32Value:c.ldb konst:c.consts[4] in:P fn:fn];
     XTIROperand* ldc = [self u32Value:c.ldc konst:c.consts[5] in:P fn:fn];
+    // A global's address taken inside the nest is taken again here, A then B
+    // then C, so the call reads no value the nest defines.
+    XTIROperand* A = c.addrA ? [self addrOf:c.addrA in:P fn:fn] : c.A;
+    XTIROperand* B = c.addrB ? [self addrOf:c.addrB in:P fn:fn] : c.B;
+    XTIROperand* Cb = c.addrC ? [self addrOf:c.addrC in:P fn:fn] : c.C;
+    if (S)
+        {
+        XTIRType* u32 = [XTIRType u32Type];
+        XTIRValueId offA = [self value:u32 in:P fn:fn op:XTIROpMul operands:@[ S, lda ]];
+        A = [XTIROperand useWithValueId:[self value:c.ptrType in:P fn:fn op:XTIROpElementAddr
+                                              operands:@[ A, [XTIROperand useWithValueId:offA] ]]];
+        XTIRValueId offC = [self value:u32 in:P fn:fn op:XTIROpMul operands:@[ S, ldc ]];
+        Cb = [XTIROperand useWithValueId:[self value:c.ptrType in:P fn:fn op:XTIROpElementAddr
+                                               operands:@[ Cb, [XTIROperand useWithValueId:offC] ]]];
+        }
     NSArray<XTIROperand*>* args = @[
-        [XTIROperand symWithSymbolId:sid], c.A, c.B, c.C, [XTIROperand useWithValueId:mn], K, lda, ldb, ldc,
+        [XTIROperand symWithSymbolId:sid], A, B, Cb, [XTIROperand useWithValueId:mn], K, lda, ldb, ldc,
         [XTIROperand useWithValueId:c.memIn]
     ];
     XTIRValueId doneId = [fn allocateValueId];

@@ -188,6 +188,7 @@ i32 main(void)
         Socket* c = ls.accept((i32)-1);
         if (c == (Socket*)0)
             continue;
+        c.setNoDelay();
         u32 i = (u32)0;
         while (i < conns.count())
         {

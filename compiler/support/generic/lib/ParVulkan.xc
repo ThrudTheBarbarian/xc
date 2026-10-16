@@ -69,6 +69,7 @@ typedef void vkGetPhysicalDeviceProperties_t(pointer pd, pointer props);
 typedef void vkGetPhysicalDeviceProperties2_t(pointer pd, pointer props);
 typedef void vkGetPhysicalDeviceFeatures_t(pointer pd, pointer feats);
 typedef void vkGetPhysicalDeviceMemoryProperties_t(pointer pd, pointer props);
+typedef void vkGetPhysicalDeviceMemoryProperties2_t(pointer pd, pointer props);
 typedef void vkGetPhysicalDeviceQueueFamilyProperties_t(pointer pd, u32* count, pointer props);
 typedef i32 vkCreateDevice_t(pointer pd, pointer info, pointer alloc, pointer* out);
 typedef i32 vkEnumerateDeviceExtensionProperties_t(pointer pd, u8* layer, u32* count, pointer props);
@@ -192,6 +193,11 @@ pointer gVkQueue;
 u64 gVkCmdPool;
 bool gVkDiscrete;
 u8* gVkMemProps;        // VkPhysicalDeviceMemoryProperties, for the workers' memory()
+// The free figure, where the device lists VK_EXT_memory_budget: the heaps'
+// budgets less their usage, asked afresh at each memory() call.
+pointer gVkPd;
+vkGetPhysicalDeviceMemoryProperties2_t* gVkMemProps2;
+bool gVkBudget;
 // An integrated GPU whose driver imports host memory (VK_EXT_external_memory_host):
 // a `simd:` block is bound where it lies, with no copy either way.
 bool gVkHostImport;
@@ -264,6 +270,30 @@ class ParVulkan
         if (!start() || _identity == (String*)0)
             return String.withCString("");
         return _identity;
+        }
+
+    // Whether the device lists the extension `name`.
+    static bool deviceHas(vkEnumerateDeviceExtensionProperties_t* enumerateExt, pointer pd, u8* name)
+        {
+        if (enumerateExt == (vkEnumerateDeviceExtensionProperties_t*)0)
+            return false;
+        u32 ne = (u32)0;
+        enumerateExt(pd, (u8*)0, &ne, (pointer)0);
+        if (ne == (u32)0)
+            return false;
+        bool have = false;
+        u8* ep = (u8*)malloc((u64)ne * (u64)260);   // VkExtensionProperties: name[256], specVersion
+        if (enumerateExt(pd, (u8*)0, &ne, (pointer)ep) == (i32)0)
+            for (u32 e = (u32)0; e < ne && !have; e = e + (u32)1)
+                {
+                u8* nm = ep + e * (u32)260;
+                u32 k = (u32)0;
+                while (name[k] != (u8)0 && nm[k] == name[k])
+                    k = k + (u32)1;
+                have = name[k] == (u8)0 && nm[k] == (u8)0;
+                }
+        free((pointer)ep);
+        return have;
         }
 
     static bool start(void)
@@ -384,6 +414,11 @@ class ParVulkan
         if (pick < (i32)0)
             pick = (i32)0;
         pointer pd = pds[pick];
+        gVkPd = pd;
+        gVkMemProps2 = (vkGetPhysicalDeviceMemoryProperties2_t*)fn("vkGetPhysicalDeviceMemoryProperties2");
+        gVkBudget = gVkMemProps2 != (vkGetPhysicalDeviceMemoryProperties2_t*)0 &&
+                    ParVulkan.deviceHas((vkEnumerateDeviceExtensionProperties_t*)fn("vkEnumerateDeviceExtensionProperties"),
+                                        pd, "VK_EXT_memory_budget");
         // A discrete GPU reads host memory across the bus, slowly, and its own
         // memory, where the host can map it at all, is uncached for the host.
         props(pd, (pointer)pp);
@@ -1616,13 +1651,44 @@ class ParVulkanWorker : ParWorker
 
     // The device-local heaps summed (VkPhysicalDeviceMemoryProperties:
     // heap count at 260, sixteen heaps of size u64 + flags u32 from 264);
-    // free is unknown without VK_EXT_memory_budget, and says 0.
+    // free from VK_EXT_memory_budget — each heap's budget less its usage —
+    // where the device has it, else 0 (unknown).
     void memory(u64* total, u64* free)
         {
         *total = (u64)0;
         *free = (u64)0;
         if (gVkMemProps == (u8*)0)
             return;
+        if (gVkBudget)
+            {
+            // VkPhysicalDeviceMemoryProperties2 (sType 1000059006, the
+            // properties at 16) with VkPhysicalDeviceMemoryBudgetPropertiesEXT
+            // (sType 1000237000, heapBudget[16] at 16, heapUsage[16] at 144)
+            // chained.
+            u8 p2[536];
+            u8 bud[272];
+            memset((pointer)&p2[0], (i32)0, (u64)536);
+            memset((pointer)&bud[0], (i32)0, (u64)272);
+            _vk32(&p2[0], (u32)0, (u32)1000059006);
+            _vkp(&p2[0], (u32)8, (pointer)&bud[0]);
+            _vk32(&bud[0], (u32)0, (u32)1000237000);
+            gVkMemProps2(gVkPd, (pointer)&p2[0]);
+            u32 nh = *(u32*)(pointer)(&p2[0] + 16 + 260);
+            if (nh > (u32)16)
+                nh = (u32)16;
+            for (u32 i = (u32)0; i < nh; i = i + (u32)1)
+                {
+                u8* h = &p2[0] + 16 + 264 + i * (u32)16;
+                if ((*(u32*)(pointer)(h + 8) & (u32)1) == (u32)0)   // DEVICE_LOCAL
+                    continue;
+                u64 b = *(u64*)(pointer)(&bud[0] + 16 + i * (u32)8);
+                u64 used = *(u64*)(pointer)(&bud[0] + 144 + i * (u32)8);
+                *total = *total + *(u64*)(pointer)h;
+                if (b > used)
+                    *free = *free + (b - used);
+                }
+            return;
+            }
         u32 heaps = *(u32*)(pointer)(gVkMemProps + 260);
         if (heaps > (u32)16)
             heaps = (u32)16;
