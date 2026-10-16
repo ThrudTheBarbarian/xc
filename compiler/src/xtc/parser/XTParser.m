@@ -1359,7 +1359,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     XTASTNode* firstInit = nil;
     if ([self match:XTTokenAssign])
         {
-        firstInit = [self parseInitialiser];
+        firstInit = [self stringInitForArrayType:varType initialiser:[self parseInitialiser]];
         }
     XTVariableDeclNode* firstDecl = [[XTVariableDeclNode alloc] initWithName:firstName
                                                                         type:varType
@@ -1382,7 +1382,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         XTASTNode* nextInit = nil;
         if ([self match:XTTokenAssign])
             {
-            nextInit = [self parseInitialiser];
+            nextInit = [self stringInitForArrayType:varType initialiser:[self parseInitialiser]];
             }
         XTVariableDeclNode* nextDecl = [[XTVariableDeclNode alloc] initWithName:nextName.value
                                                                            type:varType
@@ -2644,13 +2644,13 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
             }
         else
             {
-            firstInit = [self parseInitialiser];
+            firstInit = [self stringInitForArrayType:varType initialiser:[self parseInitialiser]];
             }
         [self blkBind:nameTok.value type:varType];
         }
     else if ([self match:XTTokenAssign])
         {
-        firstInit = [self parseInitialiser];
+        firstInit = [self stringInitForArrayType:varType initialiser:[self parseInitialiser]];
         }
     else if ([self check:XTTokenLParen])
         {
@@ -2706,7 +2706,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         XTASTNode* nextInit = nil;
         if ([self match:XTTokenAssign])
             {
-            nextInit = [self parseInitialiser];
+            nextInit = [self stringInitForArrayType:varType initialiser:[self parseInitialiser]];
             }
         XTVariableDeclNode* nextDecl = [[XTVariableDeclNode alloc] initWithName:nextName.value
                                                                            type:varType
@@ -2776,6 +2776,28 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 |* is a separate parse path and still takes either.)
 |* @return  The initialiser AST node (expression or synthetic block for lists).
 \****************************************************************************/
+// `u8 name[8] = "ABCDEFG";` — a string literal initialising an array of bytes
+// is the list of its bytes and a NUL, as C reads it. Left as the literal it
+// stored the POINTER's bytes into the array (both compilers, the Base64
+// alphabet), so it is rewritten here, where the declared type is known; an
+// unsized array then takes its size from the list.
+- (nullable XTASTNode*)stringInitForArrayType:(nullable XTType*)type initialiser:(nullable XTASTNode*)init
+    {
+    if (![init isKindOfClass:[XTLiteralStringNode class]] || ![type isKindOfClass:[XTArrayType class]])
+        return init;
+    NSString* elem = ((XTArrayType*)type).elementType.displayName;
+    if (![elem isEqualToString:@"u8"] && ![elem isEqualToString:@"i8"])
+        return init;
+    XTSourceLocation* loc = init.location;
+    NSData* bytes = [((XTLiteralStringNode*)init).stringValue dataUsingEncoding:NSUTF8StringEncoding];
+    NSMutableArray<XTASTNode*>* items = [NSMutableArray arrayWithCapacity:bytes.length + 1];
+    const uint8_t* b = bytes.bytes;
+    for (NSUInteger i = 0; i < bytes.length; i++)
+        [items addObject:[[XTLiteralIntNode alloc] initWithValue:(int64_t)b[i] location:loc]];
+    [items addObject:[[XTLiteralIntNode alloc] initWithValue:0 location:loc]];
+    return [[XTBlockNode alloc] initWithStatements:items location:loc];
+    }
+
 - (nullable XTASTNode*)parseInitialiser
     {
     XTSourceLocation* loc = [self currentLocation];

@@ -1322,6 +1322,26 @@ static NSString* parRootName(XTASTNode* n)
             return nil;
             }
         }
+    // A capture becomes an ivar of the block's class, whose own methods and
+    // range fields are named below; a capture with one of those names made the
+    // body's `run` resolve to the block's run() ("calls itself recursively; a
+    // GPU has no call stack"). Refused by name rather than mangled: the GPU
+    // printers and the reports spell the ivars as the source does.
+    static NSSet<NSString*>* reservedCapture = nil;
+    if (!reservedCapture)
+        reservedCapture = [NSSet setWithArray:@[ @"run", @"go", @"lo", @"hi", @"merge", @"copyChunk", @"parName",
+                                                 @"gpuSource", @"gpuLength", @"gpuGlobal", @"gpuGlobalBytes",
+                                                 @"gpuReadsOnly", @"gpuReadsOnlyGlobal", @"gpuWritesAll", @"__par_hi" ]];
+    for (NSString* cn in frameNames)
+        if ([reservedCapture containsObject:cn])
+            {
+            [self.diagnostics emitError:[NSString stringWithFormat:@"a '%@' block cannot capture '%@': the name is one "
+                                                                     "of the block's own (run, merge, lo, hi, …). Rename "
+                                                                     "the variable",
+                                                                   label, cn]
+                                     at:loc];
+            return nil;
+            }
 
     // ── the class ──
     NSUInteger counter = [self.blkState[@"parCounter"] unsignedIntegerValue];

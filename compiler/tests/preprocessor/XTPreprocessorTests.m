@@ -177,6 +177,36 @@ int runPreprocessorTests(void) {
         [fm removeItemAtPath:gen error:nil];
     }
 
+    // An ABSOLUTE import path names its file and is not looked for on the
+    // search list (it used to be, and failed: "Cannot find include file
+    // '/…' (searched: …)"). The .xt → .xc retry applies to it as well.
+    {
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSString *dir = [NSTemporaryDirectory() stringByAppendingPathComponent:
+                         [NSString stringWithFormat:@"xtc-abs-%u", arc4random()]];
+        [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+        NSString *absFile = [dir stringByAppendingPathComponent:@"Abs.xc"];
+        [@"ABSOLUTE_BODY\n" writeToFile:absFile atomically:YES encoding:NSUTF8StringEncoding error:nil];
+
+        XTDiagnosticEngine *diag = [[XTDiagnosticEngine alloc] init];
+        XTPreprocessor *pp = [[XTPreprocessor alloc] initWithDiagnostics:diag];
+        pp.includePaths = @[];
+        NSString *src = [NSString stringWithFormat:@"#import \"%@\"\n", absFile];
+        NSString *result = [pp preprocessSource:src filename:@"main.xc"];
+        ASSERT_TRUE([result containsString:@"ABSOLUTE_BODY"],
+                    "an absolute #import path names its file");
+        // A fresh preprocessor: #import is once per run, and the first run
+        // already took this file.
+        NSString *renamed = [dir stringByAppendingPathComponent:@"Abs.xt"];
+        XTPreprocessor *pp2 = [[XTPreprocessor alloc] initWithDiagnostics:diag];
+        pp2.includePaths = @[];
+        NSString *result2 = [pp2 preprocessSource:[NSString stringWithFormat:@"#import \"%@\"\n", renamed]
+                                         filename:@"main.xc"];
+        ASSERT_TRUE([result2 containsString:@"ABSOLUTE_BODY"],
+                    "an absolute .xt path retries as .xc");
+        [fm removeItemAtPath:dir error:nil];
+    }
+
     // `#use <X>` sugar: expands to an #import of X (source X.xc or binary libX,
     // by what the resolver finds) followed by `use X;`. Here the resolver finds
     // a source Widget.xc via the bare-name `.xc` fallback, and the `use Widget;`

@@ -4485,6 +4485,15 @@ class ClassInfo
         // its layout here would leave a spare one behind and renumber every
         // layout after it.
         String* what = isName(n.name(), "-") ? n.kid((u32)0).ty() : n.name();
+        // `sizeof(a)` for `u8 a[] = { … }`: the mention's type is still
+        // `u8[]`, and only the declaration knows the count (as `.length`
+        // reads it); it used to come out as 0.
+        if (isName(n.name(), "-") && n.kid((u32)0).kind() == (u16)nkIdent)
+            {
+            String* dt = declaredTypeOf(n.kid((u32)0));
+            if (dt != (String*)0 && isArrayLike(dt))
+                what = dt;
+            }
         u32 w = sizeOf(what);
         // sizeof's type is the target's size type (u16 on the 6502, from
         // sema): a size that does not fit it would wrap silently. Refuse it
@@ -12597,6 +12606,8 @@ class ClassInfo
     ClassInfo* preScanClass(Node* cls)
         {
         ClassInfo* info = preScanLayout(cls);
+        if (info == (ClassInfo*)0)
+            return info;
         preScanRest(cls, info);
         return info;
         }
@@ -12606,6 +12617,14 @@ class ClassInfo
         Object* cached = _classes.get((Hashable*)cls.name());
         if (cached != 0)
             return (ClassInfo*)cached;
+        // A class that reaches itself through its parent chain: sema refuses
+        // it first, and one that slipped past used to overflow the stack
+        // here (2026-10-15). An error instead.
+        if (_scanBusy.get((Hashable*)cls.name()) != 0)
+            {
+            giveUp(String.withFormat("class '%s' inherits from itself", cls.name().cString()));
+            return (ClassInfo*)0;
+            }
         _scanBusy.set((Hashable*)cls.name(), (Object*)cls.name());
 
         // The parser spells "no parent" and "no protocols" as a dash, not as

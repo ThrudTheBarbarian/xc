@@ -1350,8 +1350,22 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
     NSString* renamed = [filename hasSuffix:@".xt"]
                             ? [[filename substringToIndex:filename.length - 3] stringByAppendingString:@".xc"]
                             : nil;
+    // An ABSOLUTE path names its file: no search list, as C includes have
+    // always read. (A generated source that imports its sibling by the full
+    // path the generator knew, say.) Checked with the same case-exact test.
+    BOOL absolute = [filename hasPrefix:@"/"] || [filename hasPrefix:@"\\"]
+                 || (filename.length > 2 && [filename characterAtIndex:1] == ':');
+    if (absolute)
+        {
+        if (fileExistsCaseSensitive(fm, filename))
+            foundPath = filename;
+        else if (renamed && fileExistsCaseSensitive(fm, renamed))
+            foundPath = renamed;
+        }
     for (NSString* dir in searchPaths)
         {
+        if (foundPath || absolute)
+            break;
         NSString* candidate = [dir stringByAppendingPathComponent:filename];
         if (fileExistsCaseSensitive(fm, candidate))
             {

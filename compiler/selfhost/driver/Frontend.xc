@@ -660,7 +660,9 @@ class FeOptions
             // printDiagnostic adds the source line and the caret under it.
             for (u32 e = (u32)0; e < parser.errors().count(); e = e + (u32)1)
                 Frontend.printDiagnostic((String*)parser.errors().get(e));
-            Process.exit((i32)3);
+            // Status 1, as the reference: 3 is "unsupported", which the
+            // differentials skip, and a program refused is not that.
+            Process.exit((i32)1);
             return (IRModule*)0;
             }
         u32 at = (u32)0;
@@ -828,7 +830,7 @@ class FeOptions
             // it came from had a position, and a bare `error:` when it did not.
             for (u32 e = (u32)0; e < sema.errors().count(); e = e + (u32)1)
                 Frontend.printDiagnostic((String*)sema.errors().get(e));
-            Process.exit((i32)3);
+            Process.exit((i32)1);
             return (IRModule*)0;
             }
 

@@ -1544,7 +1544,18 @@ class IfFrame
             renamed.append(String.withCString(".xc"));
             }
         String* foundPath = (String*)0;
-        for (u32 i = (u32)0; i < searchPaths.count() && foundPath == 0; i = i + (u32)1)
+        // An ABSOLUTE path names its file: no search list, as C includes have
+        // always read. Checked with the same case-exact test.
+        bool absolute = target.hasPrefix(String.withCString("/")) || target.hasPrefix(String.withCString("\\"))
+                     || (target.byteLength() > (u32)2 && target.byteAt((u32)1) == (u8)':');
+        if (absolute)
+            {
+            if (Files.existsExact(target))
+                foundPath = target;
+            else if (renamed != (String*)0 && Files.existsExact(renamed))
+                foundPath = renamed;
+            }
+        for (u32 i = (u32)0; i < searchPaths.count() && foundPath == 0 && !absolute; i = i + (u32)1)
             {
             String* dir = (String*)searchPaths.get(i);
             String* candidate = dir.appendingPathComponent(target);

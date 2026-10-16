@@ -2023,7 +2023,7 @@ class Parser
         // keyword only adds cross-module visibility on top.
         v.setFlags(flags | (u32)NF_GLOBAL);
         if (match((u16)tokAssign)) {
-            v.add(parseInitialiser());
+            v.add(stringInitForArray(vty, parseInitialiser()));
             // §6: `extern` + initialiser = exported DEFINITION. The original
             // sets isExported (never dumped) and its dumped extern flag
             // stays 0 — swap the bits to match (tasks #31/#33).
@@ -3190,6 +3190,25 @@ class Parser
                 return (Node*)0;
             }
         }
+        // A capture becomes an ivar of the block's class, whose own methods
+        // and range fields are named below; one with such a name made the
+        // body's `run` resolve to the block's run(). Refused by name, as the
+        // reference does: the GPU printers spell the ivars as the source does.
+        for (u32 i = (u32)0; i < frameNames.count(); i = i + (u32)1) {
+            String* cn = (String*)frameNames.get(i);
+            if (cn.equals(String.withCString("run")) || cn.equals(String.withCString("go"))
+                || cn.equals(String.withCString("lo")) || cn.equals(String.withCString("hi"))
+                || cn.equals(String.withCString("merge")) || cn.equals(String.withCString("copyChunk"))
+                || cn.equals(String.withCString("parName")) || cn.equals(String.withCString("gpuSource"))
+                || cn.equals(String.withCString("gpuLength")) || cn.equals(String.withCString("gpuGlobal"))
+                || cn.equals(String.withCString("gpuGlobalBytes")) || cn.equals(String.withCString("gpuReadsOnly"))
+                || cn.equals(String.withCString("gpuReadsOnlyGlobal")) || cn.equals(String.withCString("gpuWritesAll"))
+                || cn.equals(String.withCString("__par_hi"))) {
+                _errorAt(String.withFormat("a '%s' block cannot capture '%s': the name is one of the block's own (run, merge, lo, hi, …). Rename the variable",
+                                           label.cString(), cn.cString()), parKeywordNode());
+                return (Node*)0;
+            }
+        }
         // :constant(a, b): each name a captured array, or pointer to numbers,
         // the body only reads. As the reference.
         Array* constants = (Array*)frame.get((Hashable*)String.withCString("constant"));
@@ -4004,7 +4023,7 @@ class Parser
                 if (lit != 0) v.add(lit);
                 blockBodyInit = true;
             } else if (match((u16)tokAssign)) {
-                v.add(parseInitialiser());
+                v.add(stringInitForArray(vty, parseInitialiser()));
             } else if (check((u16)tokLParen)) {
                 // `Myclass c(a, b);` — a stack instance with constructor args.
                 // The original expands this into a two-statement block: the
@@ -4071,6 +4090,26 @@ class Parser
         for (u32 i = (u32)0; i < decls.count(); i = i + (u32)1) b.add((Node*)decls.get(i));
         b.setStmtPos(startTok.fileId(), startTok.line(), startTok.col());
         return b;
+    }
+
+    // `u8 name[8] = "ABCDEFG";` — a string literal initialising an array of
+    // bytes is the list of its bytes and a NUL, as C reads it. Left as the
+    // literal it stored the POINTER's bytes into the array (both compilers,
+    // the Base64 alphabet), so it is rewritten here, where the declared
+    // type is known; an unsized array then takes its size from the list.
+    Node* stringInitForArray(String* vty, Node* init)
+    {
+        if (init == (Node*)0 || init.kind() != (u16)nkStr) return init;
+        u32 lb = vty.indexOfByte((u8)'[');
+        if (lb == String.notFound() || !vty.hasSuffix(String.withCString("]"))) return init;
+        String* elem = vty.substringBytes((u32)0, lb);
+        if (!Parser._same(elem, "u8") && !Parser._same(elem, "i8")) return init;
+        Node* list = mk((u16)nkBlock);
+        String* s = init.name();
+        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
+            list.add(parInt((i64)s.byteAt(i)));
+        list.add(parInt((i64)0));
+        return list;
     }
 
     // `= { … }` / `= [ … ]` initialiser lists, or a plain expression.
