@@ -1,0 +1,18 @@
+---
+title: UXTableCell
+description: "One realized string of a table row: drawn roomy where the toolkit paints, native where the platform does, and not clickable."
+slug: versions/0.85/compiler/api/uxkit/uxtablecell
+banner:
+  content: 'This is the documentation for xc 0.85. <a href="/compiler/">The current documentation</a> describes the newest version.'
+pagefind: false
+---
+
+`UXTableCell` is one string of a
+[`UXTableRow`](/versions/0.85/compiler/api/uxkit/uxtablerow/). Where the toolkit paints the
+table itself (GEM, headless), the cell draws its `text` scaled to the row,
+vertically centred and never smaller than the platform's stock size. Where the
+platform renders the table natively (Win32, AppKit), the cell does not draw.
+
+A cell does **not** override `mouseDown`. The click bubbles up the responder
+chain to its row, which makes the *row* the selectable item even though the
+cell receives the hit.
