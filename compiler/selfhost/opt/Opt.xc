@@ -7489,6 +7489,50 @@ class OptProfile
         return n.op().equals(op) ? n : (IRInsn*)0;
         }
 
+    // "Ptr(<ty>,", the prefix of a pointer type to ty.
+    static String* mmPtrOf(String* ty)
+        {
+        String* p = String.withCString("Ptr(");
+        p.append(ty);
+        p.appendCString(",");
+        return p;
+        }
+
+    // The same integer width, the other signedness.
+    static bool mmOtherSign(String* a, String* b)
+        {
+        u8* x = a.cString();
+        u8* y = b.cString();
+        if (a.byteLength() != (u32)3 || b.byteLength() != (u32)3 || x[1] != y[1] || x[2] != y[2])
+            return false;
+        if (!(x[1] == (u8)'3' && x[2] == (u8)'2') && !(x[1] == (u8)'6' && x[2] == (u8)'4'))
+            return false;
+        return (x[0] == (u8)'I' && y[0] == (u8)'U') || (x[0] == (u8)'U' && y[0] == (u8)'I');
+        }
+
+    // A Bitcast to the integer type fty of a value of the other signedness at
+    // the same width, else 0. As the reference.
+    IRInsn* mmSameWidthBitcast(IROperand* o, String* fty, Map* defOf)
+        {
+        IRInsn* bc = mmDefWith(o, String.withCString("Bitcast"), defOf);
+        if (bc == 0 || bc.ops().count() != (u32)1 || bc.res() == 0 || !bc.res().ty().equals(fty))
+            return (IRInsn*)0;
+        IROperand* src = (IROperand*)bc.ops().get((u32)0);
+        if (src.kind() != (u8)OPK_USE || src.val() == 0)
+            return (IRInsn*)0;
+        IRInsn* def = (IRInsn*)defOf.get((Hashable*)src.val());
+        return (def != 0 && def.res() != 0 && mmOtherSign(fty, def.res().ty())) ? bc : (IRInsn*)0;
+        }
+
+    // Such a Bitcast of a load (I32 of a U32, U64 of an I64, ...), else 0.
+    IRInsn* mmSameWidthCast(IROperand* o, String* fty, Map* defOf)
+        {
+        IRInsn* bc = mmSameWidthBitcast(o, fty, defOf);
+        if (bc == 0 || mmDefWith((IROperand*)bc.ops().get((u32)0), String.withCString("Load"), defOf) == 0)
+            return (IRInsn*)0;
+        return bc;
+        }
+
     // A use of `Const +0.0` of the given float type (or an ImmF of +0.0).
     bool mmPlusZero(IROperand* o, Map* defOf, String* fty)
         {
@@ -7777,9 +7821,11 @@ class OptProfile
                 continue;
             String* fty = sPhi.res().ty();
             bool f64 = fty.equals(String.withCString("F64"));
-            // An integer nest (u32 or i32 elements, Add and Mul) goes to the
-            // target's integer kernel, where it has one. As the reference.
-            bool isInt = fty.equals(String.withCString("U32")) || fty.equals(String.withCString("I32"));
+            // An integer nest (u32, i32, u64 or i64 elements, Add and Mul)
+            // goes to the target's integer kernel, where it has one. As the
+            // reference.
+            bool isInt = fty.equals(String.withCString("U32")) || fty.equals(String.withCString("I32"))
+                         || fty.equals(String.withCString("U64")) || fty.equals(String.withCString("I64"));
             if (!f64 && !isInt && !fty.equals(String.withCString("F32")))
                 continue;
             if (isInt && !_profile.matMulInts())
@@ -7791,20 +7837,58 @@ class OptProfile
                       : !mmPlusZero(mmIncoming(sPhi, Pk), defOf, fty))
                 continue;
             IRInsn* fadd = mmDefWith(mmIncoming(sPhi, Bk), String.withCString(isInt ? "Add" : "FAdd"), defOf);
+            // An unsigned sum of a mixed-signedness product is added in the
+            // signed type: s' = Bitcast(Add(Bitcast(s), Mul)). As the reference.
+            IRInsn* sumOut = (IRInsn*)0;
+            IRInsn* sumIn = (IRInsn*)0;
+            String* mty = fty;
+            if (fadd == 0 && isInt)
+                {
+                sumOut = mmSameWidthBitcast(mmIncoming(sPhi, Bk), fty, defOf);
+                fadd = sumOut != 0 ? mmDefWith((IROperand*)sumOut.ops().get((u32)0), String.withCString("Add"), defOf) : (IRInsn*)0;
+                if (fadd != 0)
+                    mty = fadd.res().ty();
+                }
             if (fadd == 0 || fadd.ops().count() != (u32)2 || defBlk.get((Hashable*)fadd.res()) != (Object*)Bk)
                 continue;
-            IROperand* f0 = (IROperand*)fadd.ops().get((u32)0);
-            IROperand* f1 = (IROperand*)fadd.ops().get((u32)1);
-            IROperand* prodOp = mmIsUse(f0, sPhi.res()) ? f1 : (mmIsUse(f1, sPhi.res()) ? f0 : (IROperand*)0);
+            if (sumOut != 0 && defBlk.get((Hashable*)sumOut.res()) != (Object*)Bk)
+                continue;
+            IROperand* prodOp = (IROperand*)0;
+            for (u32 q = (u32)0; q < (u32)2 && prodOp == 0; q = q + (u32)1)
+                {
+                IROperand* sOp = (IROperand*)fadd.ops().get(q);
+                IRInsn* inCast = sumOut != 0 ? mmDefWith(sOp, String.withCString("Bitcast"), defOf) : (IRInsn*)0;
+                if (inCast != 0 && (inCast.ops().count() != (u32)1 || !inCast.res().ty().equals(mty)))
+                    inCast = (IRInsn*)0;
+                bool hit = sumOut != 0
+                    ? (inCast != 0 && mmIsUse((IROperand*)inCast.ops().get((u32)0), sPhi.res())
+                       && defBlk.get((Hashable*)inCast.res()) == (Object*)Bk)
+                    : mmIsUse(sOp, sPhi.res());
+                if (hit)
+                    {
+                    prodOp = (IROperand*)fadd.ops().get((u32)1 - q);
+                    sumIn = inCast;
+                    }
+                }
             IRInsn* fmul = prodOp != 0 ? mmDefWith(prodOp, String.withCString(isInt ? "Mul" : "FMul"), defOf) : (IRInsn*)0;
             if (fmul == 0 || fmul.ops().count() != (u32)2 || defBlk.get((Hashable*)fmul.res()) != (Object*)Bk)
                 continue;
-            IRInsn* l0 = mmDefWith((IROperand*)fmul.ops().get((u32)0), String.withCString("Load"), defOf);
-            IRInsn* l1 = mmDefWith((IROperand*)fmul.ops().get((u32)1), String.withCString("Load"), defOf);
+            // A load of the other signedness at the same width arrives through
+            // a Bitcast (u32 x i32): the product's low bits are the same either
+            // way, so the nest is the kernel of the sum's type.
+            IRInsn* cast0 = isInt ? mmSameWidthCast((IROperand*)fmul.ops().get((u32)0), mty, defOf) : (IRInsn*)0;
+            IRInsn* cast1 = isInt ? mmSameWidthCast((IROperand*)fmul.ops().get((u32)1), mty, defOf) : (IRInsn*)0;
+            IRInsn* l0 = mmDefWith(cast0 != 0 ? (IROperand*)cast0.ops().get((u32)0) : (IROperand*)fmul.ops().get((u32)0),
+                                   String.withCString("Load"), defOf);
+            IRInsn* l1 = mmDefWith(cast1 != 0 ? (IROperand*)cast1.ops().get((u32)0) : (IROperand*)fmul.ops().get((u32)1),
+                                   String.withCString("Load"), defOf);
             if (l0 == 0 || l1 == 0 || l0 == l1 || defBlk.get((Hashable*)l0.res()) != (Object*)Bk
                 || defBlk.get((Hashable*)l1.res()) != (Object*)Bk)
                 continue;
-            if (!l0.res().ty().equals(fty) || !l1.res().ty().equals(fty))
+            if ((cast0 != 0 && defBlk.get((Hashable*)cast0.res()) != (Object*)Bk)
+                || (cast1 != 0 && defBlk.get((Hashable*)cast1.res()) != (Object*)Bk))
+                continue;
+            if ((cast0 == 0 && !l0.res().ty().equals(mty)) || (cast1 == 0 && !l1.res().ty().equals(mty)))
                 continue;
             IRInsn* ea0 = mmDefWith((IROperand*)l0.ops().get((u32)0), String.withCString("ElementAddr"), defOf);
             IRInsn* ea1 = mmDefWith((IROperand*)l1.ops().get((u32)0), String.withCString("ElementAddr"), defOf);
@@ -7843,7 +7927,8 @@ class OptProfile
             for (u32 i = (u32)0; i < Bk.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)Bk.insns().get(i);
-                if (n == loadA || n == loadB)
+                if (n == loadA || n == loadB || (cast0 != 0 && n == cast0) || (cast1 != 0 && n == cast1)
+                    || (sumIn != 0 && n == sumIn) || (sumOut != 0 && n == sumOut))
                     continue;
                 if (n.memRes() != 0 || !mmOpIn(n.op(), (u32)2))
                     {
@@ -7971,11 +8056,10 @@ class OptProfile
                     u32s = false;
             if (!u32s)
                 continue;
-            String* ptrPre = String.withCString("Ptr(");
-            ptrPre.append(fty);
-            ptrPre.appendCString(",");
-            if (eaA.res() == 0 || eaB.res() == 0 || eaC.res() == 0 || !eaA.res().ty().hasPrefix(ptrPre)
-                || !eaB.res().ty().hasPrefix(ptrPre) || !eaC.res().ty().hasPrefix(ptrPre))
+            // The three bases point at the element type (A and B at their
+            // loads', which differs from C's only in signedness).
+            if (eaA.res() == 0 || eaB.res() == 0 || eaC.res() == 0 || !eaA.res().ty().hasPrefix(mmPtrOf(loadA.res().ty()))
+                || !eaB.res().ty().hasPrefix(mmPtrOf(loadB.res().ty())) || !eaC.res().ty().hasPrefix(mmPtrOf(fty)))
                 continue;
             if (mmEscapes(fn, nest))
                 continue;
@@ -8001,6 +8085,10 @@ class OptProfile
                 _mmElem = String.withCString("u32");
             else if (fty.equals(String.withCString("I32")))
                 _mmElem = String.withCString("i32");
+            else if (fty.equals(String.withCString("U64")))
+                _mmElem = String.withCString("u64");
+            else if (fty.equals(String.withCString("I64")))
+                _mmElem = String.withCString("i64");
             _mxM = M; _mxN = N; _mxK = K;
             _mxLda = lda; _mxLdb = ldb; _mxLdc = ldc;
             _mxA = Aop; _mxB = Bop; _mxC = Cop;

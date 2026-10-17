@@ -1262,6 +1262,18 @@ class ParVulkanWorker : ParWorker
     u64 _dbuf[49];
     u64 _dmem[49];
     i64 _dcap[49];
+    // A discrete card's copy of a read-only array: the block, its length and
+    // generation (ParDevice.generation); one unwritten since is not sent
+    // again, as CUDA's slots.
+    pointer _dhost[49];
+    i64 _dlen[49];
+    i64 _dgen[49];
+    // A read-only footprinted array this worker saw last run, unchanged
+    // since, goes whole (once, then resident) instead of a slice per tile.
+    bool _asWhole[49];
+    pointer _seenHost[49];
+    i64 _seenLen[49];
+    i64 _seenGen[49];
     i64 _sizes[49];
     // Per slot: the reductions' buffers, the set, the command buffer, the fence.
     // A discrete card: a tile's slices go through a staging buffer per slot
@@ -1388,6 +1400,21 @@ class ParVulkanWorker : ParWorker
         return true;
         }
 
+    // Whether the read-only footprinted array of slot q is the one this
+    // worker saw last run, unwritten since, and fits what is left of budget.
+    bool wholeAgain(u32 q, pointer host, i64 len, i64* budget)
+        {
+        i64 gen = len >= (i64)65536 ? ParDevice.generation(host) : (i64)-1;
+        bool again = gen != (i64)-1 && _seenHost[q] == host && _seenLen[q] == len && _seenGen[q] == gen;
+        _seenHost[q] = host;
+        _seenLen[q] = len;
+        _seenGen[q] = gen;
+        if (!again || len > *budget)
+            return false;
+        *budget = *budget - len;
+        return true;
+        }
+
     bool prepare(ParChunk* proto, u8* src, ParLayout* l, i64 tile)
         {
         u8* spv = ParVulkan.spirvOf(src);
@@ -1400,6 +1427,9 @@ class ParVulkanWorker : ParWorker
             return false;
         l = _l;
         u8* obj = proto.objBytes();
+        // What this run writes is out of date everywhere else from now (an
+        // integrated GPU writes an imported block in place, unseen).
+        ParDevice.wroteAll(obj, l);
         u32 nfixed = (u32)1 + l.nbuf + l.nglob;
         _nb = nfixed + l.nred;
         for (u32 d = (u32)0; d < (u32)PAR_VK_DEPTH; d = d + (u32)1)
@@ -1421,14 +1451,24 @@ class ParVulkanWorker : ParWorker
         // filled once; copied to the device once when it is discrete).
         bool sliced[49];
         for (u32 i = (u32)0; i < (u32)49; i = i + (u32)1)
+            {
             sliced[i] = false;
+            _asWhole[i] = false;
+            }
         if (gVkDiscrete)
             {
             u32 bi = (u32)1;
             i64 downMax = (i64)0;
+            u64 memTotal = (u64)0;
+            u64 memFree = (u64)0;
+            memory(&memTotal, &memFree);
+            i64 budget = (i64)(memFree >> (u64)2);
             for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
                 {
-                if (l.bufFp[i] != (i64)0)
+                if (l.bufFp[i] != (i64)0 && l.bufIn[i] != (i64)0
+                    && wholeAgain(bi, *(pointer*)(obj + l.bufOff[i]), l.bufLen[i], &budget))
+                    _asWhole[bi] = true;
+                else if (l.bufFp[i] != (i64)0)
                     {
                     sliced[bi] = true;
                     i64 sl = (l.bufFpK[i] * tile + (l.bufFpHi[i] - l.bufFpLo[i])) * l.bufElem[i];
@@ -1439,7 +1479,9 @@ class ParVulkanWorker : ParWorker
                 }
             for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
                 {
-                if (l.globFp[i] != (i64)0)
+                if (l.globFp[i] != (i64)0 && l.globIn[i] != (i64)0 && wholeAgain(bi, l.globPtr[i], l.globLen[i], &budget))
+                    _asWhole[bi] = true;
+                else if (l.globFp[i] != (i64)0)
                     {
                     sliced[bi] = true;
                     i64 sl = (l.globFpK[i] * tile + (l.globFpHi[i] - l.globFpLo[i])) * l.globElem[i];
@@ -1468,7 +1510,43 @@ class ParVulkanWorker : ParWorker
                 ok = ensureHost(want, _sizes[i], &_hbuf[i], &_hmem[i], &_hmap[i], &_hcap[i], &_hhost[i]);
                 }
             if (ok && gVkDiscrete)
+                {
+                u64 had = _dbuf[i];
                 ok = ensure(_sizes[i], true, &_dbuf[i], &_dmem[i], (u8**)0, &_dcap[i]);
+                if (_dbuf[i] != had)
+                    _dhost[i] = (pointer)0;
+                }
+            }
+        // On a discrete card, the read-only arrays the device already holds
+        // at their current generation: neither staged nor copied.
+        bool resident[49];
+        for (u32 i = (u32)0; i < (u32)49; i = i + (u32)1)
+            resident[i] = false;
+        if (ok && gVkDiscrete)
+            {
+            b = (u32)1;
+            for (u32 i = (u32)0; i < l.nbuf + l.nglob; i = i + (u32)1)
+                {
+                bool isBuf = i < l.nbuf;
+                u32 g = isBuf ? i : i - l.nbuf;
+                pointer h = isBuf ? *(pointer*)(obj + l.bufOff[g]) : l.globPtr[g];
+                i64 len = isBuf ? l.bufLen[g] : l.globLen[g];
+                bool readOnly = isBuf ? l.bufIn[g] != (i64)0 : l.globIn[g] != (i64)0;
+                i64 gen = !sliced[b] && readOnly && len >= (i64)65536 ? ParDevice.generation(h) : (i64)-1;
+                if (gen != (i64)-1 && _dhost[b] == h && _dlen[b] == len && _dgen[b] == gen)
+                    {
+                    resident[b] = true;
+                    if (ParDevice.reporting())
+                        Log.info("par: %s: %ld bytes already on the GPU, unchanged since", identity().cString(), len);
+                    }
+                else
+                    {
+                    _dhost[b] = gen != (i64)-1 ? h : (pointer)0;
+                    _dlen[b] = len;
+                    _dgen[b] = gen;
+                    }
+                b = b + (u32)1;
+                }
             }
         for (u32 d = (u32)0; d < (u32)PAR_VK_DEPTH && ok; d = d + (u32)1)
             for (u32 r = (u32)0; r < l.nred && ok; r = r + (u32)1)
@@ -1482,9 +1560,9 @@ class ParVulkanWorker : ParWorker
             memcpy((pointer)_hmap[0], (pointer)obj, (u64)l.size);
             b = (u32)1;
             for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
-                { if (!sliced[b] && (pointer)_hmap[b] != *(pointer*)(obj + l.bufOff[i])) memcpy((pointer)_hmap[b], *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i]); b = b + (u32)1; }
+                { if (!sliced[b] && !resident[b] && (pointer)_hmap[b] != *(pointer*)(obj + l.bufOff[i])) memcpy((pointer)_hmap[b], *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i]); b = b + (u32)1; }
             for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
-                { if (!sliced[b]) memcpy((pointer)_hmap[b], l.globPtr[i], (u64)l.globLen[i]); b = b + (u32)1; }
+                { if (!sliced[b] && !resident[b]) memcpy((pointer)_hmap[b], l.globPtr[i], (u64)l.globLen[i]); b = b + (u32)1; }
             }
         // One descriptor pool, a set per slot naming the whole buffers and
         // the slot's partials; the pool and sets are kept while the kernel
@@ -1571,7 +1649,7 @@ class ParVulkanWorker : ParWorker
             u8 cr[24];
             for (u32 i = (u32)0; i < nfixed && ok; i = i + (u32)1)
                 {
-                if (sliced[i])
+                if (sliced[i] || resident[i])
                     continue;
                 _vk64(&cr[0], (u32)0, (u64)0);
                 _vk64(&cr[0], (u32)8, (u64)0);
@@ -1612,6 +1690,8 @@ class ParVulkanWorker : ParWorker
     // A run's end: the buffers stay for the next run.
     void finish(void)
         {
+        if (_proto != (ParChunk*)0 && _l != (ParLayout*)0)
+            ParDevice.wroteAll(_proto.objBytes(), _l);
         _ready = false;
         _proto = (ParChunk*)0;
         _l = (ParLayout*)0;
@@ -1733,7 +1813,7 @@ class ParVulkanWorker : ParWorker
             u32 b = (u32)1;
             for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
                 {
-                if (l.bufFp[i] != (i64)0)
+                if (l.bufFp[i] != (i64)0 && !_asWhole[b])
                     {
                     i64 count = l.bufLen[i] / l.bufElem[i];
                     i64 e0 = ParTiles.sliceLo(l.bufFpK[i], l.bufFpLo[i], t.lo, count);
@@ -1753,7 +1833,7 @@ class ParVulkanWorker : ParWorker
                 }
             for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
                 {
-                if (l.globFp[i] != (i64)0 && !(l.globAll[i] != (i64)0 && l.globFpK[i] == (i64)1))
+                if (l.globFp[i] != (i64)0 && !_asWhole[b] && !(l.globAll[i] != (i64)0 && l.globFpK[i] == (i64)1))
                     {
                     i64 count = l.globLen[i] / l.globElem[i];
                     i64 e0 = ParTiles.sliceLo(l.globFpK[i], l.globFpLo[i], t.lo, count);

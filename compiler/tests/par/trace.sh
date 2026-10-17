@@ -1,7 +1,8 @@
 #!/bin/bash
 # trace.sh — XC_PAR_TRACE=<file>: a run on the tile queue writes its records
 # (tools/par-trace.html draws them), the answer unchanged. Checks the header,
-# that every tile handed out came back, and that each run has its END.
+# that every tile handed out came back, and that each run has its END; and
+# XC_PAR_TRACE=host:port sends the same records to a listener.
 #
 #   XC=bin/osx/xcc-xc bash tests/par/trace.sh
 set -u
@@ -37,6 +38,30 @@ then
     echo "FAIL trace: the file is not as tools/par-trace.html reads it"; rc=1
 else
     echo "PASS trace"
+fi
+# XC_PAR_TRACE=host:port: the same records over TCP to a listener (xcmon's
+# feed), the header first.
+PORT=$((47600 + RANDOM % 300))
+python3 - "$PORT" "$L/net.trace" <<'PY' &
+import socket, sys
+s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", int(sys.argv[1]))); s.listen(1); s.settimeout(30)
+c, _ = s.accept(); c.settimeout(30)
+with open(sys.argv[2], "wb") as f:
+    while True:
+        d = c.recv(65536)
+        if not d: break
+        f.write(d)
+PY
+LP=$!
+sleep 1
+XCC_SETTINGS_DIR="$L/st" XC_PAR=all XC_PAR_TRACE="127.0.0.1:$PORT" "$L/$f" > "$L/out2" 2>&1
+wait $LP
+if grep -v '^par:' "$L/out2" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null \
+   && [ "$(head -c 8 "$L/net.trace" 2>/dev/null)" = XCPTRACE ] && [ $(( ($(wc -c < "$L/net.trace") - 16) % 48 )) = 0 ]; then
+    echo "PASS trace host:port"
+else
+    echo "FAIL trace host:port"; rc=1
 fi
 [ $rc = 0 ] && rm -rf "$L"
 echo "--- trace: $([ $rc = 0 ] && echo pass || echo FAIL) ---"

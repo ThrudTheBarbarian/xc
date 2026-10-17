@@ -70,7 +70,7 @@ pointer memset(pointer dst, i32 c, u64 n);
 #elif ARCH_x86_64 || ARCH_wasm32 || PLATFORM_android
 // Linux's monotonic clock (on wasm32, the loader's, in the same form).
 struct _ParTimespec { i64 sec; i64 nsec; }
-i32 clock_gettime(i32 clock, u8* ts);
+i32 clock_gettime(i32 clock, pointer ts);
 #if !ARCH_wasm32
 i32 sysinfo(pointer info);
 pointer memset(pointer dst, i32 c, u64 n);
@@ -256,7 +256,28 @@ class ParLayout : Object
 #if ARCH_arm64 || ARCH_x86_64 || ARCH_win64
 // The start of the page-aligned heap block p points into, or 0 (rt.c).
 pointer _xtc_simd_base(pointer p);
+// Resident data (par-blocks.md §3): the runtime watches a block's pages
+// (read-only, the first host write faulting and absorbed).
+i32 _xtc_simd_watch(pointer p);
+void _xtc_simd_unwatch(pointer p);
+i32 _xtc_simd_dirty(pointer p);
 #endif
+// A block's generation (ParDevice.generation): the watch is one flag per block,
+// and a second device re-watching after its own upload would make the first
+// device's stale copy look current. So each copy records the generation it
+// was made at, and the generation moves on every write the watch catches
+// and every write the runtime makes itself (a copy back, a kernel writing a
+// pinned block in place, which no page fault sees).
+#define PAR_DEV_GENS 64
+pointer gParDevGenHost[PAR_DEV_GENS];
+i64 gParDevGen[PAR_DEV_GENS];
+u32 gParDevGens;
+i64 gParDevGenClock;
+i64 gParDevGenNext(void)
+{
+    gParDevGenClock = gParDevGenClock + (i64)1;
+    return gParDevGenClock;
+}
 
 class ParDevice
     {
@@ -303,7 +324,7 @@ class ParDevice
         return (c / f) * (i64)1000000 + (c % f) * (i64)1000000 / f;
 #elif ARCH_x86_64 || ARCH_wasm32 || PLATFORM_android
         _ParTimespec ts;
-        clock_gettime((i32)1, (u8*)&ts);   // CLOCK_MONOTONIC on Linux
+        clock_gettime((i32)1, (pointer)&ts);   // CLOCK_MONOTONIC on Linux
         return ts.sec * (i64)1000000 + ts.nsec / (i64)1000;
 #else
         return (i64)(clock_gettime_nsec_np((i32)6) / (u64)1000); // CLOCK_MONOTONIC
@@ -1204,6 +1225,71 @@ class ParDevice
         return host != (pointer)0 && simdBase(host) == host;
         }
 
+    // The block at host's generation, watched from here on: -1 when it
+    // cannot be watched (not a page-aligned block), so no copy of it is ever
+    // taken for current.
+    static i64 generation(pointer host)
+        {
+#if !(ARCH_arm64 || ARCH_x86_64 || ARCH_win64)
+        return (i64)-1;
+#else
+        if (host == (pointer)0)
+            return (i64)-1;
+        u32 at = gParDevGens;
+        for (u32 i = (u32)0; i < gParDevGens; i = i + (u32)1)
+            if (gParDevGenHost[i] == host)
+                at = i;
+        if (at == gParDevGens)
+            {
+            if (gParDevGens == (u32)PAR_DEV_GENS)
+                {
+                // Full: the oldest entry goes, and its block's copies with it
+                // (a generation never seen again cannot match).
+                for (u32 i = (u32)1; i < (u32)PAR_DEV_GENS; i = i + (u32)1)
+                    {
+                    gParDevGenHost[i - (u32)1] = gParDevGenHost[i];
+                    gParDevGen[i - (u32)1] = gParDevGen[i];
+                    }
+                gParDevGens = gParDevGens - (u32)1;
+                at = gParDevGens;
+                }
+            gParDevGenHost[at] = host;
+            gParDevGen[at] = gParDevGenNext();
+            gParDevGens = gParDevGens + (u32)1;
+            }
+        if (_xtc_simd_dirty(host) != (i32)0)
+            {
+            gParDevGen[at] = gParDevGenNext();
+            if (_xtc_simd_watch(host) == (i32)0)
+                return (i64)-1;
+            }
+        return gParDevGen[at];
+#endif
+        }
+
+    // The runtime writes the block at host (a copy back, a kernel on pinned
+    // memory): its pages writable, and every copy of it out of date.
+    static void wrote(pointer host)
+        {
+#if ARCH_arm64 || ARCH_x86_64 || ARCH_win64
+        _xtc_simd_unwatch(host);
+#endif
+        for (u32 i = (u32)0; i < gParDevGens; i = i + (u32)1)
+            if (gParDevGenHost[i] == host)
+                gParDevGen[i] = gParDevGenNext();
+        }
+
+    // The arrays the block writes: every copy of them out of date.
+    static void wroteAll(u8* obj, ParLayout* l)
+        {
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            if (l.bufIn[i] == (i64)0)
+                ParDevice.wrote(*(pointer*)(obj + l.bufOff[i]));
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            if (l.globIn[i] == (i64)0)
+                ParDevice.wrote(l.globPtr[i]);
+        }
+
     // A GPU candidate's time for auto's comparison: the first run is the
     // warm-up (the kernel build), the second is timed. A card measured AFTER
     // the CPU's runs had cooled to its idle clocks, which the driver raises
@@ -1482,11 +1568,13 @@ class ParDevice
     // write at kw*i + cw + mw*vw and a read at kr*i + cr + mr*vr meet in no two
     // items of [lo, hi) when the two ranges of elements are disjoint, or, with
     // one stride k, when d (the write's offset less the read's) is 0, not a
-    // multiple of k, or at least |k| times the items apart.
+    // multiple of k, or at least |k| times the items apart. A side with a
+    // second captured integer has it after both:
+    // :<offw2>:<bytesw2>:<mw2>:<offr2>:<bytesr2>:<mr2> (offset -1 for none).
     static bool intervalHolds(u8* obj, i64* f, i64 lo, i64 hi)
         {
-        i64 ow = f[1] + f[4] * ParDevice.guardValue(obj, f[2], f[3]);
-        i64 orr = f[6] + f[9] * ParDevice.guardValue(obj, f[7], f[8]);
+        i64 ow = f[1] + f[4] * ParDevice.guardValue(obj, f[2], f[3]) + f[12] * ParDevice.guardValue(obj, f[10], f[11]);
+        i64 orr = f[6] + f[9] * ParDevice.guardValue(obj, f[7], f[8]) + f[15] * ParDevice.guardValue(obj, f[13], f[14]);
         i64 w0 = f[0] * lo + ow;
         i64 w1 = f[0] * (hi - (i64)1) + ow;
         i64 r0 = f[5] * lo + orr;
@@ -1519,8 +1607,11 @@ class ParDevice
             if (gx[k] != (u8)0 || (at > (u32)0 && src[at - (u32)1] != (u8)' '))
                 continue;
             u32 q = at + k;
-            i64 f[10];
-            for (u32 n = (u32)0; n < (u32)10; n = n + (u32)1)
+            i64 f[16];
+            f[10] = (i64)-1; f[11] = (i64)0; f[12] = (i64)0;
+            f[13] = (i64)-1; f[14] = (i64)0; f[15] = (i64)0;
+            bool more = true;
+            for (u32 n = (u32)0; n < (u32)16 && (n < (u32)10 || more); n = n + (u32)1)
                 {
                 bool neg = src[q] == (u8)'-';
                 if (neg) q = q + (u32)1;
@@ -1531,7 +1622,8 @@ class ParDevice
                     q = q + (u32)1;
                     }
                 f[n] = neg ? (i64)0 - v : v;
-                if (src[q] == (u8)':') q = q + (u32)1;
+                more = src[q] == (u8)':';
+                if (more) q = q + (u32)1;
                 }
             if (!ParDevice.intervalHolds(obj, &f[0], lo, hi))
                 return false;

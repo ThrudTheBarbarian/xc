@@ -321,6 +321,8 @@ class ClassInfo
     i64 c;
     i64 slot;   // the symbolic form's captured integer (a field of the block's object), or -1
     i64 m;
+    i64 slot2;  // a second one, valid when m2 != 0 (the two in field order)
+    i64 m2;
     static ParIdx* of(bool a, i64 k0, i64 c0)
         {
         ParIdx* x = new ParIdx();
@@ -329,7 +331,16 @@ class ClassInfo
         x.c = c0;
         x.slot = (i64)-1;
         x.m = (i64)0;
+        x.slot2 = (i64)0;
+        x.m2 = (i64)0;
         return x;
+        }
+    // The same symbolic terms: the two indexes differ by a constant only.
+    static bool sameTerms(ParIdx* a, ParIdx* b)
+        {
+        bool first = (a.slot < (i64)0 && b.slot < (i64)0) || (a.slot == b.slot && a.m == b.m);
+        bool second = (a.m2 == (i64)0 && b.m2 == (i64)0) || (a.slot2 == b.slot2 && a.m2 == b.m2);
+        return first && second;
         }
     static ParIdx* sym(bool a, i64 k0, i64 c0, i64 s, i64 m0)
         {
@@ -14627,14 +14638,59 @@ class ClassInfo
                 return no;
             ParIdx* s = aConst ? b : a;
             i64 fct = aConst ? a.c : b.c;
-            return ParIdx.sym(true, s.k * fct, s.c * fct, s.slot, s.m * fct);
+            ParIdx* r = ParIdx.sym(true, s.k * fct, s.c * fct, s.slot, s.m * fct);
+            r.slot2 = s.slot2;
+            r.m2 = s.m2 * fct;
+            return r;
             }
+        // The terms of both sides, merged by field: two at most, as the
+        // reference.
         i64 sign = isSub ? (i64)-1 : (i64)1;
-        if (a.slot >= (i64)0 && b.slot >= (i64)0 && a.slot != b.slot)
+        i64 tsl[4];
+        i64 tm[4];
+        tsl[0] = a.slot; tm[0] = a.slot >= (i64)0 ? a.m : (i64)0;
+        tsl[1] = a.slot2; tm[1] = a.m2;
+        tsl[2] = b.slot; tm[2] = sign * (b.slot >= (i64)0 ? b.m : (i64)0);
+        tsl[3] = b.slot2; tm[3] = sign * b.m2;
+        i64 sl[4];
+        i64 mm[4];
+        u32 n = (u32)0;
+        for (u32 t = (u32)0; t < (u32)4; t = t + (u32)1)
+            {
+            if (tm[t] == (i64)0)
+                continue;
+            u32 at = n;
+            for (u32 q = (u32)0; q < n; q = q + (u32)1)
+                if (sl[q] == tsl[t])
+                    at = q;
+            if (at == n)
+                {
+                sl[n] = tsl[t];
+                mm[n] = (i64)0;
+                n = n + (u32)1;
+                }
+            mm[at] = mm[at] + tm[t];
+            }
+        u32 kept = (u32)0;
+        for (u32 q = (u32)0; q < n; q = q + (u32)1)
+            if (mm[q] != (i64)0)
+                {
+                sl[kept] = sl[q];
+                mm[kept] = mm[q];
+                kept = kept + (u32)1;
+                }
+        if (kept > (u32)2)
             return no;
-        i64 sl = a.slot >= (i64)0 ? a.slot : b.slot;
-        i64 mm = (a.slot >= (i64)0 ? a.m : (i64)0) + sign * (b.slot >= (i64)0 ? b.m : (i64)0);
-        return ParIdx.sym(true, a.k + sign * b.k, a.c + sign * b.c, sl, mm);
+        if (kept == (u32)2 && sl[1] < sl[0])
+            {
+            i64 ts = sl[0]; sl[0] = sl[1]; sl[1] = ts;
+            i64 tv = mm[0]; mm[0] = mm[1]; mm[1] = tv;
+            }
+        ParIdx* r = ParIdx.sym(true, a.k + sign * b.k, a.c + sign * b.c, kept > (u32)0 ? sl[0] : (i64)-1,
+                               kept > (u32)0 ? mm[0] : (i64)0);
+        r.slot2 = kept > (u32)1 ? sl[1] : (i64)0;
+        r.m2 = kept > (u32)1 ? mm[1] : (i64)0;
+        return r;
         }
     static bool parIntType(String* t)
         {
@@ -14649,7 +14705,7 @@ class ClassInfo
     // parGuardFor), else 0.
     static String* parGuardFor(ParIdx* r, ParIdx* w)
         {
-        if (!r.affine || !w.affine || r.k != w.k || r.k == (i64)0)
+        if (!r.affine || !w.affine || r.k != w.k || r.k == (i64)0 || r.m2 != (i64)0 || w.m2 != (i64)0)
             return (String*)0;
         if (r.slot >= (i64)0 && w.slot >= (i64)0 && r.slot != w.slot)
             return (String*)0;
@@ -14676,7 +14732,7 @@ class ClassInfo
             return (String*)0;
         if (r.k == w.k && r.slot < (i64)0 && w.slot < (i64)0)
             return (String*)0;
-        if (r.k == w.k && r.slot >= (i64)0 && r.slot == w.slot && r.m == w.m)
+        if (r.k == w.k && ParIdx.sameTerms(r, w))
             return (String*)0;
         String* g = String.withCString("x:");
         g.append(String.withI64(w.k)); g.appendCString(":");
@@ -14687,6 +14743,14 @@ class ClassInfo
         g.append(String.withI64(r.c)); g.appendCString(":");
         g.append(String.withI64(r.slot >= (i64)0 ? r.slot : (i64)-1)); g.appendCString(":");
         g.append(String.withI64(r.slot >= (i64)0 ? r.m : (i64)0));
+        // A second captured integer on either side, after both.
+        if (r.m2 != (i64)0 || w.m2 != (i64)0)
+            {
+            g.appendCString(":"); g.append(String.withI64(w.m2 != (i64)0 ? w.slot2 : (i64)-1));
+            g.appendCString(":"); g.append(String.withI64(w.m2));
+            g.appendCString(":"); g.append(String.withI64(r.m2 != (i64)0 ? r.slot2 : (i64)-1));
+            g.appendCString(":"); g.append(String.withI64(r.m2));
+            }
         return g;
         }
 
@@ -14732,10 +14796,11 @@ class ClassInfo
         {
         if (!r.hasPrefix(String.withCString("1 ")) || !w.hasPrefix(String.withCString("1 ")))
             return true;
-        i64 rk = Lower.parFormNum(r, (u32)1);
-        i64 rc = Lower.parFormNum(r, (u32)2);
-        i64 wk = Lower.parFormNum(w, (u32)1);
-        i64 wc = Lower.parFormNum(w, (u32)2);
+        return Lower.parAffineDep(Lower.parFormNum(r, (u32)1), Lower.parFormNum(r, (u32)2),
+                                  Lower.parFormNum(w, (u32)1), Lower.parFormNum(w, (u32)2));
+        }
+    static bool parAffineDep(i64 rk, i64 rc, i64 wk, i64 wc)
+        {
         if (rk == wk && rc == wc)
             return false;
         i64 g = Lower.parGcd(rk, wk);
@@ -14748,7 +14813,7 @@ class ClassInfo
     String* parShownIndex(bool affine, i64 k, i64 c)
         {
         if (!affine)
-            return String.withCString("an index computed from data");
+            return String.withCString(" at an index computed from data");
         String* s = String.withCString("[");
         if (k == (i64)1)
             s.appendCString("i");
@@ -15111,6 +15176,24 @@ class ClassInfo
         words.append((String*)p.get(at + (u32)3));
         }
 
+    // ":offset:bytes:m" of a second captured integer, ":-1:0:0" for none.
+    void parGuardTerm(String* words, IRLayout* lay, Array* p, u32 at)
+        {
+        String* sl = (String*)p.get(at);
+        i64 q = sl.byteLength() > (u32)0 && sl.byteAt((u32)0) == (u8)'-' ? (i64)-1 : parWordI64(sl);
+        if (q < (i64)0 || q >= (i64)lay.fieldCount())
+            {
+            words.appendCString(":-1:0:0");
+            return;
+            }
+        words.appendCString(":");
+        words.append(String.withU32(lay.offsetAt((u32)q)));
+        words.appendCString(":");
+        words.append(String.withU32(mslWidth(lay.typeAt((u32)q))));
+        words.appendCString(":");
+        words.append((String*)p.get(at + (u32)1));
+        }
+
     String* parGuardWords(IRFunc* f, Array* guards)
         {
         String* words = String.withCString("");
@@ -15126,12 +15209,18 @@ class ClassInfo
             if (g.hasPrefix(String.withCString("x:")))
                 {
                 Array* p = parSplitColons(g);
-                if (p.count() != (u32)9)
+                if (p.count() != (u32)9 && p.count() != (u32)13)
                     continue;
                 words.appendCString(" guardx=");
                 parGuardSide(words, lay, p, (u32)1);
                 words.appendCString(":");
                 parGuardSide(words, lay, p, (u32)5);
+                // A second captured integer a side: offset:bytes:m, after both.
+                if (p.count() == (u32)13)
+                    {
+                    parGuardTerm(words, lay, p, (u32)9);
+                    parGuardTerm(words, lay, p, (u32)11);
+                    }
                 continue;
                 }
             u32 c1 = (u32)0;
@@ -15509,6 +15598,13 @@ class ClassInfo
             for (u32 j = (u32)0; j < ws.count(); j = j + (u32)1)
                 {
                 if (!Lower.parFormDep(form, (String*)ws.get(j)))
+                    continue;
+                // The same captured integers on both sides: they differ by a
+                // constant, which the plain test settles. As the reference.
+                ParIdx* rsy = (ParIdx*)r.get((u32)3);
+                ParIdx* wsym = (ParIdx*)wsy.get(j);
+                if (_parGuardList != (Array*)0 && rsy.affine && wsym.affine && ParIdx.sameTerms(rsy, wsym)
+                    && !Lower.parAffineDep(rsy.k, rsy.c, wsym.k, wsym.c))
                     continue;
                 String* g = _parGuardList != (Array*)0 ? Lower.parGuardFor((ParIdx*)r.get((u32)3), (ParIdx*)wsy.get(j)) : (String*)0;
                 if (g == (String*)0 && _parGuardList != (Array*)0)

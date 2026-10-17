@@ -36,6 +36,11 @@ class ParTrace
     static i64 _t0;
     static u32 _run;
     static bool _read;
+    // XC_PAR_TRACE=host:port: each run's records go to a listener (xcmon)
+    // as the run ends, the header first, rather than to a file.
+    static Socket* _sock;
+    static u32 _sent;
+    static bool _net;
     static bool on(void)
         {
         if (!_read)
@@ -45,6 +50,7 @@ class ParTrace
             if (p.byteLength() > (u32)0)
                 {
                 _path = p;
+                _net = ParTrace.isHostPort(p);
                 _buf = new Data();
                 _buf.appendBytes("XCPTRACE", (u32)8);
                 ParTrace.u32le((u32)1);
@@ -126,7 +132,56 @@ class ParTrace
         if (!ParTrace.on())
             return;
         ParTrace.rec((u8)7, (u32)0, took, ParTrace.now(), (i64)0, (i64)0, (i64)0);
-        Files.writeData(_path, _buf);
+        if (!_net)
+            {
+            Files.writeData(_path, _buf);
+            return;
+            }
+        // The listener gets what it has not had yet. One that cannot be
+        // reached turns tracing off rather than slowing every run.
+        if (_sock == (Socket*)0)
+            {
+            u32 colon = _path.byteLength();
+            while (colon > (u32)0 && _path.byteAt(colon - (u32)1) != (u8)':')
+                colon = colon - (u32)1;
+            u32 port = (u32)0;
+            for (u32 i = colon; i < _path.byteLength(); i = i + (u32)1)
+                port = port * (u32)10 + (u32)(_path.byteAt(i) - (u8)'0');
+            try
+                {
+                _sock = Socket.connect(_path.substringBytes((u32)0, colon - (u32)1), (u16)port);
+                _sock.setNoDelay();
+                }
+            catch (SocketError e)
+                {
+                Log.info("par: XC_PAR_TRACE: %s", e.message().cString());
+                _path = (String*)0;
+                return;
+                }
+            }
+        if (!_sock.write(_buf.bytes() + _sent, _buf.length() - _sent))
+            {
+            _path = (String*)0;
+            return;
+            }
+        _sent = _buf.length();
+        }
+
+    // `host:port` (digits after the last colon, no slash) rather than a file.
+    static bool isHostPort(String* p)
+        {
+        u32 colon = p.byteLength();
+        while (colon > (u32)0 && p.byteAt(colon - (u32)1) != (u8)':')
+            colon = colon - (u32)1;
+        if (colon <= (u32)1 || colon == p.byteLength())
+            return false;
+        for (u32 i = colon; i < p.byteLength(); i = i + (u32)1)
+            if (p.byteAt(i) < (u8)'0' || p.byteAt(i) > (u8)'9')
+                return false;
+        for (u32 i = (u32)0; i < p.byteLength(); i = i + (u32)1)
+            if (p.byteAt(i) == (u8)'/' || p.byteAt(i) == (u8)'\\')
+                return false;
+        return true;
         }
     }
 

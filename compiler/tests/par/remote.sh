@@ -16,6 +16,13 @@
 set -u
 XC=${XC:-bin/osx/xcc-xc}
 L=$(mktemp -d "${TMPDIR:-/tmp}/par-remote.XXXX")
+# Each daemon is waited for until it says it is serving (a loaded gate host
+# can take longer than a fixed second to start one).
+up() {
+    for log in "$@"; do
+        for i in $(seq 300); do grep -q 'xcd: serving' "$log" 2>/dev/null && break; sleep 0.1; done
+    done
+}
 PORT=$((7300 + RANDOM % 500))
 rc=0
 if ! $XC -q -O2 -H . -o "$L/xcd" selfhost/tools/xcd.xc > "$L/xcd.build" 2>&1; then
@@ -24,7 +31,7 @@ fi
 mkdir -p "$L/home1" "$L/home2"
 XCD_HOME="$L/home1" XC_PAR_REPORT=1 "$L/xcd" -port $PORT > "$L/xcd.log" 2>&1 &
 XCD=$!
-sleep 1
+up "$L/xcd.log"
 for f in par_footprint par_simd_buffers par_grid_constant; do
     if ! $XC -q -O2 -H . -fpar-kernels=all -o "$L/$f" "tests/fixtures/$f.xc" > "$L/$f.build" 2>&1; then
         echo "FAIL remote: $f does not build"; rc=1; continue
@@ -47,7 +54,7 @@ grep -q '^tls.pin.127.0.0.1:'$PORT' = ' "$L/st_par_footprint/par.conf" || { echo
 # and the answer is the local run's.
 XCD_HOME="$L/home2" XC_PAR_REPORT=1 "$L/xcd" -port $PORT -no-mdns > "$L/xcd_pin.log" 2>&1 &
 XCDP=$!
-sleep 1
+up "$L/xcd_pin.log"
 f=par_footprint
 XCC_SETTINGS_DIR="$L/st_$f" XC_PAR_REMOTE=127.0.0.1:$PORT XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/pin.out" 2> "$L/pin.err"
 if grep -v '^par:' "$L/pin.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && grep -q 'certificate changed' "$L/pin.out"; then
@@ -62,7 +69,7 @@ wait $XCDP 2> /dev/null
 PORT2=$((PORT + 1))
 XCD_HOME="$L/home1" XC_PAR_REPORT=1 "$L/xcd" -port $PORT2 -nimby 00:00-23:59 > "$L/xcd2.log" 2>&1 &
 XCD2=$!
-sleep 1
+up "$L/xcd2.log"
 f=par_simd_buffers
 mkdir -p "$L/st_nimby"
 XCC_SETTINGS_DIR="$L/st_nimby" XC_PAR_REMOTE=127.0.0.1:$PORT2 XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/nimby.out" 2> "$L/nimby.err"
@@ -79,7 +86,7 @@ grep -q 'declined (nimby)' "$L/xcd2.log" || { echo "FAIL remote: the nimby daemo
 PORT3=$((PORT + 2))
 XCD_HOME="$L/home1" XC_PAR_REPORT=1 "$L/xcd" -port $PORT3 -pool gate > "$L/xcd3.log" 2>&1 &
 XCD3=$!
-sleep 1
+up "$L/xcd3.log"
 mkdir -p "$L/st_mdns" "$L/st_mdns2"
 XCC_SETTINGS_DIR="$L/st_mdns" XC_PAR_REMOTE=mdns XC_PAR_POOL=gate XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/mdns.out" 2>&1
 XCC_SETTINGS_DIR="$L/st_mdns2" XC_PAR_REMOTE=mdns XC_PAR_POOL=other XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/mdns2.out" 2>&1
@@ -96,7 +103,7 @@ wait $XCD3 2> /dev/null
 PORT4=$((PORT + 3))
 XCD_HOME="$L/home1" XC_PAR_REPORT=1 XC_PAR_DIE_AFTER=2 "$L/xcd" -port $PORT4 -no-mdns > "$L/xcd4.log" 2>&1 &
 XCD4=$!
-sleep 1
+up "$L/xcd4.log"
 mkdir -p "$L/st_die"
 XCC_SETTINGS_DIR="$L/st_die" XC_PAR_REMOTE=127.0.0.1:$PORT4 XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/die.out" 2>&1
 if grep -v '^par:' "$L/die.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && grep -q "re-issued" "$L/die.out"; then
@@ -111,7 +118,7 @@ wait $XCD4 2> /dev/null
 PORT5=$((PORT + 4))
 XCD_HOME="$L/home1" XC_PAR_REPORT=1 "$L/xcd" -port $PORT5 -no-mdns > "$L/xcd5.log" 2>&1 &
 XCD5=$!
-sleep 1
+up "$L/xcd5.log"
 mkdir -p "$L/st_two_a" "$L/st_two_b"
 XCC_SETTINGS_DIR="$L/st_two_a" XC_PAR_REMOTE=127.0.0.1:$PORT5 XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/two_a.out" 2>&1 &
 PA=$!
@@ -136,7 +143,7 @@ XCD_HOME="$L/home1" XC_PAR_REPORT=1 "$L/xcd" -port $PORT6 -no-mdns > "$L/xcd6.lo
 XCD6=$!
 XCD_HOME="$L/home1" XC_PAR_REPORT=1 "$L/xcd" -port $PORT7 -no-mdns -cache 1 > "$L/xcd7.log" 2>&1 &
 XCD7=$!
-sleep 1
+up "$L/xcd6.log" "$L/xcd7.log"
 f=par_simd_buffers
 mkdir -p "$L/st_cache" "$L/st_cache_small"
 XCC_SETTINGS_DIR="$L/st_cache" XC_PAR_REMOTE=127.0.0.1:$PORT6 XC_PAR=all XC_PAR_REPORT=2 "$L/$f" > "$L/cache.out" 2>&1
@@ -161,7 +168,7 @@ wait $XCD7 2> /dev/null
 PORT8=$((PORT + 7))
 XCD_HOME="$L/home1" XCD_VRAM_FREE_MB=1 XC_PAR_REPORT=1 "$L/xcd" -port $PORT8 -no-mdns > "$L/xcd8.log" 2>&1 &
 XCD8=$!
-sleep 1
+up "$L/xcd8.log"
 mkdir -p "$L/st_vram"
 XCC_SETTINGS_DIR="$L/st_vram" XC_PAR_REMOTE=127.0.0.1:$PORT8 XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/vram.out" 2>&1
 sleep 1

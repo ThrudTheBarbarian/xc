@@ -796,6 +796,7 @@ class ParRemoteWorker : ParWorker
     i64 _lastPing;          // when the last ping went (this clock, us); 0 none
     i64 _lastPong;          // when the last pong came
     bool _available;        // the daemon's last word
+    u32 _queued;            // and the tiles waiting there (PONG's QUEUED)
     i64 _sizedFloor;        // the tile floor the link's latency asks for this block
     Array* _finished;       // tiles completed while reading for a pong, for poll()
     // The run in progress.
@@ -1028,6 +1029,7 @@ class ParRemoteWorker : ParWorker
         i64 sent = ParWire.getI64(f, "SENT", (i64)0);
         u8 kind = ParWire.getU8(f, "KIND", (u8)0);
         _available = ParWire.getU8(f, "AVAILABLE", (u8)1) != (u8)0;
+        _queued = ParWire.getU32(f, "QUEUED", (u32)0);
         _lastPong = ParDevice.nowUs();
         if (kind == (u8)0 && _lastPong - sent > (i64)0)
             _rttUs = _lastPong - sent;
@@ -1157,6 +1159,45 @@ class ParRemoteWorker : ParWorker
             }
         _inFlight = (u32)0;
         return false;
+        }
+    // The link and the daemon as the last heartbeat saw them (xcmon).
+    i64 rttUs(void)
+        {
+        return _rttUs;
+        }
+    bool available(void)
+        {
+        return _available;
+        }
+    u32 queued(void)
+        {
+        return _queued;
+        }
+    i64 vramTotal(void)
+        {
+        return _vramTotal;
+        }
+    i64 vramFree(void)
+        {
+        return _vramFree;
+        }
+    i64 ramTotal(void)
+        {
+        return _ramTotal;
+        }
+    i64 ramFree(void)
+        {
+        return _ramFree;
+        }
+    // A heartbeat on an idle link: the round trip and the daemon's word.
+    // False when the daemon has gone.
+    bool heartbeat(void)
+        {
+        if (_s == (ParLink*)0 || !_s.isOpen())
+            return false;
+        if (!ping((u8)0, (u32)0))
+            return false;
+        return awaitPong();
         }
     i64 kernelUs(void)
         {

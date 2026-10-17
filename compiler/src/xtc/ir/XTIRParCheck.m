@@ -606,17 +606,28 @@ typedef struct
 // "slot:m:d0:k" strings, for its header's guard= words.
 static NSMutableDictionary<NSString*, NSArray<NSString*>*>* gParGuards = nil;
 
-// An index with one symbolic term besides i: k*i + c + m*v, where v is a
-// captured integer of the block (field `slot` of its object). `a[i + off]`
-// is such a form; the plain test above cannot say whether it meets `a[i]`,
-// but the run can, once it knows off. Mirrored in the port.
+// An index with up to two symbolic terms besides i: k*i + c + m*v + m2*v2,
+// where v and v2 are captured integers of the block (fields `slot` and
+// `slot2` of its object). `a[i + off]` is such a form; the plain test above
+// cannot say whether it meets `a[i]`, but the run can, once it knows off.
+// The terms are kept in field order. Mirrored in the port.
 typedef struct
     {
     BOOL affine;
     int64_t k, c;
     NSInteger slot;   // the field, or -1 when there is no symbolic term
     int64_t m;
+    NSInteger slot2;  // a second field, valid when m2 != 0
+    int64_t m2;
     } XTParSym;
+
+// The same symbolic terms: the two indexes differ by a constant only.
+static BOOL parSameTerms(XTParSym a, XTParSym b)
+    {
+    BOOL first = (a.slot < 0 && b.slot < 0) || (a.slot == b.slot && a.m == b.m);
+    BOOL second = (a.m2 == 0 && b.m2 == 0) || (a.slot2 == b.slot2 && a.m2 == b.m2);
+    return first && second;
+    }
 
 static BOOL parIntKind(XTIRType* t)
     {
@@ -737,17 +748,54 @@ static BOOL parIntKind(XTIRType* t)
                     return no;
                 XTParSym s = aConst ? b : a;
                 int64_t f = aConst ? a.c : b.c;
-                r = (XTParSym){ YES, s.k * f, s.c * f, s.slot, s.m * f };
+                r = (XTParSym){ YES, s.k * f, s.c * f, s.slot, s.m * f, s.slot2, s.m2 * f };
                 }
             else
                 {
+                // The terms of both sides, merged by field: two at most.
                 int64_t sign = d.opcode == XTIROpSub ? -1 : 1;
-                if (a.slot >= 0 && b.slot >= 0 && a.slot != b.slot)
+                NSInteger sl[4];
+                int64_t mm[4];
+                int n = 0;
+                NSInteger tsl[4] = { a.slot, a.slot2, b.slot, b.slot2 };
+                int64_t tm[4] = { a.slot >= 0 ? a.m : 0, a.m2, sign * (b.slot >= 0 ? b.m : 0), sign * b.m2 };
+                for (int t = 0; t < 4; t++)
+                    {
+                    if (tm[t] == 0)
+                        continue;
+                    int at = -1;
+                    for (int q = 0; q < n; q++)
+                        if (sl[q] == tsl[t])
+                            at = q;
+                    if (at < 0)
+                        {
+                        sl[n] = tsl[t];
+                        mm[n] = 0;
+                        at = n++;
+                        }
+                    mm[at] += tm[t];
+                    }
+                int kept = 0;
+                for (int q = 0; q < n; q++)
+                    if (mm[q] != 0)
+                        {
+                        sl[kept] = sl[q];
+                        mm[kept] = mm[q];
+                        kept++;
+                        }
+                if (kept > 2)
                     return no;
+                if (kept == 2 && sl[1] < sl[0])
+                    {
+                    NSInteger ts = sl[0]; sl[0] = sl[1]; sl[1] = ts;
+                    int64_t tv = mm[0]; mm[0] = mm[1]; mm[1] = tv;
+                    }
                 r.k = a.k + sign * b.k;
                 r.c = a.c + sign * b.c;
-                r.slot = a.slot >= 0 ? a.slot : b.slot;
-                r.m = (a.slot >= 0 ? a.m : 0) + sign * (b.slot >= 0 ? b.m : 0);
+                r.slot = kept > 0 ? sl[0] : -1;
+                r.m = kept > 0 ? mm[0] : 0;
+                r.slot2 = kept > 1 ? sl[1] : 0;
+                r.m2 = kept > 1 ? mm[1] : 0;
                 }
             if (r.m == 0)
                 r.slot = -1;
@@ -967,7 +1015,7 @@ static BOOL parDependent(XTParIndex r, XTParIndex w)
 // multiple of k, or |d| >= |k|*n. Writes the guard as "slot:m:d0:k".
 static BOOL parGuardFor(XTParSym r, XTParSym w, NSString* _Nullable* _Nonnull guard)
     {
-    if (!r.affine || !w.affine || r.k != w.k || r.k == 0)
+    if (!r.affine || !w.affine || r.k != w.k || r.k == 0 || r.m2 != 0 || w.m2 != 0)
         return NO;
     if (r.slot >= 0 && w.slot >= 0 && r.slot != w.slot)
         return NO;
@@ -985,7 +1033,8 @@ static BOOL parGuardFor(XTParSym r, XTParSym w, NSString* _Nullable* _Nonnull gu
 // each index is affine in i, so its range over [lo, hi) runs between its
 // values at lo and hi - 1 — or, with one stride, the parGuardFor test.
 // Writes "x:<kw>:<cw>:<slotw>:<mw>:<kr>:<cr>:<slotr>:<mr>", slot -1 (m 0)
-// where a side has no captured integer.
+// where a side has no captured integer, and, where a side has a second,
+// ":<slotw2>:<mw2>:<slotr2>:<mr2>" after it.
 static BOOL parIntervalGuardFor(XTParSym r, XTParSym w, NSString* _Nullable* _Nonnull guard)
     {
     if (!r.affine || !w.affine || (r.k == 0 && w.k == 0))
@@ -994,20 +1043,25 @@ static BOOL parIntervalGuardFor(XTParSym r, XTParSym w, NSString* _Nullable* _No
     // scan stays a scan, reported where it is written).
     if (r.k == w.k && r.slot < 0 && w.slot < 0)
         return NO;
-    // …nor where both sides carry the same captured integer, which cancels.
-    if (r.k == w.k && r.slot >= 0 && r.slot == w.slot && r.m == w.m)
+    // …nor where both sides carry the same captured integers, which cancel
+    // (the caller has decided that pair statically).
+    if (r.k == w.k && parSameTerms(r, w))
         return NO;
-    *guard = [NSString stringWithFormat:@"x:%lld:%lld:%ld:%lld:%lld:%lld:%ld:%lld",
-                                        (long long)w.k, (long long)w.c, (long)(w.slot >= 0 ? w.slot : -1),
-                                        (long long)(w.slot >= 0 ? w.m : 0), (long long)r.k, (long long)r.c,
-                                        (long)(r.slot >= 0 ? r.slot : -1), (long long)(r.slot >= 0 ? r.m : 0)];
+    NSString* g = [NSString stringWithFormat:@"x:%lld:%lld:%ld:%lld:%lld:%lld:%ld:%lld",
+                                             (long long)w.k, (long long)w.c, (long)(w.slot >= 0 ? w.slot : -1),
+                                             (long long)(w.slot >= 0 ? w.m : 0), (long long)r.k, (long long)r.c,
+                                             (long)(r.slot >= 0 ? r.slot : -1), (long long)(r.slot >= 0 ? r.m : 0)];
+    if (r.m2 != 0 || w.m2 != 0)
+        g = [g stringByAppendingFormat:@":%ld:%lld:%ld:%lld", (long)(w.m2 != 0 ? w.slot2 : -1), (long long)w.m2,
+                                       (long)(r.m2 != 0 ? r.slot2 : -1), (long long)r.m2];
+    *guard = g;
     return YES;
     }
 
 static NSString* shownIndex(XTParIndex x)
     {
     if (!x.affine)
-        return @"an index computed from data";
+        return @" at an index computed from data";
     NSMutableString* s = [NSMutableString string];
     if (x.k == 1)
         [s appendString:@"i"];
@@ -1100,7 +1154,7 @@ static NSString* shownIndex(XTParIndex x)
         NSArray<NSString*>* p = [g componentsSeparatedByString:@":"];
         // `guardx=<kw>:<cw>:<offw>:<bytesw>:<mw>:<kr>:<cr>:<offr>:<bytesr>:<mr>`,
         // offset -1 (bytes 0) for a side with no captured integer.
-        if ([p[0] isEqualToString:@"x"] && p.count == 9)
+        if ([p[0] isEqualToString:@"x"] && (p.count == 9 || p.count == 13))
             {
             NSString* (^side)(NSString*, NSString*, NSString*, NSString*) =
                 ^NSString*(NSString* k, NSString* c, NSString* sl, NSString* m) {
@@ -1111,6 +1165,18 @@ static NSString* shownIndex(XTParIndex x)
                                                     [lay fieldTypeAt:(NSUInteger)q].byteWidth, m];
                 };
             [words appendFormat:@" guardx=%@:%@", side(p[1], p[2], p[3], p[4]), side(p[5], p[6], p[7], p[8])];
+            // A second captured integer a side: offset:bytes:m, after both.
+            if (p.count == 13)
+                {
+                NSString* (^term)(NSString*, NSString*) = ^NSString*(NSString* sl, NSString* m) {
+                  NSInteger q = sl.integerValue;
+                  if (!lay || q < 0 || (NSUInteger)q >= lay.fieldCount)
+                      return @"-1:0:0";
+                  return [NSString stringWithFormat:@"%u:%u:%@", [lay fieldOffsetAt:(NSUInteger)q],
+                                                    [lay fieldTypeAt:(NSUInteger)q].byteWidth, m];
+                };
+                [words appendFormat:@":%@:%@", term(p[9], p[10]), term(p[11], p[12])];
+                }
             continue;
             }
         NSInteger slot = p[0].integerValue;
@@ -1434,6 +1500,12 @@ static BOOL parIsComputeOp(XTIROpcode op)
                 continue;
             XTParSym wsx;
             [(NSValue*)wp[1] getValue:&wsx];
+            // The same captured integers on both sides: they differ by a
+            // constant, which the plain test settles (a[i + off] read and
+            // written by the same item meets no other).
+            if (guards && rs.affine && wsx.affine && parSameTerms(rs, wsx)
+                && !parDependent((XTParIndex){ YES, rs.k, rs.c }, (XTParIndex){ YES, wsx.k, wsx.c }))
+                continue;
             NSString* g = nil;
             if (guards && (parGuardFor(rs, wsx, &g) || parIntervalGuardFor(rs, wsx, &g)))
                 {

@@ -82,6 +82,7 @@ void _xtc_simd_unwatch(pointer p);
 i32 _xtc_simd_dirty(pointer p);
 pointer gParCuUpHost[52];      // the host block slot k holds a copy of
 i64 gParCuUpLen[52];
+i64 gParCuUpGen[52];           // and the block's generation it copied
 
 // The tiled path's streams, events and pinned staging, made on first use and
 // kept: one compute stream the kernels queue on in tile order (a kernel that
@@ -344,10 +345,11 @@ class ParCuda
             gParCuShadowHost[k] = (pointer)0;
             gParCuShadowLen[k] = (i64)0;
             }
-        // Resident: the slot already holds this block, and the host has not
-        // written it since (the runtime watched its pages): nothing to send.
+        // Resident: the slot already holds this block, and nothing has
+        // written it since (its generation is the one copied): nothing to send.
+        i64 gen = bytes >= (i64)65536 ? ParDevice.generation(host) : (i64)-1;
         if (host != (pointer)0 && gParCuDev[k] != (u64)0 && gParCuUpHost[k] == host && gParCuUpLen[k] == bytes &&
-            _xtc_simd_dirty(host) == (i32)0)
+            gen != (i64)-1 && gParCuUpGen[k] == gen)
             {
             if (ParDevice.reporting())
                 Log.info("par: %ld bytes already on the GPU, unchanged since", bytes);
@@ -375,10 +377,11 @@ class ParCuda
             pinned(host, bytes);
             _toDevice(gParCuDev[k], host, (u64)bytes);
             // Watched from here: a block (its start) of 64 KB and more.
-            if (bytes >= (i64)65536 && _xtc_simd_watch(host) != (i32)0)
+            if (gen != (i64)-1)
                 {
                 gParCuUpHost[k] = host;
                 gParCuUpLen[k] = bytes;
+                gParCuUpGen[k] = gen;
                 }
             }
         if (keep)
@@ -588,6 +591,7 @@ class ParCuda
         if (!tileSetup())
             return false;
         u8* obj = proto.objBytes();
+        ParDevice.wroteAll(obj, l);
 
         // The un-footprinted read-only buffers and globals: whole, once, in
         // the single-shot path's slot memory. Slots 0 and 1 are the object
@@ -951,6 +955,9 @@ class ParCuda
             for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
                 if (partDev[d * (u32)16 + r] != (u64)0) _free(partDev[d * (u32)16 + r]);
             }
+        // The tiles wrote their slices straight into pinned arrays, which no
+        // fault sees: every copy of what the block writes is out of date.
+        ParDevice.wroteAll(obj, l);
         if (snap != (u8*)0)
             free((pointer)snap);
         if (!ok)
@@ -1067,10 +1074,11 @@ class ParCuda
                 if (l.bufIn[i] == (i64)0)
                     {
                     pointer h = *(pointer*)(obj + l.bufOff[i]);
-                    _xtc_simd_unwatch(h);
+                    ParDevice.wrote(h);
                     ok = _toHost(h, dev[at], (u64)l.bufLen[i]) == (i32)0;
+                    // The slot's copy and the host agree again.
                     if (ok && gParCuUpHost[at] == h)
-                        _xtc_simd_watch(h);
+                        gParCuUpGen[at] = ParDevice.generation(h);
                     copies = copies + (u32)1;
                     }
                 at = at + (u32)1;
@@ -1177,10 +1185,20 @@ class ParCudaWorker : ParWorker
     u8* _snap;
     u64 _whole[52];
     i64 _wholeCap[52];      // device memory is kept from run to run and grown
+    pointer _wholeHost[52]; // the block each holds, its length and generation:
+    i64 _wholeLen[52];      // a read-only array unwritten since is not sent
+    i64 _wholeGen[52];      // again (resident, as the single-shot slots)
     u32 _nparams;
     u32 _q;                 // sliced buffers + globals
     i64 _sliceMax[32];
     bool _pin[32];
+    // A read-only footprinted array this worker saw last run, unchanged
+    // since, goes whole (once, then resident) instead of a slice per tile:
+    // a block run again over the same data sends none of it.
+    bool _asWhole[32];
+    pointer _seenHost[32];
+    i64 _seenLen[32];
+    i64 _seenGen[32];
     u64 _slice[PAR_CU_DEPTH * 32];
     i64 _sliceCap[PAR_CU_DEPTH * 32];
     u64 _partDev[PAR_CU_DEPTH * 16];
@@ -1341,6 +1359,44 @@ class ParCudaWorker : ParWorker
         return true;
         }
 
+    // Whether the read-only footprinted array of slot q is the one this
+    // worker saw last run, unwritten since, and fits what is left of budget.
+    bool wholeAgain(u32 q, pointer host, i64 len, i64* budget)
+        {
+        i64 gen = len >= (i64)65536 ? ParDevice.generation(host) : (i64)-1;
+        bool again = gen != (i64)-1 && _seenHost[q] == host && _seenLen[q] == len && _seenGen[q] == gen;
+        _seenHost[q] = host;
+        _seenLen[q] = len;
+        _seenGen[q] = gen;
+        if (!again || len > *budget)
+            return false;
+        *budget = *budget - len;
+        return true;
+        }
+
+    // Slot nd's copy of a read-only array: sent unless this device holds
+    // this block at its current generation.
+    bool whole(u32 nd, pointer host, i64 len)
+        {
+        i64 gen = len >= (i64)65536 ? ParDevice.generation(host) : (i64)-1;
+        if (_whole[nd] != (u64)0 && _wholeHost[nd] == host && _wholeLen[nd] == len && gen != (i64)-1 && _wholeGen[nd] == gen)
+            {
+            if (ParDevice.reporting())
+                Log.info("par: %s: %ld bytes already on the GPU, unchanged since", identity().cString(), len);
+            return true;
+            }
+        _wholeHost[nd] = (pointer)0;
+        if (!devBuf(&_whole[nd], &_wholeCap[nd], len) || gCu_toDevice(_whole[nd], host, (u64)len) != (i32)0)
+            return false;
+        if (gen != (i64)-1)
+            {
+            _wholeHost[nd] = host;
+            _wholeLen[nd] = len;
+            _wholeGen[nd] = gen;
+            }
+        return true;
+        }
+
     bool prepare(ParChunk* proto, u8* src, ParLayout* l, i64 tile)
         {
         gCu_ctxSetCurrent(_ctx);
@@ -1361,41 +1417,51 @@ class ParCudaWorker : ParWorker
         if (_snap == (u8*)0)
             return false;
         memcpy((pointer)_snap, (pointer)obj, (u64)l.size);
+        // What this run writes is out of date everywhere else from now (a
+        // kernel may write a pinned block in place, which no fault sees).
+        ParDevice.wroteAll(obj, l);
         // The un-footprinted read-only buffers and globals, whole, once per
-        // device per run.
+        // device per run, and not at all when this device already holds them
+        // unwritten since.
         u32 nd = (u32)2;
         bool ok = true;
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
-            if (l.bufFp[i] == (i64)0)
-                {
-                if (!devBuf(&_whole[nd], &_wholeCap[nd], l.bufLen[i]) ||
-                    gCu_toDevice(_whole[nd], *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i]) != (i32)0)
-                    ok = false;
-                }
+            if (l.bufFp[i] == (i64)0 && !whole(nd, *(pointer*)(obj + l.bufOff[i]), l.bufLen[i]))
+                ok = false;
             nd = nd + (u32)1;
             }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             {
-            if (l.globFp[i] == (i64)0)
-                {
-                if (!devBuf(&_whole[nd], &_wholeCap[nd], l.globLen[i]) ||
-                    gCu_toDevice(_whole[nd], l.globPtr[i], (u64)l.globLen[i]) != (i32)0)
-                    ok = false;
-                }
+            if (l.globFp[i] == (i64)0 && !whole(nd, l.globPtr[i], l.globLen[i]))
+                ok = false;
             nd = nd + (u32)1;
             }
         _nparams = nd + l.nred;
-        // Slices per slot, sized for a tile; which buffers are pinned.
+        // Slices per slot, sized for a tile; which buffers are pinned; which
+        // read-only ones go whole this time (a quarter of the free memory at
+        // most).
         l.plan(0, tile);
         i64 upMax = (i64)0;
         i64 downMax = (i64)0;
+        u64 memTotal = (u64)0;
+        u64 memFree = (u64)0;
+        memory(&memTotal, &memFree);
+        i64 budget = (i64)(memFree >> (u64)2);
         u32 q = (u32)0;
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
             _sliceMax[q] = (i64)0;
             _pin[q] = false;
-            if (l.bufFp[i] != (i64)0)
+            _asWhole[q] = false;
+            if (l.bufFp[i] != (i64)0 && l.bufIn[i] != (i64)0
+                && wholeAgain(q, *(pointer*)(obj + l.bufOff[i]), l.bufLen[i], &budget))
+                {
+                _asWhole[q] = true;
+                if (!whole((u32)2 + q, *(pointer*)(obj + l.bufOff[i]), l.bufLen[i]))
+                    ok = false;
+                }
+            else if (l.bufFp[i] != (i64)0)
                 {
                 _sliceMax[q] = (l.bufFpK[i] * tile + (l.bufFpHi[i] - l.bufFpLo[i])) * l.bufElem[i];
                 _pin[q] = ParCuda.pinned(*(pointer*)(obj + l.bufOff[i]), l.bufLen[i]);
@@ -1411,7 +1477,14 @@ class ParCudaWorker : ParWorker
             {
             _sliceMax[q] = (i64)0;
             _pin[q] = false;
-            if (l.globFp[i] != (i64)0)
+            _asWhole[q] = false;
+            if (l.globFp[i] != (i64)0 && l.globIn[i] != (i64)0 && wholeAgain(q, l.globPtr[i], l.globLen[i], &budget))
+                {
+                _asWhole[q] = true;
+                if (!whole((u32)2 + q, l.globPtr[i], l.globLen[i]))
+                    ok = false;
+                }
+            else if (l.globFp[i] != (i64)0)
                 {
                 _sliceMax[q] = (l.globFpK[i] * tile + (l.globFpHi[i] - l.globFpLo[i])) * l.globElem[i];
                 _pin[q] = ParCuda.pinned(l.globPtr[i], l.globLen[i]);
@@ -1452,6 +1525,8 @@ class ParCudaWorker : ParWorker
     // and a free a run were most of a small block's time).
     void finish(void)
         {
+        if (_snap != (u8*)0 && _l != (ParLayout*)0)
+            ParDevice.wroteAll(_snap, _l);
         if (_snap != (u8*)0) { free((pointer)_snap); _snap = (u8*)0; }
         _proto = (ParChunk*)0;
         _l = (ParLayout*)0;
@@ -1497,7 +1572,7 @@ class ParCudaWorker : ParWorker
         u32 pi = (u32)2;
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
-            if (l.bufFp[i] != (i64)0)
+            if (l.bufFp[i] != (i64)0 && !_asWhole[b])
                 {
                 i64 count = l.bufLen[i] / l.bufElem[i];
                 i64 e0 = ParCuda.sliceLo(l.bufFpK[i], l.bufFpLo[i], tlo, count);
@@ -1525,7 +1600,7 @@ class ParCudaWorker : ParWorker
             }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             {
-            if (l.globFp[i] != (i64)0)
+            if (l.globFp[i] != (i64)0 && !_asWhole[b])
                 {
                 i64 count = l.globLen[i] / l.globElem[i];
                 i64 e0 = ParCuda.sliceLo(l.globFpK[i], l.globFpLo[i], tlo, count);

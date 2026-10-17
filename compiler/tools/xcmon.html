@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>xcmon</title>
+<!-- xcmon's page: the xcd daemons and the programs tracing to xcmon, as a
+     stack of cubes per node (one cube per device; a lit cube has tiles out),
+     laid out by a force model. Drag a node to move it, double-click to pin or
+     unpin it; an offline daemon stays, greyed, until removed (its x). -->
+<style>
+:root { --bg:#f6f6f4; --fg:#1b1b1b; --dim:#777; --panel:#ffffffd9; --line:#ccc; }
+@media (prefers-color-scheme: dark) { :root { --bg:#141518; --fg:#e8e8e8; --dim:#888; --panel:#1e2026d9; --line:#333; } }
+html, body { margin:0; height:100%; background:var(--bg); color:var(--fg); font:13px/1.4 system-ui, sans-serif; overflow:hidden; }
+#c { position:fixed; inset:0; }
+#panel { position:fixed; top:12px; left:12px; max-width:min(380px, calc(100vw - 24px)); max-height:calc(100vh - 24px); overflow:auto;
+         background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+#panel h1 { font-size:14px; margin:0 0 6px; }
+.row { display:flex; gap:8px; align-items:baseline; padding:3px 0; border-top:1px solid var(--line); }
+.row .n { font-weight:600; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.row .m { color:var(--dim); font-variant-numeric:tabular-nums; }
+.off .n { color:var(--dim); text-decoration:line-through; }
+.x { cursor:pointer; color:var(--dim); border:none; background:none; font:inherit; padding:0 2px; }
+#status { color:var(--dim); }
+.label { position:fixed; pointer-events:none; font-size:11px; color:var(--fg); white-space:nowrap; transform:translate(-50%, 0); text-shadow:0 0 3px var(--bg); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="panel"><h1>xcmon</h1><div id="status">connecting…</div><div id="list"></div></div>
+<div id="labels"></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+const feedPort = "__FEED_PORT__";
+const canvas = document.getElementById("c");
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1000);
+camera.position.set(0, 18, 26); camera.lookAt(0, 0, 0);
+scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+const sun = new THREE.DirectionalLight(0xffffff, 0.7); sun.position.set(5, 20, 10); scene.add(sun);
+const grid = new THREE.GridHelper(60, 30, 0x888888, 0x888888); grid.material.opacity = 0.15; grid.material.transparent = true; scene.add(grid);
+
+// Nodes by id: { kind, data, pos (Vector3), vel, pinned, group, cubes[], label, removed }
+const nodes = new Map();
+const removed = new Set();
+const box = new THREE.BoxGeometry(1.4, 0.8, 1.4);
+const colours = { idle: 0x5b8def, busy: 0xf0a030, off: 0x777777, program: 0x4caf50, unavailable: 0xb04040 };
+
+function nodeFor(id, kind) {
+  let n = nodes.get(id);
+  if (n) return n;
+  const group = new THREE.Group();
+  scene.add(group);
+  const label = document.createElement("div");
+  label.className = "label";
+  document.getElementById("labels").appendChild(label);
+  n = { id, kind, group, cubes: [], label, pinned: false,
+        pos: new THREE.Vector3((Math.random() - 0.5) * 10, 0, (Math.random() - 0.5) * 10),
+        vel: new THREE.Vector3() };
+  nodes.set(id, n);
+  return n;
+}
+
+function setStack(n, devices) {
+  // One cube per device, stacked; colour by what it is doing.
+  while (n.cubes.length > devices.length) { const c = n.cubes.pop(); n.group.remove(c); }
+  while (n.cubes.length < devices.length) {
+    const m = new THREE.Mesh(box, new THREE.MeshStandardMaterial({ color: colours.idle, roughness: 0.6 }));
+    m.position.y = 0.4 + n.cubes.length * 0.9; m.userData.node = n.id;
+    n.group.add(m); n.cubes.push(m);
+  }
+  devices.forEach((d, i) => {
+    n.cubes[i].material.color.setHex(colours[d.state]);
+    n.cubes[i].scale.setScalar(d.state === "busy" ? 1 + Math.min(d.out, 8) * 0.04 : 1);
+  });
+}
+
+function drop(id) {
+  const n = nodes.get(id); if (!n) return;
+  scene.remove(n.group); n.label.remove(); nodes.delete(id); removed.add(id);
+}
+
+function fmtMb(f, t) { return t ? `${(f / 1024).toFixed(1)}/${(t / 1024).toFixed(1)} GB` : ""; }
+
+function apply(s) {
+  const seen = new Set();
+  const rows = [];
+  for (const d of s.nodes) {
+    if (removed.has(d.id)) continue;
+    seen.add(d.id);
+    const n = nodeFor(d.id, "daemon");
+    n.data = d;
+    const state = !d.online ? "off" : !d.available ? "unavailable" : d.queued > 0 ? "busy" : "idle";
+    setStack(n, [{ state, out: d.queued }]);
+    n.label.textContent = d.name + (d.online ? `  ${(d.rttUs / 1000).toFixed(1)} ms` : "  offline");
+    rows.push(`<div class="row ${d.online ? "" : "off"}"><span class="n" title="${esc(d.name)}">${esc(d.name)}</span>
+      <span class="m">${d.online ? (d.rttUs / 1000).toFixed(1) + " ms" : "offline"}</span>
+      <span class="m">${fmtMb(d.vramFreeMb, d.vramTotalMb)}</span>
+      <button class="x" data-id="${esc(d.id)}" title="remove">×</button></div>`);
+  }
+  for (const p of s.programs) {
+    const id = "p" + p.id;
+    if (removed.has(id)) continue;
+    seen.add(id);
+    const n = nodeFor(id, "program");
+    n.data = p;
+    const devs = p.workers.length ? p.workers.map(w => ({ state: !p.live ? "off" : w.out > 0 ? "busy" : "program", out: w.out }))
+                                  : [{ state: p.live ? "program" : "off", out: 0 }];
+    setStack(n, devs);
+    n.label.textContent = (p.block || "program " + p.id) + (p.live ? "" : " (ended)");
+    const done = p.workers.reduce((a, w) => a + w.done, 0);
+    rows.push(`<div class="row ${p.live ? "" : "off"}"><span class="n" title="${esc(p.block)}">${esc(p.block || "program " + p.id)}</span>
+      <span class="m">run ${p.run}</span><span class="m">${done} tiles</span>
+      <span class="m">${p.lastRunUs ? (p.lastRunUs / 1000).toFixed(1) + " ms" : ""}</span>
+      <button class="x" data-id="${id}" title="remove">×</button></div>`);
+    // Each device that is a daemon gets an edge to it (drawn in the layout).
+    n.links = p.workers.map(w => w.name);
+  }
+  // A daemon no longer reported is kept (it shows offline); a program the
+  // feed has dropped goes.
+  for (const [id, n] of nodes) if (!seen.has(id) && n.kind === "program") drop(id);
+  document.getElementById("list").innerHTML = rows.join("") || "<div class='row'><span class='m'>nothing yet: start xcd, or run a program with XC_PAR_TRACE=&lt;host&gt;:7482</span></div>";
+}
+function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+document.getElementById("list").addEventListener("click", e => { const b = e.target.closest(".x"); if (b) drop(b.dataset.id); });
+
+// Edges: a program to each daemon whose identity its workers name.
+const lines = new THREE.Group(); scene.add(lines);
+const lineMat = new THREE.LineBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.5 });
+function edges() {
+  const out = [];
+  for (const n of nodes.values()) {
+    if (n.kind !== "program" || !n.links) continue;
+    for (const m of nodes.values())
+      if (m.kind === "daemon" && m.data && n.links.some(w => w === m.data.name || w.includes(m.data.id.split(":")[0]))) out.push([n, m]);
+  }
+  return out;
+}
+
+// Force layout on the ground plane: everything repels, edges attract, a
+// gentle pull to the centre.
+function layout(dt) {
+  const list = [...nodes.values()];
+  const es = edges();
+  for (const a of list) {
+    if (a.pinned || a === dragging) continue;
+    const f = new THREE.Vector3().addScaledVector(a.pos, -0.05);
+    for (const b of list) if (a !== b) {
+      const d = new THREE.Vector3().subVectors(a.pos, b.pos); const l2 = Math.max(d.lengthSq(), 0.5);
+      f.addScaledVector(d.normalize(), 30 / l2);
+    }
+    for (const [p, q] of es) if (p === a || q === a) {
+      const o = p === a ? q : p; const d = new THREE.Vector3().subVectors(o.pos, a.pos);
+      f.addScaledVector(d, 0.08 * (d.length() - 5) / Math.max(d.length(), 0.01));
+    }
+    a.vel.addScaledVector(f, dt).multiplyScalar(0.85);
+    a.pos.addScaledVector(a.vel, dt * 10); a.pos.y = 0;
+  }
+  while (lines.children.length) lines.remove(lines.children[0]);
+  for (const [p, q] of es)
+    lines.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([p.pos.clone().setY(0.4), q.pos.clone().setY(0.4)]), lineMat));
+}
+
+// Drag on the ground plane; double-click pins.
+const ray = new THREE.Raycaster(), mouse = new THREE.Vector2(), ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+let dragging = null;
+function pick(e) {
+  mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(mouse, camera);
+  const hit = ray.intersectObjects([...nodes.values()].flatMap(n => n.cubes))[0];
+  return hit ? nodes.get(hit.object.userData.node) : null;
+}
+canvas.addEventListener("pointerdown", e => { dragging = pick(e); if (dragging) canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener("pointermove", e => {
+  if (!dragging) return;
+  mouse.set((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+  ray.setFromCamera(mouse, camera);
+  const p = new THREE.Vector3(); if (ray.ray.intersectPlane(ground, p)) { dragging.pos.copy(p); dragging.vel.set(0, 0, 0); }
+});
+canvas.addEventListener("pointerup", () => { dragging = null; });
+canvas.addEventListener("dblclick", e => { const n = pick(e); if (n) { n.pinned = !n.pinned; n.group.children.forEach(c => c.material.emissive?.setHex(n.pinned ? 0x222222 : 0)); } });
+addEventListener("wheel", e => { camera.position.multiplyScalar(e.deltaY > 0 ? 1.08 : 0.93); camera.lookAt(0, 0, 0); }, { passive: true });
+
+function resize() { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); }
+addEventListener("resize", resize); resize();
+
+let last = performance.now();
+function frame(t) {
+  const dt = Math.min((t - last) / 1000, 0.05); last = t;
+  layout(dt);
+  const v = new THREE.Vector3();
+  for (const n of nodes.values()) {
+    n.group.position.copy(n.pos);
+    v.copy(n.pos).setY(n.cubes.length * 0.9 + 0.4).project(camera);
+    n.label.style.left = ((v.x + 1) / 2 * innerWidth) + "px";
+    n.label.style.top = ((1 - v.y) / 2 * innerHeight) + "px";
+  }
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// The feed: a snapshot every half second; reconnect when it drops.
+function connect() {
+  const ws = new WebSocket(`ws://${location.hostname || "localhost"}:${feedPort}/`);
+  const st = document.getElementById("status");
+  ws.onopen = () => { st.textContent = "live"; };
+  ws.onmessage = e => { try { apply(JSON.parse(e.data)); } catch (err) { st.textContent = "bad snapshot: " + err; } };
+  ws.onclose = () => { st.textContent = "disconnected; retrying…"; setTimeout(connect, 2000); };
+}
+connect();
+</script>
+</body>
+</html>

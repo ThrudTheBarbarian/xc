@@ -528,6 +528,178 @@ static NSString *xtArm64SmeGemmIntKernel(BOOL signedK) {
     return o;
 }
 
+// The 64-bit integer SME matrix kernel (idiom-matmul, u64 and i64 nests):
+//
+//   bool __xt_sme_gemm_<u64|i64>(T* A, T* B, T* C, u64 M | N << 32,
+//                                u32 K, u32 lda, u32 ldb, u32 ldc)
+//
+// SME's only outer product into 64-bit tiles takes 16-bit inputs, four to a
+// doubleword (FEAT_SME_I16I64). So the kernel runs when every value of A and
+// B fits a half (u16, or i16 for i64) and the CPU has the feature, and
+// otherwise returns 0 and the loop runs. The 64-bit tile wraps as the loop's
+// arithmetic does, whatever K. The 32-bit kernel's shape with doublewords:
+// .d tiles, ld1d/st1d, Kq = (K + 3) / 4, and A's row packed by two uzp1
+// steps (the low word of each doubleword, then the low half of each word).
+static NSString *xtArm64SmeI64Loads(void) {
+    return @"    whilelt p6.d, x8, x24\n    ld1d {z0.d}, p6/z, [x15]\n"
+            "    add x16, x8, x9\n    whilelt p6.d, x16, x24\n    ld1d {z1.d}, p6/z, [x15, x9, lsl #3]\n"
+            "    add x11, x15, x9, lsl #4\n    add x16, x16, x9\n    whilelt p6.d, x16, x24\n    ld1d {z2.d}, p6/z, [x11]\n"
+            "    add x16, x16, x9\n    whilelt p6.d, x16, x24\n    ld1d {z3.d}, p6/z, [x11, x9, lsl #3]\n"
+            "    uzp1 z0.s, z0.s, z1.s\n    uzp1 z1.s, z2.s, z3.s\n    uzp1 z0.h, z0.h, z1.h\n";
+}
+
+static NSString *xtArm64SmeI64MainLoop(NSString *L, NSString *MOPA) {
+    NSMutableString *o = [NSMutableString string];
+    [o appendFormat:@"%@main:\n    rdsvl x17, #2\n    mov x10, #0\n", L];
+    // Row predicates at the input width: 4 bits (halves) per row of the
+    // 64-bit tile; ld1d and st1d read the first of each group.
+    [o appendFormat:@"%@i:\n    lsl x8, x10, #2\n    lsl x14, x22, #2\n    whilelt p0.h, x8, x14\n    add x8, x8, x9, lsl #2\n    whilelt p3.h, x8, x14\n    mov x12, #0\n", L];
+    [o appendFormat:@"%@t:\n    cmp x12, x26\n    b.hs %@td\n    whilelt p2.d, x12, x26\n    zero {za2.d, za3.d}\n", L, L];
+    [o appendString:@"    sub x14, x22, x10\n    cmp x14, x9\n    csel x14, x14, x9, lo\n"];
+    [o appendString:@"    lsl x8, x12, #2\n    madd x15, x10, x25, x8\n    add x15, x19, x15, lsl #3\n    mov w13, #0\n"];
+    [o appendFormat:@"%@a:\n", L];
+    [o appendString:xtArm64SmeI64Loads()];
+    [o appendString:@"    mova za2h.d[w13, 0], p2/m, z0.d\n"];
+    [o appendFormat:@"    add x15, x15, x25, lsl #3\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@a\n", L];
+    [o appendFormat:@"    add x11, x10, x9\n    cmp x11, x22\n    b.hs %@tc0\n", L];
+    [o appendString:@"    sub x14, x22, x11\n    cmp x14, x9\n    csel x14, x14, x9, lo\n"];
+    [o appendString:@"    madd x15, x11, x25, x8\n    add x15, x19, x15, lsl #3\n    mov w13, #0\n"];
+    [o appendFormat:@"%@a2:\n", L];
+    [o appendString:xtArm64SmeI64Loads()];
+    [o appendString:@"    mova za3h.d[w13, 0], p2/m, z0.d\n"];
+    [o appendFormat:@"    add x15, x15, x25, lsl #3\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@a2\n", L];
+    [o appendFormat:@"%@tc0:\n    sub x14, x26, x12\n    cmp x14, x9\n    csel x14, x14, x9, lo\n    madd x15, x12, x17, x28\n    mov w13, #0\n", L];
+    [o appendFormat:@"%@tc:\n    st1d {za2v.d[w13, 0]}, p0, [x15]\n    st1d {za3v.d[w13, 0]}, p3, [x15, x9, lsl #3]\n", L];
+    [o appendFormat:@"    add x15, x15, x17\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@tc\n", L];
+    [o appendFormat:@"    add x12, x12, x9\n    b %@t\n", L];
+    [o appendFormat:@"%@td:\n    mov x11, #0\n%@j:\n    lsl x8, x11, #2\n    lsl x14, x23, #2\n    whilelt p1.h, x8, x14\n    add x8, x8, x9, lsl #2\n    whilelt p4.h, x8, x14\n"
+                     "    zero {za0.d, za1.d, za2.d, za3.d}\n", L, L];
+    [o appendFormat:@"    cbz x26, %@st\n    mov x15, x28\n    add x16, x20, x11, lsl #3\n    mov x12, #0\n", L];
+    [o appendFormat:@"%@kk:\n    ld1d {z0.d}, p0/z, [x15]\n    ld1d {z2.d}, p3/z, [x15, x9, lsl #3]\n    ld1d {z1.d}, p1/z, [x16]\n"
+                     "    ld1d {z3.d}, p4/z, [x16, x9, lsl #3]\n", L];
+    [o appendFormat:@"    %@ za0.d, p0/m, p1/m, z0.h, z1.h\n    %@ za1.d, p3/m, p1/m, z2.h, z1.h\n", MOPA, MOPA];
+    [o appendFormat:@"    %@ za2.d, p0/m, p4/m, z0.h, z3.h\n    %@ za3.d, p3/m, p4/m, z2.h, z3.h\n", MOPA, MOPA];
+    [o appendFormat:@"    add x15, x15, x17\n    add x16, x16, x23, lsl #3\n    add x12, x12, #1\n    cmp x12, x26\n    b.lo %@kk\n", L];
+    [o appendFormat:@"%@st:\n    sub x14, x22, x10\n    cmp x14, x9\n    csel x14, x14, x9, lo\n", L];
+    [o appendString:@"    madd x15, x10, x27, x11\n    add x15, x21, x15, lsl #3\n    mov w13, #0\n"];
+    [o appendFormat:@"%@s:\n    st1d {za0h.d[w13, 0]}, p1, [x15]\n    st1d {za2h.d[w13, 0]}, p4, [x15, x9, lsl #3]\n", L];
+    [o appendFormat:@"    add x15, x15, x27, lsl #3\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@s\n", L];
+    [o appendFormat:@"    add x8, x10, x9\n    cmp x8, x22\n    b.hs %@jn\n", L];
+    [o appendString:@"    sub x14, x22, x8\n    cmp x14, x9\n    csel x14, x14, x9, lo\n"];
+    [o appendString:@"    madd x15, x8, x27, x11\n    add x15, x21, x15, lsl #3\n    mov w13, #0\n"];
+    [o appendFormat:@"%@s2:\n    st1d {za1h.d[w13, 0]}, p1, [x15]\n    st1d {za3h.d[w13, 0]}, p4, [x15, x9, lsl #3]\n", L];
+    [o appendFormat:@"    add x15, x15, x27, lsl #3\n    add w13, w13, #1\n    cmp x13, x14\n    b.lo %@s2\n", L];
+    [o appendFormat:@"%@jn:\n    add x11, x11, x9, lsl #1\n    cmp x11, x23\n    b.lo %@j\n", L, L];
+    [o appendFormat:@"    add x10, x10, x9, lsl #1\n    cmp x10, x22\n    b.lo %@i\n    b %@ok\n", L, L];
+    return o;
+}
+
+static NSString *xtArm64SmeI64PackB(NSString *L, BOOL signedK) {
+    // Bq[kq][j] = the 4 rows of B at kq, a row to a half; rows past K read
+    // as zeros (whilelt against a bound of 0). ldb is in x1.
+    NSMutableString *o = [NSMutableString string];
+    [o appendFormat:@"%@pb:\n    lsl x12, x10, #2\n    mul x14, x12, x1\n    add x14, x20, x14, lsl #3\n    add x15, x14, x1, lsl #3\n"
+                     "    add x0, x15, x1, lsl #3\n    add x3, x0, x1, lsl #3\n", L];
+    [o appendString:@"    add x8, x12, #1\n    cmp x8, x24\n    csel x2, x23, xzr, lo\n    add x8, x12, #2\n    cmp x8, x24\n    csel x4, x23, xzr, lo\n"
+                     "    add x8, x12, #3\n    cmp x8, x24\n    csel x5, x23, xzr, lo\n    mov x11, #0\n"];
+    [o appendFormat:@"%@pbj:\n    whilelt p1.d, x11, x23\n    ld1d {z0.d}, p1/z, [x14, x11, lsl #3]\n"
+                     "    whilelt p2.d, x11, x2\n    ld1d {z1.d}, p2/z, [x15, x11, lsl #3]\n"
+                     "    whilelt p2.d, x11, x4\n    ld1d {z2.d}, p2/z, [x0, x11, lsl #3]\n"
+                     "    whilelt p2.d, x11, x5\n    ld1d {z3.d}, p2/z, [x3, x11, lsl #3]\n", L];
+    if (signedK)
+        [o appendString:@"    and z0.d, z0.d, #0xffff\n    and z1.d, z1.d, #0xffff\n    and z2.d, z2.d, #0xffff\n    and z3.d, z3.d, #0xffff\n"];
+    [o appendString:@"    lsl z1.d, z1.d, #16\n    lsl z2.d, z2.d, #32\n    lsl z3.d, z3.d, #48\n"
+                     "    orr z0.d, z0.d, z1.d\n    orr z2.d, z2.d, z3.d\n    orr z0.d, z0.d, z2.d\n"];
+    [o appendFormat:@"    st1d {z0.d}, p1, [x16, x11, lsl #3]\n    add x11, x11, x9\n    cmp x11, x23\n    b.lo %@pbj\n", L];
+    [o appendFormat:@"    add x16, x16, x23, lsl #3\n    add x10, x10, #1\n    cmp x10, x26\n    b.lo %@pb\n", L];
+    [o appendString:@"    rdsvl x17, #2\n    madd x20, x17, x26, x28\n"];
+    return o;
+}
+
+static NSString *xtArm64SmeGemmI64Kernel(BOOL signedK) {
+    NSString *T = signedK ? @"i64" : @"u64";
+    NSString *L = signedK ? @"Lsmei64_" : @"Lsmeu64_";
+    NSString *MOPA = signedK ? @"smopa" : @"umopa";
+    NSMutableString *o = [NSMutableString string];
+    [o appendFormat:@"\n// SME matrix kernel (%@)\n    .p2align 2\n", T];
+    [o appendFormat:@"___xt_sme_gemm_%@:\n", T];
+    [o appendString:@"    stp x29, x30, [sp, #-160]!\n    mov x29, sp\n"
+                     "    stp x19, x20, [sp, #16]\n    stp x21, x22, [sp, #32]\n"
+                     "    stp x23, x24, [sp, #48]\n    stp x25, x26, [sp, #64]\n"
+                     "    stp x27, x28, [sp, #80]\n    stp d8, d9, [sp, #96]\n"
+                     "    stp d10, d11, [sp, #112]\n    stp d12, d13, [sp, #128]\n"
+                     "    stp d14, d15, [sp, #144]\n"];
+    [o appendString:@"    mov x19, x0\n    mov x20, x1\n    mov x21, x2\n"
+                     "    mov w22, w3\n    lsr x23, x3, #32\n    mov w24, w4\n"
+                     "    mov w25, w5\n    mov w26, w6\n    mov w27, w7\n"];
+    [o appendString:@"    adrp x8, ___xt_sme_state@PAGE\n    ldrb w9, [x8, ___xt_sme_state@PAGEOFF]\n"];
+    [o appendFormat:@"    cbnz w9, %@known\n", L];
+    [o appendString:xtArm64SmeProbe(@"sme")];
+    [o appendFormat:@"%@known:\n    mov w0, #0\n    cmp w9, #1\n    b.ne %@ret\n", L, L];
+    // FEAT_SME_I16I64 too, before streaming mode
+    [o appendString:@"    adrp x8, ___xt_smei64_state@PAGE\n    ldrb w9, [x8, ___xt_smei64_state@PAGEOFF]\n"];
+    [o appendFormat:@"    cbnz w9, %@known2\n", L];
+    [o appendString:xtArm64SmeProbe(@"smei64")];
+    [o appendFormat:@"%@known2:\n    mov w0, #0\n    cmp w9, #1\n    b.ne %@ret\n", L, L];
+    [o appendFormat:@"    cbz x22, %@done\n    cbz x23, %@done\n", L, L];
+    [o appendFormat:@"    cmp x27, x23\n    b.lo %@ret\n", L];
+    [o appendString:@"    sub x9, x22, #1\n    madd x10, x9, x27, x23\n"];
+    [o appendFormat:@"    sub x11, x10, #1\n    lsr x11, x11, #32\n    cbnz x11, %@ret\n", L];
+    [o appendString:@"    add x10, x21, x10, lsl #3\n"];
+    [o appendFormat:@"    cbz x24, %@go\n", L];
+    [o appendString:@"    madd x11, x9, x25, x24\n    sub x12, x11, #1\n    lsr x12, x12, #32\n"];
+    [o appendFormat:@"    cbnz x12, %@ret\n", L];
+    [o appendString:@"    add x11, x19, x11, lsl #3\n"];
+    [o appendFormat:@"    cmp x21, x11\n    ccmp x19, x10, #2, lo\n    b.lo %@ret\n", L];
+    [o appendString:@"    sub x12, x24, #1\n    madd x11, x12, x26, x23\n    sub x12, x11, #1\n    lsr x12, x12, #32\n"];
+    [o appendFormat:@"    cbnz x12, %@ret\n", L];
+    [o appendString:@"    add x11, x20, x11, lsl #3\n"];
+    [o appendFormat:@"    cmp x21, x11\n    ccmp x20, x10, #2, lo\n    b.lo %@ret\n", L];
+    // One buffer: A's panel (Kq rows of 2 vectors) then B packed (Kq rows of
+    // N doublewords). None when K == 0.
+    [o appendFormat:@"%@go:\n    mov x28, #0\n    cbz x24, %@go2\n", L, L];
+    [o appendFormat:@"    add x8, x24, #3\n    lsr x8, x8, #2\n    rdsvl x0, #2\n    mul x0, x0, x8\n"
+                     "    mul x1, x8, x23\n    add x0, x0, x1, lsl #3\n    bl _malloc\n    cbz x0, %@ret\n    mov x28, x0\n", L];
+    [o appendFormat:@"%@go2:\n    smstart\n    cntd x9\n    cbnz x24, %@scan\n    mov x26, #0\n    b %@main\n%@scan:\n", L, L, L, L];
+    // ── the largest (and, signed, the smallest) value in A and B ──
+    if (signedK)
+        [o appendString:@"    mov x8, #1\n    lsl x8, x8, #63\n    dup z4.d, x8\n    mvn x8, x8\n    dup z5.d, x8\n"];
+    else
+        [o appendString:@"    mov z4.d, #0\n"];
+    NSArray *scans = @[ @[ @"sa", @"x22", @"x24", @"x19", @"x25" ], @[ @"sb", @"x24", @"x23", @"x20", @"x26" ] ];
+    for (NSArray *sc in scans) {
+        NSString *lab = sc[0], *rows = sc[1], *cols = sc[2], *base = sc[3], *ld = sc[4];
+        [o appendString:@"    mov x10, #0\n"];
+        [o appendFormat:@"%@%@r:\n    mul x15, x10, %@\n    add x15, %@, x15, lsl #3\n    mov x12, #0\n", L, lab, ld, base];
+        [o appendFormat:@"%@%@c:\n    whilelt p0.d, x12, %@\n    ld1d {z0.d}, p0/z, [x15, x12, lsl #3]\n", L, lab, cols];
+        if (signedK)
+            [o appendString:@"    smax z4.d, p0/m, z4.d, z0.d\n    smin z5.d, p0/m, z5.d, z0.d\n"];
+        else
+            [o appendString:@"    umax z4.d, p0/m, z4.d, z0.d\n"];
+        [o appendFormat:@"    add x12, x12, x9\n    cmp x12, %@\n    b.lo %@%@c\n", cols, L, lab];
+        [o appendFormat:@"    add x10, x10, #1\n    cmp x10, %@\n    b.lo %@%@r\n", rows, L, lab];
+    }
+    [o appendString:@"    ptrue p5.d\n    mov x1, x26\n"];   // ldb, kept for the packing of B
+    if (signedK) {
+        [o appendString:@"    smaxv d0, p5, z4.d\n    sminv d1, p5, z5.d\n    fmov x10, d0\n    fmov x11, d1\n"];
+        [o appendFormat:@"    mov x8, #32767\n    cmp x10, x8\n    b.gt %@fail\n    mov x8, #-32768\n    cmp x11, x8\n    b.lt %@fail\n", L, L];
+    } else {
+        [o appendFormat:@"    umaxv d0, p5, z4.d\n    fmov x10, d0\n    cmp x10, #0x10000\n    b.hs %@fail\n", L];
+    }
+    [o appendString:@"    add x26, x24, #3\n    lsr x26, x26, #2\n    rdsvl x17, #2\n    madd x16, x17, x26, x28\n    mov x10, #0\n"];
+    [o appendString:xtArm64SmeI64PackB(L, signedK)];
+    [o appendString:xtArm64SmeI64MainLoop(L, MOPA)];
+    [o appendFormat:@"%@ok:\n    smstop\n    mov w22, #1\n    b %@free\n", L, L];
+    [o appendFormat:@"%@fail:\n    smstop\n    mov w22, #0\n%@free:\n    cbz x28, %@freed\n    mov x0, x28\n    bl _free\n", L, L, L];
+    [o appendFormat:@"%@freed:\n    mov w0, w22\n    b %@ret\n%@done:\n    mov w0, #1\n%@ret:\n", L, L, L, L];
+    [o appendString:@"    ldp d14, d15, [sp, #144]\n    ldp d12, d13, [sp, #128]\n"
+                     "    ldp d10, d11, [sp, #112]\n    ldp d8, d9, [sp, #96]\n"
+                     "    ldp x27, x28, [sp, #80]\n    ldp x25, x26, [sp, #64]\n"
+                     "    ldp x23, x24, [sp, #48]\n    ldp x21, x22, [sp, #32]\n"
+                     "    ldp x19, x20, [sp, #16]\n    ldp x29, x30, [sp], #160\n    ret\n"];
+    return o;
+}
+
 static unsigned xtArm64GlobalP2Align(uint32_t size) {
     if (size >= 8) return 3;
     if (size >= 4) return 2;
@@ -8065,7 +8237,12 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
     BOOL smeI32 = [mod referencesSymbolNamed:@"__xt_sme_gemm_i32"];
     if (smeU32) [out appendString:xtArm64SmeGemmIntKernel(NO)];
     if (smeI32) [out appendString:xtArm64SmeGemmIntKernel(YES)];
-    if (smeF32 || smeF64 || smeF32f || smeF64f || smeU32 || smeI32) {
+    // The 64-bit ones probe FEAT_SME_I16I64.
+    BOOL smeU64 = [mod referencesSymbolNamed:@"__xt_sme_gemm_u64"];
+    BOOL smeI64 = [mod referencesSymbolNamed:@"__xt_sme_gemm_i64"];
+    if (smeU64) [out appendString:xtArm64SmeGemmI64Kernel(NO)];
+    if (smeI64) [out appendString:xtArm64SmeGemmI64Kernel(YES)];
+    if (smeF32 || smeF64 || smeF32f || smeF64f || smeU32 || smeI32 || smeU64 || smeI64) {
         [out appendString:@"\n    .section __DATA,__data\n___xt_sme_state:\n    .byte 0x00\n___xt_sme_feat:\n"];
         const char *feat = "hw.optional.arm.FEAT_SME";
         for (const char *c = feat; ; c++) {
@@ -8076,6 +8253,14 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
             [out appendString:@"___xt_sme2_state:\n    .byte 0x00\n___xt_sme2_feat:\n"];
             const char *feat2 = "hw.optional.arm.FEAT_SME2";
             for (const char *c = feat2; ; c++) {
+                [out appendFormat:@"    .byte 0x%02X\n", (unsigned)(unsigned char)*c];
+                if (!*c) break;
+            }
+        }
+        if (smeU64 || smeI64) {
+            [out appendString:@"___xt_smei64_state:\n    .byte 0x00\n___xt_smei64_feat:\n"];
+            const char *feat3 = "hw.optional.arm.FEAT_SME_I16I64";
+            for (const char *c = feat3; ; c++) {
                 [out appendFormat:@"    .byte 0x%02X\n", (unsigned)(unsigned char)*c];
                 if (!*c) break;
             }

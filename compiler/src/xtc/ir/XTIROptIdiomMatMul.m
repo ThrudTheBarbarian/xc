@@ -146,6 +146,31 @@ static XTIRInsn* defWith(XTIROperand* o, XTIROpcode op, XTMatMulDefs* d)
     return (def && def.opcode == op) ? def : nil;
     }
 
+// The same integer width, the other signedness.
+static BOOL otherSign(XTIRTypeKind a, XTIRTypeKind b)
+    {
+    return (a == XTIRTypeKindI32 && b == XTIRTypeKindU32) || (a == XTIRTypeKindU32 && b == XTIRTypeKindI32)
+           || (a == XTIRTypeKindI64 && b == XTIRTypeKindU64) || (a == XTIRTypeKindU64 && b == XTIRTypeKindI64);
+    }
+
+// A Bitcast to the integer kind fk of a value of the other signedness at the
+// same width, else nil.
+static XTIRInsn* sameWidthBitcast(XTIROperand* o, XTIRTypeKind fk, XTMatMulDefs* d)
+    {
+    XTIRInsn* bc = defWith(o, XTIROpBitcast, d);
+    if (!bc || bc.operands.count != 1 || bc.result.type.kind != fk || bc.operands[0].kind != XTIROperandKindUse)
+        return nil;
+    XTIRInsn* src = d.defOf[@(bc.operands[0].valueId)];
+    return (src && src.result && otherSign(fk, src.result.type.kind)) ? bc : nil;
+    }
+
+// Such a Bitcast of a load (I32 of a U32, U64 of an I64, …), else nil.
+static XTIRInsn* sameWidthCast(XTIROperand* o, XTIRTypeKind fk, XTMatMulDefs* d)
+    {
+    XTIRInsn* bc = sameWidthBitcast(o, fk, d);
+    return (bc && defWith(bc.operands[0], XTIROpLoad, d)) ? bc : nil;
+    }
+
 // Phi incoming from block b (operands alternate block, value).
 static XTIROperand* incoming(XTIRInsn* phi, XTIRBlock* b)
     {
@@ -409,11 +434,11 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
         if (!sPhi.result || sPhi.operands.count != 4)
             continue;
         XTIRTypeKind fk = sPhi.result.type.kind;
-        // An integer nest (u32 or i32 elements, Add and Mul) goes to the
-        // target's integer kernel, where it has one: arm64's packs the values
-        // to bytes or halves when they fit (XTArm64Backend, the integer
-        // kernel). The float nest is the original.
-        BOOL isInt = (fk == XTIRTypeKindU32 || fk == XTIRTypeKindI32);
+        // An integer nest (u32, i32, u64 or i64 elements, Add and Mul) goes
+        // to the target's integer kernel, where it has one: arm64's packs the
+        // values to bytes or halves when they fit (XTArm64Backend, the integer
+        // kernels). The float nest is the original.
+        BOOL isInt = (fk == XTIRTypeKindU32 || fk == XTIRTypeKindI32 || fk == XTIRTypeKindU64 || fk == XTIRTypeKindI64);
         if (fk != XTIRTypeKindF32 && fk != XTIRTypeKindF64 && !isInt)
             continue;
         if (isInt && !self.profile.matMulInts)
@@ -425,19 +450,51 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
             continue;
         // s' = FAdd(s, FMul(x, y)) in either order, in Bk (Add and Mul for ints)
         XTIRInsn* fadd = defWith(incoming(sPhi, Bk), isInt ? XTIROpAdd : XTIROpFAdd, d);
+        // An unsigned sum of a mixed-signedness product is added in the
+        // signed type: s' = Bitcast(Add(Bitcast(s), Mul)). The bits are the
+        // same, so it is the nest of the sum's type.
+        XTIRInsn *sumOut = nil, *sumIn = nil;
+        XTIRTypeKind mk = fk;
+        if (!fadd && isInt)
+            {
+            sumOut = sameWidthBitcast(incoming(sPhi, Bk), fk, d);
+            fadd = sumOut ? defWith(sumOut.operands[0], XTIROpAdd, d) : nil;
+            if (fadd)
+                mk = fadd.result.type.kind;
+            }
         if (!fadd || fadd.operands.count != 2 || d.defBlk[@(fadd.result.valueId)] != Bk)
             continue;
-        XTIROperand* prodOp = isUse(fadd.operands[0], sPhi.result.valueId)   ? fadd.operands[1]
-                              : isUse(fadd.operands[1], sPhi.result.valueId) ? fadd.operands[0]
-                                                                             : nil;
+        if (sumOut && d.defBlk[@(sumOut.result.valueId)] != Bk)
+            continue;
+        XTIROperand* prodOp = nil;
+        for (NSUInteger q = 0; q < 2 && !prodOp; q++)
+            {
+            XTIROperand* sOp = fadd.operands[q];
+            XTIRInsn* in = sumOut ? defWith(sOp, XTIROpBitcast, d) : nil;
+            if (in && (in.operands.count != 1 || in.result.type.kind != mk))
+                in = nil;
+            if (sumOut ? (in && isUse(in.operands[0], sPhi.result.valueId) && d.defBlk[@(in.result.valueId)] == Bk)
+                       : isUse(sOp, sPhi.result.valueId))
+                {
+                prodOp = fadd.operands[1 - q];
+                sumIn = in;
+                }
+            }
         XTIRInsn* fmul = prodOp ? defWith(prodOp, isInt ? XTIROpMul : XTIROpFMul, d) : nil;
         if (!fmul || fmul.operands.count != 2 || d.defBlk[@(fmul.result.valueId)] != Bk)
             continue;
-        XTIRInsn* l0 = defWith(fmul.operands[0], XTIROpLoad, d);
-        XTIRInsn* l1 = defWith(fmul.operands[1], XTIROpLoad, d);
+        // A load of the other signedness at the same width arrives through a
+        // Bitcast (u32 × i32): the product's low 32 (64) bits are the same
+        // either way, so the nest is the kernel of the sum's type.
+        XTIRInsn* cast0 = isInt ? sameWidthCast(fmul.operands[0], mk, d) : nil;
+        XTIRInsn* cast1 = isInt ? sameWidthCast(fmul.operands[1], mk, d) : nil;
+        XTIRInsn* l0 = defWith(cast0 ? cast0.operands[0] : fmul.operands[0], XTIROpLoad, d);
+        XTIRInsn* l1 = defWith(cast1 ? cast1.operands[0] : fmul.operands[1], XTIROpLoad, d);
         if (!l0 || !l1 || l0 == l1 || d.defBlk[@(l0.result.valueId)] != Bk || d.defBlk[@(l1.result.valueId)] != Bk)
             continue;
-        if (l0.result.type.kind != fk || l1.result.type.kind != fk)
+        if ((cast0 && d.defBlk[@(cast0.result.valueId)] != Bk) || (cast1 && d.defBlk[@(cast1.result.valueId)] != Bk))
+            continue;
+        if ((!cast0 && l0.result.type.kind != mk) || (!cast1 && l1.result.type.kind != mk))
             continue;
         XTIRInsn* ea0 = defWith(l0.operands[0], XTIROpElementAddr, d);
         XTIRInsn* ea1 = defWith(l1.operands[0], XTIROpElementAddr, d);
@@ -470,7 +527,8 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
         BOOL bkClean = YES;
         for (XTIRInsn* insn in Bk.instructions)
             {
-            if (insn == loadA || insn == loadB)
+            if (insn == loadA || insn == loadB || (cast0 && insn == cast0) || (cast1 && insn == cast1)
+                || (sumIn && insn == sumIn) || (sumOut && insn == sumOut))
                 continue;
             if (insn.memoryResult)
                 {
@@ -613,10 +671,13 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
                 u32s = NO;
         if (!u32s)
             continue;
-        // The three bases point at the element type.
+        // The three bases point at the element type (A and B at their loads',
+        // which differs from C's only in signedness).
         BOOL ptrs = YES;
-        for (XTIRInsn* ea in @[ eaA, eaB, eaC ])
-            if (ea.result.type.kind != XTIRTypeKindPtr || ea.result.type.pointeeType.kind != fk)
+        NSArray<XTIRInsn*>* eas = @[ eaA, eaB, eaC ];
+        XTIRTypeKind kinds[3] = { loadA.result.type.kind, loadB.result.type.kind, fk };
+        for (NSUInteger q = 0; q < 3; q++)
+            if (eas[q].result.type.kind != XTIRTypeKindPtr || eas[q].result.type.pointeeType.kind != kinds[q])
                 ptrs = NO;
         if (!ptrs)
             continue;
@@ -654,7 +715,8 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
         c.header = Hi;
         c.exit = Ei;
         c.f64 = (fk == XTIRTypeKindF64);
-        c.elem = fk == XTIRTypeKindF64 ? @"f64" : fk == XTIRTypeKindF32 ? @"f32" : fk == XTIRTypeKindU32 ? @"u32" : @"i32";
+        c.elem = fk == XTIRTypeKindF64 ? @"f64" : fk == XTIRTypeKindF32 ? @"f32" : fk == XTIRTypeKindU32 ? @"u32"
+               : fk == XTIRTypeKindI32 ? @"i32" : fk == XTIRTypeKindU64 ? @"u64" : @"i64";
         c.M = M, c.N = N, c.K = K;
         c.lda = lda, c.ldb = ldb, c.ldc = ldc;
         c.A = Aop, c.B = Bop, c.C = Cop;

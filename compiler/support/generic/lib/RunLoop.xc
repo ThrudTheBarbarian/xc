@@ -62,7 +62,7 @@
 u64 GetTickCount64(void);
 #else
 struct _RunLoopTimespec { i64 sec; i64 nsec; }
-i32 clock_gettime(i32 clk, _RunLoopTimespec* ts);
+i32 clock_gettime(i32 clock, pointer ts);
 #endif
 
 i64 _runloop_now_us(void)
@@ -72,9 +72,9 @@ i64 _runloop_now_us(void)
 #else
     _RunLoopTimespec ts;
 #if ARCH_x86_64 || PLATFORM_android
-    clock_gettime((i32)1, &ts);     // CLOCK_MONOTONIC on Linux
+    clock_gettime((i32)1, (pointer)&ts);     // CLOCK_MONOTONIC on Linux
 #else
-    clock_gettime((i32)6, &ts);     // CLOCK_MONOTONIC on Darwin
+    clock_gettime((i32)6, (pointer)&ts);     // CLOCK_MONOTONIC on Darwin
 #endif
     return ts.sec * (i64)1000000 + ts.nsec / (i64)1000;
 #endif

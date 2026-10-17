@@ -125,7 +125,9 @@ needed.
 A machine that only lends its GPUs to `par` programs on the network needs no
 compiler: from 0.8.1 each release also ships `xcd-osx-<version>.tar.bz2`,
 `xcd-linux-<version>.tar.bz2` and `xcd-win64-<version>.zip`, holding the
-daemon and the TLS library it talks through. Unpack it and run `bin/xcd` (see
+daemon and the TLS library it talks through, and `xcmon`, a monitor that
+draws the daemons and the programs using them in a browser page. Unpack it
+and run `bin/xcd` (see
 [Across machines](/compiler/language/par/#across-machines-xcd)).
 
 ## First build

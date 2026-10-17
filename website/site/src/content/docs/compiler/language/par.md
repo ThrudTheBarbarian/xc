@@ -570,6 +570,22 @@ take, when it came back and how long the device itself spent on it. Open
 the file with `tools/par-trace.html` in the compiler's source tree, a page
 that draws each run as a timeline per device.
 
+`XC_PAR_TRACE=<host>:<port>` sends the same records, as each run ends, to
+`xcmon`, the par monitor in the `xcd` archive. It finds the daemons on the
+subnet itself (`-pool NAME` for a pool, `-at host[:port],…` for others),
+asks each for its heartbeat every second, and draws them and the programs
+tracing to it in a browser page, a stack of cubes per machine, one cube per
+device, lit while it has tiles out:
+
+```sh
+xcmon                                    # page at http://localhost:7480/
+XC_PAR_TRACE=monitor-host:7482 ./prog    # this program's runs appear on it
+```
+
+A daemon that stops answering stays on the page, greyed, until it is
+removed there. `-port N` moves the page (its feed takes N+1), `-trace N`
+the port programs send to.
+
 `XC_PAR_PROBE=1` makes a block's first run a probe: every
 worker that takes the block, local or remote, runs it alone at tile sizes
 from its floor up by powers of two, the arrays the block writes are put

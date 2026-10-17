@@ -380,8 +380,24 @@ $(XCD_WIN64_BIN): $(XCD_DEPS)
 	@echo "  xc   building xcd for win64"
 	@mkdir -p $(dir $@)
 	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -o $@ selfhost/tools/xcd.xc
+# xcmon — the par monitor (the daemons on the subnet and the programs that
+# trace to it, drawn in a browser page: tools/xcmon.html beside it).
+XCMON_BIN       = $(BIN_DIR)/xcmon
+XCMON_LINUX_BIN = bin/linux/xcmon
+XCMON_WIN64_BIN = bin/win64/xcmon.exe
+$(XCMON_BIN): $(XCD_DEPS) selfhost/tools/xcmon.xc
+	@echo "  xc   building xcmon (the par monitor)"
+	@$(XCC_XC2_BIN) -q -O2 -A arm64 -H . -o $@ selfhost/tools/xcmon.xc
+$(XCMON_LINUX_BIN): $(XCD_DEPS) selfhost/tools/xcmon.xc
+	@echo "  xc   building xcmon for linux"
+	@mkdir -p $(dir $@)
+	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -H . -o $@ selfhost/tools/xcmon.xc
+$(XCMON_WIN64_BIN): $(XCD_DEPS) selfhost/tools/xcmon.xc
+	@echo "  xc   building xcmon for win64"
+	@mkdir -p $(dir $@)
+	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -o $@ selfhost/tools/xcmon.xc
 .PHONY: xcd
-xcd: $(XCD_BIN) $(XCD_LINUX_BIN) $(XCD_WIN64_BIN)
+xcd: $(XCD_BIN) $(XCD_LINUX_BIN) $(XCD_WIN64_BIN) $(XCMON_BIN) $(XCMON_LINUX_BIN) $(XCMON_WIN64_BIN)
 
 XCC_SIGN_XC_BIN = $(BIN_DIR)/xcc-sign-xc
 $(XCC_SIGN_XC_BIN): $(XCC_SIGN_XC_DEPS) $(XCC_SIGN_XC_TLS_DEPS)
@@ -1488,24 +1504,27 @@ define STAGE_XCD
 @mkdir -p $(DIST_STAGE)/xcd-$(1)-$(VERSION)/bin $(DIST_DIR)
 @$(CP) $(2) $(DIST_STAGE)/xcd-$(1)-$(VERSION)/bin/xcd$(3)
 @if [ -n "$(4)" ]; then $(4) $(DIST_STAGE)/xcd-$(1)-$(VERSION)/bin/xcd$(3); fi
+@$(CP) $(7) $(DIST_STAGE)/xcd-$(1)-$(VERSION)/bin/xcmon$(3)
+@if [ -n "$(4)" ]; then $(4) $(DIST_STAGE)/xcd-$(1)-$(VERSION)/bin/xcmon$(3); fi
+@$(CP) tools/xcmon.html $(DIST_STAGE)/xcd-$(1)-$(VERSION)/bin/xcmon.html
 @if [ ! -f "$(5)" ]; then echo "dist-xcd: no TLS library at $(5) (make install-tls)"; exit 1; fi
 @$(CP) $(5) $(DIST_STAGE)/xcd-$(1)-$(VERSION)/bin/$(6)
 @$(CP) ../COPYING $(DIST_STAGE)/xcd-$(1)-$(VERSION)/COPYING
 @$(CP) $(TLS_SRC)/NOTICE-mbedtls.md $(DIST_STAGE)/xcd-$(1)-$(VERSION)/NOTICE-mbedtls.md
 @$(CP) $(TLS_SRC)/LICENSE-mbedtls.txt $(DIST_STAGE)/xcd-$(1)-$(VERSION)/LICENSE-mbedtls.txt
 endef
-$(XCD_OSX_ARCHIVE): $(XCD_BIN)
-	$(call STAGE_XCD,osx,$(XCD_BIN),,,$(THIRDPARTY)/tls/arm64/libtls-1-0.dylib,libtls.dylib)
+$(XCD_OSX_ARCHIVE): $(XCD_BIN) $(XCMON_BIN) tools/xcmon.html
+	$(call STAGE_XCD,osx,$(XCD_BIN),,,$(THIRDPARTY)/tls/arm64/libtls-1-0.dylib,libtls.dylib,$(XCMON_BIN))
 	@rm -f $@
 	tar -cjf $@ -C $(DIST_STAGE) xcd-osx-$(VERSION)
 	@echo "dist -> $@"
-$(XCD_LINUX_ARCHIVE): $(XCD_LINUX_BIN)
-	$(call STAGE_XCD,linux,$(XCD_LINUX_BIN),,/opt/homebrew/opt/llvm/bin/llvm-strip,$(THIRDPARTY)/tls/x86_64/libtls-1-0.so,libtls.so)
+$(XCD_LINUX_ARCHIVE): $(XCD_LINUX_BIN) $(XCMON_LINUX_BIN) tools/xcmon.html
+	$(call STAGE_XCD,linux,$(XCD_LINUX_BIN),,/opt/homebrew/opt/llvm/bin/llvm-strip,$(THIRDPARTY)/tls/x86_64/libtls-1-0.so,libtls.so,$(XCMON_LINUX_BIN))
 	@rm -f $@
 	tar -cjf $@ -C $(DIST_STAGE) xcd-linux-$(VERSION)
 	@echo "dist -> $@"
-$(XCD_WIN64_ARCHIVE): $(XCD_WIN64_BIN)
-	$(call STAGE_XCD,win64,$(XCD_WIN64_BIN),.exe,/opt/homebrew/opt/llvm/bin/llvm-strip,$(THIRDPARTY)/tls/win64/libtls.dll,libtls.dll)
+$(XCD_WIN64_ARCHIVE): $(XCD_WIN64_BIN) $(XCMON_WIN64_BIN) tools/xcmon.html
+	$(call STAGE_XCD,win64,$(XCD_WIN64_BIN),.exe,/opt/homebrew/opt/llvm/bin/llvm-strip,$(THIRDPARTY)/tls/win64/libtls.dll,libtls.dll,$(XCMON_WIN64_BIN))
 	@rm -f $@
 	cd $(DIST_STAGE) && zip -qr $(abspath $@) xcd-win64-$(VERSION)
 	@echo "dist -> $@"
