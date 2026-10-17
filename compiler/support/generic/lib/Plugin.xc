@@ -126,6 +126,12 @@ class PluginPending : Object
     String* code;
     String* sig;
     String* codeBytes;
+    String* pin;
+    String* rotated;
+    String* domain;
+    bool reached;
+    bool vouched;
+    bool revoked;
     }
 
 class Plugin : Object
@@ -299,15 +305,116 @@ class Plugin : Object
         Plugin._trustWrite(out);
         }
 
+    // Retire the record for (key, name): a rotation moved the plugin on.
+    static void _forget(String* keyId, String* name)
+        {
+        String* t = Plugin._trustText();
+        if (t == (String*)0)
+            return;
+        String* want = String.withString(keyId);
+        want.appendByte((u8)' ');
+        want.append(name);
+        want.appendByte((u8)' ');
+        String* out = new String();
+        u32 at = (u32)0;
+        while (at < t.byteLength())
+            {
+            u32 e = at;
+            while (e < t.byteLength() && t.byteAt(e) != (u8)10)
+                e = e + (u32)1;
+            String* line = t.substringBytes(at, e - at);
+            if (!line.hasPrefix(want) && line.byteLength() > (u32)0)
+                {
+                out.append(line);
+                out.appendByte((u8)10);
+                }
+            at = e + (u32)1;
+            }
+        Plugin._trustWrite(out);
+        }
+
     // The trust decision for (key, name) at version: 0 to go on, else why not.
     // *highest is the version recorded before (0: none).
+    // A hash-pinned link, `<where>@sha256:<64 hex>`: the hash of the exact
+    // bundle.json bytes, which list every file's hash, so it names the whole
+    // bundle. Returns the hash (0: not pinned) and leaves the rest in *rest.
+    static String* _pinOf(String* where, String** rest)
+        {
+        *rest = where;
+        String* tag = String.withCString("@sha256:");
+        u32 n = where.byteLength();
+        if (n < (u32)72 || !where.substringBytes(n - (u32)72, (u32)8).equals(tag))
+            return (String*)0;
+        String* h = where.substringFromByte(n - (u32)64);
+        for (u32 i = (u32)0; i < (u32)64; i = i + (u32)1)
+            {
+            u8 c = h.byteAt(i);
+            if (!((c >= (u8)'0' && c <= (u8)'9') || (c >= (u8)'a' && c <= (u8)'f')))
+                return (String*)0;
+            }
+        *rest = where.substringBytes((u32)0, n - (u32)72);
+        return h;
+        }
+
     static String* _decide(Map* m, PluginConsent_t* consent, String** highest)
         {
+        String* r = (String*)0;
+        return Plugin._decidePinned(m, consent, highest, false, &r, String.withCString(""));
+        }
+
+    // The publishers a curated program accepts (xcc --trust key.pub ...), as
+    // their key fingerprints separated by spaces; 0 accepts any publisher.
+    static String* curated(void)
+        {
+#ifdef XC_PLUGIN_TRUST
+        return String.withCString(XC_PLUGIN_TRUST);
+#else
+        return (String*)0;
+#endif
+        }
+
+    static bool _listed(String* list, String* id)
+        {
+        u32 at = (u32)0;
+        while (at < list.byteLength())
+            {
+            u32 e = at;
+            while (e < list.byteLength() && list.byteAt(e) != (u8)' ')
+                e = e + (u32)1;
+            if (list.substringBytes(at, e - at).equals(id))
+                return true;
+            at = e + (u32)1;
+            }
+        return false;
+        }
+
+    // pinned: the link named these exact bytes, so nobody is asked.
+    // *rotatedFrom: the previous key's id when the trust came through its
+    // record (a verified rotation), so the caller retires that record.
+    // verified: the publisher's domain when it vouched for the key, else "";
+    // that, not the manifest's claim, is what consent is shown.
+    static String* _decidePinned(Map* m, PluginConsent_t* consent, String** highest, bool pinned, String** rotatedFrom,
+                                 String* verified)
+        {
+        *rotatedFrom = (String*)0;
         String* name = (String*)m.get((Hashable*)String.withCString("name"));
         String* version = (String*)m.get((Hashable*)String.withCString("version"));
         Map* pub = (Map*)m.get((Hashable*)String.withCString("publisher"));
         String* keyId = (String*)pub.get((Hashable*)String.withCString("keyId"));
+        String* only = Plugin.curated();
+        if (only != (String*)0 && !Plugin._listed(only, keyId))
+            return String.withFormat("%s is from a publisher this program was not built to trust (key %s)", name.cString(),
+                                     keyId.substringBytes((u32)0, (u32)16).cString());
         String* h = Plugin._trusted(keyId, name);
+        String* prevId = (String*)pub.get((Hashable*)String.withCString("previousKeyId"));
+        if (h == (String*)0 && prevId != (String*)0)
+            {
+            // The manifest's rotation record verified with the bundle
+            // (BundleSign.verifyManifest): the old key handed this plugin over.
+            h = Plugin._trusted(prevId, name);
+            if (h != (String*)0)
+                *rotatedFrom = prevId;
+            }
         *highest = h;
         if (h != (String*)0)
             {
@@ -316,10 +423,11 @@ class Plugin : Object
                                          version.cString(), h.cString());
             return (String*)0;
             }
+        if (pinned)
+            return (String*)0;
         if (consent == (PluginConsent_t*)0)
             return String.withFormat("%s is not trusted yet, and nothing was asked (no consent callback)", name.cString());
-        if (!consent(name, (String*)pub.get((Hashable*)String.withCString("name")),
-                     (String*)pub.get((Hashable*)String.withCString("domain")), keyId))
+        if (!consent(name, (String*)pub.get((Hashable*)String.withCString("name")), verified, keyId))
             return String.withFormat("%s was not trusted", name.cString());
         return (String*)0;
         }
@@ -382,9 +490,17 @@ class Plugin : Object
 #if ARCH_wasm32
         return Plugin._fail(String.withFormat("%s: on the web a plugin is loaded with Plugin.loadAsync", path.cString()));
 #else
+        String* pin = Plugin._pinOf(path, &path);
         String* err = BundleSign.verify(path);
         if (err != (String*)0)
             return Plugin._fail(String.withFormat("%s: %s", path.cString(), err.cString()));
+        String* rotated = (String*)0;
+        if (pin != (String*)0)
+            {
+            Data* mb = Files.readData(BundleSign._join(path, String.withCString("bundle.json")));
+            if (!Sha256.hex(mb.bytes(), mb.length()).equals(pin))
+                return Plugin._fail(String.withFormat("%s: not the bundle the link names (its sha256 differs)", path.cString()));
+            }
         Map* m = (Map*)0;
         try
             {
@@ -422,7 +538,7 @@ class Plugin : Object
         if (err != (String*)0)
             return Plugin._fail(String.withFormat("the private copy of %s: %s", name.cString(), err.cString()));
         String* highest = (String*)0;
-        err = Plugin._decide(m, consent, &highest);
+        err = Plugin._decidePinned(m, consent, &highest, pin != (String*)0, &rotated, String.withCString(""));
         if (err != (String*)0)
             return Plugin._fail(err);
         String* code = Plugin._codeFor(m, &err);
@@ -455,8 +571,11 @@ class Plugin : Object
 #else
         return Plugin._fail(String.withCString("plugins are not loaded on this target yet"));
 #endif
-        if (highest == (String*)0 || Plugin._cmpVersion(version, highest) > (i32)0)
-            Plugin._record(keyId, name, version);
+        if (highest == (String*)0 || Plugin._cmpVersion(version, highest) > (i32)0 || rotated != (String*)0)
+            Plugin._record(keyId, name, Plugin._cmpVersion(version, highest == (String*)0 ? version : highest) >= (i32)0
+                                        ? version : highest);
+        if (rotated != (String*)0)
+            Plugin._forget(rotated, name);
         // Each required protocol's table, bound into it.
         Map* req = (Map*)m.get((Hashable*)String.withCString("requires"));
         Array* rk = req == (Map*)0 ? new Array() : req.allKeys();
@@ -511,7 +630,9 @@ class Plugin : Object
 #if ARCH_wasm32
         _error = (String*)0;
         PluginPending* pp = new PluginPending();
-        pp.base = String.withString(where);
+        String* rest = (String*)0;
+        pp.pin = Plugin._pinOf(where, &rest);
+        pp.base = String.withString(rest);
         while (pp.base.byteLength() > (u32)1 && pp.base.byteAt(pp.base.byteLength() - (u32)1) == (u8)'/')
             pp.base = pp.base.substringBytes((u32)0, pp.base.byteLength() - (u32)1);
         pp.consent = consent;
@@ -651,6 +772,11 @@ class Plugin : Object
             return;
             }
         pp.sig = body;
+        if (pp.pin != (String*)0 && !Sha256.hex(pp.manifest.bytes(), pp.manifest.length()).equals(pp.pin))
+            {
+            Plugin._webFail(pp, String.withFormat("%s: not the bundle the link names (its sha256 differs)", pp.base.cString()));
+            return;
+            }
         String* err = BundleSign.verifyManifest(pp.manifest, body);
         if (err != (String*)0)
             {
@@ -668,10 +794,111 @@ class Plugin : Object
             }
         pp.name = (String*)pp.m.get((Hashable*)String.withCString("name"));
         pp.version = (String*)pp.m.get((Hashable*)String.withCString("version"));
-        pp.keyId = (String*)((Map*)pp.m.get((Hashable*)String.withCString("publisher"))).get((Hashable*)String.withCString("keyId"));
+        Map* pub = (Map*)pp.m.get((Hashable*)String.withCString("publisher"));
+        pp.keyId = (String*)pub.get((Hashable*)String.withCString("keyId"));
+        pp.domain = (String*)pub.get((Hashable*)String.withCString("domain"));
+        // The publisher's domain vouches for its key (§2a, defence 3) only
+        // when it is the host the bundle came from; its list is at that
+        // origin's /.well-known/xc-bundle-keys.
+        String* origin = Plugin._origin(pp.base);
+        if (pp.domain != (String*)0 && pp.domain.byteLength() > (u32)0 && origin != (String*)0
+            && Plugin._hostOf(origin).lowercased().equals(pp.domain.lowercased()))
+            {
+            Url* u = Url.withString(String.withFormat("%s/.well-known/xc-bundle-keys", origin.cString()));
+            u.fetch(block void(u32 status, String* body) { Plugin._gotVouch(pp, status, body); });
+            return;
+            }
+        Plugin._decideWeb(pp);
+#endif
+        }
+
+    // "scheme://authority" of a URL, or 0.
+    static String* _origin(String* url)
+        {
+        u32 c = url.indexOfByte((u8)':');
+        if (c == String.notFound() || c + (u32)3 > url.byteLength() || url.byteAt(c + (u32)1) != (u8)'/'
+            || url.byteAt(c + (u32)2) != (u8)'/')
+            return (String*)0;
+        u32 e = c + (u32)3;
+        while (e < url.byteLength() && url.byteAt(e) != (u8)'/' && url.byteAt(e) != (u8)'?' && url.byteAt(e) != (u8)'#')
+            e = e + (u32)1;
+        return url.substringBytes((u32)0, e);
+        }
+
+    // The host of an origin: no scheme, user or port.
+    static String* _hostOf(String* origin)
+        {
+        u32 s = origin.indexOfByte((u8)':') + (u32)3;
+        String* a = origin.substringFromByte(s);
+        u32 at = a.indexOfByte((u8)'@');
+        if (at != String.notFound())
+            a = a.substringFromByte(at + (u32)1);
+        u32 colon = a.indexOfByte((u8)':');
+        if (colon != String.notFound() && a.byteAt((u32)0) != (u8)'[')
+            a = a.substringBytes((u32)0, colon);
+        return a;
+        }
+
+    static bool _inList(Map* m, u8* key, String* id)
+        {
+        Array* a = m == (Map*)0 ? (Array*)0 : (Array* ?)m.get((Hashable*)String.withCString(key));
+        for (u32 i = (u32)0; a != (Array*)0 && i < a.count(); i = i + (u32)1)
+            {
+            String* s = (String* ?)a.get(i);
+            if (s != (String*)0 && s.lowercased().equals(id))
+                return true;
+            }
+        return false;
+        }
+
+    static void _gotVouch(PluginPending* pp, u32 status, String* body)
+        {
+#if ARCH_wasm32
+        if (status == (u32)200 && body != (String*)0)
+            {
+            Map* v = (Map*)0;
+            try
+                {
+                v = (Map* ?)JSON.parseStrict(Data.withBytes(body.cString(), body.byteLength()), (u32)65536, (u32)4, (u32)256);
+                }
+            catch (JSONError e)
+                {
+                v = (Map*)0;
+                }
+            if (v != (Map*)0)
+                {
+                pp.reached = true;
+                pp.vouched = Plugin._inList(v, "keys", pp.keyId);
+                pp.revoked = Plugin._inList(v, "revoked", pp.keyId);
+                }
+            }
+        Plugin._decideWeb(pp);
+#endif
+        }
+
+    static void _decideWeb(PluginPending* pp)
+        {
+#if ARCH_wasm32
+        if (pp.revoked)
+            {
+            Plugin._webFail(pp, String.withFormat("%s: %s has revoked the key it was signed with (%s)", pp.name.cString(),
+                                                  pp.domain.cString(), pp.keyId.substringBytes((u32)0, (u32)16).cString()));
+            return;
+            }
+        String* err = (String*)0;
         String* h = (String*)0;
-        err = Plugin._decide(pp.m, pp.consent, &h);
+        String* rot = (String*)0;
+        err = Plugin._decidePinned(pp.m, pp.consent, &h, pp.pin != (String*)0, &rot,
+                                   pp.vouched ? pp.domain : String.withCString(""));
         pp.highest = h;
+        pp.rotated = rot;
+        // A rotation counts only if the domain vouches for the new key, so a
+        // leaked old key cannot hand the plugin to someone else.
+        if (err == (String*)0 && rot != (String*)0 && pp.domain != (String*)0 && pp.domain.byteLength() > (u32)0
+            && !pp.vouched)
+            err = String.withFormat("%s: a new key (%s) for it counts only once %s vouches for it%s", pp.name.cString(),
+                                    pp.keyId.substringBytes((u32)0, (u32)16).cString(), pp.domain.cString(),
+                                    pp.reached ? "" : ", and it could not be reached");
         if (err == (String*)0)
             pp.code = Plugin._codeFor(pp.m, &err);
         if (err == (String*)0)
@@ -725,8 +952,12 @@ class Plugin : Object
             Plugin._webFail(pp, String.withFormat("%s: %s", pp.name.cString(), String.withBytes(why, n).cString()));
             return;
             }
-        if (pp.highest == (String*)0 || Plugin._cmpVersion(pp.version, pp.highest) > (i32)0)
-            Plugin._record(pp.keyId, pp.name, pp.version);
+        if (pp.highest == (String*)0 || Plugin._cmpVersion(pp.version, pp.highest) > (i32)0 || pp.rotated != (String*)0)
+            Plugin._record(pp.keyId, pp.name,
+                           Plugin._cmpVersion(pp.version, pp.highest == (String*)0 ? pp.version : pp.highest) >= (i32)0
+                           ? pp.version : pp.highest);
+        if (pp.rotated != (String*)0)
+            Plugin._forget(pp.rotated, pp.name);
         Plugin._keep(String.withFormat("%s/bundle.json", pp.base.cString()),
                      String.withBytes(pp.manifest.bytes(), pp.manifest.length()));
         Plugin._keep(String.withFormat("%s/bundle.sig", pp.base.cString()), pp.sig);

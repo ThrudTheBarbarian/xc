@@ -70,7 +70,8 @@ The publisher key is made on first use in `~/.xcc/bundle-key` (or the file
 must be signed by the same key. `--bundle-name`, `--bundle-version`,
 `--publisher` and `--publisher-domain` fill in the rest of the manifest,
 `--property k=v` and `--setting k=v` add the developer's own
-[properties](/compiler/api/plugin/#properties); what
+[properties](/compiler/api/plugin/#properties), and `--rotate-from <old key>`
+hands the bundle over to a [new key](/compiler/api/plugin/#trust); what
 the bundle provides and requires comes from the protocols with
 [static members](/compiler/language/inheritance/#static-members-an-interface-between-programs)
 it declares.

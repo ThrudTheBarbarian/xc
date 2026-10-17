@@ -73,6 +73,35 @@ sed -i.bak 's/"provides": {}/"provides": {"Ghost": "1.0"}/' "$L/ghost/bundle.jso
 "$L/bundletool" sign "$L/ghost" "$L/key" > /dev/null
 check "export table checked"  "says it provides Ghost, but its code has no _XtP_Ghost\$table" "$L/host" "$L/ghost" yes
 
+# A hash-pinned link names the manifest's exact bytes: no prompt; another
+# hash is refused.
+"$XC" --bundle "$L/pinned" --bundle-key "$L/key" --bundle-name pinned -o "$L/pinned.$EXT" tests/bundle/spice.xc > /dev/null
+H=$( (command -v sha256sum > /dev/null && sha256sum || shasum -a 256) < "$L/pinned/bundle.json" | cut -c1-64)
+check "pinned link, no prompt" "run -> 17"                      "$L/host" "$L/pinned@sha256:$H" none
+check "pinned link, wrong"    "not the bundle the link names"   "$L/host" "$L/pinned@sha256:$(echo $H | tr 0-9a-f 1-9a-f0)" none
+
+# A curated program (--trust key.pub) loads only its publishers' plugins.
+"$XC" -q -H . --trust "$L/key.pub" -o "$L/curated" tests/bundle/plughost.xc
+check "curated, trusted"      "run -> 17"                       "$L/curated" "$L/spice" yes
+check "curated, other key"    "a publisher this program was not built to trust" "$L/curated" "$L/other" yes
+
+# Key rotation: key A hands "rot" over to key B; B's build loads with no
+# prompt, A is retired, a forged hand-over is refused, as is a rollback.
+rb() { "$XC" --bundle "$L/$1" --bundle-name rot -o "$L/$1.$EXT" tests/bundle/spice.xc "${@:2}" > /dev/null; }
+rb rotA --bundle-key "$L/keyA" --bundle-version 1.0
+check "rotation: first"       "run -> 17"                       "$L/host" "$L/rotA" yes
+rb rotB --bundle-key "$L/keyB" --bundle-version 1.1 --rotate-from "$L/keyA"
+check "rotation: handed over" "run -> 17"                       "$L/host" "$L/rotB" none
+rb rotA2 --bundle-key "$L/keyA" --bundle-version 1.2
+check "rotation: old retired" "refused: rot is not trusted yet" "$L/host" "$L/rotA2" none
+rb rotC --bundle-key "$L/keyB" --bundle-version 1.3 --rotate-from "$L/keyA"
+sed -i.bak -e 's/"rotation": "f/"rotation": "0/; t' -e 's/"rotation": "./"rotation": "f/' "$L/rotC/bundle.json"
+cmp -s "$L/rotC/bundle.json" "$L/rotC/bundle.json.bak" && echo "FAIL plugin rotation: the forgery changed nothing"; rm -f "$L/rotC/bundle.json.bak"
+"$L/bundletool" sign "$L/rotC" "$L/keyB" > /dev/null
+check "rotation: forged"      "the key rotation does not verify" "$L/host" "$L/rotC" none
+rb rotD --bundle-key "$L/keyD" --bundle-version 1.0 --rotate-from "$L/keyB"
+check "rotation: no rollback" "older than 1.1"                  "$L/host" "$L/rotD" none
+
 # Developer properties: readonly and writeable values in the signed manifest,
 # a user's overrides in the app's Settings, across updates of the bundle.
 P="$L/props"; ST="$L/props.settings"

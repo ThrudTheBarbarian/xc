@@ -30,7 +30,7 @@ const ce = console.error.bind(console);
 console.error = (...a) => { put("ERR " + a.map(String).join(" ")); ce(...a); };
 </script><script src="webhost.js"></script></body></html>
 HTML
-printf '%s\n' "asked about spice" "host emit 5 bytes" "host note 17" "run -> 17" "sum -> 10, first byte now 99" "resource: signed words" > "$L/want"
+printf '%s\n' "asked about spice (domain '')" "host emit 5 bytes" "host note 17" "run -> 17" "sum -> 10, first byte now 99" "resource: signed words" > "$L/want"
 PORT=$((48900 + RANDOM % 300))
 python3 $D/serve.py $PORT 0 "$L/site" & SP=$!
 sleep 1

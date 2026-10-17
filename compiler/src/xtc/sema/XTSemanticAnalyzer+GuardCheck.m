@@ -121,6 +121,16 @@
     if (cond.nodeKind == XTASTNodeKindBinaryExpr)
         {
         XTBinaryExprNode* b = (XTBinaryExprNode*)cond;
+        // `!f || x` — when it is NOT taken both halves are false, so f holds
+        // there: `if (!f || x) continue;` guards f as `if (!f) continue;`
+        // does.
+        if (b.op == XTBinaryOpLogOr)
+            {
+            NSString* l = [self gcFalsyBinding:b.left];
+            if (l)
+                return l;
+            return [self gcFalsyBinding:b.right];
+            }
         if (b.op == XTBinaryOpEq)
             {
             NSString* l = [self gcBoundBindingName:b.left];
@@ -161,7 +171,10 @@
         XTCallExprNode* c = (XTCallExprNode*)n;
         for (XTASTNode* a in c.arguments)
             [self gcWalkExpr:a guarded:g];
-        if (c.isBoundCall && c.calleeName.length && ![g containsObject:c.calleeName])
+        // A callee EXPRESSION (`tbl[0](5)`, `mk()(6)`) has no binding to
+        // track, as a field path has none: silent, by the rule above (its
+        // calleeName is only the "<indirect>" placeholder).
+        if (c.isBoundCall && c.calleeName.length && !c.calleeExpr && ![g containsObject:c.calleeName])
             {
             [self.diagnostics emitWarning:
                                   [NSString stringWithFormat:

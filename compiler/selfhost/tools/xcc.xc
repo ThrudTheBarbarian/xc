@@ -174,6 +174,8 @@ class DriverOptions
     String*    _bundleKey;
     String*    _publisher;
     String*    _publisherDomain;
+    String*    _trusted;          // --trust key.pub...: the only publishers Plugin.load accepts
+    String*    _rotateFrom;       // --rotate-from <old key>: hand the bundle over to the new key
     Map*       _bundleReadonly;   // --property k=v: the publisher's, final
     Map*       _bundleWriteable;  // --setting k=v: a default a user may change
     bool       _emitIfaceOnly;  // --emit-iface: the interface, and nothing else
@@ -4039,6 +4041,13 @@ void main(void)
                      "       xcc -h lists every option\n");
         Process.exit((i32)2); return;
     }
+    // --trust: the publishers' fingerprints, for Plugin.xc.
+    if (d._trusted != (String*)0) {
+        String* def = String.withCString("XC_PLUGIN_TRUST=\"");
+        def.append(d._trusted);
+        def.appendByte((u8)'"');
+        d.fe().defs().add((Object*)def);
+    }
     // --bundle on wasm32: a plugin is a module of its own with its own
     // memory (bundles-and-plugins.md §2), not the library shape that shares
     // the app's.
@@ -4255,16 +4264,32 @@ void makeBundle(DriverOptions* d)
                 requires.set((Hashable*)k, v.get((u32)0));
         }
     }
+    Data* previous = (Data*)0;
+    if (d._rotateFrom != (String*)0) {
+        if (!Files.exists(d._rotateFrom)) {
+            Stdio.printf("xcc: error: --rotate-from %s: no key there\n", d._rotateFrom.cString());
+            Process.exit((i32)1); return;
+        }
+        previous = BundleSign.publisherKey(d._rotateFrom);
+    }
     String* err = BundleSign.makeWith(d._bundleDir, name,
                                       d._bundleVersion,
                                       bundlePlatform(d), out, d._bundleResources, seed,
                                       d._publisher, d._publisherDomain, provides, requires,
-                                      d._bundleReadonly, d._bundleWriteable);
+                                      d._bundleReadonly, d._bundleWriteable, previous);
     if (err != (String*)0) {
         Stdio.printf("xcc: error: --bundle: %s\n", err.cString());
         Process.exit((i32)1); return;
     }
     Data* pub = Ed25519.publicKey(seed.bytes());
+    // The public half beside it, for a curated program's --trust.
+    String* pubPath = String.withString(keyPath);
+    pubPath.appendCString(".pub");
+    if (!Files.exists(pubPath)) {
+        String* ph = BundleSign._hex(pub.bytes(), (u32)32);
+        ph.appendByte((u8)10);
+        Files.writeText(pubPath, ph);
+    }
     Stdio.printf("xcc: %s/ signed by key %s (%s%s); keep that file: losing it means an update needs a key rotation\n",
                  d._bundleDir.cString(), Sha256.hex(pub.bytes(), (u32)32).substringBytes((u32)0, (u32)16).cString(),
                  keyPath.cString(), existed ? "" : ", made now");
@@ -6103,6 +6128,30 @@ DriverOptions* parseDriverArgs(void)
         }
         if (a.equals(String.withCString("--resources")) && i + (u32)1 < argc) {
             d._bundleResources = Process.argument(i + (u32)1); i = i + (u32)2; continue;
+        }
+        // --trust <key.pub>: a curated program, which loads plugins only from
+        // the publishers it names (bundles-and-plugins.md §2a); repeatable.
+        if (a.equals(String.withCString("--trust")) && i + (u32)1 < argc) {
+            String* f = Process.argument(i + (u32)1);
+            String* t = Files.readText(f);
+            if (t != (String*)0)
+                while (t.byteLength() > (u32)0 && (t.byteAt(t.byteLength() - (u32)1) == (u8)10
+                                                   || t.byteAt(t.byteLength() - (u32)1) == (u8)13
+                                                   || t.byteAt(t.byteLength() - (u32)1) == (u8)' '))
+                    t = t.substringBytes((u32)0, t.byteLength() - (u32)1);
+            Data* pk = t == (String*)0 ? (Data*)0 : BundleSign._unhex(t, (u32)32);
+            if (pk == (Data*)0) {
+                Stdio.printf("xcc: error: --trust %s: not a publisher's public key (64 hex digits, as xcc --bundle writes beside its key)\n",
+                             f.cString());
+                Process.exit((i32)1);
+            }
+            if (d._trusted == (String*)0) d._trusted = new String();
+            else d._trusted.appendByte((u8)' ');
+            d._trusted.append(Sha256.hex(pk.bytes(), (u32)32));
+            i = i + (u32)2; continue;
+        }
+        if (a.equals(String.withCString("--rotate-from")) && i + (u32)1 < argc) {
+            d._rotateFrom = Process.argument(i + (u32)1); i = i + (u32)2; continue;
         }
         if (a.equals(String.withCString("--bundle-key")) && i + (u32)1 < argc) {
             d._bundleKey = Process.argument(i + (u32)1); i = i + (u32)2; continue;

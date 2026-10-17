@@ -21,7 +21,7 @@ class Host : Object <Fence>
     }
 bool answerYes(String* name, String* publisher, String* domain, String* keyId)
 {
-    Stdio.printf("asked about %s\n", name.cString());
+    Stdio.printf("asked about %s (domain '%s')\n", name.cString(), domain.cString());
     return true;
 }
 bool answerNo(String* name, String* publisher, String* domain, String* keyId)

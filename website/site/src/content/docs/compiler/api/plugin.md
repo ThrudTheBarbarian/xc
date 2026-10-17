@@ -74,6 +74,35 @@ Nothing from the bundle runs until every check has passed:
    Loading a library runs its startup code, so a manifest that does not match
    its code is refused before that.
 
+### Trust
+
+The first load of a publisher's plugin asks the consent callback; the
+publisher is then known by its key, not its name. Three things narrow that
+first decision:
+
+- **A hash-pinned link** names exact bytes: `spice@sha256:<hash>` (the SHA-256
+  of `bundle.json`, which lists every file's hash). Such a load needs no
+  question, and loads nothing else.
+- **A curated program** accepts only the publishers it was built to trust:
+  `xcc --trust key.pub ... -o app app.xc`, with each publisher's public key
+  file (`xcc --bundle` writes it beside the private key, as `<key>.pub`). Any
+  other publisher's plugin is refused, asked or not.
+- **The publisher's domain vouches for its key.** When the manifest names a
+  domain and the bundle was fetched from that host, the loader reads
+  `/.well-known/xc-bundle-keys` there: `{"keys": [...], "revoked": [...]}`, key
+  fingerprints. The consent callback is shown the domain only when it vouches
+  for the key (otherwise it gets `""`), and a revoked key is refused. (On the
+  web; the file must be readable by the page, so serve it with CORS when the
+  page is elsewhere.)
+
+**Keys change.** A publisher moving to a new key builds with `xcc --bundle ...
+--bundle-key new --rotate-from old`: the old key signs the hand-over, and a
+plugin trusted under the old key carries on under the new one, with no
+question and its version floor kept. The old key is then retired: a plugin it
+signs later is asked about as a stranger. When the publisher's domain can be
+checked, a hand-over counts only if the domain vouches for the new key too, so
+a leaked old key cannot hand the plugin to someone else.
+
 A refusal says which check failed:
 
 ```

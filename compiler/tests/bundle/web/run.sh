@@ -40,6 +40,22 @@ bundle hostile "$L/hostile.xc"
 sed 's/^    Plugin.provide(.*$//' tests/bundle/web/webhost.xc > "$L/bare.xc"
 "$XC" -q -A wasm32 -H . -o "$L/bare" "$L/bare.xc"
 
+# The publisher's domain vouches for its keys (/.well-known/xc-bundle-keys at
+# the origin the bundle comes from, here 127.0.0.1): a vouched first install,
+# a key it does not list, a revoked one, and rotations with and without it.
+kid() { python3 -c "import hashlib,sys; print(hashlib.sha256(bytes.fromhex(open(sys.argv[1]).read().strip())).hexdigest())" "$1.pub"; }
+dom() { local d="$1" k="$2"; shift 2
+    "$XC" --bundle "$L/site/$d" --bundle-key "$L/$k" --bundle-name "$d" --publisher-domain 127.0.0.1 -A wasm32 \
+        -o "$L/$d.wasm" tests/bundle/web/spiceweb.xc "$@" > /dev/null || { echo "FAIL web build $d"; rc=1; }; }
+dom vouched keyV
+dom unlisted keyU
+dom revoked keyR
+dom rot keyA --bundle-version 1.0
+dom rotb keyB --bundle-name rot --bundle-version 1.1 --rotate-from "$L/keyA"
+mkdir -p "$L/site/.well-known"
+printf '{"keys": ["%s", "%s", "%s"], "revoked": ["%s"]}\n' "$(kid "$L/keyV")" "$(kid "$L/keyR")" "$(kid "$L/keyA")" \
+    "$(kid "$L/keyR")" > "$L/site/.well-known/xc-bundle-keys"
+
 PORT=$((8300 + RANDOM % 600))
 (cd "$L/site" && exec python3 -m http.server $PORT --bind 127.0.0.1 > "$L/http.log" 2>&1) & HP=$!
 for i in $(seq 1 40); do curl -s -o /dev/null "http://127.0.0.1:$PORT/" && break; perl -e 'select(undef,undef,undef,0.25)'; done
@@ -57,6 +73,13 @@ check "tampered manifest"      "the signature does not verify"      run host bad
 check "missing protocol"       "this program does not provide"      run bare spice yes
 check "pointer outside memory" "not the caller's memory"            run host hostile yes
 check "no bundle there"        "bundle.json: HTTP 404"              run host nothing yes
+check "domain vouches"         "asked about vouched (domain '127.0.0.1')" run host vouched yes
+check "domain does not list"   "asked about unlisted (domain '')"   run host unlisted yes
+check "a revoked key"          "has revoked the key"                run host revoked yes
+check "rotation: first"        "run -> 17"                          run host rot yes
+check "rotation: not vouched"  "counts only once 127.0.0.1 vouches" run host rotb none
+printf '{"keys": ["%s", "%s"], "revoked": []}\n' "$(kid "$L/keyA")" "$(kid "$L/keyB")" > "$L/site/.well-known/xc-bundle-keys"
+check "rotation: vouched"      "run -> 17"                          run host rotb none
 check "a resource, checked"    "resource: signed words"             run host spice none
 cp -R "$L/site/spice" "$L/site/badres"; printf x >> "$L/site/badres/Resources/note.txt"
 check "a changed resource"     "resource: none"                     run host badres none

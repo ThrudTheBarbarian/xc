@@ -12,11 +12,13 @@ A=${A:-arm64}
 L=$(mktemp -d "${TMPDIR:-/tmp}/negative.XXXX")
 pass=0; fail=0
 # `// xtc: error "…"`: the build must fail and say so. `// xtc: warn "…"` (one
-# or more): the build must succeed and each warning must appear.
+# or more): the build must succeed and each warning must appear; `// xtc:
+# nowarn "…"`: and this text must not.
 for f in tests/fixtures/negative/*.xc; do
     b=$(basename "$f" .xc)
     want=$(grep -m1 -oE 'xtc: error "[^"]*"' "$f" | sed -E 's/^xtc: error "//; s/"$//')
     warns=$(grep -oE 'xtc: warn "[^"]*"' "$f" | sed -E 's/^xtc: warn "//; s/"$//')
+    nowarns=$(grep -oE 'xtc: nowarn "[^"]*"' "$f" | sed -E 's/^xtc: nowarn "//; s/"$//')
     if [ -z "$want" ] && [ -z "$warns" ]; then echo "FAIL $b: no // xtc: error or warn line"; fail=$((fail + 1)); continue; fi
     "$XC" -q -O2 -A "$A" -H . -o "$L/$b" "$f" > "$L/$b.out" 2>&1
     rc=$?
@@ -38,6 +40,10 @@ for f in tests/fixtures/negative/*.xc; do
         [ -z "$w" ] && continue
         grep -qF -- "$w" "$L/$b.out" || { echo "FAIL $b: no warning: $w"; ok=0; }
     done <<< "$warns"
+    while IFS= read -r w; do
+        [ -z "$w" ] && continue
+        grep -qF -- "$w" "$L/$b.out" && { echo "FAIL $b: a warning it must not give: $w"; ok=0; }
+    done <<< "$nowarns"
     if [ $ok = 1 ]; then pass=$((pass + 1)); else fail=$((fail + 1)); fi
 done
 rm -rf "$L"

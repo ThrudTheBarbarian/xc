@@ -215,16 +215,27 @@ class BundleSign
                         String* resourcesDir, Data* seed, String* publisher, String* domain, Map* provides, Map* requires)
         {
         return BundleSign.makeWith(dir, name, version, platform, codeFile, resourcesDir, seed, publisher, domain,
-                                   provides, requires, (Map*)0, (Map*)0);
+                                   provides, requires, (Map*)0, (Map*)0, (Data*)0);
+        }
+
+    // What the old key signs to hand its plugins over to the new one.
+    static String* _rotationText(String* newKeyHex)
+        {
+        String* t = String.withCString("xc-bundle-key-rotation\n");
+        t.append(newKeyHex);
+        return t;
         }
 
     // make(), with the developer's properties: readonly (the publisher's,
-    // final) and writeable (defaults a user may override). 0 for both keeps
-    // what the last run's manifest had.
+    // final) and writeable (defaults a user may override); 0 for both keeps
+    // what the last run's manifest had. previousSeed: the key this one
+    // replaces, which signs the hand-over (a rotation record); 0 keeps the
+    // record the last run made with this key, if any.
     static String* makeWith(String* dir, String* name, String* version, String* platform, String* codeFile,
                             String* resourcesDir, Data* seed, String* publisher, String* domain, Map* provides,
-                            Map* requires, Map* readonly, Map* writeable)
+                            Map* requires, Map* readonly, Map* writeable, Data* previousSeed)
         {
+        Map* rotation = (Map*)0;
         if (!BundleRules.validName(name))
             return String.withFormat("'%s' is not a bundle name: letters, digits, '_' and '-'", name.cString());
         if (seed == (Data*)0 || seed.length() != (u32)32)
@@ -249,7 +260,10 @@ class BundleSign
                 {
                 Map* old = (Map*)BundleRules.parseManifest(mb);
                 Map* opub = (Map*)old.get((Hashable*)String.withCString("publisher"));
-                if (opub != (Map*)0 && keyHex.equals((String*)opub.get((Hashable*)String.withCString("key"))))
+                String* okey = opub == (Map*)0 ? (String*)0 : (String*)opub.get((Hashable*)String.withCString("key"));
+                bool handedOver = previousSeed != (Data*)0 && previousSeed.length() == (u32)32 && okey != (String*)0
+                                  && okey.equals(BundleSign._hex(Ed25519.publicKey(previousSeed.bytes()).bytes(), (u32)32));
+                if (okey != (String*)0 && (keyHex.equals(okey) || handedOver))
                     {
                     Map* of = (Map*)old.get((Hashable*)String.withCString("files"));
                     String* mine = String.withCString("Exec/");
@@ -270,6 +284,13 @@ class BundleSign
                         publisher = (String*)opub.get((Hashable*)String.withCString("name"));
                     if (domain == (String*)0)
                         domain = (String*)opub.get((Hashable*)String.withCString("domain"));
+                    if (previousSeed == (Data*)0 && opub.get((Hashable*)String.withCString("rotation")) != (Object*)0)
+                        {
+                        rotation = new Map();
+                        rotation.set((Hashable*)String.withCString("previousKey"), opub.get((Hashable*)String.withCString("previousKey")));
+                        rotation.set((Hashable*)String.withCString("previousKeyId"), opub.get((Hashable*)String.withCString("previousKeyId")));
+                        rotation.set((Hashable*)String.withCString("rotation"), opub.get((Hashable*)String.withCString("rotation")));
+                        }
                     Map* oprops = (Map*)old.get((Hashable*)String.withCString("properties"));
                     if (readonly == (Map*)0 && writeable == (Map*)0 && oprops != (Map*)0)
                         {
@@ -353,6 +374,26 @@ class BundleSign
         pm.set((Hashable*)String.withCString("key"), (Object*)keyHex);
         pm.set((Hashable*)String.withCString("keyId"), (Object*)Sha256.hex(pub.bytes(), (u32)32));
         pm.set((Hashable*)String.withCString("name"), (Object*)(publisher != (String*)0 ? publisher : new String()));
+        if (previousSeed != (Data*)0)
+            {
+            if (previousSeed.length() != (u32)32)
+                return String.withCString("the previous key is not a key");
+            Data* opk = Ed25519.publicKey(previousSeed.bytes());
+            if (BundleSign._hex(opk.bytes(), (u32)32).equals(keyHex))
+                return String.withCString("the previous key is the same key");
+            String* rt = BundleSign._rotationText(keyHex);
+            Data* rs = Ed25519.sign(rt.cString(), rt.byteLength(), previousSeed.bytes());
+            rotation = new Map();
+            rotation.set((Hashable*)String.withCString("previousKey"), (Object*)BundleSign._hex(opk.bytes(), (u32)32));
+            rotation.set((Hashable*)String.withCString("previousKeyId"), (Object*)Sha256.hex(opk.bytes(), (u32)32));
+            rotation.set((Hashable*)String.withCString("rotation"), (Object*)BundleSign._hex(rs.bytes(), (u32)64));
+            }
+        if (rotation != (Map*)0)
+            {
+            Array* rk = rotation.allKeys();
+            for (u32 i = (u32)0; i < rk.count(); i = i + (u32)1)
+                pm.set((Hashable*)rk.get(i), rotation.get((Hashable*)rk.get(i)));
+            }
         String* m = String.withCString("{\n  \"code\": ");
         m.append(BundleSign._quoted(name));
         m.appendCString(",\n  \"files\": ");
@@ -480,6 +521,24 @@ class BundleSign
             return String.withCString("the manifest has no publisher key");
         if (!Ed25519.verify(mb.bytes(), mb.length(), sig.bytes(), key.bytes()))
             return String.withCString("the signature does not verify");
+        // A rotation record: the previous key, its id, and its signature over
+        // the hand-over to this key. All three, or none.
+        Object* rot = pub.get((Hashable*)String.withCString("rotation"));
+        Object* prevK = pub.get((Hashable*)String.withCString("previousKey"));
+        Object* prevId = pub.get((Hashable*)String.withCString("previousKeyId"));
+        if (rot != (Object*)0 || prevK != (Object*)0 || prevId != (Object*)0)
+            {
+            String* rs = (String* ?)rot;
+            String* pk = (String* ?)prevK;
+            String* pid = (String* ?)prevId;
+            Data* pkb = pk == (String*)0 ? (Data*)0 : BundleSign._unhex(pk, (u32)32);
+            Data* rsb = rs == (String*)0 ? (Data*)0 : BundleSign._unhex(rs, (u32)64);
+            if (pkb == (Data*)0 || rsb == (Data*)0 || pid == (String*)0 || !Sha256.hex(pkb.bytes(), (u32)32).equals(pid))
+                return String.withCString("the key rotation record is incomplete");
+            String* rt = BundleSign._rotationText((String*)pub.get((Hashable*)String.withCString("key")));
+            if (!Ed25519.verify(rt.cString(), rt.byteLength(), rsb.bytes(), pkb.bytes()))
+                return String.withCString("the key rotation does not verify");
+            }
         String* name = (String*)m.get((Hashable*)String.withCString("name"));
         if (!BundleRules.validName(name))
             return String.withCString("the bundle's name is not a valid name");

@@ -1584,6 +1584,8 @@ class Sema
             }
         if (fnBody != 0)
             escapeWalkBody(fnBody);
+        if (fnBody != 0)
+            gcWalkStmt(fnBody, new Map());
         noteStackUse(decl, owner, fnBody);
         noteCallable(decl, owner);
         popScope();
@@ -1592,6 +1594,299 @@ class Sema
         _getterOwner = (String*)0;
         _setterOwner = (String*)0;
         _curReturn = (String*)0;
+        }
+
+    // ── `-Wunguarded-action`: a callback called without a test ───────────
+    // The reference's GuardCheck, walk for walk. A stored `^` empties when its
+    // receiver dies, so `if (f) f()` is the contract; a binding is GUARDED
+    // once tested and until assigned. Joins intersect; a diverging arm
+    // (return, break, continue) contributes nothing, which is how
+    // `if (!f) return;` guards what follows; only local bindings are tracked.
+    // The guarded set is a Map used as a set of names.
+    String* gcBinding(Node* n)
+        {
+        if (n == 0 || n.kind() != (u16)nkIdent || n.ty() == 0 || !isBoundSignature(n.ty()))
+            return (String*)0;
+        return n.name();
+        }
+
+    bool gcIsNull(Node* n)
+        {
+        if (n == 0)
+            return false;
+        if (n.kind() == (u16)nkCast)
+            return n.kidCount() > (u32)0 && gcIsNull(n.kid((u32)0));
+        return n.kind() == (u16)nkInt && n.num() == (i64)0;
+        }
+
+    // The binding a condition proves set when taken: `f`, `f != 0`, `f && x`.
+    String* gcTruthy(Node* c)
+        {
+        if (c == 0)
+            return (String*)0;
+        if (c.kind() == (u16)nkCast)
+            return c.kidCount() > (u32)0 ? gcTruthy(c.kid((u32)0)) : (String*)0;
+        String* d = gcBinding(c);
+        if (d != 0)
+            return d;
+        if (c.kind() == (u16)nkBinary && c.kidCount() >= (u32)2)
+            {
+            if (_isOp(c.op(), "!="))
+                {
+                String* l = gcBinding(c.kid((u32)0));
+                if (l != 0 && gcIsNull(c.kid((u32)1)))
+                    return l;
+                String* r = gcBinding(c.kid((u32)1));
+                if (r != 0 && gcIsNull(c.kid((u32)0)))
+                    return r;
+                }
+            if (_isOp(c.op(), "&&"))
+                {
+                String* l = gcTruthy(c.kid((u32)0));
+                if (l != 0)
+                    return l;
+                return gcTruthy(c.kid((u32)1));
+                }
+            }
+        return (String*)0;
+        }
+
+    // The binding a condition proves EMPTY when taken (`!f`, `f == 0`), so
+    // set when not taken; `!f || x` too, both halves false there.
+    String* gcFalsy(Node* c)
+        {
+        if (c == 0)
+            return (String*)0;
+        if (c.kind() == (u16)nkCast)
+            return c.kidCount() > (u32)0 ? gcFalsy(c.kid((u32)0)) : (String*)0;
+        if (c.kind() == (u16)nkUnary && _isOp(c.op(), "!") && c.kidCount() > (u32)0)
+            return gcTruthy(c.kid((u32)0));
+        if (c.kind() == (u16)nkBinary && c.kidCount() >= (u32)2)
+            {
+            if (_isOp(c.op(), "||"))
+                {
+                String* l = gcFalsy(c.kid((u32)0));
+                if (l != 0)
+                    return l;
+                return gcFalsy(c.kid((u32)1));
+                }
+            if (_isOp(c.op(), "=="))
+                {
+                String* l = gcBinding(c.kid((u32)0));
+                if (l != 0 && gcIsNull(c.kid((u32)1)))
+                    return l;
+                String* r = gcBinding(c.kid((u32)1));
+                if (r != 0 && gcIsNull(c.kid((u32)0)))
+                    return r;
+                }
+            }
+        return (String*)0;
+        }
+
+    static Map* gcCopy(Map* g)
+        {
+        Map* c = new Map();
+        Array* ks = g.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            c.set((Hashable*)ks.get(i), ks.get(i));
+        return c;
+        }
+
+    // g becomes what is in both g's copy a and b.
+    static void gcSetTo(Map* g, Map* a, Map* b)
+        {
+        Array* old = g.allKeys();
+        for (u32 i = (u32)0; i < old.count(); i = i + (u32)1)
+            g.remove((Hashable*)old.get(i));
+        Array* ks = a.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            if (b == (Map*)0 || b.get((Hashable*)ks.get(i)) != (Object*)0)
+                g.set((Hashable*)ks.get(i), ks.get(i));
+        }
+
+    void gcWalkExpr(Node* n, Map* g)
+        {
+        if (n == 0)
+            return;
+        u16 k = n.kind();
+        if (k == (u16)nkCall)
+            {
+            for (u32 i = (u32)0; i < (u32)n.num() && i < n.kidCount(); i = i + (u32)1)
+                gcWalkExpr(n.kid(i), g);
+            // A call through a callback VARIABLE (a callee expression has no name to track).
+            if (n.boundCall() && n.kidCount() <= (u32)n.num() && n.name() != 0 && n.name().byteLength() > (u32)0
+                && g.get((Hashable*)n.name()) == (Object*)0)
+                {
+                String* w = String.withCString("`");
+                w.append(n.name());
+                w.appendCString("` is a callback and is called without being checked \u2014 it empties when its "
+                                "receiver dies, and calling it then dispatches through a dead object. Guard it: `if (");
+                w.append(n.name());
+                w.appendCString(") { ");
+                w.append(n.name());
+                w.appendCString("(\u2026); }`");
+                _warnAt(String.withCString("unguarded-action"), w, n);
+                }
+            return;
+            }
+        if (k == (u16)nkAssign && n.kidCount() >= (u32)2)
+            {
+            gcWalkExpr(n.kid((u32)1), g);
+            String* dst = gcBinding(n.kid((u32)0));
+            if (dst != 0)
+                g.remove((Hashable*)dst);
+            else
+                gcWalkExpr(n.kid((u32)0), g);
+            return;
+            }
+        if (k == (u16)nkBinary && n.kidCount() >= (u32)2)
+            {
+            gcWalkExpr(n.kid((u32)0), g);
+            if (_isOp(n.op(), "&&"))
+                {
+                String* t = gcTruthy(n.kid((u32)0));
+                if (t != 0)
+                    {
+                    Map* inner = Sema.gcCopy(g);
+                    inner.set((Hashable*)t, (Object*)t);
+                    gcWalkExpr(n.kid((u32)1), inner);
+                    return;
+                    }
+                }
+            gcWalkExpr(n.kid((u32)1), g);
+            return;
+            }
+        if (k == (u16)nkTernary && n.kidCount() >= (u32)3)
+            {
+            gcWalkExpr(n.kid((u32)0), g);
+            String* tb = gcTruthy(n.kid((u32)0));
+            Map* thenG = g;
+            if (tb != 0)
+                {
+                thenG = Sema.gcCopy(g);
+                thenG.set((Hashable*)tb, (Object*)tb);
+                }
+            gcWalkExpr(n.kid((u32)1), thenG);
+            gcWalkExpr(n.kid((u32)2), g);
+            return;
+            }
+        if ((k == (u16)nkUnary || k == (u16)nkCast) && n.kidCount() > (u32)0)
+            {
+            gcWalkExpr(n.kid((u32)0), g);
+            return;
+            }
+        if (k == (u16)nkMethodCall)
+            {
+            for (u32 i = (u32)0; i <= (u32)n.num() && i < n.kidCount(); i = i + (u32)1)
+                gcWalkExpr(n.kid(i), g);
+            return;
+            }
+        }
+
+    // A statement; true when control cannot fall out of it.
+    bool gcWalkStmt(Node* n, Map* g)
+        {
+        if (n == 0)
+            return false;
+        u16 k = n.kind();
+        if (k == (u16)nkBlock)
+            {
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+                if (gcWalkStmt(n.kid(i), g))
+                    return true;
+            return false;
+            }
+        if (k == (u16)nkReturn)
+            {
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+                gcWalkExpr(n.kid(i), g);
+            return true;
+            }
+        if (k == (u16)nkBreak || k == (u16)nkContinue)
+            return true;
+        if (k == (u16)nkIf && n.kidCount() >= (u32)2)
+            {
+            Node* cond = n.kid((u32)0);
+            gcWalkExpr(cond, g);
+            String* truthy = gcTruthy(cond);
+            String* falsy = gcFalsy(cond);
+            Map* thenG = Sema.gcCopy(g);
+            if (truthy != 0)
+                thenG.set((Hashable*)truthy, (Object*)truthy);
+            bool thenDiverges = gcWalkStmt(n.kid((u32)1), thenG);
+            Map* elseG = Sema.gcCopy(g);
+            if (falsy != 0)
+                elseG.set((Hashable*)falsy, (Object*)falsy);
+            bool elseDiverges = n.kidCount() > (u32)2 ? gcWalkStmt(n.kid((u32)2), elseG) : false;
+            if (thenDiverges && elseDiverges)
+                return true;
+            if (thenDiverges)
+                Sema.gcSetTo(g, elseG, (Map*)0);
+            else if (elseDiverges)
+                Sema.gcSetTo(g, thenG, (Map*)0);
+            else
+                Sema.gcSetTo(g, thenG, elseG);
+            return false;
+            }
+        if (k == (u16)nkWhile && n.kidCount() >= (u32)2)
+            {
+            gcWalkExpr(n.kid((u32)0), g);
+            String* truthy = gcTruthy(n.kid((u32)0));
+            Map* bodyG = Sema.gcCopy(g);
+            if (truthy != 0)
+                bodyG.set((Hashable*)truthy, (Object*)truthy);
+            gcWalkStmt(n.kid((u32)1), bodyG);
+            return false;
+            }
+        if (k == (u16)nkExprStatement)
+            {
+            if (n.kidCount() > (u32)0)
+                gcWalkExpr(n.kid((u32)0), g);
+            return false;
+            }
+        if (k == (u16)nkForCStyle)
+            {
+            Node* body = (Node*)0;
+            Node* step = (Node*)0;
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+                {
+                Node* c = n.kid(i);
+                if (c.kind() == (u16)nkMarkerInit)
+                    {
+                    for (u32 j = (u32)0; j < c.kidCount(); j = j + (u32)1)
+                        gcWalkStmt(c.kid(j), g);
+                    }
+                else if (c.kind() == (u16)nkMarkerCond)
+                    {
+                    for (u32 j = (u32)0; j < c.kidCount(); j = j + (u32)1)
+                        gcWalkExpr(c.kid(j), g);
+                    }
+                else if (c.kind() == (u16)nkMarkerStep)
+                    step = c;
+                else
+                    body = c;
+                }
+            Map* bodyG = Sema.gcCopy(g);
+            gcWalkStmt(body, bodyG);
+            for (u32 j = (u32)0; step != 0 && j < step.kidCount(); j = j + (u32)1)
+                gcWalkExpr(step.kid(j), bodyG);
+            return false;
+            }
+        if (k == (u16)nkForIn)
+            {
+            if (n.kidCount() > (u32)0)
+                gcWalkStmt(n.kid(n.kidCount() - (u32)1), Sema.gcCopy(g));
+            return false;
+            }
+        if (k == (u16)nkVariableDecl)
+            {
+            for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+                gcWalkExpr(n.kid(i), g);
+            if (n.name() != 0)
+                g.remove((Hashable*)n.name());
+            return false;
+            }
+        return false;
         }
 
     // ── Stack instances whose address escapes ────────────────────────────
