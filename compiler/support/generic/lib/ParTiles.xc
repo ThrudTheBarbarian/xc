@@ -228,7 +228,7 @@ class ParTiles
         }
 
     // The workers for this process, made once. XC_PAR_WORKERS names them
-    // ("cpu", "cuda", "metal", "vulkan", "cuda,vulkan,cpu") and then every
+    // ("cpu", "cuda", "metal", "vulkan", "remote", "cuda,vulkan,cpu") and then every
     // block runs on the queue, whatever auto would choose; unset, the
     // default set is every GPU the box has (each CUDA card; Vulkan for a
     // card CUDA does not reach; Metal) and the CPU pool, and auto measures
@@ -402,6 +402,10 @@ class ParTiles
             else if (name.equals(String.withCString("vulkan")))
                 _workers.add((Object*)new ParVulkanWorker());
 #endif
+            // The daemons XC_PAR_REMOTE names (xcd): a run on other
+            // machines' GPUs alone, as `remote` or beside local devices.
+            else if (name.equals(String.withCString("remote")))
+                ParRemote.addWorkers(_workers);
             at = end + (u32)1;
             }
         if (cpu)
@@ -847,6 +851,14 @@ class ParTiles
                         if (gpuUsPerItem < (i64)0 || r < gpuUsPerItem)
                             gpuUsPerItem = r;
                         }
+                // Whether any GPU worker can still take a tile: with none (the
+                // only one a remote that died before finishing a tile, say),
+                // the CPU pool is not held back for a GPU rate that will never
+                // come, or nothing would take the work.
+                bool gpuUsable = false;
+                for (u32 i = (u32)0; i < nw; i = i + (u32)1)
+                    if (!isCpuW[i] && ((ParWorker*)ws.get(i)).ready(now))
+                        gpuUsable = true;
                 for (u32 i = (u32)0; i < nw; i = i + (u32)1)
                     {
                     // Not available this round (a remote worker too loaded, say):
@@ -854,7 +866,7 @@ class ParTiles
                     if (!((ParWorker*)ws.get(i)).ready(now))
                         continue;
                     i64 at;
-                    if (doneItems[i] == (i64)0 && isCpuW[i] && nw > (u32)1)
+                    if (doneItems[i] == (i64)0 && isCpuW[i] && nw > (u32)1 && gpuUsable)
                         {
                         // The CPU pool unmeasured beside GPUs: never first (a
                         // GPU-sized tile on one lane is a run of its own), and

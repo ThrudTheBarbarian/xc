@@ -20,9 +20,13 @@ i32 main(void)
 {
     Atomic* started = new Atomic();
     Array* ts = new Array();
+    // A bound method does not keep its receiver alive: the waiters are held
+    // here until every thread has been joined.
+    Array* ws = new Array();
     for (u32 i = (u32)0; i < (u32)40; i = i + (u32)1) {
         Waiter* w = new Waiter();
         w.started = started;
+        ws.add((Object*)w);
         ts.add((Object*)Thread.spawn(&w.run));
     }
     for (u32 i = (u32)0; i < ts.count(); i = i + (u32)1)

@@ -41,10 +41,16 @@
 u8* FindFirstFileA(u8* pattern, u8* data);
 i32 FindNextFileA(u8* h, u8* data);
 i32 FindClose(u8* h);
+i32 DeleteFileA(u8* path);
+i32 RemoveDirectoryA(u8* path);
+i32 MoveFileExA(u8* from, u8* to, u32 flags);
 #elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
 u8* opendir(u8* path);
 u8* readdir(u8* d);
 i32 closedir(u8* d);
+i32 unlink(u8* path);
+i32 rmdir(u8* path);
+i32 rename(u8* from, u8* to);
 #endif
 
 class DirEntry : Object
@@ -55,6 +61,59 @@ class DirEntry : Object
 
 class Directory
     {
+    // Remove path: a file, a link (not what it names), or a directory and
+    // everything under it. True when nothing is left there.
+    static bool remove(String* path)
+        {
+        Array* es = Directory.list(path);
+        if (es != (Array*)0)
+            {
+            for (u32 i = (u32)0; i < es.count(); i = i + (u32)1)
+                {
+                DirEntry* e = (DirEntry*)es.get(i);
+                String* p = String.withString(path);
+                p.appendByte((u8)'/');
+                p.append(e.name);
+                if (e.kind == (u8)DIR_DIRECTORY)
+                    Directory.remove(p);
+                else
+                    Directory._unlink(p);
+                }
+#if ARCH_win64
+            return RemoveDirectoryA(path.cString()) != (i32)0;
+#elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+            return rmdir(path.cString()) == (i32)0;
+#else
+            return false;
+#endif
+            }
+        return Directory._unlink(path);
+        }
+
+    static bool _unlink(String* path)
+        {
+#if ARCH_win64
+        return DeleteFileA(path.cString()) != (i32)0;
+#elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+        return unlink(path.cString()) == (i32)0;
+#else
+        return false;
+#endif
+        }
+
+    // Move from to to (the same volume); a file there is replaced, a
+    // directory there must be empty or absent.
+    static bool move(String* from, String* to)
+        {
+#if ARCH_win64
+        return MoveFileExA(from.cString(), to.cString(), (u32)1) != (i32)0;   // MOVEFILE_REPLACE_EXISTING
+#elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+        return rename(from.cString(), to.cString()) == (i32)0;
+#else
+        return false;
+#endif
+        }
+
     static Array* list(String* path)
         {
         Array* out = new Array();

@@ -433,8 +433,10 @@ To choose instead, in order of precedence:
 - `XC_PAR=cpu`, `XC_PAR=gpu`, `XC_PAR=gpus` (every GPU, tiled),
   `XC_PAR=all` (every GPU and the CPU) or `XC_PAR=auto` in the
   environment, for every block in one run. `XC_PAR_WORKERS=cuda,
-  vulkan,metal,cpu` names the devices of the set itself (`XC_PAR_CUDA_DEVICES=0,1`
-  picks CUDA cards by ordinal), and then every block runs on that set;
+  vulkan,metal,remote,cpu` names the devices of the set itself, and then
+  every block runs on that set: `remote` is the daemons `XC_PAR_REMOTE`
+  names (see [Across machines](#across-machines-xcd)), and
+  `XC_PAR_CUDA_DEVICES=0,1` picks CUDA cards by ordinal;
   `XC_PAR_TILE_MB=<n>` sets the tile size (8 MB each way by default) and
   `XC_PAR_TILES=0` turns tiling off;
 - `Par.device("name", "gpu")` in the program, for one block by its name (`par
@@ -451,7 +453,7 @@ the tiles and the devices a run on a set used.
 
 ### Loops that become blocks: `--par-auto`
 
- With `--par-auto`, an outermost `for (T i in a..b) { … }`
+ With `--par-auto`, a `for (T i in a..b) { … }`
 loop in plain code — or `a...b`, or the C-style `for (T i = a; i < b; i++)`
 with `<=`, `++i`, `i += 1` or `i = i + 1` — becomes a `par` block when its
 shape allows, so an existing program takes the GPU and every core without
@@ -463,6 +465,18 @@ for (u32 i in 0..N)
 u32 total = (u32)0;
 for (u32 i in 0..N)
     total = total + a[i];                   // becomes par autopar_2 :reduce(+ total) { … }
+```
+
+A loop that does not qualify stays a loop, and the loops inside it are then
+judged on their own, so the work inside a timing or retry loop is still found:
+
+```c
+for (u32 rep in 0..8) {                      // writes `first`: stays a loop
+    total = (u32)0;
+    for (u32 i in 0..N)
+        total = total + a[i];                // becomes a block, once a repetition
+    if (rep == (u32)0) first = total;
+}
 ```
 
 A loop qualifies when its body writes only its own locals, array elements,

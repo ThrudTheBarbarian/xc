@@ -11,7 +11,8 @@ case "$(uname -s)" in
     *)      EXT=so;    OTHER="";         OEXT="" ;;
 esac
 L=$(mktemp -d /tmp/plugin.XXXX)
-trap 'rm -rf "$L"' EXIT
+HP=""
+trap '[ -n "$HP" ] && { kill $HP; wait $HP; } 2>/dev/null; rm -rf "$L"' EXIT
 rc=0
 check() { # name, expected text, command...
     local n="$1" want="$2"; shift 2
@@ -111,6 +112,30 @@ check "undeclared dependency" "which is not a system library"   "$XC" --bundle "
 "$XC" --bundle "$L/dep" --bundle-key "$L/key" -L "$L/deplib" --bundle-lib "$L/deplib/libSpicelib.$EXT" \
     -o "$L/dep.$EXT" tests/bundle/spicedep.xc > /dev/null
 check "a shipped dependency"  "run -> 34"                       "$L/host" "$L/dep" yes
+
+# URL bundles (§2b): fetched into the private store, checked file by file,
+# the domain asked about the key when it is the host, offline from the copy.
+mkdir -p "$L/site/.well-known"
+"$XC" --bundle "$L/site/net" --bundle-key "$L/key" --bundle-name net --publisher-domain 127.0.0.1 \
+    -o "$L/net.$EXT" tests/bundle/spice.xc > /dev/null
+"$XC" --bundle "$L/site/gone" --bundle-key "$L/key3" --bundle-name gone --publisher-domain 127.0.0.1 \
+    -o "$L/gone.$EXT" tests/bundle/spice.xc > /dev/null
+cp -R "$L/site/net" "$L/site/badnet"; printf x >> "$L/site/badnet/Exec/"*/net.$EXT
+kid() { python3 -c "import hashlib,sys; print(hashlib.sha256(bytes.fromhex(open(sys.argv[1]).read().strip())).hexdigest())" "$1.pub"; }
+printf '{"keys": ["%s"], "revoked": ["%s"]}\n' "$(kid "$L/key")" "$(kid "$L/key3")" > "$L/site/.well-known/xc-bundle-keys"
+PORT=$((8300 + RANDOM % 600))
+(cd "$L/site" && exec python3 -m http.server $PORT --bind 127.0.0.1 > "$L/http.log" 2>&1) & HP=$!
+for i in $(seq 1 40); do curl -s -o /dev/null "http://127.0.0.1:$PORT/" && break; perl -e 'select(undef,undef,undef,0.25)'; done
+U="http://127.0.0.1:$PORT"
+check "url: domain vouches"   "asked about net from '' (domain '127.0.0.1')" "$L/host" "$U/net" yes
+check "url: loaded"           "run -> 17"                       "$L/host" "$U/net" none
+check "url: tampered"         "has changed since it was signed" "$L/host" "$U/badnet" yes
+check "url: not there"        "bundle.json: HTTP 404"           "$L/host" "$U/nothing" yes
+check "url: revoked key"      "has revoked the key"             "$L/host" "$U/gone" yes
+kill $HP; wait $HP 2>/dev/null; HP=""
+check "url: offline copy"     "run -> 17"                       "$L/host" "$U/net" none
+printf x >> "$XCC_PLUGIN_STORE/"*-net-1.0/Exec/*/net.$EXT
+check "url: changed copy"     "has changed since it was signed" "$L/host" "$U/net" none
 
 # Developer properties: readonly and writeable values in the signed manifest,
 # a user's overrides in the app's Settings, across updates of the bundle.

@@ -62,6 +62,9 @@ typedef pointer PluginTable_t(void);
 
 #import "Sha256.xc"
 #import "Exports.xc"
+#if !ARCH_wasm32
+#import "Http.xc"
+#endif
 #import "Settings.xc"
 #import "NotificationCenter.xc"
 #import "Log.xc"
@@ -491,10 +494,11 @@ class Plugin : Object
         return Plugin._fail(String.withFormat("%s: on the web a plugin is loaded with Plugin.loadAsync", path.cString()));
 #else
         String* pin = Plugin._pinOf(path, &path);
+        if (path.hasPrefix(String.withCString("http://")) || path.hasPrefix(String.withCString("https://")))
+            return Plugin._loadUrl(path, pin, consent);
         String* err = BundleSign.verify(path);
         if (err != (String*)0)
             return Plugin._fail(String.withFormat("%s: %s", path.cString(), err.cString()));
-        String* rotated = (String*)0;
         if (pin != (String*)0)
             {
             Data* mb = Files.readData(BundleSign._join(path, String.withCString("bundle.json")));
@@ -537,8 +541,195 @@ class Plugin : Object
         err = BundleSign.verify(dir);
         if (err != (String*)0)
             return Plugin._fail(String.withFormat("the private copy of %s: %s", name.cString(), err.cString()));
+        return Plugin._loadCopy(m, dir, consent, pin != (String*)0, String.withCString(""), false, false, false);
+#endif
+        }
+
+    // Caps on what a URL bundle may make this program download (review 16).
+    static u32 _maxFile(void) { return (u32)268435456; }        // 256 MiB a file
+    static u64 _maxTotal(void) { return (u64)1073741824; }      // 1 GiB a bundle
+
+    // A bundle at a URL (bundles-and-plugins.md §2b): its manifest and
+    // signature fetched and checked, the publisher's domain asked about the
+    // key when it is the host the bundle comes from, then this platform's
+    // code and the resources fetched into a side directory of the private
+    // store, each checked against the manifest, the copy verified and only
+    // then put in place. When nothing answers, the copy an earlier load made
+    // is used, verified again; a server that answers with an error is not
+    // "offline". https needs Http's TLS layer (HttpTls.xc).
+    static Plugin* _loadUrl(String* url, String* pin, PluginConsent_t* consent)
+        {
+#if ARCH_wasm32
+        return (Plugin*)0;
+#else
+        String* base = String.withString(url);
+        while (base.byteLength() > (u32)1 && base.byteAt(base.byteLength() - (u32)1) == (u8)'/')
+            base = base.substringBytes((u32)0, base.byteLength() - (u32)1);
+        String* root = Plugin._store();
+        Files.createDirectory(root);
+        String* urls = BundleSign._join(root, String.withCString("urls"));
+        Files.createDirectory(urls);
+        String* mapFile = BundleSign._join(urls, Sha256.hex(base.cString(), base.byteLength()));
+        String* plat = Plugin._platform();
+        HttpResponse* mr = Http.get(Url.withString(String.withFormat("%s/bundle.json", base.cString())));
+        if (mr.status() == (u32)0)
+            {
+            // Nothing answered: the copy, if an earlier load made one.
+            String* dn = Files.readText(mapFile);
+            if (dn == (String*)0)
+                return Plugin._fail(String.withFormat("%s cannot be reached (%s), and there is no copy of it here",
+                                                      base.cString(), mr.error() != (String*)0 ? mr.error().cString() : "no answer"));
+            String* dir = BundleSign._join(root, dn);
+            String* err = BundleSign.verifyPartial(dir, plat);
+            if (err != (String*)0)
+                return Plugin._fail(String.withFormat("the copy of %s: %s", base.cString(), err.cString()));
+            Data* cmb = Files.readData(BundleSign._join(dir, String.withCString("bundle.json")));
+            if (pin != (String*)0 && !Sha256.hex(cmb.bytes(), cmb.length()).equals(pin))
+                return Plugin._fail(String.withFormat("%s: not the bundle the link names (its sha256 differs)", base.cString()));
+            Map* cm = (Map*)0;
+            try
+                {
+                cm = (Map*)BundleRules.parseManifest(cmb);
+                }
+            catch (JSONError e)
+                {
+                return Plugin._fail(e.message());
+                }
+            return Plugin._loadCopy(cm, dir, consent, pin != (String*)0, String.withCString(""), true, false, false);
+            }
+        if (mr.status() != (u32)200)
+            return Plugin._fail(String.withFormat("%s/bundle.json: HTTP %u", base.cString(), mr.status()));
+        HttpResponse* sr = Http.get(Url.withString(String.withFormat("%s/bundle.sig", base.cString())));
+        if (sr.status() != (u32)200)
+            return Plugin._fail(String.withFormat("%s/bundle.sig: HTTP %u", base.cString(), sr.status()));
+        Data* mb = mr.body();
+        if (pin != (String*)0 && !Sha256.hex(mb.bytes(), mb.length()).equals(pin))
+            return Plugin._fail(String.withFormat("%s: not the bundle the link names (its sha256 differs)", base.cString()));
+        String* err = BundleSign.verifyManifest(mb, sr.bodyString());
+        if (err != (String*)0)
+            return Plugin._fail(String.withFormat("%s: %s", base.cString(), err.cString()));
+        Map* m = (Map*)0;
+        try
+            {
+            m = (Map*)BundleRules.parseManifest(mb);
+            }
+        catch (JSONError e)
+            {
+            return Plugin._fail(e.message());
+            }
+        String* name = (String*)m.get((Hashable*)String.withCString("name"));
+        String* version = (String*)m.get((Hashable*)String.withCString("version"));
+        Map* pub = (Map*)m.get((Hashable*)String.withCString("publisher"));
+        String* keyId = (String*)pub.get((Hashable*)String.withCString("keyId"));
+        String* domain = (String*)pub.get((Hashable*)String.withCString("domain"));
+        // The publisher's domain vouches for its key (§2a, defence 3) only
+        // when it is the host the bundle comes from.
+        bool reached = false;
+        bool vouched = false;
+        String* origin = Plugin._origin(base);
+        if (domain != (String*)0 && domain.byteLength() > (u32)0 && origin != (String*)0
+            && Plugin._hostOf(origin).lowercased().equals(domain.lowercased()))
+            {
+            HttpResponse* vr = Http.get(Url.withString(String.withFormat("%s/.well-known/xc-bundle-keys", origin.cString())));
+            if (vr.status() == (u32)200)
+                {
+                Map* v = (Map*)0;
+                try
+                    {
+                    v = (Map* ?)JSON.parseStrict(vr.body(), (u32)65536, (u32)4, (u32)256);
+                    }
+                catch (JSONError e)
+                    {
+                    v = (Map*)0;
+                    }
+                if (v != (Map*)0)
+                    {
+                    reached = true;
+                    vouched = Plugin._inList(v, "keys", keyId);
+                    if (Plugin._inList(v, "revoked", keyId))
+                        return Plugin._fail(String.withFormat("%s: %s has revoked the key it was signed with (%s)", name.cString(),
+                                                              domain.cString(), keyId.substringBytes((u32)0, (u32)16).cString()));
+                    }
+                }
+            }
+        // This platform's code and the resources, into a side directory.
+        String* dn = String.withFormat("%s-%s-%s", keyId.substringBytes((u32)0, (u32)16).cString(), name.cString(),
+                                       version.cString());
+        String* dir = BundleSign._join(root, dn);
+        String* part = String.withString(dir);
+        part.appendCString(".part");
+        Directory.remove(part);
+        Files.createDirectory(part);
+        if (!Files.writeData(BundleSign._join(part, String.withCString("bundle.json")), mb)
+            || !Files.writeText(BundleSign._join(part, String.withCString("bundle.sig")), sr.bodyString()))
+            return Plugin._fail(String.withFormat("cannot write the copy of %s", name.cString()));
+        Map* files = (Map*)m.get((Hashable*)String.withCString("files"));
+        Array* listed = files.allKeys();
+        BundleSign._sort(listed);
+        String* mine = String.withFormat("Exec/%s/", plat.cString());
+        u64 total = (u64)0;
+        for (u32 i = (u32)0; i < listed.count(); i = i + (u32)1)
+            {
+            String* f = (String*)listed.get(i);
+            if (!f.hasPrefix(String.withCString("Resources/")) && !f.hasPrefix(mine))
+                continue;
+            HttpResponse* fr = Http.get(Url.withString(String.withFormat("%s/%s", base.cString(), f.cString())));
+            if (fr.status() != (u32)200)
+                return Plugin._fail(String.withFormat("%s/%s: HTTP %u", base.cString(), f.cString(), fr.status()));
+            Data* b = fr.body();
+            total = total + (u64)b.length();
+            if (b.length() > Plugin._maxFile() || total > Plugin._maxTotal())
+                return Plugin._fail(String.withFormat("%s: %s is larger than a plugin may make this program download",
+                                                      name.cString(), f.cString()));
+            if (!Sha256.hex(b.bytes(), b.length()).equals((String*)files.get((Hashable*)f)))
+                return Plugin._fail(String.withFormat("%s: '%s' has changed since it was signed", base.cString(), f.cString()));
+            String* to = BundleSign._join(part, f);
+            u32 slash = to.byteLength();
+            while (slash > (u32)0 && to.byteAt(slash - (u32)1) != (u8)'/')
+                slash = slash - (u32)1;
+            BundleSign._mkdirs(to.substringBytes((u32)0, slash - (u32)1));
+            if (!Files.writeData(to, b))
+                return Plugin._fail(String.withFormat("cannot write %s into the copy of %s", f.cString(), name.cString()));
+            }
+        err = BundleSign.verifyPartial(part, plat);
+        if (err != (String*)0)
+            return Plugin._fail(String.withFormat("the copy of %s: %s", base.cString(), err.cString()));
+        Directory.remove(dir);
+        if (!Directory.move(part, dir))
+            return Plugin._fail(String.withFormat("cannot put the copy of %s in place", name.cString()));
+        Files.writeText(mapFile, dn);
+        return Plugin._loadCopy(m, dir, consent, pin != (String*)0, vouched ? domain : String.withCString(""), true,
+                                reached, vouched);
+#endif
+        }
+
+    // Everything after the bundle is in the private store and verified there
+    // (from a directory, or fetched from a URL): trust, the platform's code,
+    // what it requires, its export table, its shipped libraries, then the
+    // load and the tables bound into it. verified: the domain that vouched
+    // for the key ("" if none); domainChecked: whether the domain could be
+    // asked at all (a URL bundle), so a rotation needs its word.
+    static Plugin* _loadCopy(Map* m, String* dir, PluginConsent_t* consent, bool pinned, String* verified,
+                             bool domainChecked, bool reached, bool vouched)
+        {
+#if ARCH_wasm32
+        return (Plugin*)0;
+#else
+        String* name = (String*)m.get((Hashable*)String.withCString("name"));
+        String* version = (String*)m.get((Hashable*)String.withCString("version"));
+        Map* pub = (Map*)m.get((Hashable*)String.withCString("publisher"));
+        String* keyId = (String*)pub.get((Hashable*)String.withCString("keyId"));
+        String* domain = (String*)pub.get((Hashable*)String.withCString("domain"));
+        Map* files = (Map*)m.get((Hashable*)String.withCString("files"));
+        String* rotated = (String*)0;
+        String* err = (String*)0;
         String* highest = (String*)0;
-        err = Plugin._decidePinned(m, consent, &highest, pin != (String*)0, &rotated, String.withCString(""));
+        err = Plugin._decidePinned(m, consent, &highest, pinned, &rotated, verified);
+        if (err == (String*)0 && rotated != (String*)0 && domainChecked && domain != (String*)0
+            && domain.byteLength() > (u32)0 && !vouched)
+            err = String.withFormat("%s: a new key (%s) for it counts only once %s vouches for it%s", name.cString(),
+                                    keyId.substringBytes((u32)0, (u32)16).cString(), domain.cString(),
+                                    reached ? "" : ", and it could not be reached");
         if (err != (String*)0)
             return Plugin._fail(err);
         String* code = Plugin._codeFor(m, &err);

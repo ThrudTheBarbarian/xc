@@ -4076,10 +4076,12 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
     NSUInteger goal = 0;
     if (![self parAutoScan:reds goal:&goal])
         {
+        // Not a block: the loops inside it are judged on their own, so the
+        // work inside a timing loop (`for (rep in 0..8) { t0 = now; for (i in
+        // 0..n) … ; if (rep == 0) first = …; }`) is still found. The loop
+        // depth stays where it was for that reason.
         [self parGridLoop:1];
-        [self parAutoLoop:1];
         XTASTNode* plain = [self parseFor];
-        [self parAutoLoop:-1];
         [self parGridLoop:-1];
         return plain;
         }

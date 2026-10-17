@@ -47,9 +47,16 @@ i32 main(void)
 }
 ```
 
-The same lines work on every target. Natively `where` is a directory and
-`loaded` runs before `loadAsync` returns; on the web it is a URL, and `loaded`
-runs once the bundle has been fetched and checked.
+The same lines work on every target. Natively `where` is a directory or a URL
+and `loaded` runs before `loadAsync` returns; on the web it is a URL, and
+`loaded` runs once the bundle has been fetched and checked.
+
+Natively, a URL bundle is fetched into the private store: its manifest and
+signature first, then this platform's code and the resources, each checked
+against the manifest as it arrives, into a side directory that takes the
+copy's place only once it verifies. When nothing answers, the copy from an
+earlier load is used, checked again. `https:` needs Http's TLS layer
+(`HttpTls.xc`).
 
 Nothing from the bundle runs until every check has passed:
 
@@ -93,9 +100,10 @@ first decision:
   domain and the bundle was fetched from that host, the loader reads
   `/.well-known/xc-bundle-keys` there: `{"keys": [...], "revoked": [...]}`, key
   fingerprints. The consent callback is shown the domain only when it vouches
-  for the key (otherwise it gets `""`), and a revoked key is refused. (On the
-  web; the file must be readable by the page, so serve it with CORS when the
-  page is elsewhere.)
+  for the key (otherwise it gets `""`), and a revoked key is refused. This
+  applies to a bundle loaded from a URL, natively or on the web; on the web
+  the file must be readable by the page, so serve it with CORS when the page
+  is elsewhere.
 
 **Keys change.** A publisher moving to a new key builds with `xcc --bundle ...
 --bundle-key new --rotate-from old`: the old key signs the hand-over, and a

@@ -101,11 +101,15 @@ wait $XCD3 2> /dev/null
 # A daemon that dies mid-run: its tiles are re-issued to the other workers
 # and the answer is still the local run's.
 PORT4=$((PORT + 3))
-XCD_HOME="$L/home1" XC_PAR_REPORT=1 XC_PAR_DIE_AFTER=2 "$L/xcd" -port $PORT4 -no-mdns > "$L/xcd4.log" 2>&1 &
+XCD_HOME="$L/home1" XC_PAR_REPORT=1 XC_PAR_DIE_AFTER=1 "$L/xcd" -port $PORT4 -no-mdns > "$L/xcd4.log" 2>&1 &
 XCD4=$!
 up "$L/xcd4.log"
 mkdir -p "$L/st_die"
-XCC_SETTINGS_DIR="$L/st_die" XC_PAR_REMOTE=127.0.0.1:$PORT4 XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/die.out" 2>&1
+# The daemon on the queue for certain (XC_PAR_WORKERS names it, with the CPU
+# to take its tiles back), dying after its first: with XC_PAR=all and two
+# tiles to live it was sometimes handed too few to die, so nothing was
+# re-issued (gate 4310).
+XCC_SETTINGS_DIR="$L/st_die" XC_PAR_REMOTE=127.0.0.1:$PORT4 XC_PAR_WORKERS=remote,cpu XC_PAR_REPORT=1 "$L/$f" > "$L/die.out" 2>&1
 if grep -v '^par:' "$L/die.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && grep -q "re-issued" "$L/die.out"; then
     echo "PASS remote lost worker"
 else

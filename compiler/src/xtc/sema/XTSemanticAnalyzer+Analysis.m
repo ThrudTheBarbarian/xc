@@ -2,6 +2,7 @@
 |* XTSemanticAnalyzer+Analysis.m
 \****************************************************************************/
 #import "XTSemanticAnalyzer+Private.h"
+#import "XTClassLabel.h"
 
 @implementation XTSemanticAnalyzer (Analysis)
 
@@ -1985,6 +1986,18 @@
     return n;
     }
 
+// Whether class `c` (by name) declares a method whose key — its mangled
+// name, else its name — is `k`: what XTSplitClassLabel needs to find where a
+// label's class name ends.
+- (BOOL)classNamed:(NSString*)c hasMethodKey:(NSString*)k
+    {
+    XTClassDeclNode* cls = self.classesByName[c];
+    for (XTMethodDeclNode* m in cls.methods)
+        if ([(m.mangledName ?: m.methodName) isEqualToString:k])
+            return YES;
+    return NO;
+    }
+
 - (void)computeOverriddenMethods
     {
     // Library build: the program is NOT whole. The overrides live in a client
@@ -2222,14 +2235,11 @@
     // which is not a property any dispatch should have.
     for (NSString* rootLabel in sortedRootLabels)
         {
-        if (![rootLabel hasPrefix:@"_cls_"])
+        NSString* rootCls = nil;
+        NSString* mangled = nil;
+        if (!XTSplitClassLabel(rootLabel, ^BOOL(NSString* c, NSString* k) { return [self classNamed:c hasMethodKey:k]; },
+                               &rootCls, &mangled))
             continue;
-        NSString* tail = [rootLabel substringFromIndex:5];
-        NSRange us = [tail rangeOfString:@"_"];
-        if (us.location == NSNotFound)
-            continue;
-        NSString* rootCls = [tail substringToIndex:us.location];
-        NSString* mangled = [tail substringFromIndex:us.location + 1];
         for (XTClassDeclNode* c = self.classesByName[rootCls]; c != nil; c = c.parentClass)
             {
             NSNumber* k = slotOfHost[c.className][mangled];
@@ -2495,14 +2505,11 @@
             // separates class name from mangled tail. We find the
             // root method by searching class A's methods for a
             // matching mangled-name key.
-            if (![rootLabel hasPrefix:@"_cls_"])
+            NSString* rootClsName = nil;
+            NSString* rootMangled = nil;
+            if (!XTSplitClassLabel(rootLabel, ^BOOL(NSString* c, NSString* k) { return [self classNamed:c hasMethodKey:k]; },
+                                   &rootClsName, &rootMangled))
                 continue;
-            NSString* tail = [rootLabel substringFromIndex:5];
-            NSRange us = [tail rangeOfString:@"_"];
-            if (us.location == NSNotFound)
-                continue;
-            NSString* rootClsName = [tail substringToIndex:us.location];
-            NSString* rootMangled = [tail substringFromIndex:us.location + 1];
             XTClassDeclNode* rootCls = self.classesByName[rootClsName];
             if (!rootCls)
                 continue;

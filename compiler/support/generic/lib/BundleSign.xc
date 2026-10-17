@@ -511,6 +511,62 @@ class BundleSign
         return (String*)0;
         }
 
+    // A copy that holds only one platform's code (a URL bundle's local copy,
+    // bundles-and-plugins.md §2b): the signature and manifest as verify(),
+    // nothing in it the manifest does not list, every Resources/ file and
+    // every file of Exec/<platform>/ present and unchanged, and any other
+    // platform's file absent or unchanged.
+    static String* verifyPartial(String* dir, String* platform)
+        {
+        Data* mb = Files.readData(BundleSign._join(dir, String.withCString("bundle.json")));
+        String* st = Files.readText(BundleSign._join(dir, String.withCString("bundle.sig")));
+        if (mb == (Data*)0 || st == (String*)0)
+            return String.withCString("no bundle.json or bundle.sig");
+        String* err = BundleSign.verifyManifest(mb, st);
+        if (err != (String*)0)
+            return err;
+        Map* m = (Map*)0;
+        try
+            {
+            m = (Map*)BundleRules.parseManifest(mb);
+            }
+        catch (JSONError e)
+            {
+            return e.message();
+            }
+        Map* files = (Map*)m.get((Hashable*)String.withCString("files"));
+        Array* present = new Array();
+        String* bad = (String*)0;
+        if (!BundleSign._walk(dir, String.withCString(""), present, &bad))
+            return String.withFormat("'%s' is a link or a special file", bad.cString());
+        for (u32 i = (u32)0; i < present.count(); i = i + (u32)1)
+            {
+            String* p = (String*)present.get(i);
+            if (p.equals(String.withCString("bundle.json")) || p.equals(String.withCString("bundle.sig")))
+                continue;
+            if (files.get((Hashable*)p) == (Object*)0)
+                return String.withFormat("'%s' is a file the manifest does not list", p.cString());
+            }
+        String* mine = String.withFormat("Exec/%s/", platform.cString());
+        Array* listed = files.allKeys();
+        BundleSign._sort(listed);
+        for (u32 i = (u32)0; i < listed.count(); i = i + (u32)1)
+            {
+            String* p = (String*)listed.get(i);
+            bool needed = p.hasPrefix(String.withCString("Resources/")) || p.hasPrefix(mine);
+            String* h = BundleSign._sha(BundleSign._join(dir, p));
+            if (h == (String*)0)
+                {
+                if (needed)
+                    return String.withFormat("'%s' is missing", p.cString());
+                continue;
+                }
+            if (!h.equals((String*)files.get((Hashable*)p)))
+                return String.withFormat("'%s' has changed since it was signed", p.cString());
+            }
+        return (String*)0;
+        }
+
     // The manifest's bytes and bundle.sig's text: the signature, the strict
     // parse, the name and every listed path. What verify() and a web load
     // share; the files themselves are checked by whoever holds them.

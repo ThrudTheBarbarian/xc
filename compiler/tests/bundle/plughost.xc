@@ -18,7 +18,8 @@ class Host : Object <Fence>
 typedef i32 Run_t(i32 x);
 bool answerYes(String* name, String* publisher, String* domain, String* keyId)
 {
-    Stdio.printf("asked about %s from '%s'\n", name.cString(), publisher != (String*)0 ? publisher.cString() : "");
+    Stdio.printf("asked about %s from '%s' (domain '%s')\n", name.cString(), publisher != (String*)0 ? publisher.cString() : "",
+                 domain != (String*)0 ? domain.cString() : "");
     return true;
 }
 bool answerNo(String* name, String* publisher, String* domain, String* keyId)

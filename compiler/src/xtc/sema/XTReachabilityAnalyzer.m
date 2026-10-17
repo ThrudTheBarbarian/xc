@@ -1,4 +1,5 @@
 #import "XTReachabilityAnalyzer.h"
+#import "XTClassLabel.h"
 #import "XTStmtNodes.h"
 #import "XTExprNodes.h"
 #import "XTType.h"
@@ -330,14 +331,12 @@
     for (NSString* label in _virtualSlotByLabel)
         {
         // Label form: `_cls_<Class>_<mangled>`. Skip everything else.
-        if (![label hasPrefix:@"_cls_"])
+        NSString* clsName = nil;
+        NSString* methodKey = nil;
+        if (!XTSplitClassLabel(label, ^BOOL(NSString* c, NSString* k) {
+                return self->_methodByKey[[NSString stringWithFormat:@"%@::%@", c, k]] != nil; },
+                               &clsName, &methodKey))
             continue;
-        NSString* rest = [label substringFromIndex:5];
-        NSRange sep = [rest rangeOfString:@"_"];
-        if (sep.location == NSNotFound)
-            continue;
-        NSString* clsName = [rest substringToIndex:sep.location];
-        NSString* methodKey = [rest substringFromIndex:sep.location + 1];
         // Match either by mangled name (preferred — overload-aware)
         // or by the underlying method name extracted by stripping
         // the trailing `__<mangle>` suffix sema appends. Fall back
@@ -951,12 +950,12 @@
             }
         if ([target hasPrefix:@"_cls_"])
             {
-            NSString* rest = [target substringFromIndex:5];
-            NSRange sep = [rest rangeOfString:@"_"];
-            if (sep.location == NSNotFound)
+            NSString* cls = nil;
+            NSString* mangled = nil;
+            if (!XTSplitClassLabel(target, ^BOOL(NSString* c, NSString* k) {
+                    return self->_methodByKey[[NSString stringWithFormat:@"%@::%@", c, k]] != nil; },
+                                   &cls, &mangled))
                 continue;
-            NSString* cls = [rest substringToIndex:sep.location];
-            NSString* mangled = [rest substringFromIndex:sep.location + 1];
             NSString* key = [NSString stringWithFormat:@"%@::%@", cls, mangled];
             XTMethodDeclNode* m = _methodByKey[key];
             if (m)

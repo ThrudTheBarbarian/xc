@@ -26,6 +26,13 @@ timed only when idle (as ../run.py does). The best of three runs is kept.
   python3 benchmark/par/run.py --bench nbody    # one benchmark
   python3 benchmark/par/run.py --machines mac   # one machine
   python3 benchmark/par/run.py --xcc compiler/bin/osx/xcc-xc   # a build-tree compiler
+  python3 benchmark/par/run.py --autopar        # the same programs as plain loops, with --par-auto
+
+--autopar measures the programs in auto/: each par benchmark with its `par`
+block taken out, so its loop is a plain one. It builds each twice, as written
+(one thread: there is no block) and with --par-auto, and runs the second on
+all threads, on the GPU and with `auto`; the table sets those beside the
+hand-written block's `auto` from this version's results.json.
 
 Writes benchmark/par/<version>/results.json and prints the markdown table the
 performance page uses.
@@ -54,6 +61,108 @@ XCC = None   # --xcc: a compiler other than the shipped one (development runs)
 # workloads in apps/hashcat, so run.py builds them from there.
 _HASHCAT = os.path.join(common.REPO, "apps", "hashcat")
 SRC_DIRS = {"md5": _HASHCAT, "md5_mask": _HASHCAT}
+
+
+AUTO_BENCHES = ["mandelbrot", "perlin", "nbody", "saxpy"]
+
+
+def build_auto(name, arch, out, autopar):
+    """auto/<name>.xc, as written or with --par-auto."""
+    if XCC:
+        cmd = [XCC, "-H", os.path.join(common.REPO, "compiler"), "-O3"]
+    else:
+        cmd = [common.xcc_path()] + common.xcc_home_args() + ["-O3"]
+    if arch:
+        cmd += ["-A", arch]
+    if autopar:
+        cmd += ["--par-auto"]
+    cmd += ["-o", out, os.path.join(HERE, "auto", name + ".xc")]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit("par/run.py: auto/%s (%s) does not build:\n%s" % (name, arch or "arm64", r.stderr))
+
+
+def measure_auto(runner, plain, auto, gpus):
+    """As written (one run mode), then the --par-auto build on all threads,
+    the GPU (where there is one) and auto; the checksums must agree."""
+    out, sums = {}, set()
+    runs = [("written", plain, {}), ("cpu", auto, {"XC_PAR": "cpu"})]
+    if "gpu" in gpus:
+        runs.append(("gpu", auto, {"XC_PAR": "gpu"}))
+    runs.append(("auto", auto, {}))
+    for mode, binary, env in runs:
+        best = None
+        for _ in range(REPEATS):
+            got = runner(binary, env)
+            if got is None:
+                sys.exit("par/run.py: %s (%s) printed nothing usable" % (binary, mode))
+            sums.add(got[0])
+            if best is None or got[1] < best["best_us"]:
+                best = {"best_us": got[1], "first_us": got[2]}
+        out[mode] = best
+    if len(sums) != 1:
+        sys.exit("par/run.py: %s: the checksums differ: %s" % (plain, sorted(sums)))
+    out["checksum"] = sums.pop()
+    return out
+
+
+def autopar(a, machines, env, work):
+    results = {}
+    for name in a.bench or AUTO_BENCHES:
+        results[name] = {}
+        if "mac" in machines:
+            p, q = os.path.join(work, name + ".plain"), os.path.join(work, name + ".autopar")
+            build_auto(name, None, p, False)
+            build_auto(name, None, q, True)
+            results[name]["mac"] = measure_auto(run_mac, p, q, ["gpu"])
+        if "linux" in machines and env.get("XTC_LINUX_HOST"):
+            host = env["XTC_LINUX_HOST"]
+            for tag, ap_ in (("plain", False), ("autopar", True)):
+                exe = os.path.join(work, "%s.%s.x86" % (name, tag))
+                build_auto(name, "x86_64", exe, ap_)
+                subprocess.run(["scp", "-q", exe, "%s:/tmp/par-%s-%s" % (host, tag, name)], check=True)
+            results[name]["linux"] = measure_auto(lambda b, e: run_linux(host, b, e), "/tmp/par-plain-" + name,
+                                                  "/tmp/par-autopar-" + name, ["gpu"])
+        if "windows" in machines and env.get("XTC_WIN_GPU_HOST"):
+            host = env["XTC_WIN_GPU_HOST"]
+            for tag, ap_ in (("plain", False), ("autopar", True)):
+                exe = os.path.join(work, "%s.%s.exe" % (name, tag))
+                build_auto(name, "win64", exe, ap_)
+                subprocess.run(["scp", "-q", exe, "%s:par-%s-%s.exe" % (host, tag, name)], check=True)
+            results[name]["windows"] = measure_auto(lambda b, e: run_windows(host, b, e),
+                                                    ".\\par-plain-%s.exe" % name, ".\\par-autopar-%s.exe" % name,
+                                                    ["gpu"])
+        print(name, json.dumps(results[name]), flush=True)
+    outdir = os.path.join(HERE, "v" + a.version)
+    os.makedirs(outdir, exist_ok=True)
+    with open(os.path.join(outdir, "autopar.json"), "w") as fh:
+        json.dump(results, fh, indent=1, sort_keys=True)
+    hand = {}
+    hp = os.path.join(outdir, "results.json")
+    if os.path.isfile(hp):
+        with open(hp) as fh:
+            hand = json.load(fh)
+    print(table_auto(results, hand))
+
+
+def table_auto(results, hand):
+    names = {"mac": "Apple silicon, Metal", "linux": "x86-64 Linux, an integrated GPU through Vulkan",
+             "windows": "x86-64 Windows, NVIDIA through CUDA"}
+    lines = []
+    for m in ("mac", "linux", "windows"):
+        rows = [(n, r[m]) for n, r in results.items() if m in r]
+        if not rows:
+            continue
+        lines.append("\n**%s** (ms, best of eight runs)\n" % names[m])
+        lines.append("| benchmark | as written | --par-auto, all threads | --par-auto, GPU | --par-auto, `auto` "
+                     "| hand-written `par`, `auto` |")
+        lines.append("|---|---|---|---|---|---|")
+        for n, r in rows:
+            h = hand.get(n, {}).get(m, {}).get("auto")
+            lines.append("| %s | %s | %s | %s | %s | %s |" % (n, ms(r["written"]["best_us"]), ms(r["cpu"]["best_us"]),
+                                                          ms(r["gpu"]["best_us"]) if "gpu" in r else "—",
+                                                          ms(r["auto"]["best_us"]), ms(h["best_us"]) if h else "—"))
+    return "\n".join(lines)
 
 
 def build(name, arch, out):
@@ -189,6 +298,7 @@ def main():
     ap.add_argument("--machines", default="mac,linux,windows,browser")
     ap.add_argument("--version", default=common.COMPILER_VERSION)
     ap.add_argument("--xcc", help="measure this compiler instead of the shipped one")
+    ap.add_argument("--autopar", action="store_true", help="the plain-loop programs in auto/, with --par-auto")
     a = ap.parse_args()
     global XCC
     XCC = a.xcc
@@ -197,6 +307,9 @@ def main():
     env = common.build_env()
     work = os.path.join(HERE, "build")
     os.makedirs(work, exist_ok=True)
+    if a.autopar:
+        autopar(a, [m for m in machines if m != "browser"], env, work)
+        return
     results = {}
     browser = None
     for name in benches:

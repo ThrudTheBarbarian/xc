@@ -6938,6 +6938,49 @@ class Sema
     // root it participates in contributes its own. A class with no entries gets
     // no table at all — saying `vslots=0` would be a different claim from
     // saying nothing, and the original says nothing.
+    // `_cls_<Class>_<key>` -> the class (and *key). A class name may hold
+    // underscores (`_HttpJob`), so the split is the first underscore at which
+    // the prefix is a class with a method of that key; with none, the first
+    // underscore. 0 when the label is not a class label. The reference's
+    // XTSplitClassLabel is the same rule.
+    String* labelSplit(String* label, String** key)
+        {
+        if (!label.hasPrefix(String.withCString("_cls_")))
+            return (String*)0;
+        String* tail = label.substringFromByte((u32)5);
+        u32 first = String.notFound();
+        for (u32 i = (u32)0; i < tail.byteLength(); i = i + (u32)1)
+            {
+            if (tail.byteAt(i) != (u8)'_')
+                continue;
+            if (first == String.notFound())
+                first = i;
+            if (i == (u32)0)
+                continue;
+            String* c = tail.substringBytes((u32)0, i);
+            String* k = tail.substringFromByte(i + (u32)1);
+            Node* cls = (Node*)_classes.get((Hashable*)c);
+            if (cls == 0)
+                continue;
+            for (u32 j = (u32)0; j < cls.kidCount(); j = j + (u32)1)
+                {
+                Node* m = cls.kid(j);
+                if (m.kind() != (u16)nkMethodDecl)
+                    continue;
+                String* mk = m.sym() == 0 ? m.name() : m.sym();
+                if (mk != 0 && mk.equals(k))
+                    {
+                    *key = k;
+                    return c;
+                    }
+                }
+            }
+        if (first == String.notFound())
+            return (String*)0;
+        *key = tail.substringFromByte(first + (u32)1);
+        return tail.substringBytes((u32)0, first);
+        }
+
     void stampClassSlots(void)
         {
         // A faithful mirror of the original's per-class fill (task #36, the
@@ -6982,14 +7025,10 @@ class Sema
                 Object* slObj = _vt.slotForLabel(L);
                 if (slObj == 0)
                     continue;
-                if (!L.hasPrefix(String.withCString("_cls_")))
+                String* rootKey = (String*)0;
+                String* rootClsName = labelSplit(L, &rootKey);
+                if (rootClsName == 0)
                     continue;
-                String* tail = L.substringFromByte((u32)5);
-                u32 us = tail.indexOfByte((u8)'_');
-                if (us == String.notFound())
-                    continue;
-                String* rootClsName = tail.substringBytes((u32)0, us);
-                String* rootKey = tail.substringFromByte(us + (u32)1);
                 Node* rootCls = (Node*)_classes.get((Hashable*)rootClsName);
                 if (rootCls == 0)
                     continue;
@@ -7243,14 +7282,10 @@ class Sema
         for (u32 i = (u32)0; i < roots.count(); i = i + (u32)1)
             {
             String* rootLabel = (String*)roots.get(i);
-            if (!rootLabel.hasPrefix(String.withCString("_cls_")))
+            String* mangled = (String*)0;
+            String* rootCls = labelSplit(rootLabel, &mangled);
+            if (rootCls == 0)
                 continue;
-            String* tail = rootLabel.substringFromByte((u32)5);
-            u32 us = tail.indexOfByte((u8)'_');
-            if (us == String.notFound())
-                continue;
-            String* rootCls = tail.substringBytes((u32)0, us);
-            String* mangled = tail.substringFromByte(us + (u32)1);
             for (Node* c = (Node*)_classes.get((Hashable*)rootCls); c != 0; c = parentOf(c))
                 {
                 Map* sl = (Map*)slotOfHost.get((Hashable*)c.name());

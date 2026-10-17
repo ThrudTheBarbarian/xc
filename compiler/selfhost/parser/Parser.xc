@@ -2759,10 +2759,10 @@ class Parser
         Array* reds = new Array();
         u32 goal = (u32)0;
         if (!parAutoScan(reds, &goal)) {
+            // Not a block: the loops inside it are judged on their own (the
+            // work inside a timing loop), so the loop depth stays put.
             parGridEnter("loops", true);
-            _loopDepth = _loopDepth + (u32)1;
             Node* plain = parseFor();
-            _loopDepth = _loopDepth - (u32)1;
             parGridEnter("loops", false);
             return plain;
         }
