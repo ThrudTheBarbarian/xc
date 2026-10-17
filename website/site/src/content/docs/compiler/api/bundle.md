@@ -76,6 +76,30 @@ the bundle provides and requires comes from the protocols with
 [static members](/compiler/language/inheritance/#static-members-an-interface-between-programs)
 it declares.
 
+**The publisher key.** By default it is a private file, `~/.xcc/bundle-key`,
+readable by you alone (0600), made the first time a bundle is signed;
+`--bundle-key <file>` names another. `--bundle-key keychain` keeps it instead
+in the operating system's store: the login keychain on macOS, DPAPI on
+Windows, the Secret Service on a Linux desktop. That is an opt-in, and it
+never prompts: where the store would have to ask (a locked keychain, a machine
+reached only over ssh, a Linux server with no keyring) the build stops and
+says to use a key file.
+
+**Built in one place, signed in another.** The machine that builds a plugin
+need not hold the key:
+
+```sh
+# on the build machine (a rack server, CI)
+xcc --bundle spice --no-sign -A x86_64 -o spice.so spice.xc
+# copy spice/ to the machine with the key, then
+xcc --sign-bundle spice
+```
+
+`--no-sign` lays the bundle out with its manifest and no signature, which
+nothing loads. `--sign-bundle` first checks every file against the manifest,
+so a bundle changed on its way is refused, then signs it; `--publisher`,
+`--publisher-domain` and `--rotate-from` apply as they do to `--bundle`.
+
 A plugin may load only the system's libraries, or ones shipped inside the
 bundle: a library it links that the system does not provide (an xc library
 built with `--emit-lib`, say) is refused unless named with `--bundle-lib

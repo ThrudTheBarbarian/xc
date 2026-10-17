@@ -137,6 +137,18 @@ check "url: offline copy"     "run -> 17"                       "$L/host" "$U/ne
 printf x >> "$XCC_PLUGIN_STORE/"*-net-1.0/Exec/*/net.$EXT
 check "url: changed copy"     "has changed since it was signed" "$L/host" "$U/net" none
 
+# Built in one place, signed in another: --no-sign lays a bundle out (for
+# two platforms here) with no signature, nothing loads it, --sign-bundle
+# refuses one changed on the way and signs one that was not.
+"$XC" --bundle "$L/split" --no-sign --bundle-name split -o "$L/split.$EXT" tests/bundle/spice.xc > /dev/null
+[ -n "$OTHER" ] && "$XC" --bundle "$L/split" --no-sign --bundle-name split $OTHER -o "$L/split.$OEXT" tests/bundle/spice.xc > /dev/null
+check "unsigned not loaded"   "the bundle is not signed"        "$L/host" "$L/split" yes
+cp -R "$L/split" "$L/splitbad"; printf x >> "$L/splitbad/Exec/"*/split.$EXT
+check "changed: not signed"   "has changed since the manifest was written" "$XC" --sign-bundle "$L/splitbad" --bundle-key "$L/key"
+check "signed elsewhere"      "signed by key"                   "$XC" --sign-bundle "$L/split" --bundle-key "$L/key"
+check "then loaded"           "run -> 17"                       "$L/host" "$L/split" yes
+check "default key is 0600"   "^-rw-------"                     ls -l "$L/key"
+
 # Developer properties: readonly and writeable values in the signed manifest,
 # a user's overrides in the app's Settings, across updates of the bundle.
 P="$L/props"; ST="$L/props.settings"

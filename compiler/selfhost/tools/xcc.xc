@@ -24,6 +24,7 @@
 
 #import "BundleSign.xc"
 #import "Exports.xc"
+#import "KeyStore.xc"
 #import "Foundation.xc"
 #import "Stdio.xc"
 #import "Files.xc"
@@ -178,6 +179,8 @@ class DriverOptions
     String*    _trusted;          // --trust key.pub...: the only publishers Plugin.load accepts
     String*    _rotateFrom;       // --rotate-from <old key>: hand the bundle over to the new key
     Array*     _bundleLibs;       // --bundle-lib <file>: a library the code needs, shipped beside it
+    bool       _noSign;           // --no-sign: lay the bundle out unsigned, for --sign-bundle elsewhere
+    String*    _signBundle;       // --sign-bundle <dir>: sign a bundle laid out elsewhere, and nothing else
     Map*       _bundleReadonly;   // --property k=v: the publisher's, final
     Map*       _bundleWriteable;  // --setting k=v: a default a user may change
     bool       _emitIfaceOnly;  // --emit-iface: the interface, and nothing else
@@ -4037,6 +4040,11 @@ void linkObjects(DriverOptions* d)
 void main(void)
 {
     DriverOptions* d = parseDriverArgs();
+    // --sign-bundle <dir>: sign, and compile nothing.
+    if (d != 0 && d._signBundle != (String*)0) {
+        signBundle(d);
+        return;
+    }
     if (d == 0 || (d.fe().input() == 0 && d.objectInputs().count() == (u32)0)) {
         Stdio.printf("usage: xcc [-A arm64|ios|ios-sim|android|x86_64|win64|arm9|m68k|wasm32|6502] "
                      "[-On] [-H home] [-I dir] [-D k=v] <file.xc> -o <out>\n"
@@ -4238,20 +4246,11 @@ void makeBundle(DriverOptions* d)
         while (e > s && src.byteAt(e - (u32)1) != (u8)'.') e = e - (u32)1;
         name = src.substringBytes(s, (e > s + (u32)1 ? e - (u32)1 : src.byteLength()) - s);
     }
-    String* keyPath = d._bundleKey;
-    if (keyPath == (String*)0) {
-        String* dirp = Platform.home();
-        dirp.appendCString("/.xcc");
-        Files.createDirectory(dirp);
-        keyPath = String.withString(dirp);
-        keyPath.appendCString("/bundle-key");
-    }
-    bool existed = Files.exists(keyPath);
-    Data* seed = BundleSign.publisherKey(keyPath);
-    if (seed == (Data*)0) {
-        Stdio.printf("xcc: error: --bundle: cannot read or make the publisher key at %s\n", keyPath.cString());
-        Process.exit((i32)1); return;
-    }
+    String* keyWhere = (String*)0;
+    bool made = false;
+    Data* seed = (Data*)0;
+    if (!d._noSign)
+        seed = publisherSeed(d._bundleKey, true, &keyWhere, &made);
     Map* provides = new Map();
     Map* requires = new Map();
     Map* seen = Parser.protocolsSeen();
@@ -4292,12 +4291,10 @@ void makeBundle(DriverOptions* d)
         }
     }
     Data* previous = (Data*)0;
-    if (d._rotateFrom != (String*)0) {
-        if (!Files.exists(d._rotateFrom)) {
-            Stdio.printf("xcc: error: --rotate-from %s: no key there\n", d._rotateFrom.cString());
-            Process.exit((i32)1); return;
-        }
-        previous = BundleSign.publisherKey(d._rotateFrom);
+    if (d._rotateFrom != (String*)0 && !d._noSign) {
+        String* pw = (String*)0;
+        bool pm = false;
+        previous = publisherSeed(d._rotateFrom, false, &pw, &pm);
     }
     String* err = BundleSign.makeWith(d._bundleDir, name,
                                       d._bundleVersion,
@@ -4308,18 +4305,110 @@ void makeBundle(DriverOptions* d)
         Stdio.printf("xcc: error: --bundle: %s\n", err.cString());
         Process.exit((i32)1); return;
     }
+    if (d._noSign) {
+        Stdio.printf("xcc: %s/ laid out UNSIGNED: nothing loads it until it is signed, with "
+                     "xcc --sign-bundle %s on the machine that holds the publisher key\n",
+                     d._bundleDir.cString(), d._bundleDir.cString());
+        return;
+    }
+    signedLine(d._bundleDir, seed, keyWhere, made, d._bundleKey);
+}
+
+// The publisher's signing key. spec: 0 for the default, a private 0600 file
+// ~/.xcc/bundle-key; a path for that file; `keychain` for the operating
+// system's store (KeyStore.xc: the macOS login keychain, DPAPI, the Secret
+// Service), an opt-in that never prompts. create: make one when there is
+// none. Exits with the reason when it cannot.
+Data* publisherSeed(String* spec, bool create, String** where, bool* made)
+{
+    *made = false;
+    if (spec != (String*)0 && spec.equals(String.withCString("keychain"))) {
+        String* w = KeyStore.where();
+        *where = w;
+        Data* k = KeyStore.load(String.withCString("bundle-key"));
+        if (k != (Data*)0 && k.length() == (u32)32)
+            return k;
+        if (KeyStore.lastError() != (String*)0 || !create) {
+            Stdio.printf("xcc: error: the publisher key in %s: %s; use a key file instead (--bundle-key <file>, "
+                         "or the default ~/.xcc/bundle-key)\n", w.cString(),
+                         KeyStore.lastError() != (String*)0 ? KeyStore.lastError().cString() : "there is none");
+            Process.exit((i32)1);
+        }
+        k = SecureRandom.bytes((u32)32);
+        if (k == (Data*)0 || !KeyStore.save(String.withCString("bundle-key"), k)) {
+            Stdio.printf("xcc: error: the publisher key could not be kept in %s: %s; use a key file instead\n",
+                         w.cString(), KeyStore.lastError() != (String*)0 ? KeyStore.lastError().cString() : "no random source");
+            Process.exit((i32)1);
+        }
+        *made = true;
+        return k;
+    }
+    String* path = spec;
+    if (path == (String*)0) {
+        String* dirp = Platform.home();
+        dirp.appendCString("/.xcc");
+        Files.createDirectory(dirp);
+        path = String.withString(dirp);
+        path.appendCString("/bundle-key");
+    }
+    *where = path;
+    bool existed = Files.exists(path);
+    if (!existed && !create) {
+        Stdio.printf("xcc: error: no key at %s\n", path.cString());
+        Process.exit((i32)1);
+    }
+    Data* seed = BundleSign.publisherKey(path);
+    if (seed == (Data*)0) {
+        Stdio.printf("xcc: error: cannot read or make the publisher key at %s\n", path.cString());
+        Process.exit((i32)1);
+    }
+    *made = !existed;
+    return seed;
+}
+
+// "signed by key …", and the public half beside the key (for a curated
+// program's --trust): next to the key file, or ~/.xcc/bundle-keychain.pub.
+void signedLine(String* dir, Data* seed, String* where, bool made, String* spec)
+{
     Data* pub = Ed25519.publicKey(seed.bytes());
-    // The public half beside it, for a curated program's --trust.
-    String* pubPath = String.withString(keyPath);
-    pubPath.appendCString(".pub");
+    String* pubPath = (String*)0;
+    if (spec != (String*)0 && spec.equals(String.withCString("keychain"))) {
+        pubPath = Platform.home();
+        pubPath.appendCString("/.xcc/bundle-keychain.pub");
+    } else {
+        pubPath = String.withString(where);
+        pubPath.appendCString(".pub");
+    }
     if (!Files.exists(pubPath)) {
         String* ph = BundleSign._hex(pub.bytes(), (u32)32);
         ph.appendByte((u8)10);
         Files.writeText(pubPath, ph);
     }
-    Stdio.printf("xcc: %s/ signed by key %s (%s%s); keep that file: losing it means an update needs a key rotation\n",
-                 d._bundleDir.cString(), Sha256.hex(pub.bytes(), (u32)32).substringBytes((u32)0, (u32)16).cString(),
-                 keyPath.cString(), existed ? "" : ", made now");
+    Stdio.printf("xcc: %s/ signed by key %s (%s%s); keep it: losing it means an update needs a key rotation\n",
+                 dir.cString(), Sha256.hex(pub.bytes(), (u32)32).substringBytes((u32)0, (u32)16).cString(),
+                 where.cString(), made ? ", made now" : "");
+}
+
+// --sign-bundle <dir>: a bundle laid out elsewhere (--bundle --no-sign) is
+// checked against its manifest and signed here; --publisher,
+// --publisher-domain and --rotate-from apply as they do to --bundle.
+void signBundle(DriverOptions* d)
+{
+    String* where = (String*)0;
+    bool made = false;
+    Data* seed = publisherSeed(d._bundleKey, true, &where, &made);
+    Data* previous = (Data*)0;
+    if (d._rotateFrom != (String*)0) {
+        String* pw = (String*)0;
+        bool pm = false;
+        previous = publisherSeed(d._rotateFrom, false, &pw, &pm);
+    }
+    String* err = BundleSign.sign(d._signBundle, seed, d._publisher, d._publisherDomain, previous);
+    if (err != (String*)0) {
+        Stdio.printf("xcc: error: --sign-bundle %s: %s\n", d._signBundle.cString(), err.cString());
+        Process.exit((i32)1); return;
+    }
+    signedLine(d._signBundle, seed, where, made, d._bundleKey);
 }
 
 // From a (round-tripped) IR module to the output file, per target. Split out
@@ -6176,6 +6265,12 @@ DriverOptions* parseDriverArgs(void)
             else d._trusted.appendByte((u8)' ');
             d._trusted.append(Sha256.hex(pk.bytes(), (u32)32));
             i = i + (u32)2; continue;
+        }
+        if (a.equals(String.withCString("--no-sign"))) {
+            d._noSign = true; i = i + (u32)1; continue;
+        }
+        if (a.equals(String.withCString("--sign-bundle")) && i + (u32)1 < argc) {
+            d._signBundle = Process.argument(i + (u32)1); i = i + (u32)2; continue;
         }
         if (a.equals(String.withCString("--bundle-lib")) && i + (u32)1 < argc) {
             if (d._bundleLibs == (Array*)0) d._bundleLibs = new Array();

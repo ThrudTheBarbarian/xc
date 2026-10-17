@@ -189,11 +189,17 @@ class BundleSign
         if (d != (Data*)0 && d.length() == (u32)32)
             return d;
         d = SecureRandom.bytes((u32)32);
-        if (d == (Data*)0 || !Files.writeData(path, d))
+        if (d == (Data*)0)
+            return (Data*)0;
+        // The file made empty and 0600 FIRST, so the key is never readable by
+        // anyone else, not even for the moment between writing and chmod.
+        if (!Files.writeData(path, new Data()))
             return (Data*)0;
 #if ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
         chmod(path.cString(), (u32)384);   // 0600
 #endif
+        if (!Files.writeData(path, d))
+            return (Data*)0;
         return d;
         }
 
@@ -240,10 +246,12 @@ class BundleSign
         Map* rotation = (Map*)0;
         if (!BundleRules.validName(name))
             return String.withFormat("'%s' is not a bundle name: letters, digits, '_' and '-'", name.cString());
-        if (seed == (Data*)0 || seed.length() != (u32)32)
-            return String.withCString("no publisher key");
-        Data* pub = Ed25519.publicKey(seed.bytes());
-        String* keyHex = BundleSign._hex(pub.bytes(), (u32)32);
+        // seed 0: laid out UNSIGNED, for `xcc --sign-bundle` on the machine
+        // that holds the key; no loader accepts it until then.
+        if (seed != (Data*)0 && seed.length() != (u32)32)
+            return String.withCString("the publisher key is not a key");
+        String* keyHex = seed == (Data*)0 ? String.withCString("")
+                                          : BundleSign._hex(Ed25519.publicKey(seed.bytes()).bytes(), (u32)32);
         // The code file keeps its extension: Exec/<platform>/<name><ext>.
         String* ext = new String();
         u32 dot = codeFile.byteLength();
@@ -255,7 +263,10 @@ class BundleSign
         Map* files = new Map();
         Array* platforms = new Array();
         String* prior = BundleSign.verify(dir);
-        if (prior == (String*)0)
+        // An unsigned layout (from --no-sign) carries over too, when its files
+        // are what its manifest says: its key is "", so nothing is trusted from it.
+        bool unsignedPrior = prior != (String*)0 && BundleSign.checkFiles(dir) == (String*)0;
+        if (prior == (String*)0 || unsignedPrior)
             {
             Data* mb = Files.readData(BundleSign._join(dir, String.withCString("bundle.json")));
             try
@@ -265,7 +276,7 @@ class BundleSign
                 String* okey = opub == (Map*)0 ? (String*)0 : (String*)opub.get((Hashable*)String.withCString("key"));
                 bool handedOver = previousSeed != (Data*)0 && previousSeed.length() == (u32)32 && okey != (String*)0
                                   && okey.equals(BundleSign._hex(Ed25519.publicKey(previousSeed.bytes()).bytes(), (u32)32));
-                if (okey != (String*)0 && (keyHex.equals(okey) || handedOver))
+                if (okey != (String*)0 && (keyHex.equals(okey) || handedOver || (unsignedPrior && okey.byteLength() == (u32)0)))
                     {
                     Map* of = (Map*)old.get((Hashable*)String.withCString("files"));
                     String* mine = String.withCString("Exec/");
@@ -383,13 +394,25 @@ class BundleSign
                     files.set((Hashable*)p, (Object*)BundleSign._sha(BundleSign._join(dir, p)));
                 }
             }
-        // The manifest, keys sorted, then its signature.
+        return BundleSign._emit(dir, name, version, files, platforms, props, provides, requires, publisher, domain, seed,
+                                previousSeed, rotation);
+        }
+
+    // The manifest, keys sorted, then its signature (none when seed is 0).
+    static String* _emit(String* dir, String* name, String* version, Map* files, Array* platforms, Map* props,
+                         Map* provides, Map* requires, String* publisher, String* domain, Data* seed, Data* previousSeed,
+                         Map* rotation)
+        {
+        String* keyHex = seed == (Data*)0 ? String.withCString("")
+                                          : BundleSign._hex(Ed25519.publicKey(seed.bytes()).bytes(), (u32)32);
         Map* pm = new Map();
         pm.set((Hashable*)String.withCString("domain"), (Object*)(domain != (String*)0 ? domain : new String()));
         pm.set((Hashable*)String.withCString("key"), (Object*)keyHex);
-        pm.set((Hashable*)String.withCString("keyId"), (Object*)Sha256.hex(pub.bytes(), (u32)32));
+        pm.set((Hashable*)String.withCString("keyId"),
+               (Object*)(seed == (Data*)0 ? String.withCString("")
+                                          : Sha256.hex(Ed25519.publicKey(seed.bytes()).bytes(), (u32)32)));
         pm.set((Hashable*)String.withCString("name"), (Object*)(publisher != (String*)0 ? publisher : new String()));
-        if (previousSeed != (Data*)0)
+        if (previousSeed != (Data*)0 && seed != (Data*)0)
             {
             if (previousSeed.length() != (u32)32)
                 return String.withCString("the previous key is not a key");
@@ -453,12 +476,116 @@ class BundleSign
         m.appendCString("\n}\n");
         if (!Files.writeText(BundleSign._join(dir, String.withCString("bundle.json")), m))
             return String.withCString("cannot write bundle.json");
+        if (seed == (Data*)0)
+            {
+            // Unsigned: a stale signature would only mislead.
+            Directory.remove(BundleSign._join(dir, String.withCString("bundle.sig")));
+            return BundleSign.checkFiles(dir);
+            }
         Data* sig = Ed25519.sign(m.cString(), m.byteLength(), seed.bytes());
         String* sh = BundleSign._hex(sig.bytes(), (u32)64);
         sh.appendByte((u8)10);
         if (!Files.writeText(BundleSign._join(dir, String.withCString("bundle.sig")), sh))
             return String.withCString("cannot write bundle.sig");
         return BundleSign.verify(dir);
+        }
+
+    // The files against the manifest, signed or not: every listed file there
+    // and unchanged, nothing else there, the paths and properties well formed.
+    // 0, or what is wrong. What --sign-bundle checks before it signs, so a
+    // bundle altered on its way from the build machine is not signed.
+    static String* checkFiles(String* dir)
+        {
+        Data* mb = Files.readData(BundleSign._join(dir, String.withCString("bundle.json")));
+        if (mb == (Data*)0)
+            return String.withCString("no bundle.json");
+        Map* m = (Map*)0;
+        try
+            {
+            m = (Map*)BundleRules.parseManifest(mb);
+            }
+        catch (JSONError e)
+            {
+            return String.withFormat("the manifest is refused: %s", e.message().cString());
+            }
+        Map* files = (Map* ?)m.get((Hashable*)String.withCString("files"));
+        if (files == (Map*)0)
+            return String.withCString("the manifest lists no files");
+        Array* listed = files.allKeys();
+        BundleSign._sort(listed);
+        for (u32 i = (u32)0; i < listed.count(); i = i + (u32)1)
+            if (!BundleRules.validPath((String*)listed.get(i)))
+                return String.withFormat("'%s' is not a path a bundle may hold", ((String*)listed.get(i)).cString());
+        Array* present = new Array();
+        String* bad = (String*)0;
+        if (!BundleSign._walk(dir, String.withCString(""), present, &bad))
+            return String.withFormat("'%s' is a link or a special file", bad.cString());
+        for (u32 i = (u32)0; i < present.count(); i = i + (u32)1)
+            {
+            String* p = (String*)present.get(i);
+            if (p.equals(String.withCString("bundle.json")) || p.equals(String.withCString("bundle.sig")))
+                continue;
+            if (files.get((Hashable*)p) == (Object*)0)
+                return String.withFormat("'%s' is a file the manifest does not list", p.cString());
+            }
+        for (u32 i = (u32)0; i < listed.count(); i = i + (u32)1)
+            {
+            String* p = (String*)listed.get(i);
+            String* h = BundleSign._sha(BundleSign._join(dir, p));
+            if (h == (String*)0)
+                return String.withFormat("'%s' is missing", p.cString());
+            if (!h.equals((String*)files.get((Hashable*)p)))
+                return String.withFormat("'%s' has changed since the manifest was written", p.cString());
+            }
+        return BundleRules.checkProperties(m.get((Hashable*)String.withCString("properties")));
+        }
+
+    // Sign a bundle laid out elsewhere (xcc --bundle --no-sign), or sign one
+    // again: its files are checked against its manifest first, then the
+    // manifest is written with this publisher's key and signed. publisher and
+    // domain: 0 keeps the manifest's. previousSeed hands the bundle over from
+    // that key (a rotation record), as makeWith does.
+    static String* sign(String* dir, Data* seed, String* publisher, String* domain, Data* previousSeed)
+        {
+        if (seed == (Data*)0 || seed.length() != (u32)32)
+            return String.withCString("no publisher key");
+        String* err = BundleSign.checkFiles(dir);
+        if (err != (String*)0)
+            return err;
+        Map* m = (Map*)0;
+        try
+            {
+            m = (Map*)BundleRules.parseManifest(Files.readData(BundleSign._join(dir, String.withCString("bundle.json"))));
+            }
+        catch (JSONError e)
+            {
+            return e.message();
+            }
+        Map* pub = (Map*)m.get((Hashable*)String.withCString("publisher"));
+        if (publisher == (String*)0 && pub != (Map*)0)
+            publisher = (String*)pub.get((Hashable*)String.withCString("name"));
+        if (domain == (String*)0 && pub != (Map*)0)
+            domain = (String*)pub.get((Hashable*)String.withCString("domain"));
+        // A rotation record carries over only when the key that signed it is
+        // the one signing now.
+        Map* rotation = (Map*)0;
+        String* keyHex = BundleSign._hex(Ed25519.publicKey(seed.bytes()).bytes(), (u32)32);
+        if (previousSeed == (Data*)0 && pub != (Map*)0 && pub.get((Hashable*)String.withCString("rotation")) != (Object*)0
+            && keyHex.equals((String*)pub.get((Hashable*)String.withCString("key"))))
+            {
+            rotation = new Map();
+            rotation.set((Hashable*)String.withCString("previousKey"), pub.get((Hashable*)String.withCString("previousKey")));
+            rotation.set((Hashable*)String.withCString("previousKeyId"), pub.get((Hashable*)String.withCString("previousKeyId")));
+            rotation.set((Hashable*)String.withCString("rotation"), pub.get((Hashable*)String.withCString("rotation")));
+            }
+        Map* props = (Map* ?)m.get((Hashable*)String.withCString("properties"));
+        return BundleSign._emit(dir, (String*)m.get((Hashable*)String.withCString("name")),
+                                (String*)m.get((Hashable*)String.withCString("version")),
+                                (Map*)m.get((Hashable*)String.withCString("files")),
+                                (Array*)m.get((Hashable*)String.withCString("platforms")), props,
+                                (Map* ?)m.get((Hashable*)String.withCString("provides")),
+                                (Map* ?)m.get((Hashable*)String.withCString("requires")), publisher, domain, seed,
+                                previousSeed, rotation);
         }
 
     // Every check §4 steps 1-3 make before anything in the bundle is used:
@@ -470,7 +597,7 @@ class BundleSign
             return String.withCString("no bundle.json");
         String* st = Files.readText(BundleSign._join(dir, String.withCString("bundle.sig")));
         if (st == (String*)0)
-            return String.withCString("no bundle.sig");
+            return String.withCString("no bundle.sig: the bundle is not signed (xcc --sign-bundle signs it)");
         String* err = BundleSign.verifyManifest(mb, st);
         if (err != (String*)0)
             return err;
