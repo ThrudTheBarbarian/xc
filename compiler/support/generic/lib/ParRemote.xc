@@ -68,6 +68,7 @@
 #import "Sha256.xc"
 #import "Mdns.xc"
 #import "Mutex.xc"
+#import "Cond.xc"
 #import "Thread.xc"
 #import "Settings.xc"
 #import "Files.xc"
@@ -1937,6 +1938,7 @@ class ParRemoteSession : Object
     Data* _token;
     Array* _queue;
     Mutex* _lock;
+    Cond* _ready;
     bool _ended;
     bool _attached;
     void init(Data* token)
@@ -1944,6 +1946,7 @@ class ParRemoteSession : Object
         _token = token;
         _queue = new Array();
         _lock = new Mutex();
+        _ready = new Cond();
         }
     bool matches(Data* token)
         {
@@ -1958,7 +1961,26 @@ class ParRemoteSession : Object
         {
         _lock.lock();
         _queue.add((Object*)frame);
+        _ready.signal();
         _lock.unlock();
+        }
+    // The next finished tile, waiting for one; 0 once the session has ended
+    // and the queue is empty. The results link sends each the moment it is
+    // queued: a poll with a 1 ms sleep waited a whole timer tick on Windows
+    // (15.6 ms), which put a floor of about 8 ms under every remote run.
+    Data* popWait(void)
+        {
+        Data* d = (Data*)0;
+        _lock.lock();
+        while (_queue.count() == (u32)0 && !_ended)
+            _ready.wait(_lock);
+        if (_queue.count() > (u32)0)
+            {
+            d = (Data*)_queue.get((u32)0);
+            _queue.removeAt((u32)0);
+            }
+        _lock.unlock();
+        return d;
         }
     Data* pop(void)
         {
@@ -1985,6 +2007,7 @@ class ParRemoteSession : Object
         {
         _lock.lock();
         _ended = true;
+        _ready.broadcast();
         _lock.unlock();
         }
     bool ended(void)
@@ -2238,16 +2261,11 @@ class ParRemoteServe
             return;
         while (s.isOpen())
             {
-            Data* f = session.pop();
-            if (f != (Data*)0)
-                {
-                if (!ParWire.send(s, "DONE", f))
-                    break;
-                continue;
-                }
-            if (session.ended())
+            Data* f = session.popWait();
+            if (f == (Data*)0)
                 break;
-            Thread.sleepMs((u32)1);
+            if (!ParWire.send(s, "DONE", f))
+                break;
             }
         }
     static i64 newConnection(void)

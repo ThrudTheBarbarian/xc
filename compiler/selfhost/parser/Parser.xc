@@ -2554,6 +2554,24 @@ class Parser
     // A perfect two-deep nest as a grid block's body: the two indices from the
     // point (`par$y` the outer, `par$x` the inner), then the inner body; the
     // frame gets the grid's W and H. 0 when the loop is not such a nest.
+    // A nest level's extent, hi - lo (+ 1 for <=), in i64.
+    Node* parAutoExtent(Node* iv, Node* cond)
+    {
+        String* i64T = String.withCString("i64");
+        Node* e = parBin("-", parCast(i64T, cond.kid((u32)1)), parCast(i64T, iv.kid((u32)0)));
+        if (Parser._same(cond.op(), "<=")) e = parBin("+", e, parInt((i64)1));
+        return e;
+    }
+
+    // `T i = (T)((T)lo + (T)par$x)`: a nest level's index from its grid coordinate.
+    Node* parAutoCoordDecl(Node* iv, u8* coord)
+    {
+        Node* d = mkNamed((u16)nkVariableDecl, iv.name());
+        d.setOp(iv.op());
+        d.add(parCast(iv.op(), parBin("+", parCast(iv.op(), iv.kid((u32)0)), parCast(iv.op(), parIdent(String.withCString(coord))))));
+        return d;
+    }
+
     Node* parAutoGridNest(Node* node, Map* frame)
     {
         Node* iv1 = (Node*)0;
@@ -2569,29 +2587,32 @@ class Parser
         Node* cond2 = (Node*)0;
         if (!Parser.parAutoAscending(inner, &iv2, &cond2)) return (Node*)0;
         if (!Parser.parAutoBoundFree(iv2.kid((u32)0), iv1.name()) || !Parser.parAutoBoundFree(cond2.kid((u32)1), iv1.name())) return (Node*)0;
+        // A perfect THREE-deep nest is one 3-D grid (the reference explains).
+        Node* thirdNode = inner.kid((u32)3);
+        if (thirdNode.kind() == (u16)nkBlock)
+            thirdNode = thirdNode.kidCount() == (u32)1 ? thirdNode.kid((u32)0) : (Node*)0;
+        Node* iv3 = (Node*)0;
+        Node* cond3 = (Node*)0;
+        bool three = thirdNode != (Node*)0 && Parser.parAutoAscending(thirdNode, &iv3, &cond3);
+        if (three && !(Parser.parAutoBoundFree(iv3.kid((u32)0), iv1.name()) && Parser.parAutoBoundFree(cond3.kid((u32)1), iv1.name())
+                       && Parser.parAutoBoundFree(iv3.kid((u32)0), iv2.name()) && Parser.parAutoBoundFree(cond3.kid((u32)1), iv2.name())))
+            three = false;
         String* i64T = String.withCString("i64");
         Array* grid = new Array();
-        Node* w = parBin("-", parCast(i64T, cond2.kid((u32)1)), parCast(i64T, iv2.kid((u32)0)));
-        if (Parser._same(cond2.op(), "<=")) w = parBin("+", w, parInt((i64)1));
-        Node* h = parBin("-", parCast(i64T, cond1.kid((u32)1)), parCast(i64T, iv1.kid((u32)0)));
-        if (Parser._same(cond1.op(), "<=")) h = parBin("+", h, parInt((i64)1));
-        grid.add((Object*)w);
-        grid.add((Object*)h);
+        if (three) grid.add((Object*)parAutoExtent(iv3, cond3));
+        grid.add((Object*)parAutoExtent(iv2, cond2));
+        grid.add((Object*)parAutoExtent(iv1, cond1));
         frame.set((Hashable*)String.withCString("grid"), (Object*)grid);
         Set* used = new Set();
         used.add((Hashable*)String.withCString("par$x"));
         used.add((Hashable*)String.withCString("par$y"));
+        if (three) used.add((Hashable*)String.withCString("par$z"));
         frame.set((Hashable*)String.withCString("gridUsed"), (Object*)used);
         Node* body = mk((u16)nkBlock);
-        Node* d1 = mkNamed((u16)nkVariableDecl, iv1.name());
-        d1.setOp(iv1.op());
-        d1.add(parCast(iv1.op(), parBin("+", parCast(iv1.op(), iv1.kid((u32)0)), parCast(iv1.op(), parIdent(String.withCString("par$y"))))));
-        body.add(d1);
-        Node* d2 = mkNamed((u16)nkVariableDecl, iv2.name());
-        d2.setOp(iv2.op());
-        d2.add(parCast(iv2.op(), parBin("+", parCast(iv2.op(), iv2.kid((u32)0)), parCast(iv2.op(), parIdent(String.withCString("par$x"))))));
-        body.add(d2);
-        Node* innerBody = inner.kid((u32)3);
+        body.add(parAutoCoordDecl(iv1, three ? "par$z" : "par$y"));
+        body.add(parAutoCoordDecl(iv2, three ? "par$y" : "par$x"));
+        if (three) body.add(parAutoCoordDecl(iv3, "par$x"));
+        Node* innerBody = three ? thirdNode.kid((u32)3) : inner.kid((u32)3);
         if (innerBody.kind() == (u16)nkBlock) {
             for (u32 i = (u32)0; i < innerBody.kidCount(); i = i + (u32)1)
                 body.add(innerBody.kid(i));

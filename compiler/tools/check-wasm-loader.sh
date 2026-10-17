@@ -23,9 +23,16 @@ ref, tmpl = sys.argv[1], sys.argv[2]
 src = open(ref, encoding='utf-8').read()
 # Match the anchors without depending on layout: the star may sit against the
 # type or the name, and the literals may carry any leading indent.
-mstart = re.search(r'static\s+NSString\s*\*\s*loaderJS\s*\(', src)
+mstart = re.search(r'static\s+NSString\s*\*\s*(?:_Nullable\s+)?loaderJS\s*\(', src)
 if not mstart:
     sys.exit("check-wasm-loader: no loaderJS() in %s" % ref)
+# Since be6accd6 the reference has no copy of its own: loaderJS() reads the
+# template from the support tree, so there is one copy and nothing to drift.
+# The check stays for the case an embedded copy comes back.
+body = src[mstart.end():mstart.end() + 2000]
+if 'stringWithContentsOfFile:templatePath' in body and not re.search(r'^[ \t]*"[^"]*\\n"', body, re.M):
+    print("check-wasm-loader: OK (the reference reads %s; one copy)" % tmpl)
+    sys.exit(0)
 mend = re.search(r'stringByReplacingOccurrencesOfString:@"__BASE__"', src[mstart.end():])
 if not mend:
     sys.exit("check-wasm-loader: no __BASE__ substitution after loaderJS() in %s" % ref)

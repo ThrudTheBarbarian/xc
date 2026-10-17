@@ -59,7 +59,9 @@ def build(src, arch, out, extra=()):
 
 
 def parse(out):
-    parts = out.split()
+    # With XC_PAR_REPORT on, the report lines come first; the result is last.
+    lines = [l for l in out.splitlines() if l.strip() and not l.startswith("par:")]
+    parts = lines[-1].split() if lines else []
     if len(parts) != 3:
         return None
     return parts[0], int(parts[1]), int(parts[2])
@@ -118,11 +120,18 @@ def measure(runner, binary, remote_env):
         e = dict(env)
         if mode != "local":
             e.update(remote_env)
+        # A remote mode must really have used the remote GPU: a program that
+        # cannot reach the daemon runs on its own devices and says so only in
+        # its report, so the report is on and checked.
+        if mode != "local":
+            e["XC_PAR_REPORT"] = "1"
         best = None
         for _ in range(REPEATS):
             got = runner(binary, e)
             if got is None:
                 sys.exit("par/remote.py: %s (%s) printed nothing usable" % (binary, mode))
+            if mode != "local" and not got[3]:
+                sys.exit("par/remote.py: %s (%s) did not reach the daemon: %s" % (binary, mode, got[4]))
             sums.add(got[0])
             if best is None or got[1] < best["best_us"]:
                 best = {"best_us": got[1], "first_us": got[2]}
@@ -139,7 +148,7 @@ def run_mac(binary, env):
     e.update(env)
     e["XCC_SETTINGS_DIR"] = fresh_settings()
     r = subprocess.run([binary], capture_output=True, text=True, env=e)
-    return parse(r.stdout)
+    return with_remote(parse(r.stdout), r.stdout + r.stderr)
 
 
 _settings_n = [0]
@@ -159,7 +168,18 @@ def run_linux(host, binary, env):
     pre += " XCC_SETTINGS_DIR=/tmp/par-remote-settings-%d" % _settings_n[0]
     pre += " XC_TLS_LIB=$HOME/ci/3p/tls/x86_64/libtls.so"
     r = subprocess.run(["ssh", host, "%s %s" % (pre, binary)], capture_output=True, text=True)
-    return parse(r.stdout)
+    return with_remote(parse(r.stdout), r.stdout + r.stderr)
+
+
+def with_remote(got, text):
+    """(checksum, best, first, reached, why): reached is whether the report
+    shows the daemon as a worker; why, its complaint when not."""
+    if got is None:
+        return None
+    reached = "remote worker remote:" in text
+    why = next((l for l in text.splitlines() if "par: remote" in l and ("cannot" in l or "refused" in l or "lost" in l)),
+               "no remote worker in the report")
+    return got + (reached, why)
 
 
 def main():

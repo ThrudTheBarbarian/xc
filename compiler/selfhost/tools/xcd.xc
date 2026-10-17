@@ -20,8 +20,25 @@
 #import "Process.xc"
 #import "Thread.xc"
 
+#if ARCH_win64
+pointer LoadLibraryA(u8* name);
+pointer GetProcAddress(pointer module, u8* name);
+typedef u32 XcdTimePeriod_t(u32 ms);
+#endif
+
 i32 main(void)
 {
+#if ARCH_win64
+    // Windows rounds every short wait (Sleep, a socket wait) up to its timer
+    // tick, 15.6 ms by default, and the daemon's tile loop waits 1 ms at a
+    // time while tiles run: ask for 1 ms ticks (since Windows 10 2004 this
+    // affects only this process).
+    pointer winmm = LoadLibraryA("winmm.dll");
+    XcdTimePeriod_t* tbp = winmm == (pointer)0 ? (XcdTimePeriod_t*)0
+                                               : (XcdTimePeriod_t*)GetProcAddress(winmm, "timeBeginPeriod");
+    if (tbp != (XcdTimePeriod_t*)0)
+        tbp((u32)1);
+#endif
     u16 port = (u16)PAR_REMOTE_PORT;
     String* pool = new String();
     i64 cacheMb = (i64)0;

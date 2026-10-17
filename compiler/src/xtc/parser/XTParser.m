@@ -3914,21 +3914,46 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
           n = bin(XTBinaryOpAdd, n, [[XTLiteralIntNode alloc] initWithValue:1 location:loc]);
       return n;
     };
-    frame[@"grid"] = @[ extent(iv2, cond2), extent(iv1, cond1) ];
-    frame[@"gridUsed"] = [NSMutableSet setWithObjects:@"par$x", @"par$y", nil];
+    // A perfect THREE-deep nest (the inner body one loop whose bounds use
+    // neither outer index) is one 3-D grid: par$z the outer, par$y the
+    // middle, par$x the inner.
+    XTASTNode* thirdNode = inner.body;
+    if ([thirdNode isKindOfClass:[XTBlockNode class]])
+        thirdNode = ((XTBlockNode*)thirdNode).statements.count == 1 ? ((XTBlockNode*)thirdNode).statements[0] : nil;
+    XTVariableDeclNode* iv3 = nil;
+    XTBinaryExprNode* cond3 = nil;
+    XTForCStyleNode* third = thirdNode ? parAutoAscending(thirdNode, &iv3, &cond3) : nil;
+    if (third && !(parAutoBoundFree(iv3.initialiser, iv1.varName) && parAutoBoundFree(cond3.right, iv1.varName) &&
+                   parAutoBoundFree(iv3.initialiser, iv2.varName) && parAutoBoundFree(cond3.right, iv2.varName)))
+        third = nil;
+    XTASTNode* (^decl)(XTVariableDeclNode*, NSString*) = ^XTASTNode*(XTVariableDeclNode* iv, NSString* coord) {
+      return [[XTVariableDeclNode alloc] initWithName:iv.varName type:iv.declaredType
+                                          initialiser:cast(iv.declaredType, bin(XTBinaryOpAdd, cast(iv.declaredType, iv.initialiser),
+                                                                                  cast(iv.declaredType, ident(coord))))
+                                             location:loc];
+    };
     NSMutableArray<XTASTNode*>* st = [NSMutableArray array];
-    [st addObject:[[XTVariableDeclNode alloc] initWithName:iv1.varName type:iv1.declaredType
-                                               initialiser:cast(iv1.declaredType, bin(XTBinaryOpAdd, cast(iv1.declaredType, iv1.initialiser),
-                                                                                       cast(iv1.declaredType, ident(@"par$y"))))
-                                                  location:loc]];
-    [st addObject:[[XTVariableDeclNode alloc] initWithName:iv2.varName type:iv2.declaredType
-                                               initialiser:cast(iv2.declaredType, bin(XTBinaryOpAdd, cast(iv2.declaredType, iv2.initialiser),
-                                                                                       cast(iv2.declaredType, ident(@"par$x"))))
-                                                  location:loc]];
-    if ([inner.body isKindOfClass:[XTBlockNode class]])
-        [st addObjectsFromArray:((XTBlockNode*)inner.body).statements];
+    XTASTNode* innermost = inner.body;
+    if (third)
+        {
+        frame[@"grid"] = @[ extent(iv3, cond3), extent(iv2, cond2), extent(iv1, cond1) ];
+        frame[@"gridUsed"] = [NSMutableSet setWithObjects:@"par$x", @"par$y", @"par$z", nil];
+        [st addObject:decl(iv1, @"par$z")];
+        [st addObject:decl(iv2, @"par$y")];
+        [st addObject:decl(iv3, @"par$x")];
+        innermost = third.body;
+        }
     else
-        [st addObject:inner.body];
+        {
+        frame[@"grid"] = @[ extent(iv2, cond2), extent(iv1, cond1) ];
+        frame[@"gridUsed"] = [NSMutableSet setWithObjects:@"par$x", @"par$y", nil];
+        [st addObject:decl(iv1, @"par$y")];
+        [st addObject:decl(iv2, @"par$x")];
+        }
+    if ([innermost isKindOfClass:[XTBlockNode class]])
+        [st addObjectsFromArray:((XTBlockNode*)innermost).statements];
+    else
+        [st addObject:innermost];
     return [[XTBlockNode alloc] initWithStatements:st location:loc];
     }
 
