@@ -602,6 +602,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     XTParser* parser = [[XTParser alloc] initWithTokens:toks typeTable:tt diagnostics:_diagnostics];
     parser.defaultPointerPlacement = arm64 ? XTPointerPlacementMain : XTPointerPlacementHeap;
     parser.parAuto = _options.parAuto;
+    parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
     parser.libraryFiles = _libraryFiles;
     XTProgramNode* synth = nil;
@@ -784,6 +785,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     XTParser* parser = [[XTParser alloc] initWithTokens:toks typeTable:tt diagnostics:_diagnostics];
     parser.defaultPointerPlacement = arm64 ? XTPointerPlacementMain : XTPointerPlacementHeap;
     parser.parAuto = _options.parAuto;
+    parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
     parser.libraryFiles = _libraryFiles;
     XTProgramNode* synth = [parser parse];
@@ -1477,6 +1479,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                                               typeTable:tt
                                             diagnostics:_diagnostics];
     parser.parAuto = _options.parAuto;
+    parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
     parser.libraryFiles = _libraryFiles;
     parser.defaultPointerPlacement = arm64

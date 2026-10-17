@@ -102,6 +102,7 @@ const SIDEBAR = [
 								{ label: 'Http', slug: 'compiler/api/http' },
 								{ label: 'Log', slug: 'compiler/api/log' },
 								{ label: 'Math', slug: 'compiler/api/math' },
+								{ label: 'Plugin', slug: 'compiler/api/plugin' },
 								{ label: 'Settings', slug: 'compiler/api/settings' },
 								{ label: 'Sort', slug: 'compiler/api/sort' },
 								{ label: 'Stdio', slug: 'compiler/api/stdio' },

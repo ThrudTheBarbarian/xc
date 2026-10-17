@@ -912,6 +912,12 @@ class Parser
     // to. Until task #78 the shipped compiler said `line 4: unexpected token
     // 11 (wanted 85)`: no column, the NEXT token's line, and raw enum numbers.
     void setParAuto(bool b) { _parAuto = b; }
+    // wasm32: a module's memory is its own, so a protocol's static members
+    // are calls BETWEEN modules and may pass only numbers, or a buffer and its
+    // length (the reference's webModules).
+    bool _webModules;
+    void setWebModules(bool b) { _webModules = b; }
+    String* _webBad;
     void setGoalDefault(u32 g) { _goalDefault = g; }
     void setLibraryFiles(Set* files) { _libFiles = files; }
 
@@ -1224,6 +1230,7 @@ class Parser
         if (_pStaticOrder == (Array*)0 || _pStaticOrder.count() == (u32)0) return;
         if (_protocolsSeen == (Map*)0) _protocolsSeen = new Map();
         String* src = new String();
+        bool webBind = false;
         for (u32 pi = (u32)0; pi < _pStaticOrder.count(); pi = pi + (u32)1) {
             String* P = (String*)_pStaticOrder.get(pi);
             Array* ms = (Array*)_pStatics.get((Hashable*)P);
@@ -1254,7 +1261,42 @@ class Parser
             _protocolsSeen.set((Hashable*)P, (Object*)rec);
             String* C = String.withCString("_XtP_");
             C.append(P);
-            if (provider == (String*)0)
+            // wasm32: the provider's members are exports (with their shape and
+            // scratch memory for the loader's bridge); with no provider, each is
+            // an import of namespace P and bind(t) names the plugin answering it.
+            if (_webModules && provider != (String*)0) {
+                String* shape = new String();
+                for (u32 m = (u32)0; m < ms.count(); m = m + (u32)1) {
+                    Array* e = (Array*)ms.get(m);
+                    String* ret = (String*)e.get((u32)0);
+                    bool isVoid = ret.equals(String.withCString("void"));
+                    src.appendFormat("extern %s %s__%s(%s) { %s%s.%s(%s); }\n", ret.cString(), C.cString(),
+                                     ((String*)e.get((u32)1)).cString(), ((String*)e.get((u32)2)).cString(),
+                                     isVoid ? "" : "return ", provider.cString(), ((String*)e.get((u32)1)).cString(),
+                                     ((String*)e.get((u32)3)).cString());
+                    if (shape.byteLength() > (u32)0) shape.appendByte((u8)';');
+                    shape.append((String*)e.get((u32)1));
+                    shape.appendByte((u8)':');
+                    shape.append((String*)e.get((u32)4));
+                }
+                src.appendFormat("extern u8* %s__shape(void) { return \"%s\"; }\n", C.cString(), shape.cString());
+                src.appendFormat("extern u8* %s__alloc(u32 n) { return new u8[n]; }\n", C.cString());
+                src.appendFormat("extern void %s__free(u8* p) { delete p; }\n", C.cString());
+            }
+            if (_webModules && provider == (String*)0) {
+                if (!webBind) {
+                    src.appendCString("package xcplugin;\nvoid _xt_proto_bind(u8* ns, u32 n, pointer t);\npackage __none;\n");
+                    webBind = true;
+                }
+                src.appendFormat("package %s;\n", P.cString());
+                for (u32 m = (u32)0; m < ms.count(); m = m + (u32)1) {
+                    Array* e = (Array*)ms.get(m);
+                    src.appendFormat("%s %s__%s(%s);\n", ((String*)e.get((u32)0)).cString(), C.cString(),
+                                     ((String*)e.get((u32)1)).cString(), ((String*)e.get((u32)2)).cString());
+                }
+                src.appendCString("package __none;\n");
+            }
+            if (provider == (String*)0 && !_webModules)
                 for (u32 m = (u32)0; m < ms.count(); m = m + (u32)1) {
                     Array* e = (Array*)ms.get(m);
                     src.appendFormat("typedef %s %s_%s_t(%s);\n", ((String*)e.get((u32)0)).cString(), C.cString(),
@@ -1263,6 +1305,9 @@ class Parser
             src.appendFormat("class %s\n{\n", C.cString());
             if (provider != (String*)0)
                 src.appendCString("static pointer* _impl;\n");
+            else if (_webModules)
+                src.appendFormat("static pointer _table;\nstatic void bind(pointer t) { _table = t; _xt_proto_bind(\"%s\", (u32)%lu, t); }\n"
+                                 "static pointer table(void) { return _table; }\n", P.cString(), P.byteLength());
             else
                 src.appendCString("static pointer _table;\nstatic void bind(pointer t) { _table = t; }\n"
                                   "static pointer table(void) { return _table; }\n");
@@ -1273,7 +1318,10 @@ class Parser
                 String* params = (String*)e.get((u32)2);
                 String* args = (String*)e.get((u32)3);
                 bool isVoid = ret.equals(String.withCString("void"));
-                if (provider != (String*)0)
+                if (provider == (String*)0 && _webModules)
+                    src.appendFormat("static %s %s(%s) { %s%s__%s(%s); }\n", ret.cString(), nm.cString(), params.cString(),
+                                     isVoid ? "" : "return ", C.cString(), nm.cString(), args.cString());
+                else if (provider != (String*)0)
                     src.appendFormat("static %s %s(%s) { %s%s.%s(%s); }\n", ret.cString(), nm.cString(), params.cString(),
                                      isVoid ? "" : "return ", provider.cString(), nm.cString(), args.cString());
                 else
@@ -1877,9 +1925,87 @@ class Parser
 
     // Record a protocol's static member: its return type's tokens (before the
     // name), its parameters' tokens, and its parameter names.
+    // A static member's shape between web modules, from its tokens: one
+    // letter a parameter (v a number, p a pointer to numbers whose count is
+    // the next parameter, n that count), then ':' and the result (v, or -
+    // for none). _webBad names the first type that is none of these.
+    static bool isWebNumber(String* t)
+    {
+        return Parser._same(t, "i8") || Parser._same(t, "u8") || Parser._same(t, "i16") || Parser._same(t, "u16")
+            || Parser._same(t, "i32") || Parser._same(t, "u32") || Parser._same(t, "i64") || Parser._same(t, "u64")
+            || Parser._same(t, "float") || Parser._same(t, "double") || Parser._same(t, "bool");
+    }
+
+    static String* joinToks(Array* a, u32 n)
+    {
+        String* r = new String();
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            r.append((String*)a.get(i));
+        return r;
+    }
+
+    String* webKinds(Array* params, Array* ret)
+    {
+        Array* ps = new Array();
+        Array* cur = new Array();
+        for (u32 i = (u32)0; i < params.count(); i = i + (u32)1) {
+            String* t = (String*)params.get(i);
+            if (Parser._same(t, ",")) {
+                ps.add((Object*)cur);
+                cur = new Array();
+                continue;
+            }
+            cur.add((Object*)t);
+        }
+        if (cur.count() > (u32)0 && !(cur.count() == (u32)1 && Parser._same((String*)cur.get((u32)0), "void")))
+            ps.add((Object*)cur);
+        String* k = new String();
+        for (u32 i = (u32)0; i < ps.count(); i = i + (u32)1) {
+            Array* p = (Array*)ps.get(i);
+            u32 stars = (u32)0;
+            for (u32 j = (u32)0; j + (u32)1 < p.count(); j = j + (u32)1)
+                if (Parser._same((String*)p.get(j), "*")) stars = stars + (u32)1;
+            String* base = p.count() > (u32)1 ? (String*)p.get((u32)0) : String.withCString("");
+            String* type = Parser.joinToks(p, p.count() > (u32)0 ? p.count() - (u32)1 : (u32)0);
+            if (k.byteLength() > (u32)0 && k.byteAt(k.byteLength() - (u32)1) == (u8)'p') {
+                if (stars == (u32)0 && Parser.isWebNumber(base) && !Parser._same(base, "float")
+                    && !Parser._same(base, "double") && !Parser._same(base, "bool")) {
+                    k.appendByte((u8)'n');
+                    continue;
+                }
+                if (_webBad == (String*)0) {
+                    _webBad = String.withString(type);
+                    _webBad.appendCString(" (the buffer's count)");
+                }
+                k.appendByte((u8)'?');
+                continue;
+            }
+            if (stars == (u32)0 && Parser.isWebNumber(base))
+                k.appendByte((u8)'v');
+            else if (stars == (u32)1 && Parser.isWebNumber(base) && i + (u32)1 < ps.count())
+                k.appendByte((u8)'p');
+            else {
+                if (_webBad == (String*)0) _webBad = type;
+                k.appendByte((u8)'?');
+            }
+        }
+        String* r = Parser.joinToks(ret, ret.count());
+        if (Parser._same(r, "void"))
+            k.appendCString(":-");
+        else if (ret.count() == (u32)1 && Parser.isWebNumber(r))
+            k.appendCString(":v");
+        else {
+            if (_webBad == (String*)0) _webBad = r;
+            k.appendCString(":?");
+        }
+        return k;
+    }
+
     void protocolStatic(String* P, Node* m, u32 from, u32 to)
     {
         String* ret = new String();
+        Array* retToks = new Array();
+        Array* paramToks = new Array();
         u32 q = from;
         while (q < to) {
             Token* t = (Token*)_tokens.get(q);
@@ -1888,6 +2014,7 @@ class Parser
                 break;
             if (ret.byteLength() > (u32)0) ret.appendByte((u8)' ');
             ret.append(t.value());
+            retToks.add((Object*)t.value());
             q = q + (u32)1;
         }
         String* params = new String();
@@ -1905,7 +2032,17 @@ class Parser
             }
             if (params.byteLength() > (u32)0) params.appendByte((u8)' ');
             params.append(t.value());
+            paramToks.add((Object*)t.value());
             q = q + (u32)1;
+        }
+        _webBad = (String*)0;
+        String* kinds = webKinds(paramToks, retToks);
+        if (_webModules && _webBad != (String*)0) {
+            String* msg = String.withFormat("%s.%s: a protocol's static member called between "
+                                            "web modules passes numbers, or a pointer to numbers "
+                                            "followed by their count; '%s' is neither",
+                                            P.cString(), m.name().cString(), _webBad.cString());
+            _errorAt(msg, m);
         }
         String* args = new String();
         for (u32 k = (u32)0; k < m.kidCount(); k = k + (u32)1) {
@@ -1919,6 +2056,7 @@ class Parser
         e.add((Object*)m.name());
         e.add((Object*)params);
         e.add((Object*)args);
+        e.add((Object*)kinds);
         if (_pStatics == (Map*)0) {
             _pStatics = new Map();
             _pStaticOrder = new Array();

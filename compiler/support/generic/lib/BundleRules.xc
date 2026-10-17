@@ -92,6 +92,63 @@ class BundleRules
         return true;
         }
 
+    // A developer property's value (bundles-and-plugins.md, review 17): at
+    // most 1024 bytes, and no newline, carriage return or NUL, so it cannot
+    // add a line to a text Settings file.
+    static bool validValue(String* s)
+        {
+        if (s == (String*)0 || s.byteLength() > (u32)1024)
+            return false;
+        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
+            {
+            u8 c = s.byteAt(i);
+            if (c == (u8)10 || c == (u8)13 || c == (u8)0)
+                return false;
+            }
+        return true;
+        }
+
+    // The manifest's "properties": { "readonly": {k: v}, "writeable": {k: v} },
+    // either section optional; 0, or what is wrong with it.
+    static String* checkProperties(Object* o)
+        {
+        if (o == (Object*)0)
+            return (String*)0;
+        Map* p = (Map* ?)o;
+        if (p == (Map*)0)
+            return String.withCString("\"properties\" is not an object");
+        Array* ks = p.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            {
+            String* k = (String*)ks.get(i);
+            if (!k.equals(String.withCString("readonly")) && !k.equals(String.withCString("writeable")))
+                return String.withFormat("\"properties\" has '%s'; it holds only readonly and writeable", k.cString());
+            Map* m = (Map* ?)p.get((Hashable*)k);
+            if (m == (Map*)0)
+                return String.withFormat("properties.%s is not an object", k.cString());
+            Array* pk = m.allKeys();
+            for (u32 j = (u32)0; j < pk.count(); j = j + (u32)1)
+                {
+                String* key = (String*)pk.get(j);
+                String* v = (String* ?)m.get((Hashable*)key);
+                if (!BundleRules.validName(key))
+                    return String.withFormat("'%s' is not a property name: letters, digits, '_' and '-'", key.cString());
+                if (v == (String*)0 || !BundleRules.validValue(v))
+                    return String.withFormat("property '%s': a value is text of at most 1024 bytes on one line", key.cString());
+                }
+            }
+        Map* ro = (Map*)p.get((Hashable*)String.withCString("readonly"));
+        Map* rw = (Map*)p.get((Hashable*)String.withCString("writeable"));
+        if (ro != (Map*)0 && rw != (Map*)0)
+            {
+            Array* rk = ro.allKeys();
+            for (u32 i = (u32)0; i < rk.count(); i = i + (u32)1)
+                if (rw.get((Hashable*)rk.get(i)) != (Object*)0)
+                    return String.withFormat("property '%s' is both readonly and writeable", ((String*)rk.get(i)).cString());
+            }
+        return (String*)0;
+        }
+
     static String* _folded(String* s)
         {
         String* r = new String();

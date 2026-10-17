@@ -27,6 +27,10 @@ NS_ASSUME_NONNULL_BEGIN
 |* an auto block it would refuse to a serial run.
 \****************************************************************************/
 @property(nonatomic) BOOL parAuto;
+// wasm32: a module's memory is its own, so a protocol's static members are
+// calls BETWEEN modules (an export of the provider, an import of everyone
+// else) and may pass only numbers, or a buffer and its length.
+@property(nonatomic) BOOL webModules;
 // The unit's default goal for loops and par blocks without a :goal(…) of
 // their own: 0 the built-in (loops accuracy, par blocks speed), 1 speed, 2
 // accuracy — from #goal, else -fgoal=. Under an explicit speed, --par-auto

@@ -68,10 +68,16 @@ Each run adds or replaces its target's entry and signs the manifest again.
 The publisher key is made on first use in `~/.xcc/bundle-key` (or the file
 `--bundle-key` names) and its fingerprint is printed: keep it, because an update
 must be signed by the same key. `--bundle-name`, `--bundle-version`,
-`--publisher` and `--publisher-domain` fill in the rest of the manifest; what
+`--publisher` and `--publisher-domain` fill in the rest of the manifest,
+`--property k=v` and `--setting k=v` add the developer's own
+[properties](/compiler/api/plugin/#properties); what
 the bundle provides and requires comes from the protocols with
 [static members](/compiler/language/inheritance/#static-members-an-interface-between-programs)
 it declares.
+
+With `-A wasm32` the entry is `Exec/wasm32/<name>.wasm`, a module with its
+own memory that a web page loads. [Plugin](/compiler/api/plugin/) loads a
+bundle's code into a running program, on every target.
 
 `BundleSign.verify(dir)` (`#import "BundleSign.xc"`) checks a bundle before
 anything in it is used, and says what is wrong: a signature that does not

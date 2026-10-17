@@ -59,5 +59,42 @@ sed 's/^    Plugin.provide(.*$//' tests/bundle/plughost.xc > "$L/bare.xc"
 "$XC" -q -H . -o "$L/bare" "$L/bare.xc"
 check "missing protocol"      "this program does not provide"   "$L/bare" "$L/spice" yes
 
+# loadAsync and p.table(proto) natively: the host calls a protocol the
+# plugin provides (tests/bundle/web/, the same sources as on the web).
+"$XC" --bundle "$L/sw" --bundle-key "$L/key" --bundle-name sw -o "$L/sw.$EXT" tests/bundle/web/spiceweb.xc > /dev/null
+"$XC" -q -H . -o "$L/webhost" tests/bundle/web/webhost.xc
+check "loadAsync + table"     "sum -> 10, first byte now 99"     "$L/webhost" "$L/sw" yes
+
+# The manifest claims a protocol the code does not have, signed by the
+# publisher's own key: refused from the code's export table, before loading.
+"$XC" -q -H . -o "$L/bundletool" tests/bundle/bundletool.xc
+"$XC" --bundle "$L/ghost" --bundle-key "$L/key" --bundle-name ghost -o "$L/ghost.$EXT" tests/bundle/spice.xc > /dev/null
+sed -i.bak 's/"provides": {}/"provides": {"Ghost": "1.0"}/' "$L/ghost/bundle.json"; rm -f "$L/ghost/bundle.json.bak"
+"$L/bundletool" sign "$L/ghost" "$L/key" > /dev/null
+check "export table checked"  "says it provides Ghost, but its code has no _XtP_Ghost\$table" "$L/host" "$L/ghost" yes
+
+# Developer properties: readonly and writeable values in the signed manifest,
+# a user's overrides in the app's Settings, across updates of the bundle.
+P="$L/props"; ST="$L/props.settings"
+pb() { "$XC" --bundle "$P" --bundle-key "$L/key" --bundle-name props -o "$L/props.$EXT" tests/bundle/spice.xc "$@" > /dev/null; }
+"$XC" -q -H . -o "$L/propshost" tests/bundle/propshost.xc
+pb --bundle-version 1.0 --property endpoint=https://example.org --setting theme=dark
+check "properties read"       "theme: info=dark value=dark writeable=yes overridden=no" "$L/propshost" "$P" "$ST" show theme
+check "readonly refused"      "set endpoint -> no, notified 0"  "$L/propshost" "$P" "$ST" set endpoint x
+check "a user's value"        "set theme -> yes, notified 1"    "$L/propshost" "$P" "$ST" set theme light
+check "kept across runs"      "value=light writeable=yes overridden=yes defaultChanged=no" "$L/propshost" "$P" "$ST" show theme
+pb --bundle-version 1.1 --property endpoint=https://example.org --setting theme=blue
+check "user wins an update"   "info=blue value=light writeable=yes overridden=yes defaultChanged=yes" "$L/propshost" "$P" "$ST" show theme
+pb --bundle-version 1.2 --property endpoint=https://example.org --property theme=red
+check "moved to readonly"     "info=red value=red writeable=no overridden=no" "$L/propshost" "$P" "$ST" show theme
+pb --bundle-version 1.3 --property endpoint=https://example.org --setting theme=blue
+check "writeable again"       "info=blue value=light writeable=yes overridden=yes" "$L/propshost" "$P" "$ST" show theme
+check "reset"                 "reset theme, notified 1"         "$L/propshost" "$P" "$ST" reset theme
+check "manifest again"        "info=blue value=blue writeable=yes overridden=no" "$L/propshost" "$P" "$ST" show theme
+check "user state"            "set note -> yes"                 "$L/propshost" "$P" "$ST" set note hello
+check "kept per publisher"    "bundle\.[0-9a-f]\{64\}\.props\.note = hello" cat "$ST"
+check "a bad key refused"     "is not a property name"          "$XC" --bundle "$L/pbad" --bundle-key "$L/key" -o "$L/pbad.$EXT" tests/bundle/spice.xc --property a.b=x
+check "a key in both refused" "both readonly and writeable"     "$XC" --bundle "$L/pbad" --bundle-key "$L/key" -o "$L/pbad.$EXT" tests/bundle/spice.xc --property k=1 --setting k=2
+
 [ $rc = 0 ] && echo "--- plugin: pass ---" || echo "--- plugin: FAIL ---"
 exit $rc

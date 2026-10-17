@@ -174,6 +174,8 @@ class DriverOptions
     String*    _bundleKey;
     String*    _publisher;
     String*    _publisherDomain;
+    Map*       _bundleReadonly;   // --property k=v: the publisher's, final
+    Map*       _bundleWriteable;  // --setting k=v: a default a user may change
     bool       _emitIfaceOnly;  // --emit-iface: the interface, and nothing else
     bool       _compileOnly;    // -c: an OBJECT, plus its build-artifact sidecars
     Array*     _linkInputs;     // -Xlinker <path> / -l<name>: libraries to load
@@ -4037,6 +4039,14 @@ void main(void)
                      "       xcc -h lists every option\n");
         Process.exit((i32)2); return;
     }
+    // --bundle on wasm32: a plugin is a module of its own with its own
+    // memory (bundles-and-plugins.md §2), not the library shape that shares
+    // the app's.
+    if (d.bundleDir() != (String*)0 && isWasm(d)) {
+        d.setEmitLib(false);
+        d.fe().setEmitIface(false);
+        d.fe().setLibraryBuild(false);
+    }
     checkCapabilities(d);
     // `--emit-lib` on a target with no library form is REFUSED, never run
     // down the executable path: a library that is silently not a library is
@@ -4245,10 +4255,11 @@ void makeBundle(DriverOptions* d)
                 requires.set((Hashable*)k, v.get((u32)0));
         }
     }
-    String* err = BundleSign.make(d._bundleDir, name,
-                                  d._bundleVersion,
-                                  bundlePlatform(d), out, d._bundleResources, seed,
-                                  d._publisher, d._publisherDomain, provides, requires);
+    String* err = BundleSign.makeWith(d._bundleDir, name,
+                                      d._bundleVersion,
+                                      bundlePlatform(d), out, d._bundleResources, seed,
+                                      d._publisher, d._publisherDomain, provides, requires,
+                                      d._bundleReadonly, d._bundleWriteable);
     if (err != (String*)0) {
         Stdio.printf("xcc: error: --bundle: %s\n", err.cString());
         Process.exit((i32)1); return;
@@ -6067,6 +6078,21 @@ DriverOptions* parseDriverArgs(void)
             d.setEmitLib(true);
             o.setEmitIface(true);
             o.setLibraryBuild(true);
+            i = i + (u32)2; continue;
+        }
+        // --property k=v / --setting k=v: the bundle's developer properties.
+        if ((a.equals(String.withCString("--property")) || a.equals(String.withCString("--setting"))) && i + (u32)1 < argc) {
+            String* kv = Process.argument(i + (u32)1);
+            u32 eq = kv.indexOfByte((u8)'=');
+            if (eq == String.notFound() || eq == (u32)0) {
+                Stdio.printf("xcc: error: %s wants key=value, not '%s'\n", a.cString(), kv.cString());
+                Process.exit((i32)1);
+            }
+            bool ro = a.equals(String.withCString("--property"));
+            if (ro && d._bundleReadonly == (Map*)0) d._bundleReadonly = new Map();
+            if (!ro && d._bundleWriteable == (Map*)0) d._bundleWriteable = new Map();
+            (ro ? d._bundleReadonly : d._bundleWriteable).set((Hashable*)kv.substringBytes((u32)0, eq),
+                                                               (Object*)kv.substringFromByte(eq + (u32)1));
             i = i + (u32)2; continue;
         }
         if (a.equals(String.withCString("--bundle-name")) && i + (u32)1 < argc) {

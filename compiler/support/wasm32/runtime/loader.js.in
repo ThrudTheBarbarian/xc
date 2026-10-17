@@ -759,6 +759,217 @@
   const sharedMemory = !threaded ? null : threadBoot ? threadBoot.memory
                      : new WebAssembly.Memory({ initial: memPages(bytes), maximum: 16384, shared: true });
   if (sharedMemory) base.memory = sharedMemory;
+  // ── Plugins (bundles-and-plugins.md §4): a protocol's static members are
+  // calls between modules. The provider exports _XtP_<P>__<m> with
+  // _XtP_<P>__shape (each member's "m:<params>:<result>", p a buffer whose
+  // count is the next parameter) and scratch memory (__alloc / __free); every
+  // other module imports them from namespace P. A plugin is its own module
+  // with its own memory, so a call copies each buffer into the callee's
+  // memory and back, after checking it lies inside the caller's.
+  const plugins = [null];
+  const protoSlots = {};
+  const shapeOf = (inst, mem, ns) => {
+    const f = inst.exports[`_XtP_${ns}__shape`];
+    if (!f) return null;
+    const m = new Uint8Array(mem().buffer), p = f();
+    let e = p;
+    while (m[e]) e++;
+    const out = {};
+    for (const d of cdec.decode(m.subarray(p, e)).split(";")) {
+      const [name, params] = d.split(":");
+      out[name] = params;
+    }
+    return out;
+  };
+  const bridge = (fromMem, toInst, toMem, ns, m, kinds) => {
+    const fn = toInst.exports[`_XtP_${ns}__${m}`];
+    const alloc = toInst.exports[`_XtP_${ns}__alloc`], free = toInst.exports[`_XtP_${ns}__free`];
+    return (...a) => {
+      const back = [];
+      try {
+        for (let i = 0; i < kinds.length; i++) {
+          if (kinds[i] !== "p") continue;
+          const p = a[i] >>> 0, n = Number(a[i + 1]) >>> 0;
+          const src = new Uint8Array(fromMem().buffer);
+          if (p + n > src.length || (n && !p))
+            throw new RangeError(`xcc: ${ns}.${m}: ${n} bytes at ${p} are not the caller's memory`);
+          const q = n ? alloc(n) >>> 0 : 0;
+          if (n) new Uint8Array(toMem().buffer).set(src.subarray(p, p + n), q);
+          back.push([p, q, n]);
+          a[i] = q;
+        }
+        return fn(...a);
+      } finally {
+        for (const [p, q, n] of back) {
+          if (!n) continue;
+          new Uint8Array(fromMem().buffer).set(new Uint8Array(toMem().buffer).subarray(q, q + n), p);
+          free(q);
+        }
+      }
+    };
+  };
+  // This program's imports of protocols a plugin provides: late-bound, to
+  // whichever plugin P.bind() named.
+  for (const i of WebAssembly.Module.imports(wasmModule)) {
+    const pre = `_XtP_${i.module}__`;
+    if (i.kind !== "function" || !i.name.startsWith(pre)) continue;
+    const ns = i.module, m = i.name.slice(pre.length);
+    const t = imports[ns] || (imports[ns] = {});
+    if (i.name in t) continue;
+    t[i.name] = (...a) => {
+      const f = protoSlots[ns] && protoSlots[ns][m];
+      if (!f) throw new Error(`xcc: ${ns}.${m} was called before ${ns}.bind() named a plugin that provides it`);
+      return f(...a);
+    };
+  }
+  // A plugin's runtime: output, maths, time and randomness, over ITS memory.
+  // Nothing else (no files, no environment, no exit): any other import is a
+  // stub that refuses when called.
+  const pluginEnv = (P) => {
+    const pm = () => new Uint8Array(P.inst.exports.memory.buffer);
+    const e = {};
+    for (const k of Object.keys(base))
+      if (k.startsWith("_xm_") || k.startsWith("_xt_rand") ||
+          ["putc", "_putc", "_xtc_pf", "_xtc_pd", "_xtc_pfp", "_xtc_pdp", "time_ms", "getpid", "abs", "_xt_srand"].includes(k))
+        e[k] = base[k];
+    e._xt_random_fill = (p, n) => {
+      const c = globalThis.crypto;
+      if (!c || !c.getRandomValues) return -1;
+      for (let at = 0; at < n; at += 65536) {
+        const k = Math.min(65536, n - at), b = new Uint8Array(k);
+        c.getRandomValues(b);
+        pm().set(b, p + at);
+      }
+      return 0;
+    };
+    e.clock_gettime = (clk, ts) => {
+      const ns = BigInt(Math.round(performance.now() * 1e6));
+      const dv = new DataView(P.inst.exports.memory.buffer);
+      dv.setBigInt64(ts, ns / 1000000000n, true);
+      dv.setBigInt64(ts + 8, ns % 1000000000n, true);
+      return 0;
+    };
+    return e;
+  };
+  // The trust records: the page's localStorage, or $XCC_PLUGIN_STORE/trust
+  // under Node, or (neither) this run only.
+  let trustMem = "";
+  const trustKey = "xcc.plugins.trust";
+  const trustRead = () => {
+    if (isNode) {
+      const d = process.env.XCC_PLUGIN_STORE;
+      if (!d) return trustMem;
+      try { return require("fs").readFileSync(require("path").join(d, "trust"), "utf8"); } catch (e) { return ""; }
+    }
+    try { return globalThis.localStorage.getItem(trustKey) || ""; } catch (e) { return trustMem; }
+  };
+  const trustWrite = (t) => {
+    trustMem = t;
+    if (isNode) {
+      const d = process.env.XCC_PLUGIN_STORE;
+      if (!d) return;
+      try { require("fs").mkdirSync(d, { recursive: true }); require("fs").writeFileSync(require("path").join(d, "trust"), t); }
+      catch (e) {}
+      return;
+    }
+    try { globalThis.localStorage.setItem(trustKey, t); } catch (e) {}
+  };
+  // The offline copy of a bundle's files, by URL: Cache Storage in a page or
+  // worker, $XCC_PLUGIN_STORE/cache under Node. The program checks whatever
+  // comes back against the signed manifest, as it does a fresh fetch.
+  const cacheFile = (u) => {
+    const d = isNode && process.env.XCC_PLUGIN_STORE;
+    if (!d) return null;
+    const path = require("path");
+    return path.join(d, "cache", require("crypto").createHash("sha256").update(u).digest("hex"));
+  };
+  const cachePut = async (u, b) => {
+    const f = cacheFile(u);
+    if (f) {
+      require("fs").mkdirSync(require("path").dirname(f), { recursive: true });
+      require("fs").writeFileSync(f, b);
+      return;
+    }
+    if (globalThis.caches) await (await caches.open("xcc-plugins")).put(u, new Response(b));
+  };
+  const cacheGet = async (u) => {
+    const f = cacheFile(u);
+    if (f) { try { return new Uint8Array(require("fs").readFileSync(f)); } catch (e) { return null; } }
+    if (!globalThis.caches) return null;
+    const r = await (await caches.open("xcc-plugins")).match(u);
+    return r ? new Uint8Array(await r.arrayBuffer()) : null;
+  };
+  imports.xcplugin = Object.assign({
+    _xt_plugin_cache_put: (up, un, p, n) => {
+      const u = cdec.decode(mem8().subarray(up, up + un));
+      cachePut(u, mem8().slice(p, p + n)).catch(() => {});
+    },
+    _xt_plugin_cache_get: (tok, up, un) => {
+      const u = cdec.decode(mem8().subarray(up, up + un));
+      const ex = XCC.instance.exports;
+      cacheGet(u).catch(() => null).then((b) => {
+        if (!b) { ex._xt_plugin_cached(tok, 0, 0); return; }
+        const q = ex._xt_browser_alloc(b.length);
+        mem8().set(b, q);
+        ex._xt_plugin_cached(tok, q, b.length);
+      });
+    },
+    _xt_plugin_trust_len: () => new TextEncoder().encode(trustRead()).length,
+    _xt_plugin_trust_copy: (dst) => mem8().set(new TextEncoder().encode(trustRead()), dst),
+    _xt_plugin_trust_set: (p, n) => trustWrite(cdec.decode(mem8().subarray(p, p + n))),
+    // P.bind(t) in this program: t is a plugin's handle (Plugin.table).
+    _xt_proto_bind: (p, n, h) => {
+      const ns = cdec.decode(mem8().subarray(p, p + n));
+      if (!h) { delete protoSlots[ns]; return; }
+      const P = plugins[h];
+      const shape = P && shapeOf(P.inst, () => P.inst.exports.memory, ns);
+      if (!shape) throw new Error(`xcc: ${ns}.bind(): that plugin does not provide ${ns}`);
+      const slots = {};
+      for (const m of Object.keys(shape))
+        slots[m] = bridge(() => XCC.memory, P.inst, () => P.inst.exports.memory, ns, m, shape[m]);
+      protoSlots[ns] = slots;
+    },
+    // The verified code: copied out of this program's memory NOW (the bytes
+    // just hashed), compiled and instantiated, then _xt_plugin_ready.
+    _xt_plugin_instantiate: (tok, p, n) => {
+      const code = new Uint8Array(XCC.memory.buffer).slice(p, p + n);
+      const ex = XCC.instance.exports;
+      const answer = (h, why) => {
+        if (!why) { ex._xt_plugin_ready(tok, h, 0, 0); return; }
+        const b = new TextEncoder().encode(why), q = ex._xt_browser_alloc(b.length);
+        mem8().set(b, q);
+        ex._xt_plugin_ready(tok, 0, q, b.length);
+      };
+      (async () => {
+        const mod = await WebAssembly.compile(code);
+        const P = { inst: null };
+        const pim = {};
+        const penv = pluginEnv(P);
+        for (const i of WebAssembly.Module.imports(mod)) {
+          if (i.kind !== "function")
+            throw new Error(`it imports ${i.module}.${i.name}, a ${i.kind}; a plugin has its own memory and imports only functions`);
+          const t = pim[i.module] || (pim[i.module] = {});
+          const pre = `_XtP_${i.module}__`;
+          if (i.name.startsWith(pre)) {
+            const ns = i.module, m = i.name.slice(pre.length);
+            const shape = shapeOf(XCC.instance, () => XCC.memory, ns);
+            if (!shape || !(m in shape) || !ex[i.name])
+              throw new Error(`it calls ${ns}.${m}, which this program does not provide`);
+            t[i.name] = bridge(() => P.inst.exports.memory, XCC.instance, () => XCC.memory, ns, m, shape[m]);
+          } else if (i.module === "env" && i.name in penv) {
+            t[i.name] = penv[i.name];
+          } else {
+            const what = `${i.module}.${i.name}`;
+            t[i.name] = () => { throw new Error(`xcc: a plugin may not call ${what}`); };
+          }
+        }
+        P.inst = await WebAssembly.instantiate(mod, pim);
+        if (P.inst.exports._xt_init) P.inst.exports._xt_init();
+        plugins.push(P);
+        return plugins.length - 1;
+      })().then((h) => answer(h, null), (e) => answer(0, String(e && e.message || e)));
+    },
+  }, extra.xcplugin || {});
   const instance = await WebAssembly.instantiate(wasmModule, imports);
   const usesGpu = gpuJspi && WebAssembly.Module.imports(wasmModule).some((m) => m.module === "xcgpu");
   // A per-module handle. This used to be ONLY `globalThis.xcc`, so loading a

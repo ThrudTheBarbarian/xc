@@ -396,6 +396,81 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     _tokens = t;
     }
 
+/****************************************************************************\
+|* A static member's shape between web modules, from its tokens: one letter a
+|* parameter (v a number, p a pointer to numbers whose count is the next
+|* parameter, n that count), then ':' and the result (v a number, - none).
+|* *bad names the first type that is none of these.
+\****************************************************************************/
++ (BOOL)isWebNumber:(NSString*)t
+    {
+    return [@[ @"i8", @"u8", @"i16", @"u16", @"i32", @"u32", @"i64", @"u64", @"float", @"double", @"bool" ] containsObject:t];
+    }
+
++ (NSString*)webKindsOf:(NSArray<NSString*>*)params ret:(NSArray<NSString*>*)ret bad:(NSString**)bad
+    {
+    NSMutableArray<NSArray<NSString*>*>* ps = [NSMutableArray array];
+    NSMutableArray<NSString*>* cur = [NSMutableArray array];
+    for (NSString* t in params)
+        {
+        if ([t isEqualToString:@","])
+            {
+            [ps addObject:cur];
+            cur = [NSMutableArray array];
+            continue;
+            }
+        [cur addObject:t];
+        }
+    if (cur.count && !(cur.count == 1 && [cur[0] isEqualToString:@"void"]))
+        [ps addObject:cur];
+    NSMutableString* k = [NSMutableString string];
+    for (NSUInteger i = 0; i < ps.count; i++)
+        {
+        NSArray<NSString*>* p = ps[i];
+        NSUInteger stars = 0;
+        for (NSUInteger j = 0; j + 1 < p.count; j++)
+            if ([p[j] isEqualToString:@"*"])
+                stars++;
+        NSString* base = p.count > 1 ? p[0] : @"";
+        NSString* type = [[p subarrayWithRange:NSMakeRange(0, p.count ? p.count - 1 : 0)] componentsJoinedByString:@""];
+        if (k.length && [k hasSuffix:@"p"])
+            {
+            if (stars == 0 && [XTParser isWebNumber:base] && ![base isEqualToString:@"float"] &&
+                ![base isEqualToString:@"double"] && ![base isEqualToString:@"bool"])
+                {
+                [k appendString:@"n"];
+                continue;
+                }
+            if (bad && !*bad)
+                *bad = [type stringByAppendingString:@" (the buffer's count)"];
+            [k appendString:@"?"];
+            continue;
+            }
+        if (stars == 0 && [XTParser isWebNumber:base])
+            [k appendString:@"v"];
+        else if (stars == 1 && [XTParser isWebNumber:base] && i + 1 < ps.count)
+            [k appendString:@"p"];
+        else
+            {
+            if (bad && !*bad)
+                *bad = type;
+            [k appendString:@"?"];
+            }
+        }
+    NSString* r = [ret componentsJoinedByString:@""];
+    if ([r isEqualToString:@"void"])
+        [k appendString:@":-"];
+    else if (ret.count == 1 && [XTParser isWebNumber:r])
+        [k appendString:@":v"];
+    else
+        {
+        if (bad && !*bad)
+            *bad = r;
+        [k appendString:@":?"];
+        }
+    return k;
+    }
+
 - (NSArray<XTASTNode*>*)protocolCompanionsFor:(NSArray<XTASTNode*>*)decls
     {
     NSArray<NSString*>* order = self.blkState[@"pstaticOrder"];
@@ -404,6 +479,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     NSDictionary<NSString*, NSArray<NSDictionary*>*>* members = self.blkState[@"pstatics"];
     NSDictionary<NSString*, NSArray<NSNumber*>*>* versions = self.blkState[@"pversion"];
     NSMutableString* src = [NSMutableString string];
+    BOOL webBind = NO;
     for (NSString* P in order)
         {
         NSArray<NSDictionary*>* ms = members[P];
@@ -434,12 +510,46 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
             }
         NSArray<NSNumber*>* v = versions[P] ?: @[ @0, @0 ];
         NSString* C = [@"_XtP_" stringByAppendingString:P];
-        if (!provider)
+        // wasm32 (webModules): the provider's members are exports a plugin's
+        // imports are wired to, with the shape the loader bridges them by and
+        // the scratch memory it copies buffers into; with no provider, each
+        // member is an import of namespace P, and bind(t) tells the loader
+        // which loaded plugin answers it.
+        if (self.webModules && provider)
+            {
+            NSMutableString* shape = [NSMutableString string];
+            for (NSDictionary* m in ms)
+                {
+                BOOL isVoid = [m[@"ret"] isEqualToString:@"void"];
+                [src appendFormat:@"extern %@ %@__%@(%@) { %@%@.%@(%@); }\n", m[@"ret"], C, m[@"name"], m[@"params"],
+                                  isVoid ? @"" : @"return ", provider, m[@"name"], m[@"args"]];
+                [shape appendFormat:@"%@%@:%@", shape.length ? @";" : @"", m[@"name"], m[@"kinds"]];
+                }
+            [src appendFormat:@"extern u8* %@__shape(void) { return \"%@\"; }\n", C, shape];
+            [src appendFormat:@"extern u8* %@__alloc(u32 n) { return new u8[n]; }\n", C];
+            [src appendFormat:@"extern void %@__free(u8* p) { delete p; }\n", C];
+            }
+        if (self.webModules && !provider)
+            {
+            if (!webBind)
+                {
+                [src appendString:@"package xcplugin;\nvoid _xt_proto_bind(u8* ns, u32 n, pointer t);\npackage __none;\n"];
+                webBind = YES;
+                }
+            [src appendFormat:@"package %@;\n", P];
+            for (NSDictionary* m in ms)
+                [src appendFormat:@"%@ %@__%@(%@);\n", m[@"ret"], C, m[@"name"], m[@"params"]];
+            [src appendString:@"package __none;\n"];
+            }
+        if (!provider && !self.webModules)
             for (NSDictionary* m in ms)
                 [src appendFormat:@"typedef %@ %@_%@_t(%@);\n", m[@"ret"], C, m[@"name"], m[@"params"]];
         [src appendFormat:@"class %@\n{\n", C];
         if (provider)
             [src appendString:@"static pointer* _impl;\n"];
+        else if (self.webModules)
+            [src appendFormat:@"static pointer _table;\nstatic void bind(pointer t) { _table = t; _xt_proto_bind(\"%@\", (u32)%lu, t); }\n"
+                              @"static pointer table(void) { return _table; }\n", P, (unsigned long)P.length];
         else
             [src appendString:@"static pointer _table;\nstatic void bind(pointer t) { _table = t; }\n"
                               @"static pointer table(void) { return _table; }\n"];
@@ -447,7 +557,10 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         for (NSDictionary* m in ms)
             {
             BOOL isVoid = [m[@"ret"] isEqualToString:@"void"];
-            if (provider)
+            if (!provider && self.webModules)
+                [src appendFormat:@"static %@ %@(%@) { %@%@__%@(%@); }\n", m[@"ret"], m[@"name"], m[@"params"],
+                                  isVoid ? @"" : @"return ", C, m[@"name"], m[@"args"]];
+            else if (provider)
                 [src appendFormat:@"static %@ %@(%@) { %@%@.%@(%@); }\n", m[@"ret"], m[@"name"], m[@"params"],
                                   isVoid ? @"" : @"return ", provider, m[@"name"], m[@"args"]];
             else
@@ -1267,6 +1380,14 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
             NSString* paramText = [params componentsJoinedByString:@" "];
             if ([paramText isEqualToString:@"void"])
                 paramText = @"void";
+            NSString* bad = nil;
+            NSString* kinds = [XTParser webKindsOf:params ret:ret bad:&bad];
+            if (self.webModules && bad)
+                [_diagnostics emitError:[NSString stringWithFormat:@"%@.%@: a protocol's static member called between "
+                                                                   @"web modules passes numbers, or a pointer to numbers "
+                                                                   @"followed by their count; '%@' is neither",
+                                                                   nameTok.value, fn.funcName, bad]
+                                     at:fn.location];
             NSMutableDictionary* all = self.blkState[@"pstatics"];
             if (!all)
                 self.blkState[@"pstatics"] = all = [NSMutableDictionary dictionary];
@@ -1281,6 +1402,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
             [all[nameTok.value] addObject:@{ @"ret" : [ret componentsJoinedByString:@" "],
                                              @"name" : fn.funcName,
                                              @"params" : paramText,
+                                             @"kinds" : kinds,
                                              @"args" : [args componentsJoinedByString:@", "] }];
             continue;
             }

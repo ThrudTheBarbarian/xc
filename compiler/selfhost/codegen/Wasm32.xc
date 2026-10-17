@@ -995,7 +995,17 @@ class Wasm32
             IRFunc* fn = (IRFunc*)mod.funcs().get(f);
             if (fn.name().equals(String.withCString("main"))) { mainFn = fn; break; }
         }
-        if (mainFn == 0) return;
+        if (mainFn == 0) {
+            // No main: a module another one loads (a plugin). The loader runs
+            // its module inits through this before any call.
+            if (_emitLib) return;
+            out.appendCString("  (func (export \"_xt_init\")\n");
+            for (u32 i = (u32)0; i < mod.modinits().count(); i = i + (u32)1)
+                out.appendFormat("    call $%s\n",
+                                 ((String*)mod.modinits().get(i)).cString());
+            out.appendCString("  )\n");
+            return;
+        }
         bool mainReturns = !Wasm32.memOrVoid(mainFn.ret())
                         && !Wasm32.isAggTy(mainFn.ret());
         out.appendCString("  (func (export \"main\") (result i32)\n");

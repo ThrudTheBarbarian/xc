@@ -631,6 +631,13 @@ static NSString *watStringLit(NSData *bytes) {
         if (!mainReturns) [out appendString:@"    i32.const 0\n"];
         else if (is64(mainFn.returnType)) [out appendString:@"    i32.wrap_i64\n"];
         [out appendString:@"  )\n"];
+        } else if (!sEmitLib) {
+        // No main: a module another one loads (a plugin, bundles-and-plugins.md
+        // §4). The loader runs its module inits through this before any call.
+        [out appendString:@"  (func (export \"_xt_init\")\n"];
+        for (NSString *initName in mod.moduleInitFunctionNames)
+            [out appendFormat:@"    call $%@\n", initName];
+        [out appendString:@"  )\n"];
     }
     [out appendString:@")\n"];
     sMod = nil;

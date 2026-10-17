@@ -458,6 +458,7 @@ class FeOptions
             }
         Parser* parser = Parser.with(tokens);
         parser.setParAuto(o.parAuto());
+        parser.setWebModules(platformOf(o).equals(String.withCString("wasm32")));
         parser.setGoalDefault(pp.goal() != (u32)0 ? pp.goal() : o.goalDefault());
         parser.setLibraryFiles(pp.libraryFiles());
 

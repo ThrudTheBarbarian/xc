@@ -214,6 +214,17 @@ class BundleSign
     static String* make(String* dir, String* name, String* version, String* platform, String* codeFile,
                         String* resourcesDir, Data* seed, String* publisher, String* domain, Map* provides, Map* requires)
         {
+        return BundleSign.makeWith(dir, name, version, platform, codeFile, resourcesDir, seed, publisher, domain,
+                                   provides, requires, (Map*)0, (Map*)0);
+        }
+
+    // make(), with the developer's properties: readonly (the publisher's,
+    // final) and writeable (defaults a user may override). 0 for both keeps
+    // what the last run's manifest had.
+    static String* makeWith(String* dir, String* name, String* version, String* platform, String* codeFile,
+                            String* resourcesDir, Data* seed, String* publisher, String* domain, Map* provides,
+                            Map* requires, Map* readonly, Map* writeable)
+        {
         if (!BundleRules.validName(name))
             return String.withFormat("'%s' is not a bundle name: letters, digits, '_' and '-'", name.cString());
         if (seed == (Data*)0 || seed.length() != (u32)32)
@@ -259,6 +270,12 @@ class BundleSign
                         publisher = (String*)opub.get((Hashable*)String.withCString("name"));
                     if (domain == (String*)0)
                         domain = (String*)opub.get((Hashable*)String.withCString("domain"));
+                    Map* oprops = (Map*)old.get((Hashable*)String.withCString("properties"));
+                    if (readonly == (Map*)0 && writeable == (Map*)0 && oprops != (Map*)0)
+                        {
+                        readonly = (Map*)oprops.get((Hashable*)String.withCString("readonly"));
+                        writeable = (Map*)oprops.get((Hashable*)String.withCString("writeable"));
+                        }
                     Array* op = (Array*)old.get((Hashable*)String.withCString("platforms"));
                     for (u32 i = (u32)0; op != (Array*)0 && i < op.count(); i = i + (u32)1)
                         if (!((String*)op.get(i)).equals(platform))
@@ -271,6 +288,18 @@ class BundleSign
             }
         if (version == (String*)0)
             version = String.withCString("1.0");
+        Map* props = (Map*)0;
+        if ((readonly != (Map*)0 && readonly.count() > (u32)0) || (writeable != (Map*)0 && writeable.count() > (u32)0))
+            {
+            props = new Map();
+            if (readonly != (Map*)0 && readonly.count() > (u32)0)
+                props.set((Hashable*)String.withCString("readonly"), (Object*)readonly);
+            if (writeable != (Map*)0 && writeable.count() > (u32)0)
+                props.set((Hashable*)String.withCString("writeable"), (Object*)writeable);
+            String* bad = BundleRules.checkProperties((Object*)props);
+            if (bad != (String*)0)
+                return bad;
+            }
         platforms.add((Object*)platform);
         BundleSign._sort(platforms);
         // The code.
@@ -337,7 +366,27 @@ class BundleSign
                 m.appendCString(", ");
             m.append(BundleSign._quoted((String*)platforms.get(i)));
             }
-        m.appendCString("],\n  \"provides\": ");
+        m.appendCString("]");
+        if (props != (Map*)0)
+            {
+            m.appendCString(",\n  \"properties\": {");
+            bool first = true;
+            if (props.get((Hashable*)String.withCString("readonly")) != (Object*)0)
+                {
+                m.appendCString("\"readonly\": ");
+                m.append(BundleSign._object((Map*)props.get((Hashable*)String.withCString("readonly"))));
+                first = false;
+                }
+            if (props.get((Hashable*)String.withCString("writeable")) != (Object*)0)
+                {
+                if (!first)
+                    m.appendCString(", ");
+                m.appendCString("\"writeable\": ");
+                m.append(BundleSign._object((Map*)props.get((Hashable*)String.withCString("writeable"))));
+                }
+            m.appendCString("}");
+            }
+        m.appendCString(",\n  \"provides\": ");
         m.append(BundleSign._object(provides));
         m.appendCString(",\n  \"publisher\": ");
         m.append(BundleSign._object(pm));
@@ -366,6 +415,51 @@ class BundleSign
         String* st = Files.readText(BundleSign._join(dir, String.withCString("bundle.sig")));
         if (st == (String*)0)
             return String.withCString("no bundle.sig");
+        String* err = BundleSign.verifyManifest(mb, st);
+        if (err != (String*)0)
+            return err;
+        Map* m = (Map*)0;
+        try
+            {
+            m = (Map*)BundleRules.parseManifest(mb);
+            }
+        catch (JSONError e)
+            {
+            return e.message();
+            }
+        Map* files = (Map*)m.get((Hashable*)String.withCString("files"));
+        Array* listed = files.allKeys();
+        BundleSign._sort(listed);
+        Array* present = new Array();
+        String* bad = (String*)0;
+        if (!BundleSign._walk(dir, String.withCString(""), present, &bad))
+            return String.withFormat("'%s' is a link or a special file", bad.cString());
+        BundleSign._sort(present);
+        for (u32 i = (u32)0; i < present.count(); i = i + (u32)1)
+            {
+            String* p = (String*)present.get(i);
+            if (p.equals(String.withCString("bundle.json")) || p.equals(String.withCString("bundle.sig")))
+                continue;
+            if (files.get((Hashable*)p) == (Object*)0)
+                return String.withFormat("'%s' is a file the manifest does not list", p.cString());
+            }
+        for (u32 i = (u32)0; i < listed.count(); i = i + (u32)1)
+            {
+            String* p = (String*)listed.get(i);
+            String* h = BundleSign._sha(BundleSign._join(dir, p));
+            if (h == (String*)0)
+                return String.withFormat("'%s' is missing", p.cString());
+            if (!h.equals((String*)files.get((Hashable*)p)))
+                return String.withFormat("'%s' has changed since it was signed", p.cString());
+            }
+        return (String*)0;
+        }
+
+    // The manifest's bytes and bundle.sig's text: the signature, the strict
+    // parse, the name and every listed path. What verify() and a web load
+    // share; the files themselves are checked by whoever holds them.
+    static String* verifyManifest(Data* mb, String* st)
+        {
         if (st.byteLength() > (u32)0 && st.byteAt(st.byteLength() - (u32)1) == (u8)10)
             st = st.substringBytes((u32)0, st.byteLength() - (u32)1);
         Data* sig = BundleSign._unhex(st, (u32)64);
@@ -400,28 +494,6 @@ class BundleSign
         String* clash = BundleRules.collision(listed);
         if (clash != (String*)0)
             return String.withFormat("'%s' is the same file as another on a case-insensitive disk", clash.cString());
-        Array* present = new Array();
-        String* bad = (String*)0;
-        if (!BundleSign._walk(dir, String.withCString(""), present, &bad))
-            return String.withFormat("'%s' is a link or a special file", bad.cString());
-        BundleSign._sort(present);
-        for (u32 i = (u32)0; i < present.count(); i = i + (u32)1)
-            {
-            String* p = (String*)present.get(i);
-            if (p.equals(String.withCString("bundle.json")) || p.equals(String.withCString("bundle.sig")))
-                continue;
-            if (files.get((Hashable*)p) == (Object*)0)
-                return String.withFormat("'%s' is a file the manifest does not list", p.cString());
-            }
-        for (u32 i = (u32)0; i < listed.count(); i = i + (u32)1)
-            {
-            String* p = (String*)listed.get(i);
-            String* h = BundleSign._sha(BundleSign._join(dir, p));
-            if (h == (String*)0)
-                return String.withFormat("'%s' is missing", p.cString());
-            if (!h.equals((String*)files.get((Hashable*)p)))
-                return String.withFormat("'%s' has changed since it was signed", p.cString());
-            }
-        return (String*)0;
+        return BundleRules.checkProperties(m.get((Hashable*)String.withCString("properties")));
         }
     }
