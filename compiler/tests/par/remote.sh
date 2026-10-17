@@ -129,7 +129,9 @@ if grep -v '^par:' "$L/two_a.out" | diff -q - "tests/fixtures/$f.expected.out" >
    && [ "$(grep -c 'a program connected' "$L/xcd5.log")" = 2 ]; then
     echo "PASS remote two programs"
 else
-    echo "FAIL remote two programs"; grep -v '^par:' "$L/two_a.out" "$L/two_b.out" | head -4; grep -c 'connected' "$L/xcd5.log"; rc=1
+    echo "FAIL remote two programs"; grep -v '^par:' "$L/two_a.out" "$L/two_b.out" | head -4; grep -c 'connected' "$L/xcd5.log"
+    echo "  the daemon's log:"; tail -5 "$L/xcd5.log" | sed 's/^/    /'
+    echo "  what the programs said of it:"; grep -h 'remote' "$L/two_a.out" "$L/two_b.out" | head -6 | sed 's/^/    /'; rc=1
 fi
 kill $XCD5 2> /dev/null
 wait $XCD5 2> /dev/null

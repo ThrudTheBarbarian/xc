@@ -40,7 +40,7 @@ Array* apkLenPrefixed(Array* d)
     }
 Array* apkSha256(Array* d, u32 from, u32 len)
     {
-    Sha256* h = new Sha256();
+    MachOSha256* h = new MachOSha256();
     h.update(d, from, len);
     Array* out = new Array();
     h.finalise(out);

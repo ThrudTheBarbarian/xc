@@ -119,7 +119,7 @@ class Bytes
         }
     static Array* sha256(Array* a)
         {
-        Sha256* h = new Sha256();
+        MachOSha256* h = new MachOSha256();
         h.update(a, (u32)0, a.count());
         Array* out = new Array();
         h.finalise(out);
@@ -1843,7 +1843,7 @@ class Bytes
             u32 len = codeLimit - off;
             if (len > (u32)4096)
                 len = (u32)4096;
-            Sha256* h = new Sha256();
+            MachOSha256* h = new MachOSha256();
             h.update(work, off, len);
             h.finalise(codeHashes);
             }

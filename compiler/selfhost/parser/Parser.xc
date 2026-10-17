@@ -34,10 +34,17 @@
 #import "TokenType.xc"
 #import "Token.xc"
 #import "Node.xc"
+#import "Lexer.xc"
 
 class Parser
 {
     Array*  _tokens;        // of Token@
+    // Protocols' static members (bundles step 2), as the reference's
+    // blkState pstatics / pstaticOrder / pversion: per protocol, in order, an
+    // Array of [ret, name, params, args] Strings; and [major, minor].
+    Array*  _pStaticOrder;
+    Map*    _pStatics;
+    Map*    _pVersion;
     u32     _pos;
     Array*  _errors;        // of String@
     Array*  _warnings;      // of String@ — "<cat>\t<file:line:col: warning: text>"
@@ -1129,6 +1136,7 @@ class Parser
     // ── Program ──────────────────────────────────────────────────
     Node* parse(void)
     {
+        rewriteProtocolStaticReceivers();
         Node* program = mk((u16)nkProgram);
         while (!check((u16)tokEOF) && !_fatal) {
             u32 before = _pos;
@@ -1145,7 +1153,151 @@ class Parser
             if (_pos == before) advance();
         }
         blkAppendSynthesised(program);               // task #26
+        protocolCompanions(program);                 // bundles step 2
         return program;
+    }
+
+    // Static members of a protocol (bundles-and-plugins.md §3): `P.f(args)`
+    // goes to the companion class `_XtP_P`, synthesised after the program —
+    // forwarding to the class that conforms to P and defines every member
+    // (the host), else calling through the table bind() was given (a
+    // plugin). As the reference's rewriteProtocolStaticReceivers /
+    // protocolCompanionsFor, text for text.
+    void rewriteProtocolStaticReceivers(void)
+    {
+        u32 n = _tokens.count();
+        Map* withStatics = new Map();
+        for (u32 i = (u32)0; i + (u32)1 < n; i = i + (u32)1) {
+            Token* t = (Token*)_tokens.get(i);
+            Token* nt = (Token*)_tokens.get(i + (u32)1);
+            if (t.type() != (u16)tokProtocol || nt.type() != (u16)tokIdentifier) continue;
+            u32 j = i + (u32)2;
+            while (j < n && ((Token*)_tokens.get(j)).type() != (u16)tokLBrace) j = j + (u32)1;
+            i32 depth = (i32)0;
+            while (j < n) {
+                u16 ty = ((Token*)_tokens.get(j)).type();
+                if (ty == (u16)tokLBrace) depth = depth + (i32)1;
+                else if (ty == (u16)tokRBrace) {
+                    depth = depth - (i32)1;
+                    if (depth == (i32)0) break;
+                } else if (ty == (u16)tokStatic && depth == (i32)1) {
+                    withStatics.set((Hashable*)nt.value(), (Object*)nt.value());
+                }
+                j = j + (u32)1;
+            }
+        }
+        if (withStatics.count() == (u32)0) return;
+        for (u32 i = (u32)0; i + (u32)1 < n; i = i + (u32)1) {
+            Token* t = (Token*)_tokens.get(i);
+            if (t.type() != (u16)tokIdentifier || ((Token*)_tokens.get(i + (u32)1)).type() != (u16)tokDot) continue;
+            if (withStatics.get((Hashable*)t.value()) == (Object*)0) continue;
+            if (i > (u32)0) {
+                u16 pt = ((Token*)_tokens.get(i - (u32)1)).type();
+                if (pt == (u16)tokDot || pt == (u16)tokProtocol) continue;
+            }
+            String* nm = String.withCString("_XtP_");
+            nm.append(t.value());
+            _tokens.replaceAt(i, (Object*)Token.with((u16)tokIdentifier, nm, t.line(), t.col()));
+        }
+    }
+
+    // Whether the comma list `list` names p.
+    static bool listHas(String* list, String* p)
+    {
+        u32 at = (u32)0;
+        while (at <= list.byteLength()) {
+            u32 e = at;
+            while (e < list.byteLength() && list.byteAt(e) != (u8)',') e = e + (u32)1;
+            if (list.substringBytes(at, e - at).equals(p)) return true;
+            at = e + (u32)1;
+        }
+        return false;
+    }
+
+    // What the last parse's protocols with static members were: name ->
+    // ["M.m", "provides" | "requires"], for `xcc --bundle`'s manifest.
+    static Map* _protocolsSeen;
+    static Map* protocolsSeen(void) { return _protocolsSeen; }
+
+    void protocolCompanions(Node* program)
+    {
+        if (_pStaticOrder == (Array*)0 || _pStaticOrder.count() == (u32)0) return;
+        if (_protocolsSeen == (Map*)0) _protocolsSeen = new Map();
+        String* src = new String();
+        for (u32 pi = (u32)0; pi < _pStaticOrder.count(); pi = pi + (u32)1) {
+            String* P = (String*)_pStaticOrder.get(pi);
+            Array* ms = (Array*)_pStatics.get((Hashable*)P);
+            String* provider = (String*)0;
+            for (u32 d = (u32)0; d < program.kidCount() && provider == (String*)0; d = d + (u32)1) {
+                Node* c = program.kid(d);
+                if (c.kind() != (u16)nkClassDecl || c.extra() == (String*)0 || !Parser.listHas(c.extra(), P)) continue;
+                bool all = true;
+                for (u32 m = (u32)0; m < ms.count(); m = m + (u32)1) {
+                    String* want = (String*)((Array*)ms.get(m)).get((u32)1);
+                    bool found = false;
+                    for (u32 k = (u32)0; k < c.kidCount(); k = k + (u32)1) {
+                        Node* cm = c.kid(k);
+                        if (cm.kind() == (u16)nkMethodDecl && (cm.flags() & (u32)NF_STATIC) != (u32)0 && cm.name().equals(want))
+                            found = true;
+                    }
+                    if (!found) all = false;
+                }
+                if (all) provider = c.name();
+            }
+            Array* v = _pVersion == (Map*)0 ? (Array*)0 : (Array*)_pVersion.get((Hashable*)P);
+            Array* rec = new Array();
+            String* vs = String.withString(v == (Array*)0 ? String.withCString("0") : (String*)v.get((u32)0));
+            vs.appendByte((u8)'.');
+            vs.append(v == (Array*)0 ? String.withCString("0") : (String*)v.get((u32)1));
+            rec.add((Object*)vs);
+            rec.add((Object*)String.withCString(provider != (String*)0 ? "provides" : "requires"));
+            _protocolsSeen.set((Hashable*)P, (Object*)rec);
+            String* C = String.withCString("_XtP_");
+            C.append(P);
+            if (provider == (String*)0)
+                for (u32 m = (u32)0; m < ms.count(); m = m + (u32)1) {
+                    Array* e = (Array*)ms.get(m);
+                    src.appendFormat("typedef %s %s_%s_t(%s);\n", ((String*)e.get((u32)0)).cString(), C.cString(),
+                                     ((String*)e.get((u32)1)).cString(), ((String*)e.get((u32)2)).cString());
+                }
+            src.appendFormat("class %s\n{\n", C.cString());
+            if (provider != (String*)0)
+                src.appendCString("static pointer* _impl;\n");
+            else
+                src.appendCString("static pointer _table;\nstatic void bind(pointer t) { _table = t; }\n"
+                                  "static pointer table(void) { return _table; }\n");
+            for (u32 m = (u32)0; m < ms.count(); m = m + (u32)1) {
+                Array* e = (Array*)ms.get(m);
+                String* ret = (String*)e.get((u32)0);
+                String* nm = (String*)e.get((u32)1);
+                String* params = (String*)e.get((u32)2);
+                String* args = (String*)e.get((u32)3);
+                bool isVoid = ret.equals(String.withCString("void"));
+                if (provider != (String*)0)
+                    src.appendFormat("static %s %s(%s) { %s%s.%s(%s); }\n", ret.cString(), nm.cString(), params.cString(),
+                                     isVoid ? "" : "return ", provider.cString(), nm.cString(), args.cString());
+                else
+                    src.appendFormat("static %s %s(%s) { %s_%s_t* fn = (%s_%s_t*)((pointer*)_table)[%lu]; %sfn(%s); }\n",
+                                     ret.cString(), nm.cString(), params.cString(), C.cString(), nm.cString(),
+                                     C.cString(), nm.cString(), m, isVoid ? "" : "return ", args.cString());
+            }
+            if (provider != (String*)0) {
+                src.appendFormat("static pointer table(void)\n{\nif (_impl == (pointer*)0) { _impl = new pointer[%lu];", ms.count());
+                for (u32 m = (u32)0; m < ms.count(); m = m + (u32)1)
+                    src.appendFormat(" _impl[%lu] = (pointer)&%s.%s;", m, provider.cString(),
+                                     ((String*)((Array*)ms.get(m)).get((u32)1)).cString());
+                src.appendCString(" }\nreturn (pointer)_impl;\n}\n");
+            }
+            src.appendFormat("static u32 versionMajor(void) { return (u32)%s; }\nstatic u32 versionMinor(void) { return (u32)%s; }\n}\n",
+                             v == (Array*)0 ? "0" : ((String*)v.get((u32)0)).cString(),
+                             v == (Array*)0 ? "0" : ((String*)v.get((u32)1)).cString());
+        }
+        Lexer* lx = Lexer.with(src, String.withCString("<protocol-companions>"));
+        Parser* sub = Parser.with(lx.tokenise());
+        Node* prog = sub.parse();
+        if (prog == (Node*)0) return;
+        for (u32 i = (u32)0; i < prog.kidCount(); i = i + (u32)1)
+            program.add(prog.kid(i));
     }
 
     Node* parseTopLevel(void)
@@ -1667,9 +1819,39 @@ class Parser
         Token* nameTok = expect((u16)tokIdentifier);
         Node* n = mkNamed((u16)nkProtocolDecl,
                                 (nameTok == 0) ? String.withCString("?") : nameTok.value());
+        // `:version(major.minor)` (bundles step 2).
+        if (nameTok != 0 && check((u16)tokColon) && checkAt((u32)1, (u16)tokIdentifier)
+            && peek((u32)1).value().equals(String.withCString("version"))) {
+            advance();
+            advance();
+            expect((u16)tokLParen);
+            String* vt = advance().value();
+            u32 dot = vt.indexOfByte((u8)'.');
+            Array* v = new Array();
+            if (dot == String.notFound()) {
+                v.add((Object*)String.withI64(Parser.decimal(vt)));
+                v.add((Object*)String.withCString("0"));
+            } else {
+                v.add((Object*)String.withI64(Parser.decimal(vt.substringBytes((u32)0, dot))));
+                v.add((Object*)String.withI64(Parser.decimal(vt.substringFromByte(dot + (u32)1))));
+            }
+            if (_pVersion == (Map*)0) _pVersion = new Map();
+            _pVersion.set((Hashable*)nameTok.value(), (Object*)v);
+            expect((u16)tokRParen);
+        }
         if (openBlock()) {
             while (!closeBlockAhead() && !check((u16)tokEOF)) {
                 if (match((u16)tokSemicolon)) continue;
+                // A static member: the companion's, kept as text (as the reference).
+                if (nameTok != 0 && check((u16)tokStatic)) {
+                    u32 from = _pos + (u32)1;
+                    Node* sm = parseMember();
+                    u32 to = _pos;
+                    if (sm == (Node*)0 || sm.kind() != (u16)nkMethodDecl) continue;
+                    protocolStatic(nameTok.value(), sm, from, to);
+                    while (_pendingMembers.count() > (u32)0) _pendingMembers.removeAt((u32)0);
+                    continue;
+                }
                 Node* m = parseMember();
                 if (m != 0) n.add(m);
                 while (_pendingMembers.count() > (u32)0) {
@@ -1682,6 +1864,72 @@ class Parser
         match((u16)tokSemicolon);
         if (declTok != 0) n.setPos(declTok.fileId(), declTok.line(), declTok.col());
         return n;
+    }
+
+    // The leading decimal digits of s.
+    static i64 decimal(String* s)
+    {
+        i64 v = (i64)0;
+        for (u32 i = (u32)0; i < s.byteLength() && s.byteAt(i) >= (u8)'0' && s.byteAt(i) <= (u8)'9'; i = i + (u32)1)
+            v = v * (i64)10 + (i64)(s.byteAt(i) - (u8)'0');
+        return v;
+    }
+
+    // Record a protocol's static member: its return type's tokens (before the
+    // name), its parameters' tokens, and its parameter names.
+    void protocolStatic(String* P, Node* m, u32 from, u32 to)
+    {
+        String* ret = new String();
+        u32 q = from;
+        while (q < to) {
+            Token* t = (Token*)_tokens.get(q);
+            if (t.type() == (u16)tokIdentifier && t.value().equals(m.name()) && q + (u32)1 < to
+                && ((Token*)_tokens.get(q + (u32)1)).type() == (u16)tokLParen)
+                break;
+            if (ret.byteLength() > (u32)0) ret.appendByte((u8)' ');
+            ret.append(t.value());
+            q = q + (u32)1;
+        }
+        String* params = new String();
+        i32 depth = (i32)0;
+        q = q + (u32)1;
+        while (q < to) {
+            Token* t = (Token*)_tokens.get(q);
+            if (t.type() == (u16)tokLParen) {
+                depth = depth + (i32)1;
+                if (depth == (i32)1) { q = q + (u32)1; continue; }
+            }
+            if (t.type() == (u16)tokRParen) {
+                depth = depth - (i32)1;
+                if (depth == (i32)0) break;
+            }
+            if (params.byteLength() > (u32)0) params.appendByte((u8)' ');
+            params.append(t.value());
+            q = q + (u32)1;
+        }
+        String* args = new String();
+        for (u32 k = (u32)0; k < m.kidCount(); k = k + (u32)1) {
+            Node* pn = m.kid(k);
+            if (pn.kind() != (u16)nkParam) continue;
+            if (args.byteLength() > (u32)0) args.appendCString(", ");
+            args.append(pn.name());
+        }
+        Array* e = new Array();
+        e.add((Object*)ret);
+        e.add((Object*)m.name());
+        e.add((Object*)params);
+        e.add((Object*)args);
+        if (_pStatics == (Map*)0) {
+            _pStatics = new Map();
+            _pStaticOrder = new Array();
+        }
+        Array* list = (Array*)_pStatics.get((Hashable*)P);
+        if (list == (Array*)0) {
+            list = new Array();
+            _pStatics.set((Hashable*)P, (Object*)list);
+            _pStaticOrder.add((Object*)P);
+        }
+        list.add((Object*)e);
     }
 
     // One class or protocol member: an ivar or a method.

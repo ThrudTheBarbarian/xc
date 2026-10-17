@@ -43,6 +43,42 @@ all work — but [`textForResource`](#textforresource) and its siblings always
 answer `0`.
 :::
 
+## Signed bundles
+
+A **plugin** is a bundle another program loads: a library with its resources,
+laid out the same way on every platform and signed by its publisher.
+`xcc --bundle` builds one:
+
+```sh
+xcc --bundle spice -A arm64  -o spice.dylib spice.xc --resources art/
+xcc --bundle spice -A x86_64 -o spice.so    spice.xc      # adds linux-x86_64
+```
+
+```
+spice/
+    bundle.json        the manifest: name, version, platforms, every file's SHA-256,
+                       the publisher's public key, the protocols it provides and requires
+    bundle.sig         the Ed25519 signature over bundle.json
+    Exec/macos-arm64/spice.dylib
+    Exec/linux-x86_64/spice.so
+    Resources/...
+```
+
+Each run adds or replaces its target's entry and signs the manifest again.
+The publisher key is made on first use in `~/.xcc/bundle-key` (or the file
+`--bundle-key` names) and its fingerprint is printed: keep it, because an update
+must be signed by the same key. `--bundle-name`, `--bundle-version`,
+`--publisher` and `--publisher-domain` fill in the rest of the manifest; what
+the bundle provides and requires comes from the protocols with
+[static members](/compiler/language/inheritance/#static-members-an-interface-between-programs)
+it declares.
+
+`BundleSign.verify(dir)` (`#import "BundleSign.xc"`) checks a bundle before
+anything in it is used, and says what is wrong: a signature that does not
+verify, a manifest with a key given twice, a path outside the bundle, a link,
+a file the manifest does not list, or one that has changed since it was
+signed.
+
 ## Topics
 
 **Construction** · [withRoot](#withroot) · [main](#main) · [mainFrom](#mainfrom) · [directoryOf](#directoryof)

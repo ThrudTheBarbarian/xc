@@ -22,6 +22,7 @@
 // rather than half-attempted, because a driver that silently produces the wrong
 // shape is worse than one that says it cannot.
 
+#import "BundleSign.xc"
 #import "Foundation.xc"
 #import "Stdio.xc"
 #import "Files.xc"
@@ -164,6 +165,15 @@ class DriverOptions
     u32        _opt;
     bool       _keepAsm;     // -S: stop after the back end
     bool       _emitLib;     // --emit-lib: a SHARED LIBRARY, not an executable
+    // --bundle <dir> (bundles-and-plugins.md §2): the library goes into a
+    // signed bundle there; name, version, resources, key and publisher.
+    String*    _bundleDir;
+    String*    _bundleName;
+    String*    _bundleVersion;
+    String*    _bundleResources;
+    String*    _bundleKey;
+    String*    _publisher;
+    String*    _publisherDomain;
     bool       _emitIfaceOnly;  // --emit-iface: the interface, and nothing else
     bool       _compileOnly;    // -c: an OBJECT, plus its build-artifact sidecars
     Array*     _linkInputs;     // -Xlinker <path> / -l<name>: libraries to load
@@ -266,6 +276,7 @@ class DriverOptions
     u32 opt(void)        { return _opt; }
     bool keepAsm(void)   { return _keepAsm; }
     bool emitLib(void)   { return _emitLib; }
+    String* bundleDir(void) { return _bundleDir; }
     bool emitIfaceOnly(void) { return _emitIfaceOnly; }
     bool compileOnly(void)   { return _compileOnly; }
     bool lto(void)           { return _lto; }
@@ -4172,6 +4183,80 @@ void main(void)
     irrt = (IrParser*)0;
     parsed = (IRModule*)0;
     emitModule(d, mod);
+    if (d.bundleDir() != (String*)0)
+        makeBundle(d);
+}
+
+// The bundle's platform directory for the target: <os>-<arch>.
+String* bundlePlatform(DriverOptions* d)
+{
+    if (isWasm(d)) return String.withCString("wasm32");
+    if (isAndroid(d)) return String.withCString("android-arm64");
+    if (isIos(d)) return String.withCString("ios-arm64");
+    if (isX86_64(d)) return String.withCString("linux-x86_64");
+    if (isArm9(d)) return String.withCString("xtos-arm9");
+    if (d.arch().equals(String.withCString("win64"))) return String.withCString("windows-x86_64");
+    return String.withCString("macos-arm64");
+}
+
+// --bundle: the library just written goes into the signed bundle
+// (BundleSign.xc), with what the protocols say it provides and requires.
+void makeBundle(DriverOptions* d)
+{
+    String* out = d.fe().output();
+    if (out == (String*)0) {
+        Stdio.printf("xcc: error: --bundle needs -o <library>: the file that goes into the bundle\n");
+        Process.exit((i32)1); return;
+    }
+    String* name = d._bundleName;
+    if (name == (String*)0) {
+        String* src = d.fe().input();
+        u32 s = src.byteLength();
+        while (s > (u32)0 && src.byteAt(s - (u32)1) != (u8)'/') s = s - (u32)1;
+        u32 e = src.byteLength();
+        while (e > s && src.byteAt(e - (u32)1) != (u8)'.') e = e - (u32)1;
+        name = src.substringBytes(s, (e > s + (u32)1 ? e - (u32)1 : src.byteLength()) - s);
+    }
+    String* keyPath = d._bundleKey;
+    if (keyPath == (String*)0) {
+        String* dirp = Platform.home();
+        dirp.appendCString("/.xcc");
+        Files.createDirectory(dirp);
+        keyPath = String.withString(dirp);
+        keyPath.appendCString("/bundle-key");
+    }
+    bool existed = Files.exists(keyPath);
+    Data* seed = BundleSign.publisherKey(keyPath);
+    if (seed == (Data*)0) {
+        Stdio.printf("xcc: error: --bundle: cannot read or make the publisher key at %s\n", keyPath.cString());
+        Process.exit((i32)1); return;
+    }
+    Map* provides = new Map();
+    Map* requires = new Map();
+    Map* seen = Parser.protocolsSeen();
+    if (seen != (Map*)0) {
+        Array* ks = seen.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1) {
+            String* k = (String*)ks.get(i);
+            Array* v = (Array*)seen.get((Hashable*)k);
+            if (((String*)v.get((u32)1)).equals(String.withCString("provides")))
+                provides.set((Hashable*)k, v.get((u32)0));
+            else
+                requires.set((Hashable*)k, v.get((u32)0));
+        }
+    }
+    String* err = BundleSign.make(d._bundleDir, name,
+                                  d._bundleVersion,
+                                  bundlePlatform(d), out, d._bundleResources, seed,
+                                  d._publisher, d._publisherDomain, provides, requires);
+    if (err != (String*)0) {
+        Stdio.printf("xcc: error: --bundle: %s\n", err.cString());
+        Process.exit((i32)1); return;
+    }
+    Data* pub = Ed25519.publicKey(seed.bytes());
+    Stdio.printf("xcc: %s/ signed by key %s (%s%s); keep that file: losing it means an update needs a key rotation\n",
+                 d._bundleDir.cString(), Sha256.hex(pub.bytes(), (u32)32).substringBytes((u32)0, (u32)16).cString(),
+                 keyPath.cString(), existed ? "" : ", made now");
 }
 
 // From a (round-tripped) IR module to the output file, per target. Split out
@@ -5975,6 +6060,32 @@ DriverOptions* parseDriverArgs(void)
                 o.suppressWarning(cat);
             }
             i = i + (u32)1; continue;
+        }
+        // --bundle <dir> and its companions: a library, laid out and signed.
+        if (a.equals(String.withCString("--bundle")) && i + (u32)1 < argc) {
+            d._bundleDir = Process.argument(i + (u32)1);
+            d.setEmitLib(true);
+            o.setEmitIface(true);
+            o.setLibraryBuild(true);
+            i = i + (u32)2; continue;
+        }
+        if (a.equals(String.withCString("--bundle-name")) && i + (u32)1 < argc) {
+            d._bundleName = Process.argument(i + (u32)1); i = i + (u32)2; continue;
+        }
+        if (a.equals(String.withCString("--bundle-version")) && i + (u32)1 < argc) {
+            d._bundleVersion = Process.argument(i + (u32)1); i = i + (u32)2; continue;
+        }
+        if (a.equals(String.withCString("--resources")) && i + (u32)1 < argc) {
+            d._bundleResources = Process.argument(i + (u32)1); i = i + (u32)2; continue;
+        }
+        if (a.equals(String.withCString("--bundle-key")) && i + (u32)1 < argc) {
+            d._bundleKey = Process.argument(i + (u32)1); i = i + (u32)2; continue;
+        }
+        if (a.equals(String.withCString("--publisher")) && i + (u32)1 < argc) {
+            d._publisher = Process.argument(i + (u32)1); i = i + (u32)2; continue;
+        }
+        if (a.equals(String.withCString("--publisher-domain")) && i + (u32)1 < argc) {
+            d._publisherDomain = Process.argument(i + (u32)1); i = i + (u32)2; continue;
         }
         if (a.equals(String.withCString("--emit-lib"))) {
             d.setEmitLib(true);

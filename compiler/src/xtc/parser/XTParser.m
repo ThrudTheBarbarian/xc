@@ -1,4 +1,5 @@
 #import "XTParser+Private.h"
+#import "XTLexer.h"
 
 // C reserved words that may not be used as variable names
 static NSSet<NSString*>* sCReservedWords = nil;
@@ -316,6 +317,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     // `replaceFields:` / `replaceMembers:`, so any AST node that
     // captured the placeholder picks up the real layout once the
     // body has been parsed.
+    [self rewriteProtocolStaticReceivers];
     [self prescanForwardTypeDeclarations];
 
     while (![self check:XTTokenEOF] && !_diagnostics.hasFatalError)
@@ -338,8 +340,139 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     // and the per-literal impl classes (in creation order) join the
     // program here, as ordinary class declarations.
     [decls addObjectsFromArray:[self blkSynthesisedDeclsAt:loc]];
+    // Protocols' static members (bundles-and-plugins.md §3): each protocol
+    // that has them gets its companion class.
+    [decls addObjectsFromArray:[self protocolCompanionsFor:decls]];
 
     return [[XTProgramNode alloc] initWithDeclarations:decls location:loc];
+    }
+
+/****************************************************************************|* Static members of a protocol (bundles-and-plugins.md §3): the interface
+|* between a host and a plugin. `P.f(args)` names the member; the parser
+|* rewrites the receiver to the protocol's companion class `_XtP_P`, which it
+|* synthesises after the program: where a class of this program conforms to
+|* P and defines every member as a static method (the HOST), each member
+|* forwards to it and `table()` returns their addresses, in declaration order;
+|* elsewhere (a PLUGIN) each member calls through the table `bind(t)` was
+|* given at load. `versionMajor()` / `versionMinor()` give `:version(M.m)`.
+|* Mirrored in the port's parser, text for text.
+\****************************************************************************/
+- (void)rewriteProtocolStaticReceivers
+    {
+    NSUInteger n = _tokens.count;
+    NSMutableSet<NSString*>* withStatics = [NSMutableSet set];
+    for (NSUInteger i = 0; i + 1 < n; i++)
+        {
+        if (_tokens[i].type != XTTokenProtocol || _tokens[i + 1].type != XTTokenIdentifier)
+            continue;
+        NSUInteger j = i + 2;
+        while (j < n && _tokens[j].type != XTTokenLBrace)
+            j++;
+        NSInteger depth = 0;
+        for (; j < n; j++)
+            {
+            if (_tokens[j].type == XTTokenLBrace)
+                depth++;
+            else if (_tokens[j].type == XTTokenRBrace && --depth == 0)
+                break;
+            else if (_tokens[j].type == XTTokenStatic && depth == 1)
+                [withStatics addObject:_tokens[i + 1].value];
+            }
+        }
+    if (!withStatics.count)
+        return;
+    NSMutableArray<XTToken*>* t = [_tokens mutableCopy];
+    for (NSUInteger i = 0; i + 1 < n; i++)
+        {
+        XTToken* tk = t[i];
+        if (tk.type != XTTokenIdentifier || t[i + 1].type != XTTokenDot || ![withStatics containsObject:tk.value])
+            continue;
+        if (i > 0 && (t[i - 1].type == XTTokenDot || t[i - 1].type == XTTokenProtocol))
+            continue;
+        t[i] = [[XTToken alloc] initWithType:XTTokenIdentifier
+                                       value:[@"_XtP_" stringByAppendingString:tk.value]
+                                    location:tk.location];
+        }
+    _tokens = t;
+    }
+
+- (NSArray<XTASTNode*>*)protocolCompanionsFor:(NSArray<XTASTNode*>*)decls
+    {
+    NSArray<NSString*>* order = self.blkState[@"pstaticOrder"];
+    if (!order.count)
+        return @[];
+    NSDictionary<NSString*, NSArray<NSDictionary*>*>* members = self.blkState[@"pstatics"];
+    NSDictionary<NSString*, NSArray<NSNumber*>*>* versions = self.blkState[@"pversion"];
+    NSMutableString* src = [NSMutableString string];
+    for (NSString* P in order)
+        {
+        NSArray<NSDictionary*>* ms = members[P];
+        // The host: a class of this program conforming to P with every member static.
+        NSString* provider = nil;
+        for (XTASTNode* d in decls)
+            {
+            if (![d isKindOfClass:[XTClassDeclNode class]])
+                continue;
+            XTClassDeclNode* c = (XTClassDeclNode*)d;
+            if (c.isExternal || ![c.protocolNames containsObject:P])
+                continue;
+            BOOL all = YES;
+            for (NSDictionary* m in ms)
+                {
+                BOOL found = NO;
+                for (XTMethodDeclNode* cm in c.methods)
+                    if (cm.isStatic && [cm.methodName isEqualToString:m[@"name"]])
+                        found = YES;
+                if (!found)
+                    all = NO;
+                }
+            if (all)
+                {
+                provider = c.className;
+                break;
+                }
+            }
+        NSArray<NSNumber*>* v = versions[P] ?: @[ @0, @0 ];
+        NSString* C = [@"_XtP_" stringByAppendingString:P];
+        if (!provider)
+            for (NSDictionary* m in ms)
+                [src appendFormat:@"typedef %@ %@_%@_t(%@);\n", m[@"ret"], C, m[@"name"], m[@"params"]];
+        [src appendFormat:@"class %@\n{\n", C];
+        if (provider)
+            [src appendString:@"static pointer* _impl;\n"];
+        else
+            [src appendString:@"static pointer _table;\nstatic void bind(pointer t) { _table = t; }\n"
+                              @"static pointer table(void) { return _table; }\n"];
+        NSUInteger k = 0;
+        for (NSDictionary* m in ms)
+            {
+            BOOL isVoid = [m[@"ret"] isEqualToString:@"void"];
+            if (provider)
+                [src appendFormat:@"static %@ %@(%@) { %@%@.%@(%@); }\n", m[@"ret"], m[@"name"], m[@"params"],
+                                  isVoid ? @"" : @"return ", provider, m[@"name"], m[@"args"]];
+            else
+                [src appendFormat:@"static %@ %@(%@) { %@_%@_t* fn = (%@_%@_t*)((pointer*)_table)[%lu]; %@fn(%@); }\n",
+                                  m[@"ret"], m[@"name"], m[@"params"], C, m[@"name"], C, m[@"name"], (unsigned long)k,
+                                  isVoid ? @"" : @"return ", m[@"args"]];
+            k++;
+            }
+        if (provider)
+            {
+            [src appendFormat:@"static pointer table(void)\n{\nif (_impl == (pointer*)0) { _impl = new pointer[%lu];", (unsigned long)ms.count];
+            k = 0;
+            for (NSDictionary* m in ms)
+                [src appendFormat:@" _impl[%lu] = (pointer)&%@.%@;", (unsigned long)k++, provider, m[@"name"]];
+            [src appendString:@" }\nreturn (pointer)_impl;\n}\n"];
+            }
+        [src appendFormat:@"static u32 versionMajor(void) { return (u32)%@; }\nstatic u32 versionMinor(void) { return (u32)%@; }\n}\n",
+                          v[0], v[1]];
+        }
+    XTLexer* lexer = [[XTLexer alloc] initWithSource:src filename:@"<protocol-companions>" diagnostics:_diagnostics];
+    NSArray<XTToken*>* toks = [lexer tokenise];
+    XTParser* sub = [[XTParser alloc] initWithTokens:toks typeTable:_typeTable diagnostics:_diagnostics];
+    sub.defaultPointerPlacement = self.defaultPointerPlacement;
+    XTProgramNode* prog = [sub parse];
+    return prog ? prog.declarations : @[];
     }
 
 /****************************************************************************\
@@ -1074,6 +1207,20 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
             [_typeTable registerType:marker forName:nameTok.value];
             }
         }
+    // `:version(major.minor)` (bundles-and-plugins.md §3).
+    if ([self check:XTTokenColon] && [[self peekToken:1].value isEqualToString:@"version"] && nameTok)
+        {
+        [self advance];
+        [self advance];
+        [self expect:XTTokenLParen];
+        XTToken* vt = [self advance];
+        NSArray<NSString*>* parts = [vt.value componentsSeparatedByString:@"."];
+        NSMutableDictionary* pv = self.blkState[@"pversion"];
+        if (!pv)
+            self.blkState[@"pversion"] = pv = [NSMutableDictionary dictionary];
+        pv[nameTok.value] = @[ @([parts[0] integerValue]), @(parts.count > 1 ? [parts[1] integerValue] : 0) ];
+        [self expect:XTTokenRParen];
+        }
     [self expectBlockOpen];
     NSMutableArray<XTMethodDeclNode*>* methods = [NSMutableArray array];
     while (![self checkBlockClose] && ![self check:XTTokenEOF])
@@ -1081,6 +1228,62 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         // `optional bool windowShouldClose(...)` — a method a conforming
         // class may omit, leaving its vtable slot 0.
         BOOL isOptional = [self match:XTTokenOptional];
+        // `static R f(params);` — a member of the protocol's companion class
+        // (rewriteProtocolStaticReceivers), not of the conforming objects:
+        // kept as text for its synthesis.
+        if (!isOptional && [self check:XTTokenStatic] && nameTok)
+            {
+            [self advance];
+            NSUInteger from = _pos;
+            XTASTNode* sd = [self parseFunctionOrVarDecl:NO];
+            NSUInteger to = _pos;
+            if (![sd isKindOfClass:[XTFunctionDeclNode class]] || ((XTFunctionDeclNode*)sd).body)
+                {
+                [_diagnostics emitError:@"a protocol's static member is a function signature, with no body"
+                                     at:sd ? sd.location : [self currentLocation]];
+                continue;
+                }
+            XTFunctionDeclNode* fn = (XTFunctionDeclNode*)sd;
+            // Its text: the tokens before the name (the return type), and
+            // between the parentheses (the parameters).
+            NSMutableArray<NSString*>* ret = [NSMutableArray array];
+            NSMutableArray<NSString*>* params = [NSMutableArray array];
+            NSUInteger q = from;
+            while (q < to && !(_tokens[q].type == XTTokenIdentifier && [_tokens[q].value isEqualToString:fn.funcName] &&
+                               q + 1 < to && _tokens[q + 1].type == XTTokenLParen))
+                [ret addObject:_tokens[q++].value];
+            NSInteger pdepth = 0;
+            for (q = q + 1; q < to; q++)
+                {
+                if (_tokens[q].type == XTTokenLParen && pdepth++ == 0)
+                    continue;
+                if (_tokens[q].type == XTTokenRParen && --pdepth == 0)
+                    break;
+                [params addObject:_tokens[q].value];
+                }
+            NSMutableArray<NSString*>* args = [NSMutableArray array];
+            for (XTParamNode* pn in fn.parameters)
+                [args addObject:pn.paramName];
+            NSString* paramText = [params componentsJoinedByString:@" "];
+            if ([paramText isEqualToString:@"void"])
+                paramText = @"void";
+            NSMutableDictionary* all = self.blkState[@"pstatics"];
+            if (!all)
+                self.blkState[@"pstatics"] = all = [NSMutableDictionary dictionary];
+            NSMutableArray* order = self.blkState[@"pstaticOrder"];
+            if (!order)
+                self.blkState[@"pstaticOrder"] = order = [NSMutableArray array];
+            if (!all[nameTok.value])
+                {
+                all[nameTok.value] = [NSMutableArray array];
+                [order addObject:nameTok.value];
+                }
+            [all[nameTok.value] addObject:@{ @"ret" : [ret componentsJoinedByString:@" "],
+                                             @"name" : fn.funcName,
+                                             @"params" : paramText,
+                                             @"args" : [args componentsJoinedByString:@", "] }];
+            continue;
+            }
         if (![self looksLikeFunctionDecl])
             {
             [_diagnostics emitError:

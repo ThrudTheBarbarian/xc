@@ -217,6 +217,38 @@ if (resized) { resized(w, h); }              // this IS respondsTo
 Calling an `optional` method directly is a compile error, because it might be absent. Take
 `&delegate.method` and test it.
 
+### Static members: an interface between programs
+
+A protocol may also declare `static` members and a version. They are the
+interface a host and a plugin share (see [`Bundle`](/compiler/api/bundle/)): a
+call `Fence.emit(...)` names the member, not an object.
+
+```
+protocol Fence :version(2.1)
+    {
+    static i32 emit(u8* p, u32 n);
+    static void note(i32 v);
+    }
+```
+
+In the program that **provides** them, a class conforms and defines each member
+as a static method; `Fence.emit(...)` calls it, and `Fence.table()` returns
+their addresses, in declaration order, to hand to a plugin:
+
+```
+class Host : Object <Fence>
+    {
+    static i32 emit(u8* p, u32 n) { ... }
+    static void note(i32 v) { ... }
+    }
+```
+
+In a program with no such class (a **plugin**), each call goes through the
+table given to `Fence.bind(table)`, so the plugin calls the host's code.
+`Fence.versionMajor()` and `Fence.versionMinor()` give the `:version`; a later
+minor version only adds members at the end, so a plugin built against 2.1
+works with a host that provides 2.3.
+
 ### `final`
 
 Virtuality is inferred from the whole program: a method that nothing overrides keeps its direct

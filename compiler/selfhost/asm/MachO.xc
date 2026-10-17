@@ -29,7 +29,7 @@ u32 gMachOBssFrom;
 u32 gMachOBssBase;
 u32 gMachOBssSect;
 
-class Sha256
+class MachOSha256
     {
     u32 _s[8];
     u32 _len; // bytes hashed so far; a Mach-O here is far under 4 GB
@@ -2762,7 +2762,7 @@ class Sha256
             u32 len = codeLimit - off;
             if (len > CS_PAGE)
                 len = CS_PAGE;
-            Sha256* h = new Sha256();
+            MachOSha256* h = new MachOSha256();
             h.update(_out, off, len);
             h.finalise(cd);
             }
