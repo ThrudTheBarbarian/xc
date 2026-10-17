@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc)
 // threads_dealloc_method_on_self.xc — a dealloc that calls a method on self,
 // in a program that spawns a thread (bug 608).
 //

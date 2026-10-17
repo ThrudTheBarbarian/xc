@@ -240,8 +240,20 @@ static uint8_t valType(NSString* t, BOOL* ok)
                 return XTWasmFail(error, @"malformed import");
             if ([line containsString:@"(memory"])
                 {
+                // (memory N) or, for a threaded app, (memory N M shared):
+                // the limits, and whether the memory is shared.
                 memImported = YES;
-                [otherImports addObject:@[ @"memory", strs[0], strs[1], @"", @NO ]];
+                NSArray* mt = [self tokensOf:[line substringFromIndex:[line rangeOfString:@"(memory"].location + 7]];
+                NSMutableArray<NSNumber*>* lim = [NSMutableArray array];
+                for (NSString* t in mt)
+                    {
+                    NSString* d = [t stringByTrimmingCharactersInSet:[NSCharacterSet characterSetWithCharactersInString:@"()"]];
+                    if (d.length && isdigit([d characterAtIndex:0]))
+                        [lim addObject:@(strtoull(d.UTF8String, NULL, 10))];
+                    }
+                BOOL shared = [line containsString:@" shared"];
+                [otherImports addObject:@[ @"memory", strs[0], strs[1], @"", @NO,
+                                           lim.count ? lim[0] : @0, lim.count > 1 ? lim[1] : @(-1), @(shared) ]];
                 continue;
                 }
             if ([line containsString:@"(table"])
@@ -398,7 +410,10 @@ static uint8_t valType(NSString* t, BOOL* ok)
                 if ([toks[i] isEqualToString:@"global.get"] && i + 1 < toks.count)
                     addrGlobal = toks[i + 1];
                 }
-            [datas addObject:@[ addrGlobal ?: (id) @(addr),
+            // No offset at all: a passive segment, copied in by memory.init
+            // (a threaded app's data, written once by its first instance).
+            BOOL passive = !addrGlobal && ![toks containsObject:@"i32.const"];
+            [datas addObject:@[ passive ? (id)[NSNull null] : (addrGlobal ?: (id) @(addr)),
                                 [self bytesOfDataLiteral:lit] ]];
             continue;
             }
@@ -536,9 +551,14 @@ static uint8_t valType(NSString* t, BOOL* ok)
                 }
             else if ([kind isEqualToString:@"memory"])
                 {
+                // Limits: 0x00 min, 0x01 min max, 0x03 min max shared.
                 putByte(sec, 0x02);
-                putByte(sec, 0x00);
-                putU(sec, 0);
+                int64_t mx = row.count > 6 ? [row[6] longLongValue] : -1;
+                BOOL shared = row.count > 7 && [row[7] boolValue];
+                putByte(sec, mx < 0 ? 0x00 : (shared ? 0x03 : 0x01));
+                putU(sec, row.count > 5 ? [row[5] unsignedLongLongValue] : 0);
+                if (mx >= 0)
+                    putU(sec, (uint64_t)mx);
                 }
             // global
             else
@@ -674,6 +694,19 @@ static uint8_t valType(NSString* t, BOOL* ok)
         putSection(out, 9, sec);
         }
 
+    // DataCount (12), before the code: memory.init and data.drop name
+    // segments by index, which a validator checks against it.
+    BOOL anyPassive = NO;
+    for (NSArray* d in datas)
+        if (d[0] == [NSNull null])
+            anyPassive = YES;
+    if (anyPassive)
+        {
+        sec = [NSMutableData data];
+        putU(sec, datas.count);
+        putSection(out, 12, sec);
+        }
+
     sec = [NSMutableData data]; // code section
     putU(sec, funcs.count);
     for (XTWasmFn* f in funcs)
@@ -701,6 +734,14 @@ static uint8_t valType(NSString* t, BOOL* ok)
         putU(sec, datas.count);
         for (NSArray* d in datas)
             {
+            if (d[0] == [NSNull null])
+                {
+                putU(sec, 1); // passive
+                NSData* pb = d[1];
+                putU(sec, pb.length);
+                [sec appendData:pb];
+                continue;
+                }
             putU(sec, 0); // active, memory 0
             if ([d[0] isKindOfClass:[NSString class]])
                 {
@@ -943,6 +984,19 @@ typedef NS_ENUM(uint8_t, WImm) {
           @"i64.trunc_sat_f32_u" : @[ @0xFC, @(WImmNone), @5 ],
           @"i64.trunc_sat_f64_s" : @[ @0xFC, @(WImmNone), @6 ],
           @"i64.trunc_sat_f64_u" : @[ @0xFC, @(WImmNone), @7 ],
+          // 0xFE-prefixed threads/atomics (enc[2] = sub-opcode, enc[3] =
+          // natural alignment, log2).
+          @"memory.atomic.notify" : @[ @0xFE, @(WImmMemPair), @0x00, @2 ],
+          @"memory.atomic.wait32" : @[ @0xFE, @(WImmMemPair), @0x01, @2 ],
+          @"i32.atomic.load" : @[ @0xFE, @(WImmMemPair), @0x10, @2 ],
+          @"i32.atomic.load8_u" : @[ @0xFE, @(WImmMemPair), @0x12, @0 ],
+          @"i32.atomic.store" : @[ @0xFE, @(WImmMemPair), @0x17, @2 ],
+          @"i32.atomic.store8" : @[ @0xFE, @(WImmMemPair), @0x19, @0 ],
+          @"i32.atomic.rmw.add" : @[ @0xFE, @(WImmMemPair), @0x1E, @2 ],
+          @"i32.atomic.rmw.sub" : @[ @0xFE, @(WImmMemPair), @0x25, @2 ],
+          @"i32.atomic.rmw.xchg" : @[ @0xFE, @(WImmMemPair), @0x41, @2 ],
+          @"i32.atomic.rmw.cmpxchg" : @[ @0xFE, @(WImmMemPair), @0x48, @2 ],
+          @"i32.atomic.rmw8.cmpxchg_u" : @[ @0xFE, @(WImmMemPair), @0x4A, @0 ],
           @"memory.copy" : @[ @0xFC, @(WImmNone), @10 ],
           @"memory.fill" : @[ @0xFC, @(WImmNone), @11 ],
           // 0xFD-prefixed SIMD (enc[2] = LEB sub-opcode). The two memory ops
@@ -1116,6 +1170,25 @@ typedef NS_ENUM(uint8_t, WImm) {
             putByte(body, 0x00);
             continue;
             }
+        // memory.init <data> (then memory 0), data.drop <data>, atomic.fence.
+        if ([op isEqualToString:@"memory.init"] || [op isEqualToString:@"data.drop"])
+            {
+            if (toks.count < 2)
+                return XTWasmFail(error, [NSString stringWithFormat:@"%@ needs a segment (in %@)", op, fnLabel]);
+            putByte(body, 0xFC);
+            putU(body, [op isEqualToString:@"memory.init"] ? 8 : 9);
+            putU(body, strtoull(toks[1].UTF8String, NULL, 10));
+            if ([op isEqualToString:@"memory.init"])
+                putByte(body, 0x00);
+            continue;
+            }
+        if ([op isEqualToString:@"atomic.fence"])
+            {
+            putByte(body, 0xFE);
+            putU(body, 3);
+            putByte(body, 0x00);
+            continue;
+            }
         if ([op isEqualToString:@"memory.grow"])
             {
             putByte(body, 0x40);
@@ -1129,7 +1202,7 @@ typedef NS_ENUM(uint8_t, WImm) {
         putByte(body, enc[0].unsignedCharValue);
         // enc[2] is the 0xFC/0xFD sub-opcode for prefixed instructions and the
         // natural-alignment log2 for memory ops — dispatch on the prefix.
-        if (enc[0].unsignedCharValue == 0xFC || enc[0].unsignedCharValue == 0xFD)
+        if (enc[0].unsignedCharValue == 0xFC || enc[0].unsignedCharValue == 0xFD || enc[0].unsignedCharValue == 0xFE)
             {
             putU(body, enc[2].unsignedIntegerValue);
             if ([op isEqualToString:@"memory.copy"])
@@ -1270,9 +1343,9 @@ typedef NS_ENUM(uint8_t, WImm) {
             for (NSUInteger ti = 1; ti < toks.count; ti++)
                 if ([toks[ti] hasPrefix:@"offset="])
                     memOff = strtoull([toks[ti] substringFromIndex:7].UTF8String, NULL, 0);
-            putU(body, enc[0].unsignedCharValue == 0xFD
-                           ? 4
-                           : enc[2].unsignedIntegerValue); // natural align (log2)
+            putU(body, enc[0].unsignedCharValue == 0xFD   ? 4
+                       : enc[0].unsignedCharValue == 0xFE ? enc[3].unsignedIntegerValue
+                                                          : enc[2].unsignedIntegerValue); // natural align (log2)
             putU(body, memOff);
             }
         }

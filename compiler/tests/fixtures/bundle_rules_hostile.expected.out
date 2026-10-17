@@ -1,0 +1,31 @@
+path Exec/macos-arm64/spice.dylib ok
+path Resources/tool-icon.png      ok
+path bundle.json                  ok
+path ../escape.so                 refused
+path Exec/../../etc/passwd        refused
+path ./bundle.json                refused
+path /etc/passwd                  refused
+path Resources//x.png             refused
+path Resources/                   refused
+path C:/Windows/version.dll       refused
+path Exec\win\evil.dll            refused
+path Resources/café.png          refused
+path Resources/a b.png            refused
+path                              refused
+path a.so<NUL>x refused
+name spice                        ok
+name tool_1-b                     ok
+name spice.evil                   refused
+name a=b                          refused
+name x#y                          refused
+name                              refused
+collision Exec/linux-x86_64/Spice.so
+collision none
+manifest plain                ok
+manifest duplicate key        refused
+manifest nested duplicate     refused
+manifest same key, two objs   ok
+manifest 20 deep              refused
+manifest 5000-byte string     refused
+manifest 1.2 MB               refused
+manifest trailing comma       refused

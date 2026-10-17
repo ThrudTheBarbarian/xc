@@ -881,6 +881,11 @@ class _JSONReader
     u32 _i;
     u32 _depth;
     String* _error;
+    // Strict mode (JSON.parseStrict): a key twice in one object is an error,
+    // and the depth and every string's length are capped by the caller.
+    bool _strict;
+    u32 _maxDepth;
+    u32 _maxString;
 
     _JSONNode* parse(u8* p, u32 n)
         {
@@ -889,6 +894,8 @@ class _JSONReader
         _i = (u32)0;
         _depth = (u32)0;
         _error = (String*)0;
+        if (_maxDepth == (u32)0)
+            _maxDepth = (u32)256;
         _ws();
         _JSONNode* v = _value();
         if (_error != 0)
@@ -1068,6 +1075,11 @@ class _JSONReader
                 _fail("unterminated string");
                 return s;
                 }
+            if (_maxString != (u32)0 && s.byteLength() > _maxString)
+                {
+                _fail("a string is too long");
+                return s;
+                }
             u8 c = p[_i];
             if (c == (u8)'"')
                 {
@@ -1141,7 +1153,7 @@ class _JSONReader
     _JSONNode* _array(void)
         {
         _depth = _depth + (u32)1;
-        if (_depth > (u32)256)
+        if (_depth > _maxDepth)
             {
             _fail("nested too deeply");
             return (_JSONNode*)0;
@@ -1188,7 +1200,7 @@ class _JSONReader
     _JSONNode* _object(void)
         {
         _depth = _depth + (u32)1;
-        if (_depth > (u32)256)
+        if (_depth > _maxDepth)
             {
             _fail("nested too deeply");
             return (_JSONNode*)0;
@@ -1216,6 +1228,13 @@ class _JSONReader
             String* k = _string();
             if (_error != 0)
                 return (_JSONNode*)0;
+            if (_strict)
+                for (u32 q = (u32)0; q < o.keys.count(); q = q + (u32)1)
+                    if (((String*)o.keys.get(q)).equals(k))
+                        {
+                        _fail("a key appears twice in one object");
+                        return (_JSONNode*)0;
+                        }
             _ws();
             if (_i >= _n || p[_i] != (u8)':')
                 {
@@ -1292,6 +1311,27 @@ class JSON
         if (data == 0)
             throw new JSONError(String.withCString("JSON: no data"));
         return JSON._parseBytes(data.bytes(), data.length());
+        }
+
+    // Strict: what a signed manifest is read with (bundles-and-plugins.md
+    // review 5) — refuses a key twice in one object, and more than maxBytes
+    // of input, deeper nesting than maxDepth, or a string longer than
+    // maxString bytes; so a verifier and a loader cannot read two meanings
+    // from one signed text.
+    static Object* parseStrict(Data* data, u32 maxBytes, u32 maxDepth, u32 maxString) throws
+        {
+        if (data == 0)
+            throw new JSONError(String.withCString("JSON: no data"));
+        if (data.length() > maxBytes)
+            throw new JSONError(String.withFormat("JSON: %u bytes, more than the %u allowed", data.length(), maxBytes));
+        _JSONReader* reader = new _JSONReader();
+        reader._strict = true;
+        reader._maxDepth = maxDepth;
+        reader._maxString = maxString;
+        _JSONNode* root = reader.parse(data.bytes(), data.length());
+        if (root == 0)
+            throw new JSONError(reader._error);
+        return JSON._objectOf(root);
         }
 
     static Object* _parseBytes(u8* p, u32 n) throws

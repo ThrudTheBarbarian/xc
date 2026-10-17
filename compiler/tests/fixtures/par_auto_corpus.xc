@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64 --par-auto
-//xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc)
 // par_auto_corpus.xc — the corpus's own --par-auto fixture (the sweeps pass
 // the flag a fixture names in its //xtc-flags: line). An element map and an
 // integer reduction become `par` blocks; a scan is wrapped and then demoted

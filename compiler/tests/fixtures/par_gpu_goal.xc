@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc)
 //xtc-warn: because it calls Math.sin, which a Vulkan GPU has only in an approximate form
 // par_gpu_goal.xc — a `par` block's goal: speed (the default) or accuracy.
 //

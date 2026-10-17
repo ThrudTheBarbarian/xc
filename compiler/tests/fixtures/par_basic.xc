@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc)
 // par_basic.xc — `par` blocks on the CPU: a map over an array, `+` and `max`
 // reductions, a captured scalar, an inclusive range, a named and an unnamed
 // block. Par.run splits the range across threads, so the results must not

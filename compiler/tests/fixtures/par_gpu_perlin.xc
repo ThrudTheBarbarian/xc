@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc)
 // par_gpu_perlin.xc — Perlin noise (Ken Perlin's improved noise, 2D, four
 // octaves) for a 1024x1024 image in one `par` block: on the GPU with
 // XC_PAR=gpu on Apple silicon or an NVIDIA GPU under Windows, on every CPU

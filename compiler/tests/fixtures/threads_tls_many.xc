@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads: a wasm "thread" is another Worker over shared memory, deliberately NOT wired so the run loop cannot force atomic ARC (wasm-target.md §7); revisit with the threads proposal
 // threads_tls_many.xc — per-thread storage, at a scale that catches a shared one.
 //
 // The point of this fixture is the SCALE. Two threads with different values in

@@ -1,5 +1,5 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc); the serial fallback is operation_queue.xc
+//xtc-na: wasm32 — a queue runs serially there (a library must not make a page need cross-origin isolation); the serial fallback is operation_queue.xc
 // operation_queue_threads.xc — OperationQueue on worker threads: never more
 // operations at once than setMaxConcurrent, a dependency on another queue,
 // addAll waiting for its operations, an operation cancelled while it runs, and

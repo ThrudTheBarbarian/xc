@@ -1418,6 +1418,7 @@ void emitWasm(DriverOptions* d, IRModule* mod)
 
     Wasm32* be = new Wasm32();
     be.setOptLevel(d.opt());
+    be.setThreadSafeArcOverride(d.fe().threadSafeArc());
     // A library build is the back end's own mode — it emits the `;; xtc-lib
     // data=N table=M` marker the placement sidecar is read from, and a module
     // header with no start/_start.

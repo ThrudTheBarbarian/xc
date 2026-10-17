@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64 --par-auto
-//xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc)
 // par_step.xc — a `par` loop with a stride (`step s`, a literal above 1):
 // the work items are its iterations, counted from 0, with i = a + k*s. A
 // written block, an inclusive range, an empty range, and a plain step loop

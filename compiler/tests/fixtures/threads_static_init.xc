@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads: a wasm "thread" is another Worker over shared memory, deliberately NOT wired so the run loop cannot force atomic ARC (wasm-target.md §7); revisit with the threads proposal
 // threads_static_init.xc — the race-free static-init once.
 //
 // private:docs/Design/threading.md §4.3 / §9.5. `static_init_once.xc` pins the SEMANTICS

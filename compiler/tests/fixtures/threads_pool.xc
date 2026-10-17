@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads: a wasm "thread" is another Worker over shared memory, deliberately NOT wired so the run loop cannot force atomic ARC (wasm-target.md §7); revisit with the threads proposal
 // threads_pool.xc — a parallel loop, and the guarantees it makes.
 //
 // private:docs/Design/threading.md Phase 4 asked for `parallel for`; Pool.forRange is

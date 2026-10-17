@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc)
 // par_gpu_helpers.xc — a `par` body that calls helper functions: nested, with
 // a branch, and feeding a reduction. On Apple silicon with XC_PAR=gpu the
 // helpers are printed into the Metal kernel; the answer is the same anywhere.

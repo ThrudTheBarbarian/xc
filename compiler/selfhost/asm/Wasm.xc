@@ -187,10 +187,12 @@ class WasmBuf
     i64 _addr;
     String* _addrGlobal; // 0, or the $global the offset reads (W2)
     Data* _bytes;
+    bool _passive;       // no offset: copied in by memory.init
 
     void init(void)
         {
         _addr = (i64)0;
+        _passive = false;
         }
     }
 
@@ -215,6 +217,9 @@ class WasmBuf
     Array* _impMuts;             // Number@ 0/1
     Array* _importedGlobalNames; // String@ ($ids, index space before defined)
     bool _memImported;
+    i64 _memMin;         // the imported memory's limits: (memory N) or
+    i64 _memMax;         // (memory N M shared) for a threaded app; -1 no max
+    bool _memShared;
     bool _tableImported;
     bool _tableExported;
     String* _elemBaseGlobal; // 0, or the $global the elem offset reads
@@ -882,6 +887,19 @@ class WasmBuf
         op("i64.trunc_sat_f32_u", (u32)$FC, (u32)WIMM_NONE, (u32)5);
         op("i64.trunc_sat_f64_s", (u32)$FC, (u32)WIMM_NONE, (u32)6);
         op("i64.trunc_sat_f64_u", (u32)$FC, (u32)WIMM_NONE, (u32)7);
+        // 0xFE-prefixed threads/atomics: the sub-opcode, and the natural
+        // alignment (log2) in the top byte.
+        op("memory.atomic.notify", (u32)$FE, (u32)WIMM_MEMPAIR, (u32)$00 | ((u32)2 << (u32)8));
+        op("memory.atomic.wait32", (u32)$FE, (u32)WIMM_MEMPAIR, (u32)$01 | ((u32)2 << (u32)8));
+        op("i32.atomic.load", (u32)$FE, (u32)WIMM_MEMPAIR, (u32)$10 | ((u32)2 << (u32)8));
+        op("i32.atomic.load8_u", (u32)$FE, (u32)WIMM_MEMPAIR, (u32)$12);
+        op("i32.atomic.store", (u32)$FE, (u32)WIMM_MEMPAIR, (u32)$17 | ((u32)2 << (u32)8));
+        op("i32.atomic.store8", (u32)$FE, (u32)WIMM_MEMPAIR, (u32)$19);
+        op("i32.atomic.rmw.add", (u32)$FE, (u32)WIMM_MEMPAIR, (u32)$1E | ((u32)2 << (u32)8));
+        op("i32.atomic.rmw.sub", (u32)$FE, (u32)WIMM_MEMPAIR, (u32)$25 | ((u32)2 << (u32)8));
+        op("i32.atomic.rmw.xchg", (u32)$FE, (u32)WIMM_MEMPAIR, (u32)$41 | ((u32)2 << (u32)8));
+        op("i32.atomic.rmw.cmpxchg", (u32)$FE, (u32)WIMM_MEMPAIR, (u32)$48 | ((u32)2 << (u32)8));
+        op("i32.atomic.rmw8.cmpxchg_u", (u32)$FE, (u32)WIMM_MEMPAIR, (u32)$4A);
         op("memory.copy", (u32)$FC, (u32)WIMM_NONE, (u32)10);
         op("memory.fill", (u32)$FC, (u32)WIMM_NONE, (u32)11);
         }
@@ -1042,6 +1060,32 @@ class WasmBuf
             return fail(String.withCString("malformed import"));
         if (line.contains(_kPMemory))
             {
+            // (memory N) or (memory N M shared): the limits, as the reference.
+            u32 at = (u32)0;
+            while (at + (u32)7 <= line.byteLength() && !line.substringBytes(at, (u32)7).equals(_kPMemory))
+                at = at + (u32)1;
+            Array* mt = WasmWriter.tokensOf(line.substringFromByte(at + (u32)7));
+            u32 nl = (u32)0;
+            for (u32 i = (u32)0; i < mt.count(); i = i + (u32)1)
+                {
+                String* t = (String*)mt.get(i);
+                u32 b = (u32)0;
+                while (b < t.byteLength() && t.byteAt(b) == (u8)'(')
+                    b = b + (u32)1;
+                if (b < t.byteLength() && t.byteAt(b) >= (u8)'0' && t.byteAt(b) <= (u8)'9')
+                    {
+                    i64 v = (i64)0;
+                    while (b < t.byteLength() && t.byteAt(b) >= (u8)'0' && t.byteAt(b) <= (u8)'9')
+                        {
+                        v = v * (i64)10 + (i64)(t.byteAt(b) - (u8)'0');
+                        b = b + (u32)1;
+                        }
+                    if (nl == (u32)0) _memMin = v;
+                    else if (nl == (u32)1) _memMax = v;
+                    nl = nl + (u32)1;
+                    }
+                }
+            _memShared = line.contains(String.withCString(" shared"));
             _memImported = true;
             _impKinds.add((Object*)Number.withU32((u32)2));
             _impModules.add(strs.get((u32)0));
@@ -1237,6 +1281,12 @@ class WasmBuf
                 seg._addrGlobal = (String*)toks.get(i + (u32)1);
             }
         seg._bytes = WasmWriter.bytesOfDataLiteral(lit);
+        // No offset at all: a passive segment (a threaded app's data).
+        bool sawConst = false;
+        for (u32 i = (u32)0; i < toks.count(); i = i + (u32)1)
+            if (((String*)toks.get(i)).equals(_kI32Const))
+                sawConst = true;
+        seg._passive = seg._addrGlobal == (String*)0 && !sawConst;
         _datas.add((Object*)seg);
         return true;
         }
@@ -1443,6 +1493,26 @@ class WasmBuf
             body.p8((u32)$00);
             return true;
             }
+        // memory.init <data> (then memory 0), data.drop <data>, atomic.fence.
+        bool isInit = opName.equals(String.withCString("memory.init"));
+        if (isInit || opName.equals(String.withCString("data.drop")))
+            {
+            if (toks.count() < (u32)2)
+                return fail(String.withFormat("%s needs a segment (in %s)", opName.cString(), fnLabel.cString()));
+            body.p8((u32)$FC);
+            body.pU(isInit ? (u64)8 : (u64)9);
+            body.pU((u64)WasmWriter.parseI64((String*)toks.get((u32)1)));
+            if (isInit)
+                body.p8((u32)$00);
+            return true;
+            }
+        if (opName.equals(String.withCString("atomic.fence")))
+            {
+            body.p8((u32)$FE);
+            body.pU((u64)3);
+            body.p8((u32)$00);
+            return true;
+            }
 
         Object* encO = _ops.get((Hashable*)opName);
         if (encO == (Object*)0)
@@ -1452,10 +1522,17 @@ class WasmBuf
         u32 encByte = enc & (u32)$FF;
         u32 encImm = (enc >> (u32)8) & (u32)$FF;
         u32 encExtra = enc >> (u32)16;
+        u32 encAlign = (u32)0;
+        if (encByte == (u32)$FE)
+            {
+            // threads/atomics: the sub-opcode, then the alignment above it.
+            encAlign = enc >> (u32)24;
+            encExtra = (enc >> (u32)16) & (u32)$FF;
+            }
         body.p8(encByte);
-        // extra is the 0xFC/0xFD sub-opcode for prefixed instructions and the
-        // natural-alignment log2 for memory ops — dispatch on the prefix.
-        if (encByte == (u32)$FC || encByte == (u32)$FD)
+        // extra is the 0xFC/0xFD/0xFE sub-opcode for prefixed instructions and
+        // the natural-alignment log2 for memory ops — dispatch on the prefix.
+        if (encByte == (u32)$FC || encByte == (u32)$FD || encByte == (u32)$FE)
             {
             body.pU((u64)encExtra);
             if (opName.equals(_kMemCopy))
@@ -1531,7 +1608,7 @@ class WasmBuf
                 if (t.hasPrefix(_kOffsetEq))
                     memOff = (u64)WasmWriter.parseI64(t.substringFromByte((u32)7));
                 }
-            body.pU(encByte == (u32)$FD ? (u64)4 : (u64)encExtra); // natural align (log2)
+            body.pU(encByte == (u32)$FD ? (u64)4 : (encByte == (u32)$FE ? (u64)encAlign : (u64)encExtra)); // natural align (log2)
             body.pU(memOff);
             }
         return true;
@@ -1699,9 +1776,12 @@ class WasmBuf
                 }
             else if (kind == (u32)2)
                 {
+                // Limits: 0x00 min, 0x01 min max, 0x03 min max shared.
                 sec.p8((u32)$02);
-                sec.p8((u32)$00);
-                sec.pU((u64)0);
+                sec.p8(_memMax < (i64)0 ? (u32)$00 : (_memShared ? (u32)$03 : (u32)$01));
+                sec.pU((u64)_memMin);
+                if (_memMax >= (i64)0)
+                    sec.pU((u64)_memMax);
                 }
             else
                 {
@@ -1874,6 +1954,13 @@ class WasmBuf
         for (u32 i = (u32)0; i < _datas.count(); i = i + (u32)1)
             {
             WasmDataSeg* d = (WasmDataSeg*)_datas.get(i);
+            if (d._passive)
+                {
+                sec.pU((u64)1); // passive
+                sec.pU((u64)d._bytes.length());
+                sec.buf().append(d._bytes);
+                continue;
+                }
             sec.pU((u64)0); // active, memory 0
             if (d._addrGlobal != (String*)0)
                 {
@@ -1955,6 +2042,9 @@ class WasmBuf
         _impMuts = new Array();
         _importedGlobalNames = new Array();
         _memImported = false;
+        _memMin = (i64)0;
+        _memMax = (i64)-1;
+        _memShared = false;
         _tableImported = false;
         _tableExported = false;
         _elemBaseGlobal = (String*)0;
@@ -2018,6 +2108,18 @@ class WasmBuf
         emitExports(out);
         if (!emitElem(out))
             return (Data*)0;
+        // DataCount (12), before the code: memory.init and data.drop name
+        // segments by index.
+        bool anyPassive = false;
+        for (u32 i = (u32)0; i < _datas.count(); i = i + (u32)1)
+            if (((WasmDataSeg*)_datas.get(i))._passive)
+                anyPassive = true;
+        if (anyPassive)
+            {
+            WasmBuf* dc = new WasmBuf();
+            dc.pU((u64)_datas.count());
+            out.section((u32)12, dc);
+            }
         if (!emitCode(out))
             return (Data*)0;
         if (!emitData(out))

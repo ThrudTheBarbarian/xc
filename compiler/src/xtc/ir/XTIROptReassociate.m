@@ -35,18 +35,27 @@ static BOOL reassocType(XTIRType* t)
              errors:(NSMutableArray<NSString*>* _Nullable* _Nullable)outErrors
     {
     (void)outErrors;
+    // The function's use counts and phis, counted once and again after each
+    // rebuild (which changes them): counting them for every block made the
+    // pass quadratic in the function's size, most of a par program's compile.
     for (XTIRFunction* fn in mod.functions)
+        {
+        NSCountedSet<NSNumber*>* uses = [NSCountedSet set];
+        NSMutableSet<NSNumber*>* phiIds = [NSMutableSet set];
+        [self countUsesIn:fn uses:uses phis:phiIds];
         for (XTIRBlock* bb in fn.blocks)
-            while ([self reassociateOneIn:bb function:fn])
-                ;
+            while ([self reassociateOneIn:bb function:fn uses:uses phis:phiIds])
+                {
+                uses = [NSCountedSet set];
+                phiIds = [NSMutableSet set];
+                [self countUsesIn:fn uses:uses phis:phiIds];
+                }
+        }
     return YES;
     }
 
-// Rebuild one chain in `bb`; NO when there is none left to rebuild.
-- (BOOL)reassociateOneIn:(XTIRBlock*)bb function:(XTIRFunction*)fn
+- (void)countUsesIn:(XTIRFunction*)fn uses:(NSCountedSet<NSNumber*>*)uses phis:(NSMutableSet<NSNumber*>*)phiIds
     {
-    NSCountedSet<NSNumber*>* uses = [NSCountedSet set];
-    NSMutableSet<NSNumber*>* phiIds = [NSMutableSet set];
     for (XTIRBlock* b in fn.blocks)
         {
         NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:b.phiNodes];
@@ -61,6 +70,14 @@ static BOOL reassocType(XTIRType* t)
             if (p.result)
                 [phiIds addObject:@(p.result.valueId)];
         }
+    }
+
+// Rebuild one chain in `bb`; NO when there is none left to rebuild.
+- (BOOL)reassociateOneIn:(XTIRBlock*)bb
+                function:(XTIRFunction*)fn
+                    uses:(NSCountedSet<NSNumber*>*)uses
+                    phis:(NSMutableSet<NSNumber*>*)phiIds
+    {
     NSMutableDictionary<NSNumber*, XTIRInsn*> * defIn = [NSMutableDictionary dictionary];
     for (XTIRInsn* i in bb.instructions)
         if (i.result)
@@ -78,23 +95,30 @@ static BOOL reassocType(XTIRType* t)
       return p;
     };
 
+    // Every result in `bb` that is a link of a longer chain, in one pass: the
+    // test per candidate against the whole block was quadratic in its size,
+    // and the par runtime's largest functions made that most of a par
+    // program's compile time.
+    NSMutableSet<NSNumber*>* linkResults = [NSMutableSet set];
+    for (XTIRInsn* u in bb.instructions)
+        {
+        if (u.operands.count != 2)
+            continue;
+        for (XTIROperand* o in u.operands)
+            {
+            XTIRInsn* p = linkOf(o, u);
+            if (p && p != u)
+                [linkResults addObject:@(p.result.valueId)];
+            }
+        }
+
     for (XTIRInsn* T in bb.instructions)
         {
         if (!reassocOp(T.opcode) || T.operands.count != 2 || !T.result || T.memoryResult ||
             !reassocType(T.result.type))
             continue;
         // T must END its chain: its result is not itself a link of a longer one.
-        BOOL isLink = NO;
-        if ([uses countForObject:@(T.result.valueId)] == 1)
-            for (XTIRInsn* u in bb.instructions)
-                {
-                if (u == T || u.opcode != T.opcode || u.operands.count != 2)
-                    continue;
-                for (XTIROperand* o in u.operands)
-                    if (o.kind == XTIROperandKindUse && o.valueId == T.result.valueId && linkOf(o, u) == T)
-                        isLink = YES;
-                }
-        if (isLink)
+        if ([linkResults containsObject:@(T.result.valueId)])
             continue;
 
         // Walk back from T. At each link the operand that is the next link is

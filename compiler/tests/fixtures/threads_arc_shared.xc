@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads: a wasm "thread" is another Worker over shared memory, deliberately NOT wired so the run loop cannot force atomic ARC (wasm-target.md §7); revisit with the threads proposal
 // threads_arc_shared.xc — the correctness core of threading: ARC under threads.
 //
 // private:docs/Design/threading.md §4.1 calls the refcount race "the single blocking

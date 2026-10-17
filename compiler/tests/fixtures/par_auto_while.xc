@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64 --par-auto
-//xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc)
 // par_auto_while.xc — --par-auto takes a counted while loop as the `for` it
 // amounts to: `while (v < B) { …; v++; }` with v written nowhere else. After
 // it, v holds what the loop left in it. A map, an inclusive reduction, a loop

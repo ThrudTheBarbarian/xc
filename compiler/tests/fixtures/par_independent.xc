@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc)
 // par_independent.xc — what the independence rule (par-blocks.md §4) lets a
 // `par` body do: read and rewrite its own element, write at a fixed offset
 // from i and read that same element back, gather from another buffer through

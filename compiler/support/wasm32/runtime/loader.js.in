@@ -33,7 +33,9 @@
   let XCC = null;   // this module's handle; see where it is assigned
 
   // ── Worker-mode MAIN-THREAD side: own the DOM, feed the ring, spawn. ──
-  if (cfg.runLoop === "worker") {
+  // Also where a THREADED program's page goes (below): blocking is illegal on
+  // the page thread, so its main runs in a Worker.
+  const pageWorker = () => {
     if (typeof SharedArrayBuffer === "undefined")
       throw new Error("xcc: the worker run loop needs SharedArrayBuffer — serve with COOP/COEP headers");
     const ring = new SharedArrayBuffer(cfg.ringBytes || 4096);
@@ -74,6 +76,8 @@
               ? canvas.transferControlToOffscreen() : null;
     const url = (document.currentScript && document.currentScript.src) || "__BASE__.js";
     const worker = new Worker(url);
+    // An error inside the worker, on the page's console.
+    worker.onerror = (e) => console.error(`xcc: ${e.message || e}`);
     worker.onmessage = (m) => {
       const d = m.data || {};
       if (d.xccOut !== undefined) { (globalThis.xccOut || console.log)(d.xccOut); return; }
@@ -99,13 +103,19 @@
                          // XC_PAR_REPORT and friends reach the program in the worker.
                          env: globalThis.xccEnv || cfg.env || null },
                        off ? [off] : []);
-    return;
-  }
+  };
+  if (cfg.runLoop === "worker") { pageWorker(); return; }
+  // A thread of a threaded program (wasm32-threads.md): this script again, in
+  // a Worker (or Node worker_threads), told which module, memory and bound
+  // method to run.
+  const nodeWT = isNode ? require("worker_threads") : null;
+  let threadBoot = isNode && nodeWT.workerData ? nodeWT.workerData.xccThread || null : null;
 
   // ── Node, plain browser, or the WORKER side: instantiate and run. ──
   let ringI32 = null, reqSeq = 0;
   if (isWorker) {
     const boot = await new Promise((res) => { self.onmessage = (m) => res(m.data); });
+    if (boot.xccThread) threadBoot = boot.xccThread;
     if (boot.ring) ringI32 = new Int32Array(boot.ring);
     globalThis.xccCanvas = boot.canvas || null;   // OffscreenCanvas for the driver
     // The page's xccConfig.workerData (any structured-cloneable value), set
@@ -116,9 +126,12 @@
     if (boot.workerScript) importScripts(boot.workerScript); // may set xccImports HERE
   }
   let line = [];
+  // Output is UTF-8: decoded as such (one byte a character turned é into
+  // Ã©), streaming, so a character split at the 4 KiB flush survives.
+  const outDec = new TextDecoder("utf-8");
   const flush = () => {
     if (!line.length) return;
-    const text = String.fromCharCode(...line); line = [];
+    const text = outDec.decode(new Uint8Array(line), { stream: true }); line = [];
     if (isNode) process.stdout.write(text);
     else if (isWorker) self.postMessage({ xccOut: text.replace(/\n$/, "") });
     else (globalThis.xccOut || console.log)(text.replace(/\n$/, ""));
@@ -164,6 +177,19 @@
     _xtc_pdp: (d, p) => emit(p ? d.toFixed(p + 1).slice(0, -1) : d.toFixed(10)),
     time_ms: () => Date.now() & 0x7FFFFFFF,
     getpid: () => 1,
+    abs: (v) => Math.abs(v | 0) | 0,
+    // SecureRandom.xc: the platform's CSPRNG, through a plain buffer
+    // (getRandomValues refuses a view of shared memory), 64 KiB at a time.
+    _xt_random_fill: (p, n) => {
+      const c = globalThis.crypto;
+      if (!c || !c.getRandomValues) return -1;
+      for (let at = 0; at < n; at += 65536) {
+        const k = Math.min(65536, n - at), b = new Uint8Array(k);
+        c.getRandomValues(b);
+        mem8().set(b, p + at);
+      }
+      return 0;
+    },
     // Files.xc / Process.xc host surface (CI task #81). Node has a
     // filesystem and a command line; a page has neither, so there every
     // file call answers the way a missing file does and argc is 1.
@@ -229,6 +255,7 @@
     _xm_atan2: Math.atan2, _xm_atan2f: (y, x) => Math.fround(Math.atan2(y, x)),
     _xm_exp:  Math.exp,   _xm_expf:  (x) => Math.fround(Math.exp(x)),
     _xm_log:  Math.log,   _xm_logf:  (x) => Math.fround(Math.log(x)),
+    _xm_ln:   Math.log,   _xm_lnf:   (x) => Math.fround(Math.log(x)),
     _xm_pow:  Math.pow,   _xm_powf:  (x, y) => Math.fround(Math.pow(x, y)),
     _xm_floor: Math.floor, _xm_floorf: (x) => Math.fround(Math.floor(x)),
     _xm_ceil: Math.ceil,  _xm_ceilf: (x) => Math.fround(Math.ceil(x)),
@@ -252,6 +279,117 @@
       return 0;
     },
   };
+  // ── Threads (wasm32-threads.md): the Thread / Mutex / Cond / Sem / Atomic /
+  // ThreadLocal primitives over Atomics on the shared memory, and the
+  // race-free static-init once. Sync objects are words from the module's own
+  // heap (its exported _xtc_alloc / _xtc_free). Views are re-derived per call:
+  // memory.grow replaces the buffer object.
+  const i32v = () => new Int32Array(XCC.memory.buffer);
+  // Made on first use: a page that is not isolated has no SharedArrayBuffer,
+  // and must reach the check below that says so.
+  let napWord = null;
+  const nap = (ms) => {
+    if (!napWord) napWord = new Int32Array(new SharedArrayBuffer(4));
+    Atomics.wait(napWord, 0, 0, ms);
+  };
+  const xalloc = (n) => XCC.instance.exports._xtc_alloc(1, n, 0);
+  const xfree = (p) => { if (p) XCC.instance.exports._xtc_free(p - 40); };
+  const mutexLock = (m, i) => {
+    let c = Atomics.compareExchange(m, i, 0, 1);
+    if (c === 0) return;
+    if (c !== 2) c = Atomics.exchange(m, i, 2);
+    while (c !== 0) { Atomics.wait(m, i, 2); c = Atomics.exchange(m, i, 2); }
+  };
+  const mutexUnlock = (m, i) => {
+    if (Atomics.sub(m, i, 1) !== 1) { Atomics.store(m, i, 0); Atomics.notify(m, i, 1); }
+  };
+  const word = (v) => { const p = xalloc(4); Atomics.store(i32v(), p >> 2, v | 0); return p; };
+  const tls = new Map();
+  const sinitMine = new Set();
+  let spawnThread = () => 0;   // set once the module is known
+  Object.assign(base, {
+    _xt_thread_create: (code, recv) => spawnThread(code, recv),
+    _xt_thread_join: (h) => {
+      if (!h) return -1;
+      const m = i32v();
+      while (Atomics.load(m, h >> 2) === 0) Atomics.wait(m, h >> 2, 0);
+      xfree(m[(h >> 2) + 1]);
+      xfree(h);
+      return 0;
+    },
+    // Word 2 of the handle: 1 detached, 2 finished. Whichever of the two
+    // comes second frees the thread's stack and handle.
+    _xt_thread_detach: (h) => {
+      if (h && Atomics.exchange(i32v(), (h >> 2) + 2, 1) === 2) { xfree(i32v()[(h >> 2) + 1]); xfree(h); }
+    },
+    _xt_thread_yield: () => nap(0),
+    _xt_thread_sleep_ms: (ms) => nap(ms >>> 0),
+    _xt_thread_self_id: () => (XCC.instance.exports.__tid ? XCC.instance.exports.__tid.value : 1) >>> 0,
+    _xt_thread_cpu_count: () => isNode ? require("os").cpus().length : (navigator.hardwareConcurrency || 1),
+    _xt_mutex_new: () => word(0),
+    _xt_mutex_free: xfree,
+    _xt_mutex_lock: (p) => mutexLock(i32v(), p >> 2),
+    _xt_mutex_unlock: (p) => mutexUnlock(i32v(), p >> 2),
+    _xt_mutex_trylock: (p) => Atomics.compareExchange(i32v(), p >> 2, 0, 1) === 0 ? 1 : 0,
+    // A condition is a sequence number: a waiter sleeps while it is unchanged.
+    _xt_cond_new: () => word(0),
+    _xt_cond_free: xfree,
+    _xt_cond_wait: (c, mu) => {
+      const m = i32v(), seq = Atomics.load(m, c >> 2);
+      mutexUnlock(m, mu >> 2);
+      Atomics.wait(m, c >> 2, seq);
+      mutexLock(i32v(), mu >> 2);
+    },
+    _xt_cond_signal: (c) => { const m = i32v(); Atomics.add(m, c >> 2, 1); Atomics.notify(m, c >> 2, 1); },
+    _xt_cond_broadcast: (c) => { const m = i32v(); Atomics.add(m, c >> 2, 1); Atomics.notify(m, c >> 2); },
+    _xt_sem_new: (n) => word(n),
+    _xt_sem_free: xfree,
+    _xt_sem_wait: (sp) => {
+      const m = i32v(), i = sp >> 2;
+      for (;;) {
+        const v = Atomics.load(m, i);
+        if (v > 0) { if (Atomics.compareExchange(m, i, v, v - 1) === v) return; }
+        else Atomics.wait(m, i, v);
+      }
+    },
+    _xt_sem_trywait: (sp) => {
+      const m = i32v(), i = sp >> 2;
+      for (;;) {
+        const v = Atomics.load(m, i);
+        if (v <= 0) return 0;
+        if (Atomics.compareExchange(m, i, v, v - 1) === v) return 1;
+      }
+    },
+    _xt_sem_post: (sp) => { const m = i32v(); Atomics.add(m, sp >> 2, 1); Atomics.notify(m, sp >> 2, 1); },
+    _xt_atomic_load_i32: (p) => p ? Atomics.load(i32v(), p >> 2) : 0,
+    _xt_atomic_store_i32: (p, v) => { if (p) Atomics.store(i32v(), p >> 2, v); },
+    _xt_atomic_add_i32: (p, d) => p ? (Atomics.add(i32v(), p >> 2, d) + d) | 0 : 0,
+    _xt_atomic_xchg_i32: (p, v) => p ? Atomics.exchange(i32v(), p >> 2, v) : 0,
+    _xt_atomic_cas_i32: (p, e, d) => p && Atomics.compareExchange(i32v(), p >> 2, e, d) === e ? 1 : 0,
+    // Keys from a counter every thread shares (the module's __xt_rt + 16);
+    // the values are this thread's own.
+    _xt_tls_new: () => (Atomics.add(i32v(), (XCC.instance.exports.__xt_rt.value + 16) >> 2, 1) + 1) >>> 0,
+    _xt_tls_set: (k, v) => { tls.set(k, v); },
+    _xt_tls_get: (k) => tls.get(k) || 0,
+    // A class's statics, initialised once whichever thread gets there first:
+    // 0 → 1 claims, 2 publishes; the owner re-entering returns at once, any
+    // other thread waits for 2.
+    _xtc_sinit_run: (flag, init, sdata) => {
+      if (!flag) return;
+      for (;;) {
+        const st = Atomics.load(mem8(), flag);
+        if (st === 2) return;
+        if (st === 0 && Atomics.compareExchange(mem8(), flag, 0, 1) === 0) {
+          sinitMine.add(flag);
+          try { XCC.instance.exports.__indirect_function_table.get(init)(sdata); }
+          finally { sinitMine.delete(flag); Atomics.store(mem8(), flag, 2); }
+          return;
+        }
+        if (sinitMine.has(flag)) return;
+        nap(1);
+      }
+    },
+  });
   if (isWorker && ringI32) {
     const ri = ringI32;
     // The blocking primitives (XG-WEB-BACKEND sec 3): the worker CAN block.
@@ -387,7 +525,8 @@
       // a JSON object of strings. Handed back as `key = value` lines in a
       // buffer from _xt_browser_alloc, its length in the first four bytes.
       let o = {};
-      try { o = JSON.parse(globalThis.localStorage.getItem(bstr(dp, dn)) || "{}"); } catch (e) {}
+      // Not under Node: its localStorage is an experiment that warns on use.
+      try { if (!isNode) o = JSON.parse(globalThis.localStorage.getItem(bstr(dp, dn)) || "{}"); } catch (e) {}
       const t = new TextEncoder().encode(Object.keys(o).sort()
         .map(k => k + " = " + String(o[k])).join("\n"));
       const p = XCC.instance.exports._xt_browser_alloc(t.length + 4);
@@ -401,7 +540,7 @@
         const eq = line.indexOf("=");
         if (eq > 0) o[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
       }
-      try { globalThis.localStorage.setItem(bstr(dp, dn), JSON.stringify(o)); return 1; }
+      try { if (isNode) return 0; globalThis.localStorage.setItem(bstr(dp, dn), JSON.stringify(o)); return 1; }
       catch (e) { return 0; }
     },
   }, extra.browser || {});
@@ -583,7 +722,44 @@
   };
   imports.xcgpu = { _xc_gpu_run: gpuJspi ? new WebAssembly.Suspending(gpuRun) : () => 0,
                     _xc_gpu_info: gpuJspi ? new WebAssembly.Suspending(gpuInfo) : () => 0 };
-  const { instance, module: wasmModule } = await WebAssembly.instantiate(bytes, imports);
+  // The module's memory import, initial pages (a threaded program's shared
+  // memory must be at least that), from the import section.
+  const memPages = (b) => {
+    const u = new Uint8Array(b);
+    let o = 8;
+    const leb = () => { let r = 0, sh = 0, x; do { x = u[o++]; r |= (x & 0x7f) << sh; sh += 7; } while (x & 0x80); return r >>> 0; };
+    while (o < u.length) {
+      const id = u[o++], len = leb(), end = o + len;
+      if (id === 2) {
+        for (let n = leb(); n > 0; n--) {
+          for (let k = 0; k < 2; k++) { const l = leb(); o += l; }   // module and field names
+          const kind = u[o++];
+          if (kind === 0) leb();
+          else if (kind === 1) { o++; const f = u[o++]; leb(); if (f & 1) leb(); }
+          else if (kind === 2) { o++; return leb(); }
+          else o += 2;
+        }
+      }
+      o = end;
+    }
+    return 32;
+  };
+  const wasmModule = threadBoot ? threadBoot.module : await WebAssembly.compile(bytes);
+  const threaded = WebAssembly.Module.imports(wasmModule).some((i) => i.module === "env" && i.kind === "memory");
+  if (threaded && !isNode && !isWorker) {
+    // The page: a threaded main must be able to block, so it runs in a Worker,
+    // and shared memory needs a cross-origin isolated page.
+    if (!globalThis.crossOriginIsolated)
+      throw new Error("xcc: __BASE__ uses threads, which need a cross-origin isolated page: serve it with " +
+                      "the headers Cross-Origin-Opener-Policy: same-origin and " +
+                      "Cross-Origin-Embedder-Policy: require-corp");
+    pageWorker();
+    return;
+  }
+  const sharedMemory = !threaded ? null : threadBoot ? threadBoot.memory
+                     : new WebAssembly.Memory({ initial: memPages(bytes), maximum: 16384, shared: true });
+  if (sharedMemory) base.memory = sharedMemory;
+  const instance = await WebAssembly.instantiate(wasmModule, imports);
   const usesGpu = gpuJspi && WebAssembly.Module.imports(wasmModule).some((m) => m.module === "xcgpu");
   // A per-module handle. This used to be ONLY `globalThis.xcc`, so loading a
   // second independent module clobbered the first — and the clobber was not
@@ -595,7 +771,7 @@
   // `globalThis.xcc` still points at the most recent module, because callers
   // rely on it; `globalThis.xccModules[<base>]` is the stable per-module one,
   // and everything INSIDE this loader now closes over XCC instead.
-  XCC = { instance, memory: instance.exports.memory };
+  XCC = { instance, memory: sharedMemory || instance.exports.memory };
   globalThis.xcc = XCC;
   (globalThis.xccModules || (globalThis.xccModules = {}))["__BASE__"] = XCC;
   // Instantiate each dep: data goes BETWEEN the app's static data and the
@@ -605,6 +781,95 @@
   // app's exported runtime, and the dep's reloc-apply patches the vtable
   // words a data segment cannot compute. __stack_low is raised past the
   // last dep so the shadow stack cannot grow down into library data.
+  if (threadBoot) {
+    // This instance is a thread: its own stack and id, then the bound method.
+    // A browser's pool worker stays, and runs each thread handed to it.
+    const ex = instance.exports;
+    const runThread = (t) => {
+      ex.__sp.value = t.sp;
+      ex.__stack_low.value = t.low;
+      ex.__tid.value = t.handle;
+      tls.clear();
+      sinitMine.clear();
+      try { ex.__indirect_function_table.get(t.code)(t.recv); }
+      catch (e) { flush(); console.error(e); }
+      flush();
+      const m = i32v();
+      Atomics.store(m, t.handle >> 2, 1);
+      Atomics.notify(m, t.handle >> 2);
+      // Detached: nobody joins, so the thread frees its own stack (no longer
+      // in use: the call has returned) and handle.
+      if (Atomics.exchange(m, (t.handle >> 2) + 2, 2) === 1) { xfree(t.low); xfree(t.handle); }
+    };
+    if (threadBoot.pool === undefined) {
+      runThread(threadBoot);
+      if (!isNode) self.close();
+      return;
+    }
+    const idle = new Int32Array(threadBoot.idle);
+    self.onmessage = (e) => {
+      if (!e.data || !e.data.xccRun) return;
+      runThread(e.data.xccRun);
+      Atomics.store(idle, threadBoot.pool, 1);
+      Atomics.add(idle, idle.length - 1, 1);
+      Atomics.notify(idle, idle.length - 1);
+    };
+    self.postMessage({ xccReady: threadBoot.pool });
+    return;
+  }
+  if (threaded) {
+    instance.exports.__xt_init_memory();
+    // A thread: a 256 KiB shadow stack and a handle {done, stack, detached}
+    // from the heap; this script started again on them. A browser starts a
+    // new Worker only once its creator returns to its event loop, which a
+    // thread that spawns and then joins never does: so the workers are
+    // started BEFORE main, as a pool (xccConfig.threadPool, default the
+    // core count, 4 to 16), each with the module instantiated, and a spawn
+    // hands its thread to an idle one, waiting for one to come free when all
+    // are busy (word [want] counts their returns). So a program never needs
+    // more threads running AT ONCE than the pool holds, or it waits forever,
+    // as an Emscripten pthread pool does.
+    const scriptUrl = isWorker ? self.location.href : null;
+    const pool = [];
+    let poolIdle = null;
+    if (isWorker) {
+      const want = (globalThis.xccConfig && globalThis.xccConfig.threadPool) ||
+                   Math.max(4, Math.min(16, navigator.hardwareConcurrency || 4));
+      poolIdle = new Int32Array(new SharedArrayBuffer(4 * (want + 1)));
+      await Promise.all(Array.from({ length: want }, (_, k) => new Promise((res) => {
+        const w = new Worker(scriptUrl);
+        w.onmessage = (e) => {
+          if (e.data && e.data.xccReady !== undefined) { Atomics.store(poolIdle, k, 1); res(); return; }
+          self.postMessage(e.data);   // its output, to the page
+        };
+        w.postMessage({ xccThread: { module: wasmModule, memory: sharedMemory, pool: k, idle: poolIdle.buffer },
+                        env: globalThis.xccEnv || null });
+        pool.push(w);
+      })));
+    }
+    spawnThread = (code, recv) => {
+      const STACK = 256 * 1024;
+      const h = xalloc(16), stack = xalloc(STACK);
+      const m = i32v();
+      m[h >> 2] = 0; m[(h >> 2) + 1] = stack; m[(h >> 2) + 2] = 0;
+      const run = { code, recv, handle: h, sp: (stack + STACK) & ~15, low: stack };
+      while (pool.length) {
+        const gen = Atomics.load(poolIdle, pool.length);
+        for (let k = 0; k < pool.length; k++)
+          if (Atomics.compareExchange(poolIdle, k, 1, 0) === 1) { pool[k].postMessage({ xccRun: run }); return h; }
+        Atomics.wait(poolIdle, pool.length, gen, 1000);
+      }
+      const msg = { xccThread: Object.assign({ module: wasmModule, memory: sharedMemory }, run),
+                    env: globalThis.xccEnv || null };
+      if (isNode) new nodeWT.Worker(__filename, { workerData: msg });
+      else {
+        const w = new Worker(scriptUrl);
+        w.onmessage = (e) => self.postMessage(e.data);   // its output, to the page
+        w.postMessage(msg);
+      }
+      return h;
+    };
+  }
   let dcur = order.length ? instance.exports.__data_end.value : 0;
   for (const d of order) {
     const dbytes = libBytes[d], dmeta = libMeta[d];
@@ -657,5 +922,8 @@
   else if (rc) console.warn(`main() returned ${rc}`);
 })().catch((e) => {
   const isNode = typeof process !== "undefined" && !!(process.versions && process.versions.node);
-  if (isNode) { console.error(e); process.exitCode = 70; } else { console.error(e); }
+  if (isNode) { console.error(e); process.exitCode = 70; }
+  // In a worker the error goes to the page, whose console the user sees.
+  else if (typeof importScripts === "function") self.postMessage({ xccLog: String(e && e.stack || e), lvl: 2 });
+  else console.error(e);
 });

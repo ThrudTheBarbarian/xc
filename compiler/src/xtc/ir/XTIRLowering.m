@@ -12016,6 +12016,12 @@ static const NSUInteger kVarargSlotBytes = 8;
         }
 
     [self.currentFunction.blocks addObject:join];
+    // Every arm returned or threw (`try { return f(); } catch (E e) { throw
+    // …; }`): nothing reaches the join, and what follows the try is the
+    // program's own dead code, as after a `for (;;)` with no break — the
+    // verifier rejected Predicate.xc's `return 0` there.
+    if (edgeBlocks.count == 0)
+        join.deadByConstruction = YES;
     self.currentBlock = join;
     [self mergeAtJoin:join snapshots:edgeSnaps throughBlocks:edgeBlocks base:baseSnap];
     }

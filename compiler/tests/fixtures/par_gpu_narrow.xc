@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc)
 // par_gpu_narrow.xc — 8- and 16-bit values in a `par` block that can run on
 // the GPU (XC_PAR=gpu). A GPU keeps them in 32-bit registers; the kernel keeps
 // each one extended by its own signedness, so a signed compare (v < -10), a

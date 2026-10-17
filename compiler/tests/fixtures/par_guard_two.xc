@@ -58,7 +58,7 @@ void twoEachSerial(u32* a, u32 o1, u32 o2, u32 o3)
 u32 differ(u32* a, u32* b)
 {
     u32 bad = (u32)0;
-    for (u32 i in 0..4 * N)
+    for (u32 i in 0..5 * N)
         if (a[i] != b[i])
             bad = bad + (u32)1;
     return bad;
@@ -66,7 +66,7 @@ u32 differ(u32* a, u32* b)
 
 void fill(u32* a, u32* b)
 {
-    for (u32 i in 0..4 * N)
+    for (u32 i in 0..5 * N)
     {
         a[i] = i * (u32)2654435761;
         b[i] = a[i];
@@ -75,8 +75,8 @@ void fill(u32* a, u32* b)
 
 i32 main(void)
 {
-    u32* a = new u32[4 * N];
-    u32* b = new u32[4 * N];
+    u32* a = new u32[5 * N];
+    u32* b = new u32[5 * N];
     u32 offs[3] = {(u32)1, (u32)300, (u32)N};
     for (u32 t in 0..3)
     {

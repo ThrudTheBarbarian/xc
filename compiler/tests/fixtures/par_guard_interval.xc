@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc)
 // par_guard_interval.xc — the run-time checks par-check leaves where the
 // static test cannot decide: a read and a write with unequal strides and a
 // captured offset, and a read and a write each offset by a different

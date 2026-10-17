@@ -1,10 +1,11 @@
 ---
 title: Threading
-description: Thread, Mutex, Guard, Cond, Sem, Atomic and Pool on the native targets, and how ARC refcounts stay safe across threads.
+description: Thread, Mutex, Guard, Cond, Sem, Atomic and Pool on the native targets and wasm32, and how ARC refcounts stay safe across threads.
 ---
 
-Threading is available on the **native targets only**: `arm64`, `x86_64`,
-`win64` and `arm9`. On `xt6502` and `m68k` every one of these classes is a hard
+Threading is available on `arm64`, `x86_64`, `win64`, `arm9` and `wasm32`
+(each thread a Web Worker over shared memory; see [Runtime](#runtime) for what
+a page needs). On `xt6502` and `m68k` every one of these classes is a hard
 `#error`, with no stub, so a threaded program cannot build and then run
 single-threaded.
 
@@ -231,8 +232,27 @@ make 500 deposits of 2.
 ## Runtime
 
 The runtime uses pthreads on macOS, raw `clone` + futex (Linux) or kernel32
-(Windows) on the freestanding targets, and XTOS threads on `arm9`. Both macOS
-runtimes share one runtime source.
+(Windows) on the freestanding targets, XTOS threads on `arm9`, and Web Workers
+on `wasm32`. Both macOS runtimes share one runtime source.
+
+On `wasm32` a program that spawns a thread is built differently from one that
+does not: its memory is shared, its refcounts and allocator are atomic, and
+each thread is the same module started again in a Worker (Node's
+`worker_threads` under Node) on the same memory. Waiting is not allowed on a
+page's main thread, so the program's `main` runs in a Worker too, and the page
+keeps the DOM. A browser shares memory between Workers only on a
+**cross-origin isolated** page, so serve it with these two headers:
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+Without them the loader stops with a message naming the headers. On a host
+that cannot set headers, a service worker can add them (the
+`coi-serviceworker` approach). A program that never spawns a thread needs
+neither, and `par` and `OperationQueue` do not spawn threads on `wasm32`: a
+library does not make a page need isolation.
 
 On `arm9` the kernel provides only thread lifecycle and a futex. `Mutex`, `Cond`
 and `Sem` are built on it in user space, so an uncontended lock is

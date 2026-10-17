@@ -352,6 +352,8 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
     BOOL changed = NO;
     for (XTIRBlock* H in fn.blocks)
         {
+            if (xtvIsRemainder(H))
+                continue;
         if (H.phiNodes.count < 2)
             continue;
         // Candidate accumulators: every phi in this header. Which one is the
@@ -456,6 +458,8 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
     if (off) return NO;
     for (XTIRBlock* H in fn.blocks)
         {
+            if (xtvIsRemainder(H))
+                continue;
         if (H.phiNodes.count < 3)
             continue;
 
@@ -797,6 +801,7 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
 - (void)runOnFunction:(XTIRFunction*)fn
     {
     BOOL reduxOff = getenv("XTVEC_REDUX_OFF") != NULL;
+    sVecRemainders = [NSMutableSet set];
     for (NSUInteger iter = 0; iter < 256; iter++)
         {
         XTVecCand* c = [self recognise:fn];
@@ -927,6 +932,8 @@ static BOOL xtvIvStartConst(XTIRInsn* ivPhi, XTIRBlock* latch,
 
     for (XTIRBlock* H in fn.blocks)
         {
+            if (xtvIsRemainder(H))
+                continue;
         if (H.phiNodes.count != 1)
             continue; // single induction; no reduction
         XTIRInsn* ivPhi = H.phiNodes[0];
@@ -1348,6 +1355,18 @@ static NSString* xtvUniqueBlockName(XTIRFunction* fn, NSString* want)
     return want;
     }
 
+// The remainder loops this pass made (an epilogue's scalar clone), per
+// function. One is never vectorised again: it runs fewer than one vector of
+// iterations, and a loop with a runtime start (a par chunk) is accepted, so
+// re-recognising it cloned its remainder in turn, 256 deep (the driver's
+// iteration cap), turning a 42-line par loop into 20 000 lines.
+static NSMutableSet<NSValue*>* sVecRemainders = nil;
+
+static BOOL xtvIsRemainder(XTIRBlock* H)
+    {
+    return [sVecRemainders containsObject:[NSValue valueWithNonretainedObject:H]];
+    }
+
 static void xtvCloneLoop(XTIRFunction* fn, XTIRBlock* H, XTIRBlock* B,
                          XTIRBlock** outH2, XTIRBlock** outB2,
                          NSMutableDictionary<NSNumber*, NSNumber*>* vmap)
@@ -1507,6 +1526,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     if (c.needsEpilogue)
         {
         xtvCloneLoop(fn, c.H, B, &H2, &B2, cmap);
+        [sVecRemainders addObject:[NSValue valueWithNonretainedObject:H2]];
         // The vector loop now stops at the largest whole number of vectors; the
         // clone picks up from there and runs to the original bound (its own
         // guard, cloned, still tests against the original n).
@@ -1833,6 +1853,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
 
     for (XTIRBlock* H in fn.blocks)
         {
+            if (xtvIsRemainder(H))
+                continue;
         if (H.phiNodes.count != 2)
             continue; // induction + accumulator
 
@@ -2423,6 +2445,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     if (c.needsEpilogue)
         {
         xtvCloneLoop(fn, H, B, &H2, &B2, cmap);
+        [sVecRemainders addObject:[NSValue valueWithNonretainedObject:H2]];
         // The vector loop now stops at the largest whole number of vectors; the
         // clone picks up from there and runs to the original bound (its own
         // guard, cloned, still tests against the original n).
@@ -2915,6 +2938,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
 
     for (XTIRBlock* H in fn.blocks)
         {
+            if (xtvIsRemainder(H))
+                continue;
         if (H.phiNodes.count != 2)
             continue;
         BOOL headerPure = YES;
@@ -3426,6 +3451,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
 
     for (XTIRBlock* H in fn.blocks)
         {
+            if (xtvIsRemainder(H))
+                continue;
         if (H.phiNodes.count != 2)
             continue;
         BOOL headerPure = YES;
@@ -4055,6 +4082,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     for (NSUInteger hi = 0; hi < fn.blocks.count; hi++)
         {
         XTIRBlock* H = fn.blocks[hi];
+        if (xtvIsRemainder(H))
+            continue;
         if (H.phiNodes.count != 2)
             continue;
 
@@ -4377,6 +4406,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
 
     for (XTIRBlock* H in fn.blocks)
         {
+            if (xtvIsRemainder(H))
+                continue;
         if (H.phiNodes.count != 2)
             continue;
         BOOL headerPure = YES;
@@ -4687,6 +4718,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
 
     for (XTIRBlock* H in fn.blocks)
         {
+            if (xtvIsRemainder(H))
+                continue;
         if (H.phiNodes.count != 2)
             continue;
         BOOL headerPure = YES;
@@ -4947,6 +4980,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     if (c.needsEpilogue)
         {
         xtvCloneLoop(fn, H, B, &H2, &B2, cmap);
+        [sVecRemainders addObject:[NSValue valueWithNonretainedObject:H2]];
         NSMutableArray<XTIROperand*>* gops = [c.guard.operands mutableCopy];
         if (c.runtimeTrip)
             {

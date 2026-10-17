@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc)
 //xtc-warn: because it uses double, which Apple GPUs do not have
 //xtc-warn: because it uses a captured value its Vulkan version cannot hold
 // par_capture_kinds.xc — every kind of capture a par body may take: pointers

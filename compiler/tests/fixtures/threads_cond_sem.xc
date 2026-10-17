@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads: a wasm "thread" is another Worker over shared memory, deliberately NOT wired so the run loop cannot force atomic ARC (wasm-target.md §7); revisit with the threads proposal
 // threads_cond_sem.xc — blocking rendezvous: condition variables and semaphores.
 //
 // private:docs/Design/threading.md §3.2. Both types exist to make one thread WAIT for

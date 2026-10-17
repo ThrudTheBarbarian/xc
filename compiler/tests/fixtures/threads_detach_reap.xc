@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads: a wasm "thread" is another Worker over shared memory, deliberately NOT wired so the run loop cannot force atomic ARC (wasm-target.md §7); revisit with the threads proposal
 // threads_detach_reap.xc — a detached thread must not cost anything forever.
 //
 // A thread's stack cannot be freed by the thread itself (it is standing on it),

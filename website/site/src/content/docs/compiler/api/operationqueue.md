@@ -58,8 +58,9 @@ return early.
 
 **Targets.** On a target with threads (arm64, x86-64, Windows, arm9, Android, iOS)
 a queue runs up to [`setMaxConcurrent`](#setmaxconcurrent) operations at once, on
-worker threads it starts as it needs them. On one without (the 6502, m68k,
-wasm32) the same code builds: a queue runs its operations on the thread that
+worker threads it starts as it needs them. On one without (the 6502, m68k)
+and on wasm32 (where threads would make the page need cross-origin isolation)
+the same code builds: a queue runs its operations on the thread that
 waits for them, in dependency and priority order, with the result of a serial
 queue. `OperationQueue.main()` runs on [`RunLoop.main()`](/compiler/api/runloop/)
 where there is one, and like a queue without threads elsewhere (arm9).

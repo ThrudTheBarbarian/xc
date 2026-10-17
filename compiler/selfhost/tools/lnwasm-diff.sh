@@ -61,7 +61,8 @@ for f in $FILES; do
          || [ ! -s "$WORK/a.wasm" ]; then
         oracle=$((oracle+1)); continue
     fi
-    if [ -n "$VALIDATE" ] && ! "$VALIDATE" "$WORK/a.wasm" >"$WORK/v.err" 2>&1; then
+    # --enable-threads: a threaded app's memory is shared (wasm32-threads.md).
+    if [ -n "$VALIDATE" ] && ! "$VALIDATE" --enable-threads "$WORK/a.wasm" >"$WORK/v.err" 2>&1; then
         invalid=$((invalid+1)); fail=$((fail+1))
         INVALID+=("$f: $(head -1 "$WORK/v.err" | cut -c1-100)")
         continue

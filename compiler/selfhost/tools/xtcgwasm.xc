@@ -30,6 +30,7 @@ void main(void)
     bool tailCalls = false;
     bool emitLib = false;
     bool linkLibs = false;
+    i32 arcMode = (i32)-1;
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
     while (i < argc)
@@ -80,6 +81,19 @@ void main(void)
         if (a.equals(String.withCString("--link-libs")))
             {
             linkLibs = true;
+            i = i + (u32)1;
+            continue;
+            }
+        // As xcc-cg-wasm32: force the threaded module (atomic ARC) on or off.
+        if (a.equals(String.withCString("--thread-safe-arc")))
+            {
+            arcMode = (i32)1;
+            i = i + (u32)1;
+            continue;
+            }
+        if (a.equals(String.withCString("--no-thread-safe-arc")))
+            {
+            arcMode = (i32)0;
             i = i + (u32)1;
             continue;
             }
@@ -143,6 +157,7 @@ void main(void)
     be.setTailCalls(tailCalls);
     be.setEmitLib(emitLib);
     be.setLinkLibs(linkLibs);
+    be.setThreadSafeArcOverride(arcMode);
     String* wat = be.assembly(m);
     if (be.fatalImport())
         Process.exit((i32)1); // task #34

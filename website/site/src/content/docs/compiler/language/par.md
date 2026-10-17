@@ -125,8 +125,9 @@ addition in a different order rounds differently.
 The range is split into one contiguous chunk per CPU thread (`Thread.cpuCount`).
 Setting `XC_PAR_THREADS=<n>` in the environment chooses the number of threads for
 one run; `XC_PAR_THREADS=1` runs the block on the calling thread alone. On
-targets without threads (`xt6502`, `m68k` and `wasm32`) the whole range runs on
-the calling thread.
+targets without threads (`xt6502`, `m68k`), and on `wasm32`, where threads
+would make the page need cross-origin isolation, the whole range runs on the
+calling thread (or on the GPU through WebGPU).
 
 ## Running on the GPU
 

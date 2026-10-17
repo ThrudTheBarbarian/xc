@@ -1,5 +1,4 @@
 //xtc-flags: target=arm64
-//xtc-na: wasm32 — no wasm threads (see threads_cond_sem.xc)
 // par_loop_capture.xc — a `par` block inside a loop uses that loop's
 // variable. A loop header's variable was not bound for capture, so the block
 // saw it as undefined: in both compilers for `for (T x in a..b)`, and in the

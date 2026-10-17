@@ -1070,6 +1070,8 @@ class OptProfile
     class Opt
     {
     u32 _level;
+    Map* _vecRemainders;   // vectorize: the remainder loops it made, this function
+    Map* _raDefIn;   // reassociate: the current block's defining insn per value
     u32 _vecFnBytes; // the vectorised function's own width (a dispatch clone), else 0
     OptProfile* _profile;
     bool _failed;
@@ -5330,18 +5332,16 @@ class OptProfile
         Object* uc = uses.get((Hashable*)o.val());
         if (uc == (Object*)0 || ((Number*)uc).asU32() != (u32)1)
             return (IRInsn*)0;
-        for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
-            {
-            IRInsn* p = (IRInsn*)bb.insns().get(i);
-            if (p.res() != o.val())
-                continue;
-            if (!p.op().equals(cur.op()) || p.ops().count() != (u32)2 || p.memRes() != (IRValue*)0)
-                return (IRInsn*)0;
-            if (p.res().ty() == (String*)0 || !p.res().ty().equals(cur.res().ty()))
-                return (IRInsn*)0;
-            return p;
-            }
-        return (IRInsn*)0;
+        // The defining instruction from _raDefIn (this block's, by value):
+        // a scan of the block here made the pass cubic in its size.
+        IRInsn* p = (IRInsn*)_raDefIn.get((Hashable*)o.val());
+        if (p == (IRInsn*)0)
+            return (IRInsn*)0;
+        if (!p.op().equals(cur.op()) || p.ops().count() != (u32)2 || p.memRes() != (IRValue*)0)
+            return (IRInsn*)0;
+        if (p.res().ty() == (String*)0 || !p.res().ty().equals(cur.res().ty()))
+            return (IRInsn*)0;
+        return p;
         }
 
     bool reassocOnce(IRFunc* fn, IRBlock* bb)
@@ -5381,6 +5381,29 @@ class OptProfile
                 }
             }
 
+        _raDefIn = new Map();
+        for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* d = (IRInsn*)bb.insns().get(i);
+            if (d.res() != (IRValue*)0 && _raDefIn.get((Hashable*)d.res()) == (Object*)0)
+                _raDefIn.set((Hashable*)d.res(), (Object*)d);
+            }
+        // Every result in `bb` that is a link of a longer chain, in one pass,
+        // as the reference.
+        Map* linkResults = new Map();
+        for (u32 ui = (u32)0; ui < bb.insns().count(); ui = ui + (u32)1)
+            {
+            IRInsn* u = (IRInsn*)bb.insns().get(ui);
+            if (u.ops().count() != (u32)2)
+                continue;
+            for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1)
+                {
+                IRInsn* p = raLink((IROperand*)u.ops().get(q), u, bb, uses);
+                if (p != (IRInsn*)0 && p != u)
+                    linkResults.set((Hashable*)p.res(), (Object*)p);
+                }
+            }
+
         for (u32 ti = (u32)0; ti < bb.insns().count(); ti = ti + (u32)1)
             {
             IRInsn* T = (IRInsn*)bb.insns().get(ti);
@@ -5388,22 +5411,7 @@ class OptProfile
                 || !raType(T.res().ty()))
                 continue;
             // T must END its chain.
-            bool isLink = false;
-            Object* tc = uses.get((Hashable*)T.res());
-            if (tc != (Object*)0 && ((Number*)tc).asU32() == (u32)1)
-                for (u32 ui = (u32)0; ui < bb.insns().count(); ui = ui + (u32)1)
-                    {
-                    IRInsn* u = (IRInsn*)bb.insns().get(ui);
-                    if (u == T || !u.op().equals(T.op()) || u.ops().count() != (u32)2)
-                        continue;
-                    for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1)
-                        {
-                        IROperand* o = (IROperand*)u.ops().get(q);
-                        if (o.kind() == (u8)OPK_USE && o.val() == T.res() && raLink(o, u, bb, uses) == T)
-                            isLink = true;
-                        }
-                    }
-            if (isLink)
+            if (linkResults.get((Hashable*)T.res()) != (Object*)0)
                 continue;
 
             Array* links = new Array();
@@ -12400,6 +12408,13 @@ class OptProfile
         return want;
         }
 
+    // The remainder loops this pass made (an epilogue's scalar clone), per
+    // function: never vectorised again, as the reference's sVecRemainders.
+    bool vecIsRemainder(IRBlock* H)
+        {
+        return _vecRemainders != (Map*)0 && _vecRemainders.get((Hashable*)H) != (Object*)0;
+        }
+
     Array* vecCloneLoop(IRFunc* fn, IRBlock* H, IRBlock* B, Map* vmap)
         {
         IRBlock* H2 = new IRBlock(vecUniqueBlockName(fn, hoistName2(H.name(), "_rem")));
@@ -13244,6 +13259,7 @@ class OptProfile
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
             // A dispatch clone carries its own vector width.
             _vecFnBytes = fn.simdLaneBytes();
+            _vecRemainders = new Map();
             u32 iter = (u32)0;
             while (iter < (u32)256)
                 {
@@ -13332,6 +13348,8 @@ class OptProfile
         for (u32 hi = (u32)0; hi < fn.blocks().count(); hi = hi + (u32)1)
             {
             IRBlock* H = (IRBlock*)fn.blocks().get(hi);
+            if (vecIsRemainder(H))
+                continue;
             if (H.phis().count() < (u32)2)
                 continue;
             // Every phi in the header is a candidate accumulator. Which one is
@@ -13456,6 +13474,8 @@ class OptProfile
     // Split out for the arm64 frame budget, as vecWideningAt was.
     bool vecDistributeAt(IRFunc* fn, IRBlock* H)
         {
+        if (vecIsRemainder(H))
+            return false;
         if (H.phis().count() < (u32)3)
             return false;
         IRInsn* term = H.term();
@@ -13907,6 +13927,8 @@ class OptProfile
 
     VecCand* vecMapAt(IRFunc* fn, IRBlock* H, Map* defOf, Map* defBlk, Map* uses)
         {
+        if (vecIsRemainder(H))
+            return (VecCand*)0;
         // One phi only: an induction variable and nothing carried.
         if (H.phis().count() != (u32)1)
             return (VecCand*)0;
@@ -14235,6 +14257,8 @@ class OptProfile
 
     VecCand* vecReductionAt(IRFunc* fn, IRBlock* H, Map* defOf, Map* defBlk, Map* uses)
         {
+        if (vecIsRemainder(H))
+            return (VecCand*)0;
         _vrAllowRT = true; // reduction, widening-sum and dot all accept one
         // FLOAT reductions reassociate the additions, so they are taken only
         // where the source grants it AND the target can lower the lane ops. A
@@ -15036,6 +15060,7 @@ class OptProfile
             {
             Array* cl = vecCloneLoop(fn, c.h(), B, mcmap);
             mH2 = (IRBlock*)cl.get((u32)0);
+            _vecRemainders.set((Hashable*)mH2, (Object*)mH2);
             mB2 = (IRBlock*)cl.get((u32)1);
             // The vector loop now stops at the last whole vector; the clone's
             // own (cloned) guard still tests the original bound.
@@ -15262,6 +15287,8 @@ class OptProfile
 
     VecCand* vecWideningAt(IRFunc* fn, IRBlock* H, Map* defOf, Map* defBlk, Map* uses)
         {
+        if (vecIsRemainder(H))
+            return (VecCand*)0;
         _vrAllowRT = true; // widening-sum / dot accept one too (see vecReduxShape)
         if (!vecReduxShape(H, defOf, defBlk))
             return (VecCand*)0;
@@ -15407,6 +15434,8 @@ class OptProfile
 
     VecCand* vecDotAt(IRFunc* fn, IRBlock* H, Map* defOf, Map* defBlk, Map* uses)
         {
+        if (vecIsRemainder(H))
+            return (VecCand*)0;
         _vrAllowRT = true; // widening-sum / dot accept one too (see vecReduxShape)
         if (!vecReduxShape(H, defOf, defBlk))
             return (VecCand*)0;
@@ -16128,6 +16157,8 @@ class OptProfile
 
     VecCand* vecCountAt(IRFunc* fn, IRBlock* H, Map* defOf, Map* defBlk, Map* uses)
         {
+        if (vecIsRemainder(H))
+            return (VecCand*)0;
         if (H.phis().count() != (u32)2)
             return (VecCand*)0;
         for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
@@ -16481,6 +16512,8 @@ class OptProfile
 
     VecCand* vecMaxMinAt(IRFunc* fn, IRBlock* H, Map* defOf, Map* defBlk)
         {
+        if (vecIsRemainder(H))
+            return (VecCand*)0;
         if (!vecMaxMinShape(fn, H, defOf, defBlk))
             return (VecCand*)0;
         IRValue* iv = _mmIv;
@@ -16761,6 +16794,8 @@ class OptProfile
 
     void vecUnrollAt(IRFunc* fn, IRBlock* H)
         {
+        if (vecIsRemainder(H))
+            return;
         if (H.phis().count() != (u32)2)
             return;
         Map* defOf = new Map();
@@ -17086,6 +17121,7 @@ class OptProfile
         Map* cmap = new Map();
         Array* cl = vecCloneLoop(fn, H, B, cmap);
         _vecH2 = (IRBlock*)cl.get((u32)0);
+        _vecRemainders.set((Hashable*)_vecH2, (Object*)_vecH2);
         _vecB2 = (IRBlock*)cl.get((u32)1);
         _vecCmap = cmap;
         _vecPH = PH;
@@ -17729,6 +17765,7 @@ class OptProfile
             {
             Array* cl = vecCloneLoop(fn, H, B, cmap);
             H2 = (IRBlock*)cl.get((u32)0);
+            _vecRemainders.set((Hashable*)H2, (Object*)H2);
             B2 = (IRBlock*)cl.get((u32)1);
             _vecH2 = H2;
             _vecB2 = B2;
