@@ -20,6 +20,8 @@ import re
 ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(ROOT)
 PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "compiler", "performance.md")
+GPU_PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "compiler", "benchmarks", "gpu.md")
+NET_PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "compiler", "benchmarks", "network.md")
 SOURCES_PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "compiler", "benchmark-sources.mdx")
 SOURCES_URL = "/compiler/benchmark-sources/"
 SRC_FILES = (("xc", "xc", "c"), ("m", "Objective-C", "objc"), ("cpp", "C++", "cpp"), ("swift", "Swift", "swift"))
@@ -352,7 +354,70 @@ PAR_MACHINES = (("mac", "Apple MacBook Pro, M4 Max (12 performance and 4 efficie
 
 
 def ms(us):
+    # Under a millisecond the tenths hide too much (0.1 ms was 143 us against
+    # 445 ms, read as 4,500 times): the cell says so in microseconds.
+    if us < 1000:
+        return "%d µs" % us
     return "%.1f" % (us / 1000.0) if us < 100000 else "%.0f" % (us / 1000.0)
+
+
+def autopar_tables(version):
+    """--par-auto (benchmark/par/run.py --autopar): each plain-loop program as
+    written and with --par-auto, beside the hand-written par version's auto."""
+    path = os.path.join(ROOT, "par", version, "autopar.json")
+    if not os.path.exists(path):
+        return "*(not measured for this release)*"
+    with open(path) as fh:
+        res = json.load(fh)
+    hand = {}
+    hp = os.path.join(ROOT, "par", version, "results.json")
+    if os.path.exists(hp):
+        with open(hp) as fh:
+            hand = json.load(fh)
+    names = {"mac": "Apple M4 Max, Metal", "linux": "AMD Ryzen 9 9955HX, its integrated Radeon through Vulkan",
+             "windows": "Windows, RTX 5080 through CUDA"}
+    out = []
+    for m in ("mac", "linux", "windows"):
+        rows = [(b, r[m]) for b, r in res.items() if m in r]
+        if not rows:
+            continue
+        out.append("**%s** (ms; best of eight runs)\n" % names[m])
+        out.append("| benchmark | as written | `--par-auto`, all threads | `--par-auto`, GPU | `--par-auto`, `auto` "
+                   "| hand-written `par`, `auto` |")
+        out.append("|---|---|---|---|---|---|")
+        for b, r in rows:
+            h = hand.get(b, {}).get(m, {}).get("auto")
+            out.append("| [`%s`](%s#%s) | %s | %s | %s | %s | %s |" % (
+                b, SOURCES_URL, b, ms(r["written"]["best_us"]), ms(r["cpu"]["best_us"]),
+                ms(r["gpu"]["best_us"]) if "gpu" in r else "–", ms(r["auto"]["best_us"]),
+                ms(h["best_us"]) if h else "–"))
+        out.append("")
+    return "\n".join(out)
+
+
+def remote_tables(version):
+    """A remote GPU through xcd (benchmark/par/remote.py)."""
+    path = os.path.join(ROOT, "par", version, "remote.json")
+    if not os.path.exists(path):
+        return "*(not measured for this release)*"
+    with open(path) as fh:
+        res = json.load(fh)
+    names = {"mac": "Apple M4 Max (Metal), using the remote RTX 5080",
+             "linux": "AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080"}
+    out = []
+    for m in ("mac", "linux"):
+        rows = [(b, r[m]) for b, r in res.items() if m in r]
+        if not rows:
+            continue
+        out.append("**%s** (ms; best of eight runs)\n" % names[m])
+        out.append("| benchmark | this machine | the remote GPU | every GPU | `auto` |")
+        out.append("|---|---|---|---|---|")
+        for b, r in rows:
+            out.append("| [`%s`](%s#%s) | %s | %s | %s | %s |" % (
+                b, SOURCES_URL, b, ms(r["local"]["best_us"]), ms(r["remote"]["best_us"]),
+                ms(r["all"]["best_us"]), ms(r["auto"]["best_us"])))
+        out.append("")
+    return "\n".join(out)
 
 
 def par_tables(version):
@@ -609,14 +674,24 @@ def main():
         first=versions[0].lstrip("v"),
         hist_list=", ".join(v.lstrip("v") for v in versions),
         changed=", ".join("`%s`" % b for b in sorted(CHANGED_IN)),
-        par=par_tables(a.current),
-        multigpu=multigpu(a.current),
-        gpu_saturation=gpu_saturation(a.current),
-        vulkan=vulkan_notes(a.current),
     )
     with open(PAGE, "w") as fh:
         fh.write(page)
     print("wrote", os.path.relpath(PAGE, REPO))
+    gpu_page = GPU_PAGE_TEMPLATE.format(
+        release=a.release,
+        par=par_tables(a.current),
+        multigpu=multigpu(a.current),
+        gpu_saturation=gpu_saturation(a.current),
+        vulkan=vulkan_notes(a.current),
+        autopar=autopar_tables(a.current),
+    )
+    with open(GPU_PAGE, "w") as fh:
+        fh.write(gpu_page)
+    print("wrote", os.path.relpath(GPU_PAGE, REPO))
+    with open(NET_PAGE, "w") as fh:
+        fh.write(NET_PAGE_TEMPLATE.format(release=a.release, remote=remote_tables(a.current)))
+    print("wrote", os.path.relpath(NET_PAGE, REPO))
     sources_page(cur.keys())
     published(a.current)
 
@@ -669,8 +744,144 @@ names a device, a kernel language or a thread.
 """
 
 
+GPU_PAGE_TEMPLATE = """---
+title: "Performance: GPU"
+description: How xc's par blocks run on every CPU thread and on GPUs through Metal, CUDA, Vulkan and WebGPU, and what --par-auto makes of plain loops, measured with the released xcc.
+---
+
+Each figure is measured with the released {release} `xcc`, on an Apple
+MacBook Pro with an M4 Max (Metal), a Linux machine with an AMD Ryzen 9
+9955HX and its integrated Radeon (Vulkan), and a Windows machine with an RTX
+5080 and an RTX 3090 (CUDA and Vulkan). How the CPU code compares with other
+compilers is on [Performance: CPU](/compiler/performance/); GPUs on other
+machines are on [Performance: networked](/compiler/benchmarks/network/).
+
+## Parallel blocks
+
+A [`par` block](/compiler/language/par/) runs a loop's iterations at once,
+across every CPU thread, on the GPU, or across several devices at once: the
+block is cut into tiles handed to every GPU the machine
+has, and to the CPU, together. The GPU is reached through:
+
+- **Metal** on Apple silicon;
+- **CUDA** on an NVIDIA GPU under Windows;
+- **Vulkan** on Linux, Windows and Android;
+- **WebGPU** in a browser.
+
+Six programs in `benchmark/par` measure it:
+
+- `mandelbrot`: a 2048×2048 escape-time image, at most 256 iterations a pixel;
+- `perlin`: 2048×2048 improved noise, four octaves;
+- `nbody`: the force on each of 8192 bodies from all the others;
+- `saxpy`: `y = a·x + y` over 16 million integers, with a sum;
+- `md5`, `md5_mask`: the hashcat MD5 workload, hashing 64 million candidates
+  through the full 64-round compression and summing the digests.
+
+Each runs its block eight times and reports the best run. The single-device
+modes are *one thread* (`XC_PAR=cpu XC_PAR_THREADS=1`), *all threads*
+(`XC_PAR=cpu`) and *GPU* (`XC_PAR=gpu`). A block can also run on *every
+GPU* (`XC_PAR=gpus`) or on *every device* (`XC_PAR=all`), and `XC_PAR_WORKERS=…`
+names an exact set (`cuda`, `vulkan`, `metal`, `cpu`). `auto`, the default,
+times the sets the machine can form and keeps the fastest; it
+remembers the choice, per program and per machine, so later runs do not measure
+again. Every mode's checksum must agree. On Windows *GPU* is CUDA and *Vulkan*
+the same work through Vulkan (`XC_PAR_GPU=vulkan`).
+
+{par}
+{multigpu}
+{gpu_saturation}
+
+What the tables show:
+
+- **A discrete GPU wins by a wide margin** on the programs that do real work per
+  element — `md5` hashes 64 million candidates in about a millisecond on one
+  discrete card against hundreds on the CPU — and `auto` finds that and uses it.
+- **`saxpy` stays on the CPU.** It does one multiply-add for every eight bytes
+  it moves, so copying to and from the GPU outweighs the arithmetic, and `auto`
+  keeps it on the CPU everywhere.
+- **The tile queue scales a block across GPUs, where that pays.**
+  `saxpy` spreads across both cards as the sum of their PCIe links — one GPU
+  16 ms, both 7.9 — though it is memory-bound, so the CPU still wins and `auto`
+  keeps it there. `md5` at 64 million candidates takes 0.9 ms on one card and
+  0.7 on both: a block this short gains little from a second card, since the
+  queue's cost per tile is paid twice, and `auto` chooses between them by
+  measuring. A second GPU pays most on a block big enough to need its compute
+  and not bound by the transfer to it.
+- **Mixed graphics APIs.** The scheduler does not require one API: a block
+  can run one card through CUDA beside another through Vulkan, so an NVIDIA
+  and an AMD card could share a block the same way.
+- **The Ryzen's integrated Radeon** has 128 shader lanes against the CPU's 32
+  threads. It just beats them on `mandelbrot`, `perlin` and `md5` and loses on
+  `nbody` and `saxpy`, where `auto` keeps the CPU.
+{vulkan}
+
+## Plain loops: `--par-auto`
+
+`--par-auto` turns a loop whose iterations are independent into a `par`
+block. Four of the programs above, written again as plain loops with no `par`
+in them, are built as written and with `--par-auto`, and each mode's checksum
+must agree. The last column is the hand-written `par` version's `auto`.
+
+{autopar}
+
+## Reproducing
+
+```
+python3 benchmark/par/run.py              # the par tables
+python3 benchmark/par/run.py --autopar    # the --par-auto tables
+python3 benchmark/page.py
+```
+"""
+
+
+NET_PAGE_TEMPLATE = """---
+title: "Performance: networked"
+description: A par block's tiles on a GPU in another machine, served by xcd, beside the program's own devices, measured with the released xcc.
+---
+
+`xcd`, the par daemon, serves a machine's GPUs to programs on others (see
+[par](/compiler/language/par/)). Here it runs on a Windows machine with an
+RTX 5080, on the local network, and two machines use it: an Apple MacBook Pro
+with an M4 Max, whose own GPU is fast, and a Linux machine with an AMD Ryzen 9
+9955HX, whose only GPU is integrated. Each figure is measured with the
+released {release} `xcc`.
+
+Each program runs four ways: on the machine alone (`XC_PAR_REMOTE=none`), on
+the remote GPU alone (`XC_PAR_WORKERS=remote`), on every GPU, the machine's
+own and the remote one (`XC_PAR=gpus`), and as `auto` chooses with the remote
+GPU among its choices. Each run starts from empty settings, so `auto`
+measures afresh, and a remote-only figure counts only if every block ran on
+the remote GPU. Every mode's checksum must agree.
+
+{remote}
+
+What the tables show:
+
+- **A remote GPU pays where a block computes much from little data.** The
+  hashcat MD5 workload sends almost nothing and hashes 64 million candidates:
+  from the Linux machine it runs on the remote RTX 5080 many times faster than
+  on its own devices, and `auto` picks the remote card.
+- **It does not pay where the machine's own GPU is already fast**, as on the
+  M4 Max, or where a block moves more than it computes (`saxpy`): `auto` keeps
+  those local.
+- **Every GPU together is not always faster.** Beside a remote card many times
+  faster, a slow integrated GPU's share holds the fast one back; `auto`
+  measures the remote card alone too and keeps whichever is fastest.
+
+## Reproducing
+
+```
+python3 benchmark/par/remote.py
+python3 benchmark/page.py
+```
+
+`remote.py` starts `xcd` on the configured GPU machine and measures from this
+machine and the configured Linux host.
+"""
+
+
 PAGE_TEMPLATE = """---
-title: Performance
+title: "Performance: CPU"
 description: How xcc-compiled code compares with clang's Objective-C and C++, with GCC's C++ and with Swift on the same programs, measured on twenty benchmarks across arm64 and x86-64.
 ---
 
@@ -774,65 +985,12 @@ it stays a vectorised loop.)
 
 {separate}
 
-## Parallel blocks and the GPU
+## The GPU and the network
 
-A [`par` block](/compiler/language/par/) runs a loop's iterations at once,
-across every CPU thread, on the GPU (from 0.7), or across several devices at
-once (from 0.8): the block is cut into tiles handed to every GPU the machine
-has, and to the CPU, together. The GPU is reached through:
-
-- **Metal** on Apple silicon;
-- **CUDA** on an NVIDIA GPU under Windows;
-- **Vulkan** on Linux, Windows and Android (from 0.72);
-- **WebGPU** in a browser (from 0.72).
-
-Six programs in `benchmark/par` measure it:
-
-- `mandelbrot`: a 2048×2048 escape-time image, at most 256 iterations a pixel;
-- `perlin`: 2048×2048 improved noise, four octaves;
-- `nbody`: the force on each of 8192 bodies from all the others;
-- `saxpy`: `y = a·x + y` over 16 million integers, with a sum;
-- `md5`, `md5_mask`: the hashcat MD5 workload, hashing 64 million candidates
-  through the full 64-round compression and summing the digests.
-
-Each runs its block eight times and reports the best run. The single-device
-modes are *one thread* (`XC_PAR=cpu XC_PAR_THREADS=1`), *all threads*
-(`XC_PAR=cpu`) and *GPU* (`XC_PAR=gpu`). From 0.8 a block can also run on *every
-GPU* (`XC_PAR=gpus`) or on *every device* (`XC_PAR=all`), and `XC_PAR_WORKERS=…`
-names an exact set (`cuda`, `vulkan`, `metal`, `cpu`). `auto`, the default,
-times the sets the machine can form and keeps the fastest; from 0.73 it
-remembers the choice, per program and per machine, so later runs do not measure
-again. Every mode's checksum must agree. On Windows *GPU* is CUDA and *Vulkan*
-the same work through Vulkan (`XC_PAR_GPU=vulkan`).
-
-{par}
-{multigpu}
-{gpu_saturation}
-
-What the tables show:
-
-- **A discrete GPU wins by a wide margin** on the programs that do real work per
-  element — `md5` hashes 64 million candidates in about a millisecond on one
-  discrete card against hundreds on the CPU — and `auto` finds that and uses it.
-- **`saxpy` stays on the CPU.** It does one multiply-add for every eight bytes
-  it moves, so copying to and from the GPU outweighs the arithmetic, and `auto`
-  keeps it on the CPU everywhere.
-- **The tile queue scales a block across GPUs, where that pays (from 0.8).**
-  `saxpy` spreads across both cards as the sum of their PCIe links — one GPU
-  16 ms, both 7.8 — though it is memory-bound, so the CPU still wins and `auto`
-  keeps it there. `md5` at 64 million candidates is already 0.9 ms on one card,
-  too small for a second to help: the queue's per-tile overhead cancels the
-  compute it would save, both cards together are no faster, and `auto` keeps it
-  on the single card. A second GPU pays on a block big enough to need its
-  compute and not bound by the transfer to it.
-- **Mixed graphics APIs (from 0.8).** The scheduler does not require one API: a
-  block can run one card through CUDA beside another through Vulkan (`saxpy`
-  9.6 ms, against 7.8 for both through CUDA). It works across APIs, so an NVIDIA
-  and an AMD card could share a block the same way.
-- **The Ryzen's integrated Radeon** has 128 shader lanes against the CPU's 32
-  threads. It just beats them on `mandelbrot`, `perlin` and `md5` and loses on
-  `nbody` and `saxpy`, where `auto` keeps the CPU.
-{vulkan}
+`par` blocks, which run on every CPU thread, on GPUs and across machines, have
+pages of their own: [Performance: GPU](/compiler/benchmarks/gpu/) (including
+plain loops made parallel by `--par-auto`) and
+[Performance: networked](/compiler/benchmarks/network/).
 
 ## Release to release
 

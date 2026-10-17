@@ -51,6 +51,12 @@ A live 3D view of where a program's work goes, on one machine or across the netw
   repository: it finds the programs and the `xcd` daemons over mDNS and keeps what they
   report, so a viewer can attach at any time.
 
+### A tensor library in xc
+
+An equivalent of PyTorch, written in xc: tensors, their operations and automatic
+differentiation, with the work spread across every GPU and CPU available, on one
+machine or several, the way a `par` block's tiles are today.
+
 ### A C front end
 
 `xcc` compiling `.c` files directly, alongside `.xc`. The proposal and design are

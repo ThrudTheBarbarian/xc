@@ -149,7 +149,9 @@ const SIDEBAR = [
 					collapsed: true,
 					items: [
 						{ label: 'Overview', slug: 'compiler/benchmarks' },
-						{ label: 'Performance', slug: 'compiler/performance' },
+						{ label: 'Performance: CPU', slug: 'compiler/performance' },
+						{ label: 'Performance: GPU', slug: 'compiler/benchmarks/gpu' },
+						{ label: 'Performance: networked', slug: 'compiler/benchmarks/network' },
 						{ label: 'Sources', slug: 'compiler/benchmark-sources' },
 						{ label: 'How to DIY', slug: 'compiler/benchmarks/how-to-diy' },
 						{ label: 'Build the visualiser', slug: 'compiler/benchmarks/build-the-visualiser' },

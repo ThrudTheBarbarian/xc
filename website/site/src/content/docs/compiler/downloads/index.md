@@ -3,7 +3,7 @@ title: Downloads
 description: Prebuilt xcc toolchain archives for macOS, Linux and Windows, the arm9 sysroot, and UXKit's GTK 4 library.
 ---
 
-The current release line is **xcc 0.8**. One install contains the whole toolchain: the
+The current release line is **xcc 0.85**. One install contains the whole toolchain: the
 compiler (`xcc`, which runs every stage itself, from parsing through code generation
 for all seven targets to assembly and linking), the signing tool (`xcc-sign`), the
 6502 assembler (`xcc-as`), the simulators (`xcc-sim-6502`, `xcc-sim-68k`), the
@@ -12,10 +12,13 @@ cross-build native binaries for every target with **no other toolchain installed
 
 | Platform | Download | Size |
 | --- | --- | --- |
-| macOS (Apple silicon) | [xcc-osx-0.8.tar.bz2](/downloads/xcc-osx-0.8.tar.bz2) | 9.1 MB |
-| Linux (x86_64) | [xcc-linux-0.8.tar.bz2](/downloads/xcc-linux-0.8.tar.bz2) | 6.6 MB |
-| Windows (x64) | [xcc-win64-0.8.zip](/downloads/xcc-win64-0.8.zip) | 7.7 MB |
-| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.8.tar.bz2](/downloads/xcc-arm9-sysroot-0.8.tar.bz2) | 830 KB |
+| macOS (Apple silicon) | [xcc-osx-0.85.tar.bz2](/downloads/xcc-osx-0.85.tar.bz2) | 9.4 MB |
+| Linux (x86_64) | [xcc-linux-0.85.tar.bz2](/downloads/xcc-linux-0.85.tar.bz2) | 6.8 MB |
+| Windows (x64) | [xcc-win64-0.85.zip](/downloads/xcc-win64-0.85.zip) | 8.0 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.85.tar.bz2](/downloads/xcc-arm9-sysroot-0.85.tar.bz2) | 830 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-0.85.tar.bz2](/downloads/xcd-osx-0.85.tar.bz2) | 844 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.85.tar.bz2](/downloads/xcd-linux-0.85.tar.bz2) | 790 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-0.85.zip](/downloads/xcd-win64-0.85.zip) | 897 KB |
 | UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.75.tar.bz2](/downloads/xcc-uxgtk-linux-0.75.tar.bz2) | 110 KB |
 | UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.75.tar.bz2](/downloads/xcc-uxkit-0.75.tar.bz2) | 2.9 MB |
 
@@ -30,23 +33,23 @@ in the host archive.
 ## macOS
 
 ```bash
-tar xjf xcc-osx-0.8.tar.bz2
-export PATH="$PWD/xcc-osx-0.8/bin:$PATH"
+tar xjf xcc-osx-0.85.tar.bz2
+export PATH="$PWD/xcc-osx-0.85/bin:$PATH"
 xcc -v
 ```
 
 The compiler finds its libraries **relative to its own binary**, with no flags,
 environment variables or fixed install path, so you can move the directory anywhere.
 The binaries are not notarised, so the first run on a fresh macOS install may need a
-one-time Gatekeeper override (`xattr -dr com.apple.quarantine xcc-osx-0.8/`).
+one-time Gatekeeper override (`xattr -dr com.apple.quarantine xcc-osx-0.85/`).
 
 ## arm9 sysroot
 
 Needed only for `-A arm9`. Unpack it anywhere and point `-L` at it:
 
 ```bash
-tar xjf xcc-arm9-sysroot-0.8.tar.bz2
-xcc -A arm9 -L path/to/xcc-arm9-sysroot-0.8 -o prog.so prog.xc
+tar xjf xcc-arm9-sysroot-0.85.tar.bz2
+xcc -A arm9 -L path/to/xcc-arm9-sysroot-0.85 -o prog.so prog.xc
 ```
 
 It holds one file: `libc.so`, newlib 4.4.0.20231231 rebuilt as position-independent
@@ -64,7 +67,7 @@ one, and then `-A arm9` needs no `-L` at all.
 
 Needed only for a Linux GUI program built with UXKit's GTK back end. The
 program is a glibc executable that loads GTK 4, which is how `-A x86_64` links
-by default from 0.72:
+by default:
 
 ```bash
 tar xjf xcc-uxgtk-linux-0.75.tar.bz2
@@ -101,8 +104,8 @@ have. If `tar` says it cannot run `bzip2`, install it first (on Ubuntu,
 `sudo apt-get install -y bzip2`).
 
 ```bash
-tar xjf xcc-linux-0.8.tar.bz2
-export PATH="$PWD/xcc-linux-0.8/bin:$PATH"
+tar xjf xcc-linux-0.85.tar.bz2
+export PATH="$PWD/xcc-linux-0.85/bin:$PATH"
 xcc -v
 ```
 
@@ -116,14 +119,14 @@ covers a minimal install, NVIDIA, and access over ssh.
 
 ## Windows
 
-Unzip `xcc-win64-0.8.zip` anywhere and add the folder to `PATH` (or invoke
-`xcc.exe` by path). The binaries are self-contained; no runtime installer is
+Unzip `xcc-win64-0.85.zip` anywhere and add its `bin` folder to `PATH` (or
+invoke `bin\xcc.exe` by path). The binaries are self-contained; no runtime installer is
 needed.
 
-## xcd, the par worker daemon (from 0.8.1)
+## xcd, the par worker daemon
 
 A machine that only lends its GPUs to `par` programs on the network needs no
-compiler: from 0.8.1 each release also ships `xcd-osx-<version>.tar.bz2`,
+compiler: each release also ships `xcd-osx-<version>.tar.bz2`,
 `xcd-linux-<version>.tar.bz2` and `xcd-win64-<version>.zip`, holding the
 daemon and the TLS library it talks through, and `xcmon`, a monitor that
 draws the daemons and the programs using them in a browser page. Unpack it

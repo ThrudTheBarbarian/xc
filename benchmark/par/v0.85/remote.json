@@ -1,0 +1,162 @@
+{
+ "mandel_deep": {
+  "linux": {
+   "all": {
+    "best_us": 258272,
+    "first_us": 329348
+   },
+   "auto": {
+    "best_us": 309915,
+    "first_us": 1403602
+   },
+   "checksum": "2738",
+   "local": {
+    "best_us": 979098,
+    "first_us": 1391747
+   },
+   "remote": {
+    "best_us": 311046,
+    "first_us": 375028
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 120987,
+    "first_us": 216845
+   },
+   "auto": {
+    "best_us": 51580,
+    "first_us": 104852
+   },
+   "checksum": "2738",
+   "local": {
+    "best_us": 49259,
+    "first_us": 113946
+   },
+   "remote": {
+    "best_us": 248006,
+    "first_us": 336828
+   }
+  }
+ },
+ "mandelbrot": {
+  "linux": {
+   "all": {
+    "best_us": 3199,
+    "first_us": 35660
+   },
+   "auto": {
+    "best_us": 1169,
+    "first_us": 39839
+   },
+   "checksum": "199",
+   "local": {
+    "best_us": 9732,
+    "first_us": 29269
+   },
+   "remote": {
+    "best_us": 1121,
+    "first_us": 33891
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 1887,
+    "first_us": 46869
+   },
+   "auto": {
+    "best_us": 1815,
+    "first_us": 42925
+   },
+   "checksum": "199",
+   "local": {
+    "best_us": 1995,
+    "first_us": 29895
+   },
+   "remote": {
+    "best_us": 2195,
+    "first_us": 42877
+   }
+  }
+ },
+ "md5": {
+  "linux": {
+   "all": {
+    "best_us": 30198,
+    "first_us": 66293
+   },
+   "auto": {
+    "best_us": 3468,
+    "first_us": 149327
+   },
+   "checksum": "2573682417",
+   "local": {
+    "best_us": 109206,
+    "first_us": 134956
+   },
+   "remote": {
+    "best_us": 3345,
+    "first_us": 39329
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 4185,
+    "first_us": 52262
+   },
+   "auto": {
+    "best_us": 4159,
+    "first_us": 65417
+   },
+   "checksum": "2573682417",
+   "local": {
+    "best_us": 5452,
+    "first_us": 47110
+   },
+   "remote": {
+    "best_us": 3640,
+    "first_us": 51573
+   }
+  }
+ },
+ "saxpy": {
+  "linux": {
+   "all": {
+    "best_us": 145234,
+    "first_us": 477288
+   },
+   "auto": {
+    "best_us": 3089,
+    "first_us": 70898
+   },
+   "checksum": "3011510272",
+   "local": {
+    "best_us": 2325,
+    "first_us": 56759
+   },
+   "remote": {
+    "best_us": 367776,
+    "first_us": 926045
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 125263,
+    "first_us": 335750
+   },
+   "auto": {
+    "best_us": 1053,
+    "first_us": 55138
+   },
+   "checksum": "3011510272",
+   "local": {
+    "best_us": 554,
+    "first_us": 42909
+   },
+   "remote": {
+    "best_us": 305398,
+    "first_us": 796779
+   }
+  }
+ }
+}

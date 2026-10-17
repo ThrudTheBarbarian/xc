@@ -59,11 +59,11 @@ whichever is fastest.
 ### Faster
 
 - **`--par-auto`** on four plain-loop benchmarks: the Mandelbrot set goes
-  from 445 ms as written to 0.9 ms on an M4 Max's GPU and 144 µs on an RTX
+  from 444 ms as written to 778 µs on an M4 Max's GPU and 145 µs on an RTX
   5080 (`auto`), without a `par` in the source.
 - **A remote GPU**: from a Linux machine whose only GPU is integrated, the hashcat
-  MD5 workload runs in 3.6 ms on an RTX 5080 across the network against
-  108 ms on its own devices, and `auto` picks the remote card.
+  MD5 workload runs in 3.3 ms on an RTX 5080 across the network against
+  109 ms on its own devices, and `auto` picks the remote card (3.5 ms).
   A remote run's results come back the moment each tile finishes: the
   floor under a remote run went from 8 ms to about 1 ms.
 - **GPU arrays stay on the card between runs**; a CUDA card pins a block's
