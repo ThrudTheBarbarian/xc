@@ -2016,6 +2016,21 @@ class ParVulkanWorker : ParWorker
         return complete(d);
         }
 
+    bool waits(void)
+        {
+        return true;
+        }
+    bool waitFor(ParTile* t)
+        {
+        for (u32 d = (u32)0; d < (u32)PAR_VK_DEPTH; d = d + (u32)1)
+            if (_slotTile[d] == t)
+                {
+                gVk_wait(gVkDev, (u32)1, &_fence[d], (u32)1, (u64)0xFFFFFFFFFFFFFFFF);
+                return true;
+                }
+        return false;
+        }
+
     void drain(void)
         {
         while (_inFlight > (u32)0)

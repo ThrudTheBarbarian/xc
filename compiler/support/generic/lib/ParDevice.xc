@@ -109,10 +109,17 @@ u32 gParAllRuns[64];
 i64 gParGpusFrom[64];
 i64 gParAllFrom[64];
 u32 gParGpuWorkers;     // GPU workers in the default set (ParTiles tells)
+// The third queue set (2026-10-17): the GPUs on other machines alone (xcd),
+// where one is far faster than this machine's own (an integrated GPU beside
+// a remote RTX: "GPUs" let the slow one hold the fast one back).
+i64 gParRemUs[64];
+u32 gParRemRuns[64];
+i64 gParRemFrom[64];
+u32 gParRemoteWorkers;  // remote GPU workers in the default set (ParTiles tells)
 // Measurements in progress, kept across processes of the program: up to four
 // size bands a block, each the size measured and the four candidates' times.
 i64 gParProgN[256];
-i64 gParProgUs[1024];
+i64 gParProgUs[1280];   // five candidates an entry: cpu, gpu, gpus, all, remote
 u32 gParProgCount[64];
 bool gParLearned[64];
 bool gParProbed[64];    // XC_PAR_PROBE: the block's first run was the sweep
@@ -121,15 +128,15 @@ i64 gParLastN[64];
 bool gParMeasuring[64]; // this run is one auto measures (not decided by a setting or the bounds)
 // Warm measurement of a GPU candidate (warmTime below), per block and
 // candidate: 0 the GPU (through CUDA on Windows), 1 the GPU through Vulkan,
-// 2 the GPUs set, 3 the all-devices set.
+// 2 the GPUs set, 3 the all-devices set, 4 the remote set.
 // The fastest worker's rate on the tile queue's last run of the block, in
 // items per us scaled by 1024: the next run sizes its tiles so each is worth
 // well over the queue's fixed cost per tile (ParTiles).
 i64 gParTileRate[64];
-u32 gParWarmRuns[256];
-i64 gParWarmBusy[256];  // the candidate's run time so far, us
-i64 gParWarmFirst[256]; // wall at its first run
-i64 gParWarmPrev[256];  // the run before this one, or -1
+u32 gParWarmRuns[320];
+i64 gParWarmBusy[320];  // the candidate's run time so far, us
+i64 gParWarmFirst[320]; // wall at its first run
+i64 gParWarmPrev[320];  // the run before this one, or -1
 #if ARCH_win64
 // Windows reaches an NVIDIA GPU two ways, CUDA and Vulkan, and auto measures
 // both: per block, the interface kept (0 none yet, 1 CUDA, 2 Vulkan), the
@@ -369,6 +376,9 @@ class ParDevice
         gParAllRuns[i] = (u32)0;
         gParGpusFrom[i] = (i64)-1;
         gParAllFrom[i] = (i64)-1;
+        gParRemUs[i] = (i64)-1;
+        gParRemRuns[i] = (u32)0;
+        gParRemFrom[i] = (i64)-1;
         gParLearned[i] = false;
         gParProgCount[i] = (u32)0;
         gParMeasN[i] = (i64)0;
@@ -787,7 +797,7 @@ class ParDevice
         }
 
     // The measurements an earlier process of this program left unfinished
-    // (<n>,<cpu us>,<gpu us>,<gpus us>,<all us>; entries separated by ';'):
+    // (<n>,<cpu us>,<gpu us>,<gpus us>,<all us>,<remote us>; entries separated by ';'):
     // a block run a few times a process still learns in the end. Each
     // candidate still warms up once in every process.
     static void readProgress(u32 i, ParChunk* proto)
@@ -800,9 +810,12 @@ class ParDevice
         u32 at = (u32)0;
         while (c[at] != (u8)0 && gParProgCount[i] < (u32)4)
             {
-            i64 f[5];
-            for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
+            i64 f[6];
+            f[5] = (i64)-1;                 // a record from before the remote set has five fields
+            for (u32 k = (u32)0; k < (u32)6; k = k + (u32)1)
                 {
+                if (k == (u32)5 && !(c[at] == (u8)'-' || (c[at] >= (u8)'0' && c[at] <= (u8)'9')))
+                    break;
                 bool ng = c[at] == (u8)'-';
                 if (ng) at = at + (u32)1;
                 i64 val = num(c, &at);      // always read: "-1" is two characters
@@ -813,8 +826,8 @@ class ParDevice
                 {
                 u32 e = i * (u32)4 + gParProgCount[i];
                 gParProgN[e] = f[0];
-                for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
-                    gParProgUs[e * (u32)4 + k] = f[k + (u32)1];
+                for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
+                    gParProgUs[e * (u32)5 + k] = f[k + (u32)1];
                 gParProgCount[i] = gParProgCount[i] + (u32)1;
                 }
             if (c[at] == (u8)';') at = at + (u32)1;
@@ -871,6 +884,15 @@ class ParDevice
                 if (neg) at = at + (u32)1;
                 i64 a2 = num(c, &at);
                 gParAllFrom[i] = neg ? (i64)-1 : a2;
+                // ,remoteFrom (from 2026-10-17).
+                if (c[at] == (u8)',' && (c[at + (u32)1] == (u8)'-' || (c[at + (u32)1] >= (u8)'0' && c[at + (u32)1] <= (u8)'9')))
+                    {
+                    at = at + (u32)1;
+                    neg = c[at] == (u8)'-';
+                    if (neg) at = at + (u32)1;
+                    i64 r2 = num(c, &at);
+                    gParRemFrom[i] = neg ? (i64)-1 : r2;
+                    }
                 }
             }
 #if ARCH_win64
@@ -882,7 +904,7 @@ class ParDevice
 
     static u8* choiceName(i32 c)
         {
-        return c == (i32)1 ? "CPU" : c == (i32)2 ? "GPU" : c == (i32)3 ? "GPUs" : "all devices";
+        return c == (i32)1 ? "CPU" : c == (i32)2 ? "GPU" : c == (i32)3 ? "GPUs" : c == (i32)5 ? "remote GPUs" : "all devices";
         }
 
     // A measured run's verdict at size n — winner 1 CPU, 2 the GPU, 3 the
@@ -900,19 +922,23 @@ class ParDevice
             if (gParGpuFrom[i] >= (i64)0 && gParGpuFrom[i] <= gParCpuUpTo[i]) gParGpuFrom[i] = (i64)-1;
             if (gParGpusFrom[i] >= (i64)0 && gParGpusFrom[i] <= gParCpuUpTo[i]) gParGpusFrom[i] = (i64)-1;
             if (gParAllFrom[i] >= (i64)0 && gParAllFrom[i] <= gParCpuUpTo[i]) gParAllFrom[i] = (i64)-1;
+            if (gParRemFrom[i] >= (i64)0 && gParRemFrom[i] <= gParCpuUpTo[i]) gParRemFrom[i] = (i64)-1;
             }
         if (winner == (i32)2 && (gParGpuFrom[i] < (i64)0 || n < gParGpuFrom[i])) gParGpuFrom[i] = n;
         if (winner == (i32)3 && (gParGpusFrom[i] < (i64)0 || n < gParGpusFrom[i])) gParGpusFrom[i] = n;
         if (winner == (i32)4 && (gParAllFrom[i] < (i64)0 || n < gParAllFrom[i])) gParAllFrom[i] = n;
+        if (winner == (i32)5 && (gParRemFrom[i] < (i64)0 || n < gParRemFrom[i])) gParRemFrom[i] = n;
         if (winner != (i32)1)
             {
             if (gParCpuUpTo[i] >= n) gParCpuUpTo[i] = (i64)-1;
             if (winner != (i32)2 && gParGpuFrom[i] >= (i64)0 && gParGpuFrom[i] <= n) gParGpuFrom[i] = (i64)-1;
             if (winner != (i32)3 && gParGpusFrom[i] >= (i64)0 && gParGpusFrom[i] <= n) gParGpusFrom[i] = (i64)-1;
             if (winner != (i32)4 && gParAllFrom[i] >= (i64)0 && gParAllFrom[i] <= n) gParAllFrom[i] = (i64)-1;
+            if (winner != (i32)5 && gParRemFrom[i] >= (i64)0 && gParRemFrom[i] <= n) gParRemFrom[i] = (i64)-1;
             }
         Settings* st = store();
-        String* v = String.withFormat("%ld,%ld,%ld,%ld", gParCpuUpTo[i], gParGpuFrom[i], gParGpusFrom[i], gParAllFrom[i]);
+        String* v = String.withFormat("%ld,%ld,%ld,%ld,%ld", gParCpuUpTo[i], gParGpuFrom[i], gParGpusFrom[i], gParAllFrom[i],
+                                      gParRemFrom[i]);
 #if ARCH_win64
         if (gParApi[i] != (i32)0)
             v.appendCString(gParApi[i] == (i32)2 ? ",vulkan" : ",cuda");
@@ -925,8 +951,9 @@ class ParDevice
         st.set(learnedKey(i, proto), v);
         st.save();
         if (reporting())
-            Log.info("par: %s: learned the %s wins at %ld items (CPU up to %ld, GPU from %ld, GPUs from %ld, all from %ld)",
-                     gParBlock[i], choiceName(winner), n, gParCpuUpTo[i], gParGpuFrom[i], gParGpusFrom[i], gParAllFrom[i]);
+            Log.info("par: %s: learned the %s wins at %ld items (CPU up to %ld, GPU from %ld, GPUs from %ld, all from %ld, remote from %ld)",
+                     gParBlock[i], choiceName(winner), n, gParCpuUpTo[i], gParGpuFrom[i], gParGpusFrom[i], gParAllFrom[i],
+                     gParRemFrom[i]);
         }
 
     // What is measured so far at this size, saved for the next process of
@@ -949,25 +976,26 @@ class ParDevice
                 for (u32 j = (u32)1; j < (u32)4; j = j + (u32)1)
                     {
                     gParProgN[i * (u32)4 + j - (u32)1] = gParProgN[i * (u32)4 + j];
-                    for (u32 q = (u32)0; q < (u32)4; q = q + (u32)1)
-                        gParProgUs[(i * (u32)4 + j - (u32)1) * (u32)4 + q] = gParProgUs[(i * (u32)4 + j) * (u32)4 + q];
+                    for (u32 q = (u32)0; q < (u32)5; q = q + (u32)1)
+                        gParProgUs[(i * (u32)4 + j - (u32)1) * (u32)5 + q] = gParProgUs[(i * (u32)4 + j) * (u32)5 + q];
                     }
                 k = (i32)3;
                 }
             }
         u32 e = i * (u32)4 + (u32)k;
         gParProgN[e] = gParMeasN[i];
-        gParProgUs[e * (u32)4 + (u32)0] = gParCpuUs[i];
-        gParProgUs[e * (u32)4 + (u32)1] = gParGpuUs[i];
-        gParProgUs[e * (u32)4 + (u32)2] = gParGpusUs[i];
-        gParProgUs[e * (u32)4 + (u32)3] = gParAllUs[i];
+        gParProgUs[e * (u32)5 + (u32)0] = gParCpuUs[i];
+        gParProgUs[e * (u32)5 + (u32)1] = gParGpuUs[i];
+        gParProgUs[e * (u32)5 + (u32)2] = gParGpusUs[i];
+        gParProgUs[e * (u32)5 + (u32)3] = gParAllUs[i];
+        gParProgUs[e * (u32)5 + (u32)4] = gParRemUs[i];
         String* v = new String();
         for (u32 j = (u32)0; j < gParProgCount[i]; j = j + (u32)1)
             {
             u32 f = i * (u32)4 + j;
             if (j > (u32)0) v.appendCString(";");
-            v.appendFormat("%ld,%ld,%ld,%ld,%ld", gParProgN[f], gParProgUs[f * (u32)4], gParProgUs[f * (u32)4 + (u32)1],
-                           gParProgUs[f * (u32)4 + (u32)2], gParProgUs[f * (u32)4 + (u32)3]);
+            v.appendFormat("%ld,%ld,%ld,%ld,%ld,%ld", gParProgN[f], gParProgUs[f * (u32)5], gParProgUs[f * (u32)5 + (u32)1],
+                           gParProgUs[f * (u32)5 + (u32)2], gParProgUs[f * (u32)5 + (u32)3], gParProgUs[f * (u32)5 + (u32)4]);
             }
         Settings* st = store();
         st.set(progressKey(i, proto), v);
@@ -982,10 +1010,11 @@ class ParDevice
         if (k < (i32)0)
             return;
         u32 e = i * (u32)4 + (u32)k;
-        gParCpuUs[i] = gParProgUs[e * (u32)4 + (u32)0];
-        gParGpuUs[i] = gParProgUs[e * (u32)4 + (u32)1];
-        gParGpusUs[i] = gParProgUs[e * (u32)4 + (u32)2];
-        gParAllUs[i] = gParProgUs[e * (u32)4 + (u32)3];
+        gParCpuUs[i] = gParProgUs[e * (u32)5 + (u32)0];
+        gParGpuUs[i] = gParProgUs[e * (u32)5 + (u32)1];
+        gParGpusUs[i] = gParProgUs[e * (u32)5 + (u32)2];
+        gParAllUs[i] = gParProgUs[e * (u32)5 + (u32)3];
+        gParRemUs[i] = gParProgUs[e * (u32)5 + (u32)4];
         }
 
     // Once every candidate is timed at the size being measured, the fastest
@@ -995,7 +1024,8 @@ class ParDevice
         {
         bool pending = gParCpuUs[i] < (i64)0 || gParGpuUs[i] < (i64)0 ||
                        (gParGpuWorkers >= (u32)2 && gParGpusUs[i] < (i64)0) ||
-                       (gParGpuWorkers >= (u32)1 && gParAllUs[i] < (i64)0);
+                       (gParGpuWorkers >= (u32)1 && gParAllUs[i] < (i64)0) ||
+                       (gParRemoteWorkers >= (u32)1 && gParRemUs[i] < (i64)0);
         if (pending)
             {
             saveProgress(i, proto);
@@ -1005,9 +1035,10 @@ class ParDevice
         i64 best = gParGpuUs[i] <= gParCpuUs[i] ? gParGpuUs[i] : gParCpuUs[i];
         if (gParGpusUs[i] >= (i64)0 && gParGpusUs[i] < best) { winner = (i32)3; best = gParGpusUs[i]; }
         if (gParAllUs[i] >= (i64)0 && gParAllUs[i] < best) { winner = (i32)4; best = gParAllUs[i]; }
+        if (gParRemUs[i] >= (i64)0 && gParRemUs[i] < best) { winner = (i32)5; best = gParRemUs[i]; }
         if (reporting())
-            Log.info("par: %s: auto picks the %s (CPU %ld us, GPU %ld us, GPUs %ld us, all %ld us)", gParBlock[i],
-                     choiceName(winner), gParCpuUs[i], gParGpuUs[i], gParGpusUs[i], gParAllUs[i]);
+            Log.info("par: %s: auto picks the %s (CPU %ld us, GPU %ld us, GPUs %ld us, all %ld us, remote %ld us)", gParBlock[i],
+                     choiceName(winner), gParCpuUs[i], gParGpuUs[i], gParGpusUs[i], gParAllUs[i], gParRemUs[i]);
         learn(i, proto, gParMeasN[i], winner);
         }
 
@@ -1019,6 +1050,7 @@ class ParDevice
         if (!gParMeasuring[i])
             return;
         if (set == (i32)3) { gParGpusUs[i] = (i64)1 << (i64)50; gParGpusRuns[i] = (u32)2; }
+        else if (set == (i32)5) { gParRemUs[i] = (i64)1 << (i64)50; gParRemRuns[i] = (u32)2; }
         else { gParAllUs[i] = (i64)1 << (i64)50; gParAllRuns[i] = (u32)2; }
         if (reporting())
             Log.info("par: %s: the tile queue declines %s for this block", gParBlock[i], choiceName(set));
@@ -1040,6 +1072,12 @@ class ParDevice
             gParGpusRuns[i] = gParGpusRuns[i] + (u32)1;
             if (gParGpusUs[i] < (i64)0 && warmTime(i, (u32)2, us, &warm))
                 gParGpusUs[i] = warm;
+            }
+        else if (set == (i32)5)
+            {
+            gParRemRuns[i] = gParRemRuns[i] + (u32)1;
+            if (gParRemUs[i] < (i64)0 && warmTime(i, (u32)4, us, &warm))
+                gParRemUs[i] = warm;
             }
         else
             {
@@ -1091,6 +1129,8 @@ class ParDevice
             }
         // The learned bounds decide a size outside them, with no measuring.
         readLearned(i, proto);
+        if (gParRemoteWorkers >= (u32)1 && gParRemFrom[i] >= (i64)0 && n >= gParRemFrom[i])
+            return (i32)5;
         if (gParAllFrom[i] >= (i64)0 && n >= gParAllFrom[i])
             return (i32)4;
         if (gParGpusFrom[i] >= (i64)0 && n >= gParGpusFrom[i])
@@ -1108,6 +1148,8 @@ class ParDevice
             gParGpuUs[i] = (i64)-1;
             gParGpusUs[i] = (i64)-1;
             gParAllUs[i] = (i64)-1;
+            gParRemUs[i] = (i64)-1;
+            gParRemRuns[i] = gParRemRuns[i] > (u32)0 ? (u32)1 : (u32)0;
             gParCpuRuns[i] = (u32)1;
             gParGpuRuns[i] = gParGpuRuns[i] > (u32)0 ? (u32)1 : (u32)0;
             gParGpusRuns[i] = gParGpusRuns[i] > (u32)0 ? (u32)1 : (u32)0;
@@ -1146,6 +1188,11 @@ class ParDevice
         // then the tile queue's sets where there are GPU workers.
         if (gParGpuUs[i] < (i64)0)
             return (i32)2;
+        // The remote GPUs alone, where there are any: one across the network
+        // may beat this machine's own by far, and with it "GPUs" lets the
+        // slower card hold the faster back.
+        if (gParRemoteWorkers >= (u32)1 && gParRemUs[i] < (i64)0)
+            return (i32)5;
         if (gParGpuWorkers >= (u32)2 && gParGpusUs[i] < (i64)0)
             return (i32)3;
         if (gParGpuWorkers >= (u32)1 && gParAllUs[i] < (i64)0)
@@ -1170,6 +1217,7 @@ class ParDevice
         i64 bestUs = gParGpuUs[i] <= gParCpuUs[i] ? gParGpuUs[i] : gParCpuUs[i];
         if (gParGpusUs[i] >= (i64)0 && gParGpusUs[i] < bestUs) { best = (i32)3; bestUs = gParGpusUs[i]; }
         if (gParAllUs[i] >= (i64)0 && gParAllUs[i] < bestUs) { best = (i32)4; bestUs = gParAllUs[i]; }
+        if (gParRemUs[i] >= (i64)0 && gParRemUs[i] < bestUs) { best = (i32)5; bestUs = gParRemUs[i]; }
         return best;
         }
 
@@ -1306,7 +1354,7 @@ class ParDevice
         // the ORDER instead (choose: the GPU candidates before the CPU), so
         // the threshold rules this once carried are not needed; the state
         // stays, for a run count a future tuning may want.
-        u32 e = i * (u32)4 + cand;
+        u32 e = i * (u32)5 + cand;
         gParWarmRuns[e] = gParWarmRuns[e] + (u32)1;
         gParWarmBusy[e] = gParWarmBusy[e] + us;
         if (gParWarmRuns[e] == (u32)1)
@@ -1324,9 +1372,9 @@ class ParDevice
     // its warm-up, and measures afresh.
     static void warmReset(u32 i)
         {
-        for (u32 c = (u32)0; c < (u32)4; c = c + (u32)1)
+        for (u32 c = (u32)0; c < (u32)5; c = c + (u32)1)
             {
-            u32 e = i * (u32)4 + c;
+            u32 e = i * (u32)5 + c;
             gParWarmRuns[e] = gParWarmRuns[e] > (u32)0 ? (u32)1 : (u32)0;
             gParWarmBusy[e] = (i64)0;
             gParWarmPrev[e] = (i64)-1;

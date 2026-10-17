@@ -70,6 +70,7 @@
 #import "Mutex.xc"
 #import "Cond.xc"
 #import "Thread.xc"
+#import "EventQueue.xc"
 #import "Settings.xc"
 #import "Files.xc"
 #import "Base64.xc"
@@ -392,6 +393,11 @@ class ParLink
             got = got + (u32)r;
             }
         return true;
+        }
+    // The socket's descriptor, for an EventQueue to watch; -1 when closed.
+    i64 fd(void)
+        {
+        return isOpen() ? _s.fd() : (i64)-1;
         }
     // Whether a read would return something now: bytes the session has
     // decrypted and holds (the socket says nothing about those), or bytes
@@ -1600,6 +1606,12 @@ class ParRemoteWorker : ParWorker
         _inFlight = _inFlight - (u32)1;
         return t;
         }
+    // The results link: poll returned nothing, so it holds no decrypted
+    // bytes, and a frame arriving makes the socket readable.
+    i64 waitFd(void)
+        {
+        return _r != (ParLink*)0 ? _r.fd() : (i64)-1;
+        }
     ParTile* poll(void)
         {
         while (_finished.count() == (u32)0 && _inFlight > (u32)0 && _r != (ParLink*)0 && _r.isOpen() && _r.waitReadable((i32)0))
@@ -1933,6 +1945,99 @@ pointer localtime_r(i64* t, i32* tm);
 // A program's session on the daemon: the finished tiles the serve loop
 // queues, which the thread of the program's results link writes out, so
 // the loop never waits on a write.
+// The daemon's wait for its GPU (2026-10-17): a thread that blocks on each
+// tile's completion object in turn (ParWorker.waitFor) and wakes the serve
+// loop's EventQueue, so the loop waits once for "a frame came, or a tile
+// finished" rather than polling every millisecond. The loop polls a tile
+// only after the watcher has seen it finish (ready()), since the wait holds
+// the tile's completion object until then.
+class ParTileWatch : Object
+    {
+    EventQueue* _q;
+    Mutex* _lock;
+    Cond* _more;
+    Cond* _idle;
+    Array* _tiles;        // (worker, tile) pairs to wait for, in take order
+    u32 _seen;            // finished, not yet collected by the loop
+    bool _waiting;        // a wait is under way
+    bool _stop;
+    Thread* _thread;
+
+    static ParTileWatch* start(EventQueue* q)
+        {
+        ParTileWatch* tw = new ParTileWatch();
+        tw._q = q;
+        tw._lock = new Mutex();
+        tw._more = new Cond();
+        tw._idle = new Cond();
+        tw._tiles = new Array();
+        tw._thread = Thread.spawn(&tw.run);
+        if (!tw._thread.isValid())
+            return (ParTileWatch*)0;
+        return tw;
+        }
+    // A tile w has just taken.
+    void add(ParWorker* w, ParTile* t)
+        {
+        _lock.lock();
+        _tiles.add((Object*)w);
+        _tiles.add((Object*)t);
+        _more.signal();
+        _lock.unlock();
+        }
+    // How many tiles have finished and may be polled; the loop takes them.
+    u32 ready(void)
+        {
+        _lock.lock();
+        u32 n = _seen;
+        _seen = (u32)0;
+        _lock.unlock();
+        return n;
+        }
+    // Until every tile added is seen finished: before a drain, which
+    // collects them all, or the worker's end.
+    void settle(void)
+        {
+        _lock.lock();
+        while (_tiles.count() > (u32)0 || _waiting)
+            _idle.wait(_lock);
+        _lock.unlock();
+        }
+    void stop(void)
+        {
+        _lock.lock();
+        _stop = true;
+        _more.signal();
+        _lock.unlock();
+        _thread.join();
+        }
+    void run(void)
+        {
+        _lock.lock();
+        while (true)
+            {
+            while (_tiles.count() == (u32)0 && !_stop)
+                _more.wait(_lock);
+            if (_tiles.count() == (u32)0)
+                break;
+            ParWorker* w = (ParWorker*)_tiles.get((u32)0);
+            ParTile* t = (ParTile*)_tiles.get((u32)1);
+            _tiles.removeAt((u32)0);
+            _tiles.removeAt((u32)0);
+            _waiting = true;
+            _lock.unlock();
+            w.waitFor(t);
+            _lock.lock();
+            _waiting = false;
+            _seen = _seen + (u32)1;
+            if (_tiles.count() == (u32)0)
+                _idle.broadcast();
+            _q.wake();
+            }
+        _lock.unlock();
+        }
+    }
+
 class ParRemoteSession : Object
     {
     Data* _token;
@@ -2425,6 +2530,13 @@ class ParRemoteServe
                 dieAfter = dieAfter * (i64)10 + (i64)(dieV.byteAt(i) - (u8)'0');
             }
         i64 taken = (i64)0;
+        // One wait for a frame or a finished tile, where the platform has
+        // an EventQueue and the worker a waitFor; else the 1 ms poll.
+        EventQueue* evq = EventQueue.make();
+        ParTileWatch* watch = (ParTileWatch*)0;
+        if (evq != (EventQueue*)0 && evq.watch(s.fd()))
+            watch = ParTileWatch.start(evq);
+        bool watching = false;      // this block's worker has a waitFor
         while (s.isOpen())
             {
             // Hand pending tiles to the worker while it has room; collect
@@ -2437,6 +2549,8 @@ class ParRemoteServe
                     if (!w.take(t0, (ParChunk*)chunk, chunk.gpuSource(), l))
                         break;
                     pending.removeAt((u32)0);
+                    if (watching)
+                        watch.add(w, t0);
                     inFlight = inFlight + (u32)1;
                     taken = taken + (i64)1;
                     if (dieAfter >= (i64)0 && taken >= dieAfter)
@@ -2446,17 +2560,47 @@ class ParRemoteServe
                         break;
                         }
                     }
-                ParTile* d = w.poll();
-                while (d != (ParTile*)0)
+                if (watching)
                     {
-                    inFlight = inFlight - (u32)1;
-                    session.push(ParRemoteServe.doneFrame(chunk, l, d));
-                    d = w.poll();
+                    // Only what the watcher has seen finish.
+                    for (u32 k = watch.ready(); k > (u32)0; k = k - (u32)1)
+                        {
+                        ParTile* d = w.poll();
+                        if (d == (ParTile*)0)
+                            break;
+                        inFlight = inFlight - (u32)1;
+                        session.push(ParRemoteServe.doneFrame(chunk, l, d));
+                        }
+                    }
+                else
+                    {
+                    ParTile* d = w.poll();
+                    while (d != (ParTile*)0)
+                        {
+                        inFlight = inFlight - (u32)1;
+                        session.push(ParRemoteServe.doneFrame(chunk, l, d));
+                        d = w.poll();
+                        }
                     }
                 }
-            // A frame, when one is there (a millisecond's wait while tiles
-            // are in flight, else as long as it takes).
-            if (!s.waitReadable(inFlight > (u32)0 || pending.count() > (u32)0 ? (i32)1 : (i32)1000))
+            // A frame, when one is there: with the watcher, one wait for a
+            // frame or a finished tile; else a millisecond's wait while
+            // tiles are in flight, and as long as it takes when none are.
+            if (watch != (ParTileWatch*)0 && !s.waitReadable((i32)0))
+                {
+                bool busy = inFlight > (u32)0 || pending.count() > (u32)0;
+                if (busy && !watching)
+                    {
+                    if (!s.waitReadable((i32)1))
+                        continue;
+                    }
+                else
+                    {
+                    evq.wait((i32)1000);
+                    continue;
+                    }
+                }
+            else if (watch == (ParTileWatch*)0 && !s.waitReadable(inFlight > (u32)0 || pending.count() > (u32)0 ? (i32)1 : (i32)1000))
                 continue;
             Data* f = ParWire.recv(s, &tag[0], (i32)-1);
             if (f == (Data*)0)
@@ -2611,6 +2755,7 @@ class ParRemoteServe
                         {
                         w = cand;
                         l = lc;
+                        watching = watch != (ParTileWatch*)0 && w.waits();
                         }
                     }
                 if (w == (ParWorker*)0)
@@ -2698,6 +2843,11 @@ class ParRemoteServe
                              ParRemoteCache.bytes() >> (i64)20, ParRemoteCache.cap() >> (i64)20);
                 if (w != (ParWorker*)0)
                     {
+                    if (watching)
+                        {
+                        watch.settle();
+                        watch.ready();
+                        }
                     w.drain();
                     ParTile* d2 = w.poll();
                     while (d2 != (ParTile*)0)
@@ -2708,9 +2858,17 @@ class ParRemoteServe
                     w.finish();
                     }
                 w = (ParWorker*)0;
+                watching = false;
                 ParRemoteServe.releaseGpus(me);
                 }
             }
+        if (watch != (ParTileWatch*)0)
+            {
+            watch.settle();
+            watch.stop();
+            }
+        if (evq != (EventQueue*)0)
+            evq.close();
         if (w != (ParWorker*)0)
             {
             w.drain();

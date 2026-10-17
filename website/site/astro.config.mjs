@@ -72,6 +72,7 @@ const SIDEBAR = [
 								{ label: 'RunLoop', slug: 'compiler/api/runloop' },
 								{ label: 'SearchIndex', slug: 'compiler/api/searchindex' },
 								{ label: 'Set', slug: 'compiler/api/set' },
+								{ label: 'EventQueue', slug: 'compiler/api/eventqueue' },
 								{ label: 'Socket', slug: 'compiler/api/socket' },
 								{ label: 'SortDescriptor', slug: 'compiler/api/sortdescriptor' },
 								{ label: 'StateMachine', slug: 'compiler/api/statemachine' },

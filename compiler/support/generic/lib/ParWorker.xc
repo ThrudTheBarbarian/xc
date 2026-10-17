@@ -147,6 +147,26 @@ class ParWorker : Object
         {
         return (ParTile*)0;
         }
+    // From ANOTHER thread: block until tile t, taken and not yet polled, has
+    // finished, without collecting it (poll still does). False where the
+    // worker has no such wait; then nothing can wake a loop when its tiles
+    // finish, and the loop keeps polling. The caller must not poll t before
+    // this returns: the wait holds the tile's completion object.
+    bool waitFor(ParTile* t)
+        {
+        return false;
+        }
+    // Whether waitFor works here.
+    bool waits(void)
+        {
+        return false;
+        }
+    // A descriptor that becomes readable when a tile of this worker's has
+    // finished (a remote worker's results link), or -1.
+    i64 waitFd(void)
+        {
+        return (i64)-1;
+        }
     // Wait for every tile in flight (poll until empty).
     void drain(void)
         {

@@ -550,6 +550,13 @@ tile loop stages them), an array with no footprint travels once per run, and
 the written slices and the reduction partials come back, folded in tile
 order, so the result is the one a local run gives.
 
+With a remote GPU present, `auto` has a fifth candidate: the remote GPUs
+alone, the machine's own devices left out. A card across the network can be
+many times faster than the machine's own (an integrated GPU beside a remote
+RTX 5080), and in a set with it the slow device's share holds the fast one
+back; this candidate is measured and learned like the other four, so such a
+block goes to the remote card alone.
+
 The daemon runs GPU kernels only (it has none of the program's compiled code),
 and it needs the kernel form its GPU takes: build the program with
 `-fpar-kernels=all`, which puts every form — Metal, PTX, SPIR-V, WGSL — in

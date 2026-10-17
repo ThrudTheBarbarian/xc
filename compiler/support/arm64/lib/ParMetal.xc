@@ -659,6 +659,21 @@ class ParMetalWorker : ParWorker
         return complete(d);
         }
 
+    bool waits(void)
+        {
+        return true;
+        }
+    bool waitFor(ParTile* t)
+        {
+        for (u32 d = (u32)0; d < (u32)PAR_MTL_DEPTH; d = d + (u32)1)
+            if (_slotTile[d] == t)
+                {
+                ((parMsg0_t*)gMtlSend)(_cb[d], ParMetal.sel("waitUntilCompleted"));
+                return true;
+                }
+        return false;
+        }
+
     void drain(void)
         {
         parMsg0_t* send0 = (parMsg0_t*)gMtlSend;

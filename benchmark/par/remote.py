@@ -30,6 +30,7 @@ import json
 import os
 import random
 import secrets
+import shutil
 import subprocess
 import sys
 import time
@@ -155,9 +156,12 @@ _settings_n = [0]
 
 
 def fresh_settings():
+    # Emptied first: the numbers start again at 1 on every invocation, and
+    # an earlier invocation's learned choices would decide `auto`.
     _settings_n[0] += 1
     d = os.path.join(HERE, "build", "remote-settings", str(_settings_n[0]))
-    os.makedirs(d, exist_ok=True)
+    shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d)
     return d
 
 
@@ -165,7 +169,8 @@ def run_linux(host, binary, env):
     common.wait_quiet(host)
     _settings_n[0] += 1
     pre = " ".join("%s=%s" % kv for kv in env.items())
-    pre += " XCC_SETTINGS_DIR=/tmp/par-remote-settings-%d" % _settings_n[0]
+    sd = "/tmp/par-remote-settings-%d" % _settings_n[0]
+    pre = "rm -rf %s; %s XCC_SETTINGS_DIR=%s" % (sd, pre, sd)
     pre += " XC_TLS_LIB=$HOME/ci/3p/tls/x86_64/libtls.so"
     r = subprocess.run(["ssh", host, "%s %s" % (pre, binary)], capture_output=True, text=True)
     return with_remote(parse(r.stdout), r.stdout + r.stderr)

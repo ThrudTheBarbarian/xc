@@ -275,6 +275,7 @@ class ParTiles
     static void count(void)
         {
         u32 gpus = (u32)0;
+        u32 remotes = (u32)0;
         Array* ids = new Array();
         for (u32 i = (u32)0; i < _workers.count(); i = i + (u32)1)
             {
@@ -290,6 +291,8 @@ class ParTiles
             String* id = w.identity();
             if (!id.equals(String.withCString("cpu")))
                 gpus = gpus + (u32)1;
+            if (id.hasPrefix(String.withCString("remote:")))
+                remotes = remotes + (u32)1;
             // Insertion, in byte order.
             u32 at = (u32)0;
             while (at < ids.count() && ParTiles.before((String*)ids.get(at), id))
@@ -297,6 +300,7 @@ class ParTiles
             ids.insert(at, (Object*)id);
             }
         gParGpuWorkers = gpus;
+        gParRemoteWorkers = remotes;
         _ids = new String();
         for (u32 i = (u32)0; i < ids.count(); i = i + (u32)1)
             {
@@ -413,7 +417,8 @@ class ParTiles
         }
 
     // Run [lo, hi) of the block as tiles across the workers: set 0 is the
-    // named list, 3 the GPU workers of the default set, 4 all of it. False
+    // named list, 3 the GPU workers of the default set, 4 all of it, 5 its
+    // remote GPU workers alone. False
     // when no worker holds the block, before anything ran.
     static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi, i32 set)
         {
@@ -432,6 +437,7 @@ class ParTiles
     // The probe's pass: one worker alone, one tile size, set by probe()
     // around a run and cleared after it.
     static ParWorker* _probeWorker;
+    static EventQueue* _links;      // the remote workers' results links, waited on together
     static i64 _probeTile;
 
     // XC_PAR_PROBE=1: the block's first run as a sweep. Every worker that
@@ -565,6 +571,26 @@ class ParTiles
             }
         }
 
+    static void waitRemote(Array* ws, i64* inItems)
+        {
+        for (u32 i = (u32)0; i < ws.count(); i = i + (u32)1)
+            if (inItems[i] > (i64)0 && ((ParWorker*)ws.get(i)).waitFd() < (i64)0)
+                return;     // a local tile is out: keep asking
+        if (_links == (EventQueue*)0)
+            _links = EventQueue.make();
+        if (_links == (EventQueue*)0)
+            return;
+        u32 watched = (u32)0;
+        for (u32 i = (u32)0; i < ws.count(); i = i + (u32)1)
+            if (inItems[i] > (i64)0 && _links.watch(((ParWorker*)ws.get(i)).waitFd()))
+                watched = watched + (u32)1;
+        if (watched > (u32)0)
+            _links.wait((i32)100);
+        for (u32 i = (u32)0; i < ws.count(); i = i + (u32)1)
+            if (inItems[i] > (i64)0)
+                _links.unwatch(((ParWorker*)ws.get(i)).waitFd());
+        }
+
     static bool runLocked(ParChunk* proto, u8* src, i64 lo, i64 hi, i32 set)
         {
         i64 started = ParDevice.nowUs();
@@ -576,6 +602,9 @@ class ParTiles
             {
             ParWorker* w = (ParWorker*)_workers.get(i);
             if (set == (i32)3 && w.identity().equals(String.withCString("cpu")))
+                continue;
+            // Set 5: the GPUs on other machines alone.
+            if (set == (i32)5 && !w.identity().hasPrefix(String.withCString("remote:")))
                 continue;
             // forBlock, not holds: a worker whose device a preferred peer runs
             // for this block stands aside, so the pool can carry both back ends
@@ -954,6 +983,10 @@ class ParTiles
                 }
             if (!got && inFlight == (u32)0 && next >= ntiles && again.count() == (u32)0 && folded < ntiles)
                 break; // nothing in flight and nothing finishing: cannot happen, but do not spin
+            // Every tile out is on another machine: wait for one of their
+            // results links (or 100 ms) rather than ask again at once.
+            if (!got && inFlight > (u32)0)
+                waitRemote(ws, &inItems[0]);
             // Tiles remain, nothing is in flight and no worker is ready (every
             // remote in its nimby window, say): wait a little rather than
             // spin, and ask again — unless every worker is gone for good.

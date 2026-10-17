@@ -1785,6 +1785,22 @@ class ParCudaWorker : ParWorker
         return complete(d);
         }
 
+    bool waits(void)
+        {
+        return true;
+        }
+    bool waitFor(ParTile* t)
+        {
+        for (u32 d = (u32)0; d < (u32)PAR_CU_DEPTH; d = d + (u32)1)
+            if (_slotTile[d] == t)
+                {
+                gCu_ctxSetCurrent(_ctx);      // the waiting thread's own current context
+                gCu_eventSync(_tileDone[d]);
+                return true;
+                }
+        return false;
+        }
+
     void drain(void)
         {
         gCu_ctxSetCurrent(_ctx);
