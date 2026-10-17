@@ -726,6 +726,16 @@ class Wasm32
         placeData(mod);
         bool safeArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : spawnsThreads(mod);
         _threaded = safeArc && !_emitLib && !_linkLibs;
+        // A module that starts threads and is, or links, a library would
+        // spawn into nothing (each thread is an instance of one module); as
+        // the reference, refused.
+        if ((_emitLib || _linkLibs) && spawnsThreads(mod)) {
+            Stdio.printf("xcc-cg-wasm32: error: this module starts threads and %s; on wasm32 threads do not "
+                         "combine with wasm libraries yet (each thread is an instance of one module on shared memory, "
+                         "and a library is a module of its own). Build it as one program.\n",
+                         _emitLib ? "is a library" : "links wasm libraries");
+            _fatalImport = true;
+        }
         _rtWords = Wasm32.alignUp(_dataEnd, (u32)16);
         _heapBase = (u32)1048576;
         if (!_emitLib && _dataEnd > (u32)1048576 - (u32)$10000)

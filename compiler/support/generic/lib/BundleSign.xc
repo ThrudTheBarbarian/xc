@@ -215,7 +215,7 @@ class BundleSign
                         String* resourcesDir, Data* seed, String* publisher, String* domain, Map* provides, Map* requires)
         {
         return BundleSign.makeWith(dir, name, version, platform, codeFile, resourcesDir, seed, publisher, domain,
-                                   provides, requires, (Map*)0, (Map*)0, (Data*)0);
+                                   provides, requires, (Map*)0, (Map*)0, (Data*)0, (Array*)0);
         }
 
     // What the old key signs to hand its plugins over to the new one.
@@ -230,10 +230,12 @@ class BundleSign
     // final) and writeable (defaults a user may override); 0 for both keeps
     // what the last run's manifest had. previousSeed: the key this one
     // replaces, which signs the hand-over (a rotation record); 0 keeps the
-    // record the last run made with this key, if any.
+    // record the last run made with this key, if any. libs: libraries the
+    // code needs that the system does not provide, shipped beside it in
+    // Exec/<platform>/ (the loader loads them first, from the verified copy).
     static String* makeWith(String* dir, String* name, String* version, String* platform, String* codeFile,
                             String* resourcesDir, Data* seed, String* publisher, String* domain, Map* provides,
-                            Map* requires, Map* readonly, Map* writeable, Data* previousSeed)
+                            Map* requires, Map* readonly, Map* writeable, Data* previousSeed, Array* libs)
         {
         Map* rotation = (Map*)0;
         if (!BundleRules.validName(name))
@@ -334,6 +336,19 @@ class BundleSign
         if (!BundleSign._copy(codeFile, BundleSign._join(dir, rel)))
             return String.withFormat("cannot copy %s into the bundle", codeFile.cString());
         files.set((Hashable*)rel, (Object*)BundleSign._sha(BundleSign._join(dir, rel)));
+        for (u32 i = (u32)0; libs != (Array*)0 && i < libs.count(); i = i + (u32)1)
+            {
+            String* lib = (String*)libs.get(i);
+            u32 sl = lib.byteLength();
+            while (sl > (u32)0 && lib.byteAt(sl - (u32)1) != (u8)'/' && lib.byteAt(sl - (u32)1) != (u8)92)
+                sl = sl - (u32)1;
+            String* lrel = String.withFormat("Exec/%s/%s", platform.cString(), lib.substringFromByte(sl).cString());
+            if (!BundleRules.validPath(lrel) || lrel.equals(rel))
+                return String.withFormat("'%s' is not a name a bundle may hold beside its code", lrel.cString());
+            if (!BundleSign._copy(lib, BundleSign._join(dir, lrel)))
+                return String.withFormat("cannot copy %s into the bundle", lib.cString());
+            files.set((Hashable*)lrel, (Object*)BundleSign._sha(BundleSign._join(dir, lrel)));
+            }
         // The resources (one level: Resources/<file>).
         if (resourcesDir != (String*)0)
             {

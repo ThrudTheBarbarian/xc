@@ -254,6 +254,13 @@ that cannot set headers, a service worker can add them (the
 neither, and `par` and `OperationQueue` do not spawn threads on `wasm32`: a
 library does not make a page need isolation.
 
+Any thread may start threads, and as many may run at once as the program
+needs: in a browser the page keeps a pool of Workers and adds one whenever a
+thread is waiting to start. A program that starts threads cannot be, or link,
+a `wasm32` library (`--emit-lib`, or `#use` of one): each thread is an instance
+of one module, and a library is a module of its own, so the compiler refuses
+the combination rather than build threads that never run.
+
 On `arm9` the kernel provides only thread lifecycle and a futex. `Mutex`, `Cond`
 and `Sem` are built on it in user space, so an uncontended lock is
 `ldrex`/`strex` and never enters the kernel. Two behaviours there differ from a

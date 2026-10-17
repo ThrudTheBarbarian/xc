@@ -69,7 +69,9 @@ Nothing from the bundle runs until every check has passed:
 4. The bundle has code for this platform, and every protocol it requires is
    one the program provides, with the same major version and at least the
    minor version it was built against.
-5. Natively, the code's own export table, read from the file before it is
+5. Natively, the libraries shipped in the bundle (`xcc --bundle-lib`) are
+   loaded first, from the verified copy.
+6. Natively, the code's own export table, read from the file before it is
    loaded, has every protocol the manifest says it provides and requires.
    Loading a library runs its startup code, so a manifest that does not match
    its code is refused before that.

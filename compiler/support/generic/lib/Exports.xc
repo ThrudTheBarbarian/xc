@@ -27,6 +27,7 @@
 // constructors).
 //
 //     Array* names = Exports.of(Files.readData(path));   // 0: not a library this reads
+//     Array* deps = Exports.needs(Files.readData(path));  // the libraries it loads
 //
 // Mach-O 64 (the LC_SYMTAB's external defined symbols, the leading '_'
 // dropped), ELF64 (.dynsym, or through the dynamic segment when the section
@@ -82,6 +83,162 @@ class Exports : Object
             return (String*)0;
             }
         return String.withBytes(&b[(u32)at], e - (u32)at);
+        }
+
+    // The libraries a library or executable loads: Mach-O load commands
+    // (LC_LOAD_DYLIB, weak, re-export, lazy), ELF DT_NEEDED, PE imports.
+    static Array* needs(Data* d)
+        {
+        if (d == (Data*)0 || d.length() < (u32)64)
+            return (Array*)0;
+        Exports* x = new Exports();
+        x._d = d;
+        Array* r = (Array*)0;
+        u32 magic = x._u32((u64)0);
+        if (magic == (u32)0xFEEDFACF)
+            r = x._machoNeeds();
+        else if (magic == (u32)0x464C457F && x._u8((u64)4) == (u32)2)
+            r = x._elfNeeds();
+        else if (x._u16((u64)0) == (u32)0x5A4D)
+            r = x._peNeeds();
+        return x._bad ? (Array*)0 : r;
+        }
+
+    // A library the platform itself provides, by the name a library records:
+    // macOS anything under /usr/lib or /System; Linux and Android a versioned
+    // distribution soname (`libX.so.N`) or bionic's; Windows the system's
+    // DLLs. An xc library (--emit-lib) is none of these: it is shipped in the
+    // bundle (xcc --bundle-lib) or the plugin is refused.
+    static bool isSystem(String* dep, String* platform)
+        {
+        if (platform.hasPrefix(String.withCString("macos")) || platform.hasPrefix(String.withCString("ios")))
+            return dep.hasPrefix(String.withCString("/usr/lib/")) || dep.hasPrefix(String.withCString("/System/"));
+        if (platform.hasPrefix(String.withCString("windows")))
+            {
+            String* l = dep.lowercased();
+            if (l.hasPrefix(String.withCString("api-ms-win-")) || l.hasPrefix(String.withCString("ext-ms-win-")))
+                return true;
+            u8* known = "kernel32.dll user32.dll gdi32.dll advapi32.dll shell32.dll ole32.dll oleaut32.dll comdlg32.dll "
+                        "comctl32.dll ws2_32.dll winmm.dll opengl32.dll dwmapi.dll uxtheme.dll shcore.dll bcrypt.dll "
+                        "crypt32.dll secur32.dll ntdll.dll msvcrt.dll ucrtbase.dll vcruntime140.dll dbghelp.dll "
+                        "setupapi.dll version.dll vulkan-1.dll nvcuda.dll d3d11.dll d3d12.dll dxgi.dll imm32.dll "
+                        "winhttp.dll wininet.dll iphlpapi.dll userenv.dll powrprof.dll ";
+            String* k = String.withCString(known);
+            String* w = String.withString(l);
+            w.appendByte((u8)' ');
+            return k.contains(w);
+            }
+        // ELF: a versioned soname, or bionic's own.
+        if (platform.hasPrefix(String.withCString("android")))
+            {
+            u8* bionic = " libc.so libm.so libdl.so liblog.so libandroid.so libz.so libEGL.so libGLESv2.so libGLESv3.so "
+                         "libvulkan.so libOpenSLES.so libaaudio.so libmediandk.so libjnigraphics.so ";
+            String* w = String.withCString(" ");
+            w.append(dep);
+            w.appendByte((u8)' ');
+            if (String.withCString(bionic).contains(w))
+                return true;
+            }
+        u32 so = dep.byteIndexOf(String.withCString(".so."));
+        if (so == String.notFound())
+            return false;
+        for (u32 i = so + (u32)4; i < dep.byteLength(); i = i + (u32)1)
+            {
+            u8 c = dep.byteAt(i);
+            if (!((c >= (u8)'0' && c <= (u8)'9') || c == (u8)'.'))
+                return false;
+            }
+        return so + (u32)4 < dep.byteLength();
+        }
+
+    Array* _machoNeeds(void)
+        {
+        Array* r = new Array();
+        u32 ncmds = self._u32((u64)16);
+        u64 at = (u64)32;
+        for (u32 i = (u32)0; i < ncmds && !_bad; i = i + (u32)1)
+            {
+            u32 cmd = self._u32(at);
+            u32 size = self._u32(at + (u64)4);
+            if (size < (u32)8)
+                return (Array*)self._fail();
+            if (cmd == (u32)0xC || cmd == (u32)0x80000018 || cmd == (u32)0x8000001F || cmd == (u32)0x20)
+                {
+                String* n = self._str(at + (u64)self._u32(at + (u64)8));
+                if (n != (String*)0)
+                    r.add((Object*)n);
+                }
+            at = at + (u64)size;
+            }
+        return r;
+        }
+
+    Array* _elfNeeds(void)
+        {
+        Array* r = new Array();
+        u64 phoff = self._u64((u64)0x20);
+        u32 phent = self._u16((u64)0x36);
+        u32 phnum = self._u16((u64)0x38);
+        for (u32 i = (u32)0; i < phnum && !_bad; i = i + (u32)1)
+            {
+            u64 p = phoff + (u64)i * (u64)phent;
+            if (self._u32(p) != (u32)2)
+                continue;
+            u64 dyn = self._u64(p + (u64)8);
+            u64 dsz = self._u64(p + (u64)32);
+            u64 str = (u64)0;
+            for (u64 at = dyn; at + (u64)16 <= dyn + dsz && !_bad; at = at + (u64)16)
+                {
+                u64 tag = self._u64(at);
+                if (tag == (u64)0)
+                    break;
+                if (tag == (u64)5)
+                    str = self._elfOffset(self._u64(at + (u64)8));
+                }
+            for (u64 at = dyn; at + (u64)16 <= dyn + dsz && !_bad; at = at + (u64)16)
+                {
+                u64 tag = self._u64(at);
+                if (tag == (u64)0)
+                    break;
+                if (tag == (u64)1)
+                    {
+                    String* n = self._str(str + self._u64(at + (u64)8));
+                    if (n != (String*)0)
+                        r.add((Object*)n);
+                    }
+                }
+            return r;
+            }
+        return r;
+        }
+
+    Array* _peNeeds(void)
+        {
+        Array* r = new Array();
+        u64 pe = (u64)self._u32((u64)0x3C);
+        if (self._u32(pe) != (u32)0x00004550)
+            return (Array*)self._fail();
+        u32 nsec = self._u16(pe + (u64)6);
+        u32 optSize = self._u16(pe + (u64)20);
+        u64 opt = pe + (u64)24;
+        if (self._u16(opt) != (u32)0x20B)
+            return (Array*)self._fail();
+        u32 impRva = self._u32(opt + (u64)120);
+        u64 sections = opt + (u64)optSize;
+        if (impRva == (u32)0)
+            return r;
+        u64 d = self._peOffset(sections, nsec, impRva);
+        for (u32 i = (u32)0; i < (u32)4096 && !_bad; i = i + (u32)1)
+            {
+            u64 e = d + (u64)i * (u64)20;
+            u32 nameRva = self._u32(e + (u64)12);
+            if (nameRva == (u32)0)
+                break;
+            String* n = self._str(self._peOffset(sections, nsec, nameRva));
+            if (n != (String*)0)
+                r.add((Object*)n);
+            }
+        return r;
         }
 
     static Array* of(Data* d)

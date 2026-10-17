@@ -94,7 +94,26 @@
         Atomics.notify(i32, 2);
         return;
       }
+      if (d.xccPool !== undefined) { startPool(d.xccPool); return; }
       if (d.xccExit) console.warn(`main() returned ${d.xccExit}`);
+    };
+    // A threaded program's pool (the worker side explains why it is the
+    // page's): `want` workers now, then one more whenever runs wait in the
+    // queue and no worker is idle or starting.
+    const startPool = (p) => {
+      const q = new Int32Array(p.queue);
+      const add = () => {
+        Atomics.add(q, 3, 1);
+        const w = new Worker(url);
+        w.onerror = worker.onerror;
+        w.onmessage = worker.onmessage;
+        w.postMessage({ xccThread: { module: p.module, memory: p.memory, queue: p.queue }, env: p.env });
+      };
+      for (let k = 0; k < p.want; k++) add();
+      setInterval(() => {
+        const waiting = Atomics.load(q, 1) - Atomics.load(q, 0);
+        if (waiting > Atomics.load(q, 2) + Atomics.load(q, 3)) add();
+      }, 20);
     };
     worker.postMessage({ ring, canvas: off,
                          workerScript: cfg.workerScript || null,
@@ -992,9 +1011,75 @@
   // app's exported runtime, and the dep's reloc-apply patches the vtable
   // words a data segment cannot compute. __stack_low is raised past the
   // last dep so the shadow stack cannot grow down into library data.
+  // ── Spawning, from main or from any thread (wasm32-threads.md). A thread
+  // gets a 256 KiB shadow stack and a handle {done, stack, detached} from the
+  // heap. Node starts a worker per thread, from whichever thread spawns. A
+  // browser cannot: a Worker starts only once its creator returns to its
+  // event loop, which a thread that spawns and then joins never does. So
+  // there a spawn goes into a queue in shared memory, and pool workers block
+  // on that queue and run what arrives. The PAGE creates the pool workers (it
+  // never blocks) and adds one whenever runs wait and none is idle, so any
+  // thread may spawn, and there is no ceiling on how many run at once.
+  //
+  // The queue: words 0 head (next to take), 1 tail (next to fill), 2 idle
+  // workers, 3 workers starting; then Q_CAP slots of 6 words, {code, recv,
+  // handle, sp, low, seq + 1}, the last stored once the rest are written.
+  const Q_CAP = 1024, Q_HDR = 8, Q_SLOT = 6;
+  const STACK = 256 * 1024;
+  const newRun = (code, recv) => {
+    const h = xalloc(16), stack = xalloc(STACK);
+    const m = i32v();
+    m[h >> 2] = 0; m[(h >> 2) + 1] = stack; m[(h >> 2) + 2] = 0;
+    return { code, recv, handle: h, sp: (stack + STACK) & ~15, low: stack };
+  };
+  const qPush = (q, r) => {
+    let t;
+    for (;;) {
+      t = Atomics.load(q, 1);
+      const h = Atomics.load(q, 0);
+      if (t - h >= Q_CAP) { Atomics.wait(q, 0, h, 50); continue; }
+      if (Atomics.compareExchange(q, 1, t, t + 1) === t) break;
+    }
+    const s = Q_HDR + (t % Q_CAP) * Q_SLOT;
+    q[s] = r.code; q[s + 1] = r.recv; q[s + 2] = r.handle; q[s + 3] = r.sp; q[s + 4] = r.low;
+    Atomics.store(q, s + 5, t + 1);
+    Atomics.notify(q, s + 5);
+    Atomics.notify(q, 1);
+  };
+  const qTake = (q) => {
+    for (;;) {
+      const h = Atomics.load(q, 0), t = Atomics.load(q, 1);
+      if (h === t) {
+        Atomics.add(q, 2, 1);
+        Atomics.wait(q, 1, t);
+        Atomics.sub(q, 2, 1);
+        continue;
+      }
+      if (Atomics.compareExchange(q, 0, h, h + 1) !== h) continue;
+      Atomics.notify(q, 0);
+      const s = Q_HDR + (h % Q_CAP) * Q_SLOT;
+      for (let v = Atomics.load(q, s + 5); v !== h + 1; v = Atomics.load(q, s + 5)) Atomics.wait(q, s + 5, v, 10);
+      const r = { code: q[s], recv: q[s + 1], handle: q[s + 2], sp: q[s + 3], low: q[s + 4] };
+      Atomics.store(q, s + 5, 0);
+      return r;
+    }
+  };
+  let poolQ = threadBoot && threadBoot.queue ? new Int32Array(threadBoot.queue) : null;
+  if (threaded) {
+    spawnThread = (code, recv) => {
+      const run = newRun(code, recv);
+      if (isNode) {
+        new nodeWT.Worker(__filename, { workerData: { xccThread: Object.assign({ module: wasmModule, memory: sharedMemory }, run),
+                                                       env: globalThis.xccEnv || null } });
+        return run.handle;
+      }
+      qPush(poolQ, run);
+      return run.handle;
+    };
+  }
   if (threadBoot) {
     // This instance is a thread: its own stack and id, then the bound method.
-    // A browser's pool worker stays, and runs each thread handed to it.
+    // A browser's pool worker stays, and runs each thread the queue hands it.
     const ex = instance.exports;
     const runThread = (t) => {
       ex.__sp.value = t.sp;
@@ -1012,74 +1097,24 @@
       // in use: the call has returned) and handle.
       if (Atomics.exchange(m, (t.handle >> 2) + 2, 2) === 1) { xfree(t.low); xfree(t.handle); }
     };
-    if (threadBoot.pool === undefined) {
+    if (!poolQ) {
       runThread(threadBoot);
       if (!isNode) self.close();
       return;
     }
-    const idle = new Int32Array(threadBoot.idle);
-    self.onmessage = (e) => {
-      if (!e.data || !e.data.xccRun) return;
-      runThread(e.data.xccRun);
-      Atomics.store(idle, threadBoot.pool, 1);
-      Atomics.add(idle, idle.length - 1, 1);
-      Atomics.notify(idle, idle.length - 1);
-    };
-    self.postMessage({ xccReady: threadBoot.pool });
-    return;
+    Atomics.sub(poolQ, 3, 1);
+    for (;;) runThread(qTake(poolQ));
   }
   if (threaded) {
     instance.exports.__xt_init_memory();
-    // A thread: a 256 KiB shadow stack and a handle {done, stack, detached}
-    // from the heap; this script started again on them. A browser starts a
-    // new Worker only once its creator returns to its event loop, which a
-    // thread that spawns and then joins never does: so the workers are
-    // started BEFORE main, as a pool (xccConfig.threadPool, default the
-    // core count, 4 to 16), each with the module instantiated, and a spawn
-    // hands its thread to an idle one, waiting for one to come free when all
-    // are busy (word [want] counts their returns). So a program never needs
-    // more threads running AT ONCE than the pool holds, or it waits forever,
-    // as an Emscripten pthread pool does.
-    const scriptUrl = isWorker ? self.location.href : null;
-    const pool = [];
-    let poolIdle = null;
     if (isWorker) {
+      // The queue, and the page told to start the pool on it.
+      poolQ = new Int32Array(new SharedArrayBuffer(4 * (Q_HDR + Q_CAP * Q_SLOT)));
       const want = (globalThis.xccConfig && globalThis.xccConfig.threadPool) ||
                    Math.max(4, Math.min(16, navigator.hardwareConcurrency || 4));
-      poolIdle = new Int32Array(new SharedArrayBuffer(4 * (want + 1)));
-      await Promise.all(Array.from({ length: want }, (_, k) => new Promise((res) => {
-        const w = new Worker(scriptUrl);
-        w.onmessage = (e) => {
-          if (e.data && e.data.xccReady !== undefined) { Atomics.store(poolIdle, k, 1); res(); return; }
-          self.postMessage(e.data);   // its output, to the page
-        };
-        w.postMessage({ xccThread: { module: wasmModule, memory: sharedMemory, pool: k, idle: poolIdle.buffer },
-                        env: globalThis.xccEnv || null });
-        pool.push(w);
-      })));
+      self.postMessage({ xccPool: { module: wasmModule, memory: sharedMemory, queue: poolQ.buffer, want,
+                                    env: globalThis.xccEnv || null } });
     }
-    spawnThread = (code, recv) => {
-      const STACK = 256 * 1024;
-      const h = xalloc(16), stack = xalloc(STACK);
-      const m = i32v();
-      m[h >> 2] = 0; m[(h >> 2) + 1] = stack; m[(h >> 2) + 2] = 0;
-      const run = { code, recv, handle: h, sp: (stack + STACK) & ~15, low: stack };
-      while (pool.length) {
-        const gen = Atomics.load(poolIdle, pool.length);
-        for (let k = 0; k < pool.length; k++)
-          if (Atomics.compareExchange(poolIdle, k, 1, 0) === 1) { pool[k].postMessage({ xccRun: run }); return h; }
-        Atomics.wait(poolIdle, pool.length, gen, 1000);
-      }
-      const msg = { xccThread: Object.assign({ module: wasmModule, memory: sharedMemory }, run),
-                    env: globalThis.xccEnv || null };
-      if (isNode) new nodeWT.Worker(__filename, { workerData: msg });
-      else {
-        const w = new Worker(scriptUrl);
-        w.onmessage = (e) => self.postMessage(e.data);   // its output, to the page
-        w.postMessage(msg);
-      }
-      return h;
-    };
   }
   let dcur = order.length ? instance.exports.__data_end.value : 0;
   for (const d of order) {

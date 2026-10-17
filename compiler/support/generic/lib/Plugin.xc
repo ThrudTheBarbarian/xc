@@ -552,6 +552,29 @@ class Plugin : Object
         err = Plugin._checkExports(m, Files.readData(lib));
         if (err != (String*)0)
             return Plugin._fail(err);
+        // The libraries shipped beside the code, from the copy and in order,
+        // so the system finds them loaded rather than looking elsewhere.
+        Array* fk = files.allKeys();
+        BundleSign._sort(fk);
+        String* execDir = String.withFormat("Exec/%s/", Plugin._platform().cString());
+        for (u32 i = (u32)0; i < fk.count(); i = i + (u32)1)
+            {
+            String* f = (String*)fk.get(i);
+            if (!f.hasPrefix(execDir) || f.equals(code))
+                continue;
+            String* full = BundleSign._join(dir, f);
+#if ARCH_win64
+            if (LoadLibraryExA(full.cString(), (pointer)0, (u32)0x00000900) == (pointer)0)
+                return Plugin._fail(String.withFormat("%s: the system would not load %s", name.cString(), f.cString()));
+#elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+            if (dlopen(full.cString(), (i32)2) == (pointer)0)
+                {
+                u8* why = dlerror();
+                return Plugin._fail(String.withFormat("%s: %s: %s", name.cString(), f.cString(),
+                                                      why != (u8*)0 ? why : "the system would not load it"));
+                }
+#endif
+            }
         Plugin* p = new Plugin();
         p._name = name;
         p._dir = dir;

@@ -76,6 +76,13 @@ the bundle provides and requires comes from the protocols with
 [static members](/compiler/language/inheritance/#static-members-an-interface-between-programs)
 it declares.
 
+A plugin may load only the system's libraries, or ones shipped inside the
+bundle: a library it links that the system does not provide (an xc library
+built with `--emit-lib`, say) is refused unless named with `--bundle-lib
+<file>`, which puts it beside the code in `Exec/<os>-<arch>/`, listed and
+signed like the rest. The loader loads those first, from the verified copy, so
+the system never goes looking for them elsewhere.
+
 With `-A wasm32` the entry is `Exec/wasm32/<name>.wasm`, a module with its
 own memory that a web page loads. [Plugin](/compiler/api/plugin/) loads a
 bundle's code into a running program, on every target.

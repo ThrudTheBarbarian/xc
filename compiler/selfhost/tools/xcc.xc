@@ -23,6 +23,7 @@
 // shape is worse than one that says it cannot.
 
 #import "BundleSign.xc"
+#import "Exports.xc"
 #import "Foundation.xc"
 #import "Stdio.xc"
 #import "Files.xc"
@@ -176,6 +177,7 @@ class DriverOptions
     String*    _publisherDomain;
     String*    _trusted;          // --trust key.pub...: the only publishers Plugin.load accepts
     String*    _rotateFrom;       // --rotate-from <old key>: hand the bundle over to the new key
+    Array*     _bundleLibs;       // --bundle-lib <file>: a library the code needs, shipped beside it
     Map*       _bundleReadonly;   // --property k=v: the publisher's, final
     Map*       _bundleWriteable;  // --setting k=v: a default a user may change
     bool       _emitIfaceOnly;  // --emit-iface: the interface, and nothing else
@@ -4264,6 +4266,31 @@ void makeBundle(DriverOptions* d)
                 requires.set((Hashable*)k, v.get((u32)0));
         }
     }
+    // What the code loads must be the system's, or shipped in the bundle
+    // (bundles-and-plugins.md, review 2): the OS would otherwise load an
+    // unverified library from wherever it found one.
+    Array* deps = Exports.needs(Files.readData(out));
+    for (u32 k = (u32)0; deps != (Array*)0 && k < deps.count(); k = k + (u32)1) {
+        String* dep = (String*)deps.get(k);
+        if (Exports.isSystem(dep, bundlePlatform(d)))
+            continue;
+        u32 sl = dep.byteLength();
+        while (sl > (u32)0 && dep.byteAt(sl - (u32)1) != (u8)'/' && dep.byteAt(sl - (u32)1) != (u8)92)
+            sl = sl - (u32)1;
+        String* base = dep.substringFromByte(sl);
+        bool shipped = false;
+        for (u32 j = (u32)0; d._bundleLibs != (Array*)0 && j < d._bundleLibs.count(); j = j + (u32)1) {
+            String* lib = (String*)d._bundleLibs.get(j);
+            if (lib.hasSuffix(base) && (lib.byteLength() == base.byteLength()
+                                        || lib.byteAt(lib.byteLength() - base.byteLength() - (u32)1) == (u8)'/'))
+                shipped = true;
+        }
+        if (!shipped) {
+            Stdio.printf("xcc: error: --bundle: %s needs %s, which is not a system library: ship it in the bundle "
+                         "with --bundle-lib <file>, or build it into the plugin\n", out.cString(), dep.cString());
+            Process.exit((i32)1); return;
+        }
+    }
     Data* previous = (Data*)0;
     if (d._rotateFrom != (String*)0) {
         if (!Files.exists(d._rotateFrom)) {
@@ -4276,7 +4303,7 @@ void makeBundle(DriverOptions* d)
                                       d._bundleVersion,
                                       bundlePlatform(d), out, d._bundleResources, seed,
                                       d._publisher, d._publisherDomain, provides, requires,
-                                      d._bundleReadonly, d._bundleWriteable, previous);
+                                      d._bundleReadonly, d._bundleWriteable, previous, d._bundleLibs);
     if (err != (String*)0) {
         Stdio.printf("xcc: error: --bundle: %s\n", err.cString());
         Process.exit((i32)1); return;
@@ -6148,6 +6175,11 @@ DriverOptions* parseDriverArgs(void)
             if (d._trusted == (String*)0) d._trusted = new String();
             else d._trusted.appendByte((u8)' ');
             d._trusted.append(Sha256.hex(pk.bytes(), (u32)32));
+            i = i + (u32)2; continue;
+        }
+        if (a.equals(String.withCString("--bundle-lib")) && i + (u32)1 < argc) {
+            if (d._bundleLibs == (Array*)0) d._bundleLibs = new Array();
+            d._bundleLibs.add((Object*)Process.argument(i + (u32)1));
             i = i + (u32)2; continue;
         }
         if (a.equals(String.withCString("--rotate-from")) && i + (u32)1 < argc) {

@@ -102,6 +102,16 @@ check "rotation: forged"      "the key rotation does not verify" "$L/host" "$L/r
 rb rotD --bundle-key "$L/keyD" --bundle-version 1.0 --rotate-from "$L/keyB"
 check "rotation: no rollback" "older than 1.1"                  "$L/host" "$L/rotD" none
 
+# A plugin that needs a library the system does not provide: refused unless
+# it ships in the bundle (--bundle-lib), and then loaded from the copy.
+mkdir -p "$L/deplib"
+ROOT=$(pwd); XCA="$(cd "$(dirname "$XC")" && pwd)/$(basename "$XC")"
+(cd "$L/deplib" && "$XCA" --emit-lib -H "$ROOT" -q -o libSpicelib.$EXT "$ROOT/tests/bundle/Spicelib.xc")
+check "undeclared dependency" "which is not a system library"   "$XC" --bundle "$L/dep" --bundle-key "$L/key" -L "$L/deplib" -o "$L/dep.$EXT" tests/bundle/spicedep.xc
+"$XC" --bundle "$L/dep" --bundle-key "$L/key" -L "$L/deplib" --bundle-lib "$L/deplib/libSpicelib.$EXT" \
+    -o "$L/dep.$EXT" tests/bundle/spicedep.xc > /dev/null
+check "a shipped dependency"  "run -> 34"                       "$L/host" "$L/dep" yes
+
 # Developer properties: readonly and writeable values in the signed manifest,
 # a user's overrides in the app's Settings, across updates of the bundle.
 P="$L/props"; ST="$L/props.settings"

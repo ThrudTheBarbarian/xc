@@ -436,6 +436,17 @@ static NSString *watStringLit(NSData *bytes) {
     // ── Data placement: string literals, globals, vtables, constants ───────
     [self placeDataForModule:mod];
     sThreaded = sThreadSafeARC && !sEmitLib && !sLinkLibs;
+    // Each thread is an instance of ONE module on its shared memory; a wasm
+    // library is a module of its own, wired to one instance. A module that
+    // starts threads and is, or links, a library would spawn into nothing,
+    // so it is refused here rather than handing back dead threads.
+    if ((sEmitLib || sLinkLibs) && [mod referencesSymbolNamed:@"_xt_thread_create"]) {
+        fprintf(stderr, "xcc-cg-wasm32: error: this module starts threads and %s; on wasm32 threads do not "
+                "combine with wasm libraries yet (each thread is an instance of one module on shared memory, "
+                "and a library is a module of its own). Build it as one program.\n",
+                sEmitLib ? "is a library" : "links wasm libraries");
+        sFatalImportError = YES;
+    }
     sRtWords = alignUp32(sDataEnd, 16);
     sHeapBase = kWasmHeapBase;
     if (!sEmitLib && sDataEnd > kWasmHeapBase - 0x10000u)
