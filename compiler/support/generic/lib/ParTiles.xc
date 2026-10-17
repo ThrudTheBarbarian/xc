@@ -13,7 +13,7 @@
 #import "Files.xc"
 #endif
 
-// XC_PAR_TRACE=<file>: every tile queue run as fixed binary records, for
+// XC_PAR_TRACE=<file> (or 1, on: par-trace.xcpt here): every tile queue run as fixed binary records, for
 // tools/par-trace.html to draw. The file starts "XCPTRACE", a u32 version
 // (1) and a u32 0; then 48-byte records, little-endian: u8 kind, u8 worker,
 // u16 0, u32 run, five i64 a..e. Times are microseconds from the trace's
@@ -49,6 +49,15 @@ class ParTrace
             String* p = Platform.env(String.withCString("XC_PAR_TRACE"));
             if (p.byteLength() > (u32)0)
                 {
+                // A bare switch value (1, on, yes, true), as the other
+                // XC_PAR_* settings take, means the default file rather than
+                // one named "1".
+                if (p.equals(String.withCString("1")) || p.equals(String.withCString("on")) ||
+                    p.equals(String.withCString("yes")) || p.equals(String.withCString("true")))
+                    {
+                    p = String.withCString("par-trace.xcpt");
+                    Log.info("par: XC_PAR_TRACE: writing par-trace.xcpt in the current directory");
+                    }
                 _path = p;
                 _net = ParTrace.isHostPort(p);
                 _buf = new Data();

@@ -76,7 +76,7 @@
 #import "Base64.xc"
 #import "Bundle.xc"
 
-#define PAR_REMOTE_PROTO 5
+#define PAR_REMOTE_PROTO 6
 #define PAR_REMOTE_PORT 7227
 #define PAR_REMOTE_DEPTH 3
 
@@ -88,7 +88,10 @@
 //   AUTH     program -> daemon: PROTO, VERSION, PROOF; reply OK (TOKEN) or BYE (WHY)
 //   RESULTS  program -> daemon, first on its second link: TOKEN; reply OK
 //   HOLDS    program -> daemon: BLOCK (no data); reply ANSWER (TAKEN: 1 yes, 0 no, 2 busy)
-//   PREPARE  program -> daemon: BLOCK (with data), TILE, N; reply ANSWER
+//   PREPARE  program -> daemon: BLOCK (with data), TILE, N, HASHES, SRCHASH;
+//            NEED back, then DATA, then ANSWER. BLOCK's kernel source is
+//            empty when it went on this connection before (protocol 6):
+//            SRCHASH names it, and the daemon keeps every source it is sent.
 //   TILE     program -> daemon: INDEX, LO, HI, SLICES
 //   DONE     daemon -> program, on the results link: INDEX, SLICES, PARTS, NBACK, KERNELUS
 //   FINISH   program -> daemon: the run is over
@@ -105,6 +108,9 @@
 // refuses to start. The library is looked for as the file XC_TLS_LIB names,
 // beside the executable (the xcd archive puts it there), in the toolchain's
 // third-party tree, then by its bare name through the system's loader.
+#if !ARCH_wasm32
+i32 memcmp(pointer a, pointer b, u64 n);
+#endif
 #if ARCH_win64
 pointer LoadLibraryA(u8* name);
 pointer GetProcAddress(pointer module, u8* name);
@@ -742,9 +748,18 @@ class ParWire
     // cache lacks (frame DATA); HOLDS sends neither.
     static Data* describe(ParChunk* proto, u8* src, ParLayout* l, bool data, bool arrays)
         {
+        return ParWire.describeWith(proto, src, l, data, arrays, true);
+        }
+    // As describe; without the source (an empty one in its place) when the
+    // far side has it already, named by SRCHASH beside (protocol 6).
+    static Data* describeWith(ParChunk* proto, u8* src, ParLayout* l, bool data, bool arrays, bool withSource)
+        {
         Data* d = new Data();
         ParWire.putStr(d, proto.parName());
-        ParWire.putBytes(d, src, ParWire.sourceLength(src));
+        if (withSource)
+            ParWire.putBytes(d, src, ParWire.sourceLength(src));
+        else
+            ParWire.putBytes(d, src, (u32)0);
         u8* obj = proto.objBytes();
         ParWire.putU32(d, (u32)l.size);
         if (data)
@@ -821,6 +836,9 @@ class ParRemoteWorker : ParWorker
     // sent as its hash alone; a MISS (evicted) brings the tile back with
     // its bytes.
     Map* _view;
+    Array* _srcSent;        // kernel sources (hash64) sent on this connection: the daemon keeps them
+    u8* _lastSrc;           // the last source hashed, and its hash: a block's source sits in the
+    u64 _lastSrcHash;       // binary and never moves, so its hash is worked out once
     u8* _src;
     bool _resend;           // the tile being taken again after a MISS: bytes regardless
     bool _noRoom;           // the daemon refused a tile this run for want of device memory
@@ -918,6 +936,7 @@ class ParRemoteWorker : ParWorker
         if (_s == (ParLink*)0)
             return false;
         _view = new Map();
+        _srcSent = new Array();
         u8 tag[8];
         Data* hello = ParWire.recv(_s, &tag[0], (i32)5000);
         if (hello == (Data*)0 || !ParWire.tagIs(&tag[0], "HELLO"))
@@ -1309,7 +1328,24 @@ class ParRemoteWorker : ParWorker
         _savedSlices = (i64)0;
         _sentSlices = (i64)0;
         Data* d = new Data();
-        ParWire.fieldData(d, "BLOCK", ParWire.describe(proto, src, l, true, false));
+        // The kernel source (every GPU form: hundreds of KB) once per
+        // connection: the daemon keeps every source it is sent, so a later
+        // PREPARE names it by hash. Sent every run, it was most of a remote
+        // run's setup (md5: 228 KB, about 1 ms of a 3.3 ms run).
+        if (src != _lastSrc)
+            {
+            _lastSrc = src;
+            _lastSrcHash = ParWire.hash64(src, ParWire.sourceLength(src));
+            }
+        u64 sh = _lastSrcHash;
+        bool sent = false;
+        for (u32 i = (u32)0; i < _srcSent.count() && !sent; i = i + (u32)1)
+            if (((Number*)_srcSent.get(i)).asU64() == sh)
+                sent = true;
+        ParWire.fieldData(d, "BLOCK", ParWire.describeWith(proto, src, l, true, false, !sent));
+        ParWire.fieldI64(d, "SRCHASH", (i64)sh);
+        if (!sent)
+            _srcSent.add((Object*)Number.with(sh));
         ParWire.fieldI64(d, "TILE", tile);
         ParWire.fieldI64(d, "N", l.n);
         // The whole arrays by hash; the daemon says which it lacks.
@@ -1824,22 +1860,37 @@ class ParRemoteChunk : ParChunk
     static Data* internSource(u8* s, u32 n)
         {
         if (_sources == (Array*)0)
+            {
             _sources = new Array();
+            _sourceHashes = new Array();
+            }
+        // Found by hash, then compared: the byte compare against every
+        // source kept was a quarter of a millisecond a run on a big one.
+        u64 h = ParWire.hash64(s, n);
         for (u32 i = (u32)0; i < _sources.count(); i = i + (u32)1)
             {
-            Data* d = (Data*)_sources.get(i);
-            if (d.length() != n + (u32)8)
+            if (((Number*)_sourceHashes.get(i)).asU64() != h)
                 continue;
-            u32 q = (u32)0;
-            while (q < n && d.bytes()[q] == s[q])
-                q = q + (u32)1;
-            if (q == n)
+            Data* d = (Data*)_sources.get(i);
+            if (d.length() == n + (u32)8 && memcmp((pointer)d.bytes(), (pointer)s, (u64)n) == (i32)0)
                 return d;
             }
         Data* d = Data.withLength(n + (u32)8);
         memcpy((pointer)d.bytes(), (pointer)s, (u64)n);
         _sources.add((Object*)d);
+        _sourceHashes.add((Object*)Number.with(h));
         return d;
+        }
+    static Array* _sourceHashes;  // hash64 of each kept source, by index
+    // A kept source by its hash64, or 0.
+    static Data* sourceByHash(u64 h)
+        {
+        if (_sources == (Array*)0)
+            return (Data*)0;
+        for (u32 i = (u32)0; i < _sources.count(); i = i + (u32)1)
+            if (((Number*)_sourceHashes.get(i)).asU64() == h)
+                return (Data*)_sources.get(i);
+        return (Data*)0;
         }
     u8* objBytes(void)
         {
@@ -1902,11 +1953,18 @@ class ParRemoteChunk : ParChunk
     // From a HOLDS or PREPARE payload (data: the bytes are there too).
     static ParRemoteChunk* from(u8* p, u32* at, bool data, bool arrays)
         {
+        return ParRemoteChunk.fromWith(p, at, data, arrays, (u64)0);
+        }
+    // As from; an empty source is the one named by srcHash, sent earlier on
+    // this connection (0 when there is none: then the block has no source).
+    static ParRemoteChunk* fromWith(u8* p, u32* at, bool data, bool arrays, u64 srcHash)
+        {
         ParRemoteChunk* c = new ParRemoteChunk();
         c._name = ParWire.rdStr(p, at);
         u8* s = (u8*)0;
         u32 n = ParWire.rdBytes(p, at, &s);
-        c._src = ParRemoteChunk.internSource(s, n);
+        Data* known = n == (u32)0 && srcHash != (u64)0 ? ParRemoteChunk.sourceByHash(srcHash) : (Data*)0;
+        c._src = known != (Data*)0 ? known : ParRemoteChunk.internSource(s, n);
         u32 size = ParWire.rdU32(p, at);
         c._obj = Data.withLength(size);
         if (data)
@@ -2671,7 +2729,7 @@ class ParRemoteServe
                 if (!ParWire.find(f, "BLOCK", &bp, &bn))
                     break;
                 u32 at = (u32)0;
-                chunk = ParRemoteChunk.from(bp, &at, true, false);
+                chunk = ParRemoteChunk.fromWith(bp, &at, true, false, (u64)ParWire.getI64(f, "SRCHASH", (i64)0));
                 i64 tile = ParWire.getI64(f, "TILE", (i64)0);
                 i64 n = ParWire.getI64(f, "N", (i64)0);
                 // The whole arrays: each one's hash looked up in the cache,

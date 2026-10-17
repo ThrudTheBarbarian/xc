@@ -586,7 +586,8 @@ in … us on the daemon's GPU`), so the link's share of a tile's time is
 visible beside the compute's. The frames are tagged fields, read by tag, so
 a side may carry a field the other does not know.
 
-`XC_PAR_TRACE=<file>` records every run on the tile queue: each
+`XC_PAR_TRACE=<file>` (or `XC_PAR_TRACE=1`, which writes `par-trace.xcpt` in
+the current directory) records every run on the tile queue: each
 tile as it was handed out, to which device, what the queue expected it to
 take, when it came back and how long the device itself spent on it. Open
 the file with `tools/par-trace.html` in the compiler's source tree, a page
