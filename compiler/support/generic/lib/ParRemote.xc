@@ -1060,6 +1060,24 @@ class ParRemoteWorker : ParWorker
         fail("an unexpected frame mid-run");
         return false;
         }
+    // The answer to a request on the control link. A heartbeat's PONG can
+    // come first: ready() pings every second while the queue dispatches, and
+    // a run that ends before the answer leaves it for the next request to
+    // read. Taken for the PONG it is, not the answer: read as NEED it failed
+    // the next run's prepare, and the worker sat out every later run of the
+    // program (mandel_deep from the Mac fell back to its own GPU after a
+    // second of runs, 2026-10-17).
+    Data* reply(u8* tag, i32 ms)
+        {
+        while (true)
+            {
+            Data* f = ParWire.recv(_s, tag, ms);
+            if (f == (Data*)0 || !ParWire.tagIs(tag, "PONG"))
+                return f;
+            pong(f);
+            }
+        return (Data*)0;
+        }
     // One finished tile from the results link, completed and kept for
     // poll(). False when the link is lost.
     bool readResult(void)
@@ -1247,7 +1265,7 @@ class ParRemoteWorker : ParWorker
         if (!ParWire.send(_s, "HOLDS", q))
             return false;
         u8 tag[8];
-        Data* a = ParWire.recv(_s, &tag[0], (i32)30000);
+        Data* a = reply(&tag[0], (i32)30000);
         u8 taken = a != (Data*)0 && ParWire.tagIs(&tag[0], "ANSWER") ? ParWire.getU8(a, "TAKEN", (u8)0) : (u8)0;
         _held = taken == (u8)1;
         // 2: the daemon's GPUs are another program's just now — not a
@@ -1317,7 +1335,7 @@ class ParRemoteWorker : ParWorker
         if (!ParWire.send(_s, "PREPARE", d))
             return false;
         u8 tag[8];
-        Data* nd = ParWire.recv(_s, &tag[0], (i32)60000);
+        Data* nd = reply(&tag[0], (i32)60000);
         if (nd == (Data*)0 || !ParWire.tagIs(&tag[0], "NEED"))
             return false;
         Data* arrays = new Data();
@@ -1355,7 +1373,7 @@ class ParRemoteWorker : ParWorker
         ParWire.fieldData(dd, "ARRAYS", arrays);
         if (!ParWire.send(_s, "DATA", dd))
             return false;
-        Data* a = ParWire.recv(_s, &tag[0], (i32)60000);
+        Data* a = reply(&tag[0], (i32)60000);
         if (a == (Data*)0 || !ParWire.tagIs(&tag[0], "ANSWER"))
             return false;
         u8 taken = ParWire.getU8(a, "TAKEN", (u8)0);

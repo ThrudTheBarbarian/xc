@@ -788,8 +788,9 @@ class ParTiles
             firstTake[i] = (i64)0;
             }
         // The workers' rates are seeded from auto's measurements of the block
-        // at this size, where it has them (the CPU's and the single GPU's; a
-        // second card takes the first's and corrects itself from its tiles).
+        // at this size, where it has them (the CPU's, the single GPU's and
+        // the remote set's; a second local card takes the first's and
+        // corrects itself from its tiles).
         // Unmeasured, an idle worker is given a tile before anything and a
         // busy one waits behind every measured one — and the CPU pool runs
         // each tile on ONE lane, so a GPU-sized tile there is a run of its
@@ -801,10 +802,18 @@ class ParTiles
         bool isCpuW[16];
         for (u32 i = (u32)0; i < nw; i = i + (u32)1)
             isCpuW[i] = ((ParWorker*)ws.get(i)).identity().equals(String.withCString("cpu"));
+        // A remote GPU is seeded from auto's run of the remote set where that
+        // set is the one remote worker: given the local GPU's rate instead,
+        // a remote RTX 5080 beside an integrated GPU started out as slow as
+        // the integrated one, and its fast tiles barely moved that average
+        // within the run (md5: 30 ms on both against 3.3 on the 5080 alone).
         if (gParMeasN[bi] > (i64)0)
             for (u32 i = (u32)0; i < nw; i = i + (u32)1)
                 {
-                i64 us = isCpuW[i] ? gParCpuUs[bi] : gParGpuUs[bi];
+                bool remoteW = ((ParWorker*)ws.get(i)).identity().hasPrefix(String.withCString("remote:"));
+                i64 us = isCpuW[i] ? gParCpuUs[bi]
+                       : !remoteW ? gParGpuUs[bi]
+                       : gParRemoteWorkers == (u32)1 && gParRemUs[bi] < ((i64)1 << (i64)50) ? gParRemUs[bi] : (i64)-1;
                 if (us > (i64)0)
                     {
                     doneItems[i] = gParMeasN[bi];

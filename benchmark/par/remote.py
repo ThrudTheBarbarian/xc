@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import random
+import re
 import secrets
 import shutil
 import subprocess
@@ -133,6 +134,12 @@ def measure(runner, binary, remote_env):
                 sys.exit("par/remote.py: %s (%s) printed nothing usable" % (binary, mode))
             if mode != "local" and not got[3]:
                 sys.exit("par/remote.py: %s (%s) did not reach the daemon: %s" % (binary, mode, got[4]))
+            # The remote GPU alone must have run every block: a run the daemon
+            # turned away ("not now") falls back to the local devices, and the
+            # best of eight was then the local GPU's time under this column's
+            # name (mandel_deep from the Mac read 50 ms; the 5080 takes 270).
+            if mode == "remote" and got[5]:
+                sys.exit("par/remote.py: %s (remote) ran a block on this machine: %s" % (binary, got[5]))
             sums.add(got[0])
             if best is None or got[1] < best["best_us"]:
                 best = {"best_us": got[1], "first_us": got[2]}
@@ -177,14 +184,16 @@ def run_linux(host, binary, env):
 
 
 def with_remote(got, text):
-    """(checksum, best, first, reached, why): reached is whether the report
-    shows the daemon as a worker; why, its complaint when not."""
+    """(checksum, best, first, reached, why, local): reached is whether the
+    report shows the daemon as a worker; why, its complaint when not; local,
+    a report line of a block run on this machine's own devices, or ""."""
     if got is None:
         return None
     reached = "remote worker remote:" in text
     why = next((l for l in text.splitlines() if "par: remote" in l and ("cannot" in l or "refused" in l or "lost" in l)),
                "no remote worker in the report")
-    return got + (reached, why)
+    local = next((l for l in text.splitlines() if re.match(r"par: [^:]+: \d+ items on the (GPU|CPU)", l)), "")
+    return got + (reached, why, local)
 
 
 def main():

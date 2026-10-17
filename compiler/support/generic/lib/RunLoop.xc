@@ -39,9 +39,11 @@
 // a UI toolkit's frame callback — calls `runPending` from it instead, which
 // runs what is queued and returns.
 //
-// Timers fire on the loop's thread too. They are checked once per jiffy
-// (1/60 s), so a timer is late by up to about 17 ms. They run on the host's
-// monotonic clock, so changing the wall clock does not move them.
+// Timers fire on the loop's thread too. The timer thread sleeps until the
+// next one is due (an EventQueue wait, woken when a timer is added), so a
+// timer is late by about a millisecond, and nothing wakes while none is due.
+// They run on the host's monotonic clock, so changing the wall clock does not
+// move them.
 //
 // Hosted targets only (arm64, android, x86_64, win64).
 
@@ -55,11 +57,16 @@
 #import "Mutex.xc"
 #import "Cond.xc"
 #import "Time.xc"
+#import "EventQueue.xc"
 
 // Microseconds on the host's monotonic clock. Time.timerValue counts from an
 // origin the PROGRAM sets with Time.clearTimer, so a library cannot use it.
 #if ARCH_win64
-u64 GetTickCount64(void);
+i32 QueryPerformanceCounter(i64* count);
+i32 QueryPerformanceFrequency(i64* perSecond);
+pointer LoadLibraryA(u8* name);
+pointer GetProcAddress(pointer module, u8* name);
+typedef u32 _RunLoopTimePeriod_t(u32 ms);
 #else
 struct _RunLoopTimespec { i64 sec; i64 nsec; }
 i32 clock_gettime(i32 clock, pointer ts);
@@ -68,7 +75,13 @@ i32 clock_gettime(i32 clock, pointer ts);
 i64 _runloop_now_us(void)
     {
 #if ARCH_win64
-    return (i64)GetTickCount64() * (i64)1000;
+    // The performance counter: GetTickCount64 moves in 15.6 ms steps, which
+    // no timer could be more precise than.
+    i64 c = (i64)0;
+    i64 f = (i64)1;
+    QueryPerformanceCounter(&c);
+    QueryPerformanceFrequency(&f);
+    return (c / f) * (i64)1000000 + (c % f) * (i64)1000000 / f;
 #else
     _RunLoopTimespec ts;
 #if ARCH_x86_64 || PLATFORM_android
@@ -115,6 +128,7 @@ class RunLoop
     Array* _timers;        // Timer@, live ones
     bool _stopping;
     Thread* _ticker;
+    EventQueue* _tickWake;  // the timer thread's sleep; 0 where there is none
 
     void init(void)
         {
@@ -219,16 +233,30 @@ class RunLoop
         _timers.add((Object*)t);
         if (_ticker == (Thread*)0)
             {
+            _tickWake = EventQueue.make();
+#if ARCH_win64
+            // Windows wakes timed waits on its 15.6 ms tick unless a process
+            // asks for 1 ms (winmm; since Windows 10 2004 the request is the
+            // process's own): without it a timer was 8 ms late on average.
+            pointer winmm = LoadLibraryA("winmm.dll");
+            _RunLoopTimePeriod_t* tbp = winmm == (pointer)0 ? (_RunLoopTimePeriod_t*)0
+                                        : (_RunLoopTimePeriod_t*)GetProcAddress(winmm, "timeBeginPeriod");
+            if (tbp != (_RunLoopTimePeriod_t*)0)
+                tbp((u32)1);
+#endif
             _ticker = Thread.spawn(&self._tick);
             _ticker.detach();
             }
         _timersChanged.signal();
         _lock.unlock();
+        if (_tickWake != (EventQueue*)0)
+            _tickWake.wake();      // it may sleep past this one's due time
         return t;
         }
 
-    // The timer thread: asleep while there are no timers, otherwise checking
-    // once a jiffy and posting each due timer's block to the loop.
+    // The timer thread: asleep while there are no timers, otherwise asleep
+    // until the next is due (or one is added), posting each due timer's
+    // block to the loop.
     void _tick(void)
         {
         while (true)
@@ -237,6 +265,7 @@ class RunLoop
             while (_timers.count() == (u32)0)
                 _timersChanged.wait(_lock);
             i64 now = _runloop_now_us();
+            i64 next = (i64)-1;
             Array* keep = new Array();
             for (u32 i = (u32)0; i < _timers.count(); i = i + (u32)1)
                 {
@@ -258,10 +287,26 @@ class RunLoop
                         t._due = now + t._periodUs;
                     }
                 keep.add((Object*)t);
+                if (next < (i64)0 || t._due < next)
+                    next = t._due;
                 }
             _timers = keep;
             _lock.unlock();
-            Time.delayJiffies((u32)1);
+            if (_tickWake == (EventQueue*)0)
+                {
+                Time.delayJiffies((u32)1);
+                continue;
+                }
+            if (next < (i64)0)
+                continue;          // none left: the wait above sleeps
+            i64 left = next - _runloop_now_us();
+            if (left > (i64)0)
+                {
+                // Rounded up: waking a little before the due time would only
+                // go round again.
+                i64 ms = (left + (i64)999) / (i64)1000;
+                _tickWake.wait(ms > (i64)3600000 ? (i32)3600000 : (i32)ms);
+                }
             }
         }
     }

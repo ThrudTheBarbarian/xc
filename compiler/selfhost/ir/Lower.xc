@@ -5775,6 +5775,12 @@ class ClassInfo
         c.setCc(String.withCString("CallConv::Standard"));
         _blk.add(c);
         _mem = nm;
+        // A call through a bound method yields its class pointer at +1, as
+        // every call does (the reference registers it with the rest). Not
+        // noted, a callback LOCAL's result counted as borrowed: `return r(x)`
+        // retained on top of the call's +1, a leak per call (SortDescriptor's
+        // _SortRun.value, found by lib-diff 2026-10-17).
+        noteOwnedTemp(res, ret);
         return res;
         }
 
@@ -13241,7 +13247,7 @@ class ClassInfo
                         continue;
                     // "" where an `optional` requirement is unimplemented — a
                     // null entry, which is exactly what `&obj.method` tests.
-                    String* sym = implementorOf(cls, req.name(), req);
+                    String* sym = implementorOfIn(cls, req.name(), req, true);
                     row.add((Object*)(sym == 0 ? String.withCString("") : sym));
                     }
                 names.add((Object*)pn);
@@ -13329,6 +13335,13 @@ class ClassInfo
     // protocol would land in the wrong body.
     String* implementorOf(Node* cls, String* name, Node* want)
         {
+        return implementorOfIn(cls, name, want, false);
+        }
+
+    // As implementorOf; `sameParams`: a method whose parameters match `want`, or
+    // none (a protocol row).
+    String* implementorOfIn(Node* cls, String* name, Node* want, bool sameParams)
+        {
         for (Node* c = cls; c != 0; c = parentDeclOf(c))
             {
             Node* fallback = (Node*)0;
@@ -13359,7 +13372,12 @@ class ClassInfo
                         exact = m;
                     return methodSymbolName(c, exact);
                     }
-                if (fallback == 0)
+                // By name alone, except for a protocol row (`sameParams`): that
+                // takes a method whose parameters match, as the reference
+                // does. SortDescriptor's `compare(Object*, Object*)` filled
+                // Comparable's optional `compare(Object*)`, where a call
+                // through the protocol would pass one argument too few.
+                if (fallback == 0 && !sameParams)
                     fallback = m;
                 }
             if (fallback != 0)

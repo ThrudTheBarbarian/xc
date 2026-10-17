@@ -5132,20 +5132,41 @@ class Parser
         return n;
     }
 
+    // `try { ... } catch (T e) { ... }` or `catch (e)`, as the reference
+    // takes it: blocks only, at least one catch, and the binder one or two
+    // identifiers (a type and a name, or a name) — `catch (Error* e)` and a
+    // catch without parentheses were accepted here and refused there.
     Node* parseTry(void)
     {
         advance();
         Node* n = mk((u16)nkTry);
+        if (!check((u16)tokLBrace)) {
+            _error(String.withCString("'try' wants a block: try { ... } catch (e) { ... }"));
+            return (Node*)0;
+        }
         n.add(parseBlockOrStatement());
+        if (!check((u16)tokCatch)) {
+            _error(String.withCString("'try' must be followed by 'catch (name) { ... }'"));
+            return (Node*)0;
+        }
         while (check((u16)tokCatch)) {
             advance();
             Node* c = mk((u16)nkCatch);
             String* ty = String.withCString("-");
-            String* var = String.withCString("-");
-            if (match((u16)tokLParen)) {
-                if (looksLikeType()) ty = parseTypeSpelling();
-                if (check((u16)tokIdentifier)) var = advance().value();
-                expect((u16)tokRParen);
+            expect((u16)tokLParen);
+            if (!check((u16)tokIdentifier)) {
+                _error(String.withCString("'catch' wants a binding name: catch (e) or catch (T e)"));
+                return (Node*)0;
+            }
+            String* var = advance().value();
+            if (check((u16)tokIdentifier)) {
+                ty = var;
+                var = advance().value();
+            }
+            expect((u16)tokRParen);
+            if (!check((u16)tokLBrace)) {
+                _error(String.withCString("'catch' wants a block"));
+                return (Node*)0;
             }
             c.setOp(ty);
             c.setName(var);
