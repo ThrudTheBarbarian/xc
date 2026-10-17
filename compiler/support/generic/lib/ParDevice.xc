@@ -35,7 +35,7 @@
 // build the port compiler without a version define, and a predefine would then
 // differ from the reference and break lib-diff on every par library. Bumped
 // with VERSION each release (release-checklist).
-#define PAR_CACHE_VER "0.8"
+#define PAR_CACHE_VER "0.85"
 #if !ARCH_wasm32
 // Wall-clock epoch seconds, stamped into each learned record so a future
 // `xcc --par-forget-before <date>` can prune by age. Monotonic clocks (what

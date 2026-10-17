@@ -3,55 +3,76 @@ title: Future work
 description: What's planned, in progress, and known to be incomplete in xcc.
 ---
 
-xcc is pre-1.0. This page lists where it is going, what is known to be incomplete, and
-what has shipped recently.
+xcc is pre-1.0. This page lists where it is going and what is known to be incomplete.
+What has shipped is in the [ChangeLog](/compiler/downloads/changelog/).
 
 ## Where things stand
 
 The compiler lowers to a single architecture-neutral IR and out through **seven live
-backends**: xt6502, arm64 (macOS), arm9, m68k, x86_64 (Linux: glibc, or static musl with `-static`; up to 0.71 static musl, or glibc with `-dynamic`), win64 and
-**wasm32**. Every one passes the full fixture corpus, and every one is built end to end
-by the **in-house toolchain**: xcc's own assemblers, linkers and executable-format
-writers, with no external compiler in the chain. A macOS machine with only xcc installed
-cross-builds native binaries for Linux, Windows and the browser, because the libc link
-pools ship inside the install.
+backends**: xt6502, arm64 (macOS, iOS and Android), arm9, m68k, x86_64 (Linux: glibc, or
+static musl with `-static`), win64 and **wasm32**. Every one passes the full fixture
+corpus, and every one is built end to end by the **in-house toolchain**: xcc's own
+assemblers, linkers and executable-format writers, with no external compiler in the
+chain. A macOS machine with only xcc installed cross-builds native binaries for Linux,
+Windows, the phones and the browser.
 
-The whole compiler also exists a **second time, written in xcc**. Twenty-four
-differential harnesses hold every stage of it byte-identical to the original, and they
-run on every commit.
+The whole compiler also exists a **second time, written in xcc**, and that is the
+compiler you download. Forty differential harnesses hold every stage of it
+byte-identical to the original, and they run on every commit.
 
-Application code is **platform-neutral by default**. `Url`, `Log` and `Platform` are
-available on every target (each platform's prelude wires its own transports and loggers),
-so the same directive-free source file compiles, links and *runs* on a Mac, a Linux
-server, a browser and a banked 6502. Where a feature is missing, the program degrades
-instead of failing to build: a fetch with no transport completes with status 0 and a
-logged warning.
+`par` blocks run on the CPU's cores and on GPUs through Metal, CUDA, Vulkan and WebGPU,
+across several cards at once and across machines. `auto` measures the choices for each
+block and keeps the fastest.
 
-## Mobile: iOS and Android
+## Planned
 
-**iOS/iPadOS and Android are implemented**, so one language covers desktop, server,
-browser and phone. The two ports have a similar shape:
+### A visualiser for `par` work
 
-- **iOS is a platform variant of the arm64/Mach-O target** (`-A ios` / `-A ios-sim`),
-  with the same ISA, object format and calling convention as macOS. It adds a platform
-  stamp in the binary, the iOS SDK's stub libraries, a small native shell that owns the
-  run loop and feeds events in, and in-house code signing (`xcc-sign`, or `xcc --sign`)
-  that a real device accepts, with no Xcode `codesign` step. The simulator makes the
-  whole loop scriptable on a Mac.
-- **Android pairs the arm64 code generator with the ELF writer** (`-A android`,
-  `--emit-apk`), links against Android's libc as a shared object, and uses
-  **NativeActivity**: an app whose logic is all native code behind a boilerplate
-  manifest, the same mechanism Qt and SDL use. No Java is required.
-- On both, the UI comes from **Xtg**, which does **not** draw its own widgets. It
-  delegates to the platform's native widget set through a thin shim, so each control is
-  the platform's own: an `NSTableView` on AppKit, the native table control on Win32, a
-  GTK table on Linux, a GEM object on the Atari targets, and UIKit and the Android view
-  toolkit on the phones. What stays constant across platforms is the **programming
-  interface** (the AppKit-style datasource / delegate pattern), while the appearance is
-  native. On both phones the acceptance test is the same unchanged file that runs on
-  every other target. The platform prelude handles the differences: `Log.info` goes to
-  the console on a server, the browser console on the web, and the system log on a
-  phone, with no change to the app source.
+A live 3D view of where a program's work goes, on one machine or across the network:
+
+- **Worker nodes in 3D space**, placed at first by a force-directed layout. You can move
+  them and save the layout. The view rotates, pans and zooms, with buttons to bring it
+  home if you get lost.
+- **Connections that show their use.** A link grows and brightens as work crosses it and
+  shrinks and dims when idle. Packets travel at a speed relative to the link's
+  bandwidth; a local GPU is drawn as a continuous line.
+- **Each node as semi-transparent cubes** in a cube layout, one cube per block of GPU
+  units (CUDA cores or their equivalent; 100, 250, 500 or 1000 a cube, whatever reads
+  best). A cube's colour says which user or application holds those units, and its fill
+  level how many of them are busy.
+- **"VCR" controls**: stop at a moment and zoom in, single-step, play at different
+  speeds, and snap back to the live view.
+- **Filters** to show one user or application, or the whole picture.
+- **Telemetry over a WebSocket** from the host application, so the viewer can be a
+  native program or a WebAssembly one in a browser. The number of particles will call
+  for instanced drawing.
+- **Attaching in time.** A viewer has to be connected before a program's work starts to
+  see it. One answer is a telemetry daemon, `xctd`, running in the background as a
+  repository: it finds the programs and the `xcd` daemons over mDNS and keeps what they
+  report, so a viewer can attach at any time.
+
+### A C front end
+
+`xcc` compiling `.c` files directly, alongside `.xc`. The proposal and design are
+written. C is an add-on: it uses the platform's own C headers.
+
+### A C++ front end
+
+`xcc` compiling C++ files directly. The proposal and design are written. It moves
+`--par-auto`'s search for loops from the source parser to the IR, so that loops from C
+and C++ are found the same way as loops from xc.
+
+### A straight comparison
+
+Once C or C++ compiles, a benchmark comparison on equal terms: the same C or C++
+source built by xcc with every parallel and GPU option available to it, against the
+other compilers with all their usual optimisations.
+
+### Also
+
+- Fixes for the bugs that turn up.
+- Improvements to the `par` scheduler: how tiles are shared between devices of very
+  different speeds when nothing has been measured yet, and the fixed cost of each tile.
 
 ## Accepted limitations
 
@@ -67,51 +88,6 @@ These are tradeoffs and will not be changed:
   targets. Each platform's math library rounds the final bit its own way, as with C
   compilers across different libms.
 
-## Recently shipped
-
-- **The ambient platform surface.** `Url` (an NSURL-style value with a cross-platform
-  `fetch`), a `Logger` protocol behind the `Log` facade (tty-coloured console on hosted
-  targets, browser console on wasm), and a `Platform` delegate seam. All are available
-  with zero imports in application code and are wired per target by each platform's
-  prelude.
-- **The wasm32 target.** `xcc -A wasm32 -o app app.xc` produces a `.wasm` plus a
-  universal loader that runs unchanged under Node and in a browser. Classes, ARC,
-  protocols, blocks, 64-bit integers and IEEE floats all work, and the browser's
-  fetch/DOM/console surface is carried inside the generated loader.
-- **Blocks.** Closures as first-class values with by-value snapshot captures, declared
-  like variables (`block b u32(u16 x) = { … };`), storable in fields and registries, and
-  passable inline to methods. `block:` write-back captures support accumulating into a
-  local, and escape analysis turns the unsound cases into compile errors. See
-  [Blocks](/compiler/language/blocks/).
-- **UTF-8 strings, end to end.** `String` is UTF-8-native with byte *and* character
-  interfaces. 0.4 adds `\xNN`, `\uNNNN` and `\UNNNNNNNN` escapes with fixed digit counts
-  (unlike C's greedy `\x`).
-- **The toolchain-free cross matrix.** `make install` copies the Linux (musl) and
-  Windows (mingw) link pools into the install, so building static Linux ELFs and Windows
-  PEs on a Mac needs no external toolchain. A missing pool is an error that names what is
-  absent, never a silent fallback.
-- **Export names are fixed.** An `extern` definition exports under its *spelled* name
-  even when overload resolution mangles the symbol internally, and two `extern`
-  definitions of one name are a compile error. A host that looks up an export by name
-  always finds it under that name.
-- **A full Mach-O export trie.** The export writer builds the full prefix tree, so a
-  dylib is no longer capped at 255 exported symbols. A 400-symbol library round-trips with
-  clients calling symbols on both sides of the former limit.
-- **Shared libraries and `#import <Lib>`** on arm9, arm64, x86_64 and win64. A library
-  carries its own interface *inside* the binary, so clients type-check against the real
-  artifact rather than a header that may be out of date. Protocols compose across
-  libraries built independently of each other, and `weak:` fields, bound methods and
-  re-exported C types all cross the boundary.
-- **`weak:` without a table.** Weak slots are linked onto an intrusive list in the
-  referent's own heap header: no capacity limit, O(1) stores, and destroying an object
-  with no weak references costs one null test.
-- **A differential fuzzer.** It generates random programs, compiles them through every
-  backend, and treats any divergence between two targets as a bug. It found seven bugs
-  the corpus had missed.
-- **Collections.** `Array`, `Map`, `Set`, `String`, `Data`, `Number` and `Sort`, plus the
-  `Comparable` / `Hashable` / `Enumerable` protocols, with one implementation shared by
-  every backend.
-
 ## Known issues
 
-None outstanding. Report bugs through [the feedback form](/feedback/).
+Report bugs through [the feedback form](/feedback/).

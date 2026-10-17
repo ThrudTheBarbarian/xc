@@ -3,6 +3,89 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.85 — loops parallelised for you, and GPUs on other machines
+
+Two things `par` could not do before. `--par-auto` turns ordinary loops into
+`par` blocks where their shape allows, so a program written without `par`
+runs on every core and the GPU. And a block's tiles can run on GPUs in
+other machines: `xcd`, the par daemon, serves a machine's cards over the
+network, and `auto` measures them beside the local devices and keeps
+whichever is fastest.
+
+### New
+
+- **`--par-auto`**: a `for` loop whose iterations are independent becomes a
+  `par` block. Sums, counts, `min` and `max` become reductions; a perfect
+  nest of two or three loops becomes one grid block; C-style loops,
+  inclusive ranges and loops inside block literals qualify, and a loop the
+  check rejects no longer hides the loops inside it. `:serial` keeps a loop
+  as written, `#goal` and `-fgoal=` set the default goal, and
+  `-Wpar-auto` names every loop it wrapped. Library code is never changed.
+- **GPUs on other machines**: `xcd` serves a machine's GPUs to programs on
+  others. Every connection is TLS, the daemon's certificate pinned on first
+  sight; a daemon advertises itself on its subnet (`XC_PAR_REMOTE=mdns`, or
+  found unasked), keeps every slice and kernel it is sent so a block run
+  again sends hashes rather than bytes, declines work its device memory
+  cannot hold, serves several programs (its GPUs one run at a time), and
+  keeps its hours with `-nimby`. A worker that dies mid-run hands its tiles
+  back and the run finishes elsewhere. `XC_PAR_REMOTE` names daemons,
+  `XC_PAR_WORKERS=remote` uses only them.
+- **`auto` measures the remote GPUs alone** as well as the local devices and
+  every set of them, so a card across the network that is many times
+  faster than the machine's own takes the block by itself.
+- **`EventQueue`**: one wait for a socket to have something to read or
+  another thread to call `wake()` (kqueue, epoll, `WSAPoll`). The daemon
+  waits on it for a frame or a finished tile, and a program's tile loop for
+  its remote GPUs.
+- **Bundles and plugins**: `xcc --bundle` builds a signed bundle of a
+  program's code, libraries and resources; `Plugin.load` opens one from a
+  path or a URL, checks its signature, its publisher's key (pinned links,
+  key rotation, domain vouching, a curated list) and its exported symbols.
+  Protocols take static members; signing can run apart from the build, and
+  the publisher key can live in the OS keychain. Plugins run on the web too.
+- **Threads on wasm32**, over Web Workers: a thread can start threads, and
+  as many run at once as the program needs.
+- **`WebSocket`** clients and servers over `Socket` (with `wss`), `Sha1`,
+  `Base64` and Ed25519.
+- **par tools**: `XC_PAR_TRACE=<file>` records every tile-queue run and
+  `tools/par-trace.html` draws it; `XC_PAR_PROBE=1` makes a block's first
+  run a sweep that finds where each device starts to win; `xcmon` shows the
+  daemons on the network; the `:constant` hint puts a read-only capture in
+  Metal's constant address space.
+- **Compiler**: the retain-cycle warning, the unguarded-callback warning in
+  the shipped compiler, `nil` choosing a pointer overload, absolute
+  `#import` paths, and a string literal initialising a byte array.
+
+### Faster
+
+- **`--par-auto`** on four plain-loop benchmarks: the Mandelbrot set goes
+  from 445 ms as written to 0.9 ms on an M4 Max's GPU and 144 µs on an RTX
+  5080 (`auto`), without a `par` in the source.
+- **A remote GPU**: from a Linux machine whose only GPU is integrated, the hashcat
+  MD5 workload runs in 3.6 ms on an RTX 5080 across the network against
+  108 ms on its own devices, and `auto` picks the remote card.
+  A remote run's results come back the moment each tile finishes: the
+  floor under a remote run went from 8 ms to about 1 ms.
+- **GPU arrays stay on the card between runs**; a CUDA card pins a block's
+  memory for as long as it exists, and every numeric array of 64 KB or
+  more is a GPU array.
+- **The CPU pool** runs a tile across every lane, and the CPU loop reads its
+  captures once.
+- **arm64**: integer matrix kernels on SME, with values packed to bytes or
+  halves; 64-bit and mixed-sign integer matrix kernels.
+- **`RunLoop` timers** fire within about a millisecond, where they could be
+  17 ms late (24 on Windows).
+
+### Fixed
+
+- A remote GPU sat out a program's later runs once a heartbeat's reply
+  arrived after its run had ended.
+- Class names with an underscore split wrongly in vtables; a protocol slot
+  took a method of the same name but other parameters; returning the result
+  of a call through a callback variable leaked a reference.
+- `try`/`catch` takes exactly the forms the language defines in every build
+  of the compiler.
+
 ## Version 0.8 — one `par` block, every device at once
 
 A `par` block no longer runs on a single device. It is cut into tiles handed to
