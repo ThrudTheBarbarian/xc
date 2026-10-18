@@ -8901,7 +8901,15 @@ class OptProfile
                 String* why = ppVerdict(fn, L);
                 String* line = String.withFormat("propose: %s:%ld: ", path.cString(), (i32)at.dbgLine());
                 if (why == (String*)0)
+                    {
                     line.appendCString("wrap\n");
+                    // Triangular: an inner loop whose bound moves with this
+                    // loop's variable. The block is the outer loop for now;
+                    // a grid over the bounding box (or tiles balanced by
+                    // row length) needs the IR's outlining (step 3).
+                    if (ppTriangular(fn, L, loops))
+                        line.append(String.withFormat("propose: %s:%ld: shape triangular\n", path.cString(), (i32)at.dbgLine()));
+                    }
                 else
                     {
                     line.appendCString("no (");
@@ -8911,6 +8919,55 @@ class OptProfile
                 Stdio.error(line);
                 }
             }
+        }
+
+    // Whether a loop nested in L runs a number of times that depends on L's
+    // induction variable: its bound does (`for j in 0..i`) or its start does
+    // (`for j in i..n`). Rows of unequal work.
+    bool ppTriangular(IRFunc* fn, LRCLoop* L, Array* loops)
+        {
+        Map* defOf = defMapAll(fn);
+        IRInsn* oiv = (IRInsn*)0;
+        for (u32 i = (u32)0; i < L.header().phis().count() && oiv == (IRInsn*)0; i = i + (u32)1)
+            {
+            IRInsn* phi = (IRInsn*)L.header().phis().get(i);
+            if (phi.res() != (IRValue*)0 && !ppIsMem(phi.res()))
+                oiv = phi;      // the first value phi: the induction variable, as the verdict found it
+            }
+        if (oiv == (IRInsn*)0)
+            return false;
+        for (u32 j = (u32)0; j < loops.count(); j = j + (u32)1)
+            {
+            LRCLoop* M = (LRCLoop*)loops.get(j);
+            if (M == L || M.header() == L.header() || !hasBlock(L.body(), M.header()))
+                continue;
+            IRInsn* t = M.header().term();
+            if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")))
+                continue;
+            IRInsn* cmp = (IRInsn*)defOf.get((Hashable*)((IROperand*)t.ops().get((u32)0)).val());
+            if (cmp == (IRInsn*)0 || !cmp.op().equals(String.withCString("ICmp")))
+                continue;
+            for (u32 k = (u32)0; k < cmp.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)cmp.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && ppDependsOn(o.val(), oiv.res(), defOf, (u32)0))
+                    {
+                    // The inner loop's own variable: triangular when it STARTS
+                    // from the outer one (`for j in i..n`); its bound otherwise.
+                    IRInsn* d = (IRInsn*)defOf.get((Hashable*)o.val());
+                    if (d != (IRInsn*)0 && d.op().equals(String.withCString("Phi")) &&
+                        M.header().phis().indexOf((Object*)d) != (u32)$FFFFFFFF)
+                        {
+                        IRValue* start = ppPhiIn(d, M, false);
+                        if (start != (IRValue*)0 && ppDependsOn(start, oiv.res(), defOf, (u32)0))
+                            return true;
+                        continue;
+                        }
+                    return true;
+                    }
+                }
+            }
+        return false;
         }
 
     // The loop's position: its header's first located instruction, else the
