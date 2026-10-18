@@ -656,7 +656,9 @@ keep separate host sets. A program with no `XC_PAR_REMOTE` setting looks
 for daemons by itself: at its first `par` run it asks the
 subnet once, waits a moment, and takes every daemon that answered, of the
 pool `XC_PAR_POOL` names (daemons with no pool when it is unset) and of its
-own xcc version. `XC_PAR_REMOTE=none` keeps a program on its own machine,
+own xcc version. A daemon on the program's own machine is left out, since
+its devices are the program's already; named by address, it is still taken.
+`XC_PAR_REMOTE=none` keeps a program on its own machine,
 as does `XC_PAR=cpu`; `XC_PAR_REMOTE=mdns` says the default in so many
 words, and may be combined with addresses. A program carries the kernel
 form of its own target's GPU unless it was built with `-fpar-kernels=all`

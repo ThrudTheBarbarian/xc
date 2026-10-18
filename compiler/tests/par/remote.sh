@@ -82,9 +82,10 @@ kill $XCD2 2> /dev/null
 wait $XCD2 2> /dev/null
 grep -q 'declined (nimby)' "$L/xcd2.log" || { echo "FAIL remote: the nimby daemon did not decline"; head -4 "$L/xcd2.log"; rc=1; }
 # Discovery: a daemon advertising in a pool is found by XC_PAR_REMOTE=mdns
-# with that pool, and not by another pool.
+# with that pool, and not by another pool. It says it is another machine
+# (XC_PAR_MACHINE): a program does not take its own machine's daemon.
 PORT3=$((PORT + 2))
-XCD_HOME="$L/home1" XC_PAR_REPORT=1 "$L/xcd" -port $PORT3 -pool gate > "$L/xcd3.log" 2>&1 &
+XCD_HOME="$L/home1" XC_PAR_REPORT=1 XC_PAR_MACHINE=gate-other-machine "$L/xcd" -port $PORT3 -pool gate > "$L/xcd3.log" 2>&1 &
 XCD3=$!
 up "$L/xcd3.log"
 mkdir -p "$L/st_mdns" "$L/st_mdns2"
@@ -98,6 +99,24 @@ else
 fi
 kill $XCD3 2> /dev/null
 wait $XCD3 2> /dev/null
+# This machine's own daemon, found through mDNS, is not a remote worker:
+# its devices are the program's already.
+PORTOWN=$((PORT + 9))
+XCD_HOME="$L/home1" XC_PAR_REPORT=1 "$L/xcd" -port $PORTOWN -pool own > "$L/xcd5.log" 2>&1 &
+XCDOWN=$!
+up "$L/xcd5.log"
+mkdir -p "$L/st_own"
+XCC_SETTINGS_DIR="$L/st_own" XC_PAR_REMOTE=mdns XC_PAR_POOL=own XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/own.out" 2>&1
+# (The program connects to learn the daemon's machine, so it logs the worker
+# before it leaves it out: the daemon's own log says whether it took a block.)
+if grep -v '^par:' "$L/own.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && ! grep -q 'taken' "$L/xcd5.log" \
+   && grep -q "this machine's own daemon" "$L/own.out"; then
+    echo "PASS remote own machine"
+else
+    echo "FAIL remote own machine: the program took its own machine's daemon"; grep -i 'mdns\|remote' "$L/own.out" | head -4; rc=1
+fi
+kill $XCDOWN 2> /dev/null
+wait $XCDOWN 2> /dev/null
 # A daemon that dies mid-run: its tiles are re-issued to the other workers
 # and the answer is still the local run's.
 PORT4=$((PORT + 3))

@@ -77,6 +77,58 @@
 #import "Bundle.xc"
 
 #define PAR_REMOTE_PROTO 6
+
+// This machine's own identity, the same for every process on it: the
+// daemon sends it in HELLO, and a program skips a daemon it found through
+// mDNS that has its own (it would count this machine's devices twice, once
+// over a loopback link). macOS: the hardware UUID; Linux: /etc/machine-id;
+// Windows: the MachineGuid the system keeps. "" where there is none.
+#if ARCH_win64
+i32 RegGetValueA(pointer hKey, u8* subKey, u8* value, u32 flags, pointer type, pointer data, pointer dataLen);
+#elif ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
+i32 gethostuuid(u8* id, pointer wait);
+#endif
+String* gParMachine;
+
+class ParMachine
+    {
+    static String* id(void)
+        {
+        if (gParMachine != (String*)0)
+            return gParMachine;
+        // XC_PAR_MACHINE: a daemon that says it is another machine (tests
+        // run one beside the program and still find it through mDNS).
+        String* s = Platform.env(String.withCString("XC_PAR_MACHINE"));
+        if (s.byteLength() > (u32)0)
+            {
+            gParMachine = s;
+            return s;
+            }
+        s = new String();
+#if ARCH_win64
+        u8 buf[80];
+        u32 n = (u32)80;
+        // HKEY_LOCAL_MACHINE, a string value (RRF_RT_REG_SZ).
+        if (RegGetValueA((pointer)(i64)(i32)$80000002, "SOFTWARE\\Microsoft\\Cryptography", "MachineGuid",
+                         (u32)2, (pointer)0, (pointer)&buf[0], (pointer)&n) == (i32)0)
+            s = String.withCString(&buf[0]);
+#elif ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
+        u8 u[16];
+        i64 wait[2];
+        wait[0] = (i64)0;
+        wait[1] = (i64)0;
+        if (gethostuuid(&u[0], (pointer)&wait[0]) == (i32)0)
+            for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
+                s.appendFormat("%02x", (u32)u[i]);
+#else
+        String* t = Files.readText(String.withCString("/etc/machine-id"));
+        if (t != (String*)0)
+            s = t.trimmed();
+#endif
+        gParMachine = s;
+        return s;
+        }
+    }
 #define PAR_REMOTE_PORT 7227
 #define PAR_REMOTE_DEPTH 3
 
@@ -84,7 +136,8 @@
 // The frames (protocol 4): a tag of 8 bytes of ASCII, NUL-padded, a u32
 // length and a body of fields of the same shape, read by tag (ParWire).
 //   HELLO    daemon -> program: PROTO, NONCE, VERSION, IDENT, DEPTH, FLOOR,
-//            VRAMTOT, VRAMFREE, RAMTOT, RAMFREE
+//            VRAMTOT, VRAMFREE, RAMTOT, RAMFREE, MACHINE (ParMachine.id; a
+//            daemon from before it sends none)
 //   AUTH     program -> daemon: PROTO, VERSION, PROOF; reply OK (TOKEN) or BYE (WHY)
 //   RESULTS  program -> daemon, first on its second link: TOKEN; reply OK
 //   HOLDS    program -> daemon: BLOCK (no data); reply ANSWER (TAKEN: 1 yes, 0 no, 2 busy)
@@ -809,6 +862,7 @@ class ParRemoteWorker : ParWorker
     i64 _kernelUs;          // the daemon's time on this run's tiles, summed from DONE
     i64 _kernelItems;
     String* _identity;      // "remote:<host>:<the daemon's device>", "" when unreachable
+    String* _machine;       // the daemon's machine (ParMachine.id there), "" when it did not say
     u32 _depth;
     i64 _floor;
     bool _tried;
@@ -951,6 +1005,7 @@ class ParRemoteWorker : ParWorker
             return fail("not an xcd");
         String* version = ParWire.getStr(hello, "VERSION");
         String* ident = ParWire.getStr(hello, "IDENT");
+        _machine = ParWire.getStr(hello, "MACHINE");
         _depth = ParWire.getU32(hello, "DEPTH", (u32)PAR_REMOTE_DEPTH);
         _floor = ParWire.getI64(hello, "FLOOR", (i64)1024);
         _vramTotal = ParWire.getI64(hello, "VRAMTOT", (i64)0);
@@ -1265,6 +1320,14 @@ class ParRemoteWorker : ParWorker
         {
         connect();
         return _identity;
+        }
+    // Whether the daemon runs on this machine (both know the machine's id).
+    bool onThisMachine(void)
+        {
+        connect();
+        String* me = ParMachine.id();
+        return _machine != (String*)0 && _machine.byteLength() > (u32)0 && me.byteLength() > (u32)0
+            && _machine.equals(me);
         }
     u32 depth(void)
         {
@@ -1780,8 +1843,17 @@ class ParRemote
                     {
                     MdnsService* svc = (MdnsService*)found.get(i);
                     ParRemoteWorker* w = new ParRemoteWorker(svc.host, svc.port);
-                    if (w.identity().byteLength() > (u32)0)
-                        into.add((Object*)w);
+                    if (w.identity().byteLength() == (u32)0)
+                        continue;
+                    // This machine's own daemon: its devices are this
+                    // program's already (named outright, it is still taken).
+                    if (w.onThisMachine())
+                        {
+                        if (ParDevice.reporting())
+                            Log.info("par: mdns: %s is this machine's own daemon; not used as a remote worker", w.identity().cString());
+                        continue;
+                        }
+                    into.add((Object*)w);
                     }
                 continue;
                 }
@@ -2526,6 +2598,7 @@ class ParRemoteServe
         ParWire.field(hello, "NONCE", &nonce[0], (u32)32);
         ParWire.fieldStr(hello, "VERSION", PAR_CACHE_VER);
         ParWire.fieldStr(hello, "IDENT", identity.cString());
+        ParWire.fieldStr(hello, "MACHINE", ParMachine.id().cString());
         u32 depth = (u32)PAR_REMOTE_DEPTH;
         i64 floor = (i64)1024;
         for (u32 i = (u32)0; i < workers.count(); i = i + (u32)1)
