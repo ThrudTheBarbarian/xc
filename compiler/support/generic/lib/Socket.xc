@@ -111,6 +111,29 @@ i32 poll(pointer fds, u32 n, i32 timeout);
 
 i32 getaddrinfo(u8* node, u8* service, _HttpAddr* hints, _HttpAddr** res);
 void freeaddrinfo(_HttpAddr* res);
+// A connect with a time limit: the socket non-blocking for the connect, the
+// wait a poll for writable, the outcome SO_ERROR (Socket.connectWithin).
+#if ARCH_win64
+i32 ioctlsocket(u64 s, i32 cmd, u32* arg);
+i32 getsockopt(u64 s, i32 level, i32 name, u8* value, i32* len);
+#define _SOCKET_POLLOUT 0x0010
+#elif ARCH_x86_64 || PLATFORM_android
+i32 fcntl(i32 fd, i32 cmd, ...);
+i32 getsockopt(i32 fd, i32 level, i32 name, u8* value, u32* len);
+#define _SOCKET_O_NONBLOCK 0x800
+#define _SOCKET_SOL 1
+#define _SOCKET_SO_ERROR 4
+#define _SOCKET_POLLOUT 0x0004
+#else
+// Variadic in C, and on Darwin arm64 a variadic argument goes on the stack:
+// declared with fixed arguments, fcntl never saw the flags.
+i32 fcntl(i32 fd, i32 cmd, ...);
+i32 getsockopt(i32 fd, i32 level, i32 name, u8* value, u32* len);
+#define _SOCKET_O_NONBLOCK 0x4
+#define _SOCKET_SOL 0xFFFF
+#define _SOCKET_SO_ERROR 0x1007
+#define _SOCKET_POLLOUT 0x0004
+#endif
 // The server side: bind, listen, accept (Socket.listen / accept below).
 #if ARCH_win64
 i32 bind(u64 s, u8* addr, i32 len);
@@ -137,6 +160,16 @@ bool _socket_startup(void)
         }
 #endif
     return true;
+    }
+
+// C's connect, by another name: inside Socket the bare name is its own.
+bool _socket_connectFd(i64 fd, u8* addr, u32 len)
+    {
+#if ARCH_win64
+    return connect((u64)fd, addr, (i32)len) == (i32)0;
+#else
+    return connect((i32)fd, addr, len) == (i32)0;
+#endif
     }
 
 // C's close, by another name: inside Socket the bare name is its own close().
@@ -181,6 +214,14 @@ class Socket
     // when it cannot be.
     static Socket* connect(String* host, u16 port) throws
         {
+        return Socket.connectWithin(host, port, (i32)-1);
+        }
+
+    // As connect, giving up after `ms` milliseconds (-1: the system's own
+    // limit, which can be minutes): a host that silently drops the packets
+    // (a firewall) would otherwise hold the caller that long.
+    static Socket* connectWithin(String* host, u16 port, i32 ms) throws
+        {
 #if _SOCKET_NO_TCP
         throw new SocketError(String.withCString("no TCP sockets on this platform"));
         return (Socket*)0;
@@ -215,7 +256,7 @@ class Socket
             u64 h = socket(a.family, a.socktype, a.proto);
             if (h == (u64)0xFFFFFFFFFFFFFFFF)
                 continue;
-            if (connect(h, a.addr, (i32)a.addrlen) == (i32)0)
+            if (Socket._connectOne((i64)h, a.addr, a.addrlen, ms))
                 {
                 s = new Socket();
                 s._fd = (i64)h;
@@ -226,7 +267,7 @@ class Socket
             i32 h = socket(a.family, a.socktype, a.proto);
             if (h < (i32)0)
                 continue;
-            if (connect(h, a.addr, a.addrlen) == (i32)0)
+            if (Socket._connectOne((i64)h, a.addr, a.addrlen, ms))
                 {
                 s = new Socket();
                 s._fd = (i64)h;
@@ -258,6 +299,66 @@ class Socket
         {
         return _open;
         }
+
+#if !_SOCKET_NO_TCP
+    // One address: connected (true), or not within `ms` (-1: blocking, as
+    // the system does it). The socket is left blocking either way.
+    static bool _connectOne(i64 h, u8* addr, u32 len, i32 ms)
+        {
+#if ARCH_win64
+        if (ms < (i32)0)
+            return _socket_connectFd(h, addr, len);
+        u32 on = (u32)1;
+        ioctlsocket((u64)h, (i32)0x8004667E, &on);          // FIONBIO
+        bool ok = _socket_connectFd(h, addr, len);
+        if (!ok)
+            {
+            _SocketPoll p;
+            p.fd = (u64)h;
+            p._pad = (i32)0;
+            p.events = (i16)_SOCKET_POLLOUT;
+            p.revents = (i16)0;
+            if (WSAPoll((pointer)&p, (u32)1, ms) > (i32)0 && ((i32)p.revents & (i32)_SOCKET_POLLOUT) != (i32)0)
+                {
+                i32 err = (i32)0;
+                i32 el = (i32)4;
+                getsockopt((u64)h, (i32)0xFFFF, (i32)0x1007, (u8*)&err, &el);   // SOL_SOCKET, SO_ERROR
+                ok = err == (i32)0;
+                }
+            }
+        u32 off = (u32)0;
+        ioctlsocket((u64)h, (i32)0x8004667E, &off);
+        return ok;
+#else
+        if (ms < (i32)0)
+            return _socket_connectFd(h, addr, len);
+        i32 fl = fcntl((i32)h, (i32)3, (i32)0);              // F_GETFL
+        fcntl((i32)h, (i32)4, fl | (i32)_SOCKET_O_NONBLOCK); // F_SETFL
+        bool ok = _socket_connectFd(h, addr, len);
+        if (!ok)
+            {
+            _SocketPoll p;
+            p.fd = (i32)h;
+            p.events = (i16)_SOCKET_POLLOUT;
+            p.revents = (i16)0;
+#if ARCH_x86_64
+            i32 r = poll((pointer)&p, (u64)1, ms);
+#else
+            i32 r = poll((pointer)&p, (u32)1, ms);
+#endif
+            if (r > (i32)0 && ((i32)p.revents & (i32)_SOCKET_POLLOUT) != (i32)0)
+                {
+                i32 err = (i32)0;
+                u32 el = (u32)4;
+                getsockopt((i32)h, (i32)_SOCKET_SOL, (i32)_SOCKET_SO_ERROR, (u8*)&err, &el);
+                ok = err == (i32)0;
+                }
+            }
+        fcntl((i32)h, (i32)4, fl);
+        return ok;
+#endif
+        }
+#endif
 
     // TCP_NODELAY: a write leaves at once instead of waiting until the last
     // one is acknowledged. For a request/answer protocol of small frames:

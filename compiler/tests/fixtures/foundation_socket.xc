@@ -28,6 +28,18 @@ i32 main(void)
     {
     tryConnect("127.0.0.1", (u16)1);
     tryConnect("no-such-host.invalid", (u16)80);
+    // A connect with a time limit gives up: an address no one answers from
+    // (192.0.2.1, TEST-NET-1: never assigned; dropped, or refused at once where
+    // there is no route).
+    try
+        {
+        Socket* z = Socket.connectWithin(String.withCString("192.0.2.1"), (u16)47999, (i32)300);
+        Stdio.printf("connected within?\n");
+        }
+    catch (SocketError e)
+        {
+        Stdio.printf("within: refused\n");
+        }
     Socket* s = new Socket();
     u8 buf[4];
     Stdio.printf("closed: open %d, write %d, read %d, data null %d\n", (i32)(s.isOpen() ? 1 : 0),

@@ -869,7 +869,10 @@ class ParRemoteWorker : ParWorker
         Socket* sock = (Socket*)0;
         try
             {
-            sock = Socket.connect(_host, _port);
+            // Three seconds: a daemon on the network answers in well under one,
+            // and one behind a firewall that drops the packets never does (the
+            // system's own limit held the program's first par run for minutes).
+            sock = Socket.connectWithin(_host, _port, (i32)3000);
             }
         catch (SocketError e)
             {
