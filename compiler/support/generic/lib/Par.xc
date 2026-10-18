@@ -187,6 +187,19 @@ class ParFnChunk : ParChunk
         c._name = name;
         return c;
         }
+    // The block over [lo, hi): on the par runtime, or here, serially, where
+    // the compiler's check at the call found two of its arrays overlapping.
+    static void runOn(ParFnChunk* c, i64 from, i64 to, bool serial)
+        {
+        if (serial)
+            {
+            c.lo = from;
+            c.hi = to;
+            c.run();
+            return;
+            }
+        Par.run((ParChunk*)c, from, to);
+        }
     }
 
 // Never made. A second class that overrides the three per-block methods, so

@@ -98,5 +98,37 @@ if [ -x "$W/bplain" ] && [ -x "$W/bout" ]; then
     n=$(grep -c ': outlined, a block' "$W/b4")
     [ "$n" -ge 5 ] || { echo "FAIL outline: $n blocks, wanted 5"; fail=1; }
 fi
+# Pointers that may be one array: a check at the call runs the block
+# serially where their ranges overlap (scale(x + 1, x) copies each element
+# into the next, which only a serial run does as written).
+cat > "$W/g.xc" <<'XC'
+#import "Stdio.xc"
+#import "Par.xc"
+#define N 1000000
+void scale(double* d, double* s, double k, i32 n)
+    {
+    for (i32 i = 0; i < n; i++)
+        d[i] = k * s[i];
+    }
+i32 main(void)
+    {
+    double* x = new double[N + 8];
+    double* y = new double[N];
+    for (i32 i = 0; i < N + 8; i++)
+        x[i] = i;
+    scale(y, x, 2.0, N);
+    Stdio.printf("%.0f %.0f\n", y[1], y[N - 1]);
+    scale(x + 1, x, 1.0, N);
+    Stdio.printf("%.0f %.0f\n", x[2], x[N]);
+    return 0;
+    }
+XC
+XC_PAR_OUTLINE_TRACE=1 XC_PAR_PROPOSE=outline "$XC" -q -O3 -H . "$W/g.xc" -o "$W/gout" >"$W/b5" 2>&1 || { echo "FAIL outline: the overlap program"; head -3 "$W/b5"; fail=1; }
+if [ -x "$W/gout" ]; then
+    grep -q 'scale:[0-9]*: outlined, a block' "$W/b5" || { echo "FAIL outline: scale's loop is not a block"; fail=1; }
+    for t in 1 8; do
+        [ "$(XC_PAR_THREADS=$t "$W/gout" | tr '\n' ' ')" = "2 1999998 0 0 " ] || { echo "FAIL outline: the overlap program with $t threads: $(XC_PAR_THREADS=$t "$W/gout" | tr '\n' ' ')"; fail=1; }
+    done
+fi
 [ $fail = 0 ] && echo "--- outline: pass ---" || echo "--- outline: FAIL ---"
 exit $fail

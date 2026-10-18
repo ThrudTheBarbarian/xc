@@ -1612,6 +1612,7 @@ class OptProfile
             seed(m, reachable, work, String.withCString("ParFnChunk$make"));
             seed(m, reachable, work, String.withCString("ParFnChunk$ctx"));
             seed(m, reachable, work, String.withCString("Par$run"));
+            seed(m, reachable, work, String.withCString("ParFnChunk$runOn"));
             }
 
         // Library mode: seed EVERY function — the module IS the API surface.
@@ -9025,6 +9026,57 @@ class OptProfile
             }
         }
 
+    // The memory token current at the end of block b: the last one an
+    // instruction of b produces, else the one current at the end of b's only
+    // predecessor, up to the entry and the function's own token. 0 where a
+    // join (two predecessors) comes first: there is no one token there.
+    IRValue* ppMemAtEnd(IRFunc* fn, IRBlock* b)
+        {
+        IRBlock* at = b;
+        for (u32 guard = (u32)0; at != (IRBlock*)0 && guard < (u32)256; guard = guard + (u32)1)
+            {
+            for (u32 i = at.insns().count(); i > (u32)0; i = i - (u32)1)
+                {
+                IRInsn* n = (IRInsn*)at.insns().get(i - (u32)1);
+                if (n.memRes() != (IRValue*)0)
+                    return n.memRes();
+                }
+            IRBlock* pred = (IRBlock*)0;
+            u32 preds = (u32)0;
+            for (u32 k = (u32)0; k < fn.blocks().count(); k = k + (u32)1)
+                {
+                IRBlock* q = (IRBlock*)fn.blocks().get(k);
+                IRInsn* t = q.term();
+                if (t == (IRInsn*)0)
+                    continue;
+                for (u32 o = (u32)0; o < t.ops().count(); o = o + (u32)1)
+                    {
+                    IROperand* op = (IROperand*)t.ops().get(o);
+                    if (op.kind() == (u8)OPK_BLOCK && op.blk() == at)
+                        {
+                        if (pred != q)
+                            preds = preds + (u32)1;
+                        pred = q;
+                        }
+                    }
+                }
+            if (preds == (u32)0)
+                {
+                // The entry: the function's own token, its last parameter.
+                if (at == (IRBlock*)fn.blocks().get((u32)0) && fn.params().count() > (u32)0)
+                    {
+                    IRValue* m = (IRValue*)fn.params().get(fn.params().count() - (u32)1);
+                    return ppIsMem(m) ? m : (IRValue*)0;
+                    }
+                return (IRValue*)0;
+                }
+            if (preds > (u32)1)
+                return (IRValue*)0;
+            at = pred;
+            }
+        return (IRValue*)0;
+        }
+
     static void ppAddOnce(Array* a, IRValue* v)
         {
         if (a.indexOf((Object*)v) == (u32)$FFFFFFFF)
@@ -9098,6 +9150,14 @@ class OptProfile
                         ppAddOnce(liveIns, o.val());
                     }
                 }
+            }
+        // A loop that touches no memory (a pure reduction) still needs a
+        // token for the call: the one current where the loop begins.
+        if (memIns.count() == (u32)0)
+            {
+            IRValue* cur = ppMemAtEnd(fn, P);
+            if (cur != (IRValue*)0)
+                memIns.add((Object*)cur);
             }
         if (memIns.count() != (u32)1)
             return ppNo(String.withFormat("cut 6: %u memory tokens in", memIns.count()).cString());
@@ -9320,8 +9380,8 @@ class OptProfile
         IRSymbol* baseVt = symNamed(m, String.withCString("ParFnChunk$vtbl"));
         if (makeF == (IRFunc*)0)
             return ppNo("no ParFnChunk.make");
-        if (funcNamed(m, String.withCString("Par$run")) == (IRFunc*)0)
-            return ppNo("no Par.run");
+        if (funcNamed(m, String.withCString("ParFnChunk$runOn")) == (IRFunc*)0)
+            return ppNo("no ParFnChunk.runOn");
         if (funcNamed(m, String.withCString("ParFnChunk$ctx")) == (IRFunc*)0)
             return ppNo("no ParFnChunk.ctx");
         if (baseVt == (IRSymbol*)0 || baseVt.slots() == 0)
@@ -9666,14 +9726,17 @@ class OptProfile
         if (le)
             hi64 = ppEmit(P, String.withCString("Add"), String.withCString("I64"), IROperand.useVal(hi64),
                           IROperand.immI((i64)1, String.withCString("I64")), (IROperand*)0);
+        // Arrays that may be one: serial where their ranges overlap.
+        IRValue* serial = ppOverlapGuard(P, lo64, hi64);
         IRInsn* runC = IRInsn.with(String.withCString("Call"));
         runC.setCc(String.withCString("CallConv::Standard"));
         if (at != (IRInsn*)0)
             runC.copyDbg(at);
-        runC.add(IROperand.sym(String.withCString("Par$run")));
+        runC.add(IROperand.sym(String.withCString("ParFnChunk$runOn")));
         runC.add(IROperand.useVal(obj));
         runC.add(IROperand.useVal(lo64));
         runC.add(IROperand.useVal(hi64));
+        runC.add(IROperand.useVal(serial));
         runC.add(IROperand.useVal(pm));
         pm = new IRValue(String.withCString("Mem"));
         runC.setMemRes(pm);
@@ -9815,6 +9878,72 @@ class OptProfile
         return mo;
         }
 
+    // The run-time check for the pairs ppParMemoryOk could not tell apart:
+    // true when, for some pair, the bytes the loop touches in one over
+    // [lo, hi) overlap those it touches in the other — unless the two are the
+    // same array of the same element, where iteration i touches element i in
+    // both and nothing else. A Bool, false where there is no pair.
+    IRValue* ppOverlapGuard(IRBlock* P, IRValue* lo64, IRValue* hi64)
+        {
+        String* bt = String.withCString("Bool");
+        IRValue* acc = ppEmit(P, String.withCString("Const"), bt, IROperand.immI((i64)0, bt), (IROperand*)0, (IROperand*)0);
+        for (u32 p = (u32)0; p < _ppPairA.count(); p = p + (u32)1)
+            {
+            u32 a = ((Number*)_ppPairA.get(p)).asU32();
+            u32 b = ((Number*)_ppPairB.get(p)).asU32();
+            IRValue* aAt = ppRangeOf(P, a, lo64, hi64);
+            IRValue* aLo = _ppRangeLo;
+            IRValue* aHi = _ppRangeHi;
+            IRValue* bAt = ppRangeOf(P, b, lo64, hi64);
+            IRValue* bLo = _ppRangeLo;
+            IRValue* bHi = _ppRangeHi;
+            IRValue* c1 = ppCmp(P, String.withCString("ULT"), aLo, bHi);
+            IRValue* c2 = ppCmp(P, String.withCString("ULT"), bLo, aHi);
+            IRValue* ov = ppEmit(P, String.withCString("And"), bt, IROperand.useVal(c1), IROperand.useVal(c2), (IROperand*)0);
+            if (((Number*)_ppGElem.get(a)).asU32() == ((Number*)_ppGElem.get(b)).asU32())
+                {
+                IRValue* diff = ppCmp(P, String.withCString("NE"), aAt, bAt);
+                ov = ppEmit(P, String.withCString("And"), bt, IROperand.useVal(ov), IROperand.useVal(diff), (IROperand*)0);
+                }
+            acc = ppEmit(P, String.withCString("Or"), bt, IROperand.useVal(acc), IROperand.useVal(ov), (IROperand*)0);
+            }
+        return acc;
+        }
+
+    IRValue* _ppRangeLo;
+    IRValue* _ppRangeHi;
+    // Array k's base as an integer (its result), and the byte range [lo, hi)
+    // the loop touches in it, in _ppRangeLo / _ppRangeHi.
+    IRValue* ppRangeOf(IRBlock* P, u32 k, IRValue* lo64, IRValue* hi64)
+        {
+        String* i64t = String.withCString("I64");
+        String* key = (String*)_ppGKeys.get(k);
+        IRValue* base = (IRValue*)_ppGBase.get(k);
+        if (key.hasPrefix(String.withCString("@")))
+            base = ppEmit(P, String.withCString("AddrOf"), base.ty(),
+                          IROperand.sym(key.substringFromByte((u32)1)), (IROperand*)0, (IROperand*)0);
+        IRValue* at = ppEmit(P, String.withCString("PtrToInt"), i64t, IROperand.useVal(base), (IROperand*)0, (IROperand*)0);
+        IRValue* es = ppEmit(P, String.withCString("Const"), i64t,
+                             IROperand.immI((i64)((Number*)_ppGElem.get(k)).asU32(), i64t), (IROperand*)0, (IROperand*)0);
+        IRValue* lb = ppEmit(P, String.withCString("Mul"), i64t, IROperand.useVal(lo64), IROperand.useVal(es), (IROperand*)0);
+        IRValue* hb = ppEmit(P, String.withCString("Mul"), i64t, IROperand.useVal(hi64), IROperand.useVal(es), (IROperand*)0);
+        _ppRangeLo = ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(at), IROperand.useVal(lb), (IROperand*)0);
+        _ppRangeHi = ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(at), IROperand.useVal(hb), (IROperand*)0);
+        return at;
+        }
+
+    IRValue* ppCmp(IRBlock* P, String* pred, IRValue* a, IRValue* b)
+        {
+        IRInsn* c = IRInsn.with(String.withCString("ICmp"));
+        IRValue* r = new IRValue(String.withCString("Bool"));
+        c.setRes(r);
+        c.setPred(pred);
+        c.add(IROperand.useVal(a));
+        c.add(IROperand.useVal(b));
+        P.add(c);
+        return r;
+        }
+
     // The address of the record's slot at byte `off`, typed as a T*.
     IRValue* ppSlot(IRBlock* b, IRValue* ctx, u32 off, String* ty)
         {
@@ -9907,6 +10036,7 @@ class OptProfile
     // induction variable (through a widening or narrowing of it).
     String* _ppKey;
     bool _ppAtIv;
+    IRValue* _ppBase;    // the base value: the AddrOf's result, or the pointer
     bool ppAddrKey(IRValue* addr, IRValue* iv, Map* defOf)
         {
         _ppKey = (String*)0;
@@ -9930,6 +10060,7 @@ class OptProfile
                 _ppAtIv = x == iv;
                 }
             }
+        _ppBase = base;
         IRInsn* bd = (IRInsn*)defOf.get((Hashable*)base);
         if (bd != (IRInsn*)0 && bd.op().equals(String.withCString("AddrOf")) && bd.ops().count() == (u32)1
             && ((IROperand*)bd.ops().get((u32)0)).kind() == (u8)OPK_SYM)
@@ -9939,11 +10070,59 @@ class OptProfile
         return true;
         }
 
+    // The arrays a loop touches, as ppParMemoryOk found them: a key each
+    // ("@sym" for a global, else the base value's), the base (the AddrOf or
+    // the pointer value), the element's size, whether every access is at [i]
+    // and whether the loop stores to it.
+    Array* _ppGKeys;
+    Array* _ppGBase;
+    Array* _ppGElem;
+    Array* _ppGAtIv;
+    Array* _ppGStored;
+    // The pairs that need a check at run time (indices into the above).
+    Array* _ppPairA;
+    Array* _ppPairB;
+
+    void ppNoteKey(IRValue* base, IRValue* addr, bool atIv, bool stored)
+        {
+        u32 k = (u32)$FFFFFFFF;
+        for (u32 i = (u32)0; i < _ppGKeys.count() && k == (u32)$FFFFFFFF; i = i + (u32)1)
+            if (((String*)_ppGKeys.get(i)).equals(_ppKey))
+                k = i;
+        String* pt = addr.ty();
+        u32 es = (u32)0;
+        if (pt.hasPrefix(String.withCString("Ptr(")))
+            {
+            u32 comma = pt.indexOfByte((u8)',');
+            if (comma != (u32)$FFFFFFFF)
+                es = irWidth(pt.substringBytes((u32)4, comma - (u32)4));
+            }
+        if (k == (u32)$FFFFFFFF)
+            {
+            _ppGKeys.add((Object*)_ppKey);
+            _ppGBase.add((Object*)base);
+            _ppGElem.add((Object*)Number.with(es));
+            _ppGAtIv.add((Object*)Number.with(atIv ? (u32)1 : (u32)0));
+            _ppGStored.add((Object*)Number.with(stored ? (u32)1 : (u32)0));
+            return;
+            }
+        if (!atIv)
+            _ppGAtIv.set(k, (Object*)Number.with((u32)0));
+        if (stored)
+            _ppGStored.set(k, (Object*)Number.with((u32)1));
+        if (((Number*)_ppGElem.get(k)).asU32() != es)
+            _ppGElem.set(k, (Object*)Number.with((u32)0));
+        }
+
     bool ppParMemoryOk(IRFunc* fn, LRCLoop* L, IRValue* iv, Map* defOf, Map* defBlk)
         {
-        Array* storedKeys = new Array();
-        Array* loadKeys = new Array();
-        Array* loadAtIv = new Array();
+        _ppGKeys = new Array();
+        _ppGBase = new Array();
+        _ppGElem = new Array();
+        _ppGAtIv = new Array();
+        _ppGStored = new Array();
+        _ppPairA = new Array();
+        _ppPairB = new Array();
         Array* body = L.body();
         for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
             {
@@ -9952,51 +10131,57 @@ class OptProfile
                 {
                 IRInsn* n = (IRInsn*)blk.insns().get(i);
                 String* op = n.op();
-                if (op.equals(String.withCString("Store")))
+                bool st = op.equals(String.withCString("Store"));
+                if (st || op.equals(String.withCString("Load")))
                     {
-                    if (!ppAddrKey(((IROperand*)n.ops().get((u32)0)).val(), iv, defOf) || !_ppAtIv)
+                    IRValue* addr = ((IROperand*)n.ops().get((u32)0)).val();
+                    if (!ppAddrKey(addr, iv, defOf))
                         return ppNo("ppParMemoryOk 1");
-                    if (storedKeys.indexOf((Object*)_ppKey) == (u32)$FFFFFFFF)
-                        {
-                        bool seen = false;
-                        for (u32 k = (u32)0; k < storedKeys.count() && !seen; k = k + (u32)1)
-                            seen = ((String*)storedKeys.get(k)).equals(_ppKey);
-                        if (!seen)
-                            storedKeys.add((Object*)_ppKey);
-                        }
-                    }
-                else if (op.equals(String.withCString("Load")))
-                    {
-                    if (!ppAddrKey(((IROperand*)n.ops().get((u32)0)).val(), iv, defOf))
-                        return ppNo("ppParMemoryOk 2");
-                    loadKeys.add((Object*)_ppKey);
-                    loadAtIv.add((Object*)Number.with(_ppAtIv ? (u32)1 : (u32)0));
+                    if (st && !_ppAtIv)
+                        return ppNo("a store not at [i]");
+                    ppNoteKey(_ppBase, addr, _ppAtIv, st);
                     }
                 else if (lrcWritesMemory(op) || op.hasPrefix(String.withCString("Load")))
-                    return ppNo("ppParMemoryOk 3");
+                    return ppNo("ppParMemoryOk 2");
                 }
             }
-        // A stored array is read only at [i]; and a stored pointer is not
-        // known apart from any other array the loop touches.
-        for (u32 s = (u32)0; s < storedKeys.count(); s = s + (u32)1)
+        for (u32 s = (u32)0; s < _ppGKeys.count(); s = s + (u32)1)
             {
-            String* sk = (String*)storedKeys.get(s);
-            for (u32 l = (u32)0; l < loadKeys.count(); l = l + (u32)1)
+            if (((Number*)_ppGStored.get(s)).asU32() == (u32)0)
+                continue;
+            String* sk = (String*)_ppGKeys.get(s);
+            // A stored array is read only at [i].
+            if (((Number*)_ppGAtIv.get(s)).asU32() == (u32)0)
+                return ppNo("a stored array read away from [i]");
+            for (u32 x = (u32)0; x < _ppGKeys.count(); x = x + (u32)1)
                 {
-                String* lk = (String*)loadKeys.get(l);
-                if (lk.equals(sk))
+                if (x == s)
+                    continue;
+                String* xk = (String*)_ppGKeys.get(x);
+                // Two globals are two arrays.
+                if (sk.hasPrefix(String.withCString("@")) && xk.hasPrefix(String.withCString("@")))
+                    continue;
+                // A pair stored-and-other once (two stored arrays: once).
+                if (((Number*)_ppGStored.get(x)).asU32() != (u32)0 && x < s)
+                    continue;
+                // Otherwise they may be one array: checked at run time, which
+                // needs both touched only at [i], their element sizes known
+                // and their bases from outside the loop.
+                if (((Number*)_ppGAtIv.get(x)).asU32() == (u32)0)
+                    return ppNo("an array that may overlap a stored one, read away from [i]");
+                if (((Number*)_ppGElem.get(s)).asU32() == (u32)0 || ((Number*)_ppGElem.get(x)).asU32() == (u32)0)
+                    return ppNo("an array of an element whose size is not known");
+                for (u32 w = (u32)0; w < (u32)2; w = w + (u32)1)
                     {
-                    if (((Number*)loadAtIv.get(l)).asU32() == (u32)0)
-                        return ppNo("ppParMemoryOk 4");
+                    u32 idx = w == (u32)0 ? s : x;
+                    if (((String*)_ppGKeys.get(idx)).hasPrefix(String.withCString("@")))
+                        continue;
+                    IRBlock* db = (IRBlock*)defBlk.get((Hashable*)_ppGBase.get(idx));
+                    if (db != (IRBlock*)0 && hasBlock(body, db))
+                        return ppNo("a pointer computed in the loop");
                     }
-                else if (!(sk.hasPrefix(String.withCString("@")) && lk.hasPrefix(String.withCString("@"))))
-                    return ppNo("ppParMemoryOk 5");
-                }
-            for (u32 o = (u32)0; o < storedKeys.count(); o = o + (u32)1)
-                {
-                String* ok = (String*)storedKeys.get(o);
-                if (o != s && !(sk.hasPrefix(String.withCString("@")) && ok.hasPrefix(String.withCString("@"))))
-                    return ppNo("ppParMemoryOk 6");
+                _ppPairA.add((Object*)Number.with(s));
+                _ppPairB.add((Object*)Number.with(x));
                 }
             }
         return true;
