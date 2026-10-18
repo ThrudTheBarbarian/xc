@@ -8902,13 +8902,7 @@ class OptProfile
 
     void parProposeReport(IRModule* m)
         {
-        // As the scan: nothing without the par runtime in the program.
-        bool runtime = false;
-        for (u32 f = (u32)0; f < m.funcs().count() && !runtime; f = f + (u32)1)
-            if (((IRFunc*)m.funcs().get(f)).name().hasPrefix(String.withCString("ParChunk$")))
-                runtime = true;
-        if (!runtime)
-            return;
+        // Every program: --par-auto imports the runtime where a loop needs it.
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
@@ -9342,6 +9336,58 @@ class OptProfile
         return true;
         }
 
+    // A running min or max: next = Select(cmp(x, acc), x, acc) in any of its
+    // spellings (operands either way round, the branches either way). Says
+    // "Max:S", "Min:U", "Max:F" ... or 0. x must not depend on acc.
+    String* ppMinMaxOf(IRInsn* sel, IRValue* acc, Map* defOf)
+        {
+        if (!sel.op().equals(String.withCString("Select")) || sel.ops().count() != (u32)3)
+            return (String*)0;
+        IROperand* co = (IROperand*)sel.ops().get((u32)0);
+        IROperand* tv = (IROperand*)sel.ops().get((u32)1);
+        IROperand* fv = (IROperand*)sel.ops().get((u32)2);
+        if (co.kind() != (u8)OPK_USE || tv.kind() != (u8)OPK_USE || fv.kind() != (u8)OPK_USE)
+            return (String*)0;
+        IRValue* x = (IRValue*)0;
+        bool pickXWhenTrue = false;
+        if (fv.val() == acc && tv.val() != acc)
+            {
+            x = tv.val();
+            pickXWhenTrue = true;
+            }
+        else if (tv.val() == acc && fv.val() != acc)
+            x = fv.val();
+        else
+            return (String*)0;
+        if (ppDependsOn(x, acc, defOf, (u32)0))
+            return (String*)0;
+        IRInsn* c = (IRInsn*)defOf.get((Hashable*)co.val());
+        if (c == (IRInsn*)0 || c.ops().count() != (u32)2
+            || !(c.op().equals(String.withCString("ICmp")) || c.op().equals(String.withCString("FCmp"))))
+            return (String*)0;
+        IROperand* l = (IROperand*)c.ops().get((u32)0);
+        IROperand* r = (IROperand*)c.ops().get((u32)1);
+        if (l.kind() != (u8)OPK_USE || r.kind() != (u8)OPK_USE)
+            return (String*)0;
+        // Is the condition "x is greater"?
+        bool xLeft = false;
+        if (l.val() == x && r.val() == acc)
+            xLeft = true;
+        else if (!(l.val() == acc && r.val() == x))
+            return (String*)0;
+        String* p = c.pred();
+        bool gt = p.hasSuffix(String.withCString("GT")) || p.hasSuffix(String.withCString("GE"));
+        bool lt = p.hasSuffix(String.withCString("LT")) || p.hasSuffix(String.withCString("LE"));
+        if (!gt && !lt)
+            return (String*)0;
+        bool xGreater = xLeft ? gt : lt;
+        // Taking x when it is greater is a max; when it is smaller, a min.
+        bool isMax = pickXWhenTrue ? xGreater : !xGreater;
+        String* kind = c.op().equals(String.withCString("FCmp")) ? String.withCString("F")
+                     : p.hasPrefix(String.withCString("U")) ? String.withCString("U") : String.withCString("S");
+        return String.withFormat("%s:%s", isMax ? "Max" : "Min", kind.cString());
+        }
+
     // The operators an accumulator may be updated by: associative and
     // commutative, so partial results fold in any order (FAdd and FMul only
     // reach here under :goal(speed), which Propose's verdict checks).
@@ -9425,7 +9471,7 @@ class OptProfile
         // The induction variable and the accumulators.
         IRInsn* iv = (IRInsn*)0;
         Array* reds = new Array();      // the accumulator phis
-        Array* redOps = new Array();    // String@: Add / FAdd
+        Array* redOps = new Array();    // String@: Add, FAdd, Mul, FMul, Xor, Or, And, or Min:/Max: S, U or F
         for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
             {
             IRInsn* phi = (IRInsn*)H.phis().get(i);
@@ -9435,6 +9481,14 @@ class OptProfile
                 return ppNo("ppOutlinePar 8");
             IRValue* nx = ppPhiIn(phi, L, true);
             IRInsn* step = nx != (IRValue*)0 ? (IRInsn*)defOf.get((Hashable*)nx) : (IRInsn*)0;
+            // A running minimum or maximum, if-converted to a Select.
+            String* mm = step != (IRInsn*)0 ? ppMinMaxOf(step, phi.res(), defOf) : (String*)0;
+            if (mm != (String*)0)
+                {
+                reds.add((Object*)phi);
+                redOps.add((Object*)mm);
+                continue;
+                }
             if (step == (IRInsn*)0 || step.ops().count() != (u32)2)
                 return ppNo("ppOutlinePar 9");
             bool addI = step.op().equals(String.withCString("Add"));
@@ -9482,39 +9536,47 @@ class OptProfile
         if (!ppParMemoryOk(fn, L, iv.res(), defOf, defBlk))
             return ppNo("ppOutlinePar 16");
 
-        // ── the record: the live-ins, then the accumulators, 8 bytes each ──
+        // ── the record: ParChunk's prefix (a word, lo, hi), then the live-ins,
+        // then the accumulators, 8 bytes each. A struct of its own, read
+        // with FieldAddr, so that the loop's function has the shape of a
+        // generated block's run(): what the kernel printers read.
         u32 nIn = liveIns.count();
-        u32 bytes = (nIn + reds.count()) * (u32)8;
-        if (bytes == (u32)0)
-            bytes = (u32)8;
+        u32 bytes = (u32)24 + (nIn + reds.count()) * (u32)8;
+        IRLayout* recL = IRLayout.with(bytes, (u32)8);
+        recL.addField((u32)0, String.withCString("Ptr(Void, unbanked)"));
+        recL.addField((u32)8, String.withCString("I64"));
+        recL.addField((u32)16, String.withCString("I64"));
+        for (u32 i = (u32)0; i < nIn; i = i + (u32)1)
+            recL.addField((u32)24 + i * (u32)8, ((IRValue*)liveIns.get(i)).ty());
+        for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
+            recL.addField((u32)24 + (nIn + i) * (u32)8, ((IRInsn*)reds.get(i)).res().ty());
+        String* recT = String.withFormat("Ptr(Agg(%u), unbanked)", m.addLayout(recL));
         _ppOutN = _ppOutN + (u32)1;
         String* stem = String.withFormat("ParOut$%u", _ppOutN);
         String* objT = makeF.ret();
         String* u8p = String.withCString("Ptr(U8, unbanked)");
         String* ivT = iv.res().ty();
 
-        // ── body(self, ctx, lo, hi) ──
+        // ── run(rec): the loop over [rec.lo, rec.hi) ──
         IRFunc* B = new IRFunc();
-        B.setName(String.withFormat("%s$body", stem.cString()));
+        B.setName(String.withFormat("%s$run", stem.cString()));
         if (fn.hasDbg())
             B.setDbg(fn.dbgFile(), fn.dbgLine(), fn.dbgCol());
-        IRValue* bSelf = new IRValue(objT);
-        IRValue* bCtx = new IRValue(u8p);
-        IRValue* bLo = new IRValue(String.withCString("I64"));
-        IRValue* bHi = new IRValue(String.withCString("I64"));
+        IRValue* bRec = new IRValue(recT);
         IRValue* bMem = new IRValue(String.withCString("Mem"));
-        B.addParam(bSelf);
-        B.addParam(bCtx);
-        B.addParam(bLo);
-        B.addParam(bHi);
+        B.addParam(bRec);
         B.addParam(bMem);
         IRBlock* entry = new IRBlock(String.withCString("bb_entry"));
         Map* remap = new Map();
         IRValue* mcur = bMem;
+        IRValue* bLo = ppFieldLoad(entry, bRec, (u32)1, String.withCString("I64"), mcur);
+        mcur = _ppLastMem;
+        IRValue* bHi = ppFieldLoad(entry, bRec, (u32)2, String.withCString("I64"), mcur);
+        mcur = _ppLastMem;
         for (u32 i = (u32)0; i < nIn; i = i + (u32)1)
             {
             IRValue* v = (IRValue*)liveIns.get(i);
-            IRValue* ld = ppCtxLoad(entry, bCtx, i * (u32)8, v.ty(), mcur);
+            IRValue* ld = ppFieldLoad(entry, bRec, (u32)3 + i, v.ty(), mcur);
             mcur = _ppLastMem;
             remap.set((Hashable*)v, (Object*)IROperand.useVal(ld));
             }
@@ -9522,7 +9584,7 @@ class OptProfile
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
             {
             IRInsn* r = (IRInsn*)reds.get(i);
-            redInit.add((Object*)ppCtxLoad(entry, bCtx, (nIn + i) * (u32)8, r.res().ty(), mcur));
+            redInit.add((Object*)ppFieldLoad(entry, bRec, (u32)3 + nIn + i, r.res().ty(), mcur));
             mcur = _ppLastMem;
             }
         remap.set((Hashable*)memIn, (Object*)IROperand.useVal(mcur));
@@ -9602,12 +9664,42 @@ class OptProfile
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
             {
             IRInsn* r = (IRInsn*)reds.get(i);
-            mx = ppCtxStore(exitB, bCtx, (nIn + i) * (u32)8, remappedValue(remap, r.res()), mx);
+            mx = ppFieldStore(exitB, bRec, (u32)3 + nIn + i, remappedValue(remap, r.res()), mx);
             }
         IRInsn* ret = IRInsn.with(String.withCString("Return"));
         ret.add(IROperand.useVal(mx));
         exitB.setTerm(ret);
         B.addBlock(exitB);
+
+        // ── body(self, ctx, lo, hi): the chunk's range into its record, and run ──
+        IRFunc* W = new IRFunc();
+        W.setName(String.withFormat("%s$body", stem.cString()));
+        IRValue* wSelf = new IRValue(objT);
+        IRValue* wCtx = new IRValue(u8p);
+        IRValue* wLo = new IRValue(String.withCString("I64"));
+        IRValue* wHi = new IRValue(String.withCString("I64"));
+        IRValue* wMem = new IRValue(String.withCString("Mem"));
+        W.addParam(wSelf);
+        W.addParam(wCtx);
+        W.addParam(wLo);
+        W.addParam(wHi);
+        W.addParam(wMem);
+        IRBlock* wb = new IRBlock(String.withCString("bb_entry"));
+        IRValue* wRec = ppEmit(wb, String.withCString("Bitcast"), recT, IROperand.useVal(wCtx), (IROperand*)0, (IROperand*)0);
+        IRValue* wm = ppFieldStore(wb, wRec, (u32)1, wLo, wMem);
+        wm = ppFieldStore(wb, wRec, (u32)2, wHi, wm);
+        IRInsn* wc = IRInsn.with(String.withCString("Call"));
+        wc.setCc(String.withCString("CallConv::Standard"));
+        wc.add(IROperand.sym(B.name()));
+        wc.add(IROperand.useVal(wRec));
+        wc.add(IROperand.useVal(wm));
+        wm = new IRValue(String.withCString("Mem"));
+        wc.setMemRes(wm);
+        wb.add(wc);
+        IRInsn* wr = IRInsn.with(String.withCString("Return"));
+        wr.add(IROperand.useVal(wm));
+        wb.setTerm(wr);
+        W.addBlock(wb);
 
         // ── resetCtx(self, ctx) and mergeCtx(self, into, from) ──
         IRFunc* R = new IRFunc();
@@ -9624,7 +9716,7 @@ class OptProfile
             {
             String* ty = ((IRInsn*)reds.get(i)).res().ty();
             IRValue* z = ppIdentity(rb, ty, (String*)redOps.get(i));
-            rm = ppCtxStore(rb, rCtx, (nIn + i) * (u32)8, z, rm);
+            rm = ppCtxStore(rb, rCtx, (u32)24 + (nIn + i) * (u32)8, z, rm);
             }
         IRInsn* rr = IRInsn.with(String.withCString("Return"));
         rr.add(IROperand.useVal(rm));
@@ -9645,17 +9737,38 @@ class OptProfile
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
             {
             String* ty = ((IRInsn*)reds.get(i)).res().ty();
-            u32 off = (nIn + i) * (u32)8;
+            u32 off = (u32)24 + (nIn + i) * (u32)8;
             IRValue* a = ppCtxLoad(gb, gInto, off, ty, gm);
             gm = _ppLastMem;
             IRValue* b2 = ppCtxLoad(gb, gFrom, off, ty, gm);
             gm = _ppLastMem;
-            IRValue* sum = new IRValue(ty);
-            IRInsn* add = IRInsn.with((String*)redOps.get(i));
-            add.setRes(sum);
-            add.add(IROperand.useVal(a));
-            add.add(IROperand.useVal(b2));
-            gb.add(add);
+            String* rop = (String*)redOps.get(i);
+            IRValue* sum = (IRValue*)0;
+            if (rop.hasPrefix(String.withCString("Min:")) || rop.hasPrefix(String.withCString("Max:")))
+                {
+                // The other's when it is smaller (min) or larger (max).
+                bool isMax = rop.hasPrefix(String.withCString("Max:"));
+                u8 kind = rop.byteAt((u32)4);
+                IRInsn* c = IRInsn.with(String.withCString(kind == (u8)'F' ? "FCmp" : "ICmp"));
+                IRValue* cv = new IRValue(String.withCString("Bool"));
+                c.setRes(cv);
+                c.setPred(String.withCString(kind == (u8)'F' ? (isMax ? "OGT" : "OLT")
+                                             : kind == (u8)'U' ? (isMax ? "UGT" : "ULT")
+                                             : (isMax ? "SGT" : "SLT")));
+                c.add(IROperand.useVal(b2));
+                c.add(IROperand.useVal(a));
+                gb.add(c);
+                sum = ppEmit(gb, String.withCString("Select"), ty, IROperand.useVal(cv), IROperand.useVal(b2), IROperand.useVal(a));
+                }
+            else
+                {
+                sum = new IRValue(ty);
+                IRInsn* add = IRInsn.with(rop);
+                add.setRes(sum);
+                add.add(IROperand.useVal(a));
+                add.add(IROperand.useVal(b2));
+                gb.add(add);
+                }
             gm = ppCtxStore(gb, gInto, off, sum, gm);
             }
         IRInsn* gr = IRInsn.with(String.withCString("Return"));
@@ -9672,7 +9785,7 @@ class OptProfile
             if (k == (u32)0)
                 s = String.withCString("ParFnChunk$vtbl");
             else if (s.equals(String.withCString("ParFnChunk$body")))
-                s = B.name();
+                s = W.name();
             else if (s.equals(String.withCString("ParFnChunk$resetCtx")))
                 s = R.name();
             else if (s.equals(String.withCString("ParFnChunk$mergeCtx")))
@@ -9682,7 +9795,9 @@ class OptProfile
         String* vtName = String.withFormat("%s$vtbl", stem.cString());
         m.addSym(IRSymbol.vtable(vtName, slots));
         m.addFunc(B);
-        m.addSym(IRSymbol.func(B.name(), String.withFormat("(%s, %s, I64, I64) -> Void", objT.cString(), u8p.cString()), false, false));
+        m.addSym(IRSymbol.func(B.name(), String.withFormat("(%s) -> Void", recT.cString()), false, false));
+        m.addFunc(W);
+        m.addSym(IRSymbol.func(W.name(), String.withFormat("(%s, %s, I64, I64) -> Void", objT.cString(), u8p.cString()), false, false));
         m.addFunc(R);
         m.addSym(IRSymbol.func(R.name(), String.withFormat("(%s, %s) -> Void", objT.cString(), u8p.cString()), false, false));
         m.addFunc(G);
@@ -9715,11 +9830,11 @@ class OptProfile
         IRValue* ctx = ppCall(P, String.withCString("ParFnChunk$ctx"), u8p, IROperand.useVal(obj), (IROperand*)0, (IROperand*)0, pm);
         pm = _ppLastMem;
         for (u32 i = (u32)0; i < nIn; i = i + (u32)1)
-            pm = ppCtxStore(P, ctx, i * (u32)8, (IRValue*)liveIns.get(i), pm);
+            pm = ppCtxStore(P, ctx, (u32)24 + i * (u32)8, (IRValue*)liveIns.get(i), pm);
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
             {
             IRInsn* r = (IRInsn*)reds.get(i);
-            pm = ppCtxStore(P, ctx, (nIn + i) * (u32)8, ppPhiIn(r, L, false), pm);
+            pm = ppCtxStore(P, ctx, (u32)24 + (nIn + i) * (u32)8, ppPhiIn(r, L, false), pm);
             }
         IRValue* lo64 = ppConvertTo(P, ppPhiIn(iv, L, false), String.withCString("I64"));
         IRValue* hi64 = ppConvertTo(P, remat ? ppRemat(P, bound, defOf) : bound, String.withCString("I64"));
@@ -9745,7 +9860,7 @@ class OptProfile
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
             {
             IRInsn* r = (IRInsn*)reds.get(i);
-            results.add((Object*)ppCtxLoad(P, ctx, (nIn + i) * (u32)8, r.res().ty(), pm));
+            results.add((Object*)ppCtxLoad(P, ctx, (u32)24 + (nIn + i) * (u32)8, r.res().ty(), pm));
             pm = _ppLastMem;
             }
         IRInsn* rel = IRInsn.with(String.withCString("Release"));
@@ -9944,6 +10059,29 @@ class OptProfile
         return r;
         }
 
+    // Field k of the record `rec` (a struct pointer), loaded / stored.
+    IRValue* ppFieldLoad(IRBlock* b, IRValue* rec, u32 k, String* ty, IRValue* mem)
+        {
+        IRValue* p = ppEmit(b, String.withCString("FieldAddr"), String.withFormat("Ptr(%s, unbanked)", ty.cString()),
+                            IROperand.useVal(rec), IROperand.immI((i64)k, String.withCString("U8")), (IROperand*)0);
+        IRInsn* ld = IRInsn.with(String.withCString("Load"));
+        IRValue* r = new IRValue(ty);
+        _ppLastMem = new IRValue(String.withCString("Mem"));
+        ld.setRes(r);
+        ld.setMemRes(_ppLastMem);
+        ld.add(IROperand.useVal(p));
+        ld.add(IROperand.useVal(mem));
+        b.add(ld);
+        return r;
+        }
+
+    IRValue* ppFieldStore(IRBlock* b, IRValue* rec, u32 k, IRValue* v, IRValue* mem)
+        {
+        IRValue* p = ppEmit(b, String.withCString("FieldAddr"), String.withFormat("Ptr(%s, unbanked)", v.ty().cString()),
+                            IROperand.useVal(rec), IROperand.immI((i64)k, String.withCString("U8")), (IROperand*)0);
+        return ppStore(b, p, v, mem);
+        }
+
     // The address of the record's slot at byte `off`, typed as a T*.
     IRValue* ppSlot(IRBlock* b, IRValue* ctx, u32 off, String* ty)
         {
@@ -10015,6 +10153,26 @@ class OptProfile
     // The identity of a reduction operator: 0 for + ^ |, 1 for *, all ones for &.
     IRValue* ppIdentity(IRBlock* b, String* ty, String* op)
         {
+        // A maximum starts at the type's least value, a minimum at its
+        // greatest; floats at -inf and +inf.
+        if (op.hasPrefix(String.withCString("Min:")) || op.hasPrefix(String.withCString("Max:")))
+            {
+            bool isMax = op.hasPrefix(String.withCString("Max:"));
+            u8 kind = op.byteAt((u32)4);
+            if (kind == (u8)'F')
+                return ppEmit(b, String.withCString("Const"), ty,
+                              IROperand.immF(String.withCString(isMax ? "fff0000000000000" : "7ff0000000000000"), ty), (IROperand*)0, (IROperand*)0);
+            u32 bits = irWidth(ty) * (u32)8;
+            i64 v = (i64)0;
+            if (kind == (u8)'U')
+                v = isMax ? (i64)0 : (i64)0 - (i64)1;
+            else
+                {
+                i64 top = bits >= (u32)64 ? (i64)$7FFFFFFFFFFFFFFF : ((i64)1 << (i64)(bits - (u32)1)) - (i64)1;
+                v = isMax ? (i64)0 - top - (i64)1 : top;
+                }
+            return ppEmit(b, String.withCString("Const"), ty, IROperand.immI(v, ty), (IROperand*)0, (IROperand*)0);
+            }
         if (op.equals(String.withCString("FMul")))
             return ppEmit(b, String.withCString("Const"), ty, IROperand.immF(String.withCString("3ff0000000000000"), ty), (IROperand*)0, (IROperand*)0);
         if (op.equals(String.withCString("Mul")))
@@ -10132,11 +10290,20 @@ class OptProfile
                 IRInsn* n = (IRInsn*)blk.insns().get(i);
                 String* op = n.op();
                 bool st = op.equals(String.withCString("Store"));
+                // A class's one-time initialisation, which the loop may run:
+                // its flag and its run are the runtime's, thread-safe, and
+                // touch nothing of the loop's.
+                if (op.equals(String.withCString("Call")) && n.ops().count() > (u32)0
+                    && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_SYM
+                    && ((IROperand*)n.ops().get((u32)0)).name().equals(String.withCString("_xtc_sinit_run")))
+                    continue;
                 if (st || op.equals(String.withCString("Load")))
                     {
                     IRValue* addr = ((IROperand*)n.ops().get((u32)0)).val();
                     if (!ppAddrKey(addr, iv, defOf))
                         return ppNo("ppParMemoryOk 1");
+                    if (!st && _ppKey.hasPrefix(String.withCString("@__sinit_")))
+                        continue;
                     if (st && !_ppAtIv)
                         return ppNo("a store not at [i]");
                     ppNoteKey(_ppBase, addr, _ppAtIv, st);
@@ -10441,6 +10608,10 @@ class OptProfile
             }
         if (callee == (String*)0)
             return String.withCString("an indirect call");
+        // A class's one-time initialisation (Math.sqrt in a loop brings it):
+        // thread-safe, and after the first time a load and a compare.
+        if (callee.equals(String.withCString("_xtc_sinit_run")))
+            return (String*)0;
         IRFunc* f = funcNamed(_ppModule, callee);
         if (f == (IRFunc*)0 || f.blocks().count() == (u32)0)
             {

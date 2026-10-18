@@ -57,10 +57,11 @@ if [ $fail = 0 ]; then
     n=$(grep -c ': outlined, ' "$W/b2")
     [ "$n" -ge 3 ] || { echo "FAIL outline: $n loops outlined, wanted 3"; fail=1; }
 fi
-# Blocks: a map, sums by + ^ and *, a min-free max scan stays serial, and a
-# loop each of whose iterations reads the one before stays a loop.
+# Blocks: maps (one calling Math.sqrt), sums by + ^ and *, and a loop each
+# of whose iterations reads the one before stays a loop.
 cat > "$W/b.xc" <<'XC'
 #import "Stdio.xc"
+#import "Math.xc"
 #import "Par.xc"
 #define N 200000
 u32 a[N];
@@ -72,6 +73,10 @@ i32 main(void)
         a[i] = i * (u32)2654435761;
     for (u32 i in 0..N)
         x[i] = (double)(a[i] >> (u32)20) * 0.5;
+    // A class with a static initialiser in the loop: its guard runs in the
+    // block, thread-safe.
+    for (u32 i in 0..N)
+        x[i] = Math.sqrt(x[i]) + 1.0;
     u64 total = (u64)0;
     for (u32 i in 0..N)
         total = total + (u64)(a[i] >> (u32)3);
@@ -96,7 +101,7 @@ if [ -x "$W/bplain" ] && [ -x "$W/bout" ]; then
         [ "$(XC_PAR_THREADS=$t "$W/bout")" = "$want" ] || { echo "FAIL outline: the blocks' output with $t threads: $(XC_PAR_THREADS=$t "$W/bout")"; fail=1; }
     done
     n=$(grep -c ': outlined, a block' "$W/b4")
-    [ "$n" -ge 5 ] || { echo "FAIL outline: $n blocks, wanted 5"; fail=1; }
+    [ "$n" -ge 6 ] || { echo "FAIL outline: $n blocks, wanted 6"; fail=1; }
 fi
 # Pointers that may be one array: a check at the call runs the block
 # serially where their ranges overlap (scale(x + 1, x) copies each element
