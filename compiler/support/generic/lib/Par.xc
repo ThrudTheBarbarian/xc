@@ -133,6 +133,79 @@ class ParChunk : Object
         }
     }
 
+// A block the IR outliner made (XC_PAR_PROPOSE=outline; experimental): one
+// class for every such block. Its captured values and its reductions'
+// accumulators are a byte record, and the three pieces that differ per block
+// are methods the compiler replaces in a vtable it makes for the block: body
+// (the loop over [lo, hi) on a record), resetCtx (a record's accumulators to
+// their identities) and mergeCtx (one record's accumulators folded into
+// another's).
+class ParFnChunk : ParChunk
+    {
+    Data* _ctx;
+    u8* _name;
+
+    void body(u8* ctx, i64 from, i64 to)
+        {
+        }
+    void resetCtx(u8* ctx)
+        {
+        }
+    void mergeCtx(u8* into, u8* from)
+        {
+        }
+    void run(void)
+        {
+        body(_ctx.bytes(), lo, hi);
+        }
+    ParChunk* copyChunk(void)
+        {
+        ParFnChunk* c = new ParFnChunk();
+        // The block's own vtable, so that the copy runs the same body.
+        *(pointer*)(pointer)c = *(pointer*)(pointer)self;
+        c._ctx = Data.withData(_ctx);
+        c._name = _name;
+        resetCtx(c._ctx.bytes());
+        return (ParChunk*)c;
+        }
+    void merge(ParChunk* other)
+        {
+        mergeCtx(_ctx.bytes(), ((ParFnChunk*)other)._ctx.bytes());
+        }
+    u8* parName(void)
+        {
+        return _name;
+        }
+    u8* ctx(void)
+        {
+        return _ctx.bytes();
+        }
+    static ParFnChunk* make(u32 bytes, u8* name)
+        {
+        ParFnChunk* c = new ParFnChunk();
+        c._ctx = Data.withLength(bytes);
+        c._name = name;
+        return c;
+        }
+    }
+
+// Never made. A second class that overrides the three per-block methods, so
+// that ParFnChunk's calls to them are dispatched through the vtable (the
+// compiler binds a call to a method nothing overrides), which is where a
+// block's own vtable puts its versions.
+class ParFnChunkBase : ParFnChunk
+    {
+    void body(u8* ctx, i64 from, i64 to)
+        {
+        }
+    void resetCtx(u8* ctx)
+        {
+        }
+    void mergeCtx(u8* into, u8* from)
+        {
+        }
+    }
+
 class Par
     {
     // The byte length a block's generated gpuLength() reports for a captured

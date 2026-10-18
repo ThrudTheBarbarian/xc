@@ -1,9 +1,11 @@
 #!/bin/bash
-# outline.sh — IR outlining (XC_PAR_PROPOSE=outline, stages 1-2 of moving
+# outline.sh — IR outlining (XC_PAR_PROPOSE=outline, stages 1-3 of moving
 # --par-auto into the IR; cpp-front-end.md): every loop Propose would wrap
-# becomes a function of its own, called once in its place, and the program
-# gives the output it gives without. Self-hosted compiler only while it is
-# experimental. The corpus check is the same comparison over every fixture.
+# becomes a function of its own, called once in its place; in a program with
+# the par runtime, one whose shape allows becomes a block the runtime runs on
+# every core (ParFnChunk). Either way the program gives the output it gives
+# without. Self-hosted compiler only while it is experimental. The corpus
+# check is the same comparison over every fixture.
 #
 #   bash tests/par/outline.sh
 set -u
@@ -46,13 +48,55 @@ i32 main(void)
     }
 XC
 "$XC" -q -O3 -H . "$W/o.xc" -o "$W/plain" >"$W/b1" 2>&1 || { echo "FAIL outline: the plain build"; head -3 "$W/b1"; fail=1; }
-XC_PAR_PROPOSE=outline "$XC" -q -O3 -H . "$W/o.xc" -o "$W/out" >"$W/b2" 2>&1 || { echo "FAIL outline: the outlined build"; head -3 "$W/b2"; fail=1; }
+XC_PAR_OUTLINE_TRACE=1 XC_PAR_PROPOSE=outline "$XC" -q -O3 -H . "$W/o.xc" -o "$W/out" >"$W/b2" 2>&1 || { echo "FAIL outline: the outlined build"; head -3 "$W/b2"; fail=1; }
 if [ $fail = 0 ]; then
     [ "$("$W/plain")" = "$("$W/out")" ] || { echo "FAIL outline: the outlined program's output differs: $("$W/out")"; fail=1; }
     [ "$("$W/plain")" = "999000 999 250" ] || { echo "FAIL outline: the plain program's output: $("$W/plain")"; fail=1; }
-    # scale's loop, the fill, the sum (a returned result) and the max loop.
-    n=$(nm "$W/out" 2>/dev/null | grep -c '_ParOut\$[0-9]*\$run$')
-    [ "$n" -ge 4 ] || { echo "FAIL outline: $n loops outlined, wanted at least 4"; fail=1; }
+    # scale's loop, the fill and the max loop (the float sum needs
+    # :goal(speed), the while loop has a second way out).
+    n=$(grep -c ': outlined, ' "$W/b2")
+    [ "$n" -ge 3 ] || { echo "FAIL outline: $n loops outlined, wanted 3"; fail=1; }
+fi
+# Blocks: a map, sums by + ^ and *, a min-free max scan stays serial, and a
+# loop each of whose iterations reads the one before stays a loop.
+cat > "$W/b.xc" <<'XC'
+#import "Stdio.xc"
+#import "Par.xc"
+#define N 200000
+u32 a[N];
+u32 b[N];
+double x[N];
+i32 main(void)
+    {
+    for (u32 i in 0..N)
+        a[i] = i * (u32)2654435761;
+    for (u32 i in 0..N)
+        x[i] = (double)(a[i] >> (u32)20) * 0.5;
+    u64 total = (u64)0;
+    for (u32 i in 0..N)
+        total = total + (u64)(a[i] >> (u32)3);
+    u32 mix = (u32)0;
+    for (u32 i in 0..N)
+        mix = mix ^ a[i];
+    u32 odd = (u32)1;
+    for (u32 i in 0..64)
+        odd = odd * ((a[i] | (u32)1) & (u32)7);
+    b[0] = (u32)1;
+    for (u32 i in 1..N)
+        b[i] = b[i - 1] + (u32)3;
+    Stdio.printf("%lu %u %u %u %.1f\n", total, mix, odd, b[N - 1], x[N - 1]);
+    return 0;
+    }
+XC
+"$XC" -q -O3 -H . "$W/b.xc" -o "$W/bplain" >"$W/b3" 2>&1 || { echo "FAIL outline: the plain block program"; head -3 "$W/b3"; fail=1; }
+XC_PAR_OUTLINE_TRACE=1 XC_PAR_PROPOSE=outline "$XC" -q -O3 -H . "$W/b.xc" -o "$W/bout" >"$W/b4" 2>&1 || { echo "FAIL outline: the outlined block program"; head -3 "$W/b4"; fail=1; }
+if [ -x "$W/bplain" ] && [ -x "$W/bout" ]; then
+    want=$("$W/bplain")
+    for t in 1 3 8; do
+        [ "$(XC_PAR_THREADS=$t "$W/bout")" = "$want" ] || { echo "FAIL outline: the blocks' output with $t threads: $(XC_PAR_THREADS=$t "$W/bout")"; fail=1; }
+    done
+    n=$(grep -c ': outlined, a block' "$W/b4")
+    [ "$n" -ge 5 ] || { echo "FAIL outline: $n blocks, wanted 5"; fail=1; }
 fi
 [ $fail = 0 ] && echo "--- outline: pass ---" || echo "--- outline: FAIL ---"
 exit $fail

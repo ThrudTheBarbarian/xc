@@ -70,6 +70,7 @@ class OptProfile
     bool _hoistLocalAddr;  // …and a repeated AddrOf of a pinned LOCAL (arm64)
     bool _layoutHotPath;   // blocks ordered so the expected branch falls through
     bool _narrowIV;        // a counted IV is recomputed at its smallest width
+    bool _ptr64;           // pointers are 8 bytes and threads exist (arm64, x86-64, win64): IR outlining runs blocks in parallel
     // Bytes in one vector register the vectoriser may use: 16 (SSE2 / NEON /
     // simd128) or 32 (AVX2, -mavx2). The lane count, remainder loop and unroll
     // factor key off it (SIMD step 1, S2); set from the driver's vector level.
@@ -145,6 +146,10 @@ class OptProfile
     bool matMulInts(void) { return _matMulInts; }
     void setMatMulInts(bool b) { _matMulInts = b; }
 
+    bool ptr64(void)
+        {
+        return _ptr64;
+        }
     static OptProfile* forTarget(String* t)
         {
         OptProfile* p = new OptProfile();
@@ -164,6 +169,8 @@ class OptProfile
                           || t.equals(String.withCString("win64"))
                           || t.equals(String.withCString("wasm32"));
         p._initGuardElim = true;
+        p._ptr64 = t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64"))
+                || t.equals(String.withCString("win64"));
         // The 6502 and the 68000 backends do not lower MemSet, so the idiom
         // stays a loop there.
         // arm9 leaves the reduction collapse OFF: its trip-1 rewrite and
@@ -1334,7 +1341,19 @@ class OptProfile
         if (ppReport())
             parProposeReport(m);
         if (ppOutline())
+            {
             parProposeOutline(m);
+            _ppOutlined = true;
+            // XC_PAR_OUTLINE_TRACE=ir: the functions the outliner made or cut.
+            u8* tr = _xt_getenv("XC_PAR_OUTLINE_TRACE");
+            if (tr != (u8*)0 && String.withCString(tr).equals(String.withCString("ir")))
+                for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+                    {
+                    IRFunc* fn = (IRFunc*)m.funcs().get(f);
+                    if (fn.name().hasPrefix(String.withCString("ParOut$")) || fn.name().equals(String.withCString("main")))
+                        Stdio.error(fn.text());
+                    }
+            }
         if (stopHere(String.withCString("mem2reg")))
             return;
         // SECOND inlining pass, after if-conversion has linearised the small
@@ -1585,6 +1604,15 @@ class OptProfile
             seed(m, reachable, work, String.withCString("_xtc_class_new"));
         for (u32 i = (u32)0; i < m.modinits().count(); i = i + (u32)1)
             seed(m, reachable, work, (String*)m.modinits().get(i));
+        // IR outlining dispatches blocks it has not made yet, after mem2reg:
+        // the runtime's entry points stay until then (the pass after removes
+        // them if no block was made).
+        if (ppOutline() && !_ppOutlined)
+            {
+            seed(m, reachable, work, String.withCString("ParFnChunk$make"));
+            seed(m, reachable, work, String.withCString("ParFnChunk$ctx"));
+            seed(m, reachable, work, String.withCString("Par$run"));
+            }
 
         // Library mode: seed EVERY function — the module IS the API surface.
         if (_keepAllFunctions)
@@ -8942,6 +8970,7 @@ class OptProfile
     // returns. Stage 2's serial half: several results, and the merge of
     // partial results, come with the block's class (stage 3).
     u32 _ppOutN;
+    bool _ppOutlined;   // the outliner has run (the runtime need not be kept for it)
 
     void parProposeOutline(IRModule* m)
         {
@@ -8972,15 +9001,23 @@ class OptProfile
                         }
                     if (inner)
                         continue;
+                    // The program's loops only: one with no source line, or the
+                        // standard library's (the runtime's own loops among them:
+                        // outlining Data.withLength's made a block that made a
+                        // block), stays.
                     IRInsn* at = ppFirstDbg(L);
-                    if (at != (IRInsn*)0)
-                        {
-                        String* path = (String*)IRDbg.files().get(at.dbgFile());
-                        if (path != (String*)0 && path.contains(String.withCString("/support/")))
-                            continue;
-                        }
-                    if (ppVerdict(fn, L) != (String*)0)
+                    if (at == (IRInsn*)0)
                         continue;
+                    String* path = (String*)IRDbg.files().get(at.dbgFile());
+                    if (path == (String*)0 || path.contains(String.withCString("/support/")))
+                        continue;
+                    String* verdict = ppVerdict(fn, L);
+                    if (verdict != (String*)0)
+                        {
+                        _ppWhere = fn.name();
+                        ppNo(verdict.cString());
+                        continue;
+                        }
                     if (ppOutlineLoop(m, fn, L, at))
                         again = true;
                     }
@@ -9007,11 +9044,14 @@ class OptProfile
 
     bool ppOutlineLoop(IRModule* m, IRFunc* fn, LRCLoop* L, IRInsn* at)
         {
+        _ppWhere = fn.name();
+        if (at != (IRInsn*)0)
+            _ppWhere = String.withFormat("%s:%ld", fn.name().cString(), (i32)at.dbgLine());
         IRBlock* P = L.pre();
         IRBlock* H = L.header();
         Array* body = L.body();
         if (P == (IRBlock*)0 || P.term() == (IRInsn*)0 || !P.term().op().equals(String.withCString("Branch")))
-            return false;
+            return ppNo("cut 1");
         Map* defBlk = defBlockMap(fn);
         // One exit block.
         IRBlock* E = (IRBlock*)0;
@@ -9019,7 +9059,7 @@ class OptProfile
             {
             IRInsn* t = ((IRBlock*)body.get(b)).term();
             if (t == (IRInsn*)0)
-                return false;
+                return ppNo("cut 2");
             for (u32 k = (u32)0; k < t.ops().count(); k = k + (u32)1)
                 {
                 IROperand* o = (IROperand*)t.ops().get(k);
@@ -9028,13 +9068,13 @@ class OptProfile
                 if (E == (IRBlock*)0)
                     E = o.blk();
                 else if (E != o.blk())
-                    return false;
+                    return ppNo("cut 3");
                 }
             if (t.op().equals(String.withCString("Return")))
-                return false;
+                return ppNo("cut 4");
             }
         if (E == (IRBlock*)0)
-            return false;
+            return ppNo("cut 5");
         // The values the loop reads from outside it.
         Array* liveIns = new Array();
         Array* memIns = new Array();
@@ -9060,11 +9100,11 @@ class OptProfile
                 }
             }
         if (memIns.count() != (u32)1)
-            return false;
+            return ppNo(String.withFormat("cut 6: %u memory tokens in", memIns.count()).cString());
         // A frame slot is the function's own: not passed.
         for (u32 i = (u32)0; i < fn.pinned().count(); i = i + (u32)1)
             if (liveIns.indexOf((Object*)((IRPinned*)fn.pinned().get(i)).val()) != (u32)$FFFFFFFF)
-                return false;
+                return ppNo("cut 7");
         // What is live after it: one memory token at most, and one value.
         Array* memOuts = new Array();
         Array* liveOuts = new Array();
@@ -9096,11 +9136,24 @@ class OptProfile
                 // A phi in the exit with two edges from the loop: they become
                 // one edge from the call.
                 if (n.op().equals(String.withCString("Phi")) && fromBody > (u32)1)
-                    return false;
+                    return ppNo("cut 8");
                 }
             }
-        if (memOuts.count() > (u32)1 || liveOuts.count() > (u32)1)
-            return false;
+        if (memOuts.count() > (u32)1)
+            return ppNo("cut 9");
+        // Stage 3: a block of its own, run by the par runtime, where the shape
+        // is one it can split (ppOutlinePar says which).
+        _ppWhere = fn.name();
+        if (at != (IRInsn*)0)
+            _ppWhere = String.withFormat("%s:%ld", fn.name().cString(), (i32)at.dbgLine());
+        if (ppOutlinePar(m, fn, L, at, E, liveIns, (IRValue*)memIns.get((u32)0),
+                         memOuts.count() == (u32)1 ? (IRValue*)memOuts.get((u32)0) : (IRValue*)0, liveOuts))
+            {
+            ppTrace("a block");
+            return true;
+            }
+        if (liveOuts.count() > (u32)1)
+            return ppNo("cut 10");
         IRValue* outV = liveOuts.count() == (u32)1 ? (IRValue*)liveOuts.get((u32)0) : (IRValue*)0;
 
         // The outlined function.
@@ -9225,6 +9278,727 @@ class OptProfile
             if (!hasBlock(body, (IRBlock*)fn.blocks().get(b)))
                 keep.add(fn.blocks().get(b));
         fn.setBlocks(keep);
+        ppTrace("serial");
+        return true;
+        }
+
+    // The operators an accumulator may be updated by: associative and
+    // commutative, so partial results fold in any order (FAdd and FMul only
+    // reach here under :goal(speed), which Propose's verdict checks).
+    static bool ppRedOp(String* op)
+        {
+        return op.equals(String.withCString("Add")) || op.equals(String.withCString("FAdd"))
+            || op.equals(String.withCString("Mul")) || op.equals(String.withCString("FMul"))
+            || op.equals(String.withCString("Xor")) || op.equals(String.withCString("Or"))
+            || op.equals(String.withCString("And"));
+        }
+
+    // ── IR outlining, stage 3: a block the par runtime runs ─────────────────
+    // The loop becomes ParOut$<n>$body(self, ctx, lo, hi), a method of a class
+    // that is ParFnChunk with its own vtable (Par.xc): the captured values
+    // and the reductions' accumulators are a byte record (ctx), resetCtx sets
+    // a copy's accumulators to their identities and mergeCtx folds one
+    // record's into another's. The call site makes the chunk, fills the record,
+    // and calls Par.run over the loop's range. Taken only where that is
+    // plainly right, on a 64-bit target with the runtime in the program:
+    //   * the induction variable steps by 1 from a value set before the loop,
+    //     and the exit test is i < b or i <= b with b from outside the loop;
+    //   * every other carried value is an accumulator updated by +, and only
+    //     accumulators (no induction variable) are read after the loop;
+    //   * every store is to element [i] of an array from outside the loop, and
+    //     an array that is stored to is read only at [i];
+    //   * no calls, and two arrays the loop touches are either the same value
+    //     or two different globals (pointers that may overlap need a check at
+    //     run time, which is the next piece).
+    // Anything else stays the serial outline (stages 1-2).
+    bool ppOutlinePar(IRModule* m, IRFunc* fn, LRCLoop* L, IRInsn* at, IRBlock* E,
+                      Array* liveIns, IRValue* memIn, IRValue* memLast, Array* liveOuts)
+        {
+        if (_profile == (OptProfile*)0 || !_profile.ptr64())
+            return ppNo("ppOutlinePar 1");
+        IRFunc* makeF = funcNamed(m, String.withCString("ParFnChunk$make"));
+        IRSymbol* baseVt = symNamed(m, String.withCString("ParFnChunk$vtbl"));
+        if (makeF == (IRFunc*)0)
+            return ppNo("no ParFnChunk.make");
+        if (funcNamed(m, String.withCString("Par$run")) == (IRFunc*)0)
+            return ppNo("no Par.run");
+        if (funcNamed(m, String.withCString("ParFnChunk$ctx")) == (IRFunc*)0)
+            return ppNo("no ParFnChunk.ctx");
+        if (baseVt == (IRSymbol*)0 || baseVt.slots() == 0)
+            return ppNo("no ParFnChunk vtable");
+        // The three per-block methods are in the vtable (ParFnChunkBase).
+        u32 have = (u32)0;
+        for (u32 k = (u32)0; k < baseVt.slots().count(); k = k + (u32)1)
+            {
+            String* s = (String*)baseVt.slots().get(k);
+            if (s.equals(String.withCString("ParFnChunk$body")) || s.equals(String.withCString("ParFnChunk$resetCtx"))
+                || s.equals(String.withCString("ParFnChunk$mergeCtx")))
+                have = have + (u32)1;
+            }
+        if (have != (u32)3)
+            return ppNo("ParFnChunk's vtable lacks body, resetCtx or mergeCtx");
+        IRBlock* P = L.pre();
+        IRBlock* H = L.header();
+        Array* body = L.body();
+        Map* defOf = defMapAll(fn);
+        Map* defBlk = defBlockMap(fn);
+        // The exit test.
+        IRInsn* t = H.term();
+        if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() < (u32)3)
+            return ppNo("ppOutlinePar 3");
+        IROperand* onTrue = (IROperand*)t.ops().get((u32)1);
+        IROperand* onFalse = (IROperand*)t.ops().get((u32)2);
+        if (onTrue.kind() != (u8)OPK_BLOCK || !hasBlock(body, onTrue.blk())
+            || onFalse.kind() != (u8)OPK_BLOCK || onFalse.blk() != E)
+            return ppNo("ppOutlinePar 4");
+        IRInsn* cmp = (IRInsn*)defOf.get((Hashable*)((IROperand*)t.ops().get((u32)0)).val());
+        if (cmp == (IRInsn*)0 || !cmp.op().equals(String.withCString("ICmp")) || cmp.ops().count() != (u32)2)
+            return ppNo("ppOutlinePar 5");
+        String* pred = cmp.pred();
+        bool le = pred.equals(String.withCString("SLE")) || pred.equals(String.withCString("ULE"));
+        if (!le && !pred.equals(String.withCString("SLT")) && !pred.equals(String.withCString("ULT")))
+            return ppNo("ppOutlinePar 6");
+        IROperand* c0 = (IROperand*)cmp.ops().get((u32)0);
+        IROperand* c1 = (IROperand*)cmp.ops().get((u32)1);
+        if (c0.kind() != (u8)OPK_USE || c1.kind() != (u8)OPK_USE)
+            return ppNo("ppOutlinePar 7");
+        // The induction variable and the accumulators.
+        IRInsn* iv = (IRInsn*)0;
+        Array* reds = new Array();      // the accumulator phis
+        Array* redOps = new Array();    // String@: Add / FAdd
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* phi = (IRInsn*)H.phis().get(i);
+            if (phi.res() == (IRValue*)0 || ppIsMem(phi.res()))
+                continue;
+            if (phi.ops().count() != (u32)4)
+                return ppNo("ppOutlinePar 8");
+            IRValue* nx = ppPhiIn(phi, L, true);
+            IRInsn* step = nx != (IRValue*)0 ? (IRInsn*)defOf.get((Hashable*)nx) : (IRInsn*)0;
+            if (step == (IRInsn*)0 || step.ops().count() != (u32)2)
+                return ppNo("ppOutlinePar 9");
+            bool addI = step.op().equals(String.withCString("Add"));
+            if (!addI && !ppRedOp(step.op()))
+                return ppNo("ppOutlinePar 10");
+            IROperand* s0 = (IROperand*)step.ops().get((u32)0);
+            IROperand* s1 = (IROperand*)step.ops().get((u32)1);
+            IROperand* other = (IROperand*)0;
+            if (s0.kind() == (u8)OPK_USE && s0.val() == phi.res())
+                other = s1;
+            else if (s1.kind() == (u8)OPK_USE && s1.val() == phi.res())
+                other = s0;
+            if (other == (IROperand*)0)
+                return ppNo("ppOutlinePar 11");
+            if (iv == (IRInsn*)0 && addI && c0.val() == phi.res() && ppConstOne(other, defOf))
+                {
+                iv = phi;
+                continue;
+                }
+            if (other.kind() == (u8)OPK_USE && ppDependsOn(other.val(), phi.res(), defOf, (u32)0))
+                return ppNo("ppOutlinePar 12");
+            reds.add((Object*)phi);
+            redOps.add((Object*)step.op());
+            }
+        if (iv == (IRInsn*)0 || !ppIntType(iv.res().ty()))
+            return ppNo("ppOutlinePar 13");
+        // The bound is from outside the loop, or constants the loop recomputes
+        // (a `#define` bound, widened in the header), which the call site
+        // computes again.
+        IRValue* bound = c1.val();
+        IRBlock* bb = (IRBlock*)defBlk.get((Hashable*)bound);
+        bool remat = bb != (IRBlock*)0 && hasBlock(body, bb);
+        if (remat && !ppConstChain(bound, defOf, (u32)0))
+            return ppNo("ppOutlinePar 14");
+        // Only accumulators are read after the loop.
+        for (u32 i = (u32)0; i < liveOuts.count(); i = i + (u32)1)
+            {
+            bool isRed = false;
+            for (u32 r = (u32)0; r < reds.count() && !isRed; r = r + (u32)1)
+                isRed = ((IRInsn*)reds.get(r)).res() == (IRValue*)liveOuts.get(i);
+            if (!isRed)
+                return ppNo("ppOutlinePar 15");
+            }
+        // The memory: stores to [i] only, a stored array read only at [i].
+        if (!ppParMemoryOk(fn, L, iv.res(), defOf, defBlk))
+            return ppNo("ppOutlinePar 16");
+
+        // ── the record: the live-ins, then the accumulators, 8 bytes each ──
+        u32 nIn = liveIns.count();
+        u32 bytes = (nIn + reds.count()) * (u32)8;
+        if (bytes == (u32)0)
+            bytes = (u32)8;
+        _ppOutN = _ppOutN + (u32)1;
+        String* stem = String.withFormat("ParOut$%u", _ppOutN);
+        String* objT = makeF.ret();
+        String* u8p = String.withCString("Ptr(U8, unbanked)");
+        String* ivT = iv.res().ty();
+
+        // ── body(self, ctx, lo, hi) ──
+        IRFunc* B = new IRFunc();
+        B.setName(String.withFormat("%s$body", stem.cString()));
+        if (fn.hasDbg())
+            B.setDbg(fn.dbgFile(), fn.dbgLine(), fn.dbgCol());
+        IRValue* bSelf = new IRValue(objT);
+        IRValue* bCtx = new IRValue(u8p);
+        IRValue* bLo = new IRValue(String.withCString("I64"));
+        IRValue* bHi = new IRValue(String.withCString("I64"));
+        IRValue* bMem = new IRValue(String.withCString("Mem"));
+        B.addParam(bSelf);
+        B.addParam(bCtx);
+        B.addParam(bLo);
+        B.addParam(bHi);
+        B.addParam(bMem);
+        IRBlock* entry = new IRBlock(String.withCString("bb_entry"));
+        Map* remap = new Map();
+        IRValue* mcur = bMem;
+        for (u32 i = (u32)0; i < nIn; i = i + (u32)1)
+            {
+            IRValue* v = (IRValue*)liveIns.get(i);
+            IRValue* ld = ppCtxLoad(entry, bCtx, i * (u32)8, v.ty(), mcur);
+            mcur = _ppLastMem;
+            remap.set((Hashable*)v, (Object*)IROperand.useVal(ld));
+            }
+        Array* redInit = new Array();
+        for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
+            {
+            IRInsn* r = (IRInsn*)reds.get(i);
+            redInit.add((Object*)ppCtxLoad(entry, bCtx, (nIn + i) * (u32)8, r.res().ty(), mcur));
+            mcur = _ppLastMem;
+            }
+        remap.set((Hashable*)memIn, (Object*)IROperand.useVal(mcur));
+        IRValue* loT = ppConvertTo(entry, bLo, ivT);
+        IRValue* hiT = ppConvertTo(entry, bHi, ivT);
+        Map* blockMap = new Map();
+        IRBlock* exitB = new IRBlock(String.withCString("bb_out_exit"));
+        blockMap.set((Hashable*)E, (Object*)exitB);
+        Array* ordered = new Array();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* ob = (IRBlock*)fn.blocks().get(b);
+            if (!hasBlock(body, ob))
+                continue;
+            ordered.add((Object*)ob);
+            blockMap.set((Hashable*)ob, (Object*)new IRBlock(ob.name()));
+            Array* all = ppAllInsns(ob);
+            for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)all.get(i);
+                if (n.res() != (IRValue*)0)
+                    remap.set((Hashable*)n.res(), (Object*)IROperand.useVal(new IRValue(n.res().ty())));
+                if (n.memRes() != (IRValue*)0)
+                    remap.set((Hashable*)n.memRes(), (Object*)IROperand.useVal(new IRValue(n.memRes().ty())));
+                }
+            }
+        IRInsn* br = IRInsn.with(String.withCString("Branch"));
+        br.add(IROperand.block((IRBlock*)blockMap.get((Hashable*)H)));
+        entry.setTerm(br);
+        B.addBlock(entry);
+        for (u32 b = (u32)0; b < ordered.count(); b = b + (u32)1)
+            {
+            IRBlock* ob = (IRBlock*)ordered.get(b);
+            IRBlock* nb = (IRBlock*)blockMap.get((Hashable*)ob);
+            for (u32 i = (u32)0; i < ob.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* phi = (IRInsn*)ob.phis().get(i);
+                IRInsn* c = cloneInsn(remap, blockMap, phi);
+                // The edge from the preheader: from the entry, with the chunk's
+                // start for the induction variable and the record's value for
+                // an accumulator.
+                IRValue* first = (IRValue*)0;
+                if (phi == iv)
+                    first = loT;
+                else if (reds.indexOf((Object*)phi) != (u32)$FFFFFFFF)
+                    first = (IRValue*)redInit.get(reds.indexOf((Object*)phi));
+                for (u32 k = (u32)0; k + (u32)1 < c.ops().count(); k = k + (u32)2)
+                    {
+                    IROperand* o = (IROperand*)c.ops().get(k);
+                    if (o.kind() == (u8)OPK_BLOCK && o.blk() == P)
+                        {
+                        c.ops().set(k, (Object*)IROperand.block(entry));
+                        if (first != (IRValue*)0)
+                            c.ops().set(k + (u32)1, (Object*)IROperand.useVal(first));
+                        }
+                    }
+                nb.addPhi(c);
+                }
+            for (u32 i = (u32)0; i < ob.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)ob.insns().get(i);
+                IRInsn* c = cloneInsn(remap, blockMap, n);
+                // The exit test against the chunk's end, always `<`.
+                if (n == cmp)
+                    {
+                    c.ops().set((u32)1, (Object*)IROperand.useVal(hiT));
+                    if (le)
+                        c.setPred(pred.equals(String.withCString("SLE")) ? String.withCString("SLT") : String.withCString("ULT"));
+                    }
+                nb.add(c);
+                }
+            nb.setTerm(cloneInsn(remap, blockMap, ob.term()));
+            B.addBlock(nb);
+            }
+        // At the exit, the accumulators back into the record.
+        IRValue* mx = memLast != (IRValue*)0 ? remappedValue(remap, memLast) : mcur;
+        for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
+            {
+            IRInsn* r = (IRInsn*)reds.get(i);
+            mx = ppCtxStore(exitB, bCtx, (nIn + i) * (u32)8, remappedValue(remap, r.res()), mx);
+            }
+        IRInsn* ret = IRInsn.with(String.withCString("Return"));
+        ret.add(IROperand.useVal(mx));
+        exitB.setTerm(ret);
+        B.addBlock(exitB);
+
+        // ── resetCtx(self, ctx) and mergeCtx(self, into, from) ──
+        IRFunc* R = new IRFunc();
+        R.setName(String.withFormat("%s$resetCtx", stem.cString()));
+        IRValue* rSelf = new IRValue(objT);
+        IRValue* rCtx = new IRValue(u8p);
+        IRValue* rMem = new IRValue(String.withCString("Mem"));
+        R.addParam(rSelf);
+        R.addParam(rCtx);
+        R.addParam(rMem);
+        IRBlock* rb = new IRBlock(String.withCString("bb_entry"));
+        IRValue* rm = rMem;
+        for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
+            {
+            String* ty = ((IRInsn*)reds.get(i)).res().ty();
+            IRValue* z = ppIdentity(rb, ty, (String*)redOps.get(i));
+            rm = ppCtxStore(rb, rCtx, (nIn + i) * (u32)8, z, rm);
+            }
+        IRInsn* rr = IRInsn.with(String.withCString("Return"));
+        rr.add(IROperand.useVal(rm));
+        rb.setTerm(rr);
+        R.addBlock(rb);
+        IRFunc* G = new IRFunc();
+        G.setName(String.withFormat("%s$mergeCtx", stem.cString()));
+        IRValue* gSelf = new IRValue(objT);
+        IRValue* gInto = new IRValue(u8p);
+        IRValue* gFrom = new IRValue(u8p);
+        IRValue* gMem = new IRValue(String.withCString("Mem"));
+        G.addParam(gSelf);
+        G.addParam(gInto);
+        G.addParam(gFrom);
+        G.addParam(gMem);
+        IRBlock* gb = new IRBlock(String.withCString("bb_entry"));
+        IRValue* gm = gMem;
+        for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
+            {
+            String* ty = ((IRInsn*)reds.get(i)).res().ty();
+            u32 off = (nIn + i) * (u32)8;
+            IRValue* a = ppCtxLoad(gb, gInto, off, ty, gm);
+            gm = _ppLastMem;
+            IRValue* b2 = ppCtxLoad(gb, gFrom, off, ty, gm);
+            gm = _ppLastMem;
+            IRValue* sum = new IRValue(ty);
+            IRInsn* add = IRInsn.with((String*)redOps.get(i));
+            add.setRes(sum);
+            add.add(IROperand.useVal(a));
+            add.add(IROperand.useVal(b2));
+            gb.add(add);
+            gm = ppCtxStore(gb, gInto, off, sum, gm);
+            }
+        IRInsn* gr = IRInsn.with(String.withCString("Return"));
+        gr.add(IROperand.useVal(gm));
+        gb.setTerm(gr);
+        G.addBlock(gb);
+
+        // ── the class: ParFnChunk's vtable with the three replaced (they are
+        // dispatched: Par.xc's ParFnChunkBase overrides them too) ──
+        Array* slots = new Array();
+        for (u32 k = (u32)0; k < baseVt.slots().count(); k = k + (u32)1)
+            {
+            String* s = (String*)baseVt.slots().get(k);
+            if (k == (u32)0)
+                s = String.withCString("ParFnChunk$vtbl");
+            else if (s.equals(String.withCString("ParFnChunk$body")))
+                s = B.name();
+            else if (s.equals(String.withCString("ParFnChunk$resetCtx")))
+                s = R.name();
+            else if (s.equals(String.withCString("ParFnChunk$mergeCtx")))
+                s = G.name();
+            slots.add((Object*)s);
+            }
+        String* vtName = String.withFormat("%s$vtbl", stem.cString());
+        m.addSym(IRSymbol.vtable(vtName, slots));
+        m.addFunc(B);
+        m.addSym(IRSymbol.func(B.name(), String.withFormat("(%s, %s, I64, I64) -> Void", objT.cString(), u8p.cString()), false, false));
+        m.addFunc(R);
+        m.addSym(IRSymbol.func(R.name(), String.withFormat("(%s, %s) -> Void", objT.cString(), u8p.cString()), false, false));
+        m.addFunc(G);
+        m.addSym(IRSymbol.func(G.name(), String.withFormat("(%s, %s, %s) -> Void", objT.cString(), u8p.cString(), u8p.cString()), false, false));
+        // The block's name, as the learned device choices key it: file:line.
+        String* label = fn.name();
+        if (at != (IRInsn*)0)
+            {
+            String* path = (String*)IRDbg.files().get(at.dbgFile());
+            if (path != (String*)0)
+                label = String.withFormat("%s:%ld", path.lastPathComponent().cString(), (i32)at.dbgLine());
+            }
+        Array* nameBytes = new Array();
+        for (u32 i = (u32)0; i < label.byteLength(); i = i + (u32)1)
+            nameBytes.add((Object*)Number.with((u32)label.byteAt(i)));
+        nameBytes.add((Object*)Number.with((u32)0));
+        String* strName = String.withFormat("%s$name", stem.cString());
+        m.addSym(IRSymbol.stringLit(strName, nameBytes));
+
+        // ── the call site, in the preheader ──
+        IRValue* nm = ppEmit(P, String.withCString("AddrOf"), u8p, IROperand.sym(strName), (IROperand*)0, (IROperand*)0);
+        IRValue* nb2 = ppEmit(P, String.withCString("Const"), String.withCString("U32"), IROperand.immI((i64)bytes, String.withCString("U32")), (IROperand*)0, (IROperand*)0);
+        IRValue* pm = memIn;
+        IRValue* obj = ppCall(P, String.withCString("ParFnChunk$make"), objT, IROperand.useVal(nb2), IROperand.useVal(nm), (IROperand*)0, pm);
+        pm = _ppLastMem;
+        IRValue* isa = ppEmit(P, String.withCString("FieldAddr"), String.withCString("Ptr(Ptr(Void, unbanked), xt_data)"),
+                              IROperand.useVal(obj), IROperand.immI((i64)0, String.withCString("U8")), (IROperand*)0);
+        IRValue* vt = ppEmit(P, String.withCString("AddrOf"), String.withCString("Ptr(Void, unbanked)"), IROperand.sym(vtName), (IROperand*)0, (IROperand*)0);
+        pm = ppStore(P, isa, vt, pm);
+        IRValue* ctx = ppCall(P, String.withCString("ParFnChunk$ctx"), u8p, IROperand.useVal(obj), (IROperand*)0, (IROperand*)0, pm);
+        pm = _ppLastMem;
+        for (u32 i = (u32)0; i < nIn; i = i + (u32)1)
+            pm = ppCtxStore(P, ctx, i * (u32)8, (IRValue*)liveIns.get(i), pm);
+        for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
+            {
+            IRInsn* r = (IRInsn*)reds.get(i);
+            pm = ppCtxStore(P, ctx, (nIn + i) * (u32)8, ppPhiIn(r, L, false), pm);
+            }
+        IRValue* lo64 = ppConvertTo(P, ppPhiIn(iv, L, false), String.withCString("I64"));
+        IRValue* hi64 = ppConvertTo(P, remat ? ppRemat(P, bound, defOf) : bound, String.withCString("I64"));
+        if (le)
+            hi64 = ppEmit(P, String.withCString("Add"), String.withCString("I64"), IROperand.useVal(hi64),
+                          IROperand.immI((i64)1, String.withCString("I64")), (IROperand*)0);
+        IRInsn* runC = IRInsn.with(String.withCString("Call"));
+        runC.setCc(String.withCString("CallConv::Standard"));
+        if (at != (IRInsn*)0)
+            runC.copyDbg(at);
+        runC.add(IROperand.sym(String.withCString("Par$run")));
+        runC.add(IROperand.useVal(obj));
+        runC.add(IROperand.useVal(lo64));
+        runC.add(IROperand.useVal(hi64));
+        runC.add(IROperand.useVal(pm));
+        pm = new IRValue(String.withCString("Mem"));
+        runC.setMemRes(pm);
+        P.add(runC);
+        Array* results = new Array();
+        for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
+            {
+            IRInsn* r = (IRInsn*)reds.get(i);
+            results.add((Object*)ppCtxLoad(P, ctx, (nIn + i) * (u32)8, r.res().ty(), pm));
+            pm = _ppLastMem;
+            }
+        IRInsn* rel = IRInsn.with(String.withCString("Release"));
+        rel.add(IROperand.useVal(obj));
+        rel.add(IROperand.useVal(pm));
+        pm = new IRValue(String.withCString("Mem"));
+        rel.setMemRes(pm);
+        P.add(rel);
+        IRInsn* jump = IRInsn.with(String.withCString("Branch"));
+        jump.copyDbg(P.term());
+        jump.add(IROperand.block(E));
+        P.setTerm(jump);
+        for (u32 i = (u32)0; i < E.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* phi = (IRInsn*)E.phis().get(i);
+            for (u32 k = (u32)0; k < phi.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)phi.ops().get(k);
+                if (o.kind() == (u8)OPK_BLOCK && hasBlock(body, o.blk()))
+                    phi.ops().set(k, (Object*)IROperand.block(P));
+                }
+            }
+        for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
+            rewriteUsesTo(fn, ((IRInsn*)reds.get(i)).res(), IROperand.useVal((IRValue*)results.get(i)));
+        if (memLast != (IRValue*)0)
+            rewriteUsesTo(fn, memLast, IROperand.useVal(pm));
+        Array* keep = new Array();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            if (!hasBlock(body, (IRBlock*)fn.blocks().get(b)))
+                keep.add(fn.blocks().get(b));
+        fn.setBlocks(keep);
+        return true;
+        }
+
+    // XC_PAR_OUTLINE_TRACE: say which test a loop failed (always false).
+    bool ppNo(u8* why)
+        {
+        if (_xt_getenv("XC_PAR_OUTLINE_TRACE") != (u8*)0)
+            Stdio.error(String.withFormat("outline: %s: not a block: %s\n", _ppWhere.cString(), why));
+        return false;
+        }
+
+    // XC_PAR_OUTLINE_TRACE: say what became of a loop that was outlined.
+    void ppTrace(u8* how)
+        {
+        if (_xt_getenv("XC_PAR_OUTLINE_TRACE") != (u8*)0)
+            Stdio.error(String.withFormat("outline: %s: outlined, %s\n", _ppWhere.cString(), how));
+        }
+    String* _ppWhere;      // the loop being tried, for the trace
+    IRValue* _ppLastMem;   // the memory token the last ppCtxLoad / ppCall produced
+
+    static bool ppIntType(String* t)
+        {
+        return t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
+            || t.equals(String.withCString("I64")) || t.equals(String.withCString("U64"))
+            || t.equals(String.withCString("I16")) || t.equals(String.withCString("U16"));
+        }
+
+    // Whether v is made of constants alone: Const, through widenings,
+    // narrowings and reinterpretations.
+    bool ppConstChain(IRValue* v, Map* defOf, u32 depth)
+        {
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
+        if (d == (IRInsn*)0 || depth > (u32)8)
+            return false;
+        if (d.op().equals(String.withCString("Const")))
+            return true;
+        if ((d.op().equals(String.withCString("ZExt")) || d.op().equals(String.withCString("SExt"))
+             || d.op().equals(String.withCString("Trunc")) || d.op().equals(String.withCString("Bitcast"))) && d.ops().count() == (u32)1
+            && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_USE)
+            return ppConstChain(((IROperand*)d.ops().get((u32)0)).val(), defOf, depth + (u32)1);
+        return false;
+        }
+
+    // A copy of a constant chain (ppConstChain), appended to b.
+    IRValue* ppRemat(IRBlock* b, IRValue* v, Map* defOf)
+        {
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
+        IRInsn* c = IRInsn.with(d.op());
+        IRValue* r = new IRValue(v.ty());
+        c.setRes(r);
+        if (d.op().equals(String.withCString("Const")))
+            c.add((IROperand*)d.ops().get((u32)0));
+        else
+            c.add(IROperand.useVal(ppRemat(b, ((IROperand*)d.ops().get((u32)0)).val(), defOf)));
+        b.add(c);
+        return r;
+        }
+
+    bool ppConstOne(IROperand* o, Map* defOf)
+        {
+        if (o.kind() == (u8)OPK_IMMI)
+            return o.imm() == (i64)1;
+        if (o.kind() != (u8)OPK_USE)
+            return false;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)o.val());
+        // Through a widening: a range loop steps by `1` made a U8 and widened.
+        while (d != (IRInsn*)0 && (d.op().equals(String.withCString("ZExt")) || d.op().equals(String.withCString("SExt"))
+                                  || d.op().equals(String.withCString("Bitcast")))
+               && d.ops().count() == (u32)1 && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_USE)
+            d = (IRInsn*)defOf.get((Hashable*)((IROperand*)d.ops().get((u32)0)).val());
+        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("Const")) || d.ops().count() != (u32)1)
+            return false;
+        IROperand* c = (IROperand*)d.ops().get((u32)0);
+        return c.kind() == (u8)OPK_IMMI && c.imm() == (i64)1;
+        }
+
+    // One instruction with a result, appended to b.
+    IRValue* ppEmit(IRBlock* b, String* op, String* ty, IROperand* a0, IROperand* a1, IROperand* a2)
+        {
+        IRInsn* n = IRInsn.with(op);
+        IRValue* r = new IRValue(ty);
+        n.setRes(r);
+        if (a0 != (IROperand*)0) n.add(a0);
+        if (a1 != (IROperand*)0) n.add(a1);
+        if (a2 != (IROperand*)0) n.add(a2);
+        b.add(n);
+        return r;
+        }
+
+    IRValue* ppStore(IRBlock* b, IRValue* addr, IRValue* v, IRValue* mem)
+        {
+        IRInsn* st = IRInsn.with(String.withCString("Store"));
+        st.add(IROperand.useVal(addr));
+        st.add(IROperand.useVal(v));
+        st.add(IROperand.useVal(mem));
+        IRValue* mo = new IRValue(String.withCString("Mem"));
+        st.setMemRes(mo);
+        b.add(st);
+        return mo;
+        }
+
+    // The address of the record's slot at byte `off`, typed as a T*.
+    IRValue* ppSlot(IRBlock* b, IRValue* ctx, u32 off, String* ty)
+        {
+        IRValue* p = ctx;
+        if (off != (u32)0)
+            {
+            // An ElementAddr's index is a value, never an immediate.
+            IRValue* ix = ppEmit(b, String.withCString("Const"), String.withCString("I64"),
+                                 IROperand.immI((i64)off, String.withCString("I64")), (IROperand*)0, (IROperand*)0);
+            p = ppEmit(b, String.withCString("ElementAddr"), String.withCString("Ptr(U8, unbanked)"),
+                       IROperand.useVal(ctx), IROperand.useVal(ix), (IROperand*)0);
+            }
+        return ppEmit(b, String.withCString("Bitcast"), String.withFormat("Ptr(%s, unbanked)", ty.cString()),
+                      IROperand.useVal(p), (IROperand*)0, (IROperand*)0);
+        }
+
+    IRValue* ppCtxLoad(IRBlock* b, IRValue* ctx, u32 off, String* ty, IRValue* mem)
+        {
+        IRValue* p = ppSlot(b, ctx, off, ty);
+        IRInsn* ld = IRInsn.with(String.withCString("Load"));
+        IRValue* r = new IRValue(ty);
+        _ppLastMem = new IRValue(String.withCString("Mem"));
+        ld.setRes(r);
+        ld.setMemRes(_ppLastMem);
+        ld.add(IROperand.useVal(p));
+        ld.add(IROperand.useVal(mem));
+        b.add(ld);
+        return r;
+        }
+
+    IRValue* ppCtxStore(IRBlock* b, IRValue* ctx, u32 off, IRValue* v, IRValue* mem)
+        {
+        return ppStore(b, ppSlot(b, ctx, off, v.ty()), v, mem);
+        }
+
+    IRValue* ppCall(IRBlock* b, String* callee, String* ty, IROperand* a0, IROperand* a1, IROperand* a2, IRValue* mem)
+        {
+        IRInsn* c = IRInsn.with(String.withCString("Call"));
+        c.setCc(String.withCString("CallConv::Standard"));
+        c.add(IROperand.sym(callee));
+        if (a0 != (IROperand*)0) c.add(a0);
+        if (a1 != (IROperand*)0) c.add(a1);
+        if (a2 != (IROperand*)0) c.add(a2);
+        c.add(IROperand.useVal(mem));
+        IRValue* r = new IRValue(ty);
+        c.setRes(r);
+        _ppLastMem = new IRValue(String.withCString("Mem"));
+        c.setMemRes(_ppLastMem);
+        b.add(c);
+        return r;
+        }
+
+    // v as an integer of type `to` (widened by its own signedness, or cut).
+    IRValue* ppConvertTo(IRBlock* b, IRValue* v, String* to)
+        {
+        u32 have = irWidth(v.ty());
+        u32 want = irWidth(to);
+        if (have == want)
+            {
+            if (v.ty().equals(to))
+                return v;
+            return ppEmit(b, String.withCString("Bitcast"), to, IROperand.useVal(v), (IROperand*)0, (IROperand*)0);
+            }
+        String* op = have > want ? String.withCString("Trunc")
+                   : v.ty().hasPrefix(String.withCString("U")) ? String.withCString("ZExt") : String.withCString("SExt");
+        return ppEmit(b, op, to, IROperand.useVal(v), (IROperand*)0, (IROperand*)0);
+        }
+
+    // The identity of a reduction operator: 0 for + ^ |, 1 for *, all ones for &.
+    IRValue* ppIdentity(IRBlock* b, String* ty, String* op)
+        {
+        if (op.equals(String.withCString("FMul")))
+            return ppEmit(b, String.withCString("Const"), ty, IROperand.immF(String.withCString("3ff0000000000000"), ty), (IROperand*)0, (IROperand*)0);
+        if (op.equals(String.withCString("Mul")))
+            return ppEmit(b, String.withCString("Const"), ty, IROperand.immI((i64)1, ty), (IROperand*)0, (IROperand*)0);
+        if (op.equals(String.withCString("And")))
+            return ppEmit(b, String.withCString("Const"), ty, IROperand.immI((i64)0 - (i64)1, ty), (IROperand*)0, (IROperand*)0);
+        return ppZero(b, ty);
+        }
+
+    IRValue* ppZero(IRBlock* b, String* ty)
+        {
+        if (ty.hasPrefix(String.withCString("F")))
+            return ppEmit(b, String.withCString("Const"), ty, IROperand.immF(String.withCString("0000000000000000"), ty), (IROperand*)0, (IROperand*)0);
+        return ppEmit(b, String.withCString("Const"), ty, IROperand.immI((i64)0, ty), (IROperand*)0, (IROperand*)0);
+        }
+
+    // The base an address is an element of, as a key: "@sym" for a global
+    // (AddrOf), the value itself otherwise; and whether the index is the
+    // induction variable (through a widening or narrowing of it).
+    String* _ppKey;
+    bool _ppAtIv;
+    bool ppAddrKey(IRValue* addr, IRValue* iv, Map* defOf)
+        {
+        _ppKey = (String*)0;
+        _ppAtIv = false;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)addr);
+        IRValue* base = addr;
+        if (d != (IRInsn*)0 && d.op().equals(String.withCString("ElementAddr")) && d.ops().count() == (u32)2)
+            {
+            IROperand* bo = (IROperand*)d.ops().get((u32)0);
+            IROperand* io = (IROperand*)d.ops().get((u32)1);
+            if (bo.kind() != (u8)OPK_USE)
+                return false;
+            base = bo.val();
+            if (io.kind() == (u8)OPK_USE)
+                {
+                IRValue* x = io.val();
+                IRInsn* xd = (IRInsn*)defOf.get((Hashable*)x);
+                if (xd != (IRInsn*)0 && (xd.op().equals(String.withCString("SExt")) || xd.op().equals(String.withCString("ZExt")))
+                    && xd.ops().count() == (u32)1 && ((IROperand*)xd.ops().get((u32)0)).kind() == (u8)OPK_USE)
+                    x = ((IROperand*)xd.ops().get((u32)0)).val();
+                _ppAtIv = x == iv;
+                }
+            }
+        IRInsn* bd = (IRInsn*)defOf.get((Hashable*)base);
+        if (bd != (IRInsn*)0 && bd.op().equals(String.withCString("AddrOf")) && bd.ops().count() == (u32)1
+            && ((IROperand*)bd.ops().get((u32)0)).kind() == (u8)OPK_SYM)
+            _ppKey = String.withFormat("@%s", ((IROperand*)bd.ops().get((u32)0)).name().cString());
+        else
+            _ppKey = String.withFormat("%%%u", base.seq());
+        return true;
+        }
+
+    bool ppParMemoryOk(IRFunc* fn, LRCLoop* L, IRValue* iv, Map* defOf, Map* defBlk)
+        {
+        Array* storedKeys = new Array();
+        Array* loadKeys = new Array();
+        Array* loadAtIv = new Array();
+        Array* body = L.body();
+        for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
+            {
+            IRBlock* blk = (IRBlock*)body.get(b);
+            for (u32 i = (u32)0; i < blk.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)blk.insns().get(i);
+                String* op = n.op();
+                if (op.equals(String.withCString("Store")))
+                    {
+                    if (!ppAddrKey(((IROperand*)n.ops().get((u32)0)).val(), iv, defOf) || !_ppAtIv)
+                        return ppNo("ppParMemoryOk 1");
+                    if (storedKeys.indexOf((Object*)_ppKey) == (u32)$FFFFFFFF)
+                        {
+                        bool seen = false;
+                        for (u32 k = (u32)0; k < storedKeys.count() && !seen; k = k + (u32)1)
+                            seen = ((String*)storedKeys.get(k)).equals(_ppKey);
+                        if (!seen)
+                            storedKeys.add((Object*)_ppKey);
+                        }
+                    }
+                else if (op.equals(String.withCString("Load")))
+                    {
+                    if (!ppAddrKey(((IROperand*)n.ops().get((u32)0)).val(), iv, defOf))
+                        return ppNo("ppParMemoryOk 2");
+                    loadKeys.add((Object*)_ppKey);
+                    loadAtIv.add((Object*)Number.with(_ppAtIv ? (u32)1 : (u32)0));
+                    }
+                else if (lrcWritesMemory(op) || op.hasPrefix(String.withCString("Load")))
+                    return ppNo("ppParMemoryOk 3");
+                }
+            }
+        // A stored array is read only at [i]; and a stored pointer is not
+        // known apart from any other array the loop touches.
+        for (u32 s = (u32)0; s < storedKeys.count(); s = s + (u32)1)
+            {
+            String* sk = (String*)storedKeys.get(s);
+            for (u32 l = (u32)0; l < loadKeys.count(); l = l + (u32)1)
+                {
+                String* lk = (String*)loadKeys.get(l);
+                if (lk.equals(sk))
+                    {
+                    if (((Number*)loadAtIv.get(l)).asU32() == (u32)0)
+                        return ppNo("ppParMemoryOk 4");
+                    }
+                else if (!(sk.hasPrefix(String.withCString("@")) && lk.hasPrefix(String.withCString("@"))))
+                    return ppNo("ppParMemoryOk 5");
+                }
+            for (u32 o = (u32)0; o < storedKeys.count(); o = o + (u32)1)
+                {
+                String* ok = (String*)storedKeys.get(o);
+                if (o != s && !(sk.hasPrefix(String.withCString("@")) && ok.hasPrefix(String.withCString("@"))))
+                    return ppNo("ppParMemoryOk 6");
+                }
+            }
         return true;
         }
 
