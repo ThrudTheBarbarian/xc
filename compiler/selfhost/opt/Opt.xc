@@ -23,6 +23,10 @@
 // to be readable from an installed compiler and not only from the harness.
 u8* _xt_getenv(u8* name);
 
+// The lowering's kernel printers, for the blocks the IR outliner makes (stage
+// 4); 0 when nothing set it.
+ParKernelHook* gParKernelHook;
+
 // A sentinel count from lrcCountLiveOut: a value OTHER than the accumulator
 // escapes the outer loop, so the collapse is unsafe. Distinct from 0, which
 // means the accumulator itself is dead afterwards (nothing to rescale).
@@ -1074,6 +1078,33 @@ class OptProfile
         }
     }
 
+    // IR outlining, stage 4: the kernels. The printers live in the lowering,
+    // which has printed every block it made by the time the optimiser runs;
+    // for the blocks the outliner makes it hands the optimiser this hook (a
+    // subclass of it) and the optimiser calls it with them.
+    class ParOutBlock
+    {
+    String* _cls;       // ParImpl$o<n>: the name the printers know the block by
+    Array* _fieldTypes; // the record's types from field 3 on: the captures, then the accumulators
+
+    static ParOutBlock* with(String* cls, Array* types)
+        {
+        ParOutBlock* b = new ParOutBlock();
+        b._cls = cls;
+        b._fieldTypes = types;
+        return b;
+        }
+    String* cls(void)        { return _cls; }
+    Array* fieldTypes(void)  { return _fieldTypes; }
+    }
+
+    class ParKernelHook
+    {
+    void print(IRModule* m, Array* blocks)
+        {
+        }
+    }
+
     class Opt
     {
     u32 _level;
@@ -1342,8 +1373,11 @@ class OptProfile
             parProposeReport(m);
         if (ppOutline())
             {
+            _ppMade = new Array();
             parProposeOutline(m);
             _ppOutlined = true;
+            if (_ppMade.count() > (u32)0 && gParKernelHook != (ParKernelHook*)0)
+                gParKernelHook.print(m, _ppMade);
             // XC_PAR_OUTLINE_TRACE=ir: the functions the outliner made or cut.
             u8* tr = _xt_getenv("XC_PAR_OUTLINE_TRACE");
             if (tr != (u8*)0 && String.withCString(tr).equals(String.withCString("ir")))
@@ -1353,6 +1387,10 @@ class OptProfile
                     if (fn.name().hasPrefix(String.withCString("ParOut$")) || fn.name().equals(String.withCString("main")))
                         Stdio.error(fn.text());
                     }
+            // XC_PAR_OUTLINE_DUMP=<path>: the whole module after outlining.
+            u8* dp = _xt_getenv("XC_PAR_OUTLINE_DUMP");
+            if (dp != (u8*)0)
+                Files.writeText(String.withCString(dp), m.text());
             }
         if (stopHere(String.withCString("mem2reg")))
             return;
@@ -1613,6 +1651,8 @@ class OptProfile
             seed(m, reachable, work, String.withCString("ParFnChunk$ctx"));
             seed(m, reachable, work, String.withCString("Par$run"));
             seed(m, reachable, work, String.withCString("ParFnChunk$runOn"));
+            seed(m, reachable, work, String.withCString("parSameName"));
+            seed(m, reachable, work, String.withCString("Par$spanOf"));
             }
 
         // Library mode: seed EVERY function — the module IS the API surface.
@@ -8965,6 +9005,7 @@ class OptProfile
     // returns. Stage 2's serial half: several results, and the merge of
     // partial results, come with the block's class (stage 3).
     u32 _ppOutN;
+    Array* _ppMade;     // ParOutBlock@: the blocks made, for the kernel printers
     bool _ppOutlined;   // the outliner has run (the runtime need not be kept for it)
 
     void parProposeOutline(IRModule* m)
@@ -9388,6 +9429,174 @@ class OptProfile
         return String.withFormat("%s:%s", isMax ? "Max" : "Min", kind.cString());
         }
 
+    // gpuGlobal(self, name) (addr) or gpuGlobalBytes(self, name): for each
+    // global the loop names, by name (parSameName), its address or its size;
+    // else 0 / -1. A chain of Selects. Its name.
+    String* ppGpuGlobals(IRModule* m, String* stem, String* objT, IRFunc* run, bool addr)
+        {
+        String* u8p = String.withCString("Ptr(U8, unbanked)");
+        String* vp = String.withCString("Ptr(Void, unbanked)");
+        String* i64t = String.withCString("I64");
+        String* rt = addr ? vp : i64t;
+        IRFunc* F = new IRFunc();
+        F.setName(String.withFormat(addr ? "%s$gpuGlobal" : "%s$gpuGlobalBytes", stem.cString()));
+        F.setRet(rt);
+        IRValue* sv = new IRValue(objT);
+        IRValue* nm = new IRValue(u8p);
+        IRValue* mem = new IRValue(String.withCString("Mem"));
+        F.addParam(sv);
+        F.addParam(nm);
+        F.addParam(mem);
+        IRBlock* b = new IRBlock(String.withCString("bb_entry"));
+        IRValue* acc = (IRValue*)0;
+        if (addr)
+            {
+            IRValue* z = ppEmit(b, String.withCString("Const"), i64t, IROperand.immI((i64)0, i64t), (IROperand*)0, (IROperand*)0);
+            acc = ppEmit(b, String.withCString("IntToPtr"), vp, IROperand.useVal(z), (IROperand*)0, (IROperand*)0);
+            }
+        else
+            acc = ppEmit(b, String.withCString("Const"), i64t, IROperand.immI((i64)0 - (i64)1, i64t), (IROperand*)0, (IROperand*)0);
+        Array* seen = new Array();
+        IRValue* mm = mem;
+        for (u32 bb = (u32)0; bb < run.blocks().count(); bb = bb + (u32)1)
+            {
+            IRBlock* blk = (IRBlock*)run.blocks().get(bb);
+            for (u32 i = (u32)0; i < blk.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)blk.insns().get(i);
+                if (!n.op().equals(String.withCString("AddrOf")) || n.ops().count() != (u32)1)
+                    continue;
+                IROperand* o = (IROperand*)n.ops().get((u32)0);
+                if (o.kind() != (u8)OPK_SYM)
+                    continue;
+                IRSymbol* g = symNamed(m, o.name());
+                if (g == (IRSymbol*)0 || g.kind() != (u8)SYM_DATAGLOBAL)
+                    continue;
+                bool dup = false;
+                for (u32 k = (u32)0; k < seen.count() && !dup; k = k + (u32)1)
+                    dup = ((String*)seen.get(k)).equals(o.name());
+                if (dup)
+                    continue;
+                seen.add((Object*)o.name());
+                Array* nb = new Array();
+                for (u32 k = (u32)0; k < o.name().byteLength(); k = k + (u32)1)
+                    nb.add((Object*)Number.with((u32)o.name().byteAt(k)));
+                nb.add((Object*)Number.with((u32)0));
+                String* sn = String.withFormat("%s$g%u%s", stem.cString(), seen.count(), addr ? "a" : "b");
+                m.addSym(IRSymbol.stringLit(sn, nb));
+                IRValue* lit = ppEmit(b, String.withCString("AddrOf"), u8p, IROperand.sym(sn), (IROperand*)0, (IROperand*)0);
+                IRValue* same = ppCall(b, String.withCString("parSameName"), String.withCString("Bool"),
+                                       IROperand.useVal(nm), IROperand.useVal(lit), (IROperand*)0, mm);
+                mm = _ppLastMem;
+                IRValue* v = (IRValue*)0;
+                if (addr)
+                    {
+                    IRValue* ga = ppEmit(b, String.withCString("AddrOf"), n.res().ty(), IROperand.sym(o.name()), (IROperand*)0, (IROperand*)0);
+                    v = ppEmit(b, String.withCString("Bitcast"), vp, IROperand.useVal(ga), (IROperand*)0, (IROperand*)0);
+                    }
+                else
+                    {
+                    u32 size = (u32)0;
+                    String* gt = g.globalTy();
+                    if (gt != (String*)0 && gt.hasPrefix(String.withCString("Agg(")))
+                        {
+                        u32 id = (u32)0;
+                        for (u32 k = (u32)4; k < gt.byteLength() && gt.byteAt(k) >= (u8)'0' && gt.byteAt(k) <= (u8)'9'; k = k + (u32)1)
+                            id = id * (u32)10 + (u32)(gt.byteAt(k) - (u8)'0');
+                        if (id < m.layouts().count())
+                            size = ((IRLayout*)m.layouts().get(id)).size();
+                        }
+                    else
+                        size = irWidth(gt);
+                    v = ppEmit(b, String.withCString("Const"), i64t, IROperand.immI((i64)size, i64t), (IROperand*)0, (IROperand*)0);
+                    }
+                acc = ppEmit(b, String.withCString("Select"), rt, IROperand.useVal(same), IROperand.useVal(v), IROperand.useVal(acc));
+                }
+            }
+        IRInsn* r = IRInsn.with(String.withCString("Return"));
+        r.add(IROperand.useVal(acc));
+        r.add(IROperand.useVal(mm));
+        b.setTerm(r);
+        F.addBlock(b);
+        m.addFunc(F);
+        m.addSym(IRSymbol.func(F.name(), String.withFormat("(%s, %s) -> %s", objT.cString(), u8p.cString(), rt.cString()), false, false));
+        return F.name();
+        }
+
+    // gpuLength(self, k): for record field k a pointer capture, the bytes from
+    // it to the end of its heap block (Par.spanOf, as a generated block's);
+    // -1 for any other field. Its name.
+    String* ppGpuLength(IRModule* m, String* stem, String* objT, String* recT, Array* liveIns)
+        {
+        String* i64t = String.withCString("I64");
+        String* u8p = String.withCString("Ptr(U8, unbanked)");
+        IRFunc* F = new IRFunc();
+        F.setName(String.withFormat("%s$gpuLength", stem.cString()));
+        F.setRet(i64t);
+        IRValue* sv = new IRValue(objT);
+        IRValue* k = new IRValue(String.withCString("I32"));
+        IRValue* mem = new IRValue(String.withCString("Mem"));
+        F.addParam(sv);
+        F.addParam(k);
+        F.addParam(mem);
+        IRBlock* b = new IRBlock(String.withCString("bb_entry"));
+        IRValue* acc = ppEmit(b, String.withCString("Const"), i64t, IROperand.immI((i64)0 - (i64)1, i64t), (IROperand*)0, (IROperand*)0);
+        IRValue* mm = mem;
+        IRValue* rec = (IRValue*)0;
+        for (u32 i = (u32)0; i < liveIns.count(); i = i + (u32)1)
+            {
+            String* t = ((IRValue*)liveIns.get(i)).ty();
+            if (!t.hasPrefix(String.withCString("Ptr(")))
+                continue;
+            u32 comma = t.indexOfByte((u8)',');
+            u32 es = comma == (u32)$FFFFFFFF ? (u32)0 : irWidth(t.substringBytes((u32)4, comma - (u32)4));
+            if (es == (u32)0)
+                continue;
+            if (rec == (IRValue*)0)
+                {
+                IRValue* cb = ppCall(b, String.withCString("ParFnChunk$ctx"), u8p, IROperand.useVal(sv), (IROperand*)0, (IROperand*)0, mm);
+                mm = _ppLastMem;
+                rec = ppEmit(b, String.withCString("Bitcast"), recT, IROperand.useVal(cb), (IROperand*)0, (IROperand*)0);
+                }
+            IRValue* p = ppFieldLoad(b, rec, (u32)3 + i, t, mm);
+            mm = _ppLastMem;
+            IRValue* pv = ppEmit(b, String.withCString("Bitcast"), String.withCString("Ptr(Void, unbanked)"), IROperand.useVal(p), (IROperand*)0, (IROperand*)0);
+            IRValue* esv = ppEmit(b, String.withCString("Const"), i64t, IROperand.immI((i64)es, i64t), (IROperand*)0, (IROperand*)0);
+            IRValue* no = ppEmit(b, String.withCString("Const"), String.withCString("Bool"), IROperand.immI((i64)0, String.withCString("Bool")), (IROperand*)0, (IROperand*)0);
+            IRValue* sp = ppCall(b, String.withCString("Par$spanOf"), i64t, IROperand.useVal(pv), IROperand.useVal(esv), IROperand.useVal(no), mm);
+            mm = _ppLastMem;
+            IRValue* fk = ppEmit(b, String.withCString("Const"), String.withCString("I32"), IROperand.immI((i64)((u32)3 + i), String.withCString("I32")), (IROperand*)0, (IROperand*)0);
+            IRValue* is = ppCmp(b, String.withCString("EQ"), k, fk);
+            acc = ppEmit(b, String.withCString("Select"), i64t, IROperand.useVal(is), IROperand.useVal(sp), IROperand.useVal(acc));
+            }
+        IRInsn* r = IRInsn.with(String.withCString("Return"));
+        r.add(IROperand.useVal(acc));
+        r.add(IROperand.useVal(mm));
+        b.setTerm(r);
+        F.addBlock(b);
+        m.addFunc(F);
+        m.addSym(IRSymbol.func(F.name(), String.withFormat("(%s, I32) -> I64", objT.cString()), false, false));
+        return F.name();
+        }
+
+    // A reduction's operator as the parser's placeholder words spell it.
+    static String* ppRedWord(String* op)
+        {
+        if (op.equals(String.withCString("Add")) || op.equals(String.withCString("FAdd")))
+            return String.withCString("+");
+        if (op.equals(String.withCString("Mul")) || op.equals(String.withCString("FMul")))
+            return String.withCString("*");
+        if (op.equals(String.withCString("Xor")))
+            return String.withCString("^");
+        if (op.equals(String.withCString("Or")))
+            return String.withCString("|");
+        if (op.equals(String.withCString("And")))
+            return String.withCString("&");
+        if (op.hasPrefix(String.withCString("Min:")))
+            return String.withCString("min");
+        return String.withCString("max");
+        }
+
     // The operators an accumulator may be updated by: associative and
     // commutative, so partial results fold in any order (FAdd and FMul only
     // reach here under :goal(speed), which Propose's verdict checks).
@@ -9559,7 +9768,9 @@ class OptProfile
 
         // ── run(rec): the loop over [rec.lo, rec.hi) ──
         IRFunc* B = new IRFunc();
-        B.setName(String.withFormat("%s$run", stem.cString()));
+        // ParImpl$o<n>$run: the name the kernel printers find a block by.
+        String* pcls = String.withFormat("ParImpl$o%u", _ppOutN);
+        B.setName(String.withFormat("%s$run", pcls.cString()));
         if (fn.hasDbg())
             B.setDbg(fn.dbgFile(), fn.dbgLine(), fn.dbgCol());
         IRValue* bRec = new IRValue(recT);
@@ -9776,6 +9987,44 @@ class OptProfile
         gb.setTerm(gr);
         G.addBlock(gb);
 
+        // gpuSource(): the placeholder the printers fill: the tag, `auto;`,
+        // and each reduction as `<field>=<op>;`, as the parser writes them.
+        String* tagText = String.withFormat("__XC_PAR_FAST_o%u__auto;", _ppOutN);
+        for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
+            tagText.append(String.withFormat("%u=%s;", (u32)3 + nIn + i, ppRedWord((String*)redOps.get(i)).cString()));
+        Array* tagBytes = new Array();
+        for (u32 i = (u32)0; i < tagText.byteLength(); i = i + (u32)1)
+            tagBytes.add((Object*)Number.with((u32)tagText.byteAt(i)));
+        tagBytes.add((Object*)Number.with((u32)0));
+        String* srcSym = String.withFormat("%s$src", stem.cString());
+        m.addSym(IRSymbol.stringLit(srcSym, tagBytes));
+        IRFunc* S = new IRFunc();
+        S.setName(String.withFormat("%s$gpuSource", stem.cString()));
+        S.setRet(u8p);
+        IRValue* sSelf = new IRValue(objT);
+        IRValue* sMem = new IRValue(String.withCString("Mem"));
+        S.addParam(sSelf);
+        S.addParam(sMem);
+        IRBlock* sb = new IRBlock(String.withCString("bb_entry"));
+        IRValue* sp = ppEmit(sb, String.withCString("AddrOf"), u8p, IROperand.sym(srcSym), (IROperand*)0, (IROperand*)0);
+        IRInsn* sr = IRInsn.with(String.withCString("Return"));
+        sr.add(IROperand.useVal(sp));
+        sr.add(IROperand.useVal(sMem));
+        sb.setTerm(sr);
+        S.addBlock(sb);
+        m.addFunc(S);
+        m.addSym(IRSymbol.func(S.name(), String.withFormat("(%s) -> %s", objT.cString(), u8p.cString()), false, false));
+        // gpuGlobal / gpuGlobalBytes (the globals the loop names) and
+        // gpuLength (the bytes behind each pointer capture): what a GPU binds.
+        String* gName = ppGpuGlobals(m, stem, objT, B, true);
+        String* gbName = ppGpuGlobals(m, stem, objT, B, false);
+        String* glName = ppGpuLength(m, stem, objT, recT, liveIns);
+        Array* ftys = new Array();
+        for (u32 i = (u32)0; i < nIn; i = i + (u32)1)
+            ftys.add((Object*)((IRValue*)liveIns.get(i)).ty());
+        for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
+            ftys.add((Object*)((IRInsn*)reds.get(i)).res().ty());
+        _ppMade.add((Object*)ParOutBlock.with(pcls, ftys));
         // ── the class: ParFnChunk's vtable with the three replaced (they are
         // dispatched: Par.xc's ParFnChunkBase overrides them too) ──
         Array* slots = new Array();
@@ -9790,6 +10039,14 @@ class OptProfile
                 s = R.name();
             else if (s.equals(String.withCString("ParFnChunk$mergeCtx")))
                 s = G.name();
+            else if (s.equals(String.withCString("ParChunk$gpuSource")) || s.equals(String.withCString("ParFnChunk$gpuSource")))
+                s = S.name();
+            else if (s.equals(String.withCString("ParChunk$gpuGlobal")))
+                s = gName;
+            else if (s.equals(String.withCString("ParChunk$gpuGlobalBytes")))
+                s = gbName;
+            else if (s.equals(String.withCString("ParChunk$gpuLength")))
+                s = glName;
             slots.add((Object*)s);
             }
         String* vtName = String.withFormat("%s$vtbl", stem.cString());

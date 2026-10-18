@@ -54,7 +54,7 @@ class ParWebGpu
         ParLayout* l = ParDevice.layout(proto, src, lo, hi);
         if (l == (ParLayout*)0)
             return false;
-        u8* obj = (u8*)(pointer)proto;
+        u8* obj = proto.objBytes();
         u32 nb = (u32)2 + l.nbuf + l.nglob + l.nred;
         if (nb > (u32)50)
             return ParDevice.cpu("it uses more buffers than its WebGPU version can bind");

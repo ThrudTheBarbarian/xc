@@ -887,6 +887,10 @@ class FeOptions
                                                   o.classTable(), pp.stdImports()));
 
         Lower* lower = Lower.make();
+        // IR outlining (XC_PAR_PROPOSE=outline): the optimiser's blocks get
+        // their kernels from this lowering's printers.
+        if (Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
+            gParKernelHook = (ParKernelHook*)LowerKernelHook.with(lower);
         lower.setPointerWidth(pointerWidthOf(o));
         lower.setCountWidth(countWidthOf(o));
         lower.setAlignCaps(fieldAlignCapOf(o), tailAlignCapOf(o));

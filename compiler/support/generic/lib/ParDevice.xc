@@ -250,7 +250,9 @@ class ParLayout : Object
         if (nred == (u32)0)
             return;
         ParChunk* c = proto.copyChunk();
-        u8* cb = (u8*)(pointer)c;
+        // The block's bytes (its object, for a generated block; its record,
+        // for one the IR outliner made).
+        u8* cb = c.objBytes();
         for (i64 t = (i64)0; t < count; t = t + (i64)1)
             {
             for (u32 i = (u32)0; i < nred; i = i + (u32)1)
@@ -1645,7 +1647,7 @@ class ParDevice
         {
         if (src == (u8*)0 || src[0] != (u8)'/')
             return true;
-        u8* obj = (u8*)(pointer)proto;
+        u8* obj = proto.objBytes();
         u8* gx = "guardx=";
         for (u32 at = (u32)0; src[at] != (u8)0 && src[at] != (u8)10; at = at + (u32)1)
             {
@@ -1730,7 +1732,7 @@ class ParDevice
         {
         if (src == (u8*)0 || src[0] == (u8)0)
             return false;
-        u8* obj = (u8*)(pointer)proto;
+        u8* obj = proto.objBytes();
         pointer ptr[16];
         i64 len[16];
         bool ro[16];

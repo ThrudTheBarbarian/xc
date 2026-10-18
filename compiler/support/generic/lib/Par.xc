@@ -176,6 +176,16 @@ class ParFnChunk : ParChunk
         {
         return _name;
         }
+    // A GPU takes the block as its record: the captures, as a generated
+    // block's object holds them, and lo and hi where a generated block's
+    // object has them (bytes 8 and 16, ParChunk's fields).
+    u8* objBytes(void)
+        {
+        u8* r = _ctx.bytes();
+        *(i64*)(pointer)(r + 8) = lo;
+        *(i64*)(pointer)(r + 16) = hi;
+        return r;
+        }
     u8* ctx(void)
         {
         return _ctx.bytes();
@@ -210,6 +220,22 @@ class ParFnChunkBase : ParFnChunk
     {
     void body(u8* ctx, i64 from, i64 to)
         {
+        }
+    u8* gpuSource(void)
+        {
+        return "";
+        }
+    pointer gpuGlobal(u8* name)
+        {
+        return (pointer)0;
+        }
+    i64 gpuGlobalBytes(u8* name)
+        {
+        return (i64)0 - (i64)1;
+        }
+    i64 gpuLength(i32 k)
+        {
+        return (i64)0 - (i64)1;
         }
     void resetCtx(u8* ctx)
         {

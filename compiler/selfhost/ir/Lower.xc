@@ -22336,181 +22336,236 @@ class ClassInfo
             IRFunc* f = (IRFunc*)_m.funcs().get(i);
             if (!f.name().hasPrefix(String.withCString("ParImpl$")) || !f.name().hasSuffix(String.withCString("$run")))
                 continue;
-            IRFunc* kf = (IRFunc*)kfns.get((Hashable*)f.name());
-            String* n = f.name().substringBytes((u32)8, f.name().byteLength() - (u32)12);
-            String* tag = String.withCString("__XC_PAR_MSL_");
-            tag.append(n);
-            tag.appendCString("__");
-            // Which placeholder the block has says whether its goal is speed.
-            String* fastTag = String.withCString("__XC_PAR_FAST_");
-            fastTag.append(n);
-            fastTag.appendCString("__");
-            _mFast = false;
-            for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
-                if (parSymHasPrefix((IRSymbol*)_m.syms().get(j), fastTag))
-                    _mFast = true;
-            if (_mFast) tag = fastTag;
-            // The block's reductions, after the tag: `<field>=<op>;` each (bug 645).
-            _mRedOps = (Map*)0;
-            _mConst = new Map();
-            _mGridW = (i64)0;
-            _mGridH = (i64)0;
-            for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
+            parFillBlock(f, (IRFunc*)kfns.get((Hashable*)f.name()), kmod);
+            }
+        }
+
+    // The IR outliner's blocks (stage 4): each made after lowering, in the
+    // optimiser, on SSA, as a record read by field. Each gets the class
+    // declaration a parser block would have had (ParChunk's, then a field per
+    // capture and accumulator), so the printers name its fields, and is
+    // printed from itself: it is already in the optimised shape.
+    void parFillOutlined(IRModule* m, Array* blocks)
+        {
+        IRModule* saved = _m;
+        _m = m;
+        // The printers may change what they print (they are given a copy of
+        // the module for the parser's blocks): they print from a copy here
+        // too, and write into the real module's placeholders.
+        String* printed = m.text();
+        IRModule* copy = IrParser.parseText(printed, new IrParser());
+        if (copy == (IRModule*)0)
+            {
+            _m = saved;
+            return;
+            }
+        for (u32 i = (u32)0; i < blocks.count(); i = i + (u32)1)
+            {
+            ParOutBlock* b = (ParOutBlock*)blocks.get(i);
+            Node* d = Node.withName((u16)nkClassDecl, b.cls());
+            d.setOp(String.withCString("ParChunk"));
+            for (u32 k = (u32)0; k < b.fieldTypes().count(); k = k + (u32)1)
                 {
-                IRSymbol* ls = (IRSymbol*)_m.syms().get(j);
-                if (!parSymHasPrefix(ls, tag))
-                    continue;
-                u32 end = ls.bytes().count();
-                while (end > tag.byteLength() && ((Number*)ls.bytes().get(end - (u32)1)).asU32() == (u32)0)
-                    end = end - (u32)1;
-                if (end <= tag.byteLength())
-                    continue;
-                _mRedOps = new Map();
-                String* key = new String();
-                String* val = new String();
-                bool inVal = false;
-                for (u32 q = tag.byteLength(); q < end; q = q + (u32)1)
+                Node* v = Node.withName((u16)nkVariableDecl, String.withFormat("c%u", k));
+                v.setOp((String*)b.fieldTypes().get(k));
+                d.add(v);
+                }
+            _classDecls.set((Hashable*)b.cls(), (Object*)d);
+            IRFunc* f = (IRFunc*)0;
+            String* rn = String.withFormat("%s$run", b.cls().cString());
+            for (u32 k = (u32)0; k < copy.funcs().count() && f == (IRFunc*)0; k = k + (u32)1)
+                if (((IRFunc*)copy.funcs().get(k)).name().equals(rn))
+                    f = (IRFunc*)copy.funcs().get(k);
+            if (f != (IRFunc*)0)
+                {
+                _mWhy = (String*)0;
+                parFillBlock(f, f, copy);
+                // XC_PAR_OUTLINE_TRACE: why a block has no GPU form.
+                if (_mWhy != (String*)0 && Platform.env(String.withCString("XC_PAR_OUTLINE_TRACE")).byteLength() > (u32)0)
+                    Stdio.error(String.withFormat("outline: %s: no GPU form: %s\n", b.cls().cString(), _mWhy.cString()));
+                }
+            }
+        _m = saved;
+        }
+
+    // One block's kernels, printed and written into its placeholder: every
+    // block of the parser's (parFillSources), and each the IR outliner makes
+    // after lowering (parFillOutlined).
+    void parFillBlock(IRFunc* f, IRFunc* kf, IRModule* kmod)
+        {
+        String* n = f.name().substringBytes((u32)8, f.name().byteLength() - (u32)12);
+        String* tag = String.withCString("__XC_PAR_MSL_");
+        tag.append(n);
+        tag.appendCString("__");
+        // Which placeholder the block has says whether its goal is speed.
+        String* fastTag = String.withCString("__XC_PAR_FAST_");
+        fastTag.append(n);
+        fastTag.appendCString("__");
+        _mFast = false;
+        for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
+            if (parSymHasPrefix((IRSymbol*)_m.syms().get(j), fastTag))
+                _mFast = true;
+        if (_mFast) tag = fastTag;
+        // The block's reductions, after the tag: `<field>=<op>;` each (bug 645).
+        _mRedOps = (Map*)0;
+        _mConst = new Map();
+        _mGridW = (i64)0;
+        _mGridH = (i64)0;
+        for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
+            {
+            IRSymbol* ls = (IRSymbol*)_m.syms().get(j);
+            if (!parSymHasPrefix(ls, tag))
+                continue;
+            u32 end = ls.bytes().count();
+            while (end > tag.byteLength() && ((Number*)ls.bytes().get(end - (u32)1)).asU32() == (u32)0)
+                end = end - (u32)1;
+            if (end <= tag.byteLength())
+                continue;
+            _mRedOps = new Map();
+            String* key = new String();
+            String* val = new String();
+            bool inVal = false;
+            for (u32 q = tag.byteLength(); q < end; q = q + (u32)1)
+                {
+                u8 c = (u8)((Number*)ls.bytes().get(q)).asU32();
+                if (c == (u8)';')
                     {
-                    u8 c = (u8)((Number*)ls.bytes().get(q)).asU32();
-                    if (c == (u8)';')
-                        {
-                        if (key.byteLength() > (u32)0 && inVal && key.equals(String.withCString("gw")))
-                            _mGridW = parWordI64(val);
-                        else if (key.byteLength() > (u32)0 && inVal && key.equals(String.withCString("gh")))
-                            _mGridH = parWordI64(val);
-                        else if (key.byteLength() > (u32)0 && inVal)
-                            _mRedOps.set((Hashable*)key, (Object*)val);
-                        // `c<field>`: a :constant capture (storage hints).
-                        else if (key.byteLength() > (u32)1 && !inVal && key.byteAt((u32)0) == (u8)'c')
-                            _mConst.set((Hashable*)key.substringFromByte((u32)1), (Object*)String.withCString("1"));
-                        key = new String();
-                        val = new String();
-                        inVal = false;
-                        }
-                    else if (c == (u8)'=' && !inVal)
-                        inVal = true;
-                    else if (inVal)
-                        val.appendByte(c);
-                    else
-                        key.appendByte(c);
+                    if (key.byteLength() > (u32)0 && inVal && key.equals(String.withCString("gw")))
+                        _mGridW = parWordI64(val);
+                    else if (key.byteLength() > (u32)0 && inVal && key.equals(String.withCString("gh")))
+                        _mGridH = parWordI64(val);
+                    else if (key.byteLength() > (u32)0 && inVal)
+                        _mRedOps.set((Hashable*)key, (Object*)val);
+                    // `c<field>`: a :constant capture (storage hints).
+                    else if (key.byteLength() > (u32)1 && !inVal && key.byteAt((u32)0) == (u8)'c')
+                        _mConst.set((Hashable*)key.substringFromByte((u32)1), (Object*)String.withCString("1"));
+                    key = new String();
+                    val = new String();
+                    inVal = false;
                     }
+                else if (c == (u8)'=' && !inVal)
+                    inVal = true;
+                else if (inVal)
+                    val.appendByte(c);
+                else
+                    key.appendByte(c);
                 }
-            // The buffers' footprints, as words on the header line every
-            // printer writes (step 1 of par-tiles-and-devices.md).
-            _parExtraMeta = parFootprintWords(f, parIvarNames(f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4)));
-            _parExtraMeta.append(parCostWords(f));
-            _parExtraMeta.append(parGuardWords(f, (Array*)_parGuards.get((Hashable*)f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4))));
-            _parExtraMeta.append(parMergeWords(f));
-            String* msl = (String*)0;
-            // A SPIR-V module is bytes (it holds NULs): it goes in as they are.
-            Array* kernelBytes = (Array*)0;
-            // The forms this target asked for (every one under
-            // -fpar-kernels=all, so a worker on another machine finds its
-            // own: ParRemote.xc), in a fixed order — the MSL, PTX and WGSL
-            // text sections, each ended by a NUL with the next on a 4-byte
-            // boundary, and the SPIR-V module last. Each header names its
-            // kind, and a runtime finds its section by that
-            // (ParDevice.sectionOf). A block with no form at all stays on the
-            // CPU, with the first printer's reason. As the reference.
-            String* mslWhy = (String*)0;
-            String* ptxWhy = (String*)0;
-            String* wgslWhy = (String*)0;
-            String* spvWhy = (String*)0;
-            // A demoted auto block gets the serial marker instead of a kernel:
-            // Par.run then runs it on one thread, and no GPU sees it.
-            String* fcls = f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4);
-            bool serialBlock = _parSerial != (Set*)0 && _parSerial.contains((Hashable*)fcls);
-            _mWhy = (String*)0;
-            String* mslText = _parMetal && !serialBlock ? parMslK(f, kf, kmod) : (String*)0;
-            mslWhy = _mWhy;
-            _mWhy = (String*)0;
-            String* ptx = _parPTX && !serialBlock ? parPtxK(f, kf, kmod) : (String*)0;
-            ptxWhy = _mWhy;
-            _mWhy = (String*)0;
-            String* wgsl = _parWGSL && !serialBlock ? parWgslK(f, kf, kmod) : (String*)0;
-            wgslWhy = _mWhy;
-            _mWhy = (String*)0;
-            Array* spv = _parSPIRV && !serialBlock ? parSpirvK(f, kf, kmod) : (Array*)0;
-            spvWhy = _mWhy;
-            Array* all = new Array();
-            if (serialBlock)
-                {
-                String* marker = String.withCString("// xcpar serial\n");
-                for (u32 q = (u32)0; q < marker.byteLength(); q = q + (u32)1)
-                    all.add((Object*)Number.withU8(marker.byteAt(q)));
-                }
-            for (u32 t = (u32)0; t < (u32)3; t = t + (u32)1)
-                {
-                String* text = t == (u32)0 ? mslText : t == (u32)1 ? ptx : wgsl;
-                if (text == (String*)0 || text.byteLength() == (u32)0)
-                    continue;
-                while (all.count() % (u32)4 != (u32)0)
-                    all.add((Object*)Number.withU8((u8)0));
-                for (u32 q = (u32)0; q < text.byteLength(); q = q + (u32)1)
-                    all.add((Object*)Number.withU8(text.byteAt(q)));
+            }
+        // The buffers' footprints, as words on the header line every
+        // printer writes (step 1 of par-tiles-and-devices.md).
+        _parExtraMeta = parFootprintWords(f, parIvarNames(f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4)));
+        _parExtraMeta.append(parCostWords(f));
+        _parExtraMeta.append(parGuardWords(f, (Array*)_parGuards.get((Hashable*)f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4))));
+        _parExtraMeta.append(parMergeWords(f));
+        String* msl = (String*)0;
+        // A SPIR-V module is bytes (it holds NULs): it goes in as they are.
+        Array* kernelBytes = (Array*)0;
+        // The forms this target asked for (every one under
+        // -fpar-kernels=all, so a worker on another machine finds its
+        // own: ParRemote.xc), in a fixed order — the MSL, PTX and WGSL
+        // text sections, each ended by a NUL with the next on a 4-byte
+        // boundary, and the SPIR-V module last. Each header names its
+        // kind, and a runtime finds its section by that
+        // (ParDevice.sectionOf). A block with no form at all stays on the
+        // CPU, with the first printer's reason. As the reference.
+        String* mslWhy = (String*)0;
+        String* ptxWhy = (String*)0;
+        String* wgslWhy = (String*)0;
+        String* spvWhy = (String*)0;
+        // A demoted auto block gets the serial marker instead of a kernel:
+        // Par.run then runs it on one thread, and no GPU sees it.
+        String* fcls = f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4);
+        bool serialBlock = _parSerial != (Set*)0 && _parSerial.contains((Hashable*)fcls);
+        _mWhy = (String*)0;
+        String* mslText = _parMetal && !serialBlock ? parMslK(f, kf, kmod) : (String*)0;
+        mslWhy = _mWhy;
+        _mWhy = (String*)0;
+        String* ptx = _parPTX && !serialBlock ? parPtxK(f, kf, kmod) : (String*)0;
+        ptxWhy = _mWhy;
+        _mWhy = (String*)0;
+        String* wgsl = _parWGSL && !serialBlock ? parWgslK(f, kf, kmod) : (String*)0;
+        wgslWhy = _mWhy;
+        _mWhy = (String*)0;
+        Array* spv = _parSPIRV && !serialBlock ? parSpirvK(f, kf, kmod) : (Array*)0;
+        spvWhy = _mWhy;
+        Array* all = new Array();
+        if (serialBlock)
+            {
+            String* marker = String.withCString("// xcpar serial\n");
+            for (u32 q = (u32)0; q < marker.byteLength(); q = q + (u32)1)
+                all.add((Object*)Number.withU8(marker.byteAt(q)));
+            }
+        for (u32 t = (u32)0; t < (u32)3; t = t + (u32)1)
+            {
+            String* text = t == (u32)0 ? mslText : t == (u32)1 ? ptx : wgsl;
+            if (text == (String*)0 || text.byteLength() == (u32)0)
+                continue;
+            while (all.count() % (u32)4 != (u32)0)
                 all.add((Object*)Number.withU8((u8)0));
-                }
-            if (spv != (Array*)0)
+            for (u32 q = (u32)0; q < text.byteLength(); q = q + (u32)1)
+                all.add((Object*)Number.withU8(text.byteAt(q)));
+            all.add((Object*)Number.withU8((u8)0));
+            }
+        if (spv != (Array*)0)
+            {
+            while (all.count() % (u32)4 != (u32)0)
+                all.add((Object*)Number.withU8((u8)0));
+            for (u32 q = (u32)0; q < spv.count(); q = q + (u32)1)
+                all.add(spv.get(q));
+            }
+        // A block the run must check and no form to carry the check runs
+        // serially (as the reference).
+        Array* fg = (Array*)_parGuards.get((Hashable*)fcls);
+        if (all.count() == (u32)0 && fg != (Array*)0 && fg.count() > (u32)0)
+            {
+            String* marker2 = String.withCString("// xcpar serial\n");
+            for (u32 q = (u32)0; q < marker2.byteLength(); q = q + (u32)1)
+                all.add((Object*)Number.withU8(marker2.byteAt(q)));
+            }
+        if (all.count() > (u32)0)
+            {
+            kernelBytes = all;
+            msl = String.withCString("");
+            }
+        else
+            _mWhy = _parMetal ? mslWhy : _parPTX ? ptxWhy : _parSPIRV ? spvWhy : wgslWhy;
+        if (msl == (String*)0 && (_parMetal || _parPTX || _parSPIRV || _parWGSL))
+            {
+            // On a target with a GPU, say why this block stays on the CPU.
+            String* w = String.withCString("this 'par' block runs on the CPU only, because ");
+            w.append(_mWhy != (String*)0 ? _mWhy : String.withCString("its GPU version cannot express something it uses yet"));
+            String* cls = f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4);
+            warnAtNode(String.withCString("par-gpu"), w, (Node*)_classDecls.get((Hashable*)cls));
+            }
+        if (msl == (String*)0)
+            msl = String.withCString("");
+        for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
+            {
+            IRSymbol* sym = (IRSymbol*)_m.syms().get(j);
+            if (sym.kind() != (u8)SYM_STRINGLIT || sym.bytes() == (Array*)0 || sym.bytes().count() < tag.byteLength())
+                continue;
+            bool same = true;
+            for (u32 q = (u32)0; q < tag.byteLength() && same; q = q + (u32)1)
+                if (((Number*)sym.bytes().get(q)).asU32() != (u32)tag.byteAt(q))
+                    same = false;
+            if (!same)
+                continue;
+            Array* nb = new Array();
+            if (kernelBytes != (Array*)0)
                 {
-                while (all.count() % (u32)4 != (u32)0)
-                    all.add((Object*)Number.withU8((u8)0));
-                for (u32 q = (u32)0; q < spv.count(); q = q + (u32)1)
-                    all.add(spv.get(q));
+                for (u32 q = (u32)0; q < kernelBytes.count(); q = q + (u32)1)
+                    nb.add(kernelBytes.get(q));
                 }
-            // A block the run must check and no form to carry the check runs
-            // serially (as the reference).
-            Array* fg = (Array*)_parGuards.get((Hashable*)fcls);
-            if (all.count() == (u32)0 && fg != (Array*)0 && fg.count() > (u32)0)
-                {
-                String* marker2 = String.withCString("// xcpar serial\n");
-                for (u32 q = (u32)0; q < marker2.byteLength(); q = q + (u32)1)
-                    all.add((Object*)Number.withU8(marker2.byteAt(q)));
-                }
-            if (all.count() > (u32)0)
-                {
-                kernelBytes = all;
-                msl = String.withCString("");
-                }
-            else
-                _mWhy = _parMetal ? mslWhy : _parPTX ? ptxWhy : _parSPIRV ? spvWhy : wgslWhy;
-            if (msl == (String*)0 && (_parMetal || _parPTX || _parSPIRV || _parWGSL))
-                {
-                // On a target with a GPU, say why this block stays on the CPU.
-                String* w = String.withCString("this 'par' block runs on the CPU only, because ");
-                w.append(_mWhy != (String*)0 ? _mWhy : String.withCString("its GPU version cannot express something it uses yet"));
-                String* cls = f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4);
-                warnAtNode(String.withCString("par-gpu"), w, (Node*)_classDecls.get((Hashable*)cls));
-                }
-            if (msl == (String*)0)
-                msl = String.withCString("");
-            for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
-                {
-                IRSymbol* sym = (IRSymbol*)_m.syms().get(j);
-                if (sym.kind() != (u8)SYM_STRINGLIT || sym.bytes() == (Array*)0 || sym.bytes().count() < tag.byteLength())
-                    continue;
-                bool same = true;
-                for (u32 q = (u32)0; q < tag.byteLength() && same; q = q + (u32)1)
-                    if (((Number*)sym.bytes().get(q)).asU32() != (u32)tag.byteAt(q))
-                        same = false;
-                if (!same)
-                    continue;
-                Array* nb = new Array();
-                if (kernelBytes != (Array*)0)
-                    {
-                    for (u32 q = (u32)0; q < kernelBytes.count(); q = q + (u32)1)
-                        nb.add(kernelBytes.get(q));
-                    }
-                for (u32 q = (u32)0; q < msl.byteLength(); q = q + (u32)1)
-                    nb.add((Object*)Number.withU8(msl.byteAt(q)));
-                // Keep the terminator the literal had — its trailing NULs only:
-                // the reductions listed after the tag (bug 645) are not the kernel's.
-                u32 z = sym.bytes().count();
-                while (z > tag.byteLength() && ((Number*)sym.bytes().get(z - (u32)1)).asU32() == (u32)0)
-                    z = z - (u32)1;
-                for (u32 q = z; q < sym.bytes().count(); q = q + (u32)1)
-                    nb.add(sym.bytes().get(q));
-                sym.setBytes(nb);
-                }
+            for (u32 q = (u32)0; q < msl.byteLength(); q = q + (u32)1)
+                nb.add((Object*)Number.withU8(msl.byteAt(q)));
+            // Keep the terminator the literal had — its trailing NULs only:
+            // the reductions listed after the tag (bug 645) are not the kernel's.
+            u32 z = sym.bytes().count();
+            while (z > tag.byteLength() && ((Number*)sym.bytes().get(z - (u32)1)).asU32() == (u32)0)
+                z = z - (u32)1;
+            for (u32 q = z; q < sym.bytes().count(); q = q + (u32)1)
+                nb.add(sym.bytes().get(q));
+            sym.setBytes(nb);
             }
         }
 
@@ -23713,5 +23768,22 @@ class ClassInfo
         if (_failed)
             return;
         finishFunction();
+        }
+    }
+
+// The lowering's printers, for the blocks the IR outliner makes in the
+// optimiser (it holds the lowering, so the lowering outlives the front end).
+class LowerKernelHook : ParKernelHook
+    {
+    Lower* _l;
+    static LowerKernelHook* with(Lower* l)
+        {
+        LowerKernelHook* h = new LowerKernelHook();
+        h._l = l;
+        return h;
+        }
+    void print(IRModule* m, Array* blocks)
+        {
+        _l.parFillOutlined(m, blocks);
         }
     }

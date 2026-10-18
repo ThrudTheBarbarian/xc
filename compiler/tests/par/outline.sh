@@ -135,5 +135,41 @@ if [ -x "$W/gout" ]; then
         [ "$(XC_PAR_THREADS=$t "$W/gout" | tr '\n' ' ')" = "2 1999998 0 0 " ] || { echo "FAIL outline: the overlap program with $t threads: $(XC_PAR_THREADS=$t "$W/gout" | tr '\n' ' ')"; fail=1; }
     done
 fi
+# Stage 4: an outlined block has kernels, so a GPU runs it (forced with
+# XC_PAR=gpu): the same answers as the CPU. On macOS (Metal) the run must be
+# the GPU's; elsewhere a host without one runs it on the CPU.
+cat > "$W/k.xc" <<'XC'
+#import "Stdio.xc"
+#import "Par.xc"
+#define N 1000000
+u32 a[N];
+i64 c[N];
+i32 main(void)
+    {
+    for (u32 i in 0..N)
+        a[i] = i * (u32)2654435761;
+    i64 s = 0;
+    for (i32 i = 0; i < N; i++)
+        {
+        c[i] = (i64)(a[i] >> (u32)7) * 3;
+        s = s + c[i];
+        }
+    i64 t = 0;
+    for (i32 i = 0; i <= 100; i++)
+        t = t + i;
+    Stdio.printf("%ld %ld %ld\n", s, t, c[N - 1]);
+    return 0;
+    }
+XC
+XC_PAR_PROPOSE=outline "$XC" -q -O3 -H . "$W/k.xc" -o "$W/kout" >"$W/b6" 2>&1 || { echo "FAIL outline: the kernel program"; head -3 "$W/b6"; fail=1; }
+if [ -x "$W/kout" ]; then
+    kcpu=$(XC_PAR=cpu "$W/kout")
+    XC_PAR=gpu XC_PAR_REPORT=1 "$W/kout" > "$W/kgpu.err" 2>&1
+    kgpu=$(grep -v '^par:' "$W/kgpu.err")
+    [ "$kgpu" = "$kcpu" ] || { echo "FAIL outline: the blocks on the GPU give $kgpu, on the CPU $kcpu"; fail=1; }
+    if [ "$(uname -s)" = Darwin ] && ! grep -q 'items on the GPU' "$W/kgpu.err"; then
+        echo "FAIL outline: no outlined block ran on the GPU"; grep 'par:' "$W/kgpu.err" | head -4; fail=1
+    fi
+fi
 [ $fail = 0 ] && echo "--- outline: pass ---" || echo "--- outline: FAIL ---"
 exit $fail
