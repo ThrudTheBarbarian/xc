@@ -1273,6 +1273,14 @@ class OptProfile
 
     // The pipeline, in the original's order. Each pass is gated on the level it
     // declares (`minOptLevel`) and, where it has one, on a profile knob.
+    // Whether an environment variable is set to something (the host call
+    // gives "" for one that is not set at all).
+    static bool ppEnvSet(u8* name)
+        {
+        u8* e = _xt_getenv(name);
+        return e != (u8*)0 && e[0] != (u8)0;
+        }
+
     static bool ppReport(void)
         {
         u8* e = _xt_getenv("XC_PAR_PROPOSE");
@@ -1389,7 +1397,7 @@ class OptProfile
                     }
             // XC_PAR_OUTLINE_DUMP=<path>: the whole module after outlining.
             u8* dp = _xt_getenv("XC_PAR_OUTLINE_DUMP");
-            if (dp != (u8*)0)
+            if (ppEnvSet("XC_PAR_OUTLINE_DUMP"))
                 Files.writeText(String.withCString(dp), m.text());
             }
         if (stopHere(String.withCString("mem2reg")))
@@ -9745,6 +9753,40 @@ class OptProfile
         if (!ppParMemoryOk(fn, L, iv.res(), defOf, defBlk))
             return ppNo("ppOutlinePar 16");
 
+        // The captures: the live-ins the body reads, less those only the
+        // counter's start and the exit test read (lo and hi stand for them).
+        Array* ins = new Array();
+        for (u32 i = (u32)0; i < liveIns.count(); i = i + (u32)1)
+            {
+            IRValue* v = (IRValue*)liveIns.get(i);
+            bool used = false;
+            for (u32 bb2 = (u32)0; bb2 < body.count() && !used; bb2 = bb2 + (u32)1)
+                {
+                Array* all = ppAllInsns((IRBlock*)body.get(bb2));
+                for (u32 q = (u32)0; q < all.count() && !used; q = q + (u32)1)
+                    {
+                    IRInsn* n = (IRInsn*)all.get(q);
+                    for (u32 k = (u32)0; k < n.ops().count() && !used; k = k + (u32)1)
+                        {
+                        IROperand* o = (IROperand*)n.ops().get(k);
+                        if (o.kind() != (u8)OPK_USE || o.val() != v)
+                            continue;
+                        if (n == cmp && k == (u32)1)
+                            continue;
+                        // The counter's start and an accumulator's: lo, and
+                        // the accumulator's own slot, carry them.
+                        if ((n == iv || reds.indexOf((Object*)n) != (u32)$FFFFFFFF) && k > (u32)0
+                            && ((IROperand*)n.ops().get(k - (u32)1)).kind() == (u8)OPK_BLOCK
+                            && ((IROperand*)n.ops().get(k - (u32)1)).blk() == P)
+                            continue;
+                        used = true;
+                        }
+                    }
+                }
+            if (used)
+                ins.add((Object*)v);
+            }
+        liveIns = ins;
         // ── the record: ParChunk's prefix (a word, lo, hi), then the live-ins,
         // then the accumulators, 8 bytes each. A struct of its own, read
         // with FieldAddr, so that the loop's function has the shape of a
@@ -9780,10 +9822,11 @@ class OptProfile
         IRBlock* entry = new IRBlock(String.withCString("bb_entry"));
         Map* remap = new Map();
         IRValue* mcur = bMem;
-        IRValue* bLo = ppFieldLoad(entry, bRec, (u32)1, String.withCString("I64"), mcur);
-        mcur = _ppLastMem;
+        // hi, then the captures and accumulators, then lo, each narrowed as
+        // it is read: the order a generated block's run reads them in.
         IRValue* bHi = ppFieldLoad(entry, bRec, (u32)2, String.withCString("I64"), mcur);
         mcur = _ppLastMem;
+        IRValue* hiT = ppConvertTo(entry, bHi, ivT);
         for (u32 i = (u32)0; i < nIn; i = i + (u32)1)
             {
             IRValue* v = (IRValue*)liveIns.get(i);
@@ -9798,9 +9841,10 @@ class OptProfile
             redInit.add((Object*)ppFieldLoad(entry, bRec, (u32)3 + nIn + i, r.res().ty(), mcur));
             mcur = _ppLastMem;
             }
+        IRValue* bLo = ppFieldLoad(entry, bRec, (u32)1, String.withCString("I64"), mcur);
+        mcur = _ppLastMem;
         remap.set((Hashable*)memIn, (Object*)IROperand.useVal(mcur));
         IRValue* loT = ppConvertTo(entry, bLo, ivT);
-        IRValue* hiT = ppConvertTo(entry, bHi, ivT);
         Map* blockMap = new Map();
         IRBlock* exitB = new IRBlock(String.withCString("bb_out_exit"));
         blockMap.set((Hashable*)E, (Object*)exitB);
@@ -10155,7 +10199,7 @@ class OptProfile
     // XC_PAR_OUTLINE_TRACE: say which test a loop failed (always false).
     bool ppNo(u8* why)
         {
-        if (_xt_getenv("XC_PAR_OUTLINE_TRACE") != (u8*)0)
+        if (ppEnvSet("XC_PAR_OUTLINE_TRACE"))
             Stdio.error(String.withFormat("outline: %s: not a block: %s\n", _ppWhere.cString(), why));
         return false;
         }
@@ -10163,7 +10207,7 @@ class OptProfile
     // XC_PAR_OUTLINE_TRACE: say what became of a loop that was outlined.
     void ppTrace(u8* how)
         {
-        if (_xt_getenv("XC_PAR_OUTLINE_TRACE") != (u8*)0)
+        if (ppEnvSet("XC_PAR_OUTLINE_TRACE"))
             Stdio.error(String.withFormat("outline: %s: outlined, %s\n", _ppWhere.cString(), how));
         }
     String* _ppWhere;      // the loop being tried, for the trace
@@ -10185,11 +10229,32 @@ class OptProfile
             return false;
         if (d.op().equals(String.withCString("Const")))
             return true;
+        // Arithmetic on constants (`#define N (1024 * 1024)`, `D * H * W`).
+        if (ppConstBinOp(d.op()) && d.ops().count() == (u32)2)
+            {
+            for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)d.ops().get(k);
+                if (o.kind() == (u8)OPK_IMMI)
+                    continue;
+                if (o.kind() != (u8)OPK_USE || !ppConstChain(o.val(), defOf, depth + (u32)1))
+                    return false;
+                }
+            return true;
+            }
         if ((d.op().equals(String.withCString("ZExt")) || d.op().equals(String.withCString("SExt"))
              || d.op().equals(String.withCString("Trunc")) || d.op().equals(String.withCString("Bitcast"))) && d.ops().count() == (u32)1
             && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_USE)
             return ppConstChain(((IROperand*)d.ops().get((u32)0)).val(), defOf, depth + (u32)1);
         return false;
+        }
+
+    static bool ppConstBinOp(String* op)
+        {
+        return op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub"))
+            || op.equals(String.withCString("Mul")) || op.equals(String.withCString("Shl"))
+            || op.equals(String.withCString("And")) || op.equals(String.withCString("Or"))
+            || op.equals(String.withCString("Xor"));
         }
 
     // A copy of a constant chain (ppConstChain), appended to b.
@@ -10202,7 +10267,11 @@ class OptProfile
         if (d.op().equals(String.withCString("Const")))
             c.add((IROperand*)d.ops().get((u32)0));
         else
-            c.add(IROperand.useVal(ppRemat(b, ((IROperand*)d.ops().get((u32)0)).val(), defOf)));
+            for (u32 k = (u32)0; k < d.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)d.ops().get(k);
+                c.add(o.kind() == (u8)OPK_USE ? IROperand.useVal(ppRemat(b, o.val(), defOf)) : o);
+                }
         b.add(c);
         return r;
         }

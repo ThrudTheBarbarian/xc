@@ -22349,11 +22349,13 @@ class ClassInfo
         {
         IRModule* saved = _m;
         _m = m;
-        // The printers may change what they print (they are given a copy of
-        // the module for the parser's blocks): they print from a copy here
-        // too, and write into the real module's placeholders.
-        String* printed = m.text();
-        IRModule* copy = IrParser.parseText(printed, new IrParser());
+        // The printers may change what they print: they print from a copy,
+        // the kernel module the parser's blocks are printed from (the blocks
+        // and what they call, cleaned up by the kernel passes), and write
+        // into the real module's placeholders. A plain copy where that fails.
+        IRModule* copy = parKernelModule();
+        if (copy == (IRModule*)0)
+            copy = IrParser.parseText(m.text(), new IrParser());
         if (copy == (IRModule*)0)
             {
             _m = saved;
