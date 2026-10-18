@@ -12055,6 +12055,12 @@ class ClassInfo
                 continue;
             if (!hasName(_assignedNames, p.name()))
                 continue;
+            // The PARAMETER must be the class pointer: the body's assignment
+            // may be to an inner local of the same name that shadows it (a
+            // `Node* exact` in a block, beside a `bool exact` parameter, had
+            // the bool retained at entry: a crash at once, 2026-10-17).
+            if (p.op() != (String*)0 && !isClassPointer(p.op()))
+                continue;
             // A pinned one already owns its slot (emitPinnedParamCopies).
             if (_strongPins.get((Hashable*)p.name()) != 0)
                 continue;

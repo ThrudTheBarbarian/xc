@@ -18109,6 +18109,13 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             continue;
         if (![self.preScanAssignedNames containsObject:pname])
             continue;
+        // The PARAMETER must be the class pointer: the body's assignment may
+        // be to an inner local of the same name that shadows it (a `Node*
+        // exact` in a block, beside a `bool exact` parameter, had the bool
+        // retained at entry: a crash at once, 2026-10-17).
+        XTType* pt = self.currentParamASTTypes[pname];
+        if (pt && ![self astTypeIsClassPointer:pt])
+            continue;
         // A pinned one already owns its slot (the prologue copy above).
         if (self.strongPinnedLocals[pname])
             continue;
