@@ -65,6 +65,7 @@ class Parser
     u32     _parCounter;    // ParImpl$N numbering (par blocks)
     bool    _parAuto;       // --par-auto: a plain loop becomes a par block where its shape allows
     u32     _parAutoCounter; // autopar_N naming
+    bool    _parAutoWantsRuntime; // --par-auto found a loop to wrap, but Par.xc was not imported
     u32     _loopDepth;     // loops open in the code being parsed (an auto par wraps an outermost one)
     u32     _goalDefault;   // the unit's default goal: 0 built-in, 1 speed, 2 accuracy (#goal, else -fgoal=)
     Set*    _libFiles;      // the standard library's and prelude's files, which --par-auto leaves alone
@@ -912,6 +913,8 @@ class Parser
     // to. Until task #78 the shipped compiler said `line 4: unexpected token
     // 11 (wanted 85)`: no column, the NEXT token's line, and raw enum numbers.
     void setParAuto(bool b) { _parAuto = b; }
+    // The front end then parses again with the runtime imported.
+    bool parAutoWantsRuntime(void) { return _parAutoWantsRuntime; }
     // wasm32: a module's memory is its own, so a protocol's static members
     // are calls BETWEEN modules and may pass only numbers, or a buffer and its
     // length (the reference's webModules).
@@ -2779,7 +2782,12 @@ class Parser
     {
         Array* reds = new Array();
         u32 goal = (u32)0;
-        if (!parAutoScan(reds, &goal)) {
+        // Without the par runtime the loop stays a loop, and the front end is
+        // told: it parses again with Par.xc imported (--par-auto imports it).
+        bool scanned = parAutoScan(reds, &goal);
+        if (scanned && !isTypeName(String.withCString("ParChunk")))
+            _parAutoWantsRuntime = true;
+        if (!scanned || !isTypeName(String.withCString("ParChunk"))) {
             // Not a block: the loops inside it are judged on their own (the
             // work inside a timing loop), so the loop depth stays put.
             parGridEnter("loops", true);
@@ -4566,9 +4574,9 @@ class Parser
         if (check((u16)tokIf))       return parseIf();
         // --par-auto: a counted while loop becomes the `for` it amounts to,
         // which parAutoFor then takes or leaves (parAutoWhileToFor).
-        // Not without the par runtime (#import "Par.xc"): a block there could
-        // not be built, and --par-auto must never stop a program building.
-        if (check((u16)tokWhile) && _parAuto && _loopDepth == (u32)0 && isTypeName(String.withCString("ParChunk"))
+        // Without the par runtime parAutoFor leaves the loop and asks for
+        // Par.xc to be imported (the front end parses again).
+        if (check((u16)tokWhile) && _parAuto && _loopDepth == (u32)0
             && (_blkFrames.count() == (u32)0
                 || ((Map*)_blkFrames.get(_blkFrames.count() - (u32)1)).get((Hashable*)String.withCString("par")) == (Object*)0)
             && parAutoWhileToFor())
@@ -4577,7 +4585,7 @@ class Parser
         if (check((u16)tokFor)) {
             // --par-auto: an outermost loop in plain code may become a par block —
             // inside a block literal too, but not inside a par body (the reference explains).
-            if (_parAuto && _loopDepth == (u32)0 && isTypeName(String.withCString("ParChunk"))
+            if (_parAuto && _loopDepth == (u32)0
                 && (_blkFrames.count() == (u32)0
                     || ((Map*)_blkFrames.get(_blkFrames.count() - (u32)1)).get((Hashable*)String.withCString("par")) == (Object*)0))
                 return parAutoFor();

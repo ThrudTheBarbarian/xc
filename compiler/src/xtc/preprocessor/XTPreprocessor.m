@@ -406,6 +406,18 @@
         _inPrelude = savedInPrelude;
         [output appendFormat:@"#line 1 \"%@\"\n", filename];
         }
+    // The auto-import, once, at the head of the entry file (cleared first:
+    // the imported file is preprocessed through here too).
+    if (_autoImport.length && _sourceDepth == 1)
+        {
+        NSString* a = _autoImport;
+        _autoImport = nil;
+        [self processDirective:[NSString stringWithFormat:@"#import \"%@\"", a]
+                      filename:filename
+                    lineNumber:1
+                        output:output];
+        [output appendFormat:@"#line 1 \"%@\"\n", filename];
+        }
 
     for (NSUInteger i = 0; i < lines.count; i++)
         {

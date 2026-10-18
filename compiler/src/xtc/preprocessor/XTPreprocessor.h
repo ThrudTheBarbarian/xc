@@ -76,6 +76,13 @@ NS_ASSUME_NONNULL_BEGIN
 \****************************************************************************/
 @property(nonatomic, nullable) NSString* platformPrelude;
 
+/****************************************************************************\
+|* A standard-library file the entry file imports as if its first line named
+|* it: --par-auto's runtime, when the program wraps a loop and did not import
+|* it. An ordinary import, not the prelude: nothing ambient. nil = none.
+\****************************************************************************/
+@property(nonatomic, nullable) NSString* autoImport;
+
 // Every file the implicit platform prelude pulled in (standardized absolute
 // paths). The interface serializer excludes declarations that originate here:
 // the ambient surface is EVERY unit's, so a module's .xtc.iface must not

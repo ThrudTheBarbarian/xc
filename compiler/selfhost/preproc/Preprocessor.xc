@@ -101,6 +101,7 @@ class IfFrame
     bool _appleFrameworks;   // macOS/iOS: `#import <F>` may name a system framework
     String* _appleSdk;       // the SDK root, or 0 (then the frameworks on this machine)
     String* _prelude;        // the target's implicit platform header, if any
+    String* _autoImport;     // a file imported ahead of the entry file's own text (--par-auto: Par.xc), or 0
     Array* _errors;
     // `#package <ns>` — the host import namespace in force for subsequent
     // BODYLESS declarations (wasm-target.md §6). A STATE directive: it holds
@@ -130,6 +131,7 @@ class IfFrame
         _imported = new Set();
         _preludeFiles = new Set();
         _inPrelude = false;
+        _autoImport = (String*)0;
         _sourceDepth = (u32)0;
         _ifStack = new Array();
         _includePaths = new Array();
@@ -372,6 +374,13 @@ class IfFrame
     void setPrelude(String* p)
         {
         _prelude = p;
+        }
+    // A standard-library file the entry file imports as if its first line
+    // named it: --par-auto's runtime, when the program wraps a loop and did
+    // not import it. An ordinary import, not the prelude: nothing ambient.
+    void setAutoImport(String* p)
+        {
+        _autoImport = p;
         }
     // Every standard-library and prelude file this unit imported, in both
     // spellings (the canonical key and the #line form the tokens carry):
@@ -700,6 +709,17 @@ class IfFrame
             _inPrelude = true;
             handleInclude(d, filename, (u32)0, output, true);
             _inPrelude = savedInPrelude;
+            output.appendFormat("#line 1 \"%s\"\n", filename.cString());
+            }
+        // The auto-import, once, at the head of the entry file (cleared first:
+        // the imported file is preprocessed through here too).
+        if (_autoImport != (String*)0 && _sourceDepth == (u32)1)
+            {
+            String* d = String.withCString("import \"");
+            d.append(_autoImport);
+            d.appendCString("\"");
+            _autoImport = (String*)0;
+            handleInclude(d, filename, (u32)0, output, true);
             output.appendFormat("#line 1 \"%s\"\n", filename.cString());
             }
 

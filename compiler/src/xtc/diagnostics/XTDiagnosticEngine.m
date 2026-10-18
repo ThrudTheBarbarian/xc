@@ -451,4 +451,11 @@ NSArray<NSString*>* XTWarningCategoryAllNames(void)
     _fatalFlag = NO;
     }
 
+- (void)truncateToCount:(NSUInteger)count
+    {
+    if (count < _mutableDiagnostics.count)
+        [_mutableDiagnostics removeObjectsInRange:NSMakeRange(count, _mutableDiagnostics.count - count)];
+    _fatalFlag = NO;
+    }
+
 @end

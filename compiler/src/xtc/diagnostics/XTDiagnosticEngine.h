@@ -212,6 +212,12 @@ NSArray<NSString*>* XTWarningCategoryAllNames(void);
 \****************************************************************************/
 - (void)clear;
 
+/****************************************************************************\
+|* Drop every diagnostic after the first `count` (the front end starting a
+|* unit again: --par-auto importing the par runtime).
+\****************************************************************************/
+- (void)truncateToCount:(NSUInteger)count;
+
 @end
 
 NS_ASSUME_NONNULL_END

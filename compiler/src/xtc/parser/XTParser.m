@@ -2713,10 +2713,10 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         {
         // --par-auto: a counted while loop becomes the `for` it amounts to,
         // which parAutoFor then takes or leaves (parAutoWhileToFor).
-        // Not without the par runtime (#import "Par.xc"): a block there could
-        // not be built, and --par-auto must never stop a program building.
+        // Without the par runtime parAutoFor leaves the loop and asks for
+        // Par.xc to be imported (the driver parses again).
         if (self.parAuto && ![[self blkFrames].lastObject[@"par"] boolValue] &&
-            [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0 && [self.typeTable typeForName:@"ParChunk"] &&
+            [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0 &&
             [self parAutoWhileToFor])
             return [self parAutoFor];
         [self parGridLoop:1];
@@ -2732,7 +2732,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         // inside a block literal too (its captures are captured again), but
         // not inside a par body, which is a block already.
         if (self.parAuto && ![[self blkFrames].lastObject[@"par"] boolValue] &&
-            [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0 && [self.typeTable typeForName:@"ParChunk"])
+            [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0)
             return [self parAutoFor];
         [self parGridLoop:1];
         [self parAutoLoop:1];
@@ -4177,7 +4177,13 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
     {
     NSMutableArray<NSArray<NSString*>*>* reds = [NSMutableArray array];
     NSUInteger goal = 0;
-    if (![self parAutoScan:reds goal:&goal])
+    // Without the par runtime the loop stays a loop, and the driver is told:
+    // it parses again with Par.xc imported (--par-auto imports it).
+    BOOL scanned = [self parAutoScan:reds goal:&goal];
+    BOOL haveRuntime = [self.typeTable typeForName:@"ParChunk"] != nil;
+    if (scanned && !haveRuntime)
+        _parAutoWantsRuntime = YES;
+    if (!scanned || !haveRuntime)
         {
         // Not a block: the loops inside it are judged on their own, so the
         // work inside a timing loop (`for (rep in 0..8) { t0 = now; for (i in

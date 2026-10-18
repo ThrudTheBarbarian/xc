@@ -155,9 +155,10 @@ XC
 "$XC" -q -H . -O2 --par-auto -Wpar-auto "$W/outer.xc" -o "$W/outer" >"$W/b6" 2>&1 || { echo "FAIL auto: a loop on an outer variable broke the --par-auto build"; head -3 "$W/b6"; fail=1; }
 grep -q "became a 'par' block" "$W/b6" && { echo "FAIL auto: a loop on an outer variable became a block"; fail=1; }
 [ -x "$W/outer" ] && [ "$("$W/outer")" = "45 10" ] || { echo "FAIL auto: the outer-variable loop's output"; fail=1; }
-# A program that does not import the par runtime builds under --par-auto
-# as it is: no loop becomes a block there (one did, and the build failed with
-# "a 'par' block needs its runtime", 2026-10-17).
+# A program that does not import the par runtime: --par-auto imports it
+# itself when a loop becomes a block (the build failed with "a 'par' block
+# needs its runtime" in 0.85), and only then — a program with nothing to wrap
+# does not carry the runtime.
 cat > "$W/noruntime.xc" <<'XC'
 #import "Stdio.xc"
 i32 main(void)
@@ -170,8 +171,22 @@ i32 main(void)
     return 0;
     }
 XC
-"$XC" -q -H . -O2 --par-auto "$W/noruntime.xc" -o "$W/noruntime" >"$W/b7" 2>&1 || { echo "FAIL auto: --par-auto broke a program without the par runtime"; head -3 "$W/b7"; fail=1; }
+"$XC" -q -H . -O2 --par-auto -Wpar-auto "$W/noruntime.xc" -o "$W/noruntime" >"$W/b7" 2>&1 || { echo "FAIL auto: --par-auto broke a program without the par runtime"; head -3 "$W/b7"; fail=1; }
+grep -q "became a 'par' block" "$W/b7" || { echo "FAIL auto: --par-auto did not import the runtime for a program without it"; fail=1; }
 [ -x "$W/noruntime" ] && [ "$("$W/noruntime")" = "2016" ] || { echo "FAIL auto: the no-runtime program's output"; fail=1; }
+cat > "$W/nothing.xc" <<'XC'
+#import "Stdio.xc"
+i32 main(void)
+    {
+    i32 s = 1;
+    for (i32 i = 0; i < 10; i = i + 1) s = s * 3 + i;
+    Stdio.printf("%ld\n", s);
+    return 0;
+    }
+XC
+"$XC" -q -H . -O2 --par-auto "$W/nothing.xc" -o "$W/nothing" >"$W/b8" 2>&1 || { echo "FAIL auto: --par-auto broke a program with nothing to wrap"; head -3 "$W/b8"; fail=1; }
+[ -x "$W/nothing" ] && [ "$("$W/nothing")" = "73806" ] || { echo "FAIL auto: the nothing-to-wrap program's output"; fail=1; }
+nm "$W/nothing" 2>/dev/null | grep -q 'ParChunk' && { echo "FAIL auto: a program with nothing to wrap carries the par runtime"; fail=1; }
 # `acc = acc op e` is a reduction only when op joins all of e. In a Horner
 # hash, `h = h * C + x`, the + binds outside the *: the iterations depend on
 # each other, and wrapping it gave 0 (par_gpu_wide, 2026-10-17).

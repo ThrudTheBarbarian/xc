@@ -57,6 +57,7 @@ class FeOptions
     i32 _threadSafeArc; // -f[no-]thread-safe-arc: 1 on, 0 off, -1 decide per module
     bool _parKernelsAll; // -fpar-kernels=all: every GPU kernel form in every par block
     bool _parAuto;       // --par-auto: a plain range loop becomes a par block where its shape allows
+    bool _parAutoImport; // --par-auto wraps a loop in a program without Par.xc: import it
     u32 _goalDefault;    // -fgoal=: the unit's default goal (0 built-in, 1 speed, 2 accuracy); a #goal overrides it
     bool _emitIface;   // compute the module interface (--emit-lib, -c, --emit-iface)
     // …and, SEPARATELY, whether this is a LIBRARY build. The two used to be one
@@ -111,6 +112,7 @@ class FeOptions
         _threadSafeArc = (i32)-1;
         _parKernelsAll = false;
         _parAuto = false;
+        _parAutoImport = false;
         _goalDefault = (u32)0;
         // par-auto is opt-in (-Wpar-auto): what --par-auto wrapped or demoted
         // is useful to see once, and noise in every build after.
@@ -345,6 +347,14 @@ class FeOptions
     void setParAuto(bool b)
         {
         _parAuto = b;
+        }
+    bool parAutoImport(void)
+        {
+        return _parAutoImport;
+        }
+    void setParAutoImport(bool b)
+        {
+        _parAutoImport = b;
         }
     u32 goalDefault(void)
         {
@@ -632,6 +642,15 @@ class FeOptions
             }
 
         Node* program = parser.parse();
+        // --par-auto found a loop to make a block of in a program that did not
+        // import the par runtime: import it, and start again. Only then, so a
+        // program with nothing to wrap does not pay for the runtime (3 s and
+        // 380 KB for a small one), and only where the target has it.
+        if (parser.parAutoWantsRuntime() && !o.parAutoImport() && parRuntimeAvailable(o))
+            {
+            o.setParAutoImport(true);
+            return Frontend.lower(o);
+            }
         // A PARSE ERROR MUST FAIL THE BUILD. The parser collected these all
         // along and nothing ever read them, so the shipped compiler took
         // `i32 x = ;`, said nothing, exited 0 and wrote a runnable binary —
@@ -1791,11 +1810,28 @@ void addLibDir(FeOptions* o, String* support, String* plat)
     d.appendCString("/");
     d.append(plat);
     d.appendCString("/lib");
+    // Once: lower() runs again when --par-auto imports the runtime.
+    for (u32 i = (u32)0; i < o.incs().count(); i = i + (u32)1)
+        if (((String*)o.incs().get(i)).equals(d))
+            return;
     if (Files.exists(d))
         {
         o.incs().add((Object*)d);
         o.stdlibs().add((Object*)d);
         }
+    }
+
+// The par runtime is in this target's standard library.
+bool parRuntimeAvailable(FeOptions* o)
+    {
+    for (u32 i = (u32)0; i < o.stdlibs().count(); i = i + (u32)1)
+        {
+        String* p = String.withCString(((String*)o.stdlibs().get(i)).cString());
+        p.appendCString("/Par.xc");
+        if (Files.exists(p))
+            return true;
+        }
+    return false;
     }
 
 // The support tree under `base`, in the three spellings an install and a
@@ -2015,6 +2051,8 @@ Preprocessor* buildPP(FeOptions* o)
     {
     Preprocessor* pp = new Preprocessor();
     predefine(pp, o);
+    if (o.parAutoImport())
+        pp.setAutoImport(String.withCString("Par.xc"));
     // `#package` is wasm32-only and the preprocessor has to be able to say so.
     pp.setArch(platformOf(o));
     // iOS and Android are the arm64 back end, each with its own libraries.

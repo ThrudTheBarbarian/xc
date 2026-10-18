@@ -453,11 +453,13 @@ the tiles and the devices a run on a set used.
 
 ### Loops that become blocks: `--par-auto`
 
- With `--par-auto`, a `for (T i in a..b) { … }`
+With `--par-auto`, a `for (T i in a..b) { … }`
 loop in plain code — or `a...b`, or the C-style `for (T i = a; i < b; i++)`
 with `<=`, `++i`, `i += 1` or `i = i + 1` — becomes a `par` block when its
 shape allows, so an existing program takes the GPU and every core without
-being rewritten:
+being rewritten. The program need not import `Par.xc`: when a loop becomes a
+block, `--par-auto` imports the runtime itself, and a program with nothing to
+wrap is built without it.
 
 ```c
 for (u32 i in 0..N)

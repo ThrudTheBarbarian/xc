@@ -27,6 +27,9 @@ NS_ASSUME_NONNULL_BEGIN
 |* an auto block it would refuse to a serial run.
 \****************************************************************************/
 @property(nonatomic) BOOL parAuto;
+/// --par-auto found a loop to wrap, but Par.xc was not imported: the driver
+/// parses the unit again with the runtime imported.
+@property(nonatomic, readonly) BOOL parAutoWantsRuntime;
 // wasm32: a module's memory is its own, so a protocol's static members are
 // calls BETWEEN modules (an export of the provider, an import of everyone
 // else) and may pass only numbers, or a buffer and its length.

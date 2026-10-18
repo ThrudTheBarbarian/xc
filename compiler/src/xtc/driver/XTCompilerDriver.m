@@ -44,6 +44,7 @@
     {
     NSUInteger _goalDirective;   // the unit's #goal, read after preprocessing
     NSSet<NSString*>* _libraryFiles;   // the library's files, which --par-auto leaves alone
+    BOOL _parAutoImport;               // --par-auto wraps a loop in a program without Par.xc: import it
     }
 
 - (instancetype)initWithOptions:(XTCommandLineOptions*)options
@@ -191,6 +192,18 @@ static NSString* cLibraryNameFromPath(NSString* path)
 // YES if a `Platform.xc` exists on the include search path — gates the implicit
 // platform prelude so targets without one (or a bare tree) simply skip it rather
 // than failing every compile on a missing include.
+// The par runtime is in this target's standard library (the include dirs
+// the driver appended after the user's).
+- (BOOL)parRuntimeAvailable
+    {
+    NSFileManager* fm = [NSFileManager defaultManager];
+    NSArray<NSString*>* inc = [self resolveIncludePaths];
+    for (NSUInteger i = _options.includePaths.count; i < inc.count; i++)
+        if ([fm fileExistsAtPath:[inc[i] stringByAppendingPathComponent:@"Par.xc"]])
+            return YES;
+    return NO;
+    }
+
 - (BOOL)resolvePlatformPrelude
     {
     NSFileManager* fm = [NSFileManager defaultManager];
@@ -1066,6 +1079,9 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         return nil;
         }
     [_diagnostics registerSource:rawSource forFile:inputFile];
+    // Where this unit's diagnostics start: a --par-auto restart drops the first
+    // pass's.
+    NSUInteger diagMark = _diagnostics.diagnostics.count;
 
     NSArray<NSString*>* includePaths = [self resolveIncludePaths];
 
@@ -1152,6 +1168,8 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // (the win64 one does `#import <user32>` …), then the empty generic fallback.
     if ([self resolvePlatformPrelude])
         pp.platformPrelude = @"Platform.xc";
+    if (_parAutoImport)
+        pp.autoImport = @"Par.xc";
     [self setupPreprocessor:pp arm64:arm64];
     [self setupObjectFmtGateOnto:pp
                       fromSource:rawSource
@@ -1487,6 +1505,17 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                                          : XTPointerPlacementHeap;
     XTProgramNode* ast = nil;
     ast = [parser parse];
+    // --par-auto found a loop to make a block of in a program that did not
+    // import the par runtime: import it, and start again. Only then, so a
+    // program with nothing to wrap does not pay for the runtime (3 s and
+    // 380 KB for a small one), and only where the target has it.
+    if (parser.parAutoWantsRuntime && !_parAutoImport && ast && !_diagnostics.hasFatalError &&
+        [self parRuntimeAvailable])
+        {
+        _parAutoImport = YES;
+        [_diagnostics truncateToCount:diagMark];
+        return [self compileFrontendForFile:inputFile];
+        }
     if (!ast || _diagnostics.hasFatalError)
         {
         [_diagnostics printAll];
