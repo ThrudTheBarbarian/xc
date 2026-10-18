@@ -27,6 +27,12 @@ u8* _xt_getenv(u8* name);
 // 4); 0 when nothing set it.
 ParKernelHook* gParKernelHook;
 
+// The C path (cpp-front-end.md): a C program's locals are allocas, pinned
+// slots of a scalar or a pointer, which xc's lowering never makes (its
+// scalars are SSA from the start). True when the module came from C: then
+// mem2reg promotes such a slot too, where only loads and stores reach it.
+bool gOptPromoteScalars;
+
 // A sentinel count from lrcCountLiveOut: a value OTHER than the accumulator
 // escapes the outer loop, so the collapse is unsafe. Distinct from 0, which
 // means the accumulator itself is dead afterwards (nothing to rescale).
@@ -4495,7 +4501,30 @@ class OptProfile
     void m2rCollect(IRModule* m, IRFunc* fn, IRPinned* pl)
         {
         if (!aeIsAgg(pl.ty()))
+            {
+            // A C local (gOptPromoteScalars): the slot is one variable, and
+            // each AddrOf of it is a pointer to that variable.
+            if (!gOptPromoteScalars || pl.ty().equals(String.withCString("Mem")))
+                return;
+            Array* sa = aeUsersOf(fn, pl.val());
+            if (sa.count() == (u32)0)
+                return;
+            for (u32 a = (u32)0; a < sa.count(); a = a + (u32)1)
+                {
+                IRInsn* ao = (IRInsn*)sa.get(a);
+                if (!ao.op().equals(String.withCString("AddrOf")) || ao.res() == (IRValue*)0)
+                    return;
+                if (!m2rFieldUsesOk(fn, ao, pl.ty()))
+                    return;
+                }
+            u32 sv = _m2rLocal.count();
+            _m2rLocal.add((Object*)pl.val());
+            _m2rField.add((Object*)Number.with((u32)0));
+            _m2rType.add((Object*)pl.ty());
+            for (u32 a = (u32)0; a < sa.count(); a = a + (u32)1)
+                _m2rPtrVar.set((Hashable*)((IRInsn*)sa.get(a)).res(), (Object*)Number.with(sv));
             return;
+            }
         u32 lid = aeLayoutId(m, pl.ty());
         if (lid >= m.layouts().count())
             return;
@@ -9179,6 +9208,11 @@ class OptProfile
             for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)all.get(i);
+                // An address nothing uses (a promoted local's, which dead-code
+                // removes later) reads nothing.
+                if (n.op().equals(String.withCString("AddrOf")) && n.res() != (IRValue*)0
+                    && aeUsersOf(fn, n.res()).count() == (u32)0)
+                    continue;
                 for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
                     {
                     IROperand* o = (IROperand*)n.ops().get(k);
@@ -9787,6 +9821,49 @@ class OptProfile
                 ins.add((Object*)v);
             }
         liveIns = ins;
+        // An untyped pointer (the C path's `ptr`) that the loop only ever
+        // casts to one element type is captured as that type, cast once at
+        // the call: a kernel cannot cast a device pointer, and the loop then
+        // reads it as a typed pointer, as xc's own do.
+        Map* castTo = new Map();       // a cast's result in the loop -> the live-in index it stands for
+        for (u32 i = (u32)0; i < liveIns.count(); i = i + (u32)1)
+            {
+            IRValue* v = (IRValue*)liveIns.get(i);
+            if (!v.ty().equals(String.withCString("Ptr(U8, unbanked)")))
+                continue;
+            String* tt = (String*)0;
+            bool ok = true;
+            Array* casts = new Array();
+            for (u32 bb2 = (u32)0; bb2 < body.count() && ok; bb2 = bb2 + (u32)1)
+                {
+                Array* all = ppAllInsns((IRBlock*)body.get(bb2));
+                for (u32 q = (u32)0; q < all.count() && ok; q = q + (u32)1)
+                    {
+                    IRInsn* n = (IRInsn*)all.get(q);
+                    for (u32 k = (u32)0; k < n.ops().count() && ok; k = k + (u32)1)
+                        {
+                        IROperand* o = (IROperand*)n.ops().get(k);
+                        if (o.kind() != (u8)OPK_USE || o.val() != v)
+                            continue;
+                        if (!n.op().equals(String.withCString("Bitcast")) || n.res() == (IRValue*)0
+                            || !n.res().ty().hasPrefix(String.withCString("Ptr(")))
+                            ok = false;
+                        else if (tt == (String*)0)
+                            tt = n.res().ty();
+                        else if (!tt.equals(n.res().ty()))
+                            ok = false;
+                        if (ok)
+                            casts.add((Object*)n);
+                        }
+                    }
+                }
+            if (!ok || tt == (String*)0)
+                continue;
+            IRValue* vt = ppEmit(P, String.withCString("Bitcast"), tt, IROperand.useVal(v), (IROperand*)0, (IROperand*)0);
+            liveIns.set(i, (Object*)vt);
+            for (u32 c = (u32)0; c < casts.count(); c = c + (u32)1)
+                castTo.set((Hashable*)((IRInsn*)casts.get(c)).res(), (Object*)Number.with(i));
+            }
         // ── the record: ParChunk's prefix (a word, lo, hi), then the live-ins,
         // then the accumulators, 8 bytes each. A struct of its own, read
         // with FieldAddr, so that the loop's function has the shape of a
@@ -9834,6 +9911,14 @@ class OptProfile
             mcur = _ppLastMem;
             remap.set((Hashable*)v, (Object*)IROperand.useVal(ld));
             }
+        // The casts the typed captures stand for read the capture.
+        Array* castKeys = castTo.allKeys();
+        for (u32 c = (u32)0; c < castKeys.count(); c = c + (u32)1)
+            {
+            IRValue* cr = (IRValue*)castKeys.get(c);
+            u32 li = ((Number*)castTo.get((Hashable*)cr)).asU32();
+            remap.set((Hashable*)cr, remap.get((Hashable*)liveIns.get(li)));
+            }
         Array* redInit = new Array();
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1)
             {
@@ -9860,6 +9945,8 @@ class OptProfile
             for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)all.get(i);
+                if (n.res() != (IRValue*)0 && castTo.get((Hashable*)n.res()) != (Object*)0)
+                    continue;
                 if (n.res() != (IRValue*)0)
                     remap.set((Hashable*)n.res(), (Object*)IROperand.useVal(new IRValue(n.res().ty())));
                 if (n.memRes() != (IRValue*)0)
@@ -9901,6 +9988,8 @@ class OptProfile
             for (u32 i = (u32)0; i < ob.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)ob.insns().get(i);
+                if (n.res() != (IRValue*)0 && castTo.get((Hashable*)n.res()) != (Object*)0)
+                    continue;
                 IRInsn* c = cloneInsn(remap, blockMap, n);
                 // The exit test against the chunk's end, always `<`.
                 if (n == cmp)
@@ -10543,6 +10632,16 @@ class OptProfile
                     x = ((IROperand*)xd.ops().get((u32)0)).val();
                 _ppAtIv = x == iv;
                 }
+            }
+        // Through a cast of a pointer to its element type (the C path casts
+        // its untyped pointers where they are used): the array is the
+        // value cast.
+        IRInsn* bc = (IRInsn*)defOf.get((Hashable*)base);
+        while (bc != (IRInsn*)0 && bc.op().equals(String.withCString("Bitcast")) && bc.ops().count() == (u32)1
+               && ((IROperand*)bc.ops().get((u32)0)).kind() == (u8)OPK_USE)
+            {
+            base = ((IROperand*)bc.ops().get((u32)0)).val();
+            bc = (IRInsn*)defOf.get((Hashable*)base);
             }
         _ppBase = base;
         IRInsn* bd = (IRInsn*)defOf.get((Hashable*)base);

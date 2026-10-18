@@ -62,6 +62,7 @@
 #import "X86Link.xc"    // …and the link, shared with xtldx86 so they cannot drift
 #import "Elf64.xc"      // …and the ET_REL object writer `-c` needs
 #import "Pe.xc"         // the Windows PE/COFF writer, shared with xtldwin
+#import "CPath.xc"      // `xcc prog.c`: clang's LLVM IR read into a module (cpp-front-end.md)
 #import "External.xc"   // --no-self-host: the vendor-toolchain path
 
 // ── capability options ───────────────────────────────────────────────────
@@ -4155,7 +4156,23 @@ void main(void)
         Process.exit((i32)1); return;
     }
 
-    IRModule* mod = Frontend.lower(d.fe());
+    // A C file: clang compiles it to LLVM IR and the C path reads that
+    // (experimental; cpp-front-end.md, "The C path").
+    IRModule* mod = (IRModule*)0;
+    if (d.fe().input().hasSuffix(String.withCString(".c")))
+        {
+        // With the IR outliner on (XC_PAR_PROPOSE=outline), the par runtime
+        // comes too, lowered from a stub, so loops can become blocks.
+        String* cin = d.fe().input();
+        gOptPromoteScalars = true;
+        if (Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
+            mod = CPath.lowerWith(cin, CPath.scratch(), new Array(), new Array(), d.fe());
+        else
+            mod = CPath.lower(cin, CPath.scratch(), new Array(), new Array());
+        if (mod == 0) { Process.exit((i32)1); return; }
+        }
+    else
+        mod = Frontend.lower(d.fe());
     if (mod == 0) { Process.exit((i32)3); return; }
     // --emit-ir: the module as lowering left it, before any optimisation.
     if (d.emitIR()) Stdio.error(mod.text());
