@@ -858,7 +858,12 @@ class Arm64
     void emitPrologue(IRFunc* fn)
     {
         _out.appendFormat(".globl _%s\n", fn.name().cString());
-        _out.appendFormat(".p2align 4\n_%s:\n", fn.name().cString());
+        // Every function on a 64-byte line (2026-10-18): placed on 16, a
+        // function's hot loops moved against the cache lines whenever code
+        // ahead of it changed size (sieve: 8% slower in 0.85 than in 0.8, from
+        // identical code). On 64: sieve -10%, sort_small and array_map -2%,
+        // the rest of the suite within noise.
+        _out.appendFormat(".p2align 6\n_%s:\n", fn.name().cString());
         // -g: the prologue belongs to the function's first line, not to
         // whatever line the previous function ended on.
         Array* dbgFiles = IRDbg.files();

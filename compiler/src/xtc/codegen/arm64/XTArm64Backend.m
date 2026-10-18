@@ -7990,7 +7990,12 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     // Function label + prologue. Mach-O underscore convention so
     // a C stub linking against `add` finds `_add`.
     [out appendFormat:@".globl _%@\n", fn.name];
-    [out appendFormat:@".p2align 4\n_%@:\n", fn.name];
+    // Every function on a 64-byte line (2026-10-18): placed on 16, a
+    // function's hot loops moved against the cache lines whenever code ahead
+    // of it changed size (sieve: 8% slower in 0.85 than in 0.8, from identical
+    // code). On 64: sieve -10%, sort_small and array_map -2%, the rest of the
+    // suite within noise.
+    [out appendFormat:@".p2align 6\n_%@:\n", fn.name];
     // -g: the prologue belongs to the function's first line, not to whatever
     // line the previous function ended on.
     NSArray<NSString *> *dbgFiles = [XTIRDbgLoc files];
