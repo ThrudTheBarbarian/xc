@@ -1235,6 +1235,12 @@ class OptProfile
 
     // The pipeline, in the original's order. Each pass is gated on the level it
     // declares (`minOptLevel`) and, where it has one, on a profile knob.
+    static bool ppReport(void)
+        {
+        u8* e = _xt_getenv("XC_PAR_PROPOSE");
+        return e != (u8*)0 && String.withCString(e).equals(String.withCString("report"));
+        }
+
     void run(IRModule* m)
         {
         // VaArgExpand is MANDATORY at every level — the backend has no case for
@@ -1317,6 +1323,8 @@ class OptProfile
             return;
         if (_level >= (u32)2)
             mem2reg(m);
+        if (ppReport())
+            parProposeReport(m);
         if (stopHere(String.withCString("mem2reg")))
             return;
         // SECOND inlining pass, after if-conversion has linearised the small
@@ -8838,6 +8846,520 @@ class OptProfile
     bool isBankStateOp(String* op)
         {
         return op.equals(String.withCString("BankSave")) || op.equals(String.withCString("BankRestore")) || op.equals(String.withCString("BankSelectFor"));
+        }
+
+    // ── par-propose (report) ─────────────────────────────────────────────
+    //
+    // IR Propose, step 1 (cpp-front-end.md, c-and-cpp-one-path.md): find the
+    // loops --par-auto would make blocks of, in the IR rather than the
+    // parser's tokens, so loops from C and C++ are found the same way. For
+    // now a REPORT only, beside the parser's scan, until the two choose the
+    // same loops on the xc corpus: XC_PAR_PROPOSE=report lowers with source
+    // lines (and no -g pinning, so locals are SSA) and prints, after mem2reg,
+    //   propose: <file>:<line>: wrap
+    //   propose: <file>:<line>: no (<why>)
+    // for each outermost natural loop outside the standard library.
+    IRModule* _ppModule;
+
+    void parProposeReport(IRModule* m)
+        {
+        // As the scan: nothing without the par runtime in the program.
+        bool runtime = false;
+        for (u32 f = (u32)0; f < m.funcs().count() && !runtime; f = f + (u32)1)
+            if (((IRFunc*)m.funcs().get(f)).name().hasPrefix(String.withCString("ParChunk$")))
+                runtime = true;
+        if (!runtime)
+            return;
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            if (fn.blocks().count() == (u32)0)
+                continue;
+            // A written par block's body (ParImpl$<n>$…): already a block.
+            if (fn.name().hasPrefix(String.withCString("ParImpl$")))
+                continue;
+            _ppModule = m;
+            Array* loops = lrcLoops(fn);
+            for (u32 i = (u32)0; i < loops.count(); i = i + (u32)1)
+                {
+                LRCLoop* L = (LRCLoop*)loops.get(i);
+                bool inner = false;
+                for (u32 j = (u32)0; j < loops.count() && !inner; j = j + (u32)1)
+                    {
+                    LRCLoop* M = (LRCLoop*)loops.get(j);
+                    if (M != L && M.header() != L.header() && hasBlock(M.body(), L.header()))
+                        inner = true;
+                    }
+                if (inner)
+                    continue;
+                IRInsn* at = ppFirstDbg(L);
+                if (at == (IRInsn*)0)
+                    continue;
+                String* path = (String*)IRDbg.files().get(at.dbgFile());
+                if (path == (String*)0 || path.contains(String.withCString("/support/")))
+                    continue;
+                String* why = ppVerdict(fn, L);
+                String* line = String.withFormat("propose: %s:%ld: ", path.cString(), (i32)at.dbgLine());
+                if (why == (String*)0)
+                    line.appendCString("wrap\n");
+                else
+                    {
+                    line.appendCString("no (");
+                    line.append(why);
+                    line.appendCString(")\n");
+                    }
+                Stdio.error(line);
+                }
+            }
+        }
+
+    // The loop's position: its header's first located instruction, else the
+    // preheader's branch into it.
+    IRInsn* ppFirstDbg(LRCLoop* L)
+        {
+        IRBlock* H = L.header();
+        for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
+            if (((IRInsn*)H.insns().get(i)).hasDbg())
+                return (IRInsn*)H.insns().get(i);
+        if (H.term() != 0 && H.term().hasDbg())
+            return H.term();
+        if (L.pre() != (IRBlock*)0 && L.pre().term() != 0 && L.pre().term().hasDbg())
+            return L.pre().term();
+        return (IRInsn*)0;
+        }
+
+    // A phi's value on the edge from one of `from` (true: inside the loop) or
+    // from outside it (false).
+    IRValue* ppPhiIn(IRInsn* phi, LRCLoop* L, bool inside)
+        {
+        IRValue* v = (IRValue*)0;
+        for (u32 k = (u32)0; k + (u32)1 < phi.ops().count(); k = k + (u32)2)
+            {
+            IROperand* b = (IROperand*)phi.ops().get(k);
+            IROperand* o = (IROperand*)phi.ops().get(k + (u32)1);
+            if (b.kind() != (u8)OPK_BLOCK || o.kind() != (u8)OPK_USE)
+                continue;
+            if (hasBlock(L.body(), b.blk()) == inside)
+                v = o.val();
+            }
+        return v;
+        }
+
+    bool ppDefinedIn(Map* defBlk, IRValue* v, LRCLoop* L)
+        {
+        IRBlock* b = (IRBlock*)defBlk.get((Hashable*)v);
+        return b != (IRBlock*)0 && hasBlock(L.body(), b);
+        }
+
+    // Why the loop is not a candidate, or 0 when it is. The rules follow the
+    // parser's scan: a counted loop (an induction variable stepped by a
+    // positive constant, tested against a bound fixed for the loop), whose
+    // other carried values are integer reductions, and whose stores are to
+    // array elements.
+    String* ppVerdict(IRFunc* fn, LRCLoop* L)
+        {
+        if (L.pre() == (IRBlock*)0)
+            return String.withCString("no single entry");
+        Map* defOf = defMapAll(fn);
+        Map* defBlk = defBlockMap(fn);
+        IRBlock* H = L.header();
+        // The exit test: the header ends in a CondBranch on an ICmp.
+        IRInsn* t = H.term();
+        if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")))
+            return String.withCString("the loop is not tested at its top");
+        IRValue* cv = ((IROperand*)t.ops().get((u32)0)).val();
+        IRInsn* cmp = cv != (IRValue*)0 ? (IRInsn*)defOf.get((Hashable*)cv) : (IRInsn*)0;
+        if (cmp == (IRInsn*)0 || !cmp.op().equals(String.withCString("ICmp")))
+            return String.withCString("no integer exit test");
+        // The induction variable: a header phi stepped by a positive constant.
+        IRInsn* iv = (IRInsn*)0;
+        u32 reductions = (u32)0;
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* phi = (IRInsn*)H.phis().get(i);
+            if (phi.res() == (IRValue*)0 || phi.res().ty().hasPrefix(String.withCString("Mem")))
+                continue;
+            IRValue* nx = ppPhiIn(phi, L, true);
+            IRInsn* step = nx != (IRValue*)0 ? (IRInsn*)defOf.get((Hashable*)nx) : (IRInsn*)0;
+            if (step == (IRInsn*)0)
+                return String.withCString("a carried value with no step");
+            // The induction variable: stepped straight by a positive constant
+            // and tested by the exit.
+            if (iv == (IRInsn*)0 && step.op().equals(String.withCString("Add")) && ppStepOf(step, phi.res()) &&
+                ppCmpUses(cmp, phi.res(), step.res()))
+                {
+                IROperand* other = (IROperand*)0;
+                for (u32 k = (u32)0; k < step.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)step.ops().get(k);
+                    if (!(o.kind() == (u8)OPK_USE && o.val() == phi.res()))
+                        other = o;
+                    }
+                if (other != (IROperand*)0 && ppIsPositiveConst(other, defOf))
+                    {
+                    iv = phi;
+                    continue;
+                    }
+                }
+            // A reduction: every path from the accumulator back to it applies
+            // one operator (or none), through merge phis and inner loops'
+            // phis alike — `if (c) acc += x;` and a sum over a 2-D nest.
+            Set* seen = new Set();
+            seen.add((Hashable*)phi.res());
+            String* op = ppChainOp(nx, phi.res(), defOf, seen, (u32)0);
+            if (op == (String*)0)
+                return String.withCString("a carried value that is not an accumulator");
+            if (op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FMul")))
+                return String.withCString("a float reduction (only under :goal(speed))");
+            if (!(op.equals(String.withCString("Add")) || op.equals(String.withCString("Mul")) ||
+                  op.equals(String.withCString("And")) || op.equals(String.withCString("Or")) ||
+                  op.equals(String.withCString("Xor")) || op.equals(String.withCString("Select")) ||
+                  op.equals(String.withCString("="))))
+                {
+                String* w = String.withCString("a carried value updated by ");
+                w.append(op);
+                return w;
+                }
+            reductions = reductions + (u32)1;
+            }
+        if (iv == (IRInsn*)0)
+            return String.withCString("no induction variable");
+        // The bound must not change inside the loop.
+        for (u32 k = (u32)0; k < cmp.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)cmp.ops().get(k);
+            if (o.kind() != (u8)OPK_USE || o.val() == iv.res())
+                continue;
+            if (!ppInvariant(o.val(), L, defOf, defBlk, (u32)0))
+                {
+                IRInsn* d = (IRInsn*)defOf.get((Hashable*)o.val());
+                if (d == (IRInsn*)0 || !(d.op().equals(String.withCString("Add")) && ppStepOf(d, iv.res())))
+                    return String.withCString("a bound computed in the loop");
+                }
+            }
+        // One way out: the header's test. A `break` (or a return) leaves from
+        // the body as well, and an iteration's work then depends on the ones
+        // before it.
+        for (u32 b = (u32)0; b < L.body().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)L.body().get(b);
+            if (bb == H)
+                continue;
+            Array* ss = lrcSuccs(fn, bb);
+            for (u32 k = (u32)0; k < ss.count(); k = k + (u32)1)
+                if (!hasBlock(L.body(), (IRBlock*)ss.get(k)))
+                    return String.withCString("a way out of the loop besides its test (break or return)");
+            }
+        // The body: stores only to array elements, no calls.
+        for (u32 b = (u32)0; b < L.body().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)L.body().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.isCall())
+                    {
+                    String* w = ppCallWhy(n);
+                    if (w != (String*)0)
+                        return w;
+                    }
+                if (n.op().equals(String.withCString("Store")))
+                    {
+                    IRValue* a = ((IROperand*)n.ops().get((u32)0)).val();
+                    IRInsn* ad = a != (IRValue*)0 ? (IRInsn*)defOf.get((Hashable*)a) : (IRInsn*)0;
+                    // A local slot used only inside the loop is each iteration's
+                    // own scratch (an inlined callee's `u32 bits` behind a
+                    // bitcast, say): private, as the scan treats a body's locals.
+                    bool scratch = ad != (IRInsn*)0 && ad.op().equals(String.withCString("AddrOf")) &&
+                                   ppSlotOnlyIn(fn, L, ad);
+                    if (!scratch && (ad == (IRInsn*)0 || !ad.op().equals(String.withCString("ElementAddr"))))
+                        return String.withCString("a store that is not to an array element");
+                    }
+                if (n.op().equals(String.withCString("Return")))
+                    return String.withCString("a return");
+                }
+            }
+        return (String*)0;
+        }
+
+    // The one stepping instruction of a conditional reduction's merge phi, or
+    // 0: every incoming value is the accumulator itself or the same op on it.
+    IRInsn* ppCondStep(IRInsn* merge, IRValue* acc, Map* defOf)
+        {
+        IRInsn* one = (IRInsn*)0;
+        for (u32 k = (u32)0; k + (u32)1 < merge.ops().count(); k = k + (u32)2)
+            {
+            IROperand* o = (IROperand*)merge.ops().get(k + (u32)1);
+            if (o.kind() != (u8)OPK_USE)
+                return (IRInsn*)0;
+            if (o.val() == acc)
+                continue;
+            IRInsn* d = (IRInsn*)defOf.get((Hashable*)o.val());
+            if (d == (IRInsn*)0 || !ppStepOf(d, acc))
+                return (IRInsn*)0;
+            if (one != (IRInsn*)0 && !one.op().equals(d.op()))
+                return (IRInsn*)0;
+            one = d;
+            }
+        return one;
+        }
+
+    // Why a call keeps the loop serial, or 0: a direct call to a function of
+    // the program itself (not the standard library) is allowed, as the scan
+    // allows it; the check later decides whether a device can run it.
+    String* ppCallWhy(IRInsn* n)
+        {
+        String* callee = (String*)0;
+        for (u32 k = (u32)0; k < n.ops().count() && callee == (String*)0; k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() == (u8)OPK_SYM)
+                callee = o.name();
+            }
+        if (callee == (String*)0)
+            return String.withCString("an indirect call");
+        IRFunc* f = funcNamed(_ppModule, callee);
+        if (f == (IRFunc*)0 || f.blocks().count() == (u32)0)
+            {
+            String* w = String.withCString("a call to ");
+            w.append(callee);
+            return w;
+            }
+        if (f.hasDbg() && f.dbgFile() < IRDbg.files().count())
+            {
+            String* fp = (String*)IRDbg.files().get(f.dbgFile());
+            if (fp != (String*)0 && fp.contains(String.withCString("/support/")))
+                {
+                String* w = String.withCString("a call into the standard library (");
+                w.append(callee);
+                w.appendCString(")");
+                return w;
+                }
+            }
+        return (String*)0;
+        }
+
+    // The one operator every path from `acc` to v applies to it: "=" when v
+    // is acc unchanged on every path, 0 when the paths disagree, the value is
+    // used some other way, or the other operand depends on acc. Phis (merges,
+    // inner loops' headers) are followed; one met again is part of the cycle.
+    String* ppChainOp(IRValue* v, IRValue* acc, Map* defOf, Set* seen, u32 depth)
+        {
+        if (v == acc)
+            return String.withCString("=");
+        if (depth > (u32)32)
+            return (String*)0;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
+        if (d == (IRInsn*)0)
+            return (String*)0;
+        if (d.op().equals(String.withCString("Phi")))
+            {
+            if (seen.contains((Hashable*)v))
+                return String.withCString("=");
+            seen.add((Hashable*)v);
+            String* got = String.withCString("=");
+            for (u32 k = (u32)0; k + (u32)1 < d.ops().count(); k = k + (u32)2)
+                {
+                IROperand* o = (IROperand*)d.ops().get(k + (u32)1);
+                if (o.kind() != (u8)OPK_USE)
+                    return (String*)0;
+                String* one = ppChainOp(o.val(), acc, defOf, seen, depth + (u32)1);
+                if (one == (String*)0)
+                    return (String*)0;
+                if (one.equals(String.withCString("=")))
+                    continue;
+                if (got.equals(String.withCString("=")))
+                    got = one;
+                else if (!got.equals(one))
+                    return (String*)0;
+                }
+            return got;
+            }
+        // `Select c, a, b`: when c does not involve the accumulator, a merge
+        // (if-conversion's form of `if (c) acc += x;`), followed like a phi;
+        // when it does, a min or max (`acc = x < acc ? x : acc`): one arm the
+        // accumulator unchanged, the other free of it.
+        if (d.op().equals(String.withCString("Select")) && d.ops().count() == (u32)3)
+            {
+            IROperand* c = (IROperand*)d.ops().get((u32)0);
+            IROperand* x = (IROperand*)d.ops().get((u32)1);
+            IROperand* y = (IROperand*)d.ops().get((u32)2);
+            if (x.kind() != (u8)OPK_USE || y.kind() != (u8)OPK_USE)
+                return (String*)0;
+            bool cAcc = c.kind() == (u8)OPK_USE && ppDependsOn(c.val(), acc, defOf, (u32)0);
+            if (!cAcc)
+                {
+                String* l = ppChainOp(x.val(), acc, defOf, seen, depth + (u32)1);
+                String* r = ppChainOp(y.val(), acc, defOf, seen, depth + (u32)1);
+                if (l == (String*)0 || r == (String*)0)
+                    return (String*)0;
+                if (l.equals(String.withCString("=")))
+                    return r;
+                if (r.equals(String.withCString("=")) || l.equals(r))
+                    return l;
+                return (String*)0;
+                }
+            bool xAcc = x.val() == acc;
+            bool yAcc = y.val() == acc;
+            if (xAcc == yAcc)
+                return (String*)0;
+            IRValue* other = xAcc ? y.val() : x.val();
+            if (ppDependsOn(other, acc, defOf, (u32)0))
+                return (String*)0;
+            return String.withCString("Select");
+            }
+        // One operand on the accumulator's chain, the others free of it.
+        String* inner = (String*)0;
+        for (u32 k = (u32)0; k < d.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)d.ops().get(k);
+            if (o.kind() != (u8)OPK_USE || ppIsMem(o.val()))
+                continue;
+            if (!ppDependsOn(o.val(), acc, defOf, (u32)0))
+                continue;
+            if (inner != (String*)0)
+                return (String*)0;      // acc on two operands
+            inner = ppChainOp(o.val(), acc, defOf, seen, depth + (u32)1);
+            if (inner == (String*)0)
+                return (String*)0;
+            }
+        if (inner == (String*)0)
+            return (String*)0;
+        if (inner.equals(String.withCString("=")) || inner.equals(d.op()))
+            return d.op();
+        return (String*)0;
+        }
+
+    // Whether v's value is computed from acc (through anything but a phi:
+    // a phi is a path, followed by ppChainOp).
+    bool ppDependsOn(IRValue* v, IRValue* acc, Map* defOf, u32 depth)
+        {
+        if (v == acc)
+            return true;
+        if (depth > (u32)16)
+            return true;    // too deep to tell: assume it does
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
+        if (d == (IRInsn*)0)
+            return false;
+        if (d.op().equals(String.withCString("Phi")))
+            {
+            for (u32 k = (u32)0; k + (u32)1 < d.ops().count(); k = k + (u32)2)
+                {
+                IROperand* o = (IROperand*)d.ops().get(k + (u32)1);
+                if (o.kind() == (u8)OPK_USE && o.val() == acc)
+                    return true;
+                }
+            return false;
+            }
+        for (u32 k = (u32)0; k < d.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)d.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && !ppIsMem(o.val()) && ppDependsOn(o.val(), acc, defOf, depth + (u32)1))
+                return true;
+            }
+        return false;
+        }
+
+    // A memory token: it orders the loads and stores, it carries no value.
+    bool ppIsMem(IRValue* v)
+        {
+        return v != (IRValue*)0 && v.ty() != (String*)0 && v.ty().equals(String.withCString("Mem"));
+        }
+
+    // Whether the frame slot `addr` takes the address of is reached only from
+    // inside the loop (no AddrOf of it anywhere else in the function).
+    bool ppSlotOnlyIn(IRFunc* fn, LRCLoop* L, IRInsn* addr)
+        {
+        if (addr.ops().count() == (u32)0)
+            return false;
+        IROperand* slot = (IROperand*)addr.ops().get((u32)0);
+        if (slot.kind() != (u8)OPK_USE)
+            return false;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            if (hasBlock(L.body(), bb))
+                continue;
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (!n.op().equals(String.withCString("AddrOf")) || n.ops().count() == (u32)0)
+                    continue;
+                IROperand* o = (IROperand*)n.ops().get((u32)0);
+                if (o.kind() == (u8)OPK_USE && o.val() == slot.val())
+                    return false;
+                }
+            }
+        return true;
+        }
+
+    bool ppIsPositiveConst(IROperand* o, Map* defOf)
+        {
+        if (o.kind() == (u8)OPK_IMMI)
+            return o.imm() > (i64)0;
+        if (o.kind() != (u8)OPK_USE)
+            return false;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)o.val());
+        // Through the widenings the lowering wraps a small literal in.
+        while (d != (IRInsn*)0 && (d.op().equals(String.withCString("ZExt")) || d.op().equals(String.withCString("SExt"))) &&
+               d.ops().count() > (u32)0 && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_USE)
+            d = (IRInsn*)defOf.get((Hashable*)((IROperand*)d.ops().get((u32)0)).val());
+        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("Const")) || d.ops().count() == (u32)0)
+            return false;
+        IROperand* c = (IROperand*)d.ops().get((u32)0);
+        return c.kind() == (u8)OPK_IMMI && c.imm() > (i64)0;
+        }
+
+    // Whether v is the same on every iteration: defined outside the loop, or a
+    // constant, or pure arithmetic on such values (the lowering puts
+    // `(u32)D + (u32)1` and `1 << 18` in the header).
+    bool ppInvariant(IRValue* v, LRCLoop* L, Map* defOf, Map* defBlk, u32 depth)
+        {
+        if (!ppDefinedIn(defBlk, v, L))
+            return true;
+        if (depth > (u32)8)
+            return false;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
+        if (d == (IRInsn*)0)
+            return false;
+        String* op = d.op();
+        if (op.equals(String.withCString("Const")))
+            return true;
+        // Pure: touches no memory (no memory result) and is no phi, load or
+        // call — arithmetic, shifts, widenings and the like.
+        if (d.memRes() != (IRValue*)0 || d.isCall() || op.equals(String.withCString("Phi")) ||
+            op.equals(String.withCString("Load")))
+            return false;
+        for (u32 k = (u32)0; k < d.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)d.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && !ppInvariant(o.val(), L, defOf, defBlk, depth + (u32)1))
+                return false;
+            }
+        return true;
+        }
+
+    // The exit test reads the induction variable (or its next value).
+    bool ppCmpUses(IRInsn* cmp, IRValue* phi, IRValue* next)
+        {
+        for (u32 k = (u32)0; k < cmp.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)cmp.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && (o.val() == phi || o.val() == next))
+                return true;
+            }
+        return false;
+        }
+
+    bool ppStepOf(IRInsn* d, IRValue* phi)
+        {
+        for (u32 k = (u32)0; k < d.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)d.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && o.val() == phi)
+                return true;
+            }
+        return false;
         }
 
     // ── loop-reduction-collapse ──────────────────────────────────────────

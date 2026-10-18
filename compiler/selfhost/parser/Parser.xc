@@ -2955,7 +2955,7 @@ class Parser
         if (_libFiles != (Set*)0 && _libFiles.contains((Hashable*)cur().file())) return false;
         // The header: `( T? i in a .. b )` or `( T? i in a ... b )`, with a
         // positive literal `step` or none; or the C-style
-        // `( T? i = a; i < b; i++ )` with `<=`, `++i`, `i += 1` or
+        // `( T i = a; i < b; i++ )` with `<=`, `++i`, `i += 1` or
         // `i = i + 1` as well. As the reference.
         u32 depth = (u32)0;
         u32 pe = (u32)0;
@@ -2984,12 +2984,16 @@ class Parser
         }
         if (pe == (u32)0) return false;
         if (!sawIn) {
-            // C-style: `T? i = a` ; `i < b` or `i <= b` ; the step.
+            // C-style: `T i = a` ; `i < b` or `i <= b` ; the step.
             if (semi1 == (u32)0 || semi2 == (u32)0 || semi1 < at + (u32)3 || parTokType(semi1 - (u32)1) == (u16)tokAssign) return false;
             u32 eq = (u32)0;
             for (u32 i = at + (u32)2; i < semi1; i = i + (u32)1)
                 if (parTokType(i) == (u16)tokAssign) { eq = i; break; }
             if (eq == (u32)0 || parTokType(eq - (u32)1) != (u16)tokIdentifier) return false;
+            // The loop must declare its variable (`T i = a`): a block's work
+            // item gets its own, and `for (i = 0; …)` on an outer `i` left the
+            // block with none (both compilers refused the program).
+            if (eq < at + (u32)4) return false;
             var = parTokValue(eq - (u32)1);
             if (parTokType(semi1 + (u32)1) != (u16)tokIdentifier || !parTokValue(semi1 + (u32)1).equals(var)
                 || (parTokType(semi1 + (u32)2) != (u16)tokLess && parTokType(semi1 + (u32)2) != (u16)tokLessEq))
@@ -3144,6 +3148,11 @@ class Parser
                     else if (o == (u16)tokAmpersand) sym = String.withCString("&");
                     else if (o == (u16)tokPipe) sym = String.withCString("|");
                     else if (o == (u16)tokCaret) sym = String.withCString("^");
+                    // `acc = acc op e` only when op joins all of e: in
+                    // `h = h * C + x` the + binds outside the *, and the
+                    // iterations depend on each other (a Horner hash came
+                    // out 0 under --par-auto, par_gpu_wide, 2026-10-17).
+                    if (sym != (String*)0 && !parAutoTailIsOp(i + (u32)4, be, o)) sym = (String*)0;
                     want = (u32)2;
                 }
                 // `if (x < acc) acc = x;`: a min (or max) reduction (as the reference).
@@ -3192,6 +3201,56 @@ class Parser
             reds.add((Object*)r);
         }
         return true;
+    }
+
+    // Whether the statement's tail, from token `from` to its `;`, is one
+    // operand of `op`: every binary operator at its top level is `op` or binds
+    // more tightly (unary ones, after an operator or an opening bracket, do
+    // not count).
+    bool parAutoTailIsOp(u32 from, u32 be, u16 op)
+    {
+        u32 depth = (u32)0;
+        for (u32 j = from; j < be; j = j + (u32)1) {
+            u16 t = parTokType(j);
+            if (t == (u16)tokLParen || t == (u16)tokLBracket || t == (u16)tokLBrace) { depth = depth + (u32)1; continue; }
+            if (t == (u16)tokRParen || t == (u16)tokRBracket || t == (u16)tokRBrace) {
+                if (depth == (u32)0) return true;
+                depth = depth - (u32)1;
+                continue;
+            }
+            if (depth > (u32)0) continue;
+            if (t == (u16)tokSemicolon || t == (u16)tokComma) return true;
+            bool binop = t == (u16)tokPlus || t == (u16)tokMinus || t == (u16)tokStar || t == (u16)tokSlash || t == (u16)tokPercent || t == (u16)tokShiftLeft || t == (u16)tokShiftRight || t == (u16)tokLess || t == (u16)tokLessEq || t == (u16)tokGreater || t == (u16)tokGreaterEq || t == (u16)tokEqual || t == (u16)tokNotEqual || t == (u16)tokAmpersand || t == (u16)tokPipe || t == (u16)tokCaret || t == (u16)tokLogicalAnd || t == (u16)tokLogicalOr || t == (u16)tokQuestion;
+            if (!binop) continue;
+            u16 pt = j > from ? parTokType(j - (u32)1) : (u16)tokLParen;
+            bool unary = j == from || pt == (u16)tokLParen || pt == (u16)tokLBracket || pt == (u16)tokComma
+                || pt == (u16)tokAssign || parAutoIsBinOp(pt);
+            if (unary) continue;
+            // `op` again, or an operator that binds more tightly (part of the
+            // operand): anything else takes `acc op …` as its own operand.
+            if (t != op && parAutoPrec(t) <= parAutoPrec(op)) return false;
+        }
+        return true;
+    }
+    // C's binary-operator precedence, higher binding more tightly.
+    u32 parAutoPrec(u16 t)
+    {
+        if (t == (u16)tokStar || t == (u16)tokSlash || t == (u16)tokPercent) return (u32)10;
+        if (t == (u16)tokPlus || t == (u16)tokMinus) return (u32)9;
+        if (t == (u16)tokShiftLeft || t == (u16)tokShiftRight) return (u32)8;
+        if (t == (u16)tokLess || t == (u16)tokLessEq || t == (u16)tokGreater || t == (u16)tokGreaterEq) return (u32)7;
+        if (t == (u16)tokEqual || t == (u16)tokNotEqual) return (u32)6;
+        if (t == (u16)tokAmpersand) return (u32)5;
+        if (t == (u16)tokCaret) return (u32)4;
+        if (t == (u16)tokPipe) return (u32)3;
+        if (t == (u16)tokLogicalAnd) return (u32)2;
+        if (t == (u16)tokLogicalOr) return (u32)1;
+        if (t == (u16)tokQuestion) return (u32)0;
+        return (u32)0;
+    }
+    bool parAutoIsBinOp(u16 t)
+    {
+        return t == (u16)tokPlus || t == (u16)tokMinus || t == (u16)tokStar || t == (u16)tokSlash || t == (u16)tokPercent || t == (u16)tokShiftLeft || t == (u16)tokShiftRight || t == (u16)tokLess || t == (u16)tokLessEq || t == (u16)tokGreater || t == (u16)tokGreaterEq || t == (u16)tokEqual || t == (u16)tokNotEqual || t == (u16)tokAmpersand || t == (u16)tokPipe || t == (u16)tokCaret || t == (u16)tokLogicalAnd || t == (u16)tokLogicalOr || t == (u16)tokQuestion;
     }
 
     Node* parsePar(void)
@@ -3854,7 +3913,10 @@ class Parser
         // The step: `i += 1` (a range loop's), and the C-style spellings too —
         // `i++`, `++i`, `i = i + 1` — as the reference takes them.
         bool stepOk = false;
-        if (step != 0 && iv != 0) {
+        // Only a loop that declares its variable: `for (i = 0; …)` on an
+        // outer `i` has no name to compare with (the reference's nil compare
+        // is false; here it crashed --par-auto, arc_inert_elide, 2026-10-17).
+        if (step != 0 && iv != 0 && iv.kind() == (u16)nkVariableDecl && iv.name() != 0) {
             if (step.kind() == (u16)nkAssign && Parser._same(step.op(), "+=")
                 && step.kid((u32)1).kind() == (u16)nkInt && step.kid((u32)1).num() == (i64)1)
                 stepOk = true;
@@ -4504,7 +4566,9 @@ class Parser
         if (check((u16)tokIf))       return parseIf();
         // --par-auto: a counted while loop becomes the `for` it amounts to,
         // which parAutoFor then takes or leaves (parAutoWhileToFor).
-        if (check((u16)tokWhile) && _parAuto && _loopDepth == (u32)0
+        // Not without the par runtime (#import "Par.xc"): a block there could
+        // not be built, and --par-auto must never stop a program building.
+        if (check((u16)tokWhile) && _parAuto && _loopDepth == (u32)0 && isTypeName(String.withCString("ParChunk"))
             && (_blkFrames.count() == (u32)0
                 || ((Map*)_blkFrames.get(_blkFrames.count() - (u32)1)).get((Hashable*)String.withCString("par")) == (Object*)0)
             && parAutoWhileToFor())
@@ -4513,7 +4577,7 @@ class Parser
         if (check((u16)tokFor)) {
             // --par-auto: an outermost loop in plain code may become a par block —
             // inside a block literal too, but not inside a par body (the reference explains).
-            if (_parAuto && _loopDepth == (u32)0
+            if (_parAuto && _loopDepth == (u32)0 && isTypeName(String.withCString("ParChunk"))
                 && (_blkFrames.count() == (u32)0
                     || ((Map*)_blkFrames.get(_blkFrames.count() - (u32)1)).get((Hashable*)String.withCString("par")) == (Object*)0))
                 return parAutoFor();

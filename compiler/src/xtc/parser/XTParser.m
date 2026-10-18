@@ -2713,8 +2713,11 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         {
         // --par-auto: a counted while loop becomes the `for` it amounts to,
         // which parAutoFor then takes or leaves (parAutoWhileToFor).
+        // Not without the par runtime (#import "Par.xc"): a block there could
+        // not be built, and --par-auto must never stop a program building.
         if (self.parAuto && ![[self blkFrames].lastObject[@"par"] boolValue] &&
-            [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0 && [self parAutoWhileToFor])
+            [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0 && [self.typeTable typeForName:@"ParChunk"] &&
+            [self parAutoWhileToFor])
             return [self parAutoFor];
         [self parGridLoop:1];
         [self parAutoLoop:1];
@@ -2729,7 +2732,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         // inside a block literal too (its captures are captured again), but
         // not inside a par body, which is a block already.
         if (self.parAuto && ![[self blkFrames].lastObject[@"par"] boolValue] &&
-            [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0)
+            [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0 && [self.typeTable typeForName:@"ParChunk"])
             return [self parAutoFor];
         [self parGridLoop:1];
         [self parAutoLoop:1];
@@ -3424,7 +3427,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         return NO;
     // The header: `( T? i in a .. b )` or `( T? i in a ... b )`, with a
     // positive literal `step` or none (the desugaring counts a stride's
-    // iterations from 0); or the C-style `( T? i = a; i < b; i++ )` with
+    // iterations from 0); or the C-style `( T i = a; i < b; i++ )` with
     // `<=`, `++i`, `i += 1` or `i = i + 1` as well (what the desugaring takes
     // as a step).
     NSUInteger depth = 0;
@@ -3472,13 +3475,18 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         return NO;
     if (!sawIn)
         {
-        // C-style: `T? i = a` ; `i < b` or `i <= b` ; the step.
+        // C-style: `T i = a` ; `i < b` or `i <= b` ; the step.
         if (semi1 == 0 || semi2 == 0 || semi1 < at + 3 || [self parTokType:semi1 - 1] == XTTokenAssign)
             return NO;
         NSUInteger eq = 0;
         for (NSUInteger i = at + 2; i < semi1; i++)
             if ([self parTokType:i] == XTTokenAssign) { eq = i; break; }
         if (eq == 0 || [self parTokType:eq - 1] != XTTokenIdentifier)
+            return NO;
+        // The loop must declare its variable (`T i = a`): a block's work
+        // item gets its own, and `for (i = 0; …)` on an outer `i` left the
+        // block with none (both compilers refused the program).
+        if (eq < at + 4)
             return NO;
         var = [self parTokValue:eq - 1];
         if ([self parTokType:semi1 + 1] != XTTokenIdentifier || ![[self parTokValue:semi1 + 1] isEqualToString:var] ||
@@ -3693,6 +3701,11 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
                 else if (o == XTTokenAmpersand) sym = @"&";
                 else if (o == XTTokenPipe) sym = @"|";
                 else if (o == XTTokenCaret) sym = @"^";
+                // `acc = acc op e` only when op joins all of e: in
+                // `h = h * C + x` the + binds outside the *, and the
+                // iterations depend on each other (a Horner hash came out 0
+                // under --par-auto, par_gpu_wide, 2026-10-17).
+                if (sym && ![self parAutoTailFrom:i + 4 limit:be isOp:o]) sym = nil;
                 want = 2;
                 }
             // `if (x < acc) acc = x;`: a min (or max) reduction (from 0.8.1).
@@ -3759,6 +3772,71 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
 // `if (acc cmp E)` with the same E, token for token, and no else, else nil.
 // `E < acc` keeps the smaller, a min; `E > acc` the larger; reversed when
 // acc is on the left. Mirrored in the port (parAutoMinMax).
+/****************************************************************************\
+|* Whether the statement's tail, from token `from` to its `;`, is one operand
+|* of `op`: every binary operator at its top level is `op` or binds more
+|* tightly (unary ones, after an operator or an opening bracket, do not
+|* count). `acc = acc op e` is a reduction only then.
+\****************************************************************************/
+static BOOL parAutoIsBinOp(XTTokenType t)
+    {
+    return t == XTTokenPlus || t == XTTokenMinus || t == XTTokenStar || t == XTTokenSlash || t == XTTokenPercent || t == XTTokenShiftLeft || t == XTTokenShiftRight || t == XTTokenLess || t == XTTokenLessEq || t == XTTokenGreater || t == XTTokenGreaterEq || t == XTTokenEqual || t == XTTokenNotEqual || t == XTTokenAmpersand || t == XTTokenPipe || t == XTTokenCaret || t == XTTokenLogicalAnd || t == XTTokenLogicalOr || t == XTTokenQuestion;
+    }
+
+// C's binary-operator precedence, higher binding more tightly.
+static NSUInteger parAutoPrec(XTTokenType t)
+    {
+    if (t == XTTokenStar || t == XTTokenSlash || t == XTTokenPercent) return 10;
+    if (t == XTTokenPlus || t == XTTokenMinus) return 9;
+    if (t == XTTokenShiftLeft || t == XTTokenShiftRight) return 8;
+    if (t == XTTokenLess || t == XTTokenLessEq || t == XTTokenGreater || t == XTTokenGreaterEq) return 7;
+    if (t == XTTokenEqual || t == XTTokenNotEqual) return 6;
+    if (t == XTTokenAmpersand) return 5;
+    if (t == XTTokenCaret) return 4;
+    if (t == XTTokenPipe) return 3;
+    if (t == XTTokenLogicalAnd) return 2;
+    if (t == XTTokenLogicalOr) return 1;
+    if (t == XTTokenQuestion) return 0;
+    return 0;
+    }
+
+- (BOOL)parAutoTailFrom:(NSUInteger)from limit:(NSUInteger)be isOp:(XTTokenType)op
+    {
+    NSUInteger depth = 0;
+    for (NSUInteger j = from; j < be; j++)
+        {
+        XTTokenType t = [self parTokType:j];
+        if (t == XTTokenLParen || t == XTTokenLBracket || t == XTTokenLBrace)
+            {
+            depth++;
+            continue;
+            }
+        if (t == XTTokenRParen || t == XTTokenRBracket || t == XTTokenRBrace)
+            {
+            if (depth == 0)
+                return YES;
+            depth--;
+            continue;
+            }
+        if (depth > 0)
+            continue;
+        if (t == XTTokenSemicolon || t == XTTokenComma)
+            return YES;
+        if (!parAutoIsBinOp(t))
+            continue;
+        XTTokenType pt = j > from ? [self parTokType:j - 1] : XTTokenLParen;
+        BOOL unary = j == from || pt == XTTokenLParen || pt == XTTokenLBracket || pt == XTTokenComma ||
+                     pt == XTTokenAssign || parAutoIsBinOp(pt);
+        if (unary)
+            continue;
+        // `op` again, or an operator that binds more tightly (part of the
+        // operand): anything else takes `acc op …` as its own operand.
+        if (t != op && parAutoPrec(t) <= parAutoPrec(op))
+            return NO;
+        }
+    return YES;
+    }
+
 - (nullable NSString*)parAutoMinMaxAt:(NSUInteger)i name:(NSString*)name limit:(NSUInteger)be
     {
     if (i < 4 || [self parTokType:i - 1] != XTTokenRParen)

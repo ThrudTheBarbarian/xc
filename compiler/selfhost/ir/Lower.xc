@@ -403,6 +403,7 @@ class ClassInfo
     // tables. Off, no instruction carries a location and the IR text is
     // unchanged.
     bool _debugInfo;
+    bool _dbgPin;           // -g pins each plain local in a slot for the debugger; IR Propose's report keeps lines but not that
     bool _threadSafeStatics;
     // Classes whose name function the driver generated (`_xtc_cname_<C>`,
     // runtime class names): class name -> itself. Their itable carries the
@@ -525,6 +526,7 @@ class ClassInfo
         _tssMode = (i32)-1;
         _boundsCheck = false;
         _debugInfo = false;
+        _dbgPin = true;
         _threadSafeStatics = false;
         _locals = new Map();
         _localTypes = new Map();
@@ -630,6 +632,10 @@ class ClassInfo
     void setDebugInfo(bool b)
         {
         _debugInfo = b;
+        }
+    void setDebugPinning(bool b)
+        {
+        _dbgPin = b;
         }
     bool debugInfo(void)
         {
@@ -13775,7 +13781,7 @@ class ClassInfo
         // declared again in an inner scope would share the outer one's slot, a
         // pinned class reference is retained and released differently from an
         // SSA one, and structs and arrays already have slots of their own shape.
-        if (_debugInfo)
+        if (_debugInfo && _dbgPin)
             {
             Array* all = new Array();
             collectDbgLocalNames(body, all);

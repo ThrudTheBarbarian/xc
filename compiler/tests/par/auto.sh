@@ -137,5 +137,67 @@ n3=$(grep -cE 'par: autopar_[0-9]+:' "$W/rep3")
 XC_PAR_REPORT=1 "$W/speed3" > "$W/rep4" 2>&1
 n4=$(grep -cE 'par: autopar_[0-9]+:' "$W/rep4")
 [ "$n4" = "$n2" ] || { echo "FAIL auto: -fgoal=speed wrapped $n4 blocks, #goal speed $n2"; fail=1; }
+# A C-style loop on a variable declared OUTSIDE it (`for (i = 0; …)`) is not
+# a block: its work items would have no variable of their own. The scan took
+# it, and both compilers then refused the whole program (2026-10-17).
+cat > "$W/outer.xc" <<'XC'
+#import "Stdio.xc"
+i32 main(void)
+    {
+    u32 total = (u32)0;
+    u16 i = (u16)0;
+    for (i = (u16)0; i < (u16)10; i = i + (u16)1)
+        total = total + (u32)i;
+    Stdio.printf("%u %u\n", total, (u32)i);
+    return 0;
+    }
+XC
+"$XC" -q -H . -O2 --par-auto -Wpar-auto "$W/outer.xc" -o "$W/outer" >"$W/b6" 2>&1 || { echo "FAIL auto: a loop on an outer variable broke the --par-auto build"; head -3 "$W/b6"; fail=1; }
+grep -q "became a 'par' block" "$W/b6" && { echo "FAIL auto: a loop on an outer variable became a block"; fail=1; }
+[ -x "$W/outer" ] && [ "$("$W/outer")" = "45 10" ] || { echo "FAIL auto: the outer-variable loop's output"; fail=1; }
+# A program that does not import the par runtime builds under --par-auto
+# as it is: no loop becomes a block there (one did, and the build failed with
+# "a 'par' block needs its runtime", 2026-10-17).
+cat > "$W/noruntime.xc" <<'XC'
+#import "Stdio.xc"
+i32 main(void)
+    {
+    i32 a[64];
+    for (i32 i = 0; i < 64; i = i + 1) a[i] = i;
+    i32 s = 0;
+    for (i32 i = 0; i < 64; i = i + 1) s = s + a[i];
+    Stdio.printf("%ld\n", s);
+    return 0;
+    }
+XC
+"$XC" -q -H . -O2 --par-auto "$W/noruntime.xc" -o "$W/noruntime" >"$W/b7" 2>&1 || { echo "FAIL auto: --par-auto broke a program without the par runtime"; head -3 "$W/b7"; fail=1; }
+[ -x "$W/noruntime" ] && [ "$("$W/noruntime")" = "2016" ] || { echo "FAIL auto: the no-runtime program's output"; fail=1; }
+# `acc = acc op e` is a reduction only when op joins all of e. In a Horner
+# hash, `h = h * C + x`, the + binds outside the *: the iterations depend on
+# each other, and wrapping it gave 0 (par_gpu_wide, 2026-10-17).
+cat > "$W/horner.xc" <<'XC'
+#import "Stdio.xc"
+#import "Par.xc"
+#define N 4096
+u64 xs[N];
+i32 main(void)
+    {
+    for (u32 i in 0..N)
+        xs[i] = (u64)i * (u64)2654435761;
+    u64 h = (u64)1469598103934665603;
+    for (u32 i in 0..N)
+        h = h * (u64)1099511628211 + xs[i];
+    u64 s = (u64)0;
+    for (u32 i in 0..N)
+        s = s + xs[i] * (u64)3;
+    Stdio.printf("%llx %llx\n", h, s);
+    return 0;
+    }
+XC
+"$XC" -q -H . -O2 "$W/horner.xc" -o "$W/horner0" >/dev/null 2>&1
+"$XC" -q -H . -O2 --par-auto -Wpar-auto "$W/horner.xc" -o "$W/horner1" >"$W/b8" 2>&1 || { echo "FAIL auto: the Horner program did not build"; fail=1; }
+grep -q "horner.xc:10:.*became a 'par' block" "$W/b8" && { echo "FAIL auto: a Horner hash became a block"; fail=1; }
+grep -q "horner.xc:13:.*became a 'par' block" "$W/b8" || { echo "FAIL auto: s = s + xs[i] * 3 (a + reduction) did not become a block"; cat "$W/b8"; fail=1; }
+[ "$("$W/horner0")" = "$("$W/horner1")" ] || { echo "FAIL auto: the Horner program's output differs under --par-auto"; fail=1; }
 [ $fail = 0 ] && echo "--- auto: pass ---"
 exit $fail

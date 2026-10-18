@@ -889,9 +889,14 @@ class FeOptions
         // -g, as the reference's driver sets it up: a fresh file table, and the
         // program's own source registered first, so it is file 0 and names the
         // compile unit (imports are lowered first and would otherwise take it).
-        lower.setDebugInfo(o.debugInfo());
+        // XC_PAR_PROPOSE=report (IR Propose, experimental): the source lines
+        // on the IR, as -g puts them there, but the locals left to mem2reg,
+        // so the optimiser sees the loops a release build has.
+        bool ppLines = Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("report"));
+        lower.setDebugInfo(o.debugInfo() || ppLines);
+        lower.setDebugPinning(o.debugInfo());
         IRDbg.resetFiles();
-        if (o.debugInfo())
+        if (o.debugInfo() || ppLines)
             {
             IRDbg.setWorkingDirectory(Frontend.workingDirectory());
             IRDbg.fileIdForPath(IRDbg.canonicalPath(o.input()));
