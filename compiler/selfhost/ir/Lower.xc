@@ -14876,6 +14876,11 @@ class ClassInfo
         if (base.kind() != (u8)OPK_USE)
             return (String*)0;
         IRInsn* d = (IRInsn*)def.get((Hashable*)String.withU32(base.val().seq()));
+        // Through a pointer cast (the C path casts its untyped pointers
+        // where they are used).
+        while (d != (IRInsn*)0 && d.op().equals(String.withCString("Bitcast")) && d.ops().count() == (u32)1
+               && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_USE)
+            d = (IRInsn*)def.get((Hashable*)String.withU32(((IROperand*)d.ops().get((u32)0)).val().seq()));
         if (d == (IRInsn*)0 || d.ops().count() == (u32)0)
             return (String*)0;
         IROperand* o0 = (IROperand*)d.ops().get((u32)0);
@@ -15275,6 +15280,7 @@ class ClassInfo
     String* parFootprintWords(IRFunc* f, Array* ivars)
         {
         Map* def = new Map();
+        Map* phiBlk = new Map();
         IRValue* firstPhi = (IRValue*)0;
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
             {
@@ -15285,6 +15291,7 @@ class ClassInfo
                 if (ph.res() == (IRValue*)0)
                     continue;
                 def.set((Hashable*)String.withU32(ph.res().seq()), (Object*)ph);
+                phiBlk.set((Hashable*)String.withU32(ph.res().seq()), (Object*)bb);
                 if (firstPhi == (IRValue*)0)
                     firstPhi = ph.res();
                 }
@@ -15323,18 +15330,61 @@ class ClassInfo
                 IRInsn* ea = (IRInsn*)def.get((Hashable*)String.withU32(a0.val().seq()));
                 if (ea == (IRInsn*)0 || !ea.op().equals(String.withCString("ElementAddr")) || ea.ops().count() < (u32)2)
                     continue;
-                String* buf = parBufferOf((IROperand*)ea.ops().get((u32)0), selfVal, ivars, def);
+                // Element addresses of one type nested (a row of C's a[R][C],
+                // then its element; a flattened struct's element, then its
+                // field): their indices summed, into the array outermost.
+                IROperand* baseOp = (IROperand*)ea.ops().get((u32)0);
+                Array* terms = new Array();
+                terms.add(ea.ops().get((u32)1));
+                for (u32 dd = (u32)0; dd < (u32)4 && baseOp.kind() == (u8)OPK_USE; dd = dd + (u32)1)
+                    {
+                    IRInsn* inner = (IRInsn*)def.get((Hashable*)String.withU32(baseOp.val().seq()));
+                    if (inner == (IRInsn*)0 || !inner.op().equals(String.withCString("ElementAddr")) || inner.ops().count() < (u32)2
+                        || inner.res() == (IRValue*)0 || ea.res() == (IRValue*)0 || !inner.res().ty().equals(ea.res().ty()))
+                        break;
+                    terms.add(inner.ops().get((u32)1));
+                    baseOp = (IROperand*)inner.ops().get((u32)0);
+                    }
+                String* buf = parBufferOf(baseOp, selfVal, ivars, def);
                 if (buf == (String*)0)
                     continue;
-                ParIdx* px = parIndex((IROperand*)ea.ops().get((u32)1), iv, def, (u32)0);
-                if (!px.affine)
-                    px = parGridIndex((IROperand*)ea.ops().get((u32)1), iv, ivars, def);
+                ParIdx* px = (ParIdx*)0;
+                i64 rlo = (i64)0;
+                i64 rhi = (i64)0;
+                if (terms.count() == (u32)1)
+                    {
+                    px = parIndex((IROperand*)ea.ops().get((u32)1), iv, def, (u32)0);
+                    if (!px.affine)
+                        px = parGridIndex((IROperand*)ea.ops().get((u32)1), iv, ivars, def);
+                    rlo = px.c;
+                    rhi = px.c;
+                    }
+                // Else, or where that is not affine: k * i plus terms whose
+                // range is known (an inner counting loop's counter).
+                if (px == (ParIdx*)0 || !px.affine)
+                    {
+                    i64 rk = (i64)0;
+                    bool ok = true;
+                    rlo = (i64)0;
+                    rhi = (i64)0;
+                    for (u32 q = (u32)0; q < terms.count() && ok; q = q + (u32)1)
+                        {
+                        i64 tk = (i64)0;
+                        i64 tl = (i64)0;
+                        i64 th = (i64)0;
+                        ok = parRangeIndex((IROperand*)terms.get(q), iv, def, phiBlk, (u32)0, &tk, &tl, &th);
+                        rk = rk + tk;
+                        rlo = rlo + tl;
+                        rhi = rhi + th;
+                        }
+                    px = ParIdx.of(ok, rk, rlo);
+                    }
                 if (fpOk.get((Hashable*)buf) == (Object*)0)
                     {
                     order.add((Object*)buf);
                     fpK.set((Hashable*)buf, (Object*)Number.withI64(px.k));
-                    fpLo.set((Hashable*)buf, (Object*)Number.withI64(px.c));
-                    fpHi.set((Hashable*)buf, (Object*)Number.withI64(px.c));
+                    fpLo.set((Hashable*)buf, (Object*)Number.withI64(rlo));
+                    fpHi.set((Hashable*)buf, (Object*)Number.withI64(rhi));
                     fpOk.set((Hashable*)buf, (Object*)Number.withI64(px.affine && px.k != (i64)0 ? (i64)1 : (i64)0));
                     continue;
                     }
@@ -15342,10 +15392,10 @@ class ClassInfo
                     fpOk.set((Hashable*)buf, (Object*)Number.withI64((i64)0));
                 else
                     {
-                    if (px.c < ((Number*)fpLo.get((Hashable*)buf)).asI64())
-                        fpLo.set((Hashable*)buf, (Object*)Number.withI64(px.c));
-                    if (px.c > ((Number*)fpHi.get((Hashable*)buf)).asI64())
-                        fpHi.set((Hashable*)buf, (Object*)Number.withI64(px.c));
+                    if (rlo < ((Number*)fpLo.get((Hashable*)buf)).asI64())
+                        fpLo.set((Hashable*)buf, (Object*)Number.withI64(rlo));
+                    if (rhi > ((Number*)fpHi.get((Hashable*)buf)).asI64())
+                        fpHi.set((Hashable*)buf, (Object*)Number.withI64(rhi));
                     }
                 }
             }
@@ -15374,6 +15424,197 @@ class ClassInfo
             words.appendCString(":"); words.append(String.withI64(((Number*)fpHi.get((Hashable*)buf)).asI64() + (i64)1));
             }
         return words;
+        }
+
+    // An index term as k * i plus a value in [lo, hi]: a constant, i, an
+    // extension or sum or difference of such, a product with a constant, or
+    // an inner counting loop's induction phi (from a constant, by a positive
+    // constant step, while below a constant).
+    bool parRangeIndex(IROperand* op, IRValue* iv, Map* def, Map* phiBlk, u32 depth, i64* k, i64* lo, i64* hi)
+        {
+        k[0] = (i64)0;
+        if (depth > (u32)16)
+            return false;
+        if (op.kind() == (u8)OPK_IMMI)
+            {
+            lo[0] = op.imm();
+            hi[0] = op.imm();
+            return true;
+            }
+        if (op.kind() != (u8)OPK_USE || op.val() == (IRValue*)0)
+            return false;
+        if (op.val().seq() == iv.seq())
+            {
+            k[0] = (i64)1;
+            lo[0] = (i64)0;
+            hi[0] = (i64)0;
+            return true;
+            }
+        IRInsn* d = (IRInsn*)def.get((Hashable*)String.withU32(op.val().seq()));
+        if (d == (IRInsn*)0 || d.ops().count() == (u32)0)
+            return false;
+        String* o = d.op();
+        IROperand* o0 = (IROperand*)d.ops().get((u32)0);
+        if (o.equals(String.withCString("Const")))
+            {
+            if (o0.kind() != (u8)OPK_IMMI)
+                return false;
+            lo[0] = o0.imm();
+            hi[0] = o0.imm();
+            return true;
+            }
+        if (o.equals(String.withCString("ZExt")) || o.equals(String.withCString("SExt")) || o.equals(String.withCString("Copy")))
+            {
+            if (!parRangeIndex(o0, iv, def, phiBlk, depth + (u32)1, k, lo, hi))
+                return false;
+            return o.equals(String.withCString("SExt")) || o.equals(String.withCString("Copy")) || (lo[0] >= (i64)0 && k[0] == (i64)0);
+            }
+        if ((o.equals(String.withCString("Add")) || o.equals(String.withCString("Sub")) || o.equals(String.withCString("Mul"))) && d.ops().count() == (u32)2)
+            {
+            i64 ak = (i64)0; i64 al = (i64)0; i64 ah = (i64)0;
+            i64 bk = (i64)0; i64 bl = (i64)0; i64 bh = (i64)0;
+            if (!parRangeIndex(o0, iv, def, phiBlk, depth + (u32)1, &ak, &al, &ah)
+                || !parRangeIndex((IROperand*)d.ops().get((u32)1), iv, def, phiBlk, depth + (u32)1, &bk, &bl, &bh))
+                return false;
+            if (o.equals(String.withCString("Add")))
+                {
+                k[0] = ak + bk; lo[0] = al + bl; hi[0] = ah + bh;
+                return true;
+                }
+            if (o.equals(String.withCString("Sub")))
+                {
+                k[0] = ak - bk; lo[0] = al - bh; hi[0] = ah - bl;
+                return true;
+                }
+            // A product with a constant (one side a single value, no i).
+            i64 m = (i64)0;
+            if (bk == (i64)0 && bl == bh) { m = bl; k[0] = ak * m; lo[0] = al * m; hi[0] = ah * m; }
+            else if (ak == (i64)0 && al == ah) { m = al; k[0] = bk * m; lo[0] = bl * m; hi[0] = bh * m; }
+            else
+                return false;
+            if (m < (i64)0)
+                {
+                i64 t = lo[0]; lo[0] = hi[0]; hi[0] = t;
+                }
+            return true;
+            }
+        // A multiply by a power of two, as the optimiser leaves it.
+        if (o.equals(String.withCString("Shl")) && d.ops().count() == (u32)2)
+            {
+            IROperand* sh = (IROperand*)d.ops().get((u32)1);
+            i64 n = (i64)0 - (i64)1;
+            if (sh.kind() == (u8)OPK_IMMI)
+                n = sh.imm();
+            else if (sh.kind() == (u8)OPK_USE)
+                {
+                IRInsn* sd = (IRInsn*)def.get((Hashable*)String.withU32(sh.val().seq()));
+                if (sd != (IRInsn*)0 && sd.op().equals(String.withCString("Const")) && ((IROperand*)sd.ops().get((u32)0)).kind() == (u8)OPK_IMMI)
+                    n = ((IROperand*)sd.ops().get((u32)0)).imm();
+                }
+            if (n < (i64)0 || n > (i64)30)
+                return false;
+            if (!parRangeIndex(o0, iv, def, phiBlk, depth + (u32)1, k, lo, hi))
+                return false;
+            i64 m = (i64)1 << n;
+            k[0] = k[0] * m;
+            lo[0] = lo[0] * m;
+            hi[0] = hi[0] * m;
+            return true;
+            }
+        if (o.equals(String.withCString("Phi")) && d.ops().count() == (u32)4)
+            return parPhiRange(d, def, phiBlk, lo, hi);
+        return false;
+        }
+
+    bool parPhiRange(IRInsn* phi, Map* def, Map* phiBlk, i64* lo, i64* hi)
+        {
+        IRValue* pv = phi.res();
+        IRBlock* H = (IRBlock*)phiBlk.get((Hashable*)String.withU32(pv.seq()));
+        if (H == (IRBlock*)0)
+            return false;
+        i64 start = (i64)0;
+        bool haveStart = false;
+        bool stepped = false;
+        for (u32 e = (u32)0; e < (u32)2; e = e + (u32)1)
+            {
+            IROperand* ev = (IROperand*)phi.ops().get(e * (u32)2 + (u32)1);
+            if (ev.kind() == (u8)OPK_IMMI)
+                {
+                start = ev.imm();
+                haveStart = true;
+                continue;
+                }
+            if (ev.kind() != (u8)OPK_USE || ev.val() == (IRValue*)0)
+                return false;
+            IRInsn* ed = (IRInsn*)def.get((Hashable*)String.withU32(ev.val().seq()));
+            if (ed == (IRInsn*)0)
+                return false;
+            if (ed.op().equals(String.withCString("Const")) && ((IROperand*)ed.ops().get((u32)0)).kind() == (u8)OPK_IMMI)
+                {
+                start = ((IROperand*)ed.ops().get((u32)0)).imm();
+                haveStart = true;
+                continue;
+                }
+            IROperand* a0 = ed.ops().count() == (u32)2 ? (IROperand*)ed.ops().get((u32)0) : (IROperand*)0;
+            IROperand* a1 = ed.ops().count() == (u32)2 ? (IROperand*)ed.ops().get((u32)1) : (IROperand*)0;
+            if (ed.op().equals(String.withCString("Add")) && a0 != (IROperand*)0 && a0.kind() == (u8)OPK_USE && a0.val() == pv
+                && a1.kind() == (u8)OPK_IMMI && a1.imm() > (i64)0)
+                {
+                stepped = true;
+                continue;
+                }
+            return false;
+            }
+        if (!haveStart || !stepped)
+            return false;
+        // The test in the phi's block: pv < bound, the body on the true edge
+        // and the exit on the false (the header's own CondBranch).
+        IRInsn* t = H.term();
+        if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() < (u32)3)
+            return false;
+        IROperand* c0 = (IROperand*)t.ops().get((u32)0);
+        IRInsn* g = c0.kind() == (u8)OPK_USE ? (IRInsn*)def.get((Hashable*)String.withU32(c0.val().seq())) : (IRInsn*)0;
+        if (g == (IRInsn*)0 || !g.op().equals(String.withCString("ICmp")) || g.ops().count() < (u32)2 || g.pred() == (String*)0)
+            return false;
+        IROperand* g0 = (IROperand*)g.ops().get((u32)0);
+        IROperand* g1 = (IROperand*)g.ops().get((u32)1);
+        // Or rotated, the test at the bottom on the next value: pv + step
+        // < bound loops back to the phi's own block.
+        bool rotated = false;
+        if (g0.kind() == (u8)OPK_USE && g0.val() != pv)
+            {
+            IRInsn* nd = (IRInsn*)def.get((Hashable*)String.withU32(g0.val().seq()));
+            IROperand* t1 = (IROperand*)t.ops().get((u32)1);
+            if (nd != (IRInsn*)0 && nd.op().equals(String.withCString("Add")) && nd.ops().count() == (u32)2
+                && ((IROperand*)nd.ops().get((u32)0)).kind() == (u8)OPK_USE && ((IROperand*)nd.ops().get((u32)0)).val() == pv
+                && t1.kind() == (u8)OPK_BLOCK && t1.blk() == H)
+                rotated = true;
+            else
+                return false;
+            }
+        if (g0.kind() != (u8)OPK_USE || (g0.val() != pv && !rotated))
+            return false;
+        i64 bound = (i64)0;
+        if (g1.kind() == (u8)OPK_IMMI)
+            bound = g1.imm();
+        else
+            {
+            IRInsn* bd = g1.kind() == (u8)OPK_USE ? (IRInsn*)def.get((Hashable*)String.withU32(g1.val().seq())) : (IRInsn*)0;
+            if (bd == (IRInsn*)0 || !bd.op().equals(String.withCString("Const")) || ((IROperand*)bd.ops().get((u32)0)).kind() != (u8)OPK_IMMI)
+                return false;
+            bound = ((IROperand*)bd.ops().get((u32)0)).imm();
+            }
+        String* pr = g.pred();
+        bool lt = pr.equals(String.withCString("SLT")) || pr.equals(String.withCString("ULT"));
+        bool le = pr.equals(String.withCString("SLE")) || pr.equals(String.withCString("ULE"));
+        if ((!lt && !le) || start < (i64)0)
+            return false;
+        lo[0] = start;
+        hi[0] = le ? bound : bound - (i64)1;
+        // A rotated loop runs its body once before its first test.
+        if (rotated && hi[0] < start)
+            hi[0] = start;
+        return hi[0] >= lo[0];
         }
 
     // Arithmetic / compare / convert, the ops that count as per-item compute
@@ -22361,6 +22602,13 @@ class ClassInfo
         {
         IRModule* saved = _m;
         _m = m;
+        // The symbols as they are now (a C program's globals were read into
+        // the module after the parser's blocks were checked): the footprints
+        // look their arrays up here.
+        if (_parSyms == (Map*)0)
+            _parSyms = new Map();
+        for (u32 i = (u32)0; i < m.syms().count(); i = i + (u32)1)
+            _parSyms.set((Hashable*)((IRSymbol*)m.syms().get(i)).name(), m.syms().get(i));
         // The printers may change what they print: they print from a copy,
         // the kernel module the parser's blocks are printed from (the blocks
         // and what they call, cleaned up by the kernel passes), and write
