@@ -15164,6 +15164,7 @@ class ClassInfo
     // global, when every access is affine in i with the same k. Mirrors the
     // original.
     String* _parExtraMeta;
+    String* _mMslWhy;   // the Metal form's reason it was not made, for the outliner's trace
     // The guards as header words, `guard=<offset>:<bytes>:<m>:<d0>:<k>` (as
     // the reference's guardWordsIn).
     Array* parSplitColons(String* g)
@@ -17100,6 +17101,11 @@ class ClassInfo
             String* gt = gs != (IRSymbol*)0 ? gs.dataType() : (String*)0;
             IRLayout* gl = mslLayoutOf(gt);
             String* et = gl != (IRLayout*)0 ? gl.typeAt((u32)0) : gt;
+            // An array of structs of one number type: that number's
+            // (parFlatStructGlobals).
+            String* fe = parFlatField(et);
+            if (fe != (String*)0)
+                et = fe;
             String* en = mslScalar(et);
             if (en == (String*)0) return (String*)0;
             meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(mslWidth(et)));
@@ -18626,6 +18632,8 @@ class ClassInfo
             String* gt = gs != (IRSymbol*)0 ? gs.dataType() : (String*)0;
             IRLayout* gl = mslLayoutOf(gt);
             String* et = gl != (IRLayout*)0 ? gl.typeAt((u32)0) : gt;
+            String* fe = parFlatField(et);
+            if (fe != (String*)0) et = fe;
             if (ptxMem(et) == (String*)0) return (String*)0;
             meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(ptxSize(et)));
             params.appendCString(", .param .u64 glob_"); params.append(String.withU32(gi));
@@ -20363,6 +20371,8 @@ class ClassInfo
             String* gt = gs != (IRSymbol*)0 ? gs.dataType() : (String*)0;
             IRLayout* gl = mslLayoutOf(gt);
             String* et = gl != (IRLayout*)0 ? gl.typeAt((u32)0) : gt;
+            String* fe = parFlatField(et);
+            if (fe != (String*)0) et = fe;
             u32 t = spvType(et);
             if (t == (u32)0)
                 {
@@ -21959,6 +21969,8 @@ class ClassInfo
             String* gt = gs != (IRSymbol*)0 ? gs.dataType() : (String*)0;
             IRLayout* gl = mslLayoutOf(gt);
             String* et = gl != (IRLayout*)0 ? gl.typeAt((u32)0) : gt;
+            String* fe = parFlatField(et);
+            if (fe != (String*)0) et = fe;
             String* n = wgDeclare(decls, String.withFormat("g%u", gi), et);
             if (n == (String*)0)
                 {
@@ -22381,13 +22393,203 @@ class ClassInfo
             if (f != (IRFunc*)0)
                 {
                 _mWhy = (String*)0;
+                _mMslWhy = (String*)0;
+                parFlatStructGlobals(f);
                 parFillBlock(f, f, copy);
-                // XC_PAR_OUTLINE_TRACE: why a block has no GPU form.
-                if (_mWhy != (String*)0 && Platform.env(String.withCString("XC_PAR_OUTLINE_TRACE")).byteLength() > (u32)0)
-                    Stdio.error(String.withFormat("outline: %s: no GPU form: %s\n", b.cls().cString(), _mWhy.cString()));
+                // XC_PAR_OUTLINE_TRACE: why a block has no GPU form (the
+                // Metal form's reason, else the last form's).
+                String* why = _mMslWhy != (String*)0 ? _mMslWhy : _mWhy;
+                if (why != (String*)0 && Platform.env(String.withCString("XC_PAR_OUTLINE_TRACE")).byteLength() > (u32)0)
+                    Stdio.error(String.withFormat("outline: %s: no GPU form: %s\n", b.cls().cString(), why.cString()));
                 }
             }
         _m = saved;
+        }
+
+    // A global array of structs whose fields are all one number type (C's
+    // `struct P { int x, y; } ps[N]`, a vector's coordinates), in the kernel
+    // copy of an outlined block, as the array of that number it is in
+    // memory: its address a pointer to the number, element i's field k the
+    // number at i * fields + k. The printers then hold it as any array of
+    // numbers. Nothing changes where the struct is used otherwise.
+    void parFlatStructGlobals(IRFunc* f)
+        {
+        Map* def = new Map();
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                if (ip.res() != (IRValue*)0)
+                    def.set((Hashable*)String.withU32(ip.res().seq()), (Object*)ip);
+                }
+            }
+        // The candidates: an AddrOf of a global whose pointee is such a struct.
+        Map* flat = new Map();      // value seq -> the field type
+        Map* nf = new Map();        // value seq -> the number of fields
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                if (!ip.op().equals(String.withCString("AddrOf")) || ip.res() == (IRValue*)0 || ip.ops().count() != (u32)1
+                    || ((IROperand*)ip.ops().get((u32)0)).kind() != (u8)OPK_SYM || !mslIsPtr(ip.res().ty()))
+                    continue;
+                String* ft = parFlatField(mslPointee(ip.res().ty()));
+                if (ft == (String*)0)
+                    continue;
+                IRLayout* l = mslLayoutOf(mslPointee(ip.res().ty()));
+                flat.set((Hashable*)String.withU32(ip.res().seq()), (Object*)ft);
+                nf.set((Hashable*)String.withU32(ip.res().seq()), (Object*)Number.with(l.fieldCount()));
+                }
+            }
+        if (flat.count() == (u32)0)
+            return;
+        // Every use is an element's address, then only a field's; else the
+        // global stays as it is (and the kernel declines it).
+        Map* elems = new Map();     // element value seq -> its global's seq
+        for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1)
+            for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)f.blocks().get(b);
+                Array* all = new Array();
+                for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1) all.add(bb.phis().get(i));
+                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) all.add(bb.insns().get(i));
+                if (bb.term() != (IRInsn*)0) all.add((Object*)bb.term());
+                for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                    {
+                    IRInsn* ip = (IRInsn*)all.get(i);
+                    for (u32 k = (u32)0; k < ip.ops().count(); k = k + (u32)1)
+                        {
+                        IROperand* o = (IROperand*)ip.ops().get(k);
+                        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                            continue;
+                        String* key = String.withU32(o.val().seq());
+                        bool g = flat.get((Hashable*)key) != (Object*)0;
+                        bool e = elems.get((Hashable*)key) != (Object*)0;
+                        if (!g && !e)
+                            continue;
+                        bool ok = false;
+                        if (g && k == (u32)0 && ip.op().equals(String.withCString("ElementAddr")) && ip.res() != (IRValue*)0)
+                            {
+                            ok = true;
+                            if (pass == (u32)0)
+                                elems.set((Hashable*)String.withU32(ip.res().seq()), (Object*)key);
+                            }
+                        if (k == (u32)0 && ip.op().equals(String.withCString("FieldAddr")) && ip.ops().count() == (u32)2
+                            && ((IROperand*)ip.ops().get((u32)1)).kind() == (u8)OPK_IMMI)
+                            ok = true;
+                        if (!ok)
+                            {
+                            if (g)
+                                flat.set((Hashable*)key, (Object*)0);
+                            else
+                                flat.set((Hashable*)elems.get((Hashable*)key), (Object*)0);
+                            }
+                        }
+                    }
+                }
+        // The rewrite.
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            u32 i = (u32)0;
+            while (i < bb.insns().count())
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                IRValue* r = ip.res();
+                String* op = ip.op();
+                if (r == (IRValue*)0 || ip.ops().count() == (u32)0)
+                    {
+                    i = i + (u32)1;
+                    continue;
+                    }
+                IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
+                String* gk = (String*)0;
+                if (op.equals(String.withCString("AddrOf")))
+                    gk = String.withU32(r.seq());
+                else if (o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0)
+                    {
+                    String* ok0 = String.withU32(o0.val().seq());
+                    gk = flat.get((Hashable*)ok0) != (Object*)0 ? ok0 : (String*)elems.get((Hashable*)ok0);
+                    }
+                String* ft = gk != (String*)0 ? (String*)flat.get((Hashable*)gk) : (String*)0;
+                if (ft == (String*)0)
+                    {
+                    i = i + (u32)1;
+                    continue;
+                    }
+                String* pt = parPtrRetyped(r.ty(), ft);
+                if (op.equals(String.withCString("AddrOf")))
+                    r.setTy(pt);
+                else if (op.equals(String.withCString("ElementAddr")) && ip.ops().count() == (u32)2)
+                    {
+                    // [i] of the struct: [i * fields] of the number.
+                    u32 n = ((Number*)nf.get((Hashable*)gk)).asU32();
+                    IROperand* io = (IROperand*)ip.ops().get((u32)1);
+                    IROperand* scaled = (IROperand*)0;
+                    if (io.kind() == (u8)OPK_IMMI)
+                        scaled = IROperand.immI(io.imm() * (i64)n, io.ty());
+                    else if (io.kind() == (u8)OPK_USE && io.val() != (IRValue*)0)
+                        {
+                        IRValue* mv = new IRValue(io.val().ty());
+                        IRInsn* mul = IRInsn.with(String.withCString("Mul"));
+                        mul.add(IROperand.useVal(io.val()));
+                        mul.add(IROperand.immI((i64)n, io.val().ty()));
+                        mul.setRes(mv);
+                        bb.insns().insert(i, (Object*)mul);
+                        i = i + (u32)1;
+                        scaled = IROperand.useVal(mv);
+                        }
+                    if (scaled != (IROperand*)0)
+                        {
+                        ip.ops().set((u32)1, (Object*)scaled);
+                        r.setTy(pt);
+                        }
+                    }
+                else if (op.equals(String.withCString("FieldAddr")))
+                    {
+                    // Field k: the number k further on.
+                    i64 k = ((IROperand*)ip.ops().get((u32)1)).imm();
+                    IRInsn* ea = IRInsn.with(String.withCString("ElementAddr"));
+                    ea.add(o0);
+                    ea.add(IROperand.immI(k, String.withCString("I64")));
+                    ea.setRes(r);
+                    r.setTy(pt);
+                    bb.insns().set(i, (Object*)ea);
+                    }
+                i = i + (u32)1;
+                }
+            }
+        }
+
+    // A struct type whose fields are all one number type, packed: that
+    // type, else 0.
+    String* parFlatField(String* t)
+        {
+        IRLayout* l = mslLayoutOf(t);
+        if (l == (IRLayout*)0 || l.fieldCount() == (u32)0)
+            return (String*)0;
+        String* ft = l.typeAt((u32)0);
+        u32 w = mslWidth(ft);
+        if (mslScalar(ft) == (String*)0 || w == (u32)0 || l.size() != w * l.fieldCount())
+            return (String*)0;
+        for (u32 k = (u32)0; k < l.fieldCount(); k = k + (u32)1)
+            if (!l.typeAt(k).equals(ft) || l.offsetAt(k) != w * k)
+                return (String*)0;
+        return ft;
+        }
+
+    // Ptr(T, space) as Ptr(ft, space).
+    String* parPtrRetyped(String* t, String* ft)
+        {
+        String* inner = mslPointee(t);
+        String* s = String.withCString("Ptr(");
+        s.append(ft);
+        s.append(t.substringFromByte((u32)4 + inner.byteLength()));
+        return s;
         }
 
     // One block's kernels, printed and written into its placeholder: every
@@ -22481,6 +22683,7 @@ class ClassInfo
         _mWhy = (String*)0;
         String* mslText = _parMetal && !serialBlock ? parMslK(f, kf, kmod) : (String*)0;
         mslWhy = _mWhy;
+        _mMslWhy = mslWhy;
         _mWhy = (String*)0;
         String* ptx = _parPTX && !serialBlock ? parPtxK(f, kf, kmod) : (String*)0;
         ptxWhy = _mWhy;

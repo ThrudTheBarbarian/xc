@@ -9,3 +9,4 @@ particles 3
 prefix 1
 redstart 3
 nestred 2
+structs 3
