@@ -1,6 +1,7 @@
-/* offsets: stores at [i + c] (blocks), and pointer arrays that may overlap,
-   touched at an offset or by rows (serial: the run-time overlap check
-   compares [lo, hi) of each, which holds only for [i]). */
+/* offsets: stores at [i + c], and pointer arrays that may overlap touched
+   at an offset or by rows: blocks, whose run-time overlap check compares
+   the elements each touches (k * i + [c0, c1]); the calls that do overlap
+   run serially. */
 #include <stdio.h>
 #define N 100000
 int a[N + 4], b[N + 4], c[N + 4];
@@ -14,6 +15,9 @@ int main(void)
     shift(c, a, N);
     rows(b, a);
     rows(a + 50, a);          /* overlapping rows: must stay serial-correct */
+    shift(a, a, N);           /* one array, the store a step ahead: serial */
+    shift(b + 10, b, 5);      /* overlapping, a short run */
+    rows(c + 20000, b);       /* apart: parallel */
     long long t = 0;
     for (int i = 0; i < N + 4; i++) t += (long long)a[i] * 7 + b[i] * 3 + c[i];
     printf("%lld\n", t);

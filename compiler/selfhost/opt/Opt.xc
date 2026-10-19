@@ -42,9 +42,6 @@ bool gOptOutline;
 // escapes the outer loop, so the collapse is unsafe. Distinct from 0, which
 // means the accumulator itself is dead afterwards (nothing to rescale).
 #define LRC_LEAK $FFFFFFFF
-// An array access the outliner found to be a row of the iteration's own
-// (i * C plus a value in [0, C)), not [i + c].
-#define PP_OFF_ROW ((i64)0x4000000000000000)
 
 // The per-target knobs. `XTIROptTargetProfile` is a conservative base with an
 // arm64/arm9 relaxation on top; only the knobs a ported pass actually consults
@@ -9726,8 +9723,14 @@ class OptProfile
             }
         if (c == (i64)0)
             return false;
+        _ppRowC = c;
+        _ppRowLo = lo;
+        _ppRowHi = hi;
         return lo >= (i64)0 && hi < c;
         }
+    i64 _ppRowC;
+    i64 _ppRowLo;
+    i64 _ppRowHi;
 
     void ppFlattenAdd(IROperand* o, Map* defOf, Array* out, u32 depth)
         {
@@ -11066,7 +11069,12 @@ class OptProfile
             IRValue* c1 = ppCmp(P, String.withCString("ULT"), aLo, bHi);
             IRValue* c2 = ppCmp(P, String.withCString("ULT"), bLo, aHi);
             IRValue* ov = ppEmit(P, String.withCString("And"), bt, IROperand.useVal(c1), IROperand.useVal(c2), (IROperand*)0);
-            if (((Number*)_ppGElem.get(a)).asU32() == ((Number*)_ppGElem.get(b)).asU32())
+            // One array (the same base): safe only when both touch each
+            // iteration's elements the same way.
+            if (((Number*)_ppGElem.get(a)).asU32() == ((Number*)_ppGElem.get(b)).asU32()
+                && ((Number*)_ppGOff.get(a)).asI64() == ((Number*)_ppGOff.get(b)).asI64()
+                && ((Number*)_ppGOffLo.get(a)).asI64() == ((Number*)_ppGOffLo.get(b)).asI64()
+                && ((Number*)_ppGOffHi.get(a)).asI64() == ((Number*)_ppGOffHi.get(b)).asI64())
                 {
                 IRValue* diff = ppCmp(P, String.withCString("NE"), aAt, bAt);
                 ov = ppEmit(P, String.withCString("And"), bt, IROperand.useVal(ov), IROperand.useVal(diff), (IROperand*)0);
@@ -11091,8 +11099,20 @@ class OptProfile
         IRValue* at = ppEmit(P, String.withCString("PtrToInt"), i64t, IROperand.useVal(base), (IROperand*)0, (IROperand*)0);
         IRValue* es = ppEmit(P, String.withCString("Const"), i64t,
                              IROperand.immI((i64)((Number*)_ppGElem.get(k)).asU32(), i64t), (IROperand*)0, (IROperand*)0);
-        IRValue* lb = ppEmit(P, String.withCString("Mul"), i64t, IROperand.useVal(lo64), IROperand.useVal(es), (IROperand*)0);
-        IRValue* hb = ppEmit(P, String.withCString("Mul"), i64t, IROperand.useVal(hi64), IROperand.useVal(es), (IROperand*)0);
+        // Elements k * lo + c0 to k * (hi - 1) + c1, inclusive: [k * lo + c0,
+        // k * hi - k + c1 + 1), in bytes.
+        i64 kk = ((Number*)_ppGOff.get(k)).asI64();
+        i64 c0 = ((Number*)_ppGOffLo.get(k)).asI64();
+        i64 c1 = ((Number*)_ppGOffHi.get(k)).asI64();
+        IRValue* kv = ppEmit(P, String.withCString("Const"), i64t, IROperand.immI(kk, i64t), (IROperand*)0, (IROperand*)0);
+        IRValue* c0v = ppEmit(P, String.withCString("Const"), i64t, IROperand.immI(c0, i64t), (IROperand*)0, (IROperand*)0);
+        IRValue* c1v = ppEmit(P, String.withCString("Const"), i64t, IROperand.immI(c1 + (i64)1 - kk, i64t), (IROperand*)0, (IROperand*)0);
+        IRValue* le = ppEmit(P, String.withCString("Mul"), i64t, IROperand.useVal(lo64), IROperand.useVal(kv), (IROperand*)0);
+        le = ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(le), IROperand.useVal(c0v), (IROperand*)0);
+        IRValue* he = ppEmit(P, String.withCString("Mul"), i64t, IROperand.useVal(hi64), IROperand.useVal(kv), (IROperand*)0);
+        he = ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(he), IROperand.useVal(c1v), (IROperand*)0);
+        IRValue* lb = ppEmit(P, String.withCString("Mul"), i64t, IROperand.useVal(le), IROperand.useVal(es), (IROperand*)0);
+        IRValue* hb = ppEmit(P, String.withCString("Mul"), i64t, IROperand.useVal(he), IROperand.useVal(es), (IROperand*)0);
         _ppRangeLo = ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(at), IROperand.useVal(lb), (IROperand*)0);
         _ppRangeHi = ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(at), IROperand.useVal(hb), (IROperand*)0);
         return at;
@@ -11247,15 +11267,30 @@ class OptProfile
     bool _ppAtIv;
     IRValue* _ppBase;    // the base value: the AddrOf's result, or the pointer
     String* _ppAddrTy;   // the element pointer's type (a field's element's, for a field)
-    // Where an access is the iteration's own: [i + _ppOff], or a row of its
-    // own (PP_OFF_ROW: i * C plus [0, C)).
+    // Where an access is the iteration's own: element k * i + c for a c in
+    // [c0, c1] ([i + c]: k = 1, c0 = c1 = c; a row: k = C, [c0, c1] in
+    // [0, C)), as _ppOff (k) and _ppOffLo / _ppOffHi.
     i64 _ppOff;
+    i64 _ppOffLo;
+    i64 _ppOffHi;
+
+    void ppShapeRow(void)
+        {
+        if (_ppAtIv)
+            {
+            _ppOff = _ppRowC;
+            _ppOffLo = _ppRowLo;
+            _ppOffHi = _ppRowHi;
+            }
+        }
 
     bool ppAddrKey(IRValue* addr, IRValue* iv, Map* defOf)
         {
         _ppKey = (String*)0;
         _ppAtIv = false;
-        _ppOff = (i64)0;
+        _ppOff = (i64)1;
+        _ppOffLo = (i64)0;
+        _ppOffHi = (i64)0;
         _ppAddrTy = addr.ty();
         IRInsn* d = (IRInsn*)defOf.get((Hashable*)addr);
         // A field of an element: the element's (its array, its index, its size).
@@ -11285,7 +11320,6 @@ class OptProfile
                     && xd.ops().count() == (u32)1 && ((IROperand*)xd.ops().get((u32)0)).kind() == (u8)OPK_USE)
                     x = ((IROperand*)xd.ops().get((u32)0)).val();
                 _ppAtIv = x == iv;
-                _ppOff = (i64)0;
                 // [i + c] / [i - c]: the iteration's own element, c further on.
                 if (!_ppAtIv)
                     {
@@ -11300,12 +11334,14 @@ class OptProfile
                         if (a0.kind() == (u8)OPK_USE && ppStripExt(a0.val(), defOf) == iv && constValue(defOf, a1, &c))
                             {
                             _ppAtIv = true;
-                            _ppOff = sub ? (i64)0 - c : c;
+                            _ppOffLo = sub ? (i64)0 - c : c;
+                            _ppOffHi = _ppOffLo;
                             }
                         else if (!sub && a1.kind() == (u8)OPK_USE && ppStripExt(a1.val(), defOf) == iv && constValue(defOf, a0, &c))
                             {
                             _ppAtIv = true;
-                            _ppOff = c;
+                            _ppOffLo = c;
+                            _ppOffHi = c;
                             }
                         }
                     }
@@ -11336,12 +11372,12 @@ class OptProfile
                 {
                 base = rb;
                 _ppAtIv = ppRowOwned(terms, iv, defOf);
-                _ppOff = PP_OFF_ROW;
+                ppShapeRow();
                 }
             else if (!_ppAtIv && io.kind() == (u8)OPK_USE)
                 {
                 _ppAtIv = ppRowOwned(terms, iv, defOf);
-                _ppOff = PP_OFF_ROW;
+                ppShapeRow();
                 }
             }
         // Through a cast of a pointer to its element type (the C path casts
@@ -11372,7 +11408,9 @@ class OptProfile
     Array* _ppGBase;
     Array* _ppGElem;
     Array* _ppGAtIv;
-    Array* _ppGOff;     // Number@: each array's offset from [i] (or PP_OFF_ROW)
+    Array* _ppGOff;     // Number@: each array's k (elements per iteration)
+    Array* _ppGOffLo;   // Number@: and the c0, c1 of k * i + [c0, c1]
+    Array* _ppGOffHi;
     Array* _ppGStored;
     // The pairs that need a check at run time (indices into the above).
     Array* _ppPairA;
@@ -11416,11 +11454,24 @@ class OptProfile
             _ppGElem.add((Object*)Number.with(es));
             _ppGAtIv.add((Object*)Number.with(atIv ? (u32)1 : (u32)0));
             _ppGOff.add((Object*)Number.withI64(_ppOff));
+            _ppGOffLo.add((Object*)Number.withI64(_ppOffLo));
+            _ppGOffHi.add((Object*)Number.withI64(_ppOffHi));
             _ppGStored.add((Object*)Number.with(stored ? (u32)1 : (u32)0));
             return;
             }
         // Every access the iteration's own at one offset, or none is.
         if (!atIv || ((Number*)_ppGOff.get(k)).asI64() != _ppOff)
+            _ppGAtIv.set(k, (Object*)Number.with((u32)0));
+        // A row's elements: the range over every access (a stencil's rows
+        // are the same row: one iteration's).
+        else if (_ppOff != (i64)1)
+            {
+            if (_ppOffLo < ((Number*)_ppGOffLo.get(k)).asI64())
+                _ppGOffLo.set(k, (Object*)Number.withI64(_ppOffLo));
+            if (_ppOffHi > ((Number*)_ppGOffHi.get(k)).asI64())
+                _ppGOffHi.set(k, (Object*)Number.withI64(_ppOffHi));
+            }
+        else if (((Number*)_ppGOffLo.get(k)).asI64() != _ppOffLo)
             _ppGAtIv.set(k, (Object*)Number.with((u32)0));
         if (stored)
             _ppGStored.set(k, (Object*)Number.with((u32)1));
@@ -11436,6 +11487,8 @@ class OptProfile
         _ppGElem = new Array();
         _ppGAtIv = new Array();
         _ppGOff = new Array();
+        _ppGOffLo = new Array();
+        _ppGOffHi = new Array();
         _ppGStored = new Array();
         _ppPairA = new Array();
         _ppPairB = new Array();
@@ -11507,10 +11560,8 @@ class OptProfile
                 // and their bases from outside the loop.
                 if (((Number*)_ppGAtIv.get(x)).asU32() == (u32)0)
                     return ppNo("an array that may overlap a stored one, read away from [i]");
-                // The run-time check compares [lo, hi) of each: both at [i]
-                // exactly (not a row, not i + c).
-                if (((Number*)_ppGOff.get(s)).asI64() != (i64)0 || ((Number*)_ppGOff.get(x)).asI64() != (i64)0)
-                    return ppNo("an array that may overlap a stored one, touched other than at [i]");
+                // (The run-time check compares the elements each touches,
+                // k * lo + c0 up to k * (hi - 1) + c1: ppRangeOf.)
                 if (((Number*)_ppGElem.get(s)).asU32() == (u32)0 || ((Number*)_ppGElem.get(x)).asU32() == (u32)0)
                     return ppNo("an array of an element whose size is not known");
                 for (u32 w = (u32)0; w < (u32)2; w = w + (u32)1)

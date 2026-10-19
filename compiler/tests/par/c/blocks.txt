@@ -10,4 +10,4 @@ prefix 1
 redstart 3
 nestred 2
 structs 3
-offsets 4
+offsets 6
