@@ -158,5 +158,32 @@ n=$(cat "$W/scale.pb" "$W/saxpy.pb" 2>/dev/null | grep -c ': outlined, a block')
 if [ "$(uname -s)" = Darwin ]; then
     XC_PAR=gpu XC_PAR_REPORT=1 "$W/saxpy.par" 2>&1 | grep -q 'items on the GPU' || { echo "FAIL cpath: no C loop ran on the GPU"; fail=1; }
 fi
+# --par-auto on a C file is the IR outliner (there is no parser scan for C),
+# and -I / -D reach clang.
+mkdir -p "$W/inc"
+printf '#define SCALE_K 4\n' > "$W/inc/k.h"
+cat > "$W/defs.c" <<'C'
+#include <stdio.h>
+#include "k.h"
+#ifndef N
+#define N 10
+#endif
+int a[N];
+int main(void)
+{
+    for (int i = 0; i < N; i++)
+        a[i] = i * SCALE_K;
+    long s = 0;
+    for (int i = 0; i < N; i++)
+        s += a[i];
+    printf("%ld\n", s);
+    return 0;
+}
+C
+"$XC" -q -O3 --par-auto -H . -I "$W/inc" -DN=1000000 -o "$W/defs" "$W/defs.c" > "$W/defs.b" 2>&1 || { echo "FAIL cpath: --par-auto with -I/-D does not build"; head -3 "$W/defs.b"; fail=1; }
+if [ -x "$W/defs" ]; then
+    [ "$("$W/defs")" = "1999998000000" ] || { echo "FAIL cpath: --par-auto -DN=1000000 gives $("$W/defs")"; fail=1; }
+    XC_PAR_REPORT=1 "$W/defs" 2>&1 | grep -q 'items on the' || { echo "FAIL cpath: --par-auto made no block of a C loop"; fail=1; }
+fi
 [ $fail = 0 ] && echo "--- cpath: pass ---" || echo "--- cpath: FAIL ---"
 exit $fail

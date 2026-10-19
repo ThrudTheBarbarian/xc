@@ -381,8 +381,14 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
             }
         // PLT32 for a call/jmp target and PC32 for a data reference, matching
         // what clang emits — both resolve identically for a defined symbol, and
-        // a linker that treats them differently expects the distinction.
-        uint64_t rt = (f.kind == XAX86FixupRel32) ? R_X86_64_PLT32 : R_X86_64_PC32;
+        // a linker that treats them differently expects the distinction. A GOT
+        // load stays one: REX_GOTPCRELX (42, relaxable to lea) or a plain
+        // GOTPCREL (9). Written as PC32, the link pointed the load at the symbol
+        // itself and loaded its contents as its address.
+        uint64_t rt = (f.kind == XAX86FixupRel32) ? R_X86_64_PLT32
+                    : (f.kind == XAX86FixupGotLoad) ? 42
+                    : (f.kind == XAX86FixupGotRef) ? 9
+                    : R_X86_64_PC32;
         put64v(textRel, f.offset);
         put64v(textRel, info | rt);
         put64v(textRel, (uint64_t)f.addend);

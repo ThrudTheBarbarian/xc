@@ -4187,19 +4187,26 @@ void main(void)
     IRModule* mod = (IRModule*)0;
     if (d.fe().input().hasSuffix(String.withCString(".c")))
         {
-        // With the IR outliner on (XC_PAR_PROPOSE=outline), the par runtime
-        // comes too, lowered from a stub, so loops can become blocks.
+        // With the IR outliner on (--par-auto, or XC_PAR_PROPOSE=outline),
+        // the par runtime comes too, lowered from a stub, so loops can
+        // become blocks. The user's -I and -D go to clang.
         String* cin = d.fe().input();
+        if (d.fe().parAuto())
+            gOptOutline = true;
+        Array* cIncs = new Array();
+        cIncs.addAll(d.fe().incs());
+        Array* cDefs = new Array();
+        cDefs.addAll(d.fe().defs());
         gOptPromoteScalars = true;
         if (d.compileOnly())
             {
             Stdio.printf("xcc: error: -c of a C file is not done yet: build the program in one step\n");
             Process.exit((i32)1); return;
             }
-        if (Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
-            mod = CPath.lowerWith(cin, CPath.scratch(), new Array(), new Array(), d.fe());
+        if (gOptOutline || Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
+            mod = CPath.lowerWith(cin, CPath.scratch(), cIncs, cDefs, d.fe());
         else
-            mod = CPath.lower(cin, CPath.scratch(), new Array(), new Array());
+            mod = CPath.lower(cin, CPath.scratch(), cIncs, cDefs);
         // xcc's part compiles to an object, clang's is one already: the two
         // are linked where an object of xcc's would be written (cSplitLink).
         if (mod != (IRModule*)0)

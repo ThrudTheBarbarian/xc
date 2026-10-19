@@ -1257,22 +1257,41 @@ class LlvmReader
             phi.setRes(r);
             while (eat("["))
                 {
-                // A phi's constant operand is made in its predecessor: here,
-                // it is made at the top of this block, which dominates nothing
-                // it must; so only values are read.
                 ws();
-                if (peek() != (u8)'%')
+                if (peek() == (u8)'%')
                     {
-                    fail("a phi with a constant operand");
-                    return;
+                    String* vn = word();
+                    eat(",");
+                    String* bn = word().substringFromByte((u32)1);
+                    eat("]");
+                    eat(",");
+                    phi.add(IROperand.block(blockNamed(bn)));
+                    phi.add(IROperand.useVal(valNamed(vn, t)));
+                    continue;
                     }
-                String* vn = word();
+                // A constant (`[ false, %land.lhs ]`, C's && and ||): made in
+                // the predecessor, where it flows from.
+                u32 cs = _p;
+                while (_p < _s.byteLength() && _s.byteAt(_p) != (u8)',')
+                    _p = _p + (u32)1;
+                u32 ce = _p;
                 eat(",");
                 String* bn = word().substringFromByte((u32)1);
                 eat("]");
                 eat(",");
+                u32 resume = _p;
+                String* line = _s;
+                IRBlock* here = _blk;
+                _blk = blockNamed(bn);
+                at(line.substringBytes(cs, ce - cs));
+                IRValue* cv = operand(t);
+                at(line);
+                _p = resume;
+                _blk = here;
+                if (cv == (IRValue*)0)
+                    return;
                 phi.add(IROperand.block(blockNamed(bn)));
-                phi.add(IROperand.useVal(valNamed(vn, t)));
+                phi.add(IROperand.useVal(cv));
                 }
             _blk.addPhi(phi);
             return;

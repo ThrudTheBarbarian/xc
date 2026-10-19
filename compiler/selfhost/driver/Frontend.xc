@@ -889,7 +889,7 @@ class FeOptions
         Lower* lower = Lower.make();
         // IR outlining (XC_PAR_PROPOSE=outline): the optimiser's blocks get
         // their kernels from this lowering's printers.
-        if (Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
+        if (gOptOutline || Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
             gParKernelHook = (ParKernelHook*)LowerKernelHook.with(lower);
         lower.setPointerWidth(pointerWidthOf(o));
         lower.setCountWidth(countWidthOf(o));
@@ -917,7 +917,7 @@ class FeOptions
         // to mem2reg, so the optimiser sees the loops a release build has (and
         // the outliner can tell the program's loops from the library's).
         String* ppMode = Platform.env(String.withCString("XC_PAR_PROPOSE"));
-        bool ppLines = ppMode.equals(String.withCString("report")) || ppMode.equals(String.withCString("outline"));
+        bool ppLines = ppMode.equals(String.withCString("report")) || ppMode.equals(String.withCString("outline")) || gOptOutline;
         lower.setDebugInfo(o.debugInfo() || ppLines);
         lower.setDebugPinning(o.debugInfo());
         IRDbg.resetFiles();

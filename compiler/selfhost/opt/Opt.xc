@@ -33,6 +33,11 @@ ParKernelHook* gParKernelHook;
 // mem2reg promotes such a slot too, where only loads and stores reach it.
 bool gOptPromoteScalars;
 
+// The IR outliner on for this compile without XC_PAR_PROPOSE: a C file
+// built with --par-auto (the C path has no parser scan; the outliner is
+// how its loops become blocks).
+bool gOptOutline;
+
 // A sentinel count from lrcCountLiveOut: a value OTHER than the accumulator
 // escapes the outer loop, so the collapse is unsafe. Distinct from 0, which
 // means the accumulator itself is dead afterwards (nothing to rescale).
@@ -1297,6 +1302,8 @@ class OptProfile
     // of its own, called once in its place. Experimental, selfhost only.
     static bool ppOutline(void)
         {
+        if (gOptOutline)
+            return true;
         u8* e = _xt_getenv("XC_PAR_PROPOSE");
         return e != (u8*)0 && String.withCString(e).equals(String.withCString("outline"));
         }
@@ -4287,11 +4294,129 @@ class OptProfile
     void mem2reg(IRModule* m)
         {
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
             m2rFunc(m, (IRFunc*)m.funcs().get(f));
+            if (gOptPromoteScalars)
+                m2rDeadPhis((IRFunc*)m.funcs().get(f));
+            }
+        }
+
+    // A C module's phis that nothing reads, gone: phi placement does not ask
+    // whether a local is live, so a local declared inside a loop gets one at
+    // the loop's header, which then reads as a carried value.
+    void m2rDeadPhis(IRFunc* fn)
+        {
+        // Live: what an instruction other than a phi reads, and what a live
+        // phi reads, to a fixed point. (Two phis that read only each other, a
+        // local declared inside a nest, are dead together.)
+        Set* live = new Set();
+        Array* phis = new Array();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            phis.addAll(bb.phis());
+            Array* all = new Array();
+            all.addAll(bb.insns());
+            if (bb.term() != (IRInsn*)0)
+                all.add((Object*)bb.term());
+            for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)all.get(i);
+                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)n.ops().get(k);
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                        live.add((Hashable*)o.val());
+                    }
+                }
+            }
+        bool grew = true;
+        while (grew)
+            {
+            grew = false;
+            for (u32 i = (u32)0; i < phis.count(); i = i + (u32)1)
+                {
+                IRInsn* p = (IRInsn*)phis.get(i);
+                if (p.res() == (IRValue*)0 || !live.contains((Hashable*)p.res()))
+                    continue;
+                for (u32 k = (u32)0; k < p.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)p.ops().get(k);
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && !live.contains((Hashable*)o.val()))
+                        {
+                        live.add((Hashable*)o.val());
+                        grew = true;
+                        }
+                    }
+                }
+            }
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            Array* keep = new Array();
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* p = (IRInsn*)bb.phis().get(i);
+                if (p.res() == (IRValue*)0 || live.contains((Hashable*)p.res()))
+                    keep.add((Object*)p);
+                }
+            if (keep.count() != bb.phis().count())
+                bb.setPhis(keep);
+            }
+        }
+
+    // A C local's value before it is written (gOptPromoteScalars): a zero of
+    // its type, made once per function at the top of the entry block. In a
+    // dry run, only a stand-in operand.
+    Map* _m2rUndefs;
+    IROperand* m2rUndef(IRFunc* fn, u32 vi, bool dry)
+        {
+        if (dry)
+            return IROperand.immI((i64)0, String.withCString("I32"));
+        Number* key = Number.with(vi);
+        Object* have = _m2rUndefs.get((Hashable*)key);
+        if (have != (Object*)0)
+            return (IROperand*)have;
+        String* t = (String*)_m2rType.get(vi);
+        IRInsn* c = IRInsn.with(String.withCString("Const"));
+        IRValue* z = (IRValue*)0;
+        if (t.hasPrefix(String.withCString("F")))
+            {
+            z = new IRValue(t);
+            c.add(IROperand.immF(String.withCString("0000000000000000"), t));
+            }
+        else if (t.hasPrefix(String.withCString("Ptr(")))
+            {
+            // A null pointer: zero, then the pointer.
+            IRValue* zi = new IRValue(String.withCString("I64"));
+            c.add(IROperand.immI((i64)0, String.withCString("I64")));
+            c.setRes(zi);
+            IRBlock* e0 = (IRBlock*)fn.blocks().get((u32)0);
+            e0.insns().insert((u32)0, (Object*)c);
+            IRInsn* ip = IRInsn.with(String.withCString("IntToPtr"));
+            z = new IRValue(t);
+            ip.setRes(z);
+            ip.add(IROperand.useVal(zi));
+            e0.insns().insert((u32)1, (Object*)ip);
+            IROperand* po = IROperand.useVal(z);
+            _m2rUndefs.set((Hashable*)key, (Object*)po);
+            return po;
+            }
+        else
+            {
+            z = new IRValue(t);
+            c.add(IROperand.immI((i64)0, t));
+            }
+        c.setRes(z);
+        ((IRBlock*)fn.blocks().get((u32)0)).insns().insert((u32)0, (Object*)c);
+        IROperand* o = IROperand.useVal(z);
+        _m2rUndefs.set((Hashable*)key, (Object*)o);
+        return o;
         }
 
     void m2rFunc(IRModule* m, IRFunc* fn)
         {
+        _m2rUndefs = new Map();
         if (fn.blocks().count() == (u32)0 || fn.pinned().count() == (u32)0)
             return;
 
@@ -4771,6 +4896,10 @@ class OptProfile
             Array* st = (Array*)stacks.get(vi);
             if (n.op().equals(String.withCString("Load")))
                 {
+                // A C local read before it is written is undefined there: any
+                // value does, so zero (only for C: gOptPromoteScalars).
+                if (st.count() == (u32)0 && gOptPromoteScalars)
+                    st.add((Object*)m2rUndef(fn, vi, dry));
                 if (st.count() == (u32)0)
                     m2rMarkBad(vi);
                 else if (!dry && n.res() != (IRValue*)0)
@@ -4801,7 +4930,12 @@ class OptProfile
                 if (m2rIsBad(vi))
                     continue;
                 Array* st = (Array*)stacks.get(vi);
-                if (st.count() == (u32)0)
+                // A phi's edge on which a C local has not been written yet
+                // (one placed for a loop the local is dead in): zero.
+                IROperand* undef = (IROperand*)0;
+                if (st.count() == (u32)0 && gOptPromoteScalars)
+                    undef = m2rUndef(fn, vi, dry);
+                if (st.count() == (u32)0 && undef == (IROperand*)0)
                     {
                     m2rMarkBad(vi);
                     continue;
@@ -4809,6 +4943,13 @@ class OptProfile
                 if (dry)
                     continue;
                 IRInsn* phi = (IRInsn*)spi.get(k);
+                if (undef != (IROperand*)0)
+                    {
+                    for (u32 q = (u32)0; q + (u32)1 < phi.ops().count(); q = q + (u32)2)
+                        if (((IROperand*)phi.ops().get(q)).blk() == bb)
+                            phi.ops().set(q + (u32)1, undef);
+                    continue;
+                    }
                 for (u32 q = (u32)0; q + (u32)1 < phi.ops().count(); q = q + (u32)2)
                     if (((IROperand*)phi.ops().get(q)).blk() == bb)
                         phi.ops().set(q + (u32)1, st.get(st.count() - (u32)1));
@@ -9056,24 +9197,39 @@ class OptProfile
                 continue;
             bool again = true;
             u32 guard = (u32)0;
+            // Loops that are not blocks, by header: a loop inside one of them
+            // is judged on its own (the work inside a timing loop), as the
+            // parser's scan judges it.
+            Array* declined = new Array();
             while (again && guard < (u32)64)
                 {
                 again = false;
                 guard = guard + (u32)1;
                 _ppModule = m;
                 Array* loops = lrcLoops(fn);
+                // Outermost first: a loop is taken only once every loop
+                // around it has been declined.
+                bool progress = true;
+                while (progress && !again)
+                    {
+                    progress = false;
                 for (u32 i = (u32)0; i < loops.count() && !again; i = i + (u32)1)
                     {
                     LRCLoop* L = (LRCLoop*)loops.get(i);
+                    if (declined.indexOf((Object*)L.header()) != (u32)$FFFFFFFF)
+                        continue;
                     bool inner = false;
                     for (u32 j = (u32)0; j < loops.count() && !inner; j = j + (u32)1)
                         {
                         LRCLoop* M = (LRCLoop*)loops.get(j);
-                        if (M != L && M.header() != L.header() && hasBlock(M.body(), L.header()))
+                        if (M != L && M.header() != L.header() && hasBlock(M.body(), L.header())
+                            && declined.indexOf((Object*)M.header()) == (u32)$FFFFFFFF)
                             inner = true;
                         }
                     if (inner)
                         continue;
+                    progress = true;
+                    declined.add((Object*)L.header());
                     // The program's loops only: one with no source line, or the
                         // standard library's (the runtime's own loops among them:
                         // outlining Data.withLength's made a block that made a
@@ -9093,6 +9249,7 @@ class OptProfile
                         }
                     if (ppOutlineLoop(m, fn, L, at))
                         again = true;
+                    }
                     }
                 }
             }

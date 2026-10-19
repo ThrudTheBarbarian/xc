@@ -1642,8 +1642,15 @@ class ElfSharedInfo
                 }
             // PLT32 for a call/jmp target, PC32 for a data reference — what
             // clang emits. Both resolve identically for a DEFINED symbol, and a
-            // linker that treats them differently expects the distinction.
-            u32 rt = f.kind() == (u32)X86FIX_REL32 ? (u32)R_X86_64_PLT32 : (u32)R_X86_64_PC32;
+            // linker that treats them differently expects the distinction. A
+            // GOT load stays one: REX_GOTPCRELX (relaxable to lea), or a plain
+            // GOTPCREL. Written as PC32, the link pointed the load at the
+            // symbol itself, and loaded its contents as its address (a global
+            // another object defines: the C path's clang-compiled globals).
+            u32 rt = f.kind() == (u32)X86FIX_REL32 ? (u32)R_X86_64_PLT32
+                   : f.kind() == (u32)X86FIX_GOTLOAD ? (u32)42
+                   : f.kind() == (u32)X86FIX_GOTREF ? (u32)9
+                   : (u32)R_X86_64_PC32;
             Elf64.put64In(textRel, f.offset());
             Elf64.put32In(textRel, rt);
             Elf64.put32In(textRel, idx);
