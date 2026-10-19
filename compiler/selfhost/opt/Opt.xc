@@ -9914,6 +9914,8 @@ class OptProfile
         return false;
         }
 
+    Map* _ppLabels;     // block labels given so far (file:line), how many each
+
     bool ppIsPinned(IRFunc* fn, IRValue* v)
         {
         for (u32 i = (u32)0; i < fn.pinned().count(); i = i + (u32)1)
@@ -9952,9 +9954,11 @@ class OptProfile
             x = b;
         else if (b.kind() == (u8)OPK_USE && b.val() == pv)
             x = a;
-        if (x == (IROperand*)0)
+        // Or a tree of the operator holding the inner phi once.
+        bool tree = x == (IROperand*)0 && ppAssocChainOf(u, pv, defOf) && !ppTreeReads(u, pv, acc, defOf);
+        if (x == (IROperand*)0 && !tree)
             return (String*)0;
-        if (x.kind() == (u8)OPK_USE && (ppDependsOn(x.val(), pv, defOf, (u32)0) || ppDependsOn(x.val(), acc, defOf, (u32)0)))
+        if (x != (IROperand*)0 && x.kind() == (u8)OPK_USE && (ppDependsOn(x.val(), pv, defOf, (u32)0) || ppDependsOn(x.val(), acc, defOf, (u32)0)))
             return (String*)0;
         // The partial sums are used by the chain alone: acc by the inner phi
         // (and after the loop), the inner phi by the update and as acc's
@@ -9970,7 +9974,7 @@ class OptProfile
         for (u32 i = (u32)0; i < up.count(); i = i + (u32)1)
             {
             IRInsn* w = (IRInsn*)up.get(i);
-            if (w != u && w != (IRInsn*)defOf.get((Hashable*)acc))
+            if (w != u && w != (IRInsn*)defOf.get((Hashable*)acc) && !(tree && ppInTree(u, w, defOf)))
                 return (String*)0;
             }
         Array* uu = aeUsersOf(fn, upd);
@@ -9978,6 +9982,99 @@ class OptProfile
             if ((IRInsn*)uu.get(i) != inner)
                 return (String*)0;
         return u.op();
+        }
+
+    // Whether insn u is a tree of its one (associative, commutative,
+    // integer) operator whose leaves hold acc exactly once, as a leaf, the
+    // others free of it; the inner nodes used only within the tree.
+    bool ppAssocChainOf(IRInsn* u, IRValue* acc, Map* defOf)
+        {
+        String* op = u.op();
+        if (!op.equals(String.withCString("Add")) && !op.equals(String.withCString("Mul")) && !op.equals(String.withCString("And"))
+            && !op.equals(String.withCString("Or")) && !op.equals(String.withCString("Xor")))
+            return false;
+        u32 hits = (u32)0;
+        Array* work = new Array();
+        work.add((Object*)u);
+        for (u32 guard = (u32)0; work.count() > (u32)0 && guard < (u32)256; guard = guard + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)work.get(work.count() - (u32)1);
+            work.removeAt(work.count() - (u32)1);
+            if (n.ops().count() != (u32)2)
+                return false;
+            for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)n.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                    continue;
+                if (o.val() == acc)
+                    {
+                    hits = hits + (u32)1;
+                    continue;
+                    }
+                IRInsn* d = (IRInsn*)defOf.get((Hashable*)o.val());
+                if (d != (IRInsn*)0 && d.op().equals(op) && ppDependsOn(o.val(), acc, defOf, (u32)0))
+                    {
+                    work.add((Object*)d);
+                    continue;
+                    }
+                if (ppDependsOn(o.val(), acc, defOf, (u32)0))
+                    return false;
+                }
+            }
+        return hits == (u32)1 && work.count() == (u32)0;
+        }
+
+    // Whether a leaf of u's tree (other than pv itself) reads pv or acc.
+    bool ppTreeReads(IRInsn* u, IRValue* pv, IRValue* acc, Map* defOf)
+        {
+        Array* work = new Array();
+        work.add((Object*)u);
+        while (work.count() > (u32)0)
+            {
+            IRInsn* n = (IRInsn*)work.get(work.count() - (u32)1);
+            work.removeAt(work.count() - (u32)1);
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)n.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0 || o.val() == pv)
+                    continue;
+                IRInsn* d = (IRInsn*)defOf.get((Hashable*)o.val());
+                if (d != (IRInsn*)0 && d.op().equals(u.op()) && ppDependsOn(o.val(), pv, defOf, (u32)0))
+                    {
+                    work.add((Object*)d);
+                    continue;
+                    }
+                if (ppDependsOn(o.val(), acc, defOf, (u32)0))
+                    return true;
+                }
+            }
+        return false;
+        }
+
+    // Whether w is one of the inner nodes of u's operator tree (the path
+    // from u down to the accumulator).
+    bool ppInTree(IRInsn* u, IRInsn* w, Map* defOf)
+        {
+        Array* work = new Array();
+        work.add((Object*)u);
+        for (u32 guard = (u32)0; work.count() > (u32)0 && guard < (u32)256; guard = guard + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)work.get(work.count() - (u32)1);
+            work.removeAt(work.count() - (u32)1);
+            if (n == w)
+                return true;
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)n.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                    continue;
+                IRInsn* d = (IRInsn*)defOf.get((Hashable*)o.val());
+                if (d != (IRInsn*)0 && d.op().equals(u.op()))
+                    work.add((Object*)d);
+                }
+            }
+        return false;
         }
 
     bool ppInLoop(LRCLoop* L, IRInsn* w)
@@ -10391,6 +10488,14 @@ class OptProfile
                 other = s1;
             else if (s1.kind() == (u8)OPK_USE && s1.val() == phi.res())
                 other = s0;
+            // A tree of the one operator, the accumulator once among its
+            // leaves (`t = t + x1 + x2 + x3`): a reduction by it.
+            if (other == (IROperand*)0 && ppAssocChainOf(step, phi.res(), defOf))
+                {
+                reds.add((Object*)phi);
+                redOps.add((Object*)step.op());
+                continue;
+                }
             if (other == (IROperand*)0)
                 return ppNo("ppOutlinePar 11");
             if (iv == (IRInsn*)0 && addI && c0.val() == phi.res() && ppConstOne(other, defOf))
@@ -10839,6 +10944,16 @@ class OptProfile
             if (path != (String*)0)
                 label = String.withFormat("%s:%ld", path.lastPathComponent().cString(), (i32)at.dbgLine());
             }
+        // The runtime keeps each block's device choice and measurements by
+        // this name: a second block from the same line (a macro, a nest on
+        // one line) is told apart.
+        if (_ppLabels == (Map*)0)
+            _ppLabels = new Map();
+        Number* seen = (Number*)_ppLabels.get((Hashable*)label);
+        u32 nth = seen != (Number*)0 ? seen.asU32() + (u32)1 : (u32)1;
+        _ppLabels.set((Hashable*)String.withString(label), (Object*)Number.with(nth));
+        if (nth > (u32)1)
+            label = String.withFormat("%s#%u", label.cString(), nth);
         Array* nameBytes = new Array();
         for (u32 i = (u32)0; i < label.byteLength(); i = i + (u32)1)
             nameBytes.add((Object*)Number.with((u32)label.byteAt(i)));
@@ -11960,30 +12075,42 @@ class OptProfile
 
     // Whether v's value is computed from acc (through anything but a phi:
     // a phi is a path, followed by ppChainOp).
+    // Exactly, however deep (MD5's 64 rounds are hundreds of operations): a
+    // search of the values v is computed from, each once, stopping at phis.
+    // The depth argument is kept for the callers; it no longer limits.
     bool ppDependsOn(IRValue* v, IRValue* acc, Map* defOf, u32 depth)
         {
-        if (v == acc)
-            return true;
-        if (depth > (u32)16)
-            return true;    // too deep to tell: assume it does
-        IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
-        if (d == (IRInsn*)0)
-            return false;
-        if (d.op().equals(String.withCString("Phi")))
+        Set* seen = new Set();
+        Array* work = new Array();
+        work.add((Object*)v);
+        while (work.count() > (u32)0)
             {
-            for (u32 k = (u32)0; k + (u32)1 < d.ops().count(); k = k + (u32)2)
-                {
-                IROperand* o = (IROperand*)d.ops().get(k + (u32)1);
-                if (o.kind() == (u8)OPK_USE && o.val() == acc)
-                    return true;
-                }
-            return false;
-            }
-        for (u32 k = (u32)0; k < d.ops().count(); k = k + (u32)1)
-            {
-            IROperand* o = (IROperand*)d.ops().get(k);
-            if (o.kind() == (u8)OPK_USE && !ppIsMem(o.val()) && ppDependsOn(o.val(), acc, defOf, depth + (u32)1))
+            IRValue* x = (IRValue*)work.get(work.count() - (u32)1);
+            work.removeAt(work.count() - (u32)1);
+            if (x == acc)
                 return true;
+            if (seen.contains((Hashable*)x))
+                continue;
+            seen.add((Hashable*)x);
+            IRInsn* d = (IRInsn*)defOf.get((Hashable*)x);
+            if (d == (IRInsn*)0)
+                continue;
+            if (d.op().equals(String.withCString("Phi")))
+                {
+                for (u32 k = (u32)0; k + (u32)1 < d.ops().count(); k = k + (u32)2)
+                    {
+                    IROperand* o = (IROperand*)d.ops().get(k + (u32)1);
+                    if (o.kind() == (u8)OPK_USE && o.val() == acc)
+                        return true;
+                    }
+                continue;
+                }
+            for (u32 k = (u32)0; k < d.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)d.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && !ppIsMem(o.val()))
+                    work.add((Object*)o.val());
+                }
             }
         return false;
         }

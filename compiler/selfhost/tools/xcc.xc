@@ -3982,6 +3982,15 @@ void cSplitLink(DriverOptions* d)
     d.fe().setOutput(gCSplitOut);
     d.setCompileOnly(false);
     gCSplitOut = (String*)0;
+    // Linked as the program was compiled: on x86-64 that is the dynamic
+    // glibc link by default (an object-only link is otherwise the static
+    // musl one), which the par runtime's dlopen of a GPU library needs, and
+    // which Par.xc was told of (LINK_DYNAMIC).
+    if (isX86_64(d) && d.caps().dynamic()) {
+        noteLinkFlags(d);
+        linkX86_64Glibc(d, String.withCString(""));
+        return;
+    }
     linkObjects(d);
 }
 

@@ -2,7 +2,7 @@
 # ccorpus.sh — the C path's corpus: PolyBench-style kernels in tests/par/c/,
 # each built by clang -O2 alone and by xcc --par-auto (the IR outliner makes
 # par blocks of its loops). Each xcc build gives clang's output on the
-# CPU and (on macOS) the GPU, and makes at least as many blocks as
+# CPU and the GPU (Metal, or Vulkan on Linux), and makes at least as many blocks as
 # tests/par/c/blocks.txt lists for it (a loop that stops being a block is a
 # regression; more is progress: raise the number). Skipped where there is
 # no clang. Self-hosted compiler only.
@@ -27,7 +27,9 @@ for f in tests/par/c/${1:-}*.c; do
         || { echo "FAIL ccorpus: $b does not build"; sed -n 1,5p "$W/$b.log"; fail=1; continue; }
     n=$(grep -v 'support/' "$W/$b.log" | grep -c 'outlined, a block')
     total=$((total + n))
-    runs="auto cpu"; [ "$PLAT" = osx ] && runs="$runs gpu"
+    # The GPU everywhere: Metal, Vulkan (a dynamically linked program; the
+    # Linux host's iGPU), else the run falls back to the CPU with the answer.
+    runs="auto cpu gpu"
     bad=""
     for r in $runs; do
         if [ "$r" = auto ]; then out=$(timeout 120 "$W/$b" 2>/dev/null)
