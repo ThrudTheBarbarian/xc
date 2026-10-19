@@ -9576,6 +9576,87 @@ class OptProfile
         return true;
         }
 
+    // A function defined here that touches no memory at all (no load, store,
+    // call but to such a function, or reference counting): what it returns
+    // is its arguments' alone.
+    bool ppPureFn(String* name, u32 depth)
+        {
+        if (depth > (u32)4 || _ppModule == (IRModule*)0)
+            return false;
+        IRFunc* f = funcNamed(_ppModule, name);
+        if (f == (IRFunc*)0 || f.blocks().count() == (u32)0)
+            return false;
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                String* op = n.op();
+                if (op.equals(String.withCString("Call")))
+                    {
+                    IROperand* c = n.ops().count() > (u32)0 ? (IROperand*)n.ops().get((u32)0) : (IROperand*)0;
+                    if (c == (IROperand*)0 || c.kind() != (u8)OPK_SYM || !ppPureFn(c.name(), depth + (u32)1))
+                        return false;
+                    continue;
+                    }
+                // An address nothing uses (a promoted local's, which dead-code
+                // removes later) touches nothing.
+                if (op.equals(String.withCString("AddrOf")) && n.res() != (IRValue*)0
+                    && aeUsersOf(f, n.res()).count() == (u32)0)
+                    continue;
+                if (lrcWritesMemory(op) || op.hasPrefix(String.withCString("Load")) || op.equals(String.withCString("AddrOf")))
+                    return false;
+                }
+            }
+        return true;
+        }
+
+    // Select(c, acc op x, acc) or Select(c, acc, acc op x), op one a
+    // reduction may use and x not reading acc: op, else 0.
+    String* ppCondUpdateOf(IRInsn* sel, IRValue* acc, Map* defOf)
+        {
+        IROperand* tv = (IROperand*)0;
+        IROperand* fv = (IROperand*)0;
+        // Or not if-converted: the join's Phi [(then, acc op x), (else, acc)].
+        if (sel.op().equals(String.withCString("Phi")) && sel.ops().count() == (u32)4)
+            {
+            tv = (IROperand*)sel.ops().get((u32)1);
+            fv = (IROperand*)sel.ops().get((u32)3);
+            }
+        else if (sel.op().equals(String.withCString("Select")) && sel.ops().count() == (u32)3)
+            {
+            tv = (IROperand*)sel.ops().get((u32)1);
+            fv = (IROperand*)sel.ops().get((u32)2);
+            }
+        else
+            return (String*)0;
+        if (tv.kind() != (u8)OPK_USE || fv.kind() != (u8)OPK_USE)
+            return (String*)0;
+        IRValue* upd = (IRValue*)0;
+        if (fv.val() == acc)
+            upd = tv.val();
+        else if (tv.val() == acc)
+            upd = fv.val();
+        else
+            return (String*)0;
+        IRInsn* u = (IRInsn*)defOf.get((Hashable*)upd);
+        if (u == (IRInsn*)0 || u.ops().count() != (u32)2 || !ppRedOp(u.op()))
+            return (String*)0;
+        IROperand* a = (IROperand*)u.ops().get((u32)0);
+        IROperand* b = (IROperand*)u.ops().get((u32)1);
+        IROperand* other = (IROperand*)0;
+        if (a.kind() == (u8)OPK_USE && a.val() == acc)
+            other = b;
+        else if (b.kind() == (u8)OPK_USE && b.val() == acc)
+            other = a;
+        if (other == (IROperand*)0)
+            return (String*)0;
+        if (other.kind() == (u8)OPK_USE && ppDependsOn(other.val(), acc, defOf, (u32)0))
+            return (String*)0;
+        return u.op();
+        }
+
     // A running min or max: next = Select(cmp(x, acc), x, acc) in any of its
     // spellings (operands either way round, the branches either way). Says
     // "Max:S", "Min:U", "Max:F" ... or 0. x must not depend on acc.
@@ -9895,6 +9976,16 @@ class OptProfile
                 {
                 reds.add((Object*)phi);
                 redOps.add((Object*)mm);
+                continue;
+                }
+            // A conditional update, `if (c) acc = acc op x` if-converted to
+            // Select(c, acc op x, acc): each chunk folds its own, from the
+            // identity, and the partials fold as any of op's.
+            String* co = step != (IRInsn*)0 ? ppCondUpdateOf(step, phi.res(), defOf) : (String*)0;
+            if (co != (String*)0)
+                {
+                reds.add((Object*)phi);
+                redOps.add((Object*)co);
                 continue;
                 }
             if (step == (IRInsn*)0 || step.ops().count() != (u32)2)
@@ -10909,6 +11000,13 @@ class OptProfile
                     && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_SYM
                     && ((IROperand*)n.ops().get((u32)0)).name().equals(String.withCString("_xtc_sinit_run")))
                     continue;
+                // A call to a function that touches no memory (a C helper such
+                // as perlin's fade, which C does not let the first inlining
+                // take): each iteration's call is its own.
+                if (op.equals(String.withCString("Call")) && n.ops().count() > (u32)0
+                    && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_SYM
+                    && ppPureFn(((IROperand*)n.ops().get((u32)0)).name(), (u32)0))
+                    continue;
                 if (st || op.equals(String.withCString("Load")))
                     {
                     IRValue* addr = ((IROperand*)n.ops().get((u32)0)).val();
@@ -10921,7 +11019,13 @@ class OptProfile
                     ppNoteKey(_ppBase, addr, _ppAtIv, st);
                     }
                 else if (lrcWritesMemory(op) || op.hasPrefix(String.withCString("Load")))
-                    return ppNo("ppParMemoryOk 2");
+                    {
+                    String* what = String.withString(op);
+                    if (op.equals(String.withCString("Call")) && n.ops().count() > (u32)0
+                        && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_SYM)
+                        what = String.withFormat("a call to %s", ((IROperand*)n.ops().get((u32)0)).name().cString());
+                    return ppNo(String.withFormat("memory touched by %s", what.cString()).cString());
+                    }
                 }
             }
         for (u32 s = (u32)0; s < _ppGKeys.count(); s = s + (u32)1)

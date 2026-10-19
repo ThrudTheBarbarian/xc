@@ -128,6 +128,28 @@ class CPath
             m = r.read(text);
         if (m == (IRModule*)0)
             return (IRModule*)0;
+        // xcc's object is the program's entry module even when main is
+        // clang's: a back end writes the load-time constructor table (which
+        // the runtime's start walks) only for a module with main or a
+        // constructor, so it gets one that does nothing.
+        bool hasMain = false;
+        for (u32 i = (u32)0; i < m.funcs().count() && !hasMain; i = i + (u32)1)
+            hasMain = ((IRFunc*)m.funcs().get(i)).name().equals(String.withCString("main"));
+        if (!hasMain)
+            {
+            IRFunc* ctor = new IRFunc();
+            ctor.setName(String.withCString("__xc_cpath_init"));
+            IRValue* cm = new IRValue(String.withCString("Mem"));
+            ctor.addParam(cm);
+            IRBlock* cb = new IRBlock(String.withCString("bb_entry"));
+            IRInsn* cr = IRInsn.with(String.withCString("Return"));
+            cr.add(IROperand.useVal(cm));
+            cb.setTerm(cr);
+            ctor.addBlock(cb);
+            m.addFunc(ctor);
+            m.addSym(IRSymbol.func(String.withCString("__xc_cpath_init"), String.withCString("() -> Void"), false, false));
+            m.modinits().add((Object*)String.withCString("__xc_cpath_init"));
+            }
         // XC_C_TRACE: the functions left to clang, and why the first was.
         if (r.unread().count() > (u32)0 && Platform.env(String.withCString("XC_C_TRACE")).byteLength() > (u32)0)
             Stdio.error(String.withFormat("xcc: C path: %u function(s) left to clang; the first because of %s\n",
