@@ -10610,11 +10610,24 @@ class OptProfile
     String* _ppKey;
     bool _ppAtIv;
     IRValue* _ppBase;    // the base value: the AddrOf's result, or the pointer
+    String* _ppAddrTy;   // the element pointer's type (a field's element's, for a field)
     bool ppAddrKey(IRValue* addr, IRValue* iv, Map* defOf)
         {
         _ppKey = (String*)0;
         _ppAtIv = false;
+        _ppAddrTy = addr.ty();
         IRInsn* d = (IRInsn*)defOf.get((Hashable*)addr);
+        // A field of an element: the element's (its array, its index, its size).
+        if (d != (IRInsn*)0 && d.op().equals(String.withCString("FieldAddr")) && d.ops().count() >= (u32)1
+            && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_USE)
+            {
+            IRInsn* fb = (IRInsn*)defOf.get((Hashable*)((IROperand*)d.ops().get((u32)0)).val());
+            if (fb != (IRInsn*)0 && fb.op().equals(String.withCString("ElementAddr")) && fb.res() != (IRValue*)0)
+                {
+                d = fb;
+                _ppAddrTy = fb.res().ty();
+                }
+            }
         IRValue* base = addr;
         if (d != (IRInsn*)0 && d.op().equals(String.withCString("ElementAddr")) && d.ops().count() == (u32)2)
             {
@@ -10672,13 +10685,30 @@ class OptProfile
         for (u32 i = (u32)0; i < _ppGKeys.count() && k == (u32)$FFFFFFFF; i = i + (u32)1)
             if (((String*)_ppGKeys.get(i)).equals(_ppKey))
                 k = i;
-        String* pt = addr.ty();
+        String* pt = _ppAddrTy != (String*)0 ? _ppAddrTy : addr.ty();
         u32 es = (u32)0;
         if (pt.hasPrefix(String.withCString("Ptr(")))
             {
-            u32 comma = pt.indexOfByte((u8)',');
+            // The element: `Agg(N), ...` holds a comma inside, so the last one.
+            u32 comma = (u32)$FFFFFFFF;
+            for (u32 k = pt.byteLength(); k > (u32)0; k = k - (u32)1)
+                if (pt.byteAt(k - (u32)1) == (u8)',')
+                    {
+                    comma = k - (u32)1;
+                    break;
+                    }
             if (comma != (u32)$FFFFFFFF)
-                es = irWidth(pt.substringBytes((u32)4, comma - (u32)4));
+                {
+                String* et = pt.substringBytes((u32)4, comma - (u32)4);
+                if (et.hasPrefix(String.withCString("Agg(")) && _ppModule != (IRModule*)0)
+                    {
+                    u32 lid = aeLayoutId(_ppModule, et);
+                    if (lid < _ppModule.layouts().count())
+                        es = ((IRLayout*)_ppModule.layouts().get(lid)).size();
+                    }
+                else
+                    es = irWidth(et);
+                }
             }
         if (k == (u32)$FFFFFFFF)
             {
@@ -10987,6 +11017,14 @@ class OptProfile
                     // bitcast, say): private, as the scan treats a body's locals.
                     bool scratch = ad != (IRInsn*)0 && ad.op().equals(String.withCString("AddrOf")) &&
                                    ppSlotOnlyIn(fn, L, ad);
+                    // A field of an element (`pts[i].x = …`) is an element's.
+                    if (ad != (IRInsn*)0 && ad.op().equals(String.withCString("FieldAddr")) && ad.ops().count() >= (u32)1
+                        && ((IROperand*)ad.ops().get((u32)0)).kind() == (u8)OPK_USE)
+                        {
+                        IRInsn* fb = (IRInsn*)defOf.get((Hashable*)((IROperand*)ad.ops().get((u32)0)).val());
+                        if (fb != (IRInsn*)0 && fb.op().equals(String.withCString("ElementAddr")))
+                            ad = fb;
+                        }
                     if (!scratch && (ad == (IRInsn*)0 || !ad.op().equals(String.withCString("ElementAddr"))))
                         return String.withCString("a store that is not to an array element");
                     }

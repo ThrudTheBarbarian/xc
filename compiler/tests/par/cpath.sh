@@ -81,7 +81,32 @@ int main(void)
     return 0;
 }
 C
-for p in scale t1 saxpy; do
+cat > "$W/st.c" <<'C'
+#include <stdio.h>
+#define N 100000
+struct P { double x, y; int k; };
+struct P pts[N];
+double len2(struct P *p) { return p->x * p->x + p->y * p->y; }
+int main(void)
+{
+    for (int i = 0; i < N; i++) {
+        pts[i].x = i * 0.5;
+        pts[i].y = 1.0;
+        pts[i].k = i & 7;
+    }
+    struct P q;
+    q.x = 3.0; q.y = 4.0; q.k = 1;
+    double s = 0;
+    long t = 0;
+    for (int i = 0; i < N; i++) {
+        s += len2(&pts[i]);
+        t += pts[i].k;
+    }
+    printf("%.1f %ld %.1f\n", s, t, len2(&q));
+    return 0;
+}
+C
+for p in scale t1 saxpy st; do
     clang -O2 -o "$W/$p.ref" "$W/$p.c" 2>/dev/null || { echo "FAIL cpath: clang cannot build $p"; fail=1; continue; }
     want=$("$W/$p.ref")
     "$XC" -q -O2 -H . -o "$W/$p" "$W/$p.c" > "$W/$p.b" 2>&1 || { echo "FAIL cpath: $p does not build"; head -3 "$W/$p.b"; fail=1; continue; }

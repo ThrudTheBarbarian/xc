@@ -36,6 +36,7 @@ class LlvmReader
     String* _path;          // the C file, for source lines (0: none)
     u32 _fileId;
     Map* _locs;             // "!N" -> Number@ line << 16 | column, from the DILocations
+    Map* _structs;          // "%struct.X" -> "Agg(<layout id>)"
 
     // Per function.
     IRFunc* _fn;
@@ -56,6 +57,7 @@ class LlvmReader
         _globalElem = new Map();
         _retTy = new Map();
         _defined = new Map();
+        _structs = new Map();
         _strN = (u32)0;
         }
 
@@ -109,7 +111,14 @@ class LlvmReader
                 _locs.set((Hashable*)key, (Object*)Number.with((line << (u32)16) | (col & (u32)$FFFF)));
                 }
             }
-        // Globals and declarations first: a function may use one defined below it.
+        // Struct types first (a global or a function names them), then
+        // globals and declarations: a function may use one defined below it.
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            {
+            String* l = (String*)lines.get(i);
+            if (l.hasPrefix(String.withCString("%")) && l.indexOfByte((u8)'=') != (u32)$FFFFFFFF)
+                readStruct(l);
+            }
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
             {
             String* l = (String*)lines.get(i);
@@ -317,7 +326,16 @@ class LlvmReader
                 }
             return _s.substringBytes(b, _p - b);
             }
-        if (peek() == (u8)'{' || peek() == (u8)'<' || peek() == (u8)'%')
+        if (peek() == (u8)'%')
+            {
+            u32 save = _p;
+            String* sn = word();
+            if (_structs.get((Hashable*)sn) != (Object*)0)
+                return sn;
+            _p = save;
+            return (String*)0;
+            }
+        if (peek() == (u8)'{' || peek() == (u8)'<')
             return (String*)0;
         String* w = word();
         if (w.byteLength() == (u32)0)
@@ -325,11 +343,14 @@ class LlvmReader
         return w;
         }
 
-    // The IR type of a scalar LLVM type, or 0.
-    static String* irOf(String* t)
+    // The IR type of an LLVM type (a scalar, ptr, or a struct read already),
+    // or 0.
+    String* irOf(String* t)
         {
         if (t == (String*)0)
             return (String*)0;
+        if (t.hasPrefix(String.withCString("%")))
+            return (String*)_structs.get((Hashable*)t);
         if (t.equals(String.withCString("i1"))) return String.withCString("Bool");
         if (t.equals(String.withCString("i8"))) return String.withCString("I8");
         if (t.equals(String.withCString("i16"))) return String.withCString("I16");
@@ -341,13 +362,79 @@ class LlvmReader
         if (t.equals(String.withCString("void"))) return String.withCString("Void");
         return (String*)0;
         }
-    static u32 widthOf(String* irT)
+    u32 widthOf(String* irT)
         {
+        if (irT.hasPrefix(String.withCString("Agg(")))
+            return layoutOf(irT).size();
         if (irT.equals(String.withCString("Bool")) || irT.equals(String.withCString("I8"))) return (u32)1;
         if (irT.equals(String.withCString("I16"))) return (u32)2;
         if (irT.equals(String.withCString("I32")) || irT.equals(String.withCString("F32"))) return (u32)4;
         return (u32)8;
         }
+    IRLayout* layoutOf(String* aggT)
+        {
+        u32 id = (u32)0;
+        for (u32 k = (u32)4; k < aggT.byteLength() && aggT.byteAt(k) >= (u8)'0' && aggT.byteAt(k) <= (u8)'9'; k = k + (u32)1)
+            id = id * (u32)10 + (u32)(aggT.byteAt(k) - (u8)'0');
+        return (IRLayout*)_m.layouts().get(id);
+        }
+    // A type's alignment: a scalar's own width, a struct's widest field's.
+    u32 alignOf(String* irT)
+        {
+        if (!irT.hasPrefix(String.withCString("Agg(")))
+            return widthOf(irT);
+        IRLayout* L = layoutOf(irT);
+        u32 a = (u32)1;
+        if (L.isArray())
+            return alignOf(L.elemType());
+        for (u32 i = (u32)0; i < L.fieldCount(); i = i + (u32)1)
+            {
+            u32 fa = alignOf(L.typeAt(i));
+            if (fa > a)
+                a = fa;
+            }
+        return a;
+        }
+
+    // `%struct.X = type { T, T, ... }`: a layout with C's offsets.
+    void readStruct(String* l)
+        {
+        at(l);
+        String* name = word();
+        if (!eat("=") || !eat("type") || !eat("{"))
+            return;
+        IRLayout* L = IRLayout.with((u32)0, (u32)1);
+        u32 off = (u32)0;
+        u32 maxA = (u32)1;
+        while (more() && peek() != (u8)'}')
+            {
+            String* ft = llType();
+            String* it = (String*)0;
+            String* ae = arrayOf(ft);
+            if (ae != (String*)0)
+                {
+                u32 n = _arrN;
+                u32 id = _m.addLayout(IRLayout.array(ae, n, widthOf(ae), alignOf(ae)));
+                it = String.withFormat("Agg(%u)", id);
+                }
+            else
+                it = irOf(ft);
+            if (it == (String*)0 || it.equals(String.withCString("Void")))
+                return;     // not read: its uses fail where they are
+            u32 a = alignOf(it);
+            if (a > maxA)
+                maxA = a;
+            off = (off + a - (u32)1) / a * a;
+            L.addField(off, it);
+            off = off + widthOf(it);
+            eat(",");
+            }
+        off = (off + maxA - (u32)1) / maxA * maxA;
+        L.setSize(off);
+        u32 id = _m.addLayout(L);
+        _structs.set((Hashable*)name, (Object*)String.withFormat("Agg(%u)", id));
+        }
+
     static String* ptrTo(String* irT)
         {
         return String.withFormat("Ptr(%s, unbanked)", irT.cString());
@@ -370,7 +457,7 @@ class LlvmReader
             }
         _arrN = n;
         String* inner = t.substringBytes(x + (u32)1, t.byteLength() - x - (u32)2).trimmed();
-        return irOf(inner);
+        return irOf(inner);     // a scalar, or a struct read already
         }
 
     // ── globals and declarations ────────────────────────────────────────
@@ -444,7 +531,7 @@ class LlvmReader
                 _globalElem.set((Hashable*)name, (Object*)elem);
                 return;
                 }
-            IRLayout* L = IRLayout.array(elem, n, widthOf(elem), widthOf(elem));
+            IRLayout* L = IRLayout.array(elem, n, widthOf(elem), alignOf(elem));
             u32 id = _m.addLayout(L);
             _m.addSym(IRSymbol.dataGlobal(sym, String.withFormat("Agg(%u)", id)));
             _globalElem.set((Hashable*)name, (Object*)elem);
@@ -831,8 +918,12 @@ class LlvmReader
                 fail("an alloca of a type not read");
                 return;
                 }
+            u32 pa = alignOf(t);
+            if (pa < (u32)8)
+                pa = (u32)8;
+            _pinOff = (_pinOff + pa - (u32)1) / pa * pa;
             IRPinned* p = IRPinned.with(new IRValue(t), t, _pinOff, false);
-            _pinOff = _pinOff + (u32)8;
+            _pinOff = _pinOff + (widthOf(t) + (u32)7) / (u32)8 * (u32)8;
             _fn.addPinned(p);
             _pins.set((Hashable*)res, (Object*)p);
             return;
@@ -1130,6 +1221,8 @@ class LlvmReader
             }
         }
 
+    i64 _fieldK;    // a GEP's second index when a constant, else -1
+
     // `T, ptr base, idx...` (after `getelementptr [inbounds]`): the
     // element's address.
     IRValue* gepValue(void)
@@ -1140,8 +1233,27 @@ class LlvmReader
         if (base == (IRValue*)0)
             return (IRValue*)0;
         Array* idx = new Array();
+        _fieldK = (i64)0 - (i64)1;
         while (eat(","))
             {
+            // The second index of a struct's GEP is a constant field number.
+            if (idx.count() == (u32)1)
+                {
+                u32 save = _p;
+                String* it = llType();
+                ws();
+                u32 nb = _p;
+                while (_p < _s.byteLength() && _s.byteAt(_p) >= (u8)'0' && _s.byteAt(_p) <= (u8)'9')
+                    _p = _p + (u32)1;
+                if (_p > nb && it != (String*)0 && (_p >= _s.byteLength() || _s.byteAt(_p) == (u8)',' || _s.byteAt(_p) == (u8)')'))
+                    {
+                    i64 k = (i64)0;
+                    for (u32 q = nb; q < _p; q = q + (u32)1)
+                        k = k * (i64)10 + (i64)(_s.byteAt(q) - (u8)'0');
+                    _fieldK = k;
+                    }
+                _p = save;
+                }
             IRValue* i = typedOperand();
             if (i == (IRValue*)0)
                 return (IRValue*)0;
@@ -1149,6 +1261,22 @@ class LlvmReader
             }
         String* elem = irOf(t);
         IRValue* ix = (IRValue*)0;
+        // A field of a struct: `%struct.X, ptr p, i32 0, i32 k`.
+        if (elem != (String*)0 && elem.hasPrefix(String.withCString("Agg(")) && idx.count() == (u32)2
+            && _fieldK >= (i64)0)
+            {
+            IRLayout* L = layoutOf(elem);
+            if ((u32)_fieldK >= L.fieldCount())
+                {
+                fail("a getelementptr past a struct's fields");
+                return (IRValue*)0;
+                }
+            String* ft = L.typeAt((u32)_fieldK);
+            IRValue* sb = asPtrTo(base, elem);
+            IRValue* fa = emit(String.withCString("FieldAddr"), ptrTo(ft), IROperand.useVal(sb),
+                               IROperand.immI(_fieldK, String.withCString("U8")), (IROperand*)0);
+            return fa;
+            }
         if (elem != (String*)0 && idx.count() == (u32)1)
             ix = (IRValue*)idx.get((u32)0);
         else
