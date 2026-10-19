@@ -1230,6 +1230,18 @@ class LlvmReader
                 fail("a cast not read");
                 return;
                 }
+            // C's integers are read as signed types, and a back end widens
+            // an I8 or I16 by the extension its type implies (a byte loaded
+            // sign-extended stays so): C's zext of one is the widening with
+            // the high bits cleared. (An xc u8 is a U8, and never needs it.)
+            if (cast.equals(String.withCString("ZExt"))
+                && (a.ty().equals(String.withCString("I8")) || a.ty().equals(String.withCString("I16"))))
+                {
+                IRValue* w = emit(cast, t, IROperand.useVal(a), (IROperand*)0, (IROperand*)0);
+                i64 mask = a.ty().equals(String.withCString("I8")) ? (i64)255 : (i64)65535;
+                define(res, String.withCString("And"), t, IROperand.useVal(w), IROperand.immI(mask, t), (IROperand*)0, (String*)0);
+                return;
+                }
             define(res, cast, t, IROperand.useVal(a), (IROperand*)0, (IROperand*)0, (String*)0);
             return;
             }

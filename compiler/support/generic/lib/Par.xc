@@ -208,7 +208,16 @@ class ParFnChunk : ParChunk
             c.run();
             return;
             }
+        // The record holds each accumulator's value from before the loop,
+        // where a generated block's object holds its identity (the code
+        // after the block folds in the value before). A device takes the
+        // record as it is, every thread starting from it, so the block
+        // runs from the identity and the value before is folded in after.
+        Data* before = Data.withData(c._ctx);
+        c.resetCtx(c._ctx.bytes());
         Par.run((ParChunk*)c, from, to);
+        c.mergeCtx(before.bytes(), c._ctx.bytes());
+        memcpy((pointer)c._ctx.bytes(), (pointer)before.bytes(), (u64)before.length());
         }
     }
 
