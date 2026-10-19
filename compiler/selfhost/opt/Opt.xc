@@ -9356,6 +9356,31 @@ class OptProfile
             }
         if (E == (IRBlock*)0)
             return ppNo("cut 5");
+        // A frame slot's address taken in the loop (a local array's) is the
+        // same every iteration: taken before the loop instead, it is an
+        // ordinary value the block captures.
+        bool hoisted = false;
+        for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)body.get(b);
+            u32 i = (u32)0;
+            while (i < bb.insns().count())
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.op().equals(String.withCString("AddrOf")) && n.ops().count() == (u32)1
+                    && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE
+                    && ppIsPinned(fn, ((IROperand*)n.ops().get((u32)0)).val()))
+                    {
+                    bb.insns().removeAt(i);
+                    P.insns().add((Object*)n);
+                    hoisted = true;
+                    continue;
+                    }
+                i = i + (u32)1;
+                }
+            }
+        if (hoisted)
+            defBlk = defBlockMap(fn);
         // The values the loop reads from outside it.
         Array* liveIns = new Array();
         Array* memIns = new Array();
@@ -9610,6 +9635,14 @@ class OptProfile
                 }
             }
         return true;
+        }
+
+    bool ppIsPinned(IRFunc* fn, IRValue* v)
+        {
+        for (u32 i = (u32)0; i < fn.pinned().count(); i = i + (u32)1)
+            if (((IRPinned*)fn.pinned().get(i)).val() == v)
+                return true;
+        return false;
         }
 
     // Select(c, acc op x, acc) or Select(c, acc, acc op x), op one a
