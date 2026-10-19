@@ -9916,6 +9916,77 @@ class OptProfile
         return false;
         }
 
+    // inner: a phi in a header inside L, [acc (from outside that loop),
+    // inner op x (from inside it)], with op one a reduction may use, x not
+    // reading acc or inner, and nothing else using acc, inner or the update:
+    // op, else 0.
+    String* ppNestedRedOf(IRFunc* fn, LRCLoop* L, IRInsn* inner, IRValue* acc, Map* defOf)
+        {
+        if (!inner.op().equals(String.withCString("Phi")) || inner.ops().count() != (u32)4 || inner.res() == (IRValue*)0)
+            return (String*)0;
+        IRValue* pv = inner.res();
+        IROperand* v0 = (IROperand*)inner.ops().get((u32)1);
+        IROperand* v1 = (IROperand*)inner.ops().get((u32)3);
+        if (v0.kind() != (u8)OPK_USE || v1.kind() != (u8)OPK_USE)
+            return (String*)0;
+        IRValue* upd = (IRValue*)0;
+        if (v0.val() == acc)
+            upd = v1.val();
+        else if (v1.val() == acc)
+            upd = v0.val();
+        else
+            return (String*)0;
+        IRInsn* u = (IRInsn*)defOf.get((Hashable*)upd);
+        if (u == (IRInsn*)0 || u.ops().count() != (u32)2 || !ppRedOp(u.op()))
+            return (String*)0;
+        IROperand* a = (IROperand*)u.ops().get((u32)0);
+        IROperand* b = (IROperand*)u.ops().get((u32)1);
+        IROperand* x = (IROperand*)0;
+        if (a.kind() == (u8)OPK_USE && a.val() == pv)
+            x = b;
+        else if (b.kind() == (u8)OPK_USE && b.val() == pv)
+            x = a;
+        if (x == (IROperand*)0)
+            return (String*)0;
+        if (x.kind() == (u8)OPK_USE && (ppDependsOn(x.val(), pv, defOf, (u32)0) || ppDependsOn(x.val(), acc, defOf, (u32)0)))
+            return (String*)0;
+        // The partial sums are used by the chain alone: acc by the inner phi
+        // (and after the loop), the inner phi by the update and as acc's
+        // next value, the update by the inner phi.
+        Array* ua = aeUsersOf(fn, acc);
+        for (u32 i = (u32)0; i < ua.count(); i = i + (u32)1)
+            {
+            IRInsn* w = (IRInsn*)ua.get(i);
+            if (w != inner && w != (IRInsn*)defOf.get((Hashable*)acc) && ppInLoop(L, w))
+                return (String*)0;
+            }
+        Array* up = aeUsersOf(fn, pv);
+        for (u32 i = (u32)0; i < up.count(); i = i + (u32)1)
+            {
+            IRInsn* w = (IRInsn*)up.get(i);
+            if (w != u && w != (IRInsn*)defOf.get((Hashable*)acc))
+                return (String*)0;
+            }
+        Array* uu = aeUsersOf(fn, upd);
+        for (u32 i = (u32)0; i < uu.count(); i = i + (u32)1)
+            if ((IRInsn*)uu.get(i) != inner)
+                return (String*)0;
+        return u.op();
+        }
+
+    bool ppInLoop(LRCLoop* L, IRInsn* w)
+        {
+        Array* body = L.body();
+        for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)body.get(b);
+            if (bb.insns().indexOf((Object*)w) != (u32)$FFFFFFFF || bb.phis().indexOf((Object*)w) != (u32)$FFFFFFFF
+                || bb.term() == w)
+                return true;
+            }
+        return false;
+        }
+
     // Select(c, acc op x, acc) or Select(c, acc, acc op x), op one a
     // reduction may use and x not reading acc: op, else 0.
     String* ppCondUpdateOf(IRInsn* sel, IRValue* acc, Map* defOf)
@@ -10290,6 +10361,16 @@ class OptProfile
                 {
                 reds.add((Object*)phi);
                 redOps.add((Object*)co);
+                continue;
+                }
+            // Carried through an inner loop (`for i: for j: t += x`): the next
+            // value is the inner header's phi, which starts from this one and
+            // steps by an operator a reduction may use.
+            String* nest = step != (IRInsn*)0 ? ppNestedRedOf(fn, L, step, phi.res(), defOf) : (String*)0;
+            if (nest != (String*)0)
+                {
+                reds.add((Object*)phi);
+                redOps.add((Object*)nest);
                 continue;
                 }
             if (step == (IRInsn*)0 || step.ops().count() != (u32)2)
