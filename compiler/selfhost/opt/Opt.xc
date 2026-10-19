@@ -1390,6 +1390,20 @@ class OptProfile
             return;
         if (_level >= (u32)2)
             mem2reg(m);
+        // A C module's loops come from clang as test, body and step blocks
+        // (for.cond, for.body, for.inc): folded into one body block, as an
+        // xc loop is lowered, before the passes that look for that shape
+        // (the vectoriser's).
+        if (_level >= (u32)2 && gOptPromoteScalars)
+            {
+            cNarrowIndices(m);
+            // C's `c ? a : b` and `if (c) x = y` are stores to a local in
+            // two arms until mem2reg: only now are they the diamonds the
+            // if-conversion makes selects of (and a helper made of them one
+            // block, which the inlining below takes).
+            ifConvert(m);
+            blockMerge(m);
+            }
         if (ppReport())
             parProposeReport(m);
         if (ppOutline())
@@ -9915,6 +9929,53 @@ class OptProfile
         }
 
     Map* _ppLabels;     // block labels given so far (file:line), how many each
+
+    // A C module's array indices, widened by clang to i64 (`sext i32 %i`),
+    // as the 32-bit values they were: a signed 32-bit index is sign-extended
+    // where it is used, so that one is exact; a zero-extended one is taken
+    // only when its value is known to be in [0, 2^31) (a counting loop's
+    // counter). The vectoriser and the outliner then see the loop counter
+    // itself as the index, as they do in an xc program.
+    void cNarrowIndices(IRModule* m)
+        {
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            if (fn.blocks().count() == (u32)0)
+                continue;
+            Map* defOf = defMapAll(fn);
+            _ppDefBlk = defBlockMap(fn);
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                    {
+                    IRInsn* n = (IRInsn*)bb.insns().get(i);
+                    if (!n.op().equals(String.withCString("ElementAddr")) || n.ops().count() != (u32)2)
+                        continue;
+                    IROperand* io = (IROperand*)n.ops().get((u32)1);
+                    if (io.kind() != (u8)OPK_USE || io.val() == (IRValue*)0)
+                        continue;
+                    IRInsn* x = (IRInsn*)defOf.get((Hashable*)io.val());
+                    if (x == (IRInsn*)0 || x.ops().count() != (u32)1 || ((IROperand*)x.ops().get((u32)0)).kind() != (u8)OPK_USE)
+                        continue;
+                    IRValue* src = ((IROperand*)x.ops().get((u32)0)).val();
+                    if (src == (IRValue*)0 || !src.ty().equals(String.withCString("I32")))
+                        continue;
+                    bool ok = x.op().equals(String.withCString("SExt"));
+                    if (!ok && x.op().equals(String.withCString("ZExt")))
+                        {
+                        i64 lo = (i64)0;
+                        i64 hi = (i64)0;
+                        ok = ppIval(src, defOf, (u32)0, &lo, &hi) && lo >= (i64)0 && hi <= (i64)2147483647;
+                        }
+                    if (ok)
+                        n.ops().set((u32)1, (Object*)IROperand.useVal(src));
+                    }
+                }
+            _ppDefBlk = (Map*)0;
+            }
+        }
 
     bool ppIsPinned(IRFunc* fn, IRValue* v)
         {
