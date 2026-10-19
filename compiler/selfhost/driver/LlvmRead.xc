@@ -37,6 +37,11 @@ class LlvmReader
     u32 _fileId;
     Map* _locs;             // "!N" -> Number@ line << 16 | column, from the DILocations
     Map* _structs;          // "%struct.X" -> "Agg(<layout id>)"
+    bool _cabiAll;          // every function through the C ABI (clang's object calls them, or they its)
+    bool _split;            // clang compiles the rest: globals are its, and a function not read stays its
+    Map* _declOf;           // "@name" -> the `declare` line for a function this file defined
+    Array* _readFns;        // "@name"s of the functions read (xcc compiles them)
+    Array* _unread;         // "@name"s of the functions not read (clang compiles them)
 
     // Per function.
     IRFunc* _fn;
@@ -58,6 +63,9 @@ class LlvmReader
         _retTy = new Map();
         _defined = new Map();
         _structs = new Map();
+        _declOf = new Map();
+        _readFns = new Array();
+        _unread = new Array();
         _strN = (u32)0;
         }
 
@@ -72,6 +80,27 @@ class LlvmReader
     void setPath(String* p)
         {
         _path = p;
+        }
+    void setCabiAll(bool b)
+        {
+        _cabiAll = b;
+        }
+    // Split: clang compiles what this file does not take. Every function
+    // goes through the C ABI, the globals are clang's (here, references to
+    // its), and a function that is not read is left to clang rather than
+    // stopping the build.
+    void setSplit(bool b)
+        {
+        _split = b;
+        _cabiAll = _cabiAll || b;
+        }
+    Array* unread(void)
+        {
+        return _unread;
+        }
+    Array* readFunctions(void)
+        {
+        return _readFns;
         }
 
     // The module, or 0 when the text is not LLVM IR this file reads.
@@ -187,6 +216,115 @@ class LlvmReader
                 IRDbg.setCurrent(_fileId, loc.asU32() >> (u32)16, loc.asU32() & (u32)$FFFF);
             return;
             }
+        }
+
+    // The IR clang is to compile, split: each function this file read is
+    // a declaration; nothing is internal (xcc's object and clang's reach each
+    // other's symbols); a global renamed here (`@.str` is `@cg_1`) is
+    // renamed there.
+    String* rest(String* text)
+        {
+        Array* lines = text.splitOnByte((u8)10);
+        String* out = new String();
+        u32 i = (u32)0;
+        while (i < lines.count())
+            {
+            String* l = (String*)lines.get(i);
+            if (l.hasPrefix(String.withCString("define ")))
+                {
+                at(l);
+                String* name = (String*)0;
+                for (u32 g = (u32)0; g < (u32)16 && name == (String*)0 && more(); g = g + (u32)1)
+                    {
+                    ws();
+                    if (peek() == (u8)'@')
+                        name = word();
+                    else
+                        _p = _p + (u32)1;
+                    }
+                bool isRead = false;
+                for (u32 k = (u32)0; name != (String*)0 && k < _readFns.count() && !isRead; k = k + (u32)1)
+                    isRead = ((String*)_readFns.get(k)).equals(name);
+                if (isRead)
+                    {
+                    out.append(renamed((String*)_declOf.get((Hashable*)name)));
+                    out.appendCString("\n");
+                    while (i < lines.count() && !((String*)lines.get(i)).equals(String.withCString("}")))
+                        i = i + (u32)1;
+                    i = i + (u32)1;
+                    continue;
+                    }
+                }
+            String* r = renamed(l);
+            if (l.hasPrefix(String.withCString("define ")) || l.hasPrefix(String.withCString("@")))
+                r = external(r);
+            out.append(r);
+            out.appendCString("\n");
+            i = i + (u32)1;
+            }
+        return out;
+        }
+
+    // A line with each global renamed here written as renamed.
+    String* renamed(String* l)
+        {
+        String* out = new String();
+        u32 p = (u32)0;
+        while (p < l.byteLength())
+            {
+            u8 c = l.byteAt(p);
+            if (c != (u8)'@')
+                {
+                out.appendByte(c);
+                p = p + (u32)1;
+                continue;
+                }
+            u32 e = p + (u32)1;
+            while (e < l.byteLength() && isWordByte(l.byteAt(e)))
+                e = e + (u32)1;
+            String* n = l.substringBytes(p, e - p);
+            String* sym = (String*)_globals.get((Hashable*)n);
+            if (sym != (String*)0 && !n.substringFromByte((u32)1).equals(sym))
+                {
+                out.appendCString("@");
+                out.append(sym);
+                }
+            else
+                out.append(n);
+            p = e;
+            }
+        return out;
+        }
+
+    // A definition's `internal` / `private` linkage dropped.
+    static String* external(String* l)
+        {
+        return LlvmReader.dropWord(LlvmReader.dropWord(l, " internal "), " private ");
+        }
+
+    static String* dropWord(String* l, u8* word)
+        {
+        String* r = l;
+            {
+            String* d = String.withCString(word);
+            u32 at = (u32)$FFFFFFFF;
+            for (u32 q = (u32)0; q + d.byteLength() <= r.byteLength() && at == (u32)$FFFFFFFF; q = q + (u32)1)
+                {
+                bool same = true;
+                for (u32 j = (u32)0; j < d.byteLength() && same; j = j + (u32)1)
+                    same = r.byteAt(q + j) == d.byteAt(j);
+                if (same)
+                    at = q;
+                }
+            if (at != (u32)$FFFFFFFF)
+                {
+                String* nr = r.substringBytes((u32)0, at);
+                nr.appendCString(" ");
+                nr.append(r.substringFromByte(at + d.byteLength()));
+                r = nr;
+                }
+            }
+        return r;
         }
 
     // ── the cursor over one line ────────────────────────────────────────
@@ -527,21 +665,37 @@ class LlvmReader
                         _p = _p + (u32)1;
                     bytes.add((Object*)Number.with((u32)c));
                     }
-                _m.addSym(IRSymbol.stringLit(sym, bytes));
+                if (_split)
+                    {
+                    // clang's: a reference to its bytes.
+                    IRLayout* SL = IRLayout.array(elem, n, widthOf(elem), alignOf(elem));
+                    IRSymbol* ss = IRSymbol.dataGlobal(sym, String.withFormat("Agg(%u)", _m.addLayout(SL)));
+                    ss.setAttr(String.withCString("extern"), true);
+                    _m.addSym(ss);
+                    }
+                else
+                    _m.addSym(IRSymbol.stringLit(sym, bytes));
                 _globalElem.set((Hashable*)name, (Object*)elem);
                 return;
                 }
             IRLayout* L = IRLayout.array(elem, n, widthOf(elem), alignOf(elem));
             u32 id = _m.addLayout(L);
-            _m.addSym(IRSymbol.dataGlobal(sym, String.withFormat("Agg(%u)", id)));
+            IRSymbol* gs = IRSymbol.dataGlobal(sym, String.withFormat("Agg(%u)", id));
+            if (_split)
+                gs.setAttr(String.withCString("extern"), true);
+            _m.addSym(gs);
             _globalElem.set((Hashable*)name, (Object*)elem);
             return;
             }
         String* it = irOf(t);
         if (it != (String*)0 && !it.equals(String.withCString("Void")))
             {
-            // A scalar (its initial value is not carried yet: zero).
-            _m.addSym(IRSymbol.dataGlobal(sym, it));
+            // A scalar. Split, it is clang's, with its initial value; whole,
+            // its initial value is not carried yet (zero).
+            IRSymbol* gs = IRSymbol.dataGlobal(sym, it);
+            if (_split)
+                gs.setAttr(String.withCString("extern"), true);
+            _m.addSym(gs);
             _globalElem.set((Hashable*)name, (Object*)it);
             }
         }
@@ -590,6 +744,7 @@ class LlvmReader
         if (!decl)
             _defined.set((Hashable*)name, (Object*)Number.with((u32)1));
         Array* ptys = new Array();
+        Array* llps = new Array();      // the LLVM parameter types, for a `declare`
         bool variadic = false;
         if (eat("("))
             {
@@ -604,11 +759,26 @@ class LlvmReader
                 if (pt == (String*)0)
                     return;
                 ptys.add((Object*)irOf(pt));
+                llps.add((Object*)pt);
                 skipAttrs();
                 if (peek() == (u8)'%')
                     word();
                 eat(",");
                 }
+            }
+        if (!decl)
+            {
+            String* dl = String.withFormat("declare %s %s(", ret.cString(), name.cString());
+            for (u32 i = (u32)0; i < llps.count(); i = i + (u32)1)
+                {
+                if (i > (u32)0)
+                    dl.appendCString(", ");
+                dl.append((String*)llps.get(i));
+                }
+            if (variadic)
+                dl.appendCString(llps.count() > (u32)0 ? ", ..." : "...");
+            dl.appendCString(")");
+            _declOf.set((Hashable*)name, (Object*)dl);
             }
         String* sig = String.withCString("(");
         for (u32 i = (u32)0; i < ptys.count(); i = i + (u32)1)
@@ -625,7 +795,13 @@ class LlvmReader
         // module has already (a C function the xc runtime declares too)
         // stays as it is.
         if (!hasSym(sym))
-            _m.addSym(IRSymbol.func(sym, sig, variadic, decl));
+            {
+            IRSymbol* fs = IRSymbol.func(sym, sig, variadic, decl || _cabiAll);
+            // Split, clang's code calls it: a root for dead-function removal.
+            if (_split && !decl)
+                fs.setAttr(String.withCString("exported"), true);
+            _m.addSym(fs);
+            }
         }
 
     // ── a function ───────────────────────────────────────────────────────
@@ -679,6 +855,9 @@ class LlvmReader
                 if (pt == (String*)0 || irOf(pt) == (String*)0)
                     {
                     fail("a parameter of a type not read");
+                    _unread.add((Object*)name);
+                    if (_split)
+                        _bad = false;
                     return;
                     }
                 skipAttrs();
@@ -727,9 +906,16 @@ class LlvmReader
             }
         IRDbg.clearCurrent();
         if (_bad)
+            {
+            // Split, the function is clang's: noted, and the build goes on.
+            _unread.add((Object*)name);
+            if (_split)
+                _bad = false;
             return;
+            }
         _fn.setPinnedSize(_pinOff);
         _m.addFunc(_fn);
+        _readFns.add((Object*)name);
         }
 
     IRBlock* blockNamed(String* label)

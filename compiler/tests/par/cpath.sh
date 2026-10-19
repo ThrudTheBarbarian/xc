@@ -1,7 +1,9 @@
 #!/bin/bash
 # cpath.sh — the C path (experimental; cpp-front-end.md, "The C path"):
-# `xcc prog.c` has clang compile the C to LLVM IR, reads that, and builds it
-# with xcc's own optimiser and back end. Each program gives the output clang's
+# `xcc prog.c` has clang compile the C to LLVM IR, reads that, and builds what
+# it reads with xcc's own optimiser and back end; clang compiles the rest (the
+# globals, and a function using what is not read: mix.c's switch, function
+# pointer and array local), and the two objects are linked. Each program gives the output clang's
 # own build gives; with the IR outliner on (XC_PAR_PROPOSE=outline) its loops
 # become par blocks, and it still does, on the CPU and (on macOS) the GPU.
 # Skipped where there is no clang. Self-hosted compiler only.
@@ -106,7 +108,39 @@ int main(void)
     return 0;
 }
 C
-for p in scale t1 saxpy st; do
+cat > "$W/mix.c" <<'C'
+#include <stdio.h>
+#include <string.h>
+#define N 1000000
+int table[N];
+int scale_by = 3;
+static double offset = 0.25;
+static const char *names[] = { "zero", "one", "two" };
+static int classify(int v)
+{
+    switch (v % 3) {
+    case 0: return 10;
+    case 1: return 20;
+    default: return 30;
+    }
+}
+typedef int (*op)(int);
+static int twice(int v) { return 2 * v; }
+int apply(op f, int v) { return f(v); }
+int main(void)
+{
+    for (int i = 0; i < N; i++)
+        table[i] = i * scale_by;
+    long s = 0;
+    for (int i = 0; i < N; i++)
+        s += table[i];
+    char buf[32];
+    strcpy(buf, names[2]);
+    printf("%ld %d %d %.2f %s\n", s, classify(7), apply(twice, 21), offset, buf);
+    return 0;
+}
+C
+for p in scale t1 saxpy st mix; do
     clang -O2 -o "$W/$p.ref" "$W/$p.c" 2>/dev/null || { echo "FAIL cpath: clang cannot build $p"; fail=1; continue; }
     want=$("$W/$p.ref")
     "$XC" -q -O2 -H . -o "$W/$p" "$W/$p.c" > "$W/$p.b" 2>&1 || { echo "FAIL cpath: $p does not build"; head -3 "$W/$p.b"; fail=1; continue; }

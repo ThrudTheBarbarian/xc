@@ -17,6 +17,10 @@
 #import "LlvmRead.xc"
 #import "Frontend.xc"
 
+// clang's object for the part of the C program xcc does not compile (the
+// globals, and any function the reader did not read); the link adds it.
+String* gCRestObject;
+
 // The C library's: the shell runs clang, with this process's environment.
 i32 system(u8* command);
 i32 getpid(void);
@@ -99,6 +103,11 @@ class CPath
             }
         LlvmReader* r = new LlvmReader();
         r.setPath(input);
+        // clang compiles what xcc does not take, and the globals: their
+        // objects are linked (CPath.restObject).
+        r.setSplit(true);
+        if (Platform.env(String.withCString("XC_C_CABI")).byteLength() > (u32)0)
+            r.setCabiAll(true);
         IRModule* m = (IRModule*)0;
         if (fe != (FeOptions*)0)
             {
@@ -117,12 +126,33 @@ class CPath
             }
         else
             m = r.read(text);
-        if (r.why() != (String*)0)
+        if (m == (IRModule*)0)
+            return (IRModule*)0;
+        // XC_C_TRACE: the functions left to clang, and why the first was.
+        if (r.unread().count() > (u32)0 && Platform.env(String.withCString("XC_C_TRACE")).byteLength() > (u32)0)
+            Stdio.error(String.withFormat("xcc: C path: %u function(s) left to clang; the first because of %s\n",
+                                          r.unread().count(), r.why() != (String*)0 ? r.why().cString() : "?"));
+        // The rest: clang compiles it to an object the link takes.
+        String* restLl = String.withString(scratch);
+        restLl.appendCString(".rest.ll");
+        String* restO = String.withString(scratch);
+        restO.appendCString(".rest.o");
+        if (!Files.writeText(restLl, r.rest(text)))
             {
-            Stdio.error(String.withFormat("xcc: error: '%s': the C path does not read %s yet\n",
-                                          input.cString(), r.why().cString()));
+            Stdio.error(String.withFormat("xcc: error: cannot write '%s'\n", restLl.cString()));
             return (IRModule*)0;
             }
+        String* cc = String.withCString("clang -O2 -fno-unwind-tables -fno-asynchronous-unwind-tables -Wno-override-module -c -o ");
+        cc.append(CPath.quoted(restO));
+        cc.appendCString(" ");
+        cc.append(CPath.quoted(restLl));
+        if (system(cc.cString()) != (i32)0)
+            {
+            Stdio.error(String.withFormat("xcc: error: clang could not compile the rest of '%s' (%s)\n",
+                                          input.cString(), restLl.cString()));
+            return (IRModule*)0;
+            }
+        gCRestObject = restO;
         return m;
         }
     }

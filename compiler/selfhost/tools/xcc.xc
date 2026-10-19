@@ -63,6 +63,10 @@
 #import "Elf64.xc"      // …and the ET_REL object writer `-c` needs
 #import "Pe.xc"         // the Windows PE/COFF writer, shared with xtldwin
 #import "CPath.xc"      // `xcc prog.c`: clang's LLVM IR read into a module (cpp-front-end.md)
+
+// A C program's own output while xcc's part is compiled to an object (the
+// C path): set, the object is linked with clang's into it (cSplitLink).
+String* gCSplitOut;
 #import "External.xc"   // --no-self-host: the vendor-toolchain path
 
 // ── capability options ───────────────────────────────────────────────────
@@ -1701,7 +1705,7 @@ void emitWin64(DriverOptions* d, IRModule* mod)
     Opt* prof = Opt.atLevel(d.opt(), pw);
     // An OBJECT's functions are all potentially called from ANOTHER object, so
     // cross-function DCE must not read "nothing here calls it" as dead.
-    if (d.emitLib() || d.compileOnly()) prof.setKeepAllFunctions(true);
+    if (d.emitLib() || (d.compileOnly() && gCSplitOut == (String*)0)) prof.setKeepAllFunctions(true);
     else if (linkJoinsObjects(d)) prof.setKeepClassRoot(true);
     prof.run(mod);
     dumpOptIR(d, mod);
@@ -1760,6 +1764,8 @@ void emitWin64(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         writeObjectSidecars(d);
+        if (gCSplitOut != (String*)0)
+            cSplitLink(d);
         return;
     }
     linkWin64(d, prog);
@@ -2050,9 +2056,12 @@ void writeObjectSidecars(DriverOptions* d)
     }
     for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
         String* l = (String*)nl.get(i);
+        // A framework the module imported by name (`framework:CoreFoundation`)
+        // goes with the object too: the link that takes it adds the framework.
         if (!l.hasSuffix(String.withCString(".so"))
          && !l.hasSuffix(String.withCString(".dylib"))
-         && !l.contains(String.withCString(".so."))) continue;
+         && !l.contains(String.withCString(".so."))
+         && !l.hasPrefix(String.withCString("framework:"))) continue;
         if (needs.byteLength() > (u32)0) needs.appendCString("\n");
         needs.append(l);
     }
@@ -2089,7 +2098,7 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
     // them, and dead-function elimination cannot see the client.
     // An OBJECT's functions are all potentially called from ANOTHER object, so
     // cross-function DCE must not read "nothing here calls it" as dead.
-    if (d.emitLib() || d.compileOnly()) prof.setKeepAllFunctions(true);
+    if (d.emitLib() || (d.compileOnly() && gCSplitOut == (String*)0)) prof.setKeepAllFunctions(true);
     else if (linkJoinsObjects(d)) prof.setKeepClassRoot(true);
     prof.run(mod);
     dumpOptIR(d, mod);
@@ -2141,6 +2150,8 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         writeObjectSidecars(d);
+        if (gCSplitOut != (String*)0)
+            cSplitLink(d);
         return;
     }
 
@@ -2703,7 +2714,7 @@ void emitArm9(DriverOptions* d, IRModule* mod)
     Opt* prof = Opt.atLevel(d.opt(), px);
     // A LIBRARY keeps every function it defines — the client is what calls
     // them, and dead-function elimination cannot see the client.
-    if (d.emitLib() || d.compileOnly()) prof.setKeepAllFunctions(true);
+    if (d.emitLib() || (d.compileOnly() && gCSplitOut == (String*)0)) prof.setKeepAllFunctions(true);
     else if (linkJoinsObjects(d)) prof.setKeepClassRoot(true);
     prof.run(mod);
     dumpOptIR(d, mod);
@@ -2773,6 +2784,8 @@ void emitArm9(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         writeObjectSidecars(d);
+        if (gCSplitOut != (String*)0)
+            cSplitLink(d);
         return;
     }
 
@@ -3959,6 +3972,19 @@ String* iosRuntimeSource(DriverOptions* d)
 
 // Objects as inputs, dispatched per target. What is not ported is REFUSED
 // naming the gap, never linked as something else.
+// A C program (the C path): xcc's object, just written, and clang's for the
+// rest, linked into the program the command line asked for.
+void cSplitLink(DriverOptions* d)
+{
+    String* xo = d.fe().output();
+    d.objectInputs().add((Object*)xo);
+    d.objectInputs().add((Object*)gCRestObject);
+    d.fe().setOutput(gCSplitOut);
+    d.setCompileOnly(false);
+    gCSplitOut = (String*)0;
+    linkObjects(d);
+}
+
 void linkObjects(DriverOptions* d)
 {
     noteLinkFlags(d);
@@ -4165,10 +4191,25 @@ void main(void)
         // comes too, lowered from a stub, so loops can become blocks.
         String* cin = d.fe().input();
         gOptPromoteScalars = true;
+        if (d.compileOnly())
+            {
+            Stdio.printf("xcc: error: -c of a C file is not done yet: build the program in one step\n");
+            Process.exit((i32)1); return;
+            }
         if (Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
             mod = CPath.lowerWith(cin, CPath.scratch(), new Array(), new Array(), d.fe());
         else
             mod = CPath.lower(cin, CPath.scratch(), new Array(), new Array());
+        // xcc's part compiles to an object, clang's is one already: the two
+        // are linked where an object of xcc's would be written (cSplitLink).
+        if (mod != (IRModule*)0)
+            {
+            gCSplitOut = d.fe().output() != (String*)0 ? d.fe().output() : String.withCString("a.out");
+            String* xo = CPath.scratch();
+            xo.appendCString(".x.o");
+            d.fe().setOutput(xo);
+            d.setCompileOnly(true);
+            }
         if (mod == 0) { Process.exit((i32)1); return; }
         }
     else
@@ -4468,7 +4509,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
     // and the app that called it died at LOAD naming libSystem.
     // An OBJECT's functions are all potentially called from ANOTHER object,
     // for the same reason.
-    if (d.emitLib() || d.compileOnly()) opt.setKeepAllFunctions(true);
+    if (d.emitLib() || (d.compileOnly() && gCSplitOut == (String*)0)) opt.setKeepAllFunctions(true);
     else if (linkJoinsObjects(d)) opt.setKeepClassRoot(true);
     opt.run(mod);
     dumpOptIR(d, mod);
@@ -4527,6 +4568,8 @@ void emitModule(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         writeObjectSidecars(d);
+        if (gCSplitOut != (String*)0)
+            cSplitLink(d);
         return;
     }
 
