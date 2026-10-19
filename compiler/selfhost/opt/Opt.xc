@@ -42,6 +42,9 @@ bool gOptOutline;
 // escapes the outer loop, so the collapse is unsafe. Distinct from 0, which
 // means the accumulator itself is dead afterwards (nothing to rescale).
 #define LRC_LEAK $FFFFFFFF
+// An array access the outliner found to be a row of the iteration's own
+// (i * C plus a value in [0, C)), not [i + c].
+#define PP_OFF_ROW ((i64)0x4000000000000000)
 
 // The per-target knobs. `XTIROptTargetProfile` is a conservative base with an
 // arm64/arm9 relaxation on top; only the knobs a ported pass actually consults
@@ -11244,10 +11247,15 @@ class OptProfile
     bool _ppAtIv;
     IRValue* _ppBase;    // the base value: the AddrOf's result, or the pointer
     String* _ppAddrTy;   // the element pointer's type (a field's element's, for a field)
+    // Where an access is the iteration's own: [i + _ppOff], or a row of its
+    // own (PP_OFF_ROW: i * C plus [0, C)).
+    i64 _ppOff;
+
     bool ppAddrKey(IRValue* addr, IRValue* iv, Map* defOf)
         {
         _ppKey = (String*)0;
         _ppAtIv = false;
+        _ppOff = (i64)0;
         _ppAddrTy = addr.ty();
         IRInsn* d = (IRInsn*)defOf.get((Hashable*)addr);
         // A field of an element: the element's (its array, its index, its size).
@@ -11277,6 +11285,30 @@ class OptProfile
                     && xd.ops().count() == (u32)1 && ((IROperand*)xd.ops().get((u32)0)).kind() == (u8)OPK_USE)
                     x = ((IROperand*)xd.ops().get((u32)0)).val();
                 _ppAtIv = x == iv;
+                _ppOff = (i64)0;
+                // [i + c] / [i - c]: the iteration's own element, c further on.
+                if (!_ppAtIv)
+                    {
+                    IRInsn* ad = (IRInsn*)defOf.get((Hashable*)x);
+                    if (ad != (IRInsn*)0 && (ad.op().equals(String.withCString("Add")) || ad.op().equals(String.withCString("Sub")))
+                        && ad.ops().count() == (u32)2)
+                        {
+                        IROperand* a0 = (IROperand*)ad.ops().get((u32)0);
+                        IROperand* a1 = (IROperand*)ad.ops().get((u32)1);
+                        i64 c = (i64)0;
+                        bool sub = ad.op().equals(String.withCString("Sub"));
+                        if (a0.kind() == (u8)OPK_USE && ppStripExt(a0.val(), defOf) == iv && constValue(defOf, a1, &c))
+                            {
+                            _ppAtIv = true;
+                            _ppOff = sub ? (i64)0 - c : c;
+                            }
+                        else if (!sub && a1.kind() == (u8)OPK_USE && ppStripExt(a1.val(), defOf) == iv && constValue(defOf, a0, &c))
+                            {
+                            _ppAtIv = true;
+                            _ppOff = c;
+                            }
+                        }
+                    }
                 }
             // An element of a row (C's a[i][j]: the row's address an element
             // of the same type at i * C, j an element of it): one index, the
@@ -11304,9 +11336,13 @@ class OptProfile
                 {
                 base = rb;
                 _ppAtIv = ppRowOwned(terms, iv, defOf);
+                _ppOff = PP_OFF_ROW;
                 }
             else if (!_ppAtIv && io.kind() == (u8)OPK_USE)
+                {
                 _ppAtIv = ppRowOwned(terms, iv, defOf);
+                _ppOff = PP_OFF_ROW;
+                }
             }
         // Through a cast of a pointer to its element type (the C path casts
         // its untyped pointers where they are used): the array is the
@@ -11336,6 +11372,7 @@ class OptProfile
     Array* _ppGBase;
     Array* _ppGElem;
     Array* _ppGAtIv;
+    Array* _ppGOff;     // Number@: each array's offset from [i] (or PP_OFF_ROW)
     Array* _ppGStored;
     // The pairs that need a check at run time (indices into the above).
     Array* _ppPairA;
@@ -11378,10 +11415,12 @@ class OptProfile
             _ppGBase.add((Object*)base);
             _ppGElem.add((Object*)Number.with(es));
             _ppGAtIv.add((Object*)Number.with(atIv ? (u32)1 : (u32)0));
+            _ppGOff.add((Object*)Number.withI64(_ppOff));
             _ppGStored.add((Object*)Number.with(stored ? (u32)1 : (u32)0));
             return;
             }
-        if (!atIv)
+        // Every access the iteration's own at one offset, or none is.
+        if (!atIv || ((Number*)_ppGOff.get(k)).asI64() != _ppOff)
             _ppGAtIv.set(k, (Object*)Number.with((u32)0));
         if (stored)
             _ppGStored.set(k, (Object*)Number.with((u32)1));
@@ -11396,6 +11435,7 @@ class OptProfile
         _ppGBase = new Array();
         _ppGElem = new Array();
         _ppGAtIv = new Array();
+        _ppGOff = new Array();
         _ppGStored = new Array();
         _ppPairA = new Array();
         _ppPairB = new Array();
@@ -11467,6 +11507,10 @@ class OptProfile
                 // and their bases from outside the loop.
                 if (((Number*)_ppGAtIv.get(x)).asU32() == (u32)0)
                     return ppNo("an array that may overlap a stored one, read away from [i]");
+                // The run-time check compares [lo, hi) of each: both at [i]
+                // exactly (not a row, not i + c).
+                if (((Number*)_ppGOff.get(s)).asI64() != (i64)0 || ((Number*)_ppGOff.get(x)).asI64() != (i64)0)
+                    return ppNo("an array that may overlap a stored one, touched other than at [i]");
                 if (((Number*)_ppGElem.get(s)).asU32() == (u32)0 || ((Number*)_ppGElem.get(x)).asU32() == (u32)0)
                     return ppNo("an array of an element whose size is not known");
                 for (u32 w = (u32)0; w < (u32)2; w = w + (u32)1)
