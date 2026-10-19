@@ -1,10 +1,10 @@
-atax 0
+atax 5
 conv2d 2
 dot 1
-gemm 0
-jacobi1d 1
-jacobi2d 0
+gemm 3
+jacobi1d 3
+jacobi2d 4
 narrow 2
-particles 2
+particles 3
 prefix 1
 redstart 3

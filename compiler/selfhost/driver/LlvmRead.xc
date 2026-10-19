@@ -579,6 +579,31 @@ class LlvmReader
         }
     // `[N x T]` -> N and T (in _arrN, the return), or 0 when it is not an array of a scalar.
     u32 _arrN;
+    // `[A x [B x T]]`: T's IR type, with A, B (outermost first) in dims.
+    String* arrayLeaf(String* t, Array* dims)
+        {
+        String* cur = t;
+        while (cur != (String*)0 && cur.hasPrefix(String.withCString("[")))
+            {
+            u32 x = cur.indexOfByte((u8)'x');
+            if (x == (u32)$FFFFFFFF)
+                return (String*)0;
+            i64 n = (i64)0;
+            for (u32 k = (u32)1; k < x; k = k + (u32)1)
+                {
+                u8 c = cur.byteAt(k);
+                if (c >= (u8)'0' && c <= (u8)'9')
+                    n = n * (i64)10 + (i64)(c - (u8)'0');
+                }
+            dims.add((Object*)Number.withI64(n));
+            cur = cur.substringBytes(x + (u32)1, cur.byteLength() - x - (u32)2).trimmed();
+            }
+        if (dims.count() == (u32)0)
+            return (String*)0;
+        _arrN = (u32)((Number*)dims.get((u32)0)).asI64();
+        return irOf(cur);
+        }
+
     String* arrayOf(String* t)
         {
         if (t == (String*)0 || !t.hasPrefix(String.withCString("[")))
@@ -611,8 +636,50 @@ class LlvmReader
             _strN = _strN + (u32)1;
             n = String.withFormat("cg_%u", _strN);
             }
+        // A name the x86 back end renames (a register or an operand word in
+        // Intel syntax: C's `ss`, `al`, `byte`) is given its renamed form on
+        // both sides of a split, clang's too, so that the two objects meet.
+        else if (x86Reserved(n))
+            n = String.withFormat("%s$x", n.cString());
         _globals.set((Hashable*)llName, (Object*)n);
         return n;
+        }
+
+    // As X86_64's safeSym: the words it suffixes with `$x`.
+    static bool x86Reserved(String* n)
+        {
+        String* lower = new String();
+        for (u32 i = (u32)0; i < n.byteLength(); i = i + (u32)1)
+            {
+            u8 c = n.byteAt(i);
+            lower.appendByte(c >= (u8)'A' && c <= (u8)'Z' ? (u8)(c + (u8)32) : c);
+            }
+        String* words = String.withCString(" flags eflags rflags ip eip rip cs ds es fs gs ss st byte word dword qword xmmword ptr offset short near far flat eq ne lt le gt ge mod shl shr and or xor not al ah ax eax rax bl bh bx ebx rbx cl ch cx ecx rcx dl dh dx edx rdx si esi rsi sil di edi rdi dil sp esp rsp spl bp ebp rbp bpl ");
+        if (words.contains(String.withFormat(" %s ", lower.cString())))
+            return true;
+        // r0..r15 with d/w/b, xmm0..xmm15.
+        String* t = lower;
+        if (t.hasPrefix(String.withCString("xmm")))
+            t = t.substringFromByte((u32)3);
+        else if (t.hasPrefix(String.withCString("r")))
+            {
+            t = t.substringFromByte((u32)1);
+            if (t.byteLength() > (u32)1 && (t.hasSuffix(String.withCString("d")) || t.hasSuffix(String.withCString("w")) || t.hasSuffix(String.withCString("b"))))
+                t = t.substringBytes((u32)0, t.byteLength() - (u32)1);
+            }
+        else
+            return false;
+        if (t.byteLength() == (u32)0 || t.byteLength() > (u32)2)
+            return false;
+        u32 v = (u32)0;
+        for (u32 i = (u32)0; i < t.byteLength(); i = i + (u32)1)
+            {
+            u8 c = t.byteAt(i);
+            if (c < (u8)'0' || c > (u8)'9')
+                return false;
+            v = v * (u32)10 + (u32)(c - (u8)'0');
+            }
+        return v < (u32)16 && !(t.byteLength() == (u32)2 && t.byteAt((u32)0) == (u8)'0');
         }
 
     bool hasSym(String* n)
@@ -644,6 +711,18 @@ class LlvmReader
         String* t = llType();
         String* sym = symFor(name);
         String* elem = arrayOf(t);
+        // An array of arrays (`int a[R][C]`): R * C of its innermost element,
+        // which is what its address addresses (GEPs into it index that).
+        Array* dims = new Array();
+        String* leaf = arrayLeaf(t, dims);
+        if (leaf != (String*)0 && dims.count() > (u32)1)
+            {
+            i64 all = (i64)1;
+            for (u32 d = (u32)0; d < dims.count(); d = d + (u32)1)
+                all = all * ((Number*)dims.get(d)).asI64();
+            elem = leaf;
+            _arrN = (u32)all;
+            }
         if (elem != (String*)0)
             {
             u32 n = _arrN;
@@ -1498,14 +1577,40 @@ class LlvmReader
             ix = (IRValue*)idx.get((u32)0);
         else
             {
-            elem = arrayOf(t);
-            if (elem == (String*)0 || idx.count() != (u32)2)
+            // An array, of arrays maybe (C's `int a[R][C]`): the element is
+            // the innermost scalar or struct, and the indices after the first
+            // make one index into it, each times the elements its level
+            // spans. A row's address (fewer indices) points at its first
+            // element; the GEP into the row then indexes from there.
+            Array* dims = new Array();
+            elem = arrayLeaf(t, dims);
+            if (elem == (String*)0 || idx.count() < (u32)2 || idx.count() > dims.count() + (u32)1)
                 {
                 fail("a getelementptr not read (a struct, or more indices)");
                 return (IRValue*)0;
                 }
             // The first index steps over whole arrays: only 0 is read.
-            ix = (IRValue*)idx.get((u32)1);
+            for (u32 l = (u32)1; l < idx.count(); l = l + (u32)1)
+                {
+                IRValue* il = (IRValue*)idx.get(l);
+                i64 stride = (i64)1;
+                for (u32 d = l; d < dims.count(); d = d + (u32)1)
+                    stride = stride * ((Number*)dims.get(d)).asI64();
+                IRValue* term = il;
+                if (stride != (i64)1)
+                    term = emit(String.withCString("Mul"), il.ty(), IROperand.useVal(il), IROperand.immI(stride, il.ty()), (IROperand*)0);
+                if (ix == (IRValue*)0)
+                    ix = term;
+                else
+                    {
+                    if (!term.ty().equals(ix.ty()))
+                        {
+                        fail("a getelementptr with indices of two widths");
+                        return (IRValue*)0;
+                        }
+                    ix = emit(String.withCString("Add"), ix.ty(), IROperand.useVal(ix), IROperand.useVal(term), (IROperand*)0);
+                    }
+                }
             }
         IRValue* b = asPtrTo(base, elem);
         return emit(String.withCString("ElementAddr"), ptrTo(elem), IROperand.useVal(b), IROperand.useVal(ix), (IROperand*)0);
