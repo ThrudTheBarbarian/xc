@@ -22,6 +22,7 @@
 #import "XTIROptJumpThread.h"
 #import "XTIROptAggExpand.h"
 #import "XTIROptMem2Reg.h"
+#import "XTIROptSimplify.h"
 #import "XTIROptBlockLayout.h"
 #import "XTIROptLoopRotate.h"
 #import "XTIROptBlockMerge.h"
@@ -135,6 +136,7 @@
         [p addPass:[[XTIROptJumpThread alloc] init]];
         [p addPass:[[XTIROptAggExpand alloc] init]];
         [p addPass:[[XTIROptMem2Reg alloc] init]];
+        [p addPass:[[XTIROptSimplify alloc] init]];
         // SECOND inlining pass, after if-conversion has linearised the small
         // helpers that lowering gave as BRANCH DIAMONDS. A ternary lowers to a
         // two-block diamond with a join phi, so the first inline pass (which

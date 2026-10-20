@@ -27,12 +27,21 @@ timed only when idle (as ../run.py does). The best of three runs is kept.
   python3 benchmark/par/run.py --machines mac   # one machine
   python3 benchmark/par/run.py --xcc compiler/bin/osx/xcc-xc   # a build-tree compiler
   python3 benchmark/par/run.py --autopar        # the same programs as plain loops, with --par-auto
+  python3 benchmark/par/run.py --c --xcc compiler/bin/osx/xcc-xc   # the C forms in c/, against clang
 
 --autopar measures the programs in auto/: each par benchmark with its `par`
 block taken out, so its loop is a plain one. It builds each twice, as written
 (one thread: there is no block) and with --par-auto, and runs the second on
 all threads, on the GPU and with `auto`; the table sets those beside the
 hand-written block's `auto` from this version's results.json.
+
+--c measures the programs in c/: each par benchmark as a plain C program,
+built by clang -O2 and by xcc --par-auto (xcc reads clang's IR and makes par
+blocks of its loops), run as clang built it, by xcc on one thread, on all
+threads, on the GPU and with `auto`; every checksum must agree. The C path
+builds for the machine it runs on, so on the Linux host it builds there:
+--linux-xcc names an xcc on that host and --linux-home its compiler tree
+(the -H that holds Par.xc). Writes c.json.
 
 Writes benchmark/par/<version>/results.json and prints the markdown table the
 performance page uses.
@@ -162,6 +171,123 @@ def table_auto(results, hand):
             lines.append("| %s | %s | %s | %s | %s | %s |" % (n, ms(r["written"]["best_us"]), ms(r["cpu"]["best_us"]),
                                                           ms(r["gpu"]["best_us"]) if "gpu" in r else "—",
                                                           ms(r["auto"]["best_us"]), ms(h["best_us"]) if h else "—"))
+    return "\n".join(lines)
+
+
+C_BENCHES = ["mandelbrot", "perlin", "nbody", "saxpy", "md5", "md5_mask", "mandel_deep"]
+# A GPU computes a par block at :goal(speed), with the fast-math rounding that
+# allows, and mandel_deep's escape counts are sensitive enough that it shows in
+# the last digit of its checksum (2739 against 2738). The CPU modes must still
+# agree exactly; the GPU modes' checksum is recorded and shown.
+C_FASTMATH = {"mandel_deep"}
+C_DIR = os.path.join(HERE, "c")
+
+
+def build_c_mac(name, work):
+    """c/<name>.c by clang -O2 and by xcc --par-auto, here."""
+    src = os.path.join(C_DIR, name + ".c")
+    ref, xc = os.path.join(work, name + ".clang"), os.path.join(work, name + ".xcc")
+    r = subprocess.run(["clang", "-O2", "-w", "-o", ref, src], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit("par/run.py: c/%s.c: clang does not build it:\n%s" % (name, r.stderr))
+    if XCC:
+        cmd = [XCC, "-H", os.path.join(common.REPO, "compiler")]
+    else:
+        cmd = [common.xcc_path()] + common.xcc_home_args()
+    r = subprocess.run(cmd + ["-q", "-O3", "--par-auto", "-o", xc, src], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit("par/run.py: c/%s.c: xcc does not build it:\n%s" % (name, r.stderr))
+    return ref, xc
+
+
+def build_c_linux(host, name, xcc, home):
+    """The same on the Linux host, from a copy of c/ there."""
+    d = "/tmp/par-c"
+    subprocess.run(["ssh", host, "mkdir -p " + d], check=True)
+    subprocess.run(["scp", "-q", os.path.join(C_DIR, name + ".c"), os.path.join(C_DIR, "bench_time.h"),
+                    "%s:%s/" % (host, d)], check=True)
+    cmd = ("cd %s && clang -O2 -w -o %s.clang %s.c && %s -H %s -q -O3 --par-auto -o %s.xcc %s.c"
+           % (d, name, name, xcc, home, name, name))
+    r = subprocess.run(["ssh", host, cmd], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit("par/run.py: c/%s.c does not build on the Linux host:\n%s%s" % (name, r.stdout, r.stderr))
+    return "%s/%s.clang" % (d, name), "%s/%s.xcc" % (d, name)
+
+
+def measure_c(runner, ref, xc, gpu_only, fastmath=False):
+    """clang's build, then xcc's: one thread, all threads, the GPU, auto. A
+    GPU-saturation benchmark skips the one-thread run (minutes a run)."""
+    out, sums, gsums = {}, set(), set()
+    runs = [("clang", ref, {})]
+    if not gpu_only:
+        runs.append(("serial", xc, {"XC_PAR": "cpu", "XC_PAR_THREADS": "1"}))
+    runs += [("cpu", xc, {"XC_PAR": "cpu"}), ("gpu", xc, {"XC_PAR": "gpu"}), ("auto", xc, {})]
+    for mode, binary, env in runs:
+        best = None
+        for _ in range(1 if mode in ("clang", "serial") and gpu_only else REPEATS):
+            got = runner(binary, env)
+            if got is None:
+                sys.exit("par/run.py: %s (%s) printed nothing usable" % (binary, mode))
+            (gsums if fastmath and mode in ("gpu", "auto") else sums).add(got[0])
+            if best is None or got[1] < best["best_us"]:
+                best = {"best_us": got[1], "first_us": got[2]}
+        out[mode] = best
+    if len(sums) != 1:
+        sys.exit("par/run.py: %s: the checksums differ: %s" % (xc, sorted(sums)))
+    out["checksum"] = sums.pop()
+    if gsums - {out["checksum"]}:
+        out["gpu_checksum"] = "/".join(sorted(gsums))
+    return out
+
+
+def c_mode(a, machines, env, work):
+    results = {}
+    for name in a.bench or C_BENCHES:
+        results[name] = {}
+        gpu_only = name in GPU_BENCHES
+        if "mac" in machines:
+            ref, xc = build_c_mac(name, work)
+            results[name]["mac"] = measure_c(run_mac, ref, xc, gpu_only, name in C_FASTMATH)
+        if "linux" in machines and env.get("XTC_LINUX_HOST") and a.linux_xcc:
+            host = env["XTC_LINUX_HOST"]
+            ref, xc = build_c_linux(host, name, a.linux_xcc, a.linux_home)
+            results[name]["linux"] = measure_c(lambda b, e: run_linux(host, b, e), ref, xc, gpu_only,
+                                               name in C_FASTMATH)
+        print(name, json.dumps(results[name]), flush=True)
+    outdir = os.path.join(HERE, "v" + a.version)
+    os.makedirs(outdir, exist_ok=True)
+    # A run of some benchmarks (--bench) adds to the file's others.
+    path = os.path.join(outdir, "c.json")
+    if a.bench and os.path.isfile(path):
+        with open(path) as fh:
+            old = json.load(fh)
+        old.update(results)
+        results = old
+    with open(path, "w") as fh:
+        json.dump(results, fh, indent=1, sort_keys=True)
+    print(table_c(results))
+
+
+def table_c(results):
+    names = {"mac": "Apple silicon, Metal", "linux": "x86-64 Linux, an integrated GPU through Vulkan"}
+    lines = []
+    for m in ("mac", "linux"):
+        rows = [(n, r[m]) for n, r in results.items() if m in r]
+        if not rows:
+            continue
+        lines.append("\n**%s** (ms, best of eight runs)\n" % names[m])
+        lines.append("| benchmark | clang -O2 | xcc, one thread | xcc --par-auto, all threads | xcc --par-auto, GPU "
+                     "| xcc --par-auto, `auto` | `auto` against clang |")
+        lines.append("|---|---|---|---|---|---|---|")
+        for n, r in rows:
+            sp = r["clang"]["best_us"] / max(1, r["auto"]["best_us"])
+            gpu = ms(r["gpu"]["best_us"]) + ("*" if "gpu_checksum" in r else "")
+            lines.append("| %s | %s | %s | %s | %s | %s | %.1fx |" % (
+                n, ms(r["clang"]["best_us"]), ms(r["serial"]["best_us"]) if "serial" in r else "—",
+                ms(r["cpu"]["best_us"]), gpu, ms(r["auto"]["best_us"]), sp))
+        if any("gpu_checksum" in r for _, r in rows):
+            lines.append("\n\\* the GPU's fast-math rounding moves the checksum's last digit (%s against %s)"
+                         % tuple(next((r["gpu_checksum"], r["checksum"]) for _, r in rows if "gpu_checksum" in r)))
     return "\n".join(lines)
 
 
@@ -299,6 +425,9 @@ def main():
     ap.add_argument("--version", default=common.COMPILER_VERSION)
     ap.add_argument("--xcc", help="measure this compiler instead of the shipped one")
     ap.add_argument("--autopar", action="store_true", help="the plain-loop programs in auto/, with --par-auto")
+    ap.add_argument("--c", action="store_true", help="the C programs in c/: clang -O2 against xcc --par-auto")
+    ap.add_argument("--linux-xcc", help="with --c: an xcc on the Linux host that has the C path")
+    ap.add_argument("--linux-home", help="with --c: that xcc's compiler tree on the host (its -H)")
     a = ap.parse_args()
     global XCC
     XCC = a.xcc
@@ -307,6 +436,9 @@ def main():
     env = common.build_env()
     work = os.path.join(HERE, "build")
     os.makedirs(work, exist_ok=True)
+    if a.c:
+        c_mode(a, [m for m in machines if m in ("mac", "linux")], env, work)
+        return
     if a.autopar:
         autopar(a, [m for m in machines if m != "browser"], env, work)
         return
