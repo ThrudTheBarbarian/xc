@@ -50,9 +50,83 @@ static int64_t simpWrap(int64_t v, XTIRType* t)
     for (XTIRFunction* fn in mod.functions)
         {
         [self runOnFunction:fn];
+        [self strictFunction:fn];
         [self balanceFunction:fn];
         }
     return YES;
+    }
+
+// `x <= K` for a constant K becomes `x < K + 1` where K + 1 fits (8 to 32
+// bits): the loop passes read a bound with `<` (an inclusive range, `0...N -
+// 1`, once folded, is `i <= 199999`; the vectoriser's constant-trip path took
+// it as 199999 trips).
+- (void)strictFunction:(XTIRFunction*)fn
+    {
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* defOf = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        for (XTIRInsn* p in bb.phiNodes)
+            if (p.result)
+                defOf[@(p.result.valueId)] = p;
+        for (XTIRInsn* i in bb.instructions)
+            if (i.result)
+                defOf[@(i.result.valueId)] = i;
+        }
+    NSDictionary<NSNumber*, NSNumber*>* repl = @{};
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        for (NSUInteger i = 0; i < bb.instructions.count; i++)
+            {
+            XTIRInsn* n = bb.instructions[i];
+            if (n.opcode != XTIROpICmp || n.operands.count != 2)
+                continue;
+            BOOL ule = n.predicate == XTIRICmpULE, sle = n.predicate == XTIRICmpSLE;
+            if (!ule && !sle)
+                continue;
+            XTIROperand* c = n.operands[1];
+            XTIRType* t = c.kind == XTIROperandKindUse ? [fn valueForId:c.valueId].type : c.type;
+            if (!t || !simpIntKind(t.kind) || t.byteWidth > 4)
+                continue;
+            BOOL unsignedTy = !simpSignedKind(t.kind);
+            if (ule != unsignedTy)
+                continue;
+            int64_t k = 0;
+            if (!simpConst(c, fn, defOf, repl, &k))
+                continue;
+            uint32_t bits = t.byteWidth * 8;
+            int64_t kw, top;
+            if (ule)
+                {
+                kw = k & (((int64_t)1 << bits) - 1);
+                top = ((int64_t)1 << bits) - 1;
+                }
+            else
+                {
+                kw = simpWrap(k, t);
+                top = ((int64_t)1 << (bits - 1)) - 1;
+                }
+            if (kw >= top)
+                continue;
+            XTIRValue* kv = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                          type:t
+                                                       defSite:[[XTIRDefSite alloc] initWithBlock:bb insnIndex:i]];
+            [fn registerValue:kv];
+            XTIRInsn* kc = [[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                     result:kv
+                                                   operands:@[ [XTIROperand immIWithType:t value:simpWrap(kw + 1, t)] ]
+                                                     dbgLoc:n.dbgLoc];
+            XTIRInsn* nc = [[XTIRInsn alloc] initWithOpcode:XTIROpICmp
+                                                     result:n.result
+                                                   operands:@[ n.operands[0], [XTIROperand useWithValueId:kv.valueId] ]
+                                                  predicate:(ule ? XTIRICmpULT : XTIRICmpSLT)
+                                                     dbgLoc:n.dbgLoc];
+            bb.instructions[i] = nc;
+            [bb.instructions insertObject:kc atIndex:i];
+            defOf[@(kv.valueId)] = kc;
+            defOf[@(nc.result.valueId)] = nc;
+            i++;
+            }
+        }
     }
 
 static BOOL simpAssoc(XTIROpcode op)

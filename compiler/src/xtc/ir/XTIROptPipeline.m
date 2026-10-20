@@ -194,6 +194,10 @@
         XTIROptLICM* licmPre = [[XTIROptLICM alloc] init];
         licmPre.profile = profile;
         [p addPass:licmPre];
+        // simplify again, for what the late inline pass made constant: its
+        // `x <= K` to `x < K + 1` above all, since the vectoriser's
+        // constant-trip paths read a bound as `<`.
+        [p addPass:[[XTIROptSimplify alloc] init]];
         // Auto-vectorise elementwise map loops to NEON SIMD (profile-gated),
         // BEFORE the unrollers (which would otherwise replicate the scalar body
         // and defeat recognition). The unrollers skip vector-op bodies.

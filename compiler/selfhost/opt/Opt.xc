@@ -1505,6 +1505,13 @@ class OptProfile
             licm(m);
         if (stopHere(String.withCString("licm")))
             return;
+        // simplify again, for what the late inline pass made constant: its
+        // `x <= K` to `x < K + 1` above all, since the vectoriser's
+        // constant-trip paths read a bound as `<`.
+        if (_level >= (u32)2)
+            simplify(m);
+        if (stopHere(String.withCString("simplify")))
+            return;
         if (_level >= (u32)2)
             simdClone(m);
         if (stopHere(String.withCString("simd-clone")))
@@ -3263,7 +3270,66 @@ class OptProfile
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             simplifyFn((IRFunc*)m.funcs().get(f));
+            simpStrictFn((IRFunc*)m.funcs().get(f));
             simpBalanceFn((IRFunc*)m.funcs().get(f));
+            }
+        }
+
+    // `x <= K` for a constant K becomes `x < K + 1` where K + 1 fits (8 to 32
+    // bits): the loop passes read a bound with `<` (an inclusive range,
+    // `0...N - 1`, once folded, is `i <= 199999`; the vectoriser's
+    // constant-trip path took it as 199999 trips).
+    void simpStrictFn(IRFunc* fn)
+        {
+        Map* defOf = defMapAll(fn);
+        Map* repl = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (!n.op().equals(String.withCString("ICmp")) || n.pred() == (String*)0 || n.ops().count() != (u32)2)
+                    continue;
+                bool ule = n.pred().equals(String.withCString("ULE"));
+                bool sle = n.pred().equals(String.withCString("SLE"));
+                if (!ule && !sle)
+                    continue;
+                IROperand* c = (IROperand*)n.ops().get((u32)1);
+                String* t = c.kind() == (u8)OPK_USE && c.val() != (IRValue*)0 ? c.val().ty() : c.ty();
+                if (!simpIntTy(t) || irWidth(t) > (u32)4)
+                    continue;
+                if (ule != t.hasPrefix(String.withCString("U")))
+                    continue;
+                i64 k = (i64)0;
+                if (!simpConst(c, defOf, repl, &k))
+                    continue;
+                u32 bits = irWidth(t) * (u32)8;
+                i64 kw = (i64)0;
+                i64 top = (i64)0;
+                if (ule)
+                    {
+                    kw = k & (((i64)1 << (i64)bits) - (i64)1);
+                    top = ((i64)1 << (i64)bits) - (i64)1;
+                    }
+                else
+                    {
+                    kw = simpWrap(k, t);
+                    top = ((i64)1 << (i64)(bits - (u32)1)) - (i64)1;
+                    }
+                if (kw >= top)
+                    continue;
+                IRValue* kv = new IRValue(t);
+                IRInsn* kc = IRInsn.with(String.withCString("Const"));
+                kc.copyDbg(n);
+                kc.setRes(kv);
+                kc.add(IROperand.immI(simpWrap(kw + (i64)1, t), t));
+                n.setPred(String.withCString(ule ? "ULT" : "SLT"));
+                n.ops().set((u32)1, (Object*)IROperand.useVal(kv));
+                bb.insns().insert(i, (Object*)kc);
+                defOf.set((Hashable*)kv, (Object*)kc);
+                i = i + (u32)1;
+                }
             }
         }
 
@@ -24796,6 +24862,22 @@ class OptProfile
             if (hasMemWrite)
                 break;
             }
+        // A loop that calls keeps its vectors: hoisted, one is live across the
+        // call, and every vector register is the caller's to save, which no
+        // back end does. The lane-index load of an inner loop, hoisted out of
+        // an outer one that called a function, came back from the call as
+        // whatever the callee left in ymm15 (an AVX2 clone's reduction).
+        bool hasCall = false;
+        for (u32 i = (u32)0; i < body.count() && !hasCall; i = i + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)body.get(i);
+            for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
+                if (licmIsCall(((IRInsn*)bb.insns().get(k)).op()))
+                    {
+                    hasCall = true;
+                    break;
+                    }
+            }
 
         // Grow the hoist set to a fixpoint: an instruction joins once all its
         // operands are invariant, which can make the next one invariant too.
@@ -24821,6 +24903,9 @@ class OptProfile
                     if (!licmHoistable(n, hasMemWrite, defOf))
                         continue;
                     if (keepSplats && n.op().equals(String.withCString("VSplat")))
+                        continue;
+                    if (hasCall && n.res() != (IRValue*)0 && n.res().ty() != (String*)0
+                        && n.res().ty().hasPrefix(String.withCString("Vec(")))
                         continue;
                     bool inv = true;
                     for (u32 o = (u32)0; o < n.ops().count(); o = o + (u32)1)
@@ -24924,6 +25009,13 @@ class OptProfile
     bool licmIsTerminator(String* op)
         {
         return op.equals(String.withCString("Branch")) || op.equals(String.withCString("CondBranch")) || op.equals(String.withCString("Switch")) || op.equals(String.withCString("Return")) || op.equals(String.withCString("IndirectBranch")) || op.equals(String.withCString("Unreachable"));
+        }
+
+    bool licmIsCall(String* op)
+        {
+        return op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked"))
+            || op.equals(String.withCString("CallCloaked")) || op.equals(String.withCString("VTblDispatch"))
+            || op.equals(String.withCString("ProtoDispatch"));
         }
 
     bool licmWritesMemory(String* op)

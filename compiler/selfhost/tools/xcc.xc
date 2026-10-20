@@ -5729,9 +5729,12 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
     // With no -m flag the level is `auto` (runtime SIMD dispatch), as the
     // reference's driver forwards it.
     // Only for an executable built in one invocation: a -c object or a library
-    // carries its own constructor table, and two in one link collide.
+    // carries its own constructor table, and two in one link collide. A C
+    // program's xcc half is compiled as an object, but it is the program's
+    // only one with a table (clang's half, the globals, has none), so it
+    // dispatches too.
     if (simd == (String*)0 && (isX86_64(d) || d.arch().equals(String.withCString("win64")))
-        && !d.compileOnly() && !d.emitLib())
+        && (!d.compileOnly() || gCSplitOut != (String*)0) && !d.emitLib())
         simd = String.withCString("auto");
     if (simd != (String*)0)
     {

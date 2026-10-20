@@ -59,6 +59,12 @@ static BOOL writesMemory(XTIROpcode op)
         }
     }
 
+static BOOL licmIsCall(XTIROpcode op)
+    {
+    return op == XTIROpCall || op == XTIROpCallBanked || op == XTIROpCallCloaked ||
+           op == XTIROpVTblDispatch || op == XTIROpProtoDispatch;
+    }
+
 // A pure, speculation-safe op (no memory result, no side effect, no trap).
 static BOOL pureHoistable(XTIRInsn* insn)
     {
@@ -249,6 +255,25 @@ static BOOL pureHoistable(XTIRInsn* insn)
                     break;
                 }
 
+            // A loop that calls keeps its vectors: hoisted, one is live across
+            // the call, and every vector register is the caller's to save,
+            // which no back end does. The lane-index load of an inner loop,
+            // hoisted out of an outer one that called a function, came back
+            // from the call as whatever the callee left in ymm15 (an AVX2
+            // clone's reduction).
+            BOOL hasCall = NO;
+            for (NSNumber* bn in body)
+                {
+                for (XTIRInsn* insn in blocks[bn.unsignedIntegerValue].instructions)
+                    if (licmIsCall(insn.opcode))
+                        {
+                        hasCall = YES;
+                        break;
+                        }
+                if (hasCall)
+                    break;
+                }
+
             // Is value `vid` invariant for this loop (defined outside, or already
             // marked to hoist)? Memory tokens are advisory (loose model) — ignore.
             NSMutableSet<NSNumber*>* invariant = [NSMutableSet set];
@@ -305,6 +330,8 @@ static BOOL pureHoistable(XTIRInsn* insn)
                         if ([hoistSet containsObject:insn] || !isHoistable(insn))
                             continue;
                         if (keepSplats && insn.opcode == XTIROpVSplat)
+                            continue;
+                        if (hasCall && insn.result && insn.result.type.kind == XTIRTypeKindVec)
                             continue;
                         BOOL inv = YES;
                         for (XTIROperand* o in insn.operands)
