@@ -208,6 +208,20 @@ bool w32VisualStyles(pointer icc)
     return true;
     }
 
+// DPI: the process stays DPI-unaware, so every frame and click is in the 96-dpi pixels the toolkit
+// lays out in, but asks for GDI scaling (Windows 10 1809 on): at 125-200% Windows draws the text and
+// the controls at the screen's resolution instead of stretching a 96-dpi bitmap, which would blur.
+// Nothing changes at 100%, and an older Windows (or Wine), which has no such call, keeps the stretch.
+void w32DpiScaling(void)
+    {
+    W32SetDpiContextFn* set = (W32SetDpiContextFn*)GetProcAddress(LoadLibraryA((pointer) "user32.dll"),
+                                                                 (u8*)"SetProcessDpiAwarenessContext");
+    if (set != (W32SetDpiContextFn*)0)
+        {
+        set((pointer)(i64)DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED);
+        }
+    }
+
 // The control font: Segoe UI (Windows 10's UI face) at a 13 px em, the size every backend uses, not
 // DEFAULT_GUI_FONT (MS Sans Serif, 11 px).  textWidth measures with the same face.
 u8* gW32UiFace = (u8*)"Segoe UI";
@@ -236,21 +250,188 @@ i32 w32LabelDY(pointer font)
     }
 
 // A native control's place for a frame, where the control should not just take the frame:
-//   field    a single-line EDIT puts its text at its top, so it gets a text-height box centred in
-//            the frame
 //   popup    the window also holds the dropped list (the 120 below); the closed box is set to the
 //            frame's height through the selection field's item height (CB_SETITEMHEIGHT -1), by
 //            what the box measures (the border differs between Windows and Wine), and never below
 //            the font's cell
 //   stepper  the up-down at its natural width (a scroll bar's), centred, not stretched
-void w32Place(pointer c, i32 k, i32 x, i32 y, i32 w, i32 h)
+//   segmented its buttons fitted across the frame (w32SegFit)
+// A field: an EDIT that fills its frame.  A single-line EDIT draws its text at the top of its client
+// area, so w32FieldProc gives it a client one text line tall, centred: the bands above and below
+// become non-client area, painted in the field's background, and a click in them is the field's.
+pointer gW32EditProc; // the EDIT class's own proc, which w32FieldProc passes everything on to
+// The band above the client, in window coordinates: the client's top inset less its left inset
+// (the border, the same on every side).
+i32 w32FieldBand(pointer hwnd, i32* box)
     {
-    if (k == (i32)UXKindField)
+    RECT wr;
+    GetWindowRect(hwnd, (pointer)&wr);
+    RECT cr;
+    GetClientRect(hwnd, (pointer)&cr);
+    POINT o;
+    o.x = (i32)0;
+    o.y = (i32)0;
+    ClientToScreen(hwnd, (pointer)&o);
+    box[0] = o.x - wr.left;
+    box[1] = o.y - wr.top;
+    box[2] = box[0] + cr.right;
+    box[3] = box[1] + cr.bottom;
+    return box[1] - box[0];
+    }
+void w32FieldBands(pointer hwnd, pointer hdc)
+    {
+    i32 b[4];
+    i32 pad = w32FieldBand(hwnd, &b[0]);
+    if (pad <= (i32)0)
         {
-        i32 eh = (i32)20;
-        MoveWindow(c, x, y + (h - eh) / (i32)2, w, eh, (i32)1);
         return;
         }
+    u32 st = (u32)(u64)GetWindowLongPtrA(hwnd, (i32)GWL_STYLE);
+    bool grey = IsWindowEnabled(hwnd) == (i32)0 || (st & (u32)ES_READONLY) != (u32)0;
+    pointer br = CreateSolidBrush(GetSysColor(grey ? (i32)COLOR_BTNFACE : (i32)COLOR_WINDOW));
+    RECT r;
+    r.left = b[0];
+    r.right = b[2];
+    r.top = b[1] - pad;
+    r.bottom = b[1];
+    FillRect(hdc, (pointer)&r, br);
+    r.top = b[3];
+    r.bottom = b[3] + pad;
+    FillRect(hdc, (pointer)&r, br);
+    DeleteObject(br);
+    }
+// The themed edge over a printed child with a client edge (a field, a text view): on screen the
+// themed control's WM_NCPAINT draws it, but WM_PRINT draws the classic sunken one.  The edit border
+// part, in the control's state: 1 normal, 3 focused, 4 disabled.
+W32OpenThemeDataFn* gW32OpenTheme;
+W32DrawThemeBackgroundFn* gW32DrawTheme;
+W32CloseThemeDataFn* gW32CloseTheme;
+u16 gW32EditClass[5] = { (u16)69, (u16)100, (u16)105, (u16)116, (u16)0 }; // L"Edit"
+void w32FieldEdge(pointer hwnd, pointer hdc)
+    {
+    if (!gW32Themed)
+        {
+        return;
+        }
+    if (gW32OpenTheme == (W32OpenThemeDataFn*)0)
+        {
+        pointer ux = LoadLibraryA((pointer) "uxtheme.dll");
+        gW32OpenTheme = (W32OpenThemeDataFn*)GetProcAddress(ux, (u8*)"OpenThemeData");
+        gW32DrawTheme = (W32DrawThemeBackgroundFn*)GetProcAddress(ux, (u8*)"DrawThemeBackground");
+        gW32CloseTheme = (W32CloseThemeDataFn*)GetProcAddress(ux, (u8*)"CloseThemeData");
+        if (gW32OpenTheme == (W32OpenThemeDataFn*)0 || gW32DrawTheme == (W32DrawThemeBackgroundFn*)0
+            || gW32CloseTheme == (W32CloseThemeDataFn*)0)
+            {
+            gW32Themed = false; // no uxtheme: the classic edge stays
+            return;
+            }
+        }
+    pointer th = gW32OpenTheme(hwnd, (pointer)&gW32EditClass[(i32)0]);
+    if (th == (pointer)0)
+        {
+        return;
+        }
+    RECT wr;
+    GetWindowRect(hwnd, (pointer)&wr);
+    i32 b[4];
+    i32 pad = w32FieldBand(hwnd, &b[0]);
+    // the edge only: the client (and a field's bands) is clipped out, so it is left as printed
+    pointer clip = CreateRectRgn(b[0], b[1] - pad, b[2], b[3] + pad);
+    pointer all = CreateRectRgn((i32)0, (i32)0, wr.right - wr.left, wr.bottom - wr.top);
+    CombineRgn(all, all, clip, (i32)RGN_DIFF);
+    SelectClipRgn(hdc, all);
+    RECT r;
+    r.left = (i32)0;
+    r.top = (i32)0;
+    r.right = wr.right - wr.left;
+    r.bottom = wr.bottom - wr.top;
+    i32 state = IsWindowEnabled(hwnd) == (i32)0 ? (i32)4 : GetFocus() == hwnd ? (i32)3 : (i32)1;
+    gW32DrawTheme(th, hdc, (i32)EP_EDITBORDER_NOSCROLL, state, (pointer)&r, (pointer)0);
+    SelectClipRgn(hdc, (pointer)0);
+    DeleteObject(all);
+    DeleteObject(clip);
+    gW32CloseTheme(th);
+    }
+pointer w32FieldProc(pointer hwnd, u32 msg, pointer wp, pointer lp)
+    {
+    if (msg == (u32)WM_NCCALCSIZE)
+        {
+        pointer res = CallWindowProcA(gW32EditProc, hwnd, msg, wp, lp);
+        RECT* r = (RECT*)lp; // the client rect, wParam TRUE or not
+        i32 pad = (r.bottom - r.top - gW32FontH) / (i32)2;
+        if (pad > (i32)0)
+            {
+            r.top = r.top + pad;
+            r.bottom = r.bottom - pad;
+            }
+        return res;
+        }
+    if (msg == (u32)WM_NCPAINT)
+        {
+        pointer res = CallWindowProcA(gW32EditProc, hwnd, msg, wp, lp);
+        pointer wdc = GetWindowDC(hwnd);
+        w32FieldBands(hwnd, wdc);
+        ReleaseDC(hwnd, wdc);
+        return res;
+        }
+    if (msg == (u32)WM_PRINT)
+        {
+        pointer res = CallWindowProcA(gW32EditProc, hwnd, msg, wp, lp);
+        if (((u32)(u64)lp & (u32)PRF_NONCLIENT) != (u32)0)
+            {
+            w32FieldBands(hwnd, wp);
+            }
+        return res;
+        }
+    if (msg == (u32)WM_NCHITTEST)
+        {
+        pointer res = CallWindowProcA(gW32EditProc, hwnd, msg, wp, lp);
+        if ((i64)res != (i64)HTCLIENT)
+            {
+            RECT wr;
+            GetWindowRect(hwnd, (pointer)&wr);
+            i32 sx = (i32)(i16)(u32)(u64)lp;
+            i32 sy = (i32)(i16)((u32)(u64)lp >> (u32)16);
+            if (sx >= wr.left && sx < wr.right && sy >= wr.top && sy < wr.bottom)
+                {
+                return (pointer)HTCLIENT;
+                }
+            }
+        return res;
+        }
+    return CallWindowProcA(gW32EditProc, hwnd, msg, wp, lp);
+    }
+// Subclass a new field's EDIT and have it work out its client again.
+void w32FieldSubclass(pointer c)
+    {
+    pointer prev = SetWindowLongPtrA(c, (i32)GWLP_WNDPROC, (pointer)&w32FieldProc);
+    gW32EditProc = prev;
+    SetWindowPos(c, (pointer)0, (i32)0, (i32)0, (i32)0, (i32)0,
+                 (u32)SWP_NOMOVE | (u32)SWP_NOSIZE | (u32)SWP_NOZORDER | (u32)SWP_NOACTIVATE | (u32)SWP_FRAMECHANGED);
+    }
+
+// A segmented control: its buttons across the frame, widths that add up to w, the frame's height.
+void w32SegFit(pointer c, i32 w, i32 h)
+    {
+    i32 n = (i32)SendMessageA(c, (u32)TB_BUTTONCOUNT, (pointer)0, (pointer)0);
+    if (n <= (i32)0)
+        {
+        return;
+        }
+    SendMessageA(c, (u32)TB_SETPADDING, (pointer)0, (pointer)0);
+    SendMessageA(c, (u32)TB_SETBUTTONSIZE, (pointer)0, (pointer)(i64)(((h & (i32)$FFFF) << (i32)16) | ((w / n) & (i32)$FFFF)));
+    for (i32 j = (i32)0; j < n; j = j + (i32)1)
+        {
+        TBBUTTONINFOA bi;
+        bi.cbSize = (u32)48;
+        bi.dwMask = (u32)TBIF_SIZE;
+        bi.cx = (u16)((j + (i32)1) * w / n - j * w / n);
+        SendMessageA(c, (u32)TB_SETBUTTONINFOA, (pointer)j, (pointer)&bi);
+        }
+    }
+
+void w32Place(pointer c, i32 k, i32 x, i32 y, i32 w, i32 h)
+    {
     if (k == (i32)UXKindPopup)
         {
         MoveWindow(c, x, y, w, h + (i32)120, (i32)1);
@@ -266,6 +447,12 @@ void w32Place(pointer c, i32 k, i32 x, i32 y, i32 w, i32 h)
             GetWindowRect(c, (pointer)&r);
             ih = ih + h - (r.bottom - r.top);
             }
+        return;
+        }
+    if (k == (i32)UXKindSegmented)
+        {
+        MoveWindow(c, x, y, w, h, (i32)1);
+        w32SegFit(c, w, h);
         return;
         }
     if (k == (i32)UXKindStepper)
@@ -2059,6 +2246,10 @@ void w32PrintChildren(pointer root, u32* out, i32 cw, i32 ch)
                     px[q] = marker;
                     }
                 SendMessageA(c, (u32)WM_PRINT, mem, (pointer)(PRF_NONCLIENT | PRF_CLIENT | PRF_ERASEBKGND | PRF_CHILDREN));
+                if (((u32)(u64)GetWindowLongPtrA(c, (i32)GWL_EXSTYLE) & (u32)WS_EX_CLIENTEDGE) != (u32)0)
+                    {
+                    w32FieldEdge(c, mem);
+                    }
                 for (i32 y = (i32)0; y < h; y = y + (i32)1)
                     {
                     for (i32 x = (i32)0; x < w; x = x + (i32)1)
@@ -2669,6 +2860,7 @@ class UXWin32Driver : Object<UXViewDriver>
     bool boot(i32* screenW, i32* screenH)
         {
         gW32Inst = GetModuleHandleA((pointer)0);
+        w32DpiScaling();
         gW32NextHandle = (i32)1;
         gW32ScrollerN = (i32)0;
         gW32Gfx = new UXGdiGraphics();
@@ -4751,22 +4943,20 @@ class UXWin32Driver : Object<UXViewDriver>
             else if (k == (i32)UXKindField)
                 {
                 W32Field* f = (W32Field*)t.nodes[i].spec;
-                // A single-line EDIT does NOT vertically-centre text in a tall control (it sits at the
-                // top), so give it a text-height box centred in the field's frame.
-                i32 eh = (i32)20;
-                i32 ey = ay + (hh - eh) / (i32)2;
                 if (t.nodes[i].ctrl == (pointer)0)
                     {
                     u8* init = f != (W32Field*)0 ? (u8*)&f.buf[0] : (u8*)"";
-                    u32 est = (u32)WS_CHILD | (u32)WS_VISIBLE | (u32)WS_BORDER | (u32)WS_TABSTOP | (u32)ES_AUTOHSCROLL;
+                    // the edge as WS_EX_CLIENTEDGE, not WS_BORDER, which an EDIT draws inside its client
+                    u32 est = (u32)WS_CHILD | (u32)WS_VISIBLE | (u32)WS_TABSTOP | (u32)ES_AUTOHSCROLL;
                     // •••• masking
                     if (f != (W32Field*)0 && f.secure != (i32)0)
                         {
                         est = est | (u32)ES_PASSWORD;
                         }
-                    pointer c = CreateWindowExA((u32)0, (pointer) "EDIT", (pointer)init, est,
-                                                ax, ey, w, eh, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);
+                    pointer c = CreateWindowExA((u32)WS_EX_CLIENTEDGE, (pointer) "EDIT", (pointer)init, est,
+                                                ax, ay, w, hh, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);
                     SendMessageA(c, (u32)WM_SETFONT, gW32Font, (pointer)1);
+                    w32FieldSubclass(c); // its line of text centred in the frame
                     SetWindowLongPtrA(c, (i32)GWLP_USERDATA, (pointer)f); // so EN_CHANGE can sync the buffer
                     f.field = (pointer)t.nodes[i].peer;                   // and reach the field for onChange
                     // grey cue banner while empty
@@ -4924,20 +5114,20 @@ class UXWin32Driver : Object<UXViewDriver>
                         {
                         // CHECKGROUP = radio (single); CHECK = independent toggles (multi).  Win32 enforces
                         // the exclusion, and applyNativeSelection mirrors either into the model.
-                        i32 bstyle = (sg.nativeMultiSelect() != (i32)0 ? (i32)BTNS_CHECK : (i32)BTNS_CHECKGROUP) | (i32)BTNS_SHOWTEXT | (i32)BTNS_AUTOSIZE;
+                        i32 bstyle = (sg.nativeMultiSelect() != (i32)0 ? (i32)BTNS_CHECK : (i32)BTNS_CHECKGROUP) | (i32)BTNS_SHOWTEXT;
                         pointer c = self.w32MakeToolbar(parent, i, ax, ay, w, hh);
                         // no icons on a segmented control
                         for (i32 j = (i32)0; j < sg.nativeSegCount(); j = j + (i32)1)
                             {
                             self.w32ToolbarAdd(c, j, sg.nativeSegLabel(j), bstyle, sg.nativeSegSelected(j), (i32)-2);
                             }
-                        SendMessageA(c, (u32)TB_AUTOSIZE, (pointer)0, (pointer)0);
+                        w32SegFit(c, w, hh);
                         SetWindowLongPtrA(c, (i32)GWLP_USERDATA, (pointer)sg); // WM_COMMAND -> the segmented control
                         t.nodes[i].ctrl = c;
                         }
                     else
                         {
-                        MoveWindow(t.nodes[i].ctrl, ax, ay, w, hh, (i32)1);
+                        w32Place(t.nodes[i].ctrl, k, ax, ay, w, hh);
                         // model -> visual
                         for (i32 j = (i32)0; j < sg.nativeSegCount(); j = j + (i32)1)
                             {

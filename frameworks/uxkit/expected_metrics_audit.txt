@@ -1,5 +1,2 @@
 # Known failures of the metrics-audit gate (run_metrics_audit.sh): <backend> <kind>@<height> <rule>.
 # Remove a line when a driver fix makes it pass.
-gem checkbox@20 centred
-gem radio@20 centred
-gem slider@20 centred

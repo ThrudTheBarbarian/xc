@@ -94,6 +94,19 @@ i32 UpdateWindow(pointer hwnd);
 #define PRF_CLIENT $0004
 #define PRF_ERASEBKGND $0008
 #define PRF_CHILDREN $0010
+// A field's EDIT, subclassed (w32FieldProc) so its one line of text sits centred in a taller box.
+#define GWLP_WNDPROC (-4)
+#define GWL_EXSTYLE (-20)
+pointer CallWindowProcA(pointer prev, pointer hwnd, u32 msg, pointer wp, pointer lp);
+#define WM_NCCALCSIZE $0083
+#define WM_NCHITTEST $0084
+#define HTCLIENT 1
+#define COLOR_WINDOW 5
+#define ES_READONLY $0800
+#define SWP_NOSIZE $0001
+#define SWP_NOMOVE $0002
+#define SWP_FRAMECHANGED $0020
+i32 IsWindowEnabled(pointer hwnd);
 i32 EnableWindow(pointer hwnd, i32 enable);
 i32 GetClientRect(pointer hwnd, pointer r);
 i32 GetSystemMetrics(i32 index);
@@ -507,6 +520,19 @@ struct ACTCTXA
 i32 ActivateActCtx(pointer actctx, pointer cookie);
 u32 GetSystemDirectoryA(pointer buf, u32 cap);
 typedef i32 W32InitCommonControlsExFn(pointer icc);
+typedef i32 W32SetDpiContextFn(pointer ctx);
+#define DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED (-5)
+// uxtheme, loaded when visual styles are on: a themed field's edge, for a snapshot (WM_PRINT draws
+// the classic one)
+typedef pointer W32OpenThemeDataFn(pointer hwnd, pointer classList);
+typedef i32 W32DrawThemeBackgroundFn(pointer theme, pointer hdc, i32 part, i32 state, pointer rc, pointer clip);
+typedef i32 W32CloseThemeDataFn(pointer theme);
+#define EP_EDITBORDER_NOSCROLL 6
+pointer CreateRectRgn(i32 x1, i32 y1, i32 x2, i32 y2);
+i32 CombineRgn(pointer dst, pointer a, pointer b, i32 mode);
+i32 SelectClipRgn(pointer hdc, pointer rgn);
+#define RGN_DIFF 4
+pointer GetFocus(void);
 #define ACTCTX_FLAG_RESOURCE_NAME_VALID $0008
 #define ICC_LISTVIEW_CLASSES $0001
 #define ICC_TREEVIEW_CLASSES $0002
@@ -566,6 +592,28 @@ struct TBBUTTON
 #define TB_ISBUTTONCHECKED $040A  // WM_USER+10 : wParam=idCommand -> nonzero if checked
 #define TB_BUTTONSTRUCTSIZE $041E // WM_USER+30 : MUST send once (=sizeof TBBUTTON) before ADDBUTTONS
 #define TB_AUTOSIZE $0421         // WM_USER+33 : recompute button rects after ADDBUTTONS
+// A segmented control's buttons share its frame: each one's width (TBBUTTONINFOA, TBIF_SIZE),
+// all of them the frame's height (TB_SETBUTTONSIZE)
+struct TBBUTTONINFOA
+    {
+    u32 cbSize;
+    u32 dwMask;
+    i32 idCommand;
+    i32 iImage;
+    u8 fsState;
+    u8 fsStyle;
+    u16 cx;
+    u32 _p0;
+    pointer lParam;
+    pointer pszText;
+    i32 cchText;
+    u32 _p1;
+    }
+#define TBIF_SIZE $0040
+#define TB_SETBUTTONINFOA $0442 // WM_USER+66 : wParam=idCommand, lParam=TBBUTTONINFOA
+#define TB_SETBUTTONSIZE $041F  // WM_USER+31 : lParam=MAKELONG(cx, cy)
+#define TB_SETPADDING $0457     // WM_USER+87 : lParam=MAKELONG(cx, cy)
+#define TB_BUTTONCOUNT $0418    // WM_USER+24
 #define TB_SETIMAGELIST $0430     // WM_USER+48 : wParam=index(0), lParam=HIMAGELIST -> the button icons
     // We build the image list BY HAND: Wine's TB_LOADIMAGES(HINST_COMMCTRL) yields an EMPTY list
     // (imagecount=0), so the standard system bitmaps are simply not there.  A hand-drawn list works on

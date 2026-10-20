@@ -9,6 +9,13 @@
 //            height sits in the middle of its row, and one that fills the frame passes too
 //   top      a label's text starts at the top of its frame (ink within 5 px of it) at any height
 //
+// Then the controls make way for the larger views (text, scroll, tab, split, group box, combo box,
+// date picker, table, outline, collection), each in a 130 x 90 frame, checked for drawing inside it
+// and, for a view with an edge, for filling it:
+//
+//   fills    the view's ink reaches each side of its frame (within 1 px), so views placed side by
+//            side by springs and struts meet as their frames do
+//
 // Each check prints "ok" or "FAIL" with a key, <kind>@<height> <rule>.  The verdict is the runner's
 // (run_metrics_audit.sh): it compares the FAIL keys with the backend's known failures in
 // expected_metrics_audit.txt, so the gate catches a regression and reports a fix.
@@ -41,6 +48,16 @@ void ux_gtk_wait_allocated(i32 handle);
 #import "UXProgressBar.xc"
 #import "UXSegmentedControl.xc"
 #import "UXPopUpButton.xc"
+#import "UXTextView.xc"
+#import "UXScrollView.xc"
+#import "UXTabView.xc"
+#import "UXSplitView.xc"
+#import "UXGroupBox.xc"
+#import "UXComboBox.xc"
+#import "UXDatePicker.xc"
+#import "UXOutlineView.xc"
+#import "UXCollectionView.xc"
+#import "UXTableView.xc"
 #import "UXMetrics.xc"
 #import "UXGeometry.xc"
 #import "UXGraphics.xc"
@@ -67,6 +84,7 @@ i32 GROW = 12; // the second column of a pair: the standard height plus this
 i32 ROWS = 5;  // kinds 0-4 in the first pair of columns, 5-9 in the second: the window fits 640x480
 
 UXWindow* gWin;
+UXView* gBack;
 i32 gFails;
 
 u8* kindName(i32 k)
@@ -181,12 +199,14 @@ UXView* makeKind(i32 k)
     UXSegmentedControl* sc = new UXSegmentedControl();
     sc.addSegment((u8*)"One", 1);
     sc.addSegment((u8*)"Two", 2);
+    sc.selectSegment(0); // a selected segment draws as the control does in use
     return sc;
     }
 
 void build(i32 x, i32 y)
     {
     UXView* back = new Backdrop();
+    gBack = back;
     gWin = new UXWindow();
     gWin.open((u8*)"metrics audit", UXGeom.make((i16)x, (i16)y, (i16)(LEFT + 4 * PITCHX), (i16)(TOP + ROWS * PITCHY)), back);
     if (gApp != (UXApplication*)0)
@@ -288,8 +308,224 @@ void audit(void)
                 }
             }
         }
-    // the runner gives the verdict from the FAIL keys
-    Stdio.printf("PASS: audit ran, %d checks failed\n", gFails);
+    }
+
+// ---- the larger views -----------------------------------------------------------------------
+i32 NVIEWS = 10;
+i32 VIEWW = 130; // four across stay within the controls' columns (the web window's edge is beyond)
+i32 VIEWH = 90;
+
+class Rows : Object<UXTableDataSource>
+    {
+    void init(void)
+        {
+        }
+    i32 numberOfRows(UXTableView* t)
+        {
+        return 3;
+        }
+    u8* valueForCell(UXTableView* t, i32 row, i32 col)
+        {
+        return (u8*)"Row";
+        }
+    }
+
+class Tree : Object<UXOutlineDataSource>
+    {
+    Array* kids;
+    void init(void)
+        {
+        kids = new Array();
+        for (i32 i = 0; i < 3; i = i + 1)
+            {
+            kids.add(new Object());
+            }
+        }
+    i32 numberOfChildren(UXOutlineView* o, Object* item)
+        {
+        return item == (Object*)0 ? 3 : 0;
+        }
+    Object* childOfItem(UXOutlineView* o, Object* item, i32 i)
+        {
+        return (Object*)kids.get((u32)i);
+        }
+    bool isExpandable(UXOutlineView* o, Object* item)
+        {
+        return false;
+        }
+    u8* valueForItem(UXOutlineView* o, Object* item, i32 col)
+        {
+        return (u8*)"Item";
+        }
+    }
+
+Rows* gRows;   // a table holds its source weakly: these keep them
+Tree* gTree;
+
+u8* viewName(i32 k)
+    {
+    if (k == 0) { return (u8*)"textview"; }
+    if (k == 1) { return (u8*)"scrollview"; }
+    if (k == 2) { return (u8*)"tabview"; }
+    if (k == 3) { return (u8*)"splitview"; }
+    if (k == 4) { return (u8*)"groupbox"; }
+    if (k == 5) { return (u8*)"combobox"; }
+    if (k == 6) { return (u8*)"datepicker"; }
+    if (k == 7) { return (u8*)"table"; }
+    if (k == 8) { return (u8*)"outline"; }
+    return (u8*)"collection";
+    }
+// a combo box and a date picker are one row tall, like a popup; the rest take the whole cell
+i32 viewHeight(i32 k)
+    {
+    if (k == 5 || k == 6)
+        {
+        return UXMetrics.stdHeightFor((i32)UXKindPopup, (i32)UX_FORM_DESKTOP);
+        }
+    return VIEWH;
+    }
+// whether view k has an edge that should reach its frame: a text view, a group box, a table and an
+// outline do; a scroll view, a tab view's pane, a split view's panes and a collection view are
+// clear, as their content (here none) draws itself
+bool viewFills(i32 k)
+    {
+    return k == 0 || k == 4 || k == 7 || k == 8;
+    }
+i32 viewX(i32 k)
+    {
+    return LEFT + (k % 4) * (VIEWW + 10);
+    }
+i32 viewY(i32 k)
+    {
+    return TOP + (k / 4) * (VIEWH + 10);
+    }
+
+UXView* makeView(i32 k)
+    {
+    if (k == 0)
+        {
+        UXTextView* tv = new UXTextView();
+        tv.setText(String.withCString((u8*)"Hamburg"));
+        return tv;
+        }
+    if (k == 1)
+        {
+        UXScrollView* sv = new UXScrollView();
+        sv.setDocumentHeight(300);
+        return sv;
+        }
+    if (k == 2)
+        {
+        UXTabView* tb = new UXTabView();
+        tb.addTab((u8*)"One", new UXView());
+        tb.addTab((u8*)"Two", new UXView());
+        return tb;
+        }
+    if (k == 3)
+        {
+        UXSplitView* sp = new UXSplitView();
+        sp.setDividerPos((i16)60);
+        return sp;
+        }
+    if (k == 4)
+        {
+        UXGroupBox* gb = new UXGroupBox();
+        gb.setTitle((u8*)"Group");
+        return gb;
+        }
+    if (k == 5)
+        {
+        UXComboBox* cb = new UXComboBox();
+        cb.addItem((u8*)"Hamburg");
+        cb.setText((u8*)"Hamburg");
+        return cb;
+        }
+    if (k == 6)
+        {
+        UXDatePicker* dp = new UXDatePicker();
+        dp.setDate(UXDate.make(2026, 10, 20));
+        return dp;
+        }
+    if (k == 7)
+        {
+        UXTableView* t = new UXTableView();
+        t.addColumn((u8*)"Name", (i16)120);
+        gRows = new Rows();
+        t.setDataSource(gRows);
+        return t;
+        }
+    if (k == 8)
+        {
+        UXOutlineView* o = new UXOutlineView();
+        o.addColumn((u8*)"Name", (i16)120);
+        gTree = new Tree();
+        o.setOutlineSource(gTree);
+        return o;
+        }
+    UXCollectionView* cv = new UXCollectionView();
+    cv.setItemSize((i16)40, (i16)30);
+    cv.addItem((Object*)cv, (u8*)"A");
+    cv.addItem((Object*)cv, (u8*)"B");
+    return cv;
+    }
+
+void buildViews(void)
+    {
+    while (gBack.subviews.count() > 0)
+        {
+        ((UXView* ?)gBack.subviews.get((u16)0)).removeFromSuperview();
+        }
+    for (i32 k = 0; k < NVIEWS; k = k + 1)
+        {
+        UXView* v = makeView(k);
+        gBack.addSubview(v, UXGeom.make((i16)viewX(k), (i16)viewY(k), (i16)VIEWW, (i16)viewHeight(k)));
+        if (k == 7 || k == 8)
+            {
+            ((UXTableView* ?)v).reloadData(); // the rows, once it is in the window
+            }
+        }
+    gWin.displayAll();
+#if SNAP_GTK
+    ux_gtk_wait_allocated(gWin.handle);
+#endif
+    gWin.displayAll();
+    }
+
+void auditViews(void)
+    {
+    UXImage* all = gWin.snapshot((UXRect*)0);
+    if (all == (UXImage*)0)
+        {
+        Stdio.printf("FAIL: the window did not snapshot\n");
+        return;
+        }
+#if !SNAP_WEB
+    u8* save = getenv((u8*)"UX_AUDIT_VIEWS_PNG");
+    if (save != (u8*)0)
+        {
+        UXFileIO.write(save, UXPngEncode.encode(all));
+        }
+#endif
+    i32 b[4];
+    for (i32 k = 0; k < NVIEWS; k = k + 1)
+        {
+        i32 h = viewHeight(k);
+        inkBox(all, viewX(k), viewY(k), VIEWW, h, 4, &b[0]);
+        bool drawn = b[2] > 0;
+        // a clear view may draw nothing at all (GTK's scroller shows only under the pointer)
+        bool inside = (drawn || !viewFills(k)) && (!drawn || (b[0] >= -1 && b[1] >= -1 && b[0] + b[2] <= VIEWW + 1 && b[1] + b[3] <= h + 1));
+        ck(inside, viewName(k), h, (u8*)"inside", &b[0]);
+        if (h < VIEWH)
+            {
+            i32 below = h - b[1] - b[3];
+            ck(drawn && b[1] - below <= 1 && below - b[1] <= 1, viewName(k), h, (u8*)"centred", &b[0]);
+            }
+        else if (viewFills(k))
+            {
+            ck(drawn && b[0] <= 1 && b[1] <= 1 && b[0] + b[2] >= VIEWW - 1 && b[1] + b[3] >= h - 1,
+               viewName(k), h, (u8*)"fills", &b[0]);
+            }
+        }
     }
 
 class Delegate : Object<UXApplicationDelegate>
@@ -298,6 +534,10 @@ class Delegate : Object<UXApplicationDelegate>
         {
         build(40, 40);
         audit();
+        buildViews();
+        auditViews();
+        // the runner gives the verdict from the FAIL keys
+        Stdio.printf("PASS: audit ran, %d checks failed\n", gFails);
         app.stop();
         return 0;
         }
