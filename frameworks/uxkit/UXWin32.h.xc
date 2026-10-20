@@ -89,8 +89,15 @@ pointer SetWindowLongPtrA(pointer hwnd, i32 idx, pointer v);
 pointer GetWindowLongPtrA(pointer hwnd, i32 idx);
 i32 InvalidateRect(pointer hwnd, pointer r, i32 erase);
 i32 UpdateWindow(pointer hwnd);
+#define WM_PRINT $0317 // a window paints itself, and with PRF_CHILDREN its children, into wParam's DC
+#define PRF_NONCLIENT $0002
+#define PRF_CLIENT $0004
+#define PRF_ERASEBKGND $0008
+#define PRF_CHILDREN $0010
 i32 EnableWindow(pointer hwnd, i32 enable);
 i32 GetClientRect(pointer hwnd, pointer r);
+i32 GetSystemMetrics(i32 index);
+#define SM_CXVSCROLL 2 // a vertical scroll bar's width: the up-down's natural width
 i32 GetWindowRect(pointer hwnd, pointer r);            // on-screen rect (Wine desktop = Mac screen px)
 i32 AdjustWindowRect(pointer r, u32 style, i32 bMenu); // client size -> outer window size
 u32 SetBkColor(pointer hdc, u32 color);
@@ -481,6 +488,26 @@ struct INITCOMMONCONTROLSEX
     u32 dwSize;
     u32 dwICC;
     } i32 InitCommonControlsEx(pointer icc);
+// Visual styles.  Without a comctl32 v6 manifest every control draws in the classic Windows 95
+// style; the PE writer embeds no manifest, so the driver activates one at boot (kernel32's
+// activation context, from the one shell32.dll carries as resource 124) and loads v6 under it.
+struct ACTCTXA
+    {
+    u32 cbSize;
+    u32 dwFlags;
+    pointer lpSource;
+    u16 wProcessorArchitecture;
+    u16 wLangId;
+    u32 _p0;
+    pointer lpAssemblyDirectory;
+    pointer lpResourceName;
+    pointer lpApplicationName;
+    pointer hModule;
+    } pointer CreateActCtxA(pointer actctx);
+i32 ActivateActCtx(pointer actctx, pointer cookie);
+u32 GetSystemDirectoryA(pointer buf, u32 cap);
+typedef i32 W32InitCommonControlsExFn(pointer icc);
+#define ACTCTX_FLAG_RESOURCE_NAME_VALID $0008
 #define ICC_LISTVIEW_CLASSES $0001
 #define ICC_TREEVIEW_CLASSES $0002
 #define ICC_BAR_CLASSES $0004 // toolbar / statusbar / trackbar / tooltip
@@ -499,6 +526,8 @@ struct INITCOMMONCONTROLSEX
 #define CB_ADDSTRING $0143
 #define CB_SETCURSEL $014E
 #define CB_GETCURSEL $0147
+#define CB_SETITEMHEIGHT $0153 // wParam -1: the closed selection field
+#define CB_GETITEMHEIGHT $0154
 #define CBN_SELCHANGE 1
 // UpDown (native stepper): msctls_updown32 (standalone -> WM_VSCROLL)
 #define UDS_ARROWKEYS $0020

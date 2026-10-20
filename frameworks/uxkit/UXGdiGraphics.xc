@@ -247,8 +247,9 @@ class UXGdiGraphics : Object<UXGraphics>
         pointer old = (pointer)0;
         if (size > (i32)0)
             {
+            // the driver's control face, as textWidth measures it (w32UiFont)
             fnt = CreateFontA((i32)0 - size, (i32)0, (i32)0, (i32)0, (i32)400,
-                              (u32)0, (u32)0, (u32)0, (u32)1, (u32)0, (u32)0, (u32)0, (u32)0, (u8*)"");
+                              (u32)0, (u32)0, (u32)0, (u32)1, (u32)0, (u32)0, (u32)5, (u32)0, (u8*)"Segoe UI");
             old = SelectObject(hdc, fnt);
             }
         TextOutA(hdc, (i32)(origin.x + x), (i32)(origin.y + y), (pointer)s, n);

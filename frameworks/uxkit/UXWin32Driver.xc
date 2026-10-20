@@ -109,8 +109,9 @@ i32 gW32DrawOX;     // draw-origin offset for a scroll child's subtree paint (el
 i32 gW32DrawOY;
 W32Tree* gW32DrawTree;   // the tree being painted (so the recursion can reach nodes)
 pointer gW32Menu;        // the app menu bar (an HMENU), attached to every window
-pointer gW32Font;        // the system UI font (DEFAULT_GUI_FONT), set on every native control
-pointer gW32FaceBrush;   // the dialog-face grey: window background + control-label backdrop
+pointer gW32Font;        // the control font (w32UiFont), set on every native control
+u32 gW32Face;            // the dialog face colour (COLOR_BTNFACE), as a COLORREF
+pointer gW32FaceBrush;   // ...its brush: window background + control-label backdrop
 pointer gW32TbImages;    // the hand-drawn toolbar image list (built once, shared by all toolbars)
 UXEvent* gW32ClickEvent; // reused synthetic event handed to a control's mouseDown
 pointer gW32MeasureDC;   // a screen-compatible DC kept for text measurement (textWidth)
@@ -163,6 +164,118 @@ u8* w32NoValue(void)
     gW32NoValue[(i32)0] = (u8)1;
     gW32NoValue[(i32)1] = (u8)0;
     return &gW32NoValue[(i32)0];
+    }
+
+// Visual styles: activate the comctl32 v6 manifest that shell32.dll carries (resource 124) for the
+// life of the UI thread, then load v6 under it and register its classes.  From then on a "BUTTON"
+// or a list view made on this thread is v6's, themed.  False when the activation fails (the classic
+// look, as before).  The context stays active: deactivating it would take the themed classes away.
+u8 gW32SysPath[300];
+u64 gW32ActCookie;
+bool gW32Themed;
+bool w32VisualStyles(pointer icc)
+    {
+    u32 n = GetSystemDirectoryA((pointer)&gW32SysPath[(i32)0], (u32)260);
+    if (n == (u32)0 || n > (u32)260)
+        {
+        return false;
+        }
+    w32PutStr(&gW32SysPath[(i32)0], (i32)n, (u8*)"\\shell32.dll");
+    ACTCTXA ac;
+    ac.cbSize = (u32)56;
+    ac.dwFlags = (u32)ACTCTX_FLAG_RESOURCE_NAME_VALID;
+    ac.lpSource = (pointer)&gW32SysPath[(i32)0];
+    ac.wProcessorArchitecture = (u16)0;
+    ac.wLangId = (u16)0;
+    ac._p0 = (u32)0;
+    ac.lpAssemblyDirectory = (pointer)0;
+    ac.lpResourceName = (pointer)124;
+    ac.lpApplicationName = (pointer)0;
+    ac.hModule = (pointer)0;
+    pointer ctx = CreateActCtxA((pointer)&ac);
+    if (ctx == (pointer)INVALID_HANDLE_VALUE || ActivateActCtx(ctx, (pointer)&gW32ActCookie) == (i32)0)
+        {
+        return false;
+        }
+    // the import table already bound v5; LoadLibrary under the active context finds v6 beside it
+    pointer cc = LoadLibraryA((pointer) "comctl32.dll");
+    W32InitCommonControlsExFn* init = (W32InitCommonControlsExFn*)GetProcAddress(cc, (u8*)"InitCommonControlsEx");
+    if (init == (W32InitCommonControlsExFn*)0 || init(icc) == (i32)0)
+        {
+        return false;
+        }
+    gW32Themed = true;
+    return true;
+    }
+
+// The control font: Segoe UI (Windows 10's UI face) at a 13 px em, the size every backend uses, not
+// DEFAULT_GUI_FONT (MS Sans Serif, 11 px).  textWidth measures with the same face.
+u8* gW32UiFace = (u8*)"Segoe UI";
+i32 W32_UI_PX = (i32)13;
+pointer w32UiFont(i32 px)
+    {
+    return CreateFontA((i32)0 - px, (i32)0, (i32)0, (i32)0, (i32)400,
+                       (u32)0, (u32)0, (u32)0, (u32)1, (u32)0, (u32)0, (u32)5, (u32)0, gW32UiFace); // 5: CLEARTYPE_QUALITY
+    }
+// Where a label's TextOut goes, from its frame's top: TextOut places the top of the font's cell, and
+// the cell starts with the internal leading (5 px in Segoe UI at 13, about none in MS Sans Serif).
+// Taking it off puts the capitals 1 px under the frame's top, as the other backends draw a label.
+i32 gW32LabelDY = (i32)2;
+i32 gW32FontH = (i32)16; // the control font's cell, set with gW32LabelDY
+i32 w32LabelDY(pointer font)
+    {
+    pointer dc = CreateCompatibleDC((pointer)0);
+    pointer old = SelectObject(dc, font);
+    TEXTMETRICA tm;
+    tm.tmInternalLeading = (i32)0;
+    GetTextMetricsA(dc, (pointer)&tm);
+    SelectObject(dc, old);
+    DeleteDC(dc);
+    gW32FontH = tm.tmHeight;
+    return (i32)1 - tm.tmInternalLeading;
+    }
+
+// A native control's place for a frame, where the control should not just take the frame:
+//   field    a single-line EDIT puts its text at its top, so it gets a text-height box centred in
+//            the frame
+//   popup    the window also holds the dropped list (the 120 below); the closed box is set to the
+//            frame's height through the selection field's item height (CB_SETITEMHEIGHT -1), by
+//            what the box measures (the border differs between Windows and Wine), and never below
+//            the font's cell
+//   stepper  the up-down at its natural width (a scroll bar's), centred, not stretched
+void w32Place(pointer c, i32 k, i32 x, i32 y, i32 w, i32 h)
+    {
+    if (k == (i32)UXKindField)
+        {
+        i32 eh = (i32)20;
+        MoveWindow(c, x, y + (h - eh) / (i32)2, w, eh, (i32)1);
+        return;
+        }
+    if (k == (i32)UXKindPopup)
+        {
+        MoveWindow(c, x, y, w, h + (i32)120, (i32)1);
+        // Wine's CB_GETITEMHEIGHT answers 2 more than was set, so only the first guess comes from it:
+        // after that, the value set is corrected by what the closed box measures
+        RECT r;
+        GetWindowRect(c, (pointer)&r); // the closed box
+        i32 ih = (i32)SendMessageA(c, (u32)CB_GETITEMHEIGHT, (pointer)(i64)-1, (pointer)0) + h - (r.bottom - r.top);
+        for (i32 pass = (i32)0; pass < (i32)2; pass = pass + (i32)1)
+            {
+            ih = ih > gW32FontH ? ih : gW32FontH;
+            SendMessageA(c, (u32)CB_SETITEMHEIGHT, (pointer)(i64)-1, (pointer)ih);
+            GetWindowRect(c, (pointer)&r);
+            ih = ih + h - (r.bottom - r.top);
+            }
+        return;
+        }
+    if (k == (i32)UXKindStepper)
+        {
+        i32 sw = GetSystemMetrics((i32)SM_CXVSCROLL);
+        sw = sw < w ? sw : w;
+        MoveWindow(c, x + (w - sw) / (i32)2, y, sw, h, (i32)1);
+        return;
+        }
+    MoveWindow(c, x, y, w, h, (i32)1);
     }
 
 // HWND -> our window handle, as a free function: the window PROC needs it too, and it is not a method.
@@ -1359,7 +1472,7 @@ pointer UXWin32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
         }
     if (msg == (u32)WM_CTLCOLORSTATIC || msg == (u32)WM_CTLCOLORBTN)
         {
-        SetBkColor((pointer)wp, (u32)$00C0C0C0);
+        SetBkColor((pointer)wp, gW32Face);
         return gW32FaceBrush;
         }
     // A native CONTROL's WM_COMMAND is SENT straight here (not queued like a menu's), so it must be
@@ -1863,10 +1976,8 @@ pointer gW32CreateDIBSection;
 pointer gW32BitBlt;
 i32 gW32SnapLoaded;
 i32 gW32UnderWine; // Wine keeps a surface per window, and its controls ignore WM_PRINT
-pointer gW32PrintWindow;
 pointer gW32GetWindow;
 pointer gW32IsVisible;
-typedef i32 W32PrintWindowFn(pointer hwnd, pointer hdc, u32 flags);
 typedef pointer W32GetWindowFn(pointer hwnd, u32 cmd);
 typedef i32 W32IsVisibleFn(pointer hwnd);
 typedef pointer W32CreateDIBSectionFn(pointer hdc, pointer bmi, u32 usage, pointer* bits, pointer section, u32 offset);
@@ -1887,18 +1998,20 @@ void w32_snap_load(void)
         }
     if (usr != (pointer)0)
         {
-        gW32PrintWindow = GetProcAddress(usr, (u8*)"PrintWindow");
         gW32GetWindow = GetProcAddress(usr, (u8*)"GetWindow");
         gW32IsVisible = GetProcAddress(usr, (u8*)"IsWindowVisible");
         }
     pointer nt = LoadLibraryA((pointer)"ntdll.dll");
     gW32UnderWine = nt != (pointer)0 && GetProcAddress(nt, (u8*)"wine_get_version") != (pointer)0 ? (i32)1 : (i32)0;
     }
-// Copy each visible child window's rectangle from `composed` (the compositor's picture of root's
-// client, cw x ch words) into `out` (the driver's own render): the child controls as they painted
-// themselves.  Windows' controls will not paint into another DC (WM_PRINT), but the compositor holds
-// what they painted.
-void w32SnapChildren(pointer root, u32* composed, u32* out, i32 cw, i32 ch)
+// Each visible child window printed into its own bitmap and copied into `out` (root's client, cw x
+// ch words) at its place: WM_PRINT, which every control answers by painting itself (its children
+// too) into the DC it is given.  The compositor's copy (PrintWindow's full content) was the source
+// once, but for a window made a moment ago it holds nothing yet, or black.  The bitmap starts as a
+// marker whose alpha byte GDI never writes, and only what the child painted is copied, so a window
+// that paints nothing (the click shield) leaves the render under it.  The GL surface is in the
+// render already.
+void w32PrintChildren(pointer root, u32* out, i32 cw, i32 ch)
     {
     if (gW32GetWindow == (pointer)0 || gW32IsVisible == (pointer)0)
         {
@@ -1906,27 +2019,64 @@ void w32SnapChildren(pointer root, u32* composed, u32* out, i32 cw, i32 ch)
         }
     W32GetWindowFn* gw = (W32GetWindowFn*)gW32GetWindow;
     W32IsVisibleFn* vis = (W32IsVisibleFn*)gW32IsVisible;
+    W32CreateDIBSectionFn* mk = (W32CreateDIBSectionFn*)gW32CreateDIBSection;
+    u32 marker = (u32)$01FF00FF;
     pointer c = gw(root, (u32)5); // GW_CHILD
     while (c != (pointer)0)
         {
-        if (vis(c) != (i32)0)
+        RECT wr;
+        GetWindowRect(c, (pointer)&wr);
+        i32 w = wr.right - wr.left;
+        i32 h = wr.bottom - wr.top;
+        u8 cls[16];
+        GetClassNameA(c, (pointer)&cls[(i32)0], (i32)16);
+        if (vis(c) != (i32)0 && w > (i32)0 && h > (i32)0 && !w32Same(&cls[(i32)0], (u8*)"UXGl32"))
             {
-            RECT wr;
-            GetWindowRect(c, (pointer)&wr);
             POINT tl;
             tl.x = wr.left;
             tl.y = wr.top;
             ScreenToClient(root, (pointer)&tl);
-            i32 x0 = tl.x < (i32)0 ? (i32)0 : tl.x;
-            i32 y0 = tl.y < (i32)0 ? (i32)0 : tl.y;
-            i32 x1 = tl.x + (wr.right - wr.left) < cw ? tl.x + (wr.right - wr.left) : cw;
-            i32 y1 = tl.y + (wr.bottom - wr.top) < ch ? tl.y + (wr.bottom - wr.top) : ch;
-            for (i32 y = y0; y < y1; y = y + (i32)1)
+            W32BmiHeader bmi;
+            u8* z = (u8*)&bmi;
+            for (i32 i = (i32)0; i < (i32)40; i = i + (i32)1)
                 {
-                for (i32 x = x0; x < x1; x = x + (i32)1)
+                z[i] = (u8)0;
+                }
+            bmi.biSize = (u32)40;
+            bmi.biWidth = w;
+            bmi.biHeight = (i32)0 - h; // top-down
+            bmi.biPlanes = (u16)1;
+            bmi.biBitCount = (u16)32;
+            pointer bits = (pointer)0;
+            pointer dib = mk((pointer)0, (pointer)&bmi, (u32)0, &bits, (pointer)0, (u32)0);
+            if (dib != (pointer)0 && bits != (pointer)0)
+                {
+                pointer mem = CreateCompatibleDC((pointer)0);
+                pointer old = SelectObject(mem, dib);
+                u32* px = (u32*)bits;
+                for (i32 q = (i32)0; q < w * h; q = q + (i32)1)
                     {
-                    out[y * cw + x] = composed[y * cw + x];
+                    px[q] = marker;
                     }
+                SendMessageA(c, (u32)WM_PRINT, mem, (pointer)(PRF_NONCLIENT | PRF_CLIENT | PRF_ERASEBKGND | PRF_CHILDREN));
+                for (i32 y = (i32)0; y < h; y = y + (i32)1)
+                    {
+                    for (i32 x = (i32)0; x < w; x = x + (i32)1)
+                        {
+                        i32 ox = tl.x + x;
+                        i32 oy = tl.y + y;
+                        if (ox >= (i32)0 && oy >= (i32)0 && ox < cw && oy < ch && px[y * w + x] != marker)
+                            {
+                            out[oy * cw + ox] = px[y * w + x];
+                            }
+                        }
+                    }
+                SelectObject(mem, old);
+                DeleteDC(mem);
+                }
+            if (dib != (pointer)0)
+                {
+                DeleteObject(dib);
                 }
             }
         c = gw(c, (u32)2); // GW_HWNDNEXT
@@ -2531,8 +2681,9 @@ class UXWin32Driver : Object<UXViewDriver>
         wc.hInstance = gW32Inst;
         wc.hIcon = (pointer)0;
         wc.hCursor = (pointer)0;
-        gW32FaceBrush = CreateSolidBrush((u32)$00C0C0C0); // dialog face grey
-        wc.hbrBackground = gW32FaceBrush;                 // the whole window is dialog-grey by default
+        gW32Face = GetSysColor((i32)COLOR_BTNFACE);   // the system's (F0F0F0 on Windows 10; C0C0C0 was 95's)
+        gW32FaceBrush = CreateSolidBrush(gW32Face);
+        wc.hbrBackground = gW32FaceBrush;              // the whole window is the dialog face by default
         wc.lpszMenuName = (pointer)0;
         wc.lpszClassName = (pointer) "UXWin32";
         RegisterClassA((pointer)&wc);
@@ -2580,11 +2731,15 @@ class UXWin32Driver : Object<UXViewDriver>
         gc.lpszMenuName = (pointer)0;
         gc.lpszClassName = (pointer) "UXGl32";
         RegisterClassA((pointer)&gc);
-        gW32Font = GetStockObject((i32)DEFAULT_GUI_FONT); // the OS UI font, for every native control
+        gW32Font = w32UiFont(W32_UI_PX); // for every native control
+        gW32LabelDY = w32LabelDY(gW32Font);
         INITCOMMONCONTROLSEX icc;
         icc.dwSize = (u32)8;
         icc.dwICC = (u32)ICC_LISTVIEW_CLASSES | (u32)ICC_TREEVIEW_CLASSES | (u32)ICC_BAR_CLASSES | (u32)ICC_TAB_CLASSES | (u32)ICC_UPDOWN_CLASS | (u32)ICC_PROGRESS_CLASS;
-        InitCommonControlsEx((pointer)&icc); // ListView/TreeView + trackbar/toolbar/tab/updown/progress
+        if (!w32VisualStyles((pointer)&icc))
+            {
+            InitCommonControlsEx((pointer)&icc); // ListView/TreeView + trackbar/toolbar/tab/updown/progress, classic
+            }
         screenW[0] = (i32)1024;
         screenH[0] = (i32)768; // GetSystemMetrics would be exact
         return true;
@@ -3074,9 +3229,9 @@ class UXWin32Driver : Object<UXViewDriver>
     // Into a 32-bit top-down DIB section.  On Windows the driver renders the window's own content
     // itself (the content pass WM_PAINT runs, the GL frame included), which holds whether or not the
     // window is composited: the compositor's copy of a window on a desktop nobody is looking at may
-    // never get the toolkit's paint.  The child controls come from that copy (PrintWindow, full
-    // content), where they painted themselves; they will not paint into another DC.  Under Wine, the
-    // window DC's pixels: Wine keeps a surface for each window, children included, even when covered.
+    // never get the toolkit's paint.  Each child control then prints itself over it (WM_PRINT, see
+    // w32PrintChildren).  Under Wine, the window DC's pixels: Wine keeps a surface for each window,
+    // children included, even when covered.
     i32 windowSnapshot(i32 handle, i32 x, i32 y, i32 w, i32 h, u32* out)
         {
         pointer hwnd = handle > (i32)0 && handle < (i32)64 ? gW32Hwnds[handle] : (pointer)0;
@@ -3134,25 +3289,8 @@ class UXWin32Driver : Object<UXViewDriver>
                 f((i32)0, (i32)0, (i32)0, cw, ch, ud);
                 gW32CurHdc = was;
                 }
-            // the children as the compositor holds them, over the render (where it has a picture)
-            pointer cbits = (pointer)0;
-            pointer cdib = mk((pointer)0, (pointer)&bmi, (u32)0, &cbits, (pointer)0, (u32)0);
-            if (cdib != (pointer)0 && cbits != (pointer)0 && gW32PrintWindow != (pointer)0)
-                {
-                pointer cmem = CreateCompatibleDC((pointer)0);
-                pointer cold = SelectObject(cmem, cdib);
-                W32PrintWindowFn* pw = (W32PrintWindowFn*)gW32PrintWindow;
-                if (pw(hwnd, cmem, (u32)3) != (i32)0) // PW_CLIENTONLY | PW_RENDERFULLCONTENT
-                    {
-                    w32SnapChildren(hwnd, (u32*)cbits, (u32*)bits, cw, ch);
-                    }
-                SelectObject(cmem, cold);
-                DeleteDC(cmem);
-                }
-            if (cdib != (pointer)0)
-                {
-                DeleteObject(cdib);
-                }
+            // each child control printing itself over the render
+            w32PrintChildren(hwnd, (u32*)bits, cw, ch);
             ok = (i32)1;
             }
         else
@@ -3410,8 +3548,7 @@ class UXWin32Driver : Object<UXViewDriver>
         pointer fnt = gW32Font;
         if (size > (i32)0)
             {
-            fnt = CreateFontA((i32)0 - size, (i32)0, (i32)0, (i32)0, (i32)400,
-                              (u32)0, (u32)0, (u32)0, (u32)1, (u32)0, (u32)0, (u32)0, (u32)0, (u8*)"");
+            fnt = w32UiFont(size);
             }
         pointer old = SelectObject(gW32MeasureDC, fnt);
         SIZE sz;
@@ -3929,7 +4066,7 @@ class UXWin32Driver : Object<UXViewDriver>
             i32 aw = (i32)0;
             i32 ah = (i32)0;
             self.structAbsFrame(h, i, &ax, &ay, &aw, &ah);
-            MoveWindow(n.ctrl, ax, ay, aw, ah, (i32)1);
+            w32Place(n.ctrl, (i32)n.kind, ax, ay, aw, ah);
             if ((i32)n.kind == (i32)UXKindGLView)
                 {
                 w32_gl_viewport(n.peer); // the drawable moved: the viewport is the driver's
@@ -4321,11 +4458,11 @@ class UXWin32Driver : Object<UXViewDriver>
         FillRect(hdc, (pointer)&r, br);
         DeleteObject(br);
         }
-    // One 16x16 picture into a memory DC over the dialog-face grey, so it blends into the button: the
+    // One 16x16 picture into a memory DC over the dialog face, so it blends into the button: the
     // UXIcon glyph for a name, or an image of the app's scaled to fit.
     void w32DrawPicture(pointer hdc, u8* icon, UXImage* img)
         {
-        self.w32FillRC(hdc, (i32)0, (i32)0, (i32)16, (i32)16, (u32)$00C0C0C0);
+        self.w32FillRC(hdc, (i32)0, (i32)0, (i32)16, (i32)16, gW32Face);
         UXGdiGraphics* g = new UXGdiGraphics();
         g.bind(hdc, UXGeom.make((i16)0, (i16)0, (i16)16, (i16)16));
         if (img != (UXImage*)0)
@@ -4646,7 +4783,7 @@ class UXWin32Driver : Object<UXViewDriver>
                     }
                 else
                     {
-                    MoveWindow(t.nodes[i].ctrl, ax, ey, w, eh, (i32)1);
+                    w32Place(t.nodes[i].ctrl, k, ax, ay, w, hh);
                     }
                 // Push the model buffer into the EDIT when the app changed it (e.g. Clear): only if it
                 // differs, so this never fights live typing (which keeps buffer == EDIT via EN_CHANGE).
@@ -4726,10 +4863,11 @@ class UXWin32Driver : Object<UXViewDriver>
                         SendMessageA(c, (u32)CB_SETCURSEL, (pointer)pv.nativeSelected(), (pointer)0);
                         SetWindowLongPtrA(c, (i32)GWLP_USERDATA, (pointer)pv); // CBN_SELCHANGE -> the popup
                         t.nodes[i].ctrl = c;
+                        w32Place(c, k, ax, ay, w, hh);
                         }
                     else
                         {
-                        MoveWindow(t.nodes[i].ctrl, ax, ay, w, hh + (i32)120, (i32)1);
+                        w32Place(t.nodes[i].ctrl, k, ax, ay, w, hh);
                         SendMessageA(t.nodes[i].ctrl, (u32)CB_SETCURSEL, (pointer)pv.nativeSelected(), (pointer)0);
                         }
                     }
@@ -4748,10 +4886,11 @@ class UXWin32Driver : Object<UXViewDriver>
                         SendMessageA(c, (u32)UDM_SETPOS32, (pointer)0, (pointer)sv.nativeValue());
                         SetWindowLongPtrA(c, (i32)GWLP_USERDATA, (pointer)sv); // WM_VSCROLL -> the stepper
                         t.nodes[i].ctrl = c;
+                        w32Place(c, k, ax, ay, w, hh);
                         }
                     else
                         {
-                        MoveWindow(t.nodes[i].ctrl, ax, ay, w, hh, (i32)1);
+                        w32Place(t.nodes[i].ctrl, k, ax, ay, w, hh);
                         SendMessageA(t.nodes[i].ctrl, (u32)UDM_SETPOS32, (pointer)0, (pointer)sv.nativeValue());
                         }
                     }
@@ -5237,9 +5376,7 @@ class UXWin32Driver : Object<UXViewDriver>
             rc.top = ay;
             rc.right = ax + w;
             rc.bottom = ay + hh;
-            pointer br = CreateSolidBrush((u32)$00C0C0C0);
-            FillRect(gW32CurHdc, (pointer)&rc, br);
-            DeleteObject(br);
+            FillRect(gW32CurHdc, (pointer)&rc, gW32FaceBrush);
             DrawEdge(gW32CurHdc, (pointer)&rc, (u32)EDGE_RAISED, (u32)BF_RECT); // the 3D Windows button
             if (t.nodes[i].spec != (pointer)0)
                 {
@@ -5312,7 +5449,7 @@ class UXWin32Driver : Object<UXViewDriver>
             self.structAbsFrame((pointer)t, i, &ax, &ay, &w, &hh);
             SetBkMode(gW32CurHdc, (i32)TRANSPARENT);
             SetTextColor(gW32CurHdc, (u32)0);
-            w32DrawText(gW32CurHdc, ax + (i32)2, ay + (i32)2, (u8*)t.nodes[i].spec);
+            w32DrawText(gW32CurHdc, ax + (i32)2, ay + gW32LabelDY, (u8*)t.nodes[i].spec);
             }
         i16 c = t.nodes[i].head;
         while (c >= (i16)0)
