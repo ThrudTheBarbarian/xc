@@ -1,0 +1,25 @@
+# Known failures of the metrics-audit gate (run_metrics_audit.sh): <backend> <kind>@<height> <rule>.
+# Remove a line when a driver fix makes it pass.
+appkit label@28 centred
+win32 label@28 centred
+win32 popup@26 centred
+win32 popup@38 centred
+gtk checkbox@20 centred
+gtk checkbox@20 inside
+gtk label@16 centred
+gtk label@16 inside
+gtk progress@12 centred
+gtk progress@12 inside
+gtk progress@24 centred
+gtk progress@24 inside
+gtk radio@20 centred
+gtk radio@20 inside
+gtk slider@20 centred
+gtk slider@20 inside
+gtk slider@32 centred
+gtk stepper@26 centred
+gtk stepper@26 inside
+web label@28 centred
+gem checkbox@20 centred
+gem radio@20 centred
+gem slider@20 centred

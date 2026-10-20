@@ -3069,6 +3069,7 @@ static id ak_value_target(void)
     g_value_target = [[c alloc] init];
     return g_value_target;
     }
+static void ak_place_centred(NSView* v, int x, int y, int w, int h);
 // A native NSSlider bound to the peer UXSlider by (handle,node) tag.
 void ux_ak_make_slider(int handle, int node, int x, int y, int w, int h, int lo, int hi, int val)
     {
@@ -3080,6 +3081,7 @@ void ux_ak_make_slider(int handle, int node, int x, int y, int w, int h, int lo,
     [s setMaxValue:hi];
     [s setIntegerValue:val];
     [s setContinuous:YES]; // fire during the drag, not only on release
+    ak_place_centred(s, x, y, w, h);
     [s setTag:(handle * 1000 + node)];
     [s setTarget:ak_value_target()];
     [s setAction:sel_registerName("xgVal:")];
@@ -3103,6 +3105,7 @@ void ux_ak_make_popup(int handle, int node, int x, int y, int w, int h)
     if (!content || node < 0 || node >= UX_MAXN)
         return;
     NSPopUpButton* p = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(x, y, w, h) pullsDown:NO];
+    ak_place_centred(p, x, y, w, h);
     [p setTag:(handle * 1000 + node)];
     [p setTarget:ak_value_target()];
     [p setAction:sel_registerName("xgVal:")];
@@ -3165,6 +3168,7 @@ void ux_ak_make_segmented(int handle, int node, int x, int y, int w, int h, int 
         return;
     NSSegmentedControl* sc = [[NSSegmentedControl alloc] initWithFrame:NSMakeRect(x, y, w, h)];
     [sc setSegmentCount:nseg];
+    ak_place_centred(sc, x, y, w, h);
     [sc setTag:(handle * 1000 + node)];
     [sc setTarget:ak_value_target()];
     [sc setAction:sel_registerName("xgVal:")];
@@ -3427,14 +3431,25 @@ void ux_ak_set_label_text(int handle, int node, const char* text)
     if ([tf isKindOfClass:[NSTextField class]] && ![[tf stringValue] isEqualToString:want])
         [tf setStringValue:want];
     }
-// A rounded push button has a fixed native height (~21pt); a taller app frame stretches the bezel.
-// Keep the app's x/width but use the button's natural height, centred vertically in the frame.
-static void ak_place_button(NSButton* b, int x, int y, int w, int h)
+// A rounded push button, a popup, a segmented control and a slider have a fixed native height; a
+// taller app frame would not grow the bezel, it would sit at the top.  Keep the app's x/width and
+// centre the bezel (the alignment rect, without the shadow and focus ring) vertically in the frame.
+static void ak_place_centred(NSView* v, int x, int y, int w, int h)
     {
-    CGFloat nh = [b fittingSize].height;
-    if (nh <= 0 || nh > h)
-        nh = h;
-    [b setFrame:NSMakeRect(x, y + (h - nh) / 2.0, w, nh)];
+    CGFloat ih = [v intrinsicContentSize].height;
+    if (ih <= 0 || ih >= h)
+        {
+        [v setFrame:NSMakeRect(x, y, w, h)];
+        return;
+        }
+    NSEdgeInsets in = [v alignmentRectInsets];
+    CGFloat top = y + floor((h - ih) / 2.0); // the content view is flipped: the top inset is above
+    [v setFrame:NSMakeRect(x, top - in.top, w, ih + in.top + in.bottom)];
+    }
+static BOOL ak_is_centred(NSView* v)
+    {
+    return [v isKindOfClass:[NSButton class]] || [v isKindOfClass:[NSSegmentedControl class]] ||
+           [v isKindOfClass:[NSSlider class]];
     }
 void ux_ak_make_button(int handle, int node, int x, int y, int w, int h, const char* title)
     {
@@ -3447,7 +3462,7 @@ void ux_ak_make_button(int handle, int node, int x, int y, int w, int h, const c
     [b setTag:(handle * 1000 + node)];     // so ak_button_action fires the right node
     [b setTarget:ak_button_target()];
     [b setAction:sel_registerName("xgBtn:")];
-    ak_place_button(b, x, y, w, h); // native height, centred in the app's frame
+    ak_place_centred(b, x, y, w, h); // native height, centred in the app's frame
     [content addSubview:b];
     g_ctl[handle][node] = b;
     }
@@ -3471,7 +3486,7 @@ void ux_ak_make_check(int handle, int node, int x, int y, int w, int h,
     // The factory methods set the right button type + bezel (a square check box / a round radio).
     NSButton* b = isRadio ? [NSButton radioButtonWithTitle:t target:tgt action:sel]
                           : [NSButton checkboxWithTitle:t target:tgt action:sel];
-    [b setFrame:NSMakeRect(x, y, w, h)];
+    ak_place_centred(b, x, y, w, h);
     [b setState:(checked ? NSControlStateValueOn : NSControlStateValueOff)];
     [b setTag:(handle * 1000 + node)];
     [content addSubview:b];
@@ -3520,8 +3535,8 @@ void ux_ak_set_control_frame(int handle, int node, int x, int y, int w, int h)
     NSView* v = g_ctl[handle][node];
     if (!v)
         return;
-    if ([v isKindOfClass:[NSButton class]])
-        ak_place_button((NSButton*)v, x, y, w, h);
+    if (ak_is_centred(v))
+        ak_place_centred(v, x, y, w, h);
     else
         [v setFrame:NSMakeRect(x, y, w, h)];
     }

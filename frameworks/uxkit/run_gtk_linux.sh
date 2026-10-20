@@ -18,7 +18,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 xcc=${XCC:-xcc}
 test=${1:-test_gtk_real} # another GTK test to run on the Linux host, e.g. test_gtk_gl
 # The Linux machine is UX_LINUX_HOST, or XTC_LINUX_HOST when that is empty
-# (both in build.env).  UX_LINUX_LIBS adds libraries to the link (a test's -lGL, say), UX_LINUX_FILES
+# (both in build.env).  UX_LINUX_XCFLAGS adds xcc options (a test's -D), UX_LINUX_LIBS adds libraries to the link (a test's -lGL, say), UX_LINUX_FILES
 # files to copy beside the binary, and UX_LINUX_SETUP a command run in that directory before it.
 host=${UX_LINUX_HOST:-${XTC_LINUX_HOST:-}}
 rtdir=$(dirname "$(command -v "$xcc")")/../lib/xc/x86_64/runtime
@@ -30,7 +30,7 @@ ssh "$host" 'pkg-config --exists gtk4 && which xvfb-run' >/dev/null 2>&1 || { ec
 
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 echo "== gtk-linux: emitting x86_64 asm =="
-"$xcc" -A x86_64 -I "$here" "$here/$test.xc" -o "$work/test.s" -q 2>/dev/null
+"$xcc" -A x86_64 -I "$here" ${UX_LINUX_XCFLAGS:-} "$here/$test.xc" -o "$work/test.s" -q 2>/dev/null
 
 echo "== gtk-linux: building the hybrid on $host =="
 rdir=$(ssh "$host" 'mktemp -d')

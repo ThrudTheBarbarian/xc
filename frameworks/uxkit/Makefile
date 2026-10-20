@@ -227,6 +227,15 @@ android-settings: ; XCC=$(XCC) sh run_android_settings.sh
 # The standards table (pure host run, no window).
 metrics: ; XCC=$(XCC) sh run_metrics.sh
 
+# Each stock control drawn inside its UXMetrics frame and centred in it, per backend; known failures
+# in expected_metrics_audit.txt.
+metrics-audit-appkit: ; XCC=$(XCC) sh run_metrics_audit.sh appkit
+metrics-audit-win32: ; XCC=$(XCC) sh run_metrics_audit.sh win32
+metrics-audit-gtk: ; XCC=$(XCC) sh run_metrics_audit.sh gtk
+metrics-audit-web: ; XCC=$(XCC) sh run_metrics_audit.sh web
+metrics-audit-gem: ; XCC=$(XCC) sh run_metrics_audit.sh gem
+metrics-audit: metrics-audit-appkit metrics-audit-win32 metrics-audit-gtk metrics-audit-web metrics-audit-gem
+
 # Bug 026 activated: outlet/:action synthesis under the UXKit names (host run).
 designable: ; XCC=$(XCC) sh run_designable.sh
 
@@ -510,3 +519,4 @@ clean: ; rm -f $(PROGS) libUXKit.so test_host
 
 .PHONY: all lib host clean version run-demo run-rscdemo run-spine run-window mac a9 gem gem-build win32 win64 win32-real win32-loop win32-field win32-memgate win32-menu win32-focus win32-check win32-radio win32-valid win32-alert win32-scroll win32-enabled win32-hidden win32-kitchensink win32-toolbar win32-winroute win32-gl gtk-gl web-gl appkit-gl appkit-glbench win64-lib
 .PHONY: mac-alpha mac-weight mac-dash mac-vector mac-chrome mac-settings
+.PHONY: metrics-audit metrics-audit-appkit metrics-audit-win32 metrics-audit-gtk metrics-audit-web metrics-audit-gem

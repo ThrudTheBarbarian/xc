@@ -82,9 +82,11 @@ void liveTick(void)
         i32 bh = (i32)0;
         ux_ak_control_frame(gWin.handle, (i32)gBtn.index, &bx, &by, &bw, &bh);
         // The native frame is AppKit's, measured from the BOTTOM-left: anchored right and bottom, the
-        // button keeps its 20 px right margin and its 12 px bottom margin (200 - 160 - 28).
-        Stdio.printf("  the button is at %d,%d (from the bottom-left)\n", bx, by);
-        ck(bx == (i32)420 - (i32)100 && by == (i32)12, "the anchored button followed the window");
+        // button keeps its 20 px right margin and its 12 px bottom margin (200 - 160 - 28).  The bezel
+        // keeps its own height, centred in the 28 px frame, so its middle is 12 + 14 from the bottom.
+        i32 mid = by * (i32)2 + bh;
+        Stdio.printf("  the button is at %d,%d %dx%d (from the bottom-left)\n", bx, by, bw, bh);
+        ck(bx == (i32)420 - (i32)100 && mid >= (i32)50 && mid <= (i32)54, "the anchored button followed the window");
         // The map: anchored on all sides at 200,40 -> 280 x 100 grows by the window's 120 x 100.
         i32 bk[4];
         i32 sz[2];
