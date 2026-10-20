@@ -10,6 +10,7 @@ case "${1:-}" in
   --auto-quit) UX_AUTOQUIT=${2:-4000}; export UX_AUTOQUIT ;;
 esac
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 
@@ -19,5 +20,5 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/demo_appkit_scroll" -q 2>/dev/null
 
 echo "== launching under guard malloc — drag the window SMALLER to reproduce the crash =="
-MallocScribble=1 DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib "$work/demo_appkit_scroll"
+ux_mac_run MallocScribble=1 DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib "$work/demo_appkit_scroll"
 echo "== exited =="

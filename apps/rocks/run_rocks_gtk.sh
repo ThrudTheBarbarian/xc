@@ -5,6 +5,7 @@
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 ux="$here/../../frameworks/uxkit"
+. "$ux/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 pkg-config --exists gtk4 2>/dev/null || { echo "== rocks-gtk: skipped (no gtk4) =="; exit 0; }
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
@@ -14,7 +15,7 @@ cc -dynamiclib -install_name "$work/libUXGtk.dylib" "$ux/libUXGtk.c" \
 "$xcc" -A arm64 -D UX_GTK -I "$ux" -I "$here/xc" "$here/xc/rocks_main.xc" \
     -Xlinker "$work/libUXGtk.dylib" -o "$work/rocks" -q
 echo "== rocks-gtk: running =="
-out=$(timeout 8 "$work/rocks" 2>&1 | grep -v Warning) || true  # it runs on; the timeout ends it
+out=$(ux_mac_run -t 8 "$work/rocks" 2>&1 | grep -v Warning) || true  # it runs on; the timeout ends it
 echo "$out" | grep -E "^(PASS|FAIL|SKIP)" | head -1
 echo "$out" | grep -q "^PASS\|^SKIP" || { echo "$out" | tail -10; echo "== rocks-gtk: FAILED =="; exit 1; }
 echo "== rocks-gtk: OK — Rocks runs on GTK =="

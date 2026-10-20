@@ -3,6 +3,7 @@
 # the right way up, the right region, scaled, alpha honoured, and both byte layouts read correctly.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== mac-pixels: skipped (not macOS) =="; exit 0 ;; esac
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
@@ -12,7 +13,7 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
 "$xcc" -A arm64 -I "$here" "$here/test_mac_pixels.xc" \
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_mac_pixels" -q 2>/dev/null
 echo "== mac-pixels: running (headless; one forced paint, pixels read back) =="
-out=$("$work/test_mac_pixels")
+out=$(ux_mac_run "$work/test_mac_pixels")
 printf '%s\n' "$out"
 printf '%s\n' "$out" | grep -q '^PASS' || { echo "== mac-pixels: FAIL =="; exit 1; }
 echo "== mac-pixels: PASS =="

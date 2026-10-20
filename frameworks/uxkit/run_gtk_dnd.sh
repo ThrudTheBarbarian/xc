@@ -4,6 +4,7 @@
 # a window draws a line above its native controls.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 pkg-config --exists gtk4 2>/dev/null || { echo "== gtk-dnd: skipped (no gtk4) =="; exit 0; }
 
@@ -15,7 +16,7 @@ cc -dynamiclib -install_name "$work/libUXGtk.dylib" "$here/libUXGtk.c" \
     -Xlinker "$work/libUXGtk.dylib" -o "$work/gtk_dnd" -q
 
 echo "== gtk-dnd: running =="
-out=$("$work/gtk_dnd" 2>&1 | grep -v Warning) || true
+out=$(ux_mac_run "$work/gtk_dnd" 2>&1 | grep -v Warning) || true
 echo "$out"
 echo "$out" | grep -q "^PASS\|^SKIP" || { echo "== gtk-dnd: FAILED =="; exit 1; }
 echo "== gtk-dnd: OK =="

@@ -2,6 +2,7 @@
 # The frame-time HUD over the real run loop: does it sample the live clock (min/prev/max/fps)?
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== appkit-hud: skipped (not macOS) =="; exit 0 ;; esac
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
@@ -11,7 +12,7 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/demo_appkit_hud" -q 2>/dev/null
 # The turn is paced by the display, once a refresh: 75 of them take 2.5 s on a 30 Hz screen, so the
 # demo stays up for 4 s rather than its default 1.5 (it stops itself at 75 either way).
-out=$(UX_AUTOQUIT=${UX_AUTOQUIT:-4000} timeout 30 "$work/demo_appkit_hud")
+out=$(ux_mac_run -t 30 UX_AUTOQUIT=${UX_AUTOQUIT:-4000} "$work/demo_appkit_hud")
 printf '%s\n' "$out"
 printf '%s\n' "$out" | grep -q '^PASS' || { echo "== appkit-hud: FAIL =="; exit 1; }
 echo "== appkit-hud: OK =="

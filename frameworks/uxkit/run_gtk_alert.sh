@@ -3,6 +3,7 @@
 # GtkAlertDialog behind a nested GMainLoop, auto-cancelled for determinism.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 pkg-config --exists gtk4 2>/dev/null || { echo "== gtk-alert: skipped (no gtk4) =="; exit 0; }
 
@@ -14,7 +15,7 @@ cc -dynamiclib -install_name "$work/libUXGtk.dylib" "$here/libUXGtk.c" \
     -Xlinker "$work/libUXGtk.dylib" -o "$work/gtk_alert" -q 2>/dev/null
 
 echo "== gtk-alert: running =="
-out=$("$work/gtk_alert" 2>&1 | grep -v Warning) || true
+out=$(ux_mac_run "$work/gtk_alert" 2>&1 | grep -v Warning) || true
 echo "$out"
 echo "$out" | grep -q "^PASS\|^SKIP" || { echo "== gtk-alert: FAILED =="; exit 1; }
 echo "== gtk-alert: OK =="

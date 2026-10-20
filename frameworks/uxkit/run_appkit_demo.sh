@@ -12,6 +12,7 @@ case "${1:-}" in
   --auto-quit) UX_AUTOQUIT=${2:-1500}; export UX_AUTOQUIT ;;
 esac
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== appkit-demo: skipped (not macOS) =="; exit 0 ;; esac
 
@@ -23,5 +24,5 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/demo_appkit" -q 2>/dev/null
 
 echo "== appkit-demo: launching (self-closing; --stay to keep it up) =="
-"$work/demo_appkit"
+ux_mac_run "$work/demo_appkit"
 echo "== appkit-demo: done =="

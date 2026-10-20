@@ -5,6 +5,7 @@
 # teardown after the app stops varies from seconds to about a minute, hence its long limit.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== appkit-liveresize: skipped (not macOS) =="; exit 0 ;; esac
 
@@ -18,9 +19,9 @@ rc=0
 for mode in plain guard-malloc; do
   echo "== appkit-liveresize: $mode =="
   if [ "$mode" = plain ]; then
-    out=$(timeout 30 "$work/demo_appkit_liveresize" 2>&1) || true
+    out=$(ux_mac_run -t 30 "$work/demo_appkit_liveresize" 2>&1) || true
   else
-    out=$(MallocScribble=1 DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib timeout 240 "$work/demo_appkit_liveresize" 2>&1) || true
+    ux_mac_run -t 240 out=$(MallocScribble=1 DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib "$work/demo_appkit_liveresize" 2>&1) || true
   fi
   printf '%s\n' "$out" | grep -v 'GuardMalloc'
   printf '%s\n' "$out" | grep -q '^PASS' || rc=1

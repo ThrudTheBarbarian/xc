@@ -4,6 +4,7 @@
 # command line every time the user tabbed away.  macOS-only; capture mode, no window shown.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== submit-native: skipped (not macOS) =="; exit 0 ;; esac
 
@@ -15,7 +16,7 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_submit_native" -q 2>/dev/null
 
 echo "== submit-native: running native (capture mode, no window shown) =="
-got=$(timeout 20 "$work/test_submit_native" 2>/dev/null)
+got=$(ux_mac_run -t 20 "$work/test_submit_native" 2>/dev/null)
 printf '%s\n' "$got"
 
 if printf '%s\n' "$got" | grep -q '^PASS'; then

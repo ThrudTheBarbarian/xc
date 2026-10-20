@@ -4,6 +4,7 @@
 # temp dir, so the run leaves nothing behind in the user's real config.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 pkg-config --exists gtk4 2>/dev/null || { echo "== gtk-settings: skipped (no gtk4) =="; exit 0; }
 
@@ -17,7 +18,8 @@ cc -dynamiclib -install_name "$work/libUXGtk.dylib" "$here/libUXGtk.c" \
     -Xlinker "$work/libUXGtk.dylib" -o "$work/gtk_settings" -q 2>/dev/null
 
 echo "== gtk-settings: pass 1 (write) =="
-UX_SETTINGS_PASS=write "$work/gtk_settings" 2>&1 | sed 's/^/  /'
+export UX_SETTINGS_PASS=write
+ux_mac_run "$work/gtk_settings" 2>&1 | sed 's/^/  /'
 
 echo "== the keyfiles, as the store keeps them =="
 for f in "$UX_GTK_SETTINGS_DIR"/*.conf; do
@@ -25,7 +27,8 @@ for f in "$UX_GTK_SETTINGS_DIR"/*.conf; do
 done
 
 echo "== gtk-settings: pass 2 (a fresh process reads it back) =="
-got=$(UX_SETTINGS_PASS=read "$work/gtk_settings" 2>&1)
+export UX_SETTINGS_PASS=read
+got=$(ux_mac_run "$work/gtk_settings" 2>&1)
 printf '%s\n' "$got"
 if printf '%s\n' "$got" | grep -q '^PASS: settings persist in the keyfile store$'; then
     echo "== gtk-settings: PASS — preferences live in XDG keyfiles =="

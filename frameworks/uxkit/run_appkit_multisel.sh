@@ -4,6 +4,7 @@
 # — no window shown.  macOS-only (builds the ObjC shim); the model itself is backend-neutral.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== appkit-multisel: skipped (not macOS) =="; exit 0 ;; esac
 
@@ -15,4 +16,4 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_appkit_multisel" -q 2>/dev/null
 
 echo "== appkit-multisel: running =="
-"$work/test_appkit_multisel"
+ux_mac_run "$work/test_appkit_multisel"

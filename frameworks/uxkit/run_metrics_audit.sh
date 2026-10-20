@@ -8,6 +8,7 @@ _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 backend=${1:-appkit}
 name="metrics-audit-$backend"
@@ -23,7 +24,7 @@ appkit)
         -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib" 2>/dev/null
     "$xcc" -A arm64 -I "$here" -D SNAP_APPKIT "$here/test_metrics_audit.xc" \
         -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/audit" -q 2>/dev/null
-    timeout 60 "$work/audit" >"$work/out.txt" 2>&1 || true
+    ux_mac_run -t 60 "$work/audit" >"$work/out.txt" 2>&1 || true
     ;;
 win32)
     command -v wine >/dev/null 2>&1 || skip "wine absent"

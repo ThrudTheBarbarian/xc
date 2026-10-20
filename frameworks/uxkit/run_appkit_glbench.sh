@@ -13,6 +13,7 @@
 # camera; the sheet and the camera are separate inputs.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== appkit-glbench: skipped (not macOS) =="; exit 0 ;; esac
 
@@ -24,7 +25,7 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/demo_gl" -q 2>/dev/null
 
 echo "== appkit-glbench: running (bounded loop; no window interaction needed) =="
-out=$(timeout 120 "$work/demo_gl")
+out=$(ux_mac_run -t 120 "$work/demo_gl")
 printf '%s\n' "$out"
 
 fail=0

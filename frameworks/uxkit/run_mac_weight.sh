@@ -9,6 +9,7 @@
 # one face and the ink totals are equal, which is what the checks reject.  Skips cleanly off macOS.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== mac-weight: skipped (not macOS) =="; exit 0 ;; esac
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
@@ -18,7 +19,7 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
 "$xcc" -A arm64 -I "$here" "$here/test_mac_weight.xc" \
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_mac_weight" -q 2>/dev/null
 echo "== mac-weight: running (headless; one forced paint, pixels read back) =="
-out=$("$work/test_mac_weight")
+out=$(ux_mac_run "$work/test_mac_weight")
 printf '%s\n' "$out"
 printf '%s\n' "$out" | grep -q '^PASS' || { echo "== mac-weight: FAIL =="; exit 1; }
 echo "== mac-weight: PASS =="

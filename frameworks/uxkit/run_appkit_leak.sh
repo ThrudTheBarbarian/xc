@@ -3,6 +3,7 @@
 # repainted 300 times, the process footprint compared (it was one whole frame, 4.26 MB, per frame).
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== appkit-leak: skipped (not macOS) =="; exit 0 ;; esac
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
@@ -12,7 +13,7 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
 "$xcc" -A arm64 -I "$here" "$here/test_appkit_leak.xc" \
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_appkit_leak" -q 2>/dev/null
 echo "== appkit-leak: running (headless, 300 frames) =="
-out=$("$work/test_appkit_leak")
+out=$(ux_mac_run "$work/test_appkit_leak")
 printf '%s\n' "$out"
 printf '%s\n' "$out" | grep -q '^PASS' || { echo "== appkit-leak: FAIL =="; exit 1; }
 echo "== appkit-leak: PASS =="

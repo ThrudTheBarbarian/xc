@@ -3,6 +3,7 @@
 # (GL on, native controls realized) and headless (no window shown, no GL).  macOS only.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== appkit-snapshot: skipped (not macOS) =="; exit 0 ;; esac
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
@@ -11,7 +12,7 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_snapshot" -q
 for mode in live headless; do
   echo "== appkit-snapshot: $mode =="
-  if [ "$mode" = headless ]; then out=$(UX_SNAP_HEADLESS=1 "$work/test_snapshot"); else out=$("$work/test_snapshot"); fi
+  if [ "$mode" = headless ]; then out=$(ux_mac_run UX_SNAP_HEADLESS=1 "$work/test_snapshot"); else out=$(ux_mac_run "$work/test_snapshot"); fi
   printf '%s\n' "$out"
   printf '%s\n' "$out" | grep -q '^PASS' || { echo "== appkit-snapshot: FAILED ($mode) =="; exit 1; }
 done

@@ -5,6 +5,7 @@
 # user's real defaults.  macOS-only.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== mac-settings: skipped (not macOS) =="; exit 0 ;; esac
 
@@ -29,13 +30,13 @@ for d in xg.test xg.test.ks xg.test.paint xg.test.other test_mac_settings; do
 done
 
 echo "== mac-settings: pass 1 (write) =="
-UX_SETTINGS_PASS=write "$work/test_mac_settings" 2>&1 | sed 's/^/  /'
+ux_mac_run UX_SETTINGS_PASS=write "$work/test_mac_settings" 2>&1 | sed 's/^/  /'
 
 echo "== the defaults, as macOS sees them =="
 defaults read xg.test.ks 2>/dev/null | sed 's/^/  /' || echo "  (suite not readable)"
 
 echo "== mac-settings: pass 2 (a fresh process reads it back) =="
-got=$(UX_SETTINGS_PASS=read "$work/test_mac_settings" 2>&1)
+got=$(ux_mac_run UX_SETTINGS_PASS=read "$work/test_mac_settings" 2>&1)
 printf '%s\n' "$got"
 if printf '%s\n' "$got" | grep -q '^PASS: settings persist in NSUserDefaults$'; then
     echo "== mac-settings: PASS — preferences live in NSUserDefaults =="

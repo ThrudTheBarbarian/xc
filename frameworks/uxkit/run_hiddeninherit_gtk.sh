@@ -4,6 +4,7 @@
 # point: the fix had to land on every backend, not just the one it was found on.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 command -v "$xcc" >/dev/null 2>&1 || { echo "== hiddeninherit-gtk: no compiler; set XCC =="; exit 2; }
 pkg-config --exists gtk4 2>/dev/null || { echo "== hiddeninherit-gtk: skipped (no gtk4) =="; exit 0; }
@@ -12,7 +13,7 @@ cc -dynamiclib -install_name "$work/libUXGtk.dylib" "$here/libUXGtk.c" \
    $(pkg-config --cflags --libs gtk4) -o "$work/libUXGtk.dylib"
 "$xcc" -A arm64 -I "$here" "$here/test_hiddeninherit_gtk.xc" \
     -Xlinker "$work/libUXGtk.dylib" -o "$work/hi_gtk" -q
-out=$("$work/hi_gtk" 2>&1 | grep -v Warning) || true
+out=$(ux_mac_run "$work/hi_gtk" 2>&1 | grep -v Warning) || true
 echo "$out" | tail -3
 echo "$out" | grep -q "^PASS\|^SKIP" || { echo "== hiddeninherit-gtk: FAILED =="; exit 1; }
 echo "== hiddeninherit-gtk: OK =="

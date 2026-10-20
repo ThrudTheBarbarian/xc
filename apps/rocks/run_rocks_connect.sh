@@ -5,6 +5,7 @@
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 ux="$here/../../frameworks/uxkit"
+. "$ux/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 command -v "$xcc" >/dev/null 2>&1 || { echo "== rocks-connect: no compiler ('$xcc'); set XCC =="; exit 2; }
 case "$(uname)" in Darwin) ;; *) echo "== rocks-connect: skipped (not macOS) =="; exit 0 ;; esac
@@ -20,7 +21,8 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib \
 # an app folder the document is first saved into: its class must be read then
 mkdir -p "$work/app"
 printf 'class SavedHere : Object\n    {\n    outlet UXButton* go;\n    }\n' > "$work/app/SavedHere.xc"
-out=$(RK_SRC="$here/xc/fixture_player.xc" RK_LIB="$work/libplayer.dylib" RK_APP="$work/app" "$work/rkconnect" 2>&1 | grep -v Warning) || true
+cp -R "$here/xc" "$work/xc" # its source folder, beside the program, which may run on another Mac
+out=$(ux_mac_run RK_SRC="$work/xc/fixture_player.xc" RK_LIB="$work/libplayer.dylib" RK_APP="$work/app" "$work/rkconnect" 2>&1 | grep -v Warning) || true
 echo "$out"
 echo "$out" | grep -q "^PASS\|^SKIP" || { echo "== rocks-connect: FAILED =="; exit 1; }
 echo "== rocks-connect: OK =="

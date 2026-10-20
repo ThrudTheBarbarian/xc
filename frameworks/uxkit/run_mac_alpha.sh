@@ -8,6 +8,7 @@
 # change the alpha-128 rectangle is solid black and every check below fails.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== mac-alpha: skipped (not macOS) =="; exit 0 ;; esac
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
@@ -17,7 +18,7 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
 "$xcc" -A arm64 -I "$here" "$here/test_mac_alpha.xc" \
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_mac_alpha" -q 2>/dev/null
 echo "== mac-alpha: running (headless; one forced paint, pixels read back) =="
-out=$("$work/test_mac_alpha")
+out=$(ux_mac_run "$work/test_mac_alpha")
 printf '%s\n' "$out"
 printf '%s\n' "$out" | grep -q '^PASS' || { echo "== mac-alpha: FAIL =="; exit 1; }
 echo "== mac-alpha: PASS =="

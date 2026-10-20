@@ -7,6 +7,7 @@
 # guard is the same as not having it.  macOS-only.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== appkit-outline: skipped (not macOS) =="; exit 0 ;; esac
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
@@ -19,4 +20,4 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
 "$xcc" -A arm64 -I "$here" "$here/test_appkit_outline.xc" \
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_appkit_outline" -q 2>/dev/null
 echo "== appkit-outline: running =="
-"$work/test_appkit_outline"
+ux_mac_run "$work/test_appkit_outline"

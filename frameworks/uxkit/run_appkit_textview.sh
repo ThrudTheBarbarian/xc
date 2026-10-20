@@ -3,6 +3,7 @@
 # attributed runs, the selection, styles, alignment, typing, emoji, undo and redo).
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== appkit-textview: skipped (not macOS) =="; exit 0 ;; esac
 
@@ -13,7 +14,7 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_appkit_textview" -q
 
 echo "== appkit-textview: running =="
-got=$(timeout 15 "$work/test_appkit_textview" 2>/dev/null) || true
+got=$(ux_mac_run -t 15 "$work/test_appkit_textview" 2>/dev/null) || true
 printf '%s\n' "$got"
 printf '%s\n' "$got" | grep -q '^PASS' || { echo "== appkit-textview: FAIL =="; exit 1; }
 echo "== appkit-textview: OK =="

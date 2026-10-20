@@ -8,6 +8,7 @@
 # macOS-only.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== appkit-gl: skipped (not macOS) =="; exit 0 ;; esac
 
@@ -21,9 +22,9 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
 for mode in headless live; do
   echo "== appkit-gl: $mode =="
   if [ "$mode" = headless ]; then
-    out=$(UX_GL_HEADLESS=1 "$work/demo_appkit_gl")
+    out=$(ux_mac_run UX_GL_HEADLESS=1 "$work/demo_appkit_gl")
   else
-    out=$("$work/demo_appkit_gl")
+    out=$(ux_mac_run "$work/demo_appkit_gl")
   fi
   printf '%s\n' "$out"
   printf '%s\n' "$out" | grep -q '^PASS' || { echo "== appkit-gl: FAIL ($mode) =="; exit 1; }

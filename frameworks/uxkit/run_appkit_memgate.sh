@@ -7,6 +7,7 @@
 # macOS-only.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
+. "$here/tools/mac_run.sh" # ux_mac_run: here, or on UX_MAC_GUI_HOST
 xcc=${XCC:-xcc}
 case "$(uname)" in Darwin) ;; *) echo "== appkit-memgate: skipped (not macOS) =="; exit 0 ;; esac
 
@@ -18,7 +19,7 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_appkit_memgate" -q 2>/dev/null
 
 echo "== appkit-memgate: running the create/destroy loop native =="
-got=$(timeout 30 "$work/test_appkit_memgate" 2>/dev/null)
+got=$(ux_mac_run -t 30 "$work/test_appkit_memgate" 2>/dev/null)
 printf '%s\n' "$got"
 
 if printf '%s\n' "$got" | grep -q '^PASS'; then
