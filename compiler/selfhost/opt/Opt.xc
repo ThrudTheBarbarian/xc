@@ -66,6 +66,7 @@ class OptProfile
     bool _laneShift;         // back end lowers VLShr (lane shift by a constant)
     bool _iota;              // back end can build the lane-index vector
     bool _floatReduce;       // FLOAT reductions may reassociate (arm64/x86-64)
+    bool _orderedFloat;      // an ordered float sum: lanes added in order (arm64)
     bool _reductionCollapse; // an invariant reduction nest collapses
     bool _memsetIdiom;       // a byte-fill loop becomes one MemSet
     bool _initGuardElim;     // a redundant static-init guard comes out
@@ -130,6 +131,7 @@ class OptProfile
         _laneShift = false;
         _iota = false;
         _floatReduce = false;
+        _orderedFloat = false;
         _reductionCollapse = false;
         _memsetIdiom = false;
         _initGuardElim = false;
@@ -219,6 +221,7 @@ class OptProfile
         // VDiv/VSqrt and a float VReduceAdd — arm64 and x86-64/win64. The
         // vectoriser also requires the source to grant it (see floatRedux).
         p._floatReduce = t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
+        p._orderedFloat = t.equals(String.withCString("arm64"));
         p._memsetIdiom = !(t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")) || t.equals(String.withCString("atarist")));
         // The 6502 does NOT hoist: an eager init at entry costs it more than
         // the guard it saves.
@@ -361,6 +364,10 @@ class OptProfile
     bool vectorize(void)
         {
         return _vectorize;
+        }
+    bool orderedFloat(void)
+        {
+        return _orderedFloat;
         }
     bool floatReduce(void)
         {
@@ -733,6 +740,17 @@ class OptProfile
     void setIota(bool v)
         {
         _isIota = v;
+        }
+    // An ordered float sum: the accumulator stays scalar and each vector's
+    // lanes are added to it in order, so the result is the scalar loop's.
+    bool _ordered;
+    void setOrdered(bool v)
+        {
+        _ordered = v;
+        }
+    bool ordered(void)
+        {
+        return _ordered;
         }
     bool isIota(void)
         {
@@ -17731,6 +17749,11 @@ class OptProfile
         // par block is :goal(speed) and its run function names the loop header
         // in speedHeaders; both must hold. This is nbody's inner loop.
         bool floatRedux = _profile.floatReduce() && fn.isSpeedHeader(H.name());
+        // Else, at the default goal, an ORDERED float sum where the body has
+        // lane work worth it (a square root, a divide: nbody's): the elements
+        // are computed lane-wise and added to the scalar sum one by one, in
+        // order, so nothing is reassociated.
+        bool orderedRedux = !floatRedux && _profile.orderedFloat() && vecHeavyFloat(H, defOf, defBlk);
         if (!vecReduxShape(H, defOf, defBlk))
             return (VecCand*)0;
         IRInsn* ivPhi = _vrIvPhi;
@@ -17776,7 +17799,7 @@ class OptProfile
             return (VecCand*)0;
         IRInsn* accNext = (IRInsn*)ao;
         if (!(accNext.op().equals(String.withCString("Add"))
-              || (floatRedux && accNext.op().equals(String.withCString("FAdd")))))
+              || ((floatRedux || orderedRedux) && accNext.op().equals(String.withCString("FAdd")))))
             return (VecCand*)0;
         if (countOf(uses, accNextOp.val()) != (u32)1)
             return (VecCand*)0;
@@ -17813,7 +17836,7 @@ class OptProfile
             return (VecCand*)0;
 
         String* laneTy = vecClassifyReduxBody(B, iv, ivNext, accNext, elemOp,
-                                              defOf, defBlk, uses, floatRedux);
+                                              defOf, defBlk, uses, floatRedux || orderedRedux);
         if (laneTy == (String*)0)
             return (VecCand*)0;
         // The accumulator's own width must match the loads — this is an i32/u32
@@ -17896,6 +17919,7 @@ class OptProfile
         c.setReduction(accPhi, accNext, acc, elemOp.val(), initOp, PH);
         c.setDivMagic(_vrDivMagic);
         c.setIota(_profile.iota() && _vrUsesIv);
+        c.setOrdered(orderedRedux);
         c.setEpi(_vrRuntime || epiM != n, epiM);
         c.setRuntime(_vrRuntime, _vrBoundOp);
         c.setIvStart(_vrIvStart);
@@ -21392,6 +21416,14 @@ class OptProfile
                 }
             }
 
+        // An ordered sum keeps its scalar accumulator: the body adds each
+        // vector's lanes to it, and nothing is reduced at the exit.
+        if (c.ordered())
+            {
+            vecReduxBody(c, B, (IRValue*)0);
+            vecOrderedExit(fn, c);
+            return;
+            }
         // The vector accumulator, needed by name before the body's VAdd is built.
         IRValue* vacc = new IRValue(_vecTy);
         vecReduxBody(c, B, vacc);
@@ -21563,6 +21595,53 @@ class OptProfile
             }
         }
 
+    // Whether the loop at header H has a square root or a divide in its body
+    // block (the latch): lane work an ordered float sum pays for itself on.
+    bool vecHeavyFloat(IRBlock* H, Map* defOf, Map* defBlk)
+        {
+        IRInsn* t = H.term();
+        if (t == (IRInsn*)0 || t.ops().count() < (u32)3)
+            return false;
+        for (u32 k = (u32)1; k < (u32)3; k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)t.ops().get(k);
+            if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
+                continue;
+            IRBlock* b = o.blk();
+            for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
+                {
+                String* op = ((IRInsn*)b.insns().get(i)).op();
+                if (op.equals(String.withCString("FSqrt")) || op.equals(String.withCString("FDiv")))
+                    return true;
+                }
+            }
+        return false;
+        }
+
+    // The exit of an ORDERED float sum: the scalar accumulator already holds
+    // the total, in order; only the remainder loop (if any) follows it, and
+    // the readers after the loop read its result.
+    void vecOrderedExit(IRFunc* fn, VecCand* c)
+        {
+        IRValue* finalV = c.acc();
+        if (c.needEpi())
+            finalV = vecReduxEpilogue(fn, c, c.acc(), new Array());
+        if (finalV == c.acc())
+            return;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            if (bb == c.h() || bb == c.b() || bb == _vecH2 || bb == _vecB2)
+                continue;
+            for (u32 k = (u32)0; k < bb.phis().count(); k = k + (u32)1)
+                vecReplaceUse((IRInsn*)bb.phis().get(k), c.acc(), finalV, (IRInsn*)0);
+            for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
+                vecReplaceUse((IRInsn*)bb.insns().get(k), c.acc(), finalV, (IRInsn*)0);
+            if (bb.term() != (IRInsn*)0)
+                vecReplaceUse(bb.term(), c.acc(), finalV, (IRInsn*)0);
+            }
+        }
+
     // Rewrite the reduction loop's body into vector form.
     void vecReduxBody(VecCand* c, IRBlock* B, IRValue* vacc)
         {
@@ -21653,6 +21732,31 @@ class OptProfile
                 add.add(ivLeft ? a0 : a1);
                 add.add(IROperand.immI((i32)c.vw(), n.res().ty()));
                 _vecBody.add((Object*)add);
+                continue;
+                }
+            // ordered: acc + e[0] + e[1] + ..., the lanes in order, scalar.
+            if (n == c.accNext() && c.ordered())
+                {
+                IROperand* ve = vecSplatOperand(IROperand.useVal(c.elem()));
+                IRValue* t = c.acc();
+                for (u32 k = (u32)0; k < c.vw(); k = k + (u32)1)
+                    {
+                    IRValue* x = new IRValue(c.laneTy());
+                    IRInsn* ex = IRInsn.with(String.withCString("VExtract"));
+                    ex.copyDbg(n);
+                    ex.setRes(x);
+                    ex.add(ve);
+                    ex.add(IROperand.immI((i64)k, String.withCString("U32")));
+                    _vecBody.add((Object*)ex);
+                    IRValue* sum = k + (u32)1 == c.vw() ? n.res() : new IRValue(c.laneTy());
+                    IRInsn* fa = IRInsn.with(String.withCString("FAdd"));
+                    fa.copyDbg(n);
+                    fa.setRes(sum);
+                    fa.add(IROperand.useVal(t));
+                    fa.add(IROperand.useVal(x));
+                    _vecBody.add((Object*)fa);
+                    t = sum;
+                    }
                 continue;
                 }
             // vacc += vec(elem)

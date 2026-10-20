@@ -130,6 +130,10 @@
     {
     return NO; // reassociation is target- and source-gated; see the header
     }
+- (BOOL)vectorizesOrderedFloat
+    {
+    return NO;
+    }
 - (BOOL)vectorizesIota
     {
     return NO;
@@ -275,6 +279,11 @@
     }
 // fdiv/fsqrt .4s and the faddp horizontal add are all arm64 has natively.
 - (BOOL)vectorizesFloatReduce
+    {
+    return YES;
+    }
+// A lane is fmov'd out of its vector (ext first for lanes 1..3).
+- (BOOL)vectorizesOrderedFloat
     {
     return YES;
     }

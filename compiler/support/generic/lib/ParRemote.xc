@@ -189,9 +189,12 @@ typedef i32 xctlsRead_t(pointer conn, u8* buf, i32 len);
 typedef i32 xctlsWrite_t(pointer conn, u8* buf, i32 len);
 typedef void xctlsClose_t(pointer conn);
 
+// The TLS library's load state: 0 not tried, 3 loading, 1 loaded, 2 not
+// there. A file global, as the atomics take its address.
+i32 gParTlsState;
+
 class ParTls
     {
-    static i32 _state;      // 0 not tried, 1 loaded, 2 not there
     static pointer _lib;
     static pointer _client; // one pinning client configuration per process
     static xctlsMakeSelfSigned_t* _makeSelfSigned;
@@ -224,13 +227,27 @@ class ParTls
         }
 #endif
 
-    // The library, once: XC_TLS_LIB, beside the executable, the toolchain's
-    // third-party tree, then the system loader's own search.
+    // The library, once, by whichever thread comes first; another arriving
+    // meanwhile waits for the outcome (state 3, loading). It used to read the
+    // provisional "failed" a loading thread had set, so two connections at
+    // once to a new daemon both failed their TLS handshakes.
     static bool load(void)
         {
-        if (_state != (i32)0)
-            return _state == (i32)1;
-        _state = (i32)2;
+        if (_xt_atomic_cas_i32((pointer)&gParTlsState, (i32)0, (i32)3) == (i32)0)
+            {
+            while (_xt_atomic_load_i32((pointer)&gParTlsState) == (i32)3)
+                Thread.sleepMs((u32)1);
+            return _xt_atomic_load_i32((pointer)&gParTlsState) == (i32)1;
+            }
+        bool ok = loadOnce();
+        _xt_atomic_store_i32((pointer)&gParTlsState, ok ? (i32)1 : (i32)2);
+        return ok;
+        }
+
+    // XC_TLS_LIB, beside the executable, the toolchain's third-party tree,
+    // then the system loader's own search.
+    static bool loadOnce(void)
+        {
 #if ARCH_x86_64 || PLATFORM_android
         // The library writes to the socket itself, so a peer that has gone
         // raises SIGPIPE, which kills the process (exit 141) where the write
@@ -300,9 +317,9 @@ class ParTls
             || _accept == (pointer)0 || _connect == (pointer)0 || _fingerprint == (pointer)0
             || _pending == (pointer)0 || _read == (pointer)0 || _write == (pointer)0 || _close == (pointer)0)
             return false;
-        _state = (i32)1;
+        return true;
 #endif
-        return _state == (i32)1;
+        return false;
         }
 
     // A self-signed certificate and its key, as PEM files; false when they
@@ -2412,6 +2429,10 @@ class ParRemoteServe
     static void setTls(pointer server)
         {
         _tls = server;
+        // The shared state too, here at start: made lazily by the first
+        // connections, two arriving at once each made their own.
+        if (_gpus == (Mutex*)0)
+            setup();
         }
     static void setNimby(i32 fromMinutes, i32 toMinutes)
         {

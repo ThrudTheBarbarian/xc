@@ -152,6 +152,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// `speedLoopHeaders`, and the vectoriser requires BOTH that and this knob.
 /// Only the targets that lower VDiv/VSqrt and a float VReduceAdd say yes.
 - (BOOL)vectorizesFloatReduce;
+/// An ORDERED float sum at the default goal: the elements computed lane-wise
+/// and each vector's lanes added to the scalar sum in order (VExtract), so
+/// nothing is reassociated. The back end lowers VExtract (arm64).
+- (BOOL)vectorizesOrderedFloat;
 /// The back end can build the lane-index vector <0,1,2,3>, so a reduction
 /// whose per-lane value is the INDUCTION VARIABLE rather than a loaded
 /// element can vectorise (`acc += f(i)` with no array in sight).

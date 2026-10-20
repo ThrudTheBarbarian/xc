@@ -64,6 +64,9 @@
 // from a load, so the applier must map the iv to <i, i+1, i+2, i+3> instead of
 // splatting it. `acc += f(i)` with no array anywhere.
 @property(nonatomic) BOOL isIota;
+// An ordered float sum: the accumulator stays scalar and each vector's lanes
+// are added to it in order, so the result is the scalar loop's.
+@property(nonatomic) BOOL isOrdered;
 // Epilogue: when the trip count is not an exact multiple of the vector width,
 // the vector loop runs to `epiM` and a CLONE of the scalar loop finishes the
 // tail. epiN is the original bound, kept for the clone's own guard.
@@ -2057,9 +2060,28 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         if (!accNextOp || accNextOp.kind != XTIROperandKindUse)
             continue;
         XTIRInsn* accNext = defOf[@(accNextOp.valueId)];
+        // Else, at the default goal, an ORDERED float sum where the loop has
+        // lane work worth it (a square root, a divide: nbody's): the elements
+        // are computed lane-wise and added to the scalar sum one by one, in
+        // order, so nothing is reassociated. Looked for in both of the
+        // header's successors, as the port does.
+        BOOL orderedRedux = NO;
+        if (!floatRedux && (self.profile ?: [XTIROptTargetProfile conservativeProfile]).vectorizesOrderedFloat &&
+            H.terminator && H.terminator.operands.count >= 3)
+            for (NSUInteger q = 1; q < 3 && !orderedRedux; q++)
+                {
+                XTIRBlock* sb = H.terminator.operands[q].blockRef;
+                for (XTIRInsn* si in sb.instructions)
+                    if (si.opcode == XTIROpFSqrt || si.opcode == XTIROpFDiv)
+                        {
+                        orderedRedux = YES;
+                        break;
+                        }
+                }
+        BOOL floatLanes = floatRedux || orderedRedux;
         // An ADD, or a FLOAT add in a float reduction (the reassociation gate).
         BOOL accIsAdd = accNext && (accNext.opcode == XTIROpAdd ||
-                                    (floatRedux && accNext.opcode == XTIROpFAdd));
+                                    (floatLanes && accNext.opcode == XTIROpFAdd));
         if (!accIsAdd || defBlk[@(accNextOp.valueId)] != B)
             continue;
         if ([uses countForObject:@(accNextOp.valueId)] != 1)
@@ -2206,7 +2228,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                     }
                 XTIRType* lt = insn.result.type;
                 if (!lt || !(lt.kind == XTIRTypeKindI32 || lt.kind == XTIRTypeKindU32 ||
-                             (floatRedux && lt.kind == XTIRTypeKindF32)))
+                             (floatLanes && lt.kind == XTIRTypeKindF32)))
                     {
                     ok = NO;
                     break;
@@ -2334,7 +2356,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
             // FLOAT lane ops, only in a float reduction: a lane square root
             // (nbody's `sqrt(d2)`) and a lane divide (`mass*dx / (d2*sqrt)`).
             // Both produce f32 lanes, which is what the lane type records.
-            if (floatRedux && (op == XTIROpFSqrt || op == XTIROpFDiv))
+            if (floatLanes && (op == XTIROpFSqrt || op == XTIROpFDiv))
                 {
                 if (!insn.result || insn.result.type.kind != XTIRTypeKindF32)
                     {
@@ -2358,7 +2380,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                 {
                 if (!insn.result || !(insn.result.type.kind == XTIRTypeKindI32 ||
                                       insn.result.type.kind == XTIRTypeKindU32 ||
-                                      (floatRedux && insn.result.type.kind == XTIRTypeKindF32)))
+                                      (floatLanes && insn.result.type.kind == XTIRTypeKindF32)))
                     {
                     ok = NO;
                     break;
@@ -2393,7 +2415,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         // in a float reduction).
         if (!(accNext.result.type.kind == XTIRTypeKindI32 ||
               accNext.result.type.kind == XTIRTypeKindU32 ||
-              (floatRedux && accNext.result.type.kind == XTIRTypeKindF32)))
+              (floatLanes && accNext.result.type.kind == XTIRTypeKindF32)))
             continue;
         if (accNext.result.type.kind != laneType.kind)
             continue;
@@ -2495,6 +2517,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         c.vecBytes = vb;
         c.isReduction = YES;
         c.isIota = (wantIota && usesIv);
+        c.isOrdered = orderedRedux;
         c.divMagic = divMagic;
         c.accPhi = accPhi;
         c.accNext = accNext;
@@ -2721,6 +2744,29 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                                                          dbgLoc:insn.dbgLoc]];
             continue;
             }
+        // ordered: acc + e[0] + e[1] + ..., the lanes in order, scalar.
+        if (insn == c.accNext && c.isOrdered)
+            {
+            XTIROperand* ve = vecOperand([XTIROperand useWithValueId:c.elemId]);
+            XTIRValueId t = c.accPhi.result.valueId;
+            for (NSUInteger k = 0; k < c.vw; k++)
+                {
+                XTIRValue* x = newVal(c.laneType);
+                [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVExtract
+                                                             result:x
+                                                           operands:@[ ve, [XTIROperand immIWithType:[XTIRType u32Type]
+                                                                                                value:(int64_t)k] ]
+                                                             dbgLoc:insn.dbgLoc]];
+                XTIRValue* sum = (k + 1 == c.vw) ? insn.result : newVal(c.laneType);
+                [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpFAdd
+                                                             result:sum
+                                                           operands:@[ [XTIROperand useWithValueId:t],
+                                                                       [XTIROperand useWithValueId:x.valueId] ]
+                                                             dbgLoc:insn.dbgLoc]];
+                t = sum.valueId;
+                }
+            continue;
+            }
         // vacc += vec(elem)
         if (insn == c.accNext)
             {
@@ -2922,6 +2968,13 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         }
     [B.instructions setArray:newBody];
 
+    // An ordered sum keeps its scalar accumulator phi, and nothing is reduced
+    // at the exit: the remainder (if any) starts from the scalar total.
+    NSMutableArray<XTIRInsn*>* head = [NSMutableArray array];
+    XTIRValueId outId = c.accPhi.result.valueId;
+    XTIRInsn* rd = nil;
+    if (!c.isOrdered)
+    {
     XTIRValue* vnext = vmap[@(c.accNext.result.valueId)]; // vector accNext id
 
     // Vector accumulator phi: [(preheader, vacc0), (B, vnext)]. The preheader
@@ -2959,12 +3012,12 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     // started non-zero, add the initial scalar back. Rewire external uses of
     // the old scalar accumulator phi to the reduced result.
     XTIRValue* red = newVal(c.laneType);
-    XTIRInsn* rd = [[XTIRInsn alloc] initWithOpcode:XTIROpVReduceAdd
-                                             result:red
-                                           operands:@[ [XTIROperand useWithValueId:vacc.valueId] ]
-                                             dbgLoc:nil];
-    NSMutableArray<XTIRInsn*>* head = [@[ rd ] mutableCopy];
-    XTIRValueId outId = red.valueId;
+    rd = [[XTIRInsn alloc] initWithOpcode:XTIROpVReduceAdd
+                                   result:red
+                                 operands:@[ [XTIROperand useWithValueId:vacc.valueId] ]
+                                   dbgLoc:nil];
+    [head addObject:rd];
+    outId = red.valueId;
     int64_t initK = 0;
     BOOL initIsZero = resolveConstInt(c.seedOp, ({
                                           NSMutableDictionary<NSNumber*, XTIRInsn*>* d = [NSMutableDictionary dictionary];
@@ -2988,6 +3041,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                                                   dbgLoc:nil]];
         outId = withInit.valueId;
         }
+    }
     // ── Epilogue, part 2: the reduction lands in a new block between the vector
     // loop and the remainder, because the remainder's accumulator STARTS from it.
     XTIRValueId finalId = outId;

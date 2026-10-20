@@ -197,6 +197,7 @@ typedef NS_ENUM(uint16_t, XTIROpcode) {
     XTIROpVLShr,      // %v:Vec(W) <- a:Vec(W), #imm  (logical shift right by a constant)
     XTIROpVShl,       // %v:Vec(W) <- a:Vec(W), #imm  (shift left by a constant)
     XTIROpVNot,       // %v:Vec(W) <- a:Vec(W)        (bitwise not)
+    XTIROpVExtract,   // scalar <- a:Vec(W), #lane    (one lane, as a scalar)
     XTIROpVReduceAdd, // scalar <- %v:Vec  (horizontal add of all lanes)
     XTIROpVReduceMax, // scalar <- %v:Vec  (horizontal max; u/s from result type)
     XTIROpVReduceMin, // scalar <- %v:Vec  (horizontal min; u/s from result type)

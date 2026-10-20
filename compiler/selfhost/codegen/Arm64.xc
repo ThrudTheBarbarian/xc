@@ -3529,6 +3529,7 @@ class Arm64
         if (op.equals(String.withCString("VLShr"))) { emitVLShr(n); return true; }
         if (op.equals(String.withCString("VShl"))) { emitVShl(n); return true; }
         if (op.equals(String.withCString("VNot"))) { emitVNot(n); return true; }
+        if (op.equals(String.withCString("VExtract"))) { emitVExtract(n); return true; }
         if (op.equals(String.withCString("VICmp")))  { emitVICmp(n);  return true; }
         if (op.equals(String.withCString("VReduceAdd")) || op.equals(String.withCString("VReduceMax"))
          || op.equals(String.withCString("VReduceMin"))) { emitVReduce(n); return true; }
@@ -3766,6 +3767,28 @@ class Arm64
             _out.appendFormat("    mov v%lu.16b, v%lu.16b\n", d, a);
         else
             _out.appendFormat("    shl v%lu.%s, v%lu.%s, #%lld\n", d, arr.cString(), a, arr.cString(), sh);
+    }
+
+    // One 32-bit float lane of a vector, as a scalar (an ordered float sum's
+    // lanes). Lane 0 is the vector register's own s view; lane k is shifted
+    // down by `ext` into v16 (emission scratch) and read from s16.
+    void emitVExtract(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)2 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+        if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_IMMI) { unsupported(n.op()); return; }
+        String* ty = n.res().ty();
+        u32 a = vecIndex(o0.val());
+        String* d = resultReg(n.res(), fregName((u32)0, ty));
+        i64 k = o1.imm();
+        if (k == (i64)0)
+            _out.appendFormat("    fmov %s, s%lu\n", d.cString(), a);
+        else {
+            _out.appendFormat("    ext v16.16b, v%lu.16b, v%lu.16b, #%lld\n", a, a, k * (i64)4);
+            _out.appendFormat("    fmov %s, s16\n", d.cString());
+        }
+        storeReg(d, n.res());
     }
 
     // Lane-wise bitwise not (`mvn`, on the whole register).

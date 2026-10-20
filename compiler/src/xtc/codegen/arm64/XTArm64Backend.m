@@ -6745,6 +6745,26 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                  (unsigned long)d, arr, (unsigned long)a, arr, (long long)sh];
             break;
         }
+        case XTIROpVExtract: {    // one 32-bit float lane as a scalar (an ordered float sum)
+            // Lane 0 is the vector register's own s view; lane k is shifted
+            // down by `ext` into v16 (emission scratch) and read from s16.
+            if (insn.operands.count < 2 || !insn.result ||
+                insn.operands[0].kind != XTIROperandKindUse ||
+                insn.operands[1].kind != XTIROperandKindImmI) break;
+            NSUInteger a = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
+            NSString *s0 = [self fregName:0 forType:insn.result.type];
+            NSString *d = [self resultReg:insn.result.valueId scratch:s0 ctx:ctx];
+            int64_t k = insn.operands[1].intValue;
+            if (k == 0)
+                [ctx.out appendFormat:@"    fmov %@, s%lu\n", d, (unsigned long)a];
+            else {
+                [ctx.out appendFormat:@"    ext v16.16b, v%lu.16b, v%lu.16b, #%lld\n",
+                 (unsigned long)a, (unsigned long)a, (long long)(k * 4)];
+                [ctx.out appendFormat:@"    fmov %@, s16\n", d];
+            }
+            [self storeReg:d intoValue:insn.result.valueId ctx:ctx];
+            break;
+        }
         case XTIROpVNot: {        // lane-wise bitwise not (mvn, on the whole register)
             if (insn.operands.count < 1 || !insn.result ||
                 insn.operands[0].kind != XTIROperandKindUse) break;
