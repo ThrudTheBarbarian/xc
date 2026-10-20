@@ -2065,6 +2065,16 @@ void ux_ak_window_invalidate(int handle)
         {
         NSRect b = [v bounds];
         NSBitmapImageRep* rep = [v bitmapImageRepForCachingDisplayInRect:b];
+        /* AppKit sizes that bitmap for the main screen, 2 pixels a point on a Retina one.  Reads
+         * are in points, so a headless frame is painted at 1x whatever the Mac's display. */
+        if (rep && [rep pixelsWide] != (NSInteger)b.size.width)
+            {
+            rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+                pixelsWide:(NSInteger)b.size.width pixelsHigh:(NSInteger)b.size.height
+                bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO
+                colorSpaceName:[rep colorSpaceName] bytesPerRow:0 bitsPerPixel:0];
+            [rep setSize:b.size];
+            }
         if (rep)
             {
             [v cacheDisplayInRect:b toBitmapImageRep:rep];

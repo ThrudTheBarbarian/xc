@@ -1,8 +1,8 @@
 // demo_appkit_hud.xc — the frame-time HUD, sampling the REAL run loop.
 //
 // A window with the HUD in a corner; the app's own turn hook ticks it (the HUD installs no second
-// clock -- there is one frame source, the driver's).  After 240 turns the harness prints what the
-// HUD would draw, so the readout is checked and not just seen.
+// clock -- there is one frame source, the driver's).  After 75 turns and the HUD's first whole
+// second the harness prints what the HUD would draw, so the readout is checked and not just seen.
 #import <Stdio.xc>
 #import "UXAppKitDriver.xc"
 #import "UXApplication.xc"
@@ -30,7 +30,8 @@ void hudTick(void)
         {
         gHud.tick();
         }
-    if (gTicks >= (i32)75)
+    // 75 frames and one whole second published: on a 120 Hz screen the 75 come in 0.6 s
+    if (gTicks >= (i32)75 && gHud != (UXFrameHud*)0 && gHud.frameFps() > (i32)0)
         {
         gDone = (i32)1;
         Stdio.printf("frames=%ld fps=%ld min=%ldus avg=%ldus max=%ldus (last frame %ldus)\n",

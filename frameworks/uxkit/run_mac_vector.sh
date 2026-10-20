@@ -20,13 +20,13 @@ cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/
     "$here/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
 "$xcc" -A arm64 -I "$here" "$here/test_mac_vector.xc" \
     -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/test_mac_vector" -q 2>/dev/null
-rm -f /tmp/ux_vec_check.ppm
-ux_mac_run "$work/test_mac_vector" >/dev/null
-[ -f /tmp/ux_vec_check.ppm ] || { echo "== mac-vector: FAIL (nothing rendered) =="; exit 1; }
+# the picture is written in the current folder: the binary's, on whichever Mac runs it
+(cd "$work" && ux_mac_run "$work/test_mac_vector" >/dev/null)
+[ -f "$work/ux_vec_check.ppm" ] || { echo "== mac-vector: FAIL (nothing rendered) =="; exit 1; }
 
-python3 - <<'PY'
+python3 - "$work/ux_vec_check.ppm" <<'PY'
 import sys
-d=open('/tmp/ux_vec_check.ppm','rb').read()
+d=open(sys.argv[1],'rb').read()
 i=d.index(b'255\n')+4; px=d[i:]
 h=d[:i].split(); W=int(h[1]); H=int(h[2])
 def p(x,y):

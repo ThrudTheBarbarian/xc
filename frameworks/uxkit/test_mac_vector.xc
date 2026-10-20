@@ -63,7 +63,7 @@ class SeamBoard : UXView
         SeamBoard* b = new SeamBoard();
         content.addSubview(b, UXGeom.make((i16)0, (i16)0, (i16)300, (i16)280));
         win.displayAll();
-        if (ux_ak_dump_ppm((u8*)"/tmp/ux_vec_check.ppm") == (i32)0)
+        if (ux_ak_dump_ppm((u8*)"ux_vec_check.ppm") == (i32)0)
             {
             Stdio.printf("FAIL: nothing rendered\n");
             }
