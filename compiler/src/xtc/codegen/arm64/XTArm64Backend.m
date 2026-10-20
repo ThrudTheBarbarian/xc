@@ -48,6 +48,10 @@
 // buildSlotTableForCtx: so the save area can be laid out after.
 @property (nonatomic) NSMutableDictionary<NSNumber *, NSString *> *homeReg;
 @property (nonatomic) NSArray<NSString *> *savedRegs;
+// v8-v15 the vector allocator took (a function with no float scalars, past
+// the 14 of v18-v31): their d halves are callee-saved, so homing adds them to
+// savedRegs.
+@property (nonatomic) NSMutableSet<NSString *> *vecCalleeUsed;
 @property (nonatomic) NSUInteger saveAreaOffset;
 // Base offset held in x28 for a frame too large for sp-relative slot access,
 // or 0 when unused. x28 is in no home pool (homes are x19-x27 and x10-x14; x9
@@ -86,6 +90,9 @@
 // Built by computeAddrFoldForCtx (it needs both); reused by the emit to spot a
 // single-use `Const #0` store value (→ store the zero register, elide the const).
 @property (nonatomic) NSMutableDictionary<NSNumber *, XTIRInsn *> *defOf;
+// Each value's place in the function's definition order (1, 2, ...; a
+// parameter 0): which of a VBsl's inputs was ready first.
+@property (nonatomic) NSMutableDictionary<NSNumber *, NSNumber *> *defSeq;
 @property (nonatomic) NSCountedSet<NSNumber *> *useCount;
 // Value-ids whose narrow-int (U8/U16) result provably can't overflow its width,
 // so the backend may skip the uxtb/uxth canonicalisation (masked == unmasked
@@ -3777,18 +3784,23 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
 
     NSCountedSet<NSNumber *> *uses = [NSCountedSet set];
     NSMutableDictionary<NSNumber *, XTIRInsn *> *defOf = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber *, NSNumber *> *defSeq = [NSMutableDictionary dictionary];
     for (XTIRBlock *bb in fn.blocks) {
         NSMutableArray<XTIRInsn *> *all = [NSMutableArray array];
         [all addObjectsFromArray:bb.phiNodes];
         [all addObjectsFromArray:bb.instructions];
         if (bb.terminator) [all addObject:bb.terminator];
         for (XTIRInsn *insn in all) {
-            if (insn.result) defOf[@(insn.result.valueId)] = insn;
+            if (insn.result) {
+                defOf[@(insn.result.valueId)] = insn;
+                defSeq[@(insn.result.valueId)] = @(defSeq.count + 1);
+            }
             for (XTIROperand *o in insn.operands)
                 if (o.kind == XTIROperandKindUse) [uses addObject:@(o.valueId)];
         }
     }
     ctx.defOf = defOf;
+    ctx.defSeq = defSeq;
     ctx.useCount = uses;
 
     // A single-use ICmp feeding its own block's CondBranch fuses into the branch.
@@ -6790,6 +6802,76 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             [self storeReg:d intoValue:insn.result.valueId ctx:ctx];
             break;
         }
+        case XTIROpVRotl: {       // lane rotate left by a constant
+            // shl then usra (the right shift ADDED in, which is an or, the two
+            // halves' bits being disjoint). Into the source's own register it
+            // is built in v16 (emission scratch) with ushr then sli.
+            if (insn.operands.count < 2 || !insn.result ||
+                insn.operands[0].kind != XTIROperandKindUse ||
+                insn.operands[1].kind != XTIROperandKindImmI) break;
+            NSString *arr = [self neonArrFor:insn.result.type.pointeeType];
+            NSUInteger a = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
+            NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+            int64_t c = insn.operands[1].intValue;
+            int64_t w = (int64_t)insn.operands[1].type.byteWidth * 8;
+            if (d != a) {
+                [ctx.out appendFormat:@"    shl v%lu.%@, v%lu.%@, #%lld\n",
+                 (unsigned long)d, arr, (unsigned long)a, arr, (long long)c];
+                [ctx.out appendFormat:@"    usra v%lu.%@, v%lu.%@, #%lld\n",
+                 (unsigned long)d, arr, (unsigned long)a, arr, (long long)(w - c)];
+            } else {
+                [ctx.out appendFormat:@"    ushr v16.%@, v%lu.%@, #%lld\n",
+                 arr, (unsigned long)a, arr, (long long)(w - c)];
+                [ctx.out appendFormat:@"    sli v16.%@, v%lu.%@, #%lld\n",
+                 arr, (unsigned long)a, arr, (long long)c];
+                [ctx.out appendFormat:@"    mov v%lu.16b, v16.16b\n", (unsigned long)d];
+            }
+            break;
+        }
+        case XTIROpVBsl: {        // bitwise select, (m & a) | (~m & b)
+            // bsl when the result's register is the mask's, bit when it is
+            // b's, bif when it is a's. Otherwise the input defined EARLIEST is
+            // copied in and the matching form takes the other two straight
+            // from their registers: the one computed last (MD5's F has its
+            // mask from the round before) is then one instruction from the
+            // result, not two.
+            if (insn.operands.count < 3 || !insn.result ||
+                insn.operands[0].kind != XTIROperandKindUse ||
+                insn.operands[1].kind != XTIROperandKindUse ||
+                insn.operands[2].kind != XTIROperandKindUse) break;
+            NSUInteger m = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
+            NSUInteger a = [self vecIndexForValue:insn.operands[1].valueId ctx:ctx];
+            NSUInteger b = [self vecIndexForValue:insn.operands[2].valueId ctx:ctx];
+            NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+            if (d == m)
+                [ctx.out appendFormat:@"    bsl v%lu.16b, v%lu.16b, v%lu.16b\n",
+                 (unsigned long)d, (unsigned long)a, (unsigned long)b];
+            else if (d == b)
+                [ctx.out appendFormat:@"    bit v%lu.16b, v%lu.16b, v%lu.16b\n",
+                 (unsigned long)d, (unsigned long)a, (unsigned long)m];
+            else if (d == a)
+                [ctx.out appendFormat:@"    bif v%lu.16b, v%lu.16b, v%lu.16b\n",
+                 (unsigned long)d, (unsigned long)b, (unsigned long)m];
+            else {
+                NSUInteger sm = ctx.defSeq[@(insn.operands[0].valueId)].unsignedIntegerValue;
+                NSUInteger sa = ctx.defSeq[@(insn.operands[1].valueId)].unsignedIntegerValue;
+                NSUInteger sb = ctx.defSeq[@(insn.operands[2].valueId)].unsignedIntegerValue;
+                if (sb < sm && sb <= sa) {
+                    [ctx.out appendFormat:@"    mov v%lu.16b, v%lu.16b\n", (unsigned long)d, (unsigned long)b];
+                    [ctx.out appendFormat:@"    bit v%lu.16b, v%lu.16b, v%lu.16b\n",
+                     (unsigned long)d, (unsigned long)a, (unsigned long)m];
+                } else if (sa < sm && sa < sb) {
+                    [ctx.out appendFormat:@"    mov v%lu.16b, v%lu.16b\n", (unsigned long)d, (unsigned long)a];
+                    [ctx.out appendFormat:@"    bif v%lu.16b, v%lu.16b, v%lu.16b\n",
+                     (unsigned long)d, (unsigned long)b, (unsigned long)m];
+                } else {
+                    [ctx.out appendFormat:@"    mov v%lu.16b, v%lu.16b\n", (unsigned long)d, (unsigned long)m];
+                    [ctx.out appendFormat:@"    bsl v%lu.16b, v%lu.16b, v%lu.16b\n",
+                     (unsigned long)d, (unsigned long)a, (unsigned long)b];
+                }
+            }
+            break;
+        }
         case XTIROpVNot: {        // lane-wise bitwise not (mvn, on the whole register)
             if (insn.operands.count < 1 || !insn.result ||
                 insn.operands[0].kind != XTIROperandKindUse) break;
@@ -7943,7 +8025,29 @@ static BOOL arm64NamesFrameReg(NSString *t) {
         return [lo[a] compare:lo[b]];
     }];
     NSMutableArray<NSNumber *> *freePool = [NSMutableArray array];
+    // A function with no float scalars leaves the FP allocator's homes
+    // (d8-d15) unused, so the vector pool takes v8-v15 too: at the bottom of
+    // the stack, used only once v18-v31 are all live, so a function that fits
+    // in 14 is allocated exactly as before. Their d halves are callee-saved
+    // (vecCalleeUsed → savedRegs).
+    BOOL fpFree = YES;
+    for (XTIRBlock *bb in fn.blocks) {
+        NSMutableArray<XTIRInsn *> *all = [NSMutableArray arrayWithArray:bb.phiNodes];
+        [all addObjectsFromArray:bb.instructions];
+        for (XTIRInsn *insn in all) {
+            if (insn.result && XTIRTypeKindIsFloating(insn.result.type.kind)) { fpFree = NO; break; }
+            for (XTIROperand *o in insn.operands) {
+                XTIRValue *ov = o.kind == XTIROperandKindUse ? [fn valueForId:o.valueId] : nil;
+                if (ov && XTIRTypeKindIsFloating(ov.type.kind)) { fpFree = NO; break; }
+            }
+            if (!fpFree) break;
+        }
+        if (!fpFree) break;
+    }
+    if (fpFree)
+        for (int r = 8; r <= 15; r++) [freePool addObject:@(r)];
     for (int r = 18; r <= 31; r++) [freePool addObject:@(r)];
+    ctx.vecCalleeUsed = [NSMutableSet set];
     NSMutableArray<NSNumber *> *active = [NSMutableArray array];   // class ids, by ascending end
     NSMutableDictionary<NSNumber *, NSNumber *> *regOfClass = [NSMutableDictionary dictionary];
     // Where each phi class's back-edge value is written: the first position,
@@ -8023,6 +8127,8 @@ static BOOL arm64NamesFrameReg(NSString *t) {
             [freePool removeLastObject];
         }
         regOfClass[cls] = reg;
+        if (reg.intValue >= 8 && reg.intValue <= 15)
+            [ctx.vecCalleeUsed addObject:[NSString stringWithFormat:@"d%@", reg]];
         [active addObject:cls];
         [active sortUsingComparator:^NSComparisonResult(NSNumber *a, NSNumber *b) { return [hi[a] compare:hi[b]]; }];
     }
@@ -8067,6 +8173,18 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     // [base, base+16380] covers the top of the frame and the setup stays a
     // single `add x28, sp, #N, lsl #12`. Added to savedRegs so the save area
     // sizes itself and every epilogue restores it like any other home.
+    // The vector allocator's v8-v15 (a function with no float scalars): their
+    // d halves are callee-saved. After every GP and FP home, so the order
+    // (GP, then d8..d15) is the one homing sorts to; before x28. Here rather
+    // than in homing, which returns early for some functions (inline asm).
+    if (ctx.vecCalleeUsed.count > 0) {
+        NSMutableArray *sr = [ctx.savedRegs mutableCopy] ?: [NSMutableArray array];
+        for (int r = 8; r <= 15; r++) {
+            NSString *d = [NSString stringWithFormat:@"d%d", r];
+            if ([ctx.vecCalleeUsed containsObject:d] && ![sr containsObject:d]) [sr addObject:d];
+        }
+        ctx.savedRegs = sr;
+    }
     ctx.frameBase = 0;
     if (ctx.frameSize > 16380) {
         NSUInteger base = ((ctx.frameSize - 16380 + 4095) / 4096) * 4096;

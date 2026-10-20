@@ -67,6 +67,7 @@ class OptProfile
     bool _iota;              // back end can build the lane-index vector
     bool _floatReduce;       // FLOAT reductions may reassociate (arm64/x86-64)
     bool _orderedFloat;      // an ordered float sum: lanes added in order (arm64)
+    bool _bitSelect;         // back end lowers VBsl and VRotl (arm64)
     bool _reductionCollapse; // an invariant reduction nest collapses
     bool _memsetIdiom;       // a byte-fill loop becomes one MemSet
     bool _initGuardElim;     // a redundant static-init guard comes out
@@ -132,6 +133,7 @@ class OptProfile
         _iota = false;
         _floatReduce = false;
         _orderedFloat = false;
+        _bitSelect = false;
         _reductionCollapse = false;
         _memsetIdiom = false;
         _initGuardElim = false;
@@ -222,6 +224,9 @@ class OptProfile
         // vectoriser also requires the source to grant it (see floatRedux).
         p._floatReduce = t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
         p._orderedFloat = t.equals(String.withCString("arm64"));
+        // bsl/bit/bif and shl+usra on arm64. x86 would need AVX-512's
+        // vpternlogd/vprold for a gain, and its AVX2 copies cannot use them.
+        p._bitSelect = t.equals(String.withCString("arm64"));
         p._memsetIdiom = !(t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")) || t.equals(String.withCString("atarist")));
         // The 6502 does NOT hoist: an eager init at entry costs it more than
         // the guard it saves.
@@ -368,6 +373,10 @@ class OptProfile
     bool orderedFloat(void)
         {
         return _orderedFloat;
+        }
+    bool bitSelect(void)
+        {
+        return _bitSelect;
         }
     bool floatReduce(void)
         {
@@ -1524,6 +1533,10 @@ class OptProfile
             vectorize(m);
         if (stopHere(String.withCString("vectorize")))
             return;
+        if (_level >= (u32)2 && _profile.bitSelect())
+            vecCombine(m);
+        if (stopHere(String.withCString("vec-combine")))
+            return;
         if (_level >= (u32)2)
             simdPrune(m);
         if (stopHere(String.withCString("simd-prune")))
@@ -1600,6 +1613,10 @@ class OptProfile
         if (_level >= (u32)2)
             narrowIV(m);
         if (stopHere(String.withCString("narrow-iv")))
+            return;
+        if (_level >= (u32)2 && _profile.bitSelect())
+            vecPool(m);
+        if (stopHere(String.withCString("vec-pool")))
             return;
         // The final sweep: pure instructions orphaned by everything above.
         if (_level >= (u32)2)
@@ -3709,6 +3726,334 @@ class OptProfile
             rewriteThroughReplace(bb.insns(), repl);
             if (bb.term() != (IRInsn*)0)
                 rewriteInsnThroughReplace(bb.term(), repl);
+            }
+        }
+
+    // ── vec-combine ──────────────────────────────────────────────────────
+    //
+    // The vectoriser's output, two shapes made one op where the back end has
+    // it (bitSelect: arm64):
+    //   VOr(VShl(x, c), VLShr(x, w - c))          → VRotl x, c
+    //   VOr(VAnd(m, a), VAnd(VNot(m), b))         → VBsl m, a, b
+    //   VXor(b, VAnd(m, VXor(a, b)))              → VBsl m, a, b
+    // (the last is the xor form of the same select, md5_mask's F and G) with
+    // either operand of an Or, Xor or And in either place (MD5's F is the
+    // second as written, its G with the Not on the other side; every round's
+    // rotate the first). Each inner node must have this one use and be in the
+    // same block. The nodes a match consumed go with it (dead-code keeps
+    // vector ops).
+    // Then, in a big block (over VEC_SPLAT_BIG_BODY, where the vectoriser
+    // splats each constant where it is used), the integer constants' splats
+    // become loads from a read-only table, `__xtv_kpool_<fn>_<block>`: one
+    // `ldr q` each, against `movz, movk, dup` (MD5's 64 round constants).
+    // That step runs late (vec-pool, before the final dead-code) with the
+    // table's address an AddrOf at the block's top. As the reference's
+    // XTIROptVecCombine (its pool instance).
+    Array* _vcDead;
+
+    void vecCombine(IRModule* m)
+        {
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            vecCombineFn((IRFunc*)m.funcs().get(f));
+            }
+        }
+
+    // The constant tables, LATE: after the last LICM, which would take each
+    // table load out of the loop as invariant and hold all 64 of MD5's in
+    // the 14 vector registers.
+    void vecPool(IRModule* m)
+        {
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                vcPool(m, fn, (IRBlock*)fn.blocks().get(b), b);
+            }
+        }
+
+    void vcPool(IRModule* m, IRFunc* fn, IRBlock* bb, u32 bi)
+        {
+        if (bb.insns().count() <= (u32)VEC_SPLAT_BIG_BODY)
+            return;
+        Map* defIn = new Map();
+        u32 cands = (u32)0;
+        for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)bb.insns().get(i);
+            if (n.res() != (IRValue*)0)
+                defIn.set((Hashable*)n.res(), (Object*)n);
+            if (vcPoolable(n, defIn) != (IRInsn*)0)
+                cands = cands + (u32)1;
+            }
+        if (cands < (u32)2)
+            return;
+        String* nm = new String();
+        nm.appendFormat("__xtv_kpool_%s_%u", fn.name().cString(), bi);
+        if (symNamed(m, nm) != (IRSymbol*)0)
+            return;
+        IRValue* base = new IRValue(String.withCString("Ptr(U8, unbanked)"));
+        IRInsn* ao = IRInsn.with(String.withCString("AddrOf"));
+        ao.setRes(base);
+        ao.add(IROperand.sym(nm));
+        Array* bytes = new Array();
+        Map* idxOf = new Map();
+        String* symTy = (String*)0;
+        Array* out = new Array();
+        out.add((Object*)ao);
+        for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)bb.insns().get(i);
+            IRInsn* kc = vcPoolable(n, defIn);
+            if (kc == (IRInsn*)0)
+                {
+                out.add((Object*)n);
+                continue;
+                }
+            String* lane = laneOfVec(n.res().ty());
+            u32 w = irWidth(lane);
+            i64 v = ((IROperand*)kc.ops().get((u32)0)).imm();
+            if (w < (u32)8)
+                v = v & (((i64)1 << (i64)(w * (u32)8)) - (i64)1);
+            String* key = new String();
+            key.appendFormat("%u:%lld", w, v);
+            Object* have = idxOf.get((Hashable*)key);
+            u32 idx = (u32)0;
+            if (have != (Object*)0)
+                idx = ((Number*)have).asU32();
+            else
+                {
+                idx = idxOf.count();
+                idxOf.set((Hashable*)key, (Object*)Number.with(idx));
+                for (u32 l = (u32)0; l < (u32)16 / w; l = l + (u32)1)
+                    for (u32 k = (u32)0; k < w; k = k + (u32)1)
+                        bytes.add((Object*)Number.with((u32)((v >> (i64)((u32)8 * k)) & (i64)255))); // LE
+                }
+            if (symTy == (String*)0)
+                symTy = n.res().ty();
+            IRValue* ea = new IRValue(String.withCString("Ptr(U8, unbanked)"));
+            IRInsn* en = IRInsn.with(String.withCString("ElementAddr"));
+            en.copyDbg(n);
+            en.setRes(ea);
+            en.add(IROperand.useVal(base));
+            en.add(IROperand.immI((i64)idx * (i64)16, String.withCString("I64")));
+            out.add((Object*)en);
+            IRInsn* vl = IRInsn.with(String.withCString("VLoad"));
+            vl.copyDbg(n);
+            vl.setRes(n.res());
+            vl.add(IROperand.useVal(ea));
+            out.add((Object*)vl);
+            }
+        IRSymbol* sym = IRSymbol.dataGlobal(nm, symTy);
+        // Read-only, compiler-made, never address-taken beyond these loads.
+        // The type is the 16-byte vector; the payload is the whole table, and
+        // the back ends emit every byte of it.
+        sym.clearEscapes();
+        sym.setNoAttrs();
+        sym.setBytes(bytes);
+        m.addSym(sym);
+        bb.insns().removeAll();
+        for (u32 i = (u32)0; i < out.count(); i = i + (u32)1)
+            bb.insns().add(out.get(i));
+        }
+
+    // The lane of a 16-byte vector type `Vec(L)`; null for any other.
+    String* laneOfVec(String* t)
+        {
+        if (t == (String*)0 || !t.hasPrefix(String.withCString("Vec(")) || !t.hasSuffix(String.withCString(")")))
+            return (String*)0;
+        String* inner = t.substringFromByte((u32)4);
+        String* lane = inner.substringToByte(inner.byteLength() - (u32)1);
+        for (u32 i = (u32)0; i < lane.byteLength(); i = i + (u32)1)
+            if (lane.byteAt(i) == (u8)',' || lane.byteAt(i) == (u8)'(')
+                return (String*)0;
+        return lane;
+        }
+
+    // The Const a VSplat broadcasts, when it can come from the table: an
+    // integer constant defined in this block, into a 16-byte integer vector.
+    IRInsn* vcPoolable(IRInsn* n, Map* defIn)
+        {
+        if (!n.op().equals(String.withCString("VSplat")) || n.ops().count() != (u32)1 || n.res() == (IRValue*)0)
+            return (IRInsn*)0;
+        IROperand* o = (IROperand*)n.ops().get((u32)0);
+        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+            return (IRInsn*)0;
+        IRInsn* d = (IRInsn*)defIn.get((Hashable*)o.val());
+        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("Const")) || d.ops().count() < (u32)1
+            || ((IROperand*)d.ops().get((u32)0)).kind() != (u8)OPK_IMMI)
+            return (IRInsn*)0;
+        String* lane = laneOfVec(n.res().ty());
+        if (lane == (String*)0 || !simpIntTy(lane) || !vecTyOf(lane, (u32)16).equals(n.res().ty()))
+            return (IRInsn*)0;
+        return d;
+        }
+
+    // The defining insn of a use operand, when it is `op`, in `bb`, with one use.
+    IRInsn* vcDef(IROperand* o, String* op, Map* defIn, Map* uses)
+        {
+        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+            return (IRInsn*)0;
+        IRInsn* d = (IRInsn*)defIn.get((Hashable*)o.val());
+        if (d == (IRInsn*)0 || !d.op().equals(op) || countOf(uses, o.val()) != (u32)1)
+            return (IRInsn*)0;
+        return d;
+        }
+
+    bool vcSame(IROperand* a, IROperand* b)
+        {
+        return a.kind() == (u8)OPK_USE && b.kind() == (u8)OPK_USE && a.val() != (IRValue*)0 && a.val() == b.val();
+        }
+
+    // VRotl for VOr(p, q): p a VShl and q a VLShr of the same x, by c and w - c.
+    IRInsn* vcRotate(IRInsn* n, IROperand* p, IROperand* q, Map* defIn, Map* uses)
+        {
+        IRInsn* sl = vcDef(p, String.withCString("VShl"), defIn, uses);
+        IRInsn* sr = vcDef(q, String.withCString("VLShr"), defIn, uses);
+        if (sl == (IRInsn*)0 || sr == (IRInsn*)0 || sl.ops().count() != (u32)2 || sr.ops().count() != (u32)2)
+            return (IRInsn*)0;
+        IROperand* x = (IROperand*)sl.ops().get((u32)0);
+        if (!vcSame(x, (IROperand*)sr.ops().get((u32)0)))
+            return (IRInsn*)0;
+        IROperand* c = (IROperand*)sl.ops().get((u32)1);
+        IROperand* d = (IROperand*)sr.ops().get((u32)1);
+        if (c.kind() != (u8)OPK_IMMI || d.kind() != (u8)OPK_IMMI || c.ty() == (String*)0)
+            return (IRInsn*)0;
+        i64 w = (i64)(irWidth(c.ty()) * (u32)8);
+        if (w == (i64)0 || c.imm() <= (i64)0 || c.imm() >= w || c.imm() + d.imm() != w)
+            return (IRInsn*)0;
+        IRInsn* r = IRInsn.with(String.withCString("VRotl"));
+        r.copyDbg(n);
+        r.setRes(n.res());
+        r.add(x);
+        r.add(IROperand.immI(c.imm(), c.ty()));
+        _vcDead.add((Object*)sl);
+        _vcDead.add((Object*)sr);
+        return r;
+        }
+
+    // VBsl for VOr(p, q): p = VAnd(m, a) (either order), q = VAnd(VNot(m), b)
+    // (either order).
+    IRInsn* vcSelect(IRInsn* n, IROperand* p, IROperand* q, Map* defIn, Map* uses)
+        {
+        IRInsn* ap = vcDef(p, String.withCString("VAnd"), defIn, uses);
+        IRInsn* aq = vcDef(q, String.withCString("VAnd"), defIn, uses);
+        if (ap == (IRInsn*)0 || aq == (IRInsn*)0 || ap.ops().count() != (u32)2 || aq.ops().count() != (u32)2)
+            return (IRInsn*)0;
+        for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+            {
+            IRInsn* nt = vcDef((IROperand*)aq.ops().get(k), String.withCString("VNot"), defIn, uses);
+            if (nt == (IRInsn*)0 || nt.ops().count() != (u32)1)
+                continue;
+            IROperand* mk = (IROperand*)nt.ops().get((u32)0);
+            IROperand* b = (IROperand*)aq.ops().get((u32)1 - k);
+            for (u32 j = (u32)0; j < (u32)2; j = j + (u32)1)
+                {
+                if (!vcSame((IROperand*)ap.ops().get(j), mk))
+                    continue;
+                IRInsn* r = IRInsn.with(String.withCString("VBsl"));
+                r.copyDbg(n);
+                r.setRes(n.res());
+                r.add(mk);
+                r.add((IROperand*)ap.ops().get((u32)1 - j));
+                r.add(b);
+                _vcDead.add((Object*)ap);
+                _vcDead.add((Object*)aq);
+                _vcDead.add((Object*)nt);
+                return r;
+                }
+            }
+        return (IRInsn*)0;
+        }
+
+    // VBsl for VXor(p, q): q = VAnd(m, VXor(a, p)) (either order throughout).
+    IRInsn* vcSelectXor(IRInsn* n, IROperand* p, IROperand* q, Map* defIn, Map* uses)
+        {
+        IRInsn* aq = vcDef(q, String.withCString("VAnd"), defIn, uses);
+        if (aq == (IRInsn*)0 || aq.ops().count() != (u32)2 || p.kind() != (u8)OPK_USE)
+            return (IRInsn*)0;
+        for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+            {
+            IRInsn* x = vcDef((IROperand*)aq.ops().get(k), String.withCString("VXor"), defIn, uses);
+            if (x == (IRInsn*)0 || x.ops().count() != (u32)2)
+                continue;
+            IROperand* mk = (IROperand*)aq.ops().get((u32)1 - k);
+            for (u32 j = (u32)0; j < (u32)2; j = j + (u32)1)
+                {
+                if (!vcSame((IROperand*)x.ops().get(j), p))
+                    continue;
+                IRInsn* r = IRInsn.with(String.withCString("VBsl"));
+                r.copyDbg(n);
+                r.setRes(n.res());
+                r.add(mk);
+                r.add((IROperand*)x.ops().get((u32)1 - j));
+                r.add(p);
+                _vcDead.add((Object*)aq);
+                _vcDead.add((Object*)x);
+                return r;
+                }
+            }
+        return (IRInsn*)0;
+        }
+
+    void vecCombineFn(IRFunc* fn)
+        {
+        Map* uses = useCounts(fn);
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            Map* defIn = new Map();
+            _vcDead = new Array();
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.res() != (IRValue*)0)
+                    defIn.set((Hashable*)n.res(), (Object*)n);
+                if (n.ops().count() != (u32)2 || n.res() == (IRValue*)0)
+                    continue;
+                IROperand* p = (IROperand*)n.ops().get((u32)0);
+                IROperand* q = (IROperand*)n.ops().get((u32)1);
+                if (n.op().equals(String.withCString("VXor")))
+                    {
+                    IRInsn* rx = vcSelectXor(n, p, q, defIn, uses);
+                    if (rx == (IRInsn*)0)
+                        rx = vcSelectXor(n, q, p, defIn, uses);
+                    if (rx != (IRInsn*)0)
+                        {
+                        bb.insns().set(i, (Object*)rx);
+                        defIn.set((Hashable*)rx.res(), (Object*)rx);
+                        }
+                    continue;
+                    }
+                if (!n.op().equals(String.withCString("VOr")))
+                    continue;
+                IRInsn* r = vcRotate(n, p, q, defIn, uses);
+                if (r == (IRInsn*)0)
+                    r = vcRotate(n, q, p, defIn, uses);
+                if (r == (IRInsn*)0)
+                    r = vcSelect(n, p, q, defIn, uses);
+                if (r == (IRInsn*)0)
+                    r = vcSelect(n, q, p, defIn, uses);
+                if (r == (IRInsn*)0)
+                    continue;
+                bb.insns().set(i, (Object*)r);
+                defIn.set((Hashable*)r.res(), (Object*)r);
+                }
+            if (_vcDead.count() == (u32)0)
+                continue;
+            Array* keep = new Array();
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                bool dead = false;
+                for (u32 k = (u32)0; k < _vcDead.count() && !dead; k = k + (u32)1)
+                    dead = (IRInsn*)_vcDead.get(k) == n;
+                if (!dead)
+                    keep.add((Object*)n);
+                }
+            bb.insns().removeAll();
+            for (u32 i = (u32)0; i < keep.count(); i = i + (u32)1)
+                bb.insns().add(keep.get(i));
             }
         }
 
@@ -17216,6 +17561,8 @@ class OptProfile
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
             // A dispatch clone carries its own vector width.
             _vecFnBytes = fn.simdLaneBytes();
+            // The recognisers read it too (vecPoolFor), not only the appliers.
+            _vecFn = fn;
             _vecRemainders = new Map();
             u32 iter = (u32)0;
             while (iter < (u32)256)
@@ -17279,7 +17626,11 @@ class OptProfile
                     }
                 break;
                 }
-            // …then break the serial accumulator dependency.
+            // …then break the serial accumulator dependency. The bit selects
+            // and rotates first (where the back end has them), so the
+            // interleave's register estimate sees the body the back end will.
+            if (_profile.bitSelect())
+                vecCombineFn(fn);
             vecUnrollReductions(fn);
             }
         }
@@ -18757,7 +19108,70 @@ class OptProfile
         // would be `acc += k` — a scaled count, not a lane-wise reduction.
         if (!hasValue(elems, elemOp.val()))
             return (String*)0;
+        // A big body must fit the vector registers: the back ends do not
+        // spill a vector, and running out is a build error.
+        if (B.insns().count() > (u32)VEC_SPLAT_BIG_BODY && !vecScalarBodyFits(B, elems, vecPoolFor(_vecFn)))
+            return (String*)0;
         return laneTy;
+        }
+
+    // Would B's vector form fit the back end's pool? An upper bound, on the
+    // scalar body: each per-lane value (elems) is a vector from its definition
+    // to its last use, each splatted operand of a per-lane op holds one more
+    // for that op, and the accumulator and the lane-index vector are live
+    // throughout. No register reuse is credited. It is NOT an upper bound of
+    // the back end's own count (values the allocator holds across the loop
+    // are not all seen here), so it keeps a margin of three: a 14-register
+    // function whose MD5-like body counted 14 overflowed. As the reference's
+    // vecScalarBodyFits.
+    bool vecScalarBodyFits(IRBlock* B, Array* elems, u32 pool)
+        {
+        Map* isElem = new Map();
+        for (u32 i = (u32)0; i < elems.count(); i = i + (u32)1)
+            isElem.set((Hashable*)elems.get(i), elems.get(i));
+        u32 n = B.insns().count();
+        Map* lastUse = new Map();
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            {
+            IRInsn* insn = (IRInsn*)B.insns().get(i);
+            for (u32 k = (u32)0; k < insn.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)insn.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                    lastUse.set((Hashable*)o.val(), (Object*)Number.with(i));
+                }
+            }
+        u32 live = (u32)2;
+        u32 peak = live;
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            {
+            IRInsn* insn = (IRInsn*)B.insns().get(i);
+            if (insn.res() == (IRValue*)0 || isElem.get((Hashable*)insn.res()) == (Object*)0)
+                continue;
+            u32 splats = (u32)0;
+            for (u32 k = (u32)0; k < insn.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)insn.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0 || isElem.get((Hashable*)o.val()) == (Object*)0)
+                    splats = splats + (u32)1;
+                }
+            if (live + (u32)1 + splats > peak)
+                peak = live + (u32)1 + splats;
+            live = live + (u32)1;
+            for (u32 k = (u32)0; k < insn.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)insn.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0 || isElem.get((Hashable*)o.val()) == (Object*)0)
+                    continue;
+                Object* lu = lastUse.get((Hashable*)o.val());
+                if (lu != (Object*)0 && ((Number*)lu).asU32() == i)
+                    {
+                    lastUse.set((Hashable*)o.val(), (Object*)Number.with(n));
+                    live = live - (u32)1;
+                    }
+                }
+            }
+        return peak + (u32)3 <= pool;
         }
 
     bool vecRedux32(String* t)
@@ -20859,25 +21273,251 @@ class OptProfile
     // built: any other bound is one this pass does not understand, and
     // rewriting it would change the loop's trip count. EXTRACTED for the arm64
     // frame budget -- inline, vecUnrollAt needed 20032 bytes against 16384.
-    u32 vecWidenRuntimeMask(IRInsn* guard, Map* defOf, u32 vw)
+    // The vector registers the back end has for fn: 14 (arm64 v18-v31, x86
+    // xmm/ymm 2-15), or 22 on arm64 in a function with no float scalars, where
+    // the FP allocator's homes v8-v15 are free (the arm64 back end then takes
+    // them). As the reference's vecPoolFor.
+    u32 vecPoolFor(IRFunc* fn)
+        {
+        if (!_profile.bitSelect())
+            return (u32)14;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 part = (u32)0; part < (u32)2; part = part + (u32)1)
+                {
+                Array* list = part == (u32)0 ? bb.phis() : bb.insns();
+                for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
+                    {
+                    IRInsn* n = (IRInsn*)list.get(i);
+                    if (n.res() != (IRValue*)0 && vcFloatTy(n.res().ty()))
+                        return (u32)14;
+                    for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                        {
+                        IROperand* o = (IROperand*)n.ops().get(k);
+                        if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && vcFloatTy(o.val().ty()))
+                            return (u32)14;
+                        }
+                    }
+                }
+            }
+        return (u32)22;
+        }
+
+    bool vcFloatTy(String* t)
+        {
+        return t != (String*)0 && (t.equals(String.withCString("F32")) || t.equals(String.withCString("F64")));
+        }
+
+    bool vcVecTy(String* t)
+        {
+        return t != (String*)0 && t.hasPrefix(String.withCString("Vec("));
+        }
+
+    // In a big body, a lane vector built from a scalar, `VAdd(VSplat(x), t)`
+    // with t from outside the body (the iota: `<i, i+1, i+2, i+3>`), is
+    // rebuilt next to each later use instead of held: two cheap ops against a
+    // register for the whole body (MD5's candidate word, read in four
+    // rounds). As the reference's vecRematLanes.
+    void vecRematLanes(IRFunc* fn, IRBlock* B, Map* defBlk)
+        {
+        Map* defIn = new Map();
+        Map* usesIn = new Map();
+        countUses(usesIn, B.insns());
+        Map* usesAll = useCounts(fn);
+        Array* out = new Array();
+        Map* lane = new Map();
+        Map* seen = new Map();
+        for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)B.insns().get(i);
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)n.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                    continue;
+                IRInsn* va = (IRInsn*)lane.get((Hashable*)o.val());
+                if (va == (IRInsn*)0)
+                    continue;
+                if (seen.get((Hashable*)o.val()) == (Object*)0)
+                    {
+                    seen.set((Hashable*)o.val(), (Object*)o.val());
+                    continue;
+                    }
+                // A later use: a fresh splat and add, just before it.
+                IROperand* v0 = (IROperand*)va.ops().get((u32)0);
+                IROperand* v1 = (IROperand*)va.ops().get((u32)1);
+                IRInsn* sp = (IRInsn*)defIn.get((Hashable*)v0.val());
+                u32 ti = sp != (IRInsn*)0 ? (u32)1 : (u32)0;
+                if (sp == (IRInsn*)0)
+                    sp = (IRInsn*)defIn.get((Hashable*)v1.val());
+                IRValue* s2 = new IRValue(sp.res().ty());
+                IRInsn* sn = IRInsn.with(String.withCString("VSplat"));
+                sn.copyDbg(n);
+                sn.setRes(s2);
+                for (u32 q = (u32)0; q < sp.ops().count(); q = q + (u32)1)
+                    sn.add((IROperand*)sp.ops().get(q));
+                out.add((Object*)sn);
+                IRValue* a2 = new IRValue(va.res().ty());
+                IRInsn* an = IRInsn.with(String.withCString("VAdd"));
+                an.copyDbg(n);
+                an.setRes(a2);
+                if (ti == (u32)1)
+                    {
+                    an.add(IROperand.useVal(s2));
+                    an.add(v1);
+                    }
+                else
+                    {
+                    an.add(v0);
+                    an.add(IROperand.useVal(s2));
+                    }
+                out.add((Object*)an);
+                n.ops().set(k, (Object*)IROperand.useVal(a2));
+                }
+            out.add((Object*)n);
+            if (n.res() != (IRValue*)0)
+                defIn.set((Hashable*)n.res(), (Object*)n);
+            // Is this such a lane vector? VAdd of a single-use in-body VSplat
+            // and an outside value, read only in B, more than once.
+            if (n.op().equals(String.withCString("VAdd")) && n.res() != (IRValue*)0 && n.ops().count() == (u32)2
+                && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE
+                && ((IROperand*)n.ops().get((u32)1)).kind() == (u8)OPK_USE
+                && countOf(usesIn, n.res()) > (u32)1 && countOf(usesIn, n.res()) == countOf(usesAll, n.res()))
+                {
+                for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+                    {
+                    IRInsn* sp = (IRInsn*)defIn.get((Hashable*)((IROperand*)n.ops().get(k)).val());
+                    IROperand* t = (IROperand*)n.ops().get((u32)1 - k);
+                    if (sp != (IRInsn*)0 && sp.op().equals(String.withCString("VSplat"))
+                        && countOf(usesAll, sp.res()) == (u32)1
+                        && defIn.get((Hashable*)t.val()) == (Object*)0
+                        && (IRBlock*)defBlk.get((Hashable*)t.val()) != B)
+                        {
+                        lane.set((Hashable*)n.res(), (Object*)n);
+                        break;
+                        }
+                    }
+                }
+            }
+        B.insns().removeAll();
+        for (u32 i = (u32)0; i < out.count(); i = i + (u32)1)
+            B.insns().add(out.get(i));
+        }
+
+    // Would two interleaved copies of B's vector work fit the back end's pool?
+    // A sweep of B in order: each vector value B defines is live from its
+    // definition to its last use in B, twice over when it depends on the iv
+    // (its clone stands next to it); the two accumulators, and every vector B
+    // reads from outside (a preheader splat, the iota load), are live
+    // throughout. A VAdd takes the register of an operand that dies at it
+    // (the back ends' reuse); anything else needs its own while its operands
+    // live. The back ends do not spill a vector and an overflow is a build
+    // error, so this is an upper bound. As the reference's vecInterleaveFits.
+    bool vecInterleaveFits(IRFunc* fn, IRBlock* B, IRValue* vacc, IRValue* iv, IRInsn* ivNextInsn, u32 pool)
+        {
+        u32 n = B.insns().count();
+        Map* dep = new Map();
+        dep.set((Hashable*)iv, (Object*)iv);
+        dep.set((Hashable*)vacc, (Object*)vacc);
+        Map* inB = new Map();
+        Map* lastUse = new Map();
+        Map* outside = new Map();
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            {
+            IRInsn* insn = (IRInsn*)B.insns().get(i);
+            if (insn == ivNextInsn)
+                continue;
+            bool d = false;
+            for (u32 k = (u32)0; k < insn.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)insn.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                    continue;
+                lastUse.set((Hashable*)o.val(), (Object*)Number.with(i));
+                if (dep.get((Hashable*)o.val()) != (Object*)0)
+                    d = true;
+                if (vcVecTy(o.val().ty()) && o.val() != vacc && inB.get((Hashable*)o.val()) == (Object*)0)
+                    outside.set((Hashable*)o.val(), (Object*)o.val());
+                }
+            if (insn.res() != (IRValue*)0)
+                {
+                inB.set((Hashable*)insn.res(), (Object*)insn.res());
+                if (d)
+                    dep.set((Hashable*)insn.res(), (Object*)insn.res());
+                }
+            }
+        u32 live = (u32)2;
+        u32 peak = live;
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            {
+            IRInsn* insn = (IRInsn*)B.insns().get(i);
+            if (insn == ivNextInsn)
+                continue;
+            u32 dying = (u32)0;
+            for (u32 k = (u32)0; k < insn.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)insn.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0 || o.val() == vacc
+                    || inB.get((Hashable*)o.val()) == (Object*)0)
+                    continue;
+                Object* lu = lastUse.get((Hashable*)o.val());
+                if (!vcVecTy(o.val().ty()) || lu == (Object*)0 || ((Number*)lu).asU32() != i)
+                    continue;
+                lastUse.set((Hashable*)o.val(), (Object*)Number.with(n));
+                dying = dying + (dep.get((Hashable*)o.val()) != (Object*)0 ? (u32)2 : (u32)1);
+                }
+            bool vecDef = insn.res() != (IRValue*)0 && vcVecTy(insn.res().ty());
+            u32 born = vecDef ? (dep.get((Hashable*)insn.res()) != (Object*)0 ? (u32)2 : (u32)1) : (u32)0;
+            if (insn.op().equals(String.withCString("VAdd")) && dying > (u32)0)
+                {
+                live = live + born - dying;
+                if (live > peak)
+                    peak = live;
+                }
+            else
+                {
+                live = live + born;
+                if (live > peak)
+                    peak = live;
+                live = live - dying;
+                }
+            }
+        return peak + outside.count() <= pool;
+        }
+
+    // The vectoriser's runtime limit mask `n & ~(vw-1)`, the guard's bound
+    // or, for a loop from a start s (a par block's run over [lo, hi)), under
+    // the Add of `((n - s) & ~(vw-1)) + s`: widening it keeps the trip from s
+    // a whole number of U vectors. Null for any other bound.
+    IRInsn* vecRuntimeMask(IRInsn* guard, Map* defOf, u32 vw)
         {
         IROperand* gb = (IROperand*)guard.ops().get((u32)1);
         if (gb.kind() != (u8)OPK_USE)
-            return (u32)1;
+            return (IRInsn*)0;
         Object* mo = defOf.get((Hashable*)gb.val());
         if (mo == (Object*)0)
-            return (u32)1;
+            return (IRInsn*)0;
         IRInsn* mask = (IRInsn*)mo;
+        if (mask.op().equals(String.withCString("Add")) && mask.ops().count() == (u32)2)
+            {
+            IROperand* a0 = (IROperand*)mask.ops().get((u32)0);
+            IROperand* a1 = (IROperand*)mask.ops().get((u32)1);
+            IRInsn* m0 = a0.kind() == (u8)OPK_USE ? (IRInsn*)defOf.get((Hashable*)a0.val()) : (IRInsn*)0;
+            IRInsn* m1 = a1.kind() == (u8)OPK_USE ? (IRInsn*)defOf.get((Hashable*)a1.val()) : (IRInsn*)0;
+            if (m0 != (IRInsn*)0 && m0.op().equals(String.withCString("And")))
+                mask = m0;
+            else if (m1 != (IRInsn*)0 && m1.op().equals(String.withCString("And")))
+                mask = m1;
+            }
         if (!mask.op().equals(String.withCString("And")) || mask.ops().count() < (u32)2)
-            return (u32)1;
+            return (IRInsn*)0;
         IROperand* mi = (IROperand*)mask.ops().get((u32)1);
         if (mi.kind() != (u8)OPK_IMMI)
-            return (u32)1;
+            return (IRInsn*)0;
         if (mi.imm() != (i64) ~((i32)vw - (i32)1))
-            return (u32)1;
-        mask.ops().set((u32)1,
-                       (Object*)IROperand.immI((i64) ~((i32)((u32)4 * vw) - (i32)1), mask.res().ty()));
-        return (u32)4;
+            return (IRInsn*)0;
+        return mask;
         }
 
     void vecUnrollAt(IRFunc* fn, IRBlock* H)
@@ -20951,10 +21591,12 @@ class OptProfile
         IRBlock* E = (B == t0) ? t1 : t0;
         if (E == (IRBlock*)0)
             return;
-        // A large body (MD5's rounds) has parallelism of its own: four
-        // copies would only hold four sets of its values at once.
-        if (B.insns().count() > (u32)VEC_SPLAT_BIG_BODY)
-            return;
+        // A large body (MD5's rounds) gets two copies, not four, and those
+        // INTERLEAVED (each clone straight after its original): the body is
+        // one long dependency chain, and the second copy's is independent, so
+        // the core runs both at once. Only where the two copies' vectors fit
+        // the back end's pool (vecInterleaveFits); four would hold four sets.
+        bool bigBody = B.insns().count() > (u32)VEC_SPLAT_BIG_BODY;
 
         // vnext = Vop(vacc, X) and ivNext = Add(iv, vw), both in the body.
         IROperand* vnextOp = vecBackOp(vaccPhi, B);
@@ -21013,24 +21655,37 @@ class OptProfile
         u32 U = (u32)1;
         if (constN)
             {
-            U = (n % ((i64)4 * (i64)vw)) == (i64)0 ? (u32)4
+            U = (!bigBody && (n % ((i64)4 * (i64)vw)) == (i64)0) ? (u32)4
                                               : ((n % ((i64)2 * (i64)vw)) == (i64)0 ? (u32)2 : (u32)1);
             }
         else
             {
-            U = vecWidenRuntimeMask(guard, defOf, vw);
+            IRInsn* mask = vecRuntimeMask(guard, defOf, vw);
+            if (mask == (IRInsn*)0)
+                return;
+            U = bigBody ? (u32)2 : (u32)4;
+            if (bigBody)
+                vecRematLanes(fn, B, defBlk);
+            if (bigBody && !vecInterleaveFits(fn, B, vacc, iv, ivNextInsn, vecPoolFor(fn)))
+                return;
+            mask.ops().set((u32)1,
+                           (Object*)IROperand.immI((i64) ~((i32)(U * vw) - (i32)1), mask.res().ty()));
             }
         if (U < (u32)2)
             return;
+        if (bigBody && constN)
+            vecRematLanes(fn, B, defBlk);
+        if (bigBody && constN && !vecInterleaveFits(fn, B, vacc, iv, ivNextInsn, vecPoolFor(fn)))
+            return;
 
         vecUnrollApply(fn, H, B, E, PH, iv, vacc, vecTy, ivNextInsn, vnextInsn,
-                       initInsn, vw, U);
+                       initInsn, vw, U, bigBody);
         }
 
     void vecUnrollApply(IRFunc* fn, IRBlock* H, IRBlock* B, IRBlock* E, IRBlock* PH,
                         IRValue* iv, IRValue* vacc, String* vecTy,
                         IRInsn* ivNextInsn, IRInsn* vnextInsn, IRInsn* initInsn,
-                        i32 vw, u32 U)
+                        i32 vw, u32 U, bool bigBody)
         {
         String* ivTy = ivNextInsn.res().ty();
 
@@ -21071,7 +21726,7 @@ class OptProfile
                           ivDep, appended, newPhis, accs);
 
         vecUnrollSplice(fn, H, B, E, iv, vacc, vecTy, ivNextInsn, vnextInsn,
-                        ivTy, vw, U, appended, newPhis, accs);
+                        ivTy, vw, U, appended, newPhis, accs, bigBody ? ivDep : (Array*)0);
         }
 
     // One extra accumulator: its zeroed init in the preheader, its own iv offset,
@@ -21136,14 +21791,37 @@ class OptProfile
     void vecUnrollSplice(IRFunc* fn, IRBlock* H, IRBlock* B, IRBlock* E,
                          IRValue* iv, IRValue* vacc, String* vecTy,
                          IRInsn* ivNextInsn, IRInsn* vnextInsn, String* ivTy,
-                         i32 vw, u32 U, Array* appended, Array* newPhis, Array* accs)
+                         i32 vw, u32 U, Array* appended, Array* newPhis, Array* accs,
+                         Array* interleave)
         {
         // The clones go at the END of the body, after copy 0's whole chain, so
         // the loop-invariant values copy 0 computes mid-body are defined before
         // the clones that share them. The iv step is order-independent — it
-        // reads only the phi.
-        for (u32 i = (u32)0; i < appended.count(); i = i + (u32)1)
-            B.insns().add(appended.get(i));
+        // reads only the phi. A big body's (U = 2, `interleave` its iv chain)
+        // go each straight after its original instead: the shared values an
+        // original reads come before it, so before its clone too.
+        if (interleave != (Array*)0)
+            {
+            Array* il = new Array();
+            il.add(appended.get((u32)0));
+            for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)B.insns().get(i);
+                il.add((Object*)n);
+                for (u32 j = (u32)0; j < interleave.count(); j = j + (u32)1)
+                    if ((IRInsn*)interleave.get(j) == n)
+                        {
+                        il.add(appended.get(j + (u32)1));
+                        break;
+                        }
+                }
+            B.insns().removeAll();
+            for (u32 i = (u32)0; i < il.count(); i = i + (u32)1)
+                B.insns().add(il.get(i));
+            }
+        else
+            for (u32 i = (u32)0; i < appended.count(); i = i + (u32)1)
+                B.insns().add(appended.get(i));
         for (u32 j = (u32)0; j < ivNextInsn.ops().count(); j = j + (u32)1)
             {
             IROperand* o = (IROperand*)ivNextInsn.ops().get(j);

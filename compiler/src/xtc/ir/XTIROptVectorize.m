@@ -1,4 +1,5 @@
 #import "XTIROptVectorize.h"
+#import "XTIROptVecCombine.h"
 
 // ── THE LIMIT, AND THE WAY OUT (not yet implemented) ─────────────────────
 //
@@ -177,6 +178,12 @@ static BOOL xtvMagicU32(uint64_t d, uint64_t* Mout, int* sout)
     *sout = p - W;
     return YES;
     }
+
+static BOOL vecScalarBodyFits(XTIRBlock* B, NSSet<NSNumber*>* elemIds, NSUInteger pool);
+static NSUInteger vecPoolFor(XTIRFunction* fn, XTIROptTargetProfile* prof);
+static void vecRematLanes(XTIRFunction* fn, XTIRBlock* B, NSDictionary<NSNumber*, XTIRBlock*>* defBlk);
+static BOOL vecInterleaveFits(XTIRFunction* fn, XTIRBlock* B, XTIRValueId vaccId, XTIRValueId ivId,
+                              XTIRInsn* ivNextInsn, NSUInteger pool);
 
 static BOOL elementwiseArith(XTIROpcode op)
     {
@@ -921,6 +928,10 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
     // with several independent accumulators (clang-style), so the OoO core
     // overlaps the add/max chains. Profile-gated; XTVEC_NOUNROLL disables.
     XTIROptTargetProfile* prof = self.profile ?: [XTIROptTargetProfile conservativeProfile];
+    // The bit selects and rotates first (where the back end has them), so the
+    // interleave's register estimate sees the body the back end will.
+    if (prof.vectorizesBitSelect)
+        [[[XTIROptVecCombine alloc] init] runOnFunction:fn];
     if (prof.vectorizesLoops && !getenv("XTVEC_NOUNROLL"))
         [self unrollVectorReductionsInFunction:fn];
     }
@@ -2410,6 +2421,11 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         // not a loop-invariant (that would be `acc += k`, a scaled count, not a
         // lane-wise reduction).
         if (![elemIds containsObject:@(elemOp.valueId)])
+            continue;
+        // A big body must fit the vector registers: the back ends do not spill
+        // a vector, and running out is a build error.
+        if (B.instructions.count > XTIR_VEC_SPLAT_BIG_BODY &&
+            !vecScalarBodyFits(B, elemIds, vecPoolFor(fn, self.profile ?: [XTIROptTargetProfile conservativeProfile])))
             continue;
         // The accumulator lane type must match the loads (i32/u32 add, or f32
         // in a float reduction).
@@ -4373,10 +4389,12 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         XTIRBlock* E = (B == t0) ? t1 : t0;
         if (!B || !E)
             continue;
-        // A large body (MD5's rounds) has parallelism of its own: four copies
-        // would only hold four sets of its values at once.
-        if (B.instructions.count > XTIR_VEC_SPLAT_BIG_BODY)
-            continue;
+        // A large body (MD5's rounds) gets two copies, not four, and those
+        // INTERLEAVED (each clone straight after its original): the body is
+        // one long dependency chain, and the second copy's is independent, so
+        // the core runs both at once. Only where the two copies' vectors fit
+        // the back end's pool (vecInterleaveFits); four would hold four sets.
+        BOOL bigBody = B.instructions.count > XTIR_VEC_SPLAT_BIG_BODY;
 
         // vnext = vacc back-edge: Vop(vacc, X); ivNext = Add(iv, vw); both in B.
         XTIROperand* vnextOp = (vaccPhi.operands[0].blockRef == B) ? vaccPhi.operands[1] : vaccPhi.operands[3];
@@ -4418,7 +4436,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         NSInteger U;
         if (constN)
             {
-            U = (N % (4 * vw) == 0) ? 4 : (N % (2 * vw) == 0 ? 2 : 1);
+            U = (!bigBody && N % (4 * vw) == 0) ? 4 : (N % (2 * vw) == 0 ? 2 : 1);
             }
         else
             {
@@ -4436,19 +4454,39 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
             XTIRInsn* mask = (guard.operands[1].kind == XTIROperandKindUse)
                                  ? defOf[@(guard.operands[1].valueId)]
                                  : nil;
+            // A loop from a start s (a par block's run over [lo, hi)) has the
+            // limit `((n - s) & ~(vw-1)) + s`: the mask is under the Add, and
+            // widening it keeps the trip from s a whole number of U vectors.
+            if (mask && mask.opcode == XTIROpAdd && mask.operands.count == 2)
+                {
+                XTIRInsn* m0 = mask.operands[0].kind == XTIROperandKindUse ? defOf[@(mask.operands[0].valueId)] : nil;
+                XTIRInsn* m1 = mask.operands[1].kind == XTIROperandKindUse ? defOf[@(mask.operands[1].valueId)] : nil;
+                if (m0 && m0.opcode == XTIROpAnd)
+                    mask = m0;
+                else if (m1 && m1.opcode == XTIROpAnd)
+                    mask = m1;
+                }
             if (!mask || mask.opcode != XTIROpAnd || mask.operands.count < 2)
                 continue;
             if (mask.operands[1].kind != XTIROperandKindImmI)
                 continue;
             if (mask.operands[1].intValue != ~((int64_t)vw - 1))
                 continue;
-            U = 4;
+            U = bigBody ? 2 : 4;
+            if (bigBody)
+                vecRematLanes(fn, B, defBlk);
+            if (bigBody && !vecInterleaveFits(fn, B, vaccId, ivId, ivNextInsn, vecPoolFor(fn, self.profile ?: [XTIROptTargetProfile conservativeProfile])))
+                continue;
             NSMutableArray<XTIROperand*>* mops = [mask.operands mutableCopy];
             mops[1] = [XTIROperand immIWithType:mask.result.type
                                           value:~((int64_t)(U * vw) - 1)];
             [mask replaceOperands:mops];
             }
         if (U < 2)
+            continue;
+        if (bigBody && constN)
+            vecRematLanes(fn, B, defBlk);
+        if (bigBody && constN && !vecInterleaveFits(fn, B, vaccId, ivId, ivNextInsn, vecPoolFor(fn, self.profile ?: [XTIROptTargetProfile conservativeProfile])))
             continue;
 
         XTIRValue* (^newVal)(XTIRType*) = ^XTIRValue*(XTIRType* ty) {
@@ -4542,8 +4580,26 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         // Append the clones at the END of B (after copy-0's full chain), so the
         // loop-invariant values copy-0 computes mid-body (e.g. the count splats)
         // are defined before the clones that share them. The iv step is also in
-        // B but order-independent (it reads only the iv phi).
-        [B.instructions addObjectsFromArray:appended];
+        // B but order-independent (it reads only the iv phi). A big body's
+        // (U = 2) go each straight after its original instead: the shared
+        // values an original reads come before it, so before its clone too.
+        if (bigBody)
+            {
+            NSMutableDictionary<NSValue*, XTIRInsn*>* cloneOf = [NSMutableDictionary dictionary];
+            for (NSUInteger j = 0; j < ivDep.count; j++)
+                cloneOf[[NSValue valueWithNonretainedObject:ivDep[j]]] = appended[j + 1];
+            NSMutableArray<XTIRInsn*>* il = [NSMutableArray arrayWithObject:appended[0]];
+            for (XTIRInsn* insn in B.instructions)
+                {
+                [il addObject:insn];
+                XTIRInsn* cl = cloneOf[[NSValue valueWithNonretainedObject:insn]];
+                if (cl)
+                    [il addObject:cl];
+                }
+            [B.instructions setArray:il];
+            }
+        else
+            [B.instructions addObjectsFromArray:appended];
         NSMutableArray<XTIROperand*>* ivOps = [ivNextInsn.operands mutableCopy];
         for (NSUInteger j = 0; j < ivOps.count; j++)
             if (ivOps[j].kind == XTIROperandKindImmI || (ivOps[j].kind == XTIROperandKindUse && ivOps[j].valueId != ivId))
@@ -4591,6 +4647,246 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                 }
             }
         }
+    }
+
+// The vector registers the back end has for fn: 14 (arm64 v18-v31, x86
+// xmm/ymm 2-15), or 22 on arm64 in a function with no float scalars, where the
+// FP allocator's homes v8-v15 are free (the arm64 back end then takes them).
+static NSUInteger vecPoolFor(XTIRFunction* fn, XTIROptTargetProfile* prof)
+    {
+    if (!prof.vectorizesBitSelect)
+        return 14;
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:bb.phiNodes];
+        [all addObjectsFromArray:bb.instructions];
+        for (XTIRInsn* insn in all)
+            {
+            if (insn.result && XTIRTypeKindIsFloating(insn.result.type.kind))
+                return 14;
+            for (XTIROperand* o in insn.operands)
+                {
+                XTIRValue* ov = o.kind == XTIROperandKindUse ? [fn valueForId:o.valueId] : nil;
+                if (ov && XTIRTypeKindIsFloating(ov.type.kind))
+                    return 14;
+                }
+            }
+        }
+    return 22;
+    }
+
+// In a big body, a lane vector built from a scalar, `VAdd(VSplat(x), t)` with
+// t from outside the body (the iota: `<i, i+1, i+2, i+3>`), is rebuilt next to
+// each later use instead of held: two cheap ops against a register for the
+// whole body (MD5's candidate word, read in four rounds).
+static void vecRematLanes(XTIRFunction* fn, XTIRBlock* B, NSDictionary<NSNumber*, XTIRBlock*>* defBlk)
+    {
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* defIn = [NSMutableDictionary dictionary];
+    NSCountedSet<NSNumber*>* usesIn = [NSCountedSet set];
+    for (XTIRInsn* insn in B.instructions)
+        for (XTIROperand* o in insn.operands)
+            if (o.kind == XTIROperandKindUse)
+                [usesIn addObject:@(o.valueId)];
+    NSCountedSet<NSNumber*>* usesAll = [NSCountedSet set];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:bb.phiNodes];
+        [all addObjectsFromArray:bb.instructions];
+        if (bb.terminator)
+            [all addObject:bb.terminator];
+        for (XTIRInsn* insn in all)
+            for (XTIROperand* o in insn.operands)
+                if (o.kind == XTIROperandKindUse)
+                    [usesAll addObject:@(o.valueId)];
+        }
+    NSMutableArray<XTIRInsn*>* out = [NSMutableArray array];
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* lane = [NSMutableDictionary dictionary]; // value → its VAdd
+    NSMutableSet<NSNumber*>* seen = [NSMutableSet set];
+    for (XTIRInsn* insn in B.instructions)
+        {
+        NSMutableArray<XTIROperand*>* ops = nil;
+        for (NSUInteger k = 0; k < insn.operands.count; k++)
+            {
+            XTIROperand* o = insn.operands[k];
+            if (o.kind != XTIROperandKindUse)
+                continue;
+            XTIRInsn* va = lane[@(o.valueId)];
+            if (!va)
+                continue;
+            if (![seen containsObject:@(o.valueId)])
+                {
+                [seen addObject:@(o.valueId)];
+                continue;
+                }
+            // A later use: a fresh splat and add, just before it.
+            XTIRInsn* sp = defIn[@(va.operands[0].valueId)];
+            NSUInteger ti = sp ? 1 : 0;
+            if (!sp)
+                sp = defIn[@(va.operands[1].valueId)];
+            XTIRValue* s2 = [[XTIRValue alloc] initWithValueId:[fn allocateValueId] type:sp.result.type
+                                                       defSite:[[XTIRDefSite alloc] initWithBlock:B insnIndex:0]];
+            [fn registerValue:s2];
+            [out addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVSplat result:s2 operands:sp.operands dbgLoc:insn.dbgLoc]];
+            XTIRValue* a2 = [[XTIRValue alloc] initWithValueId:[fn allocateValueId] type:va.result.type
+                                                       defSite:[[XTIRDefSite alloc] initWithBlock:B insnIndex:0]];
+            [fn registerValue:a2];
+            NSArray<XTIROperand*>* aops = ti == 1 ? @[ [XTIROperand useWithValueId:s2.valueId], va.operands[1] ]
+                                                  : @[ va.operands[0], [XTIROperand useWithValueId:s2.valueId] ];
+            [out addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVAdd result:a2 operands:aops dbgLoc:insn.dbgLoc]];
+            if (!ops)
+                ops = [insn.operands mutableCopy];
+            ops[k] = [XTIROperand useWithValueId:a2.valueId];
+            }
+        if (ops)
+            [insn replaceOperands:ops];
+        [out addObject:insn];
+        if (insn.result)
+            defIn[@(insn.result.valueId)] = insn;
+        // Is this such a lane vector? VAdd of a single-use in-body VSplat and
+        // an outside value, read only in B, more than once.
+        if (insn.opcode == XTIROpVAdd && insn.result && insn.operands.count == 2 &&
+            insn.operands[0].kind == XTIROperandKindUse && insn.operands[1].kind == XTIROperandKindUse &&
+            [usesIn countForObject:@(insn.result.valueId)] > 1 &&
+            [usesIn countForObject:@(insn.result.valueId)] == [usesAll countForObject:@(insn.result.valueId)])
+            {
+            for (NSUInteger k = 0; k < 2; k++)
+                {
+                XTIRInsn* sp = defIn[@(insn.operands[k].valueId)];
+                XTIROperand* t = insn.operands[1 - k];
+                if (sp && sp.opcode == XTIROpVSplat && [usesAll countForObject:@(sp.result.valueId)] == 1 &&
+                    !defIn[@(t.valueId)] && defBlk[@(t.valueId)] != B)
+                    {
+                    lane[@(insn.result.valueId)] = insn;
+                    break;
+                    }
+                }
+            }
+        }
+    [B.instructions setArray:out];
+    }
+
+// Would B's vector form fit the back end's pool? An upper bound, on the scalar
+// body: each per-lane value (elemIds) is a vector from its definition to its
+// last use, each splatted operand of a per-lane op holds one more for that op,
+// and the accumulator and the lane-index vector are live throughout. No
+// register reuse is credited. It is NOT an upper bound of the back end's own
+// count (values the allocator holds across the loop are not all seen here), so
+// it keeps a margin of three: a 14-register function whose MD5-like body
+// counted 14 overflowed. As the port's vecScalarBodyFits.
+static BOOL vecScalarBodyFits(XTIRBlock* B, NSSet<NSNumber*>* elemIds, NSUInteger pool)
+    {
+    NSUInteger n = B.instructions.count;
+    NSMutableDictionary<NSNumber*, NSNumber*>* lastUse = [NSMutableDictionary dictionary];
+    for (NSUInteger i = 0; i < n; i++)
+        for (XTIROperand* o in B.instructions[i].operands)
+            if (o.kind == XTIROperandKindUse)
+                lastUse[@(o.valueId)] = @(i);
+    NSUInteger live = 2;
+    NSUInteger peak = live;
+    for (NSUInteger i = 0; i < n; i++)
+        {
+        XTIRInsn* insn = B.instructions[i];
+        if (!insn.result || ![elemIds containsObject:@(insn.result.valueId)])
+            continue;
+        NSUInteger splats = 0;
+        for (XTIROperand* o in insn.operands)
+            if (o.kind != XTIROperandKindUse || ![elemIds containsObject:@(o.valueId)])
+                splats++;
+        if (live + 1 + splats > peak)
+            peak = live + 1 + splats;
+        live++;
+        for (XTIROperand* o in insn.operands)
+            {
+            if (o.kind != XTIROperandKindUse || ![elemIds containsObject:@(o.valueId)])
+                continue;
+            if (lastUse[@(o.valueId)].unsignedIntegerValue == i)
+                {
+                lastUse[@(o.valueId)] = @(n);
+                live--;
+                }
+            }
+        }
+    return peak + 3 <= pool;
+    }
+
+// Would two interleaved copies of B's vector work fit the back end's pool?
+// A sweep of B in order: each vector value B defines is live from its
+// definition to its last use in B, twice over when it depends on the iv (its
+// clone stands next to it); the two accumulators, and every vector B reads
+// from outside (a preheader splat, the iota load), are live throughout. The
+// peak must leave a margin in the 14 registers the back ends have (arm64
+// v18-v31, x86 xmm/ymm 2-15): they do not spill a vector, and an overflow is a
+// build error. As the port's vecInterleaveFits.
+static BOOL vecInterleaveFits(XTIRFunction* fn, XTIRBlock* B, XTIRValueId vaccId, XTIRValueId ivId,
+                              XTIRInsn* ivNextInsn, NSUInteger pool)
+    {
+    NSUInteger n = B.instructions.count;
+    NSMutableSet<NSNumber*>* dep = [NSMutableSet setWithObjects:@(ivId), @(vaccId), nil];
+    NSMutableSet<NSNumber*>* inB = [NSMutableSet set];
+    NSMutableDictionary<NSNumber*, NSNumber*>* lastUse = [NSMutableDictionary dictionary];
+    NSMutableSet<NSNumber*>* outside = [NSMutableSet set];
+    for (NSUInteger i = 0; i < n; i++)
+        {
+        XTIRInsn* insn = B.instructions[i];
+        if (insn == ivNextInsn)
+            continue;
+        BOOL d = NO;
+        for (XTIROperand* o in insn.operands)
+            {
+            if (o.kind != XTIROperandKindUse)
+                continue;
+            lastUse[@(o.valueId)] = @(i);
+            if ([dep containsObject:@(o.valueId)])
+                d = YES;
+            XTIRValue* v = [fn valueForId:o.valueId];
+            if (v && v.type.kind == XTIRTypeKindVec && o.valueId != vaccId && ![inB containsObject:@(o.valueId)])
+                [outside addObject:@(o.valueId)];
+            }
+        if (insn.result)
+            {
+            [inB addObject:@(insn.result.valueId)];
+            if (d)
+                [dep addObject:@(insn.result.valueId)];
+            }
+        }
+    NSUInteger live = 2;
+    NSUInteger peak = live;
+    for (NSUInteger i = 0; i < n; i++)
+        {
+        XTIRInsn* insn = B.instructions[i];
+        if (insn == ivNextInsn)
+            continue;
+        // What dies here: B's vectors read for the last time (counted once).
+        NSUInteger dying = 0;
+        for (XTIROperand* o in insn.operands)
+            {
+            if (o.kind != XTIROperandKindUse || o.valueId == vaccId || ![inB containsObject:@(o.valueId)])
+                continue;
+            XTIRValue* v = [fn valueForId:o.valueId];
+            if (!v || v.type.kind != XTIRTypeKindVec || lastUse[@(o.valueId)].unsignedIntegerValue != i)
+                continue;
+            lastUse[@(o.valueId)] = @(n);
+            dying += [dep containsObject:@(o.valueId)] ? 2 : 1;
+            }
+        BOOL vecDef = insn.result && insn.result.type.kind == XTIRTypeKindVec;
+        NSUInteger born = vecDef ? ([dep containsObject:@(insn.result.valueId)] ? 2 : 1) : 0;
+        // A VAdd takes the register of an operand that dies at it (the back
+        // ends' reuse); anything else needs its own while its operands live.
+        if (insn.opcode == XTIROpVAdd && dying > 0)
+            {
+            live = live + born - dying;
+            if (live > peak)
+                peak = live;
+            }
+        else
+            {
+            live += born;
+            if (live > peak)
+                peak = live;
+            live -= dying;
+            }
+        }
+    return peak + outside.count <= pool;
     }
 
 // ── Widening sum reduction (u8/u16 → u32) ────────────────────────────────

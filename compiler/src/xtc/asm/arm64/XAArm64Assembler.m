@@ -829,7 +829,10 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
                      @"saba":@0x0E207C00u,@"uaba":@0x2E207C00u,@"sabd":@0x0E207400u,@"uabd":@0x2E207400u};
             // logical 3-same — no size field (arrangement must be 8b/16b):
             logic3 = @{@"and":@0x0E201C00u,@"bic":@0x0E601C00u,@"orr":@0x0EA01C00u,
-                       @"orn":@0x0EE01C00u,@"eor":@0x2E201C00u};
+                       @"orn":@0x0EE01C00u,@"eor":@0x2E201C00u,
+                       // bitwise select: bsl takes the mask in Vd, bit/bif in
+                       // Vm (insert Vn's bits where the mask is set / clear).
+                       @"bsl":@0x2E601C00u,@"bit":@0x2EA01C00u,@"bif":@0x2EE01C00u};
             // float 3-same — 1-bit sz at bit22 (0 for .2s/.4s, 1 for .2d):
             float3 = @{@"fadd":@0x0E20D400u,@"fsub":@0x0EA0D400u,@"fmul":@0x2E20DC00u,@"fdiv":@0x2E20FC00u,
                        @"fmla":@0x0E20CC00u,@"fmls":@0x0EA0CC00u,@"fmax":@0x0E20F400u,@"fmin":@0x0EA0F400u,
@@ -872,7 +875,8 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
             // shift right by immediate. immh:immb holds (2*esize - shift), so
             // the encoded field GROWS as the shift shrinks, and a shift of 0 is
             // not encodable at all — callers emit a move instead.
-            shrimm = @{@"ushr":@0x2F000400u, @"sshr":@0x0F000400u};
+            // usra: shift right and accumulate into Vd (a rotate's second half).
+            shrimm = @{@"ushr":@0x2F000400u, @"sshr":@0x0F000400u, @"usra":@0x2F001400u};
         });
         int vd,vs,vq,vn2,vm2,t;
         BOOL op0vec = ops.count>=1 && parseVReg(ops[0],&vd,&vs,&vq);
@@ -881,6 +885,9 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
             BOOL w,sp; if(!parseReg(ops[1],&rn,&w,&sp)){if(error)*error=asmErr(@"bad dup src");return 0;}
             return 0x0E000C00u | ((uint32_t)vq<<30) | ((1u<<vs)<<16) | ((uint32_t)rn<<5) | (uint32_t)vd;
         }
+        // mov Vd.T, Vn.T: the alias of orr Vd.T, Vn.T, Vn.T.
+        if (op0vec && [mn isEqualToString:@"mov"] && ops.count==2 && parseVReg(ops[1],&vn2,&t,&t) && t == vq)
+            return 0x0EA01C00u | ((uint32_t)vq<<30) | ((uint32_t)vn2<<16) | ((uint32_t)vn2<<5) | (uint32_t)vd;
         NSNumber *b;
         if (op0vec && (b=int3[mn]) && ops.count==3 && parseVReg(ops[1],&vn2,&t,&t) && parseVReg(ops[2],&vm2,&t,&t))
             return b.unsignedIntValue | ((uint32_t)vq<<30) | ((uint32_t)vs<<22) | ((uint32_t)vm2<<16) | ((uint32_t)vn2<<5) | (uint32_t)vd;
@@ -935,8 +942,9 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
                  | ((uint32_t)(2*esize - (int)sh)<<16) | ((uint32_t)vn2<<5) | (uint32_t)vd;
         }
         // shift left by immediate: immh:immb holds (esize + shift), shift
-        // 0 .. esize - 1.
-        if (op0vec && [mn isEqualToString:@"shl"] && ops.count==3) {
+        // 0 .. esize - 1. sli (shift left and insert, keeping Vd's low bits)
+        // has the same field with U set.
+        if (op0vec && ([mn isEqualToString:@"shl"] || [mn isEqualToString:@"sli"]) && ops.count==3) {
             int ss, sq;
             int64_t sh;
             if (!parseVReg(ops[1],&vn2,&ss,&sq) || !parseImm(ops[2],&sh)) {
@@ -952,7 +960,8 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
                 if (error) *error = asmErr(@"shl shift %lld out of range 0..%d", (long long)sh, esize - 1);
                 return 0;
             }
-            return 0x0F005400u | ((uint32_t)vq<<30) | ((uint32_t)(esize + (int)sh)<<16)
+            uint32_t base = [mn isEqualToString:@"sli"] ? 0x2F005400u : 0x0F005400u;
+            return base | ((uint32_t)vq<<30) | ((uint32_t)(esize + (int)sh)<<16)
                  | ((uint32_t)vn2<<5) | (uint32_t)vd;
         }
         if (op0vec && (b=pairlp[mn]) && ops.count==2) {

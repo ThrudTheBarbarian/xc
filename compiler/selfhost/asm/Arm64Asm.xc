@@ -1055,8 +1055,9 @@ class Arm64Asm
                      | (n.num() << (u32)5) | d.num();
             }
             // Shift left by immediate: immh:immb holds (esize + shift), shift
-            // 0 .. esize - 1.
-            if (mn.equals(String.withCString("shl"))) {
+            // 0 .. esize - 1. sli (shift left and insert, keeping Vd's low
+            // bits) has the same field with U set.
+            if (mn.equals(String.withCString("shl")) || mn.equals(String.withCString("sli"))) {
                 VRegRef* n = parseVReg(opAt(ops, (u32)1));
                 if (!n.ok() || n.size() != d.size() || n.q() != d.q()) {
                     fail(String.withCString("shift-left arrangements disagree"));
@@ -1071,12 +1072,18 @@ class Arm64Asm
                     return (u32)0;
                 }
                 _hit = true;
-                return (u32)$0F005400 | (d.q() << (u32)30) | ((esize + amt) << (u32)16)
+                u32 base = mn.equals(String.withCString("sli")) ? (u32)$2F005400 : (u32)$0F005400;
+                return base | (d.q() << (u32)30) | ((esize + amt) << (u32)16)
                      | (n.num() << (u32)5) | d.num();
             }
         }
         if (d.ok() && ops.count() == (u32)2) {
             VRegRef* n = parseVReg(opAt(ops, (u32)1));
+            // mov Vd.T, Vn.T: the alias of orr Vd.T, Vn.T, Vn.T.
+            if (n.ok() && mn.equals(String.withCString("mov")) && n.q() == d.q()) {
+                _hit = true;
+                return (u32)$0EA01C00 | (d.q() << (u32)30) | (n.num() << (u32)16) | (n.num() << (u32)5) | d.num();
+            }
             if (n.ok()) {
                 u32 bp = neonPairLong(mn);
                 if (bp != (u32)0) {
@@ -1759,6 +1766,11 @@ class Arm64Asm
         if (m.equals(String.withCString("orr"))) return (u32)$0EA01C00;
         if (m.equals(String.withCString("orn"))) return (u32)$0EE01C00;
         if (m.equals(String.withCString("eor"))) return (u32)$2E201C00;
+        // Bitwise select: bsl takes the mask in Vd, bit/bif in Vm (insert
+        // Vn's bits where the mask is set / clear).
+        if (m.equals(String.withCString("bsl"))) return (u32)$2E601C00;
+        if (m.equals(String.withCString("bit"))) return (u32)$2EA01C00;
+        if (m.equals(String.withCString("bif"))) return (u32)$2EE01C00;
         return (u32)0;
     }
 
@@ -1854,6 +1866,8 @@ class Arm64Asm
     {
         if (m.equals(String.withCString("ushr"))) return (u32)$2F000400;
         if (m.equals(String.withCString("sshr"))) return (u32)$0F000400;
+        // Shift right and accumulate into Vd (a rotate's second half).
+        if (m.equals(String.withCString("usra"))) return (u32)$2F001400;
         return (u32)0;
     }
 

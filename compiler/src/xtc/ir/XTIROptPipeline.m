@@ -23,6 +23,7 @@
 #import "XTIROptAggExpand.h"
 #import "XTIROptMem2Reg.h"
 #import "XTIROptSimplify.h"
+#import "XTIROptVecCombine.h"
 #import "XTIROptBlockLayout.h"
 #import "XTIROptLoopRotate.h"
 #import "XTIROptBlockMerge.h"
@@ -215,6 +216,9 @@
         XTIROptVectorize* vectorize = [[XTIROptVectorize alloc] init];
         vectorize.profile = profile;
         [p addPass:vectorize];
+        XTIROptVecCombine* vecCombine = [[XTIROptVecCombine alloc] init];
+        vecCombine.profile = profile;
+        [p addPass:vecCombine];
         XTIROptSimdClone* simdPrune = [[XTIROptSimdClone alloc] init];
         simdPrune.profile = profile;
         simdPrune.prune = YES;
@@ -280,6 +284,10 @@
         XTIROptNarrowIV* narrowIV = [[XTIROptNarrowIV alloc] init];
         narrowIV.profile = profile;
         [p addPass:narrowIV];
+        XTIROptVecCombine* vecPool = [[XTIROptVecCombine alloc] init];
+        vecPool.profile = profile;
+        vecPool.pool = YES;
+        [p addPass:vecPool];
         // Final sweep: drop pure instructions orphaned by inlining and the
         // value-rewriting passes above (e.g. an inlined nullary call's
         // unused receiver AddrOf).

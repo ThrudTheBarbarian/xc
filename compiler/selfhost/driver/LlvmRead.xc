@@ -1257,10 +1257,25 @@ class LlvmReader
             String* t = irOf(llType());
             IRValue* a = operand(t);
             eat(",");
+            // `xor x, -1` is C's ~x (LLVM has no not): read as xc's Not, so the
+            // vectoriser's not and the bit selects built from it apply.
+            ws();
+            bool allOnes = false;
+            if (bin.equals(String.withCString("Xor")) && _p + (u32)2 <= _s.byteLength()
+                && _s.byteAt(_p) == (u8)'-' && _s.byteAt(_p + (u32)1) == (u8)'1')
+                {
+                u8 nx = _p + (u32)2 < _s.byteLength() ? _s.byteAt(_p + (u32)2) : (u8)0;
+                allOnes = !(nx >= (u8)'0' && nx <= (u8)'9');
+                }
             IRValue* b = operand(t);
             if (t == (String*)0 || a == (IRValue*)0 || b == (IRValue*)0)
                 {
                 fail("an arithmetic instruction not read");
+                return;
+                }
+            if (allOnes)
+                {
+                define(res, String.withCString("Not"), t, IROperand.useVal(a), (IROperand*)0, (IROperand*)0, (String*)0);
                 return;
                 }
             // a + (-b) is a - b (clang writes x*x - y*y as an fmuladd or an

@@ -54,6 +54,8 @@ class Arm64
     String*   _out;
     Map*      _slot;            // value -> byte offset in the frame
     Map*      _defOf;           // value -> the instruction that defines it
+    Map*      _defSeq;          // value -> its place in definition order (1, 2, ...)
+    Map*      _vecCalleeUsed;   // "d8".."d15" the vector allocator took (float-free functions)
     Map*      _useCount;        // value -> how many operands read it
     Map*      _foldedAddr;      // values whose def is folded away (never emitted)
     Map*      _foldInfo;        // a Load/Store's pointer -> the addr insn to inline
@@ -810,6 +812,16 @@ class Arm64
         // [base, base+16380] covers the top of the frame and the setup stays a
         // single `add x28, sp, #N, lsl #12`. It joins _savedRegs, so the save
         // area sizes itself and every epilogue restores it.
+        // The vector allocator's v8-v15 (a function with no float scalars):
+        // their d halves are callee-saved. After every GP and FP home, so the
+        // order (GP, then d8..d15) is the one homing sorts to; before x28.
+        // Here rather than in homing, which returns early for some functions
+        // (inline asm). As the reference.
+        for (u32 r = (u32)8; r <= (u32)15; r = r + (u32)1) {
+            String* d = String.withFormat("d%u", r);
+            if (_vecCalleeUsed.get((Hashable*)d) != (Object*)0 && !hasStr(_savedRegs, d))
+                _savedRegs.add((Object*)d);
+        }
         _frameBase = (u32)0;
         if (_frame > (u32)16380) {
             u32 base = ((_frame - (u32)16380 + (u32)4095) / (u32)4096) * (u32)4096;
@@ -3529,6 +3541,8 @@ class Arm64
         if (op.equals(String.withCString("VLShr"))) { emitVLShr(n); return true; }
         if (op.equals(String.withCString("VShl"))) { emitVShl(n); return true; }
         if (op.equals(String.withCString("VNot"))) { emitVNot(n); return true; }
+        if (op.equals(String.withCString("VBsl"))) { emitVBsl(n); return true; }
+        if (op.equals(String.withCString("VRotl"))) { emitVRotl(n); return true; }
         if (op.equals(String.withCString("VExtract"))) { emitVExtract(n); return true; }
         if (op.equals(String.withCString("VICmp")))  { emitVICmp(n);  return true; }
         if (op.equals(String.withCString("VReduceAdd")) || op.equals(String.withCString("VReduceMax"))
@@ -3769,6 +3783,76 @@ class Arm64
             _out.appendFormat("    shl v%lu.%s, v%lu.%s, #%lld\n", d, arr.cString(), a, arr.cString(), sh);
     }
 
+    // A lane rotate left by c: shl then usra (the right shift ADDED in, which
+    // is an or, the two halves' bits being disjoint). Into the source's own
+    // register it is built in v16 (emission scratch) with ushr then sli.
+    void emitVRotl(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)2 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+        if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_IMMI) { unsupported(n.op()); return; }
+        String* arr = neonArr(laneOf(n.res().ty()));
+        u32 a = vecIndex(o0.val());
+        u32 d = vecIndex(n.res());
+        i64 c = o1.imm();
+        i64 w = (i64)(width(o1.ty()) * (u32)8);
+        if (d != a) {
+            _out.appendFormat("    shl v%lu.%s, v%lu.%s, #%lld\n", d, arr.cString(), a, arr.cString(), c);
+            _out.appendFormat("    usra v%lu.%s, v%lu.%s, #%lld\n", d, arr.cString(), a, arr.cString(), w - c);
+        } else {
+            _out.appendFormat("    ushr v16.%s, v%lu.%s, #%lld\n", arr.cString(), a, arr.cString(), w - c);
+            _out.appendFormat("    sli v16.%s, v%lu.%s, #%lld\n", arr.cString(), a, arr.cString(), c);
+            _out.appendFormat("    mov v%lu.16b, v16.16b\n", d);
+        }
+    }
+
+    u32 defSeqOf(IRValue* v)
+    {
+        Object* o = _defSeq.get((Hashable*)v);
+        return o == (Object*)0 ? (u32)0 : ((Number*)o).asU32();
+    }
+
+    // A bitwise select, (m & a) | (~m & b): bsl when the result's register is
+    // the mask's, bit when it is b's, bif when it is a's. Otherwise the input
+    // defined EARLIEST is copied in and the matching form takes the other two
+    // straight from their registers: the one computed last (MD5's F has its
+    // mask from the round before) is then one instruction from the result,
+    // not two.
+    void emitVBsl(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)3 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        IROperand* om = (IROperand*)n.ops().get((u32)0);
+        IROperand* oa = (IROperand*)n.ops().get((u32)1);
+        IROperand* ob = (IROperand*)n.ops().get((u32)2);
+        if (om.kind() != (u8)OPK_USE || oa.kind() != (u8)OPK_USE || ob.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
+        u32 m = vecIndex(om.val());
+        u32 a = vecIndex(oa.val());
+        u32 b = vecIndex(ob.val());
+        u32 d = vecIndex(n.res());
+        if (d == m)
+            _out.appendFormat("    bsl v%lu.16b, v%lu.16b, v%lu.16b\n", d, a, b);
+        else if (d == b)
+            _out.appendFormat("    bit v%lu.16b, v%lu.16b, v%lu.16b\n", d, a, m);
+        else if (d == a)
+            _out.appendFormat("    bif v%lu.16b, v%lu.16b, v%lu.16b\n", d, b, m);
+        else {
+            u32 sm = defSeqOf(om.val());
+            u32 sa = defSeqOf(oa.val());
+            u32 sb = defSeqOf(ob.val());
+            if (sb < sm && sb <= sa) {
+                _out.appendFormat("    mov v%lu.16b, v%lu.16b\n", d, b);
+                _out.appendFormat("    bit v%lu.16b, v%lu.16b, v%lu.16b\n", d, a, m);
+            } else if (sa < sm && sa < sb) {
+                _out.appendFormat("    mov v%lu.16b, v%lu.16b\n", d, a);
+                _out.appendFormat("    bif v%lu.16b, v%lu.16b, v%lu.16b\n", d, b, m);
+            } else {
+                _out.appendFormat("    mov v%lu.16b, v%lu.16b\n", d, m);
+                _out.appendFormat("    bsl v%lu.16b, v%lu.16b, v%lu.16b\n", d, a, b);
+            }
+        }
+    }
+
     // One 32-bit float lane of a vector, as a scalar (an ordered float sum's
     // lanes). Lane 0 is the vector register's own s view; lane k is shifted
     // down by `ext` into v16 (emission scratch) and read from s16.
@@ -3883,6 +3967,7 @@ class Arm64
     // function mixing float scalars with an integer reduction cannot alias.
     void allocateVectorRegisters(IRFunc* fn)
     {
+        _vecCalleeUsed = new Map();
         _vecReg = new Map();
         _vecClass = new Map();
         Array* vecVals = new Array();
@@ -4007,6 +4092,14 @@ class Arm64
         // since no two values are defined at the same position.
         sortByStart(classes, lo);
         Array* freePool = new Array();
+        // A function with no float scalars leaves the FP allocator's homes
+        // (d8-d15) unused, so the vector pool takes v8-v15 too: at the bottom
+        // of the stack, used only once v18-v31 are all live, so a function
+        // that fits in 14 is allocated exactly as before. Their d halves are
+        // callee-saved (_vecCalleeUsed, added to _savedRegs with the frame).
+        if (vecFpFree(fn))
+            for (u32 r = (u32)8; r <= (u32)15; r = r + (u32)1)
+                freePool.add((Object*)Number.with((i32)r));
         for (u32 r = (u32)18; r <= (u32)31; r = r + (u32)1)
             freePool.add((Object*)Number.with((i32)r));
         Array* active = new Array();
@@ -4041,6 +4134,11 @@ class Arm64
                 freePool.removeAt(freePool.count() - (u32)1);
             }
             regOf.set((Hashable*)cls, reg);
+            i32 rn = ((Number*)reg).asI32();
+            if (rn >= (i32)8 && rn <= (i32)15) {
+                String* dn = String.withFormat("d%ld", rn);
+                _vecCalleeUsed.set((Hashable*)dn, (Object*)dn);
+            }
             active.add((Object*)cls);
             sortByEnd(active, hi);
         }
@@ -4052,6 +4150,27 @@ class Arm64
             name.appendFormat("%ld", ((Number*)r).asI32());
             _vecReg.set((Hashable*)v, (Object*)name);
         }
+    }
+
+    // No float scalar anywhere in fn: no value of type F32/F64, defined or
+    // read. Then the FP allocator homes nothing and v8-v15 are the vectors'.
+    static bool vecFpFree(IRFunc* fn)
+    {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 part = (u32)0; part < (u32)2; part = part + (u32)1) {
+                Array* list = part == (u32)0 ? bb.phis() : bb.insns();
+                for (u32 i = (u32)0; i < list.count(); i = i + (u32)1) {
+                    IRInsn* n = (IRInsn*)list.get(i);
+                    if (n.res() != (IRValue*)0 && isFloatTy(n.res().ty())) return false;
+                    for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
+                        IROperand* o = (IROperand*)n.ops().get(k);
+                        if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && isFloatTy(o.val().ty())) return false;
+                    }
+                }
+            }
+        }
+        return true;
     }
 
     IRInsn* vecDefOf(IRFunc* fn, IRValue* v)
@@ -8683,6 +8802,7 @@ class Arm64
     void collectDefs(IRFunc* fn)
     {
         _defOf = new Map();
+        _defSeq = new Map();
         _useCount = new Map();
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
@@ -9022,7 +9142,10 @@ class Arm64
 
     void noteDef(IRInsn* n)
     {
-        if (n.res() != (IRValue*)0) _defOf.set((Hashable*)n.res(), (Object*)n);
+        if (n.res() != (IRValue*)0) {
+            _defOf.set((Hashable*)n.res(), (Object*)n);
+            _defSeq.set((Hashable*)n.res(), (Object*)Number.with(_defSeq.count() + (u32)1));
+        }
         for (u32 i = (u32)0; i < n.ops().count(); i = i + (u32)1) {
             IROperand* o = (IROperand*)n.ops().get(i);
             if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;

@@ -134,6 +134,10 @@
     {
     return NO;
     }
+- (BOOL)vectorizesBitSelect
+    {
+    return NO;
+    }
 - (BOOL)vectorizesIota
     {
     return NO;
@@ -284,6 +288,12 @@
     }
 // A lane is fmov'd out of its vector (ext first for lanes 1..3).
 - (BOOL)vectorizesOrderedFloat
+    {
+    return YES;
+    }
+// bsl/bit/bif and shl+usra. x86 would need AVX-512's vpternlogd/vprold for a
+// gain, and its AVX2 copies cannot use them.
+- (BOOL)vectorizesBitSelect
     {
     return YES;
     }
