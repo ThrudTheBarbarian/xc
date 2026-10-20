@@ -3867,12 +3867,11 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
             NSUInteger all = [uses countForObject:cv];
             if (allConds && all == inBlock && inBlock > 0)
                 [ctx.fusedCmps addObject:cv];               // selects only
-            else if (all == 1 && inBlock == 0 && cmp.opcode == XTIROpICmp)
+            else if (all == 1 && inBlock == 0)
                 [ctx.fusedCmps addObject:cv];               // the terminator's
-            // The terminator's path stays ICmp-only: it is written around integer
-            // compares (cbz/cbnz for a zero test, an inversion through
-            // negatePred), and an FCmp's float conditions do not survive that
-            // inversion. An FCmp fuses into a SELECT, where the flags are read
+            // A terminator's FCmp takes its own path in the CondBranch: no zero
+            // test, and its inverse by condition code (invertCond), not by
+            // negating the predicate. An FCmp fuses into a SELECT, where the flags are read
             // directly and none of it applies.
         }
     }
@@ -5393,6 +5392,32 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             if (c.kind == XTIROperandKindUse &&
                 [ctx.fusedCmps containsObject:@(c.valueId)]) {
                 XTIRInsn *icmp = ctx.defOf[@(c.valueId)];
+                // A float compare: `fcmp`, then the branch on its condition, the
+                // inverse (where needed) by condition code, which is exact for
+                // the unordered case too (mi/pl, ls/hi, gt/le, ge/lt).
+                if (icmp.opcode == XTIROpFCmp) {
+                    NSString *fc = [self emitCompareForFCmp:icmp ctx:ctx];
+                    if (takenPhiClobbersFallSrc(t.blockRef, f.blockRef, block)) {
+                        NSUInteger lbl = ctx.labelCounter++;
+                        NSString *Lf = [NSString stringWithFormat:@".Lpc_%lu", (unsigned long)lbl];
+                        [ctx.out appendFormat:@"    b.%@ %@\n", [self invertCond:fc], Lf];
+                        [self emitPhiCopiesFrom:block to:t.blockRef ctx:ctx];
+                        [ctx.out appendFormat:@"    b %@\n",
+                         [self blockLabelForFn:ctx.fn block:t.blockRef]];
+                        [ctx.out appendFormat:@"%@:\n", Lf];
+                        [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
+                        [ctx.out appendFormat:@"    b %@\n",
+                         [self blockLabelForFn:ctx.fn block:f.blockRef]];
+                        break;
+                    }
+                    [self emitPhiCopiesFrom:block to:t.blockRef ctx:ctx];
+                    [ctx.out appendFormat:@"    b.%@ %@\n", fc,
+                     [self blockLabelForFn:ctx.fn block:t.blockRef]];
+                    [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
+                    [ctx.out appendFormat:@"    b %@\n",
+                     [self blockLabelForFn:ctx.fn block:f.blockRef]];
+                    break;
+                }
                 // `x == 0` / `x != 0` (EQ/NE against an integer/pointer zero) →
                 // `cbz`/`cbnz reg, target` directly, eliding the `cmp #0` that
                 // gates the branch (the hot loop-control / null-check path). Only

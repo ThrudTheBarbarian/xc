@@ -6764,6 +6764,29 @@ class Arm64
         // right.
         if (c.kind() == (u8)OPK_USE && c.val() != (IRValue*)0 && inMap(_fusedCmps, c.val())) {
             IRInsn* icmp = (IRInsn*)_fusedCmps.get((Hashable*)c.val());
+            // A float compare: `fcmp`, then the branch on its condition, the
+            // inverse (where needed) by condition code, which is exact for
+            // the unordered case too (mi/pl, ls/hi, gt/le, ge/lt).
+            if (icmp.op().equals(String.withCString("FCmp"))) {
+                String* fc = emitCompareF(icmp);
+                if (takenPhiClobbersFallSrc(t, f, _bb)) {
+                    String* lf = String.withCString(".Lpc_");
+                    lf.appendFormat("%lu", _labelCounter);
+                    _labelCounter = _labelCounter + (u32)1;
+                    _out.appendFormat("    b.%s %s\n", invertCond(fc).cString(), lf.cString());
+                    emitPhiCopies(_bb, t);
+                    _out.appendFormat("    b %s\n", blockLabel(t).cString());
+                    _out.appendFormat("%s:\n", lf.cString());
+                    emitPhiCopies(_bb, f);
+                    _out.appendFormat("    b %s\n", blockLabel(f).cString());
+                    return;
+                }
+                emitPhiCopies(_bb, t);
+                _out.appendFormat("    b.%s %s\n", fc.cString(), blockLabel(t).cString());
+                emitPhiCopies(_bb, f);
+                _out.appendFormat("    b %s\n", blockLabel(f).cString());
+                return;
+            }
             // `x == 0` / `x != 0` becomes cbz/cbnz directly, eliding the cmp #0
             // that gates the branch — the hot loop-control and null-check path.
             // Only when NEITHER out-edge needs phi copies: cbz reads a register
@@ -9076,13 +9099,11 @@ class Arm64
                 u32 all = useCountOf(cv);
                 if (allConds && all == inBlock && inBlock > (u32)0)
                     _fusedCmps.set((Hashable*)cv, (Object*)cmp);        // selects only
-                else if (all == (u32)1 && inBlock == (u32)0 && cmp.op().equals(String.withCString("ICmp")))
+                else if (all == (u32)1 && inBlock == (u32)0)
                     _fusedCmps.set((Hashable*)cv, (Object*)cmp);        // the terminator's
-                // The terminator's path stays ICmp-only: it is written around
-                // integer compares (cbz/cbnz for a zero test, an inversion
-                // through negatePred), and an FCmp's float conditions do not
-                // survive that inversion. An FCmp fuses into a SELECT, where the
-                // flags are read directly and none of it applies.
+                // A terminator's FCmp takes its own path in emitCondBranch: no
+                // zero test, and its inverse by condition code (invertCond),
+                // not by negating the predicate.
             }
         }
 
