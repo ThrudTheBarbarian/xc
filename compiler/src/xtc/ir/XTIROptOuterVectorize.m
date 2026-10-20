@@ -204,6 +204,11 @@ static NSString* ovRoot(XTIRValueId v, NSDictionary<NSNumber*, XTIRInsn*>* defOf
         if ([[preds objectForKey:Bk] count] != 1 || [[preds objectForKey:Ek] count] != 1 ||
             pk.count != 2 || ![pk containsObject:Bj] || ![pk containsObject:Bk])
             continue;
+        // A large inner body (MD5's rounds) is left to the reduction
+        // vectoriser: the outer form holds the outer body's splats across it,
+        // and it needs the vector registers for its own values.
+        if (Bk.instructions.count > XTIR_VEC_SPLAT_BIG_BODY)
+            continue;
         if (Bk.phiNodes.count != 0 || Ek.phiNodes.count != 0)
             continue;
         NSArray<XTIRBlock*>* pj = [preds objectForKey:Hj];

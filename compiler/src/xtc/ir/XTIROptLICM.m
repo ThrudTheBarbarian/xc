@@ -229,6 +229,14 @@ static BOOL pureHoistable(XTIRInsn* insn)
             XTIRBlock* preheader = blocks[outside[0].unsignedIntegerValue];
 
             BOOL hasMemWrite = NO;
+            // A large loop keeps its vector splats where they are used:
+            // hoisted, each is a vector register held across a body that
+            // needs them for its own values (MD5's rounds; the vectoriser
+            // holds none there).
+            NSUInteger bodySize = 0;
+            for (NSNumber* bn in body)
+                bodySize += blocks[bn.unsignedIntegerValue].instructions.count;
+            BOOL keepSplats = bodySize > XTIR_VEC_SPLAT_BIG_BODY;
             for (NSNumber* bn in body)
                 {
                 for (XTIRInsn* insn in blocks[bn.unsignedIntegerValue].instructions)
@@ -295,6 +303,8 @@ static BOOL pureHoistable(XTIRInsn* insn)
                     for (XTIRInsn* insn in bb.instructions)
                         {
                         if ([hoistSet containsObject:insn] || !isHoistable(insn))
+                            continue;
+                        if (keepSplats && insn.opcode == XTIROpVSplat)
                             continue;
                         BOOL inv = YES;
                         for (XTIROperand* o in insn.operands)

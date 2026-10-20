@@ -401,9 +401,15 @@ static XTIRInsn* rebuiltInsn(XTIRInsn* insn, NSArray<XTIROperand*>* newOps)
                 [loadedValue addEntriesFromDictionary:outLoaded[ik]];
             }
 
+        // In a large block (a vectorised MD5 round loop) a splat is made at
+        // each use on purpose: merged, it would be one vector register held
+        // across the block.
+        BOOL keepSplats = bb.instructions.count > XTIR_VEC_SPLAT_BIG_BODY;
         for (XTIRInsn* insn in bb.instructions)
             {
             XTIROpcode op = insn.opcode;
+            if (keepSplats && op == XTIROpVSplat)
+                continue;
 
             // ── Pure-op CSE ──────────────────────────────────────────
             if (insn.result && !insn.memoryResult && isPureCSEable(op))

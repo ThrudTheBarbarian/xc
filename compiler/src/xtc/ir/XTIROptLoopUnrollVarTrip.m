@@ -678,6 +678,17 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
                         shareable = NO;
                         break;
                         }
+                // A splat of a value the body defines (a constant the
+                // vectoriser left in the body, past its hoisting budget) is
+                // made again in each copy: shared, it would be live across all
+                // of them, and MD5's rounds have dozens.
+                if (insn.opcode == XTIROpVSplat && insn.operands.count == 1 &&
+                    insn.operands[0].kind == XTIROperandKindUse && map[@(insn.operands[0].valueId)])
+                    shareable = NO;
+                // In a large body none is: each is a register the copies' own
+                // values need.
+                if (insn.opcode == XTIROpVSplat && B.instructions.count > XTIR_VEC_SPLAT_BIG_BODY)
+                    shareable = NO;
                 }
             if (shareable && sharedPure[@(insn.result.valueId)])
                 {

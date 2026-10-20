@@ -1054,6 +1054,26 @@ class Arm64Asm
                 return bs | (d.q() << (u32)30) | (((u32)2 * esize - amt) << (u32)16)
                      | (n.num() << (u32)5) | d.num();
             }
+            // Shift left by immediate: immh:immb holds (esize + shift), shift
+            // 0 .. esize - 1.
+            if (mn.equals(String.withCString("shl"))) {
+                VRegRef* n = parseVReg(opAt(ops, (u32)1));
+                if (!n.ok() || n.size() != d.size() || n.q() != d.q()) {
+                    fail(String.withCString("shift-left arrangements disagree"));
+                    return (u32)0;
+                }
+                U64* sh = parseImm(opAt(ops, (u32)2));
+                if (!_immOk) { fail(String.withCString("bad shift amount")); return (u32)0; }
+                u32 esize = (u32)8 << d.size();
+                u32 amt = sh.lo();
+                if (amt >= esize) {
+                    fail(String.withCString("shift-left amount out of range"));
+                    return (u32)0;
+                }
+                _hit = true;
+                return (u32)$0F005400 | (d.q() << (u32)30) | ((esize + amt) << (u32)16)
+                     | (n.num() << (u32)5) | d.num();
+            }
         }
         if (d.ok() && ops.count() == (u32)2) {
             VRegRef* n = parseVReg(opAt(ops, (u32)1));

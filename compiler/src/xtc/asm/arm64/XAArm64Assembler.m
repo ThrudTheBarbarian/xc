@@ -934,6 +934,27 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
             return b.unsignedIntValue | ((uint32_t)vq<<30)
                  | ((uint32_t)(2*esize - (int)sh)<<16) | ((uint32_t)vn2<<5) | (uint32_t)vd;
         }
+        // shift left by immediate: immh:immb holds (esize + shift), shift
+        // 0 .. esize - 1.
+        if (op0vec && [mn isEqualToString:@"shl"] && ops.count==3) {
+            int ss, sq;
+            int64_t sh;
+            if (!parseVReg(ops[1],&vn2,&ss,&sq) || !parseImm(ops[2],&sh)) {
+                if (error) *error = asmErr(@"bad shl operands");
+                return 0;
+            }
+            if (ss != vs || sq != vq) {
+                if (error) *error = asmErr(@"shl arrangements disagree");
+                return 0;
+            }
+            int esize = 8 << ss;
+            if (sh < 0 || sh >= esize) {
+                if (error) *error = asmErr(@"shl shift %lld out of range 0..%d", (long long)sh, esize - 1);
+                return 0;
+            }
+            return 0x0F005400u | ((uint32_t)vq<<30) | ((uint32_t)(esize + (int)sh)<<16)
+                 | ((uint32_t)vn2<<5) | (uint32_t)vd;
+        }
         if (op0vec && (b=pairlp[mn]) && ops.count==2) {
             int srcVs, srcQ;
             if (!parseVReg(ops[1],&vn2,&srcVs,&srcQ)) {

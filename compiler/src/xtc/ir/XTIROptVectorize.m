@@ -230,7 +230,7 @@ static BOOL vectorisableLane(XTIRTypeKind k)
            k == XTIRTypeKindI32 || k == XTIRTypeKindU32 || k == XTIRTypeKindF32;
     }
 
-static BOOL resolveConstInt(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>* defOf, int64_t* out)
+static BOOL resolveConstIntExt(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>* defOf, int64_t* out)
     {
     if (op.kind == XTIROperandKindImmI)
         {
@@ -248,8 +248,70 @@ static BOOL resolveConstInt(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>*
         return YES;
         }
     if (d.opcode == XTIROpZExt || d.opcode == XTIROpSExt || d.opcode == XTIROpTrunc)
-        return resolveConstInt(d.operands[0], defOf, out);
+        return resolveConstIntExt(d.operands[0], defOf, out);
     return NO;
+    }
+
+// A compile-time constant: a literal, a Const, an extension of one, or integer
+// arithmetic of constants (`32 - c`, which the front end leaves to the
+// optimiser: ROTL's shift amount). Folded only where every value involved is in
+// [0, 2^31), so that both compilers' widths agree.
+static BOOL resolveConstIntFold(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>* defOf, int64_t* out,
+                                unsigned depth)
+    {
+    int64_t k = 0;
+    if (resolveConstIntExt(op, defOf, &k))
+        {
+        *out = k;
+        return YES;
+        }
+    if (depth > 8 || op.kind != XTIROperandKindUse)
+        return NO;
+    XTIRInsn* d = defOf[@(op.valueId)];
+    if (!d || d.operands.count != 2)
+        return NO;
+    XTIROpcode o = d.opcode;
+    if (o != XTIROpAdd && o != XTIROpSub && o != XTIROpMul && o != XTIROpAnd && o != XTIROpOr &&
+        o != XTIROpXor && o != XTIROpShl && o != XTIROpLShr)
+        return NO;
+    int64_t a = 0, b = 0;
+    if (!resolveConstIntFold(d.operands[0], defOf, &a, depth + 1) ||
+        !resolveConstIntFold(d.operands[1], defOf, &b, depth + 1))
+        return NO;
+    const int64_t lim = 2147483647;
+    if (a < 0 || a > lim || b < 0 || b > lim)
+        return NO;
+    int64_t r = 0;
+    switch (o)
+        {
+    case XTIROpAdd: r = a + b; break;
+    case XTIROpSub: r = a - b; break;
+    case XTIROpMul: r = a * b; break;
+    case XTIROpAnd: r = a & b; break;
+    case XTIROpOr: r = a | b; break;
+    case XTIROpXor: r = a ^ b; break;
+    case XTIROpShl:
+        if (b > 30)
+            return NO;
+        r = a << b;
+        break;
+    default:
+        if (b > 30)
+            return NO;
+        r = a >> b;
+        break;
+        }
+    if (r < 0 || r > lim)
+        return NO;
+    *out = r;
+    return YES;
+    }
+
+// The folding form, where the port reads vecConst; a loop's bound is read
+// without folding (resolveConstIntExt) where the port reads vecConstWide.
+static BOOL resolveConstInt(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>* defOf, int64_t* out)
+    {
+    return resolveConstIntFold(op, defOf, out, 0);
     }
 
 - (BOOL)runOnModule:(XTIRModule*)mod
@@ -970,7 +1032,7 @@ static BOOL xtvIvStartConst(XTIRInsn* ivPhi, XTIRBlock* latch,
         // reduction: a runtime bound needs a strict `<` (with `i <= n` the trip
         // is n+1 and n & ~(vw-1) is wrong) and must be loop-invariant, which is
         // checked once the body block is known.
-        BOOL constBound = resolveConstInt(guard.operands[1], defOf, &N);
+        BOOL constBound = resolveConstIntExt(guard.operands[1], defOf, &N);
         BOOL runtimeTrip = NO;
         if (!constBound)
             {
@@ -1914,7 +1976,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         // constant path is left exactly as it was -- it has always assumed `<`
         // without checking, and tightening it here would alter accepted loops.
         int64_t N = 0;
-        BOOL constBound = resolveConstInt(guard.operands[1], defOf, &N);
+        BOOL constBound = resolveConstIntExt(guard.operands[1], defOf, &N);
         BOOL runtimeTrip = NO;
         if (!constBound)
             {
@@ -2177,6 +2239,51 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                 }
             if (op == XTIROpConst || op == XTIROpZExt || op == XTIROpSExt || op == XTIROpTrunc)
                 continue;
+            // A value computed from constants alone (`32 - c`): itself a
+            // constant, which its users read as one.
+            int64_t kq = 0;
+            if (insn.result && resolveConstInt([XTIROperand useWithValueId:insn.result.valueId], defOf, &kq))
+                continue;
+            // A shift LEFT by a compile-time amount, as the shift right below
+            // (a rotate is one of each: MD5's rounds), lowered as VShl.
+            if (op == XTIROpShl &&
+                (self.profile ?: [XTIROptTargetProfile conservativeProfile]).vectorizesLaneShift)
+                {
+                int64_t sh = 0;
+                if (insn.result &&
+                    (insn.result.type.kind == XTIRTypeKindI32 ||
+                     insn.result.type.kind == XTIRTypeKindU32) &&
+                    insn.operands.count >= 2 && elemOperandOK(insn.operands[0]) &&
+                    resolveConstInt(insn.operands[1], defOf, &sh) && sh >= 0 && sh < 32)
+                    {
+                    if (insn.operands[0].kind == XTIROperandKindUse &&
+                        insn.operands[0].valueId == ivId)
+                        usesIv = YES;
+                    [elemIds addObject:@(insn.result.valueId)];
+                    continue;
+                    }
+                ok = NO;
+                break;
+                }
+            // A bitwise not (one operand), lowered as VNot; gated with the
+            // shifts (the back ends that lower those lower this).
+            if (op == XTIROpNot &&
+                (self.profile ?: [XTIROptTargetProfile conservativeProfile]).vectorizesLaneShift)
+                {
+                if (insn.result &&
+                    (insn.result.type.kind == XTIRTypeKindI32 ||
+                     insn.result.type.kind == XTIRTypeKindU32) &&
+                    insn.operands.count >= 1 && elemOperandOK(insn.operands[0]))
+                    {
+                    if (insn.operands[0].kind == XTIROperandKindUse &&
+                        insn.operands[0].valueId == ivId)
+                        usesIv = YES;
+                    [elemIds addObject:@(insn.result.valueId)];
+                    continue;
+                    }
+                ok = NO;
+                break;
+                }
             // Unsigned division by a compile-time constant. There is no lane
             // divide; it becomes a magic multiply, which needs the HIGH half of
             // the lane product. Only the simple magic form is taken (see
@@ -2487,10 +2594,29 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     // A non-constant operand still splats in the body, where it is correct
     // whether or not it is invariant.
     NSMutableDictionary<NSNumber*, XTIRValue*>* phSplatCache = [NSMutableDictionary dictionary];
+    // A large body (MD5's 64 rounds) holds no constant splats in registers
+    // across the loop: it needs them for its own values. Past a few, neither
+    // does any other; and in a large one each use has its own splat.
+    BOOL splatBig = B.instructions.count > XTIR_VEC_SPLAT_BIG_BODY;
     XTIROperand* (^phSplat)(XTIROperand*, int64_t) = ^XTIROperand*(XTIROperand* op, int64_t kv) {
       NSNumber* key = @(kv);
       if (phSplatCache[key])
           return [XTIROperand useWithValueId:phSplatCache[key].valueId];
+      if (splatBig || phSplatCache.count >= XTIR_VEC_SPLAT_HOIST_MAX)
+          {
+          XTIRValue* bc = newVal(c.laneType);
+          [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                       result:bc
+                                                     operands:@[ [XTIROperand immIWithType:c.laneType
+                                                                                     value:kv] ]
+                                                       dbgLoc:nil]];
+          XTIRValue* bs = newVal(vecTy);
+          [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVSplat
+                                                       result:bs
+                                                     operands:@[ [XTIROperand useWithValueId:bc.valueId] ]
+                                                       dbgLoc:nil]];
+          return [XTIROperand useWithValueId:bs.valueId];
+          }
       XTIRValue* cst = newVal(c.laneType);
       [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
                                                            result:cst
@@ -2515,7 +2641,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
           int64_t kv;
           if (PH && resolveConstInt(op, defOf, &kv))
               return phSplat(op, kv);
-          XTIRValue* sp = splat[@(op.valueId)];
+          XTIRValue* sp = splatBig ? nil : splat[@(op.valueId)];
           if (!sp)
               {
               sp = newVal(vecTy);
@@ -2523,7 +2649,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                                                            result:sp
                                                          operands:@[ op ]
                                                            dbgLoc:nil]];
-              splat[@(op.valueId)] = sp;
+              if (!splatBig)
+                  splat[@(op.valueId)] = sp;
               }
           return [XTIROperand useWithValueId:sp.valueId];
           }
@@ -2604,6 +2731,15 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                                                        operands:@[ [XTIROperand useWithValueId:vacc.valueId], velem ]
                                                          dbgLoc:insn.dbgLoc]];
             vmap[@(insn.result.valueId)] = vnext; // accNext id → vector next
+            continue;
+            }
+        // A value computed from constants alone stays the scalar it is; its
+        // users read it as a constant.
+        int64_t kq = 0;
+        if (insn.result && insn.opcode != XTIROpAddrOf && insn.opcode != XTIROpElementAddr &&
+            resolveConstInt([XTIROperand useWithValueId:insn.result.valueId], defOf, &kq))
+            {
+            [newBody addObject:insn];
             continue;
             }
         switch (insn.opcode)
@@ -2707,6 +2843,39 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                                                        operands:@[ vx,
                                                                    [XTIROperand immIWithType:c.laneType
                                                                                        value:sh] ]
+                                                         dbgLoc:insn.dbgLoc]];
+            vmap[@(insn.result.valueId)] = vr;
+            break;
+            }
+        // Shift left by a constant: as the shift right, the amount an
+        // immediate.
+        case XTIROpShl:
+            {
+            int64_t sh = 0;
+            if (!resolveConstInt(insn.operands[1], defOf, &sh))
+                {
+                [newBody addObject:insn]; // recogniser and applier disagree
+                break;
+                }
+            XTIROperand* vx = vecOperand(insn.operands[0]);
+            XTIRValue* vr = newVal(vecTy);
+            [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVShl
+                                                         result:vr
+                                                       operands:@[ vx,
+                                                                   [XTIROperand immIWithType:c.laneType
+                                                                                       value:sh] ]
+                                                         dbgLoc:insn.dbgLoc]];
+            vmap[@(insn.result.valueId)] = vr;
+            break;
+            }
+        // A bitwise not: one operand.
+        case XTIROpNot:
+            {
+            XTIROperand* vx = vecOperand(insn.operands[0]);
+            XTIRValue* vr = newVal(vecTy);
+            [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVNot
+                                                         result:vr
+                                                       operands:@[ vx ]
                                                          dbgLoc:insn.dbgLoc]];
             vmap[@(insn.result.valueId)] = vr;
             break;
@@ -4136,7 +4305,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         // the vectoriser builds for a runtime trip count (#1136). Both are
         // unrollable; which one it is decides how U is chosen, below.
         int64_t N = 0;
-        BOOL constN = resolveConstInt(guard.operands[1], defOf, &N);
+        BOOL constN = resolveConstIntExt(guard.operands[1], defOf, &N);
         if (constN && N <= 0)
             continue;
 
@@ -4149,6 +4318,10 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         XTIRBlock* B = isLatch(t0) ? t0 : (isLatch(t1) ? t1 : nil);
         XTIRBlock* E = (B == t0) ? t1 : t0;
         if (!B || !E)
+            continue;
+        // A large body (MD5's rounds) has parallelism of its own: four copies
+        // would only hold four sets of its values at once.
+        if (B.instructions.count > XTIR_VEC_SPLAT_BIG_BODY)
             continue;
 
         // vnext = vacc back-edge: Vop(vacc, X); ivNext = Add(iv, vw); both in B.
@@ -4453,7 +4626,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         // A literal, or a RUNTIME bound. Accepted only when loop-INVARIANT
         // (checked below, once the body block is known) and the guard is a
         // strict `<`: with `i <= n` the trip is n+1 and n & ~(vw-1) is wrong.
-        BOOL constBound = resolveConstInt(guard.operands[1], defOf, &N);
+        BOOL constBound = resolveConstIntExt(guard.operands[1], defOf, &N);
         BOOL runtimeTrip = NO;
         if (!constBound)
             {
@@ -4762,7 +4935,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         // A literal, or a RUNTIME bound. Accepted only when loop-INVARIANT
         // (checked below, once the body block is known) and the guard is a
         // strict `<`: with `i <= n` the trip is n+1 and n & ~(vw-1) is wrong.
-        BOOL constBound = resolveConstInt(guard.operands[1], defOf, &N);
+        BOOL constBound = resolveConstIntExt(guard.operands[1], defOf, &N);
         BOOL runtimeTrip = NO;
         if (!constBound)
             {

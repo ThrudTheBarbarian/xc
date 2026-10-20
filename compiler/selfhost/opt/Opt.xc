@@ -42,6 +42,11 @@ bool gOptOutline;
 // escapes the outer loop, so the collapse is unsafe. Distinct from 0, which
 // means the accumulator itself is dead afterwards (nothing to rescale).
 #define LRC_LEAK $FFFFFFFF
+// The constant splats a vectorised loop holds in registers before it
+// splats the rest where they are used.
+#define VEC_SPLAT_HOIST_MAX 8
+// A loop body larger than this (instructions) hoists none.
+#define VEC_SPLAT_BIG_BODY 96
 
 // The per-target knobs. `XTIROptTargetProfile` is a conservative base with an
 // arm64/arm9 relaxation on top; only the knobs a ported pass actually consults
@@ -8868,9 +8873,15 @@ class OptProfile
 
     void cseInBlock(IRBlock* bb, Map* replace, Array* dead, Map* availPure, Map* loaded)
         {
+        // In a large block (a vectorised MD5 round loop) a splat is made at
+        // each use on purpose: merged, it would be one vector register held
+        // across the block.
+        bool keepSplats = bb.insns().count() > (u32)VEC_SPLAT_BIG_BODY;
         for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)bb.insns().get(i);
+            if (keepSplats && n.op().equals(String.withCString("VSplat")))
+                continue;
             if (n.res() != 0 && n.memRes() == 0 && isCSEable(n.op()))
                 {
                 String* key = pureKey(n, replace);
@@ -15582,6 +15593,18 @@ class OptProfile
             return false;
         if (!n.op().equals(String.withCString("VSplat")) && !n.op().equals(String.withCString("Const")) && !n.op().equals(String.withCString("ZExt")) && !n.op().equals(String.withCString("SExt")) && !n.op().equals(String.withCString("Trunc")))
             return false;
+        // A splat of a value the body defines (a constant the vectoriser left
+        // in the body, past its hoisting budget) is made again in each copy:
+        // shared, it would be live across all of them, and MD5's rounds have
+        // dozens.
+        if (n.op().equals(String.withCString("VSplat")) && n.ops().count() == (u32)1
+            && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE
+            && map.get((Hashable*)((IROperand*)n.ops().get((u32)0)).val()) != (Object*)0)
+            return false;
+        // In a large body none is: each is a register the copies' own values
+        // need.
+        if (n.op().equals(String.withCString("VSplat")) && c.b().insns().count() > (u32)VEC_SPLAT_BIG_BODY)
+            return false;
         for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
             {
             IROperand* o = (IROperand*)n.ops().get(k);
@@ -16360,6 +16383,11 @@ class OptProfile
             || !bmHas(pk, Bj) || !bmHas(pk, Bk))
             return false;
         if (Bk.phis().count() != (u32)0 || Ek.phis().count() != (u32)0)
+            return false;
+        // A large inner body (MD5's rounds) is left to the reduction
+        // vectoriser: the outer form holds the outer body's splats across
+        // it, and it needs the vector registers for its own values.
+        if (Bk.insns().count() > (u32)VEC_SPLAT_BIG_BODY)
             return false;
         Array* pj = ovPreds(fn, Hj);
         if (pj.count() != (u32)2 || !bmHas(pj, Ek))
@@ -18078,6 +18106,48 @@ class OptProfile
                 }
             if (op.equals(String.withCString("Const")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")))
                 continue;
+            // A value computed from constants alone (`32 - c`): itself a
+            // constant, which its users read as one.
+            i32 kq = (i32)0;
+            if (n.res() != (IRValue*)0 && vecConst(IROperand.useVal(n.res()), defOf, &kq))
+                continue;
+            // A shift LEFT by a compile-time amount, as the shift right below
+            // (a rotate is one of each: MD5's rounds), lowered as VShl.
+            if (op.equals(String.withCString("Shl")) && _profile.laneShift())
+                {
+                if (n.res() == (IRValue*)0 || !vecRedux32(n.res().ty()))
+                    return (String*)0;
+                if (n.ops().count() < (u32)2)
+                    return (String*)0;
+                if (!vecReduxOperandOK((IROperand*)n.ops().get((u32)0), elems, B, defOf, defBlk))
+                    return (String*)0;
+                i32 shl = (i32)0;
+                if (!vecConst((IROperand*)n.ops().get((u32)1), defOf, &shl))
+                    return (String*)0;
+                if (shl < (i32)0 || shl >= (i32)32)
+                    return (String*)0;
+                IROperand* l0 = (IROperand*)n.ops().get((u32)0);
+                if (l0.kind() == (u8)OPK_USE && l0.val() == iv)
+                    _vrUsesIv = true;
+                elems.add((Object*)n.res());
+                continue;
+                }
+            // A bitwise not (one operand), lowered as VNot; gated with the
+            // shifts (the back ends that lower those lower this).
+            if (op.equals(String.withCString("Not")) && _profile.laneShift())
+                {
+                if (n.res() == (IRValue*)0 || !vecRedux32(n.res().ty()))
+                    return (String*)0;
+                if (n.ops().count() < (u32)1)
+                    return (String*)0;
+                if (!vecReduxOperandOK((IROperand*)n.ops().get((u32)0), elems, B, defOf, defBlk))
+                    return (String*)0;
+                IROperand* n0 = (IROperand*)n.ops().get((u32)0);
+                if (n0.kind() == (u8)OPK_USE && n0.val() == iv)
+                    _vrUsesIv = true;
+                elems.add((Object*)n.res());
+                continue;
+                }
             // Unsigned division by a compile-time constant. There is no lane
             // divide; it becomes a magic multiply, which needs the HIGH half of
             // the lane product. Only the simple magic form is taken (see
@@ -18424,7 +18494,7 @@ class OptProfile
         return false;
         }
 
-    bool vecConst(IROperand* op, Map* defOf, i32* out)
+    bool vecConstExt(IROperand* op, Map* defOf, i32* out)
         {
         if (op.kind() == (u8)OPK_IMMI)
             {
@@ -18462,6 +18532,76 @@ class OptProfile
             cur = a.val();
             }
         return false;
+        }
+
+    // A compile-time constant: a literal, a Const, an extension of one, or
+    // integer arithmetic of constants (`32 - c`, which the front end leaves
+    // to the optimiser: ROTL's shift amount). Folded only where every value
+    // involved is in [0, 2^31), so that both compilers' widths agree.
+    bool vecConst(IROperand* op, Map* defOf, i32* out)
+        {
+        i64 v = (i64)0;
+        if (!vecFoldConst(op, defOf, (u32)0, &v))
+            return false;
+        out[0] = (i32)v;
+        return true;
+        }
+
+    bool vecFoldConst(IROperand* op, Map* defOf, u32 depth, i64* out)
+        {
+        i32 k = (i32)0;
+        if (vecConstExt(op, defOf, &k))
+            {
+            out[0] = (i64)k;
+            return true;
+            }
+        if (depth > (u32)8 || op.kind() != (u8)OPK_USE)
+            return false;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)op.val());
+        if (d == (IRInsn*)0 || d.ops().count() != (u32)2)
+            return false;
+        String* o = d.op();
+        bool add = o.equals(String.withCString("Add"));
+        bool sub = o.equals(String.withCString("Sub"));
+        bool mul = o.equals(String.withCString("Mul"));
+        bool band = o.equals(String.withCString("And"));
+        bool bor = o.equals(String.withCString("Or"));
+        bool bxor = o.equals(String.withCString("Xor"));
+        bool shl = o.equals(String.withCString("Shl"));
+        bool shr = o.equals(String.withCString("LShr"));
+        if (!add && !sub && !mul && !band && !bor && !bxor && !shl && !shr)
+            return false;
+        i64 a = (i64)0;
+        i64 b = (i64)0;
+        if (!vecFoldConst((IROperand*)d.ops().get((u32)0), defOf, depth + (u32)1, &a)
+            || !vecFoldConst((IROperand*)d.ops().get((u32)1), defOf, depth + (u32)1, &b))
+            return false;
+        i64 lim = (i64)2147483647;
+        if (a < (i64)0 || a > lim || b < (i64)0 || b > lim)
+            return false;
+        i64 r = (i64)0;
+        if (add) r = a + b;
+        else if (sub) r = a - b;
+        else if (mul) r = a * b;
+        else if (band) r = a & b;
+        else if (bor) r = a | b;
+        else if (bxor) r = a ^ b;
+        else if (shl)
+            {
+            if (b > (i64)30)
+                return false;
+            r = a << b;
+            }
+        else
+            {
+            if (b > (i64)30)
+                return false;
+            r = a >> b;
+            }
+        if (r < (i64)0 || r > lim)
+            return false;
+        out[0] = r;
+        return true;
         }
 
     // The vectorised body: loads become VLoad, stores VStore, elementwise
@@ -18508,6 +18648,7 @@ class OptProfile
         _vecTy = vecTyOf(c.laneTy(), c.vecBytes());
         _vecMap = new Map();
         _vecSplat = new Map();
+        _vecSplatBig = false;
         _vecEntryCache = new Map();
         _vecBody = new Array();
 
@@ -19755,6 +19896,7 @@ class OptProfile
         _vecBody = new Array();
         _vecMap = new Map();
         _vecSplat = new Map();
+        _vecSplatBig = false;
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
@@ -20300,6 +20442,10 @@ class OptProfile
             return;
         IRBlock* E = (B == t0) ? t1 : t0;
         if (E == (IRBlock*)0)
+            return;
+        // A large body (MD5's rounds) has parallelism of its own: four
+        // copies would only hold four sets of its values at once.
+        if (B.insns().count() > (u32)VEC_SPLAT_BIG_BODY)
             return;
 
         // vnext = Vop(vacc, X) and ivNext = Add(iv, vw), both in the body.
@@ -21188,6 +21334,7 @@ class OptProfile
         _vecTy = vecTyOf(c.laneTy(), c.vecBytes());
         _vecMap = new Map();
         _vecSplat = new Map();
+        _vecSplatBig = false;
         _vecBody = new Array();
         _vecH2 = (IRBlock*)0;
         _vecB2 = (IRBlock*)0;
@@ -21230,6 +21377,9 @@ class OptProfile
         _vecSplatPH = c.pre();
         _vecSplatK = new Map();
         _vecSplatTy = c.laneTy();
+        // A large body (MD5's 64 rounds) holds no constant splats in
+        // registers across the loop: it needs them for its own values.
+        _vecSplatBig = c.b().insns().count() > (u32)VEC_SPLAT_BIG_BODY;
         _vecSplatDefs = new Map();
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
@@ -21525,6 +21675,14 @@ class OptProfile
                 _vecBody.add((Object*)n);
                 continue;
                 }
+            // A value computed from constants alone stays the scalar it is;
+            // its users read it as a constant.
+            i32 kq = (i32)0;
+            if (n.res() != (IRValue*)0 && vecConst(IROperand.useVal(n.res()), _vecSplatDefs, &kq))
+                {
+                _vecBody.add((Object*)n);
+                continue;
+                }
             if (op.equals(String.withCString("Load")))
                 {
                 // Mirror the recogniser: a fully DEAD load is dropped, so a
@@ -21624,6 +21782,40 @@ class OptProfile
                 _vecMap.set((Hashable*)n.res(), (Object*)qv);
                 continue;
                 }
+            // Shift left by a constant: as the shift right, the amount an
+            // immediate.
+            if (op.equals(String.withCString("Shl")))
+                {
+                i32 shl = (i32)0;
+                if (!vecConst((IROperand*)n.ops().get((u32)1), _vecSplatDefs, &shl))
+                    {
+                    _vecBody.add((Object*)n); // recogniser and applier disagree
+                    continue;
+                    }
+                IROperand* lx = vecSplatOperand((IROperand*)n.ops().get((u32)0));
+                IRValue* lv = new IRValue(_vecTy);
+                IRInsn* sl = IRInsn.with(String.withCString("VShl"));
+                sl.copyDbg(n);
+                sl.setRes(lv);
+                sl.add(lx);
+                sl.add(IROperand.immI(shl, c.laneTy()));
+                _vecBody.add((Object*)sl);
+                _vecMap.set((Hashable*)n.res(), (Object*)lv);
+                continue;
+                }
+            // A bitwise not: one operand.
+            if (op.equals(String.withCString("Not")))
+                {
+                IROperand* nx = vecSplatOperand((IROperand*)n.ops().get((u32)0));
+                IRValue* nv = new IRValue(_vecTy);
+                IRInsn* vn = IRInsn.with(String.withCString("VNot"));
+                vn.copyDbg(n);
+                vn.setRes(nv);
+                vn.add(nx);
+                _vecBody.add((Object*)vn);
+                _vecMap.set((Hashable*)n.res(), (Object*)nv);
+                continue;
+                }
             // A lane square root (ONE operand) — the default below reads two.
             if (op.equals(String.withCString("FSqrt")))
                 {
@@ -21673,11 +21865,35 @@ class OptProfile
     // 7 every iteration — three instructions in int_muldiv's hot loop for a
     // constant. A non-constant operand still splats in the body, where it is
     // correct whether or not it is invariant.
+    bool _vecSplatBig;  // the body is too large to hold constant splats across it
+
     IROperand* vecSplatConst(i64 k)
         {
+        // An unsigned 32-bit lane's constant as the unsigned value it is (the
+        // reference's spelling: `#2654435761`, not `#-1640531535`); vecConst
+        // reads 32 bits signed.
+        if (k < (i64)0 && _vecSplatTy != (String*)0 && _vecSplatTy.equals(String.withCString("U32")))
+            k = k + (i64)4294967296;
         Object* have = _vecSplatK.get((Hashable*)Number.withI64(k));
         if (have != (Object*)0)
             return IROperand.useVal((IRValue*)have);
+        // Past a few, a constant is splatted where it is used, not held in a
+        // vector register for the whole loop: MD5's 64 round constants would
+        // need 64, and arm64's vectoriser pool is 14.
+        if (_vecSplatBig || _vecSplatK.count() >= (u32)VEC_SPLAT_HOIST_MAX)
+            {
+            IRValue* bc = new IRValue(_vecSplatTy);
+            IRInsn* bn = IRInsn.with(String.withCString("Const"));
+            bn.setRes(bc);
+            bn.add(IROperand.immI(k, _vecSplatTy));
+            _vecBody.add((Object*)bn);
+            IRValue* bv = new IRValue(_vecTy);
+            IRInsn* bs = IRInsn.with(String.withCString("VSplat"));
+            bs.setRes(bv);
+            bs.add(IROperand.useVal(bc));
+            _vecBody.add((Object*)bs);
+            return IROperand.useVal(bv);
+            }
         IRValue* cst = new IRValue(_vecSplatTy);
         IRInsn* cn = IRInsn.with(String.withCString("Const"));
         cn.setRes(cst);
@@ -21707,7 +21923,9 @@ class OptProfile
                 if (vecConst(op, _vecSplatDefs, &kv))
                     return vecSplatConst(kv);
                 }
-            Object* sp = _vecSplat.get((Hashable*)op.val());
+            // In a large body each use has its own splat: one kept for the
+            // next use would be live across the rounds between.
+            Object* sp = _vecSplatBig ? (Object*)0 : _vecSplat.get((Hashable*)op.val());
             if (sp == (Object*)0)
                 {
                 IRValue* v = new IRValue(_vecTy);
@@ -21715,7 +21933,8 @@ class OptProfile
                 s.setRes(v);
                 s.add(op);
                 _vecBody.add((Object*)s);
-                _vecSplat.set((Hashable*)op.val(), (Object*)v);
+                if (!_vecSplatBig)
+                    _vecSplat.set((Hashable*)op.val(), (Object*)v);
                 sp = (Object*)v;
                 }
             return IROperand.useVal((IRValue*)sp);
@@ -21744,7 +21963,9 @@ class OptProfile
             return hoisted;
         if (op.kind() == (u8)OPK_USE)
             {
-            Object* sp = _vecSplat.get((Hashable*)op.val());
+            // In a large body each use has its own splat: one kept for the
+            // next use would be live across the rounds between.
+            Object* sp = _vecSplatBig ? (Object*)0 : _vecSplat.get((Hashable*)op.val());
             if (sp == (Object*)0)
                 {
                 IRValue* v = new IRValue(_vecTy);
@@ -21752,7 +21973,8 @@ class OptProfile
                 s.setRes(v);
                 s.add(op);
                 _vecBody.add((Object*)s);
-                _vecSplat.set((Hashable*)op.val(), (Object*)v);
+                if (!_vecSplatBig)
+                    _vecSplat.set((Hashable*)op.val(), (Object*)v);
                 sp = (Object*)v;
                 }
             return IROperand.useVal((IRValue*)sp);
@@ -24027,6 +24249,13 @@ class OptProfile
             return false;
 
         bool hasMemWrite = false;
+        // A large loop keeps its vector splats where they are used: hoisted,
+        // each is a vector register held across a body that needs them for
+        // its own values (MD5's rounds; the vectoriser holds none there).
+        u32 bodySize = (u32)0;
+        for (u32 i = (u32)0; i < body.count(); i = i + (u32)1)
+            bodySize = bodySize + ((IRBlock*)body.get(i)).insns().count();
+        bool keepSplats = bodySize > (u32)VEC_SPLAT_BIG_BODY;
         for (u32 i = (u32)0; i < body.count(); i = i + (u32)1)
             {
             IRBlock* bb = (IRBlock*)body.get(i);
@@ -24062,6 +24291,8 @@ class OptProfile
                     if (inHoist.get((Hashable*)n) != (Object*)0)
                         continue;
                     if (!licmHoistable(n, hasMemWrite, defOf))
+                        continue;
+                    if (keepSplats && n.op().equals(String.withCString("VSplat")))
                         continue;
                     bool inv = true;
                     for (u32 o = (u32)0; o < n.ops().count(); o = o + (u32)1)

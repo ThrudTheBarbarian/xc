@@ -445,6 +445,10 @@ static NSString* dbgSuffix(XTIRInsn* insn)
         return @"VMulHi";
     case XTIROpVLShr:
         return @"VLShr";
+    case XTIROpVShl:
+        return @"VShl";
+    case XTIROpVNot:
+        return @"VNot";
     case XTIROpVReduceAdd:
         return @"VReduceAdd";
     case XTIROpVReduceMax:

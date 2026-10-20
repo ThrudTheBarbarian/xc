@@ -2050,6 +2050,68 @@ class X86_64
                           ((IROperand*)n.ops().get((u32)1)).imm());
         }
 
+    // Lane-wise shift left by a constant: psllw/pslld/psllq by lane width,
+    // as emitVLShr.
+    void emitVShl(IRInsn* n)
+        {
+        if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
+            return;
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        if (o0.kind() != (u8)OPK_USE)
+            return;
+        String* d = vecOf(n.res());
+        String* a = vecOf(o0.val());
+        if (d == (String*)0 || a == (String*)0)
+            return;
+        String* lane = laneOf(n.res().ty());
+        u32 lw = fieldWidth(lane);
+        if (lw != (u32)2 && lw != (u32)4 && lw != (u32)8)
+            return; // no byte-lane shift in SSE
+        String* mn = String.withCString(lw == (u32)2 ? "psllw" : (lw == (u32)8 ? "psllq" : "pslld"));
+        if (isYmm(d) || isZmm(d))
+            {
+            _out.appendFormat("\tv%s\t%s, %s, %d\n", mn.cString(), d.cString(), a.cString(),
+                              ((IROperand*)n.ops().get((u32)1)).imm());
+            return;
+            }
+        if (!d.equals(a))
+            _out.appendFormat("\tmovdqa\t%s, %s\n", d.cString(), a.cString());
+        _out.appendFormat("\t%s\t%s, %d\n", mn.cString(), d.cString(),
+                          ((IROperand*)n.ops().get((u32)1)).imm());
+        }
+
+    // Lane-wise bitwise not: all ones in register 0 (emission scratch) at the
+    // destination's width, xored in. EVEX has no all-ones compare into a
+    // vector, so a 512-bit one comes from vpternlogd.
+    void emitVNot(IRInsn* n)
+        {
+        if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
+            return;
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        if (o0.kind() != (u8)OPK_USE)
+            return;
+        String* d = vecOf(n.res());
+        String* a = vecOf(o0.val());
+        if (d == (String*)0 || a == (String*)0)
+            return;
+        if (isZmm(d))
+            {
+            _out.appendCString("\tvpternlogd\tzmm0, zmm0, zmm0, 0xFF\n");
+            _out.appendFormat("\tvpxord\t%s, %s, zmm0\n", d.cString(), a.cString());
+            return;
+            }
+        if (isYmm(d))
+            {
+            _out.appendCString("\tvpcmpeqd\tymm0, ymm0, ymm0\n");
+            _out.appendFormat("\tvpxor\t%s, %s, ymm0\n", d.cString(), a.cString());
+            return;
+            }
+        _out.appendCString("\tpcmpeqd\txmm0, xmm0\n");
+        if (!d.equals(a))
+            _out.appendFormat("\tmovdqa\t%s, %s\n", d.cString(), a.cString());
+        _out.appendFormat("\tpxor\t%s, xmm0\n", d.cString());
+        }
+
     // Lane-wise float square root, one source (`sqrtps d, a` / `vsqrtps d, a`).
     void emitVSqrt(IRInsn* n)
         {
@@ -6244,6 +6306,16 @@ class X86_64
         if (op.equals(String.withCString("VLShr")))
             {
             emitVLShr(n);
+            return true;
+            }
+        if (op.equals(String.withCString("VShl")))
+            {
+            emitVShl(n);
+            return true;
+            }
+        if (op.equals(String.withCString("VNot")))
+            {
+            emitVNot(n);
             return true;
             }
         if (op.equals(String.withCString("VReduceAdd")))

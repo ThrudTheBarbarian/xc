@@ -3527,6 +3527,8 @@ class Arm64
         if (op.equals(String.withCString("VAddLP"))) { emitVAddLP(n); return true; }
         if (op.equals(String.withCString("VMulHi"))) { emitVMulHi(n); return true; }
         if (op.equals(String.withCString("VLShr"))) { emitVLShr(n); return true; }
+        if (op.equals(String.withCString("VShl"))) { emitVShl(n); return true; }
+        if (op.equals(String.withCString("VNot"))) { emitVNot(n); return true; }
         if (op.equals(String.withCString("VICmp")))  { emitVICmp(n);  return true; }
         if (op.equals(String.withCString("VReduceAdd")) || op.equals(String.withCString("VReduceMax"))
          || op.equals(String.withCString("VReduceMin"))) { emitVReduce(n); return true; }
@@ -3747,6 +3749,34 @@ class Arm64
             _out.appendFormat("    mov v%lu.16b, v%lu.16b\n", d, a);
         else
             _out.appendFormat("    ushr v%lu.%s, v%lu.%s, #%lld\n", d, arr.cString(), a, arr.cString(), sh);
+    }
+
+    // Lane-wise shift left by a constant (`shl`; a zero shift is a move).
+    void emitVShl(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)2 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+        if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_IMMI) { unsupported(n.op()); return; }
+        String* arr = neonArr(laneOf(n.res().ty()));
+        u32 a = vecIndex(o0.val());
+        u32 d = vecIndex(n.res());
+        i64 sh = o1.imm();
+        if (sh == (i64)0)
+            _out.appendFormat("    mov v%lu.16b, v%lu.16b\n", d, a);
+        else
+            _out.appendFormat("    shl v%lu.%s, v%lu.%s, #%lld\n", d, arr.cString(), a, arr.cString(), sh);
+    }
+
+    // Lane-wise bitwise not (`mvn`, on the whole register).
+    void emitVNot(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        if (o0.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
+        u32 a = vecIndex(o0.val());
+        u32 d = vecIndex(n.res());
+        _out.appendFormat("    mvn v%lu.16b, v%lu.16b\n", d, a);
     }
 
     void emitVICmp(IRInsn* n)
@@ -7046,6 +7076,42 @@ class Arm64
     // An integer constant, then canonicalised to its own type's range — a U8
     // Const is `mov` plus `uxtb`, because the mov writes the whole register and
     // the value must read back as a byte.
+    // The `fmov` immediate's text for a float: +-(16..31)/16 x 2^(-3..4), in
+    // exact decimal (every one is a whole number of 1/128ths), or 0.
+    static String* fpImmText(bool neg, u32 m, i32 e)
+    {
+        if (e < (i32)-3 || e > (i32)4) return (String*)0;
+        u32 n = m << (u32)(e + (i32)3);
+        String* frac = String.withFormat("%07u", (n % (u32)128) * (u32)78125);
+        u32 len = frac.byteLength();
+        while (len > (u32)1 && frac.byteAt(len - (u32)1) == (u8)'0') len = len - (u32)1;
+        return String.withFormat("%s%u.%s", neg ? "-" : "", n / (u32)128, frac.substringBytes((u32)0, len).cString());
+    }
+
+    static String* fpImmText32(u32 b)
+    {
+        if ((b & (u32)$7FFFF) != (u32)0) return (String*)0;
+        i32 e = (i32)((b >> (u32)23) & (u32)$FF) - (i32)127;
+        return fpImmText((b >> (u32)31) != (u32)0, (u32)16 + ((b >> (u32)19) & (u32)$F), e);
+    }
+
+    // From the IR's 16-digit hex of the double's bits.
+    static String* fpImmText64(String* hex)
+    {
+        if (hex.byteLength() != (u32)16) return (String*)0;
+        u32 hi = (u32)0;
+        u32 lo = (u32)0;
+        for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1) {
+            u8 c = hex.byteAt(i);
+            u32 d = c >= (u8)'a' ? (u32)(c - (u8)'a' + (u8)10) : (c >= (u8)'A' ? (u32)(c - (u8)'A' + (u8)10) : (u32)(c - (u8)'0'));
+            if (i < (u32)8) hi = (hi << (u32)4) | d;
+            else lo = (lo << (u32)4) | d;
+        }
+        if (lo != (u32)0 || (hi & (u32)$FFFF) != (u32)0) return (String*)0;
+        i32 e = (i32)((hi >> (u32)20) & (u32)$7FF) - (i32)1023;
+        return fpImmText((hi >> (u32)31) != (u32)0, (u32)16 + ((hi >> (u32)16) & (u32)$F), e);
+    }
+
     void emitConst(IRInsn* n)
     {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1) { unsupported(String.withCString("Const")); return; }
@@ -7065,6 +7131,20 @@ class Arm64
             // zero, which is what the reference reads off a non-float operand.
             String* hex = k.kind() == (u8)OPK_IMMF
                 ? k.fpHex() : String.withCString("0000000000000000");
+            // A value homed in a float register, of the form +-(16..31)/16 x
+            // 2^(-3..4) (4.0, 2.0, 0.5): one `fmov` immediate, not three
+            // instructions through a general register.
+            if (_home.get((Hashable*)n.res()) != (Object*)0) {
+                String* fh = resultReg(n.res(), String.withCString("w16"));
+                if (fh.hasPrefix(String.withCString("s")) || fh.hasPrefix(String.withCString("d"))) {
+                    String* ft = ty.equals(String.withCString("F64"))
+                        ? fpImmText64(hex) : fpImmText32(f32BitsOfDoubleHex(hex));
+                    if (ft != (String*)0) {
+                        _out.appendFormat("    fmov %s, #%s\n", fh.cString(), ft.cString());
+                        return;
+                    }
+                }
+            }
             if (ty.equals(String.withCString("F64"))) {
                 emitBits64(hex, String.withCString("x16"));
                 storeReg(String.withCString("x16"), n.res());

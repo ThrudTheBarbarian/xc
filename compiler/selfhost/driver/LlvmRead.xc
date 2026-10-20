@@ -30,6 +30,7 @@ class LlvmReader
     String* _why;           // the first construct a function used that is not read; 0 when all were
     Map* _globals;          // "@name" -> its symbol name in the module
     Map* _globalElem;       // "@name" -> the IR type an AddrOf of it addresses (the element of an array)
+    Map* _negOf;            // a value read from `fneg x` -> x
     Map* _retTy;            // "@name" -> the function's IR return type
     Map* _defined;          // "@name" -> 1 for a function defined in this file
     u32 _strN;
@@ -60,6 +61,7 @@ class LlvmReader
         {
         _globals = new Map();
         _globalElem = new Map();
+        _negOf = new Map();
         _retTy = new Map();
         _defined = new Map();
         _structs = new Map();
@@ -1261,6 +1263,23 @@ class LlvmReader
                 fail("an arithmetic instruction not read");
                 return;
                 }
+            // a + (-b) is a - b (clang writes x*x - y*y as an fmuladd or an
+            // fadd of an fneg).
+            if (bin.equals(String.withCString("FAdd")))
+                {
+                IRValue* nb = (IRValue*)_negOf.get((Hashable*)b);
+                IRValue* na = (IRValue*)_negOf.get((Hashable*)a);
+                if (nb != (IRValue*)0)
+                    {
+                    define(res, String.withCString("FSub"), t, IROperand.useVal(a), IROperand.useVal(nb), (IROperand*)0, (String*)0);
+                    return;
+                    }
+                if (na != (IRValue*)0)
+                    {
+                    define(res, String.withCString("FSub"), t, IROperand.useVal(b), IROperand.useVal(na), (IROperand*)0, (String*)0);
+                    return;
+                    }
+                }
             define(res, bin, t, IROperand.useVal(a), IROperand.useVal(b), (IROperand*)0, (String*)0);
             return;
             }
@@ -1270,8 +1289,10 @@ class LlvmReader
             IRValue* a = operand(t);
             if (a == (IRValue*)0)
                 return;
-            IRValue* z = emit(String.withCString("Const"), t, IROperand.immF(String.withCString("8000000000000000"), t), (IROperand*)0, (IROperand*)0);
-            define(res, String.withCString("FSub"), t, IROperand.useVal(z), IROperand.useVal(a), (IROperand*)0, (String*)0);
+            define(res, String.withCString("FNeg"), t, IROperand.useVal(a), (IROperand*)0, (IROperand*)0, (String*)0);
+            IRValue* r = valNamed(res, t);
+            if (r != (IRValue*)0)
+                _negOf.set((Hashable*)r, (Object*)a);
             return;
             }
         if (op.equals(String.withCString("icmp")) || op.equals(String.withCString("fcmp")))
@@ -1658,8 +1679,13 @@ class LlvmReader
             {
             IRValue* p = emit(String.withCString("FMul"), rt, IROperand.useVal((IRValue*)args.get((u32)0)),
                               IROperand.useVal((IRValue*)args.get((u32)1)), (IROperand*)0);
-            define(res, String.withCString("FAdd"), rt, IROperand.useVal(p), IROperand.useVal((IRValue*)args.get((u32)2)),
-                   (IROperand*)0, (String*)0);
+            IRValue* addend = (IRValue*)args.get((u32)2);
+            IRValue* nc = (IRValue*)_negOf.get((Hashable*)addend);
+            if (nc != (IRValue*)0)
+                define(res, String.withCString("FSub"), rt, IROperand.useVal(p), IROperand.useVal(nc), (IROperand*)0, (String*)0);
+            else
+                define(res, String.withCString("FAdd"), rt, IROperand.useVal(p), IROperand.useVal(addend),
+                       (IROperand*)0, (String*)0);
             return;
             }
         if (callee.hasPrefix(String.withCString("@llvm.")))

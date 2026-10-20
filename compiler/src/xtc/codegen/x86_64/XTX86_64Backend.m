@@ -5193,6 +5193,58 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         [out appendFormat:@"\t%@\t%@, %lld\n", mn, d, (long long)ops[1].intValue];
         return;
         }
+    // Lane-wise shift left by a constant: psllw/pslld/psllq by lane width, as
+    // VLShr.
+    case XTIROpVShl:
+        {
+        if (!res || ops.count < 2 || ops[0].kind != XTIROperandKindUse)
+            return;
+        NSString *d = sVec[@(res.valueId)], *a = sVec[@(ops[0].valueId)];
+        if (!d || !a)
+            return;
+        XTIRType* lane = res.type.pointeeType;
+        NSUInteger lw = lane ? [self fieldWidth:lane] : 4;
+        NSString* mn = lw == 2 ? @"psllw" : lw == 8 ? @"psllq" : @"pslld";
+        if (lw != 2 && lw != 4 && lw != 8)
+            return; // no byte-lane shift in SSE
+        if ([d hasPrefix:@"ymm"] || [d hasPrefix:@"zmm"])
+            {
+            [out appendFormat:@"\tv%@\t%@, %@, %lld\n", mn, d, a, (long long)ops[1].intValue];
+            return;
+            }
+        if (![d isEqualToString:a])
+            [out appendFormat:@"\tmovdqa\t%@, %@\n", d, a];
+        [out appendFormat:@"\t%@\t%@, %lld\n", mn, d, (long long)ops[1].intValue];
+        return;
+        }
+    // Lane-wise bitwise not: all ones in register 0 (emission scratch) at the
+    // destination's width, xored in. EVEX has no all-ones compare into a
+    // vector, so a 512-bit one comes from vpternlogd.
+    case XTIROpVNot:
+        {
+        if (!res || ops.count < 1 || ops[0].kind != XTIROperandKindUse)
+            return;
+        NSString *d = sVec[@(res.valueId)], *a = sVec[@(ops[0].valueId)];
+        if (!d || !a)
+            return;
+        if ([d hasPrefix:@"zmm"])
+            {
+            [out appendString:@"\tvpternlogd\tzmm0, zmm0, zmm0, 0xFF\n"];
+            [out appendFormat:@"\tvpxord\t%@, %@, zmm0\n", d, a];
+            return;
+            }
+        if ([d hasPrefix:@"ymm"])
+            {
+            [out appendString:@"\tvpcmpeqd\tymm0, ymm0, ymm0\n"];
+            [out appendFormat:@"\tvpxor\t%@, %@, ymm0\n", d, a];
+            return;
+            }
+        [out appendString:@"\tpcmpeqd\txmm0, xmm0\n"];
+        if (![d isEqualToString:a])
+            [out appendFormat:@"\tmovdqa\t%@, %@\n", d, a];
+        [out appendFormat:@"\tpxor\t%@, xmm0\n", d];
+        return;
+        }
     // scalar <- horizontal add of 4 i32 lanes
     case XTIROpVReduceAdd:
         {

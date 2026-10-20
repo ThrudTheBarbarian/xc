@@ -3,6 +3,13 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+// The constant splats a vectorised loop holds in registers before it splats
+// the rest where they are used, and the loop body size (instructions) above
+// which it holds none: the vector register pool must keep room for the body's
+// own values (MD5's rounds). The port's VEC_SPLAT_HOIST_MAX / VEC_SPLAT_BIG_BODY.
+#define XTIR_VEC_SPLAT_HOIST_MAX 8
+#define XTIR_VEC_SPLAT_BIG_BODY 96
+
 typedef NS_ENUM(uint16_t, XTIROpcode) {
     // ── 6.1 Constants and moves ──────────────────────────────────────
     XTIROpConst, // %r:T <- ImmI/ImmF/ConstAgg
@@ -188,6 +195,8 @@ typedef NS_ENUM(uint16_t, XTIROpcode) {
     XTIROpVAddLP,     // %v:Vec(2W) <- a:Vec(W)  (unsigned add-long-pairwise/uaddlp)
     XTIROpVMulHi,     // %v:Vec(W) <- a:Vec(W), b:Vec(W)  (HIGH half of the lane product)
     XTIROpVLShr,      // %v:Vec(W) <- a:Vec(W), #imm  (logical shift right by a constant)
+    XTIROpVShl,       // %v:Vec(W) <- a:Vec(W), #imm  (shift left by a constant)
+    XTIROpVNot,       // %v:Vec(W) <- a:Vec(W)        (bitwise not)
     XTIROpVReduceAdd, // scalar <- %v:Vec  (horizontal add of all lanes)
     XTIROpVReduceMax, // scalar <- %v:Vec  (horizontal max; u/s from result type)
     XTIROpVReduceMin, // scalar <- %v:Vec  (horizontal min; u/s from result type)

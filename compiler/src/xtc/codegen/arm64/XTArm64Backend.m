@@ -119,6 +119,18 @@
 @property (nonatomic) NSMutableSet<NSNumber *> *laneSkip;
 @property (nonatomic) NSUInteger vecNext;
 @end
+// The `fmov` immediate's text for a float: +-(16..31)/16 x 2^(-3..4), in exact
+// decimal (every one is a whole number of 1/128ths), or nil. As the port's
+// fpImmText.
+static NSString *XTArm64FpImmText(BOOL neg, uint32_t m, int e) {
+    if (e < -3 || e > 4) return nil;
+    uint32_t n = m << (uint32_t)(e + 3);
+    NSString *frac = [NSString stringWithFormat:@"%07u", (n % 128u) * 78125u];
+    NSUInteger len = frac.length;
+    while (len > 1 && [frac characterAtIndex:len - 1] == '0') len--;
+    return [NSString stringWithFormat:@"%@%u.%@", neg ? @"-" : @"", n / 128u, [frac substringToIndex:len]];
+}
+
 @implementation XTArm64FnCtx
 @end
 
@@ -4588,6 +4600,31 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 double dv = 0.0;
                 uint64_t draw = imm.floatRawBytes;
                 memcpy(&dv, &draw, sizeof(dv));
+                // A value homed in a float register, of the form +-(16..31)/16
+                // x 2^(-3..4) (4.0, 2.0, 0.5): one `fmov` immediate, not three
+                // instructions through a general register.
+                if (ctx.homeReg[@(insn.result.valueId)]) {
+                    NSString *fh = [self resultReg:insn.result.valueId scratch:@"w16" ctx:ctx];
+                    if ([fh hasPrefix:@"s"] || [fh hasPrefix:@"d"]) {
+                        NSString *ft = nil;
+                        if (insn.result.type.kind == XTIRTypeKindF64) {
+                            if ((draw & 0xFFFFFFFFFFFFull) == 0)
+                                ft = XTArm64FpImmText((draw >> 63) != 0, 16u + (uint32_t)((draw >> 48) & 0xF),
+                                                      (int)((draw >> 52) & 0x7FF) - 1023);
+                        } else {
+                            float fv0 = (float)dv;
+                            uint32_t fb = 0;
+                            memcpy(&fb, &fv0, sizeof(fb));
+                            if ((fb & 0x7FFFFu) == 0)
+                                ft = XTArm64FpImmText((fb >> 31) != 0, 16u + ((fb >> 19) & 0xFu),
+                                                      (int)((fb >> 23) & 0xFF) - 127);
+                        }
+                        if (ft) {
+                            [ctx.out appendFormat:@"    fmov %@, #%@\n", fh, ft];
+                            break;
+                        }
+                    }
+                }
                 if (insn.result.type.kind == XTIRTypeKindF64) {
                     [self materialiseImm64:draw intoXReg:@"x16" ctx:ctx];
                     [self storeReg:@"x16" intoValue:insn.result.valueId ctx:ctx];
@@ -6690,6 +6727,30 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             else
                 [ctx.out appendFormat:@"    ushr v%lu.%@, v%lu.%@, #%lld\n",
                  (unsigned long)d, arr, (unsigned long)a, arr, (long long)sh];
+            break;
+        }
+        case XTIROpVShl: {        // lane-wise shift left by a constant (a zero shift is a move)
+            if (insn.operands.count < 2 || !insn.result ||
+                insn.operands[0].kind != XTIROperandKindUse ||
+                insn.operands[1].kind != XTIROperandKindImmI) break;
+            NSString *arr = [self neonArrFor:insn.result.type.pointeeType];
+            NSUInteger a = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
+            NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+            int64_t sh = insn.operands[1].intValue;
+            if (sh == 0)
+                [ctx.out appendFormat:@"    mov v%lu.16b, v%lu.16b\n",
+                 (unsigned long)d, (unsigned long)a];
+            else
+                [ctx.out appendFormat:@"    shl v%lu.%@, v%lu.%@, #%lld\n",
+                 (unsigned long)d, arr, (unsigned long)a, arr, (long long)sh];
+            break;
+        }
+        case XTIROpVNot: {        // lane-wise bitwise not (mvn, on the whole register)
+            if (insn.operands.count < 1 || !insn.result ||
+                insn.operands[0].kind != XTIROperandKindUse) break;
+            NSUInteger a = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
+            NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+            [ctx.out appendFormat:@"    mvn v%lu.16b, v%lu.16b\n", (unsigned long)d, (unsigned long)a];
             break;
         }
         case XTIROpVICmp: {       // lane-wise compare → 0/-1 mask
