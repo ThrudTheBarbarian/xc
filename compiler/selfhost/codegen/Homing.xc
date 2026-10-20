@@ -670,6 +670,34 @@ class BitSet
                     }
                 }
             }
+        // A float op is two-address on x86 (`addss d, s` overwrites d), so a
+        // result in the register of a first operand that dies here needs no
+        // copy. A use ends at 2p and a definition starts at 2p+1, so the pair
+        // never conflicts there; this only says which register to prefer.
+        // Either operand for + and *, which the back end may swap.
+        for (u32 bi = (u32)0; bi < _nb; bi = bi + (u32)1)
+            {
+            IRBlock* b = (IRBlock*)_fn.blocks().get(bi);
+            for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* fi = (IRInsn*)b.insns().get(i);
+                if (fi.res() == 0 || fi.ops().count() < (u32)2)
+                    continue;
+                String* fo = fi.op();
+                bool comm = fo.equals(String.withCString("FAdd")) || fo.equals(String.withCString("FMul"));
+                if (!comm && !fo.equals(String.withCString("FSub")) && !fo.equals(String.withCString("FDiv")))
+                    continue;
+                u32 rv = fi.res().pid();
+                for (u32 k = (u32)0; k < (comm ? (u32)2 : (u32)1); k = k + (u32)1)
+                    {
+                    IROperand* fop = (IROperand*)fi.ops().get(k);
+                    if (fop.kind() != (u8)OPK_USE || fop.val() == 0 || fop.val().pid() >= _nv)
+                        continue;
+                    relate(rv, fop.val().pid());
+                    relate(fop.val().pid(), rv);
+                    }
+                }
+            }
         for (u32 v = (u32)0; v < _nv; v = v + (u32)1)
             {
             Array* sg = (Array*)_segs.get(v);

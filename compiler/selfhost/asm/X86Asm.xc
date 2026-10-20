@@ -2384,6 +2384,37 @@ class X86Fixup
             _hit = true;
             return true;
             }
+        // vmovd/vmovq between an xmm and a GP register or memory: movd and
+        // movq's VEX forms (66 0F 6E/7E; W1 for the 64-bit one). An AVX
+        // function uses these, never the legacy forms: a legacy write to an
+        // xmm whose upper ymm half is live made the AVX2 md5 22x slower than
+        // its SSE build on a Zen 3.
+        bool isVmovd = mn.equals(String.withCString("vmovd"));
+        if ((isVmovd || mn.equals(String.withCString("vmovq"))) && _ops.count() == (u32)2 && a != (XOperand*)0 && b != (XOperand*)0
+            && (a.size() == (u32)16) != (b.size() == (u32)16))
+            {
+            bool toXmm = a.size() == (u32)16;
+            XOperand* xmm = toXmm ? a : b;
+            XOperand* other = toXmm ? b : a;
+            i32 bb = other.kind() == (u32)OP_REG ? (i32)other.reg() : other.rmReg();
+            i32 xx = other.kind() == (u32)OP_REG ? (i32)0 : other.index();
+            if (bb < (i32)0) bb = (i32)0;
+            if (xx < (i32)0) xx = (i32)0;
+            if (isVmovd)
+                eVex(xmm.reg(), xx, bb, (u32)1, (u32)$0F, (u32)0, (u32)1);
+            else
+                {
+                // The three-byte form, for W.
+                u32 rhi = (xmm.reg() & (u32)8) != (u32)0 ? (u32)0 : (u32)$80;
+                e8((u32)$C4);
+                e8(rhi | ((xx & (i32)8) != (i32)0 ? (u32)0 : (u32)$40) | ((bb & (i32)8) != (i32)0 ? (u32)0 : (u32)$20) | (u32)1);
+                e8((u32)$80 | ((u32)$0F << (u32)3) | (u32)1);
+                }
+            e8(toXmm ? (u32)$6E : (u32)$7E);
+            eModRM(xmm.reg(), other);
+            _hit = true;
+            return true;
+            }
         // pp, map, load opcode, store opcode (0 = none)
         u32 pp = (u32)0; u32 map = (u32)0; u32 ld = (u32)0; u32 st = (u32)0;
         bool bcast = false;

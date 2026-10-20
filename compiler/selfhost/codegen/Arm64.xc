@@ -2451,6 +2451,8 @@ class Arm64
     // clang emits under default FP contraction.
     void fuseMultiplyAdds(IRFunc* fn)
     {
+        Map* sharedFused = new Map();   // a shared FMul's result -> its fused uses
+        Array* sharedMuls = new Array();
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
@@ -2488,14 +2490,57 @@ class Arm64
                         if (mul != (IRInsn*)0) { addend = o1; mnem = String.withCString("fnmsub"); }
                     }
                 }
+                // A product with other uses (x*x read by two sums, as
+                // mandelbrot's x*x + y*y and x*x - y*y) fuses too when its
+                // operands are still in their homes at the add: an operand's
+                // interval reaching the add's read position means nothing else
+                // took its register or slot in between (bug 34 was a fused
+                // read past that point). This is the contraction clang's
+                // llvm.fmuladd asks for; the product stays for its other uses,
+                // and goes once every use is fused.
+                bool shared = false;
+                if (mul == (IRInsn*)0 && _linearStart.get((Hashable*)n.res()) != (Object*)0) {
+                    i32 rp = linStartOf(n.res()) - (i32)1;
+                    // The LEFT product first, as C contraction pairs them
+                    // (clang's fmuladd(x, x, y*y) for x*x + y*y): in mandelbrot
+                    // that keeps y*y apart, off x's chain, and is 8 cycles an
+                    // iteration where fusing y*y was 10.
+                    if (isAdd) {
+                        mul = sharedFMul(o0, rp);
+                        if (mul != (IRInsn*)0) { addend = o1; mnem = String.withCString("fmadd"); }
+                        else {
+                            mul = sharedFMul(o1, rp);
+                            if (mul != (IRInsn*)0) { addend = o0; mnem = String.withCString("fmadd"); }
+                        }
+                    } else {
+                        mul = sharedFMul(o0, rp);
+                        if (mul != (IRInsn*)0) { addend = o1; mnem = String.withCString("fnmsub"); }
+                        else {
+                            mul = sharedFMul(o1, rp);
+                            if (mul != (IRInsn*)0) { addend = o0; mnem = String.withCString("fmsub"); }
+                        }
+                    }
+                    shared = mul != (IRInsn*)0;
+                }
                 if (mul == (IRInsn*)0) continue;
                 _fuseKind.set((Hashable*)n.res(), (Object*)String.withCString("fma"));
                 _fuseMnem.set((Hashable*)n.res(), (Object*)mnem);
                 _fuseA.set((Hashable*)n.res(), (Object*)mul.ops().get((u32)0));
                 _fuseB.set((Hashable*)n.res(), (Object*)mul.ops().get((u32)1));
                 _fuseC.set((Hashable*)n.res(), (Object*)addend);
-                _fusedAway.set((Hashable*)mul.res(), (Object*)mul.res());
+                if (shared) {
+                    Object* c = sharedFused.get((Hashable*)mul.res());
+                    if (c == (Object*)0) sharedMuls.add((Object*)mul.res());
+                    sharedFused.set((Hashable*)mul.res(),
+                                    (Object*)Number.withU32(c == (Object*)0 ? (u32)1 : ((Number*)c).asU32() + (u32)1));
+                } else
+                    _fusedAway.set((Hashable*)mul.res(), (Object*)mul.res());
             }
+        }
+        for (u32 i = (u32)0; i < sharedMuls.count(); i = i + (u32)1) {
+            IRValue* mv = (IRValue*)sharedMuls.get(i);
+            if (((Number*)sharedFused.get((Hashable*)mv)).asU32() == useCountOf(mv))
+                _fusedAway.set((Hashable*)mv, (Object*)mv);
         }
         fuseIntMultiplyAdds(fn);
         fuseVectorMla(fn);
@@ -2686,6 +2731,48 @@ class Arm64
             }
         }
     }
+
+    // A scalar FMul with more than one use whose operands are both still live
+    // at read position `rp` (see fuseMultiplyAdds), or null.
+    IRInsn* sharedFMul(IROperand* o, i32 rp)
+    {
+        if (_hasAsm) return (IRInsn*)0;   // homed nothing: no intervals to trust, as the reference
+        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) return (IRInsn*)0;
+        if (useCountOf(o.val()) < (u32)2) return (IRInsn*)0;
+        if (inMap(_fusedAway, o.val())) return (IRInsn*)0;
+        Object* d = _defOf.get((Hashable*)o.val());
+        if (d == (Object*)0) return (IRInsn*)0;
+        IRInsn* n = (IRInsn*)d;
+        if (!n.op().equals(String.withCString("FMul")) || n.ops().count() < (u32)2)
+            return (IRInsn*)0;
+        for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1) {
+            IROperand* m = (IROperand*)n.ops().get(k);
+            if (m.kind() != (u8)OPK_USE) continue;
+            if (m.val() == (IRValue*)0 || _end.get((Hashable*)m.val()) == (Object*)0) return (IRInsn*)0;
+            if (endOf(m.val()) < rp) return (IRInsn*)0;
+            // A phi whose register its back-edge value was coalesced onto holds
+            // that value from its definition on, whatever the phi's interval
+            // says: not safe to read late.
+            if (hasVal(_phiRes, m.val()) && sharesHome(m.val())) return (IRInsn*)0;
+        }
+        return n;
+    }
+
+    // Does another value have v's home register?
+    bool sharesHome(IRValue* v)
+    {
+        Object* h = _home.get((Hashable*)v);
+        if (h == (Object*)0) return false;
+        Array* ks = _home.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1) {
+            IRValue* k = (IRValue*)ks.get(i);
+            if (k != v && ((String*)_home.get((Hashable*)k)).equals((String*)h)) return true;
+        }
+        return false;
+    }
+
+    i32 linStartOf(IRValue* v)
+    { Object* o = _linearStart.get((Hashable*)v); return o == (Object*)0 ? (i32)0 : ((Number*)o).asI32(); }
 
     IRInsn* singleUseFMul(IROperand* o, IRInsn* prev)
     {
@@ -8454,6 +8541,117 @@ class Arm64
     // the body. A use of P outside the body is a loop-exit read of the carried
     // value, and after the loop R holds the final v — so those reads are
     // satisfied by R too.
+    // In a loop of several blocks, may the back-edge value v take its phi P's
+    // register? Yes when, within an iteration, nothing reads P after v is
+    // written: no read later in v's block, none in a block reachable from it
+    // without passing the header (which is where P becomes v anyway). A read
+    // includes one made at a consumer: a fused or folded instruction reads its
+    // producer's operands where it is emitted (a shared fmadd, an address fold
+    // into a load, a compare fused into a branch), so the readers of P's
+    // readers, two levels down, count too. A phi reading P itself is refused
+    // outright (its edge copy reads P late); one reading a value made from P
+    // reads that value's own register, so it does not count. So is an inner
+    // cycle through v's block that does not pass the header. mandelbrot's y = 2*x*y + cy is the case: its
+    // copy at the bottom of the loop was 11% of the loop.
+    bool coalesceAcross(IRFunc* fn, IRValue* P, IRValue* v, u32 ti)
+    {
+        u32 nb = fn.blocks().count();
+        // Positions as numberBlocks counts them: each phi, insn and terminator.
+        Map* posOf = new Map();      // IRInsn -> position
+        Map* blkOf = new Map();      // IRInsn -> block index
+        i32 pos = (i32)0;
+        i32 dBlk = (i32)-1;
+        i32 dPos = (i32)-1;
+        for (u32 bi = (u32)0; bi < nb; bi = bi + (u32)1) {
+            IRBlock* b = (IRBlock*)fn.blocks().get(bi);
+            for (u32 i = (u32)0; i < b.phis().count(); i = i + (u32)1) {
+                IRInsn* ph = (IRInsn*)b.phis().get(i);
+                if (ph.res() == v) return false;          // v a phi: not this case
+                if (insnReads(ph, P)) return false;
+                pos = pos + (i32)1;
+            }
+            for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1) {
+                IRInsn* n = (IRInsn*)b.insns().get(i);
+                posOf.set((Hashable*)n, (Object*)Number.withI32(pos));
+                blkOf.set((Hashable*)n, (Object*)Number.withI32((i32)bi));
+                if (n.res() == v) { dBlk = (i32)bi; dPos = pos; }
+                pos = pos + (i32)1;
+            }
+            if (b.term() != (IRInsn*)0) {
+                posOf.set((Hashable*)b.term(), (Object*)Number.withI32(pos));
+                blkOf.set((Hashable*)b.term(), (Object*)Number.withI32((i32)bi));
+                pos = pos + (i32)1;
+            }
+        }
+        if (dBlk < (i32)0) return false;
+        // The values read from P one level down (v aside: its readers read v).
+        Array* lvl = new Array();
+        lvl.add((Object*)P);
+        Array* readers = new Array();    // IRInsn@ reading P or a level-1/2 value
+        for (u32 depth = (u32)0; depth < (u32)3; depth = depth + (u32)1) {
+            Array* next = new Array();
+            for (u32 bi = (u32)0; bi < nb; bi = bi + (u32)1) {
+                IRBlock* b = (IRBlock*)fn.blocks().get(bi);
+                u32 cnt = b.insns().count() + (b.term() != (IRInsn*)0 ? (u32)1 : (u32)0);
+                for (u32 i = (u32)0; i < cnt; i = i + (u32)1) {
+                    IRInsn* n = i < b.insns().count() ? (IRInsn*)b.insns().get(i) : b.term();
+                    bool hit = false;
+                    for (u32 k = (u32)0; k < lvl.count() && !hit; k = k + (u32)1)
+                        if (insnReads(n, (IRValue*)lvl.get(k))) hit = true;
+                    if (!hit) continue;
+                    if (!readers.contains((Object*)n)) readers.add((Object*)n);
+                    if (n.res() != (IRValue*)0 && n.res() != v && depth < (u32)2 && !next.contains((Object*)n.res()))
+                        next.add((Object*)n.res());
+                }
+            }
+            lvl = next;
+            if (lvl.count() == (u32)0) break;
+        }
+        // Blocks reachable from v's block without entering the header.
+        Array* reach = new Array();
+        Array* work = new Array();
+        work.add((Object*)Number.withI32(dBlk));
+        while (work.count() > (u32)0) {
+            i32 c = ((Number*)work.get(work.count() - (u32)1)).asI32();
+            work.removeAt(work.count() - (u32)1);
+            IRInsn* t = ((IRBlock*)fn.blocks().get((u32)c)).term();
+            if (t == (IRInsn*)0) continue;
+            for (u32 k = (u32)0; k < t.ops().count(); k = k + (u32)1) {
+                IROperand* o = (IROperand*)t.ops().get(k);
+                if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0) continue;
+                i32 si = blockIndexOf(fn, o.blk());
+                if (si < (i32)0 || (u32)si == ti) continue;
+                if (si == dBlk) return false;              // a cycle missing the header
+                bool seen = false;
+                for (u32 q = (u32)0; q < reach.count() && !seen; q = q + (u32)1)
+                    if (((Number*)reach.get(q)).asI32() == si) seen = true;
+                if (seen) continue;
+                reach.add((Object*)Number.withI32(si));
+                work.add((Object*)Number.withI32(si));
+            }
+        }
+        for (u32 i = (u32)0; i < readers.count(); i = i + (u32)1) {
+            IRInsn* n = (IRInsn*)readers.get(i);
+            Object* po = posOf.get((Hashable*)n);
+            if (po == (Object*)0) return false;
+            i32 rb = ((Number*)blkOf.get((Hashable*)n)).asI32();
+            i32 rpos = ((Number*)po).asI32();
+            if (rb == dBlk && rpos > dPos) return false;
+            for (u32 q = (u32)0; q < reach.count(); q = q + (u32)1)
+                if (((Number*)reach.get(q)).asI32() == rb) return false;
+        }
+        return true;
+    }
+
+    static bool insnReads(IRInsn* n, IRValue* x)
+    {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && o.val() == x) return true;
+        }
+        return false;
+    }
+
     void coalescePhiInputs(IRFunc* fn, Array* gpCallee, Array* fpCallee)
     {
         u32 nb = fn.blocks().count();
@@ -8530,7 +8728,11 @@ class Arm64
                     Object* lsv = (_linearStart == (Map*)0 || (u32)ti != si) ? (Object*)0 : _linearStart.get((Hashable*)vIn);
                     i32 vs = lsv != (Object*)0 ? ((Number*)lsv).asI32() : ivlStart(vIn);
                     i32 ve = ivlEnd(vIn);
-                    if (vs <= pe && ps <= ve) continue;         // they overlap
+                    // Across several blocks the extended start always overlaps;
+                    // there the question is asked of the CFG instead (see
+                    // coalesceAcross).
+                    if (vs <= pe && ps <= ve
+                        && ((u32)ti == si || !coalesceAcross(fn, phi.res(), vIn, (u32)ti))) continue;
                     // A caller-saved phi home is only safe for v when v crosses
                     // no call: a call AFTER the phi's last body use leaves the
                     // phi caller-saveable but can still sit inside v's range.

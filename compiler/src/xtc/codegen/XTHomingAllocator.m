@@ -357,6 +357,34 @@
                     }
                 }
             }
+    // A float op is two-address on x86 (`addss d, s` overwrites d), so a result
+    // in the register of a first operand that dies here needs no copy. A use
+    // ends at 2p and a definition starts at 2p+1, so the pair never conflicts
+    // there; this only says which register to prefer. Either operand for + and
+    // *, which the back end may swap.
+    for (NSUInteger bi = 0; bi < nb; bi++)
+        for (XTIRInsn* fi in blocks[bi].instructions)
+            {
+            if (!fi.result || fi.operands.count < 2)
+                continue;
+            BOOL comm = fi.opcode == XTIROpFAdd || fi.opcode == XTIROpFMul;
+            if (!comm && fi.opcode != XTIROpFSub && fi.opcode != XTIROpFDiv)
+                continue;
+            NSNumber* rv = @(fi.result.valueId);
+            for (NSUInteger k = 0; k < (comm ? 2u : 1u); k++)
+                {
+                XTIROperand* fop = fi.operands[k];
+                if (fop.kind != XTIROperandKindUse)
+                    continue;
+                NSNumber* ov = @(fop.valueId);
+                if (!related[rv])
+                    related[rv] = [NSMutableArray array];
+                [related[rv] addObject:ov];
+                if (!related[ov])
+                    related[ov] = [NSMutableArray array];
+                [related[ov] addObject:rv];
+                }
+            }
     // The span of each value's segments, to skip pairs that cannot meet.
     NSMutableDictionary<NSNumber*, NSNumber*>*segLo = [NSMutableDictionary dictionary], *segHi = [NSMutableDictionary dictionary];
     for (NSNumber* v in segs)

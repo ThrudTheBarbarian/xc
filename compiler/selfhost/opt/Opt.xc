@@ -25260,6 +25260,43 @@ class OptProfile
             }
         }
 
+    // Is `b` on a cycle: can it reach itself through its successors?
+    static bool chOnCycle(IRBlock* b)
+        {
+        Array* seen = new Array();
+        Array* work = new Array();
+        if (b.term() == (IRInsn*)0)
+            return false;
+        for (u32 i = (u32)0; i < b.term().ops().count(); i = i + (u32)1)
+            {
+            IROperand* o = (IROperand*)b.term().ops().get(i);
+            if (o.kind() == (u8)OPK_BLOCK && o.blk() != (IRBlock*)0 && !seen.contains((Object*)o.blk()))
+                {
+                seen.add((Object*)o.blk());
+                work.add((Object*)o.blk());
+                }
+            }
+        while (work.count() > (u32)0)
+            {
+            IRBlock* n = (IRBlock*)work.get(work.count() - (u32)1);
+            work.removeAt(work.count() - (u32)1);
+            if (n == b)
+                return true;
+            if (n.term() == (IRInsn*)0)
+                continue;
+            for (u32 i = (u32)0; i < n.term().ops().count(); i = i + (u32)1)
+                {
+                IROperand* o = (IROperand*)n.term().ops().get(i);
+                if (o.kind() == (u8)OPK_BLOCK && o.blk() != (IRBlock*)0 && !seen.contains((Object*)o.blk()))
+                    {
+                    seen.add((Object*)o.blk());
+                    work.add((Object*)o.blk());
+                    }
+                }
+            }
+        return false;
+        }
+
     void chInFunc(IRModule* m, IRFunc* fn)
         {
         if (fn.blocks().count() == (u32)0)
@@ -25271,6 +25308,7 @@ class OptProfile
         // so a hash-ordered walk would make the printed IR depend on hashing.
         Array* keys = new Array();   // String@
         Array* groups = new Array(); // Array@ of IRInsn@
+        Array* firstBlk = new Array(); // IRBlock@ of each group's first member
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
@@ -25291,6 +25329,7 @@ class OptProfile
                     {
                     keys.add((Object*)key);
                     groups.add((Object*)new Array());
+                    firstBlk.add((Object*)bb);
                     }
                 ((Array*)groups.get(gi)).add((Object*)n);
                 }
@@ -25302,7 +25341,22 @@ class OptProfile
         for (u32 gi = (u32)0; gi < groups.count(); gi = gi + (u32)1)
             {
             Array* g = (Array*)groups.get(gi);
-            if (g.count() < (u32)2)
+            // A float constant used once is moved too when it sits on a loop:
+            // x86 builds one with a mov and a movd (arm64 with up to three
+            // instructions for a value fmov cannot encode) EVERY iteration,
+            // where from the entry it is a register or a folded slot read.
+            // Positive zero stays: xorps / movi make it in one.
+            bool loopConst = false;
+            if (g.count() == (u32)1)
+                {
+                IRInsn* only = (IRInsn*)g.get((u32)0);
+                IROperand* oa = (IROperand*)only.ops().get((u32)0);
+                if (only.op().equals(String.withCString("Const")) && oa.kind() == (u8)OPK_IMMF
+                    && oa.fpHex() != (String*)0 && !oa.fpHex().equals(String.withCString("0000000000000000"))
+                    && (IRBlock*)firstBlk.get(gi) != entry && chOnCycle((IRBlock*)firstBlk.get(gi)))
+                    loopConst = true;
+                }
+            if (g.count() < (u32)2 && !loopConst)
                 continue;                           // only dedupe repeats
             IRInsn* canon = (IRInsn*)g.get((u32)0); // earliest occurrence
             hoist.add((Object*)canon);

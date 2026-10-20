@@ -185,5 +185,34 @@ if [ -x "$W/defs" ]; then
     [ "$("$W/defs")" = "1999998000000" ] || { echo "FAIL cpath: --par-auto -DN=1000000 gives $("$W/defs")"; fail=1; }
     XC_PAR_REPORT=1 "$W/defs" 2>&1 | grep -q 'items on the' || { echo "FAIL cpath: --par-auto made no block of a C loop"; fail=1; }
 fi
+# The IR other clangs write (XC_C_LL hands the reader a file): CRLF lines, as
+# clang on Windows ends them (the reader once found no `}` and left every
+# function after the first to clang, main included), and LLVM 23's `f0x`
+# floats, a float's own bits (read as 0 once). This machine's clang writes
+# neither, so the file is its IR rewritten into both.
+cat > "$W/fl.c" <<'C'
+#include <stdio.h>
+float k(void) { return 0.3f; }
+int main(void)
+{
+    float s = 0.0f;
+    for (int i = 0; i < 100; i++)
+        s += (float)i * 0.3f;
+    printf("%d %d\n", (int)(s * 10.0f), (int)(k() * 1000.0f));
+    return 0;
+}
+C
+clang -O1 -Xclang -disable-llvm-passes -fno-discard-value-names -S -emit-llvm -o "$W/fl.ll" "$W/fl.c" 2>/dev/null
+clang -O2 -w -o "$W/fl.ref" "$W/fl.c"
+if grep -q 'float 0x3FD3333340000000' "$W/fl.ll"; then
+    perl -pe 's/float 0x3FD3333340000000/float f0x3E99999A/g; s/\n/\r\n/' "$W/fl.ll" > "$W/fl.crlf.ll"
+    XC_C_LL="$W/fl.crlf.ll" XC_C_TRACE=1 "$XC" -q -O2 -H . -o "$W/fl" "$W/fl.c" > "$W/fl.b" 2>&1 \
+        || { echo "FAIL cpath: CRLF/f0x IR does not build"; head -3 "$W/fl.b"; fail=1; }
+    grep -q 'left to clang: @main' "$W/fl.b" && { echo "FAIL cpath: CRLF IR left main to clang"; fail=1; }
+    [ -x "$W/fl" ] && [ "$("$W/fl")" = "$("$W/fl.ref")" ] \
+        || { echo "FAIL cpath: CRLF/f0x IR gives '$("$W/fl" 2>&1)', clang '$("$W/fl.ref")'"; fail=1; }
+else
+    echo "FAIL cpath: clang wrote 0.3f in a form this test does not expect"; fail=1
+fi
 [ $fail = 0 ] && echo "--- cpath: pass ---" || echo "--- cpath: FAIL ---"
 exit $fail

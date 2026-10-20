@@ -1062,6 +1062,17 @@ static NSInteger sWin64SretOff = 0;
                         || ([t hasPrefix:@"jmp\t"] && ![t hasPrefix:@"jmp\t."]);
         if (exitInsn)
             [out appendString:@"\tvzeroupper\n"];
+        // ...and no legacy movd/movq between an xmm and a GPR: a legacy write
+        // to an xmm whose upper ymm half is live merges with it, and the AVX2
+        // md5 ran 22x slower than its SSE build on a Zen 3 for that (the
+        // message words are broadcast through movd). The VEX forms do not
+        // merge. Only the xmm-and-GPR/memory form: one xmm.
+        NSUInteger xmms = [[t componentsSeparatedByString:@"xmm"] count] - 1;
+        if ([t hasPrefix:@"movd\t"] || ([t hasPrefix:@"movq\t"] && xmms == 1))
+            {
+            [out appendFormat:@"\tv%@\n", t];
+            continue;
+            }
         [out appendString:line];
         [out appendString:@"\n"];
         }
@@ -2540,9 +2551,16 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                     { fnHasVector = YES; break; }
             if (fnHasVector) break;
             }
+        // xmm2-xmm7 too: in a function with no vector value nothing else uses
+        // them, and a value crossing a call (whose arguments go in xmm0-xmm7)
+        // is already kept out of this tier. Eight homes left C perlin's five
+        // loop-carried floats in slots, written through movd/mov every octave.
+        // Win64 makes xmm6/xmm7 callee-saved.
         NSArray<NSString*>* fpPool = fnHasVector ? @[]
+            : sWin64 ? @[ @"xmm8", @"xmm9", @"xmm10", @"xmm11", @"xmm12", @"xmm13",
+                          @"xmm14", @"xmm15", @"xmm2", @"xmm3", @"xmm4", @"xmm5" ]
             : @[ @"xmm8", @"xmm9", @"xmm10", @"xmm11", @"xmm12", @"xmm13",
-                 @"xmm14", @"xmm15" ];
+                 @"xmm14", @"xmm15", @"xmm2", @"xmm3", @"xmm4", @"xmm5", @"xmm6", @"xmm7" ];
         // GP caller tier. SysV leaves only five callee-saved registers, so a
         // function with more than five hot values put the rest in slots and the
         // hot loop became store/reload traffic — call_depth spent 25 of its 60
@@ -4362,9 +4380,33 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (!res || ops.count < 2)
             return;
         BOOL d = res.type.kind == XTIRTypeKindF64;
-        NSString* D = [self fdstFor:res clobbering:ops[1] as:ops[0]];
-        [self loadF:ops[0] into:D fn:fn slot:slot out:out];
-        NSString* S = [self fsrcFor:ops[1] fn:fn slot:slot out:out];
+        XTIROperand* o0 = ops[0];
+        XTIROperand* o1 = ops[1];
+        // a + b where b already sits in the result's home: add a to it there,
+        // rather than computing in xmm0 and copying back (two movaps).
+        NSString* rh = sHome[@(res.valueId)];
+        if ((op == XTIROpFAdd || op == XTIROpFMul) && rh && [self isXmmHome:rh] &&
+            o1.kind == XTIROperandKindUse &&
+            !(o0.kind == XTIROperandKindUse && o0.valueId == o1.valueId))
+            {
+            NSString* h1 = sHome[@(o1.valueId)];
+            if (h1 && [self isXmmHome:h1] && [h1 isEqualToString:rh])
+                {
+                XTIROperand* t = o0;
+                o0 = o1;
+                o1 = t;
+                }
+            }
+        NSString* D = [self fdstFor:res clobbering:o1 as:o0];
+        [self loadF:o0 into:D fn:fn slot:slot out:out];
+        // A second operand left in its slot is read from there, as SSE allows,
+        // rather than through the xmm1 scratch.
+        NSString* S;
+        NSString* h1 = o1.kind == XTIROperandKindUse ? sHome[@(o1.valueId)] : nil;
+        if (o1.kind == XTIROperandKindUse && !(h1 && [self isXmmHome:h1]) && slot[@(o1.valueId)])
+            S = [NSString stringWithFormat:@"[rbp-%@]", slot[@(o1.valueId)]];
+        else
+            S = [self fsrcFor:o1 fn:fn slot:slot out:out];
         NSString* mn = op == XTIROpFAdd ? @"add" : op == XTIROpFSub ? @"sub"
                                                : op == XTIROpFMul   ? @"mul"
                                                                     : @"div";
@@ -4493,6 +4535,17 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
     case XTIROpZExt:
         if (res && ops.count >= 1)
             {
+            // A 32-bit value from one GPR home to another: a 32-bit mov clears
+            // the upper half by itself (not `mov eax, src; mov dst, rax`, which
+            // every u32 array index paid).
+            NSString* rh = sHome[@(res.valueId)];
+            NSString* sh = ops[0].kind == XTIROperandKindUse ? sHome[@(ops[0].valueId)] : nil;
+            if (rh && ![self isXmmHome:rh] && sh && ![self isXmmHome:sh] &&
+                [self widthOf:fn.values[@(ops[0].valueId)]] == 4)
+                {
+                [out appendFormat:@"\tmov\t%@, %@\n", [self regView:rh width:4], [self regView:sh width:4]];
+                return;
+                }
             [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out]; // home-aware zero-extend
             [self store:'a' into:res slot:slot out:out];
             }
@@ -4790,7 +4843,14 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         NSUInteger w = (wl > wr ? wl : wr);
         if (w < 4)
             w = 4;
-        [self loadExt:ops[0] into:'a' signed:sg width:w fn:fn slot:slot out:out];
+        // A left operand already in a GPR home at the compare's width is
+        // compared where it sits (no `mov eax, home` first).
+        NSString* A = [self reg:'a' width:w];
+        NSString* h0 = l ? sHome[@(ops[0].valueId)] : nil;
+        if (h0 && ![self isXmmHome:h0] && [self widthOf:l] == w)
+            A = [self regView:h0 width:w];
+        else
+            [self loadExt:ops[0] into:'a' signed:sg width:w fn:fn slot:slot out:out];
         // FOLD A CONSTANT RIGHT-HAND SIDE. x86 has `cmp r32, imm32` and
         // `cmp r64, imm32` (sign-extended) and nothing was using either: every
         // comparison against a literal cost an extra `mov` into rcx first, in
@@ -4816,8 +4876,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                                p == XTIRICmpULT || p == XTIRICmpUGE);
                 if (zeroOK)
                     {
-                    [out appendFormat:@"\ttest\t%@, %@\n", [self reg:'a' width:w],
-                                      [self reg:'a' width:w]];
+                    [out appendFormat:@"\ttest\t%@, %@\n", A, A];
                     folded = YES;
                     }
                 else
@@ -4831,7 +4890,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                     // spelling decides the encoding. clang emits the short one
                     // and vocab-diff flagged the difference.
                     long long pk = (w == 4) ? (long long)(int32_t)k : k;
-                    [out appendFormat:@"\tcmp\t%@, %lld\n", [self reg:'a' width:w], pk];
+                    [out appendFormat:@"\tcmp\t%@, %lld\n", A, pk];
                     folded = YES;
                     }
                 }
@@ -4839,12 +4898,20 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (!folded)
             {
             [self loadExt:ops[1] into:'c' signed:sg width:w fn:fn slot:slot out:out];
-            [out appendFormat:@"\tcmp\t%@, %@\n", [self reg:'a' width:w], [self reg:'c' width:w]];
+            [out appendFormat:@"\tcmp\t%@, %@\n", A, [self reg:'c' width:w]];
             }
         // Fused into the block's CondBranch: leave the flags set and let the
         // terminator branch on the predicate — no boolean materialisation.
         if (sFusedCmp && [sFusedCmp containsObject:@(res.valueId)])
             return;
+        // Into a GPR home directly: a one-byte boolean home is only ever read
+        // at its own width, so setcc alone is the whole store.
+        NSString* rhm = sHome[@(res.valueId)];
+        if (rhm && ![self isXmmHome:rhm] && [self widthOf:res] == 1)
+            {
+            [out appendFormat:@"\t%@\t%@\n", [self setccForICmp:p], [self regView:rhm width:1]];
+            return;
+            }
         [out appendFormat:@"\t%@\tal\n\tmovzx\teax, al\n", [self setccForICmp:p]];
         [self store:'a' into:res slot:slot out:out];
         return;
@@ -4854,6 +4921,11 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         // cond ? trueVal : falseVal — branchless cmov.
         if (!res || ops.count < 3)
             return;
+        if (res.type && [self isFloatKind:res.type.kind])
+            {
+            [self emitSelectF:in fn:fn slot:slot out:out];
+            return;
+            }
         NSUInteger w = [self widthOf:res];
         if (w < 4)
             w = 4;
@@ -5655,6 +5727,78 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
 
 // Conditional jump taken when the ICmp predicate is FALSE (the fused CondBranch
 // jumps to its false target on the negated condition).
+// A float cond ? a : b. There is no cmov for xmm, and staging both values
+// through rax/rdx cost three movd and a cmov per select — perlin's grad spent
+// 16 of them per octave. Instead: the false value into the destination, the
+// compare, and a branch around moving the true value in (what LLVM emits for
+// an integer condition on SSE).
++ (void)emitSelectF:(XTIRInsn*)in fn:(XTIRFunction*)fn
+               slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+                out:(NSMutableString*)out
+    {
+    XTIRValue* res = in.result;
+    NSArray<XTIROperand*>* ops = in.operands;
+    XTIROperand* tv = ops[1];
+    XTIROperand* fv = ops[2];
+    // The result's own home, unless the true value lives there (loading the
+    // false value first would destroy it).
+    NSString* d = sHome[@(res.valueId)];
+    if (!d || ![self isXmmHome:d])
+        d = @"xmm0";
+    else if (tv.kind == XTIROperandKindUse &&
+             !(fv.kind == XTIROperandKindUse && fv.valueId == tv.valueId))
+        {
+        NSString* th = sHome[@(tv.valueId)];
+        if (th && [self isXmmHome:th] && [th isEqualToString:d])
+            d = @"xmm0";
+        }
+    [self loadF:fv into:d fn:fn slot:slot out:out];
+    NSUInteger lbl = sArcLabel++;
+    XTIRInsn* scmp = sSelCmp ? sSelCmp[@(res.valueId)] : nil;
+    if (scmp && ops[0].kind == XTIROperandKindUse && sSelSkip && sSelSkip[@(ops[0].valueId)])
+        {
+        uint8_t sp = scmp.predicate;
+        BOOL ssg = (sp == XTIRICmpSLT || sp == XTIRICmpSLE ||
+                    sp == XTIRICmpSGT || sp == XTIRICmpSGE);
+        XTIRValue* sl = scmp.operands[0].kind == XTIROperandKindUse
+                            ? fn.values[@(scmp.operands[0].valueId)] : nil;
+        NSUInteger cw = sl ? [self widthOf:sl] : 4;
+        if (cw < 4)
+            cw = 4;
+        [self loadExt:scmp.operands[0] into:'c' signed:ssg width:cw fn:fn slot:slot out:out];
+        long long k = (long long)scmp.operands[1].intValue;
+        BOOL zeroOK = (k == 0) && (sp == XTIRICmpEQ || sp == XTIRICmpNE ||
+                                   sp == XTIRICmpULT || sp == XTIRICmpUGE);
+        if (zeroOK)
+            [out appendFormat:@"\ttest\t%@, %@\n", [self reg:'c' width:cw], [self reg:'c' width:cw]];
+        else
+            [out appendFormat:@"\tcmp\t%@, %lld\n", [self reg:'c' width:cw],
+                              (cw == 4) ? (long long)(int32_t)k : k];
+        [out appendFormat:@"\t%@\t.L_fsel_%lu\n", [self jccForNegatedICmp:sp], (unsigned long)lbl];
+        }
+    else
+        {
+        // A condition already in a GPR home is tested where it sits, at its
+        // own width (a bool home has only its low byte written).
+        NSString* ch = ops[0].kind == XTIROperandKindUse ? sHome[@(ops[0].valueId)] : nil;
+        NSString* cr;
+        if (ch && ![self isXmmHome:ch])
+            {
+            NSUInteger vw = [self widthOf:fn.values[@(ops[0].valueId)]];
+            cr = [self regView:ch width:(vw >= 8 ? 8 : vw >= 4 ? 4 : vw >= 2 ? 2 : 1)];
+            }
+        else
+            {
+            [self loadZX:ops[0] into:'c' fn:fn slot:slot out:out];
+            cr = [self reg:'c' width:[self condWidth:ops[0] fn:fn]];
+            }
+        [out appendFormat:@"\ttest\t%@, %@\n\tje\t.L_fsel_%lu\n", cr, cr, (unsigned long)lbl];
+        }
+    [self loadF:tv into:d fn:fn slot:slot out:out];
+    [out appendFormat:@".L_fsel_%lu:\n", (unsigned long)lbl];
+    [self storeF:d into:res slot:slot out:out];
+    }
+
 // cmov taken when the ICmp predicate is FALSE — a fused Select moves its
 // FALSE value over the true one already in the destination.
 + (NSString*)cmovForNegatedICmp:(uint8_t)p
@@ -5799,6 +5943,22 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                 if (![dh isEqualToString:sh])
                     [out appendFormat:@"\tmovaps\t%@, %@\n", dh, sh];
                 continue;
+                }
+            // A float between an xmm home and a slot is one movss/movsd, not
+            // movd to eax and a mov.
+            if (dests[i].type && [self isFloatKind:dests[i].type.kind] &&
+                srcs[i].kind == XTIROperandKindUse)
+                {
+                if (sh && [self isXmmHome:sh] && !dh)
+                    {
+                    [self storeF:sh into:dests[i] slot:slot out:out];
+                    continue;
+                    }
+                if (dh && [self isXmmHome:dh] && !sh)
+                    {
+                    [self loadF:srcs[i] into:dh fn:fn slot:slot out:out];
+                    continue;
+                    }
                 }
             [self load:srcs[i] into:'a' fn:fn slot:slot out:out];
             [self store:'a' into:dests[i] slot:slot out:out];

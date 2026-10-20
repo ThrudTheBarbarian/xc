@@ -2910,9 +2910,10 @@ class Arm9
     // IEEE754 double bits -> float bits, round-to-nearest-even — the same
     // narrowing a `(float)` cast does, done on the PATTERN because that is what
     // the IR carries. Sign, then the 11-bit exponent rebiased to 8, then 52
-    // mantissa bits rounded to 23. Overflow goes to infinity and a value too
-    // small to represent goes to zero; a subnormal result is not produced,
-    // which matches what the source-level conversion already did.
+    // mantissa bits rounded to 23. Overflow goes to infinity; a value below
+    // the smallest normal becomes the subnormal C's `(float)d` gives (the
+    // reference narrows that way), rounded to nearest-even, and only one
+    // below half the smallest subnormal goes to zero.
     static u32 doubleBitsToFloatBits(u32 hi, u32 lo)
         {
         u32 sign = (hi >> 31) & (u32)1;
@@ -2930,7 +2931,20 @@ class Arm9
         if (e >= (i32)255)
             return (sign << 31) | ((u32)255 << 23); // overflow -> inf
         if (e <= (i32)0)
-            return sign << 31; // underflow -> 0
+            {
+            // The 53-bit significand, its leading one included, shifted down
+            // to the subnormal field: 30 places at e = 0, one more per step.
+            u32 sh = (u32)((i32)30 - e);
+            if (sh > (u32)63)
+                return sign << 31;
+            u64 m = ((u64)(mantHi | (u32)$100000) << (u64)32) | (u64)lo;
+            u64 q = m >> (u64)sh;
+            u64 rem = m & (((u64)1 << (u64)sh) - (u64)1);
+            u64 half = (u64)1 << (u64)(sh - (u32)1);
+            if (rem > half || (rem == half && (q & (u64)1) != (u64)0))
+                q = q + (u64)1;   // may reach the smallest normal: its encoding
+            return (sign << 31) | (u32)q;
+            }
         // 23 mantissa bits, plus the guard bit and a sticky OR of the rest.
         u32 mant = (mantHi << 3) | (lo >> 29);
         u32 guard = (lo >> 28) & (u32)1;

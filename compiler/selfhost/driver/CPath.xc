@@ -29,9 +29,17 @@ class CPath
     {
     u8 _unused;
 
-    // `'a'` for the shell, a `'` inside written `'\''`.
+    // `'a'` for the shell, a `'` inside written `'\''`. On Windows system()
+    // runs cmd.exe, which knows only double quotes: `"a"`, with no `"` inside
+    // a path to escape.
     static String* quoted(String* a)
         {
+#if ARCH_win64
+        String* w = String.withCString("\"");
+        w.append(a);
+        w.appendCString("\"");
+        return w;
+#else
         String* q = String.withCString("'");
         for (u32 i = (u32)0; i < a.byteLength(); i = i + (u32)1)
             {
@@ -43,18 +51,31 @@ class CPath
             }
         q.appendCString("'");
         return q;
+#endif
         }
 
     // A scratch path for clang's output, this process's own.
     static String* scratch(void)
         {
+#if ARCH_win64
+        // %TEMP%, as every Windows program's scratch: there is no /tmp.
+        String* t = Platform.env(String.withCString("TEMP"));
+        if (t.byteLength() == (u32)0)
+            t = String.withCString(".");
+        return String.withFormat("%s\\xcc-c-%ld", t.cString(), getpid());
+#else
         return String.withFormat("/tmp/xcc-c-%ld", getpid());
+#endif
         }
 
     // Whether clang runs here.
     static bool haveClang(void)
         {
+#if ARCH_win64
+        return system("clang --version >NUL 2>&1") == (i32)0;
+#else
         return system("clang --version >/dev/null 2>&1") == (i32)0;
+#endif
         }
 
     // The C file as an IRModule, or 0 with the reason printed. `incs` and
@@ -90,7 +111,13 @@ class CPath
         cmd.append(CPath.quoted(ll));
         cmd.appendCString(" ");
         cmd.append(CPath.quoted(input));
-        if (system(cmd.cString()) != (i32)0)
+        // XC_C_LL: read this file as clang's IR instead (tests/par/cpath.sh
+        // gives the reader IR in the forms other clangs write: CRLF lines,
+        // LLVM 23's `f0x` floats).
+        String* given = Platform.env(String.withCString("XC_C_LL"));
+        if (given.byteLength() > (u32)0)
+            ll = given;
+        else if (system(cmd.cString()) != (i32)0)
             {
             Stdio.error(String.withFormat("xcc: error: clang could not compile '%s'\n", input.cString()));
             return (IRModule*)0;
@@ -101,6 +128,11 @@ class CPath
             Stdio.error(String.withFormat("xcc: error: cannot read clang's output '%s'\n", ll.cString()));
             return (IRModule*)0;
             }
+        // clang on Windows ends its lines CRLF. The reader finds a function's
+        // end as a line that is `}`, and with a `\r` on every line it found
+        // none: the first function ran to the end of the file and every one
+        // after it (main included) was left to clang, unread.
+        text = text.replacing(String.withCString("\r\n"), String.withCString("\n"));
         LlvmReader* r = new LlvmReader();
         r.setPath(input);
         // clang compiles what xcc does not take, and the globals: their
@@ -152,8 +184,15 @@ class CPath
             }
         // XC_C_TRACE: the functions left to clang, and why the first was.
         if (r.unread().count() > (u32)0 && Platform.env(String.withCString("XC_C_TRACE")).byteLength() > (u32)0)
+            {
             Stdio.error(String.withFormat("xcc: C path: %u function(s) left to clang; the first because of %s\n",
                                           r.unread().count(), r.why() != (String*)0 ? r.why().cString() : "?"));
+            // Each by name, so a harness can tell that main was not one.
+            for (u32 i = (u32)0; i < r.unread().count(); i = i + (u32)1)
+                Stdio.error(String.withFormat("xcc: C path: left to clang: %s\nxcc: C path:   because of %s\n",
+                                              ((String*)r.unread().get(i)).cString(),
+                                              ((String*)r.unreadWhy().get(i)).cString()));
+            }
         // The rest: clang compiles it to an object the link takes.
         String* restLl = String.withString(scratch);
         restLl.appendCString(".rest.ll");

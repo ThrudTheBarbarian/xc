@@ -786,6 +786,20 @@ class X86_64
             fpCaller.add((Object*)String.withCString("xmm13"));
             fpCaller.add((Object*)String.withCString("xmm14"));
             fpCaller.add((Object*)String.withCString("xmm15"));
+            // xmm2-xmm7 too: in a function with no vector value nothing else
+            // uses them, and a value crossing a call (whose arguments go in
+            // xmm0-xmm7) is already kept out of this tier. Eight homes left
+            // C perlin's five loop-carried floats in slots, written through
+            // movd/mov every octave. Win64 makes xmm6/xmm7 callee-saved.
+            fpCaller.add((Object*)String.withCString("xmm2"));
+            fpCaller.add((Object*)String.withCString("xmm3"));
+            fpCaller.add((Object*)String.withCString("xmm4"));
+            fpCaller.add((Object*)String.withCString("xmm5"));
+            if (!_win64)
+                {
+                fpCaller.add((Object*)String.withCString("xmm6"));
+                fpCaller.add((Object*)String.withCString("xmm7"));
+                }
             }
         // GP caller tier. SysV leaves only five callee-saved registers, so a
         // function with more than five hot values put the rest in slots and the
@@ -1431,10 +1445,32 @@ class X86_64
         bool d = n.res().ty().equals(String.withCString("F64"));
         IROperand* o0 = (IROperand*)n.ops().get((u32)0);
         IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+        String* op = n.op();
+        // a + b where b already sits in the result's home: add a to it there,
+        // rather than computing in xmm0 and copying back (two movaps).
+        bool comm = op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FMul"));
+        String* rh = homeOf(n.res());
+        if (comm && isXmmHome(rh) && o1.kind() == (u8)OPK_USE && o1.val() != (IRValue*)0
+            && !(o0.kind() == (u8)OPK_USE && o0.val() == o1.val()))
+            {
+            String* h1 = homeOf(o1.val());
+            if (isXmmHome(h1) && h1.equals(rh))
+                {
+                IROperand* t = o0;
+                o0 = o1;
+                o1 = t;
+                }
+            }
         String* D = fdstFor(n.res(), o1, o0);
         loadF(o0, D);
-        String* S = fsrcFor(o1);
-        String* op = n.op();
+        // A second operand left in its slot is read from there, as SSE
+        // allows, rather than through the xmm1 scratch.
+        String* S;
+        if (o1.kind() == (u8)OPK_USE && o1.val() != (IRValue*)0 && !isXmmHome(homeOf(o1.val()))
+            && hasSlot(o1.val()))
+            S = String.withFormat("[rbp-%lu]", slotOf(o1.val()));
+        else
+            S = fsrcFor(o1);
         String* mn = op.equals(String.withCString("FAdd")) ? String.withCString("add")
                                                            : (op.equals(String.withCString("FSub")) ? String.withCString("sub")
                                                                                                     : (op.equals(String.withCString("FMul")) ? String.withCString("mul")
@@ -4071,12 +4107,34 @@ class X86_64
                             || (t.hasPrefix(String.withCString("jmp\t")) && !t.hasPrefix(String.withCString("jmp\t.")));
             if (exitInsn)
                 out.appendCString("\tvzeroupper\n");
+            // ...and no legacy movd/movq between an xmm and a GPR: a legacy
+            // write to an xmm whose upper ymm half is live merges with it, and
+            // the AVX2 md5 ran 22x slower than its SSE build on a Zen 3 for
+            // that (the message words are broadcast through movd). The VEX
+            // forms do not merge. Only the xmm-and-GPR/memory form: one xmm.
+            if (t.hasPrefix(String.withCString("movd\t")) || (t.hasPrefix(String.withCString("movq\t")) && xmmCount(t) == (u32)1))
+                {
+                out.appendCString("\tv");
+                out.append(t);
+                out.appendCString("\n");
+                continue;
+                }
             out.append(line);
             out.appendCString("\n");
             }
         if (out.hasSuffix(String.withCString("\n\n")))
             out = out.substringBytes((u32)0, out.byteLength() - (u32)1);
         return out;
+        }
+
+    // How many xmm registers a line names.
+    static u32 xmmCount(String* t)
+        {
+        u32 n = (u32)0;
+        for (u32 i = (u32)0; i + (u32)3 <= t.byteLength(); i = i + (u32)1)
+            if (t.byteAt(i) == (u8)'x' && t.byteAt(i + (u32)1) == (u8)'m' && t.byteAt(i + (u32)2) == (u8)'m')
+                n = n + (u32)1;
+        return n;
         }
 
     String* peepholeFallthrough(String* text)
@@ -5662,6 +5720,22 @@ class X86_64
                         _out.appendFormat("\tmovaps\t%s, %s\n", dh.cString(), sh.cString());
                     continue;
                     }
+                // A float between an xmm home and a slot is one movss/movsd,
+                // not movd to eax and a mov.
+                IRValue* fdv = (IRValue*)dests.get(i);
+                if (isFloatTy(fdv.ty()) && src.kind() == (u8)OPK_USE && src.val() != (IRValue*)0)
+                    {
+                    if (sh != (String*)0 && isXmmHome(sh) && dh == (String*)0)
+                        {
+                        storeF(sh, fdv);
+                        continue;
+                        }
+                    if (dh != (String*)0 && isXmmHome(dh) && sh == (String*)0)
+                        {
+                        loadF(src, dh);
+                        continue;
+                        }
+                    }
                 load(src, (u8)'a');
                 store((u8)'a', (IRValue*)dests.get(i));
                 }
@@ -6470,7 +6544,22 @@ class X86_64
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
             return;
-        loadZX((IROperand*)n.ops().get((u32)0), (u8)'a');
+        // A 32-bit value from one GPR home to another: a 32-bit mov clears the
+        // upper half by itself (not `mov eax, src; mov dst, rax`, which every
+        // u32 array index paid).
+        IROperand* s = (IROperand*)n.ops().get((u32)0);
+        String* rh = homeOf(n.res());
+        if (rh != (String*)0 && !isXmmHome(rh) && s.kind() == (u8)OPK_USE && s.val() != (IRValue*)0
+            && widthOfValue(s.val()) == (u32)4)
+            {
+            String* sh = homeOf(s.val());
+            if (sh != (String*)0 && !isXmmHome(sh))
+                {
+                _out.appendFormat("\tmov\t%s, %s\n", regView(rh, (u32)4).cString(), regView(sh, (u32)4).cString());
+                return;
+                }
+            }
+        loadZX(s, (u8)'a');
         store((u8)'a', n.res());
         }
 
@@ -6671,7 +6760,14 @@ class X86_64
         u32 w = wl > wr ? wl : wr;
         if (w < (u32)4)
             w = (u32)4;
-        loadExt(o0, (u8)'a', sg, w);
+        // A left operand already in a GPR home at the compare's width is
+        // compared where it sits (no `mov eax, home` first).
+        String* A = reg((u8)'a', w);
+        String* h0 = o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 ? homeOf(o0.val()) : (String*)0;
+        if (h0 != (String*)0 && !isXmmHome(h0) && widthOfValue(o0.val()) == w)
+            A = regView(h0, w);
+        else
+            loadExt(o0, (u8)'a', sg, w);
         // FOLD A CONSTANT RIGHT-HAND SIDE. x86 has `cmp r32, imm32` and
         // `cmp r64, imm32` (sign-extended); nothing used either, so every
         // comparison against a literal cost an extra `mov` into rcx first, in
@@ -6693,8 +6789,7 @@ class X86_64
                                   || p.equals(String.withCString("ULT")) || p.equals(String.withCString("UGE")));
                 if (zeroOK)
                     {
-                    _out.appendFormat("\ttest\t%s, %s\n", reg((u8)'a', w).cString(),
-                                      reg((u8)'a', w).cString());
+                    _out.appendFormat("\ttest\t%s, %s\n", A.cString(), A.cString());
                     folded = true;
                     }
                 else
@@ -6706,7 +6801,7 @@ class X86_64
                     // by whether the printed value fits a signed byte.
                     i64 pk = w == (u32)4 ? (i64)(i32)k : k;
                     _out.appendCString("\tcmp\t");
-                    _out.append(reg((u8)'a', w));
+                    _out.append(A);
                     _out.appendCString(", ");
                     _out.append(String.withI64(pk));
                     _out.appendCString("\n");
@@ -6717,12 +6812,20 @@ class X86_64
         if (!folded)
             {
             loadExt(o1, (u8)'c', sg, w);
-            _out.appendFormat("\tcmp\t%s, %s\n", reg((u8)'a', w).cString(), reg((u8)'c', w).cString());
+            _out.appendFormat("\tcmp\t%s, %s\n", A.cString(), reg((u8)'c', w).cString());
             }
         // Fused into the block's CondBranch: the flags reach the branch, so no
         // boolean is materialised.
         if (inFused(n.res()))
             return;
+        // Into a GPR home directly: a one-byte boolean home is only ever read
+        // at its own width, so setcc alone is the whole store.
+        String* rh = homeOf(n.res());
+        if (rh != (String*)0 && !isXmmHome(rh) && widthOfValue(n.res()) == (u32)1)
+            {
+            _out.appendFormat("\t%s\t%s\n", setccFor(p).cString(), regView(rh, (u32)1).cString());
+            return;
+            }
         _out.appendFormat("\t%s\tal\n\tmovzx\teax, al\n", setccFor(p).cString());
         store((u8)'a', n.res());
         }
@@ -6809,6 +6912,11 @@ class X86_64
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)3)
             return;
+        if (isFloatTy(n.res().ty()))
+            {
+            emitSelectF(n);
+            return;
+            }
         u32 w = widthOfValue(n.res());
         if (w < (u32)4)
             w = (u32)4;
@@ -6854,6 +6962,81 @@ class X86_64
         _out.appendFormat("\ttest\t%s, %s\n", reg((u8)'c', ccw).cString(), reg((u8)'c', ccw).cString());
         _out.appendFormat("\tcmove\t%s, %s\n", reg((u8)'a', w).cString(), reg((u8)'d', w).cString());
         store((u8)'a', n.res());
+        }
+
+    // A float cond ? a : b. There is no cmov for xmm, and staging both values
+    // through rax/rdx cost three movd and a cmov per select — perlin's grad
+    // spent 16 of them per octave. Instead: the false value into the
+    // destination, the compare, and a branch around moving the true value in
+    // (what LLVM emits for an integer condition on SSE).
+    void emitSelectF(IRInsn* n)
+        {
+        IROperand* tv = (IROperand*)n.ops().get((u32)1);
+        IROperand* fv = (IROperand*)n.ops().get((u32)2);
+        // The result's own home, unless the true value lives there (loading
+        // the false value first would destroy it).
+        String* d = homeOf(n.res());
+        if (!isXmmHome(d))
+            d = String.withCString("xmm0");
+        else if (tv.kind() == (u8)OPK_USE && tv.val() != (IRValue*)0 && tv.val() != fv.val())
+            {
+            String* th = homeOf(tv.val());
+            if (isXmmHome(th) && th.equals(d))
+                d = String.withCString("xmm0");
+            }
+        loadF(fv, d);
+        u32 lbl = _arcLabel;
+        _arcLabel = _arcLabel + (u32)1;
+        IRInsn* scmp = _selCmp == (Map*)0 ? (IRInsn*)0 : (IRInsn*)_selCmp.get((Hashable*)n.res());
+        IROperand* c0 = (IROperand*)n.ops().get((u32)0);
+        if (scmp != (IRInsn*)0 && c0.kind() == (u8)OPK_USE && inSelSkip(c0.val()))
+            {
+            String* sp = scmp.pred();
+            bool ssg = isSignedPred(sp);
+            IROperand* so0 = (IROperand*)scmp.ops().get((u32)0);
+            u32 cw = so0.kind() == (u8)OPK_USE ? widthOfValue(so0.val()) : (u32)4;
+            if (cw < (u32)4)
+                cw = (u32)4;
+            loadExt(so0, (u8)'c', ssg, cw);
+            i64 k = ((IROperand*)scmp.ops().get((u32)1)).imm();
+            bool zeroOK = k == (i64)0
+                          && (sp.equals(String.withCString("EQ")) || sp.equals(String.withCString("NE"))
+                              || sp.equals(String.withCString("ULT")) || sp.equals(String.withCString("UGE")));
+            if (zeroOK)
+                _out.appendFormat("\ttest\t%s, %s\n", reg((u8)'c', cw).cString(),
+                                  reg((u8)'c', cw).cString());
+            else
+                {
+                i64 pk = cw == (u32)4 ? (i64)(i32)k : k;
+                _out.appendCString("\tcmp\t");
+                _out.append(reg((u8)'c', cw));
+                _out.appendCString(", ");
+                _out.append(String.withI64(pk));
+                _out.appendCString("\n");
+                }
+            _out.appendFormat("\t%s\t.L_fsel_%lu\n", jccForNegated(sp).cString(), lbl);
+            }
+        else
+            {
+            // A condition already in a GPR home is tested where it sits, at
+            // its own width (a bool home has only its low byte written).
+            String* ch = c0.kind() == (u8)OPK_USE && c0.val() != (IRValue*)0 ? homeOf(c0.val()) : (String*)0;
+            String* cr;
+            if (ch != (String*)0 && !isXmmHome(ch))
+                {
+                u32 vw = widthOfValue(c0.val());
+                cr = regView(ch, vw >= (u32)8 ? (u32)8 : (vw >= (u32)4 ? (u32)4 : (vw >= (u32)2 ? (u32)2 : (u32)1)));
+                }
+            else
+                {
+                loadZX(c0, (u8)'c');
+                cr = reg((u8)'c', condWidth(c0));
+                }
+            _out.appendFormat("\ttest\t%s, %s\n\tje\t.L_fsel_%lu\n", cr.cString(), cr.cString(), lbl);
+            }
+        loadF(tv, d);
+        _out.appendFormat(".L_fsel_%lu:\n", lbl);
+        storeF(d, n.res());
         }
 
     // x86 division: the dividend in eax, the divisor in ecx; the quotient comes

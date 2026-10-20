@@ -80,6 +80,10 @@
 // result-id → fusion descriptor emitted in place of the normal op.
 @property (nonatomic) NSMutableSet<NSNumber *> *fusedAway;
 @property (nonatomic) NSMutableDictionary<NSNumber *, NSDictionary *> *fuseAt;
+// The homing intervals, for the shared-product FMA fusion: each value's end and
+// its start before the loop extension (nil when nothing was homed).
+@property (nonatomic, nullable) NSDictionary<NSNumber *, NSNumber *> *fuseEnd;
+@property (nonatomic, nullable) NSDictionary<NSNumber *, NSNumber *> *fuseLinStart;
 // Address-mode folding: `foldedAddr` = FieldAddr/ElementAddr value-ids folded
 // into their single Load/Store consumer (their own emit is skipped). `foldInfo`
 // = pointer-value-id of a foldable Load/Store → the FieldAddr/ElementAddr insn
@@ -1755,6 +1759,99 @@ static NSMutableArray<NSDictionary *> *sArm64MSFns = nil;
     }
 }
 
+// In a loop of several blocks, may the back-edge value v take its phi P's
+// register? Yes when, within an iteration, nothing reads P after v is written:
+// no read later in v's block, none in a block reachable from it without passing
+// the header (which is where P becomes v anyway). A read includes one made at a
+// consumer: a fused or folded instruction reads its producer's operands where it
+// is emitted (a shared fmadd, an address fold into a load, a compare fused into
+// a branch), so the readers of P's readers, two levels down, count too. A phi
+// reading P itself is refused outright (its edge copy reads P late); one reading
+// a value made from P reads that value's own register, so it does not count. So
+// is an inner cycle through v's block that does not pass the header. mandelbrot's y = 2*x*y + cy
+// is the case: its copy at the bottom of the loop was 11% of the loop.
+static BOOL a64InsnReads(XTIRInsn *n, XTIRValueId x) {
+    for (XTIROperand *o in n.operands)
+        if (o.kind == XTIROperandKindUse && o.valueId == x) return YES;
+    return NO;
+}
+
++ (BOOL)coalesceAcrossFn:(XTIRFunction *)fn phi:(XTIRValueId)P value:(XTIRValueId)v
+                  header:(NSUInteger)ti {
+    NSArray<XTIRBlock *> *blocks = fn.blocks;
+    NSUInteger nb = blocks.count;
+    NSMapTable<XTIRInsn *, NSNumber *> *posOf = [NSMapTable strongToStrongObjectsMapTable];
+    NSMapTable<XTIRInsn *, NSNumber *> *blkOf = [NSMapTable strongToStrongObjectsMapTable];
+    NSInteger pos = 0, dBlk = -1, dPos = -1;
+    for (NSUInteger bi = 0; bi < nb; bi++) {
+        XTIRBlock *b = blocks[bi];
+        for (XTIRInsn *ph in b.phiNodes) {
+            if (ph.result && ph.result.valueId == v) return NO;   // v a phi: not this case
+            if (a64InsnReads(ph, P)) return NO;
+            pos++;
+        }
+        for (XTIRInsn *n in b.instructions) {
+            [posOf setObject:@(pos) forKey:n];
+            [blkOf setObject:@(bi) forKey:n];
+            if (n.result && n.result.valueId == v) { dBlk = (NSInteger)bi; dPos = pos; }
+            pos++;
+        }
+        if (b.terminator) {
+            [posOf setObject:@(pos) forKey:b.terminator];
+            [blkOf setObject:@(bi) forKey:b.terminator];
+            pos++;
+        }
+    }
+    if (dBlk < 0) return NO;
+    // The values read from P one level down (v aside: its readers read v).
+    NSMutableArray<NSNumber *> *lvl = [NSMutableArray arrayWithObject:@(P)];
+    NSMutableArray<XTIRInsn *> *readers = [NSMutableArray array];
+    for (NSUInteger depth = 0; depth < 3; depth++) {
+        NSMutableArray<NSNumber *> *next = [NSMutableArray array];
+        for (XTIRBlock *b in blocks) {
+            NSMutableArray<XTIRInsn *> *all = [b.instructions mutableCopy];
+            if (b.terminator) [all addObject:b.terminator];
+            for (XTIRInsn *n in all) {
+                BOOL hit = NO;
+                for (NSNumber *x in lvl)
+                    if (a64InsnReads(n, (XTIRValueId)x.unsignedLongLongValue)) { hit = YES; break; }
+                if (!hit) continue;
+                if ([readers indexOfObjectIdenticalTo:n] == NSNotFound) [readers addObject:n];
+                if (n.result && n.result.valueId != v && depth < 2 && ![next containsObject:@(n.result.valueId)])
+                    [next addObject:@(n.result.valueId)];
+            }
+        }
+        lvl = next;
+        if (lvl.count == 0) break;
+    }
+    // Blocks reachable from v's block without entering the header.
+    NSMutableArray<NSNumber *> *reach = [NSMutableArray array];
+    NSMutableArray<NSNumber *> *work = [NSMutableArray arrayWithObject:@(dBlk)];
+    while (work.count) {
+        NSInteger c = work.lastObject.integerValue;
+        [work removeLastObject];
+        XTIRInsn *t = blocks[(NSUInteger)c].terminator;
+        if (!t) continue;
+        for (XTIROperand *o in t.operands) {
+            if (o.kind != XTIROperandKindBlock || !o.blockRef) continue;
+            NSUInteger si = [blocks indexOfObjectIdenticalTo:o.blockRef];
+            if (si == NSNotFound || si == ti) continue;
+            if ((NSInteger)si == dBlk) return NO;          // a cycle missing the header
+            if ([reach containsObject:@(si)]) continue;
+            [reach addObject:@(si)];
+            [work addObject:@(si)];
+        }
+    }
+    for (XTIRInsn *n in readers) {
+        NSNumber *po = [posOf objectForKey:n];
+        if (!po) return NO;
+        NSInteger rb = [blkOf objectForKey:n].integerValue;
+        if (rb == dBlk && po.integerValue > dPos) return NO;
+        if ([reach containsObject:@(rb)]) return NO;
+    }
+    return YES;
+}
+
 + (void)allocateRegistersForCtx:(XTArm64FnCtx *)ctx {
     XTIRFunction *fn = ctx.fn;
     ctx.homeReg = [NSMutableDictionary dictionary];
@@ -2043,6 +2140,8 @@ static NSMutableArray<NSDictionary *> *sArm64MSFns = nil;
     // in general — whether the back-edge value v can live in its own phi's
     // register — and for that the linear start is the right one: see there.
     NSDictionary<NSNumber *, NSNumber *> *linearStart = [startOf copy];
+    ctx.fuseEnd = endOf;
+    ctx.fuseLinStart = linearStart;
 
     // Loop-aware START extension, the same soundness fix slot-colouring applies
     // to its own intervals. The intervals above are LINEAR and the CFG is not: a
@@ -2288,7 +2387,12 @@ static NSMutableArray<NSDictionary *> *sArm64MSFns = nil;
                 if (!pS || !pE || !vS || !vE) continue;
                 NSInteger ps = pS.integerValue, pe = pE.integerValue;
                 NSInteger vs = vS.integerValue, ve = vE.integerValue;
-                if (vs <= pe && ps <= ve) continue;           // intervals overlap → unsafe
+                // Across several blocks the extended start always overlaps;
+                // there the question is asked of the CFG instead (see
+                // coalesceAcross).
+                if (vs <= pe && ps <= ve
+                    && (ti == si || ![self coalesceAcrossFn:fn phi:phi.result.valueId value:vIn header:ti]))
+                    continue;                                 // intervals overlap → unsafe
                 // A caller-saved phi home is only safe for v if v also crosses no
                 // call — a call after the phi's last body use (so the phi is
                 // caller-saved) can still sit inside v's [def..back-edge] range.
@@ -3539,6 +3643,8 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
     // a*b+c → fmadd, c-a*b → fmsub, a*b-c → fnmsub. One IEEE rounding instead
     // of two, so NOT bit-identical to separate fmul+fadd — but it matches what
     // clang emits under default FP contraction.
+    NSCountedSet<NSNumber *> *sharedFused = [NSCountedSet set];
+    NSMutableArray<NSNumber *> *sharedMuls = [NSMutableArray array];
     for (XTIRBlock *bb in fn.blocks) {
         XTIRInsn *prevInsn = nil;   // the instruction immediately before `insn`
         for (XTIRInsn *insn in bb.instructions) {
@@ -3575,15 +3681,70 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
                 if ((mul = mulOf(o1))) { addend = o0; mnem = @"fmsub"; }      // c - a*b
                 else if ((mul = mulOf(o0))) { addend = o1; mnem = @"fnmsub"; } // a*b - c
             }
+            // A product with other uses (x*x read by two sums, as mandelbrot's
+            // x*x + y*y and x*x - y*y) fuses too when its operands are still in
+            // their homes at the add: an operand's interval reaching the add's
+            // read position means nothing else took its register or slot in
+            // between (bug 34 was a fused read past that point). This is the
+            // contraction clang's llvm.fmuladd asks for; the product stays for
+            // its other uses, and goes once every use is fused.
+            BOOL shared = NO;
+            if (!mul && ctx.fuseEnd && ctx.fuseLinStart[@(insn.result.valueId)]) {
+                NSInteger rp = ctx.fuseLinStart[@(insn.result.valueId)].integerValue - 1;
+                XTIRInsn *(^sharedOf)(XTIROperand *) = ^XTIRInsn *(XTIROperand *o) {
+                    if (o.kind != XTIROperandKindUse) return nil;
+                    if ([uses countForObject:@(o.valueId)] < 2) return nil;
+                    if ([ctx.fusedAway containsObject:@(o.valueId)]) return nil;
+                    XTIRInsn *d = defOf[@(o.valueId)];
+                    if (!(d && d.opcode == XTIROpFMul && d.operands.count >= 2)) return nil;
+                    for (NSUInteger k = 0; k < 2; k++) {
+                        XTIROperand *m = d.operands[k];
+                        if (m.kind != XTIROperandKindUse) continue;
+                        NSNumber *e = ctx.fuseEnd[@(m.valueId)];
+                        if (!e || e.integerValue < rp) return nil;
+                        // A phi whose register its back-edge value was coalesced
+                        // onto holds that value from its definition on, whatever
+                        // the phi's interval says: not safe to read late.
+                        XTIRInsn *md = defOf[@(m.valueId)];
+                        NSString *mh = ctx.homeReg[@(m.valueId)];
+                        if (md && md.opcode == XTIROpPhi && mh) {
+                            for (NSNumber *hk in ctx.homeReg)
+                                if (hk.unsignedLongLongValue != m.valueId && [ctx.homeReg[hk] isEqualToString:mh])
+                                    return nil;
+                        }
+                    }
+                    return d;
+                };
+                // The LEFT product first, as C contraction pairs them (clang's
+                // fmuladd(x, x, y*y) for x*x + y*y): in mandelbrot that keeps
+                // y*y apart, off x's chain, and is 8 cycles an iteration where
+                // fusing y*y was 10.
+                if (insn.opcode == XTIROpFAdd) {
+                    if ((mul = sharedOf(o0))) { addend = o1; mnem = @"fmadd"; }
+                    else if ((mul = sharedOf(o1))) { addend = o0; mnem = @"fmadd"; }
+                } else {
+                    if ((mul = sharedOf(o0))) { addend = o1; mnem = @"fnmsub"; }
+                    else if ((mul = sharedOf(o1))) { addend = o0; mnem = @"fmsub"; }
+                }
+                shared = mul != nil;
+            }
             if (!mul) { prevInsn = insn; continue; }
             ctx.fuseAt[@(insn.result.valueId)] = @{
                 @"kind": @"fma", @"mnem": mnem,
                 @"a": mul.operands[0], @"b": mul.operands[1], @"c": addend,
             };
-            [ctx.fusedAway addObject:@(mul.result.valueId)];
+            if (shared) {
+                if (![sharedFused countForObject:@(mul.result.valueId)])
+                    [sharedMuls addObject:@(mul.result.valueId)];
+                [sharedFused addObject:@(mul.result.valueId)];
+            } else
+                [ctx.fusedAway addObject:@(mul.result.valueId)];
             prevInsn = insn;
         }
     }
+    for (NSNumber *mv in sharedMuls)
+        if ([sharedFused countForObject:mv] == [uses countForObject:mv])
+            [ctx.fusedAway addObject:mv];
 
     // ── Integer multiply-add: Add/Sub with a single-use Mul operand ──
     // a*b+c → madd, c-a*b → msub. Exact (integer arithmetic wraps the same

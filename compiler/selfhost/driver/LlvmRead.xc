@@ -68,6 +68,8 @@ class LlvmReader
         _declOf = new Map();
         _readFns = new Array();
         _unread = new Array();
+        _unreadWhy = new Array();
+        _msvc = false;
         _strN = (u32)0;
         }
 
@@ -142,6 +144,13 @@ class LlvmReader
                 _locs.set((Hashable*)key, (Object*)Number.with((line << (u32)16) | (col & (u32)$FFFF)));
                 }
             }
+        // The target: windows-msvc IR spells a volatile access as an atomic one.
+        for (u32 i = (u32)0; i < lines.count() && !_msvc; i = i + (u32)1)
+            {
+            String* l = (String*)lines.get(i);
+            if (l.hasPrefix(String.withCString("target triple")) && l.contains(String.withCString("windows-msvc")))
+                _msvc = true;
+            }
         // Struct types first (a global or a function names them), then
         // globals and declarations: a function may use one defined below it.
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
@@ -176,6 +185,45 @@ class LlvmReader
             i = end + (u32)1;
             }
         return _m;
+        }
+
+    // A float's 8 hex digits as the double's 16 (exact: a float widens to a
+    // double without rounding), zero, subnormals, infinity and NaN included.
+    static String* f32BitsAsF64Hex(String* h)
+        {
+        u32 b = (u32)0;
+        for (u32 i = (u32)0; i < h.byteLength(); i = i + (u32)1)
+            {
+            u8 c = h.byteAt(i);
+            u32 d = c >= (u8)'0' && c <= (u8)'9' ? (u32)(c - (u8)'0')
+                    : (c >= (u8)'a' && c <= (u8)'f' ? (u32)(c - (u8)'a') + (u32)10 : (u32)(c - (u8)'A') + (u32)10);
+            b = (b << (u32)4) | (d & (u32)15);
+            }
+        u64 sign = (u64)(b >> (u32)31) << (u64)63;
+        u32 e = (b >> (u32)23) & (u32)$FF;
+        u64 m = (u64)(b & (u32)$7FFFFF);
+        u64 dbits = sign;
+        if (e == (u32)$FF)
+            dbits = sign | ((u64)$7FF << (u64)52) | (m << (u64)29);
+        else if (e != (u32)0)
+            dbits = sign | ((u64)(e + (u32)896) << (u64)52) | (m << (u64)29);
+        else if (m != (u64)0)
+            {
+            // A subnormal float is a normal double: shift its leading one out.
+            i32 ex = (i32)-126;
+            while ((m & (u64)$800000) == (u64)0)
+                {
+                m = m << (u64)1;
+                ex = ex - (i32)1;
+                }
+            m = m & (u64)$7FFFFF;
+            dbits = sign | ((u64)(ex + (i32)1023) << (u64)52) | (m << (u64)29);
+            }
+        String* out = new String();
+        u8* digits = "0123456789ABCDEF";
+        for (i32 sh = (i32)60; sh >= (i32)0; sh = sh - (i32)4)
+            out.appendByte(digits[(u32)((dbits >> (u64)sh) & (u64)15)]);
+        return out;
         }
 
     static u32 numAfter(String* l, u8* key)
@@ -260,6 +308,11 @@ class LlvmReader
             String* r = renamed(l);
             if (l.hasPrefix(String.withCString("define ")) || l.hasPrefix(String.withCString("@")))
                 r = external(r);
+            // A global of the Microsoft headers' kind (`linkonce_odr ...,
+            // comdat`): clang's object is its one definition here, and a
+            // renamed one no longer matches the comdat its name implied.
+            if (l.hasPrefix(String.withCString("@")))
+                r = LlvmReader.dropWord(LlvmReader.dropWord(r, " linkonce_odr "), ", comdat");
             out.append(r);
             out.appendCString("\n");
             i = i + (u32)1;
@@ -282,8 +335,20 @@ class LlvmReader
                 continue;
                 }
             u32 e = p + (u32)1;
-            while (e < l.byteLength() && isWordByte(l.byteAt(e)))
+            // A quoted name runs to its closing quote: the Microsoft C
+            // library's string literals are `@"??_C@_0O@...@"`, and an `@`
+            // inside one is not the start of another name.
+            if (e < l.byteLength() && l.byteAt(e) == (u8)'"')
+                {
                 e = e + (u32)1;
+                while (e < l.byteLength() && l.byteAt(e) != (u8)'"')
+                    e = e + (u32)1;
+                if (e < l.byteLength())
+                    e = e + (u32)1;
+                }
+            else
+                while (e < l.byteLength() && isWordByte(l.byteAt(e)))
+                    e = e + (u32)1;
             String* n = l.substringBytes(p, e - p);
             String* sym = (String*)_globals.get((Hashable*)n);
             if (sym != (String*)0 && !n.substringFromByte((u32)1).equals(sym))
@@ -889,12 +954,30 @@ class LlvmReader
 
     void fail(u8* what)
         {
+        String* w = String.withFormat("%s (in %s: `%s`)", what, _fn != (IRFunc*)0 ? _fn.name().cString() : "?",
+                                      _s != (String*)0 ? _s.trimmed().cString() : "");
         if (_why == (String*)0)
-            _why = String.withFormat("%s (in %s: `%s`)", what, _fn != (IRFunc*)0 ? _fn.name().cString() : "?",
-                                     _s != (String*)0 ? _s.trimmed().cString() : "");
+            _why = w;
+        if (_fnWhy == (String*)0)
+            _fnWhy = w;
         _bad = true;
         }
     bool _bad;
+    String* _fnWhy;      // why the function being read is not, if it is not
+    bool _msvc;          // the IR is clang's for windows-msvc (its volatile rule)
+    Array* _unreadWhy;   // String@, beside _unread
+
+    // Why each unread function was not read (as many as unread()).
+    Array* unreadWhy(void)
+        {
+        return _unreadWhy;
+        }
+
+    void noteUnread(String* name)
+        {
+        _unread.add((Object*)name);
+        _unreadWhy.add((Object*)(_fnWhy != (String*)0 ? _fnWhy : String.withCString("?")));
+        }
 
     void readFunction(Array* lines, u32 head, u32 end)
         {
@@ -927,6 +1010,7 @@ class LlvmReader
         _blocks = new Map();
         _pinOff = (u32)0;
         _bad = false;
+        _fnWhy = (String*)0;
         u32 nParams = (u32)0;
         if (eat("("))
             {
@@ -936,7 +1020,7 @@ class LlvmReader
                 if (pt == (String*)0 || irOf(pt) == (String*)0)
                     {
                     fail("a parameter of a type not read");
-                    _unread.add((Object*)name);
+                    noteUnread(name);
                     if (_split)
                         _bad = false;
                     return;
@@ -989,7 +1073,7 @@ class LlvmReader
         if (_bad)
             {
             // Split, the function is clang's: noted, and the build goes on.
-            _unread.add((Object*)name);
+            noteUnread(name);
             if (_split)
                 _bad = false;
             return;
@@ -1104,6 +1188,12 @@ class LlvmReader
             String* hex = (String*)0;
             if (w.hasPrefix(String.withCString("0x")))
                 hex = w.substringFromByte((u32)2);
+            // LLVM 23 spells a float by its OWN bits, `f0x3AC00000` (clang
+            // 23.1 on Windows; older clangs wrote the double's `0x3F58...`).
+            // Read as 0 before, which made every C program's float constant
+            // that is not a short decimal zero.
+            else if (w.hasPrefix(String.withCString("f0x")) && w.byteLength() == (u32)11)
+                hex = LlvmReader.f32BitsAsF64Hex(w.substringFromByte((u32)3));
             else
                 {
                 // The encoder's hex is in memory order (little-endian):
@@ -1197,6 +1287,15 @@ class LlvmReader
             }
         if (op.equals(String.withCString("load")))
             {
+            // `load atomic volatile ... acquire` is the Microsoft C rule for
+            // a volatile (clang for windows-msvc writes every volatile read
+            // so), and on x86-64 an acquire load is a plain one: read as the
+            // volatile read it stands for. Any other atomic is clang's.
+            if (eat("atomic") && !(_msvc && eat("volatile")))
+                {
+                fail("an atomic load");
+                return;
+                }
             eat("volatile");
             String* t = irOf(llType());
             eat(",");
@@ -1221,6 +1320,14 @@ class LlvmReader
             }
         if (op.equals(String.withCString("store")))
             {
+            // `store atomic volatile ... release`, as the load (a release
+            // store is a plain one on x86-64). A seq_cst store needs a fence a
+            // plain store does not have, and any other atomic is clang's.
+            if (eat("atomic") && (!_msvc || _s.contains(String.withCString(" seq_cst")) || !eat("volatile")))
+                {
+                fail("an atomic store");
+                return;
+                }
             eat("volatile");
             IRValue* v = typedOperand();
             eat(",");

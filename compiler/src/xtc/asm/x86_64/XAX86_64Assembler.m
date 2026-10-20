@@ -1081,6 +1081,30 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
     if ([mn isEqualToString:@"vzeroupper"] && opCount == 0) {
         emit8(out, 0xC5); emit8(out, 0xF8); emit8(out, 0x77); CLEANUP(); return out;
     }
+    // vmovd/vmovq between an xmm and a GP register or memory: movd and movq's
+    // VEX forms (66 0F 6E/7E; W1 for the 64-bit one). An AVX function uses
+    // these, never the legacy forms: a legacy write to an xmm whose upper ymm
+    // half is live made the AVX2 md5 22x slower than its SSE build on a Zen 3.
+    if (([mn isEqualToString:@"vmovd"] || [mn isEqualToString:@"vmovq"]) && opCount == 2 && a && b
+        && ((a->size == 16) != (b->size == 16))) {
+        BOOL toXmm = a->size == 16;
+        XOperand *xmm = toXmm ? a : b, *other = toXmm ? b : a;
+        int bb = other->kind == OpReg ? other->reg : other->base;
+        int xx = other->kind == OpReg ? 0 : other->index;
+        bb = bb < 0 ? 0 : bb; xx = xx < 0 ? 0 : xx;
+        int rr = xmm->reg;
+        if ([mn isEqualToString:@"vmovd"] && !(xx & 8) && !(bb & 8)) {
+            emit8(out, 0xC5);
+            emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | (0x0F << 3) | 1));
+        } else {
+            emit8(out, 0xC4);
+            emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | ((xx & 8) ? 0 : 0x40) | ((bb & 8) ? 0 : 0x20) | 1));
+            emit8(out, (uint8_t)(([mn isEqualToString:@"vmovq"] ? 0x80 : 0) | (0x0F << 3) | 1));
+        }
+        emit8(out, toXmm ? 0x6E : 0x7E);
+        emitModRM(out, xmm->reg, other);
+        CLEANUP(); return out;
+    }
     {
         // mnemonic -> @[pp, map, load-opcode, store-opcode (0 = none)]
         static NSDictionary *vex2; static dispatch_once_t v2once;

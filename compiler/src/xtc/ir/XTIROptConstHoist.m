@@ -53,6 +53,45 @@ static BOOL chDominates(XTIRFunction* fn, XTIRBlock* a, XTIRBlock* b)
     return ![seen containsObject:[NSValue valueWithNonretainedObject:b]];
     }
 
+// Is `b` on a cycle: can it reach itself through its successors?
+static BOOL chOnCycle(XTIRBlock* b)
+    {
+    if (!b.terminator)
+        return NO;
+    NSMutableSet<NSValue*>* seen = [NSMutableSet set];
+    NSMutableArray<XTIRBlock*>* work = [NSMutableArray array];
+    for (XTIROperand* o in b.terminator.operands)
+        {
+        if (o.kind != XTIROperandKindBlock || !o.blockRef)
+            continue;
+        NSValue* k = [NSValue valueWithNonretainedObject:o.blockRef];
+        if ([seen containsObject:k])
+            continue;
+        [seen addObject:k];
+        [work addObject:o.blockRef];
+        }
+    while (work.count)
+        {
+        XTIRBlock* n = work.lastObject;
+        [work removeLastObject];
+        if (n == b)
+            return YES;
+        if (!n.terminator)
+            continue;
+        for (XTIROperand* o in n.terminator.operands)
+            {
+            if (o.kind != XTIROperandKindBlock || !o.blockRef)
+                continue;
+            NSValue* k = [NSValue valueWithNonretainedObject:o.blockRef];
+            if ([seen containsObject:k])
+                continue;
+            [seen addObject:k];
+            [work addObject:o.blockRef];
+            }
+        }
+    return NO;
+    }
+
 @implementation XTIROptConstHoist
 
 - (NSString*)passName
@@ -298,6 +337,7 @@ static XTIRInsn* rebuilt(XTIRInsn* insn, NSArray<XTIROperand*>* ops)
     NSMutableDictionary<NSString*, NSMutableArray<XTIRInsn*>*>* groups =
         [NSMutableDictionary dictionary];
     NSMutableArray<NSString*>* groupOrder = [NSMutableArray array];
+    NSMutableDictionary<NSString*, XTIRBlock*>* firstBlk = [NSMutableDictionary dictionary];
     for (XTIRBlock* bb in fn.blocks)
         {
         for (XTIRInsn* insn in bb.instructions)
@@ -340,6 +380,7 @@ static XTIRInsn* rebuilt(XTIRInsn* insn, NSArray<XTIROperand*>* ops)
                 g = [NSMutableArray array];
                 groups[key] = g;
                 [groupOrder addObject:key];
+                firstBlk[key] = bb;
                 }
             [g addObject:insn];
             }
@@ -351,7 +392,21 @@ static XTIRInsn* rebuilt(XTIRInsn* insn, NSArray<XTIROperand*>* ops)
     for (NSString* key in groupOrder)
         {
         NSArray<XTIRInsn*>* g = groups[key];
-        if (g.count < 2)
+        // A float constant used once is moved too when it sits on a loop: x86
+        // builds one with a mov and a movd (arm64 with up to three instructions
+        // for a value fmov cannot encode) EVERY iteration, where from the entry
+        // it is a register or a folded slot read. Positive zero stays: xorps /
+        // movi make it in one.
+        BOOL loopConst = NO;
+        if (g.count == 1)
+            {
+            XTIRInsn* only = g[0];
+            if (only.opcode == XTIROpConst && only.operands[0].kind == XTIROperandKindImmF &&
+                only.operands[0].floatRawBytes != 0 && firstBlk[key] != entry &&
+                chOnCycle(firstBlk[key]))
+                loopConst = YES;
+            }
+        if (g.count < 2 && !loopConst)
             continue;            // only dedupe repeats
         XTIRInsn* canon = g[0];  // earliest occurrence
         [hoist addObject:canon]; // relocate to entry front
