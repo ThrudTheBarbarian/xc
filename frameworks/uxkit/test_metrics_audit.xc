@@ -6,9 +6,8 @@
 //
 //   inside   the control draws within its frame (1 px of shadow allowed)
 //   centred  the space above it equals the space below (+/- 1 px), so a control that keeps its own
-//            height sits in the middle of its row, and one that fills the frame passes too.  A
-//            label's ink is its text, which is not symmetric about the line's middle (descenders,
-//            no ascender above the x-height): +/- 4 px, still well short of a top-aligned label's
+//            height sits in the middle of its row, and one that fills the frame passes too
+//   top      a label's text starts at the top of its frame (ink within 5 px of it) at any height
 //
 // Each check prints "ok" or "FAIL" with a key, <kind>@<height> <rule>.  The verdict is the runner's
 // (run_metrics_audit.sh): it compares the FAIL keys with the backend's known failures in
@@ -278,10 +277,15 @@ void audit(void)
             bool drawn = b[2] > 0;
             bool inside = drawn && b[0] >= -1 && b[1] >= -1 && b[0] + b[2] <= COLW + 1 && b[1] + b[3] <= h + 1;
             i32 below = h - b[1] - b[3];
-            i32 slack = k == 2 ? 4 : 1;
-            bool centred = drawn && b[1] - below <= slack && below - b[1] <= slack;
             ck(inside, kindName(k), h, (u8*)"inside", &b[0]);
-            ck(centred, kindName(k), h, (u8*)"centred", &b[0]);
+            if (k == 2)
+                {
+                ck(drawn && b[1] <= 5, kindName(k), h, (u8*)"top", &b[0]);
+                }
+            else
+                {
+                ck(drawn && b[1] - below <= 1 && below - b[1] <= 1, kindName(k), h, (u8*)"centred", &b[0]);
+                }
             }
         }
     // the runner gives the verdict from the FAIL keys

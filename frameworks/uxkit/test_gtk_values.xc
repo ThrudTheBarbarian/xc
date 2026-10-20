@@ -100,7 +100,7 @@ void main(void)
     win.displayAll();
     ck((u8*)"the app checking the box checks the GtkCheckButton", ux_gtk_test_native_value(h, (i32)cb.index) == (i32)1);
     ck((u8*)"the app moving the slider moves the GtkScale", ux_gtk_test_native_value(h, (i32)sl.index) == (i32)70);
-    ck((u8*)"the app setting the stepper sets the GtkSpinButton", ux_gtk_test_native_value(h, (i32)st.index) == (i32)4);
+    ck((u8*)"the app setting the stepper sets the native stepper", ux_gtk_test_native_value(h, (i32)st.index) == (i32)4);
     ck((u8*)"progress advancing advances the GtkProgressBar", ux_gtk_test_native_value(h, (i32)pg.index) == (i32)750);
     ck((u8*)"the app selecting an item selects it in the GtkDropDown", ux_gtk_test_native_value(h, (i32)pop.index) == (i32)2);
     ck((u8*)"...and none of those comes back as the user's: no action fired", gFired == (i32)0);

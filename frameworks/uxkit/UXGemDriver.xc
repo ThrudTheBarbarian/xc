@@ -35,8 +35,12 @@ struct UXGemTree
     i32 owns;
     pointer* peers;  // each object's control, for the objects GEM draws from its state (gemSyncNative)
     pointer* own;    // an ob_spec the driver allocated for an object (a slider's SCROLLBAR), freed with it
-    i32 peerCap;
+    i32* labelH;     // a label's height as the toolkit set it, or -1: the AES is given one line of it
+    i32 peerCap;     // the length of peers, own and labelH
     }
+// The AES draws a G_STRING's text centred in the object's height; a label's text sits at the top of
+// its frame on every backend, so a label's object is at most this tall and labelH keeps the frame.
+i32 GEM_LABEL_H = 16;
 // A SCROLLBAR (aes.h): a G_SLIDER's ob_spec, its value in permille.
 struct UXGemBar
     {
@@ -564,7 +568,7 @@ class UXGemDriver : Object<UXViewDriver>
         x[0] = ax;
         y[0] = ay;
         w[0] = (i32)t[i].ob_w;
-        ht[0] = (i32)t[i].ob_h;
+        ht[0] = self.gemHeightOf((UXGemTree*)h, i);
         }
 
     // ---- the OBJECT[] itself (driver-owned; UXViewTree holds only the handle) -------------
@@ -577,6 +581,7 @@ class UXGemDriver : Object<UXViewDriver>
         s.tree = (OBJECT*)malloc((u32)s.cap * (u32)sizeof(OBJECT));
         s.peers = (pointer*)0;
         s.own = (pointer*)0;
+        s.labelH = (i32*)0;
         s.peerCap = (i32)0;
         for (i32 i = (i32)0; i < (i32)64; i = i + (i32)1)
             {
@@ -610,6 +615,7 @@ class UXGemDriver : Object<UXViewDriver>
             {
             free((pointer)s.peers);
             free((pointer)s.own);
+            free((pointer)s.labelH);
             }
         for (i32 i = (i32)0; i < (i32)64; i = i + (i32)1)
             {
@@ -726,6 +732,12 @@ class UXGemDriver : Object<UXViewDriver>
         t[i].ob_w = (i16)w;
         t[i].ob_h = (i16)ht;
         s.count = i + (i32)1;
+        if (kind == (i32)UXKindLabel)
+            {
+            self.structSide(s, i);
+            s.labelH[i] = ht;
+            self.gemSetHeight(s, i, ht);
+            }
         return i;
         }
     // objc_add: link `child` as the LAST child of `parent`.
@@ -807,7 +819,7 @@ class UXGemDriver : Object<UXViewDriver>
         t[i].ob_x = (i16)x;
         t[i].ob_y = (i16)y;
         t[i].ob_w = (i16)w;
-        t[i].ob_h = (i16)ht;
+        self.gemSetHeight((UXGemTree*)h, i, ht);
         }
     void structFrame(pointer h, i32 i, i32* x, i32* y, i32* w, i32* ht)
         {
@@ -815,7 +827,7 @@ class UXGemDriver : Object<UXViewDriver>
         x[0] = (i32)t[i].ob_x;
         y[0] = (i32)t[i].ob_y;
         w[0] = (i32)t[i].ob_w;
-        ht[0] = (i32)t[i].ob_h;
+        ht[0] = self.gemHeightOf((UXGemTree*)h, i);
         }
     void structSetHidden(pointer h, i32 i, i32 on)
         {
@@ -894,33 +906,63 @@ class UXGemDriver : Object<UXViewDriver>
         {
         ((UXGemTree*)h).tree[i].ob_spec = spec;
         }
+    // Grow the per-object side arrays (peers, own, labelH) to hold object i.
+    void structSide(UXGemTree* s, i32 i)
+        {
+        if (i < s.peerCap)
+            {
+            return;
+            }
+        i32 cap = s.peerCap > (i32)0 ? s.peerCap : (i32)16;
+        while (cap <= i)
+            {
+            cap = cap * (i32)2;
+            }
+        pointer* np = (pointer*)malloc((u32)cap * (u32)sizeof(pointer));
+        pointer* no = (pointer*)malloc((u32)cap * (u32)sizeof(pointer));
+        i32* nl = (i32*)malloc((u32)cap * (u32)sizeof(i32));
+        for (i32 k = (i32)0; k < cap; k = k + (i32)1)
+            {
+            np[k] = k < s.peerCap ? s.peers[k] : (pointer)0;
+            no[k] = k < s.peerCap ? s.own[k] : (pointer)0;
+            nl[k] = k < s.peerCap ? s.labelH[k] : (i32)-1;
+            }
+        if (s.peerCap > (i32)0)
+            {
+            free((pointer)s.peers);
+            free((pointer)s.own);
+            free((pointer)s.labelH);
+            }
+        s.peers = np;
+        s.own = no;
+        s.labelH = nl;
+        s.peerCap = cap;
+        }
+    // the height the toolkit set for object i: a label's frame, else the object's own
+    i32 gemHeightOf(UXGemTree* s, i32 i)
+        {
+        if (i < s.peerCap && s.labelH[i] >= (i32)0)
+            {
+            return s.labelH[i];
+            }
+        return (i32)s.tree[i].ob_h;
+        }
+    // set object i's height: a label keeps the toolkit's height aside and gives the AES one line
+    void gemSetHeight(UXGemTree* s, i32 i, i32 ht)
+        {
+        if (i < s.peerCap && s.labelH[i] >= (i32)0)
+            {
+            s.labelH[i] = ht;
+            s.tree[i].ob_h = (i16)(ht < GEM_LABEL_H ? ht : GEM_LABEL_H);
+            return;
+            }
+        s.tree[i].ob_h = (i16)ht;
+        }
     // A control's peer: the objects GEM draws itself read their state from it (gemSyncNative).
     void structSetPeer(pointer h, i32 i, pointer peer)
         {
         UXGemTree* s = (UXGemTree*)h;
-        if (i >= s.peerCap)
-            {
-            i32 cap = s.peerCap > (i32)0 ? s.peerCap : (i32)16;
-            while (cap <= i)
-                {
-                cap = cap * (i32)2;
-                }
-            pointer* np = (pointer*)malloc((u32)cap * (u32)sizeof(pointer));
-            pointer* no = (pointer*)malloc((u32)cap * (u32)sizeof(pointer));
-            for (i32 k = (i32)0; k < cap; k = k + (i32)1)
-                {
-                np[k] = k < s.peerCap ? s.peers[k] : (pointer)0;
-                no[k] = k < s.peerCap ? s.own[k] : (pointer)0;
-                }
-            if (s.peerCap > (i32)0)
-                {
-                free((pointer)s.peers);
-                free((pointer)s.own);
-                }
-            s.peers = np;
-            s.own = no;
-            s.peerCap = cap;
-            }
+        self.structSide(s, i);
         s.peers[i] = peer;
         }
     // Copy each GEM-drawn control's state into its object before the AES draws it: a check box's

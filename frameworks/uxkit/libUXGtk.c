@@ -136,13 +136,21 @@ int ux_gtk_boot(int* w, int* h)
      * (~34px on Adwaita) silently overrule size requests, so a 28px-row UI
      * overflows.  Drop the floors app-wide — the GTK twin of the Android
      * driver's setMinHeight(0); a control still takes its full REQUESTED
-     * frame, it just stops exceeding it. */
+     * frame, it just stops exceeding it.  The text is 13px, as on the other
+     * backends (GTK's default, "Sans 10", is 13.3px). */
     GtkCssProvider* prov = gtk_css_provider_new();
     gtk_css_provider_load_from_string(prov,
+                                      "window { font-size: 13px; }\n" /* the control font every backend uses */
                                       "button, entry, spinbutton, dropdown, dropdown button { min-height: 0; min-width: 0; }\n"
                                       "button { padding: 1px 8px; }\n"
                                       "entry { padding: 1px 6px; }\n"
-                                      "spinbutton entry, spinbutton button { min-height: 0; padding: 0 4px; }\n");
+                                      "spinbutton entry, spinbutton button { min-height: 0; padding: 0 4px; }\n"
+                                      /* a check box, radio and slider fit a 20px row, centred in it */
+                                      "checkbutton { padding: 0 2px; min-height: 0; }\n"
+                                      "scale { padding: 0 10px; min-height: 0; }\n"
+                                      /* a progress bar is as wide as its frame (Adwaita asks 150px) */
+                                      "progressbar, progressbar > trough { min-width: 0; }\n"
+                                      ".ux-stepper button { padding: 0 4px; min-width: 0; }\n");
     gtk_style_context_add_provider_for_display(d, GTK_STYLE_PROVIDER(prov),
                                                GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(prov);
@@ -1672,6 +1680,7 @@ void ux_gtk_make_label(int handle, int node, int x, int y, int w, int h, const c
     {
     GtkWidget* l = gtk_label_new(text);
     gtk_label_set_xalign(GTK_LABEL(l), 0.0f);
+    gtk_label_set_yalign(GTK_LABEL(l), 0.0f); /* the text at the top of its frame, as on every backend */
     park(handle, node, l, x, y, w, h);
     }
 
@@ -1773,37 +1782,72 @@ void ux_gtk_set_slider_value(int handle, int node, int val)
     gValueMute = 0;
     }
 
-static void spin_cb(GtkSpinButton* s, gpointer ud)
+/* A stepper: a linked pair of - and + buttons, centred in its frame.  Like the other backends'
+ * steppers it shows no value of its own (GtkSpinButton would add an entry, and a 33px floor); the
+ * value, its range and step live on the parked box. */
+typedef struct
     {
+    int lo, hi, step, wraps, val;
+    } UXGtkStep;
+static void step_cb(GtkButton* b, gpointer box)
+    {
+    UXGtkStep* s = g_object_get_data(G_OBJECT(box), "ux-step");
+    int v = s->val + GPOINTER_TO_INT(g_object_get_data(G_OBJECT(b), "ux-dir")) * s->step;
+    if (v > s->hi)
+        v = s->wraps ? s->lo : s->hi;
+    if (v < s->lo)
+        v = s->wraps ? s->hi : s->lo;
+    if (v == s->val)
+        return;
+    s->val = v;
     if (gValue && !gValueMute)
-        gValue(hOf(GTK_WIDGET(s)), nOf(GTK_WIDGET(s)),
-               gtk_spin_button_get_value_as_int(s));
+        gValue(hOf(GTK_WIDGET(box)), nOf(GTK_WIDGET(box)), v);
+    }
+static UXGtkStep* stepOf(GtkWidget* c)
+    {
+    return c ? g_object_get_data(G_OBJECT(c), "ux-step") : NULL;
     }
 void ux_gtk_make_stepper(int handle, int node, int x, int y, int w, int h,
                          int lo, int hi, int step, int wraps, int val)
     {
-    GtkWidget* s = gtk_spin_button_new_with_range(lo, hi, step > 0 ? step : 1);
-    gtk_spin_button_set_wrap(GTK_SPIN_BUTTON(s), wraps != 0);
-    gtk_spin_button_set_value(GTK_SPIN_BUTTON(s), val);
-    g_signal_connect(s, "value-changed", G_CALLBACK(spin_cb), NULL);
-    park(handle, node, s, x, y, w, h);
+    UXGtkStep* s = g_new0(UXGtkStep, 1);
+    *s = (UXGtkStep){lo, hi, step > 0 ? step : 1, wraps != 0, val};
+    GtkWidget* box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    g_object_set_data_full(G_OBJECT(box), "ux-step", s, g_free);
+    GtkWidget* pair = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_add_css_class(pair, "linked");
+    gtk_widget_add_css_class(pair, "ux-stepper");
+    gtk_widget_set_hexpand(pair, TRUE);
+    gtk_widget_set_halign(pair, GTK_ALIGN_CENTER);
+    const char* icons[2] = {"list-remove-symbolic", "list-add-symbolic"};
+    for (int i = 0; i < 2; i++)
+        {
+        GtkWidget* b = gtk_button_new_from_icon_name(icons[i]);
+        g_object_set_data(G_OBJECT(b), "ux-dir", GINT_TO_POINTER(i == 0 ? -1 : 1));
+        g_signal_connect(b, "clicked", G_CALLBACK(step_cb), box);
+        gtk_box_append(GTK_BOX(pair), b);
+        }
+    gtk_box_append(GTK_BOX(box), pair);
+    park(handle, node, box, x, y, w, h);
     }
 void ux_gtk_set_stepper_value(int handle, int node, int val)
     {
-    GtkWidget* c = gCtl[handle][node];
-    if (GTK_IS_SPIN_BUTTON(c))
-        {
-        gValueMute = 1;
-        if (gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(c)) != val)
-            gtk_spin_button_set_value(GTK_SPIN_BUTTON(c), val);
-        gValueMute = 0;
-        }
+    UXGtkStep* s = stepOf(gCtl[handle][node]);
+    if (s)
+        s->val = val;
     }
 
 void ux_gtk_make_progress(int handle, int node, int x, int y, int w, int h, int mille)
     {
     GtkWidget* p = gtk_progress_bar_new();
     gtk_progress_bar_set_fraction(GTK_PROGRESS_BAR(p), mille / 1000.0);
+    /* the trough (Adwaita's is a 4px line) in the middle of the frame, not at its top */
+    for (GtkWidget* k = gtk_widget_get_first_child(p); k; k = gtk_widget_get_next_sibling(k))
+        if (strcmp(gtk_widget_get_css_name(k), "trough") == 0)
+            {
+            gtk_widget_set_vexpand(k, TRUE);
+            gtk_widget_set_valign(k, GTK_ALIGN_CENTER);
+            }
     park(handle, node, p, x, y, w, h);
     }
 void ux_gtk_set_progress(int handle, int node, int mille, int indeterminate)
@@ -1903,8 +1947,8 @@ int ux_gtk_test_native_value(int handle, int node)
     GtkWidget* c = gCtl[handle][node];
     if (GTK_IS_CHECK_BUTTON(c))
         return gtk_check_button_get_active(GTK_CHECK_BUTTON(c)) ? 1 : 0;
-    if (GTK_IS_SPIN_BUTTON(c))
-        return gtk_spin_button_get_value_as_int(GTK_SPIN_BUTTON(c));
+    if (stepOf(c))
+        return stepOf(c)->val;
     if (GTK_IS_RANGE(c))
         return (int)(gtk_range_get_value(GTK_RANGE(c)) + 0.5);
     if (GTK_IS_PROGRESS_BAR(c))
