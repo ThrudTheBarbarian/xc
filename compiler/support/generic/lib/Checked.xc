@@ -64,6 +64,21 @@ void _xt_check_trap(u8* site, u64 index, u64 count, bool known)
     _xt_exit((i32)134);
 }
 
+// A raw pointer cast to a class: it must be null or a heap object, whose
+// header carries the object magic; the class itself is then checked as a
+// downcast from Object is.
+void _xt_check_object(pointer ptr, u8* site)
+{
+    if (ptr == (pointer)0)
+        return;
+    if (*(u32*)(pointer)((u8*)ptr - 40) == (u32)XT_CHECK_MAGIC)
+        return;
+    _xt_check_put("\n=== xcc: a pointer cast to a class is not an object ===\n  at ");
+    _xt_check_put(site != (u8*)0 ? site : "?");
+    _xt_check_put("\n  aborting\n");
+    _xt_exit((i32)134);
+}
+
 void _xt_check_bounds_n(pointer ptr, u64 index, u64 count, u8* site)
 {
     if (index >= count)

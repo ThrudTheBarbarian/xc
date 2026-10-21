@@ -3834,6 +3834,32 @@ class ClassInfo
         _mem = nm;
         }
 
+    // `_xt_check_object(p, "file:line:col")`: p is null or a heap object
+    // (its header's magic), before a raw pointer is cast to a class.
+    void emitObjectCheck(IRValue* p, Node* at)
+        {
+        IRValue* sv = stringAddr(boundsSite(at));
+        if (sv == 0)
+            return;
+        IRInsn* c = IRInsn.with(String.withCString("Call"));
+        c.add(IROperand.sym(runtimeHelper(String.withCString("_xt_check_object"))));
+        c.add(IROperand.useVal(p));
+        c.add(IROperand.useVal(sv));
+        c.add(IROperand.useVal(_mem));
+        IRValue* nm = new IRValue(String.withCString("Mem"));
+        c.setMemRes(nm);
+        c.setCc(String.withCString("CallConv::Standard"));
+        _blk.add(c);
+        _mem = nm;
+        }
+
+    // A pointer that is not a class's: `u8*`, `pointer` and the like.
+    static bool isPtrSpelling(String* t)
+        {
+        return t != (String*)0 && (t.hasSuffix(String.withCString("*")) || t.hasSuffix(String.withCString("@"))
+                                   || t.equals(String.withCString("pointer")));
+        }
+
     // The checks themselves (Checked.xc's _xt_check_*) are not checked: their
     // own reads would call them again, without end.
     bool inChecker(void)
@@ -4030,6 +4056,15 @@ class ClassInfo
             ClassInfo* src = classFor(pointeeOf(st));
             if (tgt != 0 && src != 0 && !isAncestorOf(tgt, src))
                 return lowerDowncast(n, v, n.hasFlag((u32)NF_FAILABLE));
+            // A checked build checks a raw pointer cast to a class too (the
+            // security review, 2026-10-21): the pointer must be null or a
+            // heap object, and then the object must be of the class, as a
+            // downcast from Object is checked.
+            if (_boundsCheck && tgt != 0 && src == 0 && v != (IRValue*)0 && isPtrSpelling(st) && !inChecker())
+                {
+                emitObjectCheck(v, n);
+                return lowerDowncast(n, v, n.hasFlag((u32)NF_FAILABLE));
+                }
             // `(P@ ?)obj` where the operand is not KNOWN to conform. On a
             // backend that carries the conformance itable the object itself
             // answers at run time: the helper walks its vtable's itable

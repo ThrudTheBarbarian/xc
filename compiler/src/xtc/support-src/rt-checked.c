@@ -381,6 +381,23 @@ void _xt_check_bounds_n(void *ptr, unsigned long index, unsigned long count,
     }
 }
 
+/* A raw pointer cast to a class (the security review, 2026-10-21): it must be
+ * null or a heap object, whose header carries the object magic; the class
+ * itself is then checked as a downcast from Object is. Anything else (a C
+ * string, a stack address, freed memory) stops the program here, rather than
+ * at the wrong vtable later. */
+void _xt_check_object(void *ptr, const char *site){
+    if (!ptr) return;
+    unsigned char *h = (unsigned char *)ptr - 40;   /* XT_HDR — see rt.c */
+    if (*(unsigned int *)(h + 0) == 0x58544F42U) return;
+    fprintf(stderr, "\n=== xcc: a pointer cast to a class is not an object ===\n");
+    if (site) fprintf(stderr, "  at %s\n", site);
+    fprintf(stderr, "  %p has no object header\n", ptr);
+    __xt_ms_backtrace();
+    fprintf(stderr, "  aborting\n");
+    abort();
+}
+
 void _xt_check_bounds(void *ptr, unsigned long index, const char *site){
     if (!ptr) { XT_MS_CAPTURE(); _xt_trap_bounds(site, ptr, index); return; }
     unsigned char *h = (unsigned char *)ptr - 40;   /* XT_HDR — see rt.c */

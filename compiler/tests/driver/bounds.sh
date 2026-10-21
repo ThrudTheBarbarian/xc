@@ -131,6 +131,40 @@ for want in 2:9 3:14 4:21 5:28; do
     [ $rc = 134 ] && grep -q "n.xc:$line:" "$W/n$case.out" \
         || { echo "FAIL bounds: case $case was not stopped at n.xc:$line (exit $rc)"; head -3 "$W/n$case.out"; fail=1; }
 done
+# A raw pointer cast to a class, in a checked build (2026-10-21): it must be
+# null or a heap object, and of the class. The right object passes; another
+# class, or a C string, stops the program instead of reading the wrong fields.
+cat > "$W/c.xc" <<'XC'
+#import "Stdio.xc"
+class Dog : Object
+    {
+    u32 legs;
+    }
+class Cat : Object
+    {
+    u32 lives;
+    }
+i32 main(i32 argc, u8** argv)
+    {
+    Dog* d = new Dog();
+    d.legs = (u32)4;
+    pointer raw = (pointer)d;
+    if (argc > 2)
+        raw = (pointer)argv[0];
+    if (argc == 2)
+        raw = (pointer)(new Cat());
+    Dog* back = (Dog*)raw;
+    Stdio.printf("legs %u\n", back.legs);
+    return 0;
+    }
+XC
+"$XC" -q -O2 -fbounds-check -H . -o "$W/c" "$W/c.xc" > "$W/c.b" 2>&1 || { echo "FAIL bounds: the cast program does not build"; head -3 "$W/c.b"; fail=1; }
+[ "$("$W/c" < /dev/null 2>&1)" = "legs 4" ] || { echo "FAIL bounds: a cast back to the object's own class gives '$("$W/c" 2>&1 | head -1)'"; fail=1; }
+"$W/c" x < /dev/null > "$W/c1.out" 2>&1; rc=$?
+[ $rc -ge 128 ] && ! grep -q '^legs' "$W/c1.out" || { echo "FAIL bounds: a Cat cast to Dog through a raw pointer was not stopped (exit $rc)"; head -2 "$W/c1.out"; fail=1; }
+"$W/c" x y < /dev/null > "$W/c2.out" 2>&1; rc=$?
+[ $rc -ge 128 ] && grep -q 'not an object' "$W/c2.out" && grep -q 'c.xc:19:' "$W/c2.out" \
+    || { echo "FAIL bounds: a C string cast to a class was not stopped at c.xc:19 (exit $rc)"; head -3 "$W/c2.out"; fail=1; }
 # An allocation whose byte size wraps stops the program, checked or not: a
 # wrapped `count * stride` was a small block whose header said `count`, so the
 # program, and every check, wrote past its end. 2^61 + 1 u64s is 8 bytes, wrapped.

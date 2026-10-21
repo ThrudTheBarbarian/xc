@@ -7093,6 +7093,37 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             }
         }
 
+    // A checked build checks a raw pointer cast to a class too (the security
+    // review, 2026-10-21): the pointer must be null or a heap object, and then
+    // the object must be of the class, as a downcast from Object is checked.
+    // Mirrors the self-hosted lowering.
+    if (self.boundsCheck && ![self.currentFunction.name hasPrefix:@"_xt_check"] && src &&
+        dstType && dstType.kind == XTTypeKindPointer && srcType && srcType.kind == XTTypeKindPointer)
+        {
+        XTType* dp = [dstType isKindOfClass:[XTPointerType class]] ? ((XTPointerType*)dstType).pointeeType : nil;
+        XTType* sp = [srcType isKindOfClass:[XTPointerType class]] ? ((XTPointerType*)srcType).pointeeType : nil;
+        XTIRClassInfo* tci = dp ? self.classesByName[dp.displayName] : nil;
+        XTIRClassInfo* sci = sp ? self.classesByName[sp.displayName] : nil;
+        if (tci && !sci)
+            {
+            XTSourceLocation* loc = node.location;
+            NSString* site = [NSString stringWithFormat:@"%@:%lu:%lu",
+                                                        loc.filename.lastPathComponent ?: @"?",
+                                                        (unsigned long)loc.line, (unsigned long)loc.column];
+            XTIRValue* siteVal = [self internCString:site];
+            if (siteVal)
+                [self emitCall:[self runtimeHelperSymbolNamed:@"_xt_check_object"]
+                      callConv:[XTIRCallConv standard]
+                     argValues:@[ src, siteVal ]
+                    resultType:nil];
+            return [self lowerClassDowncastFrom:src
+                                    sourceClass:nil
+                                    targetClass:tci
+                                     resultType:tci.selfPtrType
+                                       failable:node.isFailable];
+            }
+        }
+
     // Pointer-to-pointer / class-pointer reinterpretation (no width
     // change for 2-byte pointers on 6502, identical encoding on
     // portable targets). Emit a Bitcast — the IR knows the source and
