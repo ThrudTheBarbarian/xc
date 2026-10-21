@@ -37,6 +37,33 @@ XC
 [ $rc = 134 ] && grep -q 'stack smashing detected' "$W/o" \
     || { echo "FAIL canary: a write 192 bytes past a local array was not stopped (exit $rc)"; head -2 "$W/o"; fail=1; }
 grep -q '^fill' "$W/o" && { echo "FAIL canary: fill returned through a smashed frame"; fail=1; }
+# A C program's overrun is stopped too, whichever half compiled the function:
+# xcc's canary, or clang's own stack protector for a function left to clang.
+if clang --version >/dev/null 2>&1; then
+    cat > "$W/c.c" <<'C'
+#include <stdio.h>
+#include <string.h>
+int __attribute__((noinline)) fill(const char *s)
+{
+    char buf[8];
+    strcpy(buf, s);
+    return buf[0];
+}
+int main(int argc, char **argv)
+{
+    printf("%d\n", fill(argc > 1 ? "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" : "AB"));
+    return 0;
+}
+C
+    if "$XC" -q -O2 -H . -o "$W/c" "$W/c.c" > "$W/c.b" 2>&1; then
+        [ "$("$W/c" 2>&1)" = "65" ] || { echo "FAIL canary: the C program's in-range run gives '$("$W/c" 2>&1 | head -1)'"; fail=1; }
+        "$W/c" x > "$W/co" 2>&1; rc=$?
+        [ $rc -ge 128 ] && ! grep -q '^65' "$W/co" \
+            || { echo "FAIL canary: a C strcpy past a local array was not stopped (exit $rc)"; head -2 "$W/co"; fail=1; }
+    else
+        echo "FAIL canary: the C program does not build"; head -3 "$W/c.b"; fail=1
+    fi
+fi
 if [ "$PLAT" = osx ]; then
     for A in x86_64 win64; do
         "$XC" -q -O2 -A $A -H . -o "$W/s.$A" "$W/s.xc" > "$W/$A.out" 2>&1 \

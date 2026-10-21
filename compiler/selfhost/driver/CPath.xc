@@ -20,6 +20,11 @@
 // clang's object for the part of the C program xcc does not compile (the
 // globals, and any function the reader did not read); the link adds it.
 String* gCRestObject;
+// Whether clang's half is built with its own stack protector: its runtime
+// (__stack_chk_guard, __stack_chk_fail) is libSystem's and glibc's, so the
+// driver says yes for macOS and the dynamic glibc link, and no for a static
+// Linux program and Windows, whose links have no such runtime.
+bool gCPathProtect;
 
 // The C library's: the shell runs clang, with this process's environment.
 i32 system(u8* command);
@@ -203,7 +208,12 @@ class CPath
             Stdio.error(String.withFormat("xcc: error: cannot write '%s'\n", restLl.cString()));
             return (IRModule*)0;
             }
-        String* cc = String.withCString("clang -O2 -fno-unwind-tables -fno-asynchronous-unwind-tables -Wno-override-module -c -o ");
+        // clang's half gets clang's own stack protector where its runtime is
+        // there (gCPathProtect), as xcc's half gets its canaries (the
+        // security review, 2026-10-21).
+        String* cc = String.withCString(gCPathProtect
+            ? "clang -O2 -fstack-protector-strong -fno-unwind-tables -fno-asynchronous-unwind-tables -Wno-override-module -c -o "
+            : "clang -O2 -fno-unwind-tables -fno-asynchronous-unwind-tables -Wno-override-module -c -o ");
         cc.append(CPath.quoted(restO));
         cc.appendCString(" ");
         cc.append(CPath.quoted(restLl));

@@ -5769,6 +5769,21 @@ class Sema
         if (call.kidCount() <= fmtIdx)
             return;
         Node* lit = call.kid(fmtIdx);
+        // `printf(text)`: a format that is not a literal, with nothing after
+        // it, is text printed AS a format, and text that holds a `%x` or a
+        // `%p` reads the stack (the security review, 2026-10-21).
+        // Only a C string (a String object goes to the message overload),
+        // and not a call that forwards its own `...` tail.
+        String* fty = lit.kind() != (u16)nkStr ? Node.stripElem(unboxedTypeOf(lit)) : (String*)0;
+        if (lit.kind() != (u16)nkStr && call.kidCount() == fmtIdx + (u32)1 && !call.hasFlag((u32)NF_VAFWD)
+            && fty != (String*)0 && (fty.equals(String.withCString("u8*")) || fty.equals(String.withCString("u8@"))
+                                      || fty.equals(String.withCString("string"))))
+            {
+            String* msg = String.withString(callName);
+            msg.appendCString(": the format is not a string literal and takes no arguments; to print text, use \"%s\" and pass it");
+            _warnAt(String.withCString("printf-format"), msg, call);
+            return;
+            }
         if (lit.kind() != (u16)nkStr || lit.name() == 0)
             return;
         String* f = lit.name();

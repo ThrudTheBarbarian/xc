@@ -4212,6 +4212,10 @@ void main(void)
             Stdio.printf("xcc: error: -c of a C file is not done yet: build the program in one step\n");
             Process.exit((i32)1); return;
             }
+        // clang's own stack protector for its half, where the link has its
+        // runtime: macOS, and Linux linked against glibc (the default).
+        gCPathProtect = (d.arch().equals(String.withCString("arm64")) && !isIos(d))
+                     || (isX86_64(d) && d.caps().dynamic());
         if (gOptOutline || Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
             mod = CPath.lowerWith(cin, CPath.scratch(), cIncs, cDefs, d.fe());
         else

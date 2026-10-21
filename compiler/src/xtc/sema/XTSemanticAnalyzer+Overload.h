@@ -123,6 +123,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)collectFormatWrappers:(NSArray<XTASTNode*>*)decls;
 - (nullable NSArray<XTASTNode*>*)formatCallArguments:(NSArray<XTASTNode*>*)args
                                               fmtIdx:(NSUInteger)fmtIdx
+                                            forwards:(BOOL)forwards
                                             location:(XTSourceLocation*)loc
                                             callName:(NSString*)callName;
 - (nullable NSArray<XTASTNode*>*)promotedFormatArguments:(NSArray<XTASTNode*>*)args

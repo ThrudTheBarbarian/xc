@@ -2047,6 +2047,7 @@ static BOOL XTIsErasedKeyType(XTType* t)
             if (wrapperFmt && ft.isVarArgs)
                 node.arguments = [self formatCallArguments:node.arguments
                                                     fmtIdx:wrapperFmt.unsignedIntegerValue
+                                                  forwards:node.forwardsVarargs
                                                   location:node.location
                                                   callName:node.calleeName] ?: node.arguments;
             NSString* key = best.mangledName ?: node.calleeName;
@@ -2229,6 +2230,13 @@ static BOOL XTIsErasedKeyType(XTType* t)
                         {
                         NSUInteger fmtIdx =
                             [bestM.methodName isEqualToString:@"printfAt"] ? 2 : 0;
+                        [self warnNonLiteralFormat:node.arguments
+                                            fmtIdx:fmtIdx
+                                          forwards:node.forwardsVarargs
+                                          location:node.location
+                                          callName:[NSString stringWithFormat:
+                                                                 @"%@ (Stdio.%@ via use)",
+                                                                 node.calleeName, bestM.methodName]];
                         if (node.arguments.count > fmtIdx &&
                             [node.arguments[fmtIdx] isKindOfClass:[XTLiteralStringNode class]])
                             {
@@ -2619,6 +2627,28 @@ static NSUInteger XTFmtIntWidth(void)
 |* not match. Category XTWarnPrintfFormat (-Wno-printf-format). A format that
 |* is not a literal is not checked.
 \****************************************************************************/
+// `printf(text)`: a format that is not a literal, with nothing after it, is
+// text printed AS a format, and text that holds a `%x` or a `%p` reads the
+// stack (the security review, 2026-10-21). Mirrors the self-hosted check.
+- (void)warnNonLiteralFormat:(NSArray<XTASTNode*>*)args
+                      fmtIdx:(NSUInteger)fmtIdx
+                    forwards:(BOOL)forwards
+                    location:(XTSourceLocation*)loc
+                    callName:(NSString*)callName
+    {
+    if (forwards || args.count != fmtIdx + 1 || [args[fmtIdx] isKindOfClass:[XTLiteralStringNode class]])
+        return;
+    // Only a C string (a String object goes to the message overload).
+    NSString* dn = args[fmtIdx].resolvedType.displayName;
+    if (!([dn isEqualToString:@"u8*"] || [dn isEqualToString:@"u8@"] || [dn isEqualToString:@"string"]))
+        return;
+    [self.diagnostics emitWarning:[NSString stringWithFormat:
+                                                @"%@: the format is not a string literal and takes no arguments; to print text, use \"%%s\" and pass it",
+                                                callName]
+                         category:XTWarnPrintfFormat
+                               at:loc];
+    }
+
 - (void)checkPrintfFormat:(NSString*)fmt
                 arguments:(NSArray<XTASTNode*>*)args
                firstVaIdx:(NSUInteger)firstVaIdx
@@ -2899,11 +2929,13 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
 \****************************************************************************/
 - (nullable NSArray<XTASTNode*>*)formatCallArguments:(NSArray<XTASTNode*>*)args
                                               fmtIdx:(NSUInteger)fmtIdx
+                                            forwards:(BOOL)forwards
                                             location:(XTSourceLocation*)loc
                                             callName:(NSString*)callName
     {
     if (args.count <= fmtIdx)
         return nil;
+    [self warnNonLiteralFormat:args fmtIdx:fmtIdx forwards:forwards location:loc callName:callName];
     NSMutableArray<XTASTNode*>* out = [args mutableCopy];
     if ([out[fmtIdx] isKindOfClass:[XTLiteralStringNode class]])
         {
@@ -3868,6 +3900,7 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
         NSUInteger fmtIdx = [node.methodName isEqualToString:@"printfAt"] ? 2 : 0;
         node.arguments = [self formatCallArguments:node.arguments
                                             fmtIdx:fmtIdx
+                                          forwards:node.forwardsVarargs
                                           location:node.location
                                           callName:[NSString stringWithFormat:@"%@.%@", className, node.methodName]]
                              ?: node.arguments;
@@ -3876,6 +3909,7 @@ static NSInteger XTFmtWrapperIndex(BOOL isVarArgs, NSArray<XTParamNode*>* params
         {
         node.arguments = [self formatCallArguments:node.arguments
                                             fmtIdx:self.formatWrappers[fmtWrapperKey].unsignedIntegerValue
+                                          forwards:node.forwardsVarargs
                                           location:node.location
                                           callName:[NSString stringWithFormat:@"%@.%@", className, node.methodName]]
                              ?: node.arguments;
