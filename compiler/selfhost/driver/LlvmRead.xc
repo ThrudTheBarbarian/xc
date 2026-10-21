@@ -282,15 +282,18 @@ class LlvmReader
             String* l = (String*)lines.get(i);
             if (l.hasPrefix(String.withCString("define ")))
                 {
+                // The name is the first `@` on the line, however many words
+                // come before it: this stepped at most 16 characters, and
+                // `define dso_local double @work` (clang for windows-msvc) puts
+                // it at 24, so every function xcc read stayed defined in
+                // clang's half too and the program called clang's copy.
                 at(l);
                 String* name = (String*)0;
-                for (u32 g = (u32)0; g < (u32)16 && name == (String*)0 && more(); g = g + (u32)1)
+                u32 atSign = l.indexOfByte((u8)'@');
+                if (atSign != (u32)$FFFFFFFF)
                     {
-                    ws();
-                    if (peek() == (u8)'@')
-                        name = word();
-                    else
-                        _p = _p + (u32)1;
+                    _p = atSign;
+                    name = word();
                     }
                 bool isRead = false;
                 for (u32 k = (u32)0; name != (String*)0 && k < _readFns.count() && !isRead; k = k + (u32)1)
