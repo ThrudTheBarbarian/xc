@@ -1755,9 +1755,18 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
 + (NSString*)assemblyFromModule:(XTIRModule*)mod
     {
     sCanaryN = 0;
+    // Atomic reference counts (the security review, 2026-10-21): on when the
+    // module spawns a thread, has no main (a library or plugin, whose caller
+    // may have threads), or loads a plugin. Not always, as arm64 is: a locked
+    // add costs arc_alloc 3.2x here. Mirrors the self-hosted arcAtomic.
+    BOOL arcHasMain = NO;
+    for (XTIRFunction* f in mod.functions)
+        if ([f.name isEqualToString:@"main"])
+            arcHasMain = YES;
     sX86ThreadSafeARC = sX86ThreadSafeARCOverride >= 0
                             ? (sX86ThreadSafeARCOverride != 0)
-                            : [mod referencesSymbolNamed:@"_xt_thread_create"];
+                            : ([mod referencesSymbolNamed:@"_xt_thread_create"] || !arcHasMain
+                               || [mod referencesSymbolNamed:@"Plugin$load"]);
     NSMutableString* out = [NSMutableString string];
     [out appendString:@"\t.intel_syntax noprefix\n\t.text\n"];
     // Runtime SIMD dispatch (-msimd=auto): a dispatched function's NAME is a

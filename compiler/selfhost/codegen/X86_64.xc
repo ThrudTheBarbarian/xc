@@ -452,7 +452,7 @@ class X86_64
     String* assembly(IRModule* m)
         {
         _m = m;
-        _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : spawnsThreads(m);
+        _atomicArc = _arcOverride >= (i32)0 ? _arcOverride != (i32)0 : arcAtomic(m);
         _out = new String();
         _out.appendCString("\t.intel_syntax noprefix\n\t.text\n");
         // Runtime SIMD dispatch (-msimd=auto), as the reference: a dispatched
@@ -3071,6 +3071,24 @@ class X86_64
     bool spawnsThreads(IRModule* m)
         {
         return referencesSymbol(m, String.withCString("_xt_thread_create"));
+        }
+
+    // Atomic reference counts (the security review, 2026-10-21): an object
+    // two threads retain and release with plain loads and stores can be freed
+    // twice. On when the module spawns a thread, as before; when it has no
+    // main (a library or a plugin, whose caller may have threads of its own);
+    // and when it loads a plugin (whose threads may share its objects). Not
+    // always, as arm64 is: a locked add costs arc_alloc 3.2x here.
+    bool arcAtomic(IRModule* m)
+        {
+        if (spawnsThreads(m))
+            return true;
+        bool hasMain = false;
+        for (u32 f = (u32)0; f < m.funcs().count() && !hasMain; f = f + (u32)1)
+            hasMain = ((IRFunc*)m.funcs().get(f)).name().equals(String.withCString("main"));
+        if (!hasMain)
+            return true;
+        return referencesSymbol(m, String.withCString("Plugin$load"));
         }
 
     bool referencesSymbol(IRModule* m, String* want)

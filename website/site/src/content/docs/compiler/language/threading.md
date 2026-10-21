@@ -25,14 +25,20 @@ Two threads that use one object race on its **ARC refcount**. A non-atomic
 increment that loses the race under-counts, and the object is freed while still
 in use. The crash can then appear far from the cause.
 
-The back ends therefore emit the refcount update as an atomic read-modify-write.
-The decision is made **per module**: it is on when the module references the
-thread-creation runtime, which happens when the program spawns a thread. You do
-not need to request it.
+The back ends therefore emit the refcount update as an atomic read-modify-write
+wherever two threads could meet. You do not need to request it:
 
-`-fthread-safe-arc` and `-fno-thread-safe-arc` force it on or off when the
-automatic decision is wrong. For example, a separately compiled library that a
-threaded program will use needs the flag on.
+- On arm64 with the LSE atomics (Apple silicon), always. They cost nothing
+  measurable there.
+- Elsewhere, per module: when the module spawns a thread; when it has no
+  `main` (a library or a plugin, whose caller may have threads of its own);
+  and when it loads a plugin, whose threads may share its objects. A program
+  that does none of these keeps plain counts, which on x86-64 are several
+  times cheaper for allocation-heavy code.
+
+`-fthread-safe-arc` and `-fno-thread-safe-arc` force it on or off. A program
+whose objects reach threads it did not start (a C library calling back into
+it from its own threads) needs the flag on.
 
 ## Spawning
 
