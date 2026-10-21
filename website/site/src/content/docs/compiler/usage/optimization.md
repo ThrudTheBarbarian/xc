@@ -85,7 +85,7 @@ Main RAM also holds the runtime and the program's data. If the functions kept th
 
 A loop whose trip count is only known at run time is unrolled four times, with each copy of the body checking the exit condition, so no separate remainder loop is needed.
 
-On `x86_64` and `win64` the head of every loop is aligned to a 32-byte boundary. On `x86_64` the ELF `.text` section starts on a 64-byte boundary, so the alignment holds in the linked program and a loop's position within the processor's fetch window does not depend on how much code precedes it.
+On `x86_64` and `win64` the head of every loop is aligned to a 64-byte boundary, the start of a cache line. On `x86_64` the ELF `.text` section starts on a 64-byte boundary, so the alignment holds in the linked program and a loop's position within the line does not depend on how much code precedes it.
 
 ## Choosing a level
 

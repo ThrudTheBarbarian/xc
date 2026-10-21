@@ -6147,8 +6147,15 @@ class X86_64
         // much that the phase is now DETERMINISTIC — it no longer re-rolls
         // when unrelated code ahead of a hot function changes size, which had
         // produced 37% swings between byte-identical loops. private:docs/bugs/232.
+        // SIXTY-FOUR since the 0.85 re-issue: at 32 a head's phase within a
+        // 64-byte line still re-rolled with the code ahead of it, and on a
+        // Zen 5 host the re-issue's own changes moved sort_small 0.93 -> 1.43 s,
+        // mem_copy 0.34 -> 0.46 and sieve 1.01 -> 1.11 with byte-identical
+        // loops; at 64 they are back (best of seven, every benchmark within
+        // 5%, none slower beyond that). The ELF writer's 64-byte .text makes
+        // it absolute.
         if (loopHead)
-            _out.appendCString("\t.p2align\t5, 0x90\n");
+            _out.appendCString("\t.p2align\t6, 0x90\n");
         _out.appendFormat("%s:\n", blockLabel(fn, bb).cString());
         for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
             {
