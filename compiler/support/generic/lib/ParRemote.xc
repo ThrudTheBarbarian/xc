@@ -879,6 +879,9 @@ class ParRemoteWorker : ParWorker
     i64 _kernelUs;          // the daemon's time on this run's tiles, summed from DONE
     i64 _kernelItems;
     String* _identity;      // "remote:<host>:<the daemon's device>", "" when unreachable
+    bool _bad;              // returned a wrong result: never used again this run
+    bool _exact;            // the block in hand computes no floating point (its results are bit-exact anywhere)
+    u32 _back;              // tiles of this block back from the daemon
     String* _machine;       // the daemon's machine (ParMachine.id there), "" when it did not say
     u32 _depth;
     i64 _floor;
@@ -1244,7 +1247,7 @@ class ParRemoteWorker : ParWorker
     // in flight are waited for by drain()).
     bool ready(i64 now)
         {
-        if (_s == (ParLink*)0 || !_s.isOpen() || _r == (ParLink*)0 || !_r.isOpen())
+        if (_bad || _s == (ParLink*)0 || !_s.isOpen() || _r == (ParLink*)0 || !_r.isOpen())
             return false;
         while (_s.waitReadable((i32)0))
             if (!readFrame())
@@ -1356,7 +1359,7 @@ class ParRemoteWorker : ParWorker
         }
     bool holds(ParChunk* proto, u8* src, ParLayout* l)
         {
-        if (src == (u8*)0 || src[0] == (u8)0 || l == (ParLayout*)0 || !connect())
+        if (_bad || src == (u8*)0 || src[0] == (u8)0 || l == (ParLayout*)0 || !connect())
             return false;
         if (_heldSrc == (pointer)src)
             return _held;
@@ -1401,6 +1404,8 @@ class ParRemoteWorker : ParWorker
             return false;
         _proto = proto;
         _l = l;
+        _exact = ParRemoteWorker.exactKernel(src);
+        _back = (u32)0;
         _inFlight = (u32)0;
         _tiles = new Array();
         _kernelUs = (i64)0;
@@ -1514,6 +1519,56 @@ class ParRemoteWorker : ParWorker
         _proto = (ParChunk*)0;
         _l = (ParLayout*)0;
         }
+    // A kernel with no floating point in it gives the same bits on any device,
+    // so its results can be checked exactly against the CPU's.
+    static bool exactKernel(u8* src)
+        {
+        if (src == (u8*)0)
+            return false;
+        String* k = String.withCString(src);
+        return !k.contains(String.withCString("float")) && !k.contains(String.withCString("half"))
+            && !k.contains(String.withCString("double"));
+        }
+
+    // Remote results are checked (the security review, 2026-10-21): a daemon
+    // on the network can be anyone's, and TLS pins a certificate, not honesty.
+    // For a block whose results are bit-exact, the first tile each daemon
+    // returns and one in 16 after it are also run on the CPU and compared,
+    // written slices and reduction partials both. A difference keeps the
+    // CPU's answer and drops the daemon for the rest of the run, loudly.
+    // XC_PAR_VERIFY=0 turns this off, =all checks every tile. A floating-point
+    // block is not checked: another GPU may round differently and be right.
+    static i32 _verifyMode;     // 0 unread, 1 off, 2 sample, 3 every tile
+    static i32 verifyMode(void)
+        {
+        if (_verifyMode == (i32)0)
+            {
+            String* v = Platform.env(String.withCString("XC_PAR_VERIFY"));
+            _verifyMode = v.equals(String.withCString("0")) ? (i32)1 : (v.equals(String.withCString("all")) ? (i32)3 : (i32)2);
+            }
+        return _verifyMode;
+        }
+    // Whether this tile is one to check: an exact block, the first tile back
+    // and one in 16 after it (every tile under XC_PAR_VERIFY=all), and only
+    // when every array it writes is written in known slices.
+    bool shouldVerify(void)
+        {
+        i32 mode = ParRemoteWorker.verifyMode();
+        if (mode == (i32)1 || !_exact || _proto == (ParChunk*)0)
+            return false;
+        _back = _back + (u32)1;
+        if (mode == (i32)2 && _back != (u32)1 && _back % (u32)16 != (u32)0)
+            return false;
+        ParLayout* l = _l;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            if (l.bufIn[i] == (i64)0 && l.bufFp[i] == (i64)0)
+                return false;
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            if (l.globIn[i] == (i64)0 && l.globFp[i] == (i64)0)
+                return false;
+        return true;
+        }
+
     // The tile's slice hashes, once per tile (every remote reads them).
     static void hashTile(ParTile* t, ParChunk* proto, ParLayout* l)
         {
@@ -1687,6 +1742,22 @@ class ParRemoteWorker : ParWorker
             return (ParTile*)0;
         ParLayout* l = _l;
         u8* obj = _proto.objBytes();
+        // A checked tile runs on the CPU first, from the inputs the daemon
+        // was given (a block that updates an array in place must not run
+        // twice), and the daemon's slices are compared with what it wrote
+        // instead of being copied in.
+        // A daemon already caught has tiles still in flight: each of those
+        // is the CPU's too.
+        bool check = _bad || shouldVerify();
+        bool same = true;
+        ParChunk* cpu = (ParChunk*)0;
+        if (check)
+            {
+            cpu = _proto.copyChunk();
+            cpu.lo = t.lo;
+            cpu.hi = t.hi;
+            cpu.run();
+            }
         u8* p = (u8*)0;
         u32 pn = (u32)0;
         ParWire.find(f, "SLICES", &p, &pn);
@@ -1700,7 +1771,13 @@ class ParRemoteWorker : ParWorker
             u8* b = (u8*)0;
             u32 n = ParWire.rdBytes(p, &at, &b);
             if (e1 > e0 && n == (u32)((e1 - e0) * l.bufElem[i]))
-                memcpy((pointer)(*(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i]), (pointer)b, (u64)n);
+                {
+                pointer dst = (pointer)(*(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i]);
+                if (check)
+                    same = same && memcmp(dst, (pointer)b, (u64)n) == (i32)0;
+                else
+                    memcpy(dst, (pointer)b, (u64)n);
+                }
             i64 wh = ParWire.rdI64(p, &at);
             if (n > (u32)0)
                 _view.set((Hashable*)ParRemoteWorker.viewKey(false, i, e0 * l.bufElem[i], n), (Object*)String.withFormat("%ld", wh));
@@ -1714,7 +1791,13 @@ class ParRemoteWorker : ParWorker
             u8* b = (u8*)0;
             u32 n = ParWire.rdBytes(p, &at, &b);
             if (e1 > e0 && n == (u32)((e1 - e0) * l.globElem[i]))
-                memcpy((pointer)((u8*)l.globPtr[i] + e0 * l.globElem[i]), (pointer)b, (u64)n);
+                {
+                pointer dst = (pointer)((u8*)l.globPtr[i] + e0 * l.globElem[i]);
+                if (check)
+                    same = same && memcmp(dst, (pointer)b, (u64)n) == (i32)0;
+                else
+                    memcpy(dst, (pointer)b, (u64)n);
+                }
             i64 wh = ParWire.rdI64(p, &at);
             if (n > (u32)0)
                 _view.set((Hashable*)ParRemoteWorker.viewKey(true, i, e0 * l.globElem[i], n), (Object*)String.withFormat("%ld", wh));
@@ -1734,7 +1817,15 @@ class ParRemoteWorker : ParWorker
                 }
             ParChunk* c = _proto.copyChunk();
             l.foldN(c, &parts[0], nback);
-            t.partial = c;
+            for (u32 r = (u32)0; check && r < l.nred; r = r + (u32)1)
+                same = same && memcmp((pointer)(c.objBytes() + l.redOff[r]), (pointer)(cpu.objBytes() + l.redOff[r]), (u64)l.redSize[r]) == (i32)0;
+            t.partial = check && !same ? cpu : c;
+            }
+        if (check && !same && !_bad)
+            {
+            _bad = true;
+            Log.info("par: remote %s returned a wrong result for %s (items %ld..%ld); the CPU's is used, and the daemon is not used again",
+                     _host.cString(), _proto.parName(), t.lo, t.hi);
             }
         t.usTaken = ParWire.getI64(f, "KERNELUS", (i64)0);
         _kernelUs = _kernelUs + t.usTaken;
@@ -1818,10 +1909,12 @@ class ParRemote
     // XC_PAR_REMOTE=host[:port],host[:port],…: a worker per entry. An entry
     // `mdns` is every daemon on this subnet that answers within 300 ms and
     // is of the pool XC_PAR_POOL names (none when unset) and this xcc
-    // version. With no setting at all, discovery is ON (owner 2026-10-16:
-    // it simplifies people's lives): the program browses once, at its first
-    // par run, and takes what it finds; `XC_PAR_REMOTE=none` turns it off,
-    // as does a forced XC_PAR=cpu. A daemon never browses for its peers.
+    // version. With no XC_PAR_REMOTE, discovery runs only when XC_PAR_POOL
+    // names a pool (the security review, 2026-10-21: discovery on by default
+    // sent a program's data to whatever daemon answered on the subnet; naming
+    // the pool is the one-line opt-in). The program browses once, at its
+    // first par run; `XC_PAR_REMOTE=none` and a forced XC_PAR=cpu turn it
+    // off. A daemon never browses for its peers.
     static bool _off;
     static void noRemotes(void)
         {
@@ -1836,7 +1929,8 @@ class ParRemote
             return;
         if (v.byteLength() == (u32)0)
             {
-            if (Platform.env(String.withCString("XC_PAR")).equals(String.withCString("cpu")))
+            if (Platform.env(String.withCString("XC_PAR")).equals(String.withCString("cpu"))
+                || Platform.env(String.withCString("XC_PAR_POOL")).byteLength() == (u32)0)
                 return;
             v = String.withCString("mdns");
             }
@@ -2477,6 +2571,17 @@ class ParRemoteServe
     // elsewhere — and a HOLDS or PREPARE that finds the GPUs held waits a
     // while, then answers 2 (busy), which the program asks again next run.
     // A FINISH, or the connection going away, hands the GPUs on.
+    // A test hook (tests/par/remote.sh): XCD_TEST_CORRUPT=1 makes this daemon
+    // lie, flipping the last byte of every slice it sends back, as a rogue
+    // daemon on the subnet would; the program must notice.
+    static i32 _corrupt;      // 0 unread, 1 no, 2 yes
+    static void testCorrupt(Data* d, u32 wn)
+        {
+        if (_corrupt == (i32)0)
+            _corrupt = Platform.env(String.withCString("XCD_TEST_CORRUPT")).byteLength() > (u32)0 ? (i32)2 : (i32)1;
+        if (_corrupt == (i32)2 && wn > (u32)0 && d.length() > (u32)0)
+            d.setByteAt(d.length() - (u32)1, d.bytes()[d.length() - (u32)1] ^ (u8)1);
+        }
     static Mutex* _gpus;
     static Mutex* _state;     // over _holder and _nextConn
     static i64 _holder;       // the connection holding the GPUs; 0 none
@@ -3156,6 +3261,7 @@ class ParRemoteServe
             u8* wb = *(u8**)(obj + l.bufOff[i]) + e0 * l.bufElem[i];
             u32 wn = e1 > e0 ? (u32)((e1 - e0) * l.bufElem[i]) : (u32)0;
             ParWire.putBytes(d, wb, wn);
+            ParRemoteServe.testCorrupt(d, wn);
             // What it wrote stays cached under its new hash, and the program
             // is told it, so the next run's tile over the same elements
             // need not bring them.

@@ -80,6 +80,24 @@ else
 fi
 kill $XCD2 2> /dev/null
 wait $XCD2 2> /dev/null
+# A daemon that lies (XCD_TEST_CORRUPT: every slice it returns has a byte
+# flipped): the program checks an exact block's remote tiles against the CPU,
+# keeps the CPU's answer and drops the daemon, saying so (security review,
+# 2026-10-21). The answer is the local run's.
+PORTL=$((PORT + 9))
+XCD_HOME="$L/home1" XCD_TEST_CORRUPT=1 XC_PAR_REPORT=1 "$L/xcd" -port $PORTL -no-mdns > "$L/xcdl.log" 2>&1 &
+XCDL=$!
+up "$L/xcdl.log"
+f=par_simd_buffers
+mkdir -p "$L/st_lie"
+XCC_SETTINGS_DIR="$L/st_lie" XC_PAR_REMOTE=127.0.0.1:$PORTL XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/lie.out" 2> "$L/lie.err"
+if grep -v '^par:' "$L/lie.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && grep -q 'returned a wrong result' "$L/lie.out"; then
+    echo "PASS remote lying daemon dropped"
+else
+    echo "FAIL remote lying daemon dropped"; grep -v '^par:' "$L/lie.out" | diff - "tests/fixtures/$f.expected.out" | head -3; grep -i 'remote' "$L/lie.out" | head -4; rc=1
+fi
+kill $XCDL 2> /dev/null
+wait $XCDL 2> /dev/null
 grep -q 'declined (nimby)' "$L/xcd2.log" || { echo "FAIL remote: the nimby daemon did not decline"; head -4 "$L/xcd2.log"; rc=1; }
 # Discovery: a daemon advertising in a pool is found by XC_PAR_REMOTE=mdns
 # with that pool, and not by another pool. It says it is another machine
@@ -91,6 +109,13 @@ up "$L/xcd3.log"
 mkdir -p "$L/st_mdns" "$L/st_mdns2"
 XCC_SETTINGS_DIR="$L/st_mdns" XC_PAR_REMOTE=mdns XC_PAR_POOL=gate XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/mdns.out" 2>&1
 XCC_SETTINGS_DIR="$L/st_mdns2" XC_PAR_REMOTE=mdns XC_PAR_POOL=other XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/mdns2.out" 2>&1
+# Neither XC_PAR_REMOTE nor XC_PAR_POOL: no discovery at all (it used to be
+# on by default, which sent a program's data to whatever answered).
+mkdir -p "$L/st_mdns3"
+env -u XC_PAR_REMOTE -u XC_PAR_POOL XCC_SETTINGS_DIR="$L/st_mdns3" XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/mdns3.out" 2>&1
+if grep -q 'mdns:\|remote worker remote:' "$L/mdns3.out"; then
+    echo "FAIL remote: a program with no XC_PAR_REMOTE or XC_PAR_POOL browsed for daemons"; grep -i 'mdns\|remote' "$L/mdns3.out" | head -3; rc=1
+fi
 if grep -v '^par:' "$L/mdns.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && grep -q "remote worker remote:" "$L/mdns.out" \
    && grep -v '^par:' "$L/mdns2.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && ! grep -q "remote worker remote:" "$L/mdns2.out"; then
     echo "PASS remote mdns"

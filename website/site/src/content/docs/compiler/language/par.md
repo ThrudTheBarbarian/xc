@@ -662,15 +662,16 @@ is the same either way. The window may cross midnight (`-nimby 23:00-07:00`).
 
 A daemon advertises itself on its subnet (multicast DNS, as `_xcd._tcp`),
 and `xcd -pool NAME` names the pool it belongs to, so projects on one network
-keep separate host sets. A program with no `XC_PAR_REMOTE` setting looks
-for daemons by itself: at its first `par` run it asks the
-subnet once, waits a moment, and takes every daemon that answered, of the
-pool `XC_PAR_POOL` names (daemons with no pool when it is unset) and of its
-own xcc version. A daemon on the program's own machine is left out, since
+keep separate host sets. A program looks for daemons only when asked to:
+with `XC_PAR_POOL` set (and no `XC_PAR_REMOTE`), at its first `par` run it
+asks the subnet once, waits a moment, and takes every daemon that answered,
+of that pool and of its own xcc version. With neither set it uses no remote
+daemon at all, so a program does not send its data to whatever answers on
+the network unless it was told to. A daemon on the program's own machine is left out, since
 its devices are the program's already; named by address, it is still taken.
 `XC_PAR_REMOTE=none` keeps a program on its own machine,
-as does `XC_PAR=cpu`; `XC_PAR_REMOTE=mdns` says the default in so many
-words, and may be combined with addresses. A program carries the kernel
+as does `XC_PAR=cpu`; `XC_PAR_REMOTE=mdns` browses whatever the pool (daemons
+with no pool when `XC_PAR_POOL` is unset), and may be combined with addresses. A program carries the kernel
 form of its own target's GPU unless it was built with `-fpar-kernels=all`
 (or with `XC_PAR_REMOTE` naming a remote at build time, which means the
 same), so a daemon of another kind takes a block only from a program built
@@ -681,6 +682,16 @@ does not cross routers or VPNs.
 A daemon that goes away mid-run costs the run nothing but time: the tiles it
 held are handed to the other workers, and a tile is the same wherever it
 runs, so the answer is the one a local run gives.
+
+A daemon's answers are checked. For a block with no floating point in it,
+whose results are the same bits on any device, the first tile each daemon
+returns and one in 16 after it are also run on the program's own CPU and
+compared, written elements and reductions both. A daemon that gets one wrong
+is not used again in that run, the CPU's answer stands, and the program says
+so. `XC_PAR_VERIFY=all` checks every tile, `XC_PAR_VERIFY=0` none. A
+floating-point block is not checked, since another GPU may round differently
+and still be right; sampling also cannot catch a daemon that lies only now and
+then, so keep remote work to daemons you run.
 
 Several programs may use one daemon at once. Its GPUs serve one program's run
 at a time: while one runs, another's heartbeat is told "not now" and it sends
