@@ -1,6 +1,8 @@
 /* structs: arrays of structs on the GPU. A struct of one number type is an
-   array of that number to a kernel (vec3 here); one that mixes types (body)
-   keeps its loops on the CPU. Values exact in float. */
+   array of that number to a kernel (vec3 here); one that mixes 4-byte numbers
+   (body) is an array of 32-bit words, each field reinterpreted where it is
+   read or written. blocks.txt allows no block without a GPU form. Values
+   exact in float. */
 #include <stdio.h>
 #define N 65536
 struct vec3 { float x, y, z; };

@@ -21,11 +21,18 @@ fail=0; total=0
 for f in tests/par/c/${1:-}*.c; do
     b=$(basename "$f" .c)
     want=$(awk -v n="$b" '$1 == n { print $2 }' tests/par/c/blocks.txt)
+    # An optional third column: at most this many of its blocks may have no GPU
+    # form (structs: 0, since a struct of mixed 4-byte numbers is words).
+    nogpu=$(awk -v n="$b" '$1 == n { print $3 }' tests/par/c/blocks.txt)
     clang -O2 -w -o "$W/$b.ref" "$f" || { echo "FAIL ccorpus: $b: clang does not build it"; fail=1; continue; }
     ref=$("$W/$b.ref")
     XC_PAR_OUTLINE_TRACE=1 "$XC" -q -O3 --par-auto -H . -o "$W/$b" "$f" > "$W/$b.log" 2>&1 \
         || { echo "FAIL ccorpus: $b does not build"; sed -n 1,5p "$W/$b.log"; fail=1; continue; }
     n=$(grep -v 'support/' "$W/$b.log" | grep -c 'outlined, a block')
+    if [ -n "$nogpu" ]; then
+        ng=$(grep -v 'support/' "$W/$b.log" | grep -c 'no GPU form')
+        [ "$ng" -le "$nogpu" ] || { echo "FAIL ccorpus: $b: $ng blocks with no GPU form, at most $nogpu"; grep 'no GPU form' "$W/$b.log" | head -3; fail=1; }
+    fi
     total=$((total + n))
     # The GPU everywhere: Metal, Vulkan (a dynamically linked program; the
     # Linux host's iGPU), else the run falls back to the CPU with the answer.

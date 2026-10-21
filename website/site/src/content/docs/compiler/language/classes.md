@@ -165,6 +165,8 @@ u16 mid = Math.lerp(0, 100, 128);
 
 Use static methods for operations that belong to a class but need no per-instance state. They give you a namespace without dispatch overhead.
 
+A static method may read and write only `static` fields. In a class that has instance methods, naming an instance field in a static method is an error, because there is no instance for it to belong to: make the field `static`, or the method an instance method. A class whose methods are all static (apart from an `init` that sets up its state) is the exception: its fields are the class's state, kept once for the whole program, as the standard library's `Assert` and `Math` keep theirs.
+
 ### Bare-call promotion: `use ClassName`
 
 `use ClassName;` is a top-level directive that adds a class's static methods to the bare-identifier call lookup for the rest of the file. After `use Stdio;`, you can call `printf("hi\n")` instead of `Stdio.printf("hi\n")`.

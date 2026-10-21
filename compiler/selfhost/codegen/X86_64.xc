@@ -583,6 +583,25 @@ class X86_64
             cur = cur + (u32)8;
             _homeSaveOff.set((Hashable*)(String*)_homeSaves.get(i), (Object*)Number.withU32(cur));
             }
+        // Win64 makes xmm6-xmm15 callee-saved (their low 128 bits), and every
+        // float home and vector register here may be one of them: a Windows
+        // caller of this function (a CRT callback, a window procedure, MSVC
+        // code) kept its own values there. Each one used is saved below the
+        // integer saves and restored with them. Nothing else in a function
+        // body names xmm6 and up.
+        _xmmSaves = new Array();
+        _xmmSaveOff = new Map();
+        if (_win64)
+            {
+            for (u32 r = (u32)6; r <= (u32)15; r = r + (u32)1)
+                if (usesVecRegNumber(r))
+                    {
+                    String* x = String.withFormat("xmm%lu", r);
+                    cur = cur + (u32)16;
+                    _xmmSaves.add((Object*)x);
+                    _xmmSaveOff.set((Hashable*)x, (Object*)Number.withU32(cur));
+                    }
+            }
         _sretOff = (u32)0;
         bool hasSret = returnsBigAgg(fn.ret()) || returnsSysVMemAgg(fn.ret());
         if (hasSret)
@@ -665,6 +684,12 @@ class X86_64
             String* r = (String*)_homeSaves.get(i);
             _out.appendFormat("\tmov\t[rbp-%lu], %s\n",
                               ((Number*)_homeSaveOff.get((Hashable*)r)).asU32(), r.cString());
+            }
+        for (u32 i = (u32)0; i < _xmmSaves.count(); i = i + (u32)1)
+            {
+            String* x = (String*)_xmmSaves.get(i);
+            _out.appendFormat("\tmovups\t[rbp-%lu], %s\n",
+                              ((Number*)_xmmSaveOff.get((Hashable*)x)).asU32(), x.cString());
             }
         if (hasSret)
             _out.appendFormat("\tmov\t[rbp-%lu], %s\n", _sretOff,
@@ -5470,6 +5495,49 @@ class X86_64
             _out.appendFormat("\tmov\t%s, [rbp-%lu]\n", r.cString(),
                               ((Number*)_homeSaveOff.get((Hashable*)r)).asU32());
             }
+        for (u32 i = (u32)0; _xmmSaves != (Array*)0 && i < _xmmSaves.count(); i = i + (u32)1)
+            {
+            String* x = (String*)_xmmSaves.get(i);
+            _out.appendFormat("\tmovups\t%s, [rbp-%lu]\n", x.cString(),
+                              ((Number*)_xmmSaveOff.get((Hashable*)x)).asU32());
+            }
+        }
+
+    Array* _xmmSaves;   // Win64: the callee-saved xmm6-xmm15 this function uses
+    Map* _xmmSaveOff;   // each one's [rbp-off]
+
+    // Does any float home or vector register here use register number r
+    // (xmmR, ymmR or zmmR)?
+    bool usesVecRegNumber(u32 r)
+        {
+        String* want = String.withU32(r);
+        Array* regs = new Array();
+        if (_homing != (Homing*)0)
+            {
+            Map* hm = _homing.homes();
+            Array* hk = hm.allKeys();
+            for (u32 i = (u32)0; i < hk.count(); i = i + (u32)1)
+                regs.add(hm.get((Hashable*)hk.get(i)));
+            }
+        if (_vec != (Map*)0)
+            {
+            Array* vk = _vec.allKeys();
+            for (u32 i = (u32)0; i < vk.count(); i = i + (u32)1)
+                regs.add(_vec.get((Hashable*)vk.get(i)));
+            }
+        for (u32 i = (u32)0; i < regs.count(); i = i + (u32)1)
+            {
+            String* g = (String*)regs.get(i);
+            if (g == (String*)0 || g.byteLength() < (u32)4)
+                continue;
+            String* pre = g.substringBytes((u32)0, (u32)3);
+            if (!pre.equals(String.withCString("xmm")) && !pre.equals(String.withCString("ymm"))
+                && !pre.equals(String.withCString("zmm")))
+                continue;
+            if (g.substringFromByte((u32)3).equals(want))
+                return true;
+            }
+        return false;
         }
 
     static Array* sortedRegs(Array* a)

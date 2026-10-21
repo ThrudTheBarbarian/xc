@@ -1614,6 +1614,7 @@
                                                                  location:cls.location]
                                           location:cls.location];
         synth.autoSuperInit = YES; // the body IS the chain
+        synth.isSynthesized = YES;
         [cls appendSynthesisedMethod:synth];
         }
 
@@ -3352,14 +3353,18 @@ static NSUInteger sumParamBytes(NSArray<XTParamNode*>* params)
         [[XTBlockNode alloc] initWithStatements:stmts
                                        location:loc];
 
-    return [[XTMethodDeclNode alloc] initWithName:@"description"
-                                      returnTypes:@[ strPtr ]
-                                       parameters:@[]
-                                         isStatic:NO
-                                        isVarArgs:NO
-                                             body:body
-                                         location:loc];
+    XTMethodDeclNode* synth = [[XTMethodDeclNode alloc] initWithName:@"description"
+                                                        returnTypes:@[ strPtr ]
+                                                         parameters:@[]
+                                                           isStatic:NO
+                                                          isVarArgs:NO
+                                                               body:body
+                                                           location:loc];
+    // Made here, not written: an all-static class gets one too, and it does
+    // not make that class one with instances (refuseStaticFieldUse).
+    synth.isSynthesized = YES;
     (void)u8Ptr;
+    return synth;
     }
 
 // Walk every class. Skip the Object root marker, String (whose

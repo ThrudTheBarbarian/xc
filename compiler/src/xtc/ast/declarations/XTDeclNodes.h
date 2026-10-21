@@ -492,6 +492,9 @@ typedef NS_ENUM(NSInteger, XTPlacement) {
 |* before the rest of the body runs.
 \****************************************************************************/
 @property(nonatomic) BOOL autoSuperInit;
+// A method sema made up (the chaining `init` of a class that declares none),
+// not one the source declared.
+@property(nonatomic) BOOL isSynthesized;
 /****************************************************************************\
 |* PR6: set by sema when a `dealloc` method needs a compiler-inserted
 |* `super.dealloc()` call at the END of its body (child-first

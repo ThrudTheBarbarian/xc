@@ -23,6 +23,8 @@
 // saved pool (rbx/r12-r15), saved into frame slots. See XTHomingAllocator.
 static NSDictionary<NSNumber*, NSString*>* sHome = nil;
 static NSDictionary<NSString*, NSNumber*>* sHomeSaves = nil; // reg → [rbp-off] save slot
+static NSArray<NSString*>* sXmmSaves = nil;                     // Win64: callee-saved xmm6-15 used
+static NSDictionary<NSString*, NSNumber*>* sXmmSaveOff = nil;   // each one's [rbp-off]
 // Address folding: pointer-value-id → the ElementAddr/FieldAddr insn to fold into
 // its single, immediately-following Load's memory operand (that addr op's own
 // emission is skipped). The allocator extends base/index live ranges to the Load.
@@ -2621,6 +2623,39 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         saves[r] = @(cur);
         }
     sHomeSaves = saves;
+    // Win64 makes xmm6-xmm15 callee-saved (their low 128 bits), and every float
+    // home and vector register here may be one of them: a Windows caller of
+    // this function (a CRT callback, a window procedure, MSVC code) kept its
+    // own values there. Each one used is saved below the integer saves and
+    // restored with them. Nothing else in a function body names xmm6 and up.
+    NSMutableArray<NSString*>* xsaves = [NSMutableArray array];
+    NSMutableDictionary<NSString*, NSNumber*>* xoff = [NSMutableDictionary dictionary];
+    if (sWin64)
+        {
+        NSMutableArray<NSString*>* regs = [NSMutableArray array];
+        if (sHome) [regs addObjectsFromArray:sHome.allValues];
+        if (sVec) [regs addObjectsFromArray:sVec.allValues];
+        for (NSUInteger r = 6; r <= 15; r++)
+            {
+            NSString* want = [NSString stringWithFormat:@"%lu", (unsigned long)r];
+            BOOL used = NO;
+            for (NSString* g in regs)
+                if (g.length >= 4 && ([g hasPrefix:@"xmm"] || [g hasPrefix:@"ymm"] || [g hasPrefix:@"zmm"])
+                    && [[g substringFromIndex:3] isEqualToString:want])
+                    {
+                    used = YES;
+                    break;
+                    }
+            if (!used)
+                continue;
+            NSString* x = [NSString stringWithFormat:@"xmm%lu", (unsigned long)r];
+            cur += 16;
+            [xsaves addObject:x];
+            xoff[x] = @(cur);
+            }
+        }
+    sXmmSaves = xsaves;
+    sXmmSaveOff = xoff;
     // Hidden sret (Win64 >8-byte, System V >16-byte MEMORY-class return):
     // reserve one slot for the caller's destination pointer.
     sWin64SretOff = 0;
@@ -2676,6 +2711,8 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         [out appendFormat:@"\tsub\trsp, %lu\n", (unsigned long)rest];
     for (NSString* r in usedSaves) // persist clobbered callee-saved homes
         [out appendFormat:@"\tmov\t[rbp-%@], %@\n", saves[r], r];
+    for (NSString* x in sXmmSaves) // and Win64's callee-saved xmm6-xmm15
+        [out appendFormat:@"\tmovups\t[rbp-%@], %@\n", sXmmSaveOff[x], x];
     if (hasSret) // rcx/rdi = caller's result buffer
         [out appendFormat:@"\tmov\t[rbp-%ld], %@\n", (long)sWin64SretOff,
                           sWin64 ? @"rcx" : @"rdi"];
@@ -2940,6 +2977,8 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         [sHomeSaves.allKeys sortedArrayUsingSelector:@selector(compare:)];
     for (NSString* r in order)
         [out appendFormat:@"\tmov\t%@, [rbp-%@]\n", r, sHomeSaves[r]];
+    for (NSString* x in sXmmSaves)
+        [out appendFormat:@"\tmovups\t%@, [rbp-%@]\n", x, sXmmSaveOff[x]];
     }
 
 // Integer arg registers (64-bit / 32-bit views), in order. Win64 uses only the

@@ -1,5 +1,6 @@
 #!/bin/bash
-# cwin64.sh — the C path on real Windows: every program in tests/par/c/ built
+# cwin64.sh — the C path on real Windows: every program in tests/par/c/ (and
+# tests/par/cwin/, the Windows-only ones) built
 # on the Windows host by its clang -O2 alone and by the installed xcc.exe,
 # which reads clang's IR (the MSVC headers', CRLF lines, LLVM 23's float
 # spelling) and compiles main itself. Each xcc build must give clang's output,
@@ -19,9 +20,9 @@ if ! ssh $SSHO "$WH" 'clang --version' >/dev/null 2>&1; then
 fi
 D="xccw-c.$$"
 ssh $SSHO "$WH" "Remove-Item -Recurse -Force $D -ErrorAction SilentlyContinue; New-Item -ItemType Directory $D | Out-Null" || exit 1
-scp $SSHO -q tests/par/c/*.c "$WH:$D/" || { echo "--- cwin64: cannot copy the programs ---"; exit 1; }
+scp $SSHO -q tests/par/c/*.c tests/par/cwin/*.c "$WH:$D/" || { echo "--- cwin64: cannot copy the programs ---"; exit 1; }
 fail=0; n=0
-for f in tests/par/c/*.c; do
+for f in tests/par/c/*.c tests/par/cwin/*.c; do
     b=$(basename "$f" .c)
     n=$((n + 1))
     # One PowerShell call a program: clang's build and run, then xcc's with the

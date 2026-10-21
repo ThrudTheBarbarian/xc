@@ -2163,7 +2163,7 @@ class ClassInfo
             // `&ted` inside a method, where `ted` is an IVAR: the implicit
             // self makes it `&self.ted`, and the address is the field's.
             if (ivarIndexOf(target.name()) >= (i32)0)
-                return ivarAddr(target.name());
+                return ivarAddr(target.name(), target);
             String* w = String.withCString("& on ");
             w.append(target.name());
             w.appendCString(" (not pinned)");
@@ -3124,7 +3124,7 @@ class ClassInfo
             // reference silently lost it instead).
             if (_curClass != 0 && ivarIndexOf(target.name()) >= (i32)0)
                 {
-                IRValue* iaddr = ivarAddr(target.name());
+                IRValue* iaddr = ivarAddr(target.name(), target);
                 String* ity = (String*)_curClass.ivarType().get((Hashable*)target.name());
                 IRValue* iold = loadThrough(iaddr, ity);
                 Array* ione = new Array();
@@ -3593,7 +3593,7 @@ class ClassInfo
             if (p != 0)
                 return pinAddrNamed(p, e.name());
             if (ivarIndexOf(e.name()) >= (i32)0)
-                return ivarAddr(e.name());
+                return ivarAddr(e.name(), e);
             Object* g = _globals.get((Hashable*)e.name());
             if (g != 0)
                 {
@@ -4487,7 +4487,7 @@ class ClassInfo
         if (ivarIndexOf(n.name()) >= (i32)0)
             {
             String* ity = (String*)_curClass.ivarType().get((Hashable*)n.name());
-            return loadThrough(ivarAddr(n.name()), ity);
+            return loadThrough(ivarAddr(n.name(), n), ity);
             }
         Object* ec = _enumConsts.get((Hashable*)n.name());
         if (ec != 0)
@@ -5214,7 +5214,7 @@ class ClassInfo
             {
             String* ity = (String*)_curClass.ivarType().get((Hashable*)lhs.name());
             IRValue* iv = coerce(v, n.kid((u32)1).ty(), ity);
-            IRValue* fa = ivarAddr(lhs.name());
+            IRValue* fa = ivarAddr(lhs.name(), lhs);
             storeStrongSlot(fa, iv, ity, n.kid((u32)1));
             // A bare `wf = x` inside a method reaches the ivar through the
             // implicit self, and it must register+balance a `weak:T@` exactly
@@ -5719,7 +5719,7 @@ class ClassInfo
                 if (ivarIndexOf(n.name()) >= (i32)0)
                     {
                     String* ivt = (String*)_curClass.ivarType().get((Hashable*)n.name());
-                    pair = loadThrough(ivarAddr(n.name()), ivt);
+                    pair = loadThrough(ivarAddr(n.name(), n), ivt);
                     }
                 else
                     {
@@ -11762,10 +11762,48 @@ class ClassInfo
         return (i32)((Number*)o).asU32();
         }
 
-    IRValue* ivarAddr(String* name)
+    IRValue* ivarAddr(String* name, Node* at)
         {
+        // A static method has no instance, so in a class that makes instances
+        // a field named there is a mistake: it would read and write the
+        // class's one `__sdata` copy, shared by nobody. (A class whose methods
+        // are all static keeps its state that way on purpose.)
+        if (_staticSelfClass != (String*)0 && classMakesInstances(_curClass))
+            {
+            String* msg = String.withCString("'");
+            msg.append(name);
+            msg.appendCString("' is an instance field of ");
+            msg.append(_curClass.name());
+            msg.appendCString(", and a static method has no instance: make the field static, or the method an instance method");
+            errorAtNode(msg, at);
+            }
         String* ty = (String*)_curClass.ivarType().get((Hashable*)name);
         return fieldAddr(_self, (u32)ivarIndexOf(name), ptrTo(irType(ty)));
+        }
+
+    // Does the class declare an instance method of its own, other than init?
+    // Only then does it make instances whose fields a static method could be
+    // mistaken for. An all-static class's init sets up its class state
+    // (Assert's counters, Math's seed), so it does not count.
+    static bool classMakesInstances(ClassInfo* ci)
+        {
+        if (ci == (ClassInfo*)0 || ci.decl() == (Node*)0)
+            return false;
+        Node* d = ci.decl();
+        for (u32 i = (u32)0; i < d.kidCount(); i = i + (u32)1)
+            {
+            Node* m = d.kid(i);
+            // Sema's own description() (line 0 of <synth-description>; every
+            // class gets one) is made, not written, as the reference's
+            // isSynthesized says: it does not count either.
+            bool madeDescription = m.name() != (String*)0 && m.name().equals(String.withCString("description"))
+                                   && m.line() == (u32)0;
+            if (m.kind() == (u16)nkMethodDecl && !m.hasFlag((u32)NF_STATIC) && !m.hasFlag((u32)NF_SYNTH)
+                && !madeDescription
+                && !(m.name() != (String*)0 && m.name().equals(String.withCString("init"))))
+                return true;
+            }
+        return false;
         }
 
     // ── ARC ──────────────────────────────────────────────────────────────
@@ -22739,7 +22777,49 @@ class ClassInfo
                         }
                     }
                 }
+        // A field of a mixed struct may only be loaded or stored through:
+        // anything else (its address passed on, compared, offset) keeps the
+        // global as it is. A uniform struct's fields are plain numbers, as
+        // before.
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            Array* all = new Array();
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1) all.add(bb.phis().get(i));
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) all.add(bb.insns().get(i));
+            if (bb.term() != (IRInsn*)0) all.add((Object*)bb.term());
+            for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)all.get(i);
+                for (u32 k = (u32)0; k < ip.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)ip.ops().get(k);
+                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                        continue;
+                    IRInsn* d = (IRInsn*)def.get((Hashable*)String.withU32(o.val().seq()));
+                    if (d == (IRInsn*)0 || !d.op().equals(String.withCString("FieldAddr")) || d.ops().count() != (u32)2)
+                        continue;
+                    IROperand* eo = (IROperand*)d.ops().get((u32)0);
+                    if (eo.kind() != (u8)OPK_USE || eo.val() == (IRValue*)0)
+                        continue;
+                    String* g = (String*)elems.get((Hashable*)String.withU32(eo.val().seq()));
+                    if (g == (String*)0 || flat.get((Hashable*)g) == (Object*)0
+                        || !((String*)flat.get((Hashable*)g)).equals(String.withCString("U32")))
+                        continue;
+                    bool viaLoad = ip.op().equals(String.withCString("Load")) && k == (u32)0;
+                    bool viaStore = ip.op().equals(String.withCString("Store")) && k == (u32)0;
+                    // A float literal stored there would need its bits worked
+                    // out here; rare in a kernel, so the global stays.
+                    if (viaStore && ip.ops().count() >= (u32)2
+                        && ((IROperand*)ip.ops().get((u32)1)).kind() == (u8)OPK_IMMF)
+                        viaStore = false;
+                    if (!viaLoad && !viaStore)
+                        flat.set((Hashable*)g, (Object*)0);
+                    }
+                }
+            }
         // The rewrite.
+        Map* recast = new Map();    // field address seq -> the field's own type
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)f.blocks().get(b);
@@ -22801,6 +22881,9 @@ class ClassInfo
                     {
                     // Field k: the number k further on.
                     i64 k = ((IROperand*)ip.ops().get((u32)1)).imm();
+                    String* fty = mslIsPtr(r.ty()) ? mslPointee(r.ty()) : (String*)0;
+                    if (fty != (String*)0 && !fty.equals(ft))
+                        recast.set((Hashable*)String.withU32(r.seq()), (Object*)fty);
                     IRInsn* ea = IRInsn.with(String.withCString("ElementAddr"));
                     ea.add(o0);
                     ea.add(IROperand.immI(k, String.withCString("I64")));
@@ -22811,10 +22894,57 @@ class ClassInfo
                 i = i + (u32)1;
                 }
             }
+        if (recast.count() == (u32)0)
+            return;
+        // A field whose type is not the word's: read the word and reinterpret
+        // it, reinterpret before writing.
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            u32 i = (u32)0;
+            while (i < bb.insns().count())
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                IROperand* a0 = ip.ops().count() > (u32)0 ? (IROperand*)ip.ops().get((u32)0) : (IROperand*)0;
+                String* fty = a0 != (IROperand*)0 && a0.kind() == (u8)OPK_USE && a0.val() != (IRValue*)0
+                              ? (String*)recast.get((Hashable*)String.withU32(a0.val().seq())) : (String*)0;
+                if (fty == (String*)0)
+                    {
+                    i = i + (u32)1;
+                    continue;
+                    }
+                if (ip.op().equals(String.withCString("Load")) && ip.res() != (IRValue*)0)
+                    {
+                    IRValue* orig = ip.res();
+                    IRValue* word = new IRValue(String.withCString("U32"));
+                    ip.setRes(word);
+                    IRInsn* bc = IRInsn.with(String.withCString("Bitcast"));
+                    bc.add(IROperand.useVal(word));
+                    bc.setRes(orig);
+                    bb.insns().insert(i + (u32)1, (Object*)bc);
+                    i = i + (u32)2;
+                    continue;
+                    }
+                if (ip.op().equals(String.withCString("Store")) && ip.ops().count() >= (u32)2
+                    && ((IROperand*)ip.ops().get((u32)1)).kind() == (u8)OPK_USE)
+                    {
+                    IROperand* vo = (IROperand*)ip.ops().get((u32)1);
+                    IRValue* word = new IRValue(String.withCString("U32"));
+                    IRInsn* bc = IRInsn.with(String.withCString("Bitcast"));
+                    bc.add(vo);
+                    bc.setRes(word);
+                    bb.insns().insert(i, (Object*)bc);
+                    ip.ops().set((u32)1, (Object*)IROperand.useVal(word));
+                    i = i + (u32)2;
+                    continue;
+                    }
+                i = i + (u32)1;
+                }
+            }
         }
 
     // A struct type whose fields are all one number type, packed: that
-    // type, else 0.
+    // type (U32 for a struct of mixed 4-byte numbers), else 0.
     String* parFlatField(String* t)
         {
         IRLayout* l = mslLayoutOf(t);
@@ -22824,9 +22954,29 @@ class ClassInfo
         u32 w = mslWidth(ft);
         if (mslScalar(ft) == (String*)0 || w == (u32)0 || l.size() != w * l.fieldCount())
             return (String*)0;
+        bool mixed = false;
         for (u32 k = (u32)0; k < l.fieldCount(); k = k + (u32)1)
-            if (!l.typeAt(k).equals(ft) || l.offsetAt(k) != w * k)
+            {
+            if (l.offsetAt(k) != w * k)
                 return (String*)0;
+            if (!l.typeAt(k).equals(ft))
+                {
+                // A struct mixing 4-byte numbers (int id; float m) is an array
+                // of 32-bit words to a kernel; each field that is not a U32
+                // is reinterpreted where it is read or written (see
+                // parFlatStructGlobals).
+                if (w != (u32)4 || mslWidth(l.typeAt(k)) != (u32)4 || mslScalar(l.typeAt(k)) == (String*)0
+                    || l.typeAt(k).equals(String.withCString("Bool")))
+                    return (String*)0;
+                mixed = true;
+                }
+            }
+        if (mixed)
+            {
+            if (ft.equals(String.withCString("Bool")))
+                return (String*)0;
+            return String.withCString("U32");
+            }
         return ft;
         }
 

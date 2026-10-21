@@ -4077,6 +4077,40 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     return r;
     }
 
+// A static method has no instance, so in a class that makes instances a field
+// named there is a mistake: it would read and write the class's one `__sdata`
+// copy, shared by nobody. (A class whose methods are all static keeps its state
+// that way on purpose.) Reports it and answers YES.
+- (BOOL)refuseStaticFieldUse:(NSString*)name at:(XTSourceLocation*)loc
+    {
+    if (!self.staticSelfClassName || !self.currentClassInfo || !name)
+        return NO;
+    BOOL isField = NO;
+    for (XTIRClassInfo* ci = self.currentClassInfo; ci != nil && !isField; ci = ci.parent)
+        if (ci.ivarFieldIndex[name])
+            isField = YES;
+    if (!isField)
+        return NO;
+    XTClassDeclNode* cls = self.classDeclsByName[self.currentClassInfo.className];
+    // An instance method other than init: an all-static class's init sets up
+    // its class state (Assert's counters, Math's seed), so it does not count.
+    BOOL makesInstances = NO;
+    for (XTMethodDeclNode* m in cls.methods)
+        if (!m.isStatic && !m.isSynthesized && ![m.methodName isEqualToString:@"init"])
+            {
+            makesInstances = YES;
+            break;
+            }
+    if (!makesInstances)
+        return NO;
+    [self.diag emitError:[NSString stringWithFormat:@"'%@' is an instance field of %@, and a static method has no "
+                                                    @"instance: make the field static, or the method an instance method",
+                                                    name, self.currentClassInfo.className]
+                      at:loc];
+    self.aborted = YES;
+    return YES;
+    }
+
 - (nullable XTIRValue*)lowerIdentifier:(XTIdentifierNode*)node
     {
     // `self` — the receiver pointer of the enclosing instance method.
@@ -4161,6 +4195,8 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         {
         NSNumber* slot = nil;
         XTType* ivarAST = nil;
+        if ([self refuseStaticFieldUse:node.identName at:node.location])
+            return nil;
         for (XTIRClassInfo* ci = self.currentClassInfo; ci != nil; ci = ci.parent)
             {
             slot = ci.ivarFieldIndex[node.identName];
@@ -4816,6 +4852,8 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                 {
                 NSNumber* slot = nil;
                 XTType* ivarAST = nil;
+                if ([self refuseStaticFieldUse:idn.identName at:idn.location])
+                    return nil;
                 for (XTIRClassInfo* ci = self.currentClassInfo; ci != nil; ci = ci.parent)
                     {
                     slot = ci.ivarFieldIndex[idn.identName];
@@ -5354,6 +5392,8 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         {
         NSNumber* slot = nil;
         XTType* ivarAST = nil;
+        if ([self refuseStaticFieldUse:id.identName at:id.location])
+            return nil;
         for (XTIRClassInfo* ci = self.currentClassInfo; ci != nil; ci = ci.parent)
             {
             slot = ci.ivarFieldIndex[id.identName];
@@ -7162,6 +7202,8 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     {
     NSNumber* slot = nil;
     XTType* ivarAST = nil;
+    if ([self refuseStaticFieldUse:ivarName at:loc])
+        return nil;
     for (XTIRClassInfo* ci = self.currentClassInfo; ci != nil; ci = ci.parent)
         {
         slot = ci.ivarFieldIndex[ivarName];
@@ -7282,6 +7324,8 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             {
             NSNumber* slot = nil;
             XTType* ivarAST = nil;
+            if ([self refuseStaticFieldUse:idn.identName at:idn.location])
+                return nil;
             for (XTIRClassInfo* ci = self.currentClassInfo; ci != nil; ci = ci.parent)
                 {
                 slot = ci.ivarFieldIndex[idn.identName];
@@ -8815,6 +8859,8 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     if (self.currentClassInfo && self.currentSelf)
         {
         NSNumber* slot = nil;
+        if ([self refuseStaticFieldUse:idn.identName at:idn.location])
+            return nil;
         for (XTIRClassInfo* ci = self.currentClassInfo; ci != nil; ci = ci.parent)
             {
             slot = ci.ivarFieldIndex[idn.identName];
