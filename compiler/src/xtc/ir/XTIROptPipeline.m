@@ -9,6 +9,7 @@
 #import "XTIROptLoopUnroll.h"
 #import "XTIROptLoopUnrollVarTrip.h"
 #import "XTIROptIdiomMemset.h"
+#import "XTIROptBoundsElide.h"
 #import "XTIROptIdiomMatMul.h"
 #import "XTIROptRedundantLoadCSE.h"
 #import "XTIROptDeadCode.h"
@@ -162,6 +163,9 @@
         XTIROptStaticInitGuard* guards = [[XTIROptStaticInitGuard alloc] init];
         guards.profile = profile;
         [p addPass:guards];
+        // A checked build's subscript checks that cannot fail come out, before
+        // the idioms and the vectoriser look at the loops.
+        [p addPass:[[XTIROptBoundsElide alloc] init]];
         // Recognise byte-fill loops as memset BEFORE unrolling (else the fill
         // loop gets unrolled instead of collapsed to a call).
         XTIROptIdiomMemset* memset = [[XTIROptIdiomMemset alloc] init];

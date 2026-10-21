@@ -227,9 +227,17 @@ is reported and ignored.
 
 ## Checked builds
 
-`-fbounds-check` compiles a program that range-checks its subscripts. It is a
-debug-time build: the checks cost code and time, and they are not meant to be
-left on in what you ship.
+`-fbounds-check` compiles a program that range-checks its subscripts.
+
+At `-O2` and above a check that cannot fail is left out: one whose index is
+proved inside the array by the guards around it and the arithmetic that makes
+it. `for (u32 i in 0..N) a[i]` over `u32 a[N]`, a nest's `a[i * M + k]` inside
+`i < M` and `k < M`, `a[j - 1]` under `j > 0`, and a heap array made by
+`new T[c]` with a constant `c` are all proved, so those loops run as they do
+unchecked, vectorised. Over the 20 benchmarks of the
+[performance page](/compiler/performance/), a checked build at `-O3` costs
+1.5% on the geometric mean on arm64; the frame records the arm64 report's
+stack needs are most of that.
 
 What each kind of subscript is checked against:
 
