@@ -18,6 +18,7 @@ binary, and optimises at `-O3`. A simple program needs nothing else.
 
 ```bash
 xcc [options] <input.xc>
+xcc [options] <input.c>
 ```
 
 ## One source file per invocation

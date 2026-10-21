@@ -57,16 +57,11 @@ An equivalent of PyTorch, written in xc: tensors, their operations and automatic
 differentiation, with the work spread across every GPU and CPU available, on one
 machine or several, the way a `par` block's tiles are today.
 
-### A C front end
-
-`xcc` compiling `.c` files directly, alongside `.xc`. The proposal and design are
-written. C is an add-on: it uses the platform's own C headers.
-
 ### A C++ front end
 
-`xcc` compiling C++ files directly. The proposal and design are written. It moves
-`--par-auto`'s search for loops from the source parser to the IR, so that loops from C
-and C++ are found the same way as loops from xc.
+`xcc` compiling C++ files directly, through the path [C programs](/compiler/usage/c-programs/)
+take: `clang` turns the source into LLVM IR, `xcc` compiles what it reads of it, and
+`--par-auto` finds its loops in the IR as it finds C's.
 
 ### A straight comparison
 

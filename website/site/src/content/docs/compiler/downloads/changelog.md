@@ -3,6 +3,71 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.85, re-issued — C programs
+
+0.85 is re-issued with a C front end and the fixes made since its first
+release. `xcc prog.c` builds a C program: `clang` turns it into LLVM IR, and
+`xcc` compiles what it reads of that with its own optimiser, vectoriser and back
+end. With `--par-auto` the program's loops become `par` blocks, on every core
+and the GPU, with no change to the source. See
+[C programs](/compiler/usage/c-programs/).
+
+### New
+
+- **C programs** on macOS, Linux and Windows, with the platform's own `clang`
+  and headers (on Windows, LLVM for Windows with Microsoft's headers). A
+  function `xcc` cannot read yet stays `clang`'s, and the two halves are linked;
+  `XC_C_TRACE=1` names each such function and why.
+- **Loops found in the IR**: `--par-auto` now finds its loops in the optimiser's
+  IR rather than the source, which is how a C program's loops become blocks.
+  Two-deep nests, sums, minima and maxima, maps over arrays of structs,
+  loops over local arrays and loops calling a class with a static initialiser
+  all qualify; pointers a block reads and writes are checked for overlap at the
+  call.
+- **Structs on the GPU**: an array of structs whose fields are all one number
+  type, or all 4-byte numbers of different types (`struct { int id; float m; }`),
+  reaches a GPU kernel; before, its loops stayed on the CPU.
+
+### Faster
+
+- x86-64 float code keeps its values in registers: selects, compares,
+  constants and loop-carried values no longer pass through memory or the
+  general registers.
+- A float constant used inside a loop is made once, before it.
+- arm64 fuses a multiply into each add that uses it, and a value carried round a
+  loop is updated in its own register.
+- Reductions as long as MD5's vectorise, on arm64 as two interleaved copies.
+- A simplify pass folds constants, drops identities and makes arithmetic trees
+  shallow.
+
+### Changed
+
+- **A static method may name only static fields.** In a class with instance
+  methods, a static method naming an instance field is now an error. It used to
+  read and write a single hidden copy of the field that no instance ever saw. A
+  class whose methods are all static keeps its fields as class state, as
+  before. See [Classes](/compiler/language/classes/#static-methods).
+
+### Fixed
+
+- A vectorised loop with a constant `<=` bound lost its last iterations
+  (in 0.85 as first released).
+- On x86-64, a vector value hoisted out of a loop that calls a function could be
+  overwritten by the call, in the AVX2 and AVX-512 copies (in 0.85 as first
+  released).
+- On some x86-64 processors (a Ryzen 9 5950X among them) every AVX2 build ran far
+  slower than its SSE build: a legacy SSE instruction among AVX ones. AVX code
+  now uses VEX forms throughout (in 0.85 as first released).
+- On Windows, a function using xmm6-xmm15 did not save them, though Windows
+  callers expect those registers preserved (in 0.85 as first released).
+- On arm9, a float constant too small for a normal float became zero.
+- A parameter is retained for an assignment only when it is a class pointer.
+- `--par-auto`: the `par` runtime is imported for a program that needs it, and
+  three bugs in how it wrapped loops are fixed.
+- A remote `par` run sends its kernel source once; a program leaves its own
+  machine's `xcd` out of its remote workers.
+- arm64 functions start on a 64-byte line.
+
 ## Version 0.85 — loops parallelised for you, and GPUs on other machines
 
 Two things `par` could not do before. `--par-auto` turns ordinary loops into

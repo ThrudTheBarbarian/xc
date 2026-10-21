@@ -136,6 +136,7 @@ const SIDEBAR = [
 					items: [
 						{ label: 'Overview', slug: 'compiler/usage' },
 						{ label: 'Allocator & ARC', slug: 'compiler/usage/allocator-arc' },
+						{ label: 'C programs', slug: 'compiler/usage/c-programs' },
 						{ label: 'CLI flag reference', slug: 'compiler/usage/cli' },
 						{ label: 'Debugging', slug: 'compiler/usage/debugging' },
 						{ label: 'Install', slug: 'compiler/usage/install' },

@@ -26,6 +26,7 @@ A successful build prints nothing on most targets. Errors and warnings go to the
 ## What's where
 
 - **[Install](/compiler/usage/install/)**: where `make install` puts things, and how `xcc` locates its own libraries. Read this first.
+- **[C programs](/compiler/usage/c-programs/)**: building a `.c` file, what it needs installed, and how its loops become `par` blocks.
 - **[CLI flag reference](/compiler/usage/cli/)**: every command-line option, grouped by purpose. Start here to look up a specific flag.
 - **[Optimisation](/compiler/usage/optimization/)**: what each `-O` level does, the `-Flu` unroll cap, and which targets vectorise.
 - **[Memory models](/compiler/usage/memory-models/)**: the `xt6502` map, with two bank windows, the 4 KB hardware stack, and the on-demand banked heap. 6502 only; the native targets have no layout to choose.
