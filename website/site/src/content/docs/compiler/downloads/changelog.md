@@ -18,8 +18,9 @@ and the GPU, with no change to the source. See
   and headers (on Windows, LLVM for Windows with Microsoft's headers). A
   function `xcc` cannot read yet stays `clang`'s, and the two halves are linked;
   `XC_C_TRACE=1` names each such function and why.
-- **Loops found in the IR**: `--par-auto` now finds its loops in the optimiser's
-  IR rather than the source, which is how a C program's loops become blocks.
+- **Loops found in the IR**: for a C program `--par-auto` finds its loops in the
+  optimiser's IR, since C has no xc source to scan; an xc program's are still
+  found in its source unless `XC_PAR_PROPOSE=outline` asks for the IR path.
   Two-deep nests, sums, minima and maxima, maps over arrays of structs,
   loops over local arrays and loops calling a class with a static initialiser
   all qualify; pointers a block reads and writes are checked for overlap at the
@@ -34,6 +35,8 @@ and the GPU, with no change to the source. See
   constants and loop-carried values no longer pass through memory or the
   general registers.
 - A float constant used inside a loop is made once, before it.
+- x86-64 loops start on a 64-byte line, so their speed no longer depends on
+  how much code precedes them.
 - arm64 fuses a multiply into each add that uses it, and a value carried round a
   loop is updated in its own register.
 - Reductions as long as MD5's vectorise, on arm64 as two interleaved copies.

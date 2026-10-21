@@ -2,160 +2,160 @@
  "mandel_deep": {
   "linux": {
    "all": {
-    "best_us": 258272,
-    "first_us": 329348
+    "best_us": 257362,
+    "first_us": 327760
    },
    "auto": {
-    "best_us": 309915,
-    "first_us": 1403602
+    "best_us": 307618,
+    "first_us": 1401166
    },
    "checksum": "2738",
    "local": {
-    "best_us": 979098,
-    "first_us": 1391747
+    "best_us": 965977,
+    "first_us": 1390963
    },
    "remote": {
-    "best_us": 311046,
-    "first_us": 375028
+    "best_us": 308224,
+    "first_us": 377529
    }
   },
   "mac": {
    "all": {
-    "best_us": 120987,
-    "first_us": 216845
+    "best_us": 118014,
+    "first_us": 220207
    },
    "auto": {
-    "best_us": 51580,
-    "first_us": 104852
+    "best_us": 50594,
+    "first_us": 98333
    },
    "checksum": "2738",
    "local": {
-    "best_us": 49259,
-    "first_us": 113946
+    "best_us": 49489,
+    "first_us": 81525
    },
    "remote": {
-    "best_us": 248006,
-    "first_us": 336828
+    "best_us": 248258,
+    "first_us": 336427
    }
   }
  },
  "mandelbrot": {
   "linux": {
    "all": {
-    "best_us": 3199,
-    "first_us": 35660
+    "best_us": 2971,
+    "first_us": 34911
    },
    "auto": {
-    "best_us": 1169,
-    "first_us": 39839
+    "best_us": 944,
+    "first_us": 39457
    },
    "checksum": "199",
    "local": {
-    "best_us": 9732,
-    "first_us": 29269
+    "best_us": 9725,
+    "first_us": 28883
    },
    "remote": {
-    "best_us": 1121,
-    "first_us": 33891
+    "best_us": 833,
+    "first_us": 34821
    }
   },
   "mac": {
    "all": {
-    "best_us": 1887,
-    "first_us": 46869
+    "best_us": 1610,
+    "first_us": 51435
    },
    "auto": {
-    "best_us": 1815,
-    "first_us": 42925
+    "best_us": 1471,
+    "first_us": 44737
    },
    "checksum": "199",
    "local": {
-    "best_us": 1995,
-    "first_us": 29895
+    "best_us": 1976,
+    "first_us": 37570
    },
    "remote": {
-    "best_us": 2195,
-    "first_us": 42877
+    "best_us": 1177,
+    "first_us": 46337
    }
   }
  },
  "md5": {
   "linux": {
    "all": {
-    "best_us": 30198,
-    "first_us": 66293
+    "best_us": 28504,
+    "first_us": 63783
    },
    "auto": {
-    "best_us": 3468,
-    "first_us": 149327
+    "best_us": 2203,
+    "first_us": 148582
    },
    "checksum": "2573682417",
    "local": {
-    "best_us": 109206,
-    "first_us": 134956
+    "best_us": 25555,
+    "first_us": 134712
    },
    "remote": {
-    "best_us": 3345,
-    "first_us": 39329
+    "best_us": 2045,
+    "first_us": 37128
    }
   },
   "mac": {
    "all": {
-    "best_us": 4185,
-    "first_us": 52262
+    "best_us": 3255,
+    "first_us": 50984
    },
    "auto": {
-    "best_us": 4159,
-    "first_us": 65417
+    "best_us": 2737,
+    "first_us": 63287
    },
    "checksum": "2573682417",
    "local": {
-    "best_us": 5452,
-    "first_us": 47110
+    "best_us": 6175,
+    "first_us": 55647
    },
    "remote": {
-    "best_us": 3640,
-    "first_us": 51573
+    "best_us": 2862,
+    "first_us": 60093
    }
   }
  },
  "saxpy": {
   "linux": {
    "all": {
-    "best_us": 145234,
-    "first_us": 477288
+    "best_us": 146502,
+    "first_us": 451400
    },
    "auto": {
-    "best_us": 3089,
-    "first_us": 70898
+    "best_us": 3194,
+    "first_us": 68889
    },
    "checksum": "3011510272",
    "local": {
-    "best_us": 2325,
-    "first_us": 56759
+    "best_us": 2361,
+    "first_us": 57283
    },
    "remote": {
-    "best_us": 367776,
-    "first_us": 926045
+    "best_us": 367784,
+    "first_us": 996356
    }
   },
   "mac": {
    "all": {
-    "best_us": 125263,
-    "first_us": 335750
+    "best_us": 125251,
+    "first_us": 326360
    },
    "auto": {
-    "best_us": 1053,
-    "first_us": 55138
+    "best_us": 943,
+    "first_us": 53699
    },
    "checksum": "3011510272",
    "local": {
-    "best_us": 554,
-    "first_us": 42909
+    "best_us": 549,
+    "first_us": 38890
    },
    "remote": {
-    "best_us": 305398,
-    "first_us": 796779
+    "best_us": 288374,
+    "first_us": 799579
    }
   }
  }

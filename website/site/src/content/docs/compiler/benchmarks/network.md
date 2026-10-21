@@ -21,19 +21,19 @@ the remote GPU. Every mode's checksum must agree.
 
 | benchmark | this machine | the remote GPU | every GPU | `auto` |
 |---|---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 49.3 | 248 | 121 | 51.6 |
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 2.0 | 2.2 | 1.9 | 1.8 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 5.5 | 3.6 | 4.2 | 4.2 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 554 µs | 305 | 125 | 1.1 |
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 49.5 | 248 | 118 | 50.6 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 2.0 | 1.2 | 1.6 | 1.5 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 6.2 | 2.9 | 3.3 | 2.7 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 549 µs | 288 | 125 | 943 µs |
 
 **AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080** (ms; best of eight runs)
 
 | benchmark | this machine | the remote GPU | every GPU | `auto` |
 |---|---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 979 | 311 | 258 | 310 |
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 9.7 | 1.1 | 3.2 | 1.2 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 109 | 3.3 | 30.2 | 3.5 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 2.3 | 368 | 145 | 3.1 |
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 966 | 308 | 257 | 308 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 9.7 | 833 µs | 3.0 | 944 µs |
+| [`md5`](/compiler/benchmark-sources/#md5) | 25.6 | 2.0 | 28.5 | 2.2 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 2.4 | 368 | 147 | 3.2 |
 
 
 What the tables show:
