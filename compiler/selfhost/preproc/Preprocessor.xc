@@ -382,6 +382,18 @@ class IfFrame
         {
         _autoImport = p;
         }
+    void addAutoImport(String* p)
+        {
+        if (_autoImport == (String*)0)
+            _autoImport = String.withString(p);
+        else
+            {
+            String* both = String.withString(_autoImport);
+            both.appendCString(";");
+            both.append(p);
+            _autoImport = both;
+            }
+        }
     // Every standard-library and prelude file this unit imported, in both
     // spellings (the canonical key and the #line form the tokens carry):
     // --par-auto leaves loops in these alone. As the reference's libraryFiles.
@@ -713,13 +725,22 @@ class IfFrame
             }
         // The auto-import, once, at the head of the entry file (cleared first:
         // the imported file is preprocessed through here too).
+        // Several, separated by `;` (--par-auto's Par.xc, a checked build's
+        // Checked.xc), each in turn.
         if (_autoImport != (String*)0 && _sourceDepth == (u32)1)
             {
-            String* d = String.withCString("import \"");
-            d.append(_autoImport);
-            d.appendCString("\"");
+            Array* names = _autoImport.splitOnByte((u8)';');
             _autoImport = (String*)0;
-            handleInclude(d, filename, (u32)0, output, true);
+            for (u32 k = (u32)0; k < names.count(); k = k + (u32)1)
+                {
+                String* nm = (String*)names.get(k);
+                if (nm.byteLength() == (u32)0)
+                    continue;
+                String* d = String.withCString("import \"");
+                d.append(nm);
+                d.appendCString("\"");
+                handleInclude(d, filename, (u32)0, output, true);
+                }
             output.appendFormat("#line 1 \"%s\"\n", filename.cString());
             }
 

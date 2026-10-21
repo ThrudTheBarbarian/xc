@@ -408,14 +408,21 @@
         }
     // The auto-import, once, at the head of the entry file (cleared first:
     // the imported file is preprocessed through here too).
+    // Several, separated by `;` (--par-auto's Par.xc, a checked build's
+    // Checked.xc), each in turn.
     if (_autoImport.length && _sourceDepth == 1)
         {
         NSString* a = _autoImport;
         _autoImport = nil;
-        [self processDirective:[NSString stringWithFormat:@"#import \"%@\"", a]
-                      filename:filename
-                    lineNumber:1
-                        output:output];
+        for (NSString* nm in [a componentsSeparatedByString:@";"])
+            {
+            if (!nm.length)
+                continue;
+            [self processDirective:[NSString stringWithFormat:@"#import \"%@\"", nm]
+                          filename:filename
+                        lineNumber:1
+                            output:output];
+            }
         [output appendFormat:@"#line 1 \"%@\"\n", filename];
         }
 

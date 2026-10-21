@@ -3809,7 +3809,7 @@ class ClassInfo
     // nothing outside the heap. The count is known here, so pass it.
     void emitBoundsCheckN(IRValue* ptr, IRValue* idx, u32 count, Node* at)
         {
-        if (!_boundsCheck || ptr == 0 || idx == 0 || count == (u32)0)
+        if (!_boundsCheck || ptr == 0 || idx == 0 || count == (u32)0 || inChecker())
             return;
         IRValue* sv = stringAddr(boundsSite(at));
         if (sv == 0)
@@ -3834,6 +3834,13 @@ class ClassInfo
         _mem = nm;
         }
 
+    // The checks themselves (Checked.xc's _xt_check_*) are not checked: their
+    // own reads would call them again, without end.
+    bool inChecker(void)
+        {
+        return _fn != (IRFunc*)0 && _fn.name() != (String*)0 && _fn.name().hasPrefix(String.withCString("_xt_check"));
+        }
+
     // The site string, shared by both checks.
     String* boundsSite(Node* at)
         {
@@ -3851,7 +3858,7 @@ class ClassInfo
 
     void emitBoundsCheck(IRValue* ptr, IRValue* idx, Node* at)
         {
-        if (!_boundsCheck || ptr == 0 || idx == 0)
+        if (!_boundsCheck || ptr == 0 || idx == 0 || inChecker())
             return;
         String* site = String.withCString("");
         if (at != 0 && at.file() != 0)

@@ -1479,12 +1479,13 @@ static NSString* sExecutablePath = nil;
                     "  has none of those. See private:docs/Design/memory-safety.md.\n");
             return nil;
             }
-        if (!opts.useArm64Backend)
+        // arm64 macOS links rt-checked's reporter; x86-64 and win64 take the
+        // checks from Checked.xc, which the driver imports. arm9 has neither.
+        if (!opts.useArm64Backend && !opts.useX86_64Backend && !opts.useWin64Backend)
             {
             fprintf(stderr,
-                    "xcc: error: -fbounds-check is implemented for arm64 so far; the\n"
-                    "  checked runtime (rt-checked-macos.s) is arm64 assembly and the\n"
-                    "  parameter map is emitted by the arm64 back end only.\n");
+                    "xcc: error: -fbounds-check is implemented for arm64, x86_64 and\n"
+                    "  win64 so far.\n");
             return nil;
             }
         }

@@ -309,7 +309,7 @@ void _xt_trap_bounds(const char *site, void *ptr, unsigned long index){
     if (ptr){
         unsigned char *h = (unsigned char *)ptr - 40;   /* XT_HDR — see rt.c */
         unsigned int magic = *(unsigned int *)(h + 0);
-        if (magic == 0x58544F42U){
+        if (magic == 0x58544F42U || magic == 0x58544F43U){
             unsigned long stride = *(unsigned long *)(h + 4);
             unsigned long count  = *(unsigned long *)(h + 12);
             fprintf(stderr, "  %s: index %lu, but the allocation holds %lu "
@@ -384,7 +384,11 @@ void _xt_check_bounds_n(void *ptr, unsigned long index, unsigned long count,
 void _xt_check_bounds(void *ptr, unsigned long index, const char *site){
     if (!ptr) { XT_MS_CAPTURE(); _xt_trap_bounds(site, ptr, index); return; }
     unsigned char *h = (unsigned char *)ptr - 40;   /* XT_HDR — see rt.c */
-    if (*(unsigned int *)(h + 0) != 0x58544F42U) return;   /* not a heap block */
+    /* Not a heap block. A block of 64 KB and more is page-aligned and carries
+     * the second magic (rt.c's XT_MAGIC_ALIGNED), with the same header: it
+     * used to be skipped, so no large array was ever checked. */
+    unsigned int magic = *(unsigned int *)(h + 0);
+    if (magic != 0x58544F42U && magic != 0x58544F43U) return;
     if (index >= *(unsigned long *)(h + 12)) {
         XT_MS_CAPTURE();
         _xt_trap_bounds(site, ptr, index);

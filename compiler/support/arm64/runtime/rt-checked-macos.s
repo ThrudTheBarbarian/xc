@@ -290,7 +290,7 @@ Lchk_BB2_1:
 	b	Lchk_BB2_2
 Lchk_BB2_2:
 	ldur	x8, [x29, #-16]
-	cbz	x8, Lchk_BB2_7
+	cbz	x8, Lchk_BB2_8
 	b	Lchk_BB2_3
 Lchk_BB2_3:
 	ldur	x8, [x29, #-16]
@@ -303,9 +303,16 @@ Lchk_BB2_3:
 	mov	w9, #20290                      ; =0x4f42
 	movk	w9, #22612, lsl #16
 	subs	w8, w8, w9
-	b.ne	Lchk_BB2_5
+	b.eq	Lchk_BB2_5
 	b	Lchk_BB2_4
 Lchk_BB2_4:
+	ldur	w8, [x29, #-36]
+	mov	w9, #20291                      ; =0x4f43
+	movk	w9, #22612, lsl #16
+	subs	w8, w8, w9
+	b.ne	Lchk_BB2_6
+	b	Lchk_BB2_5
+Lchk_BB2_5:
 	ldur	x8, [x29, #-32]
 	ldur	x8, [x8, #4]
 	stur	x8, [x29, #-48]
@@ -340,8 +347,8 @@ Lchk_BB2_4:
 	adrp	x1, l_chk.str.5@PAGE
 	add	x1, x1, l_chk.str.5@PAGEOFF
 	bl	_fprintf
-	b	Lchk_BB2_6
-Lchk_BB2_5:
+	b	Lchk_BB2_7
+Lchk_BB2_6:
 	adrp	x8, ___stderrp@GOTPAGE
 	ldr	x8, [x8, ___stderrp@GOTPAGEOFF]
 	ldr	x0, [x8]
@@ -351,16 +358,16 @@ Lchk_BB2_5:
 	adrp	x1, l_chk.str.7@PAGE
 	add	x1, x1, l_chk.str.7@PAGEOFF
 	bl	_fprintf
-	b	Lchk_BB2_6
-Lchk_BB2_6:
 	b	Lchk_BB2_7
 Lchk_BB2_7:
+	b	Lchk_BB2_8
+Lchk_BB2_8:
 	bl	___xt_ms_backtrace
 	mov	w0, #0                          ; =0x0
 	bl	_isatty
-	cbz	w0, Lchk_BB2_12
-	b	Lchk_BB2_8
-Lchk_BB2_8:
+	cbz	w0, Lchk_BB2_13
+	b	Lchk_BB2_9
+Lchk_BB2_9:
 	adrp	x8, ___stderrp@GOTPAGE
 	ldr	x8, [x8, ___stderrp@GOTPAGEOFF]
 	str	x8, [sp, #56]                   ; 8-byte Folded Spill
@@ -375,14 +382,14 @@ Lchk_BB2_8:
 	stur	w0, [x29, #-60]
 	ldur	w8, [x29, #-60]
 	subs	w8, w8, #99
-	b.eq	Lchk_BB2_10
-	b	Lchk_BB2_9
-Lchk_BB2_9:
-	ldur	w8, [x29, #-60]
-	subs	w8, w8, #67
-	b.ne	Lchk_BB2_11
+	b.eq	Lchk_BB2_11
 	b	Lchk_BB2_10
 Lchk_BB2_10:
+	ldur	w8, [x29, #-60]
+	subs	w8, w8, #67
+	b.ne	Lchk_BB2_12
+	b	Lchk_BB2_11
+Lchk_BB2_11:
 	adrp	x8, ___stderrp@GOTPAGE
 	ldr	x8, [x8, ___stderrp@GOTPAGEOFF]
 	ldr	x0, [x8]
@@ -392,9 +399,9 @@ Lchk_BB2_10:
 	ldp	x29, x30, [sp, #128]            ; 16-byte Folded Reload
 	add	sp, sp, #144
 	ret
-Lchk_BB2_11:
-	b	Lchk_BB2_12
 Lchk_BB2_12:
+	b	Lchk_BB2_13
+Lchk_BB2_13:
 	adrp	x8, ___stderrp@GOTPAGE
 	ldr	x8, [x8, ___stderrp@GOTPAGEOFF]
 	ldr	x0, [x8]
@@ -531,30 +538,39 @@ Lchk_BB4_7:
 	ldur	x1, [x29, #-8]
 	ldur	x2, [x29, #-16]
 	bl	__xt_trap_bounds
-	b	Lchk_BB4_18
+	b	Lchk_BB4_19
 Lchk_BB4_8:
 	ldur	x8, [x29, #-8]
 	subs	x8, x8, #40
 	str	x8, [sp, #8]
 	ldr	x8, [sp, #8]
 	ldr	w8, [x8]
+	str	w8, [sp, #4]
+	ldr	w8, [sp, #4]
 	mov	w9, #20290                      ; =0x4f42
 	movk	w9, #22612, lsl #16
 	subs	w8, w8, w9
-	b.eq	Lchk_BB4_10
+	b.eq	Lchk_BB4_11
 	b	Lchk_BB4_9
 Lchk_BB4_9:
-	b	Lchk_BB4_18
+	ldr	w8, [sp, #4]
+	mov	w9, #20291                      ; =0x4f43
+	movk	w9, #22612, lsl #16
+	subs	w8, w8, w9
+	b.eq	Lchk_BB4_11
+	b	Lchk_BB4_10
 Lchk_BB4_10:
+	b	Lchk_BB4_19
+Lchk_BB4_11:
 	ldur	x8, [x29, #-16]
 	ldr	x9, [sp, #8]
 	ldur	x9, [x9, #12]
 	subs	x8, x8, x9
-	b.lo	Lchk_BB4_18
-	b	Lchk_BB4_11
-Lchk_BB4_11:
+	b.lo	Lchk_BB4_19
 	b	Lchk_BB4_12
 Lchk_BB4_12:
+	b	Lchk_BB4_13
+Lchk_BB4_13:
 	adrp	x8, ___xt_ms_reg@PAGE
 	add	x8, x8, ___xt_ms_reg@PAGEOFF
 	; InlineAsm Start
@@ -566,35 +582,35 @@ Lchk_BB4_12:
 
 	; InlineAsm End
 	mov	w8, #19                         ; =0x13
-	str	w8, [sp, #4]
-	b	Lchk_BB4_13
-Lchk_BB4_13:                                ; =>This Inner Loop Header: Depth=1
-	ldr	w8, [sp, #4]
-	subs	w8, w8, #28
-	b.gt	Lchk_BB4_16
+	str	w8, [sp]
 	b	Lchk_BB4_14
-Lchk_BB4_14:                                ;   in Loop: Header=BB4_13 Depth=1
-	ldrsw	x9, [sp, #4]
+Lchk_BB4_14:                                ; =>This Inner Loop Header: Depth=1
+	ldr	w8, [sp]
+	subs	w8, w8, #28
+	b.gt	Lchk_BB4_17
+	b	Lchk_BB4_15
+Lchk_BB4_15:                                ;   in Loop: Header=BB4_14 Depth=1
+	ldrsw	x9, [sp]
 	adrp	x8, ___xt_ms_regKnown@PAGE
 	add	x8, x8, ___xt_ms_regKnown@PAGEOFF
 	add	x9, x8, x9
 	mov	w8, #1                          ; =0x1
 	strb	w8, [x9]
-	b	Lchk_BB4_15
-Lchk_BB4_15:                                ;   in Loop: Header=BB4_13 Depth=1
-	ldr	w8, [sp, #4]
+	b	Lchk_BB4_16
+Lchk_BB4_16:                                ;   in Loop: Header=BB4_14 Depth=1
+	ldr	w8, [sp]
 	add	w8, w8, #1
-	str	w8, [sp, #4]
-	b	Lchk_BB4_13
-Lchk_BB4_16:
-	b	Lchk_BB4_17
+	str	w8, [sp]
+	b	Lchk_BB4_14
 Lchk_BB4_17:
+	b	Lchk_BB4_18
+Lchk_BB4_18:
 	ldr	x0, [sp, #24]
 	ldur	x1, [x29, #-8]
 	ldur	x2, [x29, #-16]
 	bl	__xt_trap_bounds
-	b	Lchk_BB4_18
-Lchk_BB4_18:
+	b	Lchk_BB4_19
+Lchk_BB4_19:
 	ldp	x29, x30, [sp, #48]             ; 16-byte Folded Reload
 	add	sp, sp, #64
 	ret

@@ -2064,6 +2064,10 @@ Preprocessor* buildPP(FeOptions* o)
     predefine(pp, o);
     if (o.parAutoImport())
         pp.setAutoImport(String.withCString("Par.xc"));
+    // A checked build on x86-64 and win64 takes its subscript checks from
+    // Checked.xc (arm64 macOS links rt-checked's reporter instead).
+    if (o.boundsCheck() && (o.target().equals(String.withCString("x86_64")) || o.target().equals(String.withCString("win64"))))
+        pp.addAutoImport(String.withCString("Checked.xc"));
     // `#package` is wasm32-only and the preprocessor has to be able to say so.
     pp.setArch(platformOf(o));
     // iOS and Android are the arm64 back end, each with its own libraries.

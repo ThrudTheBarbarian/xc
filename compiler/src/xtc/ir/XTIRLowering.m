@@ -3899,7 +3899,9 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
                        count:(NSUInteger)count
                           at:(XTSourceLocation*)loc
     {
-    if (!self.boundsCheck || !ptr || !idx || count == 0)
+    // The checks themselves (Checked.xc's _xt_check_*) are not checked: their
+    // own reads would call them again, without end.
+    if (!self.boundsCheck || !ptr || !idx || count == 0 || [self.currentFunction.name hasPrefix:@"_xt_check"])
         return;
     NSString* site = [NSString stringWithFormat:@"%@:%lu:%lu",
                                                 loc.filename.lastPathComponent ?: @"?",
@@ -3922,7 +3924,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
                      index:(XTIRValue*)idx
                         at:(XTSourceLocation*)loc
     {
-    if (!self.boundsCheck || !ptr || !idx)
+    if (!self.boundsCheck || !ptr || !idx || [self.currentFunction.name hasPrefix:@"_xt_check"])
         return;
     NSString* site = [NSString stringWithFormat:@"%@:%lu:%lu",
                                                 loc.filename.lastPathComponent ?: @"?",

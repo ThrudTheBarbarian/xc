@@ -205,7 +205,7 @@ is reported and ignored.
 | Flag | Effect |
 |------|--------|
 | `-flto` | Link-time optimisation: recompile the whole program from its IR as one module. |
-| `-fbounds-check` | Build with subscript bounds checking; see [Checked builds](#checked-builds). arm64 only so far. |
+| `-fbounds-check` | Build with subscript bounds checking; see [Checked builds](#checked-builds). arm64, x86_64 and win64. |
 | `--sign <identity.pem>` | Sign the output with a developer identity (iOS/macOS); pair with `--sign-entitlements <plist>`. See also the standalone `xcc-sign`. |
 | `--emit-apk` | On `-A android`, package a signed `.apk`. `--sign-key <path>` names the signing key. |
 | `--needed <soname>` | On `-A android`, add a `DT_NEEDED` entry naming `<soname>`. Repeatable. A payload that calls into a companion `.so` must name it. |
@@ -253,8 +253,19 @@ aborts:
     #2  xtc_start +16
 ```
 
-The flag is implemented for arm64 so far. On a target that does not have it
-`xcc` stops with an error rather than quietly building an unchecked program.
+On `x86_64` and `win64` the report names the site, the index and the array's
+length, without the stack, and the program stops with status 134:
+
+```
+=== xcc: out-of-bounds access ===
+  at grid.xc:9:8
+  index 9, but the array holds 5 elements
+  aborting
+```
+
+The flag is implemented for arm64, x86_64 and win64. On a target that does not
+have it `xcc` stops with an error rather than quietly building an unchecked
+program.
 
 ## Warnings
 

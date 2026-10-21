@@ -1170,6 +1170,10 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         pp.platformPrelude = @"Platform.xc";
     if (_parAutoImport)
         pp.autoImport = @"Par.xc";
+    // A checked build on x86-64 and win64 takes its subscript checks from
+    // Checked.xc (arm64 macOS links rt-checked's reporter instead).
+    if (_options.boundsCheck && (_options.useX86_64Backend || _options.useWin64Backend))
+        pp.autoImport = pp.autoImport.length ? [pp.autoImport stringByAppendingString:@";Checked.xc"] : @"Checked.xc";
     [self setupPreprocessor:pp arm64:arm64];
     [self setupObjectFmtGateOnto:pp
                       fromSource:rawSource
