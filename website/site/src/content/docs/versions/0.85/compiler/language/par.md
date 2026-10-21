@@ -457,11 +457,13 @@ the tiles and the devices a run on a set used.
 
 ### Loops that become blocks: `--par-auto`
 
- With `--par-auto`, a `for (T i in a..b) { … }`
+With `--par-auto`, a `for (T i in a..b) { … }`
 loop in plain code — or `a...b`, or the C-style `for (T i = a; i < b; i++)`
 with `<=`, `++i`, `i += 1` or `i = i + 1` — becomes a `par` block when its
 shape allows, so an existing program takes the GPU and every core without
-being rewritten:
+being rewritten. The program need not import `Par.xc`: when a loop becomes a
+block, `--par-auto` imports the runtime itself, and a program with nothing to
+wrap is built without it.
 
 ```c
 for (u32 i in 0..N)
@@ -590,7 +592,8 @@ in … us on the daemon's GPU`), so the link's share of a tile's time is
 visible beside the compute's. The frames are tagged fields, read by tag, so
 a side may carry a field the other does not know.
 
-`XC_PAR_TRACE=<file>` records every run on the tile queue: each
+`XC_PAR_TRACE=<file>` (or `XC_PAR_TRACE=1`, which writes `par-trace.xcpt` in
+the current directory) records every run on the tile queue: each
 tile as it was handed out, to which device, what the queue expected it to
 take, when it came back and how long the device itself spent on it. Open
 the file with `tools/par-trace.html` in the compiler's source tree, a page
@@ -657,7 +660,9 @@ keep separate host sets. A program with no `XC_PAR_REMOTE` setting looks
 for daemons by itself: at its first `par` run it asks the
 subnet once, waits a moment, and takes every daemon that answered, of the
 pool `XC_PAR_POOL` names (daemons with no pool when it is unset) and of its
-own xcc version. `XC_PAR_REMOTE=none` keeps a program on its own machine,
+own xcc version. A daemon on the program's own machine is left out, since
+its devices are the program's already; named by address, it is still taken.
+`XC_PAR_REMOTE=none` keeps a program on its own machine,
 as does `XC_PAR=cpu`; `XC_PAR_REMOTE=mdns` says the default in so many
 words, and may be combined with addresses. A program carries the kernel
 form of its own target's GPU unless it was built with `-fpar-kernels=all`
