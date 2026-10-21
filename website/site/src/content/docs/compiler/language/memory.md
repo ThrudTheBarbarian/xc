@@ -19,7 +19,7 @@ u8* buf      = new u8[128];         // array of primitives
 MyClass* mob = new MyClass[8];      // array of class instances
 ```
 
-`new T[N]` is the only way to allocate an array on the heap. For arrays of class instances, every element is zero-filled and its `init()` runs. On out-of-memory, `new` returns null, so check the result if you need to.
+`new T[N]` is the only way to allocate an array on the heap. For arrays of class instances, every element is zero-filled and its `init()` runs. On out-of-memory, `new` returns null, so check the result if you need to. A count whose size in bytes does not fit the address space (`new u64[n]` with `n` from untrusted input, say) stops the program with a message rather than allocating a smaller block whose length is wrong.
 
 `simd: T* p = new T[N]` allocates a primitive array page-aligned, on whole 16 KB pages, so a GPU can use it in place — see [Arrays the GPU shares](/compiler/language/par/#arrays-the-gpu-shares-simd-pointers). It is otherwise an ordinary heap array: `.length`, `delete` and reference counting are the same. On the 64-bit targets a numeric array of 64 KB or more is allocated page-aligned without the qualifier, too, and a `par` block finds such a block from any pointer into it; the alignment costs at most two pages per array. On the 8-, 16- and 32-bit targets the qualifier is accepted and every allocation is a plain one.
 
@@ -223,6 +223,10 @@ The `Heap` library class (`#import <Heap.xc>`) has static helpers for inspecting
 | `Heap.size()` | `u32` | total free bytes available across every reserved bank, including 4-byte per-block header overhead |
 | `Heap.largest()` | `u16` | size of the biggest single free extent. First-fit can't satisfy a request larger than this even if `size()` is bigger |
 | `Heap.totalSize()` | `u32` | compile-time heap capacity (summed across all reserved banks) |
+
+## Stack canaries
+
+On arm64, x86_64 and win64, a function with a local array, a local struct or a local whose address is taken keeps a random guard word between those locals and the saved registers and return address above them. It is written on entry and compared on every return; a write past a local array that reaches it stops the program with `xcc: stack smashing detected` and status 134, before the return can use what was overwritten. The word changes every run and its low byte is zero, so a string copy cannot reproduce it. It costs nothing measurable on the [benchmarks](/compiler/performance/). A [checked build](/compiler/usage/cli/#checked-builds) catches the same write earlier, at the subscript.
 
 ## Limits
 

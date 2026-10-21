@@ -63,6 +63,8 @@ _xt_glibc_main:				# (argc, argv, envp), called by glibc
 	mov	r12, rdi
 	mov	r13, rsi
 	mov	r14, rdx
+	# The stack canary's guard word, before any code with a canary runs.
+	call	_xt_stack_guard_init
 	# Shared libraries' constructor tables first (libinit-linux.s appends a
 	# {next, start, end} node per library), then the program's own, which the
 	# back end lays between __xt_ctors_start and __xt_ctors_end.

@@ -29,6 +29,9 @@
 
 #pragma mark - Per-function context
 
+// The module's stack-canary check labels, numbered from 1 (reset per module).
+static NSUInteger sArm64CanaryN = 0;
+
 @interface XTArm64FnCtx : NSObject
 @property (nonatomic) XTIRFunction *fn;
 @property (nonatomic) XTIRModule *module;
@@ -68,6 +71,7 @@
 // non-HFA aggregate: the caller passes the result address in x8, the prologue
 // stows it here, and each `return` writes the struct through it. 0 = none.
 @property (nonatomic) NSUInteger sretSaveOffset;
+@property (nonatomic) NSUInteger canaryOff;   // the stack canary's slot, or 0 when the frame has none
 // AAPCS outgoing-stack-argument area, reserved at the BOTTOM of the frame
 // ([sp, #0 .. maxOutStack)) for calls that pass more than 8 GP / 8 FP arguments.
 // 0 for any function that makes no such call — then the frame is byte-identical
@@ -1006,6 +1010,20 @@ static unsigned xtArm64GlobalP2Align(uint32_t size) {
         && [self arm64AggSize:rt.layout] > 16) {
         ctx.sretSaveOffset = cur;
         cur += 8;
+    }
+    // The stack canary: a frame with an aggregate or a taken address (what a
+    // write can run along) gets a guard word just above its value slots, under
+    // the save area and the caller's frame that such a write would reach next.
+    // Stored on entry, compared on every return.
+    ctx.canaryOff = 0;
+    {
+        NSUInteger alo = 0, ahi = 0;
+        [[self class] aliasableRangeForCtx:ctx lo:&alo hi:&ahi];
+        if (ahi > alo) {
+            cur = (cur + 7) & ~(NSUInteger)7;
+            ctx.canaryOff = cur;
+            cur += 16;
+        }
     }
     ctx.valueSlotEnd = cur;                   // save area (if any) starts here
     NSUInteger bytes = (cur + 15) & ~(NSUInteger)15;   // round up to 16
@@ -5726,6 +5744,19 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                     [self materialiseOperand:vop intoReg:reg ctx:ctx];
                 }
             }
+            // The canary first, while sp still addresses the frame: x16 and
+            // x17 are the scratch pair, and the return value is already in
+            // x0/d0.
+            if (ctx.canaryOff) {
+                sArm64CanaryN++;
+                [ctx.out appendFormat:@"    ldr x16, %@\n", [self spMemForOff:ctx.canaryOff reg:@"x16" ctx:ctx]];
+                [ctx.out appendString:@"    adrp x17, ___xt_stack_guard@PAGE\n"];
+                [ctx.out appendString:@"    ldr x17, [x17, ___xt_stack_guard@PAGEOFF]\n"];
+                [ctx.out appendString:@"    cmp x16, x17\n"];
+                [ctx.out appendFormat:@"    b.eq L%@_canary_%lu\n", ctx.fn.name, (unsigned long)sArm64CanaryN];
+                [ctx.out appendString:@"    bl ___xt_stack_fail\n"];
+                [ctx.out appendFormat:@"L%@_canary_%lu:\n", ctx.fn.name, (unsigned long)sArm64CanaryN];
+            }
             // Reload the callee-saved registers. This must come AFTER the
             // return value is read (it may itself be homed in one of these
             // registers) and BEFORE the frame teardown.
@@ -8447,6 +8478,11 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     if (ctx.frameBase)
         [out appendFormat:@"    add x28, sp, #%lu, lsl #12\n",
          (unsigned long)(ctx.frameBase >> 12)];
+    if (ctx.canaryOff) {
+        [out appendString:@"    adrp x16, ___xt_stack_guard@PAGE\n"];
+        [out appendString:@"    ldr x16, [x16, ___xt_stack_guard@PAGEOFF]\n"];
+        [out appendFormat:@"    str x16, %@\n", [self spMemForOff:ctx.canaryOff reg:@"x16" ctx:ctx]];
+    }
 
     // Spill parameters into their stack slots. The last param is the
     // Mem phantom — it has a slot but no register, so skip it. AAPCS64:
@@ -8590,6 +8626,7 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
 + (BOOL)threadSafeARC { return sArm64ThreadSafeARC; }
 
 + (NSString *)assemblyFromModule:(XTIRModule *)mod {
+    sArm64CanaryN = 0;
     // Resolve thread-safe ARC HERE rather than in xtcg's main, because the
     // backend has two callers: the xtcg-arm64 process and the corpus sweep,
     // which lowers and codegens in-process. A decision made in only one of them

@@ -42,6 +42,8 @@
 	.globl	_start
 _start:
 	sub	rsp, 40
+	# The stack canary's guard word, before any code with a canary runs.
+	call	_xt_stack_guard_init
 	# Load-time constructors (bug 134): the table the back end lays between
 	# __xt_ctors_start and __xt_ctors_end in .data, walked before main. The
 	# mingw `__attribute__((constructor))` stub that used to do this went with

@@ -187,7 +187,7 @@ static int runFixture(NSString* name)
     int rc = 0;
     NSArray<NSString*>* base = XTArm64ClangArgv();
     NSArray<NSString*>* ccArgv = base ? [base arrayByAddingObjectsFromArray:
-                                                  @[ stub, asmPath, @"-o", binPath ]]
+                                                  @[ stub, asmPath, [kFixtureDir stringByAppendingPathComponent:@"stack-guard.c"], @"-o", binPath ]]
                                       : nil;
     if (!ccArgv)
         {

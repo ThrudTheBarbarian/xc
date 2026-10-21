@@ -433,6 +433,51 @@ int _xt_fmt_f(char* buf, uint32_t size, const char* fmt, int prec, double v)
     }
 
 // ───────────────────────── object runtime (per rt.c) ─────────────────────────
+// The stack canary (the back ends' frames with a local array or a taken
+// address): a random word stored between those locals and the saved registers
+// on entry and compared on every return. Its low byte is zero, as glibc's is,
+// so a string copy cannot write the whole of it back. The crt calls
+// _xt_stack_guard_init before the constructors and main. glibc has getrandom;
+// elsewhere the word mixes the cycle counter with the stack's and the image's
+// addresses (both randomised by the loader), which is weaker (TODO: AT_RANDOM on
+// Linux, the system RNG on Windows).
+// Hidden: clang otherwise reaches it through the GOT under -fPIC (the glibc
+// build), and the in-house linker gives a local symbol no GOT entry.
+__attribute__((visibility("hidden"))) uint64_t __xt_stack_guard;
+#ifdef XT_GLIBC
+extern long getrandom(void* buf, uint64_t n, unsigned int flags);
+#endif
+void _xt_stack_guard_init(void)
+    {
+    uint64_t g = 0;
+#ifdef XT_GLIBC
+    if (getrandom(&g, sizeof g, 0) != (long)sizeof g)
+        g = 0;
+#endif
+    if (g == 0)
+        {
+        uint32_t lo, hi;
+        __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+        uint64_t t = ((uint64_t)hi << 32) | lo;
+        uint64_t s = (uint64_t)&g;
+        uint64_t c = (uint64_t)&_xt_stack_guard_init;
+        g = t * 0x9E3779B97F4A7C15ULL ^ (s << 17) ^ (s >> 13) ^ c * 0xC2B2AE3D27D4EB4FULL;
+        g ^= g >> 31;
+        g *= 0x94D049BB133111EBULL;
+        g ^= g >> 29;
+        }
+    g &= ~(uint64_t)0xFF;
+    if (g == 0)
+        g = 0x5854434b53000000ULL;
+    __xt_stack_guard = g;
+    }
+void _xt_exit(int32_t code);
+void __xt_stack_fail(void)
+    {
+    static const char msg[] = "xcc: stack smashing detected (a local array was written past its end)\n";
+    write(2, msg, sizeof msg - 1);
+    _xt_exit(134);
+    }
 // count * stride must not wrap: a wrapped product is a SMALL block whose
 // header still says `count`, so every bounds check trusts it and the program
 // writes past the end (a `new T[n]` with n from input is the classic heap
@@ -585,7 +630,7 @@ static void xt_simd_unreg(uint8_t* payload)
     }
 // A global array the compiler gave pages of its own (its gpu-globals pass:
 // numeric, 64 KB and more, on a 16 KB boundary and padded to whole pages),
-// registered by the program's load-time constructor so par's runtime shares
+// registered on the par runtime's first use of the registry so par's runtime shares
 // and watches it as it does a heap block. bytes is the padded length.
 void _xtc_simd_register(void* p, uint64_t bytes)
     {

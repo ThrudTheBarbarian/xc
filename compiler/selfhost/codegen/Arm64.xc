@@ -75,6 +75,8 @@ class Arm64
         _missing = new Array();
         _failed = false;
         _frame = (u32)0;
+        _canaryOff = (u32)0;
+        _canaryN = (u32)0;
         _maxOutStack = (u32)0;
         _aapcs64Abi = false;      // Darwin's deviations unless told otherwise
         _lseAtomics = true;       // Apple Silicon always has them
@@ -852,6 +854,9 @@ class Arm64
     Array* _msFns;          // of MsFn@, or 0 when this is not a checked build
 
     u32 _saveAreaOffset;
+    u32 _canaryOff;     // the stack canary's slot, or 0 when the frame has none
+    u32 _canaryN;       // the next check's label number
+    String* _fnName;    // the function being emitted, for its labels
 
     // The frame byte range a taken address could reach; [lo, hi). Outside it, a
     // slot nothing loads really is dead.
@@ -948,6 +953,13 @@ class Arm64
         // through it — expandStagedSlots keys off exactly this line.
         if (_frameBase != (u32)0)
             _out.appendFormat("    add x28, sp, #%lu, lsl #12\n", _frameBase >> (u32)12);
+        _fnName = fn.name();
+        if (_canaryOff != (u32)0)
+            {
+            _out.appendCString("    adrp x16, ___xt_stack_guard@PAGE\n");
+            _out.appendCString("    ldr x16, [x16, ___xt_stack_guard@PAGEOFF]\n");
+            _out.appendFormat("    str x16, %s\n", spMemForOff(_canaryOff, String.withCString("x16")).cString());
+            }
         spillParams(fn);
     }
 
@@ -7553,6 +7565,18 @@ class Arm64
 
     void emitEpilogue(void)
     {
+        // The canary first, while sp still addresses the frame: x16 and x17
+        // are the scratch pair, and the return value is already in x0/d0.
+        if (_canaryOff != (u32)0) {
+            _canaryN = _canaryN + (u32)1;
+            _out.appendFormat("    ldr x16, %s\n", spMemForOff(_canaryOff, String.withCString("x16")).cString());
+            _out.appendCString("    adrp x17, ___xt_stack_guard@PAGE\n");
+            _out.appendCString("    ldr x17, [x17, ___xt_stack_guard@PAGEOFF]\n");
+            _out.appendCString("    cmp x16, x17\n");
+            _out.appendFormat("    b.eq L%s_canary_%lu\n", _fnName.cString(), _canaryN);
+            _out.appendCString("    bl ___xt_stack_fail\n");
+            _out.appendFormat("L%s_canary_%lu:\n", _fnName.cString(), _canaryN);
+        }
         emitCalleeSaves(true);
         if (_maxOutStack == (u32)0) {
             if (_frame <= (u32)504) {
@@ -9338,6 +9362,17 @@ class Arm64
         }
         if (_aliasLo == (u32)$FFFF_FFFF) { _aliasLo = (u32)0; _aliasHi = (u32)0; }
 
+        // The stack canary: a frame with an aggregate or a taken address (what
+        // a write can run along) gets a guard word just above its value slots,
+        // under the save area and the caller's frame that such a write would
+        // reach next. Stored on entry, compared on every return.
+        _canaryOff = (u32)0;
+        if (_aliasHi > _aliasLo)
+            {
+            cur = (cur + (u32)7) & ~(u32)7;
+            _canaryOff = cur;
+            cur = cur + (u32)16;
+            }
         _valueSlotEnd = cur;                   // the save area, if any, starts here
         _frame = (cur + (u32)15) & ~(u32)15;   // the stack stays 16-aligned
     }

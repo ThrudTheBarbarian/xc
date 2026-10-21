@@ -129,6 +129,8 @@ _start:
 	mov	r12, rdi
 	mov	r13, rsi
 	mov	r14, rdx
+	# The stack canary's guard word, before any code with a canary runs.
+	call	_xt_stack_guard_init
 	# First the shared libraries' tables (bug 470): each library's loader
 	# init call appended a {next, start, end} node to __xt_lib_ctors
 	# (libinit-linux.s), dependencies first. They run here rather than from

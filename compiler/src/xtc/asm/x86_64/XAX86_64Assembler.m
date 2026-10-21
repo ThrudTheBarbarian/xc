@@ -539,6 +539,8 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
     if ([mn isEqualToString:@"pause"])  { emit8(out,0xF3); emit8(out,0x90); return out; }
     // The CPU-feature reads behind runtime SIMD dispatch (_xt_simd_select).
     if ([mn isEqualToString:@"cpuid"])  { emit8(out,0x0F); emit8(out,0xA2); return out; }
+    // The cycle counter (the runtime's stack-guard seed).
+    if ([mn isEqualToString:@"rdtsc"])  { emit8(out,0x0F); emit8(out,0x31); return out; }
     if ([mn isEqualToString:@"xgetbv"]) { emit8(out,0x0F); emit8(out,0x01); emit8(out,0xD0); return out; }
     // bt / bts / btr / btc — bit test (+set/reset/complement). clang reaches for
     // `bt` on a "is bit N of this mask set?" loop, which is how the threading

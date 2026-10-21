@@ -74,6 +74,11 @@ static NSMutableString* sEdgeStubs = nil;
 // PE/COFF object format (no ELF `.type … @function`). Same x86-64 ISA otherwise.
 // Set once by xtcg-win64 before codegen; SysV paths are left byte-for-byte intact.
 static BOOL sWin64 = NO;
+// The stack canary: whether the function being emitted keeps one at [rbp-8],
+// its name (for the check's labels), and the module's label count from 1.
+static BOOL sCanary = NO;
+static NSString* sCanaryFn = nil;
+static NSUInteger sCanaryN = 0;
 
 // When the current function returns a >8-byte aggregate, Win64 passes a HIDDEN
 // pointer to the caller's destination in rcx (all real params shift right by one);
@@ -1749,6 +1754,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
 
 + (NSString*)assemblyFromModule:(XTIRModule*)mod
     {
+    sCanaryN = 0;
     sX86ThreadSafeARC = sX86ThreadSafeARCOverride >= 0
                             ? (sX86ThreadSafeARCOverride != 0)
                             : [mod referencesSymbolNamed:@"_xt_thread_create"];
@@ -2617,6 +2623,14 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
     // (bug 090, 30 functions in int_arith.xc at -O3, every one a slot swap).
     NSMutableDictionary<NSNumber*, NSNumber*>* slot = [NSMutableDictionary dictionary];
     NSUInteger cur = 0;
+    // The stack canary: a frame with an aggregate or a taken address (what a
+    // write can run along) keeps [rbp-8] for a guard word, between every slot
+    // and the saved rbp and return address such a write reaches next. Stored
+    // on entry, compared on every return.
+    sCanary = [self needsCanary:fn];
+    sCanaryFn = [self safeSym:fn.name];
+    if (sCanary)
+        cur = 16;
     for (XTIRValue* v in [fn valuesInPrintOrder])
         {
         if ([self isMem:v])
@@ -2725,6 +2739,9 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             }
     if (rest)
         [out appendFormat:@"\tsub\trsp, %lu\n", (unsigned long)rest];
+    // r11 is volatile and carries no argument on either ABI.
+    if (sCanary)
+        [out appendString:@"\tmov\tr11, qword ptr [rip + __xt_stack_guard]\n\tmov\tqword ptr [rbp-8], r11\n"];
     for (NSString* r in usedSaves) // persist clobbered callee-saved homes
         [out appendFormat:@"\tmov\t[rbp-%@], %@\n", saves[r], r];
     for (NSString* x in sXmmSaves) // and Win64's callee-saved xmm6-xmm15
@@ -2977,6 +2994,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             [self emitTerminator:bb.terminator fn:fn block:bb slot:slot frame:frame out:out];
         else
             {
+            [self emitCanaryCheck:out];
             [self emitHomeRestore:out];
             if (frame)
                 [out appendFormat:@"\tadd\trsp, %lu\n", (unsigned long)frame];
@@ -2988,6 +3006,35 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
     }
 
 // Restore callee-saved home registers before returning (rbp still valid).
+// The canary first: r11 and the flags are all it touches, so the return value
+// in rax/rdx/xmm0 is left alone.
++ (void)emitCanaryCheck:(NSMutableString*)out
+    {
+    if (!sCanary)
+        return;
+    sCanaryN++;
+    [out appendFormat:@"\tmov\tr11, qword ptr [rbp-8]\n\tcmp\tr11, qword ptr [rip + __xt_stack_guard]\n"
+                      @"\tje\t.L%@_canary_%lu\n\tcall\t__xt_stack_fail\n.L%@_canary_%lu:\n",
+                      sCanaryFn, (unsigned long)sCanaryN, sCanaryFn, (unsigned long)sCanaryN];
+    }
+
+// Whether fn's frame has anything a write can run along: a pinned local, an
+// aggregate, or a value whose address is taken.
++ (BOOL)needsCanary:(XTIRFunction*)fn
+    {
+    if (fn.frameInfo.pinnedLocals.count > 0)
+        return YES;
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIRInsn* n in bb.instructions)
+            {
+            if (n.result && n.result.type.kind == XTIRTypeKindAgg)
+                return YES;
+            if (n.opcode == XTIROpAddrOf && n.operands.count > 0 && n.operands[0].kind == XTIROperandKindUse)
+                return YES;
+            }
+    return NO;
+    }
+
 + (void)emitHomeRestore:(NSMutableString*)out
     {
     // In a STABLE order. Enumerating the dictionary walks it in Foundation's
@@ -6095,6 +6142,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                 [self load:o into:'a' fn:fn slot:slot out:out]; // → rax (xmm0 for float)
             break;
             }
+        [self emitCanaryCheck:out];
         [self emitHomeRestore:out];
         if (frame)
             [out appendFormat:@"\tadd\trsp, %lu\n", (unsigned long)frame];
@@ -6177,6 +6225,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         return;
         }
     default:
+        [self emitCanaryCheck:out];
         [self emitHomeRestore:out];
         if (frame)
             [out appendFormat:@"\tadd\trsp, %lu\n", (unsigned long)frame];

@@ -113,7 +113,7 @@ static void xt_simd_unreg(uint8_t *payload){_xt_rt_lock();unsigned long i=xt_sim
     _xt_rt_unlock();}
 /* A global array the compiler gave pages of its own (its gpu-globals pass:
    numeric, 64 KB and more, on a 16 KB boundary and padded to whole pages),
-   registered by the program's load-time constructor so par's runtime shares
+   registered on the par runtime's first use of the registry so par's runtime shares
    and watches it as it does a heap block. bytes is the padded length.
    Not on a 4 KB page (a layout the image writer did not keep), it is left
    out: the watch protects whole pages, and one shared with a neighbour would
@@ -315,6 +315,17 @@ int32_t _xt_file_chmod_exec(const char *path){return chmod(path,0755)==0?1:0;}
 // in-house assembler has no GOT relocation. Static keeps it adrp/add direct.
 static int    xt_argc_v;
 static char **xt_argv_v;
+/* The stack canary (the back ends' frames with a local array or a taken
+   address): a random word stored between those locals and the saved registers
+   on entry and compared on every return. Its low byte is zero, as glibc's is,
+   so a string copy cannot write the whole of it back. Every crt calls
+   _xt_stack_guard_init first, before _xt_set_args (which must leave argc and
+   argv alone: the crt used to rely on x0/x1 surviving it). */
+/* Hidden: clang otherwise reaches it through the GOT, and the in-house linker
+   gives a local symbol no GOT entry (rt-checked.c's __xt_ms_fns, the same). */
+__attribute__((visibility("hidden"))) unsigned long __xt_stack_guard;
+void _xt_stack_guard_init(void){unsigned long g=0;arc4random_buf(&g,sizeof g);g&=~0xFFUL;if(!g)g=0x5854434b53000000UL;__xt_stack_guard=g;}
+void __xt_stack_fail(void){fprintf(stderr,"xcc: stack smashing detected (a local array was written past its end)\n");abort();}
 void _xt_set_args(int argc,char **argv){xt_argc_v=argc;xt_argv_v=argv;}
 int32_t _xt_argc(void){return (int32_t)xt_argc_v;}
 const char *_xt_argv(int32_t i){static const char*empty="";if(i<0||i>=xt_argc_v||!xt_argv_v)return empty;return xt_argv_v[i];}

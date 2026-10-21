@@ -1359,6 +1359,14 @@ class X86Fixup
             return;
             }
         // The CPU-feature reads behind runtime SIMD dispatch (_xt_simd_select).
+        // The cycle counter (the runtime's stack-guard seed).
+        if (mn.equals(String.withCString("rdtsc")))
+            {
+            e8((u32)$0F);
+            e8((u32)$31);
+            _hit = true;
+            return;
+            }
         if (mn.equals(String.withCString("cpuid")))
             {
             e8((u32)$0F);

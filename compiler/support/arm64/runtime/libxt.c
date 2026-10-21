@@ -233,6 +233,21 @@ int32_t _xt_mkdir(const char* path)
 static int xt_argc;
 static char** xt_argv;
 
+// The stack canary (rt.c has the same pair): a guard word set before main, and
+// the routine a failed check calls.
+__attribute__((visibility("hidden"))) unsigned long __xt_stack_guard;
+__attribute__((constructor)) static void xt_stack_guard_set(void)
+{
+    unsigned long g = 0;
+    arc4random_buf(&g, sizeof g);
+    g &= ~0xFFUL;
+    __xt_stack_guard = g ? g : 0x5854434b53000000UL;
+}
+void __xt_stack_fail(void)
+{
+    fprintf(stderr, "xcc: stack smashing detected (a local array was written past its end)\n");
+    abort();
+}
 __attribute__((constructor)) static void xt_capture_args(int argc, char** argv, char** envp)
     {
     (void)envp;

@@ -57,6 +57,8 @@ class X86_64
         _arcOverride = (i32)-1;
         _win64 = false;
         _simdNames = new Array();
+        _canary = false;
+        _canaryN = (u32)0;
         }
 
     void setWin64(bool v)
@@ -559,6 +561,8 @@ class X86_64
     // pointer, and the whole thing rounds to 16 so rsp stays aligned at a call.
     Map* _slot;
     u32 _frame;
+    bool _canary;      // this frame keeps a stack canary at [rbp-8]
+    u32 _canaryN;      // the module's canary-check labels, numbered from 1
     Homing* _homing;
     Array* _homeSaves; // callee-saved registers used, in pool order
     Map* _homeSaveOff; // register -> its [rbp-off]
@@ -679,6 +683,9 @@ class X86_64
                 }
         if (rest != (u32)0)
             _out.appendFormat("\tsub\trsp, %lu\n", rest);
+        // r11 is volatile and carries no argument on either ABI.
+        if (_canary)
+            _out.appendCString("\tmov\tr11, qword ptr [rip + __xt_stack_guard]\n\tmov\tqword ptr [rbp-8], r11\n");
         for (u32 i = (u32)0; i < _homeSaves.count(); i = i + (u32)1)
             {
             String* r = (String*)_homeSaves.get(i);
@@ -5477,6 +5484,16 @@ class X86_64
 
     void emitEpilogue(void)
         {
+        // The canary first: r11 and the flags are all it touches, so the
+        // return value in rax/rdx/xmm0 is left alone.
+        if (_canary)
+            {
+            _canaryN = _canaryN + (u32)1;
+            String* nm = safeSym(_fn.name());
+            _out.appendFormat("\tmov\tr11, qword ptr [rbp-8]\n\tcmp\tr11, qword ptr [rip + __xt_stack_guard]\n"
+                              "\tje\t.L%s_canary_%lu\n\tcall\t__xt_stack_fail\n.L%s_canary_%lu:\n",
+                              nm.cString(), _canaryN, nm.cString(), _canaryN);
+            }
         emitHomeRestore();
         if (_frame != (u32)0)
             _out.appendFormat("\tadd\trsp, %lu\n", _frame);
@@ -7191,6 +7208,13 @@ class X86_64
         {
         _slot = new Map();
         u32 cur = (u32)0;
+        // The stack canary: a frame with an aggregate or a taken address (what
+        // a write can run along) keeps [rbp-8] for a guard word, between every
+        // slot and the saved rbp and return address such a write reaches next.
+        // Stored on entry, compared on every return.
+        _canary = needsCanary(fn);
+        if (_canary)
+            cur = (u32)16;
         // PRINT order, not id order — mirrors the reference (bug 090).
         Array* order = fn.valuesInPrintOrder();
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
@@ -7208,6 +7232,28 @@ class X86_64
             _slot.set((Hashable*)v, (Object*)Number.withU32(cur));
             }
         _frame = cur;
+        }
+
+    // Whether fn's frame has anything a write can run along: a pinned local,
+    // an aggregate, or a value whose address is taken.
+    static bool needsCanary(IRFunc* fn)
+        {
+        if (fn.pinned().count() > (u32)0)
+            return true;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.res() != (IRValue*)0 && isAggTy(n.res().ty()))
+                    return true;
+                if (n.op().equals(String.withCString("AddrOf")) && n.ops().count() > (u32)0
+                    && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE)
+                    return true;
+                }
+            }
+        return false;
         }
 
     u32 slotOf(IRValue* v)

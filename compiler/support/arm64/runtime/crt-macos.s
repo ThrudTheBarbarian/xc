@@ -39,9 +39,13 @@
 .globl _xtc_start
 .align 2
 _xtc_start:
-    stp x29, x30, [sp, #-16]!
+    stp x29, x30, [sp, #-32]!
     mov x29, sp
-    bl __xt_set_args                    // (argc, argv) are already in x0/x1
+    stp x0, x1, [sp, #16]               // argc, argv: kept across the calls
+    bl __xt_stack_guard_init            // the stack canary's guard word, first
+    ldp x0, x1, [sp, #16]
+    bl __xt_set_args
+    ldp x0, x1, [sp, #16]               // reloaded: no callee keeps x0/x1
     bl _main
-    ldp x29, x30, [sp], #16
+    ldp x29, x30, [sp], #32
     ret
