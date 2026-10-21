@@ -42,7 +42,14 @@
 /* A count of 0 is stored as 0. It used to be raised to 1, which made freeing
    `new C[0]` run one dealloc on an element that does not exist and gave the
    empty array a `.length` of 1 (bug 472). The block keeps its 16-byte minimum. */
+/* count * stride must not wrap: a wrapped product is a SMALL block whose header
+   still says `count`, so every bounds check trusts it and the program writes past
+   the end (a `new T[n]` with n from input is the classic heap overflow). The
+   margin keeps the header and an aligned block's pages from wrapping it too. */
+static void xt_size_check(unsigned long count,unsigned long stride){
+    if(stride&&count>(~0UL-(1UL<<20))/stride){fprintf(stderr,"xcc: an allocation of %lu x %lu bytes overflows\n",count,stride);abort();}}
 void *_xtc_alloc(unsigned long count,unsigned long stride,void(*dealloc)(void*)){
+    xt_size_check(count,stride);
     unsigned long b=count*stride;if(b<16)b=16;
     uint8_t*p=(uint8_t*)calloc(1,b+XT_HDR);
     if(!p){fprintf(stderr,"xcc: out of memory allocating %lu x %lu bytes\n",count,stride);abort();}
@@ -156,6 +163,7 @@ int _xtc_simd_dirty(void *p){int d=1;_xt_rt_lock();unsigned long i=xt_simd_find(
     if(i>0&&xt_simd_tab[2*(i-1)]==(uint8_t*)p&&(xt_simd_flag[i-1]&XT_SIMD_WATCHED))d=0;
     _xt_rt_unlock();return d;}
 void *_xtc_alloc_aligned(unsigned long count,unsigned long stride,void(*dealloc)(void*)){
+    xt_size_check(count,stride);
     /* The payload is rounded up to whole pages too: a GPU wrapping it in
        place (Metal's newBufferWithBytesNoCopy) needs a page-multiple length. */
     unsigned long b=count*stride;if(b<16)b=16;b=(b+XT_PAGE-1)&~(XT_PAGE-1);

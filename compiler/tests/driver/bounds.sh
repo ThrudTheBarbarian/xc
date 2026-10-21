@@ -131,6 +131,26 @@ for want in 2:9 3:14 4:21 5:28; do
     [ $rc = 134 ] && grep -q "n.xc:$line:" "$W/n$case.out" \
         || { echo "FAIL bounds: case $case was not stopped at n.xc:$line (exit $rc)"; head -3 "$W/n$case.out"; fail=1; }
 done
+# An allocation whose byte size wraps stops the program, checked or not: a
+# wrapped `count * stride` was a small block whose header said `count`, so the
+# program, and every check, wrote past its end. 2^61 + 1 u64s is 8 bytes, wrapped.
+cat > "$W/o.xc" <<'XC'
+#import "Stdio.xc"
+i32 main(i32 argc, u8** argv)
+    {
+    u64 n = ((u64)1 << (u64)61) + (u64)argc;
+    u64* p = new u64[n];
+    p[(u64)1000000] = (u64)7;
+    Stdio.printf("allocated %lu\n", p[(u64)1000000]);
+    return 0;
+    }
+XC
+for flag in "" -fbounds-check; do
+    "$XC" -q -O2 $flag -H . -o "$W/o" "$W/o.xc" > "$W/o.b" 2>&1 || { echo "FAIL bounds: the overflow program does not build ($flag)"; head -3 "$W/o.b"; fail=1; continue; }
+    "$W/o" < /dev/null > "$W/o.out" 2>&1; rc=$?
+    grep -q 'allocation.*overflows' "$W/o.out" && [ $rc = 134 ] \
+        || { echo "FAIL bounds: a wrapping allocation size was not stopped ($flag: exit $rc)"; head -2 "$W/o.out"; fail=1; }
+done
 if [ "$PLAT" = osx ]; then
     for A in x86_64 win64; do
         "$XC" -q -O2 -A $A -fbounds-check -H . -o "$W/b.$A" "$W/b.xc" > "$W/$A.out" 2>&1 \

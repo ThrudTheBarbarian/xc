@@ -279,12 +279,33 @@ _xtc_alloc:                             # @_xtc_alloc
 	push	rsi
 	push	rdi
 	push	rbx
-	sub	rsp, 40
+	sub	rsp, 56
 	mov	rsi, r8
 	mov	rbx, rdx
 	mov	rdi, rcx
-	mov	rax, rdx
-	imul	rax, rcx
+	test	rdx, rdx
+	je	.LBB6_3
+# %bb.1:
+	mov	rax, -1048577
+	xor	edx, edx
+	div	rbx
+	cmp	rax, rdi
+	jae	.LBB6_3
+# %bb.2:
+	mov	dword ptr [rsp + 52], 0
+	mov	ecx, -12
+	call	GetStdHandle
+	mov	qword ptr [rsp + 32], 0
+	lea	rdx, [rip + xt_size_check.msg]
+	lea	r9, [rsp + 52]
+	mov	rcx, rax
+	mov	r8d, 38
+	call	WriteFile
+	mov	ecx, 134
+	call	_xt_exit
+.LBB6_3:
+	mov	rax, rbx
+	imul	rax, rdi
 	cmp	rax, 257
 	mov	r14d, 256
 	cmovae	r14, rax
@@ -295,8 +316,8 @@ _xtc_alloc:                             # @_xtc_alloc
 	mov	r8, r14
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB6_1
-# %bb.2:
+	je	.LBB6_4
+# %bb.5:
 	mov	dword ptr [rax + 8], 1481920322
 	mov	qword ptr [rax + 12], rbx
 	mov	qword ptr [rax + 20], rdi
@@ -304,11 +325,11 @@ _xtc_alloc:                             # @_xtc_alloc
 	mov	qword ptr [rax + 36], 0
 	mov	dword ptr [rax + 44], 1
 	add	rax, 48
-	jmp	.LBB6_3
-.LBB6_1:
+	jmp	.LBB6_6
+.LBB6_4:
 	xor	eax, eax
-.LBB6_3:
-	add	rsp, 40
+.LBB6_6:
+	add	rsp, 56
 	pop	rbx
 	pop	rdi
 	pop	rsi
@@ -1002,12 +1023,33 @@ _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 	push	rdi
 	push	rbp
 	push	rbx
-	sub	rsp, 40
+	sub	rsp, 56
 	mov	rsi, r8
 	mov	rbx, rdx
 	mov	rdi, rcx
-	mov	r15, rdx
-	imul	r15, rcx
+	test	rdx, rdx
+	je	.LBB15_3
+# %bb.1:
+	mov	rax, -1048577
+	xor	edx, edx
+	div	rbx
+	cmp	rax, rdi
+	jae	.LBB15_3
+# %bb.2:
+	mov	dword ptr [rsp + 52], 0
+	mov	ecx, -12
+	call	GetStdHandle
+	mov	qword ptr [rsp + 32], 0
+	lea	rdx, [rip + xt_size_check.msg]
+	lea	r9, [rsp + 52]
+	mov	rcx, rax
+	mov	r8d, 38
+	call	WriteFile
+	mov	ecx, 134
+	call	_xt_exit
+.LBB15_3:
+	mov	r15, rbx
+	imul	r15, rdi
 	cmp	r15, 17
 	mov	r14d, 16
 	cmovae	r14, r15
@@ -1020,8 +1062,8 @@ _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 	mov	r8, r14
 	call	HeapAlloc
 	test	rax, rax
-	je	.LBB15_1
-# %bb.2:
+	je	.LBB15_4
+# %bb.5:
 	lea	rcx, [rax + 8]
 	add	rax, 16439
 	and	rax, -16384
@@ -1033,25 +1075,25 @@ _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 	mov	dword ptr [rax - 4], 1
 	mov	qword ptr [rax - 48], rcx
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB15_5
+	je	.LBB15_8
 	.p2align	4, 0x90
-.LBB15_3:                               # =>This Loop Header: Depth=1
-                                        #     Child Loop BB15_4 Depth 2
+.LBB15_6:                               # =>This Loop Header: Depth=1
+                                        #     Child Loop BB15_7 Depth 2
 	mov	ecx, 1
 	xchg	dword ptr [rip + xt_rt_spin], ecx
 	test	ecx, ecx
-	je	.LBB15_5
-.LBB15_4:                               #   Parent Loop BB15_3 Depth=1
+	je	.LBB15_8
+.LBB15_7:                               #   Parent Loop BB15_6 Depth=1
                                         # =>  This Inner Loop Header: Depth=2
 	mov	ecx, dword ptr [rip + xt_rt_spin]
 	test	ecx, ecx
-	jne	.LBB15_4
-	jmp	.LBB15_3
-.LBB15_5:
+	jne	.LBB15_7
+	jmp	.LBB15_6
+.LBB15_8:
 	mov	rcx, qword ptr [rip + xt_simd_cap]
 	cmp	qword ptr [rip + xt_simd_n], rcx
-	jne	.LBB15_25
-# %bb.6:
+	jne	.LBB15_28
+# %bb.9:
 	mov	r14, rax
 	lea	rax, [rcx + rcx]
 	test	rcx, rcx
@@ -1081,41 +1123,41 @@ _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 	cmove	rsi, rax
 	and	bpl, r13b
 	cmp	bpl, 1
-	jne	.LBB15_18
-# %bb.7:
+	jne	.LBB15_21
+# %bb.10:
 	mov	rcx, qword ptr [rip + xt_simd_n]
 	mov	rax, rcx
 	add	rax, rcx
-	je	.LBB15_10
-# %bb.8:
+	je	.LBB15_13
+# %bb.11:
 	mov	rdx, qword ptr [rip + xt_simd_tab]
 	xor	r8d, r8d
 	.p2align	4, 0x90
-.LBB15_9:                               # =>This Inner Loop Header: Depth=1
+.LBB15_12:                              # =>This Inner Loop Header: Depth=1
 	mov	r9, qword ptr [rdx + 8*r8]
 	mov	qword ptr [rdi + 8*r8], r9
 	inc	r8
 	cmp	rax, r8
-	jne	.LBB15_9
-.LBB15_10:
+	jne	.LBB15_12
+.LBB15_13:
 	test	rcx, rcx
 	mov	rax, r14
-	je	.LBB15_13
-# %bb.11:
+	je	.LBB15_16
+# %bb.14:
 	mov	rdx, qword ptr [rip + xt_simd_flag]
 	xor	r8d, r8d
 	.p2align	4, 0x90
-.LBB15_12:                              # =>This Inner Loop Header: Depth=1
+.LBB15_15:                              # =>This Inner Loop Header: Depth=1
 	movzx	r9d, byte ptr [rdx + r8]
 	mov	byte ptr [rsi + r8], r9b
 	inc	r8
 	cmp	rcx, r8
-	jne	.LBB15_12
-.LBB15_13:
+	jne	.LBB15_15
+.LBB15_16:
 	mov	rbx, qword ptr [rip + xt_simd_tab]
 	test	rbx, rbx
-	je	.LBB15_15
-# %bb.14:
+	je	.LBB15_18
+# %bb.17:
 	call	GetProcessHeap
 	add	rbx, -8
 	mov	rcx, rax
@@ -1123,30 +1165,30 @@ _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 	mov	r8, rbx
 	call	HeapFree
 	mov	rax, r14
-.LBB15_15:
-	mov	rbx, qword ptr [rip + xt_simd_flag]
-	test	rbx, rbx
-	je	.LBB15_17
-# %bb.16:
-	call	GetProcessHeap
-	add	rbx, -8
-	mov	rcx, rax
-	xor	edx, edx
-	mov	r8, rbx
-	call	HeapFree
-	mov	rax, r14
-.LBB15_17:
-	mov	qword ptr [rip + xt_simd_tab], rdi
-	mov	qword ptr [rip + xt_simd_flag], rsi
-	mov	qword ptr [rip + xt_simd_cap], r12
-	jmp	.LBB15_24
-.LBB15_1:
-	xor	eax, eax
-	jmp	.LBB15_34
 .LBB15_18:
+	mov	rbx, qword ptr [rip + xt_simd_flag]
 	test	rbx, rbx
 	je	.LBB15_20
 # %bb.19:
+	call	GetProcessHeap
+	add	rbx, -8
+	mov	rcx, rax
+	xor	edx, edx
+	mov	r8, rbx
+	call	HeapFree
+	mov	rax, r14
+.LBB15_20:
+	mov	qword ptr [rip + xt_simd_tab], rdi
+	mov	qword ptr [rip + xt_simd_flag], rsi
+	mov	qword ptr [rip + xt_simd_cap], r12
+	jmp	.LBB15_27
+.LBB15_4:
+	xor	eax, eax
+	jmp	.LBB15_37
+.LBB15_21:
+	test	rbx, rbx
+	je	.LBB15_23
+# %bb.22:
 	mov	rbx, rax
 	call	GetProcessHeap
 	add	rdi, -8
@@ -1155,36 +1197,36 @@ _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 	mov	r8, rdi
 	call	HeapFree
 	mov	rax, rbx
-.LBB15_20:
+.LBB15_23:
 	test	rax, rax
-	je	.LBB15_22
-# %bb.21:
+	je	.LBB15_25
+# %bb.24:
 	call	GetProcessHeap
 	add	rsi, -8
 	mov	rcx, rax
 	xor	edx, edx
 	mov	r8, rsi
 	call	HeapFree
-.LBB15_22:
+.LBB15_25:
 	cmp	dword ptr [rip + _xt_threads_active], 0
 	mov	rax, r14
-	je	.LBB15_24
-# %bb.23:
+	je	.LBB15_27
+# %bb.26:
 	mov	dword ptr [rip + xt_rt_spin], 0
-.LBB15_24:
+.LBB15_27:
 	test	bpl, bpl
-	je	.LBB15_34
-.LBB15_25:
+	je	.LBB15_37
+.LBB15_28:
 	mov	rcx, qword ptr [rip + xt_simd_n]
 	test	rcx, rcx
-	je	.LBB15_26
-# %bb.27:
+	je	.LBB15_29
+# %bb.30:
 	mov	r8, qword ptr [rip + xt_simd_tab]
 	xor	edx, edx
 	movabs	r9, 2305843009213693950
 	mov	r10, rcx
 	.p2align	4, 0x90
-.LBB15_28:                              # =>This Inner Loop Header: Depth=1
+.LBB15_31:                              # =>This Inner Loop Header: Depth=1
 	lea	r11, [r10 + rdx]
 	mov	rsi, r11
 	shr	rsi
@@ -1194,23 +1236,23 @@ _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 	cmova	r10, rsi
 	cmovbe	rdx, r11
 	cmp	rdx, r10
-	jb	.LBB15_28
-# %bb.29:
+	jb	.LBB15_31
+# %bb.32:
 	cmp	rcx, rdx
-	ja	.LBB15_30
-	jmp	.LBB15_32
-.LBB15_26:
+	ja	.LBB15_33
+	jmp	.LBB15_35
+.LBB15_29:
 	xor	edx, edx
 	cmp	rcx, rdx
-	jbe	.LBB15_32
-.LBB15_30:
+	jbe	.LBB15_35
+.LBB15_33:
 	mov	r8, qword ptr [rip + xt_simd_flag]
 	mov	r10, rcx
 	shl	r10, 4
 	add	r10, qword ptr [rip + xt_simd_tab]
 	mov	r9, rcx
 	.p2align	4, 0x90
-.LBB15_31:                              # =>This Inner Loop Header: Depth=1
+.LBB15_34:                              # =>This Inner Loop Header: Depth=1
 	movups	xmm0, xmmword ptr [r10 - 16]
 	movups	xmmword ptr [r10], xmm0
 	add	r10, -16
@@ -1218,8 +1260,8 @@ _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 	mov	byte ptr [r8 + r9], r11b
 	dec	r9
 	cmp	r9, rdx
-	ja	.LBB15_31
-.LBB15_32:
+	ja	.LBB15_34
+.LBB15_35:
 	mov	r8, qword ptr [rip + xt_simd_tab]
 	mov	r9, rdx
 	shl	r9, 4
@@ -1231,11 +1273,11 @@ _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 	inc	rcx
 	mov	qword ptr [rip + xt_simd_n], rcx
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB15_34
-# %bb.33:
+	je	.LBB15_37
+# %bb.36:
 	mov	dword ptr [rip + xt_rt_spin], 0
-.LBB15_34:
-	add	rsp, 40
+.LBB15_37:
+	add	rsp, 56
 	pop	rbx
 	pop	rbp
 	pop	rdi
@@ -1410,47 +1452,12 @@ _xtc_new_simd_string:                   # @_xtc_new_simd_string
 	.p2align	4, 0x90
 _xtc_new_u8:                            # @_xtc_new_u8
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	cmp	rcx, 65536
-	jb	.LBB29_1
-# %bb.5:
 	mov	edx, 1
 	xor	r8d, r8d
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
+	cmp	rcx, 65536
+	jb	_xtc_alloc                      # TAILCALL
+# %bb.1:
 	jmp	_xtc_alloc_aligned              # TAILCALL
-.LBB29_1:
-	cmp	rcx, 257
-	mov	esi, 256
-	mov	rdi, rcx
-	cmovae	rsi, rcx
-	call	GetProcessHeap
-	add	rsi, 48
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rsi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB29_2
-# %bb.3:
-	mov	dword ptr [rax + 8], 1481920322
-	mov	qword ptr [rax + 12], 1
-	mov	qword ptr [rax + 20], rdi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 28], xmm0
-	mov	dword ptr [rax + 44], 1
-	add	rax, 48
-	jmp	.LBB29_4
-.LBB29_2:
-	xor	eax, eax
-.LBB29_4:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
                                         # -- End function
 	.def	_xtc_new_i8;
 	.scl	2;
@@ -1460,47 +1467,12 @@ _xtc_new_u8:                            # @_xtc_new_u8
 	.p2align	4, 0x90
 _xtc_new_i8:                            # @_xtc_new_i8
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	cmp	rcx, 65536
-	jb	.LBB30_1
-# %bb.5:
 	mov	edx, 1
 	xor	r8d, r8d
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
+	cmp	rcx, 65536
+	jb	_xtc_alloc                      # TAILCALL
+# %bb.1:
 	jmp	_xtc_alloc_aligned              # TAILCALL
-.LBB30_1:
-	cmp	rcx, 257
-	mov	esi, 256
-	mov	rdi, rcx
-	cmovae	rsi, rcx
-	call	GetProcessHeap
-	add	rsi, 48
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rsi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB30_2
-# %bb.3:
-	mov	dword ptr [rax + 8], 1481920322
-	mov	qword ptr [rax + 12], 1
-	mov	qword ptr [rax + 20], rdi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 28], xmm0
-	mov	dword ptr [rax + 44], 1
-	add	rax, 48
-	jmp	.LBB30_4
-.LBB30_2:
-	xor	eax, eax
-.LBB30_4:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
                                         # -- End function
 	.def	_xtc_new_u16;
 	.scl	2;
@@ -1510,49 +1482,13 @@ _xtc_new_i8:                            # @_xtc_new_i8
 	.p2align	4, 0x90
 _xtc_new_u16:                           # @_xtc_new_u16
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
 	movabs	rax, 9223372036854743040
-	test	rcx, rax
-	je	.LBB31_1
-# %bb.5:
 	mov	edx, 2
 	xor	r8d, r8d
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
+	test	rcx, rax
+	je	_xtc_alloc                      # TAILCALL
+# %bb.1:
 	jmp	_xtc_alloc_aligned              # TAILCALL
-.LBB31_1:
-	mov	rdi, rcx
-	lea	rax, [rcx + rcx]
-	cmp	rax, 257
-	mov	esi, 256
-	cmovae	rsi, rax
-	call	GetProcessHeap
-	add	rsi, 48
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rsi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB31_2
-# %bb.3:
-	mov	dword ptr [rax + 8], 1481920322
-	mov	qword ptr [rax + 12], 2
-	mov	qword ptr [rax + 20], rdi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 28], xmm0
-	mov	dword ptr [rax + 44], 1
-	add	rax, 48
-	jmp	.LBB31_4
-.LBB31_2:
-	xor	eax, eax
-.LBB31_4:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
                                         # -- End function
 	.def	_xtc_new_i16;
 	.scl	2;
@@ -1562,49 +1498,13 @@ _xtc_new_u16:                           # @_xtc_new_u16
 	.p2align	4, 0x90
 _xtc_new_i16:                           # @_xtc_new_i16
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
 	movabs	rax, 9223372036854743040
-	test	rcx, rax
-	je	.LBB32_1
-# %bb.5:
 	mov	edx, 2
 	xor	r8d, r8d
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
+	test	rcx, rax
+	je	_xtc_alloc                      # TAILCALL
+# %bb.1:
 	jmp	_xtc_alloc_aligned              # TAILCALL
-.LBB32_1:
-	mov	rdi, rcx
-	lea	rax, [rcx + rcx]
-	cmp	rax, 257
-	mov	esi, 256
-	cmovae	rsi, rax
-	call	GetProcessHeap
-	add	rsi, 48
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rsi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB32_2
-# %bb.3:
-	mov	dword ptr [rax + 8], 1481920322
-	mov	qword ptr [rax + 12], 2
-	mov	qword ptr [rax + 20], rdi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 28], xmm0
-	mov	dword ptr [rax + 44], 1
-	add	rax, 48
-	jmp	.LBB32_4
-.LBB32_2:
-	xor	eax, eax
-.LBB32_4:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
                                         # -- End function
 	.def	_xtc_new_u32;
 	.scl	2;
@@ -1614,49 +1514,13 @@ _xtc_new_i16:                           # @_xtc_new_i16
 	.p2align	4, 0x90
 _xtc_new_u32:                           # @_xtc_new_u32
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
 	movabs	rax, 4611686018427371520
-	test	rcx, rax
-	je	.LBB33_1
-# %bb.5:
 	mov	edx, 4
 	xor	r8d, r8d
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
+	test	rcx, rax
+	je	_xtc_alloc                      # TAILCALL
+# %bb.1:
 	jmp	_xtc_alloc_aligned              # TAILCALL
-.LBB33_1:
-	mov	rdi, rcx
-	lea	rax, [4*rcx]
-	cmp	rax, 257
-	mov	esi, 256
-	cmovae	rsi, rax
-	call	GetProcessHeap
-	add	rsi, 48
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rsi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB33_2
-# %bb.3:
-	mov	dword ptr [rax + 8], 1481920322
-	mov	qword ptr [rax + 12], 4
-	mov	qword ptr [rax + 20], rdi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 28], xmm0
-	mov	dword ptr [rax + 44], 1
-	add	rax, 48
-	jmp	.LBB33_4
-.LBB33_2:
-	xor	eax, eax
-.LBB33_4:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
                                         # -- End function
 	.def	_xtc_new_i32;
 	.scl	2;
@@ -1666,49 +1530,13 @@ _xtc_new_u32:                           # @_xtc_new_u32
 	.p2align	4, 0x90
 _xtc_new_i32:                           # @_xtc_new_i32
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
 	movabs	rax, 4611686018427371520
-	test	rcx, rax
-	je	.LBB34_1
-# %bb.5:
 	mov	edx, 4
 	xor	r8d, r8d
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
+	test	rcx, rax
+	je	_xtc_alloc                      # TAILCALL
+# %bb.1:
 	jmp	_xtc_alloc_aligned              # TAILCALL
-.LBB34_1:
-	mov	rdi, rcx
-	lea	rax, [4*rcx]
-	cmp	rax, 257
-	mov	esi, 256
-	cmovae	rsi, rax
-	call	GetProcessHeap
-	add	rsi, 48
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rsi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB34_2
-# %bb.3:
-	mov	dword ptr [rax + 8], 1481920322
-	mov	qword ptr [rax + 12], 4
-	mov	qword ptr [rax + 20], rdi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 28], xmm0
-	mov	dword ptr [rax + 44], 1
-	add	rax, 48
-	jmp	.LBB34_4
-.LBB34_2:
-	xor	eax, eax
-.LBB34_4:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
                                         # -- End function
 	.def	_xtc_new_pointer;
 	.scl	2;
@@ -1718,38 +1546,9 @@ _xtc_new_i32:                           # @_xtc_new_i32
 	.p2align	4, 0x90
 _xtc_new_pointer:                       # @_xtc_new_pointer
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	mov	rsi, rcx
-	lea	rax, [8*rcx]
-	cmp	rax, 257
-	mov	edi, 256
-	cmovae	rdi, rax
-	call	GetProcessHeap
-	add	rdi, 48
-	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB35_1
-# %bb.2:
-	mov	dword ptr [rax + 8], 1481920322
-	mov	qword ptr [rax + 12], 8
-	mov	qword ptr [rax + 20], rsi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 28], xmm0
-	mov	dword ptr [rax + 44], 1
-	add	rax, 48
-	jmp	.LBB35_3
-.LBB35_1:
-	xor	eax, eax
-.LBB35_3:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
+	xor	r8d, r8d
+	jmp	_xtc_alloc                      # TAILCALL
                                         # -- End function
 	.def	_xtc_new_u64;
 	.scl	2;
@@ -1759,49 +1558,13 @@ _xtc_new_pointer:                       # @_xtc_new_pointer
 	.p2align	4, 0x90
 _xtc_new_u64:                           # @_xtc_new_u64
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
 	movabs	rax, 2305843009213685760
-	test	rcx, rax
-	je	.LBB36_1
-# %bb.5:
 	mov	edx, 8
 	xor	r8d, r8d
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
+	test	rcx, rax
+	je	_xtc_alloc                      # TAILCALL
+# %bb.1:
 	jmp	_xtc_alloc_aligned              # TAILCALL
-.LBB36_1:
-	mov	rdi, rcx
-	lea	rax, [8*rcx]
-	cmp	rax, 257
-	mov	esi, 256
-	cmovae	rsi, rax
-	call	GetProcessHeap
-	add	rsi, 48
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rsi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB36_2
-# %bb.3:
-	mov	dword ptr [rax + 8], 1481920322
-	mov	qword ptr [rax + 12], 8
-	mov	qword ptr [rax + 20], rdi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 28], xmm0
-	mov	dword ptr [rax + 44], 1
-	add	rax, 48
-	jmp	.LBB36_4
-.LBB36_2:
-	xor	eax, eax
-.LBB36_4:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
                                         # -- End function
 	.def	_xtc_new_i64;
 	.scl	2;
@@ -1811,49 +1574,13 @@ _xtc_new_u64:                           # @_xtc_new_u64
 	.p2align	4, 0x90
 _xtc_new_i64:                           # @_xtc_new_i64
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
 	movabs	rax, 2305843009213685760
-	test	rcx, rax
-	je	.LBB37_1
-# %bb.5:
 	mov	edx, 8
 	xor	r8d, r8d
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
+	test	rcx, rax
+	je	_xtc_alloc                      # TAILCALL
+# %bb.1:
 	jmp	_xtc_alloc_aligned              # TAILCALL
-.LBB37_1:
-	mov	rdi, rcx
-	lea	rax, [8*rcx]
-	cmp	rax, 257
-	mov	esi, 256
-	cmovae	rsi, rax
-	call	GetProcessHeap
-	add	rsi, 48
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rsi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB37_2
-# %bb.3:
-	mov	dword ptr [rax + 8], 1481920322
-	mov	qword ptr [rax + 12], 8
-	mov	qword ptr [rax + 20], rdi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 28], xmm0
-	mov	dword ptr [rax + 44], 1
-	add	rax, 48
-	jmp	.LBB37_4
-.LBB37_2:
-	xor	eax, eax
-.LBB37_4:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
                                         # -- End function
 	.def	_xtc_new_bool;
 	.scl	2;
@@ -1863,47 +1590,12 @@ _xtc_new_i64:                           # @_xtc_new_i64
 	.p2align	4, 0x90
 _xtc_new_bool:                          # @_xtc_new_bool
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	cmp	rcx, 65536
-	jb	.LBB38_1
-# %bb.5:
 	mov	edx, 1
 	xor	r8d, r8d
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
+	cmp	rcx, 65536
+	jb	_xtc_alloc                      # TAILCALL
+# %bb.1:
 	jmp	_xtc_alloc_aligned              # TAILCALL
-.LBB38_1:
-	cmp	rcx, 257
-	mov	esi, 256
-	mov	rdi, rcx
-	cmovae	rsi, rcx
-	call	GetProcessHeap
-	add	rsi, 48
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rsi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB38_2
-# %bb.3:
-	mov	dword ptr [rax + 8], 1481920322
-	mov	qword ptr [rax + 12], 1
-	mov	qword ptr [rax + 20], rdi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 28], xmm0
-	mov	dword ptr [rax + 44], 1
-	add	rax, 48
-	jmp	.LBB38_4
-.LBB38_2:
-	xor	eax, eax
-.LBB38_4:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
                                         # -- End function
 	.def	_xtc_new_float;
 	.scl	2;
@@ -1913,49 +1605,13 @@ _xtc_new_bool:                          # @_xtc_new_bool
 	.p2align	4, 0x90
 _xtc_new_float:                         # @_xtc_new_float
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
 	movabs	rax, 4611686018427371520
-	test	rcx, rax
-	je	.LBB39_1
-# %bb.5:
 	mov	edx, 4
 	xor	r8d, r8d
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
+	test	rcx, rax
+	je	_xtc_alloc                      # TAILCALL
+# %bb.1:
 	jmp	_xtc_alloc_aligned              # TAILCALL
-.LBB39_1:
-	mov	rdi, rcx
-	lea	rax, [4*rcx]
-	cmp	rax, 257
-	mov	esi, 256
-	cmovae	rsi, rax
-	call	GetProcessHeap
-	add	rsi, 48
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rsi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB39_2
-# %bb.3:
-	mov	dword ptr [rax + 8], 1481920322
-	mov	qword ptr [rax + 12], 4
-	mov	qword ptr [rax + 20], rdi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 28], xmm0
-	mov	dword ptr [rax + 44], 1
-	add	rax, 48
-	jmp	.LBB39_4
-.LBB39_2:
-	xor	eax, eax
-.LBB39_4:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
                                         # -- End function
 	.def	_xtc_new_double;
 	.scl	2;
@@ -1965,49 +1621,13 @@ _xtc_new_float:                         # @_xtc_new_float
 	.p2align	4, 0x90
 _xtc_new_double:                        # @_xtc_new_double
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
 	movabs	rax, 2305843009213685760
-	test	rcx, rax
-	je	.LBB40_1
-# %bb.5:
 	mov	edx, 8
 	xor	r8d, r8d
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
+	test	rcx, rax
+	je	_xtc_alloc                      # TAILCALL
+# %bb.1:
 	jmp	_xtc_alloc_aligned              # TAILCALL
-.LBB40_1:
-	mov	rdi, rcx
-	lea	rax, [8*rcx]
-	cmp	rax, 257
-	mov	esi, 256
-	cmovae	rsi, rax
-	call	GetProcessHeap
-	add	rsi, 48
-	mov	rcx, rax
-	mov	edx, 8
-	mov	r8, rsi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB40_2
-# %bb.3:
-	mov	dword ptr [rax + 8], 1481920322
-	mov	qword ptr [rax + 12], 8
-	mov	qword ptr [rax + 20], rdi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 28], xmm0
-	mov	dword ptr [rax + 44], 1
-	add	rax, 48
-	jmp	.LBB40_4
-.LBB40_2:
-	xor	eax, eax
-.LBB40_4:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
                                         # -- End function
 	.def	_xtc_new_string;
 	.scl	2;
@@ -2017,38 +1637,9 @@ _xtc_new_double:                        # @_xtc_new_double
 	.p2align	4, 0x90
 _xtc_new_string:                        # @_xtc_new_string
 # %bb.0:
-	push	rsi
-	push	rdi
-	sub	rsp, 40
-	mov	rsi, rcx
-	lea	rax, [8*rcx]
-	cmp	rax, 257
-	mov	edi, 256
-	cmovae	rdi, rax
-	call	GetProcessHeap
-	add	rdi, 48
-	mov	rcx, rax
 	mov	edx, 8
-	mov	r8, rdi
-	call	HeapAlloc
-	test	rax, rax
-	je	.LBB41_1
-# %bb.2:
-	mov	dword ptr [rax + 8], 1481920322
-	mov	qword ptr [rax + 12], 8
-	mov	qword ptr [rax + 20], rsi
-	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 28], xmm0
-	mov	dword ptr [rax + 44], 1
-	add	rax, 48
-	jmp	.LBB41_3
-.LBB41_1:
-	xor	eax, eax
-.LBB41_3:
-	add	rsp, 40
-	pop	rdi
-	pop	rsi
-	ret
+	xor	r8d, r8d
+	jmp	_xtc_alloc                      # TAILCALL
                                         # -- End function
 	.def	_xtc_count;
 	.scl	2;
@@ -4169,10 +3760,14 @@ _xt_simd_level:
 	.lcomm	xt_sinit_n,4,4                  # @xt_sinit_n
 	.lcomm	xt_sinit_flag,256,16            # @xt_sinit_flag
 	.lcomm	xt_sinit_owner,128,16           # @xt_sinit_owner
+	.section	.rdata,"dr"
+	.p2align	4, 0x0                          # @xt_size_check.msg
+xt_size_check.msg:
+	.asciz	"xcc: an allocation overflows its size\n"
+
 	.lcomm	xt_simd_n,8,8                   # @xt_simd_n
 	.lcomm	xt_simd_cap,8,8                 # @xt_simd_cap
 	.lcomm	xt_simd_installed,1,4           # @xt_simd_installed
-	.section	.rdata,"dr"
 .L.str:                                 # @.str
 	.asciz	"XC_SIMD"
 
@@ -4199,6 +3794,7 @@ xt_simd_pick.msg.4:
 	.addrsig_sym xt_simd_veh
 	.addrsig_sym xt_rt_spin
 	.addrsig_sym xt_alloc_spin
+	.addrsig_sym xt_size_check.msg
 	.addrsig_sym xt_simd_pick.msg
 	.addrsig_sym xt_simd_pick.msg.4
 	.addrsig_sym xt_env.buf

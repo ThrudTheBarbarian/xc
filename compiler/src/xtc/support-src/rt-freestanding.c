@@ -433,8 +433,24 @@ int _xt_fmt_f(char* buf, uint32_t size, const char* fmt, int prec, double v)
     }
 
 // ───────────────────────── object runtime (per rt.c) ─────────────────────────
+// count * stride must not wrap: a wrapped product is a SMALL block whose
+// header still says `count`, so every bounds check trusts it and the program
+// writes past the end (a `new T[n]` with n from input is the classic heap
+// overflow). It stops the program, as an abort does; the margin keeps the
+// header and an aligned block's pages from wrapping it too.
+void _xt_exit(int32_t code);
+static void xt_size_check(uint64_t count, uint64_t stride)
+    {
+    if (stride != 0 && count > (~(uint64_t)0 - ((uint64_t)1 << 20)) / stride)
+        {
+        static const char msg[] = "xcc: an allocation overflows its size\n";
+        write(2, msg, sizeof msg - 1);
+        _xt_exit(134);
+        }
+    }
 void* _xtc_alloc(uint64_t count, uint64_t stride, void (*dealloc)(void*))
     {
+    xt_size_check(count, stride);
     /* An allocation too large to satisfy returns NULL — it does not quietly
        become a small one. `b > (16UL << 20) -> b = 256` handed back a 256-byte
        block for any request over 16 MB and the caller wrote straight past it.
@@ -750,6 +766,7 @@ int _xtc_simd_dirty(void* p)
     }
 void* _xtc_alloc_aligned(uint64_t count, uint64_t stride, void (*dealloc)(void*))
     {
+    xt_size_check(count, stride);
     uint64_t b = count * stride;
     if (b < 16)
         b = 16;
