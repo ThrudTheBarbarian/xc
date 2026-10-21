@@ -10008,7 +10008,7 @@ class OptProfile
                 if (at == (IRInsn*)0)
                     continue;
                 String* path = (String*)IRDbg.files().get(at.dbgFile());
-                if (path == (String*)0 || path.contains(String.withCString("/support/")))
+                if (path == (String*)0 || IRDbg.isLibraryPath(path))
                     continue;
                 String* why = ppVerdict(fn, L);
                 String* line = String.withFormat("propose: %s:%ld: ", path.cString(), (i32)at.dbgLine());
@@ -10118,7 +10118,7 @@ class OptProfile
                     if (at == (IRInsn*)0)
                         continue;
                     String* path = (String*)IRDbg.files().get(at.dbgFile());
-                    if (path == (String*)0 || path.contains(String.withCString("/support/")))
+                    if (path == (String*)0 || IRDbg.isLibraryPath(path))
                         continue;
                     String* verdict = ppVerdict(fn, L);
                     if (verdict != (String*)0)
@@ -12879,7 +12879,7 @@ class OptProfile
         if (f.hasDbg() && f.dbgFile() < IRDbg.files().count())
             {
             String* fp = (String*)IRDbg.files().get(f.dbgFile());
-            if (fp != (String*)0 && fp.contains(String.withCString("/support/")))
+            if (fp != (String*)0 && IRDbg.isLibraryPath(fp))
                 {
                 String* w = String.withCString("a call into the standard library (");
                 w.append(callee);

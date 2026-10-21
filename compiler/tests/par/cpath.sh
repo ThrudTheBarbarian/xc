@@ -214,5 +214,32 @@ if grep -q 'float 0x3FD3333340000000' "$W/fl.ll"; then
 else
     echo "FAIL cpath: clang wrote 0.3f in a form this test does not expect"; fail=1
 fi
+# An INSTALLED compiler (<prefix>/bin/xcc beside <prefix>/lib/xc) must know the
+# library it found as the library: only a path under `support/` was, so an
+# install's --par-auto outlined String's and Data's own loops and a C program
+# built with it crashed at -O3 (the 0.85 re-issue's smoke test). The layout,
+# with this tree's library linked in.
+mkdir -p "$W/inst/bin" "$W/inst/lib"
+cp "$XC" "$W/inst/bin/xcc"
+ln -s "$(pwd)/support" "$W/inst/lib/xc"
+cat > "$W/inst.c" <<'C'
+#include <stdio.h>
+int sq[4096];
+int main(void)
+{
+    long s = 0;
+    for (int i = 0; i < 4096; i++)
+        sq[i] = i * i;
+    for (int i = 0; i < 4096; i++)
+        s += sq[i];
+    printf("%ld\n", s);
+    return 0;
+}
+C
+( cd "$W/inst" && XC_PAR_OUTLINE_TRACE=1 ./bin/xcc -q -O3 --par-auto -o "$W/inst.out" "$W/inst.c" ) > "$W/inst.b" 2>&1 \
+    || { echo "FAIL cpath: the installed layout does not build a C program with --par-auto"; head -3 "$W/inst.b"; fail=1; }
+grep -E '^outline: [A-Za-z_]+\$[A-Za-z_$]*(:[0-9]+)?: outlined' "$W/inst.b" | head -3 | sed 's/^/FAIL cpath: the installed layout outlined library code: /' | grep . && fail=1
+[ -x "$W/inst.out" ] && [ "$("$W/inst.out")" = "22898104320" ] \
+    || { echo "FAIL cpath: the installed layout's --par-auto C program gives '$("$W/inst.out" 2>&1)'"; fail=1; }
 [ $fail = 0 ] && echo "--- cpath: pass ---" || echo "--- cpath: FAIL ---"
 exit $fail

@@ -387,6 +387,11 @@ class FeOptions
     static IRModule* lower(FeOptions* o)
         {
         resolveIncludePaths(o);
+        // The optimiser tells the library's code from the program's by where
+        // its source is (--par-auto leaves the library alone).
+        String* libRoot = supportRoot(o);
+        if (libRoot != (String*)0)
+            IRDbg.setLibRoot(libRoot);
         if (o.verbose())
             {
             Stdio.printf("xc-fe: platform: %s\n", platformOf(o).cString());

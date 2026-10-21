@@ -40,7 +40,36 @@ class IRDbg
     static Array* _files; // String@, indexed by file id
     static String* _cwd;  // what a relative path is taken against
     static Map* _idByRaw; // a path as the source spelt it -> its file id (Number@)
+    static String* _libRoot; // the standard library's root, as the front end found it
     u8 _unused;           // no instances: every entry point is static
+
+    // The root the front end found the standard library under (supportRoot):
+    // `support/` in the build tree, `<prefix>/lib/xc` in an install.
+    static void setLibRoot(String* root)
+        {
+        _libRoot = root;
+        }
+
+    // Is this source file the standard library's? Both layouts: a path under
+    // a `support/` directory, or under the root the library was found in.
+    // Only `/support/` was tested, so an INSTALLED xcc took its own library
+    // for the program's code: --par-auto outlined the library's loops and a
+    // C program built with it crashed at -O3.
+    static bool isLibraryPath(String* path)
+        {
+        if (path == (String*)0)
+            return false;
+        if (path.contains(String.withCString("/support/")))
+            return true;
+        if (_libRoot == (String*)0 || _libRoot.byteLength() == (u32)0)
+            return false;
+        // In the form the debug files are recorded in: absolute, `.` and `..`
+        // resolved. The root comes from argv[0], `./bin/xcc` gives `./lib/xc`.
+        String* r = IRDbg.canonicalPath(_libRoot);
+        if (!r.hasSuffix(String.withCString("/")))
+            r.appendCString("/");
+        return path.hasPrefix(r) || path.contains(r);
+        }
 
     void init(void)
         {
