@@ -179,7 +179,7 @@ class MachOLink
                 u32 dbase = mdata.count();
                 if (obj.data().length() > (u32)0)
                     {
-                    MachOLink.padArray(mdata, (u32)15);
+                    MachOLink.padArray(mdata, obj.dataPageMask() > (u32)15 ? obj.dataPageMask() : (u32)15);
                     dbase = mdata.count();
                     MachOLink.appendData(mdata, obj.data());
                     }

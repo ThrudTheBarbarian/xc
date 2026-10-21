@@ -271,9 +271,19 @@ the registry for the block it points into, so a plain `new u32[1 << 20]` is a
 GPU array like a `simd:` one, and a pointer offset into either (`xs + 4096`)
 is sized from where it points to the block's end; Metal binds the block at
 that offset when the offset is a multiple of 256 bytes, and copies otherwise.
-A pointer into no registered block — a small array, a stack array, a global —
-keeps the block on the CPU, as a plain pointer always did. `simd:` is for
-arrays under 64 KB that a GPU should still share, and for the contract below.
+A pointer into no registered block — a small array or a stack array — keeps
+the block on the CPU, as a plain pointer always did. `simd:` is for arrays
+under 64 KB that a GPU should still share, and for the contract below.
+
+**Global arrays.** A global array of a numeric type, 64 KB or more
+(`float xs[1 << 22];`), is laid out the same way: on a page of its own and
+padded to whole 16 KB pages, and registered with the same registry the first
+time a block runs. A block that uses it shares it as it shares a heap array:
+Metal and an integrated Vulkan device use it in place, and a CUDA card keeps
+an unwritten copy on the card between runs. A C program's global arrays (see
+[C programs](/compiler/usage/c-programs/)) are laid out so too, in the half
+clang compiles. On the 64-bit targets; a program with no par block keeps its
+layout.
 
 Because the promise rides on the type, a `simd:` pointer may hold only what
 `new[]` returned or what another `simd:` pointer holds, and arithmetic on one

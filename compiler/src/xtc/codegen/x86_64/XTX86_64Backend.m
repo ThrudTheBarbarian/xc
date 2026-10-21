@@ -1856,6 +1856,10 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             // would give this module a SECOND COPY whose writes never reach the other's.
             if (sym.isExternalGlobal)
                 continue;
+            // A numeric array the optimiser gave pages of its own (gpu-globals):
+            // on a 16 KB boundary within its section, padded to whole 16 KB
+            // pages, as it registered it.
+            BOOL page = [sym.attributes[@"gpupage"] boolValue];
             if (sym.initialBytes)
                 {
                 NSData* bytes = sym.initialBytes;
@@ -1898,8 +1902,16 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                 // gave each unit a private copy (win64/PE keeps its own path).
                 if (!sWin64)
                     [data appendFormat:@"\t.globl\t%@\n", [self safeSym:sym.name]];
+                if (page)
+                    [data appendString:@"\t.p2align\t14\n"];
                 [data appendFormat:@"%@:\n", [self safeSym:sym.name]];
                 [self emitBytes:bytes into:data];
+                if (page)
+                    {
+                    NSUInteger padded = (bytes.length + 16383) & ~(NSUInteger)16383;
+                    if (padded > bytes.length)
+                        [data appendFormat:@"\t.zero\t%lu\n", (unsigned long)(padded - bytes.length)];
+                    }
                 }
             // uninitialised → COMMON / BSS
             else
@@ -1916,8 +1928,12 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                 NSUInteger sz = gt ? [self fieldWidth:gt] : 1;
                 if (sz == 0)
                     sz = 1;
+                if (page)
+                    sz = (sz + 16383) & ~(NSUInteger)16383;
                 if (sWin64)
                     {
+                    if (page)
+                        [bss appendString:@"\t.p2align\t14\n"];
                     [bss appendFormat:@"%@:\n\t.zero\t%lu\n", [self safeSym:sym.name], (unsigned long)sz];
                     }
                 else
@@ -1927,7 +1943,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                     // (and #used C libraries) merge it to one slot. A local
                     // `.bss` def gave each unit a PRIVATE copy — cross-object
                     // writes never met (c2xc bug 36, cross-object variant).
-                    NSUInteger al = sz >= 8 ? 8 : (sz >= 4 ? 4 : (sz >= 2 ? 2 : 1));
+                    NSUInteger al = page ? 16384 : (sz >= 8 ? 8 : (sz >= 4 ? 4 : (sz >= 2 ? 2 : 1)));
                     [bss appendFormat:@"\t.comm\t%@, %lu, %lu\n",
                                       [self safeSym:sym.name], (unsigned long)sz, (unsigned long)al];
                     }

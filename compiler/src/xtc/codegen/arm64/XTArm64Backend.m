@@ -8682,6 +8682,12 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
         // arm64FieldWidth handles Agg (recursive), Ptr=8, F32=4, F64=8.
         uint32_t size = (uint32_t)[self arm64FieldWidth:sym.globalType];
         if (size == 0) size = 8;
+        // A numeric array the optimiser gave pages of its own (gpu-globals):
+        // on a 16 KB boundary, padded to whole pages, as it registered it.
+        BOOL page = [sym.attributes[@"gpupage"] boolValue];
+        unsigned p2 = page ? 14u : xtArm64GlobalP2Align(size);
+        if (page)
+            size = (size + 16383u) & ~16383u;
         BOOL isFloat = XTIRTypeKindIsFloating(sym.globalType.kind);
         if (sym.initialBytes.length > 0) {
             if (!emittedInitHeader) {
@@ -8727,7 +8733,7 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
             // "pointer not aligned in '__log_logger'+0x3FA50" — which made
             // every `-c` object unusable in a mixed clang link, the exact
             // interop surface `-c` exists for.
-            [out appendFormat:@"    .p2align %u\n", xtArm64GlobalP2Align(size)];
+            [out appendFormat:@"    .p2align %u\n", p2];
             [out appendFormat:@"    .globl _%@\n", sym.name];
             [out appendFormat:@"_%@:\n", sym.name];
             const uint8_t *p = bytes.bytes;
@@ -8749,8 +8755,7 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
             // and to a linking C stub). Arg 3 is log2 alignment.
             // Mach-O `.comm` takes LOG2 alignment, so the old `1` meant two
             // bytes — not "none", and not enough for a pointer (uxkit/029).
-            [out appendFormat:@"    .comm _%@, %u, %u\n", sym.name, (unsigned)size,
-                              xtArm64GlobalP2Align(size)];
+            [out appendFormat:@"    .comm _%@, %u, %u\n", sym.name, (unsigned)size, p2];
         }
     }
     // String literals: NUL-terminated bytes in __data. AddrOf of the

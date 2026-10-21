@@ -508,7 +508,9 @@ static uint64_t xt_simd_find(const uint8_t* p)
         }
     return lo;
     }
-static void xt_simd_reg(uint8_t* payload, uint64_t bytes)
+// Always inlined: a second caller (_xtc_simd_register) must not change how
+// clang compiles the allocator that has always inlined it.
+static inline __attribute__((always_inline)) void xt_simd_reg(uint8_t* payload, uint64_t bytes)
     {
     _xt_rt_lock();
     if (xt_simd_n == xt_simd_cap)
@@ -564,6 +566,18 @@ static void xt_simd_unreg(uint8_t* payload)
         xt_simd_n--;
         }
     _xt_rt_unlock();
+    }
+// A global array the compiler gave pages of its own (its gpu-globals pass:
+// numeric, 64 KB and more, on a 16 KB boundary and padded to whole pages),
+// registered by the program's load-time constructor so par's runtime shares
+// and watches it as it does a heap block. bytes is the padded length.
+void _xtc_simd_register(void* p, uint64_t bytes)
+    {
+    // Not on a 4 KB page (a layout the image writer did not keep), it is
+    // left out: the watch protects whole pages, and one shared with a
+    // neighbour would fault outside every block. The array is then copied.
+    if (p != 0 && bytes != 0 && ((uint64_t)p & 4095) == 0 && (bytes & 4095) == 0)
+        xt_simd_reg((uint8_t*)p, bytes);
     }
 void* _xtc_simd_base(void* p)
     {

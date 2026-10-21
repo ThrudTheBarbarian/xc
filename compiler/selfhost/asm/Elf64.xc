@@ -841,7 +841,9 @@ class ElfSharedInfo
         u32 rwOff = roundUpTo(textOff + textLen, (u32)ELF_PAGE) + (u32)ELF_PAGE;
         u32 gotOff = rwOff;
         u32 dynOff = gotOff + ngot * (u32)8;
-        u32 dataAddr = roundUpTo(dynOff + nDyn * (u32)DYN_SZ, (u32)16);
+        // On a page, as the static image's .data is: a gpu-globals array is
+        // 16 KB-aligned within .data, so it lands on a page only if .data does.
+        u32 dataAddr = roundUpTo(dynOff + nDyn * (u32)DYN_SZ, (u32)ELF_PAGE);
         u32 rwEnd = dataAddr + data.length();
 
         u32 textAddr = textOff; // ET_DYN vaddr == file offset

@@ -7301,6 +7301,10 @@ class X86_64
         {
         String* gt = sym.globalTy();
         Array* bytes = sym.bytes();
+        // A numeric array the optimiser gave pages of its own (gpu-globals):
+        // on a 16 KB boundary within its section, padded to whole 16 KB
+        // pages, as it registered it.
+        bool page = sym.attr(String.withCString("gpupage"));
         if (bytes != (Array*)0 && bytes.count() > (u32)0)
             {
             if (isAggTy(gt))
@@ -7315,8 +7319,16 @@ class X86_64
             // separate units share one definition (win64/PE keeps its own path).
             if (!_win64)
                 data.appendFormat("\t.globl\t%s\n", safeSym(sym.name()).cString());
+            if (page)
+                data.appendCString("\t.p2align\t14\n");
             data.appendFormat("%s:\n", safeSym(sym.name()).cString());
             emitBytes(bytes, data);
+            if (page)
+                {
+                u32 padded = (bytes.count() + (u32)16383) & ~(u32)16383;
+                if (padded > bytes.count())
+                    data.appendFormat("\t.zero\t%lu\n", padded - bytes.count());
+                }
             return;
             }
         // Uninitialised, so zeroed BSS — sized with the RECOMPUTED native width,
@@ -7327,8 +7339,12 @@ class X86_64
         u32 sz = fieldWidth(gt);
         if (sz == (u32)0)
             sz = (u32)1;
+        if (page)
+            sz = (sz + (u32)16383) & ~(u32)16383;
         if (_win64)
             {
+            if (page)
+                bss.appendCString("\t.p2align\t14\n");
             bss.appendFormat("%s:\n\t.zero\t%lu\n", safeSym(sym.name()).cString(), sz);
             }
         else
@@ -7337,7 +7353,7 @@ class X86_64
             // a COMMON symbol, so separately-compiled units (and #used C
             // libraries) merge it to one slot. A local .bss def gave each unit a
             // PRIVATE copy (c2xc bug 36, cross-object variant).
-            u32 al = sz >= (u32)8 ? (u32)8 : (sz >= (u32)4 ? (u32)4 : (sz >= (u32)2 ? (u32)2 : (u32)1));
+            u32 al = page ? (u32)16384 : (sz >= (u32)8 ? (u32)8 : (sz >= (u32)4 ? (u32)4 : (sz >= (u32)2 ? (u32)2 : (u32)1)));
             bss.appendFormat("\t.comm\t%s, %lu, %lu\n", safeSym(sym.name()).cString(), sz, al);
             }
         }

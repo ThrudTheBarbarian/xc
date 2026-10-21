@@ -30,6 +30,7 @@ class LlvmReader
     String* _why;           // the first construct a function used that is not read; 0 when all were
     Map* _globals;          // "@name" -> its symbol name in the module
     Map* _globalElem;       // "@name" -> the IR type an AddrOf of it addresses (the element of an array)
+    Map* _cpage;            // "@name" -> its bytes: a numeric array clang's half gives pages of its own (gpu-globals)
     Map* _negOf;            // a value read from `fneg x` -> x
     Map* _retTy;            // "@name" -> the function's IR return type
     Map* _defined;          // "@name" -> 1 for a function defined in this file
@@ -61,6 +62,7 @@ class LlvmReader
         {
         _globals = new Map();
         _globalElem = new Map();
+        _cpage = new Map();
         _negOf = new Map();
         _retTy = new Map();
         _defined = new Map();
@@ -316,10 +318,78 @@ class LlvmReader
             // renamed one no longer matches the comdat its name implied.
             if (l.hasPrefix(String.withCString("@")))
                 r = LlvmReader.dropWord(LlvmReader.dropWord(r, " linkonce_odr "), ", comdat");
+            if (l.hasPrefix(String.withCString("@")))
+                {
+                u32 sp = l.indexOfByte((u8)' ');
+                Number* nb = sp != (u32)$FFFFFFFF ? (Number*)_cpage.get((Hashable*)l.substringBytes((u32)0, sp)) : (Number*)0;
+                if (nb != (Number*)0)
+                    r = LlvmReader.pagedGlobal(r, nb.asU32());
+                }
             out.append(r);
             out.appendCString("\n");
             i = i + (u32)1;
             }
+        return out;
+        }
+
+    // A global definition `... global [N x T] <init>, align A<rest>` laid out
+    // on a 16 KB boundary and padded to whole 16 KB pages (gpu-globals):
+    // `... global <{ [N x T], [P x i8] }> <{ [N x T] <init>, [P x i8]
+    // zeroinitializer }>, align 16384<rest>`. The uses need no change: with
+    // opaque pointers a GEP names its own source type. A line not of that
+    // shape is returned as it is (the array is then copied, as before).
+    static String* pagedGlobal(String* l, u32 bytes)
+        {
+        String* key = String.withCString(" global [");
+        u32 g = l.byteIndexOf(key);
+        if (g == String.notFound())
+            return l;
+        u32 ts = g + (u32)8;
+        u32 depth = (u32)0;
+        u32 te = ts;
+        while (te < l.byteLength())
+            {
+            u8 c = l.byteAt(te);
+            if (c == (u8)'[')
+                depth = depth + (u32)1;
+            else if (c == (u8)']')
+                {
+                depth = depth - (u32)1;
+                if (depth == (u32)0)
+                    break;
+                }
+            te = te + (u32)1;
+            }
+        if (te >= l.byteLength())
+            return l;
+        String* ty = l.substringBytes(ts, te + (u32)1 - ts);
+        String* alk = String.withCString(", align ");
+        u32 al = String.notFound();
+        for (u32 f = l.byteIndexOf(alk, te); f != String.notFound(); f = l.byteIndexOf(alk, f + (u32)1))
+            al = f;
+        if (al == String.notFound() || al <= te + (u32)1)
+            return l;
+        String* init = l.substringBytes(te + (u32)1, al - te - (u32)1).trimmed();
+        u32 ae = al + (u32)8;
+        while (ae < l.byteLength() && l.byteAt(ae) >= (u8)'0' && l.byteAt(ae) <= (u8)'9')
+            ae = ae + (u32)1;
+        u32 padded = (bytes + (u32)16383) & ~(u32)16383;
+        String* out = l.substringBytes((u32)0, g);
+        if (padded == bytes)
+            {
+            out.appendFormat(" global %s %s, align 16384", ty.cString(), init.cString());
+            }
+        else
+            {
+            u32 pad = padded - bytes;
+            out.appendFormat(" global <{ %s, [%u x i8] }> ", ty.cString(), pad);
+            if (init.equals(String.withCString("zeroinitializer")))
+                out.appendCString("zeroinitializer");
+            else
+                out.appendFormat("<{ %s %s, [%u x i8] zeroinitializer }>", ty.cString(), init.cString(), pad);
+            out.appendCString(", align 16384");
+            }
+        out.append(l.substringFromByte(ae));
         return out;
         }
 
@@ -768,11 +838,18 @@ class LlvmReader
             return;
         // linkage and the like, up to `global` / `constant`.
         bool found = false;
+        bool writable = false;
+        bool external = false;
         for (u32 guard = (u32)0; guard < (u32)8 && !found; guard = guard + (u32)1)
             {
             String* w = word();
             if (w.equals(String.withCString("global")) || w.equals(String.withCString("constant")))
+                {
                 found = true;
+                writable = w.equals(String.withCString("global"));
+                }
+            if (w.equals(String.withCString("external")) || w.equals(String.withCString("extern_weak")))
+                external = true;
             if (w.byteLength() == (u32)0)
                 return;
             }
@@ -832,6 +909,18 @@ class LlvmReader
             IRSymbol* gs = IRSymbol.dataGlobal(sym, String.withFormat("Agg(%u)", id));
             if (_split)
                 gs.setAttr(String.withCString("extern"), true);
+            // A writable numeric array of 64 KB and more that clang's half
+            // defines gets pages of its own there (rest() pads it and puts it
+            // on a 16 KB boundary), as an xc program's own does in the back
+            // end; `gpupage` on this side has the optimiser register it.
+            u8 ec = elem.byteLength() > (u32)0 ? elem.byteAt((u32)0) : (u8)0;
+            u64 total = (u64)n * (u64)widthOf(elem);
+            if (_split && writable && !external && (ec == (u8)'U' || ec == (u8)'I' || ec == (u8)'F')
+                && total >= (u64)65536 && total < (u64)$80000000)
+                {
+                gs.setAttr(String.withCString("gpupage"), true);
+                _cpage.set((Hashable*)name, (Object*)Number.withU32((u32)total));
+                }
             _m.addSym(gs);
             _globalElem.set((Hashable*)name, (Object*)elem);
             return;

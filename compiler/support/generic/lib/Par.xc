@@ -269,6 +269,7 @@ class Par
         if (p == (pointer)0)
             return (i64)0 - (i64)1;
 #if ARCH_arm64 || ARCH_x86_64 || ARCH_win64
+        parGlobals();
         return _xtc_simd_span(p);
 #else
 #if ARCH_6502

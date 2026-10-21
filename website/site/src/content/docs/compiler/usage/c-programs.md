@@ -40,7 +40,10 @@ at load on x86-64), the outliner that makes `par` blocks, and its back end and
 linker.
 
 A function `xcc` cannot read yet is compiled by `clang` instead, and so are the
-program's global variables; the two halves are linked into one executable. A
+program's global variables; the two halves are linked into one executable.
+A global array of a numeric type, 64 KB or more, gets pages of its own in
+clang's half, so a `par` block on a unified-memory GPU uses it in place (see
+[global arrays](/compiler/language/par/#arrays-the-gpu-shares-simd-pointers)). A
 variadic function's definition is one of these, as is anything using an
 intrinsic, an atomic or a construct the reader does not know. Set
 `XC_C_TRACE=1` to list each function left to `clang` and why:

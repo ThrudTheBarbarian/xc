@@ -186,6 +186,35 @@ class ParWorker : Object
         }
     }
 
+// One run of the direct CPU path, cut into more pieces than there are lanes
+// and claimed piece by piece: a loop whose iterations cost unequal amounts
+// (mandelbrot's rows inside the set) left most lanes idle when each took one
+// equal part (4 lanes no faster than 2; 32 lanes 9.8x). Each piece has its own
+// partial, piece 0's being the block itself, and they are merged in piece
+// order whoever ran them, so a reduction folds the same way every run.
+class ParCpuJob : Object
+    {
+    i64 _lo;
+    i64 _n;
+    i32 _pieces;
+    Array* _parts;      // ParChunk@, one per piece
+    Atomic* _next;
+
+    void work(void)
+        {
+        while (true)
+            {
+            i32 i = _next.increment() - (i32)1;
+            if (i >= _pieces)
+                return;
+            ParChunk* c = (ParChunk*)_parts.get((u32)i);
+            c.lo = _lo + (_n * (i64)i) / (i64)_pieces;
+            c.hi = _lo + (_n * (i64)(i + (i32)1)) / (i64)_pieces;
+            c.run();
+            }
+        }
+    }
+
 #if !(ARCH_6502 || ARCH_m68k || ARCH_wasm32)
 // The CPU pool as a worker: a tile runs through Par.runCpu on a chunk copy,
 // on a thread of its own, one tile in flight. It never refuses a block,
@@ -205,6 +234,7 @@ class ParCpuLane : Object
     i64 _lo;
     i64 _hi;
     ParTile* _tile;
+    ParCpuJob* _job;    // the direct path's pieces, claimed until none are left
 
     void start(void)
         {
@@ -219,9 +249,14 @@ class ParCpuLane : Object
             _go.wait();
             if (_quit)
                 return;
-            _chunk.lo = _lo;
-            _chunk.hi = _hi;
-            _chunk.run();
+            if (_job != (ParCpuJob*)0)
+                _job.work();
+            else
+                {
+                _chunk.lo = _lo;
+                _chunk.hi = _hi;
+                _chunk.run();
+                }
             _done.store((i32)1);
             }
         }
@@ -230,6 +265,10 @@ class ParCpuLane : Object
 // The lanes, made once for the process and shared by the CPU worker and the
 // direct CPU path (Par.runCpu): a thread spawned per run cost more than a
 // small block's work.
+// The direct path's pieces: this many a lane, none under this many items
+// (a piece's own cost, a chunk copy and a merge, against its work).
+#define PAR_CPU_PIECES 8
+#define PAR_CPU_PIECE_MIN 256
 Array* gParLanes;
 u32 gParLanesBusy;
 Mutex* gParLanesLock;   // held by whoever runs on the lanes; a loser spawns
@@ -275,35 +314,49 @@ class ParCpuLanes
             return false;
             }
         i64 n = hi - lo;
+        // PAR_CPU_PIECES pieces a lane, none under PAR_CPU_PIECE_MIN items.
+        i64 pieces = (i64)k * (i64)PAR_CPU_PIECES;
+        if (pieces > n / (i64)PAR_CPU_PIECE_MIN)
+            pieces = n / (i64)PAR_CPU_PIECE_MIN;
+        if (pieces < (i64)k)
+            pieces = (i64)k;
+        ParCpuJob* job = new ParCpuJob();
+        job._lo = lo;
+        job._n = n;
+        job._pieces = (i32)pieces;
+        job._parts = new Array();
+        job._parts.add((Object*)proto);
+        for (i64 j = (i64)1; j < pieces; j = j + (i64)1)
+            job._parts.add((Object*)proto.copyChunk());
+        job._next = Atomic.withValue((i32)1);
+        if (Platform.env(String.withCString("XC_PAR_REPORT")).byteLength() > (u32)0)
+            Log.info("par: %ld items in %d pieces over %d lanes", n, (i32)pieces, k);
         gParLanesBusy = (u32)(k - (i32)1);
-        Array* chunks = new Array();
         for (i32 j = (i32)1; j < k; j = j + (i32)1)
             {
             ParCpuLane* lane = (ParCpuLane*)ls.get((u32)(j - (i32)1));
-            ParChunk* c = proto.copyChunk();
-            lane._chunk = c;
-            lane._lo = lo + (n * (i64)j) / (i64)k;
-            lane._hi = lo + (n * (i64)(j + (i32)1)) / (i64)k;
+            lane._job = job;
             lane._busy = true;
             lane._done.store((i32)0);
-            chunks.add((Object*)c);
             lane._go.post();
             }
+        // Piece 0 on the block itself, then whatever is left.
         proto.lo = lo;
-        proto.hi = lo + n / (i64)k;
+        proto.hi = lo + n / pieces;
         proto.run();
+        job.work();
         for (i32 j = (i32)1; j < k; j = j + (i32)1)
             {
             ParCpuLane* lane = (ParCpuLane*)ls.get((u32)(j - (i32)1));
             while (lane._done.load() == (i32)0)
                 Thread.yield();
             lane._busy = false;
-            lane._chunk = (ParChunk*)0;
+            lane._job = (ParCpuJob*)0;
             }
         gParLanesBusy = (u32)0;
         ParCpuLanes.lock().unlock();
-        for (u32 j = (u32)0; j < chunks.count(); j = j + (u32)1)
-            proto.merge((ParChunk*)chunks.get(j));
+        for (u32 j = (u32)1; j < job._parts.count(); j = j + (u32)1)
+            proto.merge((ParChunk*)job._parts.get(j));
         return true;
         }
     }

@@ -167,6 +167,7 @@ class MachOSymDef
     u32 _reloff;
     u32 _nreloc;
     u32 _flags;
+    u32 _align;   // log2
     void init(void)
         {
         }
@@ -184,6 +185,7 @@ class MachOSymDef
     Array* _dataRelocs; // MachOReloc@ against the data blob (blob-relative)
     Array* _objcRanges; // MachOObjcRange@
     Map* _commons;      // common (tentative) NAME -> Number(size), for bug 177
+    u32 _dataPageMask;  // the largest page alignment (4 KB and more) in the blob, less one; 0 when none
     bool _ok;
 
     void init(void)
@@ -198,7 +200,13 @@ class MachOSymDef
         _dataRelocs = new Array();
         _objcRanges = new Array();
         _commons = new Map();
+        _dataPageMask = (u32)0;
         _ok = false;
+        }
+
+    u32 dataPageMask(void)
+        {
+        return _dataPageMask;
         }
 
     bool ok(void)
@@ -314,6 +322,7 @@ class MachOSymDef
                     h._foff = base + MachOObject.rd32(b, so + (u32)48);
                     h._reloff = base + MachOObject.rd32(b, so + (u32)56);
                     h._nreloc = MachOObject.rd32(b, so + (u32)60);
+                    h._align = MachOObject.rd32(b, so + (u32)52);
                     h._flags = MachOObject.rd32(b, so + (u32)64);
                     sects.add((Object*)h);
                     so = so + (u32)80;
@@ -358,6 +367,15 @@ class MachOSymDef
             if (!dataLike)
                 continue; // __compact_unwind / __LD / debug
             u32 alignTo = stype == (u32)$E ? (u32)15 : (u32)7;
+            // A page alignment (4 KB and more: a gpu-globals array clang's
+            // half laid out) is kept, and the merge starts the blob on it;
+            // smaller ones stay as they always were.
+            if (s._align >= (u32)12 && s._align <= (u32)16)
+                {
+                alignTo = ((u32)1 << s._align) - (u32)1;
+                if (alignTo > o._dataPageMask)
+                    o._dataPageMask = alignTo;
+                }
             while ((o._data.length() & alignTo) != (u32)0)
                 o._data.appendByte((u8)0);
             blobOff.set((Hashable*)Number.withU32(i), (Object*)Number.withU32(o._data.length() + (u32)1));
@@ -390,6 +408,8 @@ class MachOSymDef
             u32 amask = ((u32)1 << (align != (u32)0 ? align : (u32)3)) - (u32)1;
             if (amask < (u32)7)
                 amask = (u32)7;
+            if (amask >= (u32)4095 && amask > o._dataPageMask)
+                o._dataPageMask = amask;
             while ((o._data.length() & amask) != (u32)0)
                 o._data.appendByte((u8)0);
             commonOff.set((Hashable*)n, (Object*)Number.withU32(o._data.length() + (u32)1));

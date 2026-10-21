@@ -1644,6 +1644,15 @@ class IRValue
         return _vaforward;
         }
 
+    bool isVolatile(void)
+        {
+        return _volatile;
+        }
+    bool isTaskLocal(void)
+        {
+        return _taskLocal;
+        }
+
     void setFlag(String* key, bool v)
         {
         if (key.equals(String.withCString("escapes")))

@@ -299,7 +299,9 @@ static int mergeMachOInputs(NSArray<NSString *> *objectFiles,
                 [mtext appendData:obj[@"text"]];
                 NSData *odata = obj[@"data"]; uint64_t dbase = mdata.length;
                 if (odata.length) {
-                    while (mdata.length & 15) { uint8_t z=0; [mdata appendBytes:&z length:1]; }
+                    uint64_t pm = [obj[@"pagemask"] unsignedLongLongValue];
+                    if (pm < 15) pm = 15;
+                    while (mdata.length & pm) { uint8_t z=0; [mdata appendBytes:&z length:1]; }
                     dbase = mdata.length; [mdata appendData:odata];
                 }
                 // Bug 069: remember where this object's __objc_* sections landed,

@@ -739,6 +739,9 @@ class ParVulkan
             *mem = (u64)0;
             return false;
             }
+        // What a test looks for: the array is the program's own memory.
+        if (ParDevice.reporting())
+            Log.info("par: %ld bytes shared in place", bytes);
         return true;
         }
 
@@ -967,6 +970,9 @@ class ParVulkan
                 if (ParDevice.simdBlock(h))
                     want = h;
                 }
+            // So is a global the compiler gave pages of its own (gpu-globals).
+            if (_hostImport && i > l.nbuf && i <= l.nbuf + l.nglob && ParDevice.simdBlock(l.globPtr[i - (u32)1 - l.nbuf]))
+                want = l.globPtr[i - (u32)1 - l.nbuf];
             if (gParVkBuf[i] == (u64)0 || gParVkCap[i] < sizes[i] || gParVkHost[i] != want)
                 {
                 drop(i);
@@ -1016,7 +1022,7 @@ class ParVulkan
                 }
             for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
                 {
-                if (l.globOut[i] == (i64)0)
+                if (l.globOut[i] == (i64)0 && (pointer)maps[b] != l.globPtr[i])
                     memcpy((pointer)maps[b], l.globPtr[i], (u64)l.globLen[i]);
                 b = b + (u32)1;
                 }
@@ -1207,7 +1213,7 @@ class ParVulkan
                 }
             for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
                 {
-                if (l.globIn[i] == (i64)0)
+                if (l.globIn[i] == (i64)0 && (pointer)maps[b] != l.globPtr[i])
                     memcpy(l.globPtr[i], (pointer)maps[b], (u64)l.globLen[i]);
                 b = b + (u32)1;
                 }
@@ -1507,6 +1513,10 @@ class ParVulkanWorker : ParWorker
                     if (ParDevice.simdBlock(h))
                         want = h;
                     }
+                // So is a global the compiler gave pages of its own (gpu-globals).
+                if (gVkHostImport && !gVkDiscrete && i > l.nbuf && i <= l.nbuf + l.nglob
+                    && ParDevice.simdBlock(l.globPtr[i - (u32)1 - l.nbuf]))
+                    want = l.globPtr[i - (u32)1 - l.nbuf];
                 ok = ensureHost(want, _sizes[i], &_hbuf[i], &_hmem[i], &_hmap[i], &_hcap[i], &_hhost[i]);
                 }
             if (ok && gVkDiscrete)
@@ -1562,7 +1572,7 @@ class ParVulkanWorker : ParWorker
             for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
                 { if (!sliced[b] && !resident[b] && (pointer)_hmap[b] != *(pointer*)(obj + l.bufOff[i])) memcpy((pointer)_hmap[b], *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i]); b = b + (u32)1; }
             for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
-                { if (!sliced[b] && !resident[b]) memcpy((pointer)_hmap[b], l.globPtr[i], (u64)l.globLen[i]); b = b + (u32)1; }
+                { if (!sliced[b] && !resident[b] && (pointer)_hmap[b] != l.globPtr[i]) memcpy((pointer)_hmap[b], l.globPtr[i], (u64)l.globLen[i]); b = b + (u32)1; }
             }
         // One descriptor pool, a set per slot naming the whole buffers and
         // the slot's partials; the pool and sets are kept while the kernel
@@ -1970,7 +1980,8 @@ class ParVulkanWorker : ParWorker
                 i64 e0 = ParTiles.sliceLo(l.globFpK[i], l.globFpLo[i], t.lo, count);
                 i64 e1 = ParTiles.sliceHi(l.globFpK[i], l.globFpHi[i], t.hi, count);
                 i64 bytes = (e1 - e0) * l.globElem[i];
-                if (bytes > (i64)0)
+                // An imported global was written in place: nothing comes back.
+                if (bytes > (i64)0 && !(!gVkDiscrete && (pointer)_hmap[b] == l.globPtr[i]))
                     {
                     pointer from = gVkDiscrete ? (pointer)(_smap[d] + sat) : (pointer)(_hmap[b] + e0 * l.globElem[i]);
                     memcpy((pointer)((u8*)l.globPtr[i] + e0 * l.globElem[i]), from, (u64)bytes);

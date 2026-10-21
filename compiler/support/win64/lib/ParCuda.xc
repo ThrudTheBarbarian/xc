@@ -1087,7 +1087,14 @@ class ParCuda
                 {
                 if (l.globIn[i] == (i64)0)
                     {
-                    ok = _toHost(l.globPtr[i], dev[at], (u64)l.globLen[i]) == (i32)0;
+                    // As an array's: a global with pages of its own
+                    // (gpu-globals) may be watched, and the copy must not
+                    // land on read-only pages.
+                    pointer h = l.globPtr[i];
+                    ParDevice.wrote(h);
+                    ok = _toHost(h, dev[at], (u64)l.globLen[i]) == (i32)0;
+                    if (ok && gParCuUpHost[at] == h)
+                        gParCuUpGen[at] = ParDevice.generation(h);
                     copies = copies + (u32)1;
                     }
                 at = at + (u32)1;

@@ -1340,7 +1340,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
                 char sg[17];
                 memcpy(sg, b + so + 16, 16);
                 sg[16] = 0;
-                sects[sects.count] = @{@"name" : @(sn), @"seg" : @(sg), @"addr" : @(rd64(so + 32)), @"size" : @(rd64(so + 40)), @"foff" : @(base + rd32(so + 48)), @"reloff" : @(base + rd32(so + 56)), @"nreloc" : @(rd32(so + 60)), @"flags" : @(rd32(so + 64))};
+                sects[sects.count] = @{@"name" : @(sn), @"seg" : @(sg), @"addr" : @(rd64(so + 32)), @"size" : @(rd64(so + 40)), @"foff" : @(base + rd32(so + 48)), @"reloff" : @(base + rd32(so + 56)), @"nreloc" : @(rd32(so + 60)), @"flags" : @(rd32(so + 64)), @"align" : @(rd32(so + 52))};
                 so += 80;
                 }
             }
@@ -1369,6 +1369,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     // __cstring, __bss/__common) into one blob; record each section's blob offset
     // so a symbol's blob position is blobOff[sect] + (value - section addr).
     NSMutableData* data = [NSMutableData data];
+    uint64_t pageMask = 0; // the largest page alignment (4 KB and more) in the blob, less one
     NSMutableDictionary<NSNumber*, NSNumber*>* blobOff = [NSMutableDictionary dictionary];
     NSMutableArray<NSNumber*>* dataSectIdx = [NSMutableArray array];
     // Bug 069: the ObjC runtime finds its metadata BY SECTION IDENTITY — it
@@ -1397,6 +1398,16 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
         if (!dataLike)
             continue;                               // skip __compact_unwind / __LD / debug
         uint64_t alignTo = (stype == 0xE) ? 15 : 7; // 16-byte literals keep 16-alignment
+        // A page alignment (4 KB and more: a gpu-globals array clang's half
+        // laid out) is kept, and the merge starts the blob on it; smaller
+        // ones stay as they always were.
+        uint32_t sal = [s[@"align"] unsignedIntValue];
+        if (sal >= 12 && sal <= 16)
+            {
+            alignTo = ((uint64_t)1 << sal) - 1;
+            if (alignTo > pageMask)
+                pageMask = alignTo;
+            }
         while (data.length & alignTo)
             {
             uint8_t z = 0;
@@ -1439,6 +1450,8 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
         uint64_t amask = ((uint64_t)1 << (align ? align : 3)) - 1;
         if (amask < 7)
             amask = 7;
+        if (amask >= 4095 && amask > pageMask)
+            pageMask = amask;
         while (data.length & amask)
             {
             uint8_t z = 0;
@@ -1522,7 +1535,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             }
         }
     (void)len;
-    return @{@"text" : text, @"symbols" : syms, @"data" : data, @"datasyms" : dsyms, @"relocs" : relocs, @"datarelocs" : datarelocs, @"symnames" : symnames, @"symdefs" : symdefs, @"objcranges" : objcRanges, @"commons" : commonSize};
+    return @{@"text" : text, @"symbols" : syms, @"data" : data, @"datasyms" : dsyms, @"relocs" : relocs, @"datarelocs" : datarelocs, @"symnames" : symnames, @"symdefs" : symdefs, @"objcranges" : objcRanges, @"commons" : commonSize, @"pagemask" : @(pageMask)};
     }
 
 + (NSData*)executableFromText:(NSData*)textIn
@@ -1648,7 +1661,10 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     // __bss follows __got in memory and takes no file bytes: the segment's
     // vmsize grows past its filesize, and every later segment's vmaddr moves
     // up by the same page-rounded amount (bug 642).
-    uint64_t bssOff = roundUp(gotOffset + gotSize, 16);
+    // On a page: a common's alignment is kept from the start of the run
+    // (allocateBss), and a 16 KB one (a gpu-globals array) must land on a
+    // 16 KB address. Zero-fill, so no file bytes.
+    uint64_t bssOff = roundUp(gotOffset + gotSize, PAGE);
     uint64_t dataSegVmEnd = hasBss ? roundUp(bssOff + bssLength, PAGE) : dataSegEnd;
     uint64_t bssAddr = VMBASE + bssOff;
     uint64_t vmShift = dataSegVmEnd - dataSegEnd;
@@ -2452,7 +2468,10 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     uint8_t dataSegIdx = 1; // __TEXT=0, __DATA=1
     // __bss after __got, in memory only; later segments' vmaddr move past it
     // by the page-rounded amount (bug 642).
-    uint64_t bssOff = roundUp(gotOffset + gotSize, 16);
+    // On a page: a common's alignment is kept from the start of the run
+    // (allocateBss), and a 16 KB one (a gpu-globals array) must land on a
+    // 16 KB address. Zero-fill, so no file bytes.
+    uint64_t bssOff = roundUp(gotOffset + gotSize, PAGE);
     uint64_t dataSegVmEnd = hasBss ? roundUp(bssOff + bssLength, PAGE) : dataSegEnd;
     uint64_t bssAddr = bssOff;
     uint64_t vmShift = dataSegVmEnd - dataSegEnd;

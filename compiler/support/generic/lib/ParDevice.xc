@@ -265,6 +265,20 @@ class ParLayout : Object
     }
 
 #if ARCH_arm64 || ARCH_x86_64 || ARCH_win64
+// The program's global arrays with pages of their own (the optimiser's
+// gpu-globals pass defines this, registering each), registered the first
+// time anything asks the registry: no load-time constructor to lose in a
+// link from objects, and none at all in a program without a par block.
+void __xt_gpu_globals(void);
+bool gParGlobalsDone;
+void parGlobals(void)
+{
+    if (!gParGlobalsDone)
+        {
+        gParGlobalsDone = true;
+        __xt_gpu_globals();
+        }
+}
 // The start of the page-aligned heap block p points into, or 0 (rt.c).
 pointer _xtc_simd_base(pointer p);
 // Resident data (par-blocks.md §3): the runtime watches a block's pages
@@ -1266,6 +1280,7 @@ class ParDevice
     static pointer simdBase(pointer host)
         {
 #if ARCH_arm64 || ARCH_x86_64 || ARCH_win64
+        parGlobals();
         return host != (pointer)0 ? _xtc_simd_base(host) : (pointer)0;
 #else
         return (pointer)0;
@@ -1285,6 +1300,7 @@ class ParDevice
 #if !(ARCH_arm64 || ARCH_x86_64 || ARCH_win64)
         return (i64)-1;
 #else
+        parGlobals();
         if (host == (pointer)0)
             return (i64)-1;
         u32 at = gParDevGens;

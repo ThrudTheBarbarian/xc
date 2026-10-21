@@ -1599,6 +1599,7 @@ static BOOL isPlainIntLiteral(NSString *s) {
     // Collected here, appended after everything else once the pass is done.
     NSMutableData *bss = [NSMutableData data];
     NSMutableArray<NSString *> *bssLabels = [NSMutableArray array];
+    uint64_t bssAlign = 16; // the largest alignment a `.bss` .p2align asked for
     XTDwarfWriter *dwarf = nil;                 // -g: the line table, if the text has one
     NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
 
@@ -1707,7 +1708,7 @@ static BOOL isPlainIntLiteral(NSString *s) {
                 // ever emits .p2align; treat both as a power of two.
                 uint64_t a = 1ull << n;
                 if (section == 0)      { while (text.length % a) emit8(text, 0x90); }   // nop-pad code
-                else if (section == 2) { while (bss.length % a) emit8(bss, 0); }
+                else if (section == 2) { while (bss.length % a) emit8(bss, 0); if (a > bssAlign) bssAlign = a; }
                 else                   { while (_data.length % a) emit8(_data, 0); }
                 continue;
             }
@@ -1837,7 +1838,9 @@ static BOOL isPlainIntLiteral(NSString *s) {
     // their final offsets. Before the branch resolution below, which must see
     // them as data.
     if (bss.length) {
-        while (_data.length % 16) emit8(_data, 0);
+        // At the largest alignment inside it, so a 16 KB-aligned array
+        // (gpu-globals) keeps its alignment once appended.
+        while (_data.length % bssAlign) emit8(_data, 0);
         uint64_t base = _data.length;
         [_data appendData:bss];
         for (NSString *lbl in bssLabels) {

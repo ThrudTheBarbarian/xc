@@ -143,6 +143,9 @@ class ParMetal
                 {
                 *shared = true;
                 *offset = off;
+                // What a test looks for: the array is the program's own memory.
+                if (ParDevice.reporting())
+                    Log.info("par: %ld bytes shared in place", (i64)len);
                 return b;
                 }
             }
@@ -265,11 +268,23 @@ class ParMetal
             pointer host = *(pointer*)(obj + l.bufOff[i]);
             bufs[i] = bufferFor(host, (u64)l.bufLen[i], &bufShared[i], &bufAt[i]);
             }
+        // A global the compiler gave pages of its own (gpu-globals) is a
+        // registered block like a heap one: wrapped where it lies, and neither
+        // copied in nor back.
         pointer globs[16];
+        bool globShared[16];
+        u64 globAt[16];
         for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
-            globs[i] = l.globOut[i] != (i64)0
-                           ? withLen(_dev, sel("newBufferWithLength:options:"), (u64)l.globLen[i], (u64)0)
-                           : withBytes(_dev, sel("newBufferWithBytes:length:options:"), l.globPtr[i], (u64)l.globLen[i], (u64)0);
+            {
+            globShared[i] = false;
+            globAt[i] = (u64)0;
+            if (isShared(l.globPtr[i]))
+                globs[i] = bufferFor(l.globPtr[i], (u64)l.globLen[i], &globShared[i], &globAt[i]);
+            else
+                globs[i] = l.globOut[i] != (i64)0
+                               ? withLen(_dev, sel("newBufferWithLength:options:"), (u64)l.globLen[i], (u64)0)
+                               : withBytes(_dev, sel("newBufferWithBytes:length:options:"), l.globPtr[i], (u64)l.globLen[i], (u64)0);
+            }
         for (u32 i = (u32)0; i < nred; i = i + (u32)1)
             reds[i] = withLen(_dev, sel("newBufferWithLength:options:"), (u64)(l.nparts * l.redStride[i]), (u64)0);
 
@@ -286,7 +301,7 @@ class ParMetal
             }
         for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
             {
-            setBuf(enc, sel("setBuffer:offset:atIndex:"), globs[i], (u64)0, slot);
+            setBuf(enc, sel("setBuffer:offset:atIndex:"), globs[i], globAt[i], slot);
             slot = slot + (u64)1;
             }
         for (u32 i = (u32)0; i < nred; i = i + (u32)1)
@@ -346,7 +361,7 @@ class ParMetal
             }
         for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
             {
-            if (l.globIn[i] == (i64)0)
+            if (l.globIn[i] == (i64)0 && !globShared[i])
                 memcpy(l.globPtr[i], send0(globs[i], sel("contents")), (u64)l.globLen[i]);
             send0(globs[i], sel("release"));
             }
@@ -386,6 +401,8 @@ class ParMetalWorker : ParWorker
     pointer _args;          // the object as it was before any fold
     pointer _bufs[16];
     pointer _globs[16];
+    bool _globShared[16];
+    u64 _globAt[16];
     pointer _span[PAR_MTL_DEPTH];
     pointer _reds[PAR_MTL_DEPTH * 16];
     pointer _cb[PAR_MTL_DEPTH];
@@ -461,7 +478,14 @@ class ParMetalWorker : ParWorker
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             _bufs[i] = ParMetal.bufferFor(*(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i], &_bufShared[i], &_bufAt[i]);
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
-            _globs[i] = withBytes(gMtlDev, ParMetal.sel("newBufferWithBytes:length:options:"), l.globPtr[i], (u64)l.globLen[i], (u64)0);
+            {
+            _globShared[i] = false;
+            _globAt[i] = (u64)0;
+            if (ParMetal.isShared(l.globPtr[i]))
+                _globs[i] = ParMetal.bufferFor(l.globPtr[i], (u64)l.globLen[i], &_globShared[i], &_globAt[i]);
+            else
+                _globs[i] = withBytes(gMtlDev, ParMetal.sel("newBufferWithBytes:length:options:"), l.globPtr[i], (u64)l.globLen[i], (u64)0);
+            }
         l.plan(0, tile);
         for (u32 d = (u32)0; d < (u32)PAR_MTL_DEPTH; d = d + (u32)1)
             {
@@ -539,7 +563,7 @@ class ParMetalWorker : ParWorker
             }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             {
-            setBuf(enc, ParMetal.sel("setBuffer:offset:atIndex:"), _globs[i], (u64)0, slot);
+            setBuf(enc, ParMetal.sel("setBuffer:offset:atIndex:"), _globs[i], _globAt[i], slot);
             slot = slot + (u64)1;
             }
         for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
@@ -607,7 +631,7 @@ class ParMetalWorker : ParWorker
             }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
             {
-            if (l.globIn[i] != (i64)0 || l.globFp[i] == (i64)0)
+            if (l.globIn[i] != (i64)0 || l.globFp[i] == (i64)0 || _globShared[i])
                 continue;
             i64 count = l.globLen[i] / l.globElem[i];
             i64 e0 = ParTiles.sliceLo(l.globFpK[i], l.globFpLo[i], t.lo, count);

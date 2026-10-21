@@ -94,7 +94,9 @@ static uint8_t **xt_simd_tab; static unsigned char *xt_simd_flag; static unsigne
 #define XT_SIMD_WATCHED 1
 /* The first entry whose payload is above p. */
 static unsigned long xt_simd_find(const uint8_t *p){unsigned long lo=0,hi=xt_simd_n;while(lo<hi){unsigned long m=(lo+hi)/2;if(xt_simd_tab[2*m]<=p)lo=m+1;else hi=m;}return lo;}
-static void xt_simd_reg(uint8_t *payload,unsigned long bytes){_xt_rt_lock();
+/* Always inlined: a second caller (_xtc_simd_register) must not change how
+   clang compiles the allocator that has always inlined it. */
+static inline __attribute__((always_inline)) void xt_simd_reg(uint8_t *payload,unsigned long bytes){_xt_rt_lock();
     if(xt_simd_n==xt_simd_cap){unsigned long c=xt_simd_cap?xt_simd_cap*2:64;uint8_t**t=(uint8_t**)calloc(2*c,sizeof(uint8_t*));unsigned char*g=(unsigned char*)calloc(c,1);if(!t||!g){free(t);free(g);_xt_rt_unlock();return;}
         for(unsigned long k=0;k<2*xt_simd_n;k++)t[k]=xt_simd_tab[k];for(unsigned long k=0;k<xt_simd_n;k++)g[k]=xt_simd_flag[k];free(xt_simd_tab);free(xt_simd_flag);xt_simd_tab=t;xt_simd_flag=g;xt_simd_cap=c;}
     unsigned long i=xt_simd_find(payload);for(unsigned long k=xt_simd_n;k>i;k--){xt_simd_tab[2*k]=xt_simd_tab[2*k-2];xt_simd_tab[2*k+1]=xt_simd_tab[2*k-1];xt_simd_flag[k]=xt_simd_flag[k-1];}
@@ -102,6 +104,14 @@ static void xt_simd_reg(uint8_t *payload,unsigned long bytes){_xt_rt_lock();
 static void xt_simd_unreg(uint8_t *payload){_xt_rt_lock();unsigned long i=xt_simd_find(payload);
     if(i>0&&xt_simd_tab[2*(i-1)]==payload){i--;for(unsigned long k=i;k+1<xt_simd_n;k++){xt_simd_tab[2*k]=xt_simd_tab[2*k+2];xt_simd_tab[2*k+1]=xt_simd_tab[2*k+3];xt_simd_flag[k]=xt_simd_flag[k+1];}xt_simd_n--;}
     _xt_rt_unlock();}
+/* A global array the compiler gave pages of its own (its gpu-globals pass:
+   numeric, 64 KB and more, on a 16 KB boundary and padded to whole pages),
+   registered by the program's load-time constructor so par's runtime shares
+   and watches it as it does a heap block. bytes is the padded length.
+   Not on a 4 KB page (a layout the image writer did not keep), it is left
+   out: the watch protects whole pages, and one shared with a neighbour would
+   fault outside every block. The array is then copied, as before. */
+void _xtc_simd_register(void *p,unsigned long bytes){if(p&&bytes&&((unsigned long)p&4095UL)==0&&(bytes&4095UL)==0)xt_simd_reg((uint8_t*)p,bytes);}
 void *_xtc_simd_base(void *p){_xt_rt_lock();unsigned long i=xt_simd_find((uint8_t*)p);uint8_t*b=0;if(i>0&&(uint8_t*)p<xt_simd_tab[2*(i-1)+1])b=xt_simd_tab[2*(i-1)];_xt_rt_unlock();return b;}
 long _xtc_simd_span(void *p){_xt_rt_lock();unsigned long i=xt_simd_find((uint8_t*)p);long s=-1;if(i>0&&(uint8_t*)p<xt_simd_tab[2*(i-1)+1])s=(long)(xt_simd_tab[2*(i-1)+1]-(uint8_t*)p);_xt_rt_unlock();return s;}
 /* Dirty tracking for a GPU runtime's resident copies (par-blocks.md §3,

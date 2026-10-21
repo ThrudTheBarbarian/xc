@@ -2,6 +2,7 @@
 #import "XTIR.h"
 #import "XTIROptDeadFunctionElim.h"
 #import "XTIROptVaArgExpand.h"
+#import "XTIROptGpuGlobals.h"
 #import "XTIROptInline.h"
 #import "XTIROptConstOperandFold.h"
 #import "XTIROptStrengthReduce.h"
@@ -62,6 +63,11 @@
     XTIROptVaArgExpand* vaExpand = [[XTIROptVaArgExpand alloc] init];
     vaExpand.profile = profile; // skips native-varargs targets (arm9)
     [p addPass:vaExpand];
+    // Pages of their own for the numeric global arrays a GPU may share
+    // (gpu-globals); at every level, as the layout must not depend on -O.
+    XTIROptGpuGlobals* gpuGlobals = [[XTIROptGpuGlobals alloc] init];
+    gpuGlobals.profile = profile;
+    [p addPass:gpuGlobals];
     if (level >= 1)
         {
         [p addPass:[[XTIROptDeadFunctionElim alloc] init]];

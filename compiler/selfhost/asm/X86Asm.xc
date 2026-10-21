@@ -244,6 +244,7 @@ class X86Fixup
     Array* _globalSyms; // String@
     Map* _commonSyms;   // `.comm` COMMON: name -> [size, byteAlign] (bug 36 x-obj)
     Array* _bss;        // `.bss` bytes, appended after all the data once the pass is done (bug 642)
+    u32 _bssAlign;      // the largest alignment a `.bss` .p2align asked for (at least 16)
     Array* _bssLabels;  // the labels defined in it, rebased then
     bool _failed;
     String* _why;
@@ -267,6 +268,7 @@ class X86Fixup
         _globalSyms = new Array();
         _commonSyms = new Map();
         _bss = new Array();
+        _bssAlign = (u32)16;
         _bssLabels = new Array();
         _failed = false;
         _skipSect = false;
@@ -3240,7 +3242,9 @@ class X86Fixup
         // them as data. Mirrors the reference assembler.
         if (_bss.count() > (u32)0)
             {
-            while (_data.count() % (u32)16 != (u32)0)
+            // At the largest alignment inside it, so a 16 KB-aligned array
+            // (gpu-globals) keeps its alignment once appended.
+            while (_data.count() % _bssAlign != (u32)0)
                 _data.add((Object*)Number.withU32((u32)0));
             u32 base = _data.count();
             for (u32 i = (u32)0; i < _bss.count(); i = i + (u32)1)
@@ -3356,8 +3360,12 @@ class X86Fixup
                 while (_text.count() % al != (u32)0)
                     _text.add((Object*)Number.withU32((u32)$90));
             else if (section == (u32)2)
+                {
                 while (_bss.count() % al != (u32)0)
                     _bss.add((Object*)Number.withU32((u32)0));
+                if (al > _bssAlign)
+                    _bssAlign = al;
+                }
             else
                 while (_data.count() % al != (u32)0)
                     _data.add((Object*)Number.withU32((u32)0));

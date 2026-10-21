@@ -1435,7 +1435,9 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     uint64_t rwOff = roundUpTo(textOff + textLen, ELF_PAGE) + ELF_PAGE;
     uint64_t gotOff = rwOff;
     uint64_t dynOff = gotOff + ngot * 8;
-    uint64_t dataAddr = roundUpTo(dynOff + nDyn * DYN_SZ, 16);
+    // On a page, as the static image's .data is: a gpu-globals array is
+    // 16 KB-aligned within .data, so it lands on a page only if .data does.
+    uint64_t dataAddr = roundUpTo(dynOff + nDyn * DYN_SZ, ELF_PAGE);
     uint64_t rwEnd = dataAddr + data.length; // memsz end
     // rwFileEnd / dataFileSz are set below, AFTER the fixup loop patches data —
     // a vtable slot holding a symbolic .quad is zero until its abs64 fixup runs,

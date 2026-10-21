@@ -3408,6 +3408,12 @@ class Arm64
             if (sym.isExtern()) continue;
             u32 size = fieldWidth(sym.globalTy());
             if (size == (u32)0) size = (u32)8;
+            // A numeric array the optimiser gave pages of its own (gpu-globals):
+            // on a 16 KB boundary, padded to whole pages, as it registered it.
+            bool page = sym.attr(String.withCString("gpupage"));
+            u32 p2 = page ? (u32)14 : (u32)globalP2Align(size);
+            if (page)
+                size = (size + (u32)16383) & ~(u32)16383;
             Array* bytes = sym.bytes();
             if (bytes != (Array*)0 && bytes.count() > (u32)0) {
                 initHeader();
@@ -3417,7 +3423,7 @@ class Arm64
                     bytes = relayFloatInit(bytes, sym.globalTy());
                 // Natural alignment, capped at 8 (uxkit/029) — see the
                 // reference's xtArm64GlobalP2Align for why size decides it.
-                _out.appendFormat("    .p2align %lu\n", (i32)globalP2Align(size));
+                _out.appendFormat("    .p2align %lu\n", p2);
                 _out.appendFormat("    .globl _%s\n_%s:\n", sym.name().cString(),
                                   sym.name().cString());
                 for (u32 b = (u32)0; b < bytes.count(); b = b + (u32)1)
@@ -3437,7 +3443,7 @@ class Arm64
                 // Mach-O `.comm` takes LOG2 alignment: the old `1` meant two
                 // bytes, not "none", and not enough for a pointer.
                 _out.appendFormat("    .comm _%s, %lu, %lu\n", sym.name().cString(),
-                                  size, (i32)globalP2Align(size));
+                                  size, p2);
             }
         }
     }

@@ -1316,7 +1316,10 @@ class MachOSha256
         // __bss follows __got in memory and takes no file bytes: the segment's
         // vmsize grows past its filesize, and every later segment's vmaddr
         // moves up by the same page-rounded amount (bug 642).
-        u32 bssOff = roundUp(gotOffset + gotSize, (u32)16);
+        // On a page: a common's alignment is kept from the start of the run
+        // (Arm64Asm.allocateBss), and a 16 KB one (a gpu-globals array) must
+        // land on a 16 KB address. Zero-fill, so no file bytes.
+        u32 bssOff = roundUp(gotOffset + gotSize, (u32)MACHO_PAGE);
         u32 dataSegVmEnd = hasBss ? roundUp(bssOff + bssLength, (u32)MACHO_PAGE) : dataSegEnd;
         u32 vmShift = dataSegVmEnd - dataSegEnd;
         gMachOBssBase = bssOff;
@@ -1530,7 +1533,10 @@ class MachOSha256
         u32 gotOffInSeg = gotOffset - dataSegFileOff;
         // __bss after __got, in memory only; later segments' vmaddr move past
         // it by the page-rounded amount (bug 642).
-        u32 bssOff = roundUp(gotOffset + gotSize, (u32)16);
+        // On a page: a common's alignment is kept from the start of the run
+        // (Arm64Asm.allocateBss), and a 16 KB one (a gpu-globals array) must
+        // land on a 16 KB address. Zero-fill, so no file bytes.
+        u32 bssOff = roundUp(gotOffset + gotSize, (u32)MACHO_PAGE);
         u32 dataSegVmEnd = hasBss ? roundUp(bssOff + bssLength, (u32)MACHO_PAGE) : dataSegEnd;
         u32 vmShift = dataSegVmEnd - dataSegEnd;
         gMachOBssBase = bssOff;
