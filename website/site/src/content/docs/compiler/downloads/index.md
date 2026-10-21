@@ -12,13 +12,13 @@ cross-build native binaries for every target with **no other toolchain installed
 
 | Platform | Download | Size |
 | --- | --- | --- |
-| macOS (Apple silicon) | [xcc-osx-0.85.tar.bz2](/downloads/xcc-osx-0.85.tar.bz2) | 9.4 MB |
-| Linux (x86_64) | [xcc-linux-0.85.tar.bz2](/downloads/xcc-linux-0.85.tar.bz2) | 6.8 MB |
-| Windows (x64) | [xcc-win64-0.85.zip](/downloads/xcc-win64-0.85.zip) | 8.0 MB |
+| macOS (Apple silicon) | [xcc-osx-0.85.tar.bz2](/downloads/xcc-osx-0.85.tar.bz2) | 9.8 MB |
+| Linux (x86_64) | [xcc-linux-0.85.tar.bz2](/downloads/xcc-linux-0.85.tar.bz2) | 7.0 MB |
+| Windows (x64) | [xcc-win64-0.85.zip](/downloads/xcc-win64-0.85.zip) | 8.3 MB |
 | arm9 sysroot (any host) | [xcc-arm9-sysroot-0.85.tar.bz2](/downloads/xcc-arm9-sysroot-0.85.tar.bz2) | 830 KB |
-| xcd, the par daemon (macOS) | [xcd-osx-0.85.tar.bz2](/downloads/xcd-osx-0.85.tar.bz2) | 844 KB |
-| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.85.tar.bz2](/downloads/xcd-linux-0.85.tar.bz2) | 790 KB |
-| xcd, the par daemon (Windows x64) | [xcd-win64-0.85.zip](/downloads/xcd-win64-0.85.zip) | 897 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-0.85.tar.bz2](/downloads/xcd-osx-0.85.tar.bz2) | 847 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.85.tar.bz2](/downloads/xcd-linux-0.85.tar.bz2) | 793 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-0.85.zip](/downloads/xcd-win64-0.85.zip) | 904 KB |
 | UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.75.tar.bz2](/downloads/xcc-uxgtk-linux-0.75.tar.bz2) | 110 KB |
 | UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.75.tar.bz2](/downloads/xcc-uxkit-0.75.tar.bz2) | 2.9 MB |
 
