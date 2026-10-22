@@ -457,7 +457,9 @@ void _xt_stack_guard_init(void)
     if (g == 0)
         {
         uint32_t lo, hi;
-        __asm__ volatile("rdtsc" : "=a"(lo), "=d"(hi));
+        // rdtsc, as its bytes: an older in-house assembler (the one a
+        // bootstrap stage builds this runtime with) has no mnemonic for it.
+        __asm__ volatile(".byte 0x0f, 0x31" : "=a"(lo), "=d"(hi));
         uint64_t t = ((uint64_t)hi << 32) | lo;
         uint64_t s = (uint64_t)&g;
         uint64_t c = (uint64_t)&_xt_stack_guard_init;

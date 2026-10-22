@@ -133,6 +133,26 @@ static void replaceUses(XTIRInsn* insn, XTIRValueId old, XTIROperand* to)
     return 2;
     }
 
+// `ElementAddr base, ZExt(x)` with x a 32-bit integer: x (as a use), else nil.
+- (nullable XTIROperand*)wideIndexOf:(XTIRInsn*)n
+    {
+    if (n.opcode != XTIROpElementAddr || n.operands.count < 2 || !self.defOf)
+        return nil;
+    XTIROperand* ix = n.operands[1];
+    if (ix.kind != XTIROperandKindUse)
+        return nil;
+    XTIRInsn* d = self.defOf[@(ix.valueId)];
+    if (!d || d.opcode != XTIROpZExt || d.operands.count < 1)
+        return nil;
+    XTIROperand* a = d.operands[0];
+    if (a.kind != XTIROperandKindUse)
+        return nil;
+    XTIRValue* v = self.valueOf[@(a.valueId)];
+    if (!v || !(v.type.kind == XTIRTypeKindI32 || v.type.kind == XTIRTypeKindU32))
+        return nil;
+    return [XTIROperand useWithValueId:a.valueId];
+    }
+
 // The element count of the `new T[c]` that made p, c a constant: p is the
 // result of a call to an `_xtc_new_<T>` allocator, whose one argument is the
 // count.
@@ -605,18 +625,11 @@ static NSMapTable* dominators(XTIRFunction* fn)
     self.mod = mod;
     XTIRSymbol* chk = [mod symbolForName:@"_xt_check_bounds_n"];
     XTIRSymbol* hchk = [mod symbolForName:@"_xt_check_bounds"];
-    if (!chk && !hchk)
-        return YES;
     XTIRSymbolId chkId = chk ? [mod.symbols indexOfObjectIdenticalTo:chk] : (XTIRSymbolId)NSNotFound;
     XTIRSymbolId hchkId = hchk ? [mod.symbols indexOfObjectIdenticalTo:hchk] : (XTIRSymbolId)NSNotFound;
     for (XTIRFunction* fn in mod.functions)
         {
-        BOOL any = NO;
-        for (XTIRBlock* bb in fn.blocks)
-            for (XTIRInsn* n in bb.instructions)
-                if ((chk && isCall(n, chkId, 6)) || (hchk && isCall(n, hchkId, 5)))
-                    any = YES;
-        if (!any || fn.blocks.count == 0)
+        if (fn.blocks.count == 0)
             continue;
         self.defOf = [NSMutableDictionary dictionary];
         self.valueOf = [NSMutableDictionary dictionary];
@@ -631,6 +644,13 @@ static NSMapTable* dominators(XTIRFunction* fn)
                 if (n.result)
                     self.defOf[@(n.result.valueId)] = n;
             }
+        BOOL any = NO;
+        for (XTIRBlock* bb in fn.blocks)
+            for (XTIRInsn* n in bb.instructions)
+                if ((chk && isCall(n, chkId, 6)) || (hchk && isCall(n, hchkId, 5)) || [self wideIndexOf:n])
+                    any = YES;
+        if (!any)
+            continue;
         NSMapTable* idom = dominators(fn);
         NSMapTable* blockFacts = [self guardFacts:fn];
         for (XTIRBlock* X in fn.blocks)
@@ -644,6 +664,22 @@ static NSMapTable* dominators(XTIRFunction* fn)
                     [self.facts addObjectsFromArray:fs];
                 XTIRBlock* up = [idom objectForKey:d];
                 d = up == d ? nil : up;
+                }
+            // A subscript widened from 32 bits (C's `a[i]` reads `zext i` into an
+            // i64 index) uses the 32-bit value itself when that is proved inside
+            // [0, 2^31): the same element, and the iv-indexed shape the
+            // vectoriser takes. Mirrors the self-hosted pass.
+            for (XTIRInsn* ea in X.instructions)
+                {
+                XTIROperand* narrow = [self wideIndexOf:ea];
+                int64_t wlo = 0, whi = 0;
+                self.visiting = [NSMutableSet set];
+                if (narrow && [self range:narrow lo:&wlo hi:&whi depth:0] && wlo >= 0 && whi <= 0x7FFFFFFF)
+                    {
+                    NSMutableArray<XTIROperand*>* ops = [ea.operands mutableCopy];
+                    ops[1] = narrow;
+                    [ea replaceOperands:ops];
+                    }
                 }
             NSUInteger i = 0;
             while (i < X.instructions.count)

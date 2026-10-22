@@ -1264,14 +1264,35 @@ static BOOL xtvIvStartConst(XTIRInsn* ivPhi, XTIRBlock* latch,
         // is the honest statement of it: a range with no whole vector in it is
         // not vectorisable, whatever it starts at.
         int64_t ivStart = 0;
+        // A RUNTIME start (`for (i = lo; …)`): the vector loop begins at it and
+        // runs to the runtime limit start + ((bound - start) & ~(vw-1)), as a
+        // reduction's does, so even a constant bound becomes a runtime trip (as
+        // an immediate: the limit is computed in the preheader, ahead of the
+        // header that holds the bound's Const). The start must be
+        // loop-invariant; the remainder clone is refused by xtvIsRemainder.
+        // Mirrors the self-hosted vecMapAt.
+        XTIROperand* rtStart = nil;
         if (!xtvIvStartConst(ivPhi, B, defOf, &ivStart))
-            continue;
+            {
+            XTIROperand* so = (ivPhi.operands[0].blockRef == B) ? ivPhi.operands[3] : ivPhi.operands[1];
+            if (!so || so.kind != XTIROperandKindUse)
+                continue;
+            XTIRBlock* sdb = defBlk[@(so.valueId)];
+            if (sdb == H || sdb == B)
+                continue;
+            rtStart = so;
+            ivStart = 0;
+            }
+        BOOL rt = runtimeTrip || rtStart != nil;
+        XTIROperand* boundOp = guard.operands[1];
+        if (!runtimeTrip && rtStart)
+            boundOp = [XTIROperand immIWithType:ivPhi.result.type value:N];
         // N is only meaningful when the bound is a CONSTANT — with a runtime
         // trip it is still 0, so an unguarded `ivStart >= N` refuses every
         // runtime-bound loop, including the zero-start ones that vectorised
         // before. That is how this first showed up: the self-hosted optimiser
         // stopped vectorising vectorize_map_tail while the reference still did.
-        if (!runtimeTrip && ivStart >= N)
+        if (!rt && ivStart >= N)
             continue;
         // The header predecessor that is not the latch (same rule the reduction
         // recogniser uses; it spells this as a local `entryBlk` block).
@@ -1300,7 +1321,7 @@ static BOOL xtvIvStartConst(XTIRInsn* ivPhi, XTIRBlock* latch,
         int64_t epiM_ = ivStart + (trip_ - (trip_ % (int64_t)vw));
         // Under one whole vector: stay scalar. Also what refuses the epilogue
         // CLONE, whose range is shorter than a vector by construction.
-        if (!runtimeTrip && (epiM_ - ivStart) < (int64_t)vw)
+        if (!rt && (epiM_ - ivStart) < (int64_t)vw)
             continue;
 
         XTVecCand* c = [XTVecCand new];
@@ -1317,10 +1338,11 @@ static BOOL xtvIvStartConst(XTIRInsn* ivPhi, XTIRBlock* latch,
         c.preheader = preheader;
         c.epiN = N;
         c.epiM = epiM_;
-        c.needsEpilogue = (runtimeTrip || epiM_ != N);
-        c.runtimeTrip = runtimeTrip;
-        c.boundOp = guard.operands[1];
+        c.needsEpilogue = (rt || epiM_ != N);
+        c.runtimeTrip = rt;
+        c.boundOp = boundOp;
         c.ivStart = ivStart;
+        c.ivStartOp = rtStart;
         return c;
         }
     return nil;
@@ -2453,6 +2475,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         XTIROperand* ivInitOp = entryOp(ivPhi);
         int64_t ivStart = 0;
         XTIROperand* ivStartOp = nil;
+        XTIROperand* redBoundImm = nil;  // a literal bound, once a runtime start made the trip runtime
         if (!ivInitOp)
             continue;
         if (!resolveConstInt(ivInitOp, defOf, &ivStart))
@@ -2472,9 +2495,15 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
             if (sb == H || sb == B)
                 continue;
             // The constant-bound epilogue arithmetic below assumes a known
-            // start; with a runtime start, only the runtime-trip path works.
+            // start; with a runtime start, only the runtime-trip path works,
+            // so a literal bound becomes a runtime trip, the bound as an
+            // immediate (the limit is computed in the preheader, ahead of the
+            // header holding its Const). Mirrors the self-hosted vecReductionAt.
             if (!runtimeTrip)
-                continue;
+                {
+                runtimeTrip = YES;
+                redBoundImm = [XTIROperand immIWithType:ivPhi.result.type value:N];
+                }
             ivStartOp = ivInitOp;
             ivStart = 0;
             }
@@ -2511,7 +2540,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         // must not read as a refusal.
         if (runtimeTrip)
             {
-            XTIRBlock* bdb = defBlk[@(guard.operands[1].valueId)];
+            XTIRBlock* bdb = redBoundImm ? nil : defBlk[@(guard.operands[1].valueId)];
             if (bdb == H || bdb == B)
                 continue;
             }
@@ -2545,7 +2574,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         c.epiM = epiM_;
         c.needsEpilogue = (runtimeTrip || epiM_ != N);
         c.runtimeTrip = runtimeTrip;
-        c.boundOp = guard.operands[1];
+        c.boundOp = redBoundImm ?: guard.operands[1];
         c.ivStart = ivStart;
         c.ivStartOp = ivStartOp;
         return c;

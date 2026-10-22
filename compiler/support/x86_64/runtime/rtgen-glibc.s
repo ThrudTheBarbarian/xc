@@ -526,7 +526,8 @@ _xt_stack_guard_init:                   # @_xt_stack_guard_init
 # %bb.3:
 	#APP
 
-	rdtsc
+	.byte	15
+	.byte	49
 
 	#NO_APP
                                         # kill: def $edx killed $edx def $rdx

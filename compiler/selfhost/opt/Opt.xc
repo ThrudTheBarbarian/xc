@@ -8239,16 +8239,17 @@ class BeFact : Object
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            _beDef = fn.blocks().count() > (u32)0 ? defMap(fn) : (Map*)0;
             bool any = false;
             for (u32 b = (u32)0; b < fn.blocks().count() && !any; b = b + (u32)1)
                 {
                 IRBlock* bb = (IRBlock*)fn.blocks().get(b);
                 for (u32 i = (u32)0; i < bb.insns().count() && !any; i = i + (u32)1)
-                    any = beIsCheck((IRInsn*)bb.insns().get(i), chk) || beIsHeapCheck((IRInsn*)bb.insns().get(i));
+                    any = beIsCheck((IRInsn*)bb.insns().get(i), chk) || beIsHeapCheck((IRInsn*)bb.insns().get(i))
+                       || beWideIndex((IRInsn*)bb.insns().get(i)) != (IRValue*)0;
                 }
             if (!any || fn.blocks().count() == (u32)0)
                 continue;
-            _beDef = defMap(fn);
             Map* idom = beDominators(fn);
             Map* blockFacts = beGuardFacts(fn);
             for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
@@ -8263,6 +8264,22 @@ class BeFact : Object
                         _beFacts.add(fs.get(k));
                     IRBlock* up = (IRBlock*)idom.get((Hashable*)d);
                     d = up == d ? (IRBlock*)0 : up;
+                    }
+                // A subscript widened from 32 bits (C's `a[i]` reads `zext i`
+                // into an i64 index) uses the 32-bit value itself when that is
+                // proved inside [0, 2^31): the same element, and the iv-indexed
+                // shape the vectoriser takes. A literal start gave it this
+                // already (mem2reg); a runtime one now does too.
+                for (u32 k = (u32)0; k < X.insns().count(); k = k + (u32)1)
+                    {
+                    IRInsn* ea = (IRInsn*)X.insns().get(k);
+                    IRValue* narrow = beWideIndex(ea);
+                    i64 wlo = (i64)0;
+                    i64 whi = (i64)0;
+                    _beVisit = new Map();
+                    if (narrow != (IRValue*)0 && beRange(IROperand.useVal(narrow), &wlo, &whi, (u32)0)
+                        && wlo >= (i64)0 && whi <= (i64)$7FFFFFFF)
+                        ea.ops().set((u32)1, (Object*)IROperand.useVal(narrow));
                     }
                 u32 i = (u32)0;
                 while (i < X.insns().count())
@@ -8300,6 +8317,26 @@ class BeFact : Object
         return n.op().equals(String.withCString("Call")) && n.ops().count() == (u32)6
             && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_SYM
             && ((IROperand*)n.ops().get((u32)0)).name().equals(chk);
+        }
+
+    // `ElementAddr base, ZExt(x)` with x a 32-bit integer: x, else 0.
+    IRValue* beWideIndex(IRInsn* n)
+        {
+        if (!n.op().equals(String.withCString("ElementAddr")) || n.ops().count() < (u32)2 || _beDef == (Map*)0)
+            return (IRValue*)0;
+        IROperand* ix = (IROperand*)n.ops().get((u32)1);
+        if (ix.kind() != (u8)OPK_USE)
+            return (IRValue*)0;
+        IRInsn* d = (IRInsn*)_beDef.get((Hashable*)ix.val());
+        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("ZExt")) || d.ops().count() < (u32)1)
+            return (IRValue*)0;
+        IROperand* a = (IROperand*)d.ops().get((u32)0);
+        if (a.kind() != (u8)OPK_USE || a.val() == (IRValue*)0)
+            return (IRValue*)0;
+        String* t = a.val().ty();
+        if (t == (String*)0 || !(t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))))
+            return (IRValue*)0;
+        return a.val();
         }
 
     static bool beIsHeapCheck(IRInsn* n)
@@ -19116,9 +19153,32 @@ class BeFact : Object
         // stops the REMAINDER being re-recognised and re-cloned: the clone's
         // induction phi enters at M, so it fails this test by construction.
         i32 mapStart = vecIvStart(ivPhi, B, defOf);
-        if (vw < (u32)2 || mapStart < (i32)0)
+        if (vw < (u32)2)
             return (VecCand*)0;
-        if (!_vrMapRT && mapStart >= n)
+        // A RUNTIME start (`for (i = lo; …)`: a loop resumed, or a benchmark's
+        // opaque zero): the vector loop begins at it and runs to the runtime
+        // limit start + ((bound - start) & ~(vw-1)), as a reduction's does,
+        // so even a constant bound becomes a runtime trip (as an immediate:
+        // the limit is computed in the preheader, ahead of the header that
+        // holds the bound's Const). The start must be loop-invariant; the
+        // remainder clone is refused by vecIsRemainder above, not by this.
+        IROperand* rtStart = (IROperand*)0;
+        if (mapStart < (i32)0)
+            {
+            IROperand* so = vecEntryOpOf(ivPhi, B);
+            if (so == (IROperand*)0 || so.kind() != (u8)OPK_USE)
+                return (VecCand*)0;
+            Object* sdb = defBlk.get((Hashable*)so.val());
+            if (sdb != (Object*)0 && ((IRBlock*)sdb == H || (IRBlock*)sdb == B))
+                return (VecCand*)0;
+            rtStart = so;
+            mapStart = (i32)0;
+            }
+        bool rt = _vrMapRT || rtStart != (IROperand*)0;
+        IROperand* boundOp = (IROperand*)guard.ops().get((u32)1);
+        if (!_vrMapRT && rtStart != (IROperand*)0)
+            boundOp = IROperand.immI((i64)n, iv.ty());
+        if (!rt && mapStart >= n)
             return (VecCand*)0;
         if (_vrMapRT && !vecMapRTOK(guard, defBlk, H, B))
             return (VecCand*)0;
@@ -19133,7 +19193,7 @@ class BeFact : Object
         // Under one whole vector: nothing to gain — and this is what refuses the
         // epilogue CLONE, whose range is shorter than a vector by construction
         // (the zero-start test used to do that job).
-        if (!_vrMapRT && (epiM - mapStart) < (i32)vw)
+        if (!rt && (epiM - mapStart) < (i32)vw)
             return (VecCand*)0;
 
         VecCand* c = new VecCand();
@@ -19142,9 +19202,10 @@ class BeFact : Object
         c.setLane(laneTy, vw);
         c.setVecBytes(vb);
         c.setPre(PH);
-        c.setEpi(_vrMapRT || epiM != n, epiM);
-        c.setRuntime(_vrMapRT, (IROperand*)guard.ops().get((u32)1));
+        c.setEpi(rt || epiM != n, epiM);
+        c.setRuntime(rt, boundOp);
         c.setIvStart(mapStart);
+        c.setIvStartOp(rtStart);
         return c;
         }
 
@@ -19455,8 +19516,14 @@ class BeFact : Object
             Object* sdb = defBlk.get((Hashable*)startOp.val());
             if (sdb != (Object*)0 && ((IRBlock*)sdb == H || (IRBlock*)sdb == B))
                 return (VecCand*)0;
+            // A literal bound with a runtime start is a runtime trip too, the
+            // bound as an immediate (the limit is computed in the preheader,
+            // ahead of the header holding its Const). As the map recogniser.
             if (!_vrRuntime)
-                return (VecCand*)0;
+                {
+                _vrRuntime = true;
+                _vrBoundOp = IROperand.immI((i64)n, _vrIv.ty());
+                }
             _vrIvStartOp = startOp;
             _vrIvStart = (i64)0;
             }
@@ -19478,7 +19545,9 @@ class BeFact : Object
             // Loop-INVARIANT: a value with no defining instruction is a
             // parameter, invariant by construction, so an absent entry here
             // must NOT read as a refusal.
-            Object* bdb = defBlk.get((Hashable*)_vrBoundOp.val());
+            // An immediate (a literal bound with a runtime start) is
+            // invariant and has no value to look up.
+            Object* bdb = _vrBoundOp.kind() == (u8)OPK_USE ? defBlk.get((Hashable*)_vrBoundOp.val()) : (Object*)0;
             if (bdb != (Object*)0 && ((IRBlock*)bdb == H || (IRBlock*)bdb == B))
                 return (VecCand*)0;
             }
