@@ -8773,7 +8773,14 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
     // A CHECKED build is detected from the module, not from a flag — for the
     // same reason thread-safe ARC is: the back end has two callers and a flag
     // plumbed to one is a decision the other gets wrong.
-    sArm64MSFns = [mod referencesSymbolNamed:@"_xt_check_bounds"]
+    // The parameter map (and every frame kept) is for the backtracing reporter
+    // of -fbounds-check, linked separately; a module that brings its own
+    // checker (Checked.xc, -fbounds-check=light) needs neither.
+    BOOL ownChecker = NO;
+    for (XTIRFunction *f in mod.functions)
+        if ([f.name isEqualToString:@"_xt_check_bounds"] && f.blocks.count > 0)
+            ownChecker = YES;
+    sArm64MSFns = [mod referencesSymbolNamed:@"_xt_check_bounds"] && !ownChecker
                 ? [NSMutableArray array] : nil;
 
     // Atomic reference counts (the security review, 2026-10-21): an object two

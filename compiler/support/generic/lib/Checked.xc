@@ -1,8 +1,9 @@
-// Checked.xc — the subscript checks of a checked build (-fbounds-check) on
-// x86-64 and win64, imported by the compiler into such a build. arm64 macOS
-// has its own reporter (rt-checked.c: a backtrace with arguments); here an
-// out-of-range subscript is named by its site, its index and the extent, and
-// the program stops with status 134, as an abort does.
+// Checked.xc — the subscript checks of -fbounds-check=light (arm64 macOS,
+// x86-64, win64) and of -fbounds-check on x86-64 and win64, imported by the
+// compiler into such a build. An out-of-range subscript is named by its site,
+// its index and the extent, and the program stops with status 134, as an
+// abort does. -fbounds-check on arm64 macOS links rt-checked's reporter
+// instead (a backtrace with arguments, every frame kept for it).
 //
 // The compiler calls these before every subscript's address is used:
 // _xt_check_bounds for a pointer (its heap block's header holds the count),
@@ -64,19 +65,26 @@ void _xt_check_trap(u8* site, u64 index, u64 count, bool known)
     _xt_exit((i32)134);
 }
 
+void _xt_check_cast_trap(u8* site)
+{
+    _xt_check_put("\n=== xcc: a pointer cast to a class is not an object ===\n  at ");
+    _xt_check_put(site != (u8*)0 ? site : "?");
+    _xt_check_put("\n  aborting\n");
+    _xt_exit((i32)134);
+}
+
 // A raw pointer cast to a class: it must be null or a heap object, whose
 // header carries the object magic; the class itself is then checked as a
 // downcast from Object is.
 void _xt_check_object(pointer ptr, u8* site)
 {
-    if (ptr == (pointer)0)
-        return;
-    if (*(u32*)(pointer)((u8*)ptr - 40) == (u32)XT_CHECK_MAGIC)
-        return;
-    _xt_check_put("\n=== xcc: a pointer cast to a class is not an object ===\n  at ");
-    _xt_check_put(site != (u8*)0 ? site : "?");
-    _xt_check_put("\n  aborting\n");
-    _xt_exit((i32)134);
+    // One return and no merged values: the inliner takes a check whose only
+    // call is the trap, so a check costs a compare where it is used.
+    if (ptr != (pointer)0)
+        {
+        if (*(u32*)(pointer)((u8*)ptr - 40) != (u32)XT_CHECK_MAGIC)
+            _xt_check_cast_trap(site);
+        }
 }
 
 void _xt_check_bounds_n(pointer ptr, u64 index, u64 count, u8* site)
@@ -88,17 +96,18 @@ void _xt_check_bounds_n(pointer ptr, u64 index, u64 count, u8* site)
 void _xt_check_bounds(pointer ptr, u64 index, u8* site)
 {
     if (ptr == (pointer)0)
-        {
         _xt_check_trap(site, index, (u64)0, false);
-        return;
+    else
+        {
+        // Not a heap block (a pointer into a stack or global array, or into
+        // memory C made): its extent is unknown, so nothing is checked.
+        u8* h = (u8*)ptr - 40;
+        u32 magic = *(u32*)(pointer)h;
+        // The two magics differ only in bit 0: one compare, and no merge.
+        if ((magic | (u32)1) == (u32)XT_CHECK_MAGIC_ALIGNED)
+            {
+            if (index >= *(u64*)(pointer)(h + 12))
+                _xt_check_trap(site, index, *(u64*)(pointer)(h + 12), true);
+            }
         }
-    u8* h = (u8*)ptr - 40;
-    u32 magic = *(u32*)(pointer)h;
-    // Not a heap block (a pointer into a stack or global array, or into
-    // memory C made): its extent is unknown, so nothing is checked.
-    if (magic != (u32)XT_CHECK_MAGIC && magic != (u32)XT_CHECK_MAGIC_ALIGNED)
-        return;
-    u64 count = *(u64*)(pointer)(h + 12);
-    if (index >= count)
-        _xt_check_trap(site, index, count, true);
 }

@@ -3817,6 +3817,7 @@ class ClassInfo
         Array* co = new Array();
         co.add((Object*)IROperand.immI((i32)count, String.withCString("U64")));
         IRValue* cnt = emit(String.withCString("Const"), String.withCString("U64"), co);
+        idx = checkIndexU64(idx);
         Array* cops = new Array();
         cops.add((Object*)IROperand.sym(runtimeHelper(String.withCString("_xt_check_bounds_n"))));
         cops.add((Object*)IROperand.useVal(ptr));
@@ -3832,6 +3833,23 @@ class ClassInfo
         c.setCc(String.withCString("CallConv::Standard"));
         _blk.add(c);
         _mem = nm;
+        }
+
+    // The checks take the index as a u64. Passed narrower, a CALL was harmless,
+    // but an inlined check compares the u64 parameter, which is then the
+    // caller's narrower value: reloaded from a 4-byte slot with an 8-byte load,
+    // index 0 read as huge (Map's grow loop). So widen it: a signed index
+    // sign-extends, so a negative one is out of range.
+    IRValue* checkIndexU64(IRValue* idx)
+        {
+        String* t = idx.ty();
+        bool sgn = t.equals(String.withCString("I8")) || t.equals(String.withCString("I16")) || t.equals(String.withCString("I32"));
+        bool uns = t.equals(String.withCString("U8")) || t.equals(String.withCString("U16")) || t.equals(String.withCString("U32"));
+        if (!sgn && !uns)
+            return idx;
+        Array* xo = new Array();
+        xo.add((Object*)IROperand.useVal(idx));
+        return emit(sgn ? String.withCString("SExt") : String.withCString("ZExt"), String.withCString("U64"), xo);
         }
 
     // `_xt_check_object(p, "file:line:col")`: p is null or a heap object
@@ -3898,6 +3916,7 @@ class ClassInfo
         IRValue* sv = stringAddr(site);
         if (sv == 0)
             return;
+        idx = checkIndexU64(idx);
         Array* cops = new Array();
         cops.add((Object*)IROperand.sym(runtimeHelper(String.withCString("_xt_check_bounds"))));
         cops.add((Object*)IROperand.useVal(ptr));
@@ -4060,10 +4079,14 @@ class ClassInfo
             // security review, 2026-10-21): the pointer must be null or a
             // heap object, and then the object must be of the class, as a
             // downcast from Object is checked.
+            // A ROOT class needs no walk: every heap object is one, and the
+            // check has just said it is a heap object. The walk's loop would
+            // also keep a callee such as Array.get from being inlined.
             if (_boundsCheck && tgt != 0 && src == 0 && v != (IRValue*)0 && isPtrSpelling(st) && !inChecker())
                 {
                 emitObjectCheck(v, n);
-                return lowerDowncast(n, v, n.hasFlag((u32)NF_FAILABLE));
+                if (tgt.parent() != (ClassInfo*)0)
+                    return lowerDowncast(n, v, n.hasFlag((u32)NF_FAILABLE));
                 }
             // `(P@ ?)obj` where the operand is not KNOWN to conform. On a
             // backend that carries the conformance itable the object itself

@@ -4167,7 +4167,7 @@ void main(void)
     // arguments, from the parameter map the arm64 back end emits); x86-64 and
     // win64 take their checks from Checked.xc, which the front end imports.
     // Every other target is refused, as the reference refuses it.
-    if (d.fe().boundsCheck()
+    if (d.fe().boundsReport()
         && !d.arch().equals(String.withCString("arm64")) && !isIos(d)
         && !isX86_64(d) && !d.arch().equals(String.withCString("win64"))) {
         Stdio.printf("xcc: error: -fbounds-check is implemented for arm64, x86_64 and win64 so far; "
@@ -4621,7 +4621,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
     // own frame and is built with different flags — so it is concatenated only
     // when asked for. An ordinary build links none of it.
     String* checked = (String*)0;
-    if (d.fe().boundsCheck()) {
+    if (d.fe().boundsReport()) {
         checked = readRuntime(d.fe(), String.withCString("rt-checked-macos.s"));
         if (checked == 0) {
             Stdio.printf("xcc: error: -fbounds-check needs rt-checked-macos.s in the support tree\n");
@@ -5305,14 +5305,16 @@ void usage(void)
     Stdio.printf("                             (default 64)\n");
     Stdio.printf("  -flto                      At a link of objects, recompile the IR they\n");
     Stdio.printf("                             carry as one module\n");
-    Stdio.printf("  -fbounds-check             Checked build: subscripts are range-checked, and a\n");
-    Stdio.printf("                             failure names the site, the real bounds and a\n");
-    Stdio.printf("                             symbolised stack before aborting. An array with a\n");
-    Stdio.printf("                             declared length (local, global, or sized by its\n");
-    Stdio.printf("                             own initialiser) is checked against that length;\n");
-    Stdio.printf("                             a heap allocation against its own header; a bare\n");
-    Stdio.printf("                             pointer as a heap allocation. arm64 only so far,\n");
-    Stdio.printf("                             and an error elsewhere.\n");
+    Stdio.printf("  -fbounds-check=light       Range-check subscripts (arm64 macOS, x86-64,\n");
+    Stdio.printf("                             win64): an array with a declared length against\n");
+    Stdio.printf("                             that length, a heap allocation against its\n");
+    Stdio.printf("                             header; a check the compiler proves is dropped,\n");
+    Stdio.printf("                             and a failure names the site and the bounds and\n");
+    Stdio.printf("                             stops\n");
+    Stdio.printf("  -fbounds-check             The debug build of the same checks: a failure\n");
+    Stdio.printf("                             also prints a symbolised stack (arm64 macOS keeps\n");
+    Stdio.printf("                             every frame for it)\n");
+    Stdio.printf("  -fno-bounds-check          No subscript checks (the default)\n");
     Stdio.printf("\n");
     Stdio.printf("Linking (in-house unless --no-self-host):\n");
     Stdio.printf("  -l<name>                   Link a library found on the -L path, or a system\n");
@@ -6204,7 +6206,16 @@ DriverOptions* parseDriverArgs(void)
         // runtime is arm64 assembly and only the arm64 back end emits the
         // parameter map it walks.
         if (a.equals(String.withCString("-fbounds-check"))) {
-            o.setBoundsCheck(true); i = i + (u32)1; continue;
+            o.setBoundsCheck(true); o.setBoundsReport(true); i = i + (u32)1; continue;
+        }
+        // -fbounds-check=light: the checks without the debug build's frames
+        // and backtrace — a failure names the site and the bounds and stops.
+        if (a.equals(String.withCString("-fbounds-check=light"))) {
+            o.setBoundsCheck(true); o.setBoundsReport(false); i = i + (u32)1; continue;
+        }
+        // -fno-bounds-check: no checks, the default (benchmarks say it anyway).
+        if (a.equals(String.withCString("-fno-bounds-check"))) {
+            o.setBoundsCheck(false); o.setBoundsReport(false); i = i + (u32)1; continue;
         }
         if (a.hasPrefix(String.withCString("--migrate="))) {
             o.setMigrate(a.substringFromByte((u32)10));

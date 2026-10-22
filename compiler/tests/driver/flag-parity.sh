@@ -374,9 +374,11 @@ same "--fn-min-banked"      -q -A 6502 --fn-min-banked 50 -o @OUT@.xex ret.xc
 same "-flto (source build)" $A -flto -o @OUT@ ret.xc
 
 # ── code-generation and runtime options ─────────────────────────────────
-cover -fbounds-check -fauto-cloak= -farc -Q --quit-style -S --xtc-stack -ss --stack-size
+cover -fbounds-check -fno-bounds-check -fbounds-check= -fauto-cloak= -farc -Q --quit-style -S --xtc-stack -ss --stack-size
 cover -fnew-ir --with-ir --self-host --migrate=
 same "-fbounds-check"       $A -fbounds-check -o @OUT@ ret.xc
+same "-fno-bounds-check"    $A -fno-bounds-check -o @OUT@ ret.xc
+same "-fbounds-check=light" $A -fbounds-check=light -o @OUT@ ret.xc
 for v in never auto always bogus; do same "-fauto-cloak=$v" $A -fauto-cloak=$v -o @OUT@ ret.xc; done
 same "-farc"                $A -farc -o @OUT@ ret.xc
 same "-farc=off"            $A -farc=off -o @OUT@ ret.xc

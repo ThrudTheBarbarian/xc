@@ -3913,6 +3913,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     XTIRValue* cnt = [self emitInsnOpcode:XTIROpConst
                                    result:u64
                                  operands:@[ [XTIROperand immIWithType:u64 value:(int64_t)count] ]];
+    idx = [self checkIndexU64:idx];
     XTIRSymbolId sid = [self runtimeHelperSymbolNamed:@"_xt_check_bounds_n"];
     [self emitCall:sid
           callConv:[XTIRCallConv standard]
@@ -3932,11 +3933,27 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     XTIRValue* siteVal = [self internCString:site];
     if (!siteVal)
         return;
+    idx = [self checkIndexU64:idx];
     XTIRSymbolId sid = [self runtimeHelperSymbolNamed:@"_xt_check_bounds"];
     [self emitCall:sid
           callConv:[XTIRCallConv standard]
          argValues:@[ ptr, idx, siteVal ]
         resultType:nil];
+    }
+
+// The checks take the index as a u64. Passed narrower, a CALL was harmless,
+// but an inlined check compares the u64 parameter, which is then the caller's
+// narrower value: reloaded from a 4-byte slot with an 8-byte load, index 0
+// read as huge (Map's grow loop). So widen it: a signed index sign-extends, so
+// a negative one is out of range.
+- (XTIRValue*)checkIndexU64:(XTIRValue*)idx
+    {
+    XTIRTypeKind k = idx.type.kind;
+    if (!XTIRTypeKindIsInteger(k) || idx.type.byteWidth >= 8)
+        return idx;
+    return [self emitInsnOpcode:XTIRTypeKindIsSigned(k) ? XTIROpSExt : XTIROpZExt
+                         result:[XTIRType u64Type]
+                       operands:@[ [XTIROperand useWithValueId:idx.valueId] ]];
     }
 
 - (nullable XTIRValue*)lowerLiteralString:(XTLiteralStringNode*)node
@@ -7116,6 +7133,9 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                       callConv:[XTIRCallConv standard]
                      argValues:@[ src, siteVal ]
                     resultType:nil];
+            // A ROOT class needs no walk: every heap object is one, and the
+            // check has just said it is a heap object (the self-hosted lowering).
+            if (tci.parent)
             return [self lowerClassDowncastFrom:src
                                     sourceClass:nil
                                     targetClass:tci

@@ -52,7 +52,8 @@ class FeOptions
     Array* _defs;
     Array* _libs; // -L dirs: `.xtc.iface` side files resolve here
     bool _verbose;
-    bool _boundsCheck; // -fbounds-check
+    bool _boundsCheck; // subscripts checked: -fbounds-check or -fbounds-check=light
+    bool _boundsReport; // -fbounds-check: the debug build (frames kept, a symbolised backtrace)
     bool _debugInfo;   // -g: source locations on the IR, for the line tables
     i32 _threadSafeArc; // -f[no-]thread-safe-arc: 1 on, 0 off, -1 decide per module
     bool _parKernelsAll; // -fpar-kernels=all: every GPU kernel form in every par block
@@ -108,6 +109,7 @@ class FeOptions
         _libcReferenced = false;
         _migrate = (String*)0;
         _boundsCheck = false;
+        _boundsReport = false;
         _debugInfo = false;
         _threadSafeArc = (i32)-1;
         _parKernelsAll = false;
@@ -319,6 +321,14 @@ class FeOptions
     void setBoundsCheck(bool b)
         {
         _boundsCheck = b;
+        }
+    bool boundsReport(void)
+        {
+        return _boundsReport;
+        }
+    void setBoundsReport(bool b)
+        {
+        _boundsReport = b;
         }
     String* preprocessedPath(void)
         {
@@ -2064,9 +2074,11 @@ Preprocessor* buildPP(FeOptions* o)
     predefine(pp, o);
     if (o.parAutoImport())
         pp.setAutoImport(String.withCString("Par.xc"));
-    // A checked build on x86-64 and win64 takes its subscript checks from
-    // Checked.xc (arm64 macOS links rt-checked's reporter instead).
-    if (o.boundsCheck() && (o.target().equals(String.withCString("x86_64")) || o.target().equals(String.withCString("win64"))))
+    // Checked subscripts take their checks from Checked.xc: everywhere under
+    // -fbounds-check=light, and on x86-64 and win64 under -fbounds-check too
+    // (arm64 macOS's debug build links rt-checked's backtracing reporter).
+    if (o.boundsCheck() && (o.target().equals(String.withCString("x86_64")) || o.target().equals(String.withCString("win64"))
+                            || !o.boundsReport()))
         pp.addAutoImport(String.withCString("Checked.xc"));
     // `#package` is wasm32-only and the preprocessor has to be able to say so.
     pp.setArch(platformOf(o));

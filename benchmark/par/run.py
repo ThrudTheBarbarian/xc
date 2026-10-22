@@ -78,9 +78,9 @@ AUTO_BENCHES = ["mandelbrot", "perlin", "nbody", "saxpy"]
 def build_auto(name, arch, out, autopar):
     """auto/<name>.xc, as written or with --par-auto."""
     if XCC:
-        cmd = [XCC, "-H", os.path.join(common.REPO, "compiler"), "-O3"]
+        cmd = [XCC, "-H", os.path.join(common.REPO, "compiler"), "-O3"] + common.bench_flags(XCC)
     else:
-        cmd = [common.xcc_path()] + common.xcc_home_args() + ["-O3"]
+        cmd = [common.xcc_path()] + common.xcc_home_args() + ["-O3"] + common.bench_flags()
     if arch:
         cmd += ["-A", arch]
     if autopar:
@@ -293,9 +293,9 @@ def table_c(results):
 
 def build(name, arch, out):
     if XCC:
-        cmd = [XCC, "-H", os.path.join(common.REPO, "compiler"), "-O3"]
+        cmd = [XCC, "-H", os.path.join(common.REPO, "compiler"), "-O3"] + common.bench_flags(XCC)
     else:
-        cmd = [common.xcc_path()] + common.xcc_home_args() + ["-O3"]
+        cmd = [common.xcc_path()] + common.xcc_home_args() + ["-O3"] + common.bench_flags()
     if arch:
         cmd += ["-A", arch]
     cmd += ["-o", out, os.path.join(SRC_DIRS.get(name, HERE), name + ".xc")]

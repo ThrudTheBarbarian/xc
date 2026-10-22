@@ -19,7 +19,7 @@ static const NSUInteger kMaxInlineInsns = 64;
 
 - (NSString*)passName
     {
-    return @"inline";
+    return self.checksOnly ? @"inline-checks" : @"inline";
     }
 - (NSInteger)minOptLevel
     {
@@ -141,6 +141,10 @@ static void rewriteUses(XTIRFunction* fn, XTIRValueId oldVid, XTIROperand* newOp
     XTIRFunction* callee = fnByName[sym.name];
     if (!callee || callee == caller)
         return nil; // unknown body / self
+    // A subscript check inlines only after bounds-elide, and then nothing else.
+    BOOL isCheck = [sym.name hasPrefix:@"_xt_check_"] && ![sym.name hasSuffix:@"_trap"];
+    if (isCheck != self.checksOnly)
+        return nil;
     if (callee.blocks.count == 0)
         return nil;
     // Single-block bodies splice in place; a multi-block body is inlined by
@@ -164,6 +168,13 @@ static void rewriteUses(XTIRFunction* fn, XTIRValueId oldVid, XTIROperand* newOp
             // A multi-block callee with a call could be (mutually) recursive —
             // inlining it would re-expose the call and loop forever (the digit-
             // recursive Stdio$_emitU32). Restrict multi-block inlining to leaves.
+            // …except the subscript checks' report, which never returns: a
+            // check (Checked.xc) inlines as a compare with a cold trap.
+            if (multi && bi.opcode == XTIROpCall && bi.operands.count >= 1 &&
+                bi.operands[0].kind == XTIROperandKindSym &&
+                [[mod symbolForId:bi.operands[0].symbolId].name hasPrefix:@"_xt_check_"] &&
+                [[mod symbolForId:bi.operands[0].symbolId].name hasSuffix:@"_trap"])
+                continue;
             if (multi)
                 switch (bi.opcode)
                     {

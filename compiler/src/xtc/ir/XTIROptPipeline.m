@@ -166,6 +166,10 @@
         // A checked build's subscript checks that cannot fail come out, before
         // the idioms and the vectoriser look at the loops.
         [p addPass:[[XTIROptBoundsElide alloc] init]];
+        // The checks it could not prove stay calls. Inlining them here (never
+        // before it: then no call is left for it to find, and array_map ran 51x
+        // slower) took the arm64 back end past 36 GB on xcc.xc, so it waits
+        // (the self-hosted pipeline says the same).
         // Recognise byte-fill loops as memset BEFORE unrolling (else the fill
         // loop gets unrolled instead of collapsed to a call).
         XTIROptIdiomMemset* memset = [[XTIROptIdiomMemset alloc] init];

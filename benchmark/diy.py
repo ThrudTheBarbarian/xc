@@ -59,6 +59,13 @@ def sh(cmd, **kw):
     return subprocess.run(cmd, capture_output=True, text=True, **kw)
 
 
+def no_checks(compiler):
+    """Benchmarks are built without subscript checks, the default from 0.86;
+    an older xcc has no such flag and needs none."""
+    r = sh([compiler, "--help"])
+    return ["-fno-bounds-check"] if "-fno-bounds-check" in (r.stdout + r.stderr) else []
+
+
 def xcc():
     """The shipped compiler: /opt/xcc/<version>/bin/xcc, else xcc on PATH."""
     with open(os.path.join(REPO, "compiler", "VERSION")) as fh:
@@ -230,7 +237,7 @@ def suite_par(compiler, work, repeats, want_gpu):
             print("  par/%s: no source, skipped" % name)
             continue
         exe = os.path.join(work, "par_" + name)
-        r = sh([compiler, "-O3", "-o", exe, source])
+        r = sh([compiler, "-O3"] + no_checks(compiler) + ["-o", exe, source])
         if r.returncode != 0:
             print("  par/%s: does not build, skipped: %s" % (name, (r.stderr or r.stdout).strip()[:80]))
             continue
@@ -279,7 +286,7 @@ def lang_compile(lang, compiler, name, opt, out):
     src = os.path.join(SRC, name + LANG_SOURCES[lang])
     af = arch_flag()
     if lang == "xc":
-        return [compiler, "-I", SRC, "-" + opt, "-o", out, src]
+        return [compiler] + no_checks(compiler) + ["-I", SRC, "-" + opt, "-o", out, src]
     if lang == "objc":
         if platform.system() == "Darwin":
             return ["clang", "-fobjc-arc", "-" + opt, "-mcpu=native", "-I", SRC,

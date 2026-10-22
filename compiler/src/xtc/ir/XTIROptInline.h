@@ -15,6 +15,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface XTIROptInline : NSObject <XTIROptPass>
 @property(nonatomic, strong, nullable) XTIROptTargetProfile* profile;
+// Only the subscript checks (Checked.xc's _xt_check_*), after bounds-elide;
+// every other run leaves them alone.
+@property(nonatomic) BOOL checksOnly;
 @end
 
 NS_ASSUME_NONNULL_END

@@ -1189,6 +1189,7 @@ class BeFact : Object
     Map* _raDefIn;   // reassociate: the current block's defining insn per value
     u32 _vecFnBytes; // the vectorised function's own width (a dispatch clone), else 0
     OptProfile* _profile;
+    bool _inlineChecks; // inline: only the subscript checks (after bounds-elide)
     bool _failed;
     String* _why;
     // Stop after the named pass — the per-pass oracle. Without it a pass can
@@ -1212,6 +1213,7 @@ class BeFact : Object
         _vecFnBytes = (u32)0;
         _level = (u32)0;
         _failed = false;
+        _inlineChecks = false;
         }
 
     void setStopAfter(String* n)
@@ -1527,6 +1529,10 @@ class BeFact : Object
             boundsElide(m);
         if (stopHere(String.withCString("bounds-elide")))
             return;
+        // The checks bounds-elide could not prove stay calls. Inlining them
+        // here (never before it: then no call is left for it to find, and
+        // array_map ran 51x slower) took the arm64 back end past 36 GB on
+        // xcc.xc, so it waits (private/compiler/TODO.md).
         if (_level >= (u32)2)
             idiomMemset(m);
         if (stopHere(String.withCString("idiom-memset")))
@@ -2680,6 +2686,15 @@ class BeFact : Object
         return true;
         }
 
+    bool callsTrap(IRInsn* n)
+        {
+        if (!n.op().equals(String.withCString("Call")) || n.ops().count() < (u32)1)
+            return false;
+        IROperand* c = (IROperand*)n.ops().get((u32)0);
+        return c.kind() == (u8)OPK_SYM && c.name() != 0 && c.name().hasPrefix(String.withCString("_xt_check_"))
+            && c.name().hasSuffix(String.withCString("_trap"));
+        }
+
     bool isCallOp(String* op)
         {
         return op.equals(String.withCString("Call")) || op.equals(String.withCString("CallBanked")) || op.equals(String.withCString("CallCloaked"));
@@ -3053,6 +3068,10 @@ class BeFact : Object
         IRFunc* callee = funcNamed(m, c.name());
         if (callee == 0 || callee == caller)
             return (IRFunc*)0;
+        // A subscript check inlines only after bounds-elide, and then nothing else.
+        bool isCheck = c.name().hasPrefix(String.withCString("_xt_check_")) && !c.name().hasSuffix(String.withCString("_trap"));
+        if (isCheck != _inlineChecks)
+            return (IRFunc*)0;
         if (callee.blocks().count() == (u32)0)
             return (IRFunc*)0;
         bool multi = callee.blocks().count() > (u32)1;
@@ -3087,6 +3106,10 @@ class BeFact : Object
                 // recursive, and inlining it would re-expose the call and grow
                 // for ever. Multi-block inlining is leaves only.
                 if (!multi)
+                    continue;
+                // …except the subscript checks' report, which never returns:
+                // a check (Checked.xc) inlines as a compare with a cold trap.
+                if (callsTrap((IRInsn*)bb.insns().get(i)))
                     continue;
                 if (isCallOp(op) || op.equals(String.withCString("VTblDispatch")) || op.equals(String.withCString("ProtoDispatch")))
                     return (IRFunc*)0;

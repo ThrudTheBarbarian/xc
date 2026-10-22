@@ -49,8 +49,8 @@ XCC = None
 
 def xcc_cmd():
     if XCC:
-        return [XCC, "-H", os.path.join(common.REPO, "compiler")]
-    return [common.xcc_path()] + common.xcc_home_args()
+        return [XCC, "-H", os.path.join(common.REPO, "compiler")] + common.bench_flags(XCC)
+    return [common.xcc_path()] + common.xcc_home_args() + common.bench_flags()
 
 
 def build(src, arch, out, extra=()):

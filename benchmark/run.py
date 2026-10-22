@@ -180,8 +180,25 @@ def xcc_home_args():
     return [] if xcc_path().startswith("/opt/xcc/") else ["-H", os.path.join(REPO, "compiler")]
 
 
+_NO_CHECKS = {}
+
+
+def bench_flags(xcc=None):
+    """Benchmarks are built without subscript checks (owner, 2026-10-22), so the
+    figures stay comparable with clang's and GCC's. An xcc from before the
+    checks became the default (0.86) has no such flag and needs none."""
+    x = xcc or xcc_path()
+    if x not in _NO_CHECKS:
+        try:
+            r = subprocess.run([x, "--help"], capture_output=True, text=True)
+            _NO_CHECKS[x] = "-fno-bounds-check" in (r.stdout + r.stderr)
+        except OSError:
+            _NO_CHECKS[x] = False
+    return ["-fno-bounds-check"] if _NO_CHECKS[x] else []
+
+
 def compile_xc(name, opt, out):
-    cmd = [xcc_path()] + xcc_home_args() + ["-I", SRC, "-" + opt,
+    cmd = [xcc_path()] + xcc_home_args() + bench_flags() + ["-I", SRC, "-" + opt,
            "-o", out, os.path.join(SRC, name + ".xc")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode == 0, (r.stderr or r.stdout)
@@ -191,7 +208,7 @@ def compile_xc_x86(name, opt, out):
     """Cross-build for x86-64 Linux, linked as the release links it by default:
     a static ELF up to 0.71, a glibc executable from 0.72. Either way the remote
     host needs no toolchain of its own."""
-    cmd = [xcc_path()] + xcc_home_args() + ["-I", SRC, "-A", "x86_64",
+    cmd = [xcc_path()] + xcc_home_args() + bench_flags() + ["-I", SRC, "-A", "x86_64",
            "-" + opt, "-o", out, os.path.join(SRC, name + ".xc")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode == 0, (r.stderr or r.stdout)

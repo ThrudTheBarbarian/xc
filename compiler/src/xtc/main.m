@@ -2219,7 +2219,7 @@ static int linkArm64Executable(const char *argv0, XTCommandLineOptions *opts,
         // built with different flags (frame pointers, -O0), and linked ONLY
         // here — an ordinary build carries none of it.
         NSString *chksrc = @"";
-        if (opts.boundsCheck) {
+        if (opts.boundsReport) {
             NSString *chk = [support stringByAppendingPathComponent:
                              @"arm64/runtime/rt-checked-macos.s"];
             chksrc = [NSString stringWithContentsOfFile:chk
@@ -4737,7 +4737,10 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // all, exactly as the -Wno- note above describes. Found that way: the flag
     // parsed, the driver passed it to its own in-process lowering, and
     // `xcc -fbounds-check` still produced zero check sites.
-    if (opts.boundsCheck) [feArgs addObject:@"-fbounds-check"];
+    // The mode, resolved here, said explicitly: the front end does not
+    // resolve a default of its own.
+    [feArgs addObject:!opts.boundsCheck ? @"-fno-bounds-check"
+                      : opts.boundsReport ? @"-fbounds-check" : @"-fbounds-check=light"];
     // -g: the LOWERING stamps source locations on instructions (front end), and
     // the back end turns them into line tables, so both processes are told.
     if (opts.debugInfo) [feArgs addObject:@"-g"];

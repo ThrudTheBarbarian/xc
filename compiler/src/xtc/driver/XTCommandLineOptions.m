@@ -1165,6 +1165,19 @@ static NSString* sExecutablePath = nil;
             // a flag that quietly does nothing is what made "verified with ARC
             // off" mean nothing during bug 025.
             opts->_boundsCheck = YES;
+            opts->_boundsReport = YES;
+            }
+        else if ([arg isEqualToString:@"-fbounds-check=light"])
+            {
+            // The checks without the debug build's frames and backtrace: a
+            // failure names the site and the bounds and stops.
+            opts->_boundsCheck = YES;
+            opts->_boundsReport = NO;
+            }
+        else if ([arg isEqualToString:@"-fno-bounds-check"])
+            {
+            opts->_boundsCheck = NO;
+            opts->_boundsReport = NO;
             }
         else if ([arg isEqualToString:@"-farc"] || [arg hasPrefix:@"-farc="])
             {
@@ -1467,7 +1480,7 @@ static NSString* sExecutablePath = nil;
     // anyway would produce a link failure at best and a checked build that
     // checks nothing at worst — and a flag that quietly does nothing is what
     // made "verified with ARC off" mean nothing during bug 025.
-    if (opts.boundsCheck)
+    if (opts.boundsReport)
         {
         BOOL nativeTarget = opts.useArm64Backend || opts.useArm9Backend || opts.useX86_64Backend || opts.useWin64Backend;
         if (!nativeTarget)
@@ -1489,6 +1502,7 @@ static NSString* sExecutablePath = nil;
             return nil;
             }
         }
+
 
     // A program built where a remote worker is named (XC_PAR_REMOTE in the
     // environment) carries every GPU kernel form, as -fpar-kernels=all: the
@@ -1564,18 +1578,16 @@ static NSString* sExecutablePath = nil;
             "                             whether `retain` and `release` statements\n"
             "                             are accepted (delete is unaffected).\n"
             "                             Accepts on|yes|1 or off|no|0. Default: on.\n"
-            "  -fbounds-check             Checked build: subscripts are range-checked,\n"
-            "                             and a failure reports the site, the real\n"
-            "                             bounds and a symbolised stack before it\n"
-            "                             aborts. An array with a declared length —\n"
-            "                             local, global, or sized by its own\n"
-            "                             initialiser — is checked against that\n"
-            "                             length; a heap allocation against its own\n"
-            "                             header. A bare pointer has neither, so it\n"
-            "                             is checked as a heap allocation and means\n"
-            "                             something only if that is what it points\n"
-            "                             at. Debug-time only; native (arm64) so far,\n"
-            "                             an error elsewhere. Default: off.\n"
+            "  -fbounds-check=light       Range-check subscripts (arm64 macOS, x86-64,\n"
+            "                             win64): an array with a declared length against\n"
+            "                             that length, a heap allocation against its\n"
+            "                             header; a check the compiler proves is dropped,\n"
+            "                             and a failure names the site and the bounds and\n"
+            "                             stops\n"
+            "  -fbounds-check             The debug build of the same checks: a failure\n"
+            "                             also prints a symbolised stack (arm64 macOS keeps\n"
+            "                             every frame for it)\n"
+            "  -fno-bounds-check          No subscript checks (the default)\n"
             "  -Fli, --fn-leaf-inline <n> Max leaf-function size to inline\n"
             "                             (default: 100, requires -O2+)\n"
             "  -Flu, --fn-loop-unroll <n> Auto-unroll counted for-loops with trip\n"
