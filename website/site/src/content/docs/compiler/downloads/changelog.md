@@ -3,6 +3,69 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.86 — safer programs, wider vectors
+
+0.86 hardens what a program does when it goes wrong, and vectorises loops it
+used to leave scalar. Stack canaries, reference counts that are atomic wherever
+two threads could meet and allocations that cannot wrap are on in every build;
+subscript checks are a build you ask for, now cheaper and on every desktop
+target.
+
+### New
+
+- **Stack canaries** on arm64, x86-64 and win64: a function with a local array,
+  an aggregate local or a taken address keeps a guard word next to them, and a
+  write that runs past them stops the program with "stack smashing detected".
+  A C program's `clang` half is built with its own stack protector where the
+  link has one (macOS, and Linux against glibc).
+- **`-fbounds-check` on x86-64 and win64**, and **`-fbounds-check=light`**
+  everywhere: the same checks with a short report (the site, the index and the
+  array's length) and no stack. A checked build drops the checks it can prove,
+  so proved loops run as they do unchecked, vectorised. A raw pointer cast to a
+  class is checked too: it must be null or a heap object of that class. See
+  [Checked builds](/compiler/usage/cli/#checked-builds).
+- **`make contrib`** builds the compiler from an installed release: the tree's
+  compiler built by the installed `xcc`, by itself, and by itself again, with
+  the last two compared byte for byte.
+
+### Faster
+
+- **Escape-time loops vectorise** across pixels (a Mandelbrot's inner
+  iteration), on arm64 and on x86-64 with SSE2, AVX2 and AVX-512.
+- **A loop around a counted inner loop vectorises** across its items, as an
+  n-body step does, with uniform and per-lane loads.
+- **Loops that start at a run-time value vectorise**; before, only a literal
+  start did.
+- AVX-512 code rotates lanes with `vprold`, selects bits with `vpternlogd`, and
+  reads a big block's constants from a table.
+- A vector value the registers cannot hold is recomputed or kept in its frame
+  slot instead of stopping the build.
+- `par` blocks: a global array of 64 KB or more is shared with the GPU as a
+  heap array is (used in place on Metal and integrated Vulkan, kept resident on
+  CUDA); on CUDA, results come back at the card's copy rate, and a card with
+  one copy engine no longer tiles a block whose arrays fit.
+
+### Changed
+
+- **Reference counts are atomic** wherever objects can meet another thread: on
+  arm64 with LSE always, and in a library or plugin built on its own.
+- **Remote `par` discovery is opt-in**: a program browses the network for
+  daemons only when `XC_PAR_POOL` names a pool (or `XC_PAR_REMOTE=mdns`), and
+  the results of integer kernels a daemon returns are spot-checked on the local
+  machine.
+- **An allocation whose size wraps stops the program** instead of returning a
+  block too small for its count.
+- Text printed as a `printf` format is warned about (`-Wprintf-format`).
+
+### Fixed
+
+- arm64 objects built with `-c` lost their load-time constructors when linked,
+  so a designable class built into an object never registered itself.
+- An unrolled or inlined copy of a vector compare became an equality compare
+  (AVX2 code that counted with `>` counted with `==`).
+- A checked build's leaf methods on arm64 kept frames only the stack report
+  needs; `-fbounds-check=light` has none.
+
 ## Version 0.85, re-issued — C programs
 
 0.85 is re-issued with a C front end and the fixes made since its first

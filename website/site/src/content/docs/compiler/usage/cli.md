@@ -205,7 +205,9 @@ is reported and ignored.
 | Flag | Effect |
 |------|--------|
 | `-flto` | Link-time optimisation: recompile the whole program from its IR as one module. |
-| `-fbounds-check` | Build with subscript bounds checking; see [Checked builds](#checked-builds). arm64, x86_64 and win64. |
+| `-fbounds-check` | Build with subscript bounds checking and a stack report on failure; see [Checked builds](#checked-builds). arm64, x86_64 and win64. |
+| `-fbounds-check=light` | The same checks with a short report and no stack, and so a smaller cost; see [Checked builds](#checked-builds). |
+| `-fno-bounds-check` | No subscript checks: the default. |
 | `--sign <identity.pem>` | Sign the output with a developer identity (iOS/macOS); pair with `--sign-entitlements <plist>`. See also the standalone `xcc-sign`. |
 | `--emit-apk` | On `-A android`, package a signed `.apk`. `--sign-key <path>` names the signing key. |
 | `--needed <soname>` | On `-A android`, add a `DT_NEEDED` entry naming `<soname>`. Repeatable. A payload that calls into a companion `.so` must name it. |
@@ -228,6 +230,10 @@ is reported and ignored.
 ## Checked builds
 
 `-fbounds-check` compiles a program that range-checks its subscripts.
+Subscripts are not checked otherwise: checking is a build you ask for.
+`-fbounds-check=light` makes the same checks with the short report shown below
+for `x86_64` and `win64` on every target, and keeps none of the frame records
+the arm64 stack report needs, so it costs less there.
 
 At `-O2` and above a check that cannot fail is left out: one whose index is
 proved inside the array by the guards around it and the arithmetic that makes
@@ -261,8 +267,9 @@ aborts:
     #2  xtc_start +16
 ```
 
-On `x86_64` and `win64` the report names the site, the index and the array's
-length, without the stack, and the program stops with status 134:
+On `x86_64` and `win64`, and under `-fbounds-check=light` everywhere, the
+report names the site, the index and the array's length, without the stack,
+and the program stops with status 134:
 
 ```
 === xcc: out-of-bounds access ===
