@@ -27,18 +27,24 @@
     {
     (void)outErrors;
     XTIROptTargetProfile* prof = self.profile ?: [XTIROptTargetProfile conservativeProfile];
-    if (!prof.vectorizesBitSelect && (self.pool || !prof.vectorizesWideBitSelect))
+    if (!prof.vectorizesBitSelect && !prof.vectorizesWideBitSelect)
         return YES;
     for (XTIRFunction* fn in mod.functions)
         {
+        if (![XTIROptVecCombine wantedFor:fn profile:prof])
+            continue;
         if (!self.pool)
             {
-            if ([XTIROptVecCombine wantedFor:fn profile:prof])
-                [self runOnFunction:fn];
+            [self runOnFunction:fn];
             continue;
             }
         for (NSUInteger b = 0; b < fn.blocks.count; b++)
-            [self poolBlock:fn.blocks[b] index:b function:fn module:mod];
+            {
+            if (prof.vectorizesBitSelect)
+                [self poolBlock:fn.blocks[b] index:b function:fn module:mod];
+            else
+                [self poolBlockWide:fn.blocks[b] index:b function:fn module:mod];
+            }
         }
     return YES;
     }
@@ -86,6 +92,123 @@ static XTIRInsn* _Nullable vcPoolable(XTIRInsn* n, NSDictionary<NSNumber*, XTIRI
 // LATE, after the last LICM, which would take each table load out of the loop
 // as invariant and hold all 64 of MD5's in the 14 vector registers; the table's
 // address is an AddrOf at the block's top.
+// vcPoolable for a 64-byte vector of 32-bit integer lanes.
+static XTIRInsn* _Nullable vcPoolableWide(XTIRInsn* n, NSDictionary<NSNumber*, XTIRInsn*>* defIn)
+    {
+    if (n.opcode != XTIROpVSplat || n.operands.count != 1 || !n.result)
+        return nil;
+    XTIROperand* o = n.operands[0];
+    if (o.kind != XTIROperandKindUse)
+        return nil;
+    XTIRInsn* d = defIn[@(o.valueId)];
+    if (!d || d.opcode != XTIROpConst || d.operands.count < 1 || d.operands[0].kind != XTIROperandKindImmI)
+        return nil;
+    XTIRType* t = n.result.type;
+    if (t.kind != XTIRTypeKindVec || t.vecBytes != 64 || !t.pointeeType
+        || !(t.pointeeType.kind == XTIRTypeKindI32 || t.pointeeType.kind == XTIRTypeKindU32))
+        return nil;
+    if (!d.result || !(d.result.type.kind == XTIRTypeKindI32 || d.result.type.kind == XTIRTypeKindU32))
+        return nil;
+    return d;
+    }
+
+// x86 at 64 bytes: the same table, one 4-byte entry per constant, each splat
+// reading its entry (folded into one vpbroadcastd from memory; the port explains).
+- (void)poolBlockWide:(XTIRBlock*)bb index:(NSUInteger)bi function:(XTIRFunction*)fn module:(XTIRModule*)mod
+    {
+    if (bb.instructions.count <= XTIR_VEC_SPLAT_BIG_BODY)
+        return;
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* defIn = [NSMutableDictionary dictionary];
+    NSUInteger cands = 0;
+    for (XTIRInsn* n in bb.instructions)
+        {
+        if (n.result)
+            defIn[@(n.result.valueId)] = n;
+        if (vcPoolableWide(n, defIn))
+            cands++;
+        }
+    if (cands < 2)
+        return;
+    NSString* nm = [NSString stringWithFormat:@"__xtv_kpool_%@_%lu", fn.name, (unsigned long)bi];
+    for (XTIRSymbol* s in mod.symbols)
+        if ([s.name isEqualToString:nm])
+            return;
+    XTIRType* u32p = [XTIRType ptrToType:[XTIRType u32Type] window:0];
+    XTIRValue* base = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                    type:u32p
+                                                 defSite:[[XTIRDefSite alloc] initWithBlock:bb insnIndex:0]];
+    [fn registerValue:base];
+    XTIRSymbolId symId = (XTIRSymbolId)mod.symbols.count;
+    XTIRInsn* ao = [[XTIRInsn alloc] initWithOpcode:XTIROpAddrOf
+                                             result:base
+                                           operands:@[ [XTIROperand symWithSymbolId:symId] ]
+                                             dbgLoc:nil];
+    NSMutableData* bytes = [NSMutableData data];
+    NSMutableDictionary<NSString*, NSNumber*>* idxOf = [NSMutableDictionary dictionary];
+    XTIRType* symTy = nil;
+    NSMutableArray<XTIRInsn*>* out = [NSMutableArray arrayWithObject:ao];
+    XTIRValueId mem = (XTIRValueId)(fn.paramTypes.count - 1);
+    for (XTIRInsn* n in bb.instructions)
+        {
+        XTIRInsn* kc = vcPoolableWide(n, defIn);
+        if (!kc)
+            {
+            [out addObject:n];
+            continue;
+            }
+        int64_t v = kc.operands[0].intValue & 0xFFFFFFFFLL;
+        NSString* key = [NSString stringWithFormat:@"%lld", (long long)v];
+        NSNumber* have = idxOf[key];
+        NSUInteger idx;
+        if (have)
+            idx = have.unsignedIntegerValue;
+        else
+            {
+            idx = idxOf.count;
+            idxOf[key] = @(idx);
+            for (uint32_t k = 0; k < 4; k++)
+                {
+                uint8_t byte = (uint8_t)((v >> (8 * k)) & 255); // LE
+                [bytes appendBytes:&byte length:1];
+                }
+            }
+        if (!symTy)
+            symTy = n.result.type;
+        XTIRValue* ea = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                     type:u32p
+                                                  defSite:[[XTIRDefSite alloc] initWithBlock:bb insnIndex:0]];
+        [fn registerValue:ea];
+        [out addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpElementAddr
+                                                 result:ea
+                                               operands:@[ [XTIROperand useWithValueId:base.valueId],
+                                                           [XTIROperand immIWithType:[XTIRType i64Type] value:(int64_t)idx] ]
+                                                 dbgLoc:n.dbgLoc]];
+        XTIRValue* sv = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                     type:kc.result.type
+                                                  defSite:[[XTIRDefSite alloc] initWithBlock:bb insnIndex:0]];
+        [fn registerValue:sv];
+        XTIRInsn* ld = [[XTIRInsn alloc] initWithOpcode:XTIROpLoad
+                                                 result:sv
+                                               operands:@[ [XTIROperand useWithValueId:ea.valueId],
+                                                           [XTIROperand useWithValueId:mem] ]
+                                                 dbgLoc:n.dbgLoc];
+        XTIRValue* mr = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                     type:[XTIRType memoryType]
+                                                  defSite:[[XTIRDefSite alloc] initWithBlock:bb insnIndex:0]];
+        [fn registerValue:mr];
+        ld.memoryResult = mr;
+        [out addObject:ld];
+        [n replaceOperands:@[ [XTIROperand useWithValueId:sv.valueId] ]];
+        [out addObject:n];
+        }
+    XTIRSymbol* sym = [XTIRSymbol dataGlobalWithName:nm type:symTy volatile:NO escapes:NO taskLocal:NO];
+    sym.initialBytes = bytes;
+    XTIRSymbolId got = [mod addSymbol:sym];
+    NSAssert(got == symId, @"kpool symbol id");
+    (void)got;
+    [bb.instructions setArray:out];
+    }
+
 - (void)poolBlock:(XTIRBlock*)bb index:(NSUInteger)bi function:(XTIRFunction*)fn module:(XTIRModule*)mod
     {
     if (bb.instructions.count <= XTIR_VEC_SPLAT_BIG_BODY)
