@@ -492,7 +492,7 @@ static BOOL chainTest(XTIRBlock* h)
             NSMutableArray<XTIROperand*>* ops = [NSMutableArray array];
             for (XTIROperand* o in i.operands)
                 [ops addObject:(o.kind == XTIROperandKindUse && bMap[@(o.valueId)]) ? bMap[@(o.valueId)] : o];
-            XTIRInsn* r = (i.opcode == XTIROpICmp || i.opcode == XTIROpFCmp)
+            XTIRInsn* r = (i.opcode == XTIROpICmp || i.opcode == XTIROpFCmp || i.opcode == XTIROpVICmp || i.opcode == XTIROpVFCmp)
                               ? [[XTIRInsn alloc] initWithOpcode:i.opcode result:v operands:ops predicate:i.predicate dbgLoc:i.dbgLoc]
                               : [[XTIRInsn alloc] initWithOpcode:i.opcode result:v operands:ops dbgLoc:i.dbgLoc];
             [([needR containsObject:@(i.result.valueId)] ? remat : lateRemat) addObject:r];
@@ -563,7 +563,7 @@ static BOOL chainTest(XTIRBlock* h)
                                                 defSite:[[XTIRDefSite alloc] initWithBlock:dst insnIndex:dst.instructions.count]];
                 [fn registerValue:nm];
                 }
-            XTIRInsn* cl = (insn.opcode == XTIROpICmp || insn.opcode == XTIROpFCmp)
+            XTIRInsn* cl = (insn.opcode == XTIROpICmp || insn.opcode == XTIROpFCmp || insn.opcode == XTIROpVICmp || insn.opcode == XTIROpVFCmp)
                                ? [[XTIRInsn alloc] initWithOpcode:insn.opcode result:nr operands:ops predicate:insn.predicate dbgLoc:insn.dbgLoc]
                                : [[XTIRInsn alloc] initWithOpcode:insn.opcode result:nr operands:ops dbgLoc:insn.dbgLoc];
             cl.memoryResult = nm;
@@ -1178,7 +1178,7 @@ static BOOL chainTest(XTIRBlock* h)
             [fn registerValue:nm];
             }
         XTIRInsn* clone;
-        if (insn.opcode == XTIROpICmp || insn.opcode == XTIROpFCmp)
+        if (insn.opcode == XTIROpICmp || insn.opcode == XTIROpFCmp || insn.opcode == XTIROpVICmp || insn.opcode == XTIROpVFCmp)
             clone = [[XTIRInsn alloc] initWithOpcode:insn.opcode
                                               result:nr
                                             operands:ops

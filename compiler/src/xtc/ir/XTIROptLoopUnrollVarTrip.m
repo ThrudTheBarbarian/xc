@@ -126,7 +126,7 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
                            NSArray<XTIROperand*>* ops, XTIRValue* _Nullable memResult)
     {
     XTIRInsn* r;
-    if (insn.opcode == XTIROpICmp || insn.opcode == XTIROpFCmp)
+    if (insn.opcode == XTIROpICmp || insn.opcode == XTIROpFCmp || insn.opcode == XTIROpVICmp || insn.opcode == XTIROpVFCmp)
         r = [[XTIRInsn alloc] initWithOpcode:insn.opcode
                                       result:result
                                     operands:ops

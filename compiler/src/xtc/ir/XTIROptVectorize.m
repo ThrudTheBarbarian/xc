@@ -1436,7 +1436,7 @@ static XTIRInsn* xtvCloneInsn(XTIRInsn* insn, XTIRBlock* into, NSUInteger idx,
                                         operands:ops
                                         callConv:insn.callConv
                                           dbgLoc:insn.dbgLoc];
-    else if (insn.opcode == XTIROpICmp || insn.opcode == XTIROpFCmp)
+    else if (insn.opcode == XTIROpICmp || insn.opcode == XTIROpFCmp || insn.opcode == XTIROpVICmp || insn.opcode == XTIROpVFCmp)
         clone = [[XTIRInsn alloc] initWithOpcode:insn.opcode
                                           result:res
                                         operands:ops
