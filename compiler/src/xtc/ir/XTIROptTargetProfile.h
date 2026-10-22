@@ -159,6 +159,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// The back end lowers VBsl (a bitwise select, `(m & a) | (~m & b)`) and
 /// VRotl (a lane rotate by a constant): bsl/bit/bif and shl+usra on arm64.
 - (BOOL)vectorizesBitSelect;
+/// The bit select and lane rotate at 64 bytes only (x86: vpternlogd, vprold;
+/// the AVX2 and SSE copies have neither as one instruction).
+- (BOOL)vectorizesWideBitSelect;
 /// The back end can build the lane-index vector <0,1,2,3>, so a reduction
 /// whose per-lane value is the INDUCTION VARIABLE rather than a loaded
 /// element can vectorise (`acc += f(i)` with no array in sight).

@@ -2315,6 +2315,72 @@ class X86_64
         store((u8)'a', n.res());
         }
 
+    // VRotl d, a, #c: a lane rotate left (32-bit lanes). vprold at 64 bytes;
+    // the shifts and an or below that (ymm0/ymm1, xmm0/xmm1 the scratch).
+    void emitVRotl(IRInsn* n)
+        {
+        if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
+            return;
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+        if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_IMMI)
+            return;
+        String* d = vecOf(n.res());
+        String* a = vecOf(o0.val());
+        if (d == (String*)0 || a == (String*)0 || fieldWidth(laneOf(n.res().ty())) != (u32)4)
+            return;
+        i64 c = o1.imm();
+        if (isZmm(d))
+            _out.appendFormat("\tvprold\t%s, %s, %lld\n", d.cString(), a.cString(), c);
+        else if (isYmm(d))
+            _out.appendFormat("\tvpslld\tymm0, %s, %lld\n\tvpsrld\tymm1, %s, %lld\n\tvpor\t%s, ymm0, ymm1\n",
+                              a.cString(), c, a.cString(), (i64)32 - c, d.cString());
+        else
+            _out.appendFormat("\tmovdqa\txmm0, %s\n\tpslld\txmm0, %lld\n\tmovdqa\txmm1, %s\n\tpsrld\txmm1, %lld\n\tpor\txmm0, xmm1\n\tmovdqa\t%s, xmm0\n",
+                              a.cString(), c, a.cString(), (i64)32 - c, d.cString());
+        }
+
+    // VBsl d, m, a, b: a where m is set, else b. At 64 bytes one vpternlogd,
+    // its immediate chosen by which operand d already is (it is overwritten):
+    // 0xCA with the mask first, 0xE2 with a, 0xB8 with b. Below that, and/andn/or.
+    void emitVBsl(IRInsn* n)
+        {
+        if (n.res() == (IRValue*)0 || n.ops().count() < (u32)3)
+            return;
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+        IROperand* o2 = (IROperand*)n.ops().get((u32)2);
+        if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_USE || o2.kind() != (u8)OPK_USE)
+            return;
+        String* d = vecOf(n.res());
+        String* m = vecOf(o0.val());
+        String* a = vecOf(o1.val());
+        String* b = vecOf(o2.val());
+        if (d == (String*)0 || m == (String*)0 || a == (String*)0 || b == (String*)0)
+            return;
+        if (isZmm(d))
+            {
+            if (d.equals(m))
+                _out.appendFormat("\tvpternlogd\t%s, %s, %s, 202\n", d.cString(), a.cString(), b.cString());
+            else if (d.equals(a))
+                _out.appendFormat("\tvpternlogd\t%s, %s, %s, 226\n", d.cString(), m.cString(), b.cString());
+            else if (d.equals(b))
+                _out.appendFormat("\tvpternlogd\t%s, %s, %s, 184\n", d.cString(), m.cString(), a.cString());
+            else
+                _out.appendFormat("\tvmovdqa64\t%s, %s\n\tvpternlogd\t%s, %s, %s, 202\n", d.cString(), m.cString(),
+                                  d.cString(), a.cString(), b.cString());
+            return;
+            }
+        if (isYmm(d))
+            {
+            _out.appendFormat("\tvpandn\tymm0, %s, %s\n\tvpand\tymm1, %s, %s\n\tvpor\t%s, ymm0, ymm1\n",
+                              m.cString(), b.cString(), m.cString(), a.cString(), d.cString());
+            return;
+            }
+        _out.appendFormat("\tmovdqa\txmm0, %s\n\tpandn\txmm0, %s\n\tmovdqa\txmm1, %s\n\tpand\txmm1, %s\n\tpor\txmm0, xmm1\n\tmovdqa\t%s, xmm0\n",
+                          m.cString(), b.cString(), m.cString(), a.cString(), d.cString());
+        }
+
     // A lane-wise float compare, to the 0/-1 mask VICmp gives: cmpps's
     // predicate immediate (0 eq, 1 lt, 2 le, 4 neq-unordered), with `>` and
     // `>=` as `<` and `<=` swapped round, since SSE has no ordered gt/ge. At
@@ -6601,6 +6667,16 @@ class X86_64
         if (op.equals(String.withCString("VFCmp")))
             {
             emitVFCmp(n);
+            return true;
+            }
+        if (op.equals(String.withCString("VRotl")))
+            {
+            emitVRotl(n);
+            return true;
+            }
+        if (op.equals(String.withCString("VBsl")))
+            {
+            emitVBsl(n);
             return true;
             }
         if (op.equals(String.withCString("VSIToFp")))

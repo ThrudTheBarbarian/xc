@@ -2176,6 +2176,7 @@ class X86Fixup
         evAdd(m, String.withCString("vpsrld"), (u32)7, (u32)1, (u32)1, (u32)0, (u32)$72, (u32)2);
         evAdd(m, String.withCString("vpsrad"), (u32)7, (u32)1, (u32)1, (u32)0, (u32)$72, (u32)4);
         evAdd(m, String.withCString("vpslld"), (u32)7, (u32)1, (u32)1, (u32)0, (u32)$72, (u32)6);
+        evAdd(m, String.withCString("vprold"), (u32)7, (u32)1, (u32)1, (u32)0, (u32)$72, (u32)1);
         evAdd(m, String.withCString("vpsrlq"), (u32)7, (u32)1, (u32)1, (u32)1, (u32)$73, (u32)2);
         evAdd(m, String.withCString("vpsraq"), (u32)7, (u32)1, (u32)1, (u32)1, (u32)$72, (u32)4);
         evAdd(m, String.withCString("vpsllq"), (u32)7, (u32)1, (u32)1, (u32)1, (u32)$73, (u32)6);

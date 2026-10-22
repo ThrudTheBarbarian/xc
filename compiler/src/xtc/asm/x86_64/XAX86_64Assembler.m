@@ -988,7 +988,7 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
                 @"vpmovm2d":@[@6,@2,@2,@0,@0x38,@0], @"vpmovm2q":@[@6,@2,@2,@1,@0x38,@0],
                 // 7: shifts by an immediate (N holds the /ext)
                 @"vpsrlw":@[@7,@1,@1,@0,@0x71,@2], @"vpsraw":@[@7,@1,@1,@0,@0x71,@4], @"vpsllw":@[@7,@1,@1,@0,@0x71,@6],
-                @"vpsrld":@[@7,@1,@1,@0,@0x72,@2], @"vpsrad":@[@7,@1,@1,@0,@0x72,@4], @"vpslld":@[@7,@1,@1,@0,@0x72,@6],
+                @"vpsrld":@[@7,@1,@1,@0,@0x72,@2], @"vpsrad":@[@7,@1,@1,@0,@0x72,@4], @"vpslld":@[@7,@1,@1,@0,@0x72,@6], @"vprold":@[@7,@1,@1,@0,@0x72,@1],
                 @"vpsrlq":@[@7,@1,@1,@1,@0x73,@2], @"vpsraq":@[@7,@1,@1,@1,@0x72,@4], @"vpsllq":@[@7,@1,@1,@1,@0x73,@6],
                 // 8: extracts
                 @"vextracti64x4":@[@8,@3,@1,@1,@0x3B,@32], @"vextractf64x4":@[@8,@3,@1,@1,@0x1B,@32],

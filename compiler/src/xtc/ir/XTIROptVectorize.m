@@ -946,7 +946,7 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
     XTIROptTargetProfile* prof = self.profile ?: [XTIROptTargetProfile conservativeProfile];
     // The bit selects and rotates first (where the back end has them), so the
     // interleave's register estimate sees the body the back end will.
-    if (prof.vectorizesBitSelect)
+    if ([XTIROptVecCombine wantedFor:fn profile:prof])
         [[[XTIROptVecCombine alloc] init] runOnFunction:fn];
     if (prof.vectorizesLoops && !getenv("XTVEC_NOUNROLL"))
         [self unrollVectorReductionsInFunction:fn];

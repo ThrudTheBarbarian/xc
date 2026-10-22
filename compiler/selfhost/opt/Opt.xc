@@ -69,6 +69,7 @@ class OptProfile
     bool _floatReduce;       // FLOAT reductions may reassociate (arm64/x86-64)
     bool _orderedFloat;      // an ordered float sum: lanes added in order (arm64)
     bool _bitSelect;         // back end lowers VBsl and VRotl (arm64)
+    bool _bitSelect512;      // ...at 64 bytes only (x86: vpternlogd, vprold)
     bool _reductionCollapse; // an invariant reduction nest collapses
     bool _memsetIdiom;       // a byte-fill loop becomes one MemSet
     bool _initGuardElim;     // a redundant static-init guard comes out
@@ -136,6 +137,7 @@ class OptProfile
         _floatReduce = false;
         _orderedFloat = false;
         _bitSelect = false;
+        _bitSelect512 = false;
         _reductionCollapse = false;
         _memsetIdiom = false;
         _initGuardElim = false;
@@ -232,6 +234,9 @@ class OptProfile
         // bsl/bit/bif and shl+usra on arm64. x86 would need AVX-512's
         // vpternlogd/vprold for a gain, and its AVX2 copies cannot use them.
         p._bitSelect = t.equals(String.withCString("arm64"));
+        // AVX-512 has both as one instruction (vpternlogd 0xCA, vprold); the
+        // AVX2 and SSE copies do not, so x86 combines 64-byte functions only.
+        p._bitSelect512 = t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
         p._memsetIdiom = !(t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")) || t.equals(String.withCString("atarist")));
         // The 6502 does NOT hoist: an eager init at entry costs it more than
         // the guard it saves.
@@ -379,6 +384,11 @@ class OptProfile
         {
         return _orderedFloat;
         }
+    bool bitSelect512(void)
+        {
+        return _bitSelect512;
+        }
+
     bool bitSelect(void)
         {
         return _bitSelect;
@@ -1564,7 +1574,7 @@ class BeFact : Object
             vectorize(m);
         if (stopHere(String.withCString("vectorize")))
             return;
-        if (_level >= (u32)2 && _profile.bitSelect())
+        if (_level >= (u32)2 && (_profile.bitSelect() || _profile.bitSelect512()))
             vecCombine(m);
         if (stopHere(String.withCString("vec-combine")))
             return;
@@ -3902,8 +3912,23 @@ class BeFact : Object
         {
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
-            vecCombineFn((IRFunc*)m.funcs().get(f));
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            if (vcWanted(fn))
+                vecCombineFn(fn);
             }
+        }
+
+    // Whether fn's vector code may use the bit select and the lane rotate:
+    // everywhere on arm64; on x86 in a function 64 bytes wide (an AVX-512
+    // dispatch copy, or the whole program under -mavx512).
+    bool vcWanted(IRFunc* fn)
+        {
+        if (_profile.bitSelect())
+            return true;
+        if (!_profile.bitSelect512())
+            return false;
+        u32 w = fn.simdLaneBytes() != (u32)0 ? fn.simdLaneBytes() : _profile.vectorLaneBytes();
+        return w == (u32)64;
         }
 
     // The constant tables, LATE: after the last LICM, which would take each
@@ -20233,7 +20258,7 @@ class BeFact : Object
             // …then break the serial accumulator dependency. The bit selects
             // and rotates first (where the back end has them), so the
             // interleave's register estimate sees the body the back end will.
-            if (_profile.bitSelect())
+            if (vcWanted(fn))
                 vecCombineFn(fn);
             vecUnrollReductions(fn);
             }

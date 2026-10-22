@@ -5536,6 +5536,58 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         [self store:'a' into:res slot:slot out:out];
         return;
         }
+    // %v <- a lane rotate left by a constant (32-bit lanes): vprold at 64
+    // bytes, shifts and an or below that (the port explains).
+    case XTIROpVRotl:
+        {
+        if (!res || ops.count < 2 || ops[0].kind != XTIROperandKindUse || ops[1].kind != XTIROperandKindImmI)
+            return;
+        NSString *d = sVec[@(res.valueId)], *a = sVec[@(ops[0].valueId)];
+        if (!d || !a || res.type.pointeeType.byteWidth != 4)
+            return;
+        long long c = ops[1].intValue;
+        if ([d hasPrefix:@"zmm"])
+            [out appendFormat:@"\tvprold\t%@, %@, %lld\n", d, a, c];
+        else if ([d hasPrefix:@"ymm"])
+            [out appendFormat:@"\tvpslld\tymm0, %@, %lld\n\tvpsrld\tymm1, %@, %lld\n\tvpor\t%@, ymm0, ymm1\n",
+                              a, c, a, 32 - c, d];
+        else
+            [out appendFormat:@"\tmovdqa\txmm0, %@\n\tpslld\txmm0, %lld\n\tmovdqa\txmm1, %@\n\tpsrld\txmm1, %lld\n\tpor\txmm0, xmm1\n\tmovdqa\t%@, xmm0\n",
+                              a, c, a, 32 - c, d];
+        return;
+        }
+    // %v <- m ? a : b, bitwise: one vpternlogd at 64 bytes, its immediate by
+    // which operand d already is; and/andn/or below that (the port explains).
+    case XTIROpVBsl:
+        {
+        if (!res || ops.count < 3 || ops[0].kind != XTIROperandKindUse || ops[1].kind != XTIROperandKindUse
+            || ops[2].kind != XTIROperandKindUse)
+            return;
+        NSString *d = sVec[@(res.valueId)], *m = sVec[@(ops[0].valueId)], *a = sVec[@(ops[1].valueId)],
+                 *b = sVec[@(ops[2].valueId)];
+        if (!d || !m || !a || !b)
+            return;
+        if ([d hasPrefix:@"zmm"])
+            {
+            if ([d isEqualToString:m])
+                [out appendFormat:@"\tvpternlogd\t%@, %@, %@, 202\n", d, a, b];
+            else if ([d isEqualToString:a])
+                [out appendFormat:@"\tvpternlogd\t%@, %@, %@, 226\n", d, m, b];
+            else if ([d isEqualToString:b])
+                [out appendFormat:@"\tvpternlogd\t%@, %@, %@, 184\n", d, m, a];
+            else
+                [out appendFormat:@"\tvmovdqa64\t%@, %@\n\tvpternlogd\t%@, %@, %@, 202\n", d, m, d, a, b];
+            return;
+            }
+        if ([d hasPrefix:@"ymm"])
+            {
+            [out appendFormat:@"\tvpandn\tymm0, %@, %@\n\tvpand\tymm1, %@, %@\n\tvpor\t%@, ymm0, ymm1\n", m, b, m, a, d];
+            return;
+            }
+        [out appendFormat:@"\tmovdqa\txmm0, %@\n\tpandn\txmm0, %@\n\tmovdqa\txmm1, %@\n\tpand\txmm1, %@\n\tpor\txmm0, xmm1\n\tmovdqa\t%@, xmm0\n",
+                          m, b, m, a, d];
+        return;
+        }
     // %v:Vec(I32) <- lane-wise float compare → 0/-1 mask: cmpps's predicate
     // immediate (0 eq, 1 lt, 2 le), `>` and `>=` as `<` and `<=` swapped
     // round, since SSE has no ordered gt/ge. At 64 bytes the compare writes an

@@ -27,19 +27,32 @@
     {
     (void)outErrors;
     XTIROptTargetProfile* prof = self.profile ?: [XTIROptTargetProfile conservativeProfile];
-    if (!prof.vectorizesBitSelect)
+    if (!prof.vectorizesBitSelect && (self.pool || !prof.vectorizesWideBitSelect))
         return YES;
     for (XTIRFunction* fn in mod.functions)
         {
         if (!self.pool)
             {
-            [self runOnFunction:fn];
+            if ([XTIROptVecCombine wantedFor:fn profile:prof])
+                [self runOnFunction:fn];
             continue;
             }
         for (NSUInteger b = 0; b < fn.blocks.count; b++)
             [self poolBlock:fn.blocks[b] index:b function:fn module:mod];
         }
     return YES;
+    }
+
+// Whether fn's vector code may use the bit select and the lane rotate:
+// everywhere on arm64; on x86 in a function 64 bytes wide (the port's vcWanted).
++ (BOOL)wantedFor:(XTIRFunction*)fn profile:(XTIROptTargetProfile*)prof
+    {
+    if (prof.vectorizesBitSelect)
+        return YES;
+    if (!prof.vectorizesWideBitSelect)
+        return NO;
+    NSUInteger w = fn.simdLaneBytes ? fn.simdLaneBytes : prof.vectorLaneBytes;
+    return w == 64;
     }
 
 static BOOL vcIntKind(XTIRTypeKind k)

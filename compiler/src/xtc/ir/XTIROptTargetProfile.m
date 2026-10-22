@@ -150,6 +150,10 @@
     {
     return [self vectorizesLaneShift];
     }
+- (BOOL)vectorizesWideBitSelect
+    {
+    return NO;
+    }
 - (BOOL)formsPointerInductionVars
     {
     return NO;
@@ -738,6 +742,11 @@
 @end
 
 @implementation XTIRX86_64TargetProfile
+// vpternlogd and vprold: one instruction each, at 64 bytes only.
+- (BOOL)vectorizesWideBitSelect
+    {
+    return YES;
+    }
 
 // Dedupe a repeated `AddrOf <pinned local>`. Held back from the base profile
 // because it produces WRONG ANSWERS on xt6502 (bug 221, cause undiagnosed) —

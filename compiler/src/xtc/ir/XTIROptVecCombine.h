@@ -23,6 +23,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) BOOL pool;
 /// The combine on one function (the vectoriser runs it before its unroller).
 - (void)runOnFunction:(XTIRFunction*)fn;
+/// Whether fn's vector code may use VBsl and VRotl: everywhere on arm64, and on
+/// x86 in a function 64 bytes wide.
++ (BOOL)wantedFor:(XTIRFunction*)fn profile:(XTIROptTargetProfile*)prof;
 @end
 
 NS_ASSUME_NONNULL_END
