@@ -12,3 +12,12 @@ static long long bench_now_us(void)
 #endif
     return (long long)ts.tv_sec * 1000000 + ts.tv_nsec / 1000;
 }
+/* The timed work must stay between the two clock reads.  It does the same
+   thing each repeat, so a compiler may compute it once outside them (GCC -O3
+   does).  bench_zero() is a 0 it cannot know, read where the timed loop
+   starts, so the work cannot begin before the first read; bench_keep() stores
+   the result where it cannot see, before the second, so it cannot end after. */
+static volatile unsigned bench_zero_v;
+static volatile unsigned long long bench_keep_v;
+#define bench_zero() (bench_zero_v)
+#define bench_keep(x) (bench_keep_v = (unsigned long long)(x))

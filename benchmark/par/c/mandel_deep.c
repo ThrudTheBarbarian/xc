@@ -15,7 +15,7 @@ int main(void)
     for (unsigned rep = 0; rep < 8; rep++) {
         total = 0;
         long long t0 = bench_now_us();
-        for (unsigned i = 0; i < SIZE; i++) {
+        for (unsigned i = bench_zero(); i < SIZE; i++) {
             float cx = (float)(i % W) * (1.5f / (float)W) - 1.5f;
             float cy = (float)(i / W) * (1.5f / (float)W) - 0.75f;
             float x = 0.0f, y = 0.0f;
@@ -29,6 +29,7 @@ int main(void)
             counts[i] = k;
             total = total + k;
         }
+        bench_keep(total);
         long long t1 = bench_now_us();
         if (rep == 0)
             first = t1 - t0;

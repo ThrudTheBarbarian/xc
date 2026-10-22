@@ -22,7 +22,7 @@ int main(void)
     for (unsigned rep = 0; rep < 8; rep++) {
         right = 0;
         long long t0 = bench_now_us();
-        for (unsigned i = 0; i < N; i++) {
+        for (unsigned i = bench_zero(); i < N; i++) {
             float ax = 0.0f;
             for (unsigned j = 0; j < N; j++) {
                 float dx = px[j] - px[i];
@@ -34,6 +34,7 @@ int main(void)
             if (ax > 0.0f)
                 right = right + 1;
         }
+        bench_keep(right);
         long long t1 = bench_now_us();
         if (rep == 0)
             first = t1 - t0;

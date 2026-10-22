@@ -12,7 +12,7 @@ int main(void)
     for (unsigned rep = 0; rep < 8; rep++) {
         total = 0;
         long long t0 = bench_now_us();
-        for (unsigned i = 0; i < SIZE; i++) {
+        for (unsigned i = bench_zero(); i < SIZE; i++) {
             float cx = (float)(i % W) * (3.0f / 2048.0f) - 2.0f;
             float cy = (float)(i / W) * (3.0f / 2048.0f) - 1.5f;
             float x = 0.0f, y = 0.0f;
@@ -25,6 +25,7 @@ int main(void)
             }
             total = total + k;
         }
+        bench_keep(total);
         long long t1 = bench_now_us();
         if (rep == 0)
             first = t1 - t0;

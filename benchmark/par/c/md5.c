@@ -87,7 +87,7 @@ int main(void)
     for (unsigned rep = 0; rep < 8; rep++) {
         total = 0;
         long long t0 = bench_now_us();
-        for (unsigned i = 0; i < BATCH; i++) {
+        for (unsigned i = bench_zero(); i < BATCH; i++) {
             unsigned m0 = i, m1 = TAG, m2 = 0x80, m3 = 0, m4 = 0, m5 = 0;
             unsigned m6 = 0, m7 = 0, m8 = 0, m9 = 0, m10 = 0, m11 = 0;
             unsigned m12 = 0, m13 = 0, m14 = 64, m15 = 0;
@@ -96,6 +96,7 @@ int main(void)
             total = total + (a + 0x67452301) + (b + 0xefcdab89)
                   + (c + 0x98badcfe) + (d + 0x10325476);
         }
+        bench_keep(total);
         long long t1 = bench_now_us();
         if (rep == 0)
             first = t1 - t0;

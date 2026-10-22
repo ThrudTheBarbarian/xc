@@ -165,7 +165,7 @@ int main(void)
     for (unsigned rep = 0; rep < 8; rep++) {
         total = 0;
         long long t0 = bench_now_us();
-        for (unsigned p = 0; p < OUTER; p++) {
+        for (unsigned p = bench_zero(); p < OUTER; p++) {
             unsigned m0 = p, m1 = P1, m2 = P2, m3 = P3, m4 = P4, m5 = P5, m6 = P6, m7 = P7;
             unsigned m8 = P8, m9 = P9, m10 = P10, m11 = P11;
             unsigned m13 = 0x80, m14 = 416, m15 = 0;
@@ -179,6 +179,7 @@ int main(void)
                       + (c + 0x98badcfe) + (d + 0x10325476);
             }
         }
+        bench_keep(total);
         long long t1 = bench_now_us();
         if (rep == 0) first = t1 - t0;
         if (rep == 0 || t1 - t0 < best) best = t1 - t0;

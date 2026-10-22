@@ -18,11 +18,12 @@ int main(void)
     for (unsigned rep = 0; rep < 8; rep++) {
         total = 0;
         long long t0 = bench_now_us();
-        for (unsigned i = 0; i < SIZE; i++) {
+        for (unsigned i = bench_zero(); i < SIZE; i++) {
             unsigned v = 3u * xs[i] + ys[i];
             ys[i] = v;
             total = total + v;
         }
+        bench_keep(total);
         long long t1 = bench_now_us();
         if (rep == 0)
             first = t1 - t0;

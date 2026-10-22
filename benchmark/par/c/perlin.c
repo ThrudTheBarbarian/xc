@@ -36,7 +36,7 @@ int main(void)
     for (unsigned rep = 0; rep < 8; rep++) {
         total = 0;
         long long t0 = bench_now_us();
-        for (unsigned i = 0; i < SIZE; i++) {
+        for (unsigned i = bench_zero(); i < SIZE; i++) {
             float x = (float)(i % 2048) / 256.0f;
             float y = (float)(i / 2048) / 256.0f;
             float sum = 0.0f, amp = 1.0f, norm = 0.0f;
@@ -70,6 +70,7 @@ int main(void)
             img[i] = (unsigned char)p;
             total = total + p;
         }
+        bench_keep(total);
         long long t1 = bench_now_us();
         if (rep == 0)
             first = t1 - t0;
