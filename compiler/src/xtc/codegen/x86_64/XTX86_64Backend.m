@@ -50,6 +50,11 @@ static NSDictionary<NSNumber*, XTIRInsn*>* sSelCmp = nil; // Select id -> its IC
 // calls, so no prologue save is needed; xmm0/xmm1 stay emission scratch).
 // Absent ⇒ the function has no vectors.
 static NSDictionary<NSNumber*, NSString*>* sVec = nil;
+// Vector values the allocator gave no register (it ran out): a constant splat
+// made again where it is read (value -> the constant), or a value spilled to
+// its frame slot; both read through xmm15..xmm13 and written through xmm12.
+static NSMutableDictionary<NSNumber*, XTIROperand*>* sVRemat = nil;
+static NSMutableSet<NSNumber*>* sVSpill = nil;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // x86-64 System V AMD64 backend. Intel syntax (`.intel_syntax noprefix`), so the
@@ -2143,6 +2148,140 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
 // reuse over live intervals; a vector phi coalesces its incoming values onto the
 // phi's own register (an in-place accumulator needs no back-edge copy). Ported
 // from the arm64 vector allocator; pool is xmm2..xmm15.
+// The classes that may be given up (one member, no phi) and, of those, the
+// constant splats (the port's vecRematCandidates).
++ (void)vecRematCandidates:(XTIRFunction*)fn
+                   vecVals:(id<NSFastEnumeration>)vecVals
+                   classOf:(XTIRValueId (^)(XTIRValueId))classOf
+                  phiClass:(NSSet<NSNumber*>*)phiClass
+                   rematOf:(NSMutableDictionary<NSNumber*, XTIROperand*>*)rematOf
+                 spillable:(NSMutableSet<NSNumber*>*)spillable
+    {
+    NSMutableSet<NSNumber*>* members = [NSMutableSet set];
+    for (NSNumber* v in vecVals)
+        if (classOf(v.unsignedIntegerValue) != v.unsignedIntegerValue)
+            [members addObject:@(classOf(v.unsignedIntegerValue))];
+    for (NSNumber* v in vecVals)
+        if (classOf(v.unsignedIntegerValue) == v.unsignedIntegerValue && ![members containsObject:v]
+            && ![phiClass containsObject:v])
+            [spillable addObject:v];
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* consts = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIRInsn* n in bb.instructions)
+            if (n.opcode == XTIROpConst && n.result && n.operands.count >= 1
+                && (n.operands[0].kind == XTIROperandKindImmI || n.operands[0].kind == XTIROperandKindImmF))
+                consts[@(n.result.valueId)] = n;
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIRInsn* n in bb.instructions)
+            {
+            if (n.opcode != XTIROpVSplat || !n.result || n.operands.count < 1)
+                continue;
+            NSNumber* v = @(n.result.valueId);
+            if (classOf(v.unsignedIntegerValue) != v.unsignedIntegerValue || [members containsObject:v]
+                || [phiClass containsObject:v])
+                continue;
+            XTIROperand* o = n.operands[0];
+            XTIROperand* k = nil;
+            if (o.kind == XTIROperandKindImmI || o.kind == XTIROperandKindImmF)
+                k = o;
+            else if (o.kind == XTIROperandKindUse && consts[@(o.valueId)])
+                k = consts[@(o.valueId)].operands[0];
+            if (k)
+                rematOf[v] = k;
+            }
+    }
+
+// xmmN, ymmN or zmmN for the width of value vid.
+static NSString* vecScratchName(XTIRFunction* fn, XTIRValueId vid, unsigned r)
+    {
+    XTIRValue* vv = fn.values[@(vid)];
+    BOOL wide = vv && vv.type.kind == XTIRTypeKindVec && vv.type.byteWidth == 32;
+    BOOL wide512 = vv && vv.type.kind == XTIRTypeKindVec && vv.type.byteWidth == 64;
+    return [NSString stringWithFormat:@"%@%u", wide512 ? @"zmm" : wide ? @"ymm" : @"xmm", r];
+    }
+
+// A spilled vector between its frame slot and register `reg`.
+static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL load,
+                        NSDictionary<NSNumber*, NSNumber*>* slot, NSMutableString* out)
+    {
+    unsigned long off = slot[@(vid)].unsignedLongValue;
+    XTIRValue* vv = fn.values[@(vid)];
+    NSUInteger w = vv ? vv.type.byteWidth : 16;
+    if (w == 64)
+        {
+        if (load)
+            [out appendFormat:@"\tvmovdqu32\t%@, zmmword ptr [rbp-%lu]\n", reg, off];
+        else
+            [out appendFormat:@"\tvmovdqu32\tzmmword ptr [rbp-%lu], %@\n", off, reg];
+        }
+    else if (w == 32)
+        {
+        if (load)
+            [out appendFormat:@"\tvmovdqu\t%@, ymmword ptr [rbp-%lu]\n", reg, off];
+        else
+            [out appendFormat:@"\tvmovdqu\tymmword ptr [rbp-%lu], %@\n", off, reg];
+        }
+    else if (load)
+        [out appendFormat:@"\tmovdqu\t%@, xmmword ptr [rbp-%lu]\n", reg, off];
+    else
+        [out appendFormat:@"\tmovdqu\txmmword ptr [rbp-%lu], %@\n", off, reg];
+    }
+
+// emitInsn, with the given-up vector values made, reloaded and stored around it
+// (the port's emitInsn).
++ (void)emitInsnSpilling:(XTIRInsn*)in fn:(XTIRFunction*)fn module:(XTIRModule*)mod
+                    slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+                     out:(NSMutableString*)out
+    {
+    if (sVRemat.count == 0 && sVSpill.count == 0)
+        {
+        [self emitInsn:in fn:fn module:mod slot:slot out:out];
+        return;
+        }
+    if (in.result && sVRemat[@(in.result.valueId)])
+        return;
+    NSMutableDictionary<NSNumber*, NSString*>* vec = (NSMutableDictionary<NSNumber*, NSString*>*)sVec;
+    NSMutableArray<NSNumber*>* made = [NSMutableArray array];
+    unsigned scratch = 15;
+    for (XTIROperand* o in in.operands)
+        {
+        if (o.kind != XTIROperandKindUse || [made containsObject:@(o.valueId)])
+            continue;
+        BOOL re = sVRemat[@(o.valueId)] != nil;
+        if (!re && !([sVSpill containsObject:@(o.valueId)] && !sFold[@(o.valueId)]))
+            continue;
+        NSString* name = vecScratchName(fn, o.valueId, scratch);
+        scratch--;
+        vec[@(o.valueId)] = name;
+        if (re)
+            {
+            XTIRInsn* sp = [[XTIRInsn alloc] initWithOpcode:XTIROpVSplat
+                                                     result:fn.values[@(o.valueId)]
+                                                   operands:@[ sVRemat[@(o.valueId)] ]
+                                                     dbgLoc:nil];
+            [self emitInsn:sp fn:fn module:mod slot:slot out:out];
+            }
+        else
+            vecSlotMove(fn, o.valueId, name, YES, slot, out);
+        [made addObject:@(o.valueId)];
+        }
+    BOOL store = in.result && [sVSpill containsObject:@(in.result.valueId)] && !sFold[@(in.result.valueId)];
+    NSString* rn = nil;
+    if (store)
+        {
+        rn = vecScratchName(fn, in.result.valueId, 12);
+        vec[@(in.result.valueId)] = rn;
+        }
+    [self emitInsn:in fn:fn module:mod slot:slot out:out];
+    if (store)
+        {
+        vecSlotMove(fn, in.result.valueId, rn, NO, slot, out);
+        [vec removeObjectForKey:@(in.result.valueId)];
+        }
+    for (NSNumber* v in made)
+        [vec removeObjectForKey:v];
+    }
+
 + (NSDictionary<NSNumber*, NSString*>*)assignVectorRegsFor:(XTIRFunction*)fn
     {
     NSMutableSet<NSNumber*>* vecVals = [NSMutableSet set];
@@ -2252,9 +2391,6 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
     // the old `?: @(15)` fallback silently reused a live register, which is
     // how vectorize_outer_iv_addend computed src[i]² instead of src[i]*3
     // (pmulld xmm15, xmm15 — the splat-of-3 clobbered by a VLoad) (#1198).
-    NSMutableArray<NSNumber*>* freePool = [NSMutableArray array];
-    for (NSNumber* r in @[ @6, @7, @2, @3, @4, @5, @8, @9, @10, @11, @12, @13, @14, @15 ])
-        [freePool addObject:r];
     // Which instruction defines each class, and whether that class is a phi
     // result — for the two-address coalescing below.
     NSMutableDictionary<NSNumber*, XTIRInsn*>* defOfClass = [NSMutableDictionary dictionary];
@@ -2269,70 +2405,143 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                 defOfClass[@(classOf(in.result.valueId))] = in;
         }
 
-    NSMutableArray<NSNumber*>* active = [NSMutableArray array];
-    NSMutableDictionary<NSNumber*, NSNumber*>* regOfClass = [NSMutableDictionary dictionary];
-    for (NSNumber* cls in classes)
+    // Out of registers: again with xmm12-xmm15 held back as scratch, and
+    // whenever the pool is empty the class that ends last given up (the port's
+    // vecScanX): never a phi class, whose edges copy registers.
+    sVRemat = [NSMutableDictionary dictionary];
+    sVSpill = [NSMutableSet set];
+    NSMutableDictionary<NSNumber*, XTIROperand*>* rematOf = [NSMutableDictionary dictionary];
+    NSMutableSet<NSNumber*>* spillable = [NSMutableSet set];
+    NSMutableDictionary<NSNumber*, NSNumber*>* regOfClassFinal = nil;
+    for (int attempt = 0; attempt < 2 && !regOfClassFinal; attempt++)
         {
-        NSInteger start = lo[cls].integerValue;
-        NSMutableArray<NSNumber*>* stillActive = [NSMutableArray array];
-        for (NSNumber* a in active)
+        BOOL remat = attempt == 1;
+        if (remat)
             {
-            if (hi[a].integerValue < start)
-                [freePool addObject:regOfClass[a]];
-            else
-                [stillActive addObject:a];
+            sVRemat = [NSMutableDictionary dictionary];
+            sVSpill = [NSMutableSet set];
+            [self vecRematCandidates:fn vecVals:vecVals classOf:classOf phiClass:phiClass rematOf:rematOf
+                           spillable:spillable];
             }
-        [active setArray:stillActive];
-        if (freePool.count == 0)
+        NSMutableArray<NSNumber*>* freePool = [NSMutableArray array];
+        for (NSNumber* r in @[ @6, @7, @2, @3, @4, @5, @8, @9, @10, @11 ])
+            [freePool addObject:r];
+        if (!remat)
+            for (NSNumber* r in @[ @12, @13, @14, @15 ])
+                [freePool addObject:r];
+        NSMutableArray<NSNumber*>* active = [NSMutableArray array];
+        NSMutableDictionary<NSNumber*, NSNumber*>* regOfClass = [NSMutableDictionary dictionary];
+        BOOL failed = NO;
+        for (NSNumber* cls in classes)
             {
-            fprintf(stderr, "xcc-cg-x86_64: error: vector register pressure exceeded "
-                            "the %d-register SSE pool in '%s'\n",
-                    14,
-                    fn.name.UTF8String);
-            exit(1);
-            }
-        // TWO-ADDRESS COALESCING. x86 vector ops are destructive — `paddd d, b`
-        // writes d — so when the result gets a different register from a source
-        // that DIES at this instruction, the emitter has to copy:
-        //
-        //     movdqu xmm14, [r8]        arm64, three-address, needs no copy:
-        //     movdqa xmm13, xmm14   <--   ldr q30, [x11]
-        //     paddd  xmm13, xmm15         add v29.4s, v30.4s, v31.4s
-        //     movdqu [rsi], xmm13         str q29, [x10]
-        //
-        // Linear scan never reuses the source because it frees a register only
-        // when `hi < start`, and here the source dies exactly AT the position
-        // the result is born. For a two-address op that is precisely the case
-        // where reuse is correct: the instruction reads the source and writes
-        // the destination, which is what the machine instruction does anyway.
-        //
-        // Phi classes are excluded — a vector phi needs a register of its own,
-        // and the incoming values are already coalesced onto it above.
-        NSNumber* reg = nil;
-        XTIRInsn* def = defOfClass[cls];
-        if (def && ![phiClass containsObject:cls] && def.operands.count >= 1 &&
-            def.opcode != XTIROpVLoad && def.operands[0].kind == XTIROperandKindUse)
-            {
-            NSNumber* acls = @(classOf(def.operands[0].valueId));
-            if (![acls isEqual:cls] && ![phiClass containsObject:acls] &&
-                regOfClass[acls] && hi[acls] && hi[acls].integerValue == start &&
-                [active containsObject:acls])
+            NSInteger start = lo[cls].integerValue;
+            NSMutableArray<NSNumber*>* stillActive = [NSMutableArray array];
+            for (NSNumber* a in active)
                 {
-                reg = regOfClass[acls];
-                [active removeObject:acls]; // its interval ends here
+                if (hi[a].integerValue < start)
+                    [freePool addObject:regOfClass[a]];
+                else
+                    [stillActive addObject:a];
                 }
+            [active setArray:stillActive];
+            if (freePool.count == 0)
+                {
+                if (!remat)
+                    {
+                    failed = YES;
+                    break;
+                    }
+                // The candidate that ends last (then starts last) among the live
+                // and this one; a constant made again where read, else spilled.
+                NSNumber* victim = nil;
+                NSInteger far = -1, farLo = -1;
+                if ([spillable containsObject:cls])
+                    {
+                    victim = cls;
+                    far = hi[cls].integerValue;
+                    farLo = lo[cls].integerValue;
+                    }
+                for (NSNumber* av in active)
+                    {
+                    if (![spillable containsObject:av])
+                        continue;
+                    NSInteger h = hi[av].integerValue, l = lo[av].integerValue;
+                    if (h > far || (h == far && l > farLo))
+                        {
+                        far = h;
+                        farLo = l;
+                        victim = av;
+                        }
+                    }
+                if (!victim)
+                    {
+                    failed = YES;
+                    break;
+                    }
+                if (rematOf[victim])
+                    sVRemat[victim] = rematOf[victim];
+                else
+                    [sVSpill addObject:victim];
+                if ([victim isEqual:cls])
+                    continue;
+                [freePool addObject:regOfClass[victim]];
+                [regOfClass removeObjectForKey:victim];
+                [active removeObject:victim];
+                }
+            // TWO-ADDRESS COALESCING. x86 vector ops are destructive — `paddd d, b`
+            // writes d — so when the result gets a different register from a source
+            // that DIES at this instruction, the emitter has to copy:
+            //
+            //     movdqu xmm14, [r8]        arm64, three-address, needs no copy:
+            //     movdqa xmm13, xmm14   <--   ldr q30, [x11]
+            //     paddd  xmm13, xmm15         add v29.4s, v30.4s, v31.4s
+            //     movdqu [rsi], xmm13         str q29, [x10]
+            //
+            // Linear scan never reuses the source because it frees a register only
+            // when `hi < start`, and here the source dies exactly AT the position
+            // the result is born. For a two-address op that is precisely the case
+            // where reuse is correct: the instruction reads the source and writes
+            // the destination, which is what the machine instruction does anyway.
+            //
+            // Phi classes are excluded — a vector phi needs a register of its own,
+            // and the incoming values are already coalesced onto it above.
+            NSNumber* reg = nil;
+            XTIRInsn* def = defOfClass[cls];
+            if (def && ![phiClass containsObject:cls] && def.operands.count >= 1 &&
+                def.opcode != XTIROpVLoad && def.operands[0].kind == XTIROperandKindUse)
+                {
+                NSNumber* acls = @(classOf(def.operands[0].valueId));
+                if (![acls isEqual:cls] && ![phiClass containsObject:acls] &&
+                    regOfClass[acls] && hi[acls] && hi[acls].integerValue == start &&
+                    [active containsObject:acls])
+                    {
+                    reg = regOfClass[acls];
+                    [active removeObject:acls]; // its interval ends here
+                    }
+                }
+            if (!reg)
+                {
+                reg = freePool.lastObject;
+                [freePool removeLastObject];
+                }
+            regOfClass[cls] = reg;
+            [active addObject:cls];
+            [active sortUsingComparator:^NSComparisonResult(NSNumber* a, NSNumber* b) {
+              return [hi[a] compare:hi[b]];
+            }];
             }
-        if (!reg)
-            {
-            reg = freePool.lastObject;
-            [freePool removeLastObject];
-            }
-        regOfClass[cls] = reg;
-        [active addObject:cls];
-        [active sortUsingComparator:^NSComparisonResult(NSNumber* a, NSNumber* b) {
-          return [hi[a] compare:hi[b]];
-        }];
+        if (!failed)
+            regOfClassFinal = regOfClass;
         }
+    if (!regOfClassFinal)
+        {
+        fprintf(stderr, "xcc-cg-x86_64: error: vector register pressure exceeded "
+                        "the %d-register SSE pool in '%s'\n",
+                14,
+                fn.name.UTF8String);
+        exit(1);
+        }
+    NSMutableDictionary<NSNumber*, NSNumber*>* regOfClass = regOfClassFinal;
     NSMutableDictionary<NSNumber*, NSString*>* out = [NSMutableDictionary dictionary];
     for (NSNumber* v in vecVals)
         {
@@ -2342,8 +2551,9 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         // A 64-byte vector (-mavx512) is the same register again as zmm.
         BOOL wide = vv && vv.type.kind == XTIRTypeKindVec && vv.type.byteWidth == 32;
         BOOL wide512 = vv && vv.type.kind == XTIRTypeKindVec && vv.type.byteWidth == 64;
-        out[v] = [NSString stringWithFormat:@"%@%@", wide512 ? @"zmm" : wide ? @"ymm" : @"xmm",
-                                            regOfClass[@(classOf(v.unsignedIntegerValue))]];
+        NSNumber* r = regOfClass[@(classOf(v.unsignedIntegerValue))];
+        if (r)
+            out[v] = [NSString stringWithFormat:@"%@%@", wide512 ? @"zmm" : wide ? @"ymm" : @"xmm", r];
         }
     return out;
     }
@@ -2677,7 +2887,9 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         for (NSUInteger r = 6; r <= 15; r++)
             {
             NSString* want = [NSString stringWithFormat:@"%lu", (unsigned long)r];
-            BOOL used = NO;
+            // The remat and spill scratch, named only while an instruction is
+            // emitted: in use whenever anything was given up.
+            BOOL used = r >= 12 && (sVRemat.count > 0 || sVSpill.count > 0);
             for (NSString* g in regs)
                 if (g.length >= 4 && ([g hasPrefix:@"xmm"] || [g hasPrefix:@"ymm"] || [g hasPrefix:@"zmm"])
                     && [[g substringFromIndex:3] isEqualToString:want])
@@ -2995,7 +3207,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         for (XTIRInsn* in in bb.instructions)
             {
             loc(in);
-            [self emitInsn:in fn:fn module:mod slot:slot out:out];
+            [self emitInsnSpilling:in fn:fn module:mod slot:slot out:out];
             }
         if (bb.terminator)
             loc(bb.terminator);

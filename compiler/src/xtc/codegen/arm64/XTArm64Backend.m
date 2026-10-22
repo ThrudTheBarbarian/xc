@@ -123,6 +123,9 @@ static NSUInteger sArm64CanaryN = 0;
 // single straight-line vectorized loop body (no cross-iteration/-call vector
 // liveness), so caller-saved v0..v15 suffice and need no spill.
 @property (nonatomic) NSMutableDictionary<NSNumber *, NSString *> *vecReg;
+// Constant splats the vector allocator gave no register: value -> the constant,
+// made again into v31, v30, v29 at each instruction that reads it.
+@property (nonatomic) NSMutableDictionary<NSNumber *, XTIROperand *> *vRemat;
 // Lane groups: four broadcasts of adjacent 32-bit loads (a[k..k+3]) become one
 // `ldr q` and by-lane multiplies. Each member broadcast → its lane and its
 // group's leader (the first in the block); each leader → @[base operand,
@@ -4762,6 +4765,44 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         inBlock:(XTIRBlock *)block
             ctx:(XTArm64FnCtx *)ctx
 {
+    if (ctx.vRemat.count == 0) {
+        [self emitInsn1:insn inBlock:block ctx:ctx];
+        return;
+    }
+    // What is never emitted on its own is skipped first, as emitInsn1 does.
+    if (insn.result && ([ctx.fusedAway containsObject:@(insn.result.valueId)]
+                        || [ctx.laneSkip containsObject:@(insn.result.valueId)]
+                        || [ctx.foldedAddr containsObject:@(insn.result.valueId)]
+                        || [ctx.fusedCmps containsObject:@(insn.result.valueId)]))
+        return;
+    // A constant splat the vector allocator gave no register is made where it
+    // is read, not here (the port's emitInsn).
+    if (insn.result && ctx.vRemat[@(insn.result.valueId)])
+        return;
+    NSMutableArray<NSNumber *> *made = [NSMutableArray array];
+    NSMutableArray<XTIROperand *> *reads = [NSMutableArray arrayWithArray:insn.operands];
+    NSDictionary *fz = insn.result ? ctx.fuseAt[@(insn.result.valueId)] : nil;
+    for (NSString *key in @[ @"a", @"b", @"c" ])
+        if ([fz[key] isKindOfClass:[XTIROperand class]]) [reads addObject:fz[key]];
+    NSUInteger scratch = 31;
+    for (XTIROperand *o in reads) {
+        if (o.kind != XTIROperandKindUse || !ctx.vRemat[@(o.valueId)] || [made containsObject:@(o.valueId)]) continue;
+        ctx.vecReg[@(o.valueId)] = [NSString stringWithFormat:@"v%lu", (unsigned long)scratch];
+        scratch--;
+        XTIRValue *v = [ctx.fn valueForId:o.valueId];
+        XTIRInsn *sp = [[XTIRInsn alloc] initWithOpcode:XTIROpVSplat result:v operands:@[ ctx.vRemat[@(o.valueId)] ] dbgLoc:nil];
+        [self emitInsn1:sp inBlock:block ctx:ctx];
+        [made addObject:@(o.valueId)];
+    }
+    [self emitInsn1:insn inBlock:block ctx:ctx];
+    for (NSNumber *v in made)
+        [ctx.vecReg removeObjectForKey:v];
+}
+
++ (void)emitInsn1:(XTIRInsn *)insn
+         inBlock:(XTIRBlock *)block
+             ctx:(XTArm64FnCtx *)ctx
+{
     // Skip defs folded into a fused successor (their result is never read).
     if (insn.result && [ctx.fusedAway containsObject:@(insn.result.valueId)]) return;
     // Skip a lane group's scalar loads and member broadcasts (its leader loads all four).
@@ -8248,12 +8289,6 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     NSArray<NSNumber *> *classes = [lo.allKeys sortedArrayUsingComparator:^NSComparisonResult(NSNumber *a, NSNumber *b) {
         return [lo[a] compare:lo[b]];
     }];
-    NSMutableArray<NSNumber *> *freePool = [NSMutableArray array];
-    // A function with no float scalars leaves the FP allocator's homes
-    // (d8-d15) unused, so the vector pool takes v8-v15 too: at the bottom of
-    // the stack, used only once v18-v31 are all live, so a function that fits
-    // in 14 is allocated exactly as before. Their d halves are callee-saved
-    // (vecCalleeUsed → savedRegs).
     BOOL fpFree = YES;
     for (XTIRBlock *bb in fn.blocks) {
         NSMutableArray<XTIRInsn *> *all = [NSMutableArray arrayWithArray:bb.phiNodes];
@@ -8268,12 +8303,6 @@ static BOOL arm64NamesFrameReg(NSString *t) {
         }
         if (!fpFree) break;
     }
-    if (fpFree)
-        for (int r = 8; r <= 15; r++) [freePool addObject:@(r)];
-    for (int r = 18; r <= 31; r++) [freePool addObject:@(r)];
-    ctx.vecCalleeUsed = [NSMutableSet set];
-    NSMutableArray<NSNumber *> *active = [NSMutableArray array];   // class ids, by ascending end
-    NSMutableDictionary<NSNumber *, NSNumber *> *regOfClass = [NSMutableDictionary dictionary];
     // Where each phi class's back-edge value is written: the first position,
     // after the phi, at which a non-phi member of the class is defined.
     NSMutableDictionary<NSNumber *, NSNumber *> *backDef = [NSMutableDictionary dictionary];
@@ -8285,80 +8314,157 @@ static BOOL arm64NamesFrameReg(NSString *t) {
         if (!valDef[c] || valDef[v].integerValue <= valDef[c].integerValue) continue;
         if (!backDef[c] || valDef[v].integerValue < backDef[c].integerValue) backDef[c] = valDef[v];
     }
-    // Classes running in a phi class's register between the phi's last read and
-    // the back-edge value's write (the partial sums of an unrolled reduction):
-    // the register is the phi class's, so their expiry does not free it.
-    NSMutableSet<NSNumber *> *borrowed = [NSMutableSet set];
-    for (NSNumber *cls in classes) {
-        NSInteger start = lo[cls].integerValue;
-        // Expire classes whose interval ended before this one starts.
-        NSMutableArray<NSNumber *> *stillActive = [NSMutableArray array];
-        for (NSNumber *a in active) {
-            if (hi[a].integerValue < start) {
-                if (![borrowed containsObject:a]) [freePool addObject:regOfClass[a]];
+    // Out of registers: again with v29-v31 held back as scratch, and the
+    // constant splat that ends last given up whenever the pool is empty (made
+    // again at each read; the port's vecScan).
+    ctx.vRemat = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber *, XTIROperand *> *rematOf = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber *, NSNumber *> *regOfClass = nil;
+    for (int attempt = 0; attempt < 2 && !regOfClass; attempt++) {
+        BOOL remat = attempt == 1;
+        if (remat)
+            rematOf = [self vecRematCandidates:fn vecVals:vecVals canon:canon vecPhis:vecPhis ctx:ctx];
+        NSMutableArray<NSNumber *> *freePool = [NSMutableArray array];
+        if (fpFree)
+            for (int r = 8; r <= 15; r++) [freePool addObject:@(r)];
+        for (int r = 18; r <= (remat ? 28 : 31); r++) [freePool addObject:@(r)];
+        ctx.vecCalleeUsed = [NSMutableSet set];
+        NSMutableArray<NSNumber *> *active = [NSMutableArray array];   // class ids, by ascending end
+        NSMutableDictionary<NSNumber *, NSNumber *> *roc = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSNumber *, NSNumber *> *regOfClassAttempt = roc;
+        // Classes running in a phi class's register between the phi's last read
+        // and the back-edge value's write (the partial sums of an unrolled
+        // reduction): the register is the phi class's, so their expiry does not
+        // free it.
+        NSMutableSet<NSNumber *> *borrowed = [NSMutableSet set];
+        BOOL failed = NO;
+        for (NSNumber *cls in classes) {
+            NSInteger start = lo[cls].integerValue;
+            // Expire classes whose interval ended before this one starts.
+            NSMutableArray<NSNumber *> *stillActive = [NSMutableArray array];
+            for (NSNumber *a in active) {
+                if (hi[a].integerValue < start) {
+                    if (![borrowed containsObject:a]) [freePool addObject:roc[a]];
+                }
+                else [stillActive addObject:a];
             }
-            else [stillActive addObject:a];
-        }
-        [active setArray:stillActive];
-        // Exhaustion is a HARD error: the old `@(31)` backstop silently reused
-        // a live register, which is a miscompile, not degraded code (#1198 —
-        // the x86-64/arm9 twins' 8-register pools actually overflowed).
-        if (freePool.count == 0) {
-            fprintf(stderr, "xcc-cg-arm64: error: vector register pressure exceeded "
-                            "the 14-register pool (v18-v31) in '%s'\n",
-                            fn.name.UTF8String);
-            exit(1);
-        }
-        // A VAdd may take the register of an operand that dies AT it: emitted
-        // plain it is one `add` (both read before the write), fused it is an
-        // `mla` accumulating in place — which is the point: an unrolled dot
-        // product's chain of partial sums then stays in one register, and
-        // every step is a single mla. The operand that is not a product is
-        // preferred, since that is the accumulator.
-        NSNumber *reg = nil;
-        XTIRInsn *def = vecDef[cls];
-        if (def && def.opcode == XTIROpVAdd && def.operands.count == 2 &&
-            def.operands[0].kind == XTIROperandKindUse && def.operands[1].kind == XTIROperandKindUse) {
-            for (int pass = 0; pass < 2 && !reg; pass++) {
-                for (XTIROperand *o in def.operands) {
-                    XTIRInsn *od = vecDef[@(o.valueId)];
-                    BOOL isProduct = od && od.opcode == XTIROpVMul;
-                    if ((pass == 0) == isProduct) continue;
-                    NSNumber *ocls = @(classOf(o.valueId));
-                    if ([ocls isEqual:cls] || !regOfClass[ocls] || ![active containsObject:ocls]) continue;
-                    if (hi[ocls].integerValue != start) {
-                        // The accumulator phi itself, read for the last time
-                        // here: its register is free until the back-edge value
-                        // is written, so a chain that ends by then can run in it.
-                        if ([vecPhis containsObject:@(o.valueId)] && [ocls isEqual:@(o.valueId)] &&
-                            valLast[@(o.valueId)].integerValue == start && backDef[ocls] &&
-                            hi[cls].integerValue <= backDef[ocls].integerValue) {
-                            reg = regOfClass[ocls];
-                            [borrowed addObject:cls];
-                            break;
+            [active setArray:stillActive];
+            // Exhaustion is a HARD error: the old `@(31)` backstop silently reused
+            // a live register, which is a miscompile, not degraded code (#1198 —
+            // the x86-64/arm9 twins' 8-register pools actually overflowed).
+            if (freePool.count == 0) {
+                if (!remat) { failed = YES; break; }
+                // The candidate that ends last (then starts last) among the live
+                // and this one; the port's vecScan.
+                NSNumber *victim = nil;
+                NSInteger far = -1, farLo = -1;
+                if (rematOf[cls]) { victim = cls; far = hi[cls].integerValue; farLo = lo[cls].integerValue; }
+                for (NSNumber *av in active) {
+                    if (!rematOf[av] || [borrowed containsObject:av]) continue;
+                    NSInteger h = hi[av].integerValue, l = lo[av].integerValue;
+                    if (h > far || (h == far && l > farLo)) { far = h; farLo = l; victim = av; }
+                }
+                if (!victim) { failed = YES; break; }
+                ctx.vRemat[victim] = rematOf[victim];
+                if ([victim isEqual:cls]) continue;
+                [freePool addObject:roc[victim]];
+                [roc removeObjectForKey:victim];
+                [active removeObject:victim];
+            }
+            // A VAdd may take the register of an operand that dies AT it: emitted
+            // plain it is one `add` (both read before the write), fused it is an
+            // `mla` accumulating in place — which is the point: an unrolled dot
+            // product's chain of partial sums then stays in one register, and
+            // every step is a single mla. The operand that is not a product is
+            // preferred, since that is the accumulator.
+            NSNumber *reg = nil;
+            XTIRInsn *def = vecDef[cls];
+            if (def && def.opcode == XTIROpVAdd && def.operands.count == 2 &&
+                def.operands[0].kind == XTIROperandKindUse && def.operands[1].kind == XTIROperandKindUse) {
+                for (int pass = 0; pass < 2 && !reg; pass++) {
+                    for (XTIROperand *o in def.operands) {
+                        XTIRInsn *od = vecDef[@(o.valueId)];
+                        BOOL isProduct = od && od.opcode == XTIROpVMul;
+                        if ((pass == 0) == isProduct) continue;
+                        NSNumber *ocls = @(classOf(o.valueId));
+                        if ([ocls isEqual:cls] || !roc[ocls] || ![active containsObject:ocls]) continue;
+                        if (hi[ocls].integerValue != start) {
+                            // The accumulator phi itself, read for the last time
+                            // here: its register is free until the back-edge value
+                            // is written, so a chain that ends by then can run in it.
+                            if ([vecPhis containsObject:@(o.valueId)] && [ocls isEqual:@(o.valueId)] &&
+                                valLast[@(o.valueId)].integerValue == start && backDef[ocls] &&
+                                hi[cls].integerValue <= backDef[ocls].integerValue) {
+                                reg = roc[ocls];
+                                [borrowed addObject:cls];
+                                break;
+                            }
+                            continue;
                         }
-                        continue;
+                        reg = roc[ocls];
+                        [active removeObject:ocls];
+                        if ([borrowed containsObject:ocls]) [borrowed addObject:cls];
+                        break;
                     }
-                    reg = regOfClass[ocls];
-                    [active removeObject:ocls];
-                    if ([borrowed containsObject:ocls]) [borrowed addObject:cls];
-                    break;
                 }
             }
+            if (!reg) {
+                reg = freePool.lastObject;
+                [freePool removeLastObject];
+            }
+            roc[cls] = reg;
+            if (reg.intValue >= 8 && reg.intValue <= 15)
+                [ctx.vecCalleeUsed addObject:[NSString stringWithFormat:@"d%@", reg]];
+            [active addObject:cls];
+            [active sortUsingComparator:^NSComparisonResult(NSNumber *a, NSNumber *b) { return [hi[a] compare:hi[b]]; }];
         }
-        if (!reg) {
-            reg = freePool.lastObject;
-            [freePool removeLastObject];
-        }
-        regOfClass[cls] = reg;
-        if (reg.intValue >= 8 && reg.intValue <= 15)
-            [ctx.vecCalleeUsed addObject:[NSString stringWithFormat:@"d%@", reg]];
-        [active addObject:cls];
-        [active sortUsingComparator:^NSComparisonResult(NSNumber *a, NSNumber *b) { return [hi[a] compare:hi[b]]; }];
+        if (!failed) regOfClass = regOfClassAttempt;
     }
-    // Publish: every vector value maps to its class's register.
-    for (NSNumber *v in vecVals)
-        ctx.vecReg[v] = [NSString stringWithFormat:@"v%@", regOfClass[@(classOf(v.unsignedIntegerValue))]];
+    if (!regOfClass) {
+        fprintf(stderr, "xcc-cg-arm64: error: vector register pressure exceeded "
+                        "the 14-register pool (v18-v31) in '%s'\n",
+                        fn.name.UTF8String);
+        exit(1);
+    }
+    // Publish: every vector value maps to its class's register (a constant
+    // splat given up has none).
+    for (NSNumber *v in vecVals) {
+        NSNumber *r = regOfClass[@(classOf(v.unsignedIntegerValue))];
+        if (r) ctx.vecReg[v] = [NSString stringWithFormat:@"v%@", r];
+    }
+}
+
+// The classes that are one constant's splat and nothing else: no phi, no lane
+// group, no other member; each mapped to the constant operand (the port's
+// vecRematCandidates).
++ (NSMutableDictionary<NSNumber *, XTIROperand *> *)vecRematCandidates:(XTIRFunction *)fn
+                                                                vecVals:(NSSet<NSNumber *> *)vecVals
+                                                                  canon:(NSDictionary<NSNumber *, NSNumber *> *)canon
+                                                                vecPhis:(NSSet<NSNumber *> *)vecPhis
+                                                                    ctx:(XTArm64FnCtx *)ctx {
+    NSMutableDictionary<NSNumber *, XTIROperand *> *r = [NSMutableDictionary dictionary];
+    NSSet<NSNumber *> *members = [NSSet setWithArray:canon.allValues];
+    NSMutableDictionary<NSNumber *, XTIRInsn *> *consts = [NSMutableDictionary dictionary];
+    for (XTIRBlock *bb in fn.blocks)
+        for (XTIRInsn *n in bb.instructions)
+            if (n.opcode == XTIROpConst && n.result && n.operands.count >= 1
+                && (n.operands[0].kind == XTIROperandKindImmI || n.operands[0].kind == XTIROperandKindImmF))
+                consts[@(n.result.valueId)] = n;
+    for (XTIRBlock *bb in fn.blocks)
+        for (XTIRInsn *n in bb.instructions) {
+            if (n.opcode != XTIROpVSplat || !n.result || n.operands.count < 1) continue;
+            NSNumber *v = @(n.result.valueId);
+            if (canon[v] || [members containsObject:v] || [vecPhis containsObject:v] || ctx.laneAddr[v]
+                || ctx.laneLeader[v]) continue;
+            XTIROperand *o = n.operands[0];
+            XTIROperand *k = nil;
+            if (o.kind == XTIROperandKindImmI || o.kind == XTIROperandKindImmF)
+                k = o;
+            else if (o.kind == XTIROperandKindUse && consts[@(o.valueId)])
+                k = consts[@(o.valueId)].operands[0];
+            if (k) r[v] = k;
+        }
+    return r;
 }
 
 + (void)emitFunction:(XTIRFunction *)fn module:(XTIRModule *)mod into:(NSMutableString *)out {

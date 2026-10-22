@@ -2683,6 +2683,8 @@ class X86_64
     void assignVectorRegs(IRFunc* fn)
         {
         _vec = new Map();
+        _vRemat = new Map();
+        _vSpill = new Map();
         _vecClass = new Map();
         if (_hasAsm)
             return;
@@ -2763,14 +2765,6 @@ class X86_64
         // those two are callee-saved on Win64 (the prologue does not save xmm
         // regs), so they are touched only under pressure no real program has
         // reached (#1198).
-        Array* freePool = new Array();
-        freePool.add((Object*)Number.withU32((u32)6));
-        freePool.add((Object*)Number.withU32((u32)7));
-        for (u32 r = (u32)2; r <= (u32)5; r = r + (u32)1)
-            freePool.add((Object*)Number.withU32(r));
-        for (u32 r = (u32)8; r <= (u32)15; r = r + (u32)1)
-            freePool.add((Object*)Number.withU32(r));
-        Array* active = new Array();
         // Which instruction defines each class, and which classes are phi
         // results — for the two-address coalescing below.
         Map* defOfCls = new Map();
@@ -2792,6 +2786,59 @@ class X86_64
                 }
             }
 
+        _vRemat = new Map();
+        Map* regOf = vecScanX(fn, classes, lo, hi, defOfCls, phiCls, false);
+        if (regOf == (Map*)0)
+            {
+            // Out of registers: again with xmm12-xmm15 held back as scratch,
+            // and whenever the pool is empty the class that ends last given up:
+            // a constant splat made again at each read, anything else spilled
+            // to its frame slot (no phi class: its edges copy registers).
+            _vRemat = new Map();
+            _vSpill = new Map();
+            _vSpillable = new Map();
+            _vRematOf = vecRematCandidates(fn, vecVals, phiCls);
+            regOf = vecScanX(fn, classes, lo, hi, defOfCls, phiCls, true);
+            }
+        if (regOf == (Map*)0)
+            {
+            Stdio.printf("xcc-cg-x86_64: error: vector register pressure "
+                         "exceeded the 14-register SSE pool in '%s'\n",
+                         fn.name().cString());
+            Process.exit((i32)1);
+            }
+        for (u32 i = (u32)0; i < vecVals.count(); i = i + (u32)1)
+            {
+            IRValue* v = (IRValue*)vecVals.get(i);
+            Object* r = regOf.get((Hashable*)classOfVec(v));
+            if (r == (Object*)0)
+                continue;
+            // A 32-byte vector (-mavx2) lives in the same register
+            // under its 256-bit name; every emitter keys its VEX form off "ymm".
+            // A 64-byte vector (-mavx512) is the same register again as zmm.
+            String* name = String.withCString(isWide512VecTy(v.ty()) ? "zmm" : (isWideVecTy(v.ty()) ? "ymm" : "xmm"));
+            name.appendFormat("%lu", ((Number*)r).asU32());
+            _vec.set((Hashable*)v, (Object*)name);
+            }
+        }
+
+    Map* _vRemat;       // value -> the constant its splat broadcasts (no register)
+    Map* _vRematOf;     // the classes that are a constant's splat
+    Map* _vSpill;       // values that live in their frame slot, no register
+    Map* _vSpillable;   // the classes that may be given up: one member, no phi
+
+    // The scan: class -> register, or 0 when the pool runs out. With `remat`,
+    // xmm13-xmm15 stay out of the pool and a constant splat gives way.
+    Map* vecScanX(IRFunc* fn, Array* classes, Map* lo, Map* hi, Map* defOfCls, Array* phiCls, bool remat)
+        {
+        Array* freePool = new Array();
+        freePool.add((Object*)Number.withU32((u32)6));
+        freePool.add((Object*)Number.withU32((u32)7));
+        for (u32 r = (u32)2; r <= (u32)5; r = r + (u32)1)
+            freePool.add((Object*)Number.withU32(r));
+        for (u32 r = (u32)8; r <= (remat ? (u32)11 : (u32)15); r = r + (u32)1)
+            freePool.add((Object*)Number.withU32(r));
+        Array* active = new Array();
         Map* regOf = new Map();
         for (u32 c = (u32)0; c < classes.count(); c = c + (u32)1)
             {
@@ -2807,14 +2854,50 @@ class X86_64
                     still.add((Object*)av);
                 }
             active = still;
-            // Exhaustion is a HARD error: the old xmm15 fallback silently
-            // reused a live register, which is a miscompile (#1198).
+            // Exhaustion is a HARD failure, never a silent reuse of a live
+            // register (#1198): the caller retries with remat, then errors.
             if (freePool.count() == (u32)0)
                 {
-                Stdio.printf("xcc-cg-x86_64: error: vector register pressure "
-                             "exceeded the 14-register SSE pool in '%s'\n",
-                             fn.name().cString());
-                Process.exit((i32)1);
+                if (!remat)
+                    return (Map*)0;
+                // The candidate that ends last (then starts last) among the
+                // live and this one, as the arm64 back end.
+                IRValue* victim = (IRValue*)0;
+                i32 far = (i32)0 - (i32)1;
+                i32 farLo = (i32)0 - (i32)1;
+                if (inMap(_vSpillable, cls))
+                    {
+                    victim = cls;
+                    far = ((Number*)hi.get((Hashable*)cls)).asI32();
+                    farLo = ((Number*)lo.get((Hashable*)cls)).asI32();
+                    }
+                for (u32 a = (u32)0; a < active.count(); a = a + (u32)1)
+                    {
+                    IRValue* av = (IRValue*)active.get(a);
+                    if (!inMap(_vSpillable, av))
+                        continue;
+                    i32 h = ((Number*)hi.get((Hashable*)av)).asI32();
+                    i32 l = ((Number*)lo.get((Hashable*)av)).asI32();
+                    if (h > far || (h == far && l > farLo))
+                        {
+                        far = h;
+                        farLo = l;
+                        victim = av;
+                        }
+                    }
+                if (victim == (IRValue*)0)
+                    return (Map*)0;
+                // A constant is made again where it is read; anything else
+                // lives in its own frame slot, reloaded where it is read.
+                if (inMap(_vRematOf, victim))
+                    _vRemat.set((Hashable*)victim, _vRematOf.get((Hashable*)victim));
+                else
+                    _vSpill.set((Hashable*)victim, (Object*)victim);
+                if (victim == cls)
+                    continue;
+                freePool.add(regOf.get((Hashable*)victim));
+                regOf.remove((Hashable*)victim);
+                active.remove((Object*)victim);
                 }
             // TWO-ADDRESS COALESCING. x86 vector ops are destructive, so when
             // the result takes a different register from a source that DIES at
@@ -2855,19 +2938,74 @@ class X86_64
             active.add((Object*)cls);
             sortByEnd(active, hi);
             }
+        return regOf;
+        }
+
+    // The classes that are one constant's splat and nothing else (no phi, no
+    // other member), each mapped to the constant operand.
+    Map* vecRematCandidates(IRFunc* fn, Array* vecVals, Array* phiCls)
+        {
+        Map* r = new Map();
+        Map* members = new Map();
         for (u32 i = (u32)0; i < vecVals.count(); i = i + (u32)1)
             {
             IRValue* v = (IRValue*)vecVals.get(i);
-            Object* r = regOf.get((Hashable*)classOfVec(v));
-            if (r == (Object*)0)
-                continue;
-            // A 32-byte vector (-mavx2) lives in the same register
-            // under its 256-bit name; every emitter keys its VEX form off "ymm".
-            // A 64-byte vector (-mavx512) is the same register again as zmm.
-            String* name = String.withCString(isWide512VecTy(v.ty()) ? "zmm" : (isWideVecTy(v.ty()) ? "ymm" : "xmm"));
-            name.appendFormat("%lu", ((Number*)r).asU32());
-            _vec.set((Hashable*)v, (Object*)name);
+            IRValue* c = classOfVec(v);
+            if (c != v)
+                members.set((Hashable*)c, (Object*)c);
             }
+        Map* consts = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.op().equals(String.withCString("Const")) && n.res() != (IRValue*)0 && n.ops().count() >= (u32)1)
+                    {
+                    IROperand* k = (IROperand*)n.ops().get((u32)0);
+                    if (k.kind() == (u8)OPK_IMMI || k.kind() == (u8)OPK_IMMF)
+                        consts.set((Hashable*)n.res(), (Object*)n);
+                    }
+                }
+            }
+        for (u32 i = (u32)0; i < vecVals.count(); i = i + (u32)1)
+            {
+            IRValue* v = (IRValue*)vecVals.get(i);
+            if (classOfVec(v) == v && !inMap(members, v) && !vecHasCls(phiCls, v))
+                _vSpillable.set((Hashable*)v, (Object*)v);
+            }
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (!n.op().equals(String.withCString("VSplat")) || n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
+                    continue;
+                IRValue* v = n.res();
+                if (classOfVec(v) != v || inMap(members, v) || vecHasCls(phiCls, v))
+                    continue;
+                IROperand* o = (IROperand*)n.ops().get((u32)0);
+                IROperand* k = (IROperand*)0;
+                if (o.kind() == (u8)OPK_IMMI || o.kind() == (u8)OPK_IMMF)
+                    k = o;
+                else if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                    {
+                    IRInsn* d = (IRInsn*)consts.get((Hashable*)o.val());
+                    if (d != (IRInsn*)0)
+                        k = (IROperand*)d.ops().get((u32)0);
+                    }
+                if (k != (IROperand*)0)
+                    r.set((Hashable*)v, (Object*)k);
+                }
+            }
+        return r;
+        }
+
+    static bool inMap(Map* m, IRValue* v)
+        {
+        return m != (Map*)0 && v != (IRValue*)0 && m.get((Hashable*)v) != (Object*)0;
         }
 
     // Membership by identity; `hasValue` lives in Opt.xc and is not in scope.
@@ -5692,6 +5830,11 @@ class X86_64
     // (xmmR, ymmR or zmmR)?
     bool usesVecRegNumber(u32 r)
         {
+        // The remat and spill scratch, named only while an instruction is
+        // emitted: in use whenever anything was given up.
+        if (r >= (u32)12 && r <= (u32)15
+            && ((_vRemat != (Map*)0 && _vRemat.count() > (u32)0) || (_vSpill != (Map*)0 && _vSpill.count() > (u32)0)))
+            return true;
         String* want = String.withU32(r);
         Array* regs = new Array();
         if (_homing != (Homing*)0)
@@ -6354,6 +6497,93 @@ class X86_64
         }
 
     void emitInsn(IRFunc* fn, IRBlock* bb, IRInsn* n)
+        {
+        if ((_vRemat == (Map*)0 || _vRemat.count() == (u32)0) && (_vSpill == (Map*)0 || _vSpill.count() == (u32)0))
+            {
+            emitInsn1(fn, bb, n);
+            return;
+            }
+        // A constant splat the vector allocator gave no register is made where
+        // it is read; a spilled value is reloaded from its slot where it is
+        // read, into xmm15, xmm14, xmm13 (ymm/zmm by its width), and a spilled
+        // result written in xmm12 and stored after. A folded value is read from
+        // memory by its consumer already.
+        if (n.res() != (IRValue*)0 && inMap(_vRemat, n.res()))
+            return;
+        Array* made = new Array();
+        u32 scratch = (u32)15;
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0 || made.contains((Object*)o.val()))
+                continue;
+            bool re = inMap(_vRemat, o.val());
+            if (!re && !(inMap(_vSpill, o.val()) && !isFolded(o.val())))
+                continue;
+            String* name = vecScratchName(o.val(), scratch);
+            scratch = scratch - (u32)1;
+            _vec.set((Hashable*)o.val(), (Object*)name);
+            if (re)
+                {
+                IRInsn* sp = IRInsn.with(String.withCString("VSplat"));
+                sp.setRes(o.val());
+                sp.add((IROperand*)_vRemat.get((Hashable*)o.val()));
+                emitVSplat(sp);
+                }
+            else
+                vecSlotMove(o.val(), name, true);
+            made.add((Object*)o.val());
+            }
+        bool store = n.res() != (IRValue*)0 && inMap(_vSpill, n.res()) && !isFolded(n.res());
+        String* rn = (String*)0;
+        if (store)
+            {
+            rn = vecScratchName(n.res(), (u32)12);
+            _vec.set((Hashable*)n.res(), (Object*)rn);
+            }
+        emitInsn1(fn, bb, n);
+        if (store)
+            {
+            vecSlotMove(n.res(), rn, false);
+            _vec.remove((Hashable*)n.res());
+            }
+        for (u32 k = (u32)0; k < made.count(); k = k + (u32)1)
+            _vec.remove((Hashable*)made.get(k));
+        }
+
+    // xmmN, ymmN or zmmN for v's width.
+    String* vecScratchName(IRValue* v, u32 r)
+        {
+        String* name = String.withCString(isWide512VecTy(v.ty()) ? "zmm" : (isWideVecTy(v.ty()) ? "ymm" : "xmm"));
+        name.appendFormat("%lu", r);
+        return name;
+        }
+
+    // A spilled vector between its frame slot and the register `reg`.
+    void vecSlotMove(IRValue* v, String* reg, bool load)
+        {
+        u32 off = slotOf(v);
+        if (isWide512VecTy(v.ty()))
+            {
+            if (load)
+                _out.appendFormat("\tvmovdqu32\t%s, zmmword ptr [rbp-%lu]\n", reg.cString(), off);
+            else
+                _out.appendFormat("\tvmovdqu32\tzmmword ptr [rbp-%lu], %s\n", off, reg.cString());
+            }
+        else if (isWideVecTy(v.ty()))
+            {
+            if (load)
+                _out.appendFormat("\tvmovdqu\t%s, ymmword ptr [rbp-%lu]\n", reg.cString(), off);
+            else
+                _out.appendFormat("\tvmovdqu\tymmword ptr [rbp-%lu], %s\n", off, reg.cString());
+            }
+        else if (load)
+            _out.appendFormat("\tmovdqu\t%s, xmmword ptr [rbp-%lu]\n", reg.cString(), off);
+        else
+            _out.appendFormat("\tmovdqu\txmmword ptr [rbp-%lu], %s\n", off, reg.cString());
+        }
+
+    void emitInsn1(IRFunc* fn, IRBlock* bb, IRInsn* n)
         {
         // The dispatch is split for the frame budget alone: one chain of string
         // comparisons builds more temporaries than a 16 KB frame holds.

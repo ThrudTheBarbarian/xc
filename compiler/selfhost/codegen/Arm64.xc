@@ -1165,6 +1165,20 @@ class Arm64
         if (n.res() != (IRValue*)0 && inMap(_fusedAway, n.res())) return;
         // A lane group's scalar loads and member broadcasts (its leader loads all four).
         if (n.res() != (IRValue*)0 && inMap(_laneSkip, n.res())) return;
+        // A constant splat the vector allocator gave no register is made where
+        // it is read (vecRematBefore), not here.
+        if (_vRemat != (Map*)0 && _vRemat.count() > (u32)0) {
+            if (n.res() != (IRValue*)0 && inMap(_vRemat, n.res())) return;
+            Array* made = vecRematBefore(n);
+            emitInsn1(fn, n);
+            vecRematAfter(made);
+            return;
+        }
+        emitInsn1(fn, n);
+    }
+
+    void emitInsn1(IRFunc* fn, IRInsn* n)
+    {
         if (n.res() != (IRValue*)0 && _fuseKind.get((Hashable*)n.res()) != (Object*)0)
             { emitFused(n); return; }
         // The dispatch is split across four routines purely for the frame
@@ -3646,7 +3660,55 @@ class Arm64
     u32 _aggFbias;
     u32 _aggReb;
 
+    // A splat of a constant the allocator gave no register (it ran out): made
+    // again into a scratch register at each instruction that reads it.
+    Map* _vRemat;       // value -> the constant operand its splat broadcasts
+    // The constant splats this instruction reads that have no register, made
+    // into v31, v30, v29 for it (the fused multiply's operands included).
+    Array* vecRematBefore(IRInsn* n)
+    {
+        Array* made = new Array();
+        Array* reads = new Array();
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            reads.add(n.ops().get(k));
+        if (n.res() != (IRValue*)0 && _fuseKind.get((Hashable*)n.res()) != (Object*)0) {
+            Object* fa = _fuseA.get((Hashable*)n.res());
+            Object* fb = _fuseB.get((Hashable*)n.res());
+            Object* fc = _fuseC.get((Hashable*)n.res());
+            if (fa != (Object*)0) reads.add(fa);
+            if (fb != (Object*)0) reads.add(fb);
+            if (fc != (Object*)0) reads.add(fc);
+        }
+        u32 scratch = (u32)31;
+        for (u32 k = (u32)0; k < reads.count(); k = k + (u32)1) {
+            IROperand* o = (IROperand*)reads.get(k);
+            if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0 || !inMap(_vRemat, o.val())) continue;
+            if (made.contains((Object*)o.val())) continue;
+            String* name = String.withCString("v");
+            name.appendFormat("%lu", scratch);
+            scratch = scratch - (u32)1;
+            _vecReg.set((Hashable*)o.val(), (Object*)name);
+            IRInsn* sp = IRInsn.with(String.withCString("VSplat"));
+            sp.setRes(o.val());
+            sp.add((IROperand*)_vRemat.get((Hashable*)o.val()));
+            emitVSplat(sp);
+            made.add((Object*)o.val());
+        }
+        return made;
+    }
+
+    void vecRematAfter(Array* made)
+    {
+        for (u32 k = (u32)0; k < made.count(); k = k + (u32)1)
+            _vecReg.remove((Hashable*)made.get(k));
+    }
+
     bool dispatchVector(IRInsn* n, String* op)
+    {
+        return dispatchVector0(n, op);
+    }
+
+    bool dispatchVector0(IRInsn* n, String* op)
     {
         if (op.equals(String.withCString("VLoad")))  { emitVLoad(n);  return true; }
         if (op.equals(String.withCString("VStore"))) { emitVStore(n); return true; }
@@ -4131,6 +4193,7 @@ class Arm64
     void allocateVectorRegisters(IRFunc* fn)
     {
         _vecCalleeUsed = new Map();
+        _vRemat = new Map();
         _vecReg = new Map();
         _vecClass = new Map();
         Array* vecVals = new Array();
@@ -4254,6 +4317,86 @@ class Arm64
         // Linear scan. Classes in order of interval start — which is total,
         // since no two values are defined at the same position.
         sortByStart(classes, lo);
+        _vRemat = new Map();
+        Map* regOf = vecScan(fn, classes, lo, hi, false);
+        if (regOf == (Map*)0) {
+            // Out of registers: again with v29-v31 held back as scratch, and
+            // the constant splat that ends last given up whenever the pool is
+            // empty (made again at each read).
+            _vecCalleeUsed = new Map();
+            _vBorrowed = new Map();
+            _vRemat = new Map();
+            Map* rematOf = vecRematCandidates(fn, vecVals);
+            _vRematOf = rematOf;
+            regOf = vecScan(fn, classes, lo, hi, true);
+        }
+        if (regOf == (Map*)0) {
+            Stdio.printf("xcc-cg-arm64: error: vector register pressure "
+                         "exceeded the 14-register pool (v18-v31) in '%s'\n",
+                         fn.name().cString());
+            Process.exit((i32)1);
+        }
+        for (u32 i = (u32)0; i < vecVals.count(); i = i + (u32)1) {
+            IRValue* v = (IRValue*)vecVals.get(i);
+            Object* r = regOf.get((Hashable*)classOfVec(v));
+            if (r == (Object*)0) continue;
+            String* name = String.withCString("v");
+            name.appendFormat("%ld", ((Number*)r).asI32());
+            _vecReg.set((Hashable*)v, (Object*)name);
+        }
+    }
+
+    Map* _vRematOf;     // the classes that may be given up: class -> its constant
+
+    // The classes that are one constant's splat and nothing else: no phi, no
+    // lane group, no other member. Each maps to the constant operand.
+    Map* vecRematCandidates(IRFunc* fn, Array* vecVals)
+    {
+        Map* r = new Map();
+        Map* members = new Map();
+        Map* consts = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.op().equals(String.withCString("Const")) && n.res() != (IRValue*)0 && n.ops().count() >= (u32)1) {
+                    IROperand* k = (IROperand*)n.ops().get((u32)0);
+                    if (k.kind() == (u8)OPK_IMMI || k.kind() == (u8)OPK_IMMF)
+                        consts.set((Hashable*)n.res(), (Object*)n);
+                }
+            }
+        }
+        for (u32 i = (u32)0; i < vecVals.count(); i = i + (u32)1) {
+            IRValue* v = (IRValue*)vecVals.get(i);
+            IRValue* c = classOfVec(v);
+            if (c != v) members.set((Hashable*)c, (Object*)c);
+        }
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (!n.op().equals(String.withCString("VSplat")) || n.res() == (IRValue*)0 || n.ops().count() < (u32)1) continue;
+                IRValue* v = n.res();
+                if (classOfVec(v) != v || inMap(members, v) || inMap(_vVecPhis, v)
+                    || _laneBase.get((Hashable*)v) != (Object*)0 || _laneLeader.get((Hashable*)v) != (Object*)0) continue;
+                IROperand* o = (IROperand*)n.ops().get((u32)0);
+                IROperand* k = (IROperand*)0;
+                if (o.kind() == (u8)OPK_IMMI || o.kind() == (u8)OPK_IMMF)
+                    k = o;
+                else if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0) {
+                    IRInsn* d = (IRInsn*)consts.get((Hashable*)o.val());
+                    if (d != (IRInsn*)0) k = (IROperand*)d.ops().get((u32)0);
+                }
+                if (k != (IROperand*)0) r.set((Hashable*)v, (Object*)k);
+            }
+        }
+        return r;
+    }
+
+    // The scan itself: class -> register, or 0 when the pool runs out. With
+    // `remat`, v29-v31 stay out of the pool and a constant splat gives way.
+    Map* vecScan(IRFunc* fn, Array* classes, Map* lo, Map* hi, bool remat)
+    {
         Array* freePool = new Array();
         // A function with no float scalars leaves the FP allocator's homes
         // (d8-d15) unused, so the vector pool takes v8-v15 too: at the bottom
@@ -4263,7 +4406,7 @@ class Arm64
         if (vecFpFree(fn))
             for (u32 r = (u32)8; r <= (u32)15; r = r + (u32)1)
                 freePool.add((Object*)Number.with((i32)r));
-        for (u32 r = (u32)18; r <= (u32)31; r = r + (u32)1)
+        for (u32 r = (u32)18; r <= (remat ? (u32)28 : (u32)31); r = r + (u32)1)
             freePool.add((Object*)Number.with((i32)r));
         Array* active = new Array();
         Map* regOf = new Map();
@@ -4281,13 +4424,36 @@ class Arm64
                 else still.add((Object*)av);
             }
             active = still;
-            // Exhaustion is a HARD error: the old v31 backstop silently reused
-            // a live register, which is a miscompile (#1198).
+            // Exhaustion is a HARD failure, never a silent reuse of a live
+            // register (#1198): the caller retries with remat, then errors.
             if (freePool.count() == (u32)0) {
-                Stdio.printf("xcc-cg-arm64: error: vector register pressure "
-                             "exceeded the 14-register pool (v18-v31) in '%s'\n",
-                             fn.name().cString());
-                Process.exit((i32)1);
+                if (!remat) return (Map*)0;
+                // The candidate that ends last (then starts last: starts are
+                // unique) among the live and this one.
+                IRValue* victim = (IRValue*)0;
+                i32 far = (i32)0 - (i32)1;
+                i32 farLo = (i32)0 - (i32)1;
+                if (inMap(_vRematOf, cls)) {
+                    victim = cls;
+                    far = ((Number*)hi.get((Hashable*)cls)).asI32();
+                    farLo = ((Number*)lo.get((Hashable*)cls)).asI32();
+                }
+                for (u32 a = (u32)0; a < active.count(); a = a + (u32)1) {
+                    IRValue* av = (IRValue*)active.get(a);
+                    if (!inMap(_vRematOf, av) || inMap(_vBorrowed, av)) continue;
+                    i32 h = ((Number*)hi.get((Hashable*)av)).asI32();
+                    i32 l = ((Number*)lo.get((Hashable*)av)).asI32();
+                    if (h > far || (h == far && l > farLo)) { far = h; farLo = l; victim = av; }
+                }
+                if (victim == (IRValue*)0) return (Map*)0;
+                _vRemat.set((Hashable*)victim, _vRematOf.get((Hashable*)victim));
+                if (victim == cls) continue;
+                freePool.add(regOf.get((Hashable*)victim));
+                regOf.remove((Hashable*)victim);
+                Array* keep = new Array();
+                for (u32 a = (u32)0; a < active.count(); a = a + (u32)1)
+                    if ((IRValue*)active.get(a) != victim) keep.add(active.get(a));
+                active = keep;
             }
             // A VAdd may take the register of an operand that dies AT it (the
             // reference explains), the non-product operand first.
@@ -4305,14 +4471,7 @@ class Arm64
             active.add((Object*)cls);
             sortByEnd(active, hi);
         }
-        for (u32 i = (u32)0; i < vecVals.count(); i = i + (u32)1) {
-            IRValue* v = (IRValue*)vecVals.get(i);
-            Object* r = regOf.get((Hashable*)classOfVec(v));
-            if (r == (Object*)0) continue;
-            String* name = String.withCString("v");
-            name.appendFormat("%ld", ((Number*)r).asI32());
-            _vecReg.set((Hashable*)v, (Object*)name);
-        }
+        return regOf;
     }
 
     // No float scalar anywhere in fn: no value of type F32/F64, defined or
