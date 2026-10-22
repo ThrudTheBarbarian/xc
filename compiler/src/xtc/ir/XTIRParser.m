@@ -650,6 +650,8 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
           @"ClassDowncastFailable" : @(XTIROpClassDowncastFailable),
           @"ICmp" : @(XTIROpICmp),
           @"VICmp" : @(XTIROpVICmp),
+          @"VFCmp" : @(XTIROpVFCmp),
+          @"VSIToFp" : @(XTIROpVSIToFp),
           @"FCmp" : @(XTIROpFCmp),
           @"Select" : @(XTIROpSelect),
           @"Load" : @(XTIROpLoad),
@@ -1101,12 +1103,13 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
     case XTIROpICmp:
     case XTIROpVICmp:
     case XTIROpFCmp:
+    case XTIROpVFCmp:
         {
         XTIRTok* predTok = [self tok:tokens at:pos];
         if (predTok.kind == XTIRTokWord)
             {
             hasPredicate = YES;
-            predicate = (op == XTIROpFCmp)
+            predicate = (op == XTIROpFCmp || op == XTIROpVFCmp)
                             ? [self fcmpPredicate:predTok.text]
                             : [self icmpPredicate:predTok.text];
             pos++;

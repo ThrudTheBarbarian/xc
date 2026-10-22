@@ -131,6 +131,16 @@
 // clone with its own (0: the profile's).
 static NSUInteger sVecFnBytes = 0;
 
+// Escape-time loops (mandelbrot): the pass is at the end of this file.
+@interface XTEscapeVec : NSObject
+@property(nonatomic) NSUInteger bytes;
+- (BOOL)runOnFunction:(XTIRFunction*)fn done:(NSMutableSet<NSValue*>*)done;
+@end
+
+// The headers the escape-time pass has rewritten in this function: their
+// scalar loops remain, as the remainder, and are not taken again.
+static NSMutableSet<NSValue*>* sEscDone = nil;
+
 @implementation XTIROptVectorize
 
 - (NSString*)passName
@@ -874,6 +884,7 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
     {
     BOOL reduxOff = getenv("XTVEC_REDUX_OFF") != NULL;
     sVecRemainders = [NSMutableSet set];
+    sEscDone = [NSMutableSet set];
     for (NSUInteger iter = 0; iter < 256; iter++)
         {
         XTVecCand* c = [self recognise:fn];
@@ -913,6 +924,9 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
             [self applyWideningSum:dp inFunction:fn];
             continue;
             }
+        // A pixel loop around an escape-time loop (mandelbrot).
+        if ([self vectorizeEscapeLoop:fn])
+            continue;
         // Nothing matched. `acc = acc + X + Y` parses left-associated, which
         // hides the accumulator one Add deep; rotate it back out and try again.
         if (!reduxOff && [self reassociateReductions:fn])
@@ -934,6 +948,16 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
         [[[XTIROptVecCombine alloc] init] runOnFunction:fn];
     if (prof.vectorizesLoops && !getenv("XTVEC_NOUNROLL"))
         [self unrollVectorReductionsInFunction:fn];
+    }
+
+- (BOOL)vectorizeEscapeLoop:(XTIRFunction*)fn
+    {
+    XTIROptTargetProfile* prof = self.profile ?: [XTIROptTargetProfile conservativeProfile];
+    if (!prof.vectorizesEscapeLoops)
+        return NO;
+    XTEscapeVec* e = [[XTEscapeVec alloc] init];
+    e.bytes = [self vectorBytes];
+    return [e runOnFunction:fn done:sEscDone];
     }
 
 // Does this induction phi provably start at ZERO on the loop's entry edge?
@@ -5771,6 +5795,1275 @@ static BOOL vecInterleaveFits(XTIRFunction* fn, XTIRBlock* B, XTIRValueId vaccId
                 [insn replaceOperands:ops];
             }
         }
+    }
+
+@end
+
+// ── ESCAPE-TIME loops (2026-10-22). The port's vecEscape (selfhost/opt/Opt.xc),
+// which explains the shape and the rewrite; this mirrors it step for step, and
+// makes its values in the same order (a back end lays frames out by value id).
+//
+//   for (i = s; i < N; i++) { <lanes>; while (k < 256 && x*x + y*y < 4) {…}; total += k; }
+//
+// goes across pixels, VF a step; the inner loop runs under a lane mask and
+// leaves when no lane is live; the scalar loop stays as the remainder.
+@implementation XTEscapeVec
+    {
+    XTIRFunction* _fn;
+    NSDictionary<NSNumber*, XTIRInsn*>* _defOf;
+    NSDictionary<NSNumber*, XTIRBlock*>* _blkOf;
+    NSMutableDictionary<NSNumber*, XTIRValue*>* _valOf;
+    XTIRBlock *_H, *_PH, *_B, *_T0, *_L, *_E, *_X, *_VB;
+    NSMutableArray<XTIRBlock*>* _tests;
+    NSMutableArray<NSNumber*>* _cont;
+    XTIRInsn *_ivPhi, *_ivNext;
+    XTIRInsn *_storeAddr, *_store;
+    int64_t _n;
+    XTIROperand* _boundOp;
+    BOOL _boundConst;
+    XTIRInsn* _tripAnd;
+    XTIROperand* _tripOther;
+    BOOL _signed;
+    NSMutableArray<XTIRInsn*>* _accPhis;
+    NSMutableArray<XTIROperand*>* _accW;
+    NSMutableSet<NSNumber*>* _region;
+    NSMutableDictionary<NSNumber*, NSNumber*>* _map;
+    NSMutableDictionary<NSNumber*, NSNumber*>* _splat;
+    NSMutableDictionary<NSNumber*, NSNumber*>* _exit;
+    NSMutableDictionary<NSString*, NSNumber*>* _cse;
+    NSMutableSet<NSNumber*>* _skip;
+    NSMutableArray<XTIRInsn*>* _pre;
+    NSMutableArray<XTIRInsn*>* _splatTo;
+    XTIRBlock* _splatHome;
+    BOOL _fresh;
+    NSUInteger _vf;
+    NSMutableArray<XTIRValue*>* _vsum;
+    NSMutableArray<XTIRValue*>* _vsumNext;
+    NSInteger _tripTest;
+    int64_t _tripN, _tripC0;
+    XTIRType* _tripTy;
+    BOOL _tripSigned;
+    }
+
+- (BOOL)runOnFunction:(XTIRFunction*)fn done:(NSMutableSet<NSValue*>*)done
+    {
+    _fn = fn;
+    NSMutableDictionary* d = [NSMutableDictionary dictionary];
+    NSMutableDictionary* bo = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        for (XTIRInsn* p in bb.phiNodes)
+            if (p.result)
+                {
+                d[@(p.result.valueId)] = p;
+                bo[@(p.result.valueId)] = bb;
+                }
+        for (XTIRInsn* n in bb.instructions)
+            if (n.result)
+                {
+                d[@(n.result.valueId)] = n;
+                bo[@(n.result.valueId)] = bb;
+                }
+        }
+    _defOf = d;
+    _blkOf = bo;
+    _valOf = [NSMutableDictionary dictionary];
+    for (XTIRValue* v in fn.values.allValues)
+        _valOf[@(v.valueId)] = v;
+    for (XTIRBlock* H in fn.blocks)
+        {
+        if ([done containsObject:[NSValue valueWithNonretainedObject:H]])
+            continue;
+        if ([self recognise:H])
+            {
+            [self apply];
+            [done addObject:[NSValue valueWithNonretainedObject:H]];
+            return YES;
+            }
+        }
+    return NO;
+    }
+
+static NSArray<XTIRBlock*>* escPreds(XTIRFunction* fn, XTIRBlock* t)
+    {
+    NSMutableArray* ps = [NSMutableArray array];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        if (!bb.terminator)
+            continue;
+        for (XTIROperand* o in bb.terminator.operands)
+            if (o.kind == XTIROperandKindBlock && o.blockRef == t)
+                {
+                [ps addObject:bb];
+                break;
+                }
+        }
+    return ps;
+    }
+
+static XTIROperand* escFrom(XTIRInsn* phi, XTIRBlock* b)
+    {
+    for (NSUInteger q = 0; q + 1 < phi.operands.count; q += 2)
+        if (phi.operands[q].blockRef == b)
+            return phi.operands[q + 1];
+    return nil;
+    }
+
+static BOOL escLane32(XTIRType* t)
+    {
+    return t && (t.kind == XTIRTypeKindI32 || t.kind == XTIRTypeKindU32 || t.kind == XTIRTypeKindF32);
+    }
+
+- (XTIRBlock*)blockOf:(XTIRValueId)v
+    {
+    return _blkOf[@(v)];
+    }
+
+// The port's vecConst: an i32, folded.
+- (BOOL)constOf:(XTIROperand*)o into:(int32_t*)out
+    {
+    int64_t v = 0;
+    if (!resolveConstInt(o, _defOf, &v))
+        return NO;
+    *out = (int32_t)v;
+    return YES;
+    }
+
+- (BOOL)recognise:(XTIRBlock*)H
+    {
+    _H = H;
+    if (![self outer] || ![self inner] || ![self exitBlock])
+        return NO;
+    _vf = self.bytes / 4;
+    if (_boundConst && (_n < (int64_t)_vf || _n > 0x7FFFFFFF))
+        return NO;
+    if (!_boundConst)
+        {
+        XTIRBlock* at = [self blockOf:_boundOp.valueId];
+        XTIRType* bt = _valOf[@(_boundOp.valueId)].type;
+        if (at == _H || at == _E || [[self regionBlocks] indexOfObjectIdenticalTo:at] != NSNotFound || !bt
+            || bt.kind != _ivPhi.result.type.kind)
+            return NO;
+        }
+    return [self regionOK];
+    }
+
+- (BOOL)outer
+    {
+    XTIRInsn* term = _H.terminator;
+    if (!term || term.opcode != XTIROpCondBranch || term.operands.count < 3)
+        return NO;
+    XTIROperand* co = term.operands[0];
+    if (co.kind != XTIROperandKindUse)
+        return NO;
+    XTIRInsn* g = _defOf[@(co.valueId)];
+    if (!g || g.opcode != XTIROpICmp || g.operands.count < 2)
+        return NO;
+    BOOL ult = g.predicate == XTIRICmpULT;
+    if (!ult && g.predicate != XTIRICmpSLT)
+        return NO;
+    _signed = !ult;
+    for (XTIRInsn* n in _H.instructions)
+        if (n != g && n.opcode != XTIROpConst)
+            return NO;
+    XTIROperand* g0 = g.operands[0];
+    if (g0.kind != XTIROperandKindUse)
+        return NO;
+    // The bound: a constant, or a value from outside the loop (checked once the
+    // loop's blocks are known, in recognise).
+    int32_t nk = 0;
+    _boundOp = g.operands[1];
+    _boundConst = [self constOf:_boundOp into:&nk];
+    _n = nk;
+    if (!_boundConst && (_boundOp.kind != XTIROperandKindUse || _boundOp.valueId == g0.valueId))
+        return NO;
+    _B = term.operands[1].blockRef;
+    _X = term.operands[2].blockRef;
+    if (_B == _H || _X == _H)
+        return NO;
+    NSArray<XTIRBlock*>* ps = escPreds(_fn, _H);
+    if (ps.count != 2)
+        return NO;
+    _ivPhi = nil;
+    for (XTIRInsn* p in _H.phiNodes)
+        if (p.result && p.result.valueId == g0.valueId)
+            _ivPhi = p;
+    if (!_ivPhi || !escLane32(_ivPhi.result.type) || _ivPhi.result.type.kind == XTIRTypeKindF32)
+        return NO;
+    XTIRBlock *p0 = ps[0], *p1 = ps[1];
+    XTIROperand* b0 = escFrom(_ivPhi, p0);
+    BOOL firstIsLatch = b0 && b0.kind == XTIROperandKindUse && _defOf[@(b0.valueId)].opcode == XTIROpAdd
+                        && _defOf[@(b0.valueId)] && [self blockOf:b0.valueId] == p0;
+    _E = firstIsLatch ? p0 : p1;
+    _PH = firstIsLatch ? p1 : p0;
+    if (_E == _B || _PH == _B || !_PH.terminator || _PH.terminator.opcode != XTIROpBranch)
+        return NO;
+    return escPreds(_fn, _B).count == 1 && _B.phiNodes.count == 0 && _B.terminator
+        && _B.terminator.opcode == XTIROpBranch;
+    }
+
+- (BOOL)inner
+    {
+    _T0 = _B.terminator.operands[0].blockRef;
+    if (_T0 == _H || _T0 == _B || _T0.phiNodes.count == 0)
+        return NO;
+    _tests = [NSMutableArray array];
+    _cont = [NSMutableArray array];
+    XTIRBlock* cur = _T0;
+    _L = nil;
+    while (_tests.count < 8)
+        {
+        XTIRInsn* t = cur.terminator;
+        if (cur != _T0 && (cur.phiNodes.count != 0 || escPreds(_fn, cur).count != 1))
+            return NO;
+        // A block that only passes on (xc's `&&`, if-converted, leaves the test
+        // in a join block after the header): part of the chain, no test.
+        if (t && t.opcode == XTIROpBranch && t.operands.count >= 1)
+            {
+            XTIRBlock* nx = t.operands[0].blockRef;
+            if (nx == _T0 || nx == _H || nx == _B || nx == _E || [_tests indexOfObjectIdenticalTo:nx] != NSNotFound)
+                return NO;
+            [_tests addObject:cur];
+            [_cont addObject:@2];
+            cur = nx;
+            continue;
+            }
+        if (!t || t.opcode != XTIROpCondBranch || t.operands.count < 3)
+            return NO;
+        XTIRBlock* a = t.operands[1].blockRef;
+        XTIRBlock* b = t.operands[2].blockRef;
+        XTIRBlock* next = nil;
+        if (b == _E && a != _E)
+            {
+            next = a;
+            [_cont addObject:@1];
+            }
+        else if (a == _E && b != _E)
+            {
+            next = b;
+            [_cont addObject:@0];
+            }
+        else
+            return NO;
+        if (t.operands[0].kind != XTIROperandKindUse)
+            return NO;
+        [_tests addObject:cur];
+        if (next == _T0 || next == _H || next == _B || [_tests indexOfObjectIdenticalTo:next] != NSNotFound)
+            return NO;
+        if (next.terminator && next.terminator.opcode == XTIROpBranch && next.terminator.operands[0].blockRef == _T0)
+            {
+            _L = next;
+            break;
+            }
+        cur = next;
+        }
+    if (!_L || _L.phiNodes.count != 0 || escPreds(_fn, _L).count != 1)
+        return NO;
+    if (escPreds(_fn, _T0).count != 2)
+        return NO;
+    for (XTIRInsn* p in _T0.phiNodes)
+        if (!p.result || !escLane32(p.result.type) || p.operands.count != 4 || !escFrom(p, _B) || !escFrom(p, _L))
+            return NO;
+    NSArray<XTIRBlock*>* ep = escPreds(_fn, _E);
+    NSUInteger testing = 0;
+    for (NSNumber* c in _cont)
+        if (c.intValue != 2)
+            testing++;
+    if (ep.count != testing || testing == 0 || _E.phiNodes.count != 0)
+        return NO;
+    for (XTIRBlock* p in ep)
+        if ([_tests indexOfObjectIdenticalTo:p] == NSNotFound)
+            return NO;
+    return YES;
+    }
+
+- (BOOL)exitBlock
+    {
+    if (!_E.terminator || _E.terminator.opcode != XTIROpBranch || _E.terminator.operands[0].blockRef != _H)
+        return NO;
+    XTIRValueId iv = _ivPhi.result.valueId;
+    XTIROperand* ivBack = escFrom(_ivPhi, _E);
+    _ivNext = nil;
+    _storeAddr = nil;
+    _store = nil;
+    _accPhis = [NSMutableArray array];
+    _accW = [NSMutableArray array];
+    for (XTIRInsn* n in _E.instructions)
+        {
+        if (n.opcode == XTIROpConst)
+            continue;
+        // ONE store of a lane value to a[i] (the port explains).
+        if (n.opcode == XTIROpElementAddr && !_storeAddr && n.operands.count == 2 && n.result)
+            {
+            XTIROperand* ix = n.operands[1];
+            if (ix.kind != XTIROperandKindUse || ix.valueId != iv || n.operands[0].kind != XTIROperandKindUse)
+                return NO;
+            _storeAddr = n;
+            continue;
+            }
+        if (n.opcode == XTIROpStore && !_store && _storeAddr && n.operands.count >= 2)
+            {
+            XTIROperand* ad = n.operands[0];
+            if (ad.kind != XTIROperandKindUse || ad.valueId != _storeAddr.result.valueId)
+                return NO;
+            _store = n;
+            continue;
+            }
+        if (n.opcode != XTIROpAdd || n.operands.count != 2 || !n.result)
+            return NO;
+        XTIROperand *a = n.operands[0], *b = n.operands[1];
+        if (ivBack.kind == XTIROperandKindUse && n.result.valueId == ivBack.valueId)
+            {
+            int32_t one = 0;
+            BOOL aIv = a.kind == XTIROperandKindUse && a.valueId == iv;
+            XTIROperand* step = aIv ? b : a;
+            XTIROperand* self0 = aIv ? a : b;
+            if (self0.kind != XTIROperandKindUse || self0.valueId != iv || ![self constOf:step into:&one] || one != 1)
+                return NO;
+            _ivNext = n;
+            continue;
+            }
+        XTIRInsn* acc = [self accPhiOf:n a:a b:b];
+        if (!acc)
+            return NO;
+        [_accPhis addObject:acc];
+        [_accW addObject:(a.kind == XTIROperandKindUse && a.valueId == acc.result.valueId) ? b : a];
+        }
+    if (!_ivNext || _accPhis.count + 1 != _H.phiNodes.count)
+        return NO;
+    return (_storeAddr == nil) == (_store == nil);
+    }
+
+- (XTIRInsn*)accPhiOf:(XTIRInsn*)n a:(XTIROperand*)a b:(XTIROperand*)b
+    {
+    for (XTIRInsn* p in _H.phiNodes)
+        {
+        if (p == _ivPhi || p.operands.count != 4)
+            continue;
+        XTIROperand* back = escFrom(p, _E);
+        if (!back || back.kind != XTIROperandKindUse || back.valueId != n.result.valueId)
+            continue;
+        BOOL ok = (a.kind == XTIROperandKindUse && a.valueId == p.result.valueId)
+               || (b.kind == XTIROperandKindUse && b.valueId == p.result.valueId);
+        XTIRType* t = p.result.type;
+        if (ok && t && (t.kind == XTIRTypeKindI32 || t.kind == XTIRTypeKindU32) && t.kind == n.result.type.kind)
+            return p;
+        }
+    return nil;
+    }
+
+- (NSArray<XTIRBlock*>*)regionBlocks
+    {
+    NSMutableArray* r = [NSMutableArray arrayWithObject:_B];
+    [r addObjectsFromArray:_tests];
+    [r addObject:_L];
+    return r;
+    }
+
+- (BOOL)isAcc:(XTIRValueId)v
+    {
+    for (XTIRInsn* p in _accPhis)
+        if (p.result.valueId == v)
+            return YES;
+    return NO;
+    }
+
+- (BOOL)regionOK
+    {
+    _region = [NSMutableSet set];
+    for (XTIRInsn* p in _T0.phiNodes)
+        [_region addObject:@(p.result.valueId)];
+    NSArray<XTIRBlock*>* blks = [self regionBlocks];
+    for (XTIRBlock* bb in blks)
+        for (XTIRInsn* n in bb.instructions)
+            if (n.result)
+                [_region addObject:@(n.result.valueId)];
+    for (XTIRBlock* bb in blks)
+        for (XTIRInsn* n in bb.instructions)
+            if (![self laneable:n])
+                return NO;
+    for (XTIROperand* w in _accW)
+        if (![self operandOK:w mask:NO])
+            return NO;
+    if (_store)
+        {
+        XTIROperand* sv = _store.operands[1];
+        XTIRBlock* at = [self blockOf:_storeAddr.operands[0].valueId];
+        if (![self operandOK:sv mask:NO] || sv.kind != XTIROperandKindUse || [self uses:_storeAddr.result.valueId] != 1
+            || at == _H || at == _E || [blks indexOfObjectIdenticalTo:at] != NSNotFound)
+            return NO;
+        }
+    for (XTIRBlock* bb in _fn.blocks)
+        {
+        BOOL inLoop = bb == _H || bb == _E || [blks indexOfObjectIdenticalTo:bb] != NSNotFound || bb == _T0;
+        NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:bb.phiNodes];
+        [all addObjectsFromArray:bb.instructions];
+        if (bb.terminator)
+            [all addObject:bb.terminator];
+        for (NSUInteger i = 0; i < all.count; i++)
+            {
+            if (bb == _T0 && i < bb.phiNodes.count)
+                continue;
+            for (XTIROperand* o in all[i].operands)
+                {
+                if (o.kind != XTIROperandKindUse)
+                    continue;
+                if (!inLoop && [_region containsObject:@(o.valueId)])
+                    return NO;
+                if (inLoop && bb != _E && bb != _H && [self isAcc:o.valueId])
+                    return NO;
+                }
+            }
+        }
+    return YES;
+    }
+
+- (BOOL)operandOK:(XTIROperand*)o mask:(BOOL)maskOK
+    {
+    if (o.kind == XTIROperandKindImmI || o.kind == XTIROperandKindImmF)
+        return YES;
+    if (o.kind != XTIROperandKindUse)
+        return NO;
+    XTIRValueId v = o.valueId;
+    XTIRType* t = _valOf[@(v)].type;
+    if (v == _ivPhi.result.valueId || [_region containsObject:@(v)])
+        return escLane32(t) || (maskOK && t.kind == XTIRTypeKindBool);
+    if ([self isAcc:v])
+        return NO;
+    if (!escLane32(t))
+        return NO;
+    XTIRInsn* d = _defOf[@(v)];
+    if (d && d.opcode == XTIROpConst)
+        return YES;
+    XTIRBlock* at = [self blockOf:v];
+    return !at || !(at == _H || at == _E || [[self regionBlocks] indexOfObjectIdenticalTo:at] != NSNotFound);
+    }
+
+- (int64_t)constOfOrNeg:(XTIROperand*)o
+    {
+    int32_t k = 0;
+    if (![self constOf:o into:&k])
+        return -1;
+    return k;
+    }
+
+static int64_t escLog2(int64_t v)
+    {
+    if (v <= 0 || (v & (v - 1)) != 0)
+        return -1;
+    int64_t s = 0;
+    while (((int64_t)1 << s) < v)
+        s++;
+    return s;
+    }
+
+- (BOOL)smallUnsigned:(XTIROperand*)o
+    {
+    if (o.kind != XTIROperandKindUse)
+        return NO;
+    XTIRInsn* d = _defOf[@(o.valueId)];
+    if (!d || d.operands.count < 2)
+        return NO;
+    int64_t k = [self constOfOrNeg:d.operands[1]];
+    if (d.opcode == XTIROpURem)
+        return k > 0 && k <= 0x80000000LL;
+    if (d.opcode == XTIROpUDiv)
+        return k >= 2;
+    if (d.opcode == XTIROpLShr)
+        return k >= 1 && k < 32;
+    if (d.opcode == XTIROpAnd)
+        return k >= 0 && k <= 0x7FFFFFFF;
+    return NO;
+    }
+
+static BOOL escFloatPred(uint8_t p)
+    {
+    return p == XTIRFCmpOLT || p == XTIRFCmpOLE || p == XTIRFCmpOGT || p == XTIRFCmpOGE || p == XTIRFCmpOEQ;
+    }
+
+// `(u32)100`: a ZExt/SExt/Trunc of a constant, which is itself a constant.
+- (BOOL)isConstExt:(XTIRInsn*)n
+    {
+    if (!n || !n.result)
+        return NO;
+    if (n.opcode != XTIROpZExt && n.opcode != XTIROpSExt && n.opcode != XTIROpTrunc)
+        return NO;
+    int32_t k = 0;
+    return escLane32(n.result.type) && n.result.type.kind != XTIRTypeKindF32
+        && [self constOf:[XTIROperand useWithValueId:n.result.valueId] into:&k];
+    }
+
+- (BOOL)laneable:(XTIRInsn*)n
+    {
+    XTIROpcode op = n.opcode;
+    // A constant of any width: one is only read through a splat (a lane
+    // operation on a narrow one would itself be narrow, and refused).
+    if (op == XTIROpConst)
+        return n.result != nil;
+    if ([self isConstExt:n])
+        return YES;
+    if (!n.result)
+        return NO;
+    XTIRType* t = n.result.type;
+    BOOL isBool = t.kind == XTIRTypeKindBool;
+    if (!escLane32(t) && !isBool)
+        return NO;
+    NSUInteger nops = n.operands.count;
+    if (op == XTIROpAdd || op == XTIROpSub || op == XTIROpMul || op == XTIROpFAdd || op == XTIROpFSub
+        || op == XTIROpFMul || op == XTIROpFDiv)
+        return !isBool && nops == 2 && [self operandOK:n.operands[0] mask:NO] && [self operandOK:n.operands[1] mask:NO];
+    if (op == XTIROpAnd || op == XTIROpOr || op == XTIROpXor)
+        return nops == 2 && t.kind != XTIRTypeKindF32 && [self operandOK:n.operands[0] mask:isBool]
+            && [self operandOK:n.operands[1] mask:isBool]
+            && (!isBool || (n.operands[0].kind == XTIROperandKindUse && n.operands[1].kind == XTIROperandKindUse));
+    if (op == XTIROpNot)
+        return isBool && nops == 1 && [self operandOK:n.operands[0] mask:YES]
+            && n.operands[0].kind == XTIROperandKindUse;
+    if (op == XTIROpShl || op == XTIROpLShr)
+        {
+        int64_t k = nops == 2 ? [self constOfOrNeg:n.operands[1]] : -1;
+        return !isBool && t.kind != XTIRTypeKindF32 && k >= 0 && k < 32 && [self operandOK:n.operands[0] mask:NO];
+        }
+    if (op == XTIROpURem || op == XTIROpUDiv)
+        return !isBool && t.kind != XTIRTypeKindF32 && nops == 2 && escLog2([self constOfOrNeg:n.operands[1]]) >= 0
+            && [self operandOK:n.operands[0] mask:NO];
+    if (op == XTIROpSIToFp || op == XTIROpUIToFp)
+        {
+        if (nops != 1 || t.kind != XTIRTypeKindF32)
+            return NO;
+        XTIROperand* a = n.operands[0];
+        if (![self operandOK:a mask:NO] || a.kind != XTIROperandKindUse || _valOf[@(a.valueId)].type.kind == XTIRTypeKindF32)
+            return NO;
+        return op == XTIROpSIToFp || [self smallUnsigned:a];
+        }
+    if (op == XTIROpICmp || op == XTIROpFCmp)
+        {
+        if (!isBool || nops != 2)
+            return NO;
+        XTIROperand *a = n.operands[0], *b = n.operands[1];
+        if (![self operandOK:a mask:NO] || ![self operandOK:b mask:NO])
+            return NO;
+        if (a.kind != XTIROperandKindUse && b.kind != XTIROperandKindUse)
+            return NO;
+        return op == XTIROpICmp || escFloatPred(n.predicate);
+        }
+    if (op == XTIROpSelect)
+        {
+        if (isBool || nops != 3)
+            return NO;
+        XTIROperand* c = n.operands[0];
+        return c.kind == XTIROperandKindUse && [self operandOK:c mask:YES]
+            && _valOf[@(c.valueId)].type.kind == XTIRTypeKindBool
+            && [self operandOK:n.operands[1] mask:NO] && [self operandOK:n.operands[2] mask:NO];
+        }
+    return NO;
+    }
+
+// ── the rewrite ──────────────────────────────────────────────────────────────
+
+- (XTIRType*)vecTy:(XTIRType*)scalar
+    {
+    if (scalar.kind == XTIRTypeKindBool)
+        return [XTIRType vecWithLane:[XTIRType i32Type] bytes:(uint32_t)self.bytes];
+    return [XTIRType vecWithLane:scalar bytes:(uint32_t)self.bytes];
+    }
+
+- (XTIRValue*)newVal:(XTIRType*)t home:(XTIRBlock*)home
+    {
+    XTIRValueId rid = [_fn allocateValueId];
+    XTIRValue* v = [[XTIRValue alloc] initWithValueId:rid
+                                                 type:t
+                                              defSite:[[XTIRDefSite alloc] initWithBlock:home insnIndex:0]];
+    [_fn registerValue:v];
+    _valOf[@(rid)] = v;
+    return v;
+    }
+
+// escPut: a new value of `t`, made by `op` from `a` (and `b`), appended.
+- (XTIRValue*)put:(NSMutableArray<XTIRInsn*>*)into home:(XTIRBlock*)home op:(XTIROpcode)op ty:(XTIRType*)t
+                a:(XTIROperand*)a b:(XTIROperand*)b
+    {
+    XTIRValue* r = [self newVal:t home:home];
+    NSMutableArray* ops = [NSMutableArray array];
+    if (a)
+        [ops addObject:a];
+    if (b)
+        [ops addObject:b];
+    [into addObject:[[XTIRInsn alloc] initWithOpcode:op result:r operands:ops dbgLoc:nil]];
+    return r;
+    }
+
+- (XTIRValue*)put:(NSMutableArray<XTIRInsn*>*)into home:(XTIRBlock*)home op:(XTIROpcode)op ty:(XTIRType*)t
+                a:(XTIROperand*)a b:(XTIROperand*)b pred:(uint8_t)pred
+    {
+    XTIRValue* r = [self newVal:t home:home];
+    [into addObject:[[XTIRInsn alloc] initWithOpcode:op result:r operands:@[ a, b ] predicate:pred dbgLoc:nil]];
+    return r;
+    }
+
+- (XTIRValue*)splatOf:(XTIROperand*)o scalar:(XTIRType*)scalarTy
+    {
+    NSMutableArray* pre = _splatTo;
+    XTIRBlock* home = _splatHome;
+    if (o.kind == XTIROperandKindUse)
+        {
+        NSNumber* have = _fresh ? nil : _splat[@(o.valueId)];
+        if (have)
+            return _valOf[have];
+        XTIROperand* src = o;
+        XTIRInsn* d = _defOf[@(o.valueId)];
+        XTIRType* ot = _valOf[@(o.valueId)].type;
+        if (d && (d.opcode == XTIROpConst || [self isConstExt:d]))
+            {
+            XTIRValue* cv = [self newVal:ot home:home];
+            XTIROperand* k0 = d.operands[0];
+            if (d.opcode != XTIROpConst)
+                {
+                int32_t k = 0;
+                [self constOf:o into:&k];
+                k0 = [XTIROperand immIWithType:ot value:(int64_t)k];
+                }
+            [pre addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst result:cv operands:@[ k0 ] dbgLoc:nil]];
+            src = [XTIROperand useWithValueId:cv.valueId];
+            }
+        XTIRValue* s = [self put:pre home:home op:XTIROpVSplat ty:[self vecTy:ot] a:src b:nil];
+        if (!_fresh)
+            _splat[@(o.valueId)] = @(s.valueId);
+        return s;
+        }
+    XTIRValue* cv = [self newVal:scalarTy home:home];
+    [pre addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst result:cv operands:@[ o ] dbgLoc:nil]];
+    return [self put:pre home:home op:XTIROpVSplat ty:[self vecTy:scalarTy]
+                   a:[XTIROperand useWithValueId:cv.valueId] b:nil];
+    }
+
+- (XTIROperand*)v:(XTIROperand*)o scalar:(XTIRType*)scalarTy
+    {
+    if (o.kind == XTIROperandKindUse)
+        {
+        NSNumber* m = _map[@(o.valueId)];
+        if (m)
+            return [XTIROperand useWithValueId:m.unsignedLongLongValue];
+        return [XTIROperand useWithValueId:[self splatOf:o scalar:_valOf[@(o.valueId)].type].valueId];
+        }
+    return [XTIROperand useWithValueId:[self splatOf:o scalar:scalarTy].valueId];
+    }
+
+- (XTIRType*)opTy:(XTIRInsn*)n at:(NSUInteger)k
+    {
+    XTIROperand* o = n.operands[k];
+    if (o.kind == XTIROperandKindUse && _valOf[@(o.valueId)])
+        return _valOf[@(o.valueId)].type;
+    for (XTIROperand* p in n.operands)
+        if (p.kind == XTIROperandKindUse && _valOf[@(p.valueId)])
+            return _valOf[@(p.valueId)].type;
+    return n.result.type;
+    }
+
+- (XTIRValue*)blend:(NSMutableArray*)into home:(XTIRBlock*)home ty:(XTIRType*)vty
+               mask:(XTIRValue*)m a:(XTIRValue*)a b:(XTIRValue*)b
+    {
+    XTIRValue* d = [self put:into home:home op:XTIROpVXor ty:vty a:[XTIROperand useWithValueId:a.valueId]
+                           b:[XTIROperand useWithValueId:b.valueId]];
+    XTIRValue* e = [self put:into home:home op:XTIROpVAnd ty:vty a:[XTIROperand useWithValueId:d.valueId]
+                           b:[XTIROperand useWithValueId:m.valueId]];
+    return [self put:into home:home op:XTIROpVXor ty:vty a:[XTIROperand useWithValueId:b.valueId]
+                   b:[XTIROperand useWithValueId:e.valueId]];
+    }
+
+- (void)lane:(NSMutableArray<XTIRInsn*>*)into home:(XTIRBlock*)home insn:(XTIRInsn*)n
+    {
+    XTIROpcode op = n.opcode;
+    if (op == XTIROpConst || [_skip containsObject:@(n.result.valueId)] || [self isConstExt:n])
+        return;
+    XTIRType* vty = [self vecTy:n.result.type];
+    XTIRValue* r = nil;
+    XTIROperand* a = n.operands[0];
+    if (op == XTIROpNot)
+        {
+        XTIROperand* va = [self v:a scalar:n.result.type];
+        r = [self put:into home:home op:XTIROpVNot ty:vty a:va b:nil];
+        }
+    else if (op == XTIROpSIToFp || op == XTIROpUIToFp)
+        {
+        XTIROperand* va = [self v:a scalar:_valOf[@(a.valueId)].type];
+        r = [self put:into home:home op:XTIROpVSIToFp ty:vty a:va b:nil];
+        }
+    else if (op == XTIROpSelect)
+        {
+        XTIRValue* m = _valOf[_map[@(a.valueId)]];
+        XTIRValue* x = _valOf[@([self v:n.operands[1] scalar:n.result.type].valueId)];
+        XTIRValue* y = _valOf[@([self v:n.operands[2] scalar:n.result.type].valueId)];
+        r = [self blend:into home:home ty:vty mask:m a:x b:y];
+        }
+    else
+        {
+        NSUInteger before = into.count;
+        r = [self lane2:into home:home insn:n ty:vty];
+        if (into.count == before)
+            {
+            _map[@(n.result.valueId)] = @(r.valueId);
+            return;
+            }
+        }
+    _map[@(n.result.valueId)] = @(r.valueId);
+    XTIRInsn* last = into.lastObject;
+    if (n.dbgLoc)
+        into[into.count - 1] = [[XTIRInsn alloc] initWithOpcode:last.opcode result:last.result operands:last.operands
+                                                      predicate:last.predicate dbgLoc:n.dbgLoc];
+    }
+
+- (BOOL)isTwo:(XTIROperand*)o
+    {
+    XTIROperand* c = o;
+    if (o.kind == XTIROperandKindUse)
+        {
+        XTIRInsn* d = _defOf[@(o.valueId)];
+        if (!d || d.opcode != XTIROpConst || d.operands.count < 1)
+            return NO;
+        c = d.operands[0];
+        }
+    return c.kind == XTIROperandKindImmF && c.floatRawBytes == 0x4000000000000000ULL;
+    }
+
+- (XTIRValue*)putC:(NSMutableArray*)into home:(XTIRBlock*)home op:(XTIROpcode)op ty:(XTIRType*)t
+                 a:(XTIROperand*)a b:(XTIROperand*)b
+    {
+    NSString* k = [NSString stringWithFormat:@"%u:%llu:%llu", (unsigned)op, (unsigned long long)a.valueId,
+                            (unsigned long long)b.valueId];
+    NSNumber* have = _cse[k];
+    if (have)
+        return _valOf[have];
+    XTIRValue* r = [self put:into home:home op:op ty:t a:a b:b];
+    _cse[k] = @(r.valueId);
+    return r;
+    }
+
+- (XTIRValue*)lane2:(NSMutableArray*)into home:(XTIRBlock*)home insn:(XTIRInsn*)n ty:(XTIRType*)vty
+    {
+    XTIROpcode op = n.opcode;
+    XTIROperand *a = n.operands[0], *b = n.operands[1];
+    XTIRType* ta = [self opTy:n at:0];
+    XTIRType* tb = [self opTy:n at:1];
+    if (op == XTIROpShl || op == XTIROpLShr)
+        {
+        XTIROperand* va = [self v:a scalar:ta];
+        return [self put:into home:home op:(op == XTIROpShl ? XTIROpVShl : XTIROpVLShr) ty:vty a:va
+                       b:[XTIROperand immIWithType:n.result.type value:[self constOfOrNeg:b]]];
+        }
+    if (op == XTIROpUDiv)
+        {
+        XTIROperand* va = [self v:a scalar:ta];
+        return [self put:into home:home op:XTIROpVLShr ty:vty a:va
+                       b:[XTIROperand immIWithType:n.result.type value:escLog2([self constOfOrNeg:b])]];
+        }
+    if (op == XTIROpURem)
+        {
+        XTIROperand* va = [self v:a scalar:ta];
+        XTIRValue* m = [self splatOf:[XTIROperand immIWithType:n.result.type value:[self constOfOrNeg:b] - 1]
+                              scalar:n.result.type];
+        return [self put:into home:home op:XTIROpVAnd ty:vty a:va b:[XTIROperand useWithValueId:m.valueId]];
+        }
+    if (op == XTIROpICmp || op == XTIROpFCmp)
+        {
+        XTIROperand* va = [self v:a scalar:ta];
+        XTIROperand* vb = [self v:b scalar:tb];
+        return [self put:into home:home op:(op == XTIROpICmp ? XTIROpVICmp : XTIROpVFCmp) ty:vty a:va b:vb
+                    pred:n.predicate];
+        }
+    if (op == XTIROpFMul && ([self isTwo:a] || [self isTwo:b]))
+        {
+        XTIROperand* v = [self v:([self isTwo:a] ? b : a) scalar:n.result.type];
+        return [self putC:into home:home op:XTIROpVAdd ty:vty a:v b:v];
+        }
+    XTIROpcode vop = XTIROpVAdd;
+    if (op == XTIROpSub || op == XTIROpFSub)
+        vop = XTIROpVSub;
+    else if (op == XTIROpMul || op == XTIROpFMul)
+        vop = XTIROpVMul;
+    else if (op == XTIROpFDiv)
+        vop = XTIROpVDiv;
+    else if (op == XTIROpAnd)
+        vop = XTIROpVAnd;
+    else if (op == XTIROpOr)
+        vop = XTIROpVOr;
+    else if (op == XTIROpXor)
+        vop = XTIROpVXor;
+    XTIROperand* va = [self v:a scalar:ta];
+    XTIROperand* vb = [self v:b scalar:tb];
+    return [self putC:into home:home op:vop ty:vty a:va b:vb];
+    }
+
+// The `p + 1` in L that is T0 phi p's next value and read by nothing else.
+- (XTIRInsn*)counterOf:(XTIRInsn*)p
+    {
+    if (p.result.type.kind == XTIRTypeKindF32)
+        return nil;
+    XTIROperand* back = escFrom(p, _L);
+    if (!back || back.kind != XTIROperandKindUse)
+        return nil;
+    XTIRInsn* d = _defOf[@(back.valueId)];
+    if (!d || d.opcode != XTIROpAdd || d.operands.count != 2 || [self blockOf:d.result.valueId] != _L)
+        return nil;
+    XTIROperand *a = d.operands[0], *b = d.operands[1];
+    BOOL aP = a.kind == XTIROperandKindUse && a.valueId == p.result.valueId;
+    XTIROperand* step = aP ? b : a;
+    XTIROperand* self0 = aP ? a : b;
+    int32_t one = 0;
+    if (self0.kind != XTIROperandKindUse || self0.valueId != p.result.valueId || ![self constOf:step into:&one]
+        || one != 1)
+        return nil;
+    if ([self uses:d.result.valueId] != 1)
+        return nil;
+    return d;
+    }
+
+- (NSUInteger)uses:(XTIRValueId)v
+    {
+    NSUInteger c = 0;
+    for (XTIRBlock* bb in _fn.blocks)
+        {
+        NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:bb.phiNodes];
+        [all addObjectsFromArray:bb.instructions];
+        if (bb.terminator)
+            [all addObject:bb.terminator];
+        for (XTIRInsn* n in all)
+            for (XTIROperand* o in n.operands)
+                if (o.kind == XTIROperandKindUse && o.valueId == v)
+                    c++;
+        }
+    return c;
+    }
+
+// `k < N` on a counter k that enters at a constant c0 < N: the scalar test on
+// the inner loop's trip count (the port's escTripTest explains).
+- (void)tripTest
+    {
+    _tripTest = -1;
+    for (NSUInteger t = 0; t < _tests.count; t++)
+        {
+        if (_cont[t].intValue != 1)
+            continue;
+        XTIRBlock* T = _tests[t];
+        XTIROperand* co = T.terminator.operands[0];
+        XTIRInsn* g = _defOf[@(co.valueId)];
+        // `k < N && rest`, if-converted to an And: the trip count takes the
+        // `k < N` half and the rest stays a lane test.
+        _tripAnd = nil;
+        _tripOther = nil;
+        if (g && g.opcode == XTIROpAnd && g.operands.count == 2 && [self uses:g.result.valueId] == 1
+            && [_region containsObject:@(g.result.valueId)])
+            {
+            XTIRInsn* andI = g;
+            g = nil;
+            for (NSUInteger h = 0; h < 2 && !g; h++)
+                {
+                XTIROperand* side = andI.operands[h];
+                XTIROperand* other = andI.operands[1 - h];
+                if (side.kind != XTIROperandKindUse || other.kind != XTIROperandKindUse)
+                    continue;
+                XTIRInsn* q = _defOf[@(side.valueId)];
+                if (q && q.opcode == XTIROpICmp && [self tripCmpOK:q inAnd:YES])
+                    {
+                    g = q;
+                    _tripAnd = andI;
+                    _tripOther = other;
+                    }
+                }
+            if (!g)
+                continue;
+            }
+        else if (!g || g.opcode != XTIROpICmp || ![self tripCmpOK:g inAnd:NO] || [self blockOf:g.result.valueId] != T)
+            continue;
+        BOOL ult = g.predicate == XTIRICmpULT;
+        if (!ult && g.predicate != XTIRICmpSLT)
+            continue;
+        XTIROperand* k = g.operands[0];
+        int32_t n = 0, c0 = 0;
+        if (k.kind != XTIROperandKindUse || ![self constOf:g.operands[1] into:&n])
+            continue;
+        XTIRInsn* p = nil;
+        for (XTIRInsn* q in _T0.phiNodes)
+            if (q.result.valueId == k.valueId)
+                p = q;
+        if (!p || ![self counterOf:p] || ![self constOf:escFrom(p, _B) into:&c0])
+            continue;
+        BOOL below = ult ? (uint32_t)c0 < (uint32_t)n : c0 < n;
+        if (!below)
+            continue;
+        _tripTest = (NSInteger)t;
+        _tripN = ult ? (int64_t)(uint32_t)n : (int64_t)n;
+        _tripC0 = ult ? (int64_t)(uint32_t)c0 : (int64_t)c0;
+        _tripTy = p.result.type;
+        _tripSigned = !ult;
+        [_skip addObject:@(g.result.valueId)];
+        if (_tripAnd)
+            [_skip addObject:@(_tripAnd.result.valueId)];
+        return;
+        }
+    }
+
+// A compare the trip count can replace: two operands, read once, defined in
+// the loop.
+- (BOOL)tripCmpOK:(XTIRInsn*)g inAnd:(BOOL)inAnd
+    {
+    if (g.operands.count != 2 || [self uses:g.result.valueId] != 1)
+        return NO;
+    return !inAnd || [_region containsObject:@(g.result.valueId)];
+    }
+
+- (void)apply
+    {
+    _map = [NSMutableDictionary dictionary];
+    _splat = [NSMutableDictionary dictionary];
+    _exit = [NSMutableDictionary dictionary];
+    _pre = [NSMutableArray array];
+    _splatTo = _pre;
+    _splatHome = _PH;
+    _fresh = NO;
+    _cse = [NSMutableDictionary dictionary];
+    _skip = [NSMutableSet set];
+    for (XTIRInsn* p in _T0.phiNodes)
+        {
+        XTIRInsn* ctr = [self counterOf:p];
+        if (ctr)
+            [_skip addObject:@(ctr.result.valueId)];
+        }
+    [self tripTest];
+    XTIRBlock* VH = [[XTIRBlock alloc] init];
+    VH.name = xtvUniqueBlockName(_fn, [NSString stringWithFormat:@"%@_esc", _H.name ?: @""]);
+    XTIRBlock* VB = [[XTIRBlock alloc] init];
+    VB.name = xtvUniqueBlockName(_fn, [NSString stringWithFormat:@"%@_esc", _B.name ?: @""]);
+    XTIRBlock* VI = [[XTIRBlock alloc] init];
+    VI.name = xtvUniqueBlockName(_fn, [NSString stringWithFormat:@"%@_esc", _T0.name ?: @""]);
+    XTIRBlock* VE = [[XTIRBlock alloc] init];
+    VE.name = xtvUniqueBlockName(_fn, [NSString stringWithFormat:@"%@_esc", _E.name ?: @""]);
+    XTIRBlock* VX = [[XTIRBlock alloc] init];
+    VX.name = xtvUniqueBlockName(_fn, [NSString stringWithFormat:@"%@_escx", _H.name ?: @""]);
+    XTIRValue* viv = [self newVal:_ivPhi.result.type home:VH];
+    _VB = VB;
+    XTIRValue* vivNext = [self head:VH body:VB latch:VE exit:VX iv:viv];
+    [self body:VB inner:VI iv:viv];
+    [self innerLoop:VI exit:VE];
+    [self latch:VE head:VH iv:viv next:vivNext];
+    [self exitTo:VX iv:viv];
+    [_PH.instructions addObjectsFromArray:_pre];
+    [_PH.terminator replaceOperands:@[ [XTIROperand blockWithRef:VH] ]];
+    NSUInteger at = [_fn.blocks indexOfObjectIdenticalTo:_PH];
+    [_fn.blocks insertObjects:@[ VH, VB, VI, VE, VX ]
+                    atIndexes:[NSIndexSet indexSetWithIndexesInRange:NSMakeRange(at + 1, 5)]];
+    }
+
+- (XTIRValue*)head:(XTIRBlock*)VH body:(XTIRBlock*)VB latch:(XTIRBlock*)VE exit:(XTIRBlock*)VX iv:(XTIRValue*)viv
+    {
+    XTIRType* ivTy = _ivPhi.result.type;
+    XTIRValue* vivNext = [self newVal:ivTy home:VE];
+    [VH.phiNodes addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpPhi
+                                                     result:viv
+                                                   operands:@[ [XTIROperand blockWithRef:_PH], escFrom(_ivPhi, _PH),
+                                                               [XTIROperand blockWithRef:VE],
+                                                               [XTIROperand useWithValueId:vivNext.valueId] ]
+                                                     dbgLoc:nil]];
+    _vsum = [NSMutableArray array];
+    _vsumNext = [NSMutableArray array];
+    for (XTIRInsn* acc in _accPhis)
+        {
+        XTIRType* t = acc.result.type;
+        XTIRValue* vs = [self newVal:t home:VH];
+        XTIRValue* vn = [self newVal:t home:VE];
+        [VH.phiNodes addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpPhi
+                                                         result:vs
+                                                       operands:@[ [XTIROperand blockWithRef:_PH], escFrom(acc, _PH),
+                                                                   [XTIROperand blockWithRef:VE],
+                                                                   [XTIROperand useWithValueId:vn.valueId] ]
+                                                         dbgLoc:nil]];
+        [_vsum addObject:vs];
+        [_vsumNext addObject:vn];
+        }
+    XTIRValue* c = nil;
+    if (_boundConst)
+        c = [self put:VH.instructions home:VH op:XTIROpICmp ty:[XTIRType boolType]
+                    a:[XTIROperand useWithValueId:viv.valueId]
+                    b:[XTIROperand immIWithType:ivTy value:_n - (int64_t)_vf]
+                 pred:(_signed ? XTIRICmpSLE : XTIRICmpULE)];
+    else
+        {
+        // A run-time bound: viv < N and N - viv >= VF (N - VF could wrap).
+        XTIRType* b = [XTIRType boolType];
+        XTIRValue* c1 = [self put:VH.instructions home:VH op:XTIROpICmp ty:b
+                                a:[XTIROperand useWithValueId:viv.valueId] b:_boundOp
+                             pred:(_signed ? XTIRICmpSLT : XTIRICmpULT)];
+        XTIRValue* rem = [self put:VH.instructions home:VH op:XTIROpSub ty:ivTy a:_boundOp
+                                 b:[XTIROperand useWithValueId:viv.valueId]];
+        XTIRValue* c2 = [self put:VH.instructions home:VH op:XTIROpICmp ty:b
+                                a:[XTIROperand useWithValueId:rem.valueId]
+                                b:[XTIROperand immIWithType:ivTy value:(int64_t)_vf]
+                             pred:(_signed ? XTIRICmpSGE : XTIRICmpUGE)];
+        c = [self put:VH.instructions home:VH op:XTIROpAnd ty:b a:[XTIROperand useWithValueId:c1.valueId]
+                    b:[XTIROperand useWithValueId:c2.valueId]];
+        }
+    [VH setTerminator:[[XTIRInsn alloc] initWithOpcode:XTIROpCondBranch
+                                                result:nil
+                                              operands:@[ [XTIROperand useWithValueId:c.valueId],
+                                                          [XTIROperand blockWithRef:VB], [XTIROperand blockWithRef:VX] ]
+                                                dbgLoc:nil]];
+    return vivNext;
+    }
+
+- (void)body:(XTIRBlock*)VB inner:(XTIRBlock*)VI iv:(XTIRValue*)viv
+    {
+    XTIRType* ivTy = _ivPhi.result.type;
+    XTIRType* vty = [self vecTy:ivTy];
+    XTIRSymbolId nm = xtvIotaSymbol(ivTy, self.bytes, _fn);
+    XTIRValue* ip = [self newVal:[XTIRType ptrToType:ivTy window:0] home:VB];
+    [VB.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpAddrOf
+                                                         result:ip
+                                                       operands:@[ [XTIROperand symWithSymbolId:nm] ]
+                                                         dbgLoc:nil]];
+    XTIRValue* iota = [self put:VB.instructions home:VB op:XTIROpVLoad ty:vty
+                              a:[XTIROperand useWithValueId:ip.valueId] b:nil];
+    _splatTo = VB.instructions;
+    _splatHome = VB;
+    NSMutableDictionary* outer = _splat;
+    _splat = [NSMutableDictionary dictionary];
+    NSMutableArray* body = [NSMutableArray array];
+    XTIRValue* s = [self put:body home:VB op:XTIROpVSplat ty:vty a:[XTIROperand useWithValueId:viv.valueId] b:nil];
+    XTIRValue* lanes = [self put:body home:VB op:XTIROpVAdd ty:vty a:[XTIROperand useWithValueId:s.valueId]
+                               b:[XTIROperand useWithValueId:iota.valueId]];
+    _map[@(_ivPhi.result.valueId)] = @(lanes.valueId);
+    for (XTIRInsn* n in _B.instructions)
+        [self lane:body home:VB insn:n];
+    [VB.instructions addObjectsFromArray:body];
+    _splat = outer;
+    [VB setTerminator:[[XTIRInsn alloc] initWithOpcode:XTIROpBranch
+                                                result:nil
+                                              operands:@[ [XTIROperand blockWithRef:VI] ]
+                                                dbgLoc:nil]];
+    }
+
+- (void)innerLoop:(XTIRBlock*)VI exit:(XTIRBlock*)VE
+    {
+    XTIRType* mty = [self vecTy:[XTIRType boolType]];
+    _splatTo = _VB.instructions;
+    _splatHome = _VB;
+    _fresh = YES;
+    XTIRValue* ones = [self splatOf:[XTIROperand immIWithType:[XTIRType i32Type] value:-1] scalar:[XTIRType i32Type]];
+    NSMutableArray<XTIRValue*>* phis = [NSMutableArray array];
+    NSMutableArray<XTIRValue*>* nexts = [NSMutableArray array];
+    for (XTIRInsn* p in _T0.phiNodes)
+        {
+        [phis addObject:[self newVal:[self vecTy:p.result.type] home:VI]];
+        [nexts addObject:[self newVal:[self vecTy:p.result.type] home:VI]];
+        }
+    NSMutableArray<XTIROperand*>* entries = [NSMutableArray array];
+    NSMutableSet<NSNumber*>* taken = [NSMutableSet set];
+    for (XTIRInsn* p in _T0.phiNodes)
+        {
+        XTIROperand* ev = [self v:escFrom(p, _B) scalar:p.result.type];
+        if ([taken containsObject:@(ev.valueId)])
+            ev = [XTIROperand useWithValueId:[self put:_VB.instructions home:_VB op:XTIROpVOr
+                                                    ty:[self vecTy:p.result.type] a:ev b:ev].valueId];
+        [taken addObject:@(ev.valueId)];
+        [entries addObject:ev];
+        }
+    _fresh = NO;
+    _splatTo = _pre;
+    _splatHome = _PH;
+    for (NSUInteger i = 0; i < _T0.phiNodes.count; i++)
+        _map[@(_T0.phiNodes[i].result.valueId)] = @(phis[i].valueId);
+    XTIRValue* act = [self newVal:mty home:VI];
+    XTIRValue *trip = nil, *tripNext = nil;
+    if (_tripTest >= 0)
+        {
+        trip = [self newVal:_tripTy home:VI];
+        tripNext = [self newVal:_tripTy home:VI];
+        }
+    XTIRValue* actNext = [self innerBody:VI mask:mty act:act phis:phis nexts:nexts];
+    for (NSUInteger i = 0; i < _T0.phiNodes.count; i++)
+        {
+        [VI.phiNodes addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpPhi
+                                                         result:phis[i]
+                                                       operands:@[ [XTIROperand blockWithRef:_VB], entries[i],
+                                                                   [XTIROperand blockWithRef:VI],
+                                                                   [XTIROperand useWithValueId:nexts[i].valueId] ]
+                                                         dbgLoc:nil]];
+        _exit[@(_T0.phiNodes[i].result.valueId)] = @(nexts[i].valueId);
+        }
+    [VI.phiNodes addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpPhi
+                                                     result:act
+                                                   operands:@[ [XTIROperand blockWithRef:_VB],
+                                                               [XTIROperand useWithValueId:ones.valueId],
+                                                               [XTIROperand blockWithRef:VI],
+                                                               [XTIROperand useWithValueId:actNext.valueId] ]
+                                                     dbgLoc:nil]];
+    // The reduction reads a copy of the mask: some back ends fold a reduction
+    // in its operand's register, and the mask goes round again.
+    XTIRValue* probe = [self put:VI.instructions home:VI op:XTIROpVAnd ty:mty
+                               a:[XTIROperand useWithValueId:actNext.valueId]
+                               b:[XTIROperand useWithValueId:actNext.valueId]];
+    XTIRValue* any = [self put:VI.instructions home:VI op:XTIROpVReduceAdd ty:[XTIRType i32Type]
+                             a:[XTIROperand useWithValueId:probe.valueId] b:nil];
+    XTIRValue* c = [self put:VI.instructions home:VI op:XTIROpICmp ty:[XTIRType boolType]
+                           a:[XTIROperand useWithValueId:any.valueId]
+                           b:[XTIROperand immIWithType:[XTIRType i32Type] value:0]
+                        pred:XTIRICmpNE];
+    if (trip)
+        {
+        [VI.phiNodes addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpPhi
+                                                         result:trip
+                                                       operands:@[ [XTIROperand blockWithRef:_VB],
+                                                                   [XTIROperand immIWithType:_tripTy value:_tripC0],
+                                                                   [XTIROperand blockWithRef:VI],
+                                                                   [XTIROperand useWithValueId:tripNext.valueId] ]
+                                                         dbgLoc:nil]];
+        [VI.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpAdd
+                                                             result:tripNext
+                                                           operands:@[ [XTIROperand useWithValueId:trip.valueId],
+                                                                       [XTIROperand immIWithType:_tripTy value:1] ]
+                                                             dbgLoc:nil]];
+        XTIRValue* more = [self put:VI.instructions home:VI op:XTIROpICmp ty:[XTIRType boolType]
+                                  a:[XTIROperand useWithValueId:tripNext.valueId]
+                                  b:[XTIROperand immIWithType:_tripTy value:_tripN]
+                               pred:(_tripSigned ? XTIRICmpSLT : XTIRICmpULT)];
+        c = [self put:VI.instructions home:VI op:XTIROpAnd ty:[XTIRType boolType]
+                    a:[XTIROperand useWithValueId:c.valueId] b:[XTIROperand useWithValueId:more.valueId]];
+        }
+    [VI setTerminator:[[XTIRInsn alloc] initWithOpcode:XTIROpCondBranch
+                                                result:nil
+                                              operands:@[ [XTIROperand useWithValueId:c.valueId],
+                                                          [XTIROperand blockWithRef:VI], [XTIROperand blockWithRef:VE] ]
+                                                dbgLoc:nil]];
+    }
+
+- (XTIRValue*)innerBody:(XTIRBlock*)VI mask:(XTIRType*)mty act:(XTIRValue*)act
+                   phis:(NSArray<XTIRValue*>*)phis nexts:(NSArray<XTIRValue*>*)nexts
+    {
+    NSMutableArray* into = VI.instructions;
+    XTIRValue* live = act;
+    for (NSUInteger t = 0; t < _tests.count; t++)
+        {
+        XTIRBlock* T = _tests[t];
+        for (XTIRInsn* n in T.instructions)
+            [self lane:into home:VI insn:n];
+        if (_cont[t].intValue == 2)
+            continue;   // passes on: no test
+        XTIROperand* co = T.terminator.operands[0];
+        XTIRValue* m = nil;
+        if ((NSInteger)t == _tripTest)
+            {
+            // A scalar trip count instead (tripTest); what is And-ed with it is
+            // still a lane test.
+            if (!_tripOther)
+                continue;
+            m = _valOf[_map[@(_tripOther.valueId)]];
+            }
+        else
+            m = _valOf[_map[@(co.valueId)]];
+        if (_cont[t].intValue == 0)
+            m = [self put:into home:VI op:XTIROpVNot ty:mty a:[XTIROperand useWithValueId:m.valueId] b:nil];
+        live = [self put:into home:VI op:XTIROpVAnd ty:mty a:[XTIROperand useWithValueId:live.valueId]
+                       b:[XTIROperand useWithValueId:m.valueId]];
+        }
+    for (XTIRInsn* n in _L.instructions)
+        [self lane:into home:VI insn:n];
+    for (NSUInteger i = 0; i < _T0.phiNodes.count; i++)
+        {
+        XTIRInsn* p = _T0.phiNodes[i];
+        XTIRType* vty = [self vecTy:p.result.type];
+        if ([self counterOf:p])
+            {
+            [into addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVSub
+                                                      result:nexts[i]
+                                                    operands:@[ [XTIROperand useWithValueId:phis[i].valueId],
+                                                                [XTIROperand useWithValueId:live.valueId] ]
+                                                      dbgLoc:nil]];
+            continue;
+            }
+        XTIRValue* nv = _valOf[@([self v:escFrom(p, _L) scalar:p.result.type].valueId)];
+        XTIRValue* old = phis[i];
+        XTIRValue* d = [self put:into home:VI op:XTIROpVXor ty:vty a:[XTIROperand useWithValueId:nv.valueId]
+                               b:[XTIROperand useWithValueId:old.valueId]];
+        XTIRValue* e = [self put:into home:VI op:XTIROpVAnd ty:vty a:[XTIROperand useWithValueId:d.valueId]
+                               b:[XTIROperand useWithValueId:live.valueId]];
+        [into addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVXor
+                                                  result:nexts[i]
+                                                operands:@[ [XTIROperand useWithValueId:old.valueId],
+                                                            [XTIROperand useWithValueId:e.valueId] ]
+                                                  dbgLoc:nil]];
+        }
+    return live;
+    }
+
+- (void)latch:(XTIRBlock*)VE head:(XTIRBlock*)VH iv:(XTIRValue*)viv next:(XTIRValue*)vivNext
+    {
+    for (XTIRInsn* p in _T0.phiNodes)
+        _map[@(p.result.valueId)] = _exit[@(p.result.valueId)];
+    for (NSUInteger i = 0; i < _accPhis.count; i++)
+        {
+        XTIRType* t = _accPhis[i].result.type;
+        XTIROperand* w = [self v:_accW[i] scalar:t];
+        // The reduction folds in its operand's register on some back ends: it
+        // reads a copy.
+        XTIRValue* cp = [self put:VE.instructions home:VE op:XTIROpVOr ty:[self vecTy:t] a:w b:w];
+        XTIRValue* r = [self put:VE.instructions home:VE op:XTIROpVReduceAdd ty:t
+                               a:[XTIROperand useWithValueId:cp.valueId] b:nil];
+        [VE.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpAdd
+                                                             result:_vsumNext[i]
+                                                           operands:@[ [XTIROperand useWithValueId:_vsum[i].valueId],
+                                                                       [XTIROperand useWithValueId:r.valueId] ]
+                                                             dbgLoc:nil]];
+        }
+    if (_store)
+        {
+        // a[viv .. viv+VF-1] = the lanes, one vector store.
+        XTIROperand* sv = _store.operands[1];
+        XTIROperand* vv = [self v:sv scalar:_valOf[@(sv.valueId)].type];
+        XTIRValue* av = [self newVal:_storeAddr.result.type home:VE];
+        [VE.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpElementAddr
+                                                             result:av
+                                                           operands:@[ _storeAddr.operands[0],
+                                                                       [XTIROperand useWithValueId:viv.valueId] ]
+                                                             dbgLoc:nil]];
+        NSMutableArray<XTIROperand*>* ops = [NSMutableArray arrayWithObjects:[XTIROperand useWithValueId:av.valueId], vv, nil];
+        for (NSUInteger q = 2; q < _store.operands.count; q++)
+            [ops addObject:_store.operands[q]];
+        XTIRInsn* vs = [[XTIRInsn alloc] initWithOpcode:XTIROpVStore result:nil operands:ops dbgLoc:_store.dbgLoc];
+        if (_store.memoryResult)
+            vs.memoryResult = [self newVal:[XTIRType memoryType] home:VE];
+        [VE.instructions addObject:vs];
+        }
+    [VE.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpAdd
+                                                         result:vivNext
+                                                       operands:@[ [XTIROperand useWithValueId:viv.valueId],
+                                                                   [XTIROperand immIWithType:viv.type value:(int64_t)_vf] ]
+                                                         dbgLoc:nil]];
+    [VE setTerminator:[[XTIRInsn alloc] initWithOpcode:XTIROpBranch
+                                                result:nil
+                                              operands:@[ [XTIROperand blockWithRef:VH] ]
+                                                dbgLoc:nil]];
+    }
+
+- (void)exitTo:(XTIRBlock*)VX iv:(XTIRValue*)viv
+    {
+    for (NSUInteger i = 0; i < _accPhis.count; i++)
+        [self reenter:_accPhis[i] from:VX with:[XTIROperand useWithValueId:_vsum[i].valueId]];
+    [self reenter:_ivPhi from:VX with:[XTIROperand useWithValueId:viv.valueId]];
+    [VX setTerminator:[[XTIRInsn alloc] initWithOpcode:XTIROpBranch
+                                                result:nil
+                                              operands:@[ [XTIROperand blockWithRef:_H] ]
+                                                dbgLoc:nil]];
+    }
+
+- (void)reenter:(XTIRInsn*)p from:(XTIRBlock*)VX with:(XTIROperand*)v
+    {
+    NSMutableArray<XTIROperand*>* ops = [p.operands mutableCopy];
+    for (NSUInteger q = 0; q + 1 < ops.count; q += 2)
+        if (ops[q].blockRef == _PH)
+            {
+            ops[q] = [XTIROperand blockWithRef:VX];
+            ops[q + 1] = v;
+            }
+    [p replaceOperands:ops];
     }
 
 @end

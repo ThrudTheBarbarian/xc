@@ -1119,7 +1119,9 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
                      @"vpabsb":@[@1,@2,@0x1C,@0], @"vpabsw":@[@1,@2,@0x1D,@0],
                      @"vpabsd":@[@1,@2,@0x1E,@0],
                      // 2-operand VEX arithmetic: `vsqrtps ymm, ymm` (vvvv=1111).
-                     @"vsqrtps":@[@0,@1,@0x51,@0], @"vsqrtpd":@[@1,@1,@0x51,@0]};
+                     @"vsqrtps":@[@0,@1,@0x51,@0], @"vsqrtpd":@[@1,@1,@0x51,@0],
+                     // and the int-to-float lane conversion.
+                     @"vcvtdq2ps":@[@0,@1,@0x5B,@0]};
         });
         NSArray *v2 = vex2[mn];
         if (v2 && opCount == 2 && a && b) {
@@ -1235,13 +1237,16 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
             CLEANUP(); return out;
         }
     }
-    if ([mn hasPrefix:@"v"] && opCount == 3 && a && b) {
+    // vcmpps/vcmppd carry the predicate as a fourth, immediate operand.
+    BOOL vcmp = [mn isEqualToString:@"vcmpps"] || [mn isEqualToString:@"vcmppd"];
+    BOOL vimm4 = vcmp && opCount == 4 && opv[3].kind == OpImm;
+    if ([mn hasPrefix:@"v"] && (opCount == 3 || vimm4) && a && b) {
         NSString *base = [mn substringFromIndex:1];
         // The 0F map only, for now: the 0F38 table below is declared after this
         // point, and the vectoriser's VEX-worthy forms all live in sseRR. The
         // three-byte VEX form is written out regardless, because a high
         // register in the r/m or index field needs it whatever the map is.
-        NSArray *vr = sseRR[base];
+        NSArray *vr = vcmp ? ([base isEqualToString:@"cmppd"] ? @[@0x66, @0xC2] : @[@0, @0xC2]) : sseRR[base];
         int map = 1;
         // The 0F38 map: the SSE4.1 lane min/max and the 32-bit multiply, which
         // the 256-bit max/min reductions and i32 maps need.
@@ -1307,6 +1312,8 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
             }
             emit8(out, (uint8_t)[vr[1] intValue]);
             emitModRM(out, a->reg, src2);
+            if (vimm4)
+                emit8(out, (uint8_t)(opv[3].imm & 0xFF));
             CLEANUP(); return out;
         }
     }

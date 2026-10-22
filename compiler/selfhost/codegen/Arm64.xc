@@ -3668,6 +3668,8 @@ class Arm64
         if (op.equals(String.withCString("VRotl"))) { emitVRotl(n); return true; }
         if (op.equals(String.withCString("VExtract"))) { emitVExtract(n); return true; }
         if (op.equals(String.withCString("VICmp")))  { emitVICmp(n);  return true; }
+        if (op.equals(String.withCString("VFCmp")))  { emitVFCmp(n);  return true; }
+        if (op.equals(String.withCString("VSIToFp"))) { emitVSIToFp(n); return true; }
         if (op.equals(String.withCString("VReduceAdd")) || op.equals(String.withCString("VReduceMax"))
          || op.equals(String.withCString("VReduceMin"))) { emitVReduce(n); return true; }
         return false;
@@ -4040,6 +4042,44 @@ class Arm64
         u32 d = vecIndex(n.res());
         emitVec3(cm, arr, d, swap ? b : a, swap ? a : b);
         if (invert) _out.appendFormat("    not v%lu.16b, v%lu.16b\n", d, d);
+    }
+
+    // A lane-wise float compare, to the 0/-1 mask VICmp gives. `<` and `<=`
+    // are `>` and `>=` with the operands swapped (NaN fails both ways round,
+    // as the ordered predicates require); UNE is OEQ inverted.
+    void emitVFCmp(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)2 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+        if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
+        String* p = n.pred();
+        String* cm = (String*)0;
+        bool swap = false;
+        bool invert = false;
+        if (p != (String*)0) {
+            if (p.equals(String.withCString("OGT")))      cm = String.withCString("fcmgt");
+            else if (p.equals(String.withCString("OGE"))) cm = String.withCString("fcmge");
+            else if (p.equals(String.withCString("OLT"))) { cm = String.withCString("fcmgt"); swap = true; }
+            else if (p.equals(String.withCString("OLE"))) { cm = String.withCString("fcmge"); swap = true; }
+            else if (p.equals(String.withCString("OEQ"))) cm = String.withCString("fcmeq");
+            else if (p.equals(String.withCString("UNE"))) { cm = String.withCString("fcmeq"); invert = true; }
+        }
+        if (cm == (String*)0) { unsupported(String.withCString("VFCmp:pred")); return; }
+        u32 a = vecIndex(o0.val());
+        u32 b = vecIndex(o1.val());
+        u32 d = vecIndex(n.res());
+        emitVec3(cm, String.withCString("4s"), d, swap ? b : a, swap ? a : b);
+        if (invert) _out.appendFormat("    not v%lu.16b, v%lu.16b\n", d, d);
+    }
+
+    // Signed 32-bit lanes to float ones.
+    void emitVSIToFp(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        if (o0.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
+        _out.appendFormat("    scvtf v%lu.4s, v%lu.4s\n", vecIndex(n.res()), vecIndex(o0.val()));
     }
 
     // A horizontal reduction. Only i32/u32 lanes reach here — the reduction

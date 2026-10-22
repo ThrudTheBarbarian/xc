@@ -167,6 +167,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// from vectorizesHighMultiply because a back end can have the shift without
 /// the widening multiply the magic divide needs.
 - (BOOL)vectorizesLaneShift;
+/// The back end lowers VFCmp and VSIToFp, which escape-time loops need
+/// (mandelbrot): fcm*/scvtf on arm64, cmpps/cvtdq2ps on x86.
+- (BOOL)vectorizesEscapeLoops;
 
 // YES to rotate a top-tested loop into a bottom-tested one: the loop's exit test
 // is peeled into the preheader (run once) and duplicated at the bottom of the

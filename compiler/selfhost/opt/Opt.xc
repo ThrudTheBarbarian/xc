@@ -65,6 +65,7 @@ class OptProfile
     bool _highMul;           // back end lowers VMulHi (constant divide)
     bool _laneShift;         // back end lowers VLShr (lane shift by a constant)
     bool _iota;              // back end can build the lane-index vector
+    bool _escapeVec;         // back end has VFCmp and VSIToFp (escape-time loops)
     bool _floatReduce;       // FLOAT reductions may reassociate (arm64/x86-64)
     bool _orderedFloat;      // an ordered float sum: lanes added in order (arm64)
     bool _bitSelect;         // back end lowers VBsl and VRotl (arm64)
@@ -131,6 +132,7 @@ class OptProfile
         _highMul = false;
         _laneShift = false;
         _iota = false;
+        _escapeVec = false;
         _floatReduce = false;
         _orderedFloat = false;
         _bitSelect = false;
@@ -219,6 +221,9 @@ class OptProfile
         // VLoad the back end already has, so this needs no instruction
         // selection of its own — only somewhere to put the constant.
         p._iota = p._laneShift;
+        // The float lane compare and the int-to-float lane conversion the
+        // escape-time loops need: fcm*/scvtf on arm64, cmpps/cvtdq2ps on x86.
+        p._escapeVec = p._laneShift;
         // FLOAT reductions (a reassociation): only where the back end lowers
         // VDiv/VSqrt and a float VReduceAdd — arm64 and x86-64/win64. The
         // vectoriser also requires the source to grant it (see floatRedux).
@@ -390,6 +395,11 @@ class OptProfile
         {
         return _laneShift;
         }
+    bool escapeVec(void)
+        {
+        return _escapeVec;
+        }
+
     bool iota(void)
         {
         return _iota;
@@ -18352,6 +18362,1371 @@ class BeFact : Object
                 }
         }
 
+    // ── ESCAPE-TIME loops (2026-10-22). A counted loop over pixels whose body
+    // runs an inner loop until a per-pixel condition fails — mandelbrot's
+    //
+    //     for (i = s; i < N; i++) {
+    //         <lane arithmetic on i>
+    //         while (k < 256 && x*x + y*y < 4) { <lane arithmetic> }
+    //         total += k;
+    //     }
+    //
+    // goes across pixels: VF of them a step, each a lane. The inner loop runs
+    // with a lane mask: a lane whose condition has failed keeps its values
+    // (a blend), and the loop leaves when no lane is left. The scalar loop
+    // stays, as the remainder after the last whole step.
+    //
+    //   PH:  splats, the iota, the zero sums                 -> VH
+    //   VH:  viv; vsum… ; viv <= N - VF ?                    -> VB / VX
+    //   VB:  <i, i+1, …>, the pixel's lane arithmetic         -> VI
+    //   VI:  values, mask; tests, body, blends; any lane?    -> VI / VE
+    //   VE:  vsum += w; viv += VF                            -> VH
+    //   VX:  sum = entry + reduce(vsum)                      -> H (the scalar loop)
+    //
+    // Every instruction between the tests is computed for every lane, live or
+    // not, so all of them must be pure and unable to trap: no loads, stores,
+    // calls or division by a value. Recognition checks everything, so the
+    // rewrite never has to give up half-way.
+    IRBlock* _esH;
+    IRBlock* _esPH;
+    IRBlock* _esB;
+    IRBlock* _esT0;
+    IRBlock* _esL;
+    IRBlock* _esE;
+    IRBlock* _esX;
+    Array* _esTests;     // T0..Tm, in order
+    Array* _esCont;      // per test: Number 1 when it continues on true
+    IRInsn* _esIvPhi;
+    IRInsn* _esIvNext;
+    IRInsn* _esStoreAddr;    // E's `&a[i]`, or 0
+    IRInsn* _esStore;        // E's store of a lane value there, or 0
+    i64 _esN;
+    IROperand* _esBoundOp;
+    bool _esBoundConst;
+    bool _esSigned;
+    Array* _esAccPhis;
+    Array* _esAccW;      // the IROperand each sum adds
+    Set* _esRegion;      // values defined in B, the tests and L, and T0's phis
+    Map* _esDefOf;
+    Map* _esMap;         // scalar -> vector value
+    Map* _esSplat;       // invariant scalar -> its splat in PH
+    Map* _esExit;        // a T0 phi -> its blended value, as E reads it
+    u32 _esBytes;
+    u32 _esVF;
+
+    bool vecEscape(IRFunc* fn)
+        {
+        if (_profile == (OptProfile*)0 || !_profile.escapeVec())
+            return false;
+        _esDefOf = defMap(fn);
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            if (escRecognise(fn, (IRBlock*)fn.blocks().get(b)))
+                {
+                escApply(fn);
+                return true;
+                }
+        return false;
+        }
+
+    // The blocks that branch to `t`.
+    Array* escPreds(IRFunc* fn, IRBlock* t)
+        {
+        Array* ps = new Array();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            IRInsn* term = bb.term();
+            if (term == (IRInsn*)0)
+                continue;
+            for (u32 k = (u32)0; k < term.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)term.ops().get(k);
+                if (o.kind() == (u8)OPK_BLOCK && o.blk() == t)
+                    {
+                    ps.add((Object*)bb);
+                    break;
+                    }
+                }
+            }
+        return ps;
+        }
+
+    static bool escIs(IRInsn* n, string op)
+        {
+        return n != (IRInsn*)0 && n.op().equals(String.withCString(op));
+        }
+
+    // A phi's incoming operand from `b`, or 0.
+    static IROperand* escFrom(IRInsn* phi, IRBlock* b)
+        {
+        for (u32 q = (u32)0; q + (u32)1 < phi.ops().count(); q = q + (u32)2)
+            if (((IROperand*)phi.ops().get(q)).blk() == b)
+                return (IROperand*)phi.ops().get(q + (u32)1);
+        return (IROperand*)0;
+        }
+
+    static bool escLane32(String* t)
+        {
+        return t != (String*)0 && (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32"))
+                                   || t.equals(String.withCString("F32")));
+        }
+
+    Set* _esDone;        // headers already rewritten (their scalar loops remain)
+    IRFunc* _esFn;
+
+    bool escRecognise(IRFunc* fn, IRBlock* H)
+        {
+        if (_esDone.contains((Hashable*)H))
+            return false;
+        _esH = H;
+        _esFn = fn;
+        if (!escOuter(fn) || !escInner(fn) || !escExitBlock(fn))
+            return false;
+        _esBytes = vectorBytes();
+        _esVF = _esBytes / (u32)4;
+        if (_esBoundConst && (_esN < (i64)_esVF || _esN > (i64)$7FFFFFFF))
+            return false;
+        if (!_esBoundConst)
+            {
+            IRBlock* at = escBlockOf(fn, _esBoundOp.val());
+            if (at == _esH || at == _esE || escRegionBlocks().contains((Object*)at)
+                || _esBoundOp.val().ty() == (String*)0 || !_esBoundOp.val().ty().equals(_esIvPhi.res().ty()))
+                return false;
+            }
+        return escRegionOK(fn);
+        }
+
+    // H: `iv < N` over a phi stepping by one, N a constant; PH enters it by
+    // an unconditional branch, and its true edge goes to B.
+    bool escOuter(IRFunc* fn)
+        {
+        IRBlock* H = _esH;
+        IRInsn* term = H.term();
+        if (!escIs(term, "CondBranch") || term.ops().count() < (u32)3)
+            return false;
+        IROperand* co = (IROperand*)term.ops().get((u32)0);
+        if (co.kind() != (u8)OPK_USE)
+            return false;
+        IRInsn* g = (IRInsn*)_esDefOf.get((Hashable*)co.val());
+        if (!escIs(g, "ICmp") || g.ops().count() < (u32)2 || g.pred() == (String*)0)
+            return false;
+        bool ult = g.pred().equals(String.withCString("ULT"));
+        if (!ult && !g.pred().equals(String.withCString("SLT")))
+            return false;
+        _esSigned = !ult;
+        for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)H.insns().get(i);
+            if (n != g && !escIs(n, "Const"))
+                return false;
+            }
+        IROperand* g0 = (IROperand*)g.ops().get((u32)0);
+        if (g0.kind() != (u8)OPK_USE)
+            return false;
+        // The bound: a constant, or a value from outside the loop (checked once
+        // the loop's blocks are known, in escRecognise).
+        i32 nk = (i32)0;
+        _esBoundOp = (IROperand*)g.ops().get((u32)1);
+        _esBoundConst = vecConst(_esBoundOp, _esDefOf, &nk);
+        _esN = (i64)nk;
+        if (!_esBoundConst && (_esBoundOp.kind() != (u8)OPK_USE || _esBoundOp.val() == g0.val()))
+            return false;
+        _esB = ((IROperand*)term.ops().get((u32)1)).blk();
+        _esX = ((IROperand*)term.ops().get((u32)2)).blk();
+        if (_esB == H || _esX == H)
+            return false;
+        Array* ps = escPreds(fn, H);
+        if (ps.count() != (u32)2)
+            return false;
+        _esIvPhi = (IRInsn*)0;
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)H.phis().get(i);
+            if (p.res() == g0.val())
+                _esIvPhi = p;
+            }
+        if (_esIvPhi == (IRInsn*)0 || !escLane32(_esIvPhi.res().ty()) || _esIvPhi.res().ty().equals(String.withCString("F32")))
+            return false;
+        // The latch is the predecessor whose value is iv + 1; the other enters.
+        IRBlock* p0 = (IRBlock*)ps.get((u32)0);
+        IRBlock* p1 = (IRBlock*)ps.get((u32)1);
+        IROperand* b0 = escFrom(_esIvPhi, p0);
+        bool firstIsLatch = b0 != (IROperand*)0 && b0.kind() == (u8)OPK_USE
+                         && escIs((IRInsn*)_esDefOf.get((Hashable*)b0.val()), "Add")
+                         && escBlockOf(fn, b0.val()) == p0;
+        _esE = firstIsLatch ? p0 : p1;
+        _esPH = firstIsLatch ? p1 : p0;
+        if (_esE == _esB || _esPH == _esB || !escIs(_esPH.term(), "Branch"))
+            return false;
+        return escPreds(fn, _esB).count() == (u32)1 && _esB.phis().count() == (u32)0
+            && escIs(_esB.term(), "Branch");
+        }
+
+    IRBlock* escBlockOf(IRFunc* fn, IRValue* v)
+        {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                if (((IRInsn*)bb.insns().get(i)).res() == v)
+                    return bb;
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                if (((IRInsn*)bb.phis().get(i)).res() == v)
+                    return bb;
+            }
+        return (IRBlock*)0;
+        }
+
+    // B -> T0 (the inner header), a chain of tests each leaving for E, and
+    // L, the body, back to T0.
+    bool escInner(IRFunc* fn)
+        {
+        _esT0 = ((IROperand*)_esB.term().ops().get((u32)0)).blk();
+        if (_esT0 == _esH || _esT0 == _esB || _esT0.phis().count() == (u32)0)
+            return false;
+        _esTests = new Array();
+        _esCont = new Array();
+        IRBlock* cur = _esT0;
+        _esL = (IRBlock*)0;
+        while (_esTests.count() < (u32)8)
+            {
+            IRInsn* t = cur.term();
+            if (cur != _esT0 && (cur.phis().count() != (u32)0 || escPreds(fn, cur).count() != (u32)1))
+                return false;
+            // A block that only passes on (xc's `&&`, if-converted, leaves the
+            // test in a join block after the header): part of the chain, no test.
+            if (escIs(t, "Branch") && t.ops().count() >= (u32)1)
+                {
+                IRBlock* nx = ((IROperand*)t.ops().get((u32)0)).blk();
+                if (nx == _esT0 || nx == _esH || nx == _esB || nx == _esE || _esTests.contains((Object*)nx))
+                    return false;
+                _esTests.add((Object*)cur);
+                _esCont.add((Object*)Number.with((u32)2));
+                cur = nx;
+                continue;
+                }
+            if (!escIs(t, "CondBranch") || t.ops().count() < (u32)3)
+                return false;
+            IRBlock* a = ((IROperand*)t.ops().get((u32)1)).blk();
+            IRBlock* b = ((IROperand*)t.ops().get((u32)2)).blk();
+            IRBlock* next = (IRBlock*)0;
+            if (b == _esE && a != _esE)
+                {
+                next = a;
+                _esCont.add((Object*)Number.with((u32)1));
+                }
+            else if (a == _esE && b != _esE)
+                {
+                next = b;
+                _esCont.add((Object*)Number.with((u32)0));
+                }
+            else
+                return false;
+            if (((IROperand*)t.ops().get((u32)0)).kind() != (u8)OPK_USE)
+                return false;
+            _esTests.add((Object*)cur);
+            if (next == _esT0 || next == _esH || next == _esB || _esTests.contains((Object*)next))
+                return false;
+            if (escIs(next.term(), "Branch") && ((IROperand*)next.term().ops().get((u32)0)).blk() == _esT0)
+                {
+                _esL = next;
+                break;
+                }
+            cur = next;
+            }
+        if (_esL == (IRBlock*)0 || _esL.phis().count() != (u32)0 || escPreds(fn, _esL).count() != (u32)1)
+            return false;
+        Array* tp = escPreds(fn, _esT0);
+        if (tp.count() != (u32)2)
+            return false;
+        for (u32 i = (u32)0; i < _esT0.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)_esT0.phis().get(i);
+            if (p.res() == (IRValue*)0 || !escLane32(p.res().ty()) || p.ops().count() != (u32)4
+                || escFrom(p, _esB) == (IROperand*)0 || escFrom(p, _esL) == (IROperand*)0)
+                return false;
+            }
+        // E is reached from the tests and nothing else.
+        Array* ep = escPreds(fn, _esE);
+        u32 testing = (u32)0;
+        for (u32 i = (u32)0; i < _esCont.count(); i = i + (u32)1)
+            if (((Number*)_esCont.get(i)).asU32() != (u32)2)
+                testing = testing + (u32)1;
+        if (ep.count() != testing || testing == (u32)0 || _esE.phis().count() != (u32)0)
+            return false;
+        for (u32 i = (u32)0; i < ep.count(); i = i + (u32)1)
+            if (!_esTests.contains(ep.get(i)))
+                return false;
+        return true;
+        }
+
+    // E: constants, iv + 1, and `sum = sum + w` for every other phi of H.
+    bool escExitBlock(IRFunc* fn)
+        {
+        if (!escIs(_esE.term(), "Branch") || ((IROperand*)_esE.term().ops().get((u32)0)).blk() != _esH)
+            return false;
+        IRValue* iv = _esIvPhi.res();
+        IROperand* ivBack = escFrom(_esIvPhi, _esE);
+        _esIvNext = (IRInsn*)0;
+        _esStoreAddr = (IRInsn*)0;
+        _esStore = (IRInsn*)0;
+        _esAccPhis = new Array();
+        _esAccW = new Array();
+        for (u32 i = (u32)0; i < _esE.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)_esE.insns().get(i);
+            if (escIs(n, "Const"))
+                continue;
+            // ONE store of a lane value to a[i] (mandel_deep's counts[i] = k).
+            // Nothing in the loop loads, so the lanes' stores are disjoint and
+            // in order; a second store could alias the first across lanes.
+            if (escIs(n, "ElementAddr") && _esStoreAddr == (IRInsn*)0 && n.ops().count() == (u32)2 && n.res() != (IRValue*)0)
+                {
+                IROperand* ix = (IROperand*)n.ops().get((u32)1);
+                if (ix.kind() != (u8)OPK_USE || ix.val() != iv || ((IROperand*)n.ops().get((u32)0)).kind() != (u8)OPK_USE)
+                    return false;
+                _esStoreAddr = n;
+                continue;
+                }
+            if (escIs(n, "Store") && _esStore == (IRInsn*)0 && _esStoreAddr != (IRInsn*)0 && n.ops().count() >= (u32)2)
+                {
+                IROperand* ad = (IROperand*)n.ops().get((u32)0);
+                if (ad.kind() != (u8)OPK_USE || ad.val() != _esStoreAddr.res())
+                    return false;
+                _esStore = n;
+                continue;
+                }
+            if (!escIs(n, "Add") || n.ops().count() != (u32)2 || n.res() == (IRValue*)0)
+                return false;
+            IROperand* a = (IROperand*)n.ops().get((u32)0);
+            IROperand* b = (IROperand*)n.ops().get((u32)1);
+            if (ivBack.kind() == (u8)OPK_USE && n.res() == ivBack.val())
+                {
+                i32 one = (i32)0;
+                IROperand* step = a.kind() == (u8)OPK_USE && a.val() == iv ? b : a;
+                IROperand* self0 = a.kind() == (u8)OPK_USE && a.val() == iv ? a : b;
+                if (self0.kind() != (u8)OPK_USE || self0.val() != iv || !vecConst(step, _esDefOf, &one) || one != (i32)1)
+                    return false;
+                _esIvNext = n;
+                continue;
+                }
+            IRInsn* acc = escAccPhiOf(n, a, b);
+            if (acc == (IRInsn*)0)
+                return false;
+            _esAccPhis.add((Object*)acc);
+            _esAccW.add((Object*)((a.kind() == (u8)OPK_USE && a.val() == acc.res()) ? b : a));
+            }
+        if (_esIvNext == (IRInsn*)0 || _esAccPhis.count() + (u32)1 != _esH.phis().count())
+            return false;
+        return (_esStoreAddr == (IRInsn*)0) == (_esStore == (IRInsn*)0);
+        }
+
+    // The phi of H that `n = a + b` closes, a or b being that phi: 0 if none.
+    IRInsn* escAccPhiOf(IRInsn* n, IROperand* a, IROperand* b)
+        {
+        for (u32 i = (u32)0; i < _esH.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)_esH.phis().get(i);
+            if (p == _esIvPhi || p.ops().count() != (u32)4)
+                continue;
+            IROperand* back = escFrom(p, _esE);
+            if (back == (IROperand*)0 || back.kind() != (u8)OPK_USE || back.val() != n.res())
+                continue;
+            bool ok = (a.kind() == (u8)OPK_USE && a.val() == p.res()) || (b.kind() == (u8)OPK_USE && b.val() == p.res());
+            String* t = p.res().ty();
+            // Integer sums only: wrapping adds reassociate; float ones do not.
+            if (ok && t != (String*)0 && (t.equals(String.withCString("I32")) || t.equals(String.withCString("U32")))
+                && t.equals(n.res().ty()))
+                return p;
+            }
+        return (IRInsn*)0;
+        }
+
+    // Everything in the region goes lane-wise, nothing outside reads it, and
+    // the sums are read only by their own adds.
+    bool escRegionOK(IRFunc* fn)
+        {
+        _esRegion = new Set();
+        for (u32 i = (u32)0; i < _esT0.phis().count(); i = i + (u32)1)
+            _esRegion.add((Hashable*)((IRInsn*)_esT0.phis().get(i)).res());
+        Array* blks = escRegionBlocks();
+        for (u32 b = (u32)0; b < blks.count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)blks.get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.res() != (IRValue*)0)
+                    _esRegion.add((Hashable*)n.res());
+                }
+            }
+        for (u32 b = (u32)0; b < blks.count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)blks.get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                if (!escLaneable((IRInsn*)bb.insns().get(i)))
+                    return false;
+            }
+        for (u32 i = (u32)0; i < _esAccW.count(); i = i + (u32)1)
+            if (!escOperandOK((IROperand*)_esAccW.get(i), false))
+                return false;
+        if (_esStore != (IRInsn*)0)
+            {
+            // The value a lane value, the base from outside the loop, the
+            // address read by the store alone.
+            IROperand* sv = (IROperand*)_esStore.ops().get((u32)1);
+            IROperand* base = (IROperand*)_esStoreAddr.ops().get((u32)0);
+            IRBlock* at = escBlockOf(fn, base.val());
+            if (!escOperandOK(sv, false) || sv.kind() != (u8)OPK_USE || escUses(_esStoreAddr.res()) != (u32)1
+                || at == _esH || at == _esE || blks.contains((Object*)at))
+                return false;
+            }
+        // Outside the loop nothing reads a region value; inside it nothing but
+        // E's add reads a sum.
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            bool inLoop = bb == _esH || bb == _esE || blks.contains((Object*)bb) || bb == _esT0;
+            Array* all = new Array();
+            all.addAll(bb.phis());
+            all.addAll(bb.insns());
+            if (bb.term() != (IRInsn*)0)
+                all.add((Object*)bb.term());
+            for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)all.get(i);
+                if (bb == _esT0 && i < bb.phis().count())
+                    continue;
+                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)n.ops().get(k);
+                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                        continue;
+                    if (!inLoop && _esRegion.contains((Hashable*)o.val()))
+                        return false;
+                    if (inLoop && bb != _esE && bb != _esH && escIsAcc(o.val()))
+                        return false;
+                    }
+                }
+            }
+        return true;
+        }
+
+    bool escIsAcc(IRValue* v)
+        {
+        for (u32 i = (u32)0; i < _esAccPhis.count(); i = i + (u32)1)
+            if (((IRInsn*)_esAccPhis.get(i)).res() == v)
+                return true;
+        return false;
+        }
+
+    // B, the tests (T0 among them) and L, in order.
+    Array* escRegionBlocks(void)
+        {
+        Array* r = new Array();
+        r.add((Object*)_esB);
+        r.addAll(_esTests);
+        r.add((Object*)_esL);
+        return r;
+        }
+
+    // An operand the vector code can take: a region value or the iv (a lane
+    // value), an invariant, or an immediate. A boolean invariant has no splat.
+    bool escOperandOK(IROperand* o, bool maskOK)
+        {
+        if (o.kind() == (u8)OPK_IMMI || o.kind() == (u8)OPK_IMMF)
+            return true;
+        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+            return false;
+        IRValue* v = o.val();
+        if (v == _esIvPhi.res() || _esRegion.contains((Hashable*)v))
+            return escLane32(v.ty()) || (maskOK && v.ty().equals(String.withCString("Bool")));
+        if (escIsAcc(v))
+            return false;
+        // An invariant: a constant, or defined outside the loop, and a
+        // lane-sized scalar.
+        if (!escLane32(v.ty()))
+            return false;
+        IRInsn* d = (IRInsn*)_esDefOf.get((Hashable*)v);
+        if (d != (IRInsn*)0 && escIs(d, "Const"))
+            return true;
+        IRBlock* at = escBlockOf(_esFn, v);
+        return at == (IRBlock*)0 || !(at == _esH || at == _esE || escRegionBlocks().contains((Object*)at));
+        }
+
+    // A shift count or divisor that is a constant: its value, else -1.
+    i64 escConstOf(IROperand* o)
+        {
+        i32 k = (i32)0;
+        if (!vecConst(o, _esDefOf, &k))
+            return (i64)0 - (i64)1;
+        return (i64)k;
+        }
+
+    static i64 escLog2(i64 v)
+        {
+        if (v <= (i64)0 || (v & (v - (i64)1)) != (i64)0)
+            return (i64)0 - (i64)1;
+        i64 s = (i64)0;
+        while (((i64)1 << s) < v)
+            s = s + (i64)1;
+        return s;
+        }
+
+    // A value proved in [0, 2^31), so a signed conversion of it is exact
+    // whatever its type says: a remainder or a quotient by a constant, a
+    // right shift, or an And with a small mask.
+    bool escSmallUnsigned(IROperand* o)
+        {
+        if (o.kind() != (u8)OPK_USE)
+            return false;
+        IRInsn* d = (IRInsn*)_esDefOf.get((Hashable*)o.val());
+        if (d == (IRInsn*)0 || d.ops().count() < (u32)2)
+            return false;
+        i64 k = escConstOf((IROperand*)d.ops().get((u32)1));
+        if (escIs(d, "URem"))
+            return k > (i64)0 && k <= (i64)$80000000;
+        if (escIs(d, "UDiv"))
+            return k >= (i64)2;
+        if (escIs(d, "LShr"))
+            return k >= (i64)1 && k < (i64)32;
+        if (escIs(d, "And"))
+            return k >= (i64)0 && k <= (i64)$7FFFFFFF;
+        return false;
+        }
+
+    static bool escFloatPred(String* p)
+        {
+        return p != (String*)0 && (p.equals(String.withCString("OLT")) || p.equals(String.withCString("OLE"))
+            || p.equals(String.withCString("OGT")) || p.equals(String.withCString("OGE"))
+            || p.equals(String.withCString("OEQ")) || p.equals(String.withCString("UNE")));
+        }
+
+    // `(u32)100`: a ZExt/SExt/Trunc of a constant, which is itself a constant.
+    bool escIsConstExt(IRInsn* n)
+        {
+        if (n == (IRInsn*)0 || n.res() == (IRValue*)0)
+            return false;
+        if (!(escIs(n, "ZExt") || escIs(n, "SExt") || escIs(n, "Trunc")))
+            return false;
+        i32 k = (i32)0;
+        return escLane32(n.res().ty()) && !n.res().ty().equals(String.withCString("F32"))
+            && vecConst(IROperand.useVal(n.res()), _esDefOf, &k);
+        }
+
+    bool escLaneable(IRInsn* n)
+        {
+        String* op = n.op();
+        // A constant of any width: one is only read through a splat (a lane
+        // operation on a narrow one would itself be narrow, and refused).
+        if (op.equals(String.withCString("Const")))
+            return n.res() != (IRValue*)0;
+        if (escIsConstExt(n))
+            return true;
+        if (n.res() == (IRValue*)0)
+            return false;
+        String* t = n.res().ty();
+        bool isBool = t.equals(String.withCString("Bool"));
+        if (!escLane32(t) && !isBool)
+            return false;
+        u32 nops = n.ops().count();
+        if (op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub")) || op.equals(String.withCString("Mul"))
+            || op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub")) || op.equals(String.withCString("FMul"))
+            || op.equals(String.withCString("FDiv")))
+            return !isBool && nops == (u32)2 && escOperandOK((IROperand*)n.ops().get((u32)0), false)
+                && escOperandOK((IROperand*)n.ops().get((u32)1), false);
+        if (op.equals(String.withCString("And")) || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor")))
+            return nops == (u32)2 && !t.equals(String.withCString("F32"))
+                && escOperandOK((IROperand*)n.ops().get((u32)0), isBool)
+                && escOperandOK((IROperand*)n.ops().get((u32)1), isBool)
+                && (!isBool || (((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE
+                                && ((IROperand*)n.ops().get((u32)1)).kind() == (u8)OPK_USE));
+        if (op.equals(String.withCString("Not")))
+            return isBool && nops == (u32)1 && escOperandOK((IROperand*)n.ops().get((u32)0), true)
+                && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE;
+        if (op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr")))
+            {
+            i64 k = nops == (u32)2 ? escConstOf((IROperand*)n.ops().get((u32)1)) : (i64)0 - (i64)1;
+            return !isBool && !t.equals(String.withCString("F32")) && k >= (i64)0 && k < (i64)32
+                && escOperandOK((IROperand*)n.ops().get((u32)0), false);
+            }
+        if (op.equals(String.withCString("URem")) || op.equals(String.withCString("UDiv")))
+            return !isBool && !t.equals(String.withCString("F32")) && nops == (u32)2
+                && escLog2(escConstOf((IROperand*)n.ops().get((u32)1))) >= (i64)0
+                && escOperandOK((IROperand*)n.ops().get((u32)0), false);
+        if (op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp")))
+            {
+            if (nops != (u32)1 || !t.equals(String.withCString("F32")))
+                return false;
+            IROperand* a = (IROperand*)n.ops().get((u32)0);
+            if (!escOperandOK(a, false) || a.kind() != (u8)OPK_USE || a.val().ty().equals(String.withCString("F32")))
+                return false;
+            return op.equals(String.withCString("SIToFp")) || escSmallUnsigned(a);
+            }
+        if (op.equals(String.withCString("ICmp")) || op.equals(String.withCString("FCmp")))
+            {
+            if (!isBool || nops != (u32)2 || n.pred() == (String*)0)
+                return false;
+            IROperand* a = (IROperand*)n.ops().get((u32)0);
+            IROperand* b = (IROperand*)n.ops().get((u32)1);
+            if (!escOperandOK(a, false) || !escOperandOK(b, false))
+                return false;
+            if (a.kind() != (u8)OPK_USE && b.kind() != (u8)OPK_USE)
+                return false;
+            return op.equals(String.withCString("ICmp")) || escFloatPred(n.pred());
+            }
+        if (op.equals(String.withCString("Select")))
+            {
+            if (isBool || nops != (u32)3)
+                return false;
+            IROperand* c = (IROperand*)n.ops().get((u32)0);
+            return c.kind() == (u8)OPK_USE && escOperandOK(c, true) && c.val().ty().equals(String.withCString("Bool"))
+                && escOperandOK((IROperand*)n.ops().get((u32)1), false)
+                && escOperandOK((IROperand*)n.ops().get((u32)2), false);
+            }
+        return false;
+        }
+
+    // ── the rewrite ────────────────────────────────────────────────────────
+
+    String* escVecTy(String* scalar)
+        {
+        if (scalar.equals(String.withCString("Bool")))
+            return vecTyOf(String.withCString("I32"), _esBytes);
+        return vecTyOf(scalar, _esBytes);
+        }
+
+    IRValue* escPut(Array* into, string op, String* ty, IROperand* a, IROperand* b)
+        {
+        IRValue* r = new IRValue(ty);
+        IRInsn* n = IRInsn.with(String.withCString(op));
+        n.setRes(r);
+        if (a != (IROperand*)0)
+            n.add(a);
+        if (b != (IROperand*)0)
+            n.add(b);
+        into.add((Object*)n);
+        return r;
+        }
+
+    // The splat of an invariant or an immediate, made once in PH. A constant
+    // defined inside the loop is copied there first.
+    IRValue* escSplatOf(IROperand* o, String* scalarTy)
+        {
+        Array* pre = _esSplatTo;
+        if (o.kind() == (u8)OPK_USE)
+            {
+            Object* have = _esFresh ? (Object*)0 : _esSplat.get((Hashable*)o.val());
+            if (have != (Object*)0)
+                return (IRValue*)have;
+            IROperand* src = o;
+            IRInsn* d = (IRInsn*)_esDefOf.get((Hashable*)o.val());
+            if (d != (IRInsn*)0 && (escIs(d, "Const") || escIsConstExt(d)))
+                {
+                IRValue* cv = new IRValue(o.val().ty());
+                IRInsn* c = IRInsn.with(String.withCString("Const"));
+                c.setRes(cv);
+                if (escIs(d, "Const"))
+                    c.add((IROperand*)d.ops().get((u32)0));
+                else
+                    {
+                    i32 k = (i32)0;
+                    vecConst(o, _esDefOf, &k);
+                    c.add(IROperand.immI((i64)k, o.val().ty()));
+                    }
+                pre.add((Object*)c);
+                src = IROperand.useVal(cv);
+                }
+            IRValue* s = escPut(pre, "VSplat", escVecTy(o.val().ty()), src, (IROperand*)0);
+            if (!_esFresh)
+                _esSplat.set((Hashable*)o.val(), (Object*)s);
+            return s;
+            }
+        IRValue* cv = new IRValue(scalarTy);
+        IRInsn* c = IRInsn.with(String.withCString("Const"));
+        c.setRes(cv);
+        c.add(o);
+        pre.add((Object*)c);
+        return escPut(pre, "VSplat", escVecTy(scalarTy), IROperand.useVal(cv), (IROperand*)0);
+        }
+
+    Array* _esPre;       // PH's new instructions, before its branch
+    // Where a splat goes. The vector registers are few and an invariant
+    // made before a loop holds one for all of it, so what only the pixel
+    // arithmetic reads is made in VB, once a step; only the inner loop's own
+    // invariants are made in PH. Each region has its own cache.
+    Array* _esSplatTo;
+    bool _esFresh;       // an entry value: a splat of its own, never shared
+
+    // The vector form of a scalar operand.
+    IROperand* escV(IROperand* o, String* scalarTy)
+        {
+        if (o.kind() == (u8)OPK_USE)
+            {
+            Object* m = _esMap.get((Hashable*)o.val());
+            if (m != (Object*)0)
+                return IROperand.useVal((IRValue*)m);
+            return IROperand.useVal(escSplatOf(o, o.val().ty()));
+            }
+        return IROperand.useVal(escSplatOf(o, scalarTy));
+        }
+
+    // The scalar type an operand of `n` has: its own, or the other operand's.
+    static String* escOpTy(IRInsn* n, u32 k)
+        {
+        IROperand* o = (IROperand*)n.ops().get(k);
+        if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+            return o.val().ty();
+        for (u32 j = (u32)0; j < n.ops().count(); j = j + (u32)1)
+            {
+            IROperand* p = (IROperand*)n.ops().get(j);
+            if (p.kind() == (u8)OPK_USE && p.val() != (IRValue*)0)
+                return p.val().ty();
+            }
+        return n.res().ty();
+        }
+
+    // `b ^ ((a ^ b) & m)`: a where the mask is set, else b.
+    IRValue* escBlend(Array* into, String* vty, IRValue* m, IRValue* a, IRValue* b)
+        {
+        IRValue* d = escPut(into, "VXor", vty, IROperand.useVal(a), IROperand.useVal(b));
+        IRValue* e = escPut(into, "VAnd", vty, IROperand.useVal(d), IROperand.useVal(m));
+        return escPut(into, "VXor", vty, IROperand.useVal(b), IROperand.useVal(e));
+        }
+
+    void escLane(Array* into, IRInsn* n)
+        {
+        String* op = n.op();
+        if (op.equals(String.withCString("Const")) || _esSkip.contains((Hashable*)n.res()) || escIsConstExt(n))
+            return;
+        String* vty = escVecTy(n.res().ty());
+        IRValue* r = (IRValue*)0;
+        IROperand* a = (IROperand*)n.ops().get((u32)0);
+        if (op.equals(String.withCString("Not")))
+            r = escPut(into, "VNot", vty, escV(a, n.res().ty()), (IROperand*)0);
+        else if (op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp")))
+            r = escPut(into, "VSIToFp", vty, escV(a, a.val().ty()), (IROperand*)0);
+        else if (op.equals(String.withCString("Select")))
+            {
+            IRValue* m = (IRValue*)_esMap.get((Hashable*)a.val());
+            IRValue* x = escV((IROperand*)n.ops().get((u32)1), n.res().ty()).val();
+            IRValue* y = escV((IROperand*)n.ops().get((u32)2), n.res().ty()).val();
+            r = escBlend(into, vty, m, x, y);
+            }
+        else
+            {
+            u32 before = into.count();
+            r = escLane2(into, n, vty);
+            if (into.count() == before)
+                {
+                _esMap.set((Hashable*)n.res(), (Object*)r);
+                return;     // reused: no new instruction to carry the line
+                }
+            }
+        _esMap.set((Hashable*)n.res(), (Object*)r);
+        IRInsn* last = (IRInsn*)into.get(into.count() - (u32)1);
+        last.copyDbg(n);
+        }
+
+    IRValue* escLane2(Array* into, IRInsn* n, String* vty)
+        {
+        String* op = n.op();
+        IROperand* a = (IROperand*)n.ops().get((u32)0);
+        IROperand* b = (IROperand*)n.ops().get((u32)1);
+        String* ta = escOpTy(n, (u32)0);
+        String* tb = escOpTy(n, (u32)1);
+        if (op.equals(String.withCString("Shl")) || op.equals(String.withCString("LShr")))
+            return escPut(into, op.equals(String.withCString("Shl")) ? "VShl" : "VLShr", vty, escV(a, ta),
+                          IROperand.immI(escConstOf(b), n.res().ty()));
+        if (op.equals(String.withCString("UDiv")))
+            return escPut(into, "VLShr", vty, escV(a, ta), IROperand.immI(escLog2(escConstOf(b)), n.res().ty()));
+        if (op.equals(String.withCString("URem")))
+            return escPut(into, "VAnd", vty, escV(a, ta),
+                          IROperand.useVal(escSplatOf(IROperand.immI(escConstOf(b) - (i64)1, n.res().ty()), n.res().ty())));
+        if (op.equals(String.withCString("ICmp")) || op.equals(String.withCString("FCmp")))
+            {
+            IRValue* r = escPut(into, op.equals(String.withCString("ICmp")) ? "VICmp" : "VFCmp", vty, escV(a, ta), escV(b, tb));
+            ((IRInsn*)into.get(into.count() - (u32)1)).setPred(n.pred());
+            return r;
+            }
+        // 2.0 * v is v + v, exactly, and needs no splat of 2.0.
+        if (op.equals(String.withCString("FMul")) && (escIsTwo(a) || escIsTwo(b)))
+            {
+            IROperand* v = escV(escIsTwo(a) ? b : a, n.res().ty());
+            return escPutC(into, "VAdd", vty, v, v);
+            }
+        string vop = "VAdd";
+        if (op.equals(String.withCString("Sub")) || op.equals(String.withCString("FSub")))
+            vop = "VSub";
+        else if (op.equals(String.withCString("Mul")) || op.equals(String.withCString("FMul")))
+            vop = "VMul";
+        else if (op.equals(String.withCString("FDiv")))
+            vop = "VDiv";
+        else if (op.equals(String.withCString("And")))
+            vop = "VAnd";
+        else if (op.equals(String.withCString("Or")))
+            vop = "VOr";
+        else if (op.equals(String.withCString("Xor")))
+            vop = "VXor";
+        return escPutC(into, vop, vty, escV(a, ta), escV(b, tb));
+        }
+
+    Map* _esCse;         // "op:a:b" -> the vector value already computed
+
+    // escPut, reusing an identical lane operation computed earlier in the same
+    // vector loop: clang leaves x*x in both the test and the body, and every
+    // value kept is a vector register for the whole inner loop.
+    IRValue* escPutC(Array* into, string op, String* ty, IROperand* a, IROperand* b)
+        {
+        String* k = new String();
+        k.appendFormat("%s:%u:%u", op, a.val().seq(), b.val().seq());
+        Object* have = _esCse.get((Hashable*)k);
+        if (have != (Object*)0)
+            return (IRValue*)have;
+        IRValue* r = escPut(into, op, ty, a, b);
+        _esCse.set((Hashable*)k, (Object*)r);
+        return r;
+        }
+
+    // The float constant 2.0, as an immediate or a Const.
+    bool escIsTwo(IROperand* o)
+        {
+        IROperand* c = o;
+        if (o.kind() == (u8)OPK_USE)
+            {
+            IRInsn* d = (IRInsn*)_esDefOf.get((Hashable*)o.val());
+            if (!escIs(d, "Const") || d.ops().count() < (u32)1)
+                return false;
+            c = (IROperand*)d.ops().get((u32)0);
+            }
+        return c.kind() == (u8)OPK_IMMF && c.fpHex() != (String*)0
+            && c.fpHex().equals(String.withCString("4000000000000000"));
+        }
+
+    void escApply(IRFunc* fn)
+        {
+        _esMap = new Map();
+        _esSplat = new Map();
+        _esExit = new Map();
+        _esPre = new Array();
+        _esSplatTo = _esPre;
+        _esFresh = false;
+        _esCse = new Map();
+        _esSkip = new Set();
+        for (u32 i = (u32)0; i < _esT0.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* ctr = escCounterOf((IRInsn*)_esT0.phis().get(i));
+            if (ctr != (IRInsn*)0)
+                _esSkip.add((Hashable*)ctr.res());
+            }
+        escTripTest();
+        IRBlock* VH = new IRBlock(vecUniqueBlockName(fn, hoistName2(_esH.name(), "_esc")));
+        IRBlock* VB = new IRBlock(vecUniqueBlockName(fn, hoistName2(_esB.name(), "_esc")));
+        IRBlock* VI = new IRBlock(vecUniqueBlockName(fn, hoistName2(_esT0.name(), "_esc")));
+        IRBlock* VE = new IRBlock(vecUniqueBlockName(fn, hoistName2(_esE.name(), "_esc")));
+        IRBlock* VX = new IRBlock(vecUniqueBlockName(fn, hoistName2(_esH.name(), "_escx")));
+        String* ivTy = _esIvPhi.res().ty();
+        IRValue* viv = new IRValue(ivTy);
+        _esVB = VB;
+        IRValue* vivNext = escVecHead(fn, VH, VB, VE, VX, viv);
+        escVecBody(fn, VB, VI, viv);
+        escVecInner(fn, VI, VE);
+        escVecLatch(VE, VH, viv, vivNext);
+        escVecExit(VX, viv);
+        // PH's additions, before its branch, which now goes to VH.
+        for (u32 i = (u32)0; i < _esPre.count(); i = i + (u32)1)
+            _esPH.insns().add(_esPre.get(i));
+        _esPH.term().ops().set((u32)0, (Object*)IROperand.block(VH));
+        u32 at = (u32)0;
+        for (u32 k = (u32)0; k < fn.blocks().count(); k = k + (u32)1)
+            if ((IRBlock*)fn.blocks().get(k) == _esPH)
+                at = k + (u32)1;
+        Array* five = new Array();
+        five.add((Object*)VH);
+        five.add((Object*)VB);
+        five.add((Object*)VI);
+        five.add((Object*)VE);
+        five.add((Object*)VX);
+        fn.blocks().insertAll(at, five);
+        _esDone.add((Hashable*)_esH);
+        }
+
+    // VH: the vector iv and the vector sums; `viv <= N - VF` (the last whole
+    // step), else VX. Returns the iv's next value (defined in VE).
+    IRValue* escVecHead(IRFunc* fn, IRBlock* VH, IRBlock* VB, IRBlock* VE, IRBlock* VX, IRValue* viv)
+        {
+        String* ivTy = _esIvPhi.res().ty();
+        IRValue* vivNext = new IRValue(ivTy);
+        IRInsn* ip = IRInsn.with(String.withCString("Phi"));
+        ip.setRes(viv);
+        ip.add(IROperand.block(_esPH));
+        ip.add(escFrom(_esIvPhi, _esPH));
+        ip.add(IROperand.block(VE));
+        ip.add(IROperand.useVal(vivNext));
+        VH.addPhi(ip);
+        // The sums stay SCALAR, each step adding its lanes' reduction: a vector
+        // sum would hold a register through the whole inner loop, and one
+        // reduction a step is nothing beside the inner loop's work.
+        _esVSum = new Array();
+        _esVSumNext = new Array();
+        for (u32 i = (u32)0; i < _esAccPhis.count(); i = i + (u32)1)
+            {
+            IRInsn* acc = (IRInsn*)_esAccPhis.get(i);
+            String* t = acc.res().ty();
+            IRValue* vs = new IRValue(t);
+            IRValue* vn = new IRValue(t);
+            IRInsn* sp = IRInsn.with(String.withCString("Phi"));
+            sp.setRes(vs);
+            sp.add(IROperand.block(_esPH));
+            sp.add(escFrom(acc, _esPH));
+            sp.add(IROperand.block(VE));
+            sp.add(IROperand.useVal(vn));
+            VH.addPhi(sp);
+            _esVSum.add((Object*)vs);
+            _esVSumNext.add((Object*)vn);
+            }
+        IRValue* c = (IRValue*)0;
+        if (_esBoundConst)
+            {
+            c = new IRValue(String.withCString("Bool"));
+            IRInsn* g = IRInsn.with(String.withCString("ICmp"));
+            g.setRes(c);
+            g.setPred(String.withCString(_esSigned ? "SLE" : "ULE"));
+            g.add(IROperand.useVal(viv));
+            g.add(IROperand.immI(_esN - (i64)_esVF, ivTy));
+            VH.insns().add((Object*)g);
+            }
+        else
+            {
+            // A run-time bound: viv < N and N - viv >= VF (N - VF could wrap).
+            String* b = String.withCString("Bool");
+            IRValue* c1 = escPut(VH.insns(), "ICmp", b, IROperand.useVal(viv), _esBoundOp);
+            ((IRInsn*)VH.insns().get(VH.insns().count() - (u32)1)).setPred(String.withCString(_esSigned ? "SLT" : "ULT"));
+            IRValue* rem = escPut(VH.insns(), "Sub", ivTy, _esBoundOp, IROperand.useVal(viv));
+            IRValue* c2 = escPut(VH.insns(), "ICmp", b, IROperand.useVal(rem), IROperand.immI((i64)_esVF, ivTy));
+            ((IRInsn*)VH.insns().get(VH.insns().count() - (u32)1)).setPred(String.withCString(_esSigned ? "SGE" : "UGE"));
+            c = escPut(VH.insns(), "And", b, IROperand.useVal(c1), IROperand.useVal(c2));
+            }
+        IRInsn* br = IRInsn.with(String.withCString("CondBranch"));
+        br.add(IROperand.useVal(c));
+        br.add(IROperand.block(VB));
+        br.add(IROperand.block(VX));
+        VH.setTerm(br);
+        return vivNext;
+        }
+
+    Array* _esVSum;
+    Array* _esVSumNext;
+
+    // VB: <i, i+1, …> and B's arithmetic, then into the masked inner loop.
+    void escVecBody(IRFunc* fn, IRBlock* VB, IRBlock* VI, IRValue* viv)
+        {
+        String* ivTy = _esIvPhi.res().ty();
+        String* vty = escVecTy(ivTy);
+        String* nm = vecIotaSymbol(ivTy, _esBytes, fn);
+        String* pty = new String();
+        pty.appendFormat("Ptr(%s, unbanked)", ivTy.cString());
+        IRValue* ip = new IRValue(pty);
+        IRInsn* ao = IRInsn.with(String.withCString("AddrOf"));
+        ao.setRes(ip);
+        ao.add(IROperand.sym(nm));
+        VB.insns().add((Object*)ao);
+        IRValue* iota = escPut(VB.insns(), "VLoad", vty, IROperand.useVal(ip), (IROperand*)0);
+        _esSplatTo = VB.insns();
+        Map* outer = _esSplat;
+        _esSplat = new Map();
+        Array* body = new Array();
+        IRValue* s = escPut(body, "VSplat", vty, IROperand.useVal(viv), (IROperand*)0);
+        IRValue* lanes = escPut(body, "VAdd", vty, IROperand.useVal(s), IROperand.useVal(iota));
+        _esMap.set((Hashable*)_esIvPhi.res(), (Object*)lanes);
+        for (u32 i = (u32)0; i < _esB.insns().count(); i = i + (u32)1)
+            escLane(body, (IRInsn*)_esB.insns().get(i));
+        for (u32 i = (u32)0; i < body.count(); i = i + (u32)1)
+            VB.insns().add(body.get(i));
+        _esSplat = outer;
+        IRInsn* br = IRInsn.with(String.withCString("Branch"));
+        br.add(IROperand.block(VI));
+        VB.setTerm(br);
+        }
+
+    // VI: T0's values and the live mask as phis; every test and the body
+    // computed for all lanes; the mask narrowed by the tests; the values
+    // blended under it; round again while any lane is live.
+    void escVecInner(IRFunc* fn, IRBlock* VI, IRBlock* VE)
+        {
+        String* mty = escVecTy(String.withCString("Bool"));
+        // Entry values are made in VB, each its own: a phi class starts at its
+        // entry value, and one splat shared by two phis would join them.
+        _esSplatTo = _esVB.insns();
+        _esFresh = true;
+        IRValue* ones = escSplatOf(IROperand.immI((i64)0 - (i64)1, String.withCString("I32")), String.withCString("I32"));
+        Array* phis = new Array();
+        Array* nexts = new Array();
+        for (u32 i = (u32)0; i < _esT0.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)_esT0.phis().get(i);
+            IRValue* vp = new IRValue(escVecTy(p.res().ty()));
+            phis.add((Object*)vp);
+            IRValue* vn = new IRValue(escVecTy(p.res().ty()));
+            nexts.add((Object*)vn);
+            }
+        // Entry values first, while the map still holds B's vector values.
+        Array* entries = new Array();
+        Set* taken = new Set();
+        for (u32 i = (u32)0; i < _esT0.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)_esT0.phis().get(i);
+            IROperand* ev = escV(escFrom(p, _esB), p.res().ty());
+            // A B value entering two phis: the second gets a copy.
+            if (taken.contains((Hashable*)ev.val()))
+                ev = IROperand.useVal(escPut(_esVB.insns(), "VOr", escVecTy(p.res().ty()), ev, ev));
+            taken.add((Hashable*)ev.val());
+            entries.add((Object*)ev);
+            }
+        _esFresh = false;
+        _esSplatTo = _esPre;
+        for (u32 i = (u32)0; i < _esT0.phis().count(); i = i + (u32)1)
+            _esMap.set((Hashable*)((IRInsn*)_esT0.phis().get(i)).res(), phis.get(i));
+        IRValue* act = new IRValue(mty);
+        // The counter test as a scalar trip count (see escTripTest).
+        IRValue* trip = (IRValue*)0;
+        IRValue* tripNext = (IRValue*)0;
+        if (_esTripTest >= (i32)0)
+            {
+            trip = new IRValue(_esTripTy);
+            tripNext = new IRValue(_esTripTy);
+            }
+        IRValue* actNext = escInnerBody(VI, mty, act, phis, nexts);
+        for (u32 i = (u32)0; i < _esT0.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* vp = IRInsn.with(String.withCString("Phi"));
+            vp.setRes((IRValue*)phis.get(i));
+            vp.add(IROperand.block(_esVB));
+            vp.add((IROperand*)entries.get(i));
+            vp.add(IROperand.block(VI));
+            vp.add(IROperand.useVal((IRValue*)nexts.get(i)));
+            VI.addPhi(vp);
+            _esExit.set((Hashable*)((IRInsn*)_esT0.phis().get(i)).res(), nexts.get(i));
+            }
+        IRInsn* ap = IRInsn.with(String.withCString("Phi"));
+        ap.setRes(act);
+        ap.add(IROperand.block(_esVB));
+        ap.add(IROperand.useVal(ones));
+        ap.add(IROperand.block(VI));
+        ap.add(IROperand.useVal(actNext));
+        VI.addPhi(ap);
+        // The reduction reads a copy of the mask: some back ends fold a
+        // reduction in its operand's register, and the mask goes round again.
+        IRValue* probe = escPut(VI.insns(), "VAnd", mty, IROperand.useVal(actNext), IROperand.useVal(actNext));
+        IRValue* any = escPut(VI.insns(), "VReduceAdd", String.withCString("I32"), IROperand.useVal(probe), (IROperand*)0);
+        IRValue* c = escPut(VI.insns(), "ICmp", String.withCString("Bool"), IROperand.useVal(any),
+                            IROperand.immI((i64)0, String.withCString("I32")));
+        ((IRInsn*)VI.insns().get(VI.insns().count() - (u32)1)).setPred(String.withCString("NE"));
+        if (trip != (IRValue*)0)
+            {
+            IRInsn* tp = IRInsn.with(String.withCString("Phi"));
+            tp.setRes(trip);
+            tp.add(IROperand.block(_esVB));
+            tp.add(IROperand.immI(_esTripC0, _esTripTy));
+            tp.add(IROperand.block(VI));
+            tp.add(IROperand.useVal(tripNext));
+            VI.addPhi(tp);
+            IRInsn* inc = IRInsn.with(String.withCString("Add"));
+            inc.setRes(tripNext);
+            inc.add(IROperand.useVal(trip));
+            inc.add(IROperand.immI((i64)1, _esTripTy));
+            VI.insns().add((Object*)inc);
+            IRValue* more = escPut(VI.insns(), "ICmp", String.withCString("Bool"), IROperand.useVal(tripNext),
+                                   IROperand.immI(_esTripN, _esTripTy));
+            ((IRInsn*)VI.insns().get(VI.insns().count() - (u32)1)).setPred(String.withCString(_esTripSigned ? "SLT" : "ULT"));
+            c = escPut(VI.insns(), "And", String.withCString("Bool"), IROperand.useVal(c), IROperand.useVal(more));
+            }
+        IRInsn* br = IRInsn.with(String.withCString("CondBranch"));
+        br.add(IROperand.useVal(c));
+        br.add(IROperand.block(VI));
+        br.add(IROperand.block(VE));
+        VI.setTerm(br);
+        }
+
+    IRBlock* _esVB;
+    Set* _esSkip;        // counter adds the mask subtraction replaces
+
+    // `k < N` on a counter k that enters at a constant c0 < N (mandelbrot's
+    // iteration cap). A live lane's k is c0 plus the trips the inner loop has
+    // made, so the lane test is the SCALAR test on that trip count: no splat
+    // of N, no lane compare, no mask And. Lanes that left earlier keep their
+    // smaller k and are already out of the mask.
+    i32 _esTripTest;     // the test's index in _esTests, or -1
+    i64 _esTripN;
+    i64 _esTripC0;
+    String* _esTripTy;
+    bool _esTripSigned;
+
+    IRInsn* _esTripAnd;      // the And the trip test sits in, or 0
+    IROperand* _esTripOther; // that And's other side, still a lane test
+
+    // A compare the trip count can replace: two operands and a predicate, read
+    // once, defined in the loop.
+    bool escTripCmpOK(IRInsn* g, bool inAnd)
+        {
+        if (g.ops().count() != (u32)2 || g.pred() == (String*)0 || escUses(g.res()) != (u32)1)
+            return false;
+        return !inAnd || _esRegion.contains((Hashable*)g.res());
+        }
+
+    void escTripTest(void)
+        {
+        _esTripTest = (i32)0 - (i32)1;
+        for (u32 t = (u32)0; t < _esTests.count(); t = t + (u32)1)
+            {
+            if (((Number*)_esCont.get(t)).asU32() != (u32)1)
+                continue;
+            IRBlock* T = (IRBlock*)_esTests.get(t);
+            IROperand* co = (IROperand*)T.term().ops().get((u32)0);
+            IRInsn* g = (IRInsn*)_esDefOf.get((Hashable*)co.val());
+            // `k < N && rest`, if-converted to an And: the trip count takes the
+            // `k < N` half and the rest stays a lane test.
+            _esTripAnd = (IRInsn*)0;
+            _esTripOther = (IROperand*)0;
+            if (escIs(g, "And") && g.ops().count() == (u32)2 && escUses(g.res()) == (u32)1
+                && _esRegion.contains((Hashable*)g.res()))
+                {
+                IRInsn* andI = g;
+                g = (IRInsn*)0;
+                for (u32 h = (u32)0; h < (u32)2 && g == (IRInsn*)0; h = h + (u32)1)
+                    {
+                    IROperand* side = (IROperand*)andI.ops().get(h);
+                    IROperand* other = (IROperand*)andI.ops().get((u32)1 - h);
+                    if (side.kind() != (u8)OPK_USE || other.kind() != (u8)OPK_USE)
+                        continue;
+                    IRInsn* q = (IRInsn*)_esDefOf.get((Hashable*)side.val());
+                    if (escIs(q, "ICmp") && escTripCmpOK(q, true))
+                        {
+                        g = q;
+                        _esTripAnd = andI;
+                        _esTripOther = other;
+                        }
+                    }
+                if (g == (IRInsn*)0)
+                    continue;
+                }
+            else if (!escIs(g, "ICmp") || !escTripCmpOK(g, false) || escBlockOf(_esFn, g.res()) != T)
+                continue;
+            bool ult = g.pred().equals(String.withCString("ULT"));
+            if (!ult && !g.pred().equals(String.withCString("SLT")))
+                continue;
+            IROperand* k = (IROperand*)g.ops().get((u32)0);
+            i32 n = (i32)0;
+            i32 c0 = (i32)0;
+            if (k.kind() != (u8)OPK_USE || !vecConst((IROperand*)g.ops().get((u32)1), _esDefOf, &n))
+                continue;
+            IRInsn* p = (IRInsn*)0;
+            for (u32 i = (u32)0; i < _esT0.phis().count(); i = i + (u32)1)
+                if (((IRInsn*)_esT0.phis().get(i)).res() == k.val())
+                    p = (IRInsn*)_esT0.phis().get(i);
+            if (p == (IRInsn*)0 || escCounterOf(p) == (IRInsn*)0 || !vecConst(escFrom(p, _esB), _esDefOf, &c0))
+                continue;
+            bool below = ult ? (u32)c0 < (u32)n : c0 < n;
+            if (!below)
+                continue;
+            _esTripTest = (i32)t;
+            _esTripN = ult ? (i64)(u32)n : (i64)n;
+            _esTripC0 = ult ? (i64)(u32)c0 : (i64)c0;
+            _esTripTy = p.res().ty();
+            _esTripSigned = !ult;
+            _esSkip.add((Hashable*)g.res());
+            if (_esTripAnd != (IRInsn*)0)
+                _esSkip.add((Hashable*)_esTripAnd.res());
+            return;
+            }
+        }
+
+    // The `p + 1` in L that is T0 phi p's next value and read by nothing else,
+    // p an integer: 0 if p is not such a counter.
+    IRInsn* escCounterOf(IRInsn* p)
+        {
+        if (p.res().ty().equals(String.withCString("F32")))
+            return (IRInsn*)0;
+        IROperand* back = escFrom(p, _esL);
+        if (back == (IROperand*)0 || back.kind() != (u8)OPK_USE)
+            return (IRInsn*)0;
+        IRInsn* d = (IRInsn*)_esDefOf.get((Hashable*)back.val());
+        if (!escIs(d, "Add") || d.ops().count() != (u32)2 || escBlockOf(_esFn, d.res()) != _esL)
+            return (IRInsn*)0;
+        IROperand* a = (IROperand*)d.ops().get((u32)0);
+        IROperand* b = (IROperand*)d.ops().get((u32)1);
+        IROperand* step = (a.kind() == (u8)OPK_USE && a.val() == p.res()) ? b : a;
+        IROperand* self0 = (a.kind() == (u8)OPK_USE && a.val() == p.res()) ? a : b;
+        i32 one = (i32)0;
+        if (self0.kind() != (u8)OPK_USE || self0.val() != p.res() || !vecConst(step, _esDefOf, &one) || one != (i32)1)
+            return (IRInsn*)0;
+        if (escUses(d.res()) != (u32)1)
+            return (IRInsn*)0;
+        return d;
+        }
+
+    // How many operands in the function read v.
+    u32 escUses(IRValue* v)
+        {
+        u32 c = (u32)0;
+        for (u32 b = (u32)0; b < _esFn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)_esFn.blocks().get(b);
+            Array* all = new Array();
+            all.addAll(bb.phis());
+            all.addAll(bb.insns());
+            if (bb.term() != (IRInsn*)0)
+                all.add((Object*)bb.term());
+            for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)all.get(i);
+                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)n.ops().get(k);
+                    if (o.kind() == (u8)OPK_USE && o.val() == v)
+                        c = c + (u32)1;
+                    }
+                }
+            }
+        return c;
+        }
+
+    IRValue* escInnerBody(IRBlock* VI, String* mty, IRValue* act, Array* phis, Array* nexts)
+        {
+        Array* into = VI.insns();
+        IRValue* live = act;
+        for (u32 t = (u32)0; t < _esTests.count(); t = t + (u32)1)
+            {
+            IRBlock* T = (IRBlock*)_esTests.get(t);
+            for (u32 i = (u32)0; i < T.insns().count(); i = i + (u32)1)
+                escLane(into, (IRInsn*)T.insns().get(i));
+            if (((Number*)_esCont.get(t)).asU32() == (u32)2)
+                continue;   // passes on: no test
+            IROperand* co = (IROperand*)T.term().ops().get((u32)0);
+            IRValue* m = (IRValue*)0;
+            if ((i32)t == _esTripTest)
+                {
+                // A scalar trip count instead (escTripTest); what is And-ed
+                // with it is still a lane test.
+                if (_esTripOther == (IROperand*)0)
+                    continue;
+                m = (IRValue*)_esMap.get((Hashable*)_esTripOther.val());
+                }
+            else
+                m = (IRValue*)_esMap.get((Hashable*)co.val());
+            if (((Number*)_esCont.get(t)).asU32() == (u32)0)
+                m = escPut(into, "VNot", mty, IROperand.useVal(m), (IROperand*)0);
+            live = escPut(into, "VAnd", mty, IROperand.useVal(live), IROperand.useVal(m));
+            }
+        for (u32 i = (u32)0; i < _esL.insns().count(); i = i + (u32)1)
+            escLane(into, (IRInsn*)_esL.insns().get(i));
+        for (u32 i = (u32)0; i < _esT0.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)_esT0.phis().get(i);
+            String* vty = escVecTy(p.res().ty());
+            // A counter: k + 1 on the live lanes is k - mask (the mask is -1).
+            if (escCounterOf(p) != (IRInsn*)0)
+                {
+                IRInsn* sb = IRInsn.with(String.withCString("VSub"));
+                sb.setRes((IRValue*)nexts.get(i));
+                sb.add(IROperand.useVal((IRValue*)phis.get(i)));
+                sb.add(IROperand.useVal(live));
+                into.add((Object*)sb);
+                continue;
+                }
+            IRValue* nv = escV(escFrom(p, _esL), p.res().ty()).val();
+            IRValue* old = (IRValue*)phis.get(i);
+            IRValue* d = escPut(into, "VXor", vty, IROperand.useVal(nv), IROperand.useVal(old));
+            IRValue* e = escPut(into, "VAnd", vty, IROperand.useVal(d), IROperand.useVal(live));
+            IRInsn* x = IRInsn.with(String.withCString("VXor"));
+            x.setRes((IRValue*)nexts.get(i));
+            x.add(IROperand.useVal(old));
+            x.add(IROperand.useVal(e));
+            into.add((Object*)x);
+            }
+        return live;
+        }
+
+    // VE: each sum takes its lane values; the iv steps by VF.
+    void escVecLatch(IRBlock* VE, IRBlock* VH, IRValue* viv, IRValue* vivNext)
+        {
+        // E reads T0's values as they stood when each lane left: the blends.
+        for (u32 i = (u32)0; i < _esT0.phis().count(); i = i + (u32)1)
+            {
+            IRValue* p = ((IRInsn*)_esT0.phis().get(i)).res();
+            _esMap.set((Hashable*)p, _esExit.get((Hashable*)p));
+            }
+        for (u32 i = (u32)0; i < _esAccPhis.count(); i = i + (u32)1)
+            {
+            String* t = ((IRInsn*)_esAccPhis.get(i)).res().ty();
+            IROperand* w = escV((IROperand*)_esAccW.get(i), t);
+            // The reduction folds in its operand's register on some back ends:
+            // it reads a copy.
+            IRValue* cp = escPut(VE.insns(), "VOr", escVecTy(t), w, w);
+            IRValue* r = escPut(VE.insns(), "VReduceAdd", t, IROperand.useVal(cp), (IROperand*)0);
+            IRInsn* a = IRInsn.with(String.withCString("Add"));
+            a.setRes((IRValue*)_esVSumNext.get(i));
+            a.add(IROperand.useVal((IRValue*)_esVSum.get(i)));
+            a.add(IROperand.useVal(r));
+            VE.insns().add((Object*)a);
+            }
+        if (_esStore != (IRInsn*)0)
+            {
+            // a[viv .. viv+VF-1] = the lanes, one vector store.
+            IROperand* sv = (IROperand*)_esStore.ops().get((u32)1);
+            IROperand* vv = escV(sv, sv.val().ty());
+            IRValue* av = new IRValue(_esStoreAddr.res().ty());
+            IRInsn* ea = IRInsn.with(String.withCString("ElementAddr"));
+            ea.setRes(av);
+            ea.add((IROperand*)_esStoreAddr.ops().get((u32)0));
+            ea.add(IROperand.useVal(viv));
+            VE.insns().add((Object*)ea);
+            IRInsn* vs = IRInsn.with(String.withCString("VStore"));
+            vs.copyDbg(_esStore);
+            vs.add(IROperand.useVal(av));
+            vs.add(vv);
+            for (u32 q = (u32)2; q < _esStore.ops().count(); q = q + (u32)1)
+                vs.add((IROperand*)_esStore.ops().get(q));
+            if (_esStore.memRes() != (IRValue*)0)
+                vs.setMemRes(new IRValue(_esStore.memRes().ty()));
+            VE.insns().add((Object*)vs);
+            }
+        IRInsn* inc = IRInsn.with(String.withCString("Add"));
+        inc.setRes(vivNext);
+        inc.add(IROperand.useVal(viv));
+        inc.add(IROperand.immI((i64)_esVF, viv.ty()));
+        VE.insns().add((Object*)inc);
+        IRInsn* br = IRInsn.with(String.withCString("Branch"));
+        br.add(IROperand.block(VH));
+        VE.setTerm(br);
+        }
+
+    // VX: the sums reduced and added to what they entered with; the scalar
+    // loop then starts where the vector one stopped.
+    void escVecExit(IRBlock* VX, IRValue* viv)
+        {
+        for (u32 i = (u32)0; i < _esAccPhis.count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)_esAccPhis.get(i);
+            escReenter(p, VX, IROperand.useVal((IRValue*)_esVSum.get(i)));
+            }
+        escReenter(_esIvPhi, VX, IROperand.useVal(viv));
+        IRInsn* br = IRInsn.with(String.withCString("Branch"));
+        br.add(IROperand.block(_esH));
+        VX.setTerm(br);
+        }
+
+    // H's phi `p` now enters from VX with `v` instead of from PH.
+    void escReenter(IRInsn* p, IRBlock* VX, IROperand* v)
+        {
+        for (u32 q = (u32)0; q + (u32)1 < p.ops().count(); q = q + (u32)2)
+            if (((IROperand*)p.ops().get(q)).blk() == _esPH)
+                {
+                p.ops().set(q, (Object*)IROperand.block(VX));
+                p.ops().set(q + (u32)1, (Object*)v);
+                }
+        }
+
     void vectorize(IRModule* m)
         {
         if (!_profile.vectorize())
@@ -18365,6 +19740,7 @@ class BeFact : Object
             // The recognisers read it too (vecPoolFor), not only the appliers.
             _vecFn = fn;
             _vecRemainders = new Map();
+            _esDone = new Set();
             u32 iter = (u32)0;
             while (iter < (u32)256)
                 {
@@ -18407,6 +19783,12 @@ class BeFact : Object
                 if (dp != (VecCand*)0)
                     {
                     vecApplyWidening(fn, dp);
+                    iter = iter + (u32)1;
+                    continue;
+                    }
+                // A pixel loop around an escape-time loop (mandelbrot).
+                if (vecEscape(fn))
+                    {
                     iter = iter + (u32)1;
                     continue;
                     }

@@ -461,6 +461,10 @@ static NSString* dbgSuffix(XTIRInsn* insn)
         return @"VReduceMax";
     case XTIROpVReduceMin:
         return @"VReduceMin";
+    case XTIROpVFCmp:
+        return @"VFCmp";
+    case XTIROpVSIToFp:
+        return @"VSIToFp";
         }
     return @"?";
     }
@@ -575,6 +579,7 @@ static NSString* dbgSuffix(XTIRInsn* insn)
     case XTIROpICmp:
     case XTIROpVICmp:
     case XTIROpFCmp:
+    case XTIROpVFCmp:
         {
         // ICmp <pred>, %a, %b
         //
@@ -594,7 +599,7 @@ static NSString* dbgSuffix(XTIRInsn* insn)
             {
             predStr = iPred[insn.predicate];
             }
-        else if (insn.opcode == XTIROpFCmp && insn.predicate < sizeof(fPred) / sizeof(fPred[0]))
+        else if ((insn.opcode == XTIROpFCmp || insn.opcode == XTIROpVFCmp) && insn.predicate < sizeof(fPred) / sizeof(fPred[0]))
             {
             predStr = fPred[insn.predicate];
             }

@@ -1242,7 +1242,7 @@ class IrParser
         // an operand would otherwise start. VICmp joined them when the printer
         // was fixed to emit one: before that the text carried a lane-wise
         // compare with no operator, and the back end could only refuse it.
-        if (op.equals(String.withCString("ICmp")) || op.equals(String.withCString("FCmp")) || op.equals(String.withCString("VICmp")))
+        if (op.equals(String.withCString("ICmp")) || op.equals(String.withCString("FCmp")) || op.equals(String.withCString("VICmp")) || op.equals(String.withCString("VFCmp")))
             {
             skipSpace();
             if (!atEnd() && IrParser.isIdentChar(_cur.byteAt(_ci)))

@@ -5536,6 +5536,74 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         [self store:'a' into:res slot:slot out:out];
         return;
         }
+    // %v:Vec(I32) <- lane-wise float compare → 0/-1 mask: cmpps's predicate
+    // immediate (0 eq, 1 lt, 2 le), `>` and `>=` as `<` and `<=` swapped
+    // round, since SSE has no ordered gt/ge. At 64 bytes the compare writes an
+    // opmask and vpmovm2d widens it back.
+    case XTIROpVFCmp:
+        {
+        if (!res || ops.count < 2 || ops[0].kind != XTIROperandKindUse || ops[1].kind != XTIROperandKindUse)
+            return;
+        NSString *d = sVec[@(res.valueId)], *a = sVec[@(ops[0].valueId)], *b = sVec[@(ops[1].valueId)];
+        if (!d || !a || !b)
+            return;
+        unsigned pr = 0;
+        BOOL swap = NO;
+        switch (in.predicate)
+            {
+        case XTIRFCmpOEQ:
+            pr = 0;
+            break;
+        case XTIRFCmpOLT:
+            pr = 1;
+            break;
+        case XTIRFCmpOLE:
+            pr = 2;
+            break;
+        case XTIRFCmpOGT:
+            pr = 1;
+            swap = YES;
+            break;
+        case XTIRFCmpOGE:
+            pr = 2;
+            swap = YES;
+            break;
+        default:
+            return;
+            }
+        NSString *lhs = swap ? b : a, *rhs = swap ? a : b;
+        if ([d hasPrefix:@"zmm"])
+            {
+            [out appendFormat:@"\tvcmpps\tk1, %@, %@, %u\n\tvpmovm2d\t%@, k1\n", lhs, rhs, pr, d];
+            return;
+            }
+        if ([d hasPrefix:@"ymm"])
+            {
+            [out appendFormat:@"\tvcmpps\t%@, %@, %@, %u\n", d, lhs, rhs, pr];
+            return;
+            }
+        if ([d isEqualToString:lhs])
+            [out appendFormat:@"\tcmpps\t%@, %@, %u\n", d, rhs, pr];
+        else if ([d isEqualToString:rhs])
+            [out appendFormat:@"\tmovdqa\txmm0, %@\n\tcmpps\txmm0, %@, %u\n\tmovdqa\t%@, xmm0\n", lhs, rhs, pr, d];
+        else
+            [out appendFormat:@"\tmovdqa\t%@, %@\n\tcmpps\t%@, %@, %u\n", d, lhs, d, rhs, pr];
+        return;
+        }
+    // %v:Vec(F32) <- signed 32-bit lanes to float ones
+    case XTIROpVSIToFp:
+        {
+        if (!res || ops.count < 1 || ops[0].kind != XTIROperandKindUse)
+            return;
+        NSString *d = sVec[@(res.valueId)], *a = sVec[@(ops[0].valueId)];
+        if (!d || !a)
+            return;
+        if ([d hasPrefix:@"ymm"] || [d hasPrefix:@"zmm"])
+            [out appendFormat:@"\tvcvtdq2ps\t%@, %@\n", d, a];
+        else
+            [out appendFormat:@"\tcvtdq2ps\t%@, %@\n", d, a];
+        return;
+        }
     // %v:Vec <- lane-wise compare → 0/-1 mask (i32 lanes)
     case XTIROpVICmp:
         {

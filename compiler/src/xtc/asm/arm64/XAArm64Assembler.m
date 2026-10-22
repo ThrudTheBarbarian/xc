@@ -836,7 +836,7 @@ static int xaEncodeSME(NSString *mn, NSArray<NSString *> *ops, uint32_t *out, NS
             // float 3-same — 1-bit sz at bit22 (0 for .2s/.4s, 1 for .2d):
             float3 = @{@"fadd":@0x0E20D400u,@"fsub":@0x0EA0D400u,@"fmul":@0x2E20DC00u,@"fdiv":@0x2E20FC00u,
                        @"fmla":@0x0E20CC00u,@"fmls":@0x0EA0CC00u,@"fmax":@0x0E20F400u,@"fmin":@0x0EA0F400u,
-                       @"fcmeq":@0x0E20E400u,@"fcmgt":@0x2EA0E400u,
+                       @"fcmeq":@0x0E20E400u,@"fcmgt":@0x2EA0E400u,@"fcmge":@0x2E20E400u,
                        // FADDP (vector): the P form is the base with bit 29 set,
                        // so its .4s is 0x6E20D400 (verified against the host
                        // assembler). Used by the float horizontal reduction.

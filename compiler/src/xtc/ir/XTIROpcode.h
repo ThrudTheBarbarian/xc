@@ -203,6 +203,8 @@ typedef NS_ENUM(uint16_t, XTIROpcode) {
     XTIROpVReduceAdd, // scalar <- %v:Vec  (horizontal add of all lanes)
     XTIROpVReduceMax, // scalar <- %v:Vec  (horizontal max; u/s from result type)
     XTIROpVReduceMin, // scalar <- %v:Vec  (horizontal min; u/s from result type)
+    XTIROpVFCmp,      // %v:Vec(I32) <- a:Vec(F32), b  (lane-wise float compare -> 0/-1 mask)
+    XTIROpVSIToFp,    // %v:Vec(F32) <- a:Vec(I32)     (signed lanes to float)
 };
 
 /// Returns YES for terminator opcodes (Branch, CondBranch, Switch,

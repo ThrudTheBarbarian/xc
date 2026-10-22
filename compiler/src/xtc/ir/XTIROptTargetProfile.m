@@ -146,6 +146,10 @@
     {
     return NO;
     }
+- (BOOL)vectorizesEscapeLoops
+    {
+    return [self vectorizesLaneShift];
+    }
 - (BOOL)formsPointerInductionVars
     {
     return NO;

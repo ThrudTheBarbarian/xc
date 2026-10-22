@@ -1786,6 +1786,7 @@ class Arm64Asm
         if (m.equals(String.withCString("fmin")))  return (u32)$0EA0F400;
         if (m.equals(String.withCString("fcmeq"))) return (u32)$0E20E400;
         if (m.equals(String.withCString("fcmgt"))) return (u32)$2EA0E400;
+        if (m.equals(String.withCString("fcmge"))) return (u32)$2E20E400;
         // FADDP (vector): the P form is the base with bit 29 set, so .4s is
         // 0x6E20D400 (verified against the host assembler). The float
         // horizontal reduction uses it.

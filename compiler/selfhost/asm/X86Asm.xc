@@ -1891,10 +1891,15 @@ class X86Fixup
         {
         if (mn.byteLength() < (u32)2 || mn.byteAt((u32)0) != (u8)'v')
             return false;
-        if (_ops.count() != (u32)3 || a == (XOperand*)0)
+        if (a == (XOperand*)0)
             return false;
         String* base = mn.substringFromByte((u32)1);
-        u32 rr = sseRR(base);
+        // vcmpps/vcmppd carry the predicate as a fourth, immediate operand.
+        bool cmp = base.equals(String.withCString("cmpps")) || base.equals(String.withCString("cmppd"));
+        bool imm4 = cmp && _ops.count() == (u32)4 && opAt((u32)3) != (XOperand*)0 && opAt((u32)3).kind() == (u32)OP_IMM;
+        if (_ops.count() != (u32)3 && !imm4)
+            return false;
+        u32 rr = cmp ? (base.equals(String.withCString("cmppd")) ? (u32)$66C2 : (u32)$C2) : sseRR(base);
         u32 map = (u32)1;
         // The 0F38 map: the SSE4.1 lane min/max and the 32-bit multiply.
         if (rr == (u32)$FFFF_FFFF)
@@ -1946,6 +1951,8 @@ class X86Fixup
             }
         e8(rr & (u32)$FF);
         eModRM(a.reg(), s2);
+        if (imm4)
+            e8((u32)opAt((u32)3).imm() & (u32)$FF);
         _hit = true;
         return true;
         }
@@ -2444,6 +2451,8 @@ class X86Fixup
         // 2-operand VEX arithmetic (vvvv = 1111): the float square root.
         else if (mn.equals(String.withCString("vsqrtps"))) { pp = (u32)0; map = (u32)1; ld = (u32)$51; }
         else if (mn.equals(String.withCString("vsqrtpd"))) { pp = (u32)1; map = (u32)1; ld = (u32)$51; }
+        // and the int-to-float lane conversion.
+        else if (mn.equals(String.withCString("vcvtdq2ps"))) { pp = (u32)0; map = (u32)1; ld = (u32)$5B; }
         if (map != (u32)0 && _ops.count() == (u32)2 && a != (XOperand*)0 && b != (XOperand*)0)
             {
             bool store = a.kind() == (u32)OP_MEM && st != (u32)0;

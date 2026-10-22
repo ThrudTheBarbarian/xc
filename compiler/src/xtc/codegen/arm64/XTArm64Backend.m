@@ -7104,6 +7104,38 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             if (invert) [ctx.out appendFormat:@"    not v%lu.16b, v%lu.16b\n", (unsigned long)d, (unsigned long)d];
             break;
         }
+        case XTIROpVFCmp: {       // lane-wise float compare → 0/-1 mask
+            // `<`/`<=` are `>`/`>=` with the operands swapped (NaN fails both
+            // ways round, as the ordered predicates require).
+            if (insn.operands.count < 2 || !insn.result ||
+                insn.operands[0].kind != XTIROperandKindUse ||
+                insn.operands[1].kind != XTIROperandKindUse) break;
+            NSUInteger a = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
+            NSUInteger b = [self vecIndexForValue:insn.operands[1].valueId ctx:ctx];
+            NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+            NSString *cm = nil; BOOL swap = NO;
+            switch (insn.predicate) {
+                case XTIRFCmpOGT: cm = @"fcmgt"; break;
+                case XTIRFCmpOGE: cm = @"fcmge"; break;
+                case XTIRFCmpOLT: cm = @"fcmgt"; swap = YES; break;
+                case XTIRFCmpOLE: cm = @"fcmge"; swap = YES; break;
+                case XTIRFCmpOEQ: cm = @"fcmeq"; break;
+                default: break;
+            }
+            if (!cm) break;
+            NSUInteger lhs = swap ? b : a, rhs = swap ? a : b;
+            [ctx.out appendFormat:@"    %@ v%lu.4s, v%lu.4s, v%lu.4s\n",
+             cm, (unsigned long)d, (unsigned long)lhs, (unsigned long)rhs];
+            break;
+        }
+        case XTIROpVSIToFp: {     // signed 32-bit lanes to float ones
+            if (insn.operands.count < 1 || !insn.result ||
+                insn.operands[0].kind != XTIROperandKindUse) break;
+            NSUInteger a = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
+            NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+            [ctx.out appendFormat:@"    scvtf v%lu.4s, v%lu.4s\n", (unsigned long)d, (unsigned long)a];
+            break;
+        }
         case XTIROpVReduceMax: case XTIROpVReduceMin: {  // horizontal max/min
             // .4s-only (i32/u32 lanes) by construction, like VReduceAdd.
             if (insn.operands.count < 1 || insn.operands[0].kind != XTIROperandKindUse ||

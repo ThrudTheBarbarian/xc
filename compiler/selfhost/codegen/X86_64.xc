@@ -2315,6 +2315,87 @@ class X86_64
         store((u8)'a', n.res());
         }
 
+    // A lane-wise float compare, to the 0/-1 mask VICmp gives: cmpps's
+    // predicate immediate (0 eq, 1 lt, 2 le, 4 neq-unordered), with `>` and
+    // `>=` as `<` and `<=` swapped round, since SSE has no ordered gt/ge. At
+    // 64 bytes the compare writes an opmask and vpmovm2d widens it back.
+    void emitVFCmp(IRInsn* n)
+        {
+        if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
+            return;
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        IROperand* o1 = (IROperand*)n.ops().get((u32)1);
+        if (o0.kind() != (u8)OPK_USE || o1.kind() != (u8)OPK_USE)
+            return;
+        String* d = vecOf(n.res());
+        String* a = vecOf(o0.val());
+        String* b = vecOf(o1.val());
+        String* p = n.pred();
+        if (d == (String*)0 || a == (String*)0 || b == (String*)0 || p == (String*)0)
+            return;
+        u32 pr = (u32)0;
+        bool swap = false;
+        if (p.equals(String.withCString("OEQ")))
+            pr = (u32)0;
+        else if (p.equals(String.withCString("OLT")))
+            pr = (u32)1;
+        else if (p.equals(String.withCString("OLE")))
+            pr = (u32)2;
+        else if (p.equals(String.withCString("UNE")))
+            pr = (u32)4;
+        else if (p.equals(String.withCString("OGT")))
+            {
+            pr = (u32)1;
+            swap = true;
+            }
+        else if (p.equals(String.withCString("OGE")))
+            {
+            pr = (u32)2;
+            swap = true;
+            }
+        else
+            return;
+        String* lhs = swap ? b : a;
+        String* rhs = swap ? a : b;
+        if (isZmm(d))
+            {
+            _out.appendFormat("\tvcmpps\tk1, %s, %s, %u\n\tvpmovm2d\t%s, k1\n",
+                              lhs.cString(), rhs.cString(), pr, d.cString());
+            return;
+            }
+        if (isYmm(d))
+            {
+            _out.appendFormat("\tvcmpps\t%s, %s, %s, %u\n", d.cString(), lhs.cString(), rhs.cString(), pr);
+            return;
+            }
+        if (d.equals(lhs))
+            _out.appendFormat("\tcmpps\t%s, %s, %u\n", d.cString(), rhs.cString(), pr);
+        else if (d.equals(rhs))
+            _out.appendFormat("\tmovdqa\txmm0, %s\n\tcmpps\txmm0, %s, %u\n\tmovdqa\t%s, xmm0\n",
+                              lhs.cString(), rhs.cString(), pr, d.cString());
+        else
+            _out.appendFormat("\tmovdqa\t%s, %s\n\tcmpps\t%s, %s, %u\n",
+                              d.cString(), lhs.cString(), d.cString(), rhs.cString(), pr);
+        }
+
+    // Signed 32-bit lanes to float ones.
+    void emitVSIToFp(IRInsn* n)
+        {
+        if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
+            return;
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        if (o0.kind() != (u8)OPK_USE)
+            return;
+        String* d = vecOf(n.res());
+        String* a = vecOf(o0.val());
+        if (d == (String*)0 || a == (String*)0)
+            return;
+        if (isYmm(d) || isZmm(d))
+            _out.appendFormat("\tvcvtdq2ps\t%s, %s\n", d.cString(), a.cString());
+        else
+            _out.appendFormat("\tcvtdq2ps\t%s, %s\n", d.cString(), a.cString());
+        }
+
     void emitVICmp(IRInsn* n)
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
@@ -6515,6 +6596,16 @@ class X86_64
         if (op.equals(String.withCString("VICmp")))
             {
             emitVICmp(n);
+            return true;
+            }
+        if (op.equals(String.withCString("VFCmp")))
+            {
+            emitVFCmp(n);
+            return true;
+            }
+        if (op.equals(String.withCString("VSIToFp")))
+            {
+            emitVSIToFp(n);
             return true;
             }
         if (op.equals(String.withCString("VAddLP")))
