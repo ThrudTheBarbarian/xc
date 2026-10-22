@@ -318,6 +318,39 @@ $(XCC_XC_WIN64_BIN): $(XCC_XC2_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
 	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -D XCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) \
 	            $(call XCC_XC_TARGET_INCS,win64)
 
+# For a contributor with no toolchain but an installed release: the shipped
+# compiler built from this tree by the installed xcc (stage 1), again by stage 1
+# (stage 2), and once more by stage 2 (stage 3). Stages 2 and 3 must be byte for
+# byte the same — the fixed point that says the tree builds itself — and stage 2
+# is the compiler to try a change with, e.g.
+#   XC=build/contrib/xcc-stage2 bash selfhost/tools/installed-sweep.sh
+#   make contrib XCC=/opt/xcc/$(VERSION)/bin/xcc
+CONTRIB_DIR = build/contrib
+ifeq ($(UNAME_S),Darwin)
+CONTRIB_ARCH = -A arm64
+CONTRIB_INCS = $(XCC_XC_INCS)
+else
+CONTRIB_ARCH = -A x86_64 -static
+CONTRIB_INCS = $(call XCC_XC_TARGET_INCS,x86_64)
+endif
+CONTRIB_BUILD = -q -O2 $(CONTRIB_ARCH) -H . -D XCC_VERSION='"$(VERSION)"' $(XCC_XC_SRC) $(CONTRIB_INCS)
+
+.PHONY: contrib
+contrib:
+	@test -n "$(XCC)" || { echo "make contrib XCC=<an installed xcc>, e.g. XCC=/opt/xcc/$(VERSION)/bin/xcc"; exit 1; }
+	@test -x "$(XCC)" || { echo "make contrib: no compiler at $(XCC)"; exit 1; }
+	@mkdir -p $(CONTRIB_DIR)
+	@rm -f $(CONTRIB_DIR)/xcc-stage1 $(CONTRIB_DIR)/xcc-stage2 $(CONTRIB_DIR)/xcc-stage3
+	@echo "  xc   stage 1: this tree, built by $(XCC)"
+	@$(XCC) -o $(CONTRIB_DIR)/xcc-stage1 $(CONTRIB_BUILD)
+	@echo "  xc   stage 2: built by stage 1"
+	@$(CONTRIB_DIR)/xcc-stage1 -o $(CONTRIB_DIR)/xcc-stage2 $(CONTRIB_BUILD)
+	@echo "  xc   stage 3: built by stage 2"
+	@$(CONTRIB_DIR)/xcc-stage2 -o $(CONTRIB_DIR)/xcc-stage3 $(CONTRIB_BUILD)
+	@cmp -s $(CONTRIB_DIR)/xcc-stage2 $(CONTRIB_DIR)/xcc-stage3 \
+	    || { echo "make contrib: stage 2 and stage 3 differ — the tree does not reproduce itself"; exit 1; }
+	@echo "  xc   stage 2 = stage 3: $(CONTRIB_DIR)/xcc-stage2 is the compiler to try"
+
 .PHONY: production-linux production-win64 production-all
 production-linux: $(XCC_XC_LINUX_BIN) $(XCC_SIGN_XC_LINUX_BIN) $(XCC_AS_XC_LINUX_BIN)
 production-win64: $(XCC_XC_WIN64_BIN) $(XCC_SIGN_XC_WIN64_BIN) $(XCC_AS_XC_WIN64_BIN)

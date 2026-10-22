@@ -14,8 +14,11 @@
 # once it is somewhere else.
 #
 #   bash selfhost/tools/installed-sweep.sh [prefix] [pattern]
+#   XC=<xcc> bash selfhost/tools/installed-sweep.sh [-] [pattern]
 #
-# Default prefix is /opt/xcc/<VERSION>. Compiles each applicable fixture for the
+# Default prefix is /opt/xcc/<VERSION>. XC= names a compiler that is not
+# installed — `make contrib`'s stage 2, say — and points it at this tree's
+# support files with -H. Compiles each applicable fixture for the
 # host, RUNS it, and diffs against the fixture's expected output — a fixture
 # that builds but prints the wrong thing is a failure, not a pass.
 set -u
@@ -25,12 +28,17 @@ VER=$(cat VERSION 2>/dev/null || echo 0.5)
 PREFIX=${1:-/opt/xcc/$VER}
 PATTERN=${2:-}
 XCC="$PREFIX/bin/xcc"
+XFLAGS=()
+if [ -n "${XC:-}" ]; then
+    XCC=$XC
+    XFLAGS=(-H "$(pwd)")
+fi
 FIX=tests/fixtures
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 
 if [ ! -x "$XCC" ]; then
-    echo "--- installed-sweep: SKIPPED (no compiler at $XCC — run 'make install') ---"
+    echo "--- installed-sweep: SKIPPED (no compiler at $XCC — run 'make install', or set XC=) ---"
     exit 0
 fi
 echo "using $XCC — $("$XCC" -v 2>&1 | head -1)"
@@ -55,7 +63,7 @@ for f in "$FIX"/*.xc; do
         skipped=$((skipped+1)); continue
     fi
 
-    if ! "$XCC" -o "$WORK/$b" "$f" > "$WORK/$b.log" 2>&1; then
+    if ! "$XCC" ${XFLAGS[@]+"${XFLAGS[@]}"} -o "$WORK/$b" "$f" > "$WORK/$b.log" 2>&1; then
         buildfail=$((buildfail+1))
         FAILED+=("$b — build: $(grep -m1 -o 'error:.*' "$WORK/$b.log" | cut -c1-70)")
         continue
