@@ -17,10 +17,56 @@ class MachOLink
     u32 _rc;           // 0 merged; 1 error (reported in why); 2 a reloc the in-house link cannot express
     Array* _gotFixups; // Arm64Fixup@ — GOT refs, resolved after the pull settles
 
+    Array* _objModInit;    // Number@: the objects' constructor lists, one after another
+    Array* _objModInitFix; // Arm64Fixup@ against _objModInit
+
     void init(void)
         {
         _rc = (u32)0;
         _gotFixups = new Array();
+        _objModInit = new Array();
+        _objModInitFix = new Array();
+        }
+
+    Array* objModInit(void)
+        {
+        return _objModInit;
+        }
+
+    Array* objModInitFix(void)
+        {
+        return _objModInitFix;
+        }
+
+    // One object's constructor list, appended with its pointers as fixups.
+    bool mergeModInit(MachOObject* obj, u32 oi)
+        {
+        Data* mi = obj.modInit();
+        if (mi.length() == (u32)0)
+            return true;
+        while ((_objModInit.count() & (u32)7) != (u32)0)
+            _objModInit.add((Object*)Number.withU32((u32)0));
+        u32 mbase = _objModInit.count();
+        for (u32 k = (u32)0; k < mi.length(); k = k + (u32)1)
+            _objModInit.add((Object*)Number.withU32((u32)mi.byteAt(k)));
+        Array* ml = obj.modInitRelocs();
+        for (u32 k = (u32)0; k < ml.count(); k = k + (u32)1)
+            {
+            MachOReloc* r = (MachOReloc*)ml.get(k);
+            if (r.type() == (u32)0 && r.ext() != (u32)0 && r.symnum() < obj.symnames().count())
+                {
+                MachOSymDef* sd = (MachOSymDef*)obj.symdefs().get(r.symnum());
+                _objModInitFix.add((Object*)Arm64Fixup.make(mbase + r.off(), (u32)FIXUP_POINTER64,
+                                                            MachOLink.taggedSym(sd, oi), (u32)0));
+                continue;
+                }
+            Stdio.printf("xcc-ln-arm64: unhandled constructor relocation (type %lu, extern %lu)\n",
+                         (u32)r.type(), (u32)r.ext());
+            _why = String.withCString("unhandled constructor relocation");
+            _rc = (u32)2;
+            return false;
+            }
+        return true;
         }
     u32 rc(void)
         {
@@ -336,6 +382,11 @@ class MachOLink
                     _rc = (u32)2;
                     return;
                     }
+                // The object's load-time constructors join the image's own list,
+                // which the writer puts at the end of __data as its
+                // S_MOD_INIT_FUNC_POINTERS section.
+                if (!mergeModInit(obj, oi))
+                    return;
                 progress = true;
                 }
             }

@@ -976,7 +976,22 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
                   exports:(nullable NSSet<NSString*>*)exports
                   commons:(nullable NSDictionary<NSString*, NSArray<NSNumber*>*>*)commons
     {
+    return [self objectFromText:text symbols:symbols data:dataIn dataSymbols:dataSymbols fixups:fixups
+                        exports:exports commons:commons modInit:nil modInitFixups:nil];
+    }
+
++ (NSData*)objectFromText:(NSData*)text
+                  symbols:(NSDictionary<NSString*, NSNumber*>*)symbols
+                     data:(nullable NSData*)dataIn
+              dataSymbols:(nullable NSSet<NSString*>*)dataSymbols
+                   fixups:(NSArray<XAArm64Fixup*>*)fixups
+                  exports:(nullable NSSet<NSString*>*)exports
+                  commons:(nullable NSDictionary<NSString*, NSArray<NSNumber*>*>*)commons
+                  modInit:(nullable NSData*)modInitIn
+            modInitFixups:(nullable NSArray<XAArm64Fixup*>*)modInitFixups
+    {
     NSData* data = dataIn ?: [NSData data];
+    NSData* mi = modInitIn ?: [NSData data];
     NSSet* dsyms = dataSymbols ?: [NSSet set];
     NSDictionary<NSString*, NSArray<NSNumber*>*>* comms = commons ?: @{};
 
@@ -1087,21 +1102,42 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
         else
             nTextRel++;
         }
+    // The load-time constructors' pointers: ARM64_RELOC_UNSIGNED, 8 bytes, each
+    // against its function's symbol.
+    NSMutableData* miRel = [NSMutableData data];
+    uint32_t nMiRel = 0;
+    for (XAArm64Fixup* f in modInitFixups)
+        {
+        NSNumber* si = f.symbol ? symIndex[f.symbol] : nil;
+        if (!si)
+            continue;
+        put32(miRel, (uint32_t)f.offset);
+        put32(miRel, (uint32_t)((1u << 27) | (3u << 25) | ((uint32_t)si.unsignedIntValue & 0xFFFFFFu)));
+        nMiRel++;
+        }
 
     // ── file offsets ──────────────────────────────────────────────────────
     // LC_BUILD_VERSION: without it `ld` warns "no platform load command found,
     // assuming: macOS". It is assuming correctly, but a real object says so.
-    const uint32_t hdrSize = 32, segCmd = 72 + 80 * 2, symCmd = 24, dysymCmd = 80;
+    // A __mod_init_func section (S_MOD_INIT_FUNC_POINTERS) after __data when
+    // there are constructors; without them the object is exactly as before.
+    BOOL hasMi = mi.length > 0;
+    const uint32_t nsects = hasMi ? 3 : 2;
+    const uint32_t hdrSize = 32, segCmd = 72 + 80 * nsects, symCmd = 24, dysymCmd = 80;
     const uint32_t buildCmd = 24;
     uint32_t sizeofcmds = segCmd + symCmd + dysymCmd + buildCmd;
     uint64_t textOff = hdrSize + sizeofcmds;
     textOff = (textOff + 15) & ~15ull;
     uint64_t dataOff = textOff + text.length;
     dataOff = (dataOff + 15) & ~15ull;
-    uint64_t textRelOff = dataOff + data.length;
+    uint64_t miOff = (dataOff + data.length + 7) & ~7ull;
+    uint64_t miAddr = (text.length + data.length + 7) & ~7ull;
+    uint64_t textRelOff = hasMi ? miOff + mi.length : dataOff + data.length;
     uint64_t dataRelOff = textRelOff + textRel.length;
-    uint64_t symOff = dataRelOff + dataRel.length;
+    uint64_t miRelOff = dataRelOff + dataRel.length;
+    uint64_t symOff = miRelOff + miRel.length;
     symOff = (symOff + 7) & ~7ull;
+    uint64_t segSize = hasMi ? miAddr + mi.length : text.length + data.length;
     uint64_t strOff = symOff + order.count * 16;
 
     NSMutableData* strtab = [NSMutableData data];
@@ -1131,12 +1167,12 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     put32(out, segCmd);
     putFixed(out, "", 16);
     put64(out, 0);
-    put64(out, text.length + data.length);
+    put64(out, segSize);
     put64(out, textOff);
-    put64(out, text.length + data.length);
+    put64(out, segSize);
     put32(out, 7);
     put32(out, 7);
-    put32(out, 2 /*nsects*/);
+    put32(out, nsects);
     put32(out, 0);
 
     putFixed(out, "__text", 16);
@@ -1164,6 +1200,22 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     put32(out, 0);
     put32(out, 0);
     put32(out, 0);
+
+    if (hasMi)
+        {
+        putFixed(out, "__mod_init_func", 16);
+        putFixed(out, "__DATA", 16);
+        put64(out, miAddr);
+        put64(out, mi.length);
+        put32(out, (uint32_t)miOff);
+        put32(out, 3 /*align 8*/);
+        put32(out, (uint32_t)(nMiRel ? miRelOff : 0));
+        put32(out, nMiRel);
+        put32(out, XS_MOD_INIT_FUNC_POINTERS);
+        put32(out, 0);
+        put32(out, 0);
+        put32(out, 0);
+        }
 
     put32(out, 0x2 /*LC_SYMTAB*/);
     put32(out, symCmd);
@@ -1208,8 +1260,15 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     while (out.length < dataOff)
         put8(out, 0);
     [out appendData:data];
+    if (hasMi)
+        {
+        while (out.length < miOff)
+            put8(out, 0);
+        [out appendData:mi];
+        }
     [out appendData:textRel];
     [out appendData:dataRel];
+    [out appendData:miRel];
     while (out.length < symOff)
         put8(out, 0);
     for (NSUInteger i = 0; i < order.count; i++)
@@ -1380,6 +1439,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
     // identity back. Name, segment and flags are carried verbatim from the
     // input object, so no table of section types has to be maintained here.
     NSMutableArray<NSDictionary*>* objcRanges = [NSMutableArray array];
+    NSMutableArray<NSNumber*>* modSectIdx = [NSMutableArray array];
     for (int i = 1; i < (int)sects.count; i++)
         {
         if (i == textIdx)
@@ -1397,6 +1457,14 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
         BOOL dataLike = [sg isEqualToString:@"__DATA"] || [sg isEqualToString:@"__DATA_CONST"] || textLiteral;
         if (!dataLike)
             continue;                               // skip __compact_unwind / __LD / debug
+        // A load-time constructor list (S_MOD_INIT_FUNC_POINTERS) is not data:
+        // merged into the blob it would never run. It goes to the image's own
+        // constructor list instead (modinit / modrelocs below).
+        if (stype == 0x9)
+            {
+            [modSectIdx addObject:@(i)];
+            continue;
+            }
         uint64_t alignTo = (stype == 0xE) ? 15 : 7; // 16-byte literals keep 16-alignment
         // A page alignment (4 KB and more: a gpu-globals array clang's half
         // laid out) is kept, and the merge starts the blob on it; smaller
@@ -1534,8 +1602,32 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             datarelocs[datarelocs.count] = @{@"off" : @(bo + (uint64_t)addr), @"symnum" : @(info & 0xFFFFFF), @"pcrel" : @((info >> 24) & 1), @"len" : @((info >> 25) & 3), @"extern" : @((info >> 27) & 1), @"type" : @((info >> 28) & 0xF)};
             }
         }
+    // The constructor lists, 8-aligned one after another, their relocations
+    // relative to that run.
+    NSMutableData* modInit = [NSMutableData data];
+    NSMutableArray<NSDictionary*>* modrelocs = [NSMutableArray array];
+    for (NSNumber* si in modSectIdx)
+        {
+        NSDictionary* s = sects[si.intValue];
+        while (modInit.length & 7)
+            {
+            uint8_t z = 0;
+            [modInit appendBytes:&z length:1];
+            }
+        uint64_t mo = modInit.length;
+        [modInit appendBytes:b + [s[@"foff"] unsignedLongLongValue] length:[s[@"size"] unsignedLongLongValue]];
+        uint64_t ro = [s[@"reloff"] unsignedLongLongValue];
+        uint32_t nr = [s[@"nreloc"] unsignedIntValue];
+        for (uint32_t i = 0; i < nr; i++)
+            {
+            uint64_t r = ro + (uint64_t)i * 8;
+            int32_t addr = (int32_t)rd32(r);
+            uint32_t info = rd32(r + 4);
+            modrelocs[modrelocs.count] = @{@"off" : @(mo + (uint64_t)addr), @"symnum" : @(info & 0xFFFFFF), @"pcrel" : @((info >> 24) & 1), @"len" : @((info >> 25) & 3), @"extern" : @((info >> 27) & 1), @"type" : @((info >> 28) & 0xF)};
+            }
+        }
     (void)len;
-    return @{@"text" : text, @"symbols" : syms, @"data" : data, @"datasyms" : dsyms, @"relocs" : relocs, @"datarelocs" : datarelocs, @"symnames" : symnames, @"symdefs" : symdefs, @"objcranges" : objcRanges, @"commons" : commonSize, @"pagemask" : @(pageMask)};
+    return @{@"text" : text, @"symbols" : syms, @"data" : data, @"datasyms" : dsyms, @"relocs" : relocs, @"datarelocs" : datarelocs, @"symnames" : symnames, @"symdefs" : symdefs, @"objcranges" : objcRanges, @"commons" : commonSize, @"pagemask" : @(pageMask), @"modinit" : modInit, @"modrelocs" : modrelocs};
     }
 
 + (NSData*)executableFromText:(NSData*)textIn

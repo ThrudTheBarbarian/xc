@@ -98,6 +98,18 @@ NS_ASSUME_NONNULL_BEGIN
                   exports:(nullable NSSet<NSString*>*)exports
                   commons:(nullable NSDictionary<NSString*, NSArray<NSNumber*>*>*)commons;
 
+// The same, with the module's load-time constructors (`modInit`, pointers
+// patched by `modInitFixups`) as a __mod_init_func section the linker runs.
++ (NSData*)objectFromText:(NSData*)text
+                  symbols:(NSDictionary<NSString*, NSNumber*>*)symbols
+                     data:(nullable NSData*)data
+              dataSymbols:(nullable NSSet<NSString*>*)dataSymbols
+                   fixups:(NSArray<XAArm64Fixup*>*)fixups
+                  exports:(nullable NSSet<NSString*>*)exports
+                  commons:(nullable NSDictionary<NSString*, NSArray<NSNumber*>*>*)commons
+                  modInit:(nullable NSData*)modInit
+            modInitFixups:(nullable NSArray<XAArm64Fixup*>*)modInitFixups;
+
 // Read a BARE MH_OBJECT file, in the same shape objectsInArchive: returns per
 // member — so an explicitly-listed .o and an archive member merge identically.
 + (nullable NSDictionary*)objectAtPath:(NSString*)path;

@@ -3621,7 +3621,7 @@ Array* globlNames(String* asmText, Map* symbols)
 // assembler's model, then give the ObjC metadata its section identity back.
 // Returns the ObjC section table for the writer (empty when there is none).
 Array* mergeLinkObjects(DriverOptions* d, Array* mtext, Array* mdata, Map* msyms,
-                        Array* mdataSyms, Array* mfix, Array* extra)
+                        Array* mdataSyms, Array* mfix, Array* extra, Arm64Asm* as)
 {
     Array* objs = new Array();
     Array* ars = new Array();
@@ -3643,6 +3643,15 @@ Array* mergeLinkObjects(DriverOptions* d, Array* mtext, Array* mdata, Map* msyms
         if (ml.rc() != (u32)0) {
             Stdio.printf("xcc: error: arm64 link: %s\n", ml.why() == 0 ? "?" : ml.why().cString());
             Process.exit((i32)1); return (Array*)0;
+        }
+        // The objects' load-time constructors after the program's own, in the
+        // list the writer ends __data with (appendModInit).
+        u32 mb = as.modInitBytes().count();
+        for (u32 i = (u32)0; i < ml.objModInit().count(); i = i + (u32)1)
+            as.modInitBytes().add(ml.objModInit().get(i));
+        for (u32 i = (u32)0; i < ml.objModInitFix().count(); i = i + (u32)1) {
+            Arm64Fixup* f = (Arm64Fixup*)ml.objModInitFix().get(i);
+            as.modInitFixups().add((Object*)Arm64Fixup.make(mb + f.offset(), f.kind(), f.symbol(), f.scale()));
         }
     }
     return MachOLink.repartitionObjc(mdata, mObjc, msyms, mdataSyms, mfix);
@@ -3734,7 +3743,7 @@ void linkObjectsArm64(DriverOptions* d)
     Array* dataBytes = as.dataBytes();
     Array* fixups    = as.fixups();
     Array* objcSects = mergeLinkObjects(d, as.textBytes(), dataBytes, as.symbols(),
-                                        as.dataSyms(), fixups, d.objectInputs());
+                                        as.dataSyms(), fixups, d.objectInputs(), as);
     u32 miLen = Arm64Asm.appendModInit(as, dataBytes, fixups);
     // After the mod-init tail, so the __bss symbols sit past the data (642).
     u32 bssLen = Arm64Asm.allocateBss(bssCommons, dataBytes, as.symbols(), as.dataSyms());
@@ -4574,6 +4583,9 @@ void emitModule(DriverOptions* d, IRModule* mod)
         // The platform stamp — the reference passes `-platform` to its object
         // writer for -A ios/ios-sim (bug 137: the port wrote PLATFORM_MACOS).
         if (isIos(d)) mo.setApplePlatform(d.arch());
+        // The module's load-time constructors (XG-NIB registration) travel in
+        // the object as its __mod_init_func, for the link to run.
+        mo.setModInit(oas.modInitBytes(), oas.modInitFixups());
         Array* img = mo.objectFromText(oas.textBytes(), oas.dataBytes(), oas.symbols(),
                                        oas.dataSyms(), oas.fixups(), oas.globals(), oas.commonSyms());
         if (img == (Array*)0) {
@@ -4712,7 +4724,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         Array* dataBytes = as.dataBytes();
         Array* fixups    = as.fixups();
         Array* objcSects = mergeLinkObjects(d, as.textBytes(), dataBytes, as.symbols(),
-                                            as.dataSyms(), fixups, new Array());
+                                            as.dataSyms(), fixups, new Array(), as);
         // Bug 066: the __mod_init_func pointer array goes at the END of __data,
         // with its fixups shifted to match, so the writer can give that tail an
         // S_MOD_INIT_FUNC_POINTERS section. Without it dyld sees inert data and

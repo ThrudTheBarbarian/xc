@@ -819,11 +819,24 @@ class MachOSha256
     // where the undefined run starts, and LC_BUILD_VERSION (without it `ld`
     // warns "no platform load command found, assuming: macOS"; it is assuming
     // correctly, but a real object says so).
+    // The module's load-time constructors for the next objectFromText: bytes
+    // (Number@) and their Pointer64 fixups, written as a __mod_init_func
+    // section the linker runs. Unset, the object is as it always was.
+    Array* _objModInit;
+    Array* _objModInitFix;
+
+    void setModInit(Array* bytes, Array* fixups)
+        {
+        _objModInit = bytes;
+        _objModInitFix = fixups;
+        }
+
     Array* objectFromText(Array* text, Array* data, Map* symbols, Array* dataSyms,
                           Array* fixups, Array* exports, Map* commons)
         {
         if (data == (Array*)0)
             data = new Array();
+        Array* mi = _objModInit != (Array*)0 ? _objModInit : new Array();
         if (commons == (Map*)0)
             commons = new Map();
         // [locals][externs][undefs], as LC_DYSYMTAB requires. `exports` (the
@@ -966,18 +979,42 @@ class MachOSha256
             else
                 nTextRel = nTextRel + (u32)1;
             }
+        // The load-time constructors' pointers: ARM64_RELOC_UNSIGNED, 8 bytes,
+        // each against its function's symbol.
+        Array* miRel = new Array();
+        u32 nMiRel = (u32)0;
+        for (u32 i = (u32)0; _objModInitFix != (Array*)0 && i < _objModInitFix.count(); i = i + (u32)1)
+            {
+            Arm64Fixup* f = (Arm64Fixup*)_objModInitFix.get(i);
+            if (f.symbol() == (String*)0)
+                continue;
+            Object* si = symIndex.get((Hashable*)f.symbol());
+            if (si == (Object*)0)
+                continue;
+            MachO.put32In(miRel, f.offset());
+            MachO.put32In(miRel, ((u32)1 << (u32)27) | ((u32)3 << (u32)25) | (((Number*)si).asU32() & (u32)$FFFFFF));
+            nMiRel = nMiRel + (u32)1;
+            }
 
+        // A __mod_init_func section (S_MOD_INIT_FUNC_POINTERS) after __data
+        // when there are constructors; without them the object is as before.
+        bool hasMi = mi.count() > (u32)0;
+        u32 nsects = hasMi ? (u32)3 : (u32)2;
         u32 hdrSize = (u32)32;
-        u32 segCmd = (u32)72 + (u32)80 * (u32)2;
+        u32 segCmd = (u32)72 + (u32)80 * nsects;
         u32 symCmd = (u32)24;
         u32 dysymCmd = (u32)80;
         u32 buildCmd = (u32)24;
         u32 sizeofcmds = segCmd + symCmd + dysymCmd + buildCmd;
         u32 textOff = MachO.roundUp(hdrSize + sizeofcmds, (u32)16);
         u32 dataOff = MachO.roundUp(textOff + text.count(), (u32)16);
-        u32 textRelOff = dataOff + data.count();
+        u32 miOff = MachO.roundUp(dataOff + data.count(), (u32)8);
+        u32 miAddr = MachO.roundUp(text.count() + data.count(), (u32)8);
+        u32 textRelOff = hasMi ? miOff + mi.count() : dataOff + data.count();
         u32 dataRelOff = textRelOff + textRel.count();
-        u32 symOff = MachO.roundUp(dataRelOff + dataRel.count(), (u32)8);
+        u32 miRelOff = dataRelOff + dataRel.count();
+        u32 symOff = MachO.roundUp(miRelOff + miRel.count(), (u32)8);
+        u32 segSize = hasMi ? miAddr + mi.count() : text.count() + data.count();
         u32 strOff = symOff + order.count() * (u32)16;
 
         Array* strtab = new Array();
@@ -1008,12 +1045,12 @@ class MachOSha256
         put32(segCmd); // LC_SEGMENT_64
         putFixed(String.withCString(""), (u32)16);
         put64((u32)0, (u32)0);
-        put64(text.count() + data.count(), (u32)0);
+        put64(segSize, (u32)0);
         put64(textOff, (u32)0);
-        put64(text.count() + data.count(), (u32)0);
+        put64(segSize, (u32)0);
         put32((u32)7);
         put32((u32)7);
-        put32((u32)2);
+        put32(nsects);
         put32((u32)0);
 
         putFixed(String.withCString("__text"), (u32)16);
@@ -1041,6 +1078,22 @@ class MachOSha256
         put32((u32)0);
         put32((u32)0);
         put32((u32)0);
+
+        if (hasMi)
+            {
+            putFixed(String.withCString("__mod_init_func"), (u32)16);
+            putFixed(String.withCString("__DATA"), (u32)16);
+            put64(miAddr, (u32)0);
+            put64(mi.count(), (u32)0);
+            put32(miOff);
+            put32((u32)3); // align 8
+            put32(nMiRel != (u32)0 ? miRelOff : (u32)0);
+            put32(nMiRel);
+            put32((u32)9); // S_MOD_INIT_FUNC_POINTERS
+            put32((u32)0);
+            put32((u32)0);
+            put32((u32)0);
+            }
 
         put32((u32)2);
         put32(symCmd); // LC_SYMTAB
@@ -1084,10 +1137,18 @@ class MachOSha256
         padTo(dataOff);
         for (u32 i = (u32)0; i < data.count(); i = i + (u32)1)
             put8(((Number*)data.get(i)).asU32());
+        if (hasMi)
+            {
+            padTo(miOff);
+            for (u32 i = (u32)0; i < mi.count(); i = i + (u32)1)
+                put8(((Number*)mi.get(i)).asU32());
+            }
         for (u32 i = (u32)0; i < textRel.count(); i = i + (u32)1)
             put8(((Number*)textRel.get(i)).asU32());
         for (u32 i = (u32)0; i < dataRel.count(); i = i + (u32)1)
             put8(((Number*)dataRel.get(i)).asU32());
+        for (u32 i = (u32)0; i < miRel.count(); i = i + (u32)1)
+            put8(((Number*)miRel.get(i)).asU32());
         padTo(symOff);
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             {

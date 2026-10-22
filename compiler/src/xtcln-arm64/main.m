@@ -211,10 +211,13 @@ static NSUInteger allocateBss(NSArray<NSDictionary *> *commons, NSMutableData *m
     return cursor;
 }
 
+// The program's own constructors, then the linked objects' (objMi, its fixups
+// against objMi), in the order the port's merge leaves them.
 static NSUInteger appendModInit(XAArm64Assembler *as, NSMutableData *mdata,
-                                NSMutableArray<XAArm64Fixup *> *mfix) {
+                                NSMutableArray<XAArm64Fixup *> *mfix,
+                                NSData *objMi, NSArray<XAArm64Fixup *> *objMiFix) {
     NSData *mi = as.modInitData;
-    if (mi.length == 0) return 0;
+    if (mi.length + objMi.length == 0) return 0;
     while (mdata.length & 7) { uint8_t z = 0; [mdata appendBytes:&z length:1]; }
     uint64_t base = mdata.length;
     [mdata appendData:mi];
@@ -224,7 +227,15 @@ static NSUInteger appendModInit(XAArm64Assembler *as, NSMutableData *mdata,
         g.kind = f.kind; g.scale = f.scale; g.addend = f.addend;
         [mfix addObject:g];
     }
-    return mi.length;
+    uint64_t obase = base + mi.length;
+    if (objMi.length) [mdata appendData:objMi];
+    for (XAArm64Fixup *f in objMiFix) {
+        XAArm64Fixup *g = [XAArm64Fixup new];
+        g.offset = obase + f.offset; g.symbol = f.symbol;
+        g.kind = f.kind; g.scale = f.scale; g.addend = f.addend;
+        [mfix addObject:g];
+    }
+    return mi.length + objMi.length;
 }
 
 static int mergeMachOInputs(NSArray<NSString *> *objectFiles,
@@ -234,7 +245,9 @@ static int mergeMachOInputs(NSArray<NSString *> *objectFiles,
                             NSMutableSet<NSString *> *mdataSyms,
                             NSMutableArray<XAArm64Fixup *> *mfix,
                             NSMutableArray<NSDictionary *> *mObjc,
-                            NSMutableArray<XAArm64Fixup *> *gotFixups) {
+                            NSMutableArray<XAArm64Fixup *> *gotFixups,
+                            NSMutableData *objMi,
+                            NSMutableArray<XAArm64Fixup *> *objMiFix) {
     if (!archives.count && !objectFiles.count) return 0;
         NSMutableArray<NSDictionary *> *allObjs = [NSMutableArray array];
         // Explicit objects go in FIRST and are marked forced, so they merge
@@ -440,6 +453,30 @@ static int mergeMachOInputs(NSArray<NSString *> *objectFiles,
                             "(type %d, extern %d) — deferring to clang\n", rt, rext);
                     return 2;
                 }
+                // The object's load-time constructors join the image's own list
+                // (the port's mergeModInit).
+                NSData *omi = obj[@"modinit"];
+                if (omi.length) {
+                    while (objMi.length & 7) { uint8_t z = 0; [objMi appendBytes:&z length:1]; }
+                    uint64_t mbase = objMi.length;
+                    [objMi appendData:omi];
+                    for (NSDictionary *r in obj[@"modrelocs"]) {
+                        int rt=[r[@"type"] intValue], rext=[r[@"extern"] intValue];
+                        uint32_t sn=(uint32_t)[r[@"symnum"] unsignedIntValue];
+                        if (rt==0 && rext && sn<snames.count) {
+                            XAArm64Fixup *pf = [XAArm64Fixup new];
+                            pf.offset = mbase + (uint64_t)[r[@"off"] unsignedLongLongValue];
+                            pf.kind = XAArm64FixupPointer64;
+                            pf.symbol = taggedSym(sdefs[sn], snames[sn], oi);
+                            pf.scale = 0;
+                            [objMiFix addObject:pf];
+                            continue;
+                        }
+                        fprintf(stderr, "xcc-ln-arm64: unhandled constructor relocation "
+                                "(type %d, extern %d)\n", rt, rext);
+                        return 2;
+                    }
+                }
                 progress = YES;
             }
             refresh();
@@ -519,7 +556,9 @@ int main(int argc, const char *argv[]) {
                                                    data:as.data dataSymbols:as.dataSymbols
                                                  fixups:as.fixups
                                                 exports:as.globalSymbols
-                                                commons:as.commonSymbols];
+                                                commons:as.commonSymbols
+                                                modInit:as.modInitData
+                                          modInitFixups:as.modInitFixups];
             if (![obj writeToFile:outPath atomically:YES]) {
                 fprintf(stderr, "xcc-ln-arm64: cannot write '%s'\n", argv[3]);
                 return 1;
@@ -597,7 +636,7 @@ int main(int argc, const char *argv[]) {
             // the writer its length, exactly as the Mach-O links below do.
             NSMutableData *dataM = [as.data mutableCopy];
             NSMutableArray<XAArm64Fixup *> *fixM = [as.fixups mutableCopy];
-            NSUInteger miLen = appendModInit(as, dataM, fixM);
+            NSUInteger miLen = appendModInit(as, dataM, fixM, nil, nil);
             NSData *img = [XTElfArm64Writer sharedObjectFromText:text
                                                             data:dataM
                                                          symbols:as.symbols
@@ -693,9 +732,11 @@ int main(int argc, const char *argv[]) {
             NSMutableSet<NSString *> *mdataSyms = [as.dataSymbols mutableCopy] ?: [NSMutableSet set];
             NSMutableArray<XAArm64Fixup *> *gotFixups = [NSMutableArray array];
             NSMutableArray<NSDictionary *> *mObjc = [NSMutableArray array];   // 069
+            NSMutableData *dObjMi = [NSMutableData data];
+            NSMutableArray<XAArm64Fixup *> *dObjMiFix = [NSMutableArray array];
             if (dObjs.count || dArchives.count) {
                 int mrc = mergeMachOInputs(dObjs, dArchives, mtext, mdata,
-                                           msyms, mdataSyms, mfix, mObjc, gotFixups);
+                                           msyms, mdataSyms, mfix, mObjc, gotFixups, dObjMi, dObjMiFix);
                 if (mrc) return mrc;
                 text = mtext;
             }
@@ -703,7 +744,7 @@ int main(int argc, const char *argv[]) {
             // placed at the final tail, after everything else has settled.
             NSArray<NSDictionary *> *objcSects =
                 repartitionObjcSections(mdata, mObjc, msyms, mdataSyms, mfix);
-            NSUInteger miLen = appendModInit(as, mdata, mfix);
+            NSUInteger miLen = appendModInit(as, mdata, mfix, dObjMi, dObjMiFix);
             NSUInteger bssLen = allocateBss(bssCommons, mdata, msyms, mdataSyms);
             NSData *dylib = [XTMachOWriter dylibFromText:text installName:installName
                                 exports:exports iface:iface symbols:msyms
@@ -858,9 +899,11 @@ int main(int argc, const char *argv[]) {
         NSMutableSet<NSString *> *mdataSyms = [as.dataSymbols mutableCopy] ?: [NSMutableSet set];
         NSMutableArray<XAArm64Fixup *> *gotFixups = [NSMutableArray array];  // GOT refs, resolved after the merge
         NSMutableArray<NSDictionary *> *mObjc = [NSMutableArray array];      // 069: ObjC section ranges
+        NSMutableData *objMi = [NSMutableData data];
+        NSMutableArray<XAArm64Fixup *> *objMiFix = [NSMutableArray array];
         {
             int mrc = mergeMachOInputs(objectFiles, archives, mtext, mdata,
-                                       msyms, mdataSyms, mfix, mObjc, gotFixups);
+                                       msyms, mdataSyms, mfix, mObjc, gotFixups, objMi, objMiFix);
             if (mrc) return mrc;
         }
 
@@ -872,7 +915,7 @@ int main(int argc, const char *argv[]) {
         // missing symbol has nothing to bind and must fail HERE, by name.
         NSArray<NSDictionary *> *objcSects =
             repartitionObjcSections(mdata, mObjc, msyms, mdataSyms, mfix);
-        NSUInteger miLen = appendModInit(as, mdata, mfix);
+        NSUInteger miLen = appendModInit(as, mdata, mfix, objMi, objMiFix);
         // After the mod-init tail, so the __bss symbols sit past the data —
         // and before the check below, which must see them defined (bug 642).
         NSUInteger bssLen = allocateBss(bssCommons, mdata, msyms, mdataSyms);

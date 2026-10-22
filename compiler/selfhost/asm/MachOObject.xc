@@ -183,6 +183,8 @@ class MachOSymDef
     Array* _symdefs;    // MachOSymDef@, nlist order
     Array* _relocs;     // MachOReloc@ against __text
     Array* _dataRelocs; // MachOReloc@ against the data blob (blob-relative)
+    Data* _modInit;       // the load-time constructor lists, one after another
+    Array* _modInitRelocs; // MachOReloc@ against _modInit
     Array* _objcRanges; // MachOObjcRange@
     Map* _commons;      // common (tentative) NAME -> Number(size), for bug 177
     u32 _dataPageMask;  // the largest page alignment (4 KB and more) in the blob, less one; 0 when none
@@ -198,6 +200,8 @@ class MachOSymDef
         _symdefs = new Array();
         _relocs = new Array();
         _dataRelocs = new Array();
+        _modInit = new Data();
+        _modInitRelocs = new Array();
         _objcRanges = new Array();
         _commons = new Map();
         _dataPageMask = (u32)0;
@@ -241,6 +245,16 @@ class MachOSymDef
         {
         return _relocs;
         }
+    Data* modInit(void)
+        {
+        return _modInit;
+        }
+
+    Array* modInitRelocs(void)
+        {
+        return _modInitRelocs;
+        }
+
     Array* dataRelocs(void)
         {
         return _dataRelocs;
@@ -355,6 +369,7 @@ class MachOSymDef
         // at 8 (16 for 16-byte literals) relative to the blob start.
         Map* blobOff = new Map(); // sect index -> Number(off + 1)
         Array* dataSectIdx = new Array();
+        Array* modSectIdx = new Array();
         for (u32 i = (u32)1; i < sects.count(); i = i + (u32)1)
             {
             if (i == textIdx)
@@ -366,6 +381,14 @@ class MachOSymDef
             bool dataLike = s._seg.equals(String.withCString("__DATA")) || s._seg.equals(String.withCString("__DATA_CONST")) || textLiteral;
             if (!dataLike)
                 continue; // __compact_unwind / __LD / debug
+            // A load-time constructor list (S_MOD_INIT_FUNC_POINTERS) is not
+            // data: merged into the blob it would never run. It goes to the
+            // image's own constructor list instead (_modInit below).
+            if (stype == (u32)9)
+                {
+                modSectIdx.add((Object*)Number.withU32(i));
+                continue;
+                }
             u32 alignTo = stype == (u32)$E ? (u32)15 : (u32)7;
             // A page alignment (4 KB and more: a gpu-globals array clang's
             // half laid out) is kept, and the merge starts the blob on it;
@@ -488,6 +511,23 @@ class MachOSymDef
                 MachOReloc* rl = new MachOReloc();
                 rl.set(bo + MachOObject.rd32(b, r), MachOObject.rd32(b, r + (u32)4));
                 o._dataRelocs.add((Object*)rl);
+                }
+            }
+        // The constructor lists, 8-aligned one after another, their
+        // relocations relative to that run.
+        for (u32 k = (u32)0; k < modSectIdx.count(); k = k + (u32)1)
+            {
+            MachOSectHdr* s = (MachOSectHdr*)sects.get(((Number*)modSectIdx.get(k)).asU32());
+            while ((o._modInit.length() & (u32)7) != (u32)0)
+                o._modInit.appendByte((u8)0);
+            u32 mo = o._modInit.length();
+            MachOObject.copyInto(o._modInit, b, s._foff, s._size);
+            for (u32 i = (u32)0; i < s._nreloc; i = i + (u32)1)
+                {
+                u32 r = s._reloff + i * (u32)8;
+                MachOReloc* rl = new MachOReloc();
+                rl.set(mo + MachOObject.rd32(b, r), MachOObject.rd32(b, r + (u32)4));
+                o._modInitRelocs.add((Object*)rl);
                 }
             }
         o._ok = true;
