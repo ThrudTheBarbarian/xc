@@ -3,7 +3,10 @@
 // inner loop under a lane mask; the scalar loop finishes the last part step.
 // Every start from 0 to 9, a trip count that is not a whole number of steps,
 // an integer escape loop, a count stored to a[i] after the escape loop
-// (as mandel_deep does), and a loop the pass must refuse (it stores inside it).
+// (as mandel_deep does), counted inner loops with loads (nbody: a[i] in the
+// outer body, a[j] inside, a conditional count after; the coordinates small
+// integers so no rounding differs), and a loop the pass must refuse (it
+// stores inside it).
 #import "Stdio.xc"
 u32 seen[64];
 u32 mand(u32 s, u32 n)
@@ -50,6 +53,57 @@ u32 deep(u32 s, u32 n)
         h = h * (u32)31 + counts[i];
     return h;
     }
+float px[1100];
+float py[1100];
+float pm[1100];
+float fx[1100];
+u32 bodies(u32 s, u32 n)
+    {
+    for (u32 j in 0..1100)
+        {
+        px[j] = (float)(j % (u32)7);
+        py[j] = (float)(j % (u32)5);
+        pm[j] = (float)((u32)1 + j % (u32)3);
+        }
+    u32 right = (u32)0;
+    for (u32 i = s; i < n; i++)
+        {
+        float ax = 0.0f;
+        float qx = px[i];
+        float qy = py[i];
+        for (u32 j in 0..64)
+            {
+            float dx = px[j] - qx;
+            float dy = py[j] - qy;
+            float d2 = dx * dx + dy * dy + 1.0f;
+            ax = ax + pm[j] * dx / (d2 * d2);
+            }
+        fx[i] = ax;
+        right = ax > 0.0f ? right + (u32)1 : right;
+        }
+    u32 h = right;
+    for (u32 i = s; i < n; i++)
+        h = h * (u32)31 + (u32)(i32)(fx[i] * 1000.0f);
+    return h;
+    }
+u32 ws[64];
+u32 dots(u32 s, u32 n)
+    {
+    for (u32 j in 0..64)
+        ws[j] = j * (u32)2654435761;
+    u32 big = (u32)0;
+    u32 t = (u32)0;
+    for (u32 i = s; i < n; i++)
+        {
+        u32 acc = (u32)0;
+        u32 vi = i * (u32)40503;
+        for (u32 j in 0..64)
+            acc = acc + (ws[j] ^ vi) * (u32)3;
+        t = t + acc;
+        big = acc > (u32)$80000000 ? big + (u32)1 : big;
+        }
+    return t + big;
+    }
 u32 collatz(u32 s, u32 n)
     {
     u32 t = (u32)0;
@@ -86,7 +140,8 @@ u32 stores(u32 s)
 i32 main(void)
     {
     for (u32 s in 0..10)
-        Stdio.printf("start %u: mand %u %u collatz %u stores %u deep %u\n", s, mand(s, (u32)1003), mand(s, (u32)17),
-                     collatz(s, (u32)4099), stores(s), deep(s, (u32)1093));
+        Stdio.printf("start %u: mand %u %u collatz %u stores %u deep %u bodies %u dots %u\n", s, mand(s, (u32)1003),
+                     mand(s, (u32)17), collatz(s, (u32)4099), stores(s), deep(s, (u32)1093), bodies(s, (u32)1031),
+                     dots(s, (u32)517));
     return 0;
     }

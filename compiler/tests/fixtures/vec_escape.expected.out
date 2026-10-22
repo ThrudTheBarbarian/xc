@@ -1,10 +1,10 @@
-start 0: mand 23015 19 collatz 308111 stores 1948 deep 340421951
-start 1: mand 23014 18 collatz 308111 stores 1939 deep 3535871226
-start 2: mand 23013 17 collatz 308110 stores 1931 deep 257540132
-start 3: mand 23012 16 collatz 308103 stores 1923 deep 3360103737
-start 4: mand 23011 15 collatz 308101 stores 1915 deep 1662760161
-start 5: mand 23010 14 collatz 308096 stores 1908 deep 228085216
-start 6: mand 23009 13 collatz 308088 stores 1901 deep 3712292086
-start 7: mand 23008 12 collatz 308072 stores 1894 deep 1834427759
-start 8: mand 23007 11 collatz 308069 stores 1888 deep 3462572771
-start 9: mand 23006 10 collatz 308050 stores 1882 deep 3196156518
+start 0: mand 23015 19 collatz 308111 stores 1948 deep 340421951 bodies 4230270251 dots 2201706021
+start 1: mand 23014 18 collatz 308111 stores 1939 deep 3535871226 bodies 961060702 dots 2761975940
+start 2: mand 23013 17 collatz 308110 stores 1931 deep 257540132 bodies 3908014481 dots 3322221283
+start 3: mand 23012 16 collatz 308103 stores 1923 deep 3360103737 bodies 506799487 dots 3882515778
+start 4: mand 23011 15 collatz 308101 stores 1915 deep 1662760161 bodies 3706990158 dots 147904417
+start 5: mand 23010 14 collatz 308096 stores 1908 deep 228085216 bodies 1453823187 dots 709095936
+start 6: mand 23009 13 collatz 308088 stores 1901 deep 3712292086 bodies 2124936643 dots 1270143071
+start 7: mand 23008 12 collatz 308072 stores 1894 deep 1834427759 bodies 2038678411 dots 1831239358
+start 8: mand 23007 11 collatz 308069 stores 1888 deep 3462572771 bodies 740545952 dots 2393183517
+start 9: mand 23006 10 collatz 308050 stores 1882 deep 3196156518 bodies 3317234460 dots 2955176828
