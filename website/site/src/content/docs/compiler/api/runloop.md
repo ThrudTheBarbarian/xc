@@ -39,7 +39,8 @@ RunLoop.main().run();
 [`run`](#run) blocks until [`stop`](#stop). A program that already has a
 loop of its own, such as a UI toolkit's frame callback, calls
 [`runPending`](#runpending) from it instead. That runs whatever is queued and
-returns.
+returns. If that loop sleeps until it has an event, it installs a
+[`setWakeHook`](#setwakehook) so that a post wakes it.
 
 Timers are checked once per jiffy (1/60 s), so a timer can fire up to about
 17 ms late. They use the host's monotonic clock, so changing the wall clock
@@ -87,6 +88,22 @@ u32 runPending(void)
 
 Runs every block queued at the time of the call and returns how many ran.
 It does not wait for more.
+
+### setWakeHook
+
+```c
+void setWakeHook(block hook void(void), bool hasHook)
+```
+
+For a loop whose thread waits somewhere else, such as a UI toolkit's event
+loop that calls [`runPending`](#runpending) each time round. After every
+[`post`](#post), and every timer that fires, `hook` is called on the thread
+that posted, outside the loop's lock. It must be safe to call from any thread
+and should only wake the waiting thread. `hasHook` false removes the hook.
+
+```c
+RunLoop.main().setWakeHook(block void(void) { wakeTheEventLoop(); }, true);
+```
 
 ### stop
 

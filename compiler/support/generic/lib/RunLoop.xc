@@ -129,6 +129,8 @@ class RunLoop
     bool _stopping;
     Thread* _ticker;
     EventQueue* _tickWake;  // the timer thread's sleep; 0 where there is none
+    block _wake void(void); // setWakeHook's hook, when _hasWake
+    bool _hasWake;
 
     void init(void)
         {
@@ -138,6 +140,7 @@ class RunLoop
         _queue = new Array();
         _timers = new Array();
         _stopping = false;
+        _hasWake = false;
         }
 
     // The process's main run loop: the one a program runs on its main
@@ -159,6 +162,31 @@ class RunLoop
         _queue.add((Object*)it);
         _posted.signal();
         _lock.unlock();
+        _wakeOwner();
+        }
+
+    // For a loop whose thread waits somewhere else: a UI event loop, which
+    // calls runPending() on its own thread each time round. The hook is
+    // called after each post (and each timer firing) from the thread that
+    // posted, outside the loop's lock, so it must be safe on any thread; it
+    // should do no more than wake that thread (PostMessage on Win32, a posted
+    // event on macOS, a GLib context wakeup). Passing hasHook false removes it.
+    void setWakeHook(block hook void(void), bool hasHook)
+        {
+        _lock.lock();
+        _wake = hook;
+        _hasWake = hasHook;
+        _lock.unlock();
+        }
+
+    void _wakeOwner(void)
+        {
+        _lock.lock();
+        bool has = _hasWake;
+        block w void(void) = _wake;
+        _lock.unlock();
+        if (has)
+            w();
         }
 
     // Run `work` once, `ms` milliseconds from now.
@@ -266,6 +294,7 @@ class RunLoop
                 _timersChanged.wait(_lock);
             i64 now = _runloop_now_us();
             i64 next = (i64)-1;
+            bool fired = false;
             Array* keep = new Array();
             for (u32 i = (u32)0; i < _timers.count(); i = i + (u32)1)
                 {
@@ -278,6 +307,7 @@ class RunLoop
                     it.timer = t;
                     _queue.add((Object*)it);
                     _posted.signal();
+                    fired = true;
                     if (t._periodUs == (i64)0)
                         continue;
                     t._due = t._due + t._periodUs;
@@ -292,6 +322,8 @@ class RunLoop
                 }
             _timers = keep;
             _lock.unlock();
+            if (fired)
+                _wakeOwner();
             if (_tickWake == (EventQueue*)0)
                 {
                 Time.delayJiffies((u32)1);
