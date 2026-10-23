@@ -39,16 +39,15 @@ Two rules keep the streams' work apart:
   Something that only builds in a full checkout is a bug, because it cannot
   build for anyone else.
 
-One rule keeps the streams' commits apart, because they share one `main`:
+Pull requests, from outside contributors and from the streams alike, keep
+`main` always gated:
 
-* Push `main` only when every commit it would send is your own stream's.
-  Check `git log origin/main..main` (what the push sends, not
-  `main..origin/main`). A commit from another stream that is still local may
-  not have passed its gates yet, so ask its owner before it goes out. The
-  frameworks and applications streams push only with
-  `private/frameworks/uxkit/tools/safe_push.sh`, which lists those commits and
-  refuses if any of them touches a tree outside `frameworks/`, `apps/rocks/`
-  and the UXKit pages of the website.
+* Each stream works on its own branch, in its own worktree. Its work is
+  rebased on `origin/main`, gated, and then fast-forwarded onto `main`.
+* `main` is never force-pushed. A release is cut from `main` while the
+  streams carry on with the next round on their branches.
+* Work under way has an issue labelled with its stream and `in progress`, so
+  nobody else starts the same thing.
 
 `private/` is not part of the repository. It is ignored by git and holds the
 working rules, the notes on open and fixed bugs, and other material that is
