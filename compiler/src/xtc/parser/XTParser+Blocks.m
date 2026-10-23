@@ -1419,14 +1419,15 @@ static NSString* parRootName(XTASTNode* n)
     if (!reservedCapture)
         reservedCapture = [NSSet setWithArray:@[ @"run", @"go", @"lo", @"hi", @"merge", @"copyChunk", @"parName",
                                                  @"gpuSource", @"gpuLength", @"gpuGlobal", @"gpuGlobalBytes",
-                                                 @"gpuReadsOnly", @"gpuReadsOnlyGlobal", @"gpuWritesAll", @"__par_hi" ]];
+                                                 @"gpuReadsOnly", @"gpuReadsOnlyGlobal", @"gpuWritesAll", @"__par_hi",
+                                                 @"__par_t" ]];
     for (NSString* cn in frameNames)
         if ([reservedCapture containsObject:cn])
             {
             [self.diagnostics emitError:[NSString stringWithFormat:@"a '%@' block cannot capture '%@': the name is one "
-                                                                     "of the block's own (run, merge, lo, hi, …). Rename "
+                                                                     "of the block's own (%@). Rename "
                                                                      "the variable",
-                                                                   label, cn]
+                                                                   label, cn, @"run, go, lo, hi, merge, copyChunk, parName, gpuSource, gpuLength, gpuGlobal, gpuGlobalBytes, gpuReadsOnly, gpuReadsOnlyGlobal, gpuWritesAll"]
                                      at:loc];
             return nil;
             }
@@ -1572,16 +1573,18 @@ static NSString* parRootName(XTASTNode* n)
     // copyChunk(): a fresh chunk with the same captures, reductions at their start.
         {
         NSMutableArray<XTASTNode*>* st = [NSMutableArray array];
-        [st addObject:[[XTVariableDeclNode alloc] initWithName:@"t" type:implPtr
+        // `__par_t` (refused as a capture, as __par_hi is): as `t` it shadowed a
+        // capture called t (the port's parser says the same).
+        [st addObject:[[XTVariableDeclNode alloc] initWithName:@"__par_t" type:implPtr
                                                    initialiser:[[XTNewExprNode alloc] initWithClassName:implName
                                                                                               arguments:@[]
                                                                                                location:loc]
                                                       location:loc]];
         for (NSString* cn in caps)
-            [st addObject:assign(member(@"t", cn), ident(cn))];
+            [st addObject:assign(member(@"__par_t", cn), ident(cn))];
         for (NSArray<NSString*>* r in reductions)
-            [st addObject:assign(member(@"t", r[1]), startOf(r, ident(r[1])))];
-        [st addObject:[[XTReturnNode alloc] initWithValues:@[ ident(@"t") ] location:loc]];
+            [st addObject:assign(member(@"__par_t", r[1]), startOf(r, ident(r[1])))];
+        [st addObject:[[XTReturnNode alloc] initWithValues:@[ ident(@"__par_t") ] location:loc]];
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"copyChunk" returnTypes:@[ chunkPtr ]
                                                        parameters:@[] isStatic:NO isVarArgs:NO
                                                              body:[[XTBlockNode alloc] initWithStatements:st location:loc]

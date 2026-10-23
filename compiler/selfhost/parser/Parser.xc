@@ -3996,9 +3996,9 @@ class Parser
                 || cn.equals(String.withCString("gpuLength")) || cn.equals(String.withCString("gpuGlobal"))
                 || cn.equals(String.withCString("gpuGlobalBytes")) || cn.equals(String.withCString("gpuReadsOnly"))
                 || cn.equals(String.withCString("gpuReadsOnlyGlobal")) || cn.equals(String.withCString("gpuWritesAll"))
-                || cn.equals(String.withCString("__par_hi"))) {
-                _errorAt(String.withFormat("a '%s' block cannot capture '%s': the name is one of the block's own (run, merge, lo, hi, …). Rename the variable",
-                                           label.cString(), cn.cString()), parKeywordNode());
+                || cn.equals(String.withCString("__par_hi")) || cn.equals(String.withCString("__par_t"))) {
+                _errorAt(String.withFormat("a '%s' block cannot capture '%s': the name is one of the block's own (%s). Rename the variable",
+                                           label.cString(), cn.cString(), "run, go, lo, hi, merge, copyChunk, parName, gpuSource, gpuLength, gpuGlobal, gpuGlobalBytes, gpuReadsOnly, gpuReadsOnlyGlobal, gpuWritesAll"), parKeywordNode());
                 return (Node*)0;
             }
         }
@@ -4122,7 +4122,10 @@ class Parser
             Node* m = mkNamed((u16)nkMethodDecl, String.withCString("copyChunk"));
             m.setOp(String.withCString("ParChunk*"));
             Node* b = mk((u16)nkBlock);
-            Node* t = mkNamed((u16)nkVariableDecl, String.withCString("t"));
+            // The new chunk is `__par_t` (refused as a capture, as __par_hi is):
+            // as `t` it shadowed a capture called t, and `t.t = t` copied the
+            // chunk into itself.
+            Node* t = mkNamed((u16)nkVariableDecl, String.withCString("__par_t"));
             t.setOp(implPtr);
             Node* nw = mkNamed((u16)nkNew, implName);
             nw.setNum((i64)0);
@@ -4130,15 +4133,15 @@ class Parser
             b.add(t);
             for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
                 String* cn = (String*)caps.get(i);
-                b.add(parAssign(parMember(String.withCString("t"), cn), parIdent(cn)));
+                b.add(parAssign(parMember(String.withCString("__par_t"), cn), parIdent(cn)));
             }
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
                 Node* r = (Node*)reds.get(i);
-                b.add(parAssign(parMember(String.withCString("t"), r.name()),
+                b.add(parAssign(parMember(String.withCString("__par_t"), r.name()),
                                 parStart(r.op(), (String*)redTypes.get((Hashable*)r.name()), r.name())));
             }
             Node* ret = mk((u16)nkReturn);
-            ret.add(parIdent(String.withCString("t")));
+            ret.add(parIdent(String.withCString("__par_t")));
             b.add(ret);
             m.add(b);
             cls.add(m);

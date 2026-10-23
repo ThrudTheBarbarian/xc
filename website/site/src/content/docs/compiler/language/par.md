@@ -106,6 +106,11 @@ The body reads the variables around it, and works on arrays declared outside it:
   but may not assign to them, because every work item has its own copy and the
   write would be lost. The compiler refuses such an assignment and says why.
 - To combine values across work items, use a **reduction**.
+- A block cannot capture a variable whose name is one of its own: `run`, `go`,
+  `lo`, `hi`, `merge`, `copyChunk`, `parName`, `gpuSource`, `gpuLength`,
+  `gpuGlobal`, `gpuGlobalBytes`, `gpuReadsOnly`, `gpuReadsOnlyGlobal` or
+  `gpuWritesAll`. The compiler refuses such a capture and names it; rename the
+  variable.
 
 ## Reductions
 
