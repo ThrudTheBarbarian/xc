@@ -3,7 +3,7 @@ title: "Performance: GPU"
 description: How xc's par blocks run on every CPU thread and on GPUs through Metal, CUDA, Vulkan and WebGPU, and what --par-auto makes of plain loops, measured with the released xcc.
 ---
 
-Each figure is measured with the released 0.85 `xcc`, on an Apple
+Each figure is measured with the released 0.86 `xcc`, on an Apple
 MacBook Pro with an M4 Max (Metal), a Linux machine with an AMD Ryzen 9
 9955HX and its integrated Radeon (Vulkan), and a Windows machine with an RTX
 5080 and an RTX 3090 (CUDA and Vulkan). How the CPU code compares with other
@@ -45,45 +45,45 @@ the same work through Vulkan (`XC_PAR_GPU=vulkan`).
 
 | benchmark | one thread | all threads | GPU | all devices | `auto` | GPU vs all threads | GPU's first run |
 |---|---|---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 364 | 76.6 | 1.2 | 1.9 | 1.4 | 66× faster | 20.9 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 1190 | 99.9 | 4.1 | 4.8 | 5.2 | 24× faster | 44.3 |
-| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 925 | 78.9 | 3.5 | 3.7 | 3.9 | 22× faster | 50.8 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 19.6 | 2.1 | 1.2 | 2.0 | 1.2 | 1.82× faster | 31.4 |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 79.2 | 8.9 | 1.4 | 1.7 | 1.6 | 6.3× faster | 27.2 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 1.7 | 504 µs | 12.6 | 11.6 | 571 µs | 25× slower | 35.8 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 144 | 11.9 | 2.0 | 734 µs | 878 µs | 6.0× faster | 33.8 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 1189 | 102 | 4.2 | 4.8 | 4.1 | 24× faster | 26.7 |
+| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 924 | 77.4 | 3.5 | 3.6 | 3.5 | 22× faster | 38.3 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 19.6 | 2.0 | 1.2 | 2.0 | 1.1 | 1.75× faster | 32.8 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 78.8 | 6.5 | 1.1 | 1.1 | 1.2 | 5.7× faster | 24.0 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 1.3 | 499 µs | 1.6 | 3.1 | 502 µs | 3.3× slower | 28.6 |
 
 **AMD Ryzen 9 9955HX (16 cores, 32 threads), Linux, its integrated Radeon 610M (2 compute units, 128 shader lanes) through Vulkan** (ms; best of eight runs)
 
 | benchmark | one thread | all threads | GPU | all devices | `auto` | GPU vs all threads | GPU's first run |
 |---|---|---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 397 | 39.1 | 9.7 | 9.8 | 9.7 | 4.0× faster | 28.2 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 601 | 26.2 | 108 | 113 | 24.7 | 4.1× slower | 135 |
-| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 473 | 26.7 | 89.1 | 87.7 | 27.2 | 3.3× slower | 114 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 5.9 | 774 µs | 3.4 | 3.6 | 777 µs | 4.4× slower | 22.4 |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 114 | 9.5 | 5.8 | 5.9 | 5.9 | 1.62× faster | 29.0 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.7 | 2.3 | 22.2 | 14.5 | 2.3 | 9.7× slower | 61.2 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 57.9 | 3.3 | 9.7 | 9.8 | 2.7 | 3.0× slower | 28.7 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 394 | 16.6 | 108 | 113 | 16.0 | 6.5× slower | 135 |
+| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 314 | 13.5 | 88.1 | 87.7 | 13.2 | 6.5× slower | 116 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 6.0 | 506 µs | 3.4 | 3.6 | 503 µs | 6.8× slower | 23.0 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 114 | 8.7 | 5.7 | 5.8 | 5.7 | 1.52× faster | 32.6 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.3 | 2.9 | 9.6 | 3.1 | 2.9 | 3.3× slower | 35.6 |
 
 **AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 through CUDA and an RTX 3090 through Vulkan** (ms; best of eight runs)
 
 | benchmark | one thread | all threads | GPU | all GPUs | Vulkan | all devices | `auto` | GPU vs all threads | GPU's first run | Vulkan's first run |
 |---|---|---|---|---|---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 448 | 46.3 | 144 µs | 162 µs | 272 µs | 163 µs | 144 µs | 322× faster | 81.3 | 139 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 826 | 44.1 | 877 µs | 712 µs | 1.6 | 710 µs | 838 µs | 50× faster | 96.1 | 136 |
-| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 738 | 42.6 | 731 µs | 698 µs | 1.3 | 676 µs | 818 µs | 58× faster | 99.7 | 135 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 146 | 8.6 | 400 µs | 420 µs | 549 µs | 419 µs | 401 µs | 22× faster | 83.6 | 146 |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 181 | 15.4 | 495 µs | 446 µs | 1.1 | 317 µs | 492 µs | 31× faster | 82.8 | 140 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 5.0 | 3.0 | 16.0 | 7.9 | 30.5 | 4.5 | 3.2 | 5.3× slower | 117 | 169 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 259 | 10.8 | 143 µs | 161 µs | 269 µs | 160 µs | 143 µs | 75× faster | 95.8 | 144 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 830 | 44.0 | 875 µs | 707 µs | 1.6 | 711 µs | 829 µs | 50× faster | 96.7 | 144 |
+| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 669 | 36.1 | 727 µs | 667 µs | 1.3 | 670 µs | 729 µs | 50× faster | 95.0 | 142 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 144 | 5.3 | 400 µs | 417 µs | 548 µs | 415 µs | 398 µs | 13.3× faster | 95.6 | 138 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 181 | 12.5 | 440 µs | 444 µs | 1.0 | 326 µs | 427 µs | 28× faster | 82.0 | 142 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 5.1 | 4.1 | 5.4 | 5.4 | 30.1 | 3.5 | 4.0 | 1.33× slower | 114 | 173 |
 
 **Chrome on the Apple M4 Max: wasm32 (one thread) and WebGPU (from 0.73)** (ms; best of eight runs)
 
 | benchmark | one thread | all threads | GPU | `auto` | GPU vs one thread | GPU's first run |
 |---|---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 367 | – | 3.7 | 3.5 | 99× faster | 37.2 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 3664 | – | 4.7 | 4.6 | 780× faster | 74.3 |
-| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 2895 | – | 3.7 | 3.7 | 782× faster | 17.8 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 52.0 | – | 1.3 | 1.3 | 40× faster | 26.5 |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 91.7 | – | 2.5 | 2.5 | 37× faster | 9.0 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 1.4 | – | 22.8 | 1.4 | 16.3× slower | 76.7 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 366 | – | 1.9 | 1.6 | 192× faster | 10.4 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 3655 | – | 4.6 | 4.6 | 795× faster | 26.3 |
+| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 2882 | – | 3.7 | 3.7 | 779× faster | 21.9 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 52.8 | – | 1.3 | 1.4 | 41× faster | 5.9 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 91.3 | – | 2.4 | 2.4 | 38× faster | 8.8 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 1.4 | – | 21.1 | 1.5 | 15.1× slower | 58.0 |
 
 
 ### GPU-saturation benchmarks
@@ -114,13 +114,13 @@ column (`XC_PAR=gpus`); teaching `auto` to choose it is the next step.
 
 | benchmark | GPU | `auto` | GPU's first run |
 |---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 48.1 | 48.2 | 72.5 |
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 44.0 | 44.1 | 88.1 |
 
 **AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 through CUDA and an RTX 3090 through Vulkan** (ms; best of eight runs)
 
 | benchmark | GPU | all GPUs | Vulkan | `auto` | GPU's first run |
 |---|---|---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 19.4 | 11.4 | 34.3 | 11.4 | 125 |
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 19.3 | 11.4 | 34.5 | 11.3 | 115 |
 
 
 What the tables show:
@@ -145,11 +145,11 @@ What the tables show:
 - **The Ryzen's integrated Radeon** has 128 shader lanes against the CPU's 32
   threads. It just beats them on `mandelbrot`, `perlin` and `md5` and loses on
   `nbody` and `saxpy`, where `auto` keeps the CPU.
-- **Vulkan against CUDA:** the RTX 3090 through Vulkan against the RTX 5080 through CUDA, two cards, so this compares the APIs only roughly: Vulkan is slower on `mandel_deep` (34.3 ms against 19.4) and `mandelbrot` (272 µs ms against 144 µs) and `md5` (1.6 ms against 877 µs) and `md5_mask` (1.3 ms against 731 µs) and `nbody` (549 µs ms against 400 µs) and `perlin` (1.1 ms against 495 µs) and `saxpy` (30.5 ms against 16.0).
+- **Vulkan against CUDA:** the RTX 3090 through Vulkan against the RTX 5080 through CUDA, two cards, so this compares the APIs only roughly: Vulkan is slower on `mandel_deep` (34.5 ms against 19.3) and `mandelbrot` (269 µs ms against 143 µs) and `md5` (1.6 ms against 875 µs) and `md5_mask` (1.3 ms against 727 µs) and `nbody` (548 µs ms against 400 µs) and `perlin` (1.0 ms against 440 µs) and `saxpy` (30.1 ms against 5.4).
 - **The first run** carries one-off costs (building the kernel, and on NVIDIA
   creating the driver context and compiling the PTX or SPIR-V), so it is shown
   apart: a few tens of milliseconds on Metal and the integrated GPU, and on the
-  3090 81 to 125 ms through CUDA and 135 to 191 ms through Vulkan. `auto` pays it
+  3090 82 to 115 ms through CUDA and 138 to 198 ms through Vulkan. `auto` pays it
   once, while it measures.
 
 ## Plain loops: `--par-auto`
@@ -163,28 +163,28 @@ must agree. The last column is the hand-written `par` version's `auto`.
 
 | benchmark | as written | `--par-auto`, all threads | `--par-auto`, GPU | `--par-auto`, `auto` | hand-written `par`, `auto` |
 |---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 365 | 76.7 | 866 µs | 1.6 | 1.4 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 39.2 | 2.1 | 1.1 | 1.2 | 1.2 |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 78.7 | 9.0 | 1.3 | 1.6 | 1.6 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 1.7 | 514 µs | 10.3 | 603 µs | 571 µs |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 144 | 12.0 | 2.0 | 1.9 | 878 µs |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 39.7 | 2.0 | 1.1 | 1.2 | 1.1 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 79.4 | 6.5 | 1.3 | 1.2 | 1.2 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 1.4 | 502 µs | 2.4 | 497 µs | 502 µs |
 
 **AMD Ryzen 9 9955HX, its integrated Radeon through Vulkan** (ms; best of eight runs)
 
 | benchmark | as written | `--par-auto`, all threads | `--par-auto`, GPU | `--par-auto`, `auto` | hand-written `par`, `auto` |
 |---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 394 | 41.1 | 9.7 | 9.7 | 9.7 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 94.9 | 774 µs | 3.4 | 774 µs | 777 µs |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 112 | 10.0 | 5.8 | 5.9 | 5.9 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.4 | 2.2 | 21.9 | 2.3 | 2.3 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 57.9 | 2.4 | 9.7 | 2.4 | 2.7 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 95.0 | 555 µs | 3.4 | 464 µs | 503 µs |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 112 | 8.7 | 5.7 | 5.7 | 5.7 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.3 | 2.8 | 9.6 | 2.8 | 2.9 |
 
 **Windows, RTX 5080 through CUDA** (ms; best of eight runs)
 
 | benchmark | as written | `--par-auto`, all threads | `--par-auto`, GPU | `--par-auto`, `auto` | hand-written `par`, `auto` |
 |---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 434 | 45.9 | 146 µs | 145 µs | 144 µs |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 119 | 8.4 | 400 µs | 401 µs | 401 µs |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 169 | 15.7 | 497 µs | 493 µs | 492 µs |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 4.9 | 3.0 | 16.0 | 3.1 | 3.2 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 258 | 10.8 | 143 µs | 142 µs | 143 µs |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 119 | 5.3 | 397 µs | 397 µs | 398 µs |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 169 | 11.8 | 432 µs | 437 µs | 427 µs |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 4.9 | 4.2 | 5.4 | 4.0 | 4.0 |
 
 
 ## Reproducing

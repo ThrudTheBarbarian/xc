@@ -8,7 +8,7 @@ description: A par block's tiles on a GPU in another machine, served by xcd, bes
 RTX 5080, on the local network, and two machines use it: an Apple MacBook Pro
 with an M4 Max, whose own GPU is fast, and a Linux machine with an AMD Ryzen 9
 9955HX, whose only GPU is integrated. Each figure is measured with the
-released 0.85 `xcc`.
+released 0.86 `xcc`.
 
 Each program runs four ways: on the machine alone (`XC_PAR_REMOTE=none`), on
 the remote GPU alone (`XC_PAR_WORKERS=remote`), on every GPU, the machine's
@@ -21,19 +21,19 @@ the remote GPU. Every mode's checksum must agree.
 
 | benchmark | this machine | the remote GPU | every GPU | `auto` |
 |---|---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 49.5 | 248 | 118 | 50.6 |
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 2.0 | 1.2 | 1.6 | 1.5 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 6.2 | 2.9 | 3.3 | 2.7 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 549 µs | 288 | 125 | 943 µs |
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 44.0 | 238 | 112 | 44.1 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 2.1 | 2.0 | 1.8 | 1.8 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 5.8 | 203 | 105 | 6.7 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 502 µs | 273 | 120 | 901 µs |
 
 **AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080** (ms; best of eight runs)
 
 | benchmark | this machine | the remote GPU | every GPU | `auto` |
 |---|---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 966 | 308 | 257 | 308 |
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 9.7 | 833 µs | 3.0 | 944 µs |
-| [`md5`](/compiler/benchmark-sources/#md5) | 25.6 | 2.0 | 28.5 | 2.2 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 2.4 | 368 | 147 | 3.2 |
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 942 | 309 | 251 | 302 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 2.6 | 654 µs | 2.9 | 792 µs |
+| [`md5`](/compiler/benchmark-sources/#md5) | 16.0 | 71.4 | 52.5 | 48.7 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 2.9 | 372 | 136 | 3.7 |
 
 
 What the tables show:
