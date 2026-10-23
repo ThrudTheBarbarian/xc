@@ -132,7 +132,7 @@ class UXGdiGraphics : Object<UXGraphics>
         if (gGdiPixTried == (i32)0)
             {
             gGdiPixTried = (i32)1;
-            pointer gdi = LoadLibraryA((pointer)"gdi32.dll");
+            pointer gdi = LoadLibraryA("gdi32.dll");
             if (gdi != (pointer)0)
                 {
                 gGdiCreateDIBSection = GetProcAddress(gdi, (u8*)"CreateDIBSection");

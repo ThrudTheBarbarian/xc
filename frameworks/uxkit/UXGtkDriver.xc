@@ -30,6 +30,8 @@ i32 ux_gtk_boot(i32* w, i32* h);
 void ux_gtk_pump(void);
 void ux_gtk_wait_event(void);
 void ux_gtk_wait_event_ms(i32 ms);
+void ux_gtk_set_posted_hook(pointer fn);
+void ux_gtk_wake_posted(void); // any thread
 i32 ux_gtk_alert(i32 parent, u8* lines, u8* buttons, i32 defBtn);
 void ux_gtk_clip(i32 x, i32 y, i32 w, i32 h);
 void ux_gtk_clip_round(i32 x, i32 y, i32 w, i32 h, i32 r); // ...with rounded corners; ux_gtk_clip_end pops
@@ -686,6 +688,16 @@ class UXGtkDriver : Object<UXViewDriver>
     bool setTurnHook(turnHook_t* fn, i32 ms)
         {
         return false;
+        }
+    // Posted work: a wake adds one idle source to the default main context, which wakes the wait in
+    // nextEvent (and any nested loop, such as an alert's); the source runs fn (libUXGtk).
+    void setPostedHook(turnHook_t* fn)
+        {
+        ux_gtk_set_posted_hook((pointer)fn);
+        }
+    void wakeForPosted(void)
+        {
+        ux_gtk_wake_posted();
         }
 
     i32 formFactorClass(void)

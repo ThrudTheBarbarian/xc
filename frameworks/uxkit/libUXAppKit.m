@@ -404,18 +404,16 @@ int ux_ak_has_shield(int handle)
  * The drawable a GL view renders into: the one native view the toolkit makes for
  * a view it does not paint itself.
  *
- * It is a plain NSView with an NSOpenGLContext attached by setView:, and not an
- * NSOpenGLView, for one reason.  NSOpenGLView owns a draw cycle of its own --
- * drawRect:, reshape, and a display link if it is asked for one -- and the whole
- * point of this seam is that the DRIVER owns the present.  setView: gives a
- * context a surface and says nothing about when anything is drawn, so presentGL
- * is the only thing that ever swaps.
+ * It is a plain NSView, and its NSOpenGLContext is never attached to it: no
+ * setView:, and no NSOpenGLView.  The context renders into the offscreen surface
+ * (below), and the window's one 2-D pass draws that surface as an image in tree
+ * order, so a sibling that paints 2D lands OVER the map with neither side asking.
+ * The DRIVER owns the present: presentGL resolves a frame, and nothing else draws
+ * one.
  *
- * Surface order is the default and it is the order the toolkit wants: a context
- * attached this way is composited with the window's other content by its place in
- * the view hierarchy, so a sibling that paints 2D lands OVER the map with neither
- * side asking, which is exactly the client's two-layer stack.  The surface is
- * therefore added at the BOTTOM of the content view's subviews.
+ * Do not restore setView:.  The one-surface decision (2026-10-01) removed it, and
+ * macOS 15.8.2 broke it: a context attached to a view gets no default framebuffer
+ * there (GL_FRAMEBUFFER_UNDEFINED), while offscreen framebuffers still work.
  *
  * It takes presses, like the shield, and for the same reason: a real NSView under
  * the pointer is where AppKit routes a click, and the map needs those clicks.
@@ -5502,4 +5500,26 @@ int ux_ak_test_hidden_window(int handle, int w, int h)
     g_win[handle] = win;
     g_view[handle] = [win contentView];
     return 1;
+    }
+
+/* ── posted work (UXViewDriver.setPostedHook) ────────────────────────────────
+ * Another thread posted to RunLoop.main().  A wake puts one block on the main dispatch queue,
+ * which [NSApp run], the headless nextEventMatchingMask and every modal loop serve; the block
+ * runs fn on the main thread, between run-loop passes, so outside any drawRect.  One block at a
+ * time: the flag is cleared before fn runs, and the poster queues its work before it wakes. */
+static void (*g_posted_fn)(void) = NULL;
+static int g_posted_queued = 0;
+void ux_ak_set_posted_hook(void* fn)
+    {
+    g_posted_fn = (void (*)(void))fn;
+    }
+void ux_ak_wake_posted(void)
+    {
+    if (__atomic_exchange_n(&g_posted_queued, 1, __ATOMIC_SEQ_CST) != 0)
+        return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __atomic_store_n(&g_posted_queued, 0, __ATOMIC_SEQ_CST);
+        if (g_posted_fn)
+            g_posted_fn();
+    });
     }

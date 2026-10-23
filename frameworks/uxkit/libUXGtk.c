@@ -4295,3 +4295,29 @@ int ux_gtk_test_textview_key(int handle, int node, int key, int shift)
         return 0;
     return tv_key(NULL, (guint)key, 0, GDK_CONTROL_MASK | (shift ? GDK_SHIFT_MASK : 0), tv) ? 1 : 0;
     }
+
+/* ── posted work (UXViewDriver.setPostedHook) ────────────────────────────────
+ * Another thread posted to RunLoop.main().  A wake adds one idle source to the default main
+ * context; adding it wakes the context from any thread, so the wait in ux_gtk_wait_event_ms
+ * (or a nested loop's) returns and runs fn on the UI thread.  One source at a time: the flag is
+ * cleared before fn runs, and the poster queues its work before it wakes. */
+static void (*g_posted_fn)(void) = NULL;
+static int g_posted_queued = 0;
+static gboolean ux_gtk_posted(gpointer data)
+    {
+    (void)data;
+    __atomic_store_n(&g_posted_queued, 0, __ATOMIC_SEQ_CST);
+    if (g_posted_fn)
+        g_posted_fn();
+    return G_SOURCE_REMOVE;
+    }
+void ux_gtk_set_posted_hook(void* fn)
+    {
+    g_posted_fn = (void (*)(void))fn;
+    }
+void ux_gtk_wake_posted(void)
+    {
+    if (__atomic_exchange_n(&g_posted_queued, 1, __ATOMIC_SEQ_CST) != 0)
+        return;
+    g_idle_add_full(G_PRIORITY_DEFAULT, ux_gtk_posted, NULL, NULL);
+    }

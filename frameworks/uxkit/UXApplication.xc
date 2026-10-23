@@ -11,6 +11,10 @@
 #import "UXGraphics.xc" // UXPIX_*
 #import "UXString.xc"   // UXStr.toInt, for UX_AUTOQUIT
 #import <PlatformCore.xc> // Platform.env: "" where there is no environment (wasm32, XTOS)
+#if !(ARCH_6502 || ARCH_m68k || ARCH_wasm32 || ARCH_arm9)
+#define UX_HAS_RUNLOOP 1
+#import "RunLoop.xc"      // work other threads post to the UI thread (uxRunPosted)
+#endif
 
 protocol UXApplicationDelegate
     {
@@ -364,6 +368,13 @@ class UXApplication : UXResponder
         // running BEFORE the delegate runs, so a delegate that calls stop() during
         // start-up (a test, a one-shot tool) is honoured rather than ignored.
         running = true;
+#if UX_HAS_RUNLOOP
+        // Blocks other threads post to RunLoop.main() run on this thread: the poster's wake nudges
+        // the driver, and the driver calls uxRunPosted here.  One wake now, for what came before.
+        gDriver.setPostedHook(&uxRunPosted);
+        RunLoop.main().setWakeHook(block void(void) { gDriver.wakeForPosted(); }, true);
+        gDriver.wakeForPosted();
+#endif
         if (gDriver.driverOwnsRunLoop())
             {
             gDriver.runLoop(); // never returns; startDelegate() fires from the driver
@@ -592,3 +603,17 @@ class UXApplication : UXResponder
     // The running application, for code that must repaint mid-modal-loop (a table drag-select or a
     // scrollbar thumb drag) where the run loop is blocked and cannot reach displayIfNeeded itself.
     UXApplication* gApp;
+
+#if UX_HAS_RUNLOOP
+// The driver's posted hook (UXViewDriver.setPostedHook): run what other threads posted to
+// RunLoop.main(), on the UI thread, and repaint what that changed.
+void uxRunPosted(void)
+    {
+    if (gApp == (UXApplication*)0 || RunLoop.main().runPending() == (u32)0)
+        {
+        return;
+        }
+    gApp.displayIfNeeded();
+    gApp.drainPendingCloses();
+    }
+#endif

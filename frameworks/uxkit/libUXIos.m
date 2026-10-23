@@ -3312,3 +3312,23 @@ int ux_ios_test_toolbar_has_image(int handle, int node, int tag)
     UXBarItem* it = ios_bar_item(handle, node, tag);
     return it && it.image ? 1 : 0;
     }
+
+// Posted work (UXViewDriver.setPostedHook): another thread posted to RunLoop.main().  A wake puts
+// one block on the main dispatch queue; it runs fn on the UI thread, outside any draw.  One block
+// at a time: the flag is cleared before fn runs, and the poster queues its work before it wakes.
+static void (*g_ios_posted_fn)(void) = NULL;
+static int g_ios_posted_queued = 0;
+void ux_ios_set_posted_hook(void* fn)
+    {
+    g_ios_posted_fn = (void (*)(void))fn;
+    }
+void ux_ios_wake_posted(void)
+    {
+    if (__atomic_exchange_n(&g_ios_posted_queued, 1, __ATOMIC_SEQ_CST) != 0)
+        return;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __atomic_store_n(&g_ios_posted_queued, 0, __ATOMIC_SEQ_CST);
+        if (g_ios_posted_fn)
+            g_ios_posted_fn();
+    });
+    }

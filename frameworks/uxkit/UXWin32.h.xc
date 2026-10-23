@@ -221,7 +221,7 @@ i32 ChoosePixelFormat(pointer hdc, pointer pfd);
 i32 SetPixelFormat(pointer hdc, i32 fmt, pointer pfd);
 i32 DescribePixelFormat(pointer hdc, i32 fmt, u32 n, pointer pfd);
 i32 SwapBuffers(pointer hdc); // GDI32, and the swap on this backend
-pointer LoadLibraryA(pointer name);
+pointer LoadLibraryA(u8* name);
 pointer GetProcAddress(pointer mod, u8* name);
 
 #define PFD_DOUBLEBUFFER $00000001

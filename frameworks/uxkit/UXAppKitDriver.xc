@@ -107,6 +107,8 @@ void ux_ak_textview_focus(i32 handle, i32 node);
 void ux_ak_textview_set_look(i32 handle, i32 node, i32 bg, i32 ink, i32 caret, i32 sel, i32 size, i32 mono);
 void ux_ak_window_set_min_size(i32 handle, i32 w, i32 h);     // register the toolkit event forwarder
 void ux_ak_set_turn_hook(pointer fn, i32 ms); // the frame clock: the display link, or a timer for a slow tick
+void ux_ak_set_posted_hook(pointer fn); // posted work: fn runs on the main queue after a wake
+void ux_ak_wake_posted(void);           // any thread
 void ux_ak_set_control_fire(pointer fn); // register the control-click -> action forwarder
 pointer ux_ak_menu_new(void);
 pointer ux_ak_menu_add_title(pointer bar, u8* title);
@@ -2553,6 +2555,16 @@ class UXAppKitDriver : Object<UXViewDriver>
             }
         ux_ak_set_turn_hook((pointer)0, (i32)0);
         return false;
+        }
+    // Posted work: a wake puts one block on the main dispatch queue, which [NSApp run] and the
+    // headless nextEventMatchingMask both serve, in every run-loop mode a modal loop uses.
+    void setPostedHook(turnHook_t* fn)
+        {
+        ux_ak_set_posted_hook((pointer)fn);
+        }
+    void wakeForPosted(void)
+        {
+        ux_ak_wake_posted();
         }
 
     i32 formFactorClass(void)

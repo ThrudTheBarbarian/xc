@@ -140,6 +140,8 @@ void ux_and_set_field_hooks(pointer fn);
 void ux_and_set_field_submit_hooks(pointer fn);
 void ux_and_set_entry(pointer fn);
 void ux_and_set_turn_hook(pointer fn, i32 ms);
+void ux_and_set_posted_hook(pointer fn);
+void ux_and_wake_posted(void); // any thread
 void ux_and_shell_run(void);
 void ux_and_quit(i32 rc);
 void ux_and_clip(i32 x, i32 y, i32 w, i32 h);
@@ -610,6 +612,16 @@ class UXAndroidDriver : Object<UXViewDriver>
         {
         ux_and_set_turn_hook((pointer)fn, ms);
         return true;
+        }
+    // Posted work: a wake posts one message to the main looper's Handler (libUXAndroid
+    // ux_and_wake_posted), which runs fn on the UI thread.
+    void setPostedHook(turnHook_t* fn)
+        {
+        ux_and_set_posted_hook((pointer)fn);
+        }
+    void wakeForPosted(void)
+        {
+        ux_and_wake_posted();
         }
     // a GL view's drawable and its last frame: the copy each present reads back for the Bitmap
     i32 glDrawableSize(pointer view, i32* pw, i32* ph)

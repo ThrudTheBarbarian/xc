@@ -1957,6 +1957,13 @@ class UXWebDriver : Object<UXViewDriver>
         {
         return false;
         }
+    // posted work: the web build has no RunLoop, so nothing is ever posted from another one
+    void setPostedHook(turnHook_t* fn)
+        {
+        }
+    void wakeForPosted(void)
+        {
+        }
 
     i32 formFactorClass(void)
         {

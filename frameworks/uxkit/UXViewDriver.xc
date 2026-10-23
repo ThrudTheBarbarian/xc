@@ -575,6 +575,16 @@ protocol UXViewDriver
     // is exactly what a client drawing GL and presenting from its own clock does.
     bool setTurnHook(turnHook_t* fn, i32 ms);
 
+    // ---- work posted from other threads -------------------------------------------------------
+    // RunLoop.main().post(block) and OperationQueue.main().addBlock(block) may be called from any
+    // thread; the blocks run on the UI thread.  setPostedHook gives the driver the function that
+    // runs them (UXApplication's, which also repaints).  wakeForPosted is called on the POSTING
+    // thread, so it only nudges the platform's loop: the driver then calls fn on the UI thread,
+    // soon, outside any draw, even when the loop is idle.  A spare call costs one empty fn().
+    // GEM and the web have no RunLoop (no threads), and keep both as no-ops.
+    void setPostedHook(turnHook_t* fn);
+    void wakeForPosted(void);
+
     // The rule the seam rests on: the driver owns the ORDER of the two surfaces and the PACING
     // of the frame.  The app keeps its surfaces in step by damaging both in one present turn.
     // GL never interleaves, and GL never owns the clock.  compositesWithGL above says whether

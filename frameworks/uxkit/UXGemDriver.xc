@@ -1601,6 +1601,13 @@ class UXGemDriver : Object<UXViewDriver>
         {
         return false;
         }
+    // posted work: GEM has no threads, so nothing is ever posted from another one
+    void setPostedHook(turnHook_t* fn)
+        {
+        }
+    void wakeForPosted(void)
+        {
+        }
 
     i32 formFactorClass(void)
         {

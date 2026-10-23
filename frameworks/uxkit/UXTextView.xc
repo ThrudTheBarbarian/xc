@@ -1203,7 +1203,11 @@ class UXTextView : UXView
         size(nativeWin, nativeNode, &nb, &nr);
         u8* buf = (u8*)malloc((u32)nb + (u32)1);
         i32* runs = (i32*)malloc(((u32)nr + (u32)1) * (u32)5 * (u32)4);
-        i32 k = rd(nativeWin, nativeNode, buf, nb + (i32)1, runs, nr);
+        i32 k = (i32)0;
+        if (rd)
+            {
+            k = rd(nativeWin, nativeNode, buf, nb + (i32)1, runs, nr);
+            }
         AttributedString* m = AttributedString.withString(String.withCString(buf));
         for (i32 j = (i32)0; j < k; j = j + (i32)1)
             {

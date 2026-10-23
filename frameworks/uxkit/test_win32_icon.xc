@@ -19,7 +19,7 @@ i32 iconPixelOf(i32 handle, i32 x, i32 y)
         {
         return (i32)-1;
         }
-    pointer usr = LoadLibraryA((pointer)"user32.dll");
+    pointer usr = LoadLibraryA("user32.dll");
     W32DrawIconExFn* draw = (W32DrawIconExFn*)GetProcAddress(usr, (u8*)"DrawIconEx");
     pointer screen = GetDC((pointer)0);
     pointer mdc = CreateCompatibleDC(screen);

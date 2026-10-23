@@ -144,6 +144,8 @@ void ux_ios_popup_add_item(i32 handle, i32 node, u8* title);
 void ux_ios_popup_select(i32 handle, i32 node, i32 i);
 void ux_ios_set_entry(pointer fn);
 void ux_ios_set_turn_hook(pointer fn, i32 ms);
+void ux_ios_set_posted_hook(pointer fn);
+void ux_ios_wake_posted(void); // any thread
 void ux_ios_shell_run(void);
 void ux_ios_quit(i32 rc);
 void ux_ios_clip(i32 x, i32 y, i32 w, i32 h);
@@ -607,6 +609,15 @@ class UXIosDriver : Object<UXViewDriver>
         {
         ux_ios_set_turn_hook((pointer)fn, ms);
         return true;
+        }
+    // Posted work: a wake puts one block on the main dispatch queue (libUXIos ux_ios_wake_posted).
+    void setPostedHook(turnHook_t* fn)
+        {
+        ux_ios_set_posted_hook((pointer)fn);
+        }
+    void wakeForPosted(void)
+        {
+        ux_ios_wake_posted();
         }
     // a GL view's drawable and its last frame: the image each present reads back for the draw walk
     i32 glDrawableSize(pointer view, i32* pw, i32* ph)

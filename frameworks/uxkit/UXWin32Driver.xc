@@ -198,7 +198,7 @@ bool w32VisualStyles(pointer icc)
         return false;
         }
     // the import table already bound v5; LoadLibrary under the active context finds v6 beside it
-    pointer cc = LoadLibraryA((pointer) "comctl32.dll");
+    pointer cc = LoadLibraryA("comctl32.dll");
     W32InitCommonControlsExFn* init = (W32InitCommonControlsExFn*)GetProcAddress(cc, (u8*)"InitCommonControlsEx");
     if (init == (W32InitCommonControlsExFn*)0 || init(icc) == (i32)0)
         {
@@ -214,7 +214,7 @@ bool w32VisualStyles(pointer icc)
 // Nothing changes at 100%, and an older Windows (or Wine), which has no such call, keeps the stretch.
 void w32DpiScaling(void)
     {
-    W32SetDpiContextFn* set = (W32SetDpiContextFn*)GetProcAddress(LoadLibraryA((pointer) "user32.dll"),
+    W32SetDpiContextFn* set = (W32SetDpiContextFn*)GetProcAddress(LoadLibraryA("user32.dll"),
                                                                  (u8*)"SetProcessDpiAwarenessContext");
     if (set != (W32SetDpiContextFn*)0)
         {
@@ -315,7 +315,7 @@ void w32FieldEdge(pointer hwnd, pointer hdc)
         }
     if (gW32OpenTheme == (W32OpenThemeDataFn*)0)
         {
-        pointer ux = LoadLibraryA((pointer) "uxtheme.dll");
+        pointer ux = LoadLibraryA("uxtheme.dll");
         gW32OpenTheme = (W32OpenThemeDataFn*)GetProcAddress(ux, (u8*)"OpenThemeData");
         gW32DrawTheme = (W32DrawThemeBackgroundFn*)GetProcAddress(ux, (u8*)"DrawThemeBackground");
         gW32CloseTheme = (W32CloseThemeDataFn*)GetProcAddress(ux, (u8*)"CloseThemeData");
@@ -611,6 +611,28 @@ void w32SyncText(pointer c, u8* s)
         SetWindowTextA(c, (pointer)s);
         }
     }
+// Posted work (UXViewDriver.setPostedHook).  A worker's wake is a PostMessageA to a message-only
+// window: a thread message would be lost inside a modal loop (a menu, a window drag, a MessageBox),
+// a window message is not.  One wake message at a time: the flag is cleared before fn runs, and a
+// block is queued before its wake, so fn always sees what a skipped wake would have shown it.
+#define UX_W32_WM_POSTED $8001 // WM_APP + 1
+turnHook_t* gW32PostedFn;
+pointer gW32PostedWin;
+i32 gW32PostedQueued;
+pointer UXPosted32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
+    {
+    if (msg == (u32)UX_W32_WM_POSTED)
+        {
+        gW32PostedQueued = (i32)0;
+        if (gW32PostedFn != (turnHook_t*)0)
+            {
+            gW32PostedFn();
+            }
+        return (pointer)0;
+        }
+    return DefWindowProcA(hwnd, msg, wp, lp);
+    }
+
 // The line window's paint: the colour key everywhere (so the layer is clear), then the S-curve, a
 // frame round the target and a dot at the pointer.
 pointer UXLine32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
@@ -1021,7 +1043,7 @@ class W32TextView : Object
         {
         if (gW32RichLib == (pointer)0)
             {
-            gW32RichLib = LoadLibraryA((pointer)"Msftedit.dll");
+            gW32RichLib = LoadLibraryA("Msftedit.dll");
             }
         u32 st = (u32)WS_CHILD | (u32)WS_VISIBLE | (u32)WS_VSCROLL | (u32)WS_TABSTOP | (u32)ES_MULTILINE |
                  (u32)ES_AUTOVSCROLL | (u32)ES_WANTRETURN;
@@ -2176,8 +2198,8 @@ void w32_snap_load(void)
         return;
         }
     gW32SnapLoaded = (i32)1;
-    pointer gdi = LoadLibraryA((pointer)"gdi32.dll");
-    pointer usr = LoadLibraryA((pointer)"user32.dll");
+    pointer gdi = LoadLibraryA("gdi32.dll");
+    pointer usr = LoadLibraryA("user32.dll");
     if (gdi != (pointer)0)
         {
         gW32CreateDIBSection = GetProcAddress(gdi, (u8*)"CreateDIBSection");
@@ -2188,7 +2210,7 @@ void w32_snap_load(void)
         gW32GetWindow = GetProcAddress(usr, (u8*)"GetWindow");
         gW32IsVisible = GetProcAddress(usr, (u8*)"IsWindowVisible");
         }
-    pointer nt = LoadLibraryA((pointer)"ntdll.dll");
+    pointer nt = LoadLibraryA("ntdll.dll");
     gW32UnderWine = nt != (pointer)0 && GetProcAddress(nt, (u8*)"wine_get_version") != (pointer)0 ? (i32)1 : (i32)0;
     }
 // Each visible child window printed into its own bitmap and copied into `out` (root's client, cw x
@@ -2283,7 +2305,7 @@ void w32_gl_load(void)
         {
         return;
         }
-    gW32GlLib = LoadLibraryA((pointer)"opengl32.dll");
+    gW32GlLib = LoadLibraryA("opengl32.dll");
     if (gW32GlLib == (pointer)0)
         {
         return;
@@ -2389,7 +2411,7 @@ void w32_gl_fbo_load(void)
     gW32FbRb = w32_gl_ext((u8*)"glFramebufferRenderbuffer", (u8*)"glFramebufferRenderbufferEXT");
     gW32FbStatus = w32_gl_ext((u8*)"glCheckFramebufferStatus", (u8*)"glCheckFramebufferStatusEXT");
     gW32ReadPx = GetProcAddress(gW32GlLib, (u8*)"glReadPixels");
-    pointer gdi = LoadLibraryA((pointer)"gdi32.dll");
+    pointer gdi = LoadLibraryA("gdi32.dll");
     if (gdi != (pointer)0)
         {
         gW32StretchDIBits = GetProcAddress(gdi, (u8*)"StretchDIBits");
@@ -2697,7 +2719,7 @@ bool w32_sound_play(i16* pcm, i32 frames, i32 rate)
     {
     if (gW32WinMM == (pointer)0)
         {
-        gW32WinMM = LoadLibraryA((pointer)"winmm.dll");
+        gW32WinMM = LoadLibraryA("winmm.dll");
         if (gW32WinMM == (pointer)0)
             {
             return false;
@@ -2775,12 +2797,12 @@ typedef pointer W32SHGetFileInfoWFn(pointer path, u32 attrs, pointer info, u32 c
 // shell32's SHGetFileInfoW and user32's DestroyIcon, looked up as appSetIcon does
 pointer w32SHGetFileInfoW(pointer path, u32 attrs, pointer info, u32 cb, u32 flags)
     {
-    W32SHGetFileInfoWFn* f = (W32SHGetFileInfoWFn*)GetProcAddress(LoadLibraryA((pointer)"shell32.dll"), (u8*)"SHGetFileInfoW");
+    W32SHGetFileInfoWFn* f = (W32SHGetFileInfoWFn*)GetProcAddress(LoadLibraryA("shell32.dll"), (u8*)"SHGetFileInfoW");
     return f != (W32SHGetFileInfoWFn*)0 ? f(path, attrs, info, cb, flags) : (pointer)0;
     }
 void w32DestroyIcon(pointer icon)
     {
-    W32DestroyIconFn* d = (W32DestroyIconFn*)GetProcAddress(LoadLibraryA((pointer)"user32.dll"), (u8*)"DestroyIcon");
+    W32DestroyIconFn* d = (W32DestroyIconFn*)GetProcAddress(LoadLibraryA("user32.dll"), (u8*)"DestroyIcon");
     if (d != (W32DestroyIconFn*)0)
         {
         d(icon);
@@ -2789,8 +2811,8 @@ void w32DestroyIcon(pointer icon)
 pointer gW32AppIcon;
 pointer w32_app_icon_make(u8* data, i32 w, i32 h, i32 fmt)
     {
-    pointer gdi = LoadLibraryA((pointer)"gdi32.dll");
-    pointer usr = LoadLibraryA((pointer)"user32.dll");
+    pointer gdi = LoadLibraryA("gdi32.dll");
+    pointer usr = LoadLibraryA("user32.dll");
     if (gdi == (pointer)0 || usr == (pointer)0)
         {
         return (pointer)0;
@@ -2923,6 +2945,25 @@ class UXWin32Driver : Object<UXViewDriver>
         gc.lpszMenuName = (pointer)0;
         gc.lpszClassName = (pointer) "UXGl32";
         RegisterClassA((pointer)&gc);
+        // The posted-work window: message-only (parent HWND_MESSAGE), never shown.
+        WNDCLASSA pc;
+        pc.style = (u32)0;
+        pc._p0 = (u32)0;
+        pc.lpfnWndProc = &UXPosted32Proc;
+        pc.cbClsExtra = (i32)0;
+        pc.cbWndExtra = (i32)0;
+        pc.hInstance = gW32Inst;
+        pc.hIcon = (pointer)0;
+        pc.hCursor = (pointer)0;
+        pc.hbrBackground = (pointer)0;
+        pc.lpszMenuName = (pointer)0;
+        pc.lpszClassName = (pointer) "UXPosted32";
+        RegisterClassA((pointer)&pc);
+        if (gW32PostedWin == (pointer)0)
+            {
+            gW32PostedWin = CreateWindowExA((u32)0, (pointer) "UXPosted32", (pointer) "", (u32)0, (i32)0, (i32)0, (i32)0, (i32)0,
+                                            (pointer)(i64)-3, (pointer)0, gW32Inst, (pointer)0);
+            }
         gW32Font = w32UiFont(W32_UI_PX); // for every native control
         gW32LabelDY = w32LabelDY(gW32Font);
         INITCOMMONCONTROLSEX icc;
@@ -3273,7 +3314,7 @@ class UXWin32Driver : Object<UXViewDriver>
             }
         if (old != (pointer)0)
             {
-            pointer usr = LoadLibraryA((pointer)"user32.dll");
+            pointer usr = LoadLibraryA("user32.dll");
             W32DestroyIconFn* d = (W32DestroyIconFn*)GetProcAddress(usr, (u8*)"DestroyIcon");
             if (d != (W32DestroyIconFn*)0)
                 {
@@ -5518,7 +5559,7 @@ class UXWin32Driver : Object<UXViewDriver>
             // A view's drawing stays INSIDE ITS FRAME, as an NSView's does.
             if (gW32SaveDC == (pointer)0)
                 {
-                pointer gdi = LoadLibraryA((pointer)"gdi32.dll");
+                pointer gdi = LoadLibraryA("gdi32.dll");
                 if (gdi != (pointer)0)
                     {
                     gW32SaveDC = GetProcAddress(gdi, (u8*)"SaveDC");
@@ -6383,6 +6424,23 @@ class UXWin32Driver : Object<UXViewDriver>
     bool setTurnHook(turnHook_t* fn, i32 ms)
         {
         return false;
+        }
+    // Posted work: a wake is one message to the posted-work window (UXPosted32Proc above).
+    void setPostedHook(turnHook_t* fn)
+        {
+        gW32PostedFn = fn;
+        }
+    void wakeForPosted(void)
+        {
+        if (gW32PostedWin == (pointer)0 || gW32PostedQueued != (i32)0)
+            {
+            return;
+            }
+        gW32PostedQueued = (i32)1;
+        if (PostMessageA(gW32PostedWin, (u32)UX_W32_WM_POSTED, (pointer)0, (pointer)0) == (i32)0)
+            {
+            gW32PostedQueued = (i32)0;
+            }
         }
 
     i32 formFactorClass(void)

@@ -220,9 +220,16 @@ static void (*gLater[16])(void);          /* tests: steps run later through the 
 static int gTurnMs;
 static int gTurnArmed;
 static void uxTurnArm(void);
+static void (*gPostedFn)(void);          /* posted work (setPostedHook) */
+static int gPostedQueued;
 static void n_run(JNIEnv *env, jclass c, jint id) {
     (void)env; (void)c;
     if (id == 0) { if (gEntry) gEntry(); return; }         /* id 0 = the app's start */
+    if (id == 0x200000) {                                  /* posted work, after a wake */
+        __atomic_store_n(&gPostedQueued, 0, __ATOMIC_SEQ_CST);
+        if (gPostedFn) gPostedFn();
+        return;
+    }
     if (id == 0x80000) {                                   /* the app's frame clock */
         if (gTurnFn) { void (*f)(void) = gTurnFn; f(); uxTurnArm(); }
         return;
@@ -387,6 +394,27 @@ static void postRunDelayed(JNIEnv *env, int id, int ms) {
     jobject r = (*env)->NewObject(env, gRunCls, gRunInit, id);
     (*env)->CallBooleanMethod(env, gHandler, gPostDelayed, r, (jlong)ms);
     (*env)->DeleteLocalRef(env, r);
+}
+/* Posted work: another thread posted to RunLoop.main().  A wake posts one
+ * message (n_run id 0x200000) to the main looper's Handler, which runs the
+ * hook on the UI thread.  One at a time: the flag is cleared before the hook
+ * runs, and the poster queues its work before it wakes.  A worker thread the
+ * VM does not know is attached for the call and detached again: one that
+ * exits attached aborts the process. */
+void ux_and_set_posted_hook(void *fn) { gPostedFn = (void (*)(void))fn; }
+void ux_and_wake_posted(void) {
+    if (!gHandler || __atomic_exchange_n(&gPostedQueued, 1, __ATOMIC_SEQ_CST) != 0) return;
+    JNIEnv *env = NULL;
+    int attached = 0;
+    if ((*gVm)->GetEnv(gVm, (void **)&env, JNI_VERSION_1_6) != JNI_OK) {
+        if ((*gVm)->AttachCurrentThread(gVm, &env, NULL) != JNI_OK) {
+            __atomic_store_n(&gPostedQueued, 0, __ATOMIC_SEQ_CST);
+            return;
+        }
+        attached = 1;
+    }
+    postRun(env, 0x200000);
+    if (attached) (*gVm)->DetachCurrentThread(gVm);
 }
 /* the loop gate's rig: clicks and a watchdog as REAL Handler timers, so
  * they arrive through the platform's own loop (n_run decodes the ids) */
