@@ -585,6 +585,11 @@ protocol UXViewDriver
     void setPostedHook(turnHook_t* fn);
     void wakeForPosted(void);
 
+    // UXApplication.beginBusy / endBusy, on the first begin and the last end: while busy, the
+    // platform must not throttle the app for being out of sight (App Nap, power throttling).  A
+    // platform with no such throttling keeps it a no-op.
+    void setBusy(bool busy, u8* reason);
+
     // The rule the seam rests on: the driver owns the ORDER of the two surfaces and the PACING
     // of the frame.  The app keeps its surfaces in step by damaging both in one present turn.
     // GL never interleaves, and GL never owns the clock.  compositesWithGL above says whether

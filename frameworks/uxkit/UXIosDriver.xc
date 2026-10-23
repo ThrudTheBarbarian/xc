@@ -146,6 +146,7 @@ void ux_ios_set_entry(pointer fn);
 void ux_ios_set_turn_hook(pointer fn, i32 ms);
 void ux_ios_set_posted_hook(pointer fn);
 void ux_ios_wake_posted(void); // any thread
+void ux_ios_set_busy(i32 on, u8* reason);
 void ux_ios_shell_run(void);
 void ux_ios_quit(i32 rc);
 void ux_ios_clip(i32 x, i32 y, i32 w, i32 h);
@@ -618,6 +619,11 @@ class UXIosDriver : Object<UXViewDriver>
     void wakeForPosted(void)
         {
         ux_ios_wake_posted();
+        }
+    // busy: an NSProcessInfo activity, as on macOS
+    void setBusy(bool busy, u8* reason)
+        {
+        ux_ios_set_busy(busy ? (i32)1 : (i32)0, reason);
         }
     // a GL view's drawable and its last frame: the image each present reads back for the draw walk
     i32 glDrawableSize(pointer view, i32* pw, i32* ph)

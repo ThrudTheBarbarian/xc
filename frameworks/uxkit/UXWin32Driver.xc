@@ -619,6 +619,28 @@ void w32SyncText(pointer c, u8* s)
 turnHook_t* gW32PostedFn;
 pointer gW32PostedWin;
 i32 gW32PostedQueued;
+// Busy (UXApplication.beginBusy): Windows 10 and later throttle a process whose windows are out of
+// sight (EcoQoS).  ProcessPowerThrottling with the execution-speed bit in the control mask and clear
+// in the state mask turns that off; an empty control mask hands the choice back to Windows.  Found
+// at run time: older Windows has no SetProcessInformation, and no throttling either.
+struct W32PowerThrottling { u32 version; u32 controlMask; u32 stateMask; }
+typedef i32 W32SetProcessInformationFn(pointer process, i32 infoClass, pointer info, u32 size);
+pointer GetCurrentProcess(void);
+void w32SetBusy(bool busy)
+    {
+    W32SetProcessInformationFn* set = (W32SetProcessInformationFn*)GetProcAddress(LoadLibraryA("kernel32.dll"),
+                                                                                  (u8*)"SetProcessInformation");
+    if (set == (W32SetProcessInformationFn*)0)
+        {
+        return;
+        }
+    W32PowerThrottling t;
+    t.version = (u32)1;
+    t.controlMask = busy ? (u32)1 : (u32)0; // PROCESS_POWER_THROTTLING_EXECUTION_SPEED
+    t.stateMask = (u32)0;
+    set(GetCurrentProcess(), (i32)4, (pointer)&t, (u32)12); // ProcessPowerThrottling
+    }
+
 pointer UXPosted32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
     {
     if (msg == (u32)UX_W32_WM_POSTED)
@@ -6441,6 +6463,11 @@ class UXWin32Driver : Object<UXViewDriver>
             {
             gW32PostedQueued = (i32)0;
             }
+        }
+    // busy: power throttling off (w32SetBusy above)
+    void setBusy(bool busy, u8* reason)
+        {
+        w32SetBusy(busy);
         }
 
     i32 formFactorClass(void)

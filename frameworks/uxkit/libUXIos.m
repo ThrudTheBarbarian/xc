@@ -3332,3 +3332,21 @@ void ux_ios_wake_posted(void)
             g_ios_posted_fn();
     });
     }
+
+// Busy (UXApplication.beginBusy): an NSProcessInfo activity while the app works for the user, as on
+// macOS.  One is open at a time: begun on the first beginBusy, ended on the last endBusy.
+static id g_ios_busy_activity = nil; // ARC-strong
+void ux_ios_set_busy(int on, const char* reason)
+    {
+    if (on && !g_ios_busy_activity)
+        {
+        NSString* why = reason ? [NSString stringWithUTF8String:reason] : @"Working";
+        g_ios_busy_activity = [[NSProcessInfo processInfo]
+            beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep reason:why];
+        }
+    else if (!on && g_ios_busy_activity)
+        {
+        [[NSProcessInfo processInfo] endActivity:g_ios_busy_activity];
+        g_ios_busy_activity = nil;
+        }
+    }

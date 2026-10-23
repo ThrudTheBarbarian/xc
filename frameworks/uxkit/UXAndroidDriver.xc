@@ -623,6 +623,10 @@ class UXAndroidDriver : Object<UXViewDriver>
         {
         ux_and_wake_posted();
         }
+    // busy: a foreground activity is not throttled; background work needs a service
+    void setBusy(bool busy, u8* reason)
+        {
+        }
     // a GL view's drawable and its last frame: the copy each present reads back for the Bitmap
     i32 glDrawableSize(pointer view, i32* pw, i32* ph)
         {

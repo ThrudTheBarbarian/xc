@@ -5523,3 +5523,27 @@ void ux_ak_wake_posted(void)
             g_posted_fn();
     });
     }
+
+/* ── busy (UXApplication.beginBusy) ──────────────────────────────────────────
+ * An NSProcessInfo activity while the app works for the user: App Nap leaves it alone however its
+ * windows are placed, and the system may still sleep when idle.  Begun on the first beginBusy and
+ * ended on the last endBusy, so one is open at a time. */
+static id g_busy_activity = nil; // ARC-strong
+void ux_ak_set_busy(int on, const char* reason)
+    {
+    if (on && !g_busy_activity)
+        {
+        NSString* why = reason ? [NSString stringWithUTF8String:reason] : @"Working";
+        g_busy_activity = [[NSProcessInfo processInfo]
+            beginActivityWithOptions:NSActivityUserInitiatedAllowingIdleSystemSleep reason:why];
+        }
+    else if (!on && g_busy_activity)
+        {
+        [[NSProcessInfo processInfo] endActivity:g_busy_activity];
+        g_busy_activity = nil;
+        }
+    }
+int ux_ak_test_busy(void) // tests: 1 while an activity is open
+    {
+    return g_busy_activity != nil;
+    }

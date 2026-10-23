@@ -109,6 +109,7 @@ void ux_ak_window_set_min_size(i32 handle, i32 w, i32 h);     // register the to
 void ux_ak_set_turn_hook(pointer fn, i32 ms); // the frame clock: the display link, or a timer for a slow tick
 void ux_ak_set_posted_hook(pointer fn); // posted work: fn runs on the main queue after a wake
 void ux_ak_wake_posted(void);           // any thread
+void ux_ak_set_busy(i32 on, u8* reason); // an NSProcessInfo activity
 void ux_ak_set_control_fire(pointer fn); // register the control-click -> action forwarder
 pointer ux_ak_menu_new(void);
 pointer ux_ak_menu_add_title(pointer bar, u8* title);
@@ -2565,6 +2566,11 @@ class UXAppKitDriver : Object<UXViewDriver>
     void wakeForPosted(void)
         {
         ux_ak_wake_posted();
+        }
+    // busy: an NSProcessInfo activity (user-initiated, idle sleep allowed), which keeps App Nap off
+    void setBusy(bool busy, u8* reason)
+        {
+        ux_ak_set_busy(busy ? (i32)1 : (i32)0, reason);
         }
 
     i32 formFactorClass(void)

@@ -699,6 +699,10 @@ class UXGtkDriver : Object<UXViewDriver>
         {
         ux_gtk_wake_posted();
         }
+    // busy: Linux desktops do not throttle a background app
+    void setBusy(bool busy, u8* reason)
+        {
+        }
 
     i32 formFactorClass(void)
         {

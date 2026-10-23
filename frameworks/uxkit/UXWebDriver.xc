@@ -1964,6 +1964,10 @@ class UXWebDriver : Object<UXViewDriver>
     void wakeForPosted(void)
         {
         }
+    // busy: a page cannot opt out of the browser's background throttling
+    void setBusy(bool busy, u8* reason)
+        {
+        }
 
     i32 formFactorClass(void)
         {

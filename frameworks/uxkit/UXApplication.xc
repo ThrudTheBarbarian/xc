@@ -48,6 +48,7 @@ class UXApplication : UXResponder
     turnHook_t* turnFn;             // the app's frame clock (see everyTurn), or 0
     i32 turnMs;
     bool driverCallsTurn;           // true: the driver's own source calls turnFn, the loop does not
+    i32 busyCount;                  // beginBusy calls not yet ended
 
     void init(void)
         {
@@ -65,6 +66,7 @@ class UXApplication : UXResponder
         turnFn = (turnHook_t*)0;
         turnMs = (i32)0;
         driverCallsTurn = false;
+        busyCount = (i32)0;
 #ifdef UX_PLATFORM_DEFAULT
         // A program built with UXPlatform (or UXKit) gets the driver for its target here, so its
         // main never names one; a program that has chosen a driver already keeps it.
@@ -209,6 +211,32 @@ class UXApplication : UXResponder
         if (gDriver != (UXViewDriver*)0)
             {
             gDriver.requestStop();
+            }
+        }
+
+    // Work the user is waiting for, such as a long computation on a worker thread: between beginBusy
+    // and endBusy the platform must not slow the app down because its windows are hidden or behind
+    // others (App Nap on macOS, power throttling on Windows).  The system may still sleep when idle.
+    // `reason` says why, where the platform records it.  Calls nest: the app is busy until every
+    // beginBusy has its endBusy.  Call both on the UI thread.
+    void beginBusy(u8* reason)
+        {
+        busyCount = busyCount + (i32)1;
+        if (busyCount == (i32)1 && gDriver != (UXViewDriver*)0)
+            {
+            gDriver.setBusy(true, reason);
+            }
+        }
+    void endBusy(void)
+        {
+        if (busyCount == (i32)0)
+            {
+            return;
+            }
+        busyCount = busyCount - (i32)1;
+        if (busyCount == (i32)0 && gDriver != (UXViewDriver*)0)
+            {
+            gDriver.setBusy(false, (u8*)0);
             }
         }
 

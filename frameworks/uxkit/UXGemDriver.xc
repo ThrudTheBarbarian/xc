@@ -1608,6 +1608,10 @@ class UXGemDriver : Object<UXViewDriver>
     void wakeForPosted(void)
         {
         }
+    // busy: GEM does not throttle a background app
+    void setBusy(bool busy, u8* reason)
+        {
+        }
 
     i32 formFactorClass(void)
         {
