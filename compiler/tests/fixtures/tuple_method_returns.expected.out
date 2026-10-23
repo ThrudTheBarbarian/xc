@@ -1,0 +1,10 @@
+scalars 1 2
+find 7 1
+forward 7 1
+method forward 1 2
+twice 6 12, sum 45
+static 5000000000 0
+base 1 0
+override 2 9
+freed 9
+freed 5

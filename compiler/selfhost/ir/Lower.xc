@@ -405,6 +405,10 @@ class ClassInfo
     // header before the address is used. Off by default; an ordinary build emits
     // none of this and links none of the runtime.
     bool _boundsCheck;
+    bool _tupleWanted;    // lowerTupleAssign: the method call it lowers returns several values
+    String* _tupleIrRet;  // …and that call's aggregate IR type, while it is emitted
+    Array* _tupleParts;   // …and its return types, one per value
+    Array* _tupleSrcParts; // lowerTupleSource: the return types of the call it lowered
     // -g: stamp each statement's source location on the instructions lowered
     // for it (through IRDbg's current location), for the back end's line
     // tables. Off, no instruction carries a location and the IR text is
@@ -5472,6 +5476,10 @@ class ClassInfo
 
     IRValue* lowerCall(Node* n)
         {
+        // Taken at once, as lowerMethodCall takes it: only an implicit-self
+        // call (below) can be the source of a tuple here.
+        bool tupleWanted = _tupleWanted;
+        _tupleWanted = false;
         if (n.sym() != 0 && n.sym().hasPrefix(String.withCString("__intrinsic_va_")))
             return lowerVaIntrinsic(n, n.sym());
         // `bank(type, idx)` is a raw pointer to byte 0 of a window in a given
@@ -5575,19 +5583,30 @@ class ClassInfo
             // A sibling STATIC method takes no receiver — not even the class's
             // own storage block, which is what `self` is inside one.
             bool st = decl.hasFlag((u32)NF_STATIC);
+            // `(a, b) = sibling()` or `return sibling();`: typed with the
+            // method's aggregate, as through an explicit receiver.
+            if (tupleWanted && isMultiReturn(decl.op()))
+                {
+                _tupleIrRet = irReturnOfKey(decl, methodSymbolFor(_curClass, n));
+                _tupleParts = splitReturns(decl.op());
+                }
+            IRValue* sres = (IRValue*)0;
             // An implicit-self call to a method with a SLOT still dispatches
             // virtually. Resolving it statically would pick the authoring
             // class's body — `Gfx.plot` where the receiver is really a `Gfx8`
             // — and the override would never run. §4.2 first: a category
             // method on an imported class has a CHAIN slot, never a vtable one.
-            if (!st && catSlotFor(_curClass, n) >= (i32)0)
-                return emitCatDispatch(_self, _curClass.catAnchor(),
-                                       (u32)catSlotFor(_curClass, n), args, ret);
             i32 vs = st ? (i32)-1 : selfSlotFor(_curClass, n);
-            if (vs >= (i32)0)
-                return emitDispatch(_self, (u32)vs, args, ret);
-            return emitMethodCall(methodSymbolFor(_curClass, n), st ? (IRValue*)0 : _self,
-                                  args, ret, hasRes);
+            if (!st && catSlotFor(_curClass, n) >= (i32)0)
+                sres = emitCatDispatch(_self, _curClass.catAnchor(),
+                                       (u32)catSlotFor(_curClass, n), args, ret);
+            else if (vs >= (i32)0)
+                sres = emitDispatch(_self, (u32)vs, args, ret);
+            else
+                sres = emitMethodCall(methodSymbolFor(_curClass, n), st ? (IRValue*)0 : _self,
+                                      args, ret, hasRes);
+            _tupleIrRet = (String*)0;
+            return sres;
             }
         Object* d = n.sym() == 0 ? (Object*)0 : _funcsBySym.get((Hashable*)n.sym());
         if (d == 0)
@@ -8709,6 +8728,10 @@ class ClassInfo
                     IRValue* rv = lowerExpr(n.kid(i));
                     if (_failed)
                         return;
+                    // Each value takes its field's type: `return 1, 2` into
+                    // `u8, u16` built a U8 into the U16 field.
+                    if (_fnRetParts != 0 && i < _fnRetParts.count())
+                        rv = coerceArg(rv, n.kid(i).ty(), (String*)_fnRetParts.get(i));
                     vals.add((Object*)rv);
                     }
                 for (u32 i = (u32)0; i < vals.count(); i = i + (u32)1)
@@ -8740,7 +8763,12 @@ class ClassInfo
                 // The value is computed, then the scope is torn down, and only
                 // then is the result coerced — a release can run arbitrary
                 // code, so it must not sit between the value and its use.
-                IRValue* v = lowerExpr(n.kid((u32)0));
+                // `return f();` where f returns several values too: lowered as
+                // one value, the call was typed with its first value and
+                // zero-extended into the aggregate.
+                bool forwards = _fnRetAgg != 0 && (n.kid((u32)0).kind() == (u16)nkCall
+                                                   || n.kid((u32)0).kind() == (u16)nkMethodCall);
+                IRValue* v = forwards ? forwardTuple(n.kid((u32)0)) : lowerExpr(n.kid((u32)0));
                 if (_failed)
                     return;
                 // Every class pointer LEAVES at +1. A value that is already
@@ -8788,7 +8816,8 @@ class ClassInfo
                 // — and not the way an assignment coerces one. Same
                 // distinction, same reason: a comparison's declared type is
                 // its operand type, so returning `n == 0` as a bool truncates.
-                v = coerceArg(v, n.kid((u32)0).ty(), _fnReturn);
+                if (!forwards)
+                    v = coerceArg(v, n.kid((u32)0).ty(), _fnReturn);
                 r.add(IROperand.useVal(v));
                 }
             else
@@ -8818,17 +8847,80 @@ class ClassInfo
         {
         if (n.kidCount() < (u32)2)
             return;
-        Node* src = n.kid(n.kidCount() - (u32)1);
+        IRValue* res = lowerTupleSource(n.kid(n.kidCount() - (u32)1));
+        if (_failed || res == 0)
+            return;
+        Array* parts = _tupleSrcParts;
+        for (u32 i = (u32)0; i < n.kidCount() - (u32)1 && i < parts.count();
+             i = i + (u32)1)
+            {
+            Array* eops = new Array();
+            eops.add((Object*)IROperand.useVal(res));
+            eops.add((Object*)IROperand.immI((i32)i, String.withCString("U16")));
+            IRValue* fv = emit(String.withCString("AggExtract"),
+                               irType((String*)parts.get(i)), eops);
+            bindTupleTarget(n.kid(i), fv);
+            if (_failed)
+                return;
+            }
+        }
+
+    // A call that returns several values, lowered to the one aggregate it
+    // really returns: the source of `(a, b) = f()`, or of `return f();` in a
+    // function that returns several values itself. Its return types are left
+    // in _tupleSrcParts. Null (and a give-up) for anything else.
+    IRValue* lowerTupleSource(Node* src)
+        {
+        _tupleSrcParts = (Array*)0;
+        if (src.kind() == (u16)nkMethodCall)
+            {
+            // The method call is lowered as any other, typed with the method's
+            // aggregate (lowerMethodCall reads the flag).
+            _tupleWanted = true;
+            _tupleParts = (Array*)0;
+            IRValue* mres = lowerMethodCall(src);
+            _tupleWanted = false;
+            if (_failed)
+                return (IRValue*)0;
+            if (mres == 0 || _tupleParts == 0)
+                {
+                giveUp(String.withCString("tuple assign source does not return an aggregate"));
+                return (IRValue*)0;
+                }
+            _tupleSrcParts = _tupleParts;
+            _tupleParts = (Array*)0;
+            return mres;
+            }
         if (src.kind() != (u16)nkCall)
             {
             giveUp(String.withCString("tuple assign from a non-call"));
-            return;
+            return (IRValue*)0;
             }
         Object* d = _funcs.get((Hashable*)src.name());
+        // A sibling method through the implicit self, when no free function
+        // of the name returns several values (the reference's order).
+        if ((d == 0 || !isMultiReturn(((Node*)d).op())) && _curClass != 0 && _self != 0
+            && methodDeclFor(_curClass, src) != 0)
+            {
+            _tupleWanted = true;
+            _tupleParts = (Array*)0;
+            IRValue* sres = lowerCall(src);
+            _tupleWanted = false;
+            if (_failed)
+                return (IRValue*)0;
+            if (sres == 0 || _tupleParts == 0)
+                {
+                giveUp(String.withCString("tuple assign source does not return an aggregate"));
+                return (IRValue*)0;
+                }
+            _tupleSrcParts = _tupleParts;
+            _tupleParts = (Array*)0;
+            return sres;
+            }
         if (d == 0 || !isMultiReturn(((Node*)d).op()))
             {
             giveUp(String.withCString("tuple assign source returns one value"));
-            return;
+            return (IRValue*)0;
             }
         Node* decl = (Node*)d;
         String* agg = irReturnOf(decl);
@@ -8839,7 +8931,7 @@ class ClassInfo
             {
             IRValue* a = lowerExpr(src.kid(i));
             if (_failed)
-                return;
+                return (IRValue*)0;
             cargs.add((Object*)a);
             }
         String* tcallee = decl.sym() == 0 ? src.name() : decl.sym();
@@ -8855,19 +8947,28 @@ class ClassInfo
         call.setCc(placedCallConv(decl));
         _blk.add(call);
         _mem = nextMem;
+        _tupleSrcParts = parts;
+        return res;
+        }
 
-        for (u32 i = (u32)0; i < n.kidCount() - (u32)1 && i < parts.count();
-             i = i + (u32)1)
+    // `return f();` in a function returning several values, f too: each of
+    // f's values moves into this function's own aggregate (already +1).
+    IRValue* forwardTuple(Node* src)
+        {
+        IRValue* res = lowerTupleSource(src);
+        if (_failed || res == 0)
+            return (IRValue*)0;
+        Array* parts = _tupleSrcParts;
+        Array* bops = new Array();
+        for (u32 i = (u32)0; i < parts.count() && _fnRetParts != 0 && i < _fnRetParts.count(); i = i + (u32)1)
             {
             Array* eops = new Array();
             eops.add((Object*)IROperand.useVal(res));
             eops.add((Object*)IROperand.immI((i32)i, String.withCString("U16")));
-            IRValue* fv = emit(String.withCString("AggExtract"),
-                               irType((String*)parts.get(i)), eops);
-            bindTupleTarget(n.kid(i), fv);
-            if (_failed)
-                return;
+            bops.add((Object*)IROperand.useVal(emit(String.withCString("AggExtract"),
+                                                    irType((String*)parts.get(i)), eops)));
             }
+        return emit(String.withCString("AggBuild"), _fnRetAgg, bops);
         }
 
     void bindTupleTarget(Node* t, IRValue* fv)
@@ -10452,6 +10553,7 @@ class ClassInfo
 
     String* _fnReturn;
     String* _fnRetAgg; // non-null in a function returning a tuple
+    Array* _fnRetParts; // …and its return types, one per value
 
     // ── objects ──────────────────────────────────────────────────────────
     // `new T()` is three things, not one: allocate, stamp the instance with
@@ -11111,6 +11213,9 @@ class ClassInfo
     // body runs.
     IRValue* lowerMethodCall(Node* n)
         {
+        // Taken at once, so a method call among the arguments is not one.
+        bool tupleWanted = _tupleWanted;
+        _tupleWanted = false;
         // Sema found the "method" was a FIELD holding something callable and
         // hung the real call on the node, past the receiver and arguments.
         // None of the dispatch below applies. private:docs/bugs/074.
@@ -11243,6 +11348,12 @@ class ClassInfo
                 }
             }
         bool hasRes = retTy != 0 && !isName(stripQual(retTy), "void");
+        // `(a, b) = obj.m()`: the call returns the method's aggregate.
+        if (tupleWanted && decl != 0 && isMultiReturn(decl.op()))
+            {
+            _tupleIrRet = irReturnOf(decl);
+            _tupleParts = splitReturns(decl.op());
+            }
         IRValue* res = (IRValue*)0;
         i32 vs = (i32)-1;
         if (!isStatic && catSlotFor(ci, n) < (i32)0)
@@ -11254,6 +11365,7 @@ class ClassInfo
             res = emitDispatch(recvVal, (u32)vs, args, retTy);
         else
             res = emitMethodCall(methodSymbolFor(ci, n), recvVal, args, retTy, hasRes);
+        _tupleIrRet = (String*)0;
         if (erasedRet != 0 && res != 0)
             {
             // Emitted DIRECTLY, not through coerce(): its same-shape early-out
@@ -11470,7 +11582,7 @@ class ClassInfo
         IRValue* r = (IRValue*)0;
         if (retTy != 0 && !isName(stripQual(retTy), "void"))
             {
-            r = new IRValue(irType(retTy));
+            r = new IRValue(_tupleIrRet != (String*)0 ? _tupleIrRet : irType(retTy));
             d.setRes(r);
             }
         IRValue* nm = new IRValue(String.withCString("Mem"));
@@ -11478,7 +11590,8 @@ class ClassInfo
         d.setCc(String.withCString("CallConv::Standard"));
         _blk.add(d);
         _mem = nm;
-        noteOwnedTemp(r, retTy);
+        if (_tupleIrRet == (String*)0)
+            noteOwnedTemp(r, retTy);
         return r;
         }
 
@@ -11593,7 +11706,7 @@ class ClassInfo
         IRValue* r = (IRValue*)0;
         if (retTy != 0 && !isName(stripQual(retTy), "void"))
             {
-            r = new IRValue(irType(retTy));
+            r = new IRValue(_tupleIrRet != (String*)0 ? _tupleIrRet : irType(retTy));
             d.setRes(r);
             }
         IRValue* nm = new IRValue(String.withCString("Mem"));
@@ -11601,7 +11714,8 @@ class ClassInfo
         d.setCc(String.withCString("CallConv::Standard"));
         _blk.add(d);
         _mem = nm;
-        noteOwnedTemp(r, retTy);
+        if (_tupleIrRet == (String*)0)
+            noteOwnedTemp(r, retTy);
         return r;
         }
 
@@ -11617,7 +11731,7 @@ class ClassInfo
         IRValue* r = (IRValue*)0;
         if (retTy != 0 && !isName(stripQual(retTy), "void"))
             {
-            r = new IRValue(irType(retTy));
+            r = new IRValue(_tupleIrRet != (String*)0 ? _tupleIrRet : irType(retTy));
             d.setRes(r);
             }
         IRValue* nm = new IRValue(String.withCString("Mem"));
@@ -11625,7 +11739,8 @@ class ClassInfo
         d.setCc(String.withCString("CallConv::Standard"));
         _blk.add(d);
         _mem = nm;
-        noteOwnedTemp(r, retTy);
+        if (_tupleIrRet == (String*)0)
+            noteOwnedTemp(r, retTy);
         return r;
         }
 
@@ -11677,7 +11792,7 @@ class ClassInfo
         IRValue* r = (IRValue*)0;
         if (hasRes)
             {
-            r = new IRValue(irType(retTy));
+            r = new IRValue(_tupleIrRet != (String*)0 ? _tupleIrRet : irType(retTy));
             c.setRes(r);
             }
         IRValue* nm = new IRValue(String.withCString("Mem"));
@@ -11685,7 +11800,8 @@ class ClassInfo
         c.setCc(conv);
         _blk.add(c);
         _mem = nm;
-        noteOwnedTemp(r, retTy);
+        if (_tupleIrRet == (String*)0)
+            noteOwnedTemp(r, retTy);
         if (callee != 0 && callee.isThrowing())
             emitErrorCheckAfterCall();
         return r;
@@ -13026,7 +13142,11 @@ class ClassInfo
                 continue;
             if (methodBody(m) == 0 && !cls.hasFlag((u32)NF_EXTERNAL))
                 continue;
-            IRSymbol* msym = IRSymbol.method(methodSymbolName(cls, m), methodSignature(info, m),
+            // A method returning several values returns ONE aggregate, as a
+            // function does; its layout is made here, with the symbol.
+            String* mret = isMultiReturn(m.op()) ? irReturnOfKey(m, methodSymbolName(cls, m))
+                                                 : irType(firstReturn(m.op()));
+            IRSymbol* msym = IRSymbol.method(methodSymbolName(cls, m), methodSignature(info, m, mret),
                                              m.hasFlag((u32)NF_VARARGS), m.hasFlag((u32)NF_STATIC));
             // An imported class's METHODS live in its library too, and a call
             // to one is an import from that library's package.
@@ -13052,8 +13172,7 @@ class ClassInfo
             // signature — resolving it again later, when every class IS
             // registered, would give the function a different type from its
             // own symbol.
-            _methodRetIr.set((Hashable*)methodSymbolName(cls, m),
-                             (Object*)irType(firstReturn(m.op())));
+            _methodRetIr.set((Hashable*)methodSymbolName(cls, m), (Object*)mret);
             Array* pts = new Array();
             for (u32 j = (u32)0; j < m.kidCount(); j = j + (u32)1)
                 if (m.kid(j).kind() == (u16)nkParam)
@@ -13761,7 +13880,7 @@ class ClassInfo
         return (Node*)0;
         }
 
-    String* methodSignature(ClassInfo* info, Node* m)
+    String* methodSignature(ClassInfo* info, Node* m, String* ret)
         {
         String* s = String.withCString("(");
         u32 n = (u32)0;
@@ -13781,7 +13900,7 @@ class ClassInfo
             n = n + (u32)1;
             }
         s.appendCString(") -> ");
-        s.append(irType(firstReturn(m.op())));
+        s.append(ret);
         return s;
         }
 
@@ -23887,9 +24006,15 @@ class ClassInfo
     // after it.
     String* irReturnOf(Node* d)
         {
+        return irReturnOfKey(d, d.sym() == 0 ? d.name() : d.sym());
+        }
+
+    // A method's tuple is keyed by its symbol (`T$m`), a function's by its
+    // own name: a method and a function of the same name are two tuples.
+    String* irReturnOfKey(Node* d, String* key)
+        {
         if (!isMultiReturn(d.op()))
             return irType(returnOf(d));
-        String* key = d.sym() == 0 ? d.name() : d.sym();
         Object* have = _tupleAgg.get((Hashable*)key);
         if (have != 0)
             return (String*)have;
@@ -23971,6 +24096,11 @@ class ClassInfo
         Object* frozen = _methodRetIr.get((Hashable*)methodSymbolName(cls, m));
         if (frozen != 0)
             _fn.setRet((String*)frozen);
+        if (isMultiReturn(m.op()) && frozen != 0)
+            {
+            _fnRetAgg = (String*)frozen;
+            _fnRetParts = splitReturns(m.op());
+            }
         _fnThrows = m.hasFlag((u32)NF_THROWS);
         _curClass = info;
         _curMethodName = m.name();
@@ -24207,6 +24337,7 @@ class ClassInfo
         clearStaticLocals();
         _fnReturn = ret;
         _fnRetAgg = (String*)0;
+        _fnRetParts = (Array*)0;
         _fn.setRet(irType(_fnReturn));
         _locals = new Map();
         // Per FUNCTION, not per module. `T@ p = new T[N]` records N against the
@@ -24340,6 +24471,7 @@ class ClassInfo
         if (isMultiReturn(d.op()))
             {
             _fnRetAgg = irReturnOf(d);
+            _fnRetParts = splitReturns(d.op());
             _fn.setRet(_fnRetAgg);
             }
         bindParams(d);

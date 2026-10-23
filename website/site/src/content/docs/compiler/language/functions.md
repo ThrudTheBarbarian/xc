@@ -58,6 +58,25 @@ u16 y;
 (x, y) = myFunc();
 ```
 
+A method may return several values too, instance or static, and is unpacked the
+same way, through a receiver or, inside the class, without one:
+
+```c
+class Range : Object {
+    i32 lo, hi;
+    i32, i32 bounds(void) { return lo, hi; }
+    i32 width(void) {
+        (i32 a, i32 b) = bounds();
+        return b - a;
+    }
+}
+
+(i32 a, i32 b) = r.bounds();
+```
+
+A function or method that returns several values may return a call to another
+that returns the same types: `return myFunc();` hands on all of its values.
+
 If the return type is `void`, the `return` statement has no arguments.
 
 A non-`void` function whose body can reach its closing brace — a path with no

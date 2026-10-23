@@ -2106,7 +2106,19 @@ class Parser
         // Where the member starts (its type): where a diagnostic about it is
         // reported, as the reference reports one.
         Token* memberTok = cur();
+        // A METHOD may return several values, as a free function may:
+        // `u8, u16 m(void)`. A comma straight after the type, before any name,
+        // can only be that (an ivar list puts its comma after the name:
+        // `u16 x, y;`). The reference reads members with the free-function
+        // path, which always took the list.
         String* ty = parseTypeSpelling();
+        while (check((u16)tokComma) && (isTypeKeywordToken(peek((u32)1).type())
+                                        || (peek((u32)1).type() == (u16)tokIdentifier
+                                            && isTypeName(peek((u32)1).value())))) {
+            advance();
+            ty.appendByte((u8)',');
+            ty.append(parseTypeSpelling());
+        }
         // A method may be NAMED `release` / `retain` / `delete`: the class's own
         // override of the reference-op it will be called through. The lexer
         // hands those back as keywords, so they are accepted here by hand.

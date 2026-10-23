@@ -113,6 +113,7 @@
 @property(nonatomic) XTDiagnosticEngine* diag;
 @property(nonatomic) BOOL aborted;       // per-function abort flag
 @property(nonatomic) BOOL nativeVarargs; // AAPCS va_list target (arm9)
+@property(nonatomic) BOOL tupleWanted;   // lowerTupleAssignStmt: this method call returns several values
 
 // Module-level state, populated during pre-scan.
 @property(nonatomic) NSMutableDictionary<NSString*, XTIRClassInfo*>* classesByName;
@@ -190,6 +191,7 @@
 // YES while lowering the body of a function declared `throws` — it has the
 // hidden `$err` out-parameter, so `throw` has somewhere to store.
 @property(nonatomic) BOOL currentFnThrows;
+@property(nonatomic) BOOL currentFnMultiReturn; // the function being lowered returns several values
 // Bitcast result valueId -> the value it was cast FROM. `return (Base@)local;`
 // returns the CAST, whose valueId differs from the local's, so the return-path
 // ARC exemption could not match it and released the local while the caller still
@@ -7874,6 +7876,10 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     // dispatch, none of which applies. private:docs/bugs/074.
     if (node.indirectRewrite)
         return [self lowerExpression:node.indirectRewrite];
+    // `(a, b) = obj.m()`: the call is typed with the method's aggregate. Taken
+    // at once, so a method call among the arguments is not one.
+    BOOL tupleWanted = self.tupleWanted;
+    self.tupleWanted = NO;
     // Resolve receiver and class info.
     XTASTNode* receiver = node.receiver;
     XTType* baseType = receiver.resolvedType;
@@ -8125,7 +8131,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
 
     XTIRType* resultIR = nil;
     XTType* callResultAST = node.erasedReturnType ?: node.resolvedType;
-    if (callResultAST && !callResultAST.isVoid)
+    if (callResultAST && !callResultAST.isVoid && !tupleWanted)
         {
         resultIR = [self irTypeForASTType:callResultAST at:node.location];
         if (!resultIR)
@@ -8166,6 +8172,16 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         return nil;
         }
     XTIRSymbolId sid = [self.module.symbols indexOfObjectIdenticalTo:sym];
+    if (tupleWanted)
+        {
+        if (!sym.function || sym.function.returnType.kind != XTIRTypeKindAgg)
+            {
+            [self softFailLoweringAt:node.location
+                         withMessage:@"lowering: tuple assign source does not return an aggregate"];
+            return nil;
+            }
+        resultIR = sym.function.returnType;
+        }
 
     // Virtual dispatch — sema stamps `resolvedVirtualSlot` for protocol
     // calls; for inheritance the slot is the one the receiver class gives
@@ -9407,6 +9423,10 @@ static const NSUInteger kVarargSlotBytes = 8;
 
 - (nullable XTIRValue*)lowerCallExpr:(XTCallExprNode*)node
     {
+    // Taken at once, as lowerMethodCallExpr: takes it: only an implicit-self
+    // call (below) can be the source of a tuple here.
+    BOOL tupleWanted = self.tupleWanted;
+    self.tupleWanted = NO;
     // A block-typed callee was rewritten by sema into `.invoke` dispatch.
     // private:docs/bugs/074.
     if (node.indirectRewrite)
@@ -9641,7 +9661,11 @@ static const NSUInteger kVarargSlotBytes = 8;
                     }
                 }
             XTIRType* mResult = nil;
-            if (node.resolvedType && !node.resolvedType.isVoid)
+            // `(a, b) = sibling()` or `return sibling();`: typed with the
+            // method's aggregate, as through an explicit receiver.
+            if (tupleWanted && msym.function && msym.function.returnType.kind == XTIRTypeKindAgg)
+                mResult = msym.function.returnType;
+            else if (node.resolvedType && !node.resolvedType.isVoid)
                 {
                 mResult = [self irTypeForASTType:node.resolvedType at:node.location];
                 if (!mResult)
@@ -10123,7 +10147,17 @@ static const NSUInteger kVarargSlotBytes = 8;
     // returns an aggregate (Agg) type. Lower the call manually so we
     // can capture the aggregate result, then AggExtract each field
     // into the corresponding target variable.
-    XTASTNode* src = node.sourceExpr;
+    XTIRValue* aggResult = [self lowerTupleSource:node.sourceExpr];
+    if (!aggResult)
+        return;
+    [self bindTupleTargetsOf:node from:aggResult aggType:aggResult.type];
+    }
+
+// A call that returns several values, lowered to the one aggregate it really
+// returns: the source of `(a, b) = f()`, or of `return f();` in a function
+// that returns several values itself. nil (and a soft fail) for anything else.
+- (nullable XTIRValue*)lowerTupleSource:(XTASTNode*)src
+    {
 
     // Resolve the callee's function symbol to get the aggregate return
     // type. The source must be a call expression.
@@ -10144,24 +10178,38 @@ static const NSUInteger kVarargSlotBytes = 8;
             {
             aggRetType = sym.function.returnType;
             }
+        // A sibling method through the implicit self.
+        if ((!aggRetType || aggRetType.kind != XTIRTypeKindAgg) && self.currentClassInfo && self.currentSelf)
+            {
+            self.tupleWanted = YES;
+            XTIRValue* sres = [self lowerCallExpr:call];
+            self.tupleWanted = NO;
+            if (!sres)
+                return nil;
+            if (sres.type.kind != XTIRTypeKindAgg)
+                {
+                [self softFailLoweringAt:src.location
+                             withMessage:@"lowering: tuple assign source does not return an aggregate"];
+                return nil;
+                }
+            return sres;
+            }
         }
     else if (src.nodeKind == XTASTNodeKindMethodCallExpr)
         {
-        XTMethodCallExprNode* mcall = (XTMethodCallExprNode*)src;
-        calleeName = mcall.resolvedMangledName ?: mcall.methodName;
-        callArgs = mcall.arguments;
-        // Method calls: resolve the method symbol through the class.
-        // (Multi-return method calls not yet supported on this path.)
-        [self softFailLoweringAt:src.location
-                     withMessage:@"lowering: multi-return method call not yet supported"];
-        return;
+        // `(a, b) = obj.m()`: the method call is lowered as any other, typed
+        // with the method's aggregate (lowerMethodCallExpr: reads the flag).
+        self.tupleWanted = YES;
+        XTIRValue* mres = [self lowerMethodCallExpr:(XTMethodCallExprNode*)src];
+        self.tupleWanted = NO;
+        return mres;
         }
 
     if (!aggRetType || aggRetType.kind != XTIRTypeKindAgg)
         {
         [self softFailLoweringAt:src.location
                      withMessage:@"lowering: tuple assign source does not return an aggregate"];
-        return;
+        return nil;
         }
 
     // Lower the call arguments first.
@@ -10172,14 +10220,14 @@ static const NSUInteger kVarargSlotBytes = 8;
         [self softFailLoweringAt:src.location
                      withMessage:[NSString stringWithFormat:
                                                @"lowering: call to unknown function '%@'", calleeName]];
-        return;
+        return nil;
         }
 
     for (XTASTNode* arg in callArgs)
         {
         XTIRValue* av = [self lowerExpression:arg];
         if (!av)
-            return;
+            return nil;
         [loweredArgs addObject:av];
         }
 
@@ -10189,9 +10237,12 @@ static const NSUInteger kVarargSlotBytes = 8;
                                  callConv:[XTIRCallConv standard]
                                 argValues:loweredArgs
                                resultType:aggRetType];
-    if (!aggResult)
-        return;
+    return aggResult;
+    }
 
+// Each target of `(a, b) = …` takes its field of the call's aggregate.
+- (void)bindTupleTargetsOf:(XTTupleAssignNode*)node from:(XTIRValue*)aggResult aggType:(XTIRType*)aggRetType
+    {
     // Extract each field and assign to the corresponding target.
     XTIRLayout* layout = aggRetType.layout;
     for (NSUInteger i = 0; i < node.targets.count && i < layout.fields.count; i++)
@@ -14599,6 +14650,15 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
             XTIRValue* v = [self lowerExpression:val];
             if (!v)
                 return;
+            // Each value takes its field's type: `return 1, 2` into `u8, u16`
+            // built a U8 into the U16 field (the port's coerceArg, the same rule).
+            NSUInteger fi = retVals.count;
+            if (fi < retTy.layout.fields.count && retTy.layout.fields[fi].type.kind != XTIRTypeKindAgg)
+                {
+                XTIRValue* cv = [self coerceScalarValue:v fromASTType:val.resolvedType toIRType:retTy.layout.fields[fi].type];
+                if (cv)
+                    v = cv;
+                }
             [retVals addObject:v];
             }
         // Same convention as the single-value path: every class pointer leaves
@@ -14688,6 +14748,11 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
             [self unshadowScopeAtIndex:(NSUInteger)si];
             }
         [self restoreBindingTables:bindings];
+        // …and the `self` a method retained on entry, as the single-value path
+        // releases it (releaseStrongLocalsAlongReturnExcept:). Before methods
+        // could return several values only functions came here, which have none.
+        if (self.currentRetainedSelf)
+            [self emitRelease:self.currentRetainedSelf];
         // Build the aggregate from the individual return values.
         XTIRValue* agg = [self allocateValueOfType:retTy atSite:self.currentBlock];
         NSMutableArray<XTIROperand*>* aggOps = [NSMutableArray array];
@@ -14711,7 +14776,39 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
     XTIRBlock* exprStart = self.currentBlock; // full-expression boundary (#123)
     XTIRValue* returnValue = nil;
     XTType* returnAstType = nil;
-    if (node.values.count == 1)
+    // `return f();` where f returns several values too: the call is lowered
+    // to its aggregate, and each value moves into this function's own (the
+    // values are already +1). Lowered as a single value, the call was typed
+    // with its first value and zero-extended into the aggregate.
+    if (node.values.count == 1 && self.currentFnMultiReturn
+        && (node.values[0].nodeKind == XTASTNodeKindCallExpr || node.values[0].nodeKind == XTASTNodeKindMethodCallExpr))
+        {
+        XTIRType* retTy = self.currentFunction.returnType;
+        XTIRValue* src = [self lowerTupleSource:node.values[0]];
+        if (!src)
+            return;
+        NSMutableArray<XTIROperand*>* aggOps = [NSMutableArray array];
+        XTIRLayout* srcLayout = src.type.layout;
+        for (NSUInteger i = 0; i < srcLayout.fields.count && i < retTy.layout.fields.count; i++)
+            {
+            XTIRValue* fv = [self allocateValueOfType:srcLayout.fields[i].type atSite:self.currentBlock];
+            [self.currentBlock appendInstruction:
+                                   [[XTIRInsn alloc] initWithOpcode:XTIROpAggExtract
+                                                             result:fv
+                                                           operands:@[ [XTIROperand useWithValueId:src.valueId],
+                                                                       [XTIROperand immIWithType:[XTIRType u16Type]
+                                                                                           value:(int64_t)i] ]
+                                                             dbgLoc:nil]];
+            [aggOps addObject:[XTIROperand useWithValueId:fv.valueId]];
+            }
+        returnValue = [self allocateValueOfType:retTy atSite:self.currentBlock];
+        [self.currentBlock appendInstruction:
+                               [[XTIRInsn alloc] initWithOpcode:XTIROpAggBuild
+                                                         result:returnValue
+                                                       operands:aggOps
+                                                         dbgLoc:nil]];
+        }
+    else if (node.values.count == 1)
         {
         returnValue = [self lowerExpression:node.values[0]];
         if (!returnValue)
@@ -18475,6 +18572,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         }
     self.currentParamASTTypes = paramAST;
     self.currentFnThrows = fnDecl.throwsError;
+    self.currentFnMultiReturn = fnDecl.returnTypes.count > 1;
     [self _lowerCallable:fn
               paramNames:paramNames
                     body:fnDecl.body
@@ -19609,6 +19707,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             self.staticSelfClassName = m.isStatic ? cls.className : nil;
             self.pendingRetainSelf = m.hasHeapReceiver && !m.hasNonHeapReceiver && !m.isStatic;
             self.currentFnThrows = m.throwsError;
+            self.currentFnMultiReturn = m.returnTypes.count > 1;
             [self _lowerCallable:fn
                       paramNames:paramNames
                             body:m.body
@@ -19642,6 +19741,7 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         self.staticSelfClassName = m.isStatic ? cls.className : nil;
         self.pendingRetainSelf = m.hasHeapReceiver && !m.hasNonHeapReceiver && !m.isStatic;
         self.currentFnThrows = m.throwsError;
+            self.currentFnMultiReturn = m.returnTypes.count > 1;
         [self _lowerCallable:fn
                   paramNames:paramNames
                         body:m.body
