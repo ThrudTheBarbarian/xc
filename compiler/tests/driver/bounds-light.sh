@@ -73,5 +73,37 @@ for XC in ${XC:-bin/$PLAT/xcc-xc bin/$PLAT/xcc}; do
     got=$("$W/m" 2>&1 | head -3)
     [ "$got" = "ok 100" ] || { echo "FAIL $XC: Map growth under checks gives '$got'"; fail=1; }
 done
+# A par block in a checked build: Checked.xc's checks are the program's own
+# functions, and the par analysis once followed them down to write() and
+# refused the block ("must be able to run on a GPU"). It runs, as under
+# -fbounds-check, on the CPU if it must. x86-64's -fbounds-check takes the
+# same Checked.xc.
+cat > "$W/p.xc" <<'XC'
+#import "Stdio.xc"
+#import "Par.xc"
+u32 v[1000];
+i32 main(i32 argc, u8** argv)
+    {
+    par fill
+        {
+        for (u32 i in 0..1000)
+            v[i] = i * (u32)2;
+        }
+    u32 s = (u32)0;
+    for (u32 i in 0..1000)
+        s = s + v[i];
+    Stdio.printf("sum %u\n", s);
+    return 0;
+    }
+XC
+for XC in ${XC:-bin/$PLAT/xcc-xc bin/$PLAT/xcc}; do
+    [ -x "$XC" ] || continue
+    "$XC" -q -O2 -fbounds-check=light -H . -o "$W/p" "$W/p.xc" > "$W/o" 2>&1 \
+        || { echo "FAIL $XC: a par block does not build under -fbounds-check=light"; head -3 "$W/o"; fail=1; continue; }
+    got=$("$W/p" 2>&1)
+    [ "$got" = "sum 999000" ] || { echo "FAIL $XC: the par block gives '$got'"; fail=1; }
+    "$XC" -q -O2 -A x86_64 -fbounds-check -H . -o "$W/px" "$W/p.xc" > "$W/o" 2>&1 \
+        || { echo "FAIL $XC: a par block does not build under -A x86_64 -fbounds-check"; head -3 "$W/o"; fail=1; }
+done
 [ $fail = 0 ] && echo "bounds-light: ok"
 exit $fail

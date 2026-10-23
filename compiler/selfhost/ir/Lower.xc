@@ -23330,7 +23330,7 @@ class ClassInfo
     // -fbounds-check build, block copies, and the maths every GPU has natively.
     bool parAllowedExternal(String* n)
         {
-        String* ok = String.withCString(" _xtc_sinit_run _xt_check_bounds _xt_check_bounds_n memcpy memmove memset sqrt sqrtf sin sinf cos cosf exp expf log logf pow powf floor floorf fma fmaf fabs fabsf abs _xm_sqrt _xm_sqrtf _xm_sin _xm_sinf _xm_cos _xm_cosf _xm_exp _xm_expf _xm_ln _xm_lnf _xm_pow _xm_powf ");
+        String* ok = String.withCString(" _xtc_sinit_run _xt_check_bounds _xt_check_bounds_n _xt_check_object memcpy memmove memset sqrt sqrtf sin sinf cos cosf exp expf log logf pow powf floor floorf fma fmaf fabs fabsf abs _xm_sqrt _xm_sqrtf _xm_sin _xm_sinf _xm_cos _xm_cosf _xm_exp _xm_expf _xm_ln _xm_lnf _xm_pow _xm_powf ");
         String* key = String.withCString(" ");
         key.append(n);
         key.appendCString(" ");
@@ -23428,6 +23428,11 @@ class ClassInfo
                         if (_parSyms.get((Hashable*)gn) != (Object*)0)
                             continue;
                         }
+                    // A subscript check is allowed by name: outside the program
+                    // in a -fbounds-check build, Checked.xc's own body (which
+                    // writes to stderr) under -fbounds-check=light.
+                    if (name.hasPrefix(String.withCString("_xt_check_")) && parAllowedExternal(name))
+                        continue;
                     IRFunc* callee = (IRFunc*)_parFns.get((Hashable*)name);
                     if (callee == (IRFunc*)0)
                         {

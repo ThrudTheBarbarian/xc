@@ -40,7 +40,7 @@ static NSSet<NSString*>* allowedExternals(void)
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         s = [NSSet setWithArray:@[
-            @"_xtc_sinit_run", @"_xt_check_bounds", @"_xt_check_bounds_n",
+            @"_xtc_sinit_run", @"_xt_check_bounds", @"_xt_check_bounds_n", @"_xt_check_object",
             @"memcpy", @"memmove", @"memset",
             @"sqrt", @"sqrtf", @"sin", @"sinf", @"cos", @"cosf", @"exp", @"expf",
             @"log", @"logf", @"pow", @"powf", @"floor", @"floorf", @"fma", @"fmaf",
@@ -1616,6 +1616,11 @@ static BOOL parIsComputeOp(XTIROpcode op)
                     if ([name hasSuffix:@"$init"] &&
                         [self.module symbolForName:[@"__sinit_" stringByAppendingString:
                                                        [name substringToIndex:name.length - 5]]])
+                        break;
+                    // A subscript check is allowed by name: outside the program in
+                    // a -fbounds-check build, Checked.xc's own body (which writes
+                    // to stderr) under -fbounds-check=light.
+                    if ([name hasPrefix:@"_xt_check_"] && [allowedExternals() containsObject:name])
                         break;
                     XTIRFunction* callee = self.fnByName[name];
                     if (!callee)
