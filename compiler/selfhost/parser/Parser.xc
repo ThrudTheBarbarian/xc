@@ -2319,8 +2319,14 @@ class Parser
         String* result = String.withCString("");
         String* part = String.withCString("");
         u32 n = ty.byteLength();
+        i32 depth = (i32)0;   // a comma inside <>, () or [] is part of one type
         for (u32 i = (u32)0; i <= n; i = i + (u32)1) {
-            if (i == n || ty.byteAt(i) == (u8)',') {
+            if (i < n) {
+                u8 b = ty.byteAt(i);
+                if (b == (u8)'<' || b == (u8)'(' || b == (u8)'[') depth = depth + (i32)1;
+                else if ((b == (u8)'>' || b == (u8)')' || b == (u8)']') && depth > (i32)0) depth = depth - (i32)1;
+            }
+            if (i == n || (ty.byteAt(i) == (u8)',' && depth == (i32)0)) {
                 if (part.hasPrefix(weakPfx))
                     part = part.substringBytes((u32)5, part.byteLength() - (u32)5);
                 if (result.byteLength() > (u32)0) result.appendByte((u8)',');

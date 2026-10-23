@@ -6054,14 +6054,31 @@ class ClassInfo
 
     // A declaration's return spelling is everything before the first comma —
     // a multiple-return function's first result is what a call yields here.
+    // Only a comma outside brackets separates two: `Map<String, Map>*` is one
+    // type (it was split into `Map<String` and ` Map>*`, "unsupported: type").
     String* firstReturn(String* t)
         {
         if (t == 0)
             return String.withCString("void");
-        for (u32 i = (u32)0; i < t.byteLength(); i = i + (u32)1)
-            if (t.byteAt(i) == (u8)',')
-                return t.substringBytes((u32)0, i);
-        return t;
+        u32 c = Lower.topLevelComma(t, (u32)0);
+        return c == String.notFound() ? t : t.substringBytes((u32)0, c);
+        }
+
+    // The first comma at or after `from` outside <>, () and [], or notFound.
+    static u32 topLevelComma(String* t, u32 from)
+        {
+        i32 depth = (i32)0;
+        for (u32 i = from; i < t.byteLength(); i = i + (u32)1)
+            {
+            u8 b = t.byteAt(i);
+            if (b == (u8)'<' || b == (u8)'(' || b == (u8)'[')
+                depth = depth + (i32)1;
+            else if ((b == (u8)'>' || b == (u8)')' || b == (u8)']') && depth > (i32)0)
+                depth = depth - (i32)1;
+            else if (b == (u8)',' && depth == (i32)0)
+                return i;
+            }
+        return String.notFound();
         }
 
     // ── constant folding for initialisers ────────────────────────────────
@@ -11351,7 +11368,9 @@ class ClassInfo
         // `(a, b) = obj.m()`: the call returns the method's aggregate.
         if (tupleWanted && decl != 0 && isMultiReturn(decl.op()))
             {
-            _tupleIrRet = irReturnOf(decl);
+            // Keyed by the method's SYMBOL, as it was registered: by its bare
+            // name it made a second, identical layout.
+            _tupleIrRet = irReturnOfKey(decl, methodSymbolFor(ci, n));
             _tupleParts = splitReturns(decl.op());
             }
         IRValue* res = (IRValue*)0;
@@ -13152,18 +13171,25 @@ class ClassInfo
             // to one is an import from that library's package.
             if (cls.hasFlag((u32)NF_EXTERNAL) && cls.pkg() != (String*)0 && cls.pkg().byteLength() > (u32)0)
                 msym.setAttr(String.withFormat("pkg_%s", cls.pkg().cString()), true);
-            msym.setPlacement(m.hasFlag((u32)NF_BANKED), m.hasFlag((u32)NF_CLOAKED));
-            if (m.hasFlag((u32)NF_THROWS))
+            // …and one returning several values is registered as the
+            // reference registers it: a plain function symbol, banked and
+            // cloaked only (preScanClassRest:'s multi-return branch).
+            bool plain = isMultiReturn(m.op());
+            if (plain)
+                msym.setPlain();
+            if (!plain)
+                msym.setPlacement(m.hasFlag((u32)NF_BANKED), m.hasFlag((u32)NF_CLOAKED));
+            if (!plain && m.hasFlag((u32)NF_THROWS))
                 msym.setThrows();
             // Methods are a SEPARATE symbol path from free functions, in both
             // compilers — `String.withFormat` is a static method, so setting
             // this only on the function path left every method forwarder
             // without it (private:docs/bugs/047).
-            if (m.hasFlag((u32)NF_VAFWD))
+            if (!plain && m.hasFlag((u32)NF_VAFWD))
                 msym.setAttr(String.withCString("vaforward"), true);
             // `:main` keeps the method out of the xt6502 code banks. Only when
             // set.
-            if (m.hasFlag((u32)NF_MAINRAM))
+            if (!plain && m.hasFlag((u32)NF_MAINRAM))
                 msym.setAttr(String.withCString("main"), true);
             _m.addSym(msym);
             // The return type is FROZEN here, at the moment the symbol is
@@ -24044,10 +24070,7 @@ class ClassInfo
         {
         if (t == 0)
             return false;
-        for (u32 i = (u32)0; i < t.byteLength(); i = i + (u32)1)
-            if (t.byteAt(i) == (u8)',')
-                return true;
-        return false;
+        return Lower.topLevelComma(t, (u32)0) != String.notFound();
         }
 
     Array* splitReturns(String* t)
@@ -24056,7 +24079,7 @@ class ClassInfo
         u32 start = (u32)0;
         for (u32 i = (u32)0; i <= t.byteLength(); i = i + (u32)1)
             {
-            if (i < t.byteLength() && t.byteAt(i) != (u8)',')
+            if (i < t.byteLength() && Lower.topLevelComma(t, start) != i)
                 continue;
             // LENGTH, not the end index. substringBytes(from, len) takes a
             // length; this passed the comma's index, so every part after the

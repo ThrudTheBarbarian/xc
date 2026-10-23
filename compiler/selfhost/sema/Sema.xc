@@ -4065,7 +4065,9 @@ class Sema
                 if (!checkArity(m, n, (u32)0, n.name()))
                     return;
                 checkMisfitArgs(m, n, (u32)0, n.name());
-                n.setTy(m.op());
+                // A call yields its FIRST value, as an explicit receiver's
+                // does (below) and as the reference types it.
+                n.setTy(firstReturn(m.op()));
                 n.setSym(m.sym());
                 noteCallEdge(clsLabel(mOwner.name(), m.sym() != 0 ? m.sym() : m.name()));
                 // An implicit-self call DOES reach the method through the
@@ -4216,7 +4218,7 @@ class Sema
             // a misfit is no candidate at all (bug 271).
             if (!arityFits(m, callArgc(n, (u32)0)) || scoreCandidate(m, n, (u32)0) == Overload.noMatch())
                 continue;
-            n.setTy(m.op());
+            n.setTy(firstReturn(m.op()));
             n.setSym(m.sym());
             noteCallEdge(clsLabel(cls.name(), m.sym() != 0 ? m.sym() : m.name()));
             // The static and the demoted C proto can share a symbol name
@@ -6076,13 +6078,23 @@ class Sema
     // type — `(A@, B@) f()` used as a value is an A@. The tuple as a whole
     // only exists at the unpacking site, which is a statement, not an
     // expression.
+    // Only a comma outside <>, () and [] separates two: `Map<String, Map>*`
+    // is one type.
     String* firstReturn(String* spelling)
         {
         if (spelling == 0)
             return spelling;
+        i32 depth = (i32)0;
         for (u32 i = (u32)0; i < spelling.byteLength(); i = i + (u32)1)
-            if (spelling.byteAt(i) == (u8)',')
+            {
+            u8 b = spelling.byteAt(i);
+            if (b == (u8)'<' || b == (u8)'(' || b == (u8)'[')
+                depth = depth + (i32)1;
+            else if ((b == (u8)'>' || b == (u8)')' || b == (u8)']') && depth > (i32)0)
+                depth = depth - (i32)1;
+            else if (b == (u8)',' && depth == (i32)0)
                 return spelling.substringBytes((u32)0, i);
+            }
         return spelling;
         }
 
