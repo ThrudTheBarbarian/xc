@@ -16082,6 +16082,41 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         }
     }
 
+// The statement bodies the pre-scans also walk: a try's block and each catch
+// block, each switch case's statements, a defer's body (the port's
+// preScanNested). Without them a local declared inside one was never pinned:
+// `&v` in a try was refused, and an array there had no slot.
+- (NSArray<XTASTNode*>*)preScanNestedBodiesOf:(XTASTNode*)node
+    {
+    NSMutableArray<XTASTNode*>* out = [NSMutableArray array];
+    if (node.nodeKind == XTASTNodeKindTry)
+        {
+        XTTryNode* t = (XTTryNode*)node;
+        if (t.tryBlock) [out addObject:t.tryBlock];
+        for (XTCatchClause* c in t.catchClauses)
+            if (c.block) [out addObject:c.block];
+        }
+    else if (node.nodeKind == XTASTNodeKindSwitch)
+        {
+        for (XTSwitchCase* c in ((XTSwitchNode*)node).cases)
+            [out addObjectsFromArray:c.body];
+        }
+    else if (node.nodeKind == XTASTNodeKindDefer)
+        {
+        XTDeferNode* d = (XTDeferNode*)node;
+        if (d.body) [out addObject:d.body];
+        }
+    else if (node.nodeKind == XTASTNodeKindForIn)
+        {
+        // A for-in over a collection (a range for-in is a C-style loop by
+        // now): a struct local in its body was "unsupported: aggregate lvalue".
+        XTForInNode* f = (XTForInNode*)node;
+        if (f.loopVar) [out addObject:f.loopVar];
+        if (f.body) [out addObject:f.body];
+        }
+    return out;
+    }
+
 - (void)collectAddressTakenIn:(XTASTNode*)node
                          into:(NSMutableSet<NSString*>*)out
     {
@@ -16288,6 +16323,9 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         break;
         }
     default:
+        // a try (and its catches), a switch (its cases), a defer
+        for (XTASTNode* s in [self preScanNestedBodiesOf:node])
+            [self collectAddressTakenIn:s into:out];
         break;
         }
     }
@@ -16881,6 +16919,9 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         break;
         }
     default:
+        // a try (and its catches), a switch (its cases), a defer
+        for (XTASTNode* s in [self preScanNestedBodiesOf:node])
+            [self collectVarDeclTypesIn:s forNames:names into:out];
         break;
         }
     }
@@ -16942,6 +16983,9 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         break;
         }
     default:
+        // a try (and its catches), a switch (its cases), a defer
+        for (XTASTNode* s in [self preScanNestedBodiesOf:node])
+            [self collectVarDeclTypeListsIn:s forNames:names into:out];
         break;
         }
     }
@@ -17014,6 +17058,9 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         break;
         }
     default:
+        // a try (and its catches), a switch (its cases), a defer
+        for (XTASTNode* s in [self preScanNestedBodiesOf:node])
+            [self collectStructLocalDeclsIn:s into:out];
         break;
         }
     }
@@ -17128,6 +17175,9 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         break;
         }
     default:
+        // a try (and its catches), a switch (its cases), a defer
+        for (XTASTNode* s in [self preScanNestedBodiesOf:node])
+            [self collectClassValueLocalDeclsIn:s into:out];
         break;
         }
     }
@@ -17186,6 +17236,9 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         break;
         }
     default:
+        // a try (and its catches), a switch (its cases), a defer
+        for (XTASTNode* s in [self preScanNestedBodiesOf:node])
+            [self collectScalarByteListInitLocalsIn:s into:out];
         break;
         }
     }

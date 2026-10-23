@@ -14251,6 +14251,17 @@ class ClassInfo
     // including that it does not descend into a TERNARY. A rule the two
     // implementations have to agree on is a rule about which names get slots,
     // and "the original misses this one" is part of the rule.
+    // The statements whose bodies the pre-scans also walk: a try and its
+    // catches, a switch and its cases, a defer, a for-in over a collection
+    // (a struct local in its body was "unsupported: aggregate lvalue"). Without them a local declared
+    // inside one was never pinned: `&v` in a try was refused, and an array
+    // there was compiled as no slot at all (a crash at its first use).
+    static bool preScanNested(u16 k)
+        {
+        return k == (u16)nkTry || k == (u16)nkCatch || k == (u16)nkSwitch || k == (u16)nkCase || k == (u16)nkDefer
+            || k == (u16)nkForIn;
+        }
+
     void collectAddressTaken(Node* n, Array* out)
         {
         if (n == 0)
@@ -14303,7 +14314,7 @@ class ClassInfo
             {
             addUnique(_vaCursors, n.kid((u32)0).name());
             }
-        if (k == (u16)nkBlock || k == (u16)nkIf || k == (u16)nkWhile || k == (u16)nkForCStyle || k == (u16)nkReturn || k == (u16)nkExprStatement || k == (u16)nkVariableDecl || k == (u16)nkUnary || k == (u16)nkPostfix || k == (u16)nkBinary || k == (u16)nkAssign || k == (u16)nkCall || k == (u16)nkMethodCall || k == (u16)nkSubscript || k == (u16)nkMember || k == (u16)nkCast || k == (u16)nkTernary || k == (u16)nkMarkerInit || k == (u16)nkMarkerCond || k == (u16)nkMarkerStep)
+        if (preScanNested(k) || k == (u16)nkBlock || k == (u16)nkIf || k == (u16)nkWhile || k == (u16)nkForCStyle || k == (u16)nkReturn || k == (u16)nkExprStatement || k == (u16)nkVariableDecl || k == (u16)nkUnary || k == (u16)nkPostfix || k == (u16)nkBinary || k == (u16)nkAssign || k == (u16)nkCall || k == (u16)nkMethodCall || k == (u16)nkSubscript || k == (u16)nkMember || k == (u16)nkCast || k == (u16)nkTernary || k == (u16)nkMarkerInit || k == (u16)nkMarkerCond || k == (u16)nkMarkerStep)
             {
             for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
                 collectAddressTaken(n.kid(i), out);
@@ -14400,7 +14411,12 @@ class ClassInfo
                 }
             return;
             }
-        if (k == (u16)nkBlock || k == (u16)nkIf || k == (u16)nkWhile || k == (u16)nkForCStyle || k == (u16)nkMarkerInit)
+        // …and the bodies nested in a try (its catches), a switch (its
+        // cases) and a defer: a local declared there needs its slot as much
+        // as one in a loop does (& of one inside a try was refused, and an
+        // array there was not given a slot at all).
+        if (k == (u16)nkBlock || k == (u16)nkIf || k == (u16)nkWhile || k == (u16)nkForCStyle || k == (u16)nkMarkerInit
+            || preScanNested(k))
             {
             for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
                 collectAggregateLocals(n.kid(i), names, types);
@@ -14442,7 +14458,8 @@ class ClassInfo
                 }
             return;
             }
-        if (k == (u16)nkBlock || k == (u16)nkIf || k == (u16)nkWhile || k == (u16)nkForCStyle || k == (u16)nkMarkerInit)
+        if (k == (u16)nkBlock || k == (u16)nkIf || k == (u16)nkWhile || k == (u16)nkForCStyle || k == (u16)nkMarkerInit
+            || preScanNested(k))
             {
             for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
                 collectVarDeclTypes(n.kid(i), names, out);

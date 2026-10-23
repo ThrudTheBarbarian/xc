@@ -1,0 +1,7 @@
+try 7 7 2
+catch 7 7
+switch 7 7
+body
+defer 7 7
+forin 7
+level 7.0
