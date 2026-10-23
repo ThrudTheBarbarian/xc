@@ -117,4 +117,14 @@ if [ "$PLAT" = osx ] && command -v otool > /dev/null; then
     n=$(otool -tv "$W/s" | awk '/^_mand:/{f=1;next} f&&/^_[A-Za-z_][A-Za-z0-9_$]*:$/{exit} f' | grep -cE 'fcmgt|fcmge')
     [ "$n" -ge 1 ] || { echo "FAIL vec-escape: mand's escape loop is not vectorised"; fail=1; }
 fi
+# The AVX copies reduce the lane mask every iteration, and must do it in VEX
+# form: a legacy-SSE phaddd there merges with the live upper halves, and on a
+# Zen 3 the AVX2 mandelbrot ran 10x slower than its SSE build.
+for A in "-mavx2" "-mavx512"; do
+    "$XC" -q -O2 -A x86_64 $A -H . -S -o "$W/x.s" "$(ls tests/fixtures/vec_escape.xc)" > "$W/b" 2>&1 \
+        || { echo "FAIL vec-escape: -A x86_64 $A -S does not build"; head -3 "$W/b"; fail=1; continue; }
+    grep -qE 'ymm|zmm' "$W/x.s" || { echo "FAIL vec-escape: $A made no AVX code"; fail=1; continue; }
+    grep -qE '^[[:space:]]+(phaddd|pshufd)[[:space:]]' "$W/x.s" \
+        && { echo "FAIL vec-escape: $A reduces with legacy SSE in AVX code"; grep -nE '^[[:space:]]+(phaddd|pshufd)[[:space:]]' "$W/x.s" | head -2; fail=1; }
+done
 [ $fail = 0 ] && echo "--- vec-escape: pass ---" || { echo "--- vec-escape: FAIL ---"; exit 1; }

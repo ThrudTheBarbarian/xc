@@ -2256,6 +2256,11 @@ class X86_64
             storeF(D, n.res());
             return;
             }
+        // From a ymm or zmm the function is AVX code with the upper halves
+        // live, and a legacy-SSE phaddd there merges with them: on a Zen 3 the
+        // AVX2 escape loop, which reduces its lane mask every iteration, ran
+        // 10x slower than its SSE build. So the VEX fold, shuffles and adds.
+        bool vex = isZmm(v) || isYmm(v);
         if (isZmm(v))
             {
             // Fold the high 256 bits onto the low, then the 256-bit fold below.
@@ -2272,8 +2277,14 @@ class X86_64
                               v.cString(), x.cString(), x.cString());
             v = x;
             }
-        _out.appendFormat("\tphaddd\t%s, %s\n\tphaddd\t%s, %s\n",
-                          v.cString(), v.cString(), v.cString(), v.cString());
+        if (vex)
+            {
+            _out.appendFormat("\tvpshufd\txmm0, %s, 0x4E\n\tvpaddd\t%s, %s, xmm0\n", v.cString(), v.cString(), v.cString());
+            _out.appendFormat("\tvpshufd\txmm0, %s, 0xB1\n\tvpaddd\t%s, %s, xmm0\n", v.cString(), v.cString(), v.cString());
+            }
+        else
+            _out.appendFormat("\tphaddd\t%s, %s\n\tphaddd\t%s, %s\n",
+                              v.cString(), v.cString(), v.cString(), v.cString());
         _out.appendFormat("\tmovd\teax, %s\n", v.cString());
         store((u8)'a', n.res());
         }
@@ -2293,6 +2304,8 @@ class X86_64
         String* mn = n.op().equals(String.withCString("VReduceMax"))
                          ? String.withCString(sgn ? "pmaxsd" : "pmaxud")
                          : String.withCString(sgn ? "pminsd" : "pminud");
+        // VEX throughout from a ymm or zmm, as the sum's fold above.
+        bool vex = isZmm(v) || isYmm(v);
         if (isZmm(v))
             {
             String* y = lowYmm(v);
@@ -2307,10 +2320,20 @@ class X86_64
                               v.cString(), mn.cString(), x.cString(), x.cString());
             v = x;
             }
-        _out.appendFormat("\tpshufd\txmm0, %s, 0x4E\n\t%s\t%s, xmm0\n",
-                          v.cString(), mn.cString(), v.cString());
-        _out.appendFormat("\tpshufd\txmm0, %s, 0xB1\n\t%s\t%s, xmm0\n",
-                          v.cString(), mn.cString(), v.cString());
+        if (vex)
+            {
+            _out.appendFormat("\tvpshufd\txmm0, %s, 0x4E\n\tv%s\t%s, %s, xmm0\n",
+                              v.cString(), mn.cString(), v.cString(), v.cString());
+            _out.appendFormat("\tvpshufd\txmm0, %s, 0xB1\n\tv%s\t%s, %s, xmm0\n",
+                              v.cString(), mn.cString(), v.cString(), v.cString());
+            }
+        else
+            {
+            _out.appendFormat("\tpshufd\txmm0, %s, 0x4E\n\t%s\t%s, xmm0\n",
+                              v.cString(), mn.cString(), v.cString());
+            _out.appendFormat("\tpshufd\txmm0, %s, 0xB1\n\t%s\t%s, xmm0\n",
+                              v.cString(), mn.cString(), v.cString());
+            }
         _out.appendFormat("\tmovd\teax, %s\n", v.cString());
         store((u8)'a', n.res());
         }

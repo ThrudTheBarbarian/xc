@@ -5701,6 +5701,9 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             [self storeF:Dq into:res slot:slot out:out];
             return;
             }
+        // From a ymm or zmm: VEX throughout (a legacy phaddd merges with the
+        // live upper halves; the port explains).
+        BOOL vex = [v hasPrefix:@"zmm"] || [v hasPrefix:@"ymm"];
         if ([v hasPrefix:@"zmm"])
             {
             // Fold the high 256 bits onto the low, then the 256-bit fold below.
@@ -5715,7 +5718,13 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             [out appendFormat:@"\tvextracti128\txmm0, %@, 1\n\tvpaddd\t%@, %@, xmm0\n", v, x, x];
             v = x;
             }
-        [out appendFormat:@"\tphaddd\t%@, %@\n\tphaddd\t%@, %@\n", v, v, v, v];
+        if (vex)
+            {
+            [out appendFormat:@"\tvpshufd\txmm0, %@, 0x4E\n\tvpaddd\t%@, %@, xmm0\n", v, v, v];
+            [out appendFormat:@"\tvpshufd\txmm0, %@, 0xB1\n\tvpaddd\t%@, %@, xmm0\n", v, v, v];
+            }
+        else
+            [out appendFormat:@"\tphaddd\t%@, %@\n\tphaddd\t%@, %@\n", v, v, v, v];
         [out appendFormat:@"\tmovd\teax, %@\n", v];
         [self store:'a' into:res slot:slot out:out];
         return;
@@ -5729,6 +5738,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         NSString* v = sVec[@(ops[0].valueId)];
         BOOL sgn = XTIRTypeKindIsSigned(res.type.kind);
         NSString* mn = (op == XTIROpVReduceMax) ? (sgn ? @"pmaxsd" : @"pmaxud") : (sgn ? @"pminsd" : @"pminud");
+        BOOL vex = [v hasPrefix:@"zmm"] || [v hasPrefix:@"ymm"];
         if ([v hasPrefix:@"zmm"])
             {
             NSString* y = [@"y" stringByAppendingString:[v substringFromIndex:1]];
@@ -5742,8 +5752,16 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             v = x;
             }
         // fold [3210]→pairwise via two shuffles (xmm0 is a free scratch here).
-        [out appendFormat:@"\tpshufd\txmm0, %@, 0x4E\n\t%@\t%@, xmm0\n", v, mn, v];
-        [out appendFormat:@"\tpshufd\txmm0, %@, 0xB1\n\t%@\t%@, xmm0\n", v, mn, v];
+        if (vex)
+            {
+            [out appendFormat:@"\tvpshufd\txmm0, %@, 0x4E\n\tv%@\t%@, %@, xmm0\n", v, mn, v, v];
+            [out appendFormat:@"\tvpshufd\txmm0, %@, 0xB1\n\tv%@\t%@, %@, xmm0\n", v, mn, v, v];
+            }
+        else
+            {
+            [out appendFormat:@"\tpshufd\txmm0, %@, 0x4E\n\t%@\t%@, xmm0\n", v, mn, v];
+            [out appendFormat:@"\tpshufd\txmm0, %@, 0xB1\n\t%@\t%@, xmm0\n", v, mn, v];
+            }
         [out appendFormat:@"\tmovd\teax, %@\n", v];
         [self store:'a' into:res slot:slot out:out];
         return;
