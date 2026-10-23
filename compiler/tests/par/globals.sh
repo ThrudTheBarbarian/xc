@@ -35,6 +35,9 @@ i32 main(i32 argc, u8** argv)
             }
         }
     u64 a = (u64)(pointer)&xs[0] | (u64)(pointer)&ys[0];
+    // The last elements of both arrays: what a write just before one of
+    // them (into the other's end) would change.
+    Stdio.printf("%.1f %.1f %.1f %.1f ", (double)(xs[N - 5]), (double)(xs[N - 4]), (double)(ys[N - 5]), (double)(ys[N - 4]));
     Stdio.printf("%.1f %u %s\n", (double)(ys[N - 1]), small[3], (a & (u64)4095) == (u64)0 ? "paged" : "not paged");
     return 0;
     }
@@ -43,11 +46,28 @@ XC
 if [ -x "$W/g" ]; then
     for d in cpu gpu; do
         got=$(XC_PAR=$d "$W/g" 2>/dev/null)
-        [ "$got" = "910.0 0 paged" ] || { echo "FAIL globals: xc ($d) gives '$got', wanted '910.0 0 paged'"; fail=1; }
+        [ "$got" = "149.5 150.0 898.0 901.0 910.0 0 paged" ] || { echo "FAIL globals: xc ($d) gives '$got', wanted '149.5 150.0 898.0 901.0 910.0 0 paged'"; fail=1; }
     done
     if [ "$(uname -s)" = Darwin ]; then
         XC_PAR=gpu XC_PAR_REPORT=1 "$W/g" 2>&1 | grep -q 'bytes shared in place' \
             || { echo "FAIL globals: Metal copied the xc program's global arrays"; fail=1; }
+    fi
+fi
+# On a CUDA card (the Windows GPU host, when build.env names one): pinning a
+# global array for a copy once took it for a heap block, read its length from
+# the 40 bytes before it and wrote the unpin hook there, into the end of the
+# previous global (xs, which ys[N-1] is computed from). One card and the tiled
+# path over both gave wrong sums.
+WH=${XTC_WIN_GPU_HOST:-$(sed -n 's/^XTC_WIN_GPU_HOST=//p' build.env 2>/dev/null)}
+if [ -n "$WH" ] && "$XC" -q -O2 -A win64 -H . -o "$W/gw.exe" "$W/g.xc" > "$W/gw.b" 2>&1; then
+    SSHO="-o BatchMode=yes -o LogLevel=ERROR"
+    D="xcc-globals.$$"
+    if ssh $SSHO "$WH" "New-Item -ItemType Directory $D | Out-Null" && scp -q $SSHO "$W/gw.exe" "$WH:$D/"; then
+        for d in cpu gpu gpus; do
+            got=$(ssh $SSHO "$WH" "cd $D; \$env:XC_PAR='$d'; .\\gw.exe" 2>/dev/null | tr -d '\r')
+            [ "$got" = "149.5 150.0 898.0 901.0 910.0 0 paged" ] || { echo "FAIL globals: win64 ($d) gives '$got', wanted '149.5 150.0 898.0 901.0 910.0 0 paged'"; fail=1; }
+        done
+        ssh $SSHO "$WH" "Remove-Item -Recurse -Force $D -ErrorAction SilentlyContinue" || true
     fi
 fi
 if clang --version >/dev/null 2>&1; then

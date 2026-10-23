@@ -523,7 +523,12 @@ class ParCuda
         // A page-aligned heap block is registered whole, from its start, and
         // unpinned by the hook when it is freed (parCudaUnpin); a range in
         // anything else (a global) is held by this cache alone.
+        // A global array with pages of its own is in the same registry but
+        // has no header: the 40 bytes before it are the previous global's, so
+        // only a block whose header carries the aligned heap magic is one.
         pointer base = ParDevice.simdBase(host);
+        if (base != (pointer)0 && *(u32*)(pointer)((u8*)base - (u64)40) != (u32)$58544F43)
+            base = (pointer)0;
         if (base != (pointer)0)
             {
             host = base;
