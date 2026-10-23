@@ -1,0 +1,36 @@
+# Records contributor licence agreement signatures. A contributor signs by
+# commenting the sentence below on their pull request; the signatures are
+# kept on the cla-signatures branch. This workflow builds and tests nothing.
+name: CLA
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the contributor licence agreement
+        if: >-
+          github.event_name == 'pull_request_target' ||
+          github.event.comment.body == 'recheck' ||
+          github.event.comment.body == 'I have read the Contributor Licence Agreement and I sign it'
+        # v2.6.1, pinned by commit
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          branch: cla-signatures
+          path-to-signatures: signatures/version1/cla.json
+          path-to-document: https://github.com/ThrudTheBarbarian/xc/blob/main/CLA.md
+          custom-pr-sign-comment: I have read the Contributor Licence Agreement and I sign it
+          allowlist: ThrudTheBarbarian

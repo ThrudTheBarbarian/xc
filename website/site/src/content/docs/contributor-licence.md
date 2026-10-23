@@ -100,5 +100,6 @@ This agreement is governed by the law of England and Wales.
 
 ---
 
-Signed electronically through CLA Assistant, which records your GitHub
-account, the date, and the version of this agreement.
+You sign by commenting "I have read the Contributor Licence Agreement and I
+sign it" on your pull request. The project records your GitHub account, the
+date, the pull request and the version of this agreement in the repository.

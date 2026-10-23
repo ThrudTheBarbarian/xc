@@ -17,8 +17,10 @@ happens after you open a pull request.
 ## The contributor licence agreement
 
 Before your first pull request can be merged, you sign the
-[contributor licence agreement](CLA.md) once. The CLA Assistant bot asks you
-on that pull request, and signing takes a minute.
+[contributor licence agreement](CLA.md) once. A bot asks you on that pull
+request, and you sign by replying with one comment:
+
+> I have read the Contributor Licence Agreement and I sign it
 
 You keep the copyright in what you write. The agreement gives Cognostem Ltd,
 which runs the project, a licence to use your contribution, including the
