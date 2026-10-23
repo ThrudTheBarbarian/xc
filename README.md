@@ -65,6 +65,14 @@ root. Copy `build.env.template` to `build.env` and fill in the values you need.
 `build.env` is ignored by git. A variable left empty turns off the step that
 needs it.
 
+## Contributing
+
+Pull requests are welcome. [CONTRIBUTING.md](CONTRIBUTING.md) says how a change
+gets into `main`: the [contributor licence agreement](CLA.md) you sign once,
+where changes go, and how to build and test with an installed release. Everyone
+taking part agrees to the [code of conduct](CODE_OF_CONDUCT.md). Security
+problems are reported privately, as [SECURITY.md](SECURITY.md) describes.
+
 ## Licensing
 
 See [LICENSING.md](LICENSING.md).

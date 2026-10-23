@@ -189,6 +189,8 @@ const SIDEBAR = [
 			],
 		},
 		{ label: 'Report a bug', slug: 'feedback' },
+		{ label: 'Contributing', slug: 'contributing' },
+		{ label: 'Contributor licence', slug: 'contributor-licence' },
 	];
 
 function withVersions(sidebar) {
