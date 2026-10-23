@@ -681,7 +681,11 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         return [self parseClassDecl];
     if (cur.type == XTTokenProtocol)
         return [self parseProtocolDecl];
-    if (cur.type == XTTokenUse)
+    // `use Klass;` — `use` is CONTEXTUAL (an identifier everywhere else, so
+    // a parameter may be called use): the directive is exactly `use NAME ;`
+    // at the top level of a file.
+    if (cur.type == XTTokenIdentifier && [cur.value isEqualToString:@"use"]
+        && [self peekToken:1].type == XTTokenIdentifier && [self peekToken:2].type == XTTokenSemicolon)
         return [self parseUseDecl];
 
     // `extern` — external linkage, direction inferred from definition-presence

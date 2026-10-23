@@ -921,8 +921,6 @@ class Lexer
             }
         if (c == (u8)'u')
             {
-            if (Lexer._is(w, "use"))
-                return (u16)tokUse;
             if (Lexer._is(w, "u8"))
                 return (u16)tokU8;
             if (Lexer._is(w, "u16"))

@@ -53,7 +53,6 @@ static NSDictionary<NSString *, NSNumber *> *sKeywordMap = nil;
             @"inline":   @(XTTokenInline),
             @"asm":      @(XTTokenAsm),
             @"sizeof":   @(XTTokenSizeof),
-            @"use":      @(XTTokenUse),
             @"i8":       @(XTTokenI8),
             @"u8":       @(XTTokenU8),
             @"i16":      @(XTTokenI16),

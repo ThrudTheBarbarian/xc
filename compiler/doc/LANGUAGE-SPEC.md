@@ -2250,6 +2250,10 @@ are not on the list above. They open a declaration only when a type
 follows, so a program that uses either as an ordinary name keeps
 working: `i32 callback = 7;` compiles.
 
+`use` (§7.3) is contextual too: it is the directive only as
+`use Name;` at the top level of a file, and an ordinary name
+everywhere else (`u32 countSet(u8* use, u32 n)` compiles).
+
 ### 11.2 Formal grammar
 
 The full grammar is on the website at `/compiler/language/grammar`,

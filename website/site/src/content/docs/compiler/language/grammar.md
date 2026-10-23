@@ -28,7 +28,7 @@ sees a `#` directive.
 
 ## Reserved words
 
-These 54 words are recognised by the lexer and cannot be used as identifiers:
+These 53 words are recognised by the lexer and cannot be used as identifiers:
 
 ```
 asm      auto     bool     break    case     catch    class    continue
@@ -37,11 +37,12 @@ final    float    for      global   goto     i8       i16      i32
 i64      if       in       inline   new      optional pointer  protocol
 register release  retain   return   sizeof   static   string   struct
 switch   throw    throws   true     try      typedef  u8       u16
-u32      u64      use      void     volatile while
+u32      u64      void     volatile while
 ```
 
 Several words that behave like keywords are **contextual** and stay usable as
-ordinary identifiers: `block`, `callback`, `weak`, `main`, `shadow`, `banked`,
+ordinary identifiers: `use` (a directive only as `use Name;` at the top level
+of a file), `block`, `callback`, `weak`, `main`, `shadow`, `banked`,
 `cloaked`, `packed`, `since`, `step`, `clobbers`, `unroll`, and the annotation
 names below. `i32 callback = 7;` compiles.
 

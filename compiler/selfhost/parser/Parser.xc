@@ -1368,7 +1368,12 @@ class Parser
             _currentPackage = Parser._same(ns, "__none") ? (String*)0 : ns;
             return (Node*)0;
         }
-        if (check((u16)tokUse))      return parseUseDecl();
+        // `use Klass;` — `use` is CONTEXTUAL (an identifier everywhere else,
+        // so a parameter may be called use): the directive is exactly
+        // `use NAME ;` at the top level of a file. As the reference.
+        if (check((u16)tokIdentifier) && peek((u32)0).value().equals(String.withCString("use"))
+            && checkAt((u32)1, (u16)tokIdentifier) && checkAt((u32)2, (u16)tokSemicolon))
+            return parseUseDecl();
         if (check((u16)tokTypedef))  return parseTypedef();
         if (check((u16)tokStruct))   return parseStruct(true);
         if (check((u16)tokEnum))     return parseEnum();
