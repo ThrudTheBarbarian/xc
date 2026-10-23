@@ -508,6 +508,10 @@ class ClassInfo
     IRValue* _retainedSelf;   // …and the retain to undo at every exit, if any
     Array* _arcScopes;        // Array@ per scope of the strong names it owns
     Array* _tryHandlers;      // the enclosing `catch` blocks, innermost last
+    Array* _usedHandlers;     // …those something branched to (a try whose handler
+                              // nothing reaches lowers no catch arms)
+    Array* _tryPrefixes;      // the prefixes this function's trys took, String@
+    IRFunc* _tryPrefixFn;     // …which function they are for
     bool _fnThrows;           // the function being lowered is declared `throws`
     Array* _deferScopes;      // per open scope, the `defer` bodies it registered
     Array* _strongLocals;     // every name currently holding an owned reference
@@ -8054,8 +8058,14 @@ class ClassInfo
         {
         if (_tryHandlers.count() > (u32)0)
             {
+            IRBlock* h = (IRBlock*)_tryHandlers.get(_tryHandlers.count() - (u32)1);
+            bool seen = false;
+            for (u32 i = (u32)0; i < _usedHandlers.count() && !seen; i = i + (u32)1)
+                seen = _usedHandlers.get(i) == (Object*)h;
+            if (!seen)
+                _usedHandlers.add((Object*)h);
             IRInsn* b = IRInsn.with(String.withCString("Branch"));
-            b.add(IROperand.block((IRBlock*)_tryHandlers.get(_tryHandlers.count() - (u32)1)));
+            b.add(IROperand.block(h));
             _blk.setTerm(b);
             return;
             }
@@ -8107,7 +8117,33 @@ class ClassInfo
     // not keep propagating.
     void lowerTry(Node* n)
         {
+        // A try opening straight inside another gets the same block count, so
+        // the same prefix: two `bb_N_try_join` blocks, and a branch to the
+        // outer join landed in the inner one (0.86 also failed to assemble a
+        // second `bb_N_catch`). A prefix already taken gets a suffix.
         String* prefix = blockPrefix();
+        if (_tryPrefixFn != _fn)
+            {
+            _tryPrefixes = new Array();
+            _tryPrefixFn = _fn;
+            }
+        String* taken = String.withString(prefix);
+        u32 k = (u32)1;
+        bool clash = true;
+        while (clash)
+            {
+            clash = false;
+            for (u32 i = (u32)0; i < _tryPrefixes.count() && !clash; i = i + (u32)1)
+                clash = ((String*)_tryPrefixes.get(i)).equals(taken);
+            if (clash)
+                {
+                taken = String.withString(prefix);
+                taken.appendFormat("_%ld", (i32)k);
+                k = k + (u32)1;
+                }
+            }
+        _tryPrefixes.add((Object*)taken);
+        prefix = taken;
         String* hn = String.withString(prefix);
         hn.appendCString("_catch");
         String* jn = String.withString(prefix);
@@ -8142,6 +8178,20 @@ class ClassInfo
             _blk.setTerm(b);
             }
 
+        // Nothing in the body can raise (no throwing call, no throw): the
+        // handler and its arms would be unreachable from entry, so there are
+        // none. As the reference (its verifier rejects such blocks, §12.10).
+        bool reached = false;
+        for (u32 i = (u32)0; i < _usedHandlers.count() && !reached; i = i + (u32)1)
+            reached = _usedHandlers.get(i) == (Object*)handler;
+        if (!reached)
+            {
+            restore(baseSnap);
+            _fn.addBlock(join);
+            _blk = join;
+            mergeAtJoinN(join, edgeSnaps, edgeBlocks, baseSnap);
+            return;
+            }
         _fn.addBlock(handler);
         _blk = handler;
         _mem = memAtTry;
@@ -24394,6 +24444,7 @@ class ClassInfo
         _gotoLabelDepths = new Map();
         _deferScopes = new Array();
         _tryHandlers = new Array();
+        _usedHandlers = new Array();
         _fnThrows = false;
         _strongLocals = new Array();
         _curClass = (ClassInfo*)0;

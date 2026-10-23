@@ -1,0 +1,3 @@
+quiet ran 1
+local catch 1
+outer caught, got 0, quiet 2

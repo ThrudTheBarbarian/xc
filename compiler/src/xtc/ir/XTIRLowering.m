@@ -201,6 +201,13 @@
 // raising call inside that `try` must branch to. Empty means a raising call
 // propagates instead (which is only legal in a `throws` function).
 @property(nonatomic) NSMutableArray<XTIRBlock*>* tryHandlerStack;
+// The handlers something branched to (by identity): a try whose handler
+// nothing reaches lowers no catch arms, which would be blocks unreachable from
+// entry (the verifier's §12.10).
+@property(nonatomic) NSMutableArray<XTIRBlock*>* usedTryHandlers;
+// The prefixes this function's trys took (see lowerTryStmt:), and the function.
+@property(nonatomic) NSMutableSet<NSString*>* tryPrefixes;
+@property(nonatomic, weak) XTIRFunction* tryPrefixFn;
 // Set of local names whose current value is class-pointer-typed and is
 // owned by this scope (strong slot). Used by assignment lowering to
 // emit "release old / retain new" pairs.
@@ -11930,6 +11937,7 @@ static const NSUInteger kVarargSlotBytes = 8;
     XTIRBlock* handler = self.tryHandlerStack.lastObject;
     if (handler)
         {
+        [self noteTryHandlerUsed:handler];
         [self emitTerminator:XTIROpBranch operands:@[ [XTIROperand blockWithRef:handler] ]];
         }
     else if (self.currentFnThrows)
@@ -11978,6 +11986,18 @@ static const NSUInteger kVarargSlotBytes = 8;
     // about to release.
     [self emitStore:slot value:err];
 
+    // Inside a `try` in this function the throw goes to its handler, as a
+    // raising call there does (the port's emitPropagate, and what 0.86
+    // shipped); returning instead skipped a local catch, which the verifier
+    // then rejected as unreachable.
+    XTIRBlock* handler = self.tryHandlerStack.lastObject;
+    if (handler)
+        {
+        [self noteTryHandlerUsed:handler];
+        [self emitTerminator:XTIROpBranch operands:@[ [XTIROperand blockWithRef:handler] ]];
+        return;
+        }
+
     // Every scope's defers + releases, exactly as a `return` does — propagation
     // IS a return. The thrown error is exempt: its +1 transfers to the caller.
     [self releaseStrongLocalsAlongReturnExcept:err];
@@ -12003,10 +12023,32 @@ static const NSUInteger kVarargSlotBytes = 8;
 // branch to it (see emitErrorCheckAfterCallAt:); the handler reads the error
 // channel into the binder and clears it, because the error has been handled and
 // must not keep propagating.
+- (void)noteTryHandlerUsed:(XTIRBlock*)handler
+    {
+    if (!self.usedTryHandlers)
+        self.usedTryHandlers = [NSMutableArray array];
+    if ([self.usedTryHandlers indexOfObjectIdenticalTo:handler] == NSNotFound)
+        [self.usedTryHandlers addObject:handler];
+    }
+
 - (void)lowerTryStmt:(XTTryNode*)node
     {
     NSString* pfx = [NSString stringWithFormat:@"bb_%lu",
                                                (unsigned long)self.currentFunction.blocks.count];
+    // A try opening straight inside another gets the same block count, so the
+    // same prefix: two `bb_N_try_join` blocks, and a branch to the outer join
+    // landed in the inner one. A prefix already taken gets a suffix (the port
+    // does the same).
+    if (self.tryPrefixFn != self.currentFunction)
+        {
+        self.tryPrefixes = [NSMutableSet set];
+        self.tryPrefixFn = self.currentFunction;
+        }
+    NSString* taken = pfx;
+    for (NSUInteger k = 1; [self.tryPrefixes containsObject:taken]; k++)
+        taken = [NSString stringWithFormat:@"%@_%lu", pfx, (unsigned long)k];
+    [self.tryPrefixes addObject:taken];
+    pfx = taken;
     XTIRBlock* handler = [[XTIRBlock alloc] init];
     handler.name = [pfx stringByAppendingString:@"_catch"];
     XTIRBlock* join = [[XTIRBlock alloc] init];
@@ -12042,6 +12084,18 @@ static const NSUInteger kVarargSlotBytes = 8;
     // The handler runs from the state BEFORE the guarded block: it is reachable
     // from any raising call inside it, so nothing the body bound can be assumed.
     [self restoreLocals:baseSnap];
+
+    // Nothing in the body can raise (no throwing call, no throw): the handler
+    // and its arms would be unreachable from entry, so there are none.
+    if (!self.usedTryHandlers || [self.usedTryHandlers indexOfObjectIdenticalTo:handler] == NSNotFound)
+        {
+        [self.currentFunction.blocks addObject:join];
+        if (edgeBlocks.count == 0)
+            join.deadByConstruction = YES;
+        self.currentBlock = join;
+        [self mergeAtJoin:join snapshots:edgeSnaps throughBlocks:edgeBlocks base:baseSnap];
+        return;
+        }
 
     // Handler: load the in-flight error, then test the arms in SOURCE ORDER.
     [self.currentFunction.blocks addObject:handler];
@@ -12137,6 +12191,7 @@ static const NSUInteger kVarargSlotBytes = 8;
         XTIRBlock* outer = self.tryHandlerStack.lastObject;
         if (outer)
             {
+            [self noteTryHandlerUsed:outer];
             [self emitTerminator:XTIROpBranch operands:@[ [XTIROperand blockWithRef:outer] ]];
             }
         else if (self.currentFnThrows)
