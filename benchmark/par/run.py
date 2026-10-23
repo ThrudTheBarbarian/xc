@@ -345,8 +345,22 @@ class Browser:
                                         "--user-data-dir=" + os.path.join(work, "chrome-profile"),
                                         "--disk-cache-size=1", "about:blank"],
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(4)
+        # Wait for the debugging port to answer rather than a fixed time: a
+        # newer Chrome took longer than the 4 s this used to sleep, and the
+        # first page (the serial run) then found nothing to talk to.
+        import urllib.request
+        for _ in range(60):
+            try:
+                urllib.request.urlopen("http://127.0.0.1:%d/json/version" % self.devtools, timeout=1).read()
+                break
+            except OSError:
+                time.sleep(0.5)
         self.pages = 0
+        # A run that stops early (sys.exit on a checksum mismatch) must not
+        # leave Chrome holding the profile: the next run's Chrome cannot open
+        # it, and every page then prints nothing.
+        import atexit
+        atexit.register(self.close)
 
     def run(self, name, env):
         common.wait_quiet()
@@ -365,8 +379,10 @@ class Browser:
         return parse(r.stdout)
 
     def close(self):
-        self.chrome.terminate()
-        self.server.terminate()
+        if self.chrome.poll() is None:
+            self.chrome.terminate()
+        if self.server.poll() is None:
+            self.server.terminate()
 
 
 def run_windows(host, binary, env):
