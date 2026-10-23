@@ -20,8 +20,10 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "Arm32.xc"
-#import "Elf32.xc"
+#import <Arm32>
+#import "Arm32Defs.xc"
+#import <Elf32>
+#import "Elf32Defs.xc"
 
 // `.L<rest>` becomes `.L<index>Z<rest>`, so two separately compiled files
 // cannot collide on `.L0` — a compiler restarts its numbering per file.

@@ -22,7 +22,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 echo "building xtldx86 (xtc → native arm64 host binary)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtldx86" selfhost/tools/xtldx86.xc \
-    -I selfhost/asm > "$WORK/build.log" 2>&1
+    -I selfhost/asm -I selfhost/defs > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xtldx86" ]; then grep -a error "$WORK/build.log" | head -5; exit 1; fi
 
 # The rt shim is LAST: the runtime's heap delegates to calloc/free (satisfied
@@ -30,9 +30,9 @@ if [ ! -x "$WORK/xtldx86" ]; then grep -a error "$WORK/build.log" | head -5; exi
 RT=(support/x86_64/runtime/crt-linux.s support/x86_64/runtime/sys-linux.s
     support/x86_64/runtime/rtgen-linux.s support/x86_64/runtime/rtfiles-linux.s support/x86_64/runtime/libmgen-linux.s
     selfhost/tools/ldx86-rt-shim.s)
-RUN_INCS=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser
-          -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/codegen
-          -I selfhost/asm)
+RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+          -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt -I selfhost/codegen
+          -I selfhost/asm -I selfhost/defs)
 
 pass=0; fail=0; oracle=0
 declare -a FAILED

@@ -24,18 +24,14 @@
 // written.
 
 #import "Foundation.xc"
-#import "X86Asm.xc"
-#import "CoffObject.xc"
+#import <X86Asm>
+#import "X86AsmDefs.xc"
+#import <CoffObject>
+#import "CoffObjectDefs.xc"
 #import "Files.xc"
 
-#define PE_FILE_ALIGN $200
-#define PE_SECT_ALIGN $1000
-#define PE_OPT_HDR_SIZE 240
-#define PE_SECT_HDR_SIZE 40
-#define PE_THUNK_SZ 6
-#define PE_BASE_LO $40000000
-#define PE_DLL_BASE_LO $80000000
-#define PE_BASE_HI 1
+#import "PeDefs.xc"
+#import <DwarfWriter>
 
 class Pe
     {

@@ -48,26 +48,26 @@ tool_incs() {
       xta6502|xtas64|xtas68|xtas9|xtasx86|xta9so|xtld64|xtldwin|xtldx86| \
       xtlnandroid|xtlnwasm|xtdylib|xtx86so|xtobj64|xtobjx86| \
       elfobjdump|coffobjdump)
-          echo "-I selfhost/asm";;
-      xtcg65)    echo "-I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/driver";;
+          echo "-I selfhost/asm -I selfhost/defs";;
+      xtcg65)    echo "-I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/driver -I selfhost/defs";;
       xtcg68|xtcgwasm|xtcgx86)
-                 echo "-I selfhost/ir -I selfhost/opt -I selfhost/codegen";;
-      xtcg9)     echo "-I selfhost/ir -I selfhost/opt -I selfhost/codegen";;
-      xtcga64)   echo "-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm";;
+                 echo "-I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen";;
+      xtcg9)     echo "-I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen";;
+      xtcga64)   echo "-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm";;
       # The front end pulls in the whole chain. The set here was originally
       # lifted from bootstrap.sh, where `-I selfhost/driver` is glued onto a
       # SRC= variable rather than being the whole list — so it built with one
       # include path and failed on the first #import. Extraction from a stale
       # script is not the same as knowing what a tool needs.
-      xtfe)      echo "-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/driver";;
-      xtapk)     echo "-I selfhost/link -I selfhost/asm";;
-      xtast)     echo "-I selfhost/lexer -I selfhost/preproc -I selfhost/parser";;
-      xtir)      echo "-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/driver";;
-      xtirp)     echo "-I selfhost/ir -I selfhost/opt";;
-      xtlex)     echo "-I selfhost/lexer";;
-      xtopt)     echo "-I selfhost/ir -I selfhost/opt";;
-      xtpp)      echo "-I selfhost/preproc";;
-      xtsema)    echo "-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema";;
+      xtfe)      echo "-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/driver -I selfhost/defs";;
+      xtapk)     echo "-I selfhost/link -I selfhost/defs -I selfhost/asm";;
+      xtast)     echo "-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser";;
+      xtir)      echo "-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/driver -I selfhost/defs";;
+      xtirp)     echo "-I selfhost/ir -I selfhost/defs -I selfhost/opt";;
+      xtlex)     echo "-I selfhost/lexer -I selfhost/defs";;
+      xtopt)     echo "-I selfhost/ir -I selfhost/defs -I selfhost/opt";;
+      xtpp)      echo "-I selfhost/preproc -I selfhost/defs";;
+      xtsema)    echo "-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema";;
       *)         echo "";;
     esac
 }
@@ -112,9 +112,9 @@ if [ "${KEEP:-0}" != 1 ]; then trap 'rm -rf "$WORK"' EXIT; fi
 
 SRC=selfhost/tools/xcc.xc
 INCS=(-I support/generic/lib -I support/arm64/lib
-      -I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema
-      -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm
-      -I selfhost/link -I selfhost/driver)
+      -I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema
+      -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen -I selfhost/asm
+      -I selfhost/link -I selfhost/driver -I selfhost/defs)
 
 # Build the driver with $1, leaving $2 (executable) and $2.s (assembly).
 # A build that fails is fatal and says which stage: a stage that silently

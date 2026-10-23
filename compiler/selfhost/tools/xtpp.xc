@@ -18,8 +18,8 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "MacroDef.xc"
-#import "Preprocessor.xc"
+#import <MacroDef>
+#import <Preprocessor>
 
 void main(void)
     {

@@ -11,9 +11,11 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "Ir.xc"
-#import "IrParse.xc"
-#import "Opt.xc"
+#import <Ir>
+#import "IrDefs.xc"
+#import <IrParse>
+#import <Opt>
+#import "OptDefs.xc"
 
 void main(void)
     {

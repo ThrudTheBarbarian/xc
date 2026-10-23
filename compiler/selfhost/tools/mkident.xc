@@ -10,8 +10,8 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "CodeSign.xc"
-#import "RsaKeygen.xc"
+#import <CodeSign>
+#import <RsaKeygen>
 
 String* pemBlock(String* label, Array* der)
     {

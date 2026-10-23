@@ -20,7 +20,7 @@
 // missing annotation rather than as a wrong one.
 
 #import "Foundation.xc"
-#import "Types.xc"
+#import <Types>
 
 class Overload
     {

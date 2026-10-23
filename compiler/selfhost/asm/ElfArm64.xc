@@ -22,19 +22,13 @@
 // time, not by us.
 
 #import "Foundation.xc"
-#import "Arm64Asm.xc"
+#import <Arm64Asm>
+#import "Arm64AsmDefs.xc"
 
 // 16 KB, not 4. Android 15 runs on devices with 16 KB pages and will not map a
 // 4 KB-aligned segment; 16 KB is accepted on 4 KB devices too, so there is one
 // right answer and this is it.
-#define AELF_PAGE $4000
-#define AEHDR_SZ 64
-#define APHDR_SZ 56
-#define ASHDR_SZ 64
-#define ASYM_SZ 24
-#define ARELA_SZ 24
-#define ADYN_SZ 16
-#define ATHUNK_SZ 16
+#import "ElfArm64Defs.xc"
 
 class ElfArm64
     {

@@ -13,8 +13,9 @@
 
 #import "Foundation.xc"
 #import "Files.xc"
-#import "CodeSign.xc"
-#import "Plist.xc"
+#import <CodeSign>
+#import <Plist>
+#import "PlistDefs.xc"
 
 // ── CoreFoundation / Security ───────────────────────────────────────────────
 extern pointer kCFTypeDictionaryKeyCallBacks;
@@ -66,8 +67,7 @@ struct SecExportParams
     pointer keyAttributes;
     }
 
-#define kCFStringEncodingUTF8 $08000100
-#define kSecFormatWrappedPKCS8 5
+#import "KeychainDefs.xc"
 
 class Keychain
     {

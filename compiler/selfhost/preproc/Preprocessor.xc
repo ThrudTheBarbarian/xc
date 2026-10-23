@@ -33,7 +33,7 @@
 
 #import "Foundation.xc"
 #import "Files.xc"
-#import "MacroDef.xc"
+#import <MacroDef>
 
 // One open #if / #ifdef / #ifndef.
 //

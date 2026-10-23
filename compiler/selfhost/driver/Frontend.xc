@@ -15,25 +15,31 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "TokenType.xc"
-#import "Token.xc"
-#import "Lexer.xc"
-#import "FloatEncoding.xc"
-#import "MacroDef.xc"
-#import "Preprocessor.xc"
-#import "Node.xc"
-#import "Parser.xc"
-#import "AstDump.xc"
-#import "Mangle.xc"
-#import "Iface.xc"
-#import "IfaceWrite.xc"
-#import "Dwarf.xc" // …and a C library's own DWARF, when it has no iface
-#import "Analyze.xc"
-#import "Sema.xc"
-#import "Vtable.xc"
-#import "Ir.xc"
-#import "Lower.xc"
-#import "Designable.xc"
+#import <TokenType>
+#import "TokenTypeDefs.xc"
+#import <Token>
+#import <Lexer>
+#import <FloatEncoding>
+#import <MacroDef>
+#import <Preprocessor>
+#import <Node>
+#import "NodeDefs.xc"
+#import <Parser>
+#import <AstDump>
+#import <Mangle>
+#import <Iface>
+#import <IfaceWrite>
+#import <Dwarf> // …and a C library's own DWARF, when it has no iface
+#import "DwarfDefs.xc"
+#import <Analyze>
+#import <Sema>
+#import <Vtable>
+#import <Ir>
+#import "IrDefs.xc"
+#import <Lower>
+#import <Designable>
+#import <Opt>
+#import "OptDefs.xc"
 
 // -g resolves a relative source path against the working directory.
 u8* getcwd(u8* buf, u64 size);
@@ -904,8 +910,8 @@ class FeOptions
         Lower* lower = Lower.make();
         // IR outlining (XC_PAR_PROPOSE=outline): the optimiser's blocks get
         // their kernels from this lowering's printers.
-        if (gOptOutline || Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
-            gParKernelHook = (ParKernelHook*)LowerKernelHook.with(lower);
+        if (optOutline() || Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
+            optSetParKernelHook((ParKernelHook*)LowerKernelHook.with(lower));
         lower.setPointerWidth(pointerWidthOf(o));
         lower.setCountWidth(countWidthOf(o));
         lower.setAlignCaps(fieldAlignCapOf(o), tailAlignCapOf(o));
@@ -932,7 +938,7 @@ class FeOptions
         // to mem2reg, so the optimiser sees the loops a release build has (and
         // the outliner can tell the program's loops from the library's).
         String* ppMode = Platform.env(String.withCString("XC_PAR_PROPOSE"));
-        bool ppLines = ppMode.equals(String.withCString("report")) || ppMode.equals(String.withCString("outline")) || gOptOutline;
+        bool ppLines = ppMode.equals(String.withCString("report")) || ppMode.equals(String.withCString("outline")) || optOutline();
         lower.setDebugInfo(o.debugInfo() || ppLines);
         lower.setDebugPinning(o.debugInfo());
         IRDbg.resetFiles();

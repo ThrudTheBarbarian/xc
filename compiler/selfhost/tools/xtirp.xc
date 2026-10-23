@@ -15,8 +15,9 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "Ir.xc"
-#import "IrParse.xc"
+#import <Ir>
+#import "IrDefs.xc"
+#import <IrParse>
 
 void main(void)
     {

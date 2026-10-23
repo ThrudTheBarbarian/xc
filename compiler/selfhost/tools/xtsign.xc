@@ -17,12 +17,13 @@
 #import "Files.xc"
 #import "Process.xc"
 #import "PlatformCore.xc"
-#import "CodeSign.xc"
+#import <CodeSign>
 #if XT_HAVE_KEYCHAIN
-#import "Keychain.xc"
+#import <Keychain>
+#import "KeychainDefs.xc"
 #endif
 #if XT_HAVE_TLS
-#import "Asc.xc"
+#import <Asc>
 #endif
 
 void usage(void)

@@ -15,11 +15,7 @@
 
 #import "Foundation.xc"
 
-#define LK_BLANK $00
-#define LK_COMMENT $01
-#define LK_LABEL $02
-#define LK_INSN $03
-#define LK_DIRECTIVE $04
+#import "Peep6502Defs.xc"
 
 class Peep6502
     {

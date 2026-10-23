@@ -149,8 +149,7 @@ class AsmSymbol
         }
     }
 
-#define R_ARM_ABS32 $02
-#define R_ARM_CALL $1C
+#import "Arm32Defs.xc"
 
     class Arm32
     {

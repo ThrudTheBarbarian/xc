@@ -10,8 +10,8 @@
 // Bytes are Array@ of Number, as in CodeSign.xc.
 
 #import "Foundation.xc"
-#import "Bignum.xc"
-#import "CodeSign.xc"
+#import <Bignum>
+#import <CodeSign>
 
 class EcPoint
     {

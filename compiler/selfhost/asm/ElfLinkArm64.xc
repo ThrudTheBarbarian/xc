@@ -29,23 +29,14 @@
 //     FIXUP_PREL32 the writer settles, both ends being in the image.
 
 #import "Foundation.xc"
-#import "Arm64Asm.xc"
-#import "ElfObject.xc"
-#import "ArArchive.xc"
+#import <Arm64Asm>
+#import "Arm64AsmDefs.xc"
+#import <ElfObject>
+#import <ArArchive>
+#import <ElfArm64>
+#import "ElfArm64Defs.xc"
 
-#define RA64_ABS64              257
-#define RA64_PREL32             261
-#define RA64_ADR_PREL_PG_HI21   275
-#define RA64_ADD_ABS_LO12_NC    277
-#define RA64_LDST8_ABS_LO12_NC  278
-#define RA64_JUMP26             282
-#define RA64_CALL26             283
-#define RA64_LDST16_ABS_LO12_NC 284
-#define RA64_LDST32_ABS_LO12_NC 285
-#define RA64_LDST64_ABS_LO12_NC 286
-#define RA64_LDST128_ABS_LO12_NC 299
-#define RA64_ADR_GOT_PAGE       311
-#define RA64_LD64_GOT_LO12_NC   312
+#import "ElfLinkArm64Defs.xc"
 
 class ElfLinkArm64
     {

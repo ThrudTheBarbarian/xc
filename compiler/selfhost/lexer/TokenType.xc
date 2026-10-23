@@ -131,7 +131,7 @@ enum TokenType = {
 };
 
 // The count, for a bounds check on a dumped stream.
-#define TOKEN_TYPE_COUNT 117
+#import "TokenTypeDefs.xc"
 
 // The human name of each token kind, as XTTokenTypeName spells it — for
 // diagnostics only. A kind the reference does not name comes back as `?`.

@@ -13,52 +13,13 @@
 // than repeating a zero at forty call sites.
 
 #import "Foundation.xc"
-#import "X86Asm.xc"
+#import <X86Asm>
+#import "X86AsmDefs.xc"
 #import "Files.xc" // sharedInfo reads a .so back off disk
 
-#define ELF_PAGE $1000
-#define ELF_VBASE $400000
-#define EHDR_SZ 64
-#define PHDR_SZ 56
-#define SHDR_SZ 64
+#import "Elf64Defs.xc"
+#import <DwarfWriter>
 // ── ET_DYN (shared object) ───────────────────────────────────────────────
-#define DT_NULL 0
-#define DT_NEEDED 1
-#define DT_HASH 4
-#define DT_STRTAB 5
-#define DT_SYMTAB 6
-#define DT_RELA 7
-#define DT_RELASZ 8
-#define DT_RELAENT 9
-#define DT_STRSZ 10
-#define DT_SYMENT 11
-#define DT_SONAME 14
-#define DT_RUNPATH 29
-#define DT_INIT_ARRAY 25
-#define DT_INIT_ARRAYSZ 27
-#define R_X86_64_64 1
-#define R_X86_64_PC32 2
-#define R_X86_64_PLT32 4
-#define R_X86_64_GLOB_DAT 6
-#define R_X86_64_RELATIVE 8
-#define STB_GLOBAL 1
-#define STT_NOTYPE 0
-#define STT_OBJECT 1
-#define STT_FUNC 2
-#define SYM_SZ 24
-#define RELA_SZ 24
-#define DYN_SZ 16
-#define THUNK_SZ 6 // ff 25 <rel32> = jmp qword ptr [rip + got]
-#define PT_LOAD 1
-#define PT_DYNAMIC 2
-#define PT_INTERP 3
-#define PT_PHDR 6
-#define PT_GNU_STACK $6474E551
-#define PF_X 1
-#define PF_W 2
-#define PF_R 4
-#define ET_DYN 3
-#define EM_X86_64 62
 
 // What a `.so` tells an app that wants to link against it.
 class ElfSharedInfo

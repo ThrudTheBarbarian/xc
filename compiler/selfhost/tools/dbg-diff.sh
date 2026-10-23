@@ -44,17 +44,17 @@ TOOL=${XC_TOOL_XCC:-$BIN/xcc}
 
 echo "building the port's back ends and linkers (xtc → native host binaries)…"
 "$TOOL" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcga64" selfhost/tools/xtcga64.xc \
-    -I selfhost/ir -I selfhost/opt -I selfhost/codegen > "$WORK/b1.log" 2>&1 &
+    -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen > "$WORK/b1.log" 2>&1 &
 "$TOOL" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcgx86" selfhost/tools/xtcgx86.xc \
-    -I selfhost/ir -I selfhost/opt -I selfhost/codegen > "$WORK/b2.log" 2>&1 &
+    -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen > "$WORK/b2.log" 2>&1 &
 "$TOOL" -O2 -A $XC_HOST_ARCH -H . -DXCC_VERSION="\"$VERSION\"" -o "$WORK/xtld64" \
-    selfhost/tools/xtld64.xc -I selfhost/asm > "$WORK/b3.log" 2>&1 &
+    selfhost/tools/xtld64.xc -I selfhost/asm -I selfhost/defs > "$WORK/b3.log" 2>&1 &
 "$TOOL" -O2 -A $XC_HOST_ARCH -H . -DXCC_VERSION="\"$VERSION\"" -o "$WORK/xtldx86" \
-    selfhost/tools/xtldx86.xc -I selfhost/asm > "$WORK/b4.log" 2>&1 &
+    selfhost/tools/xtldx86.xc -I selfhost/asm -I selfhost/defs > "$WORK/b4.log" 2>&1 &
 "$TOOL" -O2 -A $XC_HOST_ARCH -H . -DXCC_VERSION="\"$VERSION\"" -o "$WORK/xtldwin" \
-    selfhost/tools/xtldwin.xc -I selfhost/asm > "$WORK/b5.log" 2>&1 &
+    selfhost/tools/xtldwin.xc -I selfhost/asm -I selfhost/defs > "$WORK/b5.log" 2>&1 &
 "$TOOL" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtopt" selfhost/tools/xtopt.xc \
-    -I selfhost/ir -I selfhost/opt > "$WORK/b6.log" 2>&1 &
+    -I selfhost/ir -I selfhost/defs -I selfhost/opt > "$WORK/b6.log" 2>&1 &
 wait
 for t in xtcga64 xtcgx86 xtld64 xtldx86 xtldwin xtopt; do
     if [ ! -x "$WORK/$t" ]; then
@@ -70,9 +70,9 @@ for d in /opt/homebrew/opt/llvm/bin/llvm-dwarfdump "$(command -v llvm-dwarfdump 
 done
 [ -z "$DWARFDUMP" ] && echo "(no llvm-dwarfdump: the --verify step is skipped)"
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser
-          -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/codegen
-          -I selfhost/asm)
+RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+          -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt -I selfhost/codegen
+          -I selfhost/asm -I selfhost/defs)
 RTX=(support/x86_64/runtime/crt-linux.s support/x86_64/runtime/sys-linux.s
      support/x86_64/runtime/rtgen-linux.s support/x86_64/runtime/rtfiles-linux.s
      support/x86_64/runtime/libmgen-linux.s selfhost/tools/ldx86-rt-shim.s)

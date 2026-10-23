@@ -17,12 +17,14 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "Ir.xc"
-#import "IrParse.xc"
-#import "Opt.xc"
-#import "Layout.xc"
-#import "Xt6502.xc"
-#import "Runtime6502.xc"
+#import <Ir>
+#import "IrDefs.xc"
+#import <IrParse>
+#import <Opt>
+#import "OptDefs.xc"
+#import <Layout>
+#import <Xt6502>
+#import <Runtime6502>
 
 void main(void)
     {

@@ -12,9 +12,10 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "Ir.xc"
-#import "IrParse.xc"
-#import "Arm9.xc"
+#import <Ir>
+#import "IrDefs.xc"
+#import <IrParse>
+#import <Arm9>
 
 void main(void)
     {

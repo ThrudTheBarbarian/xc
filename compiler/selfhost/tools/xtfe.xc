@@ -11,7 +11,7 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "Frontend.xc"
+#import <Frontend>
 
 void main(void)
     {

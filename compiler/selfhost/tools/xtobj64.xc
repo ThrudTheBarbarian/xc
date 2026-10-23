@@ -10,8 +10,10 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "Arm64Asm.xc"
-#import "MachO.xc"
+#import <Arm64Asm>
+#import "Arm64AsmDefs.xc"
+#import <MachO>
+#import "MachODefs.xc"
 
 void main(void)
     {

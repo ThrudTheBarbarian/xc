@@ -16,9 +16,11 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "U64.xc"
-#import "Arm64Asm.xc"
-#import "ElfArm64.xc"
+#import <U64>
+#import <Arm64Asm>
+#import "Arm64AsmDefs.xc"
+#import <ElfArm64>
+#import "ElfArm64Defs.xc"
 
 Array* splitCsv(String* s)
 {

@@ -16,8 +16,9 @@
 #import "Files.xc"
 #import "Process.xc"
 #import "PlatformCore.xc"
-#import "Xta.xc"
-#import "XtaHost.xc"
+#import <Xta>
+#import "XtaDefs.xc"
+#import <XtaHost>
 
 #ifndef XCC_VERSION
 #define XCC_VERSION "unversioned"

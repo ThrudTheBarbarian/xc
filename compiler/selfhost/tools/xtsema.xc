@@ -21,18 +21,20 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "TokenType.xc"
-#import "Token.xc"
-#import "Lexer.xc"
-#import "FloatEncoding.xc"
-#import "MacroDef.xc"
-#import "Preprocessor.xc"
-#import "Node.xc"
-#import "Parser.xc"
-#import "AstDump.xc"
-#import "Mangle.xc"
-#import "Sema.xc"
-#import "Vtable.xc"
+#import <TokenType>
+#import "TokenTypeDefs.xc"
+#import <Token>
+#import <Lexer>
+#import <FloatEncoding>
+#import <MacroDef>
+#import <Preprocessor>
+#import <Node>
+#import "NodeDefs.xc"
+#import <Parser>
+#import <AstDump>
+#import <Mangle>
+#import <Sema>
+#import <Vtable>
 
 void main(void)
     {

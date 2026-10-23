@@ -31,10 +31,12 @@
 //     preprocessor's business and never reach here.
 
 #import "Foundation.xc"
-#import "TokenType.xc"
-#import "Token.xc"
-#import "Node.xc"
-#import "Lexer.xc"
+#import <TokenType>
+#import "TokenTypeDefs.xc"
+#import <Token>
+#import <Node>
+#import "NodeDefs.xc"
+#import <Lexer>
 
 class Parser
 {

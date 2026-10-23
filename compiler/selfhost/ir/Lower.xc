@@ -22,14 +22,21 @@
 //     produces IR that reads correctly and orders wrongly.
 
 #import "Foundation.xc"
-#import "Node.xc"
-#import "Types.xc"
-#import "Vtable.xc"
-#import "Ir.xc"
-#import "FloatEncoding.xc"
-#import "ParSpirv.xc"
-#import "ParWgsl.xc"
-#import "Opt.xc"
+#import <Node>
+#import "NodeDefs.xc"
+#import <Types>
+#import <Vtable>
+#import <Ir>
+#import "IrDefs.xc"
+#import <FloatEncoding>
+#import <ParSpirv>
+#import "ParSpirvDefs.xc"
+#import <ParWgsl>
+#import <Overload>
+#import "Process.xc"
+#import <Opt>
+#import "OptDefs.xc"
+#import <IrParse>
 
 // What the lowering knows about one class: where its instance keeps things,
 // which slot each method dispatches through, and the shape a pointer to it has.

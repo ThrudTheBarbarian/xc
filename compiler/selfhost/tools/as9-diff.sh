@@ -41,7 +41,7 @@ command -v arm-none-eabi-as >/dev/null || {
 
 echo "building xtas9 (xtc → native arm64)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtas9" selfhost/tools/xtas9.xc \
-    -I selfhost/asm 2>&1 | grep -E "^[^ ].*error" && exit 1
+    -I selfhost/asm -I selfhost/defs 2>&1 | grep -E "^[^ ].*error" && exit 1
 
 pass=0; fail=0; unsup=0; oracle=0
 

@@ -25,7 +25,8 @@
 // difference between a compiler that runs on the A9 and one that does not.
 
 #import "Foundation.xc"
-#import "Ir.xc"
+#import <Ir>
+#import "IrDefs.xc"
 
 class BitSet
     {

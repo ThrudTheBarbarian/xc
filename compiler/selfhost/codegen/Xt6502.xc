@@ -28,8 +28,9 @@
 
 #import "Foundation.xc"
 #import "Stdio.xc"
-#import "Ir.xc"
-#import "Layout.xc"
+#import <Ir>
+#import "IrDefs.xc"
+#import <Layout>
 
 class Xt6502
 {

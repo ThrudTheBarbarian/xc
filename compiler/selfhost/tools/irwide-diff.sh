@@ -33,8 +33,8 @@ trap 'rm -rf "$WORK"' EXIT
 INCS=(-I support/generic/lib -I support/$XC_HOST_ARCH/lib -I support/xt6502/lib
       -I support/arm9/lib -I support/atarist/lib -I support/x86_64/lib
       -I support/win64/lib -I support/win64/selfhost-iface -I support/6502/lib
-      -I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema
-      -I selfhost/ir -I selfhost/opt -I selfhost/driver)
+      -I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema
+      -I selfhost/ir -I selfhost/opt -I selfhost/driver -I selfhost/defs)
 # selfhost/asm and selfhost/codegen are deliberately NOT here. Both define
 # Arm64.xc, M68k.xc and X86_64.xc, so putting them on one search path makes
 # `#import "Arm64.xc"` resolve to whichever directory comes first — the

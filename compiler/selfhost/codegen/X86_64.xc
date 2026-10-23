@@ -26,8 +26,9 @@
 #import "Foundation.xc"
 #import "Stdio.xc"
 #import "Process.xc"
-#import "Ir.xc"
-#import "Homing.xc"
+#import <Ir>
+#import "IrDefs.xc"
+#import <Homing>
 
 class X86_64
     {

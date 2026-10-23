@@ -23,7 +23,8 @@
 // importantly — what must stay silent.
 #import "Foundation.xc"
 #import "Stdio.xc"
-#import "Node.xc"
+#import <Node>
+#import "NodeDefs.xc"
 
 class Analyze
     {

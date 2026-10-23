@@ -20,7 +20,9 @@
 //     for float literals too.
 
 #import "Foundation.xc"
-#import "TokenType.xc"
+#import <TokenType>
+#import "TokenTypeDefs.xc"
+#import <FileTable>
 
 class Token
     {

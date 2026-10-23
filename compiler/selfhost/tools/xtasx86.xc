@@ -14,7 +14,8 @@
 #import "Files.xc"
 #import "Process.xc"
 
-#import "X86Asm.xc"
+#import <X86Asm>
+#import "X86AsmDefs.xc"
 
 // printf has no zero-padded hex, and the listing's whole value is that it is
 // byte-for-byte comparable, so the padding is done here.

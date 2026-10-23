@@ -21,9 +21,9 @@ PATTERN=${1:-}
 WORK=${TMPDIR:-/tmp}/capsdiff.$$
 mkdir -p "$WORK"; trap 'rm -rf "$WORK"' EXIT
 
-SELF=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema
-      -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm
-      -I selfhost/link -I selfhost/driver)
+SELF=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema
+      -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen -I selfhost/asm
+      -I selfhost/link -I selfhost/driver -I selfhost/defs)
 echo "building xcc.xc (the xtc driver → native arm64)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xccxc" selfhost/tools/xcc.xc \
     "${SELF[@]}" > "$WORK/build.log" 2>&1

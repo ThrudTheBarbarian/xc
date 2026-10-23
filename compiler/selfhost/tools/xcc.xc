@@ -29,45 +29,64 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "Frontend.xc"
-#import "IrParse.xc"
-#import "Opt.xc"
-#import "Arm64.xc"          // the BACK END
-#import "Arm64Asm.xc"       // the ASSEMBLER — different class, different dir
-#import "MachO.xc"
-#import "MachOLink.xc"
-#import "Tbd.xc"
-#import "PeLink.xc"
-#import "CodeSign.xc"
-#import "Iface.xc"
-#import "ElfArm64.xc"
-#import "ElfLinkArm64.xc"
-#import "Apk.xc"
-#import "ApkSign.xc"
-#import "RsaKeygen.xc"
-#import "Layout.xc"
-#import "LayoutMap.xc"     // -dl: a layout drawn as a memory map
-#import "Xt6502.xc"
-#import "Xta.xc"
-#import "Runtime6502.xc"
-#import "Peep6502.xc"
-#import "M68k.xc"            // the m68k BACK END
-#import "M68kAsm.xc"         // …and its assembler, which writes the GEMDOS container
-#import "Wasm32.xc"          // the wasm32 BACK END (emits WAT)
-#import "Wasm.xc"            // …and the writer that turns WAT into a .wasm module
-#import "Arm9.xc"            // the ARMv7-A BACK END
-#import "Arm32.xc"           // …its assembler
-#import "Elf32.xc"           // …and the ET_DYN writer the XTOS loader takes
-#import "X86_64.xc"          // the x86-64 BACK END
-#import "X86Link.xc"    // …and the link, shared with xtldx86 so they cannot drift
-#import "Elf64.xc"      // …and the ET_REL object writer `-c` needs
-#import "Pe.xc"         // the Windows PE/COFF writer, shared with xtldwin
-#import "CPath.xc"      // `xcc prog.c`: clang's LLVM IR read into a module (cpp-front-end.md)
+#import <Frontend>
+#import <IrParse>
+#import <Opt>
+#import "OptDefs.xc"
+#import <Arm64>          // the BACK END
+#import <Arm64Asm>       // the ASSEMBLER — different class, different dir
+#import "Arm64AsmDefs.xc"
+#import <MachO>
+#import "MachODefs.xc"
+#import <MachOLink>
+#import <Tbd>
+#import <PeLink>
+#import <CodeSign>
+#import <Iface>
+#import <ElfArm64>
+#import "ElfArm64Defs.xc"
+#import <ElfLinkArm64>
+#import "ElfLinkArm64Defs.xc"
+#import <Apk>
+#import <ApkSign>
+#import <RsaKeygen>
+#import <Layout>
+#import <LayoutMap>     // -dl: a layout drawn as a memory map
+#import <Xt6502>
+#import <Xta>
+#import "XtaDefs.xc"
+#import <Runtime6502>
+#import <Peep6502>
+#import "Peep6502Defs.xc"
+#import <M68k>            // the m68k BACK END
+#import <M68kAsm>         // …and its assembler, which writes the GEMDOS container
+#import "M68kAsmDefs.xc"
+#import <Wasm32>          // the wasm32 BACK END (emits WAT)
+#import <Wasm>            // …and the writer that turns WAT into a .wasm module
+#import "WasmDefs.xc"
+#import <Arm9>            // the ARMv7-A BACK END
+#import <Arm32>           // …its assembler
+#import "Arm32Defs.xc"
+#import <Elf32>           // …and the ET_DYN writer the XTOS loader takes
+#import "Elf32Defs.xc"
+#import <X86_64>          // the x86-64 BACK END
+#import <X86Link>    // …and the link, shared with xtldx86 so they cannot drift
+#import <Elf64>      // …and the ET_REL object writer `-c` needs
+#import "Elf64Defs.xc"
+#import <Pe>         // the Windows PE/COFF writer, shared with xtldwin
+#import "PeDefs.xc"
+#import <CPath>      // `xcc prog.c`: clang's LLVM IR read into a module (cpp-front-end.md)
 
 // A C program's own output while xcc's part is compiled to an object (the
 // C path): set, the object is linked with clang's into it (cSplitLink).
 String* gCSplitOut;
-#import "External.xc"   // --no-self-host: the vendor-toolchain path
+#import <External>   // --no-self-host: the vendor-toolchain path
+#import <Parser>
+#import <ArArchive>
+#import <Ir>
+#import "IrDefs.xc"
+#import <X86Asm>
+#import "X86AsmDefs.xc"
 
 // ── capability options ───────────────────────────────────────────────────
 //
@@ -3987,7 +4006,7 @@ void cSplitLink(DriverOptions* d)
 {
     String* xo = d.fe().output();
     d.objectInputs().add((Object*)xo);
-    d.objectInputs().add((Object*)gCRestObject);
+    d.objectInputs().add((Object*)cRestObject());
     d.fe().setOutput(gCSplitOut);
     d.setCompileOnly(false);
     gCSplitOut = (String*)0;
@@ -4210,12 +4229,12 @@ void main(void)
         // become blocks. The user's -I and -D go to clang.
         String* cin = d.fe().input();
         if (d.fe().parAuto())
-            gOptOutline = true;
+            optSetOutline(true);
         Array* cIncs = new Array();
         cIncs.addAll(d.fe().incs());
         Array* cDefs = new Array();
         cDefs.addAll(d.fe().defs());
-        gOptPromoteScalars = true;
+        optSetPromoteScalars(true);
         if (d.compileOnly())
             {
             Stdio.printf("xcc: error: -c of a C file is not done yet: build the program in one step\n");
@@ -4223,9 +4242,9 @@ void main(void)
             }
         // clang's own stack protector for its half, where the link has its
         // runtime: macOS, and Linux linked against glibc (the default).
-        gCPathProtect = (d.arch().equals(String.withCString("arm64")) && !isIos(d))
-                     || (isX86_64(d) && d.caps().dynamic());
-        if (gOptOutline || Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
+        cPathSetProtect((d.arch().equals(String.withCString("arm64")) && !isIos(d))
+                        || (isX86_64(d) && d.caps().dynamic()));
+        if (optOutline() || Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
             mod = CPath.lowerWith(cin, CPath.scratch(), cIncs, cDefs, d.fe());
         else
             mod = CPath.lower(cin, CPath.scratch(), cIncs, cDefs);

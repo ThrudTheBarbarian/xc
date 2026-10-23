@@ -14,9 +14,11 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "X86Asm.xc"
-#import "X86Link.xc"
-#import "Elf64.xc"
+#import <X86Asm>
+#import "X86AsmDefs.xc"
+#import <X86Link>
+#import <Elf64>
+#import "Elf64Defs.xc"
 
 void main(void)
     {

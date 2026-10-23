@@ -14,7 +14,8 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "Wasm.xc"
+#import <Wasm>
+#import "WasmDefs.xc"
 
 void main(void)
     {

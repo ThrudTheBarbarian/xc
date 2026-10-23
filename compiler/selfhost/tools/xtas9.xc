@@ -11,8 +11,10 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "Arm32.xc"
-#import "Elf32.xc"
+#import <Arm32>
+#import "Arm32Defs.xc"
+#import <Elf32>
+#import "Elf32Defs.xc"
 
 void main(void)
     {

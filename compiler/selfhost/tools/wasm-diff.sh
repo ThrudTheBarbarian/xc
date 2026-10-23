@@ -51,10 +51,10 @@ echo "building xtcgwasm (xtc → native arm64)…"
 # over the 16 KB frame budget; the tool's own opt level changes nothing
 # about what it EMITS.
 "${XC_TOOL_XCC:-$BIN/xcc}" -O1 -A $XC_HOST_ARCH -H . -o "$WORK/xtcgwasm" selfhost/tools/xtcgwasm.xc \
-    -I selfhost/ir -I selfhost/opt -I selfhost/codegen 2>&1 | grep -E "^[^ ].*error" && exit 1
+    -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen 2>&1 | grep -E "^[^ ].*error" && exit 1
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser
-          -I selfhost/sema -I selfhost/ir -I selfhost/codegen)
+RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+          -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/codegen)
 
 pass=0; fail=0; unsup=0; oracle=0
 declare -a FAILED

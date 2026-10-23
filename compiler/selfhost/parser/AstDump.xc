@@ -17,12 +17,13 @@
 // are byte-for-byte the parser dump they always were.
 
 #import "Foundation.xc"
-#import "Node.xc"
+#import <Node>
+#import "NodeDefs.xc"
 // Uses FloatEncoding directly. It compiled only because every CONSUMER happened
 // to import the lexer first — so this file could not be built on its own, and a
 // file that cannot be built is one the self-hosting differential silently skips
 // rather than compares (see all-diff.sh).
-#import "FloatEncoding.xc"
+#import <FloatEncoding>
 
 // The dump, as a class: `emit` and `emitKids` call each other, and a free
 // function in xtc must be defined before it is used — methods have no such

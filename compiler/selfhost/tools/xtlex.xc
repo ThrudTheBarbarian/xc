@@ -20,9 +20,10 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "TokenType.xc"
-#import "Token.xc"
-#import "Lexer.xc"
+#import <TokenType>
+#import "TokenTypeDefs.xc"
+#import <Token>
+#import <Lexer>
 
 // UPPERCASE hex, two digits — as the oracle's "\\x%02X" produces.
 u8 hexDigit(u8 nibble)

@@ -26,7 +26,7 @@
 // than as a double — see _convert.
 
 #import "Foundation.xc"
-#import "BigNat.xc"
+#import <BigNat>
 
 class FloatEncoding
     {

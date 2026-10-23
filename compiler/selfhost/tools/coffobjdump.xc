@@ -6,8 +6,9 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "ArArchive.xc"
-#import "CoffObject.xc"
+#import <ArArchive>
+#import <CoffObject>
+#import "CoffObjectDefs.xc"
 
 void dumpRelocs(String* member, String* kind, Array* rs)
     {

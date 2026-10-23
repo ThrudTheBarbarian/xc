@@ -8,8 +8,10 @@
 // relocation merging is the kind that drifts.
 
 #import "Foundation.xc"
-#import "Arm64Asm.xc"
-#import "MachOObject.xc"
+#import <Arm64Asm>
+#import "Arm64AsmDefs.xc"
+#import <MachOObject>
+#import "MachOObjectDefs.xc"
 
 class MachOLink
     {

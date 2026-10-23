@@ -9,8 +9,8 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "ArArchive.xc"
-#import "ElfObject.xc"
+#import <ArArchive>
+#import <ElfObject>
 
 void dumpOne(String* member, ElfObject* o)
     {

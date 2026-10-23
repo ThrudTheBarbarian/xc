@@ -20,7 +20,7 @@
 // the arbitrariness IS the job.
 
 #import "Foundation.xc"
-#import "Types.xc"
+#import <Types>
 
 class Mangle
     {

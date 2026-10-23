@@ -10,7 +10,8 @@
 
 #import "Foundation.xc"
 #import "Files.xc"
-#import "Xta.xc"
+#import <Xta>
+#import "XtaDefs.xc"
 
 #if ARCH_win64
 pointer FindFirstFileA(u8* pattern, u8* data);

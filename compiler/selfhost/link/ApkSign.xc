@@ -17,10 +17,11 @@
 // nowhere and says nothing about why.
 
 #import "Foundation.xc"
-#import "MachO.xc" // Sha256
-#import "Bignum.xc"
-#import "Apk.xc" // apkW8/16/32, apkAppend
-#import "RsaKeygen.xc"
+#import <MachO> // Sha256
+#import "MachODefs.xc"
+#import <Bignum>
+#import <Apk> // apkW8/16/32, apkAppend
+#import <RsaKeygen>
 
 u32 apkR32(Array* d, u32 at)
     {

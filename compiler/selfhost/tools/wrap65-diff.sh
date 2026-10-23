@@ -34,7 +34,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 echo "building xtcg65 (xtc → native arm64)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcg65" selfhost/tools/xtcg65.xc \
-    -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/driver \
+    -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/driver -I selfhost/defs \
     2>&1 | grep -E "^[^ ].*error" && exit 1
 [ -x "$WORK/xtcg65" ] || { echo "--- wrap65-diff: BROKEN (xtcg65 did not build)"; exit 1; }
 

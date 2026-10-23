@@ -7,7 +7,8 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "M68kAsm.xc"
+#import <M68kAsm>
+#import "M68kAsmDefs.xc"
 
 void main(void)
     {

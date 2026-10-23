@@ -13,9 +13,10 @@
 // next.
 
 #import "Foundation.xc"
-#import "Ir.xc"
-#import "LlvmRead.xc"
-#import "Frontend.xc"
+#import <Ir>
+#import "IrDefs.xc"
+#import <LlvmRead>
+#import <Frontend>
 
 // clang's object for the part of the C program xcc does not compile (the
 // globals, and any function the reader did not read); the link adds it.
@@ -25,6 +26,10 @@ String* gCRestObject;
 // driver says yes for macOS and the dynamic glibc link, and no for a static
 // Linux program and Windows, whose links have no such runtime.
 bool gCPathProtect;
+
+// The two above, as functions, for a file compiled against this interface.
+String* cRestObject(void) { return gCRestObject; }
+void cPathSetProtect(bool b) { gCPathProtect = b; }
 
 // The C library's: the shell runs clang, with this process's environment.
 i32 system(u8* command);

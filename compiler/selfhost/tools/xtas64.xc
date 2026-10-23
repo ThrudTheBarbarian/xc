@@ -13,8 +13,9 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "U64.xc"
-#import "Arm64Asm.xc"
+#import <U64>
+#import <Arm64Asm>
+#import "Arm64AsmDefs.xc"
 
 // printf has no zero-padded hex, and the listing's whole value is that it is
 // byte-for-byte comparable, so the padding is done here.

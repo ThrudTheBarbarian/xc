@@ -248,10 +248,10 @@ WIN64_POOL_FILES  = lib/libmingwex.a lib/libmsvcrt.a clang-rt/libclang_rt.builti
 XCC_XC_BIN = $(BIN_DIR)/xcc-xc
 XCC_XC_SRC = selfhost/tools/xcc.xc
 XCC_XC_INCS = -I support/generic/lib -I support/arm64/lib \
-              -I selfhost/lexer -I selfhost/preproc -I selfhost/parser \
-              -I selfhost/sema -I selfhost/ir -I selfhost/opt \
-              -I selfhost/codegen -I selfhost/asm -I selfhost/link \
-              -I selfhost/driver
+              -I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser \
+              -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt \
+              -I selfhost/codegen -I selfhost/defs -I selfhost/asm -I selfhost/link \
+              -I selfhost/driver -I selfhost/defs
 
 # The support libraries are SOURCES of this binary too — the compiler is an xc
 # program and compiles String.xc, Array.xc et al into itself. Without them here,
@@ -286,10 +286,10 @@ $(XCC_XC2_BIN): $(XCC_XC_BIN)
 # instead), and the link fails with `undefined symbol '_putc'` — a message that
 # reads like a compiler gap and is not one.
 XCC_XC_TARGET_INCS = -I support/generic/lib -I support/$(1)/lib \
-                     -I selfhost/lexer -I selfhost/preproc -I selfhost/parser \
-                     -I selfhost/sema -I selfhost/ir -I selfhost/opt \
-                     -I selfhost/codegen -I selfhost/asm -I selfhost/link \
-                     -I selfhost/driver
+                     -I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser \
+                     -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt \
+                     -I selfhost/codegen -I selfhost/defs -I selfhost/asm -I selfhost/link \
+                     -I selfhost/driver -I selfhost/defs
 
 XCC_XC_LINUX_BIN = bin/linux/xcc-xc
 XCC_XC_WIN64_BIN = bin/win64/xcc-xc.exe
@@ -371,7 +371,7 @@ MBEDTLS_PREFIX ?= /opt/homebrew/opt/mbedtls
 MBEDTLS_LIBS    = mbedtls mbedx509 mbedcrypto tfpsacrypto
 XCC_SIGN_XC_DEPS = $(XCC_XC2_BIN) selfhost/tools/xtsign.xc $(wildcard selfhost/link/*.xc) \
                    $(wildcard support/generic/lib/*.xc)
-XCC_SIGN_XC_INCS = -I selfhost/asm -I selfhost/link
+XCC_SIGN_XC_INCS = -I selfhost/asm -I selfhost/defs -I selfhost/link
 ifeq ($(UNAME_S),Darwin)
   XCC_SIGN_XC_HOST = -DXT_HAVE_KEYCHAIN=1 -framework Security -framework CoreFoundation
 endif
@@ -458,18 +458,18 @@ XCC_AS_XC_SRCS = selfhost/tools/xta6502.xc selfhost/asm/Xta.xc selfhost/asm/Xa65
 XCC_AS_XC_BIN = $(BIN_DIR)/xcc-as-xc
 $(XCC_AS_XC_BIN): $(XCC_XC2_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/arm64/lib/*.xc)
 	@echo "  xc   building the production assembler (stage 2)"
-	@$(XCC_XC2_BIN) -q -O2 -A arm64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
+	@$(XCC_XC2_BIN) -q -O2 -A arm64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm -I selfhost/defs
 
 $(XCC_AS_XC_LINUX_BIN): $(XCC_XC2_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/x86_64/lib/*.xc) \
                         support/x86_64/runtime/sys-linux.s
 	@echo "  xc   building the production assembler for linux"
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -static -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
+	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -static -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm -I selfhost/defs
 
 $(XCC_AS_XC_WIN64_BIN): $(XCC_XC2_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/win64/lib/*.xc)
 	@echo "  xc   building the production assembler for win64"
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm
+	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm -I selfhost/defs
 
 .PHONY: production
 production: $(XCC_XC_BIN) $(XCC_XC2_BIN) $(XCC_SIGN_XC_BIN) $(XCC_AS_XC_BIN)
@@ -1613,7 +1613,7 @@ ELFOBJDUMP_BIN = $(BIN_DIR)/elfobjdump
 elfobjdump: $(ELFOBJDUMP_BIN)
 $(ELFOBJDUMP_BIN): selfhost/tools/elfobjdump.xc selfhost/asm/ElfObject.xc \
                    selfhost/asm/ArArchive.xc $(XTC_BIN) | $(BIN_DIR)
-	@$(XTC_BIN) -A arm64 -H . -I selfhost/asm -o $@ selfhost/tools/elfobjdump.xc
+	@$(XTC_BIN) -A arm64 -H . -I selfhost/asm -I selfhost/defs -o $@ selfhost/tools/elfobjdump.xc
 
 ORACLE_COFFOBJ_BIN = $(BIN_DIR)/oracle-coffobj
 .PHONY: oracle-coffobj
@@ -1628,7 +1628,7 @@ COFFOBJDUMP_BIN = $(BIN_DIR)/coffobjdump
 coffobjdump: $(COFFOBJDUMP_BIN)
 $(COFFOBJDUMP_BIN): selfhost/tools/coffobjdump.xc selfhost/asm/CoffObject.xc \
                     selfhost/asm/ElfObject.xc selfhost/asm/ArArchive.xc $(XTC_BIN) | $(BIN_DIR)
-	@$(XTC_BIN) -A arm64 -H . -I selfhost/asm -o $@ selfhost/tools/coffobjdump.xc
+	@$(XTC_BIN) -A arm64 -H . -I selfhost/asm -I selfhost/defs -o $@ selfhost/tools/coffobjdump.xc
 
 ORACLE_ELFOBJ_BIN = $(BIN_DIR)/oracle-elfobj
 .PHONY: oracle-elfobj

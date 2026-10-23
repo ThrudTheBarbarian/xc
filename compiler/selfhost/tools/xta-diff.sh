@@ -22,15 +22,15 @@ trap 'rm -rf "$WORK"' EXIT
 
 echo "building xta6502 (xtc → native arm64 host binary)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xta6502" selfhost/tools/xta6502.xc \
-    -I selfhost/asm > "$WORK/build.log" 2>&1
+    -I selfhost/asm -I selfhost/defs > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xta6502" ]; then grep -a error "$WORK/build.log" | head -5; exit 1; fi
 
 LAYOUT=support/xt6502/layouts/xt.lnk
 BANKARGS=(-b -code-window '$6000-$9FFF' -data-window '$A000-$CFFF'
           -code-reg '$D5C0' -data-reg '$D5C1' -I . -I support)
-RUN_INCS=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser
-          -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/codegen
-          -I selfhost/asm)
+RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+          -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt -I selfhost/codegen
+          -I selfhost/asm -I selfhost/defs)
 
 pass=0; fail=0; oracle=0
 declare -a FAILED

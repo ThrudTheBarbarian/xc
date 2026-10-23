@@ -11,7 +11,7 @@
 
 #import "Foundation.xc"
 #import "Files.xc"
-#import "Bignum.xc"
+#import <Bignum>
 
 #if ARCH_win64
 // The OS's random bytes on Windows: RtlGenRandom, which advapi32 exports

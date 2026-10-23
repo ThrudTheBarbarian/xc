@@ -10,8 +10,8 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "Apk.xc"
-#import "ApkSign.xc"
+#import <Apk>
+#import <ApkSign>
 
 void writeBytes(String* path, Array* bytes)
     {

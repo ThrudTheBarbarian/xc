@@ -57,10 +57,10 @@ esac
 
 echo "building xtopt (xtc → native arm64)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtopt" selfhost/tools/xtopt.xc \
-    -I selfhost/ir -I selfhost/opt 2>&1 | grep -E "^[^ ].*error" && exit 1
+    -I selfhost/ir -I selfhost/defs -I selfhost/opt 2>&1 | grep -E "^[^ ].*error" && exit 1
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser
-          -I selfhost/sema -I selfhost/ir)
+RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+          -I selfhost/sema -I selfhost/defs -I selfhost/ir)
 # arm9 resolves `#import <c>` against the device libc.so; without it the ORACLE
 # cannot compile most of the tree.
 ARM9_SYSROOT=${XTC_ARM9_SYSROOT:-}

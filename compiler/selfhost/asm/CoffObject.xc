@@ -23,18 +23,9 @@
 //     ordinary in a libc — so taking the first leaves most of the member's code
 //     out of the image while still claiming its symbols.
 #import "Foundation.xc"
-#import "ElfObject.xc" // ElfSymDef / ElfReloc: one shape for both formats
+#import <ElfObject> // ElfSymDef / ElfReloc: one shape for both formats
 
-#define COFF_MACHINE_AMD64 $8664
-#define COFF_SCN_CODE $00000020
-#define COFF_SCN_INIT_DATA $00000040
-#define COFF_SCN_UNINIT_DATA $00000080
-#define COFF_SCN_DISCARDABLE $02000000
-#define COFF_SECT_HDR_SIZE 40
-#define COFF_SYM_SZ 18
-#define COFF_RELOC_SZ 10
-#define COFF_REL_ADDR64 $01
-#define COFF_REL_REL32 $04
+#import "CoffObjectDefs.xc"
 
 class CoffSection
     {

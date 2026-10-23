@@ -14,12 +14,13 @@
 // no 64-bit integer write a 64-bit object format without arithmetic gymnastics.
 
 #import "Foundation.xc"
-#import "MachOObject.xc"
-#import "Arm64Asm.xc"
+#import <MachOObject>
+#import "MachOObjectDefs.xc"
+#import <Arm64Asm>
+#import "Arm64AsmDefs.xc"
 
-#define MACHO_PAGE $4000
-#define STUB_SZ 12
-#define GOT_SZ 8
+#import "MachODefs.xc"
+#import <DwarfWriter>
 
 // Bug 642: a data symbol whose offset is at or past gMachOBssFrom lives in the
 // __bss zero-fill section, at gMachOBssBase + (offset - gMachOBssFrom), and

@@ -27,7 +27,7 @@ cd "$(dirname "$0")/../.." || exit 1
 BIN=bin/$XC_PLAT; [ -x "$BIN/xcc" ] || BIN=bin/linux
 WORK=${TMPDIR:-/tmp}/signdiff.$$
 mkdir -p "$WORK"; trap 'rm -rf "$WORK"' EXIT
-INCS=(-I selfhost/asm -I selfhost/link)
+INCS=(-I selfhost/asm -I selfhost/defs -I selfhost/link)
 echo "building xtsign + mkident (xtc → native arm64)…"
 # Built as the Makefile builds it: the keychain on macOS, TLS when the tls
 # module and Mbed TLS are there (make builds build/tls/tlsshim.o).

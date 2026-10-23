@@ -27,7 +27,8 @@
 
 #import "Foundation.xc"
 #import "Files.xc"
-#import "Ir.xc"
+#import <Ir>
+#import "IrDefs.xc"
 
 // -g: one line's trailing ` !dbg <file>:<line>:<col>`, taken off the line
 // when it is read so nothing else has to know the suffix is there.

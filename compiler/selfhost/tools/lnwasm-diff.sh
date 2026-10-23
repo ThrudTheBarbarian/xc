@@ -23,10 +23,10 @@ trap 'rm -rf "$WORK"' EXIT
 
 echo "building xtlnwasm (xtc → native arm64)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtlnwasm" selfhost/tools/xtlnwasm.xc \
-    -I selfhost/asm 2>&1 | grep -E "^[^ ].*error" && exit 1
+    -I selfhost/asm -I selfhost/defs 2>&1 | grep -E "^[^ ].*error" && exit 1
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser
-          -I selfhost/sema -I selfhost/ir -I selfhost/codegen)
+RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+          -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/codegen)
 
 pass=0; fail=0; oracle=0
 # VALIDATE the oracle's module, not just compare against it. Two writers

@@ -16,8 +16,10 @@
 // queue rather than a mystery diff.
 
 #import "Foundation.xc"
-#import "Ir.xc"
-#import "IrParse.xc"
+#import <Ir>
+#import "IrDefs.xc"
+#import <IrParse>
+#import "Process.xc"
 
 // The one host call this file makes: the pipeline's stop-after hook, which has
 // to be readable from an installed compiler and not only from the harness.
@@ -38,15 +40,20 @@ bool gOptPromoteScalars;
 // how its loops become blocks).
 bool gOptOutline;
 
+// The three switches above, as functions: a file compiled against Opt's
+// interface (the split build) sees functions, not globals.
+bool optOutline(void) { return gOptOutline; }
+void optSetOutline(bool b) { gOptOutline = b; }
+void optSetPromoteScalars(bool b) { gOptPromoteScalars = b; }
+void optSetParKernelHook(ParKernelHook* h) { gParKernelHook = h; }
+
 // A sentinel count from lrcCountLiveOut: a value OTHER than the accumulator
 // escapes the outer loop, so the collapse is unsafe. Distinct from 0, which
 // means the accumulator itself is dead afterwards (nothing to rescale).
-#define LRC_LEAK $FFFFFFFF
+#import "OptDefs.xc"
 // The constant splats a vectorised loop holds in registers before it
 // splats the rest where they are used.
-#define VEC_SPLAT_HOIST_MAX 8
 // A loop body larger than this (instructions) hoists none.
-#define VEC_SPLAT_BIG_BODY 96
 
 // The per-target knobs. `XTIROptTargetProfile` is a conservative base with an
 // arm64/arm9 relaxation on top; only the knobs a ported pass actually consults
@@ -1179,8 +1186,6 @@ class BeFact : Object
 // gpu-globals: the size from which a numeric global array gets pages of its
 // own (rt.c's threshold for a heap array), and the page it is aligned to
 // (16 KB covers Apple silicon's pages as well as 4 KB ones).
-#define GPU_GLOBAL_MIN 65536
-#define GPU_GLOBAL_PAGE 16384
 
     class Opt
     {

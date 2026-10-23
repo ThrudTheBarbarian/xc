@@ -33,7 +33,7 @@ VERSION=$(tr -d ' \n' < VERSION)
 
 echo "building xcc-as (xtc → native arm64 host binary)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -DXCC_VERSION="\"$VERSION\"" -o "$WORK/xcc-as" \
-    selfhost/tools/xta6502.xc -I selfhost/asm > "$WORK/build.log" 2>&1
+    selfhost/tools/xta6502.xc -I selfhost/asm -I selfhost/defs > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xcc-as" ]; then grep -a error "$WORK/build.log" | head -5; exit 1; fi
 REF="$ROOT/$BIN/xcc-as"
 PORT="$WORK/xcc-as"

@@ -21,7 +21,7 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "X86Link.xc"
+#import <X86Link>
 
 void main(void)
     {

@@ -19,8 +19,8 @@
 //     the dynamic loader, or fail the link outright for a symbol nothing
 //     needs.
 #import "Foundation.xc"
-#import "ArArchive.xc"
-#import "ElfObject.xc"
+#import <ArArchive>
+#import <ElfObject>
 
 class ArPick
     {

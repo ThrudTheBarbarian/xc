@@ -10,9 +10,11 @@
 
 #import "Foundation.xc"
 #import "Files.xc"
-#import "MachO.xc" // Sha256
-#import "Bignum.xc"
-#import "ApkSign.xc" // apkAppend
+#import <MachO> // Sha256
+#import "MachODefs.xc"
+#import <Bignum>
+#import <ApkSign> // apkAppend
+#import <Apk>
 
 // ── byte helpers ────────────────────────────────────────────────────────
 class Bytes

@@ -25,9 +25,11 @@
 //     insert a phantom field into every importer's layout and shift every ivar
 //     after it.
 #import "Foundation.xc"
-#import "Node.xc"
-#import "Vtable.xc"
-#import "Iface.xc"
+#import <Node>
+#import "NodeDefs.xc"
+#import <Vtable>
+#import <Iface>
+#import "Files.xc"
 
 class IfaceWrite
 {

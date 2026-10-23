@@ -17,8 +17,10 @@
 // reason the type-width invariant is written down (private:docs/Design/type-width-invariant.md).
 
 #import "Foundation.xc"
-#import "Ir.xc"
-#import "Homing.xc"
+#import <Ir>
+#import "IrDefs.xc"
+#import <Homing>
+#import "Process.xc"
 
 class Arm9
     {

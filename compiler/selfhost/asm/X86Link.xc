@@ -13,10 +13,14 @@
 // land in the second.
 #import "Foundation.xc"
 #import "Files.xc"
-#import "X86Asm.xc"
-#import "Elf64.xc"
-#import "ArResolve.xc"
-#import "ElfMerge.xc"
+#import <X86Asm>
+#import "X86AsmDefs.xc"
+#import <Elf64>
+#import "Elf64Defs.xc"
+#import <ArResolve>
+#import <ArArchive>
+#import <ElfMerge>
+#import <ElfObject>
 
 class X86Link
     {

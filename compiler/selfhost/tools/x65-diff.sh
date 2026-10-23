@@ -27,11 +27,11 @@ trap 'rm -rf "$WORK"' EXIT
 
 echo "building xtcg65 (xtc → native arm64 host binary)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcg65" selfhost/tools/xtcg65.xc \
-    -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/driver \
+    -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/driver -I selfhost/defs \
     2>&1 | grep -E "^[^ ].*error" && exit 1
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser
-          -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/codegen)
+RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+          -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt -I selfhost/codegen)
 
 # The backend's own output begins at its banner; everything before it is the
 # driver-prepended runtime harness. It ENDS before the banked float/double

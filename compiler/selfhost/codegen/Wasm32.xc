@@ -14,7 +14,8 @@
 // CFBasicHash to match; the original was fixed instead, per the rule).
 
 #import "Foundation.xc"
-#import "Ir.xc"
+#import <Ir>
+#import "IrDefs.xc"
 
 
 // ── Per-function emission state ────────────────────────────────────────────

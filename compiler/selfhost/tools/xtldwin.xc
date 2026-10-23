@@ -18,8 +18,10 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
-#import "X86Asm.xc"
-#import "Pe.xc"
+#import <X86Asm>
+#import "X86AsmDefs.xc"
+#import <Pe>
+#import "PeDefs.xc"
 
 Array* gDlls; // String@
 Array* gSyms; // Array@ of String@, parallel to gDlls

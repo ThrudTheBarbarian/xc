@@ -20,9 +20,9 @@ WORK=${TMPDIR:-/tmp}/ldx86dyn.$$
 mkdir -p "$WORK"; trap 'rm -rf "$WORK"' EXIT
 
 INCS=(-I support/generic/lib -I support/x86_64/lib)
-SELF=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema
-      -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm
-      -I selfhost/link -I selfhost/driver)
+SELF=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema
+      -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen -I selfhost/asm
+      -I selfhost/link -I selfhost/driver -I selfhost/defs)
 HOSTA=$( case "$(uname -m)" in (arm64|aarch64) echo arm64 ;; (*) echo x86_64 ;; esac )
 echo "building xcc.xc (the xtc driver)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $HOSTA -H . -o "$WORK/xccxc" selfhost/tools/xcc.xc \

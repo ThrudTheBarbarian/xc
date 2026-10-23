@@ -18,35 +18,24 @@
 // does not.
 
 #import "Foundation.xc"
-#import "DwarfWriter.xc"
+#import <DwarfWriter>
 
-#define X86FIX_REL32 0
-#define X86FIX_PC32 1
-#define X86FIX_ABS64 2
+#import "X86AsmDefs.xc"
 // The four below are never produced by THIS assembler. They exist because the
 // linker also consumes objects it did not produce — musl's, built by clang —
 // and those carry relocation kinds our own code generator has no reason to
 // emit (task #47, private:docs/Design/foreign-object-linking.md). Kept here rather
 // than in the merge so that one enumeration covers every fixup the writer can
 // be handed, whatever produced it.
-#define X86FIX_PC32DATA 3 // a PC-relative slot in DATA — musl's vfprintf
                           // builds a position-independent jump table
-#define X86FIX_GOTLOAD 4  // [REX_]GOTPCRELX: a RELAXABLE GOT load. When the
                           // opcode two bytes back is mov (0x8b) it becomes
                           // lea and no slot is needed at all
-#define X86FIX_GOTREF 5   // plain GOTPCREL: NOT relaxable, because the slot
                           // is read as data — it needs a real GOT entry
-#define X86FIX_TPOFF32 6  // local-exec TLS: the addend IS the final
                           // %fs-relative offset, so there is no symbol to
                           // resolve
 
-#define OP_NONE 0
-#define OP_REG 1
-#define OP_MEM 2
-#define OP_IMM 3
 // The size an opmask register (k0-k7) parses to: no real operand is this wide,
 // so it cannot be mistaken for a GPR or a vector register.
-#define XK_SIZE 99
 
 class X86Fixup
     {

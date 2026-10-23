@@ -27,11 +27,13 @@
 // type table, it can grow one behind these same queries.
 
 #import "Foundation.xc"
-#import "Node.xc"
-#import "Mangle.xc"
-#import "Types.xc"
-#import "Overload.xc"
-#import "Vtable.xc"
+#import <Node>
+#import "NodeDefs.xc"
+#import <Mangle>
+#import <Types>
+#import <Overload>
+#import <Vtable>
+#import <FileTable>
 
 class Sema
     {

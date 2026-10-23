@@ -188,9 +188,9 @@ echo "building the xc driver (selfhost/tools/xcc.xc → $XC_DRIVER_ARCH)…"
 # a long way from the include that caused it.
 "$BOOT" -O2 -A "$XC_DRIVER_ARCH" -H . -o "$WORK/xcc-xc" selfhost/tools/xcc.xc \
     -I support/generic/lib -I "$XC_DRIVER_LIB" \
-    -I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema \
-    -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm \
-    -I selfhost/link -I selfhost/driver > "$WORK/build.log" 2>&1
+    -I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema \
+    -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen -I selfhost/asm \
+    -I selfhost/link -I selfhost/defs -I selfhost/driver > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xcc-xc" ]; then
     echo "--- xc corpus sweep: BROKEN (the xc driver did not build)"
     sed 's/^/    /' "$WORK/build.log" | head -25

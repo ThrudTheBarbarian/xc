@@ -32,9 +32,10 @@
 
 #import "Foundation.xc"
 #import "CharacterSet.xc"
-#import "TokenType.xc"
-#import "Token.xc"
-#import "FileTable.xc"
+#import <TokenType>
+#import "TokenTypeDefs.xc"
+#import <Token>
+#import <FileTable>
 
 class Lexer
     {

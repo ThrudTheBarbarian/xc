@@ -11,12 +11,14 @@
 #import "Foundation.xc"
 #import "Stdio.xc"
 #import "Files.xc"
-#import "CodeSign.xc"
-#import "RsaKeygen.xc"
-#import "Plist.xc"
-#import "Es256.xc"
-#import "Json.xc"
-#import "Https.xc"
+#import <CodeSign>
+#import <RsaKeygen>
+#import <Plist>
+#import "PlistDefs.xc"
+#import <Es256>
+#import <Json>
+#import "JsonDefs.xc"
+#import <Https>
 
 i64 time(pointer t);
 i32 chmod(u8* path, u32 mode);

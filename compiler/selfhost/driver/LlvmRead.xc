@@ -21,8 +21,9 @@
 // a load or a store casts it (Bitcast) to the type it addresses.
 
 #import "Foundation.xc"
-#import "Ir.xc"
-#import "FloatEncoding.xc"
+#import <Ir>
+#import "IrDefs.xc"
+#import <FloatEncoding>
 
 class LlvmReader
     {

@@ -38,7 +38,8 @@
 //     after it.
 
 #import "Foundation.xc"
-#import "Node.xc"
+#import <Node>
+#import "NodeDefs.xc"
 
 class Vtable
     {

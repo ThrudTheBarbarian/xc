@@ -25,7 +25,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 echo "building xta9so + xtcg9 (xtc → native arm64 host binary)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xta9so" selfhost/tools/xta9so.xc \
-    -I selfhost/asm > "$WORK/build.log" 2>&1
+    -I selfhost/asm -I selfhost/defs > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xta9so" ]; then
     grep -a error "$WORK/build.log" | head -5
     exit 1
@@ -37,7 +37,7 @@ fi
 # already being run here, so comparing their `--emit-lib` output costs one
 # `cmp` and closes it.
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcg9" selfhost/tools/xtcg9.xc \
-    -I selfhost/ir -I selfhost/codegen -I selfhost/opt > "$WORK/cgbuild.log" 2>&1
+    -I selfhost/ir -I selfhost/defs -I selfhost/codegen -I selfhost/opt > "$WORK/cgbuild.log" 2>&1
 if [ ! -x "$WORK/xtcg9" ]; then
     grep -a error "$WORK/cgbuild.log" | head -5
     exit 1
@@ -57,9 +57,9 @@ else
     exit 1
 fi
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/preproc -I selfhost/parser
-          -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/codegen
-          -I selfhost/asm)
+RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+          -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt -I selfhost/codegen
+          -I selfhost/asm -I selfhost/defs)
 
 pass=0; fail=0; oracle=0
 declare -a FAILED

@@ -23,8 +23,9 @@
 //   * A TLS symbol's value is an OFFSET in the thread block, not an address, so
 //     it goes in its own table and never into the ordinary symbol map.
 #import "Foundation.xc"
-#import "X86Asm.xc"
-#import "ElfObject.xc"
+#import <X86Asm>
+#import "X86AsmDefs.xc"
+#import <ElfObject>
 
 // A GC unit boundary: a text offset and the symbol that names it (bug 196).
 class GcUnit

@@ -6,9 +6,12 @@
 // came out different from the reference).
 
 #import "Foundation.xc"
-#import "X86Asm.xc"
-#import "CoffObject.xc"
-#import "ArArchive.xc"
+#import <X86Asm>
+#import "X86AsmDefs.xc"
+#import <CoffObject>
+#import "CoffObjectDefs.xc"
+#import <ArArchive>
+#import <ElfObject>
 
 class PeLink
     {

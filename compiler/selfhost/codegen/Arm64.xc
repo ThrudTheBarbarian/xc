@@ -25,11 +25,12 @@
 // which is the one failure this harness exists to prevent.
 
 #import "Foundation.xc"
-#import "MsFn.xc"
+#import <MsFn>
 #import "Stdio.xc"
 #import "Process.xc"
-#import "Ir.xc"
-#import "Homing.xc"
+#import <Ir>
+#import "IrDefs.xc"
+#import <Homing>
 
 class Arm64
 {

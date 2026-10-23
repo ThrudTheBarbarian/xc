@@ -1,0 +1,37 @@
+// DwarfDefs.xc — the constants of Dwarf.xc.xc, apart from its code so a file
+// compiled against its interface (the split build) can still see them.
+#define DW_TAG_array_type $01
+#define DW_TAG_enumeration_type $04
+#define DW_TAG_formal_parameter $05
+#define DW_TAG_member $0D
+#define DW_TAG_pointer_type $0F
+#define DW_TAG_structure_type $13
+#define DW_TAG_subroutine_type $15
+#define DW_TAG_typedef $16
+#define DW_TAG_union_type $17
+#define DW_TAG_unspecified_parameters $18
+#define DW_TAG_base_type $24
+#define DW_TAG_const_type $26
+#define DW_TAG_enumerator $28
+#define DW_TAG_subrange_type $21
+#define DW_TAG_subprogram $2E
+#define DW_TAG_volatile_type $35
+#define DW_TAG_restrict_type $37
+#define DW_AT_name $03
+#define DW_AT_byte_size $0B
+#define DW_AT_const_value $1C
+#define DW_AT_upper_bound $2F
+#define DW_AT_count $37
+#define DW_AT_data_member_location $38
+#define DW_AT_declaration $3C
+#define DW_AT_encoding $3E
+#define DW_AT_external $3F
+#define DW_AT_type $49
+#define DW_AT_linkage_name $6E
+#define DW_ATE_boolean $02
+#define DW_ATE_float $04
+#define DW_ATE_signed $05
+#define DW_ATE_signed_char $06
+#define DW_ATE_unsigned $07
+#define DW_ATE_unsigned_char $08
+#define DW_OP_plus_uconst $23

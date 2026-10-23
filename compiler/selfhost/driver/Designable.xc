@@ -10,9 +10,10 @@
 #import "Foundation.xc"
 #import "Stdio.xc"
 #import "Process.xc"
-#import "Node.xc"
-#import "Lexer.xc"
-#import "Parser.xc"
+#import <Node>
+#import "NodeDefs.xc"
+#import <Lexer>
+#import <Parser>
 
 // uxkit/026, XG-NIB §4 — the designable surface, mirrored from the reference
 // driver's `synthesizeDesignable:`.

@@ -20,7 +20,7 @@
 // (static / varargs / throws / …), one bit each.
 
 #import "Foundation.xc"
-#import "FileTable.xc"
+#import <FileTable>
 
 // Node kinds. The names match the Objective-C XTASTNodeKind enumerators, and
 // the DUMP prints these names — so unlike the token types there is no numeric
@@ -92,78 +92,49 @@ enum NodeKind = {
     nkMarkerStep};
 
 // Flag bits, one per boolean qualifier a declaration can carry.
-#define NF_STATIC $0001
-#define NF_VARARGS $0002
-#define NF_THROWS $0004
-#define NF_OPTIONAL $0008
-#define NF_FINAL $0010
-#define NF_GLOBAL $0020
-#define NF_EXTERN $0040
-#define NF_VOLATILE $0080
-#define NF_REGISTER $0100
-#define NF_ARROW $0200
-#define NF_INCLUSIVE $0400
-#define NF_FAILABLE $0800
-#define NF_DEFAULT $1000
-#define NF_RANGE $2000
+#import "NodeDefs.xc"
 // `case ..hi:` and `case lo..:` both carry ONE bound, and nothing about the
 // node says which — so the open-low form says so itself.
-#define NF_RANGE_HI $20000
 // A Block that is really a DECL-LIST — `Block a, b, c;` wraps its declarators
 // in one. It is not a scope: the original marks it `isDeclList` and the
 // analyser has to know, or every declarator after the first is defined in a
 // scope that pops immediately. The dump does not print it (neither does the
 // original's), so this costs the M5 comparison nothing.
-#define NF_DECLLIST $4000
 // Placement qualifiers on a signature — `void f(void) :banked`. They do NOT
 // appear in the AST dump (neither does the original's), but the IR needs them:
 // a banked callee is reached through a different call opcode.
-#define NF_BANKED $8000
-#define NF_CLOAKED $10000
 // `:main` — keep the function out of the xt6502 code banks. The flag word is
 // full, so it shares its bit with NF_INCLUSIVE, which only a range or slice
 // node carries.
-#define NF_MAINRAM $0400
 // `:irq` / `:vbi` — an interrupt handler's prologue and epilogue are not a
 // function's, so the symbol has to carry which kind it is.
-#define NF_IRQ $40000
-#define NF_VBI $80000
 // `:xtcStack` / `:hwStack` — the xt6502 calling convention a function asks for,
 // overriding the --xtc-stack default. The flag word is full, so :hwStack shares
 // its bit with NF_RANGE_HI, which only a `case` label ever carries.
-#define NF_XTCSTACK $80000000
-#define NF_HWSTACK $20000
 // A declaration that came from a C interface, so it uses the C ABI. Set by the
 // TOOL on everything it reads out of an interface stub, exactly as the driver
 // sets it on what it reads out of DWARF — there is no source syntax for it,
 // and adding one would make the port a different language.
-#define NF_CABI $200000
 // The call carries a literal `...` — the vararg forwarding form — or, on a
 // DECLARATION, its body contains one. Only arm9 acts on it: its varargs travel
 // in registers, so a forwarder has to relay its own homed tail into the
 // callee's slots. private:docs/bugs/047.
-#define NF_VAFWD $400000
 
 // `struct X :packed { … }` — size is the raw field sum, no tail rounding.
-#define NF_PACKED $800000
 // A METHOD CALL that is really a call through a FIELD holding something
 // callable — `w.onChange(7)`, `s.fn(6)`. The parser cannot tell (it has no
 // types); sema marks it and hangs the rewritten call on the node as one extra
 // kid, past the receiver and arguments. The dump does not print that kid —
 // neither does the original, which keeps the node as it was written — so the
 // M5 comparison is unaffected. private:docs/bugs/074.
-#define NF_FIELDCALL $1000000
 // A method the ANALYSER made up rather than one the source declared. It is a
 // real method — it is called, and it has a symbol — but it did not exist when
 // the vtable slots were numbered, so it never fills one.
-#define NF_SYNTH $100000
 // A declaration reconstructed from a `.xtc.iface` — the class/function lives
 // in ANOTHER module; register externs, lower no bodies (stage 3 of
 // separate-compilation, mirrored from XTInterfaceImporter's isExternal).
-#define NF_EXTERNAL $2000000
 // §4.3b: a chain-dispatched category method, round-tripped through the iface
 // so an importer refuses to override it (the iface has no chain shape).
-#define NF_CHAINM $4000000
 
 // uxkit/026: the designable surface. `outlet` on a field and `:action` on a
 // method are markers the DRIVER reads — a class carrying either auto-conforms
@@ -179,20 +150,13 @@ enum NodeKind = {
 // the IR optimiser can raise its trip/body BUDGETS for that loop alone. Like
 // the markers above it this never appears in the AST dump — the original does
 // not print forceUnroll either, so it costs the comparison nothing.
-#define NF_UNROLL $08000000
 // `for (...) : goal(speed)` / `: goal(accuracy)` on a for node. The bits are
 // :irq / :vbi's, which only a function carries. Like NF_UNROLL, never in the
 // AST dump.
-#define NF_GOAL_SPEED $40000
-#define NF_GOAL_ACCURACY $80000
-#define NF_MODINIT $40000000
-#define NF_OUTLET $10000000
-#define NF_ACTION $20000000
 
 // §6 (tasks #31/#33): `extern` + initialiser on a global = an EXPORTED
 // definition — the original stores isExported (never dumped) and leaves
 // its dumped extern flag CLEAR; only a bodyless extern global keeps it.
-#define NF_EXPORTED $8000000
 
 class Node
     {

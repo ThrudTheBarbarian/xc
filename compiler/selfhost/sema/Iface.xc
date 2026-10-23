@@ -18,7 +18,9 @@
 // and nothing more.
 
 #import "Foundation.xc"
-#import "Node.xc"
+#import <Node>
+#import "NodeDefs.xc"
+#import "Files.xc"
 
 // ── A minimal JSON DOM ──────────────────────────────────────────────────
 // Kinds: 0 null, 1 bool, 2 number, 3 string, 4 array, 5 object.

@@ -11,11 +11,9 @@
 // arrive in this linker in exactly the shape they arrive in that one.
 
 #import "Foundation.xc"
-#import "ArArchive.xc"
+#import <ArArchive>
 
-#define MACHO_MAGIC_64 $FEEDFACF
-#define MACHO_LC_SEG64 $19
-#define MACHO_LC_SYMTAB $2
+#import "MachOObjectDefs.xc"
 
 // One symbol-table entry, PARALLEL to the object's nlist order so a
 // relocation's r_symbolnum indexes it. where: 0 undefined, 1 text, 2 data.
