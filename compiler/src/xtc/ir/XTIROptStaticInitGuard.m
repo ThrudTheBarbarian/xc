@@ -275,6 +275,32 @@ static NSArray<XTIRBlock*>* successors(XTIRBlock* b)
     return guards;
     }
 
+// The single-threaded guard whose init block is the flag's own store and
+// nothing else (constants aside), branching straight to its cont block. As
+// the port's sgTrivial.
+static BOOL guardIsTrivial(XTSinitGuard* g)
+    {
+    if (g.pred != XTIRICmpEQ || g.run.phiNodes.count || !g.addrOfInsn.result)
+        return NO;
+    XTIRInsn* t = g.run.terminator;
+    if (!t || t.opcode != XTIROpBranch || t.operands.count != 1 || t.operands[0].blockRef != g.cont)
+        return NO;
+    for (XTIRInsn* i in g.run.instructions)
+        {
+        if (i.opcode == XTIROpConst)
+            continue;
+        if (i.opcode == XTIROpStore && i.operands.count >= 2 && i.operands[0].kind == XTIROperandKindUse &&
+            i.operands[0].valueId == g.addrOfInsn.result.valueId)
+            continue;
+        return NO;
+        }
+    for (XTIRInsn* phi in g.cont.phiNodes)
+        for (XTIROperand* o in phi.operands)
+            if (o.kind == XTIROperandKindBlock && o.blockRef == g.run)
+                return NO;
+    return YES;
+    }
+
 - (void)runOnFunction:(XTIRFunction*)fn module:(XTIRModule*)mod
     {
     if (fn.blocks.count < 2)
@@ -305,6 +331,28 @@ static NSArray<XTIRBlock*>* successors(XTIRBlock* b)
     // provably dead pure ops are removed, so this cannot change behaviour.
     for (XTIRBlock* bb in fn.blocks)
         [self deadStripBlock:bb inFunction:fn];
+
+    // A guard whose init block only sets its own flag does nothing: the class
+    // has no initialiser (Math), and nothing but its guards reads the flag.
+    // It comes out wherever it is. One left in a loop kept the body two
+    // blocks, and neither vectoriser takes such a loop (nbody's inner loop
+    // calls Math.sqrt), when the hoist above did not reach it.
+    NSMutableArray<XTSinitGuard*>* trivial = [NSMutableArray array];
+    for (XTSinitGuard* g in guards)
+        if (guardIsTrivial(g))
+            [trivial addObject:g];
+    for (XTSinitGuard* g in trivial)
+        [self fold:g inFunction:fn];
+    if (trivial.count)
+        {
+        // The check's Load of the flag is left behind (fold leaves the tail to
+        // dead-code elimination, which keeps a Load): strip it, or the loop
+        // still reads the flag every time round.
+        [self coalesceStraightLineIn:fn];
+        for (XTIRBlock* bb in fn.blocks)
+            [self deadStripBlock:bb inFunction:fn];
+        guards = [self recogniseAllIn:fn module:mod preds:&preds];
+        }
 
     if (guards.count < 2)
         {

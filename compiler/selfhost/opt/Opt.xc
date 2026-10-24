@@ -7652,6 +7652,29 @@ class BeFact : Object
             }
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             sgDeadStripBlock((IRBlock*)fn.blocks().get(b), fn);
+
+        // A guard whose init block only sets its own flag does nothing: the
+        // class has no initialiser (Math), and nothing but its guards reads
+        // the flag. It comes out wherever it is; one left in a loop kept the
+        // body two blocks, which neither vectoriser takes (nbody's inner loop
+        // calls Math.sqrt). As the reference.
+        Array* trivial = new Array();
+        for (u32 i = (u32)0; i < _sgGuards.count(); i = i + (u32)1)
+            if (sgTrivial(i))
+                trivial.add((Object*)Number.with(i));
+        for (u32 k = (u32)0; k < trivial.count(); k = k + (u32)1)
+            foldGuard(fn, ((Number*)trivial.get(k)).asU32());
+        if (trivial.count() > (u32)0)
+            {
+            // The check's Load of the flag is left behind (foldGuard leaves the
+            // tail to dead-code elimination, which keeps a Load): strip it, or
+            // the loop still reads the flag every time round. As the reference.
+            coalesceStraightLine(fn);
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                sgDeadStripBlock((IRBlock*)fn.blocks().get(b), fn);
+            recogniseGuards(m, fn);
+            }
+
         if (_sgGuards.count() < (u32)2)
             return;
 
@@ -7682,6 +7705,51 @@ class BeFact : Object
         // what puts the loop body back in one block for the unroller.
         if (redundant.count() > (u32)0)
             coalesceStraightLine(fn);
+        }
+
+    // The single-threaded guard whose init block is the flag's own store and
+    // nothing else (constants aside), branching straight to its cont block.
+    // As the reference's guardIsTrivial.
+    bool sgTrivial(u32 i)
+        {
+        IRInsn* icmp = (IRInsn*)_sgIcmps.get(i);
+        IRBlock* run = (IRBlock*)_sgRuns.get(i);
+        IRBlock* cont = (IRBlock*)_sgConts.get(i);
+        IRInsn* addr = (IRInsn*)_sgAddrs.get(i);
+        if (icmp == 0 || icmp.pred() == 0 || !icmp.pred().equals(String.withCString("EQ")))
+            return false;
+        if (run.phis().count() > (u32)0 || addr == 0 || addr.res() == (IRValue*)0)
+            return false;
+        IRInsn* t = run.term();
+        if (t == 0 || !t.op().equals(String.withCString("Branch")) || t.ops().count() != (u32)1)
+            return false;
+        IROperand* to = (IROperand*)t.ops().get((u32)0);
+        if (to.kind() != (u8)OPK_BLOCK || to.blk() != cont)
+            return false;
+        for (u32 k = (u32)0; k < run.insns().count(); k = k + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)run.insns().get(k);
+            if (n.op().equals(String.withCString("Const")))
+                continue;
+            if (n.op().equals(String.withCString("Store")) && n.ops().count() >= (u32)2)
+                {
+                IROperand* a = (IROperand*)n.ops().get((u32)0);
+                if (a.kind() == (u8)OPK_USE && a.val() == addr.res())
+                    continue;
+                }
+            return false;
+            }
+        for (u32 k = (u32)0; k < cont.phis().count(); k = k + (u32)1)
+            {
+            IRInsn* ph = (IRInsn*)cont.phis().get(k);
+            for (u32 q = (u32)0; q < ph.ops().count(); q = q + (u32)1)
+                {
+                IROperand* o = (IROperand*)ph.ops().get(q);
+                if (o.kind() == (u8)OPK_BLOCK && o.blk() == run)
+                    return false;
+                }
+            }
+        return true;
         }
 
     void recogniseGuards(IRModule* m, IRFunc* fn)
