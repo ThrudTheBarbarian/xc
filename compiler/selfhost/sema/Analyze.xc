@@ -92,7 +92,9 @@ class Analyze
                         continue;
                     checkBody(m);
                     // A static method has no self, so it has no fields to hide.
-                    if (!m.hasFlag((u32)NF_STATIC))
+                    // A par block's class (ParImpl$<n>) is the compiler's: its
+                    // run copies each capture to a local named as the field.
+                    if (!m.hasFlag((u32)NF_STATIC) && !d.name().hasPrefix(String.withCString("ParImpl$")))
                         for (u32 b = (u32)0; b < m.kidCount(); b = b + (u32)1)
                             if (m.kid(b).kind() == (u16)nkBlock)
                                 hiddenFields(m.kid(b), fields, d.name());
@@ -226,6 +228,15 @@ class Analyze
             String* name = storedName(b.kid(i));
             if (name == (String*)0)
                 continue;
+            // A name this block does not declare (an instance variable, a
+            // global, an outer local) can be read by any call: the scan
+            // stops at one. ParRemote's `_resend = true; ok = take(...);
+            // _resend = false;` was reported, and take() reads _resend.
+            bool local = false;
+            for (u32 d = (u32)0; d <= i; d = d + (u32)1)
+                if (b.kid(d).kind() == (u16)nkVariableDecl && b.kid(d).name() != (String*)0
+                    && b.kid(d).name().equals(name))
+                    local = true;
             for (u32 j = i + (u32)1; j < b.kidCount(); j = j + (u32)1)
                 {
                 Node* nxt = b.kid(j);
@@ -243,7 +254,7 @@ class Analyze
                     j = b.kidCount();
                     continue;
                     }
-                if (opaque(nxt))
+                if (opaque(nxt) || (!local && callsIn(nxt)))
                     break;
                 }
             }
@@ -282,6 +293,18 @@ class Analyze
         }
 
     // Anything that could read or write the local out of sight.
+    // Whether a call, a method call or a `new` appears anywhere in the node.
+    bool callsIn(Node* n)
+        {
+        u16 k = n.kind();
+        if (k == (u16)nkCall || k == (u16)nkMethodCall || k == (u16)nkNew)
+            return true;
+        for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+            if (n.kid(i) != (Node*)0 && callsIn(n.kid(i)))
+                return true;
+        return false;
+        }
+
     bool opaque(Node* st)
         {
         u16 k = st.kind();
