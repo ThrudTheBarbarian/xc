@@ -340,6 +340,12 @@ class IfaceWrite
             if (parent == (String*)0 || parent.equals(String.withCString("-")))
                 parent = String.withCString("");
             IfaceWrite.kv(out, "parent", parent, true);
+            // A class this module instantiates, so a client that only calls
+            // its static methods does not run the INSTANCE init on its static
+            // block (the static-class guard). Only when true. As the
+            // reference.
+            if (c.usedByNew())
+                out.appendCString("\"instantiated\": true, ");
 
             // Protocols ride on `extra` as a comma-separated list, "-" when
             // there are none — the shape Iface.xc's reader produces, so the

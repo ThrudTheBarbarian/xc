@@ -255,6 +255,15 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
                                          @"protocols": c.protocolNames ?: @[],
                                          @"ivars":     ivars,
                                          @"methods":   methods } mutableCopy];
+            // A class this module instantiates. A client that only calls its
+            // static methods would otherwise run the INSTANCE init on the
+            // class's static block before the first call (the static-class
+            // idiom's guard, which skips instantiated classes but could not
+            // tell): Bignum.init's virtual setZero() called through that
+            // block's empty vtable, in every split-built compiler file that
+            // signs. Written only when true, so no other interface changes.
+            if (c.usedByNew)
+                cd[@"instantiated"] = @YES;
             if (outlets.count || actions.count) {
                 cd[@"designable"] = @YES;
                 cd[@"outlets"]    = outlets;

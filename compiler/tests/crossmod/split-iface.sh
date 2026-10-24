@@ -7,6 +7,12 @@
 #            "Duplicate enum name 'Shade'".
 #   opaque   e imports b only, whose interface names a's class behind a
 #            pointer: "imported library names the type 'Box'".
+#   static   f calls only a static method of a's Counter, which a itself
+#            instantiates: f ran Counter's INSTANCE init on the class's static
+#            block (the static-class guard, which skips instantiated classes
+#            but could not tell from the interface), and init's virtual call
+#            went through that block's empty vtable (the split-built compiler
+#            crashed signing an APK, in Bignum).
 #
 # Each compiler builds the interfaces and objects, links a, b and c, and the
 # program prints its answer.
@@ -28,6 +34,14 @@ class Box : Object
     u32 twice(void) { return v * (u32)2; }
     }
 Box* makeBox(u32 v) { Box* b = new Box(); b.v = v; return b; }
+class Counter : Object
+    {
+    u32 n;
+    void init(void) { reset(); }
+    void reset(void) { n = (u32)5; }
+    u32 count(void) { return n; }
+    static u32 made(void) { Counter* c = new Counter(); return c.count(); }
+    }
 XC
 cat > "$W/src/b.xc" <<'XC'
 #import <a>
@@ -54,15 +68,24 @@ cat > "$W/src/e.xc" <<'XC'
 #import <b>
 u32 valueOf(Holder* h) { return h.value(); }
 XC
+cat > "$W/src/f.xc" <<'XC'
+#import <a>
+#import "Stdio.xc"
+i32 main(void)
+    {
+    Stdio.printf("%u\n", Counter.made());
+    return 0;
+    }
+XC
 for XC in ${XC:-bin/$PLAT/xcc bin/$PLAT/xcc-xc}; do
     [ -x "$XC" ] || continue
     d="$W/$(basename "$XC")"; mkdir -p "$d/if" "$d/obj"
     ok=1
-    for f in a b c e; do
+    for f in a b c e f; do
         "$XC" -q -A $A -H . -L "$d/if" --emit-iface -o "$d/if/$f.xtc.iface" "$W/src/$f.xc" > "$d/if/$f.log" 2>&1 \
             || { echo "FAIL $XC: the interface of $f"; head -3 "$d/if/$f.log"; ok=0; }
     done
-    for f in a b c e; do
+    for f in a b c e f; do
         [ $ok = 1 ] || break
         "$XC" -q -O2 -A $A -H . -L "$d/if" -c -o "$d/obj/$f.o" "$W/src/$f.xc" > "$d/obj/$f.log" 2>&1 \
             || { echo "FAIL $XC: the object of $f"; sed 's/\x1b\[[0-9;]*m//g' "$d/obj/$f.log" | head -3; ok=0; }
@@ -74,6 +97,11 @@ for XC in ${XC:-bin/$PLAT/xcc bin/$PLAT/xcc-xc}; do
     if [ $ok = 1 ]; then
         got=$("$d/p")
         [ "$got" = "42 0" ] || { echo "FAIL $XC: the program gives '$got'"; ok=0; }
+    fi
+    if [ $ok = 1 ]; then
+        "$XC" -q -A $A -H . -o "$d/q" "$d/obj/a.o" "$d/obj/f.o" > "$d/link2.log" 2>&1 \
+            || { echo "FAIL $XC: the static link"; head -3 "$d/link2.log"; ok=0; }
+        [ $ok = 1 ] && { got=$("$d/q" 2>&1); [ "$got" = "5" ] || { echo "FAIL $XC: the static call gives '$got'"; ok=0; }; }
     fi
     [ $ok = 1 ] || fail=1
 done

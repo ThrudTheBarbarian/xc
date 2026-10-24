@@ -764,6 +764,9 @@ static NSMutableSet<NSString*>* sUnresolved = nil;
                                                             methods:methods
                                                            location:loc];
         cd.isExternal = YES; // bodies live in the .so — register externs, don't emit
+        // Instantiated where it is defined: no static-init guard for it here.
+        if ([c[@"instantiated"] boolValue])
+            cd.usedByNew = YES;
         [decls addObject:cd];
         }
     return decls;

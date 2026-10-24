@@ -991,6 +991,10 @@ class JsonVal
                 }
             cd.setExtra(protos.byteLength() > (u32)0 ? protos : String.withCString("-"));
             cd.addFlag((u32)NF_EXTERNAL);
+            // Instantiated where it is defined: no static-init guard for it
+            // here. As the reference.
+            if (c.memberBool((u8*)"instantiated"))
+                cd.setUsedByNew();
             JsonVal* ivs = c.member((u8*)"ivars");
             if (ivs != 0)
                 {
