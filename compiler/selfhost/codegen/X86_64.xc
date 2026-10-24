@@ -4478,12 +4478,95 @@ class X86_64
                 out.appendCString("\n");
                 continue;
                 }
+            // The same for the rest of the legacy SSE an AVX function's scalar
+            // and xmm code uses: a legacy write merges with the live upper half
+            // on a Zen 3 (AVX2 mandelbrot 259 ms against SSE 167). As the
+            // reference's vexFormOf:.
+            String* vex = vexFormOf(t);
+            if (vex != (String*)0)
+                {
+                out.appendCString("\t");
+                out.append(vex);
+                out.appendCString("\n");
+                continue;
+                }
             out.append(line);
             out.appendCString("\n");
             }
         if (out.hasSuffix(String.withCString("\n\n")))
             out = out.substringBytes((u32)0, out.byteLength() - (u32)1);
         return out;
+        }
+
+    static bool vexIn(String* mn, string list)
+        {
+        String* l = String.withCString(list);
+        Array* names = l.splitOnByte((u8)' ');
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            if (((String*)names.get(i)).equals(mn))
+                return true;
+        return false;
+        }
+
+    static bool vexXmm(String* o)
+        {
+        return o.hasPrefix(String.withCString("xmm")) && o.byteLength() <= (u32)5;
+        }
+
+    static bool vexMem(String* o)
+        {
+        return o.indexOfByte((u8)'[') != String.notFound();
+        }
+
+    // A legacy SSE instruction's VEX form, for an AVX function, or null when
+    // it has none here: a destructive `op a, b` is `vop a, a, b`, a move or a
+    // compare keeps its operands. As the reference's vexFormOf:.
+    String* vexFormOf(String* t)
+        {
+        u32 tab = t.indexOfByte((u8)9);
+        if (tab == String.notFound())
+            return (String*)0;
+        String* mn = t.substringBytes((u32)0, tab);
+        String* rest = t.substringFromByte(tab + (u32)1);
+        Array* ops = new Array();
+        i32 depth = (i32)0;
+        u32 from = (u32)0;
+        for (u32 i = (u32)0; i < rest.byteLength(); i = i + (u32)1)
+            {
+            u8 c = rest.byteAt(i);
+            if (c == (u8)'[')
+                depth = depth + (i32)1;
+            else if (c == (u8)']')
+                depth = depth - (i32)1;
+            else if (c == (u8)',' && depth == (i32)0)
+                {
+                ops.add((Object*)rest.substringBytes(from, i - from).trimmed());
+                from = i + (u32)1;
+                }
+            }
+        ops.add((Object*)rest.substringFromByte(from).trimmed());
+        String* o0 = (String*)ops.get((u32)0);
+        String* o1 = ops.count() > (u32)1 ? (String*)ops.get((u32)1) : (String*)0;
+        String* o2 = ops.count() > (u32)2 ? (String*)ops.get((u32)2) : (String*)0;
+        if ((mn.equals(String.withCString("movss")) || mn.equals(String.withCString("movsd"))) && ops.count() == (u32)2)
+            {
+            if (vexXmm(o0) && vexXmm(o1))
+                return String.withFormat("v%s\t%s, %s, %s", mn.cString(), o0.cString(), o0.cString(), o1.cString());
+            if ((vexXmm(o0) && vexMem(o1)) || (vexMem(o0) && vexXmm(o1)))
+                return String.withFormat("v%s\t%s, %s", mn.cString(), o0.cString(), o1.cString());
+            return (String*)0;
+            }
+        if (ops.count() == (u32)2 && vexXmm(o0)
+            && vexIn(mn, "addss subss mulss divss addsd subsd mulsd divsd minss maxss minsd maxsd sqrtss sqrtsd cvtss2sd cvtsd2ss cvtsi2ss cvtsi2sd addps subps mulps divps addpd subpd mulpd divpd minps maxps minpd maxpd xorps xorpd andps andpd andnps andnpd orps orpd unpcklps unpcklpd unpckhps unpckhpd pxor por pand paddd paddq psubd psubq"))
+            return String.withFormat("v%s\t%s, %s, %s", mn.cString(), o0.cString(), o0.cString(), o1.cString());
+        if (mn.equals(String.withCString("shufps")) && ops.count() == (u32)3 && vexXmm(o0))
+            return String.withFormat("vshufps\t%s, %s, %s, %s", o0.cString(), o0.cString(), o1.cString(), o2.cString());
+        if (mn.equals(String.withCString("pshufd")) && ops.count() == (u32)3 && vexXmm(o0))
+            return String.withFormat("vpshufd\t%s, %s, %s", o0.cString(), o1.cString(), o2.cString());
+        if (ops.count() == (u32)2 && (vexXmm(o0) || vexXmm(o1))
+            && vexIn(mn, "movaps movups movdqa movdqu ucomiss ucomisd comiss comisd cvttss2si cvttsd2si sqrtps sqrtpd cvtdq2ps"))
+            return String.withFormat("v%s\t%s, %s", mn.cString(), o0.cString(), o1.cString());
+        return (String*)0;
         }
 
     // How many xmm registers a line names.

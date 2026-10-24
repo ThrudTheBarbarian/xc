@@ -1889,6 +1889,15 @@ class X86Fixup
         if (_ops.count() != (u32)3 && !imm4)
             return false;
         u32 rr = cmp ? (base.equals(String.withCString("cmppd")) ? (u32)$66C2 : (u32)$C2) : sseRR(base);
+        // Three-operand scalar forms not in sseRR (their legacy encodings
+        // differ): vmovss/vmovsd reg, reg, reg merge the low element, and
+        // vcvtsi2ss/sd take a GPR or memory source, W1 for 64 bits. As the
+        // reference.
+        bool cvtsi = false;
+        if (rr == (u32)$FFFF_FFFF && base.equals(String.withCString("movss"))) rr = (u32)$F310;
+        if (rr == (u32)$FFFF_FFFF && base.equals(String.withCString("movsd"))) rr = (u32)$F210;
+        if (rr == (u32)$FFFF_FFFF && base.equals(String.withCString("cvtsi2ss"))) { rr = (u32)$F32A; cvtsi = true; }
+        if (rr == (u32)$FFFF_FFFF && base.equals(String.withCString("cvtsi2sd"))) { rr = (u32)$F22A; cvtsi = true; }
         u32 map = (u32)1;
         // The 0F38 map: the SSE4.1 lane min/max and the 32-bit multiply.
         if (rr == (u32)$FFFF_FFFF)
@@ -1926,7 +1935,11 @@ class X86Fixup
         u32 rhi = (a.reg() & (u32)8) != (u32)0 ? (u32)0 : (u32)$80;
         // VEX.L: 256-bit when the operands are ymm.
         u32 L = (a.size() == (u32)32 || s1.size() == (u32)32 || s2.size() == (u32)32) ? (u32)4 : (u32)0;
-        if (map == (u32)1 && (xx & (i32)8) == (i32)0 && (bb & (i32)8) == (i32)0)
+        // VEX.W: a 64-bit integer source of vcvtsi2ss/sd.
+        u32 W = (cvtsi && s2.kind() == (u32)OP_REG && s2.size() == (u32)8) ? (u32)1 : (u32)0;
+        if (cvtsi)
+            L = (u32)0;
+        if (map == (u32)1 && W == (u32)0 && (xx & (i32)8) == (i32)0 && (bb & (i32)8) == (i32)0)
             {
             e8((u32)$C5);
             e8(rhi | (vvvv << (u32)3) | L | pp);
@@ -1936,7 +1949,7 @@ class X86Fixup
             e8((u32)$C4);
             e8(rhi | ((xx & (i32)8) != (i32)0 ? (u32)0 : (u32)$40)
                    | ((bb & (i32)8) != (i32)0 ? (u32)0 : (u32)$20) | map);
-            e8((vvvv << (u32)3) | L | pp);
+            e8((W << (u32)7) | (vvvv << (u32)3) | L | pp);
             }
         e8(rr & (u32)$FF);
         eModRM(a.reg(), s2);
@@ -2443,6 +2456,43 @@ class X86Fixup
         else if (mn.equals(String.withCString("vsqrtpd"))) { pp = (u32)1; map = (u32)1; ld = (u32)$51; }
         // and the int-to-float lane conversion.
         else if (mn.equals(String.withCString("vcvtdq2ps"))) { pp = (u32)0; map = (u32)1; ld = (u32)$5B; }
+        // The scalar compares, and the scalar moves to or from memory (a
+        // register-to-register vmovss takes three operands, encVex128): what an
+        // AVX function's scalar float code uses. As the reference.
+        else if (mn.equals(String.withCString("vucomiss"))) { pp = (u32)0; map = (u32)1; ld = (u32)$2E; }
+        else if (mn.equals(String.withCString("vucomisd"))) { pp = (u32)1; map = (u32)1; ld = (u32)$2E; }
+        else if (mn.equals(String.withCString("vcomiss"))) { pp = (u32)0; map = (u32)1; ld = (u32)$2F; }
+        else if (mn.equals(String.withCString("vcomisd"))) { pp = (u32)1; map = (u32)1; ld = (u32)$2F; }
+        else if (mn.equals(String.withCString("vmovss"))) { pp = (u32)2; map = (u32)1; ld = (u32)$10; st = (u32)$11; }
+        else if (mn.equals(String.withCString("vmovsd"))) { pp = (u32)3; map = (u32)1; ld = (u32)$10; st = (u32)$11; }
+        // vcvttss2si / vcvttsd2si r, xmm/m: VEX.LIG.F3/F2.0F.W 2C /r, W1 for a
+        // 64-bit destination; reg = the GPR, r/m = the source.
+        if ((mn.equals(String.withCString("vcvttss2si")) || mn.equals(String.withCString("vcvttsd2si")))
+            && _ops.count() == (u32)2 && a != (XOperand*)0 && b != (XOperand*)0 && a.kind() == (u32)OP_REG)
+            {
+            u32 tpp = mn.equals(String.withCString("vcvttss2si")) ? (u32)2 : (u32)3;
+            u32 W = a.size() == (u32)8 ? (u32)1 : (u32)0;
+            i32 bb = b.kind() == (u32)OP_REG ? (i32)b.reg() : b.rmReg();
+            i32 xx = b.kind() == (u32)OP_REG ? (i32)0 : b.index();
+            if (bb < (i32)0) bb = (i32)0;
+            if (xx < (i32)0) xx = (i32)0;
+            u32 rhi = (a.reg() & (u32)8) != (u32)0 ? (u32)0 : (u32)$80;
+            if (W == (u32)0 && (xx & (i32)8) == (i32)0 && (bb & (i32)8) == (i32)0)
+                {
+                e8((u32)$C5);
+                e8(rhi | ((u32)$0F << (u32)3) | tpp);
+                }
+            else
+                {
+                e8((u32)$C4);
+                e8(rhi | ((xx & (i32)8) != (i32)0 ? (u32)0 : (u32)$40) | ((bb & (i32)8) != (i32)0 ? (u32)0 : (u32)$20) | (u32)1);
+                e8((W << (u32)7) | ((u32)$0F << (u32)3) | tpp);
+                }
+            e8((u32)$2C);
+            eModRM(a.reg(), b);
+            _hit = true;
+            return true;
+            }
         if (map != (u32)0 && _ops.count() == (u32)2 && a != (XOperand*)0 && b != (XOperand*)0)
             {
             bool store = a.kind() == (u32)OP_MEM && st != (u32)0;

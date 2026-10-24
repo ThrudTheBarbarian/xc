@@ -1121,8 +1121,37 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
                      // 2-operand VEX arithmetic: `vsqrtps ymm, ymm` (vvvv=1111).
                      @"vsqrtps":@[@0,@1,@0x51,@0], @"vsqrtpd":@[@1,@1,@0x51,@0],
                      // and the int-to-float lane conversion.
-                     @"vcvtdq2ps":@[@0,@1,@0x5B,@0]};
+                     @"vcvtdq2ps":@[@0,@1,@0x5B,@0],
+                     // The scalar compares, and the scalar moves to or from
+                     // memory (a register-to-register vmovss takes three
+                     // operands, below): what an AVX function's scalar float
+                     // code uses, so no legacy SSE merges with a live upper half.
+                     @"vucomiss":@[@0,@1,@0x2E,@0], @"vucomisd":@[@1,@1,@0x2E,@0],
+                     @"vcomiss":@[@0,@1,@0x2F,@0],  @"vcomisd":@[@1,@1,@0x2F,@0],
+                     @"vmovss":@[@2,@1,@0x10,@0x11], @"vmovsd":@[@3,@1,@0x10,@0x11]};
         });
+        // vcvttss2si / vcvttsd2si r, xmm/m: VEX.LIG.F3/F2.0F.W 2C /r, W1 for a
+        // 64-bit destination; reg = the GPR, r/m = the source.
+        if (([mn isEqualToString:@"vcvttss2si"] || [mn isEqualToString:@"vcvttsd2si"]) && opCount == 2 && a && b
+            && a->kind == OpReg) {
+            int pp = [mn isEqualToString:@"vcvttss2si"] ? 2 : 3;
+            int W = a->size == 8 ? 1 : 0;
+            int rr = a->reg < 0 ? 0 : a->reg;
+            int bb = b->kind == OpReg ? b->reg : b->base;
+            int xx = b->kind == OpReg ? 0 : b->index;
+            bb = bb < 0 ? 0 : bb; xx = xx < 0 ? 0 : xx;
+            if (!W && !(xx & 8) && !(bb & 8)) {
+                emit8(out, 0xC5);
+                emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | (0x0F << 3) | pp));
+            } else {
+                emit8(out, 0xC4);
+                emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | ((xx & 8) ? 0 : 0x40) | ((bb & 8) ? 0 : 0x20) | 1));
+                emit8(out, (uint8_t)((W << 7) | (0x0F << 3) | pp));
+            }
+            emit8(out, 0x2C);
+            emitModRM(out, a->reg, b);
+            CLEANUP(); return out;
+        }
         NSArray *v2 = vex2[mn];
         if (v2 && opCount == 2 && a && b) {
             BOOL store = (a->kind == OpMem) && [v2[3] intValue] != 0;
@@ -1247,6 +1276,14 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
         // three-byte VEX form is written out regardless, because a high
         // register in the r/m or index field needs it whatever the map is.
         NSArray *vr = vcmp ? ([base isEqualToString:@"cmppd"] ? @[@0x66, @0xC2] : @[@0, @0xC2]) : sseRR[base];
+        // Three-operand scalar forms not in sseRR (their legacy encodings
+        // differ): vmovss/vmovsd reg, reg, reg merge the low element, and
+        // vcvtsi2ss/sd take a GPR or memory source, W1 for 64 bits.
+        BOOL cvtsi = NO;
+        if (!vr && [base isEqualToString:@"movss"]) vr = @[@0xF3, @0x10];
+        if (!vr && [base isEqualToString:@"movsd"]) vr = @[@0xF2, @0x10];
+        if (!vr && [base isEqualToString:@"cvtsi2ss"]) { vr = @[@0xF3, @0x2A]; cvtsi = YES; }
+        if (!vr && [base isEqualToString:@"cvtsi2sd"]) { vr = @[@0xF2, @0x2A]; cvtsi = YES; }
         int map = 1;
         // The 0F38 map: the SSE4.1 lane min/max and the 32-bit multiply, which
         // the 256-bit max/min reductions and i32 maps need.
@@ -1300,7 +1337,11 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
             int vvvv = (~src1->reg) & 0x0F;
             // VEX.L: 256-bit when the operands are ymm.
             int L = (a->size == 32 || src1->size == 32 || src2->size == 32) ? 0x04 : 0;
-            if (map == 1 && !(xx & 8) && !(bb & 8)) {
+            // VEX.W: a 64-bit integer source of vcvtsi2ss/sd.
+            int W = (cvtsi && src2->kind == OpReg && src2->size == 8) ? 1 : 0;
+            if (cvtsi)
+                L = 0;
+            if (map == 1 && !W && !(xx & 8) && !(bb & 8)) {
                 emit8(out, 0xC5);
                 emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | (vvvv << 3) | L | pp));
             }
@@ -1308,7 +1349,7 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
                 emit8(out, 0xC4);
                 emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | ((xx & 8) ? 0 : 0x40)
                                      | ((bb & 8) ? 0 : 0x20) | map));
-                emit8(out, (uint8_t)((vvvv << 3) | L | pp));
+                emit8(out, (uint8_t)((W << 7) | (vvvv << 3) | L | pp));
             }
             emit8(out, (uint8_t)[vr[1] intValue]);
             emitModRM(out, a->reg, src2);

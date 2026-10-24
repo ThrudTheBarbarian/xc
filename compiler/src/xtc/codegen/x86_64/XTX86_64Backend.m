@@ -1061,6 +1061,75 @@ static NSInteger sWin64SretOff = 0;
 // each way out (a call, a return, a jump to another function) is the rule
 // every compiler follows; done as a pass over the finished text so no call
 // site has to remember it. Functions with no ymm or zmm are returned unchanged.
+// A legacy SSE instruction's VEX form, for an AVX function (withVzeroupper:),
+// or nil when it has none here. The port's vexFormOf is the same table.
++ (nullable NSString*)vexFormOf:(NSString*)t
+    {
+    static NSSet<NSString*>* three;
+    static NSSet<NSString*>* two;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+      three = [NSSet setWithArray:@[ @"addss", @"subss", @"mulss", @"divss", @"addsd", @"subsd", @"mulsd", @"divsd",
+                                     @"minss", @"maxss", @"minsd", @"maxsd", @"sqrtss", @"sqrtsd", @"cvtss2sd",
+                                     @"cvtsd2ss", @"cvtsi2ss", @"cvtsi2sd", @"addps", @"subps", @"mulps", @"divps",
+                                     @"addpd", @"subpd", @"mulpd", @"divpd", @"minps", @"maxps", @"minpd", @"maxpd",
+                                     @"xorps", @"xorpd", @"andps", @"andpd", @"andnps", @"andnpd", @"orps", @"orpd",
+                                     @"unpcklps", @"unpcklpd", @"unpckhps", @"unpckhpd", @"pxor", @"por", @"pand",
+                                     @"paddd", @"paddq", @"psubd", @"psubq" ]];
+      two = [NSSet setWithArray:@[ @"movaps", @"movups", @"movdqa", @"movdqu", @"ucomiss", @"ucomisd", @"comiss",
+                                   @"comisd", @"cvttss2si", @"cvttsd2si", @"sqrtps", @"sqrtpd", @"cvtdq2ps" ]];
+    });
+    NSRange tab = [t rangeOfString:@"\t"];
+    if (tab.location == NSNotFound)
+        return nil;
+    NSString* mn = [t substringToIndex:tab.location];
+    NSString* rest = [t substringFromIndex:tab.location + 1];
+    // The operands, split at the commas outside brackets.
+    NSMutableArray<NSString*>* ops = [NSMutableArray array];
+    NSInteger depth = 0;
+    NSUInteger from = 0;
+    for (NSUInteger i = 0; i < rest.length; i++)
+        {
+        unichar c = [rest characterAtIndex:i];
+        if (c == '[')
+            depth++;
+        else if (c == ']')
+            depth--;
+        else if (c == ',' && depth == 0)
+            {
+            [ops addObject:[[rest substringWithRange:NSMakeRange(from, i - from)]
+                               stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]];
+            from = i + 1;
+            }
+        }
+    [ops addObject:[[rest substringFromIndex:from] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]];
+    BOOL (^isXmm)(NSString*) = ^BOOL(NSString* o) {
+      return [o hasPrefix:@"xmm"] && o.length <= 5;
+    };
+    BOOL (^isMem)(NSString*) = ^BOOL(NSString* o) {
+      return [o rangeOfString:@"["].location != NSNotFound;
+    };
+    // movss/movsd: register to register merges (three operands); to or from
+    // memory it is a plain move.
+    if (([mn isEqualToString:@"movss"] || [mn isEqualToString:@"movsd"]) && ops.count == 2)
+        {
+        if (isXmm(ops[0]) && isXmm(ops[1]))
+            return [NSString stringWithFormat:@"v%@\t%@, %@, %@", mn, ops[0], ops[0], ops[1]];
+        if ((isXmm(ops[0]) && isMem(ops[1])) || (isMem(ops[0]) && isXmm(ops[1])))
+            return [NSString stringWithFormat:@"v%@\t%@, %@", mn, ops[0], ops[1]];
+        return nil;
+        }
+    if ([three containsObject:mn] && ops.count == 2 && isXmm(ops[0]))
+        return [NSString stringWithFormat:@"v%@\t%@, %@, %@", mn, ops[0], ops[0], ops[1]];
+    if ([mn isEqualToString:@"shufps"] && ops.count == 3 && isXmm(ops[0]))
+        return [NSString stringWithFormat:@"vshufps\t%@, %@, %@, %@", ops[0], ops[0], ops[1], ops[2]];
+    if ([mn isEqualToString:@"pshufd"] && ops.count == 3 && isXmm(ops[0]))
+        return [NSString stringWithFormat:@"vpshufd\t%@, %@, %@", ops[0], ops[1], ops[2]];
+    if ([two containsObject:mn] && ops.count == 2 && (isXmm(ops[0]) || isXmm(ops[1])))
+        return [NSString stringWithFormat:@"v%@\t%@, %@", mn, ops[0], ops[1]];
+    return nil;
+    }
+
 + (NSString*)withVzeroupper:(NSString*)text
     {
     // zmm too: a 512-bit register dirties the same upper state.
@@ -1083,6 +1152,17 @@ static NSInteger sWin64SretOff = 0;
         if ([t hasPrefix:@"movd\t"] || ([t hasPrefix:@"movq\t"] && xmms == 1))
             {
             [out appendFormat:@"\tv%@\n", t];
+            continue;
+            }
+        // The same for the rest of the legacy SSE an AVX function's scalar and
+        // xmm code uses (2026-10-24): on a Zen 3 a legacy write merges with the
+        // live upper half, and AVX2 mandelbrot ran 259 ms against SSE 167. A
+        // destructive `op a, b` is `vop a, a, b`; a move or a compare keeps its
+        // operands. The VEX forms clear bits 255:128, which nothing here keeps.
+        NSString* vex = [self vexFormOf:t];
+        if (vex)
+            {
+            [out appendFormat:@"\t%@\n", vex];
             continue;
             }
         [out appendString:line];
