@@ -7905,11 +7905,15 @@ class X86_64
             else if (isFloatTy(gt) && bytes.count() != fieldWidth(gt))
                 bytes = relayFloat(bytes, gt);
             // A file-scope global has EXTERNAL linkage in C — export it so
-            // separate units share one definition (win64/PE keeps its own path).
-            // …and on win64 a library's standard-library state (`exported`),
-            // which a client imports from the DLL.
-            if (!_win64 || sym.attr(String.withCString("exported")))
-                data.appendFormat("\t.globl\t%s\n", safeSym(sym.name()).cString());
+            // separate units share one definition. Local-only gave each unit
+            // a private copy: on win64 every object's own stdlib state (class
+            // statics, init guards), so code inlined in one object read state
+            // another had never initialised (the split-built xcc.exe printed
+            // "(null)" for every string). The PE linker keeps the first
+            // definition, as ELF keeps one COMMON slot; a DLL exports it, and
+            // a client imports it only when bound (`dllimport`). As the
+            // reference.
+            data.appendFormat("\t.globl\t%s\n", safeSym(sym.name()).cString());
             if (page)
                 data.appendCString("\t.p2align\t14\n");
             data.appendFormat("%s:\n", safeSym(sym.name()).cString());
@@ -7936,8 +7940,8 @@ class X86_64
             {
             if (page)
                 bss.appendCString("\t.p2align\t14\n");
-            if (sym.attr(String.withCString("exported")))
-                bss.appendFormat("\t.globl\t%s\n", safeSym(sym.name()).cString());
+            // Shared by every object, as initialised data above.
+            bss.appendFormat("\t.globl\t%s\n", safeSym(sym.name()).cString());
             bss.appendFormat("%s:\n\t.zero\t%lu\n", safeSym(sym.name()).cString(), sz);
             }
         else

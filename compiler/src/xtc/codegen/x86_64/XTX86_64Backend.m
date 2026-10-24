@@ -1999,11 +1999,14 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                     }
                 // A file-scope global has EXTERNAL linkage in C — export it so
                 // separate units share one definition. Local-only (no `.globl`)
-                // gave each unit a private copy (win64/PE keeps its own path).
-                // …and on win64 a library's standard-library state
-                // (`exported`), which a client imports from the DLL.
-                if (!sWin64 || [sym.attributes[@"exported"] boolValue])
-                    [data appendFormat:@"\t.globl\t%@\n", [self safeSym:sym.name]];
+                // gave each unit a private copy: on win64 every object's own
+                // stdlib state (class statics, init guards), so code inlined
+                // in one object read state another had never initialised (the
+                // split-built xcc.exe printed "(null)" for every string). The
+                // PE linker keeps the first definition, as ELF keeps one
+                // COMMON slot; a DLL exports it, and a client imports it only
+                // when bound (`dllimport`).
+                [data appendFormat:@"\t.globl\t%@\n", [self safeSym:sym.name]];
                 if (page)
                     [data appendString:@"\t.p2align\t14\n"];
                 [data appendFormat:@"%@:\n", [self safeSym:sym.name]];
@@ -2036,8 +2039,8 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                     {
                     if (page)
                         [bss appendString:@"\t.p2align\t14\n"];
-                    if ([sym.attributes[@"exported"] boolValue])
-                        [bss appendFormat:@"\t.globl\t%@\n", [self safeSym:sym.name]];
+                    // Shared by every object, as initialised data above.
+                    [bss appendFormat:@"\t.globl\t%@\n", [self safeSym:sym.name]];
                     [bss appendFormat:@"%@:\n\t.zero\t%lu\n", [self safeSym:sym.name], (unsigned long)sz];
                     }
                 else
