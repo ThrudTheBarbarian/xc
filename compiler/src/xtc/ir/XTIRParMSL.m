@@ -182,6 +182,31 @@ static BOOL isTranscendental(NSString* callee)
     return _sinitOf;
     }
 
+@synthesize localOf = _localOf;
+@synthesize localDecl = _localDecl;
+@synthesize localIndex = _localIndex;
+
+- (NSMutableDictionary<NSNumber*, NSNumber*>*)localIndex
+    {
+    if (!_localIndex)
+        _localIndex = [NSMutableDictionary dictionary];
+    return _localIndex;
+    }
+
+- (NSMutableDictionary<NSNumber*, NSNumber*>*)localOf
+    {
+    if (!_localOf)
+        _localOf = [NSMutableDictionary dictionary];
+    return _localOf;
+    }
+
+- (NSMutableDictionary<NSNumber*, NSString*>*)localDecl
+    {
+    if (!_localDecl)
+        _localDecl = [NSMutableDictionary dictionary];
+    return _localDecl;
+    }
+
 - (nullable XTIRType*)typeOf:(XTIRValueId)v
     {
     return [self.fn valueForId:v].type;
@@ -321,6 +346,37 @@ static BOOL isTranscendental(NSString* callee)
                     }
                 case XTIROpAddrOf:
                     {
+                    // A work item's own array: a pinned frame value of
+                    // scalars, a `thread` array in the kernel. Anything else
+                    // in the frame stays on the CPU.
+                    if (i.operands.count && i.operands[0].kind == XTIROperandKindUse)
+                        {
+                        XTIRPinnedLocal* pl = nil;
+                        for (XTIRPinnedLocal* p in self.fn.frameInfo.pinnedLocals)
+                            if (p.valueId == i.operands[0].valueId)
+                                pl = p;
+                        XTIRType* et = i.result.type.kind == XTIRTypeKindPtr ? i.result.type.pointeeType : nil;
+                        NSString* en = et ? scalarName(et) : nil;
+                        NSUInteger ew = et ? et.byteWidth : 0;
+                        NSUInteger total = pl.type.kind == XTIRTypeKindAgg ? pl.type.layout.size : 0;
+                        if (!pl || !en || !ew || !total || total % ew)
+                            {
+                            [self because:@"it uses a local value its GPU version cannot place"];
+                            return NO;
+                            }
+                        // Numbered in the order first met, as the port numbers them.
+                        NSNumber* k = self.localIndex[@(pl.valueId)];
+                        if (!k)
+                            {
+                            k = @(self.localIndex.count);
+                            self.localIndex[@(pl.valueId)] = k;
+                            self.localDecl[k] = [NSString stringWithFormat:@"    thread %@ loc_%@[%lu];\n", en, k,
+                                                                          (unsigned long)(total / ew)];
+                            }
+                        self.localOf[@(r)] = k;
+                        self.space[@(r)] = @(XTParSpaceThread);
+                        break;
+                        }
                     // A static-init guard's parts (see sinitOf).
                     XTIRSymbol* g = (i.operands.count && i.operands[0].kind == XTIROperandKindSym)
                                         ? [self.module symbolForId:i.operands[0].symbolId]
@@ -1084,6 +1140,9 @@ static NSString* intrinsicFor(NSString* callee)
             {
             if (self.sinitOf[@(i.result.valueId)])
                 return @"";
+            NSNumber* loc = self.localOf[@(i.result.valueId)];
+            if (loc)
+                return [NSString stringWithFormat:@"%@ = loc_%@;", r, loc];
             NSString* g = self.globalOf[@(i.result.valueId)];
             if (!g)
                 return nil;
@@ -1131,6 +1190,9 @@ static NSString* intrinsicFor(NSString* callee)
             if (i.result && i.result.type.kind != XTIRTypeKindMemory)
                 [decls appendString:[self declOf:i.result]];
         }
+    // The work item's own arrays, in the order first met.
+    for (NSNumber* v in [self.localDecl.allKeys sortedArrayUsingSelector:@selector(compare:)])
+        [decls appendString:self.localDecl[v]];
     if (self.failed)
         return NO;
 

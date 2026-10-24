@@ -16453,6 +16453,13 @@ class ClassInfo
     // data ("0"). The host ran every init before the block started, so the
     // flag reads as done (2) and the rest prints nothing.
     Map* _mSinit;
+    // A work item's own array (`float a[64];` in the body, a pinned frame
+    // value): the AddrOf's value seq -> its number k, the pinned value's seq
+    // -> k, and each k's declaration, `thread <elem> loc_<k>[<count>];`, k in
+    // the order first met. As the reference's localOf/localIndex/localDecl.
+    Map* _mLocalOf;
+    Map* _mLocalIndex;
+    Array* _mLocalDecls;
     // Why the kernel could not be printed, for the par-gpu warning: the first
     // reason met, phrased to follow "because" ("it calls Math.sin, which …").
     // A helper's own reason comes back to its caller in _mHelperWhy.
@@ -16716,6 +16723,42 @@ class ClassInfo
                     }
                 else if (op.equals(String.withCString("AddrOf")))
                     {
+                    // A work item's own array: a pinned frame value of
+                    // scalars, a `thread` array in the kernel. Anything else
+                    // in the frame stays on the CPU. As the reference.
+                    if (ip.ops().count() > (u32)0 && ((IROperand*)ip.ops().get((u32)0)).kind() == (u8)OPK_USE && r != (IRValue*)0)
+                        {
+                        IRValue* pv = ((IROperand*)ip.ops().get((u32)0)).val();
+                        IRPinned* pl = (IRPinned*)0;
+                        for (u32 q = (u32)0; q < f.pinned().count(); q = q + (u32)1)
+                            if (((IRPinned*)f.pinned().get(q)).val() == pv)
+                                pl = (IRPinned*)f.pinned().get(q);
+                        String* en = mslIsPtr(r.ty()) ? mslScalar(mslPointee(r.ty())) : (String*)0;
+                        u32 ew = en != (String*)0 ? mslWidth(mslPointee(r.ty())) : (u32)0;
+                        u32 total = (u32)0;
+                        if (pl != (IRPinned*)0 && pl.ty().hasPrefix(String.withCString("Agg(")))
+                            {
+                            IRLayout* pll = layoutOfAgg(pl.ty());
+                            if (pll != (IRLayout*)0)
+                                total = pll.size();
+                            }
+                        if (pl == (IRPinned*)0 || en == (String*)0 || ew == (u32)0 || total == (u32)0 || total % ew != (u32)0)
+                            { parBecause(String.withCString("it uses a local value its GPU version cannot place")); return false; }
+                        // Numbered in the order first met, as the reference.
+                        String* k = (String*)_mLocalIndex.get((Hashable*)mslKey(pv));
+                        if (k == (String*)0)
+                            {
+                            k = String.withU32(_mLocalDecls.count());
+                            _mLocalIndex.set((Hashable*)mslKey(pv), (Object*)k);
+                            String* d = String.withCString("    thread ");
+                            d.append(en); d.appendCString(" loc_"); d.append(k); d.appendCString("[");
+                            d.append(String.withU32(total / ew)); d.appendCString("];\n");
+                            _mLocalDecls.add((Object*)d);
+                            }
+                        _mLocalOf.set((Hashable*)mslKey(r), (Object*)k);
+                        _mSpace.set((Hashable*)mslKey(r), (Object*)String.withCString("thread"));
+                        continue;
+                        }
                     // A static-init guard's parts (see _mSinit).
                     if (ip.ops().count() > (u32)0 && ((IROperand*)ip.ops().get((u32)0)).kind() == (u8)OPK_SYM && r != (IRValue*)0)
                         {
@@ -17431,6 +17474,9 @@ class ClassInfo
         if (op.equals(String.withCString("AddrOf")))
             {
             if (_mSinit.get((Hashable*)mslKey(r)) != (Object*)0) return String.withCString("");
+            String* lk = (String*)_mLocalOf.get((Hashable*)mslKey(r));
+            if (lk != (String*)0)
+                return mslAssign(r, mslCat3(String.withCString("loc_"), "", lk));
             String* g = (String*)_mGlobalOf.get((Hashable*)mslKey(r));
             if (g == (String*)0) return (String*)0;
             u32 gi = (u32)0;
@@ -17487,6 +17533,9 @@ class ClassInfo
                     decls.append(mslDecl(ip.res()));
                 }
             }
+        // The work item's own arrays, in the order first met.
+        for (u32 q = (u32)0; q < _mLocalDecls.count(); q = q + (u32)1)
+            decls.append((String*)_mLocalDecls.get(q));
         if (_mFailed) return false;
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
             {
@@ -17542,6 +17591,7 @@ class ClassInfo
         Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
         Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
         bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit; String* sWhy = _mWhy;
+        Map* sLocalOf = _mLocalOf; Map* sLocalIndex = _mLocalIndex; Array* sLocalDecls = _mLocalDecls;
         Array* sSucc = _sSucc; Array* sRpo = _sRpo; Array* sFwd = _sFwd; Map* sLoop = _sLoop; Map* sExit = _sExit;
         Array* sIpdom = _sIpdom; IRFunc* sFn = _sFn;
         String* out = mslHelperText(g, name);
@@ -17549,13 +17599,14 @@ class ClassInfo
         _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
         _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
         _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams; _mSinit = sSinit; _mWhy = sWhy;
+        _mLocalOf = sLocalOf; _mLocalIndex = sLocalIndex; _mLocalDecls = sLocalDecls;
         _sSucc = sSucc; _sRpo = sRpo; _sFwd = sFwd; _sLoop = sLoop; _sExit = sExit; _sIpdom = sIpdom; _sFn = sFn;
         return out;
         }
     String* mslHelperText(IRFunc* g, String* name)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0;
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
         _mHelper = true;
         _mParams = new Map();
         if (!mslAnalyse(g)) return (String*)0;
@@ -17798,7 +17849,7 @@ class ClassInfo
     String* parMsl(IRFunc* f)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0;
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
         _mHelper = false;
         _mVecW = (u32)0;
         _mParams = (Map*)0;
@@ -19241,19 +19292,21 @@ class ClassInfo
         Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
         Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
         bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit; String* sWhy = _mWhy;
+        Map* sLocalOf = _mLocalOf; Map* sLocalIndex = _mLocalIndex; Array* sLocalDecls = _mLocalDecls;
         u32 sEdge = _pEdge;
         String* out = ptxHelperText(g, name);
         _mHelperWhy = _mWhy;
         _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
         _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
         _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams; _mSinit = sSinit; _mWhy = sWhy;
+        _mLocalOf = sLocalOf; _mLocalIndex = sLocalIndex; _mLocalDecls = sLocalDecls;
         _pEdge = sEdge;
         return out;
         }
     String* ptxHelperText(IRFunc* g, String* name)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0;
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
         _mHelper = true;
         _mParams = new Map();
         _mObj = (IRLayout*)0;
@@ -19326,7 +19379,7 @@ class ClassInfo
     String* parPtx(IRFunc* f)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0;
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
         _mHelper = false;
         _mParams = (Map*)0;
         _mGlobals = new Array();
@@ -20820,6 +20873,7 @@ class ClassInfo
         Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
         Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
         bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit; String* sWhy = _mWhy;
+        Map* sLocalOf = _mLocalOf; Map* sLocalIndex = _mLocalIndex; Array* sLocalDecls = _mLocalDecls;
         Array* sGlobals = _mGlobals; Map* sGlobalOf = _mGlobalOf; SpvFn* sFn = _spvFn;
         Array* sSucc = _sSucc; Array* sRpo = _sRpo; Array* sFwd = _sFwd; Map* sLoop = _sLoop; Map* sExit = _sExit;
         Array* sIpdom = _sIpdom; IRFunc* sSFn = _sFn;
@@ -20829,6 +20883,7 @@ class ClassInfo
         _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
         _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
         _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams; _mSinit = sSinit; _mWhy = sWhy;
+        _mLocalOf = sLocalOf; _mLocalIndex = sLocalIndex; _mLocalDecls = sLocalDecls;
         _mGlobals = sGlobals; _mGlobalOf = sGlobalOf; _spvFn = sFn;
         return out;
         }
@@ -20836,7 +20891,7 @@ class ClassInfo
     u32 spvHelperBody(IRFunc* g)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0;
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
         _mHelper = true;
         _mParams = new Map();
         _mObj = (IRLayout*)0;
@@ -20926,7 +20981,7 @@ class ClassInfo
     bool parSpirv(IRFunc* f)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0;
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
         _mHelper = false;
         _mParams = (Map*)0;
         _mGlobals = new Array();
@@ -22533,6 +22588,7 @@ class ClassInfo
         Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
         Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
         bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit; String* sWhy = _mWhy;
+        Map* sLocalOf = _mLocalOf; Map* sLocalIndex = _mLocalIndex; Array* sLocalDecls = _mLocalDecls;
         Array* sGlobals = _mGlobals; Map* sGlobalOf = _mGlobalOf; WgFn* sFn = _wf;
         Array* sSucc = _sSucc; Array* sRpo = _sRpo; Array* sFwd = _sFwd; Map* sLoop = _sLoop; Map* sExit = _sExit;
         Array* sIpdom = _sIpdom; IRFunc* sSFn = _sFn;
@@ -22542,6 +22598,7 @@ class ClassInfo
         _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
         _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
         _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams; _mSinit = sSinit; _mWhy = sWhy;
+        _mLocalOf = sLocalOf; _mLocalIndex = sLocalIndex; _mLocalDecls = sLocalDecls;
         _mGlobals = sGlobals; _mGlobalOf = sGlobalOf; _wf = sFn;
         return ok;
         }
@@ -22549,7 +22606,7 @@ class ClassInfo
     bool wgHelperBody(IRFunc* g, String* name)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0;
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
         _mHelper = true;
         _mParams = new Map();
         _mObj = (IRLayout*)0;
@@ -22633,7 +22690,7 @@ class ClassInfo
     bool parWgsl(IRFunc* f)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0;
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
         _mHelper = false;
         _mParams = (Map*)0;
         _mGlobals = new Array();

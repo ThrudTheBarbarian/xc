@@ -57,6 +57,12 @@ typedef NS_ENUM(uint8_t, XTParSpace) {
 // (YES for the flag). The host ran every init before the block started, so
 // the flag reads as done (2) and the rest prints nothing.
 @property(nonatomic, readonly) NSMutableDictionary<NSNumber*, NSNumber*>* sinitOf;
+// A work item's own array (`float a[64];` in the body, a pinned frame value):
+// the AddrOf's value -> the pinned value it names. Each is declared in the
+// kernel as `thread <elem> loc_<k>[<count>];`, k in the order first met.
+@property(nonatomic, readonly) NSMutableDictionary<NSNumber*, NSNumber*>* localOf;    // AddrOf value -> k
+@property(nonatomic, readonly) NSMutableDictionary<NSNumber*, NSNumber*>* localIndex; // pinned value -> k
+@property(nonatomic, readonly) NSMutableDictionary<NSNumber*, NSString*>* localDecl;  // k -> its declaration
 // Why the kernel could not be printed, for the par-gpu warning: the first
 // reason met, phrased to follow "because" ("it calls Math.sin, which …").
 @property(nonatomic, nullable) NSString* why;
