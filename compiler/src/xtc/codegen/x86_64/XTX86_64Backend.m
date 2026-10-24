@@ -3595,7 +3595,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                 // casts yet; it keeps the plain lea.)
                 [out appendFormat:@"\tmov\trax, [rip+%@@GOTPCREL]\n", [self safeSym:sym.name] ?: @"0"];
                 }
-            else if (imported && sWin64 && sym.kind == XTIRSymbolKindDataGlobal)
+            else if (imported && sWin64 && sym.kind == XTIRSymbolKindDataGlobal && [sym.attributes[@"dllimport"] boolValue])
                 {
                 // DATA from a DLL (a library's standard-library state): its
                 // address is the content of its import-table slot, `__imp_X`.

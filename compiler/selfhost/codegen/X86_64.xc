@@ -5434,7 +5434,7 @@ class X86_64
             {
             IRSymbol* s = (IRSymbol*)_m.syms().get(i);
             if (s.name().equals(name))
-                return s.isExtern() && s.kind() == (u8)SYM_DATAGLOBAL;
+                return s.isExtern() && s.kind() == (u8)SYM_DATAGLOBAL && s.attr(String.withCString("dllimport"));
             }
         return false;
         }

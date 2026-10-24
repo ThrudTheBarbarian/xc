@@ -1093,6 +1093,11 @@ class FeOptions
                         pk.append(boundPkg);
                         sym.setAttr(pk, true);
                         }
+                    // win64 through its import-table slot: only this state,
+                    // not every extern global (a C path's data defined in
+                    // clang's object is linked, and has no slot).
+                    if (o.target().equals(String.withCString("win64")))
+                        sym.setAttr(String.withCString("dllimport"), true);
                     }
                 else if (stdExport.contains((Hashable*)sym.name()))
                     sym.setAttr(String.withCString("exported"), true);

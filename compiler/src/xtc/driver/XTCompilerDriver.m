@@ -228,6 +228,15 @@ static NSSet<NSString*>* stdStateNamesIn(XTProgramNode* ast, NSSet<NSString*>* f
                 a[[@"pkg_" stringByAppendingString:boundPkg]] = @YES;
                 sym.attributes = a;
                 }
+            // win64 through its import-table slot (`dllimport`): only this
+            // state, not every extern global (a C path's data defined in
+            // clang's object is linked, and has no slot).
+            if (_options.useWin64Backend)
+                {
+                NSMutableDictionary* a = [sym.attributes mutableCopy] ?: [NSMutableDictionary dictionary];
+                a[@"dllimport"] = @YES;
+                sym.attributes = a;
+                }
             }
         else if ([exportNames containsObject:sym.name])
             {
