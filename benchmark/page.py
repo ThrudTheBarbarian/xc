@@ -627,9 +627,15 @@ def sources_page(names):
     # The par benchmarks: xc only (each is one program, its blocks run on the
     # CPU's threads or the GPU as the runtime chooses).
     o.append(PAR_SOURCES_HEAD)
-    for path in sorted(f for f in os.listdir(os.path.join(ROOT, "par")) if f.endswith(".xc")):
-        b = path[:-3]
-        with open(os.path.join(ROOT, "par", path)) as fh:
+    # Beside par/run.py, and md5 and md5_mask from apps/hashcat, where run.py
+    # builds them (SRC_DIRS there): the GPU page links both here.
+    srcs = {f[:-3]: os.path.join(ROOT, "par", f) for f in os.listdir(os.path.join(ROOT, "par")) if f.endswith(".xc")}
+    for b in ("md5", "md5_mask"):
+        hp = os.path.join(REPO, "apps", "hashcat", b + ".xc")
+        if os.path.exists(hp):
+            srcs[b] = hp
+    for b in sorted(srcs):
+        with open(srcs[b]) as fh:
             text = fh.read().rstrip("\n")
         first = text.split("\n", 1)[0]
         what = first.split(" — ", 1)[1] if " — " in first else ""

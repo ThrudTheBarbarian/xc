@@ -454,7 +454,7 @@ twenty-one classes, many of them moved from UXKit.
 - GPU kernels for Vulkan are structured loops and ifs, so a SIMD group's
   threads reconverge, and on a discrete GPU they work in its own memory: on an
   RTX 3090, Vulkan comes within 1.2–1.7× of CUDA (`mandelbrot` 2.2 ms against
-  1.9). See [Performance](/compiler/performance/#parallel-blocks-and-the-gpu).
+  1.9). See [Performance](/compiler/performance/#the-gpu-and-the-network).
 
 ### Fixed
 

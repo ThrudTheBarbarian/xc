@@ -89,7 +89,7 @@ void main(void) {
 }
 ```
 
-Bare-call promotion (`use Stdio;` and the `#use` shorthand) is documented under [Classes → Bare-call promotion](/versions/0.66/compiler/language/classes/#bare-call-promotion-use-classname) and [Preprocessor → `#use`](/versions/0.66/compiler/language/preprocessor/#importing-and-promoting-a-class-use). These pages use the explicit `Klass.method(...)` form because it is unambiguous. In your own code, use whichever form you prefer.
+Bare-call promotion (`use Stdio;` and the `#use` shorthand) is documented under [Classes → Bare-call promotion](/versions/0.66/compiler/language/classes/#bare-call-promotion-use-classname) and [Preprocessor → `#use`](/versions/0.66/compiler/language/preprocessor/#importing-and-promoting-use). These pages use the explicit `Klass.method(...)` form because it is unambiguous. In your own code, use whichever form you prefer.
 
 ## What's documented here
 

@@ -38,7 +38,11 @@ for p in sorted(glob.glob(root + "/**/*.md", recursive=True) +
             if not os.path.exists(os.path.join(pub, t.lstrip("/"))):
                 bad.setdefault(os.path.relpath(p, root), set()).add(t)
         else:
-            if t.rstrip("/") not in slugs:
+            # A docs page, or a page the site serves as it is from public/
+            # (the demos: /demo/mandelbrot/ is public/demo/mandelbrot/index.html).
+            served = os.path.join(pub, t.strip("/"))
+            if t.rstrip("/") not in slugs and not os.path.exists(os.path.join(served, "index.html")) \
+                    and not os.path.exists(served + ".html"):
                 bad.setdefault(os.path.relpath(p, root), set()).add(t)
 
 # QUARANTINED, reported every run rather than deleted. compiler/downloads/
@@ -54,6 +58,9 @@ KNOWN = {t for t in (
     "/downloads/xtc-win64-0.11.zip",
     "/downloads/xtc-linux-0.12.tar.bz2", "/downloads/xtc-osx-0.12.tar.bz2",
     "/downloads/xtc-win64-0.12.zip",
+    # 0.4 (2026-10-24): offered by historical.md, never kept in the mirror.
+    "/downloads/xcc-linux-0.4.tar.bz2", "/downloads/xcc-osx-0.4.tar.bz2",
+    "/downloads/xcc-win64-0.4.zip",
 )}
 
 # PENDING: archives the downloads page advertises for the CURRENT release that
