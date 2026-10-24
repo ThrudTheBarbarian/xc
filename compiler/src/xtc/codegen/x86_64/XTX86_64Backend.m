@@ -2847,6 +2847,14 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
     sFusedCmp = fused;
     sSelSkip = skip;
     sSelCmp = selCmp;
+    // The given-up vector values are THIS function's: assignVectorRegsFor:
+    // returns before it resets them when the function has no vector values
+    // (and is not called at all with inline asm), so a function after one that
+    // spilled took an unrelated value with the same id as a spilled vector and
+    // moved xmm12 through a frame slot (lib-diff, vec_pressure's class-table
+    // constructor). The port's allocator starts each function empty.
+    sVRemat = nil;
+    sVSpill = nil;
     sVec = hasAsm ? nil : [self assignVectorRegsFor:fn]; // SSE regs for Vec values
 
     // Register homing (GP callee-saved rbx/r12-r15). Folded addresses excluded.
