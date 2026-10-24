@@ -28,7 +28,7 @@ if [ ! -x "$WORK/xta6502" ]; then grep -a error "$WORK/build.log" | head -5; exi
 LAYOUT=support/xt6502/layouts/xt.lnk
 BANKARGS=(-b -code-window '$6000-$9FFF' -data-window '$A000-$CFFF'
           -code-reg '$D5C0' -data-reg '$D5C1' -I . -I support)
-RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+RUN_INCS=(-I selfhost/lexer -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser
           -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt -I selfhost/codegen
           -I selfhost/asm -I selfhost/defs)
 

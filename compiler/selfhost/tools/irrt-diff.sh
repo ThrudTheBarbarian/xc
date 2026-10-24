@@ -46,7 +46,7 @@ ARM9_SYSROOT=${XTC_ARM9_SYSROOT:-}
 LIBARGS=()
 [ "$TARGET" = arm9 ] && [ -d "$ARM9_SYSROOT" ] && LIBARGS=(-L "$ARM9_SYSROOT")
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+RUN_INCS=(-I selfhost/lexer -I selfhost/opt -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser
           -I selfhost/sema -I selfhost/defs -I selfhost/ir)
 
 pass=0; fail=0; unsup=0; oracle=0

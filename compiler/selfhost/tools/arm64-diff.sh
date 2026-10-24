@@ -45,7 +45,7 @@ echo "building xtcga64 (xtc → native arm64)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcga64" selfhost/tools/xtcga64.xc \
     -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen 2>&1 | grep -E "^[^ ].*error" && exit 1
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+RUN_INCS=(-I selfhost/lexer -I selfhost/asm -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser
           -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/codegen)
 
 pass=0; fail=0; unsup=0; oracle=0

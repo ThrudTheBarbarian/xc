@@ -30,7 +30,7 @@ echo "building xtcg65 (xtc → native arm64 host binary)…"
     -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/driver -I selfhost/defs \
     2>&1 | grep -E "^[^ ].*error" && exit 1
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+RUN_INCS=(-I selfhost/lexer -I selfhost/asm -I selfhost/link -I selfhost/defs -I selfhost/preproc -I selfhost/parser
           -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt -I selfhost/codegen)
 
 # The backend's own output begins at its banner; everything before it is the

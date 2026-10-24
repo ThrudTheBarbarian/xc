@@ -29,7 +29,7 @@ trap 'rm -rf "$TMP"' EXIT
 INCS=(-I support/generic/lib -I support/$XC_HOST_ARCH/lib -I support/xt6502/lib
       -I support/arm9/lib -I support/atarist/lib -I support/x86_64/lib
       -I support/win64/lib -I support/win64/selfhost-iface -I support/6502/lib
-      -I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser)
+      -I selfhost/lexer -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser)
 
 if [ ! -x "$XTC" ] || [ ! -x "$FE" ]; then
     echo "pp-diff: build first (make)" >&2

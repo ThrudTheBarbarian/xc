@@ -70,7 +70,7 @@ for d in /opt/homebrew/opt/llvm/bin/llvm-dwarfdump "$(command -v llvm-dwarfdump 
 done
 [ -z "$DWARFDUMP" ] && echo "(no llvm-dwarfdump: the --verify step is skipped)"
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+RUN_INCS=(-I selfhost/lexer -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser
           -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt -I selfhost/codegen
           -I selfhost/asm -I selfhost/defs)
 RTX=(support/x86_64/runtime/crt-linux.s support/x86_64/runtime/sys-linux.s

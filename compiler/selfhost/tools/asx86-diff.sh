@@ -31,7 +31,7 @@ if [ ! -x "$WORK/xtasx86" ]; then
     exit 1
 fi
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+RUN_INCS=(-I selfhost/lexer -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser
           -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt -I selfhost/codegen
           -I selfhost/asm -I selfhost/defs)
 

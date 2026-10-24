@@ -43,7 +43,7 @@ mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 INCS=(-I support/generic/lib -I support/arm64/lib -I support/xt6502/lib
-      -I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+      -I selfhost/lexer -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/defs -I selfhost/preproc -I selfhost/parser
       -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt)
 SRC=selfhost/tools/xtfe.xc -I selfhost/driver -I selfhost/defs
 

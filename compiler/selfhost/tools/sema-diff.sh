@@ -34,14 +34,13 @@ trap 'rm -rf "$TMP"' EXIT
 INCS=(-I support/generic/lib -I support/$XC_HOST_ARCH/lib -I support/xt6502/lib
       -I support/arm9/lib -I support/atarist/lib -I support/x86_64/lib
       -I support/win64/lib -I support/win64/selfhost-iface -I support/6502/lib
-      -I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema
+      -I selfhost/lexer -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema
       -I selfhost/ir -I selfhost/defs -I selfhost/opt)
-# selfhost/asm and selfhost/codegen are deliberately NOT here. Both define
-# Arm64.xc, M68k.xc and X86_64.xc, so putting them on one search path makes
-# `#import "Arm64.xc"` resolve to whichever directory comes first — the
-# assembler where the back end was meant, or the reverse. That is not extra
-# coverage, it is a WRONG comparison: tried it, and it manufactured three
-# "divergences" that were purely the wrong file being imported.
+# Every compiler source directory is here: the sources import each other as
+# `#import <Name>` (one object per source file), which needs them all on the
+# path. selfhost/asm and selfhost/codegen once both had Arm64.xc, M68k.xc and
+# X86_64.xc, which made a shared path import the wrong one; the assembler's are
+# Arm64Asm.xc and so on now, so no name is in two directories.
 
 if [ ! -x "$XTC" ] || [ ! -x "$FE" ]; then
     echo "sema-diff: build first (make)" >&2
@@ -49,7 +48,7 @@ if [ ! -x "$XTC" ] || [ ! -x "$FE" ]; then
 fi
 
 echo "building xtsema (xtc → native arm64)…"
-if ! "${XC_TOOL_XCC:-$XTC}" -H . -q -A $XC_HOST_ARCH -I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema \
+if ! "${XC_TOOL_XCC:-$XTC}" -H . -q -A $XC_HOST_ARCH -I selfhost/lexer -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema \
         selfhost/tools/xtsema.xc -o "$TMP/xtsema" 2>"$TMP/build.err"; then
     echo "sema-diff: xtsema failed to build" >&2
     cat "$TMP/build.err" >&2

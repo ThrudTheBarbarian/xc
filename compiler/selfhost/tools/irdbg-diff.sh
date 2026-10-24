@@ -42,7 +42,7 @@ mkdir -p "$WORK"
 trap 'rm -rf "$WORK"' EXIT
 
 BUILD_INCS=(-I support/generic/lib -I support/$XC_HOST_ARCH/lib -I support/xt6502/lib
-            -I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+            -I selfhost/lexer -I selfhost/driver -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/defs -I selfhost/preproc -I selfhost/parser
             -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt)
 
 echo "building xtfe and xtirp (xtc → native $XC_HOST_ARCH)…"
@@ -51,7 +51,7 @@ echo "building xtfe and xtirp (xtc → native $XC_HOST_ARCH)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtirp" selfhost/tools/xtirp.xc \
     -I selfhost/ir -I selfhost/defs -I selfhost/opt 2>&1 | grep -E "^[^ ].*error" && exit 1
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+RUN_INCS=(-I selfhost/lexer -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/defs -I selfhost/preproc -I selfhost/parser
           -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt)
 
 pass=0; fail=0; unsup=0; oracle=0; fediv=0

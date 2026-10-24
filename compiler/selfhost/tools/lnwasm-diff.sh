@@ -25,7 +25,7 @@ echo "building xtlnwasm (xtc → native arm64)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtlnwasm" selfhost/tools/xtlnwasm.xc \
     -I selfhost/asm -I selfhost/defs 2>&1 | grep -E "^[^ ].*error" && exit 1
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+RUN_INCS=(-I selfhost/lexer -I selfhost/opt -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser
           -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/codegen)
 
 pass=0; fail=0; oracle=0

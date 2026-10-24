@@ -38,7 +38,7 @@ trap 'rm -rf "$WORK"' EXIT
 # drop-in resolves the platform and generic libs itself from -H, which is the
 # whole point of it.
 BUILD_INCS=(-I support/generic/lib -I support/$XC_HOST_ARCH/lib -I support/xt6502/lib
-            -I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+            -I selfhost/lexer -I selfhost/driver -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/defs -I selfhost/preproc -I selfhost/parser
             -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt)
 
 echo "building xtfe (xtc → native arm64)…"
@@ -59,7 +59,7 @@ ARM9_SYSROOT=${XTC_ARM9_SYSROOT:-}
 LIBARGS=()
 [ "$TARGET" = arm9 ] && [ -d "$ARM9_SYSROOT" ] && LIBARGS=(-L "$ARM9_SYSROOT")
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+RUN_INCS=(-I selfhost/lexer -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser
           -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt)
 
 pass=0; fail=0; unsup=0; oracle=0

@@ -53,21 +53,21 @@ tool_incs() {
       xtcg68|xtcgwasm|xtcgx86)
                  echo "-I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen";;
       xtcg9)     echo "-I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen";;
-      xtcga64)   echo "-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm";;
+      xtcga64)   echo "-I selfhost/lexer -I selfhost/link -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm";;
       # The front end pulls in the whole chain. The set here was originally
       # lifted from bootstrap.sh, where `-I selfhost/driver` is glued onto a
       # SRC= variable rather than being the whole list — so it built with one
       # include path and failed on the first #import. Extraction from a stale
       # script is not the same as knowing what a tool needs.
-      xtfe)      echo "-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/driver -I selfhost/defs";;
+      xtfe)      echo "-I selfhost/lexer -I selfhost/codegen -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/driver -I selfhost/defs";;
       xtapk)     echo "-I selfhost/link -I selfhost/defs -I selfhost/asm";;
-      xtast)     echo "-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser";;
-      xtir)      echo "-I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/driver -I selfhost/defs";;
+      xtast)     echo "-I selfhost/lexer -I selfhost/codegen -I selfhost/defs -I selfhost/preproc -I selfhost/parser";;
+      xtir)      echo "-I selfhost/lexer -I selfhost/codegen -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/driver -I selfhost/defs";;
       xtirp)     echo "-I selfhost/ir -I selfhost/defs -I selfhost/opt";;
-      xtlex)     echo "-I selfhost/lexer -I selfhost/defs";;
+      xtlex)     echo "-I selfhost/lexer -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/defs";;
       xtopt)     echo "-I selfhost/ir -I selfhost/defs -I selfhost/opt";;
       xtpp)      echo "-I selfhost/preproc -I selfhost/defs";;
-      xtsema)    echo "-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema";;
+      xtsema)    echo "-I selfhost/lexer -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema";;
       *)         echo "";;
     esac
 }

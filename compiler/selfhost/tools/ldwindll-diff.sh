@@ -33,7 +33,7 @@ if [ ! -x "$WORK/xtldwin" ]; then grep -a error "$WORK/build.log" | head -5; exi
 RT=(support/win64/runtime/rtgen-win64.s support/win64/runtime/rtfiles-win64.s
     support/win64/runtime/libmgen-win64.s support/win64/runtime/dllmain-win64.s)
 MAP=support/win64/win32-imports.map
-RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+RUN_INCS=(-I selfhost/lexer -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser
           -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt -I selfhost/codegen
           -I selfhost/asm -I selfhost/defs)
 # dllmain-win64.s walks the module's constructor table; the drivers add an

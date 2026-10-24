@@ -30,7 +30,7 @@ if [ ! -x "$XTC" ] || [ ! -x "$FE" ]; then
 fi
 
 echo "building xtlex (xtc → native arm64)…"
-if ! "${XC_TOOL_XCC:-$XTC}" -H . -q -A $XC_HOST_ARCH -I selfhost/lexer -I selfhost/defs selfhost/tools/xtlex.xc -o "$TMP/xtlex" 2>"$TMP/build.err"; then
+if ! "${XC_TOOL_XCC:-$XTC}" -H . -q -A $XC_HOST_ARCH -I selfhost/lexer -I selfhost/preproc -I selfhost/parser -I selfhost/sema -I selfhost/ir -I selfhost/opt -I selfhost/codegen -I selfhost/asm -I selfhost/link -I selfhost/driver -I selfhost/defs selfhost/tools/xtlex.xc -o "$TMP/xtlex" 2>"$TMP/build.err"; then
     echo "lexer-diff: xtlex failed to build" >&2
     cat "$TMP/build.err" >&2
     exit 1

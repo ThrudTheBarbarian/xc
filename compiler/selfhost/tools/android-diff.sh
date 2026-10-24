@@ -23,12 +23,12 @@ trap 'rm -rf "$WORK"' EXIT
 
 echo "building xtcga64 (xtc → native arm64 host binary)…"
 "${XC_TOOL_XCC:-$BIN/xcc}" -O2 -A $XC_HOST_ARCH -H . -o "$WORK/xtcga64" selfhost/tools/xtcga64.xc \
-    -I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema \
+    -I selfhost/lexer -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser -I selfhost/sema \
     -I selfhost/ir -I selfhost/defs -I selfhost/opt -I selfhost/codegen -I selfhost/asm \
     > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xtcga64" ]; then grep -a error "$WORK/build.log" | head -5; exit 1; fi
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+RUN_INCS=(-I selfhost/lexer -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser
           -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/codegen)
 OPTS=(--aapcs64-abi --no-lse-atomics)
 

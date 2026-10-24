@@ -25,7 +25,7 @@ echo "building xtas68 (xtc → native arm64 host binary)…"
     -I selfhost/asm -I selfhost/defs > "$WORK/build.log" 2>&1
 if [ ! -x "$WORK/xtas68" ]; then grep -a error "$WORK/build.log" | head -5; exit 1; fi
 
-RUN_INCS=(-I selfhost/lexer -I selfhost/defs -I selfhost/preproc -I selfhost/parser
+RUN_INCS=(-I selfhost/lexer -I selfhost/link -I selfhost/driver -I selfhost/defs -I selfhost/preproc -I selfhost/parser
           -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/opt -I selfhost/codegen
           -I selfhost/asm -I selfhost/defs)
 
