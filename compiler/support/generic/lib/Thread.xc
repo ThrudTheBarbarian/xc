@@ -100,6 +100,17 @@ void _xt_thread_sleep_ms(u32 ms);
 u32 _xt_thread_self_id(void);
 i32 _xt_thread_cpu_count(void);
 
+// The calling thread's priority, from the OS where it says (setPriority).
+#if ARCH_win64
+pointer GetCurrentThread(void);
+i32 SetThreadPriority(pointer thread, i32 priority);
+#elif ARCH_arm64 && !PLATFORM_android
+i32 pthread_set_qos_class_self_np(u32 qos, i32 relative);
+#elif ARCH_x86_64 || PLATFORM_android
+i64 syscall(i64 number);
+i32 setpriority(i32 which, u32 who, i32 prio);
+#endif
+
 class Thread
     {
     pointer _handle;           // opaque OS handle; 0 once joined/detached
@@ -185,5 +196,45 @@ class Thread
     static i32 cpuCount(void)
         {
         return _xt_thread_cpu_count();
+        }
+
+    // The levels setPriority takes, lowest first. A worker that should not
+    // compete with the interface runs at utility or background; one the user
+    // is waiting on, at userInitiated. A new thread starts at normal.
+    static i32 background(void) { return (i32)-2; }
+    static i32 utility(void) { return (i32)-1; }
+    static i32 normal(void) { return (i32)0; }
+    static i32 userInitiated(void) { return (i32)1; }
+
+    // Set the CALLING thread's priority to one of the levels above; call it
+    // first thing in a thread's body. True when the OS took it. macOS and iOS
+    // map the levels to their QoS classes (a thread at the default QoS can run
+    // some 40% slower than at user-initiated); Linux to the thread's nice value
+    // (19, 10, 0, -5: going above normal again usually needs privileges, and is
+    // then false); Windows to THREAD_PRIORITY_LOWEST..ABOVE_NORMAL. Elsewhere
+    // there is nothing to set and it is false.
+    static bool setPriority(i32 level)
+        {
+        if (level < (i32)-2 || level > (i32)1)
+            return false;
+#if ARCH_win64
+        return SetThreadPriority(GetCurrentThread(), level) != (i32)0;
+#elif ARCH_arm64 && !PLATFORM_android
+        // QOS_CLASS_BACKGROUND, _UTILITY, _DEFAULT, _USER_INITIATED.
+        u32 qos = level == (i32)-2 ? (u32)$09 : level == (i32)-1 ? (u32)$11 : level == (i32)0 ? (u32)$15 : (u32)$19;
+        return pthread_set_qos_class_self_np(qos, (i32)0) == (i32)0;
+#elif ARCH_x86_64 || PLATFORM_android
+        // PRIO_PROCESS with a thread id sets that thread alone on Linux; the
+        // id is gettid's (186 on x86-64, 178 on arm64).
+#if ARCH_x86_64
+        u32 tid = (u32)syscall((i64)186);
+#else
+        u32 tid = (u32)syscall((i64)178);
+#endif
+        i32 nice = level == (i32)-2 ? (i32)19 : level == (i32)-1 ? (i32)10 : level == (i32)0 ? (i32)0 : (i32)-5;
+        return setpriority((i32)0, tid, nice) == (i32)0;
+#else
+        return false;
+#endif
         }
     }

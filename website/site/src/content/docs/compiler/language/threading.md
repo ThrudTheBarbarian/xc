@@ -66,6 +66,33 @@ ta.join();
 | `isValid()` | `false` if the thread failed to start. |
 | `Thread.yield()` | Hint to the scheduler. |
 | `Thread.sleepMs(u32)` | Sleep the calling thread. |
+| `Thread.setPriority(level)` | Set the calling thread's priority (below). Returns `false` if the OS refused it. |
+
+### Priority
+
+A new thread runs at the normal priority. A worker that should not compete with
+the interface, or one the user is waiting on, sets its own priority first thing in
+its body:
+
+```c
+void run(void)
+{
+    Thread.setPriority(Thread.utility());
+    …
+}
+```
+
+| Level | macOS, iOS | Linux | Windows |
+|---|---|---|---|
+| `Thread.background()` | `QOS_CLASS_BACKGROUND` | nice 19 | `THREAD_PRIORITY_LOWEST` |
+| `Thread.utility()` | `QOS_CLASS_UTILITY` | nice 10 | `THREAD_PRIORITY_BELOW_NORMAL` |
+| `Thread.normal()` | `QOS_CLASS_DEFAULT` | nice 0 | `THREAD_PRIORITY_NORMAL` |
+| `Thread.userInitiated()` | `QOS_CLASS_USER_INITIATED` | nice -5 | `THREAD_PRIORITY_ABOVE_NORMAL` |
+
+On macOS a thread at the default QoS can run noticeably slower than at
+user-initiated, so a long computation the user started is worth setting. On Linux,
+raising a thread's priority again usually needs privileges, and `setPriority` then
+returns `false`. Where threads have no priority, it always returns `false`.
 
 ## Mutex and Guard
 
