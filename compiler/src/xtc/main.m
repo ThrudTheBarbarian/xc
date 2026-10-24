@@ -1376,6 +1376,42 @@ static NSArray<NSString *> *macosSdkFrameworkDirs(NSString *platform) {
 // executable one, which is why `--emit-lib` silently ignored every -Wl object
 // and archive: a library wrapping external C came out the same size whatever
 // was passed, and aborted at load on the first wrapped symbol.
+
+// Whether a 64-bit Mach-O object's symbol table names an UNDEFINED external
+// `_objc_msgSend…` or `_OBJC_CLASS_$_…`: LC_SYMTAB's nlist_64 entries, an
+// undefined one being N_EXT with type N_UNDF. Anything unreadable: no.
+static BOOL machoObjectNeedsObjc(NSData *blob) {
+    const uint8_t *b = blob.bytes;
+    NSUInteger n = blob.length;
+    if (n < 32 || *(const uint32_t *)b != 0xFEEDFACFu) return NO;
+    uint32_t ncmds = *(const uint32_t *)(b + 16);
+    NSUInteger at = 32;
+    for (uint32_t c = 0; c < ncmds && at + 8 <= n; c++) {
+        uint32_t cmd = *(const uint32_t *)(b + at), size = *(const uint32_t *)(b + at + 4);
+        if (cmd == 0x2 && at + 24 <= n) {
+            uint32_t symoff = *(const uint32_t *)(b + at + 8), nsyms = *(const uint32_t *)(b + at + 12);
+            uint32_t stroff = *(const uint32_t *)(b + at + 16), strsize = *(const uint32_t *)(b + at + 20);
+            for (uint32_t k = 0; k < nsyms; k++) {
+                NSUInteger e = (NSUInteger)symoff + (NSUInteger)k * 16;
+                if (e + 16 > n) return NO;
+                uint32_t strx = *(const uint32_t *)(b + e);
+                uint8_t type = b[e + 4];
+                if ((type & 0x01) == 0 || (type & 0x0E) != 0 || strx >= strsize
+                    || (NSUInteger)stroff + strx >= n) continue;
+                const char *nm = (const char *)(b + stroff + strx);
+                NSUInteger left = n - (stroff + strx);
+                if (strnlen(nm, left) == left) continue;
+                // `_objc_msgSend`, or clang's per-selector stub `_objc_msgSend$length`.
+                if (!strncmp(nm, "_objc_msgSend", 13) || !strncmp(nm, "_OBJC_CLASS_$_", 14)) return YES;
+            }
+            return NO;
+        }
+        if (size == 0) return NO;
+        at += size;
+    }
+    return NO;
+}
+
 static void resolveUserLinkInputs(XTCommandLineOptions *opts, NSFileManager *fm,
                                   NSMutableArray<NSString *> *userDylibs,
                                   NSMutableArray<NSString *> *linkerRaw,
@@ -1468,6 +1504,15 @@ static void resolveUserLinkInputs(XTCommandLineOptions *opts, NSFileManager *fm,
             NSData *blob = [NSData dataWithContentsOfFile:raw
                                                   options:NSDataReadingMappedIfSafe error:NULL];
             if (!blob.length) continue;
+            // An object: its symbol table, for an UNDEFINED ObjC name. The
+            // bytes alone matched a compiler whose own sources hold
+            // "_objc_msgSend" as a string (every split-built xcc linked
+            // libobjc, and the install refused it as an Objective-C build).
+            // An archive: still the byte scan.
+            if ([raw hasSuffix:@".o"]) {
+                if (machoObjectNeedsObjc(blob)) { wantsObjc = YES; break; }
+                continue;
+            }
             NSData *needle = [@"_OBJC_CLASS_$_" dataUsingEncoding:NSUTF8StringEncoding];
             NSData *needle2 = [@"_objc_msgSend" dataUsingEncoding:NSUTF8StringEncoding];
             if ([blob rangeOfData:needle options:0 range:NSMakeRange(0, blob.length)].location != NSNotFound

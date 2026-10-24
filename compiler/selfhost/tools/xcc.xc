@@ -878,6 +878,53 @@ bool dataContains(Data* d, string needle)
     return false;
 }
 
+u32 leU32(Data* b, u32 at)
+{
+    return (u32)b.byteAt(at) | ((u32)b.byteAt(at + (u32)1) << (u32)8)
+         | ((u32)b.byteAt(at + (u32)2) << (u32)16) | ((u32)b.byteAt(at + (u32)3) << (u32)24);
+}
+
+// Whether a 64-bit Mach-O object's symbol table names an UNDEFINED external
+// `_objc_msgSend…` or `_OBJC_CLASS_$_…`: LC_SYMTAB's nlist_64 entries, an
+// undefined one being N_EXT with type N_UNDF. Anything unreadable: no. As
+// the reference.
+bool machoObjectNeedsObjc(Data* b)
+{
+    if (b == (Data*)0) return false;
+    u32 n = b.length();
+    if (n < (u32)32 || leU32(b, (u32)0) != (u32)$FEEDFACF) return false;
+    u32 ncmds = leU32(b, (u32)16);
+    u32 at = (u32)32;
+    for (u32 c = (u32)0; c < ncmds && at + (u32)8 <= n; c = c + (u32)1) {
+        u32 cmd = leU32(b, at);
+        u32 size = leU32(b, at + (u32)4);
+        if (cmd == (u32)2 && at + (u32)24 <= n) {
+            u32 symoff = leU32(b, at + (u32)8);
+            u32 nsyms = leU32(b, at + (u32)12);
+            u32 stroff = leU32(b, at + (u32)16);
+            u32 strsize = leU32(b, at + (u32)20);
+            for (u32 k = (u32)0; k < nsyms; k = k + (u32)1) {
+                u32 e = symoff + k * (u32)16;
+                if (e + (u32)16 > n) return false;
+                u32 strx = leU32(b, e);
+                u8 type = b.byteAt(e + (u32)4);
+                if ((type & (u8)1) == (u8)0 || (type & (u8)$0E) != (u8)0 || strx >= strsize || stroff + strx >= n) continue;
+                u32 q = stroff + strx;
+                String* nm = new String();
+                while (q < n && b.byteAt(q) != (u8)0) { nm.appendByte(b.byteAt(q)); q = q + (u32)1; }
+                if (q >= n) continue;
+                // `_objc_msgSend`, or clang's per-selector stub `_objc_msgSend$length`.
+                if (nm.hasPrefix(String.withCString("_objc_msgSend")) || nm.hasPrefix(String.withCString("_OBJC_CLASS_$_")))
+                    return true;
+            }
+            return false;
+        }
+        if (size == (u32)0) return false;
+        at = at + size;
+    }
+    return false;
+}
+
 // Bug 068: an ObjC object needs libobjc, and nothing else in the link
 // provides it (libSystem does not re-export `_objc_msgSend`). Added only when
 // a merged object or archive actually references ObjC — its string table
@@ -895,6 +942,15 @@ bool objectsWantObjc(DriverOptions* d, Array* extra)
         String* p = (String*)paths.get(i);
         if (!p.hasSuffix(String.withCString(".o")) && !p.hasSuffix(String.withCString(".a"))) continue;
         Data* blob = Files.readData(p);
+        // An object: its symbol table, for an UNDEFINED ObjC name. The bytes
+        // alone matched a compiler whose own sources hold "_objc_msgSend" as
+        // a string (every split-built xcc linked libobjc, and the install
+        // refused it as an Objective-C build). An archive: still the bytes.
+        // As the reference.
+        if (p.hasSuffix(String.withCString(".o"))) {
+            if (machoObjectNeedsObjc(blob)) return true;
+            continue;
+        }
         if (dataContains(blob, "_OBJC_CLASS_$_") || dataContains(blob, "_objc_msgSend")) return true;
     }
     return false;
