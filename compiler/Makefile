@@ -339,10 +339,12 @@ $(XCC_XC_LINUX_BIN): $(XCC_XC2_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
 
 $(XCC_XC_WIN64_BIN): $(XCC_XC2_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
                      $(wildcard support/generic/lib/*.xc) $(wildcard support/win64/lib/*.xc)
-	@echo "  xc   building the production compiler for win64 (split)"
+	@echo "  xc   building the production compiler for win64"
 	@mkdir -p $(dir $@) build
-	@XCC=$(XCC_XC2_BIN) SPLIT_DIR=build/split-win64 bash $(SPLIT_BUILD) $@ -A win64 -j $(SPLIT_JOBS) > build/split-win64.log 2>&1 \
-	    || { tail -15 build/split-win64.log; exit 1; }
+	@# One unit: a split-built xcc.exe does not work yet (6502 code reaches
+	@# its x86 assembler; a link misses __xt_ctors_start).
+	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -D XCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) \
+	            $(call XCC_XC_TARGET_INCS,win64)
 
 # For a contributor with no toolchain but an installed release: the shipped
 # compiler built from this tree by the installed xcc (stage 1), again by stage 1
