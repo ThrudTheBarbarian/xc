@@ -6779,6 +6779,30 @@ class ClassInfo
                     return;
                 continue;
                 }
+            // A callback member (`^`: the receiver and code words) is an
+            // aggregate with no struct declaration: each word is zeroed, as
+            // the reference's recursion into its two-field struct does.
+            if (fir.hasPrefix(String.withCString("Agg(")))
+                {
+                IRLayout* cl = layoutOfAgg(fir);
+                if (cl == (IRLayout*)0)
+                    {
+                    giveUp(String.withCString("byte-list zero-fill of an aggregate member with no layout"));
+                    return;
+                    }
+                for (u32 k = (u32)0; k < cl.fieldCount(); k = k + (u32)1)
+                    {
+                    String* kt = cl.typeAt(k);
+                    IRValue* ka = fieldAddr(fa, k, ptrTo(kt));
+                    Array* kops = new Array();
+                    if (isFloatIr(kt))
+                        kops.add((Object*)IROperand.immF(String.withCString("0000000000000000"), kt));
+                    else
+                        kops.add((Object*)IROperand.immI((i32)0, kt));
+                    storeThrough(ka, emit(String.withCString("Const"), kt, kops));
+                    }
+                continue;
+                }
             Array* zops = new Array();
             if (isFloatIr(fir))
                 zops.add((Object*)IROperand.immF(String.withCString("0000000000000000"), fir));
