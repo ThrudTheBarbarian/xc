@@ -1631,19 +1631,27 @@ class IfFrame
     void handleInclude(String* content, String* filename, u32 line, String* output, bool onceOnly)
         {
         handleIncludeOne(content, filename, line, output, onceOnly);
-        while (_pendingStd.count() > (u32)0)
+        // This include's own queue, taken whole: each file below may #import
+        // further, and a nested include draining the shared queue took the
+        // rest of these files inside the first one, so they came out in
+        // reverse (a library client's classes in a different order from the
+        // reference's). Each file is imported in turn, as the reference does
+        // inside its own loop.
+        Array* stds = _pendingStd;
+        _pendingStd = new Array();
+        Array* defs = _pendingDefines;
+        _pendingDefines = new Array();
+        for (u32 si = (u32)0; si < stds.count(); si = si + (u32)1)
             {
-            String* nm = (String*)_pendingStd.get((u32)0);
-            _pendingStd.removeAt((u32)0);
+            String* nm = (String*)stds.get(si);
             String* imp = String.withCString("import <");
             imp.append(nm);
             imp.appendCString(">");
-            handleIncludeOne(imp, filename, line, output, true);
+            handleInclude(imp, filename, line, output, true);
             }
-        while (_pendingDefines.count() > (u32)0)
+        for (u32 di = (u32)0; di < defs.count(); di = di + (u32)1)
             {
-            String* d = (String*)_pendingDefines.get((u32)0);
-            _pendingDefines.removeAt((u32)0);
+            String* d = (String*)defs.get(di);
             u32 e = (u32)0;
             while (e < d.byteLength() && Preprocessor.isIdentChar(d.byteAt(e)))
                 e = e + (u32)1;

@@ -20257,6 +20257,20 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
                          at:g.location];
         }
 
+    // Bound-method trampolines last, by name. Each was added where it was
+    // first needed, which depends on the order functions are lowered in; a
+    // client of a library with stdImports met that need at a different
+    // function in each compiler, and the programs differed by placement.
+    {
+    NSMutableArray<XTIRFunction*>* tramps = [NSMutableArray array];
+    for (XTIRFunction* f in L.module.functions)
+        if ([f.name hasPrefix:@"__bm_tramp_"])
+            [tramps addObject:f];
+    [L.module.functions removeObjectsInArray:tramps];
+    [tramps sortUsingComparator:^NSComparisonResult(XTIRFunction* x, XTIRFunction* y) { return [x.name compare:y.name]; }];
+    [L.module.functions addObjectsFromArray:tramps];
+    }
+
     // `par` blocks must stay within the GPU subset on every target
     // (par-blocks.md §2): checked here, on the lowered kernels, so every
     // caller of the lowering gets the same answer.

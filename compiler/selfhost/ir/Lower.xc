@@ -2893,6 +2893,36 @@ class ClassInfo
     // derived from the signature and a single compare settles whether a given
     // `^` is a widened plain function. The body is the widening: take the
     // receiver word as the code address and jump through it.
+    void trampolinesLast(void)
+        {
+        Array* tramps = new Array();
+        Array* rest = new Array();
+        for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
+            {
+            IRFunc* f = (IRFunc*)_m.funcs().get(i);
+            if (f.name().hasPrefix(String.withCString("__bm_tramp_")))
+                tramps.add((Object*)f);
+            else
+                rest.add((Object*)f);
+            }
+        if (tramps.count() == (u32)0)
+            return;
+        // By name (insertion sort: a program has a handful).
+        for (u32 i = (u32)1; i < tramps.count(); i = i + (u32)1)
+            for (u32 j = i; j > (u32)0 && ((IRFunc*)tramps.get(j)).name().compare(((IRFunc*)tramps.get(j - (u32)1)).name()) < (i8)0; j = j - (u32)1)
+                {
+                Object* t = tramps.get(j);
+                tramps.set(j, tramps.get(j - (u32)1));
+                tramps.set(j - (u32)1, t);
+                }
+        while (_m.funcs().count() > (u32)0)
+            _m.funcs().removeLast();
+        for (u32 i = (u32)0; i < rest.count(); i = i + (u32)1)
+            _m.funcs().add(rest.get(i));
+        for (u32 i = (u32)0; i < tramps.count(); i = i + (u32)1)
+            _m.funcs().add(tramps.get(i));
+        }
+
     String* boundTrampoline(String* boundSpelling)
         {
         String* sig = boundSignatureOf(boundSpelling);
@@ -24374,6 +24404,9 @@ class ClassInfo
             if (sym.kind() == (u8)SYM_FUNCTION && sym.name().hasSuffix(String.withCString("$dealloc")))
                 sym.setEscapes();
             }
+        // Bound-method trampolines last, by name: each was added where it was
+        // first needed, which depends on the lowering order. As the reference.
+        trampolinesLast();
         // `par` blocks must stay within the GPU subset on every target
         // (par-blocks.md §2).
         parCheck();

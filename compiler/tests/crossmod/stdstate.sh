@@ -15,7 +15,8 @@
 #
 #   library  libSsLib (sslib.xc, --emit-lib) and its client ssclient.xc, a
 #            compiler MATRIX (xcc, xcc-xc for each half); the two compilers'
-#            libraries are compared byte for byte, the programs by their output.
+#            libraries and the programs are compared byte for byte, and the
+#            programs run.
 #   mismatch a library built from a standard library that differs by one
 #            comment: the client warns and keeps its own copy (arm64).
 #
@@ -68,9 +69,12 @@ libmatrix() {  # <target> <libfile> <program> <runner> <want>
             got=$($run "$d" "$prog" 2>&1)
             [ "$got" = "$want" ] || { bad "$arch lib=$L app=$A:"; echo "$got" | sed 's/^/        /'; }
         done
-        # The programs are compared by what they print, not byte for byte: a
-        # client of a library with stdImports already placed one bound-method
-        # trampoline differently in the two compilers before this (TODO).
+        # …and against one library, the two compilers' programs are the same
+        # bytes (they differed by the order of the library's stdImports, and
+        # so of a trampoline, until 2026-10-24).
+        # (wasm32 writes <prog>.js, .wasm and .html, not <prog> itself.)
+        samefiles "$TMP/$arch/$L-xcc" "$TMP/$arch/$L-xcc-xc" $(cd "$TMP/$arch/$L-xcc" && ls "$prog" "$prog".* 2>/dev/null) \
+            || bad "$arch lib=$L: the two compilers' programs differ"
     done
 }
 
