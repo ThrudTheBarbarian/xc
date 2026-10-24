@@ -5,6 +5,7 @@
 // internal id changes; the printer is deterministic — equal modules
 // print to byte-identical text.
 #import <Foundation/Foundation.h>
+#import "XTIROpcode.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -14,6 +15,9 @@ NS_ASSUME_NONNULL_BEGIN
 @interface XTIRPrinter : NSObject
 
 + (NSString*)stringFromModule:(XTIRModule*)mod;
+
+// The IR text name of an opcode (`FieldAddr`), as the printer writes it.
++ (NSString*)mnemonicForOpcode:(XTIROpcode)op;
 
 /// A type as the printer spells it (`Ptr(Agg(70), unbanked)`) — what the
 /// xc compiler's back ends read, so a back end matching types by name here

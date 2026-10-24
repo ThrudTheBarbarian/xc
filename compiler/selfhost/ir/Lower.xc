@@ -16795,7 +16795,7 @@ class ClassInfo
                     i64 k = mslSelfField(ip);
                     if (k >= (i64)0)
                         {
-                        if (k >= (i64)_mObj.fieldCount()) { parBecause(String.withCString("it uses an operation its GPU version cannot express yet")); return false; }
+                        if (k >= (i64)_mObj.fieldCount()) { parBecause(String.withCString("it uses an operation its GPU version cannot express yet (IR op FieldAddr)")); return false; }
                         _mSpace.set((Hashable*)mslKey(r), (Object*)String.withCString("thread"));
                         }
                     else if (ip.ops().count() > (u32)0)
@@ -16881,7 +16881,7 @@ class ClassInfo
                     // A data global of scalars (an array, or one value): a
                     // device buffer. Anything else stays on the CPU.
                     if (ip.ops().count() == (u32)0 || ((IROperand*)ip.ops().get((u32)0)).kind() != (u8)OPK_SYM)
-                        { parBecause(String.withCString("it uses an operation its GPU version cannot express yet")); return false; }
+                        { parBecause(String.withCString("it uses an operation its GPU version cannot express yet (IR op AddrOf)")); return false; }
                     String* gn = ((IROperand*)ip.ops().get((u32)0)).name();
                     if (_mHelper)
                         {
@@ -23962,7 +23962,11 @@ class ClassInfo
             }
         if (!ptx && ip.res() != (IRValue*)0 && ip.res().ty().equals(String.withCString("F64")))
             return String.withCString("it uses double, which Apple GPUs do not have");
-        return String.withCString("it uses an operation its GPU version cannot express yet");
+        // Named, so the warning says what to change (astronomancy, 2026-10-24). As the reference.
+        String* w = String.withCString("it uses an operation its GPU version cannot express yet (IR op ");
+        w.append(ip.op());
+        w.appendCString(")");
+        return w;
         }
 
     // A call that could not be printed: the helper's own reason, when there is one.

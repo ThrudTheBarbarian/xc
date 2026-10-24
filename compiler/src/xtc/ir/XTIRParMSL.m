@@ -1,4 +1,5 @@
 #import "XTIRParMSL.h"
+#import "XTIRPrinter.h"
 #import "XTIRModule.h"
 #import "XTIRFunction.h"
 #import "XTIRBlock.h"
@@ -166,7 +167,9 @@ static BOOL isTranscendental(NSString* callee)
         }
     if (!ptx && i.result.type.kind == XTIRTypeKindF64)
         return @"it uses double, which Apple GPUs do not have";
-    return @"it uses an operation its GPU version cannot express yet";
+    // Named, so the warning says what to change (astronomancy, 2026-10-24).
+    return [NSString stringWithFormat:@"it uses an operation its GPU version cannot express yet (IR op %@)",
+                                      [XTIRPrinter mnemonicForOpcode:i.opcode]];
     }
 
 // A call that could not be printed: the helper's own reason, when there is one.
@@ -325,7 +328,7 @@ static BOOL isTranscendental(NSString* callee)
                         {
                         if ((NSUInteger)k >= fields.count)
                             {
-                            [self because:@"it uses an operation its GPU version cannot express yet"];
+                            [self because:@"it uses an operation its GPU version cannot express yet (IR op FieldAddr)"];
                             return NO;
                             }
                         self.space[@(r)] = @(XTParSpaceThread);
@@ -414,7 +417,7 @@ static BOOL isTranscendental(NSString* callee)
                     // device buffer. Anything else stays on the CPU.
                     if (!g)
                         {
-                        [self because:@"it uses an operation its GPU version cannot express yet"];
+                        [self because:@"it uses an operation its GPU version cannot express yet (IR op AddrOf)"];
                         return NO;
                         }
                     if (self.helperMode)
