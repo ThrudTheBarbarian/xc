@@ -2503,6 +2503,28 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
     sVSpill = [NSMutableSet set];
     NSMutableDictionary<NSNumber*, XTIROperand*>* rematOf = [NSMutableDictionary dictionary];
     NSMutableSet<NSNumber*>* spillable = [NSMutableSet set];
+    // The classes whose every value is a 64-byte vector, which alone may take
+    // zmm16-31; none at all outside an AVX-512 function.
+    NSMutableSet<NSNumber*>* zmmOnly = [NSMutableSet set];
+    NSMutableSet<NSNumber*>* notZmm = [NSMutableSet set];
+    for (NSNumber* v in vecVals)
+        {
+        XTIRValue* vv = fn.values[v];
+        NSNumber* c = @(classOf(v.unsignedIntegerValue));
+        if (vv && vv.type.kind == XTIRTypeKindVec && vv.type.byteWidth == 64)
+            [zmmOnly addObject:c];
+        else
+            [notZmm addObject:c];
+        }
+    [zmmOnly minusSet:notZmm];
+    // A reduction folds its source in place through the register's ymm and xmm
+    // names (VReduce*), so a class it reads keeps a register those can name.
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIRInsn* in in bb.instructions)
+            if ((in.opcode == XTIROpVReduceAdd || in.opcode == XTIROpVReduceMax || in.opcode == XTIROpVReduceMin)
+                && in.operands.count && in.operands[0].kind == XTIROperandKindUse)
+                [zmmOnly removeObject:@(classOf(in.operands[0].valueId))];
+    BOOL has512 = zmmOnly.count > 0;
     NSMutableDictionary<NSNumber*, NSNumber*>* regOfClassFinal = nil;
     for (int attempt = 0; attempt < 2 && !regOfClassFinal; attempt++)
         {
@@ -2520,6 +2542,17 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
         if (!remat)
             for (NSNumber* r in @[ @12, @13, @14, @15 ])
                 [freePool addObject:r];
+        // zmm16-31 (AVX-512): only for a class whose every value is 64 bytes,
+        // so a register past 15 is never named as xmm/ymm (which would need
+        // EVEX's vector-length forms the assemblers do not have). Taken first;
+        // a freed one goes back here.
+        NSMutableArray<NSNumber*>* highPool = [NSMutableArray array];
+        if (has512)
+            for (int r = 31; r >= 16; r--)
+                [highPool addObject:@(r)];
+        void (^release)(NSNumber*) = ^(NSNumber* r) {
+            [(r.intValue >= 16 ? highPool : freePool) addObject:r];
+        };
         NSMutableArray<NSNumber*>* active = [NSMutableArray array];
         NSMutableDictionary<NSNumber*, NSNumber*>* regOfClass = [NSMutableDictionary dictionary];
         BOOL failed = NO;
@@ -2530,12 +2563,13 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
             for (NSNumber* a in active)
                 {
                 if (hi[a].integerValue < start)
-                    [freePool addObject:regOfClass[a]];
+                    release(regOfClass[a]);
                 else
                     [stillActive addObject:a];
                 }
             [active setArray:stillActive];
-            if (freePool.count == 0)
+            BOOL wideOnly = [zmmOnly containsObject:cls];
+            if (freePool.count == 0 && !(wideOnly && highPool.count))
                 {
                 if (!remat)
                     {
@@ -2575,7 +2609,7 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
                     [sVSpill addObject:victim];
                 if ([victim isEqual:cls])
                     continue;
-                [freePool addObject:regOfClass[victim]];
+                release(regOfClass[victim]);
                 [regOfClass removeObjectForKey:victim];
                 [active removeObject:victim];
                 }
@@ -2604,11 +2638,16 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
                 NSNumber* acls = @(classOf(def.operands[0].valueId));
                 if (![acls isEqual:cls] && ![phiClass containsObject:acls] &&
                     regOfClass[acls] && hi[acls] && hi[acls].integerValue == start &&
-                    [active containsObject:acls])
+                    [active containsObject:acls] && (regOfClass[acls].intValue < 16 || wideOnly))
                     {
                     reg = regOfClass[acls];
                     [active removeObject:acls]; // its interval ends here
                     }
+                }
+            if (!reg && wideOnly && highPool.count)
+                {
+                reg = highPool.lastObject;
+                [highPool removeLastObject];
                 }
             if (!reg)
                 {
@@ -5476,6 +5515,10 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if ([d hasPrefix:@"ymm"] || [d hasPrefix:@"zmm"])
             {
             NSString* x = [@"x" stringByAppendingString:[d substringFromIndex:1]];
+            // zmm16-31 have no xmm name the assemblers take: stage the scalar
+            // in the emission scratch instead.
+            if ([d substringFromIndex:3].intValue >= 16)
+                x = @"xmm1";
             XTIRInsn* sld = ops[0].kind == XTIROperandKindUse ? sFold[@(ops[0].valueId)] : nil;
             if (sld && sld.opcode == XTIROpLoad)
                 {

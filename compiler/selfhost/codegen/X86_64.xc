@@ -224,6 +224,19 @@ class X86_64
         return x;
         }
 
+    // A vector register's number: `zmm17` -> 17.
+    static u32 vregNum(String* r)
+        {
+        u32 v = (u32)0;
+        for (u32 i = (u32)3; i < r.byteLength(); i = i + (u32)1)
+            {
+            u8 c = r.byteAt(i);
+            if (c < (u8)48 || c > (u8)57) break;
+            v = v * (u32)10 + (u32)(c - (u8)48);
+            }
+        return v;
+        }
+
     static bool isFloatTy(String* t)
         {
         return t != (String*)0 && (t.equals(String.withCString("F32")) || t.equals(String.withCString("F64")));
@@ -1830,6 +1843,10 @@ class X86_64
         if (isYmm(d) || isZmm(d))
             {
             String* x = lowHalf(d);
+            // zmm16-31 have no xmm name the assemblers take: stage the scalar
+            // in the emission scratch instead. As the reference.
+            if (vregNum(d) >= (u32)16)
+                x = String.withCString("xmm1");
             if (src.kind() == (u8)OPK_USE && isFolded(src.val()) && ((IRInsn*)_fold.get((Hashable*)src.val())).op().equals(String.withCString("Load")))
                 {
                 // The elided Load's memory operand: its own folded address, a
@@ -2810,6 +2827,37 @@ class X86_64
                 }
             }
 
+        // The classes whose every value is a 64-byte vector, which alone may
+        // take zmm16-31; none at all outside an AVX-512 function. A reduction
+        // folds its source in place through the register's ymm and xmm names
+        // (VReduce*), so a class it reads keeps a register those can name. As
+        // the reference.
+        Map* zmmOnly = new Map();
+        Map* notZmm = new Map();
+        for (u32 i = (u32)0; i < vecVals.count(); i = i + (u32)1)
+            {
+            IRValue* v = (IRValue*)vecVals.get(i);
+            if (isWide512VecTy(v.ty()))
+                zmmOnly.set((Hashable*)classOfVec(v), (Object*)v);
+            else
+                notZmm.set((Hashable*)classOfVec(v), (Object*)v);
+            }
+        Array* nz = notZmm.allKeys();
+        for (u32 i = (u32)0; i < nz.count(); i = i + (u32)1)
+            zmmOnly.remove((Hashable*)nz.get(i));
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if ((n.op().equals(String.withCString("VReduceAdd")) || n.op().equals(String.withCString("VReduceMax"))
+                     || n.op().equals(String.withCString("VReduceMin")))
+                    && n.ops().count() > (u32)0 && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE)
+                    zmmOnly.remove((Hashable*)classOfVec(((IROperand*)n.ops().get((u32)0)).val()));
+                }
+            }
+        _vZmmOnly = zmmOnly;
         _vRemat = new Map();
         Map* regOf = vecScanX(fn, classes, lo, hi, defOfCls, phiCls, false);
         if (regOf == (Map*)0)
@@ -2850,6 +2898,7 @@ class X86_64
     Map* _vRematOf;     // the classes that are a constant's splat
     Map* _vSpill;       // values that live in their frame slot, no register
     Map* _vSpillable;   // the classes that may be given up: one member, no phi
+    Map* _vZmmOnly;     // the classes that may take zmm16-31 (every value 64 bytes)
 
     // The scan: class -> register, or 0 when the pool runs out. With `remat`,
     // xmm13-xmm15 stay out of the pool and a constant splat gives way.
@@ -2862,6 +2911,13 @@ class X86_64
             freePool.add((Object*)Number.withU32(r));
         for (u32 r = (u32)8; r <= (remat ? (u32)11 : (u32)15); r = r + (u32)1)
             freePool.add((Object*)Number.withU32(r));
+        // zmm16-31 (AVX-512): only for a class whose every value is 64 bytes,
+        // so a register past 15 is never named as xmm/ymm. Taken first; a
+        // freed one goes back here. As the reference.
+        Array* highPool = new Array();
+        if (_vZmmOnly != (Map*)0 && _vZmmOnly.count() > (u32)0)
+            for (u32 r = (u32)31; r >= (u32)16; r = r - (u32)1)
+                highPool.add((Object*)Number.withU32(r));
         Array* active = new Array();
         Map* regOf = new Map();
         for (u32 c = (u32)0; c < classes.count(); c = c + (u32)1)
@@ -2873,14 +2929,15 @@ class X86_64
                 {
                 IRValue* av = (IRValue*)active.get(a);
                 if (((Number*)hi.get((Hashable*)av)).asI32() < start)
-                    freePool.add((Object*)regOf.get((Hashable*)av));
+                    vecRelease(regOf.get((Hashable*)av), freePool, highPool);
                 else
                     still.add((Object*)av);
                 }
             active = still;
+            bool wideOnly = _vZmmOnly != (Map*)0 && inMap(_vZmmOnly, cls);
             // Exhaustion is a HARD failure, never a silent reuse of a live
             // register (#1198): the caller retries with remat, then errors.
-            if (freePool.count() == (u32)0)
+            if (freePool.count() == (u32)0 && !(wideOnly && highPool.count() > (u32)0))
                 {
                 if (!remat)
                     return (Map*)0;
@@ -2919,7 +2976,7 @@ class X86_64
                     _vSpill.set((Hashable*)victim, (Object*)victim);
                 if (victim == cls)
                     continue;
-                freePool.add(regOf.get((Hashable*)victim));
+                vecRelease(regOf.get((Hashable*)victim), freePool, highPool);
                 regOf.remove((Hashable*)victim);
                 active.remove((Object*)victim);
                 }
@@ -2945,13 +3002,19 @@ class X86_64
                         if (acls != cls && !vecHasCls(phiCls, acls)
                             && regOf.get((Hashable*)acls) != (Object*)0
                             && ahi != (Object*)0 && ((Number*)ahi).asI32() == start
-                            && vecHasCls(active, acls))
+                            && vecHasCls(active, acls)
+                            && (((Number*)regOf.get((Hashable*)acls)).asU32() < (u32)16 || wideOnly))
                             {
                             r = regOf.get((Hashable*)acls);
                             active.remove((Object*)acls); // its interval ends here
                             }
                         }
                     }
+                }
+            if (r == (Object*)0 && wideOnly && highPool.count() > (u32)0)
+                {
+                r = (Object*)highPool.get(highPool.count() - (u32)1);
+                highPool.removeAt(highPool.count() - (u32)1);
                 }
             if (r == (Object*)0)
                 {
@@ -2963,6 +3026,15 @@ class X86_64
             sortByEnd(active, hi);
             }
         return regOf;
+        }
+
+    // A register back to its pool: zmm16-31 to the high one.
+    void vecRelease(Object* r, Array* freePool, Array* highPool)
+        {
+        if (((Number*)r).asU32() >= (u32)16)
+            highPool.add(r);
+        else
+            freePool.add(r);
         }
 
     // The classes that are one constant's splat and nothing else (no phi, no
