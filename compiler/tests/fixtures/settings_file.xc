@@ -6,7 +6,8 @@
 // text is stable.
 //
 // The file lives in the working directory under a fixed name and is
-// overwritten on every run; nothing here can delete it (Files has no remove).
+// overwritten on every run; nothing here can delete it (Files has no remove),
+// so the "not there yet" case takes a name no earlier run used.
 //
 //xtc-na: xt6502 — a 6502 has no filesystem: Settings there is memory-only and
 //        save() reports false (settings_memory.xc covers that half).
@@ -21,10 +22,14 @@ i32 main(void)
     String* p = String.withCString("tmp/settings_file.tmp");
 
     // A file that is not there is an EMPTY STORE, not an error: the first
-    // save() creates it.
-    Settings* fresh = Settings.open(p);
+    // save() creates it. A name no run has used yet, so a second run sees a
+    // file that is not there too (the fixed name was there from the first).
+    String* f = String.withCString("tmp/settings_fresh_0.tmp");
+    for (u32 n = (u32)1; Files.exists(f); n = n + (u32)1)
+        f = String.withFormat("tmp/settings_fresh_%u.tmp", n);
+    Settings* fresh = Settings.open(f);
     Stdio.printf("fresh %lu save %d\n", fresh.count(), (i16)(fresh.save() ? 1 : 0));
-    Stdio.printf("created size %ld\n", Files.size(p));
+    Stdio.printf("created size %ld\n", Files.size(f));
 
     Files.writeText(p, String.withCString("# a comment\nalpha = one\n\nbeta=two\n"));
     Settings* s = Settings.open(p);
