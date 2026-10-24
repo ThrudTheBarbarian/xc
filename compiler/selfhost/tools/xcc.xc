@@ -4102,7 +4102,7 @@ void linkObjects(DriverOptions* d)
     Process.exit((i32)1);
 }
 
-#if ARCH_x86_64
+#if ARCH_x86_64 && !ARCH_win64
 // struct rlimit: { rlim_cur, rlim_max }, two u64s.
 i32 getrlimit(i32 resource, u64* rl);
 i32 setrlimit(i32 resource, u64* rl);
@@ -4115,7 +4115,7 @@ i32 setrlimit(i32 resource, u64* rl);
 // raised towards the hard one (at most 1 GB), and nothing else changes.
 void raiseStackLimit(void)
 {
-#if ARCH_x86_64
+#if ARCH_x86_64 && !ARCH_win64
     u64 rl[2];
     if (getrlimit((i32)3, &rl[0]) != (i32)0) return; // RLIMIT_STACK
     u64 want = (u64)1 << (u64)30;
