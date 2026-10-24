@@ -605,10 +605,10 @@ void w32SyncText(pointer c, u8* s)
         return;
         }
     u8 buf[256];
-    GetWindowTextA(c, (pointer)&buf[0], (i32)256);
+    w32GetText(c, (u8*)&buf[0], (i32)256);
     if (!w32Same(&buf[0], s))
         {
-        SetWindowTextA(c, (pointer)s);
+        w32SetText(c, (u8*)s);
         }
     }
 // Posted work (UXViewDriver.setPostedHook).  A worker's wake is a PostMessageA to a message-only
@@ -799,6 +799,78 @@ void w32ValueChanged(pointer ctrl, i32 value)
     c.fire();
     }
 #define W32_CTRL_ID_BASE 1000 // control ids start here so they never collide with menu-item ids
+
+// CreateWindowExW with UTF-8 class and window names: a system control (BUTTON, EDIT, ...) made this
+// way is a Unicode window, so its text is never squeezed through the ANSI code page.
+pointer w32Create(u32 ex, pointer cls, pointer name, u32 style, i32 x, i32 y, i32 w, i32 h, pointer par,
+                  pointer menu, pointer inst, pointer p)
+    {
+    u16 cb[64];
+    u16 nb[256];
+    i32 cn = (i32)0;
+    i32 nn = (i32)0;
+    u16* wc = w32Wide((u8*)cls, (i32)-1, &cb[0], (i32)64, &cn);
+    u16* wn = w32Wide((u8*)name, (i32)-1, &nb[0], (i32)256, &nn);
+    pointer hwnd = CreateWindowExW(ex, (pointer)wc, (pointer)wn, style, x, y, w, h, par, menu, inst, p);
+    w32WideDone(wc, &cb[0]);
+    w32WideDone(wn, &nb[0]);
+    return hwnd;
+    }
+
+// A window's text, set and read as UTF-8.
+void w32SetText(pointer hwnd, u8* s)
+    {
+    u16 b[256];
+    i32 n = (i32)0;
+    u16* w = w32Wide(s, (i32)-1, &b[0], (i32)256, &n);
+    SetWindowTextW(hwnd, (pointer)w);
+    w32WideDone(w, &b[0]);
+    }
+// Into `out` (cap bytes, NUL included), cut at a character boundary when it does not fit; the bytes
+// written, without the NUL.
+i32 w32GetText(pointer hwnd, u8* out, i32 cap)
+    {
+    i32 n = GetWindowTextLengthW(hwnd);
+    u16* w = (u16*)malloc((u32)(n + (i32)1) * (u32)2);
+    n = GetWindowTextW(hwnd, (pointer)w, n + (i32)1);
+    i32 len = n > (i32)0 ? WideCharToMultiByte((u32)CP_UTF8, (u32)0, (pointer)w, n, (pointer)0, (i32)0, (pointer)0, (pointer)0) : (i32)0;
+    while (len > cap - (i32)1 && n > (i32)0)
+        {
+        n = n - (i32)1;
+        if (n > (i32)0 && w[n] >= (u16)$DC00 && w[n] < (u16)$E000)
+            {
+            n = n - (i32)1; // not half a surrogate pair
+            }
+        len = n > (i32)0 ? WideCharToMultiByte((u32)CP_UTF8, (u32)0, (pointer)w, n, (pointer)0, (i32)0, (pointer)0, (pointer)0) : (i32)0;
+        }
+    if (len > (i32)0)
+        {
+        WideCharToMultiByte((u32)CP_UTF8, (u32)0, (pointer)w, n, (pointer)out, len, (pointer)0, (pointer)0);
+        }
+    out[len] = (u8)0;
+    free((pointer)w);
+    return len;
+    }
+// A menu item with a UTF-8 label (a menu is not a window, so AppendMenuA would use the code page).
+i32 w32AppendMenu(pointer menu, u32 flags, pointer idOrSubmenu, u8* label)
+    {
+    u16 b[256];
+    i32 n = (i32)0;
+    u16* w = w32Wide(label, (i32)-1, &b[0], (i32)256, &n);
+    i32 r = AppendMenuW(menu, flags, idOrSubmenu, (pointer)w);
+    w32WideDone(w, &b[0]);
+    return r;
+    }
+// A message whose lParam is a UTF-8 string, sent as UTF-16 (CB_ADDSTRING, say).
+pointer w32Send(pointer hwnd, u32 msg, pointer wp, u8* s)
+    {
+    u16 b[256];
+    i32 n = (i32)0;
+    u16* w = w32Wide(s, (i32)-1, &b[0], (i32)256, &n);
+    pointer r = SendMessageW(hwnd, msg, wp, (pointer)w);
+    w32WideDone(w, &b[0]);
+    return r;
+    }
 
 // Draw a UTF-8 string through the WIDE text API.  The neutral toolkit hands us UTF-8 (u8*); TextOutA
 // would read those bytes as the ANSI code page and mangle any multibyte char (e.g. an em dash shows
@@ -1069,7 +1141,7 @@ class W32TextView : Object
             }
         u32 st = (u32)WS_CHILD | (u32)WS_VISIBLE | (u32)WS_VSCROLL | (u32)WS_TABSTOP | (u32)ES_MULTILINE |
                  (u32)ES_AUTOVSCROLL | (u32)ES_WANTRETURN;
-        pointer c = CreateWindowExA((u32)WS_EX_CLIENTEDGE, (pointer) "RICHEDIT50W", (pointer) "", st, x, y, w, h, parent,
+        pointer c = w32Create((u32)WS_EX_CLIENTEDGE, (pointer) "RICHEDIT50W", (pointer) "", st, x, y, w, h, parent,
                                     (pointer)(W32_CTRL_ID_BASE + node), gW32Inst, (pointer)0);
         if (c == (pointer)0)
             {
@@ -1757,7 +1829,7 @@ pointer UXWin32Proc(pointer hwnd, u32 msg, pointer wp, pointer lp)
                 W32Field* f = (W32Field*)GetWindowLongPtrA(lp, (i32)GWLP_USERDATA);
                 if (f != (W32Field*)0)
                     {
-                    GetWindowTextA(lp, (pointer)&f.buf[0], f.cap); // sync the buffer first
+                    w32GetText(lp, (u8*)&f.buf[0], f.cap); // sync the buffer first
                     if (f.field != (pointer)0)
                         {
                         ((UXTextField*)f.field).fieldDidChange();
@@ -2983,7 +3055,7 @@ class UXWin32Driver : Object<UXViewDriver>
         RegisterClassA((pointer)&pc);
         if (gW32PostedWin == (pointer)0)
             {
-            gW32PostedWin = CreateWindowExA((u32)0, (pointer) "UXPosted32", (pointer) "", (u32)0, (i32)0, (i32)0, (i32)0, (i32)0,
+            gW32PostedWin = w32Create((u32)0, (pointer) "UXPosted32", (pointer) "", (u32)0, (i32)0, (i32)0, (i32)0, (i32)0,
                                             (pointer)(i64)-3, (pointer)0, gW32Inst, (pointer)0);
             }
         gW32Font = w32UiFont(W32_UI_PX); // for every native control
@@ -3119,7 +3191,7 @@ class UXWin32Driver : Object<UXViewDriver>
             }
         if (gW32LineWin[handle] == (pointer)0)
             {
-            pointer lw = CreateWindowExA((u32)(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE),
+            pointer lw = w32Create((u32)(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE),
                                          (pointer) "UXLine32", (pointer) "", (u32)WS_POPUP,
                                          o.x, o.y, rc.right, rc.bottom, main, (pointer)0, gW32Inst, (pointer)0);
             SetLayeredWindowAttributes(lw, (u32)$00FF00FF, (u8)255, (u32)LWA_COLORKEY);
@@ -3174,7 +3246,7 @@ class UXWin32Driver : Object<UXViewDriver>
             else
                 {
                 u32 fl = (u32)MF_STRING | ((fs[i] & (i32)2) != (i32)0 ? (u32)MF_GRAYED : (u32)0);
-                AppendMenuA(m, fl, (pointer)(i + (i32)1), (pointer)ts[i]);
+                w32AppendMenu(m, fl, (pointer)(i + (i32)1), (u8*)ts[i]);
                 }
             }
         POINT p;
@@ -3197,7 +3269,7 @@ class UXWin32Driver : Object<UXViewDriver>
         rc.right = w;
         rc.bottom = h;
         AdjustWindowRect((pointer)&rc, style, gW32Menu != (pointer)0 ? (i32)1 : (i32)0);
-        pointer hwnd = CreateWindowExA((u32)0, (pointer) "UXWin32", (pointer) "UXKit",
+        pointer hwnd = w32Create((u32)0, (pointer) "UXWin32", (pointer) "UXKit",
                                        style, x, y, rc.right - rc.left, rc.bottom - rc.top, (pointer)0, (pointer)0, gW32Inst, (pointer)0);
         i32 handle = (i32)0; // reuse a freed slot if there is one,
         // so create/destroy loops stay bounded
@@ -3287,17 +3359,14 @@ class UXWin32Driver : Object<UXViewDriver>
             {
             t = UXStr.append(UXStr.append(t, (u8*)" - "), gW32Subtitle[handle]);
             }
-        u16 wbuf[512]; // UTF-8 -> UTF-16 so a non-ASCII title isn't mangled
-        i32 wch = MultiByteToWideChar((u32)CP_UTF8, (u32)0, (pointer)t, (i32)-1, (pointer)&wbuf[0], (i32)512);
-        if (wch > (i32)0)
-            {
-            SetWindowTextW(gW32Hwnds[handle], (pointer)&wbuf[0]);
-            }
-        // fallback
-        else
-            {
-            SetWindowTextA(gW32Hwnds[handle], (pointer)t);
-            }
+        // The window's class is ANSI, so SetWindowTextW would pass the title through UXWin32Proc in the
+        // code page, and a character outside it would come out as "?".  DefWindowProcW stores the UTF-16
+        // title as it is, and the caption is drawn from that.
+        u16 wb[256];
+        i32 wn = (i32)0;
+        u16* w = w32Wide(t, (i32)-1, &wb[0], (i32)256, &wn);
+        DefWindowProcW(gW32Hwnds[handle], (u32)WM_SETTEXT, (pointer)0, (pointer)w);
+        w32WideDone(w, &wb[0]);
         }
     void windowSetSubtitle(i32 handle, u8* s)
         {
@@ -3809,7 +3878,11 @@ class UXWin32Driver : Object<UXViewDriver>
         SIZE sz;
         sz.cx = (i32)0;
         sz.cy = (i32)0;
-        GetTextExtentPoint32A(gW32MeasureDC, (pointer)s, n, (pointer)&sz);
+        u16 wb[256];
+        i32 wn = (i32)0;
+        u16* ws = w32Wide(s, n, &wb[0], (i32)256, &wn);
+        GetTextExtentPoint32W(gW32MeasureDC, (pointer)ws, wn, (pointer)&sz);
+        w32WideDone(ws, &wb[0]);
         SelectObject(gW32MeasureDC, old);
         if (size > (i32)0)
             {
@@ -3848,7 +3921,11 @@ class UXWin32Driver : Object<UXViewDriver>
         SIZE sz;
         sz.cx = (i32)0;
         sz.cy = (i32)0;
-        GetTextExtentPoint32A(gW32MeasureDC, (pointer)s, n, (pointer)&sz);
+        u16 wb[256];
+        i32 wn = (i32)0;
+        u16* ws = w32Wide(s, n, &wb[0], (i32)256, &wn);
+        GetTextExtentPoint32W(gW32MeasureDC, (pointer)ws, wn, (pointer)&sz);
+        w32WideDone(ws, &wb[0]);
         SelectObject(gW32MeasureDC, old);
         DeleteObject(fnt);
         return sz.cx;
@@ -4655,7 +4732,7 @@ class UXWin32Driver : Object<UXViewDriver>
     pointer w32MakeToolbar(pointer parent, i32 nodeIdx, i32 ax, i32 ay, i32 w, i32 hh)
         {
         u32 st = (u32)WS_CHILD | (u32)WS_VISIBLE | (u32)TBSTYLE_LIST | (u32)CCS_NORESIZE | (u32)CCS_NOPARENTALIGN | (u32)CCS_NODIVIDER;
-        pointer c = CreateWindowExA((u32)0, (pointer) "ToolbarWindow32", (pointer) "",
+        pointer c = w32Create((u32)0, (pointer) "ToolbarWindow32", (pointer) "",
                                     st, ax, ay, w, hh, parent, (pointer)(W32_CTRL_ID_BASE + nodeIdx), gW32Inst, (pointer)0);
         SendMessageA(c, (u32)TB_BUTTONSTRUCTSIZE, (pointer)32, (pointer)0); // sizeof(TBBUTTON) on Win64
         SendMessageA(c, (u32)WM_SETFONT, gW32Font, (pointer)1);
@@ -4676,21 +4753,22 @@ class UXWin32Driver : Object<UXViewDriver>
         b.dwData = (pointer)0;
         b.iString = (pointer)0;
         }
-    // Add one text button.  TB_ADDSTRINGA registers the label (double-NUL-terminated list) and returns an
-    // index the button's iString points at.  Labels are treated as ANSI here — fine for ASCII controls.
+    // Add one text button.  TB_ADDSTRINGW registers the label (a double-NUL-terminated UTF-16 list) and
+    // returns an index the button's iString points at.
     // image = a standard-image index (STD_*), or -2 (I_IMAGENONE) for no icon (the segmented check-group).
     void w32ToolbarAdd(pointer tb, i32 idCommand, u8* label, i32 fsStyle, i32 checked, i32 image)
         {
-        u8 buf[128];
+        u16 buf[128];
         i32 n = (i32)0;
-        while (label[n] != (u8)0 && n < (i32)126)
+        u16* w = w32Wide(label, (i32)-1, &buf[0], (i32)127, &n);
+        if (w != &buf[0])
             {
-            buf[n] = label[n];
-            n = n + (i32)1;
+            w32WideDone(w, &buf[0]); // over 126 UTF-16 units: no label is
+            n = (i32)0;
+            buf[0] = (u16)0;
             }
-        buf[n] = (u8)0;
-        buf[n + (i32)1] = (u8)0;
-        i32 si = (i32)SendMessageA(tb, (u32)TB_ADDSTRINGA, (pointer)0, (pointer)&buf[0]);
+        buf[n + (i32)1] = (u16)0;
+        i32 si = (i32)SendMessageW(tb, (u32)TB_ADDSTRINGW, (pointer)0, (pointer)&buf[0]);
         TBBUTTON b;
         self.w32TbbInit(&b);
         b.iBitmap = image;
@@ -4944,7 +5022,7 @@ class UXWin32Driver : Object<UXViewDriver>
                 {
                 if (t.nodes[i].ctrl == (pointer)0)
                     {
-                    pointer c = CreateWindowExA((u32)0, (pointer) "UXShield32", (pointer) "",
+                    pointer c = w32Create((u32)0, (pointer) "UXShield32", (pointer) "",
                                                 (u32)WS_CHILD | (u32)WS_VISIBLE,
                                                 ax, ay, w, hh, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);
                     SetWindowLongPtrA(c, (i32)GWLP_USERDATA, t.nodes[i].peer); // for the coord translation
@@ -4967,7 +5045,7 @@ class UXWin32Driver : Object<UXViewDriver>
                 // and the SURFACE is taken on the one that follows the first makeGL.
                 if (t.nodes[i].ctrl == (pointer)0)
                     {
-                    pointer c = CreateWindowExA((u32)0, (pointer) "UXGl32", (pointer) "",
+                    pointer c = w32Create((u32)0, (pointer) "UXGl32", (pointer) "",
                                                 (u32)WS_CHILD | (u32)WS_VISIBLE | (u32)WS_CLIPSIBLINGS,
                                                 ax, ay, w, hh, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);
                     t.nodes[i].ctrl = c;
@@ -4990,7 +5068,7 @@ class UXWin32Driver : Object<UXViewDriver>
                 if (t.nodes[i].ctrl == (pointer)0)
                     {
                     u8* title = t.nodes[i].spec != (pointer)0 ? (u8*)t.nodes[i].spec : (u8*)"";
-                    pointer c = CreateWindowExA((u32)0, (pointer) "BUTTON", (pointer)title,
+                    pointer c = w32Create((u32)0, (pointer) "BUTTON", (pointer)title,
                                                 (u32)WS_CHILD | (u32)WS_VISIBLE | (u32)WS_TABSTOP | (u32)BS_PUSHBUTTON,
                                                 ax, ay, w, hh, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);
                     SendMessageA(c, (u32)WM_SETFONT, gW32Font, (pointer)1);
@@ -5016,7 +5094,7 @@ class UXWin32Driver : Object<UXViewDriver>
                         {
                         est = est | (u32)ES_PASSWORD;
                         }
-                    pointer c = CreateWindowExA((u32)WS_EX_CLIENTEDGE, (pointer) "EDIT", (pointer)init, est,
+                    pointer c = w32Create((u32)WS_EX_CLIENTEDGE, (pointer) "EDIT", (pointer)init, est,
                                                 ax, ay, w, hh, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);
                     SendMessageA(c, (u32)WM_SETFONT, gW32Font, (pointer)1);
                     w32FieldSubclass(c); // its line of text centred in the frame
@@ -5043,10 +5121,10 @@ class UXWin32Driver : Object<UXViewDriver>
                 if (f != (W32Field*)0)
                     {
                     u8 cur[256];
-                    GetWindowTextA(t.nodes[i].ctrl, (pointer)&cur[0], (i32)256);
+                    w32GetText(t.nodes[i].ctrl, (u8*)&cur[0], (i32)256);
                     if (self.strdiff(&cur[0], &f.buf[0]) != (i32)0)
                         {
-                        SetWindowTextA(t.nodes[i].ctrl, (pointer)&f.buf[0]);
+                        w32SetText(t.nodes[i].ctrl, (u8*)&f.buf[0]);
                         }
                     }
                 }
@@ -5059,7 +5137,7 @@ class UXWin32Driver : Object<UXViewDriver>
                 if (t.nodes[i].ctrl == (pointer)0)
                     {
                     u8* title = t.nodes[i].spec != (pointer)0 ? (u8*)t.nodes[i].spec : (u8*)"";
-                    pointer c = CreateWindowExA((u32)0, (pointer) "BUTTON", (pointer)title,
+                    pointer c = w32Create((u32)0, (pointer) "BUTTON", (pointer)title,
                                                 (u32)WS_CHILD | (u32)WS_VISIBLE | (u32)WS_TABSTOP | (u32)style,
                                                 ax, ay, w, hh, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);
                     SendMessageA(c, (u32)WM_SETFONT, gW32Font, (pointer)1);
@@ -5081,7 +5159,7 @@ class UXWin32Driver : Object<UXViewDriver>
                     {
                     if (t.nodes[i].ctrl == (pointer)0)
                         {
-                        pointer c = CreateWindowExA((u32)0, (pointer) "msctls_trackbar32", (pointer) "",
+                        pointer c = w32Create((u32)0, (pointer) "msctls_trackbar32", (pointer) "",
                                                     (u32)WS_CHILD | (u32)WS_VISIBLE | (u32)WS_TABSTOP | (u32)TBS_HORZ | (u32)TBS_AUTOTICKS,
                                                     ax, ay, w, hh, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);
                         SendMessageA(c, (u32)TBM_SETRANGEMIN, (pointer)0, (pointer)sv.nativeMin());
@@ -5105,13 +5183,13 @@ class UXWin32Driver : Object<UXViewDriver>
                     if (t.nodes[i].ctrl == (pointer)0)
                         {
                         // the combo's height must include the dropped-down list, so add headroom
-                        pointer c = CreateWindowExA((u32)0, (pointer) "COMBOBOX", (pointer) "",
+                        pointer c = w32Create((u32)0, (pointer) "COMBOBOX", (pointer) "",
                                                     (u32)WS_CHILD | (u32)WS_VISIBLE | (u32)WS_TABSTOP | (u32)WS_VSCROLL | (u32)CBS_DROPDOWNLIST,
                                                     ax, ay, w, hh + (i32)120, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);
                         SendMessageA(c, (u32)WM_SETFONT, gW32Font, (pointer)1);
                         for (i32 j = (i32)0; j < pv.nativeItemCount(); j = j + (i32)1)
                             {
-                            SendMessageA(c, (u32)CB_ADDSTRING, (pointer)0, (pointer)pv.nativeItemTitle(j));
+                            w32Send(c, (u32)CB_ADDSTRING, (pointer)0, (u8*)pv.nativeItemTitle(j));
                             }
                         SendMessageA(c, (u32)CB_SETCURSEL, (pointer)pv.nativeSelected(), (pointer)0);
                         SetWindowLongPtrA(c, (i32)GWLP_USERDATA, (pointer)pv); // CBN_SELCHANGE -> the popup
@@ -5132,7 +5210,7 @@ class UXWin32Driver : Object<UXViewDriver>
                     {
                     if (t.nodes[i].ctrl == (pointer)0)
                         {
-                        pointer c = CreateWindowExA((u32)0, (pointer) "msctls_updown32", (pointer) "",
+                        pointer c = w32Create((u32)0, (pointer) "msctls_updown32", (pointer) "",
                                                     (u32)WS_CHILD | (u32)WS_VISIBLE | (u32)UDS_ARROWKEYS,
                                                     ax, ay, w, hh, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);
                         SendMessageA(c, (u32)UDM_SETRANGE32, (pointer)sv.nativeMin(), (pointer)sv.nativeMax());
@@ -5155,7 +5233,7 @@ class UXWin32Driver : Object<UXViewDriver>
                     {
                     if (t.nodes[i].ctrl == (pointer)0)
                         {
-                        pointer c = CreateWindowExA((u32)0, (pointer) "msctls_progress32", (pointer) "",
+                        pointer c = w32Create((u32)0, (pointer) "msctls_progress32", (pointer) "",
                                                     (u32)WS_CHILD | (u32)WS_VISIBLE,
                                                     ax, ay, w, hh, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);
                         SendMessageA(c, (u32)PBM_SETRANGE32, (pointer)0, (pointer)1000);
@@ -5242,7 +5320,7 @@ class UXWin32Driver : Object<UXViewDriver>
                         {
                         // A native TREE: SysTreeView32, populated from the outline's item hooks.
                         u32 tvs = (u32)WS_CHILD | (u32)WS_VISIBLE | (u32)WS_BORDER | (u32)TVS_HASBUTTONS | (u32)TVS_HASLINES | (u32)TVS_LINESATROOT | (u32)TVS_SHOWSELALWAYS;
-                        pointer c = CreateWindowExA((u32)0, (pointer) "SysTreeView32", (pointer) "",
+                        pointer c = w32Create((u32)0, (pointer) "SysTreeView32", (pointer) "",
                                                     tvs, ax, ay, w, hh, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);
                         SendMessageA(c, (u32)WM_SETFONT, gW32Font, (pointer)1);
                         SetWindowLongPtrA(c, (i32)GWLP_USERDATA, (pointer)tv); // WM_NOTIFY maps back to the outline
@@ -5260,7 +5338,7 @@ class UXWin32Driver : Object<UXViewDriver>
                             {
                             lvs = lvs | (u32)LVS_NOCOLUMNHEADER; // no titles: no header row
                             }
-                        pointer c = CreateWindowExA((u32)0, (pointer) "SysListView32", (pointer) "",
+                        pointer c = w32Create((u32)0, (pointer) "SysListView32", (pointer) "",
                                                     lvs, ax, ay, w, hh, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);
                         SendMessageA(c, (u32)WM_SETFONT, gW32Font, (pointer)1);
                         SendMessageA(c, (u32)LVM_SETEXTENDEDLISTVIEWSTYLE,
@@ -5302,7 +5380,7 @@ class UXWin32Driver : Object<UXViewDriver>
                 if (t.nodes[i].ctrl == (pointer)0)
                     {
                     u32 style = (u32)WS_CHILD | (u32)WS_VISIBLE | (u32)WS_VSCROLL | (u32)WS_BORDER;
-                    pointer c = CreateWindowExA((u32)0, (pointer) "UXScroll32", (pointer) "",
+                    pointer c = w32Create((u32)0, (pointer) "UXScroll32", (pointer) "",
                                                 style, ax, ay, w, hh, parent, (pointer)(W32_CTRL_ID_BASE + i), gW32Inst, (pointer)0);
                     SetWindowLongPtrA(c, (i32)GWLP_USERDATA, (pointer)sv); // WM_PAINT reads the peer off this
                     SendMessageA(c, (u32)WM_SETFONT, gW32Font, (pointer)1);
@@ -5407,13 +5485,17 @@ class UXWin32Driver : Object<UXViewDriver>
             col.mask = (u32)(LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM);
             col.fmt = (i32)0;
             col.cx = (i32)tv.columnWidth(c);
-            col.pszText = (pointer)tv.columnTitle(c);
+            u16 cb[128];
+            i32 cn = (i32)0;
+            u16* cw = w32Wide((u8*)tv.columnTitle(c), (i32)-1, &cb[0], (i32)128, &cn);
+            col.pszText = (pointer)cw;
             col.cchTextMax = (i32)0;
             col.iSubItem = c;
             col.iImage = (i32)0;
             col.iOrder = (i32)0;
             col._pad0 = (i32)0;
-            SendMessageA(lv, (u32)LVM_INSERTCOLUMNA, (pointer)c, (pointer)&col);
+            SendMessageW(lv, (u32)LVM_INSERTCOLUMNW, (pointer)c, (pointer)&col);
+            w32WideDone(cw, &cb[0]);
             }
         i32 nrow = tv.nativeRowCount();
         for (i32 r = (i32)0; r < nrow; r = r + (i32)1)
@@ -5423,8 +5505,12 @@ class UXWin32Driver : Object<UXViewDriver>
             it.mask = (u32)LVIF_TEXT;
             it.iItem = r;
             it.iSubItem = (i32)0;
-            it.pszText = (pointer)tv.nativeCellText(r, (i32)0);
-            SendMessageA(lv, (u32)LVM_INSERTITEMA, (pointer)0, (pointer)&it);
+            u16 ib[256];
+            i32 iwn = (i32)0;
+            u16* iw = w32Wide((u8*)tv.nativeCellText(r, (i32)0), (i32)-1, &ib[0], (i32)256, &iwn);
+            it.pszText = (pointer)iw;
+            SendMessageW(lv, (u32)LVM_INSERTITEMW, (pointer)0, (pointer)&it);
+            w32WideDone(iw, &ib[0]);
             for (i32 c = (i32)1; c < ncol; c = c + (i32)1)
                 {
                 LVITEM si;
@@ -5432,8 +5518,12 @@ class UXWin32Driver : Object<UXViewDriver>
                 si.mask = (u32)LVIF_TEXT;
                 si.iItem = r;
                 si.iSubItem = c;
-                si.pszText = (pointer)tv.nativeCellText(r, c);
-                SendMessageA(lv, (u32)LVM_SETITEMTEXTA, (pointer)r, (pointer)&si);
+                u16 sb[256];
+                i32 sn = (i32)0;
+                u16* sw = w32Wide((u8*)tv.nativeCellText(r, c), (i32)-1, &sb[0], (i32)256, &sn);
+                si.pszText = (pointer)sw;
+                SendMessageW(lv, (u32)LVM_SETITEMTEXTW, (pointer)r, (pointer)&si);
+                w32WideDone(sw, &sb[0]);
                 }
             }
         }
@@ -5458,13 +5548,17 @@ class UXWin32Driver : Object<UXViewDriver>
             ins.hItem = (pointer)0;
             ins.state = (u32)0;
             ins.stateMask = (u32)0;
-            ins.pszText = (pointer)o.nativeItemValue(child, (i32)0);
+            u16 tb[256];
+            i32 tn = (i32)0;
+            u16* tw = w32Wide((u8*)o.nativeItemValue(child, (i32)0), (i32)-1, &tb[0], (i32)256, &tn);
+            ins.pszText = (pointer)tw;
             ins.cchTextMax = (i32)0;
             ins.iImage = (i32)0;
             ins.iSelectedImage = (i32)0;
             ins.cChildren = (i32)0;
             ins.lParam = child;
-            pointer hChild = SendMessageA(tv, (u32)TVM_INSERTITEMA, (pointer)0, (pointer)&ins);
+            pointer hChild = SendMessageW(tv, (u32)TVM_INSERTITEMW, (pointer)0, (pointer)&ins);
+            w32WideDone(tw, &tb[0]);
             if (o.nativeExpandable(child) != (i32)0)
                 {
                 self.treeFill(tv, o, child, hChild); // its children
@@ -5540,7 +5634,7 @@ class UXWin32Driver : Object<UXViewDriver>
         W32Field* f = (W32Field*)GetWindowLongPtrA(ctrl, (i32)GWLP_USERDATA);
         if (f != (W32Field*)0)
             {
-            GetWindowTextA(ctrl, (pointer)&f.buf[0], f.cap);
+            w32GetText(ctrl, (u8*)&f.buf[0], f.cap);
             }
         }
     // Walk the shadow tree; a custom view calls back into drawRect, a label paints its text.
@@ -5915,10 +6009,10 @@ class UXWin32Driver : Object<UXViewDriver>
                         text = &s[1];
                         }
                     // a shortcut is spelled out after a tab, which Windows right-aligns
-                    AppendMenuA(sub, flags, (pointer)self.menuId(t, j), (pointer)UXMenuKey.labelled(text, (u8*)"\t", (u8*)"Ctrl+", (u8*)"Shift+"));
+                    w32AppendMenu(sub, flags, (pointer)self.menuId(t, j), UXMenuKey.labelled(text, (u8*)"\t", (u8*)"Ctrl+", (u8*)"Shift+"));
                     }
                 }
-            AppendMenuA(bar, (u32)MF_POPUP, sub, (pointer)d[t].title);
+            w32AppendMenu(bar, (u32)MF_POPUP, sub, (u8*)d[t].title);
             }
         return bar;
         }
@@ -6207,7 +6301,14 @@ class UXWin32Driver : Object<UXViewDriver>
 
         u32 type = nb >= (i32)3 ? (u32)MB_YESNOCANCEL : (nb == (i32)2 ? (u32)MB_OKCANCEL : (u32)MB_OK);
         type = type | (icon >= (i32)3 ? (u32)MB_ICONSTOP : (u32)MB_ICONINFO);
-        i32 r = MessageBoxA((pointer)0, (u8*)&body[0], (u8*)"Alert", type);
+        u16 mb[512];
+        i32 mn = (i32)0;
+        u16* mw = w32Wide((u8*)&body[0], (i32)-1, &mb[0], (i32)512, &mn);
+        u16 cap[8];
+        i32 capn = (i32)0;
+        w32Wide((u8*)"Alert", (i32)-1, &cap[0], (i32)8, &capn);
+        i32 r = MessageBoxW((pointer)0, (pointer)mw, (pointer)&cap[0], type);
+        w32WideDone(mw, &mb[0]);
 
         if (nb >= (i32)3)
             {

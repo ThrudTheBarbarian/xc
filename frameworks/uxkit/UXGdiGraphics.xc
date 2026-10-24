@@ -6,6 +6,42 @@
 #import "UXGeometry.xc"
 #import "UXGraphics.xc"
 
+// UTF-8 to UTF-16, NUL-terminated: `n` bytes of `s` (-1: up to its NUL), into `buf` (cap u16s) when
+// it fits, else into a malloc'd copy that w32WideDone frees.  wn gets the length without the NUL.
+u16* w32Wide(u8* s, i32 n, u16* buf, i32 cap, i32* wn)
+    {
+    i32 len = (s == (u8*)0 || n == (i32)0) ? (i32)0 : MultiByteToWideChar((u32)CP_UTF8, (u32)0, (pointer)s, n, (pointer)0, (i32)0);
+    if (n < (i32)0 && len > (i32)0)
+        {
+        len = len - (i32)1; // it counted the NUL
+        }
+    u16* out = len < cap ? buf : (u16*)malloc((u32)(len + (i32)1) * (u32)2);
+    if (len > (i32)0)
+        {
+        MultiByteToWideChar((u32)CP_UTF8, (u32)0, (pointer)s, n < (i32)0 ? (i32)-1 : n, (pointer)out, n < (i32)0 ? len + (i32)1 : len);
+        }
+    out[len] = (u16)0;
+    wn[0] = len;
+    return out;
+    }
+void w32WideDone(u16* w, u16* buf)
+    {
+    if (w != buf)
+        {
+        free((pointer)w);
+        }
+    }
+
+// TextOut of `n` bytes of UTF-8, as UTF-16 (TextOutA would read them as the ANSI code page)
+void gdiTextOut(pointer hdc, i32 x, i32 y, u8* s, i32 n)
+    {
+    u16 b[256];
+    i32 wn = (i32)0;
+    u16* w = w32Wide(s, n, &b[0], (i32)256, &wn);
+    TextOutW(hdc, x, y, (pointer)w, wn);
+    w32WideDone(w, &b[0]);
+    }
+
 // drawPixels' GDI calls, resolved from gdi32 by name: neither is in the toolchain's import map.
 pointer gGdiCreateDIBSection;
 pointer gGdiAlphaBlend;
@@ -252,7 +288,7 @@ class UXGdiGraphics : Object<UXGraphics>
                               (u32)0, (u32)0, (u32)0, (u32)1, (u32)0, (u32)0, (u32)5, (u32)0, (u8*)"Segoe UI");
             old = SelectObject(hdc, fnt);
             }
-        TextOutA(hdc, (i32)(origin.x + x), (i32)(origin.y + y), (pointer)s, n);
+        gdiTextOut(hdc, (i32)(origin.x + x), (i32)(origin.y + y), s, n);
         if (fnt != (pointer)0)
             {
             SelectObject(hdc, old);
@@ -275,7 +311,7 @@ class UXGdiGraphics : Object<UXGraphics>
         pointer fnt = CreateFontA(h, (i32)0, (i32)0, (i32)0, bold ? (i32)700 : (i32)400,
                                   italic ? (u32)1 : (u32)0, (u32)0, (u32)0, (u32)1, (u32)0, (u32)0, (u32)0, (u32)0, family);
         pointer old = SelectObject(hdc, fnt);
-        TextOutA(hdc, (i32)(origin.x + x), (i32)(origin.y + y), (pointer)s, n);
+        gdiTextOut(hdc, (i32)(origin.x + x), (i32)(origin.y + y), s, n);
         SelectObject(hdc, old);
         DeleteObject(fnt);
         }
@@ -297,7 +333,7 @@ class UXGdiGraphics : Object<UXGraphics>
         pointer fnt = CreateFontA(h, (i32)0, (i32)0, (i32)0, w,
                                   italic ? (u32)1 : (u32)0, (u32)0, (u32)0, (u32)1, (u32)0, (u32)0, (u32)0, (u32)0, family);
         pointer old = SelectObject(hdc, fnt);
-        TextOutA(hdc, (i32)(origin.x + x), (i32)(origin.y + y), (pointer)s, n);
+        gdiTextOut(hdc, (i32)(origin.x + x), (i32)(origin.y + y), s, n);
         SelectObject(hdc, old);
         DeleteObject(fnt);
         }

@@ -142,9 +142,19 @@ struct SHFILEINFOW
 
 // The neutral toolkit's strings are UTF-8; the ...A text APIs treat bytes as the ANSI code page and
 // mangle every multibyte char (an em dash renders as "â€""), so text goes out via the wide (...W) APIs
-// after MultiByteToWideChar(CP_UTF8).  CreateWindowExA is fine (the class/placeholder names are ASCII).
+// after MultiByteToWideChar(CP_UTF8).  The native controls are made with CreateWindowExW, so they are
+// Unicode windows and keep that text as it is; w32Create, w32SetText and w32GetText do the converting.
 #define CP_UTF8 65001
 i32 MultiByteToWideChar(u32 cp, u32 flags, pointer mb, i32 cb, pointer wc, i32 cch);
+pointer CreateWindowExW(u32 ex, pointer cls, pointer name, u32 style,
+                        i32 x, i32 y, i32 w, i32 h, pointer par, pointer menu, pointer inst, pointer p);
+pointer SendMessageW(pointer hwnd, u32 msg, pointer wp, pointer lp);
+pointer DefWindowProcW(pointer hwnd, u32 msg, pointer wp, pointer lp);
+i32 InternalGetWindowText(pointer hwnd, pointer ws, i32 cap); // the stored UTF-16 title, no WM_GETTEXT
+i32 GetWindowTextLengthW(pointer hwnd);
+i32 GetTextExtentPoint32W(pointer hdc, pointer ws, i32 n, pointer size);
+i32 AppendMenuW(pointer menu, u32 flags, pointer idOrSubmenu, pointer ws);
+i32 MessageBoxW(pointer hwnd, pointer ws, pointer caption, u32 type);
 
 // GDI
 pointer BeginPaint(pointer hwnd, pointer ps);
@@ -588,6 +598,7 @@ struct TBBUTTON
     }
 #define TB_ADDBUTTONS $0414       // WM_USER+20 : wParam=count, lParam=TBBUTTON[]
 #define TB_ADDSTRINGA $041C       // WM_USER+28 : lParam=double-NUL string list, returns first index
+#define TB_ADDSTRINGW $044D       // WM_USER+77 : the same, UTF-16
 #define TB_CHECKBUTTON $0402      // WM_USER+2  : wParam=idCommand, lParam=LOWORD(fChecked)
 #define TB_ISBUTTONCHECKED $040A  // WM_USER+10 : wParam=idCommand -> nonzero if checked
 #define TB_BUTTONSTRUCTSIZE $041E // WM_USER+30 : MUST send once (=sizeof TBBUTTON) before ADDBUTTONS
@@ -787,6 +798,7 @@ struct LVCOLUMN
     }
 #define TVM_FIRST $1100
 #define TVM_INSERTITEMA $1100 // TVM_FIRST + 0
+#define TVM_INSERTITEMW $1132 // TVM_FIRST + 50
 #define TVM_DELETEITEM $1101  // TVM_FIRST + 1
 #define TVM_EXPAND $1102      // TVM_FIRST + 2
 #define TVM_GETNEXTITEM $110A // TVM_FIRST + 10
@@ -811,14 +823,17 @@ struct LVCOLUMN
 #define TVN_ITEMEXPANDEDA $FFFFFE6A
 #define LVM_FIRST $1000
 #define LVM_INSERTITEMA $1007
+#define LVM_INSERTITEMW $104D
 #define LVM_DELETEALLITEMS $1009
 #define LVM_GETITEMCOUNT $1004
 #define LVM_GETSELECTEDCOUNT $1032 // how many rows are selected (no index argument)
 #define LVM_GETITEMSTATE $102C     // one row's state bits (index in wParam)   // rows the native list actually holds (a test can ask)
 #define LVM_GETNEXTITEM $100C
 #define LVM_INSERTCOLUMNA $101B
+#define LVM_INSERTCOLUMNW $1061
 #define LVM_SETITEMSTATE $102B
 #define LVM_SETITEMTEXTA $102E
+#define LVM_SETITEMTEXTW $1074
 #define LVM_SETEXTENDEDLISTVIEWSTYLE $1036
 // Scrolling a report-mode list: LVM_SCROLL's dy is in LINES for LVS_REPORT (pixels in every other
 // view), and LVM_GETTOPINDEX is the row currently at the top — together they are a seek, and
