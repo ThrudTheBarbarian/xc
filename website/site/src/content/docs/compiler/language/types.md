@@ -92,6 +92,10 @@ Initialisers use `{ … }`, as C does. Members are listed in declaration order;
 omitted trailing members are zero-filled, and supplying more elements than the
 struct holds is a compile-time error.
 
+A struct local with no initialiser is zero-filled as well, as a stack class
+instance is: every member of `CursorPos p;` starts at zero, and nothing is left
+as whatever the stack held.
+
 A struct can be returned by value:
 
 ```c

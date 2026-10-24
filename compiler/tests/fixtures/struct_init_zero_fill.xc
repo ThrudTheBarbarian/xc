@@ -1,6 +1,7 @@
 // Omitted trailing members of a struct initialiser are zero-filled (types.md),
 // as an array's omitted elements are: `P p = {1.0};` left p.b and p.c as
-// whatever the stack held (Astronomancy's affine transforms). The stack is
+// whatever the stack held. A struct local with no initialiser at all is
+// zero-filled too (LANGUAGE-SPEC §7.1; Astronomancy's affine transforms). The stack is
 // dirtied first so leftovers would show; every member is compared exactly.
 #import "Stdio.xc"
 struct Inner { u16 q; float r; }
@@ -47,12 +48,20 @@ u32 two(void)
     if (p.e != (i64)0 || p.f != (u32*)0 || p.g.q != (u16)0 || p.h[2] != (u16)0) bad = (u32)1;
     return bad + (p.b == 3.0 && p.d == (u8)5 ? (u32)0 : (u32)100);
     }
+u32 none(void)
+    {
+    P p;
+    p.a = 1.5;
+    return unset(&p);
+    }
 i32 main(void)
     {
     dirty();
     u32 a = one();
     dirty();
     u32 b = two();
-    Stdio.printf("unset members left: %u and %u\n", a, b);
+    dirty();
+    u32 c = none();
+    Stdio.printf("unset members left: %u and %u; no initialiser: %u\n", a, b, c);
     return 0;
     }

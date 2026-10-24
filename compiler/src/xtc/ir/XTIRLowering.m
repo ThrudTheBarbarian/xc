@@ -14472,6 +14472,17 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
                         }
                     }
                 }
+            // A struct local with no initialiser is zero-filled, as a stack
+            // class instance is (owner, 2026-10-24): `AMAffine t; t.a = 1.0;`
+            // returned four members of stack garbage. The same stores as an
+            // empty `= {}`.
+            if (node.declaredType.kind == XTTypeKindStruct)
+                {
+                [self lowerAggregateByteListInit:[[XTBlockNode alloc] initWithStatements:@[] location:node.location]
+                                          pinned:pl
+                                        declType:node.declaredType
+                                        location:node.location];
+                }
             // Uninitialised array of class pointers: null every element so
             // the scope-exit walker's Release of an un-assigned slot is a
             // no-op (Release of null is safe) rather than freeing garbage.

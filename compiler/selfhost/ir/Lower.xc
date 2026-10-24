@@ -9236,6 +9236,15 @@ class ClassInfo
                 // aggregate has no scalar zero to store.
                 if (pin.ty().hasPrefix(String.withCString("Agg(")))
                     {
+                    // A struct local with no initialiser is zero-filled, as a
+                    // stack class instance is (owner, 2026-10-24): the same
+                    // stores as an empty `= {}`. As the reference.
+                    if (structDeclFor(n.op()) != (Node*)0)
+                        {
+                        lowerAggregateByteList(pinAddr(pin), n.op(), Node.with((u16)nkBlock));
+                        if (_failed)
+                            return;
+                        }
                     if (isArrayLike(n.op()) && isWeakSlot(elementOf(n.op())))
                         {
                         zeroWeakArrayLinks(pin, n.op());

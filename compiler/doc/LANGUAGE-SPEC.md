@@ -1115,6 +1115,14 @@ MyClass mine;
 - Runs parameterless `init()` if present.
 - Reuses bytes at scope exit (no heap touch).
 
+#### Struct locals
+
+A struct local is zero-filled the same way: every member of
+`AMAffine t;` starts at zero (numbers, pointers, nested structs and
+arrays), and a brace initialiser that names only some members,
+`AMAffine t = {1.0};`, zero-fills the rest. Nothing is left as
+whatever the stack held.
+
 #### Heap instance
 
 ```c
