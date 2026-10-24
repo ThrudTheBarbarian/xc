@@ -49,6 +49,12 @@ for XC in ${XC:-bin/osx/xcc bin/osx/xcc-xc}; do
     otool -L "$d/p" | grep -q libobjc || { echo "FAIL $XC: an ObjC object's link lacks libobjc"; fail=1; }
     got=$("$d/p" 2>&1)
     [ "$got" = "4" ] || { echo "FAIL $XC: the ObjC program gives '$got'"; fail=1; }
+    # An object-only link: the ObjC object on the line, -framework honoured.
+    "$XC" -q -H . -c -o "$d/main.o" "$W/main.xc" && "$XC" -q -H . -framework Foundation -o "$d/oo" "$d/main.o" "$W/probe.o" > "$d/out3" 2>&1 \
+        || { echo "FAIL $XC: the object-only link with an ObjC object failed"; head -3 "$d/out3"; fail=1; continue; }
+    otool -L "$d/oo" | grep -q libobjc || { echo "FAIL $XC: the object-only link lacks libobjc"; fail=1; }
+    got=$("$d/oo" 2>&1)
+    [ "$got" = "4" ] || { echo "FAIL $XC: the object-only ObjC program gives '$got'"; fail=1; }
 done
 [ $fail = 0 ] && echo "objc-link: ok"
 exit $fail

@@ -1499,7 +1499,12 @@ static void resolveUserLinkInputs(XTCommandLineOptions *opts, NSFileManager *fm,
         // that merely contains the literal would add a load command it does not
         // need — harmless, and the alternative costs far more.
         BOOL wantsObjc = NO;
-        for (NSString *raw in linkerRaw) {
+        // The forwarded objects, and the objects an object-only link was
+        // given on the line (the port's linkInputs + extra objects).
+        NSMutableArray<NSString *> *scan = [linkerRaw mutableCopy];
+        for (NSString *inp in opts.inputFiles)
+            if ([inp hasSuffix:@".o"]) [scan addObject:inp];
+        for (NSString *raw in scan) {
             if (!([raw hasSuffix:@".o"] || [raw hasSuffix:@".a"])) continue;
             NSData *blob = [NSData dataWithContentsOfFile:raw
                                                   options:NSDataReadingMappedIfSafe error:NULL];
@@ -4661,6 +4666,14 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             if (opts.applePlatform) [args addObjectsFromArray:@[@"-platform", opts.applePlatform]];
             [args addObjectsFromArray:opts.inputFiles];
             [args addObjectsFromArray:objNeeds];    // LC_LOAD_DYLIB per #import <Lib>
+            // -l / -framework, and libobjc when an object references ObjC, as
+            // the source path resolves them (the port's arm64LinkDeps).
+            NSMutableArray<NSString *> *userDylibs = [NSMutableArray array];
+            NSMutableArray<NSString *> *linkerRaw = [NSMutableArray array];
+            BOOL sysLibs = NO;
+            resolveUserLinkInputs(opts, lfm, userDylibs, linkerRaw, &sysLibs);
+            [args addObjectsFromArray:userDylibs];
+            [args addObjectsFromArray:linkerRaw];
             int rc = runChild(ln, args);
             if (rc == 0 && !opts.quiet)
                 fprintf(stderr, "xcc: arm64 executable (from %lu object%s) -> '%s'\n",
