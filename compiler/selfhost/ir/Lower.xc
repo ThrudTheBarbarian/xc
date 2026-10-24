@@ -6734,6 +6734,28 @@ class ClassInfo
                 return;
             storeThrough(fa, coerce(v, entry.ty(), ft));
             }
+        // Omitted trailing members are zero-filled (types.md), as an array's
+        // omitted elements are above; they were left as whatever the stack
+        // held. As the reference.
+        for (u32 i = n; i < st.kidCount(); i = i + (u32)1)
+            {
+            String* ft = st.kid(i).op();
+            String* fir = irType(ft);
+            IRValue* fa = fieldAddr(base, i, ptrTo(fir));
+            if (isArrayLike(ft) || structDeclFor(ft) != (Node*)0)
+                {
+                lowerAggregateByteList(fa, ft, Node.with((u16)nkBlock));
+                if (_failed)
+                    return;
+                continue;
+                }
+            Array* zops = new Array();
+            if (isFloatIr(fir))
+                zops.add((Object*)IROperand.immF(String.withCString("0000000000000000"), fir));
+            else
+                zops.add((Object*)IROperand.immI((i32)0, fir));
+            storeThrough(fa, emit(String.withCString("Const"), fir, zops));
+            }
         }
 
     // The 64 bits of the double these IEEE bytes denote. Eight bytes ARE a

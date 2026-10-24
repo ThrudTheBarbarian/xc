@@ -13966,6 +13966,35 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
             v = [self coerceValue:v fromType:entry.resolvedType toType:f.fieldType location:loc];
             [self emitStore:fa value:v];
             }
+        // Omitted trailing members are zero-filled (types.md), as an
+        // array's omitted elements are above: they were left as whatever the
+        // stack held (`P p = {1.0};` read p.b as leftover bits).
+        for (NSUInteger i = entries.count; i < st.fields.count; i++)
+            {
+            XTStructField* f = st.fields[i];
+            XTIRType* fIR = [self irTypeForASTType:f.fieldType at:loc];
+            if (!fIR)
+                return NO;
+            XTIRType* fPtrIR = [XTIRType ptrToType:fIR window:XTIRWindowUnbanked];
+            XTIRValue* fa = [self emitFieldAddr:base fieldIndex:i resultType:fPtrIR];
+            if (f.fieldType.kind == XTTypeKindStruct || f.fieldType.kind == XTTypeKindArray)
+                {
+                if (![self lowerAggregateByteListInitAt:fa
+                                               declType:f.fieldType
+                                                   list:[[XTBlockNode alloc] initWithStatements:@[] location:loc]
+                                               location:loc])
+                    return NO;
+                continue;
+                }
+            XTIRValue* z = [self allocateValueOfType:fIR atSite:self.currentBlock];
+            BOOL fp = fIR.kind == XTIRTypeKindF32 || fIR.kind == XTIRTypeKindF64;
+            [self.currentBlock appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                                           result:z
+                                                                         operands:@[ fp ? [XTIROperand immFWithType:fIR rawBytes:0]
+                                                                                        : [XTIROperand immIWithType:fIR value:0] ]
+                                                                           dbgLoc:nil]];
+            [self emitStore:fa value:z];
+            }
         return YES;
         }
     return NO; // not an aggregate — fall through to the scalar path
