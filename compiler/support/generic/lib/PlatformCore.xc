@@ -122,10 +122,14 @@ class Platform
 #endif
         }
 
-    // $HOME, or "" — the one lookup common enough to name.
+    // The user's home directory: $HOME, else %USERPROFILE% (Windows has
+    // no HOME, so a win64 program got "" and built relative paths), else "".
     static String* home(void)
         {
-        return Platform.env(String.withCString("HOME"));
+        String* h = Platform.env(String.withCString("HOME"));
+        if (h.byteLength() == (u32)0)
+            h = Platform.env(String.withCString("USERPROFILE"));
+        return h;
         }
 
     static void inject(String* sel, String* html)
