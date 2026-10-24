@@ -258,17 +258,19 @@ XCC_XC_INCS = -I support/generic/lib -I support/arm64/lib \
 # a library fix silently did not reach the compiler that had the bug, and the
 # rebuilt-looking binary still crashed.
 #
-# The stages after this one are SPLIT builds (selfhost/tools/split-build.sh): one
-# interface and one object per compiler file, in parallel, then one link, about
-# 4 GB a process. This one stays one unit (some 60 GB): the bootstrap compiler
-# cannot build the split interfaces yet (TODO). make split-check builds stage 2
-# again as one unit and compares the two.
+# Every stage is a SPLIT build (selfhost/tools/split-build.sh): one interface
+# and one object per compiler file, in parallel, then one link, about 4 GB a
+# process, where one unit took some 60 GB. The bootstrap compiler builds this
+# stage the same way since it reads interfaces as the port does (2026-10-24).
+# make split-check builds stage 2 again as one unit and compares the two.
 SPLIT_BUILD = selfhost/tools/split-build.sh
 SPLIT_JOBS ?= 8
 $(XCC_XC_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
                $(wildcard support/generic/lib/*.xc) $(wildcard support/arm64/lib/*.xc)
-	@echo "  xc   building the production compiler with the bootstrap one"
-	@$(XTC_BIN) -O2 -A arm64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) $(XCC_XC_INCS)
+	@echo "  xc   building the production compiler with the bootstrap one (split)"
+	@mkdir -p $(dir $@) build
+	@XCC=$(XTC_BIN) SPLIT_DIR=build/split-stage1 bash $(SPLIT_BUILD) $@ -A arm64 -j $(SPLIT_JOBS) > build/split-stage1.log 2>&1 \
+	    || { tail -15 build/split-stage1.log; exit 1; }
 
 # The one-unit build of stage 2, kept as a check on the split one. The two are
 # not the same FILE (each split object carries the library it uses), so each
