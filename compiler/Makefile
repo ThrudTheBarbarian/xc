@@ -257,10 +257,34 @@ XCC_XC_INCS = -I support/generic/lib -I support/arm64/lib \
 # program and compiles String.xc, Array.xc et al into itself. Without them here,
 # a library fix silently did not reach the compiler that had the bug, and the
 # rebuilt-looking binary still crashed.
+#
+# The stages after this one are SPLIT builds (selfhost/tools/split-build.sh): one
+# interface and one object per compiler file, in parallel, then one link, about
+# 4 GB a process. This one stays one unit (some 60 GB): the bootstrap compiler
+# cannot build the split interfaces yet (TODO). make split-check builds stage 2
+# again as one unit and compares the two.
+SPLIT_BUILD = selfhost/tools/split-build.sh
+SPLIT_JOBS ?= 8
 $(XCC_XC_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
                $(wildcard support/generic/lib/*.xc) $(wildcard support/arm64/lib/*.xc)
 	@echo "  xc   building the production compiler with the bootstrap one"
 	@$(XTC_BIN) -O2 -A arm64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) $(XCC_XC_INCS)
+
+# The one-unit build of stage 2, kept as a check on the split one. The two are
+# not the same FILE (each split object carries the library it uses), so each
+# builds stage 3, split, and those must be: the same compiler either way.
+.PHONY: split-check
+split-check: $(XCC_XC2_BIN)
+	@echo "  xc   stage 2 again, as one unit"
+	@$(XCC_XC_BIN) -q -O2 -A arm64 -H . -D XCC_VERSION='"$(VERSION)"' -o build/xcc-xc2-mono $(XCC_XC_SRC) $(XCC_XC_INCS)
+	@echo "  xc   stage 3 by each"
+	@XCC=$(XCC_XC2_BIN) SPLIT_DIR=build/split-check-s bash $(SPLIT_BUILD) build/xcc-xc3-by-split -A arm64 -j $(SPLIT_JOBS) > build/split-check-s.log 2>&1 \
+	    || { tail -15 build/split-check-s.log; exit 1; }
+	@XCC=build/xcc-xc2-mono SPLIT_DIR=build/split-check-m bash $(SPLIT_BUILD) build/xcc-xc3-by-mono -A arm64 -j $(SPLIT_JOBS) > build/split-check-m.log 2>&1 \
+	    || { tail -15 build/split-check-m.log; exit 1; }
+	@cmp -s build/xcc-xc3-by-split build/xcc-xc3-by-mono \
+	    && echo "  xc   the split and one-unit stage 2 build the same stage 3" \
+	    || { echo "split-check: the split and one-unit stage 2 build different compilers"; exit 1; }
 
 # Stage 2: the compiler that SHIPS, built by the xc compiler above rather than
 # by the Objective-C one. Every binary that reaches a user (this one, the
@@ -271,8 +295,10 @@ $(XCC_XC_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
 # differential calls `xcc-xc`.
 XCC_XC2_BIN = $(BIN_DIR)/xcc-xc2
 $(XCC_XC2_BIN): $(XCC_XC_BIN)
-	@echo "  xc   building the shipped compiler with the xc compiler (stage 2)"
-	@$(XCC_XC_BIN) -q -O2 -A arm64 -H . -D XCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) $(XCC_XC_INCS)
+	@echo "  xc   building the shipped compiler with the xc compiler (stage 2, split)"
+	@mkdir -p build
+	@XCC=$(XCC_XC_BIN) SPLIT_DIR=build/split-stage2 bash $(SPLIT_BUILD) $@ -A arm64 -j $(SPLIT_JOBS) > build/split-stage2.log 2>&1 \
+	    || { tail -15 build/split-stage2.log; exit 1; }
 
 # The SAME production compiler, cross-built for the other two hosts. THE GOLDEN
 # RULE is that we never ship the Objective-C build, so a platform
@@ -306,17 +332,17 @@ XCC_AS_XC_WIN64_BIN = bin/win64/xcc-as-xc.exe
 
 $(XCC_XC_LINUX_BIN): $(XCC_XC2_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
                      $(wildcard support/generic/lib/*.xc) $(wildcard support/x86_64/lib/*.xc)
-	@echo "  xc   building the production compiler for x86_64 linux"
-	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -static -H . -D XCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) \
-	            $(call XCC_XC_TARGET_INCS,x86_64)
+	@echo "  xc   building the production compiler for x86_64 linux (split)"
+	@mkdir -p $(dir $@) build
+	@XCC=$(XCC_XC2_BIN) SPLIT_DIR=build/split-linux bash $(SPLIT_BUILD) $@ -A x86_64 -j $(SPLIT_JOBS) > build/split-linux.log 2>&1 \
+	    || { tail -15 build/split-linux.log; exit 1; }
 
 $(XCC_XC_WIN64_BIN): $(XCC_XC2_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
                      $(wildcard support/generic/lib/*.xc) $(wildcard support/win64/lib/*.xc)
-	@echo "  xc   building the production compiler for win64"
-	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -D XCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) \
-	            $(call XCC_XC_TARGET_INCS,win64)
+	@echo "  xc   building the production compiler for win64 (split)"
+	@mkdir -p $(dir $@) build
+	@XCC=$(XCC_XC2_BIN) SPLIT_DIR=build/split-win64 bash $(SPLIT_BUILD) $@ -A win64 -j $(SPLIT_JOBS) > build/split-win64.log 2>&1 \
+	    || { tail -15 build/split-win64.log; exit 1; }
 
 # For a contributor with no toolchain but an installed release: the shipped
 # compiler built from this tree by the installed xcc (stage 1), again by stage 1
@@ -327,13 +353,13 @@ $(XCC_XC_WIN64_BIN): $(XCC_XC2_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
 #   make contrib XCC=/opt/xcc/$(VERSION)/bin/xcc
 CONTRIB_DIR = build/contrib
 ifeq ($(UNAME_S),Darwin)
-CONTRIB_ARCH = -A arm64
-CONTRIB_INCS = $(XCC_XC_INCS)
+CONTRIB_ARCH = arm64
 else
-CONTRIB_ARCH = -A x86_64 -static
-CONTRIB_INCS = $(call XCC_XC_TARGET_INCS,x86_64)
+CONTRIB_ARCH = x86_64
 endif
-CONTRIB_BUILD = -q -O2 $(CONTRIB_ARCH) -H . -D XCC_VERSION='"$(VERSION)"' $(XCC_XC_SRC) $(CONTRIB_INCS)
+# contrib_stage <compiler> <output> <n>: one split build of this tree.
+contrib_stage = XCC=$(1) SPLIT_DIR=$(CONTRIB_DIR)/split-$(3) bash $(SPLIT_BUILD) $(2) -A $(CONTRIB_ARCH) -j $(SPLIT_JOBS) \
+                    > $(CONTRIB_DIR)/stage$(3).log 2>&1 || { tail -15 $(CONTRIB_DIR)/stage$(3).log; exit 1; }
 
 .PHONY: contrib
 contrib:
@@ -342,11 +368,11 @@ contrib:
 	@mkdir -p $(CONTRIB_DIR)
 	@rm -f $(CONTRIB_DIR)/xcc-stage1 $(CONTRIB_DIR)/xcc-stage2 $(CONTRIB_DIR)/xcc-stage3
 	@echo "  xc   stage 1: this tree, built by $(XCC)"
-	@$(XCC) -o $(CONTRIB_DIR)/xcc-stage1 $(CONTRIB_BUILD)
+	@$(call contrib_stage,$(XCC),$(CONTRIB_DIR)/xcc-stage1,1)
 	@echo "  xc   stage 2: built by stage 1"
-	@$(CONTRIB_DIR)/xcc-stage1 -o $(CONTRIB_DIR)/xcc-stage2 $(CONTRIB_BUILD)
+	@$(call contrib_stage,$(CONTRIB_DIR)/xcc-stage1,$(CONTRIB_DIR)/xcc-stage2,2)
 	@echo "  xc   stage 3: built by stage 2"
-	@$(CONTRIB_DIR)/xcc-stage2 -o $(CONTRIB_DIR)/xcc-stage3 $(CONTRIB_BUILD)
+	@$(call contrib_stage,$(CONTRIB_DIR)/xcc-stage2,$(CONTRIB_DIR)/xcc-stage3,3)
 	@cmp -s $(CONTRIB_DIR)/xcc-stage2 $(CONTRIB_DIR)/xcc-stage3 \
 	    || { echo "make contrib: stage 2 and stage 3 differ — the tree does not reproduce itself"; exit 1; }
 	@echo "  xc   stage 2 = stage 3: $(CONTRIB_DIR)/xcc-stage2 is the compiler to try"

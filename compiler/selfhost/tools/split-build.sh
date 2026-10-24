@@ -81,5 +81,8 @@ echo "$FILES" | xargs -P "$JOBS" -I{} sh -c '
 fail=$(grep -l -E 'error' "$W"/if/*.log "$W"/obj/*.log 2>/dev/null)
 if [ -n "$fail" ]; then echo "split-build: errors in:"; echo "$fail" | head -10; exit 1; fi
 step "link"
-"$XCC" -q -A "$ARCH" -H . ${EXTRA[@]+"${EXTRA[@]}"} -o "$OUT" "$W"/obj/*.o || { echo "split-build: the link failed"; exit 1; }
+# To a new name, then moved: a Mach-O rewritten in place at a path that is
+# running (or was, and is cached) dies with SIGKILL.
+"$XCC" -q -A "$ARCH" -H . ${EXTRA[@]+"${EXTRA[@]}"} -o "$OUT.new.$$" "$W"/obj/*.o || { echo "split-build: the link failed"; exit 1; }
+mv -f "$OUT.new.$$" "$OUT"
 step "done: $OUT"
