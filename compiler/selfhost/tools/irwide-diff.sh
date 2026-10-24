@@ -47,9 +47,9 @@ echo "building xtir (xtc → native arm64)…"
 
 PATTERN=${1:-}
 pass=0; fail=0; unsup=0; oracle=0
-declare -a FAILED
-declare -a UNSUP
-declare -a ORACLE_FAILED
+FAILED=()
+UNSUP=()
+ORACLE_FAILED=()
 
 # SHARD_I/SHARD_N: run only every Nth file, so one harness can be split
 # across several parallel slots. all-diff uses it on the long ones; the

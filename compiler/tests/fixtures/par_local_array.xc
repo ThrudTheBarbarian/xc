@@ -1,7 +1,9 @@
+//xtc-warn: because it uses an operation its GPU version cannot express yet
 // A work item's own array (`u32 a[32];` in the body): Astronomancy's median
 // combine kept every such block on the CPU ("it uses an operation its GPU
 // version cannot express yet"). On Metal it is a thread array of the kernel;
-// the answer is the serial loop's on every device.
+// the answer is the serial loop's on every device. PTX, WGSL and SPIR-V
+// do not hold one yet, so there the block is on the CPU and says so.
 #import "Stdio.xc"
 #import "Par.xc"
 i32 main(void)

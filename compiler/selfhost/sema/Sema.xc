@@ -4808,7 +4808,10 @@ class Sema
                     if (!checkArity(pm, n, (u32)1, plbl))
                         return;
                     checkMisfitArgs(pm, n, (u32)1, plbl);
-                    n.setTy(pm.op());
+                    // A requirement returning several values types the call by
+                    // its first, as a class receiver's (the tuple assignment
+                    // reads them all from the requirement). As the reference.
+                    n.setTy(firstReturn(pm.op()));
                     Map* ps = _vt.protoSlotsFor(owner);
                     if (ps != 0)
                         {
