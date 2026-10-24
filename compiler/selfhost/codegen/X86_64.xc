@@ -5381,6 +5381,12 @@ class X86_64
                 // load back to the lea when the image defines the symbol.
                 _out.appendFormat("\tmov\trax, [rip+%s@GOTPCREL]\n", nm.cString());
                 }
+            else if (_win64 && symbolIsExternData(o.name()))
+                {
+                // DATA from a DLL (a library's standard-library state): its
+                // address is the content of its import-table slot, `__imp_X`.
+                _out.appendFormat("\tmov\trax, [rip+__imp_%s]\n", nm.cString());
+                }
             else
                 {
                 _out.appendFormat("\tlea\trax, [rip+%s]\n", nm.cString());
@@ -5416,6 +5422,21 @@ class X86_64
             if (((IRFunc*)_m.funcs().get(i)).name().equals(name))
                 return false;
         return true;
+        }
+
+    // An extern DATA global: on win64 one from a DLL (a library's
+    // standard-library state), reached through its import-table slot.
+    bool symbolIsExternData(String* name)
+        {
+        if (_m == (IRModule*)0)
+            return false;
+        for (u32 i = (u32)0; i < _m.syms().count(); i = i + (u32)1)
+            {
+            IRSymbol* s = (IRSymbol*)_m.syms().get(i);
+            if (s.name().equals(name))
+                return s.isExtern() && s.kind() == (u8)SYM_DATAGLOBAL;
+            }
+        return false;
         }
 
     bool symbolIsExtern(String* name)
@@ -7802,7 +7823,9 @@ class X86_64
                 bytes = relayFloat(bytes, gt);
             // A file-scope global has EXTERNAL linkage in C — export it so
             // separate units share one definition (win64/PE keeps its own path).
-            if (!_win64)
+            // …and on win64 a library's standard-library state (`exported`),
+            // which a client imports from the DLL.
+            if (!_win64 || sym.attr(String.withCString("exported")))
                 data.appendFormat("\t.globl\t%s\n", safeSym(sym.name()).cString());
             if (page)
                 data.appendCString("\t.p2align\t14\n");
@@ -7830,6 +7853,8 @@ class X86_64
             {
             if (page)
                 bss.appendCString("\t.p2align\t14\n");
+            if (sym.attr(String.withCString("exported")))
+                bss.appendFormat("\t.globl\t%s\n", safeSym(sym.name()).cString());
             bss.appendFormat("%s:\n\t.zero\t%lu\n", safeSym(sym.name()).cString(), sz);
             }
         else
@@ -7839,6 +7864,10 @@ class X86_64
             // libraries) merge it to one slot. A local .bss def gave each unit a
             // PRIVATE copy (c2xc bug 36, cross-object variant).
             u32 al = page ? (u32)16384 : (sz >= (u32)8 ? (u32)8 : (sz >= (u32)4 ? (u32)4 : (sz >= (u32)2 ? (u32)2 : (u32)1)));
+            // A library's standard-library state (`exported`) is named by
+            // `.globl` too, which is what puts it in a .so's exports.
+            if (sym.attr(String.withCString("exported")))
+                bss.appendFormat("\t.globl\t%s\n", safeSym(sym.name()).cString());
             bss.appendFormat("\t.comm\t%s, %lu, %lu\n", safeSym(sym.name()).cString(), sz, al);
             }
         }

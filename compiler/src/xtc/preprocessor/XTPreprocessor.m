@@ -34,6 +34,12 @@
 @property(nonatomic) NSMutableSet<NSString*>* mutablePreludeFiles;
 @property(nonatomic) BOOL inPrelude;
 /****************************************************************************\
+|* The file each macro was #defined in (its #line spelling), for a library's
+|* interface to carry the macros its own files define (`defines`). A macro
+|* from -D, or defined by an imported library's interface, has none.
+\****************************************************************************/
+@property(nonatomic) NSMutableDictionary<NSString*, NSString*>* macroFiles;
+/****************************************************************************\
 |* The `#package` in force — the host import namespace for subsequent extern
 |* declarations (wasm-target.md §6). Saved/restored across file boundaries
 |* by handleInclude:. nil = the default package.
@@ -76,6 +82,7 @@
         {
         _diagnostics = diagnostics;
         _macros = [NSMutableDictionary dictionary];
+        _macroFiles = [NSMutableDictionary dictionary];
         _expandingMacros = [NSMutableSet set];
         _importedFiles = [NSMutableSet set];
         _mutablePreludeFiles = [NSMutableSet set];
@@ -1549,6 +1556,19 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
                                location:loc
                                  output:output
                                onceOnly:YES];
+                // …and its own #defines, as an #import of its source would
+                // give them, unless this unit defined the name itself.
+                XTSourceLocation* ifaceLoc = [XTSourceLocation locationWithFilename:@"<iface>"
+                                                                               line:loc.line
+                                                                             column:loc.column];
+                for (NSString* d in [self definesOfLibrary:abs])
+                    {
+                    NSUInteger e = 0;
+                    while (e < d.length && (isalnum([d characterAtIndex:e]) || [d characterAtIndex:e] == '_'))
+                        e++;
+                    if (!_macros[[d substringToIndex:e]])
+                        [self handleDefine:[@"define " stringByAppendingString:d] location:ifaceLoc];
+                    }
                 }
             if (vendorXcDir && ![_includePaths containsObject:vendorXcDir])
                 self.includePaths = [_includePaths arrayByAddingObject:vendorXcDir];
@@ -1767,6 +1787,10 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
                                                           parameters:params
                                                                 body:body];
     _macros[name] = def;
+    if (loc.filename.length)
+        _macroFiles[name] = loc.filename;
+    else
+        [_macroFiles removeObjectForKey:name];
     }
 
 /****************************************************************************\
@@ -1780,6 +1804,49 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
     NSString* name = [[content substringFromIndex:5]
         stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
     [_macros removeObjectForKey:name];
+    [_macroFiles removeObjectForKey:name];
+    }
+
+/****************************************************************************\
+|* The macros this unit's own files define, each as the text of its #define
+|* (`NAME body`, `NAME(a, b) body`), sorted: what a library's interface
+|* carries (`defines`) for a client to define as an #import of the source
+|* would. Not the standard library's or the prelude's, not -D's, and not
+|* those an imported library's interface defined.
+\****************************************************************************/
+- (NSArray<NSString*>*)ownDefines
+    {
+    NSMutableArray<NSString*>* out = [NSMutableArray array];
+    for (NSString* name in _macros)
+        {
+        NSString* f = _macroFiles[name];
+        if (!f.length || [f isEqualToString:@"<iface>"] || [_mutableLibraryFiles containsObject:f])
+            continue;
+        XTMacroDefinition* d = _macros[name];
+        NSMutableString* t = [NSMutableString stringWithString:name];
+        if (d.parameters)
+            [t appendFormat:@"(%@)", [d.parameters componentsJoinedByString:@", "]];
+        if (d.body.length)
+            [t appendFormat:@" %@", d.body];
+        [out addObject:t];
+        }
+    return [out sortedArrayUsingSelector:@selector(compare:)];
+    }
+
+/****************************************************************************\
+|* The `defines` an xtc library's interface names (see ownDefines). Empty for
+|* a C library or an interface without the key.
+\****************************************************************************/
+- (NSArray<NSString*>*)definesOfLibrary:(NSString*)path
+    {
+    NSString* json = [XTInterfaceImporter interfaceJSONFromLibrary:path];
+    if (!json.length)
+        return @[];
+    NSDictionary* root = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding]
+                                                         options:0
+                                                           error:NULL];
+    NSArray* a = [root isKindOfClass:[NSDictionary class]] ? root[@"defines"] : nil;
+    return [a isKindOfClass:[NSArray class]] ? a : @[];
     }
 
 #pragma mark - Macro Expansion

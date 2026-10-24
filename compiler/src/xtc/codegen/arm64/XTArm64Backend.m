@@ -8947,6 +8947,10 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
             // and to a linking C stub). Arg 3 is log2 alignment.
             // Mach-O `.comm` takes LOG2 alignment, so the old `1` meant two
             // bytes — not "none", and not enough for a pointer (uxkit/029).
+            // A library's standard-library state (`exported`) is named by
+            // `.globl` too, which is what puts it in a dylib's exports.
+            if ([sym.attributes[@"exported"] boolValue])
+                [out appendFormat:@"    .globl _%@\n", sym.name];
             [out appendFormat:@"    .comm _%@, %u, %u\n", sym.name, (unsigned)size, p2];
         }
     }

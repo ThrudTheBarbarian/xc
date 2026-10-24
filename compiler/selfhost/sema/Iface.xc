@@ -870,6 +870,37 @@ class JsonVal
         return out;
         }
 
+    // A library's own #defines (`defines`), which a client defines on
+    // importing it. Empty when there are none.
+    static Array* definesOf(String* path)
+        {
+        Array* out = new Array();
+        String* text = IfaceImport.ifaceText(path);
+        if (text == 0)
+            return out;
+        JsonVal* root = JsonParser.parse(text);
+        JsonVal* a = root == (JsonVal*)0 ? (JsonVal*)0 : root.member("defines");
+        for (u32 i = (u32)0; a != (JsonVal*)0 && i < a.count(); i = i + (u32)1)
+            {
+            String* d = a.at(i).asStr();
+            if (d != (String*)0)
+                out.add((Object*)d);
+            }
+        return out;
+        }
+
+    // A library's `stdState`: the hash of the standard-library sources it was
+    // built with (Frontend.xc's stdStateHashOf). Null when it has none.
+    static String* stdStateOf(String* path)
+        {
+        String* text = IfaceImport.ifaceText(path);
+        if (text == 0)
+            return (String*)0;
+        JsonVal* root = JsonParser.parse(text);
+        JsonVal* v = root == (JsonVal*)0 ? (JsonVal*)0 : root.member("stdState");
+        return v == (JsonVal*)0 ? (String*)0 : v.asStr();
+        }
+
     static IfaceImport* read(String* path)
         {
         // A `.wasm` LIBRARY carries its interface inside itself, so there is no

@@ -6418,6 +6418,7 @@ DriverOptions* parseDriverArgs(void)
             d.setEmitLib(true);
             o.setEmitIface(true);        // the library carries its own interface
             o.setLibraryBuild(true);     // …and numbers every method a slot
+            o.setEmitLib(true);          // …and exports its standard-library state
             i = i + (u32)1;
             continue;
         }

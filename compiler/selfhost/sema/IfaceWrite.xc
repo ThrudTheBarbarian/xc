@@ -546,6 +546,18 @@ class IfaceWrite
     static String* jsonWithStd(Node* program, Vtable* vt, Set* prelude, Array* cImports,
                                String* classTable, Array* stdImports)
     {
+        return IfaceWrite.jsonWithState(program, vt, prelude, cImports, classTable, stdImports, (String*)0,
+                                        (Array*)0);
+    }
+
+    // …and a library's standard-library state hash (`stdState`): a client
+    // built from the same sources binds to its copy. Written only when given.
+    // …and its own #defines (`defines`, Preprocessor.ownDefines), which a
+    // client defines on importing it. Written only when there are any.
+    static String* jsonWithState(Node* program, Vtable* vt, Set* prelude, Array* cImports,
+                                 String* classTable, Array* stdImports, String* stdState,
+                                 Array* defines)
+    {
         String* out = new String();
         out.appendCString("{\n");
         out.appendCString("\"ifaceVersion\": 1, \"version\": 1,\n");
@@ -960,6 +972,16 @@ class IfaceWrite
             for (u32 i = (u32)0; i < stdImports.count(); i = i + (u32)1) {
                 if (i > (u32)0) out.appendCString(", ");
                 out.appendFormat("\"%s\"", IfaceWrite.esc((String*)stdImports.get(i)).cString());
+            }
+            out.appendCString("]");
+        }
+        if (stdState != (String*)0 && stdState.byteLength() > (u32)0)
+            out.appendFormat(", \"stdState\": \"%s\"", IfaceWrite.esc(stdState).cString());
+        if (defines != (Array*)0 && defines.count() > (u32)0) {
+            out.appendCString(", \"defines\": [");
+            for (u32 i = (u32)0; i < defines.count(); i = i + (u32)1) {
+                if (i > (u32)0) out.appendCString(", ");
+                out.appendFormat("\"%s\"", IfaceWrite.esc((String*)defines.get(i)).cString());
             }
             out.appendCString("]");
         }

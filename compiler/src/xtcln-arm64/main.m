@@ -683,12 +683,12 @@ int main(int argc, const char *argv[]) {
             if (!text) { fprintf(stderr, "xcc-ln-arm64: assembly failed: %s\n", err.localizedDescription.UTF8String); return 1; }
             NSData *iface = nil;
             if (![ifacePath isEqualToString:@"-"]) iface = [NSData dataWithContentsOfFile:ifacePath];
-            NSMutableSet<NSString *> *exports = [NSMutableSet set];
+            NSMutableArray<NSString *> *wanted = [NSMutableArray array];
             if (![exportsPath isEqualToString:@"-"]) {
                 NSString *el = [NSString stringWithContentsOfFile:exportsPath encoding:NSUTF8StringEncoding error:NULL];
                 for (NSString *ln in [el componentsSeparatedByString:@"\n"]) {
                     NSString *s = [ln stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-                    if (s.length && as.symbols[s]) [exports addObject:s];
+                    if (s.length) [wanted addObject:s];
                 }
             }
             // Extra inputs after <out> — the SAME kinds the executable link
@@ -746,6 +746,12 @@ int main(int argc, const char *argv[]) {
                 repartitionObjcSections(mdata, mObjc, msyms, mdataSyms, mfix);
             NSUInteger miLen = appendModInit(as, mdata, mfix, dObjMi, dObjMiFix);
             NSUInteger bssLen = allocateBss(bssCommons, mdata, msyms, mdataSyms);
+            // Defined here, or not exported. Read after the __bss is allocated:
+            // a COMMON (zero-initialised `.comm` storage, such as a library's
+            // standard-library state) is defined only from then on.
+            NSMutableSet<NSString *> *exports = [NSMutableSet set];
+            for (NSString *s in wanted)
+                if (msyms[s]) [exports addObject:s];
             NSData *dylib = [XTMachOWriter dylibFromText:text installName:installName
                                 exports:exports iface:iface symbols:msyms
                                 data:mdata dataSymbols:mdataSyms fixups:mfix

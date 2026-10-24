@@ -1920,7 +1920,9 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                 // A file-scope global has EXTERNAL linkage in C — export it so
                 // separate units share one definition. Local-only (no `.globl`)
                 // gave each unit a private copy (win64/PE keeps its own path).
-                if (!sWin64)
+                // …and on win64 a library's standard-library state
+                // (`exported`), which a client imports from the DLL.
+                if (!sWin64 || [sym.attributes[@"exported"] boolValue])
                     [data appendFormat:@"\t.globl\t%@\n", [self safeSym:sym.name]];
                 if (page)
                     [data appendString:@"\t.p2align\t14\n"];
@@ -1954,6 +1956,8 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                     {
                     if (page)
                         [bss appendString:@"\t.p2align\t14\n"];
+                    if ([sym.attributes[@"exported"] boolValue])
+                        [bss appendFormat:@"\t.globl\t%@\n", [self safeSym:sym.name]];
                     [bss appendFormat:@"%@:\n\t.zero\t%lu\n", [self safeSym:sym.name], (unsigned long)sz];
                     }
                 else
@@ -1964,6 +1968,10 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                     // `.bss` def gave each unit a PRIVATE copy — cross-object
                     // writes never met (c2xc bug 36, cross-object variant).
                     NSUInteger al = page ? 16384 : (sz >= 8 ? 8 : (sz >= 4 ? 4 : (sz >= 2 ? 2 : 1)));
+                    // A library's standard-library state (`exported`) is named
+                    // by `.globl` too, which is what puts it in a .so's exports.
+                    if ([sym.attributes[@"exported"] boolValue])
+                        [bss appendFormat:@"\t.globl\t%@\n", [self safeSym:sym.name]];
                     [bss appendFormat:@"\t.comm\t%@, %lu, %lu\n",
                                       [self safeSym:sym.name], (unsigned long)sz, (unsigned long)al];
                     }
@@ -3586,6 +3594,12 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                 // PE uses IAT/__imp_ indirection — not wired for cross-module class
                 // casts yet; it keeps the plain lea.)
                 [out appendFormat:@"\tmov\trax, [rip+%@@GOTPCREL]\n", [self safeSym:sym.name] ?: @"0"];
+                }
+            else if (imported && sWin64 && sym.kind == XTIRSymbolKindDataGlobal)
+                {
+                // DATA from a DLL (a library's standard-library state): its
+                // address is the content of its import-table slot, `__imp_X`.
+                [out appendFormat:@"\tmov\trax, [rip+__imp_%@]\n", [self safeSym:sym.name] ?: @"0"];
                 }
             else
                 {

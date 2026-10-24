@@ -45,6 +45,197 @@
     NSUInteger _goalDirective;   // the unit's #goal, read after preprocessing
     NSSet<NSString*>* _libraryFiles;   // the library's files, which --par-auto leaves alone
     BOOL _parAutoImport;               // --par-auto wraps a loop in a program without Par.xc: import it
+    NSArray<NSString*>* _stdlibDirs;   // the preprocessor's standard-library directories
+    }
+
+#pragma mark - Standard-library state across a library boundary
+
+// The name of a standard-library file within its directory, or nil.
+static NSString* stdlibNameOf(NSString* absPath, NSArray<NSString*>* dirs)
+    {
+    for (NSString* dir in dirs)
+        {
+        NSString* pre = [dir stringByAppendingString:@"/"];
+        if ([absPath hasPrefix:pre])
+            return [absPath substringFromIndex:pre.length];
+        }
+    return nil;
+    }
+
+// Where `#import <name>` finds a standard-library file: the first directory
+// that has it. nil when none does.
+static NSString* stdlibPathOf(NSString* name, NSArray<NSString*>* dirs)
+    {
+    for (NSString* dir in dirs)
+        {
+        NSString* p = [[dir stringByAppendingPathComponent:name] stringByStandardizingPath];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:p])
+            return p;
+        }
+    return nil;
+    }
+
+// FNV-1a, 64 bits, over each name (sorted, each once) and its file's bytes,
+// each followed by a NUL; 16 hex digits. The port's Frontend.xc computes the
+// same (where a client's prelude list holds the stdImports it imported).
+static NSString* stdStateHashOf(NSArray<NSString*>* names, NSArray<NSString*>* dirs)
+    {
+    uint64_t h = 0xCBF29CE484222325ULL;
+    for (NSString* n in [[NSSet setWithArray:names].allObjects sortedArrayUsingSelector:@selector(compare:)])
+        {
+        NSData* nb = [n dataUsingEncoding:NSUTF8StringEncoding];
+        NSString* p = stdlibPathOf(n, dirs);
+        NSData* fb = p ? [NSData dataWithContentsOfFile:p] : nil;
+        for (int part = 0; part < 2; part++)
+            {
+            NSData* d = part == 0 ? nb : fb;
+            const uint8_t* b = d.bytes;
+            for (NSUInteger i = 0; i < d.length; i++)
+                {
+                h ^= b[i];
+                h *= 0x100000001B3ULL;
+                }
+            h *= 0x100000001B3ULL;   // the NUL after each part: h ^= 0 is h
+            }
+        }
+    return [NSString stringWithFormat:@"%016llx", (unsigned long long)h];
+    }
+
+// The names of the state a set of files declares: each top-level global, and
+// each class's static data block and its once-flag.
+static NSSet<NSString*>* stdStateNamesIn(XTProgramNode* ast, NSSet<NSString*>* files)
+    {
+    NSMutableSet<NSString*>* out = [NSMutableSet set];
+    NSString* cwd = [[NSFileManager defaultManager] currentDirectoryPath];
+    for (XTASTNode* d in ast.declarations)
+        {
+        NSString* df = d.location.filename;
+        if (!df.length)
+            continue;
+        NSString* abs = [(df.isAbsolutePath ? df : [cwd stringByAppendingPathComponent:df]) stringByStandardizingPath];
+        if (![files containsObject:abs])
+            continue;
+        if ([d isKindOfClass:[XTVariableDeclNode class]])
+            [out addObject:((XTVariableDeclNode*)d).varName];
+        else if ([d isKindOfClass:[XTClassDeclNode class]])
+            {
+            NSString* cn = ((XTClassDeclNode*)d).className;
+            [out addObject:[@"__sdata_" stringByAppendingString:cn]];
+            [out addObject:[@"__sinit_" stringByAppendingString:cn]];
+            }
+        }
+    return out;
+    }
+
+// A library EXPORTS the state of the standard-library files it was built with;
+// a program or library importing one built from the same sources BINDS to it:
+// those symbols become externs, and the first such library's copy is the
+// process's one. Without this each image had its own RunLoop.main(), so posts
+// from a program never reached a library's loop. Two libraries carrying the
+// same file still keep a copy each (the client binds to the first).
+- (void)shareStdlibStateIn:(XTIRModule*)mod
+                   program:(XTProgramNode*)ast
+                  libPaths:(NSArray<NSString*>*)libPaths
+                  libJsons:(NSArray<NSString*>*)libJsons
+              libraryBuild:(BOOL)libraryBuild
+    {
+    NSArray<NSString*>* dirs = _stdlibDirs ?: @[];
+    NSMutableArray<NSString*>* preludeNames = [NSMutableArray array];
+    for (NSString* p in _preludeFiles)
+        {
+        NSString* n = stdlibNameOf(p, dirs);
+        if (n)
+            [preludeNames addObject:n];
+        }
+    // The client side: the first imported library whose stdState matches.
+    NSMutableSet<NSString*>* bound = [NSMutableSet set];
+    NSString* boundPkg = nil;   // wasm32: the library's package (`libX.wasm` -> X)
+    for (NSUInteger i = 0; i < libJsons.count; i++)
+        {
+        NSDictionary* root = [NSJSONSerialization JSONObjectWithData:[libJsons[i] dataUsingEncoding:NSUTF8StringEncoding]
+                                                             options:0
+                                                               error:NULL];
+        NSString* theirs = [root isKindOfClass:[NSDictionary class]] ? root[@"stdState"] : nil;
+        if (![theirs isKindOfClass:[NSString class]])
+            continue;
+        NSArray* imps = [root[@"stdImports"] isKindOfClass:[NSArray class]] ? root[@"stdImports"] : @[];
+        NSMutableArray<NSString*>* names = [preludeNames mutableCopy];
+        [names addObjectsFromArray:imps];
+        if (![stdStateHashOf(names, dirs) isEqualToString:theirs])
+            {
+            [_diagnostics emitWarning:[NSString stringWithFormat:
+                                                    @"'%@' was built from other standard-library sources than this "
+                                                    @"compiler's, so this program keeps its own copy of their state "
+                                                    @"(RunLoop.main() and the like are not the library's); rebuild "
+                                                    @"the library with this compiler",
+                                                    libPaths[i].lastPathComponent]
+                                   at:[XTSourceLocation locationWithFilename:@"<import>" line:0 column:0]];
+            continue;
+            }
+        for (NSString* p in _preludeFiles)
+            [bound addObject:p];
+        for (NSString* n in imps)
+            {
+            NSString* p = stdlibPathOf(n, dirs);
+            if (p)
+                [bound addObject:p];
+            }
+        if (_options.useWasm32Backend)
+            {
+            NSString* stem = libPaths[i].lastPathComponent;
+            if ([stem hasPrefix:@"lib"])
+                stem = [stem substringFromIndex:3];
+            boundPkg = stem.stringByDeletingPathExtension;
+            }
+        break;
+        }
+    NSSet<NSString*>* boundNames = bound.count ? stdStateNamesIn(ast, bound) : [NSSet set];
+    // The library side: every other standard-library file it was built with.
+    NSSet<NSString*>* exportNames = [NSSet set];
+    if (libraryBuild)
+        {
+        NSMutableSet<NSString*>* own = [NSMutableSet set];
+        NSMutableArray<NSString*>* names = [preludeNames mutableCopy];
+        for (NSString* p in _preludeFiles)
+            if (![bound containsObject:p])
+                [own addObject:p];
+        for (NSString* p in _stdlibFiles)
+            {
+            if (![_preludeFiles containsObject:p])
+                [names addObject:_stdlibFiles[p]];
+            if (![bound containsObject:p])
+                [own addObject:p];
+            }
+        // A library that bound its state to another one has none of its own
+        // to offer: a client of it alone keeps its own copy (it would find
+        // nothing to bind to here).
+        _stdStateHash = bound.count ? nil : stdStateHashOf(names, dirs);
+        exportNames = stdStateNamesIn(ast, own);
+        }
+    for (XTIRSymbol* sym in mod.symbols)
+        {
+        if (sym.kind != XTIRSymbolKindDataGlobal || sym.taskLocal)
+            continue;
+        if ([boundNames containsObject:sym.name])
+            {
+            sym.isExternalGlobal = YES;
+            sym.initialBytes = nil;
+            // wasm32 reaches it through the library's __addr_ getter, imported
+            // from the library's package, as an imported class's vtable is.
+            if (boundPkg.length)
+                {
+                NSMutableDictionary* a = [sym.attributes mutableCopy] ?: [NSMutableDictionary dictionary];
+                a[[@"pkg_" stringByAppendingString:boundPkg]] = @YES;
+                sym.attributes = a;
+                }
+            }
+        else if ([exportNames containsObject:sym.name])
+            {
+            NSMutableDictionary* a = [sym.attributes mutableCopy] ?: [NSMutableDictionary dictionary];
+            a[@"exported"] = @YES;
+            sym.attributes = a;
+            }
+        }
     }
 
 - (instancetype)initWithOptions:(XTCommandLineOptions*)options
@@ -1188,6 +1379,8 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     _libraryFiles = pp.libraryFiles;
     _preludeFiles = pp.preludeFiles;
     _stdlibFiles = pp.stdlibFiles;
+    _stdlibDirs = pp.stdlibDirs;
+    _ownDefines = pp.ownDefines;
     if (!expanded || _diagnostics.hasFatalError)
         {
         [_diagnostics printAll];
@@ -1941,6 +2134,8 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // Instructions an optimisation pass makes later carry no location of their
     // own; they must not take the last statement's.
     [XTIRDbgLoc setCurrent:nil];
+    if (mod && !_diagnostics.hasFatalError)
+        [self shareStdlibStateIn:mod program:ast libPaths:xtcLibPaths libJsons:xtcLibJsons libraryBuild:_options.emitLib];
     if (!mod || _diagnostics.hasFatalError)
         {
         [_diagnostics printAll];

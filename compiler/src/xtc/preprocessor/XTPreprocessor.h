@@ -115,6 +115,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic, copy) NSArray<NSString*>* stdlibDirs;
 @property(nonatomic, readonly) NSDictionary<NSString*, NSString*>* stdlibFiles;
+// The macros this unit's own files define, as `#define` text, sorted: a
+// library's interface carries them (`defines`).
+- (NSArray<NSString*>*)ownDefines;
 
 /****************************************************************************\
 |* Resolved `.so` paths gathered from library-metadata `#import`s, in first-

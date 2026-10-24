@@ -122,7 +122,20 @@ class IfFrame
     Set* _stdlibFiles;    // of String@ — canonical keys and #line spellings
     Array* _stdNames;     // of String@ — names within their directory, first-seen order
     Array* _pendingStd;   // of String@ — a newly named library's stdImports, to import
+    // Each standard-library file's name within its directory -> both of its
+    // spellings, prelude or not, and the prelude's names: a library's state
+    // is shared with its clients by file (stdStateNames in Frontend.xc).
+    Map* _stdSpellings;   // String@ -> Array@ of String@
+    Array* _preludeNames; // of String@, first-seen order
     callback _stdImportsOf Array*(String* lib);
+    // A library's own #defines (its interface's `defines`), read through
+    // `_definesOf` as `_stdImportsOf` is, defined after its stdImports. The
+    // file each macro came from decides which a library's interface carries
+    // (ownDefines); `<iface>` marks one an imported interface defined.
+    callback _definesOf Array*(String* lib);
+    Array* _pendingDefines; // of String@
+    Map* _macroFiles;       // String@ name -> String@ #line spelling
+    String* _defineFile;    // the file of the #define being handled, or null
 
     void init(void)
         {
@@ -139,9 +152,15 @@ class IfFrame
         _metadataImports = new Array();
         _stdlibDirs = new Array();
         _stdlibFiles = new Set();
+        _stdSpellings = new Map();
+        _preludeNames = new Array();
         _stdNames = new Array();
         _pendingStd = new Array();
         _stdImportsOf = (callback Array*(String* lib))0;
+        _definesOf = (callback Array*(String* lib))0;
+        _pendingDefines = new Array();
+        _macroFiles = new Map();
+        _defineFile = (String*)0;
         _thirdPartyRoots = new Array();
         _appleFrameworks = false;
         _appleSdk = (String*)0;
@@ -339,6 +358,60 @@ class IfFrame
             for (u32 i = (u32)0; names != (Array*)0 && i < names.count(); i = i + (u32)1)
                 _pendingStd.add(names.get(i));
             }
+        // …and its own #defines, after them.
+        callback g Array*(String* lib) = _definesOf;
+        if (g)
+            {
+            Array* ds = g(p);
+            for (u32 i = (u32)0; ds != (Array*)0 && i < ds.count(); i = i + (u32)1)
+                _pendingDefines.add(ds.get(i));
+            }
+        }
+
+    void setDefinesReader(callback f Array*(String* lib))
+        {
+        _definesOf = f;
+        }
+
+    // The macros this unit's own files define, each as the text of its
+    // #define (`NAME body`, `NAME(a, b) body`), sorted: what a library's
+    // interface carries (`defines`). Not the standard library's or the
+    // prelude's, not -D's, and not those an imported interface defined. As
+    // the reference's ownDefines.
+    Array* ownDefines(void)
+        {
+        Set* lib = libraryFiles();
+        Array* out = new Array();
+        Array* names = _macros.allKeys();
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* name = (String*)names.get(i);
+            String* f = (String*)_macroFiles.get((Hashable*)name);
+            if (f == (String*)0 || f.byteLength() == (u32)0 || f.equals(String.withCString("<iface>"))
+                || lib.contains((Hashable*)f))
+                continue;
+            MacroDef* d = (MacroDef*)_macros.get((Hashable*)name);
+            String* t = String.withString(name);
+            if (d.params() != (Array*)0)
+                {
+                t.appendCString("(");
+                for (u32 k = (u32)0; k < d.params().count(); k = k + (u32)1)
+                    {
+                    if (k > (u32)0)
+                        t.appendCString(", ");
+                    t.append((String*)d.params().get(k));
+                    }
+                t.appendCString(")");
+                }
+            if (d.body() != (String*)0 && d.body().byteLength() > (u32)0)
+                {
+                t.appendCString(" ");
+                t.append(d.body());
+                }
+            out.add((Object*)t);
+            }
+        out.sort();
+        return out;
         }
 
     void addStdlibDir(String* d)
@@ -411,6 +484,46 @@ class IfFrame
     Set* preludeFiles(void)
         {
         return _preludeFiles;
+        }
+
+    // A standard-library file's name within its directory, or null.
+    String* stdNameOf(String* key)
+        {
+        for (u32 i = (u32)0; i < _stdlibDirs.count(); i = i + (u32)1)
+            {
+            String* pre = String.withString((String*)_stdlibDirs.get(i));
+            pre.appendCString("/");
+            if (key.hasPrefix(pre))
+                return key.substringFromByte(pre.byteLength());
+            }
+        return (String*)0;
+        }
+    void noteSpellings(String* name, String* key, String* foundPath)
+        {
+        Array* sp = (Array*)_stdSpellings.get((Hashable*)name);
+        if (sp == (Array*)0)
+            {
+            sp = new Array();
+            _stdSpellings.set((Hashable*)name, (Object*)sp);
+            }
+        sp.add((Object*)String.withString(key));
+        sp.add((Object*)String.withString(foundPath));
+        }
+    // The prelude's files by name within their directory.
+    Array* preludeNames(void)
+        {
+        return _preludeNames;
+        }
+    // Both spellings of a standard-library file this unit imported, by name;
+    // empty when it imported no such file.
+    Array* spellingsOf(String* name)
+        {
+        Array* sp = (Array*)_stdSpellings.get((Hashable*)name);
+        return sp == (Array*)0 ? new Array() : sp;
+        }
+    Array* stdlibDirs(void)
+        {
+        return _stdlibDirs;
         }
 
     // Two spellings of one directory have to compare EQUAL, or a file living in
@@ -1411,13 +1524,16 @@ class IfFrame
             }
         if (Preprocessor._hasCPrefix(content, "define"))
             {
+            _defineFile = filename;
             handleDefine(content);
+            _defineFile = (String*)0;
             return;
             }
         if (Preprocessor._hasCPrefix(content, "undef"))
             {
             String* name = content.substringFromByte((u32)5).trimmed();
             _macros.remove((Hashable*)name);
+            _macroFiles.remove((Hashable*)name);
             return;
             }
         // #warning and #error carry their location, as every other
@@ -1523,6 +1639,21 @@ class IfFrame
             imp.append(nm);
             imp.appendCString(">");
             handleIncludeOne(imp, filename, line, output, true);
+            }
+        while (_pendingDefines.count() > (u32)0)
+            {
+            String* d = (String*)_pendingDefines.get((u32)0);
+            _pendingDefines.removeAt((u32)0);
+            u32 e = (u32)0;
+            while (e < d.byteLength() && Preprocessor.isIdentChar(d.byteAt(e)))
+                e = e + (u32)1;
+            if (_macros.get((Hashable*)d.substringBytes((u32)0, e)) != (Object*)0)
+                continue;
+            String* def = String.withCString("define ");
+            def.append(d);
+            _defineFile = String.withCString("<iface>");
+            handleDefine(def);
+            _defineFile = (String*)0;
             }
         }
 
@@ -1774,6 +1905,12 @@ class IfFrame
                 // needs no path canonicaliser of its own — a second copy of
                 // that rule is a second thing to drift.
                 _preludeFiles.add((Hashable*)String.withString(foundPath));
+                String* pn = stdNameOf(key);
+                if (pn != (String*)0)
+                    {
+                    _preludeNames.add((Object*)pn);
+                    noteSpellings(pn, key, foundPath);
+                    }
                 }
             else
                 {
@@ -1788,6 +1925,7 @@ class IfFrame
                         _stdlibFiles.add((Hashable*)key);
                         _stdlibFiles.add((Hashable*)String.withString(foundPath));
                         String* nm = key.substringFromByte(pre.byteLength());
+                        noteSpellings(nm, key, foundPath);
                         bool seen = false;
                         for (u32 j = (u32)0; j < _stdNames.count() && !seen; j = j + (u32)1)
                             seen = ((String*)_stdNames.get(j)).equals(nm);
@@ -1880,6 +2018,10 @@ class IfFrame
             body = body.substringBytes((u32)0, slashes).trimmed();
 
         _macros.set((Hashable*)name, (Object*)MacroDef.with(name, params, body));
+        if (_defineFile != (String*)0 && _defineFile.byteLength() > (u32)0)
+            _macroFiles.set((Hashable*)name, (Object*)_defineFile);
+        else
+            _macroFiles.remove((Hashable*)name);
         }
 
     // ── Macro expansion ──────────────────────────────────────────

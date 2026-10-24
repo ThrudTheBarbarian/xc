@@ -3501,6 +3501,10 @@ class Arm64
                 // argument is log2 alignment.
                 // Mach-O `.comm` takes LOG2 alignment: the old `1` meant two
                 // bytes, not "none", and not enough for a pointer.
+                // A library's standard-library state (`exported`) is named by
+                // `.globl` too, which is what puts it in a dylib's exports.
+                if (sym.attr(String.withCString("exported")))
+                    _out.appendFormat("    .globl _%s\n", sym.name().cString());
                 _out.appendFormat("    .comm _%s, %lu, %lu\n", sym.name().cString(),
                                   size, p2);
             }

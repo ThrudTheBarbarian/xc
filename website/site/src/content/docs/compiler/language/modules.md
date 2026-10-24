@@ -81,6 +81,42 @@ nothing type-checks it and nothing reports it.
 
 The client does not need to know: importing `libXtg` pulls in `libGEM`.
 
+## The standard library's state is the library's
+
+A library and the program that imports it each compile the standard library from source,
+but there is one copy of its state per process. `RunLoop.main()`,
+`OperationQueue.main()`, `NotificationCenter.shared()`, `Null.null()` and every other
+global the standard library keeps (and its classes' static data) are the library's own in
+the program too. A program can `post()` to `RunLoop.main()` and have the library's loop
+run it.
+
+The library exports that state, and the program refers to it instead of keeping its own.
+This happens only when both were built from the same standard-library sources: the
+interface records a hash of them. A library built by another compiler version gets a
+warning, *"…was built from other standard-library sources than this compiler's, so this
+program keeps its own copy of their state…"*, and then works as two copies would. Rebuild
+the library with the compiler that builds the program.
+
+A program shares the state of the first library it imports. If it imports two libraries
+that both use, say, `RunLoop.xc`, the second keeps its own copy.
+
+## A library's `#define`s
+
+A library's interface carries the `#define`s its own files make, object-like and
+function-like. `#import <Lib>` defines each one the program has not defined itself, as an
+`#import` of the library's source would, so they work in `#if` too:
+
+```c
+#import <MyLib>        // MyLib's own source says #define MYLIB_LEVEL 3
+
+#if MYLIB_LEVEL >= 3
+...
+#endif
+```
+
+Only the library's own macros travel: not the standard library's, not those given with
+`-D`, and not those of another library it imports.
+
 ## `extern` — globals are module-scoped
 
 A global belongs to the module it was compiled in. To refer to one that lives in another

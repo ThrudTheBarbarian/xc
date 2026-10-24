@@ -74,6 +74,7 @@ class FeOptions
     // them apart: `--emit-lib` and `-c` are library builds, `--emit-iface` is
     // a question.
     bool _libraryBuild;
+    bool _emitLib;
     // …and whether it is `-c` in particular: an object without `main` leaves
     // the class-name root (`_xtc_class_new`) to the module that has it.
     bool _compileOnly;
@@ -100,6 +101,7 @@ class FeOptions
         _ppOut = (String*)0;
         _emitIface = false;
         _libraryBuild = false;
+        _emitLib = false;
         _compileOnly = false;
         _classTable = (String*)0;
         _analyze = false;
@@ -236,6 +238,16 @@ class FeOptions
     bool libraryBuild(void)
         {
         return _libraryBuild;
+        }
+    // --emit-lib itself (libraryBuild is set for -c too): a shared library,
+    // which exports its standard-library state (shareStdState).
+    bool emitLib(void)
+        {
+        return _emitLib;
+        }
+    void setEmitLib(bool b)
+        {
+        _emitLib = b;
         }
     void setLibraryBuild(bool b)
         {
@@ -515,6 +527,7 @@ class FeOptions
         // How many of the imports are XTC libraries (they carry an interface).
         // A C library read from DWARF does not count: nothing in it dispatches.
         u32 xtcImports = (u32)0;
+        Array* xtcLibs = new Array();   // their paths, in import order (shareStdState)
             {
             Array* metas = pp.metadataImports();
             // Handed to the DRIVER: a wasm app's loader lists the modules it
@@ -565,7 +578,10 @@ class FeOptions
                 if (im == 0)
                     cImports.add((Object*)cLibraryName(mp));
                 else
+                    {
                     xtcImports = xtcImports + (u32)1;
+                    xtcLibs.add((Object*)mp);
+                    }
                 // No `.xtc.iface`? Then this is a library THIS compiler did not
                 // build, and a C library describes itself in DWARF. That is
                 // where its types come from — verbatim, which is the only way
@@ -903,9 +919,88 @@ class FeOptions
         // never asks for it, so it costs nothing to compute here and hand back.
         // The prelude's files are the AMBIENT surface: every unit already has
         // them, so this module does not export them as its own.
+        // The standard library's state across a library boundary (see
+        // stdStateHashOf): bound to the first imported library built from the
+        // same sources, exported by a library build.
+        Array* sdirs = pp.stdlibDirs();
+        Set* boundFiles = new Set();
+        String* boundPkg = (String*)0;   // wasm32: the library's package (`libX.wasm` -> X)
+        for (u32 li = (u32)0; li < xtcLibs.count(); li = li + (u32)1)
+            {
+            String* lp = (String*)xtcLibs.get(li);
+            String* theirs = IfaceImport.stdStateOf(lp);
+            if (theirs == (String*)0)
+                continue;
+            Array* imps = IfaceImport.stdImportsOf(lp);
+            Array* names = new Array();
+            for (u32 k = (u32)0; k < pp.preludeNames().count(); k = k + (u32)1)
+                names.add(pp.preludeNames().get(k));
+            for (u32 k = (u32)0; k < imps.count(); k = k + (u32)1)
+                names.add(imps.get(k));
+            if (!stdStateHashOf(names, sdirs).equals(theirs))
+                {
+                String* w = String.withCString("xcc: warning: '");
+                u32 slash = lp.byteLength();
+                while (slash > (u32)0 && lp.byteAt(slash - (u32)1) != (u8)'/')
+                    slash = slash - (u32)1;
+                w.append(lp.substringFromByte(slash));
+                w.appendCString("' was built from other standard-library sources than this compiler's, so this "
+                                "program keeps its own copy of their state (RunLoop.main() and the like are not the "
+                                "library's); rebuild the library with this compiler\n");
+                Stdio.error(w);
+                continue;
+                }
+            Array* pf = pp.preludeFiles().allObjects();
+            for (u32 k = (u32)0; k < pf.count(); k = k + (u32)1)
+                boundFiles.add((Hashable*)pf.get(k));
+            for (u32 k = (u32)0; k < imps.count(); k = k + (u32)1)
+                {
+                Array* sp = pp.spellingsOf((String*)imps.get(k));
+                for (u32 j = (u32)0; j < sp.count(); j = j + (u32)1)
+                    boundFiles.add((Hashable*)sp.get(j));
+                }
+            if (lp.hasSuffix(String.withCString(".wasm")))
+                {
+                String* fn = lp.lastPathComponent();
+                if (fn.hasPrefix(String.withCString("lib")))
+                    boundPkg = fn.substringBytes((u32)3, fn.byteLength() - (u32)3 - (u32)5);
+                }
+            break;
+            }
+        Set* stdBound = stdStateNames(program, boundFiles);
+        Set* stdExport = new Set();
+        String* stdState = (String*)0;
+        if (o.emitLib())
+            {
+            Array* names = new Array();
+            for (u32 k = (u32)0; k < pp.preludeNames().count(); k = k + (u32)1)
+                names.add(pp.preludeNames().get(k));
+            Array* own = pp.stdImports();
+            for (u32 k = (u32)0; k < own.count(); k = k + (u32)1)
+                names.add(own.get(k));
+            // A library that bound its state to another one has none of its
+            // own to offer: a client of it alone keeps its own copy. As the
+            // reference.
+            if (boundFiles.count() == (u32)0)
+                stdState = stdStateHashOf(names, sdirs);
+            Set* ownFiles = new Set();
+            Array* pf = pp.preludeFiles().allObjects();
+            for (u32 k = (u32)0; k < pf.count(); k = k + (u32)1)
+                if (!boundFiles.contains((Hashable*)pf.get(k)))
+                    ownFiles.add((Hashable*)pf.get(k));
+            for (u32 k = (u32)0; k < own.count(); k = k + (u32)1)
+                {
+                Array* sp = pp.spellingsOf((String*)own.get(k));
+                for (u32 j = (u32)0; j < sp.count(); j = j + (u32)1)
+                    if (!boundFiles.contains((Hashable*)sp.get(j)))
+                        ownFiles.add((Hashable*)sp.get(j));
+                }
+            stdExport = stdStateNames(program, ownFiles);
+            }
         if (o.emitIface())
-            o.setIfaceJson(IfaceWrite.jsonWithStd(program, sema.vtable(), pp.ambientFiles(), cImports,
-                                                  o.classTable(), pp.stdImports()));
+            o.setIfaceJson(IfaceWrite.jsonWithState(program, sema.vtable(), pp.ambientFiles(), cImports,
+                                                    o.classTable(), pp.stdImports(), stdState,
+                                                    o.emitLib() ? pp.ownDefines() : (Array*)0));
 
         Lower* lower = Lower.make();
         // IR outlining (XC_PAR_PROPOSE=outline): the optimiser's blocks get
@@ -977,6 +1072,32 @@ class FeOptions
         lower.setParWGSL(allK || o.target().equals(String.withCString("wasm32")));
         lower.setVtable(sema.vtable());
         IRModule* mod = lower.run(program, moduleNameOf(o.input()));
+        if (mod != (IRModule*)0)
+            {
+            Array* syms = mod.syms();
+            for (u32 k = (u32)0; k < syms.count(); k = k + (u32)1)
+                {
+                IRSymbol* sym = (IRSymbol*)syms.get(k);
+                if (sym.kind() != (u8)SYM_DATAGLOBAL || sym.isTaskLocal())
+                    continue;
+                if (stdBound.contains((Hashable*)sym.name()))
+                    {
+                    sym.setAttr(String.withCString("extern"), true);
+                    sym.setBytes((Array*)0);
+                    // wasm32 reaches it through the library's __addr_ getter,
+                    // imported from the library's package, as an imported
+                    // class's vtable is.
+                    if (boundPkg != (String*)0)
+                        {
+                        String* pk = String.withCString("pkg_");
+                        pk.append(boundPkg);
+                        sym.setAttr(pk, true);
+                        }
+                    }
+                else if (stdExport.contains((Hashable*)sym.name()))
+                    sym.setAttr(String.withCString("exported"), true);
+                }
+            }
         // Instructions an optimisation pass makes later carry no location of
         // their own; they must not take the last statement's.
         IRDbg.clearCurrent();
@@ -2021,6 +2142,93 @@ String* supportRoot(FeOptions* o)
     return (String*)0;
     }
 
+// ── Standard-library state across a library boundary ───────────────────
+// A library EXPORTS the state of the standard-library files it was built with
+// (each top-level global, each class's static data block and its once-flag);
+// a program or library importing one built from the same sources BINDS to it:
+// those symbols become externs, and the first such library's copy is the
+// process's one. Without this each image had its own RunLoop.main(), so posts
+// from a program never reached a library's loop. As the reference's
+// shareStdlibStateIn: in XTCompilerDriver.m.
+
+// Where `#import <name>` finds a standard-library file, or null.
+String* stdlibPathOf(String* name, Array* dirs)
+    {
+    for (u32 i = (u32)0; i < dirs.count(); i = i + (u32)1)
+        {
+        String* p = String.withString((String*)dirs.get(i));
+        p.appendCString("/");
+        p.append(name);
+        if (Files.exists(p))
+            return p;
+        }
+    return (String*)0;
+    }
+
+// FNV-1a, 64 bits, over each name (sorted, each once) and its file's bytes,
+// each followed by a NUL; 16 hex digits. The reference computes the same. Once
+// each: a client's prelude list holds the stdImports it imported for a
+// library, and the library's does not.
+u64 fnvByte(u64 h, u8 b)
+    {
+    return (h ^ (u64)b) * (u64)$100000001B3;
+    }
+String* stdStateHashOf(Array* names, Array* dirs)
+    {
+    Set* seen = new Set();
+    Array* sorted = new Array();
+    for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+        if (!seen.contains((Hashable*)names.get(i)))
+            {
+            seen.add((Hashable*)names.get(i));
+            sorted.add(names.get(i));
+            }
+    sorted.sort();
+    u64 h = (u64)$CBF29CE484222325;
+    for (u32 i = (u32)0; i < sorted.count(); i = i + (u32)1)
+        {
+        String* n = (String*)sorted.get(i);
+        for (u32 k = (u32)0; k < n.byteLength(); k = k + (u32)1)
+            h = fnvByte(h, n.byteAt(k));
+        h = fnvByte(h, (u8)0);
+        String* p = stdlibPathOf(n, dirs);
+        Data* d = p == (String*)0 ? (Data*)0 : Files.readData(p);
+        for (u32 k = (u32)0; d != (Data*)0 && k < d.length(); k = k + (u32)1)
+            h = fnvByte(h, d.byteAt(k));
+        h = fnvByte(h, (u8)0);
+        }
+    String* out = String.withCString("");
+    u8* digits = "0123456789abcdef";
+    for (i32 sh = (i32)60; sh >= (i32)0; sh = sh - (i32)4)
+        out.appendByte(digits[(u32)((h >> (u64)sh) & (u64)$F)]);
+    return out;
+    }
+
+// The names of the state a set of files declares (by #line spelling).
+Set* stdStateNames(Node* program, Set* files)
+    {
+    Set* out = new Set();
+    for (u32 i = (u32)0; i < program.kidCount(); i = i + (u32)1)
+        {
+        Node* d = program.kid(i);
+        String* f = d.file();
+        if (f == (String*)0 || !files.contains((Hashable*)f))
+            continue;
+        if (d.kind() == (u16)nkVariableDecl)
+            out.add((Hashable*)d.name());
+        else if (d.kind() == (u16)nkClassDecl)
+            {
+            String* sd = String.withCString("__sdata_");
+            sd.append(d.name());
+            out.add((Hashable*)sd);
+            String* si = String.withCString("__sinit_");
+            si.append(d.name());
+            out.add((Hashable*)si);
+            }
+        }
+    return out;
+    }
+
 // The mingw sysroot's import-library directory, or 0 when no win64 toolchain
 // is installed. ONE definition: it decides both where `#use <user32>` looks and
 // which resolved files are ambient system libraries, and those two answers have
@@ -2074,6 +2282,12 @@ Array* stdImportsOfLibrary(String* lib)
     return IfaceImport.stdImportsOf(lib);
     }
 
+// …and its own #defines.
+Array* definesOfLibrary(String* lib)
+    {
+    return IfaceImport.definesOf(lib);
+    }
+
 Preprocessor* buildPP(FeOptions* o)
     {
     Preprocessor* pp = new Preprocessor();
@@ -2105,6 +2319,7 @@ Preprocessor* buildPP(FeOptions* o)
     for (u32 i = (u32)0; i < o.stdlibs().count(); i = i + (u32)1)
         pp.addStdlibDir((String*)o.stdlibs().get(i));
     pp.setStdImportsReader(&stdImportsOfLibrary);
+    pp.setDefinesReader(&definesOfLibrary);
     // macOS and iOS: `#import <F>` may name a system framework.
     String* tgt = o.target();
     if (tgt.equals(String.withCString("arm64")) || tgt.equals(String.withCString("ios"))

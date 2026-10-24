@@ -152,6 +152,20 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
                 excludeFiles:(NSSet<NSString *> *)excludeFiles
                   classTable:(NSString *)classTable
                  stdlibFiles:(NSDictionary<NSString *, NSString *> *)stdlibFiles {
+    return [self jsonForProgram:program protocolSlots:protocolSlots methodSlots:methodSlots cImports:cImports
+                   excludeFiles:excludeFiles classTable:classTable stdlibFiles:stdlibFiles stdState:nil
+                        defines:nil];
+}
+
++ (NSString *)jsonForProgram:(XTProgramNode *)program
+               protocolSlots:(NSDictionary *)protocolSlots
+                 methodSlots:(NSDictionary *)methodSlots
+                    cImports:(NSArray<NSString *> *)cImports
+                excludeFiles:(NSSet<NSString *> *)excludeFiles
+                  classTable:(NSString *)classTable
+                 stdlibFiles:(NSDictionary<NSString *, NSString *> *)stdlibFiles
+                    stdState:(NSString *)stdState
+                     defines:(NSArray<NSString *> *)defines {
     if (!program) return nil;
     NSMutableArray *classes   = [NSMutableArray array];
     NSMutableArray *protocols = [NSMutableArray array];
@@ -435,6 +449,20 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
         NSMutableDictionary *withStd = [root mutableCopy];
         withStd[@"stdImports"] = [stdNames.allObjects sortedArrayUsingSelector:@selector(compare:)];
         root = withStd;
+    }
+    // A library's standard-library state (XTCompilerDriver.stdStateHash): a
+    // client built from the same sources binds to it. Only when there is one.
+    if (stdState.length) {
+        NSMutableDictionary *withState = [root mutableCopy];
+        withState[@"stdState"] = stdState;
+        root = withState;
+    }
+    // A library's own #defines (XTPreprocessor.ownDefines), which a client
+    // defines on importing it. Only when there are any.
+    if (defines.count) {
+        NSMutableDictionary *withDefines = [root mutableCopy];
+        withDefines[@"defines"] = defines;
+        root = withDefines;
     }
     NSMutableString *out = [NSMutableString string];
     appendCanonicalJSON(out, root);

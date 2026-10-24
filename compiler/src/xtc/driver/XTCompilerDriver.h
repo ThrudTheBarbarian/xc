@@ -38,6 +38,15 @@ NS_ASSUME_NONNULL_BEGIN
 // The standard-library files the unit imported outside the prelude, absolute
 // path -> name within its directory (see XTPreprocessor.stdlibFiles, bug 637).
 @property (nonatomic, readonly, nullable) NSDictionary<NSString *, NSString *> *stdlibFiles;
+// A library's `stdState` (its interface's key): a hash of the standard-library
+// sources it was built with, the prelude's and its stdImports', names and
+// bytes. A client built from the same sources shares the library's copy of
+// their state (globals, class static data) instead of keeping its own, so a
+// stdlib singleton is one per process. nil unless --emit-lib.
+@property (nonatomic, readonly, nullable) NSString *stdStateHash;
+// The macros the unit's own files define (XTPreprocessor.ownDefines), which a
+// library's interface carries as `defines`.
+@property (nonatomic, readonly, nullable) NSArray<NSString *> *ownDefines;
 /****************************************************************************\
 |* The vtable slot indices this build committed to — serialised into the
 |* library's interface under --emit-lib so a client adopts them rather than

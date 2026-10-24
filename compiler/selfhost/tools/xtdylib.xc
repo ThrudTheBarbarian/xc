@@ -76,7 +76,7 @@ void main(void)
             iface.add((Object*)Number.withU32((u32)d.byteAt(i)));
         }
 
-    Array* exports = new Array();
+    Array* wanted = new Array();
     if (!exportsPath.equals(String.withCString("-")))
         {
         String* el = Files.readText(exportsPath);
@@ -92,10 +92,7 @@ void main(void)
             String* s = ((String*)lines.get(i)).trimmed();
             if (s.byteLength() == (u32)0)
                 continue;
-            // Defined HERE, or not exported at all — see the header note.
-            if (a.symbols().get((Hashable*)s) == (Object*)0)
-                continue;
-            exports.add((Object*)s);
+            wanted.add((Object*)s);
             }
         }
 
@@ -124,6 +121,14 @@ void main(void)
 
     // After the mod-init tail, so the __bss symbols sit past the data (642).
     u32 bssLen = Arm64Asm.allocateBss(bssCommons, dataBytes, a.symbols(), a.dataSyms());
+    // Defined HERE, or not exported at all — see the header note. Read after
+    // the __bss is allocated: a COMMON (zero-initialised `.comm` storage, such
+    // as a library's standard-library state) is defined only from then on, as
+    // xcc.xc's own dylib link reads it.
+    Array* exports = new Array();
+    for (u32 i = (u32)0; i < wanted.count(); i = i + (u32)1)
+        if (a.symbols().get((Hashable*)wanted.get(i)) != (Object*)0)
+            exports.add(wanted.get(i));
     MachO* m = new MachO();
     if (platform != 0)
         m.setApplePlatform(platform);

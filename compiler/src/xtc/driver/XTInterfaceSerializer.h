@@ -84,6 +84,16 @@ NS_ASSUME_NONNULL_BEGIN
                         excludeFiles:(nullable NSSet<NSString*>*)excludeFiles
                           classTable:(nullable NSString*)classTable
                          stdlibFiles:(nullable NSDictionary<NSString*, NSString*>*)stdlibFiles;
+// …and a library's standard-library state hash, written as `stdState`.
++ (nullable NSString*)jsonForProgram:(XTProgramNode*)program
+                       protocolSlots:(nullable NSDictionary*)protocolSlots
+                         methodSlots:(nullable NSDictionary*)methodSlots
+                            cImports:(nullable NSArray<NSString*>*)cImports
+                        excludeFiles:(nullable NSSet<NSString*>*)excludeFiles
+                          classTable:(nullable NSString*)classTable
+                         stdlibFiles:(nullable NSDictionary<NSString*, NSString*>*)stdlibFiles
+                            stdState:(nullable NSString*)stdState
+                             defines:(nullable NSArray<NSString*>*)defines;
 @end
 
 NS_ASSUME_NONNULL_END

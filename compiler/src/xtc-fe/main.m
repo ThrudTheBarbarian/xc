@@ -608,7 +608,9 @@ int main(int argc, const char* argv[])
                                                               cImports:driver.cLibraryImports
                                                           excludeFiles:driver.preludeFiles
                                                             classTable:driver.classTableSymbol
-                                                           stdlibFiles:driver.stdlibFiles];
+                                                           stdlibFiles:driver.stdlibFiles
+                                                              stdState:(opts.emitLib ? driver.stdStateHash : nil)
+                                                               defines:(opts.emitLib ? driver.ownDefines : nil)];
                 if (json.length)
                     {
                     [json writeToFile:ifacePath
