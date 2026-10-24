@@ -285,6 +285,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly) BOOL useX86_64Backend; // -A x86_64 — x86-64 Linux (System V AMD64, musl)
 @property(nonatomic, readonly) BOOL useWin64Backend;  // -A win64 — x86-64 Windows (Win64 ABI, mingw PE)
 @property(nonatomic, readonly) BOOL useWasm32Backend; // -A wasm32 — WebAssembly (Node.js / browser, JS env host)
+@property(nonatomic, readonly) BOOL namedModel;       // -m given on the line (not the default model)
 
 /****************************************************************************\
 |* Which Apple platform an arm64 build targets: nil (macOS, the default),

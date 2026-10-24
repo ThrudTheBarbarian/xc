@@ -328,7 +328,8 @@ xcconly "-m <path without .lnk>" 0 "" -q -m custom -o @OUT@.xex ret.xc
 xcconly "-m xt-heap (refused, named)" 1 "does not implement" -q -m xt-heap -o @OUT@.xex ret.xc
 xcconly "-m xt-test-fallover (refused)" 1 "does not implement" -q -m xt-test-fallover -o @OUT@.xex ret.xc
 cover -dl --dump-layout --list-layouts -ll
-text "-dl"                  out -dl
+text "-dl, no target"       err -dl
+text "-dl -A 6502"          out -dl -A 6502
 text "-dl -m xt"            out -dl -m xt
 text "-dl -m xt6502/xt-heap" out -dl -m xt6502/xt-heap
 text "--dump-layout -m xt-test-fallover" out --dump-layout -m xt-test-fallover

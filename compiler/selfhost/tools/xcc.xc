@@ -6785,9 +6785,11 @@ void finishDriverArgs(DriverOptions* d)
     if (d.dumpLayout()) {
         String* lp = d.layoutPath();
         if (lp == (String*)0) {
-            if (d.sawArch() && !isXt6502(d)) {
-                Stdio.printf("xcc: error: --dump-layout draws a 6502 memory layout; '%s' has "
-                             "none (use -m <layout>)\n", d.arch().cString());
+            // Never a silent fallback for a target that has none (the host
+            // when no -A is given). As the reference.
+            if (!isXt6502(d)) {
+                Stdio.error(String.withCString("xcc: error: --dump-layout draws a 6502 memory layout: "
+                                               "name one with -m <layout>, or -A 6502 for the default\n"));
                 Process.exit((i32)1);
                 return;
             }

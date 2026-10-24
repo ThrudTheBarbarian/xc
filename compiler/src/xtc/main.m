@@ -5190,6 +5190,16 @@ int main(int argc, const char *argv[]) {
         }
 
         if (opts.dumpLayout) {
+            // A 6502 layout, named by -m or the 6502 target's default; never
+            // a silent fallback for a target that has none (the host when no
+            // -A is given). As the port.
+            if (!opts.namedModel && (opts.useArm64Backend || opts.useArm9Backend
+                    || opts.useX86_64Backend || opts.useWin64Backend
+                    || opts.useWasm32Backend || opts.useM68kBackend)) {
+                fprintf(stderr, "xcc: error: --dump-layout draws a 6502 memory layout: "
+                                "name one with -m <layout>, or -A 6502 for the default\n");
+                return 1;
+            }
             XTMemoryModel *m = opts.memoryModel;
             if (!m) {
                 fprintf(stderr, "xcc: error: --dump-layout requires -m <model>\n");

@@ -18,6 +18,7 @@
 @property(nonatomic, readwrite) NSMutableArray<NSString*>* mutableLinkerArgs;
 @property(nonatomic, readwrite) NSString* targetName;
 @property(nonatomic, readwrite) XTMemoryModel* memoryModel;
+@property(nonatomic, readwrite) BOOL namedModel;
 @property(nonatomic, readwrite, nullable) NSString* outputPath;
 @property(nonatomic, readwrite) NSMutableDictionary<NSString*, NSString*>* mutableDefines;
 @property(nonatomic, readwrite) NSInteger optimisationLevel;
@@ -516,6 +517,7 @@ static NSString* sExecutablePath = nil;
         }
     // -1 means "let the code generator decide" — see the property's comment.
     opts.threadSafeARC = -1;
+    opts.namedModel = sawModel;
 
     // Pre-scan for -H / --xtc-home so it's available for -m resolution
     // even if -H appears after -m on the command line. The argument
