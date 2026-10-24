@@ -834,7 +834,12 @@ class IfaceWrite
                 // ordinal, so its slot number means nothing to a client — the
                 // same reason its declaration is not published. `$` is the
                 // hex-literal prefix, so the test is exact.
-                if (cn.indexOfByte((u8)'$') != String.notFound()) continue;
+                // A block's per-signature BASE class (`Blk$void`) is not an
+                // ordinal: every module naming the signature makes the same
+                // class, and a block made in one module is called in another
+                // through its `invoke` slot. Published as the prelude's are.
+                // As the reference.
+                if (cn.indexOfByte((u8)'$') != String.notFound() && !cn.hasPrefix(String.withCString("Blk$"))) continue;
                 for (u32 k = (u32)0; k < c.kidCount(); k = k + (u32)1) {
                     Node* m = c.kid(k);
                     if (m == (Node*)0 || m.kind() != (u16)nkMethodDecl) continue;

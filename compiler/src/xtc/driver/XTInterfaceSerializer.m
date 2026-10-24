@@ -400,7 +400,15 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
         // reason its DECLARATION is not published. `$` is the hex-literal
         // prefix and cannot occur in a name anybody wrote, so the test is
         // exact.
-        if (!owned && [rest rangeOfString:@"$"].location == NSNotFound)
+        // A block's per-signature BASE class (`Blk$void`, `Blk$u32$u16`) is
+        // not an ordinal: every module that names the signature synthesises
+        // the same class, and a block made in one module is called in
+        // another through its `invoke` slot. A client that numbered it
+        // itself called whatever the library kept at its own number (a
+        // RunLoop wake hook set by a library, called by the client's post,
+        // crashed). So its slots are published as the prelude's are.
+        BOOL blockBase = [rest hasPrefix:@"Blk$"];
+        if (!owned && (blockBase || [rest rangeOfString:@"$"].location == NSNotFound))
             ambientSlots[label] = methodSlots[label];
 
     }
