@@ -16,6 +16,16 @@ the same way (CMake Release, no tests or programs, `-ffile-prefix-map`), with
 the NDK's `android.toolchain.cmake` for `arm64-v8a` and `CMAKE_SYSTEM_NAME=iOS`
 for the device SDK.
 
+The Linux libraries are built with threading on: `MBEDTLS_THREADING_C` and
+`MBEDTLS_THREADING_PTHREAD` defined in `tf-psa-crypto/include/psa/crypto_config.h`
+(nothing else changed), CMake Release with the musl cross clang
+(`/opt/clang/linux/bin/x86_64-linux-musl-clang`, `CMAKE_SYSTEM_NAME=Linux`),
+no tests or programs, and `-ffile-prefix-map`. The PSA crypto core's random
+generator and key slots are shared by every connection, and without threading
+two handshakes at once could both fail (a daemon serving two programs). The
+shim is compiled against headers with threading on, so the libraries must
+match. The win64, Android and iOS libraries do not have it yet.
+
 - **Licence:** dual **Apache-2.0 OR GPL-2.0-or-later** — the user chooses.
   Full text in `LICENSE-mbedtls.txt`.
 - **Upstream:** <https://github.com/Mbed-TLS/mbedtls>
