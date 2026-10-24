@@ -1360,7 +1360,7 @@ class ParRemoteWorker : ParWorker
         }
     bool holds(ParChunk* proto, u8* src, ParLayout* l)
         {
-        if (_bad || src == (u8*)0 || src[0] == (u8)0 || l == (ParLayout*)0 || !connect())
+        if (_bad || !ParDevice.hasKernel(src) || l == (ParLayout*)0 || !connect())
             return false;
         if (_heldSrc == (pointer)src)
             return _held;

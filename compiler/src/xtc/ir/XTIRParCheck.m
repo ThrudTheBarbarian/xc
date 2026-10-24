@@ -459,7 +459,28 @@ static BOOL gEmitsWGSL = NO;
                                                          why ?: @"its GPU version cannot express something it uses yet"]
                      category:XTWarnParGpu
                            at:classDecls[cls].location];
-            kernel = [NSData data];
+            // No form to run, but the run still checks the block's arrays
+            // against each other (ParDevice.bufferOverlap): two captured
+            // pointers that are one block, one written, make it a scan, and it
+            // must run serially. The check reads the buffers from the header
+            // line, so a block with no form gets that line alone, `// xcpar
+            // cpu`, with every captured pointer to numbers. Empty, an aliased
+            // block ran in parallel and gave wrong answers on any target
+            // without a GPU form for it.
+            NSMutableString* hdr = [NSMutableString stringWithString:@"// xcpar cpu"];
+            XTIRType* selfT = f.paramTypes.count ? f.paramTypes[0] : nil;
+            NSArray<XTIRLayoutField*>* fl = selfT.kind == XTIRTypeKindPtr ? selfT.pointeeType.layout.fields : nil;
+            for (NSUInteger k = 3; k < fl.count; k++)
+                {
+                XTIRType* t = fl[k].type;
+                XTIRType* e = t.kind == XTIRTypeKindPtr ? t.pointeeType : nil;
+                if (!e || e.kind == XTIRTypeKindAgg || e.kind == XTIRTypeKindPtr || e.kind == XTIRTypeKindVec
+                    || e.kind == XTIRTypeKindVoid || e.byteWidth == 0)
+                    continue;
+                [hdr appendFormat:@" buf=%u:%lu:%u", fl[k].byteOffset, (unsigned long)(k - 3), e.byteWidth];
+                }
+            [hdr appendString:@"\n"];
+            kernel = [hdr dataUsingEncoding:NSUTF8StringEncoding];
             }
         for (XTIRSymbol* sym in module.symbols)
             {

@@ -641,7 +641,7 @@ class ParDevice
         if (_mode == (i32)1 || _mode == (i32)2 || _mode == (i32)5 || _mode == (i32)6)
             return false;
         u8* src = proto.gpuSource();
-        if (src == (u8*)0 || src[0] == (u8)0)
+        if (!hasKernel(src))
             return false;
         u32 i = slot(proto.parName());
         if (_mode == (i32)4)
@@ -1133,7 +1133,7 @@ class ParDevice
         if (_mode == (i32)4 && dev > (i32)0)
             return dev;
         u8* src = proto.gpuSource();
-        if (src == (u8*)0 || src[0] == (u8)0)
+        if (!hasKernel(src))
             return (i32)1;
         if (_mode == (i32)4)
             {
@@ -1254,7 +1254,7 @@ class ParDevice
         bool measured = gParMeasuring[i] && gParCpuUs[i] < (i64)0 && gParCpuRuns[i] >= (u32)2;
         if (measured)
             gParCpuUs[i] = us;
-        bool gpuable = proto.gpuSource() != (u8*)0 && proto.gpuSource()[0] != (u8)0;
+        bool gpuable = hasKernel(proto.gpuSource());
         if (reporting())
             {
             Log.info("par: %s: %ld items on the CPU, %ld us", gParBlock[i], gParLastN[i], us);
@@ -1546,6 +1546,10 @@ class ParDevice
         {
         if (src == (u8*)0 || src[0] != (u8)'/')
             return (u8*)0;
+        // The header a block with no form carries is no form of any kind,
+        // even where a device is forced (XC_PAR=gpu).
+        if (!hasKernel(src))
+            return (u8*)0;
         bool wantSpv = kind[0] == (u8)'s';
         u8* s = src;
         while (true)
@@ -1746,6 +1750,20 @@ class ParDevice
     // two buffers may be one — `u32* b = a;` — and then an item's write is
     // another item's read. No static test can rule it out, so the run is
     // checked: such a block runs serially, as its source reads.
+    // Whether a block's source holds a GPU form: not empty, and not the
+    // header alone a block with none carries (`// xcpar cpu buf=…`), which
+    // is there only so bufferOverlap can check its arrays.
+    static bool hasKernel(u8* src)
+        {
+        if (src == (u8*)0 || src[0] == (u8)0)
+            return false;
+        u8* m = "// xcpar cpu";
+        for (u32 i = (u32)0; m[i] != (u8)0; i = i + (u32)1)
+            if (src[i] != m[i])
+                return true;
+        return false;
+        }
+
     static bool bufferOverlap(ParChunk* proto, u8* src)
         {
         if (src == (u8*)0 || src[0] == (u8)0)

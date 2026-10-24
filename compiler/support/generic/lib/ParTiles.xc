@@ -463,7 +463,7 @@ class ParTiles
         {
         ParDevice.setProbed(proto);
         ParTiles.ready();
-        if (_workers.count() == (u32)0 || src == (u8*)0 || src[0] == (u8)0)
+        if (_workers.count() == (u32)0 || !ParDevice.hasKernel(src))
             return false;
         ParLayout* l = ParDevice.layout(proto, src, lo, hi);
         if (l == (ParLayout*)0)

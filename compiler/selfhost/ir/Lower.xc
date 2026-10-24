@@ -23765,6 +23765,30 @@ class ClassInfo
             String* cls = f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4);
             warnAtNode(String.withCString("par-gpu"), w, (Node*)_classDecls.get((Hashable*)cls));
             }
+        // No form to run, but the run still checks the block's arrays against
+        // each other (ParDevice.bufferOverlap) from the header line: a block
+        // with no form gets that line alone, `// xcpar cpu`, with every
+        // captured pointer to numbers. As the reference.
+        if (msl == (String*)0 && kernelBytes == (Array*)0)
+            {
+            msl = String.withCString("// xcpar cpu");
+            IRValue* selfV = f.params().count() > (u32)0 ? (IRValue*)f.params().get((u32)0) : (IRValue*)0;
+            String* selfPointee = selfV != (IRValue*)0 ? mslPointee(selfV.ty()) : (String*)0;
+            IRLayout* bl = selfPointee != (String*)0 && selfPointee.hasPrefix(String.withCString("Agg(")) ? layoutOfAgg(selfPointee) : (IRLayout*)0;
+            for (u32 k = (u32)3; bl != (IRLayout*)0 && k < bl.fieldCount(); k = k + (u32)1)
+                {
+                String* e = mslPointee(bl.typeAt(k));
+                if (e == (String*)0 || e.hasPrefix(String.withCString("Agg(")) || irWidth(e) == (u32)0)
+                    continue;
+                msl.appendCString(" buf=");
+                msl.append(String.withU32(bl.offsetAt(k)));
+                msl.appendCString(":");
+                msl.append(String.withU32(k - (u32)3));
+                msl.appendCString(":");
+                msl.append(String.withU32(irWidth(e)));
+                }
+            msl.appendCString("\n");
+            }
         if (msl == (String*)0)
             msl = String.withCString("");
         for (u32 j = (u32)0; j < _m.syms().count(); j = j + (u32)1)
