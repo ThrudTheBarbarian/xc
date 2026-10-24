@@ -3715,7 +3715,7 @@ Array* objectNeeds(Array* objectInputs)
     Array* out = new Array();
     for (u32 i = (u32)0; i < objectInputs.count(); i = i + (u32)1) {
         String* op = (String*)objectInputs.get(i);
-        if (!op.hasSuffix(String.withCString(".o"))) continue;
+        if (!op.hasSuffix(String.withCString(".o")) && !op.hasSuffix(String.withCString(".obj"))) continue;
         String* side = stripExtension(op); side.appendCString(".xtc.needs");
         String* body = Files.readText(side);
         if (body == (String*)0) continue;
@@ -4027,7 +4027,8 @@ void linkObjects(DriverOptions* d)
     noteLinkFlags(d);
     bool anyObject = false;
     for (u32 i = (u32)0; i < d.objectInputs().count(); i = i + (u32)1)
-        if (((String*)d.objectInputs().get(i)).hasSuffix(String.withCString(".o"))) anyObject = true;
+        if (((String*)d.objectInputs().get(i)).hasSuffix(String.withCString(".o"))
+            || ((String*)d.objectInputs().get(i)).hasSuffix(String.withCString(".obj"))) anyObject = true;
     if (!anyObject) {
         Stdio.printf("xcc: error: a link of archives alone has nothing to seed the demand — "
                      "name at least one .o\n");
@@ -6629,7 +6630,10 @@ DriverOptions* parseDriverArgs(void)
         // `xcc a.o b.o -o prog` / `xcc a.o lib.a -o prog`: objects and archives
         // named as inputs are the LINK step of separate compilation, not
         // source (bug 138: they used to be parsed as .xc and fail on byte 1).
-        if (a.hasSuffix(String.withCString(".o")) || a.hasSuffix(String.withCString(".a"))) {
+        // `.obj` too: the name Windows tools give a COFF object (it was read
+        // as source: "unterminated block comment").
+        if (a.hasSuffix(String.withCString(".o")) || a.hasSuffix(String.withCString(".a"))
+            || a.hasSuffix(String.withCString(".obj"))) {
             d.objectInputs().add((Object*)a);
             i = i + (u32)1;
             continue;

@@ -253,7 +253,8 @@ int main(int argc, const char* argv[])
                 [archives addObject:inputs[i]];
                 continue;
                 }
-            if ([inputs[i].pathExtension isEqualToString:@"o"])
+            // `.obj` is what Windows tools call a COFF object.
+            if ([inputs[i].pathExtension isEqualToString:@"o"] || [inputs[i].pathExtension isEqualToString:@"obj"])
                 {
                 [objInputs addObject:inputs[i]];
                 continue;

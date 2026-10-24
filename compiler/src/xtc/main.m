@@ -4173,7 +4173,8 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         BOOL allObjects = YES, anyObject = NO;
         for (NSString *f in opts.inputFiles) {
             NSString *e = f.pathExtension;
-            if ([e isEqualToString:@"o"]) { anyObject = YES; continue; }
+            // `.obj` too: the name Windows tools give a COFF object.
+            if ([e isEqualToString:@"o"] || [e isEqualToString:@"obj"]) { anyObject = YES; continue; }
             if ([e isEqualToString:@"a"]) continue;
             allObjects = NO; break;
         }
@@ -4190,7 +4191,7 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         if (allObjects) {
             NSMutableSet<NSString *> *seenNeed = [NSMutableSet set];
             for (NSString *o in opts.inputFiles) {
-                if (![o.pathExtension isEqualToString:@"o"]) continue;
+                if (![o.pathExtension isEqualToString:@"o"] && ![o.pathExtension isEqualToString:@"obj"]) continue;
                 NSString *side = [[o stringByDeletingPathExtension]
                                      stringByAppendingPathExtension:@"xtc.needs"];
                 NSString *body = [NSString stringWithContentsOfFile:side
