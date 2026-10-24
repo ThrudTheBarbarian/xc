@@ -4102,8 +4102,33 @@ void linkObjects(DriverOptions* d)
     Process.exit((i32)1);
 }
 
+#if ARCH_x86_64
+// struct rlimit: { rlim_cur, rlim_max }, two u64s.
+i32 getrlimit(i32 resource, u64* rl);
+i32 setrlimit(i32 resource, u64* rl);
+#endif
+
+// Compiling a large program recurses deeply (the compiler itself for win64
+// overflowed the default 8 MB after six minutes). Linux grows the main
+// thread's stack on demand up to the soft RLIMIT_STACK, checked when it
+// faults, and leaves at least 128 MB below it at exec; so the soft limit is
+// raised towards the hard one (at most 1 GB), and nothing else changes.
+void raiseStackLimit(void)
+{
+#if ARCH_x86_64
+    u64 rl[2];
+    if (getrlimit((i32)3, &rl[0]) != (i32)0) return; // RLIMIT_STACK
+    u64 want = (u64)1 << (u64)30;
+    if (rl[1] < want) want = rl[1];
+    if (rl[0] >= want) return;
+    rl[0] = want;
+    setrlimit((i32)3, &rl[0]);
+#endif
+}
+
 void main(void)
 {
+    raiseStackLimit();
     DriverOptions* d = parseDriverArgs();
     // --sign-bundle <dir>: sign, and compile nothing.
     if (d != 0 && d._signBundle != (String*)0) {
