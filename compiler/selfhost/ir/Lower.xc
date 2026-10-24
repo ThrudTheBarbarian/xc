@@ -15289,8 +15289,10 @@ class ClassInfo
     // A `par :grid` block's index as a polynomial over its point and size:
     // atoms i (the flat index), W and H (the par$w and par$h ivars), x (i % W),
     // q (i / W), y ((i / W) % H) and z (i / (W*H)); "" is the constant. 0 when
-    // the index is anything else. As the reference's gridPoly.
-    Map* parGridPoly(IROperand* op, IRValue* iv, Array* ivars, Map* def, u32 depth)
+    // the index is anything else. A captured integer (another field of the
+    // block's object, as parSymIndex takes it) is the atom "#<field>", only ever
+    // times a constant. As the reference's gridPoly.
+    Map* parGridPoly(IROperand* op, IRValue* iv, IRValue* selfVal, Array* ivars, Map* def, u32 depth)
         {
         if (depth > (u32)32)
             return (Map*)0;
@@ -15308,7 +15310,7 @@ class ClassInfo
         if (o.equals(String.withCString("Const")))
             return o0.kind() == (u8)OPK_IMMI ? parPoly1("", o0.imm()) : (Map*)0;
         if (o.equals(String.withCString("ZExt")) || o.equals(String.withCString("SExt")) || o.equals(String.withCString("Trunc")) || o.equals(String.withCString("Copy")))
-            return parGridPoly(o0, iv, ivars, def, depth + (u32)1);
+            return parGridPoly(o0, iv, selfVal, ivars, def, depth + (u32)1);
         if (o.equals(String.withCString("Load")))
             {
             // An ivar of the block's object: the grid's width or height.
@@ -15317,7 +15319,22 @@ class ClassInfo
                 return parPoly1("W", (i64)1);
             if (n != (String*)0 && n.equals(String.withCString("par$h")))
                 return parPoly1("H", (i64)1);
-            return (Map*)0;
+            // A captured integer: the same test as parSymIndex's.
+            if (o0.kind() != (u8)OPK_USE || o0.val() == (IRValue*)0 || d.res() == (IRValue*)0 || !Lower.parIntType(d.res().ty()))
+                return (Map*)0;
+            IRInsn* fa = (IRInsn*)def.get((Hashable*)String.withU32(o0.val().seq()));
+            if (fa == (IRInsn*)0 || !fa.op().equals(String.withCString("FieldAddr")) || fa.ops().count() < (u32)2)
+                return (Map*)0;
+            IROperand* f0 = (IROperand*)fa.ops().get((u32)0);
+            IROperand* f1 = (IROperand*)fa.ops().get((u32)1);
+            if (f0.kind() != (u8)OPK_USE || f0.val() == (IRValue*)0 || selfVal == (IRValue*)0 || f0.val().seq() != selfVal.seq()
+                || f1.kind() != (u8)OPK_IMMI || f1.imm() < (i64)3)
+                return (Map*)0;
+            Map* cp = new Map();
+            String* cm = String.withCString("#");
+            cm.append(String.withI64(f1.imm()));
+            cp.set((Hashable*)cm, (Object*)Number.with((i64)1));
+            return cp;
             }
         if (d.ops().count() < (u32)2)
             return (Map*)0;
@@ -15328,8 +15345,8 @@ class ClassInfo
         bool isMul = o.equals(String.withCString("Mul"));
         if (!isRem && !isDiv && !isAdd && !isSub && !isMul)
             return (Map*)0;
-        Map* a = parGridPoly(o0, iv, ivars, def, depth + (u32)1);
-        Map* b = parGridPoly((IROperand*)d.ops().get((u32)1), iv, ivars, def, depth + (u32)1);
+        Map* a = parGridPoly(o0, iv, selfVal, ivars, def, depth + (u32)1);
+        Map* b = parGridPoly((IROperand*)d.ops().get((u32)1), iv, selfVal, ivars, def, depth + (u32)1);
         if (a == (Map*)0 || b == (Map*)0)
             return (Map*)0;
         if (isRem && parIsAtom(a, "i") && parIsAtom(b, "W"))
@@ -15347,6 +15364,9 @@ class ClassInfo
         Array* bk = b.allKeys();
         if (isMul)
             {
+            // A captured integer only times a constant.
+            if ((parHasCap(a) && !parIsConst(b)) || (parHasCap(b) && !parIsConst(a)))
+                return (Map*)0;
             for (u32 i = (u32)0; i < ak.count(); i = i + (u32)1)
                 for (u32 j = (u32)0; j < bk.count(); j = j + (u32)1)
                     {
@@ -15380,6 +15400,56 @@ class ClassInfo
         return r;
         }
 
+    // Does a string literal read `file:line:col` (a bounds check's site)? The
+    // bytes are Number@ each, as IRSymbol keeps them.
+    static bool isCheckSite(Array* b)
+        {
+        if (b == (Array*)0)
+            return false;
+        u32 n = b.count();
+        // Drop a trailing NUL.
+        if (n > (u32)0 && ((Number*)b.get(n - (u32)1)).asU32() == (u32)0)
+            n = n - (u32)1;
+        // From the end: digits, ':', digits, ':', then at least one byte.
+        u32 i = n;
+        for (u32 part = (u32)0; part < (u32)2; part = part + (u32)1)
+            {
+            u32 digits = (u32)0;
+            while (i > (u32)0)
+                {
+                u32 c = ((Number*)b.get(i - (u32)1)).asU32();
+                if (c < (u32)48 || c > (u32)57)
+                    break;
+                i = i - (u32)1;
+                digits = digits + (u32)1;
+                }
+            if (digits == (u32)0 || i == (u32)0 || ((Number*)b.get(i - (u32)1)).asU32() != (u32)58)
+                return false;
+            i = i - (u32)1;
+            }
+        if (i == (u32)0)
+            return false;
+        // The reference's `^.+` does not cross a newline.
+        for (u32 j = (u32)0; j < i; j = j + (u32)1)
+            if (((Number*)b.get(j)).asU32() == (u32)10)
+                return false;
+        return true;
+        }
+
+    bool parHasCap(Map* p)
+        {
+        Array* ks = p.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            if (((String*)ks.get(i)).hasPrefix(String.withCString("#")))
+                return true;
+        return false;
+        }
+
+    bool parIsConst(Map* p)
+        {
+        return p.count() == (u32)0 || (p.count() == (u32)1 && p.get((Hashable*)String.withCString("")) != (Object*)0);
+        }
+
     // Does the polynomial (without its constant) equal k times one form?
     i64 parGridForm(Map* p, Array* form)
         {
@@ -15406,7 +15476,7 @@ class ClassInfo
     // The index as k*i + c when its polynomial is k times the flat index of
     // the point plus a constant: i, x + W*q, and x + W*y in a 2-D grid or
     // x + W*y + W*H*z in a 3-D one (a par$d ivar). As the reference.
-    ParIdx* parGridIndex(IROperand* op, IRValue* iv, Array* ivars, Map* def)
+    ParIdx* parGridIndex(IROperand* op, IRValue* iv, IRValue* selfVal, Array* ivars, Map* def)
         {
         bool hasW = false;
         bool threeD = false;
@@ -15418,11 +15488,77 @@ class ClassInfo
             }
         if (!hasW)
             return ParIdx.of(false, (i64)0, (i64)0);
-        Map* p = parGridPoly(op, iv, ivars, def, (u32)0);
-        if (p == (Map*)0)
+        Map* p = parGridPoly(op, iv, selfVal, ivars, def, (u32)0);
+        if (p == (Map*)0 || parHasCap(p))
             return ParIdx.of(false, (i64)0, (i64)0);
         i64 c = parCoef(p, String.withCString(""));
         p.remove((Hashable*)String.withCString(""));
+        return parGridMatch(p, c, threeD, (i64)-1, (i64)0, (i64)0, (i64)0);
+        }
+
+    // The grid index with up to two captured integers in it, as parSymIndex
+    // gives the loop form's: k*i + c + m*field (+ m2*field2), the fields in
+    // order. As the reference's gridSymIndexOf.
+    ParIdx* parGridSym(IROperand* op, IRValue* iv, IRValue* selfVal, Array* ivars, Map* def)
+        {
+        bool hasW = false;
+        bool threeD = false;
+        for (u32 i = (u32)0; i < ivars.count(); i = i + (u32)1)
+            {
+            String* n = (String*)ivars.get(i);
+            if (n.equals(String.withCString("par$w"))) hasW = true;
+            if (n.equals(String.withCString("par$d"))) threeD = true;
+            }
+        if (!hasW)
+            return ParIdx.of(false, (i64)0, (i64)0);
+        Map* p = parGridPoly(op, iv, selfVal, ivars, def, (u32)0);
+        if (p == (Map*)0)
+            return ParIdx.of(false, (i64)0, (i64)0);
+        Array* slots = new Array();
+        Array* ks = p.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            {
+            String* m = (String*)ks.get(i);
+            if (m.hasPrefix(String.withCString("#")))
+                {
+                i64 v = (i64)0;
+                for (u32 j = (u32)1; j < m.byteLength(); j = j + (u32)1)
+                    v = v * (i64)10 + (i64)(m.byteAt(j) - (u8)'0');
+                slots.add((Object*)Number.with(v));
+                }
+            }
+        if (slots.count() == (u32)0 || slots.count() > (u32)2)
+            return ParIdx.of(false, (i64)0, (i64)0);
+        i64 s1 = ((Number*)slots.get((u32)0)).asI64();
+        i64 s2 = slots.count() > (u32)1 ? ((Number*)slots.get((u32)1)).asI64() : (i64)0;
+        if (slots.count() > (u32)1 && s2 < s1)
+            {
+            i64 t = s1;
+            s1 = s2;
+            s2 = t;
+            }
+        String* k1 = String.withCString("#");
+        k1.append(String.withI64(s1));
+        i64 m1 = parCoef(p, k1);
+        p.remove((Hashable*)k1);
+        i64 m2 = (i64)0;
+        if (slots.count() > (u32)1)
+            {
+            String* k2 = String.withCString("#");
+            k2.append(String.withI64(s2));
+            m2 = parCoef(p, k2);
+            p.remove((Hashable*)k2);
+            }
+        i64 c = parCoef(p, String.withCString(""));
+        p.remove((Hashable*)String.withCString(""));
+        return parGridMatch(p, c, threeD, s1, m1, slots.count() > (u32)1 ? s2 : (i64)0, m2);
+        }
+
+    // k*i + c (+ the captured terms) when p is k times a form of the flat
+    // index: i, x + W*q, and x + W*y in a 2-D grid or x + W*y + W*H*z in a
+    // 3-D one; a constant grid's `640 * y` renamed first.
+    ParIdx* parGridMatch(Map* p, i64 c, bool threeD, i64 s1, i64 m1, i64 s2, i64 m2)
+        {
         // A constant grid: `640 * y + x` is the flat index as `W * y + x` is
         // (the reference's parRenameConstantGrid).
         if (_mGridW > (i64)0)
@@ -15455,7 +15591,17 @@ class ClassInfo
             {
             i64 k = parGridForm(p, (Array*)forms.get(i));
             if (k != (i64)0)
-                return ParIdx.of(true, k, c);
+                {
+                ParIdx* x = ParIdx.of(true, k, c);
+                if (m1 != (i64)0)
+                    {
+                    x.slot = s1;
+                    x.m = m1;
+                    x.slot2 = s2;
+                    x.m2 = m2;
+                    }
+                return x;
+                }
             }
         return ParIdx.of(false, (i64)0, (i64)0);
         }
@@ -15677,7 +15823,7 @@ class ClassInfo
                     {
                     px = parIndex((IROperand*)ea.ops().get((u32)1), iv, def, (u32)0);
                     if (!px.affine)
-                        px = parGridIndex((IROperand*)ea.ops().get((u32)1), iv, ivars, def);
+                        px = parGridIndex((IROperand*)ea.ops().get((u32)1), iv, selfVal, ivars, def);
                     rlo = px.c;
                     rhi = px.c;
                     }
@@ -16127,11 +16273,14 @@ class ClassInfo
                     continue;
                 ParIdx* px = parIndex((IROperand*)ea.ops().get((u32)1), iv, def, (u32)0);
                 if (!px.affine)
-                    px = parGridIndex((IROperand*)ea.ops().get((u32)1), iv, ivars, def);
+                    px = parGridIndex((IROperand*)ea.ops().get((u32)1), iv, selfVal, ivars, def);
                 bool af = px.affine; i64 k = px.k; i64 c = px.c;
                 ParIdx* sx = ParIdx.of(false, (i64)0, (i64)0);
                 if (_parGuardList != (Array*)0)
                     sx = af ? ParIdx.of(true, k, c) : parSymIndex((IROperand*)ea.ops().get((u32)1), iv, selfVal, def, (u32)0);
+                // …and in a grid, the point's flat index plus captured integers.
+                if (_parGuardList != (Array*)0 && !sx.affine)
+                    sx = parGridSym((IROperand*)ea.ops().get((u32)1), iv, selfVal, ivars, def);
                 // A symbolic write with stride k != 0 is no scatter (as the reference).
                 bool symStrided = sx.affine && sx.k != (i64)0;
                 String* form = String.withCString(af ? "1 " : "0 ");
@@ -16570,6 +16719,17 @@ class ClassInfo
                     for (u32 q = (u32)0; q < _m.syms().count(); q = q + (u32)1)
                         if (((IRSymbol*)_m.syms().get(q)).name().equals(gn))
                             gs = (IRSymbol*)_m.syms().get(q);
+                    // A string: the site a checked build's subscript check
+                    // reports (`file:line:col`), or one the body names. Said
+                    // as that, not as the literal's internal name. As the
+                    // reference.
+                    if (gs != (IRSymbol*)0 && gs.kind() == (u8)SYM_STRINGLIT)
+                        {
+                        parBecause(String.withCString(Lower.isCheckSite(gs.bytes())
+                                       ? "it checks its subscripts (a -fbounds-check build), and its GPU version has no checks"
+                                       : "it uses a string literal"));
+                        return false;
+                        }
                     if (gs == (IRSymbol*)0 || gs.kind() != (u8)SYM_DATAGLOBAL || r == (IRValue*)0 || !mslIsPtr(r.ty()) || mslScalar(mslPointee(r.ty())) == (String*)0)
                         {
                         String* w = String.withCString("it uses ");

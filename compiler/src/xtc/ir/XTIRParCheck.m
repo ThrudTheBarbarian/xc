@@ -809,7 +809,10 @@ static BOOL parIntKind(XTIRType* t)
 // A `par :grid` block's index as a polynomial over its point and size: the
 // atoms are i (the flat index), W and H (the par$w and par$h ivars), x (i % W),
 // q (i / W), y ((i / W) % H) and z (i / (W*H)); a monomial is its atoms sorted
-// and joined by '.', "" the constant. nil when the index is anything else.
+// and joined by '.', "" the constant. nil when the index is anything else. A
+// captured integer (another field of the block's object, as symIndexOf: takes
+// it) is the atom "#<field>", and only ever times a constant, so
+// `o[plane + par.y * par.width + par.x]` is the loop form's `o[plane + i]`.
 - (nullable NSMutableDictionary<NSString*, NSNumber*>*)gridPoly:(XTIROperand*)op
                                                              iv:(XTIRValueId)iv
                                                            self:(XTIRValueId)selfId
@@ -857,6 +860,8 @@ static BOOL parIntKind(XTIRType* t)
                 return [@{@"W" : @1} mutableCopy];
             if ([n isEqualToString:@"par$h"])
                 return [@{@"H" : @1} mutableCopy];
+            if (k >= 3 && d.result && parIntKind(d.result.type))
+                return [@{[NSString stringWithFormat:@"#%lld", (long long)k] : @1} mutableCopy];
             return nil;
             }
         case XTIROpURem:
@@ -887,6 +892,18 @@ static BOOL parIntKind(XTIRType* t)
             NSMutableDictionary<NSString*, NSNumber*>* r = [NSMutableDictionary dictionary];
             if (d.opcode == XTIROpMul)
                 {
+                // A captured integer only times a constant.
+                BOOL (^hasCap)(NSDictionary*) = ^BOOL(NSDictionary* p) {
+                  for (NSString* m in p)
+                      if ([m hasPrefix:@"#"])
+                          return YES;
+                  return NO;
+                };
+                BOOL (^isConst)(NSDictionary*) = ^BOOL(NSDictionary* p) {
+                  return p.count == 0 || (p.count == 1 && p[@""] != nil);
+                };
+                if ((hasCap(a) && !isConst(b)) || (hasCap(b) && !isConst(a)))
+                    return nil;
                 for (NSString* ma in a)
                     for (NSString* mb in b)
                         {
@@ -955,6 +972,10 @@ static void parRenameConstantGrid(NSMutableDictionary<NSString*, NSNumber*>* p, 
     NSMutableDictionary<NSString*, NSNumber*>* p = [self gridPoly:op iv:iv self:selfId ivars:ivars defs:def depth:0];
     if (!p)
         return no;
+    // A captured integer in it: not k*i + c (gridSymIndexOf: takes it).
+    for (NSString* m in p)
+        if ([m hasPrefix:@"#"])
+            return no;
     int64_t c = [p[@""] longLongValue];
     [p removeObjectForKey:@""];
     BOOL threeD = [ivars containsObject:@"par$d"];
@@ -972,6 +993,53 @@ static void parRenameConstantGrid(NSMutableDictionary<NSString*, NSNumber*>* p, 
                 match = NO;
         if (match)
             return (XTParIndex){ YES, k, c };
+        }
+    return no;
+    }
+
+// The grid index with up to two captured integers in it, as symIndexOf: gives
+// the loop form's: k*i + c + m*field (+ m2*field2), the fields in order. Not
+// affine when the rest is not k times a form of the flat index.
+- (XTParSym)gridSymIndexOf:(XTIROperand*)op iv:(XTIRValueId)iv self:(XTIRValueId)selfId
+                     ivars:(NSArray<NSString*>*)ivars defs:(NSDictionary<NSNumber*, XTIRInsn*>*)def
+    {
+    XTParSym no = { NO, 0, 0, -1, 0 };
+    if (![ivars containsObject:@"par$w"])
+        return no;
+    NSMutableDictionary<NSString*, NSNumber*>* p = [self gridPoly:op iv:iv self:selfId ivars:ivars defs:def depth:0];
+    if (!p)
+        return no;
+    NSMutableArray<NSNumber*>* slots = [NSMutableArray array];
+    for (NSString* m in p.allKeys)
+        if ([m hasPrefix:@"#"])
+            {
+            [slots addObject:@([m substringFromIndex:1].longLongValue)];
+            }
+    if (slots.count == 0 || slots.count > 2)
+        return no;
+    [slots sortUsingSelector:@selector(compare:)];
+    int64_t m1 = [p[[NSString stringWithFormat:@"#%lld", slots[0].longLongValue]] longLongValue];
+    int64_t m2 = slots.count > 1 ? [p[[NSString stringWithFormat:@"#%lld", slots[1].longLongValue]] longLongValue] : 0;
+    for (NSNumber* sl in slots)
+        [p removeObjectForKey:[NSString stringWithFormat:@"#%lld", sl.longLongValue]];
+    int64_t c = [p[@""] longLongValue];
+    [p removeObjectForKey:@""];
+    BOOL threeD = [ivars containsObject:@"par$d"];
+    parRenameConstantGrid(p, threeD);
+    NSArray<NSArray<NSString*>*>* forms = threeD ? @[ @[ @"i" ], @[ @"W.q", @"x" ], @[ @"H.W.z", @"W.y", @"x" ] ]
+                                                 : @[ @[ @"i" ], @[ @"W.q", @"x" ], @[ @"W.y", @"x" ] ];
+    for (NSArray<NSString*>* form in forms)
+        {
+        if (p.count != form.count)
+            continue;
+        int64_t k = [p[form[0]] longLongValue];
+        BOOL match = k != 0;
+        for (NSString* m in form)
+            if ([p[m] longLongValue] != k)
+                match = NO;
+        if (match)
+            return (XTParSym){ YES, k, c, (NSInteger)slots[0].longLongValue, m1,
+                               slots.count > 1 ? (NSInteger)slots[1].longLongValue : 0, m2 };
         }
     return no;
     }
@@ -1461,6 +1529,9 @@ static BOOL parIsComputeOp(XTIROpcode op)
             if (guards)
                 sx = x.affine ? (XTParSym){ YES, x.k, x.c, -1, 0 }
                               : [self symIndexOf:ea.operands[1] iv:iv self:selfId defs:def depth:0];
+            // …and in a grid, the point's flat index plus captured integers.
+            if (guards && !sx.affine)
+                sx = [self gridSymIndexOf:ea.operands[1] iv:iv self:selfId ivars:ivars defs:def];
             NSValue* sv = [NSValue valueWithBytes:&sx objCType:@encode(XTParSym)];
             // A symbolic write with stride k != 0 is no scatter: items write
             // distinct elements, and the guard settles it against the reads.

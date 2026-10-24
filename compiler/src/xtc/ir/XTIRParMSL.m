@@ -343,6 +343,20 @@ static BOOL isTranscendental(NSString* callee)
                         [self because:[NSString stringWithFormat:@"it uses the global %@", shownName(g.name)]];
                         return NO;
                         }
+                    // A string: the site a checked build's subscript check
+                    // reports (`file:line:col`), or one the body names. Said
+                    // as that, not as the literal's internal name (str_2060).
+                    if (g.kind == XTIRSymbolKindStringLit)
+                        {
+                        NSString* t = [[NSString alloc] initWithData:g.stringBytes ?: [NSData data] encoding:NSUTF8StringEncoding];
+                        // The literal keeps its C string's NUL.
+                        while ([t hasSuffix:@"\0"])
+                            t = [t substringToIndex:t.length - 1];
+                        BOOL site = t && [t rangeOfString:@"^.+:[0-9]+:[0-9]+$" options:NSRegularExpressionSearch].location != NSNotFound;
+                        [self because:site ? @"it checks its subscripts (a -fbounds-check build), and its GPU version has no checks"
+                                           : @"it uses a string literal"];
+                        return NO;
+                        }
                     if (g.kind != XTIRSymbolKindDataGlobal || i.result.type.kind != XTIRTypeKindPtr ||
                         !scalarName(i.result.type.pointeeType))
                         {

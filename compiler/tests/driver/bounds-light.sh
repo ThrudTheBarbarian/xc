@@ -102,6 +102,13 @@ for XC in ${XC:-bin/$PLAT/xcc-xc bin/$PLAT/xcc}; do
         || { echo "FAIL $XC: a par block does not build under -fbounds-check=light"; head -3 "$W/o"; fail=1; continue; }
     got=$("$W/p" 2>&1)
     [ "$got" = "sum 999000" ] || { echo "FAIL $XC: the par block gives '$got'"; fail=1; }
+    # Why it stays on the CPU, in words: the checks' site string was named as
+    # an internal symbol ("it uses str_2060, which is not a global array").
+    "$XC" -O2 -fbounds-check=light -H . -o "$W/pw" "$W/p.xc" > "$W/w" 2>&1
+    if grep -q 'str_[0-9]' "$W/w"; then echo "FAIL $XC: a warning names an internal symbol"; grep 'str_' "$W/w" | head -2; fail=1; fi
+    if grep -q 'CPU only' "$W/w" && ! grep -q 'checks its subscripts' "$W/w"; then
+        echo "FAIL $XC: the CPU-only warning does not say it is the checks"; grep 'CPU only' "$W/w" | head -2; fail=1
+    fi
     "$XC" -q -O2 -A x86_64 -fbounds-check -H . -o "$W/px" "$W/p.xc" > "$W/o" 2>&1 \
         || { echo "FAIL $XC: a par block does not build under -A x86_64 -fbounds-check"; head -3 "$W/o"; fail=1; }
 done
