@@ -3,8 +3,8 @@
    set, 256 iterations at most; prints "<checksum> <best_us> <first_us>". */
 #include <stdio.h>
 #include "bench_time.h"
-#define W 2048
-#define SIZE (2048 * 2048)
+#define W (2048 * BENCH_SIDE)
+#define SIZE (W * W)
 int main(void)
 {
     unsigned total = 0;
@@ -13,8 +13,8 @@ int main(void)
         total = 0;
         long long t0 = bench_now_us();
         for (unsigned i = bench_zero(); i < SIZE; i++) {
-            float cx = (float)(i % W) * (3.0f / 2048.0f) - 2.0f;
-            float cy = (float)(i / W) * (3.0f / 2048.0f) - 1.5f;
+            float cx = (float)(i % W) * (3.0f / (float)W) - 2.0f;
+            float cy = (float)(i / W) * (3.0f / (float)W) - 1.5f;
             float x = 0.0f, y = 0.0f;
             unsigned k = 0;
             while (k < 256 && x * x + y * y < 4.0f) {

@@ -3,7 +3,8 @@
    Perlin noise over a 2048x2048 image; prints "<tenths> <best_us> <first_us>". */
 #include <stdio.h>
 #include "bench_time.h"
-#define SIZE (2048 * 2048)
+#define W (2048 * BENCH_SIDE)
+#define SIZE (W * W)
 unsigned perm[512];
 unsigned char img[SIZE];
 static float fade(float t) { return t * t * t * (t * (t * 6.0f - 15.0f) + 10.0f); }
@@ -37,8 +38,8 @@ int main(void)
         total = 0;
         long long t0 = bench_now_us();
         for (unsigned i = bench_zero(); i < SIZE; i++) {
-            float x = (float)(i % 2048) / 256.0f;
-            float y = (float)(i / 2048) / 256.0f;
+            float x = (float)(i % W) / 256.0f;
+            float y = (float)(i / W) / 256.0f;
             float sum = 0.0f, amp = 1.0f, norm = 0.0f;
             for (unsigned o = 0; o < 4; o++) {
                 unsigned xi = (unsigned)x;

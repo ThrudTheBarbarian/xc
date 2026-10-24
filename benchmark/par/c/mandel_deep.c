@@ -4,7 +4,7 @@
    "<checksum> <best_us> <first_us>". */
 #include <stdio.h>
 #include "bench_time.h"
-#define W 4096
+#define W (4096 * BENCH_SIDE)
 #define MAXITER 4096
 #define SIZE (W * W)
 unsigned counts[SIZE];

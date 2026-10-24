@@ -21,3 +21,13 @@ static volatile unsigned bench_zero_v;
 static volatile unsigned long long bench_keep_v;
 #define bench_zero() (bench_zero_v)
 #define bench_keep(x) (bench_keep_v = (unsigned long long)(x))
+/* BENCH_SCALE multiplies a program's work by 1 (the default), 4 or 16, as a
+   build option (-DBENCH_SCALE=4): enough for a big GPU, or two, to fill.  An
+   image's side, or N in O(N^2), grows by BENCH_SIDE, 1, 2 or 4. */
+#ifndef BENCH_SCALE
+#define BENCH_SCALE 1
+#endif
+#if BENCH_SCALE != 1 && BENCH_SCALE != 4 && BENCH_SCALE != 16
+#error BENCH_SCALE is 1, 4 or 16
+#endif
+#define BENCH_SIDE (BENCH_SCALE == 16 ? 4 : BENCH_SCALE == 4 ? 2 : 1)

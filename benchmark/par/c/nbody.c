@@ -5,7 +5,7 @@
 #include <stdio.h>
 #include <math.h>
 #include "bench_time.h"
-#define N 8192
+#define N (8192 * BENCH_SIDE)
 float px[N], py[N], mass[N], fx[N];
 int main(void)
 {

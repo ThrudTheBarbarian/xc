@@ -4,7 +4,10 @@
    "<checksum> <best_us> <first_us>". */
 #include <stdio.h>
 #include "bench_time.h"
-#define SIZE (16 * 1024 * 1024)
+#if BENCH_SCALE > 4
+#error saxpy stops at BENCH_SCALE 4: 16 would need 2 GB of static arrays (and it is bound by memory, not arithmetic)
+#endif
+#define SIZE (16 * 1024 * 1024 * BENCH_SCALE)
 unsigned xs[SIZE];
 unsigned ys[SIZE];
 int main(void)

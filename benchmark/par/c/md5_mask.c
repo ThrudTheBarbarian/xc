@@ -4,7 +4,7 @@
    --par-auto. Prints "<checksum> <best_us> <first_us>". */
 #include <stdio.h>
 #include "bench_time.h"
-#define OUTER (1024 * 1024)
+#define OUTER (1024 * 1024 * BENCH_SCALE)
 #define INNER 64
 #define P1  0x6b636168
 #define P2  0x74736168

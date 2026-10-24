@@ -3,7 +3,7 @@
    alone, and by xcc --par-auto. Prints "<checksum> <best_us> <first_us>". */
 #include <stdio.h>
 #include "bench_time.h"
-#define BATCH (64 * 1024 * 1024)
+#define BATCH (64 * 1024 * 1024 * BENCH_SCALE)
 #define TAG 0x6b636168
 #define ROTL(x, c)    (((x) << (c)) | ((x) >> (32 - (c))))
 #define MD5F(x, y, z) (((x) & (y)) | (~(x) & (z)))
