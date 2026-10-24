@@ -1797,9 +1797,14 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                 if ([localFnSigs containsObject:sig])
                     continue;
                 }
-            else if ([d isKindOfClass:[XTEnumDeclNode class]] && [localEnums containsObject:((XTEnumDeclNode*)d).enumName])
+            else if ([d isKindOfClass:[XTEnumDeclNode class]])
                 {
-                continue;
+                // Two imported interfaces can both carry an enum (each library
+                // compiled the same source in): the first one stands, as the
+                // port's reader keeps it.
+                if ([localEnums containsObject:((XTEnumDeclNode*)d).enumName])
+                    continue;
+                [localEnums addObject:((XTEnumDeclNode*)d).enumName];
                 }
             [keptImports addObject:d];
             }

@@ -10,6 +10,10 @@
 #import "XTEnumType.h"
 #import "XTSourceLocation.h"
 
+// Depth of pointer types being read (typeFromString:): a name met behind one
+// is an opaque class, not an unresolved type.
+static NSUInteger sUnderPointer = 0;
+
 @implementation XTInterfaceImporter
 
 #pragma mark - ELF section extraction
@@ -399,7 +403,9 @@
             placement = XTPointerPlacementRaw;
             body = [body substringFromIndex:4];
             }
+        sUnderPointer++;
         XTType* pointee = [self typeFromString:body tt:tt protos:protos];
+        sUnderPointer--;
         return [XTPointerType pointerToType:pointee placement:placement isWeak:isWeak];
         }
     if ([protos containsObject:s])
@@ -454,9 +460,7 @@
     // Collected, not printed: the driver turns these into FATAL diagnostics. An
     // "error:" on stderr that still emits a binary is the same bug wearing a
     // warning's clothes — it built `gapp.so` with OBJECT@ silently degraded to void@.
-    if (!sUnresolved)
-        sUnresolved = [NSMutableSet set];
-    [sUnresolved addObject:s];
+
     // An identifier-shaped name gets a NAMED class placeholder, not void: when
     // the unit itself declares the class (the ambient prelude surface — every
     // module's interface legitimately says `String*` now, task #36), sema's
@@ -472,6 +476,18 @@
             identShaped = NO;
         if (ci == 0 && isdigit(c))
             identShaped = NO;
+        }
+    // Behind a pointer, an identifier-shaped name is an opaque class: a
+    // library may name a class of a third library the client never imports
+    // (each file of a split build names its neighbours' classes), and a
+    // pointer to it needs no layout until the client uses one, which then
+    // fails where it is used. As the port's reader. A name by VALUE is the
+    // silent-void hazard above, and stays fatal.
+    if (!(identShaped && sUnderPointer > 0))
+        {
+        if (!sUnresolved)
+            sUnresolved = [NSMutableSet set];
+        [sUnresolved addObject:s];
         }
     if (identShaped)
         return [[XTType alloc] initWithKind:XTTypeKindClass displayName:s];
