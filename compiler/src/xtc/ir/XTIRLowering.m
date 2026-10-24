@@ -3522,6 +3522,17 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     self.ownedTemps[idx] = result;
     }
 
+// The protocol method a call through a protocol receiver dispatches to, by
+// name and argument count, or nil.
+- (nullable XTMethodDeclNode*)protocolMethodOf:(XTMethodCallExprNode*)node
+    {
+    XTProtocolDeclNode* proto = self.protocolDeclsByName[node.resolvedProtocolName];
+    for (XTMethodDeclNode* m in proto.methods)
+        if ([m.methodName isEqualToString:node.methodName] && m.parameters.count == node.arguments.count)
+            return m;
+    return nil;
+    }
+
 // Widen/narrow each entry of `args` (the method-call args, self excluded) to the
 // matching parameter type of the protocol method `node` dispatches to. Mirrors
 // the width/sign coercion the concrete-callee paths apply via `sym.function
@@ -3530,18 +3541,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
 - (void)coerceArgs:(NSMutableArray<XTIRValue*>*)args
     toProtocolMethodOf:(XTMethodCallExprNode*)node
     {
-    XTProtocolDeclNode* proto = self.protocolDeclsByName[node.resolvedProtocolName];
-    if (!proto)
-        return;
-    XTMethodDeclNode* pm = nil;
-    for (XTMethodDeclNode* m in proto.methods)
-        {
-        if ([m.methodName isEqualToString:node.methodName] && m.parameters.count == node.arguments.count)
-            {
-            pm = m;
-            break;
-            }
-        }
+    XTMethodDeclNode* pm = [self protocolMethodOf:node];
     if (!pm)
         return;
     for (NSUInteger k = 0; k < args.count && k < pm.parameters.count && k < node.arguments.count; k++)
@@ -8081,7 +8081,21 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             [self coerceArgs:args toProtocolMethodOf:node];
             XTIRType* resultIR = nil;
             XTType* callResultAST = node.erasedReturnType ?: node.resolvedType;
-            if (callResultAST && !callResultAST.isVoid)
+            // `(a, b) = p.m()`: typed with the protocol method's aggregate,
+            // built from its declaration as a class method's is.
+            if (tupleWanted)
+                {
+                XTMethodDeclNode* pm = [self protocolMethodOf:node];
+                XTIRLayout* tl = pm.returnTypes.count > 1 ? [self layoutForTupleReturnTypes:pm.returnTypes] : nil;
+                if (!tl)
+                    {
+                    [self softFailLoweringAt:node.location
+                                 withMessage:@"lowering: tuple assign source does not return an aggregate"];
+                    return nil;
+                    }
+                resultIR = [XTIRType aggWithLayout:tl];
+                }
+            else if (callResultAST && !callResultAST.isVoid)
                 {
                 resultIR = [self irTypeForASTType:callResultAST at:node.location];
                 if (!resultIR)

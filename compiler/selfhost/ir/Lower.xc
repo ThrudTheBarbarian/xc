@@ -11323,10 +11323,28 @@ class ClassInfo
             // and implicit-self paths already coerce; this is the same rule
             // for the one receiver whose class is not known here.
             coerceProtocolArgs(pargs, n);
+            // `(a, b) = p.m()`: typed with the requirement's aggregate, a new
+            // layout from its declaration (as the reference).
+            String* pty = n.ty();
+            if (tupleWanted)
+                {
+                Node* req = protocolRequirement(n, pargs.count());
+                if (req == (Node*)0 || !isMultiReturn(req.op()))
+                    {
+                    giveUp(String.withCString("tuple assign source does not return an aggregate"));
+                    return (IRValue*)0;
+                    }
+                _tupleIrRet = irReturnOfKey(req, (String*)0);
+                _tupleParts = splitReturns(req.op());
+                pty = req.op();
+                }
+            IRValue* pres = (IRValue*)0;
             if (_itableDispatch && n.proto() != 0 && n.protoIdx() >= (i32)0)
-                return emitProtoDispatch(pv, n.proto(), (u32)n.protoIdx(),
-                                         pargs, n.ty());
-            return emitDispatch(pv, (u32)n.vslot(), pargs, n.ty());
+                pres = emitProtoDispatch(pv, n.proto(), (u32)n.protoIdx(), pargs, pty);
+            else
+                pres = emitDispatch(pv, (u32)n.vslot(), pargs, pty);
+            _tupleIrRet = (String*)0;
+            return pres;
             }
         if (ci == 0)
             {
@@ -11497,25 +11515,31 @@ class ClassInfo
         return emitMethodCall(methodSymbolFor(ci, n), (IRValue*)0, args, ret, hasRes);
         }
 
-    void coerceProtocolArgs(Array* args, Node* n)
+    // The requirement a call through a protocol receiver dispatches to, by
+    // name and argument count, or nil. As the reference's protocolMethodOf:.
+    Node* protocolRequirement(Node* n, u32 argc)
         {
         if (n.proto() == 0)
-            return;
+            return (Node*)0;
         Object* pd = _protocols.get((Hashable*)n.proto());
         if (pd == 0)
-            return;
+            return (Node*)0;
         Node* proto = (Node*)pd;
-        Node* req = (Node*)0;
         for (u32 i = (u32)0; i < proto.kidCount(); i = i + (u32)1)
             {
             Node* m = proto.kid(i);
             if (m.kind() != (u16)nkMethodDecl || !m.name().equals(n.name()))
                 continue;
-            if (fixedParamCount(m) != args.count())
+            if (fixedParamCount(m) != argc)
                 continue;
-            req = m;
-            break;
+            return m;
             }
+        return (Node*)0;
+        }
+
+    void coerceProtocolArgs(Array* args, Node* n)
+        {
+        Node* req = protocolRequirement(n, args.count());
         if (req == 0)
             return;
         for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
@@ -24341,7 +24365,9 @@ class ClassInfo
         {
         if (!isMultiReturn(d.op()))
             return irType(returnOf(d));
-        Object* have = _tupleAgg.get((Hashable*)key);
+        // A nil key: a new layout every time (a protocol requirement's, at
+        // each call site, as the reference).
+        Object* have = key != (String*)0 ? _tupleAgg.get((Hashable*)key) : (Object*)0;
         if (have != 0)
             return (String*)have;
         IRLayout* L = new IRLayout();
@@ -24362,7 +24388,8 @@ class ClassInfo
         String* agg = String.withCString("Agg(");
         agg.appendFormat("%ld", (i32)_m.addLayout(L));
         agg.appendCString(")");
-        _tupleAgg.set((Hashable*)key, (Object*)agg);
+        if (key != (String*)0)
+            _tupleAgg.set((Hashable*)key, (Object*)agg);
         return agg;
         }
 
