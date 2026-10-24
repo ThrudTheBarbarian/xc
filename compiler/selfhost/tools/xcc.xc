@@ -1765,6 +1765,55 @@ String* muslLibDir(FeOptions* o)
     return (String*)0;
 }
 
+// The clang target words for the C path (` -target <triple> --sysroot <root>`),
+// empty when the target is the host, or 0 after saying why it cannot be
+// built here. A program for x86-64 Linux or win64 built on another host needs
+// that target's C headers: the musl root ($XTC_MUSL_ROOT, else
+// /opt/clang/linux/x86_64-linux-musl) or the mingw one
+// (/opt/clang/win64/x86_64-w64-mingw32), each with an include/ directory.
+String* cPathTargetFlags(DriverOptions* d)
+{
+#if ARCH_win64
+    String* host = String.withCString("win64");
+#elif ARCH_x86_64
+    String* host = String.withCString("x86_64");
+#elif ARCH_arm9
+    String* host = String.withCString("arm9");
+#else
+    String* host = String.withCString("arm64");
+#endif
+    String* a = d.arch();
+    if (a.equals(host))
+        return String.withCString("");
+    String* triple = (String*)0;
+    String* root = (String*)0;
+    if (isX86_64(d)) {
+        triple = String.withCString(d.caps().dynamic() ? "x86_64-linux-gnu" : "x86_64-linux-musl");
+        String* env = Platform.env(String.withCString("XTC_MUSL_ROOT"));
+        root = env != 0 && env.byteLength() > (u32)0 ? env : String.withCString("/opt/clang/linux/x86_64-linux-musl");
+    } else if (a.equals(String.withCString("win64"))) {
+        triple = String.withCString("x86_64-w64-windows-gnu");
+        root = String.withCString("/opt/clang/win64/x86_64-w64-mingw32");
+    } else {
+        Stdio.error(String.withFormat("xcc: error: a C program builds for the host or for x86_64 and win64; not for '%s'\n", a.cString()));
+        return (String*)0;
+    }
+    String* hdr = String.withString(root);
+    hdr.appendCString("/include/stdio.h");
+    if (!Files.exists(hdr)) {
+        Stdio.error(String.withFormat("xcc: error: a C program for %s built on this host needs that target's C headers: "
+                                      "none at %s/include%s (build it on that host instead)\n",
+                                      a.cString(), root.cString(),
+                                      isX86_64(d) ? " (set XTC_MUSL_ROOT to a musl sysroot)" : ""));
+        return (String*)0;
+    }
+    String* f = String.withCString(" -target ");
+    f.append(triple);
+    f.appendCString(" --sysroot ");
+    f.append(root);
+    return f;
+}
+
 // ── win64 ────────────────────────────────────────────────────────────────
 //
 // The same back end as x86_64 with the MS ABI, then the PE writer. Windows has
@@ -4326,6 +4375,14 @@ void main(void)
         // runtime: macOS, and Linux linked against glibc (the default).
         cPathSetProtect((d.arch().equals(String.withCString("arm64")) && !isIos(d))
                         || (isX86_64(d) && d.caps().dynamic()));
+        // clang builds for the target, not the host: a triple, and from
+        // another host the target's C headers (a sysroot with include/).
+        String* tgt = cPathTargetFlags(d);
+        if (tgt == (String*)0)
+            {
+            Process.exit((i32)1); return;
+            }
+        cPathSetTarget(tgt);
         if (optOutline() || Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
             mod = CPath.lowerWith(cin, CPath.scratch(), cIncs, cDefs, d.fe());
         else

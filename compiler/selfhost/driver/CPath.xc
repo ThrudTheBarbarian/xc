@@ -26,10 +26,16 @@ String* gCRestObject;
 // driver says yes for macOS and the dynamic glibc link, and no for a static
 // Linux program and Windows, whose links have no such runtime.
 bool gCPathProtect;
+// clang's target, when it is not the host's: ` -target <triple> --sysroot
+// <root>` (or empty), for both clang runs. `xcc -A x86_64 prog.c` on a Mac
+// gave clang no target, so its half was a host object the x86-64 link could
+// not read ("rest.o is not a readable x86-64 object").
+String* gCPathTarget;
 
 // The two above, as functions, for a file compiled against this interface.
 String* cRestObject(void) { return gCRestObject; }
 void cPathSetProtect(bool b) { gCPathProtect = b; }
+void cPathSetTarget(String* t) { gCPathTarget = t; }
 
 // The C library's: the shell runs clang, with this process's environment.
 i32 system(u8* command);
@@ -106,7 +112,10 @@ class CPath
             }
         String* ll = String.withString(scratch);
         ll.appendCString(".ll");
-        String* cmd = String.withCString("clang -O1 -Xclang -disable-llvm-passes -fno-discard-value-names -gline-tables-only -S -emit-llvm");
+        String* cmd = String.withCString("clang");
+        if (gCPathTarget != (String*)0)
+            cmd.append(gCPathTarget);
+        cmd.appendCString(" -O1 -Xclang -disable-llvm-passes -fno-discard-value-names -gline-tables-only -S -emit-llvm");
         for (u32 i = (u32)0; i < incs.count(); i = i + (u32)1)
             {
             cmd.appendCString(" -I ");
@@ -216,9 +225,12 @@ class CPath
         // clang's half gets clang's own stack protector where its runtime is
         // there (gCPathProtect), as xcc's half gets its canaries (the
         // security review, 2026-10-21).
-        String* cc = String.withCString(gCPathProtect
-            ? "clang -O2 -fstack-protector-strong -fno-unwind-tables -fno-asynchronous-unwind-tables -Wno-override-module -c -o "
-            : "clang -O2 -fno-unwind-tables -fno-asynchronous-unwind-tables -Wno-override-module -c -o ");
+        String* cc = String.withCString("clang");
+        if (gCPathTarget != (String*)0)
+            cc.append(gCPathTarget);
+        cc.appendCString(gCPathProtect
+            ? " -O2 -fstack-protector-strong -fno-unwind-tables -fno-asynchronous-unwind-tables -Wno-override-module -c -o "
+            : " -O2 -fno-unwind-tables -fno-asynchronous-unwind-tables -Wno-override-module -c -o ");
         cc.append(CPath.quoted(restO));
         cc.appendCString(" ");
         cc.append(CPath.quoted(restLl));
