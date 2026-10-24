@@ -46,6 +46,17 @@ extern int CreateDirectoryA(const char* name, void* sec);
 extern char* GetCommandLineA(void);
 extern void ExitProcess(uint32_t code);
 extern uint32_t GetEnvironmentVariableA(const char* name, char* buf, uint32_t n);
+// WIN32_FIND_DATAA: the name as the directory stores it is at offset 44.
+typedef struct
+    {
+    uint32_t attrs;
+    uint32_t times[6];
+    uint32_t sizeHigh, sizeLow, reserved0, reserved1;
+    char name[260];
+    char altName[14];
+    } xt_find_data;
+extern void* FindFirstFileA(const char* name, xt_find_data* data);
+extern int FindClose(void* h);
 
 #define XT_MAX_FILES 64
 static void* xt_files[XT_MAX_FILES]; // handle i+3 -> HANDLE
@@ -143,11 +154,33 @@ int32_t _xt_file_exists(const char* path)
     {
     return GetFileAttributesA(path) != 0xFFFFFFFFu ? 1 : 0; // INVALID_FILE_ATTRIBUTES
     }
-// NTFS is case-preserving and case-insensitive, like macOS: there is no exact
-// spelling question the API can answer cheaply, so the plain answer stands.
+// NTFS is case-preserving and case-insensitive, so a plain exists() says yes
+// to `String.xc` when the directory holds `string.xc`, and `#import
+// "String.xc"` beside a program with a string.xc took that file instead of the
+// stdlib's (a win64 build of tests/fixtures/throw_basic.xc lost its main).
+// FindFirstFileA hands back the name as stored: the last component must match
+// it byte for byte, as the macOS runtime's directory listing does.
 int32_t _xt_file_exists_exact(const char* path)
     {
-    return _xt_file_exists(path);
+    const char* name = path;
+    for (const char* p = path; *p; p++)
+        if (*p == '/' || *p == '\\' || *p == ':')
+            name = p + 1;
+    // A root, `.` or `..` has no stored name to compare.
+    if (!*name || (name[0] == '.' && (!name[1] || (name[1] == '.' && !name[2]))))
+        return _xt_file_exists(path);
+    for (const char* p = name; *p; p++)
+        if (*p == '*' || *p == '?')
+            return 0;
+    xt_find_data fd;
+    void* h = FindFirstFileA(path, &fd);
+    if (h == XT_INVALID_HANDLE)
+        return 0;
+    FindClose(h);
+    int i = 0;
+    while (name[i] && i < 259 && name[i] == fd.name[i])
+        i++;
+    return name[i] == 0 && fd.name[i] == 0 ? 1 : 0;
     }
 // no execute bit on Windows
 int32_t _xt_file_chmod_exec(const char* path)

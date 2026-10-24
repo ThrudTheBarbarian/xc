@@ -315,14 +315,122 @@ _xt_file_exists:                        # @_xt_file_exists
 	.p2align	4
 _xt_file_exists_exact:                  # @_xt_file_exists_exact
 # %bb.0:
-	sub	rsp, 40
+	push	rsi
+	sub	rsp, 352
+	lea	rax, [rcx + 1]
+	movabs	rdx, 35184372090881
+	mov	rsi, rcx
+	jmp	.LBB6_1
+	.p2align	4
+.LBB6_2:                                #   in Loop: Header=BB6_1 Depth=1
+	test	r8d, r8d
+	je	.LBB6_3
+.LBB6_11:                               #   in Loop: Header=BB6_1 Depth=1
+	inc	rax
+.LBB6_1:                                # =>This Inner Loop Header: Depth=1
+	movzx	r8d, byte ptr [rax - 1]
+	lea	r9d, [r8 - 47]
+	cmp	r9d, 45
+	ja	.LBB6_2
+# %bb.9:                                #   in Loop: Header=BB6_1 Depth=1
+	bt	rdx, r9
+	jae	.LBB6_2
+# %bb.10:                               #   in Loop: Header=BB6_1 Depth=1
+	mov	rsi, rax
+	jmp	.LBB6_11
+.LBB6_3:
+	movzx	edx, byte ptr [rsi]
+	test	edx, edx
+	je	.LBB6_8
+# %bb.4:
+	mov	rax, rsi
+	cmp	edx, 46
+	jne	.LBB6_12
+# %bb.5:
+	movzx	edx, byte ptr [rsi + 1]
+	test	edx, edx
+	je	.LBB6_8
+# %bb.6:
+	mov	rax, rsi
+	cmp	edx, 46
+	jne	.LBB6_12
+# %bb.7:
+	cmp	byte ptr [rsi + 2], 0
+	mov	rax, rsi
+	jne	.LBB6_12
+.LBB6_8:
 	call	GetFileAttributesA
-	xor	ecx, ecx
-	cmp	eax, -1
-	setne	cl
-	mov	eax, ecx
-	add	rsp, 40
+	mov	ecx, eax
+	xor	eax, eax
+	cmp	ecx, -1
+	setne	al
+	jmp	.LBB6_28
+	.p2align	4
+.LBB6_13:                               #   in Loop: Header=BB6_12 Depth=1
+	cmp	edx, 42
+	je	.LBB6_27
+# %bb.14:                               #   in Loop: Header=BB6_12 Depth=1
+	cmp	edx, 63
+	je	.LBB6_27
+# %bb.15:                               #   in Loop: Header=BB6_12 Depth=1
+	inc	rax
+.LBB6_12:                               # =>This Inner Loop Header: Depth=1
+	movzx	edx, byte ptr [rax]
+	test	edx, edx
+	jne	.LBB6_13
+# %bb.16:
+	lea	rdx, [rsp + 32]
+	call	FindFirstFileA
+	cmp	rax, -1
+	je	.LBB6_27
+# %bb.17:
+	mov	rcx, rax
+	call	FindClose
+	movzx	edx, byte ptr [rsi]
+	xor	eax, eax
+	test	dl, dl
+	je	.LBB6_18
+# %bb.19:
+	xor	r8d, r8d
+	.p2align	4
+.LBB6_22:                               # =>This Inner Loop Header: Depth=1
+	cmp	dl, byte ptr [rsp + r8 + 76]
+	jne	.LBB6_23
+# %bb.20:                               #   in Loop: Header=BB6_22 Depth=1
+	lea	rcx, [r8 + 1]
+	movzx	edx, byte ptr [rsi + r8 + 1]
+	test	dl, dl
+	je	.LBB6_24
+# %bb.21:                               #   in Loop: Header=BB6_22 Depth=1
+	cmp	r8, 257
+	mov	r8, rcx
+	jbe	.LBB6_22
+	jmp	.LBB6_24
+.LBB6_27:
+	xor	eax, eax
+.LBB6_28:
+                                        # kill: def $eax killed $eax killed $rax
+	add	rsp, 352
+	pop	rsi
 	ret
+.LBB6_18:
+	mov	dl, 1
+	xor	ecx, ecx
+	test	dl, dl
+	je	.LBB6_28
+	jmp	.LBB6_26
+.LBB6_23:
+	mov	rcx, r8
+.LBB6_24:
+	test	dl, dl
+	sete	dl
+	test	dl, dl
+	je	.LBB6_28
+.LBB6_26:
+	xor	eax, eax
+	cmp	byte ptr [rsp + rcx + 76], 0
+	sete	al
+	jmp	.LBB6_28
                                         # -- End function
 	.def	_xt_file_chmod_exec;
 	.scl	2;
