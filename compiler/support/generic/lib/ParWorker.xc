@@ -192,25 +192,45 @@ class ParWorker : Object
 // equal part (4 lanes no faster than 2; 32 lanes 9.8x). Each piece has its own
 // partial, piece 0's being the block itself, and they are merged in piece
 // order whoever ran them, so a reduction folds the same way every run.
+//
+// The pieces are in one group a lane, the lane's equal part, and a lane runs
+// its own group before it takes another's: a block run again (a benchmark's
+// repetitions, a time step) finds its part where it left it, in its own
+// core's cache. Claimed from one shared counter, a part moved to whichever
+// lane came first, often on the other CCD, and a memory-bound saxpy over
+// 128 MB ran 1.26x slower on 32 threads than with fixed parts (0.85).
 class ParCpuJob : Object
     {
     i64 _lo;
     i64 _n;
     i32 _pieces;
+    i32 _groups;        // one a lane
     Array* _parts;      // ParChunk@, one per piece
-    Atomic* _next;
+    Array* _next;       // Atomic@ a group: its next piece, from its first
 
-    void work(void)
+    i32 groupStart(i32 g)
         {
-        while (true)
+        return (i32)(((i64)_pieces * (i64)g) / (i64)_groups);
+        }
+
+    // Lane `me`'s group, then the others' from the next one round.
+    void work(i32 me)
+        {
+        for (i32 d = (i32)0; d < _groups; d = d + (i32)1)
             {
-            i32 i = _next.increment() - (i32)1;
-            if (i >= _pieces)
-                return;
-            ParChunk* c = (ParChunk*)_parts.get((u32)i);
-            c.lo = _lo + (_n * (i64)i) / (i64)_pieces;
-            c.hi = _lo + (_n * (i64)(i + (i32)1)) / (i64)_pieces;
-            c.run();
+            i32 g = (me + d) % _groups;
+            Atomic* next = (Atomic*)_next.get((u32)g);
+            i32 end = groupStart(g + (i32)1);
+            while (true)
+                {
+                i32 i = next.increment() - (i32)1;
+                if (i >= end)
+                    break;
+                ParChunk* c = (ParChunk*)_parts.get((u32)i);
+                c.lo = _lo + (_n * (i64)i) / (i64)_pieces;
+                c.hi = _lo + (_n * (i64)(i + (i32)1)) / (i64)_pieces;
+                c.run();
+                }
             }
         }
     }
@@ -235,6 +255,7 @@ class ParCpuLane : Object
     i64 _hi;
     ParTile* _tile;
     ParCpuJob* _job;    // the direct path's pieces, claimed until none are left
+    i32 _index;         // its group in a job: lane j of the pool is group j + 1
 
     void start(void)
         {
@@ -250,7 +271,7 @@ class ParCpuLane : Object
             if (_quit)
                 return;
             if (_job != (ParCpuJob*)0)
-                _job.work();
+                _job.work(_index);
             else
                 {
                 _chunk.lo = _lo;
@@ -275,6 +296,33 @@ Mutex* gParLanesLock;   // held by whoever runs on the lanes; a loser spawns
 
 class ParCpuLanes
     {
+    // Whether a block's items all cost about the same: its kernel header
+    // (`// xcpar size=…`, Metal's `// xcpar msl size=…`) is known and has no
+    // `loop` word (a nested loop, whose trip count may differ from item to
+    // item). A block with no GPU form (`// xcpar cpu`), or none at all, is
+    // not known to be even.
+    static bool evenItems(String* src)
+        {
+        if (src == (String*)0 || !src.hasPrefix(String.withCString("// xcpar ")))
+            return false;
+        u32 n = src.byteLength();
+        bool sized = false;
+        for (u32 i = (u32)0; i + (u32)5 <= n; i = i + (u32)1)
+            {
+            u8 c = src.byteAt(i);
+            if (c == (u8)10)
+                return sized;
+            if (c == (u8)32 && src.byteAt(i + (u32)1) == (u8)115 && src.byteAt(i + (u32)2) == (u8)105
+                && src.byteAt(i + (u32)3) == (u8)122 && src.byteAt(i + (u32)4) == (u8)101)
+                sized = true;   // ` size=`
+            if (c == (u8)32 && src.byteAt(i + (u32)1) == (u8)108 && src.byteAt(i + (u32)2) == (u8)111
+                && src.byteAt(i + (u32)3) == (u8)111 && src.byteAt(i + (u32)4) == (u8)112
+                && (i + (u32)5 == n || src.byteAt(i + (u32)5) == (u8)32 || src.byteAt(i + (u32)5) == (u8)10))
+                return false;
+            }
+        return sized;
+        }
+
     static Mutex* lock(void)
         {
         if (gParLanesLock == (Mutex*)0)
@@ -314,8 +362,12 @@ class ParCpuLanes
             return false;
             }
         i64 n = hi - lo;
-        // PAR_CPU_PIECES pieces a lane, none under PAR_CPU_PIECE_MIN items.
-        i64 pieces = (i64)k * (i64)PAR_CPU_PIECES;
+        // PAR_CPU_PIECES pieces a lane, none under PAR_CPU_PIECE_MIN items;
+        // one a lane for an item body with no nested loop, whose items cost
+        // the same (the pieces' setup is serial: 255 chunk copies on 32
+        // lanes, 0.15 ms a run of a memory-bound saxpy).
+        i64 perLane = ParCpuLanes.evenItems(proto.gpuSource()) ? (i64)1 : (i64)PAR_CPU_PIECES;
+        i64 pieces = (i64)k * perLane;
         if (pieces > n / (i64)PAR_CPU_PIECE_MIN)
             pieces = n / (i64)PAR_CPU_PIECE_MIN;
         if (pieces < (i64)k)
@@ -328,7 +380,10 @@ class ParCpuLanes
         job._parts.add((Object*)proto);
         for (i64 j = (i64)1; j < pieces; j = j + (i64)1)
             job._parts.add((Object*)proto.copyChunk());
-        job._next = Atomic.withValue((i32)1);
+        job._groups = k;
+        job._next = new Array();
+        for (i32 g = (i32)0; g < k; g = g + (i32)1)   // group 0's piece 0 is the block's own, run below
+            job._next.add((Object*)Atomic.withValue(g == (i32)0 ? (i32)1 : job.groupStart(g)));
         if (Platform.env(String.withCString("XC_PAR_REPORT")).byteLength() > (u32)0)
             Log.info("par: %ld items in %d pieces over %d lanes", n, (i32)pieces, k);
         gParLanesBusy = (u32)(k - (i32)1);
@@ -336,6 +391,7 @@ class ParCpuLanes
             {
             ParCpuLane* lane = (ParCpuLane*)ls.get((u32)(j - (i32)1));
             lane._job = job;
+            lane._index = j;
             lane._busy = true;
             lane._done.store((i32)0);
             lane._go.post();
@@ -344,7 +400,7 @@ class ParCpuLanes
         proto.lo = lo;
         proto.hi = lo + n / pieces;
         proto.run();
-        job.work();
+        job.work((i32)0);
         for (i32 j = (i32)1; j < k; j = j + (i32)1)
             {
             ParCpuLane* lane = (ParCpuLane*)ls.get((u32)(j - (i32)1));

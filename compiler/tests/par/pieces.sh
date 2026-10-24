@@ -4,7 +4,9 @@
 # the lanes claim them as they finish, so a loop whose iterations cost unequal
 # amounts keeps every lane busy (mandelbrot: 4 lanes were no faster than 2
 # with one equal part each). Each piece keeps its own partial and they are
-# merged in piece order, so a float sum gives the same bits every run.
+# merged in piece order, so a float sum gives the same bits every run. Each
+# lane runs its own group of pieces before another's, and a block with no
+# nested loop (its items cost the same) takes one piece a lane.
 #
 #   bash tests/par/pieces.sh
 set -u
@@ -48,5 +50,36 @@ done
 one=$(XC_PAR=cpu XC_PAR_THREADS=1 "$W/p" 2>/dev/null)
 awk -v a="$one" -v b="$(cat "$W/o1")" 'BEGIN { d = a - b; if (d < 0) d = -d; exit !(d <= 1e-9 * (a < 0 ? -a : a)) }' \
     || { echo "FAIL pieces: 4 lanes give $(cat "$W/o1"), one thread $one"; fail=1; }
+# An even block (no nested loop: every item costs the same) takes one piece a
+# lane, each lane its own equal part, as 0.85 did (2026-10-24: eight claimed
+# pieces cost a memory-bound saxpy 1.26x on 32 threads, its parts moving
+# between caches from run to run).
+cat > "$W/e.xc" <<'XC'
+#import "Stdio.xc"
+#import "Par.xc"
+#define N 65536
+u32 xs[N];
+u32 ys[N];
+i32 main(void)
+    {
+    for (u32 i in 0..N) { xs[i] = i * (u32)7; ys[i] = i; }
+    u32 total = (u32)0;
+    par even :reduce(+ total)
+        {
+        for (u32 i in 0..N)
+            {
+            u32 v = (u32)3 * xs[i] + ys[i];
+            ys[i] = v;
+            total = total + v;
+            }
+        }
+    Stdio.printf("%u\n", total);
+    return 0;
+    }
+XC
+"$XC" -q -O2 -H . -o "$W/e" "$W/e.xc" > "$W/e.b" 2>&1 || { echo "FAIL pieces: the even block does not build"; head -3 "$W/e.b"; exit 1; }
+XC_PAR=cpu XC_PAR_THREADS=4 XC_PAR_REPORT=1 "$W/e" > "$W/e1" 2>&1
+grep -q 'items in 4 pieces over 4 lanes' "$W/e1" || { echo "FAIL pieces: the even block is not one piece a lane:"; grep pieces "$W/e1" | head -2; fail=1; }
+[ "$(tail -1 "$W/e1")" = "$(XC_PAR=cpu XC_PAR_THREADS=1 "$W/e" 2>/dev/null)" ] || { echo "FAIL pieces: the even block's 4 lanes and one thread differ"; fail=1; }
 [ $fail = 0 ] && echo "--- pieces: pass ---" || echo "--- pieces: FAIL ---"
 exit $fail
