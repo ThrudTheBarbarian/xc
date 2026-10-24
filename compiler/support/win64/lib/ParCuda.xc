@@ -83,6 +83,22 @@ i32 _xtc_simd_dirty(pointer p);
 pointer gParCuUpHost[52];      // the host block slot k holds a copy of
 i64 gParCuUpLen[52];
 i64 gParCuUpGen[52];           // and the block's generation it copied
+// Parked copies: residency belonged to a parameter SLOT, so two blocks run in
+// turn evicted each other's arrays (slot k of one is slot k of the other) and
+// uploaded them every time: 16 MB blocks alternating took 2.5-4.2 ms where
+// each alone took 1.35. A slot about to take another block parks the copy it
+// holds instead of overwriting it; an upload of a parked block, unwritten
+// since, takes the copy back. A copy is in one place at a time (a slot or the
+// park), so nothing is shared. At most PAR_CU_PARK of them, the least
+// recently used given up first, within a quarter of the card's free memory.
+#define PAR_CU_PARK 8
+pointer gParCuParkHost[8];
+i64 gParCuParkLen[8];
+i64 gParCuParkGen[8];
+u64 gParCuParkDev[8];
+i64 gParCuParkCap[8];
+i64 gParCuParkUsed[8];         // when it was parked (a counter), for LRU
+i64 gParCuParkTick;
 // What the tiled path saw in each slot last run (a read-only footprinted
 // array): seen again unwritten, it goes up WHOLE once and stays resident
 // instead of a slice a tile every run, as the Vulkan worker's wholeAgain.
@@ -328,6 +344,80 @@ class ParCuda
         return fn;
         }
 
+    // The park entry holding this block's copy at this generation, or -1. A
+    // copy of the block at an older generation is stale: given up here.
+    static i32 parkedAt(pointer host, i64 bytes, i64 gen)
+        {
+        for (i32 p = (i32)0; p < (i32)PAR_CU_PARK; p = p + (i32)1)
+            {
+            if (gParCuParkHost[p] != host || gParCuParkDev[p] == (u64)0)
+                continue;
+            if (gParCuParkLen[p] == bytes && gParCuParkGen[p] == gen)
+                return p;
+            _free(gParCuParkDev[p]);
+            gParCuParkHost[p] = (pointer)0;
+            gParCuParkDev[p] = (u64)0;
+            gParCuParkCap[p] = (i64)0;
+            }
+        return (i32)-1;
+        }
+
+    // Slot k's watched copy into the park (the least recently parked entry
+    // given up for it, and others while the park is over its budget); the
+    // slot is left with no device memory. A slot with no watched copy, or a
+    // copy the budget cannot hold, keeps its memory to be reused.
+    static void parkSlot(u32 k)
+        {
+        if (gParCuDev[k] == (u64)0 || gParCuUpHost[k] == (pointer)0)
+            return;
+        i64 budget = (i64)0;
+        u64 memFree = (u64)0;
+        u64 memTotal = (u64)0;
+        if (gCu_memGetInfo != (cuMemGetInfo_t*)0 && gCu_memGetInfo(&memFree, &memTotal) == (i32)0)
+            budget = (i64)(memFree >> (u64)2);
+        i64 held = (i64)0;
+        for (i32 p = (i32)0; p < (i32)PAR_CU_PARK; p = p + (i32)1)
+            held = held + gParCuParkCap[p];
+        // Give up the oldest until there is a free entry and room.
+        while (true)
+            {
+            i32 freeAt = (i32)-1;
+            i32 oldest = (i32)-1;
+            for (i32 p = (i32)0; p < (i32)PAR_CU_PARK; p = p + (i32)1)
+                {
+                if (gParCuParkDev[p] == (u64)0)
+                    {
+                    if (freeAt < (i32)0)
+                        freeAt = p;
+                    }
+                else if (oldest < (i32)0 || gParCuParkUsed[p] < gParCuParkUsed[oldest])
+                    oldest = p;
+                }
+            if (freeAt >= (i32)0 && held + gParCuCap[k] <= budget)
+                {
+                gParCuParkTick = gParCuParkTick + (i64)1;
+                gParCuParkHost[freeAt] = gParCuUpHost[k];
+                gParCuParkLen[freeAt] = gParCuUpLen[k];
+                gParCuParkGen[freeAt] = gParCuUpGen[k];
+                gParCuParkDev[freeAt] = gParCuDev[k];
+                gParCuParkCap[freeAt] = gParCuCap[k];
+                gParCuParkUsed[freeAt] = gParCuParkTick;
+                gParCuDev[k] = (u64)0;
+                gParCuCap[k] = (i64)0;
+                gParCuUpHost[k] = (pointer)0;
+                gParCuUpLen[k] = (i64)0;
+                return;
+                }
+            if (oldest < (i32)0)
+                return;   // nothing to give up: the slot keeps its memory
+            held = held - gParCuParkCap[oldest];
+            _free(gParCuParkDev[oldest]);
+            gParCuParkHost[oldest] = (pointer)0;
+            gParCuParkDev[oldest] = (u64)0;
+            gParCuParkCap[oldest] = (i64)0;
+            }
+        }
+
     // Parameter slot k's device memory, holding a copy of host (or space the
     // kernel fills, when host is nil). Kept for the next run and reused where
     // big enough, as allocating device memory costs more than most blocks.
@@ -361,6 +451,35 @@ class ParCuda
                 Log.info("par: %ld bytes already on the GPU, unchanged since", bytes);
             return gParCuDev[k];
             }
+        // Parked: this block's copy was set aside when its slot took another
+        // block. Unwritten since, it comes back (the slot's own copy is
+        // parked in its place) instead of going up again.
+        if (host != (pointer)0 && gen != (i64)-1)
+            {
+            i32 p = ParCuda.parkedAt(host, bytes, gen);
+            if (p >= (i32)0)
+                {
+                u64 d = gParCuParkDev[p];
+                i64 c = gParCuParkCap[p];
+                gParCuParkHost[p] = (pointer)0;
+                gParCuParkDev[p] = (u64)0;
+                gParCuParkCap[p] = (i64)0;
+                ParCuda.parkSlot(k);
+                if (gParCuDev[k] != (u64)0)
+                    _free(gParCuDev[k]);
+                gParCuDev[k] = d;
+                gParCuCap[k] = c;
+                gParCuUpHost[k] = host;
+                gParCuUpLen[k] = bytes;
+                gParCuUpGen[k] = gen;
+                if (ParDevice.reporting())
+                    Log.info("par: %ld bytes already on the GPU (parked), unchanged since", bytes);
+                return d;
+                }
+            }
+        // Another block's copy in this slot: parked, not overwritten.
+        if (gParCuUpHost[k] != (pointer)0 && gParCuUpHost[k] != host)
+            ParCuda.parkSlot(k);
         gParCuUpHost[k] = (pointer)0;
         gParCuUpLen[k] = (i64)0;
         if (gParCuDev[k] == (u64)0 || gParCuCap[k] < bytes)
