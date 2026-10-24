@@ -3886,11 +3886,62 @@ class Parser
     }
     // A reduction's starting value: the identity for + * ^, else the
     // variable's current value (the idempotent & | min max).
-    Node* parStart(String* op, String* ty, String* var)
+    Node* parStart(String* op, String* ty, Node* cur)
     {
         if (Parser._same(op, "+") || Parser._same(op, "^")) return parCast(ty, parInt((i64)0));
         if (Parser._same(op, "*")) return parCast(ty, parInt((i64)1));
-        return parIdent(var);
+        return cur;
+    }
+
+    // A capture named as one of the block's own members keeps its name in
+    // the body (a local of run()), and its ivar is `__par_<name>`. As the
+    // reference's reservedCapture / fieldOf / fieldRef.
+    static bool parReservedCapture(String* n)
+    {
+        return Parser._same(n, "run") || Parser._same(n, "go") || Parser._same(n, "lo") || Parser._same(n, "hi")
+            || Parser._same(n, "merge") || Parser._same(n, "copyChunk") || Parser._same(n, "parName")
+            || Parser._same(n, "gpuSource") || Parser._same(n, "gpuLength") || Parser._same(n, "gpuGlobal")
+            || Parser._same(n, "gpuGlobalBytes") || Parser._same(n, "gpuReadsOnly")
+            || Parser._same(n, "gpuReadsOnlyGlobal") || Parser._same(n, "gpuWritesAll");
+    }
+    static String* parFieldOf(String* n)
+    {
+        if (!Parser.parReservedCapture(n)) return n;
+        String* f = String.withCString("__par_");
+        f.append(n);
+        return f;
+    }
+    // The ivar, from a method of the block: by its plain name as before, and
+    // as self.__par_<name> when it was renamed.
+    Node* parFieldRef(String* n)
+    {
+        if (Parser.parReservedCapture(n)) return parMember(String.withCString("self"), Parser.parFieldOf(n));
+        return parIdent(n);
+    }
+    // The chunk's own lo / hi, from run(): self.<n> when a capture is so
+    // named (its local would shadow it), else the plain name as before.
+    Node* parRangeRef(Array* frameNames, string n)
+    {
+        for (u32 i = (u32)0; i < frameNames.count(); i = i + (u32)1)
+            if (Parser._same((String*)frameNames.get(i), n))
+                return parMember(String.withCString("self"), String.withCString(n));
+        return parIdent(String.withCString(n));
+    }
+    // Whether run() reads a capture of this type into a local (a pointer or a
+    // scalar; an array as its pointer): the local is what makes the body's
+    // name mean the capture.
+    static bool parHasLocal(String* ty)
+    {
+        String* t = String.withString(ty);
+        u32 lb = t.indexOfByte((u8)'[');
+        if (lb != (u32)$FFFFFFFF) { t = t.substringBytes((u32)0, lb); t.appendByte((u8)'*'); }
+        bool isPtr = t.byteLength() > (u32)0 && t.byteAt(t.byteLength() - (u32)1) == (u8)'*';
+        bool isScalar = Parser._same(t, "i8") || Parser._same(t, "u8") || Parser._same(t, "i16")
+            || Parser._same(t, "u16") || Parser._same(t, "i32") || Parser._same(t, "u32")
+            || Parser._same(t, "i64") || Parser._same(t, "u64") || Parser._same(t, "float")
+            || Parser._same(t, "double") || Parser._same(t, "bool") || Parser._same(t, "pointer")
+            || Parser._same(t, "string");
+        return isPtr || isScalar;
     }
     // A node at the `par` keyword, for an error about the whole block: the
     // reference reports those there, not where parsing had got to (bug 617).
@@ -4002,21 +4053,18 @@ class Parser
             }
         }
         // A capture becomes an ivar of the block's class, whose own methods
-        // and range fields are named below; one with such a name made the
-        // body's `run` resolve to the block's run(). Refused by name, as the
-        // reference does: the GPU printers spell the ivars as the source does.
+        // and range fields are named below. One with such a name keeps it in
+        // the body, a local of run(), and its ivar is `__par_<name>`
+        // (parFieldOf); a capture with no local (a struct) is still refused by
+        // those names, as is any name beginning `__par_`. As the reference.
         for (u32 i = (u32)0; i < frameNames.count(); i = i + (u32)1) {
             String* cn = (String*)frameNames.get(i);
-            if (cn.equals(String.withCString("run")) || cn.equals(String.withCString("go"))
-                || cn.equals(String.withCString("lo")) || cn.equals(String.withCString("hi"))
-                || cn.equals(String.withCString("merge")) || cn.equals(String.withCString("copyChunk"))
-                || cn.equals(String.withCString("parName")) || cn.equals(String.withCString("gpuSource"))
-                || cn.equals(String.withCString("gpuLength")) || cn.equals(String.withCString("gpuGlobal"))
-                || cn.equals(String.withCString("gpuGlobalBytes")) || cn.equals(String.withCString("gpuReadsOnly"))
-                || cn.equals(String.withCString("gpuReadsOnlyGlobal")) || cn.equals(String.withCString("gpuWritesAll"))
-                || cn.equals(String.withCString("__par_hi")) || cn.equals(String.withCString("__par_t"))) {
+            bool own = cn.hasPrefix(String.withCString("__par_"));
+            if (own || (Parser.parReservedCapture(cn) && redTypes.get((Hashable*)cn) == 0
+                        && !Parser.parHasLocal((String*)frameTypes.get((Hashable*)cn)))) {
                 _errorAt(String.withFormat("a '%s' block cannot capture '%s': the name is one of the block's own (%s). Rename the variable",
-                                           label.cString(), cn.cString(), "run, go, lo, hi, merge, copyChunk, parName, gpuSource, gpuLength, gpuGlobal, gpuGlobalBytes, gpuReadsOnly, gpuReadsOnlyGlobal, gpuWritesAll"), parKeywordNode());
+                                           label.cString(), cn.cString(), own ? "names beginning __par_"
+                                               : "run, go, lo, hi, merge, copyChunk, parName, gpuSource, gpuLength, gpuGlobal, gpuGlobalBytes, gpuReadsOnly, gpuReadsOnlyGlobal, gpuWritesAll, for a struct"), parKeywordNode());
                 return (Node*)0;
             }
         }
@@ -4056,13 +4104,13 @@ class Parser
             String* t = String.withString((String*)frameTypes.get((Hashable*)cn));
             u32 lb = t.indexOfByte((u8)'[');
             if (lb != (u32)$FFFFFFFF) { t = t.substringBytes((u32)0, lb); t.appendByte((u8)'*'); }
-            Node* ivn = mkNamed((u16)nkVariableDecl, cn);
+            Node* ivn = mkNamed((u16)nkVariableDecl, Parser.parFieldOf(cn));
             ivn.setOp(t);
             cls.add(ivn);
         }
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
             Node* r = (Node*)reds.get(i);
-            Node* ivn = mkNamed((u16)nkVariableDecl, r.name());
+            Node* ivn = mkNamed((u16)nkVariableDecl, Parser.parFieldOf(r.name()));
             ivn.setOp((String*)redTypes.get((Hashable*)r.name()));
             cls.add(ivn);
         }
@@ -4074,7 +4122,8 @@ class Parser
             Node* im = mk((u16)nkMarkerInit);
             Node* decl = mkNamed((u16)nkVariableDecl, iv.name());
             decl.setOp(ivT);
-            decl.add(parCast(ivT, parIdent(String.withCString("lo"))));
+            // The chunk's own range: self.lo when a capture's local is lo.
+            decl.add(parCast(ivT, parRangeRef(frameNames, "lo")));
             im.add(decl);
             f.add(im);
             Node* cm = mk((u16)nkMarkerCond);
@@ -4093,7 +4142,7 @@ class Parser
             {
                 Node* h = mkNamed((u16)nkVariableDecl, String.withCString("__par_hi"));
                 h.setOp(ivT);
-                h.add(parCast(ivT, parIdent(String.withCString("hi"))));
+                h.add(parCast(ivT, parRangeRef(frameNames, "hi")));
                 rb.add(h);
             }
             // Every capture is read into a local of run() once: the body
@@ -4117,20 +4166,20 @@ class Parser
                     continue;
                 Node* d = mkNamed((u16)nkVariableDecl, cn);
                 d.setOp(t);
-                d.add(parMember(String.withCString("self"), cn));
+                d.add(parMember(String.withCString("self"), Parser.parFieldOf(cn)));
                 rb.add(d);
             }
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
                 Node* r = (Node*)reds.get(i);
                 Node* d = mkNamed((u16)nkVariableDecl, r.name());
                 d.setOp((String*)redTypes.get((Hashable*)r.name()));
-                d.add(parMember(String.withCString("self"), r.name()));
+                d.add(parMember(String.withCString("self"), Parser.parFieldOf(r.name())));
                 rb.add(d);
             }
             rb.add(f);
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
                 Node* r = (Node*)reds.get(i);
-                rb.add(parAssign(parMember(String.withCString("self"), r.name()), parIdent(r.name())));
+                rb.add(parAssign(parMember(String.withCString("self"), Parser.parFieldOf(r.name())), parIdent(r.name())));
             }
             m.add(rb);
             cls.add(m);
@@ -4151,12 +4200,12 @@ class Parser
             b.add(t);
             for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
                 String* cn = (String*)caps.get(i);
-                b.add(parAssign(parMember(String.withCString("__par_t"), cn), parIdent(cn)));
+                b.add(parAssign(parMember(String.withCString("__par_t"), Parser.parFieldOf(cn)), parFieldRef(cn)));
             }
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
                 Node* r = (Node*)reds.get(i);
-                b.add(parAssign(parMember(String.withCString("__par_t"), r.name()),
-                                parStart(r.op(), (String*)redTypes.get((Hashable*)r.name()), r.name())));
+                b.add(parAssign(parMember(String.withCString("__par_t"), Parser.parFieldOf(r.name())),
+                                parStart(r.op(), (String*)redTypes.get((Hashable*)r.name()), parFieldRef(r.name()))));
             }
             Node* ret = mk((u16)nkReturn);
             ret.add(parIdent(String.withCString("__par_t")));
@@ -4199,7 +4248,7 @@ class Parser
                     sz.setName(Parser.parPrimPointee(t));
                     Node* call = mkNamed((u16)nkMethodCall, String.withCString("spanOf"));
                     call.add(parIdent(String.withCString("Par")));
-                    call.add(parCast(String.withCString("pointer"), parIdent(cn)));
+                    call.add(parCast(String.withCString("pointer"), parFieldRef(cn)));
                     call.add(parCast(String.withCString("i64"), sz));
                     Node* simd = mk((u16)nkBool);
                     simd.setNum(Parser.parSimdPointee(t) != (String*)0 ? (i64)1 : (i64)0);
@@ -4525,8 +4574,8 @@ class Parser
             }
             for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
                 Node* r = (Node*)reds.get(i);
-                b.add(parFold(r.op(), parIdent(r.name()), parIdent(r.name()),
-                              parMember(String.withCString("o"), r.name())));
+                b.add(parFold(r.op(), parFieldRef(r.name()), parFieldRef(r.name()),
+                              parMember(String.withCString("o"), Parser.parFieldOf(r.name()))));
             }
             m.add(b);
             cls.add(m);
@@ -4557,13 +4606,13 @@ class Parser
                 addr.add(sub);
                 v = addr;
             }
-            site.add(parAssign(parMember(pv, cn), v));
+            site.add(parAssign(parMember(pv, Parser.parFieldOf(cn)), v));
             blkNoteUse(cn);
         }
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
             Node* r = (Node*)reds.get(i);
-            site.add(parAssign(parMember(pv, r.name()),
-                               parStart(r.op(), (String*)redTypes.get((Hashable*)r.name()), r.name())));
+            site.add(parAssign(parMember(pv, Parser.parFieldOf(r.name())),
+                               parStart(r.op(), (String*)redTypes.get((Hashable*)r.name()), parIdent(r.name()))));
             blkNoteUse(r.name());
         }
         Node* hi = cond.kid((u32)1);
@@ -4577,8 +4626,8 @@ class Parser
         site.add(parStmt(call));
         for (u32 i = (u32)0; i < reds.count(); i = i + (u32)1) {
             Node* r = (Node*)reds.get(i);
-            if (parIdem(r.op())) site.add(parAssign(parIdent(r.name()), parMember(pv, r.name())));
-            else site.add(parFold(r.op(), parIdent(r.name()), parIdent(r.name()), parMember(pv, r.name())));
+            if (parIdem(r.op())) site.add(parAssign(parIdent(r.name()), parMember(pv, Parser.parFieldOf(r.name()))));
+            else site.add(parFold(r.op(), parIdent(r.name()), parIdent(r.name()), parMember(pv, Parser.parFieldOf(r.name()))));
         }
         return site;
     }

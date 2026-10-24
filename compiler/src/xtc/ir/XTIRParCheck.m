@@ -75,6 +75,10 @@ static BOOL isMathIntrinsic(NSString* irName)
 // `Stdio$printf` reads as `Stdio.printf`, and an overload's `__double` tail goes.
 static NSString* shownName(NSString* irName)
     {
+    // A capture renamed for the block's own names (`__par_lo`) is shown as
+    // the source spells it.
+    if ([irName hasPrefix:@"__par_"] && irName.length > 6)
+        irName = [irName substringFromIndex:6];
     NSRange r = [irName rangeOfString:@"__"];
     NSString* s = (r.location != NSNotFound && r.location > 0) ? [irName substringToIndex:r.location] : irName;
     return [s stringByReplacingOccurrencesOfString:@"$" withString:@"."];

@@ -106,11 +106,12 @@ The body reads the variables around it, and works on arrays declared outside it:
   but may not assign to them, because every work item has its own copy and the
   write would be lost. The compiler refuses such an assignment and says why.
 - To combine values across work items, use a **reduction**.
-- A block cannot capture a variable whose name is one of its own: `run`, `go`,
-  `lo`, `hi`, `merge`, `copyChunk`, `parName`, `gpuSource`, `gpuLength`,
-  `gpuGlobal`, `gpuGlobalBytes`, `gpuReadsOnly`, `gpuReadsOnlyGlobal` or
-  `gpuWritesAll`. The compiler refuses such a capture and names it; rename the
-  variable.
+- Names beginning `__par_` are the block's own: it cannot capture a variable
+  so named. A struct cannot be captured under one of the names the block's
+  class uses (`run`, `go`, `lo`, `hi`, `merge`, `copyChunk`, `parName`,
+  `gpuSource`, `gpuLength`, `gpuGlobal`, `gpuGlobalBytes`, `gpuReadsOnly`,
+  `gpuReadsOnlyGlobal` or `gpuWritesAll`); a number, a pointer or an array
+  may have any of those names. The compiler names a capture it refuses.
 
 ## Reductions
 

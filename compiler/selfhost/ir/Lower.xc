@@ -23864,6 +23864,10 @@ class ClassInfo
 
     String* parShown(String* n)
         {
+        // A capture renamed for the block's own names (`__par_lo`) is shown
+        // as the source spells it. As the reference.
+        if (n.hasPrefix(String.withCString("__par_")) && n.byteLength() > (u32)6)
+            n = n.substringFromByte((u32)6);
         String* out = String.withCString("");
         for (u32 i = (u32)0; i < n.byteLength(); i = i + (u32)1)
             {

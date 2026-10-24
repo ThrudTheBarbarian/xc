@@ -1411,23 +1411,36 @@ static NSString* parRootName(XTASTNode* n)
             }
         }
     // A capture becomes an ivar of the block's class, whose own methods and
-    // range fields are named below; a capture with one of those names made the
-    // body's `run` resolve to the block's run() ("calls itself recursively; a
-    // GPU has no call stack"). Refused by name rather than mangled: the GPU
-    // printers and the reports spell the ivars as the source does.
+    // range fields are named below. A capture with one of those names keeps
+    // its name in the body, a local of run() spelled as the source spells it,
+    // and its ivar is `__par_<name>` (fieldOf): `lo` as a capture made the
+    // loop start from the capture, and `run` made the body's run resolve to
+    // the block's ("calls itself recursively"). The local is what makes the
+    // body's name mean the capture, so a capture with no local (a struct) is
+    // still refused by those names, as is any name beginning `__par_`, the
+    // block's own.
     static NSSet<NSString*>* reservedCapture = nil;
     if (!reservedCapture)
         reservedCapture = [NSSet setWithArray:@[ @"run", @"go", @"lo", @"hi", @"merge", @"copyChunk", @"parName",
                                                  @"gpuSource", @"gpuLength", @"gpuGlobal", @"gpuGlobalBytes",
-                                                 @"gpuReadsOnly", @"gpuReadsOnlyGlobal", @"gpuWritesAll", @"__par_hi",
-                                                 @"__par_t" ]];
+                                                 @"gpuReadsOnly", @"gpuReadsOnlyGlobal", @"gpuWritesAll" ]];
+    BOOL (^hasLocal)(XTType*) = ^BOOL(XTType* t) {
+        if ([t isKindOfClass:[XTArrayType class]])
+            return YES;
+        return (t.kind == XTTypeKindPointer || t.isInteger || t.isFloating || t.kind == XTTypeKindBool) &&
+               t.kind != XTTypeKindEnum;
+    };
+    NSString* (^fieldOf)(NSString*) = ^NSString*(NSString* n) {
+        return [reservedCapture containsObject:n] ? [@"__par_" stringByAppendingString:n] : n;
+    };
     for (NSString* cn in frameNames)
-        if ([reservedCapture containsObject:cn])
+        if ([cn hasPrefix:@"__par_"] || ([reservedCapture containsObject:cn] && !redByVar[cn] && !hasLocal(frameTypes[cn])))
             {
             [self.diagnostics emitError:[NSString stringWithFormat:@"a '%@' block cannot capture '%@': the name is one "
                                                                      "of the block's own (%@). Rename "
                                                                      "the variable",
-                                                                   label, cn, @"run, go, lo, hi, merge, copyChunk, parName, gpuSource, gpuLength, gpuGlobal, gpuGlobalBytes, gpuReadsOnly, gpuReadsOnlyGlobal, gpuWritesAll"]
+                                                                   label, cn, [cn hasPrefix:@"__par_"] ? @"names beginning __par_"
+                                                                     : @"run, go, lo, hi, merge, copyChunk, parName, gpuSource, gpuLength, gpuGlobal, gpuGlobalBytes, gpuReadsOnly, gpuReadsOnlyGlobal, gpuWritesAll, for a struct"]
                                      at:loc];
             return nil;
             }
@@ -1447,6 +1460,15 @@ static NSString* parRootName(XTASTNode* n)
     };
     XTASTNode* (^member)(NSString*, NSString*) = ^XTASTNode*(NSString* b, NSString* m) {
       return [[XTMemberAccessNode alloc] initWithBase:ident(b) memberName:m isArrow:NO location:loc];
+    };
+    // The ivar, from a method of the block: by its plain name as before, and
+    // as self.__par_<name> when it was renamed.
+    XTASTNode* (^fieldRef)(NSString*) = ^XTASTNode*(NSString* n) {
+        return [reservedCapture containsObject:n] ? member(@"self", fieldOf(n)) : ident(n);
+    };
+    // The chunk's own range: self.lo when a capture's local is called lo.
+    XTASTNode* (^rangeRef)(NSString*) = ^XTASTNode*(NSString* n) {
+        return [frameNames containsObject:n] ? member(@"self", n) : ident(n);
     };
     XTASTNode* (^stmt)(XTASTNode*) = ^XTASTNode*(XTASTNode* e) {
       return [[XTExpressionStatementNode alloc] initWithExpression:e location:loc];
@@ -1494,17 +1516,17 @@ static NSString* parRootName(XTASTNode* n)
         XTType* t = frameTypes[cn];
         if ([t isKindOfClass:[XTArrayType class]])
             t = [XTPointerType pointerToType:((XTArrayType*)t).elementType];
-        [ivars addObject:[[XTVariableDeclNode alloc] initWithName:cn type:t initialiser:nil location:loc]];
+        [ivars addObject:[[XTVariableDeclNode alloc] initWithName:fieldOf(cn) type:t initialiser:nil location:loc]];
         }
     for (NSArray<NSString*>* r in reductions)
-        [ivars addObject:[[XTVariableDeclNode alloc] initWithName:r[1] type:redTypes[r[1]] initialiser:nil location:loc]];
+        [ivars addObject:[[XTVariableDeclNode alloc] initWithName:fieldOf(r[1]) type:redTypes[r[1]] initialiser:nil location:loc]];
 
     NSMutableArray<XTMethodDeclNode*>* methods = [NSMutableArray array];
     // run(): the loop over [lo, hi), the body verbatim.
         {
         XTVariableDeclNode* init = [[XTVariableDeclNode alloc] initWithName:iv.varName
                                                                        type:ivT
-                                                                initialiser:cast(ivT, ident(@"lo"))
+                                                                initialiser:cast(ivT, rangeRef(@"lo"))
                                                                    location:loc];
         XTASTNode* c = [[XTBinaryExprNode alloc] initWithOp:XTBinaryOpLt
                                                        left:ident(iv.varName)
@@ -1534,7 +1556,7 @@ static NSString* parRootName(XTASTNode* n)
         // guard alone. `lo` was already evaluated once, in the for-init.
         NSMutableArray<XTASTNode*>* stmts = [NSMutableArray array];
         [stmts addObject:[[XTVariableDeclNode alloc] initWithName:@"__par_hi" type:ivT
-                                                    initialiser:cast(ivT, ident(@"hi")) location:loc]];
+                                                    initialiser:cast(ivT, rangeRef(@"hi")) location:loc]];
         // Every CAPTURE is read into a local of run() once, too. The body
         // names a capture as the ivar, so each use was a load from the block
         // object inside the loop, and with a store in the loop (an element
@@ -1558,14 +1580,14 @@ static NSString* parRootName(XTASTNode* n)
                 t.kind == XTTypeKindEnum)
                 continue; // an enum counts as an integer here; the port knows it by name only
             [stmts addObject:[[XTVariableDeclNode alloc] initWithName:cn type:t
-                                                       initialiser:member(@"self", cn) location:loc]];
+                                                       initialiser:member(@"self", fieldOf(cn)) location:loc]];
             }
         for (NSArray<NSString*>* r in reductions)
             [stmts addObject:[[XTVariableDeclNode alloc] initWithName:r[1] type:redTypes[r[1]]
-                                                       initialiser:member(@"self", r[1]) location:loc]];
+                                                       initialiser:member(@"self", fieldOf(r[1])) location:loc]];
         [stmts addObject:f];
         for (NSArray<NSString*>* r in reductions)
-            [stmts addObject:assign(member(@"self", r[1]), ident(r[1]))];
+            [stmts addObject:assign(member(@"self", fieldOf(r[1])), ident(r[1]))];
         XTBlockNode* rb = [[XTBlockNode alloc] initWithStatements:stmts location:loc];
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"run" returnTypes:@[ [XTType voidType] ]
                                                        parameters:@[] isStatic:NO isVarArgs:NO body:rb location:loc]];
@@ -1581,9 +1603,9 @@ static NSString* parRootName(XTASTNode* n)
                                                                                                location:loc]
                                                       location:loc]];
         for (NSString* cn in caps)
-            [st addObject:assign(member(@"__par_t", cn), ident(cn))];
+            [st addObject:assign(member(@"__par_t", fieldOf(cn)), fieldRef(cn))];
         for (NSArray<NSString*>* r in reductions)
-            [st addObject:assign(member(@"__par_t", r[1]), startOf(r, ident(r[1])))];
+            [st addObject:assign(member(@"__par_t", fieldOf(r[1])), startOf(r, fieldRef(r[1])))];
         [st addObject:[[XTReturnNode alloc] initWithValues:@[ ident(@"__par_t") ] location:loc]];
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"copyChunk" returnTypes:@[ chunkPtr ]
                                                        parameters:@[] isStatic:NO isVarArgs:NO
@@ -1644,7 +1666,7 @@ static NSString* parRootName(XTASTNode* n)
                 bytes = [[XTMethodCallExprNode alloc]
                     initWithReceiver:ident(@"Par")
                           methodName:@"spanOf"
-                           arguments:@[ cast(pointerT, ident(cn)),
+                           arguments:@[ cast(pointerT, fieldRef(cn)),
                                         cast(i64T, [[XTSizeofExprNode alloc] initWithOperand:parPrimPointee(t) location:loc]),
                                         [[XTLiteralBoolNode alloc] initWithBool:((XTPointerType*)t).isSimd location:loc] ]
                             location:loc];
@@ -1910,7 +1932,7 @@ static NSString* parRootName(XTASTNode* n)
                                                        initialiser:cast(implPtr, ident(@"other"))
                                                           location:loc]];
         for (NSArray<NSString*>* r in reductions)
-            [st addObject:fold(r[0], ident(r[1]), ident(r[1]), member(@"o", r[1]))];
+            [st addObject:fold(r[0], fieldRef(r[1]), fieldRef(r[1]), member(@"o", fieldOf(r[1])))];
         XTParamNode* p = [[XTParamNode alloc] initWithType:chunkPtr name:@"other" location:loc];
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"merge" returnTypes:@[ [XTType voidType] ]
                                                        parameters:@[ p ] isStatic:NO isVarArgs:NO
@@ -1942,12 +1964,12 @@ static NSString* parRootName(XTASTNode* n)
                                                                                          index:[[XTLiteralIntNode alloc] initWithValue:0 location:loc]
                                                                                       location:loc]
                                            location:loc];
-        [site addObject:assign(member(pv, cn), v)];
+        [site addObject:assign(member(pv, fieldOf(cn)), v)];
         [self blkNoteIdentifierUse:cn at:loc];
         }
     for (NSArray<NSString*>* r in reductions)
         {
-        [site addObject:assign(member(pv, r[1]), startOf(r, ident(r[1])))];
+        [site addObject:assign(member(pv, fieldOf(r[1])), startOf(r, ident(r[1])))];
         [self blkNoteIdentifierUse:r[1] at:loc];
         }
     XTASTNode* hi = cond.right;
@@ -1964,8 +1986,8 @@ static NSString* parRootName(XTASTNode* n)
         NSString* op = r[0];
         BOOL idem = [op isEqualToString:@"&"] || [op isEqualToString:@"|"] || [op isEqualToString:@"min"]
                     || [op isEqualToString:@"max"];
-        [site addObject:idem ? assign(ident(r[1]), member(pv, r[1]))
-                             : fold(op, ident(r[1]), ident(r[1]), member(pv, r[1]))];
+        [site addObject:idem ? assign(ident(r[1]), member(pv, fieldOf(r[1])))
+                             : fold(op, ident(r[1]), ident(r[1]), member(pv, fieldOf(r[1])))];
         }
     return [[XTBlockNode alloc] initWithStatements:site location:loc];
     }
