@@ -318,8 +318,9 @@ class ParTls
             || _pending == (pointer)0 || _read == (pointer)0 || _write == (pointer)0 || _close == (pointer)0)
             return false;
         return true;
-#endif
+#else
         return false;
+#endif
         }
 
     // A self-signed certificate and its key, as PEM files; false when they

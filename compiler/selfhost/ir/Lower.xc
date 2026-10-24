@@ -23521,19 +23521,34 @@ class ClassInfo
         // A demoted auto block gets the serial marker instead of a kernel:
         // Par.run then runs it on one thread, and no GPU sees it.
         String* fcls = f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4);
+        // The optimised kernel can name a global the block cannot locate (a
+        // helper's, inlined): the plain one then speaks for the block, and
+        // its helper says why it stays on the CPU. As the reference.
+        IRFunc* kfUse = kf;
+        if (kf != (IRFunc*)0 && kmod != (IRModule*)0 && parUnlocatedGlobal(kmod, _m, kf, fcls) != (String*)0)
+            kfUse = (IRFunc*)0;
         bool serialBlock = _parSerial != (Set*)0 && _parSerial.contains((Hashable*)fcls);
-        _mWhy = (String*)0;
-        String* mslText = _parMetal && !serialBlock ? parMslK(f, kf, kmod) : (String*)0;
+        // A global its run could not locate: no form at all, and that reason.
+        String* lost = serialBlock ? (String*)0 : parUnlocatedGlobal(_m, _m, f, fcls);
+        String* lostWhy = (String*)0;
+        if (lost != (String*)0)
+            {
+            lostWhy = String.withCString("it uses the global ");
+            lostWhy.append(parShown(lost));
+            }
+        bool noForms = serialBlock || lost != (String*)0;
+        _mWhy = lostWhy;
+        String* mslText = _parMetal && !noForms ? parMslK(f, kfUse, kmod) : (String*)0;
         mslWhy = _mWhy;
         _mMslWhy = mslWhy;
-        _mWhy = (String*)0;
-        String* ptx = _parPTX && !serialBlock ? parPtxK(f, kf, kmod) : (String*)0;
+        _mWhy = lostWhy;
+        String* ptx = _parPTX && !noForms ? parPtxK(f, kfUse, kmod) : (String*)0;
         ptxWhy = _mWhy;
-        _mWhy = (String*)0;
-        String* wgsl = _parWGSL && !serialBlock ? parWgslK(f, kf, kmod) : (String*)0;
+        _mWhy = lostWhy;
+        String* wgsl = _parWGSL && !noForms ? parWgslK(f, kfUse, kmod) : (String*)0;
         wgslWhy = _mWhy;
-        _mWhy = (String*)0;
-        Array* spv = _parSPIRV && !serialBlock ? parSpirvK(f, kf, kmod) : (Array*)0;
+        _mWhy = lostWhy;
+        Array* spv = _parSPIRV && !noForms ? parSpirvK(f, kfUse, kmod) : (Array*)0;
         spvWhy = _mWhy;
         Array* all = new Array();
         if (serialBlock)
@@ -23691,6 +23706,81 @@ class ClassInfo
         }
 
     // `Stdio$printf` reads as `Stdio.printf`, and an overload's `__double` tail goes.
+    // A data global the block's kernel would name (glob=) that the block's
+    // gpuGlobal() cannot locate, or nil. That method knows only the globals
+    // the body names itself; one a helper uses arrives with the helper once
+    // it is inlined, and the run then refused the kernel with no warning at
+    // compile time. Compared as the run compares: the IR name against the
+    // method's string literals. The method is in the program's module
+    // (`mod`); the kernel may be in the kernels' copy (`runMod`), which
+    // holds only what they need. As the reference.
+    String* parUnlocatedGlobal(IRModule* runMod, IRModule* mod, IRFunc* run, String* cls)
+        {
+        String* want = String.withString(cls);
+        want.appendCString("$gpuGlobal");
+        IRFunc* lookup = (IRFunc*)0;
+        for (u32 i = (u32)0; i < mod.funcs().count(); i = i + (u32)1)
+            if (((IRFunc*)mod.funcs().get(i)).name().equals(want))
+                lookup = (IRFunc*)mod.funcs().get(i);
+        if (lookup == (IRFunc*)0)
+            return (String*)0;
+        Map* symOf = new Map();
+        for (u32 q = (u32)0; q < mod.syms().count(); q = q + (u32)1)
+            symOf.set((Hashable*)((IRSymbol*)mod.syms().get(q)).name(), mod.syms().get(q));
+        Map* runSymOf = symOf;
+        if (runMod != mod)
+            {
+            runSymOf = new Map();
+            for (u32 q = (u32)0; q < runMod.syms().count(); q = q + (u32)1)
+                runSymOf.set((Hashable*)((IRSymbol*)runMod.syms().get(q)).name(), runMod.syms().get(q));
+            }
+        Set* known = new Set();
+        for (u32 b = (u32)0; b < lookup.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)lookup.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                for (u32 k = (u32)0; k < ip.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)ip.ops().get(k);
+                    if (o.kind() != (u8)OPK_SYM)
+                        continue;
+                    IRSymbol* ls = (IRSymbol*)symOf.get((Hashable*)o.name());
+                    if (ls == (IRSymbol*)0 || ls.kind() != (u8)SYM_STRINGLIT || ls.bytes() == (Array*)0)
+                        continue;
+                    String* t = new String();
+                    for (u32 q = (u32)0; q < ls.bytes().count(); q = q + (u32)1)
+                        {
+                        u8 c = (u8)((Number*)ls.bytes().get(q)).asU32();
+                        if (c != (u8)0)
+                            t.appendByte(c);
+                        }
+                    known.add((Hashable*)t);
+                    }
+                }
+            }
+        for (u32 b = (u32)0; b < run.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)run.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                if (!ip.op().equals(String.withCString("AddrOf")) || ip.ops().count() == (u32)0
+                    || ((IROperand*)ip.ops().get((u32)0)).kind() != (u8)OPK_SYM)
+                    continue;
+                String* gn = ((IROperand*)ip.ops().get((u32)0)).name();
+                IRSymbol* gs = (IRSymbol*)runSymOf.get((Hashable*)gn);
+                if (gs == (IRSymbol*)0 || gs.kind() != (u8)SYM_DATAGLOBAL || gn.hasPrefix(String.withCString("__sinit_"))
+                    || gn.hasPrefix(String.withCString("__sdata_")) || gn.hasSuffix(String.withCString("$init")))
+                    continue;
+                if (!known.contains((Hashable*)gn))
+                    return gn;
+                }
+            }
+        return (String*)0;
+        }
+
     String* parShown(String* n)
         {
         String* out = String.withCString("");

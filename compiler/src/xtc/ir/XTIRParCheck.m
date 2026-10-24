@@ -80,6 +80,52 @@ static NSString* shownName(NSString* irName)
     return [s stringByReplacingOccurrencesOfString:@"$" withString:@"."];
     }
 
+// A data global the block's kernel would name (glob=) that the block's
+// gpuGlobal() cannot locate, or nil. That method knows only the globals the
+// body names itself; one a helper uses arrives with the helper once the
+// kernel's optimiser inlines it, and the run then refused the kernel ("a
+// global the block cannot locate") with no warning at compile time.
+// Compared as the run compares: the IR name against the method's string
+// literals. The method is in the program's module (`module`); the kernel may
+// be in the kernels' copy (`runModule`), which holds only what they need.
+static NSString* _Nullable unlocatedGlobal(XTIRFunction* run, XTIRModule* runModule, XTIRModule* module, NSString* cls)
+    {
+    XTIRFunction* lookup = nil;
+    NSString* want = [cls stringByAppendingString:@"$gpuGlobal"];
+    for (XTIRFunction* g in module.functions)
+        if ([g.name isEqualToString:want])
+            lookup = g;
+    if (!lookup)
+        return nil;
+    NSMutableSet<NSString*>* known = [NSMutableSet set];
+    for (XTIRBlock* bb in lookup.blocks)
+        for (XTIRInsn* i in bb.instructions)
+            for (XTIROperand* op in i.operands)
+                {
+                XTIRSymbol* s = op.kind == XTIROperandKindSym ? [module symbolForId:op.symbolId] : nil;
+                if (s.kind != XTIRSymbolKindStringLit)
+                    continue;
+                NSString* t = [[NSString alloc] initWithData:s.stringBytes ?: [NSData data] encoding:NSUTF8StringEncoding];
+                while ([t hasSuffix:@"\0"])
+                    t = [t substringToIndex:t.length - 1];
+                if (t)
+                    [known addObject:t];
+                }
+    for (XTIRBlock* bb in run.blocks)
+        for (XTIRInsn* i in bb.instructions)
+            {
+            if (i.opcode != XTIROpAddrOf || !i.operands.count || i.operands[0].kind != XTIROperandKindSym)
+                continue;
+            XTIRSymbol* g = [runModule symbolForId:i.operands[0].symbolId];
+            if (g.kind != XTIRSymbolKindDataGlobal || [g.name hasPrefix:@"__sinit_"] || [g.name hasPrefix:@"__sdata_"] ||
+                [g.name hasSuffix:@"$init"])
+                continue;
+            if (![known containsObject:g.name])
+                return g.name;
+            }
+    return nil;
+    }
+
 @interface XTIRParCheck ()
 @property(nonatomic) XTIRModule* module;
 @property(nonatomic) NSMutableDictionary<NSString*, XTIRFunction*>* fnByName;
@@ -299,6 +345,11 @@ static BOOL gEmitsWGSL = NO;
         for (XTIRFunction* hf in module.functions)
             fc.fnByName[hf.name] = hf;
         NSString* fcls = [f.name substringToIndex:f.name.length - 4];
+        // The optimised kernel can name a global the block cannot locate (a
+        // helper's, inlined): the plain one then speaks for the block, and
+        // its helper says why it stays on the CPU.
+        if (kf && unlocatedGlobal(kf, kmod, module, fcls))
+            kf = nil;
         [XTIRParMSL setExtraMeta:[[[fc footprintWordsIn:f ivarNames:[fc ivarNamesOf:classDecls[fcls] in:classDecls]]
                                    stringByAppendingString:[fc costWordsIn:f]]
                                    stringByAppendingString:[[fc guardWordsIn:f guards:gParGuards[fcls]]
@@ -335,10 +386,15 @@ static BOOL gEmitsWGSL = NO;
         // A demoted auto block gets the serial marker instead of a kernel:
         // Par.run then runs it on one thread, and no GPU sees it.
         BOOL serialBlock = [serial containsObject:fcls];
-        NSString* msl = gEmitsMetal && !serialBlock ? metalOf(&mslWhy) : nil;
-        NSString* ptx = gEmitsPTX && !serialBlock ? ptxOf(&ptxWhy) : nil;
-        NSString* wgsl = gEmitsWGSL && !serialBlock ? wgslOf(&wgslWhy) : nil;
-        NSData* spv = gEmitsSPIRV && !serialBlock ? spirvOf(&spvWhy) : nil;
+        // A global its run could not locate: no form at all, and that reason.
+        NSString* lost = serialBlock ? nil : unlocatedGlobal(f, module, module, fcls);
+        if (lost)
+            mslWhy = ptxWhy = wgslWhy = spvWhy = [@"it uses the global " stringByAppendingString:shownName(lost)];
+        BOOL noForms = serialBlock || lost;
+        NSString* msl = gEmitsMetal && !noForms ? metalOf(&mslWhy) : nil;
+        NSString* ptx = gEmitsPTX && !noForms ? ptxOf(&ptxWhy) : nil;
+        NSString* wgsl = gEmitsWGSL && !noForms ? wgslOf(&wgslWhy) : nil;
+        NSData* spv = gEmitsSPIRV && !noForms ? spirvOf(&spvWhy) : nil;
         NSMutableData* all = [NSMutableData data];
         if (serialBlock)
             [all appendData:[@"// xcpar serial\n" dataUsingEncoding:NSUTF8StringEncoding]];
