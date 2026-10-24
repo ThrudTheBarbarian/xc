@@ -2231,15 +2231,14 @@ sequences inside xc code.
 
 ### 11.1 Reserved words (lexer-recognised)
 
-`asm`, `auto`, `bool`, `break`, `case`, `class`, `clobbers`,
-`continue`, `default`, `delete`, `dealloc`, `do`, `double`,
-`else`, `enum`, `false`, `float`, `for`, `global`, `i8`, `i16`,
-`i32`, `if`, `in`, `init`, `inline`, `naked`, `new`, `pointer`,
-`optional`, `protocol`, `register`, `release`, `retain`, `return`,
-`self`,
-`sizeof`, `static`, `string`, `struct`, `super`, `switch`,
-`true`, `typedef`, `u8`, `u16`, `u32`, `va_arg`, `va_end`,
-`va_start`, `void`, `volatile`, `weak`, `while`.
+`asm`, `auto`, `bool`, `break`, `case`, `catch`, `class`,
+`continue`, `default`, `defer`, `delete`, `double`, `else`, `enum`,
+`extern`, `false`, `final`, `float`, `for`, `global`, `goto`, `i8`,
+`i16`, `i32`, `i64`, `if`, `in`, `inline`, `new`, `optional`,
+`pointer`, `protocol`, `register`, `release`, `retain`, `return`,
+`sizeof`, `static`, `string`, `struct`, `switch`, `throw`,
+`throws`, `true`, `try`, `typedef`, `u8`, `u16`, `u32`, `u64`,
+`void`, `volatile`, `while`.
 
 The parser accepts additional in-context tokens (function
 annotations such as `:irq`, `:vbi` and `:banked`; see §6.6) that
