@@ -4056,7 +4056,7 @@ class Sema
             // method IDENTITY: a wrapper with sibling overloads (`sqrt(float)`
             // beside `sqrt(double)`) still finds a candidate that is not
             // itself, and captures the call straight back into the class.
-            if (m != 0 && _functions.get((Hashable*)n.name()) != 0 && _curMethod != 0 && n.name().equals(_curMethod.name()))
+            if (m != 0 && wrapsFree(n.name()))
                 m = (Node*)0;
             if (m != 0)
                 {
@@ -5392,7 +5392,7 @@ class Sema
             if (kidIdx >= (u32)call.num() || call.kidCount() > (u32)call.num())
                 return (String*)0;
             u32 argc = (u32)call.num();
-            if (_curClass != 0 && !(_curMethod != 0 && _curMethod.name() != 0 && call.name().equals(_curMethod.name())))
+            if (_curClass != 0 && !wrapsFree(call.name()))
                 {
                 Array* ms = methodsNamedNearest(_curClass, call.name());
                 if (ms.count() > (u32)0)
@@ -6267,14 +6267,43 @@ class Sema
         return false;
         }
 
+    // Is a call of this name, in the method being compiled, the free function
+    // it wraps? Only when the method calls its OWN name and a free function of
+    // that name can be what it wraps: one with no body (a C function, an
+    // extern) or one defined in the method's own file. A program's own
+    // `i32 compare(i32, i32, i32)` captured `String.compare(Object*)`'s call to
+    // its sibling `compare(String*)`, and building the standard library failed
+    // inside it (2026-10-24). As the reference.
+    bool wrapsFree(String* name)
+        {
+        if (name == 0 || _curMethod == 0 || _curMethod.name() == 0 || !name.equals(_curMethod.name()))
+            return false;
+        Array* group = (Array*)_functions.get((Hashable*)name);
+        if (group == 0)
+            return false;
+        String* here = _curMethod.file();
+        for (u32 i = (u32)0; i < group.count(); i = i + (u32)1)
+            {
+            Node* fn = (Node*)group.get(i);
+            bool body = false;
+            for (u32 k = (u32)0; k < fn.kidCount(); k = k + (u32)1)
+                if (fn.kid(k).kind() == (u16)nkBlock)
+                    body = true;
+            bool beside = here != (String*)0 && fn.file() != (String*)0 && fn.file().equals(here);
+            if (!body || beside)
+                return true;
+            }
+        return false;
+        }
+
     // Does the class being compiled, or an ancestor, declare a method of this
-    // name? A method naming ITSELF does not count: that is how a wrapper
+    // name? A method naming ITSELF does not count when that is how a wrapper
     // reaches the free function it wraps (`Math.sqrt` calling `sqrt`).
     bool classChainDeclares(String* name)
         {
         if (name == 0 || _curClass == 0)
             return false;
-        if (_curMethod != 0 && _curMethod.name() != 0 && name.equals(_curMethod.name()))
+        if (wrapsFree(name))
             return false;
         for (Node* c = _curClass; c != 0; c = parentOf(c))
             for (u32 k = (u32)0; k < c.kidCount(); k = k + (u32)1)

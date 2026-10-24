@@ -434,6 +434,7 @@ class ClassInfo
     Map* _localTypes; // name -> its AST type spelling
     Map* _globals;    // name -> its AST type spelling
     Map* _funcs;      // name -> its FunctionDecl node
+    Map* _funcGroups; // name -> every FunctionDecl of it (Array), for the self-wrapper test
     bool _failed;     // a shape this slice does not lower yet
 
     // ── aggregates and frame slots ───────────────────────────────────────
@@ -504,6 +505,7 @@ class ClassInfo
     Node* _objectDecl;        // the implicit root every parentless class gets
     ClassInfo* _curClass;     // the class whose method is being lowered
     String* _curMethodName;   // …and its NAME, for the self-wrapper carve-out
+    String* _curMethodFile;   // …and its source file (the carve-out takes only a free function there, or a bodiless one)
     IRValue* _self;           // …and its receiver
     IRValue* _retainedSelf;   // …and the retain to undo at every exit, if any
     Array* _arcScopes;        // Array@ per scope of the strong names it owns
@@ -547,6 +549,7 @@ class ClassInfo
         _localTypes = new Map();
         _globals = new Map();
         _funcs = new Map();
+        _funcGroups = new Map();
         _structs = new Map();
         _layoutIds = new Map();
         _layoutPending = new Map();
@@ -5589,7 +5592,22 @@ class ClassInfo
         // a method calling its OWN name means the free function (the
         // `sqrt(double v) { return sqrt(v); }` wrapper), anything else means
         // the member.
-        bool selfWrapper = _curMethodName != 0 && n.name().equals(_curMethodName) && _funcs.get((Hashable*)n.name()) != 0;
+        // Only a free function that CAN be what the method wraps: one with no
+        // body (a C function, an extern) or one in the method's own file — as
+        // sema's wrapsFree, so a program's `compare(i32, i32, i32)` does not
+        // capture String.compare(Object*)'s call to its sibling (2026-10-24).
+        bool selfWrapper = false;
+        Array* fg = _curMethodName != 0 && n.name().equals(_curMethodName) && _funcGroups != (Map*)0
+                        ? (Array*)_funcGroups.get((Hashable*)n.name()) : (Array*)0;
+        for (u32 q = (u32)0; fg != (Array*)0 && q < fg.count() && !selfWrapper; q = q + (u32)1)
+            {
+            Node* fd = (Node*)fg.get(q);
+            bool body = false;
+            for (u32 k = (u32)0; k < fd.kidCount(); k = k + (u32)1)
+                if (fd.kid(k).kind() == (u16)nkBlock)
+                    body = true;
+            selfWrapper = !body || (_curMethodFile != 0 && fd.file() != 0 && fd.file().equals(_curMethodFile));
+            }
         if (_curClass != 0 && _self != 0 && !selfWrapper && methodDeclFor(_curClass, n) != 0)
             {
             Node* decl = methodDeclFor(_curClass, n);
@@ -24402,6 +24420,13 @@ class ClassInfo
                     d.addFlag((u32)NF_CABI);
                 }
             _funcs.set((Hashable*)d.name(), (Object*)d);
+            Array* fg = (Array*)_funcGroups.get((Hashable*)d.name());
+            if (fg == (Array*)0)
+                {
+                fg = new Array();
+                _funcGroups.set((Hashable*)d.name(), (Object*)fg);
+                }
+            fg.add((Object*)d);
             // …and under the MANGLED name, which is what tells two overloads
             // apart. Keyed by name alone, `show(u32)` and `show(u8,u8)` are
             // the same entry and whichever was declared last answers for both.
@@ -24725,6 +24750,7 @@ class ClassInfo
         _fnThrows = m.hasFlag((u32)NF_THROWS);
         _curClass = info;
         _curMethodName = m.name();
+        _curMethodFile = m.file();
         if (!m.hasFlag((u32)NF_STATIC))
             {
             IRValue* selfV = new IRValue(info.selfPtr());

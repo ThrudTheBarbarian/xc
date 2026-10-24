@@ -570,8 +570,28 @@ static BOOL XTIsErasedKeyType(XTType* t)
     // A method whose name matches no free function is unaffected — the layer
     // simply finds nothing and falls through to the self-method path below, so
     // ordinary recursion still works.
+    //
+    // Only a free function that CAN be what the method wraps defers: one with
+    // no body (a C function, an extern) or one defined in the method's own
+    // file. A program's own `i32 compare(i32, i32, i32)` captured
+    // `String.compare(Object*)`'s call to its sibling `compare(String*)`, and
+    // building the standard library failed inside it (2026-10-24); a program
+    // function with a body in another file is never what a library method
+    // wraps. As the port.
     if ([name isEqualToString:self.currentMethod.methodName])
-        return NO;
+        {
+        NSString* here = self.currentMethod.location.filename;
+        for (XTSymbol* s in [[self currentScope] lookupFunctionCandidates:name])
+            {
+            if (![s.symbolType isKindOfClass:[XTFunctionType class]])
+                continue;
+            BOOL bodiless = [self.externalFunctions containsObject:
+                                 [@"_fn_" stringByAppendingString:(s.mangledName ?: s.symbolName)]];
+            BOOL beside = here && s.definedAt.filename && [s.definedAt.filename isEqualToString:here];
+            if (bodiless || beside)
+                return NO;
+            }
+        }
     for (XTClassDeclNode* c = self.currentClassNode; c != nil; c = c.parentClass)
         for (XTMethodDeclNode* m in c.methods)
             if ([m.methodName isEqualToString:name])
