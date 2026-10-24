@@ -429,11 +429,13 @@ class X86Fixup
             _regSize = (u32)32;
             return v;
             }
-        // zmmN: the same registers at 64 bytes; a zmm operand selects EVEX.
+        // zmmN: 32 registers at 64 bytes; a zmm operand selects EVEX, whose
+        // R', V' and X bits carry bit 4. zmm16-31 exist only there; any other
+        // encoding refuses them (encodeOne). As the reference.
         if (s.hasPrefix(String.withCString("zmm")))
             {
             i32 v = smallNumber(s, (u32)3);
-            if (v < (i32)0 || v > (i32)15)
+            if (v < (i32)0 || v > (i32)31)
                 return (i32)-1;
             _regSize = (u32)64;
             return v;
@@ -1017,13 +1019,25 @@ class X86Fixup
     u32 _osz;
     bool _w;
     bool _force8;
+    bool _evexUsed;  // set by eEvex: zmm16-31 are legal only then
 
     Array* encodeOne(String* line)
         {
         _ripDispOffset = (i32)-1;
         _ripSymbol = (String*)0;
         _ripAddend = (i32)0;
+        _evexUsed = false;
         Array* bytes = encodeInsn(line);
+        // zmm16-31 exist only in the EVEX encoding: any other one would drop
+        // bit 4 and name zmm0-15 instead, silently. As the reference.
+        if (bytes != (Array*)0 && !_evexUsed && X86Asm.namesHighZmm(line))
+            {
+            String* m = String.withCString("zmm16-31 need an EVEX encoding: '");
+            m.append(line);
+            m.appendByte((u8)$27);
+            fail(m);
+            return (Array*)0;
+            }
         if (bytes != (Array*)0 && _ripDispOffset >= (i32)0 && _ripSymbol != (String*)0)
             {
             // The CPU adds the disp32 to the address of the NEXT instruction, so
@@ -1193,6 +1207,23 @@ class X86Fixup
                 _force8 = true;
             }
 
+        // A broadcast from a GENERAL register: only EVEX has it, at every
+        // width (7A b / 7B w / 7C d, q with W1); the table forms read the
+        // register number as an xmm one. As the reference.
+        if (_ops.count() == (u32)2 && a.kind() == (u32)OP_REG
+            && (a.size() == (u32)16 || a.size() == (u32)32 || a.size() == (u32)64)
+            && b.kind() == (u32)OP_REG
+            && (b.size() == (u32)1 || b.size() == (u32)2 || b.size() == (u32)4 || b.size() == (u32)8)
+            && mn.hasPrefix(String.withCString("vpbroadcast")) && mn.byteLength() == (u32)12)
+            {
+            u8 e = mn.byteAt((u32)11);
+            u32 bop = e == (u8)'b' ? (u32)$7A : e == (u8)'w' ? (u32)$7B : (u32)$7C;
+            eEvex((u32)2, (u32)1, e == (u8)'q' ? (u32)1 : (u32)0, a.reg(), (i32)-1, b,
+                  a.size() == (u32)64 ? (u32)2 : a.size() == (u32)32 ? (u32)1 : (u32)0);
+            e8(bop);
+            eModRM(a.reg(), b);
+            return _out;
+            }
         encGroupA(mn, a, b);
         if (_hit || _failed)
             return _failed ? (Array*)0 : _out;
@@ -2043,18 +2074,53 @@ class X86Fixup
     //   P2  z L'L b V' a a a    L'L the length (2 = 512); V' inverted; aaa the opmask
     // Registers are 0-15, so R' and V' are always 1. For a register r/m, X holds
     // bit 4 of that register (1, inverted); for memory, the index's bit 3.
+    // R' holds bit 4 of the reg register and V' bit 4 of vvvv's (both
+    // inverted); for a register r/m, X holds bit 4 of that register. As the
+    // reference.
     void eEvex(u32 map, u32 pp, u32 w, u32 reg, i32 vreg, XOperand* rm, u32 ll)
         {
         i32 bb = rm.kind() == (u32)OP_REG ? (i32)rm.reg() : rm.base();
-        i32 xx = rm.kind() == (u32)OP_REG ? (i32)0 : rm.index();
+        i32 xx = rm.kind() == (u32)OP_REG ? (i32)((rm.reg() & (u32)16) >> (u32)1) : rm.index();
         if (bb < (i32)0) bb = (i32)0;
         if (xx < (i32)0) xx = (i32)0;
+        u32 vv = vreg < (i32)0 ? (u32)0 : (u32)vreg;
         u32 vvvv = vreg < (i32)0 ? (u32)$0F : ((~(u32)vreg) & (u32)$0F);
+        _evexUsed = true;
         e8((u32)$62);
         e8(((reg & (u32)8) != (u32)0 ? (u32)0 : (u32)$80) | (((u32)xx & (u32)8) != (u32)0 ? (u32)0 : (u32)$40)
-           | (((u32)bb & (u32)8) != (u32)0 ? (u32)0 : (u32)$20) | (u32)$10 | (map & (u32)7));
+           | (((u32)bb & (u32)8) != (u32)0 ? (u32)0 : (u32)$20) | ((reg & (u32)16) != (u32)0 ? (u32)0 : (u32)$10)
+           | (map & (u32)7));
         e8((w != (u32)0 ? (u32)$80 : (u32)0) | (vvvv << (u32)3) | (u32)4 | (pp & (u32)3));
-        e8((ll << (u32)5) | (u32)8);
+        e8((ll << (u32)5) | ((vv & (u32)16) != (u32)0 ? (u32)0 : (u32)8));
+        }
+
+    // A register number 16-31 (zmm16-31) named in an instruction's text.
+    static bool namesHighZmm(String* s)
+        {
+        String* t = s.lowercased();
+        u32 n = t.byteLength();
+        for (u32 i = (u32)0; i + (u32)4 < n; i = i + (u32)1)
+            {
+            if (t.byteAt(i) != (u8)'z' || t.byteAt(i + (u32)1) != (u8)'m' || t.byteAt(i + (u32)2) != (u8)'m')
+                continue;
+            if (i > (u32)0 && X86Asm.identByte(t.byteAt(i - (u32)1)))
+                continue;
+            u8 d1 = t.byteAt(i + (u32)3);
+            u8 d2 = t.byteAt(i + (u32)4);
+            if (d2 < (u8)'0' || d2 > (u8)'9')
+                continue;
+            if (i + (u32)5 < n && X86Asm.identByte(t.byteAt(i + (u32)5)))
+                continue;
+            u32 v = (u32)(d1 - (u8)'0') * (u32)10 + (u32)(d2 - (u8)'0');
+            if (d1 >= (u8)'1' && d1 <= (u8)'3' && v >= (u32)16 && v <= (u32)31)
+                return true;
+            }
+        return false;
+        }
+
+    static bool identByte(u8 c)
+        {
+        return (c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'0' && c <= (u8)'9') || c == (u8)'_';
         }
 
     static void evAdd(Map* m, String* name, u32 form, u32 map, u32 pp, u32 w, u32 op, u32 n)

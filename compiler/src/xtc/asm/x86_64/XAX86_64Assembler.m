@@ -65,9 +65,11 @@ static BOOL parseReg(NSString *s, int *num, int *size, BOOL *needRex) {
         // ymm: the same 16 registers at 32 bytes. A ymm operand is what sets
         // VEX.L; nothing else distinguishes the encodings.
         for (int i=0;i<16;i++) m[[NSString stringWithFormat:@"ymm%d", i]] = @[@(i), @32, @0];
-        // zmm: the same 16 registers at 64 bytes; a zmm operand is what selects
-        // the EVEX encoding. Only zmm0-15: nothing here allocates zmm16-31.
-        for (int i=0;i<16;i++) m[[NSString stringWithFormat:@"zmm%d", i]] = @[@(i), @64, @0];
+        // zmm: 32 registers at 64 bytes; a zmm operand is what selects the
+        // EVEX encoding, whose R', V' and X bits carry bit 4 of a register
+        // number. zmm16-31 exist only there (an AVX-512 function's extra
+        // registers); an instruction encoded any other way refuses them.
+        for (int i=0;i<32;i++) m[[NSString stringWithFormat:@"zmm%d", i]] = @[@(i), @64, @0];
         // k0-k7, the AVX-512 opmask registers, at a size no other operand has.
         for (int i=0;i<8;i++) m[[NSString stringWithFormat:@"k%d", i]] = @[@(i), @(XK_SIZE), @0];
         T = m;
@@ -332,17 +334,29 @@ static void emitModRMN(NSMutableData *d, int reg, const XOperand *rm, int N) {
 //   P0  R X B R' 0 m m m     R, X, B, R' inverted; mmm the opcode map (1 0F, 2 0F38, 3 0F3A)
 //   P1  W v v v v 1 p p      vvvv the first source inverted (1111 when none); pp 66/F3/F2
 //   P2  z L'L b V' a a a     L'L the vector length (2 = 512); V' inverted; aaa the opmask
-// Registers here are 0-15, so R' and V' are always 1. For a register r/m, X
-// holds bit 4 of that register (1, inverted); for memory it is the index's bit 3.
+// R' holds bit 4 of the ModRM.reg register and V' bit 4 of vvvv's (both
+// inverted). For a register r/m, X holds bit 4 of that register (inverted);
+// for memory it is the index's bit 3.
+static BOOL gEvexUsed;   // set by emitEvex: zmm16-31 are legal only then
 static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg, const XOperand *rm, int LL) {
     int rr = reg < 0 ? 0 : reg;
     int bb = rm->kind == OpReg ? rm->reg : (rm->base < 0 ? 0 : rm->base);
-    int xx = rm->kind == OpReg ? 0 : (rm->index < 0 ? 0 : rm->index);
+    int xx = rm->kind == OpReg ? (rm->reg & 16) >> 1 : (rm->index < 0 ? 0 : rm->index);
+    int vv = vreg < 0 ? 0 : vreg;
     int vvvv = vreg < 0 ? 0x0F : ((~vreg) & 0x0F);
+    gEvexUsed = YES;
     emit8(d, 0x62);
-    emit8(d, (uint8_t)(((rr & 8) ? 0 : 0x80) | ((xx & 8) ? 0 : 0x40) | ((bb & 8) ? 0 : 0x20) | 0x10 | (map & 7)));
+    emit8(d, (uint8_t)(((rr & 8) ? 0 : 0x80) | ((xx & 8) ? 0 : 0x40) | ((bb & 8) ? 0 : 0x20) | ((rr & 16) ? 0 : 0x10) | (map & 7)));
     emit8(d, (uint8_t)((W ? 0x80 : 0) | (vvvv << 3) | 0x04 | (pp & 3)));
-    emit8(d, (uint8_t)((LL << 5) | 0x08));
+    emit8(d, (uint8_t)((LL << 5) | ((vv & 16) ? 0 : 0x08)));
+}
+
+// A register number 16-31 (zmm16-31) in the text of an instruction.
+static BOOL namesHighZmm(NSString *s) {
+    static NSRegularExpression *re = nil;
+    if (!re) re = [NSRegularExpression regularExpressionWithPattern:@"\\bzmm(1[6-9]|2[0-9]|3[01])\\b"
+                                                              options:NSRegularExpressionCaseInsensitive error:NULL];
+    return [re firstMatchInString:s options:0 range:NSMakeRange(0, s.length)] != nil;
 }
 
 @implementation XAX86_64Assembler {
@@ -390,7 +404,16 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
 // which encodes one instruction at a time in isolation).
 - (nullable NSData *)encodeOne:(NSString *)line error:(NSError **)error {
     gRipDispOffset = -1; gRipSymbol = nil; gRipAddend = 0;
+    gEvexUsed = NO;
     NSData *out = [self encodeInsn:line error:error];
+    // zmm16-31 exist only in the EVEX encoding: any other one would drop bit
+    // 4 and name zmm0-15 instead, silently.
+    if (out && !gEvexUsed && namesHighZmm(line)) {
+        if (error) *error = [NSError errorWithDomain:@"XAX86_64" code:1
+                                            userInfo:@{NSLocalizedDescriptionKey:
+                                                [NSString stringWithFormat:@"zmm16-31 need an EVEX encoding: '%@'", line]}];
+        return nil;
+    }
     if (out && gRipDispOffset >= 0 && gRipSymbol) {
         // The CPU adds the disp32 to the address of the NEXT instruction, so the
         // addend is minus the number of bytes that follow the displacement —
@@ -450,6 +473,20 @@ static void emitEvex(NSMutableData *d, int map, int pp, int W, int reg, int vreg
     else if (b && b->kind == OpReg) osz = b->size;
     else if (a && a->kind == OpMem && a->size) osz = a->size;
     BOOL w = (osz == 8);
+
+    // A broadcast from a GENERAL register (`vpbroadcastd zmm20, eax`): only
+    // EVEX has it, at every width (opcodes 7A b / 7B w / 7C d, q with W1).
+    // The table forms below are from xmm/memory (58/59/78/79) and read the
+    // register number as an xmm one: broadcast from xmm0, not eax.
+    if (opCount == 2 && a->kind == OpReg && (a->size == 16 || a->size == 32 || a->size == 64)
+        && b->kind == OpReg && (b->size == 1 || b->size == 2 || b->size == 4 || b->size == 8)
+        && [mn hasPrefix:@"vpbroadcast"] && mn.length == 12) {
+        unichar e = [mn characterAtIndex:11];
+        int bop = e == 'b' ? 0x7A : e == 'w' ? 0x7B : 0x7C;
+        emitEvex(out, 2, 1, e == 'q', a->reg, -1, b, a->size == 64 ? 2 : a->size == 32 ? 1 : 0);
+        emit8(out, (uint8_t)bop);
+        emitModRM(out, a->reg, b); CLEANUP(); return out;
+    }
 
     // A segment override is the OUTERMOST prefix: it precedes the operand-size
     // 0x66 and the REX byte, so it is emitted first and once.
