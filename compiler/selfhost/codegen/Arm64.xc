@@ -1172,10 +1172,26 @@ class Arm64
         if (n.res() != (IRValue*)0 && inMap(_laneSkip, n.res())) return;
         // A constant splat the vector allocator gave no register is made where
         // it is read (vecRematBefore), not here.
-        if (_vRemat != (Map*)0 && _vRemat.count() > (u32)0) {
+        // A spilled vector is loaded where it is read and stored where it is
+        // defined, through the same scratch registers.
+        if ((_vRemat != (Map*)0 && _vRemat.count() > (u32)0) || (_vSpill != (Map*)0 && _vSpill.count() > (u32)0)) {
             if (n.res() != (IRValue*)0 && inMap(_vRemat, n.res())) return;
             Array* made = vecRematBefore(n);
+            IRValue* sv = n.res() != (IRValue*)0 && inMap(_vSpill, n.res()) ? n.res() : (IRValue*)0;
+            if (sv != (IRValue*)0) {
+                if (_vScratch < (u32)29) {
+                    Stdio.printf("xcc-cg-arm64: error: vector register pressure "
+                                 "exceeded the 14-register pool (v18-v31) in '%s'\n", fn.name().cString());
+                    Process.exit((i32)1);
+                }
+                String* name = String.withCString("v");
+                name.appendFormat("%lu", _vScratch);
+                _vecReg.set((Hashable*)sv, (Object*)name);
+                made.add((Object*)sv);
+            }
             emitInsn1(fn, n);
+            if (sv != (IRValue*)0)
+                _out.appendFormat("    str q%lu, [sp, #%lu]\n", _vScratch, ((Number*)_vSpill.get((Hashable*)sv)).asU32());
             vecRematAfter(made);
             return;
         }
@@ -3682,6 +3698,7 @@ class Arm64
     // A splat of a constant the allocator gave no register (it ran out): made
     // again into a scratch register at each instruction that reads it.
     Map* _vRemat;       // value -> the constant operand its splat broadcasts
+    u32 _vScratch;      // the next free scratch after vecRematBefore (31 down to 29)
     // The constant splats this instruction reads that have no register, made
     // into v31, v30, v29 for it (the fused multiply's operands included).
     Array* vecRematBefore(IRInsn* n)
@@ -3701,18 +3718,30 @@ class Arm64
         u32 scratch = (u32)31;
         for (u32 k = (u32)0; k < reads.count(); k = k + (u32)1) {
             IROperand* o = (IROperand*)reads.get(k);
-            if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0 || !inMap(_vRemat, o.val())) continue;
+            if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
+            bool rm = inMap(_vRemat, o.val());
+            bool sp = !rm && _vSpill != (Map*)0 && inMap(_vSpill, o.val());
+            if (!rm && !sp) continue;
             if (made.contains((Object*)o.val())) continue;
+            if (scratch < (u32)29) {
+                Stdio.printf("xcc-cg-arm64: error: vector register pressure "
+                             "exceeded the 14-register pool (v18-v31) in '%s'\n", _fn.name().cString());
+                Process.exit((i32)1);
+            }
             String* name = String.withCString("v");
             name.appendFormat("%lu", scratch);
-            scratch = scratch - (u32)1;
             _vecReg.set((Hashable*)o.val(), (Object*)name);
-            IRInsn* sp = IRInsn.with(String.withCString("VSplat"));
-            sp.setRes(o.val());
-            sp.add((IROperand*)_vRemat.get((Hashable*)o.val()));
-            emitVSplat(sp);
+            if (rm) {
+                IRInsn* spl = IRInsn.with(String.withCString("VSplat"));
+                spl.setRes(o.val());
+                spl.add((IROperand*)_vRemat.get((Hashable*)o.val()));
+                emitVSplat(spl);
+            } else
+                _out.appendFormat("    ldr q%lu, [sp, #%lu]\n", scratch, ((Number*)_vSpill.get((Hashable*)o.val())).asU32());
+            scratch = scratch - (u32)1;
             made.add((Object*)o.val());
         }
+        _vScratch = scratch;
         return made;
     }
 
@@ -4213,6 +4242,9 @@ class Arm64
     {
         _vecCalleeUsed = new Map();
         _vRemat = new Map();
+        _vSpill = new Map();
+        _vSpillOrder = new Array();
+        _vSpillOf = new Map();
         _vecReg = new Map();
         _vecClass = new Map();
         Array* vecVals = new Array();
@@ -4347,6 +4379,9 @@ class Arm64
             _vRemat = new Map();
             Map* rematOf = vecRematCandidates(fn, vecVals);
             _vRematOf = rematOf;
+            _vSpill = new Map();
+            _vSpillOrder = new Array();
+            _vSpillOf = vecSpillCandidates(fn, vecVals, rematOf);
             regOf = vecScan(fn, classes, lo, hi, true);
         }
         if (regOf == (Map*)0) {
@@ -4366,6 +4401,14 @@ class Arm64
     }
 
     Map* _vRematOf;     // the classes that may be given up: class -> its constant
+    // A vector the allocator gave no register that is not a constant (it ran
+    // out): it lives in a 16-byte frame slot of its own, stored where it is
+    // defined and loaded into v31/v30/v29 where it is read. x86 spills to the
+    // value's own slot; arm64's vector values have 8-byte colourable slots, so
+    // these are laid out after the value slots (buildSlots). As the reference.
+    Map* _vSpillOf;     // the classes that may be spilled (value -> value)
+    Map* _vSpill;       // spilled value -> its frame offset (Number), set by buildSlots
+    Array* _vSpillOrder; // the spilled values, in the order given up
 
     // The classes that are one constant's splat and nothing else: no phi, no
     // lane group, no other member. Each maps to the constant operand.
@@ -4412,6 +4455,50 @@ class Arm64
         return r;
     }
 
+    // The classes that may be spilled: one member (the value itself), defined
+    // by an instruction, not a phi or a phi's incoming value (the edge copies
+    // registers), not in a lane group, not a constant's splat (those are made
+    // again instead), and read by no terminator. As the reference.
+    Map* vecSpillCandidates(IRFunc* fn, Array* vecVals, Map* rematOf)
+    {
+        Map* r = new Map();
+        Map* members = new Map();
+        for (u32 i = (u32)0; i < vecVals.count(); i = i + (u32)1) {
+            IRValue* v = (IRValue*)vecVals.get(i);
+            IRValue* c = classOfVec(v);
+            if (c != v) members.set((Hashable*)c, (Object*)c);
+        }
+        Map* barred = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1) {
+                IRInsn* p = (IRInsn*)bb.phis().get(i);
+                for (u32 k = (u32)0; k < p.ops().count(); k = k + (u32)1) {
+                    IROperand* o = (IROperand*)p.ops().get(k);
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0) barred.set((Hashable*)o.val(), (Object*)o.val());
+                }
+            }
+            IRInsn* t = bb.term();
+            for (u32 k = (u32)0; t != (IRInsn*)0 && k < t.ops().count(); k = k + (u32)1) {
+                IROperand* o = (IROperand*)t.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0) barred.set((Hashable*)o.val(), (Object*)o.val());
+            }
+        }
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                IRValue* v = n.res();
+                if (v == (IRValue*)0 || !isVecTy(v.ty())) continue;
+                if (classOfVec(v) != v || inMap(members, v) || inMap(_vVecPhis, v) || inMap(rematOf, v)
+                    || inMap(barred, v)
+                    || _laneBase.get((Hashable*)v) != (Object*)0 || _laneLeader.get((Hashable*)v) != (Object*)0) continue;
+                r.set((Hashable*)v, (Object*)v);
+            }
+        }
+        return r;
+    }
+
     // The scan itself: class -> register, or 0 when the pool runs out. With
     // `remat`, v29-v31 stay out of the pool and a constant splat gives way.
     Map* vecScan(IRFunc* fn, Array* classes, Map* lo, Map* hi, bool remat)
@@ -4452,20 +4539,27 @@ class Arm64
                 IRValue* victim = (IRValue*)0;
                 i32 far = (i32)0 - (i32)1;
                 i32 farLo = (i32)0 - (i32)1;
-                if (inMap(_vRematOf, cls)) {
+                if (inMap(_vRematOf, cls) || inMap(_vSpillOf, cls)) {
                     victim = cls;
                     far = ((Number*)hi.get((Hashable*)cls)).asI32();
                     farLo = ((Number*)lo.get((Hashable*)cls)).asI32();
                 }
                 for (u32 a = (u32)0; a < active.count(); a = a + (u32)1) {
                     IRValue* av = (IRValue*)active.get(a);
-                    if (!inMap(_vRematOf, av) || inMap(_vBorrowed, av)) continue;
+                    if ((!inMap(_vRematOf, av) && !inMap(_vSpillOf, av)) || inMap(_vBorrowed, av)) continue;
                     i32 h = ((Number*)hi.get((Hashable*)av)).asI32();
                     i32 l = ((Number*)lo.get((Hashable*)av)).asI32();
                     if (h > far || (h == far && l > farLo)) { far = h; farLo = l; victim = av; }
                 }
                 if (victim == (IRValue*)0) return (Map*)0;
-                _vRemat.set((Hashable*)victim, _vRematOf.get((Hashable*)victim));
+                // A constant is made again where it is read; anything else
+                // lives in a frame slot of its own.
+                if (inMap(_vRematOf, victim))
+                    _vRemat.set((Hashable*)victim, _vRematOf.get((Hashable*)victim));
+                else {
+                    _vSpill.set((Hashable*)victim, (Object*)Number.withU32((u32)0));
+                    _vSpillOrder.add((Object*)victim);
+                }
                 if (victim == cls) continue;
                 freePool.add(regOf.get((Hashable*)victim));
                 regOf.remove((Hashable*)victim);
@@ -9598,6 +9692,15 @@ class Arm64
         }
         if (_aliasLo == (u32)$FFFF_FFFF) { _aliasLo = (u32)0; _aliasHi = (u32)0; }
 
+        // The spilled vectors' 16-byte slots (allocateVectorRegisters), in the
+        // order they were given up, after the value slots. As the reference.
+        if (_vSpillOrder != (Array*)0 && _vSpillOrder.count() > (u32)0) {
+            cur = (cur + (u32)15) & ~(u32)15;
+            for (u32 i = (u32)0; i < _vSpillOrder.count(); i = i + (u32)1) {
+                _vSpill.set((Hashable*)_vSpillOrder.get(i), (Object*)Number.withU32(cur));
+                cur = cur + (u32)16;
+            }
+        }
         // The stack canary: a frame with an aggregate or a taken address (what
         // a write can run along) gets a guard word just above its value slots,
         // under the save area and the caller's frame that such a write would

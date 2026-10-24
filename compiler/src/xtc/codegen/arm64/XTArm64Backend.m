@@ -126,6 +126,13 @@ static NSUInteger sArm64CanaryN = 0;
 // Constant splats the vector allocator gave no register: value -> the constant,
 // made again into v31, v30, v29 at each instruction that reads it.
 @property (nonatomic) NSMutableDictionary<NSNumber *, XTIROperand *> *vRemat;
+// A vector the allocator gave no register that is not a constant: a 16-byte
+// frame slot of its own after the value slots, stored where it is defined and
+// loaded into v31/v30/v29 where it is read (the port's _vSpill).
+@property (nonatomic) NSSet<NSNumber *> *vSpillOf;
+@property (nonatomic) NSMutableDictionary<NSNumber *, NSNumber *> *vSpill;   // value -> frame offset
+@property (nonatomic) NSMutableArray<NSNumber *> *vSpillOrder;
+@property (nonatomic) NSUInteger vScratch;
 // Lane groups: four broadcasts of adjacent 32-bit loads (a[k..k+3]) become one
 // `ldr q` and by-lane multiplies. Each member broadcast → its lane and its
 // group's leader (the first in the block); each leader → @[base operand,
@@ -1013,6 +1020,15 @@ static unsigned xtArm64GlobalP2Align(uint32_t size) {
         && [self arm64AggSize:rt.layout] > 16) {
         ctx.sretSaveOffset = cur;
         cur += 8;
+    }
+    // The spilled vectors' 16-byte slots, in the order they were given up,
+    // after the value slots (the port's buildSlots).
+    if (ctx.vSpillOrder.count) {
+        cur = (cur + 15) & ~(NSUInteger)15;
+        for (NSNumber *v in ctx.vSpillOrder) {
+            ctx.vSpill[v] = @(cur);
+            cur += 16;
+        }
     }
     // The stack canary: a frame with an aggregate or a taken address (what a
     // write can run along) gets a guard word just above its value slots, under
@@ -4765,7 +4781,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         inBlock:(XTIRBlock *)block
             ctx:(XTArm64FnCtx *)ctx
 {
-    if (ctx.vRemat.count == 0) {
+    if (ctx.vRemat.count == 0 && ctx.vSpill.count == 0) {
         [self emitInsn1:insn inBlock:block ctx:ctx];
         return;
     }
@@ -4786,15 +4802,39 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         if ([fz[key] isKindOfClass:[XTIROperand class]]) [reads addObject:fz[key]];
     NSUInteger scratch = 31;
     for (XTIROperand *o in reads) {
-        if (o.kind != XTIROperandKindUse || !ctx.vRemat[@(o.valueId)] || [made containsObject:@(o.valueId)]) continue;
+        if (o.kind != XTIROperandKindUse || [made containsObject:@(o.valueId)]) continue;
+        BOOL rm = ctx.vRemat[@(o.valueId)] != nil;
+        BOOL sp = !rm && ctx.vSpill[@(o.valueId)] != nil;
+        if (!rm && !sp) continue;
+        if (scratch < 29) {
+            fprintf(stderr, "xcc-cg-arm64: error: vector register pressure exceeded "
+                            "the 14-register pool (v18-v31) in '%s'\n", ctx.fn.name.UTF8String);
+            exit(1);
+        }
         ctx.vecReg[@(o.valueId)] = [NSString stringWithFormat:@"v%lu", (unsigned long)scratch];
+        if (rm) {
+            XTIRValue *v = [ctx.fn valueForId:o.valueId];
+            XTIRInsn *spl = [[XTIRInsn alloc] initWithOpcode:XTIROpVSplat result:v operands:@[ ctx.vRemat[@(o.valueId)] ] dbgLoc:nil];
+            [self emitInsn1:spl inBlock:block ctx:ctx];
+        } else
+            [ctx.out appendFormat:@"    ldr q%lu, [sp, #%@]\n", (unsigned long)scratch, ctx.vSpill[@(o.valueId)]];
         scratch--;
-        XTIRValue *v = [ctx.fn valueForId:o.valueId];
-        XTIRInsn *sp = [[XTIRInsn alloc] initWithOpcode:XTIROpVSplat result:v operands:@[ ctx.vRemat[@(o.valueId)] ] dbgLoc:nil];
-        [self emitInsn1:sp inBlock:block ctx:ctx];
         [made addObject:@(o.valueId)];
     }
+    // A spilled result: written in the next scratch, then stored to its slot.
+    NSNumber *sv = insn.result && ctx.vSpill[@(insn.result.valueId)] ? @(insn.result.valueId) : nil;
+    if (sv) {
+        if (scratch < 29) {
+            fprintf(stderr, "xcc-cg-arm64: error: vector register pressure exceeded "
+                            "the 14-register pool (v18-v31) in '%s'\n", ctx.fn.name.UTF8String);
+            exit(1);
+        }
+        ctx.vecReg[sv] = [NSString stringWithFormat:@"v%lu", (unsigned long)scratch];
+        [made addObject:sv];
+    }
     [self emitInsn1:insn inBlock:block ctx:ctx];
+    if (sv)
+        [ctx.out appendFormat:@"    str q%lu, [sp, #%@]\n", (unsigned long)scratch, ctx.vSpill[sv]];
     for (NSNumber *v in made)
         [ctx.vecReg removeObjectForKey:v];
 }
@@ -8318,12 +8358,19 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     // constant splat that ends last given up whenever the pool is empty (made
     // again at each read; the port's vecScan).
     ctx.vRemat = [NSMutableDictionary dictionary];
+    ctx.vSpill = [NSMutableDictionary dictionary];
+    ctx.vSpillOrder = [NSMutableArray array];
+    ctx.vSpillOf = [NSSet set];
     NSMutableDictionary<NSNumber *, XTIROperand *> *rematOf = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSNumber *, NSNumber *> *regOfClass = nil;
     for (int attempt = 0; attempt < 2 && !regOfClass; attempt++) {
         BOOL remat = attempt == 1;
-        if (remat)
+        if (remat) {
             rematOf = [self vecRematCandidates:fn vecVals:vecVals canon:canon vecPhis:vecPhis ctx:ctx];
+            ctx.vSpill = [NSMutableDictionary dictionary];
+            ctx.vSpillOrder = [NSMutableArray array];
+            ctx.vSpillOf = [self vecSpillCandidates:fn canon:canon vecPhis:vecPhis rematOf:rematOf ctx:ctx];
+        }
         NSMutableArray<NSNumber *> *freePool = [NSMutableArray array];
         if (fpFree)
             for (int r = 8; r <= 15; r++) [freePool addObject:@(r)];
@@ -8358,14 +8405,21 @@ static BOOL arm64NamesFrameReg(NSString *t) {
                 // and this one; the port's vecScan.
                 NSNumber *victim = nil;
                 NSInteger far = -1, farLo = -1;
-                if (rematOf[cls]) { victim = cls; far = hi[cls].integerValue; farLo = lo[cls].integerValue; }
+                if (rematOf[cls] || [ctx.vSpillOf containsObject:cls]) { victim = cls; far = hi[cls].integerValue; farLo = lo[cls].integerValue; }
                 for (NSNumber *av in active) {
-                    if (!rematOf[av] || [borrowed containsObject:av]) continue;
+                    if ((!rematOf[av] && ![ctx.vSpillOf containsObject:av]) || [borrowed containsObject:av]) continue;
                     NSInteger h = hi[av].integerValue, l = lo[av].integerValue;
                     if (h > far || (h == far && l > farLo)) { far = h; farLo = l; victim = av; }
                 }
                 if (!victim) { failed = YES; break; }
-                ctx.vRemat[victim] = rematOf[victim];
+                // A constant is made again where it is read; anything else lives
+                // in a frame slot of its own (the port's vecScan).
+                if (rematOf[victim])
+                    ctx.vRemat[victim] = rematOf[victim];
+                else {
+                    ctx.vSpill[victim] = @0;
+                    [ctx.vSpillOrder addObject:victim];
+                }
                 if ([victim isEqual:cls]) continue;
                 [freePool addObject:roc[victim]];
                 [roc removeObjectForKey:victim];
@@ -8437,6 +8491,36 @@ static BOOL arm64NamesFrameReg(NSString *t) {
 // The classes that are one constant's splat and nothing else: no phi, no lane
 // group, no other member; each mapped to the constant operand (the port's
 // vecRematCandidates).
+// The classes that may be spilled: one member (the value itself), defined by
+// an instruction, not a phi or a phi's incoming value (the edge copies
+// registers), not in a lane group, not a constant's splat, and read by no
+// terminator (the port's vecSpillCandidates).
++ (NSSet<NSNumber *> *)vecSpillCandidates:(XTIRFunction *)fn
+                                    canon:(NSDictionary<NSNumber *, NSNumber *> *)canon
+                                  vecPhis:(NSSet<NSNumber *> *)vecPhis
+                                  rematOf:(NSDictionary<NSNumber *, XTIROperand *> *)rematOf
+                                      ctx:(XTArm64FnCtx *)ctx {
+    NSMutableSet<NSNumber *> *r = [NSMutableSet set];
+    NSSet<NSNumber *> *members = [NSSet setWithArray:canon.allValues];
+    NSMutableSet<NSNumber *> *barred = [NSMutableSet set];
+    for (XTIRBlock *bb in fn.blocks) {
+        for (XTIRInsn *p in bb.phiNodes)
+            for (XTIROperand *o in p.operands)
+                if (o.kind == XTIROperandKindUse) [barred addObject:@(o.valueId)];
+        for (XTIROperand *o in bb.terminator.operands)
+            if (o.kind == XTIROperandKindUse) [barred addObject:@(o.valueId)];
+    }
+    for (XTIRBlock *bb in fn.blocks)
+        for (XTIRInsn *n in bb.instructions) {
+            if (!n.result || n.result.type.kind != XTIRTypeKindVec) continue;
+            NSNumber *v = @(n.result.valueId);
+            if (canon[v] || [members containsObject:v] || [vecPhis containsObject:v] || rematOf[v]
+                || [barred containsObject:v] || ctx.laneAddr[v] || ctx.laneLeader[v]) continue;
+            [r addObject:v];
+        }
+    return r;
+}
+
 + (NSMutableDictionary<NSNumber *, XTIROperand *> *)vecRematCandidates:(XTIRFunction *)fn
                                                                 vecVals:(NSSet<NSNumber *> *)vecVals
                                                                   canon:(NSDictionary<NSNumber *, NSNumber *> *)canon
