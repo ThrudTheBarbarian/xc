@@ -189,6 +189,22 @@ static BOOL isTranscendental(NSString* callee)
 @synthesize localOf = _localOf;
 @synthesize localDecl = _localDecl;
 @synthesize localIndex = _localIndex;
+@synthesize localBytes = _localBytes;
+@synthesize localElem = _localElem;
+
+- (NSMutableDictionary<NSNumber*, NSNumber*>*)localBytes
+    {
+    if (!_localBytes)
+        _localBytes = [NSMutableDictionary dictionary];
+    return _localBytes;
+    }
+
+- (NSMutableDictionary<NSNumber*, XTIRType*>*)localElem
+    {
+    if (!_localElem)
+        _localElem = [NSMutableDictionary dictionary];
+    return _localElem;
+    }
 
 - (NSMutableDictionary<NSNumber*, NSNumber*>*)localIndex
     {
@@ -376,6 +392,9 @@ static BOOL isTranscendental(NSString* callee)
                             self.localIndex[@(pl.valueId)] = k;
                             self.localDecl[k] = [NSString stringWithFormat:@"    thread %@ loc_%@[%lu];\n", en, k,
                                                                           (unsigned long)(total / ew)];
+                            // The PTX, WGSL and SPIR-V printers declare it from these.
+                            self.localBytes[k] = @(total);
+                            self.localElem[k] = et;
                             }
                         self.localOf[@(r)] = k;
                         self.space[@(r)] = @(XTParSpaceThread);

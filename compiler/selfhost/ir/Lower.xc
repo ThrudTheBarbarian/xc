@@ -16545,6 +16545,8 @@ class ClassInfo
     Map* _mLocalOf;
     Map* _mLocalIndex;
     Array* _mLocalDecls;
+    Array* _mLocalBytes;  // k -> its size in bytes (Number), for PTX, WGSL and SPIR-V
+    Array* _mLocalElem;   // k -> its element type
     // Why the kernel could not be printed, for the par-gpu warning: the first
     // reason met, phrased to follow "because" ("it calls Math.sin, which …").
     // A helper's own reason comes back to its caller in _mHelperWhy.
@@ -16839,6 +16841,9 @@ class ClassInfo
                             d.append(en); d.appendCString(" loc_"); d.append(k); d.appendCString("[");
                             d.append(String.withU32(total / ew)); d.appendCString("];\n");
                             _mLocalDecls.add((Object*)d);
+                            // The PTX, WGSL and SPIR-V printers declare it from these.
+                            _mLocalBytes.add((Object*)Number.withU32(total));
+                            _mLocalElem.add((Object*)mslPointee(r.ty()));
                             }
                         _mLocalOf.set((Hashable*)mslKey(r), (Object*)k);
                         _mSpace.set((Hashable*)mslKey(r), (Object*)String.withCString("thread"));
@@ -17676,7 +17681,7 @@ class ClassInfo
         Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
         Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
         bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit; String* sWhy = _mWhy;
-        Map* sLocalOf = _mLocalOf; Map* sLocalIndex = _mLocalIndex; Array* sLocalDecls = _mLocalDecls;
+        Map* sLocalOf = _mLocalOf; Map* sLocalIndex = _mLocalIndex; Array* sLocalDecls = _mLocalDecls; Array* sLocalBytes = _mLocalBytes; Array* sLocalElem = _mLocalElem;
         Array* sSucc = _sSucc; Array* sRpo = _sRpo; Array* sFwd = _sFwd; Map* sLoop = _sLoop; Map* sExit = _sExit;
         Array* sIpdom = _sIpdom; IRFunc* sFn = _sFn;
         String* out = mslHelperText(g, name);
@@ -17684,14 +17689,14 @@ class ClassInfo
         _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
         _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
         _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams; _mSinit = sSinit; _mWhy = sWhy;
-        _mLocalOf = sLocalOf; _mLocalIndex = sLocalIndex; _mLocalDecls = sLocalDecls;
+        _mLocalOf = sLocalOf; _mLocalIndex = sLocalIndex; _mLocalDecls = sLocalDecls; _mLocalBytes = sLocalBytes; _mLocalElem = sLocalElem;
         _sSucc = sSucc; _sRpo = sRpo; _sFwd = sFwd; _sLoop = sLoop; _sExit = sExit; _sIpdom = sIpdom; _sFn = sFn;
         return out;
         }
     String* mslHelperText(IRFunc* g, String* name)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array(); _mLocalBytes = new Array(); _mLocalElem = new Array();
         _mHelper = true;
         _mParams = new Map();
         if (!mslAnalyse(g)) return (String*)0;
@@ -17934,7 +17939,7 @@ class ClassInfo
     String* parMsl(IRFunc* f)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array(); _mLocalBytes = new Array(); _mLocalElem = new Array();
         _mHelper = false;
         _mVecW = (u32)0;
         _mParams = (Map*)0;
@@ -18866,6 +18871,14 @@ class ClassInfo
         if (op.equals(ptxS("AddrOf")))
             {
             if (_mSinit.get((Hashable*)mslKey(rv)) != (Object*)0) return ptxS("");
+            // A work item's own array: a .local array of the thread's. As the reference.
+            String* lk = (String*)_mLocalOf.get((Hashable*)mslKey(rv));
+            if (lk != (String*)0)
+                {
+                String* s = ptxS("\tmov.u64 ");
+                s.append(r); s.appendCString(", loc_"); s.append(lk); s.appendCString(";\n");
+                return s;
+                }
             String* g = (String*)_mGlobalOf.get((Hashable*)mslKey(rv));
             if (g == (String*)0) return (String*)0;
             u32 gi = (u32)0;
@@ -19377,21 +19390,21 @@ class ClassInfo
         Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
         Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
         bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit; String* sWhy = _mWhy;
-        Map* sLocalOf = _mLocalOf; Map* sLocalIndex = _mLocalIndex; Array* sLocalDecls = _mLocalDecls;
+        Map* sLocalOf = _mLocalOf; Map* sLocalIndex = _mLocalIndex; Array* sLocalDecls = _mLocalDecls; Array* sLocalBytes = _mLocalBytes; Array* sLocalElem = _mLocalElem;
         u32 sEdge = _pEdge;
         String* out = ptxHelperText(g, name);
         _mHelperWhy = _mWhy;
         _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
         _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
         _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams; _mSinit = sSinit; _mWhy = sWhy;
-        _mLocalOf = sLocalOf; _mLocalIndex = sLocalIndex; _mLocalDecls = sLocalDecls;
+        _mLocalOf = sLocalOf; _mLocalIndex = sLocalIndex; _mLocalDecls = sLocalDecls; _mLocalBytes = sLocalBytes; _mLocalElem = sLocalElem;
         _pEdge = sEdge;
         return out;
         }
     String* ptxHelperText(IRFunc* g, String* name)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array(); _mLocalBytes = new Array(); _mLocalElem = new Array();
         _mHelper = true;
         _mParams = new Map();
         _mObj = (IRLayout*)0;
@@ -19464,7 +19477,7 @@ class ClassInfo
     String* parPtx(IRFunc* f)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array(); _mLocalBytes = new Array(); _mLocalElem = new Array();
         _mHelper = false;
         _mParams = (Map*)0;
         _mGlobals = new Array();
@@ -19612,6 +19625,12 @@ class ClassInfo
             out.append((String*)_mHelperText.get(i));
         out.appendCString(".visible .entry par_kernel("); out.append(params); out.appendCString(")\n{\n");
         out.appendCString("\t.local .align 8 .b8 st["); out.append(String.withU32(_mObj.size())); out.appendCString("];\n");
+        // The work item's own arrays, in the order first met.
+        for (u32 q = (u32)0; q < _mLocalBytes.count(); q = q + (u32)1)
+            {
+            out.appendCString("\t.local .align 8 .b8 loc_"); out.append(String.withU32(q)); out.appendCString("[");
+            out.append(String.withU32(((Number*)_mLocalBytes.get(q)).asU32())); out.appendCString("];\n");
+            }
         if (devred)
             out.appendCString("\t.shared .align 8 .b8 sh[2056];\n\t.reg .b64 %sha, %shb, %cta64, %y2, %fa;\n\t.reg .b32 %k2, %nc, %nv, %j;\n\t.reg .f32 %fk2;\n\t.reg .f64 %dk2;\n\t.reg .pred %pl;\n");
         out.appendCString("\t.reg .b64 %stp, %ga, %gs, %lo, %hi, %end, %per, %tid64, %x, %y;\n");
@@ -19886,6 +19905,8 @@ class ClassInfo
             idx.add(r.members.get(i));
         if (r.indexVar != (u32)0)
             idx.add((Object*)Number.withU32(spvEmitR((u32)SPV_LOAD, r.indexType, spvA1(r.indexVar))));
+        else if (r.local)
+            idx.add((Object*)Number.withU32(_sMod.u32c((u32)0)));   // the array itself: its first element
         if (idx.count() == (u32)0)
             return r.base;
         Array* a = new Array();
@@ -20444,6 +20465,9 @@ class ClassInfo
             SpvRecipe* b = o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 ? (SpvRecipe*)_spvFn.recipeOf.get((Hashable*)mslKey(o0.val())) : (SpvRecipe*)0;
             String* pe = mslPointee(rt);
             if (b == (SpvRecipe*)0 || pe == (String*)0) return false;
+            // A work item's array holds one slot per element of its own type:
+            // an index by any other width would land elsewhere. As the reference.
+            if (b.local && mslWidth(pe) != mslWidth(b.pointee)) return false;
             IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
             String* it = o1.kind() == (u8)OPK_USE ? mslTypeOf(o1) : spvS("I64");
             u32 ity = spvType(it);
@@ -20459,7 +20483,7 @@ class ClassInfo
                 idx = spvEmitR((u32)SPV_IADD, b.indexType, spvA2(prev, idx));
                 ity = b.indexType;
                 }
-            else if (b.storage == (u32)SPV_ST_FUNCTION)
+            else if (b.storage == (u32)SPV_ST_FUNCTION && !b.local)
                 return false;
             r.indexVar = spvLocalVar(ity);
             r.indexType = ity;
@@ -20544,6 +20568,43 @@ class ClassInfo
             {
             if (res != (IRValue*)0 && _mSinit.get((Hashable*)mslKey(res)) != (Object*)0)
                 return true;
+            // A work item's own array: a Function variable of an array type,
+            // an element a slot of its SPIR-V type (a narrow one in 32 bits).
+            // Ids in the reference's order: the length constant, the array
+            // type, the variable, then its pointer type.
+            String* lk = res != (IRValue*)0 ? (String*)_mLocalOf.get((Hashable*)mslKey(res)) : (String*)0;
+            if (lk != (String*)0)
+                {
+                u32 k = (u32)0;
+                while (k < _mLocalBytes.count() && !String.withU32(k).equals(lk)) k = k + (u32)1;
+                if (k >= _mLocalBytes.count()) return false;
+                String* et = (String*)_mLocalElem.get(k);
+                u32 ety = spvType(et);
+                u32 ew = mslWidth(et);
+                if (ety == (u32)0 || ew == (u32)0) return false;
+                Number* var = (Number*)_spvFn.locals.get((Hashable*)lk);
+                if (var == (Number*)0)
+                    {
+                    u32 n = ((Number*)_mLocalBytes.get(k)).asU32() / ew;
+                    String* akey = spvS("farr");
+                    akey.append(String.withU32(ety)); akey.appendCString("_"); akey.append(String.withU32(n));
+                    u32 nc = _sMod.u32c(n);
+                    u32 arrT = _sMod.cached(akey, (u32)SPV_TYPEARRAY, spvA2(ety, nc), true);
+                    u32 v = _sMod.newId();
+                    u32 pt = _sMod.ptrType((u32)SPV_ST_FUNCTION, arrT);
+                    spvOp(_spvFn.vars, (u32)SPV_VARIABLE, spvA3(pt, v, (u32)SPV_ST_FUNCTION));
+                    var = Number.withU32(v);
+                    _spvFn.locals.set((Hashable*)lk, (Object*)var);
+                    }
+                SpvRecipe* lr = new SpvRecipe();
+                lr.base = var.asU32();
+                lr.storage = (u32)SPV_ST_FUNCTION;
+                lr.members = new Array();
+                lr.pointee = mslPointee(rt);
+                lr.local = true;
+                _spvFn.recipeOf.set((Hashable*)mslKey(res), (Object*)lr);
+                return true;
+                }
             String* g = res != (IRValue*)0 ? (String*)_mGlobalOf.get((Hashable*)mslKey(res)) : (String*)0;
             if (g == (String*)0) return false;
             u32 gi = (u32)0;
@@ -20958,7 +21019,7 @@ class ClassInfo
         Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
         Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
         bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit; String* sWhy = _mWhy;
-        Map* sLocalOf = _mLocalOf; Map* sLocalIndex = _mLocalIndex; Array* sLocalDecls = _mLocalDecls;
+        Map* sLocalOf = _mLocalOf; Map* sLocalIndex = _mLocalIndex; Array* sLocalDecls = _mLocalDecls; Array* sLocalBytes = _mLocalBytes; Array* sLocalElem = _mLocalElem;
         Array* sGlobals = _mGlobals; Map* sGlobalOf = _mGlobalOf; SpvFn* sFn = _spvFn;
         Array* sSucc = _sSucc; Array* sRpo = _sRpo; Array* sFwd = _sFwd; Map* sLoop = _sLoop; Map* sExit = _sExit;
         Array* sIpdom = _sIpdom; IRFunc* sSFn = _sFn;
@@ -20968,7 +21029,7 @@ class ClassInfo
         _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
         _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
         _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams; _mSinit = sSinit; _mWhy = sWhy;
-        _mLocalOf = sLocalOf; _mLocalIndex = sLocalIndex; _mLocalDecls = sLocalDecls;
+        _mLocalOf = sLocalOf; _mLocalIndex = sLocalIndex; _mLocalDecls = sLocalDecls; _mLocalBytes = sLocalBytes; _mLocalElem = sLocalElem;
         _mGlobals = sGlobals; _mGlobalOf = sGlobalOf; _spvFn = sFn;
         return out;
         }
@@ -20976,7 +21037,7 @@ class ClassInfo
     u32 spvHelperBody(IRFunc* g)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array(); _mLocalBytes = new Array(); _mLocalElem = new Array();
         _mHelper = true;
         _mParams = new Map();
         _mObj = (IRLayout*)0;
@@ -21066,7 +21127,7 @@ class ClassInfo
     bool parSpirv(IRFunc* f)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array(); _mLocalBytes = new Array(); _mLocalElem = new Array();
         _mHelper = false;
         _mParams = (Map*)0;
         _mGlobals = new Array();
@@ -22222,6 +22283,9 @@ class ClassInfo
             WgRecipe* b = o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 ? (WgRecipe*)_wf.recipeOf.get((Hashable*)mslKey(o0.val())) : (WgRecipe*)0;
             String* pe = mslPointee(rt);
             if (b == (WgRecipe*)0 || pe == (String*)0 || b.base.hasPrefix(spvS("f"))) return false;
+            // A work item's array holds one slot per element of its own type:
+            // an index by any other width would land elsewhere. As the reference.
+            if (b.base.hasPrefix(spvS("loc_")) && mslWidth(pe) != mslWidth(b.pointee)) return false;
             IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
             String* it = o1.kind() == (u8)OPK_USE ? mslTypeOf(o1) : spvS("I64");
             String* idx = wgValue(o1, it);
@@ -22336,6 +22400,19 @@ class ClassInfo
             {
             if (res != (IRValue*)0 && _mSinit.get((Hashable*)mslKey(res)) != (Object*)0)
                 return true;
+            // A work item's own array (declared by wgDeclareValues). As the reference.
+            String* lk = res != (IRValue*)0 ? (String*)_mLocalOf.get((Hashable*)mslKey(res)) : (String*)0;
+            if (lk != (String*)0)
+                {
+                WgRecipe* lr = new WgRecipe();
+                lr.base = spvS("loc_");
+                lr.base.append(lk);
+                lr.index = (String*)0;
+                lr.pointee = mslPointee(rt);
+                lr.words = false;
+                _wf.recipeOf.set((Hashable*)mslKey(res), (Object*)lr);
+                return true;
+                }
             String* g = res != (IRValue*)0 ? (String*)_mGlobalOf.get((Hashable*)mslKey(res)) : (String*)0;
             if (g == (String*)0) return false;
             u32 gi = (u32)0;
@@ -22664,6 +22741,27 @@ class ClassInfo
                 _wf.vars.appendCString(";\n");
                 }
             }
+        // The work item's own arrays, in the order first met: function-scope
+        // arrays, an element a slot of its WGSL type (a narrow one in a u32).
+        // As the reference.
+        for (u32 q = (u32)0; q < _mLocalBytes.count(); q = q + (u32)1)
+            {
+            String* et = (String*)_mLocalElem.get(q);
+            String* ty = wgType(et);
+            u32 ew = mslWidth(et);
+            if (ty == (String*)0 || ew == (u32)0)
+                {
+                parBecause(ptxIs(et, "F64") ? spvS("it uses a double, which WebGPU does not have") : spvS("it uses a local value its WebGPU version cannot place"));
+                return false;
+                }
+            _wf.vars.appendCString("  var loc_");
+            _wf.vars.append(String.withU32(q));
+            _wf.vars.appendCString(": array<");
+            _wf.vars.append(ty);
+            _wf.vars.appendCString(", ");
+            _wf.vars.append(String.withU32(((Number*)_mLocalBytes.get(q)).asU32() / ew));
+            _wf.vars.appendCString(">;\n");
+            }
         return true;
         }
 
@@ -22673,7 +22771,7 @@ class ClassInfo
         Map* sDef = _mDef; Map* sSpace = _mSpace; Map* sBufOf = _mBufOf; Map* sOrd = _mOrd;
         Map* sBlk = _mBlk; Map* sBufs = _mBufs; Map* sReds = _mReds; IRLayout* sObj = _mObj;
         bool sFailed = _mFailed; bool sHelper = _mHelper; Map* sParams = _mParams; Map* sSinit = _mSinit; String* sWhy = _mWhy;
-        Map* sLocalOf = _mLocalOf; Map* sLocalIndex = _mLocalIndex; Array* sLocalDecls = _mLocalDecls;
+        Map* sLocalOf = _mLocalOf; Map* sLocalIndex = _mLocalIndex; Array* sLocalDecls = _mLocalDecls; Array* sLocalBytes = _mLocalBytes; Array* sLocalElem = _mLocalElem;
         Array* sGlobals = _mGlobals; Map* sGlobalOf = _mGlobalOf; WgFn* sFn = _wf;
         Array* sSucc = _sSucc; Array* sRpo = _sRpo; Array* sFwd = _sFwd; Map* sLoop = _sLoop; Map* sExit = _sExit;
         Array* sIpdom = _sIpdom; IRFunc* sSFn = _sFn;
@@ -22683,7 +22781,7 @@ class ClassInfo
         _mDef = sDef; _mSpace = sSpace; _mBufOf = sBufOf; _mOrd = sOrd;
         _mBlk = sBlk; _mBufs = sBufs; _mReds = sReds; _mObj = sObj;
         _mFailed = sFailed; _mHelper = sHelper; _mParams = sParams; _mSinit = sSinit; _mWhy = sWhy;
-        _mLocalOf = sLocalOf; _mLocalIndex = sLocalIndex; _mLocalDecls = sLocalDecls;
+        _mLocalOf = sLocalOf; _mLocalIndex = sLocalIndex; _mLocalDecls = sLocalDecls; _mLocalBytes = sLocalBytes; _mLocalElem = sLocalElem;
         _mGlobals = sGlobals; _mGlobalOf = sGlobalOf; _wf = sFn;
         return ok;
         }
@@ -22691,7 +22789,7 @@ class ClassInfo
     bool wgHelperBody(IRFunc* g, String* name)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array(); _mLocalBytes = new Array(); _mLocalElem = new Array();
         _mHelper = true;
         _mParams = new Map();
         _mObj = (IRLayout*)0;
@@ -22775,7 +22873,7 @@ class ClassInfo
     bool parWgsl(IRFunc* f)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
-        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array();
+        _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array(); _mLocalBytes = new Array(); _mLocalElem = new Array();
         _mHelper = false;
         _mParams = (Map*)0;
         _mGlobals = new Array();

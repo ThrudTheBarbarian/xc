@@ -256,6 +256,7 @@ class SpvRecipe
     String* pointee;   // the IR type pointed at
     bool words;        // a narrow element of a buffer of 32-bit words
     u32 wordShift;     // a narrow captured value: its bit offset in its word, + 1 (0: none)
+    bool local;        // a work item's own array (a Function array variable)
 
     SpvRecipe* copy(void)
         {
@@ -268,6 +269,7 @@ class SpvRecipe
         r.pointee = pointee;
         r.words = words;
         r.wordShift = wordShift;
+        r.local = local;
         return r;
         }
     }
@@ -279,6 +281,7 @@ class SpvFn
     Array* code;
     Map* varOf;        // value key -> variable (Number)
     Map* recipeOf;     // pointer value key -> SpvRecipe
+    Map* locals;       // local array k -> its variable (Number)
     Map* used;         // value key -> 1: values some instruction reads
     Map* blockNum;     // block name -> its number (Number)
     u32 pcVar;
@@ -298,6 +301,7 @@ class SpvFn
         vars = new Array();
         code = new Array();
         varOf = new Map();
+        locals = new Map();
         recipeOf = new Map();
         used = new Map();
         blockNum = new Map();

@@ -289,6 +289,7 @@ static NSArray<NSNumber*>* spvString(NSString* s)
 @property(nonatomic) BOOL readOnly;
 @property(nonatomic) BOOL words;            // a narrow element of a buffer of 32-bit words
 @property(nonatomic) uint32_t wordShift;    // a narrow captured value: its bit offset in its word, + 1 (0: none)
+@property(nonatomic) BOOL local;            // a work item's own array (a Function array variable)
 @end
 
 @implementation XTSpvRecipe
@@ -297,6 +298,7 @@ static NSArray<NSNumber*>* spvString(NSString* s)
 // One function being printed (the kernel or a helper).
 @interface XTSpvFunc : NSObject
 @property(nonatomic) NSMutableArray<NSNumber*>* vars;     // its Function variables, first in the entry block
+@property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* locals;  // local array k -> its variable
 @property(nonatomic) NSMutableArray<NSNumber*>* code;
 @property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* varOf;      // value -> variable
 @property(nonatomic) NSMutableDictionary<NSNumber*, XTSpvRecipe*>* recipeOf;  // pointer value -> recipe
@@ -585,6 +587,8 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     NSMutableArray* idx = [NSMutableArray arrayWithArray:r.members];
     if (r.indexVar)
         [idx addObject:@([self emit:SpvOpLoad type:r.indexType args:@[ @(r.indexVar) ]])];
+    else if (r.local)
+        [idx addObject:@([self.spv u32:0])];   // the array itself: its first element
     if (!idx.count)
         return r.base;
     NSMutableArray* a = [NSMutableArray arrayWithObject:@(r.base)];
@@ -1065,6 +1069,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     r.readOnly = b.readOnly;
     r.words = b.words;
     r.wordShift = b.wordShift;
+    r.local = b.local;
     return r;
     }
 
@@ -1178,6 +1183,10 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
                                                                       : nil;
             if (!b || !rt.pointeeType)
                 return NO;
+            // A work item's array holds one slot per element of its own type:
+            // an index by any other width would land elsewhere.
+            if (b.local && rt.pointeeType.byteWidth != b.pointee.byteWidth)
+                return NO;
             XTIRType* it = i.operands[1].kind == XTIROperandKindUse ? [self typeOf:i.operands[1].valueId]
                                                                     : [XTIRType i64Type];
             uint32_t ity = [self spvType:it];
@@ -1195,7 +1204,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
                 idx = [self emit:SpvOpIAdd type:b.indexType args:@[ @(prev), @(idx) ]];
                 ity = b.indexType;
                 }
-            else if (b.storage == SpvStorageFunction)
+            else if (b.storage == SpvStorageFunction && !b.local)
                 return NO;   // an element of a field of the object: not in this cut
             r.indexVar = [self localVar:ity];
             r.indexType = ity;
@@ -1288,6 +1297,38 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
             {
             if (self.sinitOf[@(i.result.valueId)])
                 return YES;
+            // A work item's own array: a Function variable of an array type,
+            // an element a slot of its SPIR-V type (a narrow one in 32 bits).
+            NSNumber* loc = self.localOf[@(i.result.valueId)];
+            if (loc)
+                {
+                XTIRType* et = self.localElem[loc];
+                uint32_t ety = [self spvType:et];
+                if (!ety || !et.byteWidth)
+                    return NO;
+                if (!self.sf.locals)
+                    self.sf.locals = [NSMutableDictionary dictionary];
+                NSNumber* var = self.sf.locals[loc];
+                if (!var)
+                    {
+                    uint32_t n = (uint32_t)(self.localBytes[loc].unsignedIntegerValue / et.byteWidth);
+                    uint32_t arrT = [self.spv cached:[NSString stringWithFormat:@"farr%u_%u", ety, n] op:SpvOpTypeArray
+                                               words:@[ @(ety), @([self.spv u32:n]) ] resultFirst:YES];
+                    uint32_t v = [self.spv newId];
+                    spvOp(self.sf.vars, SpvOpVariable, @[ @([self.spv pointer:SpvStorageFunction to:arrT]), @(v),
+                                                          @(SpvStorageFunction) ]);
+                    var = @(v);
+                    self.sf.locals[loc] = var;
+                    }
+                XTSpvRecipe* r = [XTSpvRecipe new];
+                r.base = var.unsignedIntValue;
+                r.storage = SpvStorageFunction;
+                r.members = @[];
+                r.pointee = rt.pointeeType;
+                r.local = YES;
+                self.sf.recipeOf[@(i.result.valueId)] = r;
+                return YES;
+                }
             NSString* g = self.globalOf[@(i.result.valueId)];
             if (!g)
                 return NO;

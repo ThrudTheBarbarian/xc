@@ -901,6 +901,10 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
             XTWgRecipe* b = i.operands[0].kind == XTIROperandKindUse ? self.wf.recipeOf[@(i.operands[0].valueId)] : nil;
             if (!b || !rt.pointeeType || [b.base hasPrefix:@"f"])
                 return NO;   // an element of a field of the object: not in this cut
+            // A work item's array holds one slot per element of its own type:
+            // an index by any other width would land elsewhere.
+            if ([b.base hasPrefix:@"loc_"] && rt.pointeeType.byteWidth != b.pointee.byteWidth)
+                return NO;
             XTIRType* it = i.operands[1].kind == XTIROperandKindUse ? [self typeOf:i.operands[1].valueId]
                                                                     : [XTIRType i64Type];
             NSString* idx = [self wgValue:i.operands[1] type:it];
@@ -1021,6 +1025,16 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
             {
             if (self.sinitOf[@(i.result.valueId)])
                 return YES;
+            // A work item's own array (declared by wgDeclareValues).
+            NSNumber* loc = self.localOf[@(i.result.valueId)];
+            if (loc)
+                {
+                XTWgRecipe* r = [XTWgRecipe new];
+                r.base = [NSString stringWithFormat:@"loc_%@", loc];
+                r.pointee = rt.pointeeType;
+                self.wf.recipeOf[@(i.result.valueId)] = r;
+                return YES;
+                }
             NSString* g = self.globalOf[@(i.result.valueId)];
             if (!g)
                 return NO;
@@ -1382,6 +1396,21 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
             self.wf.varOf[@(i.result.valueId)] = n;
             [self.wf.vars appendFormat:@"  var %@: %@;\n", n, ty];
             }
+        }
+    // The work item's own arrays, in the order first met: function-scope
+    // arrays, an element a slot of its WGSL type (a narrow one in a u32).
+    for (NSNumber* k in [self.localBytes.allKeys sortedArrayUsingSelector:@selector(compare:)])
+        {
+        XTIRType* et = self.localElem[k];
+        NSString* ty = wgType(et);
+        if (!ty || !et.byteWidth)
+            {
+            [self because:et.kind == XTIRTypeKindF64 ? @"it uses a double, which WebGPU does not have"
+                                                      : @"it uses a local value its WebGPU version cannot place"];
+            return NO;
+            }
+        [self.wf.vars appendFormat:@"  var loc_%@: array<%@, %lu>;\n", k, ty,
+                                   (unsigned long)(self.localBytes[k].unsignedIntegerValue / et.byteWidth)];
         }
     return YES;
     }

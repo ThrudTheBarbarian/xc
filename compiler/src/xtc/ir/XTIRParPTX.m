@@ -899,6 +899,10 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
             {
             if (self.sinitOf[@(i.result.valueId)])
                 return @"";
+            // A work item's own array: a .local array of the thread's.
+            NSNumber* loc = self.localOf[@(i.result.valueId)];
+            if (loc)
+                return [NSString stringWithFormat:@"\tmov.u64 %@, loc_%@;\n", r, loc];
             NSString* g = self.globalOf[@(i.result.valueId)];
             if (!g)
                 return nil;
@@ -1363,6 +1367,9 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
         [out appendString:h];
     [out appendFormat:@".visible .entry par_kernel(%@)\n{\n", [params componentsJoinedByString:@", "]];
     [out appendFormat:@"\t.local .align 8 .b8 st[%u];\n", self.objLayout.size];
+    // The work item's own arrays, in the order first met.
+    for (NSNumber* k in [self.localBytes.allKeys sortedArrayUsingSelector:@selector(compare:)])
+        [out appendFormat:@"\t.local .align 8 .b8 loc_%@[%@];\n", k, self.localBytes[k]];
     if (devred)
         [out appendString:@"\t.shared .align 8 .b8 sh[2056];\n\t.reg .b64 %sha, %shb, %cta64, %y2, %fa;\n"
                           @"\t.reg .b32 %k2, %nc, %nv, %j;\n\t.reg .f32 %fk2;\n\t.reg .f64 %dk2;\n\t.reg .pred %pl;\n"];

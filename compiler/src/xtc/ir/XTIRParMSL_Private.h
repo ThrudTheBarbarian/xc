@@ -63,6 +63,8 @@ typedef NS_ENUM(uint8_t, XTParSpace) {
 @property(nonatomic, readonly) NSMutableDictionary<NSNumber*, NSNumber*>* localOf;    // AddrOf value -> k
 @property(nonatomic, readonly) NSMutableDictionary<NSNumber*, NSNumber*>* localIndex; // pinned value -> k
 @property(nonatomic, readonly) NSMutableDictionary<NSNumber*, NSString*>* localDecl;  // k -> its declaration
+@property(nonatomic, readonly) NSMutableDictionary<NSNumber*, NSNumber*>* localBytes; // k -> its size in bytes
+@property(nonatomic, readonly) NSMutableDictionary<NSNumber*, XTIRType*>* localElem;  // k -> its element type
 // Why the kernel could not be printed, for the par-gpu warning: the first
 // reason met, phrased to follow "because" ("it calls Math.sin, which …").
 @property(nonatomic, nullable) NSString* why;
