@@ -2360,18 +2360,13 @@ class Parser
             break;
         }
 
-        // `(i32, i32) mr(void)` — a parenthesised list of return types. The
-        // dump joins them with commas, which is what the original prints.
+        // `(i32, i32) mr(void)` is not a declaration: a return list is
+        // written bare (`i32, i32 mr(void)`, functions.md). The reference's
+        // words; this one parsed it, undocumented (2026-10-24).
         String* ty = (String*)0;
         if (check((u16)tokLParen) && looksLikeReturnTypeList()) {
-            match((u16)tokLParen);
-            ty = String.withCString("");
-            while (!check((u16)tokRParen) && !check((u16)tokEOF)) {
-                if (ty.byteLength() > (u32)0) ty.appendByte((u8)',');
-                ty.append(parseTypeSpelling());
-                if (!match((u16)tokComma)) break;
-            }
-            expect((u16)tokRParen);
+            _error(String.withCString("Expected type in declaration"));
+            return (Node*)0;
         } else {
             ty = parseTypeSpelling();
             // `i32, i32 mr(i32 x)` — a bare comma-separated return-type list.
