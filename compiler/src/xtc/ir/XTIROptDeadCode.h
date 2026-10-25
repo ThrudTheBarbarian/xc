@@ -10,7 +10,12 @@ NS_ASSUME_NONNULL_BEGIN
 // Conservative: only an explicit allowlist of pure opcodes is removed;
 // loads/stores/calls/ARC/weak/memcpy/asm/phi and terminators are left alone.
 // -O2+.
+@class XTIRFunction;
+
 @interface XTIROptDeadCode : NSObject <XTIROptPass>
+// One function, as runOnModule: does for each (bounds-elide runs it on a
+// function it took checks out of).
+- (void)runOnFunction:(XTIRFunction*)fn;
 @end
 
 NS_ASSUME_NONNULL_END

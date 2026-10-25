@@ -165,7 +165,9 @@
         [p addPass:guards];
         // A checked build's subscript checks that cannot fail come out, before
         // the idioms and the vectoriser look at the loops.
-        [p addPass:[[XTIROptBoundsElide alloc] init]];
+        XTIROptBoundsElide* belide = [[XTIROptBoundsElide alloc] init];
+        belide.profile = profile;
+        [p addPass:belide];
         // The checks it could not prove stay calls. Inlining them here (never
         // before it: then no call is left for it to find, and array_map ran 51x
         // slower) took the arm64 back end past 36 GB on xcc.xc, so it waits

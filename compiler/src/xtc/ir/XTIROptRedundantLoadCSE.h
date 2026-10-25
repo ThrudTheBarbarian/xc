@@ -31,6 +31,8 @@ NS_ASSUME_NONNULL_BEGIN
 /// computed 63968 instead of 2046976 with this on before the vectoriser.
 /// Enabled only on the instance that runs before if-conversion, which is where
 /// it pays: it is what makes a diamond's arms convertible.
+@class XTIRFunction;
+
 @interface XTIROptRedundantLoadCSE : NSObject <XTIROptPass>
 @property(nonatomic) BOOL crossBlock;
 /// The run after LICM, when the unrollers, the vectoriser and the constant
@@ -40,6 +42,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// it guards, so in declaration order the body inherited nothing from it and
 /// insertion sort recomputed `j - 1` and reloaded `a[j-1]` in the body.
 @property(nonatomic) BOOL late;
+// One function, as runOnModule: does for each (bounds-elide runs it again on
+// a function it took checks out of).
+- (void)runOnFunction:(XTIRFunction*)fn;
 @end
 
 NS_ASSUME_NONNULL_END

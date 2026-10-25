@@ -1,4 +1,8 @@
 #import "XTIROptBoundsElide.h"
+#import "XTIROptIfConvert.h"
+#import "XTIROptDeadCode.h"
+#import "XTIROptRedundantLoadCSE.h"
+#import "XTIROptTargetProfile.h"
 #import "XTIRModule.h"
 #import "XTIRFunction.h"
 #import "XTIRBlock.h"
@@ -687,6 +691,7 @@ static NSMapTable* dominators(XTIRFunction* fn)
             continue;
         NSMapTable* idom = dominators(fn);
         NSMapTable* blockFacts = [self guardFacts:fn];
+        BOOL removed = NO;
         for (XTIRBlock* X in fn.blocks)
             {
             self.facts = [NSMutableArray array];
@@ -742,10 +747,29 @@ static NSMapTable* dominators(XTIRFunction* fn)
                             replaceUses(b.terminator, old, to);
                         }
                     [X.instructions removeObjectAtIndex:i];
+                    removed = YES;
                     continue;
                     }
                 i++;
                 }
+            }
+        // An `if` body that held a check was a call, so if-conversion left it
+        // a branch: with the checks gone it may be a select now (branch_mix
+        // checked kept main's four selects as branches). Only the functions
+        // checks came out of, so an unchecked build is untouched.
+        if (removed && self.profile && self.profile.ifConvertsPredicates && !getenv("XTIC_OFF"))
+            {
+            // What the checks leave (their site strings and counts) goes,
+            // then the arms' loads, as before the first if-conversion: the
+            // checks kept each arm's `a[i]` its own load, which an arm may not
+            // speculate.
+            [[[XTIROptDeadCode alloc] init] runOnFunction:fn];
+            XTIROptRedundantLoadCSE* cse = [[XTIROptRedundantLoadCSE alloc] init];
+            cse.crossBlock = self.profile.hoistsLocalAddr;
+            [cse runOnFunction:fn];
+            XTIROptIfConvert* ic = [[XTIROptIfConvert alloc] init];
+            ic.profile = self.profile;
+            [ic runOnFunction:fn];
             }
         }
     self.defOf = nil;

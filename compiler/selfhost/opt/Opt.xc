@@ -8578,6 +8578,7 @@ class BeFact : Object
                 continue;
             Map* idom = beDominators(fn);
             Map* blockFacts = beGuardFacts(fn);
+            bool removed = false;
             for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
                 {
                 IRBlock* X = (IRBlock*)fn.blocks().get(b);
@@ -8627,6 +8628,7 @@ class BeFact : Object
                         // The call's memory goes to whatever it came from.
                         rewriteUsesTo(fn, n.memRes(), (IROperand*)n.ops().get(n.ops().count() - (u32)1));
                         X.insns().removeAt(i);
+                        removed = true;
                         continue;
                         }
                     i = i + (u32)1;
@@ -8635,6 +8637,24 @@ class BeFact : Object
             _beDef = (Map*)0;
             _beFacts = (Array*)0;
             _beVisit = (Map*)0;
+            // An `if` body that held a check was a call, so if-conversion left
+            // it a branch: with the checks gone it may be a select now. Only
+            // the functions checks came out of, so an unchecked build is
+            // untouched. As the reference.
+            if (removed && _profile.ifConvert() && !ppEnvSet("XTIC_OFF"))
+                {
+                // What the checks leave (their site strings and counts) goes,
+                // then the arms' loads, as before the first if-conversion: the
+                // checks kept each arm's `a[i]` its own load, which an arm may
+                // not speculate.
+                deadCodeInFunc(fn);
+                _cseCrossBlock = _profile.hoistLocalAddr();
+                cseInFunc(fn);
+                _cseCrossBlock = false;
+                for (u32 iter = (u32)0; iter < (u32)4096; iter = iter + (u32)1)
+                    if (!ifConvertOnce(fn))
+                        break;
+                }
             }
         }
 

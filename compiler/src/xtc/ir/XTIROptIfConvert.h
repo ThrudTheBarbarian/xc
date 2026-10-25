@@ -29,8 +29,13 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
+@class XTIRFunction;
+
 @interface XTIROptIfConvert : NSObject <XTIROptPass>
 @property(nonatomic, strong, nullable) XTIROptTargetProfile* profile;
+// One function's diamonds, as runOnModule: does for each (bounds-elide runs
+// it again on a function it took checks out of).
+- (void)runOnFunction:(XTIRFunction*)fn;
 @end
 
 NS_ASSUME_NONNULL_END
