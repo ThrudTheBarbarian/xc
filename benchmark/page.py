@@ -52,6 +52,9 @@ def general(cur):
 # entry from <v>/ is dropped, never mixed with the M3 Max's, and a release the
 # M3 Max has not timed has no arm64 figures.
 MAC_TREE = None
+# The release the page is for: an older release the M3 Max timed only xc for
+# is set against the other languages as measured there for this one.
+CURRENT = None
 MACHINES = {
     None: ("Apple M4 Max", "an Apple MacBook Pro with an M4 Max (12 performance and 4\n  efficiency cores)", True),
     "m3max": ("Apple M3 Max", "an Apple MacBook Pro with an M3 Max (12 performance and 4\n  efficiency cores, a 40-core GPU, no SME matrix unit)", False),
@@ -84,6 +87,21 @@ def merged(v):
                     for l, t in langs.items():
                         if not l.endswith("_x86_64"):
                             tbl.setdefault(b, {}).setdefault(o, {})[l] = t
+            # Only xc timed for this release (the M3 Max re-timed every
+            # release's xc with today's sources, 0.87): the other languages
+            # as measured there for the current release, which are the same
+            # compilers on the same machine running the same programs.
+            cp = os.path.join(ROOT, "%s-%s" % (MAC_TREE, CURRENT), "results.json")
+            if CURRENT and v != CURRENT and os.path.exists(cp):
+                with open(cp) as fh:
+                    cur_arm = json.load(fh).get(key, {})
+                for b, opts in tbl.items():
+                    for o, langs in opts.items():
+                        if "xc" not in langs or any(l != "xc" and not l.endswith("_x86_64") for l in langs):
+                            continue
+                        for l, t in cur_arm.get(b, {}).get(o, {}).items():
+                            if l != "xc" and not l.endswith("_x86_64"):
+                                langs[l] = t
     tc = d.setdefault("toolchains", {})
     tc.pop("arm64", None)
     if arm and arm.get("toolchains", {}).get("arm64"):
@@ -717,8 +735,9 @@ def main():
     ap.add_argument("--mac", default=None, choices=["m3max"],
                     help="the arm64 figures from benchmark/<mac>-<version>/ (the Mac they were measured on)")
     a = ap.parse_args()
-    global MAC_TREE
+    global MAC_TREE, CURRENT
     MAC_TREE = a.mac
+    CURRENT = a.current
     cur = load(a.current)
     versions = a.history.split(",")
     hist = {v: load(v) for v in versions}
@@ -736,6 +755,14 @@ def main():
         summary=summary(cur),
         standing=standing(cur),
         separate=separate(cur),
+        history_note=(
+            "On arm64 every release's xc was timed again on the %s with today's programs, and is "
+            "set against the other languages as measured there for %s. On x86-64 releases before "
+            "0.65 were measured against Objective-C alone, apart from `matrix_mul_f32`, which was "
+            "added later and measured against all three." % (mac_name(), a.current.lstrip("v"))
+            if MAC_TREE else
+            "Releases before 0.65 were measured against Objective-C alone, apart from "
+            "`matrix_mul_f32`, which was added later and measured against all three."),
         chart_arm=version_switch(hist, "", "arm64: xc against each language, per benchmark",
                                  [v for v in versions if has_mac(v)], "vs-arm"),
         chart_x86=version_switch(hist, "_x86_64", "x86-64: xc against each language, per benchmark", versions, "vs-x86"),
@@ -1007,8 +1034,7 @@ matrices. Its figures are under [Matrix multiplies](#matrix-multiplies).
 Each row is a benchmark, each dot one language: how much faster or slower xc
 is than that language. Dots left of the centre line are benchmarks xc wins. Choose a
 release above a chart to see how it stood then; the rows stay in {release}'s
-order. Releases before 0.65 were measured against Objective-C alone, apart
-from `matrix_mul_f32`, which was added later and measured against all three.
+order. {history_note}
 
 {chart_arm}
 
