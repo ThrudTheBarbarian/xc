@@ -4389,7 +4389,12 @@ void main(void)
             mod = CPath.lower(cin, CPath.scratch(), cIncs, cDefs);
         // xcc's part compiles to an object, clang's is one already: the two
         // are linked where an object of xcc's would be written (cSplitLink).
-        if (mod != (IRModule*)0)
+        // -S: the assembly of xcc's part, at the user's -o (the functions
+        // clang compiles are not in it). It used to go to the scratch object
+        // and nothing was written where asked.
+        if (mod != (IRModule*)0 && d.keepAsm())
+            d.setCompileOnly(true);
+        else if (mod != (IRModule*)0)
             {
             gCSplitOut = d.fe().output() != (String*)0 ? d.fe().output() : String.withCString("a.out");
             String* xo = CPath.scratch();

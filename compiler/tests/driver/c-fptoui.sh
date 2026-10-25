@@ -37,5 +37,12 @@ fi
 "$XC" -q -A x86_64 -O2 -static -o "$W/f86" tests/c/fptoui.c
 objdump -d --no-show-raw-insn -M intel "$W/f86" > "$W/f86.dis" 2> /dev/null
 [ "$(checked "$W/f86.dis")" = 0 ] || { echo "FAIL c-fptoui: the port's to_u32 checks its result"; fail=1; }
+# -S writes xcc's part as assembly where asked (it went to a scratch object).
+"$XC" -q -A x86_64 -O2 -S -o "$W/f86.s" tests/c/fptoui.c
+if [ ! -s "$W/f86.s" ] || ! grep -q -E '^_?to_u32:' "$W/f86.s"; then
+    echo "FAIL c-fptoui: -S wrote no assembly"; fail=1
+elif [ "$(checked "$W/f86.s")" != 0 ]; then
+    echo "FAIL c-fptoui: the port's -S to_u32 checks its result"; fail=1
+fi
 [ $fail = 0 ] && echo "c-fptoui: ok"
 exit $fail
