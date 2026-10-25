@@ -51,6 +51,7 @@ static int64_t simpWrap(int64_t v, XTIRType* t)
         {
         [self runOnFunction:fn];
         [self strictFunction:fn];
+        [self maskFunction:fn];
         [self balanceFunction:fn];
         }
     return YES;
@@ -123,6 +124,90 @@ static int64_t simpWrap(int64_t v, XTIRType* t)
             bb.instructions[i] = nc;
             [bb.instructions insertObject:kc atIndex:i];
             defOf[@(kv.valueId)] = kc;
+            defOf[@(nc.result.valueId)] = nc;
+            i++;
+            }
+        }
+    }
+
+// Masks: `(x & C1) & C2` is `x & (C1 & C2)`, and `(x & M) <u 2^k` is
+// `(x & (M with the bits below 2^k cleared)) == 0` (`>=u`: `!= 0`), one bit
+// test (8 to 32 bits). perlin's grad() reads `h & 7` as `g < 4`, `g & 1` and
+// `g & 2`: they become h & 4, h & 1 and h & 2, and `h & 7` is dead.
+- (void)maskFunction:(XTIRFunction*)fn
+    {
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* defOf = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        for (XTIRInsn* p in bb.phiNodes)
+            if (p.result)
+                defOf[@(p.result.valueId)] = p;
+        for (XTIRInsn* i in bb.instructions)
+            if (i.result)
+                defOf[@(i.result.valueId)] = i;
+        }
+    NSDictionary<NSNumber*, NSNumber*>* repl = @{};
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        for (NSUInteger i = 0; i < bb.instructions.count; i++)
+            {
+            XTIRInsn* n = bb.instructions[i];
+            BOOL band = n.opcode == XTIROpAnd;
+            BOOL ult = n.opcode == XTIROpICmp && n.predicate == XTIRICmpULT;
+            BOOL uge = n.opcode == XTIROpICmp && n.predicate == XTIRICmpUGE;
+            if ((!band && !ult && !uge) || n.operands.count != 2)
+                continue;
+            XTIROperand* a = n.operands[0];
+            if (a.kind != XTIROperandKindUse)
+                continue;
+            XTIRType* t = [fn valueForId:a.valueId].type;
+            if (!t || !simpIntKind(t.kind) || t.byteWidth > 4)
+                continue;
+            int64_t k = 0;
+            if (!simpConst(n.operands[1], fn, defOf, repl, &k))
+                continue;
+            XTIRInsn* d = defOf[@(a.valueId)];
+            if (!d || d.opcode != XTIROpAnd || d.operands.count != 2 || d.operands[0].kind != XTIROperandKindUse)
+                continue;
+            int64_t m = 0;
+            if (!simpConst(d.operands[1], fn, defOf, repl, &m))
+                continue;
+            XTIRValue* xv = [fn valueForId:d.operands[0].valueId];
+            if (!xv || xv.type.kind != t.kind)
+                continue;
+            uint32_t bits = t.byteWidth * 8;
+            int64_t wmask = ((int64_t)1 << bits) - 1;
+            m &= wmask;
+            k &= wmask;
+            if (band)
+                {
+                [n replaceOperands:@[ [XTIROperand useWithValueId:xv.valueId],
+                                      [XTIROperand immIWithType:t value:simpWrap(m & k, t)] ]];
+                continue;
+                }
+            if (k == 0 || (k & (k - 1)) != 0)
+                continue;
+            int64_t mk = m & ~(k - 1);
+            if (mk == 0)
+                continue;
+            XTIRValue* av = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                          type:t
+                                                       defSite:[[XTIRDefSite alloc] initWithBlock:bb insnIndex:i]];
+            [fn registerValue:av];
+            XTIRInsn* na = [[XTIRInsn alloc] initWithOpcode:XTIROpAnd
+                                                     result:av
+                                                   operands:@[ [XTIROperand useWithValueId:xv.valueId],
+                                                               [XTIROperand immIWithType:t value:simpWrap(mk, t)] ]
+                                                     dbgLoc:n.dbgLoc];
+            XTIRInsn* nc = [[XTIRInsn alloc] initWithOpcode:XTIROpICmp
+                                                     result:n.result
+                                                   operands:@[ [XTIROperand useWithValueId:av.valueId],
+                                                               [XTIROperand immIWithType:t value:0] ]
+                                                  predicate:(ult ? XTIRICmpEQ : XTIRICmpNE)
+                                                     dbgLoc:n.dbgLoc];
+            bb.instructions[i] = nc;
+            [bb.instructions insertObject:na atIndex:i];
+            defOf[@(av.valueId)] = na;
             defOf[@(nc.result.valueId)] = nc;
             i++;
             }

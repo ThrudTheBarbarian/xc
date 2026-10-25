@@ -5141,22 +5141,34 @@ class X86_64
                 continue;
             _fusedCmp.set((Hashable*)cond.val(), (Object*)last);
             }
-        // Compare-and-select fusion: an ICmp whose ONLY use is a Select
-        // condition in the same block. Without it the condition is materialised
-        // (setcc/movzx) and then tested AGAIN before the cmov — four
-        // instructions to re-derive flags the cmp already set. Fused, the ICmp
-        // emits nothing and the compare is re-issued at the Select, whose cmov
-        // reads the flags directly. Immediate right-hand side only: the
-        // re-issue then needs one scratch register, and rax/rdx are taken.
+        // Compare-and-select fusion: an ICmp whose ONLY uses are Select
+        // conditions in the same block. Without it the condition is
+        // materialised (setcc/movzx) and then tested AGAIN before the cmov —
+        // four instructions to re-derive flags the cmp already set. Fused, the
+        // ICmp emits nothing and the compare is re-issued at each Select, whose
+        // cmov or branch reads the flags directly (perlin's grad() picks two
+        // values on one `g < 4`). Immediate right-hand side only: the re-issue
+        // then needs one scratch register, and rax/rdx are taken.
         for (u32 b2 = (u32)0; b2 < fn.blocks().count(); b2 = b2 + (u32)1)
             {
             IRBlock* bb2 = (IRBlock*)fn.blocks().get(b2);
             Map* defs = new Map();
+            Map* selUses = new Map();
             for (u32 i2 = (u32)0; i2 < bb2.insns().count(); i2 = i2 + (u32)1)
                 {
                 IRInsn* in2 = (IRInsn*)bb2.insns().get(i2);
                 if (in2.res() != (IRValue*)0)
                     defs.set((Hashable*)in2.res(), (Object*)in2);
+                if (in2.op().equals(String.withCString("Select")) && in2.ops().count() >= (u32)3)
+                    {
+                    IROperand* sc = (IROperand*)in2.ops().get((u32)0);
+                    if (sc.kind() == (u8)OPK_USE && sc.val() != (IRValue*)0)
+                        {
+                        Object* was = selUses.get((Hashable*)sc.val());
+                        u32 nu = was == (Object*)0 ? (u32)1 : ((Number*)was).asU32() + (u32)1;
+                        selUses.set((Hashable*)sc.val(), (Object*)Number.withU32(nu));
+                        }
+                    }
                 }
             for (u32 i2 = (u32)0; i2 < bb2.insns().count(); i2 = i2 + (u32)1)
                 {
@@ -5168,7 +5180,8 @@ class X86_64
                 IROperand* c2 = (IROperand*)in2.ops().get((u32)0);
                 if (c2.kind() != (u8)OPK_USE || c2.val() == (IRValue*)0)
                     continue;
-                if (useCount(uc, c2.val()) != (u32)1)
+                Object* su = selUses.get((Hashable*)c2.val());
+                if (su == (Object*)0 || useCount(uc, c2.val()) != ((Number*)su).asU32())
                     continue;
                 IRInsn* cmp2 = (IRInsn*)defs.get((Hashable*)c2.val());
                 if (cmp2 == (IRInsn*)0 || !cmp2.op().equals(String.withCString("ICmp")))
@@ -5183,8 +5196,46 @@ class X86_64
                 i64 k2 = r2.imm();
                 if (k2 < (i64)-2147483648 || k2 > (i64)2147483647)
                     continue;
-                _selSkip.set((Hashable*)c2.val(), (Object*)cmp2);
-                _selCmp.set((Hashable*)in2.res(), (Object*)cmp2);
+                // `(x & m) == 0` / `!= 0` with the And used only here: the
+                // Select tests x against m itself (`test r11d, 4`), and the And
+                // is not emitted. The stand-in And-with-predicate is what the
+                // Select reads, and its operands (x) are what the allocator
+                // keeps live to each Select.
+                IRInsn* use2 = (IRInsn*)_selSkip.get((Hashable*)c2.val());
+                if (use2 == (IRInsn*)0)
+                    {
+                    use2 = cmp2;
+                    IROperand* l2 = (IROperand*)cmp2.ops().get((u32)0);
+                    IRInsn* d2 = l2.kind() == (u8)OPK_USE && l2.val() != (IRValue*)0
+                                     ? (IRInsn*)defs.get((Hashable*)l2.val()) : (IRInsn*)0;
+                    String* p2 = cmp2.pred();
+                    bool eqne = p2 != (String*)0
+                                && (p2.equals(String.withCString("EQ")) || p2.equals(String.withCString("NE")));
+                    if (k2 == (i64)0 && eqne && d2 != (IRInsn*)0 && d2.op().equals(String.withCString("And"))
+                        && d2.res() != (IRValue*)0 && d2.ops().count() == (u32)2
+                        && ((IROperand*)d2.ops().get((u32)0)).kind() == (u8)OPK_USE
+                        && ((IROperand*)d2.ops().get((u32)0)).val() != (IRValue*)0
+                        && ((IROperand*)d2.ops().get((u32)1)).kind() == (u8)OPK_IMMI
+                        && useCount(uc, d2.res()) == (u32)1)
+                        {
+                        IRValue* xv2 = ((IROperand*)d2.ops().get((u32)0)).val();
+                        u32 xw2 = widthOfValue(xv2);
+                        i64 m2 = ((IROperand*)d2.ops().get((u32)1)).imm();
+                        if (!isFloatTy(xv2.ty()) && !xv2.ty().hasPrefix(String.withCString("Vec"))
+                            && xw2 >= (u32)1 && xw2 <= (u32)8 && m2 > (i64)0 && m2 <= (i64)2147483647
+                            && (xw2 >= (u32)4 || m2 < ((i64)1 << (i64)((u32)8 * xw2))))
+                            {
+                            use2 = IRInsn.with(String.withCString("And"));
+                            use2.copyDbg(cmp2);
+                            use2.setPred(p2);
+                            use2.add((IROperand*)d2.ops().get((u32)0));
+                            use2.add((IROperand*)d2.ops().get((u32)1));
+                            _selSkip.set((Hashable*)d2.res(), (Object*)d2);
+                            }
+                        }
+                    }
+                _selSkip.set((Hashable*)c2.val(), (Object*)use2);
+                _selCmp.set((Hashable*)in2.res(), (Object*)use2);
                 }
             }
         }
@@ -6844,6 +6895,10 @@ class X86_64
         String* op = n.op();
         if (op.equals(String.withCString("Phi")))
             return; // edge copies
+        // An And whose one use is a Select-fused `== 0`: the Select tests its
+        // operand against the mask itself (see _selSkip).
+        if (n.res() != (IRValue*)0 && op.equals(String.withCString("And")) && inSelSkip(n.res()))
+            return;
         if (dispatchCore(n, op))
             return;
         if (dispatchMemory(fn, n, op))
@@ -7691,28 +7746,7 @@ class X86_64
         if (scmp != (IRInsn*)0 && c0.kind() == (u8)OPK_USE && inSelSkip(c0.val()))
             {
             String* sp = scmp.pred();
-            bool ssg = isSignedPred(sp);
-            IROperand* so0 = (IROperand*)scmp.ops().get((u32)0);
-            u32 cw = so0.kind() == (u8)OPK_USE ? widthOfValue(so0.val()) : (u32)4;
-            if (cw < (u32)4)
-                cw = (u32)4;
-            loadExt(so0, (u8)'c', ssg, cw);
-            i64 k = ((IROperand*)scmp.ops().get((u32)1)).imm();
-            bool zeroOK = k == (i64)0
-                          && (sp.equals(String.withCString("EQ")) || sp.equals(String.withCString("NE"))
-                              || sp.equals(String.withCString("ULT")) || sp.equals(String.withCString("UGE")));
-            if (zeroOK)
-                _out.appendFormat("\ttest\t%s, %s\n", reg((u8)'c', cw).cString(),
-                                  reg((u8)'c', cw).cString());
-            else
-                {
-                i64 pk = cw == (u32)4 ? (i64)(i32)k : k;
-                _out.appendCString("\tcmp\t");
-                _out.append(reg((u8)'c', cw));
-                _out.appendCString(", ");
-                _out.append(String.withI64(pk));
-                _out.appendCString("\n");
-                }
+            emitSelCompare(scmp);
             _out.appendFormat("\t%s\t%s, %s\n", cmovForNegated(sp).cString(),
                               reg((u8)'a', w).cString(), reg((u8)'d', w).cString());
             store((u8)'a', n.res());
@@ -7730,6 +7764,56 @@ class X86_64
     // spent 16 of them per octave. Instead: the false value into the
     // destination, the compare, and a branch around moving the true value in
     // (what LLVM emits for an integer condition on SSE).
+    // The flags of a Select-fused compare (_selCmp): `cmp`/`test` of the
+    // ICmp's left side, or for the stand-in And of a fused `(x & m) == 0`,
+    // `test x, m` on x where it is homed. rcx is the scratch; rax/rdx may
+    // hold the arms.
+    void emitSelCompare(IRInsn* scmp)
+        {
+        String* sp = scmp.pred();
+        IROperand* so0 = (IROperand*)scmp.ops().get((u32)0);
+        u32 cw = so0.kind() == (u8)OPK_USE ? widthOfValue(so0.val()) : (u32)4;
+        if (cw < (u32)4)
+            cw = (u32)4;
+        if (scmp.op().equals(String.withCString("And")))
+            {
+            i64 m = ((IROperand*)scmp.ops().get((u32)1)).imm();
+            String* h = so0.val() != (IRValue*)0 ? homeOf(so0.val()) : (String*)0;
+            String* r = (String*)0;
+            if (h != (String*)0 && !isXmmHome(h))
+                r = regView(h, cw);
+            else
+                {
+                loadZX(so0, (u8)'c');
+                r = reg((u8)'c', cw);
+                }
+            _out.appendCString("\ttest\t");
+            _out.append(r);
+            _out.appendCString(", ");
+            _out.append(String.withI64(m));
+            _out.appendCString("\n");
+            return;
+            }
+        bool ssg = isSignedPred(sp);
+        loadExt(so0, (u8)'c', ssg, cw);
+        i64 k = ((IROperand*)scmp.ops().get((u32)1)).imm();
+        bool zeroOK = k == (i64)0
+                      && (sp.equals(String.withCString("EQ")) || sp.equals(String.withCString("NE"))
+                          || sp.equals(String.withCString("ULT")) || sp.equals(String.withCString("UGE")));
+        if (zeroOK)
+            _out.appendFormat("\ttest\t%s, %s\n", reg((u8)'c', cw).cString(),
+                              reg((u8)'c', cw).cString());
+        else
+            {
+            i64 pk = cw == (u32)4 ? (i64)(i32)k : k;
+            _out.appendCString("\tcmp\t");
+            _out.append(reg((u8)'c', cw));
+            _out.appendCString(", ");
+            _out.append(String.withI64(pk));
+            _out.appendCString("\n");
+            }
+        }
+
     void emitSelectF(IRInsn* n)
         {
         IROperand* tv = (IROperand*)n.ops().get((u32)1);
@@ -7753,28 +7837,7 @@ class X86_64
         if (scmp != (IRInsn*)0 && c0.kind() == (u8)OPK_USE && inSelSkip(c0.val()))
             {
             String* sp = scmp.pred();
-            bool ssg = isSignedPred(sp);
-            IROperand* so0 = (IROperand*)scmp.ops().get((u32)0);
-            u32 cw = so0.kind() == (u8)OPK_USE ? widthOfValue(so0.val()) : (u32)4;
-            if (cw < (u32)4)
-                cw = (u32)4;
-            loadExt(so0, (u8)'c', ssg, cw);
-            i64 k = ((IROperand*)scmp.ops().get((u32)1)).imm();
-            bool zeroOK = k == (i64)0
-                          && (sp.equals(String.withCString("EQ")) || sp.equals(String.withCString("NE"))
-                              || sp.equals(String.withCString("ULT")) || sp.equals(String.withCString("UGE")));
-            if (zeroOK)
-                _out.appendFormat("\ttest\t%s, %s\n", reg((u8)'c', cw).cString(),
-                                  reg((u8)'c', cw).cString());
-            else
-                {
-                i64 pk = cw == (u32)4 ? (i64)(i32)k : k;
-                _out.appendCString("\tcmp\t");
-                _out.append(reg((u8)'c', cw));
-                _out.appendCString(", ");
-                _out.append(String.withI64(pk));
-                _out.appendCString("\n");
-                }
+            emitSelCompare(scmp);
             _out.appendFormat("\t%s\t.L_fsel_%lu\n", jccForNegated(sp).cString(), lbl);
             }
         else

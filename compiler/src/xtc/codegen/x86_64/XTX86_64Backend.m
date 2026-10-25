@@ -35,12 +35,12 @@ static NSDictionary<NSNumber*, XTIRInsn*>* sFold = nil;
 // the CondBranch then branches on the predicate directly (`cmp; jl`) instead of
 // materialising a boolean and testing it. Excluded from homing (never stored).
 static NSSet<NSNumber*>* sFusedCmp = nil;
-// Compare-and-select fusion: an ICmp whose ONLY use is a Select condition in
+// Compare-and-select fusion: an ICmp whose ONLY uses are Select conditions in
 // the same block. Without it the condition is materialised (`setcc al; movzx`)
 // and then tested AGAIN (`test ecx, ecx`) before the cmov — four instructions
 // to re-derive flags the cmp already set. Fused, the ICmp emits nothing at its
-// own site and the compare is re-issued at the Select, so the cmov reads the
-// flags directly. Only when the ICmp's right-hand side is an immediate: the
+// own site and the compare is re-issued at each Select, so the cmov or branch
+// reads the flags directly (perlin's grad() picks two values on one `g < 4`). Only when the ICmp's right-hand side is an immediate: the
 // re-issue then needs ONE scratch register, and rax/rdx already hold the two
 // selected values.
 static NSDictionary<NSNumber*, XTIRInsn*>* sSelSkip = nil; // cond id -> its ICmp
@@ -2913,15 +2913,21 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
         for (XTIRBlock* b in fn.blocks)
             {
             NSMutableDictionary<NSNumber*, XTIRInsn*>* defs = [NSMutableDictionary dictionary];
+            NSCountedSet<NSNumber*>* selUses = [NSCountedSet set];
             for (XTIRInsn* in in b.instructions)
+                {
                 if (in.result)
                     defs[@(in.result.valueId)] = in;
+                if (in.opcode == XTIROpSelect && in.operands.count >= 3 && in.operands[0].kind == XTIROperandKindUse)
+                    [selUses addObject:@(in.operands[0].valueId)];
+                }
             for (XTIRInsn* in in b.instructions)
                 {
                 if (in.opcode != XTIROpSelect || !in.result || in.operands.count < 3)
                     continue;
                 XTIROperand* c = in.operands[0];
-                if (c.kind != XTIROperandKindUse || uc[@(c.valueId)].integerValue != 1)
+                if (c.kind != XTIROperandKindUse ||
+                    uc[@(c.valueId)].integerValue != (NSInteger)[selUses countForObject:@(c.valueId)])
                     continue;
                 XTIRInsn* cmp = defs[@(c.valueId)];
                 if (!cmp || cmp.opcode != XTIROpICmp || cmp.operands.count < 2)
@@ -2934,8 +2940,38 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
                 long long k = (long long)cmp.operands[1].intValue;
                 if (k < INT32_MIN || k > INT32_MAX)
                     continue;
-                skip[@(c.valueId)] = cmp;
-                selCmp[@(in.result.valueId)] = cmp;
+                // `(x & m) == 0` / `!= 0` with the And used only here: the
+                // Select tests x against m itself (`test r11d, 4`), and the And
+                // is not emitted. The stand-in And-with-predicate is what the
+                // Select reads, and its operands (x) are what the allocator
+                // keeps live to each Select.
+                XTIRInsn* use = skip[@(c.valueId)];
+                if (!use)
+                    {
+                    use = cmp;
+                    XTIRInsn* d = cmp.operands[0].kind == XTIROperandKindUse ? defs[@(cmp.operands[0].valueId)] : nil;
+                    if (k == 0 && (cmp.predicate == XTIRICmpEQ || cmp.predicate == XTIRICmpNE) && d &&
+                        d.opcode == XTIROpAnd && d.result && d.operands.count == 2 &&
+                        d.operands[0].kind == XTIROperandKindUse && d.operands[1].kind == XTIROperandKindImmI &&
+                        uc[@(d.result.valueId)].integerValue == 1)
+                        {
+                        XTIRValue* xv = fn.values[@(d.operands[0].valueId)];
+                        NSUInteger xw = xv ? [self widthOf:xv] : 0;
+                        long long m = (long long)d.operands[1].intValue;
+                        if (xv && ![self isFloatKind:xv.type.kind] && xv.type.kind != XTIRTypeKindVec &&
+                            xw >= 1 && xw <= 8 && m > 0 && m <= INT32_MAX && (xw >= 4 || m < (1LL << (8 * xw))))
+                            {
+                            use = [[XTIRInsn alloc] initWithOpcode:XTIROpAnd
+                                                            result:nil
+                                                          operands:d.operands
+                                                         predicate:cmp.predicate
+                                                            dbgLoc:cmp.dbgLoc];
+                            skip[@(d.result.valueId)] = d;
+                            }
+                        }
+                    }
+                skip[@(c.valueId)] = use;
+                selCmp[@(in.result.valueId)] = use;
                 }
             }
         }
@@ -3746,6 +3782,10 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
     XTIROpcode op = in.opcode;
     XTIRValue* res = in.result;
     NSArray<XTIROperand*>* ops = in.operands;
+    // An And whose one use is a Select-fused `== 0`: the Select tests its
+    // operand against the mask itself (see sSelSkip).
+    if (op == XTIROpAnd && res && sSelSkip && sSelSkip[@(res.valueId)])
+        return;
 
     switch (op)
         {
@@ -5466,24 +5506,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (scmp && ops[0].kind == XTIROperandKindUse && sSelSkip &&
             sSelSkip[@(ops[0].valueId)])
             {
-            uint8_t sp = scmp.predicate;
-            BOOL ssg = (sp == XTIRICmpSLT || sp == XTIRICmpSLE ||
-                        sp == XTIRICmpSGT || sp == XTIRICmpSGE);
-            XTIRValue* sl = scmp.operands[0].kind == XTIROperandKindUse
-                                ? fn.values[@(scmp.operands[0].valueId)] : nil;
-            NSUInteger cw = sl ? [self widthOf:sl] : 4;
-            if (cw < 4)
-                cw = 4;
-            [self loadExt:scmp.operands[0] into:'c' signed:ssg width:cw fn:fn slot:slot out:out];
-            long long k = (long long)scmp.operands[1].intValue;
-            BOOL zeroOK = (k == 0) && (sp == XTIRICmpEQ || sp == XTIRICmpNE ||
-                                       sp == XTIRICmpULT || sp == XTIRICmpUGE);
-            if (zeroOK)
-                [out appendFormat:@"\ttest\t%@, %@\n", [self reg:'c' width:cw], [self reg:'c' width:cw]];
-            else
-                [out appendFormat:@"\tcmp\t%@, %lld\n", [self reg:'c' width:cw],
-                                  (cw == 4) ? (long long)(int32_t)k : k];
-            [out appendFormat:@"\t%@\t%@, %@\n", [self cmovForNegatedICmp:sp],
+            [self emitSelCompare:scmp fn:fn slot:slot out:out];
+            [out appendFormat:@"\t%@\t%@, %@\n", [self cmovForNegatedICmp:scmp.predicate],
                               [self reg:'a' width:w], [self reg:'d' width:w]];
             [self store:'a' into:res slot:slot out:out];
             return;
@@ -6395,6 +6419,47 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
     return @"sete";
     }
 
+// The flags of a Select-fused compare (sSelCmp): `cmp`/`test` of the ICmp's
+// left side, or for the stand-in And of a fused `(x & m) == 0`, `test x, m`
+// on x where it is homed. rcx is the scratch; rax/rdx may hold the arms.
++ (void)emitSelCompare:(XTIRInsn*)scmp fn:(XTIRFunction*)fn
+                  slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+                   out:(NSMutableString*)out
+    {
+    uint8_t sp = scmp.predicate;
+    XTIRValue* sl = scmp.operands[0].kind == XTIROperandKindUse
+                        ? fn.values[@(scmp.operands[0].valueId)] : nil;
+    NSUInteger cw = sl ? [self widthOf:sl] : 4;
+    if (cw < 4)
+        cw = 4;
+    if (scmp.opcode == XTIROpAnd)
+        {
+        long long m = (long long)scmp.operands[1].intValue;
+        NSString* h = sl ? sHome[@(sl.valueId)] : nil;
+        NSString* r;
+        if (h && ![self isXmmHome:h])
+            r = [self regView:h width:cw];
+        else
+            {
+            [self loadZX:scmp.operands[0] into:'c' fn:fn slot:slot out:out];
+            r = [self reg:'c' width:cw];
+            }
+        [out appendFormat:@"\ttest\t%@, %lld\n", r, m];
+        return;
+        }
+    BOOL ssg = (sp == XTIRICmpSLT || sp == XTIRICmpSLE ||
+                sp == XTIRICmpSGT || sp == XTIRICmpSGE);
+    [self loadExt:scmp.operands[0] into:'c' signed:ssg width:cw fn:fn slot:slot out:out];
+    long long k = (long long)scmp.operands[1].intValue;
+    BOOL zeroOK = (k == 0) && (sp == XTIRICmpEQ || sp == XTIRICmpNE ||
+                               sp == XTIRICmpULT || sp == XTIRICmpUGE);
+    if (zeroOK)
+        [out appendFormat:@"\ttest\t%@, %@\n", [self reg:'c' width:cw], [self reg:'c' width:cw]];
+    else
+        [out appendFormat:@"\tcmp\t%@, %lld\n", [self reg:'c' width:cw],
+                          (cw == 4) ? (long long)(int32_t)k : k];
+    }
+
 // Conditional jump taken when the ICmp predicate is FALSE (the fused CondBranch
 // jumps to its false target on the negated condition).
 // A float cond ? a : b. There is no cmov for xmm, and staging both values
@@ -6427,24 +6492,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
     XTIRInsn* scmp = sSelCmp ? sSelCmp[@(res.valueId)] : nil;
     if (scmp && ops[0].kind == XTIROperandKindUse && sSelSkip && sSelSkip[@(ops[0].valueId)])
         {
-        uint8_t sp = scmp.predicate;
-        BOOL ssg = (sp == XTIRICmpSLT || sp == XTIRICmpSLE ||
-                    sp == XTIRICmpSGT || sp == XTIRICmpSGE);
-        XTIRValue* sl = scmp.operands[0].kind == XTIROperandKindUse
-                            ? fn.values[@(scmp.operands[0].valueId)] : nil;
-        NSUInteger cw = sl ? [self widthOf:sl] : 4;
-        if (cw < 4)
-            cw = 4;
-        [self loadExt:scmp.operands[0] into:'c' signed:ssg width:cw fn:fn slot:slot out:out];
-        long long k = (long long)scmp.operands[1].intValue;
-        BOOL zeroOK = (k == 0) && (sp == XTIRICmpEQ || sp == XTIRICmpNE ||
-                                   sp == XTIRICmpULT || sp == XTIRICmpUGE);
-        if (zeroOK)
-            [out appendFormat:@"\ttest\t%@, %@\n", [self reg:'c' width:cw], [self reg:'c' width:cw]];
-        else
-            [out appendFormat:@"\tcmp\t%@, %lld\n", [self reg:'c' width:cw],
-                              (cw == 4) ? (long long)(int32_t)k : k];
-        [out appendFormat:@"\t%@\t.L_fsel_%lu\n", [self jccForNegatedICmp:sp], (unsigned long)lbl];
+        [self emitSelCompare:scmp fn:fn slot:slot out:out];
+        [out appendFormat:@"\t%@\t.L_fsel_%lu\n", [self jccForNegatedICmp:scmp.predicate], (unsigned long)lbl];
         }
     else
         {

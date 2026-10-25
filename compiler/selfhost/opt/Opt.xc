@@ -3473,6 +3473,7 @@ class BeFact : Object
             {
             simplifyFn((IRFunc*)m.funcs().get(f));
             simpStrictFn((IRFunc*)m.funcs().get(f));
+            simpMaskFn((IRFunc*)m.funcs().get(f));
             simpBalanceFn((IRFunc*)m.funcs().get(f));
             }
         }
@@ -3530,6 +3531,79 @@ class BeFact : Object
                 n.ops().set((u32)1, (Object*)IROperand.useVal(kv));
                 bb.insns().insert(i, (Object*)kc);
                 defOf.set((Hashable*)kv, (Object*)kc);
+                i = i + (u32)1;
+                }
+            }
+        }
+
+    // Masks: `(x & C1) & C2` is `x & (C1 & C2)`, and `(x & M) <u 2^k` is
+    // `(x & (M with the bits below 2^k cleared)) == 0` (`>=u`: `!= 0`), one
+    // bit test (8 to 32 bits). perlin's grad() reads `h & 7` as `g < 4`,
+    // `g & 1` and `g & 2`: they become h & 4, h & 1 and h & 2, and `h & 7`
+    // is dead.
+    void simpMaskFn(IRFunc* fn)
+        {
+        Map* defOf = defMapAll(fn);
+        Map* repl = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                bool band = n.op().equals(String.withCString("And"));
+                bool icmp = n.op().equals(String.withCString("ICmp")) && n.pred() != (String*)0;
+                bool ult = icmp && n.pred().equals(String.withCString("ULT"));
+                bool uge = icmp && n.pred().equals(String.withCString("UGE"));
+                if ((!band && !ult && !uge) || n.ops().count() != (u32)2)
+                    continue;
+                IROperand* a = (IROperand*)n.ops().get((u32)0);
+                if (a.kind() != (u8)OPK_USE || a.val() == (IRValue*)0)
+                    continue;
+                String* t = a.val().ty();
+                if (!simpIntTy(t) || irWidth(t) > (u32)4)
+                    continue;
+                i64 k = (i64)0;
+                if (!simpConst((IROperand*)n.ops().get((u32)1), defOf, repl, &k))
+                    continue;
+                IRInsn* d = (IRInsn*)defOf.get((Hashable*)a.val());
+                if (d == (IRInsn*)0 || !d.op().equals(String.withCString("And")) || d.ops().count() != (u32)2)
+                    continue;
+                IROperand* d0 = (IROperand*)d.ops().get((u32)0);
+                if (d0.kind() != (u8)OPK_USE || d0.val() == (IRValue*)0)
+                    continue;
+                i64 m = (i64)0;
+                if (!simpConst((IROperand*)d.ops().get((u32)1), defOf, repl, &m))
+                    continue;
+                IRValue* xv = d0.val();
+                if (!xv.ty().equals(t))
+                    continue;
+                u32 bits = irWidth(t) * (u32)8;
+                i64 wmask = ((i64)1 << (i64)bits) - (i64)1;
+                m = m & wmask;
+                k = k & wmask;
+                if (band)
+                    {
+                    n.ops().set((u32)0, (Object*)IROperand.useVal(xv));
+                    n.ops().set((u32)1, (Object*)IROperand.immI(simpWrap(m & k, t), t));
+                    continue;
+                    }
+                if (k == (i64)0 || (k & (k - (i64)1)) != (i64)0)
+                    continue;
+                i64 mk = m & ~(k - (i64)1);
+                if (mk == (i64)0)
+                    continue;
+                IRValue* av = new IRValue(t);
+                IRInsn* na = IRInsn.with(String.withCString("And"));
+                na.copyDbg(n);
+                na.setRes(av);
+                na.add(IROperand.useVal(xv));
+                na.add(IROperand.immI(simpWrap(mk, t), t));
+                n.setPred(String.withCString(ult ? "EQ" : "NE"));
+                n.ops().set((u32)0, (Object*)IROperand.useVal(av));
+                n.ops().set((u32)1, (Object*)IROperand.immI((i64)0, t));
+                bb.insns().insert(i, (Object*)na);
+                defOf.set((Hashable*)av, (Object*)na);
                 i = i + (u32)1;
                 }
             }
