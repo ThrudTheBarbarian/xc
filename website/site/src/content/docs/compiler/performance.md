@@ -142,7 +142,8 @@ bit, and `-fno-matmul` turns it off. The kernel depends on the machine:
   bits of a NaN (the inputs have none).
 - **Apple M1 to M3 (no SME):** the program finds no matrix unit when it
   starts and runs the loops, vectorised. The arm64 figures on this page, for
-  every release, come from an M3 Max, so there `matrix_mul_f32` is the loop.
+  every release, come from an M3 Max, so there `matrix_mul_f32` is the loop;
+  the table below adds an M4 Max, where it is the matrix unit.
 - **x86-64:** the widest vector unit the processor has (SSE2, AVX2 or
   AVX-512), chosen when the program starts; the Ryzen 9 9955HX picks AVX-512.
 
@@ -152,6 +153,8 @@ it stays a vectorised loop.)
 
 | `matrix_mul_f32` | xc | Objective-C | C++ (clang) | C++ (GCC) | Swift |
 |---|---|---|---|---|---|
+| arm64, Apple M4 Max (SME) | 28 ms | 11.0 s | 11.0 s | 11.0 s | 10.2 s |
+| xc is | | **389× faster** | **388× faster** | **389× faster** | **362× faster** |
 | arm64, Apple M3 Max | 10.2 s | 11.0 s | 11.0 s | 10.9 s | 11.9 s |
 | xc is | | **1.07× faster** | **1.07× faster** | **1.07× faster** | **1.16× faster** |
 | x86-64, AMD Ryzen 9 9955HX | 230 ms | 8.4 s | 8.3 s | 837 ms | 8.0 s |
@@ -162,7 +165,9 @@ it stays a vectorised loop.)
 `par` blocks, which run on every CPU thread, on GPUs and across machines, have
 pages of their own: [Performance: GPU](/compiler/benchmarks/gpu/) (including
 plain loops made parallel by `--par-auto`) and
-[Performance: networked](/compiler/benchmarks/network/).
+[Performance: networked](/compiler/benchmarks/network/). Plain C built by xcc,
+against GCC and clang on one thread and with OpenMP on every thread, is on
+[Performance: C](/compiler/benchmarks/c/).
 
 ## Release to release
 

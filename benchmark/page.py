@@ -24,6 +24,8 @@ GPU_PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "comp
 NET_PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "compiler", "benchmarks", "network.md")
 SOURCES_PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "compiler", "benchmark-sources.mdx")
 SOURCES_URL = "/compiler/benchmark-sources/"
+C_PAGE = os.path.join(REPO, "website", "site", "src", "content", "docs", "compiler", "benchmarks", "c.md")
+C_NAMES = (("gcc", "GCC"), ("clang", "clang"))
 SRC_FILES = (("xc", "xc", "c"), ("m", "Objective-C", "objc"), ("cpp", "C++", "cpp"), ("swift", "Swift", "swift"))
 
 # "gcc" is the C++ source built with GCC: on the Linux host (g++), and from 0.8
@@ -368,9 +370,22 @@ def separate(cur):
     """The benchmarks kept out of the means, each as a table: the times on
     each target, and how much faster xc is than each language there."""
     out = []
+    # The M4 Max's own run of these (benchmark/m4max-<v>/, 0.87): the matrix
+    # unit the M3 Max the other arm64 figures come from does not have.
+    m4 = {}
+    mp = os.path.join(ROOT, "m4max-%s" % CURRENT, "results.json") if CURRENT else ""
+    if MAC_TREE and mp and os.path.exists(mp):
+        with open(mp) as fh:
+            m4 = json.load(fh).get("net", {})
     for b in SEPARATE:
         d = cur.get(b, {}).get("O3", {})
         rows = ["| `%s` | xc | Objective-C | C++ (clang) | C++ (GCC) | Swift |" % b, "|---|---|---|---|---|---|"]
+        e = m4.get(b, {}).get("O3", {})
+        if e.get("xc"):
+            rows.append("| arm64, Apple M4 Max (SME) | %s | %s |" % (secs(e["xc"]),
+                        " | ".join(secs(e[l]) if e.get(l) else "–" for l, _, _ in LANGS)))
+            rows.append("| xc is | | %s |" % " | ".join(("**%s**" % speed(e["xc"] / e[l])) if e.get(l) else "–"
+                                                    for l, _, _ in LANGS))
         for (pname, suf), mach in zip(PLATFORMS, (mac_name(), "AMD Ryzen 9 9955HX")):
             x = d.get("xc" + suf)
             if not x:
@@ -469,6 +484,44 @@ def autopar_tables(version):
     return "\n".join(out)
 
 
+def c_tables(version):
+    """benchmark/par/c_run.py's results: one thread and every thread, each its
+    own table and mean, never mixed (owner, 2026-10-25)."""
+    path = os.path.join(ROOT, "par", version, "c.json")
+    if not os.path.exists(path):
+        return None
+    with open(path) as fh:
+        d = json.load(fh)
+    res = d["results"]
+    def ver(line, name):
+        m = re.search(r"(\d+\.\d+)(\.\d+)?(?:\s|$|-)", line.split(")")[-1] if name == "GCC" else line)
+        return "%s %s" % (name, m.group(1)) if m else line
+    def msec(us):
+        v = us / 1000.0
+        return "%.2f" % v if v < 10 else "%.1f" % v if v < 100 else "%.0f" % v
+    out = {"cpu": d["cpu"].replace(" 16-Core Processor", ""), "threads": d["threads"],
+           "gcc": ver(d["toolchains"]["gcc"], "GCC"), "clang": ver(d["toolchains"]["clang"], "clang")}
+    for mode in ("one", "all"):
+        rows = ["| benchmark | xcc | GCC | clang | xcc against GCC | xcc against clang |",
+                "|---|---|---|---|---|---|"]
+        ratios = {c: [] for c, _ in C_NAMES}
+        for b in sorted(res, key=lambda n: list(res).index(n)):
+            r = res[b][mode]
+            x = r["xcc"]["median_us"]
+            cells = []
+            for c, _ in C_NAMES:
+                ratios[c].append(x / r[c]["median_us"])
+                cells.append("**%s**" % speed(x / r[c]["median_us"]))
+            rows.append("| `%s` | %s | %s | %s | %s |" % (
+                b, msec(x), msec(r["gcc"]["median_us"]), msec(r["clang"]["median_us"]), " | ".join(cells)))
+        rows.append("| geometric mean | | | | **%s** | **%s** |" % tuple(speed(gmean(ratios[c])) for c, _ in C_NAMES))
+        out[mode] = "\n".join(rows)
+        out[mode + "_wins"] = sum(1 for i in range(len(res))
+                                  if all(ratios[c][i] < 1 for c, _ in C_NAMES))
+        out["n"] = len(res)
+    return out
+
+
 def remote_tables(version):
     """A remote GPU through xcd (benchmark/par/remote.py)."""
     path = os.path.join(ROOT, "par", version, "remote.json")
@@ -476,7 +529,7 @@ def remote_tables(version):
         return "*(not measured for this release)*"
     with open(path) as fh:
         res = json.load(fh)
-    names = {"mac": "Apple M4 Max (Metal), using the remote RTX 5080",
+    names = {"mac": "Apple %s (Metal), using the remote RTX 5080" % (par_mac().split(",")[0] if MAC_TREE else "M4 Max"),
              "linux": "AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080"}
     out = []
     for m in ("mac", "linux"):
@@ -791,8 +844,14 @@ def main():
         fh.write(gpu_page)
     print("wrote", os.path.relpath(GPU_PAGE, REPO))
     with open(NET_PAGE, "w") as fh:
-        fh.write(NET_PAGE_TEMPLATE.format(release=a.release, remote=remote_tables(a.current)))
+        fh.write(NET_PAGE_TEMPLATE.format(release=a.release, remote=remote_tables(a.current),
+                                          net_mac=par_mac().split(",")[0], net_mac_short=par_mac().split(",")[0]))
     print("wrote", os.path.relpath(NET_PAGE, REPO))
+    ct = c_tables(a.current)
+    if ct:
+        with open(C_PAGE, "w") as fh:
+            fh.write(C_PAGE_TEMPLATE.format(release=a.release, **ct))
+        print("wrote", os.path.relpath(C_PAGE, REPO))
     sources_page(cur.keys())
     published(a.current)
 
@@ -937,6 +996,66 @@ python3 benchmark/page.py
 """
 
 
+C_PAGE_TEMPLATE = """---
+title: "Performance: C"
+description: Plain C built by xcc, against the same C built by GCC and clang, on one thread and on every thread with OpenMP.
+---
+
+xcc compiles C ([C programs](/compiler/usage/c-programs/)): it reads a `.c`
+file through clang's front end and generates the code itself. These are the
+seven par benchmarks as plain C, the same files for every compiler, timed on
+one machine: an {cpu} ({threads} hardware threads) running Linux, with xcc
+{release}, {gcc} and {clang}.
+
+The two sections below measure different things and are never mixed: one
+thread is the code each core runs; every thread adds how a compiler spreads
+a loop across the cores.
+
+## One thread
+
+Each compiler builds the plain C with no parallel code: `xcc -O3` against
+`gcc -O3 -march=native` and `clang -O3 -march=native`.
+
+Milliseconds; the median of up to fifteen runs.
+
+{one}
+
+## Every thread
+
+The same C, run across all {threads} threads:
+
+- **xcc:** `xcc -O3 --par-auto` on the unchanged files. `--par-auto` finds
+  the loops that can run in parallel and runs them as `par` blocks; here they
+  are kept on the CPU (`XC_PAR=cpu`), so this is CPU against CPU.
+- **GCC and clang:** `-O3 -march=native -fopenmp`, on a copy of each file
+  with one `#pragma omp parallel for` line (with its `reduction` clause where
+  the loop has one) before the timed loop: the work a programmer does to get
+  OpenMP's threads.
+
+Milliseconds; the median of up to fifteen runs. xcc is ahead of both on
+{all_wins} of the {n}.
+
+{all}
+
+The same programs on GPUs, where `--par-auto` sends them by default, are on
+[Performance: GPU](/compiler/benchmarks/gpu/).
+
+## How they were measured
+
+Every program prints its checksum and its best time over its own repeats; each
+build was run several times, round-robin with the others, the machine idle
+before each round, and the figure is the median of those runs' best times.
+The spread from run to run is wide for all three compilers on this machine
+(several tens of percent on the shortest programs), which is why one run is
+never the figure. Every build of a program gave the same checksum.
+
+The C sources and their OpenMP copies are in
+[xcc-c-bench-sources-{release}.tar.bz2](/downloads/xcc-c-bench-sources-{release}.tar.bz2),
+and in the repository's `benchmark/par/c/` and `benchmark/par/c/openmp/`;
+`benchmark/par/c_run.py` repeats the whole measurement.
+"""
+
+
 NET_PAGE_TEMPLATE = """---
 title: "Performance: networked"
 description: A par block's tiles on a GPU in another machine, served by xcd, beside the program's own devices, measured with the released xcc.
@@ -945,7 +1064,7 @@ description: A par block's tiles on a GPU in another machine, served by xcd, bes
 `xcd`, the par daemon, serves a machine's GPUs to programs on others (see
 [par](/compiler/language/par/)). Here it runs on a Windows machine with an
 RTX 5080, on the local network, and two machines use it: an Apple MacBook Pro
-with an M4 Max, whose own GPU is fast, and a Linux machine with an AMD Ryzen 9
+with an {net_mac}, whose own GPU is fast, and a Linux machine with an AMD Ryzen 9
 9955HX, whose only GPU is integrated. Each figure is measured with the
 released {release} `xcc`.
 
@@ -965,7 +1084,7 @@ What the tables show:
   from the Linux machine it runs on the remote RTX 5080 many times faster than
   on its own devices, and `auto` picks the remote card.
 - **It does not pay where the machine's own GPU is already fast**, as on the
-  M4 Max, or where a block moves more than it computes (`saxpy`): `auto` keeps
+  {net_mac_short}, or where a block moves more than it computes (`saxpy`): `auto` keeps
   those local.
 - **Every GPU together is not always faster.** Beside a remote card many times
   faster, a slow integrated GPU's share holds the fast one back; `auto`
@@ -1079,7 +1198,8 @@ bit, and `-fno-matmul` turns it off. The kernel depends on the machine:
   bits of a NaN (the inputs have none).
 - **Apple M1 to M3 (no SME):** the program finds no matrix unit when it
   starts and runs the loops, vectorised. The arm64 figures on this page, for
-  every release, come from an M3 Max, so there `matrix_mul_f32` is the loop.
+  every release, come from an M3 Max, so there `matrix_mul_f32` is the loop;
+  the table below adds an M4 Max, where it is the matrix unit.
 - **x86-64:** the widest vector unit the processor has (SSE2, AVX2 or
   AVX-512), chosen when the program starts; the Ryzen 9 9955HX picks AVX-512.
 
@@ -1094,7 +1214,9 @@ it stays a vectorised loop.)
 `par` blocks, which run on every CPU thread, on GPUs and across machines, have
 pages of their own: [Performance: GPU](/compiler/benchmarks/gpu/) (including
 plain loops made parallel by `--par-auto`) and
-[Performance: networked](/compiler/benchmarks/network/).
+[Performance: networked](/compiler/benchmarks/network/). Plain C built by xcc,
+against GCC and clang on one thread and with OpenMP on every thread, is on
+[Performance: C](/compiler/benchmarks/c/).
 
 ## Release to release
 

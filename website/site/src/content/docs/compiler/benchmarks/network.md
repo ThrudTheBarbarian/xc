@@ -6,7 +6,7 @@ description: A par block's tiles on a GPU in another machine, served by xcd, bes
 `xcd`, the par daemon, serves a machine's GPUs to programs on others (see
 [par](/compiler/language/par/)). Here it runs on a Windows machine with an
 RTX 5080, on the local network, and two machines use it: an Apple MacBook Pro
-with an M4 Max, whose own GPU is fast, and a Linux machine with an AMD Ryzen 9
+with an M3 Max, whose own GPU is fast, and a Linux machine with an AMD Ryzen 9
 9955HX, whose only GPU is integrated. Each figure is measured with the
 released 0.87 `xcc`.
 
@@ -17,14 +17,14 @@ GPU among its choices. Each run starts from empty settings, so `auto`
 measures afresh, and a remote-only figure counts only if every block ran on
 the remote GPU. Every mode's checksum must agree.
 
-**Apple M4 Max (Metal), using the remote RTX 5080** (ms; best of eight runs; measured with 0.86)
+**Apple M3 Max (Metal), using the remote RTX 5080** (ms; best of eight runs)
 
 | benchmark | this machine | the remote GPU | every GPU | `auto` |
 |---|---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 44.0 | 238 | 112 | 44.1 |
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 2.1 | 2.0 | 1.8 | 1.8 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 5.8 | 203 | 105 | 6.7 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 502 µs | 273 | 120 | 901 µs |
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 50.3 | 638 | 336 | 49.7 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 1.2 | 2.8 | 1.5 | 1.4 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 5.3 | 232 | 119 | 5.6 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 1.1 | 695 | 212 | 1.3 |
 
 **AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080** (ms; best of eight runs)
 
@@ -43,7 +43,7 @@ What the tables show:
   from the Linux machine it runs on the remote RTX 5080 many times faster than
   on its own devices, and `auto` picks the remote card.
 - **It does not pay where the machine's own GPU is already fast**, as on the
-  M4 Max, or where a block moves more than it computes (`saxpy`): `auto` keeps
+  M3 Max, or where a block moves more than it computes (`saxpy`): `auto` keeps
   those local.
 - **Every GPU together is not always faster.** Beside a remote card many times
   faster, a slow integrated GPU's share holds the fast one back; `auto`

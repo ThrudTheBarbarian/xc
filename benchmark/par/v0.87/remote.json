@@ -21,22 +21,21 @@
   },
   "mac": {
    "all": {
-    "best_us": 112026,
-    "first_us": 209109
+    "best_us": 335816,
+    "first_us": 408112
    },
    "auto": {
-    "best_us": 44070,
-    "first_us": 86777
+    "best_us": 49666,
+    "first_us": 110217
    },
    "checksum": "2738",
    "local": {
-    "best_us": 44036,
-    "first_us": 69173
+    "best_us": 50296,
+    "first_us": 115025
    },
-   "measured_with": "0.86",
    "remote": {
-    "best_us": 237773,
-    "first_us": 360096
+    "best_us": 637833,
+    "first_us": 796075
    }
   }
  },
@@ -62,22 +61,21 @@
   },
   "mac": {
    "all": {
-    "best_us": 1786,
-    "first_us": 46231
+    "best_us": 1512,
+    "first_us": 61550
    },
    "auto": {
-    "best_us": 1800,
-    "first_us": 44683
+    "best_us": 1414,
+    "first_us": 56289
    },
    "checksum": "199",
    "local": {
-    "best_us": 2114,
-    "first_us": 23063
+    "best_us": 1157,
+    "first_us": 29510
    },
-   "measured_with": "0.86",
    "remote": {
-    "best_us": 1966,
-    "first_us": 38799
+    "best_us": 2750,
+    "first_us": 52377
    }
   }
  },
@@ -103,22 +101,21 @@
   },
   "mac": {
    "all": {
-    "best_us": 105057,
-    "first_us": 149367
+    "best_us": 119002,
+    "first_us": 183835
    },
    "auto": {
-    "best_us": 6742,
-    "first_us": 49430
+    "best_us": 5580,
+    "first_us": 72034
    },
    "checksum": "2573682417",
    "local": {
-    "best_us": 5844,
-    "first_us": 49380
+    "best_us": 5290,
+    "first_us": 35389
    },
-   "measured_with": "0.86",
    "remote": {
-    "best_us": 202782,
-    "first_us": 465816
+    "best_us": 231857,
+    "first_us": 297519
    }
   }
  },
@@ -144,22 +141,21 @@
   },
   "mac": {
    "all": {
-    "best_us": 120350,
-    "first_us": 360136
+    "best_us": 211781,
+    "first_us": 834735
    },
    "auto": {
-    "best_us": 901,
-    "first_us": 47392
+    "best_us": 1264,
+    "first_us": 61419
    },
    "checksum": "3011510272",
    "local": {
-    "best_us": 502,
-    "first_us": 33354
+    "best_us": 1063,
+    "first_us": 30164
    },
-   "measured_with": "0.86",
    "remote": {
-    "best_us": 272911,
-    "first_us": 904044
+    "best_us": 695047,
+    "first_us": 1766352
    }
   }
  }

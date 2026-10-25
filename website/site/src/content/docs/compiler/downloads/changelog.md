@@ -35,8 +35,9 @@ runs is tighter on x86-64, and `par` sends a GPU less.
   uses the VEX three-operand forms; selects on a masked bit are one bit test,
   two selects on one condition share a branch, and a select's chosen value is
   computed after its branch; float conversions and constants are read in
-  place; `mov` and `add` pairs become `lea`. C perlin on one thread: 107 ms to
-  87 ms.
+  place; `mov` and `add` pairs become `lea`. A C float-to-integer cast is the
+  conversion alone, as C leaves an out-of-range one undefined. C perlin on one
+  thread: 107 ms to 84 ms.
 - **`par` sends a GPU less**: an array the block overwrites whole is not
   uploaded (CUDA 7.2 ms to 3.6 ms on 16 MB), locally and through a worker
   daemon, and CUDA keeps a block's arrays resident while another block runs.
@@ -56,6 +57,9 @@ runs is tighter on x86-64, and `par` sends a GPU less.
 
 ### Fixed
 
+- In C, an `unsigned char` or `unsigned short` returned from a function or
+  passed to one compiled by clang arrived sign-extended on arm64: 65535 read
+  as -1.
 - A cast to a typed collection pointer, `(Array<Point>*)0`, did not parse.
 - A program's free function captured a library method's call to a method of
   the same name.
