@@ -6667,6 +6667,17 @@ class X86_64
                         continue;
                         }
                     }
+                // A 32- or 64-bit integer from one GPR home to another is
+                // one move, not through eax (perlin's octave counter paid
+                // `mov eax, edi; mov r15d, eax` on every back edge).
+                u32 gw = widthOfValue(fdv);
+                if (dh != (String*)0 && sh != (String*)0 && !isXmmHome(dh) && !isXmmHome(sh)
+                    && gw >= (u32)4 && !isFloatTy(fdv.ty()))
+                    {
+                    u32 vw = gw >= (u32)8 ? (u32)8 : (u32)4;
+                    _out.appendFormat("\tmov\t%s, %s\n", regView(dh, vw).cString(), regView(sh, vw).cString());
+                    continue;
+                    }
                 load(src, (u8)'a');
                 store((u8)'a', (IRValue*)dests.get(i));
                 }

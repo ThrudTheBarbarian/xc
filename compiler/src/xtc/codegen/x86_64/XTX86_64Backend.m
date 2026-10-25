@@ -6993,6 +6993,17 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                     continue;
                     }
                 }
+            // A 32- or 64-bit integer from one GPR home to another is one
+            // move, not through eax (perlin's octave counter paid
+            // `mov eax, edi; mov r15d, eax` on every back edge).
+            NSUInteger gw = [self widthOf:dests[i]];
+            if (dh && sh && ![self isXmmHome:dh] && ![self isXmmHome:sh] && gw >= 4 &&
+                !(dests[i].type && [self isFloatKind:dests[i].type.kind]))
+                {
+                NSUInteger vw = gw >= 8 ? 8 : 4;
+                [out appendFormat:@"\tmov\t%@, %@\n", [self regView:dh width:vw], [self regView:sh width:vw]];
+                continue;
+                }
             [self load:srcs[i] into:'a' fn:fn slot:slot out:out];
             [self store:'a' into:dests[i] slot:slot out:out];
             }

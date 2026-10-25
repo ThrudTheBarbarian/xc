@@ -7,7 +7,9 @@
 #     `vaddss d, b, [m]` (perlin's frame-slot constants, eight an octave);
 #   `mov a, b; add a, c|k` is `lea a, [b+c|k]` when no instruction reads the
 #     add's flags first, and a `mov r, r` straight after a 32-bit write of r
-#     is dropped.
+#     is dropped;
+#   a loop-carried integer is copied from GPR home to GPR home on the back
+#     edge, not through eax.
 # perlin's avx2 block has none of the float shapes and the whole program none
 # of the integer ones, the two compilers print the same code, and lea_peep.xc (its edge cases) gives its answer on Linux
 # x86-64 (here, or on XC_LINUX_HOST).
@@ -60,6 +62,17 @@ if [ -f "$SRC" ]; then
         { prev = line }
         END { print n + 0 }' "$S")
     [ "$bad" = 0 ] || { echo "FAIL: $bad zero-extending mov r, r after a 32-bit write"; fail=1; }
+    # A loop-carried integer is copied home to home on the back edge, not
+    # through eax (2026-10-25).
+    bad=$(awk '{ gsub(/^[ \t]+/, ""); l[NR] = $0 }
+        END { for (i = 1; i + 2 <= NR; i++)
+                if (l[i] ~ /^mov\t(eax|rax), (e[a-z]+|r[0-9]+d?|r[a-z]+)$/ && l[i] !~ /, (eax|rax)$/ &&
+                    l[i+1] ~ /^mov\t(e[a-z]+|r[0-9]+d?|r[a-z]+), (eax|rax)$/ && l[i+2] ~ /^jmp\t/) {
+                    split(l[i], a, /[\t ,]+/); split(l[i+1], b, /[\t ,]+/)
+                    if (a[3] != b[2]) n++
+                }
+              print n + 0 }' "$S")
+    [ "$bad" = 0 ] || { echo "FAIL: $bad back-edge copies through eax"; fail=1; }
     grep -qE '^[[:space:]]*vcvttss2si[[:space:]]+rax, xmm([1-9]|1[0-5])$' "$W/body.s" \
         || { echo "FAIL: no float conversion reads its own register"; fail=1; }
 else
