@@ -191,6 +191,7 @@ static BOOL xtvMagicU32(uint64_t d, uint64_t* Mout, int* sout)
 
 static BOOL vecScalarBodyFits(XTIRBlock* B, NSSet<NSNumber*>* elemIds, NSUInteger pool);
 static NSUInteger vecPoolFor(XTIRFunction* fn, XTIROptTargetProfile* prof);
+static NSUInteger vecPoolForTy(XTIRFunction* fn, XTIROptTargetProfile* prof, XTIRType* t);
 static void vecRematLanes(XTIRFunction* fn, XTIRBlock* B, NSDictionary<NSNumber*, XTIRBlock*>* defBlk);
 static BOOL vecInterleaveFits(XTIRFunction* fn, XTIRBlock* B, XTIRValueId vaccId, XTIRValueId ivId,
                               XTIRInsn* ivNextInsn, NSUInteger pool);
@@ -4530,7 +4531,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
             U = bigBody ? 2 : 4;
             if (bigBody)
                 vecRematLanes(fn, B, defBlk);
-            if (bigBody && !vecInterleaveFits(fn, B, vaccId, ivId, ivNextInsn, vecPoolFor(fn, self.profile ?: [XTIROptTargetProfile conservativeProfile])))
+            if (bigBody && !vecInterleaveFits(fn, B, vaccId, ivId, ivNextInsn, vecPoolForTy(fn, self.profile ?: [XTIROptTargetProfile conservativeProfile], vaccPhi.result.type)))
                 continue;
             NSMutableArray<XTIROperand*>* mops = [mask.operands mutableCopy];
             mops[1] = [XTIROperand immIWithType:mask.result.type
@@ -4541,7 +4542,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
             continue;
         if (bigBody && constN)
             vecRematLanes(fn, B, defBlk);
-        if (bigBody && constN && !vecInterleaveFits(fn, B, vaccId, ivId, ivNextInsn, vecPoolFor(fn, self.profile ?: [XTIROptTargetProfile conservativeProfile])))
+        if (bigBody && constN && !vecInterleaveFits(fn, B, vaccId, ivId, ivNextInsn, vecPoolForTy(fn, self.profile ?: [XTIROptTargetProfile conservativeProfile], vaccPhi.result.type)))
             continue;
 
         XTIRValue* (^newVal)(XTIRType*) = ^XTIRValue*(XTIRType* ty) {
@@ -4728,6 +4729,17 @@ static NSUInteger vecPoolFor(XTIRFunction* fn, XTIROptTargetProfile* prof)
             }
         }
     return 22;
+    }
+
+// The pool for a loop over vectors of type t: on x86 a 64-byte (AVX-512)
+// loop has zmm16-31 too, which the back end gives to classes whose every value
+// is 64 bytes (21e53d67): 30, not 14. That is what lets a big body (MD5's 64
+// rounds) interleave two lane groups, as clang does. As the port.
+static NSUInteger vecPoolForTy(XTIRFunction* fn, XTIROptTargetProfile* prof, XTIRType* t)
+    {
+    if (!prof.vectorizesBitSelect && t.kind == XTIRTypeKindVec && t.byteWidth == 64)
+        return 30;
+    return vecPoolFor(fn, prof);
     }
 
 // In a big body, a lane vector built from a scalar, `VAdd(VSplat(x), t)` with

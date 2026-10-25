@@ -24182,6 +24182,17 @@ class BeFact : Object
         return (u32)22;
         }
 
+    // The pool for a loop over vectors of type t: on x86 a 64-byte (AVX-512)
+    // loop has zmm16-31 too, which the back end gives to classes whose every
+    // value is 64 bytes: 30, not 14 (MD5's 64 rounds then interleave two lane
+    // groups, as clang does). As the reference.
+    u32 vecPoolForTy(IRFunc* fn, String* t)
+        {
+        if (!_profile.bitSelect() && t != (String*)0 && t.hasSuffix(String.withCString(", 64)")))
+            return (u32)30;
+        return vecPoolFor(fn);
+        }
+
     bool vcFloatTy(String* t)
         {
         return t != (String*)0 && (t.equals(String.withCString("F32")) || t.equals(String.withCString("F64")));
@@ -24544,7 +24555,7 @@ class BeFact : Object
             U = bigBody ? (u32)2 : (u32)4;
             if (bigBody)
                 vecRematLanes(fn, B, defBlk);
-            if (bigBody && !vecInterleaveFits(fn, B, vacc, iv, ivNextInsn, vecPoolFor(fn)))
+            if (bigBody && !vecInterleaveFits(fn, B, vacc, iv, ivNextInsn, vecPoolForTy(fn, vecTy)))
                 return;
             mask.ops().set((u32)1,
                            (Object*)IROperand.immI((i64) ~((i32)(U * vw) - (i32)1), mask.res().ty()));
@@ -24553,7 +24564,7 @@ class BeFact : Object
             return;
         if (bigBody && constN)
             vecRematLanes(fn, B, defBlk);
-        if (bigBody && constN && !vecInterleaveFits(fn, B, vacc, iv, ivNextInsn, vecPoolFor(fn)))
+        if (bigBody && constN && !vecInterleaveFits(fn, B, vacc, iv, ivNextInsn, vecPoolForTy(fn, vecTy)))
             return;
 
         vecUnrollApply(fn, H, B, E, PH, iv, vacc, vecTy, ivNextInsn, vnextInsn,
