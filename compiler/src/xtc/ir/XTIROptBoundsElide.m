@@ -411,6 +411,31 @@ static XTIRICmpPredicate notPred(XTIRICmpPredicate p, BOOL* ok)
 
 // `ICmp pred a, b` taken (or not): what it says of the value against the
 // constant, or nil.
+// `Select (ICmp ULT x, K), x, K`, the unsigned min of x and a constant K >= 0:
+// K in *k. The port's beMinConst.
+- (BOOL)minConstOf:(XTIROperand*)o k:(int64_t*)k
+    {
+    if (o.kind != XTIROperandKindUse)
+        return NO;
+    XTIRInsn* sel = self.defOf[@(o.valueId)];
+    if (!sel || sel.opcode != XTIROpSelect || sel.operands.count != 3)
+        return NO;
+    XTIROperand* sc = sel.operands[0];
+    XTIROperand* st = sel.operands[1];
+    XTIROperand* sf = sel.operands[2];
+    if (sc.kind != XTIROperandKindUse || st.kind != XTIROperandKindUse)
+        return NO;
+    XTIRInsn* cmp = self.defOf[@(sc.valueId)];
+    if (!cmp || cmp.opcode != XTIROpICmp || cmp.predicate != XTIRICmpULT || cmp.operands.count < 2)
+        return NO;
+    int64_t kc = 0, kf = 0;
+    if (cmp.operands[0].kind != XTIROperandKindUse || cmp.operands[0].valueId != st.valueId
+        || !constWide(cmp.operands[1], self.defOf, &kc) || !constWide(sf, self.defOf, &kf) || kc != kf || kc < 0)
+        return NO;
+    *k = kc;
+    return YES;
+    }
+
 - (nullable XTBeFact*)factOf:(XTIRInsn*)cmp taken:(BOOL)taken
     {
     XTIROperand* a = cmp.operands[0];
@@ -429,6 +454,15 @@ static XTIRICmpPredicate notPred(XTIRICmpPredicate p, BOOL* ok)
         v = b.valueId;
         have = YES;
         p = swapPred(p, &ok);
+        }
+    // `a <u min(x, K)` taken: a is below K as surely as against K itself (the
+    // outliner clamps a chunk's end to its loop's bound this way, 2026-10-25).
+    // The port's beFactOf.
+    else if (taken && a.kind == XTIROperandKindUse && (p == XTIRICmpULT || p == XTIRICmpULE)
+             && [self minConstOf:b k:&c])
+        {
+        v = a.valueId;
+        have = YES;
         }
     if (!have || !ok)
         return nil;

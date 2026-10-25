@@ -8953,6 +8953,13 @@ class BeFact : Object
             v = b.val();
             p = beSwapPred(p);
             }
+        // `a <u min(x, K)` taken: a is below K as surely as against K itself
+        // (the outliner clamps a chunk's end to its loop's bound this way,
+        // 2026-10-25). As the reference.
+        else if (taken && a.kind() == (u8)OPK_USE && p != (String*)0
+                 && (p.equals(String.withCString("ULT")) || p.equals(String.withCString("ULE")))
+                 && beMinConst(b, &c))
+            v = a.val();
         if (v == (IRValue*)0 || p == (String*)0)
             return (BeFact*)0;
         if (!taken)
@@ -8998,6 +9005,35 @@ class BeFact : Object
             return fa;
             }
         return (BeFact*)0;
+        }
+
+    // `Select (ICmp ULT x, K), x, K`, the unsigned min of x and a constant
+    // K >= 0: K in *k. As the reference's minConstOf.
+    bool beMinConst(IROperand* o, i64* k)
+        {
+        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+            return false;
+        IRInsn* sel = (IRInsn*)_beDef.get((Hashable*)o.val());
+        if (sel == (IRInsn*)0 || !sel.op().equals(String.withCString("Select")) || sel.ops().count() != (u32)3)
+            return false;
+        IROperand* sc = (IROperand*)sel.ops().get((u32)0);
+        IROperand* st = (IROperand*)sel.ops().get((u32)1);
+        IROperand* sf = (IROperand*)sel.ops().get((u32)2);
+        if (sc.kind() != (u8)OPK_USE || st.kind() != (u8)OPK_USE)
+            return false;
+        IRInsn* cmp = (IRInsn*)_beDef.get((Hashable*)sc.val());
+        if (cmp == (IRInsn*)0 || !cmp.op().equals(String.withCString("ICmp")) || cmp.pred() == (String*)0
+            || !cmp.pred().equals(String.withCString("ULT")) || cmp.ops().count() < (u32)2)
+            return false;
+        IROperand* cx = (IROperand*)cmp.ops().get((u32)0);
+        i64 kc = (i64)0;
+        i64 kf = (i64)0;
+        if (cx.kind() != (u8)OPK_USE || cx.val() != st.val()
+            || !vecConstWide((IROperand*)cmp.ops().get((u32)1), _beDef, &kc) || !vecConstWide(sf, _beDef, &kf)
+            || kc != kf || kc < (i64)0)
+            return false;
+        k[0] = kc;
+        return true;
         }
 
     static String* beSwapPred(String* p)
@@ -12609,6 +12645,34 @@ class BeFact : Object
         IRValue* bHi = ppFieldLoad(entry, bRec, (u32)2, String.withCString("I64"), mcur);
         mcur = _ppLastMem;
         IRValue* hiT = ppConvertTo(entry, bHi, ivT);
+        // The chunk's end is never past the loop's own bound, so where that
+        // bound is a constant N below 2^31 and the test unsigned, the end is
+        // clamped to it: free at run time, and it proves the iv inside
+        // [0, N), so `a[zext i]` narrows to the iv-indexed form the escape-time
+        // vectoriser takes (bounds-elide's wide-index narrowing). C nbody's
+        // outlined block stayed scalar without it: 95 ms on one thread
+        // against the plain build's 6.0 (2026-10-25).
+        i32 boundN = (i32)0;
+        bool unsignedTest = pred.equals(String.withCString("ULT")) || pred.equals(String.withCString("ULE"));
+        if (unsignedTest && (ivT.equals(String.withCString("I32")) || ivT.equals(String.withCString("U32")))
+            && vecConst((IROperand*)cmp.ops().get((u32)1), defOf, &boundN) && boundN > (i32)0
+            && (le ? boundN < (i32)$7FFFFFFF : true))
+            {
+            i32 cap = le ? boundN + (i32)1 : boundN;
+            IRInsn* lt = IRInsn.with(String.withCString("ICmp"));
+            lt.setRes(new IRValue(String.withCString("Bool")));
+            lt.setPred(String.withCString("ULT"));
+            lt.add(IROperand.useVal(hiT));
+            lt.add(IROperand.immI((i64)cap, ivT));
+            entry.add(lt);
+            IRInsn* sel = IRInsn.with(String.withCString("Select"));
+            sel.setRes(new IRValue(ivT));
+            sel.add(IROperand.useVal(lt.res()));
+            sel.add(IROperand.useVal(hiT));
+            sel.add(IROperand.immI((i64)cap, ivT));
+            entry.add(sel);
+            hiT = sel.res();
+            }
         for (u32 i = (u32)0; i < nIn; i = i + (u32)1)
             {
             IRValue* v = (IRValue*)liveIns.get(i);
