@@ -1,0 +1,146 @@
+<?xml version="1.0"?>
+<PhoronixTestSuite>
+  <TestInformation>
+    <Title>xc C</Title>
+    <AppVersion>0.87</AppVersion>
+    <Description>Plain C benchmarks, with no pragmas or annotations, built by GCC, by Clang and by xcc (and, for comparison, the same files with one OpenMP pragma on the timed loop, built by GCC and Clang), the compiler of the xc language. xcc builds a C file through clang's LLVM IR and compiles it with its own optimiser and back end; with --par-auto it turns the program's loops into data-parallel blocks that run on every CPU thread or on the GPU, with no change to the source. Each program runs its work eight times and the result is the best run; the first run, which carries one-off costs such as building a GPU kernel, is reported too. Every run must print the benchmark's checksum, and a GPU build that falls back to the CPU is refused. Each program runs at 1, 4 or 16 times its standard work, so a big GPU, or several, has enough to do. Needs gcc and clang (xcc's C path uses clang's front end); Clang's OpenMP build needs libomp.</Description>
+    <ResultScale>ms</ResultScale>
+    <Proportion>LIB</Proportion>
+    <TimesToRun>3</TimesToRun>
+  </TestInformation>
+  <TestProfile>
+    <Version>1.0.0</Version>
+    <SupportedPlatforms>Linux</SupportedPlatforms>
+    <SoftwareType>Benchmark</SoftwareType>
+    <TestType>Processor</TestType>
+    <License>Free</License>
+    <Status>Verified</Status>
+    <ExternalDependencies>build-utilities, bzip2</ExternalDependencies>
+    <EnvironmentSize>120</EnvironmentSize>
+    <ProjectURL>https://compile-xc.org/</ProjectURL>
+    <RepositoryURL>https://github.com/ThrudTheBarbarian/xc</RepositoryURL>
+    <InternalTags>SMP, Vulkan, GPU Compute, Compiler</InternalTags>
+    <Maintainer>compile-xc.org</Maintainer>
+  </TestProfile>
+  <TestSettings>
+    <Option>
+      <DisplayName>Benchmark</DisplayName>
+      <Identifier>bench</Identifier>
+      <Menu>
+        <Entry>
+          <Name>SAXPY</Name>
+          <Value>saxpy</Value>
+          <Message>y = 3x + y over 16M integers; bound by memory, not arithmetic</Message>
+        </Entry>
+        <Entry>
+          <Name>N-Body</Name>
+          <Value>nbody</Value>
+          <Message>the force on each of 8192 bodies from every other, O(N^2)</Message>
+        </Entry>
+        <Entry>
+          <Name>Perlin</Name>
+          <Value>perlin</Value>
+          <Message>four octaves of 2D Perlin noise over a 2048x2048 image</Message>
+        </Entry>
+        <Entry>
+          <Name>MD5</Name>
+          <Value>md5</Value>
+          <Message>hashcat's brute-force inner loop: one MD5 block per candidate, 64M candidates</Message>
+        </Entry>
+        <Entry>
+          <Name>MD5 Mask</Name>
+          <Value>md5_mask</Value>
+          <Message>hashcat's mask attack: a fixed prefix hashed once, the last word varied</Message>
+        </Entry>
+        <Entry>
+          <Name>Mandelbrot</Name>
+          <Value>mandelbrot</Value>
+          <Message>2048x2048 escape-time image, up to 256 iterations a pixel</Message>
+        </Entry>
+        <Entry>
+          <Name>Mandelbrot Deep</Name>
+          <Value>mandel_deep</Value>
+          <Message>4096x4096 window mostly inside the set, up to 4096 iterations a pixel; about a minute a run on one CPU thread</Message>
+        </Entry>
+      </Menu>
+    </Option>
+    <Option>
+      <DisplayName>Build</DisplayName>
+      <Identifier>build</Identifier>
+      <Menu>
+        <Entry>
+          <Name>GCC -O2</Name>
+          <Value>gcc</Value>
+        </Entry>
+        <Entry>
+          <Name>Clang -O2</Name>
+          <Value>clang</Value>
+        </Entry>
+        <Entry>
+          <Name>GCC -O3 -march=native</Name>
+          <Value>gcc-native</Value>
+        </Entry>
+        <Entry>
+          <Name>Clang -O3 -march=native</Name>
+          <Value>clang-native</Value>
+        </Entry>
+        <Entry>
+          <Name>GCC -O3 -march=native, OpenMP</Name>
+          <Value>gcc-openmp</Value>
+          <Message>the same file with one OpenMP pragma on the timed loop, every CPU thread</Message>
+        </Entry>
+        <Entry>
+          <Name>Clang -O3 -march=native, OpenMP</Name>
+          <Value>clang-openmp</Value>
+          <Message>as GCC's; needs libomp</Message>
+        </Entry>
+        <Entry>
+          <Name>xcc</Name>
+          <Value>xcc</Value>
+          <Message>one CPU thread, as GCC and Clang</Message>
+        </Entry>
+        <Entry>
+          <Name>xcc --par-auto, CPU</Name>
+          <Value>xcc-par-cpu</Value>
+          <Message>the loops as par blocks on every CPU thread</Message>
+        </Entry>
+        <Entry>
+          <Name>xcc --par-auto, GPU</Name>
+          <Value>xcc-par-gpu</Value>
+          <Message>the loops as par blocks on the GPU (Vulkan)</Message>
+        </Entry>
+        <Entry>
+          <Name>xcc --par-auto, Every GPU</Name>
+          <Value>xcc-par-gpus</Value>
+          <Message>the loops as par blocks across every GPU</Message>
+        </Entry>
+        <Entry>
+          <Name>xcc --par-auto, Auto</Name>
+          <Value>xcc-par-auto</Value>
+          <Message>the program measures the CPU and the GPU and keeps the faster</Message>
+        </Entry>
+      </Menu>
+    </Option>
+    <Option>
+      <DisplayName>Size</DisplayName>
+      <Identifier>size</Identifier>
+      <Menu>
+        <Entry>
+          <Name>1x</Name>
+          <Value>1</Value>
+          <Message>the standard size</Message>
+        </Entry>
+        <Entry>
+          <Name>4x</Name>
+          <Value>4</Value>
+          <Message>4 times the work: an image's side or N doubled; for the parallel builds</Message>
+        </Entry>
+        <Entry>
+          <Name>16x</Name>
+          <Value>16</Value>
+          <Message>16 times the work, for big GPUs; up to 2 GB of memory (saxpy), and hours on one CPU thread</Message>
+        </Entry>
+      </Menu>
+    </Option>
+  </TestSettings>
+</PhoronixTestSuite>
