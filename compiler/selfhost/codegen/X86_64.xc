@@ -498,7 +498,7 @@ class X86_64
             String* module = _out;
             _out = new String();
             emitFunction(fn);
-            module.append(withVzeroupper(peepholeFallthrough(peepholeCopyProp(_out)), fn.simdLevel() != (String*)0));
+            module.append(withVzeroupper(peepholeFallthrough(peepholeLea(peepholeCopyProp(_out))), fn.simdLevel() != (String*)0));
             _out = module;
             }
         // The matrix kernels the module calls (idiom-matmul): `_auto` is
@@ -1570,17 +1570,24 @@ class X86_64
         // cvtsi2* reads a SIGNED register, so a signed source must be
         // sign-extended — zero-extending would turn a negative i8 into a large
         // positive integer.
-        if (n.op().equals(String.withCString("SIToFp")))
+        // Into the result's own xmm home where it has one (perlin's floor
+        // paid a movaps out of xmm0 for each); the u64 form works in xmm0.
+        bool sint = n.op().equals(String.withCString("SIToFp"));
+        String* D = sint || w < (u32)8 ? fdstFor(n.res(), (IROperand*)0, (IROperand*)0) : String.withCString("xmm0");
+        if (sint)
             {
             loadExt(src, (u8)'a', true, w);
-            _out.appendFormat("\tcvtsi2%s\txmm0, %s\n", sfx, reg((u8)'a', w).cString());
+            _out.appendFormat("\tcvtsi2%s\t%s, %s\n", sfx, D.cString(), reg((u8)'a', w).cString());
             }
         else
             {
             loadZX(src, (u8)'a');
-            emitUintToFp(sfx, w);
+            if (w < (u32)8)
+                _out.appendFormat("\tcvtsi2%s\t%s, rax\n", sfx, D.cString());
+            else
+                emitUintToFp(sfx, w);
             }
-        storeF(String.withCString("xmm0"), n.res());
+        storeF(D, n.res());
         }
 
     // An unsigned integer, zero-extended into rax, to a float in xmm0.
@@ -1617,7 +1624,8 @@ class X86_64
     //   u64                    a value from 2^63 up is converted less 2^63 and
     //                          the top bit put back; a negative one is 0.
     //
-    // Clobbers rcx, rdx and xmm1; xmm0 is the scratch copy of the operand. NOT r11:
+    // Clobbers rcx, rdx and xmm1; xmm0 is the scratch copy of the operand
+    // (narrower than 64 bits it is read from its own home, not written). NOT r11:
     // the allocator homes values there, and a u64 conversion that put 2^63 in it
     // overwrote the previous unrolled copy's result (`btc` flips the bit instead).
     void emitFpToInt(IRInsn* n)
@@ -1629,10 +1637,12 @@ class X86_64
         u32 rw = widthOfValue(n.res());
         bool sgn = n.op().equals(String.withCString("FpToSI"));
         string sfx = d ? "sd" : "ss";
-        loadF(src, String.withCString("xmm0"));
+        // Narrower than 64 bits the operand is only read, so from its own
+        // home; the 64-bit forms subtract in xmm0.
         if (rw < (u32)8)
             {
-            _out.appendFormat("\tcvtt%s2si\trax, xmm0\n", sfx);
+            String* S = fsrcForStore(src);
+            _out.appendFormat("\tcvtt%s2si\trax, %s\n", sfx, S.cString());
             if (sgn)
                 _out.appendCString(rw == (u32)1 ? "\tmovsx\trcx, al\n" : rw == (u32)2 ? "\tmovsx\trcx, ax\n" : "\tmovsxd\trcx, eax\n");
             else
@@ -1641,6 +1651,7 @@ class X86_64
             store((u8)'a', n.res());
             return;
             }
+        loadF(src, String.withCString("xmm0"));
         // The bit pattern of -2^63 (signed) or 2^63 (unsigned) in the
         // source's format, into xmm1.
         if (d)
@@ -4441,6 +4452,180 @@ class X86_64
         }
 
 
+    // ── lea peephole ─────────────────────────────────────────────────────
+    // Two rewrites over a function's finished text (the reference's
+    // peepholeLea:):
+    //
+    //   mov  a, b ; add a, c|k   ->  lea a, [b+c|k]     (sub a, k: [b-k])
+    //   <32-bit write to r> ; mov r, r   ->  the mov dropped
+    //
+    // The first keeps b live without the copy's extra instruction: C perlin's
+    // perm lookups spelt each `perm[X] + Y` that way, six an octave. It is
+    // only taken when nothing reads the add's flags before an instruction that
+    // sets them again (lea sets none). The second: a 32-bit write already
+    // clears the upper half, so the zero-extending `mov edi, edi` after
+    // `add edi, r9d` does nothing. rsp and rbp are left alone.
+    static String* leaReg64(String* r)
+        {
+        string n32 = "eax ebx ecx edx esi edi r8d r9d r10d r11d r12d r13d r14d r15d";
+        string n64 = "rax rbx rcx rdx rsi rdi r8 r9 r10 r11 r12 r13 r14 r15";
+        Array* a32 = String.withCString(n32).splitOnByte((u8)' ');
+        Array* a64 = String.withCString(n64).splitOnByte((u8)' ');
+        for (u32 i = (u32)0; i < a32.count(); i = i + (u32)1)
+            {
+            if (r.equals((String*)a32.get(i)) || r.equals((String*)a64.get(i)))
+                return (String*)a64.get(i);
+            }
+        return (String*)0;
+        }
+
+    static bool leaIs32(String* r)
+        {
+        return r.hasPrefix(String.withCString("e")) || r.hasSuffix(String.withCString("d"));
+        }
+
+    // A decimal immediate (what both back ends print), into *k.
+    static bool leaImm(String* o, i64* k)
+        {
+        u32 n = o.byteLength();
+        u32 i = (u32)0;
+        if (n == (u32)0)
+            return false;
+        bool neg = o.byteAt((u32)0) == (u8)'-';
+        if (neg)
+            i = (u32)1;
+        if (i >= n || n - i > (u32)10)
+            return false;
+        i64 v = (i64)0;
+        for (u32 j = i; j < n; j = j + (u32)1)
+            {
+            u8 c = o.byteAt(j);
+            if (c < (u8)'0' || c > (u8)'9')
+                return false;
+            v = v * (i64)10 + (i64)(c - (u8)'0');
+            }
+        *k = neg ? (i64)0 - v : v;
+        return true;
+        }
+
+    // The mnemonic and the two operands of an instruction line, or 0.
+    static Array* leaSplit(String* line)
+        {
+        String* t = line.trimmed();
+        u32 tab = t.indexOfByte((u8)9);
+        if (tab == String.notFound())
+            return (Array*)0;
+        Array* ops = t.substringFromByte(tab + (u32)1).splitOnByte((u8)',');
+        if (ops.count() != (u32)2)
+            return (Array*)0;
+        Array* r = new Array();
+        r.add((Object*)t.substringBytes((u32)0, tab));
+        r.add((Object*)((String*)ops.get((u32)0)).trimmed());
+        r.add((Object*)((String*)ops.get((u32)1)).trimmed());
+        return r;
+        }
+
+    // Whether the flags an instruction at lines[from - 1] sets are read
+    // before they are set again: a label, or 64 lines with neither, counts as
+    // read.
+    static bool leaFlagsRead(Array* lines, u32 from)
+        {
+        string setters = "cmp test add sub and or xor neg imul ucomiss ucomisd comiss comisd vucomiss vucomisd vcomiss vcomisd call ret jmp";
+        for (u32 j = from; j < lines.count() && j < from + (u32)64; j = j + (u32)1)
+            {
+            String* t = ((String*)lines.get(j)).trimmed();
+            if (t.hasSuffix(String.withCString(":")))
+                return true;
+            if (t.byteLength() == (u32)0 || t.hasPrefix(String.withCString(".")) || t.hasPrefix(String.withCString("#")))
+                continue;
+            u32 tab = t.indexOfByte((u8)9);
+            String* m = tab == String.notFound() ? t : t.substringBytes((u32)0, tab);
+            if (vexIn(m, setters))
+                return false;
+            if (m.hasPrefix(String.withCString("j")) || m.hasPrefix(String.withCString("set"))
+                || m.hasPrefix(String.withCString("cmov")) || m.equals(String.withCString("adc"))
+                || m.equals(String.withCString("sbb")) || m.equals(String.withCString("rcl"))
+                || m.equals(String.withCString("rcr")) || m.equals(String.withCString("pushf"))
+                || m.equals(String.withCString("lahf")))
+                return true;
+            }
+        return true;
+        }
+
+    String* peepholeLea(String* text)
+        {
+        string writes32 = "mov movzx movsx add sub and or xor imul lea shl shr sar neg not inc dec";
+        Array* lines = text.splitOnByte((u8)'\n');
+        Array* out = new Array();
+        bool lastIsInsn = false;
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            {
+            String* line = (String*)lines.get(i);
+            Array* sp = leaSplit(line);
+            if (sp == (Array*)0)
+                {
+                out.add((Object*)line);
+                lastIsInsn = false;
+                continue;
+                }
+            String* mn = (String*)sp.get((u32)0);
+            String* a = (String*)sp.get((u32)1);
+            String* b = (String*)sp.get((u32)2);
+            // mov r, r after a 32-bit write of r.
+            if (mn.equals(String.withCString("mov")) && a.equals(b) && leaReg64(a) != (String*)0 && leaIs32(a) && lastIsInsn)
+                {
+                Array* pv = leaSplit((String*)out.get(out.count() - (u32)1));
+                if (pv != (Array*)0 && ((String*)pv.get((u32)1)).equals(a) && vexIn((String*)pv.get((u32)0), writes32))
+                    continue;
+                }
+            // mov a, b ; add a, c|k
+            String* a64 = leaReg64(a);
+            String* b64 = leaReg64(b);
+            Array* nx = i + (u32)1 < lines.count() ? leaSplit((String*)lines.get(i + (u32)1)) : (Array*)0;
+            if (mn.equals(String.withCString("mov")) && a64 != (String*)0 && b64 != (String*)0 && !a.equals(b)
+                && leaIs32(a) == leaIs32(b) && nx != (Array*)0 && ((String*)nx.get((u32)1)).equals(a))
+                {
+                String* nm = (String*)nx.get((u32)0);
+                String* n1 = (String*)nx.get((u32)2);
+                bool add = nm.equals(String.withCString("add"));
+                if ((add || nm.equals(String.withCString("sub"))) && !leaFlagsRead(lines, i + (u32)2))
+                    {
+                    String* addr = (String*)0;
+                    i64 k = (i64)0;
+                    String* c64 = leaReg64(n1);
+                    if (add && c64 != (String*)0 && leaIs32(n1) == leaIs32(a))
+                        addr = String.withFormat("%s+%s", b64.cString(), n1.equals(a) ? b64.cString() : c64.cString());
+                    else if (leaImm(n1, &k))
+                        {
+                        i64 off = add ? k : (i64)0 - k;
+                        if (off != (i64)0 && off > (i64)-2147483648 && off < (i64)2147483648)
+                            {
+                            addr = String.withFormat(off < (i64)0 ? "%s-" : "%s+", b64.cString());
+                            addr.append(String.withI64(off < (i64)0 ? (i64)0 - off : off));
+                            }
+                        }
+                    if (addr != (String*)0)
+                        {
+                        out.add((Object*)String.withFormat("\tlea\t%s, [%s]", a.cString(), addr.cString()));
+                        lastIsInsn = true;
+                        i = i + (u32)1;
+                        continue;
+                        }
+                    }
+                }
+            out.add((Object*)line);
+            lastIsInsn = true;
+            }
+        String* res = String.withCString("");
+        for (u32 i = (u32)0; i < out.count(); i = i + (u32)1)
+            {
+            if (i > (u32)0)
+                res.appendCString("\n");
+            res.append((String*)out.get(i));
+            }
+        return res;
+        }
+
     // ── Fallthrough peephole ─────────────────────────────────────────────
     //
     // Drop `jmp L` when L is the very next label, and invert a conditional
@@ -4611,17 +4796,40 @@ class X86_64
     // it has none here: a destructive `op a, b` is `vop a, a, b`, a move or a
     // compare keeps its operands. As the reference's vexFormOf:.
     // `movaps d, a` (two xmm registers) and then a destructive `op d, b` as one
-    // `vop d, a, b`, or 0. b that is d itself reads the copied a. As the
-    // reference's vexFold.
+    // `vop d, a, b`, or 0. b that is d itself reads the copied a. And a
+    // scalar load `movss d, [m]` then `addss`/`mulss d, b` (b another
+    // register) as `vaddss d, b, [m]`: perlin's constants live in frame
+    // slots, and each `2.0 * v` cost the load and the multiply (eight per
+    // octave). Only add and multiply, which commute; min and max do not (a
+    // NaN picks the second). As the reference's vexFold.
     String* vexFold(String* mv, String* nx)
         {
-        if (!mv.hasPrefix(String.withCString("movaps\t")))
+        bool sd = mv.hasPrefix(String.withCString("movsd\t"));
+        bool load = sd || mv.hasPrefix(String.withCString("movss\t"));
+        if (!mv.hasPrefix(String.withCString("movaps\t")) && !load)
             return (String*)0;
-        Array* mo = mv.substringFromByte((u32)7).splitOnByte((u8)',');
+        Array* mo = mv.substringFromByte(load ? (u32)6 : (u32)7).splitOnByte((u8)',');
         if (mo.count() != (u32)2)
             return (String*)0;
         String* d = ((String*)mo.get((u32)0)).trimmed();
         String* a = ((String*)mo.get((u32)1)).trimmed();
+        if (load)
+            {
+            if (!vexXmm(d) || !a.contains(String.withCString("[")))
+                return (String*)0;
+            if (!nx.hasPrefix(String.withCString(sd ? "addsd\t" : "addss\t"))
+                && !nx.hasPrefix(String.withCString(sd ? "mulsd\t" : "mulss\t")))
+                return (String*)0;
+            Array* no = nx.substringFromByte((u32)6).splitOnByte((u8)',');
+            if (no.count() != (u32)2)
+                return (String*)0;
+            String* l0 = ((String*)no.get((u32)0)).trimmed();
+            String* l1 = ((String*)no.get((u32)1)).trimmed();
+            if (!l0.equals(d) || !vexXmm(l1) || l1.equals(d))
+                return (String*)0;
+            return String.withFormat("v%s\t%s, %s, %s", nx.substringBytes((u32)0, (u32)5).cString(),
+                                     d.cString(), l1.cString(), a.cString());
+            }
         if (!vexXmm(d) || !vexXmm(a) || d.equals(a))
             return (String*)0;
         u32 tab = (u32)0;

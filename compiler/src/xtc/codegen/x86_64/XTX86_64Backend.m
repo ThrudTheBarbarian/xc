@@ -222,16 +222,17 @@ static NSInteger sWin64SretOff = 0;
 //   u64                    a value from 2^63 up is converted less 2^63 and
 //                          the top bit put back; a negative one is 0.
 //
-// Clobbers rcx, rdx and xmm1; xmm0 is the scratch copy of the operand. NOT r11:
+// Clobbers rcx, rdx and xmm1; xmm0 is the scratch copy of the operand (narrower
+// than 64 bits it is read from `src`, its own home, and not written). NOT r11:
 // the allocator homes values there, and a u64 conversion that put 2^63 in it
 // overwrote the previous unrolled copy's result (`btc` flips the bit instead).
-+ (NSString*)fpToIntText:(NSString*)sfx signed:(BOOL)sgn width:(NSUInteger)rw
++ (NSString*)fpToIntText:(NSString*)sfx signed:(BOOL)sgn width:(NSUInteger)rw from:(NSString*)src
     {
     BOOL d = [sfx isEqualToString:@"sd"];
     NSMutableString* o = [NSMutableString string];
     if (rw < 8)
         {
-        [o appendFormat:@"\tcvtt%@2si\trax, xmm0\n", sfx];
+        [o appendFormat:@"\tcvtt%@2si\trax, %@\n", sfx, src];
         if (sgn)
             [o appendString:rw == 1 ? @"\tmovsx\trcx, al\n" : rw == 2 ? @"\tmovsx\trcx, ax\n"
                                                                   : @"\tmovsxd\trcx, eax\n"];
@@ -1043,6 +1044,154 @@ static NSInteger sWin64SretOff = 0;
     }
 
 
+// ── lea peephole ────────────────────────────────────────────────────────
+// Two rewrites over a function's finished text (the port's peepholeLea):
+//
+//   mov  a, b ; add a, c|k   ->  lea a, [b+c|k]     (sub a, k: [b-k])
+//   <32-bit write to r> ; mov r, r   ->  the mov dropped
+//
+// The first keeps b live without the copy's extra instruction: C perlin's
+// perm lookups spelt each `perm[X] + Y` that way, six an octave. It is only
+// taken when nothing reads the add's flags before an instruction that sets
+// them again (lea sets none). The second: a 32-bit write already clears the
+// upper half, so the zero-extending `mov edi, edi` after `add edi, r9d` does
+// nothing. rsp and rbp are left alone.
+static NSString* x86LeaReg64(NSString* r)
+    {
+    static NSDictionary<NSString*, NSString*>* m = nil;
+    if (!m)
+        m = @{ @"eax" : @"rax", @"ebx" : @"rbx", @"ecx" : @"rcx", @"edx" : @"rdx", @"esi" : @"rsi", @"edi" : @"rdi",
+               @"r8d" : @"r8", @"r9d" : @"r9", @"r10d" : @"r10", @"r11d" : @"r11", @"r12d" : @"r12",
+               @"r13d" : @"r13", @"r14d" : @"r14", @"r15d" : @"r15",
+               @"rax" : @"rax", @"rbx" : @"rbx", @"rcx" : @"rcx", @"rdx" : @"rdx", @"rsi" : @"rsi", @"rdi" : @"rdi",
+               @"r8" : @"r8", @"r9" : @"r9", @"r10" : @"r10", @"r11" : @"r11", @"r12" : @"r12",
+               @"r13" : @"r13", @"r14" : @"r14", @"r15" : @"r15" };
+    return m[r];
+    }
+static BOOL x86LeaIs32(NSString* r)
+    {
+    return [r hasPrefix:@"e"] || [r hasSuffix:@"d"];
+    }
+// A decimal immediate (what both back ends print), into *k.
+static BOOL x86LeaImm(NSString* o, long long* k)
+    {
+    NSUInteger n = o.length, i = 0;
+    if (n == 0)
+        return NO;
+    if ([o characterAtIndex:0] == '-')
+        i = 1;
+    if (i >= n || n - i > 10)
+        return NO;
+    for (NSUInteger j = i; j < n; j++)
+        if ([o characterAtIndex:j] < '0' || [o characterAtIndex:j] > '9')
+            return NO;
+    *k = [o longLongValue];
+    return YES;
+    }
+// The mnemonic and the two operands of an instruction line, or NO.
+static BOOL x86LeaSplit(NSString* line, NSString** mn, NSString** o0, NSString** o1)
+    {
+    NSString* t = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    NSRange tab = [t rangeOfString:@"\t"];
+    if (tab.location == NSNotFound)
+        return NO;
+    NSArray<NSString*>* ops = [[t substringFromIndex:tab.location + 1] componentsSeparatedByString:@","];
+    if (ops.count != 2)
+        return NO;
+    NSCharacterSet* ws = [NSCharacterSet whitespaceCharacterSet];
+    *mn = [t substringToIndex:tab.location];
+    *o0 = [ops[0] stringByTrimmingCharactersInSet:ws];
+    *o1 = [ops[1] stringByTrimmingCharactersInSet:ws];
+    return YES;
+    }
+// Whether the flags an instruction at lines[from - 1] sets are read before
+// they are set again: a label, or 64 lines with neither, counts as read.
+static BOOL x86LeaFlagsRead(NSArray<NSString*>* lines, NSUInteger from)
+    {
+    static NSSet<NSString*>* setters = nil;
+    if (!setters)
+        setters = [NSSet setWithArray:@[ @"cmp", @"test", @"add", @"sub", @"and", @"or", @"xor", @"neg", @"imul",
+                                         @"ucomiss", @"ucomisd", @"comiss", @"comisd", @"vucomiss", @"vucomisd",
+                                         @"vcomiss", @"vcomisd", @"call", @"ret", @"jmp" ]];
+    for (NSUInteger j = from; j < lines.count && j < from + 64; j++)
+        {
+        NSString* t = [lines[j] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if ([t hasSuffix:@":"])
+            return YES;
+        if (t.length == 0 || [t hasPrefix:@"."] || [t hasPrefix:@"#"])
+            continue;
+        NSRange tab = [t rangeOfString:@"\t"];
+        NSString* m = tab.location == NSNotFound ? t : [t substringToIndex:tab.location];
+        if ([setters containsObject:m])
+            return NO;
+        if (([m hasPrefix:@"j"]) || [m hasPrefix:@"set"] || [m hasPrefix:@"cmov"] || [m isEqualToString:@"adc"] ||
+            [m isEqualToString:@"sbb"] || [m isEqualToString:@"rcl"] || [m isEqualToString:@"rcr"] ||
+            [m isEqualToString:@"pushf"] || [m isEqualToString:@"lahf"])
+            return YES;
+        }
+    return YES;
+    }
+
++ (NSString*)peepholeLea:(NSString*)text
+    {
+    static NSSet<NSString*>* writes32 = nil;
+    if (!writes32)
+        writes32 = [NSSet setWithArray:@[ @"mov", @"movzx", @"movsx", @"add", @"sub", @"and", @"or", @"xor",
+                                          @"imul", @"lea", @"shl", @"shr", @"sar", @"neg", @"not", @"inc", @"dec" ]];
+    NSArray<NSString*>* lines = [text componentsSeparatedByString:@"\n"];
+    NSMutableArray<NSString*>* out = [NSMutableArray arrayWithCapacity:lines.count];
+    BOOL lastIsInsn = NO;
+    for (NSUInteger i = 0; i < lines.count; i++)
+        {
+        NSString* line = lines[i];
+        NSString *mn, *a, *b;
+        if (!x86LeaSplit(line, &mn, &a, &b))
+            {
+            [out addObject:line];
+            lastIsInsn = NO;
+            continue;
+            }
+        // mov r, r after a 32-bit write of r.
+        if ([mn isEqualToString:@"mov"] && [a isEqualToString:b] && x86LeaReg64(a) && x86LeaIs32(a) && lastIsInsn)
+            {
+            NSString *pm, *p0, *p1;
+            if (x86LeaSplit(out.lastObject, &pm, &p0, &p1) && [p0 isEqualToString:a] && [writes32 containsObject:pm])
+                continue;
+            }
+        // mov a, b ; add a, c|k
+        NSString *nm, *n0, *n1;
+        NSString* a64 = x86LeaReg64(a);
+        NSString* b64 = x86LeaReg64(b);
+        if ([mn isEqualToString:@"mov"] && a64 && b64 && ![a isEqualToString:b] && x86LeaIs32(a) == x86LeaIs32(b) &&
+            i + 1 < lines.count && x86LeaSplit(lines[i + 1], &nm, &n0, &n1) && [n0 isEqualToString:a] &&
+            ([nm isEqualToString:@"add"] || [nm isEqualToString:@"sub"]) && !x86LeaFlagsRead(lines, i + 2))
+            {
+            NSString* addr = nil;
+            long long k = 0;
+            NSString* c64 = x86LeaReg64(n1);
+            if ([nm isEqualToString:@"add"] && c64 && x86LeaIs32(n1) == x86LeaIs32(a))
+                addr = [NSString stringWithFormat:@"%@+%@", b64, [n1 isEqualToString:a] ? b64 : c64];
+            else if (x86LeaImm(n1, &k))
+                {
+                long long off = [nm isEqualToString:@"add"] ? k : -k;
+                if (off != 0 && off > -2147483648LL && off < 2147483648LL)
+                    addr = off < 0 ? [NSString stringWithFormat:@"%@-%lld", b64, -off]
+                                   : [NSString stringWithFormat:@"%@+%lld", b64, off];
+                }
+            if (addr)
+                {
+                [out addObject:[NSString stringWithFormat:@"\tlea\t%@, [%@]", a, addr]];
+                lastIsInsn = YES;
+                i++;
+                continue;
+                }
+            }
+        [out addObject:line];
+        lastIsInsn = YES;
+        }
+    return [out componentsJoinedByString:@"\n"];
+    }
+
 // ── Fallthrough peephole ─────────────────────────────────────────────────
 //
 // Drop `jmp L` when L is the very next label, and invert a conditional whose
@@ -1131,19 +1280,42 @@ static NSInteger sWin64SretOff = 0;
     }
 
 // `movaps d, a` (two xmm registers) and then a destructive `op d, b` as one
-// `vop d, a, b`, or nil. b that is d itself reads the copied a. The port's
-// vexFold.
+// `vop d, a, b`, or nil. b that is d itself reads the copied a. And a scalar
+// load `movss d, [m]` then `addss`/`mulss d, b` (b another register) as
+// `vaddss d, b, [m]`: perlin's constants live in frame slots, and each
+// `2.0 * v` cost the load and the multiply (eight per octave). Only add and
+// multiply, which commute; min and max do not (a NaN picks the second). The
+// port's vexFold.
 + (nullable NSString*)vexFold:(NSString*)mv next:(NSString*)nx
     {
-    if (![mv hasPrefix:@"movaps\t"])
+    BOOL load = [mv hasPrefix:@"movss\t"] || [mv hasPrefix:@"movsd\t"];
+    if (![mv hasPrefix:@"movaps\t"] && !load)
         return nil;
-    NSArray<NSString*>* mo = [[mv substringFromIndex:7] componentsSeparatedByString:@","];
+    NSArray<NSString*>* mo = [[mv substringFromIndex:(load ? 6 : 7)] componentsSeparatedByString:@","];
     if (mo.count != 2)
         return nil;
     NSCharacterSet* ws = [NSCharacterSet whitespaceCharacterSet];
     NSString* d = [mo[0] stringByTrimmingCharactersInSet:ws];
     NSString* a = [mo[1] stringByTrimmingCharactersInSet:ws];
     BOOL (^isXmm)(NSString*) = ^BOOL(NSString* r) { return [r hasPrefix:@"xmm"]; };
+    if (load)
+        {
+        if (!isXmm(d) || [a rangeOfString:@"["].location == NSNotFound)
+            return nil;
+        BOOL sd = [mv hasPrefix:@"movsd\t"];
+        NSString* add = sd ? @"addsd\t" : @"addss\t";
+        NSString* mul = sd ? @"mulsd\t" : @"mulss\t";
+        if (![nx hasPrefix:add] && ![nx hasPrefix:mul])
+            return nil;
+        NSArray<NSString*>* no = [[nx substringFromIndex:6] componentsSeparatedByString:@","];
+        if (no.count != 2)
+            return nil;
+        NSString* o0 = [no[0] stringByTrimmingCharactersInSet:ws];
+        NSString* o1 = [no[1] stringByTrimmingCharactersInSet:ws];
+        if (![o0 isEqualToString:d] || !isXmm(o1) || [o1 isEqualToString:d])
+            return nil;
+        return [NSString stringWithFormat:@"v%@\t%@, %@, %@", [nx substringToIndex:5], d, o1, a];
+        }
     if (!isXmm(d) || !isXmm(a) || [d isEqualToString:a])
         return nil;
     NSRange tab = [nx rangeOfString:@"\t"];
@@ -1937,7 +2109,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             {
             NSMutableString* fbuf = [NSMutableString string]; // per-function → peephole
             [self emitFunction:fn module:mod into:fbuf];
-            [out appendString:[self withVzeroupper:[self peepholeFallthrough:[self peepholeCopyProp:fbuf]] avx:fn.simdLevel != nil]];
+            [out appendString:[self withVzeroupper:[self peepholeFallthrough:[self peepholeLea:[self peepholeCopyProp:fbuf]]] avx:fn.simdLevel != nil]];
             }
         }
     // The matrix kernels the module calls (idiom-matmul): `_auto` is dispatched
@@ -5023,17 +5195,23 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         NSString* sfx = d ? @"sd" : @"ss";
         // cvtsi2ss reads a signed reg, so a SIGNED source must be sign-extended
         // (zero-extend would turn a negative i8 into a large positive int).
+        // Into the result's own xmm home where it has one (perlin's floor
+        // paid a movaps out of xmm0 for each); the u64 form works in xmm0.
+        NSString* D = (op == XTIROpSIToFp || w < 8) ? [self fdstFor:res clobbering:nil as:nil] : @"xmm0";
         if (op == XTIROpSIToFp)
             {
             [self loadExt:ops[0] into:'a' signed:YES width:w fn:fn slot:slot out:out];
-            [out appendFormat:@"\tcvtsi2%@\txmm0, %@\n", sfx, [self reg:'a' width:w]];
+            [out appendFormat:@"\tcvtsi2%@\t%@, %@\n", sfx, D, [self reg:'a' width:w]];
             }
         else
             {
             [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out];
-            [out appendString:[self uintToFpText:sfx width:w]];
+            if (w < 8)
+                [out appendFormat:@"\tcvtsi2%@\t%@, rax\n", sfx, D];
+            else
+                [out appendString:[self uintToFpText:sfx width:w]];
             }
-        [self storeF:@"xmm0" into:res slot:slot out:out];
+        [self storeF:D into:res slot:slot out:out];
         return;
         }
     case XTIROpFpToSI:
@@ -5044,8 +5222,14 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         XTIRValue* sv = ops[0].kind == XTIROperandKindUse ? fn.values[@(ops[0].valueId)] : nil;
         BOOL d = sv && sv.type.kind == XTIRTypeKindF64;
         NSUInteger rw = [self widthOf:res];
-        [self loadF:ops[0] into:@"xmm0" fn:fn slot:slot out:out];
-        [out appendString:[self fpToIntText:(d ? @"sd" : @"ss") signed:(op == XTIROpFpToSI) width:rw]];
+        // Narrower than 64 bits the operand is only read, so from its own
+        // home; the 64-bit forms subtract in xmm0.
+        NSString* S = @"xmm0";
+        if (rw < 8)
+            S = [self fsrcForStore:ops[0] fn:fn slot:slot out:out];
+        else
+            [self loadF:ops[0] into:@"xmm0" fn:fn slot:slot out:out];
+        [out appendString:[self fpToIntText:(d ? @"sd" : @"ss") signed:(op == XTIROpFpToSI) width:rw from:S]];
         [self store:'a' into:res slot:slot out:out];
         return;
         }
