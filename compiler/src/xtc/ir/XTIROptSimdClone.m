@@ -1,4 +1,7 @@
 // XTIROptSimdClone.m — runtime SIMD dispatch: the per-level clones. See the header.
+#import "XTIRInsn.h"
+#import "XTIROperand.h"
+#import "XTIROpcode.h"
 #import "XTIROptSimdClone.h"
 #import "XTIRModule.h"
 #import "XTIRFunction.h"
@@ -42,6 +45,35 @@ static BOOL hasWideVector(XTIRFunction* fn, uint32_t bytes)
     return NO;
     }
 
+// A loop with at least 8 scalar float operations (F32/F64 FAdd, FSub, FMul,
+// FDiv): blocks from a back edge's target to its source, by block order. The
+// port's simdFloatLoop.
+static BOOL hasFloatLoop(XTIRFunction* fn)
+    {
+    NSUInteger nb = fn.blocks.count;
+    NSMutableIndexSet* inLoop = [NSMutableIndexSet indexSet];
+    for (NSUInteger b = 0; b < nb; b++)
+        for (XTIROperand* o in fn.blocks[b].terminator.operands)
+            {
+            if (o.kind != XTIROperandKindBlock || !o.blockRef)
+                continue;
+            NSUInteger h = [fn.blocks indexOfObject:o.blockRef];
+            if (h != NSNotFound && h <= b)
+                [inLoop addIndexesInRange:NSMakeRange(h, b - h + 1)];
+            }
+    NSUInteger n = 0;
+    for (NSUInteger b = 0; b < nb; b++)
+        {
+        if (![inLoop containsIndex:b])
+            continue;
+        for (XTIRInsn* x in fn.blocks[b].instructions)
+            if (x.result && XTIRTypeKindIsFloating(x.result.type.kind) &&
+                (x.opcode == XTIROpFAdd || x.opcode == XTIROpFSub || x.opcode == XTIROpFMul || x.opcode == XTIROpFDiv))
+                n++;
+        }
+    return n >= 8;
+    }
+
 - (BOOL)runOnModule:(XTIRModule*)mod
              errors:(NSMutableArray<NSString*>* _Nullable* _Nullable)outErrors
     {
@@ -59,7 +91,12 @@ static BOOL hasWideVector(XTIRFunction* fn, uint32_t bytes)
             if (!fn.simdLevel)
                 continue;
             XTIRFunction* base = byName[fn.simdBaseName];
-            if (base && hasWideVector(fn, (uint32_t)fn.simdLaneBytes))
+            // An avx2 clone with a scalar float loop stays too, though it did
+            // not vectorise: its float code takes the three-operand VEX forms,
+            // which save the copy every destructive SSE op needs (perlin,
+            // 2026-10-25). As the port.
+            if (base && (hasWideVector(fn, (uint32_t)fn.simdLaneBytes)
+                         || ([fn.simdLevel isEqualToString:@"avx2"] && hasFloatLoop(fn))))
                 base.simdDispatch = YES;
             else
                 [drop addObject:fn];

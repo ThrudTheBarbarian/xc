@@ -1130,14 +1130,57 @@ static NSInteger sWin64SretOff = 0;
     return nil;
     }
 
-+ (NSString*)withVzeroupper:(NSString*)text
+// `movaps d, a` (two xmm registers) and then a destructive `op d, b` as one
+// `vop d, a, b`, or nil. b that is d itself reads the copied a. The port's
+// vexFold.
++ (nullable NSString*)vexFold:(NSString*)mv next:(NSString*)nx
     {
-    // zmm too: a 512-bit register dirties the same upper state.
-    if ([text rangeOfString:@"ymm"].location == NSNotFound && [text rangeOfString:@"zmm"].location == NSNotFound)
+    if (![mv hasPrefix:@"movaps\t"])
+        return nil;
+    NSArray<NSString*>* mo = [[mv substringFromIndex:7] componentsSeparatedByString:@","];
+    if (mo.count != 2)
+        return nil;
+    NSCharacterSet* ws = [NSCharacterSet whitespaceCharacterSet];
+    NSString* d = [mo[0] stringByTrimmingCharactersInSet:ws];
+    NSString* a = [mo[1] stringByTrimmingCharactersInSet:ws];
+    BOOL (^isXmm)(NSString*) = ^BOOL(NSString* r) { return [r hasPrefix:@"xmm"]; };
+    if (!isXmm(d) || !isXmm(a) || [d isEqualToString:a])
+        return nil;
+    NSRange tab = [nx rangeOfString:@"\t"];
+    if (tab.location == NSNotFound)
+        return nil;
+    NSString* mn = [nx substringToIndex:tab.location];
+    static NSSet<NSString*>* arith;
+    if (!arith)
+        arith = [NSSet setWithArray:[@"addss subss mulss divss addsd subsd mulsd divsd minss maxss minsd maxsd addps subps mulps divps addpd subpd mulpd divpd minps maxps minpd maxpd xorps xorpd andps andpd andnps andnpd orps orpd" componentsSeparatedByString:@" "]];
+    if (![arith containsObject:mn])
+        return nil;
+    NSString* rest = [nx substringFromIndex:tab.location + 1];
+    NSRange comma = [rest rangeOfString:@","];
+    if (comma.location == NSNotFound)
+        return nil;
+    NSString* o0 = [[rest substringToIndex:comma.location] stringByTrimmingCharactersInSet:ws];
+    NSString* o1 = [[rest substringFromIndex:comma.location + 1] stringByTrimmingCharactersInSet:ws];
+    if (![o0 isEqualToString:d] || [o1 rangeOfString:@","].location != NSNotFound)
+        return nil;
+    if ([o1 isEqualToString:d])
+        o1 = a;
+    return [NSString stringWithFormat:@"v%@\t%@, %@, %@", mn, d, a, o1];
+    }
+
++ (NSString*)withVzeroupper:(NSString*)text avx:(BOOL)avx
+    {
+    // zmm too: a 512-bit register dirties the same upper state. A function's
+    // AVX clone takes the VEX forms even with no wide register (a scalar
+    // float loop, 2026-10-25): their three operands save the copy a
+    // destructive SSE op needs.
+    if (!avx && [text rangeOfString:@"ymm"].location == NSNotFound && [text rangeOfString:@"zmm"].location == NSNotFound)
         return text;
     NSMutableString* out = [NSMutableString stringWithCapacity:text.length + 256];
-    for (NSString* line in [text componentsSeparatedByString:@"\n"])
+    NSArray<NSString*>* lines = [text componentsSeparatedByString:@"\n"];
+    for (NSUInteger li = 0; li < lines.count; li++)
         {
+        NSString* line = lines[li];
         NSString* t = [line stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
         BOOL exitInsn = [t hasPrefix:@"call\t"] || [t hasPrefix:@"call "] || [t isEqualToString:@"ret"]
                         || ([t hasPrefix:@"jmp\t"] && ![t hasPrefix:@"jmp\t."]);
@@ -1159,6 +1202,17 @@ static NSInteger sWin64SretOff = 0;
         // live upper half, and AVX2 mandelbrot ran 259 ms against SSE 167. A
         // destructive `op a, b` is `vop a, a, b`; a move or a compare keeps its
         // operands. The VEX forms clear bits 255:128, which nothing here keeps.
+        // `movaps d, a` then `op d, b` is one `vop d, a, b` (the port's).
+        if (li + 1 < lines.count)
+            {
+            NSString* fused = [self vexFold:t next:[lines[li + 1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]];
+            if (fused)
+                {
+                [out appendFormat:@"\t%@\n", fused];
+                li++;
+                continue;
+                }
+            }
         NSString* vex = [self vexFormOf:t];
         if (vex)
             {
@@ -1883,7 +1937,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
             {
             NSMutableString* fbuf = [NSMutableString string]; // per-function → peephole
             [self emitFunction:fn module:mod into:fbuf];
-            [out appendString:[self withVzeroupper:[self peepholeFallthrough:[self peepholeCopyProp:fbuf]]]];
+            [out appendString:[self withVzeroupper:[self peepholeFallthrough:[self peepholeCopyProp:fbuf]] avx:fn.simdLevel != nil]];
             }
         }
     // The matrix kernels the module calls (idiom-matmul): `_auto` is dispatched

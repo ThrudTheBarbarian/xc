@@ -25297,6 +25297,50 @@ class BeFact : Object
         return false;
         }
 
+    // A loop with at least 8 scalar float operations (F32/F64 FAdd, FSub,
+    // FMul, FDiv): blocks from a back edge's target to its source, by block
+    // order. As the reference's hasFloatLoop.
+    static bool simdFloatLoop(IRFunc* fn)
+        {
+        u32 nb = fn.blocks().count();
+        Array* inLoop = new Array();
+        for (u32 b = (u32)0; b < nb; b = b + (u32)1)
+            inLoop.add((Object*)0);
+        for (u32 b = (u32)0; b < nb; b = b + (u32)1)
+            {
+            IRInsn* t = ((IRBlock*)fn.blocks().get(b)).term();
+            for (u32 k = (u32)0; t != (IRInsn*)0 && k < t.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)t.ops().get(k);
+                if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
+                    continue;
+                for (u32 h = (u32)0; h <= b; h = h + (u32)1)
+                    if ((IRBlock*)fn.blocks().get(h) == o.blk())
+                        for (u32 j = h; j <= b; j = j + (u32)1)
+                            inLoop.set(j, (Object*)Number.withU32((u32)1));
+                }
+            }
+        u32 n = (u32)0;
+        for (u32 b = (u32)0; b < nb; b = b + (u32)1)
+            {
+            if (inLoop.get(b) == (Object*)0)
+                continue;
+            IRBlock* bl = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bl.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* x = (IRInsn*)bl.insns().get(i);
+                String* op = x.op();
+                if (x.res() == (IRValue*)0 || x.res().ty() == (String*)0)
+                    continue;
+                bool fp = x.res().ty().equals(String.withCString("F32")) || x.res().ty().equals(String.withCString("F64"));
+                if (fp && (op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub"))
+                           || op.equals(String.withCString("FMul")) || op.equals(String.withCString("FDiv"))))
+                    n = n + (u32)1;
+                }
+            }
+        return n >= (u32)8;
+        }
+
     void simdClone(IRModule* m)
         {
         if (!_profile.simdDispatch() || !_profile.vectorize())
@@ -25363,7 +25407,12 @@ class BeFact : Object
             for (u32 g = (u32)0; g < m.funcs().count(); g = g + (u32)1)
                 if (((IRFunc*)m.funcs().get(g)).name().equals(fn.simdBaseName()))
                     base = (IRFunc*)m.funcs().get(g);
-            if (base != (IRFunc*)0 && simdHasWide(fn, fn.simdLaneBytes()))
+            // An avx2 clone with a scalar float loop stays too, though it did
+            // not vectorise: its float code takes the three-operand VEX forms
+            // (the back end), which save the copy every destructive SSE op
+            // needs (perlin, 2026-10-25). As the reference.
+            if (base != (IRFunc*)0 && (simdHasWide(fn, fn.simdLaneBytes())
+                                       || (fn.simdLevel().equals(String.withCString("avx2")) && simdFloatLoop(fn))))
                 {
                 base.setSimdDispatch(true);
                 keep.add((Object*)fn);

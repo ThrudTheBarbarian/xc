@@ -498,7 +498,7 @@ class X86_64
             String* module = _out;
             _out = new String();
             emitFunction(fn);
-            module.append(withVzeroupper(peepholeFallthrough(peepholeCopyProp(_out))));
+            module.append(withVzeroupper(peepholeFallthrough(peepholeCopyProp(_out)), fn.simdLevel() != (String*)0));
             _out = module;
             }
         // The matrix kernels the module calls (idiom-matmul): `_auto` is
@@ -4522,10 +4522,13 @@ class X86_64
     // each way out (a call, a return, a jump to another function) is the rule
     // every compiler follows; done as a pass over the finished text so no call
     // site has to remember it. Functions with no ymm or zmm are returned unchanged.
-    String* withVzeroupper(String* text)
+    String* withVzeroupper(String* text, bool avx)
         {
-        // zmm too: a 512-bit register dirties the same upper state.
-        if (!text.contains(String.withCString("ymm")) && !text.contains(String.withCString("zmm")))
+        // zmm too: a 512-bit register dirties the same upper state. A
+        // function's AVX clone takes the VEX forms even with no wide register
+        // (a scalar float loop, 2026-10-25): their three operands save the
+        // copy a destructive SSE op needs.
+        if (!avx && !text.contains(String.withCString("ymm")) && !text.contains(String.withCString("zmm")))
             return text;
         Array* lines = text.splitOnByte((u8)'\n');
         String* out = String.withCString("");
@@ -4554,6 +4557,20 @@ class X86_64
             // and xmm code uses: a legacy write merges with the live upper half
             // on a Zen 3 (AVX2 mandelbrot 259 ms against SSE 167). As the
             // reference's vexFormOf:.
+            // `movaps d, a` then `op d, b` is one `vop d, a, b`: the copy a
+            // destructive SSE op needed, gone. As the reference.
+            if (i + (u32)1 < lines.count())
+                {
+                String* fused = vexFold(t, ((String*)lines.get(i + (u32)1)).trimmed());
+                if (fused != (String*)0)
+                    {
+                    out.appendCString("\t");
+                    out.append(fused);
+                    out.appendCString("\n");
+                    i = i + (u32)1;
+                    continue;
+                    }
+                }
             String* vex = vexFormOf(t);
             if (vex != (String*)0)
                 {
@@ -4593,6 +4610,43 @@ class X86_64
     // A legacy SSE instruction's VEX form, for an AVX function, or null when
     // it has none here: a destructive `op a, b` is `vop a, a, b`, a move or a
     // compare keeps its operands. As the reference's vexFormOf:.
+    // `movaps d, a` (two xmm registers) and then a destructive `op d, b` as one
+    // `vop d, a, b`, or 0. b that is d itself reads the copied a. As the
+    // reference's vexFold.
+    String* vexFold(String* mv, String* nx)
+        {
+        if (!mv.hasPrefix(String.withCString("movaps\t")))
+            return (String*)0;
+        Array* mo = mv.substringFromByte((u32)7).splitOnByte((u8)',');
+        if (mo.count() != (u32)2)
+            return (String*)0;
+        String* d = ((String*)mo.get((u32)0)).trimmed();
+        String* a = ((String*)mo.get((u32)1)).trimmed();
+        if (!vexXmm(d) || !vexXmm(a) || d.equals(a))
+            return (String*)0;
+        u32 tab = (u32)0;
+        while (tab < nx.byteLength() && nx.byteAt(tab) != (u8)9)
+            tab = tab + (u32)1;
+        if (tab >= nx.byteLength())
+            return (String*)0;
+        String* mn = nx.substringBytes((u32)0, tab);
+        if (!vexIn(mn, "addss subss mulss divss addsd subsd mulsd divsd minss maxss minsd maxsd addps subps mulps divps addpd subpd mulpd divpd minps maxps minpd maxpd xorps xorpd andps andpd andnps andnpd orps orpd"))
+            return (String*)0;
+        String* rest = nx.substringFromByte(tab + (u32)1);
+        u32 comma = (u32)0;
+        while (comma < rest.byteLength() && rest.byteAt(comma) != (u8)',')
+            comma = comma + (u32)1;
+        if (comma >= rest.byteLength())
+            return (String*)0;
+        String* o0 = rest.substringBytes((u32)0, comma).trimmed();
+        String* o1 = rest.substringFromByte(comma + (u32)1).trimmed();
+        if (!o0.equals(d) || o1.contains(String.withCString(",")))
+            return (String*)0;
+        if (o1.equals(d))
+            o1 = a;
+        return String.withFormat("v%s\t%s, %s, %s", mn.cString(), d.cString(), a.cString(), o1.cString());
+        }
+
     String* vexFormOf(String* t)
         {
         u32 tab = t.indexOfByte((u8)9);
