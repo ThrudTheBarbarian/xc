@@ -500,7 +500,7 @@ static BOOL constOf(XTIROperand* op, NSDictionary<NSNumber*, XTIRInsn*>* defOf, 
                   }
           if (!changed)
               continue;
-          XTIRInsn* r = (insn.opcode == XTIROpICmp || insn.opcode == XTIROpFCmp || insn.opcode == XTIROpVICmp || insn.opcode == XTIROpVFCmp)
+          XTIRInsn* r = (XTIROpCarriesPredicate(insn.opcode))
                             ? [[XTIRInsn alloc] initWithOpcode:insn.opcode result:insn.result operands:ops predicate:insn.predicate dbgLoc:insn.dbgLoc]
                             : [[XTIRInsn alloc] initWithOpcode:insn.opcode result:insn.result operands:ops dbgLoc:insn.dbgLoc];
           r.memoryResult = insn.memoryResult;

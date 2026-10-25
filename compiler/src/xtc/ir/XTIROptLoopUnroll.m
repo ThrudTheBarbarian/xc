@@ -766,7 +766,7 @@ static XTIROperand* remapOp(XTIROperand* op, NSDictionary<NSNumber*, NSNumber*>*
                                                 operands:newOps
                                                 callConv:insn.callConv
                                                   dbgLoc:insn.dbgLoc];
-            else if (insn.opcode == XTIROpICmp || insn.opcode == XTIROpFCmp || insn.opcode == XTIROpVICmp || insn.opcode == XTIROpVFCmp)
+            else if (XTIROpCarriesPredicate(insn.opcode))
                 clone = [[XTIRInsn alloc] initWithOpcode:insn.opcode
                                                   result:newResult
                                                 operands:newOps
@@ -899,7 +899,7 @@ static XTIROperand* remapOp(XTIROperand* op, NSDictionary<NSNumber*, NSNumber*>*
                                           operands:no
                                           callConv:insn.callConv
                                             dbgLoc:insn.dbgLoc];
-          else if (insn.opcode == XTIROpICmp || insn.opcode == XTIROpFCmp || insn.opcode == XTIROpVICmp || insn.opcode == XTIROpVFCmp)
+          else if (XTIROpCarriesPredicate(insn.opcode))
               r = [[XTIRInsn alloc] initWithOpcode:insn.opcode
                                             result:insn.result
                                           operands:no

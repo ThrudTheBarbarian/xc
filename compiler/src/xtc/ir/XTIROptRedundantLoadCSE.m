@@ -199,7 +199,7 @@ static XTIRInsn* rebuiltInsn(XTIRInsn* insn, NSArray<XTIROperand*>* newOps)
                                     callConv:insn.callConv
                                       dbgLoc:insn.dbgLoc];
         }
-    else if (insn.opcode == XTIROpICmp || insn.opcode == XTIROpFCmp || insn.opcode == XTIROpVICmp || insn.opcode == XTIROpVFCmp)
+    else if (XTIROpCarriesPredicate(insn.opcode))
         {
         r = [[XTIRInsn alloc] initWithOpcode:insn.opcode
                                       result:insn.result

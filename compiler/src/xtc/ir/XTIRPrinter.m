@@ -614,6 +614,20 @@ static NSString* dbgSuffix(XTIRInsn* insn)
             }
         break;
         }
+    case XTIROpFpToSI:
+    case XTIROpFpToUI:
+        {
+        // FpToUI [unchecked,] %x — C's casts are unchecked (XTIRSupport.h).
+        if (insn.predicate == XTIRConvUnchecked)
+            [line appendString:@" unchecked"];
+        BOOL first = insn.predicate != XTIRConvUnchecked;
+        for (XTIROperand* op in insn.operands)
+            {
+            [line appendFormat:first ? @" %@" : @", %@", [self stringFromOperand:op module:mod context:ctx]];
+            first = NO;
+            }
+        break;
+        }
     default:
         {
         // Generic: comma-separated operand list.

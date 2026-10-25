@@ -1104,9 +1104,23 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
     case XTIROpVICmp:
     case XTIROpFCmp:
     case XTIROpVFCmp:
+    case XTIROpFpToSI:
+    case XTIROpFpToUI:
         {
         XTIRTok* predTok = [self tok:tokens at:pos];
-        if (predTok.kind == XTIRTokWord)
+        if (op == XTIROpFpToSI || op == XTIROpFpToUI)
+            {
+            // FpToUI [unchecked,] %x (XTIRSupport.h).
+            if (predTok.kind == XTIRTokWord && [predTok.text isEqualToString:@"unchecked"])
+                {
+                hasPredicate = YES;
+                predicate = XTIRConvUnchecked;
+                pos++;
+                if ([self tok:tokens at:pos].kind == XTIRTokComma)
+                    pos++;
+                }
+            }
+        else if (predTok.kind == XTIRTokWord)
             {
             hasPredicate = YES;
             predicate = (op == XTIROpFCmp || op == XTIROpVFCmp)

@@ -1637,6 +1637,17 @@ class X86_64
         u32 rw = widthOfValue(n.res());
         bool sgn = n.op().equals(String.withCString("FpToSI"));
         string sfx = d ? "sd" : "ss";
+        // UNCHECKED (C's casts, whose out-of-range result is undefined): the
+        // conversion alone, its low bits the result, as GCC and clang emit.
+        // A u64 keeps its handling of 2^63 and up, which are in range.
+        bool unchecked = n.pred() != (String*)0 && n.pred().equals(String.withCString("unchecked"));
+        if (unchecked && (rw < (u32)8 || sgn))
+            {
+            String* S = fsrcForStore(src);
+            _out.appendFormat("\tcvtt%s2si\trax, %s\n", sfx, S.cString());
+            store((u8)'a', n.res());
+            return;
+            }
         // Narrower than 64 bits the operand is only read, so from its own
         // home; the 64-bit forms subtract in xmm0.
         if (rw < (u32)8)

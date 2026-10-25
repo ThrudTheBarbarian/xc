@@ -34,6 +34,8 @@ class LlvmReader
     Map* _cpage;            // "@name" -> its bytes: a numeric array clang's half gives pages of its own (gpu-globals)
     Map* _negOf;            // a value read from `fneg x` -> x
     Map* _retTy;            // "@name" -> the function's IR return type
+    bool _sawZext;          // the last skipAttrs() passed a `zeroext`
+    Array* _zxParams;       // a function's zeroext parameters: name, value
     Map* _defined;          // "@name" -> 1 for a function defined in this file
     u32 _strN;
     String* _path;          // the C file, for source lines (0: none)
@@ -535,6 +537,7 @@ class LlvmReader
     // The attributes LLVM writes beside a value or a function: skipped.
     void skipAttrs(void)
         {
+        _sawZext = false;
         bool again = true;
         while (again)
             {
@@ -548,7 +551,11 @@ class LlvmReader
                 || w.equals(String.withCString("zeroext")) || w.equals(String.withCString("noalias"))
                 || w.equals(String.withCString("inreg")) || w.equals(String.withCString("returned"))
                 || w.equals(String.withCString("nofree")) || w.equals(String.withCString("immarg")))
+                {
+                if (w.equals(String.withCString("zeroext")))
+                    _sawZext = true;
                 again = true;
+                }
             else if (w.equals(String.withCString("align")) || w.equals(String.withCString("dereferenceable"))
                      || w.equals(String.withCString("dereferenceable_or_null")))
                 {
@@ -952,12 +959,61 @@ class LlvmReader
         }
 
     // `define`/`declare RET @name(PARAMS)`: the symbol, with the C ABI.
+    // C's unsigned char and short (2026-10-25). The reader's integers are
+    // signed (I8, I16, kept sign-extended in a register), but LLVM marks a
+    // return of an unsigned narrow type `zeroext`: the CALLER, clang's code
+    // included, then reads the whole register and does not extend again, so
+    // arm64 returned (unsigned short)65535 as -1. Such a function returns a
+    // U8 / U16, zero-extended; a call reads that and narrows it back to the
+    // signed I8 / I16 the rest of the reader expects.
+    bool eatZeroExt(void)
+        {
+        ws();
+        u32 save = _p;
+        String* w = word();
+        if (w != (String*)0 && w.equals(String.withCString("zeroext")))
+            return true;
+        _p = save;
+        return false;
+        }
+
+    // A signed I8 / I16 as the U8 / U16 of the same bits, zero-extended.
+    IRValue* toUnsigned(IRValue* v)
+        {
+        String* ut = unsignedOf(v.ty());
+        if (ut.equals(v.ty()))
+            return v;
+        IRValue* w = emit(String.withCString("ZExt"), String.withCString("I32"), IROperand.useVal(v), (IROperand*)0, (IROperand*)0);
+        i64 mask = v.ty().equals(String.withCString("I8")) ? (i64)255 : (i64)65535;
+        IRValue* m = emit(String.withCString("And"), String.withCString("I32"), IROperand.useVal(w), IROperand.immI(mask, String.withCString("I32")), (IROperand*)0);
+        return emit(String.withCString("Trunc"), ut, IROperand.useVal(m), (IROperand*)0, (IROperand*)0);
+        }
+
+    // A U8 / U16 back to the signed I8 / I16 the reader works in.
+    IRValue* toSigned(IRValue* u, String* t)
+        {
+        IRValue* w = emit(String.withCString("ZExt"), String.withCString("I32"), IROperand.useVal(u), (IROperand*)0, (IROperand*)0);
+        return emit(String.withCString("Trunc"), t, IROperand.useVal(w), (IROperand*)0, (IROperand*)0);
+        }
+
+    static String* unsignedOf(String* t)
+        {
+        if (t == (String*)0)
+            return t;
+        if (t.equals(String.withCString("I8")))
+            return String.withCString("U8");
+        if (t.equals(String.withCString("I16")))
+            return String.withCString("U16");
+        return t;
+        }
+
     void readSignature(String* l, bool decl)
         {
         at(l);
         word(); // define / declare
         String* ret = (String*)0;
         String* name = (String*)0;
+        bool zx = false;
         for (u32 guard = (u32)0; guard < (u32)12 && name == (String*)0; guard = guard + (u32)1)
             {
             ws();
@@ -965,6 +1021,11 @@ class LlvmReader
                 {
                 name = word();
                 break;
+                }
+            if (eatZeroExt())
+                {
+                zx = true;
+                continue;
                 }
             u32 save = _p;
             String* t = llType();
@@ -979,7 +1040,8 @@ class LlvmReader
         if (name.hasPrefix(String.withCString("@llvm.")))
             return;
         String* sym = symFor(name);
-        _retTy.set((Hashable*)name, (Object*)irOf(ret));
+        String* irRet = zx ? unsignedOf(irOf(ret)) : irOf(ret);
+        _retTy.set((Hashable*)name, (Object*)irRet);
         if (!decl)
             _defined.set((Hashable*)name, (Object*)Number.with((u32)1));
         Array* ptys = new Array();
@@ -997,9 +1059,10 @@ class LlvmReader
                 String* pt = llType();
                 if (pt == (String*)0)
                     return;
-                ptys.add((Object*)irOf(pt));
-                llps.add((Object*)pt);
                 skipAttrs();
+                // A zeroext narrow parameter is the unsigned type (eatZeroExt).
+                ptys.add((Object*)(_sawZext ? unsignedOf(irOf(pt)) : irOf(pt)));
+                llps.add((Object*)(_sawZext ? String.withFormat("%s zeroext", pt.cString()) : pt));
                 if (peek() == (u8)'%')
                     word();
                 eat(",");
@@ -1007,7 +1070,7 @@ class LlvmReader
             }
         if (!decl)
             {
-            String* dl = String.withFormat("declare %s %s(", ret.cString(), name.cString());
+            String* dl = String.withFormat("declare %s%s %s(", zx ? "zeroext " : "", ret.cString(), name.cString());
             for (u32 i = (u32)0; i < llps.count(); i = i + (u32)1)
                 {
                 if (i > (u32)0)
@@ -1027,7 +1090,7 @@ class LlvmReader
             sig.append((String*)ptys.get(i));
             }
         sig.appendCString(") -> ");
-        sig.append(irOf(ret));
+        sig.append(irRet);
         // A function this file defines is compiled by xcc and called only
         // from it (the whole program is read): xc's own convention. A C
         // library function is reached through the C ABI. A symbol the
@@ -1078,6 +1141,7 @@ class LlvmReader
         word();
         String* ret = (String*)0;
         String* name = (String*)0;
+        bool zx = false;
         for (u32 guard = (u32)0; guard < (u32)12 && name == (String*)0; guard = guard + (u32)1)
             {
             ws();
@@ -1085,6 +1149,11 @@ class LlvmReader
                 {
                 name = word();
                 break;
+                }
+            if (eatZeroExt())
+                {
+                zx = true;
+                continue;
                 }
             u32 save = _p;
             String* t = llType();
@@ -1097,13 +1166,14 @@ class LlvmReader
             return;
         _fn = new IRFunc();
         _fn.setName(symFor(name));
-        _fn.setRet(irOf(ret));
+        _fn.setRet(zx ? unsignedOf(irOf(ret)) : irOf(ret));
         _vals = new Map();
         _pins = new Map();
         _blocks = new Map();
         _pinOff = (u32)0;
         _bad = false;
         _fnWhy = (String*)0;
+        _zxParams = new Array();
         u32 nParams = (u32)0;
         if (eat("("))
             {
@@ -1120,9 +1190,16 @@ class LlvmReader
                     }
                 skipAttrs();
                 String* pn = word();
-                IRValue* v = new IRValue(irOf(pt));
+                String* ut = _sawZext ? unsignedOf(irOf(pt)) : irOf(pt);
+                IRValue* v = new IRValue(ut);
                 _fn.addParam(v);
                 _vals.set((Hashable*)pn, (Object*)v);
+                if (!ut.equals(irOf(pt)))
+                    {
+                    // Narrowed to the signed type before the first instruction.
+                    _zxParams.add((Object*)pn);
+                    _zxParams.add((Object*)v);
+                    }
                 nParams = nParams + (u32)1;
                 eat(",");
                 }
@@ -1158,6 +1235,16 @@ class LlvmReader
                     _fn.addBlock(nb);
                     continue;
                     }
+                }
+            if (_zxParams.count() > (u32)0)
+                {
+                for (u32 k = (u32)0; k + (u32)1 < _zxParams.count(); k = k + (u32)2)
+                    {
+                    IRValue* u = (IRValue*)_zxParams.get(k + (u32)1);
+                    String* st = u.ty().equals(String.withCString("U8")) ? String.withCString("I8") : String.withCString("I16");
+                    _vals.set((Hashable*)_zxParams.get(k), (Object*)toSigned(u, st));
+                    }
+                _zxParams = new Array();
                 }
             lineOf(t);
             readInsn(t);
@@ -1557,7 +1644,12 @@ class LlvmReader
                 define(res, String.withCString("And"), t, IROperand.useVal(w), IROperand.immI(mask, t), (IROperand*)0, (String*)0);
                 return;
                 }
-            define(res, cast, t, IROperand.useVal(a), (IROperand*)0, (IROperand*)0, (String*)0);
+            // C leaves a float-to-integer cast out of range undefined, so
+            // the conversion needs no check of the result (xc's FpToUI gives
+            // 0 there, at five instructions a conversion on x86-64).
+            String* how = (cast.equals(String.withCString("FpToSI")) || cast.equals(String.withCString("FpToUI")))
+                ? String.withCString("unchecked") : (String*)0;
+            define(res, cast, t, IROperand.useVal(a), (IROperand*)0, (IROperand*)0, how);
             return;
             }
         if (op.equals(String.withCString("select")))
@@ -1657,6 +1749,17 @@ class LlvmReader
                 IRValue* v = typedOperand();
                 if (v == (IRValue*)0)
                     return;
+                String* rt = _fn.ret();
+                if (v.ty() != (String*)0 && (rt.equals(String.withCString("U8")) || rt.equals(String.withCString("U16")))
+                    && (v.ty().equals(String.withCString("I8")) || v.ty().equals(String.withCString("I16"))))
+                    {
+                    // The value widened with its high bits cleared, then
+                    // narrowed to the unsigned type the function returns.
+                    IRValue* w = emit(String.withCString("ZExt"), String.withCString("I32"), IROperand.useVal(v), (IROperand*)0, (IROperand*)0);
+                    i64 mask = v.ty().equals(String.withCString("I8")) ? (i64)255 : (i64)65535;
+                    IRValue* m = emit(String.withCString("And"), String.withCString("I32"), IROperand.useVal(w), IROperand.immI(mask, String.withCString("I32")), (IROperand*)0);
+                    v = emit(String.withCString("Trunc"), rt, IROperand.useVal(m), (IROperand*)0, (IROperand*)0);
+                    }
                 r.add(IROperand.useVal(v));
                 }
             r.add(IROperand.useVal(_mem));
@@ -1855,6 +1958,7 @@ class LlvmReader
     // `call RET [(SIG)] @f(ARGS)`.
     void readCall(String* res)
         {
+        bool zx = eatZeroExt();
         String* rt = irOf(llType());
         if (rt == (String*)0)
             {
@@ -1878,14 +1982,24 @@ class LlvmReader
             || callee.hasPrefix(String.withCString("@llvm.assume")))
             return;
         Array* args = new Array();
+        Array* zxArg = new Array();
         if (eat("("))
             {
             while (more() && peek() != (u8)')')
                 {
-                IRValue* a = typedOperand();
+                String* at = irOf(llType());
+                if (at == (String*)0)
+                    {
+                    fail("an operand of a type not read");
+                    return;
+                    }
+                skipAttrs();
+                bool z = _sawZext;
+                IRValue* a = operand(at);
                 if (a == (IRValue*)0)
                     return;
                 args.add((Object*)a);
+                zxArg.add((Object*)Number.with(z ? (u32)1 : (u32)0));
                 eat(",");
                 }
             }
@@ -1938,18 +2052,42 @@ class LlvmReader
         IRInsn* c = IRInsn.with(String.withCString("Call"));
         c.setCc(String.withCString("CallConv::Standard"));
         c.add(IROperand.sym(sym));
+        // A zeroext narrow argument goes as the unsigned type, as the callee
+        // (clang's code too) reads the whole register.
         for (u32 i = (u32)0; i < args.count(); i = i + (u32)1)
-            c.add(IROperand.useVal((IRValue*)args.get(i)));
+            {
+            IRValue* a = (IRValue*)args.get(i);
+            if (((Number*)zxArg.get(i)).asU32() == (u32)1)
+                a = toUnsigned(a);
+            c.add(IROperand.useVal(a));
+            }
         c.add(IROperand.useVal(_mem));
+        // A zeroext narrow result arrives as the unsigned type: read it so,
+        // then narrow it to the signed type the reader works in.
+        String* ut = zx ? unsignedOf(rt) : rt;
+        bool narrowBack = !ut.equals(rt);
+        IRValue* wide = (IRValue*)0;
         if (!rt.equals(String.withCString("Void")))
             {
-            IRValue* r = res != (String*)0 ? valNamed(res, rt) : new IRValue(rt);
-            r.setTy(rt);
-            c.setRes(r);
+            if (narrowBack)
+                wide = new IRValue(ut);
+            else
+                {
+                IRValue* r = res != (String*)0 ? valNamed(res, rt) : new IRValue(rt);
+                r.setTy(rt);
+                c.setRes(r);
+                }
+            if (wide != (IRValue*)0)
+                c.setRes(wide);
             }
         IRValue* mo = new IRValue(String.withCString("Mem"));
         c.setMemRes(mo);
         _blk.add(c);
         _mem = mo;
+        if (wide != (IRValue*)0)
+            {
+            IRValue* w32 = emit(String.withCString("ZExt"), String.withCString("I32"), IROperand.useVal(wide), (IROperand*)0, (IROperand*)0);
+            define(res, String.withCString("Trunc"), rt, IROperand.useVal(w32), (IROperand*)0, (IROperand*)0, (String*)0);
+            }
         }
     }

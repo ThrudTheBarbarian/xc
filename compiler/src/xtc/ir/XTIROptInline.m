@@ -43,7 +43,7 @@ static XTIRInsn* rebuildInsn(XTIRInsn* insn, XTIRValue* result,
                                       callConv:insn.callConv
                                         dbgLoc:insn.dbgLoc];
         }
-    else if (op == XTIROpICmp || op == XTIROpFCmp || op == XTIROpVICmp || op == XTIROpVFCmp)
+    else if (XTIROpCarriesPredicate(op))
         {
         out = [[XTIRInsn alloc] initWithOpcode:op
                                         result:result

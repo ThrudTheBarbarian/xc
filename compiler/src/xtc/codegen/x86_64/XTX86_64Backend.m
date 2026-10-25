@@ -5302,6 +5302,16 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         XTIRValue* sv = ops[0].kind == XTIROperandKindUse ? fn.values[@(ops[0].valueId)] : nil;
         BOOL d = sv && sv.type.kind == XTIRTypeKindF64;
         NSUInteger rw = [self widthOf:res];
+        // UNCHECKED (C's casts, whose out-of-range result is undefined): the
+        // conversion alone, its low bits the result, as GCC and clang emit.
+        // A u64 keeps its handling of 2^63 and up, which are in range.
+        if (in.predicate == XTIRConvUnchecked && (rw < 8 || op == XTIROpFpToSI))
+            {
+            NSString* U = [self fsrcForStore:ops[0] fn:fn slot:slot out:out];
+            [out appendFormat:@"\tcvtt%@2si\trax, %@\n", d ? @"sd" : @"ss", U];
+            [self store:'a' into:res slot:slot out:out];
+            return;
+            }
         // Narrower than 64 bits the operand is only read, so from its own
         // home; the 64-bit forms subtract in xmm0.
         NSString* S = @"xmm0";

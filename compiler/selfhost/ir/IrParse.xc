@@ -1243,6 +1243,22 @@ class IrParser
         // an operand would otherwise start. VICmp joined them when the printer
         // was fixed to emit one: before that the text carried a lane-wise
         // compare with no operator, and the back end could only refuse it.
+        // FpToSI / FpToUI [unchecked,] %x: C's casts, whose out-of-range
+        // result is undefined (the reference's XTIRConvUnchecked). Only that
+        // word: an operand never starts with a letter here, but `undef` could.
+        if (op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI")))
+            {
+            skipSpace();
+            u32 save = _ci;
+            String* w = word();
+            if (w != (String*)0 && w.equals(String.withCString("unchecked")))
+                {
+                insn.setPred(w);
+                expectChar((u8)',');
+                }
+            else
+                _ci = save;
+            }
         if (op.equals(String.withCString("ICmp")) || op.equals(String.withCString("FCmp")) || op.equals(String.withCString("VICmp")) || op.equals(String.withCString("VFCmp")))
             {
             skipSpace();

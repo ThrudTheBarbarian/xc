@@ -182,7 +182,7 @@ static BOOL resolveInt(NSDictionary<NSNumber*, XTIRInsn*>* defOf,
                                     operands:out
                                     callConv:insn.callConv
                                       dbgLoc:insn.dbgLoc];
-    else if (insn.opcode == XTIROpICmp || insn.opcode == XTIROpFCmp || insn.opcode == XTIROpVICmp || insn.opcode == XTIROpVFCmp)
+    else if (XTIROpCarriesPredicate(insn.opcode))
         r = [[XTIRInsn alloc] initWithOpcode:insn.opcode
                                       result:insn.result
                                     operands:out

@@ -77,6 +77,12 @@ typedef NS_ENUM(uint8_t, XTIRFCmpPredicate) {
     // Unordered variants omitted initially; add as needed.
 };
 
+// FpToSI / FpToUI carry a predicate only to say how out-of-range values
+// convert: 0 is xc's meaning (a NaN or a value the destination cannot hold
+// gives 0), XTIRConvUnchecked C's (undefined, so the bare conversion). The
+// text spells it `FpToUI unchecked, %x`.
+enum { XTIRConvChecked = 0, XTIRConvUnchecked = 1 };
+
 #pragma mark - Debug location
 
 @interface XTIRDbgLoc : NSObject

@@ -214,4 +214,12 @@ BOOL XTIROpcodeIsTerminator(XTIROpcode op);
 /// Returns YES for opcodes that take/return a memory token.
 BOOL XTIROpcodeTouchesMemory(XTIROpcode op);
 
+/// Opcodes whose instruction carries a predicate a copy must keep: the
+/// compares' operator, and FpToSI / FpToUI's XTIRConvUnchecked (C's casts).
+static inline BOOL XTIROpCarriesPredicate(XTIROpcode op)
+    {
+    return op == XTIROpICmp || op == XTIROpFCmp || op == XTIROpVICmp || op == XTIROpVFCmp
+        || op == XTIROpFpToSI || op == XTIROpFpToUI;
+    }
+
 NS_ASSUME_NONNULL_END
