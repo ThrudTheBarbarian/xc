@@ -104,6 +104,41 @@ void main(void)
     // either. Running the ported pipeline at level 0 is therefore not an
     // optimisation step, it is the same mandatory lowering, and it is what
     // makes this a comparison of the code generators alone.
+    // The input is the reference's pipeline output, so gpu-globals has run on
+    // it already. At -O1 and up dead-function-elim may then have taken
+    // __xt_gpu_globals (its only caller was dead) and left the symbol, and the
+    // level-0 run here would build the function again from that symbol: a
+    // registration function the reference never emits (arm64-diff at -O2 had
+    // 63 files differing by it alone, 2026-10-25). A symbol with no function
+    // and no call is dropped first.
+    String* ggName = String.withCString("__xt_gpu_globals");
+    bool ggLive = false;
+    for (u32 f = (u32)0; f < m.funcs().count() && !ggLive; f = f + (u32)1)
+        {
+        IRFunc* fn = (IRFunc*)m.funcs().get(f);
+        if (fn.name().equals(ggName))
+            ggLive = true;
+        for (u32 b = (u32)0; b < fn.blocks().count() && !ggLive; b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 k = (u32)0; k < bb.insns().count() && !ggLive; k = k + (u32)1)
+                {
+                IRInsn* gi = (IRInsn*)bb.insns().get(k);
+                for (u32 q = (u32)0; q < gi.ops().count(); q = q + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)gi.ops().get(q);
+                    if (o.kind() == (u8)OPK_SYM && o.name() != (String*)0 && o.name().equals(ggName))
+                        ggLive = true;
+                    }
+                }
+            }
+        }
+    for (u32 i = (u32)0; i < m.syms().count() && !ggLive; i = i + (u32)1)
+        if (((IRSymbol*)m.syms().get(i)).name().equals(ggName))
+            {
+            m.syms().removeAt(i);
+            break;
+            }
     Opt* opt = Opt.atLevel((u32)0, OptProfile.forTarget(String.withCString("arm64")));
     opt.run(m);
     if (opt.failed())
