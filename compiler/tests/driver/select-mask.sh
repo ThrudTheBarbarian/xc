@@ -7,8 +7,8 @@
 # `and; cmp 4; setb` and a `test` per select, and `mov; and; test` for each
 # bit; C perlin 30.2 -> 25.8 G instructions, 107 -> 101 ms on one thread.
 # float_select_homes.xc's grad() has no `and` and tests bits 4, 1 and 2;
-# select_mask.xc gives its answer on Linux x86-64 (here, or on
-# XC_LINUX_HOST); the two compilers print the same code.
+# select_mask.xc and float_select_homes.xc give their answers on Linux x86-64
+# (here, or on XC_LINUX_HOST); the two compilers print the same code.
 #
 #   bash tests/driver/select-mask.sh
 set -u
@@ -37,18 +37,30 @@ for m in 4 1 2; do
     n=$(grep -cE "^[[:space:]]*test[[:space:]]+[a-z0-9]+, $m\$" "$S")
     [ "$n" -ge 2 ] || { echo "FAIL: 'test reg, $m' $n times, want 2 or more"; fail=1; }
 done
+# Two selects on one condition share the branch: a `test r, 4`, its jump,
+# then both true values moved before the label (2026-10-25: perlin 97.0 ->
+# 94.8 ms).
+pairs=$(awk '{ gsub(/^[ \t]+/, ""); l[NR] = $0 }
+    END { for (i = 1; i + 4 <= NR; i++)
+            if (l[i] ~ /^test\t[a-z0-9]+, 4$/ && l[i+1] ~ /^j[a-z]+\t\.L_fsel_/ &&
+                l[i+2] ~ /^movaps\t/ && l[i+3] ~ /^movaps\t/ && l[i+4] ~ /^\.L_fsel_[0-9]+:$/) n++
+          print n + 0 }' "$S")
+[ "$pairs" -ge 1 ] || { echo "FAIL: no two selects share a branch in float_select_homes"; fail=1; }
 H=${XC_LINUX_HOST:-}
 native=$( [ "$(uname -s)-$(uname -m)" = Linux-x86_64 ] && echo 1 || echo 0 )
 if [ -n "$H" ] || [ $native = 1 ]; then
-    "$XC" -q -A x86_64 -O2 -H . -o "$W/sm" tests/fixtures/select_mask.xc || { echo "FAIL: no x86-64 select_mask"; fail=1; }
-    if [ -f "$W/sm" ] && [ $native = 1 ]; then
-        got=$("$W/sm"); H=$(uname -n)
-    elif [ -f "$W/sm" ]; then
-        scp -q "$W/sm" "$H:/tmp/select-mask.$$" &&
-            got=$(ssh "$H" "/tmp/select-mask.$$; rm -f /tmp/select-mask.$$")
-        [ "${got:-}" = "$(cat tests/fixtures/select_mask.expected.out)" ] \
-            || { echo "FAIL: select_mask on $H printed '${got:-}'"; fail=1; }
-    fi
+    [ $native = 1 ] && H=$(uname -n)
+    for f in select_mask float_select_homes; do
+        "$XC" -q -A x86_64 -O2 -H . -o "$W/$f" tests/fixtures/$f.xc || { echo "FAIL: no x86-64 $f"; fail=1; continue; }
+        got=
+        if [ $native = 1 ]; then
+            got=$("$W/$f")
+        else
+            scp -q "$W/$f" "$H:/tmp/select-mask.$$" &&
+                got=$(ssh "$H" "/tmp/select-mask.$$; rm -f /tmp/select-mask.$$")
+        fi
+        [ "$got" = "$(cat tests/fixtures/$f.expected.out)" ] || { echo "FAIL: $f on $H printed '$got'"; fail=1; }
+    done
 fi
 [ $fail = 0 ] && echo "select-mask: ok"
 exit $fail

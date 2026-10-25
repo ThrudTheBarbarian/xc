@@ -3604,9 +3604,17 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
             // 64-byte .text makes it absolute.
             [out appendString:@"\t.p2align\t6, 0x90\n"];
         [out appendFormat:@"%@:\n", [self blockLabel:bb fn:fn]];
-        for (XTIRInsn* in in bb.instructions)
+        NSArray<XTIRInsn*>* bins = bb.instructions;
+        for (NSUInteger k = 0; k < bins.count; k++)
             {
+            XTIRInsn* in = bins[k];
             loc(in);
+            if (k + 1 < bins.count && [self selPair:in with:bins[k + 1] fn:fn])
+                {
+                [self emitSelectPair:in with:bins[k + 1] fn:fn slot:slot out:out];
+                k++;
+                continue;
+                }
             [self emitInsnSpilling:in fn:fn module:mod slot:slot out:out];
             }
         if (bb.terminator)
@@ -6673,6 +6681,20 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         }
     [self loadF:fv into:d fn:fn slot:slot out:out];
     NSUInteger lbl = sArcLabel++;
+    [self emitSelBranch:in label:lbl fn:fn slot:slot out:out];
+    [self loadF:tv into:d fn:fn slot:slot out:out];
+    [out appendFormat:@".L_fsel_%lu:\n", (unsigned long)lbl];
+    [self storeF:d into:res slot:slot out:out];
+    }
+
+// The branch of a float select: past the move of the true value when the
+// condition does not hold.
++ (void)emitSelBranch:(XTIRInsn*)in label:(NSUInteger)lbl fn:(XTIRFunction*)fn
+                 slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+                  out:(NSMutableString*)out
+    {
+    XTIRValue* res = in.result;
+    NSArray<XTIROperand*>* ops = in.operands;
     XTIRInsn* scmp = sSelCmp ? sSelCmp[@(res.valueId)] : nil;
     if (scmp && ops[0].kind == XTIROperandKindUse && sSelSkip && sSelSkip[@(ops[0].valueId)])
         {
@@ -6697,9 +6719,60 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             }
         [out appendFormat:@"\ttest\t%@, %@\n\tje\t.L_fsel_%lu\n", cr, cr, (unsigned long)lbl];
         }
-    [self loadF:tv into:d fn:fn slot:slot out:out];
+    }
+
+// Two float selects in a row on the same condition (perlin's grad() picks u
+// and v on one `g < 4`) as one branch: both false values in, one test, both
+// true values in. Only when each result has its own xmm home, the two differ,
+// neither is where one of the four arms lives (an early write would destroy
+// it), and the second does not read the first's result.
++ (BOOL)selPair:(XTIRInsn*)a with:(XTIRInsn*)b fn:(XTIRFunction*)fn
+    {
+    if (sVRemat.count != 0 || sVSpill.count != 0)
+        return NO;
+    if (a.opcode != XTIROpSelect || b.opcode != XTIROpSelect || !a.result || !b.result ||
+        a.operands.count < 3 || b.operands.count < 3)
+        return NO;
+    if (![self isFloatKind:a.result.type.kind] || ![self isFloatKind:b.result.type.kind])
+        return NO;
+    XTIROperand* ca = a.operands[0];
+    XTIROperand* cb = b.operands[0];
+    if (ca.kind != XTIROperandKindUse || cb.kind != XTIROperandKindUse || ca.valueId != cb.valueId)
+        return NO;
+    NSString* d1 = sHome[@(a.result.valueId)];
+    NSString* d2 = sHome[@(b.result.valueId)];
+    if (!d1 || !d2 || ![self isXmmHome:d1] || ![self isXmmHome:d2] || [d1 isEqualToString:d2])
+        return NO;
+    NSArray<XTIROperand*>* arms = @[ a.operands[1], a.operands[2], b.operands[1], b.operands[2] ];
+    for (NSUInteger k = 0; k < arms.count; k++)
+        {
+        XTIROperand* o = arms[k];
+        if (o.kind != XTIROperandKindUse)
+            continue;
+        if (k >= 2 && o.valueId == a.result.valueId)
+            return NO;
+        NSString* h = sHome[@(o.valueId)];
+        if (h && ([h isEqualToString:d1] || [h isEqualToString:d2]))
+            return NO;
+        }
+    return YES;
+    }
+
++ (void)emitSelectPair:(XTIRInsn*)a with:(XTIRInsn*)b fn:(XTIRFunction*)fn
+                  slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+                   out:(NSMutableString*)out
+    {
+    NSString* d1 = sHome[@(a.result.valueId)];
+    NSString* d2 = sHome[@(b.result.valueId)];
+    [self loadF:a.operands[2] into:d1 fn:fn slot:slot out:out];
+    [self loadF:b.operands[2] into:d2 fn:fn slot:slot out:out];
+    NSUInteger lbl = sArcLabel++;
+    [self emitSelBranch:a label:lbl fn:fn slot:slot out:out];
+    [self loadF:a.operands[1] into:d1 fn:fn slot:slot out:out];
+    [self loadF:b.operands[1] into:d2 fn:fn slot:slot out:out];
     [out appendFormat:@".L_fsel_%lu:\n", (unsigned long)lbl];
-    [self storeF:d into:res slot:slot out:out];
+    [self storeF:d1 into:a.result slot:slot out:out];
+    [self storeF:d2 into:b.result slot:slot out:out];
     }
 
 // cmov taken when the ICmp predicate is FALSE — a fused Select moves its

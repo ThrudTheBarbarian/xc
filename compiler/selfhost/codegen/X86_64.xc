@@ -6998,6 +6998,13 @@ class X86_64
         for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
             {
             emitLoc((IRInsn*)bb.insns().get(i));
+            if (i + (u32)1 < bb.insns().count()
+                && selPair((IRInsn*)bb.insns().get(i), (IRInsn*)bb.insns().get(i + (u32)1)))
+                {
+                emitSelectPair((IRInsn*)bb.insns().get(i), (IRInsn*)bb.insns().get(i + (u32)1));
+                i = i + (u32)1;
+                continue;
+                }
             emitInsn(fn, bb, (IRInsn*)bb.insns().get(i));
             }
         if (bb.term() != (IRInsn*)0)
@@ -8040,6 +8047,16 @@ class X86_64
         loadF(fv, d);
         u32 lbl = _arcLabel;
         _arcLabel = _arcLabel + (u32)1;
+        emitSelBranch(n, lbl);
+        loadF(tv, d);
+        _out.appendFormat(".L_fsel_%lu:\n", lbl);
+        storeF(d, n.res());
+        }
+
+    // The branch of a float select: past the move of the true value when the
+    // condition does not hold.
+    void emitSelBranch(IRInsn* n, u32 lbl)
+        {
         IRInsn* scmp = _selCmp == (Map*)0 ? (IRInsn*)0 : (IRInsn*)_selCmp.get((Hashable*)n.res());
         IROperand* c0 = (IROperand*)n.ops().get((u32)0);
         if (scmp != (IRInsn*)0 && c0.kind() == (u8)OPK_USE && inSelSkip(c0.val()))
@@ -8066,9 +8083,60 @@ class X86_64
                 }
             _out.appendFormat("\ttest\t%s, %s\n\tje\t.L_fsel_%lu\n", cr.cString(), cr.cString(), lbl);
             }
-        loadF(tv, d);
+        }
+
+    // Two float selects in a row on the same condition (perlin's grad() picks
+    // u and v on one `g < 4`) as one branch: both false values in, one test,
+    // both true values in. Only when each result has its own xmm home, the
+    // two differ, neither is where one of the four arms lives (an early write
+    // would destroy it), and the second does not read the first's result. As
+    // the reference's selPair:with:.
+    bool selPair(IRInsn* a, IRInsn* b)
+        {
+        if ((_vRemat != (Map*)0 && _vRemat.count() != (u32)0) || (_vSpill != (Map*)0 && _vSpill.count() != (u32)0))
+            return false;
+        if (!a.op().equals(String.withCString("Select")) || !b.op().equals(String.withCString("Select")))
+            return false;
+        if (a.res() == (IRValue*)0 || b.res() == (IRValue*)0 || a.ops().count() < (u32)3 || b.ops().count() < (u32)3)
+            return false;
+        if (!isFloatTy(a.res().ty()) || !isFloatTy(b.res().ty()))
+            return false;
+        IROperand* ca = (IROperand*)a.ops().get((u32)0);
+        IROperand* cb = (IROperand*)b.ops().get((u32)0);
+        if (ca.kind() != (u8)OPK_USE || cb.kind() != (u8)OPK_USE || ca.val() == (IRValue*)0 || ca.val() != cb.val())
+            return false;
+        String* d1 = homeOf(a.res());
+        String* d2 = homeOf(b.res());
+        if (d1 == (String*)0 || d2 == (String*)0 || !isXmmHome(d1) || !isXmmHome(d2) || d1.equals(d2))
+            return false;
+        for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)(k < (u32)2 ? a : b).ops().get((u32)1 + (k & (u32)1));
+            if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                continue;
+            if (k >= (u32)2 && o.val() == a.res())
+                return false;
+            String* h = homeOf(o.val());
+            if (h != (String*)0 && (h.equals(d1) || h.equals(d2)))
+                return false;
+            }
+        return true;
+        }
+
+    void emitSelectPair(IRInsn* a, IRInsn* b)
+        {
+        String* d1 = homeOf(a.res());
+        String* d2 = homeOf(b.res());
+        loadF((IROperand*)a.ops().get((u32)2), d1);
+        loadF((IROperand*)b.ops().get((u32)2), d2);
+        u32 lbl = _arcLabel;
+        _arcLabel = _arcLabel + (u32)1;
+        emitSelBranch(a, lbl);
+        loadF((IROperand*)a.ops().get((u32)1), d1);
+        loadF((IROperand*)b.ops().get((u32)1), d2);
         _out.appendFormat(".L_fsel_%lu:\n", lbl);
-        storeF(d, n.res());
+        storeF(d1, a.res());
+        storeF(d2, b.res());
         }
 
     // x86 division: the dividend in eax, the divisor in ecx; the quotient comes
