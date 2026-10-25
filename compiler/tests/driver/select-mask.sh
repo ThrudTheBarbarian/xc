@@ -7,7 +7,8 @@
 # `and; cmp 4; setb` and a `test` per select, and `mov; and; test` for each
 # bit; C perlin 30.2 -> 25.8 G instructions, 107 -> 101 ms on one thread.
 # float_select_homes.xc's grad() has no `and` and tests bits 4, 1 and 2;
-# select_mask.xc and float_select_homes.xc give their answers on Linux x86-64
+# select_sink.xc's true values are made after the branch;
+# the three fixtures give their answers on Linux x86-64
 # (here, or on XC_LINUX_HOST); the two compilers print the same code.
 #
 #   bash tests/driver/select-mask.sh
@@ -17,7 +18,7 @@ PLAT=$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )
 REF=bin/$PLAT/xcc; XC=${XC:-bin/$PLAT/xcc-xc}
 fail=0
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
-for f in float_select_homes select_mask; do
+for f in float_select_homes select_mask select_sink; do
     for c in "$REF" "$XC"; do
         [ -x "$c" ] || continue
         "$c" -q -A x86_64 -O2 -H . -S -o "$W/$f.$(basename "$c").s" tests/fixtures/$f.xc \
@@ -46,11 +47,16 @@ pairs=$(awk '{ gsub(/^[ \t]+/, ""); l[NR] = $0 }
                 l[i+2] ~ /^movaps\t/ && l[i+3] ~ /^movaps\t/ && l[i+4] ~ /^\.L_fsel_[0-9]+:$/) n++
           print n + 0 }' "$S")
 [ "$pairs" -ge 1 ] || { echo "FAIL: no two selects share a branch in float_select_homes"; fail=1; }
+# A true value used only by its select is computed after the branch (the
+# arithmetic between the jump and the label: perlin 94.9 -> 87.4 ms).
+sunk=$(grep -A2 -E '^[[:space:]]*j[a-z]+[[:space:]]+\.L_fsel' "$W/select_sink.$(basename "$XC").s" \
+       | grep -cE '^[[:space:]]*(sub|add|mul|div)s[sd][[:space:]]')
+[ "$sunk" -ge 4 ] || { echo "FAIL: $sunk true values computed after a select's branch in select_sink, want 4 or more"; fail=1; }
 H=${XC_LINUX_HOST:-}
 native=$( [ "$(uname -s)-$(uname -m)" = Linux-x86_64 ] && echo 1 || echo 0 )
 if [ -n "$H" ] || [ $native = 1 ]; then
     [ $native = 1 ] && H=$(uname -n)
-    for f in select_mask float_select_homes; do
+    for f in select_mask float_select_homes select_sink; do
         "$XC" -q -A x86_64 -O2 -H . -o "$W/$f" tests/fixtures/$f.xc || { echo "FAIL: no x86-64 $f"; fail=1; continue; }
         got=
         if [ $native = 1 ]; then

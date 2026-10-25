@@ -45,6 +45,13 @@ static NSSet<NSNumber*>* sFusedCmp = nil;
 // selected values.
 static NSDictionary<NSNumber*, XTIRInsn*>* sSelSkip = nil; // cond id -> its ICmp
 static NSDictionary<NSNumber*, XTIRInsn*>* sSelCmp = nil; // Select id -> its ICmp
+// A float Select's true value made only where it is chosen: an FAdd, FSub,
+// FMul or FDiv in the same block whose one use is that arm is not emitted at
+// its own site; the Select computes it after its branch, into the result
+// (perlin's `c ? 0.0 - u : u` paid the load and the subtract every time,
+// where GCC branches over them). Its operands are read at the Select (the
+// allocator's selInfo hook, keyed by the arm), and its result has no home.
+static NSDictionary<NSNumber*, XTIRInsn*>* sSelSink = nil; // Select id -> its true value's insn
 // Auto-vectorised loops: a Vec-typed SSA value-id → its assigned SSE register
 // (xmm2..xmm15, all caller-saved on System V; vectorised loop bodies contain no
 // calls, so no prologue save is needed; xmm0/xmm1 stay emission scratch).
@@ -2946,6 +2953,7 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
     NSMutableSet<NSNumber*>* fused = [NSMutableSet set];
     NSMutableDictionary<NSNumber*, XTIRInsn*>* skip = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSNumber*, XTIRInsn*>* selCmp = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* selSink = [NSMutableDictionary dictionary];
     if (!hasAsm)
         {
         NSMutableDictionary<NSNumber*, NSNumber*>* uc = [NSMutableDictionary dictionary];
@@ -3145,12 +3153,33 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
                 skip[@(c.valueId)] = use;
                 selCmp[@(in.result.valueId)] = use;
                 }
+            // A float Select's true value computed after its branch (see
+            // sSelSink).
+            for (XTIRInsn* in in b.instructions)
+                {
+                if (in.opcode != XTIROpSelect || !in.result || in.operands.count < 3 ||
+                    ![self isFloatKind:in.result.type.kind])
+                    continue;
+                XTIROperand* t = in.operands[1];
+                if (t.kind != XTIROperandKindUse || uc[@(t.valueId)].integerValue != 1)
+                    continue;
+                XTIRInsn* d = defs[@(t.valueId)];
+                XTIROpcode dop = d ? d.opcode : XTIROpSelect;
+                if (!d || !d.result || d.operands.count != 2 ||
+                    (dop != XTIROpFAdd && dop != XTIROpFSub && dop != XTIROpFMul && dop != XTIROpFDiv))
+                    continue;
+                if (d.result.type.kind != in.result.type.kind || skip[@(t.valueId)] || fold[@(t.valueId)])
+                    continue;
+                skip[@(t.valueId)] = d;
+                selSink[@(in.result.valueId)] = d;
+                }
             }
         }
     sFold = fold;
     sFusedCmp = fused;
     sSelSkip = skip;
     sSelCmp = selCmp;
+    sSelSink = selSink;
     // The given-up vector values are THIS function's: assignVectorRegsFor:
     // returns before it resets them when the function has no vector values
     // (and is not called at all with inline asm), so a function after one that
@@ -3965,6 +3994,10 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
     // An And whose one use is a Select-fused `== 0`: the Select tests its
     // operand against the mask itself (see sSelSkip).
     if (op == XTIROpAnd && res && sSelSkip && sSelSkip[@(res.valueId)])
+        return;
+    // A Select's true value, made after the Select's branch (see sSelSink).
+    if ((op == XTIROpFAdd || op == XTIROpFSub || op == XTIROpFMul || op == XTIROpFDiv) && res && sSelSkip &&
+        sSelSkip[@(res.valueId)])
         return;
 
     switch (op)
@@ -6670,6 +6703,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
     // The result's own home, unless the true value lives there (loading the
     // false value first would destroy it).
     NSString* d = sHome[@(res.valueId)];
+    XTIRInsn* sink = sSelSink ? sSelSink[@(res.valueId)] : nil;
     if (!d || ![self isXmmHome:d])
         d = @"xmm0";
     else if (tv.kind == XTIROperandKindUse &&
@@ -6679,10 +6713,31 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (th && [self isXmmHome:th] && [th isEqualToString:d])
             d = @"xmm0";
         }
+    // A sunk true value is computed into d after the branch: none of its
+    // operands may live in d, which the false value is loaded into first.
+    if (sink)
+        for (XTIROperand* so in sink.operands)
+            if (so.kind == XTIROperandKindUse && [sHome[@(so.valueId)] isEqualToString:d])
+                d = @"xmm0";
     [self loadF:fv into:d fn:fn slot:slot out:out];
     NSUInteger lbl = sArcLabel++;
     [self emitSelBranch:in label:lbl fn:fn slot:slot out:out];
-    [self loadF:tv into:d fn:fn slot:slot out:out];
+    if (sink)
+        {
+        XTIROperand* o1 = sink.operands[1];
+        [self loadF:sink.operands[0] into:d fn:fn slot:slot out:out];
+        NSString* S;
+        NSString* h1 = o1.kind == XTIROperandKindUse ? sHome[@(o1.valueId)] : nil;
+        if (o1.kind == XTIROperandKindUse && !(h1 && [self isXmmHome:h1]) && slot[@(o1.valueId)])
+            S = [NSString stringWithFormat:@"[rbp-%@]", slot[@(o1.valueId)]];
+        else
+            S = [self fsrcFor:o1 fn:fn slot:slot out:out];
+        XTIROpcode sop = sink.opcode;
+        NSString* mn = sop == XTIROpFAdd ? @"add" : sop == XTIROpFSub ? @"sub" : sop == XTIROpFMul ? @"mul" : @"div";
+        [out appendFormat:@"\t%@%@\t%@, %@\n", mn, res.type.kind == XTIRTypeKindF64 ? @"sd" : @"ss", d, S];
+        }
+    else
+        [self loadF:tv into:d fn:fn slot:slot out:out];
     [out appendFormat:@".L_fsel_%lu:\n", (unsigned long)lbl];
     [self storeF:d into:res slot:slot out:out];
     }
@@ -6729,6 +6784,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
 + (BOOL)selPair:(XTIRInsn*)a with:(XTIRInsn*)b fn:(XTIRFunction*)fn
     {
     if (sVRemat.count != 0 || sVSpill.count != 0)
+        return NO;
+    if (sSelSink && (sSelSink[@(a.result.valueId)] || sSelSink[@(b.result.valueId)]))
         return NO;
     if (a.opcode != XTIROpSelect || b.opcode != XTIROpSelect || !a.result || !b.result ||
         a.operands.count < 3 || b.operands.count < 3)

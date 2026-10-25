@@ -5198,6 +5198,7 @@ class X86_64
         _fusedCmp = new Map();
         _selSkip = new Map();
         _selCmp = new Map();
+        _selSink = new Map();
         if (_hasAsm)
             return;
         Map* uc = new Map();
@@ -5444,6 +5445,30 @@ class X86_64
                     }
                 _selSkip.set((Hashable*)c2.val(), (Object*)use2);
                 _selCmp.set((Hashable*)in2.res(), (Object*)use2);
+                }
+            // A float Select's true value computed after its branch (see
+            // _selSink).
+            for (u32 i2 = (u32)0; i2 < bb2.insns().count(); i2 = i2 + (u32)1)
+                {
+                IRInsn* in2 = (IRInsn*)bb2.insns().get(i2);
+                if (!in2.op().equals(String.withCString("Select")) || in2.res() == (IRValue*)0
+                    || in2.ops().count() < (u32)3 || !isFloatTy(in2.res().ty()))
+                    continue;
+                IROperand* t2 = (IROperand*)in2.ops().get((u32)1);
+                if (t2.kind() != (u8)OPK_USE || t2.val() == (IRValue*)0 || useCount(uc, t2.val()) != (u32)1)
+                    continue;
+                IRInsn* d2 = (IRInsn*)defs.get((Hashable*)t2.val());
+                if (d2 == (IRInsn*)0 || d2.res() == (IRValue*)0 || d2.ops().count() != (u32)2)
+                    continue;
+                String* dop = d2.op();
+                if (!dop.equals(String.withCString("FAdd")) && !dop.equals(String.withCString("FSub"))
+                    && !dop.equals(String.withCString("FMul")) && !dop.equals(String.withCString("FDiv")))
+                    continue;
+                if (!d2.res().ty().equals(in2.res().ty()) || _selSkip.get((Hashable*)t2.val()) != (Object*)0
+                    || _fold.get((Hashable*)t2.val()) != (Object*)0)
+                    continue;
+                _selSkip.set((Hashable*)t2.val(), (Object*)d2);
+                _selSink.set((Hashable*)in2.res(), (Object*)d2);
                 }
             }
         }
@@ -7114,6 +7139,11 @@ class X86_64
         // operand against the mask itself (see _selSkip).
         if (n.res() != (IRValue*)0 && op.equals(String.withCString("And")) && inSelSkip(n.res()))
             return;
+        // A Select's true value, made after the Select's branch (see _selSink).
+        if (n.res() != (IRValue*)0 && inSelSkip(n.res())
+            && (op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub"))
+                || op.equals(String.withCString("FMul")) || op.equals(String.withCString("FDiv"))))
+            return;
         if (dispatchCore(n, op))
             return;
         if (dispatchMemory(fn, n, op))
@@ -7903,6 +7933,14 @@ class X86_64
     Map* _fusedCmp;
     Map* _selSkip;
     Map* _selCmp;
+    // A float Select's true value made only where it is chosen: an FAdd,
+    // FSub, FMul or FDiv in the same block whose one use is that arm is not
+    // emitted at its own site; the Select computes it after its branch, into
+    // the result (perlin's `c ? 0.0 - u : u` paid the load and the subtract
+    // every time, where GCC branches over them). Its operands are read at the
+    // Select (the allocator's selInfo hook, keyed by the arm), and its result
+    // has no home. As the reference's sSelSink.
+    Map* _selSink;
 
     static bool isSignedPred(String* p)
         {
@@ -8036,6 +8074,7 @@ class X86_64
         // The result's own home, unless the true value lives there (loading
         // the false value first would destroy it).
         String* d = homeOf(n.res());
+        IRInsn* sink = _selSink == (Map*)0 ? (IRInsn*)0 : (IRInsn*)_selSink.get((Hashable*)n.res());
         if (!isXmmHome(d))
             d = String.withCString("xmm0");
         else if (tv.kind() == (u8)OPK_USE && tv.val() != (IRValue*)0 && tv.val() != fv.val())
@@ -8044,11 +8083,42 @@ class X86_64
             if (isXmmHome(th) && th.equals(d))
                 d = String.withCString("xmm0");
             }
+        // A sunk true value is computed into d after the branch: none of its
+        // operands may live in d, which the false value is loaded into first.
+        if (sink != (IRInsn*)0)
+            for (u32 k = (u32)0; k < sink.ops().count(); k = k + (u32)1)
+                {
+                IROperand* so = (IROperand*)sink.ops().get(k);
+                if (so.kind() == (u8)OPK_USE && so.val() != (IRValue*)0)
+                    {
+                    String* sh = homeOf(so.val());
+                    if (sh != (String*)0 && sh.equals(d))
+                        d = String.withCString("xmm0");
+                    }
+                }
         loadF(fv, d);
         u32 lbl = _arcLabel;
         _arcLabel = _arcLabel + (u32)1;
         emitSelBranch(n, lbl);
-        loadF(tv, d);
+        if (sink != (IRInsn*)0)
+            {
+            IROperand* o1 = (IROperand*)sink.ops().get((u32)1);
+            loadF((IROperand*)sink.ops().get((u32)0), d);
+            String* S;
+            if (o1.kind() == (u8)OPK_USE && o1.val() != (IRValue*)0 && !isXmmHome(homeOf(o1.val()))
+                && hasSlot(o1.val()))
+                S = String.withFormat("[rbp-%lu]", slotOf(o1.val()));
+            else
+                S = fsrcFor(o1);
+            String* sop = sink.op();
+            string mn = sop.equals(String.withCString("FAdd")) ? "add"
+                        : (sop.equals(String.withCString("FSub")) ? "sub"
+                           : (sop.equals(String.withCString("FMul")) ? "mul" : "div"));
+            _out.appendFormat("\t%s%s\t%s, %s\n", mn, n.res().ty().equals(String.withCString("F64")) ? "sd" : "ss",
+                              d.cString(), S.cString());
+            }
+        else
+            loadF(tv, d);
         _out.appendFormat(".L_fsel_%lu:\n", lbl);
         storeF(d, n.res());
         }
@@ -8094,6 +8164,9 @@ class X86_64
     bool selPair(IRInsn* a, IRInsn* b)
         {
         if ((_vRemat != (Map*)0 && _vRemat.count() != (u32)0) || (_vSpill != (Map*)0 && _vSpill.count() != (u32)0))
+            return false;
+        if (_selSink != (Map*)0 && a.res() != (IRValue*)0 && b.res() != (IRValue*)0
+            && (_selSink.get((Hashable*)a.res()) != (Object*)0 || _selSink.get((Hashable*)b.res()) != (Object*)0))
             return false;
         if (!a.op().equals(String.withCString("Select")) || !b.op().equals(String.withCString("Select")))
             return false;

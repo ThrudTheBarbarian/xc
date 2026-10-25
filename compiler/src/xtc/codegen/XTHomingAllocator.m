@@ -166,6 +166,15 @@
                 if (sc)
                     for (XTIROperand* so in sc.operands)
                         recordUse(so);
+                // ...and a true value computed after the Select's branch (the
+                // x86 back end's sSelSink): its operands are read here too.
+                if (insn.operands.count >= 2 && insn.operands[1].kind == XTIROperandKindUse)
+                    {
+                    XTIRInsn* st = selInfo[@(insn.operands[1].valueId)];
+                    if (st)
+                        for (XTIROperand* so in st.operands)
+                            recordUse(so);
+                    }
                 }
             if ([self isCallOpcode:insn.opcode])
                 [callPositions addObject:@(pos)];

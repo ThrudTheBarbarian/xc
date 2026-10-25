@@ -384,6 +384,19 @@ class BitSet
                         if (sc != 0)
                             recordUses((IRInsn*)sc, pos, defs, ue);
                         }
+                    // ...and a true value computed after the Select's branch
+                    // (the x86 back end's _selSink): its operands are read
+                    // here too. As the reference.
+                    if (insn.ops().count() >= (u32)2)
+                        {
+                        IROperand* t1 = (IROperand*)insn.ops().get((u32)1);
+                        if (t1.kind() == (u8)OPK_USE && t1.val() != 0)
+                            {
+                            Object* st = _selInfo.get((Hashable*)Number.with(t1.val().pid()));
+                            if (st != 0)
+                                recordUses((IRInsn*)st, pos, defs, ue);
+                            }
+                        }
                     }
                 if (Homing.isCallOp(insn.op()))
                     _callPos.add((Object*)Number.with(pos));
