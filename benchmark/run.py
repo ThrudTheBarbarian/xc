@@ -133,10 +133,21 @@ def toolchains(host):
                     "swiftc": first_line("swiftc --version 2>&1")}}
     if gpp():
         tc["arm64"]["gcc"] = first_line(gpp() + " --version")
+    # The CPU and the features that change the code xcc emits (SME on arm64,
+    # AVX-512 on x86-64), so results from two machines are never mistaken
+    # for one (0.87 measures arm64 on an M3 Max, which has no SME).
+    brand = first_line("sysctl -n machdep.cpu.brand_string")
+    if brand:
+        sme = first_line("sysctl -n hw.optional.arm.FEAT_SME 2>/dev/null") == "1"
+        tc["arm64"]["cpu"] = "%s (%s SME)" % (brand, "with" if sme else "no")
     if host:
         tc["x86_64"] = {"clang": first_line("clang++ --version", host),
                         "gcc": first_line("g++ --version", host),
                         "swiftc": first_line("swiftc --version 2>&1", host)}
+        model = first_line("grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2-", host)
+        if model:
+            avx = first_line("grep -c -m1 -w avx512f /proc/cpuinfo", host) == "1"
+            tc["x86_64"]["cpu"] = "%s (%s AVX-512)" % (model, "with" if avx else "no")
     return tc
 
 
