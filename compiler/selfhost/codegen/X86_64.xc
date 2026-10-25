@@ -5199,6 +5199,7 @@ class X86_64
         _selSkip = new Map();
         _selCmp = new Map();
         _selSink = new Map();
+        _nonNeg = new Map();
         if (_hasAsm)
             return;
         Map* uc = new Map();
@@ -5445,6 +5446,35 @@ class X86_64
                     }
                 _selSkip.set((Hashable*)c2.val(), (Object*)use2);
                 _selCmp.set((Hashable*)in2.res(), (Object*)use2);
+                }
+            // Non-negative signed 32-bit values (see _nonNeg).
+            for (u32 i2 = (u32)0; i2 < bb2.insns().count(); i2 = i2 + (u32)1)
+                {
+                IRInsn* in2 = (IRInsn*)bb2.insns().get(i2);
+                bool isAnd = in2.op().equals(String.withCString("And"));
+                if ((!isAnd && !in2.op().equals(String.withCString("Add"))) || in2.res() == (IRValue*)0
+                    || in2.ops().count() != (u32)2 || fieldWidth(in2.res().ty()) != (u32)4)
+                    continue;
+                i64 most = (i64)-1;
+                for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1)
+                    {
+                    IROperand* mo = (IROperand*)in2.ops().get(q);
+                    IROperand* other = (IROperand*)in2.ops().get((u32)1 - q);
+                    if (mo.kind() != (u8)OPK_IMMI || mo.imm() < (i64)0 || mo.imm() > (i64)2147483647)
+                        continue;
+                    if (isAnd)
+                        most = mo.imm();
+                    else if (other.kind() == (u8)OPK_USE && other.val() != (IRValue*)0
+                             && _nonNeg.get((Hashable*)other.val()) != (Object*)0)
+                        {
+                        i64 m = ((Number*)_nonNeg.get((Hashable*)other.val())).asI64() + mo.imm();
+                        if (m <= (i64)2147483647)
+                            most = m;
+                        }
+                    break;
+                    }
+                if (most >= (i64)0)
+                    _nonNeg.set((Hashable*)in2.res(), (Object*)Number.with(most));
                 }
             // A float Select's true value computed after its branch (see
             // _selSink).
@@ -6150,7 +6180,8 @@ class X86_64
             IRValue* iv = iop.val();
             String* ihome = homeOf(iv);
             u32 iw = fieldWidth(iv.ty());
-            if (ihome != (String*)0 && iw == (u32)4 && !isSignedTy(iv.ty()))
+            if (ihome != (String*)0 && iw == (u32)4
+                && (!isSignedTy(iv.ty()) || (_nonNeg != (Map*)0 && _nonNeg.get((Hashable*)iv) != (Object*)0)))
                 idxReg = regView(ihome, (u32)8);
             }
         if (idxReg == (String*)0)
@@ -7952,6 +7983,15 @@ class X86_64
     // Select (the allocator's selInfo hook, keyed by the arm), and its result
     // has no home. As the reference's sSelSink.
     Map* _selSink;
+    // A signed 32-bit value known to be non-negative: an And with a mask from
+    // 0 to 2^31 - 1, or such a value plus a constant that keeps it under 2^31
+    // (`X + 1` with X = h & 255: at most 256); the map holds its largest
+    // value. As an index it is read as its 64-bit home directly, as
+    // an unsigned one is (its home was written by a 32-bit op, so the upper
+    // half is clear, and it has no sign to extend). A C program's indices are
+    // all signed (LLVM's i32), and perlin's `perm[X & 255]` paid a movsxd for
+    // each. As the reference's sNonNeg.
+    Map* _nonNeg;
 
     static bool isSignedPred(String* p)
         {

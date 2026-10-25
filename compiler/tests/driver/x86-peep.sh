@@ -9,7 +9,9 @@
 #     add's flags first, and a `mov r, r` straight after a 32-bit write of r
 #     is dropped;
 #   a loop-carried integer is copied from GPR home to GPR home on the back
-#     edge, not through eax.
+#     edge, not through eax;
+#   a signed 32-bit index known non-negative (a mask, plus a constant) is its
+#     own 64-bit register, with no movsxd (C indices are all signed).
 # perlin's avx2 block has none of the float shapes and the whole program none
 # of the integer ones, the two compilers print the same code, and lea_peep.xc (its edge cases) gives its answer on Linux
 # x86-64 (here, or on XC_LINUX_HOST).
@@ -78,6 +80,12 @@ if [ -f "$SRC" ]; then
 else
     echo "x86-peep: no benchmark/par/perlin.xc, the code shapes skipped"
 fi
+# A signed index known non-negative (`t[h & 255]`, `t[(h & 255) + 1]`) is
+# its own 64-bit register: index_nonneg.xc's main (lookups inlined) had 7
+# movsxd and has 4, the top-bit mask and the negative index among them.
+"$XC" -q -A x86_64 -O2 -H . -S -o "$W/in.s" tests/fixtures/index_nonneg.xc || { echo "FAIL: no assembly for index_nonneg"; fail=1; }
+n=$(awk '$0 == "main:" {p=1; next} p && /^[A-Za-z_][A-Za-z0-9_$]*:$/ {p=0} p' "$W/in.s" | grep -c movsxd)
+[ "$n" -le 4 ] || { echo "FAIL: index_nonneg's main sign-extends $n indices, want 4 or fewer"; fail=1; }
 H=${XC_LINUX_HOST:-}
 native=$( [ "$(uname -s)-$(uname -m)" = Linux-x86_64 ] && echo 1 || echo 0 )
 if [ -n "$H" ] || [ $native = 1 ]; then
@@ -89,6 +97,14 @@ if [ -n "$H" ] || [ $native = 1 ]; then
         scp -q "$W/lp" "$H:/tmp/lea-peep.$$" && got=$(ssh "$H" "/tmp/lea-peep.$$; rm -f /tmp/lea-peep.$$")
     fi
     [ "$got" = "$(cat tests/fixtures/lea_peep.expected.out)" ] || { echo "FAIL: lea_peep on $H printed '$got'"; fail=1; }
+    "$XC" -q -A x86_64 -O2 -H . -o "$W/ix" tests/fixtures/index_nonneg.xc || { echo "FAIL: no x86-64 index_nonneg"; fail=1; }
+    got=
+    if [ -f "$W/ix" ] && [ $native = 1 ]; then
+        got=$("$W/ix")
+    elif [ -f "$W/ix" ]; then
+        scp -q "$W/ix" "$H:/tmp/index-nonneg.$$" && got=$(ssh "$H" "/tmp/index-nonneg.$$; rm -f /tmp/index-nonneg.$$")
+    fi
+    [ "$got" = "$(cat tests/fixtures/index_nonneg.expected.out)" ] || { echo "FAIL: index_nonneg on $H printed '$got'"; fail=1; }
 fi
 [ $fail = 0 ] && echo "x86-peep: ok"
 exit $fail

@@ -52,6 +52,13 @@ static NSDictionary<NSNumber*, XTIRInsn*>* sSelCmp = nil; // Select id -> its IC
 // where GCC branches over them). Its operands are read at the Select (the
 // allocator's selInfo hook, keyed by the arm), and its result has no home.
 static NSDictionary<NSNumber*, XTIRInsn*>* sSelSink = nil; // Select id -> its true value's insn
+// A signed 32-bit value known to be non-negative: an And with a mask from 0 to
+// 2^31 - 1, or such a value plus a constant that keeps it under 2^31 (`X + 1`
+// with X = h & 255: at most 256). As an index it is read as its 64-bit home directly, as an unsigned
+// one is (its home was written by a 32-bit op, so the upper half is clear, and
+// it has no sign to extend). A C program's indices are all signed (LLVM's i32),
+// and perlin's `perm[X & 255]` paid a movsxd for each.
+static NSSet<NSNumber*>* sNonNeg = nil;
 // Auto-vectorised loops: a Vec-typed SSA value-id → its assigned SSE register
 // (xmm2..xmm15, all caller-saved on System V; vectorised loop bodies contain no
 // calls, so no prologue save is needed; xmm0/xmm1 stay emission scratch).
@@ -923,7 +930,7 @@ static NSInteger sWin64SretOff = 0;
         XTIRValue* iv = fn.values[@(iop.valueId)];
         NSString* ihome = sHome[@(iop.valueId)];
         NSUInteger iw = iv ? [self fieldWidth:iv.type] : 0;
-        if (ihome && iv && iw == 4 && ![self isSignedKind:iv.type.kind])
+        if (ihome && iv && iw == 4 && (![self isSignedKind:iv.type.kind] || [sNonNeg containsObject:@(iop.valueId)]))
             idxReg = [self regView:ihome width:8];
         }
     if (!idxReg)
@@ -2954,6 +2961,8 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
     NSMutableDictionary<NSNumber*, XTIRInsn*>* skip = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSNumber*, XTIRInsn*>* selCmp = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSNumber*, XTIRInsn*>* selSink = [NSMutableDictionary dictionary];
+    NSMutableSet<NSNumber*>* nonNeg = [NSMutableSet set];
+    NSMutableDictionary<NSNumber*, NSNumber*>* nonNegMax = [NSMutableDictionary dictionary]; // its largest value
     if (!hasAsm)
         {
         NSMutableDictionary<NSNumber*, NSNumber*>* uc = [NSMutableDictionary dictionary];
@@ -3153,6 +3162,35 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
                 skip[@(c.valueId)] = use;
                 selCmp[@(in.result.valueId)] = use;
                 }
+            // Non-negative signed 32-bit values (see sNonNeg).
+            for (XTIRInsn* in in b.instructions)
+                {
+                if ((in.opcode != XTIROpAnd && in.opcode != XTIROpAdd) || !in.result || in.operands.count != 2 ||
+                    [self fieldWidth:in.result.type] != 4)
+                    continue;
+                long long most = -1;
+                for (NSUInteger q = 0; q < 2; q++)
+                    {
+                    XTIROperand* mo = in.operands[q];
+                    XTIROperand* other = in.operands[1 - q];
+                    if (mo.kind != XTIROperandKindImmI || mo.intValue < 0 || mo.intValue > 2147483647)
+                        continue;
+                    if (in.opcode == XTIROpAnd)
+                        most = (long long)mo.intValue;
+                    else if (other.kind == XTIROperandKindUse && nonNegMax[@(other.valueId)])
+                        {
+                        long long m = nonNegMax[@(other.valueId)].longLongValue + (long long)mo.intValue;
+                        if (m <= 2147483647)
+                            most = m;
+                        }
+                    break;
+                    }
+                if (most >= 0)
+                    {
+                    [nonNeg addObject:@(in.result.valueId)];
+                    nonNegMax[@(in.result.valueId)] = @(most);
+                    }
+                }
             // A float Select's true value computed after its branch (see
             // sSelSink).
             for (XTIRInsn* in in b.instructions)
@@ -3180,6 +3218,7 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
     sSelSkip = skip;
     sSelCmp = selCmp;
     sSelSink = selSink;
+    sNonNeg = nonNeg;
     // The given-up vector values are THIS function's: assignVectorRegsFor:
     // returns before it resets them when the function has no vector values
     // (and is not called at all with inline asm), so a function after one that
