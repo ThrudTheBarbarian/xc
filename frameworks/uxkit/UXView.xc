@@ -20,6 +20,11 @@
 // Raised by setNeedsDisplay, lowered by the run loop after it repaints.
 bool gNeedsDisplay;
 
+// UXView.trackMouse's work, installed by UXApplication (which can reach the driver and repaint):
+// the view and the press, as pointers.  0 until an application exists.
+typedef void uxTrackMouse_t(pointer view, pointer press);
+uxTrackMouse_t* gUXTrackMouse;
+
 class UXView : UXResponder
     {
     weak : UXViewTree* owner; // the tree we live in (it holds us, so weak)
@@ -378,6 +383,19 @@ class UXView : UXResponder
             owner.markDirty(abs);
             }
         gNeedsDisplay = true;
+        }
+
+    // Follow a press to its release, called from mouseDown: the view's mouseDragged gets each move and
+    // its mouseUp the release, in the press's coordinates, with a repaint after each move.  On the
+    // desktops the drag is followed here, before trackMouse returns; on the touch backends the same
+    // calls arrive afterwards as events, so trackMouse returns at once.  Call it before anything that
+    // takes the release itself (a modal alert, say).
+    void trackMouse(UXEvent* press)
+        {
+        if (gUXTrackMouse != (uxTrackMouse_t*)0)
+            {
+            gUXTrackMouse((pointer)self, (pointer)press);
+            }
         }
 
     // ---- hit-testing ---------------------------------------------------------

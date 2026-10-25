@@ -5547,3 +5547,24 @@ int ux_ak_test_busy(void) // tests: 1 while an activity is open
     {
     return g_busy_activity != nil;
     }
+
+/* Test seam: post one mouse event at window-local (tx, ty) -- 1 press, 2 release, 3 drag -- so a
+ * headless gate can feed a drag to code that follows it with ux_ak_drag_next. */
+void ux_ak_post_mouse(int handle, int kind, int tx, int ty)
+    {
+    NSWindow* win = g_win[handle];
+    NSView* v = g_view[handle];
+    if (!win || !v)
+        return;
+    NSEventType et = kind == 1 ? NSEventTypeLeftMouseDown : kind == 2 ? NSEventTypeLeftMouseUp : NSEventTypeLeftMouseDragged;
+    NSEvent* e = [NSEvent mouseEventWithType:et
+                                    location:[v convertPoint:NSMakePoint(tx, ty) toView:nil]
+                               modifierFlags:0
+                                   timestamp:0
+                                windowNumber:[win windowNumber]
+                                     context:nil
+                                 eventNumber:0
+                                  clickCount:1
+                                    pressure:1.0];
+    [NSApp postEvent:e atStart:NO];
+    }

@@ -67,6 +67,7 @@ class UXApplication : UXResponder
         turnMs = (i32)0;
         driverCallsTurn = false;
         busyCount = (i32)0;
+        gUXTrackMouse = &uxTrackMouse;
 #ifdef UX_PLATFORM_DEFAULT
         // A program built with UXPlatform (or UXKit) gets the driver for its target here, so its
         // main never names one; a program that has chosen a driver already keeps it.
@@ -631,6 +632,42 @@ class UXApplication : UXResponder
     // The running application, for code that must repaint mid-modal-loop (a table drag-select or a
     // scrollbar thumb drag) where the run loop is blocked and cannot reach displayIfNeeded itself.
     UXApplication* gApp;
+
+// UXView.trackMouse: where the driver tracks a drag modally (the desktops, GEM, the web), follow it to
+// the release with trackDragStep, handing the view each move and then the release.  Elsewhere the
+// moves and the release reach the view as events, so there is nothing to do.
+void uxTrackMouse(pointer vp, pointer ep)
+    {
+    UXView* v = (UXView*)(Object*)vp;
+    UXEvent* press = (UXEvent*)(Object*)ep;
+    if (gDriver == (UXViewDriver*)0 || !gDriver.dragTrackingIsModal() || v == (UXView*)0)
+        {
+        return;
+        }
+    i32 x = press != (UXEvent*)0 ? (i32)press.x : (i32)0;
+    i32 y = press != (UXEvent*)0 ? (i32)press.y : (i32)0;
+    UXEvent* e = new UXEvent();
+    e.handle = press != (UXEvent*)0 ? press.handle : (i32)0;
+    e.kind = (u8)UXEventMouseDragged;
+    i32 nx = x;
+    i32 ny = y;
+    while (gDriver.trackDragStep(&nx, &ny) != (i32)0)
+        {
+        x = nx;
+        y = ny;
+        e.x = (i16)x;
+        e.y = (i16)y;
+        v.mouseDragged(e);
+        if (gApp != (UXApplication*)0)
+            {
+            gApp.displayIfNeeded();
+            }
+        }
+    e.kind = (u8)UXEventMouseUp; // where the pointer last was: not every platform reports the release's point
+    e.x = (i16)x;
+    e.y = (i16)y;
+    v.mouseUp(e);
+    }
 
 #if UX_HAS_RUNLOOP
 // The driver's posted hook (UXViewDriver.setPostedHook): run what other threads posted to
