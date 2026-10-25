@@ -220,6 +220,9 @@ export default defineConfig({
 			description:
 				'xcc, the compiler and toolchain for xc — a modern, typed, class-based C-like language — compiled through a shared SSA intermediate representation to multiple backends: native arm64, x86-64, arm9 and win64, WebAssembly, and a banked-6502 target.',
 			customCss: ['./src/styles/xtc.css'],
+			// The grammar pages' `bnf` blocks: Shiki has no grammar language,
+			// so plain text, without a warning for every copy of the page.
+			expressiveCode: { shiki: { langAlias: { bnf: 'txt' } } },
 			// Each page's sidebar trimmed to its own tree (versions-sidebar.mjs).
 			routeMiddleware: './src/routeData.ts',
 			// Browser-tab icon, cropped to the golden jigsaw piece (see public/).
