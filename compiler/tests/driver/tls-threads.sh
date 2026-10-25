@@ -3,8 +3,8 @@
 # PSA's random generator and key slots are shared by every TLS connection, and
 # without MBEDTLS_THREADING_C an xcd serving two programs at once failed both
 # handshakes now and then (7 runs in 100 on a loaded 32-thread host; none in
-# 100 with threading). Linux, Android and iOS (pthreads; win64 is still
-# without). The libraries are prebuilt, so the check is that the
+# 100 with threading). Linux, Android and iOS over pthreads, win64 over SRW
+# locks. The libraries are prebuilt, so the check is that the
 # crypto core uses pthread mutexes; the race itself is remote.sh's
 # "two programs".
 #
@@ -20,6 +20,14 @@ for t in linux android ios; do
     n=$("$NM" "$D/libtfpsacrypto.a" 2>/dev/null | grep -c 'pthread_mutex_lock')
     [ "${n:-0}" -gt 0 ] || { echo "FAIL tls-threads: $D/libtfpsacrypto.a is built without threading"; fail=1; }
 done
+# win64: threading over SRW locks (MBEDTLS_THREADING_ALT), so the hook the
+# shim calls is in the library and pthreads are not.
+D=../frameworks/3p/tls/mbedtls-win64
+if [ -f "$D/libtfpsacrypto.a" ]; then
+    seen=$((seen+1))
+    "$NM" "$D/libtfpsacrypto.a" 2>/dev/null | grep -q 'mbedtls_threading_set_alt' \
+        || { echo "FAIL tls-threads: $D/libtfpsacrypto.a is built without threading"; fail=1; }
+fi
 [ $seen -gt 0 ] || { echo "tls-threads: no vendored Mbed TLS, skipped"; exit 0; }
 [ $fail = 0 ] && echo "tls-threads: ok"
 exit $fail

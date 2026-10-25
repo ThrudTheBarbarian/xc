@@ -75,7 +75,10 @@ if [ -f "$MBWIN/libmbedtls.a" ]; then
     # mingw's own printf family (__USE_MINGW_ANSI_STDIO, its default) needs
     # its C runtime start-up, which an xc DLL does not have; the ucrt one is
     # what xc programs already call. The vendored Mbed TLS is built the same.
-    if "$WINCC" -c -O2 -D__USE_MINGW_ANSI_STDIO=0 -I"$MB/include" tlsshim.c -o "$TMP/tlsshim-win64.o" \
+    # The win64 libraries' user configuration (threading over SRW locks):
+    # the shim must see the same, or its view of Mbed TLS's structures differs.
+    if "$WINCC" -c -O2 -D__USE_MINGW_ANSI_STDIO=0 -I"$HERE/win64" '-DTF_PSA_CRYPTO_USER_CONFIG_FILE="tls_win64_config.h"' \
+           -I"$MB/include" tlsshim.c -o "$TMP/tlsshim-win64.o" \
        && "$WINAR" rcs "$TMP/libtlsshim-win64.a" "$TMP/tlsshim-win64.o" \
        && "$XCC" --emit-lib -A win64 -I xc -o "$TMP/libtls.dll" xc/tls_lib.xc \
            -Wl,"$TMP/libtlsshim-win64.a" \

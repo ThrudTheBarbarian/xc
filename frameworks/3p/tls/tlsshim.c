@@ -19,9 +19,38 @@
 #include <wincrypt.h>
 #endif
 
+#if defined(_WIN32) && defined(MBEDTLS_THREADING_ALT)
+// The PSA core's mutexes on win64 (tls_win64_config.h): SRW locks and
+// condition variables, which Windows has without an extra DLL. Mbed TLS
+// unlocks from the locking thread and never locks twice, so an exclusive SRW
+// lock is enough. mbedtls_platform_mutex_t is one pointer, as an SRWLOCK is.
+#include <mbedtls/threading.h>
+static int xt_mutex_init(mbedtls_platform_mutex_t *m) { InitializeSRWLock((PSRWLOCK)m); return 0; }
+static void xt_mutex_destroy(mbedtls_platform_mutex_t *m) { (void)m; }
+static int xt_mutex_lock(mbedtls_platform_mutex_t *m) { AcquireSRWLockExclusive((PSRWLOCK)m); return 0; }
+static int xt_mutex_unlock(mbedtls_platform_mutex_t *m) { ReleaseSRWLockExclusive((PSRWLOCK)m); return 0; }
+static int xt_cond_init(mbedtls_platform_condition_variable_t *c) { InitializeConditionVariable((PCONDITION_VARIABLE)c); return 0; }
+static void xt_cond_destroy(mbedtls_platform_condition_variable_t *c) { (void)c; }
+static int xt_cond_signal(mbedtls_platform_condition_variable_t *c) { WakeConditionVariable((PCONDITION_VARIABLE)c); return 0; }
+static int xt_cond_broadcast(mbedtls_platform_condition_variable_t *c) { WakeAllConditionVariable((PCONDITION_VARIABLE)c); return 0; }
+static int xt_cond_wait(mbedtls_platform_condition_variable_t *c, mbedtls_platform_mutex_t *m) {
+    return SleepConditionVariableSRW((PCONDITION_VARIABLE)c, (PSRWLOCK)m, INFINITE, 0) ? 0 : MBEDTLS_ERR_THREADING_USAGE_ERROR;
+}
+#endif
+
 static int g_psa = 0;
 static int ensure_psa(void) {
-    if (!g_psa) { if (psa_crypto_init() != PSA_SUCCESS) return -1; g_psa = 1; }
+    if (!g_psa) {
+#if defined(_WIN32) && defined(MBEDTLS_THREADING_ALT)
+        // Before any other Mbed TLS call, once: the first TLS object a
+        // program makes, on its main thread.
+        mbedtls_threading_set_alt(xt_mutex_init, xt_mutex_destroy, xt_mutex_lock, xt_mutex_unlock,
+                                  xt_cond_init, xt_cond_destroy, xt_cond_signal, xt_cond_broadcast,
+                                  xt_cond_wait);
+#endif
+        if (psa_crypto_init() != PSA_SUCCESS) return -1;
+        g_psa = 1;
+    }
     return 0;
 }
 

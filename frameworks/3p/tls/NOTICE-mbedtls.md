@@ -26,7 +26,13 @@ Android and iOS as above (NDK r27, API level 21, debug sections stripped;
 generator and key slots are shared by every connection, and without threading
 two handshakes at once could both fail (a daemon serving two programs). The
 shim is compiled against headers with threading on, so the libraries must
-match. The win64 libraries do not have it yet.
+match. The win64 libraries have it over Windows SRW locks instead of pthreads
+(which Windows has only through an extra DLL): built with
+`-DTF_PSA_CRYPTO_USER_CONFIG_FILE="tls_win64_config.h"` and `-I win64/`
+(`win64/tls_win64_config.h` switches MBEDTLS_THREADING_PTHREAD off and
+MBEDTLS_THREADING_ALT on; `win64/threading_alt.h` declares the two types),
+and the shim installs the lock functions before psa_crypto_init. The win64
+shim is compiled with the same flags, so both see the same structures.
 
 - **Licence:** dual **Apache-2.0 OR GPL-2.0-or-later** — the user chooses.
   Full text in `LICENSE-mbedtls.txt`.
