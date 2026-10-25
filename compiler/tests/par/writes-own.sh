@@ -10,8 +10,9 @@
 # overwrites ys (reported), one writes half of zs (whose other half must
 # survive), one reads acc as it writes it. The CUDA run of that block, on an
 # RTX 5080: 7.2 -> 3.6 ms; Vulkan 10.4 -> 9.5.
-# Here: the CPU answer, and on a Mac the Metal one with its report; on the
-# Windows host (XTC_WIN64_HOST) CUDA and Vulkan with theirs.
+# Here: the CPU answer, on a Mac the Metal one with its report, and one
+# through a worker daemon on this machine; on the Windows host
+# (XTC_WIN64_HOST) CUDA and Vulkan with theirs.
 #
 #   [XTC_WIN64_HOST=<host>] bash tests/par/writes-own.sh
 set -u
@@ -36,6 +37,23 @@ check() {   # $1: label, $2: the run's output
 }
 if [ "$(uname -s)" = Darwin ]; then
     check Metal "$(XC_PAR=gpu XC_PAR_REPORT=1 "$W/p" 2>&1)"
+fi
+# Through a worker daemon on this machine (protocol 7): the array's bytes
+# are not sent, the daemon makes its own empty copy and does not send it to
+# its device either, and the answer is the local one.
+if "$XC" -q -O2 -H . -o "$W/xcd" selfhost/tools/xcd.xc > "$W/xcd.b" 2>&1; then
+    PORT=$((47000 + RANDOM % 2000))
+    mkdir -p "$W/home" "$W/set"
+    XCD_HOME="$W/home" XC_PAR_REPORT=1 "$W/xcd" -port $PORT -no-mdns > "$W/xcd.log" 2>&1 &
+    XPID=$!
+    for k in 1 2 3 4 5 6 7 8 9 10; do grep -q 'serving' "$W/xcd.log" 2>/dev/null && break; sleep 1; done
+    got=$(XCC_SETTINGS_DIR="$W/set" XC_PAR_REMOTE=127.0.0.1:$PORT XC_PAR=all "$W/p" 2>/dev/null | tail -1)
+    kill $XPID 2>/dev/null; wait $XPID 2>/dev/null
+    [ "$got" = "$WANT" ] || { echo "FAIL writes-own: through the daemon gives '$got'"; fail=1; }
+    grep -q 'written whole on the device, not sent' "$W/xcd.log" \
+        || { echo "FAIL writes-own: the daemon was sent ys, or did not run it whole"; fail=1; }
+else
+    echo "FAIL writes-own: xcd does not build"; fail=1
 fi
 WH=${XTC_WIN64_HOST:-}
 if [ -n "$WH" ]; then

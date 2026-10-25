@@ -76,7 +76,7 @@
 #import "Base64.xc"
 #import "Bundle.xc"
 
-#define PAR_REMOTE_PROTO 6
+#define PAR_REMOTE_PROTO 7
 
 // This machine's own identity, the same for every process on it: the
 // daemon sends it in HELLO, and a program skips a daemon it found through
@@ -845,7 +845,10 @@ class ParWire
             // Sliced: its footprint is known, so each tile brings the
             // elements it reads and the whole array stays home.
             ParWire.putU8(d, l.bufFp[i] != (i64)0 ? (u8)1 : (u8)0);
-            if (arrays && l.bufFp[i] == (i64)0)
+            // Overwritten whole (bufOut): its old bytes are never read, so
+            // they stay home (protocol 7).
+            ParWire.putU8(d, l.bufOut[i] != (i64)0 ? (u8)1 : (u8)0);
+            if (arrays && l.bufFp[i] == (i64)0 && l.bufOut[i] == (i64)0)
                 d.appendBytes(*(u8**)(obj + l.bufOff[i]), (u32)l.bufLen[i]);
             }
         ParWire.putU32(d, l.nglob);
@@ -2000,6 +2003,7 @@ class ParRemoteChunk : ParChunk
     i64 _bufLen[16];
     bool _bufRo[16];
     bool _bufSliced[16];    // its slices come with each tile
+    bool _bufAll[16];       // overwritten whole: its bytes were not sent
     i64 _bufIvar[16];
     u32 _nbuf;
     Array* _globs;          // Data, per global
@@ -2109,6 +2113,15 @@ class ParRemoteChunk : ParChunk
                 return _bufRo[i];
         return false;
         }
+    // The program's block overwrites this array whole (its bytes were not
+    // sent), so this device need not be sent it either.
+    bool gpuWritesAllOwn(i32 k)
+        {
+        for (u32 i = (u32)0; i < _nbuf; i = i + (u32)1)
+            if (_bufIvar[i] == (i64)k)
+                return _bufAll[i];
+        return false;
+        }
     i32 globIndex(u8* name)
         {
         for (u32 i = (u32)0; i < _nglob; i = i + (u32)1)
@@ -2168,8 +2181,9 @@ class ParRemoteChunk : ParChunk
             c._bufLen[i] = ParWire.rdI64(p, at);
             c._bufRo[i] = ParWire.rdU8(p, at) != (u8)0;
             c._bufSliced[i] = ParWire.rdU8(p, at) != (u8)0;
+            c._bufAll[i] = ParWire.rdU8(p, at) != (u8)0;
             Data* b = Data.withLength((u32)c._bufLen[i] + (u32)16);
-            if (arrays && !c._bufSliced[i])
+            if (arrays && !c._bufSliced[i] && !c._bufAll[i])
                 {
                 memcpy((pointer)b.bytes(), (pointer)(p + *at), (u64)c._bufLen[i]);
                 *at = *at + (u32)c._bufLen[i];
