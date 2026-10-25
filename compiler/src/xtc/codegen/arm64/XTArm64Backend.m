@@ -6831,7 +6831,9 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             // `(u64)12345678900.5` both came back 0 (bug 173). ARMv8 fcvtz
             // saturates a >2^63 double to INT64_MIN/MAX; the sub-64-bit
             // saturate-to-0 rule does not reach the widest integer.
-            if (w < 8) {
+            // UNCHECKED (C's casts, out of range undefined): no check, the
+            // low bits of the 64-bit conversion, as clang emits.
+            if (w < 8 && insn.predicate != XTIRConvUnchecked) {
                 NSString *ext;
                 if (toSigned) ext = (w==1) ? @"sxtb x17, w16"
                                    : (w==2) ? @"sxth x17, w16" : @"sxtw x17, w16";

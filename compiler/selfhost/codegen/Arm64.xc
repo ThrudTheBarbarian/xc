@@ -4986,7 +4986,10 @@ class Arm64
         // NARROWER than the 64-bit fcvtz result. For a 64-bit destination the
         // fcvtz value IS the result; the old `else` branch re-extended the low
         // 32 BITS, so every value above 2^32 was csel'd to 0 (bug 173).
-        if (w < (u32)8) {
+        // UNCHECKED (C's casts, out of range undefined): no check, the low
+        // bits of the 64-bit conversion, as clang emits.
+        bool unchecked = n.pred() != (String*)0 && n.pred().equals(String.withCString("unchecked"));
+        if (w < (u32)8 && !unchecked) {
             String* ext;
             if (sgn) ext = String.withCString(w == (u32)1 ? "sxtb x17, w16"
                                             : w == (u32)2 ? "sxth x17, w16" : "sxtw x17, w16");

@@ -44,5 +44,17 @@ if [ ! -s "$W/f86.s" ] || ! grep -q -E '^_?to_u32:' "$W/f86.s"; then
 elif [ "$(checked "$W/f86.s")" != 0 ]; then
     echo "FAIL c-fptoui: the port's -S to_u32 checks its result"; fail=1
 fi
+# arm64: the conversion alone, without the fit check's csel (both compilers).
+"$XC" -q -A arm64 -O2 -S -o "$W/a64.s" tests/c/fptoui.c
+if [ "$(awk '/^_?to_u32:/,/ret/' "$W/a64.s" | grep -c 'csel')" != 0 ]; then
+    echo "FAIL c-fptoui: the port's arm64 to_u32 checks its result"; fail=1
+fi
+CG64=bin/$PLAT/xcc-cg-arm64
+if [ -x "$CG64" ]; then
+    "$XC" -q -A arm64 -O2 --emit-ir -o "$W/x64" tests/c/fptoui.c 2> "$W/c64.ir"
+    "$CG64" -O2 -q -o "$W/ref64.s" "$W/c64.ir"
+    [ "$(awk '/^_?to_u32:/,/ret/' "$W/ref64.s" | grep -c 'csel')" = 0 ] \
+        || { echo "FAIL c-fptoui: the reference's arm64 to_u32 checks its result"; fail=1; }
+fi
 [ $fail = 0 ] && echo "c-fptoui: ok"
 exit $fail
