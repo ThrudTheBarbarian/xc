@@ -8,7 +8,7 @@ description: A par block's tiles on a GPU in another machine, served by xcd, bes
 RTX 5080, on the local network, and two machines use it: an Apple MacBook Pro
 with an M4 Max, whose own GPU is fast, and a Linux machine with an AMD Ryzen 9
 9955HX, whose only GPU is integrated. Each figure is measured with the
-released 0.86 `xcc`.
+released 0.87 `xcc`.
 
 Each program runs four ways: on the machine alone (`XC_PAR_REMOTE=none`), on
 the remote GPU alone (`XC_PAR_WORKERS=remote`), on every GPU, the machine's
@@ -17,7 +17,7 @@ GPU among its choices. Each run starts from empty settings, so `auto`
 measures afresh, and a remote-only figure counts only if every block ran on
 the remote GPU. Every mode's checksum must agree.
 
-**Apple M4 Max (Metal), using the remote RTX 5080** (ms; best of eight runs)
+**Apple M4 Max (Metal), using the remote RTX 5080** (ms; best of eight runs; measured with 0.86)
 
 | benchmark | this machine | the remote GPU | every GPU | `auto` |
 |---|---|---|---|---|
@@ -30,10 +30,10 @@ the remote GPU. Every mode's checksum must agree.
 
 | benchmark | this machine | the remote GPU | every GPU | `auto` |
 |---|---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 942 | 309 | 251 | 302 |
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 2.6 | 654 µs | 2.9 | 792 µs |
-| [`md5`](/compiler/benchmark-sources/#md5) | 16.0 | 71.4 | 52.5 | 48.7 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 2.9 | 372 | 136 | 3.7 |
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 928 | 300 | 246 | 295 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 2.5 | 836 µs | 2.8 | 972 µs |
+| [`md5`](/compiler/benchmark-sources/#md5) | 9.8 | 43.6 | 32.9 | 30.9 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 2.4 | 356 | 127 | 3.3 |
 
 
 What the tables show:

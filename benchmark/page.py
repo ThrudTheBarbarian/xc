@@ -46,16 +46,63 @@ def general(cur):
     return {b: d for b, d in cur.items() if b not in SEPARATE}
 
 
-def load(v):
+# --mac m3max: the arm64 figures come from benchmark/m3max-<v>/ (measured on
+# an M3 Max, so the M4 Max stays free for compiling, 0.87), the x86-64 ones
+# from benchmark/<v>/ as before. One machine's figures per target: an arm64
+# entry from <v>/ is dropped, never mixed with the M3 Max's, and a release the
+# M3 Max has not timed has no arm64 figures.
+MAC_TREE = None
+MACHINES = {
+    None: ("Apple M4 Max", "an Apple MacBook Pro with an M4 Max (12 performance and 4\n  efficiency cores)", True),
+    "m3max": ("Apple M3 Max", "an Apple MacBook Pro with an M3 Max (12 performance and 4\n  efficiency cores, a 40-core GPU, no SME matrix unit)", False),
+}
+
+
+def mac_name():
+    return MACHINES[MAC_TREE][0]
+
+
+def merged(v):
+    """A release's results.json, its arm64 entries taken from MAC_TREE's when set."""
     with open(os.path.join(ROOT, v, "results.json")) as fh:
-        return json.load(fh)["net"]
+        d = json.load(fh)
+    if MAC_TREE is None:
+        return d
+    ap = os.path.join(ROOT, "%s-%s" % (MAC_TREE, v), "results.json")
+    arm = None
+    if os.path.exists(ap):
+        with open(ap) as fh:
+            arm = json.load(fh)
+    for key in ("net", "raw"):
+        tbl = d.get(key, {})
+        for b in tbl:
+            for o in tbl[b]:
+                tbl[b][o] = {l: t for l, t in tbl[b][o].items() if l.endswith("_x86_64")}
+        if arm:
+            for b, opts in arm.get(key, {}).items():
+                for o, langs in opts.items():
+                    for l, t in langs.items():
+                        if not l.endswith("_x86_64"):
+                            tbl.setdefault(b, {}).setdefault(o, {})[l] = t
+    tc = d.setdefault("toolchains", {})
+    tc.pop("arm64", None)
+    if arm and arm.get("toolchains", {}).get("arm64"):
+        tc["arm64"] = arm["toolchains"]["arm64"]
+    return d
+
+
+def has_mac(v):
+    return MAC_TREE is None or os.path.exists(os.path.join(ROOT, "%s-%s" % (MAC_TREE, v), "results.json"))
+
+
+def load(v):
+    return merged(v)["net"]
 
 
 def toolchain_notes(v):
     """One clause per machine naming the compilers the results were measured
     against, from the versions run.py recorded; empty for results without them."""
-    with open(os.path.join(ROOT, v, "results.json")) as fh:
-        tc = json.load(fh).get("toolchains", {})
+    tc = merged(v).get("toolchains", {})
     def short(s):
         # "Apple clang version 17.0.0 (clang-1700...)" -> "Apple clang 17.0.0";
         # "gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0" -> "GCC 15.2.0"; Swift's
@@ -176,6 +223,9 @@ def version_switch(hist, suffix, title, versions, key):
     """The per-benchmark chart for each release, one shown at a time, chosen
     by a row of release labels (the latest at first). CSS only: each label is
     a radio button's, and the checked one's chart is displayed."""
+    # A release with nothing to compare against here (the M3 Max history
+    # has only xc before 0.87) gets no label: its chart would be empty.
+    versions = [v for v in versions if any(r[2] for r in ratio_rows(hist[v], suffix))]
     latest = versions[-1]
     order = [r[1] for r in sorted(ratio_rows(hist[latest], suffix), key=lambda r: -r[0])]
     tag = lambda v: "%s-%s" % (key, v.lstrip("v").replace(".", "-"))
@@ -286,7 +336,7 @@ def table(cur, suffix):
 
 
 def summary(cur):
-    out = ["| xc compared with | arm64 (Apple M4 Max) | x86-64 (AMD Ryzen 9 9955HX) |", "|---|---|---|"]
+    out = ["| xc compared with | arm64 (%s) | x86-64 (AMD Ryzen 9 9955HX) |" % mac_name(), "|---|---|---|"]
     for l, name, _ in LANGS:
         vals = []
         for _, suf in PLATFORMS:
@@ -303,7 +353,7 @@ def separate(cur):
     for b in SEPARATE:
         d = cur.get(b, {}).get("O3", {})
         rows = ["| `%s` | xc | Objective-C | C++ (clang) | C++ (GCC) | Swift |" % b, "|---|---|---|---|---|---|"]
-        for (pname, suf), mach in zip(PLATFORMS, ("Apple M4 Max", "AMD Ryzen 9 9955HX")):
+        for (pname, suf), mach in zip(PLATFORMS, (mac_name(), "AMD Ryzen 9 9955HX")):
             x = d.get("xc" + suf)
             if not x:
                 continue
@@ -343,14 +393,20 @@ def standing(cur):
 # (key, description, multi_gpu): multi_gpu is True only where the machine has
 # two or more GPUs, so the "all GPUs" column (combining them) means something.
 # On a one-GPU machine it would just repeat the "GPU" column, so it is dropped.
-PAR_MACHINES = (("mac", "Apple MacBook Pro, M4 Max (12 performance and 4 efficiency cores), its GPU through Metal", False),
+PAR_MACHINES = (("mac", "Apple MacBook Pro, %s (12 performance and 4 efficiency cores), its GPU through Metal", False),
                 ("linux", "AMD Ryzen 9 9955HX (16 cores, 32 threads), Linux, its integrated Radeon 610M "
                           "(2 compute units, 128 shader lanes) through Vulkan", False),
                 # CUDA's default device is the faster card (an RTX 5080 since 2026-10-12), Vulkan's the
                 # first it enumerates (the RTX 3090): the two columns are two cards.
                 ("windows", "AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 through CUDA "
                             "and an RTX 3090 through Vulkan", True),
-                ("browser", "Chrome on the Apple M4 Max: wasm32 (one thread) and WebGPU (from 0.73)", False))
+                ("browser", "Chrome on the Apple M4 Max: wasm32 (one thread) and WebGPU (from 0.73); "
+                            "measured with 0.86, as the M3 Max has no Chrome", False))
+
+
+def par_mac():
+    """The Mac the par figures' "mac" column was measured on."""
+    return "M3 Max, a 40-core GPU" if MAC_TREE == "m3max" else "M4 Max"
 
 
 def ms(us):
@@ -374,7 +430,7 @@ def autopar_tables(version):
     if os.path.exists(hp):
         with open(hp) as fh:
             hand = json.load(fh)
-    names = {"mac": "Apple M4 Max, Metal", "linux": "AMD Ryzen 9 9955HX, its integrated Radeon through Vulkan",
+    names = {"mac": "Apple %s, Metal" % par_mac().split(",")[0], "linux": "AMD Ryzen 9 9955HX, its integrated Radeon through Vulkan",
              "windows": "Windows, RTX 5080 through CUDA"}
     out = []
     for m in ("mac", "linux", "windows"):
@@ -409,7 +465,9 @@ def remote_tables(version):
         rows = [(b, r[m]) for b, r in res.items() if m in r]
         if not rows:
             continue
-        out.append("**%s** (ms; best of eight runs)\n" % names[m])
+        older = sorted({r.get("measured_with") for _, r in rows} - {None})
+        note = "; measured with %s" % ", ".join(older) if older else ""
+        out.append("**%s** (ms; best of eight runs%s)\n" % (names[m], note))
         out.append("| benchmark | this machine | the remote GPU | every GPU | `auto` |")
         out.append("|---|---|---|---|---|")
         for b, r in rows:
@@ -430,6 +488,7 @@ def par_tables(version):
         res = json.load(fh)
     out = []
     for m, name, multi_gpu in PAR_MACHINES:
+        name = name % par_mac() if "%s" in name else name
         # GPU-saturation benchmarks (no CPU figures) have their own section.
         rows = [(b, r[m]) for b, r in sorted(res.items()) if m in r and "serial" in r[m]]
         if not rows:
@@ -516,6 +575,7 @@ def gpu_saturation(version):
         return ""
     out = [GPU_SAT_INTRO]
     for m, name, multi_gpu in PAR_MACHINES:
+        name = name % par_mac() if "%s" in name else name
         rows = [(b, res[b][m]) for b in sorted(gpu_benches) if m in res[b]]
         if not rows:
             continue
@@ -654,7 +714,11 @@ def main():
     ap.add_argument("--current", default="v0.8")
     ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66,v0.7,v0.71,v0.72,v0.73,v0.74,v0.75,v0.8")
     ap.add_argument("--release", default="0.8")
+    ap.add_argument("--mac", default=None, choices=["m3max"],
+                    help="the arm64 figures from benchmark/<mac>-<version>/ (the Mac they were measured on)")
     a = ap.parse_args()
+    global MAC_TREE
+    MAC_TREE = a.mac
     cur = load(a.current)
     versions = a.history.split(",")
     hist = {v: load(v) for v in versions}
@@ -666,16 +730,19 @@ def main():
     tc = toolchain_notes(a.current)
     page = PAGE_TEMPLATE.format(
         release=a.release,
+        mac_long=MACHINES[MAC_TREE][1],
         tc_arm=tc.get("arm64", ""),
         tc_x86=tc.get("x86_64", ""),
         summary=summary(cur),
         standing=standing(cur),
         separate=separate(cur),
-        chart_arm=version_switch(hist, "", "arm64: xc against each language, per benchmark", versions, "vs-arm"),
+        chart_arm=version_switch(hist, "", "arm64: xc against each language, per benchmark",
+                                 [v for v in versions if has_mac(v)], "vs-arm"),
         chart_x86=version_switch(hist, "_x86_64", "x86-64: xc against each language, per benchmark", versions, "vs-x86"),
         table_arm=table(cur, ""),
         table_x86=table(cur, "_x86_64"),
-        hist_arm=history_chart(hist, "", "arm64: xc's speed relative to %s" % versions[0].lstrip("v"), versions),
+        hist_arm=history_chart(hist, "", "arm64: xc's speed relative to %s" % versions[0].lstrip("v"),
+                               [v for v in versions if has_mac(v)]),
         hist_x86=history_chart(hist, "_x86_64", "x86-64: xc's speed relative to %s" % versions[0].lstrip("v"), versions),
         first=versions[0].lstrip("v"),
         hist_list=", ".join(v.lstrip("v") for v in versions),
@@ -686,6 +753,7 @@ def main():
     print("wrote", os.path.relpath(PAGE, REPO))
     gpu_page = GPU_PAGE_TEMPLATE.format(
         release=a.release,
+        par_mac=par_mac().split(",")[0],
         par=par_tables(a.current),
         multigpu=multigpu(a.current),
         gpu_saturation=gpu_saturation(a.current),
@@ -710,11 +778,13 @@ PUBLISHED = os.path.join(REPO, "website", "site", "public", "benchmarks", "publi
 
 def published(current):
     os.makedirs(PUBLISHED, exist_ok=True)
-    for name, src in (("langs.json", os.path.join(ROOT, current, "results.json")),
-                      ("par.json", os.path.join(ROOT, "par", current, "results.json"))):
-        if os.path.exists(src):
-            shutil.copyfile(src, os.path.join(PUBLISHED, name))
-            print("wrote", os.path.relpath(os.path.join(PUBLISHED, name), REPO))
+    with open(os.path.join(PUBLISHED, "langs.json"), "w") as fh:
+        json.dump(merged(current), fh, indent=1, sort_keys=True)
+    print("wrote", os.path.relpath(os.path.join(PUBLISHED, "langs.json"), REPO))
+    src = os.path.join(ROOT, "par", current, "results.json")
+    if os.path.exists(src):
+        shutil.copyfile(src, os.path.join(PUBLISHED, "par.json"))
+        print("wrote", os.path.relpath(os.path.join(PUBLISHED, "par.json"), REPO))
 
 
 SOURCES_HEAD = """---
@@ -756,7 +826,7 @@ description: How xc's par blocks run on every CPU thread and on GPUs through Met
 ---
 
 Each figure is measured with the released {release} `xcc`, on an Apple
-MacBook Pro with an M4 Max (Metal), a Linux machine with an AMD Ryzen 9
+MacBook Pro with an {par_mac} (Metal), a Linux machine with an AMD Ryzen 9
 9955HX and its integrated Radeon (Vulkan), and a Windows machine with an RTX
 5080 and an RTX 3090 (CUDA and Vulkan). How the CPU code compares with other
 compilers is on [Performance: CPU](/compiler/performance/); GPUs on other
@@ -903,8 +973,7 @@ carries a column for each C++ compiler.
 
 Each figure is measured with the released {release} `xcc` on two machines:
 
-- **arm64:** an Apple MacBook Pro with an M4 Max (12 performance and 4
-  efficiency cores), macOS{tc_arm};
+- **arm64:** {mac_long}, macOS{tc_arm};
 - **x86-64:** an AMD Ryzen 9 9955HX (16 cores, 32 threads), Linux{tc_x86}; its
   CPU frequency governor is `performance` (amd-pstate-epp) for the run.
 
@@ -982,6 +1051,9 @@ bit, and `-fno-matmul` turns it off. The kernel depends on the machine:
   [`:goal(speed)`](/compiler/language/statements/#speed-or-accuracy-goal),
   which `matrix_mul_f32` uses, it leaves out a NaN check that only affects the
   bits of a NaN (the inputs have none).
+- **Apple M1 to M3 (no SME):** the program finds no matrix unit when it
+  starts and runs the loops, vectorised. The arm64 figures on this page, for
+  every release, come from an M3 Max, so there `matrix_mul_f32` is the loop.
 - **x86-64:** the widest vector unit the processor has (SSE2, AVX2 or
   AVX-512), chosen when the program starts; the Ryzen 9 9955HX picks AVX-512.
 

@@ -1,0 +1,166 @@
+{
+ "mandel_deep": {
+  "linux": {
+   "all": {
+    "best_us": 246231,
+    "first_us": 317001
+   },
+   "auto": {
+    "best_us": 294886,
+    "first_us": 1390373
+   },
+   "checksum": "2738",
+   "local": {
+    "best_us": 928123,
+    "first_us": 1381427
+   },
+   "remote": {
+    "best_us": 300407,
+    "first_us": 374608
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 112026,
+    "first_us": 209109
+   },
+   "auto": {
+    "best_us": 44070,
+    "first_us": 86777
+   },
+   "checksum": "2738",
+   "local": {
+    "best_us": 44036,
+    "first_us": 69173
+   },
+   "measured_with": "0.86",
+   "remote": {
+    "best_us": 237773,
+    "first_us": 360096
+   }
+  }
+ },
+ "mandelbrot": {
+  "linux": {
+   "all": {
+    "best_us": 2805,
+    "first_us": 36340
+   },
+   "auto": {
+    "best_us": 972,
+    "first_us": 40405
+   },
+   "checksum": "199",
+   "local": {
+    "best_us": 2501,
+    "first_us": 28988
+   },
+   "remote": {
+    "best_us": 836,
+    "first_us": 34213
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 1786,
+    "first_us": 46231
+   },
+   "auto": {
+    "best_us": 1800,
+    "first_us": 44683
+   },
+   "checksum": "199",
+   "local": {
+    "best_us": 2114,
+    "first_us": 23063
+   },
+   "measured_with": "0.86",
+   "remote": {
+    "best_us": 1966,
+    "first_us": 38799
+   }
+  }
+ },
+ "md5": {
+  "linux": {
+   "all": {
+    "best_us": 32935,
+    "first_us": 66681
+   },
+   "auto": {
+    "best_us": 30885,
+    "first_us": 148154
+   },
+   "checksum": "2573682417",
+   "local": {
+    "best_us": 9835,
+    "first_us": 134532
+   },
+   "remote": {
+    "best_us": 43637,
+    "first_us": 76864
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 105057,
+    "first_us": 149367
+   },
+   "auto": {
+    "best_us": 6742,
+    "first_us": 49430
+   },
+   "checksum": "2573682417",
+   "local": {
+    "best_us": 5844,
+    "first_us": 49380
+   },
+   "measured_with": "0.86",
+   "remote": {
+    "best_us": 202782,
+    "first_us": 465816
+   }
+  }
+ },
+ "saxpy": {
+  "linux": {
+   "all": {
+    "best_us": 127312,
+    "first_us": 425764
+   },
+   "auto": {
+    "best_us": 3345,
+    "first_us": 46964
+   },
+   "checksum": "3011510272",
+   "local": {
+    "best_us": 2368,
+    "first_us": 33415
+   },
+   "remote": {
+    "best_us": 355865,
+    "first_us": 916126
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 120350,
+    "first_us": 360136
+   },
+   "auto": {
+    "best_us": 901,
+    "first_us": 47392
+   },
+   "checksum": "3011510272",
+   "local": {
+    "best_us": 502,
+    "first_us": 33354
+   },
+   "measured_with": "0.86",
+   "remote": {
+    "best_us": 272911,
+    "first_us": 904044
+   }
+  }
+ }
+}
