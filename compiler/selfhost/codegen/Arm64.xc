@@ -2869,7 +2869,8 @@ class Arm64
         String* ty = n.res().ty();
         if (kind.equals(String.withCString("scvtf"))) {
             IROperand* src = (IROperand*)_fuseSrc.get((Hashable*)n.res());
-            String* s = operandReg(src, String.withCString("w16"));
+            // At the source's width, as emitIntToFp (a 64-bit one in a slot).
+            String* s = operandReg(src, String.withCString(width(opType(src)) >= (u32)8 ? "x16" : "w16"));
             String* d = resultReg(n.res(), fregName((u32)0, ty));
             bool sgn = ((Number*)_fuseSigned.get((Hashable*)n.res())).asI32() != (i32)0;
             _out.appendFormat("    %s %s, %s, #%lu\n", sgn ? "scvtf" : "ucvtf",
@@ -4962,7 +4963,12 @@ class Arm64
     void emitIntToFp(IRInsn* n)
     {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1) { unsupported(n.op()); return; }
-        String* a = operandReg((IROperand*)n.ops().get((u32)0), String.withCString("w16"));
+        // The scratch at the operand's width: a 64-bit operand in a frame slot
+        // was loaded into w16, and only its low half converted (2026-10-25:
+        // a u64 total of 8779000000 printed as 189065408, once a par block in
+        // the loop spilled it). A home register is viewed at its width anyway.
+        IROperand* src = (IROperand*)n.ops().get((u32)0);
+        String* a = operandReg(src, String.withCString(width(opType(src)) >= (u32)8 ? "x16" : "w16"));
         String* d = resultReg(n.res(), fregName((u32)0, n.res().ty()));
         _out.appendFormat("    %s %s, %s\n",
                           n.op().equals(String.withCString("SIToFp")) ? "scvtf" : "ucvtf",

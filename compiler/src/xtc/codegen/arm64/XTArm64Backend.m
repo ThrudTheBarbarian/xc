@@ -4638,7 +4638,10 @@ static uint64_t satMul64(uint64_t a, uint64_t b) {
 + (void)emitFused:(NSDictionary *)fz forInsn:(XTIRInsn *)insn ctx:(XTArm64FnCtx *)ctx {
     NSString *kind = fz[@"kind"];
     if ([kind isEqualToString:@"scvtf"]) {
-        NSString *src = [self operandReg:fz[@"src"] intoScratch:@"w16" ctx:ctx];
+        // At the source's width, as SIToFp/UIToFp (a 64-bit one in a slot).
+        XTIROperand *fso = fz[@"src"];
+        XTIRType *fst = fso.kind == XTIROperandKindUse ? [ctx.fn valueForId:fso.valueId].type : fso.type;
+        NSString *src = [self operandReg:fso intoScratch:(fst.byteWidth >= 8 ? @"x16" : @"w16") ctx:ctx];
         NSString *dst = [self resultReg:insn.result.valueId
                                 scratch:[self fregName:0 forType:insn.result.type] ctx:ctx];
         [ctx.out appendFormat:@"    %@ %@, %@, #%@\n",
@@ -6799,7 +6802,13 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
         }
         case XTIROpSIToFp: case XTIROpUIToFp: {
             if (insn.operands.count < 1 || !insn.result) break;
-            NSString *a = [self operandReg:insn.operands[0] intoScratch:@"w16" ctx:ctx];
+            // The scratch at the operand's width: a 64-bit operand in a frame
+            // slot was loaded into w16, and only its low half converted
+            // (2026-10-25: a u64 total of 8779000000 printed as 189065408,
+            // once a par block in the loop spilled it).
+            XTIROperand *so = insn.operands[0];
+            XTIRType *st = so.kind == XTIROperandKindUse ? [ctx.fn valueForId:so.valueId].type : so.type;
+            NSString *a = [self operandReg:so intoScratch:(st.byteWidth >= 8 ? @"x16" : @"w16") ctx:ctx];
             NSString *dst = [self resultReg:insn.result.valueId
                                     scratch:[self fregName:0 forType:insn.result.type]
                                         ctx:ctx];
