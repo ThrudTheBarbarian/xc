@@ -266,7 +266,16 @@ class ParMetal
         for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
             {
             pointer host = *(pointer*)(obj + l.bufOff[i]);
-            bufs[i] = bufferFor(host, (u64)l.bufLen[i], &bufShared[i], &bufAt[i]);
+            // Overwritten whole (bufOut): a buffer of its size, nothing copied
+            // into it; a shared block stays shared.
+            if (l.bufOut[i] != (i64)0 && !isShared(host))
+                {
+                bufShared[i] = false;
+                bufAt[i] = (u64)0;
+                bufs[i] = withLen(_dev, sel("newBufferWithLength:options:"), (u64)l.bufLen[i], (u64)0);
+                }
+            else
+                bufs[i] = bufferFor(host, (u64)l.bufLen[i], &bufShared[i], &bufAt[i]);
             }
         // A global the compiler gave pages of its own (gpu-globals) is a
         // registered block like a heap one: wrapped where it lies, and neither

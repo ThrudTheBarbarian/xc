@@ -96,6 +96,12 @@ class ParChunk : Object
         {
         return false;
         }
+    // Generated too, for a block that overwrites a captured array whole: true
+    // for own ivar k, so its old contents need not reach the device.
+    bool gpuWritesAllOwn(i32 k)
+        {
+        return false;
+        }
     // Generated too: true for own ivar k / the named global when the body only
     // reads that array, so it need not be copied back.
     bool gpuReadsOnly(i32 k)

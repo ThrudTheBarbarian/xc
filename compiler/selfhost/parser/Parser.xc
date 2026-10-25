@@ -3902,7 +3902,8 @@ class Parser
             || Parser._same(n, "merge") || Parser._same(n, "copyChunk") || Parser._same(n, "parName")
             || Parser._same(n, "gpuSource") || Parser._same(n, "gpuLength") || Parser._same(n, "gpuGlobal")
             || Parser._same(n, "gpuGlobalBytes") || Parser._same(n, "gpuReadsOnly")
-            || Parser._same(n, "gpuReadsOnlyGlobal") || Parser._same(n, "gpuWritesAll");
+            || Parser._same(n, "gpuReadsOnlyGlobal") || Parser._same(n, "gpuWritesAll")
+            || Parser._same(n, "gpuWritesAllOwn");
     }
     static String* parFieldOf(String* n)
     {
@@ -4309,6 +4310,67 @@ class Parser
                 mr.add(pr);
                 mr.add(bro);
                 cls.add(mr);
+            }
+            // gpuWritesAllOwn(k): own ivar k is a captured array (or a
+            // pointer to one) the body overwrites whole in its range, the
+            // shape gpuWritesAll takes for a global (the reference explains).
+            Map* wrefs = (Map*)frame.get((Hashable*)String.withCString("refs"));
+            bool mayWallOwn = gridDecls.count() == (u32)0 && frame.get((Hashable*)String.withCString("exits")) == (Object*)0
+                && !written.contains((Hashable*)iv.name()) && wrefs != (Map*)0;
+            Node* woBody = loop.kid((u32)3);
+            Node* bwo = mk((u16)nkBlock);
+            u32 nwo = (u32)0;
+            for (u32 i = (u32)0; i < caps.count(); i = i + (u32)1) {
+                String* cn = (String*)caps.get(i);
+                String* t = (String*)frameTypes.get((Hashable*)cn);
+                Number* cr = wrefs != (Map*)0 ? (Number*)wrefs.get((Hashable*)cn) : (Number*)0;
+                bool wall = false;
+                // The loop's statements: its block's, or the one statement of
+                // a loop written without braces (as the reference).
+                bool woBlock = woBody != (Node*)0 && woBody.kind() == (u16)nkBlock;
+                u32 woCount = woBody == (Node*)0 ? (u32)0 : (woBlock ? woBody.kidCount() : (u32)1);
+                if (mayWallOwn && t != (String*)0
+                    && (t.indexOfByte((u8)'[') != (u32)$FFFFFFFF || Parser.parPrimPointee(t) != (String*)0) && cr != (Number*)0
+                    && cr.asU32() == (u32)1)
+                    for (u32 si = (u32)0; si < woCount; si = si + (u32)1) {
+                        Node* st = woBlock ? woBody.kid(si) : woBody;
+                        if (st == (Node*)0 || st.kind() != (u16)nkExprStatement || st.kidCount() == (u32)0) continue;
+                        Node* as = st.kid((u32)0);
+                        if (as.kind() != (u16)nkAssign || !Parser._same(as.op(), "=")) continue;
+                        Node* sub = as.kid((u32)0);
+                        if (sub.kind() != (u16)nkSubscript || sub.kidCount() < (u32)2) continue;
+                        if (sub.kid((u32)0).kind() == (u16)nkIdent && sub.kid((u32)0).name().equals(cn)
+                            && sub.kid((u32)1).kind() == (u16)nkIdent && sub.kid((u32)1).name().equals(iv.name()))
+                            wall = true;
+                    }
+                if (!wall)
+                    continue;
+                Node* n = mk((u16)nkIf);
+                n.add(parBin("==", parIdent(String.withCString("k")),
+                             parCast(String.withCString("i32"), parInt((i64)i))));
+                Node* then = mk((u16)nkBlock);
+                Node* ret = mk((u16)nkReturn);
+                Node* tv = mk((u16)nkBool);
+                tv.setNum((i64)1);
+                ret.add(tv);
+                then.add(ret);
+                n.add(then);
+                bwo.add(n);
+                nwo = nwo + (u32)1;
+            }
+            if (nwo > (u32)0) {
+                Node* rf = mk((u16)nkReturn);
+                Node* fv = mk((u16)nkBool);
+                fv.setNum((i64)0);
+                rf.add(fv);
+                bwo.add(rf);
+                Node* mw = mkNamed((u16)nkMethodDecl, String.withCString("gpuWritesAllOwn"));
+                mw.setOp(String.withCString("bool"));
+                Node* pw = mkNamed((u16)nkParam, String.withCString("k"));
+                pw.setOp(String.withCString("i32"));
+                mw.add(pw);
+                mw.add(bwo);
+                cls.add(mw);
             }
         }
         // gpuGlobal(name) / gpuGlobalBytes(name): where each global the body

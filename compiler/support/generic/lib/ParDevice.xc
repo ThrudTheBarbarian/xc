@@ -175,6 +175,10 @@ class ParLayout : Object
     // 1: the body only reads the global / buffer k, so it is not copied back.
     i64 globIn[16];
     i64 bufIn[16];
+    // 1: the kernel overwrites the whole captured array k, so nothing need be
+    // copied to the device before it runs; it still comes back
+    // (gpuWritesAllOwn, as globOut for a global).
+    i64 bufOut[16];
     // The elements work item i touches in buffer / global k, from the header's
     // fp= / gfp= words: [fpK*i + fpLo, fpK*i + fpHi), when known (fp = 1);
     // else the whole buffer (par-tiles-and-devices.md step 1).
@@ -1839,6 +1843,15 @@ class ParDevice
                     {
                     cpu("it uses an array whose size is not known");
                     return (ParLayout*)0;
+                    }
+                // Only when this run's range is the whole array: the body
+                // writes element i for each i in it, and nothing else.
+                l.bufOut[k] = (i64)0;
+                if (proto.gpuWritesAllOwn((i32)ivar) && lo == (i64)0 && (hi - lo) * l.bufElem[k] >= l.bufLen[k])
+                    {
+                    l.bufOut[k] = (i64)1;
+                    if (ParDevice.reporting())
+                        Log.info("par: %ld bytes written whole on the device, not sent", l.bufLen[k]);
                     }
                 l.nbuf = k + (u32)1;
                 continue;

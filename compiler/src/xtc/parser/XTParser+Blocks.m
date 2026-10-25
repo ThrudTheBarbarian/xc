@@ -1423,7 +1423,8 @@ static NSString* parRootName(XTASTNode* n)
     if (!reservedCapture)
         reservedCapture = [NSSet setWithArray:@[ @"run", @"go", @"lo", @"hi", @"merge", @"copyChunk", @"parName",
                                                  @"gpuSource", @"gpuLength", @"gpuGlobal", @"gpuGlobalBytes",
-                                                 @"gpuReadsOnly", @"gpuReadsOnlyGlobal", @"gpuWritesAll" ]];
+                                                 @"gpuReadsOnly", @"gpuReadsOnlyGlobal", @"gpuWritesAll",
+                                                 @"gpuWritesAllOwn" ]];
     BOOL (^hasLocal)(XTType*) = ^BOOL(XTType* t) {
         if ([t isKindOfClass:[XTArrayType class]])
             return YES;
@@ -1729,6 +1730,66 @@ static NSString* parRootName(XTASTNode* n)
                                                           returnTypes:@[ [self.typeTable typeForName:@"bool"] ]
                                                            parameters:@[ pr ] isStatic:NO isVarArgs:NO
                                                                  body:[[XTBlockNode alloc] initWithStatements:ro location:loc]
+                                                             location:loc]];
+            }
+        // gpuWritesAllOwn(k): own ivar k is a captured array (or a pointer to
+        // one) the body overwrites whole in its range, the shape gpuWritesAll
+        // takes for a
+        // global (a top-level `a[i] = e;` on the loop variable, the body
+        // naming a nowhere else, no early exit, i never assigned), so its old
+        // contents need not reach the device. The runtime checks the range
+        // covers the whole array.
+        NSMutableArray<XTASTNode*>* wo = [NSMutableArray array];
+        // The loop's statements: its block's, or the one statement of a loop
+        // written without braces (`for (u32 i in 0..N) out[i] = e;`).
+        NSArray<XTASTNode*>* woStmts = [loop.body isKindOfClass:[XTBlockNode class]] ? ((XTBlockNode*)loop.body).statements
+                                     : loop.body ? @[ loop.body ] : @[];
+        j = 0;
+        for (NSString* cn in caps)
+            {
+            BOOL wall = NO;
+            if (([frameTypes[cn] isKindOfClass:[XTArrayType class]] || parPrimPointee(frameTypes[cn])) && gridDecls.count == 0 &&
+                ![frame[@"exits"] boolValue] && ![written containsObject:iv.varName] &&
+                [frame[@"refs"][cn] unsignedIntegerValue] == 1)
+                for (XTASTNode* st in woStmts)
+                    {
+                    XTAssignExprNode* as = [st isKindOfClass:[XTExpressionStatementNode class]]
+                                           && [((XTExpressionStatementNode*)st).expression isKindOfClass:[XTAssignExprNode class]]
+                                               ? (XTAssignExprNode*)((XTExpressionStatementNode*)st).expression : nil;
+                    XTSubscriptExprNode* sub = [as.lhs isKindOfClass:[XTSubscriptExprNode class]] ? (XTSubscriptExprNode*)as.lhs : nil;
+                    if (as && as.assignOp == XTAssignOpAssign && sub
+                        && [sub.base isKindOfClass:[XTIdentifierNode class]]
+                        && [((XTIdentifierNode*)sub.base).identName isEqualToString:cn]
+                        && [sub.index isKindOfClass:[XTIdentifierNode class]]
+                        && [((XTIdentifierNode*)sub.index).identName isEqualToString:iv.varName])
+                        wall = YES;
+                    }
+            if (wall)
+                {
+                XTASTNode* test = [[XTBinaryExprNode alloc]
+                    initWithOp:XTBinaryOpEq
+                          left:ident(@"k")
+                         right:cast(i32T, [[XTLiteralIntNode alloc] initWithValue:(int64_t)j location:loc])
+                      location:loc];
+                XTBlockNode* then = [[XTBlockNode alloc]
+                    initWithStatements:@[ [[XTReturnNode alloc]
+                                             initWithValues:@[ [[XTLiteralBoolNode alloc] initWithBool:YES location:loc] ]
+                                                   location:loc] ]
+                              location:loc];
+                [wo addObject:[[XTIfNode alloc] initWithCondition:test thenBlock:then elseBlock:nil location:loc]];
+                }
+            j++;
+            }
+        if (wo.count > 0)
+            {
+            [wo addObject:[[XTReturnNode alloc]
+                              initWithValues:@[ [[XTLiteralBoolNode alloc] initWithBool:NO location:loc] ]
+                                    location:loc]];
+            XTParamNode* pw = [[XTParamNode alloc] initWithType:i32T name:@"k" location:loc];
+            [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"gpuWritesAllOwn"
+                                                          returnTypes:@[ [self.typeTable typeForName:@"bool"] ]
+                                                           parameters:@[ pw ] isStatic:NO isVarArgs:NO
+                                                                 body:[[XTBlockNode alloc] initWithStatements:wo location:loc]
                                                              location:loc]];
             }
         }

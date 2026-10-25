@@ -1199,7 +1199,8 @@ class ParCuda
             }
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
             {
-            dev[nd] = uploadKeeping(nd, *(pointer*)(obj + l.bufOff[i]), l.bufLen[i], l.bufIn[i] != (i64)0);
+            dev[nd] = uploadKeeping(nd, l.bufOut[i] != (i64)0 ? (pointer)0 : *(pointer*)(obj + l.bufOff[i]), l.bufLen[i],
+                                    l.bufIn[i] != (i64)0);
             nd = nd + (u32)1;
             }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)

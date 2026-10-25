@@ -1015,8 +1015,9 @@ class ParVulkan
             b = (u32)1;
             for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
                 {
-                // An imported `simd:` block IS the mapping: nothing to copy.
-                if ((pointer)maps[b] != *(pointer*)(obj + l.bufOff[i]))
+                // An imported `simd:` block IS the mapping: nothing to copy;
+                // nor is an array the kernel overwrites whole (bufOut).
+                if (l.bufOut[i] == (i64)0 && (pointer)maps[b] != *(pointer*)(obj + l.bufOff[i]))
                     memcpy((pointer)maps[b], *(pointer*)(obj + l.bufOff[i]), (u64)l.bufLen[i]);
                 b = b + (u32)1;
                 }
