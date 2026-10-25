@@ -3,6 +3,72 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.87 — C at OpenMP speed
+
+0.87 makes plain C, built with `xcc --par-auto`, run across a machine's cores
+about as fast as the same C with OpenMP pragmas built by GCC or clang, and
+faster on five of the seven C par benchmarks on x86-64. The single-thread code that each core
+runs is tighter on x86-64, and `par` sends a GPU less.
+
+### New
+
+- **Methods return several values**, as functions do, through a protocol
+  receiver too.
+- **A struct local with no initialiser is zero-filled**, and a struct
+  initialiser zero-fills the members it leaves out.
+- **C programs cross-build** for x86-64 and win64 from another host.
+- **`.obj` objects are link inputs on win64**, and an object-only link honours
+  `-l`, `-framework` and an Objective-C object's `libobjc`.
+- `Thread.setPriority` for the calling thread.
+- `par` blocks may capture variables called `t`, `lo`, `hi`, `run` and
+  `merge`, and a work item's own local array runs on Metal, CUDA, Vulkan and
+  WebGPU. `par :grid` takes a captured offset.
+
+### Faster
+
+- **C loops that `--par-auto` makes parallel keep their vector code**: n-body
+  on 32 threads went from 6.4 ms to 0.82 ms.
+- **CPU threads**: each lane runs its own part of a block first, one piece a
+  lane when every item costs the same.
+- **x86-64 single-thread code**: AVX-512 code uses zmm16-31 and interleaves two
+  lane groups (md5 1.7x faster on one thread); a scalar float loop's AVX2 copy
+  uses the VEX three-operand forms; selects on a masked bit are one bit test,
+  two selects on one condition share a branch, and a select's chosen value is
+  computed after its branch; float conversions and constants are read in
+  place; `mov` and `add` pairs become `lea`. C perlin on one thread: 107 ms to
+  87 ms.
+- **`par` sends a GPU less**: an array the block overwrites whole is not
+  uploaded (CUDA 7.2 ms to 3.6 ms on 16 MB), locally and through a worker
+  daemon, and CUDA keeps a block's arrays resident while another block runs.
+- A checked build whose checks all come out compiles as the unchecked one.
+- A static initialiser that only sets its own flag is removed.
+- The compiler builds from one object per source file.
+
+### Changed
+
+- **`--dump-layout` needs a layout** (`-m <layout>`, or `-A 6502` for the
+  default one); it no longer falls back to the 6502 map silently.
+- **The remote `par` protocol is version 7**: a program and an `xcd` daemon
+  must both be 0.87.
+- **TLS connections on every target are thread-safe**: the bundled Mbed TLS is
+  built with threading (pthreads; Windows SRW locks on win64).
+- On Linux, `xcc` raises its own stack limit for large inputs.
+
+### Fixed
+
+- A cast to a typed collection pointer, `(Array<Point>*)0`, did not parse.
+- A program's free function captured a library method's call to a method of
+  the same name.
+- A local inside `try`, `catch`, `switch`, `defer` or `for … in` shared a slot
+  with another; a `throw` to a local `try` and nested `try`s are kept apart.
+- A client of the second library in a chain did not share the first's
+  standard-library state; one standard-library singleton per process across
+  libraries.
+- On win64, `Files.existsExact` compared the name as typed, not as the
+  directory stores it.
+- An arm64 vector value that is not a constant is spilled instead of stopping
+  the build.
+
 ## Version 0.86 — safer programs, wider vectors
 
 0.86 hardens what a program does when it goes wrong, and vectorises loops it

@@ -37,7 +37,7 @@
 // with VERSION each release (release-checklist). A re-issue of a version
 // changes it too: 0.85's re-issue generates different code (and kernels), so
 // its learned choices, and the xcd daemons it works with, are its own.
-#define PAR_CACHE_VER "0.86"
+#define PAR_CACHE_VER "0.87"
 #if !ARCH_wasm32
 // Wall-clock epoch seconds, stamped into each learned record so a future
 // `xcc --par-forget-before <date>` can prune by age. Monotonic clocks (what

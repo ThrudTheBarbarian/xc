@@ -131,7 +131,7 @@ supplies its functions, types and enum constants. See
 | `-H <path>` | Root holding the support tree. Rarely needed, because `xcc` finds it relative to its own binary. See [Install](/compiler/usage/install/). |
 | `-m <layout>` | Select a memory layout. `-m xt` is the banked 6502 map and implies `-A 6502`. There is no default: with neither `-m` nor `-A`, `xcc` targets the host. The argument is a built-in layout name, or the path of a `.lnk` file (`.lnk` is appended if missing). The long form is `--memory-model`. See [Linker scripts](/compiler/usage/linker-scripts/). |
 | `-ll`, `--list-layouts` | List every built-in layout, grouped by platform, and exit. |
-| `-dl`, `--dump-layout` | Print the active layout's memory-map diagram and exit. Use with `-m`. |
+| `-dl`, `--dump-layout` | Print a 6502 memory layout's map and exit. Name the layout with `-m`, or `-A 6502` for the default one. |
 | `-dp`, `--dump-placement` | xt6502: after code generation, print where each function went (`main`, `bank <n>`, `irq` or `vbi`) and its size, then the bytes of generated code in main RAM and in each code bank, to stderr. The sizes are the compiler's estimates, an upper bound. |
 | `-du`, `--dump-usage` | xt6502: after assembly, print the bytes the program uses in every region and code bank of the layout, to stderr: zero page, the software stack, the system, screen and main regions, each code bank in use, the unused code banks as one range, and the data window. With `-S` the assembly is written and also assembled to measure it. |
 
