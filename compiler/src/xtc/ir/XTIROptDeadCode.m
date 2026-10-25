@@ -1,3 +1,4 @@
+#import "XTIRType.h"
 #import "XTIROptDeadCode.h"
 #import "XTIRModule.h"
 #import "XTIRFunction.h"
@@ -88,8 +89,104 @@ static BOOL XTIRDCEIsPure(XTIROpcode op)
     return YES;
     }
 
+// A store's address as a key, when it is a function's own local reached by
+// constant field and element steps (`q.x`, `a[2]`); nil for anything else (a
+// global, a pointer from anywhere, a variable index), so a store through
+// memory the program does not own here, a volatile one or a device register,
+// is never touched.
+static NSString* XTIRDSEKey(XTIROperand* p, NSDictionary<NSNumber*, XTIRInsn*>* defOf, int depth)
+    {
+    if (depth > 16 || p.kind != XTIROperandKindUse)
+        return nil;
+    XTIRInsn* d = defOf[@(p.valueId)];
+    if (!d || d.operands.count < 1)
+        return nil;
+    XTIROperand* o0 = d.operands[0];
+    if (d.opcode == XTIROpAddrOf)
+        return o0.kind == XTIROperandKindUse ? [NSString stringWithFormat:@"L%llu", (unsigned long long)o0.valueId] : nil;
+    if ((d.opcode == XTIROpFieldAddr || d.opcode == XTIROpElementAddr) && d.operands.count == 2 &&
+        d.operands[1].kind == XTIROperandKindImmI)
+        {
+        NSString* base = XTIRDSEKey(o0, defOf, depth + 1);
+        return base ? [NSString stringWithFormat:@"%@/%c%lld", base, d.opcode == XTIROpFieldAddr ? 'f' : 'e',
+                                                  (long long)d.operands[1].intValue] : nil;
+        }
+    return nil;
+    }
+
+// Dead stores, block by block: a scalar store to a local, overwritten by a
+// later store to the same place and of the same type with nothing between
+// that reads memory (a load, a call, anything else with a memory token), is
+// never read. A struct local with no initialiser is zero-filled (owner,
+// 2026-10-24) and then usually assigned field by field at once: struct_copy's
+// `Pt q; q.x = ...; q.y = ...;` paid two zero stores a call, 1.5x slower.
+// The removed store's memory token is handed on to what used it.
+- (void)deadStoresIn:(XTIRFunction*)fn
+    {
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* defOf = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIRInsn* insn in bb.instructions)
+            if (insn.result)
+                defOf[@(insn.result.valueId)] = insn;
+    BOOL (^scalar)(XTIROperand*) = ^BOOL(XTIROperand* v) {
+      XTIRType* t = v.kind == XTIROperandKindUse ? fn.values[@(v.valueId)].type : v.type;
+      return t && t.kind != XTIRTypeKindAgg && t.kind != XTIRTypeKindVec;
+    };
+    XTIRType* (^typeOf)(XTIROperand*) = ^XTIRType*(XTIROperand* v) {
+      return v.kind == XTIROperandKindUse ? fn.values[@(v.valueId)].type : v.type;
+    };
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        NSMutableDictionary<NSString*, XTIRInsn*>* pending = [NSMutableDictionary dictionary];
+        NSMutableArray<XTIRInsn*>* dead = [NSMutableArray array];
+        for (XTIRInsn* insn in bb.instructions)
+            {
+            if (insn.opcode == XTIROpStore && insn.operands.count == 3 && insn.memoryResult)
+                {
+                NSString* key = XTIRDSEKey(insn.operands[0], defOf, 0);
+                if (!key || !scalar(insn.operands[1]))
+                    continue; // a store elsewhere reads nothing: no barrier
+                XTIRInsn* prev = pending[key];
+                if (prev && [typeOf(prev.operands[1]) isEqual:typeOf(insn.operands[1])])
+                    [dead addObject:prev];
+                pending[key] = insn;
+                continue;
+                }
+            if (insn.memoryResult)
+                [pending removeAllObjects];
+            }
+        for (XTIRInsn* st in dead)
+            {
+            XTIRValueId old = st.memoryResult.valueId;
+            XTIROperand* to = st.operands[2];
+            for (XTIRBlock* b in fn.blocks)
+                {
+                NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:b.phiNodes];
+                [all addObjectsFromArray:b.instructions];
+                if (b.terminator)
+                    [all addObject:b.terminator];
+                for (XTIRInsn* u in all)
+                    {
+                    NSMutableArray<XTIROperand*>* ops = [u.operands mutableCopy];
+                    BOOL ch = NO;
+                    for (NSUInteger k = 0; k < ops.count; k++)
+                        if (ops[k].kind == XTIROperandKindUse && ops[k].valueId == old)
+                            {
+                            ops[k] = to;
+                            ch = YES;
+                            }
+                    if (ch)
+                        [u replaceOperands:ops];
+                    }
+                }
+            [bb.instructions removeObjectIdenticalTo:st];
+            }
+        }
+    }
+
 - (void)runOnFunction:(XTIRFunction*)fn
     {
+    [self deadStoresIn:fn];
     BOOL changed = YES;
     while (changed)
         {

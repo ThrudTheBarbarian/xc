@@ -10604,8 +10604,112 @@ class BeFact : Object
             deadCodeInFunc((IRFunc*)m.funcs().get(f));
         }
 
+    // A store's address as a key, when it is a function's own local reached
+    // by constant field and element steps (`q.x`, `a[2]`); 0 for anything
+    // else (a global, a pointer from anywhere, a variable index), so a store
+    // through memory the program does not own here, a volatile one or a
+    // device register, is never touched. As the reference's XTIRDSEKey.
+    // The locals a function's dead-store keys name, numbered on first sight
+    // (an IRValue's pid is not unique among a frame's pinned locals).
+    Map* _dseLocals;
+
+    String* dseKey(IROperand* p, Map* defOf, u32 depth)
+        {
+        if (depth > (u32)16 || p.kind() != (u8)OPK_USE || p.val() == (IRValue*)0)
+            return (String*)0;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)p.val());
+        if (d == (IRInsn*)0 || d.ops().count() < (u32)1)
+            return (String*)0;
+        IROperand* o0 = (IROperand*)d.ops().get((u32)0);
+        if (d.op().equals(String.withCString("AddrOf")))
+            {
+            if (o0.kind() != (u8)OPK_USE || o0.val() == (IRValue*)0)
+                return (String*)0;
+            Object* seen = _dseLocals.get((Hashable*)o0.val());
+            if (seen == (Object*)0)
+                {
+                seen = (Object*)Number.with(_dseLocals.count());
+                _dseLocals.set((Hashable*)o0.val(), seen);
+                }
+            String* k = String.withCString("L");
+            k.append(String.withU64((u64)((Number*)seen).asU32()));
+            return k;
+            }
+        bool fa = d.op().equals(String.withCString("FieldAddr"));
+        if ((fa || d.op().equals(String.withCString("ElementAddr"))) && d.ops().count() == (u32)2
+            && ((IROperand*)d.ops().get((u32)1)).kind() == (u8)OPK_IMMI)
+            {
+            String* base = dseKey(o0, defOf, depth + (u32)1);
+            if (base == (String*)0)
+                return (String*)0;
+            base.appendCString(fa ? "/f" : "/e");
+            base.append(String.withI64(((IROperand*)d.ops().get((u32)1)).imm()));
+            return base;
+            }
+        return (String*)0;
+        }
+
+    String* dseTy(IRFunc* fn, IROperand* v)
+        {
+        if (v.kind() == (u8)OPK_USE)
+            return v.val() == (IRValue*)0 ? (String*)0 : v.val().ty();
+        return v.ty();
+        }
+
+    // Dead stores, block by block: a scalar store to a local, overwritten by
+    // a later store to the same place and of the same type with nothing
+    // between that reads memory (a load, a call, anything else with a memory
+    // token), is never read. A struct local with no initialiser is
+    // zero-filled and then usually assigned field by field at once:
+    // struct_copy paid two zero stores a call. As the reference.
+    void deadStoresIn(IRFunc* fn)
+        {
+        Map* defOf = defMap(fn);
+        _dseLocals = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            Map* pending = new Map();
+            Array* dead = new Array();
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.op().equals(String.withCString("Store")) && n.ops().count() == (u32)3 && n.memRes() != (IRValue*)0)
+                    {
+                    String* key = dseKey((IROperand*)n.ops().get((u32)0), defOf, (u32)0);
+                    String* t = dseTy(fn, (IROperand*)n.ops().get((u32)1));
+                    if (key == (String*)0 || t == (String*)0 || t.hasPrefix(String.withCString("Agg"))
+                        || t.hasPrefix(String.withCString("Vec")))
+                        continue; // a store elsewhere reads nothing: no barrier
+                    IRInsn* prev = (IRInsn*)pending.get((Hashable*)key);
+                    if (prev != (IRInsn*)0)
+                        {
+                        String* pt = dseTy(fn, (IROperand*)prev.ops().get((u32)1));
+                        if (pt != (String*)0 && pt.equals(t))
+                            dead.add((Object*)prev);
+                        }
+                    pending.set((Hashable*)key, (Object*)n);
+                    continue;
+                    }
+                if (n.memRes() != (IRValue*)0)
+                    pending = new Map();
+                }
+            for (u32 k = (u32)0; k < dead.count(); k = k + (u32)1)
+                {
+                IRInsn* st = (IRInsn*)dead.get(k);
+                rewriteUsesTo(fn, st.memRes(), (IROperand*)st.ops().get((u32)2));
+                Array* keep = new Array();
+                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                    if ((IRInsn*)bb.insns().get(i) != st)
+                        keep.add(bb.insns().get(i));
+                bb.setInsns(keep);
+                }
+            }
+        }
+
     void deadCodeInFunc(IRFunc* fn)
         {
+        deadStoresIn(fn);
         bool changed = true;
         while (changed)
             {
