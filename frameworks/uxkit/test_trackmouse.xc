@@ -1,7 +1,8 @@
 // test_trackmouse.xc — UXView.trackMouse follows a press to its release on the desktop: called from
 // mouseDown, it hands the view's mouseDragged each move and its mouseUp the release, so a view drags
 // the same way here as on the touch backends, with no driver in sight.  A press, two moves and a
-// release are fed through the backend's real event path (headless).
+// release are fed through the backend's real event path (headless).  A press the program makes up
+// itself (mouseDown called directly) returns at once.
 //
 //   -A arm64 (AppKit, headless) or -A arm64 -D UX_TRACK_GTK (GTK).  Build+run: sh run_trackmouse.sh
 #import <Stdio.xc>
@@ -26,6 +27,8 @@ i32 gUps;
 i32 gLastX;
 i32 gLastY;
 i32 gOrderOK;
+bool gMadeUp;  // the press below that the test makes up itself
+bool gMadeUpReturned;
 
 // The next step of the drag, fed while it is followed (GTK steps wait for a move that is not there yet).
 void feed(i32 step)
@@ -50,6 +53,12 @@ class Dragger : UXView
     {
     void mouseDown(UXEvent* e)
         {
+        if (gMadeUp)
+            {
+            self.trackMouse(e); // no platform press behind it: must return at once
+            gMadeUpReturned = true;
+            return;
+            }
         gDowns = gDowns + (i32)1;
 #if UX_TRACK_GTK
         feed((i32)1);
@@ -131,6 +140,15 @@ void main(void)
     if (gUps != (i32)1 || gLastX != (i32)70 || gLastY != (i32)61)
         {
         Stdio.printf("  FAIL one release, where the pointer last was (%d at %d,%d)\n", gUps, gLastX, gLastY);
+        fails = fails + (i32)1;
+        }
+    i32 drags = gDrags;
+    i32 ups = gUps;
+    gMadeUp = true;
+    v.mouseDown(new UXEvent());
+    if (!gMadeUpReturned || gDrags != drags || gUps != ups)
+        {
+        Stdio.printf("  FAIL a press the app makes up returns at once, with no moves or release\n");
         fails = fails + (i32)1;
         }
     if (fails == (i32)0)

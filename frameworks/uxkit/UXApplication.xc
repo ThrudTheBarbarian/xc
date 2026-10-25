@@ -640,10 +640,11 @@ void uxTrackMouse(pointer vp, pointer ep)
     {
     UXView* v = (UXView*)(Object*)vp;
     UXEvent* press = (UXEvent*)(Object*)ep;
-    if (gDriver == (UXViewDriver*)0 || !gDriver.dragTrackingIsModal() || v == (UXView*)0)
+    if (gDriver == (UXViewDriver*)0 || !gDriver.dragTrackingIsModal() || v == (UXView*)0 || !gUXPressLive)
         {
-        return;
+        return; // events follow (touch), or no real press is held (one the app made up, or already followed)
         }
+    gUXPressLive = false;
     i32 x = press != (UXEvent*)0 ? (i32)press.x : (i32)0;
     i32 y = press != (UXEvent*)0 ? (i32)press.y : (i32)0;
     UXEvent* e = new UXEvent();

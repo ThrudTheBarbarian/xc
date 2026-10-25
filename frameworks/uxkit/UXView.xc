@@ -389,7 +389,8 @@ class UXView : UXResponder
     // its mouseUp the release, in the press's coordinates, with a repaint after each move.  On the
     // desktops the drag is followed here, before trackMouse returns; on the touch backends the same
     // calls arrive afterwards as events, so trackMouse returns at once.  Call it before anything that
-    // takes the release itself (a modal alert, say).
+    // takes the release itself (a modal alert, say).  It returns at once for a press that did not come
+    // from the platform (a test calling mouseDown itself), and for a second call in the same press.
     void trackMouse(UXEvent* press)
         {
         if (gUXTrackMouse != (uxTrackMouse_t*)0)

@@ -730,5 +730,9 @@ UXViewDriver* gDriver;
 // Added to every point trackDragStep reports, for the drag in progress: the scroll offset of the
 // natively scrolled document the press landed in (UXWindow.dispatchMouse), so a drag is measured in
 // the same coordinates as its press.  0 outside a drag, and for a press on anything unscrolled.
+// True while UXWindow hands a press from the platform to a view's mouseDown, and until a trackMouse
+// in it has followed that press: a press the app makes up (a test calling mouseDown) has no drag
+// behind it, so trackMouse returns at once for it.
+bool gUXPressLive;
 i32 gUXDragDX;
 i32 gUXDragDY;

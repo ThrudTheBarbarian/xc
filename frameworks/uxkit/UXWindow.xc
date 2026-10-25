@@ -658,7 +658,9 @@ class UXWindow : UXResponder
         tree.pressY = (i32)e.y;
         gUXDragDX = grabDX; // a modal drag (trackDragStep) inside mouseDown is measured the same way
         gUXDragDY = grabDY;
+        gUXPressLive = true;
         v.mouseDown(e); // climbs the chain if unhandled
+        gUXPressLive = false;
         gUXDragDX = (i32)0;
         gUXDragDY = (i32)0;
         }
