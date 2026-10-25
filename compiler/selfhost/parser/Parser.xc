@@ -6019,6 +6019,27 @@ class Parser
             return false;
         }
 
+        // A typed collection's argument list, `(Array<AMSkyPoint>*)0`, as a
+        // declaration takes it (astronomancy, 2026-10-25: the cast failed at
+        // the `*)`). Only type words, commas, sigils and nested lists may
+        // stand inside, so `(font < limit)` with a type called font stays a
+        // comparison; `>>` closes two lists. As the reference.
+        if (i > (u32)0 && isTypeName(peek(i - (u32)1).value()) && peek(i).type() == (u16)tokLess) {
+            i32 depth = (i32)0;
+            while (true) {
+                Token* g = peek(i);
+                u16 gt = g.type();
+                if (gt == (u16)tokLess) depth = depth + (i32)1;
+                else if (gt == (u16)tokGreater) depth = depth - (i32)1;
+                else if (gt == (u16)tokShiftRight) depth = depth - (i32)2;
+                else if (!(gt == (u16)tokIdentifier || isTypeKeywordToken(gt) || gt == (u16)tokComma
+                           || isPointerSigil(gt) || gt == (u16)tokCaret)) return false;
+                i = i + (u32)1;
+                if (depth < (i32)0) return false;
+                if (depth == (i32)0) break;
+            }
+        }
+
         u32 beforeStars = i;
         if (peek(i).type() == (u16)tokCaret) i = i + (u32)1;   // `sig^` — bound method
         while (isPointerSigil(peek(i).type())) i = i + (u32)1;

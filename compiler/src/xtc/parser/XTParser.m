@@ -2260,6 +2260,33 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
           [_typeTable isTypeName:base.value] || baseIsOpaquePtr))
         return NO;
     i++;
+    // A typed collection's argument list, `(Array<AMSkyPoint>*)0`, as a
+    // declaration takes it (astronomancy, 2026-10-25: the cast failed at the
+    // `*)`). Only type words, commas, sigils and nested lists may stand inside,
+    // so `(font < limit)` with a type called font stays a comparison; `>>`
+    // closes two lists.
+    if ([_typeTable isTypeName:base.value] && [self peekToken:i].type == XTTokenLess)
+        {
+        NSInteger depth = 0;
+        while (YES)
+            {
+            XTToken* g = [self peekToken:i];
+            if (g.type == XTTokenLess)
+                depth++;
+            else if (g.type == XTTokenGreater)
+                depth--;
+            else if (g.type == XTTokenShiftRight)
+                depth -= 2;
+            else if (!(g.type == XTTokenIdentifier || g.isTypeKeyword || g.type == XTTokenComma ||
+                       XTIsPointerSigil(g.type) || g.type == XTTokenCaret))
+                return NO;
+            i++;
+            if (depth < 0)
+                return NO;
+            if (depth == 0)
+                break;
+            }
+        }
     // Pointer and bound-method suffixes, in any order: `T*`, `T**`, `fn^`.
     while (XTIsPointerSigil([self peekToken:i].type) ||
            [self peekToken:i].type == XTTokenCaret)
