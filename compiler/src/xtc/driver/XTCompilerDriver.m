@@ -133,6 +133,37 @@ static NSSet<NSString*>* stdStateNamesIn(XTProgramNode* ast, NSSet<NSString*>* f
 // process's one. Without this each image had its own RunLoop.main(), so posts
 // from a program never reached a library's loop. Two libraries carrying the
 // same file still keep a copy each (the client binds to the first).
+// The imports, each library whose standard-library state is another's
+// (`"stdState": "@<file>"`) preceded by that owner, found beside it, when the
+// program does not import it already: the state is then bound to the owner,
+// which is linked like any import. A client of the second library of a chain
+// kept its own copy of RunLoop.main() and the like before. As the port's
+// importsWithStateOwners.
+- (NSArray<NSString*>*)importsWithStateOwners:(NSArray<NSString*>*)imports
+    {
+    NSMutableArray<NSString*>* out = [NSMutableArray array];
+    for (NSString* p in imports)
+        {
+        if (![p hasPrefix:@"framework:"])
+            {
+            NSString* json = [XTInterfaceImporter interfaceJSONFromLibrary:p];
+            NSDictionary* root = json.length ? [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding]
+                                                                                options:0 error:NULL] : nil;
+            NSString* st = [root isKindOfClass:[NSDictionary class]] ? root[@"stdState"] : nil;
+            if ([st isKindOfClass:[NSString class]] && [st hasPrefix:@"@"] && st.length > 1)
+                {
+                NSString* owner = [p.stringByDeletingLastPathComponent stringByAppendingPathComponent:[st substringFromIndex:1]];
+                if (![imports containsObject:owner] && ![out containsObject:owner] &&
+                    [[NSFileManager defaultManager] fileExistsAtPath:owner])
+                    [out addObject:owner];
+                }
+            }
+        if (![out containsObject:p])
+            [out addObject:p];
+        }
+    return out;
+    }
+
 - (void)shareStdlibStateIn:(XTIRModule*)mod
                    program:(XTProgramNode*)ast
                   libPaths:(NSArray<NSString*>*)libPaths
@@ -149,6 +180,7 @@ static NSSet<NSString*>* stdStateNamesIn(XTProgramNode* ast, NSSet<NSString*>* f
         }
     // The client side: the first imported library whose stdState matches.
     NSMutableSet<NSString*>* bound = [NSMutableSet set];
+    NSString* boundLib = nil;   // the library it bound to, by file name
     NSString* boundPkg = nil;   // wasm32: the library's package (`libX.wasm` -> X)
     for (NSUInteger i = 0; i < libJsons.count; i++)
         {
@@ -157,6 +189,10 @@ static NSSet<NSString*>* stdStateNamesIn(XTProgramNode* ast, NSSet<NSString*>* f
                                                                error:NULL];
         NSString* theirs = [root isKindOfClass:[NSDictionary class]] ? root[@"stdState"] : nil;
         if (![theirs isKindOfClass:[NSString class]])
+            continue;
+        // `@<file>`: that library's state is another's (importsWithStateOwners
+        // put the owner ahead of it, so it binds there).
+        if ([theirs hasPrefix:@"@"])
             continue;
         NSArray* imps = [root[@"stdImports"] isKindOfClass:[NSArray class]] ? root[@"stdImports"] : @[];
         NSMutableArray<NSString*>* names = [preludeNames mutableCopy];
@@ -174,6 +210,7 @@ static NSSet<NSString*>* stdStateNamesIn(XTProgramNode* ast, NSSet<NSString*>* f
             }
         for (NSString* p in _preludeFiles)
             [bound addObject:p];
+        boundLib = libPaths[i].lastPathComponent;
         for (NSString* n in imps)
             {
             NSString* p = stdlibPathOf(n, dirs);
@@ -206,10 +243,11 @@ static NSSet<NSString*>* stdStateNamesIn(XTProgramNode* ast, NSSet<NSString*>* f
             if (![bound containsObject:p])
                 [own addObject:p];
             }
-        // A library that bound its state to another one has none of its own
-        // to offer: a client of it alone keeps its own copy (it would find
-        // nothing to bind to here).
-        _stdStateHash = bound.count ? nil : stdStateHashOf(names, dirs);
+        // A library that bound its state to another one has none of its own:
+        // it names the owner (`@libA.dylib`), and a client of it alone imports
+        // that library too and binds to it (importsWithStateOwners). Without
+        // this such a client kept its own copy. As the port.
+        _stdStateHash = bound.count ? [@"@" stringByAppendingString:boundLib ?: @""] : stdStateHashOf(names, dirs);
         exportNames = stdStateNamesIn(ast, own);
         }
     for (XTIRSymbol* sym in mod.symbols)
@@ -1511,7 +1549,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
             stringByAppendingPathComponent:@"x86_64-w64-mingw32/lib"];
         }
     NSMutableArray<NSString*>* frameworkImports = [NSMutableArray array];
-    for (NSString* p in pp.metadataImports)
+    for (NSString* p in [self importsWithStateOwners:pp.metadataImports])
         {
         // A system framework: linked as -framework, declaring nothing. It
         // travels to the link in the needs list, still marked.

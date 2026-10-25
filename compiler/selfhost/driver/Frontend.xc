@@ -529,7 +529,7 @@ class FeOptions
         u32 xtcImports = (u32)0;
         Array* xtcLibs = new Array();   // their paths, in import order (shareStdState)
             {
-            Array* metas = pp.metadataImports();
+            Array* metas = importsWithStateOwners(pp.metadataImports());
             // Handed to the DRIVER: a wasm app's loader lists the modules it
             // will fetch, and `#import <X>` is the only place that is known.
             o.setNeededLibs(metas);
@@ -925,11 +925,16 @@ class FeOptions
         Array* sdirs = pp.stdlibDirs();
         Set* boundFiles = new Set();
         String* boundPkg = (String*)0;   // wasm32: the library's package (`libX.wasm` -> X)
+        String* boundLib = (String*)0;   // the library it bound to, by file name
         for (u32 li = (u32)0; li < xtcLibs.count(); li = li + (u32)1)
             {
             String* lp = (String*)xtcLibs.get(li);
             String* theirs = IfaceImport.stdStateOf(lp);
             if (theirs == (String*)0)
+                continue;
+            // `@<file>`: that library's state is another's (importsWithState-
+            // Owners put the owner ahead of it, so it binds there).
+            if (theirs.hasPrefix(String.withCString("@")))
                 continue;
             Array* imps = IfaceImport.stdImportsOf(lp);
             Array* names = new Array();
@@ -965,6 +970,7 @@ class FeOptions
                 if (fn.hasPrefix(String.withCString("lib")))
                     boundPkg = fn.substringBytes((u32)3, fn.byteLength() - (u32)3 - (u32)5);
                 }
+            boundLib = lp.lastPathComponent();
             break;
             }
         Set* stdBound = stdStateNames(program, boundFiles);
@@ -979,10 +985,17 @@ class FeOptions
             for (u32 k = (u32)0; k < own.count(); k = k + (u32)1)
                 names.add(own.get(k));
             // A library that bound its state to another one has none of its
-            // own to offer: a client of it alone keeps its own copy. As the
-            // reference.
+            // own: it names the owner (`@libA.dylib`), and a client of it alone
+            // imports that library too and binds to it (importsWithState-
+            // Owners). As the reference.
             if (boundFiles.count() == (u32)0)
                 stdState = stdStateHashOf(names, sdirs);
+            else
+                {
+                stdState = String.withCString("@");
+                if (boundLib != (String*)0)
+                    stdState.append(boundLib);
+                }
             Set* ownFiles = new Set();
             Array* pf = pp.preludeFiles().allObjects();
             for (u32 k = (u32)0; k < pf.count(); k = k + (u32)1)
@@ -2178,6 +2191,44 @@ u64 fnvByte(u64 h, u8 b)
     {
     return (h ^ (u64)b) * (u64)$100000001B3;
     }
+// The imports, each library whose standard-library state is another's
+// (`"stdState": "@<file>"`) preceded by that owner, found beside it, when the
+// program does not import it already: the state is then bound to the owner,
+// which is linked like any import. A client of the second library of a chain
+// kept its own copy of RunLoop.main() and the like before. As the reference.
+Array* importsWithStateOwners(Array* imports)
+{
+    Array* out = new Array();
+    for (u32 i = (u32)0; i < imports.count(); i = i + (u32)1)
+        {
+        String* p = (String*)imports.get(i);
+        if (!p.hasPrefix(String.withCString("framework:")))
+            {
+            String* st = IfaceImport.stdStateOf(p);
+            if (st != (String*)0 && st.hasPrefix(String.withCString("@")) && st.byteLength() > (u32)1)
+                {
+                String* owner = p.deletingLastPathComponent();
+                if (owner.byteLength() > (u32)0)
+                    owner.appendCString("/");
+                owner.append(st.substringFromByte((u32)1));
+                if (!importsHas(imports, owner) && !importsHas(out, owner) && Files.exists(owner))
+                    out.add((Object*)owner);
+                }
+            }
+        if (!importsHas(out, p))
+            out.add((Object*)p);
+        }
+    return out;
+}
+
+bool importsHas(Array* a, String* p)
+{
+    for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+        if (((String*)a.get(i)).equals(p))
+            return true;
+    return false;
+}
+
 String* stdStateHashOf(Array* names, Array* dirs)
     {
     Set* seen = new Set();

@@ -106,6 +106,21 @@ case "$(uname -s)-$(uname -m)" in
             echo "$got" | grep -q 'one Null.null(): 0' \
                 || { bad "arm64 mismatch: $L bound to the library's state anyway:"; echo "$got" | sed 's/^/        /'; }
         done
+        # A chain: libSsChain imports libSsLib, and a program imports only
+        # libSsChain. Its singletons must be libSsLib's (the second library
+        # names the first as the owner of its state, and the program imports
+        # that library too); it kept its own copy before (2026-10-24).
+        WANT_CHAIN=$'one OperationQueue.main(): 1\none NotificationCenter.shared(): 1\none Null.null(): 1'
+        for L in xcc xcc-xc; do
+            d="$TMP/arm64/chain-$L"
+            buildlib arm64 "$L" "$d" libSsLib.dylib || { bad "arm64 chain: $L could not build libSsLib"; continue; }
+            ( cd "$d" && "$BIN/$L" --emit-lib -A arm64 -H "$ROOT" -q -L . -o libSsChain.dylib "$T/sschain.xc" ) 2>"$d/err1" \
+                || { bad "arm64 chain: $L could not build libSsChain"; sed 's/^/        /' "$d/err1"; continue; }
+            ( cd "$d" && "$BIN/$L" -A arm64 -H "$ROOT" -q -L . -o sschainclient "$T/sschainclient.xc" ) 2>"$d/err2" \
+                || { bad "arm64 chain: $L: sschainclient did not build"; sed 's/^/        /' "$d/err2"; continue; }
+            got=$(run_native "$d" sschainclient 2>&1)
+            [ "$got" = "$WANT_CHAIN" ] || { bad "arm64 chain, $L:"; echo "$got" | sed 's/^/        /'; }
+        done
         [ $fail = $before ] && echo "PASS  arm64: one stdlib singleton per process across a library" ;;
     *)  echo "SKIP  arm64: needs a macOS arm64 host" ;;
 esac
