@@ -1788,7 +1788,11 @@ class ParDevice
                 i64 ivar = num(src, &at);
                 at = at + (u32)1;
                 num(src, &at);
-                ptr[nbuf] = *(pointer*)(obj + off);
+                // The field at off, through an integer address: the block's
+                // bytes are one object, and a checked build (which runs this
+                // guard for a block that stays on the CPU) read `obj + off` as
+                // subscript off of a one-element array and stopped the program.
+                ptr[nbuf] = *(pointer*)((pointer)((u64)obj + (u64)off));
                 len[nbuf] = proto.gpuLength((i32)ivar);
                 ro[nbuf] = proto.gpuReadsOnly((i32)ivar);
                 nbuf = nbuf + (u32)1;

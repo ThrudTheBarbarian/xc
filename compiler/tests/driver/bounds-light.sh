@@ -112,5 +112,38 @@ for XC in ${XC:-bin/$PLAT/xcc-xc bin/$PLAT/xcc}; do
     "$XC" -q -O2 -A x86_64 -fbounds-check -H . -o "$W/px" "$W/p.xc" > "$W/o" 2>&1 \
         || { echo "FAIL $XC: a par block does not build under -A x86_64 -fbounds-check"; head -3 "$W/o"; fail=1; }
 done
+# A par block that captures a heap array, in a checked build (0.87's release
+# smoke test): the alias guard the block runs on the CPU reads each captured
+# pointer out of the block's own bytes, and a checked build took `obj + off`
+# for subscript off of a one-element array: "index 24, but the array holds 1
+# element", aborting. Both check levels.
+cat > "$W/h.xc" <<'XC'
+#import "Stdio.xc"
+#import "Par.xc"
+#define N 100000
+i32 main(i32 argc, u8** argv)
+    {
+    float* a = new float[N];
+    for (u32 i = 0; i < N; i++)
+        a[i] = (float)i * 0.5;
+    double total = 0.0;
+    par :reduce(+ total)
+        {
+        for (u32 i in 0..N)
+            total = total + (double)a[i];
+        }
+    Stdio.printf("par %.1f\n", total);
+    return 0;
+    }
+XC
+for XC in ${XC:-bin/$PLAT/xcc-xc bin/$PLAT/xcc}; do
+    [ -x "$XC" ] || continue
+    for chk in -fbounds-check=light -fbounds-check; do
+        "$XC" -q -O2 $chk -H . -o "$W/h" "$W/h.xc" > "$W/o" 2>&1 \
+            || { echo "FAIL $XC: a par block over a heap array does not build under $chk"; head -3 "$W/o"; fail=1; continue; }
+        got=$("$W/h" 2>&1 | tail -1)
+        [ "$got" = "par 2499975000.0" ] || { echo "FAIL $XC: the heap-array par block under $chk gives '$got'"; fail=1; }
+    done
+done
 [ $fail = 0 ] && echo "bounds-light: ok"
 exit $fail
