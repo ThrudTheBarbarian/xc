@@ -18,7 +18,9 @@ case "$out" in --*) out=linux-x86_64 ;; esac
 inputs=0
 for a in "$@"; do [ "$a" = --with-link-inputs ] && inputs=1; done
 mkdir -p "$out"
-build='gcc -shared -fPIC -O2 libUXGtk.c $(pkg-config --cflags --libs gtk4) -o libUXGtk.so'
+# gnu17: compiled as C23 (newer GCCs' default), glibc's headers bind strtol to __isoc23_strtol,
+# and the library would need glibc 2.38 instead of 2.34.
+build='gcc -shared -fPIC -O2 -std=gnu17 libUXGtk.c $(pkg-config --cflags --libs gtk4) -o libUXGtk.so'
 if [ "$(uname -s)" = Linux ]; then
   ( cd "$here" && sh -c "$build" && mv libUXGtk.so "$OLDPWD/$out/" )
   if [ $inputs = 1 ]; then
