@@ -10707,8 +10707,61 @@ class BeFact : Object
             }
         }
 
+    // A Retain and a Release of the same value that cancel, block by block:
+    // the Release takes its memory token straight from the Retain and only
+    // pure instructions lie between, so nothing can drop the count meanwhile
+    // and the Release cannot free what the Retain held. As the reference's
+    // retainPairsIn (an Array search retained and released every element
+    // around one compare).
+    void retainPairsIn(IRFunc* fn)
+        {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            bool again = true;
+            while (again)
+                {
+                again = false;
+                Array* ins = bb.insns();
+                for (u32 i = (u32)0; i < ins.count() && !again; i = i + (u32)1)
+                    {
+                    IRInsn* r = (IRInsn*)ins.get(i);
+                    if (!r.op().equals(String.withCString("Retain")) || r.ops().count() != (u32)2 || r.memRes() == (IRValue*)0
+                        || ((IROperand*)r.ops().get((u32)0)).kind() != (u8)OPK_USE)
+                        continue;
+                    IRValue* rv = ((IROperand*)r.ops().get((u32)0)).val();
+                    for (u32 k = i + (u32)1; k < ins.count(); k = k + (u32)1)
+                        {
+                        IRInsn* q = (IRInsn*)ins.get(k);
+                        if (q.op().equals(String.withCString("Release")))
+                            {
+                            if (q.ops().count() == (u32)2 && q.memRes() != (IRValue*)0
+                                && ((IROperand*)q.ops().get((u32)0)).kind() == (u8)OPK_USE
+                                && ((IROperand*)q.ops().get((u32)0)).val() == rv
+                                && ((IROperand*)q.ops().get((u32)1)).kind() == (u8)OPK_USE
+                                && ((IROperand*)q.ops().get((u32)1)).val() == r.memRes())
+                                {
+                                rewriteUsesTo(fn, q.memRes(), (IROperand*)r.ops().get((u32)1));
+                                Array* keep = new Array();
+                                for (u32 m = (u32)0; m < ins.count(); m = m + (u32)1)
+                                    if ((IRInsn*)ins.get(m) != q && (IRInsn*)ins.get(m) != r)
+                                        keep.add(ins.get(m));
+                                bb.setInsns(keep);
+                                again = true;
+                                }
+                            break;
+                            }
+                        if (q.memRes() != (IRValue*)0 || !isPureOp(q))
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
     void deadCodeInFunc(IRFunc* fn)
         {
+        retainPairsIn(fn);
         deadStoresIn(fn);
         bool changed = true;
         while (changed)

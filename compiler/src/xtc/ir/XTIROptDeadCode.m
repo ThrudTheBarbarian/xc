@@ -184,8 +184,77 @@ static NSString* XTIRDSEKey(XTIROperand* p, NSDictionary<NSNumber*, XTIRInsn*>* 
         }
     }
 
+// A Retain and a Release of the same value that cancel, block by block: the
+// Release takes its memory token straight from the Retain and only pure
+// instructions (no memory token, no call) lie between, so nothing can drop the
+// count in between and the Release cannot free what the Retain held. A loop
+// that compares each element of an Array with a value retained and released
+// every element around one compare (2026-10-25). Whatever used the Release's
+// token uses the Retain's input token instead.
+- (void)retainPairsIn:(XTIRFunction*)fn
+    {
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        BOOL again = YES;
+        while (again)
+            {
+            again = NO;
+            NSArray<XTIRInsn*>* ins = bb.instructions;
+            for (NSUInteger i = 0; i < ins.count && !again; i++)
+                {
+                XTIRInsn* r = ins[i];
+                if (r.opcode != XTIROpRetain || r.operands.count != 2 || !r.memoryResult ||
+                    r.operands[0].kind != XTIROperandKindUse)
+                    continue;
+                for (NSUInteger k = i + 1; k < ins.count; k++)
+                    {
+                    XTIRInsn* q = ins[k];
+                    if (q.opcode == XTIROpRelease)
+                        {
+                        if (q.operands.count == 2 && q.memoryResult && q.operands[0].kind == XTIROperandKindUse &&
+                            q.operands[0].valueId == r.operands[0].valueId &&
+                            q.operands[1].kind == XTIROperandKindUse &&
+                            q.operands[1].valueId == r.memoryResult.valueId)
+                            {
+                            XTIRValueId old = q.memoryResult.valueId;
+                            XTIROperand* to = r.operands[1];
+                            for (XTIRBlock* b in fn.blocks)
+                                {
+                                NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:b.phiNodes];
+                                [all addObjectsFromArray:b.instructions];
+                                if (b.terminator)
+                                    [all addObject:b.terminator];
+                                for (XTIRInsn* u in all)
+                                    {
+                                    NSMutableArray<XTIROperand*>* ops = [u.operands mutableCopy];
+                                    BOOL ch = NO;
+                                    for (NSUInteger m = 0; m < ops.count; m++)
+                                        if (ops[m].kind == XTIROperandKindUse && ops[m].valueId == old)
+                                            {
+                                            ops[m] = to;
+                                            ch = YES;
+                                            }
+                                    if (ch)
+                                        [u replaceOperands:ops];
+                                    }
+                                }
+                            [bb.instructions removeObjectIdenticalTo:q];
+                            [bb.instructions removeObjectIdenticalTo:r];
+                            again = YES;
+                            }
+                        break;
+                        }
+                    if (q.memoryResult || !XTIRDCEIsPure(q.opcode))
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
 - (void)runOnFunction:(XTIRFunction*)fn
     {
+    [self retainPairsIn:fn];
     [self deadStoresIn:fn];
     BOOL changed = YES;
     while (changed)
