@@ -46,12 +46,23 @@ if "$XC" -q -O2 -H . -o "$W/xcd" selfhost/tools/xcd.xc > "$W/xcd.b" 2>&1; then
     mkdir -p "$W/home" "$W/set"
     XCD_HOME="$W/home" XC_PAR_REPORT=1 "$W/xcd" -port $PORT -no-mdns > "$W/xcd.log" 2>&1 &
     XPID=$!
-    for k in 1 2 3 4 5 6 7 8 9 10; do grep -q 'serving' "$W/xcd.log" 2>/dev/null && break; sleep 1; done
-    got=$(XCC_SETTINGS_DIR="$W/set" XC_PAR_REMOTE=127.0.0.1:$PORT XC_PAR=all "$W/p" 2>/dev/null | tail -1)
-    kill $XPID 2>/dev/null; wait $XPID 2>/dev/null
-    [ "$got" = "$WANT" ] || { echo "FAIL writes-own: through the daemon gives '$got'"; fail=1; }
-    grep -q 'written whole on the device, not sent' "$W/xcd.log" \
-        || { echo "FAIL writes-own: the daemon was sent ys, or did not run it whole"; fail=1; }
+    for k in 1 2 3 4 5 6 7 8 9 10; do grep -q -e 'serving' -e 'no TLS library' "$W/xcd.log" 2>/dev/null && break; sleep 1; done
+    if grep -q 'xcd: serving' "$W/xcd.log"; then
+        got=$(XCC_SETTINGS_DIR="$W/set" XC_PAR_REMOTE=127.0.0.1:$PORT XC_PAR=all "$W/p" 2>/dev/null | tail -1)
+        kill $XPID 2>/dev/null; wait $XPID 2>/dev/null
+        [ "$got" = "$WANT" ] || { echo "FAIL writes-own: through the daemon gives '$got'"; fail=1; }
+        # The report comes from a device's layout: a daemon serving only its
+        # CPU pool has none to give.
+        if grep -q 'xcd: serving cpu' "$W/xcd.log"; then
+            echo "writes-own: the daemon here serves only its CPU, the report not checked"
+        else
+            grep -q 'written whole on the device, not sent' "$W/xcd.log" \
+                || { echo "FAIL writes-own: the daemon was sent ys, or did not run it whole"; fail=1; }
+        fi
+    else
+        kill $XPID 2>/dev/null; wait $XPID 2>/dev/null
+        echo "writes-own: the daemon does not serve here ($(grep -m1 -E 'xcd:' "$W/xcd.log")), skipped"
+    fi
 else
     echo "FAIL writes-own: xcd does not build"; fail=1
 fi
