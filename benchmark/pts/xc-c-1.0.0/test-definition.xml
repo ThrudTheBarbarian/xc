@@ -2,7 +2,7 @@
 <PhoronixTestSuite>
   <TestInformation>
     <Title>xc C</Title>
-    <AppVersion>0.87</AppVersion>
+    <AppVersion>0.87.2</AppVersion>
     <Description>Plain C benchmarks, with no pragmas or annotations, built by GCC, by Clang and by xcc (and, for comparison, the same files with one OpenMP pragma on the timed loop, built by GCC and Clang), the compiler of the xc language. xcc builds a C file through clang's LLVM IR and compiles it with its own optimiser and back end; with --par-auto it turns the program's loops into data-parallel blocks that run on every CPU thread or on the GPU, with no change to the source. Each program runs its work eight times and the result is the best run; the first run, which carries one-off costs such as building a GPU kernel, is reported too. Every run must print the benchmark's checksum, and a GPU build that falls back to the CPU is refused. Each program runs at 1, 4 or 16 times its standard work, so a big GPU, or several, has enough to do. Needs gcc and clang (xcc's C path uses clang's front end); Clang's OpenMP build needs libomp.</Description>
     <ResultScale>ms</ResultScale>
     <Proportion>LIB</Proportion>
