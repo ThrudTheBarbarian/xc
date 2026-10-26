@@ -17,6 +17,10 @@ i32 main(void)
     u32 n = 1 << 20;                              // 4 MB: aligned, registered
     u32* a = new u32[n];
     u32 rounds = 200;
+    // On the CPU's lanes, whatever the machine: the race is between threads,
+    // and a GPU that shares memory in place (Metal) would write the block
+    // this test write-protects by hand, which the runtime itself never does.
+    Par.device("fill", "cpu");
     for (u32 r = 0; r < rounds; r = r + 1)
     {
         _xtc_simd_watch((pointer)a);
