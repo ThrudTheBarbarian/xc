@@ -13,10 +13,17 @@ set -u
 cd "$(dirname "$0")/../.." || exit 1
 PLAT=$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )
 XC=${XC:-bin/$PLAT/xcc-xc}
+XC=$(cd "$(dirname "$XC")" && pwd)/$(basename "$XC")   # absolute: -c runs elsewhere
 command -v clang > /dev/null || { echo "--- c-zeroext: skipped (no clang) ---"; exit 0; }
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 want="1065813 1065804 2665790 2365783"
 "$XC" -q -O2 -o "$W/z" tests/c/zeroext.c || { echo "FAIL c-zeroext: does not build"; exit 1; }
 got=$("$W/z")
 [ "$got" = "$want" ] || { echo "FAIL c-zeroext: printed '$got', want '$want'"; exit 1; }
+# -c: one object holding xcc's half and clang's (clang -r), linked after.
+( H=$PWD; cd "$W" && "$XC" -q -O2 -H "$H" -c -o z.o "$H/tests/c/zeroext.c" ) \
+    || { echo "FAIL c-zeroext: -c did not make an object"; exit 1; }
+"$XC" -q -H . -o "$W/zl" "$W/z.o" || { echo "FAIL c-zeroext: the -c object does not link"; exit 1; }
+got=$("$W/zl")
+[ "$got" = "$want" ] || { echo "FAIL c-zeroext: -c then link printed '$got'"; exit 1; }
 echo "c-zeroext: ok"

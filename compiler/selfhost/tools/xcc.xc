@@ -80,6 +80,8 @@
 // A C program's own output while xcc's part is compiled to an object (the
 // C path): set, the object is linked with clang's into it (cSplitLink).
 String* gCSplitOut;
+// -c of a C file: cSplitLink makes one relocatable object, not a program.
+bool gCSplitRelocatable;
 #import <External>   // --no-self-host: the vendor-toolchain path
 #import <Parser>
 #import <ArArchive>
@@ -4110,6 +4112,16 @@ String* iosRuntimeSource(DriverOptions* d)
 void cSplitLink(DriverOptions* d)
 {
     String* xo = d.fe().output();
+    if (gCSplitRelocatable) {
+        String* out = gCSplitOut;
+        gCSplitOut = (String*)0;
+        if (cPathRelocatable(xo, out) != (i32)0) {
+            Stdio.printf("xcc: error: clang -r could not make '%s' from the two halves of the C file\n", out.cString());
+            Process.exit((i32)1); return;
+        }
+        d.fe().setOutput(out);
+        return;
+    }
     d.objectInputs().add((Object*)xo);
     d.objectInputs().add((Object*)cRestObject());
     d.fe().setOutput(gCSplitOut);
@@ -4366,10 +4378,16 @@ void main(void)
         Array* cDefs = new Array();
         cDefs.addAll(d.fe().defs());
         optSetPromoteScalars(true);
-        if (d.compileOnly())
+        // -c: one object, xcc's and clang's halves together (cSplitLink).
+        // win64's link has no relocatable form: there, build in one step.
+        if (d.compileOnly() && !d.keepAsm())
             {
-            Stdio.printf("xcc: error: -c of a C file is not done yet: build the program in one step\n");
-            Process.exit((i32)1); return;
+            if (d.arch().equals(String.withCString("win64")))
+                {
+                Stdio.printf("xcc: error: -c of a C file is not done for win64: build the program in one step\n");
+                Process.exit((i32)1); return;
+                }
+            gCSplitRelocatable = true;
             }
         // clang's own stack protector for its half, where the link has its
         // runtime: macOS, and Linux linked against glibc (the default).
@@ -4397,6 +4415,13 @@ void main(void)
         else if (mod != (IRModule*)0)
             {
             gCSplitOut = d.fe().output() != (String*)0 ? d.fe().output() : String.withCString("a.out");
+            if (gCSplitRelocatable && d.fe().output() == (String*)0)
+                {
+                // -c with no -o: prog.c gives prog.o, beside where it runs.
+                String* base = cin.lastPathComponent();
+                gCSplitOut = base.substringBytes((u32)0, base.byteLength() - (u32)2);
+                gCSplitOut.appendCString(".o");
+                }
             String* xo = CPath.scratch();
             xo.appendCString(".x.o");
             d.fe().setOutput(xo);

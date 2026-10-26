@@ -32,6 +32,29 @@ bool gCPathProtect;
 // not read ("rest.o is not a readable x86-64 object").
 String* gCPathTarget;
 
+// -c of a C file: xcc's object and clang's become one relocatable object
+// (`clang -r`, the system linker on macOS, ld.lld for another target), not a
+// program. 0 when it worked, else the shell's status.
+i32 cPathRelocatable(String* xo, String* out)
+    {
+    String* cc = String.withCString("clang");
+    if (gCPathTarget != (String*)0 && gCPathTarget.byteLength() > (u32)0)
+        {
+        cc.append(gCPathTarget);
+        cc.appendCString(" -fuse-ld=lld");
+        }
+    cc.appendCString(" -r -nostdlib -o ");
+    cc.append(CPath.quoted(out));
+    cc.appendCString(" ");
+    cc.append(CPath.quoted(xo));
+    if (gCRestObject != (String*)0)
+        {
+        cc.appendCString(" ");
+        cc.append(CPath.quoted(gCRestObject));
+        }
+    return system(cc.cString());
+    }
+
 // The two above, as functions, for a file compiled against this interface.
 String* cRestObject(void) { return gCRestObject; }
 void cPathSetProtect(bool b) { gCPathProtect = b; }
