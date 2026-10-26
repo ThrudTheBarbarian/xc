@@ -1153,45 +1153,22 @@ LBB21_4:                                ; =>This Inner Loop Header: Depth=1
 	cmp	x9, x10
 	b.lo	LBB21_4
 LBB21_5:
-	cbz	x9, LBB21_8
+	cbz	x9, LBB21_11
 ; %bb.6:
 	ldr	x8, [x8, _xt_simd_tab@PAGEOFF]
 	sub	x10, x9, #1
 	add	x9, x8, x10, lsl #4
 	ldr	x9, [x9, #8]
 	cmp	x21, x9
-	b.hs	LBB21_8
+	b.hs	LBB21_11
 ; %bb.7:
 Lloh75:
 	adrp	x11, _xt_simd_flag@PAGE
 Lloh76:
 	ldr	x11, [x11, _xt_simd_flag@PAGEOFF]
 	ldrb	w12, [x11, x10]
-	tbnz	w12, #0, LBB21_11
-LBB21_8:
-	ldr	w8, [x20, __xt_threads_active@PAGEOFF]
-	cbz	w8, LBB21_10
-; %bb.9:
-Lloh77:
-	adrp	x0, _xt_rt_mtx@PAGE
-Lloh78:
-	add	x0, x0, _xt_rt_mtx@PAGEOFF
-	bl	_pthread_mutex_unlock
-LBB21_10:
-	cmp	w19, #11
-	cset	w8, ne
-Lloh79:
-	adrp	x9, _xt_simd_old@PAGE
-Lloh80:
-	add	x9, x9, _xt_simd_old@PAGEOFF
-	add	x1, x9, w8, uxtw #4
-	mov	x0, x19
-	mov	x2, #0                          ; =0x0
-	ldp	x29, x30, [sp, #32]             ; 16-byte Folded Reload
-	ldp	x20, x19, [sp, #16]             ; 16-byte Folded Reload
-	ldp	x22, x21, [sp], #48             ; 16-byte Folded Reload
-	b	_sigaction
-LBB21_11:
+	tbz	w12, #0, LBB21_9
+; %bb.8:
 	and	w12, w12, #0xfe
 	strb	w12, [x11, x10]
 	lsl	x10, x10, #1
@@ -1202,18 +1179,42 @@ LBB21_11:
 	and	x1, x8, #0xffffffffffffc000
 	mov	w2, #3                          ; =0x3
 	bl	_mprotect
+LBB21_9:
 	ldr	w8, [x20, __xt_threads_active@PAGEOFF]
-	cbz	w8, LBB21_13
-; %bb.12:
-Lloh81:
+	cbz	w8, LBB21_14
+; %bb.10:
+Lloh77:
 	adrp	x0, _xt_rt_mtx@PAGE
-Lloh82:
+Lloh78:
 	add	x0, x0, _xt_rt_mtx@PAGEOFF
 	ldp	x29, x30, [sp, #32]             ; 16-byte Folded Reload
 	ldp	x20, x19, [sp, #16]             ; 16-byte Folded Reload
 	ldp	x22, x21, [sp], #48             ; 16-byte Folded Reload
 	b	_pthread_mutex_unlock
+LBB21_11:
+	ldr	w8, [x20, __xt_threads_active@PAGEOFF]
+	cbz	w8, LBB21_13
+; %bb.12:
+Lloh79:
+	adrp	x0, _xt_rt_mtx@PAGE
+Lloh80:
+	add	x0, x0, _xt_rt_mtx@PAGEOFF
+	bl	_pthread_mutex_unlock
 LBB21_13:
+	cmp	w19, #11
+	cset	w8, ne
+Lloh81:
+	adrp	x9, _xt_simd_old@PAGE
+Lloh82:
+	add	x9, x9, _xt_simd_old@PAGEOFF
+	add	x1, x9, w8, uxtw #4
+	mov	x0, x19
+	mov	x2, #0                          ; =0x0
+	ldp	x29, x30, [sp, #32]             ; 16-byte Folded Reload
+	ldp	x20, x19, [sp, #16]             ; 16-byte Folded Reload
+	ldp	x22, x21, [sp], #48             ; 16-byte Folded Reload
+	b	_sigaction
+LBB21_14:
 	ldp	x29, x30, [sp, #32]             ; 16-byte Folded Reload
 	ldp	x20, x19, [sp, #16]             ; 16-byte Folded Reload
 	ldp	x22, x21, [sp], #48             ; 16-byte Folded Reload

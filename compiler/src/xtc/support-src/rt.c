@@ -137,7 +137,10 @@ static struct sigaction xt_simd_old[2]; static int xt_simd_installed;
 static unsigned long xt_simd_pages(unsigned long i){return ((unsigned long)(xt_simd_tab[2*i+1]-xt_simd_tab[2*i])+XT_PAGE-1)&~(XT_PAGE-1);}
 static void xt_simd_fault(int sig,siginfo_t*si,void*uc){(void)uc;uint8_t*a=(uint8_t*)si->si_addr;int ours=0;
     _xt_rt_lock();unsigned long i=xt_simd_find(a);
-    if(i>0&&a<xt_simd_tab[2*(i-1)+1]&&(xt_simd_flag[i-1]&XT_SIMD_WATCHED)){ours=1;xt_simd_flag[i-1]&=(unsigned char)~XT_SIMD_WATCHED;mprotect(xt_simd_tab[2*(i-1)],xt_simd_pages(i-1),PROT_READ|PROT_WRITE);}
+    /* Inside a block no longer watched: another thread's write faulted first
+       and made it writable under this lock, so this one is retried (several
+       CPU lanes writing an array a GPU run had watched, 2026-10-26). */
+    if(i>0&&a<xt_simd_tab[2*(i-1)+1]){ours=1;if(xt_simd_flag[i-1]&XT_SIMD_WATCHED){xt_simd_flag[i-1]&=(unsigned char)~XT_SIMD_WATCHED;mprotect(xt_simd_tab[2*(i-1)],xt_simd_pages(i-1),PROT_READ|PROT_WRITE);}}
     _xt_rt_unlock();
     if(!ours)sigaction(sig,&xt_simd_old[sig==SIGSEGV?0:1],0);}
 /* Watch the block at payload p (its start): 1 when it is one and its pages

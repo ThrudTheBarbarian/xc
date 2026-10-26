@@ -3715,76 +3715,77 @@ xt_simd_veh:                            # @xt_simd_veh
 # %bb.0:
 	push	rsi
 	sub	rsp, 48
-	mov	rcx, qword ptr [rcx]
-	xor	eax, eax
-	cmp	dword ptr [rcx], -1073741819
+	mov	rax, qword ptr [rcx]
+	xor	esi, esi
+	cmp	dword ptr [rax], -1073741819
 	jne	.LBB101_15
 # %bb.1:
-	cmp	qword ptr [rcx + 32], 1
+	cmp	qword ptr [rax + 32], 1
 	jne	.LBB101_15
 # %bb.2:
-	mov	rcx, qword ptr [rcx + 40]
+	mov	rax, qword ptr [rax + 40]
 	cmp	dword ptr [rip + _xt_threads_active], 0
 	je	.LBB101_5
 	.p2align	4, 0x90
 .LBB101_3:                              # =>This Loop Header: Depth=1
                                         #     Child Loop BB101_4 Depth 2
-	mov	eax, 1
-	xchg	dword ptr [rip + xt_rt_spin], eax
-	test	eax, eax
+	mov	ecx, 1
+	xchg	dword ptr [rip + xt_rt_spin], ecx
+	test	ecx, ecx
 	je	.LBB101_5
 .LBB101_4:                              #   Parent Loop BB101_3 Depth=1
                                         # =>  This Inner Loop Header: Depth=2
-	mov	eax, dword ptr [rip + xt_rt_spin]
-	test	eax, eax
+	mov	ecx, dword ptr [rip + xt_rt_spin]
+	test	ecx, ecx
 	jne	.LBB101_4
 	jmp	.LBB101_3
 .LBB101_5:
-	mov	r8, qword ptr [rip + xt_simd_n]
-	xor	eax, eax
-	test	r8, r8
+	mov	rdx, qword ptr [rip + xt_simd_n]
+	xor	esi, esi
+	test	rdx, rdx
 	je	.LBB101_6
 # %bb.7:
-	mov	r9, qword ptr [rip + xt_simd_tab]
-	xor	edx, edx
-	movabs	r10, 2305843009213693950
+	mov	r8, qword ptr [rip + xt_simd_tab]
+	xor	ecx, ecx
+	movabs	r9, 2305843009213693950
 	.p2align	4, 0x90
 .LBB101_8:                              # =>This Inner Loop Header: Depth=1
-	lea	r11, [r8 + rdx]
-	mov	rsi, r11
-	shr	rsi
-	and	r11, r10
-	cmp	qword ptr [r9 + 8*r11], rcx
-	lea	r11, [rsi + 1]
-	cmova	r8, rsi
-	cmovbe	rdx, r11
-	cmp	rdx, r8
+	lea	r10, [rdx + rcx]
+	mov	r11, r10
+	shr	r11
+	and	r10, r9
+	cmp	qword ptr [r8 + 8*r10], rax
+	lea	r10, [r11 + 1]
+	cmova	rdx, r11
+	cmovbe	rcx, r10
+	cmp	rcx, rdx
 	jb	.LBB101_8
 # %bb.9:
-	test	rdx, rdx
+	test	rcx, rcx
 	jne	.LBB101_10
 	jmp	.LBB101_13
 .LBB101_6:
-	xor	edx, edx
-	test	rdx, rdx
+	xor	ecx, ecx
+	test	rcx, rcx
 	je	.LBB101_13
 .LBB101_10:
-	mov	r8, qword ptr [rip + xt_simd_tab]
-	lea	r9, [2*rdx - 2]
-	cmp	qword ptr [r8 + 8*r9 + 8], rcx
+	mov	rdx, qword ptr [rip + xt_simd_tab]
+	lea	r8, [2*rcx - 2]
+	cmp	qword ptr [rdx + 8*r8 + 8], rax
 	jbe	.LBB101_13
 # %bb.11:
-	lea	rcx, [rdx - 1]
-	mov	r10, qword ptr [rip + xt_simd_flag]
-	movzx	r11d, byte ptr [r10 + rcx]
-	test	r11b, 1
+	lea	rax, [rcx - 1]
+	mov	r9, qword ptr [rip + xt_simd_flag]
+	movzx	r10d, byte ptr [r9 + rax]
+	mov	esi, -1
+	test	r10b, 1
 	je	.LBB101_13
 # %bb.12:
-	lea	rax, [2*rdx - 1]
-	and	r11b, -2
-	mov	byte ptr [r10 + rcx], r11b
-	mov	rcx, qword ptr [r8 + 8*r9]
-	mov	rdx, qword ptr [r8 + 8*rax]
+	lea	r11, [2*rcx - 1]
+	and	r10b, -2
+	mov	byte ptr [r9 + rax], r10b
+	mov	rcx, qword ptr [rdx + 8*r8]
+	mov	rdx, qword ptr [rdx + 8*r11]
 	sub	rdx, rcx
 	add	rdx, 16383
 	and	rdx, -16384
@@ -3792,14 +3793,13 @@ xt_simd_veh:                            # @xt_simd_veh
 	lea	r9, [rsp + 44]
 	mov	r8d, 4
 	call	VirtualProtect
-	mov	eax, -1
 .LBB101_13:
 	cmp	dword ptr [rip + _xt_threads_active], 0
 	je	.LBB101_15
 # %bb.14:
 	mov	dword ptr [rip + xt_rt_spin], 0
 .LBB101_15:
-                                        # kill: def $eax killed $eax killed $rax
+	mov	eax, esi
 	add	rsp, 48
 	pop	rsi
 	ret

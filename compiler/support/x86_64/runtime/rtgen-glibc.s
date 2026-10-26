@@ -4766,22 +4766,22 @@ xt_simd_fault:                          # @xt_simd_fault
 .LBB106_7:
 	mov	dl, 1
 	test	rcx, rcx
-	je	.LBB106_11
+	je	.LBB106_12
 # %bb.8:
 	mov	rsi, qword ptr [rip + xt_simd_tab]
 	lea	r8, [2*rcx - 2]
 	cmp	qword ptr [rsi + 8*r8 + 8], rax
-	jbe	.LBB106_11
+	jbe	.LBB106_12
 # %bb.9:
 	lea	rax, [rcx - 1]
-	mov	r9, qword ptr [rip + xt_simd_flag]
-	movzx	r10d, byte ptr [r9 + rax]
-	test	r10b, 1
+	mov	rdx, qword ptr [rip + xt_simd_flag]
+	movzx	r9d, byte ptr [rdx + rax]
+	test	r9b, 1
 	je	.LBB106_11
 # %bb.10:
 	lea	rcx, [2*rcx - 1]
-	and	r10b, -2
-	mov	byte ptr [r9 + rax], r10b
+	and	r9b, -2
+	mov	byte ptr [rdx + rax], r9b
 	mov	rax, qword ptr [rsi + 8*r8]
 	mov	rsi, qword ptr [rsi + 8*rcx]
 	sub	rsi, rax
@@ -4792,16 +4792,17 @@ xt_simd_fault:                          # @xt_simd_fault
 	mov	edx, 3
 	call	mprotect@PLT
 	mov	edi, ebp
-	xor	edx, edx
 .LBB106_11:
+	xor	edx, edx
+.LBB106_12:
 	cmp	dword ptr [rbx], 0
-	je	.LBB106_13
-# %bb.12:
-	mov	dword ptr [rip + xt_rt_spin], 0
-.LBB106_13:
-	test	dl, dl
 	je	.LBB106_14
-# %bb.15:
+# %bb.13:
+	mov	dword ptr [rip + xt_rt_spin], 0
+.LBB106_14:
+	test	dl, dl
+	je	.LBB106_15
+# %bb.16:
 	movsxd	rsi, edi
 	xor	eax, eax
 	cmp	esi, 11
@@ -4817,7 +4818,7 @@ xt_simd_fault:                          # @xt_simd_fault
 	pop	rbx
 	pop	rbp
 	jmp	syscall@PLT                     # TAILCALL
-.LBB106_14:
+.LBB106_15:
 	add	rsp, 8
 	pop	rbx
 	pop	rbp

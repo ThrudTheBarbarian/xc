@@ -712,17 +712,25 @@ static int xt_simd_protect(uint8_t* p, uint64_t n, int ro)
 #endif
 static int xt_simd_installed;
 /* A write at a: when it is inside a watched block, the block is marked
-   written and made writable, and 1 is returned; else 0. */
+   written and made writable, and 1 is returned; else 0. Inside a block that
+   is no longer watched it is 1 too: another thread's write faulted first and
+   made the pages writable under this lock, so this one is retried. Several
+   CPU lanes writing an array a GPU run had watched all fault at once, and
+   every one after the first was taken for a real access violation
+   (0xC0000005 on Windows, 2026-10-26). */
 static int xt_simd_hit(uint8_t* a)
     {
     int ours = 0;
     _xt_rt_lock();
     uint64_t i = xt_simd_find(a);
-    if (i > 0 && a < xt_simd_tab[2 * (i - 1) + 1] && (xt_simd_flag[i - 1] & XT_SIMD_WATCHED))
+    if (i > 0 && a < xt_simd_tab[2 * (i - 1) + 1])
         {
         ours = 1;
-        xt_simd_flag[i - 1] &= (uint8_t)~XT_SIMD_WATCHED;
-        xt_simd_protect(xt_simd_tab[2 * (i - 1)], xt_simd_pages(i - 1), 0);
+        if (xt_simd_flag[i - 1] & XT_SIMD_WATCHED)
+            {
+            xt_simd_flag[i - 1] &= (uint8_t)~XT_SIMD_WATCHED;
+            xt_simd_protect(xt_simd_tab[2 * (i - 1)], xt_simd_pages(i - 1), 0);
+            }
         }
     _xt_rt_unlock();
     return ours;
