@@ -3,6 +3,21 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.87.1 — two par fixes
+
+Two fixes to how `par` runs a program across a GPU and the CPU, found by a
+user on Windows with CUDA. Nothing else changed.
+
+### Fixed
+
+- A program could crash when a block that `auto` had run on a GPU was later
+  run on the CPU's threads and wrote an array the GPU had used: the threads'
+  first writes to that array were taken for an invalid access (an access
+  violation on Windows, SIGSEGV on Linux, SIGBUS on macOS).
+- On CUDA, a block that wrote a slice of a large array through a pointer into
+  it (`stack + k * n`) did not mark the whole array as changed, so a later block
+  reading the whole array could get the GPU's earlier copy of it.
+
 ## Version 0.87 — C at OpenMP speed
 
 0.87 makes plain C, built with `xcc --par-auto`, run across a machine's cores
