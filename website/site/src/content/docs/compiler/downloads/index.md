@@ -3,7 +3,7 @@ title: Downloads
 description: Prebuilt xcc toolchain archives for macOS, Linux and Windows, the arm9 sysroot, and UXKit's GTK 4 library.
 ---
 
-The current release line is **xcc 0.87**. One install contains the whole toolchain: the
+The current release line is **xcc 0.87.1**. One install contains the whole toolchain: the
 compiler (`xcc`, which runs every stage itself, from parsing through code generation
 for all seven targets to assembly and linking), the signing tool (`xcc-sign`), the
 6502 assembler (`xcc-as`), the simulators (`xcc-sim-6502`, `xcc-sim-68k`), the
@@ -12,13 +12,13 @@ cross-build native binaries for every target with **no other toolchain installed
 
 | Platform | Download | Size |
 | --- | --- | --- |
-| macOS (Apple silicon) | [xcc-osx-0.87.tar.bz2](/downloads/xcc-osx-0.87.tar.bz2) | 10.4 MB |
-| Linux (x86_64) | [xcc-linux-0.87.tar.bz2](/downloads/xcc-linux-0.87.tar.bz2) | 6.9 MB |
-| Windows (x64) | [xcc-win64-0.87.zip](/downloads/xcc-win64-0.87.zip) | 8.5 MB |
-| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.87.tar.bz2](/downloads/xcc-arm9-sysroot-0.87.tar.bz2) | 830 KB |
-| xcd, the par daemon (macOS) | [xcd-osx-0.87.tar.bz2](/downloads/xcd-osx-0.87.tar.bz2) | 858 KB |
-| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.87.tar.bz2](/downloads/xcd-linux-0.87.tar.bz2) | 799 KB |
-| xcd, the par daemon (Windows x64) | [xcd-win64-0.87.zip](/downloads/xcd-win64-0.87.zip) | 923 KB |
+| macOS (Apple silicon) | [xcc-osx-0.87.1.tar.bz2](/downloads/xcc-osx-0.87.1.tar.bz2) | 10.4 MB |
+| Linux (x86_64) | [xcc-linux-0.87.1.tar.bz2](/downloads/xcc-linux-0.87.1.tar.bz2) | 6.9 MB |
+| Windows (x64) | [xcc-win64-0.87.1.zip](/downloads/xcc-win64-0.87.1.zip) | 8.5 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.87.1.tar.bz2](/downloads/xcc-arm9-sysroot-0.87.1.tar.bz2) | 831 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-0.87.1.tar.bz2](/downloads/xcd-osx-0.87.1.tar.bz2) | 858 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.87.1.tar.bz2](/downloads/xcd-linux-0.87.1.tar.bz2) | 799 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-0.87.1.zip](/downloads/xcd-win64-0.87.1.zip) | 923 KB |
 | UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.87.tar.bz2](/downloads/xcc-uxgtk-linux-0.87.tar.bz2) | 112 KB |
 | UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.87.tar.bz2](/downloads/xcc-uxkit-0.87.tar.bz2) | 2.9 MB |
 
@@ -33,23 +33,23 @@ in the host archive.
 ## macOS
 
 ```bash
-tar xjf xcc-osx-0.87.tar.bz2
-export PATH="$PWD/xcc-osx-0.87/bin:$PATH"
+tar xjf xcc-osx-0.87.1.tar.bz2
+export PATH="$PWD/xcc-osx-0.87.1/bin:$PATH"
 xcc -v
 ```
 
 The compiler finds its libraries **relative to its own binary**, with no flags,
 environment variables or fixed install path, so you can move the directory anywhere.
 The binaries are not notarised, so the first run on a fresh macOS install may need a
-one-time Gatekeeper override (`xattr -dr com.apple.quarantine xcc-osx-0.87/`).
+one-time Gatekeeper override (`xattr -dr com.apple.quarantine xcc-osx-0.87.1/`).
 
 ## arm9 sysroot
 
 Needed only for `-A arm9`. Unpack it anywhere and point `-L` at it:
 
 ```bash
-tar xjf xcc-arm9-sysroot-0.87.tar.bz2
-xcc -A arm9 -L path/to/xcc-arm9-sysroot-0.87 -o prog.so prog.xc
+tar xjf xcc-arm9-sysroot-0.87.1.tar.bz2
+xcc -A arm9 -L path/to/xcc-arm9-sysroot-0.87.1 -o prog.so prog.xc
 ```
 
 It holds one file: `libc.so`, newlib 4.4.0.20231231 rebuilt as position-independent
@@ -84,7 +84,7 @@ rebuilds it against any machine's GTK 4.
 
 UXKit built as a library for macOS (arm64), Windows (x64), Linux (x86_64) and the
 web, for xcc 0.87. Put its `3p/` beside the versioned install, so that
-`/opt/xcc/3p/uxkit/` sits next to `/opt/xcc/0.87/`:
+`/opt/xcc/3p/uxkit/` sits next to `/opt/xcc/0.87.1/`:
 
 ```bash
 tar xjf xcc-uxkit-0.87.tar.bz2
@@ -104,8 +104,8 @@ have. If `tar` says it cannot run `bzip2`, install it first (on Ubuntu,
 `sudo apt-get install -y bzip2`).
 
 ```bash
-tar xjf xcc-linux-0.87.tar.bz2
-export PATH="$PWD/xcc-linux-0.87/bin:$PATH"
+tar xjf xcc-linux-0.87.1.tar.bz2
+export PATH="$PWD/xcc-linux-0.87.1/bin:$PATH"
 xcc -v
 ```
 
@@ -119,7 +119,7 @@ covers a minimal install, NVIDIA, and access over ssh.
 
 ## Windows
 
-Unzip `xcc-win64-0.87.zip` anywhere and add its `bin` folder to `PATH` (or
+Unzip `xcc-win64-0.87.1.zip` anywhere and add its `bin` folder to `PATH` (or
 invoke `bin\xcc.exe` by path). The binaries are self-contained; no runtime installer is
 needed.
 
