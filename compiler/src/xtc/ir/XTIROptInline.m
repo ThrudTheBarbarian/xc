@@ -122,6 +122,100 @@ static void rewriteUses(XTIRFunction* fn, XTIRValueId oldVid, XTIROperand* newOp
 
 #pragma mark - Candidate selection
 
+// The blocks on a cycle of the CFG: in a strongly connected component of more
+// than one block, or branching to themselves (Kosaraju, iterative, linear). A
+// set, so visit order does not matter; the port's cyclicBlocks is the same.
+static NSSet<NSValue*>* XTIRCyclicBlocks(XTIRFunction* fn)
+    {
+    NSArray<XTIRBlock*>* bs = fn.blocks;
+    NSUInteger n = bs.count;
+    NSMutableDictionary<NSValue*, NSNumber*>* idx = [NSMutableDictionary dictionary];
+    for (NSUInteger i = 0; i < n; i++)
+        idx[[NSValue valueWithNonretainedObject:bs[i]]] = @(i);
+    NSMutableArray<NSMutableArray<NSNumber*>*>* succ = [NSMutableArray array];
+    NSMutableArray<NSMutableArray<NSNumber*>*>* pred = [NSMutableArray array];
+    for (NSUInteger i = 0; i < n; i++)
+        {
+        [succ addObject:[NSMutableArray array]];
+        [pred addObject:[NSMutableArray array]];
+        }
+    NSMutableSet<NSValue*>* loops = [NSMutableSet set];
+    for (NSUInteger i = 0; i < n; i++)
+        {
+        XTIRInsn* t = bs[i].terminator;
+        for (XTIROperand* o in t.operands)
+            {
+            if (o.kind != XTIROperandKindBlock || !o.blockRef)
+                continue;
+            NSNumber* j = idx[[NSValue valueWithNonretainedObject:o.blockRef]];
+            if (!j)
+                continue;
+            [succ[i] addObject:j];
+            [pred[j.unsignedIntegerValue] addObject:@(i)];
+            if (j.unsignedIntegerValue == i)
+                [loops addObject:[NSValue valueWithNonretainedObject:bs[i]]];
+            }
+        }
+    NSMutableArray<NSNumber*>* order = [NSMutableArray array];
+    NSMutableIndexSet* seen = [NSMutableIndexSet indexSet];
+    for (NSUInteger r = 0; r < n; r++)
+        {
+        if ([seen containsIndex:r])
+            continue;
+        NSMutableArray<NSNumber*>* stN = [NSMutableArray arrayWithObject:@(r)];
+        NSMutableArray<NSNumber*>* stK = [NSMutableArray arrayWithObject:@0];
+        [seen addIndex:r];
+        while (stN.count)
+            {
+            NSUInteger top = stN.count - 1;
+            NSUInteger v = stN[top].unsignedIntegerValue, k = stK[top].unsignedIntegerValue;
+            if (k < succ[v].count)
+                {
+                stK[top] = @(k + 1);
+                NSUInteger c = succ[v][k].unsignedIntegerValue;
+                if (![seen containsIndex:c])
+                    {
+                    [seen addIndex:c];
+                    [stN addObject:@(c)];
+                    [stK addObject:@0];
+                    }
+                }
+            else
+                {
+                [order addObject:@(v)];
+                [stN removeLastObject];
+                [stK removeLastObject];
+                }
+            }
+        }
+    NSMutableIndexSet* done = [NSMutableIndexSet indexSet];
+    for (NSInteger q = (NSInteger)order.count - 1; q >= 0; q--)
+        {
+        NSUInteger r = order[(NSUInteger)q].unsignedIntegerValue;
+        if ([done containsIndex:r])
+            continue;
+        NSMutableArray<NSNumber*>* members = [NSMutableArray array];
+        NSMutableArray<NSNumber*>* st = [NSMutableArray arrayWithObject:@(r)];
+        [done addIndex:r];
+        while (st.count)
+            {
+            NSUInteger v = st.lastObject.unsignedIntegerValue;
+            [st removeLastObject];
+            [members addObject:@(v)];
+            for (NSNumber* c in pred[v])
+                if (![done containsIndex:c.unsignedIntegerValue])
+                    {
+                    [done addIndex:c.unsignedIntegerValue];
+                    [st addObject:c];
+                    }
+            }
+        if (members.count > 1)
+            for (NSNumber* m in members)
+                [loops addObject:[NSValue valueWithNonretainedObject:bs[m.unsignedIntegerValue]]];
+        }
+    return loops;
+    }
+
 // Return the callee XTIRFunction this Call can be inlined from, or nil.
 - (nullable XTIRFunction*)inlinableCalleeFor:(XTIRInsn*)insn
                                       caller:(XTIRFunction*)caller
@@ -543,9 +637,15 @@ static void rewriteUses(XTIRFunction* fn, XTIRValueId oldVid, XTIROperand* newOp
         while (again && guard++ < 8192)
             {
             again = NO;
+            // Checks inline only where they repeat: in a block on a cycle
+            // (inlined everywhere, binaries grew 1.93x, cold code included).
+            // Recomputed on each rescan, as an inline splits blocks.
+            NSSet<NSValue*>* loops = self.checksOnly ? XTIRCyclicBlocks(caller) : nil;
             for (NSUInteger bi = 0; bi < caller.blocks.count && !again; bi++)
                 {
                 XTIRBlock* bb = caller.blocks[bi];
+                if (loops && ![loops containsObject:[NSValue valueWithNonretainedObject:bb]])
+                    continue;
                 NSUInteger i = 0;
                 while (i < bb.instructions.count)
                     {

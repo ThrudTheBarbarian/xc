@@ -1535,9 +1535,10 @@ class BeFact : Object
         if (stopHere(String.withCString("bounds-elide")))
             return;
         // The checks bounds-elide could not prove stay calls. Inlining them
-        // here (never before it: then no call is left for it to find, and
-        // array_map ran 51x slower) took the arm64 back end past 36 GB on
-        // xcc.xc, so it waits (private/compiler/TODO.md).
+        // here, only in loops (cyclicBlocks; never before bounds-elide: then
+        // no call is left for it to find), was measured 2026-10-26 and left
+        // out: checked binaries 1.43x larger, array_map 1.67x faster, sieve
+        // and mem_copy 3-4% slower, the rest the same (private TODO).
         if (_level >= (u32)2)
             idiomMemset(m);
         if (stopHere(String.withCString("idiom-memset")))
@@ -2816,6 +2817,112 @@ class BeFact : Object
     // caller's block, so the block list changes underneath the scan and the
     // caller is rescanned. The guard is the original's, against a pathological
     // chain of inlines.
+    // The blocks on a cycle of the CFG: in a strongly connected component of
+    // more than one block, or branching to themselves (Kosaraju, iterative,
+    // linear). A set, so the order blocks are visited in does not matter; the
+    // reference's +cyclicBlocksOf: is the same.
+    Map* cyclicBlocks(IRFunc* fn)
+        {
+        Array* bs = fn.blocks();
+        Map* idx = new Map();
+        for (u32 i = (u32)0; i < bs.count(); i = i + (u32)1)
+            idx.set((Hashable*)bs.get(i), (Object*)Number.with(i));
+        Array* succ = new Array();
+        Array* pred = new Array();
+        for (u32 i = (u32)0; i < bs.count(); i = i + (u32)1)
+            {
+            succ.add((Object*)new Array());
+            pred.add((Object*)new Array());
+            }
+        Map* loops = new Map();
+        for (u32 i = (u32)0; i < bs.count(); i = i + (u32)1)
+            {
+            Array* ss = successorsOf((IRBlock*)bs.get(i));
+            for (u32 k = (u32)0; k < ss.count(); k = k + (u32)1)
+                {
+                Object* j = idx.get((Hashable*)ss.get(k));
+                if (j == (Object*)0)
+                    continue;
+                u32 jj = ((Number*)j).asU32();
+                ((Array*)succ.get(i)).add((Object*)Number.with(jj));
+                ((Array*)pred.get(jj)).add((Object*)Number.with(i));
+                if (jj == i)
+                    loops.set((Hashable*)bs.get(i), (Object*)Number.with((u32)1));
+                }
+            }
+        // 1. Postorder over the successors.
+        Array* order = new Array();
+        Map* seen = new Map();
+        for (u32 r = (u32)0; r < bs.count(); r = r + (u32)1)
+            {
+            if (seen.get((Hashable*)Number.with(r)) != (Object*)0)
+                continue;
+            Array* stN = new Array();
+            Array* stK = new Array();
+            seen.set((Hashable*)Number.with(r), (Object*)Number.with((u32)1));
+            stN.add((Object*)Number.with(r));
+            stK.add((Object*)Number.with((u32)0));
+            while (stN.count() > (u32)0)
+                {
+                u32 top = stN.count() - (u32)1;
+                u32 n = ((Number*)stN.get(top)).asU32();
+                u32 k = ((Number*)stK.get(top)).asU32();
+                Array* ss = (Array*)succ.get(n);
+                if (k < ss.count())
+                    {
+                    stK.set(top, (Object*)Number.with(k + (u32)1));
+                    u32 c = ((Number*)ss.get(k)).asU32();
+                    if (seen.get((Hashable*)Number.with(c)) == (Object*)0)
+                        {
+                        seen.set((Hashable*)Number.with(c), (Object*)Number.with((u32)1));
+                        stN.add((Object*)Number.with(c));
+                        stK.add((Object*)Number.with((u32)0));
+                        }
+                    }
+                else
+                    {
+                    order.add((Object*)Number.with(n));
+                    stN.removeLast();
+                    stK.removeLast();
+                    }
+                }
+            }
+        // 2. Components over the predecessors, in reverse postorder.
+        Map* comp = new Map();
+        u32 nc = (u32)0;
+        for (u32 q = order.count(); q > (u32)0; q = q - (u32)1)
+            {
+            u32 r = ((Number*)order.get(q - (u32)1)).asU32();
+            if (comp.get((Hashable*)Number.with(r)) != (Object*)0)
+                continue;
+            nc = nc + (u32)1;
+            Array* members = new Array();
+            Array* st = new Array();
+            comp.set((Hashable*)Number.with(r), (Object*)Number.with(nc));
+            st.add((Object*)Number.with(r));
+            while (st.count() > (u32)0)
+                {
+                u32 n = ((Number*)st.get(st.count() - (u32)1)).asU32();
+                st.removeLast();
+                members.add((Object*)Number.with(n));
+                Array* ps = (Array*)pred.get(n);
+                for (u32 k = (u32)0; k < ps.count(); k = k + (u32)1)
+                    {
+                    u32 c = ((Number*)ps.get(k)).asU32();
+                    if (comp.get((Hashable*)Number.with(c)) == (Object*)0)
+                        {
+                        comp.set((Hashable*)Number.with(c), (Object*)Number.with(nc));
+                        st.add((Object*)Number.with(c));
+                        }
+                    }
+                }
+            if (members.count() > (u32)1)
+                for (u32 k = (u32)0; k < members.count(); k = k + (u32)1)
+                    loops.set((Hashable*)bs.get(((Number*)members.get(k)).asU32()), (Object*)Number.with((u32)1));
+            }
+        return loops;
+        }
+
     void inlineInto(IRModule* m, IRFunc* caller)
         {
         bool again = true;
@@ -2824,11 +2931,17 @@ class BeFact : Object
             {
             guard = guard + (u32)1;
             again = false;
+            // Checks inline only where they repeat: in a block on a cycle
+            // (inlined everywhere, binaries grew 1.93x, cold code included).
+            // Recomputed on each rescan, as an inline splits blocks.
+            Map* loops = _inlineChecks ? cyclicBlocks(caller) : (Map*)0;
             for (u32 b = (u32)0; b < caller.blocks().count(); b = b + (u32)1)
                 {
                 if (again)
                     break;
                 IRBlock* bb = (IRBlock*)caller.blocks().get(b);
+                if (loops != (Map*)0 && loops.get((Hashable*)bb) == (Object*)0)
+                    continue;
                 u32 i = (u32)0;
                 while (i < bb.insns().count())
                     {

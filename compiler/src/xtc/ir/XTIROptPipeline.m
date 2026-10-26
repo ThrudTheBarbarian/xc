@@ -168,10 +168,11 @@
         XTIROptBoundsElide* belide = [[XTIROptBoundsElide alloc] init];
         belide.profile = profile;
         [p addPass:belide];
-        // The checks it could not prove stay calls. Inlining them here (never
-        // before it: then no call is left for it to find, and array_map ran 51x
-        // slower) took the arm64 back end past 36 GB on xcc.xc, so it waits
-        // (the self-hosted pipeline says the same).
+        // The checks it could not prove stay calls. Inlining them here, only in
+        // loops (checksOnly; never before it: then no call is left for it to
+        // find), was measured 2026-10-26 and left out: checked binaries 1.43x
+        // larger, array_map 1.67x faster, sieve and mem_copy 3-4% slower, the
+        // rest the same. The port's pipeline is the same.
         // Recognise byte-fill loops as memset BEFORE unrolling (else the fill
         // loop gets unrolled instead of collapsed to a call).
         XTIROptIdiomMemset* memset = [[XTIROptIdiomMemset alloc] init];
