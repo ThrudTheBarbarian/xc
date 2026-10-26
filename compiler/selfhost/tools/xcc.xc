@@ -4429,6 +4429,26 @@ void main(void)
             }
         if (mod == 0) { Process.exit((i32)1); return; }
         }
+    else if (d.fe().input().hasSuffix(String.withCString(".ir")))
+        {
+        // IR text, as --emit-ir writes it: parsed, then optimised and compiled
+        // like a module the front end made (the reference's xcc-cg-* tools,
+        // which are not shipped, took this input).
+        String* text = Files.readText(d.fe().input());
+        if (text == (String*)0)
+            {
+            Stdio.printf("xcc: error: cannot read '%s'\n", d.fe().input().cString());
+            Process.exit((i32)1); return;
+            }
+        IrParser* ip = new IrParser();
+        mod = ip.run(text);
+        if (mod == 0 || ip.failed())
+            {
+            Stdio.printf("xcc: %s: not IR this xcc reads: %s\n", d.fe().input().cString(),
+                         ip.why() == 0 ? "?" : ip.why().cString());
+            Process.exit((i32)1); return;
+            }
+        }
     else
         mod = Frontend.lower(d.fe());
     if (mod == 0) { Process.exit((i32)3); return; }
