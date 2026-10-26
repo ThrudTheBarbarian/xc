@@ -423,6 +423,19 @@ as the sum of their links (on a machine with an RTX 5080 and an RTX 3090,
 `saxpy` over 16 million floats: 16 ms on one card, 10 ms on both); a block
 with compute to hide gains more.
 
+The scheduler works from two things it measures for each device: the time to
+move a tile's data to and from it, and the time to compute the tile. By default
+a tile moves up to 8 MB each way. Run once with `XC_PAR_PROBE=1` (see
+[Across machines](#across-machines-xcd)) and each device is timed at tile sizes
+doubling from its smallest (×2, ×4, ×8, …); from then on the program starts
+from the smallest tile that reaches nine tenths of that device's best rate, so
+the copies do not drown the work. A device across the network gets a smallest
+tile sized from its link's round trip and bandwidth, so the latency stays under
+a twentieth of a tile's time. Whether to use a device at all is not worked out
+from these numbers: `auto` times the devices alone and together and keeps the
+fastest arrangement, and in a shared run each device takes the next tile when
+it has room, so a faster one simply does more of the work.
+
 `auto` treats the two sets as two more candidates after the CPU and the one
 GPU: the GPUs together, and the GPUs with the CPU. Each is measured twice
 (the first run a warm-up, as above), and the fastest of the four wins at that
