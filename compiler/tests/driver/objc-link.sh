@@ -37,6 +37,7 @@ i32 main(void)
     }
 XC
 clang -c -fno-objc-msgsend-selector-stubs -o "$W/probe.o" "$W/probe.m" 2>/dev/null || { echo "objc-link: no clang, skipped"; exit 0; }
+clang -c -fobjc-msgsend-selector-stubs -o "$W/stubs.o" "$W/probe.m" 2>/dev/null || : > "$W/stubs.o"
 for XC in ${XC:-bin/osx/xcc bin/osx/xcc-xc}; do
     [ -x "$XC" ] || continue
     d="$W/$(basename "$XC")"; mkdir -p "$d"
@@ -55,6 +56,15 @@ for XC in ${XC:-bin/osx/xcc bin/osx/xcc-xc}; do
     otool -L "$d/oo" | grep -q libobjc || { echo "FAIL $XC: the object-only link lacks libobjc"; fail=1; }
     got=$("$d/oo" 2>&1)
     [ "$got" = "4" ] || { echo "FAIL $XC: the object-only ObjC program gives '$got'"; fail=1; }
+    # Built with clang's default selector stubs (objc_msgSend$<sel>), which
+    # only Apple's linker makes: the error names them and the clang flag,
+    # rather than sending the user to look for a framework.
+    if [ -s "$W/stubs.o" ]; then
+        "$XC" -q -H . -framework Foundation -o "$d/st" "$d/main.o" "$W/stubs.o" > "$d/out4" 2>&1 \
+            && { echo "FAIL $XC: an object with selector stubs linked"; fail=1; }
+        grep -q "objc_msgSend\$length': a selector stub" "$d/out4" && grep -q 'fno-objc-msgsend-selector-stubs' "$d/out4" \
+            || { echo "FAIL $XC: selector stubs not named in the error"; head -3 "$d/out4"; fail=1; }
+    fi
 done
 [ $fail = 0 ] && echo "objc-link: ok"
 exit $fail

@@ -819,13 +819,24 @@ void checkSystemImports(DriverOptions* d, MachO* m)
         have.set((Hashable*)syms.get(i), syms.get(i));
     Array* bad = m.unexportedSystemImports(have);
     if (bad.count() == (u32)0) return;
+    bool stubs = false;
     for (u32 i = (u32)0; i < bad.count(); i = i + (u32)1) {
         String* s = (String*)bad.get(i);
         String* shown = s.hasPrefix(String.withCString("_")) ? s.substringFromByte((u32)1) : s;
+        // clang's Objective-C selector stubs (objc_msgSend$<selector>) are
+        // made by Apple's linker, which this one is not.
+        if (shown.hasPrefix(String.withCString("objc_msgSend$"))) {
+            Stdio.printf("xcc: error: undefined symbol '%s': a selector stub, which clang leaves "
+                         "for the linker to make and xcc's linker does not\n", shown.cString());
+            stubs = true;
+            continue;
+        }
         Stdio.printf("xcc: error: undefined symbol '%s': no linked library exports it, and "
                      "libSystem does not have it. If it lives in a framework, #import <Framework> "
                      "or pass -framework <Framework>\n", shown.cString());
     }
+    if (stubs)
+        Stdio.printf("xcc: note: build Objective-C objects with clang -fno-objc-msgsend-selector-stubs\n");
     Process.exit((i32)1);
 }
 

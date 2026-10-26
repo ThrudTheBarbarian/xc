@@ -955,12 +955,23 @@ int main(int argc, const char *argv[]) {
         // have, is a link error rather than a launch-time `Symbol not found`.
         NSArray<NSString *> *unexported = [XTMachOWriter lastUnexportedSystemImports];
         if (unexported.count) {
+            BOOL stubs = NO;
             for (NSString *s in unexported) {
                 NSString *shown = [s hasPrefix:@"_"] ? [s substringFromIndex:1] : s;
+                // clang's Objective-C selector stubs (objc_msgSend$<selector>)
+                // are made by Apple's linker, which this one is not.
+                if ([shown hasPrefix:@"objc_msgSend$"]) {
+                    fprintf(stderr, "xcc: error: undefined symbol '%s': a selector stub, which clang leaves "
+                                    "for the linker to make and xcc's linker does not\n", shown.UTF8String);
+                    stubs = YES;
+                    continue;
+                }
                 fprintf(stderr, "xcc: error: undefined symbol '%s': no linked library exports it, and "
                                 "libSystem does not have it. If it lives in a framework, #import <Framework> "
                                 "or pass -framework <Framework>\n", shown.UTF8String);
             }
+            if (stubs)
+                fprintf(stderr, "xcc: note: build Objective-C objects with clang -fno-objc-msgsend-selector-stubs\n");
             return 1;
         }
         if (![macho writeToFile:outPath atomically:YES]) {
