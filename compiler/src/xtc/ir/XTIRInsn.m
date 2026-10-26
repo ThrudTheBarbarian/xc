@@ -6,7 +6,6 @@
 
 @interface XTIRInsn ()
 @property(nonatomic, readwrite, nullable) XTIRCallConv* callConv;
-@property(nonatomic, readwrite) uint8_t predicate;
 @end
 
 @implementation XTIRInsn

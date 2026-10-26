@@ -1108,6 +1108,18 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
     case XTIROpFpToUI:
         {
         XTIRTok* predTok = [self tok:tokens at:pos];
+        if (op == XTIROpFAdd || op == XTIROpFSub)
+            {
+            // FAdd [contract,] %a, %b (XTIRSupport.h).
+            if (predTok.kind == XTIRTokWord && [predTok.text isEqualToString:@"contract"])
+                {
+                hasPredicate = YES;
+                predicate = XTIRFpContract;
+                pos++;
+                if ([self tok:tokens at:pos].kind == XTIRTokComma)
+                    pos++;
+                }
+            }
         if (op == XTIROpFpToSI || op == XTIROpFpToUI)
             {
             // FpToUI [unchecked,] %x (XTIRSupport.h).

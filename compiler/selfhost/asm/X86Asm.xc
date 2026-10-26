@@ -1968,6 +1968,9 @@ class X86Fixup
         u32 L = (a.size() == (u32)32 || s1.size() == (u32)32 || s2.size() == (u32)32) ? (u32)4 : (u32)0;
         // VEX.W: a 64-bit integer source of vcvtsi2ss/sd.
         u32 W = (cvtsi && s2.kind() == (u32)OP_REG && s2.size() == (u32)8) ? (u32)1 : (u32)0;
+        // VEX.W: the double forms of the scalar FMAs.
+        if (map == (u32)2 && base.hasPrefix(String.withCString("f")) && base.hasSuffix(String.withCString("sd")))
+            W = (u32)1;
         if (cvtsi)
             L = (u32)0;
         if (map == (u32)1 && W == (u32)0 && (xx & (i32)8) == (i32)0 && (bb & (i32)8) == (i32)0)
@@ -2004,6 +2007,14 @@ class X86Fixup
         if (m.equals(String.withCString("pmulld"))) return (u32)$6640;
         // The u8 pair sum the 256-bit widening reductions use (bug 644).
         if (m.equals(String.withCString("pmaddubsw"))) return (u32)$6604;
+        // Scalar FMA (:goal(speed) code's fused multiply-adds), VEX.W1 for the
+        // double forms.
+        if (m.equals(String.withCString("fmadd231ss")) || m.equals(String.withCString("fmadd231sd"))) return (u32)$66B9;
+        if (m.equals(String.withCString("fmsub231ss")) || m.equals(String.withCString("fmsub231sd"))) return (u32)$66BB;
+        if (m.equals(String.withCString("fnmadd231ss")) || m.equals(String.withCString("fnmadd231sd"))) return (u32)$66BD;
+        if (m.equals(String.withCString("fmadd213ss")) || m.equals(String.withCString("fmadd213sd"))) return (u32)$66A9;
+        if (m.equals(String.withCString("fmsub213ss")) || m.equals(String.withCString("fmsub213sd"))) return (u32)$66AB;
+        if (m.equals(String.withCString("fnmadd213ss")) || m.equals(String.withCString("fnmadd213sd"))) return (u32)$66AD;
         return (u32)$FFFF_FFFF;
         }
 

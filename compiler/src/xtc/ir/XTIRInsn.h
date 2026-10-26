@@ -35,8 +35,9 @@ NS_ASSUME_NONNULL_BEGIN
 /// Calling convention (only meaningful for call opcodes).
 @property(nonatomic, readonly, nullable) XTIRCallConv* callConv;
 
-/// ICmp/FCmp predicate (only for ICmp/FCmp opcodes).
-@property(nonatomic, readonly) uint8_t predicate;
+/// ICmp/FCmp predicate; FpToSI/FpToUI's XTIRConvUnchecked; FAdd/FSub's
+/// XTIRFpContract (set by XTIROptFpContract, hence writable).
+@property(nonatomic) uint8_t predicate;
 
 - (instancetype)initWithOpcode:(XTIROpcode)opcode
                         result:(nullable XTIRValue*)result

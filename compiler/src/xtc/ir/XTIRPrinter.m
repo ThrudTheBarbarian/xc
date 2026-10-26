@@ -614,6 +614,20 @@ static NSString* dbgSuffix(XTIRInsn* insn)
             }
         break;
         }
+    case XTIROpFAdd:
+    case XTIROpFSub:
+        {
+        // FAdd [contract,] %a, %b — under :goal(speed) (XTIRSupport.h).
+        if (insn.predicate == XTIRFpContract)
+            [line appendString:@" contract"];
+        BOOL first = insn.predicate != XTIRFpContract;
+        for (XTIROperand* op in insn.operands)
+            {
+            [line appendFormat:first ? @" %@" : @", %@", [self stringFromOperand:op module:mod context:ctx]];
+            first = NO;
+            }
+        break;
+        }
     case XTIROpFpToSI:
     case XTIROpFpToUI:
         {

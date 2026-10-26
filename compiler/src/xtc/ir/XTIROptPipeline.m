@@ -26,6 +26,7 @@
 #import "XTIROptMem2Reg.h"
 #import "XTIROptSimplify.h"
 #import "XTIROptVecCombine.h"
+#import "XTIROptFpContract.h"
 #import "XTIROptBlockLayout.h"
 #import "XTIROptLoopRotate.h"
 #import "XTIROptBlockMerge.h"
@@ -309,6 +310,10 @@
         // value-rewriting passes above (e.g. an inlined nullary call's
         // unused receiver AddrOf).
 [p addPass:[[XTIROptDeadCode alloc] init]];
+        // Under :goal(speed), a product and the add or subtract consuming it
+        // may round once (owner, 2026-10-26). After everything that rebuilds
+        // instructions, so the mark is not lost on the way.
+        [p addPass:[[XTIROptFpContract alloc] init]];
         // LAST: order the blocks so a conditional branch's expected successor
         // falls through. Nothing after this may reorder or add blocks, and
         // nothing before it is affected — the pass rewrites no instruction,

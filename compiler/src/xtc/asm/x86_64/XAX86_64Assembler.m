@@ -1332,7 +1332,15 @@ static BOOL namesHighZmm(NSString *s) {
                       @"pmaxuw":@[@0x66,@0x3E], @"pminuw":@[@0x66,@0x3A],
                       @"pmulld":@[@0x66,@0x40],
                       // The u8 pair sum the 256-bit widening reductions use (bug 644).
-                      @"pmaddubsw":@[@0x66,@0x04]};
+                      @"pmaddubsw":@[@0x66,@0x04],
+                      // Scalar FMA (:goal(speed) code's fused multiply-adds),
+                      // VEX.W1 for the double forms.
+                      @"fmadd231ss":@[@0x66,@0xB9], @"fmadd231sd":@[@0x66,@0xB9],
+                      @"fmsub231ss":@[@0x66,@0xBB], @"fmsub231sd":@[@0x66,@0xBB],
+                      @"fnmadd231ss":@[@0x66,@0xBD], @"fnmadd231sd":@[@0x66,@0xBD],
+                      @"fmadd213ss":@[@0x66,@0xA9], @"fmadd213sd":@[@0x66,@0xA9],
+                      @"fmsub213ss":@[@0x66,@0xAB], @"fmsub213sd":@[@0x66,@0xAB],
+                      @"fnmadd213ss":@[@0x66,@0xAD], @"fnmadd213sd":@[@0x66,@0xAD]};
         });
         if (!vr && vex38[base]) { vr = vex38[base]; map = 2; }
         XOperand *src1 = &opv[1];
@@ -1376,6 +1384,9 @@ static BOOL namesHighZmm(NSString *s) {
             int L = (a->size == 32 || src1->size == 32 || src2->size == 32) ? 0x04 : 0;
             // VEX.W: a 64-bit integer source of vcvtsi2ss/sd.
             int W = (cvtsi && src2->kind == OpReg && src2->size == 8) ? 1 : 0;
+            // VEX.W: the double forms of the scalar FMAs.
+            if (map == 2 && [base hasPrefix:@"f"] && [base hasSuffix:@"sd"])
+                W = 1;
             if (cvtsi)
                 L = 0;
             if (map == 1 && !W && !(xx & 8) && !(bb & 8)) {

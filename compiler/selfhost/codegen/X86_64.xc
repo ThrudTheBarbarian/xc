@@ -5211,9 +5211,28 @@ class X86_64
         _selCmp = new Map();
         _selSink = new Map();
         _nonNeg = new Map();
+        _fmaUc = new Map();
+        _fmaPhi = new Map();
+        // The avx2 and avx512 copies have FMA (the dispatcher requires it).
+        _fmaOk = fn.simdLevel() != (String*)0;
         if (_hasAsm)
             return;
         Map* uc = new Map();
+        _fmaUc = uc;
+        // A loop-carried value (a phi's) as the addend stays unfused: fused,
+        // the carried chain pays the whole multiply-add's latency instead of
+        // an add's (perlin's `sum = sum + n * amp`: 94 -> 111 ms on Zen 5).
+        _fmaPhi = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            Array* ph = ((IRBlock*)fn.blocks().get(b)).phis();
+            for (u32 k = (u32)0; k < ph.count(); k = k + (u32)1)
+                {
+                IRInsn* pn = (IRInsn*)ph.get(k);
+                if (pn.res() != (IRValue*)0)
+                    _fmaPhi.set((Hashable*)pn.res(), (Object*)pn);
+                }
+            }
         Map* useOf = new Map();
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
@@ -7083,6 +7102,13 @@ class X86_64
                 i = i + (u32)1;
                 continue;
                 }
+            if (i + (u32)1 < bb.insns().count()
+                && fmaPair((IRInsn*)bb.insns().get(i), (IRInsn*)bb.insns().get(i + (u32)1)))
+                {
+                emitFmaPair((IRInsn*)bb.insns().get(i), (IRInsn*)bb.insns().get(i + (u32)1));
+                i = i + (u32)1;
+                continue;
+                }
             emitInsn(fn, bb, (IRInsn*)bb.insns().get(i));
             }
         if (bb.term() != (IRInsn*)0)
@@ -7994,6 +8020,9 @@ class X86_64
     // Select (the allocator's selInfo hook, keyed by the arm), and its result
     // has no home. As the reference's sSelSink.
     Map* _selSink;
+    Map* _fmaUc;     // value -> its use count, for fmaPair
+    Map* _fmaPhi;    // value -> its phi: a loop-carried addend stays unfused
+    bool _fmaOk;     // this function's code has FMA (an avx2/avx512 copy)
     // A signed 32-bit value known to be non-negative: an And with a mask from
     // 0 to 2^31 - 1, or such a value plus a constant that keeps it under 2^31
     // (`X + 1` with X = h & 255: at most 256); the map holds its largest
@@ -8223,6 +8252,132 @@ class X86_64
     // two differ, neither is where one of the four arms lives (an early write
     // would destroy it), and the second does not read the first's result. As
     // the reference's selPair:with:.
+    // ── Fused multiply-add (:goal(speed) only) ──────────────────────────
+    //
+    // A product used once, by the contract-marked FAdd/FSub straight after it
+    // (fp-contract: code under :goal(speed)), is one vfmadd231 / vfmsub231 /
+    // vfnmadd231 in a copy that has FMA, rounding once. Plain code is never
+    // marked, so its answer does not depend on the CPU (owner, 2026-10-26).
+    // Adjacent, so the product's operands are still in their homes at the
+    // add: nothing is emitted between. Its first operand must be in a register
+    // or a slot (loaded into xmm1), its second in a register or a slot (read
+    // from memory, as the instruction allows).
+    bool fmaPair(IRInsn* a, IRInsn* b)
+        {
+        if (!_fmaOk || _fmaUc == (Map*)0)
+            return false;
+        if ((_vRemat != (Map*)0 && _vRemat.count() != (u32)0) || (_vSpill != (Map*)0 && _vSpill.count() != (u32)0))
+            return false;
+        if (!a.op().equals(String.withCString("FMul")) || a.res() == (IRValue*)0 || a.ops().count() < (u32)2)
+            return false;
+        if (!b.op().equals(String.withCString("FAdd")) && !b.op().equals(String.withCString("FSub")))
+            return false;
+        if (b.pred() == (String*)0 || !b.pred().equals(String.withCString("contract")))
+            return false;
+        if (b.res() == (IRValue*)0 || b.ops().count() < (u32)2 || !b.res().ty().equals(a.res().ty()))
+            return false;
+        if (useCount(_fmaUc, a.res()) != (u32)1)
+            return false;
+        IROperand* b0 = (IROperand*)b.ops().get((u32)0);
+        IROperand* b1 = (IROperand*)b.ops().get((u32)1);
+        bool p0 = b0.kind() == (u8)OPK_USE && b0.val() == a.res();
+        bool p1 = b1.kind() == (u8)OPK_USE && b1.val() == a.res();
+        if (p0 == p1)
+            return false;
+        IROperand* c = p0 ? b1 : b0;
+        if (c.kind() != (u8)OPK_USE || c.val() == (IRValue*)0)
+            return false;
+        if (!isXmmHome(homeOf(c.val())) && !hasSlot(c.val()))
+            return false;
+        if (_fmaPhi != (Map*)0 && _fmaPhi.get((Hashable*)c.val()) != (Object*)0)
+            return false;
+        for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)a.ops().get(k);
+            if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                return false;
+            if (!isXmmHome(homeOf(o.val())) && !hasSlot(o.val()))
+                return false;
+            }
+        return true;
+        }
+
+    void emitFmaPair(IRInsn* a, IRInsn* b)
+        {
+        bool d = b.res().ty().equals(String.withCString("F64"));
+        string sfx = d ? "sd" : "ss";
+        IROperand* A = (IROperand*)a.ops().get((u32)0);
+        IROperand* B = (IROperand*)a.ops().get((u32)1);
+        IROperand* b0 = (IROperand*)b.ops().get((u32)0);
+        bool p0 = b0.kind() == (u8)OPK_USE && b0.val() == a.res();
+        IROperand* c = p0 ? (IROperand*)b.ops().get((u32)1) : b0;
+        // a*b + c, a*b - c, c - a*b; the form's number says which operand
+        // the destination is (231: the addend, 213: a factor).
+        string op = b.op().equals(String.withCString("FAdd")) ? "vfmadd" : (p0 ? "vfmsub" : "vfnmadd");
+        String* Ah = homeOf(A.val());
+        String* Bh = homeOf(B.val());
+        String* Ch = homeOf(c.val());
+        String* R = homeOf(b.res());
+        bool aR = isXmmHome(Ah);
+        bool bR = isXmmHome(Bh);
+        bool cR = isXmmHome(Ch);
+        if (isXmmHome(R))
+            {
+            // The addend already in the result's register: R += A*B.
+            if (cR && Ch.equals(R))
+                {
+                String* Ar = aR ? Ah : fmaLoad(A, String.withCString("xmm1"));
+                String* Bs = bR ? Bh : fmaMem(B);
+                _out.appendFormat("\t%s231%s\t%s, %s, %s\n", op, sfx, R.cString(), Ar.cString(), Bs.cString());
+                return;
+                }
+            // A factor's register is the result's (it dies here): R = R*other + C.
+            if ((aR && Ah.equals(R)) || (bR && Bh.equals(R)))
+                {
+                IROperand* o = aR && Ah.equals(R) ? B : A;
+                String* oh = homeOf(o.val());
+                String* Or = isXmmHome(oh) ? oh : fmaLoad(o, String.withCString("xmm1"));
+                String* Cs = cR ? Ch : fmaMem(c);
+                _out.appendFormat("\t%s213%s\t%s, %s, %s\n", op, sfx, R.cString(), Or.cString(), Cs.cString());
+                return;
+                }
+            // The addend in memory (a constant's slot): R = A, then R = R*B + [C].
+            if (!cR)
+                {
+                loadF(A, R);
+                String* Br = bR ? Bh : fmaLoad(B, String.withCString("xmm1"));
+                _out.appendFormat("\t%s213%s\t%s, %s, %s\n", op, sfx, R.cString(), Br.cString(), fmaMem(c).cString());
+                return;
+                }
+            // The addend in another register: R = C, then R += A*B.
+            loadF(c, R);
+            String* Ar2 = aR ? Ah : fmaLoad(A, String.withCString("xmm1"));
+            String* Bs2 = bR ? Bh : fmaMem(B);
+            _out.appendFormat("\t%s231%s\t%s, %s, %s\n", op, sfx, R.cString(), Ar2.cString(), Bs2.cString());
+            return;
+            }
+        // The result lives in a slot: through xmm0.
+        String* Ar3 = aR ? Ah : fmaLoad(A, String.withCString("xmm1"));
+        String* Bs3 = bR ? Bh : fmaMem(B);
+        String* x0 = String.withCString("xmm0");
+        loadF(c, x0);
+        _out.appendFormat("\t%s231%s\t%s, %s, %s\n", op, sfx, x0.cString(), Ar3.cString(), Bs3.cString());
+        storeF(x0, b.res());
+        }
+
+    // A factor not in a register, loaded into the given scratch.
+    String* fmaLoad(IROperand* o, String* x)
+        {
+        loadF(o, x);
+        return x;
+        }
+
+    // A value not in a register, read from its slot.
+    String* fmaMem(IROperand* o)
+        {
+        return String.withFormat("[rbp-%lu]", slotOf(o.val()));
+        }
+
     bool selPair(IRInsn* a, IRInsn* b)
         {
         if ((_vRemat != (Map*)0 && _vRemat.count() != (u32)0) || (_vSpill != (Map*)0 && _vSpill.count() != (u32)0))

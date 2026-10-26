@@ -1259,6 +1259,21 @@ class IrParser
             else
                 _ci = save;
             }
+        // FAdd / FSub [contract,] %a, %b: under :goal(speed), a product feeding
+        // it may fuse (Opt's fp-contract; the reference's XTIRFpContract).
+        if (op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub")))
+            {
+            skipSpace();
+            u32 save = _ci;
+            String* w = word();
+            if (w != (String*)0 && w.equals(String.withCString("contract")))
+                {
+                insn.setPred(w);
+                expectChar((u8)',');
+                }
+            else
+                _ci = save;
+            }
         if (op.equals(String.withCString("ICmp")) || op.equals(String.withCString("FCmp")) || op.equals(String.withCString("VICmp")) || op.equals(String.withCString("VFCmp")))
             {
             skipSpace();

@@ -82,6 +82,10 @@ typedef NS_ENUM(uint8_t, XTIRFCmpPredicate) {
 // gives 0), XTIRConvUnchecked C's (undefined, so the bare conversion). The
 // text spells it `FpToUI unchecked, %x`.
 enum { XTIRConvChecked = 0, XTIRConvUnchecked = 1 };
+// FAdd / FSub's predicate: XTIRFpExact rounds the product feeding it on its
+// own, XTIRFpContract (printed `contract`) may fuse with it, under :goal(speed)
+// (XTIROptFpContract).
+enum { XTIRFpExact = 0, XTIRFpContract = 1 };
 
 #pragma mark - Debug location
 

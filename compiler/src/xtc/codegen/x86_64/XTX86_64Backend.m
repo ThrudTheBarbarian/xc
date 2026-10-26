@@ -52,6 +52,9 @@ static NSDictionary<NSNumber*, XTIRInsn*>* sSelCmp = nil; // Select id -> its IC
 // where GCC branches over them). Its operands are read at the Select (the
 // allocator's selInfo hook, keyed by the arm), and its result has no home.
 static NSDictionary<NSNumber*, XTIRInsn*>* sSelSink = nil; // Select id -> its true value's insn
+static NSDictionary<NSNumber*, NSNumber*>* sFmaUc = nil; // value id -> its use count, for fmaPair
+static BOOL sFmaOk = NO;                                  // this function's code has FMA (avx2/avx512 copy)
+static NSSet<NSNumber*>* sFmaPhi = nil;                   // phi results: a loop-carried addend stays unfused
 // A signed 32-bit value known to be non-negative: an And with a mask from 0 to
 // 2^31 - 1, or such a value plus a constant that keeps it under 2^31 (`X + 1`
 // with X = h & 255: at most 256). As an index it is read as its 64-bit home directly, as an unsigned
@@ -2963,9 +2966,11 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
     NSMutableDictionary<NSNumber*, XTIRInsn*>* selSink = [NSMutableDictionary dictionary];
     NSMutableSet<NSNumber*>* nonNeg = [NSMutableSet set];
     NSMutableDictionary<NSNumber*, NSNumber*>* nonNegMax = [NSMutableDictionary dictionary]; // its largest value
+    NSDictionary<NSNumber*, NSNumber*>* fmaUc = nil;
     if (!hasAsm)
         {
         NSMutableDictionary<NSNumber*, NSNumber*>* uc = [NSMutableDictionary dictionary];
+        fmaUc = uc;
         NSMutableDictionary<NSNumber*, XTIRInsn*>* useOf = [NSMutableDictionary dictionary];
         void (^rec)(XTIROperand*, XTIRInsn*) = ^(XTIROperand* o, XTIRInsn* host) {
           if (o.kind != XTIROperandKindUse)
@@ -3218,6 +3223,18 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
     sSelSkip = skip;
     sSelCmp = selCmp;
     sSelSink = selSink;
+    sFmaUc = fmaUc;
+    // A loop-carried value (a phi's) as the addend stays unfused: fused, the
+    // carried chain pays the whole multiply-add's latency instead of an add's
+    // (perlin's `sum = sum + n * amp`: 94 -> 111 ms on Zen 5). As the port.
+    NSMutableSet<NSNumber*>* fmaPhi = [NSMutableSet set];
+    for (XTIRBlock* pb in fn.blocks)
+        for (XTIRInsn* pn in pb.phiNodes)
+            if (pn.result)
+                [fmaPhi addObject:@(pn.result.valueId)];
+    sFmaPhi = fmaPhi;
+    // The avx2 and avx512 copies have FMA (the dispatcher requires it).
+    sFmaOk = fn.simdLevel != nil;
     sNonNeg = nonNeg;
     // The given-up vector values are THIS function's: assignVectorRegsFor:
     // returns before it resets them when the function has no vector values
@@ -3680,6 +3697,12 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
             if (k + 1 < bins.count && [self selPair:in with:bins[k + 1] fn:fn])
                 {
                 [self emitSelectPair:in with:bins[k + 1] fn:fn slot:slot out:out];
+                k++;
+                continue;
+                }
+            if (k + 1 < bins.count && [self fmaPair:in with:bins[k + 1] slot:slot])
+                {
+                [self emitFmaPair:in with:bins[k + 1] fn:fn slot:slot out:out];
                 k++;
                 continue;
                 }
@@ -6830,6 +6853,129 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
 // true values in. Only when each result has its own xmm home, the two differ,
 // neither is where one of the four arms lives (an early write would destroy
 // it), and the second does not read the first's result.
+// ── Fused multiply-add (:goal(speed) only) ──────────────────────────────────
+//
+// A product used once, by the contract-marked FAdd/FSub straight after it
+// (XTIROptFpContract: code under :goal(speed)), is one vfmadd231 / vfmsub231 /
+// vfnmadd231 in a copy that has FMA, rounding once. Plain code is never
+// marked, so its answer does not depend on the CPU (owner, 2026-10-26).
+// Adjacent, so the product's operands are still in their homes at the add:
+// nothing is emitted between. Its first operand must be in a register or a
+// slot (loaded into xmm1), its second in a register or a slot (read from
+// memory, as the instruction allows). As the port's fmaPair.
++ (BOOL)fmaPair:(XTIRInsn*)a with:(XTIRInsn*)b slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+    {
+    if (!sFmaOk || !sFmaUc)
+        return NO;
+    if (sVRemat.count != 0 || sVSpill.count != 0)
+        return NO;
+    if (a.opcode != XTIROpFMul || !a.result || a.operands.count < 2)
+        return NO;
+    if (b.opcode != XTIROpFAdd && b.opcode != XTIROpFSub)
+        return NO;
+    if (b.predicate != XTIRFpContract)
+        return NO;
+    if (!b.result || b.operands.count < 2 || b.result.type.kind != a.result.type.kind)
+        return NO;
+    if (sFmaUc[@(a.result.valueId)].integerValue != 1)
+        return NO;
+    XTIROperand* b0 = b.operands[0];
+    XTIROperand* b1 = b.operands[1];
+    BOOL p0 = b0.kind == XTIROperandKindUse && b0.valueId == a.result.valueId;
+    BOOL p1 = b1.kind == XTIROperandKindUse && b1.valueId == a.result.valueId;
+    if (p0 == p1)
+        return NO;
+    XTIROperand* c = p0 ? b1 : b0;
+    if (c.kind != XTIROperandKindUse)
+        return NO;
+    NSString* ch = sHome[@(c.valueId)];
+    if (!(ch && [self isXmmHome:ch]) && !slot[@(c.valueId)])
+        return NO;
+    if ([sFmaPhi containsObject:@(c.valueId)])
+        return NO;
+    for (NSUInteger k = 0; k < 2; k++)
+        {
+        XTIROperand* o = a.operands[k];
+        if (o.kind != XTIROperandKindUse)
+            return NO;
+        NSString* h = sHome[@(o.valueId)];
+        if (!(h && [self isXmmHome:h]) && !slot[@(o.valueId)])
+            return NO;
+        }
+    return YES;
+    }
+
++ (void)emitFmaPair:(XTIRInsn*)a with:(XTIRInsn*)b fn:(XTIRFunction*)fn
+               slot:(NSDictionary<NSNumber*, NSNumber*>*)slot
+                out:(NSMutableString*)out
+    {
+    BOOL d = b.result.type.kind == XTIRTypeKindF64;
+    NSString* sfx = d ? @"sd" : @"ss";
+    XTIROperand* A = a.operands[0];
+    XTIROperand* B = a.operands[1];
+    XTIROperand* b0 = b.operands[0];
+    BOOL p0 = b0.kind == XTIROperandKindUse && b0.valueId == a.result.valueId;
+    XTIROperand* c = p0 ? b.operands[1] : b0;
+    // a*b + c, a*b - c, c - a*b; the form's number says which operand the
+    // destination is (231: the addend, 213: a factor).
+    NSString* op = b.opcode == XTIROpFAdd ? @"vfmadd" : (p0 ? @"vfmsub" : @"vfnmadd");
+    NSString* Ah = sHome[@(A.valueId)];
+    NSString* Bh = sHome[@(B.valueId)];
+    NSString* Ch = sHome[@(c.valueId)];
+    NSString* R = sHome[@(b.result.valueId)];
+    BOOL aR = Ah && [self isXmmHome:Ah];
+    BOOL bR = Bh && [self isXmmHome:Bh];
+    BOOL cR = Ch && [self isXmmHome:Ch];
+    NSString* (^load)(XTIROperand*, NSString*) = ^NSString*(XTIROperand* o, NSString* x) {
+      [self loadF:o into:x fn:fn slot:slot out:out];
+      return x;
+    };
+    NSString* (^mem)(XTIROperand*) = ^NSString*(XTIROperand* o) {
+      return [NSString stringWithFormat:@"[rbp-%@]", slot[@(o.valueId)]];
+    };
+    if (R && [self isXmmHome:R])
+        {
+        // The addend already in the result's register: R += A*B.
+        if (cR && [Ch isEqualToString:R])
+            {
+            NSString* Ar = aR ? Ah : load(A, @"xmm1");
+            NSString* Bs = bR ? Bh : mem(B);
+            [out appendFormat:@"\t%@231%@\t%@, %@, %@\n", op, sfx, R, Ar, Bs];
+            return;
+            }
+        // A factor's register is the result's (it dies here): R = R*other + C.
+        if ((aR && [Ah isEqualToString:R]) || (bR && [Bh isEqualToString:R]))
+            {
+            XTIROperand* o = aR && [Ah isEqualToString:R] ? B : A;
+            NSString* oh = sHome[@(o.valueId)];
+            NSString* Or = oh && [self isXmmHome:oh] ? oh : load(o, @"xmm1");
+            NSString* Cs = cR ? Ch : mem(c);
+            [out appendFormat:@"\t%@213%@\t%@, %@, %@\n", op, sfx, R, Or, Cs];
+            return;
+            }
+        // The addend in memory (a constant's slot): R = A, then R = R*B + [C].
+        if (!cR)
+            {
+            [self loadF:A into:R fn:fn slot:slot out:out];
+            NSString* Br = bR ? Bh : load(B, @"xmm1");
+            [out appendFormat:@"\t%@213%@\t%@, %@, %@\n", op, sfx, R, Br, mem(c)];
+            return;
+            }
+        // The addend in another register: R = C, then R += A*B.
+        [self loadF:c into:R fn:fn slot:slot out:out];
+        NSString* Ar2 = aR ? Ah : load(A, @"xmm1");
+        NSString* Bs2 = bR ? Bh : mem(B);
+        [out appendFormat:@"\t%@231%@\t%@, %@, %@\n", op, sfx, R, Ar2, Bs2];
+        return;
+        }
+    // The result lives in a slot: through xmm0.
+    NSString* Ar3 = aR ? Ah : load(A, @"xmm1");
+    NSString* Bs3 = bR ? Bh : mem(B);
+    [self loadF:c into:@"xmm0" fn:fn slot:slot out:out];
+    [out appendFormat:@"\t%@231%@\t%@, %@, %@\n", op, sfx, @"xmm0", Ar3, Bs3];
+    [self storeF:@"xmm0" into:b.result slot:slot out:out];
+    }
+
 + (BOOL)selPair:(XTIRInsn*)a with:(XTIRInsn*)b fn:(XTIRFunction*)fn
     {
     if (sVRemat.count != 0 || sVSpill.count != 0)

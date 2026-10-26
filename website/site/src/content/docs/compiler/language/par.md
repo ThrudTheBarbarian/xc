@@ -315,7 +315,9 @@ With speed, the GPU uses its fast maths. On a Mac that is Metal's fast mode,
 which also lets the GPU reorder float arithmetic and assume there are no NaNs
 or infinities. On an NVIDIA GPU, and through Vulkan and WebGPU, `sin`, `cos`,
 `exp`, `ln` and `pow` of `float` values use the hardware's approximations. Float results can then differ from
-the CPU's in the last few bits; integer results are the same either way.
+the CPU's in the last few bits; integer results are the same either way. On
+the CPU the goal works as a loop's does: on x86-64, a block under speed fuses
+multiply-adds where the CPU has FMA ([Speed or accuracy](/compiler/language/statements/#speed-or-accuracy-goal)).
 
 With accuracy, the maths is precise and float results land within about one
 ULP of the CPU's. NVIDIA GPUs have no precise `sin`, `cos`, `exp`, `ln` or
