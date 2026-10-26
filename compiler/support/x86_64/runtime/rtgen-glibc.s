@@ -4152,7 +4152,7 @@ _xt_simd_select:                        # @_xt_simd_select
 	#NO_APP
 	xor	r15d, r15d
 	not	ecx
-	test	ecx, 402653184
+	test	ecx, 402657280
 	jne	.LBB102_4
 # %bb.1:
 	xor	r15d, r15d
@@ -4345,7 +4345,7 @@ _xt_simd_select4:                       # @_xt_simd_select4
 	#NO_APP
 	xor	r15d, r15d
 	not	ecx
-	test	ecx, 402653184
+	test	ecx, 402657280
 	jne	.LBB103_4
 # %bb.1:
 	xor	r15d, r15d

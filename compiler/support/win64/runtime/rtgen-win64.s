@@ -3121,7 +3121,7 @@ _xt_simd_select:                        # @_xt_simd_select
 	#NO_APP
 	xor	ebp, ebp
 	not	ecx
-	test	ecx, 402653184
+	test	ecx, 402657280
 	jne	.LBB97_4
 # %bb.1:
 	xor	ebp, ebp
@@ -3331,7 +3331,7 @@ _xt_simd_select4:                       # @_xt_simd_select4
 	#NO_APP
 	xor	ebp, ebp
 	not	ecx
-	test	ecx, 402653184
+	test	ecx, 402657280
 	jne	.LBB98_4
 # %bb.1:
 	xor	ebp, ebp

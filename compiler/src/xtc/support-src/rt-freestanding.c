@@ -2236,7 +2236,9 @@ static const char* xt_env(const char* name)
 
 // AVX2 is usable only when the CPU has it AND the OS saves the ymm registers
 // across context switches: cpuid.1:ECX OSXSAVE and AVX, then XCR0 bits 1-2,
-// then cpuid.7:EBX AVX2.
+// then cpuid.7:EBX AVX2. The avx2 copies may fuse multiply-adds (code under
+// :goal(speed)), so FMA (cpuid.1:ECX bit 12) is part of the level: every AVX2
+// CPU made has it, and one without would fault on vfmadd.
 // The two instructions are spelled as bytes (cpuid = 0F A2, xgetbv = 0F 01 D0):
 // the runtime is assembled by whichever compiler builds the next one, and an
 // older assembler knows `.byte` but not these mnemonics.
@@ -2248,7 +2250,7 @@ static int xt_cpu_simd_level(void)
     {
     uint32_t a, b, c, d;
     __asm__ volatile(".byte 0x0f, 0xa2" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
-    if (!(c & (1u << 27)) || !(c & (1u << 28)))
+    if (!(c & (1u << 27)) || !(c & (1u << 28)) || !(c & (1u << 12)))
         return 0;
     uint32_t lo, hi;
     __asm__ volatile(".byte 0x0f, 0x01, 0xd0" : "=a"(lo), "=d"(hi) : "c"(0));
