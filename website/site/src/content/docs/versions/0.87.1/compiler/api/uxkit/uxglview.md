@@ -1,0 +1,100 @@
+---
+title: UXGLView
+description: "A view that owns a GL context: the driver keeps the surface and the frame, the app keeps the renderer."
+slug: versions/0.87.1/compiler/api/uxkit/uxglview
+banner:
+  content: 'This is the documentation for xc 0.87.1. <a href="/compiler/">The current documentation</a> describes the newest version.'
+pagefind: false
+---
+
+`UXGLView` is a [`UXView`](/versions/0.87.1/compiler/api/uxkit/uxview/) that can own a GL
+context instead of being painted by `drawRect`. The driver owns the surface,
+its size, its order and its swap. The app owns the renderer, which makes its GL
+calls through [`UXGL.xc`](/versions/0.87.1/compiler/api/uxkit/uxgl/), the same source on every
+backend, or finds an entry point itself with
+[`UXViewDriver.glProc`](/versions/0.87.1/compiler/api/uxkit/uxviewdriver/#gl-the-driver-owns-the-surface-and-the-frame).
+
+```c
+#import "UXView.xc"
+```
+
+## Overview
+
+```c
+if (map.makeGL()) {
+    // draw the frame
+    map.presentGL();
+}
+```
+
+Where the backend has no GL, or no surface could be made, `makeGL` answers false
+and the view is still a view: `drawRect` paints it.
+
+## Topics
+
+**The context** · [glKind](#glkind) · [makeGL](#makegl) · [glContext](#glcontext) · [presentGL](#presentgl) · [destroyGL](#destroygl)
+**The drawable** · [drawableSize](#drawablesize) · [snapshot](#snapshot)
+
+### glKind
+
+```c
+i32 glKind(void)
+```
+
+Which GL the backend offers: `UX_GL_GL33`, `UX_GL_GLES3`, `UX_GL_WEBGL2`, or
+`UX_GL_NONE`.
+
+### makeGL
+
+```c
+bool makeGL(void)
+```
+
+Binds a context to the view. It can be called again safely.
+
+### glContext
+
+```c
+pointer glContext(void)
+```
+
+The backend's opaque context, or 0. The renderer hands it back and never reads
+through it.
+
+### presentGL
+
+```c
+void presentGL(void)
+```
+
+The frame is finished. Call it once per turn, after any 2-D view over this one
+has been damaged, so both land in one present.
+
+### destroyGL
+
+```c
+void destroyGL(void)
+```
+
+Releases the context. The view also releases it when it leaves the tree or is
+freed.
+
+### drawableSize
+
+```c
+bool drawableSize(i32* pw, i32* ph)
+```
+
+The drawable's size in pixels, the size the renderer draws at: the bounds times
+the backing scale, or the driver's framebuffer where the GPU cannot take the full
+size. False before the view has a surface.
+
+### snapshot
+
+```c
+UXImage* snapshot(void)
+```
+
+The view's last GL frame alone, without the 2-D views over it, at the drawable's
+size. Every backend with GL reads it. It is null before the view has a surface,
+and where there is no GL (GEM). For the window as it shows, use [`UXWindow.snapshot`](/versions/0.87.1/compiler/api/uxkit/uxwindow/).
