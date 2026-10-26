@@ -3,6 +3,17 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.87.2 — a 64-bit conversion on arm64
+
+One more fix on top of 0.87.1. Nothing else changed.
+
+### Fixed
+
+- On arm64, a 64-bit integer converted to `float` or `double` could keep only
+  its low 32 bits when the value lived on the stack rather than in a register
+  (a `u64` of 8779000000 came out 189065408), which register pressure such as
+  a `par` block nearby could cause.
+
 ## Version 0.87.1 — two par fixes
 
 Two fixes to how `par` runs a program across a GPU and the CPU, found by a
