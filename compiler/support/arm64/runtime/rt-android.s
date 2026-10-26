@@ -1018,41 +1018,23 @@ xt_simd_fault:                          // @xt_simd_fault
 	b.lo	.Lrt_BB21_4
 // %bb.5:
 	cbnz	x10, .Lrt_BB21_7
-	b	.Lrt_BB21_9
+	b	.Lrt_BB21_12
 .Lrt_BB21_6:
 	mov	x10, xzr
-	cbz	x10, .Lrt_BB21_9
+	cbz	x10, .Lrt_BB21_12
 .Lrt_BB21_7:
 	ldr	x8, [x8, :lo12:xt_simd_tab]
 	sub	x9, x10, #1
 	add	x10, x8, x9, lsl #4
 	ldr	x10, [x10, #8]
 	cmp	x21, x10
-	b.hs	.Lrt_BB21_9
+	b.hs	.Lrt_BB21_12
 // %bb.8:
 	adrp	x11, xt_simd_flag
 	ldr	x11, [x11, :lo12:xt_simd_flag]
 	ldrb	w12, [x11, x9]
-	tbnz	w12, #0, .Lrt_BB21_12
-.Lrt_BB21_9:
-	ldr	w8, [x20, :lo12:_xt_threads_active]
-	cbz	w8, .Lrt_BB21_11
-// %bb.10:
-	adrp	x0, xt_rt_mtx
-	add	x0, x0, :lo12:xt_rt_mtx
-	bl	pthread_mutex_unlock
-.Lrt_BB21_11:
-	cmp	w19, #11
-	mov	w0, w19
-	adrp	x9, xt_simd_old
-	add	x9, x9, :lo12:xt_simd_old
-	ldp	x20, x19, [sp, #16]             // 16-byte Folded Reload
-	cset	w8, ne
-	mov	x2, xzr
-	add	x1, x9, x8, lsl #5
-	ldp	x30, x21, [sp], #32             // 16-byte Folded Reload
-	b	sigaction
-.Lrt_BB21_12:
+	tbz	w12, #0, .Lrt_BB21_10
+// %bb.9:
 	lsl	x13, x9, #1
 	and	w12, w12, #0xfe
 	strb	w12, [x11, x9]
@@ -1063,15 +1045,34 @@ xt_simd_fault:                          // @xt_simd_fault
 	add	x8, x8, x9
 	and	x1, x8, #0xffffffffffffc000
 	bl	mprotect
+.Lrt_BB21_10:
 	ldr	w8, [x20, :lo12:_xt_threads_active]
-	cbz	w8, .Lrt_BB21_14
-// %bb.13:
+	cbz	w8, .Lrt_BB21_15
+// %bb.11:
 	ldp	x20, x19, [sp, #16]             // 16-byte Folded Reload
 	adrp	x0, xt_rt_mtx
 	add	x0, x0, :lo12:xt_rt_mtx
 	ldp	x30, x21, [sp], #32             // 16-byte Folded Reload
 	b	pthread_mutex_unlock
+.Lrt_BB21_12:
+	ldr	w8, [x20, :lo12:_xt_threads_active]
+	cbz	w8, .Lrt_BB21_14
+// %bb.13:
+	adrp	x0, xt_rt_mtx
+	add	x0, x0, :lo12:xt_rt_mtx
+	bl	pthread_mutex_unlock
 .Lrt_BB21_14:
+	cmp	w19, #11
+	mov	w0, w19
+	adrp	x9, xt_simd_old
+	add	x9, x9, :lo12:xt_simd_old
+	ldp	x20, x19, [sp, #16]             // 16-byte Folded Reload
+	cset	w8, ne
+	mov	x2, xzr
+	add	x1, x9, x8, lsl #5
+	ldp	x30, x21, [sp], #32             // 16-byte Folded Reload
+	b	sigaction
+.Lrt_BB21_15:
 	ldp	x20, x19, [sp, #16]             // 16-byte Folded Reload
 	ldp	x30, x21, [sp], #32             // 16-byte Folded Reload
 	ret
