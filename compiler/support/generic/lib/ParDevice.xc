@@ -1341,13 +1341,18 @@ class ParDevice
 
     // The runtime writes the block at host (a copy back, a kernel on pinned
     // memory): its pages writable, and every copy of it out of date.
+    // A pointer INTO a block (`stack + k*n`, a slice of a big array) writes
+    // that block: its generation moves too, or a copy of the whole array kept
+    // on a GPU was taken for current after its slices were written one at a
+    // time (2026-10-26, CUDA: a combine over ten slices saw only the first).
     static void wrote(pointer host)
         {
+        pointer base = simdBase(host);
 #if ARCH_arm64 || ARCH_x86_64 || ARCH_win64
-        _xtc_simd_unwatch(host);
+        _xtc_simd_unwatch(base != (pointer)0 ? base : host);
 #endif
         for (u32 i = (u32)0; i < gParDevGens; i = i + (u32)1)
-            if (gParDevGenHost[i] == host)
+            if (gParDevGenHost[i] == host || (base != (pointer)0 && gParDevGenHost[i] == base))
                 gParDevGen[i] = gParDevGenNext();
         }
 
