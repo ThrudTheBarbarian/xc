@@ -480,6 +480,30 @@ To choose instead, in order of precedence:
 on the CPU, what `auto` decided and learned, the hardware key, and
 the tiles and the devices a run on a set used.
 
+#### Which hardware ran a block
+
+Different hardware can give different float results from the same block: a GPU
+and a CPU, two GPUs from different vendors, a GPU with and without its fast
+maths, round and approximate differently in the last bits. xc does not promise
+that a `float` or `double` result is the same on every device; integer results
+always are. What it does promise is that you can tell which device made a
+result. `Par.ranOn` names the hardware a block's last run used, as the runtimes
+name it: `cpu`, then `metal:`, `cuda:`, `vulkan:` or `remote:` and the device.
+It is a list, because a run can be split across devices, the GPU and the CPU's
+lanes together or several GPUs; it is empty until the block has run.
+
+```c
+par frame { … }
+Array* on = Par.ranOn("frame");      // ["cuda:NVIDIA GeForce RTX 5080"], say
+```
+
+A block is named as for `Par.device`: by its name, or `file:line` for an
+unnamed block or a loop `--par-auto` made a block of. `XC_PAR_REPORT=1` logs
+every run under the same names. A C program built with `--par-auto` asks with
+`xc_par_ran_on("file.c:line")`, which returns the list as one string
+(`"cuda:…, cpu"`, or `""` before the block has run); declare it as
+`const char *xc_par_ran_on(const char *block);`.
+
 ### Loops that become blocks: `--par-auto`
 
 With `--par-auto`, a `for (T i in a..b) { … }`
@@ -492,10 +516,10 @@ wrap is built without it.
 
 ```c
 for (u32 i in 0..N)
-    a[i] = (u32)3 * x[i] + y[i];            // becomes par autopar_1 { … }
+    a[i] = (u32)3 * x[i] + y[i];            // becomes par prog.xc:1 { … }
 u32 total = (u32)0;
 for (u32 i in 0..N)
-    total = total + a[i];                   // becomes par autopar_2 :reduce(+ total) { … }
+    total = total + a[i];                   // becomes par prog.xc:4 :reduce(+ total) { … }
 ```
 
 A loop that does not qualify stays a loop, and the loops inside it are then
@@ -532,7 +556,8 @@ wrapped too. A loop marked `:serial` is never wrapped:
 ```c
 #goal speed
 float sum = 0.0f;
-for (u32 i in 0..N)                     // becomes par autopar_1 :reduce(+ sum) :goal(speed)
+for (u32 i in 0..N)                     // becomes a block named after its file and line:
+                                        //   par dot.xc:3 :reduce(+ sum) :goal(speed)
     sum = sum + x[i] * y[i];
 for (u32 i in 0..N) : serial            // left as it is
     order[i] = order[i - 1] + 1;
@@ -554,7 +579,8 @@ still means what it did. `-Wpar-auto` reports what was wrapped and what was
 demoted, and why; it is off by default, since the report is useful once and
 noise in every build after. Blocks the checks pass run as any `par` block
 does: `auto` measures and chooses the device, and `XC_PAR_REPORT=1` names
-them `autopar_<n>`.
+each by the file and line of its loop (`prog.xc:4`), which is also the name
+[`Par.ranOn`](#which-hardware-ran-a-block) and `Par.device` take.
 
 ### Across machines: `xcd`
 

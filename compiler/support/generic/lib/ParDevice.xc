@@ -1611,6 +1611,65 @@ class ParDevice
         return (u8*)0;
         }
 
+    // Where each block's last run went (Par.ranOn): its name -> the devices
+    // that did its work, as their runtimes name them ("cpu", "metal:…",
+    // "cuda:…", "vulkan:…", "remote:…"). A float result can differ in its
+    // last bits between devices, and a program can say which made it.
+    static Map* _ranOn;
+    static Map* _ranText;   // its name -> the list as one string (xc_par_ran_on)
+
+    // A run of the block starts: forget where the last one went.
+    static void ranClear(ParChunk* proto)
+        {
+        if (_ranOn == (Map*)0)
+            _ranOn = new Map();
+        _ranOn.set((Hashable*)String.withCString(proto.parName()), (Object*)new Array());
+        }
+
+    // This run did some of its work on `dev`.
+    static void ranAdd(ParChunk* proto, String* dev)
+        {
+        if (dev == (String*)0 || dev.byteLength() == (u32)0)
+            return;
+        if (_ranOn == (Map*)0)
+            _ranOn = new Map();
+        String* k = String.withCString(proto.parName());
+        Array* a = (Array*)_ranOn.get((Hashable*)k);
+        if (a == (Array*)0)
+            {
+            a = new Array();
+            _ranOn.set((Hashable*)k, (Object*)a);
+            }
+        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+            if (((String*)a.get(i)).equals(dev))
+                return;
+        a.add((Object*)String.withString(dev));
+        }
+
+    // The devices of the block's last run; empty when it has not run.
+    static Array* ranOn(u8* block)
+        {
+        Array* a = _ranOn != (Map*)0 ? (Array*)_ranOn.get((Hashable*)String.withCString(block)) : (Array*)0;
+        return a != (Array*)0 ? a : new Array();
+        }
+
+    // The same as one string, "cuda:…, cpu", kept until the next call for it.
+    static u8* ranOnText(u8* block)
+        {
+        Array* a = ParDevice.ranOn(block);
+        String* s = new String();
+        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+            {
+            if (i > (u32)0)
+                s.appendCString(", ");
+            s.append((String*)a.get(i));
+            }
+        if (_ranText == (Map*)0)
+            _ranText = new Map();
+        _ranText.set((Hashable*)String.withCString(block), (Object*)s);
+        return s.cString();
+        }
+
     // Whether a block's kernel source is the marker par-check leaves on an
     // auto block it demoted: `// xcpar serial`. Such a block runs on one
     // thread (Par.run) and never on a GPU.

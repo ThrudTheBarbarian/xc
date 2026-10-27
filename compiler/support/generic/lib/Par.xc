@@ -212,6 +212,8 @@ class ParFnChunk : ParChunk
             c.lo = from;
             c.hi = to;
             c.run();
+            ParDevice.ranClear((ParChunk*)c);
+            ParDevice.ranAdd((ParChunk*)c, String.withCString("cpu"));
             return;
             }
         // The record holds each accumulator's value from before the loop,
@@ -295,6 +297,7 @@ class Par
         {
         if (hi <= lo)
             return;
+        ParDevice.ranClear(proto);
         // A block --par-auto made from a plain loop that par-check could not
         // prove independent, or that a GPU could not run: its kernel is the
         // marker `// xcpar serial`, and it runs as its source reads, one item
@@ -305,6 +308,7 @@ class Par
             proto.lo = lo;
             proto.hi = hi;
             proto.run();
+            ParDevice.ranAdd(proto, String.withCString("cpu"));
             return;
             }
 #if (ARCH_arm64 && !PLATFORM_ios) || ARCH_x86_64 || ARCH_wasm32
@@ -332,6 +336,7 @@ class Par
             proto.lo = lo;
             proto.hi = hi;
             proto.run();
+            ParDevice.ranAdd(proto, String.withCString("cpu"));
             return;
             }
         if (ParDevice.bufferOverlap(proto, proto.gpuSource()))
@@ -341,6 +346,7 @@ class Par
             proto.lo = lo;
             proto.hi = hi;
             proto.run();
+            ParDevice.ranAdd(proto, String.withCString("cpu"));
             return;
             }
 #if !ARCH_wasm32
@@ -362,7 +368,10 @@ class Par
             {
 #if ARCH_wasm32
             if (ParWebGpu.run(proto, proto.gpuSource(), lo, hi))
+                {
+                ParDevice.ranAdd(proto, ParWebGpu.identity());
                 return;
+                }
 #elif ARCH_win64
             // NVIDIA's own driver or Vulkan (AMD, Intel, or NVIDIA where CUDA
             // is missing): auto measures both where both work and keeps the
@@ -373,26 +382,41 @@ class Par
                 {
                 ParDevice.useApi((i32)1);
                 if (ParCuda.run(proto, proto.gpuSource(), lo, hi))
+                    {
+                    ParDevice.ranAdd(proto, ParCuda.identity());
                     return;
+                    }
                 ParDevice.cannotRun(proto, (i32)1);
                 }
             ParDevice.useApi((i32)2);
             if (ParVulkan.run(proto, proto.gpuSource(), lo, hi))
+                {
+                ParDevice.ranAdd(proto, ParVulkan.identity());
                 return;
+                }
             ParDevice.cannotRun(proto, (i32)2);
             if (api == (i32)2 && !ParDevice.vulkanOnly())
                 {
                 ParDevice.useApi((i32)1);
                 if (ParCuda.run(proto, proto.gpuSource(), lo, hi))
+                    {
+                    ParDevice.ranAdd(proto, ParCuda.identity());
                     return;
+                    }
                 ParDevice.cannotRun(proto, (i32)1);
                 }
 #elif ARCH_x86_64 || PLATFORM_android
             if (ParVulkan.run(proto, proto.gpuSource(), lo, hi))
+                {
+                ParDevice.ranAdd(proto, ParVulkan.identity());
                 return;
+                }
 #else
             if (ParMetal.run(proto, proto.gpuSource(), lo, hi))
+                {
+                ParDevice.ranAdd(proto, ParMetal.identity());
                 return;
+                }
 #endif
             }
         i64 t0 = ParDevice.nowUs();
@@ -401,6 +425,7 @@ class Par
 #else
         Par.runCpu(proto, lo, hi);
 #endif
+        ParDevice.ranAdd(proto, String.withCString("cpu"));
         }
 
 #if (ARCH_arm64 && !PLATFORM_ios) || ARCH_x86_64 || ARCH_wasm32
@@ -424,6 +449,17 @@ class Par
 #endif
         }
 #endif
+
+    // The hardware the block's last run used, as its runtimes name it: "cpu",
+    // "metal:…", "cuda:…", "vulkan:…", "remote:…" — several when the run was
+    // split across devices; empty when it has not run. By the block's name,
+    // as Par.device takes it: its source name, or file:line (a lifted loop
+    // too). Float results can differ in their last bits from one device to
+    // another; integer results never do.
+    static Array* ranOn(u8* block)
+        {
+        return ParDevice.ranOn(block);
+        }
 
     // Which device a block runs on: "cpu", "gpu" or "auto" (measure both
     // and keep the faster), by the block's name — its source name, or
@@ -506,3 +542,12 @@ class Par
         }
 #endif
     }
+
+// From C: the hardware a block's last run used, as Par.ranOn gives it, joined
+// with ", " ("cuda:…, cpu"); "" when it has not run. The block is named as
+// XC_PAR_REPORT names it: file:line for a loop --par-auto made a block of.
+// The text stays valid until the next call for the same block.
+u8* xc_par_ran_on(u8* block)
+{
+    return ParDevice.ranOnText(block);
+}

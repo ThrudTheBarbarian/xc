@@ -1047,6 +1047,10 @@ class ParTiles
                 }
             Log.info("par: %s: %ld items in %ld tiles across %s (%ld us)", proto.parName(), n, ntiles, names.cString(), took);
             }
+        // Where the work went: every worker that finished some of it.
+        for (u32 i = (u32)0; i < nw; i = i + (u32)1)
+            if (doneItems[i] > (i64)0)
+                ParDevice.ranAdd(proto, ((ParWorker*)ws.get(i)).identity());
         if (set != (i32)0)
             ParDevice.ranOnSet(proto, set, took);
         return true;

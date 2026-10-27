@@ -4257,9 +4257,22 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
     XTBlockNode* body = [self parAutoGridNest:loop frame:frame at:loc];
     if (!body)
         body = [[XTBlockNode alloc] initWithStatements:@[ loop ] location:loc];
+    // Named where the loop is, file:line (a second one on the line #2, as the
+    // C path names its blocks), so a program can ask where a lifted loop ran
+    // (Par.ranOn) and XC_PAR_REPORT says which loop it is. As the port.
     NSUInteger c = [self.blkState[@"parAutoCounter"] unsignedIntegerValue] + 1;
     self.blkState[@"parAutoCounter"] = @(c);
-    NSString* name = [NSString stringWithFormat:@"autopar_%lu", (unsigned long)c];
+    NSString* name = [NSString stringWithFormat:@"%@:%lu", loc.filename.lastPathComponent ?: @"?", (unsigned long)loc.line];
+    NSMutableDictionary<NSString*, NSNumber*>* labels = self.blkState[@"parAutoLabels"];
+    if (!labels)
+        {
+        labels = [NSMutableDictionary dictionary];
+        self.blkState[@"parAutoLabels"] = labels;
+        }
+    NSUInteger nth = labels[name].unsignedIntegerValue + 1;
+    labels[name] = @(nth);
+    if (nth > 1)
+        name = [NSString stringWithFormat:@"%@#%lu", name, (unsigned long)nth];
     return [self parDesugarBody:body frame:frame name:name reductions:reds at:loc];
     }
 

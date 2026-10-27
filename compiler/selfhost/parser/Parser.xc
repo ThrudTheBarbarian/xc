@@ -66,7 +66,8 @@ class Parser
     Array*  _blkClasses;    // synthesised impl ClassDecl nodes, creation order
     u32     _parCounter;    // ParImpl$N numbering (par blocks)
     bool    _parAuto;       // --par-auto: a plain loop becomes a par block where its shape allows
-    u32     _parAutoCounter; // autopar_N naming
+    u32     _parAutoCounter; // lifted loops so far
+    Map*    _parAutoLabels;  // a lifted loop's file:line -> how many had it
     bool    _parAutoWantsRuntime; // --par-auto found a loop to wrap, but Par.xc was not imported
     u32     _loopDepth;     // loops open in the code being parsed (an auto par wraps an outermost one)
     u32     _goalDefault;   // the unit's default goal: 0 built-in, 1 speed, 2 accuracy (#goal, else -fgoal=)
@@ -2849,9 +2850,26 @@ class Parser
             body = mk((u16)nkBlock);
             body.add(loop);
         }
+        // Named where the loop is, file:line (a second one on the line #2,
+        // as the C path names its blocks), so a program can ask where a
+        // lifted loop ran (Par.ranOn) and XC_PAR_REPORT says which loop it is.
         _parAutoCounter = _parAutoCounter + (u32)1;
-        String* name = String.withCString("autopar_");
-        name.append(String.withU32(_parAutoCounter));
+        String* lf = (forTok != (Token*)0 && forTok.file() != (String*)0) ? forTok.file() : String.withCString("?");
+        u32 lcut = (u32)0;
+        for (u32 q = (u32)0; q < lf.byteLength(); q = q + (u32)1)
+            if (lf.byteAt(q) == (u8)'/') lcut = q + (u32)1;
+        String* name = lf.substringBytes(lcut, lf.byteLength() - lcut);
+        name.appendByte((u8)':');
+        name.append(String.withU32(forTok != (Token*)0 ? forTok.line() : (u32)0));
+        if (_parAutoLabels == (Map*)0)
+            _parAutoLabels = new Map();
+        Number* lseen = (Number*)_parAutoLabels.get((Hashable*)name);
+        u32 lnth = lseen != (Number*)0 ? lseen.asU32() + (u32)1 : (u32)1;
+        _parAutoLabels.set((Hashable*)String.withString(name), (Object*)Number.with(lnth));
+        if (lnth > (u32)1) {
+            name.appendByte((u8)'#');
+            name.append(String.withU32(lnth));
+        }
         Token* savedMkAt = _mkAt;
         _mkAt = forTok;
         Node* out = parDesugar(body, frame, name, reds);
