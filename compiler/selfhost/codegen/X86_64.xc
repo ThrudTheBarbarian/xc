@@ -1577,13 +1577,19 @@ class X86_64
         if (sint)
             {
             loadExt(src, (u8)'a', true, w);
+            // Zeroed first: cvtsi2* writes only the low element and keeps the
+            // rest of D, so it waits on D's last writer, an unrelated chain of
+            // float maths. xorps D, D is a zero idiom the CPU executes for free
+            // (perlin's floor, 2026-10-27: the avx2 copy's hottest instructions
+            // in IBS samples, 2.3x the base copy's back-end stalls).
+            _out.appendFormat("\txorps\t%s, %s\n", D.cString(), D.cString());
             _out.appendFormat("\tcvtsi2%s\t%s, %s\n", sfx, D.cString(), reg((u8)'a', w).cString());
             }
         else
             {
             loadZX(src, (u8)'a');
             if (w < (u32)8)
-                _out.appendFormat("\tcvtsi2%s\t%s, rax\n", sfx, D.cString());
+                _out.appendFormat("\txorps\t%s, %s\n\tcvtsi2%s\t%s, rax\n", D.cString(), D.cString(), sfx, D.cString());
             else
                 emitUintToFp(sfx, w);
             }
@@ -1601,12 +1607,12 @@ class X86_64
         {
         if (w < (u32)8)
             {
-            _out.appendFormat("\tcvtsi2%s\txmm0, rax\n", sfx);
+            _out.appendFormat("\txorps\txmm0, xmm0\n\tcvtsi2%s\txmm0, rax\n", sfx);
             return;
             }
         _out.appendCString("\tmov\trcx, rax\n\tshr\trcx, 1\n\tmov\tedx, eax\n\tand\tedx, 1\n");
         _out.appendCString("\tor\trcx, rdx\n\ttest\trax, rax\n\tcmovns\trcx, rax\n");
-        _out.appendFormat("\tcvtsi2%s\txmm0, rcx\n\tsar\trax, 63\n\tmovq\txmm1, rax\n", sfx);
+        _out.appendFormat("\txorps\txmm0, xmm0\n\tcvtsi2%s\txmm0, rcx\n\tsar\trax, 63\n\tmovq\txmm1, rax\n", sfx);
         _out.appendFormat("\tandps\txmm1, xmm0\n\tadd%s\txmm0, xmm1\n", sfx);
         }
 

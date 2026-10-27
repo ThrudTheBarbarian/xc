@@ -217,11 +217,11 @@ static NSInteger sWin64SretOff = 0;
 + (NSString*)uintToFpText:(NSString*)sfx width:(NSUInteger)w
     {
     if (w < 8)
-        return [NSString stringWithFormat:@"\tcvtsi2%@\txmm0, rax\n", sfx];
+        return [NSString stringWithFormat:@"\txorps\txmm0, xmm0\n\tcvtsi2%@\txmm0, rax\n", sfx];
     return [NSString stringWithFormat:
                          @"\tmov\trcx, rax\n\tshr\trcx, 1\n\tmov\tedx, eax\n\tand\tedx, 1\n"
                           "\tor\trcx, rdx\n\ttest\trax, rax\n\tcmovns\trcx, rax\n"
-                          "\tcvtsi2%@\txmm0, rcx\n\tsar\trax, 63\n\tmovq\txmm1, rax\n"
+                          "\txorps\txmm0, xmm0\n\tcvtsi2%@\txmm0, rcx\n\tsar\trax, 63\n\tmovq\txmm1, rax\n"
                           "\tandps\txmm1, xmm0\n\tadd%@\txmm0, xmm1\n",
                          sfx, sfx];
     }
@@ -5308,13 +5308,18 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (op == XTIROpSIToFp)
             {
             [self loadExt:ops[0] into:'a' signed:YES width:w fn:fn slot:slot out:out];
+            // Zeroed first: cvtsi2* writes only the low element and keeps the
+            // rest of D, so it waits on D's last writer, an unrelated chain of
+            // float maths. xorps D, D is a zero idiom the CPU executes for free
+            // (perlin's floor, 2026-10-27). As the port.
+            [out appendFormat:@"\txorps\t%@, %@\n", D, D];
             [out appendFormat:@"\tcvtsi2%@\t%@, %@\n", sfx, D, [self reg:'a' width:w]];
             }
         else
             {
             [self loadZX:ops[0] into:'a' fn:fn slot:slot out:out];
             if (w < 8)
-                [out appendFormat:@"\tcvtsi2%@\t%@, rax\n", sfx, D];
+                [out appendFormat:@"\txorps\t%@, %@\n\tcvtsi2%@\t%@, rax\n", D, D, sfx, D];
             else
                 [out appendString:[self uintToFpText:sfx width:w]];
             }
