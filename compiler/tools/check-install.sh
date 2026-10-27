@@ -38,6 +38,12 @@ n=$(count "$NAMES")
 # ---- RULES ---------------------------------------------------------------------------------
 for list in SHIP_OSX SHIP_LINUX SHIP_WIN64; do
     entries=$(val $list)
+    # The Linux and Windows lists are made where dist builds them, on the Mac
+    # (the Makefile defines them inside its Darwin block): elsewhere they are
+    # empty, which is not a broken ship list (2026-10-27, the Linux gate host).
+    if [ -z "$entries" ] && [ "$list" != SHIP_OSX ] && [ "$(uname -s)" != Darwin ]; then
+        continue
+    fi
     if [ "$(count "$entries")" -ne "$n" ]; then
         echo "FAIL  $list has $(count "$entries") entries for $n names in SHIP_NAMES"
         echo "      ($list: $entries)"
