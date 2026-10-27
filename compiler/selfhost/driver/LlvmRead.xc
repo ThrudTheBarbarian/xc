@@ -1536,11 +1536,27 @@ class LlvmReader
         String* bin = binOp(op);
         if (bin != (String*)0)
             {
-            // flags: nsw nuw exact disjoint fast and the like.
-            while (eat("nsw") || eat("nuw") || eat("exact") || eat("disjoint") || eat("fast") || eat("nnan")
-                   || eat("ninf") || eat("nsz") || eat("arcp") || eat("contract") || eat("afn") || eat("reassoc"))
+            // flags: nsw nuw exact disjoint fast and the like. `contract` (or
+            // `fast`) on a float add or subtract is the C source asking for
+            // fused multiply-adds (-ffp-contract=fast): kept as the IR's own
+            // `contract`, which the x86-64 back end fuses (owner, 2026-10-26: C
+            // stays exact unless asked; clang's default `on` writes
+            // llvm.fmuladd instead, read below as a plain multiply and add).
+            bool contract = false;
+            while (true)
                 {
+                if (eat("contract") || eat("fast"))
+                    {
+                    contract = true;
+                    continue;
+                    }
+                if (eat("nsw") || eat("nuw") || eat("exact") || eat("disjoint") || eat("nnan")
+                    || eat("ninf") || eat("nsz") || eat("arcp") || eat("afn") || eat("reassoc"))
+                    continue;
+                break;
                 }
+            String* cpred = contract && (bin.equals(String.withCString("FAdd")) || bin.equals(String.withCString("FSub")))
+                            ? String.withCString("contract") : (String*)0;
             String* t = irOf(llType());
             IRValue* a = operand(t);
             eat(",");
@@ -1573,20 +1589,21 @@ class LlvmReader
                 IRValue* na = (IRValue*)_negOf.get((Hashable*)a);
                 if (nb != (IRValue*)0)
                     {
-                    define(res, String.withCString("FSub"), t, IROperand.useVal(a), IROperand.useVal(nb), (IROperand*)0, (String*)0);
+                    define(res, String.withCString("FSub"), t, IROperand.useVal(a), IROperand.useVal(nb), (IROperand*)0, cpred);
                     return;
                     }
                 if (na != (IRValue*)0)
                     {
-                    define(res, String.withCString("FSub"), t, IROperand.useVal(b), IROperand.useVal(na), (IROperand*)0, (String*)0);
+                    define(res, String.withCString("FSub"), t, IROperand.useVal(b), IROperand.useVal(na), (IROperand*)0, cpred);
                     return;
                     }
                 }
-            define(res, bin, t, IROperand.useVal(a), IROperand.useVal(b), (IROperand*)0, (String*)0);
+            define(res, bin, t, IROperand.useVal(a), IROperand.useVal(b), (IROperand*)0, cpred);
             return;
             }
         if (op.equals(String.withCString("fneg")))
             {
+            eatFastMath();
             String* t = irOf(llType());
             IRValue* a = operand(t);
             if (a == (IRValue*)0)
@@ -1599,7 +1616,8 @@ class LlvmReader
             }
         if (op.equals(String.withCString("icmp")) || op.equals(String.withCString("fcmp")))
             {
-            while (eat("fast") || eat("nnan") || eat("ninf") || eat("nsz") || eat("samesign"))
+            while (eat("fast") || eat("contract") || eat("nnan") || eat("ninf") || eat("nsz") || eat("arcp")
+                   || eat("afn") || eat("reassoc") || eat("samesign"))
                 {
                 }
             String* pred = word().uppercased();
@@ -1654,6 +1672,7 @@ class LlvmReader
             }
         if (op.equals(String.withCString("select")))
             {
+            eatFastMath();
             IRValue* c = typedOperand();
             eat(",");
             IRValue* a = typedOperand();
@@ -1669,6 +1688,7 @@ class LlvmReader
             }
         if (op.equals(String.withCString("phi")))
             {
+            eatFastMath();
             String* t = irOf(llType());
             IRInsn* phi = IRInsn.with(String.withCString("Phi"));
             IRValue* r = valNamed(res, t);
@@ -1770,6 +1790,7 @@ class LlvmReader
             {
             if (!op.equals(String.withCString("call")))
                 eat("call");
+            eatFastMath();
             readCall(res);
             return;
             }
@@ -1779,6 +1800,16 @@ class LlvmReader
             return;
             }
         fail(String.withFormat("an instruction not read: %s", op.cString()).cString());
+        }
+
+    // The fast-math flags clang writes on float instructions (-ffp-contract=fast
+    // puts `contract` on calls, phis, selects and compares too): read past.
+    void eatFastMath()
+        {
+        while (eat("fast") || eat("contract") || eat("nnan") || eat("ninf") || eat("nsz") || eat("arcp")
+               || eat("afn") || eat("reassoc"))
+            {
+            }
         }
 
     // r = op(a, b, c), the result named `res` (already referenced or not).

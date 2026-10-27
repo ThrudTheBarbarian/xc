@@ -31,6 +31,9 @@ bool gCPathProtect;
 // gave clang no target, so its half was a host object the x86-64 link could
 // not read ("rest.o is not a readable x86-64 object").
 String* gCPathTarget;
+// -ffp-contract=<x>, handed to clang: `fast` is the C source asking for fused
+// multiply-adds (LlvmRead keeps clang's `contract` flags); 0 for clang's default.
+String* gCPathFpContract;
 
 // -c of a C file: xcc's object and clang's become one relocatable object
 // (`clang -r`, the system linker on macOS, ld.lld for another target), not a
@@ -59,6 +62,7 @@ i32 cPathRelocatable(String* xo, String* out)
 String* cRestObject(void) { return gCRestObject; }
 void cPathSetProtect(bool b) { gCPathProtect = b; }
 void cPathSetTarget(String* t) { gCPathTarget = t; }
+void cPathSetFpContract(String* v) { gCPathFpContract = v; }
 
 // The C library's: the shell runs clang, with this process's environment.
 i32 system(u8* command);
@@ -139,6 +143,11 @@ class CPath
         if (gCPathTarget != (String*)0)
             cmd.append(gCPathTarget);
         cmd.appendCString(" -O1 -Xclang -disable-llvm-passes -fno-discard-value-names -gline-tables-only -S -emit-llvm");
+        if (gCPathFpContract != (String*)0)
+            {
+            cmd.appendCString(" -ffp-contract=");
+            cmd.append(gCPathFpContract);
+            }
         for (u32 i = (u32)0; i < incs.count(); i = i + (u32)1)
             {
             cmd.appendCString(" -I ");
