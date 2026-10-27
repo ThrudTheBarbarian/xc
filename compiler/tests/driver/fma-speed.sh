@@ -1,6 +1,6 @@
 #!/bin/bash
 # fma-speed.sh — x86-64 fuses a float multiply with the add or subtract that
-# consumes it ONLY under :goal(speed) (owner, 2026-10-26; GCC and clang fuse by
+# consumes it ONLY under :goal(speed), and only with XCC_X86_FMA=1 for now (owner, 2026-10-26; GCC and clang fuse by
 # default, which put perlin 1.3x ahead of xcc). The same chaotic recurrence
 # x = x*x - c twice: in a :goal(speed) loop its avx2 copy is vfmsub231ss, one
 # rounding a step; in a plain loop there is none, so the plain answer never
@@ -51,9 +51,14 @@ i32 main(void)
     return 0;
 }
 XC
+# Fusion is OFF by default until the Zen 5 slowdown on perlin is understood
+# (owner, 2026-10-26): no fused code without XCC_X86_FMA=1, then all of it.
 for c in "$REF" "$XC"; do
     [ -x "$c" ] || continue
-    "$c" -q -A x86_64 -O2 -S -o "$W/$(basename "$c").s" "$W/fma.xc" || { echo "FAIL $c: no assembly"; fail=1; }
+    "$c" -q -A x86_64 -O2 -S -o "$W/$(basename "$c").off.s" "$W/fma.xc" || { echo "FAIL $c: no assembly"; fail=1; }
+    n=$(grep -cE 'vfn?m(add|sub)' "$W/$(basename "$c").off.s")
+    [ "$n" = 0 ] || { echo "FAIL $c: $n fused multiply-adds without XCC_X86_FMA=1"; fail=1; }
+    XCC_X86_FMA=1 "$c" -q -A x86_64 -O2 -S -o "$W/$(basename "$c").s" "$W/fma.xc" || { echo "FAIL $c: no assembly"; fail=1; }
 done
 S="$W/$(basename "$XC").s"
 fnbody() { awk -v f="$1" '$0 == f":" {p=1; next} p && /^[A-Za-z_][A-Za-z0-9_$]*:$/ {p=0} p' "$S"; }
@@ -68,10 +73,10 @@ if [ -s "$W/xcc.s" ] && [ -s "$W/xcc-xc.s" ] && ! cmp -s "$W/xcc.s" "$W/xcc-xc.s
 run() { :; }
 H=${XTC_X86_HOST:-}
 if [ "$(uname -m)" = x86_64 ] && [ "$PLAT" = linux ]; then
-    "$XC" -q -O2 -o "$W/fma" "$W/fma.xc" || { echo "FAIL: does not build"; exit 1; }
+    XCC_X86_FMA=1 "$XC" -q -O2 -o "$W/fma" "$W/fma.xc" || { echo "FAIL: does not build"; exit 1; }
     run() { XC_SIMD=$1 "$W/fma" 2>/dev/null; }
 elif [ -n "$H" ]; then
-    "$XC" -q -A x86_64 -O2 -o "$W/fma" "$W/fma.xc" || { echo "FAIL: does not build for x86-64"; exit 1; }
+    XCC_X86_FMA=1 "$XC" -q -A x86_64 -O2 -o "$W/fma" "$W/fma.xc" || { echo "FAIL: does not build for x86-64"; exit 1; }
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
     scp $SSHO -q "$W/fma" "$H:fma-speed.bin" || { echo "FAIL: copy to $H"; exit 1; }
     run() { ssh $SSHO "$H" "XC_SIMD=$1 ./fma-speed.bin 2>/dev/null"; }

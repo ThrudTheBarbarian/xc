@@ -3233,8 +3233,12 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
             if (pn.result)
                 [fmaPhi addObject:@(pn.result.valueId)];
     sFmaPhi = fmaPhi;
-    // The avx2 and avx512 copies have FMA (the dispatcher requires it).
-    sFmaOk = fn.simdLevel != nil;
+    // The avx2 and avx512 copies have FMA (the dispatcher requires it). OFF
+    // unless XCC_X86_FMA=1 (owner, 2026-10-26): fused, perlin ran 33% slower
+    // on Zen 5 (C, -ffp-contract=fast: 81.9 -> 109 ms) where GCC's fused code
+    // is faster; on until that is understood. As the port.
+    const char* fe = getenv("XCC_X86_FMA");
+    sFmaOk = fn.simdLevel != nil && fe && strcmp(fe, "1") == 0;
     sNonNeg = nonNeg;
     // The given-up vector values are THIS function's: assignVectorRegsFor:
     // returns before it resets them when the function has no vector values

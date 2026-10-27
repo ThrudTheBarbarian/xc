@@ -5214,7 +5214,11 @@ class X86_64
         _fmaUc = new Map();
         _fmaPhi = new Map();
         // The avx2 and avx512 copies have FMA (the dispatcher requires it).
-        _fmaOk = fn.simdLevel() != (String*)0;
+        // OFF unless XCC_X86_FMA=1 (owner, 2026-10-26): fused, perlin ran 33%
+        // slower on Zen 5 (C, -ffp-contract=fast: 81.9 -> 109 ms) where GCC's
+        // fused code is faster; on until that is understood.
+        String* fe = Platform.env(String.withCString("XCC_X86_FMA"));
+        _fmaOk = fn.simdLevel() != (String*)0 && fe != (String*)0 && fe.equals(String.withCString("1"));
         if (_hasAsm)
             return;
         Map* uc = new Map();
