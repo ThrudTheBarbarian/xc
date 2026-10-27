@@ -3359,7 +3359,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 // label, and no outer name incremented, taken by address or written through a
 // member. The decision is made on the TOKENS, before parsing, so both parsers
 // decide alike without a trial parse; a loop that qualifies is parsed inside a
-// par frame, as `par autopar_N :reduce(op acc) { for … }` would be. What the
+// par frame, as `par <file:line> :reduce(op acc) { for … }` would be. What the
 // tokens cannot tell — a dependence between items, a call the GPU cannot make
 // — par-check decides after lowering, and demotes an auto block to a serial
 // run rather than refusing it. Mirrored in the port (parAutoFor).

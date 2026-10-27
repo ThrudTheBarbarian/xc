@@ -107,17 +107,17 @@ got=$(grep -v '^par: ' "$W/rep" | tail -1)
 [ "$want" = "$got" ] || { echo "FAIL auto: outputs differ: plain '$want', --par-auto '$got'"; fail=1; }
 # Six blocks ran (the map, the two reductions, the C-style map, the inclusive
 # reduction and the count); the scan ran serially and is not reported as a
-# run on any device, and the :serial loop is no block at all, so the blocks
-# are numbered 1-4 and 5-7.
-n=$(grep -cE 'par: autopar_[0-9]+:' "$W/rep")
+# run on any device, and the :serial loop is no block at all. A lifted loop
+# is named by its file and line (auto.xc:13), as Par.ranOn takes it.
+n=$(grep -cE 'par: [A-Za-z0-9_]+\.xc:[0-9]+(#[0-9]+)?:' "$W/rep")
 [ "$n" -ge 10 ] || { echo "FAIL auto: expected the auto blocks in the report, saw $n lines"; cat "$W/rep"; fail=1; }
-grep -q 'autopar_4' "$W/rep" && { echo "FAIL auto: the scan ran as a block"; fail=1; }
-for k in 5 6 7 8 9 10 11; do grep -q "autopar_$k:" "$W/rep" || { echo "FAIL auto: block autopar_$k (C-style / inclusive / acc++ / block literal / nest / xor / bare if) did not run"; fail=1; }; done
-for k in 12 13; do grep -q "autopar_$k:" "$W/rep" || { echo "FAIL auto: block autopar_$k (min / max) did not run"; fail=1; }; done
-grep -q 'autopar_14' "$W/rep" && { echo "FAIL auto: a fourteenth block ran (the :serial loop?)"; fail=1; }
+grep -q 'auto\.xc:22:' "$W/rep" && { echo "FAIL auto: the scan (line 22) ran as a block"; fail=1; }
+for k in 35 38 41 48 52 56 59; do grep -q "auto\.xc:$k:" "$W/rep" || { echo "FAIL auto: the block at line $k (C-style / inclusive / acc++ / block literal / nest / xor / bare if) did not run"; fail=1; }; done
+for k in 63 67; do grep -q "auto\.xc:$k:" "$W/rep" || { echo "FAIL auto: the block at line $k (min / max) did not run"; fail=1; }; done
+grep -q 'auto\.xc:33:' "$W/rep" && { echo "FAIL auto: the :serial loop (line 33) ran as a block"; fail=1; }
 # The nest ran as ONE block over the whole grid (640*480 items), not as 480
-# blocks of 640, and the reduction after it (autopar_10) is a block of its own.
-grep -q 'autopar_9: 307200 items' "$W/rep" || { echo "FAIL auto: the perfect nest did not run as one 307200-item grid block"; grep autopar_9 "$W/rep" | head -3; fail=1; }
+# blocks of 640, and the reduction after it (line 56) is a block of its own.
+grep -q 'auto\.xc:52: 307200 items' "$W/rep" || { echo "FAIL auto: the perfect nest did not run as one 307200-item grid block"; grep 'auto\.xc:52' "$W/rep" | head -3; fail=1; }
 # Under `#goal speed` the float reduction is a block too (its sum may
 # reassociate; the goal says that is wanted), and the result still agrees.
 { echo '#goal speed'; cat "$W/auto.xc"; } > "$W/speed.xc"
@@ -125,17 +125,17 @@ grep -q 'autopar_9: 307200 items' "$W/rep" || { echo "FAIL auto: the perfect nes
 XC_PAR_REPORT=1 "$W/speed" > "$W/rep2" 2>&1
 got2=$(grep -v '^par: ' "$W/rep2" | tail -1)
 [ "$want" = "$got2" ] || { echo "FAIL auto: outputs differ under #goal speed: plain '$want', got '$got2'"; fail=1; }
-n2=$(grep -cE 'par: autopar_[0-9]+:' "$W/rep2")
+n2=$(grep -cE 'par: [A-Za-z0-9_]+\.xc:[0-9]+(#[0-9]+)?:' "$W/rep2")
 [ "$n2" -gt "$n" ] || { echo "FAIL auto: #goal speed did not add the float reduction ($n2 vs $n lines)"; cat "$W/rep2" | head -20; fail=1; }
 # -fgoal=accuracy on the same file: the directive wins over the flag.
 "$XC" -q -H . -O2 --par-auto -fgoal=accuracy "$W/speed.xc" -o "$W/speed2" >"$W/b4" 2>&1 || { echo "FAIL auto: -fgoal=accuracy build"; head -3 "$W/b4"; exit 1; }
 XC_PAR_REPORT=1 "$W/speed2" > "$W/rep3" 2>&1
-n3=$(grep -cE 'par: autopar_[0-9]+:' "$W/rep3")
+n3=$(grep -cE 'par: [A-Za-z0-9_]+\.xc:[0-9]+(#[0-9]+)?:' "$W/rep3")
 [ "$n3" = "$n2" ] || { echo "FAIL auto: -fgoal=accuracy overrode #goal speed ($n3 vs $n2)"; fail=1; }
 # -fgoal=speed alone (no directive) wraps the float reduction as the directive did.
 "$XC" -q -H . -O2 --par-auto -fgoal=speed "$W/auto.xc" -o "$W/speed3" >"$W/b5" 2>&1 || { echo "FAIL auto: -fgoal=speed build"; head -3 "$W/b5"; exit 1; }
 XC_PAR_REPORT=1 "$W/speed3" > "$W/rep4" 2>&1
-n4=$(grep -cE 'par: autopar_[0-9]+:' "$W/rep4")
+n4=$(grep -cE 'par: [A-Za-z0-9_]+\.xc:[0-9]+(#[0-9]+)?:' "$W/rep4")
 [ "$n4" = "$n2" ] || { echo "FAIL auto: -fgoal=speed wrapped $n4 blocks, #goal speed $n2"; fail=1; }
 # A C-style loop on a variable declared OUTSIDE it (`for (i = 0; …)`) is not
 # a block: its work items would have no variable of their own. The scan took

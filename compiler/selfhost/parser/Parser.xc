@@ -2530,7 +2530,7 @@ class Parser
     // address or written through a member. The decision is made on the
     // TOKENS, before parsing, so both parsers decide alike without a trial
     // parse; a loop that qualifies is parsed inside a par frame, as
-    // `par autopar_N :reduce(op acc) { for … }` would be. What the tokens
+    // `par <file:line> :reduce(op acc) { for … }` would be. What the tokens
     // cannot tell — a dependence between items, a call the GPU cannot make —
     // par-check decides after lowering, and demotes an auto block to a
     // serial run rather than refusing it. Mirrors the reference's parAutoFor.
