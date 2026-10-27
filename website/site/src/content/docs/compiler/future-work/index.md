@@ -63,6 +63,20 @@ machine or several, the way a `par` block's tiles are today.
 take: `clang` turns the source into LLVM IR, `xcc` compiles what it reads of it, and
 `--par-auto` finds its loops in the IR as it finds C's.
 
+### A generic LLVM back end
+
+An option for `xcc` to hand its optimised IR to LLVM as LLVM IR, so a program can be
+built for any processor LLVM supports, RISC-V and POWER among them, not only the ones
+`xcc` has its own back ends for. `xcc`'s own back ends stay the default where they
+exist: that is where its vector code, SIMD dispatch and `par` runtimes are tuned.
+
+### `par` on FPGAs, through `xcd`
+
+A `par` block run on an FPGA as well as on GPUs and CPUs: its body compiled to logic by
+high-level synthesis, and the board served by an `xcd` worker like a remote GPU, so its
+tiles join the same queue as every other device's. Integer and fixed-point work suits it
+best; floating point would use the FPGA's DSP blocks.
+
 ### A straight comparison
 
 Once C or C++ compiles, a benchmark comparison on equal terms: the same C or C++
