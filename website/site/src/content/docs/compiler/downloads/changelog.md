@@ -3,6 +3,45 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.87.3 — steadier x86 float code, and which device ran a block
+
+Everything since 0.87.2, from the main line.
+
+### New
+
+- **`Par.ranOn` says which hardware ran a block**: the devices its last run
+  used, as `cpu`, `metal:…`, `cuda:…`, `vulkan:…` or `remote:…`, several when
+  the run was split across devices. A C program asks with
+  `xc_par_ran_on("file.c:line")`. Float results can differ from one device to
+  another; integer results never do. See
+  [Which hardware ran a block](/compiler/language/par/#which-hardware-ran-a-block).
+- A loop `--par-auto` makes a block is named after its file and line
+  (`prog.xc:12`), as unnamed blocks and C's loops already were, in
+  `XC_PAR_REPORT` and for `Par.device`.
+- `xcc` compiles IR text (`.ir` files).
+- C: `-S` writes the assembly where asked, `-c` makes one object of a C file,
+  and `-ffp-contract=fast|on|off` is handed to clang.
+
+### Faster
+
+- **x86-64 float code no longer waits on its integer-to-float conversions.**
+  A conversion writes only part of its register and so waited on whatever had
+  last written the rest; in the AVX2 code that was often a long chain of float
+  maths. Perlin noise on one Zen 5 thread now runs a steady 91.6 ms where it
+  swung between 93 and 122 ms from run to run.
+- A retain and a release that cancel each other are dropped.
+
+### Fixed
+
+- `xcc` crashed reading a C file built with `-ffp-contract=fast` (clang's
+  fast-math flags on calls, phis and compares).
+- On arm64, C's float-to-integer casts are unchecked, as they are on x86-64.
+- An Objective-C object built with clang's default selector stubs fails to link
+  with an error that names them and the clang flag that avoids them, rather
+  than suggesting a missing framework.
+- x86-64 picks its AVX2 code only on a CPU that also has FMA (every AVX2 CPU
+  does).
+
 ## Version 0.87.2 — a 64-bit conversion on arm64
 
 One more fix on top of 0.87.1. Nothing else changed.
