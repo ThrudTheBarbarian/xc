@@ -6,7 +6,7 @@
 # needs clang on the PATH), plain and with --par-auto.  Clang's OpenMP needs
 # libomp; without it that build is left out, and running it says so.
 fail() { echo 1 > ~/install-exit-status; exit 1; }
-tar xjf xcc-linux-0.87.2.tar.bz2 || fail
+tar xjf xcc-linux-0.87.3.tar.bz2 || fail
 tar xjf xcc-c-bench-sources-0.87.tar.bz2 || fail
 src=xcc-c-bench-sources-0.87
 mkdir -p bin
@@ -23,8 +23,8 @@ do
         clang -O3 -march=native -w $d -o $o.clang-native $src/$b.c -lm || fail
         gcc   -O3 -march=native -fopenmp -w $d -o $o.gcc-openmp $src/openmp/$b.c -lm || fail
         clang -O3 -march=native -fopenmp -w $d -o $o.clang-openmp $src/openmp/$b.c -lm 2>/dev/null
-        ./xcc-linux-0.87.2/bin/xcc -q -O3 $d -o $o.xcc $src/$b.c || fail
-        ./xcc-linux-0.87.2/bin/xcc -q -O3 --par-auto $d -o $o.xcc-par $src/$b.c || fail
+        ./xcc-linux-0.87.3/bin/xcc -q -O3 $d -o $o.xcc $src/$b.c || fail
+        ./xcc-linux-0.87.3/bin/xcc -q -O3 --par-auto $d -o $o.xcc-par $src/$b.c || fail
     done
 done
 

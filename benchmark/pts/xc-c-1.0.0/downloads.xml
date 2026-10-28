@@ -2,10 +2,10 @@
 <PhoronixTestSuite>
   <Downloads>
     <Package>
-      <URL>https://compile-xc.org/downloads/xcc-linux-0.87.2.tar.bz2</URL>
-      <SHA256>029b7bd0b6983cf58bda8ea94e803511ff127293a2b026ce18b66a0e4c6ec23a</SHA256>
-      <FileName>xcc-linux-0.87.2.tar.bz2</FileName>
-      <FileSize>7203880</FileSize>
+      <URL>https://compile-xc.org/downloads/xcc-linux-0.87.3.tar.bz2</URL>
+      <SHA256>20f1bcc7a95b5a0ff2e81ef587a254f6b788cc6ce55a78837ba3957bd27a1aa0</SHA256>
+      <FileName>xcc-linux-0.87.3.tar.bz2</FileName>
+      <FileSize>7215725</FileSize>
       <PlatformSpecific>Linux</PlatformSpecific>
     </Package>
     <Package>
