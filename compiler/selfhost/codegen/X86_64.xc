@@ -5219,12 +5219,13 @@ class X86_64
         _nonNeg = new Map();
         _fmaUc = new Map();
         _fmaPhi = new Map();
-        // The avx2 and avx512 copies have FMA (the dispatcher requires it).
-        // OFF unless XCC_X86_FMA=1 (owner, 2026-10-26): fused, perlin ran 33%
-        // slower on Zen 5 (C, -ffp-contract=fast: 81.9 -> 109 ms) where GCC's
-        // fused code is faster; on until that is understood.
-        String* fe = Platform.env(String.withCString("XCC_X86_FMA"));
-        _fmaOk = fn.simdLevel() != (String*)0 && fe != (String*)0 && fe.equals(String.withCString("1"));
+        // The avx2 and avx512 copies have FMA (the dispatcher requires it),
+        // and fuse what the IR marks `contract`: :goal(speed) code and C built
+        // with -ffp-contract=fast (owner, 2026-10-26). It was held off while
+        // fused C perlin ran 33% slower on Zen 5; that was the cvtsi2ss false
+        // dependency, fixed in 0.87.3, and fused it is now 12% faster (73.8
+        // ms against 83.5). On by the owner, 2026-10-28.
+        _fmaOk = fn.simdLevel() != (String*)0;
         _vexOk = fn.simdLevel() != (String*)0;
         if (_hasAsm)
             return;
