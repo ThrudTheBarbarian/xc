@@ -22,9 +22,10 @@ NS_ASSUME_NONNULL_BEGIN
 // the lowering emits for a widened literal). -O2+.
 //
 // The float rewrites, all exact (see runFloatOnFunction:):
+// all on a target whose plain code never fuses (profile.floatMulToAdd):
 //   FDiv x, ±2^e  → FMul x, ±2^-e   (1/c a normal number of the type)
-//   FMul x, 2     → FAdd x, x       (profile.floatMulToAdd)
-//   FAdd (FMul x, -2), c → FSub c, (FAdd x, x)   (likewise)
+//   FMul x, 2     → FAdd x, x
+//   FAdd (FMul x, -2), c → FSub c, (FAdd x, x)
 @interface XTIROptStrengthReduce : NSObject <XTIROptPass>
 // Set by the main pipeline; nil (a par kernel's passes) leaves the multiply
 // rewrites off.

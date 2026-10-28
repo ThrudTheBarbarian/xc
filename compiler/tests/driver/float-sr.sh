@@ -2,8 +2,8 @@
 # float-sr.sh — the exact float strength reductions, and a float select's
 # sunk arm in an avx copy (2026-10-28)
 #
-# x / 2^k is x * 2^-k when 2^-k is normal (every target); on x86-64, which
-# fuses no plain multiply-add, x * 2 is x + x and (x * -2) + c is c - (x + x).
+# On x86-64, which fuses no plain multiply-add: x / 2^k is x * 2^-k when 2^-k is normal,
+# x * 2 is x + x and (x * -2) + c is c - (x + x) (arm64 fuses products, so none of it there).
 # All exact: the program prints each over zeros of both signs, infinities, a
 # NaN and a value whose quotient is subnormal, and must print what the plain
 # operations print. Then C perlin's gradient: its avx2 copy must divide by

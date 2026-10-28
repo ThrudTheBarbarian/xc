@@ -17419,11 +17419,11 @@ class BeFact : Object
 
     // ── the float rewrites, all exact ──────────────────────────────────────
     //
-    // x / c, c = ±2^e, is x * (1/c) when 1/c is a normal number of the type:
-    // both are the one correctly rounded x·2^-e, NaN, infinities and signed
-    // zeros alike. The constant is rewritten in place, so every use of it must
-    // be such a divisor. On a target that fuses no plain multiply-add
-    // (_srFloatMul), x * 2 is x + x, and (x * -2) + c with the product read
+    // On a target that fuses no plain multiply-add (_srFloatMul), outside
+    // :goal(speed) code: x / c, c = ±2^e, is x * (1/c) when 1/c is a normal
+    // number of the type: both are the one correctly rounded x·2^-e, NaN,
+    // infinities and signed zeros alike. The constant is rewritten in place,
+    // so every use of it must be such a divisor. And x * 2 is x + x, and (x * -2) + c with the product read
     // only there is c - (x + x): -2x is -(2x) exactly, and c + -(p) is c - p
     // by definition. clang writes C's `0.0f - 2.0f * v` as fmuladd(-2, v, 0),
     // which C perlin's gradient pays as two multiplies and an add where GCC
@@ -17458,7 +17458,11 @@ class BeFact : Object
                     continue;
                 IROperand* a = (IROperand*)n.ops().get((u32)0);
                 IROperand* c = (IROperand*)n.ops().get((u32)1);
-                if (n.op().equals(String.withCString("FDiv")))
+                // The divide too only where products never fuse: a multiply
+                // where a divide stood is one arm64 fuses with the add after
+                // it, rounding once where the program rounded twice, and -O3
+                // then disagreed with -O0 (math_rand_float_range, ahl).
+                if (n.op().equals(String.withCString("FDiv")) && mulOk)
                     {
                     IRInsn* k = srfConstOf(defOf, c, ty);
                     if (k == (IRInsn*)0)
@@ -17576,16 +17580,23 @@ class BeFact : Object
         return d;
         }
 
+    // Compared as BITS: a constant's hex is lowercase from the reference's
+    // text and uppercase from clang's, and the reference compares the bits.
     bool srfIsConst(Map* defOf, IROperand* o, String* ty, u8* hex)
         {
         IRInsn* d = srfConstOf(defOf, o, ty);
-        return d != (IRInsn*)0 && ((IROperand*)d.ops().get((u32)0)).fpHex().equals(String.withCString(hex));
+        if (d == (IRInsn*)0)
+            return false;
+        u64 a = (u64)0;
+        u64 b = (u64)0;
+        return srfBits(((IROperand*)d.ops().get((u32)0)).fpHex(), &a) && srfBits(String.withCString(hex), &b) && a == b;
         }
 
-    // The bits of 1/c when c (a double's bits, in hex) is ±2^e and 1/c is a
-    // normal number of the type, else 0.
-    String* srfRecipHex(String* hex, bool f32)
+    // A double's bits from its 16 hex digits, either case.
+    bool srfBits(String* hex, u64* out)
         {
+        if (hex == (String*)0 || hex.byteLength() != (u32)16)
+            return false;
         u64 bits = (u64)0;
         for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
             {
@@ -17598,9 +17609,20 @@ class BeFact : Object
             else if (ch >= (u8)97 && ch <= (u8)102)
                 v = (u64)(ch - (u8)87);
             else
-                return (String*)0;
+                return false;
             bits = (bits << (u64)4) | v;
             }
+        *out = bits;
+        return true;
+        }
+
+    // The bits of 1/c when c (a double's bits, in hex) is ±2^e and 1/c is a
+    // normal number of the type, else 0.
+    String* srfRecipHex(String* hex, bool f32)
+        {
+        u64 bits = (u64)0;
+        if (!srfBits(hex, &bits))
+            return (String*)0;
         if ((bits & (u64)$FFFFFFFFFFFFF) != (u64)0)
             return (String*)0;
         i64 ex = (i64)((bits >> (u64)52) & (u64)$7FF);
@@ -17612,7 +17634,8 @@ class BeFact : Object
         if (-e < lo || -e > hi || e < lo || e > hi)
             return (String*)0;
         u64 r = (bits & ((u64)1 << (u64)63)) | ((u64)((i64)1023 - e) << (u64)52);
-        string digits = "0123456789ABCDEF";
+        // Lowercase, as the reference prints a constant's bits.
+        string digits = "0123456789abcdef";
         String* out = String.withCString("");
         for (i32 sh = (i32)60; sh >= (i32)0; sh = sh - (i32)4)
             out.appendByte(digits[(u32)((r >> (u64)sh) & (u64)$F)]);

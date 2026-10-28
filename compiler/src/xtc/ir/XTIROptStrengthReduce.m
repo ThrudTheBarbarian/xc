@@ -59,11 +59,11 @@ static BOOL recipBits(uint64_t bits, BOOL f32, uint64_t* out)
     return YES;
     }
 
-// x / c, c = ±2^e, is x * (1/c) when 1/c is a normal number of the type: both
-// are the one correctly rounded x·2^-e, NaN, infinities and signed zeros
-// alike. The constant is rewritten in place, so every use of it must be such a
-// divisor. On a target that fuses no plain multiply-add (profile.floatMulToAdd),
-// x * 2 is x + x, and (x * -2) + c with the product read only there is
+// On a target that fuses no plain multiply-add (profile.floatMulToAdd), outside
+// :goal(speed) code: x / c, c = ±2^e, is x * (1/c) when 1/c is a normal number
+// of the type: both are the one correctly rounded x·2^-e, NaN, infinities and
+// signed zeros alike. The constant is rewritten in place, so every use of it
+// must be such a divisor. And x * 2 is x + x, and (x * -2) + c with the product read only there is
 // c - (x + x): -2x is -(2x) exactly, and c + -(p) is c - p by definition.
 // clang writes C's `0.0f - 2.0f * v` as fmuladd(-2, v, 0), which C perlin's
 // gradient paid as two multiplies and an add where GCC does one add and a
@@ -133,7 +133,11 @@ static BOOL recipBits(uint64_t bits, BOOL f32, uint64_t* out)
                 continue;
             XTIRTypeKind k = n.result.type.kind;
             XTIROperand *a = n.operands[0], *c = n.operands[1];
-            if (n.opcode == XTIROpFDiv)
+            // The divide too only where products never fuse: a multiply where
+            // a divide stood is one arm64 fuses with the add after it, rounding
+            // once where the program rounded twice, and -O3 then disagreed with
+            // -O0 (math_rand_float_range, ahl).
+            if (n.opcode == XTIROpFDiv && mulOk)
                 {
                 XTIRInsn* kc = constOf(c, k);
                 uint64_t rb = 0;
