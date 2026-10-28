@@ -850,7 +850,32 @@ void* _xtc_alloc_aligned(uint64_t count, uint64_t stride, void (*dealloc)(void*)
    waste (up to two pages) would be out of proportion. Pointer and string
    arrays are never GPU data and stay as they were. */
 #define XT_SIMD_FROM 65536ULL
-#define XT_NEW_PRIM(n, st) ((n) * (st) >= XT_SIMD_FROM ? _xtc_alloc_aligned((n), (st), 0) : _xtc_alloc((n), (st), 0))
+/* Below that, a numeric array of XT_LINE_FROM bytes or more starts on a
+   64-byte cache line, so a vector loop's 64-byte loads do not split across
+   two lines (the header puts plain data 40 bytes past the allocator's
+   16-byte alignment). It has the page-aligned shape — magic
+   XT_MAGIC_ALIGNED, the allocator's base 8 bytes before the header —
+   without the registry, so _xtc_dealloc frees it by the same path. The same
+   as rt.c's. */
+#define XT_LINE_FROM 1024ULL
+void* _xtc_alloc_line(uint64_t count, uint64_t stride)
+    {
+    xt_size_check(count, stride);
+    uint8_t* raw = (uint8_t*)_xt_calloc(count * stride + XT_HDR + 64 + 8);
+    if (!raw)
+        return 0;
+    uint8_t* payload = (uint8_t*)(((uint64_t)(raw + XT_HDR + 8) + 63) & ~(uint64_t)63);
+    uint8_t* p = payload - XT_HDR;
+    *(uint32_t*)(p + 0) = XT_MAGIC_ALIGNED;
+    *(uint64_t*)(p + 4) = stride;
+    *(uint64_t*)(p + 12) = count;
+    *(void (**)(void*))(p + 20) = 0;
+    *(void**)(p + 28) = 0;
+    *(XT_RC_T*)(p + XT_RC_OFF) = 1;
+    *(void**)(p - 8) = raw;
+    return payload;
+    }
+#define XT_NEW_PRIM(n, st) ((n) * (st) >= XT_SIMD_FROM ? _xtc_alloc_aligned((n), (st), 0) : (n) * (st) >= XT_LINE_FROM ? _xtc_alloc_line((n), (st)) : _xtc_alloc((n), (st), 0))
 void* _xtc_new_simd_u8(uint64_t n) { return _xtc_alloc_aligned(n, 1, 0); }
 void* _xtc_new_simd_i8(uint64_t n) { return _xtc_alloc_aligned(n, 1, 0); }
 void* _xtc_new_simd_bool(uint64_t n) { return _xtc_alloc_aligned(n, 1, 0); }
@@ -949,8 +974,13 @@ void _xtc_dealloc(void* o)
         {
         if (d)
             d(o);
-        _xtc_simd_unwatch(o);
-        xt_simd_unreg((uint8_t*)o);
+        /* Only a block on a page can be in the registry (a cache-line block
+           of _xtc_alloc_line never is): the others skip the lock and search. */
+        if (((uint64_t)o & (XT_PAGE - 1)) == 0)
+            {
+            _xtc_simd_unwatch(o);
+            xt_simd_unreg((uint8_t*)o);
+            }
         _xt_free(*(void**)(base - 8));
         return;
         }

@@ -67,7 +67,18 @@ void *_xtc_alloc_aligned(unsigned long count,unsigned long stride,void(*dealloc)
    waste (up to two pages) would be out of proportion. Pointer and string
    arrays are never GPU data and stay as they were. */
 #define XT_SIMD_FROM 65536UL
-#define XT_NEW_PRIM(n,st) ((n)*(st)>=XT_SIMD_FROM?_xtc_alloc_aligned((n),(st),0):_xtc_alloc((n),(st),0))
+/* Below that, a numeric array of XT_LINE_FROM bytes or more starts on a
+   64-byte cache line. calloc gives 16, and the header puts the data 40 past
+   that, so a vector loop's 64-byte loads split across two lines for most
+   placements (an AVX-512 sum ran at half speed on some runs: the stack and
+   global arrays had the same fault). The block has the page-aligned shape —
+   magic XT_MAGIC_ALIGNED, the allocator's base 8 bytes before the header —
+   without the registry: it is never shared with a GPU, and _xtc_dealloc
+   frees it by the same path. Smaller arrays keep the plain block, where the
+   72 bytes of slack would be out of proportion. */
+#define XT_LINE_FROM 1024UL
+void *_xtc_alloc_line(unsigned long count,unsigned long stride);
+#define XT_NEW_PRIM(n,st) ((n)*(st)>=XT_SIMD_FROM?_xtc_alloc_aligned((n),(st),0):(n)*(st)>=XT_LINE_FROM?_xtc_alloc_line((n),(st)):_xtc_alloc((n),(st),0))
 void *_xtc_new_u8(unsigned long n){return XT_NEW_PRIM(n,1);}
 void *_xtc_new_i8(unsigned long n){return XT_NEW_PRIM(n,1);}
 void *_xtc_new_u16(unsigned long n){return XT_NEW_PRIM(n,2);}
@@ -176,6 +187,14 @@ void *_xtc_alloc_aligned(unsigned long count,unsigned long stride,void(*dealloc)
     *(uint32_t*)(p+XT_MAGIC_OFF)=XT_MAGIC_ALIGNED;*(unsigned long*)(p+XT_STRIDE_OFF)=stride;
     *(unsigned long*)(p+XT_COUNT_OFF)=count;*(void(**)(void*))(p+XT_DEALLOC_OFF)=dealloc;
     *(void**)(p+XT_WEAKH_OFF)=0;*(XT_RC_T*)(p+XT_RC_OFF)=1;*(void**)(p-8)=raw;xt_simd_reg(payload,count*stride);return payload;}
+void *_xtc_alloc_line(unsigned long count,unsigned long stride){
+    xt_size_check(count,stride);
+    uint8_t*raw=(uint8_t*)calloc(1,count*stride+XT_HDR+64+8);
+    if(!raw){fprintf(stderr,"xcc: out of memory allocating %lu x %lu bytes\n",count,stride);abort();}
+    uint8_t*payload=(uint8_t*)(((unsigned long)(raw+XT_HDR+8)+63)&~63UL);uint8_t*p=payload-XT_HDR;
+    *(uint32_t*)(p+XT_MAGIC_OFF)=XT_MAGIC_ALIGNED;*(unsigned long*)(p+XT_STRIDE_OFF)=stride;
+    *(unsigned long*)(p+XT_COUNT_OFF)=count;*(void(**)(void*))(p+XT_DEALLOC_OFF)=0;
+    *(void**)(p+XT_WEAKH_OFF)=0;*(XT_RC_T*)(p+XT_RC_OFF)=1;*(void**)(p-8)=raw;return payload;}
 void *_xtc_new_simd_u8(unsigned long n){return _xtc_alloc_aligned(n,1,0);}
 void *_xtc_new_simd_i8(unsigned long n){return _xtc_alloc_aligned(n,1,0);}
 void *_xtc_new_simd_bool(unsigned long n){return _xtc_alloc_aligned(n,1,0);}
@@ -208,7 +227,10 @@ void _xtc_dealloc(void *o){_xtc_weak_zero_for(o);uint8_t*base=(uint8_t*)o-XT_HDR
        copies (ParCuda.pinned) stores the unpin there, and it is called once
        with the payload before the block goes. The block's header is not its
        allocator base either (see _xtc_alloc_aligned). */
-    if(*(uint32_t*)(base+XT_MAGIC_OFF)==XT_MAGIC_ALIGNED){if(d)d(o);_xtc_simd_unwatch(o);xt_simd_unreg((uint8_t*)o);free(*(void**)(base-8));return;}
+    if(*(uint32_t*)(base+XT_MAGIC_OFF)==XT_MAGIC_ALIGNED){if(d)d(o);
+        /* Only a block on a page can be in the registry (a cache-line block
+           of _xtc_alloc_line never is): the others skip the lock and search. */
+        if(((unsigned long)o&(XT_PAGE-1))==0){_xtc_simd_unwatch(o);xt_simd_unreg((uint8_t*)o);}free(*(void**)(base-8));return;}
     if(d){*(XT_RC_T*)((uint8_t*)o-XT_RC_BYTES)=XT_RC_DYING;for(unsigned long i=0;i<count;i++)d((uint8_t*)o+i*stride);}
     free(base);}
 #define _XT_WH(o) (*(void***)((uint8_t*)(o)-(XT_HDR-XT_WEAKH_OFF)))
