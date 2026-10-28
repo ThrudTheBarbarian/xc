@@ -1,0 +1,162 @@
+{
+ "mandelbrot": {
+  "linux": {
+   "auto": {
+    "best_us": 2797,
+    "first_us": 24470
+   },
+   "checksum": "199",
+   "cpu": {
+    "best_us": 3285,
+    "first_us": 4496
+   },
+   "gpu": {
+    "best_us": 9691,
+    "first_us": 33708
+   },
+   "written": {
+    "best_us": 55888,
+    "first_us": 70229
+   }
+  },
+  "windows": {
+   "auto": {
+    "best_us": 144,
+    "first_us": 448472
+   },
+   "checksum": "199",
+   "cpu": {
+    "best_us": 4304,
+    "first_us": 4704
+   },
+   "gpu": {
+    "best_us": 145,
+    "first_us": 113014
+   },
+   "written": {
+    "best_us": 83893,
+    "first_us": 84663
+   }
+  }
+ },
+ "nbody": {
+  "linux": {
+   "auto": {
+    "best_us": 763,
+    "first_us": 20576
+   },
+   "checksum": "42",
+   "cpu": {
+    "best_us": 561,
+    "first_us": 2193
+   },
+   "gpu": {
+    "best_us": 3432,
+    "first_us": 23544
+   },
+   "written": {
+    "best_us": 94775,
+    "first_us": 118787
+   }
+  },
+  "windows": {
+   "auto": {
+    "best_us": 400,
+    "first_us": 449431
+   },
+   "checksum": "42",
+   "cpu": {
+    "best_us": 1092,
+    "first_us": 1914
+   },
+   "gpu": {
+    "best_us": 400,
+    "first_us": 123630
+   },
+   "written": {
+    "best_us": 117397,
+    "first_us": 117975
+   }
+  }
+ },
+ "perlin": {
+  "linux": {
+   "auto": {
+    "best_us": 5702,
+    "first_us": 10642
+   },
+   "checksum": "243",
+   "cpu": {
+    "best_us": 6054,
+    "first_us": 6680
+   },
+   "gpu": {
+    "best_us": 5703,
+    "first_us": 10680
+   },
+   "written": {
+    "best_us": 85708,
+    "first_us": 87183
+   }
+  },
+  "windows": {
+   "auto": {
+    "best_us": 436,
+    "first_us": 2076
+   },
+   "checksum": "243",
+   "cpu": {
+    "best_us": 8215,
+    "first_us": 8940
+   },
+   "gpu": {
+    "best_us": 440,
+    "first_us": 1751
+   },
+   "written": {
+    "best_us": 129882,
+    "first_us": 131420
+   }
+  }
+ },
+ "saxpy": {
+  "linux": {
+   "auto": {
+    "best_us": 2409,
+    "first_us": 9889
+   },
+   "checksum": "3011510272",
+   "cpu": {
+    "best_us": 2332,
+    "first_us": 3831
+   },
+   "gpu": {
+    "best_us": 9882,
+    "first_us": 10525
+   },
+   "written": {
+    "best_us": 3332,
+    "first_us": 5115
+   }
+  },
+  "windows": {
+   "auto": {
+    "best_us": 3084,
+    "first_us": 5507
+   },
+   "checksum": "3011510272",
+   "cpu": {
+    "best_us": 2967,
+    "first_us": 5430
+   },
+   "gpu": {
+    "best_us": 5384,
+    "first_us": 16306
+   },
+   "written": {
+    "best_us": 4844,
+    "first_us": 5931
+   }
+  }
+ }
+}

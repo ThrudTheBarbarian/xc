@@ -785,6 +785,13 @@ def main():
     ap.add_argument("--current", default="v0.8")
     ap.add_argument("--history", default="v0.62,v0.63,v0.64,v0.65,v0.66,v0.7,v0.71,v0.72,v0.73,v0.74,v0.75,v0.8")
     ap.add_argument("--release", default="0.8")
+    # A dot release times xc again and keeps the other languages' figures from
+    # the release they were measured for (their compilers have not changed):
+    # the page names that release, not this one (0.87.3: --langs-release 0.87).
+    ap.add_argument("--langs-release", default=None,
+                    help="the release the other languages were measured for, when not this one")
+    ap.add_argument("--net-release", default=None,
+                    help="the release the network page's figures were measured with, when not this one")
     ap.add_argument("--mac", default=None, choices=["m3max"],
                     help="the arm64 figures from benchmark/<mac>-<version>/ (the Mac they were measured on)")
     a = ap.parse_args()
@@ -812,7 +819,7 @@ def main():
             "On arm64 every release's xc was timed again on the %s with today's programs, and is "
             "set against the other languages as measured there for %s. On x86-64 releases before "
             "0.65 were measured against Objective-C alone, apart from `matrix_mul_f32`, which was "
-            "added later and measured against all three." % (mac_name(), a.current.lstrip("v"))
+            "added later and measured against all three." % (mac_name(), a.langs_release or a.current.lstrip("v"))
             if MAC_TREE else
             "Releases before 0.65 were measured against Objective-C alone, apart from "
             "`matrix_mul_f32`, which was added later and measured against all three."),
@@ -844,7 +851,7 @@ def main():
         fh.write(gpu_page)
     print("wrote", os.path.relpath(GPU_PAGE, REPO))
     with open(NET_PAGE, "w") as fh:
-        fh.write(NET_PAGE_TEMPLATE.format(release=a.release, remote=remote_tables(a.current),
+        fh.write(NET_PAGE_TEMPLATE.format(release=a.net_release or a.release, remote=remote_tables(a.current),
                                           net_mac=par_mac().split(",")[0], net_mac_short=par_mac().split(",")[0]))
     print("wrote", os.path.relpath(NET_PAGE, REPO))
     ct = c_tables(a.current)
