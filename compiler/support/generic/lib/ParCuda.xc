@@ -1,12 +1,14 @@
 // ParCuda.xc — runs a `par` block on an NVIDIA GPU through the CUDA driver
-// (Windows), for Par.run when ParDevice chooses the GPU.
+// (Windows, and Linux in a dynamically linked program), for Par.run when
+// ParDevice chooses the GPU.
 //
 // The compiler gives each block its kernel as PTX (gpuSource()), printed from
 // the block's own chunk method, under the same header line as the Metal
 // runtime reads (ParDevice.xc). The driver compiles the PTX for the GPU it
-// finds, so a program needs no CUDA toolkit, only the driver: nvcuda.dll is
-// loaded when a block first asks for the GPU, and its entry points are looked
-// up by name, so a machine without one runs every block on the CPU.
+// finds, so a program needs no CUDA toolkit, only the driver: nvcuda.dll
+// (Windows) or libcuda.so.1 (Linux) is loaded when a block first asks for the
+// GPU, and its entry points are looked up by name, so a machine without one
+// runs every block on the CPU.
 //
 // Each GPU thread runs the method over its own slice of the range. Captured
 // arrays and globals are copied in and back; each thread's reductions come
@@ -14,8 +16,22 @@
 #import "ParDevice.xc"
 #import "ParWorker.xc"     // ParTile and ParWorker: the file stands alone (sema-diff, ast-diff read it so)
 
+#if ARCH_win64
 pointer LoadLibraryA(u8* name);
 pointer GetProcAddress(pointer module, u8* name);
+#else
+pointer dlopen(u8* path, i32 mode);
+pointer dlsym(pointer handle, u8* name);
+#endif
+// The driver's entry point by name, from the library start() loaded.
+pointer parCuSym(pointer lib, u8* name)
+    {
+#if ARCH_win64
+    return GetProcAddress(lib, name);
+#else
+    return dlsym(lib, name);
+#endif
+    }
 pointer malloc(u64 n);
 void free(pointer p);
 
@@ -205,40 +221,44 @@ class ParCuda
         if (_state != (i32)0)
             return _state == (i32)1;
         _state = (i32)2;
+#if ARCH_win64
         pointer lib = LoadLibraryA("nvcuda.dll");
+#else
+        pointer lib = dlopen("libcuda.so.1", (i32)2);   // RTLD_NOW
+#endif
         if (lib == (pointer)0)
             return false;
-        cuInit_t* init = (cuInit_t*)GetProcAddress(lib, "cuInit");
-        cuDeviceGet_t* deviceGet = (cuDeviceGet_t*)GetProcAddress(lib, "cuDeviceGet");
-        cuCtxCreate_t* ctxCreate = (cuCtxCreate_t*)GetProcAddress(lib, "cuCtxCreate_v2");
-        _load = (cuModuleLoadDataEx_t*)GetProcAddress(lib, "cuModuleLoadDataEx");
-        _getFunction = (cuModuleGetFunction_t*)GetProcAddress(lib, "cuModuleGetFunction");
-        _alloc = (cuMemAlloc_t*)GetProcAddress(lib, "cuMemAlloc_v2");
-        _free = (cuMemFree_t*)GetProcAddress(lib, "cuMemFree_v2");
-        _toDevice = (cuMemcpyHtoD_t*)GetProcAddress(lib, "cuMemcpyHtoD_v2");
-        _toHost = (cuMemcpyDtoH_t*)GetProcAddress(lib, "cuMemcpyDtoH_v2");
-        _launch = (cuLaunchKernel_t*)GetProcAddress(lib, "cuLaunchKernel");
-        _sync = (cuCtxSynchronize_t*)GetProcAddress(lib, "cuCtxSynchronize");
-        _attr = (cuDeviceGetAttribute_t*)GetProcAddress(lib, "cuDeviceGetAttribute");
-        _streamCreate = (cuStreamCreate_t*)GetProcAddress(lib, "cuStreamCreate");
-        _streamSync = (cuStreamSynchronize_t*)GetProcAddress(lib, "cuStreamSynchronize");
-        _eventCreate = (cuEventCreate_t*)GetProcAddress(lib, "cuEventCreate");
-        _eventRecord = (cuEventRecord_t*)GetProcAddress(lib, "cuEventRecord");
-        _eventSync = (cuEventSynchronize_t*)GetProcAddress(lib, "cuEventSynchronize");
-        _hostAlloc = (cuMemHostAlloc_t*)GetProcAddress(lib, "cuMemHostAlloc");
-        _hostFree = (cuMemFreeHost_t*)GetProcAddress(lib, "cuMemFreeHost");
-        _toDeviceAsync = (cuMemcpyHtoDAsync_t*)GetProcAddress(lib, "cuMemcpyHtoDAsync_v2");
-        _toHostAsync = (cuMemcpyDtoHAsync_t*)GetProcAddress(lib, "cuMemcpyDtoHAsync_v2");
-        _streamWait = (cuStreamWaitEvent_t*)GetProcAddress(lib, "cuStreamWaitEvent");
-        _hostRegister = (cuMemHostRegister_t*)GetProcAddress(lib, "cuMemHostRegister_v2");
-        _hostUnregister = (cuMemHostUnregister_t*)GetProcAddress(lib, "cuMemHostUnregister");
+        cuInit_t* init = (cuInit_t*)parCuSym(lib, "cuInit");
+        cuDeviceGet_t* deviceGet = (cuDeviceGet_t*)parCuSym(lib, "cuDeviceGet");
+        cuCtxCreate_t* ctxCreate = (cuCtxCreate_t*)parCuSym(lib, "cuCtxCreate_v2");
+        _load = (cuModuleLoadDataEx_t*)parCuSym(lib, "cuModuleLoadDataEx");
+        _getFunction = (cuModuleGetFunction_t*)parCuSym(lib, "cuModuleGetFunction");
+        _alloc = (cuMemAlloc_t*)parCuSym(lib, "cuMemAlloc_v2");
+        _free = (cuMemFree_t*)parCuSym(lib, "cuMemFree_v2");
+        _toDevice = (cuMemcpyHtoD_t*)parCuSym(lib, "cuMemcpyHtoD_v2");
+        _toHost = (cuMemcpyDtoH_t*)parCuSym(lib, "cuMemcpyDtoH_v2");
+        _launch = (cuLaunchKernel_t*)parCuSym(lib, "cuLaunchKernel");
+        _sync = (cuCtxSynchronize_t*)parCuSym(lib, "cuCtxSynchronize");
+        _attr = (cuDeviceGetAttribute_t*)parCuSym(lib, "cuDeviceGetAttribute");
+        _streamCreate = (cuStreamCreate_t*)parCuSym(lib, "cuStreamCreate");
+        _streamSync = (cuStreamSynchronize_t*)parCuSym(lib, "cuStreamSynchronize");
+        _eventCreate = (cuEventCreate_t*)parCuSym(lib, "cuEventCreate");
+        _eventRecord = (cuEventRecord_t*)parCuSym(lib, "cuEventRecord");
+        _eventSync = (cuEventSynchronize_t*)parCuSym(lib, "cuEventSynchronize");
+        _hostAlloc = (cuMemHostAlloc_t*)parCuSym(lib, "cuMemHostAlloc");
+        _hostFree = (cuMemFreeHost_t*)parCuSym(lib, "cuMemFreeHost");
+        _toDeviceAsync = (cuMemcpyHtoDAsync_t*)parCuSym(lib, "cuMemcpyHtoDAsync_v2");
+        _toHostAsync = (cuMemcpyDtoHAsync_t*)parCuSym(lib, "cuMemcpyDtoHAsync_v2");
+        _streamWait = (cuStreamWaitEvent_t*)parCuSym(lib, "cuStreamWaitEvent");
+        _hostRegister = (cuMemHostRegister_t*)parCuSym(lib, "cuMemHostRegister_v2");
+        _hostUnregister = (cuMemHostUnregister_t*)parCuSym(lib, "cuMemHostUnregister");
         _deviceGet = deviceGet;
         _ctxCreate = ctxCreate;
-        _getName = (cuDeviceGetName_t*)GetProcAddress(lib, "cuDeviceGetName");
-        _deviceGetCount = (cuDeviceGetCount_t*)GetProcAddress(lib, "cuDeviceGetCount");
-        _ctxSetCurrent = (cuCtxSetCurrent_t*)GetProcAddress(lib, "cuCtxSetCurrent");
-        gCu_memGetInfo = (cuMemGetInfo_t*)GetProcAddress(lib, "cuMemGetInfo_v2");
-        _eventQuery = (cuEventQuery_t*)GetProcAddress(lib, "cuEventQuery");
+        _getName = (cuDeviceGetName_t*)parCuSym(lib, "cuDeviceGetName");
+        _deviceGetCount = (cuDeviceGetCount_t*)parCuSym(lib, "cuDeviceGetCount");
+        _ctxSetCurrent = (cuCtxSetCurrent_t*)parCuSym(lib, "cuCtxSetCurrent");
+        gCu_memGetInfo = (cuMemGetInfo_t*)parCuSym(lib, "cuMemGetInfo_v2");
+        _eventQuery = (cuEventQuery_t*)parCuSym(lib, "cuEventQuery");
         // Without the whole set the runtime stays single shot; the driver's
         // API has had all of them since CUDA 4, so this is defensive.
         _tiles = _attr != (cuDeviceGetAttribute_t*)0 && _streamCreate != (cuStreamCreate_t*)0 &&
@@ -268,7 +288,7 @@ class ParCuda
         if (_attr != (cuDeviceGetAttribute_t*)0 && _attr(&eng, (i32)40, dev) == (i32)0)   // CU_DEVICE_ATTRIBUTE_ASYNC_ENGINE_COUNT
             _engines = eng;
         _identity = String.withCString("cuda:");
-        cuDeviceGetName_t* getName = (cuDeviceGetName_t*)GetProcAddress(lib, "cuDeviceGetName");
+        cuDeviceGetName_t* getName = (cuDeviceGetName_t*)parCuSym(lib, "cuDeviceGetName");
         u8 nm[256];
         nm[0] = (u8)0;
         if (getName != (cuDeviceGetName_t*)0 && getName(&nm[0], (i32)255, dev) == (i32)0)

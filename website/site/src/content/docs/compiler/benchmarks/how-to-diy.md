@@ -83,8 +83,8 @@ XC_PAR=gpu XC_PAR_REPORT=1 ./mandelbrot
 ```
 
 On macOS the GPU is reached through Metal and needs nothing installed. On
-Windows an NVIDIA GPU needs only NVIDIA's driver, which carries both CUDA and
-Vulkan.
+Windows and Linux an NVIDIA GPU needs only NVIDIA's driver, which carries both
+CUDA and Vulkan.
 
 ## 2. Get the benchmark sources
 
@@ -124,7 +124,7 @@ The exact parameters, per run, are:
 |---|---|---|
 | one thread | `XC_PAR=cpu XC_PAR_THREADS=1` | every `par` block on a single CPU thread |
 | all threads | `XC_PAR=cpu` | every CPU thread |
-| GPU | `XC_PAR=gpu` | the GPU (CUDA on x86-64 Windows, Metal on macOS, Vulkan on Linux) |
+| GPU | `XC_PAR=gpu` | the GPU (CUDA on an NVIDIA card under Windows or Linux, Metal on macOS, Vulkan otherwise) |
 | Vulkan | `XC_PAR=gpu XC_PAR_GPU=vulkan` | the GPU through Vulkan, on Windows |
 | auto | (none) | the block measures both devices and picks |
 

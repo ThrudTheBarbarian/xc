@@ -64,6 +64,12 @@ pointer memcpy(pointer dst, pointer src, u64 n);
 // integrated Vulkan GPU) leaves it false.
 bool gParGpuDiscrete;
 
+// CUDA's driver beside Vulkan: on Windows, and on Linux in a dynamically
+// linked program, the one that can load libcuda.so.1 (Par.xc and ParTiles.xc
+// spell the same condition out, as they can be read before this file).
+#if ARCH_win64 || (ARCH_x86_64 && LINK_DYNAMIC && !PLATFORM_android)
+#define PAR_CUDA 1
+#endif
 #if ARCH_win64
 i32 QueryPerformanceCounter(i64* count);
 i32 QueryPerformanceFrequency(i64* perSecond);
@@ -139,8 +145,8 @@ u32 gParWarmRuns[320];
 i64 gParWarmBusy[320];  // the candidate's run time so far, us
 i64 gParWarmFirst[320]; // wall at its first run
 i64 gParWarmPrev[320];  // the run before this one, or -1
-#if ARCH_win64
-// Windows reaches an NVIDIA GPU two ways, CUDA and Vulkan, and auto measures
+#if PAR_CUDA
+// Windows and Linux reach an NVIDIA GPU two ways, CUDA and Vulkan, and auto measures
 // both: per block, the interface kept (0 none yet, 1 CUDA, 2 Vulkan), the
 // runs on each and what each took (-1 not yet, -2 the block cannot run
 // there), and the interface the current GPU run uses.
@@ -406,7 +412,7 @@ class ParDevice
         gParMeasN[i] = (i64)0;
         gParLastN[i] = (i64)0;
         gParMeasuring[i] = false;
-#if ARCH_win64
+#if PAR_CUDA
         gParApi[i] = (i32)0;
         gParCudaRuns[i] = (u32)0;
         gParVkRuns[i] = (u32)0;
@@ -433,7 +439,7 @@ class ParDevice
         return Platform.env(String.withCString("XC_PAR_GPU")).equals(String.withCString("vulkan"));
         }
 
-#if ARCH_win64
+#if PAR_CUDA
     // XC_PAR_GPU's interface: 1 cuda, 2 vulkan, 0 neither (auto chooses).
     static i32 forcedApi(void)
         {
@@ -917,7 +923,7 @@ class ParDevice
                     }
                 }
             }
-#if ARCH_win64
+#if PAR_CUDA
         // ,cuda or ,vulkan: the interface auto chose (none in a 0.73/0.74 record).
         if (c[at] == (u8)',' && gParApi[i] == (i32)0)
             gParApi[i] = c[at + (u32)1] == (u8)'v' ? (i32)2 : c[at + (u32)1] == (u8)'c' ? (i32)1 : (i32)0;
@@ -961,7 +967,7 @@ class ParDevice
         Settings* st = store();
         String* v = String.withFormat("%ld,%ld,%ld,%ld,%ld", gParCpuUpTo[i], gParGpuFrom[i], gParGpusFrom[i], gParAllFrom[i],
                                       gParRemFrom[i]);
-#if ARCH_win64
+#if PAR_CUDA
         if (gParApi[i] != (i32)0)
             v.appendCString(gParApi[i] == (i32)2 ? ",vulkan" : ",cuda");
 #endif
@@ -1421,7 +1427,7 @@ class ParDevice
         bool decided = false;
         i64 measured = took;
         i64 warm = (i64)0;
-#if ARCH_win64
+#if PAR_CUDA
         // Neither interface kept yet: each is warmed up and timed on its own,
         // and the GPU's time is the faster one's once both are known.
         if (gParMeasuring[bi] && gParApi[bi] == (i32)0 && forcedApi() == (i32)0)

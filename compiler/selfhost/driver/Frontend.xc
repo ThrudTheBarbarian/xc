@@ -1071,13 +1071,16 @@ class FeOptions
         // another machine (xcd, ParRemote.xc) finds the one its GPU takes.
         bool allK = o.parKernelsAll();
         lower.setParMetal(allK || (o.target().equals(String.withCString("arm64")) && !android && !ios));
-        lower.setParPTX(allK || o.target().equals(String.withCString("win64")));
         // Vulkan on x86-64 Linux, in a program that can load it (-dynamic, which
         // the driver passes on as LINK_DYNAMIC): a static one gets no kernels.
         bool linkDynamic = false;
         for (u32 i = (u32)0; i < o.defs().count(); i = i + (u32)1)
             if (((String*)o.defs().get(i)).hasPrefix(String.withCString("LINK_DYNAMIC")))
                 linkDynamic = true;
+        // PTX for CUDA's driver: on Windows, and on x86-64 Linux where the
+        // program can load libcuda.so.1 (the same LINK_DYNAMIC).
+        lower.setParPTX(allK || o.target().equals(String.withCString("win64"))
+                        || (o.target().equals(String.withCString("x86_64")) && linkDynamic && !android));
         // On Windows beside the PTX (AMD, Intel); on Android, the only GPU path.
         lower.setParSPIRV(allK || (o.target().equals(String.withCString("x86_64")) && linkDynamic) ||
                           o.target().equals(String.withCString("win64")) || android);

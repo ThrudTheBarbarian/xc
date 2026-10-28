@@ -2163,7 +2163,10 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // another machine (xcd, ParRemote.xc) finds the one its GPU takes.
     BOOL allK = _options.parKernelsAll;
     [XTIRParCheck setEmitsMetal:(allK || (_options.useArm64Backend && !_options.applePlatform && !androidBuild))];
-    [XTIRParCheck setEmitsPTX:(allK || _options.useWin64Backend)];
+    // PTX for CUDA's driver: on Windows, and on x86-64 Linux where the program
+    // can load libcuda.so.1 (the same LINK_DYNAMIC). As the port.
+    [XTIRParCheck setEmitsPTX:(allK || _options.useWin64Backend
+                               || (_options.useX86_64Backend && _options.defines[@"LINK_DYNAMIC"] != nil && !androidBuild))];
     // Vulkan on x86-64 Linux, in a program that can load it (-dynamic, which
     // the driver passes on as LINK_DYNAMIC): a static one gets no kernels.
     // Vulkan on x86-64 Linux, in a program that can load it (LINK_DYNAMIC);

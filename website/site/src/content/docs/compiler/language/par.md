@@ -178,7 +178,10 @@ uses a global itself, runs on the CPU. What else each GPU can hold:
   converted to and from `float` there too, with the CPU's results. A block that needs more arrays, or a larger
   one, than the device can hold runs on the CPU.
 
-On Windows with an NVIDIA GPU, a block can reach it through CUDA or Vulkan.
+On Windows and Linux with an NVIDIA GPU, a block can reach it through CUDA or
+Vulkan. Both need only NVIDIA's driver; on Linux the program has to be linked
+dynamically (the default), since it loads the driver's `libcuda.so.1` and
+Vulkan's loader at run time, and a `-static` one runs every block on the CPU.
 `auto` measures both and keeps the faster for each block (see
 [Which device](#which-device)).
 `XC_PAR_GPU=vulkan` or `XC_PAR_GPU=cuda` in the environment picks one
@@ -354,8 +357,8 @@ the smallest the GPU won at. A run whose size falls outside those is decided
 without measuring; one between them is measured once and narrows them. The keys
 include a hash of the machine's GPU and CPU, so a new GPU is measured afresh
 (and the old one's values wait for it to come back), and a hash of the block's
-GPU version, so a block that changes is measured afresh too. On
-Windows with both CUDA and Vulkan, the value also names the interface `auto`
+GPU version, so a block that changes is measured afresh too. Where
+both CUDA and Vulkan work, the value also names the interface `auto`
 chose (`…,cuda` or `…,vulkan`).
 
 #### How `auto` learns across runs of different sizes

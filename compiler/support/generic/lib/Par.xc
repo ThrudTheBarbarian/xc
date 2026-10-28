@@ -16,16 +16,16 @@
 #import "Thread.xc"
 #import "PlatformCore.xc"
 #endif
-// A GPU runtime: Metal on macOS (Apple silicon), Vulkan on Linux, CUDA's
-// driver on Windows (NVIDIA). Each runs a block on the GPU when ParDevice
-// chooses it.
+// A GPU runtime: Metal on macOS (Apple silicon), Vulkan on Linux and Windows,
+// CUDA's driver on Windows and on Linux in a dynamically linked program
+// (NVIDIA). Each runs a block on the GPU when ParDevice chooses it.
 #if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
 #import "ParMetal.xc"
 #endif
 #if ARCH_x86_64 || (ARCH_arm64 && PLATFORM_android)
 #import "ParVulkan.xc"
 #endif
-#if ARCH_win64
+#if ARCH_win64 || (ARCH_x86_64 && LINK_DYNAMIC && !PLATFORM_android)
 #import "ParCuda.xc"
 #endif
 #if !(ARCH_6502 || ARCH_m68k || ARCH_wasm32)
@@ -372,7 +372,7 @@ class Par
                 ParDevice.ranAdd(proto, ParWebGpu.identity());
                 return;
                 }
-#elif ARCH_win64
+#elif ARCH_win64 || (ARCH_x86_64 && LINK_DYNAMIC && !PLATFORM_android)
             // NVIDIA's own driver or Vulkan (AMD, Intel, or NVIDIA where CUDA
             // is missing): auto measures both where both work and keeps the
             // faster; XC_PAR_GPU=cuda|vulkan picks one. If the one tried
@@ -434,7 +434,7 @@ class Par
         {
 #if ARCH_wasm32
         return ParWebGpu.identity();
-#elif ARCH_win64
+#elif ARCH_win64 || (ARCH_x86_64 && LINK_DYNAMIC && !PLATFORM_android)
         if (!ParDevice.vulkanOnly())
             {
             String* c = ParCuda.identity();

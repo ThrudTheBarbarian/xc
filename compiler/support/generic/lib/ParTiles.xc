@@ -336,7 +336,7 @@ class ParTiles
     // "vulkan:<name>:<vendor>:<device>", a CUDA one "cuda:<name>".
     static void defaultWorkers(void)
         {
-#if ARCH_win64
+#if ARCH_win64 || (ARCH_x86_64 && LINK_DYNAMIC && !PLATFORM_android)
         if (!ParDevice.vulkanOnly())
             ParCuda.addWorkers(_workers);
         ParVulkanWorker* vk = new ParVulkanWorker();
@@ -403,7 +403,7 @@ class ParTiles
             String* name = names.substringBytes(at, end - at);
             if (name.equals(String.withCString("cpu")))
                 cpu = true;
-#if ARCH_win64
+#if ARCH_win64 || (ARCH_x86_64 && LINK_DYNAMIC && !PLATFORM_android)
             else if (name.equals(String.withCString("cuda")))
                 ParCuda.addWorkers(_workers);
 #endif
