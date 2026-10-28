@@ -54,6 +54,7 @@ static NSDictionary<NSNumber*, XTIRInsn*>* sSelCmp = nil; // Select id -> its IC
 static NSDictionary<NSNumber*, XTIRInsn*>* sSelSink = nil; // Select id -> its true value's insn
 static NSDictionary<NSNumber*, NSNumber*>* sFmaUc = nil; // value id -> its use count, for fmaPair
 static BOOL sFmaOk = NO;                                  // this function's code has FMA (avx2/avx512 copy)
+static NSSet<NSNumber*>* sAligned = nil;                  // pinned large arrays placed on a 64-byte boundary
 static NSSet<NSNumber*>* sFmaPhi = nil;                   // phi results: a loop-carried addend stays unfused
 // A signed 32-bit value known to be non-negative: an And with a mask from 0 to
 // 2^31 - 1, or such a value plus a constant that keeps it under 2^31 (`X + 1`
@@ -3339,11 +3340,50 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
     sCanaryFn = [self safeSym:fn.name];
     if (sCanary)
         cur = 16;
+    // A large local array (pinned, 256 bytes or more, reached only through
+    // AddrOf) starts on a 64-byte boundary: its slot has 64 bytes of slack and
+    // its address is rounded up into it (AddrOf below). rbp is only 16-aligned,
+    // and where the stack lands moves from run to run, so a vector loop's
+    // 64-byte loads straddled two cache lines in three runs of four:
+    // array_sum ran 213 ms or 380, with 1.8 G loads split (2026-10-28, perf's
+    // ls_misal_loads.ma64 on Zen 5). Not under -g, whose variable locations name
+    // the slot itself. As the port's alignedArrays.
+    {
+    NSMutableSet<NSNumber*>* aligned = [NSMutableSet set];
+    for (XTIRPinnedLocal* pl in fn.frameInfo.pinnedLocals)
+        {
+        XTIRValue* pv = fn.values[@(pl.valueId)];
+        if (!pv || pl.sourceName || !pv.type || pv.type.kind != XTIRTypeKindAgg)
+            continue;
+        if ([self aggSize:pv.type.layout] < 256)
+            continue;
+        [aligned addObject:@(pl.valueId)];
+        }
+    if (aligned.count)
+        for (XTIRBlock* bb in fn.blocks)
+            {
+            NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:bb.phiNodes];
+            [all addObjectsFromArray:bb.instructions];
+            if (bb.terminator)
+                [all addObject:bb.terminator];
+            for (XTIRInsn* x in all)
+                {
+                if (x.opcode == XTIROpAddrOf)
+                    continue;
+                for (XTIROperand* o in x.operands)
+                    if (o.kind == XTIROperandKindUse)
+                        [aligned removeObject:@(o.valueId)];
+                }
+            }
+    sAligned = aligned;
+    }
     for (XTIRValue* v in [fn valuesInPrintOrder])
         {
         if ([self isMem:v])
             continue;
         NSUInteger sz = [self slotSizeOf:v]; // aggregates (pinned locals) get full size
+        if ([sAligned containsObject:@(v.valueId)])
+            sz += 64;
         cur += sz;
         // A slot of 16 bytes or more is 16-aligned (rbp is, after `push rbp`;
         // the slot starts at rbp-cur), so a 16-byte access to a local array
@@ -4121,7 +4161,12 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             {
             NSNumber* s = slot[@(ops[0].valueId)];
             if (s)
+                {
                 [out appendFormat:@"\tlea\trax, [rbp-%@]\n", s];
+                // A large array: rounded up to its 64-byte boundary (sAligned).
+                if ([sAligned containsObject:@(ops[0].valueId)])
+                    [out appendString:@"\tadd\trax, 63\n\tand\trax, -64\n"];
+                }
             else
                 [out appendString:@"\txor\teax, eax\n"];
             }

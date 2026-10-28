@@ -5958,6 +5958,9 @@ class X86_64
         else if (o.kind() == (u8)OPK_USE && hasSlot(o.val()))
             {
             _out.appendFormat("\tlea\trax, [rbp-%lu]\n", slotOf(o.val()));
+            // A large array: rounded up to its 64-byte boundary (alignedArrays).
+            if (_aligned != (Map*)0 && _aligned.get((Hashable*)o.val()) != (Object*)0)
+                _out.appendCString("\tadd\trax, 63\n\tand\trax, -64\n");
             }
         else
             {
@@ -8031,6 +8034,7 @@ class X86_64
     // has no home. As the reference's sSelSink.
     Map* _selSink;
     Map* _fmaUc;     // value -> its use count, for fmaPair
+    Map* _aligned;   // pinned large arrays placed on a 64-byte boundary
     Map* _fmaPhi;    // value -> its phi: a loop-carried addend stays unfused
     bool _fmaOk;     // this function's code has FMA (an avx2/avx512 copy)
     // A signed 32-bit value known to be non-negative: an And with a mask from
@@ -8512,9 +8516,62 @@ class X86_64
         return !_win64 && isAggTy(t) && aggSize(layoutOf(t)) > (u32)16;
         }
 
+    // A large local array (pinned, 256 bytes or more, reached only through
+    // AddrOf) starts on a 64-byte boundary: its slot has 64 bytes of slack
+    // and its address is rounded up into it (emitAddrOf). rbp is only 16-
+    // aligned, and where the stack lands moves from run to run, so a vector
+    // loop's 64-byte loads straddled two cache lines in three runs of four:
+    // array_sum ran 213 ms or 380, with 1.8 G loads split (2026-10-28, perf's
+    // ls_misal_loads.ma64 on Zen 5). Not under -g, whose variable locations
+    // name the slot itself.
+    Map* alignedArrays(IRFunc* fn)
+        {
+        Map* out = new Map();
+        for (u32 pi = (u32)0; pi < fn.pinned().count(); pi = pi + (u32)1)
+            {
+            IRPinned* pl = (IRPinned*)fn.pinned().get(pi);
+            IRValue* v = pl.val();
+            if (v == (IRValue*)0 || pl.srcName() != (String*)0 || !isAggTy(v.ty()))
+                continue;
+            if (aggSize(layoutOf(v.ty())) < (u32)256)
+                continue;
+            out.set((Hashable*)v, (Object*)v);
+            }
+        if (out.count() == (u32)0)
+            return out;
+        // Every use an AddrOf: anything else reads the slot itself.
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            alignedUses(out, bb.phis(), (IRInsn*)0);
+            alignedUses(out, bb.insns(), (IRInsn*)0);
+            if (bb.term() != (IRInsn*)0)
+                alignedUses(out, (Array*)0, bb.term());
+            }
+        return out;
+        }
+
+    void alignedUses(Map* cand, Array* ins, IRInsn* one)
+        {
+        u32 n = ins != (Array*)0 ? ins.count() : (u32)1;
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            {
+            IRInsn* x = ins != (Array*)0 ? (IRInsn*)ins.get(i) : one;
+            if (x == (IRInsn*)0 || x.op().equals(String.withCString("AddrOf")))
+                continue;
+            for (u32 k = (u32)0; k < x.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)x.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && cand.get((Hashable*)o.val()) != (Object*)0)
+                    cand.remove((Hashable*)o.val());
+                }
+            }
+        }
+
     void assignSlots(IRFunc* fn)
         {
         _slot = new Map();
+        _aligned = alignedArrays(fn);
         u32 cur = (u32)0;
         // The stack canary: a frame with an aggregate or a taken address (what
         // a write can run along) keeps [rbp-8] for a guard word, between every
@@ -8531,6 +8588,8 @@ class X86_64
             if (isMemTy(v.ty()))
                 continue;
             u32 sz = slotSizeOf(v);
+            if (_aligned.get((Hashable*)v) != (Object*)0)
+                sz = sz + (u32)64;
             cur = cur + sz;
             // A slot of 16 bytes or more is 16-aligned (rbp is, after
             // `push rbp`; the slot starts at rbp-cur), so a 16-byte access to a
