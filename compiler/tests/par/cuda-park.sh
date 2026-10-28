@@ -14,7 +14,8 @@ cd "$(dirname "$0")/../.." || exit 1
 WH=${XTC_WIN64_HOST:-}
 LH=${XTC_LINUX_CUDA_HOST:-}
 [ -n "$WH" ] || [ -n "$LH" ] || { echo "cuda-park: no XTC_WIN64_HOST or XTC_LINUX_CUDA_HOST, skipped"; exit 0; }
-XC=${XC:-bin/osx/xcc-xc}
+PLAT=$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )
+XC=${XC:-bin/$PLAT/xcc-xc}
 SSHO="-o BatchMode=yes -o LogLevel=ERROR"
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 fail=0

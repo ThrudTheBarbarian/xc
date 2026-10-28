@@ -18,7 +18,9 @@ integrated GPU through Vulkan) and the Windows host (x86-64, NVIDIA), and from
 (Metal underneath). The browser has no threads for wasm, so it runs serial,
 gpu and auto; Chrome (and node 22 or later, for the DevTools driver
 webgpu-run.js) must be installed. Their ssh names come from build.env
-(XTC_LINUX_HOST, XTC_WIN_GPU_HOST), so none is written into the tree. A run
+(XTC_LINUX_HOST, XTC_WIN_GPU_HOST, and XTC_LINUX_GPU_HOST for an x86-64 Linux
+machine with an NVIDIA card, machine "linuxgpu", CUDA and Vulkan as on
+Windows), so none is written into the tree. A run
 counts only if every mode's checksum agrees, and the Mac and the Linux host are
 timed only when idle (as ../run.py does). The best of three runs is kept.
 
@@ -437,7 +439,8 @@ def measure(runner, binary, gpus, threads=True, multi=True, gpu_only=False):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bench", action="append")
-    ap.add_argument("--machines", default="mac,linux,windows,browser")
+    ap.add_argument("--machines", default="mac,linux,windows,browser",
+                    help="any of mac, linux, linuxgpu, windows, browser")
     ap.add_argument("--version", default=common.COMPILER_VERSION)
     ap.add_argument("--xcc", help="measure this compiler instead of the shipped one")
     ap.add_argument("--autopar", action="store_true", help="the plain-loop programs in auto/, with --par-auto")
@@ -478,6 +481,13 @@ def main():
             subprocess.run(["scp", "-q", exe, "%s:/tmp/par-%s" % (host, name)], check=True)
             results[name]["linux"] = measure(lambda b, e: run_linux(host, b, e), "/tmp/par-" + name,
                                              ["gpu"] if a.version >= "0.72" else [], gpu_only=gpu_only)
+        if "linuxgpu" in machines and env.get("XTC_LINUX_GPU_HOST"):
+            host = env["XTC_LINUX_GPU_HOST"]
+            exe = os.path.join(work, name + ".x86gpu")
+            build(name, "x86_64", exe)
+            subprocess.run(["scp", "-q", exe, "%s:/tmp/par-%s" % (host, name)], check=True)
+            results[name]["linuxgpu"] = measure(lambda b, e: run_linux(host, b, e), "/tmp/par-" + name,
+                                                ["gpu", "vulkan"], gpu_only=gpu_only)
         if "windows" in machines and env.get("XTC_WIN_GPU_HOST"):
             host = env["XTC_WIN_GPU_HOST"]
             exe = os.path.join(work, name + ".exe")
@@ -523,10 +533,11 @@ def ms(us):
 def table(results):
     """Milliseconds for the best run, per machine and mode, for the performance page."""
     names = {"mac": "Apple silicon, Metal", "linux": "x86-64 Linux, an integrated GPU through Vulkan",
+             "linuxgpu": "x86-64 Linux, NVIDIA through CUDA and Vulkan",
              "windows": "x86-64 Windows, NVIDIA through CUDA and Vulkan",
              "browser": "Chrome on Apple silicon, wasm32 and WebGPU"}
     lines = []
-    for m in ("mac", "linux", "windows", "browser"):
+    for m in ("mac", "linux", "linuxgpu", "windows", "browser"):
         rows = [(n, r[m]) for n, r in results.items() if m in r]
         if not rows:
             continue
