@@ -1895,6 +1895,12 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         }
     [ops addObject:[XTIROperand useWithValueId:self.memToken.valueId]];
 
+    // A callee registered returning a class instance BY VALUE (returnsByValue:)
+    // hands back the aggregate, whatever the call site typed from the AST.
+    XTIRSymbol* calleeSym = [self.module symbolForId:calleeSymbolId];
+    if (resultType && resultType.kind == XTIRTypeKindPtr && calleeSym.function
+        && calleeSym.function.returnType.kind == XTIRTypeKindAgg)
+        resultType = calleeSym.function.returnType;
     XTIRValue* r = nil;
     if (resultType && resultType.kind != XTIRTypeKindVoid)
         {
@@ -3774,6 +3780,8 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         {
         XTCallExprNode* c = (XTCallExprNode*)node;
         XTIRValue* r = [self lowerCallExpr:c];
+        if (r && r.type.kind == XTIRTypeKindAgg && [self valueClassForASTType:node.resolvedType])
+            return [self spillClassValue:r ofAST:node.resolvedType];
         // Every call yielding a class pointer yields it at +1, so its
         // result is an owned temporary to release at end-of-full-expression
         // (#123, #829). That includes a call through a bound method (`^`),
@@ -3791,6 +3799,8 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         {
         XTMethodCallExprNode* m = (XTMethodCallExprNode*)node;
         XTIRValue* r = [self lowerMethodCallExpr:m];
+        if (r && r.type.kind == XTIRTypeKindAgg && [self valueClassForASTType:node.resolvedType])
+            return [self spillClassValue:r ofAST:node.resolvedType];
         if (r && [self irValueIsPointer:r] && [self astCallYieldsOwnedClassPointer:node])
             [self registerOwnedTemp:r];
         return r;
@@ -5991,7 +6001,10 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             // non-clone-method cases collapse here uniformly — the
             // earlier no-user-clone field-copy short-circuit doesn't
             // fire when a user method is in play.
-            if (pl.type.kind == XTIRTypeKindAgg && node.rhs.nodeKind == XTASTNodeKindMethodCallExpr)
+            // …and `b = a` of one stack instance to another copies the bytes,
+            // as a struct assignment does (owner, 2026-10-28).
+            if (pl.type.kind == XTIRTypeKindAgg && node.rhs.nodeKind != XTASTNodeKindNewExpr
+                && [self valueClassForASTType:node.rhs.resolvedType])
                 {
                 XTIRClassInfo* vci = self.valueClassLocals[lhs.identName];
                 if (vci)
@@ -7876,6 +7889,127 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                        operands:@[ [XTIROperand useWithValueId:av.valueId] ]];
     }
 
+// A stack class returned BY VALUE (`V make() { V v; ...; return v; }`)
+// travels as its instance aggregate, as a struct does, so the back end passes
+// it through the target's result buffer. It used to return the ADDRESS of the
+// callee's own instance: a pointer into a frame already gone, which a caller
+// copied from in time by luck, or stored as the instance's first word (UXKit,
+// 2026-10-28).
+- (nullable XTIRClassInfo*)valueClassForASTType:(nullable XTType*)t
+    {
+    if (t && t.kind == XTTypeKindClass && ![t isKindOfClass:[XTPointerType class]])
+        return self.classesByName[t.displayName];
+    return nil;
+    }
+
+// A bare class return type is ambiguous: `Node init() { return self; }` hands
+// back a reference. The BODY says which: a function returns by value exactly
+// when one of its returns names a stack instance it declared itself (`V v;` or
+// `V v(args)`). Blocks, ifs and loops are walked; the port walks the same ones.
+- (BOOL)returnsByValue:(NSArray<XTType*>*)rets body:(nullable XTASTNode*)body
+    {
+    if (!body || rets.count != 1 || ![self valueClassForASTType:rets.firstObject])
+        return NO;
+    NSMutableSet<NSString*>* inst = [NSMutableSet set];
+    [self rbvDeclsIn:body class:rets.firstObject.displayName into:inst];
+    return [self rbvReturnsIn:body instances:inst];
+    }
+
+- (void)rbvDeclsIn:(nullable XTASTNode*)n class:(NSString*)cls into:(NSMutableSet<NSString*>*)out
+    {
+    if (!n)
+        return;
+    if ([n isKindOfClass:[XTVariableDeclNode class]])
+        {
+        XTVariableDeclNode* vd = (XTVariableDeclNode*)n;
+        XTType* t = vd.declaredType;
+        if (vd.varName && t && t.kind == XTTypeKindClass && ![t isKindOfClass:[XTPointerType class]]
+            && [t.displayName isEqualToString:cls] && !vd.initialiser)
+            [out addObject:vd.varName];
+        return;
+        }
+    for (XTASTNode* k in [self rbvKidsOf:n])
+        [self rbvDeclsIn:k class:cls into:out];
+    }
+
+- (BOOL)rbvReturnsIn:(nullable XTASTNode*)n instances:(NSSet<NSString*>*)inst
+    {
+    if (!n)
+        return NO;
+    if ([n isKindOfClass:[XTReturnNode class]])
+        {
+        XTReturnNode* r = (XTReturnNode*)n;
+        XTASTNode* v = r.values.firstObject;
+        return v && [v isKindOfClass:[XTIdentifierNode class]] && [inst containsObject:((XTIdentifierNode*)v).identName];
+        }
+    for (XTASTNode* k in [self rbvKidsOf:n])
+        if ([self rbvReturnsIn:k instances:inst])
+            return YES;
+    return NO;
+    }
+
+// The statements the walk descends into: a block's, an if's arms, a loop's
+// body (and a for's init clause).
+- (NSArray<XTASTNode*>*)rbvKidsOf:(XTASTNode*)n
+    {
+    NSMutableArray<XTASTNode*>* out = [NSMutableArray array];
+    if ([n isKindOfClass:[XTBlockNode class]])
+        [out addObjectsFromArray:((XTBlockNode*)n).statements];
+    else if ([n isKindOfClass:[XTIfNode class]])
+        {
+        XTIfNode* f = (XTIfNode*)n;
+        if (f.thenBlock) [out addObject:f.thenBlock];
+        if (f.elseBlock) [out addObject:f.elseBlock];
+        }
+    else if ([n isKindOfClass:[XTWhileNode class]])
+        {
+        if (((XTWhileNode*)n).body) [out addObject:((XTWhileNode*)n).body];
+        }
+    else if ([n isKindOfClass:[XTForCStyleNode class]])
+        {
+        XTForCStyleNode* f = (XTForCStyleNode*)n;
+        if (f.loopInit) [out addObject:f.loopInit];
+        if (f.body) [out addObject:f.body];
+        }
+    else if ([n isKindOfClass:[XTForInNode class]])
+        {
+        if (((XTForInNode*)n).body) [out addObject:((XTForInNode*)n).body];
+        }
+    return out;
+    }
+
+// A call that handed back a class instance by value: its aggregate goes into a
+// slot of THIS frame, and the expression is that slot's address, the instance
+// pointer every use of a class value expects.
+- (nullable XTIRValue*)spillClassValue:(nullable XTIRValue*)r ofAST:(nullable XTType*)t
+    {
+    if (!r || r.type.kind != XTIRTypeKindAgg)
+        return r;
+    XTIRClassInfo* ci = [self valueClassForASTType:t];
+    if (!ci)
+        return r;
+    XTIRType* aggTy = [XTIRType aggWithLayout:ci.instanceLayout];
+    if (![aggTy isEqual:r.type])
+        return r;
+    XTIRFunction* fn = self.currentFunction;
+    XTIRValueId vid = [fn allocateValueId];
+    uint32_t off = fn.frameInfo.pinnedLocalSize;
+    XTIRPinnedLocal* pl = [[XTIRPinnedLocal alloc] initWithName:[NSString stringWithFormat:@"__retval%llu", (unsigned long long)vid]
+                                                           type:aggTy
+                                                     byteOffset:off
+                                                        valueId:vid];
+    pl.escapesViaPointer = YES;
+    XTIRValue* v = [[XTIRValue alloc] initWithValueId:vid type:aggTy defSite:[XTIRDefSite parameterDef]];
+    [fn registerValue:v];
+    fn.frameInfo.pinnedLocals = [(fn.frameInfo.pinnedLocals ?: @[]) arrayByAddingObject:pl];
+    fn.frameInfo.pinnedLocalSize = off + aggTy.byteWidth;
+    XTIRValue* a = [self emitInsnOpcode:XTIROpAddrOf
+                                 result:ci.selfPtrType
+                               operands:@[ [XTIROperand useWithValueId:vid] ]];
+    [self emitStore:a value:r];
+    return a;
+    }
+
 - (nullable XTIRValue*)lowerMethodCallExpr:(XTMethodCallExprNode*)node
     {
     // Sema found the "method" was a FIELD holding something callable and
@@ -8022,6 +8156,10 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     // not a pointer-to-instance. There's no `self` to lower or pass —
     // the method body reaches class fields via its `__sdata` self.
     BOOL isStaticCall = (baseType && baseType.kind == XTTypeKindClass && ![baseType isKindOfClass:[XTPointerType class]] && !isValueInstance);
+    // A call's result is an instance, returned by value (`make().sum()`), and
+    // never names the class.
+    if (receiver.nodeKind == XTASTNodeKindCallExpr || receiver.nodeKind == XTASTNodeKindMethodCallExpr)
+        isStaticCall = NO;
     // …but a class-typed LOCAL VARIABLE is a heap instance receiver
     // (`Counter c = new Counter(); c.set(x)`), whose declared type is a bare
     // class rather than a pointer and which isn't a stack value-instance — so it
@@ -8307,6 +8445,10 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
     // direct Call, preserving "non-overridden methods stay static" (T7).
     // Arg width/sign coercion above used the statically-resolved `sym`;
     // override signatures match the base, so the param types agree.
+    // A method returning its instance by value dispatches to the same aggregate
+    // (the overrides share the base's signature).
+    if (resultIR && resultIR.kind == XTIRTypeKindPtr && sym.function && sym.function.returnType.kind == XTIRTypeKindAgg)
+        resultIR = sym.function.returnType;
     if (cslot && !isStaticCall && recvCi.needsVtable && recvCi.catChainAnchor.length)
         {
         return [self retypeErasedResult:[self emitCatDispatch:recvVal
@@ -9716,6 +9858,8 @@ static const NSUInteger kVarargSlotBytes = 8;
                 // slot, never a vtable one.
                 NSNumber* cslot = selfCi.catSlot[methodMangled] ?: ci.catSlot[methodMangled];
                 NSString* canchor = selfCi.catChainAnchor ?: ci.catChainAnchor;
+                if (mResult && mResult.kind == XTIRTypeKindPtr && msym.function && msym.function.returnType.kind == XTIRTypeKindAgg)
+                    mResult = msym.function.returnType;
                 if (cslot && canchor.length)
                     {
                     return [self emitCatDispatch:self.currentSelf
@@ -14394,7 +14538,8 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
         // b.x / b.y. Field-copy from `*initVal` into b's slot instead.
         // Mirrors the no-user-clone field-copy branch above; together
         // the two cases cover every class-value-returning init.
-        if (pl.type.kind == XTIRTypeKindAgg && node.initialiser && node.initialiser.nodeKind == XTASTNodeKindMethodCallExpr)
+        if (pl.type.kind == XTIRTypeKindAgg && node.initialiser && node.initialiser.nodeKind != XTASTNodeKindNewExpr
+            && [self valueClassForASTType:node.initialiser.resolvedType])
             {
             XTIRClassInfo* vci = self.valueClassLocals[node.varName];
             if (vci)
@@ -14937,6 +15082,18 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
     // `return someStrongLocal;` does NOT come through here: the teardown
     // exempts that local by value, so its +1 moves to the caller as-is. Only a
     // genuinely borrowed expression pays the retain.
+    // A class returned by value leaves as its bytes, read now, before the
+    // teardown, while the instance is still whole.
+    BOOL classByValue = NO;
+    if (returnValue && [self irValueIsPointer:returnValue] && self.currentFunction.returnType.kind == XTIRTypeKindAgg)
+        {
+        XTIRClassInfo* rvc = [self valueClassForASTType:returnAstType];
+        if (rvc)
+            {
+            returnValue = [self emitLoad:returnValue pointeeType:[XTIRType aggWithLayout:rvc.instanceLayout]];
+            classByValue = YES;
+            }
+        }
     BOOL returnIsOwnedTemp = returnValue && self.ownedTemps && [self.ownedTemps indexOfObjectIdenticalTo:returnValue] != NSNotFound;
     // A weak-field READ (`return weakField;`) is a borrowed value too, and the
     // return convention is +1 — so it must be retained exactly like a strong
@@ -14989,7 +15146,8 @@ typedef NS_ENUM(NSInteger, XTStructARCMode) {
         // differs.
         XTType* srcAST = returnAstType;
         XTIRType* dstIR = self.currentFunction.returnType;
-        if (srcAST && dstIR && dstIR.kind != XTIRTypeKindVoid)
+        // A class's bytes are already the return type: nothing to coerce.
+        if (srcAST && dstIR && dstIR.kind != XTIRTypeKindVoid && !classByValue)
             {
             BOOL srcFloat = v.type && XTIRTypeKindIsFloating(v.type.kind);
             BOOL dstFloat = XTIRTypeKindIsFloating(dstIR.kind);
@@ -17334,6 +17492,24 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         if (vd.varName && ty && ty.kind == XTTypeKindClass && ![ty isKindOfClass:[XTPointerType class]] && self.classesByName[ty.displayName])
             {
             BOOL needsPin = !vd.initialiser;
+            // `<C> p = makePoint()`: a function returns the instance by value
+            // now, and the slot takes its bytes (lowerVarDecl's call branch),
+            // as the port's does.
+            // …and any other initialiser yielding the class (a call's result,
+            // another instance): its bytes are copied (owner, 2026-10-28).
+            if (!needsPin && vd.initialiser.nodeKind != XTASTNodeKindNewExpr && vd.initialiser.nodeKind != XTASTNodeKindMethodCallExpr
+                && [self valueClassForASTType:vd.initialiser.resolvedType])
+                needsPin = YES;
+            // …and from a method called on a HEAP instance, as the port's
+            // bindsWithoutSlot decides: only a stack instance's method result
+            // binds without a slot of its own.
+            if (!needsPin && vd.initialiser.nodeKind == XTASTNodeKindMethodCallExpr)
+                {
+                XTType* rt = ((XTMethodCallExprNode*)vd.initialiser).receiver.resolvedType;
+                if (rt && [rt isKindOfClass:[XTPointerType class]]
+                    && [self valueClassForASTType:((XTMethodCallExprNode*)vd.initialiser).resolvedType])
+                    needsPin = YES;
+                }
             if (!needsPin && vd.initialiser && vd.initialiser.nodeKind == XTASTNodeKindMethodCallExpr)
                 {
                 XTMethodCallExprNode* call =
@@ -17538,7 +17714,8 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
         return YES;
         }
     XTType* astRetType = fnDecl.returnTypes.firstObject ?: [XTType voidType];
-    XTIRType* irRetType = [self irTypeForASTTypeQuiet:astRetType];
+    XTIRClassInfo* retVc = [self returnsByValue:fnDecl.returnTypes body:fnDecl.body] ? [self valueClassForASTType:astRetType] : nil;
+    XTIRType* irRetType = retVc ? [XTIRType aggWithLayout:retVc.instanceLayout] : [self irTypeForASTTypeQuiet:astRetType];
     if (!irRetType)
         return YES;
     // main() is conceptually `int main(...)` — it returns an exit code to the OS
@@ -19315,7 +19492,8 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             continue;
             }
         XTType* astRet = m.returnTypes.firstObject ?: [XTType voidType];
-        XTIRType* irRet = [self irTypeForASTTypeQuiet:astRet];
+        XTIRClassInfo* retVc = [self returnsByValue:m.returnTypes body:m.body] ? [self valueClassForASTType:astRet] : nil;
+        XTIRType* irRet = retVc ? [XTIRType aggWithLayout:retVc.instanceLayout] : [self irTypeForASTTypeQuiet:astRet];
         if (!irRet)
             continue; // skip-on-unsupported
 

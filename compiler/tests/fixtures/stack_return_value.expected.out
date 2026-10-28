@@ -1,0 +1,9 @@
+decl 1 2
+add 11 22
+assign 5 6
+method 3 6
+rvalue 7 15 5
+big 100 102 105
+loop 18
+virtual 11 23
+copy 1 2 1 2 9

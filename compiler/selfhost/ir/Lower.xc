@@ -4168,13 +4168,13 @@ class ClassInfo
         if (k == (u16)nkNew)
             return lowerNew(n);
         if (k == (u16)nkMethodCall)
-            return lowerMethodCall(n);
+            return spillClassValue(lowerMethodCall(n), n);
         if (k == (u16)nkBinary)
             return lowerBinary(n);
         if (k == (u16)nkAssign)
             return lowerAssign(n);
         if (k == (u16)nkCall)
-            return lowerCall(n);
+            return spillClassValue(lowerCall(n), n);
         if (k == (u16)nkTernary)
             return lowerTernary(n);
         // `sizeof` measures the OPERAND, not the expression: it is a
@@ -5642,6 +5642,12 @@ class ClassInfo
                 _tupleIrRet = irReturnOfKey(decl, methodSymbolFor(_curClass, n));
                 _tupleParts = splitReturns(decl.op());
                 }
+            if (_tupleIrRet == (String*)0)
+                {
+                String* bvr = methodCallRet(methodSymbolFor(_curClass, n), ret);
+                if (bvr.hasPrefix(String.withCString("Agg(")))
+                    _tupleIrRet = bvr;
+                }
             IRValue* sres = (IRValue*)0;
             // An implicit-self call to a method with a SLOT still dispatches
             // virtually. Resolving it statically would pick the authoring
@@ -5739,7 +5745,7 @@ class ClassInfo
         IRValue* res = (IRValue*)0;
         if (!isName(stripQual(ret), "void"))
             {
-            res = new IRValue(irType(ret));
+            res = new IRValue(returnsByValue(decl, fnBodyOf(decl)) ? valueClassOf(ret).agg() : irType(ret));
             call.setRes(res);
             }
         call.setCc(placedCallConv(decl));
@@ -8932,6 +8938,11 @@ class ClassInfo
                 IRValue* v = forwards ? forwardTuple(n.kid((u32)0)) : lowerExpr(n.kid((u32)0));
                 if (_failed)
                     return;
+                // A class returned by value leaves as its bytes, read now,
+                // before the teardown, while the instance is still whole.
+                ClassInfo* rvc = valueClassOf(n.kid((u32)0).ty());
+                if (rvc != 0 && isPtrIr(v.ty()) && _fn.ret().hasPrefix(String.withCString("Agg(")))
+                    v = loadThroughIr(v, rvc.agg());
                 // Every class pointer LEAVES at +1. A value that is already
                 // owned here — a call's result, or a strong local whose
                 // ownership transfers — is one already; anything else was
@@ -9260,7 +9271,10 @@ class ClassInfo
                 setUpStackInstance(n.name(), (ClassInfo*)vco);
                 return;
                 }
-            if (vco != 0 && n.kidCount() > (u32)0 && n.kid((u32)0).kind() == (u16)nkMethodCall && pin.ty().hasPrefix(String.withCString("Agg(")))
+            // Any initialiser yielding the class: a call's result, or another
+            // instance, whose bytes are copied (owner, 2026-10-28).
+            if (vco != 0 && n.kidCount() > (u32)0 && n.kid((u32)0).kind() != (u16)nkNew && valueClassOf(n.kid((u32)0).ty()) != 0
+                && pin.ty().hasPrefix(String.withCString("Agg(")))
                 {
                 if (valueClassInit(n.kid((u32)0), pin, (ClassInfo*)vco))
                     return;
@@ -10193,9 +10207,12 @@ class ClassInfo
     // would leave every ivar uninitialised, which reads as garbage in b.x.
     // The copy-assign half of [[valueClassInit]] — same shape, reached from
     // `b = recv.m()` rather than a declaration.
+    // …and `b = a` of one stack instance to another copies the bytes, as a
+    // struct assignment does (owner, 2026-10-28): it stored a's ADDRESS into
+    // b's first word, and b read garbage.
     bool valueClassAssign(String* name, Node* rhs)
         {
-        if (rhs.kind() != (u16)nkMethodCall)
+        if (rhs.kind() == (u16)nkNew || valueClassOf(rhs.ty()) == 0)
             return false;
         IRPinned* vpin = pinOf(name);
         if (vpin == 0 || !vpin.ty().hasPrefix(String.withCString("Agg(")))
@@ -10209,7 +10226,7 @@ class ClassInfo
     bool valueClassInit(Node* call, IRPinned* pin, ClassInfo* ci)
         {
         IRValue* src = (IRValue*)0;
-        if (isName(call.name(), "clone") && call.kidCount() == (u32)1)
+        if (call.kind() == (u16)nkMethodCall && isName(call.name(), "clone") && call.kidCount() == (u32)1)
             {
             ClassInfo* rci = classFor(pointeeOf(call.kid((u32)0).ty()));
             bool userClone = false;
@@ -11544,6 +11561,14 @@ class ClassInfo
             _tupleIrRet = irReturnOfKey(decl, methodSymbolFor(ci, n));
             _tupleParts = splitReturns(decl.op());
             }
+        // A method returning its instance by value dispatches to the same
+        // aggregate (the overrides share the base's signature).
+        if (_tupleIrRet == (String*)0)
+            {
+            String* bvr = methodCallRet(methodSymbolFor(ci, n), retTy);
+            if (bvr.hasPrefix(String.withCString("Agg(")))
+                _tupleIrRet = bvr;
+            }
         IRValue* res = (IRValue*)0;
         i32 vs = (i32)-1;
         if (!isStatic && catSlotFor(ci, n) < (i32)0)
@@ -11988,7 +12013,7 @@ class ClassInfo
         IRValue* r = (IRValue*)0;
         if (hasRes)
             {
-            r = new IRValue(_tupleIrRet != (String*)0 ? _tupleIrRet : irType(retTy));
+            r = new IRValue(_tupleIrRet != (String*)0 ? _tupleIrRet : methodCallRet(sym, retTy));
             c.setRes(r);
             }
         IRValue* nm = new IRValue(String.withCString("Mem"));
@@ -12217,6 +12242,118 @@ class ClassInfo
     // weak VALUE read into a strong slot is a reference the slot now owns and
     // must claim. Answering NO there let the strong slot hold a pointer whose
     // only other owner could go away.
+    // A stack class returned BY VALUE (`V make() { V v; ...; return v; }`)
+    // travels as its instance aggregate, as a struct does, so the back end
+    // passes it through the target's result buffer. It used to return the
+    // ADDRESS of the callee's own instance: a pointer into a frame already
+    // gone, which a caller copied from in time by luck, or stored as the
+    // instance's first word (UXKit, 2026-10-28).
+    // A bare class return type is ambiguous: `Node init() { return self; }`
+    // hands back a reference. The BODY says which: a function returns by value
+    // exactly when one of its returns names a stack instance it declared
+    // itself (`V v;` or `V v(args)`). Blocks, ifs and loops are walked; the
+    // reference walks the same ones.
+    bool returnsByValue(Node* d, Node* body)
+        {
+        if (d == 0 || body == 0 || isMultiReturn(d.op()))
+            return false;
+        String* rt = firstReturn(d.op());
+        if (valueClassOf(rt) == 0)
+            return false;
+        Map* inst = new Map();
+        rbvDecls(body, stripQual(rt), inst);
+        return rbvReturns(body, inst);
+        }
+
+    static bool rbvWalks(u16 k)
+        {
+        return k == (u16)nkBlock || k == (u16)nkIf || k == (u16)nkWhile || k == (u16)nkForCStyle || k == (u16)nkForIn;
+        }
+
+    void rbvDecls(Node* n, String* cls, Map* out)
+        {
+        if (n == 0)
+            return;
+        u16 k = n.kind();
+        if (k == (u16)nkVariableDecl)
+            {
+            if (n.name() != 0 && n.op() != 0 && !Types.isPointer(n.op()) && stripQual(n.op()).equals(cls)
+                && (n.kidCount() == (u32)0 || n.kid((u32)0).ty() == 0 || !stripQual(n.kid((u32)0).ty()).equals(cls)))
+                out.set((Hashable*)n.name(), (Object*)n);
+            return;
+            }
+        if (!rbvWalks(k))
+            return;
+        for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+            rbvDecls(n.kid(i), cls, out);
+        }
+
+    bool rbvReturns(Node* n, Map* inst)
+        {
+        if (n == 0)
+            return false;
+        u16 k = n.kind();
+        if (k == (u16)nkReturn)
+            return n.kidCount() > (u32)0 && n.kid((u32)0).kind() == (u16)nkIdent && n.kid((u32)0).name() != 0
+                   && inst.get((Hashable*)n.kid((u32)0).name()) != 0;
+        if (!rbvWalks(k))
+            return false;
+        for (u32 i = (u32)0; i < n.kidCount(); i = i + (u32)1)
+            if (rbvReturns(n.kid(i), inst))
+                return true;
+        return false;
+        }
+
+    // A function declaration's body block, or 0 for a prototype.
+    Node* fnBodyOf(Node* d)
+        {
+        if (d == 0)
+            return (Node*)0;
+        for (u32 i = (u32)0; i < d.kidCount(); i = i + (u32)1)
+            if (d.kid(i).kind() == (u16)nkBlock)
+                return d.kid(i);
+        return (Node*)0;
+        }
+
+    // A method call's result type: the instance aggregate when the method was
+    // registered returning one by value, else the declared type's.
+    String* methodCallRet(String* sym, String* retTy)
+        {
+        Object* fr = sym != 0 ? _methodRetIr.get((Hashable*)sym) : (Object*)0;
+        if (fr != 0 && ((String*)fr).hasPrefix(String.withCString("Agg(")) && valueClassOf(retTy) != 0)
+            return (String*)fr;
+        return irType(retTy);
+        }
+
+    // The class a by-value class type names, or 0.
+    ClassInfo* valueClassOf(String* ast)
+        {
+        if (ast == 0 || Types.isPointer(ast))
+            return (ClassInfo*)0;
+        return classFor(stripQual(ast));
+        }
+
+    // A call that handed back a class instance by value: its aggregate goes
+    // into a slot of THIS frame, and the expression is that slot's address,
+    // the instance pointer every use of a class value expects.
+    IRValue* spillClassValue(IRValue* r, Node* call)
+        {
+        if (r == 0 || !r.ty().hasPrefix(String.withCString("Agg(")))
+            return r;
+        ClassInfo* ci = valueClassOf(call.ty());
+        if (ci == 0 || !ci.agg().equals(r.ty()))
+            return r;
+        u32 off = _fn.pinnedSize();
+        IRPinned* p = IRPinned.with(new IRValue(r.ty()), r.ty(), off, true);
+        _fn.addPinned(p);
+        _fn.setPinnedSize(off + irWidth(r.ty()));
+        Array* aops = new Array();
+        aops.add((Object*)IROperand.useVal(p.val()));
+        IRValue* a = emit(String.withCString("AddrOf"), ci.selfPtr(), aops);
+        storeThrough(a, r);
+        return a;
+        }
+
     bool isAnyClassPointer(String* t)
         {
         if (t == 0)
@@ -13341,7 +13478,8 @@ class ClassInfo
             // A method returning several values returns ONE aggregate, as a
             // function does; its layout is made here, with the symbol.
             String* mret = isMultiReturn(m.op()) ? irReturnOfKey(m, methodSymbolName(cls, m))
-                                                 : irType(firstReturn(m.op()));
+                                                 : (returnsByValue(m, methodBody(m)) ? valueClassOf(firstReturn(m.op())).agg()
+                                                                                       : irType(firstReturn(m.op())));
             IRSymbol* msym = IRSymbol.method(methodSymbolName(cls, m), methodSignature(info, m, mret),
                                              m.hasFlag((u32)NF_VARARGS), m.hasFlag((u32)NF_STATIC));
             // An imported class's METHODS live in its library too, and a call
@@ -24664,7 +24802,11 @@ class ClassInfo
     String* irReturnOfKey(Node* d, String* key)
         {
         if (!isMultiReturn(d.op()))
+            {
+            if (returnsByValue(d, fnBodyOf(d)))
+                return valueClassOf(returnOf(d)).agg();
             return irType(returnOf(d));
+            }
         // A nil key: a new layout every time (a protocol requirement's, at
         // each call site, as the reference).
         Object* have = key != (String*)0 ? _tupleAgg.get((Hashable*)key) : (Object*)0;
@@ -25126,6 +25268,8 @@ class ClassInfo
             _fnRetParts = splitReturns(d.op());
             _fn.setRet(_fnRetAgg);
             }
+        else if (returnsByValue(d, body))
+            _fn.setRet(valueClassOf(returnOf(d)).agg());
         bindParams(d);
         _mem = new IRValue(String.withCString("Mem"));
         _fn.addParam(_mem);
