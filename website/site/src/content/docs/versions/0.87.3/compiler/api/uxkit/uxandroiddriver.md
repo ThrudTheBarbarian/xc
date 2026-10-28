@@ -1,0 +1,117 @@
+---
+title: UXAndroidDriver
+description: "The Android backend: real android.widget views over JNI, with the one Java class the platform requires carried as a committed bootstrap dex, and an explicit hop to the UI thread."
+slug: versions/0.87.3/compiler/api/uxkit/uxandroiddriver
+banner:
+  content: 'This is the documentation for xc 0.87.3. <a href="/compiler/">The current documentation</a> describes the newest version.'
+pagefind: false
+---
+
+`UXAndroidDriver` is the Android realization of
+[`UXViewDriver`](/versions/0.87.3/compiler/api/uxkit/uxviewdriver/). It is the seventh backend,
+and the device-realm sibling of
+[`UXIosDriver`](/versions/0.87.3/compiler/api/uxkit/uxiosdriver/).
+
+```c
+#use <UXKit>            // or #import "UXAndroidDriver.xc"
+```
+
+## Real widgets, over JNI
+
+The toolkit's rule is to **use the native UI**. On Android that means real
+`android.widget` views, built through JNI in `libUXAndroid.c`.
+
+| neutral | Android |
+| --- | --- |
+| [`UXButton`](/versions/0.87.3/compiler/api/uxkit/uxbutton/) | `Button` |
+| [`UXLabel`](/versions/0.87.3/compiler/api/uxkit/uxlabel/) | `TextView` |
+| [`UXSlider`](/versions/0.87.3/compiler/api/uxkit/uxslider/) | `SeekBar` |
+| [`UXWindow`](/versions/0.87.3/compiler/api/uxkit/uxwindow/) | `FrameLayout` |
+| [`UXStepper`](/versions/0.87.3/compiler/api/uxkit/uxstepper/) | a composed `-`/`+` button pair |
+
+**Android has no platform stepper**, so the driver composes one from two
+buttons. A backend that cannot realize a control natively builds the closest
+real equivalent. This is better than drawing a fake, because the pieces are
+real widgets with native behaviour.
+
+## The one Java class the platform forces
+
+Android does not let native code register a listener directly: a
+`View.OnClickListener` has to be a Java object. There is therefore **one** Java
+class, the listener bridge, carried as a **committed bootstrap dex** in
+`tools/android/`.
+
+The built artefact is committed so that applications do not need a Java
+toolchain in their build to produce one small class that never changes. The dex
+is tested and checked in, so building an Android application needs only the
+NDK.
+
+A press travels `OnClickListener` → `UXBridge` → `nativeFire` → the toolkit's
+fire-by-peer path, the same entry point every other backend's controls use.
+
+## The thread hop is explicit
+
+The loop has the same shape as on iOS, with the thread hop visible:
+
+```
+the framework's UI thread   owns the loop
+the compiler's glue         runs xt_main on a DETACHED thread
+runLoop()                   posts the app's start onto the UI thread, then parks
+```
+
+`boot()`, windows, `realizeTree`, painting and firing all happen **on the UI
+thread**, inside the posted entry or a widget callback. This is Android's rule,
+and breaking it causes a crash, not a warning.
+
+Because the driver makes the hop, neutral code never has to know about it. An
+application's `main` runs where the compiler put it, and the driver moves the
+work to where Android requires it.
+
+## Two libraries, one APK
+
+The APK carries two native libraries: the app, compiled by `xcc`, and
+`libUXAndroid.so`, the C shim, built with the NDK. Android loads the shim first,
+and the shim loads the app. `xcc` packages both in one command:
+
+```sh
+$NDK/aarch64-linux-android26-clang -shared -fPIC -Wl,-soname,libUXAndroid.so \
+    libUXAndroid.c -llog -landroid -o libUXAndroid.so
+xcc -A android --emit-apk app.xc --needed libUXAndroid.so \
+    --with-lib libUXAndroid.so --lib-name UXAndroid \
+    --with-dex tools/android/classes.dex -o app.apk
+```
+
+`--needed` adds the `DT_NEEDED` entry that binds the app's `ux_and_*` imports to
+the shim, and `--lib-name` makes the shim the library Android starts. The
+package is `org.compile_xc.<name>`, from the `-o` file's name, and the shim
+loads `lib<name>.so` from it.
+
+:::caution[Assembling `.s` through the NDK does not work]
+The compiler emits Mach-O-dialect assembly, which the NDK's assembler does not
+accept. The build uses the compiler's own path instead.
+
+Do not try to shortcut the toolchain here. It looks as if it should work, and
+the failure reads like a missing flag.
+:::
+
+## Bring-up state
+
+Working, covered by the `android-real` gate: windows as `FrameLayout`s, the
+shadow tree, custom-view painting through `Canvas`
+([`UXAndroidGraphics`](/versions/0.87.3/compiler/api/uxkit/uxandroidgraphics/)), native `Button`
+and `TextView` overlays, the fire-by-peer path, time and measurement, and the
+offscreen `Bitmap` readback rig that allows visual checks without a screen.
+
+Stubbed: the value controls (`Switch`/`SeekBar`/`ProgressBar`/`Spinner`), the
+`EditText` overlay, menus, alerts (`AlertDialog`), scrolling (`ScrollView`),
+`SharedPreferences` settings, and `Typeface`-styled measurement.
+
+## See also
+
+- [`UXViewDriver`](/versions/0.87.3/compiler/api/uxkit/uxviewdriver/): the interface
+- [`UXAndroidGraphics`](/versions/0.87.3/compiler/api/uxkit/uxandroidgraphics/): the `Canvas`
+  drawing vocabulary
+- [`UXIosDriver`](/versions/0.87.3/compiler/api/uxkit/uxiosdriver/): the sibling, with the same
+  loop shape
+- [`UXWebDriver`](/versions/0.87.3/compiler/api/uxkit/uxwebdriver/): the other backend across a
+  foreign-function boundary
