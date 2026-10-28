@@ -2253,6 +2253,11 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                 [data appendFormat:@"\t.globl\t%@\n", [self safeSym:sym.name]];
                 if (page)
                     [data appendString:@"\t.p2align\t14\n"];
+                // An array of 256 bytes or more starts on a cache line, so a
+                // vector loop's 64-byte loads over it never split across two
+                // (2026-10-28). As the port.
+                else if (bytes.length >= 256)
+                    [data appendString:@"\t.p2align\t6\n"];
                 [data appendFormat:@"%@:\n", [self safeSym:sym.name]];
                 [self emitBytes:bytes into:data];
                 if (page)
@@ -2283,6 +2288,8 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                     {
                     if (page)
                         [bss appendString:@"\t.p2align\t14\n"];
+                    else if (sz >= 256)
+                        [bss appendString:@"\t.p2align\t6\n"];
                     // Shared by every object, as initialised data above.
                     [bss appendFormat:@"\t.globl\t%@\n", [self safeSym:sym.name]];
                     [bss appendFormat:@"%@:\n\t.zero\t%lu\n", [self safeSym:sym.name], (unsigned long)sz];
@@ -2294,7 +2301,7 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
                     // (and #used C libraries) merge it to one slot. A local
                     // `.bss` def gave each unit a PRIVATE copy — cross-object
                     // writes never met (c2xc bug 36, cross-object variant).
-                    NSUInteger al = page ? 16384 : (sz >= 8 ? 8 : (sz >= 4 ? 4 : (sz >= 2 ? 2 : 1)));
+                    NSUInteger al = page ? 16384 : (sz >= 256 ? 64 : (sz >= 8 ? 8 : (sz >= 4 ? 4 : (sz >= 2 ? 2 : 1))));
                     // A library's standard-library state (`exported`) is named
                     // by `.globl` too, which is what puts it in a .so's exports.
                     if ([sym.attributes[@"exported"] boolValue])

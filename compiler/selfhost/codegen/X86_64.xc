@@ -8740,6 +8740,11 @@ class X86_64
             data.appendFormat("\t.globl\t%s\n", safeSym(sym.name()).cString());
             if (page)
                 data.appendCString("\t.p2align\t14\n");
+            // An array of 256 bytes or more starts on a cache line, so a vector
+            // loop's 64-byte loads over it never split across two (2026-10-28:
+            // a u32[1024] global sat 40 bytes into a line, every load split).
+            else if (bytes.count() >= (u32)256)
+                data.appendCString("\t.p2align\t6\n");
             data.appendFormat("%s:\n", safeSym(sym.name()).cString());
             emitBytes(bytes, data);
             if (page)
@@ -8764,6 +8769,8 @@ class X86_64
             {
             if (page)
                 bss.appendCString("\t.p2align\t14\n");
+            else if (sz >= (u32)256)
+                bss.appendCString("\t.p2align\t6\n");
             // Shared by every object, as initialised data above.
             bss.appendFormat("\t.globl\t%s\n", safeSym(sym.name()).cString());
             bss.appendFormat("%s:\n\t.zero\t%lu\n", safeSym(sym.name()).cString(), sz);
@@ -8774,7 +8781,7 @@ class X86_64
             // a COMMON symbol, so separately-compiled units (and #used C
             // libraries) merge it to one slot. A local .bss def gave each unit a
             // PRIVATE copy (c2xc bug 36, cross-object variant).
-            u32 al = page ? (u32)16384 : (sz >= (u32)8 ? (u32)8 : (sz >= (u32)4 ? (u32)4 : (sz >= (u32)2 ? (u32)2 : (u32)1)));
+            u32 al = page ? (u32)16384 : (sz >= (u32)256 ? (u32)64 : (sz >= (u32)8 ? (u32)8 : (sz >= (u32)4 ? (u32)4 : (sz >= (u32)2 ? (u32)2 : (u32)1))));
             // A library's standard-library state (`exported`) is named by
             // `.globl` too, which is what puts it in a .so's exports.
             if (sym.attr(String.withCString("exported")))

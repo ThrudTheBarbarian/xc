@@ -1,5 +1,6 @@
 #!/bin/bash
-# stack-align.sh — a large local array starts on a 64-byte boundary on x86-64
+# stack-align.sh — a large local or global array starts on a 64-byte boundary
+# on x86-64
 # (2026-10-28). rbp is only 16-aligned and the stack's place moves from run
 # to run, so the vector loops over a local array split every 64-byte load
 # across two cache lines in three runs of four: array_sum ran 213 or 380 ms
@@ -7,7 +8,8 @@
 # slow run, a few thousand in a fast one). The array's slot has 64 bytes of
 # slack and its address is rounded up into it. Both compilers print the same
 # code; on an x86-64 host (or XTC_X86_HOST over ssh) the array's address is a
-# multiple of 64 in every run.
+# multiple of 64 in every run. A global array of 256 bytes or more is
+# 64-aligned too (it sat 40 bytes into a cache line, every load split).
 #
 #   [XTC_X86_HOST=<host>] bash tests/driver/stack-align.sh
 set -u
@@ -19,6 +21,9 @@ fail=0
 cat > "$W/al.xc" <<'XC'
 #import "Stdio.xc"
 
+u8 gpad[3];
+u32 g[1024];
+
 i32 main(i32 argc, u8** argv)
 {
     u32 a[1024];
@@ -29,7 +34,10 @@ i32 main(i32 argc, u8** argv)
     u32 s = 0;
     for (u32 i = 0; i < 1024; i = i + 1)
         s = s + a[i];
-    Stdio.printf("%u %u\n", (u32)(((u64)(pointer)&a[0]) & (u64)63), s + (u32)small[0]);
+    g[5] = s;
+    gpad[0] = (u8)argc;
+    Stdio.printf("%u %u %u\n", (u32)(((u64)(pointer)&a[0]) & (u64)63), s + (u32)small[0] + (u32)gpad[0] - (u32)argc,
+                 (u32)(((u64)(pointer)&g[0]) & (u64)63) + g[5] - s);
     return 0;
 }
 XC
@@ -55,9 +63,11 @@ out=$(run)
 if [ -n "$out" ]; then
     bad=$(printf '%s\n' "$out" | awk '$1 != 0' | head -1)
     [ -z "$bad" ] || { echo "FAIL stack-align: the array is ${bad%% *} bytes past a 64-byte boundary"; fail=1; }
+    gbad=$(printf '%s\n' "$out" | awk '$3 != 0' | head -1)
+    [ -z "$gbad" ] || { echo "FAIL stack-align: the global array is $(echo "$gbad" | awk '{print $3}') bytes past a 64-byte boundary"; fail=1; }
     sums=$(printf '%s\n' "$out" | awk '{print $2}' | sort -u | wc -l | tr -d ' ')
     [ "$sums" = 1 ] || { echo "FAIL stack-align: the sum varies"; fail=1; }
-    msg="8 runs, every array 64-aligned"
+    msg="8 runs, the local and the global array 64-aligned"
 else
     msg="not run (no x86-64 host)"
 fi
