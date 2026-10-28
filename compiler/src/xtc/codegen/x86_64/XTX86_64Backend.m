@@ -54,6 +54,7 @@ static NSDictionary<NSNumber*, XTIRInsn*>* sSelCmp = nil; // Select id -> its IC
 static NSDictionary<NSNumber*, XTIRInsn*>* sSelSink = nil; // Select id -> its true value's insn
 static NSDictionary<NSNumber*, NSNumber*>* sFmaUc = nil; // value id -> its use count, for fmaPair
 static BOOL sFmaOk = NO;                                  // this function's code has FMA (avx2/avx512 copy)
+static BOOL sVexOk = NO;                                  // this function is an avx2/avx512 copy: three-operand forms
 static NSSet<NSNumber*>* sAligned = nil;                  // pinned large arrays placed on a 64-byte boundary
 static NSSet<NSNumber*>* sFmaPhi = nil;                   // phi results: a loop-carried addend stays unfused
 // A signed 32-bit value known to be non-negative: an And with a mask from 0 to
@@ -3247,6 +3248,7 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
     // is faster; on until that is understood. As the port.
     const char* fe = getenv("XCC_X86_FMA");
     sFmaOk = fn.simdLevel != nil && fe && strcmp(fe, "1") == 0;
+    sVexOk = fn.simdLevel != nil;
     sNonNeg = nonNeg;
     // The given-up vector values are THIS function's: assignVectorRegsFor:
     // returns before it resets them when the function has no vector values
@@ -6848,17 +6850,38 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         }
     // A sunk true value is computed into d after the branch: none of its
     // operands may live in d, which the false value is loaded into first.
+    // An avx copy computes it in one three-operand instruction, which reads
+    // before it writes, so there the false value itself may be one of them:
+    // d already holds it. perlin's `g & 2 ? 0 - 2v : 2v` went through xmm0
+    // and back, two copies a gradient.
     if (sink)
         for (XTIROperand* so in sink.operands)
-            if (so.kind == XTIROperandKindUse && [sHome[@(so.valueId)] isEqualToString:d])
+            {
+            BOOL held = sVexOk && fv.kind == XTIROperandKindUse && fv.valueId == so.valueId;
+            if (so.kind == XTIROperandKindUse && [sHome[@(so.valueId)] isEqualToString:d] && !held)
                 d = @"xmm0";
+            }
     [self loadF:fv into:d fn:fn slot:slot out:out];
     NSUInteger lbl = sArcLabel++;
     [self emitSelBranch:in label:lbl fn:fn slot:slot out:out];
     if (sink)
         {
+        XTIROperand* o0 = sink.operands[0];
         XTIROperand* o1 = sink.operands[1];
-        [self loadF:sink.operands[0] into:d fn:fn slot:slot out:out];
+        // The three-operand form needs d to be a home of its own: its first
+        // source goes through the xmm0 scratch when it has none.
+        BOOL three = sVexOk && ![d isEqualToString:@"xmm0"];
+        NSString* A = d;
+        NSString* h0 = o0.kind == XTIROperandKindUse ? sHome[@(o0.valueId)] : nil;
+        if (three && h0 && [self isXmmHome:h0])
+            A = h0;
+        else if (three)
+            {
+            A = @"xmm0";
+            [self loadF:o0 into:A fn:fn slot:slot out:out];
+            }
+        else
+            [self loadF:o0 into:d fn:fn slot:slot out:out];
         NSString* S;
         NSString* h1 = o1.kind == XTIROperandKindUse ? sHome[@(o1.valueId)] : nil;
         if (o1.kind == XTIROperandKindUse && !(h1 && [self isXmmHome:h1]) && slot[@(o1.valueId)])
@@ -6867,7 +6890,10 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             S = [self fsrcFor:o1 fn:fn slot:slot out:out];
         XTIROpcode sop = sink.opcode;
         NSString* mn = sop == XTIROpFAdd ? @"add" : sop == XTIROpFSub ? @"sub" : sop == XTIROpFMul ? @"mul" : @"div";
-        [out appendFormat:@"\t%@%@\t%@, %@\n", mn, res.type.kind == XTIRTypeKindF64 ? @"sd" : @"ss", d, S];
+        if (three)
+            [out appendFormat:@"\tv%@%@\t%@, %@, %@\n", mn, res.type.kind == XTIRTypeKindF64 ? @"sd" : @"ss", d, A, S];
+        else
+            [out appendFormat:@"\t%@%@\t%@, %@\n", mn, res.type.kind == XTIRTypeKindF64 ? @"sd" : @"ss", d, S];
         }
     else
         [self loadF:tv into:d fn:fn slot:slot out:out];

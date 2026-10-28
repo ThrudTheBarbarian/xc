@@ -85,6 +85,9 @@ NS_ASSUME_NONNULL_BEGIN
 // block. Separate from hoistsGlobalAddr because it regresses xt6502 — see
 // private:docs/bugs.
 - (BOOL)hoistsLocalAddr;
+// x*2 -> x+x and (x*-2) + c -> c - (x+x) in strength reduction: a target that
+// fuses no plain multiply-add (x86-64, where only :goal(speed) code fuses).
+- (BOOL)floatMulToAdd;
 
 // YES to partially unroll a *variable*-trip loop (unknown iteration count) by
 // replicating its single-block body N times in sequence, each copy guarded by a

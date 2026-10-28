@@ -5225,6 +5225,7 @@ class X86_64
         // fused code is faster; on until that is understood.
         String* fe = Platform.env(String.withCString("XCC_X86_FMA"));
         _fmaOk = fn.simdLevel() != (String*)0 && fe != (String*)0 && fe.equals(String.withCString("1"));
+        _vexOk = fn.simdLevel() != (String*)0;
         if (_hasAsm)
             return;
         Map* uc = new Map();
@@ -8037,6 +8038,7 @@ class X86_64
     Map* _aligned;   // pinned large arrays placed on a 64-byte boundary
     Map* _fmaPhi;    // value -> its phi: a loop-carried addend stays unfused
     bool _fmaOk;     // this function's code has FMA (an avx2/avx512 copy)
+    bool _vexOk;     // this function is an avx2/avx512 copy: three-operand forms
     // A signed 32-bit value known to be non-negative: an And with a mask from
     // 0 to 2^31 - 1, or such a value plus a constant that keeps it under 2^31
     // (`X + 1` with X = h & 255: at most 256); the map holds its largest
@@ -8190,6 +8192,10 @@ class X86_64
             }
         // A sunk true value is computed into d after the branch: none of its
         // operands may live in d, which the false value is loaded into first.
+        // An avx copy computes it in one three-operand instruction, which
+        // reads before it writes, so there the false value itself may be one
+        // of them: d already holds it. perlin's `g & 2 ? 0 - 2v : 2v` went
+        // through xmm0 and back, two copies a gradient.
         if (sink != (IRInsn*)0)
             for (u32 k = (u32)0; k < sink.ops().count(); k = k + (u32)1)
                 {
@@ -8197,7 +8203,8 @@ class X86_64
                 if (so.kind() == (u8)OPK_USE && so.val() != (IRValue*)0)
                     {
                     String* sh = homeOf(so.val());
-                    if (sh != (String*)0 && sh.equals(d))
+                    bool held = _vexOk && fv.kind() == (u8)OPK_USE && fv.val() == so.val();
+                    if (sh != (String*)0 && sh.equals(d) && !held)
                         d = String.withCString("xmm0");
                     }
                 }
@@ -8207,8 +8214,21 @@ class X86_64
         emitSelBranch(n, lbl);
         if (sink != (IRInsn*)0)
             {
+            IROperand* o0 = (IROperand*)sink.ops().get((u32)0);
             IROperand* o1 = (IROperand*)sink.ops().get((u32)1);
-            loadF((IROperand*)sink.ops().get((u32)0), d);
+            // The three-operand form needs d to be a home of its own: its
+            // first source goes through the xmm0 scratch when it has none.
+            bool three = _vexOk && !d.equals(String.withCString("xmm0"));
+            String* A = d;
+            if (three && o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 && isXmmHome(homeOf(o0.val())))
+                A = homeOf(o0.val());
+            else if (three)
+                {
+                A = String.withCString("xmm0");
+                loadF(o0, A);
+                }
+            else
+                loadF(o0, d);
             String* S;
             if (o1.kind() == (u8)OPK_USE && o1.val() != (IRValue*)0 && !isXmmHome(homeOf(o1.val()))
                 && hasSlot(o1.val()))
@@ -8219,8 +8239,12 @@ class X86_64
             string mn = sop.equals(String.withCString("FAdd")) ? "add"
                         : (sop.equals(String.withCString("FSub")) ? "sub"
                            : (sop.equals(String.withCString("FMul")) ? "mul" : "div"));
-            _out.appendFormat("\t%s%s\t%s, %s\n", mn, n.res().ty().equals(String.withCString("F64")) ? "sd" : "ss",
-                              d.cString(), S.cString());
+            if (three)
+                _out.appendFormat("\tv%s%s\t%s, %s, %s\n", mn, n.res().ty().equals(String.withCString("F64")) ? "sd" : "ss",
+                                  d.cString(), A.cString(), S.cString());
+            else
+                _out.appendFormat("\t%s%s\t%s, %s\n", mn, n.res().ty().equals(String.withCString("F64")) ? "sd" : "ss",
+                                  d.cString(), S.cString());
             }
         else
             loadF(tv, d);

@@ -15,6 +15,12 @@
     return NO;
     }
 
+// Off by default: arm64 fuses a product with the add that reads it already.
+- (BOOL)floatMulToAdd
+    {
+    return NO;
+    }
+
 // Off by default: measured on arm64, whose back end already has the
 // fallthrough peephole this depends on.
 - (BOOL)laysOutHotPath
@@ -754,6 +760,14 @@
 // matrix_mul was emitting 32 copies of `lea rax, [rbp-4112]`, one per unrolled
 // copy, each spilled to its own frame slot.
 - (BOOL)hoistsLocalAddr
+    {
+    return YES;
+    }
+
+// x86-64 fuses no plain multiply-add (only :goal(speed) code, owner
+// 2026-10-26), so a product by 2 is cheaper as a sum, and a negated product
+// added to something is a subtraction.
+- (BOOL)floatMulToAdd
     {
     return YES;
     }

@@ -99,6 +99,7 @@ class OptProfile
     bool _licm;            // loop-invariant code moves to the preheader
     bool _hoistGlobalAddr; // …and a repeated AddrOf @sym dedupes to the entry
     bool _hoistLocalAddr;  // …and a repeated AddrOf of a pinned LOCAL (arm64)
+    bool _floatMulToAdd;   // x*2 -> x+x and -k*x + c -> c - k*x (no fusing back end)
     bool _layoutHotPath;   // blocks ordered so the expected branch falls through
     bool _narrowIV;        // a counted IV is recomputed at its smallest width
     bool _ptr64;           // pointers are 8 bytes and threads exist (arm64, x86-64, win64): IR outlining runs blocks in parallel
@@ -161,6 +162,7 @@ class OptProfile
         _licm = false;
         _hoistGlobalAddr = false;
         _hoistLocalAddr = false;
+        _floatMulToAdd = false;
         _layoutHotPath = false;
         _narrowIV = false;
         _loopRotate = false;
@@ -317,6 +319,12 @@ class OptProfile
         // differed from the reference (bug 251).
         if (t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64")))
             p._hoistLocalAddr = true;
+        // x86-64 fuses no plain multiply-add (only :goal(speed) code, owner
+        // 2026-10-26), so a product by 2 is cheaper as a sum, and a negated
+        // product added to something is a subtraction. arm64 fuses both into
+        // one instruction already and keeps them.
+        if (t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64")))
+            p._floatMulToAdd = true;
         // wasm32: modest caps between the 6502's 4/8 and arm64's 32/64 —
         // code size is download size (XTIRWasm32TargetProfile).
         if (t.equals(String.withCString("wasm32")))
@@ -506,6 +514,10 @@ class OptProfile
         }
 
     // Separate from hoistGlobalAddr because it regresses xt6502.
+    bool floatMulToAdd(void)
+        {
+        return _floatMulToAdd;
+        }
     bool hoistLocalAddr(void)
         {
         return _hoistLocalAddr;
@@ -1616,7 +1628,11 @@ class BeFact : Object
         if (stopHere(String.withCString("loop-unroll-vartrip")))
             return;
         if (_level >= (u32)2)
+            {
+            _srFloatMul = _profile.floatMulToAdd();
             strengthReduce(m);
+            _srFloatMul = false;
+            }
         if (stopHere(String.withCString("strength-reduce")))
             return;
         if (_level >= (u32)2)
@@ -17265,10 +17281,12 @@ class BeFact : Object
             srInFunc((IRFunc*)m.funcs().get(f));
         }
 
+    bool _srFloatMul; // the float multiply rewrites (set for the main pipeline)
+
     void srInFunc(IRFunc* fn)
         {
         Map* defOf = defMap(fn);
-        bool changed = false;
+        bool changed = srFloat(fn, defOf);
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
@@ -17397,6 +17415,229 @@ class BeFact : Object
             return false;
         bb.insns().set(i, (Object*)repl);
         return true;
+        }
+
+    // ── the float rewrites, all exact ──────────────────────────────────────
+    //
+    // x / c, c = ±2^e, is x * (1/c) when 1/c is a normal number of the type:
+    // both are the one correctly rounded x·2^-e, NaN, infinities and signed
+    // zeros alike. The constant is rewritten in place, so every use of it must
+    // be such a divisor. On a target that fuses no plain multiply-add
+    // (_srFloatMul), x * 2 is x + x, and (x * -2) + c with the product read
+    // only there is c - (x + x): -2x is -(2x) exactly, and c + -(p) is c - p
+    // by definition. clang writes C's `0.0f - 2.0f * v` as fmuladd(-2, v, 0),
+    // which C perlin's gradient pays as two multiplies and an add where GCC
+    // does one add and a subtract from zero; the x + x it then shares with the
+    // other arm's 2v. Code under :goal(speed) is left as it is: its products
+    // fuse.
+    bool srFloat(IRFunc* fn, Map* defOf)
+        {
+        bool changed = false;
+        Map* uses = new Map(); // value -> Array@ of the instructions reading it, once per operand
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 k = (u32)0; k < bb.phis().count(); k = k + (u32)1)
+                srfNote(uses, (IRInsn*)bb.phis().get(k));
+            for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
+                srfNote(uses, (IRInsn*)bb.insns().get(k));
+            if (bb.term() != (IRInsn*)0)
+                srfNote(uses, bb.term());
+            }
+        bool mulOk = _srFloatMul && fn.speedHeaders().count() == (u32)0;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.res() == (IRValue*)0 || n.ops().count() != (u32)2 || n.pred() != (String*)0)
+                    continue;
+                String* ty = n.res().ty();
+                if (!ty.equals(String.withCString("F32")) && !ty.equals(String.withCString("F64")))
+                    continue;
+                IROperand* a = (IROperand*)n.ops().get((u32)0);
+                IROperand* c = (IROperand*)n.ops().get((u32)1);
+                if (n.op().equals(String.withCString("FDiv")))
+                    {
+                    IRInsn* k = srfConstOf(defOf, c, ty);
+                    if (k == (IRInsn*)0)
+                        continue;
+                    String* rh = srfRecipHex(((IROperand*)k.ops().get((u32)0)).fpHex(), ty.equals(String.withCString("F32")));
+                    if (rh == (String*)0)
+                        continue;
+                    Array* us = (Array*)uses.get((Hashable*)c.val());
+                    bool allDiv = us != (Array*)0;
+                    for (u32 j = (u32)0; allDiv && j < us.count(); j = j + (u32)1)
+                        {
+                        IRInsn* u = (IRInsn*)us.get(j);
+                        if (!u.op().equals(String.withCString("FDiv")) || u.ops().count() != (u32)2 || u.pred() != (String*)0
+                            || u.res() == (IRValue*)0 || !u.res().ty().equals(ty))
+                            allDiv = false;
+                        else
+                            {
+                            IROperand* u0 = (IROperand*)u.ops().get((u32)0);
+                            IROperand* u1 = (IROperand*)u.ops().get((u32)1);
+                            if (u1.kind() != (u8)OPK_USE || u1.val() != c.val()
+                                || (u0.kind() == (u8)OPK_USE && u0.val() == c.val()))
+                                allDiv = false;
+                            }
+                        }
+                    if (!allDiv)
+                        continue;
+                    k.ops().set((u32)0, (Object*)IROperand.immF(rh, ((IROperand*)k.ops().get((u32)0)).ty()));
+                    for (u32 j = (u32)0; j < us.count(); j = j + (u32)1)
+                        srfRetag(fn, (IRInsn*)us.get(j), "FMul", (IROperand*)0, (IROperand*)0);
+                    changed = true;
+                    continue;
+                    }
+                if (!mulOk)
+                    continue;
+                if (n.op().equals(String.withCString("FMul")))
+                    {
+                    // x * 2 (either side) -> x + x
+                    IROperand* x = (IROperand*)0;
+                    if (srfIsConst(defOf, c, ty, "4000000000000000"))
+                        x = a;
+                    else if (srfIsConst(defOf, a, ty, "4000000000000000"))
+                        x = c;
+                    if (x == (IROperand*)0)
+                        continue;
+                    srfRetag(fn, n, "FAdd", x, x);
+                    changed = true;
+                    continue;
+                    }
+                if (n.op().equals(String.withCString("FAdd")))
+                    {
+                    // (x * -2) + c, either side, the product read only here
+                    for (u32 side = (u32)0; side < (u32)2; side = side + (u32)1)
+                        {
+                        IROperand* p = side == (u32)0 ? a : c;
+                        IROperand* o = side == (u32)0 ? c : a;
+                        if (p.kind() != (u8)OPK_USE || p.val() == (IRValue*)0)
+                            continue;
+                        if (o.kind() == (u8)OPK_USE && o.val() == p.val())
+                            continue;
+                        IRInsn* d = (IRInsn*)defOf.get((Hashable*)p.val());
+                        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("FMul")) || d.ops().count() != (u32)2
+                            || d.pred() != (String*)0 || d.res() == (IRValue*)0 || !d.res().ty().equals(ty))
+                            continue;
+                        Array* du = (Array*)uses.get((Hashable*)p.val());
+                        if (du == (Array*)0 || du.count() != (u32)1)
+                            continue;
+                        IROperand* d0 = (IROperand*)d.ops().get((u32)0);
+                        IROperand* d1 = (IROperand*)d.ops().get((u32)1);
+                        IROperand* x = (IROperand*)0;
+                        if (srfIsConst(defOf, d1, ty, "C000000000000000"))
+                            x = d0;
+                        else if (srfIsConst(defOf, d0, ty, "C000000000000000"))
+                            x = d1;
+                        if (x == (IROperand*)0)
+                            continue;
+                        srfRetag(fn, d, "FAdd", x, x);
+                        srfRetag(fn, n, "FSub", o, p);
+                        changed = true;
+                        side = (u32)2;
+                        }
+                    }
+                }
+            }
+        return changed;
+        }
+
+    void srfNote(Map* uses, IRInsn* n)
+        {
+        for (u32 i = (u32)0; i < n.ops().count(); i = i + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(i);
+            if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                continue;
+            Array* l = (Array*)uses.get((Hashable*)o.val());
+            if (l == (Array*)0)
+                {
+                l = new Array();
+                uses.set((Hashable*)o.val(), (Object*)l);
+                }
+            l.add((Object*)n);
+            }
+        }
+
+    // The Const defining o, when it is a float immediate of type ty.
+    IRInsn* srfConstOf(Map* defOf, IROperand* o, String* ty)
+        {
+        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0 || !o.val().ty().equals(ty))
+            return (IRInsn*)0;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)o.val());
+        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("Const")) || d.ops().count() < (u32)1)
+            return (IRInsn*)0;
+        IROperand* k = (IROperand*)d.ops().get((u32)0);
+        if (k.kind() != (u8)OPK_IMMF || k.fpHex() == (String*)0 || k.fpHex().byteLength() != (u32)16)
+            return (IRInsn*)0;
+        return d;
+        }
+
+    bool srfIsConst(Map* defOf, IROperand* o, String* ty, u8* hex)
+        {
+        IRInsn* d = srfConstOf(defOf, o, ty);
+        return d != (IRInsn*)0 && ((IROperand*)d.ops().get((u32)0)).fpHex().equals(String.withCString(hex));
+        }
+
+    // The bits of 1/c when c (a double's bits, in hex) is ±2^e and 1/c is a
+    // normal number of the type, else 0.
+    String* srfRecipHex(String* hex, bool f32)
+        {
+        u64 bits = (u64)0;
+        for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
+            {
+            u8 ch = hex.byteAt(i);
+            u64 v = (u64)0;
+            if (ch >= (u8)48 && ch <= (u8)57)
+                v = (u64)(ch - (u8)48);
+            else if (ch >= (u8)65 && ch <= (u8)70)
+                v = (u64)(ch - (u8)55);
+            else if (ch >= (u8)97 && ch <= (u8)102)
+                v = (u64)(ch - (u8)87);
+            else
+                return (String*)0;
+            bits = (bits << (u64)4) | v;
+            }
+        if ((bits & (u64)$FFFFFFFFFFFFF) != (u64)0)
+            return (String*)0;
+        i64 ex = (i64)((bits >> (u64)52) & (u64)$7FF);
+        if (ex == (i64)0 || ex == (i64)$7FF)
+            return (String*)0;
+        i64 e = ex - (i64)1023;   // c = ±2^e, 1/c = ±2^-e
+        i64 lo = f32 ? (i64)-126 : (i64)-1022;
+        i64 hi = f32 ? (i64)127 : (i64)1023;
+        if (-e < lo || -e > hi || e < lo || e > hi)
+            return (String*)0;
+        u64 r = (bits & ((u64)1 << (u64)63)) | ((u64)((i64)1023 - e) << (u64)52);
+        string digits = "0123456789ABCDEF";
+        String* out = String.withCString("");
+        for (i32 sh = (i32)60; sh >= (i32)0; sh = sh - (i32)4)
+            out.appendByte(digits[(u32)((r >> (u64)sh) & (u64)$F)]);
+        return out;
+        }
+
+    // Replace n, wherever it sits, by `op` over the given operands (its own,
+    // when both are 0), keeping its result and location.
+    void srfRetag(IRFunc* fn, IRInsn* n, u8* op, IROperand* x, IROperand* y)
+        {
+        IRInsn* r = IRInsn.with(String.withCString(op));
+        r.copyDbg(n);
+        r.setRes(n.res());
+        r.add(x != (IROperand*)0 ? x : (IROperand*)n.ops().get((u32)0));
+        r.add(y != (IROperand*)0 ? y : (IROperand*)n.ops().get((u32)1));
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                if ((IRInsn*)bb.insns().get(i) == n)
+                    {
+                    bb.insns().set(i, (Object*)r);
+                    return;
+                    }
+            }
         }
 
     IRInsn* srBinImm(IRInsn* n, String* newOp, IROperand* xop,

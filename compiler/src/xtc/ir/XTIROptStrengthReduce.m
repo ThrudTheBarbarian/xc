@@ -22,6 +22,23 @@ static int log2IfPow2(int64_t n)
     return k;
     }
 
+// The bits of 1/c when c (a double's bits) is ±2^e and 1/c is a normal
+// number of the type; NO otherwise.
+static BOOL recipBits(uint64_t bits, BOOL f32, uint64_t* out)
+    {
+    if ((bits & 0xFFFFFFFFFFFFFULL) != 0)
+        return NO;
+    int64_t ex = (int64_t)((bits >> 52) & 0x7FF);
+    if (ex == 0 || ex == 0x7FF)
+        return NO;
+    int64_t e = ex - 1023; // c = ±2^e, 1/c = ±2^-e
+    int64_t lo = f32 ? -126 : -1022, hi = f32 ? 127 : 1023;
+    if (-e < lo || -e > hi || e < lo || e > hi)
+        return NO;
+    *out = (bits & (1ULL << 63)) | ((uint64_t)(1023 - e) << 52);
+    return YES;
+    }
+
 @implementation XTIROptStrengthReduce
 
 - (NSString*)passName
@@ -40,6 +57,152 @@ static int log2IfPow2(int64_t n)
     for (XTIRFunction* fn in mod.functions)
         [self runOnFunction:fn];
     return YES;
+    }
+
+// x / c, c = ±2^e, is x * (1/c) when 1/c is a normal number of the type: both
+// are the one correctly rounded x·2^-e, NaN, infinities and signed zeros
+// alike. The constant is rewritten in place, so every use of it must be such a
+// divisor. On a target that fuses no plain multiply-add (profile.floatMulToAdd),
+// x * 2 is x + x, and (x * -2) + c with the product read only there is
+// c - (x + x): -2x is -(2x) exactly, and c + -(p) is c - p by definition.
+// clang writes C's `0.0f - 2.0f * v` as fmuladd(-2, v, 0), which C perlin's
+// gradient paid as two multiplies and an add where GCC does one add and a
+// subtract from zero; the x + x it then shares with the other arm's 2v. Code
+// under :goal(speed) is left as it is: its products fuse.
+- (BOOL)runFloatOnFunction:(XTIRFunction*)fn defOf:(NSDictionary<NSNumber*, XTIRInsn*>*)defOf
+    {
+    BOOL changed = NO;
+    NSMutableDictionary<NSNumber*, NSMutableArray<XTIRInsn*>*>* uses = [NSMutableDictionary dictionary];
+    void (^note)(XTIRInsn*) = ^(XTIRInsn* n) {
+      for (XTIROperand* o in n.operands)
+          {
+          if (o.kind != XTIROperandKindUse)
+              continue;
+          NSMutableArray* l = uses[@(o.valueId)];
+          if (!l)
+              uses[@(o.valueId)] = l = [NSMutableArray array];
+          [l addObject:n];
+          }
+    };
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        for (XTIRInsn* phi in bb.phiNodes)
+            note(phi);
+        for (XTIRInsn* insn in bb.instructions)
+            note(insn);
+        }
+    BOOL (^isF)(XTIRType*) = ^BOOL(XTIRType* t) {
+      return t && (t.kind == XTIRTypeKindF32 || t.kind == XTIRTypeKindF64);
+    };
+    // The Const defining o, when it is a float immediate of kind `k`.
+    XTIRInsn* (^constOf)(XTIROperand*, XTIRTypeKind) = ^XTIRInsn*(XTIROperand* o, XTIRTypeKind k) {
+      if (o.kind != XTIROperandKindUse)
+          return nil;
+      XTIRInsn* d = defOf[@(o.valueId)];
+      if (!d || d.opcode != XTIROpConst || d.operands.count < 1 || !d.result || d.result.type.kind != k)
+          return nil;
+      if (d.operands[0].kind != XTIROperandKindImmF)
+          return nil;
+      return d;
+    };
+    BOOL (^isConst)(XTIROperand*, XTIRTypeKind, uint64_t) = ^BOOL(XTIROperand* o, XTIRTypeKind k, uint64_t bits) {
+      XTIRInsn* d = constOf(o, k);
+      return d && d.operands[0].floatRawBytes == bits;
+    };
+    // Replace n, wherever it sits, by `op` over the given operands.
+    void (^retag)(XTIRInsn*, XTIROpcode, NSArray<XTIROperand*>*) = ^(XTIRInsn* n, XTIROpcode op, NSArray<XTIROperand*>* ops) {
+      XTIRInsn* r = [[XTIRInsn alloc] initWithOpcode:op result:n.result operands:ops dbgLoc:n.dbgLoc];
+      for (XTIRBlock* bb in fn.blocks)
+          {
+          NSUInteger at = [bb.instructions indexOfObjectIdenticalTo:n];
+          if (at != NSNotFound)
+              {
+              bb.instructions[at] = r;
+              return;
+              }
+          }
+    };
+    BOOL mulOk = self.profile.floatMulToAdd && fn.speedLoopHeaders.count == 0;
+    const uint64_t two = 0x4000000000000000ULL, minusTwo = 0xC000000000000000ULL;
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        for (NSUInteger i = 0; i < bb.instructions.count; i++)
+            {
+            XTIRInsn* n = bb.instructions[i];
+            if (!n.result || n.operands.count != 2 || n.predicate != XTIRFpExact || !isF(n.result.type))
+                continue;
+            XTIRTypeKind k = n.result.type.kind;
+            XTIROperand *a = n.operands[0], *c = n.operands[1];
+            if (n.opcode == XTIROpFDiv)
+                {
+                XTIRInsn* kc = constOf(c, k);
+                uint64_t rb = 0;
+                if (!kc || !recipBits(kc.operands[0].floatRawBytes, k == XTIRTypeKindF32, &rb))
+                    continue;
+                NSArray<XTIRInsn*>* us = uses[@(c.valueId)];
+                BOOL allDiv = us != nil;
+                for (XTIRInsn* u in us)
+                    {
+                    if (u.opcode != XTIROpFDiv || u.operands.count != 2 || u.predicate != XTIRFpExact || !u.result
+                        || u.result.type.kind != k)
+                        {
+                        allDiv = NO;
+                        break;
+                        }
+                    XTIROperand *u0 = u.operands[0], *u1 = u.operands[1];
+                    if (u1.kind != XTIROperandKindUse || u1.valueId != c.valueId
+                        || (u0.kind == XTIROperandKindUse && u0.valueId == c.valueId))
+                        {
+                        allDiv = NO;
+                        break;
+                        }
+                    }
+                if (!allDiv)
+                    continue;
+                [kc replaceOperands:@[ [XTIROperand immFWithType:kc.operands[0].type rawBytes:rb] ]];
+                for (XTIRInsn* u in us)
+                    retag(u, XTIROpFMul, u.operands);
+                changed = YES;
+                continue;
+                }
+            if (!mulOk)
+                continue;
+            if (n.opcode == XTIROpFMul)
+                {
+                XTIROperand* x = isConst(c, k, two) ? a : isConst(a, k, two) ? c : nil;
+                if (!x)
+                    continue;
+                retag(n, XTIROpFAdd, @[ x, x ]);
+                changed = YES;
+                continue;
+                }
+            if (n.opcode == XTIROpFAdd)
+                for (int side = 0; side < 2; side++)
+                    {
+                    XTIROperand* p = side == 0 ? a : c;
+                    XTIROperand* o = side == 0 ? c : a;
+                    if (p.kind != XTIROperandKindUse)
+                        continue;
+                    if (o.kind == XTIROperandKindUse && o.valueId == p.valueId)
+                        continue;
+                    XTIRInsn* d = defOf[@(p.valueId)];
+                    if (!d || d.opcode != XTIROpFMul || d.operands.count != 2 || d.predicate != XTIRFpExact || !d.result
+                        || d.result.type.kind != k)
+                        continue;
+                    if (uses[@(p.valueId)].count != 1)
+                        continue;
+                    XTIROperand *d0 = d.operands[0], *d1 = d.operands[1];
+                    XTIROperand* x = isConst(d1, k, minusTwo) ? d0 : isConst(d0, k, minusTwo) ? d1 : nil;
+                    if (!x)
+                        continue;
+                    retag(d, XTIROpFAdd, @[ x, x ]);
+                    retag(n, XTIROpFSub, @[ o, p ]);
+                    changed = YES;
+                    break;
+                    }
+            }
+        }
+    return changed;
     }
 
 - (void)runOnFunction:(XTIRFunction*)fn
@@ -93,7 +256,7 @@ static int log2IfPow2(int64_t n)
       return NO;
     };
 
-    BOOL changed = NO;
+    BOOL changed = [self runFloatOnFunction:fn defOf:defOf];
     for (XTIRBlock* bb in fn.blocks)
         {
         for (NSUInteger i = 0; i < bb.instructions.count; i++)

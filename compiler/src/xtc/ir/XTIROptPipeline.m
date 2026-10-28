@@ -261,7 +261,9 @@
         XTIROptLoopUnrollVarTrip* unrollVT = [[XTIROptLoopUnrollVarTrip alloc] init];
         unrollVT.profile = profile;
         [p addPass:unrollVT];
-        [p addPass:[[XTIROptStrengthReduce alloc] init]];
+        XTIROptStrengthReduce* sr = [[XTIROptStrengthReduce alloc] init];
+        sr.profile = profile;
+        [p addPass:sr];
         [p addPass:[[XTIROptConstOperandFold alloc] init]];
         [p addPass:[[XTIROptRedundantLoadCSE alloc] init]];
         // Hoist loop-invariant address arithmetic / field loads to the preheader

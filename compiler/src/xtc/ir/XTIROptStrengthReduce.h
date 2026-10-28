@@ -1,4 +1,5 @@
 #import "XTIROptPass.h"
+#import "XTIROptTargetProfile.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -19,7 +20,15 @@ NS_ASSUME_NONNULL_BEGIN
 // lowering, and forwarding x would need a use-rewrite (the CSE pass's job).
 // The constant operand is resolved through ZExt/SExt of a Const (the form
 // the lowering emits for a widened literal). -O2+.
+//
+// The float rewrites, all exact (see runFloatOnFunction:):
+//   FDiv x, ±2^e  → FMul x, ±2^-e   (1/c a normal number of the type)
+//   FMul x, 2     → FAdd x, x       (profile.floatMulToAdd)
+//   FAdd (FMul x, -2), c → FSub c, (FAdd x, x)   (likewise)
 @interface XTIROptStrengthReduce : NSObject <XTIROptPass>
+// Set by the main pipeline; nil (a par kernel's passes) leaves the multiply
+// rewrites off.
+@property(nonatomic, strong, nullable) XTIROptTargetProfile* profile;
 @end
 
 NS_ASSUME_NONNULL_END
