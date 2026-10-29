@@ -188,6 +188,8 @@ class Plugin : Object
         return String.withCString("linux-x86_64");
 #elif ARCH_wasm32
         return String.withCString("wasm32");
+#elif PLATFORM_ios
+        return String.withCString("ios-arm64");    // as the driver names the bundle's directory
 #else
         return String.withCString("macos-arm64");
 #endif
