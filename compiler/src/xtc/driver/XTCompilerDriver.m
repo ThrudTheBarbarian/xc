@@ -345,9 +345,9 @@ static NSSet<NSString*>* stdStateNamesIn(XTProgramNode* ast, NSSet<NSString*>* f
         // fall through to x86_64's. Every other platform is a single dir.
         // iOS: its own layer first (support/ios/lib — the Platform.xc
         // prelude), then the arm64 tree it shares the ISA and runtime with.
-        NSArray<NSString*>* platDirs = _options.useWin64Backend
-                                           ? @[ @"win64", @"x86_64" ]
-                                           : (_options.applePlatform ? @[ @"ios", plat ] : @[ plat ]);
+        // The row's chain (the target table); 6502's is its layout's platform.
+        NSArray<NSString*>* rowChain = _options.effectiveTarget.supportChain;
+        NSArray<NSString*>* platDirs = rowChain.count ? rowChain : @[ plat ];
         for (NSString* pd in platDirs)
             {
             NSString* platLib = [support stringByAppendingPathComponent:
@@ -515,9 +515,9 @@ static NSString* cLibraryNameFromPath(NSString* path)
         // win64 shares x86_64's native library tree (see resolveIncludePaths).
         // iOS: its own layer first (support/ios/lib — the Platform.xc
         // prelude), then the arm64 tree it shares the ISA and runtime with.
-        NSArray<NSString*>* platDirs = _options.useWin64Backend
-                                           ? @[ @"win64", @"x86_64" ]
-                                           : (_options.applePlatform ? @[ @"ios", plat ] : @[ plat ]);
+        // The row's chain (the target table); 6502's is its layout's platform.
+        NSArray<NSString*>* rowChain = _options.effectiveTarget.supportChain;
+        NSArray<NSString*>* platDirs = rowChain.count ? rowChain : @[ plat ];
         for (NSString* pd in platDirs)
             [paths addObject:[support stringByAppendingPathComponent:
                                           [NSString stringWithFormat:@"%@/lib", pd]]];

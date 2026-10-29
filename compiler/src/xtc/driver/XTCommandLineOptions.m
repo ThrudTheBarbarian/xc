@@ -1046,6 +1046,12 @@ static NSString* sExecutablePath = nil;
             {
             opts.printTarget = YES;
             }
+        else if ([arg isEqualToString:@"--target-row"] && i + 1 < argc)
+            {
+            // The driver hands its row to xcc-fe (which is still driven by -m
+            // and -D for the flags): the row, without touching those flags.
+            opts.targetRow = [XTTarget rowForToken:@(argv[++i])];
+            }
         else if ([arg isEqualToString:@"-S"])
             {
             // cc's "keep the assembly", as in the shipped driver. The output's
@@ -1933,9 +1939,14 @@ static NSString* sExecutablePath = nil;
                   : self.useWasm32Backend ? @"wasm32" : self.useArm9Backend ? @"arm9"
                   : self.useM68kBackend ? @"m68k" : self.androidTarget ? @"android"
                   : self.applePlatform ?: (self.useArm64Backend ? @"arm64" : @"xt6502");
-    if (self.targetRow && [self.targetRow.legacy isEqualToString:key])
+    // The -A row (or the one the driver handed the front end) stands while it
+    // is the same code generator as the flags' target: android, iOS and the
+    // 68030 are rows of their own over the arm64 and m68k back ends, and a
+    // later -m that changes the back end drops it, as the port's does.
+    XTTarget* byFlags = [XTTarget rowForToken:key];
+    if (self.targetRow && [self.targetRow.codegen isEqualToString:byFlags.codegen])
         return self.targetRow;
-    return [XTTarget rowForToken:key];
+    return byFlags;
     }
 
 @end

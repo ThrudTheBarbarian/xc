@@ -23,6 +23,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly, copy) NSString* legacy;    // the -A spelling the parser decides by today
 @property(nonatomic, readonly, copy) NSString* backend;   // platform key: front end target, opt profile (arm64, x86_64, win64, arm9, atarist, wasm32, xt6502)
 @property(nonatomic, readonly, copy) NSString* codegen;   // the code generator, xcc-cg-<codegen>
+// support/<dir>/lib searched before support/generic/lib, in order; empty for
+// 6502, whose layout names its platform.
+@property(nonatomic, readonly, copy) NSArray<NSString*>* supportChain;
 
 // Every row, in the order both compilers list them.
 + (NSArray<XTTarget*>*)rows;

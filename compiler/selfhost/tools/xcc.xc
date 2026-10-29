@@ -4224,6 +4224,7 @@ void linkObjects(DriverOptions* d)
         if (isArm9(d)) d.fe().setNeededLibs(objectNeeds(d.objectInputs()));
         d.fe().setTarget(backendTargetOf(d));
     if (isIos(d)) d.fe().setLibPlatform(d.arch());
+    d.fe().setTargetRow(d.targetRow());
         emitModule(d, mod);
         return;
     }
@@ -4386,6 +4387,7 @@ void main(void)
     }
     d.fe().setTarget(backendTargetOf(d));
     if (isIos(d)) d.fe().setLibPlatform(d.arch());
+    d.fe().setTargetRow(d.targetRow());
 
     // Objects as inputs: the link step. No front end runs — the runtime is
     // the primary input and the objects ride as extras, exactly the shape the

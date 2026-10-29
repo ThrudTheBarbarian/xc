@@ -21,6 +21,7 @@
 #import <Lexer>
 #import <FloatEncoding>
 #import <MacroDef>
+#import <Target>
 #import <Preprocessor>
 #import <Node>
 #import "NodeDefs.xc"
@@ -52,6 +53,7 @@ class FeOptions
     String* _output;
     String* _target;      // arm64 / arm9 / atarist / x86_64 / win64 / xt6502
     String* _libPlatform; // ios / ios-sim: the platform LAYER searched before the arch tree (iOS.md stage 4)
+    TargetRow* _targetRow; // the target-table row the driver chose, or 0 (a standalone front end)
     String* _home;        // -H, or 0 for the search list
     Array* _incs;
     Array* _stdlibs; // the standard library's dirs among _incs (bug 637)
@@ -109,6 +111,7 @@ class FeOptions
         _neededLibs = new Array();
         _target = String.withCString("xt6502");
         _libPlatform = (String*)0;
+        _targetRow = (TargetRow*)0;
         _incs = new Array();
         _stdlibs = new Array();
         _defs = new Array();
@@ -315,6 +318,14 @@ class FeOptions
     void setTarget(String* s)
         {
         _target = s;
+        }
+    TargetRow* targetRow(void)
+        {
+        return _targetRow;
+        }
+    void setTargetRow(TargetRow* r)
+        {
+        _targetRow = r;
         }
     String* libPlatform(void)
         {
@@ -1916,6 +1927,16 @@ void resolveIncludePaths(FeOptions* o)
     if (support == 0)
         return;
     String* plat = platformOf(o);
+    // The target-table row's chain when the driver gave one (6502's is empty:
+    // its layout names the platform); the reference reads the same field.
+    TargetRow* row = o.targetRow();
+    if (row != (TargetRow*)0 && row.supportChain().count() > (u32)0)
+        {
+        for (u32 i = (u32)0; i < row.supportChain().count(); i = i + (u32)1)
+            addLibDir(o, support, (String*)row.supportChain().get(i));
+        }
+    else
+    {
     // iOS: its own layer FIRST (support/ios/lib — the Platform.xc prelude and
     // whatever is iOS-shaped), then the arm64 tree it shares the ISA and
     // runtime with — the same platform-then-arch order win64/x86_64 use.
@@ -1932,6 +1953,7 @@ void resolveIncludePaths(FeOptions* o)
         {
         addLibDir(o, support, plat);
         }
+    }
     addLibDir(o, support, String.withCString("generic"));
     // `#import <kernel32>` and friends. With a mingw sysroot present the
     // reference reads the real import libraries; without one — which is this

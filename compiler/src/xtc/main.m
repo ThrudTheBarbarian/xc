@@ -4749,6 +4749,9 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     } else if (opts.targetName) {
         [feArgs addObjectsFromArray:@[@"-m", opts.targetName]];
     }
+    // The target-table row, so the front end decides by the same row the
+    // driver does (step 2 of the target table).
+    [feArgs addObjectsFromArray:@[@"--target-row", opts.effectiveTarget.name]];
     for (NSString *path in opts.includePaths) {
         [feArgs addObjectsFromArray:@[@"-I", path]];
     }
