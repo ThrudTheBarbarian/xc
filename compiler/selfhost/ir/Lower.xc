@@ -24010,7 +24010,16 @@ class ClassInfo
             msl = String.withCString("");
             }
         else
-            _mWhy = _parMetal ? mslWhy : _parPTX ? ptxWhy : _parSPIRV ? spvWhy : wgslWhy;
+            {
+            // The first form's reason, of those the target has: Vulkan's
+            // before CUDA's, so a Linux build that carries both (2026-10-28)
+            // still says what Vulkan could not do. As the reference.
+            _mWhy = (String*)0;
+            if (_parMetal) _mWhy = mslWhy;
+            if (_mWhy == (String*)0 && _parSPIRV) _mWhy = spvWhy;
+            if (_mWhy == (String*)0 && _parPTX) _mWhy = ptxWhy;
+            if (_mWhy == (String*)0 && _parWGSL) _mWhy = wgslWhy;
+            }
         if (msl == (String*)0 && (_parMetal || _parPTX || _parSPIRV || _parWGSL))
             {
             // On a target with a GPU, say why this block stays on the CPU.

@@ -425,7 +425,16 @@ static BOOL gEmitsWGSL = NO;
         if (all.length)
             kernel = all;
         else
-            why = gEmitsMetal ? mslWhy : gEmitsPTX ? ptxWhy : gEmitsSPIRV ? spvWhy : wgslWhy;
+            {
+            // The first form's reason, of those the target has: Vulkan's before
+            // CUDA's, so a Linux build that carries both (2026-10-28) still says
+            // what Vulkan could not do. As the port.
+            why = nil;
+            if (gEmitsMetal) why = mslWhy;
+            if (!why && gEmitsSPIRV) why = spvWhy;
+            if (!why && gEmitsPTX) why = ptxWhy;
+            if (!why && gEmitsWGSL) why = wgslWhy;
+            }
         // XC_PAR_SPIRV_DUMP=<dir>: every block's SPIR-V module, on any target,
         // as <dir>/<block>.spv (for spirv-val), or <block>.why when it has none.
         const char* dump = getenv("XC_PAR_SPIRV_DUMP");
