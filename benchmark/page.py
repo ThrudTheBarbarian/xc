@@ -431,6 +431,8 @@ PAR_MACHINES = (("mac", "Apple MacBook Pro, %s (12 performance and 4 efficiency 
                           "(2 compute units, 128 shader lanes) through Vulkan", False),
                 # CUDA's default device is the faster card (an RTX 5080 since 2026-10-12), Vulkan's the
                 # first it enumerates (the RTX 3090): the two columns are two cards.
+                ("linuxgpu", "Intel Core i5-14500 (14 cores, 20 threads), Linux, an NVIDIA RTX 5070 through CUDA "
+                             "and Vulkan (from 0.88)", False),
                 ("windows", "AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 through CUDA "
                             "and an RTX 3090 through Vulkan", True),
                 ("browser", "Chrome on the Apple M4 Max: wasm32 (one thread) and WebGPU (from 0.73); "
@@ -790,6 +792,8 @@ def main():
     # the page names that release, not this one (0.87.3: --langs-release 0.87).
     ap.add_argument("--langs-release", default=None,
                     help="the release the other languages were measured for, when not this one")
+    ap.add_argument("--arm64-release", default=None,
+                    help="the release the arm64 xc figures were measured with, when not this one")
     ap.add_argument("--net-release", default=None,
                     help="the release the network page's figures were measured with, when not this one")
     ap.add_argument("--mac", default=None, choices=["m3max"],
@@ -809,6 +813,9 @@ def main():
     tc = toolchain_notes(a.current)
     page = PAGE_TEMPLATE.format(
         release=a.release,
+        arm_note=("; on arm64 they are %s's, which ran as fast as %s when the two were timed side by side "
+                  "(the machine was busy when %s was measured)" % (a.arm64_release, a.release, a.release)
+                  if a.arm64_release else ""),
         mac_long=MACHINES[MAC_TREE][1],
         tc_arm=tc.get("arm64", ""),
         tc_x86=tc.get("x86_64", ""),
@@ -1238,7 +1245,7 @@ twelve percent), the thick line the geometric mean (without `matrix_mul_f32`). R
 
 ## What is being compared, and what is not
 
-**The compiler that ships.** The xc numbers come from the `xcc` in the download.
+**The compiler that ships.** The xc numbers come from the `xcc` in the download{arm_note}.
 
 **The same work in every language.** Every version keeps its data where the xc
 version keeps it (local arrays, not `static` ones, which clang optimises

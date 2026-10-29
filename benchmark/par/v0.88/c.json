@@ -1,0 +1,228 @@
+{
+ "cpu": "AMD Ryzen 9 9955HX 16-Core Processor",
+ "results": {
+  "mandel_deep": {
+   "all": {
+    "clang": {
+     "median_us": 2140124.5,
+     "runs": 14
+    },
+    "gcc": {
+     "median_us": 2049632.5,
+     "runs": 14
+    },
+    "xcc": {
+     "median_us": 354702,
+     "runs": 15
+    }
+   },
+   "checksum": "2738",
+   "one": {
+    "clang": {
+     "median_us": 58452467,
+     "runs": 3
+    },
+    "gcc": {
+     "median_us": 56245351,
+     "runs": 3
+    },
+    "xcc": {
+     "median_us": 8603808,
+     "runs": 3
+    }
+   }
+  },
+  "mandelbrot": {
+   "all": {
+    "clang": {
+     "median_us": 12544,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 12276,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 2913,
+     "runs": 15
+    }
+   },
+   "checksum": "199",
+   "one": {
+    "clang": {
+     "median_us": 334220,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 326567,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 56168,
+     "runs": 15
+    }
+   }
+  },
+  "md5": {
+   "all": {
+    "clang": {
+     "median_us": 15523,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 16047,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 9500,
+     "runs": 15
+    }
+   },
+   "checksum": "2573682417",
+   "one": {
+    "clang": {
+     "median_us": 211935,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 387038,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 228945,
+     "runs": 15
+    }
+   }
+  },
+  "md5_mask": {
+   "all": {
+    "clang": {
+     "median_us": 13122,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 11973,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 9036,
+     "runs": 15
+    }
+   },
+   "checksum": "1683609514",
+   "one": {
+    "clang": {
+     "median_us": 176134,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 277511,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 188784,
+     "runs": 15
+    }
+   }
+  },
+  "nbody": {
+   "all": {
+    "clang": {
+     "median_us": 9776,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 1283,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 603,
+     "runs": 15
+    }
+   },
+   "checksum": "42",
+   "one": {
+    "clang": {
+     "median_us": 96099,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 27284,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 6016,
+     "runs": 15
+    }
+   }
+  },
+  "perlin": {
+   "all": {
+    "clang": {
+     "median_us": 6829,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 4353,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 5843,
+     "runs": 15
+    }
+   },
+   "checksum": "243",
+   "one": {
+    "clang": {
+     "median_us": 74869,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 64429,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 82121,
+     "runs": 15
+    }
+   }
+  },
+  "saxpy": {
+   "all": {
+    "clang": {
+     "median_us": 2294,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 2180,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 2373,
+     "runs": 15
+    }
+   },
+   "checksum": "3011510272",
+   "one": {
+    "clang": {
+     "median_us": 3597,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 3388,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 3451,
+     "runs": 15
+    }
+   }
+  }
+ },
+ "threads": 32,
+ "toolchains": {
+  "clang": "Ubuntu clang version 21.1.8 (6ubuntu1)",
+  "gcc": "gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0",
+  "xcc": "0.88"
+ }
+}
