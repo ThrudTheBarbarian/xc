@@ -299,6 +299,12 @@ same "--arch"               -q --arch x86_64 -o @OUT@ ret.xc
 cover 68000 68030
 same "-A 68000"             -q -A 68000 -o @OUT@.prg ret.xc
 same "-A 68030"             -q -A 68030 -o @OUT@.prg ret.xc
+# Names the port took and the reference refused (target-table step 0), and the
+# last -A winning in both (the reference used to add each -A's flags together).
+same "-A xt6502"            -q -A xt6502 -o @OUT@.xex ret.xc
+same "-A atarist"           -q -A atarist -o @OUT@.prg ret.xc
+same "-A x86_64 -A arm64"   -q -A x86_64 -A arm64 -o @OUT@ ret.xc
+same "-A arm64 -A x86_64"   -q -A arm64 -A x86_64 -o @OUT@ ret.xc
 
 # ── memory layouts ──────────────────────────────────────────────────────
 cover -m --memory-model
@@ -308,6 +314,13 @@ same "--memory-model"       -q --memory-model xt -o @OUT@.xex ret.xc
 same "-m arm64"             -q -m arm64 -o @OUT@ ret.xc
 same "-m x86_64"            -q -m x86_64 -o @OUT@ ret.xc
 same "-m win64"             -q -m win64 -o @OUT@ ret.xc
+# -m naming a platform alone (target-table step 0): atarist is the m68k back
+# end in both, xt6502 and 6502 mean the xt map, and the retired parametric xe
+# layouts are refused by both.
+same "-m atarist"           -q -m atarist -o @OUT@.prg ret.xc
+same "-m xt6502"            -q -m xt6502 -o @OUT@.xex ret.xc
+same "-m 6502"              -q -m 6502 -o @OUT@.xex ret.xc
+same "-m xe:64:15"          -q -m xe:64:15 -o @OUT@.xex ret.xc
 same "-m wasm32"            -q -m wasm32 -o @OUT@ ret.xc
 same "-m atarist -A m68k"   -q -m atarist -A m68k -o @OUT@ ret.xc
 run "$XC" xcout -q -m arm9 -o @OUT@.s ret.xc

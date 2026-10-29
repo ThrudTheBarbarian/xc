@@ -630,8 +630,13 @@ static NSString* sExecutablePath = nil;
                 // libs from support/atarist/, ARCH_m68k predefined.
                 if ([spec isEqualToString:@"atarist"])
                     {
+                    // The platform names its back end too, as in the port: -m
+                    // atarist alone used to reach the 6502 back end.
                     opts.targetName = spec;
                     opts.m68kPlatform = YES;
+                    opts.useM68kBackend = YES;
+                    if (opts.m68kCpu == 0)
+                        opts.m68kCpu = 68000;
                     explicitModel = YES;
                     continue;
                     }
@@ -677,8 +682,19 @@ static NSString* sExecutablePath = nil;
                 // that can't be found is a hard error — no hardcoded fallback.
                 XTMemoryModel* m = [XTCommandLineOptions tryLoadLinkerScript:spec
                                                                      xtcHome:resolvedHome];
+                // -m xt6502 / -m 6502 name the platform, and mean its xt map.
+                if (!m && ([spec isEqualToString:@"xt6502"] || [spec isEqualToString:@"6502"]))
+                    {
+                    m = [XTCommandLineOptions tryLoadLinkerScript:@"xt6502/xt" xtcHome:resolvedHome];
+                    if (m)
+                        spec = @"xt6502/xt";   // what the front end and code generator are handed
+                    }
                 if (!m && [spec hasPrefix:@"xe:"])
-                    m = [XTMemoryModel modelFromSpec:spec];
+                    {
+                    fprintf(stderr, "xcc: error: '-m %s': the parametric Atari xe layouts are retired; "
+                                    "the 6502 target is xt6502 (-m xt)\n", spec.UTF8String);
+                    return nil;
+                    }
                 if (!m)
                     {
                     fprintf(stderr, "xcc: error: no layout file for -m '%s' "
@@ -728,6 +744,20 @@ static NSString* sExecutablePath = nil;
             if (i + 1 < argc)
                 {
                 NSString* a = [NSString stringWithUTF8String:argv[++i]];
+                // The last -A wins, as in the port: each one starts from no
+                // target (an earlier -A's flags would otherwise accumulate and
+                // the back-end priority order would pick between them). A -m
+                // layout name in targetName is kept.
+                opts.useArm64Backend = NO;
+                opts.useArm9Backend = NO;
+                opts.useX86_64Backend = NO;
+                opts.useWin64Backend = NO;
+                opts.useWasm32Backend = NO;
+                opts.useM68kBackend = NO;
+                opts.androidTarget = NO;
+                opts.applePlatform = nil;
+                if ([@[ @"arm9", @"x86_64", @"win64", @"wasm32", @"android" ] containsObject:opts.targetName ?: @""])
+                    opts.targetName = nil;
                 if ([a isEqualToString:@"arm64"])
                     {
                     opts.useArm64Backend = YES;
@@ -764,11 +794,11 @@ static NSString* sExecutablePath = nil;
                     opts.useWasm32Backend = YES;
                     opts.targetName = @"wasm32";
                     }
-                else if ([a isEqualToString:@"6502"])
+                else if ([a isEqualToString:@"6502"] || [a isEqualToString:@"xt6502"] || [a isEqualToString:@"xt"])
                     {
                     opts.useArm64Backend = NO;
                     }
-                else if ([a isEqualToString:@"m68k"] || [a isEqualToString:@"68000"])
+                else if ([a isEqualToString:@"m68k"] || [a isEqualToString:@"68000"] || [a isEqualToString:@"atarist"])
                     {
                     opts.useM68kBackend = YES;
                     opts.m68kCpu = 68000;
@@ -789,7 +819,7 @@ static NSString* sExecutablePath = nil;
                 else
                     {
                     fprintf(stderr, "xcc: error: unknown -A architecture '%s' "
-                                    "(supported: arm64, ios, ios-sim, arm9, 6502, m68k, 68000, 68030, x86_64, win64, wasm32)\n",
+                                    "(supported: arm64, ios, ios-sim, android, arm9, 6502, xt6502, m68k, 68000, 68030, atarist, x86_64, win64, wasm32)\n",
                             a.UTF8String);
                     return nil;
                     }
