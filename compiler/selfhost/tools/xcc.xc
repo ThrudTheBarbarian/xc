@@ -52,6 +52,7 @@
 #import <RsaKeygen>
 #import <Layout>
 #import <LayoutMap>     // -dl: a layout drawn as a memory map
+#import <Target>        // the target table: -A names a row
 #import <Xt6502>
 #import <Xta>
 #import "XtaDefs.xc"
@@ -223,6 +224,8 @@ class DriverOptions
     i32        _unroll;      // -Flu <n>, or -1 for the target's own cap
     String*    _signKey;     // --sign-key: the raw debug key both drivers share
     bool       _sawArch;        // -A / --arch was given
+    TargetRow* _targetRow;      // the row -A named (or the host's), private:docs/Design/targets.md
+    bool       _printTarget;    // --print-target: print the row and stop
     String*    _layoutSpec;     // -m <layout>: as typed, resolved after the parse
     String*    _layoutPath;     // …the .lnk it resolved to
     String*    _layoutName;     // …and the model's name (the file's stem)
@@ -288,6 +291,8 @@ class DriverOptions
         _unroll = (i32)-1;
         _signKey = String.withCString("");
         _sawArch = false;
+        _targetRow = (TargetRow*)0;
+        _printTarget = false;
         _layoutSpec = (String*)0;
         _layoutPath = (String*)0;
         _layoutName = (String*)0;
@@ -342,6 +347,10 @@ class DriverOptions
     void setSignKey(String* p) { _signKey = p; }
 
     bool sawArch(void)              { return _sawArch; }
+    TargetRow* targetRow(void)      { return _targetRow != (TargetRow*)0 ? _targetRow : Targets.find(_arch); }
+    void setTargetRow(TargetRow* r) { _targetRow = r; }
+    bool printTarget(void)          { return _printTarget; }
+    void setPrintTarget(bool b)     { _printTarget = b; }
     void setSawArch(bool b)         { _sawArch = b; }
     String* layoutSpec(void)        { return _layoutSpec; }
     void setLayoutSpec(String* s)   { _layoutSpec = s; }
@@ -4258,6 +4267,16 @@ void main(void)
 {
     raiseStackLimit();
     DriverOptions* d = parseDriverArgs();
+    // --print-target: the row the command line names, and nothing else.
+    if (d != 0 && d.printTarget()) {
+        TargetRow* r = d.targetRow();
+        if (r == (TargetRow*)0) {
+            Stdio.printf("xcc: error: --print-target: '%s' is not a target\n", d.arch().cString());
+            Process.exit((i32)1); return;
+        }
+        Stdio.printf("%s", r.describe().cString());
+        Process.exit((i32)0); return;
+    }
     // --sign-bundle <dir>: sign, and compile nothing.
     if (d != 0 && d._signBundle != (String*)0) {
         signBundle(d);
@@ -5687,22 +5706,6 @@ bool isWarningCategory(String* c)
     return false;
 }
 
-// The other spellings `-A` takes for a target, folded to the one name the rest
-// of the driver tests for.
-String* canonicalArch(String* a)
-{
-    if (a.equals(String.withCString("x86-64")) || a.equals(String.withCString("amd64")))
-        return String.withCString("x86_64");
-    if (a.equals(String.withCString("windows")) || a.equals(String.withCString("x86_64-windows")))
-        return String.withCString("win64");
-    if (a.equals(String.withCString("wasm")))
-        return String.withCString("wasm32");
-    if (a.equals(String.withCString("armv7")) || a.equals(String.withCString("armv7-a"))
-        || a.equals(String.withCString("cortex-a9")))
-        return String.withCString("arm9");
-    return a;
-}
-
 // The `-m` names that are a PLATFORM rather than a layout, and the target each
 // selects. 0 for a layout name.
 String* platformLayoutArch(String* m)
@@ -6059,20 +6062,6 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
     // -A m68k / 68000 / 68030: the m68k back end, and WHICH 68k. The CPU is a
     // code-generation choice (32-bit PC-relative addressing on the 030, so no
     // 32 KB branch limit) and an assembler one, so it rides with the target.
-    if (a.equals(String.withCString("-A")) && hasVal) {
-        String* v = Process.argument(i + (u32)1);
-        if (v.equals(String.withCString("m68k")) || v.equals(String.withCString("68000"))) {
-            d.setArch(String.withCString("m68k"));
-            c.setM68kCpu((u32)68000);
-            *ip = i + (u32)2; return true;
-        }
-        if (v.equals(String.withCString("68030"))) {
-            d.setArch(String.withCString("m68k"));
-            c.setM68kCpu((u32)68030);
-            *ip = i + (u32)2; return true;
-        }
-        return false;
-    }
     if (a.hasPrefix(String.withCString("-falloc="))) {
         String* v = a.substringFromByte((u32)8).lowercased();
         if (!v.equals(String.withCString("bump")) && !v.equals(String.withCString("heap"))) {
@@ -6350,7 +6339,15 @@ DriverOptions* parseDriverArgs(void)
         }
         if ((a.equals(String.withCString("-A")) || a.equals(String.withCString("--arch")))
             && i + (u32)1 < argc) {
-            d.setArch(canonicalArch(Process.argument(i + (u32)1)));
+            // -A names a row of the target table; the driver still tests the
+            // row's legacy arch string. A token no row has is kept as typed
+            // and refused later, with the list of targets.
+            String* tok = Process.argument(i + (u32)1);
+            TargetRow* row = Targets.find(tok);
+            d.setTargetRow(row);
+            d.setArch(row != (TargetRow*)0 ? row.legacy() : tok);
+            if (row != (TargetRow*)0 && row.cpuVariant() != (u32)0)
+                d.caps().setM68kCpu(row.cpuVariant());
             d.setSawArch(true);
             i = i + (u32)2; continue;
         }
@@ -6486,6 +6483,10 @@ DriverOptions* parseDriverArgs(void)
             usage();
             Process.exit((i32)0);
             return (DriverOptions*)0;
+        }
+        if (a.equals(String.withCString("--print-target"))) {
+            d.setPrintTarget(true);
+            i = i + (u32)1; continue;
         }
         if (a.equals(String.withCString("-v")) || a.equals(String.withCString("--version"))) {
             // XCC_VERSION comes from the Makefile, which reads the VERSION

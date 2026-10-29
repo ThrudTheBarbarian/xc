@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#import "XTTarget.h"
 #import "XTMemoryModel.h"
 
 NS_ASSUME_NONNULL_BEGIN
@@ -303,6 +304,10 @@ NS_ASSUME_NONNULL_BEGIN
 |* bionic, producing a runnable ELF PIE for the emulator/device.
 \****************************************************************************/
 @property(nonatomic, readwrite) BOOL androidTarget;
+// The target-table row -A named (private:docs/Design/targets.md), or nil when
+// no -A was given; --print-target prints it.
+@property(nonatomic, readonly, nullable) XTTarget* targetRow;
+@property(nonatomic, readonly) BOOL printTarget;
 
 /****************************************************************************\
 |* Developer code signing (docs/mobile/signing.md). When signIdentityPath is

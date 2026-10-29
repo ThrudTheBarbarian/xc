@@ -119,6 +119,7 @@ GRP_CG_M68K    = $(patsubst %.m,%.o,$(shell find src/xtc/codegen/m68k   -name '*
 GRP_CG_X8664   = $(patsubst %.m,%.o,$(shell find src/xtc/codegen/x86_64 -name '*.m'))
 GRP_CG_WASM32  = $(patsubst %.m,%.o,$(shell find src/xtc/codegen/wasm32 -name '*.m'))
 GRP_DRV_CORE   = src/xtc/driver/XTCommandLineOptions.o \
+                 src/xtc/driver/XTTarget.o \
                  src/xtc/driver/XTMemoryModel.o \
                  src/xtc/driver/XTLinkerScriptParser.o \
                  src/xtc/driver/XTBankDescriptor.o \
@@ -146,6 +147,7 @@ XTA_MODEL_OBJS = src/xtc/driver/XTLinkerScriptParser.o \
                  src/xtc/driver/XTBankDescriptor.o \
                  src/xtc/driver/XTCloakedRegion.o \
                  src/xtc/driver/XTCommandLineOptions.o \
+                 src/xtc/driver/XTTarget.o \
                  src/xtc/diagnostics/XTDiagnosticEngine.o \
                  src/xtc/lexer/XTSourceLocation.o
 

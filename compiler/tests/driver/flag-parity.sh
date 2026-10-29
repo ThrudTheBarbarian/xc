@@ -299,6 +299,31 @@ same "--arch"               -q --arch x86_64 -o @OUT@ ret.xc
 cover 68000 68030
 same "-A 68000"             -q -A 68000 -o @OUT@.prg ret.xc
 same "-A 68030"             -q -A 68030 -o @OUT@.prg ret.xc
+# The target table (private design targets.md): every row's name and alias
+# prints the same row in both drivers, and building with a canonical name or a
+# gcc/clang triple writes what the short name writes.
+cover --print-target
+for t in arm64-macos arm64 aarch64-apple-darwin arm64-apple-macos arm64-apple-darwin \
+         arm64-ios ios arm64-apple-ios arm64-ios-sim ios-sim arm64-apple-ios-simulator \
+         arm64-android android aarch64-linux-android \
+         x86_64-linux x86_64 x86-64 amd64 x86_64-linux-gnu x86_64-pc-linux-gnu \
+         x86_64-windows win64 windows x86_64-w64-mingw32 x86_64-w64-windows-gnu x86_64-pc-windows-gnu \
+         armv7-xtos arm9 armv7 armv7-a cortex-a9 wasm32-web wasm32 wasm wasm32-unknown-unknown \
+         m68k-tos m68k 68000 atarist m68k-atari-tos m68030-tos 68030 6502-xt 6502 xt6502 xt; do
+    "$REF" --print-target -A $t ret.xc > rt.txt 2>&1; "$XC" --print-target -A $t ret.xc > xt.txt 2>&1
+    if cmp -s rt.txt xt.txt && grep -q '^target ' xt.txt; then ok "--print-target -A $t"
+    else bad "--print-target -A $t: the drivers' rows differ: $(head -c 120 xt.txt)"; fi
+done
+"$REF" --print-target ret.xc > rt.txt 2>&1; "$XC" --print-target ret.xc > xt.txt 2>&1
+cmp -s rt.txt xt.txt && ok "--print-target (host)" || bad "--print-target: the host rows differ"
+for pair in arm64-macos:arm64 aarch64-linux-android:android x86_64-linux-gnu:x86_64 \
+            x86_64-w64-mingw32:win64 armv7-xtos:arm9 wasm32-web:wasm32 m68k-tos:m68k 6502-xt:6502; do
+    al=${pair%%:*}; ca=${pair##*:}
+    run "$XC" xcout -q -A $ca -o @OUT@.s ret.xc; cp xcout.s canon.s 2>/dev/null
+    run "$XC" xcout -q -A $al -o @OUT@.s ret.xc
+    if [ $RC = 0 ] && cmp -s canon.s xcout.s; then ok "-A $al is -A $ca"
+    else bad "-A $al: status $RC, or not what -A $ca writes"; fi
+done
 # Names the port took and the reference refused (target-table step 0), and the
 # last -A winning in both (the reference used to add each -A's flags together).
 same "-A xt6502"            -q -A xt6502 -o @OUT@.xex ret.xc

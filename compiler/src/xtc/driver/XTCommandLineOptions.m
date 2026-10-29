@@ -35,6 +35,8 @@
 @property(nonatomic, readwrite, copy, nullable) NSString* withDex;
 @property(nonatomic, readwrite) BOOL selfHost;
 @property(nonatomic, readwrite) BOOL noSelfHost;
+@property(nonatomic, readwrite, nullable) XTTarget* targetRow;
+@property(nonatomic, readwrite) BOOL printTarget;
 @property(nonatomic, readwrite) BOOL verbose;
 @property(nonatomic, readwrite, nullable) NSString* xtcHome;
 @property(nonatomic, readwrite) NSUInteger maxLeafInlineSize;
@@ -758,6 +760,13 @@ static NSString* sExecutablePath = nil;
                 opts.applePlatform = nil;
                 if ([@[ @"arm9", @"x86_64", @"win64", @"wasm32", @"android" ] containsObject:opts.targetName ?: @""])
                     opts.targetName = nil;
+                // -A names a row of the target table; the branches below still
+                // decide by the row's legacy spelling. A token no row has is
+                // refused below, with the list of targets.
+                XTTarget* row = [XTTarget rowForToken:a];
+                opts.targetRow = row;
+                if (row)
+                    a = row.legacy;
                 if ([a isEqualToString:@"arm64"])
                     {
                     opts.useArm64Backend = YES;
@@ -823,6 +832,9 @@ static NSString* sExecutablePath = nil;
                             a.UTF8String);
                     return nil;
                     }
+                // m68k-tos and m68030-tos share the m68k branch: the row says which 68k.
+                if (row.cpuVariant)
+                    opts.m68kCpu = row.cpuVariant;
                 }
             else
                 {
@@ -1029,6 +1041,10 @@ static NSString* sExecutablePath = nil;
         else if ([arg isEqualToString:@"--xtc-stack"])
             {
             opts.useXtcStack = YES;
+            }
+        else if ([arg isEqualToString:@"--print-target"])
+            {
+            opts.printTarget = YES;
             }
         else if ([arg isEqualToString:@"-S"])
             {

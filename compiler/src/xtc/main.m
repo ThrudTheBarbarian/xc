@@ -5171,6 +5171,22 @@ int main(int argc, const char *argv[]) {
         XTCommandLineOptions *opts = [XTCommandLineOptions parseArgc:argc argv:argv];
         if (!opts) return 1;
 
+        // --print-target: the row the command line names, and nothing else.
+        // Without -A it is the host's default target, as the port reports it.
+        if (opts.printTarget) {
+            NSString *host = opts.useWin64Backend ? @"win64" : opts.useX86_64Backend ? @"x86_64"
+                           : opts.useWasm32Backend ? @"wasm32" : opts.useArm9Backend ? @"arm9"
+                           : opts.useM68kBackend ? @"m68k" : opts.androidTarget ? @"android"
+                           : opts.applePlatform ?: (opts.useArm64Backend ? @"arm64" : @"xt6502");
+            XTTarget *row = opts.targetRow ?: [XTTarget rowForToken:host];
+            if (!row) {
+                fprintf(stderr, "xcc: error: --print-target: '%s' is not a target\n", host.UTF8String);
+                return 1;
+            }
+            fputs(row.describe.UTF8String, stdout);
+            return 0;
+        }
+
         // arm9 links against a device sysroot that lives in ANOTHER repo, so it
         // is vendored into the install (lib/xc/arm9-sysroot) and added here as
         // a default -L. Without it arm9 would be the one target that needs an
