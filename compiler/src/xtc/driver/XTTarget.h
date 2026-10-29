@@ -21,6 +21,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly, copy, nullable) NSString* env;  // simulator, or nil
 @property(nonatomic, readonly, copy) NSString* libc;      // darwin, bionic, glibc, musl, msvcrt, xtos, none
 @property(nonatomic, readonly, copy) NSString* legacy;    // the -A spelling the parser decides by today
+@property(nonatomic, readonly, copy) NSString* backend;   // platform key: front end target, opt profile (arm64, x86_64, win64, arm9, atarist, wasm32, xt6502)
+@property(nonatomic, readonly, copy) NSString* codegen;   // the code generator, xcc-cg-<codegen>
 
 // Every row, in the order both compilers list them.
 + (NSArray<XTTarget*>*)rows;

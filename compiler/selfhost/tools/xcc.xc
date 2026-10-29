@@ -347,7 +347,15 @@ class DriverOptions
     void setSignKey(String* p) { _signKey = p; }
 
     bool sawArch(void)              { return _sawArch; }
-    TargetRow* targetRow(void)      { return _targetRow != (TargetRow*)0 ? _targetRow : Targets.find(_arch); }
+    // The row the options select, -A or not: found from the arch string while
+    // it still decides, so the two can never disagree; the -A row is kept when
+    // it is that row (68030).
+    TargetRow* targetRow(void)
+        {
+        if (_targetRow != (TargetRow*)0 && _targetRow.legacy().equals(_arch))
+            return _targetRow;
+        return Targets.find(_arch);
+        }
     void setTargetRow(TargetRow* r) { _targetRow = r; }
     bool printTarget(void)          { return _printTarget; }
     void setPrintTarget(bool b)     { _printTarget = b; }
@@ -472,6 +480,10 @@ bool isXt6502(DriverOptions* d)
 String* backendTargetOf(DriverOptions* d)
 {
     // Android IS the arm64 back end under different options; xt6502 is its own.
+    // The target table's platform key for the row (step 2); an arch no row has
+    // keeps the arm64 fallback it always had.
+    TargetRow* row = d.targetRow();
+    if (row != (TargetRow*)0) return row.backend();
     if (isXt6502(d)) return String.withCString("xt6502");
     if (isX86_64(d)) return String.withCString("x86_64");
     if (isArm9(d))   return String.withCString("arm9");

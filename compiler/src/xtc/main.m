@@ -4708,13 +4708,8 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     NSString *input = opts.inputFiles.firstObject;
 
     NSString *feTool = resolveSiblingTool(argv0, @"xcc-fe");
-    NSString *cgName = opts.useM68kBackend ? @"xcc-cg-68k"
-                     : opts.useWin64Backend ? @"xcc-cg-win64"
-                     : opts.useX86_64Backend ? @"xcc-cg-x86_64"
-                     : opts.useWasm32Backend ? @"xcc-cg-wasm32"
-                     : opts.useArm9Backend ? @"xcc-cg-arm9"
-                     : opts.useArm64Backend ? @"xcc-cg-arm64"
-                     : @"xcc-cg-6502";
+    // The target table's code generator for the row (step 2).
+    NSString *cgName = [@"xcc-cg-" stringByAppendingString:opts.effectiveTarget.codegen];
     NSString *cgTool = resolveSiblingTool(argv0, cgName);
     if (!feTool || !cgTool) {
         fprintf(stderr, "xcc: error: helper binaries not found "
@@ -5174,15 +5169,7 @@ int main(int argc, const char *argv[]) {
         // --print-target: the row the command line names, and nothing else.
         // Without -A it is the host's default target, as the port reports it.
         if (opts.printTarget) {
-            NSString *host = opts.useWin64Backend ? @"win64" : opts.useX86_64Backend ? @"x86_64"
-                           : opts.useWasm32Backend ? @"wasm32" : opts.useArm9Backend ? @"arm9"
-                           : opts.useM68kBackend ? @"m68k" : opts.androidTarget ? @"android"
-                           : opts.applePlatform ?: (opts.useArm64Backend ? @"arm64" : @"xt6502");
-            XTTarget *row = opts.targetRow ?: [XTTarget rowForToken:host];
-            if (!row) {
-                fprintf(stderr, "xcc: error: --print-target: '%s' is not a target\n", host.UTF8String);
-                return 1;
-            }
+            XTTarget *row = opts.effectiveTarget;
             fputs(row.describe.UTF8String, stdout);
             return 0;
         }

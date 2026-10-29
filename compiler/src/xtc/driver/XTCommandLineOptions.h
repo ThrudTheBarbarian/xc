@@ -308,6 +308,10 @@ NS_ASSUME_NONNULL_BEGIN
 // no -A was given; --print-target prints it.
 @property(nonatomic, readonly, nullable) XTTarget* targetRow;
 @property(nonatomic, readonly) BOOL printTarget;
+// The row the options select, -A or not (the host default, -m arm64 ...):
+// derived from the per-target flags while they still decide, so it can never
+// disagree with them; the -A row is kept when it is that row (68030).
+- (XTTarget*)effectiveTarget;
 
 /****************************************************************************\
 |* Developer code signing (docs/mobile/signing.md). When signIdentityPath is

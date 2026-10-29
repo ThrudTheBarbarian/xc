@@ -1927,4 +1927,15 @@ static NSString* sExecutablePath = nil;
             "                             didn't auto-cloak under -fauto-cloak.\n");
     }
 
+- (XTTarget*)effectiveTarget
+    {
+    NSString* key = self.useWin64Backend ? @"win64" : self.useX86_64Backend ? @"x86_64"
+                  : self.useWasm32Backend ? @"wasm32" : self.useArm9Backend ? @"arm9"
+                  : self.useM68kBackend ? @"m68k" : self.androidTarget ? @"android"
+                  : self.applePlatform ?: (self.useArm64Backend ? @"arm64" : @"xt6502");
+    if (self.targetRow && [self.targetRow.legacy isEqualToString:key])
+        return self.targetRow;
+    return [XTTarget rowForToken:key];
+    }
+
 @end
