@@ -1369,7 +1369,10 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                         : _options.useArm64Backend  ? @"arm64"
                         : _options.m68kPlatform     ? @"atarist"
                                                     : (_options.memoryModel.platform ?: nil);
-    pp.targetPlatformName = _options.androidTarget ? @"android"
+    // The front end runs as its own process, handed -m arm64 -DPLATFORM_android
+    // for android, so the define says it too (as the par kernels below read it,
+    // and as the port's setPlatformDir does).
+    pp.targetPlatformName = (_options.androidTarget || _options.defines[@"PLATFORM_android"] != nil) ? @"android"
                             : ([_options.applePlatform isEqualToString:@"ios"] ||
                                [_options.applePlatform isEqualToString:@"ios-sim"]) ? _options.applePlatform
                                                                                     : nil;
