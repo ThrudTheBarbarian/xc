@@ -3,6 +3,49 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.88 — CUDA on Linux, and stack instances by value
+
+Everything since 0.87.3.
+
+### New
+
+- **`par` reaches an NVIDIA card on Linux through CUDA**, as on Windows. A
+  dynamically linked program (the default on Linux) loads the driver's
+  `libcuda.so.1`, so the driver is all it needs; `auto` measures CUDA and
+  Vulkan where both work, `XC_PAR_GPU=cuda|vulkan` picks one, and
+  `Par.ranOn` names `cuda:…`. On an RTX 5070, CUDA ran the GPU benchmarks 1.5
+  to 4 times faster than Vulkan on the same card. A static (musl) program has
+  no GPU, as before.
+- **A stack instance returns and copies by value.** `V make() { V v; …;
+  return v; }` returns the instance's bytes, as a struct does (it used to
+  return the address of an instance in a frame already gone), and `V b = a`
+  and `b = a` copy the bytes, through a virtual call too. A method that
+  returns `self` still returns the reference.
+
+### Faster
+
+- **x86-64 fuses multiply-adds in `:goal(speed)` code**, `par` blocks and C
+  built with `-ffp-contract=fast`, wherever the CPU has FMA (the AVX2 and
+  AVX-512 code): C perlin noise on one Zen 5 thread runs in 73 ms, from 84.
+  Plain code still never fuses on x86-64, so its answer does not depend on the
+  CPU.
+- **Vectorised loops fuse multiply-adds as scalar code does** (`fmla` on
+  arm64, `vfmadd` in x86-64 speed code), so a loop gives the same answer
+  whether or not it was vectorised.
+- **Large arrays start on a cache line**: heap arrays of 1 KB or more, global
+  arrays of 256 bytes or more, and large local arrays on x86-64. A vector loop
+  over them no longer splits its loads across two lines, which made the same
+  binary's `array_sum` run in 213 or 380 ms from one run to the next.
+- Exact float strength reductions: `x / 256.0` is a multiply, and on x86-64
+  `x * 2` is `x + x`, both bit-identical to the original.
+- **`-fbounds-check=light` puts the checks in loops inline** at `-O2` and
+  above: `array_map` ran 1.67 times faster checked, for checked binaries
+  about 40% larger. `-fbounds-check` keeps them calls.
+
+### Fixed
+
+- Calling a function that returned a stack instance read a dead frame (above).
+
 ## Version 0.87.3 — steadier x86 float code, and which device ran a block
 
 Everything since 0.87.2, from the main line.
