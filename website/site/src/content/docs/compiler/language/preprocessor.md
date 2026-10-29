@@ -61,14 +61,17 @@ directory hides the real one.
    arm9; `.dll`, then the `.dll.a` and `.a` import libraries, for win64; `.wasm`
    for wasm32. Then the name exactly as written (`libfoo.a`), then
    `Name.xtc.iface`.
-2. **The third-party tree**: `$XCC_3P` if it is set, then the `3p` directory
-   beside the compiler's own (`/opt/xcc/3p` for an install in
-   `/opt/xcc/<version>`). A library there lives at
-   `3p/<vendor>/<target>/lib<Name>.<ext>`; `<Name>` looks in the vendor
-   directory of the same name, and `<vendor/Name>` names the vendor explicitly.
-   When one is found, the vendor's `3p/<vendor>/xc` directory of xc sources is
-   added to the **end** of the search path, so its helper files can be
-   imported but never hide the standard library's.
+2. **The third-party tree**, in this order: `$XCC_3P` if it is set; the
+   install's own `3p` (`/mnt/compilers/xcc/3p` for an install in
+   `/mnt/compilers/xcc`); the `3p` beside the install (`/opt/xcc/3p` for one in
+   `/opt/xcc/<version>`, so an upgrade keeps the libraries); then the system's
+   standard place, `/opt/xcc/3p` (on Windows `%ProgramFiles%\xcc\3p`). A
+   library there lives at `3p/<vendor>/<target>/lib<Name>.<ext>`. `<Name>`
+   looks under every vendor, and is an error naming them when more than one
+   ships it; `<vendor/Name>` names the vendor explicitly. When one is found,
+   the vendor's `3p/<vendor>/xc` directory of xc sources is added to the
+   **end** of the search path, so its helper files can be imported but never
+   hide the standard library's.
 3. **A system framework**, on macOS and iOS only, for a name with
    no `.` or `/`: `CoreFoundation.framework` in the SDK when one is installed, else in
    `/System/Library/Frameworks`. `#import <CoreFoundation>` is then the same

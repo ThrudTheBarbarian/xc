@@ -2384,23 +2384,49 @@ Preprocessor* buildPP(FeOptions* o)
     if (tgt.equals(String.withCString("arm64")) || tgt.equals(String.withCString("ios"))
         || tgt.equals(String.withCString("ios-sim")))
         pp.enableAppleFrameworks(appleSdkFor(o));
-    // Third-party libraries: $XCC_3P first, then the SIBLING of the compiler
-    // home, /opt/xcc/<version> -> /opt/xcc/3p, so an upgrade keeps them.
-    // An install's support root is <home>/lib/xc, an in-tree one <home>/support.
+    // Third-party libraries, in order (the reference's resolveThirdPartyRoots
+    // says why): $XCC_3P; the install's own <home>/3p; its sibling
+    // <home>/../3p (/opt/xcc/<version> -> /opt/xcc/3p, so an upgrade keeps
+    // them); then the OS's standard place, /opt/xcc/3p (Windows:
+    // %ProgramFiles%\xcc\3p). Each root once. An install's support root is
+    // <home>/lib/xc, an in-tree one <home>/support.
+    Array* roots = new Array();
     String* env3p = sanitiseEnvPath(Platform.env(String.withCString("XCC_3P")));
     if (env3p != 0 && Files.exists(env3p))
-        pp.addThirdPartyRoot(env3p);
+        roots.add((Object*)env3p);
     String* sup = supportRoot(o);
     if (sup != 0)
         {
         String* home = sup.hasSuffix(String.withCString("/lib/xc")) ? dirOf(dirOf(sup)) : dirOf(sup);
-        String* up = home == 0 ? (String*)0 : dirOf(home);
-        if (up != 0)
+        if (home != 0)
             {
-            String* sib = up.appendingPathComponent(String.withCString("3p"));
-            if (Files.exists(sib) && (env3p == 0 || !sib.equals(env3p)))
-                pp.addThirdPartyRoot(sib);
+            roots.add((Object*)home.appendingPathComponent(String.withCString("3p")));
+            String* up = dirOf(home);
+            if (up != 0)
+                roots.add((Object*)up.appendingPathComponent(String.withCString("3p")));
             }
+        }
+#if ARCH_win64
+    String* pf = sanitiseEnvPath(Platform.env(String.withCString("ProgramFiles")));
+    if (pf != 0)
+        roots.add((Object*)pf.appendingPathComponent(String.withCString("xcc")).appendingPathComponent(String.withCString("3p")));
+#else
+    roots.add((Object*)String.withCString("/opt/xcc/3p"));
+#endif
+    Array* seen = new Array();
+    for (u32 r = (u32)0; r < roots.count(); r = r + (u32)1)
+        {
+        String* p = (String*)roots.get(r);
+        if (!Files.exists(p))
+            continue;
+        bool dup = false;
+        for (u32 k = (u32)0; k < seen.count(); k = k + (u32)1)
+            if (((String*)seen.get(k)).equals(p))
+                dup = true;
+        if (dup)
+            continue;
+        seen.add((Object*)p);
+        pp.addThirdPartyRoot(p);
         }
     // The target's implicit platform header, when it has one. win64's declares
     // the Win32 entry points a program reaches the native API through; a target

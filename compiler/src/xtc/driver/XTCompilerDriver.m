@@ -451,11 +451,14 @@ static NSString* cLibraryNameFromPath(NSString* path)
     return NO;
     }
 
-// The third-party library roots. XCC_3P (tests, unusual layouts) first, then
-// the sibling of the compiler home: /opt/xcc/<version> -> /opt/xcc/3p. The
-// sibling placement is the point — make install's prune walks only lib/xc,
-// and an upgrade replaces only the versioned root, so 3p content survives
-// both with no exemption logic anywhere.
+// The third-party library roots, in order: XCC_3P (tests, unusual layouts);
+// the install's own <home>/3p (an install at /mnt/compilers/xcc has
+// /mnt/compilers/xcc/3p); its sibling <home>/../3p (/opt/xcc/<version> ->
+// /opt/xcc/3p: make install's prune walks only lib/xc and an upgrade replaces
+// only the versioned root, so 3p content survives both); then the OS's
+// standard place, /opt/xcc/3p (Windows: %ProgramFiles%\xcc\3p). Owner
+// 2026-10-29: both the standard place and the compiler's own relative path.
+// Each root once; the port's resolve is the same.
 - (NSArray<NSString*>*)resolveThirdPartyRoots
     {
     NSMutableArray<NSString*>* roots = [NSMutableArray array];
@@ -478,11 +481,21 @@ static NSString* cLibraryNameFromPath(NSString* path)
         NSString* home = [support hasSuffix:@"/lib/xc"]
                              ? [[support stringByDeletingLastPathComponent] stringByDeletingLastPathComponent]
                              : [support stringByDeletingLastPathComponent];
-        NSString* sib = [[home stringByAppendingPathComponent:@"../3p"]
-            stringByStandardizingPath];
-        if ([fm fileExistsAtPath:sib isDirectory:&isDir] && isDir && ![roots containsObject:sib])
-            [roots addObject:sib];
+        for (NSString* rel in @[ @"3p", @"../3p" ])
+            {
+            NSString* p = [[home stringByAppendingPathComponent:rel] stringByStandardizingPath];
+            if ([fm fileExistsAtPath:p isDirectory:&isDir] && isDir && ![roots containsObject:p])
+                [roots addObject:p];
+            }
         }
+#if defined(_WIN32)
+    const char* pf = getenv("ProgramFiles");
+    NSString* standard = pf && *pf ? [[@(pf) stringByAppendingPathComponent:@"xcc"] stringByAppendingPathComponent:@"3p"] : nil;
+#else
+    NSString* standard = @"/opt/xcc/3p";
+#endif
+    if (standard && [fm fileExistsAtPath:standard isDirectory:&isDir] && isDir && ![roots containsObject:standard])
+        [roots addObject:standard];
     return roots;
     }
 
