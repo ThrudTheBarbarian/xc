@@ -172,7 +172,7 @@ class _HttpSocket
         _HttpTimeVal tv;
         tv.sec = (i64)_HTTP_TIMEOUT_SECONDS;
         tv.usec = (i64)0;
-#if ARCH_x86_64 || OS_android
+#if ARCH_x86_64 || OS_linux || OS_android
         setsockopt((i32)_fd, (i32)1, (i32)20, (u8*)&tv, (u32)16);    // SO_RCVTIMEO
         setsockopt((i32)_fd, (i32)1, (i32)21, (u8*)&tv, (u32)16);    // SO_SNDTIMEO
 #else
@@ -211,7 +211,7 @@ class _HttpSocket
             if (put <= (i32)0)
                 return false;
             done = done + (u32)put;
-#elif ARCH_x86_64 || OS_android
+#elif ARCH_x86_64 || OS_linux || OS_android
             i64 put = send((i32)_fd, p + done, (u64)(n - done), (i32)0x4000);   // MSG_NOSIGNAL
             if (put <= (i64)0)
                 return false;

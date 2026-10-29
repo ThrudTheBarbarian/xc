@@ -37,7 +37,7 @@
 #import "Array.xc"
 #import "Data.xc"
 
-#if ARCH_arm64 && !OS_android
+#if OS_darwin
 
 #import <CoreFoundation>
 

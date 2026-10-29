@@ -358,7 +358,7 @@ class ParTiles
             }
         if (vid.byteLength() > (u32)0)
             _workers.add((Object*)vk);
-#elif ARCH_x86_64 || (ARCH_arm64 && OS_android)
+#elif ARCH_x86_64 || OS_linux || OS_android
         ParVulkanWorker* vk = new ParVulkanWorker();
         if (vk.identity().byteLength() > (u32)0)
             _workers.add((Object*)vk);
@@ -407,11 +407,11 @@ class ParTiles
             else if (name.equals(String.withCString("cuda")))
                 ParCuda.addWorkers(_workers);
 #endif
-#if ARCH_arm64 && !OS_ios && !OS_android
+#if OS_macos
             else if (name.equals(String.withCString("metal")))
                 _workers.add((Object*)new ParMetalWorker());
 #endif
-#if ARCH_x86_64 || OS_windows || (ARCH_arm64 && OS_android)
+#if ARCH_x86_64 || OS_linux || OS_android
             else if (name.equals(String.withCString("vulkan")))
                 _workers.add((Object*)new ParVulkanWorker());
 #endif

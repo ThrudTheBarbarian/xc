@@ -104,9 +104,9 @@ i32 _xt_thread_cpu_count(void);
 #if OS_windows
 pointer GetCurrentThread(void);
 i32 SetThreadPriority(pointer thread, i32 priority);
-#elif ARCH_arm64 && !OS_android
+#elif OS_darwin
 i32 pthread_set_qos_class_self_np(u32 qos, i32 relative);
-#elif ARCH_x86_64 || OS_android
+#elif ARCH_x86_64 || OS_linux || OS_android
 i64 syscall(i64 number);
 i32 setpriority(i32 which, u32 who, i32 prio);
 #endif
@@ -219,11 +219,11 @@ class Thread
             return false;
 #if OS_windows
         return SetThreadPriority(GetCurrentThread(), level) != (i32)0;
-#elif ARCH_arm64 && !OS_android
+#elif OS_darwin
         // QOS_CLASS_BACKGROUND, _UTILITY, _DEFAULT, _USER_INITIATED.
         u32 qos = level == (i32)-2 ? (u32)$09 : level == (i32)-1 ? (u32)$11 : level == (i32)0 ? (u32)$15 : (u32)$19;
         return pthread_set_qos_class_self_np(qos, (i32)0) == (i32)0;
-#elif ARCH_x86_64 || OS_android
+#elif ARCH_x86_64 || OS_linux || OS_android
         // PRIO_PROCESS with a thread id sets that thread alone on Linux; the
         // id is gettid's (186 on x86-64, 178 on arm64).
 #if ARCH_x86_64

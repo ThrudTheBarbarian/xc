@@ -46,7 +46,7 @@ class MdnsSocket
         u8 sa[16];
         for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
             sa[i] = (u8)0;
-#if OS_windows || ARCH_x86_64 || OS_android
+#if OS_windows || ARCH_x86_64 || OS_linux || OS_android
         sa[0] = (u8)2;
 #else
         sa[0] = (u8)16;
@@ -85,7 +85,7 @@ class MdnsSocket
             return (MdnsSocket*)0;
         if (responder)
             {
-#if ARCH_x86_64 || OS_android
+#if ARCH_x86_64 || OS_linux || OS_android
             setsockopt(h, (i32)1, (i32)2, (u8*)&one, (u32)4);                // SO_REUSEADDR
             setsockopt(h, (i32)1, (i32)15, (u8*)&one, (u32)4);               // SO_REUSEPORT
 #else
@@ -97,7 +97,7 @@ class MdnsSocket
                 _socket_closeFd((i64)h);
                 return (MdnsSocket*)0;
                 }
-#if ARCH_x86_64 || OS_android
+#if ARCH_x86_64 || OS_linux || OS_android
             setsockopt(h, (i32)0, (i32)35, &mreq[0], (u32)8);                // IP_ADD_MEMBERSHIP
 #else
             setsockopt(h, (i32)0, (i32)12, &mreq[0], (u32)8);
@@ -130,7 +130,7 @@ class MdnsSocket
         u8 sa[16];
         for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
             sa[i] = (u8)0;
-#if OS_windows || ARCH_x86_64 || OS_android
+#if OS_windows || ARCH_x86_64 || OS_linux || OS_android
         sa[0] = (u8)2;
 #else
         sa[0] = (u8)16;
@@ -168,7 +168,7 @@ class MdnsSocket
         pl.revents = (i16)0;
 #if OS_windows
         i32 r = WSAPoll((pointer)&pl, (u32)1, ms);
-#elif ARCH_x86_64
+#elif LIBC_glibc || LIBC_musl
         i32 r = poll((pointer)&pl, (u64)1, ms);
 #else
         i32 r = poll((pointer)&pl, (u32)1, ms);

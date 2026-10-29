@@ -75,7 +75,7 @@ i32 QueryPerformanceCounter(i64* count);
 i32 QueryPerformanceFrequency(i64* perSecond);
 i32 GlobalMemoryStatusEx(pointer status);
 pointer memset(pointer dst, i32 c, u64 n);
-#elif ARCH_x86_64 || ARCH_wasm32 || OS_android
+#elif ARCH_x86_64 || OS_linux || ARCH_wasm32 || OS_android
 // Linux's monotonic clock (on wasm32, the loader's, in the same form).
 struct _ParTimespec { i64 sec; i64 nsec; }
 i32 clock_gettime(i32 clock, pointer ts);
@@ -357,7 +357,7 @@ class ParDevice
         QueryPerformanceCounter(&c);
         QueryPerformanceFrequency(&f);
         return (c / f) * (i64)1000000 + (c % f) * (i64)1000000 / f;
-#elif ARCH_x86_64 || ARCH_wasm32 || OS_android
+#elif ARCH_x86_64 || OS_linux || ARCH_wasm32 || OS_android
         _ParTimespec ts;
         clock_gettime((i32)1, (pointer)&ts);   // CLOCK_MONOTONIC on Linux
         return ts.sec * (i64)1000000 + ts.nsec / (i64)1000;
@@ -504,7 +504,7 @@ class ParDevice
             *total = *(u64*)(pointer)(&st[0] + 8);
             *free = *(u64*)(pointer)(&st[0] + 16);
             }
-#elif ARCH_x86_64 || OS_android
+#elif ARCH_x86_64 || OS_linux || OS_android
         u8 si[128];                     // struct sysinfo: totalram at 32, freeram at 40, mem_unit at 104
         memset((pointer)&si[0], (i32)0, (u64)128);
         if (sysinfo((pointer)&si[0]) == (i32)0)
@@ -611,7 +611,7 @@ class ParDevice
 #endif
 #if OS_windows
         s.append(Platform.env(String.withCString("PROCESSOR_IDENTIFIER")));
-#elif ARCH_x86_64 || OS_android
+#elif ARCH_x86_64 || OS_linux || OS_android
         String* info = Files.readText(String.withCString("/proc/cpuinfo"));
         if (info != (String*)0)
             {

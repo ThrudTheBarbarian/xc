@@ -37,7 +37,7 @@ pointer GetProcAddress(pointer module, u8* name);
 typedef i32 bcryptGenRandom_t(pointer alg, u8* buf, u32 n, u32 flags);
 #elif ARCH_wasm32
 i32 _xt_random_fill(u8* p, u32 n);
-#elif ARCH_arm64 || ARCH_x86_64 || OS_android
+#elif ARCH_arm64 || ARCH_x86_64
 i32 getentropy(pointer buf, u64 n);
 #endif
 
@@ -64,7 +64,7 @@ class SecureRandom
         return _gen((pointer)0, p, n, (u32)2) == (i32)0;
 #elif ARCH_wasm32
         return _xt_random_fill(p, n) == (i32)0;
-#elif ARCH_arm64 || ARCH_x86_64 || OS_android
+#elif ARCH_arm64 || ARCH_x86_64
         // getentropy gives at most 256 bytes a call.
         u32 at = (u32)0;
         while (at < n)

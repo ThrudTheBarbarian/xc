@@ -85,7 +85,7 @@ void _xt_plugin_cache_get(u32 token, u8* u, u32 un);
 #if OS_windows
 pointer LoadLibraryExA(u8* path, pointer file, u32 flags);
 pointer GetProcAddress(pointer module, u8* name);
-#elif ARCH_arm64 || ARCH_x86_64 || OS_android
+#elif ARCH_arm64 || ARCH_x86_64
 pointer dlopen(u8* path, i32 mode);
 pointer dlsym(pointer handle, u8* name);
 u8* dlerror(void);
@@ -184,7 +184,7 @@ class Plugin : Object
         return String.withCString("windows-x86_64");
 #elif OS_android
         return String.withCString("android-arm64");
-#elif ARCH_x86_64
+#elif OS_linux
         return String.withCString("linux-x86_64");
 #elif ARCH_wasm32
         return String.withCString("wasm32");
@@ -759,7 +759,7 @@ class Plugin : Object
 #if OS_windows
             if (LoadLibraryExA(full.cString(), (pointer)0, (u32)0x00000900) == (pointer)0)
                 return Plugin._fail(String.withFormat("%s: the system would not load %s", name.cString(), f.cString()));
-#elif ARCH_arm64 || ARCH_x86_64 || OS_android
+#elif ARCH_arm64 || ARCH_x86_64
             if (dlopen(full.cString(), (i32)2) == (pointer)0)
                 {
                 u8* why = dlerror();
@@ -777,7 +777,7 @@ class Plugin : Object
         p._handle = LoadLibraryExA(lib.cString(), (pointer)0, (u32)0x00000900);
         if (p._handle == (pointer)0)
             return Plugin._fail(String.withFormat("%s: the system would not load %s", name.cString(), code.cString()));
-#elif ARCH_arm64 || ARCH_x86_64 || OS_android
+#elif ARCH_arm64 || ARCH_x86_64
         p._handle = dlopen(lib.cString(), (i32)2);
         if (p._handle == (pointer)0)
             {
@@ -1369,7 +1369,7 @@ class Plugin : Object
         {
 #if OS_windows
         return GetProcAddress(_handle, nm.cString());
-#elif ARCH_arm64 || ARCH_x86_64 || OS_android
+#elif ARCH_arm64 || ARCH_x86_64
         return dlsym(_handle, nm.cString());
 #else
         return (pointer)0;

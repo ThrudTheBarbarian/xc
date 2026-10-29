@@ -84,7 +84,7 @@ i64 _runloop_now_us(void)
     return (c / f) * (i64)1000000 + (c % f) * (i64)1000000 / f;
 #else
     _RunLoopTimespec ts;
-#if ARCH_x86_64 || OS_android
+#if ARCH_x86_64 || OS_linux || OS_android
     clock_gettime((i32)1, (pointer)&ts);     // CLOCK_MONOTONIC on Linux
 #else
     clock_gettime((i32)6, (pointer)&ts);     // CLOCK_MONOTONIC on Darwin

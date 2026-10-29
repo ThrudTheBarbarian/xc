@@ -63,9 +63,9 @@
 // what the caller typed: plain `myapp` from PATH names no directory).
 #if OS_windows
 u32 GetModuleFileNameA(pointer module, u8* buf, u32 size);
-#elif ARCH_arm64 && !OS_android
+#elif OS_darwin
 i32 _NSGetExecutablePath(u8* buf, u32* size);
-#elif ARCH_x86_64 || OS_android
+#elif ARCH_x86_64 || OS_linux || OS_android
 i64 readlink(u8* path, u8* buf, u64 size);
 #endif
 
@@ -137,12 +137,12 @@ class Bundle
         u32 wn = GetModuleFileNameA((pointer)0, &wbuf[0], (u32)1024);
         if (wn > (u32)0 && wn < (u32)1024)
             return String.withBytes(&wbuf[0], wn);
-#elif ARCH_arm64 && !OS_android
+#elif OS_darwin
         u8 mbuf[1024];
         u32 msize = (u32)1024;
         if (_NSGetExecutablePath(&mbuf[0], &msize) == (i32)0)
             return String.withCString(&mbuf[0]);
-#elif ARCH_x86_64 || OS_android
+#elif ARCH_x86_64 || OS_linux || OS_android
         // Linux and Android: the kernel's own answer, exact whatever argv[0]
         // says (a symlink, a relative start, an exec by a launcher).
         u8 lbuf[1024];

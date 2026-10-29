@@ -50,7 +50,7 @@ i32 sendto(u64 s, u8* buf, i32 len, i32 flags, u8* to, i32 tolen);
 i32 recvfrom(u64 s, u8* buf, i32 len, i32 flags, u8* from, i32* fromlen);
 i32 getsockname(u64 s, u8* name, i32* namelen);
 #define _EVQ_OK 1
-#elif (ARCH_arm64 && !OS_android) || OS_ios
+#elif OS_darwin
 // struct kevent: ident, filter, flags, fflags, data, udata (32 bytes).
 struct _EvqKevent { u64 ident; i16 filter; u16 flags; u32 fflags; i64 data; u64 udata; }
 struct _EvqTimespec { i64 sec; i64 nsec; }
@@ -58,7 +58,7 @@ i32 kqueue(void);
 i32 kevent(i32 kq, pointer changes, i32 nchanges, pointer events, i32 nevents, pointer timeout);
 #define _EVQ_KQUEUE 1
 #define _EVQ_OK 1
-#elif ARCH_x86_64 || OS_android
+#elif ARCH_x86_64 || OS_linux || OS_android
 i32 epoll_create1(i32 flags);
 i32 epoll_ctl(i32 epfd, i32 op, i32 fd, pointer ev);
 i32 epoll_wait(i32 epfd, pointer evs, i32 max, i32 timeout);

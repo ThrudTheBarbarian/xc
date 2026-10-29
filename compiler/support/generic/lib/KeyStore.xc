@@ -49,14 +49,14 @@ pointer LoadLibraryA(u8* name);
 pointer GetProcAddress(pointer module, u8* name);
 pointer LocalFree(pointer p);
 typedef i32 KsCrypt_t(u8* blobIn, pointer desc, pointer entropy, pointer reserved, pointer prompt, u32 flags, u8* blobOut);
-#elif ARCH_arm64 && !OS_ios && !OS_android
+#elif OS_macos
 pointer dlopen(u8* path, i32 mode);
 pointer dlsym(pointer handle, u8* name);
 typedef i32 KsInteract_t(u8 allowed);
 typedef i32 KsFind_t(pointer kc, u32 sl, u8* s, u32 al, u8* a, u32* pl, pointer* pd, pointer* item);
 typedef i32 KsAdd_t(pointer kc, u32 sl, u8* s, u32 al, u8* a, u32 pl, u8* pd, pointer* item);
 typedef i32 KsFree_t(pointer attrs, pointer data);
-#elif ARCH_x86_64
+#elif OS_linux
 pointer popen(u8* cmd, u8* mode);
 i32 pclose(pointer f);
 u64 fread(u8* p, u64 size, u64 n, pointer f);
@@ -85,7 +85,7 @@ class KeyStore : Object
         {
 #if OS_windows
         return String.withCString("DPAPI (encrypted to this Windows user)");
-#elif ARCH_arm64 && !OS_ios && !OS_android
+#elif OS_macos
         return String.withCString("the login keychain (service \"xcc\")");
 #else
         return String.withCString("the Secret Service (secret-tool, service xcc)");
@@ -123,7 +123,7 @@ class KeyStore : Object
         return d;
         }
 
-#if ARCH_arm64 && !OS_ios && !OS_android
+#if OS_macos
     static pointer _sec;
 
     static pointer _fn(u8* name)
@@ -169,7 +169,7 @@ class KeyStore : Object
         }
 #endif
 
-#if ARCH_x86_64 && !OS_windows
+#if OS_linux
     // secret-tool runs only where a session bus is: a machine reached by ssh
     // alone has none, and a store there would fail or wait.
     static bool _session(void)
@@ -181,7 +181,7 @@ class KeyStore : Object
     static Data* load(String* name)
         {
         _error = (String*)0;
-#if ARCH_arm64 && !OS_ios && !OS_android
+#if OS_macos
         KsFind_t* find = (KsFind_t*)KeyStore._fn("SecKeychainFindGenericPassword");
         KsFree_t* fr = (KsFree_t*)KeyStore._fn("SecKeychainItemFreeContent");
         if (find == (KsFind_t*)0 || fr == (KsFree_t*)0)
@@ -218,7 +218,7 @@ class KeyStore : Object
         Data* d = Data.withBytes(*(u8**)&outB[8], *(u32*)&outB[0]);
         LocalFree((pointer)*(u8**)&outB[8]);
         return d;
-#elif ARCH_x86_64
+#elif OS_linux
         if (!KeyStore._session())
             return KeyStore._failData(String.withCString("no Secret Service here (no session bus: an ssh-only machine has none)"));
         String* cmd = String.withFormat("secret-tool lookup service xcc account '%s' 2>/dev/null", name.cString());
@@ -245,7 +245,7 @@ class KeyStore : Object
     static bool save(String* name, Data* secret)
         {
         _error = (String*)0;
-#if ARCH_arm64 && !OS_ios && !OS_android
+#if OS_macos
         KsAdd_t* add = (KsAdd_t*)KeyStore._fn("SecKeychainAddGenericPassword");
         if (add == (KsAdd_t*)0)
             {
@@ -287,7 +287,7 @@ class KeyStore : Object
             return false;
             }
         return true;
-#elif ARCH_x86_64
+#elif OS_linux
         if (!KeyStore._session())
             {
             KeyStore._fail(String.withCString("no Secret Service here (no session bus: an ssh-only machine has none)"));

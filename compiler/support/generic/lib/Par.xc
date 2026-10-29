@@ -19,10 +19,10 @@
 // A GPU runtime: Metal on macOS (Apple silicon), Vulkan on Linux and Windows,
 // CUDA's driver on Windows and on Linux in a dynamically linked program
 // (NVIDIA). Each runs a block on the GPU when ParDevice chooses it.
-#if ARCH_arm64 && !OS_ios && !OS_android
+#if OS_macos
 #import "ParMetal.xc"
 #endif
-#if ARCH_x86_64 || (ARCH_arm64 && OS_android)
+#if ARCH_x86_64 || OS_linux || OS_android
 #import "ParVulkan.xc"
 #endif
 #if OS_windows || (ARCH_x86_64 && LINK_DYNAMIC && !OS_android)
@@ -405,7 +405,7 @@ class Par
                     }
                 ParDevice.cannotRun(proto, (i32)1);
                 }
-#elif ARCH_x86_64 || OS_android
+#elif ARCH_x86_64 || OS_linux || OS_android
             if (ParVulkan.run(proto, proto.gpuSource(), lo, hi))
                 {
                 ParDevice.ranAdd(proto, ParVulkan.identity());
@@ -442,7 +442,7 @@ class Par
                 return c;
             }
         return ParVulkan.identity();
-#elif ARCH_x86_64 || OS_android
+#elif ARCH_x86_64 || OS_linux || OS_android
         return ParVulkan.identity();
 #else
         return ParMetal.identity();

@@ -44,7 +44,7 @@ i32 FindClose(u8* h);
 i32 DeleteFileA(u8* path);
 i32 RemoveDirectoryA(u8* path);
 i32 MoveFileExA(u8* from, u8* to, u32 flags);
-#elif ARCH_arm64 || ARCH_x86_64 || OS_android
+#elif ARCH_arm64 || ARCH_x86_64
 u8* opendir(u8* path);
 u8* readdir(u8* d);
 i32 closedir(u8* d);
@@ -81,7 +81,7 @@ class Directory
                 }
 #if OS_windows
             return RemoveDirectoryA(path.cString()) != (i32)0;
-#elif ARCH_arm64 || ARCH_x86_64 || OS_android
+#elif ARCH_arm64 || ARCH_x86_64
             return rmdir(path.cString()) == (i32)0;
 #else
             return false;
@@ -94,7 +94,7 @@ class Directory
         {
 #if OS_windows
         return DeleteFileA(path.cString()) != (i32)0;
-#elif ARCH_arm64 || ARCH_x86_64 || OS_android
+#elif ARCH_arm64 || ARCH_x86_64
         return unlink(path.cString()) == (i32)0;
 #else
         return false;
@@ -107,7 +107,7 @@ class Directory
         {
 #if OS_windows
         return MoveFileExA(from.cString(), to.cString(), (u32)1) != (i32)0;   // MOVEFILE_REPLACE_EXISTING
-#elif ARCH_arm64 || ARCH_x86_64 || OS_android
+#elif ARCH_arm64 || ARCH_x86_64
         return rename(from.cString(), to.cString()) == (i32)0;
 #else
         return false;
@@ -142,13 +142,13 @@ class Directory
             }
         FindClose(h);
         return out;
-#elif ARCH_arm64 || ARCH_x86_64 || OS_android
+#elif ARCH_arm64 || ARCH_x86_64
         u8* d = opendir(path.cString());
         if (d == (u8*)0)
             return (Array*)0;
         // struct dirent: d_type then d_name, at 20 / 21 on Apple, 18 / 19 on
         // Linux (glibc, musl and bionic agree).
-#if ARCH_arm64 && !OS_android
+#if OS_darwin
         u32 typeAt = (u32)20;
 #else
         u32 typeAt = (u32)18;

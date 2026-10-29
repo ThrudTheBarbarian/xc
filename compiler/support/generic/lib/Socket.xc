@@ -83,7 +83,7 @@ struct _SocketPoll { u64 fd; i16 events; i16 revents; i32 _pad; }
 i32 WSAPoll(pointer fds, u32 n, i32 timeout);
 #define _SOCKET_POLLIN 0x0100
 #define _SOCKET_POLLGONE 0x0003
-#elif ARCH_x86_64
+#elif LIBC_glibc || LIBC_musl
 struct _HttpAddr { i32 flags; i32 family; i32 socktype; i32 proto; u32 addrlen; u32 _pad; u8* addr; u8* canon; _HttpAddr* next; }
 i32 socket(i32 domain, i32 type, i32 proto);
 i32 connect(i32 fd, u8* addr, u32 len);
@@ -117,7 +117,7 @@ void freeaddrinfo(_HttpAddr* res);
 i32 ioctlsocket(u64 s, i32 cmd, u32* arg);
 i32 getsockopt(u64 s, i32 level, i32 name, u8* value, i32* len);
 #define _SOCKET_POLLOUT 0x0010
-#elif ARCH_x86_64 || OS_android
+#elif ARCH_x86_64 || OS_linux || OS_android
 i32 fcntl(i32 fd, i32 cmd, ...);
 i32 getsockopt(i32 fd, i32 level, i32 name, u8* value, u32* len);
 #define _SOCKET_O_NONBLOCK 0x800
@@ -286,7 +286,7 @@ class Socket
             throw new SocketError(m);
             }
         s._open = true;
-#if !OS_windows && !ARCH_x86_64 && !OS_android
+#if !OS_windows && !OS_linux && !OS_android
         // A peer that closes early must fail the write, not kill the process.
         i32 one = (i32)1;
         setsockopt((i32)s._fd, (i32)0xFFFF, (i32)0x1022, (u8*)&one, (u32)4);  // SO_NOSIGPIPE
@@ -341,7 +341,7 @@ class Socket
             p.fd = (i32)h;
             p.events = (i16)_SOCKET_POLLOUT;
             p.revents = (i16)0;
-#if ARCH_x86_64
+#if LIBC_glibc || LIBC_musl
             i32 r = poll((pointer)&p, (u64)1, ms);
 #else
             i32 r = poll((pointer)&p, (u32)1, ms);
@@ -402,7 +402,7 @@ class Socket
         u8 sa[16];
         for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
             sa[i] = (u8)0;
-#if OS_windows || ARCH_x86_64 || OS_android
+#if OS_windows || ARCH_x86_64 || OS_linux || OS_android
         sa[0] = (u8)2;
 #else
         sa[0] = (u8)16;
@@ -433,7 +433,7 @@ class Socket
         i32 h = socket((i32)2, (i32)1, (i32)0);
         if (h < (i32)0)
             throw new SocketError(String.withCString("cannot make a socket"));
-#if ARCH_x86_64 || OS_android
+#if ARCH_x86_64 || OS_linux || OS_android
         setsockopt(h, (i32)1, (i32)2, (u8*)&one, (u32)4);                    // SOL_SOCKET, SO_REUSEADDR
 #else
         setsockopt(h, (i32)0xFFFF, (i32)4, (u8*)&one, (u32)4);
@@ -478,7 +478,7 @@ class Socket
         Socket* s = new Socket();
         s._fd = fd;
         s._open = true;
-#if !OS_windows && !ARCH_x86_64 && !OS_android
+#if !OS_windows && !OS_linux && !OS_android
         i32 one = (i32)1;
         setsockopt((i32)fd, (i32)0xFFFF, (i32)0x1022, (u8*)&one, (u32)4);  // SO_NOSIGPIPE
 #endif
@@ -527,7 +527,7 @@ class Socket
                 return false;
                 }
             done = done + (u32)put;
-#elif ARCH_x86_64 || OS_android
+#elif ARCH_x86_64 || OS_linux || OS_android
             i64 put = send((i32)_fd, p + done, (u64)(n - done), (i32)0x4000);   // MSG_NOSIGNAL
             if (put <= (i64)0)
                 {
@@ -583,7 +583,7 @@ class Socket
         p.revents = (i16)0;
 #if OS_windows
         i32 r = WSAPoll((pointer)&p, (u32)1, ms);
-#elif ARCH_x86_64
+#elif LIBC_glibc || LIBC_musl
         i32 r = poll((pointer)&p, (u64)1, ms);
 #else
         i32 r = poll((pointer)&p, (u32)1, ms);

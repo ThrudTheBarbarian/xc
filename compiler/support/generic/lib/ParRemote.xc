@@ -85,7 +85,7 @@
 // Windows: the MachineGuid the system keeps. "" where there is none.
 #if OS_windows
 i32 RegGetValueA(pointer hKey, u8* subKey, u8* value, u32 flags, pointer type, pointer data, pointer dataLen);
-#elif ARCH_arm64 && !OS_ios && !OS_android
+#elif OS_macos
 i32 gethostuuid(u8* id, pointer wait);
 #endif
 String* gParMachine;
@@ -112,7 +112,7 @@ class ParMachine
         if (RegGetValueA((pointer)(i64)(i32)$80000002, "SOFTWARE\\Microsoft\\Cryptography", "MachineGuid",
                          (u32)2, (pointer)0, (pointer)&buf[0], (pointer)&n) == (i32)0)
             s = String.withCString(&buf[0]);
-#elif ARCH_arm64 && !OS_ios && !OS_android
+#elif OS_macos
         u8 u[16];
         i64 wait[2];
         wait[0] = (i64)0;
@@ -175,7 +175,7 @@ pointer dlsym(pointer handle, u8* name);
 #else
 #define PAR_TLS_LOADER 0
 #endif
-#if ARCH_x86_64 || OS_android
+#if ARCH_x86_64 || OS_linux || OS_android
 pointer signal(i32 sig, pointer handler);
 #endif
 typedef i32 xctlsMakeSelfSigned_t(u8* certPath, u8* keyPath, u8* cn);
@@ -248,7 +248,7 @@ class ParTls
     // then the system loader's own search.
     static bool loadOnce(void)
         {
-#if ARCH_x86_64 || OS_android
+#if ARCH_x86_64 || OS_linux || OS_android
         // The library writes to the socket itself, so a peer that has gone
         // raises SIGPIPE, which kills the process (exit 141) where the write
         // should fail and the tiles be re-issued. Socket's own writes say
@@ -268,7 +268,7 @@ class ParTls
                 cut = cut - (u32)1;
 #if OS_windows
             String* beside = exe.substringBytes((u32)0, cut).appending(String.withCString("libtls.dll"));
-#elif ARCH_arm64 && !OS_android
+#elif OS_darwin
             String* beside = exe.substringBytes((u32)0, cut).appending(String.withCString("libtls.dylib"));
 #else
             String* beside = exe.substringBytes((u32)0, cut).appending(String.withCString("libtls.so"));
