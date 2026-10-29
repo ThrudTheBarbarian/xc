@@ -25,6 +25,7 @@ class TargetRow
     String* _backend;   // platform key: front end target, opt profile (arm64, x86_64, win64, arm9, atarist, wasm32, xt6502)
     String* _codegen;   // the code generator, xcc-cg-<codegen> in the reference
     Array* _supportChain; // of String*: support/<dir>/lib before generic, in order; empty for 6502 (its layout names it)
+    String* _platformLayer; // the third-party tree's platform layer before the arch's (ios, ios-sim, android), or 0
 
     void init(void)
         {
@@ -44,11 +45,12 @@ class TargetRow
     String* backend(void)  { return _backend; }
     String* codegen(void)  { return _codegen; }
     Array* supportChain(void) { return _supportChain; }
+    String* platformLayer(void) { return _platformLayer; }
 
     // A row: name, cpu, cpu variant, os, env (or ""), libc, legacy arch, then
     // its aliases separated by spaces.
     static TargetRow* make(string name, string cpu, u32 variant, string os, string env,
-                           string libc, string legacy, string backend, string codegen, string chain, string aliases)
+                           string libc, string legacy, string backend, string codegen, string chain, string layer, string aliases)
         {
         TargetRow* r = new TargetRow();
         r._name = String.withCString(name);
@@ -62,6 +64,8 @@ class TargetRow
         r._backend = String.withCString(backend);
         r._codegen = String.withCString(codegen);
         r._supportChain = TargetRow.words(String.withCString(chain));
+        String* ly = String.withCString(layer);
+        r._platformLayer = ly.byteLength() == (u32)0 ? (String*)0 : ly;
         r._aliases = TargetRow.words(String.withCString(aliases));
         return r;
         }
@@ -99,6 +103,8 @@ class TargetRow
         s.appendFormat("legacy %s\n", _legacy.cString());
         s.appendFormat("backend %s\n", _backend.cString());
         s.appendFormat("codegen %s\n", _codegen.cString());
+        if (_platformLayer != (String*)0)
+            s.appendFormat("platform-layer %s\n", _platformLayer.cString());
         s.appendCString("support");
         for (u32 i = (u32)0; i < _supportChain.count(); i = i + (u32)1)
             s.appendFormat(" %s", ((String*)_supportChain.get(i)).cString());
@@ -117,27 +123,27 @@ class Targets
     static Array* rows(void)
         {
         Array* t = new Array();
-        t.add((Object*)TargetRow.make("arm64-macos", "arm64", (u32)0, "macos", "", "darwin", "arm64", "arm64", "arm64", "arm64",
+        t.add((Object*)TargetRow.make("arm64-macos", "arm64", (u32)0, "macos", "", "darwin", "arm64", "arm64", "arm64", "arm64", "",
                                       "arm64 aarch64-apple-darwin arm64-apple-macos arm64-apple-darwin"));
-        t.add((Object*)TargetRow.make("arm64-ios", "arm64", (u32)0, "ios", "", "darwin", "ios", "arm64", "arm64", "ios arm64",
+        t.add((Object*)TargetRow.make("arm64-ios", "arm64", (u32)0, "ios", "", "darwin", "ios", "arm64", "arm64", "ios arm64", "ios",
                                       "ios arm64-apple-ios"));
-        t.add((Object*)TargetRow.make("arm64-ios-sim", "arm64", (u32)0, "ios", "simulator", "darwin", "ios-sim", "arm64", "arm64", "ios arm64",
+        t.add((Object*)TargetRow.make("arm64-ios-sim", "arm64", (u32)0, "ios", "simulator", "darwin", "ios-sim", "arm64", "arm64", "ios arm64", "ios-sim",
                                       "ios-sim arm64-apple-ios-simulator"));
-        t.add((Object*)TargetRow.make("arm64-android", "arm64", (u32)0, "android", "", "bionic", "android", "arm64", "arm64", "arm64",
+        t.add((Object*)TargetRow.make("arm64-android", "arm64", (u32)0, "android", "", "bionic", "android", "arm64", "arm64", "arm64", "android",
                                       "android aarch64-linux-android"));
-        t.add((Object*)TargetRow.make("x86_64-linux", "x86_64", (u32)0, "linux", "", "glibc", "x86_64", "x86_64", "x86_64", "x86_64",
+        t.add((Object*)TargetRow.make("x86_64-linux", "x86_64", (u32)0, "linux", "", "glibc", "x86_64", "x86_64", "x86_64", "x86_64", "",
                                       "x86_64 x86-64 amd64 x86_64-linux-gnu x86_64-pc-linux-gnu"));
-        t.add((Object*)TargetRow.make("x86_64-windows", "x86_64", (u32)0, "windows", "", "msvcrt", "win64", "win64", "win64", "win64 x86_64",
+        t.add((Object*)TargetRow.make("x86_64-windows", "x86_64", (u32)0, "windows", "", "msvcrt", "win64", "win64", "win64", "win64 x86_64", "",
                                       "win64 windows x86_64-w64-mingw32 x86_64-w64-windows-gnu x86_64-pc-windows-gnu"));
-        t.add((Object*)TargetRow.make("armv7-xtos", "armv7", (u32)0, "xtos", "", "xtos", "arm9", "arm9", "arm9", "arm9",
+        t.add((Object*)TargetRow.make("armv7-xtos", "armv7", (u32)0, "xtos", "", "xtos", "arm9", "arm9", "arm9", "arm9", "",
                                       "arm9 armv7 armv7-a cortex-a9"));
-        t.add((Object*)TargetRow.make("wasm32-web", "wasm32", (u32)0, "web", "", "none", "wasm32", "wasm32", "wasm32", "wasm32",
+        t.add((Object*)TargetRow.make("wasm32-web", "wasm32", (u32)0, "web", "", "none", "wasm32", "wasm32", "wasm32", "wasm32", "",
                                       "wasm32 wasm wasm32-unknown-unknown"));
-        t.add((Object*)TargetRow.make("m68k-tos", "m68k", (u32)68000, "tos", "", "none", "m68k", "atarist", "68k", "atarist",
+        t.add((Object*)TargetRow.make("m68k-tos", "m68k", (u32)68000, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "",
                                       "m68k 68000 atarist m68k-atari-tos"));
-        t.add((Object*)TargetRow.make("m68030-tos", "m68k", (u32)68030, "tos", "", "none", "m68k", "atarist", "68k", "atarist",
+        t.add((Object*)TargetRow.make("m68030-tos", "m68k", (u32)68030, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "",
                                       "68030"));
-        t.add((Object*)TargetRow.make("6502-xt", "6502", (u32)0, "xt", "", "none", "xt6502", "xt6502", "6502", "",
+        t.add((Object*)TargetRow.make("6502-xt", "6502", (u32)0, "xt", "", "none", "xt6502", "xt6502", "6502", "", "",
                                       "6502 xt6502 xt"));
         return t;
         }

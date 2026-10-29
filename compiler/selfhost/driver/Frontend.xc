@@ -2384,8 +2384,9 @@ Preprocessor* buildPP(FeOptions* o)
     // `#package` is wasm32-only and the preprocessor has to be able to say so.
     pp.setArch(platformOf(o));
     // iOS and Android are the arm64 back end, each with its own libraries.
-    String* plat = o.libPlatform();
-    for (u32 i = (u32)0; plat == (String*)0 && i < o.defs().count(); i = i + (u32)1)
+    // The row's platform layer when the driver gave one (the target table).
+    String* plat = o.targetRow() != (TargetRow*)0 ? o.targetRow().platformLayer() : o.libPlatform();
+    for (u32 i = (u32)0; o.targetRow() == (TargetRow*)0 && plat == (String*)0 && i < o.defs().count(); i = i + (u32)1)
         if (((String*)o.defs().get(i)).hasPrefix(String.withCString("PLATFORM_android")))
             plat = String.withCString("android");
     if (plat != (String*)0 && (plat.equals(String.withCString("ios")) || plat.equals(String.withCString("ios-sim"))

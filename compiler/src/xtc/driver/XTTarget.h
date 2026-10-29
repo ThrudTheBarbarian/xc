@@ -26,6 +26,9 @@ NS_ASSUME_NONNULL_BEGIN
 // support/<dir>/lib searched before support/generic/lib, in order; empty for
 // 6502, whose layout names its platform.
 @property(nonatomic, readonly, copy) NSArray<NSString*>* supportChain;
+// The third-party tree's platform layer, searched before the arch's directory
+// (ios, ios-sim, android), or nil.
+@property(nonatomic, readonly, copy, nullable) NSString* platformLayer;
 
 // Every row, in the order both compilers list them.
 + (NSArray<XTTarget*>*)rows;
