@@ -5951,6 +5951,11 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
 {
     Opt.setInlineOverride(p, d.inlineMax());
     Opt.setDceTrace(p, d.dceTrace());
+    // -fbounds-check=light: the subscript checks bounds-elide leaves inline in
+    // loops (-O2+, arm64, x86-64, win64); the debug build keeps them calls.
+    if ((d.arch().equals(String.withCString("arm64")) || isX86_64(d) || d.arch().equals(String.withCString("win64")))
+        && d.fe().boundsCheck() && !d.fe().boundsReport() && d.opt() >= (u32)2)
+        p.setInlineChecks(true);
     // Matrix kernels, -O2+, unless -fno-matmul: arm64 macOS (SME; the kernel
     // checks for SME at run time and leaves the loop to run when it is absent)
     // and x86-64 Linux (a kernel per vector tier, named below with the level).

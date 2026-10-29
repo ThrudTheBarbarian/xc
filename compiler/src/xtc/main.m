@@ -5037,6 +5037,11 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     if (((opts.useArm64Backend && !opts.androidTarget && !opts.applePlatform) || opts.useX86_64Backend)
         && !opts.noMatmul && opts.optimisationLevel >= 2)
         [cgArgs addObject:@"--matmul"];
+    // -fbounds-check=light: the subscript checks bounds-elide leaves inline in
+    // loops (-O2+, arm64, x86-64, win64); the debug build keeps them calls.
+    if ((opts.useArm64Backend || opts.useX86_64Backend || opts.useWin64Backend)
+        && opts.boundsCheck && !opts.boundsReport && opts.optimisationLevel >= 2)
+        [cgArgs addObject:@"--inline-checks"];
     if (opts.androidTarget) {
         [cgArgs addObject:@"--aapcs64-abi"];
         // Android's minSdk floor is plain armv8-a, so the LSE atomics Apple

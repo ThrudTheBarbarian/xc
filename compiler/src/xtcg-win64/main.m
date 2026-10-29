@@ -56,6 +56,7 @@ int main(int argc, const char* argv[])
         // -1 = decide from the module (the default), 0 = off, 1 = on.
         int threadSafeARC = -1;
         BOOL dumpOptIR = NO;
+        BOOL inlineChecks = NO;         // --inline-checks: -fbounds-check=light
 
         for (int i = 1; i < argc; i++)
             {
@@ -93,6 +94,10 @@ int main(int argc, const char* argv[])
             else if ([arg isEqualToString:@"-q"] || [arg isEqualToString:@"--quiet"])
                 {
                 quiet = YES;
+                }
+            else if ([arg isEqualToString:@"--inline-checks"])
+                {
+                inlineChecks = YES;
                 }
             else if ([arg isEqualToString:@"--object"])
                 {
@@ -181,6 +186,7 @@ int main(int argc, const char* argv[])
             XTIRX86_64TargetProfile* x86Profile = [XTIRX86_64TargetProfile new];
             x86Profile.vectorLaneBytes = simdLaneBytes; // 32 under -mavx2: the back end emits ymm
             x86Profile.simdDispatch = simdDispatch;
+            x86Profile.inlineChecks = inlineChecks;
             // The x86-64 profile applies — same ISA, same opt passes. Only the
             // backend ABI/object-format differs, selected below.
             XTIROptPipeline* pipe =

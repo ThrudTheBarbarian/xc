@@ -27,6 +27,7 @@ void main(void)
     u32 simdBytes = (u32)16;
     bool simdDispatch = false; // --simd=auto: runtime SIMD dispatch clones
     bool matMul = false;       // --matmul: idiom-matmul's kernel for the target
+    bool inlineChecks = false; // --inline-checks: -fbounds-check=light's checks inline
     String* simdName = String.withCString("base");
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
@@ -85,6 +86,14 @@ void main(void)
             i = i + (u32)1;
             continue;
             }
+        // --inline-checks: the checked subscripts inline in loops, as the
+        // code generators take it under -fbounds-check=light.
+        if (a.equals(String.withCString("--inline-checks")))
+            {
+            inlineChecks = true;
+            i = i + (u32)1;
+            continue;
+            }
         if (a.hasPrefix(String.withCString("--simd=")))
             {
             simdBytes = a.substringFromByte((u32)7).equals(String.withCString("avx512")) ? (u32)64
@@ -127,6 +136,7 @@ void main(void)
     OptProfile* prof = OptProfile.forTarget(target);
     prof.setVectorLaneBytes(simdBytes);
     prof.setSimdDispatch(simdDispatch);
+    prof.setInlineChecks(inlineChecks);
     if (matMul && target.equals(String.withCString("arm64")))
         {
         prof.setMatMul(String.withCString("__xt_sme_gemm_"), String.withCString(""));

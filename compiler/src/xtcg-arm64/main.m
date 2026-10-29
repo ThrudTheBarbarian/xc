@@ -68,6 +68,7 @@ int main(int argc, const char* argv[])
         int threadSafeARC = -1;
         BOOL aapcs64Abi = NO;
         BOOL matMul = NO;
+        BOOL inlineChecks = NO;         // --inline-checks: -fbounds-check=light
         BOOL lseAtomics = YES;
 
         for (int i = 1; i < argc; i++)
@@ -137,6 +138,10 @@ int main(int argc, const char* argv[])
             else if ([arg isEqualToString:@"--matmul"])
                 {
                 matMul = YES;
+                }
+            else if ([arg isEqualToString:@"--inline-checks"])
+                {
+                inlineChecks = YES;
                 }
             else if ([arg isEqualToString:@"--aapcs64-abi"])
                 {
@@ -216,6 +221,7 @@ int main(int argc, const char* argv[])
             armProfile.matMulPrefix = matMul ? @"__xt_sme_gemm_" : nil;
             armProfile.matMulFastSuffix = matMul ? @"_fast" : nil;
             armProfile.matMulInts = matMul;
+            armProfile.inlineChecks = inlineChecks;
             XTIROptPipeline* pipe =
                 [XTIROptPipeline standardPipelineAtLevel:optLevel
                                                  profile:armProfile];

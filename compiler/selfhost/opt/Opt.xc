@@ -119,6 +119,7 @@ class OptProfile
     bool _loopRotateChain; // and loops whose test is a short-circuit chain
     u32 _inlineMax;        // the largest callee (IR instructions) the inliner splices
     bool _dceTrace;        // name each function dead-function elimination removes
+    bool _inlineChecks;    // -fbounds-check=light: inline the subscript checks in loops after bounds-elide
 
     void init(void)
         {
@@ -130,6 +131,7 @@ class OptProfile
         _matMulInts = false;
         _inlineMax = (u32)64;
         _dceTrace = false;
+        _inlineChecks = false;
         _nativeVarargs = false;
         _sqrtIntrinsic = false;
         _powSquare = false;
@@ -182,6 +184,8 @@ class OptProfile
     void setMatMulFastSuffix(String* s) { _matMulFastSuffix = s; }
     bool matMulInts(void) { return _matMulInts; }
     void setMatMulInts(bool b) { _matMulInts = b; }
+    bool inlineChecks(void) { return _inlineChecks; }
+    void setInlineChecks(bool b) { _inlineChecks = b; }
 
     bool ptr64(void)
         {
@@ -1546,11 +1550,19 @@ class BeFact : Object
             boundsElide(m);
         if (stopHere(String.withCString("bounds-elide")))
             return;
-        // The checks bounds-elide could not prove stay calls. Inlining them
-        // here, only in loops (cyclicBlocks; never before bounds-elide: then
-        // no call is left for it to find), was measured 2026-10-26 and left
-        // out: checked binaries 1.43x larger, array_map 1.67x faster, sieve
-        // and mem_copy 3-4% slower, the rest the same (private TODO).
+        // The checks bounds-elide could not prove stay calls. Under
+        // -fbounds-check=light they inline here, only in loops (cyclicBlocks;
+        // never before bounds-elide: then no call is left for it to find):
+        // measured 2026-10-26, array_map 1.67x faster, sieve and mem_copy 3-4%
+        // slower, checked binaries 1.43x larger. The debug build keeps calls.
+        if (_level >= (u32)2 && _profile != (OptProfile*)0 && _profile.inlineChecks())
+            {
+            _inlineChecks = true;
+            inlineLeaves(m);
+            _inlineChecks = false;
+            if (stopHere(String.withCString("inline-checks")))
+                return;
+            }
         if (_level >= (u32)2)
             idiomMemset(m);
         if (stopHere(String.withCString("idiom-memset")))

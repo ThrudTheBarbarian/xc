@@ -77,12 +77,16 @@ SIMDARGS=()
 # OPT_MATMUL=1: the matrix-kernel recognition on (--matmul), as the driver
 # gives arm64 macOS and x86-64 Linux at -O2+.
 [ -n "${OPT_MATMUL:-}" ] && SIMDARGS+=(--matmul)
+# OPT_CHECKS=1: -fbounds-check=light's IR (the front end's checked subscripts,
+# and --inline-checks to both pipelines).
+[ -n "${OPT_CHECKS:-}" ] && SIMDARGS+=(--inline-checks)
 STOPARGS=()
 [ -n "$STOP" ] && STOPARGS=(--stop-after "$STOP")
 # OPT_G=1: the front end's -g IR (source locations on every instruction), so
 # what each pass does with an instruction's location is compared too.
 FEG=()
 [ -n "${OPT_G:-}" ] && FEG=(-g)
+[ -n "${OPT_CHECKS:-}" ] && FEG+=(-fbounds-check=light)
 
 pass=0; fail=0; unsup=0; oracle=0
 declare -a FAILED

@@ -47,6 +47,7 @@ int main(int argc, const char* argv[])
         NSUInteger simdLaneBytes = 16; // --simd: the profile's vector width
         BOOL simdDispatch = NO;         // --simd=auto: base + avx2 clones, picked at load
         BOOL matMul = NO;               // --matmul: idiom-matmul's x86-64 kernel
+        BOOL inlineChecks = NO;         // --inline-checks: -fbounds-check=light
         NSString* simdLevelName = @"base";
         // Record argv[0] so the support tree is found relative to THIS binary.
         // An installed tool must not depend on the current directory to find
@@ -131,6 +132,10 @@ int main(int argc, const char* argv[])
             {
                 matMul = YES;
             }
+            else if ([arg isEqualToString:@"--inline-checks"])
+            {
+                inlineChecks = YES;
+            }
             else if ([arg isEqualToString:@"--thread-safe-arc"])
                 {
                 threadSafeARC = 1;
@@ -191,6 +196,7 @@ int main(int argc, const char* argv[])
             XTIRX86_64TargetProfile* x86Profile = [XTIRX86_64TargetProfile new];
             x86Profile.vectorLaneBytes = simdLaneBytes; // 32 under -mavx2: the back end emits ymm
             x86Profile.simdDispatch = simdDispatch;
+            x86Profile.inlineChecks = inlineChecks;
             // The matrix kernel for the module's vector tier (`_auto`: all
             // three, picked at load).
             if (matMul)

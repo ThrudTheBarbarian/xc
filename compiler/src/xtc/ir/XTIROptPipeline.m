@@ -169,11 +169,17 @@
         XTIROptBoundsElide* belide = [[XTIROptBoundsElide alloc] init];
         belide.profile = profile;
         [p addPass:belide];
-        // The checks it could not prove stay calls. Inlining them here, only in
-        // loops (checksOnly; never before it: then no call is left for it to
-        // find), was measured 2026-10-26 and left out: checked binaries 1.43x
-        // larger, array_map 1.67x faster, sieve and mem_copy 3-4% slower, the
-        // rest the same. The port's pipeline is the same.
+        // The checks it could not prove stay calls. Under -fbounds-check=light
+        // they inline here, only in loops (checksOnly; never before it: then no
+        // call is left for it to find): measured 2026-10-26, array_map 1.67x
+        // faster, sieve and mem_copy 3-4% slower, checked binaries 1.43x
+        // larger. The debug build keeps calls. The port's pipeline is the same.
+        if (profile.inlineChecks) {
+            XTIROptInline* checks = [[XTIROptInline alloc] init];
+            checks.profile = profile;
+            checks.checksOnly = YES;
+            [p addPass:checks];
+        }
         // Recognise byte-fill loops as memset BEFORE unrolling (else the fill
         // loop gets unrolled instead of collapsed to a call).
         XTIROptIdiomMemset* memset = [[XTIROptIdiomMemset alloc] init];

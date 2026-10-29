@@ -245,6 +245,12 @@ unchecked, vectorised. Over the 20 benchmarks of the
 1.5% on the geometric mean on arm64; the frame records the arm64 report's
 stack needs are most of that.
 
+Under `-fbounds-check=light`, at `-O2` and above, the checks that are left
+inside loops are compiled into the loop rather than called: a loop that
+indexes through a lookup table ran 1.67 times faster checked, and checked
+binaries are about 40% larger. `-fbounds-check` keeps them calls, so its stack
+report has a frame for each.
+
 What each kind of subscript is checked against:
 
 | The base | Checked against |

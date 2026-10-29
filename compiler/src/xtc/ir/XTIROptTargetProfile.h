@@ -274,6 +274,9 @@ NS_ASSUME_NONNULL_BEGIN
 // The target has integer kernels too (prefix + "u32"/"i32" + suffix): arm64,
 // whose SME kernel packs the values to bytes or halves when they fit.
 @property(nonatomic) BOOL matMulInts;
+// -fbounds-check=light (the driver's --inline-checks): the subscript checks that
+// bounds-elide could not prove inline, in loops only. NO: they stay calls.
+@property(nonatomic) BOOL inlineChecks;
 
 + (instancetype)conservativeProfile;
 
