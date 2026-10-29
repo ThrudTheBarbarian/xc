@@ -4703,8 +4703,10 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // the implementation lives in each backend's link function, so a target
     // without one would sail straight past it and write an EXECUTABLE to the .o
     // path. 6502 and m68k are deferred (private:docs/Design/separate-compilation.md §7).
-    if (opts.compileOnly && !opts.useArm64Backend && !opts.useX86_64Backend
-        && !opts.useWin64Backend && !opts.useArm9Backend) {
+    // android is the arm64 back end with no object writer of its own: refused,
+    // as the port refuses it (its link function wrote an EXECUTABLE to the .o).
+    if (opts.compileOnly && ((!opts.useArm64Backend && !opts.useX86_64Backend
+        && !opts.useWin64Backend && !opts.useArm9Backend) || opts.androidTarget)) {
         fprintf(stderr, "xcc: error: -c is implemented for the hosted targets (arm64, "
                         "x86_64, win64, arm9) only — 6502 and m68k are single-module by "
                         "construction (private:docs/Design/separate-compilation.md §7)\n");

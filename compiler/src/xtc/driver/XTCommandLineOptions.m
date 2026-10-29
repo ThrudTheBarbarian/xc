@@ -1475,6 +1475,43 @@ static NSString* sExecutablePath = nil;
 #endif
         }
 
+    // --no-self-host hands the link to a vendor toolchain where one exists
+    // (clang on arm64 macOS, the NDK for android, arm-none-eabi-gcc for arm9),
+    // as the port decides it: m68k, 6502 and wasm32 always write their image
+    // in-house, x86-64, win64, iOS and an arm64 library link in-house only. An
+    // object (-c), assembly or an interface is written in-house either way.
+    {
+    NSString* ext = opts.outputPath.pathExtension.lowercaseString ?: @"";
+    BOOL asmOut = [ext isEqualToString:@"s"] || [ext isEqualToString:@"asm"];
+    NSString* an = opts.useM68kBackend ? @"m68k" : opts.useWasm32Backend ? @"wasm32"
+                 : opts.useX86_64Backend ? @"x86_64" : opts.useWin64Backend ? @"win64"
+                 : opts.applePlatform ?: (opts.androidTarget ? @"android" : opts.useArm9Backend ? @"arm9"
+                 : opts.useArm64Backend ? @"arm64" : @"6502");
+    if (opts.noSelfHost && !opts.compileOnly && !asmOut && !opts.emitIface)
+        {
+        if (opts.useM68kBackend || opts.useWasm32Backend || (!opts.useArm64Backend && !opts.useArm9Backend
+            && !opts.useX86_64Backend && !opts.useWin64Backend))
+            fprintf(stderr, "xcc: warning: --no-self-host has no effect on '%s': its "
+                            "image is always written in-house\n", an.UTF8String);
+        else if (opts.useX86_64Backend || opts.useWin64Backend)
+            {
+            fprintf(stderr, "xcc: error: --no-self-host: '%s' has no vendor-toolchain "
+                            "link; its runtime is linked in-house only\n", an.UTF8String);
+            return nil;
+            }
+        else if (opts.applePlatform)
+            {
+            fprintf(stderr, "xcc: error: --no-self-host: '%s' links in-house only\n", an.UTF8String);
+            return nil;
+            }
+        else if (opts.emitLib && !opts.androidTarget && !opts.useArm9Backend)
+            {
+            fprintf(stderr, "xcc: error: --no-self-host: an arm64 library links in-house only\n");
+            return nil;
+            }
+        }
+    }
+
     // -dynamic and -static are x86-64 Linux link modes; anywhere else they
     // would be ignored. From 0.72 an x86-64 executable links
     // dynamically against glibc unless -static asks for the static musl link,
@@ -1525,8 +1562,10 @@ static NSString* sExecutablePath = nil;
             return nil;
             }
         // arm64 macOS links rt-checked's reporter; x86-64 and win64 take the
-        // checks from Checked.xc, which the driver imports. arm9 has neither.
-        if (!opts.useArm64Backend && !opts.useX86_64Backend && !opts.useWin64Backend)
+        // checks from Checked.xc, which the driver imports. arm9 has neither,
+        // and nor has android (the arm64 back end, but no reporter is linked
+        // there: refused, as the port refuses it).
+        if ((!opts.useArm64Backend && !opts.useX86_64Backend && !opts.useWin64Backend) || opts.androidTarget)
             {
             fprintf(stderr,
                     "xcc: error: -fbounds-check is implemented for arm64, x86_64 and\n"

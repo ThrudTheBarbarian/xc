@@ -682,6 +682,14 @@ same "-mfpu (m68k)"         -q -A 68030 -mfpu -o @OUT@.prg ret.xc
 same "-msoft-float (m68k)"  -q -A m68k -msoft-float -o @OUT@.prg ret.xc
 same "-g"                   -q -g -o @OUT@ ret.xc
 same "--no-self-host"       -q --no-self-host -o @OUT@ ret.xc
+# Refused alike where the link is in-house only (target-table step 0).
+same "--no-self-host x86_64" -q -A x86_64 --no-self-host -o @OUT@ ret.xc
+same "--no-self-host win64"  -q -A win64 --no-self-host -o @OUT@ ret.xc
+same "--no-self-host ios"    -q -A ios --no-self-host -o @OUT@ ret.xc
+same "--no-self-host lib"    -q --emit-lib --no-self-host -o @OUT@.dylib ret.xc
+# android has no checked runtime and no object writer: refused by both.
+same "-fbounds-check android" -q -A android -fbounds-check -o @OUT@ ret.xc
+same "-c android"            -q -A android -c -o @OUT@.o ret.xc
 # -dynamic: an x86-64 executable linked against glibc (ldx86dyn-diff compares
 # the bytes over the corpus; here, acceptance and the refusals).
 cover -dynamic
