@@ -2490,6 +2490,14 @@ void predefine(Preprocessor* pp, FeOptions* o)
         pp.define(String.withCString("XT_PRINTF_DATA_BUF"), String.withCString("$0482"));
         }
 
+    // The target table's library defines (step 3; the reference says why only
+    // with the driver's row), beside the old ones until the libraries move.
+    if (o.targetRow() != (TargetRow*)0)
+        {
+        Array* ms = o.targetRow().macros();
+        for (u32 i = (u32)0; i < ms.count(); i = i + (u32)1)
+            pp.define((String*)ms.get(i), String.withCString("1"));
+        }
     // The platform LAYER's defines, beside the ISA's: ARCH_arm64 says what
     // the code is, PLATFORM_ios says where it runs (and _sim which flavour).
     if (o.libPlatform() != (String*)0 && o.libPlatform().hasPrefix(String.withCString("ios")))

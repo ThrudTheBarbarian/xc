@@ -87,6 +87,37 @@ class TargetRow
         return out;
         }
 
+    // The library defines the row generates (the reference's macros says
+    // which, in which order), each defined as 1.
+    Array* macros(void)
+        {
+        Array* m = new Array();
+        String* a = String.withCString("ARCH_");
+        a.append(_cpu);
+        m.add((Object*)a);
+        String* o = String.withCString("OS_");
+        o.append(_os);
+        m.add((Object*)o);
+        bool darwin = _os.equals(String.withCString("macos")) || _os.equals(String.withCString("ios"));
+        if (darwin)
+            m.add((Object*)String.withCString("OS_darwin"));
+        if (darwin || _os.equals(String.withCString("linux")) || _os.equals(String.withCString("android")))
+            m.add((Object*)String.withCString("OS_unix"));
+        if (!_libc.equals(String.withCString("none")))
+            {
+            String* l = String.withCString("LIBC_");
+            l.append(_libc);
+            m.add((Object*)l);
+            }
+        if (_env != (String*)0)
+            {
+            String* e = String.withCString("ENV_");
+            e.append(_env);
+            m.add((Object*)e);
+            }
+        return m;
+        }
+
     // `--print-target`: the row, one field per line, in the order both
     // compilers print it.
     String* describe(void)
@@ -108,6 +139,11 @@ class TargetRow
         s.appendCString("support");
         for (u32 i = (u32)0; i < _supportChain.count(); i = i + (u32)1)
             s.appendFormat(" %s", ((String*)_supportChain.get(i)).cString());
+        s.appendCString("\n");
+        s.appendCString("macros");
+        Array* ms = macros();
+        for (u32 i = (u32)0; i < ms.count(); i = i + (u32)1)
+            s.appendFormat(" %s", ((String*)ms.get(i)).cString());
         s.appendCString("\n");
         s.appendCString("aliases");
         for (u32 i = (u32)0; i < _aliases.count(); i = i + (u32)1)

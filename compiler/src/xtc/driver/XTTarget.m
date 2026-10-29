@@ -88,6 +88,22 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
     return nil;
     }
 
+- (NSArray<NSString*>*)macros
+    {
+    NSMutableArray<NSString*>* m = [NSMutableArray array];
+    [m addObject:[@"ARCH_" stringByAppendingString:self.cpu]];
+    [m addObject:[@"OS_" stringByAppendingString:self.os]];
+    if ([self.os isEqualToString:@"macos"] || [self.os isEqualToString:@"ios"])
+        [m addObject:@"OS_darwin"];
+    if ([@[ @"macos", @"ios", @"linux", @"android" ] containsObject:self.os])
+        [m addObject:@"OS_unix"];
+    if (![self.libc isEqualToString:@"none"])
+        [m addObject:[@"LIBC_" stringByAppendingString:self.libc]];
+    if (self.env)
+        [m addObject:[@"ENV_" stringByAppendingString:self.env]];
+    return m;
+    }
+
 - (NSString*)describe
     {
     NSMutableString* s = [NSMutableString string];
@@ -107,6 +123,10 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
     [s appendString:@"support"];
     for (NSString* c in self.supportChain)
         [s appendFormat:@" %@", c];
+    [s appendString:@"\n"];
+    [s appendString:@"macros"];
+    for (NSString* m in self.macros)
+        [s appendFormat:@" %@", m];
     [s appendString:@"\n"];
     [s appendString:@"aliases"];
     for (NSString* a in self.aliases)

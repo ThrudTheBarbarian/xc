@@ -34,6 +34,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSArray<XTTarget*>*)rows;
 // The row a -A token names (its canonical name or an alias), or nil.
 + (nullable XTTarget*)rowForToken:(NSString*)token;
+// The library defines the row generates (target-table step 3): ARCH_<cpu>,
+// OS_<os>, OS_darwin (macos, ios), OS_unix (macos, ios, linux, android),
+// LIBC_<libc> (not for none), ENV_<env>; each defined as 1, in this order.
+- (NSArray<NSString*>*)macros;
 // --print-target: the row, one field per line, as the port prints it.
 - (NSString*)describe;
 @end
