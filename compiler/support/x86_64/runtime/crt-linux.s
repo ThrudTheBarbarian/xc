@@ -174,9 +174,7 @@ _start:
 					#   __stdio_exit, the only thing that flushes
 					#   stdio — a raw syscall here lost every byte
 					#   still buffered on a piped stdout (task #30).
-					#   A link with no libc pool gets `exit` from
-					#   exitstub-linux.s, which IS the raw
-					#   exit_group(2).
+					#   A link with no libc pool is refused.
 	hlt				# unreachable; faults loudly if exit ever returns
 
 # musl's pooled members reach the environment through __environ (getenv,

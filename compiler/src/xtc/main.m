@@ -1233,21 +1233,6 @@ static int x86MissingPool(NSString * _Nullable support) {
     return 1;
 }
 
-// crt-linux.s leaves the process through `call exit`, so a musl link runs
-// atexit + the stdio flush (task #30 — a raw exit_group dropped everything
-// still buffered on a piped stdout: musl goes fully buffered after its first
-// write to a non-tty, and nothing ever wrote the rest). A link with NO libc
-// pool must still define `exit`: this is the raw exit_group fallback.
-// Appended exactly when the pool is absent — beside the pool it would shadow
-// musl's exit, because an archive member is only pulled for a symbol nothing
-// else defines.
-static NSString * _Nullable x86ExitStub(NSString * _Nullable support) {
-    if (!support) return nil;
-    NSString *p = [support stringByAppendingPathComponent:
-                   @"x86_64/runtime/exitstub-linux.s"];
-    return [[NSFileManager defaultManager] fileExistsAtPath:p] ? p : nil;
-}
-
 // The compiler-support builtins beside it (finding #16). C code compiled by
 // clang/gcc calls libgcc for what the ISA lacks an instruction for — 128-bit
 // division (`__udivti3`, mbedcrypto's bignum), soft-float oddments — and
@@ -2775,11 +2760,15 @@ static int linkX86_64Dynamic(const char *argv0, XTCommandLineOptions *opts, NSSt
             NSMutableArray<NSString *> *args = [rtPaths mutableCopy];
             [args addObject:stubPath];
             [args addObject:asmPath];
-            // The exit stub only when there is no musl pool: libc.a's exit(3)
-            // runs the atexit handlers and flushes stdio, and a second `exit`
-            // would keep it from being pulled. The shipped driver never adds it.
-            if (!x86MuslLibc(support))
-                { NSString *es = x86ExitStub(support); if (es) [args addObject:es]; }
+            // No musl pool: refused, as the port refuses it (a raw exit stub
+            // used to stand in for libc's exit, which the shipped driver never
+            // did).
+            if (!x86MuslLibc(support)) {
+                fprintf(stderr, "xcc: error: the x86-64 static link needs musl's libc.a and no copy was found.\n"
+                                "  looked in $XTC_MUSL_ROOT/lib, /opt/clang/linux/x86_64-linux-musl/lib,\n"
+                                "  and <support>/x86_64-sysroot\n");
+                return 1;
+            }
             if (!x86AddMimalloc(argv0, opts, args)) return 1;
             // The user's own objects and archives (`-Wl,shim.o`), after the
             // allocator object and before libc, the order the shipped driver
