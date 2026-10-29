@@ -41,7 +41,7 @@ class Ios
     // "ios" on a device, "ios-sim" on the simulator.
     static String* platform(void)
         {
-#if PLATFORM_ios_sim
+#if ENV_simulator
         return String.withCString("ios-sim");
 #else
         return String.withCString("ios");

@@ -19,13 +19,13 @@
 // A GPU runtime: Metal on macOS (Apple silicon), Vulkan on Linux and Windows,
 // CUDA's driver on Windows and on Linux in a dynamically linked program
 // (NVIDIA). Each runs a block on the GPU when ParDevice chooses it.
-#if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
+#if ARCH_arm64 && !OS_ios && !OS_android
 #import "ParMetal.xc"
 #endif
-#if ARCH_x86_64 || (ARCH_arm64 && PLATFORM_android)
+#if ARCH_x86_64 || (ARCH_arm64 && OS_android)
 #import "ParVulkan.xc"
 #endif
-#if ARCH_win64 || (ARCH_x86_64 && LINK_DYNAMIC && !PLATFORM_android)
+#if OS_windows || (ARCH_x86_64 && LINK_DYNAMIC && !OS_android)
 #import "ParCuda.xc"
 #endif
 #if !(ARCH_6502 || ARCH_m68k || ARCH_wasm32)
@@ -35,7 +35,7 @@
 #import "ParWebGpu.xc"
 #endif
 
-#if ARCH_arm64 || ARCH_x86_64 || ARCH_win64
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
 // The bytes from p to the end of the page-aligned heap block it points into,
 // or -1 outside every such block (the runtime's registry, rt.c).
 i64 _xtc_simd_span(pointer p);
@@ -276,7 +276,7 @@ class Par
         {
         if (p == (pointer)0)
             return (i64)0 - (i64)1;
-#if ARCH_arm64 || ARCH_x86_64 || ARCH_win64
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
         parGlobals();
         return _xtc_simd_span(p);
 #else
@@ -311,7 +311,7 @@ class Par
             ParDevice.ranAdd(proto, String.withCString("cpu"));
             return;
             }
-#if (ARCH_arm64 && !PLATFORM_ios) || ARCH_x86_64 || ARCH_wasm32
+#if (ARCH_arm64 && !OS_ios) || ARCH_x86_64 || ARCH_wasm32
         // The GPU's identity, for the hardware key auto keeps its choices
         // under, asked of the runtime only when choose() will look them up.
         if (ParDevice.needsHardware(proto))
@@ -372,7 +372,7 @@ class Par
                 ParDevice.ranAdd(proto, ParWebGpu.identity());
                 return;
                 }
-#elif ARCH_win64 || (ARCH_x86_64 && LINK_DYNAMIC && !PLATFORM_android)
+#elif OS_windows || (ARCH_x86_64 && LINK_DYNAMIC && !OS_android)
             // NVIDIA's own driver or Vulkan (AMD, Intel, or NVIDIA where CUDA
             // is missing): auto measures both where both work and keeps the
             // faster; XC_PAR_GPU=cuda|vulkan picks one. If the one tried
@@ -405,7 +405,7 @@ class Par
                     }
                 ParDevice.cannotRun(proto, (i32)1);
                 }
-#elif ARCH_x86_64 || PLATFORM_android
+#elif ARCH_x86_64 || OS_android
             if (ParVulkan.run(proto, proto.gpuSource(), lo, hi))
                 {
                 ParDevice.ranAdd(proto, ParVulkan.identity());
@@ -428,13 +428,13 @@ class Par
         ParDevice.ranAdd(proto, String.withCString("cpu"));
         }
 
-#if (ARCH_arm64 && !PLATFORM_ios) || ARCH_x86_64 || ARCH_wasm32
+#if (ARCH_arm64 && !OS_ios) || ARCH_x86_64 || ARCH_wasm32
     // The GPU this program would run on, as its runtime names it ("" for none).
     static String* gpuIdentity(void)
         {
 #if ARCH_wasm32
         return ParWebGpu.identity();
-#elif ARCH_win64 || (ARCH_x86_64 && LINK_DYNAMIC && !PLATFORM_android)
+#elif OS_windows || (ARCH_x86_64 && LINK_DYNAMIC && !OS_android)
         if (!ParDevice.vulkanOnly())
             {
             String* c = ParCuda.identity();
@@ -442,7 +442,7 @@ class Par
                 return c;
             }
         return ParVulkan.identity();
-#elif ARCH_x86_64 || PLATFORM_android
+#elif ARCH_x86_64 || OS_android
         return ParVulkan.identity();
 #else
         return ParMetal.identity();
@@ -467,7 +467,7 @@ class Par
     // the choice in its Settings passes it on here; XC_PAR overrides all.
     static void device(u8* block, u8* choice)
         {
-#if (ARCH_arm64 && !PLATFORM_ios) || ARCH_x86_64 || ARCH_wasm32
+#if (ARCH_arm64 && !OS_ios) || ARCH_x86_64 || ARCH_wasm32
         ParDevice.setDevice(block, choice);
 #endif
         }

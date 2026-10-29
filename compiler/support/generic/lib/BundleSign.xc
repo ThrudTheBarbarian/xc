@@ -49,7 +49,7 @@
 #import "SecureRandom.xc"
 #import "BundleRules.xc"
 
-#if ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+#if ARCH_arm64 || ARCH_x86_64 || OS_android
 i32 chmod(u8* path, u32 mode);
 #endif
 
@@ -195,7 +195,7 @@ class BundleSign
         // anyone else, not even for the moment between writing and chmod.
         if (!Files.writeData(path, new Data()))
             return (Data*)0;
-#if ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+#if ARCH_arm64 || ARCH_x86_64 || OS_android
         chmod(path.cString(), (u32)384);   // 0600
 #endif
         if (!Files.writeData(path, d))

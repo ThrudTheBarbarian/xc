@@ -31,26 +31,26 @@
 // Windows, crypto.getRandomValues on the web (the wasm32 loader).
 #import "Foundation.xc"
 
-#if ARCH_win64
+#if OS_windows
 pointer LoadLibraryA(u8* name);
 pointer GetProcAddress(pointer module, u8* name);
 typedef i32 bcryptGenRandom_t(pointer alg, u8* buf, u32 n, u32 flags);
 #elif ARCH_wasm32
 i32 _xt_random_fill(u8* p, u32 n);
-#elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+#elif ARCH_arm64 || ARCH_x86_64 || OS_android
 i32 getentropy(pointer buf, u64 n);
 #endif
 
 class SecureRandom
     {
-#if ARCH_win64
+#if OS_windows
     static bcryptGenRandom_t* _gen;
 #endif
 
     // n random bytes at p; false when the system has no source (or it failed).
     static bool fill(u8* p, u32 n)
         {
-#if ARCH_win64
+#if OS_windows
         if (_gen == (bcryptGenRandom_t*)0)
             {
             pointer lib = LoadLibraryA("bcrypt.dll");
@@ -64,7 +64,7 @@ class SecureRandom
         return _gen((pointer)0, p, n, (u32)2) == (i32)0;
 #elif ARCH_wasm32
         return _xt_random_fill(p, n) == (i32)0;
-#elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+#elif ARCH_arm64 || ARCH_x86_64 || OS_android
         // getentropy gives at most 256 bytes a call.
         u32 at = (u32)0;
         while (at < n)

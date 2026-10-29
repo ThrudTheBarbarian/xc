@@ -1153,7 +1153,7 @@ class String<Comparable, Hashable, Copying>
 
     static bool isPathSeparator(u8 c)
         {
-#if ARCH_win64
+#if OS_windows
         return c == (u8)'/' || c == (u8)'\\';
 #else
         return c == (u8)'/';
@@ -1186,7 +1186,7 @@ class String<Comparable, Hashable, Copying>
         if (_length == (u32)0)
             return false;
         u8* b = _bytes;
-#if ARCH_win64
+#if OS_windows
         // C:\\ or C:/ is absolute on Windows.
         if (_length >= (u32)3 && b[1] == (u8)':' && String.isPathSeparator(b[2]))
             return true;

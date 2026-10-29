@@ -37,14 +37,14 @@
 #define DIR_DIRECTORY 2
 #define DIR_LINK 3
 
-#if ARCH_win64
+#if OS_windows
 u8* FindFirstFileA(u8* pattern, u8* data);
 i32 FindNextFileA(u8* h, u8* data);
 i32 FindClose(u8* h);
 i32 DeleteFileA(u8* path);
 i32 RemoveDirectoryA(u8* path);
 i32 MoveFileExA(u8* from, u8* to, u32 flags);
-#elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+#elif ARCH_arm64 || ARCH_x86_64 || OS_android
 u8* opendir(u8* path);
 u8* readdir(u8* d);
 i32 closedir(u8* d);
@@ -79,9 +79,9 @@ class Directory
                 else
                     Directory._unlink(p);
                 }
-#if ARCH_win64
+#if OS_windows
             return RemoveDirectoryA(path.cString()) != (i32)0;
-#elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+#elif ARCH_arm64 || ARCH_x86_64 || OS_android
             return rmdir(path.cString()) == (i32)0;
 #else
             return false;
@@ -92,9 +92,9 @@ class Directory
 
     static bool _unlink(String* path)
         {
-#if ARCH_win64
+#if OS_windows
         return DeleteFileA(path.cString()) != (i32)0;
-#elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+#elif ARCH_arm64 || ARCH_x86_64 || OS_android
         return unlink(path.cString()) == (i32)0;
 #else
         return false;
@@ -105,9 +105,9 @@ class Directory
     // directory there must be empty or absent.
     static bool move(String* from, String* to)
         {
-#if ARCH_win64
+#if OS_windows
         return MoveFileExA(from.cString(), to.cString(), (u32)1) != (i32)0;   // MOVEFILE_REPLACE_EXISTING
-#elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+#elif ARCH_arm64 || ARCH_x86_64 || OS_android
         return rename(from.cString(), to.cString()) == (i32)0;
 #else
         return false;
@@ -117,7 +117,7 @@ class Directory
     static Array* list(String* path)
         {
         Array* out = new Array();
-#if ARCH_win64
+#if OS_windows
         // WIN32_FIND_DATAA: attributes at 0, the name at 44 (320 bytes in all).
         String* pat = String.withString(path);
         pat.appendCString("\\*");
@@ -142,13 +142,13 @@ class Directory
             }
         FindClose(h);
         return out;
-#elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+#elif ARCH_arm64 || ARCH_x86_64 || OS_android
         u8* d = opendir(path.cString());
         if (d == (u8*)0)
             return (Array*)0;
         // struct dirent: d_type then d_name, at 20 / 21 on Apple, 18 / 19 on
         // Linux (glibc, musl and bionic agree).
-#if ARCH_arm64 && !PLATFORM_android
+#if ARCH_arm64 && !OS_android
         u32 typeAt = (u32)20;
 #else
         u32 typeAt = (u32)18;

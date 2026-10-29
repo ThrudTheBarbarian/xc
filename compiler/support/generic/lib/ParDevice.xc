@@ -67,15 +67,15 @@ bool gParGpuDiscrete;
 // CUDA's driver beside Vulkan: on Windows, and on Linux in a dynamically
 // linked program, the one that can load libcuda.so.1 (Par.xc and ParTiles.xc
 // spell the same condition out, as they can be read before this file).
-#if ARCH_win64 || (ARCH_x86_64 && LINK_DYNAMIC && !PLATFORM_android)
+#if OS_windows || (ARCH_x86_64 && LINK_DYNAMIC && !OS_android)
 #define PAR_CUDA 1
 #endif
-#if ARCH_win64
+#if OS_windows
 i32 QueryPerformanceCounter(i64* count);
 i32 QueryPerformanceFrequency(i64* perSecond);
 i32 GlobalMemoryStatusEx(pointer status);
 pointer memset(pointer dst, i32 c, u64 n);
-#elif ARCH_x86_64 || ARCH_wasm32 || PLATFORM_android
+#elif ARCH_x86_64 || ARCH_wasm32 || OS_android
 // Linux's monotonic clock (on wasm32, the loader's, in the same form).
 struct _ParTimespec { i64 sec; i64 nsec; }
 i32 clock_gettime(i32 clock, pointer ts);
@@ -274,7 +274,7 @@ class ParLayout : Object
         }
     }
 
-#if ARCH_arm64 || ARCH_x86_64 || ARCH_win64
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
 // The program's global arrays with pages of their own (the optimiser's
 // gpu-globals pass defines this, registering each), registered the first
 // time anything asks the registry: no load-time constructor to lose in a
@@ -351,13 +351,13 @@ class ParDevice
 
     static i64 nowUs(void)
         {
-#if ARCH_win64
+#if OS_windows
         i64 c = (i64)0;
         i64 f = (i64)1;
         QueryPerformanceCounter(&c);
         QueryPerformanceFrequency(&f);
         return (c / f) * (i64)1000000 + (c % f) * (i64)1000000 / f;
-#elif ARCH_x86_64 || ARCH_wasm32 || PLATFORM_android
+#elif ARCH_x86_64 || ARCH_wasm32 || OS_android
         _ParTimespec ts;
         clock_gettime((i32)1, (pointer)&ts);   // CLOCK_MONOTONIC on Linux
         return ts.sec * (i64)1000000 + ts.nsec / (i64)1000;
@@ -495,7 +495,7 @@ class ParDevice
         {
         *total = (u64)0;
         *free = (u64)0;
-#if ARCH_win64
+#if OS_windows
         u8 st[64];                      // MEMORYSTATUSEX
         memset((pointer)&st[0], (i32)0, (u64)64);
         *(u32*)(pointer)&st[0] = (u32)64;
@@ -504,7 +504,7 @@ class ParDevice
             *total = *(u64*)(pointer)(&st[0] + 8);
             *free = *(u64*)(pointer)(&st[0] + 16);
             }
-#elif ARCH_x86_64 || PLATFORM_android
+#elif ARCH_x86_64 || OS_android
         u8 si[128];                     // struct sysinfo: totalram at 32, freeram at 40, mem_unit at 104
         memset((pointer)&si[0], (i32)0, (u64)128);
         if (sysinfo((pointer)&si[0]) == (i32)0)
@@ -609,9 +609,9 @@ class ParDevice
 #else
         String* s = String.withFormat("cpu:%d:", Thread.cpuCount());
 #endif
-#if ARCH_win64
+#if OS_windows
         s.append(Platform.env(String.withCString("PROCESSOR_IDENTIFIER")));
-#elif ARCH_x86_64 || PLATFORM_android
+#elif ARCH_x86_64 || OS_android
         String* info = Files.readText(String.withCString("/proc/cpuinfo"));
         if (info != (String*)0)
             {
@@ -1289,7 +1289,7 @@ class ParDevice
     // shares such a block in place instead of copying it.
     static pointer simdBase(pointer host)
         {
-#if ARCH_arm64 || ARCH_x86_64 || ARCH_win64
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
         parGlobals();
         return host != (pointer)0 ? _xtc_simd_base(host) : (pointer)0;
 #else
@@ -1307,7 +1307,7 @@ class ParDevice
     // taken for current.
     static i64 generation(pointer host)
         {
-#if !(ARCH_arm64 || ARCH_x86_64 || ARCH_win64)
+#if !(ARCH_arm64 || ARCH_x86_64 || OS_windows)
         return (i64)-1;
 #else
         parGlobals();
@@ -1354,7 +1354,7 @@ class ParDevice
     static void wrote(pointer host)
         {
         pointer base = simdBase(host);
-#if ARCH_arm64 || ARCH_x86_64 || ARCH_win64
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
         _xtc_simd_unwatch(base != (pointer)0 ? base : host);
 #endif
         for (u32 i = (u32)0; i < gParDevGens; i = i + (u32)1)

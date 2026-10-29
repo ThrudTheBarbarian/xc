@@ -49,10 +49,10 @@
 
 // The Vulkan loader: vulkan-1.dll on Windows, libvulkan.so on Android, and
 // libvulkan.so.1 on Linux, where only a dynamically linked program can load it.
-#if ARCH_win64
+#if OS_windows
 pointer LoadLibraryA(u8* name);
 pointer GetProcAddress(pointer module, u8* name);
-#elif LINK_DYNAMIC || PLATFORM_android
+#elif LINK_DYNAMIC || OS_android
 pointer dlopen(u8* path, i32 mode);
 pointer dlsym(pointer handle, u8* name);
 #endif
@@ -250,12 +250,12 @@ class ParVulkan
     static u64 _fence;          // one fence, reset and reused: a create and a destroy a run was latency
     static vkResetCommandBuffer_t* _resetCmd;
 
-#if ARCH_win64 || LINK_DYNAMIC || PLATFORM_android
+#if OS_windows || LINK_DYNAMIC || OS_android
     static pointer _lib;
 
     static pointer fn(u8* name)
         {
-#if ARCH_win64
+#if OS_windows
         return GetProcAddress(_lib, name);
 #else
         return dlsym(_lib, name);
@@ -301,10 +301,10 @@ class ParVulkan
         if (_state != (i32)0)
             return _state == (i32)1;
         _state = (i32)2;
-#if ARCH_win64 || LINK_DYNAMIC || PLATFORM_android
-#if ARCH_win64
+#if OS_windows || LINK_DYNAMIC || OS_android
+#if OS_windows
         _lib = LoadLibraryA("vulkan-1.dll");
-#elif PLATFORM_android
+#elif OS_android
         _lib = dlopen("libvulkan.so", (i32)2);     // RTLD_NOW
 #else
         _lib = dlopen("libvulkan.so.1", (i32)2);   // RTLD_NOW
@@ -904,7 +904,7 @@ class ParVulkan
         src = spirvOf(src);
         if (src == (u8*)0)
             return ParDevice.cpu("it has no Vulkan version");
-#if !(ARCH_win64 || LINK_DYNAMIC || PLATFORM_android)
+#if !(OS_windows || LINK_DYNAMIC || OS_android)
         return ParDevice.cpu("the program is linked with -static, and a Vulkan GPU needs the dynamic link");
 #else
         if (!start())

@@ -83,9 +83,9 @@
 // mDNS that has its own (it would count this machine's devices twice, once
 // over a loopback link). macOS: the hardware UUID; Linux: /etc/machine-id;
 // Windows: the MachineGuid the system keeps. "" where there is none.
-#if ARCH_win64
+#if OS_windows
 i32 RegGetValueA(pointer hKey, u8* subKey, u8* value, u32 flags, pointer type, pointer data, pointer dataLen);
-#elif ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
+#elif ARCH_arm64 && !OS_ios && !OS_android
 i32 gethostuuid(u8* id, pointer wait);
 #endif
 String* gParMachine;
@@ -105,14 +105,14 @@ class ParMachine
             return s;
             }
         s = new String();
-#if ARCH_win64
+#if OS_windows
         u8 buf[80];
         u32 n = (u32)80;
         // HKEY_LOCAL_MACHINE, a string value (RRF_RT_REG_SZ).
         if (RegGetValueA((pointer)(i64)(i32)$80000002, "SOFTWARE\\Microsoft\\Cryptography", "MachineGuid",
                          (u32)2, (pointer)0, (pointer)&buf[0], (pointer)&n) == (i32)0)
             s = String.withCString(&buf[0]);
-#elif ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
+#elif ARCH_arm64 && !OS_ios && !OS_android
         u8 u[16];
         i64 wait[2];
         wait[0] = (i64)0;
@@ -164,18 +164,18 @@ class ParMachine
 #if !ARCH_wasm32
 i32 memcmp(pointer a, pointer b, u64 n);
 #endif
-#if ARCH_win64
+#if OS_windows
 pointer LoadLibraryA(u8* name);
 pointer GetProcAddress(pointer module, u8* name);
 #define PAR_TLS_LOADER 1
-#elif ARCH_arm64 || LINK_DYNAMIC || PLATFORM_android
+#elif ARCH_arm64 || LINK_DYNAMIC || OS_android
 pointer dlopen(u8* path, i32 mode);
 pointer dlsym(pointer handle, u8* name);
 #define PAR_TLS_LOADER 1
 #else
 #define PAR_TLS_LOADER 0
 #endif
-#if ARCH_x86_64 || PLATFORM_android
+#if ARCH_x86_64 || OS_android
 pointer signal(i32 sig, pointer handler);
 #endif
 typedef i32 xctlsMakeSelfSigned_t(u8* certPath, u8* keyPath, u8* cn);
@@ -211,7 +211,7 @@ class ParTls
 #if PAR_TLS_LOADER
     static pointer openLib(u8* path)
         {
-#if ARCH_win64
+#if OS_windows
         return LoadLibraryA(path);
 #else
         return dlopen(path, (i32)2);   // RTLD_NOW
@@ -219,7 +219,7 @@ class ParTls
         }
     static pointer fn(u8* name)
         {
-#if ARCH_win64
+#if OS_windows
         return GetProcAddress(_lib, name);
 #else
         return dlsym(_lib, name);
@@ -248,7 +248,7 @@ class ParTls
     // then the system loader's own search.
     static bool loadOnce(void)
         {
-#if ARCH_x86_64 || PLATFORM_android
+#if ARCH_x86_64 || OS_android
         // The library writes to the socket itself, so a peer that has gone
         // raises SIGPIPE, which kills the process (exit 141) where the write
         // should fail and the tiles be re-issued. Socket's own writes say
@@ -266,9 +266,9 @@ class ParTls
             u32 cut = exe.byteLength();
             while (cut > (u32)0 && exe.byteAt(cut - (u32)1) != (u8)'/' && exe.byteAt(cut - (u32)1) != (u8)'\\')
                 cut = cut - (u32)1;
-#if ARCH_win64
+#if OS_windows
             String* beside = exe.substringBytes((u32)0, cut).appending(String.withCString("libtls.dll"));
-#elif ARCH_arm64 && !PLATFORM_android
+#elif ARCH_arm64 && !OS_android
             String* beside = exe.substringBytes((u32)0, cut).appending(String.withCString("libtls.dylib"));
 #else
             String* beside = exe.substringBytes((u32)0, cut).appending(String.withCString("libtls.so"));
@@ -276,17 +276,17 @@ class ParTls
             if (cut > (u32)0 && Files.exists(beside))
                 _lib = openLib(beside.cString());
             }
-#if ARCH_win64
+#if OS_windows
         if (_lib == (pointer)0)
             _lib = openLib("C:/Program Files/xcc/3p/tls/win64/libtls.dll");
         if (_lib == (pointer)0)
             _lib = openLib("C:/Program Files/3p/tls/win64/libtls.dll");
         if (_lib == (pointer)0)
             _lib = openLib("libtls.dll");
-#elif PLATFORM_android
+#elif OS_android
         if (_lib == (pointer)0)
             _lib = openLib("libtls.so");
-#elif PLATFORM_ios
+#elif OS_ios
         if (_lib == (pointer)0)
             _lib = openLib("libtls.dylib");
 #elif ARCH_arm64
@@ -2213,7 +2213,7 @@ class ParRemoteChunk : ParChunk
         }
     }
 
-#if ARCH_win64
+#if OS_windows
 void GetLocalTime(u16* systemTime);
 #elif !ARCH_wasm32
 pointer localtime_r(i64* t, i32* tm);
@@ -2556,7 +2556,7 @@ class ParRemoteServe
     // The local time of day in minutes.
     static i32 localMinutes(void)
         {
-#if ARCH_win64
+#if OS_windows
         u16 st[8];
         GetLocalTime(&st[0]);
         return (i32)st[4] * (i32)60 + (i32)st[5];

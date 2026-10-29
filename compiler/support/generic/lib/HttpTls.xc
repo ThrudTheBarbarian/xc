@@ -117,7 +117,7 @@ class HttpTls
     // the usual places. False when there is none (https stays off).
     static bool install(void)
         {
-#if ARCH_win64
+#if OS_windows
         if (!tls_require((i32)1))
             return false;
         TlsClient* sys = new TlsClient();

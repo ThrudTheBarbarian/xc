@@ -95,7 +95,7 @@ class _HttpSocket
 
     bool open(String* host, u32 port)
         {
-#if ARCH_win64
+#if OS_windows
         if (!_http_winsock_ready)
             {
             u8 wsa[512];
@@ -127,7 +127,7 @@ class _HttpSocket
         bool ok = false;
         for (_HttpAddr* a = res; a != (_HttpAddr*)0 && !ok; a = a.next)
             {
-#if ARCH_win64
+#if OS_windows
             u64 s = socket(a.family, a.socktype, a.proto);
             if (s == (u64)0xFFFFFFFFFFFFFFFF)
                 continue;
@@ -164,7 +164,7 @@ class _HttpSocket
 
     void _setOptions(void)
         {
-#if ARCH_win64
+#if OS_windows
         u32 ms = (u32)_HTTP_TIMEOUT_SECONDS * (u32)1000;
         setsockopt((u64)_fd, (i32)0xFFFF, (i32)0x1006, (u8*)&ms, (i32)4);
         setsockopt((u64)_fd, (i32)0xFFFF, (i32)0x1005, (u8*)&ms, (i32)4);
@@ -172,7 +172,7 @@ class _HttpSocket
         _HttpTimeVal tv;
         tv.sec = (i64)_HTTP_TIMEOUT_SECONDS;
         tv.usec = (i64)0;
-#if ARCH_x86_64 || PLATFORM_android
+#if ARCH_x86_64 || OS_android
         setsockopt((i32)_fd, (i32)1, (i32)20, (u8*)&tv, (u32)16);    // SO_RCVTIMEO
         setsockopt((i32)_fd, (i32)1, (i32)21, (u8*)&tv, (u32)16);    // SO_SNDTIMEO
 #else
@@ -206,12 +206,12 @@ class _HttpSocket
         u32 done = (u32)0;
         while (done < n)
             {
-#if ARCH_win64
+#if OS_windows
             i32 put = send((u64)_fd, p + done, (i32)(n - done), (i32)0);
             if (put <= (i32)0)
                 return false;
             done = done + (u32)put;
-#elif ARCH_x86_64 || PLATFORM_android
+#elif ARCH_x86_64 || OS_android
             i64 put = send((i32)_fd, p + done, (u64)(n - done), (i32)0x4000);   // MSG_NOSIGNAL
             if (put <= (i64)0)
                 return false;
@@ -232,7 +232,7 @@ class _HttpSocket
         {
         if (_tls != (HttpSecureConnection*)0)
             return _tls.read(p, n);
-#if ARCH_win64
+#if OS_windows
         return recv((u64)_fd, p, (i32)n, (i32)0);
 #else
         return (i32)recv((i32)_fd, p, (u64)n, (i32)0);
@@ -248,7 +248,7 @@ class _HttpSocket
             _tls.close();
             _tls = (HttpSecureConnection*)0;
             }
-#if ARCH_win64
+#if OS_windows
         closesocket((u64)_fd);
 #else
         close((i32)_fd);

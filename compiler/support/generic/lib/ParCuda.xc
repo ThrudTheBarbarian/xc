@@ -16,7 +16,7 @@
 #import "ParDevice.xc"
 #import "ParWorker.xc"     // ParTile and ParWorker: the file stands alone (sema-diff, ast-diff read it so)
 
-#if ARCH_win64
+#if OS_windows
 pointer LoadLibraryA(u8* name);
 pointer GetProcAddress(pointer module, u8* name);
 #else
@@ -26,7 +26,7 @@ pointer dlsym(pointer handle, u8* name);
 // The driver's entry point by name, from the library start() loaded.
 pointer parCuSym(pointer lib, u8* name)
     {
-#if ARCH_win64
+#if OS_windows
     return GetProcAddress(lib, name);
 #else
     return dlsym(lib, name);
@@ -221,7 +221,7 @@ class ParCuda
         if (_state != (i32)0)
             return _state == (i32)1;
         _state = (i32)2;
-#if ARCH_win64
+#if OS_windows
         pointer lib = LoadLibraryA("nvcuda.dll");
 #else
         pointer lib = dlopen("libcuda.so.1", (i32)2);   // RTLD_NOW

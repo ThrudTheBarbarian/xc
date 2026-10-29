@@ -44,12 +44,12 @@
 #import "Files.xc"
 #import "PlatformCore.xc"
 
-#if ARCH_win64
+#if OS_windows
 pointer LoadLibraryA(u8* name);
 pointer GetProcAddress(pointer module, u8* name);
 pointer LocalFree(pointer p);
 typedef i32 KsCrypt_t(u8* blobIn, pointer desc, pointer entropy, pointer reserved, pointer prompt, u32 flags, u8* blobOut);
-#elif ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
+#elif ARCH_arm64 && !OS_ios && !OS_android
 pointer dlopen(u8* path, i32 mode);
 pointer dlsym(pointer handle, u8* name);
 typedef i32 KsInteract_t(u8 allowed);
@@ -83,9 +83,9 @@ class KeyStore : Object
 
     static String* where(void)
         {
-#if ARCH_win64
+#if OS_windows
         return String.withCString("DPAPI (encrypted to this Windows user)");
-#elif ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
+#elif ARCH_arm64 && !OS_ios && !OS_android
         return String.withCString("the login keychain (service \"xcc\")");
 #else
         return String.withCString("the Secret Service (secret-tool, service xcc)");
@@ -123,7 +123,7 @@ class KeyStore : Object
         return d;
         }
 
-#if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
+#if ARCH_arm64 && !OS_ios && !OS_android
     static pointer _sec;
 
     static pointer _fn(u8* name)
@@ -148,7 +148,7 @@ class KeyStore : Object
         }
 #endif
 
-#if ARCH_win64
+#if OS_windows
     static String* _dpapiFile(String* name)
         {
         String* d = Platform.home();
@@ -169,7 +169,7 @@ class KeyStore : Object
         }
 #endif
 
-#if ARCH_x86_64 && !ARCH_win64
+#if ARCH_x86_64 && !OS_windows
     // secret-tool runs only where a session bus is: a machine reached by ssh
     // alone has none, and a store there would fail or wait.
     static bool _session(void)
@@ -181,7 +181,7 @@ class KeyStore : Object
     static Data* load(String* name)
         {
         _error = (String*)0;
-#if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
+#if ARCH_arm64 && !OS_ios && !OS_android
         KsFind_t* find = (KsFind_t*)KeyStore._fn("SecKeychainFindGenericPassword");
         KsFree_t* fr = (KsFree_t*)KeyStore._fn("SecKeychainItemFreeContent");
         if (find == (KsFind_t*)0 || fr == (KsFree_t*)0)
@@ -199,7 +199,7 @@ class KeyStore : Object
         if (d == (Data*)0)
             return KeyStore._failData(String.withCString("the keychain item is not a key"));
         return d;
-#elif ARCH_win64
+#elif OS_windows
         Data* blob = Files.readData(KeyStore._dpapiFile(name));
         if (blob == (Data*)0)
             return (Data*)0;
@@ -245,7 +245,7 @@ class KeyStore : Object
     static bool save(String* name, Data* secret)
         {
         _error = (String*)0;
-#if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
+#if ARCH_arm64 && !OS_ios && !OS_android
         KsAdd_t* add = (KsAdd_t*)KeyStore._fn("SecKeychainAddGenericPassword");
         if (add == (KsAdd_t*)0)
             {
@@ -261,7 +261,7 @@ class KeyStore : Object
             return false;
             }
         return true;
-#elif ARCH_win64
+#elif OS_windows
         KsCrypt_t* pr = KeyStore._crypt("CryptProtectData");
         if (pr == (KsCrypt_t*)0)
             {

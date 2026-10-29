@@ -70,7 +70,7 @@
 // that order; Windows's size_t ai_addrlen fills the padding the others have.
 
 #if !_SOCKET_NO_TCP
-#if ARCH_win64
+#if OS_windows
 struct _HttpAddr { i32 flags; i32 family; i32 socktype; i32 proto; u32 addrlen; u32 _pad; u8* canon; u8* addr; _HttpAddr* next; }
 i32 WSAStartup(u16 version, u8* data);
 u64 socket(i32 domain, i32 type, i32 proto);
@@ -113,11 +113,11 @@ i32 getaddrinfo(u8* node, u8* service, _HttpAddr* hints, _HttpAddr** res);
 void freeaddrinfo(_HttpAddr* res);
 // A connect with a time limit: the socket non-blocking for the connect, the
 // wait a poll for writable, the outcome SO_ERROR (Socket.connectWithin).
-#if ARCH_win64
+#if OS_windows
 i32 ioctlsocket(u64 s, i32 cmd, u32* arg);
 i32 getsockopt(u64 s, i32 level, i32 name, u8* value, i32* len);
 #define _SOCKET_POLLOUT 0x0010
-#elif ARCH_x86_64 || PLATFORM_android
+#elif ARCH_x86_64 || OS_android
 i32 fcntl(i32 fd, i32 cmd, ...);
 i32 getsockopt(i32 fd, i32 level, i32 name, u8* value, u32* len);
 #define _SOCKET_O_NONBLOCK 0x800
@@ -135,7 +135,7 @@ i32 getsockopt(i32 fd, i32 level, i32 name, u8* value, u32* len);
 #define _SOCKET_POLLOUT 0x0004
 #endif
 // The server side: bind, listen, accept (Socket.listen / accept below).
-#if ARCH_win64
+#if OS_windows
 i32 bind(u64 s, u8* addr, i32 len);
 i32 listen(u64 s, i32 backlog);
 u64 accept(u64 s, u8* addr, i32* len);
@@ -150,7 +150,7 @@ bool _socket_winsock_ready = false;
 // Winsock's start-up, once (true on the other hosts).
 bool _socket_startup(void)
     {
-#if ARCH_win64
+#if OS_windows
     if (!_socket_winsock_ready)
         {
         u8 wsa[512];
@@ -165,7 +165,7 @@ bool _socket_startup(void)
 // C's connect, by another name: inside Socket the bare name is its own.
 bool _socket_connectFd(i64 fd, u8* addr, u32 len)
     {
-#if ARCH_win64
+#if OS_windows
     return connect((u64)fd, addr, (i32)len) == (i32)0;
 #else
     return connect((i32)fd, addr, len) == (i32)0;
@@ -175,7 +175,7 @@ bool _socket_connectFd(i64 fd, u8* addr, u32 len)
 // C's close, by another name: inside Socket the bare name is its own close().
 void _socket_closeFd(i64 fd)
     {
-#if ARCH_win64
+#if OS_windows
     closesocket((u64)fd);
 #else
     close((i32)fd);
@@ -252,7 +252,7 @@ class Socket
         Socket* s = (Socket*)0;
         for (_HttpAddr* a = res; a != (_HttpAddr*)0 && s == 0; a = a.next)
             {
-#if ARCH_win64
+#if OS_windows
             u64 h = socket(a.family, a.socktype, a.proto);
             if (h == (u64)0xFFFFFFFFFFFFFFFF)
                 continue;
@@ -286,7 +286,7 @@ class Socket
             throw new SocketError(m);
             }
         s._open = true;
-#if !ARCH_win64 && !ARCH_x86_64 && !PLATFORM_android
+#if !OS_windows && !ARCH_x86_64 && !OS_android
         // A peer that closes early must fail the write, not kill the process.
         i32 one = (i32)1;
         setsockopt((i32)s._fd, (i32)0xFFFF, (i32)0x1022, (u8*)&one, (u32)4);  // SO_NOSIGPIPE
@@ -305,7 +305,7 @@ class Socket
     // the system does it). The socket is left blocking either way.
     static bool _connectOne(i64 h, u8* addr, u32 len, i32 ms)
         {
-#if ARCH_win64
+#if OS_windows
         if (ms < (i32)0)
             return _socket_connectFd(h, addr, len);
         u32 on = (u32)1;
@@ -370,7 +370,7 @@ class Socket
         if (!_open)
             return;
         i32 one = (i32)1;
-#if ARCH_win64
+#if OS_windows
         setsockopt((u64)_fd, (i32)6, (i32)1, (u8*)&one, (i32)4);    // IPPROTO_TCP, TCP_NODELAY
 #else
         setsockopt((i32)_fd, (i32)6, (i32)1, (u8*)&one, (u32)4);    // IPPROTO_TCP, TCP_NODELAY
@@ -402,7 +402,7 @@ class Socket
         u8 sa[16];
         for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
             sa[i] = (u8)0;
-#if ARCH_win64 || ARCH_x86_64 || PLATFORM_android
+#if OS_windows || ARCH_x86_64 || OS_android
         sa[0] = (u8)2;
 #else
         sa[0] = (u8)16;
@@ -411,7 +411,7 @@ class Socket
         sa[2] = (u8)(port >> (u16)8);
         sa[3] = (u8)(port & (u16)255);
         i32 one = (i32)1;
-#if ARCH_win64
+#if OS_windows
         u64 h = socket((i32)2, (i32)1, (i32)0);
         if (h == (u64)0xFFFFFFFFFFFFFFFF)
             throw new SocketError(String.withCString("cannot make a socket"));
@@ -433,7 +433,7 @@ class Socket
         i32 h = socket((i32)2, (i32)1, (i32)0);
         if (h < (i32)0)
             throw new SocketError(String.withCString("cannot make a socket"));
-#if ARCH_x86_64 || PLATFORM_android
+#if ARCH_x86_64 || OS_android
         setsockopt(h, (i32)1, (i32)2, (u8*)&one, (u32)4);                    // SOL_SOCKET, SO_REUSEADDR
 #else
         setsockopt(h, (i32)0xFFFF, (i32)4, (u8*)&one, (u32)4);
@@ -462,7 +462,7 @@ class Socket
         if (!_open || !waitReadable(ms))
             return (Socket*)0;
         u8 sa[128];
-#if ARCH_win64
+#if OS_windows
         i32 len = (i32)128;
         u64 h = accept((u64)_fd, &sa[0], &len);
         if (h == (u64)0xFFFFFFFFFFFFFFFF)
@@ -478,7 +478,7 @@ class Socket
         Socket* s = new Socket();
         s._fd = fd;
         s._open = true;
-#if !ARCH_win64 && !ARCH_x86_64 && !PLATFORM_android
+#if !OS_windows && !ARCH_x86_64 && !OS_android
         i32 one = (i32)1;
         setsockopt((i32)fd, (i32)0xFFFF, (i32)0x1022, (u8*)&one, (u32)4);  // SO_NOSIGPIPE
 #endif
@@ -519,7 +519,7 @@ class Socket
         u32 done = (u32)0;
         while (done < n)
             {
-#if ARCH_win64
+#if OS_windows
             i32 put = send((u64)_fd, p + done, (i32)(n - done), (i32)0);
             if (put <= (i32)0)
                 {
@@ -527,7 +527,7 @@ class Socket
                 return false;
                 }
             done = done + (u32)put;
-#elif ARCH_x86_64 || PLATFORM_android
+#elif ARCH_x86_64 || OS_android
             i64 put = send((i32)_fd, p + done, (u64)(n - done), (i32)0x4000);   // MSG_NOSIGNAL
             if (put <= (i64)0)
                 {
@@ -573,7 +573,7 @@ class Socket
         if (!_open)
             return true;
         _SocketPoll p;
-#if ARCH_win64
+#if OS_windows
         p.fd = (u64)_fd;
         p._pad = (i32)0;
 #else
@@ -581,7 +581,7 @@ class Socket
 #endif
         p.events = (i16)_SOCKET_POLLIN;
         p.revents = (i16)0;
-#if ARCH_win64
+#if OS_windows
         i32 r = WSAPoll((pointer)&p, (u32)1, ms);
 #elif ARCH_x86_64
         i32 r = poll((pointer)&p, (u64)1, ms);
@@ -604,7 +604,7 @@ class Socket
             return (i32)-1;
         if (cap == (u32)0 || !waitReadable((i32)0))
             return (i32)0;
-#if ARCH_win64
+#if OS_windows
         i32 got = recv((u64)_fd, p, (i32)cap, (i32)0);
 #else
         i32 got = (i32)recv((i32)_fd, p, (u64)cap, (i32)0);

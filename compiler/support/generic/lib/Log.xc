@@ -61,7 +61,7 @@ protocol Logger
     optional void debug(String * msg);
     }
 
-#if ARCH_win64
+#if OS_windows
 // No tty probe on win64: ucrtbase.dll's isatty is unimplemented under wine
 // (the sweep host), and the Windows console colour story is its own thing.
 #else
@@ -86,7 +86,7 @@ class ConsoleLogger<Logger>
             {
             _decided = true;
             _colour = false;
-#if ARCH_win64
+#if OS_windows
 #else
 #if ARCH_arm64 || ARCH_x86_64
             if (isatty((i32)1) != 0)
@@ -208,7 +208,7 @@ class Log
             {
 #if ARCH_wasm32
             _log_logger = (Logger*)new BrowserLogger();
-#elif PLATFORM_ios
+#elif OS_ios
             _log_logger = (Logger*)new IosLogger();
 #else
             _log_logger = (Logger*)new ConsoleLogger();

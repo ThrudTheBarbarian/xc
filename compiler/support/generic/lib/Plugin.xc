@@ -82,10 +82,10 @@ void _xt_plugin_cache_put(u8* u, u32 un, u8* p, u32 n);
 void _xt_plugin_cache_get(u32 token, u8* u, u32 un);
 #endif
 
-#if ARCH_win64
+#if OS_windows
 pointer LoadLibraryExA(u8* path, pointer file, u32 flags);
 pointer GetProcAddress(pointer module, u8* name);
-#elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+#elif ARCH_arm64 || ARCH_x86_64 || OS_android
 pointer dlopen(u8* path, i32 mode);
 pointer dlsym(pointer handle, u8* name);
 u8* dlerror(void);
@@ -180,15 +180,15 @@ class Plugin : Object
 
     static String* _platform(void)
         {
-#if ARCH_win64
+#if OS_windows
         return String.withCString("windows-x86_64");
-#elif PLATFORM_android
+#elif OS_android
         return String.withCString("android-arm64");
 #elif ARCH_x86_64
         return String.withCString("linux-x86_64");
 #elif ARCH_wasm32
         return String.withCString("wasm32");
-#elif PLATFORM_ios
+#elif OS_ios
         return String.withCString("ios-arm64");    // as the driver names the bundle's directory
 #else
         return String.withCString("macos-arm64");
@@ -756,10 +756,10 @@ class Plugin : Object
             if (!f.hasPrefix(execDir) || f.equals(code))
                 continue;
             String* full = BundleSign._join(dir, f);
-#if ARCH_win64
+#if OS_windows
             if (LoadLibraryExA(full.cString(), (pointer)0, (u32)0x00000900) == (pointer)0)
                 return Plugin._fail(String.withFormat("%s: the system would not load %s", name.cString(), f.cString()));
-#elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+#elif ARCH_arm64 || ARCH_x86_64 || OS_android
             if (dlopen(full.cString(), (i32)2) == (pointer)0)
                 {
                 u8* why = dlerror();
@@ -772,12 +772,12 @@ class Plugin : Object
         p._name = name;
         p._dir = dir;
         p._adopt(m);
-#if ARCH_win64
+#if OS_windows
         // LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32
         p._handle = LoadLibraryExA(lib.cString(), (pointer)0, (u32)0x00000900);
         if (p._handle == (pointer)0)
             return Plugin._fail(String.withFormat("%s: the system would not load %s", name.cString(), code.cString()));
-#elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+#elif ARCH_arm64 || ARCH_x86_64 || OS_android
         p._handle = dlopen(lib.cString(), (i32)2);
         if (p._handle == (pointer)0)
             {
@@ -1367,9 +1367,9 @@ class Plugin : Object
     // A symbol of the plugin's code, or 0.
     pointer symbol(String* nm)
         {
-#if ARCH_win64
+#if OS_windows
         return GetProcAddress(_handle, nm.cString());
-#elif ARCH_arm64 || ARCH_x86_64 || PLATFORM_android
+#elif ARCH_arm64 || ARCH_x86_64 || OS_android
         return dlsym(_handle, nm.cString());
 #else
         return (pointer)0;

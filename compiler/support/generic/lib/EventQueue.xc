@@ -45,12 +45,12 @@
 #import "Foundation.xc"
 #import "Socket.xc"
 
-#if ARCH_win64
+#if OS_windows
 i32 sendto(u64 s, u8* buf, i32 len, i32 flags, u8* to, i32 tolen);
 i32 recvfrom(u64 s, u8* buf, i32 len, i32 flags, u8* from, i32* fromlen);
 i32 getsockname(u64 s, u8* name, i32* namelen);
 #define _EVQ_OK 1
-#elif (ARCH_arm64 && !PLATFORM_android) || PLATFORM_ios
+#elif (ARCH_arm64 && !OS_android) || OS_ios
 // struct kevent: ident, filter, flags, fflags, data, udata (32 bytes).
 struct _EvqKevent { u64 ident; i16 filter; u16 flags; u32 fflags; i64 data; u64 udata; }
 struct _EvqTimespec { i64 sec; i64 nsec; }
@@ -58,7 +58,7 @@ i32 kqueue(void);
 i32 kevent(i32 kq, pointer changes, i32 nchanges, pointer events, i32 nevents, pointer timeout);
 #define _EVQ_KQUEUE 1
 #define _EVQ_OK 1
-#elif ARCH_x86_64 || PLATFORM_android
+#elif ARCH_x86_64 || OS_android
 i32 epoll_create1(i32 flags);
 i32 epoll_ctl(i32 epfd, i32 op, i32 fd, pointer ev);
 i32 epoll_wait(i32 epfd, pointer evs, i32 max, i32 timeout);
@@ -111,7 +111,7 @@ class EventQueue : Object
         if (_q < (i64)0 || _wakeFd < (i64)0)
             return false;
         return self._add(_wakeFd);
-#elif ARCH_win64
+#elif OS_windows
         if (!_socket_startup())
             return false;
         u64 s = socket((i32)2, (i32)2, (i32)17);          // AF_INET, SOCK_DGRAM, UDP
@@ -168,7 +168,7 @@ class EventQueue : Object
         return kevent((i32)_q, (pointer)&ev, (i32)1, (pointer)0, (i32)0, (pointer)0) == (i32)0;
 #elif _EVQ_EPOLL
         return self._add(fd);
-#elif ARCH_win64
+#elif OS_windows
         _fds.add((Object*)Number.with((u64)fd));
         return true;
 #else
@@ -193,7 +193,7 @@ class EventQueue : Object
 #elif _EVQ_EPOLL
         u8[16] ev;
         epoll_ctl((i32)_q, (i32)2, (i32)fd, (pointer)&ev[0]);   // EPOLL_CTL_DEL
-#elif ARCH_win64
+#elif OS_windows
         for (u32 i = (u32)0; i < _fds.count(); i = i + (u32)1)
             if (((Number*)_fds.get(i)).asU64() == (u64)fd)
                 {
@@ -215,7 +215,7 @@ class EventQueue : Object
 #elif _EVQ_EPOLL
         _socket_closeFd(_q);
         _socket_closeFd(_wakeFd);
-#elif ARCH_win64
+#elif OS_windows
         _socket_closeFd(_wakeFd);
 #endif
         }
@@ -237,7 +237,7 @@ class EventQueue : Object
 #elif _EVQ_EPOLL
         u64 one = (u64)1;
         write((i32)_wakeFd, (u8*)&one, (i32)8);
-#elif ARCH_win64
+#elif OS_windows
         u8 b = (u8)1;
         sendto((u64)_wakeFd, &b, (i32)1, (i32)0, &_self[0], (i32)16);
 #endif
@@ -266,7 +266,7 @@ class EventQueue : Object
             read((i32)_wakeFd, (u8*)&drain, (i32)8);       // non-blocking: 0 or the count
             }
         return n > (i32)0;
-#elif ARCH_win64
+#elif OS_windows
         u32 n = _fds.count() + (u32)1;
         u8* polls = new u8[n * (u32)16];
         // WSAPOLLFD: SOCKET fd (8), short events, short revents (+4 padding).

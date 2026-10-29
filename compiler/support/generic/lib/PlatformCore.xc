@@ -77,7 +77,7 @@ class Platform
             {
 #if ARCH_wasm32
             _plat_delegate = (PlatformDelegate*)new Browser();
-#elif PLATFORM_ios
+#elif OS_ios
             _plat_delegate = (PlatformDelegate*)new IosDelegate();
 #endif
             _plat_wired = true;

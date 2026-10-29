@@ -20,7 +20,7 @@
 #define MDNS_SERVICE "_xcd._tcp.local"
 
 #if !_SOCKET_NO_TCP
-#if ARCH_win64
+#if OS_windows
 i32 sendto(u64 s, u8* buf, i32 len, i32 flags, u8* to, i32 tolen);
 i32 recvfrom(u64 s, u8* buf, i32 len, i32 flags, u8* from, i32* fromlen);
 #else
@@ -46,7 +46,7 @@ class MdnsSocket
         u8 sa[16];
         for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
             sa[i] = (u8)0;
-#if ARCH_win64 || ARCH_x86_64 || PLATFORM_android
+#if OS_windows || ARCH_x86_64 || OS_android
         sa[0] = (u8)2;
 #else
         sa[0] = (u8)16;
@@ -64,7 +64,7 @@ class MdnsSocket
             mreq[i] = (u8)0;
         mreq[0] = (u8)224;
         mreq[3] = (u8)251;
-#if ARCH_win64
+#if OS_windows
         u64 h = socket((i32)2, (i32)2, (i32)17);
         if (h == (u64)0xFFFFFFFFFFFFFFFF)
             return (MdnsSocket*)0;
@@ -85,7 +85,7 @@ class MdnsSocket
             return (MdnsSocket*)0;
         if (responder)
             {
-#if ARCH_x86_64 || PLATFORM_android
+#if ARCH_x86_64 || OS_android
             setsockopt(h, (i32)1, (i32)2, (u8*)&one, (u32)4);                // SO_REUSEADDR
             setsockopt(h, (i32)1, (i32)15, (u8*)&one, (u32)4);               // SO_REUSEPORT
 #else
@@ -97,7 +97,7 @@ class MdnsSocket
                 _socket_closeFd((i64)h);
                 return (MdnsSocket*)0;
                 }
-#if ARCH_x86_64 || PLATFORM_android
+#if ARCH_x86_64 || OS_android
             setsockopt(h, (i32)0, (i32)35, &mreq[0], (u32)8);                // IP_ADD_MEMBERSHIP
 #else
             setsockopt(h, (i32)0, (i32)12, &mreq[0], (u32)8);
@@ -130,7 +130,7 @@ class MdnsSocket
         u8 sa[16];
         for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
             sa[i] = (u8)0;
-#if ARCH_win64 || ARCH_x86_64 || PLATFORM_android
+#if OS_windows || ARCH_x86_64 || OS_android
         sa[0] = (u8)2;
 #else
         sa[0] = (u8)16;
@@ -142,7 +142,7 @@ class MdnsSocket
         sa[5] = ip[1];
         sa[6] = ip[2];
         sa[7] = ip[3];
-#if ARCH_win64
+#if OS_windows
         return sendto((u64)_fd, p, (i32)n, (i32)0, &sa[0], (i32)16) == (i32)n;
 #else
         return sendto((i32)_fd, p, (u64)n, (i32)0, &sa[0], (u32)16) == (i64)n;
@@ -158,7 +158,7 @@ class MdnsSocket
         return (i32)-1;
 #else
         _SocketPoll pl;
-#if ARCH_win64
+#if OS_windows
         pl.fd = (u64)_fd;
         pl._pad = (i32)0;
 #else
@@ -166,7 +166,7 @@ class MdnsSocket
 #endif
         pl.events = (i16)_SOCKET_POLLIN;
         pl.revents = (i16)0;
-#if ARCH_win64
+#if OS_windows
         i32 r = WSAPoll((pointer)&pl, (u32)1, ms);
 #elif ARCH_x86_64
         i32 r = poll((pointer)&pl, (u64)1, ms);
@@ -176,7 +176,7 @@ class MdnsSocket
         if (r <= (i32)0 || ((i32)pl.revents & (i32)_SOCKET_POLLIN) == (i32)0)
             return (i32)-1;
         u8 sa[128];
-#if ARCH_win64
+#if OS_windows
         i32 len = (i32)128;
         i32 n = recvfrom((u64)_fd, p, (i32)cap, (i32)0, &sa[0], &len);
 #else

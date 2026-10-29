@@ -336,7 +336,7 @@ class ParTiles
     // "vulkan:<name>:<vendor>:<device>", a CUDA one "cuda:<name>".
     static void defaultWorkers(void)
         {
-#if ARCH_win64 || (ARCH_x86_64 && LINK_DYNAMIC && !PLATFORM_android)
+#if OS_windows || (ARCH_x86_64 && LINK_DYNAMIC && !OS_android)
         if (!ParDevice.vulkanOnly())
             ParCuda.addWorkers(_workers);
         ParVulkanWorker* vk = new ParVulkanWorker();
@@ -358,11 +358,11 @@ class ParTiles
             }
         if (vid.byteLength() > (u32)0)
             _workers.add((Object*)vk);
-#elif ARCH_x86_64 || (ARCH_arm64 && PLATFORM_android)
+#elif ARCH_x86_64 || (ARCH_arm64 && OS_android)
         ParVulkanWorker* vk = new ParVulkanWorker();
         if (vk.identity().byteLength() > (u32)0)
             _workers.add((Object*)vk);
-#elif ARCH_arm64 && !PLATFORM_ios
+#elif ARCH_arm64 && !OS_ios
         ParMetalWorker* mtl = new ParMetalWorker();
         if (mtl.identity().byteLength() > (u32)0)
             _workers.add((Object*)mtl);
@@ -403,15 +403,15 @@ class ParTiles
             String* name = names.substringBytes(at, end - at);
             if (name.equals(String.withCString("cpu")))
                 cpu = true;
-#if ARCH_win64 || (ARCH_x86_64 && LINK_DYNAMIC && !PLATFORM_android)
+#if OS_windows || (ARCH_x86_64 && LINK_DYNAMIC && !OS_android)
             else if (name.equals(String.withCString("cuda")))
                 ParCuda.addWorkers(_workers);
 #endif
-#if ARCH_arm64 && !PLATFORM_ios && !PLATFORM_android
+#if ARCH_arm64 && !OS_ios && !OS_android
             else if (name.equals(String.withCString("metal")))
                 _workers.add((Object*)new ParMetalWorker());
 #endif
-#if ARCH_x86_64 || ARCH_win64 || (ARCH_arm64 && PLATFORM_android)
+#if ARCH_x86_64 || OS_windows || (ARCH_arm64 && OS_android)
             else if (name.equals(String.withCString("vulkan")))
                 _workers.add((Object*)new ParVulkanWorker());
 #endif

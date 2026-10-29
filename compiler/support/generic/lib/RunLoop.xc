@@ -61,7 +61,7 @@
 
 // Microseconds on the host's monotonic clock. Time.timerValue counts from an
 // origin the PROGRAM sets with Time.clearTimer, so a library cannot use it.
-#if ARCH_win64
+#if OS_windows
 i32 QueryPerformanceCounter(i64* count);
 i32 QueryPerformanceFrequency(i64* perSecond);
 pointer LoadLibraryA(u8* name);
@@ -74,7 +74,7 @@ i32 clock_gettime(i32 clock, pointer ts);
 
 i64 _runloop_now_us(void)
     {
-#if ARCH_win64
+#if OS_windows
     // The performance counter: GetTickCount64 moves in 15.6 ms steps, which
     // no timer could be more precise than.
     i64 c = (i64)0;
@@ -84,7 +84,7 @@ i64 _runloop_now_us(void)
     return (c / f) * (i64)1000000 + (c % f) * (i64)1000000 / f;
 #else
     _RunLoopTimespec ts;
-#if ARCH_x86_64 || PLATFORM_android
+#if ARCH_x86_64 || OS_android
     clock_gettime((i32)1, (pointer)&ts);     // CLOCK_MONOTONIC on Linux
 #else
     clock_gettime((i32)6, (pointer)&ts);     // CLOCK_MONOTONIC on Darwin
@@ -262,7 +262,7 @@ class RunLoop
         if (_ticker == (Thread*)0)
             {
             _tickWake = EventQueue.make();
-#if ARCH_win64
+#if OS_windows
             // Windows wakes timed waits on its 15.6 ms tick unless a process
             // asks for 1 ms (winmm; since Windows 10 2004 the request is the
             // process's own): without it a timer was 8 ms late on average.

@@ -61,11 +61,11 @@
 
 // The running image's own path, from the OS where it says (argv[0] is only
 // what the caller typed: plain `myapp` from PATH names no directory).
-#if ARCH_win64
+#if OS_windows
 u32 GetModuleFileNameA(pointer module, u8* buf, u32 size);
-#elif ARCH_arm64 && !PLATFORM_android
+#elif ARCH_arm64 && !OS_android
 i32 _NSGetExecutablePath(u8* buf, u32* size);
-#elif ARCH_x86_64 || PLATFORM_android
+#elif ARCH_x86_64 || OS_android
 i64 readlink(u8* path, u8* buf, u64 size);
 #endif
 
@@ -132,17 +132,17 @@ class Bundle
 #if ARCH_6502
         return (String*)0;
 #else
-#if ARCH_win64
+#if OS_windows
         u8 wbuf[1024];
         u32 wn = GetModuleFileNameA((pointer)0, &wbuf[0], (u32)1024);
         if (wn > (u32)0 && wn < (u32)1024)
             return String.withBytes(&wbuf[0], wn);
-#elif ARCH_arm64 && !PLATFORM_android
+#elif ARCH_arm64 && !OS_android
         u8 mbuf[1024];
         u32 msize = (u32)1024;
         if (_NSGetExecutablePath(&mbuf[0], &msize) == (i32)0)
             return String.withCString(&mbuf[0]);
-#elif ARCH_x86_64 || PLATFORM_android
+#elif ARCH_x86_64 || OS_android
         // Linux and Android: the kernel's own answer, exact whatever argv[0]
         // says (a symlink, a relative start, an exec by a launcher).
         u8 lbuf[1024];
@@ -159,7 +159,7 @@ class Bundle
         String* path = Platform.env(String.withCString("PATH"));
         if (path == 0)
             return a0;
-#if ARCH_win64
+#if OS_windows
         u8 sep = (u8)';';
 #else
         u8 sep = (u8)':';
