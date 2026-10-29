@@ -101,7 +101,7 @@ class Platform
     // pretending. A caller that needs a real value must say so itself.
     static String* env(String* name)
         {
-#if ARCH_6502 || ARCH_arm9 || ARCH_m68k
+#if ARCH_6502 || ARCH_armv7 || ARCH_m68k
         return String.withCString("");
 #elif ARCH_wasm32
         if (name == 0)

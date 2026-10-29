@@ -50,7 +50,7 @@
 #import "Thread.xc"
 #import "Mutex.xc"
 #import "Cond.xc"
-#if ARCH_arm9
+#if ARCH_armv7
 #else
 #import "RunLoop.xc"
 RunLoop* _async_files_deliver = (RunLoop*)0;
@@ -83,7 +83,7 @@ class _AsyncFileOp
             String* t = Files.readText(path);
             if (!hasText)
                 return;
-#if ARCH_arm9
+#if ARCH_armv7
 #else
             if (_async_files_deliver != (RunLoop*)0)
                 {
@@ -99,7 +99,7 @@ class _AsyncFileOp
             Data* d = Files.readData(path);
             if (!hasData)
                 return;
-#if ARCH_arm9
+#if ARCH_armv7
 #else
             if (_async_files_deliver != (RunLoop*)0)
                 {
@@ -121,7 +121,7 @@ class _AsyncFileOp
                 ok = Files.appendText(path, text);
             if (!hasDone)
                 return;
-#if ARCH_arm9
+#if ARCH_armv7
 #else
             if (_async_files_deliver != (RunLoop*)0)
                 {
@@ -254,7 +254,7 @@ class AsyncFiles
         AsyncFiles._write((u32)_AF_APPEND_TEXT, path, text, (Data*)0, cb);
         }
 
-#if ARCH_arm9
+#if ARCH_armv7
 #else
     // Post every completion to `loop` instead of running it on the worker; 0
     // goes back to the worker. Set it before queueing. drain() then waits for

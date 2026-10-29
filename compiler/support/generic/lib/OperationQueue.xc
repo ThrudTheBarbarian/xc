@@ -47,7 +47,7 @@
 #import "Mutex.xc"
 #import "Cond.xc"
 #endif
-#if !(ARCH_6502 || ARCH_m68k || ARCH_wasm32 || ARCH_arm9)
+#if !(ARCH_6502 || ARCH_m68k || ARCH_wasm32 || ARCH_armv7)
 #import "RunLoop.xc"
 #endif
 
@@ -392,7 +392,7 @@ class OperationQueue : Object
             _opq_main = new OperationQueue();
             _opq_main._max = (i32)1;
             _opq_main._isMain = true;
-#if ARCH_6502 || ARCH_m68k || ARCH_wasm32 || ARCH_arm9
+#if ARCH_6502 || ARCH_m68k || ARCH_wasm32 || ARCH_armv7
             _opq_main._onCaller = true;
 #endif
             }
@@ -506,7 +506,7 @@ class OperationQueue : Object
             return;
             }
 #if !(ARCH_6502 || ARCH_m68k || ARCH_wasm32)
-#if !ARCH_arm9
+#if !ARCH_armv7
         // The main queue's operations run on the main run loop; waiting for
         // them on the thread that runs it would never return, so run them.
         if (_isMain)
@@ -627,7 +627,7 @@ class OperationQueue : Object
         }
 #endif
 
-#if !(ARCH_6502 || ARCH_m68k || ARCH_wasm32 || ARCH_arm9)
+#if !(ARCH_6502 || ARCH_m68k || ARCH_wasm32 || ARCH_armv7)
     // One ready operation to the main run loop.
     void _postMain(void)
         {

@@ -49,7 +49,7 @@
 
 #import "Foundation.xc"
 
-#if ARCH_6502 || ARCH_m68k || ARCH_wasm32 || ARCH_arm9
+#if ARCH_6502 || ARCH_m68k || ARCH_wasm32 || ARCH_armv7
 #error "RunLoop: needs threads and a monotonic clock (arm64, android, x86_64 or win64)"
 #endif
 

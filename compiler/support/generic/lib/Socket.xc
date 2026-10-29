@@ -57,7 +57,7 @@
 #import "Foundation.xc"
 #import "Error.xc"
 
-#if ARCH_wasm32 || ARCH_arm9 || ARCH_m68k
+#if ARCH_wasm32 || ARCH_armv7 || ARCH_m68k
 #define _SOCKET_NO_TCP 1
 #endif
 

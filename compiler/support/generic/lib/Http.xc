@@ -51,7 +51,7 @@
 
 #import "Foundation.xc"
 
-#if ARCH_6502 || ARCH_m68k || ARCH_arm9 || ARCH_wasm32
+#if ARCH_6502 || ARCH_m68k || ARCH_armv7 || ARCH_wasm32
 #error "Http: needs a hosted target with sockets (arm64, android, x86_64 or win64)"
 #endif
 
