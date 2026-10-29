@@ -690,6 +690,8 @@ same "--no-self-host lib"    -q --emit-lib --no-self-host -o @OUT@.dylib ret.xc
 # android has no checked runtime and no object writer: refused by both.
 same "-fbounds-check android" -q -A android -fbounds-check -o @OUT@ ret.xc
 same "-c android"            -q -A android -c -o @OUT@.o ret.xc
+same "-fthread-safe-arc m68k" -q -A m68k -fthread-safe-arc -o @OUT@.prg ret.xc
+same "-fno-thread-safe-arc 6502" -q -A 6502 -fno-thread-safe-arc -o @OUT@.xex ret.xc
 # -dynamic: an x86-64 executable linked against glibc (ldx86dyn-diff compares
 # the bytes over the corpus; here, acceptance and the refusals).
 cover -dynamic

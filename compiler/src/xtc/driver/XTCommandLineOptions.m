@@ -1512,6 +1512,17 @@ static NSString* sExecutablePath = nil;
         }
     }
 
+    // -f[no-]thread-safe-arc on a target with no threads is an error, as in the
+    // port: there is no atomic reference count to choose.
+    BOOL threadless = opts.useM68kBackend || (!opts.useArm64Backend && !opts.useArm9Backend
+                      && !opts.useX86_64Backend && !opts.useWin64Backend && !opts.useWasm32Backend);
+    if (opts.threadSafeARC != -1 && threadless)
+        {
+        fprintf(stderr, "xcc: error: -f[no-]thread-safe-arc: '%s' has no threads, so there "
+                        "is no atomic reference count to choose\n", opts.useM68kBackend ? "m68k" : "6502");
+        return nil;
+        }
+
     // -dynamic and -static are x86-64 Linux link modes; anywhere else they
     // would be ignored. From 0.72 an x86-64 executable links
     // dynamically against glibc unless -static asks for the static musl link,
