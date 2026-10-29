@@ -33,6 +33,7 @@
 
 #import "Foundation.xc"
 #import "Files.xc"
+#import "Directory.xc"
 #import <MacroDef>
 
 // One open #if / #ifdef / #ifndef.
@@ -242,64 +243,114 @@ class IfFrame
         return true;
         }
 
-    // `<X>` from the third-party tree: `<root>/X/<arch>/lib<X>.<ext>`, or, for
-    // the qualified `<vendor/X>`, `<root>/vendor/<arch>/lib<X>.<ext>`. A hit
-    // is recorded like a -L library, and the vendor's `xc/` sources join the
-    // END of the include path, so they can never shadow the standard library.
-    // The reference also finds a library whose vendor directory has another
-    // name by listing the root; this probes the vendor named after the
-    // library, which is how the installed libraries are laid out.
-    bool probeThirdParty(String* target, bool isSystemForm, Array* exts)
+    // `<X>` from the third-party tree, as the reference finds it: every vendor
+    // directory under each root (`<root>/<vendor>/<plat-or-arch>/lib<X>.<ext>`),
+    // or the one a qualified `<vendor/X>` names. One vendor = one subtree, with
+    // the arch-neutral contract sources once at `<vendor>/xc/`, which join the
+    // END of the include path so they can never shadow the standard library. A
+    // bare name more than one vendor ships is an error naming them, never an
+    // ordering accident. Vendors are tried in name order, as the reference's.
+    bool probeThirdParty(String* target, bool isSystemForm, Array* exts, String* filename, u32 line)
         {
-        String* vendor = target;
+        String* qual = (String*)0;
         String* stem = target;
         u32 slash = target.indexOfByte((u8)'/');
         if (isSystemForm && slash != String.notFound())
             {
-            vendor = target.substringBytes((u32)0, slash);
+            qual = target.substringBytes((u32)0, slash);
             stem = target.substringFromByte(slash + (u32)1);
             }
+        Array* hits = new Array();
+        Array* hitVendors = new Array();
+        Array* hitDirs = new Array();
         for (u32 r = (u32)0; r < _thirdPartyRoots.count(); r = r + (u32)1)
             {
-            String* vdir = ((String*)_thirdPartyRoots.get(r)).appendingPathComponent(vendor);
-            // The vendor's directory as it is spelt: `#use <UXKit>` finds
-            // uxkit/, as the reference's listing of the root does, and the
-            // runpath then names the directory that is really there.
-            if (!Files.existsExact(vdir))
+            String* root = (String*)_thirdPartyRoots.get(r);
+            Array* vendors = new Array();
+            if (qual != (String*)0)
+                vendors.add((Object*)qual);
+            else
                 {
-                String* low = ((String*)_thirdPartyRoots.get(r)).appendingPathComponent(vendor.lowercased());
-                if (Files.existsExact(low))
-                    vdir = low;
+                // DirEntry (name, kind): every name, as the reference's
+                // listing takes files too (a file has no <plat> under it).
+                Array* ls = Directory.list(root);
+                for (u32 k = (u32)0; ls != (Array*)0 && k < ls.count(); k = k + (u32)1)
+                    vendors.add((Object*)((DirEntry*)ls.get(k)).name);
                 }
-            Array* dirs = new Array();
-            if (_platformDir != (String*)0)
-                dirs.add((Object*)vdir.appendingPathComponent(_platformDir));
-            dirs.add((Object*)vdir.appendingPathComponent(_arch));
-            for (u32 di = (u32)0; di < dirs.count(); di = di + (u32)1)
-            for (u32 e = (u32)0; e < exts.count(); e = e + (u32)1)
+            // name order (insertion sort: a root holds a handful of vendors)
+            for (u32 a = (u32)1; a < vendors.count(); a = a + (u32)1)
                 {
-                String* adir = (String*)dirs.get(di);
-                String* cand = String.withCString("lib");
-                cand.append(stem);
-                cand.appendCString(".");
-                cand.append((String*)exts.get(e));
-                String* p = adir.appendingPathComponent(cand);
-                if (Files.existsExact(p))
+                String* v = (String*)vendors.get(a);
+                u32 b = a;
+                while (b > (u32)0 && ((String*)vendors.get(b - (u32)1)).compare(v) > (i8)0)
                     {
-                    noteMetadataImport(p);
-                    String* xc = vdir.appendingPathComponent(String.withCString("xc"));
-                    if (Files.exists(xc))
-                        {
-                        bool have = false;
-                        for (u32 i = (u32)0; i < _includePaths.count(); i = i + (u32)1)
-                            if (((String*)_includePaths.get(i)).equals(xc))
-                                have = true;
-                        if (!have)
-                            _includePaths.add((Object*)xc);
-                        }
-                    return true;
+                    vendors.set(b, vendors.get(b - (u32)1));
+                    b = b - (u32)1;
+                    }
+                vendors.set(b, (Object*)v);
+                }
+            for (u32 vi = (u32)0; vi < vendors.count(); vi = vi + (u32)1)
+                {
+                String* vendor = (String*)vendors.get(vi);
+                String* vdir = root.appendingPathComponent(vendor);
+                Array* dirs = new Array();
+                if (_platformDir != (String*)0)
+                    dirs.add((Object*)vdir.appendingPathComponent(_platformDir));
+                dirs.add((Object*)vdir.appendingPathComponent(_arch));
+                String* found = (String*)0;
+                for (u32 di = (u32)0; found == (String*)0 && di < dirs.count(); di = di + (u32)1)
+                for (u32 e = (u32)0; found == (String*)0 && e < exts.count(); e = e + (u32)1)
+                    {
+                    String* cand = String.withCString("lib");
+                    cand.append(stem);
+                    cand.appendCString(".");
+                    cand.append((String*)exts.get(e));
+                    String* p = ((String*)dirs.get(di)).appendingPathComponent(cand);
+                    if (Files.existsExact(p))
+                        found = p;
+                    }
+                if (found != (String*)0)
+                    {
+                    hits.add((Object*)found);
+                    hitVendors.add((Object*)vendor);
+                    hitDirs.add((Object*)vdir);
                     }
                 }
+            }
+        if (hits.count() > (u32)1)
+            {
+            String* msg = new String();
+            msg.appendCString("'");
+            msg.append(stem);
+            msg.appendCString("' matches a library from more than one third-party vendor (");
+            for (u32 h = (u32)0; h < hitVendors.count(); h = h + (u32)1)
+                {
+                if (h > (u32)0)
+                    msg.appendCString(", ");
+                msg.append((String*)hitVendors.get(h));
+                }
+            msg.appendCString(") \u2014 qualify it, e.g. #import <");
+            msg.append((String*)hitVendors.get((u32)0));
+            msg.appendCString("/");
+            msg.append(stem);
+            msg.appendCString(">");
+            _error(Preprocessor.positioned(filename, line, msg));
+            return true;
+            }
+        if (hits.count() == (u32)1)
+            {
+            noteMetadataImport((String*)hits.get((u32)0));
+            String* xc = ((String*)hitDirs.get((u32)0)).appendingPathComponent(String.withCString("xc"));
+            if (Files.exists(xc))
+                {
+                bool have = false;
+                for (u32 i = (u32)0; i < _includePaths.count(); i = i + (u32)1)
+                    if (((String*)_includePaths.get(i)).equals(xc))
+                        have = true;
+                if (!have)
+                    _includePaths.add((Object*)xc);
+                }
+            return true;
             }
         return false;
         }
@@ -1841,7 +1892,7 @@ class IfFrame
                     return;
                     }
                 }
-            if (_arch != 0 && probeThirdParty(target, isSystemForm, exts))
+            if (_arch != 0 && probeThirdParty(target, isSystemForm, exts, filename, line))
                 return;
             }
         if (foundPath == 0 && _appleFrameworks && probeAppleFramework(target))

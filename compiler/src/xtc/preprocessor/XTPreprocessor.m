@@ -1482,8 +1482,10 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
             NSMutableArray<NSString*>* hitVendors = [NSMutableArray array];
             for (NSString* root in _thirdPartyRoots)
                 {
+                // In name order, as the port tries them (so a two-vendor error
+                // names them alike in both).
                 NSArray<NSString*>* vendors = vendorQual ? @[ vendorQual ]
-                                                         : ([fm contentsOfDirectoryAtPath:root error:NULL] ?: @[]);
+                    : [([fm contentsOfDirectoryAtPath:root error:NULL] ?: @[]) sortedArrayUsingSelector:@selector(compare:)];
                 for (NSString* vendor in vendors)
                     {
                     NSString* archDir = [[root stringByAppendingPathComponent:vendor]
