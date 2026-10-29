@@ -1,0 +1,252 @@
+---
+title: UXScrollView
+description: "A clipped viewport over a taller document view: the document is MOVED, not re-laid-out, so content keeps fixed coordinates and hit-testing still works."
+slug: versions/0.88/compiler/api/uxkit/uxscrollview
+banner:
+  content: 'This is the documentation for xc 0.88. <a href="/compiler/">The current documentation</a> describes the newest version.'
+pagefind: false
+---
+
+import { Tabs, TabItem } from '@astrojs/starlight/components';
+
+`UXScrollView` is the generic vertical scroller: a clipped viewport over
+a taller **document** view, with an optional pinned header strip and a
+scrollbar (track, arrow boxes, a draggable thumb).
+[`UXTableView`](/versions/0.88/compiler/api/uxkit/uxtableview/) and
+[`UXOutlineView`](/versions/0.88/compiler/api/uxkit/uxoutlineview/) are built on it. Put a tall
+view in the document and set its height, and the wheel, arrows, paging and
+thumb-drag all work.
+
+The document is **moved, not re-laid-out**. Scrolling sets the document view's y
+to `-scrollOffset` and the clip cuts it to the viewport. Your content keeps fixed
+coordinates, and the ordinary hit test finds it where it is drawn.
+
+On backends that scroll natively (Win32, AppKit, GTK, iOS, Android) a native container
+overlays this whole subtree and owns the offset, and the custom bar never draws. On
+GEM the bar is a `G_SCROLL` the AES draws (its arrows, track and thumb from the
+theme), with the toolkit handling the press where GEM drew each part. Headless, the
+toolkit draws the bar itself.
+
+A click or a hover over the document reaches the view under it in the document's
+coordinates on every backend, whether the toolkit or a native container scrolled it,
+and whether the event is real or passed to
+[`UXWindow.dispatchMouse`](/versions/0.88/compiler/api/uxkit/uxwindow/#dispatchmouse) by your own
+code. A view does not add `scrollPx()` itself.
+
+```c
+#use <UXKit>
+```
+
+## Overview
+
+```c
+UXScrollView* sv = new UXScrollView();
+content.addSubview(sv, UXGeom.make(8, 8, 300, 200));
+
+BigCanvas* big = new BigCanvas();
+sv.document().addSubview(big, UXGeom.make(0, 0, 300, 900));
+sv.setDocumentHeight(900);
+sv.setLineHeight(18);              // the arrow/wheel step
+```
+
+## Topics
+
+**The document** · [document](#document) · [setDocumentHeight](#setdocumentheight) · [setHeaderView](#setheaderview) · [setLineHeight](#setlineheight)
+**Motion** · [scrollTo](#scrollto) · [scrollByLines](#scrollbylines) · [touch panning](#touch-panning)
+**Appearance** · [setCornerRadius](#setcornerradius) · [setBorderRGB](#setborderrgb--clearborder) · [clearBorder](#setborderrgb--clearborder)
+**Geometry** · [contentPx](#contentpx) · [viewportPx](#viewportpx) · [scrollPx](#scrollpx) · [maxScroll](#maxscroll) · [needsBar](#needsbar)
+
+### document
+
+```c
+UXView* document(void)
+```
+
+The view your content goes in. Add subviews at their natural, fixed
+coordinates. Scrolling moves the document, not them.
+
+### setDocumentHeight
+
+```c
+void setDocumentHeight(i32 h)
+```
+
+The height of the content. All the scroll geometry derives from this number.
+Update it whenever the content grows.
+
+### setHeaderView
+
+```c
+void setHeaderView(UXView* hv, i16 h)
+```
+
+A strip pinned above the viewport, such as a table's column header. It does not
+scroll with the document.
+
+### setLineHeight
+
+```c
+void setLineHeight(i16 h)
+```
+
+The arrow-click and wheel-notch step. A table sets its row height here so an
+arrow click moves one row.
+
+### scrollTo
+
+```c
+void scrollTo(i16 off)
+```
+
+Scrolls to an absolute offset, clamped to `[0, maxScroll]`. This is the only
+place a scroll is announced; every other motion goes through it.
+
+### scrollByLines
+
+```c
+void scrollByLines(i32 lines)
+```
+
+Relative motion in line-height steps, used by arrows, wheel notches and the
+keyboard.
+
+### Touch panning
+
+On iOS and Android the content follows the finger. A drag that starts
+anywhere in the document scrolls it by the finger's travel, including a drag
+that starts on a row which took the press (the drag climbs the responder
+chain to the scroll view). It is measured from where the finger went down.
+With a mouse, scrolling stays with the bar and the wheel, and a press on the
+scroll view's background climbs on as before.
+
+### setCornerRadius
+
+```c
+void setCornerRadius(i32 r)
+```
+
+A rounded panel: the scroll view clips its content and its scroller to a rounded
+rectangle of radius `r`, as a browser panel with `border-radius` and
+`overflow: auto` does, and the scroller runs between the corners rather than into
+them. `0` is square. It is read when the tree next realises, so display in the
+same turn.
+
+Every backend rounds it except GEM, whose clip is a rectangle. On AppKit the
+native scroll view is clipped by its layer, on Win32 the native scroll
+container is clipped by a window region, and on GTK the `GtkScrolledWindow`
+is rounded by its own CSS, with its overflow hidden, and on iOS the
+`UIScrollView` by its layer. On Android the `ScrollView` clips what it
+scrolls to the rounded shape and strokes the edge over it. The web draws the
+scroll view itself, so it clips the subtree to the rounded shape.
+
+### setBorderRGB / clearBorder
+
+```c
+void setBorderRGB(i32 r, i32 g, i32 b)
+void clearBorder(void)
+```
+
+A 1-pixel edge in this colour that follows the rounding, or none. Where the
+toolkit draws the scroll view, the edge sits just inside the frame and the
+content is inset by a pixel to clear it. With neither a radius nor an edge,
+AppKit and Win32 draw their usual border. On Win32 a radius with no edge colour
+draws the edge in the system's window-frame colour.
+
+### contentPx
+
+```c
+i32 contentPx(void)
+```
+
+The document height, as set.
+
+### viewportPx
+
+```c
+i32 viewportPx(void)
+```
+
+The visible height (the clip's, minus any header).
+
+### scrollPx
+
+```c
+i32 scrollPx(void)
+```
+
+The current scroll offset. On a native backend the **container holds the real
+value**, because the user can drag its scroller without the toolkit being told.
+This method asks the driver rather than reporting the last value the toolkit set.
+
+### maxScroll
+
+```c
+i32 maxScroll(void)
+```
+
+The largest valid offset (zero when the document fits).
+
+### needsBar
+
+```c
+bool needsBar(void)
+```
+
+Whether the content overflows the viewport. The bar hides when it does not.
+
+## Platform appearance
+
+<div class="ux-platforms">
+<Tabs>
+  <TabItem label="Web">
+    <img src="/uxkit/scroll-web.png" alt="UXScrollView on Web" width="220" />
+
+    The toolkit's scrollbar: track, arrows, and the proportional thumb over the clipped document.
+  </TabItem>
+  <TabItem label="iOS">
+    <img src="/uxkit/scroll-ios.png" alt="UXScrollView on iOS" width="220" />
+
+    A native `UIScrollView`: UIKit's pan, momentum, bounce and scroll indicator. Native controls inside the scroll view scroll and clip with it.
+  </TabItem>
+  <TabItem label="Android">
+    <img src="/uxkit/scroll-android.png" alt="UXScrollView on Android" width="220" />
+
+    A native `ScrollView`: Android's drag, fling, edge effect and scrollbar. Native controls inside the scroll view scroll and clip with it.
+  </TabItem>
+  <TabItem label="macOS">
+    <img src="/uxkit/scroll-macos.png" alt="UXScrollView on macOS" width="220" />
+
+    A native scroll container owns the clipping; the platform's overlay scrollers appear on interaction.
+  </TabItem>
+  <TabItem label="Windows">
+    <img src="/uxkit/scroll-windows.png" alt="UXScrollView on Windows" width="220" />
+
+    A native scroll child window with system scrollbars.
+  </TabItem>
+  <TabItem label="Linux">
+    <img src="/uxkit/scroll-linux.png" alt="UXScrollView on Linux" width="220" />
+
+    A native `GtkScrolledWindow`: GTK's own scrollbar, kinetic scrolling and overshoot. Native controls inside the scroll view scroll and clip with it.
+  </TabItem>
+  <TabItem label="GEM">
+    <img src="/uxkit/scroll-gem.png" alt="UXScrollView on GEM" width="220" />
+
+    The toolkit's scrollbar: track, arrows, and the proportional thumb over the clipped document.
+  </TabItem>
+</Tabs>
+</div>
+
+## Example
+
+Reveal a row from code. This works because `scrollTo` is the single path for
+every scroll:
+
+```c
+void revealRow(i32 row) {
+    i32 y = row * rowH;
+    if (y < sv.scrollPx()) { sv.scrollTo(y); }
+    else if (y + rowH > sv.scrollPx() + sv.viewportPx()) {
+        sv.scrollTo(y + rowH - sv.viewportPx());
+    }
+}
+```

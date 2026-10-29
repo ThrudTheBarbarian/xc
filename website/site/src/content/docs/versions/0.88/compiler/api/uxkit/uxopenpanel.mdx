@@ -1,0 +1,54 @@
+---
+title: UXOpenPanel
+description: "Run a file-open dialog and get the path back: the platform's own dialog where it has one, the toolkit-drawn panel where it doesn't. The call is the same either way."
+slug: versions/0.88/compiler/api/uxkit/uxopenpanel
+banner:
+  content: 'This is the documentation for xc 0.88. <a href="/compiler/">The current documentation</a> describes the newest version.'
+pagefind: false
+---
+
+`UXOpenPanel` is the call an app makes to ask for a file:
+
+```c
+u8* path = UXOpenPanel.run((u8*)"Open Image", (u8*)"/home/user");
+if (path != (u8*)0) { openDocument(path); }
+```
+
+Where the backend has a native dialog, the driver runs it: AppKit's
+`NSOpenPanel`, GTK's `GtkFileDialog`, Win32's `GetOpenFileName`, and on the
+phones the system's document picker, `UIDocumentPickerViewController` on iOS
+and `ACTION_OPEN_DOCUMENT` on Android. Those reach every file provider the device has. The picked document
+is copied into the app's own space, so the path that comes back reads with
+[`UXFileIO.read`](/versions/0.88/compiler/api/uxkit/uxfileio/) like any other. On the web, in the worker run
+loop, the page shows a small dialog whose Choose File… button opens the
+browser's own file picker; a browser opens the picker only from a click,
+which is why there is a dialog first. The picked file is copied into the
+web's file store, and the path that comes back reads with
+[`UXFileIO.read`](/versions/0.88/compiler/api/uxkit/uxfileio/). On GEM the call falls back to [`runToolkit`](#runtoolkit),
+which runs the toolkit-drawn
+[`UXFilePanel`](/versions/0.88/compiler/api/uxkit/uxfilepanel/).
+Application code sees no difference: a prompt and a start directory go in,
+and a chosen path comes out.
+
+To ask where to **save**, use [`UXSavePanel`](/versions/0.88/compiler/api/uxkit/uxsavepanel/).
+To read the chosen file, use [`UXFileIO.read`](/versions/0.88/compiler/api/uxkit/uxfileio/).
+
+## Topics
+
+### run
+
+```c
+static u8* run(u8* prompt, u8* startDir)
+```
+
+Runs the dialog modally. Returns a malloc'd path string **the caller
+owns**, or null on Cancel.
+
+### runToolkit
+
+```c
+static u8* runToolkit(u8* prompt, u8* startDir)
+```
+
+The fallback half. You can call it directly (a test drives it on any
+backend). It constructs a fresh `UXFilePanel` and runs it.

@@ -1,0 +1,116 @@
+---
+title: "Guide: the driver model and multiplatform"
+description: "Nothing in your program names a backend: UXPlatform gives the driver for the target you build for. What a driver does, and what you can see of it."
+slug: versions/0.88/compiler/api/uxkit/guide-drivers
+banner:
+  content: 'This is the documentation for xc 0.88. <a href="/compiler/">The current documentation</a> describes the newest version.'
+pagefind: false
+---
+
+Every example in these guides starts its application the same way:
+
+```c
+UXApplication* app = new UXApplication();   // with the driver for the target this is built for
+```
+
+A UXKit program names no platform: with [`UXPlatform`](/versions/0.88/compiler/api/uxkit/uxplatform/)
+in the build (or `#use <UXKit>`), a new application installs the driver itself. This guide covers what the driver does and
+what you can see of it.
+
+## What a driver is
+
+A driver is the backend. It owns four things your code never touches:
+
+| | |
+| --- | --- |
+| **windows** | create, open, invalidate, close |
+| **the shadow tree** | the flat object array the platform walks, mirroring your view tree |
+| **events** | decode the native event into a neutral [`UXEvent`](/versions/0.88/compiler/api/uxkit/uxevent/) |
+| **realization** | make native controls for the nodes that have them, and push their state |
+
+Everything above the driver (views, controls, layout, the responder chain) is
+one body of code on every platform. Below it, `UXAppKitDriver` talks to
+`NSWindow` and `NSButton`, `UXWin32Driver` to `HWND` and `BUTTON`,
+`UXGemDriver` to the AES, `UXGtkDriver` to GTK4, and
+[`UXWebDriver`](/versions/0.88/compiler/api/uxkit/uxwebdriver/) to a canvas.
+
+## Choosing the driver
+
+[`UXPlatform`](/versions/0.88/compiler/api/uxkit/uxplatform/) picks the driver from the
+target the program is compiled for, and imports only that one, because a
+driver's header names its platform's system libraries (the Win32 driver names
+`comdlg32`, `ole32` and `comctl32`, the GEM driver the AES), which do not exist
+elsewhere:
+
+| target | platform | backend |
+| --- | --- | --- |
+| `arm64` | macOS | AppKit |
+| `x86_64` | Linux | GTK4 |
+| `win64` | Windows | Win32 |
+| `ios-sim`, `ios` | iOS | UIKit |
+| `android` | Android | Android views |
+| `wasm32` | the web | canvas |
+| `arm9` | Atari | GEM/AES |
+
+Two choices are not the target's own and are made when building: `-D UX_GTK`
+builds the GTK driver for a Mac, against its GTK 4, and `-D UX_GEM` builds GEM
+for a Mac, against the host GEM stack.
+
+`new UXApplication()` installs the driver and tells it about the application,
+which is where each driver sets itself up: AppKit hands the loop to `[NSApp run]`
+and routes native events into the application, iOS and Android hand it to the
+system's own loop.
+
+## Booting, and what "no display" means
+
+`app.run()` starts the driver. When there is no display to talk to (a headless
+CI box, an unset `DISPLAY`) it returns `1` without running. Treat that as a
+**skip, not a failure**. "This environment has no screen" and "this program is
+broken" are different results, and counting both as failures makes a green CI
+run meaningless.
+
+## What the driver does that you can see
+
+Three driver behaviours explain things that otherwise look like bugs.
+
+**Native controls are realized, not drawn.** On backends with real widgets, a
+[`UXButton`](/versions/0.88/compiler/api/uxkit/uxbutton/) becomes an `NSButton` or a
+`BUTTON` window. Your `drawRect` is not called for it, and the platform themes
+it. A plain view placed "on top" of one in the toolkit's tree does **not**
+intercept its clicks, because the platform hit-tests its own hierarchy first.
+See [`UXShieldView`](/versions/0.88/compiler/api/uxkit/uxshieldview/) for the fix.
+
+**A press may never reach the toolkit.** Where the control is native, the OS
+reports `BN_CLICKED` or an `NSButton` action, and the driver fires your
+callback **by handle and node**, with no synthetic click and no hit-test. Where
+the control is toolkit-drawn, the press arrives as an ordinary event and routes
+through the [responder chain](/versions/0.88/compiler/api/uxkit/uxresponder/). Both paths end
+at the same method, so you write one handler.
+
+**A drag is modal.** Pressing a scrollbar or a split divider enters the
+driver's `trackDragStep`, which follows the pointer itself and returns when the
+button comes up. No `mouseDragged` events are emitted, so a widget that waits
+for them waits forever, and a recorder sees the press and nothing else. For
+this reason [`UXEvent`](/versions/0.88/compiler/api/uxkit/uxevent/) has outcome kinds such as
+`UXEventScrolled`.
+
+## Testing without a screen
+
+The driver is an interface, so most of the toolkit is testable headlessly.
+Geometry, ranges, predicates, text layout, timers and index sets need no driver
+at all. The examples in these guides that print output run this way.
+
+For the parts that need a driver, AppKit has a capture mode that realizes
+native controls without a visible window. The portrait sheets on the widget
+pages are produced with it.
+
+## What to read next
+
+- [`UXApplication`](/versions/0.88/compiler/api/uxkit/uxapplication/): the run loop the
+  driver feeds
+- [`UXViewTree`](/versions/0.88/compiler/api/uxkit/uxviewtree/): the shadow tree a driver
+  walks, and why it is the AES object tree on GEM
+- [`UXShieldView`](/versions/0.88/compiler/api/uxkit/uxshieldview/): intercepting input above
+  native controls
+- [`UXEvent`](/versions/0.88/compiler/api/uxkit/uxevent/): what a decoded native event looks
+  like
