@@ -19,8 +19,8 @@ cross-build native binaries for every target with **no other toolchain installed
 | xcd, the par daemon (macOS) | [xcd-osx-0.88.tar.bz2](/downloads/xcd-osx-0.88.tar.bz2) | 858 KB |
 | xcd, the par daemon (Linux x86_64) | [xcd-linux-0.88.tar.bz2](/downloads/xcd-linux-0.88.tar.bz2) | 816 KB |
 | xcd, the par daemon (Windows x64) | [xcd-win64-0.88.zip](/downloads/xcd-win64-0.88.zip) | 924 KB |
-| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.87.tar.bz2](/downloads/xcc-uxgtk-linux-0.87.tar.bz2) | 112 KB |
-| UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.87.tar.bz2](/downloads/xcc-uxkit-0.87.tar.bz2) | 2.9 MB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.88.tar.bz2](/downloads/xcc-uxgtk-linux-0.88.tar.bz2) | 112 KB |
+| UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.88.tar.bz2](/downloads/xcc-uxkit-0.88.tar.bz2) | 2.9 MB |
 
 Every archive contains the same compiler. Each host build cross-compiles to **all**
 targets, so the platform you download for decides only where the compiler runs.
@@ -70,8 +70,8 @@ program is a glibc executable that loads GTK 4, which is how `-A x86_64` links
 by default:
 
 ```bash
-tar xjf xcc-uxgtk-linux-0.87.tar.bz2
-xcc -A x86_64 app.xc -L xcc-uxgtk-linux-0.87 -lUXGtk -lgtk-4 -o app
+tar xjf xcc-uxgtk-linux-0.88.tar.bz2
+xcc -A x86_64 app.xc -L xcc-uxgtk-linux-0.88 -lUXGtk -lgtk-4 -o app
 ```
 
 The machine that runs the program needs glibc 2.34 or later and GTK 4; this
@@ -83,12 +83,12 @@ rebuilds it against any machine's GTK 4.
 ## UXKit library
 
 UXKit built as a library for macOS (arm64), Windows (x64), Linux (x86_64) and the
-web, for xcc 0.87. Put its `3p/` beside the versioned install, so that
+web, for xcc 0.88. Put its `3p/` beside the versioned install, so that
 `/opt/xcc/3p/uxkit/` sits next to `/opt/xcc/0.88/`:
 
 ```bash
-tar xjf xcc-uxkit-0.87.tar.bz2
-sudo cp -R xcc-uxkit-0.87/3p /opt/xcc/
+tar xjf xcc-uxkit-0.88.tar.bz2
+sudo cp -R xcc-uxkit-0.88/3p /opt/xcc/
 ```
 
 A program then names UXKit once, with `#use <UXKit>`, and builds with nothing

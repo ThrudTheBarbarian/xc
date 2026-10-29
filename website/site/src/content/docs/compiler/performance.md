@@ -65,26 +65,26 @@ order. On arm64 every release's xc was timed again on the Apple M3 Max with toda
 
 | benchmark | xc | Objective-C | C++ (clang) | C++ (GCC) | Swift | xc vs the fastest of the others |
 |---|---|---|---|---|---|---|
-| [`method_call`](/compiler/benchmark-sources/#method_call) | 0.92 | 2.54 | 1.19 | 0.21 | 1.19 | **4.4× slower** |
+| [`method_call`](/compiler/benchmark-sources/#method_call) | 0.94 | 2.54 | 1.19 | 0.21 | 1.19 | **4.4× slower** |
 | [`poly_dispatch`](/compiler/benchmark-sources/#poly_dispatch) | 1.37 | 2.29 | 1.52 | 0.56 | 3.10 | **2.5× slower** |
-| [`int_muldiv`](/compiler/benchmark-sources/#int_muldiv) | 1.26 | 1.06 | 1.04 | 0.86 | 1.04 | **1.47× slower** |
+| [`int_muldiv`](/compiler/benchmark-sources/#int_muldiv) | 1.27 | 1.06 | 1.04 | 0.86 | 1.04 | **1.47× slower** |
 | [`sort_small`](/compiler/benchmark-sources/#sort_small) | 1.34 | 1.05 | 1.07 | 1.08 | 1.92 | **1.28× slower** |
 | [`struct_copy`](/compiler/benchmark-sources/#struct_copy) | 0.75 | 1.09 | 1.09 | 0.68 | 1.09 | **1.11× slower** |
 | [`array_map`](/compiler/benchmark-sources/#array_map) | 1.25 | 1.81 | 1.17 | 5.06 | 1.13 | **1.10× slower** |
 | [`arc_array`](/compiler/benchmark-sources/#arc_array) | 0.59 | 5.75 | 0.57 | 0.82 | 1.02 | **1.05× slower** |
 | [`float_math`](/compiler/benchmark-sources/#float_math) | 1.13 | 1.12 | 1.12 | 1.10 | 1.12 | **1.03× slower** |
-| [`mem_copy`](/compiler/benchmark-sources/#mem_copy) | 1.25 | 2.13 | 1.26 | 1.80 | 1.21 | **1.03× slower** |
-| [`matrix_mul`](/compiler/benchmark-sources/#matrix_mul) | 0.25 | 0.25 | 0.25 | 0.44 | 1.60 | **1.01× slower** |
+| [`mem_copy`](/compiler/benchmark-sources/#mem_copy) | 1.24 | 2.13 | 1.26 | 1.80 | 1.21 | **1.02× slower** |
+| [`matrix_mul`](/compiler/benchmark-sources/#matrix_mul) | 0.25 | 0.25 | 0.25 | 0.44 | 1.60 | **1.02× slower** |
 | [`branch_mix`](/compiler/benchmark-sources/#branch_mix) | 1.03 | 1.03 | 1.04 | 1.05 | 1.05 | **the same** |
 | [`hash_mix`](/compiler/benchmark-sources/#hash_mix) | 1.27 | 1.27 | 1.27 | 1.27 | 1.27 | **the same** |
 | [`int_accum`](/compiler/benchmark-sources/#int_accum) | 1.22 | 1.22 | 1.22 | 1.22 | 1.23 | **the same** |
 | [`arc_alloc`](/compiler/benchmark-sources/#arc_alloc) | 1.12 | 1.78 | 1.14 | 1.14 | 2.47 | **1.02× faster** |
+| [`call_depth`](/compiler/benchmark-sources/#call_depth) | 0.99 | 1.03 | 1.03 | 1.10 | 1.03 | **1.03× faster** |
 | [`bit_ops`](/compiler/benchmark-sources/#bit_ops) | 1.24 | 1.29 | 1.31 | 1.34 | 1.31 | **1.04× faster** |
-| [`call_depth`](/compiler/benchmark-sources/#call_depth) | 0.98 | 1.03 | 1.03 | 1.10 | 1.03 | **1.05× faster** |
-| [`matrix_mul_f32`](/compiler/benchmark-sources/#matrix_mul_f32) | 10.25 | 10.96 | 10.96 | 10.94 | 11.88 | **1.07× faster** |
-| [`array_sum`](/compiler/benchmark-sources/#array_sum) | 0.89 | 0.99 | 0.99 | 3.55 | 0.98 | **1.11× faster** |
-| [`sieve`](/compiler/benchmark-sources/#sieve) | 1.24 | 1.67 | 1.67 | 1.42 | 2.21 | **1.15× faster** |
-| [`string_scan`](/compiler/benchmark-sources/#string_scan) | 1.02 | 2.54 | 2.54 | 1.46 | 2.54 | **1.43× faster** |
+| [`matrix_mul_f32`](/compiler/benchmark-sources/#matrix_mul_f32) | 10.26 | 10.96 | 10.96 | 10.94 | 11.88 | **1.07× faster** |
+| [`array_sum`](/compiler/benchmark-sources/#array_sum) | 0.89 | 0.99 | 0.99 | 3.55 | 0.98 | **1.10× faster** |
+| [`sieve`](/compiler/benchmark-sources/#sieve) | 1.20 | 1.67 | 1.67 | 1.42 | 2.21 | **1.19× faster** |
+| [`string_scan`](/compiler/benchmark-sources/#string_scan) | 1.04 | 2.54 | 2.54 | 1.46 | 2.54 | **1.40× faster** |
 
 ### x86-64
 
@@ -180,7 +180,7 @@ twelve percent), the thick line the geometric mean (without `matrix_mul_f32`). R
 
 ## What is being compared, and what is not
 
-**The compiler that ships.** The xc numbers come from the `xcc` in the download; on arm64 they are 0.87.3's, which ran as fast as 0.88 when the two were timed side by side (the machine was busy when 0.88 was measured).
+**The compiler that ships.** The xc numbers come from the `xcc` in the download.
 
 **The same work in every language.** Every version keeps its data where the xc
 version keeps it (local arrays, not `static` ones, which clang optimises
