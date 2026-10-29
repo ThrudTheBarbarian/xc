@@ -25,3 +25,40 @@ imul rcx
 idiv rsi
 cdq
 syscall
+vfmadd231ps xmm1, xmm2, xmm3
+vfmadd231ps ymm9, ymm14, ymm3
+vfmadd231ps zmm16, zmm17, zmm2
+vfmadd231pd xmm1, xmm2, xmm3
+vfmadd231pd ymm9, ymm14, ymm3
+vfmadd231pd zmm16, zmm17, zmm2
+vfmsub231ps xmm1, xmm2, xmm3
+vfmsub231ps ymm9, ymm14, ymm3
+vfmsub231ps zmm16, zmm17, zmm2
+vfmsub231pd xmm1, xmm2, xmm3
+vfmsub231pd ymm9, ymm14, ymm3
+vfmsub231pd zmm16, zmm17, zmm2
+vfnmadd231ps xmm1, xmm2, xmm3
+vfnmadd231ps ymm9, ymm14, ymm3
+vfnmadd231ps zmm16, zmm17, zmm2
+vfnmadd231pd xmm1, xmm2, xmm3
+vfnmadd231pd ymm9, ymm14, ymm3
+vfnmadd231pd zmm16, zmm17, zmm2
+vfmadd213ps xmm1, xmm2, xmm3
+vfmadd213ps ymm9, ymm14, ymm3
+vfmadd213ps zmm16, zmm17, zmm2
+vfmadd213pd xmm1, xmm2, xmm3
+vfmadd213pd ymm9, ymm14, ymm3
+vfmadd213pd zmm16, zmm17, zmm2
+vfmsub213ps xmm1, xmm2, xmm3
+vfmsub213ps ymm9, ymm14, ymm3
+vfmsub213ps zmm16, zmm17, zmm2
+vfmsub213pd xmm1, xmm2, xmm3
+vfmsub213pd ymm9, ymm14, ymm3
+vfmsub213pd zmm16, zmm17, zmm2
+vfnmadd213ps xmm1, xmm2, xmm3
+vfnmadd213ps ymm9, ymm14, ymm3
+vfnmadd213ps zmm16, zmm17, zmm2
+vfnmadd213pd xmm1, xmm2, xmm3
+vfnmadd213pd ymm9, ymm14, ymm3
+vfnmadd213pd zmm16, zmm17, zmm2
+vmovaps ymm12, ymm3

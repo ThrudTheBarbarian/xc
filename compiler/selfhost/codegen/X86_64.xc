@@ -7124,6 +7124,13 @@ class X86_64
                 i = i + (u32)1;
                 continue;
                 }
+            if (i + (u32)1 < bb.insns().count()
+                && vfmaPair((IRInsn*)bb.insns().get(i), (IRInsn*)bb.insns().get(i + (u32)1)))
+                {
+                emitVfmaPair((IRInsn*)bb.insns().get(i), (IRInsn*)bb.insns().get(i + (u32)1));
+                i = i + (u32)1;
+                continue;
+                }
             emitInsn(fn, bb, (IRInsn*)bb.insns().get(i));
             }
         if (bb.term() != (IRInsn*)0)
@@ -8339,6 +8346,74 @@ class X86_64
                 return false;
             }
         return true;
+        }
+
+    // The vector form (the reference's vfmaPair explains): a VMul over float
+    // lanes used once, by the contract-marked VAdd/VSub straight after it.
+    bool vfmaPair(IRInsn* a, IRInsn* b)
+        {
+        if (!_fmaOk || _fmaUc == (Map*)0 || _vec == (Map*)0)
+            return false;
+        if ((_vRemat != (Map*)0 && _vRemat.count() != (u32)0) || (_vSpill != (Map*)0 && _vSpill.count() != (u32)0))
+            return false;
+        if (!a.op().equals(String.withCString("VMul")) || a.res() == (IRValue*)0 || a.ops().count() < (u32)2)
+            return false;
+        if (!b.op().equals(String.withCString("VAdd")) && !b.op().equals(String.withCString("VSub")))
+            return false;
+        if (b.pred() == (String*)0 || !b.pred().equals(String.withCString("contract")))
+            return false;
+        if (b.res() == (IRValue*)0 || b.ops().count() < (u32)2)
+            return false;
+        String* lane = laneOf(b.res().ty());
+        if (lane == (String*)0 || (!lane.equals(String.withCString("F32")) && !lane.equals(String.withCString("F64"))))
+            return false;
+        String* al = laneOf(a.res().ty());
+        if (al == (String*)0 || !al.equals(lane))
+            return false;
+        if (useCount(_fmaUc, a.res()) != (u32)1)
+            return false;
+        IROperand* b0 = (IROperand*)b.ops().get((u32)0);
+        IROperand* b1 = (IROperand*)b.ops().get((u32)1);
+        bool p0 = b0.kind() == (u8)OPK_USE && b0.val() == a.res();
+        bool p1 = b1.kind() == (u8)OPK_USE && b1.val() == a.res();
+        if (p0 == p1)
+            return false;
+        IROperand* c = p0 ? b1 : b0;
+        if (c.kind() != (u8)OPK_USE || vecOf(c.val()) == (String*)0)
+            return false;
+        if (_fmaPhi != (Map*)0 && _fmaPhi.get((Hashable*)c.val()) != (Object*)0)
+            return false;
+        if (vecOf(b.res()) == (String*)0)
+            return false;
+        for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)a.ops().get(k);
+            if (o.kind() != (u8)OPK_USE || vecOf(o.val()) == (String*)0)
+                return false;
+            }
+        return true;
+        }
+
+    void emitVfmaPair(IRInsn* a, IRInsn* b)
+        {
+        string sfx = laneOf(b.res().ty()).equals(String.withCString("F64")) ? "pd" : "ps";
+        IROperand* b0 = (IROperand*)b.ops().get((u32)0);
+        bool p0 = b0.kind() == (u8)OPK_USE && b0.val() == a.res();
+        IROperand* c = p0 ? (IROperand*)b.ops().get((u32)1) : b0;
+        string op = b.op().equals(String.withCString("VAdd")) ? "vfmadd" : (p0 ? "vfmsub" : "vfnmadd");
+        String* A = vecOf(((IROperand*)a.ops().get((u32)0)).val());
+        String* B = vecOf(((IROperand*)a.ops().get((u32)1)).val());
+        String* C = vecOf(c.val());
+        String* D = vecOf(b.res());
+        if (D.equals(C))
+            _out.appendFormat("\t%s231%s\t%s, %s, %s\n", op, sfx, D.cString(), A.cString(), B.cString());
+        else if (D.equals(A))
+            _out.appendFormat("\t%s213%s\t%s, %s, %s\n", op, sfx, D.cString(), B.cString(), C.cString());
+        else if (D.equals(B))
+            _out.appendFormat("\t%s213%s\t%s, %s, %s\n", op, sfx, D.cString(), A.cString(), C.cString());
+        else
+            _out.appendFormat("\tvmovaps\t%s, %s\n\t%s231%s\t%s, %s, %s\n", D.cString(), C.cString(), op, sfx,
+                              D.cString(), A.cString(), B.cString());
         }
 
     void emitFmaPair(IRInsn* a, IRInsn* b)

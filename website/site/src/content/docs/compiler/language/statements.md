@@ -383,14 +383,22 @@ for (u32 i = 0; i < M; i++) :goal(speed)
         }
 ```
 
-Today the goal changes one thing. On a Mac with SME, the compiler runs a
+Today the goal changes two things. On x86-64, a multiply whose product is
+added straight away (`s + a * b`, `a * b - c`) becomes one fused multiply-add
+under `speed`, rounding once instead of twice, in vectorised loops as in
+scalar code, wherever the processor has FMA (the compiler's AVX2 and AVX-512
+code); an exact loop keeps the two operations, so its answer does not depend
+on the processor. arm64 fuses these everywhere, as C compilers do there, so
+there `speed` and exact loops give the same answer.
+
+On a Mac with SME, the compiler runs a
 matrix multiply like the one above on the SME unit, then checks the result for
 NaNs, because there a NaN comes out as the standard default NaN where the loop
 would keep an input NaN's bits. Under `speed` that check is left out: a NaN
 still comes out as a NaN, in the same places, and every other value
 (infinities, signed zeros and denormals included) is unchanged. Leaving the
 check out makes a 128×128 multiply about a fifth faster; for larger matrices
-the check costs less. Elsewhere the goal has no effect yet.
+the check costs less.
 
 A [`par` block](/compiler/language/par/#speed-or-accuracy) has the same goal,
 with `speed` as its default, and the loops in its body follow it.

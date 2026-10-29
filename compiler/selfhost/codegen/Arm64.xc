@@ -2422,6 +2422,7 @@ class Arm64
     Map* _fuseB;
     Map* _fuseC;
     Map* _fuseMnem;
+    Map* _fuseNeg;         // vmla: a*b - c, an fneg after the fmls
     Map* _fuseSrc;         // scvtf: the integer source operand
     Map* _fuseSigned;
     Map* _fuseBits;
@@ -2447,7 +2448,7 @@ class Arm64
         _fuseAmt = new Map();
         _fuseKind = new Map();
         _fuseA = new Map(); _fuseB = new Map(); _fuseC = new Map();
-        _fuseMnem = new Map(); _fuseSrc = new Map();
+        _fuseMnem = new Map(); _fuseSrc = new Map(); _fuseNeg = new Map();
         _fuseSigned = new Map(); _fuseBits = new Map();
         fuseFixedPointConverts(fn);
         fuseMultiplyAdds(fn);
@@ -2671,18 +2672,22 @@ class Arm64
         }
     }
 
-    // acc + a*b over integer lanes becomes mla (the reference explains); the
-    // VMul must be immediately before the VAdd.
+    // acc + a*b becomes mla (integer lanes) or fmla (f32/f64 lanes), c - a*b
+    // fmls, a*b - c fmls then fneg (the reference explains); the VMul must be
+    // immediately before the add. Float lanes fuse as scalar code does.
     void fuseVectorMla(IRFunc* fn)
     {
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
             IRBlock* bb = (IRBlock*)fn.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
-                if (!n.op().equals(String.withCString("VAdd")) || n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
+                bool isSub = n.op().equals(String.withCString("VSub"));
+                if ((!n.op().equals(String.withCString("VAdd")) && !isSub) || n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
                     continue;
                 String* lane = laneOf(n.res().ty());
-                if (lane == (String*)0 || isFloatTy(lane)) continue;
+                if (lane == (String*)0) continue;
+                bool flt = isFloatTy(lane);
+                if (isSub && !flt) continue;
                 if (_fuseKind.get((Hashable*)n.res()) != (Object*)0) continue;
                 IROperand* o0 = (IROperand*)n.ops().get((u32)0);
                 IROperand* o1 = (IROperand*)n.ops().get((u32)1);
@@ -2690,11 +2695,15 @@ class Arm64
                 IRInsn* prev = (i > (u32)0) ? (IRInsn*)bb.insns().get(i - (u32)1) : (IRInsn*)0;
                 IRInsn* mul = singleUseVMul(o1, prev);
                 IROperand* addend = o0;
+                String* mnem = String.withCString(flt ? (isSub ? "fmls" : "fmla") : "mla");
                 if (mul == (IRInsn*)0) {
                     mul = singleUseVMul(o0, prev);
                     addend = o1;
+                    if (mul != (IRInsn*)0 && isSub)
+                        _fuseNeg.set((Hashable*)n.res(), (Object*)n.res());
                 }
                 if (mul == (IRInsn*)0) continue;
+                _fuseMnem.set((Hashable*)n.res(), (Object*)mnem);
                 _fuseKind.set((Hashable*)n.res(), (Object*)String.withCString("vmla"));
                 _fuseA.set((Hashable*)n.res(), (Object*)mul.ops().get((u32)0));
                 _fuseB.set((Hashable*)n.res(), (Object*)mul.ops().get((u32)1));
@@ -2902,25 +2911,29 @@ class Arm64
             Object* la = _laneOf.get((Hashable*)((IROperand*)_fuseA.get((Hashable*)n.res())).val());
             Object* lb = _laneOf.get((Hashable*)((IROperand*)_fuseB.get((Hashable*)n.res())).val());
             bool lane = la != (Object*)0 || lb != (Object*)0;
+            String* mn = (String*)_fuseMnem.get((Hashable*)n.res());
+            bool flt = !mn.equals(String.withCString("mla"));
             String* fb = String.withCString("v");
             if (lane)
-                fb.appendFormat("%lu.s[%lu]", lb != (Object*)0 ? vb : va,
+                fb.appendFormat("%lu.%s[%lu]", lb != (Object*)0 ? vb : va,
+                                (flt && laneOf(ty).equals(String.withCString("F64"))) ? "d" : "s",
                                 ((Number*)(lb != (Object*)0 ? lb : la)).asU32());
             else
                 fb.appendFormat("%lu.%s", vb, arr.cString());
             if (lane && lb == (Object*)0) va = vb;
-            if (vd != vc && (vd == va || vd == vb)) {
+            if (vd != vc && (vd == va || vd == vb) && !flt) {
                 _out.appendFormat("    mul v16.%s, v%lu.%s, %s\n", arr.cString(), va, arr.cString(), fb.cString());
                 _out.appendFormat("    add v%lu.%s, v%lu.%s, v16.%s\n", vd, arr.cString(), vc, arr.cString(), arr.cString());
-            } else if (lane) {
-                if (vd != vc)
-                    _out.appendFormat("    orr v%lu.16b, v%lu.16b, v%lu.16b\n", vd, vc, vc);
-                _out.appendFormat("    mla v%lu.%s, v%lu.%s, %s\n", vd, arr.cString(), va, arr.cString(), fb.cString());
             } else {
-                if (vd != vc)
-                    _out.appendFormat("    orr v%lu.16b, v%lu.16b, v%lu.16b\n", vd, vc, vc);
-                emitVec3(String.withCString("mla"), arr, vd, va, vb);
+                u32 acc = (vd != vc && (vd == va || vd == vb)) ? (u32)16 : vd;
+                if (acc != vc)
+                    _out.appendFormat("    orr v%lu.16b, v%lu.16b, v%lu.16b\n", acc, vc, vc);
+                _out.appendFormat("    %s v%lu.%s, v%lu.%s, %s\n", mn.cString(), acc, arr.cString(), va, arr.cString(), fb.cString());
+                if (acc != vd)
+                    _out.appendFormat("    orr v%lu.16b, v%lu.16b, v%lu.16b\n", vd, acc, acc);
             }
+            if (_fuseNeg.get((Hashable*)n.res()) != (Object*)0)
+                _out.appendFormat("    fneg v%lu.%s, v%lu.%s\n", vd, arr.cString(), vd, arr.cString());
             return;
         }
         if (kind.equals(String.withCString("ima"))) {

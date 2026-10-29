@@ -91,11 +91,15 @@ static NSSet<NSValue*>* reach(XTIRBlock* H, NSDictionary<NSValue*, NSArray<XTIRB
                 continue;
             for (XTIRInsn* n in bb.instructions)
                 {
-                if (n.opcode != XTIROpFAdd && n.opcode != XTIROpFSub)
+                BOOL vec = n.opcode == XTIROpVAdd || n.opcode == XTIROpVSub;
+                if (n.opcode != XTIROpFAdd && n.opcode != XTIROpFSub && !vec)
                     continue;
                 if (!n.result || n.predicate != XTIRFpExact)
                     continue;
-                XTIRTypeKind k = n.result.type.kind;
+                // A vector add over float lanes too, so a loop fuses the same
+                // whether it was vectorised or not (owner, 2026-10-29).
+                XTIRTypeKind k = vec ? (n.result.type.pointeeType ? n.result.type.pointeeType.kind : XTIRTypeKindVoid)
+                                     : n.result.type.kind;
                 if (k != XTIRTypeKindF32 && k != XTIRTypeKindF64)
                     continue;
                 n.predicate = XTIRFpContract;

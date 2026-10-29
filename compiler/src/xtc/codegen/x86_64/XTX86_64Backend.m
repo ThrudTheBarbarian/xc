@@ -3760,6 +3760,12 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
                 k++;
                 continue;
                 }
+            if (k + 1 < bins.count && [self vfmaPair:in with:bins[k + 1]])
+                {
+                [self emitVfmaPair:in with:bins[k + 1] out:out];
+                k++;
+                continue;
+                }
             [self emitInsnSpilling:in fn:fn module:mod slot:slot out:out];
             }
         if (bb.terminator)
@@ -6991,6 +6997,72 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             return NO;
         }
     return YES;
+    }
+
+// The vector form: a VMul over float lanes used once, by the contract-marked
+// VAdd/VSub straight after it, as one vfmadd/vfmsub/vfnmadd (ps/pd) in a copy
+// that has FMA, so a vectorised loop rounds as its scalar form does (owner,
+// 2026-10-29). Every operand is in its vector register (no vector value of
+// the function is spilled or rematerialised) and the addend is not a phi's,
+// as for the scalar form. As the port's vfmaPair.
++ (BOOL)vfmaPair:(XTIRInsn*)a with:(XTIRInsn*)b
+    {
+    if (!sFmaOk || !sFmaUc || !sVec)
+        return NO;
+    if (sVRemat.count != 0 || sVSpill.count != 0)
+        return NO;
+    if (a.opcode != XTIROpVMul || !a.result || a.operands.count < 2)
+        return NO;
+    if (b.opcode != XTIROpVAdd && b.opcode != XTIROpVSub)
+        return NO;
+    if (b.predicate != XTIRFpContract)
+        return NO;
+    XTIRType* lane = b.result.type.pointeeType;
+    if (!b.result || b.operands.count < 2 || !lane || (lane.kind != XTIRTypeKindF32 && lane.kind != XTIRTypeKindF64))
+        return NO;
+    if (!a.result.type.pointeeType || a.result.type.pointeeType.kind != lane.kind)
+        return NO;
+    if (sFmaUc[@(a.result.valueId)].integerValue != 1)
+        return NO;
+    XTIROperand* b0 = b.operands[0];
+    XTIROperand* b1 = b.operands[1];
+    BOOL p0 = b0.kind == XTIROperandKindUse && b0.valueId == a.result.valueId;
+    BOOL p1 = b1.kind == XTIROperandKindUse && b1.valueId == a.result.valueId;
+    if (p0 == p1)
+        return NO;
+    XTIROperand* c = p0 ? b1 : b0;
+    if (c.kind != XTIROperandKindUse || !sVec[@(c.valueId)] || [sFmaPhi containsObject:@(c.valueId)])
+        return NO;
+    if (!sVec[@(b.result.valueId)])
+        return NO;
+    for (NSUInteger k = 0; k < 2; k++)
+        if (a.operands[k].kind != XTIROperandKindUse || !sVec[@(a.operands[k].valueId)])
+            return NO;
+    return YES;
+    }
+
+// d = c + A*B (vfmadd), A*B - c (vfmsub), c - A*B (vfnmadd). 231 accumulates
+// into the addend: d holds c (copied when it is a fourth register). 213 when
+// d is a factor: d = d*other ± c.
++ (void)emitVfmaPair:(XTIRInsn*)a with:(XTIRInsn*)b out:(NSMutableString*)out
+    {
+    NSString* sfx = b.result.type.pointeeType.kind == XTIRTypeKindF64 ? @"pd" : @"ps";
+    XTIROperand* b0 = b.operands[0];
+    BOOL p0 = b0.kind == XTIROperandKindUse && b0.valueId == a.result.valueId;
+    XTIROperand* c = p0 ? b.operands[1] : b0;
+    NSString* op = b.opcode == XTIROpVAdd ? @"vfmadd" : (p0 ? @"vfmsub" : @"vfnmadd");
+    NSString* A = sVec[@(a.operands[0].valueId)];
+    NSString* B = sVec[@(a.operands[1].valueId)];
+    NSString* C = sVec[@(c.valueId)];
+    NSString* D = sVec[@(b.result.valueId)];
+    if ([D isEqualToString:C])
+        [out appendFormat:@"\t%@231%@\t%@, %@, %@\n", op, sfx, D, A, B];
+    else if ([D isEqualToString:A])
+        [out appendFormat:@"\t%@213%@\t%@, %@, %@\n", op, sfx, D, B, C];
+    else if ([D isEqualToString:B])
+        [out appendFormat:@"\t%@213%@\t%@, %@, %@\n", op, sfx, D, A, C];
+    else
+        [out appendFormat:@"\tvmovaps\t%@, %@\n\t%@231%@\t%@, %@, %@\n", D, C, op, sfx, D, A, B];
     }
 
 + (void)emitFmaPair:(XTIRInsn*)a with:(XTIRInsn*)b fn:(XTIRFunction*)fn

@@ -616,8 +616,11 @@ static NSString* dbgSuffix(XTIRInsn* insn)
         }
     case XTIROpFAdd:
     case XTIROpFSub:
+    case XTIROpVAdd:
+    case XTIROpVSub:
         {
-        // FAdd [contract,] %a, %b — under :goal(speed) (XTIRSupport.h).
+        // FAdd [contract,] %a, %b — under :goal(speed) (XTIRSupport.h); a
+        // float VAdd/VSub too.
         if (insn.predicate == XTIRFpContract)
             [line appendString:@" contract"];
         BOOL first = insn.predicate != XTIRFpContract;

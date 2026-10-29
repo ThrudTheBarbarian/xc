@@ -1671,8 +1671,9 @@ ORACLE_X8664_BIN = $(BIN_DIR)/oracle-x86_64
 .PHONY: oracle-x86_64
 oracle-x86_64: $(ORACLE_X8664_BIN)
 $(ORACLE_X8664_BIN): tests/asm-x86_64/oracle-diff/harness.m \
-                     src/xtc/asm/x86_64/XAX86_64Assembler.m | $(BIN_DIR)
-	$(CC) $(CFLAGS) -I src/xtc/asm/x86_64 $(LDFLAGS) -o $@ $^
+                     src/xtc/asm/x86_64/XAX86_64Assembler.m \
+                     src/xtc/dwarf/XTDwarfWriter.m | $(BIN_DIR)
+	$(CC) $(CFLAGS) -I src/xtc/asm/x86_64 -I src/xtc/dwarf $(LDFLAGS) -o $@ $^
 
 # The self-hosted Linux path, end to end. Each script skips cleanly when no
 # Linux host is reachable (XTC_LINUX_HOST in build.env).

@@ -3824,19 +3824,23 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
         }
     }
 
-    // ── Vector integer multiply-accumulate: VAdd with a single-use VMul ──
-    // acc + a*b → mla. The VMul must be IMMEDIATELY before the VAdd, for the
-    // FMA fusion's reason; integer lanes only (an fmla rounds once, a separate
-    // fmul and fadd twice). A dot product vectorised across its outer loop is
-    // one mla per step.
+    // ── Vector multiply-accumulate: VAdd/VSub with a single-use VMul ──
+    // acc + a*b → mla (integer lanes) or fmla (f32/f64 lanes), c - a*b → fmls,
+    // a*b - c → fmls then fneg (exact). The VMul must be IMMEDIATELY before the
+    // add, for the FMA fusion's reason. Float lanes fuse as scalar code does
+    // (one rounding), so a loop's answer does not depend on whether it was
+    // vectorised (owner, 2026-10-29). A dot product vectorised across its
+    // outer loop is one mla per step.
     for (XTIRBlock *bb in fn.blocks) {
         XTIRInsn *prevInsn = nil;
         for (XTIRInsn *insn in bb.instructions) {
             XTIRInsn *localPrev = prevInsn;
             prevInsn = insn;
-            if (insn.opcode != XTIROpVAdd || !insn.result || insn.operands.count < 2) continue;
+            if ((insn.opcode != XTIROpVAdd && insn.opcode != XTIROpVSub) || !insn.result || insn.operands.count < 2) continue;
             XTIRType *lane = insn.result.type.pointeeType;
-            if (!lane || !XTIRTypeKindIsInteger(lane.kind)) continue;
+            BOOL flt = lane && (lane.kind == XTIRTypeKindF32 || lane.kind == XTIRTypeKindF64);
+            if (!lane || !(flt || XTIRTypeKindIsInteger(lane.kind))) continue;
+            if (insn.opcode == XTIROpVSub && !flt) continue;
             if (ctx.fuseAt[@(insn.result.valueId)]) continue;
             XTIROperand *o0 = insn.operands[0], *o1 = insn.operands[1];
             if (o0.kind != XTIROperandKindUse || o1.kind != XTIROperandKindUse) continue;
@@ -3849,11 +3853,13 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
                 return (d == localPrev) ? d : nil;
             };
             XTIRInsn *mul = nil; XTIROperand *addend = nil;
-            if ((mul = vmulOf(o1))) addend = o0;
-            else if ((mul = vmulOf(o0))) addend = o1;
+            NSString *mnem = flt ? @"fmla" : @"mla", *neg = @"";
+            if ((mul = vmulOf(o1))) { addend = o0; if (insn.opcode == XTIROpVSub) mnem = @"fmls"; }
+            else if ((mul = vmulOf(o0))) { addend = o1; if (insn.opcode == XTIROpVSub) { mnem = @"fmls"; neg = @"fneg"; } }
             if (!mul) continue;
             ctx.fuseAt[@(insn.result.valueId)] = @{
                 @"kind": @"vmla", @"a": mul.operands[0], @"b": mul.operands[1], @"c": addend,
+                @"mnem": mnem, @"neg": neg,
             };
             [ctx.fusedAway addObject:@(mul.result.valueId)];
         }
@@ -4667,31 +4673,37 @@ static uint64_t satMul64(uint64_t a, uint64_t b) {
         [ctx.out appendFormat:@"    %@ %@, %@, %@, %@\n", fz[@"mnem"], d, ra, rb, rc];
         [self storeReg:d intoValue:insn.result.valueId ctx:ctx];
     } else if ([kind isEqualToString:@"vmla"]) {
-        // d = c + a*b. mla accumulates IN PLACE, so d must hold c first; when
-        // d is one of the multiplicands that copy would destroy it, and the
-        // product goes through the v16 scratch instead.
+        // d = c + a*b (mla/fmla) or c - a*b (fmls). It accumulates IN PLACE, so
+        // d must hold c first; when d is one of the multiplicands that copy
+        // would destroy it, and the product goes through the v16 scratch
+        // instead (for float lanes c is accumulated there, so it still rounds
+        // once). a*b - c is fmls, then fneg.
         NSString *arr = [self neonArrFor:insn.result.type.pointeeType];
+        NSString *mn = fz[@"mnem"];
+        BOOL flt = ![mn isEqualToString:@"mla"];
+        NSString *el = insn.result.type.pointeeType.kind == XTIRTypeKindF64 ? @"d" : @"s";
         NSUInteger a = [self vecIndexForValue:[fz[@"a"] valueId] ctx:ctx];
         NSUInteger b = [self vecIndexForValue:[fz[@"b"] valueId] ctx:ctx];
         NSUInteger c = [self vecIndexForValue:[fz[@"c"] valueId] ctx:ctx];
         NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
         // A lane of a group's vector as one factor: the by-element forms.
         NSNumber *la = ctx.laneOf[@([fz[@"a"] valueId])], *lb = ctx.laneOf[@([fz[@"b"] valueId])];
-        NSString *fb = (lb || la) ? [NSString stringWithFormat:@"v%lu.s[%@]", (unsigned long)(lb ? b : a), lb ?: la]
+        NSString *fb = (lb || la) ? [NSString stringWithFormat:@"v%lu.%@[%@]", (unsigned long)(lb ? b : a), flt ? el : @"s", lb ?: la]
                                   : [NSString stringWithFormat:@"v%lu.%@", (unsigned long)b, arr];
         if (lb || la) a = lb ? a : b;
-        if (d != c && (d == a || d == b)) {
+        if (d != c && (d == a || d == b) && !flt) {
             [ctx.out appendFormat:@"    mul v16.%@, v%lu.%@, %@\n", arr, (unsigned long)a, arr, fb];
             [ctx.out appendFormat:@"    add v%lu.%@, v%lu.%@, v16.%@\n", (unsigned long)d, arr, (unsigned long)c, arr, arr];
-        } else if (lb || la) {
-            if (d != c)
-                [ctx.out appendFormat:@"    orr v%lu.16b, v%lu.16b, v%lu.16b\n", (unsigned long)d, (unsigned long)c, (unsigned long)c];
-            [ctx.out appendFormat:@"    mla v%lu.%@, v%lu.%@, %@\n", (unsigned long)d, arr, (unsigned long)a, arr, fb];
         } else {
-            if (d != c)
-                [ctx.out appendFormat:@"    orr v%lu.16b, v%lu.16b, v%lu.16b\n", (unsigned long)d, (unsigned long)c, (unsigned long)c];
-            [ctx.out appendFormat:@"    mla v%lu.%@, v%lu.%@, v%lu.%@\n", (unsigned long)d, arr, (unsigned long)a, arr, (unsigned long)b, arr];
+            NSUInteger acc = (d != c && (d == a || d == b)) ? 16 : d;
+            if (acc != c)
+                [ctx.out appendFormat:@"    orr v%lu.16b, v%lu.16b, v%lu.16b\n", (unsigned long)acc, (unsigned long)c, (unsigned long)c];
+            [ctx.out appendFormat:@"    %@ v%lu.%@, v%lu.%@, %@\n", mn, (unsigned long)acc, arr, (unsigned long)a, arr, fb];
+            if (acc != d)
+                [ctx.out appendFormat:@"    orr v%lu.16b, v%lu.16b, v%lu.16b\n", (unsigned long)d, (unsigned long)acc, (unsigned long)acc];
         }
+        if ([fz[@"neg"] length])
+            [ctx.out appendFormat:@"    fneg v%lu.%@, v%lu.%@\n", (unsigned long)d, arr, (unsigned long)d, arr];
     } else if ([kind isEqualToString:@"ima"]) {
         XTIRType *ty = insn.result.type;
         NSString *ra = [self operandReg:fz[@"a"] intoScratch:[self regName:15 forType:ty] ctx:ctx];

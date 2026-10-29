@@ -1969,7 +1969,8 @@ class X86Fixup
         // VEX.W: a 64-bit integer source of vcvtsi2ss/sd.
         u32 W = (cvtsi && s2.kind() == (u32)OP_REG && s2.size() == (u32)8) ? (u32)1 : (u32)0;
         // VEX.W: the double forms of the scalar FMAs.
-        if (map == (u32)2 && base.hasPrefix(String.withCString("f")) && base.hasSuffix(String.withCString("sd")))
+        if (map == (u32)2 && base.hasPrefix(String.withCString("f"))
+            && (base.hasSuffix(String.withCString("sd")) || base.hasSuffix(String.withCString("pd"))))
             W = (u32)1;
         if (cvtsi)
             L = (u32)0;
@@ -2015,6 +2016,14 @@ class X86Fixup
         if (m.equals(String.withCString("fmadd213ss")) || m.equals(String.withCString("fmadd213sd"))) return (u32)$66A9;
         if (m.equals(String.withCString("fmsub213ss")) || m.equals(String.withCString("fmsub213sd"))) return (u32)$66AB;
         if (m.equals(String.withCString("fnmadd213ss")) || m.equals(String.withCString("fnmadd213sd"))) return (u32)$66AD;
+        // Packed FMA (vector code's fused multiply-adds), VEX.W1 for the double
+        // forms.
+        if (m.equals(String.withCString("fmadd231ps")) || m.equals(String.withCString("fmadd231pd"))) return (u32)$66B8;
+        if (m.equals(String.withCString("fmsub231ps")) || m.equals(String.withCString("fmsub231pd"))) return (u32)$66BA;
+        if (m.equals(String.withCString("fnmadd231ps")) || m.equals(String.withCString("fnmadd231pd"))) return (u32)$66BC;
+        if (m.equals(String.withCString("fmadd213ps")) || m.equals(String.withCString("fmadd213pd"))) return (u32)$66A8;
+        if (m.equals(String.withCString("fmsub213ps")) || m.equals(String.withCString("fmsub213pd"))) return (u32)$66AA;
+        if (m.equals(String.withCString("fnmadd213ps")) || m.equals(String.withCString("fnmadd213pd"))) return (u32)$66AC;
         return (u32)$FFFF_FFFF;
         }
 
@@ -2198,6 +2207,19 @@ class X86Fixup
         evAdd(m, String.withCString("vpminub"), (u32)1, (u32)1, (u32)1, (u32)0, (u32)$DA, (u32)64);
         evAdd(m, String.withCString("vpmulld"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$40, (u32)64);
         evAdd(m, String.withCString("vpmullq"), (u32)1, (u32)2, (u32)1, (u32)1, (u32)$40, (u32)64);
+        // Packed FMA: reg = the destination (the addend for 231, a factor for 213).
+        evAdd(m, String.withCString("vfmadd231ps"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$B8, (u32)64);
+        evAdd(m, String.withCString("vfmadd231pd"), (u32)1, (u32)2, (u32)1, (u32)1, (u32)$B8, (u32)64);
+        evAdd(m, String.withCString("vfmsub231ps"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$BA, (u32)64);
+        evAdd(m, String.withCString("vfmsub231pd"), (u32)1, (u32)2, (u32)1, (u32)1, (u32)$BA, (u32)64);
+        evAdd(m, String.withCString("vfnmadd231ps"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$BC, (u32)64);
+        evAdd(m, String.withCString("vfnmadd231pd"), (u32)1, (u32)2, (u32)1, (u32)1, (u32)$BC, (u32)64);
+        evAdd(m, String.withCString("vfmadd213ps"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$A8, (u32)64);
+        evAdd(m, String.withCString("vfmadd213pd"), (u32)1, (u32)2, (u32)1, (u32)1, (u32)$A8, (u32)64);
+        evAdd(m, String.withCString("vfmsub213ps"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$AA, (u32)64);
+        evAdd(m, String.withCString("vfmsub213pd"), (u32)1, (u32)2, (u32)1, (u32)1, (u32)$AA, (u32)64);
+        evAdd(m, String.withCString("vfnmadd213ps"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$AC, (u32)64);
+        evAdd(m, String.withCString("vfnmadd213pd"), (u32)1, (u32)2, (u32)1, (u32)1, (u32)$AC, (u32)64);
         evAdd(m, String.withCString("vpmaxsd"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$3D, (u32)64);
         evAdd(m, String.withCString("vpminsd"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$39, (u32)64);
         evAdd(m, String.withCString("vpmaxud"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$3F, (u32)64);

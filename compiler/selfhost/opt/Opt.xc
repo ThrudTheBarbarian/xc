@@ -26192,11 +26192,16 @@ class BeFact : Object
                 for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                     {
                     IRInsn* n = (IRInsn*)bb.insns().get(i);
-                    if (!n.op().equals(String.withCString("FAdd")) && !n.op().equals(String.withCString("FSub")))
+                    bool vec = n.op().equals(String.withCString("VAdd")) || n.op().equals(String.withCString("VSub"));
+                    if (!n.op().equals(String.withCString("FAdd")) && !n.op().equals(String.withCString("FSub")) && !vec)
                         continue;
                     if (n.res() == (IRValue*)0 || n.pred() != (String*)0)
                         continue;
-                    if (!n.res().ty().equals(String.withCString("F32")) && !n.res().ty().equals(String.withCString("F64")))
+                    // A vector add over float lanes too (the reference says why).
+                    String* t = n.res().ty();
+                    bool flt = vec ? (t.hasPrefix(String.withCString("Vec(F32")) || t.hasPrefix(String.withCString("Vec(F64")))
+                                   : (t.equals(String.withCString("F32")) || t.equals(String.withCString("F64")));
+                    if (!flt)
                         continue;
                     n.setPred(String.withCString("contract"));
                     }

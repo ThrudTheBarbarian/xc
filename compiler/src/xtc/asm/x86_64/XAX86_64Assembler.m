@@ -992,6 +992,14 @@ static BOOL namesHighZmm(NSString *s) {
                 @"vpmaxsw":@[@1,@1,@1,@0,@0xEE,@64], @"vpminsw":@[@1,@1,@1,@0,@0xEA,@64],
                 @"vpmaxub":@[@1,@1,@1,@0,@0xDE,@64], @"vpminub":@[@1,@1,@1,@0,@0xDA,@64],
                 @"vpmulld":@[@1,@2,@1,@0,@0x40,@64], @"vpmullq":@[@1,@2,@1,@1,@0x40,@64],
+                // Packed FMA: reg = the destination (the addend for 231, a
+                // factor for 213), vvvv and r/m the other two.
+                @"vfmadd231ps":@[@1,@2,@1,@0,@0xB8,@64], @"vfmadd231pd":@[@1,@2,@1,@1,@0xB8,@64],
+                @"vfmsub231ps":@[@1,@2,@1,@0,@0xBA,@64], @"vfmsub231pd":@[@1,@2,@1,@1,@0xBA,@64],
+                @"vfnmadd231ps":@[@1,@2,@1,@0,@0xBC,@64], @"vfnmadd231pd":@[@1,@2,@1,@1,@0xBC,@64],
+                @"vfmadd213ps":@[@1,@2,@1,@0,@0xA8,@64], @"vfmadd213pd":@[@1,@2,@1,@1,@0xA8,@64],
+                @"vfmsub213ps":@[@1,@2,@1,@0,@0xAA,@64], @"vfmsub213pd":@[@1,@2,@1,@1,@0xAA,@64],
+                @"vfnmadd213ps":@[@1,@2,@1,@0,@0xAC,@64], @"vfnmadd213pd":@[@1,@2,@1,@1,@0xAC,@64],
                 @"vpmaxsd":@[@1,@2,@1,@0,@0x3D,@64], @"vpminsd":@[@1,@2,@1,@0,@0x39,@64],
                 @"vpmaxud":@[@1,@2,@1,@0,@0x3F,@64], @"vpminud":@[@1,@2,@1,@0,@0x3B,@64],
                 @"vpmaxsq":@[@1,@2,@1,@1,@0x3D,@64], @"vpminsq":@[@1,@2,@1,@1,@0x39,@64],
@@ -1340,7 +1348,15 @@ static BOOL namesHighZmm(NSString *s) {
                       @"fnmadd231ss":@[@0x66,@0xBD], @"fnmadd231sd":@[@0x66,@0xBD],
                       @"fmadd213ss":@[@0x66,@0xA9], @"fmadd213sd":@[@0x66,@0xA9],
                       @"fmsub213ss":@[@0x66,@0xAB], @"fmsub213sd":@[@0x66,@0xAB],
-                      @"fnmadd213ss":@[@0x66,@0xAD], @"fnmadd213sd":@[@0x66,@0xAD]};
+                      @"fnmadd213ss":@[@0x66,@0xAD], @"fnmadd213sd":@[@0x66,@0xAD],
+                      // Packed FMA (vector code's fused multiply-adds), VEX.W1
+                      // for the double forms.
+                      @"fmadd231ps":@[@0x66,@0xB8], @"fmadd231pd":@[@0x66,@0xB8],
+                      @"fmsub231ps":@[@0x66,@0xBA], @"fmsub231pd":@[@0x66,@0xBA],
+                      @"fnmadd231ps":@[@0x66,@0xBC], @"fnmadd231pd":@[@0x66,@0xBC],
+                      @"fmadd213ps":@[@0x66,@0xA8], @"fmadd213pd":@[@0x66,@0xA8],
+                      @"fmsub213ps":@[@0x66,@0xAA], @"fmsub213pd":@[@0x66,@0xAA],
+                      @"fnmadd213ps":@[@0x66,@0xAC], @"fnmadd213pd":@[@0x66,@0xAC]};
         });
         if (!vr && vex38[base]) { vr = vex38[base]; map = 2; }
         XOperand *src1 = &opv[1];
@@ -1384,8 +1400,8 @@ static BOOL namesHighZmm(NSString *s) {
             int L = (a->size == 32 || src1->size == 32 || src2->size == 32) ? 0x04 : 0;
             // VEX.W: a 64-bit integer source of vcvtsi2ss/sd.
             int W = (cvtsi && src2->kind == OpReg && src2->size == 8) ? 1 : 0;
-            // VEX.W: the double forms of the scalar FMAs.
-            if (map == 2 && [base hasPrefix:@"f"] && [base hasSuffix:@"sd"])
+            // VEX.W: the double forms of the FMAs.
+            if (map == 2 && [base hasPrefix:@"f"] && ([base hasSuffix:@"sd"] || [base hasSuffix:@"pd"]))
                 W = 1;
             if (cvtsi)
                 L = 0;
