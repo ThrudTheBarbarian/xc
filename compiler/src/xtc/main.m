@@ -5145,6 +5145,17 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             fprintf(stderr, "xcc: error: --emit-apk requires -A android\n");
             return 1;
         }
+        // The arm64 ELF link (android, arm64 Linux) has no object merge in this
+        // driver: a -Wl,x.o / -Xlinker lib.a would be left out without a word
+        // and its code undefined at run time. The port merges them (its
+        // ElfLinkArm64); refused here until this driver has one.
+        if ([opts.effectiveTarget.exeFormat isEqualToString:@"elf-pie"] && !opts.compileOnly
+            && linkJoinsObjects(opts)) {
+            fprintf(stderr, "xcc: error: objects and archives (-Wl,x.o, -Xlinker lib.a) are not "
+                            "linked for '%s' by this driver — the link would silently omit them.\n",
+                    opts.effectiveTarget.name.UTF8String);
+            return 1;
+        }
         int linkRc = wasm32Mod
             ? linkWasm32Module(argv0, opts, tmpAsm, opts.outputPath, neededLibs, ifaceJson)
             : arm9Pic

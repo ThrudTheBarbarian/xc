@@ -3,7 +3,9 @@
 The static libraries in `mbedtls-linux/` (x86-64 Linux, musl),
 `mbedtls-win64/` (x86-64 Windows, mingw-w64), `mbedtls-android/` (arm64
 Android, NDK r27 clang, API level 21, debug sections stripped) and
-`mbedtls-ios/` (arm64 iOS 15, the iOS SDK's clang) are prebuilt
+`mbedtls-ios/` (arm64 iOS 15, the iOS SDK's clang) and `mbedtls-linux-arm64/`
+(arm64 Linux, glibc 2.41, Debian's gcc 14, position-independent, debug sections
+stripped) are prebuilt
 **mbedTLS 4.2.0**, built from the unmodified release:
 
     libmbedtls.a  libmbedcrypto.a  libmbedx509.a  libtfpsacrypto.a
@@ -16,13 +18,15 @@ the same way (CMake Release, no tests or programs, `-ffile-prefix-map`), with
 the NDK's `android.toolchain.cmake` for `arm64-v8a` and `CMAKE_SYSTEM_NAME=iOS`
 for the device SDK.
 
-The Linux, Android and iOS libraries are built with threading on: `MBEDTLS_THREADING_C` and
+The Linux, Android, iOS and arm64 Linux libraries are built with threading on: `MBEDTLS_THREADING_C` and
 `MBEDTLS_THREADING_PTHREAD` defined in `tf-psa-crypto/include/psa/crypto_config.h`
 (nothing else changed), CMake Release, no tests or programs, and
 `-ffile-prefix-map`: Linux with the musl cross clang
 (`/opt/clang/linux/bin/x86_64-linux-musl-clang`, `CMAKE_SYSTEM_NAME=Linux`),
 Android and iOS as above (NDK r27, API level 21, debug sections stripped;
-`CMAKE_SYSTEM_NAME=iOS`, iOS 15). The PSA crypto core's random
+`CMAKE_SYSTEM_NAME=iOS`, iOS 15), and arm64 Linux natively on an arm64 Linux
+machine (`CMAKE_POSITION_INDEPENDENT_CODE=ON`, so they can join a shared
+library). The PSA crypto core's random
 generator and key slots are shared by every connection, and without threading
 two handshakes at once could both fail (a daemon serving two programs). The
 shim is compiled against headers with threading on, so the libraries must

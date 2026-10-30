@@ -3870,7 +3870,7 @@ void mergeElfLinkObjects(DriverOptions* d, Array* mtext, Array* mdata, Map* msym
     ElfLinkArm64* el = new ElfLinkArm64();
     el.merge(objs, ars, mtext, mdata, msyms, mdataSyms, mfix);
     if (el.rc() != (u32)0) {
-        Stdio.printf("xcc: error: android link: %s\n", el.why() == 0 ? "?" : el.why().cString());
+        Stdio.printf("xcc: error: %s link: %s\n", d.targetRow().name().cString(), el.why() == 0 ? "?" : el.why().cString());
         Process.exit((i32)1); return;
     }
 }
@@ -4792,7 +4792,8 @@ void emitModule(DriverOptions* d, IRModule* mod)
     bool win64 = d.arch().equals(String.withCString("win64"));
     if ((d.linkInputs().count() > (u32)0 || d.frameworks().count() > (u32)0)
         && !isX86_64(d) && !d.arch().equals(String.withCString("arm64"))
-        && !isAndroid(d) && !isIos(d)
+        && !isIos(d)
+        && !(d.targetRow() != (TargetRow*)0 && d.targetRow().exeFormat().equals(String.withCString("elf-pie")))
         && !(win64 && d.frameworks().count() == (u32)0)) {
         Stdio.printf("xcc: error: -Xlinker/-l/-framework is not wired for '%s' in "
                      "this driver — the link would silently omit it.\n",

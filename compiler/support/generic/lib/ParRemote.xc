@@ -289,11 +289,16 @@ class ParTls
 #elif OS_ios
         if (_lib == (pointer)0)
             _lib = openLib("libtls.dylib");
-#elif ARCH_arm64
+#elif OS_macos
         if (_lib == (pointer)0)
             _lib = openLib("/opt/xcc/3p/tls/arm64/libtls.dylib");
         if (_lib == (pointer)0)
             _lib = openLib("libtls.dylib");
+#elif OS_linux && ARCH_arm64
+        if (_lib == (pointer)0)
+            _lib = openLib("/opt/xcc/3p/tls/linux-arm64/libtls.so");
+        if (_lib == (pointer)0)
+            _lib = openLib("libtls.so");
 #else
         if (_lib == (pointer)0)
             _lib = openLib("/opt/xcc/3p/tls/x86_64/libtls.so");

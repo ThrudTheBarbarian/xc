@@ -103,12 +103,13 @@ if [ -f "$MBIOS/libmbedtls.a" ] && [ -n "$IOSSDK" ]; then
     if clang -isysroot "$IOSSDK" -target arm64-apple-ios15.0 -c -O2 -I"$MB/include" \
            tlsshim.c -o "$TMP/tlsshim-ios.o" \
        && ar rcs "$TMP/libtlsshim-ios.a" "$TMP/tlsshim-ios.o" \
-       && "$XCC" --emit-lib -A ios -I xc -o "$TMP/libtls-ios.dylib" xc/tls_lib.xc \
+       && mkdir -p "$TMP/ios" \
+       && "$XCC" --emit-lib -A ios -I xc -o "$TMP/ios/libtls.dylib" xc/tls_lib.xc \
            -Wl,"$TMP/libtlsshim-ios.a" \
            -Wl,"$MBIOS/libmbedtls.a" -Wl,"$MBIOS/libmbedx509.a" \
            -Wl,"$MBIOS/libmbedcrypto.a" -Wl,"$MBIOS/libtfpsacrypto.a"; then
         mkdir -p "$DEST/ios"
-        cp "$TMP/libtls-ios.dylib" "$DEST/ios/libtls.dylib".new && mv -f "$DEST/ios/libtls.dylib".new "$DEST/ios/libtls.dylib"
+        cp "$TMP/ios/libtls.dylib" "$DEST/ios/libtls.dylib".new && mv -f "$DEST/ios/libtls.dylib".new "$DEST/ios/libtls.dylib"
         echo "installed: $DEST/ios/libtls.dylib"
     else
         echo "NOTE: ios libtls build failed (iOS consumers) — the rest installed"
@@ -135,18 +136,57 @@ if [ -f "$MBAND/libmbedtls.a" ] && [ -x "$NDKBIN/clang" ]; then
     if "$NDKBIN/clang" --target=aarch64-linux-android21 -c -O2 -fPIC -I"$MB/include" \
            tlsshim.c -o "$TMP/tlsshim-android.o" \
        && "$NDKBIN/llvm-ar" rcs "$TMP/libtlsshim-android.a" "$TMP/tlsshim-android.o" \
-       && "$XCC" --emit-lib -A android -I xc -o "$TMP/libtls-android.so" xc/tls_lib.xc \
+       && mkdir -p "$TMP/android" \
+       && "$XCC" --emit-lib -A android -I xc -o "$TMP/android/libtls.so" xc/tls_lib.xc \
            -Wl,"$TMP/libtlsshim-android.a" \
            -Wl,"$MBAND/libmbedtls.a" -Wl,"$MBAND/libmbedx509.a" \
            -Wl,"$MBAND/libmbedcrypto.a" -Wl,"$RTB"; then
         mkdir -p "$DEST/android"
-        cp "$TMP/libtls-android.so" "$DEST/android/libtls.so".new && mv -f "$DEST/android/libtls.so".new "$DEST/android/libtls.so"
+        cp "$TMP/android/libtls.so" "$DEST/android/libtls.so".new && mv -f "$DEST/android/libtls.so".new "$DEST/android/libtls.so"
         echo "installed: $DEST/android/libtls.so"
     else
         echo "NOTE: android libtls build failed (Android consumers) — the rest installed"
     fi
 else
     echo "NOTE: no Android Mbed TLS at $MBAND or no NDK — skipped android"
+fi
+
+# Each library is linked under the name it is installed by, in its own
+# directory: the name it is linked as is its soname (install name), which is
+# what a program that links it asks the loader for.
+# ── linux-arm64 (arm64 Linux, glibc): shim + vendored static mbedtls ──
+# The shim is compiled ON an arm64 Linux machine ($XTC_LINUX_ARM64_HOST, over
+# ssh, as tools/regen-runtimes.py builds rt-glibc.s there) against this
+# script's Mbed TLS headers, so it sees the vendored libraries' structures.
+# That machine's libgcc joins the link: Mbed TLS's 128-bit division wants
+# __udivti3, which glibc does not export. Installed beside the x86_64 one,
+# under the row's platform directory.
+MBA64="$HERE/mbedtls-linux-arm64"
+A64H=${XTC_LINUX_ARM64_HOST:-}
+if [ -f "$MBA64/libmbedtls.a" ] && [ -n "$A64H" ]; then
+    RT=$(ssh -o BatchMode=yes "$A64H" 'mktemp -d') || RT=""
+    if [ -n "$RT" ] \
+       && tar cf - -C "$MB" include | ssh -o BatchMode=yes "$A64H" "tar xf - -C $RT" \
+       && scp -q tlsshim.c tlsshim.h "$A64H:$RT/" \
+       && ssh -o BatchMode=yes "$A64H" "cd $RT && gcc -c -O2 -fPIC -I include tlsshim.c -o tlsshim.o && ar rcs libtlsshim.a tlsshim.o && cp \"\$(gcc -print-libgcc-file-name)\" libgcc.a" \
+       && scp -q "$A64H:$RT/libtlsshim.a" "$TMP/libtlsshim-linux-arm64.a" \
+       && scp -q "$A64H:$RT/libgcc.a" "$TMP/libgcc-linux-arm64.a" \
+       && mkdir -p "$TMP/linux-arm64" \
+       && "$XCC" --emit-lib -A arm64-linux -I xc -o "$TMP/linux-arm64/libtls.so" xc/tls_lib.xc \
+           -Wl,"$TMP/libtlsshim-linux-arm64.a" \
+           -Wl,"$MBA64/libmbedtls.a" -Wl,"$MBA64/libmbedx509.a" \
+           -Wl,"$MBA64/libmbedcrypto.a" -Wl,"$MBA64/libtfpsacrypto.a" \
+           -Wl,"$TMP/libgcc-linux-arm64.a"; then
+        mkdir -p "$DEST/linux-arm64"
+        cp "$TMP/linux-arm64/libtls.so" "$DEST/linux-arm64/libtls-$MAJ-$MIN.so".new && mv -f "$DEST/linux-arm64/libtls-$MAJ-$MIN.so".new "$DEST/linux-arm64/libtls-$MAJ-$MIN.so"
+        ln -sf "libtls-$MAJ-$MIN.so" "$DEST/linux-arm64/libtls.so"
+        echo "installed: $DEST/linux-arm64/libtls.so -> libtls-$MAJ-$MIN.so"
+    else
+        echo "NOTE: linux-arm64 libtls build failed (arm64 Linux consumers) — the rest installed"
+    fi
+    [ -n "$RT" ] && ssh -o BatchMode=yes "$A64H" "rm -rf $RT"
+else
+    echo "NOTE: no arm64 Linux Mbed TLS at $MBA64 or no XTC_LINUX_ARM64_HOST — skipped linux-arm64"
 fi
 
 rm -rf "$TMP"
