@@ -445,6 +445,91 @@ static BOOL simpConst(XTIROperand* o, XTIRFunction* fn, NSDictionary<NSNumber*, 
     return YES;
     }
 
+// A float operand's constant value, as the bits of a double: an immediate or
+// a Const's, resolved through the replacements made so far.
+static BOOL simpFConst(XTIROperand* o, NSDictionary<NSNumber*, XTIRInsn*>* defOf,
+                       NSDictionary<NSNumber*, NSNumber*>* repl, double* out)
+    {
+    uint64_t bits = 0;
+    if (o.kind == XTIROperandKindImmF)
+        bits = o.floatRawBytes;
+    else if (o.kind == XTIROperandKindUse)
+        {
+        XTIRInsn* d = defOf[@(simpResolve(repl, o.valueId))];
+        if (!d || d.opcode != XTIROpConst || d.operands.count < 1 || d.operands[0].kind != XTIROperandKindImmF)
+            return NO;
+        bits = d.operands[0].floatRawBytes;
+        }
+    else
+        return NO;
+    memcpy(out, &bits, 8);
+    return YES;
+    }
+
+// Floats of constants (2026-10-30): an int-to-float conversion of a constant
+// of up to 32 bits, and FAdd/FSub/FMul/FDiv of two float constants, become a
+// Const. Each is computed in the result's own precision, one IEEE rounding,
+// which is what the hardware does at run time; a NaN or infinite result is
+// left alone. mandel_deep's `(float)W` (W a u16 literal) stayed a UIToFp of a
+// constant, and `1.5f / (float)W` a division on every item, which kept the
+// escape vectoriser off its par body. nil when n is none of these.
+static XTIRInsn* simpFoldFloat(XTIRInsn* n, XTIRFunction* fn, NSDictionary<NSNumber*, XTIRInsn*>* defOf,
+                               NSDictionary<NSNumber*, NSNumber*>* repl)
+    {
+    XTIRValue* r = n.result;
+    if (!r || n.memoryResult || (r.type.kind != XTIRTypeKindF32 && r.type.kind != XTIRTypeKindF64))
+        return nil;
+    BOOL f32 = r.type.kind == XTIRTypeKindF32;
+    XTIROpcode op = n.opcode;
+    double v = 0;
+    if ((op == XTIROpUIToFp || op == XTIROpSIToFp) && n.operands.count == 1)
+        {
+        XTIROperand* a = n.operands[0];
+        XTIRType* st = a.kind == XTIROperandKindUse ? [fn valueForId:a.valueId].type : a.type;
+        int64_t k = 0;
+        if (!st || !simpIntKind(st.kind) || st.byteWidth > 4 || !simpConst(a, fn, defOf, repl, &k))
+            return nil;
+        uint32_t sbits = st.byteWidth * 8;
+        int64_t smask = ((int64_t)1 << sbits) - 1;
+        int64_t u = k & smask;
+        if (op == XTIROpSIToFp && u >= ((int64_t)1 << (sbits - 1)))
+            u -= (int64_t)1 << sbits;
+        if (f32)
+            v = (double)(op == XTIROpUIToFp ? (float)(uint32_t)u : (float)(int32_t)u);
+        else
+            v = op == XTIROpUIToFp ? (double)(uint32_t)u : (double)(int32_t)u;
+        }
+    else if ((op == XTIROpFAdd || op == XTIROpFSub || op == XTIROpFMul || op == XTIROpFDiv) && n.operands.count == 2)
+        {
+        double x = 0, y = 0;
+        if (!simpFConst(n.operands[0], defOf, repl, &x) || !simpFConst(n.operands[1], defOf, repl, &y))
+            return nil;
+        if (f32)
+            {
+            float fx = (float)x, fy = (float)y, fr;
+            if (op == XTIROpFAdd) fr = fx + fy;
+            else if (op == XTIROpFSub) fr = fx - fy;
+            else if (op == XTIROpFMul) fr = fx * fy;
+            else fr = fx / fy;
+            v = (double)fr;
+            }
+        else if (op == XTIROpFAdd) v = x + y;
+        else if (op == XTIROpFSub) v = x - y;
+        else if (op == XTIROpFMul) v = x * y;
+        else v = x / y;
+        }
+    else
+        return nil;
+    if (!isfinite(v))
+        return nil;
+    uint64_t bits = 0;
+    memcpy(&bits, &v, 8);
+    return [[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                     result:r
+                                   operands:@[ [XTIROperand immFWithType:r.type rawBytes:bits] ]
+                                     dbgLoc:n.dbgLoc];
+    }
+
 - (void)runOnFunction:(XTIRFunction*)fn
     {
     if (fn.blocks.count == 0)
@@ -466,6 +551,27 @@ static BOOL simpConst(XTIROperand* o, XTIRFunction* fn, NSDictionary<NSNumber*, 
             {
             XTIRInsn* n = bb.instructions[i];
             XTIRValue* r = n.result;
+            XTIRInsn* fk = simpFoldFloat(n, fn, defOf, repl);
+            if (fk)
+                {
+                bb.instructions[i] = fk;
+                defOf[@(r.valueId)] = fk;
+                continue;
+                }
+            // Neg of a constant (`-7`, which arrives as Neg #7), 8 to 32 bits.
+            int64_t kn = 0;
+            if (r && !n.memoryResult && n.opcode == XTIROpNeg && n.operands.count == 1 && simpIntKind(r.type.kind)
+                && r.type.byteWidth <= 4 && simpConst(n.operands[0], fn, defOf, repl, &kn))
+                {
+                XTIRInsn* k = [[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                        result:r
+                                                      operands:@[ [XTIROperand immIWithType:r.type
+                                                                                      value:simpWrap(-simpWrap(kn, r.type), r.type)] ]
+                                                        dbgLoc:n.dbgLoc];
+                bb.instructions[i] = k;
+                defOf[@(r.valueId)] = k;
+                continue;
+                }
             if (!r || n.memoryResult || n.operands.count != 2 || !simpIntKind(r.type.kind))
                 continue;
             XTIROpcode op = n.opcode;

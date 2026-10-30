@@ -4031,6 +4031,108 @@ class BeFact : Object
         return true;
         }
 
+    // A float operand's constant value: an immediate or a Const's, as a
+    // double, resolved through the replacements made so far.
+    bool simpFConst(IROperand* o, Map* defOf, Map* repl, double* out)
+        {
+        u64 bits = (u64)0;
+        String* hex = (String*)0;
+        if (o.kind() == (u8)OPK_IMMF)
+            hex = o.fpHex();
+        else if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+            {
+            IRInsn* d = (IRInsn*)defOf.get((Hashable*)resolveReplace(repl, o.val()));
+            if (d == (IRInsn*)0 || !d.op().equals(String.withCString("Const")) || d.ops().count() < (u32)1
+                || ((IROperand*)d.ops().get((u32)0)).kind() != (u8)OPK_IMMF)
+                return false;
+            hex = ((IROperand*)d.ops().get((u32)0)).fpHex();
+            }
+        if (!srfBits(hex, &bits))
+            return false;
+        out[0] = *(double*)(pointer)&bits;
+        return true;
+        }
+
+    // Floats of constants, as the reference's simpFoldFloat: an int-to-float
+    // conversion of a constant of up to 32 bits, and FAdd/FSub/FMul/FDiv of
+    // two float constants, become a Const computed in the result's own
+    // precision; a NaN or infinite result is left alone. 0 when n is none.
+    IRInsn* simpFoldFloat(IRInsn* n, Map* defOf, Map* repl)
+        {
+        IRValue* r = n.res();
+        if (r == (IRValue*)0 || n.memRes() != (IRValue*)0)
+            return (IRInsn*)0;
+        bool f32 = r.ty().equals(String.withCString("F32"));
+        if (!f32 && !r.ty().equals(String.withCString("F64")))
+            return (IRInsn*)0;
+        String* op = n.op();
+        bool ui = op.equals(String.withCString("UIToFp"));
+        bool si = op.equals(String.withCString("SIToFp"));
+        double v = (double)0;
+        if ((ui || si) && n.ops().count() == (u32)1)
+            {
+            IROperand* a = (IROperand*)n.ops().get((u32)0);
+            String* st = a.kind() == (u8)OPK_USE && a.val() != (IRValue*)0 ? a.val().ty() : a.ty();
+            i64 k = (i64)0;
+            if (!simpIntTy(st) || irWidth(st) > (u32)4 || !simpConst(a, defOf, repl, &k))
+                return (IRInsn*)0;
+            u32 sbits = irWidth(st) * (u32)8;
+            i64 smask = ((i64)1 << (i64)sbits) - (i64)1;
+            i64 u = k & smask;
+            if (si && u >= ((i64)1 << (i64)(sbits - (u32)1)))
+                u = u - ((i64)1 << (i64)sbits);
+            if (f32)
+                {
+                float fv = ui ? (float)(u32)u : (float)(i32)u;
+                v = (double)fv;
+                }
+            else
+                v = ui ? (double)(u32)u : (double)(i32)u;
+            }
+        else
+            {
+            bool fadd = op.equals(String.withCString("FAdd"));
+            bool fsub = op.equals(String.withCString("FSub"));
+            bool fmul = op.equals(String.withCString("FMul"));
+            bool fdiv = op.equals(String.withCString("FDiv"));
+            if ((!fadd && !fsub && !fmul && !fdiv) || n.ops().count() != (u32)2)
+                return (IRInsn*)0;
+            double x = (double)0;
+            double y = (double)0;
+            if (!simpFConst((IROperand*)n.ops().get((u32)0), defOf, repl, &x)
+                || !simpFConst((IROperand*)n.ops().get((u32)1), defOf, repl, &y))
+                return (IRInsn*)0;
+            if (f32)
+                {
+                float fx = (float)x;
+                float fy = (float)y;
+                float fr = (float)0;
+                if (fadd) fr = fx + fy;
+                else if (fsub) fr = fx - fy;
+                else if (fmul) fr = fx * fy;
+                else fr = fx / fy;
+                v = (double)fr;
+                }
+            else if (fadd) v = x + y;
+            else if (fsub) v = x - y;
+            else if (fmul) v = x * y;
+            else v = x / y;
+            }
+        u64 bits = *(u64*)(pointer)&v;
+        // Not NaN, not infinite: the exponent field is not all ones.
+        if (((bits >> (u64)52) & (u64)$7FF) == (u64)$7FF)
+            return (IRInsn*)0;
+        string digits = "0123456789abcdef";
+        String* hex = String.withCString("");
+        for (i32 sh = (i32)60; sh >= (i32)0; sh = sh - (i32)4)
+            hex.appendByte(digits[(u32)((bits >> (u64)sh) & (u64)$F)]);
+        IRInsn* k = IRInsn.with(String.withCString("Const"));
+        k.copyDbg(n);
+        k.setRes(r);
+        k.add(IROperand.immF(hex, r.ty()));
+        return k;
+        }
+
     void simplifyFn(IRFunc* fn)
         {
         if (fn.blocks().count() == (u32)0)
@@ -4044,6 +4146,27 @@ class BeFact : Object
                 {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
                 IRValue* r = n.res();
+                IRInsn* fk = simpFoldFloat(n, defOf, repl);
+                if (fk != (IRInsn*)0)
+                    {
+                    bb.insns().set(i, (Object*)fk);
+                    defOf.set((Hashable*)r, (Object*)fk);
+                    continue;
+                    }
+                // Neg of a constant (`-7`, which arrives as Neg #7), 8 to 32 bits.
+                i64 kn = (i64)0;
+                if (r != (IRValue*)0 && n.memRes() == (IRValue*)0 && n.op().equals(String.withCString("Neg"))
+                    && n.ops().count() == (u32)1 && simpIntTy(r.ty()) && irWidth(r.ty()) <= (u32)4
+                    && simpConst((IROperand*)n.ops().get((u32)0), defOf, repl, &kn))
+                    {
+                    IRInsn* kq = IRInsn.with(String.withCString("Const"));
+                    kq.copyDbg(n);
+                    kq.setRes(r);
+                    kq.add(IROperand.immI(simpWrap((i64)0 - simpWrap(kn, r.ty()), r.ty()), r.ty()));
+                    bb.insns().set(i, (Object*)kq);
+                    defOf.set((Hashable*)r, (Object*)kq);
+                    continue;
+                    }
                 if (r == (IRValue*)0 || n.memRes() != (IRValue*)0 || n.ops().count() != (u32)2 || !simpIntTy(r.ty()))
                     continue;
                 String* op = n.op();
