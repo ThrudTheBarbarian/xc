@@ -4397,13 +4397,15 @@ void main(void)
                      "ported first.\n", d.arch().cString());
         Process.exit((i32)1); return;
     }
-    // arm64 macOS links the checked runtime (rt-checked: a backtrace with
-    // arguments, from the parameter map the arm64 back end emits); x86-64 and
-    // win64 take their checks from Checked.xc, which the front end imports.
-    // Every other target is refused, as the reference refuses it.
+    // macOS and iOS link the row's checked runtime (rt-checked: a backtrace
+    // with arguments, from the parameter map the arm64 back end emits); every
+    // other arm64, x86-64 and win64 row takes its checks from Checked.xc, which
+    // the front end imports. Every other target is refused, as the reference
+    // refuses it.
+    String* ccg = d.targetRow() != (TargetRow*)0 ? d.targetRow().codegen() : String.withCString("");
     if (d.fe().boundsReport()
-        && !d.arch().equals(String.withCString("arm64")) && !isIos(d)
-        && !isX86_64(d) && !d.arch().equals(String.withCString("win64"))) {
+        && !ccg.equals(String.withCString("arm64")) && !ccg.equals(String.withCString("x86_64"))
+        && !ccg.equals(String.withCString("win64"))) {
         Stdio.printf("xcc: error: -fbounds-check is implemented for arm64, x86_64 and win64 so far; "
                      "'%s' has no checked runtime\n", d.arch().cString());
         Process.exit((i32)2); return;
@@ -4903,9 +4905,9 @@ void emitModule(DriverOptions* d, IRModule* mod)
     // when asked for. An ordinary build links none of it.
     String* checked = (String*)0;
     if (d.fe().boundsReport()) {
-        checked = readRuntime(d.fe(), String.withCString("rt-checked-macos.s"));
+        checked = readRuntime(d.fe(), d.targetRow().checkedRuntime());
         if (checked == 0) {
-            Stdio.printf("xcc: error: -fbounds-check needs rt-checked-macos.s in the support tree\n");
+            Stdio.printf("xcc: error: -fbounds-check needs %s in the support tree\n", d.targetRow().checkedRuntime().cString());
             Process.exit((i32)1); return;
         }
     }
@@ -6005,8 +6007,10 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
     Opt.setInlineOverride(p, d.inlineMax());
     Opt.setDceTrace(p, d.dceTrace());
     // -fbounds-check=light: the subscript checks bounds-elide leaves inline in
-    // loops (-O2+, arm64, x86-64, win64); the debug build keeps them calls.
-    if ((d.arch().equals(String.withCString("arm64")) || isX86_64(d) || d.arch().equals(String.withCString("win64")))
+    // loops (-O2+, the arm64, x86-64 and win64 code generators: every arm64
+    // row, android and arm64 Linux among them); the debug build keeps them calls.
+    String* cg = d.targetRow() != (TargetRow*)0 ? d.targetRow().codegen() : String.withCString("");
+    if ((cg.equals(String.withCString("arm64")) || cg.equals(String.withCString("x86_64")) || cg.equals(String.withCString("win64")))
         && d.fe().boundsCheck() && !d.fe().boundsReport() && d.opt() >= (u32)2)
         p.setInlineChecks(true);
     // Matrix kernels, -O2+, unless -fno-matmul: arm64 macOS (SME; the kernel

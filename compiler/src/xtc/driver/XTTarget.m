@@ -26,6 +26,7 @@
 @property(nonatomic, readwrite, copy) NSArray<NSString*>* needed;
 @property(nonatomic, readwrite, copy) NSString* bundlePlatform;
 @property(nonatomic, readwrite, copy) NSArray<NSString*>* libExts;
+@property(nonatomic, readwrite, copy) NSString* checkedRuntime;
 @end
 
 @implementation XTTarget
@@ -33,7 +34,7 @@
 // A row: name, cpu, cpu variant, os, env (or ""), libc, legacy spelling, then
 // its aliases separated by spaces — the port's TargetRow.make.
 static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString* os, NSString* env,
-                     NSString* libc, NSString* legacy, NSString* backend, NSString* codegen, NSString* chain, NSString* layer, NSString* abi, BOOL lse, NSString* sdk, NSString* kernels, NSString* matmul, NSString* fmt, NSString* crt, NSString* rt, NSString* interp, NSString* needed, NSString* bundle, NSString* exts, NSString* aliases)
+                     NSString* libc, NSString* legacy, NSString* backend, NSString* codegen, NSString* chain, NSString* layer, NSString* abi, BOOL lse, NSString* sdk, NSString* kernels, NSString* matmul, NSString* fmt, NSString* crt, NSString* rt, NSString* interp, NSString* needed, NSString* bundle, NSString* exts, NSString* checked, NSString* aliases)
     {
     XTTarget* r = [[XTTarget alloc] init];
     r.name = name;
@@ -71,6 +72,7 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
     r.needed = nd;
     r.bundlePlatform = bundle;
     r.libExts = [exts componentsSeparatedByString:@" "];
+    r.checkedRuntime = checked;
     NSMutableArray<NSString*>* al = [NSMutableArray array];
     for (NSString* a in [aliases componentsSeparatedByString:@" "])
         if (a.length)
@@ -85,31 +87,31 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         t = @[
-            row(@"arm64-macos", @"arm64", 0, @"macos", @"", @"darwin", @"arm64", @"arm64", @"arm64", @"arm64", @"", @"darwin64", YES, @"macosx", @"metal", @"sme", @"macho", @"crt-macos.s", @"rt-macos.s", @"", @"", @"macos-arm64", @"dylib so",
+            row(@"arm64-macos", @"arm64", 0, @"macos", @"", @"darwin", @"arm64", @"arm64", @"arm64", @"arm64", @"", @"darwin64", YES, @"macosx", @"metal", @"sme", @"macho", @"crt-macos.s", @"rt-macos.s", @"", @"", @"macos-arm64", @"dylib so", @"rt-checked-macos.s",
                 @"arm64 aarch64-apple-darwin arm64-apple-macos arm64-apple-darwin"),
-            row(@"arm64-ios", @"arm64", 0, @"ios", @"", @"darwin", @"ios", @"arm64", @"arm64", @"ios arm64", @"ios", @"darwin64", YES, @"iphoneos", @"", @"", @"macho", @"crt-macos.s", @"rt-macos.s", @"", @"", @"ios-arm64", @"dylib so",
+            row(@"arm64-ios", @"arm64", 0, @"ios", @"", @"darwin", @"ios", @"arm64", @"arm64", @"ios arm64", @"ios", @"darwin64", YES, @"iphoneos", @"", @"", @"macho", @"crt-macos.s", @"rt-macos.s", @"", @"", @"ios-arm64", @"dylib so", @"rt-checked-macos.s",
                 @"ios arm64-apple-ios"),
-            row(@"arm64-ios-sim", @"arm64", 0, @"ios", @"simulator", @"darwin", @"ios-sim", @"arm64", @"arm64", @"ios arm64", @"ios-sim", @"darwin64", YES, @"iphonesimulator", @"", @"", @"macho", @"crt-macos.s", @"rt-macos.s", @"", @"", @"ios-arm64", @"dylib so",
+            row(@"arm64-ios-sim", @"arm64", 0, @"ios", @"simulator", @"darwin", @"ios-sim", @"arm64", @"arm64", @"ios arm64", @"ios-sim", @"darwin64", YES, @"iphonesimulator", @"", @"", @"macho", @"crt-macos.s", @"rt-macos.s", @"", @"", @"ios-arm64", @"dylib so", @"rt-checked-macos.s",
                 @"ios-sim arm64-apple-ios-simulator"),
-            row(@"arm64-android", @"arm64", 0, @"android", @"", @"bionic", @"android", @"arm64", @"arm64", @"arm64", @"android", @"aapcs64", NO, @"", @"spirv", @"", @"elf-pie", @"crt-android.s", @"rt-android.s", @"/system/bin/linker64", @"libc.so libm.so libdl.so", @"android-arm64", @"so",
+            row(@"arm64-android", @"arm64", 0, @"android", @"", @"bionic", @"android", @"arm64", @"arm64", @"arm64", @"android", @"aapcs64", NO, @"", @"spirv", @"", @"elf-pie", @"crt-android.s", @"rt-android.s", @"/system/bin/linker64", @"libc.so libm.so libdl.so", @"android-arm64", @"so", @"",
                 @"android aarch64-linux-android"),
-            row(@"arm64-linux", @"arm64", 0, @"linux", @"", @"glibc", @"arm64-linux", @"arm64", @"arm64", @"arm64", @"linux-arm64", @"aapcs64", NO, @"", @"spirv", @"", @"elf-pie", @"crt-glibc.s", @"rt-glibc.s", @"/lib/ld-linux-aarch64.so.1", @"libc.so.6 libm.so.6", @"linux-arm64", @"so",
+            row(@"arm64-linux", @"arm64", 0, @"linux", @"", @"glibc", @"arm64-linux", @"arm64", @"arm64", @"arm64", @"linux-arm64", @"aapcs64", NO, @"", @"spirv", @"", @"elf-pie", @"crt-glibc.s", @"rt-glibc.s", @"/lib/ld-linux-aarch64.so.1", @"libc.so.6 libm.so.6", @"linux-arm64", @"so", @"",
                 @"aarch64-linux-gnu arm64-linux-gnu aarch64-unknown-linux-gnu"),
-            row(@"x86_64-linux", @"x86_64", 0, @"linux", @"", @"glibc", @"x86_64", @"x86_64", @"x86_64", @"x86_64", @"", @"sysv", NO, @"", @"ptx spirv", @"x86", @"elf-dyn", @"", @"", @"", @"", @"linux-x86_64", @"so dylib",
+            row(@"x86_64-linux", @"x86_64", 0, @"linux", @"", @"glibc", @"x86_64", @"x86_64", @"x86_64", @"x86_64", @"", @"sysv", NO, @"", @"ptx spirv", @"x86", @"elf-dyn", @"", @"", @"", @"", @"linux-x86_64", @"so dylib", @"",
                 @"x86_64 x86-64 amd64 x86_64-linux-gnu x86_64-pc-linux-gnu"),
-            row(@"x86_64-linux-musl", @"x86_64", 0, @"linux", @"", @"musl", @"x86_64", @"x86_64", @"x86_64", @"x86_64", @"", @"sysv", NO, @"", @"", @"x86", @"elf-static", @"", @"", @"", @"", @"linux-x86_64", @"so dylib",
+            row(@"x86_64-linux-musl", @"x86_64", 0, @"linux", @"", @"musl", @"x86_64", @"x86_64", @"x86_64", @"x86_64", @"", @"sysv", NO, @"", @"", @"x86", @"elf-static", @"", @"", @"", @"", @"linux-x86_64", @"so dylib", @"",
                 @"x86_64-pc-linux-musl"),
-            row(@"x86_64-windows", @"x86_64", 0, @"windows", @"", @"msvcrt", @"win64", @"win64", @"win64", @"win64 x86_64", @"", @"win64", NO, @"", @"ptx spirv", @"", @"pe", @"", @"", @"", @"", @"windows-x86_64", @"dll dll.a a",
+            row(@"x86_64-windows", @"x86_64", 0, @"windows", @"", @"msvcrt", @"win64", @"win64", @"win64", @"win64 x86_64", @"", @"win64", NO, @"", @"ptx spirv", @"", @"pe", @"", @"", @"", @"", @"windows-x86_64", @"dll dll.a a", @"",
                 @"win64 windows x86_64-w64-mingw32 x86_64-w64-windows-gnu x86_64-pc-windows-gnu"),
-            row(@"armv7-xtos", @"armv7", 0, @"xtos", @"", @"xtos", @"arm9", @"arm9", @"arm9", @"arm9", @"", @"aapcs-vfp", NO, @"", @"", @"", @"elf32-dyn", @"", @"", @"", @"", @"xtos-arm9", @"so dylib",
+            row(@"armv7-xtos", @"armv7", 0, @"xtos", @"", @"xtos", @"arm9", @"arm9", @"arm9", @"arm9", @"", @"aapcs-vfp", NO, @"", @"", @"", @"elf32-dyn", @"", @"", @"", @"", @"xtos-arm9", @"so dylib", @"",
                 @"arm9 armv7 armv7-a cortex-a9"),
-            row(@"wasm32-web", @"wasm32", 0, @"web", @"", @"none", @"wasm32", @"wasm32", @"wasm32", @"wasm32", @"", @"wasm", NO, @"", @"wgsl", @"", @"wasm", @"", @"", @"", @"", @"wasm32", @"wasm",
+            row(@"wasm32-web", @"wasm32", 0, @"web", @"", @"none", @"wasm32", @"wasm32", @"wasm32", @"wasm32", @"", @"wasm", NO, @"", @"wgsl", @"", @"wasm", @"", @"", @"", @"", @"wasm32", @"wasm", @"",
                 @"wasm32 wasm wasm32-unknown-unknown"),
-            row(@"m68k-tos", @"m68k", 68000, @"tos", @"", @"none", @"m68k", @"atarist", @"68k", @"atarist", @"", @"m68k", NO, @"", @"", @"", @"prg", @"", @"", @"", @"", @"macos-arm64", @"so dylib",
+            row(@"m68k-tos", @"m68k", 68000, @"tos", @"", @"none", @"m68k", @"atarist", @"68k", @"atarist", @"", @"m68k", NO, @"", @"", @"", @"prg", @"", @"", @"", @"", @"macos-arm64", @"so dylib", @"",
                 @"m68k 68000 atarist m68k-atari-tos"),
-            row(@"m68030-tos", @"m68k", 68030, @"tos", @"", @"none", @"m68k", @"atarist", @"68k", @"atarist", @"", @"m68k", NO, @"", @"", @"", @"prg", @"", @"", @"", @"", @"macos-arm64", @"so dylib",
+            row(@"m68030-tos", @"m68k", 68030, @"tos", @"", @"none", @"m68k", @"atarist", @"68k", @"atarist", @"", @"m68k", NO, @"", @"", @"", @"prg", @"", @"", @"", @"", @"macos-arm64", @"so dylib", @"",
                 @"68030"),
-            row(@"6502-xt", @"6502", 0, @"xt", @"", @"none", @"xt6502", @"xt6502", @"6502", @"", @"", @"xt6502", NO, @"", @"", @"", @"xex", @"", @"", @"", @"", @"macos-arm64", @"so dylib",
+            row(@"6502-xt", @"6502", 0, @"xt", @"", @"none", @"xt6502", @"xt6502", @"6502", @"", @"", @"xt6502", NO, @"", @"", @"", @"xex", @"", @"", @"", @"", @"macos-arm64", @"so dylib", @"",
                 @"6502 xt6502 xt"),
         ];
     });
@@ -177,6 +179,7 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
         }
     [s appendFormat:@"bundle-platform %@\n", self.bundlePlatform];
     [s appendFormat:@"lib-exts %@\n", [self.libExts componentsJoinedByString:@" "]];
+    [s appendFormat:@"checked-runtime %@\n", self.checkedRuntime.length ? self.checkedRuntime : @"-"];
     [s appendString:@"par-kernels"];
     for (NSString* w in self.parKernels)
         [s appendFormat:@" %@", w];

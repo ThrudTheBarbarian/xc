@@ -2361,10 +2361,10 @@ Preprocessor* buildPP(FeOptions* o)
     if (o.parAutoImport())
         pp.setAutoImport(String.withCString("Par.xc"));
     // Checked subscripts take their checks from Checked.xc: everywhere under
-    // -fbounds-check=light, and on x86-64 and win64 under -fbounds-check too
-    // (arm64 macOS's debug build links rt-checked's backtracing reporter).
-    if (o.boundsCheck() && (o.target().equals(String.withCString("x86_64")) || o.target().equals(String.withCString("win64"))
-                            || !o.boundsReport()))
+    // -fbounds-check=light, and under -fbounds-check wherever the row has no
+    // checked runtime (macOS and iOS link rt-checked's backtracing reporter).
+    if (o.boundsCheck() && (!o.boundsReport() || o.targetRow() == (TargetRow*)0
+                            || o.targetRow().checkedRuntime().byteLength() == (u32)0))
         pp.addAutoImport(String.withCString("Checked.xc"));
     // `#package` is wasm32-only and the preprocessor has to be able to say so.
     pp.setArch(platformOf(o));

@@ -1400,9 +1400,9 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     if (_parAutoImport)
         pp.autoImport = @"Par.xc";
     // Checked subscripts take their checks from Checked.xc: everywhere under
-    // -fbounds-check=light, and on x86-64 and win64 under -fbounds-check too
-    // (arm64 macOS's debug build links rt-checked's backtracing reporter).
-    if (_options.boundsCheck && (_options.useX86_64Backend || _options.useWin64Backend || !_options.boundsReport))
+    // -fbounds-check=light, and under -fbounds-check wherever the row has no
+    // checked runtime (macOS and iOS link rt-checked's backtracing reporter).
+    if (_options.boundsCheck && (!_options.boundsReport || _options.effectiveTarget.checkedRuntime.length == 0))
         pp.autoImport = pp.autoImport.length ? [pp.autoImport stringByAppendingString:@";Checked.xc"] : @"Checked.xc";
     [self setupPreprocessor:pp arm64:arm64];
     [self setupObjectFmtGateOnto:pp

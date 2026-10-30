@@ -2291,7 +2291,7 @@ static int linkArm64Executable(const char *argv0, XTCommandLineOptions *opts,
         NSString *chksrc = @"";
         if (opts.boundsReport) {
             NSString *chk = [support stringByAppendingPathComponent:
-                             @"arm64/runtime/rt-checked-macos.s"];
+                             [@"arm64/runtime" stringByAppendingPathComponent:opts.effectiveTarget.checkedRuntime]];
             chksrc = [NSString stringWithContentsOfFile:chk
                                                encoding:NSUTF8StringEncoding error:NULL] ?: @"";
             if (!chksrc.length) {
@@ -5054,8 +5054,10 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         && !opts.noMatmul && opts.optimisationLevel >= 2)
         [cgArgs addObject:@"--matmul"];
     // -fbounds-check=light: the subscript checks bounds-elide leaves inline in
-    // loops (-O2+, arm64, x86-64, win64); the debug build keeps them calls.
-    if ((opts.useArm64Backend || opts.useX86_64Backend || opts.useWin64Backend)
+    // loops (-O2+, the arm64, x86-64 and win64 code generators: every arm64
+    // row, android and arm64 Linux among them); the debug build keeps them calls.
+    NSString *icg = opts.effectiveTarget.codegen;
+    if (([icg isEqualToString:@"arm64"] || [icg isEqualToString:@"x86_64"] || [icg isEqualToString:@"win64"])
         && opts.boundsCheck && !opts.boundsReport && opts.optimisationLevel >= 2)
         [cgArgs addObject:@"--inline-checks"];
     // The row's calling convention and atomics (the target table). AAPCS64 is

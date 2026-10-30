@@ -1606,12 +1606,11 @@ static NSString* sExecutablePath = nil;
                     "  has none of those. See private:docs/Design/memory-safety.md.\n");
             return nil;
             }
-        // arm64 macOS links rt-checked's reporter; x86-64 and win64 take the
-        // checks from Checked.xc, which the driver imports. arm9 has neither,
-        // and nor has android (the arm64 back end, but no reporter is linked
-        // there: refused, as the port refuses it).
-        if ((!opts.useArm64Backend && !opts.useX86_64Backend && !opts.useWin64Backend)
-            || [opts.effectiveTarget.exeFormat isEqualToString:@"elf-pie"])
+        // macOS and iOS link the row's checked runtime (rt-checked's reporter);
+        // every other arm64, x86-64 and win64 row takes the checks from
+        // Checked.xc, which the front end imports. arm9 has neither.
+        NSString *ccg = opts.effectiveTarget.codegen;
+        if (![ccg isEqualToString:@"arm64"] && ![ccg isEqualToString:@"x86_64"] && ![ccg isEqualToString:@"win64"])
             {
             fprintf(stderr,
                     "xcc: error: -fbounds-check is implemented for arm64, x86_64 and\n"
