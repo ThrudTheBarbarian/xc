@@ -2182,19 +2182,16 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // -fpar-kernels=all: every form, whatever the target, so a worker on
     // another machine (xcd, ParRemote.xc) finds the one its GPU takes.
     BOOL allK = _options.parKernelsAll;
-    [XTIRParCheck setEmitsMetal:(allK || (_options.useArm64Backend && !_options.applePlatform && !androidBuild))];
-    // PTX for CUDA's driver: on Windows, and on x86-64 Linux where the program
-    // can load libcuda.so.1 (the same LINK_DYNAMIC). As the port.
-    [XTIRParCheck setEmitsPTX:(allK || _options.useWin64Backend
-                               || (_options.useX86_64Backend && _options.defines[@"LINK_DYNAMIC"] != nil && !androidBuild))];
-    // Vulkan on x86-64 Linux, in a program that can load it (-dynamic, which
-    // the driver passes on as LINK_DYNAMIC): a static one gets no kernels.
-    // Vulkan on x86-64 Linux, in a program that can load it (LINK_DYNAMIC);
-    // on Windows beside the PTX (AMD, Intel); on Android, the only GPU path.
-    [XTIRParCheck setEmitsSPIRV:(allK || (_options.useX86_64Backend && _options.defines[@"LINK_DYNAMIC"] != nil) ||
-                                 _options.useWin64Backend || androidBuild)];
-    // WGSL for WebGPU on wasm32 (the browser's GPU, through the loader).
-    [XTIRParCheck setEmitsWGSL:(allK || _options.useWasm32Backend)];
+    // The row's kernel forms (the target table): Metal on macOS, PTX for CUDA's
+    // driver and SPIR-V for Vulkan on Windows and dynamic glibc Linux (a
+    // static musl program can load neither), SPIR-V on Android, WGSL for
+    // WebGPU on wasm32. As the port.
+    (void)androidBuild;
+    NSArray<NSString*>* kinds = _options.effectiveTarget.parKernels;
+    [XTIRParCheck setEmitsMetal:(allK || [kinds containsObject:@"metal"])];
+    [XTIRParCheck setEmitsPTX:(allK || [kinds containsObject:@"ptx"])];
+    [XTIRParCheck setEmitsSPIRV:(allK || [kinds containsObject:@"spirv"])];
+    [XTIRParCheck setEmitsWGSL:(allK || [kinds containsObject:@"wgsl"])];
     [XTIRLowering setDebugInfo:_options.debugInfo];
     [XTIRDbgLoc resetFiles];
     // -g: the program's own source is file 1, which names the compile unit

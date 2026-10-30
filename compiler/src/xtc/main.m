@@ -5023,7 +5023,7 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // checks for SME at run time and leaves the loop to run when it is absent,
     // so a binary built here still runs on M1-M3) and x86-64 Linux (a kernel per
     // vector tier).
-    if (((opts.useArm64Backend && !opts.androidTarget && !opts.applePlatform) || opts.useX86_64Backend)
+    if (opts.effectiveTarget.matmul
         && !opts.noMatmul && opts.optimisationLevel >= 2)
         [cgArgs addObject:@"--matmul"];
     // -fbounds-check=light: the subscript checks bounds-elide leaves inline in

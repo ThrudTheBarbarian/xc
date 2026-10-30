@@ -29,6 +29,8 @@ class TargetRow
     String* _abi;       // the calling convention (the reference's abi says which)
     bool _lse;          // arm64: the baseline has the LSE atomics
     String* _appleSdk;  // macosx, iphoneos, iphonesimulator, or 0: frameworks are on exactly when set
+    Array* _parKernels; // of String*: the par kernel forms its runtime runs (metal, ptx, spirv, wgsl)
+    String* _matmul;    // the matrix-multiply kernels: sme, x86, or 0
 
     void init(void)
         {
@@ -52,11 +54,20 @@ class TargetRow
     String* abi(void) { return _abi; }
     bool lseAtomics(void) { return _lse; }
     String* appleSdk(void) { return _appleSdk; }
+    Array* parKernels(void) { return _parKernels; }
+    String* matmul(void) { return _matmul; }
+    bool hasParKernel(string k)
+        {
+        for (u32 i = (u32)0; i < _parKernels.count(); i = i + (u32)1)
+            if (((String*)_parKernels.get(i)).equals(String.withCString(k)))
+                return true;
+        return false;
+        }
 
     // A row: name, cpu, cpu variant, os, env (or ""), libc, legacy arch, then
     // its aliases separated by spaces.
     static TargetRow* make(string name, string cpu, u32 variant, string os, string env,
-                           string libc, string legacy, string backend, string codegen, string chain, string layer, string abi, bool lse, string sdk, string aliases)
+                           string libc, string legacy, string backend, string codegen, string chain, string layer, string abi, bool lse, string sdk, string kernels, string matmul, string aliases)
         {
         TargetRow* r = new TargetRow();
         r._name = String.withCString(name);
@@ -76,6 +87,9 @@ class TargetRow
         r._lse = lse;
         String* sd = String.withCString(sdk);
         r._appleSdk = sd.byteLength() == (u32)0 ? (String*)0 : sd;
+        r._parKernels = TargetRow.words(String.withCString(kernels));
+        String* mmk = String.withCString(matmul);
+        r._matmul = mmk.byteLength() == (u32)0 ? (String*)0 : mmk;
         r._aliases = TargetRow.words(String.withCString(aliases));
         return r;
         }
@@ -151,6 +165,12 @@ class TargetRow
             s.appendCString("lse-atomics\n");
         if (_appleSdk != (String*)0)
             s.appendFormat("apple-sdk %s\n", _appleSdk.cString());
+        if (_matmul != (String*)0)
+            s.appendFormat("matmul %s\n", _matmul.cString());
+        s.appendCString("par-kernels");
+        for (u32 i = (u32)0; i < _parKernels.count(); i = i + (u32)1)
+            s.appendFormat(" %s", ((String*)_parKernels.get(i)).cString());
+        s.appendCString("\n");
         s.appendCString("support");
         for (u32 i = (u32)0; i < _supportChain.count(); i = i + (u32)1)
             s.appendFormat(" %s", ((String*)_supportChain.get(i)).cString());
@@ -174,29 +194,29 @@ class Targets
     static Array* rows(void)
         {
         Array* t = new Array();
-        t.add((Object*)TargetRow.make("arm64-macos", "arm64", (u32)0, "macos", "", "darwin", "arm64", "arm64", "arm64", "arm64", "", "darwin64", true, "macosx",
+        t.add((Object*)TargetRow.make("arm64-macos", "arm64", (u32)0, "macos", "", "darwin", "arm64", "arm64", "arm64", "arm64", "", "darwin64", true, "macosx", "metal", "sme",
                                       "arm64 aarch64-apple-darwin arm64-apple-macos arm64-apple-darwin"));
-        t.add((Object*)TargetRow.make("arm64-ios", "arm64", (u32)0, "ios", "", "darwin", "ios", "arm64", "arm64", "ios arm64", "ios", "darwin64", true, "iphoneos",
+        t.add((Object*)TargetRow.make("arm64-ios", "arm64", (u32)0, "ios", "", "darwin", "ios", "arm64", "arm64", "ios arm64", "ios", "darwin64", true, "iphoneos", "", "",
                                       "ios arm64-apple-ios"));
-        t.add((Object*)TargetRow.make("arm64-ios-sim", "arm64", (u32)0, "ios", "simulator", "darwin", "ios-sim", "arm64", "arm64", "ios arm64", "ios-sim", "darwin64", true, "iphonesimulator",
+        t.add((Object*)TargetRow.make("arm64-ios-sim", "arm64", (u32)0, "ios", "simulator", "darwin", "ios-sim", "arm64", "arm64", "ios arm64", "ios-sim", "darwin64", true, "iphonesimulator", "", "",
                                       "ios-sim arm64-apple-ios-simulator"));
-        t.add((Object*)TargetRow.make("arm64-android", "arm64", (u32)0, "android", "", "bionic", "android", "arm64", "arm64", "arm64", "android", "aapcs64", false, "",
+        t.add((Object*)TargetRow.make("arm64-android", "arm64", (u32)0, "android", "", "bionic", "android", "arm64", "arm64", "arm64", "android", "aapcs64", false, "", "spirv", "",
                                       "android aarch64-linux-android"));
-        t.add((Object*)TargetRow.make("x86_64-linux", "x86_64", (u32)0, "linux", "", "glibc", "x86_64", "x86_64", "x86_64", "x86_64", "", "sysv", false, "",
+        t.add((Object*)TargetRow.make("x86_64-linux", "x86_64", (u32)0, "linux", "", "glibc", "x86_64", "x86_64", "x86_64", "x86_64", "", "sysv", false, "", "ptx spirv", "x86",
                                       "x86_64 x86-64 amd64 x86_64-linux-gnu x86_64-pc-linux-gnu"));
-        t.add((Object*)TargetRow.make("x86_64-linux-musl", "x86_64", (u32)0, "linux", "", "musl", "x86_64", "x86_64", "x86_64", "x86_64", "", "sysv", false, "",
+        t.add((Object*)TargetRow.make("x86_64-linux-musl", "x86_64", (u32)0, "linux", "", "musl", "x86_64", "x86_64", "x86_64", "x86_64", "", "sysv", false, "", "", "x86",
                                       "x86_64-pc-linux-musl"));
-        t.add((Object*)TargetRow.make("x86_64-windows", "x86_64", (u32)0, "windows", "", "msvcrt", "win64", "win64", "win64", "win64 x86_64", "", "win64", false, "",
+        t.add((Object*)TargetRow.make("x86_64-windows", "x86_64", (u32)0, "windows", "", "msvcrt", "win64", "win64", "win64", "win64 x86_64", "", "win64", false, "", "ptx spirv", "",
                                       "win64 windows x86_64-w64-mingw32 x86_64-w64-windows-gnu x86_64-pc-windows-gnu"));
-        t.add((Object*)TargetRow.make("armv7-xtos", "armv7", (u32)0, "xtos", "", "xtos", "arm9", "arm9", "arm9", "arm9", "", "aapcs-vfp", false, "",
+        t.add((Object*)TargetRow.make("armv7-xtos", "armv7", (u32)0, "xtos", "", "xtos", "arm9", "arm9", "arm9", "arm9", "", "aapcs-vfp", false, "", "", "",
                                       "arm9 armv7 armv7-a cortex-a9"));
-        t.add((Object*)TargetRow.make("wasm32-web", "wasm32", (u32)0, "web", "", "none", "wasm32", "wasm32", "wasm32", "wasm32", "", "wasm", false, "",
+        t.add((Object*)TargetRow.make("wasm32-web", "wasm32", (u32)0, "web", "", "none", "wasm32", "wasm32", "wasm32", "wasm32", "", "wasm", false, "", "wgsl", "",
                                       "wasm32 wasm wasm32-unknown-unknown"));
-        t.add((Object*)TargetRow.make("m68k-tos", "m68k", (u32)68000, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "", "m68k", false, "",
+        t.add((Object*)TargetRow.make("m68k-tos", "m68k", (u32)68000, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "", "m68k", false, "", "", "",
                                       "m68k 68000 atarist m68k-atari-tos"));
-        t.add((Object*)TargetRow.make("m68030-tos", "m68k", (u32)68030, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "", "m68k", false, "",
+        t.add((Object*)TargetRow.make("m68030-tos", "m68k", (u32)68030, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "", "m68k", false, "", "", "",
                                       "68030"));
-        t.add((Object*)TargetRow.make("6502-xt", "6502", (u32)0, "xt", "", "none", "xt6502", "xt6502", "6502", "", "", "xt6502", false, "",
+        t.add((Object*)TargetRow.make("6502-xt", "6502", (u32)0, "xt", "", "none", "xt6502", "xt6502", "6502", "", "", "xt6502", false, "", "", "",
                                       "6502 xt6502 xt"));
         return t;
         }

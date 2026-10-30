@@ -1076,37 +1076,15 @@ class FeOptions
             IRDbg.setWorkingDirectory(Frontend.workingDirectory());
             IRDbg.fileIdForPath(IRDbg.canonicalPath(o.input()));
             }
-        // `par` blocks get their Metal source only where Metal exists: macOS
-        // on Apple silicon (not iOS for now, not Android); on Windows, PTX
-        // for NVIDIA's driver.
-        bool android = false;
-        for (u32 i = (u32)0; i < o.defs().count(); i = i + (u32)1)
-            {
-            if (((String*)o.defs().get(i)).hasPrefix(String.withCString("PLATFORM_android")))
-                android = true;
-            }
-        // iOS is arm64 with the iOS platform layer (see PLATFORM_ios below):
-        // its par runtime has no Metal path yet.
-        bool ios = o.libPlatform() != (String*)0 && o.libPlatform().hasPrefix(String.withCString("ios"));
         // -fpar-kernels=all: every form, whatever the target, so a worker on
         // another machine (xcd, ParRemote.xc) finds the one its GPU takes.
         bool allK = o.parKernelsAll();
-        lower.setParMetal(allK || (o.target().equals(String.withCString("arm64")) && !android && !ios));
-        // Vulkan on x86-64 Linux, in a program that can load it (-dynamic, which
-        // the driver passes on as LINK_DYNAMIC): a static one gets no kernels.
-        bool linkDynamic = false;
-        for (u32 i = (u32)0; i < o.defs().count(); i = i + (u32)1)
-            if (((String*)o.defs().get(i)).hasPrefix(String.withCString("LINK_DYNAMIC")))
-                linkDynamic = true;
-        // PTX for CUDA's driver: on Windows, and on x86-64 Linux where the
-        // program can load libcuda.so.1 (the same LINK_DYNAMIC).
-        lower.setParPTX(allK || o.target().equals(String.withCString("win64"))
-                        || (o.target().equals(String.withCString("x86_64")) && linkDynamic && !android));
-        // On Windows beside the PTX (AMD, Intel); on Android, the only GPU path.
-        lower.setParSPIRV(allK || (o.target().equals(String.withCString("x86_64")) && linkDynamic) ||
-                          o.target().equals(String.withCString("win64")) || android);
-        // WGSL for WebGPU on wasm32 (the browser's GPU, through the loader).
-        lower.setParWGSL(allK || o.target().equals(String.withCString("wasm32")));
+        // The row's kernel forms (the reference's driver says which).
+        TargetRow* kr = o.targetRow();
+        lower.setParMetal(allK || (kr != (TargetRow*)0 && kr.hasParKernel("metal")));
+        lower.setParPTX(allK || (kr != (TargetRow*)0 && kr.hasParKernel("ptx")));
+        lower.setParSPIRV(allK || (kr != (TargetRow*)0 && kr.hasParKernel("spirv")));
+        lower.setParWGSL(allK || (kr != (TargetRow*)0 && kr.hasParKernel("wgsl")));
         lower.setVtable(sema.vtable());
         IRModule* mod = lower.run(program, moduleNameOf(o.input()));
         if (mod != (IRModule*)0)

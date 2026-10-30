@@ -5981,7 +5981,8 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
     // checks for SME at run time and leaves the loop to run when it is absent)
     // and x86-64 Linux (a kernel per vector tier, named below with the level).
     bool matMul = !d.caps().noMatmul() && d.opt() >= (u32)2;
-    if (matMul && d.arch().equals(String.withCString("arm64")) && !isIos(d)) {
+    String* mmKind = d.targetRow() != (TargetRow*)0 ? d.targetRow().matmul() : (String*)0;
+    if (matMul && mmKind != (String*)0 && mmKind.equals(String.withCString("sme"))) {
         p.setMatMul(String.withCString("__xt_sme_gemm_"), String.withCString(""));
         p.setMatMulFastSuffix(String.withCString("_fast"));
         p.setMatMulInts(true);
@@ -6007,7 +6008,7 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
         // -msimd=auto: base code plus avx2 clones, picked at load.
         p.setSimdDispatch(simd.equals(String.withCString("auto")));
     }
-    if (matMul && isX86_64(d))
+    if (matMul && mmKind != (String*)0 && mmKind.equals(String.withCString("x86")))
     {
         String* lv = simd == (String*)0 ? String.withCString("base") : simd;
         if (!lv.equals(String.withCString("avx512")) && !lv.equals(String.withCString("avx2"))

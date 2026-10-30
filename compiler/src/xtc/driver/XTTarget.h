@@ -37,6 +37,11 @@ NS_ASSUME_NONNULL_BEGIN
 // The Apple SDK whose frameworks `#import <F>` may name (macosx, iphoneos,
 // iphonesimulator), or nil: frameworks are on exactly when it is set.
 @property(nonatomic, readonly, copy, nullable) NSString* appleSdk;
+// The par kernel forms the target's runtime can run: metal, ptx, spirv, wgsl.
+@property(nonatomic, readonly, copy) NSArray<NSString*>* parKernels;
+// The matrix-multiply kernels idiom-matmul calls at -O2+: sme (arm64 macOS,
+// checked for at run time), x86 (one per vector tier), or nil.
+@property(nonatomic, readonly, copy, nullable) NSString* matmul;
 
 // Every row, in the order both compilers list them.
 + (NSArray<XTTarget*>*)rows;
