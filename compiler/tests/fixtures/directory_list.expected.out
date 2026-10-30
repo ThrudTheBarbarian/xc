@@ -1,0 +1,6 @@
+entries 3
+a.txt 1 b.txt 1 sub 2
+sub holds 1: c.txt 1
+missing directory lists as nothing: 1
+moved 1: a.txt 100, a2.txt 1, text alpha
+removed 1, exists 0
