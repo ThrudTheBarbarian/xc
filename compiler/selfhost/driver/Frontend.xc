@@ -2077,7 +2077,7 @@ String* sanitiseEnvPath(String* raw)
     }
 
 // `a/b/xcc` -> `a/b`, and "" for a bare name.
-#if ARCH_win64
+#if OS_windows
 u32 GetModuleFileNameA(pointer module, u8* buf, u32 size);
 #endif
 
@@ -2086,7 +2086,7 @@ u32 GetModuleFileNameA(pointer module, u8* buf, u32 size);
 // image really is; elsewhere argv[0] stays (and /opt/xcc is a fallback).
 String* selfPath(void)
     {
-#if ARCH_win64
+#if OS_windows
     u8 buf[1024];
     u32 n = GetModuleFileNameA((pointer)0, &buf[0], (u32)1024);
     if (n > (u32)0 && n < (u32)1024)
@@ -2439,7 +2439,7 @@ Preprocessor* buildPP(FeOptions* o)
                 roots.add((Object*)up.appendingPathComponent(String.withCString("3p")));
             }
         }
-#if ARCH_win64
+#if OS_windows
     String* pf = sanitiseEnvPath(Platform.env(String.withCString("ProgramFiles")));
     if (pf != 0)
         roots.add((Object*)pf.appendingPathComponent(String.withCString("xcc")).appendingPathComponent(String.withCString("3p")));

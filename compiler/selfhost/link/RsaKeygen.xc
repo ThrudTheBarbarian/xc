@@ -13,7 +13,7 @@
 #import "Files.xc"
 #import <Bignum>
 
-#if ARCH_win64
+#if OS_windows
 // The OS's random bytes on Windows: RtlGenRandom, which advapi32 exports
 // under this name (bug 641: a Windows host has no /dev/urandom). Nonzero on
 // success.
@@ -33,7 +33,7 @@ class Rsa
         {
         Array* out = new Array();
         u8* buf = new u8[n];
-#if ARCH_win64
+#if OS_windows
         if (SystemFunction036(buf, n) == (u8)0)
             {
             delete buf;

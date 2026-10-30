@@ -13,7 +13,7 @@
 #import <Xta>
 #import "XtaDefs.xc"
 
-#if ARCH_win64
+#if OS_windows
 pointer FindFirstFileA(u8* pattern, u8* data);
 i32 FindNextFileA(pointer h, u8* data);
 i32 FindClose(pointer h);
@@ -44,7 +44,7 @@ class XaDir
     static Array* list(String* path)
         {
         Array* out = new Array();
-#if ARCH_win64
+#if OS_windows
         String* pattern = String.withString(path);
         pattern.appendCString("\\*");
         u8* data = new u8[(u32)592];

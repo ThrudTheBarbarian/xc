@@ -266,11 +266,11 @@ class DriverOptions
         // compiler default to emitting Linux ELFs. The more specific platform
         // is therefore tested first, and this is the general rule for any
         // future host that shares an arch with another.
-#if ARCH_win64
+#if OS_windows
         _arch = String.withCString("win64");
 #elif ARCH_x86_64
         _arch = String.withCString("x86_64");
-#elif ARCH_arm9
+#elif ARCH_armv7
         _arch = String.withCString("arm9");
 #else
         _arch = String.withCString("arm64");
@@ -1810,11 +1810,11 @@ String* muslLibDir(FeOptions* o)
 // (/opt/clang/win64/x86_64-w64-mingw32), each with an include/ directory.
 String* cPathTargetFlags(DriverOptions* d)
 {
-#if ARCH_win64
+#if OS_windows
     String* host = String.withCString("win64");
 #elif ARCH_x86_64
     String* host = String.withCString("x86_64");
-#elif ARCH_arm9
+#elif ARCH_armv7
     String* host = String.withCString("arm9");
 #else
     String* host = String.withCString("arm64");
@@ -4255,7 +4255,7 @@ void linkObjects(DriverOptions* d)
     Process.exit((i32)1);
 }
 
-#if ARCH_x86_64 && !ARCH_win64
+#if OS_linux
 // struct rlimit: { rlim_cur, rlim_max }, two u64s.
 i32 getrlimit(i32 resource, u64* rl);
 i32 setrlimit(i32 resource, u64* rl);
@@ -4268,7 +4268,7 @@ i32 setrlimit(i32 resource, u64* rl);
 // raised towards the hard one (at most 1 GB), and nothing else changes.
 void raiseStackLimit(void)
 {
-#if ARCH_x86_64 && !ARCH_win64
+#if OS_linux
     u64 rl[2];
     if (getrlimit((i32)3, &rl[0]) != (i32)0) return; // RLIMIT_STACK
     u64 want = (u64)1 << (u64)30;
@@ -5770,7 +5770,7 @@ i32 parseStackSize(String* v)
 // no primitive for that, so it goes to the host C library: opendir/readdir on
 // the POSIX hosts, FindFirstFileA on Windows. The entry layout is the host's,
 // hence the per-host offsets: d_type/d_name at 20/21 on macOS, 18/19 on musl.
-#if ARCH_win64
+#if OS_windows
 u8* FindFirstFileA(u8* pattern, u8* data);
 i32 FindNextFileA(u8* h, u8* data);
 i32 FindClose(u8* h);
@@ -5786,7 +5786,7 @@ i32 closedir(u8* d);
 Array* listDirectory(String* dir)
 {
     Array* out = new Array();
-#if ARCH_win64
+#if OS_windows
     u8 fd[320];
     String* pat = String.withString(dir);
     pat.appendCString("/*");
@@ -5802,7 +5802,7 @@ Array* listDirectory(String* dir)
         more = FindNextFileA(h, &fd[0]) != (i32)0;
     }
     FindClose(h);
-#elif ARCH_arm9
+#elif ARCH_armv7
     // No host C library to ask on this target.
     return out;
 #else
@@ -6018,7 +6018,7 @@ void applyOptFlags(DriverOptions* d, OptProfile* p)
     }
 }
 
-#if ARCH_win64
+#if OS_windows
 i32 IsProcessorFeaturePresent(u32 feature);
 #endif
 
@@ -6032,7 +6032,7 @@ i32 IsProcessorFeaturePresent(u32 feature);
 // the kernel supports it. Matches the reference's hostSimdLevel.
 String* hostSimdLevel(void)
 {
-#if ARCH_win64
+#if OS_windows
     // 41 = PF_AVX512F_INSTRUCTIONS_AVAILABLE. Windows has no flag for DQ, BW
     // and VL, but every part with AVX-512F that Windows runs on has all three.
     if (IsProcessorFeaturePresent((u32)41) != (i32)0)
@@ -6305,7 +6305,7 @@ void checkCapabilities(DriverOptions* d)
             Stdio.printf("xcc: error: --no-self-host: an arm64 library links in-house only\n");
             Process.exit((i32)1); return;
         }
-#if ARCH_win64
+#if OS_windows
         Stdio.printf("xcc: error: --no-self-host runs a POSIX shell toolchain and is not "
                      "available on a Windows host\n");
         Process.exit((i32)1); return;

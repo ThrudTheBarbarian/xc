@@ -77,7 +77,7 @@ class CPath
     // a path to escape.
     static String* quoted(String* a)
         {
-#if ARCH_win64
+#if OS_windows
         String* w = String.withCString("\"");
         w.append(a);
         w.appendCString("\"");
@@ -100,7 +100,7 @@ class CPath
     // A scratch path for clang's output, this process's own.
     static String* scratch(void)
         {
-#if ARCH_win64
+#if OS_windows
         // %TEMP%, as every Windows program's scratch: there is no /tmp.
         String* t = Platform.env(String.withCString("TEMP"));
         if (t.byteLength() == (u32)0)
@@ -114,7 +114,7 @@ class CPath
     // Whether clang runs here.
     static bool haveClang(void)
         {
-#if ARCH_win64
+#if OS_windows
         return system("clang --version >NUL 2>&1") == (i32)0;
 #else
         return system("clang --version >/dev/null 2>&1") == (i32)0;

@@ -35,11 +35,19 @@ class ElfArm64
     Array* _out;
     bool _failed;
     String* _why;
+    String* _interp;   // an executable's PT_INTERP (the reference's setInterpreter:)
 
     void init(void)
         {
         _out = new Array();
         _failed = false;
+        _interp = String.withCString("/system/bin/linker64");
+        }
+
+    // Android's linker64 unless set (glibc Linux: /lib/ld-linux-aarch64.so.1).
+    void setInterp(String* path)
+        {
+        _interp = path;
         }
 
     Array* bytes(void)
@@ -369,7 +377,7 @@ class ElfArm64
 
         u32 nphdr = isExec ? (u32)7 : (u32)5;
         u32 interpOff = roundUpTo((u32)AEHDR_SZ + nphdr * (u32)APHDR_SZ, (u32)8);
-        u32 interpSz = isExec ? (u32)21 : (u32)0; // "/system/bin/linker64" + NUL
+        u32 interpSz = isExec ? _interp.byteLength() + (u32)1 : (u32)0; // the path + NUL
         u32 roOff = roundUpTo(interpOff + interpSz, (u32)8);
         u32 symOff = roOff;
         u32 strOffB = symOff + nsym * (u32)ASYM_SZ;
@@ -546,9 +554,8 @@ class ElfArm64
         if (isExec)
             {
             padTo(interpOff);
-            String* interp = String.withCString("/system/bin/linker64");
-            for (u32 i = (u32)0; i < interp.byteLength(); i = i + (u32)1)
-                p8((u32)interp.byteAt(i));
+            for (u32 i = (u32)0; i < _interp.byteLength(); i = i + (u32)1)
+                p8((u32)_interp.byteAt(i));
             p8((u32)0);
             }
         padTo(symOff);
