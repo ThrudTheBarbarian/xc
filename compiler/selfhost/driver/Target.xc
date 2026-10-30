@@ -26,6 +26,9 @@ class TargetRow
     String* _codegen;   // the code generator, xcc-cg-<codegen> in the reference
     Array* _supportChain; // of String*: support/<dir>/lib before generic, in order; empty for 6502 (its layout names it)
     String* _platformLayer; // the third-party tree's platform layer before the arch's (ios, ios-sim, android), or 0
+    String* _abi;       // the calling convention (the reference's abi says which)
+    bool _lse;          // arm64: the baseline has the LSE atomics
+    String* _appleSdk;  // macosx, iphoneos, iphonesimulator, or 0: frameworks are on exactly when set
 
     void init(void)
         {
@@ -46,11 +49,14 @@ class TargetRow
     String* codegen(void)  { return _codegen; }
     Array* supportChain(void) { return _supportChain; }
     String* platformLayer(void) { return _platformLayer; }
+    String* abi(void) { return _abi; }
+    bool lseAtomics(void) { return _lse; }
+    String* appleSdk(void) { return _appleSdk; }
 
     // A row: name, cpu, cpu variant, os, env (or ""), libc, legacy arch, then
     // its aliases separated by spaces.
     static TargetRow* make(string name, string cpu, u32 variant, string os, string env,
-                           string libc, string legacy, string backend, string codegen, string chain, string layer, string aliases)
+                           string libc, string legacy, string backend, string codegen, string chain, string layer, string abi, bool lse, string sdk, string aliases)
         {
         TargetRow* r = new TargetRow();
         r._name = String.withCString(name);
@@ -66,6 +72,10 @@ class TargetRow
         r._supportChain = TargetRow.words(String.withCString(chain));
         String* ly = String.withCString(layer);
         r._platformLayer = ly.byteLength() == (u32)0 ? (String*)0 : ly;
+        r._abi = String.withCString(abi);
+        r._lse = lse;
+        String* sd = String.withCString(sdk);
+        r._appleSdk = sd.byteLength() == (u32)0 ? (String*)0 : sd;
         r._aliases = TargetRow.words(String.withCString(aliases));
         return r;
         }
@@ -136,6 +146,11 @@ class TargetRow
         s.appendFormat("codegen %s\n", _codegen.cString());
         if (_platformLayer != (String*)0)
             s.appendFormat("platform-layer %s\n", _platformLayer.cString());
+        s.appendFormat("abi %s\n", _abi.cString());
+        if (_lse)
+            s.appendCString("lse-atomics\n");
+        if (_appleSdk != (String*)0)
+            s.appendFormat("apple-sdk %s\n", _appleSdk.cString());
         s.appendCString("support");
         for (u32 i = (u32)0; i < _supportChain.count(); i = i + (u32)1)
             s.appendFormat(" %s", ((String*)_supportChain.get(i)).cString());
@@ -159,29 +174,29 @@ class Targets
     static Array* rows(void)
         {
         Array* t = new Array();
-        t.add((Object*)TargetRow.make("arm64-macos", "arm64", (u32)0, "macos", "", "darwin", "arm64", "arm64", "arm64", "arm64", "",
+        t.add((Object*)TargetRow.make("arm64-macos", "arm64", (u32)0, "macos", "", "darwin", "arm64", "arm64", "arm64", "arm64", "", "darwin64", true, "macosx",
                                       "arm64 aarch64-apple-darwin arm64-apple-macos arm64-apple-darwin"));
-        t.add((Object*)TargetRow.make("arm64-ios", "arm64", (u32)0, "ios", "", "darwin", "ios", "arm64", "arm64", "ios arm64", "ios",
+        t.add((Object*)TargetRow.make("arm64-ios", "arm64", (u32)0, "ios", "", "darwin", "ios", "arm64", "arm64", "ios arm64", "ios", "darwin64", true, "iphoneos",
                                       "ios arm64-apple-ios"));
-        t.add((Object*)TargetRow.make("arm64-ios-sim", "arm64", (u32)0, "ios", "simulator", "darwin", "ios-sim", "arm64", "arm64", "ios arm64", "ios-sim",
+        t.add((Object*)TargetRow.make("arm64-ios-sim", "arm64", (u32)0, "ios", "simulator", "darwin", "ios-sim", "arm64", "arm64", "ios arm64", "ios-sim", "darwin64", true, "iphonesimulator",
                                       "ios-sim arm64-apple-ios-simulator"));
-        t.add((Object*)TargetRow.make("arm64-android", "arm64", (u32)0, "android", "", "bionic", "android", "arm64", "arm64", "arm64", "android",
+        t.add((Object*)TargetRow.make("arm64-android", "arm64", (u32)0, "android", "", "bionic", "android", "arm64", "arm64", "arm64", "android", "aapcs64", false, "",
                                       "android aarch64-linux-android"));
-        t.add((Object*)TargetRow.make("x86_64-linux", "x86_64", (u32)0, "linux", "", "glibc", "x86_64", "x86_64", "x86_64", "x86_64", "",
+        t.add((Object*)TargetRow.make("x86_64-linux", "x86_64", (u32)0, "linux", "", "glibc", "x86_64", "x86_64", "x86_64", "x86_64", "", "sysv", false, "",
                                       "x86_64 x86-64 amd64 x86_64-linux-gnu x86_64-pc-linux-gnu"));
-        t.add((Object*)TargetRow.make("x86_64-linux-musl", "x86_64", (u32)0, "linux", "", "musl", "x86_64", "x86_64", "x86_64", "x86_64", "",
+        t.add((Object*)TargetRow.make("x86_64-linux-musl", "x86_64", (u32)0, "linux", "", "musl", "x86_64", "x86_64", "x86_64", "x86_64", "", "sysv", false, "",
                                       "x86_64-pc-linux-musl"));
-        t.add((Object*)TargetRow.make("x86_64-windows", "x86_64", (u32)0, "windows", "", "msvcrt", "win64", "win64", "win64", "win64 x86_64", "",
+        t.add((Object*)TargetRow.make("x86_64-windows", "x86_64", (u32)0, "windows", "", "msvcrt", "win64", "win64", "win64", "win64 x86_64", "", "win64", false, "",
                                       "win64 windows x86_64-w64-mingw32 x86_64-w64-windows-gnu x86_64-pc-windows-gnu"));
-        t.add((Object*)TargetRow.make("armv7-xtos", "armv7", (u32)0, "xtos", "", "xtos", "arm9", "arm9", "arm9", "arm9", "",
+        t.add((Object*)TargetRow.make("armv7-xtos", "armv7", (u32)0, "xtos", "", "xtos", "arm9", "arm9", "arm9", "arm9", "", "aapcs-vfp", false, "",
                                       "arm9 armv7 armv7-a cortex-a9"));
-        t.add((Object*)TargetRow.make("wasm32-web", "wasm32", (u32)0, "web", "", "none", "wasm32", "wasm32", "wasm32", "wasm32", "",
+        t.add((Object*)TargetRow.make("wasm32-web", "wasm32", (u32)0, "web", "", "none", "wasm32", "wasm32", "wasm32", "wasm32", "", "wasm", false, "",
                                       "wasm32 wasm wasm32-unknown-unknown"));
-        t.add((Object*)TargetRow.make("m68k-tos", "m68k", (u32)68000, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "",
+        t.add((Object*)TargetRow.make("m68k-tos", "m68k", (u32)68000, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "", "m68k", false, "",
                                       "m68k 68000 atarist m68k-atari-tos"));
-        t.add((Object*)TargetRow.make("m68030-tos", "m68k", (u32)68030, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "",
+        t.add((Object*)TargetRow.make("m68030-tos", "m68k", (u32)68030, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "", "m68k", false, "",
                                       "68030"));
-        t.add((Object*)TargetRow.make("6502-xt", "6502", (u32)0, "xt", "", "none", "xt6502", "xt6502", "6502", "", "",
+        t.add((Object*)TargetRow.make("6502-xt", "6502", (u32)0, "xt", "", "none", "xt6502", "xt6502", "6502", "", "", "xt6502", false, "",
                                       "6502 xt6502 xt"));
         return t;
         }

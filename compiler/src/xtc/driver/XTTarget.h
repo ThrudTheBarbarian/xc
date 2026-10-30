@@ -29,6 +29,14 @@ NS_ASSUME_NONNULL_BEGIN
 // The third-party tree's platform layer, searched before the arch's directory
 // (ios, ios-sim, android), or nil.
 @property(nonatomic, readonly, copy, nullable) NSString* platformLayer;
+// The calling convention: darwin64, aapcs64, sysv, win64, aapcs-vfp, wasm, m68k, xt6502.
+@property(nonatomic, readonly, copy) NSString* abi;
+// arm64: the baseline has the LSE atomics (Apple Silicon); NO for plain armv8-a
+// (Android's floor, a Pi 4's A72). NO elsewhere, where it means nothing.
+@property(nonatomic, readonly) BOOL lseAtomics;
+// The Apple SDK whose frameworks `#import <F>` may name (macosx, iphoneos,
+// iphonesimulator), or nil: frameworks are on exactly when it is set.
+@property(nonatomic, readonly, copy, nullable) NSString* appleSdk;
 
 // Every row, in the order both compilers list them.
 + (NSArray<XTTarget*>*)rows;

@@ -14,6 +14,9 @@
 @property(nonatomic, readwrite, copy) NSString* codegen;
 @property(nonatomic, readwrite, copy) NSArray<NSString*>* supportChain;
 @property(nonatomic, readwrite, copy, nullable) NSString* platformLayer;
+@property(nonatomic, readwrite, copy) NSString* abi;
+@property(nonatomic, readwrite) BOOL lseAtomics;
+@property(nonatomic, readwrite, copy, nullable) NSString* appleSdk;
 @end
 
 @implementation XTTarget
@@ -21,7 +24,7 @@
 // A row: name, cpu, cpu variant, os, env (or ""), libc, legacy spelling, then
 // its aliases separated by spaces — the port's TargetRow.make.
 static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString* os, NSString* env,
-                     NSString* libc, NSString* legacy, NSString* backend, NSString* codegen, NSString* chain, NSString* layer, NSString* aliases)
+                     NSString* libc, NSString* legacy, NSString* backend, NSString* codegen, NSString* chain, NSString* layer, NSString* abi, BOOL lse, NSString* sdk, NSString* aliases)
     {
     XTTarget* r = [[XTTarget alloc] init];
     r.name = name;
@@ -39,6 +42,9 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
             [ch addObject:c];
     r.supportChain = ch;
     r.platformLayer = layer.length ? layer : nil;
+    r.abi = abi;
+    r.lseAtomics = lse;
+    r.appleSdk = sdk.length ? sdk : nil;
     NSMutableArray<NSString*>* al = [NSMutableArray array];
     for (NSString* a in [aliases componentsSeparatedByString:@" "])
         if (a.length)
@@ -53,29 +59,29 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         t = @[
-            row(@"arm64-macos", @"arm64", 0, @"macos", @"", @"darwin", @"arm64", @"arm64", @"arm64", @"arm64", @"",
+            row(@"arm64-macos", @"arm64", 0, @"macos", @"", @"darwin", @"arm64", @"arm64", @"arm64", @"arm64", @"", @"darwin64", YES, @"macosx",
                 @"arm64 aarch64-apple-darwin arm64-apple-macos arm64-apple-darwin"),
-            row(@"arm64-ios", @"arm64", 0, @"ios", @"", @"darwin", @"ios", @"arm64", @"arm64", @"ios arm64", @"ios",
+            row(@"arm64-ios", @"arm64", 0, @"ios", @"", @"darwin", @"ios", @"arm64", @"arm64", @"ios arm64", @"ios", @"darwin64", YES, @"iphoneos",
                 @"ios arm64-apple-ios"),
-            row(@"arm64-ios-sim", @"arm64", 0, @"ios", @"simulator", @"darwin", @"ios-sim", @"arm64", @"arm64", @"ios arm64", @"ios-sim",
+            row(@"arm64-ios-sim", @"arm64", 0, @"ios", @"simulator", @"darwin", @"ios-sim", @"arm64", @"arm64", @"ios arm64", @"ios-sim", @"darwin64", YES, @"iphonesimulator",
                 @"ios-sim arm64-apple-ios-simulator"),
-            row(@"arm64-android", @"arm64", 0, @"android", @"", @"bionic", @"android", @"arm64", @"arm64", @"arm64", @"android",
+            row(@"arm64-android", @"arm64", 0, @"android", @"", @"bionic", @"android", @"arm64", @"arm64", @"arm64", @"android", @"aapcs64", NO, @"",
                 @"android aarch64-linux-android"),
-            row(@"x86_64-linux", @"x86_64", 0, @"linux", @"", @"glibc", @"x86_64", @"x86_64", @"x86_64", @"x86_64", @"",
+            row(@"x86_64-linux", @"x86_64", 0, @"linux", @"", @"glibc", @"x86_64", @"x86_64", @"x86_64", @"x86_64", @"", @"sysv", NO, @"",
                 @"x86_64 x86-64 amd64 x86_64-linux-gnu x86_64-pc-linux-gnu"),
-            row(@"x86_64-linux-musl", @"x86_64", 0, @"linux", @"", @"musl", @"x86_64", @"x86_64", @"x86_64", @"x86_64", @"",
+            row(@"x86_64-linux-musl", @"x86_64", 0, @"linux", @"", @"musl", @"x86_64", @"x86_64", @"x86_64", @"x86_64", @"", @"sysv", NO, @"",
                 @"x86_64-pc-linux-musl"),
-            row(@"x86_64-windows", @"x86_64", 0, @"windows", @"", @"msvcrt", @"win64", @"win64", @"win64", @"win64 x86_64", @"",
+            row(@"x86_64-windows", @"x86_64", 0, @"windows", @"", @"msvcrt", @"win64", @"win64", @"win64", @"win64 x86_64", @"", @"win64", NO, @"",
                 @"win64 windows x86_64-w64-mingw32 x86_64-w64-windows-gnu x86_64-pc-windows-gnu"),
-            row(@"armv7-xtos", @"armv7", 0, @"xtos", @"", @"xtos", @"arm9", @"arm9", @"arm9", @"arm9", @"",
+            row(@"armv7-xtos", @"armv7", 0, @"xtos", @"", @"xtos", @"arm9", @"arm9", @"arm9", @"arm9", @"", @"aapcs-vfp", NO, @"",
                 @"arm9 armv7 armv7-a cortex-a9"),
-            row(@"wasm32-web", @"wasm32", 0, @"web", @"", @"none", @"wasm32", @"wasm32", @"wasm32", @"wasm32", @"",
+            row(@"wasm32-web", @"wasm32", 0, @"web", @"", @"none", @"wasm32", @"wasm32", @"wasm32", @"wasm32", @"", @"wasm", NO, @"",
                 @"wasm32 wasm wasm32-unknown-unknown"),
-            row(@"m68k-tos", @"m68k", 68000, @"tos", @"", @"none", @"m68k", @"atarist", @"68k", @"atarist", @"",
+            row(@"m68k-tos", @"m68k", 68000, @"tos", @"", @"none", @"m68k", @"atarist", @"68k", @"atarist", @"", @"m68k", NO, @"",
                 @"m68k 68000 atarist m68k-atari-tos"),
-            row(@"m68030-tos", @"m68k", 68030, @"tos", @"", @"none", @"m68k", @"atarist", @"68k", @"atarist", @"",
+            row(@"m68030-tos", @"m68k", 68030, @"tos", @"", @"none", @"m68k", @"atarist", @"68k", @"atarist", @"", @"m68k", NO, @"",
                 @"68030"),
-            row(@"6502-xt", @"6502", 0, @"xt", @"", @"none", @"xt6502", @"xt6502", @"6502", @"", @"",
+            row(@"6502-xt", @"6502", 0, @"xt", @"", @"none", @"xt6502", @"xt6502", @"6502", @"", @"", @"xt6502", NO, @"",
                 @"6502 xt6502 xt"),
         ];
     });
@@ -122,6 +128,11 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
     [s appendFormat:@"codegen %@\n", self.codegen];
     if (self.platformLayer)
         [s appendFormat:@"platform-layer %@\n", self.platformLayer];
+    [s appendFormat:@"abi %@\n", self.abi];
+    if (self.lseAtomics)
+        [s appendString:@"lse-atomics\n"];
+    if (self.appleSdk)
+        [s appendFormat:@"apple-sdk %@\n", self.appleSdk];
     [s appendString:@"support"];
     for (NSString* c in self.supportChain)
         [s appendFormat:@" %@", c];

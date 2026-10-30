@@ -2413,9 +2413,8 @@ Preprocessor* buildPP(FeOptions* o)
     pp.setStdImportsReader(&stdImportsOfLibrary);
     pp.setDefinesReader(&definesOfLibrary);
     // macOS and iOS: `#import <F>` may name a system framework.
-    String* tgt = o.target();
-    if (tgt.equals(String.withCString("arm64")) || tgt.equals(String.withCString("ios"))
-        || tgt.equals(String.withCString("ios-sim")))
+    // On exactly when the row names an Apple SDK (the reference says why).
+    if (o.targetRow() != (TargetRow*)0 && o.targetRow().appleSdk() != (String*)0)
         pp.enableAppleFrameworks(appleSdkFor(o));
     // Third-party libraries, in order (the reference's resolveThirdPartyRoots
     // says why): $XCC_3P; the install's own <home>/3p; its sibling

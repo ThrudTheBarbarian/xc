@@ -5031,14 +5031,17 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     if ((opts.useArm64Backend || opts.useX86_64Backend || opts.useWin64Backend)
         && opts.boundsCheck && !opts.boundsReport && opts.optimisationLevel >= 2)
         [cgArgs addObject:@"--inline-checks"];
-    if (opts.androidTarget) {
+    // The row's calling convention and atomics (the target table). AAPCS64 is
+    // Android's (and arm64 Linux's); Darwin's is the code generator's default.
+    // Android's minSdk floor is plain armv8-a, so the LSE atomics Apple
+    // Silicon always has are not available. The emulator on an arm64 Mac HAS
+    // them, which is why this cannot be found by running there — the NDK
+    // assembler refusing them is the only signal.
+    XTTarget *cgRow = opts.effectiveTarget;
+    if ([cgRow.abi isEqualToString:@"aapcs64"])
         [cgArgs addObject:@"--aapcs64-abi"];
-        // Android's minSdk floor is plain armv8-a, so the LSE atomics Apple
-        // Silicon always has are not available. The emulator on an arm64 Mac
-        // HAS them, which is why this cannot be found by running there — the
-        // NDK assembler refusing them is the only signal.
+    if ([cgRow.cpu isEqualToString:@"arm64"] && !cgRow.lseAtomics)
         [cgArgs addObject:@"--no-lse-atomics"];
-    }
     // The x86-64 vector level. With no -m flag it is `auto`: runtime SIMD
     // dispatch, base code plus AVX2 clones picked at load, so one binary runs
     // the widest unit the machine has and still runs everywhere.

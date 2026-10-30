@@ -1391,14 +1391,18 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     pp.targetPlatformName = _options.effectiveTarget.platformLayer;
     pp.explicitLibraryPathCount = _options.explicitLibraryPathCount;
     // macOS and iOS: `#import <F>` may name a system framework.
-    if (_options.useArm64Backend && !_options.androidTarget)
+    // On exactly when the row names an Apple SDK (the target table): android
+    // and arm64 Linux are the arm64 back end with no frameworks to import.
+    NSString* sdkName = _options.effectiveTarget.appleSdk;
+    if (sdkName)
         {
         pp.appleFrameworks = YES;
         NSMutableArray<NSString*>* sdks = [NSMutableArray array];
         const char* sdkroot = getenv("SDKROOT");
         if (sdkroot && *sdkroot)
             [sdks addObject:@(sdkroot)];
-        NSString* plat = _options.applePlatform;
+        NSString* plat = [sdkName isEqualToString:@"iphoneos"] ? @"ios"
+                       : [sdkName isEqualToString:@"iphonesimulator"] ? @"ios-sim" : nil;
         if ([plat isEqualToString:@"ios"])
             [sdks addObject:@"/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"];
         else if ([plat isEqualToString:@"ios-sim"])

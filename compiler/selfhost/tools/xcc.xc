@@ -4799,8 +4799,9 @@ void emitModule(DriverOptions* d, IRModule* mod)
     dumpOptIR(d, mod);
 
     Arm64* be = new Arm64();
-    be.setAapcs64Abi(isAndroid(d));
-    be.setLseAtomics(!isAndroid(d));
+    // The row's calling convention and atomics (the reference says why).
+    be.setAapcs64Abi(d.targetRow().abi().equals(String.withCString("aapcs64")));
+    be.setLseAtomics(d.targetRow().lseAtomics());
     be.setThreadSafeArcOverride(d.fe().threadSafeArc());
     String* prog = be.assembly(mod);
     if (be.failed()) {
