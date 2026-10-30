@@ -319,9 +319,19 @@ class FeOptions
         {
         _target = s;
         }
+    // The row the driver handed over, or, for a front end run on its own (the
+    // diff harnesses), the one its target, platform layer and a
+    // -DPLATFORM_android name — as the reference's effectiveTarget finds it.
     TargetRow* targetRow(void)
         {
-        return _targetRow;
+        if (_targetRow != (TargetRow*)0)
+            return _targetRow;
+        if (_libPlatform != (String*)0)
+            return Targets.find(_libPlatform);
+        for (u32 i = (u32)0; i < _defs.count(); i = i + (u32)1)
+            if (((String*)_defs.get(i)).hasPrefix(String.withCString("PLATFORM_android")))
+                return Targets.find(String.withCString("android"));
+        return Targets.find(target());
         }
     void setTargetRow(TargetRow* r)
         {
@@ -2490,8 +2500,8 @@ void predefine(Preprocessor* pp, FeOptions* o)
         pp.define(String.withCString("XT_PRINTF_DATA_BUF"), String.withCString("$0482"));
         }
 
-    // The target table's library defines (step 3; the reference says why only
-    // with the driver's row), beside the old ones until the libraries move.
+    // The target table's library defines (step 3), beside the old ones until
+    // the libraries move.
     if (o.targetRow() != (TargetRow*)0)
         {
         Array* ms = o.targetRow().macros();

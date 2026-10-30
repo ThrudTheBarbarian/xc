@@ -1234,12 +1234,10 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // the else-if chain above — inserted inside it, this `if` captured the
     // chain's final `else` and every non-iOS arm64 build got ARCH_6502.
     // The target table's library defines (step 3), beside the ones above until
-    // the libraries move onto them; only with the row the driver handed over,
-    // so a front end run on its own predefines what it always did, as the
-    // port's does.
-    if (_options.targetRow)
-        for (NSString* m in _options.effectiveTarget.macros)
-            [pp defineMacro:m value:@"1"];
+    // the libraries move onto them. A front end run on its own (the diff
+    // harnesses) finds its row from its flags, as the port's does.
+    for (NSString* m in _options.effectiveTarget.macros)
+        [pp defineMacro:m value:@"1"];
     if (_options.applePlatform)
         {
         [pp defineMacro:@"PLATFORM_ios" value:@"1"];

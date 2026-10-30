@@ -352,6 +352,9 @@ class DriverOptions
     // it is that row (68030).
     TargetRow* targetRow(void)
         {
+        // x86-64 Linux: -static is the musl row, whatever -A spelt.
+        if (_arch.equals(String.withCString("x86_64")))
+            return Targets.find(String.withCString(_caps.staticLink() ? "x86_64-linux-musl" : "x86_64-linux"));
         if (_targetRow != (TargetRow*)0 && _targetRow.legacy().equals(_arch))
             return _targetRow;
         return Targets.find(_arch);
@@ -6362,6 +6365,9 @@ DriverOptions* parseDriverArgs(void)
             d.setArch(row != (TargetRow*)0 ? row.legacy() : tok);
             if (row != (TargetRow*)0 && row.cpuVariant() != (u32)0)
                 d.caps().setM68kCpu(row.cpuVariant());
+            // The musl row is -A x86_64 -static.
+            if (row != (TargetRow*)0 && row.name().equals(String.withCString("x86_64-linux-musl")))
+                d.caps().setStatic();
             d.setSawArch(true);
             i = i + (u32)2; continue;
         }

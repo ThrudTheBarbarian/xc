@@ -37,6 +37,7 @@
 @property(nonatomic, readwrite) BOOL noSelfHost;
 @property(nonatomic, readwrite, nullable) XTTarget* targetRow;
 @property(nonatomic, readwrite) BOOL printTarget;
+@property(nonatomic) BOOL targetRowHanded;   // the row came from the driver (--target-row): it decides
 @property(nonatomic, readwrite) BOOL verbose;
 @property(nonatomic, readwrite, nullable) NSString* xtcHome;
 @property(nonatomic, readwrite) NSUInteger maxLeafInlineSize;
@@ -765,8 +766,12 @@ static NSString* sExecutablePath = nil;
                 // refused below, with the list of targets.
                 XTTarget* row = [XTTarget rowForToken:a];
                 opts.targetRow = row;
+                opts.targetRowHanded = NO;
                 if (row)
                     a = row.legacy;
+                // The musl row is -A x86_64 -static.
+                if ([row.name isEqualToString:@"x86_64-linux-musl"])
+                    opts.staticLink = YES;
                 if ([a isEqualToString:@"arm64"])
                     {
                     opts.useArm64Backend = YES;
@@ -1051,6 +1056,7 @@ static NSString* sExecutablePath = nil;
             // The driver hands its row to xcc-fe (which is still driven by -m
             // and -D for the flags): the row, without touching those flags.
             opts.targetRow = [XTTarget rowForToken:@(argv[++i])];
+            opts.targetRowHanded = YES;
             }
         else if ([arg isEqualToString:@"-S"])
             {
@@ -1937,14 +1943,23 @@ static NSString* sExecutablePath = nil;
     {
     NSString* key = self.useWin64Backend ? @"win64" : self.useX86_64Backend ? @"x86_64"
                   : self.useWasm32Backend ? @"wasm32" : self.useArm9Backend ? @"arm9"
-                  : self.useM68kBackend ? @"m68k" : self.androidTarget ? @"android"
+                  : self.useM68kBackend ? @"m68k"
+                  : (self.androidTarget || self.defines[@"PLATFORM_android"] != nil) ? @"android"
                   : self.applePlatform ?: (self.useArm64Backend ? @"arm64" : @"xt6502");
     // The -A row (or the one the driver handed the front end) stands while it
     // is the same code generator as the flags' target: android, iOS and the
     // 68030 are rows of their own over the arm64 and m68k back ends, and a
     // later -m that changes the back end drops it, as the port's does.
-    XTTarget* byFlags = [XTTarget rowForToken:key];
-    if (self.targetRow && [self.targetRow.codegen isEqualToString:byFlags.codegen])
+    // A row the driver handed over is the decision itself: xcc-fe is not given
+    // -static, and the handed row says glibc or musl.
+    if (self.targetRow && self.targetRowHanded)
+        return self.targetRow;
+    // -static is the musl row of x86-64 Linux.
+    XTTarget* byFlags = [XTTarget rowForToken:(self.useX86_64Backend && self.staticLink) ? @"x86_64-linux-musl" : key];
+    // On x86-64 the flags decide the libc; elsewhere the -A row stands while it
+    // is the same code generator (android, iOS, the 68030).
+    if (self.targetRow && [self.targetRow.codegen isEqualToString:byFlags.codegen]
+        && ![byFlags.cpu isEqualToString:@"x86_64"])
         return self.targetRow;
     return byFlags;
     }

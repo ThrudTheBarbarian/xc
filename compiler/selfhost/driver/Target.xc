@@ -169,6 +169,8 @@ class Targets
                                       "android aarch64-linux-android"));
         t.add((Object*)TargetRow.make("x86_64-linux", "x86_64", (u32)0, "linux", "", "glibc", "x86_64", "x86_64", "x86_64", "x86_64", "",
                                       "x86_64 x86-64 amd64 x86_64-linux-gnu x86_64-pc-linux-gnu"));
+        t.add((Object*)TargetRow.make("x86_64-linux-musl", "x86_64", (u32)0, "linux", "", "musl", "x86_64", "x86_64", "x86_64", "x86_64", "",
+                                      "x86_64-pc-linux-musl"));
         t.add((Object*)TargetRow.make("x86_64-windows", "x86_64", (u32)0, "windows", "", "msvcrt", "win64", "win64", "win64", "win64 x86_64", "",
                                       "win64 windows x86_64-w64-mingw32 x86_64-w64-windows-gnu x86_64-pc-windows-gnu"));
         t.add((Object*)TargetRow.make("armv7-xtos", "armv7", (u32)0, "xtos", "", "xtos", "arm9", "arm9", "arm9", "arm9", "",
