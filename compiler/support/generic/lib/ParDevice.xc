@@ -233,12 +233,19 @@ class ParLayout : Object
     // before the coordinator folds it (the order cannot change its bits).
     // Read for a daemon that merges partials; the coordinator folds them all.
     u32 mergeMask;
+    // At most this many threads in one launch, or 0 for no cap beyond plan's
+    // own. A Vulkan dispatch is guaranteed 65535 workgroups in x and no more
+    // (the Raspberry Pi 5's V3D allows just that): 2^22 threads in groups of
+    // 64 are 65536, which it silently does not run.
+    i64 maxThreads;
 
     void plan(i64 lo, i64 hi)
         {
         n = hi - lo;
         per = (i64)1;
         i64 most = nred > (u32)0 && devred == (i64)0 ? (i64)65536 : (i64)1 << (i64)22;
+        if (maxThreads > (i64)0 && most > maxThreads)
+            most = maxThreads;
         if (n > most)
             per = (n + most - (i64)1) / most;
         threads = (n + per - (i64)1) / per;

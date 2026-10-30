@@ -50,7 +50,8 @@ enum
     SpvOpSNegate = 126, SpvOpFNegate = 127, SpvOpIAdd = 128, SpvOpFAdd = 129, SpvOpISub = 130,
     SpvOpFSub = 131, SpvOpIMul = 132, SpvOpFMul = 133, SpvOpUDiv = 134, SpvOpSDiv = 135, SpvOpFDiv = 136,
     SpvOpUMod = 137, SpvOpSRem = 138, SpvOpLogicalEqual = 164, SpvOpLogicalNotEqual = 165,
-    SpvOpLogicalAnd = 167, SpvOpLogicalNot = 168, SpvOpSelect = 169, SpvOpIEqual = 170,
+    SpvOpLogicalOr = 166, SpvOpLogicalAnd = 167, SpvOpLogicalNot = 168, SpvOpSelect = 169, SpvOpIEqual = 170,
+    SpvOpSpecConstantFalse = 49, SpvDecSpecId = 1,
     SpvOpINotEqual = 171, SpvOpUGreaterThan = 172, SpvOpSGreaterThan = 173, SpvOpUGreaterThanEqual = 174,
     SpvOpSGreaterThanEqual = 175, SpvOpULessThan = 176, SpvOpSLessThan = 177, SpvOpULessThanEqual = 178,
     SpvOpSLessThanEqual = 179, SpvOpFOrdEqual = 180, SpvOpFUnordNotEqual = 183, SpvOpFOrdLessThan = 184,
@@ -390,13 +391,27 @@ static BOOL spvNarrowSigned(XTIRType* t)
 @property(nonatomic) uint32_t localObj;            // the kernel's Function copy of the object
 @property(nonatomic) uint32_t localObjType;
 @property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* bufVar;       // field / global index -> variable
+@property(nonatomic) BOOL span32;                                             // the 32-bit span form (no Int64)
+@property(nonatomic) NSMutableSet<NSNumber*>* narrowVals;                     // in it, lo/hi loads held as u32
+@property(nonatomic) NSDictionary<NSNumber*, NSString*>* fullCmps;            // the full form's compares: "h" / "l"
+@property(nonatomic) uint32_t fullC;                                          // its SpecId 0 constant, or 0
 @end
 
 #import <objc/runtime.h>
 
 @implementation XTIRParMSL (SPIRVState)
 
-static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift, kWordBufs;
+static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift, kWordBufs, kSpan32, kNarrowVals, kFullCmps, kFullC;
+
+- (NSDictionary*)fullCmps { return objc_getAssociatedObject(self, &kFullCmps); }
+- (void)setFullCmps:(NSDictionary*)v { objc_setAssociatedObject(self, &kFullCmps, v, OBJC_ASSOCIATION_RETAIN); }
+- (uint32_t)fullC { return [objc_getAssociatedObject(self, &kFullC) unsignedIntValue]; }
+- (void)setFullC:(uint32_t)v { objc_setAssociatedObject(self, &kFullC, @(v), OBJC_ASSOCIATION_RETAIN); }
+
+- (BOOL)span32 { return [objc_getAssociatedObject(self, &kSpan32) boolValue]; }
+- (void)setSpan32:(BOOL)v { objc_setAssociatedObject(self, &kSpan32, @(v), OBJC_ASSOCIATION_RETAIN); }
+- (NSMutableSet*)narrowVals { return objc_getAssociatedObject(self, &kNarrowVals); }
+- (void)setNarrowVals:(NSMutableSet*)v { objc_setAssociatedObject(self, &kNarrowVals, v, OBJC_ASSOCIATION_RETAIN); }
 
 - (NSMutableDictionary*)narrowShiftOf { return objc_getAssociatedObject(self, &kNarrowShift); }
 - (void)setNarrowShiftOf:(NSMutableDictionary*)v { objc_setAssociatedObject(self, &kNarrowShift, v, OBJC_ASSOCIATION_RETAIN); }
@@ -516,6 +531,15 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     }
 
 // An operand's value (an id), as type `want` for an immediate; 0 when it cannot be.
+// The type a value takes in the kernel: a load of lo or hi that is only
+// truncated to 32 bits or less is a u32 in the 32-bit span form.
+- (XTIRType*)spvValType:(uint32_t)valueId type:(XTIRType*)t
+    {
+    if (self.span32 && [self.narrowVals containsObject:@(valueId)])
+        return [XTIRType u32Type];
+    return t;
+    }
+
 - (uint32_t)value:(XTIROperand*)op type:(nullable XTIRType*)want
     {
     switch (op.kind)
@@ -523,7 +547,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         case XTIROperandKindUse:
             {
             NSNumber* var = self.sf.varOf[@(op.valueId)];
-            XTIRType* t = [self typeOf:op.valueId];
+            XTIRType* t = [self spvValType:op.valueId type:[self typeOf:op.valueId]];
             if (!var)
                 {
                 // A helper's parameter that was never stored: not reached here,
@@ -838,7 +862,16 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
                 return NO;
             }
         }
-    [self setResult:i to:[self emit:op type:[self.spv typeBool] args:@[ @(a), @(b) ]]];
+    uint32_t r = [self emit:op type:[self.spv typeBool] args:@[ @(a), @(b) ]];
+    // The full form's entry and latch tests (spvFullCmps): true and false
+    // there, as they are anyway when every thread has its one item.
+    NSString* fc = self.fullC && i.result ? self.fullCmps[@(i.result.valueId)] : nil;
+    if ([fc isEqualToString:@"h"])
+        r = [self emit:SpvOpLogicalOr type:[self.spv typeBool] args:@[ @(self.fullC), @(r) ]];
+    else if (fc)
+        r = [self emit:SpvOpLogicalAnd type:[self.spv typeBool]
+                  args:@[ @([self emit:SpvOpLogicalNot type:[self.spv typeBool] args:@[ @(self.fullC) ]]), @(r) ]];
+    [self setResult:i to:r];
     return YES;
     }
 
@@ -846,6 +879,8 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     {
     XTIRType* rt = i.result.type;
     XTIRType* st = i.operands[0].kind == XTIROperandKindUse ? [self typeOf:i.operands[0].valueId] : rt;
+    if (i.operands[0].kind == XTIROperandKindUse)
+        st = [self spvValType:i.operands[0].valueId type:st];
     uint32_t a = [self value:i.operands[0] type:st];
     uint32_t ty = [self spvType:rt];
     if (!a || !ty || ![self spvType:st])
@@ -1168,6 +1203,9 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
                 r.storage = SpvStorageFunction;
                 r.members = @[ @([self.spv u32:m.unsignedIntValue]) ];
                 r.pointee = self.objLayout.fields[(NSUInteger)k].type;
+                // The 32-bit span form holds lo and hi as u32.
+                if (self.span32 && (k == 1 || k == 2))
+                    r.pointee = [XTIRType u32Type];
                 NSNumber* sh = self.narrowShiftOf[@(k)];
                 if (sh)
                     r.wordShift = sh.unsignedIntValue + 1;
@@ -1256,7 +1294,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
                 return YES;
                 }
             XTSpvRecipe* r = self.sf.recipeOf[@(i.operands[0].valueId)];
-            uint32_t ty = [self spvType:rt];
+            uint32_t ty = [self spvType:[self spvValType:i.result.valueId type:rt]];
             if (!r || !ty || [self spvType:r.pointee] != ty)
                 return NO;
             if (r.words || r.wordShift)
@@ -1771,7 +1809,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
             {
             if (!i.result)
                 continue;
-            XTIRType* t = i.result.type;
+            XTIRType* t = [self spvValType:i.result.valueId type:i.result.type];
             if (t.kind == XTIRTypeKindMemory || t.kind == XTIRTypeKindPtr || ![used containsObject:@(i.result.valueId)])
                 continue;
             uint32_t ty = [self spvType:t];
@@ -1902,6 +1940,144 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     return v;
     }
 
+// In the 32-bit span form, the loads of lo or hi (fields 1 and 2) whose every
+// use truncates to 32 bits or less: those, and only those, are u32. A loop
+// over a 32-bit variable reads its bounds that way. As the port.
+- (NSMutableSet<NSNumber*>*)spvNarrowLoHi
+    {
+    NSMutableSet<NSNumber*>* addrs = [NSMutableSet set];
+    NSMutableSet<NSNumber*>* loads = [NSMutableSet set];
+    for (int pass = 0; pass < 3; pass++)
+        for (XTIRBlock* b in self.fn.blocks)
+            {
+            NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:b.phiNodes];
+            [all addObjectsFromArray:b.instructions];
+            if (b.terminator)
+                [all addObject:b.terminator];
+            for (XTIRInsn* i in all)
+                {
+                if (pass == 0)
+                    {
+                    if (i.opcode == XTIROpFieldAddr && i.result)
+                        {
+                        NSInteger k = [self selfFieldOf:[XTIROperand useWithValueId:i.result.valueId]];
+                        if (k == 1 || k == 2)
+                            [addrs addObject:@(i.result.valueId)];
+                        }
+                    continue;
+                    }
+                if (pass == 1)
+                    {
+                    if (i.opcode != XTIROpLoad || !i.result || !i.operands.count)
+                        continue;
+                    if (i.operands[0].kind == XTIROperandKindUse && [addrs containsObject:@(i.operands[0].valueId)])
+                        [loads addObject:@(i.result.valueId)];
+                    continue;
+                    }
+                // pass 2: a use other than a truncation to 32 bits or less widens it.
+                XTIRTypeKind rk = i.result ? i.result.type.kind : XTIRTypeKindVoid;
+                BOOL narrowing = i.opcode == XTIROpTrunc && i.result &&
+                    (rk == XTIRTypeKindU32 || rk == XTIRTypeKindI32 || rk == XTIRTypeKindU16 ||
+                     rk == XTIRTypeKindI16 || rk == XTIRTypeKindU8 || rk == XTIRTypeKindI8);
+                for (XTIROperand* op in i.operands)
+                    if (op.kind == XTIROperandKindUse && !narrowing)
+                        [loads removeObject:@(op.valueId)];
+                }
+            }
+    return loads;
+    }
+
+// The "full" form (V3D, 2026-10-30): a pipeline specialised with SpecId 0
+// true runs only where every thread has exactly one item, and there the item
+// loop's entry test (lo < hi) is true and its latch test (i + 1 < hi) false.
+// Folding both lets the driver see the item's own loops as uniform (Mesa's
+// V3D compiles a loop inside divergent control flow lane by lane). The
+// compares against hi qualify only in that shape: the entry's left side is
+// lo; the latch's is i + 1 for the induction variable i, a phi of lo and that
+// sum. Anything else that uses hi, and the kernel has no full form: nil. As
+// the port (spvFullCmps).
+- (nullable NSDictionary<NSNumber*, NSString*>*)spvFullCmps
+    {
+    NSMutableDictionary<NSNumber*, NSString*>* addrK = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber*, NSString*>* loadK = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber*, NSString*>* truncK = [NSMutableDictionary dictionary];
+    NSMutableSet<NSNumber*>* phiLo = [NSMutableSet set];
+    NSMutableDictionary<NSNumber*, NSNumber*>* addOf = [NSMutableDictionary dictionary];
+    NSMutableArray<XTIRInsn*>* insns = [NSMutableArray array];
+    for (XTIRBlock* b in self.fn.blocks)
+        {
+        [insns addObjectsFromArray:b.phiNodes];
+        [insns addObjectsFromArray:b.instructions];
+        if (b.terminator)
+            [insns addObject:b.terminator];
+        }
+    for (int pass = 0; pass < 5; pass++)
+        for (XTIRInsn* i in insns)
+            {
+            XTIROperand* o0 = i.operands.count ? i.operands[0] : nil;
+            BOOL u0 = o0 && o0.kind == XTIROperandKindUse;
+            if (pass == 0 && i.opcode == XTIROpFieldAddr && i.result)
+                {
+                NSInteger k = [self selfFieldOf:[XTIROperand useWithValueId:i.result.valueId]];
+                if (k == 1 || k == 2)
+                    addrK[@(i.result.valueId)] = [NSString stringWithFormat:@"%ld", (long)k];
+                }
+            if (pass == 1 && i.opcode == XTIROpLoad && i.result && u0 && addrK[@(o0.valueId)] &&
+                [self.narrowVals containsObject:@(i.result.valueId)])
+                loadK[@(i.result.valueId)] = addrK[@(o0.valueId)];
+            if (pass == 2 && i.opcode == XTIROpTrunc && i.result && u0 && loadK[@(o0.valueId)])
+                truncK[@(i.result.valueId)] = loadK[@(o0.valueId)];
+            if (pass == 3 && i.opcode == XTIROpPhi && i.result)
+                for (XTIROperand* op in i.operands)
+                    if (op.kind == XTIROperandKindUse && [truncK[@(op.valueId)] isEqualToString:@"1"])
+                        [phiLo addObject:@(i.result.valueId)];
+            if (pass == 4 && i.opcode == XTIROpAdd && i.result && u0 && i.operands.count == 2 &&
+                [phiLo containsObject:@(o0.valueId)])
+                {
+                XTIROperand* o1 = i.operands[1];
+                if (o1.kind == XTIROperandKindImmI && o1.intValue == 1)
+                    addOf[@(i.result.valueId)] = @(o0.valueId);
+                }
+            }
+    // The induction phi's incomings: lo, or its own sum, and nothing else.
+    for (XTIRInsn* i in insns)
+        {
+        if (i.opcode != XTIROpPhi || !i.result || ![phiLo containsObject:@(i.result.valueId)])
+            continue;
+        for (XTIROperand* op in i.operands)
+            {
+            if (op.kind != XTIROperandKindUse)
+                continue;
+            BOOL ok = [truncK[@(op.valueId)] isEqualToString:@"1"] ||
+                      [addOf[@(op.valueId)] isEqualToNumber:@(i.result.valueId)];
+            if (!ok)
+                [phiLo removeObject:@(i.result.valueId)];
+            }
+        }
+    NSMutableDictionary<NSNumber*, NSString*>* out = [NSMutableDictionary dictionary];
+    for (XTIRInsn* i in insns)
+        for (NSUInteger k = 0; k < i.operands.count; k++)
+            {
+            XTIROperand* op = i.operands[k];
+            if (op.kind != XTIROperandKindUse || ![truncK[@(op.valueId)] isEqualToString:@"2"])
+                continue;
+            // A use of hi: only as the right side of lo < hi or i + 1 < hi.
+            if (i.opcode != XTIROpICmp || k != 1 || !i.result ||
+                !(i.predicate == XTIRICmpULT || i.predicate == XTIRICmpSLT))
+                return nil;
+            XTIROperand* a = i.operands[0];
+            if (a.kind != XTIROperandKindUse)
+                return nil;
+            if ([truncK[@(a.valueId)] isEqualToString:@"1"])
+                out[@(i.result.valueId)] = @"h";
+            else if (addOf[@(a.valueId)] && [phiLo containsObject:addOf[@(a.valueId)]])
+                out[@(i.result.valueId)] = @"l";
+            else
+                return nil;
+            }
+    return out.count ? out : nil;
+    }
+
 - (nullable NSData*)spvPrint
     {
     self.def = [NSMutableDictionary dictionary];
@@ -1930,6 +2106,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     self.memberOf = [NSMutableDictionary dictionary];
     self.narrowShiftOf = [NSMutableDictionary dictionary];
     self.wordBufs = [NSMutableSet set];
+    self.narrowVals = self.span32 ? [self spvNarrowLoHi] : [NSMutableSet set];
 
     // The object's fields the kernel reads or writes (other than captured
     // arrays): lo, hi, and every `FieldAddr self, #k`, in field order.
@@ -1947,7 +2124,8 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     NSMutableArray<NSNumber*>* memberTypes = [NSMutableArray array];
     NSMutableArray<NSNumber*>* memberOffsets = [NSMutableArray array];
     [used enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
-        uint32_t t = [self spvType:fl[k].type];
+        // The 32-bit span form: lo and hi are their fields' low words.
+        uint32_t t = [self spvType:(self.span32 && (k == 1 || k == 2)) ? [XTIRType u32Type] : fl[k].type];
         if (!t)
             {
             [self because:@"it uses a captured value its Vulkan version cannot hold"];
@@ -2002,7 +2180,9 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     // The span: four i64 push constants — lo, hi, per, and (bug 645) the
     // number of partials the fold entry point has to combine, which the kernel
     // itself does not read.
-    uint32_t i64t = [m typeInt:64];
+    // The 32-bit span form reads the low word of each (the host writes the
+    // same four i64 values either way), and has no 64-bit integer.
+    uint32_t i64t = self.span32 ? [m typeInt:32] : [m typeInt:64];
     uint32_t spanT = [m newId];
     spvOp(m.globals, SpvOpTypeStruct, @[ @(spanT), @(i64t), @(i64t), @(i64t), @(i64t) ]);
     spvOp(m.decos, SpvOpDecorate, @[ @(spanT), @(SpvDecBlock) ]);
@@ -2034,6 +2214,16 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         if (!okT || !okOp)
             devred = NO;
     }];
+    // The full form, where the shape allows it (spvFullCmps): the
+    // specialization constant the runtime sets for the whole workgroups.
+    self.fullCmps = self.span32 && self.reductionFields.count == 0 ? [self spvFullCmps] : nil;
+    self.fullC = 0;
+    if (self.fullCmps)
+        {
+        self.fullC = [m newId];
+        spvOp(m.globals, SpvOpSpecConstantFalse, @[ @([m typeBool]), @(self.fullC) ]);
+        spvOp(m.decos, SpvOpDecorate, @[ @(self.fullC), @(SpvDecSpecId), @0 ]);
+        }
     uint32_t lidV = 0, wgV = 0;
     if (devred)
         {
@@ -2048,6 +2238,10 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     // Buffers: captured arrays, globals, reductions, in the header's order.
     NSMutableString* meta = [NSMutableString stringWithFormat:@"// xcpar size=%u lo=%u hi=%u", self.objLayout.size,
                                                               fl[1].byteOffset, fl[2].byteOffset];
+    if (self.span32)
+        [meta appendString:@" span=32"];
+    if (self.fullC)
+        [meta appendString:@" full"];
     NSMutableArray<NSNumber*>* interface = [NSMutableArray arrayWithObjects:@(gidV), @(argsV), @(spanV), nil];
     if (devred)
         {
@@ -2149,7 +2343,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     // tid, the span, lo and hi: lo = span.lo + tid * per, hi = min(lo + per, span.hi).
     uint32_t gid = [self emit:SpvOpLoad type:uvec3 args:@[ @(gidV) ]];
     uint32_t tid32 = [self emit:SpvOpCompositeExtract type:u32t args:@[ @(gid), @0 ]];
-    uint32_t tid = [self emit:SpvOpUConvert type:i64t args:@[ @(tid32) ]];
+    uint32_t tid = self.span32 ? tid32 : [self emit:SpvOpUConvert type:i64t args:@[ @(tid32) ]];
     uint32_t pI64 = [m pointer:SpvStoragePushConstant to:i64t];
     uint32_t spanLo = [self emit:SpvOpLoad type:i64t
                             args:@[ @([self emit:SpvOpAccessChain type:pI64 args:@[ @(spanV), @([m u32:0]) ]]) ]];
@@ -2184,6 +2378,8 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     self.sf.pcVar = [self localVar:u32t];
     [self emit:SpvOpStore words:@[ @(self.sf.pcVar), @([m u32:0]) ]];
     uint32_t guard = [self emit:SpvOpSLessThan type:[m typeBool] args:@[ @(lo), @(hi) ]];
+    if (self.fullC)
+        guard = [self emit:SpvOpLogicalOr type:[m typeBool] args:@[ @(self.fullC), @(guard) ]];
     uint32_t merge = [self label];
     if (![self spvBodyMerge:merge guard:guard])
         return nil;
@@ -2320,7 +2516,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     // kernel's own device reduction runs, and the result in slot 0.
     if (devred)
         {
-        uint32_t i64f = [m typeInt:64];
+        uint32_t i64f = self.span32 ? [m typeInt:32] : [m typeInt:64];
         uint32_t pI64f = [m pointer:SpvStoragePushConstant to:i64f];
         uint32_t scope = [m u32:2];       // Workgroup
         uint32_t sem = [m u32:0x108];     // AcquireRelease | WorkgroupMemory
@@ -2331,8 +2527,8 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         uint32_t flidv = [self emit:SpvOpLoad type:uvec3 args:@[ @(lidV) ]];
         uint32_t flid = [self emit:SpvOpCompositeExtract type:u32t args:@[ @(flidv), @0 ]];
         uint32_t pn = [self emit:SpvOpAccessChain type:pI64f args:@[ @(spanV), @([m u32:3]) ]];
-        uint32_t nparts = [self emit:SpvOpUConvert type:u32t
-                                  args:@[ @([self emit:SpvOpLoad type:i64f args:@[ @(pn) ]]) ]];
+        uint32_t pnload = [self emit:SpvOpLoad type:i64f args:@[ @(pn) ]];
+        uint32_t nparts = self.span32 ? pnload : [self emit:SpvOpUConvert type:u32t args:@[ @(pnload) ]];
         __block NSUInteger fdi = 0;
         [self.reductionFields enumerateIndexesUsingBlock:^(NSUInteger k, BOOL* stop) {
             XTIRType* rt = fl[k].type;
@@ -2444,6 +2640,18 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
                             redOps:(nullable NSDictionary<NSNumber*, NSString*>*)redOps
                                why:(NSString* _Nullable* _Nullable)why
     {
+    // The 32-bit span form first, which declares no 64-bit integer and so runs
+    // on a device without Int64 (the Raspberry Pi 5's V3D); the 64-bit one
+    // when anything in the kernel still needs one. As the port (parSpirv).
+    XTIRParMSL* n = [XTIRParMSL new];
+    n.module = module;
+    n.fn = run;
+    n.fast = fast;
+    n.redOps = redOps;
+    n.span32 = YES;
+    NSData* narrow = [n spvPrint];
+    if (narrow && !n.spv.usesInt64)
+        return narrow;
     XTIRParMSL* p = [XTIRParMSL new];
     p.module = module;
     p.fn = run;

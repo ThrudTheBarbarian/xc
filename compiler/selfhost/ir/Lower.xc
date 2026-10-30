@@ -19876,6 +19876,10 @@ class ClassInfo
     Map* _sHelpers;   // callee -> function id (Number)
     Map* _sMember;    // object field index (String) -> member index (Number)
     Map* _sNarrowShift; // narrow field index (String) -> bit offset in its word (Number)
+    bool _sSpan32;      // the 32-bit span form: lo/hi and the span as u32 (no Int64, for V3D)
+    Map* _sNarrowVals;  // in it, the loads of lo/hi that are only truncated: held as u32
+    Map* _sFullCmps;    // the "full" form's compares against hi: "h" the item loop's entry, "l" its latch; or 0
+    u32 _sFullC;        // the "full" specialization constant (SpecId 0), or 0 when the kernel has none
     Map* _sWordBufs;  // buffer variable (String) -> 1: a buffer of 32-bit words
     u32 _sLocalObj;
     Map* _sBufVar;    // "f<k>" for a captured array field, "g<i>" for a global -> variable (Number)
@@ -20011,6 +20015,15 @@ class ClassInfo
         }
 
     // An operand's value (an id); 0 when it cannot be.
+    // The type a value takes in the kernel: a load of lo or hi that is only
+    // truncated to 32 bits or less is a u32 in the 32-bit span form.
+    String* spvValType(IRValue* v)
+        {
+        if (_sSpan32 && _sNarrowVals != (Map*)0 && _sNarrowVals.get((Hashable*)mslKey(v)) != (Object*)0)
+            return spvS("U32");
+        return v.ty();
+        }
+
     u32 spvValue(IROperand* op, String* want)
         {
         if (op.kind() == (u8)OPK_USE)
@@ -20018,7 +20031,7 @@ class ClassInfo
             if (op.val() == (IRValue*)0) return (u32)0;
             Number* var = (Number*)_spvFn.varOf.get((Hashable*)mslKey(op.val()));
             if (var == (Number*)0) return (u32)0;
-            return spvEmitR((u32)SPV_LOAD, spvType(op.val().ty()), spvA1(var.asU32()));
+            return spvEmitR((u32)SPV_LOAD, spvType(spvValType(op.val())), spvA1(var.asU32()));
             }
         if (op.kind() == (u8)OPK_IMMI)
             return spvImm(op.imm(), want);
@@ -20312,7 +20325,16 @@ class ClassInfo
                 else return false;
                 }
             }
-        spvSetResult(ip, spvEmitR(op, _sMod.typeBool(), spvA2(a, b)));
+        u32 r = spvEmitR(op, _sMod.typeBool(), spvA2(a, b));
+        // The full form's entry and latch tests (spvFullCmps): true and false
+        // there, as they are anyway when every thread has its one item.
+        String* fc = _sFullC != (u32)0 && ip.res() != (IRValue*)0 ? (String*)_sFullCmps.get((Hashable*)mslKey(ip.res())) : (String*)0;
+        if (fc != (String*)0 && fc.equals(spvS("h")))
+            r = spvEmitR((u32)SPV_LOGICALOR, _sMod.typeBool(), spvA2(_sFullC, r));
+        else if (fc != (String*)0)
+            r = spvEmitR((u32)SPV_LOGICALAND, _sMod.typeBool(),
+                         spvA2(spvEmitR((u32)SPV_LOGICALNOT, _sMod.typeBool(), spvA1(_sFullC)), r));
+        spvSetResult(ip, r);
         return true;
         }
 
@@ -20321,6 +20343,8 @@ class ClassInfo
         String* rt = ip.res().ty();
         IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
         String* st = o0.kind() == (u8)OPK_USE ? mslTypeOf(o0) : rt;
+        if (o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0)
+            st = _sSpan32 && _sNarrowVals.get((Hashable*)mslKey(o0.val())) != (Object*)0 ? spvS("U32") : st;
         u32 a = spvValue(o0, st);
         u32 ty = spvType(rt);
         if (a == (u32)0 || ty == (u32)0 || spvType(st) == (u32)0)
@@ -20608,6 +20632,9 @@ class ClassInfo
                 r.members = new Array();
                 r.members.add((Object*)Number.withU32(_sMod.u32c(m.asU32())));
                 r.pointee = _mObj.typeAt((u32)k);
+                // The 32-bit span form holds lo and hi as u32.
+                if (_sSpan32 && (k == (i64)1 || k == (i64)2))
+                    r.pointee = spvS("U32");
                 Number* sh = (Number*)_sNarrowShift.get((Hashable*)String.withI64(k));
                 if (sh != (Number*)0)
                     r.wordShift = sh.asU32() + (u32)1;
@@ -20689,7 +20716,7 @@ class ClassInfo
                 return true;
                 }
             SpvRecipe* r = o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 ? (SpvRecipe*)_spvFn.recipeOf.get((Hashable*)mslKey(o0.val())) : (SpvRecipe*)0;
-            u32 ty = spvType(rt);
+            u32 ty = spvType(spvValType(res));
             if (r == (SpvRecipe*)0 || ty == (u32)0 || spvType(r.pointee) != ty) return false;
             if (r.words || r.wordShift != (u32)0)
                 {
@@ -21144,7 +21171,7 @@ class ClassInfo
                 {
                 IRInsn* ip = (IRInsn*)all.get(i);
                 if (ip.res() == (IRValue*)0) continue;
-                String* t = ip.res().ty();
+                String* t = spvValType(ip.res());
                 if (ptxIs(t, "Mem") || mslIsPtr(t) || _spvFn.used.get((Hashable*)mslKey(ip.res())) == (Object*)0) continue;
                 u32 ty = spvType(t);
                 if (ty == (u32)0)
@@ -21279,8 +21306,181 @@ class ClassInfo
         return v;
         }
 
-    // The kernel: true with its bytes in _sOut, or false.
+    // The kernel: true with its bytes in _sOut, or false. The 32-bit span
+    // form first, which declares no 64-bit integer and so runs on a device
+    // without Int64 (the Raspberry Pi 5's V3D); the 64-bit one when anything
+    // in the kernel still needs one. As the reference (spirvForKernel).
     bool parSpirv(IRFunc* f)
+        {
+        _sSpan32 = true;
+        if (parSpirvForm(f) && !_sMod.usesInt64)
+            return true;
+        _sSpan32 = false;
+        _mWhy = (String*)0;
+        return parSpirvForm(f);
+        }
+
+    // In the 32-bit span form, the loads of lo or hi (fields 1 and 2) whose
+    // every use truncates to 32 bits or less: those, and only those, are u32.
+    // A loop over a 32-bit variable reads its bounds that way.
+    Map* spvNarrowLoHi(IRFunc* f)
+        {
+        Map* addrs = new Map();
+        Map* loads = new Map();
+        for (u32 pass = (u32)0; pass < (u32)3; pass = pass + (u32)1)
+            for (u32 bi = (u32)0; bi < f.blocks().count(); bi = bi + (u32)1)
+                {
+                IRBlock* b = (IRBlock*)f.blocks().get(bi);
+                Array* all = new Array();
+                for (u32 i = (u32)0; i < b.phis().count(); i = i + (u32)1) all.add(b.phis().get(i));
+                for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1) all.add(b.insns().get(i));
+                if (b.term() != (IRInsn*)0) all.add((Object*)b.term());
+                for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                    {
+                    IRInsn* ip = (IRInsn*)all.get(i);
+                    if (pass == (u32)0)
+                        {
+                        if (ip.op().equals(spvS("FieldAddr")) && ip.res() != (IRValue*)0)
+                            {
+                            i64 k = mslSelfField(ip);
+                            if (k == (i64)1 || k == (i64)2)
+                                addrs.set((Hashable*)mslKey(ip.res()), (Object*)spvS("1"));
+                            }
+                        continue;
+                        }
+                    if (pass == (u32)1)
+                        {
+                        if (!ip.op().equals(spvS("Load")) || ip.res() == (IRValue*)0 || ip.ops().count() == (u32)0) continue;
+                        IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
+                        if (o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 && addrs.get((Hashable*)mslKey(o0.val())) != (Object*)0)
+                            loads.set((Hashable*)mslKey(ip.res()), (Object*)spvS("1"));
+                        continue;
+                        }
+                    // pass 2: a use other than a truncation to 32 bits or less widens it.
+                    bool narrowing = ip.op().equals(spvS("Trunc")) && ip.res() != (IRValue*)0 &&
+                        (ptxIs(ip.res().ty(), "U32") || ptxIs(ip.res().ty(), "I32") || ptxIs(ip.res().ty(), "U16") ||
+                         ptxIs(ip.res().ty(), "I16") || ptxIs(ip.res().ty(), "U8") || ptxIs(ip.res().ty(), "I8"));
+                    for (u32 k = (u32)0; k < ip.ops().count(); k = k + (u32)1)
+                        {
+                        IROperand* op = (IROperand*)ip.ops().get(k);
+                        if (op.kind() != (u8)OPK_USE || op.val() == (IRValue*)0) continue;
+                        if (!narrowing && loads.get((Hashable*)mslKey(op.val())) != (Object*)0)
+                            loads.remove((Hashable*)mslKey(op.val()));
+                        }
+                    }
+                }
+        return loads;
+        }
+
+    // The "full" form (V3D, 2026-10-30): a pipeline specialised with SpecId 0
+    // true runs only where every thread has exactly one item, and there the
+    // item loop's entry test (lo < hi) is true and its latch test (i + 1 < hi)
+    // false. Folding both lets the driver see the item's own loops as uniform
+    // (Mesa's V3D compiles a loop inside divergent control flow lane by lane).
+    // The compares against hi qualify only in that shape: the entry's left side
+    // is lo; the latch's is i + 1 for the induction variable i, a phi of lo
+    // and that sum. Anything else that uses hi, or a reduction, and the
+    // kernel has no full form: 0.
+    Map* spvFullCmps(IRFunc* f)
+        {
+        Map* addrK = new Map();     // FieldAddr self #1/#2 -> "1"/"2"
+        Map* loadK = new Map();     // narrowed load -> "1"/"2"
+        Map* truncK = new Map();    // Trunc of one -> "1"/"2"
+        Map* phiLo = new Map();     // phi with a lo trunc among its incomings
+        Map* addOf = new Map();     // Add(phi, 1) -> the phi's key
+        Array* insns = new Array();
+        for (u32 bi = (u32)0; bi < f.blocks().count(); bi = bi + (u32)1)
+            {
+            IRBlock* b = (IRBlock*)f.blocks().get(bi);
+            for (u32 i = (u32)0; i < b.phis().count(); i = i + (u32)1) insns.add(b.phis().get(i));
+            for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1) insns.add(b.insns().get(i));
+            if (b.term() != (IRInsn*)0) insns.add((Object*)b.term());
+            }
+        for (u32 pass = (u32)0; pass < (u32)5; pass = pass + (u32)1)
+            for (u32 i = (u32)0; i < insns.count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)insns.get(i);
+                IRValue* res = ip.res();
+                IROperand* o0 = ip.ops().count() > (u32)0 ? (IROperand*)ip.ops().get((u32)0) : (IROperand*)0;
+                bool u0 = o0 != (IROperand*)0 && o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0;
+                if (pass == (u32)0 && ip.op().equals(spvS("FieldAddr")) && res != (IRValue*)0)
+                    {
+                    i64 k = mslSelfField(ip);
+                    if (k == (i64)1 || k == (i64)2) addrK.set((Hashable*)mslKey(res), (Object*)String.withI64(k));
+                    }
+                if (pass == (u32)1 && ip.op().equals(spvS("Load")) && res != (IRValue*)0 && u0 &&
+                    addrK.get((Hashable*)mslKey(o0.val())) != (Object*)0 && _sNarrowVals.get((Hashable*)mslKey(res)) != (Object*)0)
+                    loadK.set((Hashable*)mslKey(res), addrK.get((Hashable*)mslKey(o0.val())));
+                if (pass == (u32)2 && ip.op().equals(spvS("Trunc")) && res != (IRValue*)0 && u0 &&
+                    loadK.get((Hashable*)mslKey(o0.val())) != (Object*)0)
+                    truncK.set((Hashable*)mslKey(res), loadK.get((Hashable*)mslKey(o0.val())));
+                if (pass == (u32)3 && ip.op().equals(spvS("Phi")) && res != (IRValue*)0)
+                    for (u32 k = (u32)0; k < ip.ops().count(); k = k + (u32)1)
+                        {
+                        IROperand* op = (IROperand*)ip.ops().get(k);
+                        if (op.kind() == (u8)OPK_USE && op.val() != (IRValue*)0)
+                            {
+                            String* tk = (String*)truncK.get((Hashable*)mslKey(op.val()));
+                            if (tk != (String*)0 && tk.equals(spvS("1"))) phiLo.set((Hashable*)mslKey(res), (Object*)spvS("1"));
+                            }
+                        }
+                if (pass == (u32)4 && ip.op().equals(spvS("Add")) && res != (IRValue*)0 && u0 && ip.ops().count() == (u32)2 &&
+                    phiLo.get((Hashable*)mslKey(o0.val())) != (Object*)0)
+                    {
+                    IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
+                    if (o1.kind() == (u8)OPK_IMMI && o1.imm() == (i64)1)
+                        addOf.set((Hashable*)mslKey(res), (Object*)mslKey(o0.val()));
+                    }
+                }
+        // The induction phi's incomings: lo, or its own sum, and nothing else.
+        for (u32 i = (u32)0; i < insns.count(); i = i + (u32)1)
+            {
+            IRInsn* ip = (IRInsn*)insns.get(i);
+            if (!ip.op().equals(spvS("Phi")) || ip.res() == (IRValue*)0 || phiLo.get((Hashable*)mslKey(ip.res())) == (Object*)0) continue;
+            for (u32 k = (u32)0; k < ip.ops().count(); k = k + (u32)1)
+                {
+                IROperand* op = (IROperand*)ip.ops().get(k);
+                if (op.kind() != (u8)OPK_USE || op.val() == (IRValue*)0) continue;
+                String* key = mslKey(op.val());
+                String* tk = (String*)truncK.get((Hashable*)key);
+                String* ak = (String*)addOf.get((Hashable*)key);
+                bool ok = (tk != (String*)0 && tk.equals(spvS("1"))) || (ak != (String*)0 && ak.equals(mslKey(ip.res())));
+                if (!ok) phiLo.remove((Hashable*)mslKey(ip.res()));
+                }
+            }
+        Map* out = new Map();
+        bool any = false;
+        for (u32 i = (u32)0; i < insns.count(); i = i + (u32)1)
+            {
+            IRInsn* ip = (IRInsn*)insns.get(i);
+            for (u32 k = (u32)0; k < ip.ops().count(); k = k + (u32)1)
+                {
+                IROperand* op = (IROperand*)ip.ops().get(k);
+                if (op.kind() != (u8)OPK_USE || op.val() == (IRValue*)0) continue;
+                String* tk = (String*)truncK.get((Hashable*)mslKey(op.val()));
+                if (tk == (String*)0 || !tk.equals(spvS("2"))) continue;
+                // A use of hi: only as the right side of lo < hi or i + 1 < hi.
+                if (!ip.op().equals(spvS("ICmp")) || k != (u32)1 || ip.res() == (IRValue*)0 ||
+                    !(ip.pred().equals(spvS("ULT")) || ip.pred().equals(spvS("SLT"))))
+                    return (Map*)0;
+                IROperand* a = (IROperand*)ip.ops().get((u32)0);
+                if (a.kind() != (u8)OPK_USE || a.val() == (IRValue*)0) return (Map*)0;
+                String* ak = mslKey(a.val());
+                String* atk = (String*)truncK.get((Hashable*)ak);
+                String* aph = (String*)addOf.get((Hashable*)ak);
+                if (atk != (String*)0 && atk.equals(spvS("1")))
+                    out.set((Hashable*)mslKey(ip.res()), (Object*)spvS("h"));
+                else if (aph != (String*)0 && phiLo.get((Hashable*)aph) != (Object*)0)
+                    out.set((Hashable*)mslKey(ip.res()), (Object*)spvS("l"));
+                else
+                    return (Map*)0;
+                any = true;
+                }
+            }
+        return any ? out : (Map*)0;
+        }
+
+    bool parSpirvForm(IRFunc* f)
         {
         _mDef = new Map(); _mSpace = new Map(); _mBufOf = new Map(); _mOrd = new Map();
         _mBlk = new Map(); _mBufs = new Map(); _mReds = new Map(); _mFailed = false; _mSinit = new Map(); _mWhy = (String*)0; _mLocalOf = new Map(); _mLocalIndex = new Map(); _mLocalDecls = new Array(); _mLocalBytes = new Array(); _mLocalElem = new Array();
@@ -21308,6 +21508,7 @@ class ClassInfo
         _sMember = new Map();
         _sNarrowShift = new Map();
         _sWordBufs = new Map();
+        _sNarrowVals = _sSpan32 ? spvNarrowLoHi(f) : new Map();
 
         // The object's fields the kernel uses (other than captured arrays).
         Map* used = new Map();
@@ -21333,6 +21534,9 @@ class ClassInfo
             {
             if (used.get((Hashable*)String.withU32(k)) == (Object*)0) continue;
             String* ft = _mObj.typeAt(k);
+            // The 32-bit span form: lo and hi are their fields' low words.
+            if (_sSpan32 && (k == (u32)1 || k == (u32)2))
+                ft = spvS("U32");
             u32 t = spvType(ft);
             if (t == (u32)0)
                 {
@@ -21381,7 +21585,9 @@ class ClassInfo
         // The span: four i64 push constants — lo, hi, per, and (bug 645) the
         // number of partials the fold entry point has to combine, which the
         // kernel itself does not read (the reference explains).
-        u32 i64t = m.typeInt((u32)64);
+        // The 32-bit span form reads the low word of each (the host writes
+        // the same four i64 values either way), and has no 64-bit integer.
+        u32 i64t = _sSpan32 ? m.typeInt((u32)32) : m.typeInt((u32)64);
         u32 spanT = m.newId();
         spvOp(m.globals, (u32)SPV_TYPESTRUCT, spvW((u32)5, spanT, i64t, i64t, i64t, i64t, (u32)0));
         spvOp(m.decos, (u32)SPV_DECORATE, spvA2(spanT, (u32)SPV_DEC_BLOCK));
@@ -21417,6 +21623,16 @@ class ClassInfo
             }
         if (!anyRed)
             devred = false;
+        // The full form, where the shape allows it (spvFullCmps): the
+        // specialization constant the runtime sets for the whole workgroups.
+        _sFullCmps = _sSpan32 && !anyRed ? spvFullCmps(f) : (Map*)0;
+        _sFullC = (u32)0;
+        if (_sFullCmps != (Map*)0)
+            {
+            _sFullC = m.newId();
+            spvOp(m.globals, (u32)SPV_SPECCONSTANTFALSE, spvA2(m.typeBool(), _sFullC));
+            spvOp(m.decos, (u32)SPV_DECORATE, spvA3(_sFullC, (u32)SPV_DEC_SPECID, (u32)0));
+            }
         u32 lidV = (u32)0;
         u32 wgV = (u32)0;
         if (devred)
@@ -21433,6 +21649,10 @@ class ClassInfo
         String* meta = spvS("// xcpar size=");
         meta.append(String.withU32(_mObj.size())); meta.appendCString(" lo="); meta.append(String.withU32(_mObj.offsetAt((u32)1)));
         meta.appendCString(" hi="); meta.append(String.withU32(_mObj.offsetAt((u32)2)));
+        if (_sSpan32)
+            meta.appendCString(" span=32");
+        if (_sFullC != (u32)0)
+            meta.appendCString(" full");
         Array* iface = new Array();
         iface.add((Object*)Number.withU32(gidV));
         iface.add((Object*)Number.withU32(argsV));
@@ -21551,7 +21771,7 @@ class ClassInfo
 
         u32 gid = spvEmitR((u32)SPV_LOAD, uvec3, spvA1(gidV));
         u32 tid32 = spvEmitR((u32)SPV_COMPOSITEEXTRACT, u32t, spvA2(gid, (u32)0));
-        u32 tid = spvEmitR((u32)SPV_UCONVERT, i64t, spvA1(tid32));
+        u32 tid = _sSpan32 ? tid32 : spvEmitR((u32)SPV_UCONVERT, i64t, spvA1(tid32));
         u32 pI64 = m.ptrType((u32)SPV_ST_PUSHCONSTANT, i64t);
         u32 spanLo = spvEmitR((u32)SPV_LOAD, i64t, spvA1(spvEmitR((u32)SPV_ACCESSCHAIN, pI64, spvA2(spanV, m.u32c((u32)0)))));
         u32 spanHi = spvEmitR((u32)SPV_LOAD, i64t, spvA1(spvEmitR((u32)SPV_ACCESSCHAIN, pI64, spvA2(spanV, m.u32c((u32)1)))));
@@ -21574,6 +21794,8 @@ class ClassInfo
         fn.pcVar = spvLocalVar(u32t);
         spvEmit((u32)SPV_STORE, spvA2(fn.pcVar, m.u32c((u32)0)));
         u32 guard = spvEmitR((u32)SPV_SLESSTHAN, m.typeBool(), spvA2(lo, hi));
+        if (_sFullC != (u32)0)
+            guard = spvEmitR((u32)SPV_LOGICALOR, m.typeBool(), spvA2(_sFullC, guard));
         u32 merge = spvLabel();
         if (!spvBody(f, merge, guard)) return false;
         if (devred)
@@ -21716,7 +21938,7 @@ class ClassInfo
             {
             SpvFn* ffn = new SpvFn();
             _spvFn = ffn;
-            u32 fi64 = m.typeInt((u32)64);
+            u32 fi64 = _sSpan32 ? m.typeInt((u32)32) : m.typeInt((u32)64);
             u32 fpI64 = m.ptrType((u32)SPV_ST_PUSHCONSTANT, fi64);
             u32 fscope = m.u32c((u32)2);      // Workgroup
             u32 fsem = m.u32c((u32)0x108);    // AcquireRelease | WorkgroupMemory
@@ -21726,7 +21948,8 @@ class ClassInfo
             u32 flidv = spvEmitR((u32)SPV_LOAD, uvec3, spvA1(lidV));
             u32 flid = spvEmitR((u32)SPV_COMPOSITEEXTRACT, u32t, spvA2(flidv, (u32)0));
             u32 fpn = spvEmitR((u32)SPV_ACCESSCHAIN, fpI64, spvA2(spanV, m.u32c((u32)3)));
-            u32 fnparts = spvEmitR((u32)SPV_UCONVERT, u32t, spvA1(spvEmitR((u32)SPV_LOAD, fi64, spvA1(fpn))));
+            u32 fnload = spvEmitR((u32)SPV_LOAD, fi64, spvA1(fpn));
+            u32 fnparts = _sSpan32 ? fnload : spvEmitR((u32)SPV_UCONVERT, u32t, spvA1(fnload));
             for (u32 di = (u32)0; di < redFields.count(); di = di + (u32)1)
                 {
                 u32 k = ((Number*)redFields.get(di)).asU32();

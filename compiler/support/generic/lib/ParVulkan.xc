@@ -121,6 +121,7 @@ u64 gParVkPipe[64];
 // the kernel has none. It is dispatched after the kernel to combine the
 // workgroups' partials on the device.
 u64 gParVkFold[64];
+u64 gParVkFull[64];    // the kernel specialised for whole workgroups (header ` full`), or 0
 u64 gParVkLayout[64];
 u64 gParVkSetLayout[64];
 u32 gParVkBindings[64];
@@ -241,6 +242,7 @@ class ParVulkan
     static vkCmdCopyBuffer_t* _copy;
     static vkCmdPipelineBarrier_t* _barrier;
     static bool _discrete;      // the kernel's buffers in the GPU's memory, copied through staging
+    static bool _int64;         // the device has 64-bit integers (shaderInt64); V3D has not
     static String* _identity;   // the chosen device, for auto's hardware key (ParDevice)
     static vkCreateFence_t* _createFence;
     static vkDestroyFence_t* _destroyFence;
@@ -430,16 +432,14 @@ class ParVulkan
                     _barrier != (vkCmdPipelineBarrier_t*)0;
         free((pointer)pp);
 
-        // 64-bit integers are required (lo and hi); doubles are enabled where the device has them.
+        // 64-bit integers and doubles are enabled where the device has them. A
+        // device without 64-bit integers (the Raspberry Pi 5's V3D) runs the
+        // kernels compiled in the 32-bit span form (run, below).
         u8* has = (u8*)calloc((u64)1, (u64)220);
         feats(pd, (pointer)has);
-        if (*(u32*)(pointer)(has + 160) == (u32)0)
-            {
-            free((pointer)has);
-            return false;
-            }
+        _int64 = *(u32*)(pointer)(has + 160) != (u32)0;
         u8* on = (u8*)calloc((u64)1, (u64)220);
-        _vk32(on, (u32)160, (u32)1);
+        _vk32(on, (u32)160, *(u32*)(pointer)(has + 160));
         _vk32(on, (u32)156, *(u32*)(pointer)(has + 156));
         free((pointer)has);
 
@@ -777,6 +777,7 @@ class ParVulkan
         gParVkKernels = gParVkKernels + (u32)1;
         gParVkSrc[slot] = (pointer)src;
         gParVkPipe[slot] = (u64)0;
+        gParVkFull[slot] = (u64)0;
 
         // The header: bindings (block, then one per buf=, glob=, red=) and spirv=<words>.
         u32 nb = (u32)1;
@@ -874,6 +875,35 @@ class ParVulkan
             _vk64(&cpi[0], (u32)72, layout);
             rc = _createPipelines(_dev, (u64)0, (u32)1, (pointer)&cpi[0], (pointer)0, &foldPipe);
             }
+        // A kernel with a full form (header word `full`): a third pipeline,
+        // SpecId 0 true, for the dispatches where every thread has exactly one
+        // item (run). Not having it only costs speed, so a failure is not one.
+        u64 fullPipe = (u64)0;
+        if (rc == (i32)0 && ParVulkan.headerHas(src, " full"))
+            {
+            u32 yes = (u32)1;
+            u8 sme[16];
+            memset((pointer)&sme[0], (i32)0, (u64)16);
+            _vk32(&sme[0], (u32)0, (u32)0);                     // constantID 0
+            _vk32(&sme[0], (u32)4, (u32)0);                     // offset
+            _vk64(&sme[0], (u32)8, (u64)4);                     // size: a VkBool32
+            u8 spi[32];
+            memset((pointer)&spi[0], (i32)0, (u64)32);
+            _vk32(&spi[0], (u32)0, (u32)1);
+            _vkp(&spi[0], (u32)8, (pointer)&sme[0]);
+            _vk64(&spi[0], (u32)16, (u64)4);
+            _vkp(&spi[0], (u32)24, (pointer)&yes);
+            memset((pointer)&cpi[0], (i32)0, (u64)96);
+            _vk32(&cpi[0], (u32)0, (u32)29);
+            _vk32(&cpi[0], (u32)24, (u32)18);                   // the stage
+            _vk32(&cpi[0], (u32)24 + (u32)20, (u32)0x20);
+            _vk64(&cpi[0], (u32)24 + (u32)24, module);
+            _vkp(&cpi[0], (u32)24 + (u32)32, (pointer)"main");
+            _vkp(&cpi[0], (u32)24 + (u32)40, (pointer)&spi[0]); // pSpecializationInfo
+            _vk64(&cpi[0], (u32)72, layout);
+            if (_createPipelines(_dev, (u64)0, (u32)1, (pointer)&cpi[0], (pointer)0, &fullPipe) != (i32)0)
+                fullPipe = (u64)0;
+            }
         free((pointer)code);
         if (rc != (i32)0)
             {
@@ -882,6 +912,7 @@ class ParVulkan
             }
         gParVkPipe[slot] = pipe;
         gParVkFold[slot] = foldPipe;
+        gParVkFull[slot] = fullPipe;
         gParVkLayout[slot] = layout;
         gParVkSetLayout[slot] = dsl;
         gParVkBindings[slot] = nb;
@@ -899,6 +930,40 @@ class ParVulkan
         return ParDevice.sectionOf(src, "spirv", false);
         }
 
+    // The threads one dispatch may launch: 65535 workgroups of 64, the most
+    // every Vulkan device takes in x (ParLayout.maxThreads).
+    static i64 maxThreads(void)
+        {
+        return (i64)65535 * (i64)64;
+        }
+
+    // Whether a kernel's header line holds `word` (with its leading space)
+    // as a whole word.
+    static bool headerHas(u8* src, string word)
+        {
+        u32 wl = (u32)0;
+        while (word[wl] != (u8)0) wl = wl + (u32)1;
+        for (u32 at = (u32)0; src[at] != (u8)0 && src[at] != (u8)10; at = at + (u32)1)
+            {
+            u32 k = (u32)0;
+            while (k < wl && src[at + k] == word[k]) k = k + (u32)1;
+            if (k == wl && (src[at + wl] == (u8)' ' || src[at + wl] == (u8)10 || src[at + wl] == (u8)0))
+                return true;
+            }
+        return false;
+        }
+
+    // Whether a kernel's header marks the 32-bit span form (" span=32").
+    static bool span32(u8* src)
+        {
+        for (u32 at = (u32)0; src[at] != (u8)0 && src[at] != (u8)10; at = at + (u32)1)
+            if (src[at] == (u8)' ' && src[at + (u32)1] == (u8)'s' && src[at + (u32)2] == (u8)'p' &&
+                src[at + (u32)3] == (u8)'a' && src[at + (u32)4] == (u8)'n' && src[at + (u32)5] == (u8)'=' &&
+                src[at + (u32)6] == (u8)'3' && src[at + (u32)7] == (u8)'2')
+                return true;
+        return false;
+        }
+
     static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
         src = spirvOf(src);
@@ -908,7 +973,17 @@ class ParVulkan
         return ParDevice.cpu("the program is linked with -static, and a Vulkan GPU needs the dynamic link");
 #else
         if (!start())
-            return ParDevice.cpu("there is no Vulkan device with 64-bit integers");
+            return ParDevice.cpu("there is no Vulkan device");
+        // A kernel in the 32-bit span form declares no 64-bit integer; its
+        // range must keep lo + per within a signed 32-bit value. Any other
+        // kernel needs a device with 64-bit integers.
+        if (ParVulkan.span32(src))
+            {
+            if (lo < (i64)-2147483648 || hi + (hi - lo) > (i64)2147483647)
+                return ParDevice.cpu("its range is too large for its 32-bit GPU version");
+            }
+        else if (!_int64)
+            return ParDevice.cpu("its GPU version needs 64-bit integers, which this Vulkan device does not have");
         i32 slot = pipeline(src);
         if (slot < (i32)0)
             return ParDevice.cpu("its GPU version did not build");
@@ -916,6 +991,8 @@ class ParVulkan
         ParLayout* l = ParDevice.layout(proto, src, lo, hi);
         if (l == (ParLayout*)0)
             return false;
+        l.maxThreads = ParVulkan.maxThreads();
+        l.plan(lo, hi);
         u8* obj = proto.objBytes();
         u32 nb = gParVkBindings[slot];
         if (nb != (u32)1 + l.nbuf + l.nglob + l.nred)
@@ -1137,6 +1214,41 @@ class ParVulkan
                     }
                 _bindPipeline(cb, (u32)1, gParVkPipe[slot]);
                 _bindSets(cb, (u32)1, gParVkLayout[slot], (u32)0, (u32)1, &set, (u32)0, (pointer)0);
+                // A kernel with a full form and no reductions: the whole
+                // workgroups through it, one item a thread, in dispatches of
+                // at most 65535 groups; the last partial group through the
+                // ordinary pipeline. A Vulkan driver then sees the item's own
+                // loops as uniform (V3D runs them lane by lane otherwise).
+                if (gParVkFull[slot] != (u64)0 && l.devred == (i64)0 && l.nred == (u32)0 && l.devlast == (i64)0)
+                    {
+                    i64 whole = (l.n / (i64)64) * (i64)64;
+                    i64 most = (i64)65535 * (i64)64;
+                    i64 fspan[4];
+                    if (whole > (i64)0)
+                        _bindPipeline(cb, (u32)1, gParVkFull[slot]);
+                    for (i64 off = (i64)0; off < whole; off = off + most)
+                        {
+                        i64 cnt = whole - off < most ? whole - off : most;
+                        fspan[0] = lo + off;
+                        fspan[1] = lo + off + cnt;
+                        fspan[2] = (i64)1;
+                        fspan[3] = span[3];
+                        _push(cb, gParVkLayout[slot], (u32)0x20, (u32)0, (u32)32, (pointer)&fspan[0]);
+                        _dispatch(cb, (u32)(cnt / (i64)64), (u32)1, (u32)1);
+                        }
+                    if (whole < l.n)
+                        {
+                        _bindPipeline(cb, (u32)1, gParVkPipe[slot]);
+                        fspan[0] = lo + whole;
+                        fspan[1] = hi;
+                        fspan[2] = (i64)1;
+                        fspan[3] = span[3];
+                        _push(cb, gParVkLayout[slot], (u32)0x20, (u32)0, (u32)32, (pointer)&fspan[0]);
+                        _dispatch(cb, (u32)1, (u32)1, (u32)1);
+                        }
+                    }
+                else
+                    {
                 _push(cb, gParVkLayout[slot], (u32)0x20, (u32)0, (u32)32, (pointer)&span[0]);
                 // A kernel that reduces on the device (bug 645) has workgroups
                 // of 256, one partial each; any other, workgroups of 64.
@@ -1144,6 +1256,7 @@ class ParVulkan
                     _dispatch(cb, (u32)l.nparts, (u32)1, (u32)1);
                 else
                     _dispatch(cb, (u32)((l.threads + (i64)63) / (i64)64), (u32)1, (u32)1);
+                    }
                 // And when the module has a fold entry point, one more dispatch
                 // combines the partials on the device: the dispatch boundary is
                 // the execution dependency, the barrier below the memory one.
@@ -1346,6 +1459,8 @@ class ParVulkanWorker : ParWorker
         l = ParDevice.layout(proto, spv, (i64)0, l.n);
         if (l == (ParLayout*)0)
             return false;
+        l.maxThreads = ParVulkan.maxThreads();
+        l.plan((i64)0, l.n);
         i32 slot = ParVulkan.pipeline(spv);
         if (slot < (i32)0 || gParVkBindings[slot] != (u32)1 + l.nbuf + l.nglob + l.nred)
             return false;
@@ -1432,6 +1547,8 @@ class ParVulkanWorker : ParWorker
         _l = ParDevice.layout(proto, spv, (i64)0, l.n);
         if (_l == (ParLayout*)0)
             return false;
+        _l.maxThreads = ParVulkan.maxThreads();
+        _l.plan((i64)0, l.n);
         l = _l;
         u8* obj = proto.objBytes();
         // What this run writes is out of date everywhere else from now (an
@@ -1447,6 +1564,7 @@ class ParVulkanWorker : ParWorker
         u32 b = (u32)1;
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1) { _sizes[b] = l.bufLen[i]; b = b + (u32)1; }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1) { _sizes[b] = l.globLen[i]; b = b + (u32)1; }
+        l.maxThreads = ParVulkan.maxThreads();
         l.plan(0, tile);
         for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
             _rsize[r] = (l.nparts * l.redStride[r] + (i64)3) & (i64)-4;
@@ -1797,6 +1915,7 @@ class ParVulkanWorker : ParWorker
         l = _l;
         u32 d = _nextSlot;
         u32 nfixed = (u32)1 + l.nbuf + l.nglob;
+        l.maxThreads = ParVulkan.maxThreads();
         l.plan(t.lo, t.hi);
         pointer cb = (pointer)_cb[d];
         if (gVk_resetCmd != (vkResetCommandBuffer_t*)0 && gVk_resetCmd(cb, (u32)0) != (i32)0)
@@ -1993,6 +2112,7 @@ class ParVulkanWorker : ParWorker
             }
         if (l.nred > (u32)0)
             {
+            l.maxThreads = ParVulkan.maxThreads();
             l.plan(t.lo, t.hi);
             u8* parts[16];
             for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
