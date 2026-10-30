@@ -67,7 +67,7 @@ bool gParGpuDiscrete;
 // CUDA's driver beside Vulkan: on Windows, and on Linux in a dynamically
 // linked program, the one that can load libcuda.so.1 (Par.xc and ParTiles.xc
 // spell the same condition out, as they can be read before this file).
-#if OS_windows || (ARCH_x86_64 && LINK_DYNAMIC && !OS_android)
+#if OS_windows || (ARCH_x86_64 && LIBC_glibc && !OS_android)
 #define PAR_CUDA 1
 #endif
 #if OS_windows

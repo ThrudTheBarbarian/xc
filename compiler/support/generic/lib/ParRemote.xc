@@ -168,7 +168,7 @@ i32 memcmp(pointer a, pointer b, u64 n);
 pointer LoadLibraryA(u8* name);
 pointer GetProcAddress(pointer module, u8* name);
 #define PAR_TLS_LOADER 1
-#elif ARCH_arm64 || LINK_DYNAMIC || OS_android
+#elif ARCH_arm64 || LIBC_glibc || OS_android
 pointer dlopen(u8* path, i32 mode);
 pointer dlsym(pointer handle, u8* name);
 #define PAR_TLS_LOADER 1

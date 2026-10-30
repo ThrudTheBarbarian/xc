@@ -52,7 +52,7 @@
 #if OS_windows
 pointer LoadLibraryA(u8* name);
 pointer GetProcAddress(pointer module, u8* name);
-#elif LINK_DYNAMIC || OS_android
+#elif LIBC_glibc || OS_android
 pointer dlopen(u8* path, i32 mode);
 pointer dlsym(pointer handle, u8* name);
 #endif
@@ -250,7 +250,7 @@ class ParVulkan
     static u64 _fence;          // one fence, reset and reused: a create and a destroy a run was latency
     static vkResetCommandBuffer_t* _resetCmd;
 
-#if OS_windows || LINK_DYNAMIC || OS_android
+#if OS_windows || LIBC_glibc || OS_android
     static pointer _lib;
 
     static pointer fn(u8* name)
@@ -301,7 +301,7 @@ class ParVulkan
         if (_state != (i32)0)
             return _state == (i32)1;
         _state = (i32)2;
-#if OS_windows || LINK_DYNAMIC || OS_android
+#if OS_windows || LIBC_glibc || OS_android
 #if OS_windows
         _lib = LoadLibraryA("vulkan-1.dll");
 #elif OS_android
@@ -904,7 +904,7 @@ class ParVulkan
         src = spirvOf(src);
         if (src == (u8*)0)
             return ParDevice.cpu("it has no Vulkan version");
-#if !(OS_windows || LINK_DYNAMIC || OS_android)
+#if !(OS_windows || LIBC_glibc || OS_android)
         return ParDevice.cpu("the program is linked with -static, and a Vulkan GPU needs the dynamic link");
 #else
         if (!start())

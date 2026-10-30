@@ -25,7 +25,7 @@
 #if ARCH_x86_64 || OS_linux || OS_android
 #import "ParVulkan.xc"
 #endif
-#if OS_windows || (ARCH_x86_64 && LINK_DYNAMIC && !OS_android)
+#if OS_windows || (ARCH_x86_64 && LIBC_glibc && !OS_android)
 #import "ParCuda.xc"
 #endif
 #if !(ARCH_6502 || ARCH_m68k || ARCH_wasm32)
@@ -372,7 +372,7 @@ class Par
                 ParDevice.ranAdd(proto, ParWebGpu.identity());
                 return;
                 }
-#elif OS_windows || (ARCH_x86_64 && LINK_DYNAMIC && !OS_android)
+#elif OS_windows || (ARCH_x86_64 && LIBC_glibc && !OS_android)
             // NVIDIA's own driver or Vulkan (AMD, Intel, or NVIDIA where CUDA
             // is missing): auto measures both where both work and keeps the
             // faster; XC_PAR_GPU=cuda|vulkan picks one. If the one tried
@@ -434,7 +434,7 @@ class Par
         {
 #if ARCH_wasm32
         return ParWebGpu.identity();
-#elif OS_windows || (ARCH_x86_64 && LINK_DYNAMIC && !OS_android)
+#elif OS_windows || (ARCH_x86_64 && LIBC_glibc && !OS_android)
         if (!ParDevice.vulkanOnly())
             {
             String* c = ParCuda.identity();
