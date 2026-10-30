@@ -102,6 +102,9 @@ void main(void)
     Array* lnFix  = a.fixups();
     u32 lnMi = Arm64Asm.appendModInit(a, lnData, lnFix);
     ElfArm64* w = new ElfArm64();
+    // The executable's interpreter, optional, as the reference takes it.
+    if (Process.argumentCount() > (u32)8 && !Process.argument((u32)8).equals(String.withCString("-")))
+        w.setInterp(Process.argument((u32)8));
     w.image(a.textBytes(), lnData, a.symbols(), a.dataSyms(),
             exports, lnFix,
             isExe ? (String*)0 : entryOrSoname,

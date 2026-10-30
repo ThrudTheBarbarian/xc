@@ -305,7 +305,7 @@ same "-A 68030"             -q -A 68030 -o @OUT@.prg ret.xc
 cover --print-target
 for t in arm64-macos arm64 aarch64-apple-darwin arm64-apple-macos arm64-apple-darwin \
          arm64-ios ios arm64-apple-ios arm64-ios-sim ios-sim arm64-apple-ios-simulator \
-         arm64-android android aarch64-linux-android \
+         arm64-android android aarch64-linux-android arm64-linux aarch64-linux-gnu arm64-linux-gnu aarch64-unknown-linux-gnu \
          x86_64-linux x86_64 x86-64 amd64 x86_64-linux-gnu x86_64-pc-linux-gnu x86_64-linux-musl x86_64-pc-linux-musl \
          x86_64-windows win64 windows x86_64-w64-mingw32 x86_64-w64-windows-gnu x86_64-pc-windows-gnu \
          armv7-xtos arm9 armv7 armv7-a cortex-a9 wasm32-web wasm32 wasm wasm32-unknown-unknown \
@@ -319,7 +319,7 @@ cmp -s rt.txt xt.txt && ok "--print-target (host)" || bad "--print-target: the h
 "$REF" --print-target -A x86_64 -static ret.xc > rt.txt 2>&1; "$XC" --print-target -A x86_64 -static ret.xc > xt.txt 2>&1
 cmp -s rt.txt xt.txt && grep -q '^target x86_64-linux-musl' xt.txt && ok "--print-target -A x86_64 -static is the musl row" \
     || bad "--print-target -A x86_64 -static: not the musl row in both"
-for pair in arm64-macos:arm64 aarch64-linux-android:android x86_64-linux-gnu:x86_64 \
+for pair in arm64-macos:arm64 aarch64-linux-gnu:arm64-linux aarch64-linux-android:android x86_64-linux-gnu:x86_64 \
             x86_64-w64-mingw32:win64 armv7-xtos:arm9 wasm32-web:wasm32 m68k-tos:m68k 6502-xt:6502; do
     al=${pair%%:*}; ca=${pair##*:}
     run "$XC" xcout -q -A $ca -o @OUT@.s ret.xc; cp xcout.s canon.s 2>/dev/null

@@ -4340,10 +4340,8 @@ void main(void)
                      d.arch().cString());
         Process.exit((i32)1); return;
     }
-    if (!d.arch().equals(String.withCString("arm64")) && !isAndroid(d)
-        && !isXt6502(d) && !isM68k(d) && !isWasm(d) && !isX86_64(d) && !isArm9(d)
-        && !isIos(d)
-        && !d.arch().equals(String.withCString("win64"))) {
+    // A target is wired when the table has its row.
+    if (d.targetRow() == (TargetRow*)0) {
         // Say what is ACTUALLY in the way. This used to tell every refused
         // target it needed "archive reading in the linker — task #47", which
         // is true of x86_64 and win64 and of nothing else, so anyone asking
@@ -4866,9 +4864,12 @@ void emitModule(DriverOptions* d, IRModule* mod)
     // The whole image is ONE assembly unit: crt, runtime, per-class allocators,
     // then the program. That is what lets the linker resolve everything at link
     // time and leave only the imports dynamic.
-    bool android = isAndroid(d);
-    String* crt = readRuntime(d.fe(), String.withCString(android ? "crt-android.s" : "crt-macos.s"));
-    String* rt  = readRuntime(d.fe(), String.withCString(android ? "rt-android.s"  : "rt-macos.s"));
+    // The row's format and runtime (the target table): an ELF image for
+    // android and arm64 Linux, a Mach-O one for macOS and iOS.
+    TargetRow* lrow = d.targetRow();
+    bool android = lrow.exeFormat().equals(String.withCString("elf-pie"));
+    String* crt = readRuntime(d.fe(), lrow.crt());
+    String* rt  = readRuntime(d.fe(), lrow.runtime());
     if (crt == 0 || rt == 0) {
         Stdio.printf("xcc: error: cannot read the arm64 runtime from the support tree\n");
         Process.exit((i32)1); return;
@@ -4921,14 +4922,19 @@ void emitModule(DriverOptions* d, IRModule* mod)
     // a SHARED OBJECT and not an executable — Android dlopen()s it and calls
     // ANativeActivity_onCreate. So the crt goes away, the glue comes in, and the
     // user's `main` is renamed to the `xt_main` the glue calls.
-    if (android && d.emitApk()) {
+    if (isAndroid(d) && d.emitApk()) {
         emitApkPackage(d, prog);
         return;
     }
 
     Array* image = (Array*)0;
     if (android) {
-        Array* needed = androidNeededWithImports(d, "libc.so,libm.so,libdl.so");
+        String* baseNeeded = new String();
+        for (u32 ni = (u32)0; ni < lrow.needed().count(); ni = ni + (u32)1) {
+            if (ni > (u32)0) baseNeeded.appendCString(",");
+            baseNeeded.append((String*)lrow.needed().get(ni));
+        }
+        Array* needed = androidNeededWithImports(d, baseNeeded.cString());
         // Bug 124: as above — append the constructor array before linking,
         // and the C objects and archives of the command line before that.
         Array* aData = as.dataBytes();
@@ -4936,6 +4942,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         mergeElfLinkObjects(d, as.textBytes(), aData, as.symbols(), as.dataSyms(), aFix, new Array());
         u32 aMi = Arm64Asm.appendModInit(as, aData, aFix);
         ElfArm64* w = new ElfArm64();
+        w.setInterp(lrow.interp());
         if (d.emitLib()) {
             // A real Android shared library: no crt and no glue (that is the
             // APK payload's shape), its own public API exported — the
@@ -4958,7 +4965,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
                     String.withCString("_start"), aMi);
         }
         if (w.failed()) {
-            Stdio.printf("xcc: android link failed: %s\n", w.why().cString());
+            Stdio.printf("xcc: %s link failed: %s\n", lrow.name().cString(), w.why().cString());
             Process.exit((i32)1); return;
         }
         image = w.bytes();

@@ -55,6 +55,13 @@ TARGETS = {
                  "-fno-asynchronous-unwind-tables", "-fno-addrsig", "-mno-outline-atomics",
                  "-mbranch-protection=none"] + COMMON,
                 lambda s: s.replace(".L", ".Lrt_")),
+    # arm64 Linux (glibc): clang on an arm64 Linux host ($XTC_LINUX_ARM64_HOST,
+    # over ssh), against that system's own glibc headers, so no sysroot is
+    # needed here; android's flags otherwise.
+    "glibc-arm64": ("support/arm64/runtime/rt-glibc.s", RT,
+                ["@remote", "-S", "-O1", "-fno-asynchronous-unwind-tables", "-fno-addrsig",
+                 "-mno-outline-atomics", "-mbranch-protection=none"] + COMMON,
+                lambda s: s.replace(".L", ".Lrt_")),
     "linux":   ("support/x86_64/runtime/rtgen-linux.s", RTF,
                 [CLANG] + INTEL + ["-target", "x86_64-unknown-linux-gnu",
                  "-DXT_SINIT_C_INCLUDED=1", "-DXT_NO_WEAK_SEAM=1"], "linux-pieces"),
@@ -65,7 +72,16 @@ TARGETS = {
                 [CLANG] + INTEL + ["-target", "x86_64-windows-gnu", "-DXT_WIN64", "-DXT_NO_WEAK_SEAM=1"], None),
 }
 
+def remote_host():
+    return os.environ.get("XTC_LINUX_ARM64_HOST")
+
 def clang_version(cc):
+    if cc == "@remote":
+        h = remote_host()
+        if not h:
+            return "?"
+        out = subprocess.run(["ssh", "-o", "BatchMode=yes", h, "clang --version"], capture_output=True, text=True)
+        return out.stdout.splitlines()[0].strip() if out.returncode == 0 and out.stdout else "?"
     out = subprocess.run([cc, "--version"], capture_output=True, text=True)
     return out.stdout.splitlines()[0].strip() if out.returncode == 0 and out.stdout else "?"
 
@@ -107,7 +123,21 @@ def generate(name):
     cc = argv[0]
     if name == "android" and not os.path.exists(cc):
         return None, "no NDK clang"
-    run = subprocess.run(argv + ["-o", "-", os.path.join(REPO, src)], capture_output=True, text=True, cwd=REPO)
+    if cc == "@remote":
+        h = remote_host()
+        if not h:
+            return None, "no XTC_LINUX_ARM64_HOST"
+        # The runtime's sources (rt.c includes support/generic/runtime) go over
+        # as a tar; clang runs there and writes the assembly to stdout.
+        tar = subprocess.run(["tar", "cf", "-", "src/xtc/support-src", "support/generic/runtime"],
+                             capture_output=True, cwd=REPO)
+        remote = ("d=$(mktemp -d) && cd $d && tar xf - && clang " + " ".join(argv[1:]) +
+                  " -o - " + src + "; rc=$?; cd / && rm -rf $d; exit $rc")
+        run = subprocess.run(["ssh", "-o", "BatchMode=yes", h, remote], input=tar.stdout,
+                             capture_output=True)
+        run = subprocess.CompletedProcess(run.args, run.returncode, run.stdout.decode(), run.stderr.decode())
+    else:
+        run = subprocess.run(argv + ["-o", "-", os.path.join(REPO, src)], capture_output=True, text=True, cwd=REPO)
     if run.returncode != 0:
         sys.exit(f"{name}: clang failed:\n" + run.stderr[-2000:])
     body = run.stdout

@@ -822,6 +822,12 @@ static NSString* sExecutablePath = nil;
                     opts.useM68kBackend = YES;
                     opts.m68kCpu = 68030;
                     }
+                else if ([a isEqualToString:@"arm64-linux"])
+                    {
+                    // arm64 Linux (glibc): the arm64 back end; the row says the
+                    // rest (AAPCS64, no LSE, the ELF link, glibc's loader).
+                    opts.useArm64Backend = YES;
+                    }
                 else if ([a isEqualToString:@"android"])
                     {
                     // Android aarch64: the arm64 backend + IR pipeline, linked
@@ -1540,6 +1546,13 @@ static NSString* sExecutablePath = nil;
         }
     }
 
+    // arm64 Linux has no library form yet, as in the port.
+    if (opts.emitLib && [opts.effectiveTarget.name isEqualToString:@"arm64-linux"])
+        {
+        fprintf(stderr, "xcc: error: --emit-lib is not supported for 'arm64-linux' "
+                        "(it is for arm64, ios, android, x86_64, win64, arm9 and wasm32)\n");
+        return nil;
+        }
     // -f[no-]thread-safe-arc on a target with no threads is an error, as in the
     // port: there is no atomic reference count to choose.
     BOOL threadless = opts.useM68kBackend || (!opts.useArm64Backend && !opts.useArm9Backend
@@ -1604,7 +1617,8 @@ static NSString* sExecutablePath = nil;
         // checks from Checked.xc, which the driver imports. arm9 has neither,
         // and nor has android (the arm64 back end, but no reporter is linked
         // there: refused, as the port refuses it).
-        if ((!opts.useArm64Backend && !opts.useX86_64Backend && !opts.useWin64Backend) || opts.androidTarget)
+        if ((!opts.useArm64Backend && !opts.useX86_64Backend && !opts.useWin64Backend)
+            || [opts.effectiveTarget.exeFormat isEqualToString:@"elf-pie"])
             {
             fprintf(stderr,
                     "xcc: error: -fbounds-check is implemented for arm64, x86_64 and\n"

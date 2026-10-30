@@ -599,6 +599,10 @@ int main(int argc, const char *argv[]) {
                     return 1;
                 }
             }
+            // The executable's interpreter, optional (Android's linker64 when
+            // absent or "-"): arm64 Linux names glibc's.
+            if (argc >= 10 && strcmp(argv[9], "-") != 0)
+                [XTElfArm64Writer setInterpreter:@(argv[9])];
             NSError *err = nil;
             NSString *src = [NSString stringWithContentsOfFile:inPath
                                                       encoding:NSUTF8StringEncoding error:&err];

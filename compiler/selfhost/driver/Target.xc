@@ -31,6 +31,11 @@ class TargetRow
     String* _appleSdk;  // macosx, iphoneos, iphonesimulator, or 0: frameworks are on exactly when set
     Array* _parKernels; // of String*: the par kernel forms its runtime runs (metal, ptx, spirv, wgsl)
     String* _matmul;    // the matrix-multiply kernels: sme, x86, or 0
+    String* _exeFormat; // macho, elf-pie, elf-dyn, elf-static, elf32-dyn, pe, wasm, prg, xex
+    String* _crt;       // arm64 so far: support/arm64/runtime's crt and runtime, or 0
+    String* _runtime;
+    String* _interp;    // an ELF executable's PT_INTERP, or 0
+    Array* _needed;     // of String*: its DT_NEEDED before the program's own
 
     void init(void)
         {
@@ -56,6 +61,16 @@ class TargetRow
     String* appleSdk(void) { return _appleSdk; }
     Array* parKernels(void) { return _parKernels; }
     String* matmul(void) { return _matmul; }
+    String* exeFormat(void) { return _exeFormat; }
+    String* crt(void) { return _crt; }
+    String* runtime(void) { return _runtime; }
+    String* interp(void) { return _interp; }
+    Array* needed(void) { return _needed; }
+    static String* orNull(string s)
+        {
+        String* v = String.withCString(s);
+        return v.byteLength() == (u32)0 ? (String*)0 : v;
+        }
     bool hasParKernel(string k)
         {
         for (u32 i = (u32)0; i < _parKernels.count(); i = i + (u32)1)
@@ -67,7 +82,7 @@ class TargetRow
     // A row: name, cpu, cpu variant, os, env (or ""), libc, legacy arch, then
     // its aliases separated by spaces.
     static TargetRow* make(string name, string cpu, u32 variant, string os, string env,
-                           string libc, string legacy, string backend, string codegen, string chain, string layer, string abi, bool lse, string sdk, string kernels, string matmul, string aliases)
+                           string libc, string legacy, string backend, string codegen, string chain, string layer, string abi, bool lse, string sdk, string kernels, string matmul, string fmt, string crt, string rt, string interp, string needed, string aliases)
         {
         TargetRow* r = new TargetRow();
         r._name = String.withCString(name);
@@ -90,6 +105,11 @@ class TargetRow
         r._parKernels = TargetRow.words(String.withCString(kernels));
         String* mmk = String.withCString(matmul);
         r._matmul = mmk.byteLength() == (u32)0 ? (String*)0 : mmk;
+        r._exeFormat = String.withCString(fmt);
+        r._crt = TargetRow.orNull(crt);
+        r._runtime = TargetRow.orNull(rt);
+        r._interp = TargetRow.orNull(interp);
+        r._needed = TargetRow.words(String.withCString(needed));
         r._aliases = TargetRow.words(String.withCString(aliases));
         return r;
         }
@@ -167,6 +187,18 @@ class TargetRow
             s.appendFormat("apple-sdk %s\n", _appleSdk.cString());
         if (_matmul != (String*)0)
             s.appendFormat("matmul %s\n", _matmul.cString());
+        s.appendFormat("format %s\n", _exeFormat.cString());
+        if (_crt != (String*)0)
+            s.appendFormat("runtime %s %s\n", _crt.cString(), _runtime.cString());
+        if (_interp != (String*)0)
+            s.appendFormat("interp %s\n", _interp.cString());
+        if (_needed.count() > (u32)0)
+            {
+            s.appendCString("needed");
+            for (u32 i = (u32)0; i < _needed.count(); i = i + (u32)1)
+                s.appendFormat(" %s", ((String*)_needed.get(i)).cString());
+            s.appendCString("\n");
+            }
         s.appendCString("par-kernels");
         for (u32 i = (u32)0; i < _parKernels.count(); i = i + (u32)1)
             s.appendFormat(" %s", ((String*)_parKernels.get(i)).cString());
@@ -194,29 +226,31 @@ class Targets
     static Array* rows(void)
         {
         Array* t = new Array();
-        t.add((Object*)TargetRow.make("arm64-macos", "arm64", (u32)0, "macos", "", "darwin", "arm64", "arm64", "arm64", "arm64", "", "darwin64", true, "macosx", "metal", "sme",
+        t.add((Object*)TargetRow.make("arm64-macos", "arm64", (u32)0, "macos", "", "darwin", "arm64", "arm64", "arm64", "arm64", "", "darwin64", true, "macosx", "metal", "sme", "macho", "crt-macos.s", "rt-macos.s", "", "",
                                       "arm64 aarch64-apple-darwin arm64-apple-macos arm64-apple-darwin"));
-        t.add((Object*)TargetRow.make("arm64-ios", "arm64", (u32)0, "ios", "", "darwin", "ios", "arm64", "arm64", "ios arm64", "ios", "darwin64", true, "iphoneos", "", "",
+        t.add((Object*)TargetRow.make("arm64-ios", "arm64", (u32)0, "ios", "", "darwin", "ios", "arm64", "arm64", "ios arm64", "ios", "darwin64", true, "iphoneos", "", "", "macho", "crt-macos.s", "rt-macos.s", "", "",
                                       "ios arm64-apple-ios"));
-        t.add((Object*)TargetRow.make("arm64-ios-sim", "arm64", (u32)0, "ios", "simulator", "darwin", "ios-sim", "arm64", "arm64", "ios arm64", "ios-sim", "darwin64", true, "iphonesimulator", "", "",
+        t.add((Object*)TargetRow.make("arm64-ios-sim", "arm64", (u32)0, "ios", "simulator", "darwin", "ios-sim", "arm64", "arm64", "ios arm64", "ios-sim", "darwin64", true, "iphonesimulator", "", "", "macho", "crt-macos.s", "rt-macos.s", "", "",
                                       "ios-sim arm64-apple-ios-simulator"));
-        t.add((Object*)TargetRow.make("arm64-android", "arm64", (u32)0, "android", "", "bionic", "android", "arm64", "arm64", "arm64", "android", "aapcs64", false, "", "spirv", "",
+        t.add((Object*)TargetRow.make("arm64-android", "arm64", (u32)0, "android", "", "bionic", "android", "arm64", "arm64", "arm64", "android", "aapcs64", false, "", "spirv", "", "elf-pie", "crt-android.s", "rt-android.s", "/system/bin/linker64", "libc.so libm.so libdl.so",
                                       "android aarch64-linux-android"));
-        t.add((Object*)TargetRow.make("x86_64-linux", "x86_64", (u32)0, "linux", "", "glibc", "x86_64", "x86_64", "x86_64", "x86_64", "", "sysv", false, "", "ptx spirv", "x86",
+        t.add((Object*)TargetRow.make("arm64-linux", "arm64", (u32)0, "linux", "", "glibc", "arm64-linux", "arm64", "arm64", "arm64", "", "aapcs64", false, "", "spirv", "", "elf-pie", "crt-glibc.s", "rt-glibc.s", "/lib/ld-linux-aarch64.so.1", "libc.so.6 libm.so.6",
+                                      "aarch64-linux-gnu arm64-linux-gnu aarch64-unknown-linux-gnu"));
+        t.add((Object*)TargetRow.make("x86_64-linux", "x86_64", (u32)0, "linux", "", "glibc", "x86_64", "x86_64", "x86_64", "x86_64", "", "sysv", false, "", "ptx spirv", "x86", "elf-dyn", "", "", "", "",
                                       "x86_64 x86-64 amd64 x86_64-linux-gnu x86_64-pc-linux-gnu"));
-        t.add((Object*)TargetRow.make("x86_64-linux-musl", "x86_64", (u32)0, "linux", "", "musl", "x86_64", "x86_64", "x86_64", "x86_64", "", "sysv", false, "", "", "x86",
+        t.add((Object*)TargetRow.make("x86_64-linux-musl", "x86_64", (u32)0, "linux", "", "musl", "x86_64", "x86_64", "x86_64", "x86_64", "", "sysv", false, "", "", "x86", "elf-static", "", "", "", "",
                                       "x86_64-pc-linux-musl"));
-        t.add((Object*)TargetRow.make("x86_64-windows", "x86_64", (u32)0, "windows", "", "msvcrt", "win64", "win64", "win64", "win64 x86_64", "", "win64", false, "", "ptx spirv", "",
+        t.add((Object*)TargetRow.make("x86_64-windows", "x86_64", (u32)0, "windows", "", "msvcrt", "win64", "win64", "win64", "win64 x86_64", "", "win64", false, "", "ptx spirv", "", "pe", "", "", "", "",
                                       "win64 windows x86_64-w64-mingw32 x86_64-w64-windows-gnu x86_64-pc-windows-gnu"));
-        t.add((Object*)TargetRow.make("armv7-xtos", "armv7", (u32)0, "xtos", "", "xtos", "arm9", "arm9", "arm9", "arm9", "", "aapcs-vfp", false, "", "", "",
+        t.add((Object*)TargetRow.make("armv7-xtos", "armv7", (u32)0, "xtos", "", "xtos", "arm9", "arm9", "arm9", "arm9", "", "aapcs-vfp", false, "", "", "", "elf32-dyn", "", "", "", "",
                                       "arm9 armv7 armv7-a cortex-a9"));
-        t.add((Object*)TargetRow.make("wasm32-web", "wasm32", (u32)0, "web", "", "none", "wasm32", "wasm32", "wasm32", "wasm32", "", "wasm", false, "", "wgsl", "",
+        t.add((Object*)TargetRow.make("wasm32-web", "wasm32", (u32)0, "web", "", "none", "wasm32", "wasm32", "wasm32", "wasm32", "", "wasm", false, "", "wgsl", "", "wasm", "", "", "", "",
                                       "wasm32 wasm wasm32-unknown-unknown"));
-        t.add((Object*)TargetRow.make("m68k-tos", "m68k", (u32)68000, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "", "m68k", false, "", "", "",
+        t.add((Object*)TargetRow.make("m68k-tos", "m68k", (u32)68000, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "", "m68k", false, "", "", "", "prg", "", "", "", "",
                                       "m68k 68000 atarist m68k-atari-tos"));
-        t.add((Object*)TargetRow.make("m68030-tos", "m68k", (u32)68030, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "", "m68k", false, "", "", "",
+        t.add((Object*)TargetRow.make("m68030-tos", "m68k", (u32)68030, "tos", "", "none", "m68k", "atarist", "68k", "atarist", "", "m68k", false, "", "", "", "prg", "", "", "", "",
                                       "68030"));
-        t.add((Object*)TargetRow.make("6502-xt", "6502", (u32)0, "xt", "", "none", "xt6502", "xt6502", "6502", "", "", "xt6502", false, "", "", "",
+        t.add((Object*)TargetRow.make("6502-xt", "6502", (u32)0, "xt", "", "none", "xt6502", "xt6502", "6502", "", "", "xt6502", false, "", "", "", "xex", "", "", "", "",
                                       "6502 xt6502 xt"));
         return t;
         }

@@ -42,6 +42,15 @@ NS_ASSUME_NONNULL_BEGIN
 // The matrix-multiply kernels idiom-matmul calls at -O2+: sme (arm64 macOS,
 // checked for at run time), x86 (one per vector tier), or nil.
 @property(nonatomic, readonly, copy, nullable) NSString* matmul;
+// The executable format: macho, elf-pie, elf-dyn, elf-static, elf32-dyn, pe,
+// wasm, prg, xex.
+@property(nonatomic, readonly, copy) NSString* exeFormat;
+// arm64 so far: the runtime files from support/arm64/runtime (crt, runtime),
+// an ELF executable's PT_INTERP, and its DT_NEEDED before the program's own.
+@property(nonatomic, readonly, copy, nullable) NSString* crt;
+@property(nonatomic, readonly, copy, nullable) NSString* runtime;
+@property(nonatomic, readonly, copy, nullable) NSString* interp;
+@property(nonatomic, readonly, copy) NSArray<NSString*>* needed;
 
 // Every row, in the order both compilers list them.
 + (NSArray<XTTarget*>*)rows;

@@ -1694,8 +1694,10 @@ static int linkAndroidSelfHost(const char *argv0, XTCommandLineOptions *opts,
                                NSArray<NSString *> *neededLibs) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *ln  = resolveSiblingTool(argv0, @"xcc-ln-arm64");
-    NSString *crt = [support stringByAppendingPathComponent:@"arm64/runtime/crt-android.s"];
-    NSString *rt  = [support stringByAppendingPathComponent:@"arm64/runtime/rt-android.s"];
+    // The row's runtime, loader and libraries (android's or arm64 Linux's).
+    XTTarget *lrow = opts.effectiveTarget;
+    NSString *crt = [support stringByAppendingPathComponent:[@"arm64/runtime" stringByAppendingPathComponent:lrow.crt]];
+    NSString *rt  = [support stringByAppendingPathComponent:[@"arm64/runtime" stringByAppendingPathComponent:lrow.runtime]];
     if (!ln || ![fm fileExistsAtPath:crt] || ![fm fileExistsAtPath:rt]) {
         if (!opts.quiet)
             fprintf(stderr, "xcc: note: android self-host pieces missing "
@@ -1722,13 +1724,14 @@ static int linkAndroidSelfHost(const char *argv0, XTCommandLineOptions *opts,
     // libc.so covers stdio/malloc/pthread; libm.so the _xm_* wrappers' tail
     // calls; libdl.so is what every Android image is expected to name.
     int rc = runChild(ln, @[@"--android", @"exe", @"_start", @"-",
-                            androidNeededCsvWithImports(opts, @"libc.so,libm.so,libdl.so",
+                            androidNeededCsvWithImports(opts, [lrow.needed componentsJoinedByString:@","],
                                                         neededLibs),
-                            combinedPath, outPath]);
+                            combinedPath, outPath, @"-", lrow.interp ?: @"-"]);
     if (!opts.verbose) [fm removeItemAtPath:combinedPath error:NULL];
     if (rc == 0 && !opts.quiet)
-        fprintf(stderr, "xcc: android aarch64 ELF (self-hosted, no clang) -> '%s'  "
-                        "(adb push; run)\n", outPath.UTF8String);
+        fprintf(stderr, "xcc: %s aarch64 ELF (self-hosted, no clang) -> '%s'%s\n",
+                [lrow.os isEqualToString:@"android"] ? "android" : lrow.name.UTF8String, outPath.UTF8String,
+                [lrow.os isEqualToString:@"android"] ? "  (adb push; run)" : "");
     return rc;
 }
 
@@ -2175,6 +2178,16 @@ static int linkArm64Executable(const char *argv0, XTCommandLineOptions *opts,
     if (opts.androidTarget)
         return opts.emitApk ? linkAndroidApk(argv0, opts, asmPath, outPath, neededLibs)
                             : linkAndroidExecutable(argv0, opts, asmPath, outPath, neededLibs);
+    // arm64 Linux: the same in-house ELF link as android's, with the row's
+    // runtime, loader and libraries (the target table); no vendor fallback.
+    if ([opts.effectiveTarget.exeFormat isEqualToString:@"elf-pie"]) {
+        NSString *sup = resolveSupportRoot(argv0, opts);
+        if (!sup) {
+            fprintf(stderr, "xcc: error: cannot locate support/ (set XTC_HOME)\n");
+            return 1;
+        }
+        return linkAndroidSelfHost(argv0, opts, sup, asmPath, outPath, neededLibs);
+    }
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *support = resolveSupportRoot(argv0, opts);
     if (!support) {
@@ -4695,7 +4708,7 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // android is the arm64 back end with no object writer of its own: refused,
     // as the port refuses it (its link function wrote an EXECUTABLE to the .o).
     if (opts.compileOnly && ((!opts.useArm64Backend && !opts.useX86_64Backend
-        && !opts.useWin64Backend && !opts.useArm9Backend) || opts.androidTarget)) {
+        && !opts.useWin64Backend && !opts.useArm9Backend) || [opts.effectiveTarget.exeFormat isEqualToString:@"elf-pie"])) {
         fprintf(stderr, "xcc: error: -c is implemented for the hosted targets (arm64, "
                         "x86_64, win64, arm9) only — 6502 and m68k are single-module by "
                         "construction (private:docs/Design/separate-compilation.md §7)\n");
