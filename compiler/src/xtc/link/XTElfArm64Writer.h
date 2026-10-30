@@ -39,6 +39,10 @@ NS_ASSUME_NONNULL_BEGIN
 // DT_INIT_ARRAY / DT_INIT_ARRAYSZ. Zero means the program has no constructors.
 // Without those two tags the pointers are inert words the loader never walks,
 // which is bug 124 (and bug 066 before it, on Mach-O).
+//
+// The executable's PT_INTERP: Android's /system/bin/linker64 unless set (glibc
+// Linux: /lib/ld-linux-aarch64.so.1). Set once, before the image is written.
++ (void)setInterpreter:(NSString*)path;
 + (nullable NSData*)sharedObjectFromText:(NSData*)text
                                     data:(NSData*)data
                                  symbols:(NSDictionary<NSString*, NSNumber*>*)symbols

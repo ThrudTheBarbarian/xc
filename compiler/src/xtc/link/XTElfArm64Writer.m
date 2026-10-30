@@ -48,6 +48,7 @@ enum
 #define THUNK_SZ 16 // adrp / ldr / br, padded to a 16-byte slot
 
 static const char* kInterp = "/system/bin/linker64";
+static char sInterpBuf[256];
 
 static void put8v(NSMutableData* d, uint8_t v)
     {
@@ -182,6 +183,13 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
     }
 
 @implementation XTElfArm64Writer
+
++ (void)setInterpreter:(NSString*)path
+    {
+    // As the port's setInterp: Android's linker64 by default.
+    strlcpy(sInterpBuf, path.UTF8String, sizeof sInterpBuf);
+    kInterp = sInterpBuf;
+    }
 
 + (nullable NSData*)sharedObjectFromText:(NSData*)textIn
                                     data:(NSData*)dataIn
