@@ -33,6 +33,9 @@ done
 [ $fail = 0 ] && {
     strings "$W/x-par_simd_buffers" | grep -q 'xcpar size=.* span=32 ' \
         || { echo "FAIL vulkan-span32: par_simd_buffers' kernel is not in the 32-bit span form"; fail=1; }
+    # Workgroups of 256 (2026-10-30): the V3D ran a kernel 3x slower in 64s.
+    strings "$W/x-par_simd_buffers" | grep 'xcpar size=' | grep -q ' wg=256' \
+        || { echo "FAIL vulkan-span32: par_simd_buffers' kernel does not declare 256-thread workgroups"; fail=1; }
     strings "$W/x-par_gpu_wide" | grep 'xcpar size=' | grep -q 'span=32' \
         && { echo "FAIL vulkan-span32: par_gpu_wide computes in 64 bits but its kernel claims the 32-bit form"; fail=1; }
 }

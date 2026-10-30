@@ -121,6 +121,7 @@ u64 gParVkPipe[64];
 // the kernel has none. It is dispatched after the kernel to combine the
 // workgroups' partials on the device.
 u64 gParVkFold[64];
+i64 gParVkWg[64];      // the kernel's workgroup size: 256 (header ` wg=256`), else 64
 u64 gParVkFull[64];    // the kernel specialised for whole workgroups (header ` full`), or 0
 u64 gParVkLayout[64];
 u64 gParVkSetLayout[64];
@@ -778,6 +779,7 @@ class ParVulkan
         gParVkSrc[slot] = (pointer)src;
         gParVkPipe[slot] = (u64)0;
         gParVkFull[slot] = (u64)0;
+        gParVkWg[slot] = ParVulkan.headerHas(src, " wg=256") ? (i64)256 : (i64)64;
 
         // The header: bindings (block, then one per buf=, glob=, red=) and spirv=<words>.
         u32 nb = (u32)1;
@@ -879,7 +881,10 @@ class ParVulkan
         // SpecId 0 true, for the dispatches where every thread has exactly one
         // item (run). Not having it only costs speed, so a failure is not one.
         u64 fullPipe = (u64)0;
-        if (rc == (i32)0 && ParVulkan.headerHas(src, " full"))
+        // XC_PAR_VK_FULL=0 leaves it out, to compare the two forms.
+        String* fullEnv = Platform.env(String.withCString("XC_PAR_VK_FULL"));
+        bool fullOff = fullEnv != (String*)0 && fullEnv.equals(String.withCString("0"));
+        if (rc == (i32)0 && !fullOff && ParVulkan.headerHas(src, " full"))
             {
             u32 yes = (u32)1;
             u8 sme[16];
@@ -930,11 +935,17 @@ class ParVulkan
         return ParDevice.sectionOf(src, "spirv", false);
         }
 
-    // The threads one dispatch may launch: 65535 workgroups of 64, the most
-    // every Vulkan device takes in x (ParLayout.maxThreads).
-    static i64 maxThreads(void)
+    // The threads one dispatch may launch: 65535 workgroups (the most every
+    // Vulkan device takes in x) of the kernel's size (ParLayout.maxThreads).
+    static i64 maxThreads(i32 slot)
         {
-        return (i64)65535 * (i64)64;
+        return (i64)65535 * ParVulkan.wg(slot);
+        }
+
+    // A kernel's workgroup size: 256 for one that says `wg=256`, else 64.
+    static i64 wg(i32 slot)
+        {
+        return slot >= (i32)0 && gParVkWg[slot] > (i64)0 ? gParVkWg[slot] : (i64)64;
         }
 
     // Whether a kernel's header line holds `word` (with its leading space)
@@ -991,7 +1002,7 @@ class ParVulkan
         ParLayout* l = ParDevice.layout(proto, src, lo, hi);
         if (l == (ParLayout*)0)
             return false;
-        l.maxThreads = ParVulkan.maxThreads();
+        l.maxThreads = ParVulkan.maxThreads(slot);
         l.plan(lo, hi);
         u8* obj = proto.objBytes();
         u32 nb = gParVkBindings[slot];
@@ -1221,8 +1232,9 @@ class ParVulkan
                 // loops as uniform (V3D runs them lane by lane otherwise).
                 if (gParVkFull[slot] != (u64)0 && l.devred == (i64)0 && l.nred == (u32)0 && l.devlast == (i64)0)
                     {
-                    i64 whole = (l.n / (i64)64) * (i64)64;
-                    i64 most = (i64)65535 * (i64)64;
+                    i64 wgs = ParVulkan.wg(slot);
+                    i64 whole = (l.n / wgs) * wgs;
+                    i64 most = (i64)65535 * wgs;
                     i64 fspan[4];
                     if (whole > (i64)0)
                         _bindPipeline(cb, (u32)1, gParVkFull[slot]);
@@ -1234,7 +1246,7 @@ class ParVulkan
                         fspan[2] = (i64)1;
                         fspan[3] = span[3];
                         _push(cb, gParVkLayout[slot], (u32)0x20, (u32)0, (u32)32, (pointer)&fspan[0]);
-                        _dispatch(cb, (u32)(cnt / (i64)64), (u32)1, (u32)1);
+                        _dispatch(cb, (u32)(cnt / wgs), (u32)1, (u32)1);
                         }
                     if (whole < l.n)
                         {
@@ -1251,11 +1263,11 @@ class ParVulkan
                     {
                 _push(cb, gParVkLayout[slot], (u32)0x20, (u32)0, (u32)32, (pointer)&span[0]);
                 // A kernel that reduces on the device (bug 645) has workgroups
-                // of 256, one partial each; any other, workgroups of 64.
+                // of 256, one partial each; any other, its own size (wg=).
                 if (l.devred != (i64)0)
                     _dispatch(cb, (u32)l.nparts, (u32)1, (u32)1);
                 else
-                    _dispatch(cb, (u32)((l.threads + (i64)63) / (i64)64), (u32)1, (u32)1);
+                    _dispatch(cb, (u32)((l.threads + ParVulkan.wg(slot) - (i64)1) / ParVulkan.wg(slot)), (u32)1, (u32)1);
                     }
                 // And when the module has a fold entry point, one more dispatch
                 // combines the partials on the device: the dispatch boundary is
@@ -1459,9 +1471,9 @@ class ParVulkanWorker : ParWorker
         l = ParDevice.layout(proto, spv, (i64)0, l.n);
         if (l == (ParLayout*)0)
             return false;
-        l.maxThreads = ParVulkan.maxThreads();
-        l.plan((i64)0, l.n);
         i32 slot = ParVulkan.pipeline(spv);
+        l.maxThreads = ParVulkan.maxThreads(slot);
+        l.plan((i64)0, l.n);
         if (slot < (i32)0 || gParVkBindings[slot] != (u32)1 + l.nbuf + l.nglob + l.nred)
             return false;
         // Every written buffer needs a footprint, so a tile knows which slice
@@ -1547,7 +1559,7 @@ class ParVulkanWorker : ParWorker
         _l = ParDevice.layout(proto, spv, (i64)0, l.n);
         if (_l == (ParLayout*)0)
             return false;
-        _l.maxThreads = ParVulkan.maxThreads();
+        _l.maxThreads = ParVulkan.maxThreads(_slot);
         _l.plan((i64)0, l.n);
         l = _l;
         u8* obj = proto.objBytes();
@@ -1564,7 +1576,7 @@ class ParVulkanWorker : ParWorker
         u32 b = (u32)1;
         for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1) { _sizes[b] = l.bufLen[i]; b = b + (u32)1; }
         for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1) { _sizes[b] = l.globLen[i]; b = b + (u32)1; }
-        l.maxThreads = ParVulkan.maxThreads();
+        l.maxThreads = ParVulkan.maxThreads(_slot);
         l.plan(0, tile);
         for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)
             _rsize[r] = (l.nparts * l.redStride[r] + (i64)3) & (i64)-4;
@@ -1915,7 +1927,7 @@ class ParVulkanWorker : ParWorker
         l = _l;
         u32 d = _nextSlot;
         u32 nfixed = (u32)1 + l.nbuf + l.nglob;
-        l.maxThreads = ParVulkan.maxThreads();
+        l.maxThreads = ParVulkan.maxThreads(_slot);
         l.plan(t.lo, t.hi);
         pointer cb = (pointer)_cb[d];
         if (gVk_resetCmd != (vkResetCommandBuffer_t*)0 && gVk_resetCmd(cb, (u32)0) != (i32)0)
@@ -1993,7 +2005,7 @@ class ParVulkanWorker : ParWorker
         if (l.devred != (i64)0)
             gVk_dispatch(cb, (u32)l.nparts, (u32)1, (u32)1);
         else
-            gVk_dispatch(cb, (u32)((l.threads + (i64)63) / (i64)64), (u32)1, (u32)1);
+            gVk_dispatch(cb, (u32)((l.threads + ParVulkan.wg(_slot) - (i64)1) / ParVulkan.wg(_slot)), (u32)1, (u32)1);
         if (l.devlast != (i64)0)
             {
             _vk32(&mb[0], (u32)16, (u32)0x40);
@@ -2112,7 +2124,7 @@ class ParVulkanWorker : ParWorker
             }
         if (l.nred > (u32)0)
             {
-            l.maxThreads = ParVulkan.maxThreads();
+            l.maxThreads = ParVulkan.maxThreads(_slot);
             l.plan(t.lo, t.hi);
             u8* parts[16];
             for (u32 r = (u32)0; r < l.nred; r = r + (u32)1)

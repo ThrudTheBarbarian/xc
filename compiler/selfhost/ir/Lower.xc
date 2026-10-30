@@ -21653,6 +21653,8 @@ class ClassInfo
             meta.appendCString(" span=32");
         if (_sFullC != (u32)0)
             meta.appendCString(" full");
+        // Workgroups of 256 for every kernel (the reference explains).
+        meta.appendCString(" wg=256");
         Array* iface = new Array();
         iface.add((Object*)Number.withU32(gidV));
         iface.add((Object*)Number.withU32(argsV));
@@ -21924,7 +21926,7 @@ class ClassInfo
             for (u32 i = (u32)0; i < shVars.count(); i = i + (u32)1) fep.add(shVars.get(i));
             spvOp(m.head, (u32)SPV_ENTRYPOINT, fep);
             }
-        spvOp(m.head, (u32)SPV_EXECUTIONMODE, spvW((u32)5, mainId, (u32)17, devred ? (u32)256 : (u32)64, (u32)1, (u32)1, (u32)0));
+        spvOp(m.head, (u32)SPV_EXECUTIONMODE, spvW((u32)5, mainId, (u32)17, (u32)256, (u32)1, (u32)1, (u32)0));
         if (devred)
             spvOp(m.head, (u32)SPV_EXECUTIONMODE, spvW((u32)5, foldId, (u32)17, (u32)256, (u32)1, (u32)1, (u32)0));
         for (u32 i = (u32)0; i < header.count(); i = i + (u32)1) m.funcs.add(header.get(i));

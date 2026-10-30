@@ -2242,6 +2242,11 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         [meta appendString:@" span=32"];
     if (self.fullC)
         [meta appendString:@" full"];
+    // Workgroups of 256 for every kernel (2026-10-30), as a device reduction
+    // already had: the Raspberry Pi 5's V3D ran mandel_deep's kernel 3x
+    // slower in groups of 64 (80.9 s against 26.6 s). The runtime sizes its
+    // dispatches from this word; a kernel without it keeps 64.
+    [meta appendString:@" wg=256"];
     NSMutableArray<NSNumber*>* interface = [NSMutableArray arrayWithObjects:@(gidV), @(argsV), @(spanV), nil];
     if (devred)
         {
@@ -2503,7 +2508,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         [fep addObjectsFromArray:shVars];
         spvOp(m.head, SpvOpEntryPoint, fep);
         }
-    spvOp(m.head, SpvOpExecutionMode, @[ @(mainId), @17, @(devred ? 256 : 64), @1, @1 ]);   // LocalSize 64 (256: devred) 1 1
+    spvOp(m.head, SpvOpExecutionMode, @[ @(mainId), @17, @256, @1, @1 ]);   // LocalSize 256 1 1 (header wg=256)
     if (devred)
         spvOp(m.head, SpvOpExecutionMode, @[ @(foldId), @17, @256, @1, @1 ]);
     // The kernel function goes after its helpers (already in funcs).
