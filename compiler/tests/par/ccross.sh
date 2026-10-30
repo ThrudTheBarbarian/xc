@@ -3,7 +3,10 @@
 # prog.c` gave clang no target, so its half of the split (rest.o) was a host
 # object the x86-64 link refused. clang now gets the target's triple and the
 # target's C headers (the musl or mingw sysroot); without them the driver says
-# so. macOS only (the cross case); skipped without clang or the sysroots.
+# so. arm64 Linux too (2026-10-30), its triple from the target table's
+# c-triple and its headers glibc's, in a sysroot's usr/include; with
+# XTC_LINUX_ARM64_HOST set the program runs there. macOS only (the cross
+# case); skipped without clang or the sysroots.
 #
 #   bash tests/par/ccross.sh
 set -u
@@ -43,6 +46,21 @@ if [ -f /opt/clang/win64/x86_64-w64-mingw32/include/stdio.h ]; then
     fi
 else
     echo "ccross: no mingw sysroot, win64 skipped"
+fi
+A=${XTC_ARM64_LINUX_ROOT:-/opt/clang/linux/aarch64-linux-gnu}
+if [ -f "$A/usr/include/stdio.h" ]; then
+    "$XC" -q -A arm64-linux -H . -o "$W/pa" "$W/p.c" > "$W/ba" 2>&1 || { echo "FAIL arm64-linux: does not build"; head -3 "$W/ba"; fail=1; }
+    [ -f "$W/pa" ] && { file "$W/pa" | grep -q 'ELF 64-bit.*aarch64' || { echo "FAIL arm64-linux: not an arm64 ELF: $(file -b "$W/pa")"; fail=1; }; }
+    XTC_ARM64_LINUX_ROOT="$W/none" "$XC" -q -A arm64-linux -H . -o "$W/pan" "$W/p.c" > "$W/ban" 2>&1 && { echo "FAIL arm64-linux: built without headers"; fail=1; }
+    grep -q "XTC_ARM64_LINUX_ROOT" "$W/ban" || { echo "FAIL arm64-linux: the refusal does not name XTC_ARM64_LINUX_ROOT:"; head -2 "$W/ban"; fail=1; }
+    H=${XTC_LINUX_ARM64_HOST:-}
+    if [ -f "$W/pa" ] && [ -n "$H" ]; then
+        scp -o BatchMode=yes -q "$W/pa" "$H:ccross.bin" \
+            && got=$(ssh -o BatchMode=yes "$H" './ccross.bin; rm -f ccross.bin') \
+            && [ "$got" = "4193280.0" ] || { echo "FAIL arm64-linux: gives '${got:-nothing}' on the host"; fail=1; }
+    fi
+else
+    echo "ccross: no arm64 Linux sysroot, arm64-linux skipped"
 fi
 [ $fail = 0 ] && echo "ccross: ok"
 exit $fail

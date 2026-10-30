@@ -16,9 +16,14 @@ times, round-robin, the machine idle before each round (../run.py's check),
 and the figure is the median of the runs' best times (the spread is wide on
 all three, so a single run says little). Every build's checksum must agree.
 Writes benchmark/par/v<version>/c.json; page.py makes the C page from it.
+--machine pi runs the same suite on an arm64 Linux machine
+(XTC_LINUX_ARM64_HOST, a Raspberry Pi 5) with xcc building for arm64-linux,
+into c-pi.json. Where that machine's clang has no OpenMP runtime (libomp) its
+every-thread build is left out and the file says so.
 
   python3 benchmark/par/c_run.py
   python3 benchmark/par/c_run.py --bench md5 --runs 5
+  python3 benchmark/par/c_run.py --machine pi --xcc compiler/bin/osx/xcc-xc
 """
 import argparse
 import json
@@ -54,20 +59,32 @@ def main():
     ap.add_argument("--bench", action="append")
     ap.add_argument("--runs", type=int, default=15, help="the most runs of a build")
     ap.add_argument("--version", default=common.COMPILER_VERSION)
+    ap.add_argument("--machine", choices=["linux", "pi"], default="linux")
+    ap.add_argument("--xcc", help="the compiler to measure (default: the installed release)")
     a = ap.parse_args()
     env = common.build_env()
-    host = env.get("XTC_C_HOST") or env.get("XTC_LINUX_HOST")
-    if not host:
-        sys.exit("par/c_run.py: no XTC_C_HOST or XTC_LINUX_HOST in build.env")
+    if a.machine == "pi":
+        host, arch, name = env.get("XTC_LINUX_ARM64_HOST"), "arm64-linux", "c-pi.json"
+        if not host:
+            sys.exit("par/c_run.py: no XTC_LINUX_ARM64_HOST in build.env")
+    else:
+        host, arch, name = env.get("XTC_C_HOST") or env.get("XTC_LINUX_HOST"), "x86_64", "c.json"
+        if not host:
+            sys.exit("par/c_run.py: no XTC_C_HOST or XTC_LINUX_HOST in build.env")
     benches = a.bench or BENCHES
-    work = os.path.join(HERE, "build", "c")
+    work = os.path.join(HERE, "build", "c-" + a.machine)
     os.makedirs(work, exist_ok=True)
-    xcc = [common.xcc_path()] + common.xcc_home_args() + common.bench_flags()
+    if a.xcc:
+        xp = os.path.abspath(a.xcc)
+        xcc = [xp] + ([] if xp.startswith("/opt/xcc/") else ["-H", os.path.join(common.REPO, "compiler")]) \
+            + common.bench_flags(xp)
+    else:
+        xcc = [common.xcc_path()] + common.xcc_home_args() + common.bench_flags()
     for b in benches:
         src = os.path.join(CDIR, b + ".c")
         for tag, extra in (("xcc-one", []), ("xcc-all", ["--par-auto"])):
             out = os.path.join(work, "%s.%s" % (b, tag))
-            r = subprocess.run(xcc + ["-q", "-A", "x86_64", "-O3"] + extra + ["-o", out, src],
+            r = subprocess.run(xcc + ["-q", "-A", arch, "-O3"] + extra + ["-o", out, src],
                                capture_output=True, text=True)
             if r.returncode != 0:
                 sys.exit("par/c_run.py: xcc does not build %s:\n%s" % (b, r.stderr))
@@ -80,17 +97,28 @@ def main():
                    check=True)
     subprocess.run(["scp", "-q"] + [os.path.join(work, f) for f in os.listdir(work) if f.split(".")[0] in benches]
                    + ["%s:%s/" % (host, rdir)], check=True)
+    # clang's OpenMP needs libomp, which a distribution's clang may not have.
+    probe = "echo 'int main(void){return 0;}' > %s/omp.c && clang -fopenmp -o %s/omp %s/omp.c" % (rdir, rdir, rdir)
+    clang_omp = subprocess.run(["ssh", host, probe], capture_output=True).returncode == 0
+    missing = [] if clang_omp else ["all/clang: no OpenMP runtime (libomp) for clang on that machine"]
     builds = []
     for b in benches:
         builds.append("gcc -O3 -march=native -w -o {b}.gcc-one {b}.c -lm".format(b=b))
         builds.append("clang -O3 -march=native -w -o {b}.clang-one {b}.c -lm".format(b=b))
         builds.append("gcc -O3 -march=native -fopenmp -w -o {b}.gcc-all openmp/{b}.c -lm".format(b=b))
-        builds.append("clang -O3 -march=native -fopenmp -w -o {b}.clang-all openmp/{b}.c -lm".format(b=b))
+        if clang_omp:
+            builds.append("clang -O3 -march=native -fopenmp -w -o {b}.clang-all openmp/{b}.c -lm".format(b=b))
     sh(host, "cd %s && %s" % (rdir, " && ".join(builds)))
-    toolchains = {"xcc": common.COMPILER_VERSION,
+    toolchains = {"xcc": a.version,
                   "gcc": sh(host, "gcc --version").splitlines()[0],
                   "clang": sh(host, "clang --version").splitlines()[0]}
-    cpu = sh(host, "grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2-").strip()
+    # x86 names its CPU in /proc/cpuinfo; arm64 Linux does not, but lscpu does,
+    # and a Raspberry Pi names the board in its device tree.
+    cpu = sh(host, "grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2-", check=False).strip() \
+        or sh(host, "lscpu | grep -m1 'Model name' | cut -d: -f2-", check=False).strip()
+    board = sh(host, "tr -d '\\0' < /proc/device-tree/model 2>/dev/null", check=False).strip()
+    if board:
+        cpu = "%s (%s)" % (board, cpu)
     threads = int(sh(host, "nproc").strip())
 
     def run_once(b, mode, comp):
@@ -101,7 +129,7 @@ def main():
     results = {}
     for b in benches:
         results[b] = {"one": {}, "all": {}}
-        times = {(m, c): [] for m in MODES for c in MODES[m]}
+        times = {(m, c): [] for m in MODES for c in MODES[m] if clang_omp or (m, c) != ("all", "clang")}
         sums = {}
         # The first round sets each build's number of runs from its time.
         common.wait_quiet(host)
@@ -126,17 +154,18 @@ def main():
         print("%-12s one: %s   all: %s" % (b, "  ".join("%s %.2f ms" % (c, results[b]["one"][c]["median_us"] / 1000)
                                                         for c in MODES["one"]),
                                            "  ".join("%s %.2f ms" % (c, results[b]["all"][c]["median_us"] / 1000)
-                                                     for c in MODES["all"])), flush=True)
+                                                     for c in MODES["all"] if c in results[b]["all"])), flush=True)
     outdir = os.path.join(HERE, "v" + a.version)
     os.makedirs(outdir, exist_ok=True)
-    path = os.path.join(outdir, "c.json")
+    path = os.path.join(outdir, name)
     prev = {}
     if a.bench and os.path.exists(path):
         with open(path) as fh:
             prev = json.load(fh).get("results", {})
     prev.update(results)
     with open(path, "w") as fh:
-        json.dump({"cpu": cpu, "threads": threads, "toolchains": toolchains, "results": prev},
+        json.dump({"cpu": cpu, "threads": threads, "toolchains": toolchains, "results": prev,
+                   "missing": missing},
                   fh, indent=1, sort_keys=True)
     print("results -> %s" % os.path.relpath(path, common.REPO))
 

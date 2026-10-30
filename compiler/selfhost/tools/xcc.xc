@@ -1887,26 +1887,41 @@ String* cPathTargetFlags(DriverOptions* d)
     String* a = d.arch();
     if (a.equals(host))
         return String.withCString("");
-    String* triple = (String*)0;
+    // The row's clang target (the target table); its C headers from a root
+    // for that target: musl's for x86-64 Linux, mingw's for win64, glibc's
+    // (usr/include, copied from an arm64 Linux machine) for arm64 Linux.
+    TargetRow* row = d.targetRow();
+    String* triple = row != (TargetRow*)0 ? row.cTriple() : String.withCString("");
     String* root = (String*)0;
-    if (isX86_64(d)) {
-        triple = String.withCString(d.caps().dynamic() ? "x86_64-linux-gnu" : "x86_64-linux-musl");
-        String* env = Platform.env(String.withCString("XTC_MUSL_ROOT"));
-        root = env != 0 && env.byteLength() > (u32)0 ? env : String.withCString("/opt/clang/linux/x86_64-linux-musl");
-    } else if (a.equals(String.withCString("win64"))) {
-        triple = String.withCString("x86_64-w64-windows-gnu");
-        root = String.withCString("/opt/clang/win64/x86_64-w64-mingw32");
-    } else {
-        Stdio.error(String.withFormat("xcc: error: a C program builds for the host or for x86_64 and win64; not for '%s'\n", a.cString()));
+    String* rootVar = (String*)0;
+    if (triple.byteLength() == (u32)0) {
+        Stdio.error(String.withFormat("xcc: error: a C program builds for the host or for x86_64, win64 and arm64-linux; not for '%s'\n", a.cString()));
         return (String*)0;
     }
+    if (triple.hasPrefix(String.withCString("x86_64-linux"))) {
+        rootVar = String.withCString("XTC_MUSL_ROOT");
+        root = String.withCString("/opt/clang/linux/x86_64-linux-musl");
+    } else if (triple.hasPrefix(String.withCString("aarch64-linux"))) {
+        rootVar = String.withCString("XTC_ARM64_LINUX_ROOT");
+        root = String.withCString("/opt/clang/linux/aarch64-linux-gnu");
+    } else
+        root = String.withCString("/opt/clang/win64/x86_64-w64-mingw32");
+    if (rootVar != (String*)0) {
+        String* env = Platform.env(rootVar);
+        if (env != 0 && env.byteLength() > (u32)0) root = env;
+    }
+    // musl's and mingw's roots keep the headers in include/, glibc's in usr/include.
     String* hdr = String.withString(root);
     hdr.appendCString("/include/stdio.h");
-    if (!Files.exists(hdr)) {
+    String* hdr2 = String.withString(root);
+    hdr2.appendCString("/usr/include/stdio.h");
+    if (!Files.exists(hdr) && !Files.exists(hdr2)) {
         Stdio.error(String.withFormat("xcc: error: a C program for %s built on this host needs that target's C headers: "
-                                      "none at %s/include%s (build it on that host instead)\n",
-                                      a.cString(), root.cString(),
-                                      isX86_64(d) ? " (set XTC_MUSL_ROOT to a musl sysroot)" : ""));
+                                      "none at %s/include or %s/usr/include%s%s%s (build it on that host instead)\n",
+                                      a.cString(), root.cString(), root.cString(),
+                                      rootVar != (String*)0 ? " (set " : "",
+                                      rootVar != (String*)0 ? rootVar.cString() : "",
+                                      rootVar != (String*)0 ? " to a sysroot)" : ""));
         return (String*)0;
     }
     String* f = String.withCString(" -target ");
@@ -4491,21 +4506,31 @@ void main(void)
         Array* cDefs = new Array();
         cDefs.addAll(d.fe().defs());
         optSetPromoteScalars(true);
+        // The arm64 ELF rows (arm64 Linux, android) write no object of xcc's
+        // yet: their program links from source, and clang's half joins the
+        // image through the ELF object merge, as a -Wl object does.
+        TargetRow* crow = d.targetRow();
+        bool cElfArm64 = crow != (TargetRow*)0 && crow.cpu().equals(String.withCString("arm64"))
+                         && crow.exeFormat().hasPrefix(String.withCString("elf"));
         // -c: one object, xcc's and clang's halves together (cSplitLink).
-        // win64's link has no relocatable form: there, build in one step.
+        // win64's link has no relocatable form, nor yet the arm64 ELF rows':
+        // there, build in one step.
         if (d.compileOnly() && !d.keepAsm())
             {
-            if (d.arch().equals(String.withCString("win64")))
+            if (d.arch().equals(String.withCString("win64")) || cElfArm64)
                 {
-                Stdio.printf("xcc: error: -c of a C file is not done for win64: build the program in one step\n");
+                Stdio.printf("xcc: error: -c of a C file is not done for %s: build the program in one step\n",
+                             crow != (TargetRow*)0 ? crow.name().cString() : d.arch().cString());
                 Process.exit((i32)1); return;
                 }
             gCSplitRelocatable = true;
             }
         // clang's own stack protector for its half, where the link has its
-        // runtime: macOS, and Linux linked against glibc (the default).
+        // runtime: macOS, and Linux linked against glibc (the default; arm64
+        // Linux is glibc's).
         cPathSetProtect((d.arch().equals(String.withCString("arm64")) && !isIos(d))
-                        || (isX86_64(d) && d.caps().dynamic()));
+                        || (isX86_64(d) && d.caps().dynamic())
+                        || (cElfArm64 && !isAndroid(d)));
         // clang builds for the target, not the host: a triple, and from
         // another host the target's C headers (a sysroot with include/).
         String* tgt = cPathTargetFlags(d);
@@ -4525,6 +4550,8 @@ void main(void)
         // and nothing was written where asked.
         if (mod != (IRModule*)0 && d.keepAsm())
             d.setCompileOnly(true);
+        else if (mod != (IRModule*)0 && cElfArm64)
+            d.linkInputs().add((Object*)cRestObject());
         else if (mod != (IRModule*)0)
             {
             gCSplitOut = d.fe().output() != (String*)0 ? d.fe().output() : String.withCString("a.out");

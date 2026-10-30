@@ -143,6 +143,17 @@ class ElfLinkArm64
         _rc = (u32)0;
         if (objectFiles.count() == (u32)0 && archives.count() == (u32)0)
             return;
+        // The program's own GOT references too: xcc reaches what another
+        // file defines through the GOT (a C program's globals, which clang's
+        // half defines), and once an object here defines it the image does.
+        // Left as a GOT load, the writer resolved its ldr to the symbol
+        // itself and loaded the variable's first word as its address.
+        for (u32 i = (u32)0; i < mfix.count(); i = i + (u32)1)
+            {
+            Arm64Fixup* pf = (Arm64Fixup*)mfix.get(i);
+            if (pf.kind() == (u32)FIXUP_GOTPAGE21 || pf.kind() == (u32)FIXUP_GOTPAGEOFF12)
+                _gotFixups.add((Object*)pf);
+            }
         Array* allObjs = new Array();
         Array* labels = new Array();
         Map* forced = new Map();

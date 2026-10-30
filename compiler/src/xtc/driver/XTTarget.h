@@ -58,6 +58,9 @@ NS_ASSUME_NONNULL_BEGIN
 // -fbounds-check's reporter, linked from support/<cpu>/runtime (macOS and iOS:
 // a backtrace with arguments), or "" where Checked.xc reports instead.
 @property(nonatomic, readonly, copy) NSString* checkedRuntime;
+// The clang target a C program is compiled for when it is not the host's
+// (the C path), or "" where a C program builds only on the host.
+@property(nonatomic, readonly, copy) NSString* cTriple;
 
 // Every row, in the order both compilers list them.
 + (NSArray<XTTarget*>*)rows;
