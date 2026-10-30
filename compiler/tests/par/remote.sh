@@ -23,7 +23,15 @@ up() {
         for i in $(seq 300); do grep -q 'xcd: serving' "$log" 2>/dev/null && break; sleep 0.1; done
     done
 }
-PORT=$((7300 + RANDOM % 500))
+# A base whose ten ports (PORT..PORT+9) are all free: a daemon left
+# listening on one of them (another run, or one a person started by hand)
+# made the sub-test that drew it fail with "cannot listen on the port".
+port_free() { ! (exec 3<> "/dev/tcp/127.0.0.1/$1") 2> /dev/null; }
+for try in $(seq 50); do
+    PORT=$((7300 + RANDOM % 500)); ok=1
+    for k in 0 1 2 3 4 5 6 7 8 9; do port_free $((PORT + k)) || { ok=0; break; }; done
+    [ $ok = 1 ] && break
+done
 rc=0
 if ! $XC -q -O2 -H . -o "$L/xcd" selfhost/tools/xcd.xc > "$L/xcd.build" 2>&1; then
     echo "FAIL remote: xcd does not build"; cat "$L/xcd.build" | head -5; exit 1
