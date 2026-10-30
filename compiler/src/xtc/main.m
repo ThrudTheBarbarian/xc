@@ -1014,6 +1014,59 @@ static BOOL dashLResolveArchives(XTCommandLineOptions *opts, NSFileManager *fm,
     return YES;
 }
 
+// The arm64 ELF link's (android, arm64 Linux) shared libraries from the link
+// line: each -l<name> found on the -L path as lib<name>.so, and each .so named
+// directly, needed as an `#import <X>` is (by soname, through the runpath on
+// Linux), as the port has them. Nil after saying why: a -l that is not found,
+// or one that is only an archive, which this driver cannot merge.
+static NSArray<NSString *> * _Nullable elfArm64LinkLibraries(XTCommandLineOptions *opts) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSMutableArray<NSString *> *toks = [NSMutableArray array];
+    for (NSString *arg in opts.linkerArgs) {
+        if (!arg.length) continue;
+        if ([arg hasPrefix:@"-Wl,"]) {
+            for (NSString *p in [[arg substringFromIndex:4] componentsSeparatedByString:@","])
+                if (p.length) [toks addObject:p];
+        } else [toks addObject:arg];
+    }
+    NSMutableArray<NSString *> *dirs = [opts.libraryPaths mutableCopy] ?: [NSMutableArray array];
+    for (NSString *t in toks)
+        if ([t hasPrefix:@"-L"] && t.length > 2) [dirs addObject:[t substringFromIndex:2]];
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (NSString *t in toks) {
+        if ([t hasPrefix:@"-l"] && t.length > 2) {
+            NSString *stem = [t substringFromIndex:2], *found = nil;
+            BOOL archive = NO;
+            for (NSString *dir in dirs) {
+                NSString *so = [dir stringByAppendingPathComponent:[NSString stringWithFormat:@"lib%@.so", stem]];
+                if ([fm fileExistsAtPath:so]) { found = so; break; }
+            }
+            for (NSString *dir in dirs)
+                if (!found && [fm fileExistsAtPath:[dir stringByAppendingPathComponent:
+                                                    [NSString stringWithFormat:@"lib%@.a", stem]]]) archive = YES;
+            // The C library's own names: the row's DT_NEEDED already covers
+            // them (glibc's libpthread, libdl and librt are libc.so.6 since
+            // 2.34; bionic's are libc.so), as in the port.
+            if (!found && !archive && [@[@"c", @"m", @"dl", @"pthread", @"rt"] containsObject:stem]) continue;
+            if (!found) {
+                fprintf(stderr, archive
+                    ? "xcc: error: %s: lib%s.a is an archive, which this driver does not link for '%s'\n"
+                    : "xcc: error: %s: no lib%s.so on the -L path\n",
+                    t.UTF8String, stem.UTF8String, opts.effectiveTarget.name.UTF8String);
+                return nil;
+            }
+            if (![out containsObject:found]) [out addObject:found];
+        } else if ([t.pathExtension isEqualToString:@"so"] && ![t hasPrefix:@"-"]) {
+            if (![fm fileExistsAtPath:t]) {
+                fprintf(stderr, "xcc: error: -Xlinker '%s': no such file\n", t.UTF8String);
+                return nil;
+            }
+            if (![out containsObject:t]) [out addObject:t];
+        }
+    }
+    return out;
+}
+
 static BOOL x86SelfHostCanIgnoreLinkFlags(XTCommandLineOptions *opts) {
     for (NSString *arg in opts.linkerArgs) {
         if (!arg.length) continue;
@@ -5155,6 +5208,15 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
                             "linked for '%s' by this driver — the link would silently omit them.\n",
                     opts.effectiveTarget.name.UTF8String);
             return 1;
+        }
+        if ([opts.effectiveTarget.exeFormat isEqualToString:@"elf-pie"] && !opts.compileOnly) {
+            NSArray<NSString *> *lls = elfArm64LinkLibraries(opts);
+            if (!lls) return 1;
+            if (lls.count) {
+                NSMutableArray<NSString *> *all = [neededLibs mutableCopy] ?: [NSMutableArray array];
+                for (NSString *l in lls) if (![all containsObject:l]) [all addObject:l];
+                neededLibs = all;
+            }
         }
         int linkRc = wasm32Mod
             ? linkWasm32Module(argv0, opts, tmpAsm, opts.outputPath, neededLibs, ifaceJson)

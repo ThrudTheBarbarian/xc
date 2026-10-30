@@ -746,8 +746,11 @@ String* resolveLinkInput(DriverOptions* d, String* arg)
     // NOT be a `-l<name>` candidate: 0.5 grabbed a stray macOS `libfoo.dylib`
     // off the -L path and handed it to the ELF linker, which then refused it;
     // 0.4 skipped it (c2xc bug 37). Those targets use `.so` / `.a` instead.
+    // The row's format decides (android and arm64 Linux are ELF though their
+    // back end is arm64's).
     String* arch = d.arch();
-    bool machO = !(arch.equals(String.withCString("x86_64"))
+    bool machO = d.targetRow() != (TargetRow*)0 ? d.targetRow().exeFormat().equals(String.withCString("macho"))
+               : !(arch.equals(String.withCString("x86_64"))
                 || arch.equals(String.withCString("arm9"))
                 || arch.equals(String.withCString("win64")));
     for (u32 i = (u32)0; dirs != (Array*)0 && i < dirs.count(); i = i + (u32)1) {
@@ -4956,6 +4959,33 @@ void emitModule(DriverOptions* d, IRModule* mod)
 
     Array* image = (Array*)0;
     if (android) {
+        // A shared library on the link line (-l<name>, -Wl,x.so) is needed as
+        // an #import <X> is: named by its soname and, on Linux, found through
+        // the runpath. The object merge below takes only objects and archives,
+        // and a .so given here used to be left out without a word.
+        // A -l found nowhere is an error, except the C library's own names,
+        // which the row's DT_NEEDED already covers (glibc's libpthread, libdl
+        // and librt are libc.so.6 since 2.34; bionic's are libc.so).
+        Array* li = d.linkInputs();
+        for (u32 i = (u32)0; li != (Array*)0 && i < li.count(); i = i + (u32)1) {
+            String* arg = (String*)li.get(i);
+            String* lp = resolveLinkInput(d, arg);
+            if (lp == (String*)0) {
+                String* stem = arg.substringFromByte((u32)2);
+                if (!stem.equals(String.withCString("c")) && !stem.equals(String.withCString("m"))
+                    && !stem.equals(String.withCString("dl")) && !stem.equals(String.withCString("pthread"))
+                    && !stem.equals(String.withCString("rt"))) {
+                    Stdio.printf("xcc: error: %s: no lib%s.so on the -L path\n", arg.cString(), stem.cString());
+                    Process.exit((i32)1); return;
+                }
+                continue;
+            }
+            if (!lp.hasSuffix(String.withCString(".so"))) continue;
+            bool have = false;
+            for (u32 k = (u32)0; k < d.fe().neededLibs().count(); k = k + (u32)1)
+                if (((String*)d.fe().neededLibs().get(k)).equals(lp)) have = true;
+            if (!have) d.fe().neededLibs().add((Object*)lp);
+        }
         String* baseNeeded = new String();
         for (u32 ni = (u32)0; ni < lrow.needed().count(); ni = ni + (u32)1) {
             if (ni > (u32)0) baseNeeded.appendCString(",");
