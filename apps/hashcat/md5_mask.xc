@@ -37,7 +37,9 @@ i64 hc_now_us(void)
     return (c / f) * 1000000 + ((c % f) * 1000000) / f;
 #else
     HcSpec ts;
-#if ARCH_x86_64
+    // CLOCK_MONOTONIC is 1 on Linux and 6 on Darwin; 6 on Linux is the
+    // 4 ms CLOCK_MONOTONIC_COARSE (arm64 Linux timed with it until 2026-10-30).
+#if OS_linux || ARCH_x86_64
     clock_gettime(1, (pointer)&ts);
 #else
     clock_gettime(6, (pointer)&ts);

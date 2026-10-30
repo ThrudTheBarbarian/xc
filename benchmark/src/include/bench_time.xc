@@ -24,8 +24,11 @@ i64 bench_now_us(void)
     return (c / f) * (i64)1000000 + ((c % f) * (i64)1000000) / f;
 #else
     BenchSpec ts;
-    // CLOCK_MONOTONIC is 6 on Darwin and 1 on Linux.
-#if ARCH_x86_64
+    // CLOCK_MONOTONIC is 6 on Darwin and 1 on Linux; 6 on Linux is
+    // CLOCK_MONOTONIC_COARSE, which moves in 4 ms ticks (arm64 Linux timed
+    // with it until 2026-10-30). ARCH_x86_64 keeps a compiler without the
+    // OS_ names right on x86-64 Linux.
+#if OS_linux || ARCH_x86_64
     clock_gettime((i32)1, (pointer)&ts);
 #else
     clock_gettime((i32)6, (pointer)&ts);

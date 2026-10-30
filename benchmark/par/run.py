@@ -440,7 +440,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bench", action="append")
     ap.add_argument("--machines", default="mac,linux,windows,browser",
-                    help="any of mac, linux, linuxgpu, windows, browser")
+                    help="any of mac, linux, linuxgpu, pi, windows, browser")
     ap.add_argument("--version", default=common.COMPILER_VERSION)
     ap.add_argument("--xcc", help="measure this compiler instead of the shipped one")
     ap.add_argument("--autopar", action="store_true", help="the plain-loop programs in auto/, with --par-auto")
@@ -488,6 +488,16 @@ def main():
             subprocess.run(["scp", "-q", exe, "%s:/tmp/par-%s" % (host, name)], check=True)
             results[name]["linuxgpu"] = measure(lambda b, e: run_linux(host, b, e), "/tmp/par-" + name,
                                                 ["gpu", "vulkan"], gpu_only=gpu_only)
+        # A Raspberry Pi 5 (arm64 Linux): its four A76 cores and the V3D
+        # through Vulkan. mandel_deep runs there in every mode, as a long
+        # piece of work rather than a GPU-saturation test (owner, 2026-10-30).
+        if "pi" in machines and env.get("XTC_LINUX_ARM64_HOST"):
+            host = env["XTC_LINUX_ARM64_HOST"]
+            exe = os.path.join(work, name + ".pi")
+            build(name, "arm64-linux", exe)
+            subprocess.run(["scp", "-q", exe, "%s:/tmp/par-%s" % (host, name)], check=True)
+            results[name]["pi"] = measure(lambda b, e: run_linux(host, b, e), "/tmp/par-" + name,
+                                          ["gpu"], gpu_only=False)
         if "windows" in machines and env.get("XTC_WIN_GPU_HOST"):
             host = env["XTC_WIN_GPU_HOST"]
             exe = os.path.join(work, name + ".exe")
@@ -534,10 +544,11 @@ def table(results):
     """Milliseconds for the best run, per machine and mode, for the performance page."""
     names = {"mac": "Apple silicon, Metal", "linux": "x86-64 Linux, an integrated GPU through Vulkan",
              "linuxgpu": "x86-64 Linux, NVIDIA through CUDA and Vulkan",
+             "pi": "Raspberry Pi 5, its V3D GPU through Vulkan",
              "windows": "x86-64 Windows, NVIDIA through CUDA and Vulkan",
              "browser": "Chrome on Apple silicon, wasm32 and WebGPU"}
     lines = []
-    for m in ("mac", "linux", "linuxgpu", "windows", "browser"):
+    for m in ("mac", "linux", "linuxgpu", "pi", "windows", "browser"):
         rows = [(n, r[m]) for n, r in results.items() if m in r]
         if not rows:
             continue
