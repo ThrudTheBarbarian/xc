@@ -7504,7 +7504,9 @@ class Arm64
             // scratch register first, then writing every dest — SP is untouched,
             // so slot-homed members stay addressable. GP members use x15/x16/x17
             // (never home registers; spMemForOff's address temp is x9, so it
-            // can't clobber them); FP members use s/d16..18. Aggregate cycles
+            // can't clobber them); FP members use s/d16, 17 and 7 (d18, the
+            // third until 2026-10-30, is a home register: a three-float
+            // rotation came out wrong). Aggregate cycles
             // (never seen — a struct phi lives in a slot, not a register swap)
             // and cycles wider than the scratch pool fall back to the in-place
             // single step, no worse than pre-fix.
@@ -7548,7 +7550,7 @@ class Arm64
     }
 
     // Scratch register for a residual phi-copy cycle: slot 0..2. GP members ride
-    // x15/x16/x17 (or w-views), FP members s/d16..18 — none is a home register,
+    // x15/x16/x17 (or w-views), FP members s/d16, 17 and 7 — none is a home register,
     // so reading all sources then writing all dests cannot clobber a live value.
     static String* phiCycleScratch(u32 slot, String* pty)
     {
@@ -7556,7 +7558,7 @@ class Arm64
             bool d = pty.equals(String.withCString("F64"));
             if (slot == (u32)0) return String.withCString(d ? "d16" : "s16");
             if (slot == (u32)1) return String.withCString(d ? "d17" : "s17");
-            return String.withCString(d ? "d18" : "s18");
+            return String.withCString(d ? "d7" : "s7");
         }
         bool x = needsXReg(pty);
         if (slot == (u32)0) return String.withCString(x ? "x15" : "w15");

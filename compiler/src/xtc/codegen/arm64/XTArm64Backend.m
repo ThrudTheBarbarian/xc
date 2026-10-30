@@ -3366,7 +3366,12 @@ static BOOL arm64LogicalImm(uint64_t v, int width) {
         // reading EVERY source into a scratch register first, then writing every
         // dest -- SP is untouched, so slot-homed members stay addressable. GP
         // members use x15/x16/x17 (never home registers; spMemForOff's address
-        // temp is x9, so it can't clobber them); FP members use s/d16..18.
+        // temp is x9, so it can't clobber them); FP members use s/d16, 17 and 7.
+        // The third was d18, which IS a home (the first of the caller-saved FP
+        // tier): a loop rotating three floats had one of them homed there, and
+        // phase 2 wrote that member's new value over the third staged source,
+        // so `t = a; a = b; b = c; c = t` came out wrong. d0-d7 are FP scratch
+        // and never homes, and no argument is live at a block's phi copies.
         // Aggregate cycles (never seen -- a struct phi lives in a slot and does
         // not participate in a register swap) and cycles wider than the scratch
         // pool fall back to the in-place single step, no worse than pre-fix.
@@ -3386,7 +3391,7 @@ static BOOL arm64LogicalImm(uint64_t v, int width) {
             continue;
         }
         int gpScratch[3] = { 15, 16, 17 };
-        int fpScratch[3] = { 16, 17, 18 };
+        int fpScratch[3] = { 16, 17, 7 };
         NSUInteger gpUsed = 0, fpUsed = 0;
         NSMutableArray<NSString *> *staged = [NSMutableArray array];
         // Phase 1: read every source into its own scratch register.
