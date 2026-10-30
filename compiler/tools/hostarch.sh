@@ -42,12 +42,14 @@ case "$(uname -s)" in
     *)      XC_BIN=bin/linux ;;
 esac
 
-# uname -m spells the same ISA differently per OS: `arm64` on Darwin, `aarch64`
-# on Linux. Normalise to the names the -A flag actually accepts (the backend
-# set is arm64, android, xt6502, m68k, wasm32, x86_64, win64, arm9).
-case "$(uname -m)" in
-    arm64|aarch64) XC_HOST_ARCH=arm64  ;;
-    x86_64|amd64)  XC_HOST_ARCH=x86_64 ;;
+# The host's row in the target table, cpu and operating system together:
+# `arm64` (arm64-macos) on Apple silicon, `arm64-linux` on an arm64 Linux host
+# (uname -m says `aarch64` there), `x86_64` (x86_64-linux) on Linux x86-64.
+# The cpu alone is not enough: plain `arm64` is macOS's Mach-O.
+case "$(uname -s)/$(uname -m)" in
+    Darwin/arm64)                   XC_HOST_ARCH=arm64       ;;
+    Linux/aarch64|Linux/arm64)      XC_HOST_ARCH=arm64-linux ;;
+    */x86_64|*/amd64)               XC_HOST_ARCH=x86_64      ;;
     *)
         echo "hostarch.sh: unsupported host $(uname -s)/$(uname -m) — no native" \
              "-A target for it; set XC_HOST_ARCH yourself if you know better" >&2
