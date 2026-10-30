@@ -6,7 +6,7 @@
 //
 //   -A arm64 (AppKit, headless) or -A win64 (Win32).  Build+run: sh run_busy.sh
 #import <Stdio.xc>
-#if ARCH_win64
+#if OS_windows
 #import "UXWin32Driver.xc"
 typedef i32 W32GetProcessInformationFn(pointer process, i32 infoClass, pointer info, u32 size);
 #else
@@ -21,7 +21,7 @@ bool gBusySkip; // the platform cannot report its state
 // 1 while the platform has the app marked busy
 i32 busyNow(void)
     {
-#if ARCH_win64
+#if OS_windows
     W32GetProcessInformationFn* get = (W32GetProcessInformationFn*)GetProcAddress(LoadLibraryA("kernel32.dll"),
                                                                                   (u8*)"GetProcessInformation");
     if (get == (W32GetProcessInformationFn*)0)
@@ -59,7 +59,7 @@ void expect(u8* what, i32 want)
 
 void main(void)
     {
-#if ARCH_win64
+#if OS_windows
     gDriver = new UXWin32Driver();
 #else
     UXAppKitDriver* ak = new UXAppKitDriver();

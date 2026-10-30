@@ -4,28 +4,27 @@
 //     app.setDelegate(new MyDelegate());
 //     app.run();
 //
-// The backend is the target's where the target decides it (win64: Win32, wasm32: the web, arm9:
-// GEM, ios-sim / ios: iOS, android: Android).  Otherwise the build names it, with -D UX_GTK or
-// -D UX_GEM (host GEM); with neither, an arm64 build is the Mac's AppKit and an x86_64 build is GTK
-// (Linux).
+// The backend is the target's where the target decides it (Windows: Win32, the web, armv7: GEM,
+// iOS, Android).  Otherwise the build names it, with -D UX_GTK or -D UX_GEM (host GEM); with
+// neither, Linux is GTK and macOS is AppKit.
 // Only the driver the build uses is imported.
 //
 // With this file in the build, `new UXApplication()` installs the driver itself (UXApplication's
 // init, under UX_PLATFORM_DEFAULT), so main is only `new UXApplication()`, a delegate and run().
 #define UX_PLATFORM_DEFAULT 1
-#if ARCH_win64
+#if OS_windows
 #import "UXWin32Driver.xc"
 #define UX_PLATFORM_WIN32 1
 #elif ARCH_wasm32
 #import "UXWebDriver.xc"
 #define UX_PLATFORM_WEB 1
-#elif ARCH_arm9
+#elif ARCH_armv7
 #import "UXGemDriver.xc"
 #define UX_PLATFORM_GEM 1
-#elif PLATFORM_ios
+#elif OS_ios
 #import "UXIosDriver.xc"
 #define UX_PLATFORM_IOS 1
-#elif PLATFORM_android
+#elif OS_android
 #import "UXAndroidDriver.xc"
 #define UX_PLATFORM_ANDROID 1
 #elif UX_GEM
@@ -34,12 +33,14 @@
 #elif UX_GTK
 #import "UXGtkDriver.xc"
 #define UX_PLATFORM_GTK 1
-#elif ARCH_x86_64
+#elif OS_linux
 #import "UXGtkDriver.xc"
 #define UX_PLATFORM_GTK 1
-#else
+#elif OS_macos
 #import "UXAppKitDriver.xc"
 #define UX_PLATFORM_APPKIT 1
+#else
+#error "UXPlatform: no UXKit driver for this target (name one with -D UX_GTK or -D UX_GEM)"
 #endif
 
 class UXPlatform : Object

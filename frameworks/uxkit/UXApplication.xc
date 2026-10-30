@@ -11,7 +11,7 @@
 #import "UXGraphics.xc" // UXPIX_*
 #import "UXString.xc"   // UXStr.toInt, for UX_AUTOQUIT
 #import <PlatformCore.xc> // Platform.env: "" where there is no environment (wasm32, XTOS)
-#if !(ARCH_6502 || ARCH_m68k || ARCH_wasm32 || ARCH_arm9)
+#if !(ARCH_6502 || ARCH_m68k || ARCH_wasm32 || ARCH_armv7)
 #define UX_HAS_RUNLOOP 1
 #import "RunLoop.xc"      // work other threads post to the UI thread (uxRunPosted)
 #endif

@@ -16,15 +16,15 @@
 #import "Thread.xc"
 #import "RunLoop.xc"
 #import "OperationQueue.xc"
-#if PLATFORM_ios
+#if OS_ios
 #import "UXIosDriver.xc"
 extern void ux_ios_test_watchdog(i32 ms, i32 rc); // a wedge fails, never hangs
-#elif PLATFORM_android
+#elif OS_android
 #import "UXAndroidDriver.xc"
 extern void ux_and_test_watchdog(i32 ms, i32 rc);
-#elif ARCH_win64
+#elif OS_windows
 #import "UXWin32Driver.xc"
-#elif ARCH_x86_64 || UX_POSTED_GTK
+#elif OS_linux || UX_POSTED_GTK
 #import "UXGtkDriver.xc"
 #else
 #import "UXAppKitDriver.xc"
@@ -73,7 +73,7 @@ void postedCheck(i32 seq)
     gNext = seq + (i32)1;
     if (gNext == (i32)POSTED_N)
         {
-#if PLATFORM_ios || PLATFORM_android
+#if OS_ios || OS_android
         postedReport();
 #endif
         gPostedApp.stop();
@@ -104,9 +104,9 @@ class PostedDelegate : Object<UXApplicationDelegate>
         win.open((u8*)"Posted", UXGeom.make((i16)80, (i16)80, (i16)200, (i16)120), new UXView());
         app.addWindow(win);
         RunLoop.main().after((u32)100, block void(void) { gTimerRan = Thread.currentId() == gUiThread; });
-#if PLATFORM_ios
+#if OS_ios
         ux_ios_test_watchdog((i32)15000, (i32)2);
-#elif PLATFORM_android
+#elif OS_android
         ux_and_test_watchdog((i32)15000, (i32)2);
 #endif
         Thread* t = Thread.spawn(&postedWorker);
@@ -117,13 +117,13 @@ class PostedDelegate : Object<UXApplicationDelegate>
 
 void main(void)
     {
-#if PLATFORM_ios
+#if OS_ios
     gDriver = new UXIosDriver();
-#elif PLATFORM_android
+#elif OS_android
     gDriver = new UXAndroidDriver();
-#elif ARCH_win64
+#elif OS_windows
     gDriver = new UXWin32Driver();
-#elif ARCH_x86_64 || UX_POSTED_GTK
+#elif OS_linux || UX_POSTED_GTK
     gDriver = new UXGtkDriver();
 #else
     gDriver = new UXAppKitDriver();

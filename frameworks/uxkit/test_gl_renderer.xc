@@ -95,7 +95,7 @@ void drawFrame(UXGLView* map)
     typedef u8* GetStrFn(u32 which);
     GetStrFn* gs = (GetStrFn*)gDriver.glProc((u8*)"glGetString");
     Stdio.printf("  (GL %s / GLSL %s)\n", gs != (GetStrFn*)0 ? gs((u32)$1F02) : (u8*)"?", gs != (GetStrFn*)0 ? gs((u32)$8B8C) : (u8*)"?");
-#if ARCH_win64
+#if OS_windows
     // a GL 3.2 renderer needs vertex arrays: a context without them (Wine on macOS offers 2.1) cannot
     // run it, and that is the platform's answer, not this test's
     if (gDriver.glProc((u8*)"glGenVertexArrays") == (pointer)0)

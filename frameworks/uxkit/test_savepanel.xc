@@ -5,9 +5,9 @@
 // which on the POSIX backends is ux_posix_fs.h -- so this is also the gate that the drawn panel sees
 // files at all on AppKit and GTK.
 //
-// macOS: AppKit, headless.  x86_64: GTK on real Linux (run_gtk_linux.sh test_savepanel).
+// macOS: AppKit, headless.  Linux: GTK on real Linux (run_gtk_linux.sh test_savepanel).
 #import <Stdio.xc>
-#if ARCH_x86_64
+#if OS_linux
 #import "UXGtkDriver.xc"
 #else
 #import "UXAppKitDriver.xc"
@@ -75,7 +75,7 @@ class TestSavePanel : UXFilePanel
 void main(void)
     {
     gFails = (i32)0;
-#if ARCH_x86_64
+#if OS_linux
     UXGtkDriver* d = new UXGtkDriver();
 #else
     ux_ak_set_capture((i32)1);

@@ -14,7 +14,7 @@
 // textures, framebuffers, uniforms -- plus their deletes and glViewport / glGetError.  A call not
 // here can be reached through glProc, or added here.
 
-#if ARCH_win64
+#if OS_windows
 #import "UXViewDriver.xc" // gDriver.glProc
 
 typedef void _uxgl_glActiveTexture_t(u32 texture);
