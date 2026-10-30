@@ -30,6 +30,10 @@ choice on a machine that is also doing other things.
                              gcc is the C++ source through the Linux host's g++)
   run.py --max-load 0.25     wait until each machine's 1-minute load average,
                              per core, is at or below this before timing on it
+  run.py --platform pi       an arm64 Linux machine (XTC_LINUX_ARM64_HOST, a
+                             Raspberry Pi 5) alone: xc cross-built here, the C++
+                             source through its clang++ and g++; results-pi.json
+  run.py --xcc PATH          measure this compiler, not the installed release
 
 Hosts for platforms other than this one come from build.env at the repository
 root. A variable left empty turns off that platform and the run reports the skip.
@@ -165,6 +169,9 @@ def benchmarks():
     return have, unpaired
 
 
+XCC_OVERRIDE = None     # --xcc
+
+
 def xcc_path():
     """The SHIPPED compiler: the installed release, /opt/xcc/<VERSION>/bin/xcc.
 
@@ -174,6 +181,8 @@ def xcc_path():
     is installed, and the run says so. The Objective-C bootstrap is never
     measured.
     """
+    if XCC_OVERRIDE:
+        return XCC_OVERRIDE
     installed = os.path.join("/opt/xcc", COMPILER_VERSION, "bin", "xcc")
     if os.access(installed, os.X_OK):
         return installed
@@ -211,6 +220,14 @@ def bench_flags(xcc=None):
 def compile_xc(name, opt, out):
     cmd = [xcc_path()] + xcc_home_args() + bench_flags() + ["-I", SRC, "-" + opt,
            "-o", out, os.path.join(SRC, name + ".xc")]
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return r.returncode == 0, (r.stderr or r.stdout)
+
+
+def compile_xc_pi(name, opt, out):
+    """Cross-build for arm64 Linux (glibc), as `-A arm64-linux` links it."""
+    cmd = [xcc_path()] + xcc_home_args() + bench_flags() + ["-I", SRC, "-A", "arm64-linux",
+           "-" + opt, "-o", out, os.path.join(SRC, name + ".xc")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     return r.returncode == 0, (r.stderr or r.stdout)
 
@@ -405,10 +422,15 @@ def main():
     ap.add_argument("--langs", default=None,
                     help="comma-separated subset of xc,objc,cpp,gcc,swift (gcc: the C++ source "
                          "through the Linux host's g++; x86-64 only)")
-    ap.add_argument("--platform", default=None, choices=["arm64", "x86_64"],
-                    help="measure one target's legs only (the other machine may be busy)")
+    ap.add_argument("--platform", default=None, choices=["arm64", "x86_64", "pi"],
+                    help="measure one target's legs only (the other machine may be busy); "
+                         "pi: the arm64 Linux machine alone, into results-pi.json")
+    ap.add_argument("--xcc", default=None, help="the compiler to measure (default: the installed release)")
     args = ap.parse_args()
     MAX_LOAD = args.max_load
+    global XCC_OVERRIDE
+    if args.xcc:
+        XCC_OVERRIDE = os.path.abspath(args.xcc)
 
     names, unpaired = benchmarks()
     if unpaired:
@@ -433,7 +455,13 @@ def main():
     if gpp():
         langs.append(("gcc", compile_gcc))   # real GCC on this host (macOS: Homebrew g++)
     host = env.get("XTC_LINUX_HOST")
-    if host:
+    if args.platform == "pi":
+        # The Pi alone: its own legs, under their own names, in their own file.
+        host = env.get("XTC_LINUX_ARM64_HOST")
+        if not host:
+            sys.exit("run.py: --platform pi needs XTC_LINUX_ARM64_HOST in build.env")
+        langs = [("xc_pi", compile_xc_pi), ("cpp_pi", None), ("gcc_pi", None)]
+    elif host:
         langs.append(("xc_x86_64", compile_xc_x86))
         langs.append(("objc_x86_64", None))   # compiled on the remote host
         langs.append(("cpp_x86_64", None))
@@ -444,8 +472,8 @@ def main():
               "there (GNUstep Objective-C cannot be cross-built from macOS).")
     if args.langs:
         want = set(args.langs.split(","))
-        langs = [(l, c) for l, c in langs if l.split("_x86_64")[0] in want]
-    if args.platform:
+        langs = [(l, c) for l, c in langs if l.split("_x86_64")[0].split("_pi")[0] in want]
+    if args.platform in ("arm64", "x86_64"):
         langs = [(l, c) for l, c in langs if l.endswith("_x86_64") == (args.platform == "x86_64")]
     source_ext = {"xc": ".xc", "objc": ".m", "cpp": ".cpp", "gcc": ".cpp", "swift": ".swift"}
 
@@ -453,12 +481,12 @@ def main():
         for name in names:
             checks = {}
             for lang, compiler in langs:
-                base = lang.split("_x86_64")[0]
+                base = lang.split("_x86_64")[0].split("_pi")[0]
                 # C++ and Swift versions are optional: a benchmark without one
                 # is simply not measured in that language.
                 if not os.path.isfile(os.path.join(SRC, name + source_ext[base])):
                     continue
-                if lang in ("objc_x86_64", "cpp_x86_64", "gcc_x86_64", "swift_x86_64"):
+                if lang in ("objc_x86_64", "cpp_x86_64", "gcc_x86_64", "swift_x86_64", "cpp_pi", "gcc_pi"):
                     rpath, err = build_remote(name, opt, opt, host, base)
                     if rpath is None:
                         failures.append((name, lang, opt, err if isinstance(err, list) else [str(err)]))
@@ -479,7 +507,7 @@ def main():
                 if not ok:
                     failures.append((name, lang, opt, log.strip().splitlines()[:2]))
                     continue
-                if lang == "xc_x86_64":
+                if lang in ("xc_x86_64", "xc_pi"):
                     secs, checksum = measure_remote(out, args.repeats, host)
                 else:
                     secs, checksum = measure(out, args.repeats)
@@ -502,8 +530,18 @@ def main():
     # A run restricted with --langs or --bench adds to the results already in
     # this version's directory instead of replacing them, so a language can be
     # measured later without re-timing the others.
-    prev_path = os.path.join(outdir, "results.json")
-    tc = toolchains(host)
+    rname = "results-pi.json" if args.platform == "pi" else "results.json"
+    prev_path = os.path.join(outdir, rname)
+    tc = toolchains(None if args.platform == "pi" else host)
+    if args.platform == "pi":
+        def rl(cmd):
+            r = subprocess.run(["ssh", "-o", "ConnectTimeout=10", host, cmd], capture_output=True, text=True)
+            o = r.stdout.strip().splitlines()
+            return o[0].strip() if o else None
+        tc = {"xcc": tc["xcc"] if not XCC_OVERRIDE else args.version,
+              "arm64_linux": {"clang": rl("clang++ --version"), "gcc": rl("g++ --version"),
+                              "cpu": "%s (%s)" % (rl("tr -d '\\0' < /proc/device-tree/model"),
+                                                  rl("lscpu | grep -m1 'Model name' | cut -d: -f2-"))}}
     if (args.langs or args.bench or args.platform) and os.path.isfile(prev_path):
         with open(prev_path) as fh:
             prev_all = json.load(fh)
@@ -520,16 +558,17 @@ def main():
 
     payload = {
         "version": args.version,
-        "platform": subprocess.run(["uname", "-m"], capture_output=True, text=True).stdout.strip(),
+        "platform": "arm64-linux" if args.platform == "pi" else
+                    subprocess.run(["uname", "-m"], capture_output=True, text=True).stdout.strip(),
         "repeats": args.repeats,
         "toolchains": tc,
         "raw": results,
         "net": adjusted,
         "mismatches": [{"benchmark": n, "opt": o, "checksums": c} for n, o, c in mismatches],
     }
-    with open(os.path.join(outdir, "results.json"), "w") as fh:
+    with open(os.path.join(outdir, rname), "w") as fh:
         json.dump(payload, fh, indent=2, sort_keys=True)
-    print("\nresults -> %s" % os.path.relpath(os.path.join(outdir, "results.json"), REPO))
+    print("\nresults -> %s" % os.path.relpath(os.path.join(outdir, rname), REPO))
 
     for n, l, o, log in failures:
         print("BUILD/RUN FAILED  %s %s %s: %s" % (n, l, o, " ".join(log)))
