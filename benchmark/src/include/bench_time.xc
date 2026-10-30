@@ -3,7 +3,7 @@
 // calls, so the two halves are measured identically.
 // Windows has no clock_gettime; QueryPerformanceCounter is its monotonic
 // high-resolution clock.
-#if ARCH_win64
+#if OS_windows
 i32 QueryPerformanceCounter(i64* count);
 i32 QueryPerformanceFrequency(i64* freq);
 #else
@@ -16,7 +16,7 @@ struct BenchSpec { i64 sec; i64 nsec; }
 
 i64 bench_now_us(void)
     {
-#if ARCH_win64
+#if OS_windows
     i64 c = (i64)0;
     i64 f = (i64)1;
     QueryPerformanceCounter(&c);

@@ -23,7 +23,7 @@ void hc_eu64(u64 v)
     write(2, &buf[start], 24 - start);
     }
 
-#if ARCH_win64
+#if OS_windows
 i32 QueryPerformanceCounter(i64* count);
 i32 QueryPerformanceFrequency(i64* freq);
 #else
@@ -32,7 +32,7 @@ i32 clock_gettime(i32 clk, pointer ts);   // the library's signature (ParDevice.
 struct HcSpec { i64 sec; i64 nsec; }
 i64 hc_now_us(void)
     {
-#if ARCH_win64
+#if OS_windows
     i64 c = 0; i64 f = 1; QueryPerformanceCounter(&c); QueryPerformanceFrequency(&f);
     return (c / f) * 1000000 + ((c % f) * 1000000) / f;
 #else

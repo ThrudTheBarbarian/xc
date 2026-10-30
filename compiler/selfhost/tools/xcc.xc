@@ -260,7 +260,7 @@ class DriverOptions
         // "Exec format error". `ARCH_<arch>` is predefined by the compiler
         // building this file, so the answer is known here with no host probe.
         //
-        // ORDER MATTERS: `-A win64` predefines ARCH_win64 AND ARCH_x86_64,
+        // ORDER MATTERS: `-A win64` predefines OS_windows AND ARCH_x86_64,
         // because win64 IS x86-64 — it is the same architecture with a
         // different container and ABI. Testing x86_64 first made the Windows
         // compiler default to emitting Linux ELFs. The more specific platform
@@ -1181,6 +1181,33 @@ String* androidSonameOf(String* path)
 // after the base set, each by its soname (bug 460). Without them the image had
 // no DT_NEEDED for a library it calls into, and bionic had nothing to resolve
 // those imports in.
+// arm64 Linux: the imported libraries' DT_RUNPATH, $ORIGIN then where each
+// was linked from (the reference's arm64ElfRunpath); 0 when it imports none,
+// and always for android, whose images carry none.
+String* arm64ElfRunpath(DriverOptions* d, TargetRow* row)
+{
+    if (!row.os().equals(String.withCString("linux"))) return (String*)0;
+    Array* nl = d.fe().neededLibs();
+    String* rp = String.withCString("$ORIGIN");
+    bool any = false;
+    Array* dirs = new Array();
+    for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
+        String* lp = (String*)nl.get(i);
+        if (!lp.hasSuffix(String.withCString(".so"))) continue;
+        String* dir = standardPath(lp.deletingLastPathComponent());
+        bool seen = false;
+        for (u32 k = (u32)0; k < dirs.count(); k = k + (u32)1)
+            if (((String*)dirs.get(k)).equals(dir)) seen = true;
+        if (dir.byteLength() > (u32)0 && !seen) {
+            dirs.add((Object*)dir);
+            rp.appendCString(":");
+            rp.append(dir);
+            any = true;
+        }
+    }
+    return any ? rp : (String*)0;
+}
+
 Array* androidNeededWithImports(DriverOptions* d, string base)
 {
     String* all = String.withCString(base);
@@ -4165,7 +4192,7 @@ void cSplitLink(DriverOptions* d)
     // Linked as the program was compiled: on x86-64 that is the dynamic
     // glibc link by default (an object-only link is otherwise the static
     // musl one), which the par runtime's dlopen of a GPU library needs, and
-    // which Par.xc was told of (LINK_DYNAMIC).
+    // which Par.xc was told of (LIBC_glibc).
     if (isX86_64(d) && d.caps().dynamic()) {
         noteLinkFlags(d);
         linkX86_64Glibc(d, String.withCString(""));
@@ -4333,6 +4360,7 @@ void main(void)
         Process.exit((i32)1); return;
     }
     if (d.emitLib() && !isWasm(d) && !isX86_64(d) && !isArm9(d) && !isAndroid(d)
+        && (d.targetRow() == (TargetRow*)0 || !d.targetRow().exeFormat().equals(String.withCString("elf-pie")))
         && !isIos(d) && !d.arch().equals(String.withCString("arm64"))
         && !d.arch().equals(String.withCString("win64"))) {
         Stdio.printf("xcc: error: --emit-lib is not supported for '%s' "
@@ -4559,12 +4587,8 @@ void main(void)
 // The bundle's platform directory for the target: <os>-<arch>.
 String* bundlePlatform(DriverOptions* d)
 {
-    if (isWasm(d)) return String.withCString("wasm32");
-    if (isAndroid(d)) return String.withCString("android-arm64");
-    if (isIos(d)) return String.withCString("ios-arm64");
-    if (isX86_64(d)) return String.withCString("linux-x86_64");
-    if (isArm9(d)) return String.withCString("xtos-arm9");
-    if (d.arch().equals(String.withCString("win64"))) return String.withCString("windows-x86_64");
+    // The row's (the target table); an arch no row has keeps macOS's.
+    if (d.targetRow() != (TargetRow*)0) return d.targetRow().bundlePlatform();
     return String.withCString("macos-arm64");
 }
 
@@ -4943,6 +4967,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         u32 aMi = Arm64Asm.appendModInit(as, aData, aFix);
         ElfArm64* w = new ElfArm64();
         w.setInterp(lrow.interp());
+        w.setRunpath(arm64ElfRunpath(d, lrow));
         if (d.emitLib()) {
             // A real Android shared library: no crt and no glue (that is the
             // APK payload's shape), its own public API exported — the
@@ -6897,18 +6922,10 @@ DriverOptions* parseDriverArgs(void)
         o.setInput(a);
         i = i + (u32)1;
     }
-    // Android shares the arm64 ISA macro with macOS; the platform layer is
-    // what tells library source which one it is building for.
-    if (isAndroid(d))
-        o.defs().add((Object*)String.withCString("PLATFORM_android=1"));
-    // A dynamically linked x86-64 executable can load libraries at run time
-    // (dlopen): library source that needs to (ParVulkan.xc) keys on this.
     // The dynamic glibc link is the x86-64 default (-static: musl); settled
     // here, before the front end is told, as the reference settles it while
     // reading the options. checkCapabilities refuses the bad combinations.
     d.caps().resolveDynamic(isX86_64(d));
-    if (isX86_64(d) && d.caps().dynamic())
-        o.defs().add((Object*)String.withCString("LINK_DYNAMIC=1"));
     finishDriverArgs(d);
     return d;
 }

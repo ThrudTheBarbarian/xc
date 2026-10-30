@@ -1689,6 +1689,22 @@ static NSString *androidNeededCsvWithImports(XTCommandLineOptions *opts, NSStrin
     return androidNeededCsv(opts, [all componentsJoinedByString:@","]);
 }
 
+// arm64 Linux: the libraries the program imported are found beside it
+// ($ORIGIN) or where each was linked from, as the x86-64 glibc link has them;
+// "-" (none) when it imports none, and always for android, whose images carry
+// no DT_RUNPATH.
+static NSString *arm64ElfRunpath(XTTarget *row, NSArray<NSString *> *neededLibs) {
+    if (![row.os isEqualToString:@"linux"]) return @"-";
+    NSMutableArray<NSString *> *dirs = [NSMutableArray array];
+    for (NSString *lib in neededLibs) {
+        if (![lib hasSuffix:@".so"]) continue;
+        NSString *dir = [lib stringByDeletingLastPathComponent];
+        if (dir.length && ![dirs containsObject:dir]) [dirs addObject:dir];
+    }
+    if (!dirs.count) return @"-";
+    return [@"$ORIGIN:" stringByAppendingString:[dirs componentsJoinedByString:@":"]];
+}
+
 static int linkAndroidSelfHost(const char *argv0, XTCommandLineOptions *opts,
                                NSString *support, NSString *asmPath, NSString *outPath,
                                NSArray<NSString *> *neededLibs) {
@@ -1726,7 +1742,8 @@ static int linkAndroidSelfHost(const char *argv0, XTCommandLineOptions *opts,
     int rc = runChild(ln, @[@"--android", @"exe", @"_start", @"-",
                             androidNeededCsvWithImports(opts, [lrow.needed componentsJoinedByString:@","],
                                                         neededLibs),
-                            combinedPath, outPath, @"-", lrow.interp ?: @"-"]);
+                            combinedPath, outPath, @"-", lrow.interp ?: @"-",
+                            arm64ElfRunpath(lrow, neededLibs)]);
     if (!opts.verbose) [fm removeItemAtPath:combinedPath error:NULL];
     if (rc == 0 && !opts.quiet)
         fprintf(stderr, "xcc: %s aarch64 ELF (self-hosted, no clang) -> '%s'%s\n",
@@ -1754,10 +1771,14 @@ static int linkAndroidShared(const char *argv0, XTCommandLineOptions *opts,
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *support = resolveSupportRoot(argv0, opts);
     NSString *ln = resolveSiblingTool(argv0, @"xcc-ln-arm64");
-    NSString *rt = support ? [support stringByAppendingPathComponent:@"arm64/runtime/rt-android.s"] : nil;
+    // The row's runtime and libraries (android's or arm64 Linux's).
+    XTTarget *lrow = opts.effectiveTarget;
+    NSString *rt = support ? [support stringByAppendingPathComponent:[@"arm64/runtime" stringByAppendingPathComponent:lrow.runtime]] : nil;
     if (!support || !ln || !rt || ![fm fileExistsAtPath:rt]) {
-        fprintf(stderr, "xcc: error: -A android --emit-lib needs the android runtime "
-                        "(xcc-ln-arm64 + support/arm64/runtime/rt-android.s)\n");
+        fprintf(stderr, "xcc: error: -A %s --emit-lib needs the %s runtime "
+                        "(xcc-ln-arm64 + support/arm64/runtime/%s)\n",
+                [lrow.os isEqualToString:@"android"] ? "android" : lrow.name.UTF8String,
+                [lrow.os isEqualToString:@"android"] ? "android" : lrow.name.UTF8String, lrow.runtime.UTF8String);
         return 1;
     }
     NSString *asmText = [NSString stringWithContentsOfFile:asmPath
@@ -1802,16 +1823,17 @@ static int linkAndroidShared(const char *argv0, XTCommandLineOptions *opts,
 
     NSString *soname = outPath.lastPathComponent;
     int rc = runChild(ln, @[@"--android", @"so", soname, exportsPath,
-                            androidNeededCsvWithImports(opts, @"libc.so,libm.so,libdl.so",
+                            androidNeededCsvWithImports(opts, [lrow.needed componentsJoinedByString:@","],
                                                         neededLibs),
-                            elfPath, outPath, ifacePath]);
+                            elfPath, outPath, ifacePath, @"-", arm64ElfRunpath(lrow, neededLibs)]);
+    const char *tname = [lrow.os isEqualToString:@"android"] ? "android" : lrow.name.UTF8String;
     if (rc != 0) {
-        fprintf(stderr, "xcc: error: android shared-library link failed\n");
+        fprintf(stderr, "xcc: error: %s shared-library link failed\n", tname);
         return 1;
     }
     if (!opts.quiet)
-        fprintf(stderr, "xcc: android aarch64 shared library -> '%s'  (soname %s)\n",
-                outPath.UTF8String, soname.UTF8String);
+        fprintf(stderr, "xcc: %s aarch64 shared library -> '%s'  (soname %s)\n",
+                tname, outPath.UTF8String, soname.UTF8String);
     return 0;
 }
 
@@ -4744,11 +4766,11 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // doesn't care about (e.g. -O passes through to cg).
     NSMutableArray<NSString *> *feArgs = [NSMutableArray array];
     if (opts.useArm9Backend) {
-        // ARMv7-A / AArch32 (Zynq Cortex-A9): libs from support/arm9/, ARCH_arm9.
+        // ARMv7-A / AArch32 (Zynq Cortex-A9): libs from support/arm9/, ARCH_armv7.
         [feArgs addObjectsFromArray:@[@"-m", @"arm9"]];
     } else if (opts.useArm64Backend) {
         [feArgs addObjectsFromArray:@[@"-m", @"arm64"]];
-        // The iOS platform LAYER (support/ios/lib, PLATFORM_ios) is the front
+        // The iOS platform LAYER (support/ios/lib, OS_ios) is the front
         // end's business too: without this the front end saw plain arm64 and
         // the prelude the port found was invisible to the reference.
         if (opts.applePlatform) [feArgs addObjectsFromArray:@[@"-A", opts.applePlatform]];
@@ -4757,7 +4779,7 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         // 6502 memory model. (Was a temporary `-m arm64` shim through M2.5.)
         [feArgs addObjectsFromArray:@[@"-m", @"atarist"]];
     } else if (opts.useWin64Backend) {
-        // x86-64 Windows: libs from support/win64+x86_64, ARCH_x86_64+ARCH_win64.
+        // x86-64 Windows: libs from support/win64+x86_64, ARCH_x86_64+OS_windows.
         [feArgs addObjectsFromArray:@[@"-m", @"win64"]];
     } else if (opts.targetName) {
         [feArgs addObjectsFromArray:@[@"-m", opts.targetName]];
@@ -4776,14 +4798,6 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     [opts.defines enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSString *v, BOOL *s) {
         [feArgs addObject:[NSString stringWithFormat:@"-D%@=%@", k, v]];
     }];
-    // Android shares the arm64 ISA macro with macOS; the platform layer is
-    // what tells library source which one it is building for.
-    if (opts.androidTarget)
-        [feArgs addObject:@"-DPLATFORM_android=1"];
-    // A dynamically linked x86-64 executable can load libraries at run time
-    // (dlopen): library source that needs to (ParVulkan.xc) keys on this.
-    if (opts.useX86_64Backend && opts.dynamicGlibc)
-        [feArgs addObject:@"-DLINK_DYNAMIC=1"];
     // Warning suppressions. Every -Wno- category is diagnosed by the FRONT END
     // (lexer / preprocessor / sema), so a flag the dispatcher keeps to itself
     // silences nothing: `xcc -Wno-comment` still printed the warning while
@@ -5155,7 +5169,7 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
             // have told you either. A loud refusal until the real thing exists
             // (an android .so is its own link: no glue, no crt, exported API,
             // soname + the base DT_NEEDED set).
-            : (opts.androidTarget && opts.emitLib && !opts.compileOnly)
+            : ([opts.effectiveTarget.exeFormat isEqualToString:@"elf-pie"] && opts.emitLib && !opts.compileOnly)
             ? linkAndroidShared(argv0, opts, tmpAsm, opts.outputPath, ifaceJson, neededLibs)
             : (opts.useArm64Backend && opts.emitLib && !opts.compileOnly)
             ? linkArm64Shared(argv0, opts, tmpAsm, opts.outputPath, ifaceJson, neededLibs)

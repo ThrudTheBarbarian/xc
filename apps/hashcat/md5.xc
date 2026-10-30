@@ -51,7 +51,7 @@ void hc_eu64(u64 v)
 #endif
 
 // A monotonic microsecond clock, measured the same way on every target.
-#if ARCH_win64
+#if OS_windows
 i32 QueryPerformanceCounter(i64* count);
 i32 QueryPerformanceFrequency(i64* freq);
 #else
@@ -62,7 +62,7 @@ struct HcSpec { i64 sec; i64 nsec; }
 
 i64 hc_now_us(void)
     {
-#if ARCH_win64
+#if OS_windows
     i64 c = 0;
     i64 f = 1;
     QueryPerformanceCounter(&c);

@@ -644,7 +644,7 @@ static NSString* sExecutablePath = nil;
                     continue;
                     }
                 // arm9 (ARMv7-A / AArch32, Zynq Cortex-A9): like arm64, no 6502
-                // memory model; libs from support/arm9/, ARCH_arm9 predefined.
+                // memory model; libs from support/arm9/, ARCH_armv7 predefined.
                 if ([spec isEqualToString:@"arm9"])
                     {
                     opts.targetName = spec;
@@ -662,7 +662,7 @@ static NSString* sExecutablePath = nil;
                     continue;
                     }
                 // x86-64 Windows (Win64 ABI, mingw PE): libs from support/win64/,
-                // ARCH_x86_64 + ARCH_win64. Same ISA as x86_64, different ABI/format.
+                // ARCH_x86_64 + OS_windows. Same ISA as x86_64, different ABI/format.
                 if ([spec isEqualToString:@"win64"] || [spec isEqualToString:@"windows"])
                     {
                     opts.targetName = @"win64";
@@ -1546,13 +1546,6 @@ static NSString* sExecutablePath = nil;
         }
     }
 
-    // arm64 Linux has no library form yet, as in the port.
-    if (opts.emitLib && [opts.effectiveTarget.name isEqualToString:@"arm64-linux"])
-        {
-        fprintf(stderr, "xcc: error: --emit-lib is not supported for 'arm64-linux' "
-                        "(it is for arm64, ios, android, x86_64, win64, arm9 and wasm32)\n");
-        return nil;
-        }
     // -f[no-]thread-safe-arc on a target with no threads is an error, as in the
     // port: there is no atomic reference count to choose.
     BOOL threadless = opts.useM68kBackend || (!opts.useArm64Backend && !opts.useArm9Backend
@@ -1958,7 +1951,7 @@ static NSString* sExecutablePath = nil;
     NSString* key = self.useWin64Backend ? @"win64" : self.useX86_64Backend ? @"x86_64"
                   : self.useWasm32Backend ? @"wasm32" : self.useArm9Backend ? @"arm9"
                   : self.useM68kBackend ? @"m68k"
-                  : (self.androidTarget || self.defines[@"PLATFORM_android"] != nil) ? @"android"
+                  : self.androidTarget ? @"android"
                   : self.applePlatform ?: (self.useArm64Backend ? @"arm64" : @"xt6502");
     // The -A row (or the one the driver handed the front end) stands while it
     // is the same code generator as the flags' target: android, iOS and the

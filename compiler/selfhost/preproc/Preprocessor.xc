@@ -110,6 +110,7 @@ class IfFrame
     String* _currentPackage;
     String* _arch;    // of String@
     String* _platformDir; // ios / ios-sim / android: tried before _arch in the third-party tree, or 0
+    Array* _libExts;      // the target row's library extensions, in order, or 0 (decided by _arch)
     Array* _warnings; // of String@
     u32 _goal;        // #goal: 0 none, 1 speed, 2 accuracy (the unit's default goal)
     // The standard library (bug 637). `_stdlibDirs` are support/<plat>/lib and
@@ -169,6 +170,7 @@ class IfFrame
         _currentPackage = (String*)0;
         _arch = (String*)0;
         _platformDir = (String*)0;
+        _libExts = (Array*)0;
         _warnings = new Array();
         _goal = (u32)0;
         }
@@ -177,6 +179,10 @@ class IfFrame
     // The target, for the one directive that is target-specific.
     // The target's own directory in the third-party tree (ios, ios-sim,
     // android), tried before the arch's. As the reference's targetPlatformName.
+    void setLibExts(Array* e)
+        {
+        _libExts = e;
+        }
     void setPlatformDir(String* p)
         {
         _platformDir = p;
@@ -1834,6 +1840,14 @@ class IfFrame
             // so a program naming any Win32 library beyond the three bundled
             // stubs could not be compiled (bug 120).
             Array* exts = new Array();
+            // The target row's order when the driver gave one (the reference's
+            // sharedLibExtensions); else decided by the arch, as before.
+            if (_libExts != (Array*)0)
+                {
+                for (u32 xe = (u32)0; xe < _libExts.count(); xe = xe + (u32)1)
+                    exts.add(_libExts.get(xe));
+                }
+            else
             if (_arch != 0 && _arch.equals(String.withCString("win64")))
                 {
                 // The xtc DLL first — it carries the `.xtc_iface` section the

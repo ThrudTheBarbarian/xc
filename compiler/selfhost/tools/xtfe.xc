@@ -69,6 +69,14 @@ FeOptions* parseArgs(void)
             i = i + (u32)2;
             continue;
             }
+        // The driver's row, handed over (the reference's --target-row): it
+        // decides, without touching -m and -D.
+        if (a.equals(String.withCString("--target-row")) && i + (u32)1 < argc)
+            {
+            o.setTargetRow(Targets.find(Process.argument(i + (u32)1)));
+            i = i + (u32)2;
+            continue;
+            }
         if (a.equals(String.withCString("-H")) && i + (u32)1 < argc)
             {
             o.setHome(Process.argument(i + (u32)1));

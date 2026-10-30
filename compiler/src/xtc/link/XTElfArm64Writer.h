@@ -43,6 +43,8 @@ NS_ASSUME_NONNULL_BEGIN
 // The executable's PT_INTERP: Android's /system/bin/linker64 unless set (glibc
 // Linux: /lib/ld-linux-aarch64.so.1). Set once, before the image is written.
 + (void)setInterpreter:(NSString*)path;
+// A DT_RUNPATH ("$ORIGIN:<dir>..."), or nil for none (Android's images have none).
++ (void)setRunpath:(nullable NSString*)path;
 + (nullable NSData*)sharedObjectFromText:(NSData*)text
                                     data:(NSData*)data
                                  symbols:(NSDictionary<NSString*, NSNumber*>*)symbols

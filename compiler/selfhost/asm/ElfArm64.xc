@@ -36,18 +36,26 @@ class ElfArm64
     bool _failed;
     String* _why;
     String* _interp;   // an executable's PT_INTERP (the reference's setInterpreter:)
+    String* _runpath;  // a DT_RUNPATH, or 0 for none (the reference's setRunpath:)
 
     void init(void)
         {
         _out = new Array();
         _failed = false;
         _interp = String.withCString("/system/bin/linker64");
+        _runpath = (String*)0;
         }
 
     // Android's linker64 unless set (glibc Linux: /lib/ld-linux-aarch64.so.1).
     void setInterp(String* path)
         {
         _interp = path;
+        }
+
+    // "$ORIGIN:<dir>..." for arm64 Linux; none by default, as Android's.
+    void setRunpath(String* path)
+        {
+        _runpath = (path != (String*)0 && path.byteLength() > (u32)0) ? path : (String*)0;
         }
 
     Array* bytes(void)
@@ -358,12 +366,14 @@ class ElfArm64
             for (u32 i = (u32)0; i < needed.count(); i = i + (u32)1)
                 neededOff.add((Object*)Number.withU32(
                     internStr(dynstr, strOff, (String*)needed.get(i))));
+        u32 runpathOff = _runpath != (String*)0 ? internStr(dynstr, strOff, _runpath) : (u32)0;
 
         u32 nbucket = nsym < (u32)4 ? (u32)1 : nsym / (u32)4 + (u32)1;
         u32 hashSz = ((u32)2 + nbucket + nsym) * (u32)4;
         // The constructor array cannot be longer than the data it sits in.
         u32 miLen = modInitLength <= dataIn.count() ? modInitLength : (u32)0;
-        u32 nDyn = (u32)8 + (isExec ? (u32)0 : (u32)1) + neededOff.count() + (u32)1 + (miLen > (u32)0 ? (u32)2 : (u32)0);
+        u32 nDyn = (u32)8 + (isExec ? (u32)0 : (u32)1) + (_runpath != (String*)0 ? (u32)1 : (u32)0)
+                 + neededOff.count() + (u32)1 + (miLen > (u32)0 ? (u32)2 : (u32)0);
 
         // One RELATIVE per `.quad <symbol>` and one GLOB_DAT per import.
         Array* absFixups = new Array();
@@ -652,6 +662,8 @@ class ElfArm64
         // the loader's lookup scope.
         if (!isExec)
             dyn((u32)14, sonameOff);
+        if (_runpath != (String*)0)
+            dyn((u32)29, runpathOff);       // DT_RUNPATH
         dyn((u32)4, hashOff);               // DT_HASH
         dyn((u32)5, strOffB);               // DT_STRTAB
         dyn((u32)6, symOff);                // DT_SYMTAB

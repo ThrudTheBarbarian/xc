@@ -328,9 +328,6 @@ class FeOptions
             return _targetRow;
         if (_libPlatform != (String*)0)
             return Targets.find(_libPlatform);
-        for (u32 i = (u32)0; i < _defs.count(); i = i + (u32)1)
-            if (((String*)_defs.get(i)).hasPrefix(String.withCString("PLATFORM_android")))
-                return Targets.find(String.withCString("android"));
         return Targets.find(target());
         }
     void setTargetRow(TargetRow* r)
@@ -2374,12 +2371,11 @@ Preprocessor* buildPP(FeOptions* o)
     // iOS and Android are the arm64 back end, each with its own libraries.
     // The row's platform layer when the driver gave one (the target table).
     String* plat = o.targetRow() != (TargetRow*)0 ? o.targetRow().platformLayer() : o.libPlatform();
-    for (u32 i = (u32)0; o.targetRow() == (TargetRow*)0 && plat == (String*)0 && i < o.defs().count(); i = i + (u32)1)
-        if (((String*)o.defs().get(i)).hasPrefix(String.withCString("PLATFORM_android")))
-            plat = String.withCString("android");
     if (plat != (String*)0 && (plat.equals(String.withCString("ios")) || plat.equals(String.withCString("ios-sim"))
-                               || plat.equals(String.withCString("android"))))
+                               || plat.equals(String.withCString("android")) || plat.equals(String.withCString("linux-arm64"))))
         pp.setPlatformDir(plat);
+    if (o.targetRow() != (TargetRow*)0)
+        pp.setLibExts(o.targetRow().libExts());
     for (u32 i = (u32)0; i < o.incs().count(); i = i + (u32)1)
         pp.addIncludePath((String*)o.incs().get(i));
     for (u32 i = (u32)0; i < o.libs().count(); i = i + (u32)1)
@@ -2477,64 +2473,29 @@ void predefine(Preprocessor* pp, FeOptions* o)
         pp.define(String.withCString("XT_PRINTF_DATA_BUF"), String.withCString("$0482"));
         }
 
-    // The target table's library defines (step 3), beside the old ones until
-    // the libraries move.
-    if (o.targetRow() != (TargetRow*)0)
+    // The target table's library defines: ARCH_<cpu>, OS_<os> (with OS_darwin
+    // and OS_unix where they hold), LIBC_<libc> and ENV_simulator.
+    //
+    // NOT a silent default. When the ARCH_ macros were a chain of their own,
+    // wasm32 was missing from it and fell through to ARCH_6502 — so the
+    // shipped compiler built wasm against the 6502 branches of every shared
+    // library, and a stored callback ended up trapping inside
+    // _xtc_weak_register (bug 083). A target with no row stops here.
+    if (o.targetRow() == (TargetRow*)0)
         {
-        Array* ms = o.targetRow().macros();
-        for (u32 i = (u32)0; i < ms.count(); i = i + (u32)1)
-            pp.define((String*)ms.get(i), String.withCString("1"));
-        }
-    // The platform LAYER's defines, beside the ISA's: ARCH_arm64 says what
-    // the code is, PLATFORM_ios says where it runs (and _sim which flavour).
-    if (o.libPlatform() != (String*)0 && o.libPlatform().hasPrefix(String.withCString("ios")))
-        {
-        pp.define(String.withCString("PLATFORM_ios"), String.withCString("1"));
-        if (o.libPlatform().equals(String.withCString("ios-sim")))
-            pp.define(String.withCString("PLATFORM_ios_sim"), String.withCString("1"));
-        }
-    pp.define(String.withCString("BANK_DATA"), String.withCString("0"));
-    pp.define(String.withCString("BANK_CODE"), String.withCString("1"));
-    pp.define(String.withCString("BANK_C"), String.withCString("2"));
-
-    if (plat.equals(String.withCString("atarist")))
-        pp.define(String.withCString("ARCH_m68k"), String.withCString("1"));
-    else if (plat.equals(String.withCString("win64")))
-        {
-        // Windows is x86-64 — the ISA guard AND the OS guard both apply.
-        pp.define(String.withCString("ARCH_x86_64"), String.withCString("1"));
-        pp.define(String.withCString("ARCH_win64"), String.withCString("1"));
-        }
-    else if (plat.equals(String.withCString("x86_64")))
-        pp.define(String.withCString("ARCH_x86_64"), String.withCString("1"));
-    else if (plat.equals(String.withCString("arm9")))
-        pp.define(String.withCString("ARCH_arm9"), String.withCString("1"));
-    else if (plat.equals(String.withCString("arm64")))
-        pp.define(String.withCString("ARCH_arm64"), String.withCString("1"));
-    else if (plat.equals(String.withCString("wasm32")))
-        pp.define(String.withCString("ARCH_wasm32"), String.withCString("1"));
-    else if (plat.equals(String.withCString("xt6502")))
-        pp.define(String.withCString("ARCH_6502"), String.withCString("1"));
-    else
-        {
-        // NOT a silent default. wasm32 was missing from this chain and fell
-        // through to ARCH_6502 — so the shipped compiler built wasm against the
-        // 6502 branches of every shared library. Object.hash took the `#if
-        // ARCH_6502` arm and returned a u8 folded from a u16 pointer, which is
-        // how a stored callback ended up trapping inside _xtc_weak_register
-        // (bug 083).
-        //
-        // platformOf() a hundred lines below carries the same lesson, learned
-        // the same way and written down at the time: "A default that is a valid
-        // answer can never announce itself." This chain kept its silent default
-        // anyway. It does not have one now.
-        Stdio.printf("xc-fe: error: no ARCH_ macro is mapped for platform '%s'\n",
+        Stdio.printf("xc-fe: error: no target row for platform '%s'\n",
                      plat.cString());
-        Stdio.printf("       (a shared library dispatches on ARCH_<arch>; falling\n"
+        Stdio.printf("       (a shared library dispatches on ARCH_<cpu> and OS_<os>; falling\n"
                      "        back to another target's branch compiles something\n"
                      "        that builds, runs, and is wrong)\n");
         Process.exit((i32)2);
         }
+    Array* ms = o.targetRow().macros();
+    for (u32 i = (u32)0; i < ms.count(); i = i + (u32)1)
+        pp.define((String*)ms.get(i), String.withCString("1"));
+    pp.define(String.withCString("BANK_DATA"), String.withCString("0"));
+    pp.define(String.withCString("BANK_CODE"), String.withCString("1"));
+    pp.define(String.withCString("BANK_C"), String.withCString("2"));
 
     // A literal in the driver too — the heap pointer's width in the SOURCE's
     // eyes, not the target's.

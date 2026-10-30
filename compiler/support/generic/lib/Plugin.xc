@@ -184,6 +184,8 @@ class Plugin : Object
         return String.withCString("windows-x86_64");
 #elif OS_android
         return String.withCString("android-arm64");
+#elif OS_linux && ARCH_arm64
+        return String.withCString("linux-arm64");   // as the driver names the bundle's directory
 #elif OS_linux
         return String.withCString("linux-x86_64");
 #elif ARCH_wasm32

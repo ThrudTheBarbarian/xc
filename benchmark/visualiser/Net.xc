@@ -52,7 +52,7 @@ class Net
         {
         if (_net_tls) { return true; }
         _net_tls = HttpTls.install();
-#if ARCH_win64
+#if OS_windows
         // HttpTls before xcc 0.76 looks for a PEM bundle only, and Windows has
         // none: read the certificate store through libtls 1.0.1 directly.
         if (!_net_tls && tls_require(1))

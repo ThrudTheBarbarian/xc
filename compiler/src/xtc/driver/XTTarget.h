@@ -51,6 +51,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, readonly, copy, nullable) NSString* runtime;
 @property(nonatomic, readonly, copy, nullable) NSString* interp;
 @property(nonatomic, readonly, copy) NSArray<NSString*>* needed;
+// A bundle's platform directory, <os>-<cpu> (the port's --bundle writes it).
+@property(nonatomic, readonly, copy) NSString* bundlePlatform;
+// A library's file extensions, in the order `#import <X>` tries lib<X>.<ext>.
+@property(nonatomic, readonly, copy) NSArray<NSString*>* libExts;
 
 // Every row, in the order both compilers list them.
 + (NSArray<XTTarget*>*)rows;

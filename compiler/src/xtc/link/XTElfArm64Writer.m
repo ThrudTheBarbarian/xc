@@ -49,6 +49,7 @@ enum
 
 static const char* kInterp = "/system/bin/linker64";
 static char sInterpBuf[256];
+static NSString* sRunpath = nil;
 
 static void put8v(NSMutableData* d, uint8_t v)
     {
@@ -183,6 +184,12 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
     }
 
 @implementation XTElfArm64Writer
+
++ (void)setRunpath:(nullable NSString*)path
+    {
+    // As the port's setRunpath: none by default.
+    sRunpath = path.length ? [path copy] : nil;
+    }
 
 + (void)setInterpreter:(NSString*)path
     {
@@ -332,12 +339,13 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
     NSMutableArray<NSNumber*>* neededOff = [NSMutableArray array];
     for (NSString* n in needed ?: @[])
         [neededOff addObject:@(intern(n))];
+    uint32_t runpathOff = sRunpath ? intern(sRunpath) : 0;
 
     NSUInteger nbucket = nsym < 4 ? 1 : nsym / 4 + 1;
     NSUInteger hashSz = (2 + nbucket + nsym) * 4;
     // The constructor array cannot be longer than the data it was appended to.
     NSUInteger miLen = (modInitLength <= dataIn.length) ? modInitLength : 0;
-    NSUInteger nDyn = 8 + (isExec ? 0 : 1) + neededOff.count + 1 + (miLen ? 2 : 0);
+    NSUInteger nDyn = 8 + (isExec ? 0 : 1) + (sRunpath ? 1 : 0) + neededOff.count + 1 + (miLen ? 2 : 0);
 
     // One RELATIVE per `.quad <symbol>` — an absolute address the loader biases —
     // and one GLOB_DAT per import.
@@ -633,6 +641,8 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
     // loader's lookup scope.
     if (!isExec)
         dyn(DT_SONAME, sonameOff);
+    if (sRunpath)
+        dyn(29, runpathOff);   // DT_RUNPATH
     dyn(DT_HASH, hashOff);
     dyn(DT_STRTAB, strOffB);
     dyn(DT_SYMTAB, symOff);

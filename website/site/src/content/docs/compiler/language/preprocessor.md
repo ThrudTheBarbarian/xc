@@ -261,35 +261,49 @@ The name may also be joined to the flag: `-DDEBUG` is the same as `-D DEBUG`.
 
 ## Predefined macros
 
-The driver predefines an `ARCH_<arch>` sentinel for the target being built, so a
-single source file can serve every backend. The standard library uses this to
-keep one copy of each class:
+The driver predefines a few macros for the target being built, so one source
+file can serve every target. The standard library uses them to keep one copy of
+each class. They come in three families:
+
+- `ARCH_<cpu>`: the instruction set (`ARCH_arm64`, `ARCH_x86_64`, `ARCH_armv7`,
+  `ARCH_wasm32`, `ARCH_m68k`, `ARCH_6502`).
+- `OS_<os>`: the operating system (`OS_macos`, `OS_ios`, `OS_android`,
+  `OS_linux`, `OS_windows`, `OS_xtos`, `OS_web`, `OS_tos`, `OS_xt`), plus
+  `OS_darwin` for macOS and iOS, and `OS_unix` for the Unix-like ones.
+- `LIBC_<libc>`: the C library underneath (`LIBC_darwin`, `LIBC_bionic`,
+  `LIBC_glibc`, `LIBC_musl`, `LIBC_msvcrt`, `LIBC_xtos`). A target with no C
+  library defines none.
+
+The iOS simulator also defines `ENV_simulator`.
 
 | Target | Defined |
 |---|---|
-| `-A arm64` | `ARCH_arm64` |
-| `-A android` | `ARCH_arm64` **and** `PLATFORM_android` |
-| `-A x86_64` | `ARCH_x86_64` |
-| `-A win64` | `ARCH_x86_64` **and** `ARCH_win64` |
-| `-A arm9` | `ARCH_arm9` |
-| `-A m68k` | `ARCH_m68k` |
-| `-A wasm32` | `ARCH_wasm32` |
-| `-A 6502` | `ARCH_6502` |
+| `-A arm64-macos` (`arm64`) | `ARCH_arm64 OS_macos OS_darwin OS_unix LIBC_darwin` |
+| `-A arm64-ios` (`ios`) | `ARCH_arm64 OS_ios OS_darwin OS_unix LIBC_darwin` |
+| `-A arm64-ios-sim` (`ios-sim`) | the same, and `ENV_simulator` |
+| `-A arm64-android` (`android`) | `ARCH_arm64 OS_android OS_unix LIBC_bionic` |
+| `-A arm64-linux` | `ARCH_arm64 OS_linux OS_unix LIBC_glibc` |
+| `-A x86_64-linux` (`x86_64`) | `ARCH_x86_64 OS_linux OS_unix LIBC_glibc` |
+| `-A x86_64-linux-musl` (`x86_64 -static`) | `ARCH_x86_64 OS_linux OS_unix LIBC_musl` |
+| `-A x86_64-windows` (`win64`) | `ARCH_x86_64 OS_windows LIBC_msvcrt` |
+| `-A armv7-xtos` (`arm9`) | `ARCH_armv7 OS_xtos LIBC_xtos` |
+| `-A wasm32-web` (`wasm32`) | `ARCH_wasm32 OS_web` |
+| `-A m68k-tos` (`m68k`) | `ARCH_m68k OS_tos` |
+| `-A 6502-xt` (`6502`) | `ARCH_6502 OS_xt` |
 
-Windows defines both because it uses the x86-64 instruction set. ISA-guarded
-code (inline assembly, register names) keys off `ARCH_x86_64`, and OS-specific
-code (calling convention, system calls) keys off `ARCH_win64`. Android is the
-arm64 instruction set on a different operating system, so it adds
-`PLATFORM_android`; the iOS targets add `PLATFORM_ios` (and `PLATFORM_ios_sim`
-for the simulator) in the same way.
+`xcc --print-target -A <target>` prints the list for any target. Test the family
+that matters: code that depends on the instruction set (inline assembly,
+register names) keys off `ARCH_`, code that depends on the system (system calls,
+calling conventions) keys off `OS_`, and code that calls the C library directly
+keys off `LIBC_`.
 
 ```c
 #if ARCH_6502
     // a byte-oriented path, and no i64 arithmetic
-#elif ARCH_win64
+#elif OS_windows
     // kernel32, and the Microsoft x64 calling convention
 #else
-    // the 64-bit hosts
+    // the 64-bit Unix-like hosts
 #endif
 ```
 

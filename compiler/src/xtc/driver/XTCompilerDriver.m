@@ -1210,40 +1210,12 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     [pp defineMacro:@"BANK_CODE" value:@"1"];
     [pp defineMacro:@"BANK_C" value:@"2"];
 
-    if (_options.m68kPlatform)
-        [pp defineMacro:@"ARCH_m68k" value:@"1"];
-    else if (_options.useWin64Backend)
-        {
-        // Windows is x86-64 ISA — define ARCH_x86_64 so ISA-guarded library
-        // sources compile, plus ARCH_win64 for OS-specific dispatch.
-        [pp defineMacro:@"ARCH_x86_64" value:@"1"];
-        [pp defineMacro:@"ARCH_win64" value:@"1"];
-        }
-    else if (_options.useX86_64Backend)
-        [pp defineMacro:@"ARCH_x86_64" value:@"1"];
-    else if (_options.useWasm32Backend)
-        [pp defineMacro:@"ARCH_wasm32" value:@"1"];
-    else if (_options.useArm9Backend)
-        [pp defineMacro:@"ARCH_arm9" value:@"1"];
-    else if (arm64)
-        [pp defineMacro:@"ARCH_arm64" value:@"1"];
-    else
-        [pp defineMacro:@"ARCH_6502" value:@"1"];
-    // The platform LAYER's defines, beside the ISA's: PLATFORM_ios says where
-    // the code runs, PLATFORM_ios_sim which flavour (iOS.md stage 4). AFTER
-    // the else-if chain above — inserted inside it, this `if` captured the
-    // chain's final `else` and every non-iOS arm64 build got ARCH_6502.
-    // The target table's library defines (step 3), beside the ones above until
-    // the libraries move onto them. A front end run on its own (the diff
-    // harnesses) finds its row from its flags, as the port's does.
+    // The target table's library defines: ARCH_<cpu>, OS_<os> (with OS_darwin
+    // and OS_unix where they hold), LIBC_<libc> and ENV_simulator. A front end
+    // run on its own (the diff harnesses) finds its row from its flags, as the
+    // port's does.
     for (NSString* m in _options.effectiveTarget.macros)
         [pp defineMacro:m value:@"1"];
-    if (_options.applePlatform)
-        {
-        [pp defineMacro:@"PLATFORM_ios" value:@"1"];
-        if ([_options.applePlatform isEqualToString:@"ios-sim"])
-            [pp defineMacro:@"PLATFORM_ios_sim" value:@"1"];
-        }
 
     [pp defineMacro:@"XTC_POINTER_WIDTH" value:@"4"];
 
@@ -1369,11 +1341,10 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // first so a stale sibling of the wrong format in a -L dir never gets picked.
     // For win64 the `.dll` is preferred (it carries the `.xtc_iface` section the
     // front end reads); the linker derives the `.dll.a` import lib from it.
-    pp.sharedLibExtensions = _options.useWin64Backend
-                                 ? @[ @"dll", @"dll.a", @"a" ]          // xtc DLL, its import lib, or a system import lib (libuser32.a)
-                             : _options.useWasm32Backend ? @[ @"wasm" ] // W2: lib<X>.wasm (iface in a custom section)
-                             : _options.useArm64Backend  ? @[ @"dylib", @"so" ]
-                                                         : @[ @"so", @"dylib" ];
+    // The row's order (the target table): win64's DLL, its import lib or a
+    // system import lib (libuser32.a); wasm32's lib<X>.wasm; macOS and iOS
+    // .dylib first; android and arm64 Linux .so alone; the rest .so first.
+    pp.sharedLibExtensions = _options.effectiveTarget.libExts;
     // Third-party tree: /opt/xcc/3p — a SIBLING of the versioned install
     // root, so it survives make install's prune and compiler upgrades.
     // XCC_3P overrides (tests, unusual layouts). Probed between the explicit
@@ -2175,10 +2146,9 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // `par` blocks get their Metal source only where Metal exists: macOS on
     // Apple silicon (not iOS for now, not Android).
     // Metal only where it exists: macOS on Apple silicon. The driver runs the
-    // front end for Android as arm64 with -DPLATFORM_android, so androidTarget
-    // alone is not enough to tell (an Android build carried Metal kernels the
-    // shipped compiler, keyed on the define, rightly left out).
-    BOOL androidBuild = _options.androidTarget || _options.defines[@"PLATFORM_android"] != nil;
+    // front end for Android as arm64 with the android row, so androidTarget
+    // alone is not enough to tell.
+    BOOL androidBuild = [_options.effectiveTarget.os isEqualToString:@"android"];
     // -fpar-kernels=all: every form, whatever the target, so a worker on
     // another machine (xcd, ParRemote.xc) finds the one its GPU takes.
     BOOL allK = _options.parKernelsAll;

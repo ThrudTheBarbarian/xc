@@ -603,6 +603,9 @@ int main(int argc, const char *argv[]) {
             // absent or "-"): arm64 Linux names glibc's.
             if (argc >= 10 && strcmp(argv[9], "-") != 0)
                 [XTElfArm64Writer setInterpreter:@(argv[9])];
+            // A DT_RUNPATH, optional (none when absent or "-").
+            if (argc >= 11 && strcmp(argv[10], "-") != 0)
+                [XTElfArm64Writer setRunpath:@(argv[10])];
             NSError *err = nil;
             NSString *src = [NSString stringWithContentsOfFile:inPath
                                                       encoding:NSUTF8StringEncoding error:&err];
