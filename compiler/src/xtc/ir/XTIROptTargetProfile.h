@@ -176,6 +176,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// The back end lowers VFCmp and VSIToFp, which escape-time loops need
 /// (mandelbrot): fcm*/scvtf on arm64, cmpps/cvtdq2ps on x86.
 - (BOOL)vectorizesEscapeLoops;
+/// How many vectors an escape-time loop with a counted inner loop and no
+/// reduction runs side by side (each a run of VF items): their chains
+/// interleave, hiding the latency of one serial chain (a par body's rounds).
+/// 1 is one vector. 4 on arm64 (32 vector registers), 2 on x86-64.
+- (NSUInteger)escapeInterleave;
 
 // YES to rotate a top-tested loop into a bottom-tested one: the loop's exit test
 // is peeled into the preheader (run once) and duplicated at the bottom of the

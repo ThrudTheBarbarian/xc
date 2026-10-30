@@ -156,6 +156,10 @@
     {
     return [self vectorizesLaneShift];
     }
+- (NSUInteger)escapeInterleave
+    {
+    return 1;
+    }
 - (BOOL)vectorizesWideBitSelect
     {
     return NO;
@@ -323,6 +327,11 @@
 - (BOOL)vectorizesLaneShift
     {
     return YES;
+    }
+// 32 vector registers: four chains side by side.
+- (NSUInteger)escapeInterleave
+    {
+    return 4;
     }
 - (BOOL)formsPointerInductionVars
     {
@@ -806,6 +815,11 @@
 - (BOOL)vectorizesLaneShift
     {
     return YES;
+    }
+// 16 vector registers: two chains side by side.
+- (NSUInteger)escapeInterleave
+    {
+    return 2;
     }
 // pmuludq over both lane pairs plus a re-interleave builds the high half of a
 // 32x32 lane product, so constant division vectorises here too.

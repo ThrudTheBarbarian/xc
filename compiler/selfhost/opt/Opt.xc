@@ -73,6 +73,7 @@ class OptProfile
     bool _laneShift;         // back end lowers VLShr (lane shift by a constant)
     bool _iota;              // back end can build the lane-index vector
     bool _escapeVec;         // back end has VFCmp and VSIToFp (escape-time loops)
+    u32 _escapeJam;          // vectors an escape-time loop runs side by side (escapeInterleave)
     bool _floatReduce;       // FLOAT reductions may reassociate (arm64/x86-64)
     bool _orderedFloat;      // an ordered float sum: lanes added in order (arm64)
     bool _bitSelect;         // back end lowers VBsl and VRotl (arm64)
@@ -144,6 +145,7 @@ class OptProfile
         _laneShift = false;
         _iota = false;
         _escapeVec = false;
+        _escapeJam = (u32)1;
         _floatReduce = false;
         _orderedFloat = false;
         _bitSelect = false;
@@ -239,6 +241,8 @@ class OptProfile
         // The float lane compare and the int-to-float lane conversion the
         // escape-time loops need: fcm*/scvtf on arm64, cmpps/cvtdq2ps on x86.
         p._escapeVec = p._laneShift;
+        p._escapeJam = t.equals(String.withCString("arm64")) ? (u32)4
+                     : (t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"))) ? (u32)2 : (u32)1;
         // FLOAT reductions (a reassociation): only where the back end lowers
         // VDiv/VSqrt and a float VReduceAdd — arm64 and x86-64/win64. The
         // vectoriser also requires the source to grant it (see floatRedux).
@@ -427,6 +431,14 @@ class OptProfile
     bool escapeVec(void)
         {
         return _escapeVec;
+        }
+    // How many vectors an escape-time loop with a counted inner loop and no
+    // reduction runs side by side, their chains interleaved: 4 on arm64 (32
+    // vector registers), 2 on x86-64, 1 elsewhere. The reference's
+    // escapeInterleave.
+    u32 escapeJam(void)
+        {
+        return _escapeJam;
         }
 
     bool iota(void)
@@ -19366,6 +19378,8 @@ class BeFact : Object
     Map* _esExit;        // a T0 phi -> its blended value, as E reads it
     u32 _esBytes;
     u32 _esVF;
+    bool _esParItems;    // the item loop of a par body: its items are independent by the language
+    u32 _esJam;          // vectors side by side in this loop (escApply): 1, or the profile's escapeJam
 
     bool vecEscape(IRFunc* fn)
         {
@@ -19473,6 +19487,41 @@ class BeFact : Object
     Set* _esDone;        // headers already rewritten (their scalar loops remain)
     IRFunc* _esFn;
 
+    // Whether `o` is the block's field `field` (lo 1, hi 2) as a par body
+    // reads it: Trunc(Load(FieldAddr(self, #field))), self the method's
+    // object. As the reference (isParField:).
+    bool escIsParField(IROperand* o, i64 field)
+        {
+        if (o == (IROperand*)0 || o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+            return false;
+        IRInsn* t = (IRInsn*)_esDefOf.get((Hashable*)o.val());
+        if (!escIs(t, "Trunc") || t.ops().count() == (u32)0 || ((IROperand*)t.ops().get((u32)0)).kind() != (u8)OPK_USE)
+            return false;
+        IRInsn* l = (IRInsn*)_esDefOf.get((Hashable*)((IROperand*)t.ops().get((u32)0)).val());
+        if (!escIs(l, "Load") || l.ops().count() == (u32)0 || ((IROperand*)l.ops().get((u32)0)).kind() != (u8)OPK_USE)
+            return false;
+        IRInsn* fa = (IRInsn*)_esDefOf.get((Hashable*)((IROperand*)l.ops().get((u32)0)).val());
+        if (!escIs(fa, "FieldAddr") || fa.ops().count() < (u32)2)
+            return false;
+        IROperand* b = (IROperand*)fa.ops().get((u32)0);
+        IROperand* k = (IROperand*)fa.ops().get((u32)1);
+        if (b.kind() != (u8)OPK_USE || _esDefOf.get((Hashable*)b.val()) != (Object*)0 || k.kind() != (u8)OPK_IMMI)
+            return false;
+        return k.imm() == field;
+        }
+
+    // The item loop of a par body (ParImpl$<n>$run, from the block's lo to its
+    // hi): its work items are independent by the language (par.md,
+    // "Independent work items": none may read what another writes), so its
+    // arrays need not be proved distinct. As the reference (parItemLoop).
+    bool escParItemLoop(void)
+        {
+        String* nm = _esFn.name();
+        if (!nm.hasPrefix(String.withCString("ParImpl$")) || !nm.hasSuffix(String.withCString("$run")) || _esBoundConst)
+            return false;
+        return escIsParField(escFrom(_esIvPhi, _esPH), (i64)1) && escIsParField(_esBoundOp, (i64)2);
+        }
+
     bool escRecognise(IRFunc* fn, IRBlock* H)
         {
         if (_esDone.contains((Hashable*)H))
@@ -19481,6 +19530,7 @@ class BeFact : Object
         _esFn = fn;
         if (!escOuter(fn) || !escInner(fn) || !escExitBlock(fn))
             return false;
+        _esParItems = escParItemLoop();
         _esBytes = vectorBytes();
         _esVF = _esBytes / (u32)4;
         if (_esBoundConst && (_esN < (i64)_esVF || _esN > (i64)$7FFFFFFF))
@@ -19984,11 +20034,11 @@ class BeFact : Object
                 || at == _esH || at == _esE || blks.contains((Object*)at))
                 return false;
             String* sr = escRootOf(base.val());
-            if (_esLoadRoots.count() > (u32)0 && (!sr.hasPrefix(String.withCString("s:")) || _esLoadRoots.contains((Hashable*)sr)))
+            if (!_esParItems && _esLoadRoots.count() > (u32)0 && (!sr.hasPrefix(String.withCString("s:")) || _esLoadRoots.contains((Hashable*)sr)))
                 return false;
             Array* roots = _esLoadRoots.allObjects();
             for (u32 i = (u32)0; i < roots.count(); i = i + (u32)1)
-                if (!((String*)roots.get(i)).hasPrefix(String.withCString("s:")))
+                if (!_esParItems && !((String*)roots.get(i)).hasPrefix(String.withCString("s:")))
                     return false;
             }
         // Outside the loop nothing reads a region value; inside it nothing but
@@ -20171,8 +20221,14 @@ class BeFact : Object
             return false;
         if (!(escIs(n, "ZExt") || escIs(n, "SExt") || escIs(n, "Trunc")))
             return false;
+        // Of any integer width, as a Const is: a shift amount is a u8, and a
+        // constant is only read through a splat or as the shift's own
+        // immediate. As the reference.
         i32 k = (i32)0;
-        return escLane32(n.res().ty()) && !n.res().ty().equals(String.withCString("F32"))
+        String* rt = n.res().ty();
+        bool intTy = rt.equals(String.withCString("U8")) || rt.equals(String.withCString("I8"))
+                  || rt.equals(String.withCString("U16")) || rt.equals(String.withCString("I16")) || escLane32(rt);
+        return intTy && !rt.equals(String.withCString("F32"))
             && vecConst(IROperand.useVal(n.res()), _esDefOf, &k);
         }
 
@@ -20526,8 +20582,123 @@ class BeFact : Object
             && c.fpHex().equals(String.withCString("4000000000000000"));
         }
 
+    // The other _esJam - 1 vectors (escApply): copy u runs items viv + u*VF.
+    // Every instruction of VB, VI and VE that depends on viv or on a lane
+    // value is copied, once per copy, after the block's originals, with viv
+    // read as viv + u*VF; a lane phi of VI is copied with it. The trip
+    // counter, its test, VE's step and everything uniform stay single. As
+    // the reference (jamBody:).
+    static bool escJamUses(IRInsn* n, Set* D)
+        {
+        for (u32 q = (u32)0; q < n.ops().count(); q = q + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(q);
+            if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && D.contains((Hashable*)o.val()))
+                return true;
+            }
+        return false;
+        }
+
+    // The originals in order, then each copy's run in turn: a copy's own
+    // instructions stay next to each other, which is what lets the back end
+    // still fuse a lane multiply into the add that takes it.
+    void escJamInsns(IRBlock* b, Array* maps, Set* D, IRValue* skip, Array* lead)
+        {
+        Array* out = new Array();
+        for (u32 i = (u32)0; i < lead.count(); i = i + (u32)1)
+            out.add(lead.get(i));
+        Array* lane = new Array();
+        for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)b.insns().get(i);
+            out.add((Object*)n);
+            if ((skip != (IRValue*)0 && n.res() == skip) || !escJamUses(n, D))
+                continue;
+            if (n.res() != (IRValue*)0)
+                D.add((Hashable*)n.res());
+            if (n.memRes() != (IRValue*)0)
+                D.add((Hashable*)n.memRes());
+            lane.add((Object*)n);
+            }
+        for (u32 u = (u32)0; u < maps.count(); u = u + (u32)1)
+            for (u32 i = (u32)0; i < lane.count(); i = i + (u32)1)
+                out.add((Object*)vecCloneInsn((IRInsn*)lane.get(i), (Map*)maps.get(u), new Map()));
+        b.setInsns(out);
+        }
+
+    void escJam(IRBlock* VB, IRBlock* VI, IRBlock* VE, IRValue* viv, IRValue* vivNext)
+        {
+        Array* maps = new Array();
+        Set* D = new Set();
+        D.add((Hashable*)viv);
+        Array* lead = new Array();
+        for (u32 u = (u32)1; u < _esJam; u = u + (u32)1)
+            {
+            IRValue* vu = escPut(lead, "Add", viv.ty(), IROperand.useVal(viv), IROperand.immI((i64)(u * _esVF), viv.ty()));
+            Map* m = new Map();
+            m.set((Hashable*)viv, (Object*)vu);
+            maps.add((Object*)m);
+            }
+        escJamInsns(VB, maps, D, (IRValue*)0, lead);
+        // VI's lane phis: their copies' results first, so the body's copies
+        // can name them; their operands once the body is copied.
+        Array* lanePhis = new Array();
+        Array* phiRes = new Array();
+        for (u32 i = (u32)0; i < VI.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)VI.phis().get(i);
+            if (p.res() == (IRValue*)0 || !(p.res().ty().hasPrefix(String.withCString("Vec(")) || escJamUses(p, D)))
+                continue;
+            D.add((Hashable*)p.res());
+            Array* rs = new Array();
+            for (u32 u = (u32)0; u < maps.count(); u = u + (u32)1)
+                {
+                IRValue* r = new IRValue(p.res().ty());
+                ((Map*)maps.get(u)).set((Hashable*)p.res(), (Object*)r);
+                rs.add((Object*)r);
+                }
+            lanePhis.add((Object*)p);
+            phiRes.add((Object*)rs);
+            }
+        escJamInsns(VI, maps, D, (IRValue*)0, new Array());
+        Array* phis = new Array();
+        for (u32 i = (u32)0; i < VI.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)VI.phis().get(i);
+            phis.add((Object*)p);
+            u32 k = (u32)0;
+            bool found = false;
+            for (u32 j = (u32)0; j < lanePhis.count(); j = j + (u32)1)
+                if ((IRInsn*)lanePhis.get(j) == p)
+                    {
+                    k = j;
+                    found = true;
+                    }
+            if (!found)
+                continue;
+            for (u32 u = (u32)0; u < maps.count(); u = u + (u32)1)
+                {
+                IRInsn* c = IRInsn.with(String.withCString("Phi"));
+                c.setRes((IRValue*)((Array*)phiRes.get(k)).get(u));
+                for (u32 q = (u32)0; q < p.ops().count(); q = q + (u32)1)
+                    c.add(vecSubst((Map*)maps.get(u), new Map(), (IROperand*)p.ops().get(q)));
+                phis.add((Object*)c);
+                }
+            }
+        VI.setPhis(phis);
+        escJamInsns(VE, maps, D, vivNext, new Array());
+        }
+
     void escApply(IRFunc* fn)
         {
+        // Vectors side by side: a counted inner loop (every lane makes every
+        // trip) and nothing summed across items, so the copies share the trip
+        // and touch only their own items. As the reference.
+        _esJam = (u32)1;
+        u32 jam = _profile != (OptProfile*)0 ? _profile.escapeJam() : (u32)1;
+        if (jam > (u32)1 && _esCounted && _esAccPhis.count() == (u32)0
+            && !(_esBoundConst && _esN < (i64)(_esVF * jam)))
+            _esJam = jam;
         _esMap = new Map();
         _esSplat = new Map();
         _esExit = new Map();
@@ -20548,6 +20719,8 @@ class BeFact : Object
         escVecBody(fn, VB, VI, viv);
         escVecInner(fn, VI, VE);
         escVecLatch(VE, VH, viv, vivNext);
+        if (_esJam > (u32)1)
+            escJam(VB, VI, VE, viv, vivNext);
         escVecExit(VX, viv);
         // PH's additions, before its branch, which now goes to VH.
         for (u32 i = (u32)0; i < _esPre.count(); i = i + (u32)1)
@@ -20609,7 +20782,7 @@ class BeFact : Object
             g.setRes(c);
             g.setPred(String.withCString(_esSigned ? "SLE" : "ULE"));
             g.add(IROperand.useVal(viv));
-            g.add(IROperand.immI(_esN - (i64)_esVF, ivTy));
+            g.add(IROperand.immI(_esN - (i64)(_esVF * _esJam), ivTy));
             VH.insns().add((Object*)g);
             }
         else
@@ -20619,7 +20792,7 @@ class BeFact : Object
             IRValue* c1 = escPut(VH.insns(), "ICmp", b, IROperand.useVal(viv), _esBoundOp);
             ((IRInsn*)VH.insns().get(VH.insns().count() - (u32)1)).setPred(String.withCString(_esSigned ? "SLT" : "ULT"));
             IRValue* rem = escPut(VH.insns(), "Sub", ivTy, _esBoundOp, IROperand.useVal(viv));
-            IRValue* c2 = escPut(VH.insns(), "ICmp", b, IROperand.useVal(rem), IROperand.immI((i64)_esVF, ivTy));
+            IRValue* c2 = escPut(VH.insns(), "ICmp", b, IROperand.useVal(rem), IROperand.immI((i64)(_esVF * _esJam), ivTy));
             ((IRInsn*)VH.insns().get(VH.insns().count() - (u32)1)).setPred(String.withCString(_esSigned ? "SGE" : "UGE"));
             c = escPut(VH.insns(), "And", b, IROperand.useVal(c1), IROperand.useVal(c2));
             }
@@ -21061,7 +21234,7 @@ class BeFact : Object
         IRInsn* inc = IRInsn.with(String.withCString("Add"));
         inc.setRes(vivNext);
         inc.add(IROperand.useVal(viv));
-        inc.add(IROperand.immI((i64)_esVF, viv.ty()));
+        inc.add(IROperand.immI((i64)(_esVF * _esJam), viv.ty()));
         VE.insns().add((Object*)inc);
         IRInsn* br = IRInsn.with(String.withCString("Branch"));
         br.add(IROperand.block(VH));

@@ -134,6 +134,7 @@ static NSUInteger sVecFnBytes = 0;
 // Escape-time loops (mandelbrot): the pass is at the end of this file.
 @interface XTEscapeVec : NSObject
 @property(nonatomic) NSUInteger bytes;
+@property(nonatomic) NSUInteger interleave;   // the profile's escapeInterleave
 - (BOOL)runOnFunction:(XTIRFunction*)fn done:(NSMutableSet<NSValue*>*)done;
 @end
 
@@ -960,6 +961,7 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
         return NO;
     XTEscapeVec* e = [[XTEscapeVec alloc] init];
     e.bytes = [self vectorBytes];
+    e.interleave = prof.escapeInterleave;
     return [e runOnFunction:fn done:sEscDone];
     }
 
@@ -5839,12 +5841,14 @@ static BOOL vecInterleaveFits(XTIRFunction* fn, XTIRBlock* B, XTIRValueId vaccId
     NSMutableSet<NSString*>* _loadRoots;
     NSMutableSet<NSNumber*>* _idxPhis;
     BOOL _counted;
+    NSUInteger _jam;   // vectors side by side in this loop (apply): 1, or the profile's interleave
     XTIRInsn* _tripPhi;
     NSMutableSet<NSNumber*>* _uniform;
     XTIRValue *_viv, *_tripV;
     int64_t _n;
     XTIROperand* _boundOp;
     BOOL _boundConst;
+    BOOL _parItems;    // the item loop of a par body: its items are independent by the language
     XTIRInsn* _tripAnd;
     XTIROperand* _tripOther;
     BOOL _signed;
@@ -6001,11 +6005,43 @@ static BOOL escLane32(XTIRType* t)
     return YES;
     }
 
+// Whether `o` is the block's field `field` (lo 1, hi 2) as a par body reads
+// it: Trunc(Load(FieldAddr(self, #field))), self the method's object.
+- (BOOL)isParField:(XTIROperand*)o field:(int64_t)field
+    {
+    if (o.kind != XTIROperandKindUse)
+        return NO;
+    XTIRInsn* t = _defOf[@(o.valueId)];
+    if (!t || t.opcode != XTIROpTrunc || !t.operands.count || t.operands[0].kind != XTIROperandKindUse)
+        return NO;
+    XTIRInsn* l = _defOf[@(t.operands[0].valueId)];
+    if (!l || l.opcode != XTIROpLoad || !l.operands.count || l.operands[0].kind != XTIROperandKindUse)
+        return NO;
+    XTIRInsn* fa = _defOf[@(l.operands[0].valueId)];
+    if (!fa || fa.opcode != XTIROpFieldAddr || fa.operands.count < 2 || fa.operands[0].kind != XTIROperandKindUse
+        || _defOf[@(fa.operands[0].valueId)] || fa.operands[1].kind != XTIROperandKindImmI)
+        return NO;
+    return fa.operands[1].intValue == field;
+    }
+
+// The item loop of a par body (ParImpl$<n>$run, from the block's lo to its
+// hi): its work items are independent by the language (par.md, "Independent
+// work items": none may read what another writes), so its arrays need not be
+// proved distinct.
+- (BOOL)parItemLoop
+    {
+    NSString* nm = _fn.name;
+    if (![nm hasPrefix:@"ParImpl$"] || ![nm hasSuffix:@"$run"] || _boundConst)
+        return NO;
+    return [self isParField:escFrom(_ivPhi, _PH) field:1] && [self isParField:_boundOp field:2];
+    }
+
 - (BOOL)recognise:(XTIRBlock*)H
     {
     _H = H;
     if (![self outer] || ![self inner] || ![self exitBlock])
         return NO;
+    _parItems = [self parItemLoop];
     _vf = self.bytes / 4;
     if (_boundConst && (_n < (int64_t)_vf || _n > 0x7FFFFFFF))
         return NO;
@@ -6427,10 +6463,10 @@ static BOOL escLane32(XTIRType* t)
             || at == _H || at == _E || [blks indexOfObjectIdenticalTo:at] != NSNotFound)
             return NO;
         NSString* sr = [self rootOf:_storeAddr.operands[0].valueId];
-        if (_loadRoots.count > 0 && (![sr hasPrefix:@"s:"] || [_loadRoots containsObject:sr]))
+        if (!_parItems && _loadRoots.count > 0 && (![sr hasPrefix:@"s:"] || [_loadRoots containsObject:sr]))
             return NO;
         for (NSString* r in _loadRoots)
-            if (![r hasPrefix:@"s:"])
+            if (!_parItems && ![r hasPrefix:@"s:"])
                 return NO;
         }
     for (XTIRBlock* bb in _fn.blocks)
@@ -6567,8 +6603,13 @@ static BOOL escFloatPred(uint8_t p)
         return NO;
     if (n.opcode != XTIROpZExt && n.opcode != XTIROpSExt && n.opcode != XTIROpTrunc)
         return NO;
+    // Of any integer width, as a Const is: a shift amount is a u8, and a
+    // constant is only read through a splat or as the shift's own immediate.
     int32_t k = 0;
-    return escLane32(n.result.type) && n.result.type.kind != XTIRTypeKindF32
+    XTIRTypeKind rk = n.result.type.kind;
+    BOOL intTy = rk == XTIRTypeKindU8 || rk == XTIRTypeKindI8 || rk == XTIRTypeKindU16 || rk == XTIRTypeKindI16
+                 || escLane32(n.result.type);
+    return intTy && rk != XTIRTypeKindF32
         && [self constOf:[XTIROperand useWithValueId:n.result.valueId] into:&k];
     }
 
@@ -7060,6 +7101,13 @@ static BOOL escFloatPred(uint8_t p)
 
 - (void)apply
     {
+    // Vectors side by side: a counted inner loop (every lane makes every trip)
+    // and nothing summed across items, so the copies share the trip and touch
+    // only their own items.
+    _jam = 1;
+    if (self.interleave > 1 && _counted && _accPhis.count == 0
+        && !(_boundConst && _n < (int64_t)(_vf * self.interleave)))
+        _jam = self.interleave;
     _map = [NSMutableDictionary dictionary];
     _splat = [NSMutableDictionary dictionary];
     _exit = [NSMutableDictionary dictionary];
@@ -7085,6 +7133,8 @@ static BOOL escFloatPred(uint8_t p)
     [self body:VB inner:VI iv:viv];
     [self innerLoop:VI exit:VE];
     [self latch:VE head:VH iv:viv next:vivNext];
+    if (_jam > 1)
+        [self jamBody:VB inner:VI latch:VE iv:viv next:vivNext];
     [self exitTo:VX iv:viv];
     [_PH.instructions addObjectsFromArray:_pre];
     [_PH.terminator replaceOperands:@[ [XTIROperand blockWithRef:VH] ]];
@@ -7123,7 +7173,7 @@ static BOOL escFloatPred(uint8_t p)
     if (_boundConst)
         c = [self put:VH.instructions home:VH op:XTIROpICmp ty:[XTIRType boolType]
                     a:[XTIROperand useWithValueId:viv.valueId]
-                    b:[XTIROperand immIWithType:ivTy value:_n - (int64_t)_vf]
+                    b:[XTIROperand immIWithType:ivTy value:_n - (int64_t)(_vf * _jam)]
                  pred:(_signed ? XTIRICmpSLE : XTIRICmpULE)];
     else
         {
@@ -7136,7 +7186,7 @@ static BOOL escFloatPred(uint8_t p)
                                  b:[XTIROperand useWithValueId:viv.valueId]];
         XTIRValue* c2 = [self put:VH.instructions home:VH op:XTIROpICmp ty:b
                                 a:[XTIROperand useWithValueId:rem.valueId]
-                                b:[XTIROperand immIWithType:ivTy value:(int64_t)_vf]
+                                b:[XTIROperand immIWithType:ivTy value:(int64_t)(_vf * _jam)]
                              pred:(_signed ? XTIRICmpSGE : XTIRICmpUGE)];
         c = [self put:VH.instructions home:VH op:XTIROpAnd ty:b a:[XTIROperand useWithValueId:c1.valueId]
                     b:[XTIROperand useWithValueId:c2.valueId]];
@@ -7423,12 +7473,108 @@ static BOOL escFloatPred(uint8_t p)
     [VE.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpAdd
                                                          result:vivNext
                                                        operands:@[ [XTIROperand useWithValueId:viv.valueId],
-                                                                   [XTIROperand immIWithType:viv.type value:(int64_t)_vf] ]
+                                                                   [XTIROperand immIWithType:viv.type value:(int64_t)(_vf * _jam)] ]
                                                          dbgLoc:nil]];
     [VE setTerminator:[[XTIRInsn alloc] initWithOpcode:XTIROpBranch
                                                 result:nil
                                               operands:@[ [XTIROperand blockWithRef:VH] ]
                                                 dbgLoc:nil]];
+    }
+
+// The other _jam - 1 vectors (apply): copy u runs items viv + u*VF. Every
+// instruction of VB, VI and VE that depends on viv or on a lane value is
+// copied, once per copy, after the block's originals, with viv read as
+// viv + u*VF; a lane phi of VI is copied with it. The trip counter, its test, VE's step
+// and everything uniform stay single. As the port (escJam).
+- (BOOL)jamUses:(XTIRInsn*)n of:(NSSet<NSNumber*>*)D
+    {
+    for (XTIROperand* o in n.operands)
+        if (o.kind == XTIROperandKindUse && [D containsObject:@(o.valueId)])
+            return YES;
+    return NO;
+    }
+
+- (void)jamInsns:(XTIRBlock*)b maps:(NSArray<NSMutableDictionary*>*)maps D:(NSMutableSet<NSNumber*>*)D
+            skip:(nullable XTIRValue*)skip lead:(NSArray<XTIRInsn*>*)lead
+    {
+    // The originals in order, then each copy's run in turn: a copy's own
+    // instructions stay next to each other, which is what lets the back end
+    // still fuse a lane multiply into the add that takes it.
+    NSMutableArray<XTIRInsn*>* out = [NSMutableArray arrayWithArray:lead];
+    NSMutableArray<XTIRInsn*>* lane = [NSMutableArray array];
+    for (XTIRInsn* n in b.instructions)
+        {
+        [out addObject:n];
+        if ((skip && n.result == skip) || ![self jamUses:n of:D])
+            continue;
+        if (n.result)
+            [D addObject:@(n.result.valueId)];
+        if (n.memoryResult)
+            [D addObject:@(n.memoryResult.valueId)];
+        [lane addObject:n];
+        }
+    for (NSMutableDictionary* m in maps)
+        for (XTIRInsn* n in lane)
+            {
+            XTIRInsn* c = xtvCloneInsn(n, b, out.count, _fn, m, @{});
+            if (c.result)
+                _valOf[@(c.result.valueId)] = c.result;
+            [out addObject:c];
+            }
+    [b.instructions removeAllObjects];
+    [b.instructions addObjectsFromArray:out];
+    }
+
+- (void)jamBody:(XTIRBlock*)VB inner:(XTIRBlock*)VI latch:(XTIRBlock*)VE iv:(XTIRValue*)viv next:(XTIRValue*)vivNext
+    {
+    NSMutableArray<NSMutableDictionary*>* maps = [NSMutableArray array];
+    NSMutableSet<NSNumber*>* D = [NSMutableSet setWithObject:@(viv.valueId)];
+    NSMutableArray<XTIRInsn*>* lead = [NSMutableArray array];
+    for (NSUInteger u = 1; u < _jam; u++)
+        {
+        XTIRValue* vu = [self put:lead home:VB op:XTIROpAdd ty:viv.type a:[XTIROperand useWithValueId:viv.valueId]
+                                b:[XTIROperand immIWithType:viv.type value:(int64_t)(u * _vf)]];
+        [maps addObject:[NSMutableDictionary dictionaryWithObject:@(vu.valueId) forKey:@(viv.valueId)]];
+        }
+    [self jamInsns:VB maps:maps D:D skip:nil lead:lead];
+    // VI's lane phis: their copies' results first, so the body's copies can
+    // name them; their operands once the body is copied.
+    NSMutableArray<XTIRInsn*>* lanePhis = [NSMutableArray array];
+    NSMutableArray<NSArray<XTIRValue*>*>* phiRes = [NSMutableArray array];
+    for (XTIRInsn* p in VI.phiNodes)
+        {
+        if (!p.result || !(p.result.type.kind == XTIRTypeKindVec || [self jamUses:p of:D]))
+            continue;
+        [D addObject:@(p.result.valueId)];
+        NSMutableArray<XTIRValue*>* rs = [NSMutableArray array];
+        for (NSMutableDictionary* m in maps)
+            {
+            XTIRValue* r = [self newVal:p.result.type home:VI];
+            m[@(p.result.valueId)] = @(r.valueId);
+            [rs addObject:r];
+            }
+        [lanePhis addObject:p];
+        [phiRes addObject:rs];
+        }
+    [self jamInsns:VI maps:maps D:D skip:nil lead:@[]];
+    NSMutableArray<XTIRInsn*>* phis = [NSMutableArray array];
+    for (XTIRInsn* p in VI.phiNodes)
+        {
+        [phis addObject:p];
+        NSUInteger k = [lanePhis indexOfObjectIdenticalTo:p];
+        if (k == NSNotFound)
+            continue;
+        for (NSUInteger u = 0; u < maps.count; u++)
+            {
+            NSMutableArray<XTIROperand*>* ops = [NSMutableArray array];
+            for (XTIROperand* o in p.operands)
+                [ops addObject:xtvRemapOperand(o, maps[u], @{})];
+            [phis addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpPhi result:phiRes[k][u] operands:ops dbgLoc:nil]];
+            }
+        }
+    [VI.phiNodes removeAllObjects];
+    [VI.phiNodes addObjectsFromArray:phis];
+    [self jamInsns:VE maps:maps D:D skip:vivNext lead:@[]];
     }
 
 - (void)exitTo:(XTIRBlock*)VX iv:(XTIRValue*)viv
