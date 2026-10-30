@@ -1216,11 +1216,12 @@ class ParDevice
                 return (i32)1;
                 }
             }
-        // The GPU candidates first, the CPU last: a card measured after the
-        // CPU's runs has cooled to its idle clocks, which the driver raises
-        // only after sustained work (warmTime); measured straight after the
-        // hardware probe made its context, it runs at speed. The single GPU,
-        // then the tile queue's sets where there are GPU workers.
+        // The GPU candidates first: a card measured after the CPU's runs has
+        // cooled to its idle clocks, which the driver raises only after
+        // sustained work (warmTime); measured straight after the hardware
+        // probe made its context, it runs at speed. The single GPU, the
+        // GPU-only sets, then the CPU, then all devices (which needs the
+        // CPU's rate, below).
         if (gParGpuUs[i] < (i64)0)
             return (i32)2;
         // The remote GPUs alone, where there are any: one across the network
@@ -1230,6 +1231,14 @@ class ParDevice
             return (i32)5;
         if (gParGpuWorkers >= (u32)2 && gParGpusUs[i] < (i64)0)
             return (i32)3;
+        // The CPU before "all devices": the tile queue seeds each worker's
+        // rate from these measurements, and an unmeasured CPU pool beside a
+        // GPU is taken as a hundred times slower and given no tile. Measured
+        // after the set, the CPU never had a rate there: on a Raspberry Pi 5
+        // the four cores (14.0 s for mandel_deep) took none of the V3D's
+        // (22.9 s) tiles, and "all" came out as the GPU alone (19.2 s).
+        if (gParCpuUs[i] < (i64)0)
+            return (i32)1;
         if (gParGpuWorkers >= (u32)1 && gParAllUs[i] < (i64)0)
             {
             // The CPU and a GPU that is not across a bus draw on ONE memory
@@ -1245,6 +1254,10 @@ class ParDevice
             gParAllRuns[i] = (u32)2;
             if (reporting())
                 Log.info("par: %s: auto does not try all devices (bandwidth-bound, and the CPU and GPU share one memory bus)", gParBlock[i]);
+            // The last candidate is settled here, with no run to settle it
+            // (the CPU is measured before this set): decide now, as the
+            // queue's own decline does (setDeclined).
+            decide(i, proto);
             }
         if (gParCpuUs[i] < (i64)0)
             return (i32)1;
