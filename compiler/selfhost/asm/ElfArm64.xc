@@ -37,6 +37,7 @@ class ElfArm64
     String* _why;
     String* _interp;   // an executable's PT_INTERP (the reference's setInterpreter:)
     String* _runpath;  // a DT_RUNPATH, or 0 for none (the reference's setRunpath:)
+    Map* _known;       // the symbols an executable may import, or 0: none checked (setKnownImports:)
 
     void init(void)
         {
@@ -44,12 +45,21 @@ class ElfArm64
         _failed = false;
         _interp = String.withCString("/system/bin/linker64");
         _runpath = (String*)0;
+        _known = (Map*)0;
         }
 
     // Android's linker64 unless set (glibc Linux: /lib/ld-linux-aarch64.so.1).
     void setInterp(String* path)
         {
         _interp = path;
+        }
+
+    // arm64 Linux: glibc's symbols (glibc-imports.map) and those of the
+    // libraries the program links; any other import is an error naming it.
+    // None by default (android checks nothing).
+    void setKnownImports(Map* names)
+        {
+        _known = names;
         }
 
     // "$ORIGIN:<dir>..." for arm64 Linux; none by default, as Android's.
@@ -314,6 +324,30 @@ class ElfArm64
         for (u32 i = (u32)0; i < wordCand.count(); i = i + (u32)1)
             if (!inArray(imports, (String*)wordCand.get(i)))
                 wordImports.add(wordCand.get(i));
+        // An executable's imports, checked against what its libraries define:
+        // a symbol none of them has is an error here rather than at load.
+        if (isExec && _known != (Map*)0)
+            {
+            Array* missing = new Array();
+            for (u32 i = (u32)0; i < imports.count() + wordImports.count(); i = i + (u32)1)
+                {
+                String* n = i < imports.count() ? (String*)imports.get(i) : (String*)wordImports.get(i - imports.count());
+                if (_known.get((Hashable*)n) == (Object*)0)
+                    missing.add((Object*)n);
+                }
+            if (missing.count() > (u32)0)
+                {
+                missing.sort();
+                String* all = new String();
+                for (u32 i = (u32)0; i < missing.count(); i = i + (u32)1)
+                    {
+                    if (i > (u32)0) all.appendCString(", ");
+                    all.append((String*)missing.get(i));
+                    }
+                failWith(String.withCString("undefined symbols, which no library the program links defines:"), all);
+                return;
+                }
+            }
 
         // ── 2. exports ───────────────────────────────────────────────────
         Array* exports = new Array();

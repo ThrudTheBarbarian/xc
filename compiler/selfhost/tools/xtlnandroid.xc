@@ -36,6 +36,20 @@ Array* splitCsv(String* s)
     return out;
 }
 
+// The names in a symbol-tab-anything file (# comments, blank lines skipped).
+Map* knownImportsFrom(String* text)
+{
+    Map* m = new Map();
+    Array* lines = text.splitOnByte((u8)'\n');
+    for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+        String* line = (String*)lines.get(i);
+        if (line.byteLength() == (u32)0 || line.byteAt((u32)0) == (u8)'#') continue;
+        String* n = (String*)line.splitOnByte((u8)'\t').get((u32)0);
+        m.set((Hashable*)n, (Object*)n);
+    }
+    return m;
+}
+
 void main(void)
 {
     if (Process.argumentCount() < (u32)7) {
@@ -107,13 +121,23 @@ void main(void)
         w.setInterp(Process.argument((u32)8));
     if (Process.argumentCount() > (u32)9 && !Process.argument((u32)9).equals(String.withCString("-")))
         w.setRunpath(Process.argument((u32)9));
+    // The symbols an executable may import (the reference's argv[11]): a file
+    // of symbol-tab-anything lines, # comments; none checked when "-".
+    if (Process.argumentCount() > (u32)10 && !Process.argument((u32)10).equals(String.withCString("-"))) {
+        String* text = Files.readText(Process.argument((u32)10));
+        if (text == (String*)0) {
+            Stdio.printf("xcc-ln-arm64: cannot read %s\n", Process.argument((u32)10).cString());
+            Process.exit((i32)1);
+        }
+        w.setKnownImports(knownImportsFrom(text));
+    }
     w.image(a.textBytes(), lnData, a.symbols(), a.dataSyms(),
             exports, lnFix,
             isExe ? (String*)0 : entryOrSoname,
             splitCsv(neededCsv),
             isExe ? entryOrSoname : (String*)0, lnMi, iface);
     if (w.failed()) {
-        Stdio.printf("xtlnandroid: android link failed: %s\n", w.why().cString());
+        Stdio.printf("xtlnandroid: ELF link failed: %s\n", w.why().cString());
         Process.exit((i32)1); return;
     }
 

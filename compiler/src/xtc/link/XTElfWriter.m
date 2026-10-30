@@ -569,7 +569,7 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     if (rd16(16) != 3 /*ET_DYN*/)
         return nil;
 
-    // Section headers carry the .dynsym/.dynstr/.dynamic we need; our own writer
+    // Section headers carry the .dynsym/.dynstr/.dynamic we need; the x86-64 writer
     // emits them (ld.so reads program headers, but `nm`/gdb and this reader want
     // sections). A stripped .so with no section headers is not something we
     // produce, so a section-based read is sufficient here.
@@ -597,14 +597,46 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
         }
     // The android writer emits .dynamic and .dynstr but no .dynsym section (its
     // symbols reach the loader through the dynamic segment alone), so a
-    // library of its has a soname to read and no symbol table: the string
-    // table is then the one .dynamic links, and the symbol lists stay empty
-    // (bug 635). A file with neither is not a shared library we can read.
+    // library of its has a soname to read and its symbols through DT_SYMTAB
+    // (below): the string table is then the one .dynamic links (bug 635). A
+    // file with neither is not a shared library we can read.
     uint64_t strLink = dynsymOff ? dynsymLink : dynamicLink;
     if ((!dynsymOff && !dynamicOff) || strLink >= shnum)
         return nil;
     uint64_t ls = shoff + strLink * shentsize; // .dynstr, the linked strtab
     uint64_t strOff = rd64(ls + 24), strSz = rd64(ls + 32);
+    // No .dynsym section: the symbol table is where the dynamic segment says,
+    // DT_SYMTAB, and DT_HASH's chain count is how many entries it has, as the
+    // loader finds them. An address is turned into a file offset through the
+    // PT_LOAD segment that holds it.
+    if (!dynsymOff && dynamicOff)
+        {
+        uint64_t symAddr = 0, hashAddr = 0;
+        for (uint64_t o = dynamicOff; o + 16 <= dynamicOff + dynamicSz && o + 16 <= d.length; o += 16)
+            {
+            uint64_t tag = rd64(o), val = rd64(o + 8);
+            if (tag == 6) symAddr = val;        // DT_SYMTAB
+            else if (tag == 4) hashAddr = val;  // DT_HASH
+            }
+        uint64_t phoff = rd64(32);
+        uint16_t phentsize = rd16(54), phnum = rd16(56);
+        uint64_t (^fileOff)(uint64_t) = ^uint64_t(uint64_t a) {
+          for (uint16_t i = 0; i < phnum; i++)
+              {
+              uint64_t p = phoff + (uint64_t)i * phentsize;
+              if (p + 56 > d.length || rd32(p) != 1) continue;   // PT_LOAD
+              uint64_t off = rd64(p + 8), va = rd64(p + 16), fsz = rd64(p + 32);
+              if (a >= va && a < va + fsz) return off + (a - va);
+              }
+          return 0;
+        };
+        uint64_t so = symAddr ? fileOff(symAddr) : 0, ho = hashAddr ? fileOff(hashAddr) : 0;
+        if (so && ho && ho + 8 <= d.length)
+            {
+            dynsymOff = so;
+            dynsymSz = (uint64_t)rd32(ho + 4) * 24;   // nchain = the symbol count
+            }
+        }
     NSString* (^str)(uint64_t) = ^NSString*(uint64_t off) {
       if (off >= strSz)
           return @"";

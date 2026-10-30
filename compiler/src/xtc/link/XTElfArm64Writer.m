@@ -50,6 +50,7 @@ enum
 static const char* kInterp = "/system/bin/linker64";
 static char sInterpBuf[256];
 static NSString* sRunpath = nil;
+static NSSet<NSString*>* sKnownImports = nil;
 
 static void put8v(NSMutableData* d, uint8_t v)
     {
@@ -185,6 +186,11 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
 
 @implementation XTElfArm64Writer
 
++ (void)setKnownImports:(nullable NSSet<NSString*>*)names
+    {
+    sKnownImports = [names copy];
+    }
+
 + (void)setRunpath:(nullable NSString*)path
     {
     // As the port's setRunpath: none by default.
@@ -300,6 +306,22 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
             wordIdx[w] = @(wordImports.count);
             [wordImports addObject:w];
             }
+    // An executable's imports, checked against what its libraries define: a
+    // symbol none of them has is an error here rather than at load.
+    if (isExec && sKnownImports)
+        {
+        NSMutableArray<NSString*>* missing = [NSMutableArray array];
+        for (NSString* n in [imports arrayByAddingObjectsFromArray:wordImports])
+            if (![sKnownImports containsObject:n])
+                [missing addObject:n];
+        if (missing.count)
+            {
+            if (error)
+                *error = elfErr(@"undefined symbols, which no library the program links defines: '%@'",
+                                [[missing sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@", "]);
+            return nil;
+            }
+        }
 
     // ── 2. exports ────────────────────────────────────────────────────────
     NSMutableArray<NSString*>* exports = [NSMutableArray array];

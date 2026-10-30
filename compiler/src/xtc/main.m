@@ -1758,6 +1758,35 @@ static NSString *arm64ElfRunpath(XTTarget *row, NSArray<NSString *> *neededLibs)
     return [@"$ORIGIN:" stringByAppendingString:[dirs componentsJoinedByString:@":"]];
 }
 
+// arm64 Linux: the symbols an executable may import, as a file the linker
+// reads (symbol, then a tab, then anything): glibc's (glibc-imports.map), then
+// what each library the program links defines. "-" for android, which checks
+// nothing, and nil after saying why.
+static NSString * _Nullable arm64KnownImportsFile(NSString *support, XTTarget *row,
+                                                   NSArray<NSString *> *neededLibs) {
+    if (![row.os isEqualToString:@"linux"]) return @"-";
+    NSString *map = [NSString stringWithContentsOfFile:
+                     [support stringByAppendingPathComponent:@"arm64/glibc-imports.map"]
+                                              encoding:NSUTF8StringEncoding error:NULL];
+    if (!map) {
+        fprintf(stderr, "xcc: error: cannot read arm64/glibc-imports.map from the support tree\n");
+        return nil;
+    }
+    NSMutableString *all = [map mutableCopy];
+    for (NSString *lib in neededLibs) {
+        if (![lib hasSuffix:@".so"]) continue;
+        NSDictionary *info = [XTElfWriter sharedInfoAtPath:lib];
+        if (!info) {
+            fprintf(stderr, "xcc: error: '%s' is not a readable ELF64 shared object\n", lib.UTF8String);
+            return nil;
+        }
+        for (NSString *n in info[@"defined"]) [all appendFormat:@"\n%@\t%@", n, info[@"soname"]];
+    }
+    NSString *path = [xtcTempDir() stringByAppendingPathComponent:@"xtc-arm64-known-imports.txt"];
+    [all writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    return path;
+}
+
 static int linkAndroidSelfHost(const char *argv0, XTCommandLineOptions *opts,
                                NSString *support, NSString *asmPath, NSString *outPath,
                                NSArray<NSString *> *neededLibs) {
@@ -1792,11 +1821,13 @@ static int linkAndroidSelfHost(const char *argv0, XTCommandLineOptions *opts,
     [combined writeToFile:combinedPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
     // libc.so covers stdio/malloc/pthread; libm.so the _xm_* wrappers' tail
     // calls; libdl.so is what every Android image is expected to name.
+    NSString *known = arm64KnownImportsFile(support, lrow, neededLibs);
+    if (!known) return 1;
     int rc = runChild(ln, @[@"--android", @"exe", @"_start", @"-",
                             androidNeededCsvWithImports(opts, [lrow.needed componentsJoinedByString:@","],
                                                         neededLibs),
                             combinedPath, outPath, @"-", lrow.interp ?: @"-",
-                            arm64ElfRunpath(lrow, neededLibs)]);
+                            arm64ElfRunpath(lrow, neededLibs), known]);
     if (!opts.verbose) [fm removeItemAtPath:combinedPath error:NULL];
     if (rc == 0 && !opts.quiet)
         fprintf(stderr, "xcc: %s aarch64 ELF (self-hosted, no clang) -> '%s'%s\n",

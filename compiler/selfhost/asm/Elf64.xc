@@ -415,6 +415,27 @@ class ElfSharedInfo
     //
     // Returns null when the file is not an ET_DYN x86-64 ELF, so the caller can
     // say which of the two it was rather than guessing.
+    // The file offset of address `a` in an image, through the PT_LOAD segment
+    // that holds it; 0 when none does.
+    static u32 loadOffset(Data* d, u32 a)
+        {
+        u32 phoff = Elf64.rd32(d, (u32)32);
+        u32 phentsize = Elf64.rd16(d, (u32)54);
+        u32 phnum = Elf64.rd16(d, (u32)56);
+        for (u32 i = (u32)0; i < phnum; i = i + (u32)1)
+            {
+            u32 p = phoff + i * phentsize;
+            if (p + (u32)56 > d.length() || Elf64.rd32(d, p) != (u32)1)
+                continue;   // PT_LOAD
+            u32 off = Elf64.rd32(d, p + (u32)8);
+            u32 va = Elf64.rd32(d, p + (u32)16);
+            u32 fsz = Elf64.rd32(d, p + (u32)32);
+            if (a >= va && a < va + fsz)
+                return off + (a - va);
+            }
+        return (u32)0;
+        }
+
     static ElfSharedInfo* sharedInfo(String* path)
         {
         Data* d = Files.readData(path);
@@ -459,8 +480,8 @@ class ElfSharedInfo
             }
         // The android writer emits .dynamic and .dynstr but no .dynsym section
         // (its symbols reach the loader through the dynamic segment alone), so
-        // a library of its has a soname to read and no symbol table: the string
-        // table is then the one .dynamic links, and the symbol lists stay empty
+        // a library of its has a soname to read and its symbols through
+        // DT_SYMTAB (below): the string table is then the one .dynamic links
         // (bug 635). A file with neither is not a shared library we can read.
         u32 strLink = dynsymOff != (u32)0 ? dynsymLink : dynLink;
         if ((dynsymOff == (u32)0 && dynOff == (u32)0) || strLink >= shnum)
@@ -468,6 +489,29 @@ class ElfSharedInfo
         u32 ls = shoff + strLink * shentsize;
         u32 strOff = Elf64.rd32(d, ls + (u32)24);
         u32 strSz = Elf64.rd32(d, ls + (u32)32);
+        // No .dynsym section: the symbol table is where the dynamic segment
+        // says, DT_SYMTAB, and DT_HASH's chain count is how many entries it
+        // has, as the loader finds them (the reference does the same). An
+        // address becomes a file offset through the PT_LOAD that holds it.
+        if (dynsymOff == (u32)0 && dynOff != (u32)0)
+            {
+            u32 symAddr = (u32)0;
+            u32 hashAddr = (u32)0;
+            for (u32 o = dynOff; o + (u32)16 <= dynOff + dynSz && o + (u32)16 <= d.length(); o = o + (u32)16)
+                {
+                u32 tag = Elf64.rd32(d, o);
+                u32 val = Elf64.rd32(d, o + (u32)8);
+                if (tag == (u32)6) symAddr = val;        // DT_SYMTAB
+                else if (tag == (u32)4) hashAddr = val;  // DT_HASH
+                }
+            u32 so = symAddr != (u32)0 ? Elf64.loadOffset(d, symAddr) : (u32)0;
+            u32 ho = hashAddr != (u32)0 ? Elf64.loadOffset(d, hashAddr) : (u32)0;
+            if (so != (u32)0 && ho != (u32)0 && ho + (u32)8 <= d.length())
+                {
+                dynsymOff = so;
+                dynsymSz = Elf64.rd32(d, ho + (u32)4) * (u32)24;   // nchain = the symbol count
+                }
+            }
 
         ElfSharedInfo* info = new ElfSharedInfo();
         // Every GLOBAL or WEAK symbol with SHN_UNDEF: what the library needs

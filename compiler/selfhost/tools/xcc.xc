@@ -1184,6 +1184,41 @@ String* androidSonameOf(String* path)
 // after the base set, each by its soname (bug 460). Without them the image had
 // no DT_NEEDED for a library it calls into, and bionic had nothing to resolve
 // those imports in.
+// arm64 Linux: the symbols an executable may import — glibc's
+// (glibc-imports.map), then what each library the program links defines —
+// as the reference hands its linker (arm64KnownImportsFile).
+Map* arm64KnownImports(DriverOptions* d)
+{
+    String* map = readRuntimeIn(d.fe(), "arm64", String.withCString("glibc-imports.map"));
+    if (map == 0) {
+        Stdio.printf("xcc: error: cannot read arm64/glibc-imports.map from the support tree\n");
+        Process.exit((i32)1);
+        return (Map*)0;
+    }
+    Map* m = new Map();
+    Array* lines = map.splitOnByte((u8)'\n');
+    for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+        String* line = (String*)lines.get(i);
+        if (line.byteLength() == (u32)0 || line.byteAt((u32)0) == (u8)'#') continue;
+        String* n = (String*)line.splitOnByte((u8)'\t').get((u32)0);
+        m.set((Hashable*)n, (Object*)n);
+    }
+    Array* nl = d.fe().neededLibs();
+    for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
+        String* lp = (String*)nl.get(i);
+        if (!lp.hasSuffix(String.withCString(".so"))) continue;
+        ElfSharedInfo* info = Elf64.sharedInfo(lp);
+        if (info == (ElfSharedInfo*)0) {
+            Stdio.printf("xcc: error: '%s' is not a readable ELF64 shared object\n", lp.cString());
+            Process.exit((i32)1);
+            return (Map*)0;
+        }
+        for (u32 k = (u32)0; k < info.exported().count(); k = k + (u32)1)
+            m.set((Hashable*)info.exported().get(k), info.exported().get(k));
+    }
+    return m;
+}
+
 // arm64 Linux: the imported libraries' DT_RUNPATH, $ORIGIN then where each
 // was linked from (the reference's arm64ElfRunpath); 0 when it imports none,
 // and always for android, whose images carry none.
@@ -5001,6 +5036,8 @@ void emitModule(DriverOptions* d, IRModule* mod)
         ElfArm64* w = new ElfArm64();
         w.setInterp(lrow.interp());
         w.setRunpath(arm64ElfRunpath(d, lrow));
+        if (!d.emitLib() && lrow.os().equals(String.withCString("linux")))
+            w.setKnownImports(arm64KnownImports(d));
         if (d.emitLib()) {
             // A real Android shared library: no crt and no glue (that is the
             // APK payload's shape), its own public API exported — the

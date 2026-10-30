@@ -4,6 +4,7 @@
 #
 # -A arm64-linux is the arm64 back end in AAPCS64 mode, linked in-house to an
 # ELF PIE that names glibc's loader (/lib/ld-linux-aarch64.so.1) and libc.so.6.
+# An import nothing defines is refused at link time (support/arm64/glibc-imports.map).
 # Both compilers must write the same bytes; with XTC_LINUX_ARM64_HOST set the
 # program runs there and must print what it should.
 #
@@ -32,6 +33,15 @@ XC
     || { echo "FAIL arm64-linux: no glibc interpreter in the program"; fail=1; }; }
 [ $fail = 0 ] && { strings "$W/x" | grep -qx 'libc.so.6' \
     || { echo "FAIL arm64-linux: libc.so.6 is not needed"; fail=1; }; }
+# A symbol neither glibc nor a linked library defines is a link error, in
+# both, where it used to link and fail at load ("symbol lookup error").
+printf 'i32 nowhere_fn(i32 a);\ni32 main(i32 argc, u8** argv) { return nowhere_fn(argc); }\n' > "$W/u.xc"
+for c in "$REF" "$XC"; do
+    "$c" -q -A arm64-linux -o "$W/u" "$W/u.xc" > "$W/ue" 2>&1 \
+        && { echo "FAIL arm64-linux: $(basename "$c") linked an undefined symbol"; fail=1; }
+    grep -q "undefined symbols, which no library the program links defines: 'nowhere_fn'" "$W/ue" \
+        || { echo "FAIL arm64-linux: $(basename "$c") did not name the undefined symbol: $(head -c 200 "$W/ue")"; fail=1; }
+done
 msg="code"
 H=${XTC_LINUX_ARM64_HOST:-}
 if [ $fail = 0 ] && [ -n "$H" ]; then

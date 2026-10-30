@@ -606,6 +606,25 @@ int main(int argc, const char *argv[]) {
             // A DT_RUNPATH, optional (none when absent or "-").
             if (argc >= 11 && strcmp(argv[10], "-") != 0)
                 [XTElfArm64Writer setRunpath:@(argv[10])];
+            // The symbols an executable may import, a file of symbol-tab-anything
+            // lines (# comments), optional: none checked when absent or "-".
+            if (argc >= 12 && strcmp(argv[11], "-") != 0)
+                {
+                NSString* text = [NSString stringWithContentsOfFile:@(argv[11])
+                                                           encoding:NSUTF8StringEncoding error:NULL];
+                if (!text)
+                    {
+                    fprintf(stderr, "xcc-ln-arm64: cannot read %s\n", argv[11]);
+                    return 1;
+                    }
+                NSMutableSet<NSString*>* names = [NSMutableSet set];
+                for (NSString* line in [text componentsSeparatedByString:@"\n"])
+                    {
+                    if (!line.length || [line hasPrefix:@"#"]) continue;
+                    [names addObject:[line componentsSeparatedByString:@"\t"][0]];
+                    }
+                [XTElfArm64Writer setKnownImports:names];
+                }
             NSError *err = nil;
             NSString *src = [NSString stringWithContentsOfFile:inPath
                                                       encoding:NSUTF8StringEncoding error:&err];
@@ -657,7 +676,7 @@ int main(int argc, const char *argv[]) {
                                                            iface:iface
                                                            error:&err];
             if (!img) {
-                fprintf(stderr, "xcc-ln-arm64: android link failed: %s\n",
+                fprintf(stderr, "xcc-ln-arm64: ELF link failed: %s\n",
                         err.localizedDescription.UTF8String);
                 return 1;
             }

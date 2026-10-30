@@ -45,6 +45,10 @@ NS_ASSUME_NONNULL_BEGIN
 + (void)setInterpreter:(NSString*)path;
 // A DT_RUNPATH ("$ORIGIN:<dir>..."), or nil for none (Android's images have none).
 + (void)setRunpath:(nullable NSString*)path;
+// The symbols an executable may import (arm64 Linux: glibc's, from
+// glibc-imports.map, and those of the libraries it links); any other import is
+// an error naming it. Nil, the default, checks nothing (android).
++ (void)setKnownImports:(nullable NSSet<NSString*>*)names;
 + (nullable NSData*)sharedObjectFromText:(NSData*)text
                                     data:(NSData*)data
                                  symbols:(NSDictionary<NSString*, NSNumber*>*)symbols
