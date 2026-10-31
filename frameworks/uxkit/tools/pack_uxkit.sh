@@ -31,9 +31,11 @@ done
 cp "$here/COPYING" "$here/COPYING.LESSER" "$top/"
 # Where the README says to put it: xcc 0.90 and later search their own tree, earlier ones the shared one.
 if "$xcc" --print-3p-dir >/dev/null 2>&1; then
-  where="Put uxkit/ in xcc $ver's own third-party tree, /opt/xcc/$ver/3p (xcc --print-3p-dir prints it):
+  where="Put uxkit/ in xcc $ver's own third-party tree, /opt/xcc/$ver/3p (xcc --print-3p-dir prints it;
+a compiler unpacked from its archive does not have the directory yet):
 
-    sudo cp -R 3p/uxkit \"\$(xcc --print-3p-dir)/\""
+    d=\"\$(xcc --print-3p-dir)\"
+    sudo mkdir -p \"\$d\" && sudo cp -R 3p/uxkit \"\$d/\""
 else
   where="Put 3p/ beside the versioned xcc install, so that /opt/xcc/3p/uxkit/ sits next to
 /opt/xcc/$ver/:
