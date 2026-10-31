@@ -105,7 +105,9 @@ void synthesizeDesignable(Node* program)
             }
         else if (d.kind() == (u16)nkClassDecl)
             {
-            if (nibClass == 0 && nameIsOneOf(n, String.withCString("UXNib"),
+            // UXKit's class is UXRsc since 2026-10-07 (it was UXNib). As
+            // the reference.
+            if (nibClass == 0 && nameIsOneOf(n, String.withCString("UXRsc"),
                                              String.withCString("XGNib")))
                 nibClass = n;
             if (controlType == 0 && nameIsOneOf(n, String.withCString("UXControl"),

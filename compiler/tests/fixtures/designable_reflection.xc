@@ -46,7 +46,7 @@ class UXControl : Object
 // hands the module's factory over at load, with no per-app code.
 u16 registered;
 
-class UXNib : Object
+class UXRsc : Object
 {
     static void registerObjectFactory(pointer fn) { registered = registered + (u16)1; }
 }

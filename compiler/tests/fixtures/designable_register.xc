@@ -42,7 +42,7 @@ typedef UXDesignable* UXFactory(u8* name);
 
 u16 registered;
 
-class UXNib : Object
+class UXRsc : Object
 {
     static UXFactory* f0;
     static void registerObjectFactory(pointer fn)
@@ -75,7 +75,7 @@ void main(void)
     // its own bug, and is how the interim crt-side fix for 066 was caught.
     Assert.isEqual(registered, (u16)1);                          // T1
 
-    UXDesignable* p = UXNib.make((u8*)"Panel");
+    UXDesignable* p = UXRsc.make((u8*)"Panel");
     Assert.isTrue(p != (UXDesignable*)0);                        // T2
 
     Assert.summary();

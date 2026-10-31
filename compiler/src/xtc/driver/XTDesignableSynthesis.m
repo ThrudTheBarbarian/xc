@@ -67,7 +67,7 @@ static NSString* XTStripTypeQualifiers(NSString* disp)
     //    spelling silently stops synthesising the moment the other is imported.
     //    Whichever is in scope wins; both are accepted so a mixed tree builds.
     NSString* protoName = nil;   // UXDesignable | UIDesignable
-    NSString* nibClass = nil;    // UXNib        | XGNib
+    NSString* nibClass = nil;    // UXRsc        | XGNib
     NSString* controlType = nil; // UXControl    | XGControl
     NSString* menuItemType = nil; // UXMenuItem  | XGMenuItem
     for (XTASTNode* d in ast.declarations)
@@ -82,7 +82,9 @@ static NSString* XTStripTypeQualifiers(NSString* disp)
         else if ([d isKindOfClass:[XTClassDeclNode class]])
             {
             NSString* n = ((XTClassDeclNode*)d).className;
-            if (!nibClass && ([n isEqualToString:@"UXNib"] ||
+            // UXKit's class is UXRsc since 2026-10-07 (it was UXNib, and the
+            // factory silently went unregistered after the rename).
+            if (!nibClass && ([n isEqualToString:@"UXRsc"] ||
                               [n isEqualToString:@"XGNib"]))
                 nibClass = n;
             if (!controlType && ([n isEqualToString:@"UXControl"] ||
