@@ -22,7 +22,7 @@ class ChainA
 // It calls through Base's vtable, whose words this library fills in when it
 // is relocated, so on wasm32 this library must be relocated before a library
 // whose startup code calls it.
-class UXNib
+class UXRsc
     {
     static Base@ probe;
     static u32 boot;

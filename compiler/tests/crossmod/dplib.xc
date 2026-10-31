@@ -5,7 +5,7 @@ protocol UXDesignable
     bool wireAction(u8* name, Object* control);
     }
 
-class UXNib
+class UXRsc
     {
     static u32 registered;
     static void registerObjectFactory(pointer fn)

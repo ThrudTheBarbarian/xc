@@ -2,7 +2,7 @@
 # designable-import.sh — a library whose designable class conforms to a
 # protocol it IMPORTED (bug 443).
 #
-#   dplib.xc   declares UXDesignable and UXNib
+#   dplib.xc   declares UXDesignable and UXRsc
 #   dqlib.xc   imports <dplib> and declares a class with an `outlet`, which the
 #              compiler makes conform to dplib's UXDesignable
 #

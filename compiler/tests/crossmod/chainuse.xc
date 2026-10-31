@@ -1,7 +1,7 @@
 // chainuse.xc — the third library of chain.sh. It uses chainbase's library
 // only inside its bodies, so its interface names nothing from it. It has
 // startup code: UsePanel's `outlet` gives it a load-time constructor, which
-// calls chainbase's UXNib.registerObjectFactory.
+// calls chainbase's UXRsc.registerObjectFactory.
 #import "Stdio.xc"
 #import <ChainBase>
 
@@ -19,7 +19,7 @@ class UsePanel
 
 class ChainU
     {
-    static u32 booted(void) { return UXNib.booted(); }
+    static u32 booted(void) { return UXRsc.booted(); }
     // An array of the first library's class, made and freed here. Each
     // element is freed through the first library's Base$dealloc.
     static u32 many(u32 n)

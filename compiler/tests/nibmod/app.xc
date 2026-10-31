@@ -1,8 +1,8 @@
 #import "Stdio.xc"
 #import "Assert.xc"
-// The framework comes in as a BINARY module: UXNib, UXControl and the protocol
+// The framework comes in as a BINARY module: UXRsc, UXControl and the protocol
 // are the LIBRARY's, so its loader state is the one the app sees. Importing the
-// stub as source here would give the app a private second copy of UXNib's
+// stub as source here would give the app a private second copy of UXRsc's
 // statics and hide whether the library ever registered at all.
 #import <LibPanel>
 
@@ -42,12 +42,12 @@ class AppPanel : Object
     // program calls registerObjectFactory: the app's constructor runs (the back
     // end's __xtc_run_modinit, called by the crt) and the LIBRARY's does not,
     // because the Mach-O writer emits no __mod_init_func for dyld to run.
-    Assert.isEqual(UXNib.factoryCount(), (u16)2); // T1
+    Assert.isEqual(UXRsc.factoryCount(), (u16)2); // T1
 
     // The app's own class, made BY NAME through the erased factory — this is
     // the whole per-module-factory mechanism, on the module whose constructor
     // does run.
-    UXDesignable* ap = UXNib.make((u8*)"AppPanel");
+    UXDesignable* ap = UXRsc.make((u8*)"AppPanel");
     Assert.isTrue(ap != (UXDesignable*)0); // T2
 
     // The library's designable is constructed directly rather than by name,
@@ -79,7 +79,7 @@ class AppPanel : Object
     Assert.isEqual(LibProbe.fired(), (u16)1); // T11
 
     // An unknown class name yields nothing.
-    Assert.isTrue(UXNib.make((u8*)"NoSuchPanel") == (UXDesignable*)0); // T12
+    Assert.isTrue(UXRsc.make((u8*)"NoSuchPanel") == (UXDesignable*)0); // T12
 
     Assert.summary();
     }

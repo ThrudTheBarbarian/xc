@@ -31,7 +31,7 @@ typedef UXDesignable* UXFactory(u8* name);
 
 // The loader. It holds the registered factories and tries them in turn, so a
 // designable class can live in ANY module and no module knows another's.
-class UXNib : Object
+class UXRsc : Object
     {
     static UXFactory* f0;
     static UXFactory* f1;
