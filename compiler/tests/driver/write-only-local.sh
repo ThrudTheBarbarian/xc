@@ -31,7 +31,7 @@ done
 [ $fail = 0 ] && { cmp -s "$W/r.s" "$W/x.s" || { echo "FAIL write-only-local: the two compilers' assembly differs"; fail=1; }; }
 if [ $fail = 0 ] && [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
     for o in O0 O2; do
-        "$XC" -q -$o -o "$W/p$o" "$F" && "$W/p$o" x > "$W/out$o" || { echo "FAIL write-only-local: -$o build fails"; fail=1; }
+        "$XC" -q -$o -o "$W/p$o" "$F" && "$W/p$o" > "$W/out$o" || { echo "FAIL write-only-local: -$o build fails"; fail=1; }
     done
     cmp -s "$W/outO0" tests/fixtures/write_only_local.expected.out && cmp -s "$W/outO2" tests/fixtures/write_only_local.expected.out \
         || { echo "FAIL write-only-local: the program prints something else"; fail=1; }
