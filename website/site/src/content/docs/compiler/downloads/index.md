@@ -19,8 +19,8 @@ cross-build native binaries for every target with **no other toolchain installed
 | xcd, the par daemon (macOS) | [xcd-osx-0.89.tar.bz2](/downloads/xcd-osx-0.89.tar.bz2) | 858 KB |
 | xcd, the par daemon (Linux x86_64) | [xcd-linux-0.89.tar.bz2](/downloads/xcd-linux-0.89.tar.bz2) | 818 KB |
 | xcd, the par daemon (Windows x64) | [xcd-win64-0.89.zip](/downloads/xcd-win64-0.89.zip) | 926 KB |
-| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.88.tar.bz2](/downloads/xcc-uxgtk-linux-0.88.tar.bz2) | 112 KB |
-| UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.88.tar.bz2](/downloads/xcc-uxkit-0.88.tar.bz2) | 2.9 MB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.89.tar.bz2](/downloads/xcc-uxgtk-linux-0.89.tar.bz2) | 112 KB |
+| UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.89.tar.bz2](/downloads/xcc-uxkit-0.89.tar.bz2) | 2.9 MB |
 
 Every archive contains the same compiler. Each host build cross-compiles to **all**
 targets, so the platform you download for decides only where the compiler runs. That
@@ -72,8 +72,8 @@ program is a glibc executable that loads GTK 4, which is how `-A x86_64` links
 by default:
 
 ```bash
-tar xjf xcc-uxgtk-linux-0.88.tar.bz2
-xcc -A x86_64 app.xc -L xcc-uxgtk-linux-0.88 -lUXGtk -lgtk-4 -o app
+tar xjf xcc-uxgtk-linux-0.89.tar.bz2
+xcc -A x86_64 app.xc -L xcc-uxgtk-linux-0.89 -lUXGtk -lgtk-4 -o app
 ```
 
 The machine that runs the program needs glibc 2.34 or later and GTK 4; this
@@ -89,8 +89,8 @@ web, for xcc 0.89. Put its `3p/` beside the versioned install, so that
 `/opt/xcc/3p/uxkit/` sits next to `/opt/xcc/0.89/`:
 
 ```bash
-tar xjf xcc-uxkit-0.88.tar.bz2
-sudo cp -R xcc-uxkit-0.88/3p /opt/xcc/
+tar xjf xcc-uxkit-0.89.tar.bz2
+sudo cp -R xcc-uxkit-0.89/3p /opt/xcc/
 ```
 
 A program then names UXKit once, with `#use <UXKit>`, and builds with nothing
