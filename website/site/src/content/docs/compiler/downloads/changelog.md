@@ -3,6 +3,63 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.89 — Raspberry Pi 5, and its GPU
+
+Everything since 0.88.
+
+### New
+
+- **A new target, `-A arm64-linux`: Linux on 64-bit Arm with glibc**, such as a
+  Raspberry Pi 5 running Raspberry Pi OS. It builds from any host with the same
+  in-house assembler and linker as the other targets, links against the
+  system's glibc dynamically, and refuses at link time an import that nothing
+  defines, rather than leaving it for the loader to find. `-l<name>`, `#import`
+  of the system's libraries, the TLS library (https and wss in `Http`, and the
+  `par` runtime's encrypted connections), and checked builds
+  (`-fbounds-check=light` and `-fbounds-check`) all work there, as they do on
+  android.
+- **`par` runs on the Raspberry Pi 5's GPU**, the VideoCore VII (V3D 7.1)
+  through Vulkan. The V3D has no 64-bit integers, so a kernel that computes
+  only in 32 bits is emitted without them, and a block that needs them runs on
+  the CPU with a message saying so. Whole workgroups run without the range
+  check, which Mesa's compiler would otherwise run lane by lane.
+- **`par auto` uses the whole chip.** It measures the CPU before it tries every
+  device together, so the combined run starts with both devices' real speeds
+  and splits the work between them. On a Pi 5, `mandel_deep` runs in 9.5 s on
+  the four cores and the GPU together, against 14.0 s on the cores and 22.9 s
+  on the GPU alone; gcc with OpenMP takes 31.9 s.
+- **C programs build for arm64 Linux from a Mac** (`xcc -A arm64-linux prog.c`),
+  with clang compiling the parts xcc does not and glibc's headers in a sysroot.
+- The target table: every `-A` name is one row of a table both compilers share,
+  and the target `#if`s are `OS_linux`, `OS_windows`, `OS_macos`, `OS_android`,
+  `OS_ios`, `ARCH_arm64`, `ARCH_armv7`, `ARCH_x86_64` and `LIBC_glibc`. The old
+  names (`ARCH_arm9`, `LINK_DYNAMIC` and the rest) are gone.
+
+### Faster
+
+- **`par` bodies run as NEON vectors on the CPU**, four vectors side by side so
+  their chains overlap: on a Pi 5, an integer multiply chain runs in 28.5 ms
+  from 110.9.
+- **Constants fold in the IR, floats included**: `(float)W` and `1.5f /
+  (float)W` become constants, in the type's own precision. The escape
+  vectoriser then takes a `par` body it refused before: on a Pi 5,
+  `mandel_deep`'s four-core time goes from 37.5 s to 14.0 s, the same as the C
+  build's.
+- **Vulkan kernels run in workgroups of 256** (from 64): on the V3D a kernel
+  without a reduction ran 3.5 times faster.
+- **A float matrix multiply vectorises where no matrix kernel replaces it**
+  (arm64 Linux, android, an arm64 Mac without SME): on a Pi 5,
+  `matrix_mul_f32` runs in 3.76 s from 15.3, where g++ takes 4.24 s.
+
+### Fixed
+
+- On arm64, a loop rotating three float variables (`t = a; a = b; b = c; c = t`)
+  could give one of them the wrong value.
+- On x86-64 and win64, comparing an 8- or 16-bit signed value with a negative
+  constant could give the wrong answer.
+- Benchmarks on arm64 Linux read a coarse clock with 4 ms steps; they read
+  `CLOCK_MONOTONIC` now.
+
 ## Version 0.88 — CUDA on Linux, and stack instances by value
 
 Everything since 0.87.3.
