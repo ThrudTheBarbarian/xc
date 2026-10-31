@@ -5799,6 +5799,18 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         if (ops[1].kind == XTIROperandKindImmI)
             {
             long long k = (long long)ops[1].intValue;
+            // A narrow left operand was loaded zero-extended for an equality
+            // or unsigned test and sign-extended for a signed one: the
+            // immediate is extended the same way from that width. `b == -5`
+            // with b an i16 compared movzx'd 0xfffb against -5 and was never
+            // true (2026-10-31, once the IR folded `-5` to a constant).
+            if (wl < 4)
+                {
+                unsigned bits = (unsigned)wl * 8;
+                long long mask = (1LL << bits) - 1;
+                long long u = k & mask;
+                k = (sg && u >= (1LL << (bits - 1))) ? u - (1LL << bits) : u;
+                }
             BOOL fits = (w <= 4) || (k >= INT32_MIN && k <= INT32_MAX);
             if (fits)
                 {
@@ -6818,6 +6830,15 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                 sp == XTIRICmpSGT || sp == XTIRICmpSGE);
     [self loadExt:scmp.operands[0] into:'c' signed:ssg width:cw fn:fn slot:slot out:out];
     long long k = (long long)scmp.operands[1].intValue;
+    // The immediate extended as the narrow left side was (the plain ICmp's
+    // case explains): range_init's `b4[0] != -2` on an i8 behind a cmov.
+    NSUInteger nw = sl ? [self widthOf:sl] : 4;
+    if (nw < 4)
+        {
+        unsigned bits = (unsigned)nw * 8;
+        long long u = k & ((1LL << bits) - 1);
+        k = (ssg && u >= (1LL << (bits - 1))) ? u - (1LL << bits) : u;
+        }
     BOOL zeroOK = (k == 0) && (sp == XTIRICmpEQ || sp == XTIRICmpNE ||
                                sp == XTIRICmpULT || sp == XTIRICmpUGE);
     if (zeroOK)

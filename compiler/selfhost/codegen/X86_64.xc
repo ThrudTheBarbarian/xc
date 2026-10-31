@@ -7943,6 +7943,15 @@ class X86_64
         if (o1.kind() == (u8)OPK_IMMI)
             {
             i64 k = o1.imm();
+            // A narrow left operand's extension applies to the immediate too
+            // (the reference explains).
+            if (wl < (u32)4)
+                {
+                u32 bits = wl * (u32)8;
+                i64 mask = ((i64)1 << (i64)bits) - (i64)1;
+                i64 u = k & mask;
+                k = sg && u >= ((i64)1 << (i64)(bits - (u32)1)) ? u - ((i64)1 << (i64)bits) : u;
+                }
             bool fits = w <= (u32)4 || (k >= (i64)-2147483648 && k <= (i64)2147483647);
             if (fits)
                 {
@@ -8165,6 +8174,15 @@ class X86_64
         bool ssg = isSignedPred(sp);
         loadExt(so0, (u8)'c', ssg, cw);
         i64 k = ((IROperand*)scmp.ops().get((u32)1)).imm();
+        // The immediate extended as the narrow left side was (the reference
+        // explains).
+        u32 nw = so0.kind() == (u8)OPK_USE ? widthOfValue(so0.val()) : (u32)4;
+        if (nw < (u32)4)
+            {
+            u32 bits = nw * (u32)8;
+            i64 u = k & (((i64)1 << (i64)bits) - (i64)1);
+            k = ssg && u >= ((i64)1 << (i64)(bits - (u32)1)) ? u - ((i64)1 << (i64)bits) : u;
+            }
         bool zeroOK = k == (i64)0
                       && (sp.equals(String.withCString("EQ")) || sp.equals(String.withCString("NE"))
                           || sp.equals(String.withCString("ULT")) || sp.equals(String.withCString("UGE")));
