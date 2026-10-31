@@ -663,12 +663,19 @@ class ParDevice
         u32 i = slot(proto.parName());
         if (_mode == (i32)4)
             {
+            // choose's order: the user's setting, Par.device, the block's
+            // :device default, auto. Only auto measures.
+            i32 u = userSetting(i);
+            if (u == (i32)3)
+                return true;
+            if (u != (i32)5)
+                return false;
             i32 dev = gParSet[i];
             if (dev < (i32)0 && gParAll > (i32)0)
                 dev = gParAll - (i32)1;
             if (dev > (i32)0)
                 return false;
-            if (userSetting(i) != (i32)3 && userSetting(i) != (i32)5)
+            if (dev < (i32)0 && proto.defaultDevice() > (i32)0)
                 return false;
             }
         return true;
@@ -1144,14 +1151,11 @@ class ParDevice
             return _mode - (i32)2;
         u32 i = slot(proto.parName());
         gParMeasuring[i] = false;
-        i32 dev = gParSet[i];
-        if (_mode == (i32)4 && dev < (i32)0 && gParAll > (i32)0)
-            dev = gParAll - (i32)1;
-        if (_mode == (i32)4 && dev > (i32)0)
-            return dev;
-        u8* src = proto.gpuSource();
-        if (!hasKernel(src))
-            return (i32)1;
+        // With no XC_PAR, in order (owner 2026-10-31): the user's setting
+        // (par.<name>, par), then the program's Par.device, then the block's
+        // own :device default, then auto. A user's explicit `auto` outranks
+        // both of the program's choices; a program's Par.device(…, "auto")
+        // outranks the block's default.
         if (_mode == (i32)4)
             {
             i32 u = userSetting(i);
@@ -1161,7 +1165,24 @@ class ParDevice
                 return u - (i32)3;
             if (u == (i32)4)
                 return n >= gParUserN[i] ? (i32)2 : (i32)1;
+            if (u != (i32)3)
+                {
+                i32 dev = gParSet[i];
+                if (dev < (i32)0 && gParAll > (i32)0)
+                    dev = gParAll - (i32)1;
+                if (dev > (i32)0)
+                    return dev;
+                if (dev < (i32)0)
+                    {
+                    i32 d = proto.defaultDevice();
+                    if (d > (i32)0)
+                        return d;
+                    }
+                }
             }
+        u8* src = proto.gpuSource();
+        if (!hasKernel(src))
+            return (i32)1;
         // The learned bounds decide a size outside them, with no measuring.
         readLearned(i, proto);
         if (gParRemoteWorkers >= (u32)1 && gParRemFrom[i] >= (i64)0 && n >= gParRemFrom[i])

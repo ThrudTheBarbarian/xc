@@ -1421,7 +1421,7 @@ static NSString* parRootName(XTASTNode* n)
     // block's own.
     static NSSet<NSString*>* reservedCapture = nil;
     if (!reservedCapture)
-        reservedCapture = [NSSet setWithArray:@[ @"run", @"go", @"lo", @"hi", @"merge", @"copyChunk", @"parName",
+        reservedCapture = [NSSet setWithArray:@[ @"run", @"go", @"lo", @"hi", @"merge", @"copyChunk", @"parName", @"defaultDevice",
                                                  @"gpuSource", @"gpuLength", @"gpuGlobal", @"gpuGlobalBytes",
                                                  @"gpuReadsOnly", @"gpuReadsOnlyGlobal", @"gpuWritesAll",
                                                  @"gpuWritesAllOwn" ]];
@@ -1441,7 +1441,7 @@ static NSString* parRootName(XTASTNode* n)
                                                                      "of the block's own (%@). Rename "
                                                                      "the variable",
                                                                    label, cn, [cn hasPrefix:@"__par_"] ? @"names beginning __par_"
-                                                                     : @"run, go, lo, hi, merge, copyChunk, parName, gpuSource, gpuLength, gpuGlobal, gpuGlobalBytes, gpuReadsOnly, gpuReadsOnlyGlobal, gpuWritesAll, for a struct"]
+                                                                     : @"run, go, lo, hi, merge, copyChunk, parName, defaultDevice, gpuSource, gpuLength, gpuGlobal, gpuGlobalBytes, gpuReadsOnly, gpuReadsOnlyGlobal, gpuWritesAll, for a struct"]
                                      at:loc];
             return nil;
             }
@@ -1940,6 +1940,20 @@ static NSString* parRootName(XTASTNode* n)
                       location:loc];
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"parName"
                                                       returnTypes:@[ [XTPointerType pointerToType:[self.typeTable typeForName:@"u8"]] ]
+                                                       parameters:@[] isStatic:NO isVarArgs:NO body:b location:loc]];
+        }
+    // defaultDevice(): the block's :device(…), its developer's default device
+    // (ParDevice's code), only when it has one; ParChunk's own returns 0.
+    if (frame[@"device"])
+        {
+        XTBlockNode* b = [[XTBlockNode alloc]
+            initWithStatements:@[ [[XTReturnNode alloc]
+                                     initWithValues:@[ [[XTLiteralIntNode alloc] initWithValue:[frame[@"device"] longLongValue]
+                                                                                   location:loc] ]
+                                           location:loc] ]
+                      location:loc];
+        [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"defaultDevice"
+                                                      returnTypes:@[ [self.typeTable typeForName:@"i32"] ]
                                                        parameters:@[] isStatic:NO isVarArgs:NO body:b location:loc]];
         }
     // gpuSource(): the kernel's GPU source. A placeholder string, unique per

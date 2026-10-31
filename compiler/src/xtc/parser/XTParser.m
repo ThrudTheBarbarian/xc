@@ -4294,6 +4294,10 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
     // :grid(w, h[, d]): the work items are the points of a 2-D or 3-D grid,
     // and the body is any code, run once per point.
     NSMutableArray<XTASTNode*>* grid = nil;
+    // :device(cpu|gpu|gpus|all|auto): the developer's DEFAULT device, below
+    // XC_PAR, the user's settings and Par.device, above auto (which then does
+    // not measure the block): ParDevice's codes, 0 for auto, -1 when absent.
+    NSInteger device = -1;
     while ([self check:XTTokenColon])
         {
         [self advance];
@@ -4326,6 +4330,30 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
                                      at:dec.location];
                 return nil;
                 }
+            continue;
+            }
+        if ([dec.value isEqualToString:@"device"])
+            {
+            if (device >= 0)
+                {
+                [_diagnostics emitError:@"'par' takes one ':device'" at:dec.location];
+                return nil;
+                }
+            if (![self expect:XTTokenLParen])
+                return nil;
+            XTToken* d = [self expect:XTTokenIdentifier];
+            if (!d)
+                return nil;
+            NSDictionary<NSString*, NSNumber*>* codes = @{ @"auto" : @0, @"cpu" : @1, @"gpu" : @2, @"gpus" : @3, @"all" : @4 };
+            if (!codes[d.value])
+                {
+                [_diagnostics emitError:[NSString stringWithFormat:@"':device' takes cpu, gpu, gpus, all or auto, not '%@'", d.value]
+                                     at:d.location];
+                return nil;
+                }
+            device = codes[d.value].integerValue;
+            if (![self expect:XTTokenRParen])
+                return nil;
             continue;
             }
         if ([dec.value isEqualToString:@"goal"])
@@ -4371,7 +4399,8 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
             {
             [_diagnostics emitError:[NSString stringWithFormat:@"'par' has no decorator ':%@' "
                                                                  "(it takes :reduce(op var), :grid(w, h[, d]), "
-                                                                 ":goal(speed|accuracy) and :constant(a, b))",
+                                                                 ":goal(speed|accuracy), :constant(a, b) and "
+                                                                 ":device(cpu|gpu|gpus|all|auto))",
                                                                dec.value]
                                  at:dec.location];
             return nil;
@@ -4444,6 +4473,8 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
         frame[@"fast"] = @YES;
     if (constants.count > 0)
         frame[@"constant"] = constants;
+    if (device > 0)
+        frame[@"device"] = @(device);
     return [self parDesugarBody:body frame:frame name:name reductions:reductions at:loc];
     }
 

@@ -3313,6 +3313,7 @@ class Parser
         // :grid(w, h[, d]): the work items are the points of a 2-D or 3-D
         // grid, and the body is any code, run once per point.
         Array* grid = (Array*)0;
+        i32 device = (i32)-1;   // :device(…): ParDevice's code, auto 0; -1 when absent
         // :constant(a, b): captured arrays the GPU reads as constants.
         Array* constants = new Array();
         while (check((u16)tokColon)) {
@@ -3338,6 +3339,37 @@ class Parser
                     _errorAt(String.withCString("':grid' takes a width and a height, and optionally a depth: :grid(w, h) or :grid(w, h, d)"), parTokNode(decTok));
                     return (Node*)0;
                 }
+                continue;
+            }
+            // :device(cpu|gpu|gpus|all|auto): the developer's DEFAULT device
+            // (ParDevice's codes, auto 0). As the reference.
+            if (dec.equals(String.withCString("device"))) {
+                if (device >= (i32)0) {
+                    _errorAt(String.withCString("'par' takes one ':device'"), parTokNode(decTok));
+                    return (Node*)0;
+                }
+                if (expect((u16)tokLParen) == (Token*)0) return (Node*)0;
+                if (!check((u16)tokIdentifier)) {
+                    _error(String.withCString("':device' takes cpu, gpu, gpus, all or auto"));
+                    return (Node*)0;
+                }
+                String* dv = cur().value();
+                i32 code = (i32)-1;
+                if (dv.equals(String.withCString("auto"))) code = (i32)0;
+                else if (dv.equals(String.withCString("cpu"))) code = (i32)1;
+                else if (dv.equals(String.withCString("gpu"))) code = (i32)2;
+                else if (dv.equals(String.withCString("gpus"))) code = (i32)3;
+                else if (dv.equals(String.withCString("all"))) code = (i32)4;
+                if (code < (i32)0) {
+                    String* m = String.withCString("':device' takes cpu, gpu, gpus, all or auto, not '");
+                    m.append(dv);
+                    m.appendCString("'");
+                    _error(m);
+                    return (Node*)0;
+                }
+                advance();
+                device = code;
+                if (expect((u16)tokRParen) == (Token*)0) return (Node*)0;
                 continue;
             }
             // :goal(speed) (the default) or :goal(accuracy): what the
@@ -3381,7 +3413,7 @@ class Parser
             if (!dec.equals(String.withCString("reduce"))) {
                 String* m = String.withCString("'par' has no decorator ':");
                 m.append(dec);
-                m.appendCString("' (it takes :reduce(op var), :grid(w, h[, d]), :goal(speed|accuracy) and :constant(a, b))");
+                m.appendCString("' (it takes :reduce(op var), :grid(w, h[, d]), :goal(speed|accuracy), :constant(a, b) and :device(cpu|gpu|gpus|all|auto))");
                 _error(m);
                 return (Node*)0;
             }
@@ -3438,6 +3470,8 @@ class Parser
             frame.set((Hashable*)String.withCString("fast"), (Object*)Number.with((u32)1));
         if (constants.count() > (u32)0)
             frame.set((Hashable*)String.withCString("constant"), (Object*)constants);
+        if (device > (i32)0)
+            frame.set((Hashable*)String.withCString("device"), (Object*)Number.with((u32)device));
         _blkFrames.add((Object*)frame);
         blkPushScope();
         Node* body = parseBlock();
@@ -3918,6 +3952,7 @@ class Parser
     {
         return Parser._same(n, "run") || Parser._same(n, "go") || Parser._same(n, "lo") || Parser._same(n, "hi")
             || Parser._same(n, "merge") || Parser._same(n, "copyChunk") || Parser._same(n, "parName")
+            || Parser._same(n, "defaultDevice")
             || Parser._same(n, "gpuSource") || Parser._same(n, "gpuLength") || Parser._same(n, "gpuGlobal")
             || Parser._same(n, "gpuGlobalBytes") || Parser._same(n, "gpuReadsOnly")
             || Parser._same(n, "gpuReadsOnlyGlobal") || Parser._same(n, "gpuWritesAll")
@@ -4083,7 +4118,7 @@ class Parser
                         && !Parser.parHasLocal((String*)frameTypes.get((Hashable*)cn)))) {
                 _errorAt(String.withFormat("a '%s' block cannot capture '%s': the name is one of the block's own (%s). Rename the variable",
                                            label.cString(), cn.cString(), own ? "names beginning __par_"
-                                               : "run, go, lo, hi, merge, copyChunk, parName, gpuSource, gpuLength, gpuGlobal, gpuGlobalBytes, gpuReadsOnly, gpuReadsOnlyGlobal, gpuWritesAll, for a struct"), parKeywordNode());
+                                               : "run, go, lo, hi, merge, copyChunk, parName, defaultDevice, gpuSource, gpuLength, gpuGlobal, gpuGlobalBytes, gpuReadsOnly, gpuReadsOnlyGlobal, gpuWritesAll, for a struct"), parKeywordNode());
                 return (Node*)0;
             }
         }
@@ -4575,6 +4610,21 @@ class Parser
             b.add(ret);
             m.add(b);
             cls.add(m);
+        }
+        // defaultDevice(): the block's :device(…), only when it has one;
+        // ParChunk's own returns 0. As the reference.
+        {
+            Number* dv = (Number*)frame.get((Hashable*)String.withCString("device"));
+            if (dv != (Number*)0) {
+                Node* m = mkNamed((u16)nkMethodDecl, String.withCString("defaultDevice"));
+                m.setOp(String.withCString("i32"));
+                Node* b = mk((u16)nkBlock);
+                Node* ret = mk((u16)nkReturn);
+                ret.add(parInt((i64)dv.asU32()));
+                b.add(ret);
+                m.add(b);
+                cls.add(m);
+            }
         }
         // gpuSource(): the kernel's GPU source. A placeholder string, unique
         // per block, that the lowering replaces with the printed kernel (or

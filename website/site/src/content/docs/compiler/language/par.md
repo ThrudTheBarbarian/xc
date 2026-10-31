@@ -471,13 +471,19 @@ To choose instead, in order of precedence:
   `XC_PAR_CUDA_DEVICES=0,1` picks CUDA cards by ordinal;
   `XC_PAR_TILE_MB=<n>` sets the tile size (8 MB each way by default) and
   `XC_PAR_TILES=0` turns tiling off;
+- the user's own settings, in the program's settings store: `par.<name> = cpu`,
+  `gpu`, `auto`, or a number of items from which the block runs on the GPU
+  (`par.heavy = 200000`), and `par = …` for every block without its own;
+  `gpus` and `all` as well. The program never writes these, and a user's
+  `auto` outranks both of the program's choices below;
 - `Par.device("name", "gpu")` in the program, for one block by its name (`par
   name { … }`, or `file:line` for an unnamed block), or `Par.device("par", …)`
-  for every block without its own choice; `"gpus"` and `"all"` too;
-- the user's own settings, in the same store: `par.<name> = cpu`,
-  `gpu`, `auto`, or a number of items from which the block runs on the GPU (`par.heavy
-  = 200000`), and `par = …` for every block without its own; `gpus`
-  and `all` as well. The program never writes these.
+  for every block without its own choice; `"gpus"`, `"all"` and `"auto"` too;
+- the block's own default, written on it: `par frame :device(gpu) { … }`
+  (`cpu`, `gpu`, `gpus`, `all` or `auto`). It is where a block should run
+  unless someone says otherwise: a block meant for the GPU so that the CPU's
+  threads stay free for other work, say, even where the CPU would measure
+  faster. `auto` does not measure a block that has one.
 
 `XC_PAR_REPORT=1` prints where each block ran, what it took, why a block stayed
 on the CPU, what `auto` decided and learned, the hardware key, and

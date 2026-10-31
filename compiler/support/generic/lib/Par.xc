@@ -80,6 +80,14 @@ class ParChunk : Object
         return (i64)0 - (i64)1;
         }
     // Generated too: the block's name (its source name, or file:line).
+    // The block's :device(…), its developer's default device (ParDevice's
+    // code: cpu 1, gpu 2, gpus 3, all 4), or 0 when it has none. The
+    // desugaring overrides it only for a block that says one.
+    i32 defaultDevice(void)
+        {
+        return (i32)0;
+        }
+
     u8* parName(void)
         {
         return "par";
