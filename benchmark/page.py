@@ -388,7 +388,16 @@ def pi_section(version):
     for r, b, v in rows:
         cells = ["%.2f" % v[k] if v.get(k) else "–" for k in ("xc_pi", "cpp_pi", "gcc_pi")]
         out.append("| [`%s`](%s#%s) | %s | **%s** |" % (b, SOURCES_URL, b, " | ".join(cells), speed(r)))
-    out.append("| geometric mean | | | | **%s** |" % speed(gmean([r for r, _, _ in rows])))
+    # The means are per compiler, as the summary above gives them for the
+    # other machines: xc against clang++, and against g++ (a mean against
+    # "the faster of the two" per benchmark is a harder measure, and not the
+    # one the other platforms are given).
+    def mean_vs(k):
+        rs = [v["xc_pi"] / v[k] for _, _, v in rows if v.get(k)]
+        return speed(gmean(rs)) if rs else "–"
+    out.append("")
+    out.append("Geometric mean of xc's times against each: **%s** than clang++, **%s** than g++." % (
+        mean_vs("cpp_pi"), mean_vs("gcc_pi")))
     return "\n".join(out) + "\n"
 
 
