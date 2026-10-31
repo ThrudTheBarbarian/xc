@@ -271,7 +271,7 @@ $(XCC_XC_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
                $(wildcard support/generic/lib/*.xc) $(wildcard support/arm64/lib/*.xc)
 	@echo "  xc   building the production compiler with the bootstrap one (split)"
 	@mkdir -p $(dir $@) build
-	@XCC=$(XTC_BIN) SPLIT_DIR=build/split-stage1 bash $(SPLIT_BUILD) $@ -A arm64 -j $(SPLIT_JOBS) > build/split-stage1.log 2>&1 \
+	@XCC=$(XTC_BIN) SPLIT_DIR=build/split-stage1 SPLIT_VERSION=$(VERSION) bash $(SPLIT_BUILD) $@ -A arm64 -j $(SPLIT_JOBS) > build/split-stage1.log 2>&1 \
 	    || { tail -15 build/split-stage1.log; exit 1; }
 
 # The one-unit build of stage 2, kept as a check on the split one. The two are
@@ -282,9 +282,9 @@ split-check: $(XCC_XC2_BIN)
 	@echo "  xc   stage 2 again, as one unit"
 	@$(XCC_XC_BIN) -q -O2 -A arm64 -H . -D XCC_VERSION='"$(VERSION)"' -o build/xcc-xc2-mono $(XCC_XC_SRC) $(XCC_XC_INCS)
 	@echo "  xc   stage 3 by each"
-	@XCC=$(XCC_XC2_BIN) SPLIT_DIR=build/split-check-s bash $(SPLIT_BUILD) build/xcc-xc3-by-split -A arm64 -j $(SPLIT_JOBS) > build/split-check-s.log 2>&1 \
+	@XCC=$(XCC_XC2_BIN) SPLIT_DIR=build/split-check-s SPLIT_VERSION=$(VERSION) bash $(SPLIT_BUILD) build/xcc-xc3-by-split -A arm64 -j $(SPLIT_JOBS) > build/split-check-s.log 2>&1 \
 	    || { tail -15 build/split-check-s.log; exit 1; }
-	@XCC=build/xcc-xc2-mono SPLIT_DIR=build/split-check-m bash $(SPLIT_BUILD) build/xcc-xc3-by-mono -A arm64 -j $(SPLIT_JOBS) > build/split-check-m.log 2>&1 \
+	@XCC=build/xcc-xc2-mono SPLIT_DIR=build/split-check-m SPLIT_VERSION=$(VERSION) bash $(SPLIT_BUILD) build/xcc-xc3-by-mono -A arm64 -j $(SPLIT_JOBS) > build/split-check-m.log 2>&1 \
 	    || { tail -15 build/split-check-m.log; exit 1; }
 	@cmp -s build/xcc-xc3-by-split build/xcc-xc3-by-mono \
 	    && echo "  xc   the split and one-unit stage 2 build the same stage 3" \
@@ -301,7 +301,7 @@ XCC_XC2_BIN = $(BIN_DIR)/xcc-xc2
 $(XCC_XC2_BIN): $(XCC_XC_BIN)
 	@echo "  xc   building the shipped compiler with the xc compiler (stage 2, split)"
 	@mkdir -p build
-	@XCC=$(XCC_XC_BIN) SPLIT_DIR=build/split-stage2 bash $(SPLIT_BUILD) $@ -A arm64 -j $(SPLIT_JOBS) > build/split-stage2.log 2>&1 \
+	@XCC=$(XCC_XC_BIN) SPLIT_DIR=build/split-stage2 SPLIT_VERSION=$(VERSION) bash $(SPLIT_BUILD) $@ -A arm64 -j $(SPLIT_JOBS) > build/split-stage2.log 2>&1 \
 	    || { tail -15 build/split-stage2.log; exit 1; }
 
 # The SAME production compiler, cross-built for the other two hosts. THE GOLDEN
@@ -338,7 +338,7 @@ $(XCC_XC_LINUX_BIN): $(XCC_XC2_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
                      $(wildcard support/generic/lib/*.xc) $(wildcard support/x86_64/lib/*.xc)
 	@echo "  xc   building the production compiler for x86_64 linux (split)"
 	@mkdir -p $(dir $@) build
-	@XCC=$(XCC_XC2_BIN) SPLIT_DIR=build/split-linux bash $(SPLIT_BUILD) $@ -A x86_64 -j $(SPLIT_JOBS) > build/split-linux.log 2>&1 \
+	@XCC=$(XCC_XC2_BIN) SPLIT_DIR=build/split-linux SPLIT_VERSION=$(VERSION) bash $(SPLIT_BUILD) $@ -A x86_64 -j $(SPLIT_JOBS) > build/split-linux.log 2>&1 \
 	    || { tail -15 build/split-linux.log; exit 1; }
 
 $(XCC_XC_WIN64_BIN): $(XCC_XC2_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
@@ -364,7 +364,7 @@ else
 CONTRIB_ARCH = x86_64
 endif
 # contrib_stage <compiler> <output> <n>: one split build of this tree.
-contrib_stage = XCC=$(1) SPLIT_DIR=$(CONTRIB_DIR)/split-$(3) bash $(SPLIT_BUILD) $(2) -A $(CONTRIB_ARCH) -j $(SPLIT_JOBS) \
+contrib_stage = XCC=$(1) SPLIT_DIR=$(CONTRIB_DIR)/split-$(3) SPLIT_VERSION=$(VERSION) bash $(SPLIT_BUILD) $(2) -A $(CONTRIB_ARCH) -j $(SPLIT_JOBS) \
                     > $(CONTRIB_DIR)/stage$(3).log 2>&1 || { tail -15 $(CONTRIB_DIR)/stage$(3).log; exit 1; }
 
 .PHONY: contrib

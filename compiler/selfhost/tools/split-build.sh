@@ -27,12 +27,15 @@ while [ $# -gt 0 ]; do
     esac
 done
 case "$ARCH" in
-    arm64) LIB=support/arm64/lib ;;
+    arm64|arm64-linux) LIB=support/arm64/lib ;;
     x86_64) LIB=support/x86_64/lib; EXTRA+=(-static) ;;
     win64) LIB=support/win64/lib ;;
     *) echo "split-build: no library directory for -A $ARCH"; exit 2 ;;
 esac
-V=$(cat VERSION)
+# The version the driver reports: the Makefile's (SPLIT_VERSION, so that
+# `make VERSION=0.90 install` builds a 0.90 compiler, as an interim install
+# needs), else the VERSION file.
+V=${SPLIT_VERSION:-$(cat VERSION)}
 W=${SPLIT_DIR:-build/split-$ARCH}
 rm -rf "${W:?}"; mkdir -p "$W/if" "$W/obj"
 DIRS="selfhost/lexer selfhost/preproc selfhost/parser selfhost/sema selfhost/ir selfhost/opt selfhost/codegen selfhost/asm selfhost/link selfhost/driver selfhost/tools"
