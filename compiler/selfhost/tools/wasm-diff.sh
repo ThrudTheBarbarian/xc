@@ -57,6 +57,8 @@ RUN_INCS=(-I selfhost/lexer -I selfhost/asm -I selfhost/link -I selfhost/driver 
           -I selfhost/sema -I selfhost/defs -I selfhost/ir -I selfhost/codegen)
 
 pass=0; fail=0; unsup=0; oracle=0
+# Declared, so a run with nothing differing does not trip set -u on it.
+FAILED=()
 declare -a FAILED
 
 # SHARD_I/SHARD_N: run only every Nth file, so one harness can be split
