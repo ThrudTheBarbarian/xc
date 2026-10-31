@@ -666,7 +666,7 @@ class ParCuda
         // has no header: the 40 bytes before it are the previous global's, so
         // only a block whose header carries the aligned heap magic is one.
         pointer base = ParDevice.simdBase(host);
-        if (base != (pointer)0 && *(u32*)(pointer)((u8*)base - (u64)40) != (u32)$58544F43)
+        if (base != (pointer)0 && *(u32*)(pointer)((u8*)base - (u64)8) != (u32)$58544F43)
             base = (pointer)0;
         if (base != (pointer)0)
             {
@@ -690,7 +690,7 @@ class ParCuda
         if (base != (pointer)0)
             {
             parUnpin_t* hook = &parCudaUnpin;
-            *(pointer*)((u8*)base - (u64)20) = (pointer)hook;
+            *(pointer*)((u8*)base - (u64)24) = (pointer)hook;
             }
         return true;
         }

@@ -618,12 +618,12 @@ _xtc_alloc:                             # @_xtc_alloc
 	test	rax, rax
 	je	.LBB15_4
 # %bb.5:
-	mov	dword ptr [rax], 1481920322
-	mov	qword ptr [rax + 4], r15
-	mov	qword ptr [rax + 12], r14
-	mov	qword ptr [rax + 20], rbx
-	mov	qword ptr [rax + 28], 0
-	mov	dword ptr [rax + 36], 1
+	movabs	rcx, 5776887618
+	mov	qword ptr [rax + 32], rcx
+	mov	qword ptr [rax], r15
+	mov	qword ptr [rax + 8], r14
+	mov	qword ptr [rax + 16], rbx
+	mov	qword ptr [rax + 24], 0
 	add	rax, 40
 	jmp	.LBB15_6
 .LBB15_4:
@@ -1517,12 +1517,12 @@ _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 	mov	rbx, rax
 	add	rbx, 16431
 	and	rbx, -16384
-	mov	dword ptr [rbx - 40], 1481920323
-	mov	qword ptr [rbx - 36], r12
-	mov	qword ptr [rbx - 28], r15
-	mov	qword ptr [rbx - 20], r14
-	mov	qword ptr [rbx - 12], 0
-	mov	dword ptr [rbx - 4], 1
+	movabs	rcx, 5776887619
+	mov	qword ptr [rbx - 8], rcx
+	mov	qword ptr [rbx - 40], r12
+	mov	qword ptr [rbx - 32], r15
+	mov	qword ptr [rbx - 24], r14
+	mov	qword ptr [rbx - 16], 0
 	mov	qword ptr [rbx - 48], rax
 	mov	r15, qword ptr [rip + _xt_threads_active@GOTPCREL]
 	cmp	dword ptr [r15], 0
@@ -1920,12 +1920,12 @@ _xtc_alloc_line:                        # @_xtc_alloc_line
 	mov	rcx, rax
 	add	rax, 111
 	and	rax, -64
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], r14
-	mov	qword ptr [rax - 28], rbx
+	movabs	rdx, 5776887619
+	mov	qword ptr [rax - 8], rdx
+	mov	qword ptr [rax - 40], r14
+	mov	qword ptr [rax - 32], rbx
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
+	movups	xmmword ptr [rax - 24], xmm0
 	mov	qword ptr [rax - 48], rcx
 	jmp	.LBB25_6
 .LBB25_4:
@@ -2106,12 +2106,12 @@ _xtc_new_u8:                            # @_xtc_new_u8
 	mov	rcx, rax
 	add	rax, 111
 	and	rax, -64
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 1
-	mov	qword ptr [rax - 28], rbx
+	movabs	rdx, 5776887619
+	mov	qword ptr [rax - 8], rdx
+	mov	qword ptr [rax - 40], 1
+	mov	qword ptr [rax - 32], rbx
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
+	movups	xmmword ptr [rax - 24], xmm0
 	mov	qword ptr [rax - 48], rcx
 	pop	rbx
 	ret
@@ -2126,12 +2126,12 @@ _xtc_new_u8:                            # @_xtc_new_u8
 	test	rax, rax
 	je	.LBB39_8
 # %bb.6:
-	mov	dword ptr [rax], 1481920322
-	mov	qword ptr [rax + 4], 1
-	mov	qword ptr [rax + 12], rbx
+	movabs	rcx, 5776887618
+	mov	qword ptr [rax + 32], rcx
+	mov	qword ptr [rax], 1
+	mov	qword ptr [rax + 8], rbx
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 20], xmm0
-	mov	dword ptr [rax + 36], 1
+	movups	xmmword ptr [rax + 16], xmm0
 	add	rax, 40
 	pop	rbx
 	ret
@@ -2167,12 +2167,12 @@ _xtc_new_i8:                            # @_xtc_new_i8
 	mov	rcx, rax
 	add	rax, 111
 	and	rax, -64
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 1
-	mov	qword ptr [rax - 28], rbx
+	movabs	rdx, 5776887619
+	mov	qword ptr [rax - 8], rdx
+	mov	qword ptr [rax - 40], 1
+	mov	qword ptr [rax - 32], rbx
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
+	movups	xmmword ptr [rax - 24], xmm0
 	mov	qword ptr [rax - 48], rcx
 	pop	rbx
 	ret
@@ -2187,12 +2187,12 @@ _xtc_new_i8:                            # @_xtc_new_i8
 	test	rax, rax
 	je	.LBB40_8
 # %bb.6:
-	mov	dword ptr [rax], 1481920322
-	mov	qword ptr [rax + 4], 1
-	mov	qword ptr [rax + 12], rbx
+	movabs	rcx, 5776887618
+	mov	qword ptr [rax + 32], rcx
+	mov	qword ptr [rax], 1
+	mov	qword ptr [rax + 8], rbx
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 20], xmm0
-	mov	dword ptr [rax + 36], 1
+	movups	xmmword ptr [rax + 16], xmm0
 	add	rax, 40
 	pop	rbx
 	ret
@@ -2246,12 +2246,12 @@ _xtc_new_u16:                           # @_xtc_new_u16
 	mov	rcx, rax
 	add	rax, 111
 	and	rax, -64
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 2
-	mov	qword ptr [rax - 28], r14
+	movabs	rdx, 5776887619
+	mov	qword ptr [rax - 8], rdx
+	mov	qword ptr [rax - 40], 2
+	mov	qword ptr [rax - 32], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
+	movups	xmmword ptr [rax - 24], xmm0
 	mov	qword ptr [rax - 48], rcx
 	jmp	.LBB41_13
 .LBB41_7:
@@ -2273,12 +2273,12 @@ _xtc_new_u16:                           # @_xtc_new_u16
 	test	rax, rax
 	je	.LBB41_12
 # %bb.10:
-	mov	dword ptr [rax], 1481920322
-	mov	qword ptr [rax + 4], 2
-	mov	qword ptr [rax + 12], r14
+	movabs	rcx, 5776887618
+	mov	qword ptr [rax + 32], rcx
+	mov	qword ptr [rax], 2
+	mov	qword ptr [rax + 8], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 20], xmm0
-	mov	dword ptr [rax + 36], 1
+	movups	xmmword ptr [rax + 16], xmm0
 	add	rax, 40
 	jmp	.LBB41_13
 .LBB41_12:
@@ -2334,12 +2334,12 @@ _xtc_new_i16:                           # @_xtc_new_i16
 	mov	rcx, rax
 	add	rax, 111
 	and	rax, -64
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 2
-	mov	qword ptr [rax - 28], r14
+	movabs	rdx, 5776887619
+	mov	qword ptr [rax - 8], rdx
+	mov	qword ptr [rax - 40], 2
+	mov	qword ptr [rax - 32], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
+	movups	xmmword ptr [rax - 24], xmm0
 	mov	qword ptr [rax - 48], rcx
 	jmp	.LBB42_13
 .LBB42_7:
@@ -2361,12 +2361,12 @@ _xtc_new_i16:                           # @_xtc_new_i16
 	test	rax, rax
 	je	.LBB42_12
 # %bb.10:
-	mov	dword ptr [rax], 1481920322
-	mov	qword ptr [rax + 4], 2
-	mov	qword ptr [rax + 12], r14
+	movabs	rcx, 5776887618
+	mov	qword ptr [rax + 32], rcx
+	mov	qword ptr [rax], 2
+	mov	qword ptr [rax + 8], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 20], xmm0
-	mov	dword ptr [rax + 36], 1
+	movups	xmmword ptr [rax + 16], xmm0
 	add	rax, 40
 	jmp	.LBB42_13
 .LBB42_12:
@@ -2422,12 +2422,12 @@ _xtc_new_u32:                           # @_xtc_new_u32
 	mov	rcx, rax
 	add	rax, 111
 	and	rax, -64
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 4
-	mov	qword ptr [rax - 28], r14
+	movabs	rdx, 5776887619
+	mov	qword ptr [rax - 8], rdx
+	mov	qword ptr [rax - 40], 4
+	mov	qword ptr [rax - 32], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
+	movups	xmmword ptr [rax - 24], xmm0
 	mov	qword ptr [rax - 48], rcx
 	jmp	.LBB43_13
 .LBB43_7:
@@ -2449,12 +2449,12 @@ _xtc_new_u32:                           # @_xtc_new_u32
 	test	rax, rax
 	je	.LBB43_12
 # %bb.10:
-	mov	dword ptr [rax], 1481920322
-	mov	qword ptr [rax + 4], 4
-	mov	qword ptr [rax + 12], r14
+	movabs	rcx, 5776887618
+	mov	qword ptr [rax + 32], rcx
+	mov	qword ptr [rax], 4
+	mov	qword ptr [rax + 8], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 20], xmm0
-	mov	dword ptr [rax + 36], 1
+	movups	xmmword ptr [rax + 16], xmm0
 	add	rax, 40
 	jmp	.LBB43_13
 .LBB43_12:
@@ -2510,12 +2510,12 @@ _xtc_new_i32:                           # @_xtc_new_i32
 	mov	rcx, rax
 	add	rax, 111
 	and	rax, -64
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 4
-	mov	qword ptr [rax - 28], r14
+	movabs	rdx, 5776887619
+	mov	qword ptr [rax - 8], rdx
+	mov	qword ptr [rax - 40], 4
+	mov	qword ptr [rax - 32], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
+	movups	xmmword ptr [rax - 24], xmm0
 	mov	qword ptr [rax - 48], rcx
 	jmp	.LBB44_13
 .LBB44_7:
@@ -2537,12 +2537,12 @@ _xtc_new_i32:                           # @_xtc_new_i32
 	test	rax, rax
 	je	.LBB44_12
 # %bb.10:
-	mov	dword ptr [rax], 1481920322
-	mov	qword ptr [rax + 4], 4
-	mov	qword ptr [rax + 12], r14
+	movabs	rcx, 5776887618
+	mov	qword ptr [rax + 32], rcx
+	mov	qword ptr [rax], 4
+	mov	qword ptr [rax + 8], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 20], xmm0
-	mov	dword ptr [rax + 36], 1
+	movups	xmmword ptr [rax + 16], xmm0
 	add	rax, 40
 	jmp	.LBB44_13
 .LBB44_12:
@@ -2582,12 +2582,12 @@ _xtc_new_pointer:                       # @_xtc_new_pointer
 	test	rax, rax
 	je	.LBB45_3
 # %bb.4:
-	mov	dword ptr [rax], 1481920322
-	mov	qword ptr [rax + 4], 8
-	mov	qword ptr [rax + 12], rbx
+	movabs	rcx, 5776887618
+	mov	qword ptr [rax + 32], rcx
+	mov	qword ptr [rax], 8
+	mov	qword ptr [rax + 8], rbx
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 20], xmm0
-	mov	dword ptr [rax + 36], 1
+	movups	xmmword ptr [rax + 16], xmm0
 	add	rax, 40
 	pop	rbx
 	ret
@@ -2641,12 +2641,12 @@ _xtc_new_u64:                           # @_xtc_new_u64
 	mov	rcx, rax
 	add	rax, 111
 	and	rax, -64
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 8
-	mov	qword ptr [rax - 28], r14
+	movabs	rdx, 5776887619
+	mov	qword ptr [rax - 8], rdx
+	mov	qword ptr [rax - 40], 8
+	mov	qword ptr [rax - 32], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
+	movups	xmmword ptr [rax - 24], xmm0
 	mov	qword ptr [rax - 48], rcx
 	jmp	.LBB46_13
 .LBB46_7:
@@ -2668,12 +2668,12 @@ _xtc_new_u64:                           # @_xtc_new_u64
 	test	rax, rax
 	je	.LBB46_12
 # %bb.10:
-	mov	dword ptr [rax], 1481920322
-	mov	qword ptr [rax + 4], 8
-	mov	qword ptr [rax + 12], r14
+	movabs	rcx, 5776887618
+	mov	qword ptr [rax + 32], rcx
+	mov	qword ptr [rax], 8
+	mov	qword ptr [rax + 8], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 20], xmm0
-	mov	dword ptr [rax + 36], 1
+	movups	xmmword ptr [rax + 16], xmm0
 	add	rax, 40
 	jmp	.LBB46_13
 .LBB46_12:
@@ -2729,12 +2729,12 @@ _xtc_new_i64:                           # @_xtc_new_i64
 	mov	rcx, rax
 	add	rax, 111
 	and	rax, -64
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 8
-	mov	qword ptr [rax - 28], r14
+	movabs	rdx, 5776887619
+	mov	qword ptr [rax - 8], rdx
+	mov	qword ptr [rax - 40], 8
+	mov	qword ptr [rax - 32], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
+	movups	xmmword ptr [rax - 24], xmm0
 	mov	qword ptr [rax - 48], rcx
 	jmp	.LBB47_13
 .LBB47_7:
@@ -2756,12 +2756,12 @@ _xtc_new_i64:                           # @_xtc_new_i64
 	test	rax, rax
 	je	.LBB47_12
 # %bb.10:
-	mov	dword ptr [rax], 1481920322
-	mov	qword ptr [rax + 4], 8
-	mov	qword ptr [rax + 12], r14
+	movabs	rcx, 5776887618
+	mov	qword ptr [rax + 32], rcx
+	mov	qword ptr [rax], 8
+	mov	qword ptr [rax + 8], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 20], xmm0
-	mov	dword ptr [rax + 36], 1
+	movups	xmmword ptr [rax + 16], xmm0
 	add	rax, 40
 	jmp	.LBB47_13
 .LBB47_12:
@@ -2799,12 +2799,12 @@ _xtc_new_bool:                          # @_xtc_new_bool
 	mov	rcx, rax
 	add	rax, 111
 	and	rax, -64
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 1
-	mov	qword ptr [rax - 28], rbx
+	movabs	rdx, 5776887619
+	mov	qword ptr [rax - 8], rdx
+	mov	qword ptr [rax - 40], 1
+	mov	qword ptr [rax - 32], rbx
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
+	movups	xmmword ptr [rax - 24], xmm0
 	mov	qword ptr [rax - 48], rcx
 	pop	rbx
 	ret
@@ -2819,12 +2819,12 @@ _xtc_new_bool:                          # @_xtc_new_bool
 	test	rax, rax
 	je	.LBB48_8
 # %bb.6:
-	mov	dword ptr [rax], 1481920322
-	mov	qword ptr [rax + 4], 1
-	mov	qword ptr [rax + 12], rbx
+	movabs	rcx, 5776887618
+	mov	qword ptr [rax + 32], rcx
+	mov	qword ptr [rax], 1
+	mov	qword ptr [rax + 8], rbx
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 20], xmm0
-	mov	dword ptr [rax + 36], 1
+	movups	xmmword ptr [rax + 16], xmm0
 	add	rax, 40
 	pop	rbx
 	ret
@@ -2878,12 +2878,12 @@ _xtc_new_float:                         # @_xtc_new_float
 	mov	rcx, rax
 	add	rax, 111
 	and	rax, -64
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 4
-	mov	qword ptr [rax - 28], r14
+	movabs	rdx, 5776887619
+	mov	qword ptr [rax - 8], rdx
+	mov	qword ptr [rax - 40], 4
+	mov	qword ptr [rax - 32], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
+	movups	xmmword ptr [rax - 24], xmm0
 	mov	qword ptr [rax - 48], rcx
 	jmp	.LBB49_13
 .LBB49_7:
@@ -2905,12 +2905,12 @@ _xtc_new_float:                         # @_xtc_new_float
 	test	rax, rax
 	je	.LBB49_12
 # %bb.10:
-	mov	dword ptr [rax], 1481920322
-	mov	qword ptr [rax + 4], 4
-	mov	qword ptr [rax + 12], r14
+	movabs	rcx, 5776887618
+	mov	qword ptr [rax + 32], rcx
+	mov	qword ptr [rax], 4
+	mov	qword ptr [rax + 8], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 20], xmm0
-	mov	dword ptr [rax + 36], 1
+	movups	xmmword ptr [rax + 16], xmm0
 	add	rax, 40
 	jmp	.LBB49_13
 .LBB49_12:
@@ -2966,12 +2966,12 @@ _xtc_new_double:                        # @_xtc_new_double
 	mov	rcx, rax
 	add	rax, 111
 	and	rax, -64
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], 8
-	mov	qword ptr [rax - 28], r14
+	movabs	rdx, 5776887619
+	mov	qword ptr [rax - 8], rdx
+	mov	qword ptr [rax - 40], 8
+	mov	qword ptr [rax - 32], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
+	movups	xmmword ptr [rax - 24], xmm0
 	mov	qword ptr [rax - 48], rcx
 	jmp	.LBB50_13
 .LBB50_7:
@@ -2993,12 +2993,12 @@ _xtc_new_double:                        # @_xtc_new_double
 	test	rax, rax
 	je	.LBB50_12
 # %bb.10:
-	mov	dword ptr [rax], 1481920322
-	mov	qword ptr [rax + 4], 8
-	mov	qword ptr [rax + 12], r14
+	movabs	rcx, 5776887618
+	mov	qword ptr [rax + 32], rcx
+	mov	qword ptr [rax], 8
+	mov	qword ptr [rax + 8], r14
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 20], xmm0
-	mov	dword ptr [rax + 36], 1
+	movups	xmmword ptr [rax + 16], xmm0
 	add	rax, 40
 	jmp	.LBB50_13
 .LBB50_12:
@@ -3038,12 +3038,12 @@ _xtc_new_string:                        # @_xtc_new_string
 	test	rax, rax
 	je	.LBB51_3
 # %bb.4:
-	mov	dword ptr [rax], 1481920322
-	mov	qword ptr [rax + 4], 8
-	mov	qword ptr [rax + 12], rbx
+	movabs	rcx, 5776887618
+	mov	qword ptr [rax + 32], rcx
+	mov	qword ptr [rax], 8
+	mov	qword ptr [rax + 8], rbx
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax + 20], xmm0
-	mov	dword ptr [rax + 36], 1
+	movups	xmmword ptr [rax + 16], xmm0
 	add	rax, 40
 	pop	rbx
 	ret
@@ -3059,7 +3059,7 @@ _xtc_new_string:                        # @_xtc_new_string
 	.type	_xtc_count,@function
 _xtc_count:                             # @_xtc_count
 # %bb.0:
-	mov	eax, dword ptr [rdi - 28]
+	mov	eax, dword ptr [rdi - 32]
 	ret
 .Lfunc_end52:
 	.size	_xtc_count, .Lfunc_end52-_xtc_count
@@ -3095,7 +3095,7 @@ _xtc_dealloc:                           # @_xtc_dealloc
 	jne	.LBB53_3
 	jmp	.LBB53_2
 .LBB53_4:
-	mov	rcx, qword ptr [rbx - 12]
+	mov	rcx, qword ptr [rbx - 16]
 	test	rcx, rcx
 	je	.LBB53_7
 # %bb.5:
@@ -3109,14 +3109,14 @@ _xtc_dealloc:                           # @_xtc_dealloc
 	test	rdx, rdx
 	jne	.LBB53_6
 .LBB53_7:
-	mov	qword ptr [rbx - 12], 0
+	mov	qword ptr [rbx - 16], 0
 	cmp	dword ptr [rax], 0
 	je	.LBB53_9
 # %bb.8:
 	mov	dword ptr [rip + xt_rt_spin], 0
 .LBB53_9:
-	mov	r15, qword ptr [rbx - 20]
-	cmp	dword ptr [rbx - 40], 1481920323
+	mov	r15, qword ptr [rbx - 24]
+	cmp	dword ptr [rbx - 8], 1481920323
 	jne	.LBB53_37
 # %bb.10:
 	test	r15, r15
@@ -3151,8 +3151,8 @@ _xtc_dealloc:                           # @_xtc_dealloc
 	test	r15, r15
 	je	.LBB53_41
 # %bb.38:
-	mov	r12, qword ptr [rbx - 36]
-	mov	r13, qword ptr [rbx - 28]
+	mov	r12, qword ptr [rbx - 40]
+	mov	r13, qword ptr [rbx - 32]
 	mov	dword ptr [rbx - 4], -2147483648
 	test	r13, r13
 	je	.LBB53_41
@@ -3355,7 +3355,7 @@ _xtc_weak_zero_for:                     # @_xtc_weak_zero_for
 	jne	.LBB54_3
 	jmp	.LBB54_2
 .LBB54_4:
-	mov	rcx, qword ptr [rdi - 12]
+	mov	rcx, qword ptr [rdi - 16]
 	test	rcx, rcx
 	je	.LBB54_7
 # %bb.5:
@@ -3369,7 +3369,7 @@ _xtc_weak_zero_for:                     # @_xtc_weak_zero_for
 	test	rdx, rdx
 	jne	.LBB54_6
 .LBB54_7:
-	mov	qword ptr [rdi - 12], 0
+	mov	qword ptr [rdi - 16], 0
 	cmp	dword ptr [rax], 0
 	je	.LBB54_9
 # %bb.8:
@@ -3471,11 +3471,11 @@ _xtc_weak_register:                     # @_xtc_weak_register
 	test	rsi, rsi
 	je	.LBB56_13
 # %bb.9:
-	cmp	dword ptr [rsi - 40], 1481920322
+	cmp	dword ptr [rsi - 8], 1481920322
 	jne	.LBB56_13
 # %bb.10:
-	mov	rcx, qword ptr [rsi - 12]
-	add	rsi, -12
+	mov	rcx, qword ptr [rsi - 16]
+	add	rsi, -16
 	mov	qword ptr [rdi - 16], rsi
 	mov	qword ptr [rdi - 8], rcx
 	test	rcx, rcx

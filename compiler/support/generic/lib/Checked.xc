@@ -14,9 +14,10 @@
 i32 write(i32 fd, u8* buf, i32 len);   // as Stdio declares it
 void _xt_exit(i32 code);
 
-// The heap block header (rt.c, rt-freestanding.c): the magic at payload-40,
-// the element stride after it, then the element count. A block of 64 KB and
-// more is page-aligned and carries the second magic, with the same layout.
+// The heap block header (rt.c, rt-freestanding.c): the magic at payload-8,
+// next to the refcount; an array's element count at payload-32. A block of
+// 64 KB and more is page-aligned and carries the second magic, with the same
+// layout.
 #define XT_CHECK_MAGIC $58544F42
 #define XT_CHECK_MAGIC_ALIGNED $58544F43
 
@@ -82,7 +83,7 @@ void _xt_check_object(pointer ptr, u8* site)
     // call is the trap, so a check costs a compare where it is used.
     if (ptr != (pointer)0)
         {
-        if (*(u32*)(pointer)((u8*)ptr - 40) != (u32)XT_CHECK_MAGIC)
+        if (*(u32*)(pointer)((u8*)ptr - 8) != (u32)XT_CHECK_MAGIC)
             _xt_check_cast_trap(site);
         }
 }
@@ -102,12 +103,12 @@ void _xt_check_bounds(pointer ptr, u64 index, u8* site)
         // Not a heap block (a pointer into a stack or global array, or into
         // memory C made): its extent is unknown, so nothing is checked.
         u8* h = (u8*)ptr - 40;
-        u32 magic = *(u32*)(pointer)h;
+        u32 magic = *(u32*)(pointer)(h + 32);
         // The two magics differ only in bit 0: one compare, and no merge.
         if ((magic | (u32)1) == (u32)XT_CHECK_MAGIC_ALIGNED)
             {
-            if (index >= *(u64*)(pointer)(h + 12))
-                _xt_check_trap(site, index, *(u64*)(pointer)(h + 12), true);
+            if (index >= *(u64*)(pointer)(h + 8))
+                _xt_check_trap(site, index, *(u64*)(pointer)(h + 8), true);
             }
         }
 }

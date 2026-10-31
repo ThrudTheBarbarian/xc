@@ -231,7 +231,7 @@ static const char *__xt_ms_symbolise(const void *addr, unsigned long *offset,
  * compiler emits as `__xt_ms_sites`.
  *
  * Bounds need no new metadata: every heap block already carries
- * {magic, stride, count} at payload-40, so the element count is recoverable
+ * {stride, count, ..., magic} at payload-40, so the element count is recoverable
  * from the pointer alone. A pointer with the wrong magic is not a heap block —
  * reported as such rather than guessed at.
  */
@@ -307,11 +307,11 @@ void _xt_trap_bounds(const char *site, void *ptr, unsigned long index){
     fprintf(stderr, "\n=== xcc: out-of-bounds access ===\n");
     if (site) fprintf(stderr, "  at %s\n", site);
     if (ptr){
-        unsigned char *h = (unsigned char *)ptr - 40;   /* XT_HDR — see rt.c */
-        unsigned int magic = *(unsigned int *)(h + 0);
+        unsigned char *h = (unsigned char *)ptr - 40;   /* XT_HDR; magic +32, stride +0, count +8 — see rt.c */
+        unsigned int magic = *(unsigned int *)(h + 32);
         if (magic == 0x58544F42U || magic == 0x58544F43U){
-            unsigned long stride = *(unsigned long *)(h + 4);
-            unsigned long count  = *(unsigned long *)(h + 12);
+            unsigned long stride = *(unsigned long *)(h + 0);
+            unsigned long count  = *(unsigned long *)(h + 8);
             fprintf(stderr, "  %s: index %lu, but the allocation holds %lu "
                             "element%s of %lu byte%s\n",
                     "array", index, count,
@@ -388,8 +388,8 @@ void _xt_check_bounds_n(void *ptr, unsigned long index, unsigned long count,
  * at the wrong vtable later. */
 void _xt_check_object(void *ptr, const char *site){
     if (!ptr) return;
-    unsigned char *h = (unsigned char *)ptr - 40;   /* XT_HDR — see rt.c */
-    if (*(unsigned int *)(h + 0) == 0x58544F42U) return;
+    unsigned char *h = (unsigned char *)ptr - 40;   /* XT_HDR; magic +32, stride +0, count +8 — see rt.c */
+    if (*(unsigned int *)(h + 32) == 0x58544F42U) return;
     fprintf(stderr, "\n=== xcc: a pointer cast to a class is not an object ===\n");
     if (site) fprintf(stderr, "  at %s\n", site);
     fprintf(stderr, "  %p has no object header\n", ptr);
@@ -400,13 +400,13 @@ void _xt_check_object(void *ptr, const char *site){
 
 void _xt_check_bounds(void *ptr, unsigned long index, const char *site){
     if (!ptr) { XT_MS_CAPTURE(); _xt_trap_bounds(site, ptr, index); return; }
-    unsigned char *h = (unsigned char *)ptr - 40;   /* XT_HDR — see rt.c */
+    unsigned char *h = (unsigned char *)ptr - 40;   /* XT_HDR; magic +32, stride +0, count +8 — see rt.c */
     /* Not a heap block. A block of 64 KB and more is page-aligned and carries
      * the second magic (rt.c's XT_MAGIC_ALIGNED), with the same header: it
      * used to be skipped, so no large array was ever checked. */
-    unsigned int magic = *(unsigned int *)(h + 0);
+    unsigned int magic = *(unsigned int *)(h + 32);
     if (magic != 0x58544F42U && magic != 0x58544F43U) return;
-    if (index >= *(unsigned long *)(h + 12)) {
+    if (index >= *(unsigned long *)(h + 8)) {
         XT_MS_CAPTURE();
         _xt_trap_bounds(site, ptr, index);
     }

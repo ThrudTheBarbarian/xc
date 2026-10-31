@@ -388,12 +388,12 @@ _xtc_alloc:                             # @_xtc_alloc
 	test	rax, rax
 	je	.LBB8_4
 # %bb.5:
-	mov	dword ptr [rax + 8], 1481920322
-	mov	qword ptr [rax + 12], rbx
-	mov	qword ptr [rax + 20], rdi
-	mov	qword ptr [rax + 28], rsi
-	mov	qword ptr [rax + 36], 0
-	mov	dword ptr [rax + 44], 1
+	movabs	rcx, 5776887618
+	mov	qword ptr [rax + 40], rcx
+	mov	qword ptr [rax + 8], rbx
+	mov	qword ptr [rax + 16], rdi
+	mov	qword ptr [rax + 24], rsi
+	mov	qword ptr [rax + 32], 0
 	add	rax, 48
 	jmp	.LBB8_6
 .LBB8_4:
@@ -1137,12 +1137,12 @@ _xtc_alloc_aligned:                     # @_xtc_alloc_aligned
 	lea	rcx, [rax + 8]
 	add	rax, 16439
 	and	rax, -16384
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], rbx
-	mov	qword ptr [rax - 28], rdi
-	mov	qword ptr [rax - 20], rsi
-	mov	qword ptr [rax - 12], 0
-	mov	dword ptr [rax - 4], 1
+	movabs	rdx, 5776887619
+	mov	qword ptr [rax - 8], rdx
+	mov	qword ptr [rax - 40], rbx
+	mov	qword ptr [rax - 32], rdi
+	mov	qword ptr [rax - 24], rsi
+	mov	qword ptr [rax - 16], 0
 	mov	qword ptr [rax - 48], rcx
 	cmp	dword ptr [rip + _xt_threads_active], 0
 	je	.LBB17_8
@@ -1407,12 +1407,12 @@ _xtc_alloc_line:                        # @_xtc_alloc_line
 	lea	rcx, [rax + 8]
 	add	rax, 119
 	and	rax, -64
-	mov	dword ptr [rax - 40], 1481920323
-	mov	qword ptr [rax - 36], rdi
-	mov	qword ptr [rax - 28], rsi
+	movabs	rdx, 5776887619
+	mov	qword ptr [rax - 8], rdx
+	mov	qword ptr [rax - 40], rdi
+	mov	qword ptr [rax - 32], rsi
 	xorps	xmm0, xmm0
-	movups	xmmword ptr [rax - 20], xmm0
-	mov	dword ptr [rax - 4], 1
+	movups	xmmword ptr [rax - 24], xmm0
 	mov	qword ptr [rax - 48], rcx
 	jmp	.LBB18_6
 .LBB18_4:
@@ -1851,7 +1851,7 @@ _xtc_new_string:                        # @_xtc_new_string
 	.p2align	4, 0x90
 _xtc_count:                             # @_xtc_count
 # %bb.0:
-	mov	eax, dword ptr [rcx - 28]
+	mov	eax, dword ptr [rcx - 32]
 	ret
                                         # -- End function
 	.def	_xtc_dealloc;
@@ -1888,7 +1888,7 @@ _xtc_dealloc:                           # @_xtc_dealloc
 	jne	.LBB46_3
 	jmp	.LBB46_2
 .LBB46_4:
-	mov	rax, qword ptr [rsi - 12]
+	mov	rax, qword ptr [rsi - 16]
 	test	rax, rax
 	je	.LBB46_7
 # %bb.5:
@@ -1902,14 +1902,14 @@ _xtc_dealloc:                           # @_xtc_dealloc
 	test	rcx, rcx
 	jne	.LBB46_6
 .LBB46_7:
-	mov	qword ptr [rsi - 12], 0
+	mov	qword ptr [rsi - 16], 0
 	cmp	dword ptr [rip + _xt_threads_active], 0
 	je	.LBB46_9
 # %bb.8:
 	mov	dword ptr [rip + xt_rt_spin], 0
 .LBB46_9:
-	mov	rbx, qword ptr [rsi - 20]
-	cmp	dword ptr [rsi - 40], 1481920323
+	mov	rbx, qword ptr [rsi - 24]
+	cmp	dword ptr [rsi - 8], 1481920323
 	jne	.LBB46_31
 # %bb.10:
 	test	rbx, rbx
@@ -1943,8 +1943,8 @@ _xtc_dealloc:                           # @_xtc_dealloc
 	test	rbx, rbx
 	je	.LBB46_35
 # %bb.32:
-	mov	r14, qword ptr [rsi - 36]
-	mov	r15, qword ptr [rsi - 28]
+	mov	r14, qword ptr [rsi - 40]
+	mov	r15, qword ptr [rsi - 32]
 	mov	dword ptr [rsi - 4], -2147483648
 	test	r15, r15
 	je	.LBB46_35
@@ -2074,7 +2074,7 @@ _xtc_weak_zero_for:                     # @_xtc_weak_zero_for
 	jne	.LBB47_3
 	jmp	.LBB47_2
 .LBB47_4:
-	mov	rax, qword ptr [rcx - 12]
+	mov	rax, qword ptr [rcx - 16]
 	test	rax, rax
 	je	.LBB47_7
 # %bb.5:
@@ -2088,7 +2088,7 @@ _xtc_weak_zero_for:                     # @_xtc_weak_zero_for
 	test	rdx, rdx
 	jne	.LBB47_6
 .LBB47_7:
-	mov	qword ptr [rcx - 12], 0
+	mov	qword ptr [rcx - 16], 0
 	cmp	dword ptr [rip + _xt_threads_active], 0
 	je	.LBB47_9
 # %bb.8:
@@ -2190,11 +2190,11 @@ _xtc_weak_register:                     # @_xtc_weak_register
 	test	rdx, rdx
 	je	.LBB49_13
 # %bb.9:
-	cmp	dword ptr [rdx - 40], 1481920322
+	cmp	dword ptr [rdx - 8], 1481920322
 	jne	.LBB49_13
 # %bb.10:
-	mov	rax, qword ptr [rdx - 12]
-	add	rdx, -12
+	mov	rax, qword ptr [rdx - 16]
+	add	rdx, -16
 	mov	qword ptr [rcx - 16], rdx
 	mov	qword ptr [rcx - 8], rax
 	test	rax, rax

@@ -297,7 +297,7 @@ Lchk_BB2_3:
 	subs	x8, x8, #40
 	stur	x8, [x29, #-32]
 	ldur	x8, [x29, #-32]
-	ldr	w8, [x8]
+	ldr	w8, [x8, #32]
 	stur	w8, [x29, #-36]
 	ldur	w8, [x29, #-36]
 	mov	w9, #20290                      ; =0x4f42
@@ -314,10 +314,10 @@ Lchk_BB2_4:
 	b	Lchk_BB2_5
 Lchk_BB2_5:
 	ldur	x8, [x29, #-32]
-	ldur	x8, [x8, #4]
+	ldr	x8, [x8]
 	stur	x8, [x29, #-48]
 	ldur	x8, [x29, #-32]
-	ldur	x8, [x8, #12]
+	ldr	x8, [x8, #8]
 	stur	x8, [x29, #-56]
 	adrp	x8, ___stderrp@GOTPAGE
 	ldr	x8, [x8, ___stderrp@GOTPAGEOFF]
@@ -503,7 +503,7 @@ Lchk_BB4_2:
 	subs	x8, x8, #40
 	str	x8, [sp, #24]
 	ldr	x8, [sp, #24]
-	ldr	w8, [x8]
+	ldr	w8, [x8, #32]
 	mov	w9, #20290                      ; =0x4f42
 	movk	w9, #22612, lsl #16
 	subs	w8, w8, w9
@@ -620,7 +620,7 @@ Lchk_BB5_8:
 	subs	x8, x8, #40
 	str	x8, [sp, #8]
 	ldr	x8, [sp, #8]
-	ldr	w8, [x8]
+	ldr	w8, [x8, #32]
 	str	w8, [sp, #4]
 	ldr	w8, [sp, #4]
 	mov	w9, #20290                      ; =0x4f42
@@ -640,7 +640,7 @@ Lchk_BB5_10:
 Lchk_BB5_11:
 	ldur	x8, [x29, #-16]
 	ldr	x9, [sp, #8]
-	ldur	x9, [x9, #12]
+	ldr	x9, [x9, #8]
 	subs	x8, x8, x9
 	b.lo	Lchk_BB5_19
 	b	Lchk_BB5_12

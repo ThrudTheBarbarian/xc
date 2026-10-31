@@ -29,11 +29,15 @@
    inline in four back ends — the "duplicated contract lists drift" shape of
    bug 027. */
 #define XT_RC_BYTES   4
-#define XT_MAGIC_OFF  0
-#define XT_STRIDE_OFF 4
-#define XT_COUNT_OFF  12
-#define XT_DEALLOC_OFF 20
-#define XT_WEAKH_OFF  28
+/* The magic sits next to the refcount, at payload-8, so a class instance's
+   8-byte header (magic + refcount) and an array's 40-byte one put it in the
+   same place; the 8-byte fields are 8-aligned (2026-10-31,
+   private:docs/Design/compact-object-header.md). */
+#define XT_STRIDE_OFF 0
+#define XT_COUNT_OFF  8
+#define XT_DEALLOC_OFF 16
+#define XT_WEAKH_OFF  24
+#define XT_MAGIC_OFF  32
 #define XT_RC_OFF     36
 #define XT_HDR        (XT_RC_OFF + XT_RC_BYTES)          /* 40 */
 #define XT_RC_T       uint32_t

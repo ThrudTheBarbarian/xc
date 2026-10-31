@@ -44,6 +44,11 @@
 // you change one, change the other — bug 027's "duplicated contract lists
 // drift" is exactly this, and the refcount width is now in both.
 #define XT_RC_BYTES 4
+#define XT_STRIDE_OFF 0
+#define XT_COUNT_OFF 8
+#define XT_DEALLOC_OFF 16
+#define XT_WEAKH_OFF 24
+#define XT_MAGIC_OFF 32
 #define XT_RC_OFF 36
 #define XT_HDR (XT_RC_OFF + XT_RC_BYTES) /* 40 */
 #define XT_RC_T uint32_t
@@ -527,11 +532,11 @@ void* _xtc_alloc(uint64_t count, uint64_t stride, void (*dealloc)(void*))
     uint8_t* p = (uint8_t*)_xt_calloc(b + XT_HDR);
     if (!p)
         return 0;
-    *(uint32_t*)(p + 0) = 0x58544F42U;
-    *(uint64_t*)(p + 4) = stride;
-    *(uint64_t*)(p + 12) = count;
-    *(void (**)(void*))(p + 20) = dealloc;
-    *(void**)(p + 28) = 0;
+    *(uint32_t*)(p + XT_MAGIC_OFF) = 0x58544F42U;
+    *(uint64_t*)(p + XT_STRIDE_OFF) = stride;
+    *(uint64_t*)(p + XT_COUNT_OFF) = count;
+    *(void (**)(void*))(p + XT_DEALLOC_OFF) = dealloc;
+    *(void**)(p + XT_WEAKH_OFF) = 0;
     *(XT_RC_T*)(p + XT_RC_OFF) = 1;
     return p + XT_HDR;
     }
@@ -833,11 +838,11 @@ void* _xtc_alloc_aligned(uint64_t count, uint64_t stride, void (*dealloc)(void*)
         return 0;
     uint8_t* payload = (uint8_t*)(((uint64_t)(raw + XT_HDR + 8) + XT_PAGE - 1) & ~(XT_PAGE - 1));
     uint8_t* p = payload - XT_HDR;
-    *(uint32_t*)(p + 0) = XT_MAGIC_ALIGNED;
-    *(uint64_t*)(p + 4) = stride;
-    *(uint64_t*)(p + 12) = count;
-    *(void (**)(void*))(p + 20) = dealloc;
-    *(void**)(p + 28) = 0;
+    *(uint32_t*)(p + XT_MAGIC_OFF) = XT_MAGIC_ALIGNED;
+    *(uint64_t*)(p + XT_STRIDE_OFF) = stride;
+    *(uint64_t*)(p + XT_COUNT_OFF) = count;
+    *(void (**)(void*))(p + XT_DEALLOC_OFF) = dealloc;
+    *(void**)(p + XT_WEAKH_OFF) = 0;
     *(XT_RC_T*)(p + XT_RC_OFF) = 1;
     *(void**)(p - 8) = raw;
     xt_simd_reg(payload, count * stride);
@@ -866,11 +871,11 @@ void* _xtc_alloc_line(uint64_t count, uint64_t stride)
         return 0;
     uint8_t* payload = (uint8_t*)(((uint64_t)(raw + XT_HDR + 8) + 63) & ~(uint64_t)63);
     uint8_t* p = payload - XT_HDR;
-    *(uint32_t*)(p + 0) = XT_MAGIC_ALIGNED;
-    *(uint64_t*)(p + 4) = stride;
-    *(uint64_t*)(p + 12) = count;
-    *(void (**)(void*))(p + 20) = 0;
-    *(void**)(p + 28) = 0;
+    *(uint32_t*)(p + XT_MAGIC_OFF) = XT_MAGIC_ALIGNED;
+    *(uint64_t*)(p + XT_STRIDE_OFF) = stride;
+    *(uint64_t*)(p + XT_COUNT_OFF) = count;
+    *(void (**)(void*))(p + XT_DEALLOC_OFF) = 0;
+    *(void**)(p + XT_WEAKH_OFF) = 0;
     *(XT_RC_T*)(p + XT_RC_OFF) = 1;
     *(void**)(p - 8) = raw;
     return payload;
@@ -945,7 +950,7 @@ void* _xtc_new_string(uint64_t n)
 
 void _xtc_weak_zero_for(void*);
 /* The element count of a `new T[N]` allocation, read from the header the
-   allocator wrote (count at base+12, payload at base+XT_HDR). The `.length` of a
+   allocator wrote (count at base+XT_COUNT_OFF, payload at base+XT_HDR). The `.length` of a
    runtime-sized heap array — private:docs/bugs/045 remedy 1.
 
    NOT u16: that truncated every array over 65535 elements, and because
@@ -955,22 +960,22 @@ void _xtc_weak_zero_for(void*);
    main.m describes a narrower one, so 4 is the width both can honour. */
 uint32_t _xtc_count(void* o)
     {
-    return (uint32_t)*(uint64_t*)((uint8_t*)o - XT_HDR + 12);
+    return (uint32_t)*(uint64_t*)((uint8_t*)o - XT_HDR + XT_COUNT_OFF);
     }
 
 void _xtc_dealloc(void* o)
     {
     _xtc_weak_zero_for(o);
     uint8_t* base = (uint8_t*)o - XT_HDR;
-    uint64_t stride = *(uint64_t*)(base + 4);
-    uint64_t count = *(uint64_t*)(base + 12);
-    void (*d)(void*) = *(void (**)(void*))(base + 20);
+    uint64_t stride = *(uint64_t*)(base + XT_STRIDE_OFF);
+    uint64_t count = *(uint64_t*)(base + XT_COUNT_OFF);
+    void (*d)(void*) = *(void (**)(void*))(base + XT_DEALLOC_OFF);
     /* A page-aligned block holds numbers, never objects, so its dealloc slot
        is free for a ONCE hook: a GPU runtime that pinned the block for its
        copies (ParCuda.pinned) stores the unpin there, and it is called once
        with the payload before the block goes. The block's header is not its
        allocator base either (see _xtc_alloc_aligned). */
-    if (*(uint32_t*)(base + 0) == XT_MAGIC_ALIGNED)
+    if (*(uint32_t*)(base + XT_MAGIC_OFF) == XT_MAGIC_ALIGNED)
         {
         if (d)
             d(o);
@@ -995,7 +1000,7 @@ void _xtc_dealloc(void* o)
     _xt_free(base);
     }
 
-#define _XT_WH(o) (*(void***)((uint8_t*)(o) - (XT_HDR - 28)))
+#define _XT_WH(o) (*(void***)((uint8_t*)(o) - (XT_HDR - XT_WEAKH_OFF)))
 // The intrusive list is the one piece of runtime state two threads can splice
 // at once (private:docs/Design/threading.md §4.4), so every operation runs under the
 // runtime lock. xt_weak_unreg is the unlocked body, so register can unlink and
@@ -1031,7 +1036,7 @@ void _xtc_weak_register(void** slot, void* obj)
     {
     _xt_rt_lock();
     xt_weak_unreg(slot);
-    if (!obj || *(uint32_t*)((uint8_t*)obj - XT_HDR) != 0x58544F42U)
+    if (!obj || *(uint32_t*)((uint8_t*)obj - XT_HDR + XT_MAGIC_OFF) != 0x58544F42U)
         {
         _xt_rt_unlock();
         return;
