@@ -1,0 +1,210 @@
+---
+title: "Guide: your first window"
+description: "A window, a label, a button and a method that runs when it is pressed: the smallest complete UXKit program, and what each line is for."
+slug: versions/0.89/compiler/api/uxkit/guide-first-window
+banner:
+  content: 'This is the documentation for xc 0.89. <a href="/compiler/">The current documentation</a> describes the newest version.'
+pagefind: false
+---
+
+This is the smallest complete UXKit program: a window, a label, a button, and a
+method that runs when the button is pressed. The whole program is below, and it
+is about forty lines.
+
+The program names no platform. The same source is a native app on GEM, Windows,
+macOS, Linux, iOS, Android and the web.
+
+## The whole program
+
+```c
+#import <Stdio.xc>
+#import "UXPlatform.xc"
+#import "UXApplication.xc"
+#import "UXWindow.xc"
+#import "UXView.xc"
+#import "UXControl.xc"
+#import "UXGeometry.xc"
+
+class Counter : Object <UXApplicationDelegate>
+{
+    UXLabel* readout;
+    i32      presses;
+
+    void init(void) { presses = 0; readout = (UXLabel*)0; }
+
+    // A callback: &self.onPress carries the receiver AND the code.
+    void onPress(UXControl* sender) {
+        presses = presses + 1;
+        readout.setText(presses == 1 ? (u8*)"pressed once"
+                                     : (u8*)"pressed again");
+    }
+
+    i32 applicationDidStart(UXApplication* app) {
+        UXView*   content = new UXView();
+        UXWindow* win     = new UXWindow();
+        app.addWindow(win);
+        win.open((u8*)"First window", UXGeom.make(80, 80, 240, 120), content);
+
+        readout = new UXLabel();
+        readout.setText((u8*)"not pressed yet");
+        content.addSubview(readout, UXGeom.make(16, 16, 200, 18));
+
+        UXButton* b = new UXButton();
+        b.setTitle((u8*)"Press me");
+        b.setAction(&self.onPress);
+        content.addSubview(b, UXGeom.make(16, 48, 96, 24));
+
+        win.tree.finalise();
+        win.displayAll();
+        return 0;
+    }
+}
+
+void main(void) {
+    UXApplication* app = new UXApplication();
+    Counter* c = new Counter();
+    app.setDelegate(c);
+    app.run();
+}
+```
+
+## Building it
+
+With UXKit installed, a program replaces its UXKit imports with one line,
+
+```c
+#use <UXKit>
+```
+
+and builds with nothing else:
+
+```sh
+xcc -A arm64 first_window.xc -o first_window       # macOS
+xcc -A win64 first_window.xc -o first_window.exe   # Windows: ship libUXKit.dll beside it
+xcc -A x86_64 first_window.xc -o first_window      # Linux: ship libUXKit.so and libUXGtk.so beside it
+xcc -A wasm32 first_window.xc -o first_window      # the web
+```
+
+A web app ships `libUXKit.wasm`, `libUXKit.json` and UXKit's two page scripts,
+`ux_web_page.js` and `ux_web_browser.js`, beside its own `.js` and `.wasm`; all
+four are in the installed `wasm32` directory. The page loads `ux_web_page.js`
+and sets `xccConfig.workerScript` to `ux_web_browser.js`.
+
+`frameworks/uxkit/install.sh` builds the library for each target and installs it
+in the third-party tree, `/opt/xcc/3p/uxkit/<target>/`, beside the version
+contract a program can check (`UXAbi.xc`). The library is the toolkit with that
+target's driver: on macOS it includes the Objective-C part of the AppKit driver
+and links Cocoa itself; on Linux it needs GTK 4 on the machine it runs on.
+
+iOS and Android are not ready to use installed yet. For those, and for working
+on UXKit itself, build against the sources:
+
+```sh
+cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib \
+   -install_name $PWD/libUXAppKit.dylib libUXAppKit.m -framework Cocoa \
+   -o libUXAppKit.dylib
+xcc -A arm64 -I <uxkit> first_window.xc \
+    -Xlinker libUXAppKit.dylib -o first_window
+./first_window
+```
+
+## What each part is for
+
+### The delegate, not a subclass
+
+```c
+class Counter : Object <UXApplicationDelegate>
+```
+
+Your controller is a plain object that **conforms to a protocol**. It does not
+inherit from an application class, so it can inherit from whatever your program
+needs. `applicationDidStart` is the one method you must provide. It runs once,
+after the toolkit is up and before the first event, and you build your
+interface in it.
+
+### No platform in the source
+
+```c
+UXApplication* app = new UXApplication();
+```
+
+The **driver** is the backend. With [`UXPlatform`](/versions/0.89/compiler/api/uxkit/uxplatform/)
+imported (first, before the other UXKit files) or `#use <UXKit>`, a new
+application installs the one for the target the program is built for: AppKit for `-A arm64`,
+Win32 for `-A win64`, GTK for `-A x86_64`, the web for `-A wasm32`, iOS,
+Android and GEM for theirs. Build the same file for another target and it is a
+native app there; see [the driver model](/versions/0.89/compiler/api/uxkit/guide-drivers/).
+
+Nothing in the program mentions a platform. Keep it that way as you write: if
+you need a platform name inside a controller, there is almost always a neutral
+API for what you want.
+
+### Views go in a tree, positioned by their parent
+
+```c
+content.addSubview(readout, UXGeom.make(16, 16, 200, 18));
+```
+
+A view does not place itself. You hand it to a parent **with a frame**, and the
+parent owns it from then on. Frames are `x, y, width, height` in the parent's
+coordinates, so `16, 16` is sixteen points in from the content view's top-left
+corner, not the screen's.
+
+Number literals bind to the parameter's type, so `UXGeom.make(16, 16, 200, 18)`
+needs no casts. Some toolkit sources contain `(i16)` casts; they are a style
+choice and not required.
+
+### A button's action is a callback
+
+```c
+b.setAction(&self.onPress);
+```
+
+`&self.onPress` is a **callback**: one value carrying both the receiver and the
+code. There is no selector to misspell, no target field to set separately, and
+no downcast in the handler.
+
+A callback never owns its receiver, which has two effects. It breaks what would
+otherwise be a retain cycle (`window → tree → button → action → controller →
+window`). And if the controller has been deallocated, the button does nothing
+instead of jumping into freed memory. The toolkit tests `if (action)`, which is
+false both when no action is set and when the receiver is gone.
+
+You cannot write `weak:` on a callback. It is implied, and the compiler reports
+an error if you write it.
+
+### finalise() then displayAll()
+
+```c
+win.tree.finalise();
+win.displayAll();
+```
+
+`finalise` closes the view tree. It tells the toolkit the shape is complete, so
+the backend can realize native controls for it. `displayAll` then paints the
+window and, on backends with native widgets, creates them.
+
+Build your whole interface first, then finalise once. Adding views after
+`finalise` works (an editor does it constantly), but the first paint needs a
+complete tree.
+
+### run() does not return
+
+```c
+app.run();
+```
+
+The event loop takes over. The rest of your program's behaviour happens in
+callbacks, delegate methods and timers. The loop ends when the last window
+closes or something calls [`stop`](/versions/0.89/compiler/api/uxkit/uxapplication/).
+
+## What to read next
+
+- [The view tree and layout](/versions/0.89/compiler/api/uxkit/guide-view-tree/): frames,
+  parents, resizing, and who owns what
+- [Controls and callbacks](/versions/0.89/compiler/api/uxkit/guide-controls/): the full
+  control set and how actions are wired
+- [`UXApplication`](/versions/0.89/compiler/api/uxkit/uxapplication/): the delegate protocol
+  in full
+- [`UXButton`](/versions/0.89/compiler/api/uxkit/uxbutton/): what a press does on each
+  backend

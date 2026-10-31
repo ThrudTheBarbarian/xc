@@ -1,0 +1,253 @@
+---
+title: "Guide: rsc files, or designing a window instead of writing one"
+description: "A GEM resource file is the design. How outlets and actions wire themselves, how one form carries a layout per form factor, and how connections can differ between them."
+slug: versions/0.89/compiler/api/uxkit/guide-rsc
+banner:
+  content: 'This is the documentation for xc 0.89. <a href="/compiler/">The current documentation</a> describes the newest version.'
+pagefind: false
+---
+
+The other guides build windows in code. This guide loads them from a designed
+resource.
+
+```c
+UXRscInstance* ni = UXRsc.load(bytes, len, FORM_PREFS, (UXDesignable*)self, window.contentView);
+```
+
+After this one call, a designed dialog is on screen with its outlets assigned
+and its buttons wired to your methods. There is no layout code, no `setAction`
+call and no per-control setup.
+
+## The resource file is the design
+
+A GEM resource already contains an `OBJECT` tree for each dialog, so the
+resource file is the design, with nothing to compile. [**Rocks**](/versions/0.89/rocks/), the
+resource editor, is the Interface Builder for this toolkit, and what it writes is still a classic `.rsc` that any
+GEM AES reads. What GEM does not know about (layouts per form factor, custom
+classes, controllers and connections) is in a chunk after the classic data,
+where a GEM AES does not look.
+
+There are two loaders:
+
+| | |
+| --- | --- |
+| [`UXRsc`](/versions/0.89/compiler/api/uxkit/uxrsc/) | every backend. Builds UXKit views from the document, for this device's layout |
+| [`UXRscGem`](/versions/0.89/compiler/api/uxkit/uxrscgem/) | GEM only. Binds views onto libGEM's own `OBJECT` array, so the AES walks the resource in place; one layout, unscoped connections |
+
+Rocks draws its canvas with `UXRsc`'s own view mapping, so what you drag is
+what loads.
+
+:::tip[The resource supplies the *what*; you supply the *behaviour*]
+Views are chosen by `ob_type`. The resource says what each object **is** (its
+type, frame, flags and initial state), and the toolkit gives it identity,
+hit-testing and a place in the responder chain.
+
+Designing a window is therefore a separate activity from programming one, and
+not a different syntax for the same work.
+:::
+
+## Outlets and actions wire themselves
+
+You do not write wiring code. You **decorate** the fields and methods you want
+wired, and the compiler generates the rest.
+
+```c
+class PrefsController : Object
+{
+    outlet UXTextField* nameField;
+    outlet UXCheckbox*  showGrid;
+
+    void onApply(UXControl* c) :action { … }
+    void onCancel(UXControl* c) :action { … }
+}
+```
+
+A class that declares any `outlet` field or `:action` method **auto-conforms**
+to [`UXDesignable`](/versions/0.89/compiler/api/uxkit/uxdesignable/), and the compiler
+generates both of its methods from the decorations:
+
+| generated | from |
+| --- | --- |
+| `setOutlet(name, value)` | a checked assignment per `outlet` |
+| `wireAction(name, control)` | `control.setAction(&self.<method>)` per `:action` |
+
+The loader reaches a loaded object through that protocol and wires the rsc's
+connections **by name**. There is no per-application code, and no reflection
+beyond what the decorations declare and the compiler has checked.
+
+A misspelled outlet name in an rsc file is a `false` return at load. A connection of
+the **wrong kind** is refused and not mis-assigned, because the generated
+assignment is a checked cast against your field's declared type.
+
+You can call both generated methods directly to confirm the decorations took
+effect:
+
+```
+assign nameField: 1
+  landed in the field: 1
+unknown name: 0
+wrong type into nameField: 0
+wire onApply: 1
+  applied count: 1
+unknown action: 0
+```
+
+`applied count: 1` shows the button firing the wired method, beyond
+`wireAction` returning true. The program is
+`website/site/examples/uxkit/rscwiring.xc`, compiled by the `doc-examples` gate.
+
+:::caution[A refused outlet is cleared, not left alone]
+A type mismatch returns `false` **and** sets the field to null. It does not
+preserve the previous value.
+
+On an rsc file load this changes nothing: each outlet is connected once, from null,
+and a failed connection leaves it null either way. But a `false` return does not
+mean "nothing happened", so do not use it as a safe probe on an outlet that
+already holds something.
+:::
+
+## Loading
+
+```c
+UXRsc.load(bytes, len, formId, owner, into);            // this device's layout
+UXRsc.loadDoc(doc, formId, owner, into);                // from a document already read
+UXRsc.loadDocAs(doc, formId, klass, orient, owner, into); // a given layout theme
+```
+
+The `owner` is **File's Owner**: the object whose outlets get filled and whose
+actions get bound. It is your window controller. `into` is the view the form is
+added to, usually a window's content view.
+
+Each returns **null**, never a partial form, when the bytes do not parse or
+there is no such form.
+
+Besides File's Owner, a form can list **top-level objects**: controllers and
+other non-view objects, each of a class you name in Rocks. The loader makes
+them, connects their outlets and actions like the owner's, and returns them in
+the [`UXRscInstance`](/versions/0.89/compiler/api/uxkit/uxrscinstance/).
+
+When every connection is made, each object the load made that conforms to
+[`UXRscAwaking`](/versions/0.89/compiler/api/uxkit/uxrscawaking/), and then File's Owner, is
+sent `awakeFromRsc`. That is where code that needs its outlets goes.
+
+## Classes come from a compiler-generated factory
+
+An rsc file names classes as **strings**: a custom view subclass for a `G_USERDEF`
+slot, or a non-view top-level object such as a controller or a formatter.
+Something has to turn `"PrefsController"` into an object.
+
+Each **module** that owns designable classes contributes a generated
+`xgRscNew(name) -> Object*`, a switch over that module's classes, registered
+automatically through an `.init_array` entry.
+
+```c
+UXRsc.registerObjectFactory(fn);      // the explicit fallback
+```
+
+This has two consequences:
+
+- **Cross-module works.** An rsc file in one library can instantiate a class from
+  another, because the loader tries each registered factory in turn.
+- **A class the factories do not know is a null**, not a crash. An rsc file that
+  refers to a deleted class loads with that object missing, and the connections
+  to it fail quietly.
+
+## The chunk's versions
+
+| | |
+| --- | --- |
+| **v1** (`XGNB`) | class overrides, top-level objects, connections |
+| **v2** (`UXNB`) | adds forms with a layout per form factor, and logical ids |
+| **v3** (`UXNB`) | adds a scope to each connection, labels for top-level objects, and extension sections. |
+
+`UXRsc` reads all three, in portable code, on every backend. A v1 file reads
+under the compatibility rule: every tree is its own form, with one layout for
+every form factor. Existing resources keep working without any conversion.
+
+## Variants: one rsc, several form factors
+
+A form can carry several **variants** (a phone layout, a tablet layout, a
+desktop layout), and the loader picks the best available one by walking a
+fallback chain. An rsc file that ships only a desktop variant still loads on a phone,
+by falling back.
+
+The instance's `klass` reports which variant was used. This distinguishes "a
+phone layout exists" from "the desktop layout is in use on a phone".
+
+Each variant is a whole tree of its own, so a phone layout can nest controls in
+containers the desktop layout does not have.
+
+### Logical ids are how the code stays the same
+
+A control is referred to by a **logical id** instead of its index in a tree, so
+the same code binds to it in every variant even though the layouts differ.
+
+```c
+i32 obj = rsc.objForLogical(tree, LOGICAL_APPLY);
+if (obj < 0) { /* this variant does not have it — skip */ }
+```
+
+:::note[A missing control is a design decision, not a failure]
+`-1` is a normal answer. A phone variant may drop a control the desktop variant
+has, such as a secondary toolbar or an advanced option, and the caller skips it
+silently.
+
+This is what makes variants useful. If every variant had to carry every
+control, variants would differ only in geometry, and a layout system already
+handles geometry.
+:::
+
+### Connections can differ per layout
+
+Each connection has a **scope**: the layout themes it binds in. The
+default is all of them. A phone that fires `showDetail` from a toolbar button
+and a desktop that fires it from a list's selection have two connections to
+the same action, one scoped to the phone and one to the desktop and tablet.
+The loader binds only the connections whose scope includes the layout it
+loaded. See [`UXRsc`](/versions/0.89/compiler/api/uxkit/uxrsc/#connections-per-layout-theme).
+
+## The mistake that costs an afternoon
+
+:::danger[The byte parser borrows your buffer]
+Every `u8*` it returns (class names, member names, form names) points **into
+the bytes you passed to `open`**. They are valid only while you keep that
+buffer alive and unmodified.
+
+```c
+u8* name = rsc.formName(id);        // borrowed!
+free(rscBytes);                     // name is now garbage
+```
+
+Copy anything you intend to keep with
+[`UXStr.dup`](/versions/0.89/compiler/api/uxkit/uxstr/#dup). The symptom is a name that reads
+as nonsense later, in code far from the `free`, which makes the bug hard to
+trace.
+:::
+
+The parser borrows so that a resource with hundreds of names costs **no
+allocations** to parse. In exchange, the parser is a view onto your bytes, and
+you own their lifetime.
+
+## Testing an rsc file without a designer
+
+A document can be built in-process with
+[`UXRscDoc`](/versions/0.89/compiler/api/uxkit/uxrscdoc/), written with
+[`UXRscWriter`](/versions/0.89/compiler/api/uxkit/uxrscwriter/), and loaded with
+`loadDocAs` for each theme. The rsc pipeline is gated this way: a form with a
+desktop and a phone layout, a custom view class, a controller and scoped
+connections is loaded for the desktop, the phone and a tablet, and each load
+must bind the connections in its scope and no others.
+
+An rsc file change is therefore testable like any other change, without someone
+clicking through a window.
+
+## Where to go next
+
+- [`UXRsc`](/versions/0.89/compiler/api/uxkit/uxrsc/): loading a form
+- [`UXRscDoc`](/versions/0.89/compiler/api/uxkit/uxrscdoc/): the document model
+- [`UXRscV2`](/versions/0.89/compiler/api/uxkit/uxrscv2/): the chunk read in place
+- [`UXDesignable`](/versions/0.89/compiler/api/uxkit/uxdesignable/): the two generated
+  methods, and what the decorations mean
+- [`UXViewTree`](/versions/0.89/compiler/api/uxkit/uxviewtree/): what a loaded rsc becomes
+- [Guide: the driver model](/versions/0.89/compiler/api/uxkit/guide-drivers/): where
+  `formFactorClass` comes from
