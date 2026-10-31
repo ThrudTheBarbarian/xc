@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<PhoronixTestSuite>
+  <Downloads>
+    <Package>
+      <URL>https://compile-xc.org/downloads/xcc-linux-0.89.tar.bz2</URL>
+      <SHA256>513ca1d02a070cb2f2f2631ce1c6b401ca79f044b9860ad17faedc01282da744</SHA256>
+      <FileName>xcc-linux-0.89.tar.bz2</FileName>
+      <FileSize>7275308</FileSize>
+      <PlatformSpecific>Linux</PlatformSpecific>
+    </Package>
+    <Package>
+      <URL>https://compile-xc.org/downloads/xcc-bench-sources-0.89.tar.bz2</URL>
+      <SHA256>5b9e6c72799871d732cdb62287beec69f0de5bc0b981e5eb2f3a66723b637512</SHA256>
+      <FileName>xcc-bench-sources-0.89.tar.bz2</FileName>
+      <FileSize>155390</FileSize>
+    </Package>
+  </Downloads>
+</PhoronixTestSuite>
