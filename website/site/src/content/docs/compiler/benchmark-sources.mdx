@@ -2851,7 +2851,7 @@ i32 main(void)
 
 Hashcat's MD5 workload in xc. Each item hashes one 8-byte candidate
 
-Lines: 306.
+Lines: 308.
 
 ```c
 // md5 — hashcat's MD5 workload in xc. Each item hashes one 8-byte candidate
@@ -2907,7 +2907,7 @@ void hc_eu64(u64 v)
 #endif
 
 // A monotonic microsecond clock, measured the same way on every target.
-#if ARCH_win64
+#if OS_windows
 i32 QueryPerformanceCounter(i64* count);
 i32 QueryPerformanceFrequency(i64* freq);
 #else
@@ -2918,7 +2918,7 @@ struct HcSpec { i64 sec; i64 nsec; }
 
 i64 hc_now_us(void)
     {
-#if ARCH_win64
+#if OS_windows
     i64 c = 0;
     i64 f = 1;
     QueryPerformanceCounter(&c);
@@ -2926,7 +2926,9 @@ i64 hc_now_us(void)
     return (c / f) * 1000000 + ((c % f) * 1000000) / f;
 #else
     HcSpec ts;
-#if ARCH_x86_64
+    // CLOCK_MONOTONIC is 1 on Linux and 6 on Darwin; 6 on Linux is the
+    // 4 ms CLOCK_MONOTONIC_COARSE (arm64 Linux timed with it until 2026-10-30).
+#if OS_linux || ARCH_x86_64
     clock_gettime(1, (pointer)&ts);
 #else
     clock_gettime(6, (pointer)&ts);
@@ -3166,7 +3168,7 @@ i32 main(i32 argc, u8** argv)
 
 Hashcat's MASK-ATTACK MD5 workload in xc. Unlike md5.xc (which
 
-Lines: 298.
+Lines: 300.
 
 ```c
 // md5_mask — hashcat's MASK-ATTACK MD5 workload in xc. Unlike md5.xc (which
@@ -3194,7 +3196,7 @@ void hc_eu64(u64 v)
     write(2, &buf[start], 24 - start);
     }
 
-#if ARCH_win64
+#if OS_windows
 i32 QueryPerformanceCounter(i64* count);
 i32 QueryPerformanceFrequency(i64* freq);
 #else
@@ -3203,12 +3205,14 @@ i32 clock_gettime(i32 clk, pointer ts);   // the library's signature (ParDevice.
 struct HcSpec { i64 sec; i64 nsec; }
 i64 hc_now_us(void)
     {
-#if ARCH_win64
+#if OS_windows
     i64 c = 0; i64 f = 1; QueryPerformanceCounter(&c); QueryPerformanceFrequency(&f);
     return (c / f) * 1000000 + ((c % f) * 1000000) / f;
 #else
     HcSpec ts;
-#if ARCH_x86_64
+    // CLOCK_MONOTONIC is 1 on Linux and 6 on Darwin; 6 on Linux is the
+    // 4 ms CLOCK_MONOTONIC_COARSE (arm64 Linux timed with it until 2026-10-30).
+#if OS_linux || ARCH_x86_64
     clock_gettime(1, (pointer)&ts);
 #else
     clock_gettime(6, (pointer)&ts);

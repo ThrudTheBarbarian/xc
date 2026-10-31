@@ -315,6 +315,8 @@ def parse(out):
 
 def run_mac(binary, env):
     common.wait_quiet()
+    if "XCC_SETTINGS_DIR" in env:
+        os.makedirs(env["XCC_SETTINGS_DIR"], exist_ok=True)
     e = dict(os.environ)
     e.update(env)
     r = subprocess.run([binary], capture_output=True, text=True, env=e)
@@ -324,7 +326,8 @@ def run_mac(binary, env):
 def run_linux(host, binary, env):
     common.wait_quiet(host)
     pre = " ".join("%s=%s" % kv for kv in env.items())
-    r = subprocess.run(["ssh", host, "%s %s" % (pre, binary)], capture_output=True, text=True)
+    mk = "mkdir -p %s && " % env["XCC_SETTINGS_DIR"] if "XCC_SETTINGS_DIR" in env else ""
+    r = subprocess.run(["ssh", host, "%s%s %s" % (mk, pre, binary)], capture_output=True, text=True)
     return parse(r.stdout)
 
 
@@ -366,6 +369,7 @@ class Browser:
 
     def run(self, name, env):
         common.wait_quiet()
+        env = {k: v for k, v in env.items() if k != "XCC_SETTINGS_DIR"}   # a page has no such directory
         self.pages += 1
         page = "run_%s_%d.html" % (name, self.pages)
         sets = ", ".join('%s: "%s"' % kv for kv in env.items())
@@ -389,9 +393,15 @@ class Browser:
 
 def run_windows(host, binary, env):
     sets = "".join("$env:%s='%s'; " % kv for kv in env.items())
+    if "XCC_SETTINGS_DIR" in env:
+        sets = "New-Item -ItemType Directory -Force '%s' | Out-Null; %s" % (env["XCC_SETTINGS_DIR"], sets)
     r = subprocess.run(["ssh", host, "%s& '%s'" % (sets, binary)], capture_output=True, text=True)
     return parse(r.stdout.replace("\r", ""))
 
+
+# A fresh settings directory for each auto measurement (measure()).
+AUTO_STORE_BASE = "/tmp/xcpar-auto"
+_AUTO_STORES = 0
 
 MODES = [("serial", {"XC_PAR": "cpu", "XC_PAR_THREADS": "1"}),
          ("cpu", {"XC_PAR": "cpu"}),
@@ -421,6 +431,13 @@ def measure(runner, binary, gpus, threads=True, multi=True, gpu_only=False):
             continue
         if mode == "cpu" and not threads:
             continue
+        # auto starts from an empty settings store for each benchmark on each
+        # machine, shared by its repeats: a choice it learned in an earlier
+        # run (another build, another day) is not carried into these figures.
+        if mode == "auto":
+            global _AUTO_STORES
+            _AUTO_STORES += 1
+            env = dict(env, XCC_SETTINGS_DIR="%s-%d-%d" % (AUTO_STORE_BASE, os.getpid(), _AUTO_STORES))
         best = None
         for _ in range(REPEATS):
             got = runner(binary, env)

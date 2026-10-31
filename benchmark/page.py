@@ -355,6 +355,43 @@ def table(cur, suffix):
     return "\n".join(out)
 
 
+def pi_section(version):
+    """The Raspberry Pi 5's microbenchmarks (run.py --platform pi, from 0.89):
+    xc cross-built with -A arm64-linux, the C++ through the Pi's clang++ and
+    g++, at -O3; "" where the release has none."""
+    path = os.path.join(ROOT, version, "results-pi.json")
+    if not os.path.exists(path):
+        return ""
+    with open(path) as fh:
+        d = json.load(fh)
+    raw = {b: r for b, r in d.get("raw", {}).items() if b != "baseline"}
+    rows = []
+    for b, by_opt in raw.items():
+        r = by_opt.get("O3") or by_opt.get("O2") or {}
+        x = r.get("xc_pi")
+        others = [r[k] for k in ("cpp_pi", "gcc_pi") if r.get(k)]
+        if x and others:
+            rows.append((x / min(others), b, r))
+    if not rows:
+        return ""
+    rows.sort(key=lambda t: -t[0])
+    tc = d.get("toolchains", {}).get("arm64_linux", {})
+    def short(line, name):
+        m = re.search(r"(\d+\.\d+)(\.\d+)?", line or "")
+        return "%s %s" % (name, m.group(1)) if m else name
+    out = ["### A Raspberry Pi 5 (arm64 Linux)", "",
+           "The same programs on a %s under Raspberry Pi OS, from 0.89: xc cross-built with "
+           "`-A arm64-linux`, the C++ built on the Pi by %s and %s, all at `-O3`. Seconds; the best of five runs." % (
+               tc.get("cpu", "Raspberry Pi 5"), short(tc.get("clang"), "clang++"), short(tc.get("gcc"), "g++")), "",
+           "| benchmark | xc | C++ (clang) | C++ (GCC) | xc vs the faster of the two |",
+           "|---|---|---|---|---|"]
+    for r, b, v in rows:
+        cells = ["%.2f" % v[k] if v.get(k) else "–" for k in ("xc_pi", "cpp_pi", "gcc_pi")]
+        out.append("| [`%s`](%s#%s) | %s | **%s** |" % (b, SOURCES_URL, b, " | ".join(cells), speed(r)))
+    out.append("| geometric mean | | | | **%s** |" % speed(gmean([r for r, _, _ in rows])))
+    return "\n".join(out) + "\n"
+
+
 def summary(cur):
     out = ["| xc compared with | arm64 (%s) | x86-64 (AMD Ryzen 9 9955HX) |" % mac_name(), "|---|---|---|"]
     for l, name, _ in LANGS:
@@ -433,6 +470,8 @@ PAR_MACHINES = (("mac", "Apple MacBook Pro, %s (12 performance and 4 efficiency 
                 # first it enumerates (the RTX 3090): the two columns are two cards.
                 ("linuxgpu", "Intel Core i5-14500 (14 cores, 20 threads), Linux, an NVIDIA RTX 5070 through CUDA "
                              "and Vulkan (from 0.88)", False),
+                ("pi", "Raspberry Pi 5 (four Cortex-A76 cores at 2.4 GHz), Raspberry Pi OS, its VideoCore VII GPU "
+                       "(V3D 7.1) through Vulkan (from 0.89)", False),
                 ("windows", "AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 through CUDA "
                             "and an RTX 3090 through Vulkan", True),
                 ("browser", "Chrome on the Apple M4 Max: wasm32 (one thread) and WebGPU (from 0.73); "
@@ -486,10 +525,11 @@ def autopar_tables(version):
     return "\n".join(out)
 
 
-def c_tables(version):
+def c_tables(version, fname="c.json"):
     """benchmark/par/c_run.py's results: one thread and every thread, each its
-    own table and mean, never mixed (owner, 2026-10-25)."""
-    path = os.path.join(ROOT, "par", version, "c.json")
+    own table and mean, never mixed (owner, 2026-10-25). fname c-pi.json is
+    the Raspberry Pi's run (--machine pi, from 0.89)."""
+    path = os.path.join(ROOT, "par", version, fname)
     if not os.path.exists(path):
         return None
     with open(path) as fh:
@@ -835,6 +875,7 @@ def main():
         chart_x86=version_switch(hist, "_x86_64", "x86-64: xc against each language, per benchmark", versions, "vs-x86"),
         table_arm=table(cur, ""),
         table_x86=table(cur, "_x86_64"),
+        pi_section=pi_section(a.current),
         hist_arm=history_chart(hist, "", "arm64: xc's speed relative to %s" % versions[0].lstrip("v"),
                                [v for v in versions if has_mac(v)]),
         hist_x86=history_chart(hist, "_x86_64", "x86-64: xc's speed relative to %s" % versions[0].lstrip("v"), versions),
@@ -863,8 +904,10 @@ def main():
     print("wrote", os.path.relpath(NET_PAGE, REPO))
     ct = c_tables(a.current)
     if ct:
+        pt = c_tables(a.current, "c-pi.json")
+        pi = C_PI_TEMPLATE.format(release=a.release, **pt) if pt else ""
         with open(C_PAGE, "w") as fh:
-            fh.write(C_PAGE_TEMPLATE.format(release=a.release, **ct))
+            fh.write(C_PAGE_TEMPLATE.format(release=a.release, pi_section=pi, **ct))
         print("wrote", os.path.relpath(C_PAGE, REPO))
     sources_page(cur.keys())
     published(a.current)
@@ -986,6 +1029,16 @@ What the tables show:
 - **Mixed graphics APIs.** The scheduler does not require one API: a block
   can run one card through CUDA beside another through Vulkan, so an NVIDIA
   and an AMD card could share a block the same way.
+- **The Raspberry Pi 5** (from 0.89): the V3D runs `par` blocks through
+  Vulkan in 32-bit kernels, as it has no 64-bit integers. On its own it
+  trails the four cores on most blocks and edges them on `md5`; `auto`
+  measures both and then the two together, and runs `perlin`, `md5`,
+  `md5_mask` and `mandel_deep` across the CPU and the GPU at once:
+  `mandel_deep` in 9.6 s, against 14.0 s on the cores and 22.9 s on the GPU
+  alone, where GCC with OpenMP takes about 32 s
+  ([Performance: C](/compiler/benchmarks/c/)). The "all devices" column is
+  the set forced from the start, before `auto` has measured the CPU, so it is
+  mostly the GPU's tiles.
 - **The Ryzen's integrated Radeon** has 128 shader lanes against the CPU's 32
   threads. It just beats them on `mandelbrot`, `perlin` and `md5` and loses on
   `nbody` and `saxpy`, where `auto` keeps the CPU.
@@ -1061,7 +1114,7 @@ Milliseconds; the median of up to fifteen runs. xcc is ahead of both on
 
 The same programs on GPUs, where `--par-auto` sends them by default, are on
 [Performance: GPU](/compiler/benchmarks/gpu/).
-
+{pi_section}
 ## How they were measured
 
 Every program prints its checksum and its best time over its own repeats; each
@@ -1075,6 +1128,30 @@ The C sources and their OpenMP copies are in
 [xcc-c-bench-sources-{release}.tar.bz2](/downloads/xcc-c-bench-sources-{release}.tar.bz2),
 and in the repository's `benchmark/par/c/` and `benchmark/par/c/openmp/`;
 `benchmark/par/c_run.py` repeats the whole measurement.
+"""
+
+
+# The Raspberry Pi's section of the C page (c_run.py --machine pi, from 0.89):
+# xcc builds there from another host (-A arm64-linux), GCC and clang on the Pi.
+C_PI_TEMPLATE = """
+## A Raspberry Pi 5
+
+The same seven programs on a {cpu}, its {threads} cores, under Raspberry Pi
+OS: xcc {release} cross-built them with `-A arm64-linux`; {gcc} and {clang}
+built them on the Pi, with the same flags as above.
+
+One thread, milliseconds; the median of up to fifteen runs:
+
+{one}
+
+Every thread (xcc `--par-auto`, GCC and clang with OpenMP), milliseconds. xcc
+is ahead of both on {all_wins} of the {n}:
+
+{all}
+
+On the Pi, xcc's escape vectoriser runs `mandelbrot`'s and `mandel_deep`'s
+per-pixel loop four pixels at a time in NEON, which neither GCC nor clang
+vectorises.
 """
 
 
@@ -1189,6 +1266,7 @@ order. {history_note}
 
 {table_x86}
 
+{pi_section}
 The fastest results are where the runtime does the work: `string_scan`,
 `method_call` and `struct_copy` are byte scanning, dynamic dispatch and
 aggregate copies. The slowest show where xcc's code generation has most to
