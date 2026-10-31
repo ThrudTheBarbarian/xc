@@ -70,6 +70,11 @@ class Badge : Object
     UXDesignable* d = (UXDesignable* ?)o;
     check((u8*)"...and it conforms (auto-apply)", d != (UXDesignable*)0);
     check((u8*)"an unknown class makes nothing", UXRsc.make((u8*)"NoSuch") == (Object*)0);
+    if (d == (UXDesignable*)0)
+        {
+        Stdio.printf("FAIL: %d checks (no Panel to bind, so the rest cannot run)\n", gFails);
+        return;
+        }
 
     // T4-T6 — outlets bind by name through the synthesised body.
     Panel* p = (Panel* ?)o;
