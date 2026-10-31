@@ -5312,6 +5312,20 @@ int main(int argc, const char *argv[]) {
             fputs(row.describe.UTF8String, stdout);
             return 0;
         }
+        // --print-3p-dir: the compiler's OWN third-party tree, <home>/3p (an
+        // install's <prefix>/3p), the first it searches after $XCC_3P, whether
+        // or not it exists yet. Scripts that install a library for this
+        // compiler ask here (owner 2026-10-31: each install has its own 3p).
+        if (opts.print3pDir) {
+            NSString *support = resolveSupportRoot(argv[0], opts);
+            NSString *home = [support hasSuffix:@"/lib/xc"]
+                                 ? [[support stringByDeletingLastPathComponent] stringByDeletingLastPathComponent]
+                                 : [support stringByDeletingLastPathComponent];
+            // Absolute, with `..` resolved, so a script can use it as is.
+            NSURL *u = [[NSURL fileURLWithPath:[home stringByAppendingPathComponent:@"3p"]] URLByStandardizingPath];
+            printf("%s\n", u.path.UTF8String);
+            return 0;
+        }
 
         // arm9 links against a device sysroot that lives in ANOTHER repo, so it
         // is vendored into the install (lib/xc/arm9-sysroot) and added here as

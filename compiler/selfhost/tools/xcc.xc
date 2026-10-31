@@ -226,6 +226,7 @@ class DriverOptions
     bool       _sawArch;        // -A / --arch was given
     TargetRow* _targetRow;      // the row -A named (or the host's), private:docs/Design/targets.md
     bool       _printTarget;    // --print-target: print the row and stop
+    bool       _print3pDir;     // --print-3p-dir: print the own third-party tree and stop
     String*    _layoutSpec;     // -m <layout>: as typed, resolved after the parse
     String*    _layoutPath;     // …the .lnk it resolved to
     String*    _layoutName;     // …and the model's name (the file's stem)
@@ -293,6 +294,7 @@ class DriverOptions
         _sawArch = false;
         _targetRow = (TargetRow*)0;
         _printTarget = false;
+        _print3pDir = false;
         _layoutSpec = (String*)0;
         _layoutPath = (String*)0;
         _layoutName = (String*)0;
@@ -362,6 +364,8 @@ class DriverOptions
     void setTargetRow(TargetRow* r) { _targetRow = r; }
     bool printTarget(void)          { return _printTarget; }
     void setPrintTarget(bool b)     { _printTarget = b; }
+    bool print3pDir(void)           { return _print3pDir; }
+    void setPrint3pDir(bool b)      { _print3pDir = b; }
     void setSawArch(bool b)         { _sawArch = b; }
     String* layoutSpec(void)        { return _layoutSpec; }
     void setLayoutSpec(String* s)   { _layoutSpec = s; }
@@ -4373,6 +4377,40 @@ void main(void)
         Stdio.printf("%s", r.describe().cString());
         Process.exit((i32)0); return;
     }
+    // --print-3p-dir: the compiler's OWN third-party tree, <home>/3p (an
+    // install's <prefix>/3p), the first it searches after $XCC_3P, whether or
+    // not it exists yet. As the reference.
+    if (d != 0 && d.print3pDir()) {
+        String* sup = supportRoot(d.fe());
+        String* home = (String*)0;
+        if (sup != 0)
+            home = sup.hasSuffix(String.withCString("/lib/xc")) ? dirOf(dirOf(sup)) : dirOf(sup);
+        if (home == (String*)0) {
+            Stdio.printf("xcc: error: --print-3p-dir: no support tree found\n");
+            Process.exit((i32)1); return;
+        }
+        // Absolute, with `.` and `..` resolved, so a script can use it as is
+        // (as the reference's URLByStandardizingPath).
+        String* p3 = home.appendingPathComponent(String.withCString("3p"));
+        if (!p3.hasPrefix(String.withCString("/")))
+            p3 = Frontend.workingDirectory().appendingPathComponent(p3);
+        Array* parts = p3.splitOnByte((u8)'/');
+        Array* keep = new Array();
+        for (u32 k = (u32)0; k < parts.count(); k = k + (u32)1) {
+            String* c = (String*)parts.get(k);
+            if (c.byteLength() == (u32)0 || c.equals(String.withCString(".")))
+                continue;
+            if (c.equals(String.withCString(".."))) {
+                if (keep.count() > (u32)0) keep.removeLast();
+                continue;
+            }
+            keep.add((Object*)c);
+        }
+        String* out = String.withCString("/");
+        out.append(String.join(keep, String.withCString("/")));
+        Stdio.printf("%s\n", out.cString());
+        Process.exit((i32)0); return;
+    }
     // --sign-bundle <dir>: sign, and compile nothing.
     if (d != 0 && d._signBundle != (String*)0) {
         signBundle(d);
@@ -5730,6 +5768,7 @@ void usage(void)
     Stdio.printf("  -V, --verbose              Print the support root and include search paths\n");
     Stdio.printf("  --emit-ir                  Print the IR after lowering to stderr\n");
     Stdio.printf("  --emit-ir-opt              Print the IR after the optimiser to stderr\n");
+    Stdio.printf("  --print-3p-dir             Print this compiler's own third-party library tree\n");
     Stdio.printf("  -fdce-trace                Name each function dead-function elimination\n");
     Stdio.printf("                             removes, on stderr\n");
     Stdio.printf("  -W                         All warnings (the default)\n");
@@ -6658,6 +6697,10 @@ DriverOptions* parseDriverArgs(void)
         }
         if (a.equals(String.withCString("--print-target"))) {
             d.setPrintTarget(true);
+            i = i + (u32)1; continue;
+        }
+        if (a.equals(String.withCString("--print-3p-dir"))) {
+            d.setPrint3pDir(true);
             i = i + (u32)1; continue;
         }
         if (a.equals(String.withCString("-v")) || a.equals(String.withCString("--version"))) {

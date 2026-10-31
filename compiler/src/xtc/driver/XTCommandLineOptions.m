@@ -37,6 +37,7 @@
 @property(nonatomic, readwrite) BOOL noSelfHost;
 @property(nonatomic, readwrite, nullable) XTTarget* targetRow;
 @property(nonatomic, readwrite) BOOL printTarget;
+@property(nonatomic, readwrite) BOOL print3pDir;
 @property(nonatomic) BOOL targetRowHanded;   // the row came from the driver (--target-row): it decides
 @property(nonatomic, readwrite) BOOL verbose;
 @property(nonatomic, readwrite, nullable) NSString* xtcHome;
@@ -1057,6 +1058,10 @@ static NSString* sExecutablePath = nil;
             {
             opts.printTarget = YES;
             }
+        else if ([arg isEqualToString:@"--print-3p-dir"])
+            {
+            opts.print3pDir = YES;
+            }
         else if ([arg isEqualToString:@"--target-row"] && i + 1 < argc)
             {
             // The driver hands its row to xcc-fe (which is still driven by -m
@@ -1392,7 +1397,7 @@ static NSString* sExecutablePath = nil;
             }
         }
 
-    if (opts.mutableInputFiles.count == 0 && !opts.dumpLayout)
+    if (opts.mutableInputFiles.count == 0 && !opts.dumpLayout && !opts.print3pDir)
         {
         fprintf(stderr, "xcc: error: no input files\n");
         [opts printUsage];

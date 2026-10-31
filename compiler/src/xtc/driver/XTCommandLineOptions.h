@@ -308,6 +308,8 @@ NS_ASSUME_NONNULL_BEGIN
 // no -A was given; --print-target prints it.
 @property(nonatomic, readonly, nullable) XTTarget* targetRow;
 @property(nonatomic, readonly) BOOL printTarget;
+/// --print-3p-dir: print the compiler's own third-party tree and exit.
+@property(nonatomic, readonly) BOOL print3pDir;
 // The row the options select, -A or not (the host default, -m arm64 ...):
 // derived from the per-target flags while they still decide, so it can never
 // disagree with them; the -A row is kept when it is that row (68030).

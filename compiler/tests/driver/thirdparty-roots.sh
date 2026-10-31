@@ -40,6 +40,15 @@ for which in ref xc; do
     otool -l "$W/use-$which" 2>/dev/null | grep -q "$I/3p/acme/arm64" \
         || { echo "FAIL thirdparty-roots ($which): no runpath to the install's 3p"; fail=1; }
 done
+# `xcc --print-3p-dir` names the install's own tree, absolute (2026-10-31: a
+# script that installs a library for this compiler asks it where).
+for which in ref xc; do
+    I="$W/$which/compilers/xcc"
+    got=$(cd "$W" && env -u XCC_3P -u XCC_HOME -u XTC_HOME "$I/bin/xcc" --print-3p-dir 2>&1)
+    want=$(cd "$I/3p" && pwd -P)
+    [ "$(cd "$got" 2>/dev/null && pwd -P)" = "$want" ] && [ "${got#/}" != "$got" ] \
+        || { echo "FAIL thirdparty-roots ($which): --print-3p-dir says '$got', want $want"; fail=1; }
+done
 # The same vendor in the install's own 3p and in its sibling <dir>/../3p (an
 # earlier compiler's shared tree, 2026-10-31: each install has its own 3p, and
 # the shared one keeps the libraries older compilers built): the own copy is

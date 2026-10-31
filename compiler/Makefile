@@ -570,6 +570,9 @@ check-install: ; @sh tools/check-install.sh
 
 install: $(SHIP_OSX)
 	@echo "installing -> $(PREFIX)"
+	@# The install's own third-party tree (empty until a library is installed):
+	@# `xcc --print-3p-dir` names it, and scripts install libraries there.
+	@mkdir -p $(THIRDPARTY)
 	@set -- $(SHIP_NAMES); n=$$#; set -- $(SHIP_OSX); if [ $$# -ne $$n ]; then \
 		echo "install: the ship list has $$# entries for $$n names — a tool has no"; \
 		echo "  self-hosted build, and nothing built from the Objective-C sources ships."; \
