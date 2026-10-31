@@ -592,6 +592,7 @@ class FeOptions
                     Process.exit((i32)1);
                     return (IRModule*)0;
                     }
+                IfaceImport.setNeedsV2(o.targetRow() != (TargetRow*)0 && o.targetRow().compactObjects());
                 IfaceImport* im = IfaceImport.read(mp);
                 if (im == 0)
                     cImports.add((Object*)cLibraryName(mp));

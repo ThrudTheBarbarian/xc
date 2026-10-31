@@ -6,7 +6,8 @@
 # relative path". An install at <dir> (bin/xcc, lib/xc) looks in <dir>/3p, then
 # its sibling <dir>/../3p (the versioned /opt/xcc/<ver> layout), then the OS's
 # standard place (/opt/xcc/3p). The library here exists only in <dir>/3p, so
-# finding it with no XCC_3P is the check, for both compilers.
+# finding it with no XCC_3P is the check, for both compilers; then the same
+# vendor in <dir>/3p and <dir>/../3p takes the first.
 #
 #   bash tests/driver/thirdparty-roots.sh
 set -u
@@ -38,6 +39,19 @@ for which in ref xc; do
         || { echo "FAIL thirdparty-roots ($which): the install does not look in its own 3p: $(head -c 200 "$W/err-$which")"; fail=1; continue; }
     otool -l "$W/use-$which" 2>/dev/null | grep -q "$I/3p/acme/arm64" \
         || { echo "FAIL thirdparty-roots ($which): no runpath to the install's 3p"; fail=1; }
+done
+# The same vendor in the install's own 3p and in its sibling <dir>/../3p (an
+# earlier compiler's shared tree, 2026-10-31: each install has its own 3p, and
+# the shared one keeps the libraries older compilers built): the own copy is
+# used, and the two are not one library "from more than one vendor".
+for which in ref xc; do
+    I="$W/$which/compilers/xcc"
+    mkdir -p "$W/$which/compilers/3p/acme/arm64"
+    cp "$W/libFoo.dylib" "$W/$which/compilers/3p/acme/arm64/"
+    ( cd "$W" && env -u XCC_3P -u XCC_HOME -u XTC_HOME "$I/bin/xcc" -q -A arm64 -o "$W/use2-$which" "$W/use.xc" ) > "$W/err2-$which" 2>&1 \
+        || { echo "FAIL thirdparty-roots ($which): a vendor in two roots: $(head -c 200 "$W/err2-$which")"; fail=1; continue; }
+    otool -l "$W/use2-$which" 2>/dev/null | grep -q "$I/3p/acme/arm64" \
+        || { echo "FAIL thirdparty-roots ($which): a vendor in two roots did not take the install's own copy"; fail=1; }
 done
 [ $fail = 0 ] && echo "thirdparty-roots: ok"
 exit $fail

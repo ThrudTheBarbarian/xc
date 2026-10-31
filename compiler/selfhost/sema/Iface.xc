@@ -23,6 +23,8 @@
 #import "Files.xc"
 #import "Process.xc"
 
+bool gIfaceNeedsV2;
+
 // ── A minimal JSON DOM ──────────────────────────────────────────────────
 // Kinds: 0 null, 1 bool, 2 number, 3 string, 4 array, 5 object.
 class JsonVal
@@ -902,6 +904,12 @@ class JsonVal
         return v == (JsonVal*)0 ? (String*)0 : v.asStr();
         }
 
+    // On a compact-objects target an interface must be v2 (the front end sets
+    // this from the target row); elsewhere v1 is still the layout.
+    static void setNeedsV2(bool b)
+        {
+        gIfaceNeedsV2 = b;
+        }
     static IfaceImport* read(String* path)
         {
         // A `.wasm` LIBRARY carries its interface inside itself, so there is no
@@ -925,7 +933,7 @@ class JsonVal
         // refused; a newer format is refused too. As the reference.
         JsonVal* ver = root.member((u8*)"ifaceVersion");
         i64 v = ver == 0 ? (i64)0 : ver.asNum();
-        if (v != (i64)2)
+        if (v > (i64)2 || (gIfaceNeedsV2 && v < (i64)2))
             {
             if (v > (i64)2)
                 Stdio.printf("xcc: error: '%s' carries interface format v%lld, serialised by a newer "

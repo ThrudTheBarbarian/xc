@@ -1488,6 +1488,13 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
                     : [([fm contentsOfDirectoryAtPath:root error:NULL] ?: @[]) sortedArrayUsingSelector:@selector(compare:)];
                 for (NSString* vendor in vendors)
                     {
+                    // A vendor an earlier root already supplied hides its
+                    // copy in a later one: the compiler's own <home>/3p comes
+                    // before the shared /opt/xcc/3p, which keeps libraries
+                    // built by earlier compilers (per-compiler 3p, owner
+                    // 2026-10-31). Two vendors are still ambiguous.
+                    if ([hitVendors containsObject:vendor])
+                        continue;
                     NSString* archDir = [[root stringByAppendingPathComponent:vendor]
                         stringByAppendingPathComponent:_targetArchName];
                     // The target's own directory first (ios-sim, android…),

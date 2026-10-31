@@ -298,6 +298,15 @@ class IfFrame
             for (u32 vi = (u32)0; vi < vendors.count(); vi = vi + (u32)1)
                 {
                 String* vendor = (String*)vendors.get(vi);
+                // A vendor an earlier root already supplied hides its copy in
+                // a later one (the compiler's own <home>/3p before the shared
+                // /opt/xcc/3p). As the reference.
+                bool seenV = false;
+                for (u32 h = (u32)0; h < hitVendors.count(); h = h + (u32)1)
+                    if (((String*)hitVendors.get(h)).equals(vendor))
+                        seenV = true;
+                if (seenV)
+                    continue;
                 String* vdir = root.appendingPathComponent(vendor);
                 Array* dirs = new Array();
                 if (_platformDir != (String*)0)

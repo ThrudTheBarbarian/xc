@@ -1562,9 +1562,12 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                              error:NULL];
             NSInteger v = [hdr[@"ifaceVersion"] integerValue]; // absent -> 0
             // v2 since the compact object header (a fourth vtable header
-            // word, an 8-byte instance header): a library built by an
-            // earlier xcc dispatches one word off, so it is refused too.
-            if (v != 2)
+            // word, an 8-byte instance header): on a compact-objects target a
+            // library built by an earlier xcc dispatches one word off, so it is
+            // refused too. The other targets' layout did not change: v1 is
+            // still theirs.
+            BOOL compact = [_options effectiveTarget].compactObjects;
+            if (v > 2 || (compact && v < 2))
                 {
                 NSString* why = v > 2
                     ? [NSString stringWithFormat:@"'%@' carries interface format v%ld, serialised by a newer "

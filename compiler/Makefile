@@ -891,11 +891,13 @@ build/tls/tlsshim.o: $(TLS_SRC)/tlsshim.c | build/tls
 build/tls:
 	@mkdir -p $@
 
-# The third-party tree is the SIBLING of the install root, which is where the
-# compiler looks for it (/opt/xcc/<version> -> /opt/xcc/3p). It used to be
-# /opt/xcc/3p whatever PREFIX said, so a `make install PREFIX=<scratch>` from a
-# clone replaced the shared tls libraries the installed compilers use.
-THIRDPARTY ?= $(abspath $(PREFIX)/..)/3p
+# The third-party tree is the install's OWN, <prefix>/3p (/opt/xcc/<version>/3p),
+# which the compiler searches first (owner 2026-10-31: each compiler install
+# has its own 3p). An xc library carries the object layout of the compiler
+# that built it, so the shared sibling /opt/xcc/3p keeps the libraries of the
+# compilers installed before the compact object header, and this install's
+# copies never replace theirs.
+THIRDPARTY ?= $(PREFIX)/3p
 # install-tls — the compiler INSTALLS the tls 3p lib to /opt/xcc/3p (decision A):
 # the host-linkable shim (for xcc-sign and other host tools) plus the xtc
 # libtls (for `#use <tls>` in xtc programs, built by install.sh via xcc).

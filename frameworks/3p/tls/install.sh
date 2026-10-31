@@ -25,10 +25,17 @@ MBLIN="$HERE/mbedtls-linux"
 MAJ=1; MIN=0
 TMP=$(mktemp -d)
 
-mkdir -p "$DEST/arm64" "$DEST/xc"
+# TLS_PLATFORMS: the platforms to build, separated by spaces (arm64 x86_64
+# win64 ios android linux-arm64), or every one when unset. A test that needs
+# the library built by the compiler under test builds only its host's.
+want() { [ -z "${TLS_PLATFORMS:-}" ] && return 0; case " $TLS_PLATFORMS " in *" $1 "*) return 0 ;; esac; return 1; }
+
+mkdir -p "$DEST/xc"
 cp xc/TlsVersion.xc xc/TlsAbi.xc "$DEST/xc/"
 
 # ── arm64 (macOS): shim + brew static mbedtls, bundled into the dylib ──
+if want arm64; then
+mkdir -p "$DEST/arm64"
 cc -c -O2 -I"$MB/include" tlsshim.c -o "$TMP/tlsshim-arm64.o"
 ar rcs "$TMP/libtlsshim-arm64.a" "$TMP/tlsshim-arm64.o"
 "$XCC" --emit-lib -A arm64 -I xc -o "$TMP/libtls.dylib" xc/tls_lib.xc \
@@ -38,9 +45,10 @@ ar rcs "$TMP/libtlsshim-arm64.a" "$TMP/tlsshim-arm64.o"
 cp "$TMP/libtls.dylib" "$DEST/arm64/libtls-$MAJ-$MIN.dylib".new && mv -f "$DEST/arm64/libtls-$MAJ-$MIN.dylib".new "$DEST/arm64/libtls-$MAJ-$MIN.dylib"
 ln -sf "libtls-$MAJ-$MIN.dylib" "$DEST/arm64/libtls.dylib"
 echo "installed: $DEST/arm64/libtls.dylib -> libtls-$MAJ-$MIN.dylib"
+fi
 
 # ── x86_64 (Linux/musl): shim + vendored static musl mbedtls, if present ──
-if [ -f "$MBLIN/libmbedtls.a" ]; then
+if want x86_64 && [ -f "$MBLIN/libmbedtls.a" ]; then
     mkdir -p "$DEST/x86_64"
     LINCC=${LINUX_CC:-/opt/homebrew/opt/llvm/bin/clang}
     SR=/opt/clang/linux/x86_64-linux-musl
@@ -69,7 +77,7 @@ fi
 # program imports it by. The shim reads the Windows certificate store
 # (xt_tls_client_new_system), which is how HttpTls verifies there.
 MBWIN="$HERE/mbedtls-win64"
-if [ -f "$MBWIN/libmbedtls.a" ]; then
+if want win64 && [ -f "$MBWIN/libmbedtls.a" ]; then
     WINCC=${WIN64_CC:-x86_64-w64-mingw32-gcc}
     WINAR=${WIN64_AR:-x86_64-w64-mingw32-ar}
     # mingw's own printf family (__USE_MINGW_ANSI_STDIO, its default) needs
@@ -99,7 +107,7 @@ fi
 # where a par program's lazy loader, ParTls in ParRemote.xc, looks first).
 MBIOS="$HERE/mbedtls-ios"
 IOSSDK=$(xcrun --sdk iphoneos --show-sdk-path 2>/dev/null || true)
-if [ -f "$MBIOS/libmbedtls.a" ] && [ -n "$IOSSDK" ]; then
+if want ios && [ -f "$MBIOS/libmbedtls.a" ] && [ -n "$IOSSDK" ]; then
     if clang -isysroot "$IOSSDK" -target arm64-apple-ios15.0 -c -O2 -I"$MB/include" \
            tlsshim.c -o "$TMP/tlsshim-ios.o" \
        && ar rcs "$TMP/libtlsshim-ios.a" "$TMP/tlsshim-ios.o" \
@@ -131,7 +139,7 @@ if [ -z "$NDK" ]; then
     done
 fi
 NDKBIN="$NDK/toolchains/llvm/prebuilt/darwin-x86_64/bin"
-if [ -f "$MBAND/libmbedtls.a" ] && [ -x "$NDKBIN/clang" ]; then
+if want android && [ -f "$MBAND/libmbedtls.a" ] && [ -x "$NDKBIN/clang" ]; then
     RTB=$(ls "$NDK"/toolchains/llvm/prebuilt/darwin-x86_64/lib/clang/*/lib/linux/libclang_rt.builtins-aarch64-android.a 2>/dev/null | tail -1)
     if "$NDKBIN/clang" --target=aarch64-linux-android21 -c -O2 -fPIC -I"$MB/include" \
            tlsshim.c -o "$TMP/tlsshim-android.o" \
@@ -163,7 +171,7 @@ fi
 # under the row's platform directory.
 MBA64="$HERE/mbedtls-linux-arm64"
 A64H=${XTC_LINUX_ARM64_HOST:-}
-if [ -f "$MBA64/libmbedtls.a" ] && [ -n "$A64H" ]; then
+if want linux-arm64 && [ -f "$MBA64/libmbedtls.a" ] && [ -n "$A64H" ]; then
     RT=$(ssh -o BatchMode=yes "$A64H" 'mktemp -d') || RT=""
     if [ -n "$RT" ] \
        && tar cf - -C "$MB" include | ssh -o BatchMode=yes "$A64H" "tar xf - -C $RT" \
