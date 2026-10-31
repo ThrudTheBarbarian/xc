@@ -8,6 +8,7 @@
 #import "XTIROpcode.h"
 #import "XTIRValue.h"
 #import "XTIRType.h"
+#import "XTIRSymbol.h"
 #import "XTIRSupport.h"
 
 // The role of a value in the nest being vectorised.
@@ -17,6 +18,10 @@ typedef NS_ENUM(NSInteger, XTOVRole) {
     XTOVAddr,        // ElementAddr(uniform base, index): a scalar lane-0 address
     XTOVVector,      // depends on j any other way: becomes a vector
 };
+
+@interface XTIROptOuterVectorize ()
+@property(nonatomic, weak, nullable) XTIRModule* mod;   // for the callee of an allocator root
+@end
 
 @implementation XTIROptOuterVectorize
 
@@ -36,6 +41,7 @@ typedef NS_ENUM(NSInteger, XTOVRole) {
     XTIROptTargetProfile* prof = self.profile ?: [XTIROptTargetProfile conservativeProfile];
     if (!prof.vectorizesLoops)
         return YES;
+    self.mod = mod;
     for (XTIRFunction* fn in mod.functions)
         for (int guard = 0; guard < 16; guard++)
             if (![self vectorizeOneIn:fn])
@@ -74,19 +80,23 @@ static BOOL ovHeaderInsnsOk(XTIRBlock* H)
     return YES;
     }
 
+// FAdd/FSub/FMul too (2026-10-30), on f32 lanes: each lane is one j and
+// does exactly that j's scalar operations in their order, so a float result
+// is the scalar loop's bit for bit, as an integer one is.
 static BOOL ovArith(XTIROpcode op)
     {
     return op == XTIROpAdd || op == XTIROpSub || op == XTIROpMul ||
-           op == XTIROpAnd || op == XTIROpOr || op == XTIROpXor;
+           op == XTIROpAnd || op == XTIROpOr || op == XTIROpXor ||
+           op == XTIROpFAdd || op == XTIROpFSub || op == XTIROpFMul;
     }
 
 static XTIROpcode ovVecOp(XTIROpcode op)
     {
     switch (op)
         {
-    case XTIROpAdd: return XTIROpVAdd;
-    case XTIROpSub: return XTIROpVSub;
-    case XTIROpMul: return XTIROpVMul;
+    case XTIROpAdd: case XTIROpFAdd: return XTIROpVAdd;
+    case XTIROpSub: case XTIROpFSub: return XTIROpVSub;
+    case XTIROpMul: case XTIROpFMul: return XTIROpVMul;
     case XTIROpAnd: return XTIROpVAnd;
     case XTIROpOr: return XTIROpVOr;
     default: return XTIROpVXor;
@@ -99,9 +109,12 @@ static BOOL ovSameType(XTIRType* a, XTIRType* b)
     }
 
 // The array a pointer is derived from: walk ElementAddr / FieldAddr bases to
-// an AddrOf of a local or a global. nil when it is not one of those, which
-// makes the pass decline — it cannot then prove a store apart from the loads.
-static NSString* ovRoot(XTIRValueId v, NSDictionary<NSNumber*, XTIRInsn*>* defOf)
+// an AddrOf of a local or a global, or (2026-10-30) the result of an
+// `_xtc_new_<T>` allocator call, which is an array of its own and so apart
+// from every other root (matrix_mul_f32's three `new float[]`). nil when it is
+// none of those, which makes the pass decline — it cannot then prove a store
+// apart from the loads.
+static NSString* ovRoot(XTIRValueId v, NSDictionary<NSNumber*, XTIRInsn*>* defOf, XTIRModule* mod)
     {
     for (int hop = 0; hop < 16; hop++)
         {
@@ -115,6 +128,13 @@ static NSString* ovRoot(XTIRValueId v, NSDictionary<NSNumber*, XTIRInsn*>* defOf
                 return [NSString stringWithFormat:@"u%lu", (unsigned long)o.valueId];
             if (o.kind == XTIROperandKindSym)
                 return [NSString stringWithFormat:@"s%lu", (unsigned long)o.symbolId];
+            return nil;
+            }
+        if (d.opcode == XTIROpCall && d.operands[0].kind == XTIROperandKindSym && mod)
+            {
+            XTIRSymbol* s = [mod symbolForId:d.operands[0].symbolId];
+            if ([s.name hasPrefix:@"_xtc_new_"] && d.result)
+                return [NSString stringWithFormat:@"n%lu", (unsigned long)d.result.valueId];
             return nil;
             }
         if ((d.opcode == XTIROpElementAddr || d.opcode == XTIROpFieldAddr) &&
@@ -246,7 +266,7 @@ static NSString* ovRoot(XTIRValueId v, NSDictionary<NSNumber*, XTIRInsn*>* defOf
         if (!kPhi || !sPhi || !sPhi.result || sPhi.operands.count != 4)
             continue;
         XTIRType* laneTy = sPhi.result.type;
-        if (!laneTy || !XTIRTypeKindIsInteger(laneTy.kind) || laneTy.byteWidth != 4)
+        if (!laneTy || !(XTIRTypeKindIsInteger(laneTy.kind) || laneTy.kind == XTIRTypeKindF32) || laneTy.byteWidth != 4)
             continue;
         // The width this function may use: a dispatch clone's own level
         // (32 bytes for avx2, 64 for avx512), else the target's. It was a
@@ -301,7 +321,7 @@ static NSString* ovRoot(XTIRValueId v, NSDictionary<NSNumber*, XTIRInsn*>* defOf
                         ok = NO;
                         break;
                         }
-                    NSString* root = ovRoot(i.operands[0].valueId, defOf);
+                    NSString* root = ovRoot(i.operands[0].valueId, defOf, self.mod);
                     if (!root)
                         {
                         ok = NO;
@@ -327,7 +347,7 @@ static NSString* ovRoot(XTIRValueId v, NSDictionary<NSNumber*, XTIRInsn*>* defOf
                         ok = NO;
                         break;
                         }
-                    NSString* root = ovRoot(i.operands[0].valueId, defOf);
+                    NSString* root = ovRoot(i.operands[0].valueId, defOf, self.mod);
                     if (!root)
                         {
                         ok = NO;
