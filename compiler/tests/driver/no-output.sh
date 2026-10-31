@@ -22,7 +22,7 @@ for flag in "" "-S"; do
         (cd "$W" && "$OLDPWD/$c" -q -O2 -H "$OLDPWD" $flag "$OLDPWD/$F" > "$W/$s.s" 2> "$W/$s.e")
         rc=$?
         [ $rc = 0 ] || { echo "FAIL no-output: $(basename "$c") $flag exits $rc: $(head -c 200 "$W/$s.e")"; fail=1; }
-        grep -q '_main:' "$W/$s.s" || { echo "FAIL no-output: $(basename "$c") $flag printed no assembly"; fail=1; }
+        grep -qE '^_?main:' "$W/$s.s" || { echo "FAIL no-output: $(basename "$c") $flag printed no assembly"; fail=1; }
     done
     [ $fail = 0 ] && { cmp -s "$W/r.s" "$W/x.s" || { echo "FAIL no-output: the two compilers print different assembly ($flag)"; fail=1; }; }
     [ -e "$W/a.out" ] && { echo "FAIL no-output: a program was linked ($flag)"; fail=1; }

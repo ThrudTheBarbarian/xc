@@ -34,7 +34,8 @@ grep -q 'Call @_xtc_alloc_object, \[' "$W/ir" || { echo "FAIL compact-object: ne
 grep -q 'Call @_xtc_alloc, \[' "$W/ir" || { echo "FAIL compact-object: new C[n] no longer calls _xtc_alloc"; fail=1; }
 for s in r x; do
     c=$REF; [ $s = x ] && c=$XC
-    "$c" -q -O2 -S -o "$W/$s.s" "$F" > "$W/e" 2>&1 || { echo "FAIL compact-object: $(basename "$c") does not compile it"; fail=1; }
+    # The assembly checks read arm64 (Mach-O) spelling, so they build for it on any host.
+    "$c" -q -O2 -A arm64 -S -o "$W/$s.s" "$F" > "$W/e" 2>&1 || { echo "FAIL compact-object: $(basename "$c") does not compile it"; fail=1; }
 done
 [ $fail = 0 ] && { cmp -s "$W/r.s" "$W/x.s" || { echo "FAIL compact-object: the two compilers' assembly differs"; fail=1; }; }
 word3() { awk -v v="_$1\$vtbl:" '$0 == v {n = 0; next} n >= 0 && /\.quad/ {n++; if (n == 4) {print $2; exit}}' n=-1 "$W/x.s"; }
