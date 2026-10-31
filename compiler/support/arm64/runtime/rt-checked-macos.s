@@ -497,21 +497,31 @@ __xt_check_object:                      ; @_xt_check_object
 	cbnz	x8, Lchk_BB4_2
 	b	Lchk_BB4_1
 Lchk_BB4_1:
-	b	Lchk_BB4_7
+	b	Lchk_BB4_8
 Lchk_BB4_2:
 	ldur	x8, [x29, #-8]
 	subs	x8, x8, #40
 	str	x8, [sp, #24]
 	ldr	x8, [sp, #24]
 	ldr	w8, [x8, #32]
+	str	w8, [sp, #20]
+	ldr	w8, [sp, #20]
+	orr	w8, w8, #0x1
+	mov	w9, #20303                      ; =0x4f4f
+	movk	w9, #22612, lsl #16
+	subs	w8, w8, w9
+	b.eq	Lchk_BB4_4
+	b	Lchk_BB4_3
+Lchk_BB4_3:
+	ldr	w8, [sp, #20]
 	mov	w9, #20290                      ; =0x4f42
 	movk	w9, #22612, lsl #16
 	subs	w8, w8, w9
-	b.ne	Lchk_BB4_4
-	b	Lchk_BB4_3
-Lchk_BB4_3:
-	b	Lchk_BB4_7
+	b.ne	Lchk_BB4_5
+	b	Lchk_BB4_4
 Lchk_BB4_4:
+	b	Lchk_BB4_8
+Lchk_BB4_5:
 	adrp	x8, ___stderrp@GOTPAGE
 	ldr	x8, [x8, ___stderrp@GOTPAGEOFF]
 	ldr	x0, [x8]
@@ -519,9 +529,9 @@ Lchk_BB4_4:
 	add	x1, x1, l_chk.str.11@PAGEOFF
 	bl	_fprintf
 	ldur	x8, [x29, #-16]
-	cbz	x8, Lchk_BB4_6
-	b	Lchk_BB4_5
-Lchk_BB4_5:
+	cbz	x8, Lchk_BB4_7
+	b	Lchk_BB4_6
+Lchk_BB4_6:
 	adrp	x8, ___stderrp@GOTPAGE
 	ldr	x8, [x8, ___stderrp@GOTPAGEOFF]
 	ldr	x0, [x8]
@@ -531,11 +541,11 @@ Lchk_BB4_5:
 	adrp	x1, l_chk.str.1@PAGE
 	add	x1, x1, l_chk.str.1@PAGEOFF
 	bl	_fprintf
-	b	Lchk_BB4_6
-Lchk_BB4_6:
+	b	Lchk_BB4_7
+Lchk_BB4_7:
 	adrp	x8, ___stderrp@GOTPAGE
 	ldr	x8, [x8, ___stderrp@GOTPAGEOFF]
-	str	x8, [sp, #16]                   ; 8-byte Folded Spill
+	str	x8, [sp, #8]                    ; 8-byte Folded Spill
 	ldr	x0, [x8]
 	ldur	x8, [x29, #-8]
 	mov	x9, sp
@@ -544,13 +554,13 @@ Lchk_BB4_6:
 	add	x1, x1, l_chk.str.12@PAGEOFF
 	bl	_fprintf
 	bl	___xt_ms_backtrace
-	ldr	x8, [sp, #16]                   ; 8-byte Folded Reload
+	ldr	x8, [sp, #8]                    ; 8-byte Folded Reload
 	ldr	x0, [x8]
 	adrp	x1, l_chk.str.10@PAGE
 	add	x1, x1, l_chk.str.10@PAGEOFF
 	bl	_fprintf
 	bl	_abort
-Lchk_BB4_7:
+Lchk_BB4_8:
 	ldp	x29, x30, [sp, #48]             ; 16-byte Folded Reload
 	add	sp, sp, #64
 	ret

@@ -566,7 +566,7 @@ class IfaceWrite
     {
         String* out = new String();
         out.appendCString("{\n");
-        out.appendCString("\"ifaceVersion\": 1, \"version\": 1,\n");
+        out.appendCString("\"ifaceVersion\": 2, \"version\": 1,\n");
 
         // The names actually exported, collected as they are written: the slot
         // maps below are pruned to them, so the two can never disagree about

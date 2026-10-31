@@ -1,0 +1,11 @@
+T1 alive 7 freed 0
+T1 after freed 1
+T2 kid 3 4
+T2 after kid 1 base 1
+T3 before 11 11
+T3 after 1 1 freed 1
+T4 still 22
+T4 after a-null 1 freed 2
+T5 zeroed 5000 freed 5000
+T6 freed 4
+T7 plain 5

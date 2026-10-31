@@ -34,6 +34,10 @@ NS_ASSUME_NONNULL_BEGIN
 // arm64: the baseline has the LSE atomics (Apple Silicon); NO for plain armv8-a
 // (Android's floor, a Pi 4's A72). NO elsewhere, where it means nothing.
 @property(nonatomic, readonly) BOOL lseAtomics;
+/// `new C` gets the 8-byte instance header (magic + refcount) from
+/// _xtc_alloc_object, and vtables carry the dealloc as a fourth header word
+/// (private:docs/Design/compact-object-header.md).
+@property(nonatomic, readonly) BOOL compactObjects;
 // The Apple SDK whose frameworks `#import <F>` may name (macosx, iphoneos,
 // iphonesimulator), or nil: frameworks are on exactly when it is set.
 @property(nonatomic, readonly, copy, nullable) NSString* appleSdk;

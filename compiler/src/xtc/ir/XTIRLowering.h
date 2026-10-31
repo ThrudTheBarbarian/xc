@@ -77,6 +77,8 @@ NS_ASSUME_NONNULL_BEGIN
 // cross-`.so` backends (arm9/arm64/x86_64/win64); OFF for xt6502/m68k, which keep the
 // compile-time-subtree downcast and a parent-free vtable.
 + (void)setVtableAncestry:(BOOL)on;
+/// The target row's compact-objects field (compact-object-header.md).
++ (void)setCompactObjects:(BOOL)on;
 + (BOOL)vtableAncestry;
 
 @end

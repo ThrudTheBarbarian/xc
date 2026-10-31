@@ -1046,6 +1046,9 @@ class FeOptions
         // itable ahead of the methods, and the ones that do not keep the
         // parent-free vtable and decide conformance at compile time.
         lower.setVtableAncestry(carriesItable(o));
+        // The 8-byte instance header and the vtable's dealloc word, where the
+        // target row says its runtime has them (compact-object-header.md).
+        lower.setCompactObjects(o.targetRow() != (TargetRow*)0 && o.targetRow().compactObjects());
         lower.setVtableItable(carriesItable(o));
         // Where a program-global protocol slot cannot be handed out, dispatch
         // goes through the itable (bugs 201, 266).

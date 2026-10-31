@@ -540,6 +540,28 @@ void* _xtc_alloc(uint64_t count, uint64_t stride, void (*dealloc)(void*))
     *(XT_RC_T*)(p + XT_RC_OFF) = 1;
     return p + XT_HDR;
     }
+/* A class instance (`new C`): an 8-byte header, the magic and the refcount
+   at payload-8 and payload-4 as in an array's. One element by definition (no
+   count or stride); its dealloc is vtable header word XT_VT_DEALLOC; the head
+   of its weak list, once a weak reference has pointed at it, lives in a side
+   table, flagged by the second magic. As rt.c;
+   private:docs/Design/compact-object-header.md. */
+#define XT_MAGIC_OBJ 0x58544F4EU
+#define XT_MAGIC_OBJW 0x58544F4FU
+#define XT_OBJ_HDR 8
+#define XT_VT_DEALLOC 3
+#define XT_IS_OBJ(m) (((m) | 1U) == XT_MAGIC_OBJW)
+#define XT_MAGIC_AT(o) (*(uint32_t*)((uint8_t*)(o) - 8))
+void* _xtc_alloc_object(uint64_t size)
+    {
+    xt_size_check(1, size);
+    uint8_t* p = (uint8_t*)_xt_calloc(size + XT_OBJ_HDR);
+    if (!p)
+        return 0;
+    *(uint32_t*)p = XT_MAGIC_OBJ;
+    *(XT_RC_T*)(p + 4) = 1;
+    return p + XT_OBJ_HDR;
+    }
 /* One element is its own width, not eight — an 8x waste that also hit the
    (now removed) ceiling eight times sooner than the element count suggested. */
 /* `simd:` — a PAGE-ALIGNED payload (par-blocks.md): a unified-memory GPU then
@@ -965,6 +987,20 @@ uint32_t _xtc_count(void* o)
 
 void _xtc_dealloc(void* o)
     {
+    uint32_t m0 = XT_MAGIC_AT(o);
+    if (XT_IS_OBJ(m0))
+        {
+        if (m0 == XT_MAGIC_OBJW)
+            _xtc_weak_zero_for(o);
+        void (*d)(void*) = (*(void (***)(void*))o)[XT_VT_DEALLOC];
+        if (d)
+            {
+            *(XT_RC_T*)((uint8_t*)o - XT_RC_BYTES) = XT_RC_DYING;
+            d(o);
+            }
+        _xt_free((uint8_t*)o - XT_OBJ_HDR);
+        return;
+        }
     _xtc_weak_zero_for(o);
     uint8_t* base = (uint8_t*)o - XT_HDR;
     uint64_t stride = *(uint64_t*)(base + XT_STRIDE_OFF);
@@ -1032,21 +1068,106 @@ void _xtc_weak_unregister(void** slot)
     xt_weak_unreg(slot);
     _xt_rt_unlock();
     }
+/* An instance's weak-list head: a cell of its own (slot[-2] points at it, so
+   it must not move when the table grows), found through an open-addressed
+   table keyed by the object's address. Only objects a weak reference has
+   pointed at are in it; all of it runs under the runtime lock. As rt.c. */
+typedef struct
+    {
+    void* obj;
+    void*** cell;
+    } xt_wtab_e;
+static xt_wtab_e* xt_wtab;
+static uint64_t xt_wtab_cap, xt_wtab_n, xt_wtab_used;
+#define XT_WTAB_DEAD ((void*)1)
+static uint64_t xt_wtab_h(void* o)
+    {
+    uint64_t x = (uint64_t)o >> 3;
+    x ^= x >> 17;
+    x *= 0xed5ad4bbULL;
+    x ^= x >> 11;
+    return x;
+    }
+static xt_wtab_e* xt_wtab_find(void* o)
+    {
+    if (!xt_wtab_cap)
+        return 0;
+    uint64_t i = xt_wtab_h(o) & (xt_wtab_cap - 1);
+    for (;;)
+        {
+        xt_wtab_e* e = &xt_wtab[i];
+        if (e->obj == o)
+            return e;
+        if (!e->obj)
+            return 0;
+        i = (i + 1) & (xt_wtab_cap - 1);
+        }
+    }
+static void xt_wtab_put(void* o, void*** cell);
+static void xt_wtab_grow(void)
+    {
+    uint64_t oc = xt_wtab_cap;
+    xt_wtab_e* old = xt_wtab;
+    xt_wtab_cap = oc ? oc * 2 : 64;
+    while (xt_wtab_n * 2 >= xt_wtab_cap)
+        xt_wtab_cap *= 2;
+    xt_wtab = (xt_wtab_e*)_xt_calloc(xt_wtab_cap * sizeof(xt_wtab_e));
+    xt_wtab_n = 0;
+    xt_wtab_used = 0;
+    for (uint64_t i = 0; i < oc; i++)
+        if (old[i].obj && old[i].obj != XT_WTAB_DEAD)
+            xt_wtab_put(old[i].obj, old[i].cell);
+    if (old)
+        _xt_free(old);
+    }
+static void xt_wtab_put(void* o, void*** cell)
+    {
+    if ((xt_wtab_used + 1) * 2 > xt_wtab_cap)
+        xt_wtab_grow();
+    uint64_t i = xt_wtab_h(o) & (xt_wtab_cap - 1);
+    while (xt_wtab[i].obj && xt_wtab[i].obj != XT_WTAB_DEAD)
+        i = (i + 1) & (xt_wtab_cap - 1);
+    if (!xt_wtab[i].obj)
+        xt_wtab_used++;
+    xt_wtab[i].obj = o;
+    xt_wtab[i].cell = cell;
+    xt_wtab_n++;
+    }
+/* The address of obj's weak-list head, or 0 when obj is not a block weak
+   references can name. Under the lock. */
+static void*** xt_weak_head(void* obj, int make)
+    {
+    uint32_t m = XT_MAGIC_AT(obj);
+    if (m == 0x58544F42U)
+        return (void***)&_XT_WH(obj);
+    if (!XT_IS_OBJ(m))
+        return 0;
+    xt_wtab_e* e = m == XT_MAGIC_OBJW ? xt_wtab_find(obj) : 0;
+    if (e)
+        return e->cell;
+    if (!make)
+        return 0;
+    void*** cell = (void***)_xt_calloc(sizeof(void**));
+    xt_wtab_put(obj, cell);
+    XT_MAGIC_AT(obj) = XT_MAGIC_OBJW;
+    return cell;
+    }
 void _xtc_weak_register(void** slot, void* obj)
     {
     _xt_rt_lock();
     xt_weak_unreg(slot);
-    if (!obj || *(uint32_t*)((uint8_t*)obj - XT_HDR + XT_MAGIC_OFF) != 0x58544F42U)
+    void*** hd = obj ? xt_weak_head(obj, 1) : 0;
+    if (!hd)
         {
         _xt_rt_unlock();
         return;
         }
-    void** nx = _XT_WH(obj);
-    slot[-2] = (void*)&_XT_WH(obj);
+    void** nx = *hd;
+    slot[-2] = (void*)hd;
     slot[-1] = (void*)nx;
     if (nx)
         nx[-2] = (void*)&slot[-1];
-    _XT_WH(obj) = slot;
+    *hd = slot;
     _xt_rt_unlock();
     }
 void* _xtc_weak_load(void** slot)
@@ -1058,16 +1179,31 @@ void _xtc_weak_zero_for(void* obj)
     if (!obj)
         return;
     _xt_rt_lock();
-    void** s = _XT_WH(obj);
-    while (s)
+    void*** hd = xt_weak_head(obj, 0);
+    if (hd)
         {
-        void** nx = (void**)s[-1];
-        *s = 0;
-        s[-2] = 0;
-        s[-1] = 0;
-        s = nx;
+        void** s = *hd;
+        while (s)
+            {
+            void** nx = (void**)s[-1];
+            *s = 0;
+            s[-2] = 0;
+            s[-1] = 0;
+            s = nx;
+            }
+        *hd = 0;
+        if (XT_IS_OBJ(XT_MAGIC_AT(obj)))
+            {
+            xt_wtab_e* e = xt_wtab_find(obj);
+            if (e)
+                {
+                e->obj = XT_WTAB_DEAD;
+                e->cell = 0;
+                xt_wtab_n--;
+                }
+            _xt_free(hd);
+            }
         }
-    _XT_WH(obj) = 0;
     _xt_rt_unlock();
     }
 

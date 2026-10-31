@@ -1561,13 +1561,21 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                            options:0
                              error:NULL];
             NSInteger v = [hdr[@"ifaceVersion"] integerValue]; // absent -> 0
-            if (v > 1)
+            // v2 since the compact object header (a fourth vtable header
+            // word, an 8-byte instance header): a library built by an
+            // earlier xcc dispatches one word off, so it is refused too.
+            if (v != 2)
                 {
-                [_diagnostics emitError:[NSString stringWithFormat:
-                                                      @"'%@' carries interface format v%ld, serialised by a newer "
-                                                      @"xcc than this one (reads <= v1) — upgrade the compiler or "
-                                                      @"rebuild the library with this one",
-                                                      p.lastPathComponent, (long)v]
+                NSString* why = v > 2
+                    ? [NSString stringWithFormat:@"'%@' carries interface format v%ld, serialised by a newer "
+                                                 @"xcc than this one (reads v2) — upgrade the compiler or "
+                                                 @"rebuild the library with this one",
+                                                 p.lastPathComponent, (long)v]
+                    : [NSString stringWithFormat:@"'%@' carries interface format v%ld, from an xcc before the "
+                                                 @"compact object header (this one reads v2) — rebuild the "
+                                                 @"library with this compiler",
+                                                 p.lastPathComponent, (long)(v < 1 ? 1 : v)];
+                [_diagnostics emitError:why
                                      at:[XTSourceLocation locationWithFilename:@"<import>" line:0 column:0]];
                 continue;
                 }
@@ -2131,6 +2139,9 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // subclass defined in another module. xt6502 (banked 3-byte pointers) and m68k do
     // not — they keep the parent-free vtable and the compile-time-subtree downcast.
     [XTIRLowering setVtableAncestry:(_options.useArm9Backend || _options.useArm64Backend || _options.useX86_64Backend || _options.useWin64Backend || _options.useWasm32Backend)];
+    // The 8-byte instance header and the vtable's dealloc word, where the
+    // target row says its runtime has them (compact-object-header.md).
+    [XTIRLowering setCompactObjects:[_options effectiveTarget].compactObjects];
     sema.importedProtocolSlots = impProtoSlots.count ? impProtoSlots : nil;
     sema.importedMethodSlots = impMethodSlots.count ? impMethodSlots : nil;
     [sema analyzeProgram:ast];

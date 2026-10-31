@@ -389,7 +389,10 @@ void _xt_check_bounds_n(void *ptr, unsigned long index, unsigned long count,
 void _xt_check_object(void *ptr, const char *site){
     if (!ptr) return;
     unsigned char *h = (unsigned char *)ptr - 40;   /* XT_HDR; magic +32, stride +0, count +8 — see rt.c */
-    if (*(unsigned int *)(h + 32) == 0x58544F42U) return;
+    unsigned int m = *(unsigned int *)(h + 32);
+    /* A class instance (8-byte header, magic XTON, or XTOO once a weak
+       reference has pointed at it) or an array block (an element of new C[n]). */
+    if ((m | 1U) == 0x58544F4FU || m == 0x58544F42U) return;
     fprintf(stderr, "\n=== xcc: a pointer cast to a class is not an object ===\n");
     if (site) fprintf(stderr, "  at %s\n", site);
     fprintf(stderr, "  %p has no object header\n", ptr);

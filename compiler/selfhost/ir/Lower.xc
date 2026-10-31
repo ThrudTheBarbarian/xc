@@ -377,6 +377,7 @@ class ClassInfo
     // shared objects (arm64/x86_64/win64/arm9), OFF for xt6502 and m68k, which
     // keep the compile-time-subtree downcast and a parent-free vtable.
     bool _vtAncestry;
+    bool _compactObjects;   // the target row's compact-objects field
     // Conformance itable: each class carries a (protoId, &table) list so a
     // runtime `(P@ ?)obj` downcast can search the protocol ids. It reserves a
     // vtable entry in EVERY class — a search site has to find it at the same
@@ -535,6 +536,7 @@ class ClassInfo
         _tailCap = (u32)8;
         _loopGoal = (u32)0;
         _vtAncestry = false;
+        _compactObjects = false;
         _vtItable = false;
         _itableDispatch = false;
         _pendingCatLay = (IRLayout*)0;
@@ -626,6 +628,12 @@ class ClassInfo
     void setVtableAncestry(bool v)
         {
         _vtAncestry = v;
+        }
+    // The target row's compact-objects field: `new C` gets the 8-byte
+    // instance header and every vtable a dealloc word (as the reference).
+    void setCompactObjects(bool v)
+        {
+        _compactObjects = v;
         }
     void setVtableItable(bool v)
         {
@@ -10880,10 +10888,20 @@ class ClassInfo
             }
 
         IRInsn* call = IRInsn.with(String.withCString("Call"));
-        call.add(IROperand.sym(runtimeHelper(String.withCString("_xtc_alloc"))));
-        call.add(IROperand.useVal(count));
-        call.add(IROperand.useVal(stride));
-        call.add(IROperand.useVal(deallocPtr));
+        // One instance on a compact-objects target: the 8-byte header, its
+        // dealloc read from the vtable (the class has one: needsVtable).
+        if (_compactObjects && !hasCount && ci.needsVtable())
+            {
+            call.add(IROperand.sym(runtimeHelper(String.withCString("_xtc_alloc_object"))));
+            call.add(IROperand.useVal(stride));
+            }
+        else
+            {
+            call.add(IROperand.sym(runtimeHelper(String.withCString("_xtc_alloc"))));
+            call.add(IROperand.useVal(count));
+            call.add(IROperand.useVal(stride));
+            call.add(IROperand.useVal(deallocPtr));
+            }
         call.add(IROperand.useVal(_mem));
         IRValue* inst = new IRValue(ci.selfPtr());
         call.setRes(inst);
@@ -10902,8 +10920,11 @@ class ClassInfo
             zeroInitIvars(inst, ci);
         stampClassId(inst, ci);
         // The allocator does not run the constructor: an ivar read before init
-        // would see whatever the block last held.
-        if (n.sym() != 0)
+        // would see whatever the block last held. An array of class
+        // (`new C[n]`) runs none, as in the reference: it used to call init on
+        // the first element with no arguments, its argument registers holding
+        // whatever they held (found 2026-10-31, compact_object T6).
+        if (n.sym() != 0 && !hasCount)
             runInit(inst, ci, n.sym(), ctorArgs);
         // `new T` on a CLASS hands back a +1: an owned temporary, released at
         // the end of the full expression unless something adopts it. A raw
@@ -11787,7 +11808,15 @@ class ClassInfo
     // library-built receiver reads that class's first method pointer instead.
     u32 vtblSlotBias(void)
         {
-        return (_vtAncestry ? (u32)2 : (u32)0) + (_vtItable ? (u32)1 : (u32)0);
+        return (_vtAncestry ? (u32)2 : (u32)0) + (_vtItable ? (u32)1 : (u32)0) + (_compactObjects ? (u32)1 : (u32)0);
+        }
+
+    // The category-chain word's index (after the parent link and the itable)
+    // and the dealloc word's after it: the reference's XTVtblCatChainIndex
+    // and XTVtblDeallocIndex.
+    u32 vtblChainIndex(void)
+        {
+        return (_vtAncestry ? (u32)1 : (u32)0) + (_vtItable ? (u32)1 : (u32)0);
         }
 
     IRValue* emitProtoDispatch(IRValue* recvVal, String* proto, u32 index,
@@ -11834,7 +11863,7 @@ class ClassInfo
         Array* o2 = new Array();
         o2.add((Object*)IROperand.useVal(vtbl));
         IRValue* vtPP = emit(String.withCString("Bitcast"), ppVoid, o2);
-        IRValue* chIdx = emitConstU16(vtblSlotBias() - (u32)1);
+        IRValue* chIdx = emitConstU16(vtblChainIndex());
         Array* o3 = new Array();
         o3.add((Object*)IROperand.useVal(vtPP));
         o3.add((Object*)IROperand.useVal(chIdx));
@@ -13524,6 +13553,16 @@ class ClassInfo
         // in the symbol table — and so the check for "does this class already
         // have one" sees every method it declares.
         registerSynthesisedDealloc(info, cls);
+        // Compact objects: the vtable's dealloc word names the class's
+        // $dealloc, or null when it has none (now known). As the reference.
+        u32 di = vtblChainIndex() + (u32)1;
+        if (_compactObjects && _vtAncestry && info.needsVtable() && info.vtblEntries().count() > di)
+            {
+            String* dn = String.withString(cls.name());
+            dn.appendCString("$dealloc");
+            if (!symbolExists(dn) && ((String*)info.vtblEntries().get(di)).equals(dn))
+                info.vtblEntries().set(di, (Object*)String.withCString(""));
+            }
         }
 
     // The instance: a vtable pointer at slot 0, then every ivar in the chain
@@ -13762,6 +13801,15 @@ class ClassInfo
                 info.vtblEntries().insert(_vtItable ? (u32)1 : (u32)0,
                                           (Object*)(catTblName != 0 ? catTblName : String.withCString("")));
                 vtblOff = vtblOff + (u32)2;
+                // The dealloc word (compact objects): the class's $dealloc,
+                // settled once it is known whether one exists (declareMethods).
+                if (_compactObjects)
+                    {
+                    String* dn = String.withString(cls.name());
+                    dn.appendCString("$dealloc");
+                    info.vtblEntries().insert(_vtItable ? (u32)2 : (u32)1, (Object*)dn);
+                    vtblOff = vtblOff + (u32)2;
+                    }
                 }
             }
         else
@@ -24570,7 +24618,7 @@ class ClassInfo
                     if (ip.ops().count() == (u32)0 || ((IROperand*)ip.ops().get((u32)0)).kind() != (u8)OPK_SYM)
                         return String.withCString("makes a dynamic call (a virtual or protocol call, a function pointer or a callback)");
                     String* name = ((IROperand*)ip.ops().get((u32)0)).name();
-                    if (name.equals(String.withCString("_xtc_alloc")) || name.hasPrefix(String.withCString("_xtc_new")))
+                    if (name.equals(String.withCString("_xtc_alloc")) || name.equals(String.withCString("_xtc_alloc_object")) || name.hasPrefix(String.withCString("_xtc_new")))
                         return String.withCString("allocates on the heap ('new')");
                     if (parMathIntrinsic(name))
                         continue;

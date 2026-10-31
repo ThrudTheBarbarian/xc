@@ -1768,7 +1768,7 @@ static BOOL parIsComputeOp(XTIROpcode op)
                         return @"makes a dynamic call (a virtual or protocol call, a function pointer or a callback)";
                     XTIRSymbol* sym = [self.module symbolForId:i.operands[0].symbolId];
                     NSString* name = sym.name;
-                    if ([name isEqualToString:@"_xtc_alloc"] || [name hasPrefix:@"_xtc_new"])
+                    if ([name isEqualToString:@"_xtc_alloc"] || [name isEqualToString:@"_xtc_alloc_object"] || [name hasPrefix:@"_xtc_new"])
                         return @"allocates on the heap ('new')";
                     if (isMathIntrinsic(name))
                         break;

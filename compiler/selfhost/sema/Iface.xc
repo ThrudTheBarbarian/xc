@@ -21,6 +21,7 @@
 #import <Node>
 #import "NodeDefs.xc"
 #import "Files.xc"
+#import "Process.xc"
 
 // ── A minimal JSON DOM ──────────────────────────────────────────────────
 // Kinds: 0 null, 1 bool, 2 number, 3 string, 4 array, 5 object.
@@ -918,6 +919,25 @@ class JsonVal
         JsonVal* root = JsonParser.parse(text);
         if (root == 0 || root.kind() != (u8)5)
             return (IfaceImport*)0;
+        // The interface format version: v2 since the compact object header
+        // (a fourth vtable header word, an 8-byte instance header), so a
+        // library built by an earlier xcc dispatches one word off and is
+        // refused; a newer format is refused too. As the reference.
+        JsonVal* ver = root.member((u8*)"ifaceVersion");
+        i64 v = ver == 0 ? (i64)0 : ver.asNum();
+        if (v != (i64)2)
+            {
+            if (v > (i64)2)
+                Stdio.printf("xcc: error: '%s' carries interface format v%lld, serialised by a newer "
+                             "xcc than this one (reads v2) — upgrade the compiler or rebuild the "
+                             "library with this one\n", path.lastPathComponent().cString(), v);
+            else
+                Stdio.printf("xcc: error: '%s' carries interface format v%lld, from an xcc before the "
+                             "compact object header (this one reads v2) — rebuild the library with "
+                             "this compiler\n", path.lastPathComponent().cString(), v < (i64)1 ? (i64)1 : v);
+            Process.exit((i32)1);
+            return (IfaceImport*)0;
+            }
         IfaceImport* im = new IfaceImport();
         // Types first: a class field, a method signature or a function may name
         // an imported struct, enum or alias, and every one of them must exist

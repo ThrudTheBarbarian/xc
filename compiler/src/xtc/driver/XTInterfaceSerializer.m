@@ -436,7 +436,7 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
                             // interface must be a clear diagnostic, not a
                             // misparse. Bump on any change a strict reader of
                             // the previous format would misread.
-                            @"ifaceVersion": @1,
+                            @"ifaceVersion": @2,
                             @"classes":   classes,
                             @"protocols": protocols,
                             @"enums":     enums,

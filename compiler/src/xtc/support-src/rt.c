@@ -60,6 +60,24 @@ void *_xtc_alloc(unsigned long count,unsigned long stride,void(*dealloc)(void*))
     *(uint32_t*)(p+XT_MAGIC_OFF)=0x58544F42U;*(unsigned long*)(p+XT_STRIDE_OFF)=stride;
     *(unsigned long*)(p+XT_COUNT_OFF)=count;*(void(**)(void*))(p+XT_DEALLOC_OFF)=dealloc;
     *(void**)(p+XT_WEAKH_OFF)=0;*(XT_RC_T*)(p+XT_RC_OFF)=1;return p+XT_HDR;}
+/* A class instance (`new C`) has an 8-byte header: the magic and the
+   refcount, at payload-8 and payload-4 as in an array's header. It is one
+   element by definition, so it has no count or stride; its dealloc is the
+   vtable's header word XT_VT_DEALLOC (an instance's first word is its vtable
+   pointer); and the head of its weak list, when a weak reference has ever
+   pointed at it, lives in a side table, flagged by the second magic.
+   private:docs/Design/compact-object-header.md. */
+#define XT_MAGIC_OBJ  0x58544F4EU
+#define XT_MAGIC_OBJW 0x58544F4FU   /* OBJ | 1: a weak reference has pointed here */
+#define XT_OBJ_HDR    8
+#define XT_VT_DEALLOC 3
+#define XT_IS_OBJ(m)  (((m)|1U)==XT_MAGIC_OBJW)
+#define XT_MAGIC_AT(o) (*(uint32_t*)((uint8_t*)(o)-8))
+void *_xtc_alloc_object(unsigned long size){
+    xt_size_check(1,size);
+    uint8_t*p=(uint8_t*)calloc(1,size+XT_OBJ_HDR);
+    if(!p){fprintf(stderr,"xcc: out of memory allocating %lu bytes\n",size);abort();}
+    *(uint32_t*)p=XT_MAGIC_OBJ;*(XT_RC_T*)(p+4)=1;return p+XT_OBJ_HDR;}
 /* One element is its own width, not eight. Every primitive array used to
    allocate 8 bytes per element — an 8x waste that also hit the (now removed)
    size ceiling eight times sooner than the element count suggested. */
@@ -222,7 +240,14 @@ void _xtc_weak_zero_for(void*);
    length (bug 234). The header field is `unsigned long` and is returned
    whole. */
 unsigned long _xtc_count(void *o){return *(unsigned long*)((uint8_t*)o-XT_HDR+XT_COUNT_OFF);}
-void _xtc_dealloc(void *o){_xtc_weak_zero_for(o);uint8_t*base=(uint8_t*)o-XT_HDR;
+void _xtc_dealloc(void *o){
+    uint32_t m0=XT_MAGIC_AT(o);
+    if(XT_IS_OBJ(m0)){
+        if(m0==XT_MAGIC_OBJW)_xtc_weak_zero_for(o);
+        void(*d)(void*)=(*(void(***)(void*))o)[XT_VT_DEALLOC];
+        if(d){*(XT_RC_T*)((uint8_t*)o-XT_RC_BYTES)=XT_RC_DYING;d(o);}
+        free((uint8_t*)o-XT_OBJ_HDR);return;}
+    _xtc_weak_zero_for(o);uint8_t*base=(uint8_t*)o-XT_HDR;
     unsigned long stride=*(unsigned long*)(base+XT_STRIDE_OFF);
     unsigned long count=*(unsigned long*)(base+XT_COUNT_OFF);
     void(*d)(void*)=*(void(**)(void*))(base+XT_DEALLOC_OFF);
@@ -255,9 +280,44 @@ void _xt_rt_lock(void); void _xt_rt_unlock(void);
    a mismatch means the slot was never really linked here, so clear and bail. */
 static void xt_weak_unreg(void **slot){void ***pp=(void***)slot[-2];if(!pp)return;if(*pp!=slot){slot[-2]=0;slot[-1]=0;return;}void **nx=(void**)slot[-1];*pp=nx;if(nx)nx[-2]=(void*)pp;slot[-2]=0;slot[-1]=0;}
 void _xtc_weak_unregister(void **slot){_xt_rt_lock();xt_weak_unreg(slot);_xt_rt_unlock();}
-void _xtc_weak_register(void **slot,void *obj){_xt_rt_lock();xt_weak_unreg(slot);if(!obj||(*(uint32_t*)((uint8_t*)obj-XT_HDR+XT_MAGIC_OFF)!=0x58544F42U&&*(uint32_t*)((uint8_t*)obj-XT_HDR+XT_MAGIC_OFF)!=XT_MAGIC_ALIGNED)){_xt_rt_unlock();return;}void **nx=_XT_WH(obj);slot[-2]=(void*)&_XT_WH(obj);slot[-1]=(void*)nx;if(nx)nx[-2]=(void*)&slot[-1];_XT_WH(obj)=slot;_xt_rt_unlock();}
+/* An instance's weak-list head: a cell of its own (so slot[-2], which points
+   at the head, stays valid when the table grows), found through an
+   open-addressed table keyed by the object's address. Only objects a weak
+   reference has pointed at are in it; all of it is under the runtime lock. */
+typedef struct{void *obj;void ***cell;}xt_wtab_e;
+static xt_wtab_e *xt_wtab;static unsigned long xt_wtab_cap,xt_wtab_n,xt_wtab_used;
+#define XT_WTAB_DEAD ((void*)1)
+static unsigned long xt_wtab_h(void *o){unsigned long x=(unsigned long)o>>3;x^=x>>17;x*=0xed5ad4bbUL;x^=x>>11;return x;}
+static xt_wtab_e *xt_wtab_find(void *o){if(!xt_wtab_cap)return 0;unsigned long i=xt_wtab_h(o)&(xt_wtab_cap-1);
+    for(;;){xt_wtab_e*e=&xt_wtab[i];if(e->obj==o)return e;if(!e->obj)return 0;i=(i+1)&(xt_wtab_cap-1);}}
+static void xt_wtab_put(void *o,void ***cell);
+static void xt_wtab_grow(void){unsigned long oc=xt_wtab_cap;xt_wtab_e*old=xt_wtab;
+    xt_wtab_cap=oc?oc*2:64;while(xt_wtab_n*2>=xt_wtab_cap)xt_wtab_cap*=2;
+    xt_wtab=(xt_wtab_e*)calloc(xt_wtab_cap,sizeof(xt_wtab_e));
+    if(!xt_wtab){fprintf(stderr,"xcc: out of memory (weak references)\n");abort();}
+    xt_wtab_n=0;xt_wtab_used=0;
+    for(unsigned long i=0;i<oc;i++)if(old[i].obj&&old[i].obj!=XT_WTAB_DEAD)xt_wtab_put(old[i].obj,old[i].cell);free(old);}
+static void xt_wtab_put(void *o,void ***cell){if((xt_wtab_used+1)*2>xt_wtab_cap)xt_wtab_grow();
+    unsigned long i=xt_wtab_h(o)&(xt_wtab_cap-1);while(xt_wtab[i].obj&&xt_wtab[i].obj!=XT_WTAB_DEAD)i=(i+1)&(xt_wtab_cap-1);
+    if(!xt_wtab[i].obj)xt_wtab_used++;xt_wtab[i].obj=o;xt_wtab[i].cell=cell;xt_wtab_n++;}
+/* The address of obj's weak-list head, or 0 when obj is not a heap object
+   (a stack instance, memory C made). Under the lock. */
+static void ***xt_weak_head(void *obj,int make){
+    uint32_t m=XT_MAGIC_AT(obj);
+    if(m==0x58544F42U||m==XT_MAGIC_ALIGNED)return (void***)&_XT_WH(obj);
+    if(!XT_IS_OBJ(m))return 0;
+    xt_wtab_e*e=m==XT_MAGIC_OBJW?xt_wtab_find(obj):0;
+    if(e)return e->cell;
+    if(!make)return 0;
+    void ***cell=(void***)calloc(1,sizeof(void**));
+    if(!cell){fprintf(stderr,"xcc: out of memory (weak references)\n");abort();}
+    xt_wtab_put(obj,cell);XT_MAGIC_AT(obj)=XT_MAGIC_OBJW;return cell;}
+void _xtc_weak_register(void **slot,void *obj){_xt_rt_lock();xt_weak_unreg(slot);void ***hd=obj?xt_weak_head(obj,1):0;if(!hd){_xt_rt_unlock();return;}void **nx=*hd;slot[-2]=(void*)hd;slot[-1]=(void*)nx;if(nx)nx[-2]=(void*)&slot[-1];*hd=slot;_xt_rt_unlock();}
 void *_xtc_weak_load(void **slot){return *slot;}
-void _xtc_weak_zero_for(void *obj){if(!obj)return;_xt_rt_lock();void **s=_XT_WH(obj);while(s){void **nx=(void**)s[-1];*s=0;s[-2]=0;s[-1]=0;s=nx;}_XT_WH(obj)=0;_xt_rt_unlock();}
+void _xtc_weak_zero_for(void *obj){if(!obj)return;_xt_rt_lock();void ***hd=xt_weak_head(obj,0);
+    if(hd){void **s=*hd;while(s){void **nx=(void**)s[-1];*s=0;s[-2]=0;s[-1]=0;s=nx;}*hd=0;
+        if(XT_IS_OBJ(XT_MAGIC_AT(obj))){xt_wtab_e*e=xt_wtab_find(obj);if(e){e->obj=XT_WTAB_DEAD;e->cell=0;xt_wtab_n--;}free(hd);}}
+    _xt_rt_unlock();}
 /* `write` comes from <unistd.h>, included below with the file helpers. It used
    to be declared here by hand, which made the header's own declaration a
    redefinition and stopped this file compiling on its own — inconvenient,

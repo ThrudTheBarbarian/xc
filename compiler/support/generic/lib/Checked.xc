@@ -20,6 +20,7 @@ void _xt_exit(i32 code);
 // layout.
 #define XT_CHECK_MAGIC $58544F42
 #define XT_CHECK_MAGIC_ALIGNED $58544F43
+#define XT_CHECK_MAGIC_OBJW $58544F4F
 
 void _xt_check_put(u8* s)
 {
@@ -83,8 +84,14 @@ void _xt_check_object(pointer ptr, u8* site)
     // call is the trap, so a check costs a compare where it is used.
     if (ptr != (pointer)0)
         {
-        if (*(u32*)(pointer)((u8*)ptr - 8) != (u32)XT_CHECK_MAGIC)
-            _xt_check_cast_trap(site);
+        // A class instance (magic XTON, or XTOO once a weak reference has
+        // pointed at it: they differ in bit 0) or an array block.
+        u32 m = *(u32*)(pointer)((u8*)ptr - 8);
+        if ((m | (u32)1) != (u32)XT_CHECK_MAGIC_OBJW)
+            {
+            if (m != (u32)XT_CHECK_MAGIC)
+                _xt_check_cast_trap(site);
+            }
         }
 }
 

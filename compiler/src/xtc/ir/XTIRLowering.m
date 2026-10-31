@@ -467,6 +467,10 @@ static BOOL sVtableConforms = NO;
 // they keep the compile-time-subtree downcast and a parent-free vtable (byte-identical
 // old codegen). Default ON so the target-agnostic front-end tests exercise the walk.
 static BOOL sVtableAncestry = YES;
+// The target's compact-objects row field: `new C` gets the 8-byte instance
+// header (_xtc_alloc_object) and every vtable a fourth header word, the
+// class's dealloc (private:docs/Design/compact-object-header.md).
+static BOOL sCompactObjects = NO;
 
 /****************************************************************************\
 |* How many HEADER words sit in front of a vtable's method slots.
@@ -493,14 +497,22 @@ static NSUInteger XTVtblHeaderWords(void)
     {
     return (sVtableAncestry ? 1 : 0)                         // parent
            + ((sItableProtocols || sVtableConforms) ? 1 : 0) // itable
-           + (sVtableAncestry ? 1 : 0);                      // category chain
+           + (sVtableAncestry ? 1 : 0)                       // category chain
+           + (sCompactObjects ? 1 : 0);                      // dealloc
     }
 
-// Index of the category-chain word: the last header word, so it exists only
-// where sVtableAncestry does.
+// Index of the category-chain word: after the parent link and the itable, so
+// it exists only where sVtableAncestry does.
 static NSUInteger XTVtblCatChainIndex(void)
     {
-    return XTVtblHeaderWords() - 1;
+    return (sVtableAncestry ? 1 : 0) + ((sItableProtocols || sVtableConforms) ? 1 : 0);
+    }
+
+// Index of the dealloc word (compact objects, which ride sVtableAncestry): the
+// runtime's XT_VT_DEALLOC, after the chain word.
+static NSUInteger XTVtblDeallocIndex(void)
+    {
+    return XTVtblCatChainIndex() + 1;
     }
 
 // The bounded C-variadic rule (blewit item 2): a BODY-LESS declaration
@@ -604,6 +616,10 @@ static void setDbgLocFromNode(XTASTNode* node)
 + (void)setVtableAncestry:(BOOL)on
     {
     sVtableAncestry = on;
+    }
++ (void)setCompactObjects:(BOOL)on
+    {
+    sCompactObjects = on;
     }
 + (BOOL)vtableAncestry
     {
@@ -8611,6 +8627,13 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
             }
         allocArgs = @[ countVal, strideVal, deallocPtr ];
         helperName = @"_xtc_alloc";
+        // One instance on a compact-objects target: the 8-byte header, its
+        // dealloc read from the vtable (the class has one: needsVtable).
+        if (sCompactObjects && !node.countExpr && ci.needsVtable)
+            {
+            allocArgs = @[ strideVal ];
+            helperName = @"_xtc_alloc_object";
+            }
         }
     else
         {
@@ -19307,6 +19330,11 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             // a chain word there, not that class's first method pointer.
             [ents insertObject:(catTblName ?: @"")
                        atIndex:((sItableProtocols || sVtableConforms) ? 1 : 0)];
+            // The dealloc word (compact objects): the class's $dealloc, settled
+            // at the end of the pre-scan once it is known whether one exists.
+            if (sCompactObjects)
+                [ents insertObject:[NSString stringWithFormat:@"%@$dealloc", cls.className]
+                           atIndex:((sItableProtocols || sVtableConforms) ? 2 : 1)];
             }
         info.vtableEntrySymbolNames = ents;
         info.methodSlot = [(cls.vtableMethodSlots ?: @{}) mutableCopy];
@@ -19636,6 +19664,24 @@ static void xtCollectAsmIdentifiers(NSString* line, NSMutableSet<NSString*>* out
             if (!self.synthDeallocClasses)
                 self.synthDeallocClasses = [NSMutableSet set];
             [self.synthDeallocClasses addObject:cls.className];
+            }
+        }
+    // Compact objects: the vtable's dealloc word names the class's $dealloc,
+    // or null when the class has none (now known: declared or synthesised
+    // above).
+    if (sCompactObjects && sVtableAncestry && info.needsVtable && info.vtableEntrySymbolNames.count > XTVtblDeallocIndex())
+        {
+        NSString* dn = [NSString stringWithFormat:@"%@$dealloc", cls.className];
+        if (![self.module symbolForName:dn] && [info.vtableEntrySymbolNames[XTVtblDeallocIndex()] isEqualToString:dn])
+            {
+            info.vtableEntrySymbolNames[XTVtblDeallocIndex()] = @"";
+            XTIRSymbol* vs = [self.module symbolForName:[NSString stringWithFormat:@"%@$vtbl", cls.className]];
+            if (vs && vs.vtableEntryNames.count > XTVtblDeallocIndex())
+                {
+                NSMutableArray<NSString*>* e = [vs.vtableEntryNames mutableCopy];
+                e[XTVtblDeallocIndex()] = @"";
+                vs.vtableEntryNames = e;
+                }
             }
         }
     }
