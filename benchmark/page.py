@@ -367,7 +367,7 @@ def pi_section(version):
     raw = {b: r for b, r in d.get("raw", {}).items() if b != "baseline"}
     rows = []
     for b, by_opt in raw.items():
-        r = by_opt.get("O3") or by_opt.get("O2") or {}
+        r = by_opt.get("O3") or {}
         x = r.get("xc_pi")
         others = [r[k] for k in ("cpp_pi", "gcc_pi") if r.get(k)]
         if x and others:

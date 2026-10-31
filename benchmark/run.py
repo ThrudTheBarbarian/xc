@@ -416,7 +416,11 @@ def main():
         default_version = "v" + f.read().strip()
     ap.add_argument("--version", default=default_version)
     ap.add_argument("--bench", default=None)
-    ap.add_argument("--opt", default=None)
+    # -O3 only by default: the page shows -O3 and nothing else (owner
+    # 2026-10-31: the benchmarks showcase the best we offer, and four levels
+    # took most of a release's benchmark time). `--opt all` measures every
+    # level, for a look at the others; diy.py keeps all four.
+    ap.add_argument("--opt", default="O3", help="one level (O0..O3), or all")
     ap.add_argument("--repeats", type=int, default=5)
     ap.add_argument("--max-load", type=float, default=MAX_LOAD)
     ap.add_argument("--langs", default=None,
@@ -439,7 +443,7 @@ def main():
         names = [n for n in names if n == args.bench]
         if not names:
             sys.exit("no such benchmark: " + args.bench)
-    opts = [args.opt] if args.opt else OPTS
+    opts = OPTS if args.opt == "all" else [args.opt]
 
     env = build_env()
     if not env.get("XTC_LINUX_HOST"):
