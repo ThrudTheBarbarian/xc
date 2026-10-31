@@ -1877,7 +1877,7 @@ LBB40_26:
 __xtc_weak_zero_for:                    ; @_xtc_weak_zero_for
 	.cfi_startproc
 ; %bb.0:
-	cbz	x0, LBB41_25
+	cbz	x0, LBB41_18
 ; %bb.1:
 	stp	x20, x19, [sp, #-32]!           ; 16-byte Folded Spill
 	stp	x29, x30, [sp, #16]             ; 16-byte Folded Spill
@@ -1897,96 +1897,20 @@ Lloh118:
 	add	x0, x0, _xt_rt_mtx@PAGEOFF
 	bl	_pthread_mutex_lock
 LBB41_3:
+	mov	w8, #20290                      ; =0x4f42
+	movk	w8, #22612, lsl #16
 	ldur	w9, [x19, #-8]
-	and	w8, w9, #0xfffffffe
-	mov	w10, #20302                     ; =0x4f4e
-	movk	w10, #22612, lsl #16
-	cmp	w8, w10
-	b.eq	LBB41_5
-; %bb.4:
-	mov	w9, #20290                      ; =0x4f42
-	movk	w9, #22612, lsl #16
-	sub	x10, x19, #16
-	cmp	w8, w9
-	csel	x0, xzr, x10, ne
-	cbnz	x0, LBB41_14
-	b	LBB41_23
-LBB41_5:
-	orr	w10, w10, #0x1
+	mov	w10, #13                        ; =0xd
+	orr	w10, w8, w10
 	cmp	w9, w10
-	b.ne	LBB41_9
-; %bb.6:
+	b.ne	LBB41_8
+; %bb.4:
 Lloh119:
-	adrp	x9, _xt_wtab_cap@PAGE
-Lloh120:
-	ldr	x9, [x9, _xt_wtab_cap@PAGEOFF]
-	cbz	x9, LBB41_12
-; %bb.7:
-	lsr	x10, x19, #3
-	eor	x10, x10, x19, lsr #20
-	mov	w11, #54459                     ; =0xd4bb
-	movk	w11, #60762, lsl #16
-	mul	x10, x10, x11
-	eor	x10, x10, x10, lsr #11
-	sub	x9, x9, #1
-	and	x10, x9, x10
-Lloh121:
-	adrp	x11, _xt_wtab@PAGE
-Lloh122:
-	ldr	x11, [x11, _xt_wtab@PAGEOFF]
-	mov	w13, #1                         ; =0x1
-                                        ; implicit-def: $x12
-LBB41_8:                                ; =>This Inner Loop Header: Depth=1
-	add	x14, x11, x10, lsl #4
-	ldr	x15, [x14]
-	add	x16, x10, #1
-	and	x16, x16, x9
-	cmp	x15, #0
-	csel	x16, x10, x16, eq
-	csel	x12, xzr, x12, eq
-	csel	w17, wzr, w13, eq
-	cmp	x15, x19
-	csel	x10, x10, x16, eq
-	csel	x12, x14, x12, eq
-	csel	w14, wzr, w17, eq
-	tbnz	w14, #0, LBB41_8
-	b	LBB41_10
-LBB41_9:
-	mov	x12, #0                         ; =0x0
-LBB41_10:
-	cbz	x12, LBB41_13
-LBB41_11:
-	ldr	x0, [x12, #8]
-	cbnz	x0, LBB41_14
-	b	LBB41_23
-LBB41_12:
-	mov	x12, #0                         ; =0x0
-	cbnz	x12, LBB41_11
-LBB41_13:
-	mov	x0, #0                          ; =0x0
-	cbz	x0, LBB41_23
-LBB41_14:
-	ldr	x9, [x0]
-	cbz	x9, LBB41_16
-LBB41_15:                               ; =>This Inner Loop Header: Depth=1
-	ldur	x10, [x9, #-8]
-	stp	xzr, xzr, [x9, #-8]
-	stur	xzr, [x9, #-16]
-	mov	x9, x10
-	cbnz	x10, LBB41_15
-LBB41_16:
-	str	xzr, [x0]
-	mov	w9, #20302                      ; =0x4f4e
-	movk	w9, #22612, lsl #16
-	cmp	w8, w9
-	b.ne	LBB41_23
-; %bb.17:
-Lloh123:
 	adrp	x8, _xt_wtab_cap@PAGE
-Lloh124:
+Lloh120:
 	ldr	x8, [x8, _xt_wtab_cap@PAGEOFF]
-	cbz	x8, LBB41_26
-; %bb.18:
+	cbz	x8, LBB41_12
+; %bb.5:
 	lsr	x9, x19, #3
 	eor	x9, x9, x19, lsr #20
 	mov	w10, #54459                     ; =0xd4bb
@@ -1994,61 +1918,88 @@ Lloh124:
 	mul	x9, x9, x10
 	eor	x9, x9, x9, lsr #11
 	sub	x8, x8, #1
-	and	x9, x8, x9
-Lloh125:
-	adrp	x10, _xt_wtab@PAGE
-Lloh126:
-	ldr	x11, [x10, _xt_wtab@PAGEOFF]
+	and	x10, x8, x9
+Lloh121:
+	adrp	x9, _xt_wtab@PAGE
+Lloh122:
+	ldr	x11, [x9, _xt_wtab@PAGEOFF]
 	mov	w12, #1                         ; =0x1
-                                        ; implicit-def: $x10
-LBB41_19:                               ; =>This Inner Loop Header: Depth=1
-	add	x13, x11, x9, lsl #4
+                                        ; implicit-def: $x9
+LBB41_6:                                ; =>This Inner Loop Header: Depth=1
+	add	x13, x11, x10, lsl #4
 	ldr	x14, [x13]
-	add	x15, x9, #1
+	add	x15, x10, #1
 	and	x15, x15, x8
 	cmp	x14, #0
-	csel	x15, x9, x15, eq
-	csel	x10, xzr, x10, eq
+	csel	x15, x10, x15, eq
+	csel	x9, xzr, x9, eq
 	csel	w16, wzr, w12, eq
 	cmp	x14, x19
-	csel	x9, x9, x15, eq
-	csel	x10, x13, x10, eq
+	csel	x10, x10, x15, eq
+	csel	x9, x13, x9, eq
 	csel	w13, wzr, w16, eq
-	tbnz	w13, #0, LBB41_19
-; %bb.20:
-	cbz	x10, LBB41_22
-LBB41_21:
-	mov	w8, #1                          ; =0x1
-	stp	x8, xzr, [x10]
-	adrp	x8, _xt_wtab_n@PAGE
-	ldr	x9, [x8, _xt_wtab_n@PAGEOFF]
-	sub	x9, x9, #1
-	str	x9, [x8, _xt_wtab_n@PAGEOFF]
-LBB41_22:
-	bl	_free
-LBB41_23:
+	tbnz	w13, #0, LBB41_6
+; %bb.7:
+	cbnz	x9, LBB41_13
+	b	LBB41_16
+LBB41_8:
+	and	w9, w9, #0xfffffffe
+	cmp	w9, w8
+	b.ne	LBB41_16
+; %bb.9:
+	ldur	x8, [x19, #-16]
+	cbz	x8, LBB41_11
+LBB41_10:                               ; =>This Inner Loop Header: Depth=1
+	ldur	x9, [x8, #-8]
+	stp	xzr, xzr, [x8, #-8]
+	stur	xzr, [x8, #-16]
+	mov	x8, x9
+	cbnz	x9, LBB41_10
+LBB41_11:
+	stur	xzr, [x19, #-16]
+	b	LBB41_16
+LBB41_12:
+	mov	x9, #0                          ; =0x0
+	cbz	x9, LBB41_16
+LBB41_13:
+	ldr	x8, [x9, #8]
+	mov	w10, #1                         ; =0x1
+	stp	x10, xzr, [x9]
+	adrp	x9, _xt_wtab_n@PAGE
+	ldr	x10, [x9, _xt_wtab_n@PAGEOFF]
+	sub	x10, x10, #1
+	str	x10, [x9, _xt_wtab_n@PAGEOFF]
+	ldr	x9, [x8]
+	cbz	x9, LBB41_15
+LBB41_14:                               ; =>This Inner Loop Header: Depth=1
+	ldur	x10, [x9, #-8]
+	stp	xzr, xzr, [x9, #-8]
+	stur	xzr, [x9, #-16]
+	mov	x9, x10
+	cbnz	x10, LBB41_14
+LBB41_15:
+	str	xzr, [x8]
+	adrp	x9, _xt_wcell_free@PAGE
+	ldr	x10, [x9, _xt_wcell_free@PAGEOFF]
+	str	x10, [x8]
+	str	x8, [x9, _xt_wcell_free@PAGEOFF]
+LBB41_16:
 	ldr	w8, [x20, __xt_threads_active@PAGEOFF]
 	ldp	x29, x30, [sp, #16]             ; 16-byte Folded Reload
 	ldp	x20, x19, [sp], #32             ; 16-byte Folded Reload
-	cbz	w8, LBB41_25
-; %bb.24:
-Lloh127:
+	cbz	w8, LBB41_18
+; %bb.17:
+Lloh123:
 	adrp	x0, _xt_rt_mtx@PAGE
-Lloh128:
+Lloh124:
 	add	x0, x0, _xt_rt_mtx@PAGEOFF
 	b	_pthread_mutex_unlock
-LBB41_25:
+LBB41_18:
 	ret
-LBB41_26:
-	mov	x10, #0                         ; =0x0
-	cbnz	x10, LBB41_21
-	b	LBB41_22
 	.loh AdrpAdd	Lloh117, Lloh118
 	.loh AdrpLdr	Lloh119, Lloh120
 	.loh AdrpLdr	Lloh121, Lloh122
-	.loh AdrpLdr	Lloh123, Lloh124
-	.loh AdrpLdr	Lloh125, Lloh126
-	.loh AdrpAdd	Lloh127, Lloh128
+	.loh AdrpAdd	Lloh123, Lloh124
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xtc_weak_unregister           ; -- Begin function _xtc_weak_unregister
@@ -2068,9 +2019,9 @@ __xtc_weak_unregister:                  ; @_xtc_weak_unregister
 	ldr	w8, [x20, __xt_threads_active@PAGEOFF]
 	cbz	w8, LBB42_2
 ; %bb.1:
-Lloh129:
+Lloh125:
 	adrp	x0, _xt_rt_mtx@PAGE
-Lloh130:
+Lloh126:
 	add	x0, x0, _xt_rt_mtx@PAGEOFF
 	bl	_pthread_mutex_lock
 LBB42_2:
@@ -2093,9 +2044,9 @@ LBB42_7:
 	ldr	w8, [x20, __xt_threads_active@PAGEOFF]
 	cbz	w8, LBB42_9
 ; %bb.8:
-Lloh131:
+Lloh127:
 	adrp	x0, _xt_rt_mtx@PAGE
-Lloh132:
+Lloh128:
 	add	x0, x0, _xt_rt_mtx@PAGEOFF
 	ldp	x29, x30, [sp, #16]             ; 16-byte Folded Reload
 	ldp	x20, x19, [sp], #32             ; 16-byte Folded Reload
@@ -2104,8 +2055,8 @@ LBB42_9:
 	ldp	x29, x30, [sp, #16]             ; 16-byte Folded Reload
 	ldp	x20, x19, [sp], #32             ; 16-byte Folded Reload
 	ret
-	.loh AdrpAdd	Lloh129, Lloh130
-	.loh AdrpAdd	Lloh131, Lloh132
+	.loh AdrpAdd	Lloh125, Lloh126
+	.loh AdrpAdd	Lloh127, Lloh128
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xtc_weak_register             ; -- Begin function _xtc_weak_register
@@ -2132,9 +2083,9 @@ __xtc_weak_register:                    ; @_xtc_weak_register
 	ldr	w8, [x22, __xt_threads_active@PAGEOFF]
 	cbz	w8, LBB43_2
 ; %bb.1:
-Lloh133:
+Lloh129:
 	adrp	x0, _xt_rt_mtx@PAGE
-Lloh134:
+Lloh130:
 	add	x0, x0, _xt_rt_mtx@PAGEOFF
 	bl	_pthread_mutex_lock
 LBB43_2:
@@ -2168,21 +2119,21 @@ LBB43_7:
 	sub	x10, x20, #16
 	cmp	w8, w9
 	csel	x21, xzr, x10, ne
-	cbnz	x21, LBB43_21
-	b	LBB43_24
+	cbnz	x21, LBB43_25
+	b	LBB43_28
 LBB43_10:
 	mov	x21, #0                         ; =0x0
-	cbnz	x21, LBB43_21
-	b	LBB43_24
+	cbnz	x21, LBB43_25
+	b	LBB43_28
 LBB43_11:
 	mov	w23, #20303                     ; =0x4f4f
 	movk	w23, #22612, lsl #16
 	cmp	w9, w23
 	b.ne	LBB43_15
 ; %bb.12:
-Lloh135:
+Lloh131:
 	adrp	x8, _xt_wtab_cap@PAGE
-Lloh136:
+Lloh132:
 	ldr	x8, [x8, _xt_wtab_cap@PAGEOFF]
 	cbz	x8, LBB43_18
 ; %bb.13:
@@ -2194,9 +2145,9 @@ Lloh136:
 	eor	x9, x9, x9, lsr #11
 	sub	x8, x8, #1
 	and	x9, x8, x9
-Lloh137:
+Lloh133:
 	adrp	x10, _xt_wtab@PAGE
-Lloh138:
+Lloh134:
 	ldr	x10, [x10, _xt_wtab@PAGEOFF]
 	mov	w12, #1                         ; =0x1
                                         ; implicit-def: $x11
@@ -2221,58 +2172,77 @@ LBB43_16:
 	cbz	x11, LBB43_19
 LBB43_17:
 	ldr	x21, [x11, #8]
-	cbnz	x21, LBB43_21
-	b	LBB43_24
+	cbnz	x21, LBB43_25
+	b	LBB43_28
 LBB43_18:
 	mov	x11, #0                         ; =0x0
 	cbnz	x11, LBB43_17
 LBB43_19:
-	mov	w0, #1                          ; =0x1
+	adrp	x24, _xt_wcell_free@PAGE
+	ldr	x8, [x24, _xt_wcell_free@PAGEOFF]
+	cbnz	x8, LBB43_24
+; %bb.20:
+	mov	w0, #512                        ; =0x200
 	mov	w1, #8                          ; =0x8
 	bl	_calloc
-	cbz	x0, LBB43_27
-; %bb.20:
-	mov	x21, x0
+	cbz	x0, LBB43_31
+; %bb.21:
+	mov	x8, #0                          ; =0x0
+LBB43_22:                               ; =>This Inner Loop Header: Depth=1
+	add	x9, x0, x8
+	add	x10, x9, #8
+	str	x10, [x9]
+	add	x8, x8, #8
+	cmp	x8, #4088
+	b.ne	LBB43_22
+; %bb.23:
+	str	xzr, [x0, #4088]
+	str	x0, [x24, _xt_wcell_free@PAGEOFF]
+LBB43_24:
+	ldr	x21, [x24, _xt_wcell_free@PAGEOFF]
+	ldr	x8, [x21]
+	str	x8, [x24, _xt_wcell_free@PAGEOFF]
+	str	xzr, [x21]
 	mov	x0, x20
 	mov	x1, x21
 	bl	_xt_wtab_put
 	stur	w23, [x20, #-8]
-	cbz	x21, LBB43_24
-LBB43_21:
+	cbz	x21, LBB43_28
+LBB43_25:
 	ldr	x8, [x21]
 	mov	x9, x19
 	str	x8, [x9, #-8]!
 	stur	x21, [x9, #-8]
-	cbz	x8, LBB43_23
-; %bb.22:
+	cbz	x8, LBB43_27
+; %bb.26:
 	stur	x9, [x8, #-16]
-LBB43_23:
+LBB43_27:
 	str	x19, [x21]
-LBB43_24:
+LBB43_28:
 	ldr	w8, [x22, __xt_threads_active@PAGEOFF]
-	cbz	w8, LBB43_26
-; %bb.25:
-Lloh139:
+	cbz	w8, LBB43_30
+; %bb.29:
+Lloh135:
 	adrp	x0, _xt_rt_mtx@PAGE
-Lloh140:
+Lloh136:
 	add	x0, x0, _xt_rt_mtx@PAGEOFF
 	ldp	x29, x30, [sp, #48]             ; 16-byte Folded Reload
 	ldp	x20, x19, [sp, #32]             ; 16-byte Folded Reload
 	ldp	x22, x21, [sp, #16]             ; 16-byte Folded Reload
 	ldp	x24, x23, [sp], #64             ; 16-byte Folded Reload
 	b	_pthread_mutex_unlock
-LBB43_26:
+LBB43_30:
 	ldp	x29, x30, [sp, #48]             ; 16-byte Folded Reload
 	ldp	x20, x19, [sp, #32]             ; 16-byte Folded Reload
 	ldp	x22, x21, [sp, #16]             ; 16-byte Folded Reload
 	ldp	x24, x23, [sp], #64             ; 16-byte Folded Reload
 	ret
-LBB43_27:
+LBB43_31:
 	bl	__xtc_weak_register.cold.1
-	.loh AdrpAdd	Lloh133, Lloh134
-	.loh AdrpLdr	Lloh135, Lloh136
-	.loh AdrpLdr	Lloh137, Lloh138
-	.loh AdrpAdd	Lloh139, Lloh140
+	.loh AdrpAdd	Lloh129, Lloh130
+	.loh AdrpLdr	Lloh131, Lloh132
+	.loh AdrpLdr	Lloh133, Lloh134
+	.loh AdrpAdd	Lloh135, Lloh136
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xtc_weak_load                 ; -- Begin function _xtc_weak_load
@@ -2319,9 +2289,9 @@ __xtc_pf:                               ; @_xtc_pf
 	.cfi_offset w20, -32
 	fcvt	d0, s0
 	str	d0, [sp]
-Lloh141:
+Lloh137:
 	adrp	x2, l_.str.2@PAGE
-Lloh142:
+Lloh138:
 	add	x2, x2, l_.str.2@PAGEOFF
 	add	x19, sp, #16
 	add	x0, sp, #16
@@ -2341,7 +2311,7 @@ LBB46_1:                                ; =>This Inner Loop Header: Depth=1
 	ldp	x20, x19, [sp, #80]             ; 16-byte Folded Reload
 	add	sp, sp, #112
 	ret
-	.loh AdrpAdd	Lloh141, Lloh142
+	.loh AdrpAdd	Lloh137, Lloh138
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xtc_pd                        ; -- Begin function _xtc_pd
@@ -2358,9 +2328,9 @@ __xtc_pd:                               ; @_xtc_pd
 	.cfi_offset w19, -24
 	.cfi_offset w20, -32
 	str	d0, [sp]
-Lloh143:
+Lloh139:
 	adrp	x2, l_.str.3@PAGE
-Lloh144:
+Lloh140:
 	add	x2, x2, l_.str.3@PAGEOFF
 	add	x19, sp, #16
 	add	x0, sp, #16
@@ -2380,7 +2350,7 @@ LBB47_1:                                ; =>This Inner Loop Header: Depth=1
 	ldp	x20, x19, [sp, #80]             ; 16-byte Folded Reload
 	add	sp, sp, #112
 	ret
-	.loh AdrpAdd	Lloh143, Lloh144
+	.loh AdrpAdd	Lloh139, Lloh140
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xtc_pfp                       ; -- Begin function _xtc_pfp
@@ -2402,9 +2372,9 @@ __xtc_pfp:                              ; @_xtc_pfp
 	add	w8, w0, #1
 	str	d0, [sp, #8]
 	str	x8, [sp]
-Lloh145:
+Lloh141:
 	adrp	x2, l_.str.9@PAGE
-Lloh146:
+Lloh142:
 	add	x2, x2, l_.str.9@PAGEOFF
 	add	x19, sp, #16
 	add	x0, sp, #16
@@ -2432,9 +2402,9 @@ LBB48_6:                                ; =>This Inner Loop Header: Depth=1
 	b	LBB48_9
 LBB48_7:
 	str	d0, [sp]
-Lloh147:
+Lloh143:
 	adrp	x2, l_.str.2@PAGE
-Lloh148:
+Lloh144:
 	add	x2, x2, l_.str.2@PAGEOFF
 	add	x19, sp, #16
 	add	x0, sp, #16
@@ -2454,8 +2424,8 @@ LBB48_9:
 	ldp	x20, x19, [sp, #80]             ; 16-byte Folded Reload
 	add	sp, sp, #112
 	ret
-	.loh AdrpAdd	Lloh145, Lloh146
-	.loh AdrpAdd	Lloh147, Lloh148
+	.loh AdrpAdd	Lloh141, Lloh142
+	.loh AdrpAdd	Lloh143, Lloh144
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xtc_pdp                       ; -- Begin function _xtc_pdp
@@ -2476,9 +2446,9 @@ __xtc_pdp:                              ; @_xtc_pdp
 	add	w8, w0, #1
 	str	d0, [sp, #8]
 	str	x8, [sp]
-Lloh149:
+Lloh145:
 	adrp	x2, l_.str.9@PAGE
-Lloh150:
+Lloh146:
 	add	x2, x2, l_.str.9@PAGEOFF
 	add	x19, sp, #16
 	add	x0, sp, #16
@@ -2506,9 +2476,9 @@ LBB49_6:                                ; =>This Inner Loop Header: Depth=1
 	b	LBB49_9
 LBB49_7:
 	str	d0, [sp]
-Lloh151:
+Lloh147:
 	adrp	x2, l_.str.3@PAGE
-Lloh152:
+Lloh148:
 	add	x2, x2, l_.str.3@PAGEOFF
 	add	x19, sp, #16
 	add	x0, sp, #16
@@ -2528,8 +2498,8 @@ LBB49_9:
 	ldp	x20, x19, [sp, #80]             ; 16-byte Folded Reload
 	add	sp, sp, #112
 	ret
-	.loh AdrpAdd	Lloh149, Lloh150
-	.loh AdrpAdd	Lloh151, Lloh152
+	.loh AdrpAdd	Lloh145, Lloh146
+	.loh AdrpAdd	Lloh147, Lloh148
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xm_sqrtf                      ; -- Begin function _xm_sqrtf
@@ -2820,9 +2790,9 @@ __xt_clk_ticks:                         ; @_xt_clk_ticks
 	movk	x8, #15889, lsl #48
 	fmov	d2, x8
 	fmadd	d0, d1, d2, d0
-Lloh153:
+Lloh149:
 	adrp	x8, _xt_clk_origin@PAGE
-Lloh154:
+Lloh150:
 	ldr	d1, [x8, _xt_clk_origin@PAGEOFF]
 	fsub	d0, d0, d1
 	mov	x8, #145685290680320            ; =0x848000000000
@@ -2833,7 +2803,7 @@ Lloh154:
 	ldp	x29, x30, [sp, #16]             ; 16-byte Folded Reload
 	add	sp, sp, #32
 	ret
-	.loh AdrpLdr	Lloh153, Lloh154
+	.loh AdrpLdr	Lloh149, Lloh150
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xt_clk_delay                  ; -- Begin function _xt_clk_delay
@@ -2887,9 +2857,9 @@ LBB73_2:
 	.cfi_offset w19, -24
 	.cfi_offset w20, -32
 	mov	w8, w0
-Lloh155:
+Lloh151:
 	adrp	x9, __xtc_bank_regions@PAGE
-Lloh156:
+Lloh152:
 	add	x9, x9, __xtc_bank_regions@PAGEOFF
 	add	x19, x9, x8, lsl #11
 	ldr	x8, [x19, w1, uxtw #3]
@@ -2906,7 +2876,7 @@ LBB73_4:
 	ldp	x29, x30, [sp, #16]             ; 16-byte Folded Reload
 	ldp	x20, x19, [sp], #32             ; 16-byte Folded Reload
 	ret
-	.loh AdrpAdd	Lloh155, Lloh156
+	.loh AdrpAdd	Lloh151, Lloh152
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xt_file_open                  ; -- Begin function _xt_file_open
@@ -2922,9 +2892,9 @@ __xt_file_open:                         ; @_xt_file_open
 	.cfi_offset w19, -24
 	.cfi_offset w20, -32
 	mov	x19, #0                         ; =0x0
-Lloh157:
+Lloh153:
 	adrp	x20, _xt_files@PAGE
-Lloh158:
+Lloh154:
 	add	x20, x20, _xt_files@PAGEOFF
 LBB74_1:                                ; =>This Inner Loop Header: Depth=1
 	ldr	x8, [x20, x19, lsl #3]
@@ -2947,7 +2917,7 @@ LBB74_6:
 	ldp	x29, x30, [sp, #16]             ; 16-byte Folded Reload
 	ldp	x20, x19, [sp], #32             ; 16-byte Folded Reload
 	ret
-	.loh AdrpAdd	Lloh157, Lloh158
+	.loh AdrpAdd	Lloh153, Lloh154
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xt_file_read                  ; -- Begin function _xt_file_read
@@ -2958,9 +2928,9 @@ __xt_file_read:                         ; @_xt_file_read
 	cmp	w0, #7
 	b.hi	LBB75_3
 ; %bb.1:
-Lloh159:
+Lloh155:
 	adrp	x8, _xt_files@PAGE
-Lloh160:
+Lloh156:
 	add	x8, x8, _xt_files@PAGEOFF
 	ldr	x3, [x8, w0, uxtw #3]
 	cbz	x3, LBB75_3
@@ -2980,7 +2950,7 @@ LBB75_3:
 	mov	w0, #-1                         ; =0xffffffff
                                         ; kill: def $w0 killed $w0 killed $x0
 	ret
-	.loh AdrpAdd	Lloh159, Lloh160
+	.loh AdrpAdd	Lloh155, Lloh156
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xt_file_write                 ; -- Begin function _xt_file_write
@@ -2991,9 +2961,9 @@ __xt_file_write:                        ; @_xt_file_write
 	cmp	w0, #7
 	b.hi	LBB76_3
 ; %bb.1:
-Lloh161:
+Lloh157:
 	adrp	x8, _xt_files@PAGE
-Lloh162:
+Lloh158:
 	add	x8, x8, _xt_files@PAGEOFF
 	ldr	x3, [x8, w0, uxtw #3]
 	cbz	x3, LBB76_3
@@ -3013,7 +2983,7 @@ LBB76_3:
 	mov	w0, #-1                         ; =0xffffffff
                                         ; kill: def $w0 killed $w0 killed $x0
 	ret
-	.loh AdrpAdd	Lloh161, Lloh162
+	.loh AdrpAdd	Lloh157, Lloh158
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xt_file_close                 ; -- Begin function _xt_file_close
@@ -3031,9 +3001,9 @@ __xt_file_close:                        ; @_xt_file_close
 	.cfi_offset w29, -16
 	.cfi_offset w19, -24
 	.cfi_offset w20, -32
-Lloh163:
+Lloh159:
 	adrp	x19, _xt_files@PAGE
-Lloh164:
+Lloh160:
 	add	x19, x19, _xt_files@PAGEOFF
 	ldr	x8, [x19, w0, uxtw #3]
 	cbz	x8, LBB77_3
@@ -3047,7 +3017,7 @@ LBB77_3:
 	ldp	x20, x19, [sp], #32             ; 16-byte Folded Reload
 LBB77_4:
 	ret
-	.loh AdrpAdd	Lloh163, Lloh164
+	.loh AdrpAdd	Lloh159, Lloh160
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xt_file_size                  ; -- Begin function _xt_file_size
@@ -3062,9 +3032,9 @@ __xt_file_size:                         ; @_xt_file_size
 	.cfi_offset w29, -16
 	.cfi_offset w19, -24
 	.cfi_offset w20, -32
-Lloh165:
+Lloh161:
 	adrp	x1, l_.str.4@PAGE
-Lloh166:
+Lloh162:
 	add	x1, x1, l_.str.4@PAGEOFF
 	bl	_fopen
 	cbz	x0, LBB78_3
@@ -3092,7 +3062,7 @@ LBB78_5:
 	ldp	x29, x30, [sp, #16]             ; 16-byte Folded Reload
 	ldp	x20, x19, [sp], #32             ; 16-byte Folded Reload
 	ret
-	.loh AdrpAdd	Lloh165, Lloh166
+	.loh AdrpAdd	Lloh161, Lloh162
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xt_file_exists                ; -- Begin function _xt_file_exists
@@ -3104,9 +3074,9 @@ __xt_file_exists:                       ; @_xt_file_exists
 	.cfi_def_cfa_offset 16
 	.cfi_offset w30, -8
 	.cfi_offset w29, -16
-Lloh167:
+Lloh163:
 	adrp	x1, l_.str.4@PAGE
-Lloh168:
+Lloh164:
 	add	x1, x1, l_.str.4@PAGEOFF
 	bl	_fopen
 	cbz	x0, LBB79_2
@@ -3116,7 +3086,7 @@ Lloh168:
 LBB79_2:
 	ldp	x29, x30, [sp], #16             ; 16-byte Folded Reload
 	ret
-	.loh AdrpAdd	Lloh167, Lloh168
+	.loh AdrpAdd	Lloh163, Lloh164
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xt_getenv                     ; -- Begin function _xt_getenv
@@ -3129,15 +3099,15 @@ __xt_getenv:                            ; @_xt_getenv
 	.cfi_offset w30, -8
 	.cfi_offset w29, -16
 	bl	_getenv
-Lloh169:
+Lloh165:
 	adrp	x8, l_.str.5@PAGE
-Lloh170:
+Lloh166:
 	add	x8, x8, l_.str.5@PAGEOFF
 	cmp	x0, #0
 	csel	x0, x8, x0, eq
 	ldp	x29, x30, [sp], #16             ; 16-byte Folded Reload
 	ret
-	.loh AdrpAdd	Lloh169, Lloh170
+	.loh AdrpAdd	Lloh165, Lloh166
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xt_mkdir                      ; -- Begin function _xt_mkdir
@@ -3218,22 +3188,22 @@ ___xt_stack_fail:                       ; @__xt_stack_fail
 	.cfi_def_cfa_offset 16
 	.cfi_offset w30, -8
 	.cfi_offset w29, -16
-Lloh171:
+Lloh167:
 	adrp	x8, ___stderrp@GOTPAGE
-Lloh172:
+Lloh168:
 	ldr	x8, [x8, ___stderrp@GOTPAGEOFF]
-Lloh173:
+Lloh169:
 	ldr	x3, [x8]
-Lloh174:
+Lloh170:
 	adrp	x0, l_.str.6@PAGE
-Lloh175:
+Lloh171:
 	add	x0, x0, l_.str.6@PAGEOFF
 	mov	w1, #70                         ; =0x46
 	mov	w2, #1                          ; =0x1
 	bl	_fwrite
 	bl	_abort
-	.loh AdrpAdd	Lloh174, Lloh175
-	.loh AdrpLdrGotLdr	Lloh171, Lloh172, Lloh173
+	.loh AdrpAdd	Lloh170, Lloh171
+	.loh AdrpLdrGotLdr	Lloh167, Lloh168, Lloh169
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xt_set_args                   ; -- Begin function _xt_set_args
@@ -3241,14 +3211,14 @@ Lloh175:
 __xt_set_args:                          ; @_xt_set_args
 	.cfi_startproc
 ; %bb.0:
-Lloh176:
+Lloh172:
 	adrp	x8, _xt_argc_v@PAGE
 	str	w0, [x8, _xt_argc_v@PAGEOFF]
-Lloh177:
+Lloh173:
 	adrp	x8, _xt_argv_v@PAGE
 	str	x1, [x8, _xt_argv_v@PAGEOFF]
 	ret
-	.loh AdrpAdrp	Lloh176, Lloh177
+	.loh AdrpAdrp	Lloh172, Lloh173
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xt_argc                       ; -- Begin function _xt_argc
@@ -3256,12 +3226,12 @@ Lloh177:
 __xt_argc:                              ; @_xt_argc
 	.cfi_startproc
 ; %bb.0:
-Lloh178:
+Lloh174:
 	adrp	x8, _xt_argc_v@PAGE
-Lloh179:
+Lloh175:
 	ldr	w0, [x8, _xt_argc_v@PAGEOFF]
 	ret
-	.loh AdrpLdr	Lloh178, Lloh179
+	.loh AdrpLdr	Lloh174, Lloh175
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xt_argv                       ; -- Begin function _xt_argv
@@ -3271,30 +3241,30 @@ __xt_argv:                              ; @_xt_argv
 ; %bb.0:
 	tbnz	w0, #31, LBB87_2
 ; %bb.1:
-Lloh180:
+Lloh176:
 	adrp	x8, _xt_argc_v@PAGE
-Lloh181:
+Lloh177:
 	ldr	w9, [x8, _xt_argc_v@PAGEOFF]
-Lloh182:
+Lloh178:
 	adrp	x8, _xt_argv_v@PAGE
-Lloh183:
+Lloh179:
 	ldr	x8, [x8, _xt_argv_v@PAGEOFF]
 	cmp	w9, w0
 	ccmp	x8, #0, #4, gt
 	b.ne	LBB87_3
 LBB87_2:
-Lloh184:
+Lloh180:
 	adrp	x0, l_.str.5@PAGE
-Lloh185:
+Lloh181:
 	add	x0, x0, l_.str.5@PAGEOFF
 	ret
 LBB87_3:
 	ldr	x0, [x8, w0, uxtw #3]
 	ret
-	.loh AdrpLdr	Lloh182, Lloh183
-	.loh AdrpAdrp	Lloh180, Lloh182
-	.loh AdrpLdr	Lloh180, Lloh181
-	.loh AdrpAdd	Lloh184, Lloh185
+	.loh AdrpLdr	Lloh178, Lloh179
+	.loh AdrpAdrp	Lloh176, Lloh178
+	.loh AdrpLdr	Lloh176, Lloh177
+	.loh AdrpAdd	Lloh180, Lloh181
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xt_exit                       ; -- Begin function _xt_exit
@@ -3405,12 +3375,12 @@ LBB89_14:
 __xt_threads_multi:                     ; @_xt_threads_multi
 	.cfi_startproc
 ; %bb.0:
-Lloh186:
+Lloh182:
 	adrp	x8, __xt_threads_active@PAGE
-Lloh187:
+Lloh183:
 	ldr	w0, [x8, __xt_threads_active@PAGEOFF]
 	ret
-	.loh AdrpLdr	Lloh186, Lloh187
+	.loh AdrpLdr	Lloh182, Lloh183
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xt_thread_create              ; -- Begin function _xt_thread_create
@@ -3436,9 +3406,9 @@ __xt_thread_create:                     ; @_xt_thread_create
 	ldr	w8, [x19, __xt_threads_active@PAGEOFF]
 	cbnz	w8, LBB91_3
 ; %bb.2:
-Lloh188:
+Lloh184:
 	adrp	x0, _xt_rt_mtx@PAGE
-Lloh189:
+Lloh185:
 	add	x0, x0, _xt_rt_mtx@PAGEOFF
 	mov	x1, #0                          ; =0x0
 	bl	_pthread_mutex_init
@@ -3455,9 +3425,9 @@ LBB91_3:
 	bl	_malloc
 	cbz	x0, LBB91_7
 ; %bb.5:
-Lloh190:
+Lloh186:
 	adrp	x2, _xt_thread_entry@PAGE
-Lloh191:
+Lloh187:
 	add	x2, x2, _xt_thread_entry@PAGEOFF
 	mov	x20, x0
 	mov	x1, #0                          ; =0x0
@@ -3483,8 +3453,8 @@ LBB91_10:
 	ldp	x22, x21, [sp], #48             ; 16-byte Folded Reload
 LBB91_11:
 	ret
-	.loh AdrpAdd	Lloh188, Lloh189
-	.loh AdrpAdd	Lloh190, Lloh191
+	.loh AdrpAdd	Lloh184, Lloh185
+	.loh AdrpAdd	Lloh186, Lloh187
 	.cfi_endproc
                                         ; -- End function
 	.p2align	2                               ; -- Begin function xt_thread_entry
@@ -4197,17 +4167,17 @@ __xtc_sinit_run:                        ; @_xtc_sinit_run
 	adrp	x23, __xt_threads_active@PAGE
 	mov	w25, #1                         ; =0x1
 	adrp	x24, _xt_sinit_n@PAGE
-Lloh192:
+Lloh188:
 	adrp	x26, _xt_sinit_flag@PAGE
-Lloh193:
+Lloh189:
 	add	x26, x26, _xt_sinit_flag@PAGEOFF
-Lloh194:
+Lloh190:
 	adrp	x27, _xt_sinit_owner@PAGE
-Lloh195:
+Lloh191:
 	add	x27, x27, _xt_sinit_owner@PAGEOFF
-Lloh196:
+Lloh192:
 	adrp	x22, _xt_rt_mtx@PAGE
-Lloh197:
+Lloh193:
 	add	x22, x22, _xt_rt_mtx@PAGEOFF
 	b	LBB125_4
 LBB125_2:                               ;   in Loop: Header=BB125_4 Depth=1
@@ -4309,9 +4279,9 @@ LBB125_26:
 	ldr	w8, [x23, __xt_threads_active@PAGEOFF]
 	cbz	w8, LBB125_28
 ; %bb.27:
-Lloh198:
+Lloh194:
 	adrp	x0, _xt_rt_mtx@PAGE
-Lloh199:
+Lloh195:
 	add	x0, x0, _xt_rt_mtx@PAGEOFF
 	bl	_pthread_mutex_lock
 LBB125_28:
@@ -4321,13 +4291,13 @@ LBB125_28:
 	cmp	w8, #1
 	b.lt	LBB125_32
 ; %bb.29:
-Lloh200:
+Lloh196:
 	adrp	x9, _xt_sinit_owner@PAGE
-Lloh201:
+Lloh197:
 	add	x9, x9, _xt_sinit_owner@PAGEOFF
-Lloh202:
+Lloh198:
 	adrp	x10, _xt_sinit_flag@PAGE
-Lloh203:
+Lloh199:
 	add	x10, x10, _xt_sinit_flag@PAGEOFF
 	mov	x13, x8
 	mov	x12, x10
@@ -4345,9 +4315,9 @@ LBB125_32:
 	ldr	w8, [x23, __xt_threads_active@PAGEOFF]
 	cbz	w8, LBB125_35
 LBB125_33:
-Lloh204:
+Lloh200:
 	adrp	x0, _xt_rt_mtx@PAGE
-Lloh205:
+Lloh201:
 	add	x0, x0, _xt_rt_mtx@PAGEOFF
 	ldp	x29, x30, [sp, #80]             ; 16-byte Folded Reload
 	ldp	x20, x19, [sp, #64]             ; 16-byte Folded Reload
@@ -4374,13 +4344,13 @@ LBB125_35:
 	ldp	x26, x25, [sp, #16]             ; 16-byte Folded Reload
 	ldp	x28, x27, [sp], #96             ; 16-byte Folded Reload
 	ret
-	.loh AdrpAdd	Lloh196, Lloh197
-	.loh AdrpAdd	Lloh194, Lloh195
 	.loh AdrpAdd	Lloh192, Lloh193
+	.loh AdrpAdd	Lloh190, Lloh191
+	.loh AdrpAdd	Lloh188, Lloh189
+	.loh AdrpAdd	Lloh194, Lloh195
 	.loh AdrpAdd	Lloh198, Lloh199
-	.loh AdrpAdd	Lloh202, Lloh203
+	.loh AdrpAdd	Lloh196, Lloh197
 	.loh AdrpAdd	Lloh200, Lloh201
-	.loh AdrpAdd	Lloh204, Lloh205
 	.cfi_endproc
                                         ; -- End function
 	.globl	__xt_thread_exiting             ; -- Begin function _xt_thread_exiting
@@ -4516,22 +4486,22 @@ __xtc_alloc_object.cold.1:              ; @_xtc_alloc_object.cold.1
 	.cfi_def_cfa_offset 32
 	.cfi_offset w30, -8
 	.cfi_offset w29, -16
-Lloh206:
+Lloh202:
 	adrp	x8, ___stderrp@GOTPAGE
-Lloh207:
+Lloh203:
 	ldr	x8, [x8, ___stderrp@GOTPAGEOFF]
-Lloh208:
+Lloh204:
 	ldr	x8, [x8]
 	str	x0, [sp]
-Lloh209:
+Lloh205:
 	adrp	x1, l_.str.1@PAGE
-Lloh210:
+Lloh206:
 	add	x1, x1, l_.str.1@PAGEOFF
 	mov	x0, x8
 	bl	_fprintf
 	bl	_abort
-	.loh AdrpAdd	Lloh209, Lloh210
-	.loh AdrpLdrGotLdr	Lloh206, Lloh207, Lloh208
+	.loh AdrpAdd	Lloh205, Lloh206
+	.loh AdrpLdrGotLdr	Lloh202, Lloh203, Lloh204
 	.cfi_endproc
                                         ; -- End function
 	.p2align	2                               ; -- Begin function _xtc_alloc_object.cold.2
@@ -4543,23 +4513,23 @@ __xtc_alloc_object.cold.2:              ; @_xtc_alloc_object.cold.2
 	.cfi_def_cfa_offset 32
 	.cfi_offset w30, -8
 	.cfi_offset w29, -16
-Lloh211:
+Lloh207:
 	adrp	x8, ___stderrp@GOTPAGE
-Lloh212:
+Lloh208:
 	ldr	x8, [x8, ___stderrp@GOTPAGEOFF]
-Lloh213:
+Lloh209:
 	ldr	x8, [x8]
 	mov	w9, #1                          ; =0x1
 	stp	x9, x0, [sp]
-Lloh214:
+Lloh210:
 	adrp	x1, l_.str.7@PAGE
-Lloh215:
+Lloh211:
 	add	x1, x1, l_.str.7@PAGEOFF
 	mov	x0, x8
 	bl	_fprintf
 	bl	_abort
-	.loh AdrpAdd	Lloh214, Lloh215
-	.loh AdrpLdrGotLdr	Lloh211, Lloh212, Lloh213
+	.loh AdrpAdd	Lloh210, Lloh211
+	.loh AdrpLdrGotLdr	Lloh207, Lloh208, Lloh209
 	.cfi_endproc
                                         ; -- End function
 	.p2align	2                               ; -- Begin function _xtc_weak_register.cold.1
@@ -4570,20 +4540,20 @@ __xtc_weak_register.cold.1:             ; @_xtc_weak_register.cold.1
 	.cfi_def_cfa_offset 16
 	.cfi_offset w30, -8
 	.cfi_offset w29, -16
-Lloh216:
+Lloh212:
 	adrp	x8, ___stderrp@GOTPAGE
-Lloh217:
+Lloh213:
 	ldr	x8, [x8, ___stderrp@GOTPAGEOFF]
-Lloh218:
+Lloh214:
 	ldr	x3, [x8]
-Lloh219:
+Lloh215:
 	adrp	x0, l_.str.8@PAGE
-Lloh220:
+Lloh216:
 	add	x0, x0, l_.str.8@PAGEOFF
 	bl	_OUTLINED_FUNCTION_0
 	bl	_abort
-	.loh AdrpAdd	Lloh219, Lloh220
-	.loh AdrpLdrGotLdr	Lloh216, Lloh217, Lloh218
+	.loh AdrpAdd	Lloh215, Lloh216
+	.loh AdrpLdrGotLdr	Lloh212, Lloh213, Lloh214
 	.cfi_endproc
                                         ; -- End function
 	.p2align	2                               ; -- Begin function xt_wtab_put.cold.1
@@ -4594,20 +4564,20 @@ _xt_wtab_put.cold.1:                    ; @xt_wtab_put.cold.1
 	.cfi_def_cfa_offset 16
 	.cfi_offset w30, -8
 	.cfi_offset w29, -16
-Lloh221:
+Lloh217:
 	adrp	x8, ___stderrp@GOTPAGE
-Lloh222:
+Lloh218:
 	ldr	x8, [x8, ___stderrp@GOTPAGEOFF]
-Lloh223:
+Lloh219:
 	ldr	x3, [x8]
-Lloh224:
+Lloh220:
 	adrp	x0, l_.str.8@PAGE
-Lloh225:
+Lloh221:
 	add	x0, x0, l_.str.8@PAGEOFF
 	bl	_OUTLINED_FUNCTION_0
 	bl	_abort
-	.loh AdrpAdd	Lloh224, Lloh225
-	.loh AdrpLdrGotLdr	Lloh221, Lloh222, Lloh223
+	.loh AdrpAdd	Lloh220, Lloh221
+	.loh AdrpLdrGotLdr	Lloh217, Lloh218, Lloh219
 	.cfi_endproc
                                         ; -- End function
 	.p2align	2                               ; -- Begin function OUTLINED_FUNCTION_0
@@ -4665,6 +4635,7 @@ l_.str.7:                               ; @.str.7
 
 .zerofill __DATA,__bss,_xt_simd_n,8,3   ; @xt_simd_n
 .zerofill __DATA,__bss,_xt_simd_cap,8,3 ; @xt_simd_cap
+.zerofill __DATA,__bss,_xt_wcell_free,8,3 ; @xt_wcell_free
 l_.str.8:                               ; @.str.8
 	.asciz	"xcc: out of memory (weak references)\n"
 

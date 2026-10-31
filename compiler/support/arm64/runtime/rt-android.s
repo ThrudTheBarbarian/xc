@@ -1679,7 +1679,7 @@ _xtc_dealloc:                           // @_xtc_dealloc
 	.type	_xtc_weak_zero_for,@function
 _xtc_weak_zero_for:                     // @_xtc_weak_zero_for
 // %bb.0:
-	cbz	x0, .Lrt_BB41_25
+	cbz	x0, .Lrt_BB41_18
 // %bb.1:
 	str	x30, [sp, #-32]!                // 8-byte Folded Spill
 	stp	x20, x19, [sp, #16]             // 16-byte Folded Spill
@@ -1692,140 +1692,99 @@ _xtc_weak_zero_for:                     // @_xtc_weak_zero_for
 	add	x0, x0, :lo12:xt_rt_mtx
 	bl	pthread_mutex_lock
 .Lrt_BB41_3:
+	mov	w8, #20290                      // =0x4f42
 	ldur	w9, [x19, #-8]
-	mov	w10, #20302                     // =0x4f4e
-	movk	w10, #22612, lsl #16
-	and	w8, w9, #0xfffffffe
-	cmp	w8, w10
-	b.eq	.Lrt_BB41_6
-// %bb.4:
-	mov	w9, #20290                      // =0x4f42
-	movk	w9, #22612, lsl #16
-	cmp	w8, w9
-	b.ne	.Lrt_BB41_13
-// %bb.5:
-	sub	x0, x19, #16
-	cbnz	x0, .Lrt_BB41_14
-	b	.Lrt_BB41_23
-.Lrt_BB41_6:
-	orr	w10, w10, #0x1
+	mov	w10, #13                        // =0xd
+	movk	w8, #22612, lsl #16
+	orr	w10, w8, w10
 	cmp	w9, w10
-	b.ne	.Lrt_BB41_12
-// %bb.7:
-	adrp	x9, xt_wtab_cap
-	ldr	x9, [x9, :lo12:xt_wtab_cap]
-	cbz	x9, .Lrt_BB41_26
-// %bb.8:
-	lsr	x10, x19, #3
-	mov	w11, #54459                     // =0xd4bb
-	sub	x9, x9, #1
-	movk	w11, #60762, lsl #16
-	mov	w12, #1                         // =0x1
-                                        // implicit-def: $x13
-	eor	x10, x10, x19, lsr #20
-	mul	x10, x10, x11
-	eor	x11, x10, x10, lsr #11
-	adrp	x10, xt_wtab
-	ldr	x10, [x10, :lo12:xt_wtab]
-	and	x11, x9, x11
-.Lrt_BB41_9:                               // =>This Inner Loop Header: Depth=1
-	add	x14, x10, x11, lsl #4
-	add	x16, x11, #1
-	and	x16, x16, x9
-	ldr	x15, [x14]
-	cmp	x15, #0
-	csel	x16, x11, x16, eq
-	csel	x13, xzr, x13, eq
-	csel	w17, wzr, w12, eq
-	cmp	x15, x19
-	csel	w15, wzr, w17, eq
-	csel	x11, x11, x16, eq
-	csel	x13, x14, x13, eq
-	tbnz	w15, #0, .Lrt_BB41_9
-// %bb.10:
-	cbz	x13, .Lrt_BB41_13
-.Lrt_BB41_11:
-	ldr	x0, [x13, #8]
-	cbnz	x0, .Lrt_BB41_14
-	b	.Lrt_BB41_23
-.Lrt_BB41_12:
-	mov	x13, xzr
-	cbnz	x13, .Lrt_BB41_11
-.Lrt_BB41_13:
-	mov	x0, xzr
-	cbz	x0, .Lrt_BB41_23
-.Lrt_BB41_14:
-	ldr	x9, [x0]
-	cbz	x9, .Lrt_BB41_16
-.Lrt_BB41_15:                              // =>This Inner Loop Header: Depth=1
-	ldur	x10, [x9, #-8]
-	stp	xzr, xzr, [x9, #-8]
-	stur	xzr, [x9, #-16]
-	mov	x9, x10
-	cbnz	x10, .Lrt_BB41_15
-.Lrt_BB41_16:
-	mov	w9, #20302                      // =0x4f4e
-	str	xzr, [x0]
-	movk	w9, #22612, lsl #16
-	cmp	w8, w9
-	b.ne	.Lrt_BB41_23
-// %bb.17:
+	b.ne	.Lrt_BB41_8
+// %bb.4:
 	adrp	x8, xt_wtab_cap
 	ldr	x8, [x8, :lo12:xt_wtab_cap]
-	cbz	x8, .Lrt_BB41_20
-// %bb.18:
+	cbz	x8, .Lrt_BB41_12
+// %bb.5:
 	lsr	x9, x19, #3
 	mov	w10, #54459                     // =0xd4bb
-	mov	w12, #1                         // =0x1
+	sub	x8, x8, #1
 	movk	w10, #60762, lsl #16
+	mov	w12, #1                         // =0x1
 	eor	x9, x9, x19, lsr #20
 	mul	x9, x9, x10
 	adrp	x10, xt_wtab
 	ldr	x10, [x10, :lo12:xt_wtab]
-	eor	x11, x9, x9, lsr #11
-	sub	x9, x8, #1
-                                        // implicit-def: $x8
-	and	x11, x9, x11
-.Lrt_BB41_19:                              // =>This Inner Loop Header: Depth=1
+	eor	x9, x9, x9, lsr #11
+	and	x11, x8, x9
+                                        // implicit-def: $x9
+.Lrt_BB41_6:                               // =>This Inner Loop Header: Depth=1
 	add	x13, x10, x11, lsl #4
 	add	x15, x11, #1
-	and	x15, x15, x9
+	and	x15, x15, x8
 	ldr	x14, [x13]
 	cmp	x14, #0
 	csel	x15, x11, x15, eq
-	csel	x8, xzr, x8, eq
+	csel	x9, xzr, x9, eq
 	csel	w16, wzr, w12, eq
 	cmp	x14, x19
 	csel	w14, wzr, w16, eq
 	csel	x11, x11, x15, eq
-	csel	x8, x13, x8, eq
-	tbnz	w14, #0, .Lrt_BB41_19
-.Lrt_BB41_20:
-	cbz	x8, .Lrt_BB41_22
-// %bb.21:
-	adrp	x9, xt_wtab_n
+	csel	x9, x13, x9, eq
+	tbnz	w14, #0, .Lrt_BB41_6
+// %bb.7:
+	cbnz	x9, .Lrt_BB41_13
+	b	.Lrt_BB41_16
+.Lrt_BB41_8:
+	and	w9, w9, #0xfffffffe
+	cmp	w9, w8
+	b.ne	.Lrt_BB41_16
+// %bb.9:
+	ldur	x8, [x19, #-16]
+	cbz	x8, .Lrt_BB41_11
+.Lrt_BB41_10:                              // =>This Inner Loop Header: Depth=1
+	ldur	x9, [x8, #-8]
+	stp	xzr, xzr, [x8, #-8]
+	stur	xzr, [x8, #-16]
+	mov	x8, x9
+	cbnz	x9, .Lrt_BB41_10
+.Lrt_BB41_11:
+	stur	xzr, [x19, #-16]
+	b	.Lrt_BB41_16
+.Lrt_BB41_12:
+	mov	x9, xzr
+	cbz	x9, .Lrt_BB41_16
+.Lrt_BB41_13:
 	mov	w10, #1                         // =0x1
-	ldr	x11, [x9, :lo12:xt_wtab_n]
-	stp	x10, xzr, [x8]
-	sub	x8, x11, #1
-	str	x8, [x9, :lo12:xt_wtab_n]
-.Lrt_BB41_22:
-	bl	free
-.Lrt_BB41_23:
+	ldr	x8, [x9, #8]
+	adrp	x11, xt_wtab_n
+	stp	x10, xzr, [x9]
+	ldr	x10, [x11, :lo12:xt_wtab_n]
+	ldr	x9, [x8]
+	sub	x10, x10, #1
+	str	x10, [x11, :lo12:xt_wtab_n]
+	cbz	x9, .Lrt_BB41_15
+.Lrt_BB41_14:                              // =>This Inner Loop Header: Depth=1
+	ldur	x10, [x9, #-8]
+	stp	xzr, xzr, [x9, #-8]
+	stur	xzr, [x9, #-16]
+	mov	x9, x10
+	cbnz	x10, .Lrt_BB41_14
+.Lrt_BB41_15:
+	str	xzr, [x8]
+	adrp	x9, xt_wcell_free
+	ldr	x10, [x9, :lo12:xt_wcell_free]
+	str	x10, [x8]
+	str	x8, [x9, :lo12:xt_wcell_free]
+.Lrt_BB41_16:
 	ldr	w8, [x20, :lo12:_xt_threads_active]
 	ldp	x20, x19, [sp, #16]             // 16-byte Folded Reload
 	ldr	x30, [sp], #32                  // 8-byte Folded Reload
-	cbz	w8, .Lrt_BB41_25
-// %bb.24:
+	cbz	w8, .Lrt_BB41_18
+// %bb.17:
 	adrp	x0, xt_rt_mtx
 	add	x0, x0, :lo12:xt_rt_mtx
 	b	pthread_mutex_unlock
-.Lrt_BB41_25:
+.Lrt_BB41_18:
 	ret
-.Lrt_BB41_26:
-	mov	x13, xzr
-	cbnz	x13, .Lrt_BB41_11
-	b	.Lrt_BB41_13
 .Lrt_func_end41:
 	.size	_xtc_weak_zero_for, .Lrt_func_end41-_xtc_weak_zero_for
                                         // -- End function
@@ -1881,13 +1840,14 @@ _xtc_weak_unregister:                   // @_xtc_weak_unregister
 	.type	_xtc_weak_register,@function
 _xtc_weak_register:                     // @_xtc_weak_register
 // %bb.0:
-	stp	x30, x23, [sp, #-48]!           // 16-byte Folded Spill
-	stp	x22, x21, [sp, #16]             // 16-byte Folded Spill
+	str	x30, [sp, #-64]!                // 8-byte Folded Spill
+	stp	x22, x21, [sp, #32]             // 16-byte Folded Spill
 	adrp	x22, _xt_threads_active
 	ldr	w8, [x22, :lo12:_xt_threads_active]
-	stp	x20, x19, [sp, #32]             // 16-byte Folded Spill
+	stp	x20, x19, [sp, #48]             // 16-byte Folded Spill
 	mov	x20, x1
 	mov	x19, x0
+	stp	x24, x23, [sp, #16]             // 16-byte Folded Spill
 	cbz	w8, .Lrt_BB43_2
 // %bb.1:
 	adrp	x0, xt_rt_mtx
@@ -1930,9 +1890,10 @@ _xtc_weak_register:                     // @_xtc_weak_register
 	ldr	w8, [x22, :lo12:_xt_threads_active]
 	cbnz	w8, .Lrt_BB43_17
 .Lrt_BB43_12:
-	ldp	x20, x19, [sp, #32]             // 16-byte Folded Reload
-	ldp	x22, x21, [sp, #16]             // 16-byte Folded Reload
-	ldp	x30, x23, [sp], #48             // 16-byte Folded Reload
+	ldp	x20, x19, [sp, #48]             // 16-byte Folded Reload
+	ldp	x22, x21, [sp, #32]             // 16-byte Folded Reload
+	ldp	x24, x23, [sp, #16]             // 16-byte Folded Reload
+	ldr	x30, [sp], #64                  // 8-byte Folded Reload
 	ret
 .Lrt_BB43_13:
 	mov	x21, xzr
@@ -1950,11 +1911,12 @@ _xtc_weak_register:                     // @_xtc_weak_register
 	str	x19, [x21]
 	cbz	w8, .Lrt_BB43_12
 .Lrt_BB43_17:
-	ldp	x20, x19, [sp, #32]             // 16-byte Folded Reload
+	ldp	x20, x19, [sp, #48]             // 16-byte Folded Reload
 	adrp	x0, xt_rt_mtx
 	add	x0, x0, :lo12:xt_rt_mtx
-	ldp	x22, x21, [sp, #16]             // 16-byte Folded Reload
-	ldp	x30, x23, [sp], #48             // 16-byte Folded Reload
+	ldp	x22, x21, [sp, #32]             // 16-byte Folded Reload
+	ldp	x24, x23, [sp, #16]             // 16-byte Folded Reload
+	ldr	x30, [sp], #64                  // 8-byte Folded Reload
 	b	pthread_mutex_unlock
 .Lrt_BB43_18:
 	mov	w23, #20303                     // =0x4f4f
@@ -1964,7 +1926,7 @@ _xtc_weak_register:                     // @_xtc_weak_register
 // %bb.19:
 	adrp	x8, xt_wtab_cap
 	ldr	x8, [x8, :lo12:xt_wtab_cap]
-	cbz	x8, .Lrt_BB43_27
+	cbz	x8, .Lrt_BB43_31
 // %bb.20:
 	lsr	x9, x20, #3
 	mov	w10, #54459                     // =0xd4bb
@@ -2002,23 +1964,42 @@ _xtc_weak_register:                     // @_xtc_weak_register
 	mov	x12, xzr
 	cbnz	x12, .Lrt_BB43_23
 .Lrt_BB43_25:
-	mov	w0, #1                          // =0x1
+	adrp	x24, xt_wcell_free
+	ldr	x8, [x24, :lo12:xt_wcell_free]
+	cbnz	x8, .Lrt_BB43_30
+// %bb.26:
+	mov	w0, #512                        // =0x200
 	mov	w1, #8                          // =0x8
 	bl	calloc
-	cbz	x0, .Lrt_BB43_28
-// %bb.26:
-	mov	x21, x0
+	cbz	x0, .Lrt_BB43_32
+// %bb.27:
+	mov	x8, xzr
+.Lrt_BB43_28:                              // =>This Inner Loop Header: Depth=1
+	add	x9, x0, x8
+	add	x8, x8, #8
+	add	x10, x9, #8
+	cmp	x8, #4088
+	str	x10, [x9]
+	b.ne	.Lrt_BB43_28
+// %bb.29:
+	str	xzr, [x0, #4088]
+	str	x0, [x24, :lo12:xt_wcell_free]
+.Lrt_BB43_30:
+	ldr	x21, [x24, :lo12:xt_wcell_free]
 	mov	x0, x20
+	ldr	x8, [x21]
 	mov	x1, x21
+	str	x8, [x24, :lo12:xt_wcell_free]
+	str	xzr, [x21]
 	bl	xt_wtab_put
 	stur	w23, [x20, #-8]
 	cbnz	x21, .Lrt_BB43_14
 	b	.Lrt_BB43_11
-.Lrt_BB43_27:
+.Lrt_BB43_31:
 	mov	x12, xzr
 	cbnz	x12, .Lrt_BB43_23
 	b	.Lrt_BB43_25
-.Lrt_BB43_28:
+.Lrt_BB43_32:
 	adrp	x8, :got:stderr
 	adrp	x0, .Lrt_.str.8
 	add	x0, x0, :lo12:.Lrt_.str.8
@@ -4142,6 +4123,9 @@ _xt_threads_active:
 	.type	xt_simd_cap,@object             // @xt_simd_cap
 	.local	xt_simd_cap
 	.comm	xt_simd_cap,8,8
+	.type	xt_wcell_free,@object           // @xt_wcell_free
+	.local	xt_wcell_free
+	.comm	xt_wcell_free,8,8
 	.type	.Lrt_.str.8,@object                // @.str.8
 .Lrt_.str.8:
 	.asciz	"xcc: out of memory (weak references)\n"

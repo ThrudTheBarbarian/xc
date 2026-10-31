@@ -2090,9 +2090,8 @@ _xtc_dealloc:                           # @_xtc_dealloc
 _xtc_weak_zero_for:                     # @_xtc_weak_zero_for
 # %bb.0:
 	push	rsi
-	sub	rsp, 32
 	test	rcx, rcx
-	je	.LBB48_40
+	je	.LBB48_27
 # %bb.1:
 	cmp	dword ptr [rip + _xt_threads_active], 0
 	je	.LBB48_4
@@ -2110,27 +2109,18 @@ _xtc_weak_zero_for:                     # @_xtc_weak_zero_for
 	jne	.LBB48_3
 	jmp	.LBB48_2
 .LBB48_4:
-	mov	eax, dword ptr [rcx - 8]
-	cmp	eax, 1481920322
-	jne	.LBB48_6
+	mov	edx, dword ptr [rcx - 8]
+	mov	al, 1
+	cmp	edx, 1481920322
+	je	.LBB48_14
 # %bb.5:
-	lea	rsi, [rcx - 16]
-	test	rsi, rsi
-	jne	.LBB48_22
-	jmp	.LBB48_38
-.LBB48_6:
-	mov	edx, eax
-	and	edx, -2
-	cmp	edx, 1481920334
-	jne	.LBB48_21
-# %bb.7:
-	cmp	eax, 1481920335
-	jne	.LBB48_17
-# %bb.8:
+	cmp	edx, 1481920335
+	jne	.LBB48_19
+# %bb.6:
 	mov	rdx, qword ptr [rip + xt_wtab_cap]
 	test	rdx, rdx
-	je	.LBB48_20
-# %bb.9:
+	je	.LBB48_16
+# %bb.7:
 	mov	r8, rcx
 	shr	r8, 3
 	mov	r9, rcx
@@ -2145,141 +2135,85 @@ _xtc_weak_zero_for:                     # @_xtc_weak_zero_for
 	and	r8, rdx
 	mov	r10, qword ptr [rip + xt_wtab]
                                         # implicit-def: $r9
-	jmp	.LBB48_12
+	jmp	.LBB48_10
 	.p2align	4, 0x90
-.LBB48_10:                              #   in Loop: Header=BB48_12 Depth=1
+.LBB48_8:                               #   in Loop: Header=BB48_10 Depth=1
 	add	rsi, r10
 	xor	r11d, r11d
 	mov	r9, rsi
-.LBB48_11:                              #   in Loop: Header=BB48_12 Depth=1
+.LBB48_9:                               #   in Loop: Header=BB48_10 Depth=1
 	test	r11b, r11b
-	je	.LBB48_18
-.LBB48_12:                              # =>This Inner Loop Header: Depth=1
+	je	.LBB48_17
+.LBB48_10:                              # =>This Inner Loop Header: Depth=1
 	mov	rsi, r8
 	shl	rsi, 4
 	mov	r11, qword ptr [r10 + rsi]
 	cmp	r11, rcx
-	je	.LBB48_10
-# %bb.13:                               #   in Loop: Header=BB48_12 Depth=1
+	je	.LBB48_8
+# %bb.11:                               #   in Loop: Header=BB48_10 Depth=1
 	test	r11, r11
-	je	.LBB48_15
-# %bb.14:                               #   in Loop: Header=BB48_12 Depth=1
+	je	.LBB48_13
+# %bb.12:                               #   in Loop: Header=BB48_10 Depth=1
 	inc	r8
 	and	r8, rdx
 	mov	r11b, 1
-	jmp	.LBB48_11
+	jmp	.LBB48_9
 	.p2align	4, 0x90
-.LBB48_15:                              #   in Loop: Header=BB48_12 Depth=1
+.LBB48_13:                              #   in Loop: Header=BB48_10 Depth=1
 	xor	r9d, r9d
 	xor	r11d, r11d
-	jmp	.LBB48_11
+	jmp	.LBB48_9
+.LBB48_14:
+	add	rcx, -16
+	test	rcx, rcx
+	jne	.LBB48_20
+	jmp	.LBB48_25
+.LBB48_16:
+	xor	r9d, r9d
 .LBB48_17:
-	xor	r9d, r9d
-.LBB48_18:
 	test	r9, r9
-	je	.LBB48_21
+	je	.LBB48_19
+# %bb.18:
+	mov	rcx, qword ptr [r9 + 8]
+	mov	qword ptr [r9], 1
+	mov	qword ptr [r9 + 8], 0
+	dec	qword ptr [rip + xt_wtab_n]
+	xor	eax, eax
+	test	rcx, rcx
+	jne	.LBB48_20
+	jmp	.LBB48_25
 .LBB48_19:
-	mov	rsi, qword ptr [r9 + 8]
-	test	rsi, rsi
-	jne	.LBB48_22
-	jmp	.LBB48_38
-.LBB48_20:
-	xor	r9d, r9d
-	test	r9, r9
-	jne	.LBB48_19
-.LBB48_21:
-	xor	esi, esi
-	test	rsi, rsi
-	je	.LBB48_38
-.LBB48_22:
-	mov	rdx, qword ptr [rsi]
-	test	rdx, rdx
+	xor	ecx, ecx
+	test	rcx, rcx
 	je	.LBB48_25
-# %bb.23:
+.LBB48_20:
+	mov	rdx, qword ptr [rcx]
+	test	rdx, rdx
+	je	.LBB48_23
+# %bb.21:
 	xorps	xmm0, xmm0
 	.p2align	4, 0x90
-.LBB48_24:                              # =>This Inner Loop Header: Depth=1
+.LBB48_22:                              # =>This Inner Loop Header: Depth=1
 	mov	r8, qword ptr [rdx - 8]
 	movups	xmmword ptr [rdx - 16], xmm0
 	mov	qword ptr [rdx], 0
 	mov	rdx, r8
 	test	r8, r8
-	jne	.LBB48_24
+	jne	.LBB48_22
+.LBB48_23:
+	mov	qword ptr [rcx], 0
+	test	al, al
+	jne	.LBB48_25
+# %bb.24:
+	mov	rax, qword ptr [rip + xt_wcell_free]
+	mov	qword ptr [rcx], rax
+	mov	qword ptr [rip + xt_wcell_free], rcx
 .LBB48_25:
-	mov	qword ptr [rsi], 0
-	and	eax, -2
-	cmp	eax, 1481920334
-	jne	.LBB48_38
-# %bb.26:
-	mov	rax, qword ptr [rip + xt_wtab_cap]
-	test	rax, rax
-	je	.LBB48_34
-# %bb.27:
-	mov	rdx, rcx
-	shr	rdx, 3
-	mov	r8, rcx
-	shr	r8, 20
-	xor	r8, rdx
-	mov	r9d, 3982152891
-	imul	r9, r8
-	mov	rdx, r9
-	shr	rdx, 11
-	xor	rdx, r9
-	dec	rax
-	and	rdx, rax
-	mov	r9, qword ptr [rip + xt_wtab]
-                                        # implicit-def: $r8
-	jmp	.LBB48_30
-	.p2align	4, 0x90
-.LBB48_28:                              #   in Loop: Header=BB48_30 Depth=1
-	add	r11, r9
-	xor	r10d, r10d
-	mov	r8, r11
-.LBB48_29:                              #   in Loop: Header=BB48_30 Depth=1
-	test	r10b, r10b
-	je	.LBB48_35
-.LBB48_30:                              # =>This Inner Loop Header: Depth=1
-	mov	r11, rdx
-	shl	r11, 4
-	mov	r10, qword ptr [r9 + r11]
-	cmp	r10, rcx
-	je	.LBB48_28
-# %bb.31:                               #   in Loop: Header=BB48_30 Depth=1
-	test	r10, r10
-	je	.LBB48_33
-# %bb.32:                               #   in Loop: Header=BB48_30 Depth=1
-	inc	rdx
-	and	rdx, rax
-	mov	r10b, 1
-	jmp	.LBB48_29
-	.p2align	4, 0x90
-.LBB48_33:                              #   in Loop: Header=BB48_30 Depth=1
-	xor	r8d, r8d
-	xor	r10d, r10d
-	jmp	.LBB48_29
-.LBB48_34:
-	xor	r8d, r8d
-.LBB48_35:
-	test	r8, r8
-	je	.LBB48_37
-# %bb.36:
-	mov	qword ptr [r8], 1
-	mov	qword ptr [r8 + 8], 0
-	dec	qword ptr [rip + xt_wtab_n]
-.LBB48_37:
-	call	GetProcessHeap
-	add	rsi, -8
-	mov	rcx, rax
-	xor	edx, edx
-	mov	r8, rsi
-	call	HeapFree
-.LBB48_38:
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB48_40
-# %bb.39:
+	je	.LBB48_27
+# %bb.26:
 	mov	dword ptr [rip + xt_rt_spin], 0
-.LBB48_40:
-	add	rsp, 32
+.LBB48_27:
 	pop	rsi
 	ret
                                         # -- End function
@@ -2387,8 +2321,8 @@ _xtc_weak_register:                     # @_xtc_weak_register
 # %bb.10:
 	add	rdx, -16
 	test	rdx, rdx
-	jne	.LBB50_28
-	jmp	.LBB50_31
+	jne	.LBB50_32
+	jmp	.LBB50_35
 .LBB50_12:
 	mov	r8d, eax
 	and	r8d, -2
@@ -2447,24 +2381,24 @@ _xtc_weak_register:                     # @_xtc_weak_register
 .LBB50_11:
 	xor	edx, edx
 	test	rdx, rdx
-	je	.LBB50_31
-.LBB50_28:
+	je	.LBB50_35
+.LBB50_32:
 	mov	rax, qword ptr [rdx]
 	mov	qword ptr [rcx - 16], rdx
 	mov	qword ptr [rcx - 8], rax
 	test	rax, rax
-	je	.LBB50_30
-# %bb.29:
+	je	.LBB50_34
+# %bb.33:
 	lea	r8, [rcx - 8]
 	mov	qword ptr [rax - 16], r8
-.LBB50_30:
+.LBB50_34:
 	mov	qword ptr [rdx], rcx
-.LBB50_31:
+.LBB50_35:
 	cmp	dword ptr [rip + _xt_threads_active], 0
-	je	.LBB50_33
-# %bb.32:
+	je	.LBB50_37
+# %bb.36:
 	mov	dword ptr [rip + xt_rt_spin], 0
-.LBB50_33:
+.LBB50_37:
 	add	rsp, 32
 	pop	rbx
 	pop	rdi
@@ -2478,32 +2412,53 @@ _xtc_weak_register:                     # @_xtc_weak_register
 .LBB50_25:
 	mov	rdx, qword ptr [r9 + 8]
 	test	rdx, rdx
-	jne	.LBB50_28
-	jmp	.LBB50_31
+	jne	.LBB50_32
+	jmp	.LBB50_35
 .LBB50_26:
 	xor	r9d, r9d
 	test	r9, r9
 	jne	.LBB50_25
 .LBB50_27:
-	mov	rbx, rcx
+	mov	rdi, rcx
+	cmp	qword ptr [rip + xt_wcell_free], 0
+	jne	.LBB50_31
+# %bb.28:
 	mov	rsi, rdx
 	call	GetProcessHeap
-	mov	r8d, 16
+	mov	r8d, 4104
 	mov	rcx, rax
 	mov	edx, 8
 	call	HeapAlloc
-	lea	rdi, [rax + 8]
+	lea	rcx, [rax + 8]
 	test	rax, rax
-	cmove	rdi, rax
-	mov	rcx, rsi
-	mov	rdx, rdi
+	cmove	rcx, rax
+	lea	rax, [rcx + 8]
+	mov	edx, 511
+	.p2align	4, 0x90
+.LBB50_29:                              # =>This Inner Loop Header: Depth=1
+	mov	qword ptr [rax - 8], rax
+	add	rax, 8
+	dec	rdx
+	jne	.LBB50_29
+# %bb.30:
+	mov	qword ptr [rcx + 4088], 0
+	mov	qword ptr [rip + xt_wcell_free], rcx
+	mov	rdx, rsi
+.LBB50_31:
+	mov	rsi, qword ptr [rip + xt_wcell_free]
+	mov	rax, qword ptr [rsi]
+	mov	qword ptr [rip + xt_wcell_free], rax
+	mov	qword ptr [rsi], 0
+	mov	rcx, rdx
+	mov	rbx, rdx
+	mov	rdx, rsi
 	call	xt_wtab_put
-	mov	rcx, rbx
-	mov	dword ptr [rsi - 8], 1481920335
-	mov	rdx, rdi
+	mov	rdx, rsi
+	mov	dword ptr [rbx - 8], 1481920335
+	mov	rcx, rdi
 	test	rdx, rdx
-	jne	.LBB50_28
-	jmp	.LBB50_31
+	jne	.LBB50_32
+	jmp	.LBB50_35
                                         # -- End function
 	.def	_xtc_weak_load;
 	.scl	2;
@@ -4397,6 +4352,7 @@ xt_size_check.msg:
 	.lcomm	xt_simd_n,8,8                   # @xt_simd_n
 	.lcomm	xt_simd_cap,8,8                 # @xt_simd_cap
 	.lcomm	xt_simd_installed,1,4           # @xt_simd_installed
+	.lcomm	xt_wcell_free,8,8               # @xt_wcell_free
 	.lcomm	xt_wtab_used,8,8                # @xt_wtab_used
 	.lcomm	xt_wtab_cap,8,8                 # @xt_wtab_cap
 	.lcomm	xt_wtab,8,8                     # @xt_wtab

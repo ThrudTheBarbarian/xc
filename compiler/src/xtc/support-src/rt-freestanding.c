@@ -1133,6 +1133,30 @@ static void xt_wtab_put(void* o, void*** cell)
     xt_wtab[i].cell = cell;
     xt_wtab_n++;
     }
+/* Head cells from a free list carved from blocks of 512 (no allocation of
+   its own per weakly referenced object). A free cell's word links the list.
+   Under the lock. As rt.c. */
+static void** xt_wcell_free;
+static void*** xt_wcell_get(void)
+    {
+    if (!xt_wcell_free)
+        {
+        void** blk = (void**)_xt_calloc(512 * sizeof(void*));
+        for (int i = 0; i < 511; i++)
+            blk[i] = (void*)&blk[i + 1];
+        blk[511] = 0;
+        xt_wcell_free = blk;
+        }
+    void** c = xt_wcell_free;
+    xt_wcell_free = (void**)*c;
+    *c = 0;
+    return (void***)c;
+    }
+static void xt_wcell_put(void*** c)
+    {
+    *(void**)c = (void*)xt_wcell_free;
+    xt_wcell_free = (void**)c;
+    }
 /* The address of obj's weak-list head, or 0 when obj is not a block weak
    references can name. Under the lock. */
 static void*** xt_weak_head(void* obj, int make)
@@ -1147,7 +1171,7 @@ static void*** xt_weak_head(void* obj, int make)
         return e->cell;
     if (!make)
         return 0;
-    void*** cell = (void***)_xt_calloc(sizeof(void**));
+    void*** cell = xt_wcell_get();
     xt_wtab_put(obj, cell);
     XT_MAGIC_AT(obj) = XT_MAGIC_OBJW;
     return cell;
@@ -1179,7 +1203,24 @@ void _xtc_weak_zero_for(void* obj)
     if (!obj)
         return;
     _xt_rt_lock();
-    void*** hd = xt_weak_head(obj, 0);
+    /* An instance's entry is found once and taken out as its slots are
+       zeroed. As rt.c. */
+    uint32_t m = XT_MAGIC_AT(obj);
+    void*** hd = 0;
+    xt_wtab_e* e = 0;
+    if (m == XT_MAGIC_OBJW)
+        {
+        e = xt_wtab_find(obj);
+        if (e)
+            {
+            hd = e->cell;
+            e->obj = XT_WTAB_DEAD;
+            e->cell = 0;
+            xt_wtab_n--;
+            }
+        }
+    else if (m == 0x58544F42U)
+        hd = (void***)&_XT_WH(obj);
     if (hd)
         {
         void** s = *hd;
@@ -1192,17 +1233,8 @@ void _xtc_weak_zero_for(void* obj)
             s = nx;
             }
         *hd = 0;
-        if (XT_IS_OBJ(XT_MAGIC_AT(obj)))
-            {
-            xt_wtab_e* e = xt_wtab_find(obj);
-            if (e)
-                {
-                e->obj = XT_WTAB_DEAD;
-                e->cell = 0;
-                xt_wtab_n--;
-                }
-            _xt_free(hd);
-            }
+        if (e)
+            xt_wcell_put(hd);
         }
     _xt_rt_unlock();
     }

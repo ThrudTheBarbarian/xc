@@ -300,6 +300,17 @@ static void xt_wtab_grow(void){unsigned long oc=xt_wtab_cap;xt_wtab_e*old=xt_wta
 static void xt_wtab_put(void *o,void ***cell){if((xt_wtab_used+1)*2>xt_wtab_cap)xt_wtab_grow();
     unsigned long i=xt_wtab_h(o)&(xt_wtab_cap-1);while(xt_wtab[i].obj&&xt_wtab[i].obj!=XT_WTAB_DEAD)i=(i+1)&(xt_wtab_cap-1);
     if(!xt_wtab[i].obj)xt_wtab_used++;xt_wtab[i].obj=o;xt_wtab[i].cell=cell;xt_wtab_n++;}
+/* Head cells come from a free list, carved from blocks of 512, so a weakly
+   referenced object costs no malloc and free of its own (weak_churn on a Pi 5:
+   a calloc and a free each object's life were most of the side table's cost).
+   A free cell's one word links the list. Under the lock. */
+static void **xt_wcell_free;
+static void ***xt_wcell_get(void){
+    if(!xt_wcell_free){void **blk=(void**)calloc(512,sizeof(void*));
+        if(!blk){fprintf(stderr,"xcc: out of memory (weak references)\n");abort();}
+        for(int i=0;i<511;i++)blk[i]=(void*)&blk[i+1];blk[511]=0;xt_wcell_free=blk;}
+    void **c=xt_wcell_free;xt_wcell_free=(void**)*c;*c=0;return (void***)c;}
+static void xt_wcell_put(void ***c){*(void**)c=(void*)xt_wcell_free;xt_wcell_free=(void**)c;}
 /* The address of obj's weak-list head, or 0 when obj is not a heap object
    (a stack instance, memory C made). Under the lock. */
 static void ***xt_weak_head(void *obj,int make){
@@ -309,14 +320,18 @@ static void ***xt_weak_head(void *obj,int make){
     xt_wtab_e*e=m==XT_MAGIC_OBJW?xt_wtab_find(obj):0;
     if(e)return e->cell;
     if(!make)return 0;
-    void ***cell=(void***)calloc(1,sizeof(void**));
-    if(!cell){fprintf(stderr,"xcc: out of memory (weak references)\n");abort();}
+    void ***cell=xt_wcell_get();
     xt_wtab_put(obj,cell);XT_MAGIC_AT(obj)=XT_MAGIC_OBJW;return cell;}
 void _xtc_weak_register(void **slot,void *obj){_xt_rt_lock();xt_weak_unreg(slot);void ***hd=obj?xt_weak_head(obj,1):0;if(!hd){_xt_rt_unlock();return;}void **nx=*hd;slot[-2]=(void*)hd;slot[-1]=(void*)nx;if(nx)nx[-2]=(void*)&slot[-1];*hd=slot;_xt_rt_unlock();}
 void *_xtc_weak_load(void **slot){return *slot;}
-void _xtc_weak_zero_for(void *obj){if(!obj)return;_xt_rt_lock();void ***hd=xt_weak_head(obj,0);
-    if(hd){void **s=*hd;while(s){void **nx=(void**)s[-1];*s=0;s[-2]=0;s[-1]=0;s=nx;}*hd=0;
-        if(XT_IS_OBJ(XT_MAGIC_AT(obj))){xt_wtab_e*e=xt_wtab_find(obj);if(e){e->obj=XT_WTAB_DEAD;e->cell=0;xt_wtab_n--;}free(hd);}}
+/* Zero every weak slot naming obj. An instance's entry is found once and
+   taken out as its slots are zeroed. */
+static void xt_weak_zero_list(void ***hd){void **s=*hd;while(s){void **nx=(void**)s[-1];*s=0;s[-2]=0;s[-1]=0;s=nx;}*hd=0;}
+void _xtc_weak_zero_for(void *obj){if(!obj)return;_xt_rt_lock();
+    uint32_t m=XT_MAGIC_AT(obj);
+    if(m==XT_MAGIC_OBJW){xt_wtab_e*e=xt_wtab_find(obj);
+        if(e){void ***hd=e->cell;e->obj=XT_WTAB_DEAD;e->cell=0;xt_wtab_n--;xt_weak_zero_list(hd);xt_wcell_put(hd);}}
+    else if(m==0x58544F42U||m==XT_MAGIC_ALIGNED)xt_weak_zero_list((void***)&_XT_WH(obj));
     _xt_rt_unlock();}
 /* `write` comes from <unistd.h>, included below with the file helpers. It used
    to be declared here by hand, which made the header's own declaration a
