@@ -7722,6 +7722,11 @@ class ClassInfo
             return;
         String* idxTy = firstReturn(lenM.op());
 
+        // The temps the subject's own evaluation leaves (an argument's) end
+        // with it: released once, below, before the loop. Left pending, the
+        // body's flush released them every iteration (an over-release). As
+        // the reference.
+        u32 subjTempMark = _ownedTemps == 0 ? (u32)0 : _ownedTemps.count();
         IRValue* recv = lowerExpr(coll);
         if (_failed)
             return;
@@ -7743,6 +7748,7 @@ class ClassInfo
             noteStrongLocal(subjName);
             _locals.set((Hashable*)subjName, (Object*)recv);
             }
+        releaseOwnedTempsSince(subjTempMark);
         Array* zops = new Array();
         zops.add((Object*)IROperand.immI((i32)0, irType(idxTy)));
         IRValue* zero = emit(String.withCString("Const"), irType(idxTy), zops);
@@ -12803,6 +12809,22 @@ class ClassInfo
     // short-circuit arms only, where the arm's own value is a Bool and so
     // cannot be one of them. The ternary arms deliberately do NOT: there the
     // arm's value MAY be the temp.
+    // Release (and forget) every pending owned temp registered since `mark`,
+    // last first. As the reference's releaseOwnedTempsSince.
+    void releaseOwnedTempsSince(u32 mark)
+        {
+        if (_ownedTemps == 0 || _blk.term() != (IRInsn*)0)
+            return;
+        while (_ownedTemps.count() > mark)
+            {
+            u32 i = _ownedTemps.count() - (u32)1;
+            refOp(String.withCString("Release"), (IRValue*)_ownedTemps.get(i));
+            _ownedTemps.removeAt(i);
+            if (_ownedBlocks != 0 && i < _ownedBlocks.count())
+                _ownedBlocks.removeAt(i);
+            }
+        }
+
     void releaseOwnedTempsAtDepth(u32 depth)
         {
         if (_ownedTemps == 0)

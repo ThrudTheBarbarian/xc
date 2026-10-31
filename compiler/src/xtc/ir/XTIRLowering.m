@@ -3715,6 +3715,25 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         }
     }
 
+// Release (and forget) every pending owned temp registered since `mark`, last
+// first: the temps of one sub-expression whose value has already been adopted
+// (a for-in subject's arguments, 2026-10-31).
+- (void)releaseOwnedTempsSince:(NSUInteger)mark
+    {
+    if (self.currentBlock.terminator != nil)
+        return;
+    while (self.ownedTemps.count > mark)
+        {
+        NSUInteger i = self.ownedTemps.count - 1;
+        [self emitRelease:self.ownedTemps[i]];
+        [self.ownedTemps removeObjectAtIndex:i];
+        if (i < self.ownedTempDepths.count)
+            [self.ownedTempDepths removeObjectAtIndex:i];
+        if (i < self.ownedTempBlocks.count)
+            [self.ownedTempBlocks removeObjectAtIndex:i];
+        }
+    }
+
 - (void)flushOwnedTempsFrom:(XTIRBlock*)startBlock
     {
     if (self.ownedTemps.count == 0)
@@ -11209,6 +11228,11 @@ static const NSUInteger kVarargSlotBytes = 8;
             return;
             }
         // Lower the collection expression to get the receiver value.
+        // The temps the subject's own evaluation leaves (an argument such as
+        // `words(name.deletingPathExtension())`'s) end with it: released below,
+        // once, before the loop. Left pending they were never released (a
+        // leak; the port released them every iteration, an over-release).
+        NSUInteger subjTempMark = self.ownedTemps.count;
         XTIRValue* recvVal = [self lowerExpression:collection];
         if (!recvVal)
             return;
@@ -11252,6 +11276,7 @@ static const NSUInteger kVarargSlotBytes = 8;
             [self enrollInArcScope:subjName];
             self.locals[subjName] = recvVal;
             }
+        [self releaseOwnedTempsSince:subjTempMark];
         }
     else if (collType && collType.kind == XTTypeKindPointer && [collection isKindOfClass:[XTIdentifierNode class]] && self.heapArrayLengthByLocal[((XTIdentifierNode*)collection).identName])
         {
