@@ -3326,6 +3326,12 @@ class Sema
                 // runs and every field reads back zero — reported here, since
                 // leaving it to the original leaves the SHIPPED compiler
                 // accepting it.
+                // An array of class (`new T[n]`, a count after the
+                // arguments) runs no init, as in the reference (its
+                // countExpr == nil test): the port used to resolve one and the
+                // lowering called it on the first element with no arguments.
+                if (n.kidCount() > (u32)n.num())
+                    return;
                 Node* ini = initOverload(cls, n);
                 if (ini != 0)
                     {
