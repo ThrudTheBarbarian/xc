@@ -111,6 +111,7 @@ static BOOL chOnCycle(XTIRBlock* b)
         {
         if (!getenv("XTNODEDUPE")) [self runOnFunction:fn module:mod];
         if (!getenv("XTNOMULHOIST")) [self hoistMulImmediates:fn];
+        if (self.profile.hoistsWideCmpImm) [self hoistCmpImmediates:fn];
         }
     return YES;
     }
@@ -262,6 +263,130 @@ static BOOL chOnCycle(XTIRBlock* b)
             ops[side] = [XTIROperand useWithValueId:(XTIRValueId)have.unsignedLongLongValue];
             [insn replaceOperands:ops];
             }
+            }
+        }
+    }
+
+// Can arm64's cmp (or cmn, for the negation) take `v` as an immediate? A
+// 12-bit value, optionally shifted left by 12, of the operand's width.
+static BOOL chArm64CmpImm(int64_t v, uint32_t width)
+    {
+    uint64_t mask = width >= 8 ? ~(uint64_t)0 : (((uint64_t)1 << (width * 8)) - 1);
+    uint64_t u = (uint64_t)v & mask, n = (uint64_t)(-v) & mask;
+    BOOL (^fits)(uint64_t) = ^BOOL(uint64_t x) { return x <= 0xfff || ((x & 0xfff) == 0 && x <= 0xfff000); };
+    return fits(u) || fits(n);
+    }
+
+// A compare against an immediate the target's compare cannot take, in a loop,
+// rebuilds that immediate every turn: on arm64 `i < 2200000000` is movz + movk +
+// cmp in struct_copy's one-block loop, where clang keeps the bound in a
+// register (2026-10-31; Pi 5 1.42x clang). The immediate becomes a Const in the
+// preheader, as hoistMulImmediates does for multiplies. A loop here is the
+// header's region (header and body), or a one-block loop that branches to
+// itself, which the multiply rule's walk does not take.
+- (void)hoistCmpImmediates:(XTIRFunction*)fn
+    {
+    for (XTIRBlock* H in fn.blocks)
+        {
+        XTIRInsn* term = H.terminator;
+        if (!term || term.opcode != XTIROpCondBranch || term.operands.count < 3)
+            continue;
+        XTIRBlock* t0 = term.operands[1].blockRef;
+        XTIRBlock* t1 = term.operands[2].blockRef;
+        NSMutableSet<XTIRBlock*>* loop = nil;
+        if (t0 == H || t1 == H)
+            loop = [NSMutableSet setWithObject:H];
+        else
+            {
+            for (NSUInteger pick = 0; pick < 2 && !loop; pick++)
+                {
+                XTIRBlock* entry = pick ? t1 : t0;
+                XTIRBlock* other = pick ? t0 : t1;
+                if (!entry) continue;
+                NSMutableSet<XTIRBlock*>* seen = [NSMutableSet set];
+                NSMutableArray<XTIRBlock*>* work = [NSMutableArray arrayWithObject:entry];
+                BOOL closes = NO, escaped = NO;
+                while (work.count && !escaped)
+                    {
+                    XTIRBlock* b = work.lastObject;
+                    [work removeLastObject];
+                    if (b == H) { closes = YES; continue; }
+                    if (b == other || [seen containsObject:b]) continue;
+                    if (!b.terminator) { escaped = YES; break; }
+                    [seen addObject:b];
+                    if (seen.count > 8) { escaped = YES; break; }
+                    for (XTIROperand* o in b.terminator.operands)
+                        if (o.kind == XTIROperandKindBlock && o.blockRef)
+                            [work addObject:o.blockRef];
+                    }
+                if (closes && !escaped && seen.count)
+                    {
+                    loop = seen;
+                    [loop addObject:H];
+                    }
+                }
+            }
+        if (!loop)
+            continue;
+        // The preheader: the one predecessor outside the loop, dominating H.
+        XTIRBlock* PH = nil;
+        NSUInteger preds = 0;
+        for (XTIRBlock* p in fn.blocks)
+            {
+            if (!p.terminator) continue;
+            for (XTIROperand* o in p.terminator.operands)
+                if (o.kind == XTIROperandKindBlock && o.blockRef == H)
+                    {
+                    preds++;
+                    if (![loop containsObject:p] && chDominates(fn, p, H))
+                        PH = p;
+                    }
+            }
+        if (!PH || preds != 2 || PH == H)
+            continue;
+        NSMutableDictionary<NSString*, NSNumber*>* made = [NSMutableDictionary dictionary];
+        // Function block order, as hoistMulImmediates (private:docs/bugs/242).
+        for (XTIRBlock* b in fn.blocks)
+            {
+            if (![loop containsObject:b])
+                continue;
+            for (XTIRInsn* insn in b.instructions)
+                {
+                if (insn.opcode != XTIROpICmp || insn.operands.count != 2)
+                    continue;
+                NSUInteger side = NSNotFound;
+                if (insn.operands[1].kind == XTIROperandKindImmI) side = 1;
+                else if (insn.operands[0].kind == XTIROperandKindImmI) side = 0;
+                if (side == NSNotFound)
+                    continue;
+                XTIROperand* imm = insn.operands[side];
+                XTIROperand* other = insn.operands[1 - side];
+                XTIRType* ity = imm.type;
+                if (!ity && other.kind == XTIROperandKindUse)
+                    ity = [fn valueForId:other.valueId].type;
+                if (!ity || ity.byteWidth == 0 || chArm64CmpImm(imm.intValue, ity.byteWidth))
+                    continue;
+                NSString* key = [NSString stringWithFormat:@"%lld|%u", (long long)imm.intValue, (unsigned)ity.kind];
+                NSNumber* have = made[key];
+                if (!have)
+                    {
+                    XTIRValueId cid = [fn allocateValueId];
+                    XTIRValue* cv = [[XTIRValue alloc] initWithValueId:cid
+                                                                  type:ity
+                                                               defSite:[[XTIRDefSite alloc] initWithBlock:PH
+                                                                                                insnIndex:PH.instructions.count]];
+                    [fn registerValue:cv];
+                    [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                                         result:cv
+                                                                       operands:@[ imm ]
+                                                                         dbgLoc:insn.dbgLoc]];
+                    have = @(cid);
+                    made[key] = have;
+                    }
+                NSMutableArray<XTIROperand*>* ops = [insn.operands mutableCopy];
+                ops[side] = [XTIROperand useWithValueId:(XTIRValueId)have.unsignedLongLongValue];
+                [insn replaceOperands:ops];
+                }
             }
         }
     }

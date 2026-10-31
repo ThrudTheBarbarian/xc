@@ -91,6 +91,10 @@
     {
     return NO;
     }
+- (BOOL)hoistsWideCmpImm
+    {
+    return NO;
+    }
 - (BOOL)unrollsVariableTrip
     {
     return NO;
@@ -255,6 +259,10 @@
     return YES;
     }
 - (BOOL)hoistsGlobalAddr
+    {
+    return YES;
+    }
+- (BOOL)hoistsWideCmpImm
     {
     return YES;
     }

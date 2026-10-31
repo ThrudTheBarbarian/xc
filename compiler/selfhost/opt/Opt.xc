@@ -100,6 +100,7 @@ class OptProfile
     bool _licm;            // loop-invariant code moves to the preheader
     bool _hoistGlobalAddr; // …and a repeated AddrOf @sym dedupes to the entry
     bool _hoistLocalAddr;  // …and a repeated AddrOf of a pinned LOCAL (arm64)
+    bool _hoistCmpImm;     // a loop's compare immediate cmp cannot encode → a Const (arm64)
     bool _floatMulToAdd;   // x*2 -> x+x and -k*x + c -> c - k*x (no fusing back end)
     bool _layoutHotPath;   // blocks ordered so the expected branch falls through
     bool _narrowIV;        // a counted IV is recomputed at its smallest width
@@ -166,6 +167,7 @@ class OptProfile
         _licm = false;
         _hoistGlobalAddr = false;
         _hoistLocalAddr = false;
+        _hoistCmpImm = false;
         _floatMulToAdd = false;
         _layoutHotPath = false;
         _narrowIV = false;
@@ -310,6 +312,7 @@ class OptProfile
             // body is fine. The product does, because it is what the
             // allocator sees.
             p._hoistLocalAddr = true;
+            p._hoistCmpImm = true;
             p._layoutHotPath = true;
             p._unrollMaxTotal = (u32)128;
             p._unrollCallsInBody = true;
@@ -537,6 +540,10 @@ class OptProfile
     bool hoistLocalAddr(void)
         {
         return _hoistLocalAddr;
+        }
+    bool hoistCmpImm(void)
+        {
+        return _hoistCmpImm;
         }
 
     bool hoistGlobalAddr(void)
@@ -29413,6 +29420,120 @@ class BeFact : Object
             _hoistFn = (IRFunc*)m.funcs().get(f);
             chInFunc(m, (IRFunc*)m.funcs().get(f));
             chHoistMulImms((IRFunc*)m.funcs().get(f));
+            if (_profile.hoistCmpImm())
+                chHoistCmpImms((IRFunc*)m.funcs().get(f));
+            }
+        }
+
+    // Can arm64's cmp (or cmn, for the negation) take `v` as an immediate? A
+    // 12-bit value, optionally shifted left by 12, of the operand's width. As
+    // the reference's chArm64CmpImm.
+    bool chCmpImmFits(u64 x)
+        {
+        return x <= (u64)$FFF || ((x & (u64)$FFF) == (u64)0 && x <= (u64)$FFF000);
+        }
+    bool chArm64CmpImm(i64 v, u32 width)
+        {
+        u64 mask = width >= (u32)8 ? (u64)0 - (u64)1 : ((u64)1 << (u64)(width * (u32)8)) - (u64)1;
+        u64 u = (u64)v & mask;
+        u64 n = ((u64)0 - (u64)v) & mask;
+        return chCmpImmFits(u) || chCmpImmFits(n);
+        }
+
+    // A loop's compare against an immediate arm64's cmp cannot take becomes a
+    // compare against a Const in the preheader (struct_copy's one-block loop
+    // rebuilt 2200000000 with movz + movk every turn). The loop is the header
+    // and its body, or a one-block loop branching to itself. As the
+    // reference's hoistCmpImmediates.
+    void chHoistCmpImms(IRFunc* fn)
+        {
+        for (u32 hi = (u32)0; hi < fn.blocks().count(); hi = hi + (u32)1)
+            {
+            IRBlock* H = (IRBlock*)fn.blocks().get(hi);
+            IRInsn* term = H.term();
+            if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch"))
+                || term.ops().count() < (u32)3)
+                continue;
+            IRBlock* t0 = ((IROperand*)term.ops().get((u32)1)).blk();
+            IRBlock* t1 = ((IROperand*)term.ops().get((u32)2)).blk();
+            Array* loop = (Array*)0;
+            if (t0 == H || t1 == H)
+                {
+                loop = new Array();
+                loop.add((Object*)H);
+                }
+            else
+                {
+                loop = chLoopBody(fn, H, t0, t1);
+                if (loop == (Array*)0)
+                    loop = chLoopBody(fn, H, t1, t0);
+                if (loop != (Array*)0)
+                    loop.add((Object*)H);
+                }
+            if (loop == (Array*)0)
+                continue;
+            IRBlock* PH = (IRBlock*)0;
+            u32 preds = (u32)0;
+            for (u32 pi = (u32)0; pi < fn.blocks().count(); pi = pi + (u32)1)
+                {
+                IRBlock* p = (IRBlock*)fn.blocks().get(pi);
+                if (p.term() == (IRInsn*)0) continue;
+                for (u32 q = (u32)0; q < p.term().ops().count(); q = q + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)p.term().ops().get(q);
+                    if (o.kind() == (u8)OPK_BLOCK && o.blk() == H)
+                        {
+                        preds = preds + (u32)1;
+                        if (!chHas(loop, p) && chDominates(fn, p, H))
+                            PH = p;
+                        }
+                    }
+                }
+            if (PH == (IRBlock*)0 || preds != (u32)2 || PH == H)
+                continue;
+            Map* made = new Map();
+            for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(bi);
+                if (!chHas(loop, bb))
+                    continue;
+                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                    {
+                    IRInsn* n = (IRInsn*)bb.insns().get(i);
+                    if (!n.op().equals(String.withCString("ICmp")) || n.ops().count() != (u32)2)
+                        continue;
+                    u32 side = (u32)2;
+                    if (((IROperand*)n.ops().get((u32)1)).kind() == (u8)OPK_IMMI) side = (u32)1;
+                    else if (((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_IMMI) side = (u32)0;
+                    if (side == (u32)2)
+                        continue;
+                    IROperand* imm = (IROperand*)n.ops().get(side);
+                    IROperand* oth = (IROperand*)n.ops().get((u32)1 - side);
+                    String* ity = imm.ty();
+                    if (ity == (String*)0 && oth.kind() == (u8)OPK_USE && oth.val() != (IRValue*)0)
+                        ity = oth.val().ty();
+                    if (ity == (String*)0)
+                        continue;
+                    u32 w = irWidth(ity);
+                    if (w == (u32)0 || chArm64CmpImm(imm.imm(), w))
+                        continue;
+                    String* key = new String();
+                    key.appendFormat("%lld|%s", imm.imm(), ity.cString());
+                    Object* have = made.get((Hashable*)key);
+                    if (have == (Object*)0)
+                        {
+                        IRValue* cv = new IRValue(ity);
+                        IRInsn* cn = IRInsn.with(String.withCString("Const"));
+                        cn.copyDbg(n);
+                        cn.setRes(cv);
+                        cn.add(imm);
+                        PH.insns().add((Object*)cn);
+                        made.set((Hashable*)key, (Object*)cv);
+                        have = (Object*)cv;
+                        }
+                    n.ops().set(side, (Object*)IROperand.useVal((IRValue*)have));
+                    }
+                }
             }
         }
 

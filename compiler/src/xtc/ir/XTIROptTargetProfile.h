@@ -85,6 +85,11 @@ NS_ASSUME_NONNULL_BEGIN
 // block. Separate from hoistsGlobalAddr because it regresses xt6502 — see
 // private:docs/bugs.
 - (BOOL)hoistsLocalAddr;
+// A compare immediate the target's compare cannot encode, inside a loop, moves
+// into a Const before the loop, so the loop reads it from a register instead
+// of rebuilding it every turn: arm64, whose cmp takes a 12-bit immediate
+// (optionally shifted by 12) and rebuilds anything else with movz/movk.
+- (BOOL)hoistsWideCmpImm;
 // x*2 -> x+x and (x*-2) + c -> c - (x+x) in strength reduction: a target that
 // fuses no plain multiply-add (x86-64, where only :goal(speed) code fuses).
 - (BOOL)floatMulToAdd;
