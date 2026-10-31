@@ -1,5 +1,7 @@
 // XTIROptSimplify.m — see the header.
 #import "XTIROptSimplify.h"
+#include <float.h>
+#include <math.h>
 #import "XTIRModule.h"
 #import "XTIRFunction.h"
 #import "XTIRBlock.h"
@@ -511,6 +513,9 @@ static XTIRInsn* simpFoldFloat(XTIRInsn* n, XTIRFunction* fn, NSDictionary<NSNum
             else if (op == XTIROpFSub) fr = fx - fy;
             else if (op == XTIROpFMul) fr = fx * fy;
             else fr = fx / fy;
+            // A subnormal float is left to the hardware (below).
+            if (fr != 0.0f && fabsf(fr) < FLT_MIN)
+                return nil;
             v = (double)fr;
             }
         else if (op == XTIROpFAdd) v = x + y;
@@ -520,7 +525,11 @@ static XTIRInsn* simpFoldFloat(XTIRInsn* n, XTIRFunction* fn, NSDictionary<NSNum
         }
     else
         return nil;
-    if (!isfinite(v))
+    // Not NaN or infinite, and not subnormal: a subnormal result is the
+    // hardware's to make (a device that flushes subnormals to zero would not
+    // make it), and the WAT printer spells one through the C library's %a,
+    // which glibc and macOS write differently (math_lnexp_ieee, wasm).
+    if (!isfinite(v) || (!f32 && v != 0.0 && fabs(v) < DBL_MIN))
         return nil;
     uint64_t bits = 0;
     memcpy(&bits, &v, 8);

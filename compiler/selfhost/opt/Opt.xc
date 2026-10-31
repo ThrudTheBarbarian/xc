@@ -4111,6 +4111,10 @@ class BeFact : Object
                 else if (fsub) fr = fx - fy;
                 else if (fmul) fr = fx * fy;
                 else fr = fx / fy;
+                // A subnormal float is left to the hardware (below).
+                u32 fb = *(u32*)(pointer)&fr;
+                if (((fb >> (u32)23) & (u32)$FF) == (u32)0 && (fb & (u32)$7FFFFF) != (u32)0)
+                    return (IRInsn*)0;
                 v = (double)fr;
                 }
             else if (fadd) v = x + y;
@@ -4119,8 +4123,12 @@ class BeFact : Object
             else v = x / y;
             }
         u64 bits = *(u64*)(pointer)&v;
-        // Not NaN, not infinite: the exponent field is not all ones.
+        // Not NaN, not infinite (the exponent field all ones), and for a
+        // double not subnormal (all zeros, a non-zero fraction): the
+        // reference explains.
         if (((bits >> (u64)52) & (u64)$7FF) == (u64)$7FF)
+            return (IRInsn*)0;
+        if (!f32 && ((bits >> (u64)52) & (u64)$7FF) == (u64)0 && (bits & (u64)$FFFFFFFFFFFFF) != (u64)0)
             return (IRInsn*)0;
         string digits = "0123456789abcdef";
         String* hex = String.withCString("");
@@ -18932,11 +18940,14 @@ class BeFact : Object
         return true;
         }
 
+    // FAdd/FSub/FMul too, on f32 lanes (the reference explains).
     static bool ovArith(String* op)
         {
         return op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub"))
             || op.equals(String.withCString("Mul")) || op.equals(String.withCString("And"))
-            || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor"));
+            || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor"))
+            || op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub"))
+            || op.equals(String.withCString("FMul"));
         }
 
     // The array a pointer derives from: a local value (returned), or a
@@ -18961,6 +18972,15 @@ class BeFact : Object
                     return o.val();
                 if (o.kind() == (u8)OPK_SYM && o.name() != (String*)0)
                     _ovRootName = o.name();
+                return (IRValue*)0;
+                }
+            // An `_xtc_new_<T>` allocator's result: an array of its own (the
+            // reference explains).
+            if (d.op().equals(String.withCString("Call")))
+                {
+                if (o.kind() == (u8)OPK_SYM && o.name() != (String*)0
+                    && o.name().hasPrefix(String.withCString("_xtc_new_")) && d.res() != (IRValue*)0)
+                    return d.res();
                 return (IRValue*)0;
                 }
             if ((d.op().equals(String.withCString("ElementAddr")) || d.op().equals(String.withCString("FieldAddr")))
@@ -19165,7 +19185,8 @@ class BeFact : Object
         if (kPhi == (IRInsn*)0 || sPhi == (IRInsn*)0 || sPhi.res() == (IRValue*)0 || sPhi.ops().count() != (u32)4)
             return false;
         String* laneTy = sPhi.res().ty();
-        if (laneTy == (String*)0 || !(laneTy.equals(String.withCString("U32")) || laneTy.equals(String.withCString("I32"))))
+        if (laneTy == (String*)0 || !(laneTy.equals(String.withCString("U32")) || laneTy.equals(String.withCString("I32"))
+                                      || laneTy.equals(String.withCString("F32"))))
             return false;
         // The width this function may use: a dispatch clone's own level, else
         // the target's (vectorBytes). It was a fixed four lanes, which left
@@ -19337,6 +19358,10 @@ class BeFact : Object
 
     static String* ovVecOp(String* op)
         {
+        // The vector ops are typed by their lanes: FAdd is VAdd on f32 lanes.
+        if (op.equals(String.withCString("FAdd"))) return String.withCString("VAdd");
+        if (op.equals(String.withCString("FSub"))) return String.withCString("VSub");
+        if (op.equals(String.withCString("FMul"))) return String.withCString("VMul");
         String* v = String.withCString("V");
         v.append(op);
         return v;
