@@ -3,6 +3,61 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.9 — smaller objects, and a block's own device
+
+Everything since 0.89.
+
+### Rebuild your libraries and plugins
+
+- **Class instances have an 8-byte header.** On the 64-bit targets (macOS, iOS,
+  android, arm64 Linux, x86-64 Linux, Windows), an object made with `new C`
+  carried the same 40-byte header as an array. It now carries 8 bytes, its
+  magic and its reference count, so a one-field object is a 32-byte allocation
+  rather than 64. The vtable gains a word, so **an xc library, bundle or plugin
+  built with an earlier xcc must be rebuilt**: importing such a library is
+  refused with a message that says so. A plugin cannot be checked yet, so
+  rebuild it.
+- **Each compiler install has its own third-party tree**, `<prefix>/3p` (such
+  as `/opt/xcc/0.9/3p`), searched before the shared `/opt/xcc/3p`, which keeps
+  the libraries the earlier compilers built. `xcc --print-3p-dir` names it, for
+  scripts that install a library for a given compiler.
+
+### New
+
+- **A `par` block can name its default device**: `par frame :device(gpu) { … }`
+  (`cpu`, `gpu`, `gpus`, `all` or `auto`). `auto` does not measure a block that
+  has one, so a block meant for the GPU, to keep the CPU's threads free, runs
+  there from the start. The user's settings and `XC_PAR` still override it, and
+  so does the program's `Par.device`, which now ranks below the user's
+  settings, so the user always has the last word.
+
+### Faster
+
+- Objects take half the memory, and programs that keep many of them stay in
+  cache longer: on a Raspberry Pi 5, `arc_array` runs in 1.55 s from 2.90 and
+  `arc_alloc` in 2.09 s from 2.53 (clang++: 1.42 and 2.01). Compiling the
+  compiler's optimiser takes 23% less memory.
+- A struct local that is only stored to, never read, is no longer written at
+  all: `struct_copy` on a Pi 5 runs in 2.58 s from 3.10.
+- `(x + c) * k` beside `x * k` shares one multiply: `call_depth` on a Pi 5 runs
+  in 3.85 s from 4.05.
+- On arm64 a loop's compare against a constant `cmp` cannot hold (such as
+  `i < 2200000000`) keeps the constant in a register instead of rebuilding it
+  every turn.
+
+### Fixed
+
+- A `for` loop over a call whose argument was itself a temporary, such as
+  `for (w in words(name.trimmed()))`, released that temporary once for every
+  element: freed memory was written.
+- Designable classes were never registered for their `.rsc` documents since
+  UXKit's `UXNib` became `UXRsc`: an app's own designable classes could not be
+  made by name.
+- `xcc prog.xc` with no `-o` crashed. It prints the program's assembly, as `-S`
+  does.
+- `new C[n]`, for a class whose `init` takes arguments, called that `init` on
+  the first element with no arguments.
+
 ## Version 0.89 — Raspberry Pi 5, and its GPU
 
 Everything since 0.88.
