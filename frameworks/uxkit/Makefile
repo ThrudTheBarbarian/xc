@@ -95,7 +95,8 @@ LIBDEST = $(LOADER)/romfs-overlay/Library
 # The home is derived from the xcc actually on PATH; a source-checkout xcc has
 # no install to deploy into and the step is skipped — that is not an error.
 XCCHOME = $(dir $(shell command -v $(XCC)))..
-XCC3P   = $(or $(XCC_3P),$(XCCHOME)/../3p)
+# The compiler's own third-party tree (xcc --print-3p-dir, 0.90 on), else the shared one beside it.
+XCC3P   = $(or $(XCC_3P),$(shell d=$$($(XCC) --print-3p-dir 2>/dev/null) && echo "$$d" || echo "$(XCCHOME)/../3p"))
 UXK_MAJ = $(shell sed -n 's/^\#define UXK_MAJOR[[:space:]]*//p' UXVersion.xc)
 UXK_MIN = $(shell sed -n 's/^\#define UXK_MINOR[[:space:]]*//p' UXVersion.xc)
 

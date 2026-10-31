@@ -16,11 +16,13 @@ xcc=${XCC:-xcc}
 _root=$(git -C "$here" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 gemlib=${GEMLIB:-${LOADER:+$LOADER/build-xtg}}
-# The third-party tree the compiler searches: XCC_3P, else the installed home's sibling 3p/, else the
-# standard /opt/xcc/3p (an in-tree compiler, compiler/bin/osx/xcc-xc, searches that one).
 home=$(cd "$(dirname "$(command -v "$xcc")")/.." 2>/dev/null && pwd)
-tp=${XCC_3P:-$home/../3p}
-[ -d "$tp/uxkit" ] || tp=/opt/xcc/3p
+# The compiler's own third-party tree: XCC_3P, else what `xcc --print-3p-dir` names (0.90 on:
+# <prefix>/3p), else the shared tree beside the install (0.89 and earlier, which lack the option).
+tp=${XCC_3P:-}
+[ -n "$tp" ] || tp=$("$xcc" --print-3p-dir 2>/dev/null) || tp=$home/../3p
+# arm9 keeps the shared tree: a compiler searches its own tree first, then /opt/xcc/3p.
+[ -e "$tp/uxkit/arm9/libUXKit.so" ] || tp=/opt/xcc/3p
 lib="$tp/uxkit/arm9/libUXKit.so"
 [ -e "$lib" ] || { echo "== oot-client: skipped (no deployed $lib; make libUXKit.so ARCH=arm9) =="; exit 0; }
 [ -d "$gemlib" ] || { echo "== oot-client: skipped (no GEMLIB) =="; exit 0; }

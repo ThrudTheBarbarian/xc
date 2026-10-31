@@ -12,7 +12,13 @@ ver=$1
 [ -n "$ver" ] || { echo "usage: pack_uxkit.sh <version> [outdir]"; exit 2; }
 here=$(cd "$(dirname "$0")/.." && pwd)
 out=${2:-.}
-src=${XCC_3P:-/opt/xcc/3p}/uxkit
+xcc=${XCC:-xcc}
+home=$(cd "$(dirname "$(command -v "$xcc")")/.." && pwd)
+# The compiler's own third-party tree: XCC_3P, else what `xcc --print-3p-dir` names (0.90 on:
+# <prefix>/3p), else the shared tree beside the install (0.89 and earlier, which lack the option).
+tp=${XCC_3P:-}
+[ -n "$tp" ] || tp=$("$xcc" --print-3p-dir 2>/dev/null) || tp=$home/../3p
+src=$tp/uxkit
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 top="$work/xcc-uxkit-$ver"
 mkdir -p "$top/3p/uxkit" "$top/src"
@@ -23,13 +29,21 @@ done
 ( cd "$here" && git ls-files -- 'UX*.xc' 'lib*.m' 'lib*.c' '*.h' 'ux_web_*.js' install.sh \
       tools/build_libuxgtk.sh tools/android/UXBridge.java | tar cf - -T - ) | ( cd "$top/src" && tar xf - )
 cp "$here/COPYING" "$here/COPYING.LESSER" "$top/"
+# Where the README says to put it: xcc 0.90 and later search their own tree, earlier ones the shared one.
+if "$xcc" --print-3p-dir >/dev/null 2>&1; then
+  where="Put uxkit/ in xcc $ver's own third-party tree, /opt/xcc/$ver/3p (xcc --print-3p-dir prints it):
+
+    sudo cp -R 3p/uxkit \"\$(xcc --print-3p-dir)/\""
+else
+  where="Put 3p/ beside the versioned xcc install, so that /opt/xcc/3p/uxkit/ sits next to
+/opt/xcc/$ver/:
+
+    sudo cp -R 3p /opt/xcc/"
+fi
 cat > "$top/README" <<TXT
 UXKit $ver — the UI toolkit for xc, as an installed library, for xcc $ver
 
-Put 3p/ beside the versioned xcc install, so that /opt/xcc/3p/uxkit/ sits next to
-/opt/xcc/$ver/:
-
-    sudo cp -R 3p /opt/xcc/
+$where
 
 A program then names UXKit once and builds with nothing else:
 

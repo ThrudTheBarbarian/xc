@@ -14,7 +14,10 @@ _root=$(git -C "$here" rev-parse --show-toplevel 2>/dev/null)
 lhost=${UX_LINUX_HOST:-${XTC_LINUX_HOST:-}}
 xcc=${XCC:-xcc}
 home=$(cd "$(dirname "$(command -v "$xcc")")/.." && pwd)
-tp=${XCC_3P:-$home/../3p}
+# The compiler's own third-party tree: XCC_3P, else what `xcc --print-3p-dir` names (0.90 on:
+# <prefix>/3p), else the shared tree beside the install (0.89 and earlier, which lack the option).
+tp=${XCC_3P:-}
+[ -n "$tp" ] || tp=$("$xcc" --print-3p-dir 2>/dev/null) || tp=$home/../3p
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
 cat > "$work/app.xc" <<'XC'
 #import <Stdio.xc>

@@ -6,8 +6,8 @@
 #     <3p>/uxkit/<target>/libUXKit.<ext>                   -> the versioned one
 #     <3p>/uxkit/xc/UXAbi.xc, UXVersion.xc                 the version contract a client imports
 #
-# <3p> is XCC_3P if set, else the 3p directory beside the installed xcc (/opt/xcc/3p for
-# /opt/xcc/<version>).  The library for a target is the toolkit with that target's driver
+# <3p> is the compiler's own third-party tree (below): /opt/xcc/<version>/3p for xcc 0.90 and
+# later, the shared /opt/xcc/3p for earlier ones, or XCC_3P if set.  The library for a target is the toolkit with that target's driver
 # (UXPlatform):
 #
 #     arm64    AppKit, with its Objective-C shim (libUXAppKit.m) built here and bundled in
@@ -27,7 +27,11 @@ set -e
 here=$(cd "$(dirname "$0")" && pwd)
 xcc=${XCC:-xcc}
 home=$(cd "$(dirname "$(command -v "$xcc")")/.." && pwd)
-dest=${XCC_3P:-$home/../3p}/uxkit
+# The compiler's own third-party tree: XCC_3P, else what `xcc --print-3p-dir` names (0.90 on:
+# <prefix>/3p), else the shared tree beside the install (0.89 and earlier, which lack the option).
+tp=${XCC_3P:-}
+[ -n "$tp" ] || tp=$("$xcc" --print-3p-dir 2>/dev/null) || tp=$home/../3p
+dest=$tp/uxkit
 maj=$(sed -n 's/^#define UXK_MAJOR[[:space:]]*//p' "$here/UXVersion.xc")
 min=$(sed -n 's/^#define UXK_MINOR[[:space:]]*//p' "$here/UXVersion.xc")
 targets=${*:-arm64 win64 x86_64 wasm32 ios-sim android}
