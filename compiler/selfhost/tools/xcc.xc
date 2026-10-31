@@ -1968,7 +1968,7 @@ void emitWin64(DriverOptions* d, IRModule* mod)
         Process.exit((i32)3); return;
     }
     if (d.keepAsm()) {
-        if (!Files.writeText(d.fe().output(), prog)) {
+        if (!writeAsmOut(d, prog)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
             Process.exit((i32)1); return;
         }
@@ -2360,7 +2360,7 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
         Process.exit((i32)3); return;
     }
     if (d.keepAsm()) {
-        if (!Files.writeText(d.fe().output(), prog)) {
+        if (!writeAsmOut(d, prog)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
             Process.exit((i32)1); return;
         }
@@ -2983,7 +2983,7 @@ void emitArm9(DriverOptions* d, IRModule* mod)
     // only in the object (below): `-S` shows the module as it was compiled.
     if (!d.emitLib() && !d.compileOnly()) prog = renameArm9Main(prog);
     if (d.keepAsm()) {
-        if (!Files.writeText(d.fe().output(), prog)) {
+        if (!writeAsmOut(d, prog)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
             Process.exit((i32)1); return;
         }
@@ -3401,7 +3401,7 @@ void emitM68k(DriverOptions* d, IRModule* mod)
 
     // `-o x.s` stops here, as it does on every other target.
     if (d.keepAsm()) {
-        if (!Files.writeText(d.fe().output(), prog)) {
+        if (!writeAsmOut(d, prog)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
             Process.exit((i32)1); return;
         }
@@ -3556,7 +3556,7 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
     // -du reports what the ASSEMBLER placed, so with -S the text is assembled
     // too, only to measure it.
     if (d.keepAsm()) {
-        if (!Files.writeText(d.fe().output(), asmText)) {
+        if (!writeAsmOut(d, asmText)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
             Process.exit((i32)1);
         }
@@ -4384,6 +4384,12 @@ void main(void)
                      "       xcc -h lists every option\n");
         Process.exit((i32)2); return;
     }
+    // No -o: a program's assembly to standard output, as the reference does
+    // (writeAsmOut). Without it the driver went on to link a program to no
+    // path and died.
+    if (d.fe().output() == (String*)0 && d.fe().input() != 0 && d.fe().input().hasSuffix(String.withCString(".xc"))
+        && !d.compileOnly() && !d.emitLib())
+        d.setKeepAsm(true);
     // --trust: the publishers' fingerprints, for Plugin.xc.
     if (d._trusted != (String*)0) {
         String* def = String.withCString("XC_PLUGIN_TRUST=\"");
@@ -4901,7 +4907,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
     }
 
     if (d.keepAsm()) {
-        if (!Files.writeText(d.fe().output(), prog)) {
+        if (!writeAsmOut(d, prog)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
             Process.exit((i32)1); return;
         }
@@ -6087,6 +6093,19 @@ void noteLinkFlags(DriverOptions* d)
             Stdio.error(String.withFormat("xcc: note: ignoring '-rpath %s': only a Mach-O "
                                           "link records a search path\n",
                                           ((String*)d.rpaths().get(i)).cString()));
+}
+
+// The assembly a build stops at: to the -o file, or with no -o to standard
+// output, as the reference does (`xcc prog.xc` prints the program's
+// assembly). The port used to take a missing -o for a program and died
+// writing to no path (2026-10-31: every release since 0.86).
+bool writeAsmOut(DriverOptions* d, String* text)
+{
+    if (d.fe().output() == (String*)0) {
+        Stdio.printf("%s", text.cString());
+        return true;
+    }
+    return Files.writeText(d.fe().output(), text);
 }
 
 // The IR after the optimiser, when --emit-ir-opt asked for it.
