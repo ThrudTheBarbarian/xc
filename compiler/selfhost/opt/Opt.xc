@@ -4141,10 +4141,182 @@ class BeFact : Object
         return k;
         }
 
+    // A multiply by a constant of a value plus constants, `(b + c) * k`, where
+    // another such product (or b * k itself) has the same b and k: each
+    // becomes `b * k + c * k`, so CSE leaves one multiply for the group
+    // (call_depth's inlined leaf(x) .. leaf(x + 3)). As the reference's
+    // distributeMulsIn. simpPeel: the base and the constant sum of an Add/Sub
+    // chain with constants, true when there was at least one step.
+    IRValue* _peelBase;
+    i64 _peelSum;
+    bool simpPeel(IROperand* o, Map* defOf)
+        {
+        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+            return false;
+        Map* none = new Map();
+        IRValue* cur = o.val();
+        i64 c = (i64)0;
+        u32 steps = (u32)0;
+        for (u32 i = (u32)0; i < (u32)8; i = i + (u32)1)
+            {
+            IRInsn* d = (IRInsn*)defOf.get((Hashable*)cur);
+            if (d == (IRInsn*)0 || d.memRes() != (IRValue*)0 || d.ops().count() != (u32)2)
+                break;
+            bool isAdd = d.op().equals(String.withCString("Add"));
+            if (!isAdd && !d.op().equals(String.withCString("Sub")))
+                break;
+            i64 k = (i64)0;
+            IROperand* x = (IROperand*)d.ops().get((u32)0);
+            IROperand* y = (IROperand*)d.ops().get((u32)1);
+            if (simpConst(y, defOf, none, &k) && x.kind() == (u8)OPK_USE && x.val() != (IRValue*)0)
+                c = isAdd ? c + k : c - k;
+            else if (isAdd && simpConst(x, defOf, none, &k) && y.kind() == (u8)OPK_USE && y.val() != (IRValue*)0)
+                {
+                c = c + k;
+                x = y;
+                }
+            else
+                break;
+            cur = x.val();
+            steps = steps + (u32)1;
+            }
+        _peelBase = cur;
+        _peelSum = c;
+        return steps > (u32)0;
+        }
+
+    void simpDistributeMuls(IRFunc* fn)
+        {
+        Map* defOf = defMapAll(fn);
+        Map* none = new Map();
+        Map* baseNo = new Map();
+        Array* cands = new Array();
+        Array* bases = new Array();
+        Array* ks = new Array();
+        Array* cs = new Array();
+        Array* keys = new Array();
+        Map* group = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                IRValue* r = n.res();
+                if (r == (IRValue*)0 || n.memRes() != (IRValue*)0 || !n.op().equals(String.withCString("Mul"))
+                    || n.ops().count() != (u32)2 || !simpIntTy(r.ty()) || irWidth(r.ty()) > (u32)4)
+                    continue;
+                i64 k = (i64)0;
+                IROperand* v = (IROperand*)0;
+                if (simpConst((IROperand*)n.ops().get((u32)1), defOf, none, &k))
+                    v = (IROperand*)n.ops().get((u32)0);
+                else if (simpConst((IROperand*)n.ops().get((u32)0), defOf, none, &k))
+                    v = (IROperand*)n.ops().get((u32)1);
+                if (v == (IROperand*)0 || v.kind() != (u8)OPK_USE || v.val() == (IRValue*)0)
+                    continue;
+                bool peeled = simpPeel(v, defOf);
+                IRValue* bv = _peelBase;
+                i64 c = _peelSum;
+                if (bv == (IRValue*)0 || bv.ty() == (String*)0 || !bv.ty().equals(r.ty()))
+                    continue;
+                Object* no = baseNo.get((Hashable*)bv);
+                if (no == (Object*)0)
+                    {
+                    no = (Object*)Number.with(baseNo.count());
+                    baseNo.set((Hashable*)bv, no);
+                    }
+                String* key = String.withU64((u64)((Number*)no).asU32());
+                key.appendCString("*");
+                key.append(String.withI64(simpWrap(k, r.ty())));
+                Object* cnt = group.get((Hashable*)key);
+                group.set((Hashable*)key, (Object*)Number.with(cnt == (Object*)0 ? (u32)1 : ((Number*)cnt).asU32() + (u32)1));
+                if (peeled)
+                    {
+                    cands.add((Object*)n);
+                    bases.add((Object*)bv);
+                    ks.add((Object*)Number.withI64(k));
+                    cs.add((Object*)Number.withI64(c));
+                    keys.add((Object*)key);
+                    }
+                }
+            }
+        // In block order: a product b * k made earlier in the block (the
+        // program's, or one made here) is reused. As the reference.
+        Map* candAt = new Map();
+        for (u32 i = (u32)0; i < cands.count(); i = i + (u32)1)
+            candAt.set((Hashable*)cands.get(i), (Object*)Number.with(i));
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            Map* avail = new Map();
+            for (u32 at = (u32)0; at < bb.insns().count(); at = at + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(at);
+                Object* ci = candAt.get((Hashable*)n);
+                if (ci == (Object*)0)
+                    {
+                    IRValue* r = n.res();
+                    if (r != (IRValue*)0 && n.memRes() == (IRValue*)0 && n.op().equals(String.withCString("Mul"))
+                        && n.ops().count() == (u32)2 && simpIntTy(r.ty()) && irWidth(r.ty()) <= (u32)4)
+                        {
+                        i64 k = (i64)0;
+                        IROperand* v = (IROperand*)0;
+                        if (simpConst((IROperand*)n.ops().get((u32)1), defOf, none, &k))
+                            v = (IROperand*)n.ops().get((u32)0);
+                        else if (simpConst((IROperand*)n.ops().get((u32)0), defOf, none, &k))
+                            v = (IROperand*)n.ops().get((u32)1);
+                        if (v != (IROperand*)0 && v.kind() == (u8)OPK_USE && v.val() != (IRValue*)0)
+                            {
+                            Object* no = baseNo.get((Hashable*)v.val());
+                            if (no == (Object*)0)
+                                {
+                                no = (Object*)Number.with(baseNo.count());
+                                baseNo.set((Hashable*)v.val(), no);
+                                }
+                            String* key = String.withU64((u64)((Number*)no).asU32());
+                            key.appendCString("*");
+                            key.append(String.withI64(simpWrap(k, r.ty())));
+                            avail.set((Hashable*)key, (Object*)r);
+                            }
+                        }
+                    continue;
+                    }
+                u32 i = ((Number*)ci).asU32();
+                Object* cnt = group.get(keys.get(i));
+                if (cnt == (Object*)0 || ((Number*)cnt).asU32() < (u32)2)
+                    continue;
+                IRValue* bv = (IRValue*)bases.get(i);
+                i64 k = ((Number*)ks.get(i)).asI64();
+                i64 c = ((Number*)cs.get(i)).asI64();
+                IRValue* r = n.res();
+                IRValue* mv = (IRValue*)avail.get(keys.get(i));
+                if (mv == (IRValue*)0)
+                    {
+                    mv = new IRValue(r.ty());
+                    IRInsn* m = IRInsn.with(String.withCString("Mul"));
+                    m.copyDbg(n);
+                    m.setRes(mv);
+                    m.add(IROperand.useVal(bv));
+                    m.add(IROperand.immI(simpWrap(k, r.ty()), r.ty()));
+                    bb.insns().insert(at, (Object*)m);
+                    at = at + (u32)1;
+                    avail.set(keys.get(i), (Object*)mv);
+                    }
+                IRInsn* a = IRInsn.with(String.withCString("Add"));
+                a.copyDbg(n);
+                a.setRes(r);
+                a.add(IROperand.useVal(mv));
+                a.add(IROperand.immI(simpWrap(c * k, r.ty()), r.ty()));
+                bb.insns().set(at, (Object*)a);
+                }
+            }
+        }
+
     void simplifyFn(IRFunc* fn)
         {
         if (fn.blocks().count() == (u32)0)
             return;
+        simpDistributeMuls(fn);
         Map* defOf = defMapAll(fn);
         Map* repl = new Map();
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
@@ -10998,6 +11170,110 @@ class BeFact : Object
             }
         }
 
+    // Write-only locals: a frame slot that does not escape and whose address
+    // (AddrOf, then field and element steps) is used only as a store's
+    // address is never read, so every store to it is dead (struct_copy's
+    // `p = bump(p, r)` after inlining). Any other use of an address into the
+    // slot keeps every store. As the reference's writeOnlyLocalsIn.
+    void writeOnlyLocalsIn(IRFunc* fn)
+        {
+        Set* slots = new Set();
+        for (u32 i = (u32)0; i < fn.pinned().count(); i = i + (u32)1)
+            {
+            IRPinned* pl = (IRPinned*)fn.pinned().get(i);
+            if (!pl.esc())
+                slots.add((Hashable*)pl.val());
+            }
+        if (slots.count() == (u32)0)
+            return;
+        Array* all = new Array();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                all.add(bb.phis().get(i));
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                all.add(bb.insns().get(i));
+            if (bb.term() != 0)
+                all.add((Object*)bb.term());
+            }
+        Map* slotOf = new Map();
+        bool grew = true;
+        while (grew)
+            {
+            grew = false;
+            for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)all.get(i);
+                if (n.res() == (IRValue*)0 || slotOf.get((Hashable*)n.res()) != (Object*)0 || n.ops().count() < (u32)1)
+                    continue;
+                IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+                if (o0.kind() != (u8)OPK_USE || o0.val() == (IRValue*)0)
+                    continue;
+                Object* sl = (Object*)0;
+                if (n.op().equals(String.withCString("AddrOf")) && slots.contains((Hashable*)o0.val()))
+                    sl = (Object*)o0.val();
+                else if (n.op().equals(String.withCString("FieldAddr")) || n.op().equals(String.withCString("ElementAddr")))
+                    sl = slotOf.get((Hashable*)o0.val());
+                if (sl != (Object*)0)
+                    {
+                    slotOf.set((Hashable*)n.res(), sl);
+                    grew = true;
+                    }
+                }
+            }
+        if (slotOf.count() == (u32)0)
+            return;
+        Set* read = new Set();
+        Array* stores = new Array();
+        for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)all.get(i);
+            bool isAddrOf = n.op().equals(String.withCString("AddrOf"));
+            bool step = (n.op().equals(String.withCString("FieldAddr")) || n.op().equals(String.withCString("ElementAddr")))
+                && n.res() != (IRValue*)0 && slotOf.get((Hashable*)n.res()) != (Object*)0;
+            bool store = n.op().equals(String.withCString("Store")) && n.ops().count() == (u32)3 && n.memRes() != (IRValue*)0;
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)n.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                    continue;
+                if (!isAddrOf && slots.contains((Hashable*)o.val()))
+                    {
+                    read.add((Hashable*)o.val()); // the slot itself, other than by its address
+                    continue;
+                    }
+                Object* sl = slotOf.get((Hashable*)o.val());
+                if (sl == (Object*)0 || (k == (u32)0 && (step || store)))
+                    continue;
+                read.add((Hashable*)sl);
+                }
+            if (store)
+                {
+                IROperand* a = (IROperand*)n.ops().get((u32)0);
+                if (a.kind() == (u8)OPK_USE && a.val() != (IRValue*)0 && slotOf.get((Hashable*)a.val()) != (Object*)0)
+                    stores.add((Object*)n);
+                }
+            }
+        for (u32 i = (u32)0; i < stores.count(); i = i + (u32)1)
+            {
+            IRInsn* st = (IRInsn*)stores.get(i);
+            IROperand* a = (IROperand*)st.ops().get((u32)0);
+            if (read.contains((Hashable*)slotOf.get((Hashable*)a.val())))
+                continue;
+            rewriteUsesTo(fn, st.memRes(), (IROperand*)st.ops().get((u32)2));
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                Array* keep = new Array();
+                for (u32 m = (u32)0; m < bb.insns().count(); m = m + (u32)1)
+                    if ((IRInsn*)bb.insns().get(m) != st)
+                        keep.add(bb.insns().get(m));
+                bb.setInsns(keep);
+                }
+            }
+        }
+
     // A Retain and a Release of the same value that cancel, block by block:
     // the Release takes its memory token straight from the Retain and only
     // pure instructions lie between, so nothing can drop the count meanwhile
@@ -11054,6 +11330,7 @@ class BeFact : Object
         {
         retainPairsIn(fn);
         deadStoresIn(fn);
+        writeOnlyLocalsIn(fn);
         bool changed = true;
         while (changed)
             {

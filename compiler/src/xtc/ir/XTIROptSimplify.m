@@ -539,10 +539,161 @@ static XTIRInsn* simpFoldFloat(XTIRInsn* n, XTIRFunction* fn, NSDictionary<NSNum
                                      dbgLoc:n.dbgLoc];
     }
 
+// A multiply by a constant of a value plus constants, `(b + c) * k`, where
+// another such product (or b * k itself) has the same b and k: each becomes
+// `b * k + c * k`, so CSE leaves one multiply for the group. call_depth's
+// inlined leaf(x), leaf(x + 1), leaf(x + 2), leaf(x + 3) multiplied four times
+// where clang multiplies once, and a 32-bit vector multiply is one pipe at half
+// rate on a Cortex-A76 (2026-10-31: Pi 1.26x clang). Wrapping arithmetic, so
+// exact at every width up to 32 bits. The new multiply goes just before the
+// one it replaces (b is defined before the chain that leads to it).
+static BOOL simpPeel(XTIROperand* o, XTIRFunction* fn, NSDictionary<NSNumber*, XTIRInsn*>* defOf,
+                     XTIRValueId* base, int64_t* sum)
+    {
+    if (o.kind != XTIROperandKindUse)
+        return NO;
+    XTIRValueId cur = o.valueId;
+    int64_t c = 0;
+    int steps = 0;
+    NSDictionary<NSNumber*, NSNumber*>* none = @{};
+    for (int i = 0; i < 8; i++)
+        {
+        XTIRInsn* d = defOf[@(cur)];
+        if (!d || d.memoryResult || d.operands.count != 2 || (d.opcode != XTIROpAdd && d.opcode != XTIROpSub))
+            break;
+        int64_t k = 0;
+        XTIROperand* x = d.operands[0];
+        if (simpConst(d.operands[1], fn, defOf, none, &k) && x.kind == XTIROperandKindUse)
+            c += d.opcode == XTIROpAdd ? k : -k;
+        else if (d.opcode == XTIROpAdd && simpConst(x, fn, defOf, none, &k) && d.operands[1].kind == XTIROperandKindUse)
+            {
+            c += k;
+            x = d.operands[1];
+            }
+        else
+            break;
+        cur = x.valueId;
+        steps++;
+        }
+    *base = cur;
+    *sum = c;
+    return steps > 0;
+    }
+
+- (void)distributeMulsIn:(XTIRFunction*)fn
+    {
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* defOf = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIRInsn* i in bb.instructions)
+            if (i.result)
+                defOf[@(i.result.valueId)] = i;
+    NSDictionary<NSNumber*, NSNumber*>* none = @{};
+    // Each product by a constant: its base and constant sum, keyed by (base, k).
+    NSMutableArray<XTIRInsn*>* cands = [NSMutableArray array];
+    NSMutableArray<NSArray*>* info = [NSMutableArray array];
+    NSCountedSet<NSString*>* group = [NSCountedSet set];
+    for (XTIRBlock* bb in fn.blocks)
+        for (XTIRInsn* n in bb.instructions)
+            {
+            XTIRValue* r = n.result;
+            if (!r || n.memoryResult || n.opcode != XTIROpMul || n.operands.count != 2 || !simpIntKind(r.type.kind) ||
+                r.type.byteWidth > 4)
+                continue;
+            int64_t k = 0;
+            XTIROperand* v = nil;
+            if (simpConst(n.operands[1], fn, defOf, none, &k))
+                v = n.operands[0];
+            else if (simpConst(n.operands[0], fn, defOf, none, &k))
+                v = n.operands[1];
+            if (!v || v.kind != XTIROperandKindUse)
+                continue;
+            XTIRValueId b = 0;
+            int64_t c = 0;
+            BOOL peeled = simpPeel(v, fn, defOf, &b, &c);
+            XTIRValue* bv = [fn valueForId:b];
+            if (!bv || bv.type.kind != r.type.kind)
+                continue;
+            NSString* key = [NSString stringWithFormat:@"%llu*%lld", (unsigned long long)b, (long long)simpWrap(k, r.type)];
+            [group addObject:key];
+            if (peeled)
+                {
+                [cands addObject:n];
+                [info addObject:@[ @(b), @(k), @(c), key ]];
+                }
+            }
+    // In block order: a product of b * k already made earlier in the block (one
+    // the program wrote, or one made here) is reused, so a group leaves one
+    // multiply whatever runs after (a vectorised copy is not CSE'd again).
+    NSMapTable<XTIRInsn*, NSNumber*>* candAt = [NSMapTable strongToStrongObjectsMapTable];
+    for (NSUInteger i = 0; i < cands.count; i++)
+        [candAt setObject:@(i) forKey:cands[i]];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        NSMutableDictionary<NSString*, NSNumber*>* avail = [NSMutableDictionary dictionary];
+        for (NSUInteger at = 0; at < bb.instructions.count; at++)
+            {
+            XTIRInsn* n = bb.instructions[at];
+            NSNumber* ci = [candAt objectForKey:n];
+            if (!ci)
+                {
+                // A plain b * k (b not an add chain): available from here on.
+                XTIRValue* r = n.result;
+                if (r && !n.memoryResult && n.opcode == XTIROpMul && n.operands.count == 2 && simpIntKind(r.type.kind) &&
+                    r.type.byteWidth <= 4)
+                    {
+                    int64_t k = 0;
+                    XTIROperand* v = nil;
+                    if (simpConst(n.operands[1], fn, defOf, none, &k))
+                        v = n.operands[0];
+                    else if (simpConst(n.operands[0], fn, defOf, none, &k))
+                        v = n.operands[1];
+                    if (v && v.kind == XTIROperandKindUse)
+                        avail[[NSString stringWithFormat:@"%llu*%lld", (unsigned long long)v.valueId,
+                                                         (long long)simpWrap(k, r.type)]] = @(r.valueId);
+                    }
+                continue;
+                }
+            NSUInteger i = ci.unsignedIntegerValue;
+            NSString* key = info[i][3];
+            if ([group countForObject:key] < 2)
+                continue;
+            XTIRValueId b = [info[i][0] unsignedLongLongValue];
+            int64_t k = [info[i][1] longLongValue], c = [info[i][2] longLongValue];
+            XTIRValue* r = n.result;
+            XTIRValueId mid = 0;
+            if (avail[key])
+                mid = [avail[key] unsignedLongLongValue];
+            else
+                {
+                mid = [fn allocateValueId];
+                XTIRValue* mv = [[XTIRValue alloc] initWithValueId:mid
+                                                              type:r.type
+                                                           defSite:[[XTIRDefSite alloc] initWithBlock:bb insnIndex:at]];
+                [fn registerValue:mv];
+                XTIRInsn* m = [[XTIRInsn alloc] initWithOpcode:XTIROpMul
+                                                        result:mv
+                                                      operands:@[ [XTIROperand useWithValueId:b],
+                                                                  [XTIROperand immIWithType:r.type value:simpWrap(k, r.type)] ]
+                                                        dbgLoc:n.dbgLoc];
+                [bb.instructions insertObject:m atIndex:at];
+                at++;
+                avail[key] = @(mid);
+                }
+            XTIRInsn* a = [[XTIRInsn alloc] initWithOpcode:XTIROpAdd
+                                                    result:r
+                                                  operands:@[ [XTIROperand useWithValueId:mid],
+                                                              [XTIROperand immIWithType:r.type value:simpWrap(c * k, r.type)] ]
+                                                    dbgLoc:n.dbgLoc];
+            bb.instructions[at] = a;
+            }
+        }
+    }
+
 - (void)runOnFunction:(XTIRFunction*)fn
     {
     if (fn.blocks.count == 0)
         return;
+    [self distributeMulsIn:fn];
     NSMutableDictionary<NSNumber*, XTIRInsn*>* defOf = [NSMutableDictionary dictionary];
     for (XTIRBlock* bb in fn.blocks)
         {

@@ -184,6 +184,106 @@ static NSString* XTIRDSEKey(XTIROperand* p, NSDictionary<NSNumber*, XTIRInsn*>* 
         }
     }
 
+// Write-only locals: a frame slot that does not escape and whose address
+// (AddrOf, then field and element steps) is used only as a store's address is
+// never read, so every store to it is dead. struct_copy's `p = bump(p, r)`
+// left, after inlining, two stores a turn to p's slot that nothing loaded
+// (2026-10-31; 11 instructions a turn against clang's 6). Any other use of an
+// address into the slot (a load, a call, a copy, a store of the address
+// itself, a phi, debug info) keeps every store. The removed stores' memory
+// tokens are handed on; the address chains go to the sweep after.
+- (void)writeOnlyLocalsIn:(XTIRFunction*)fn
+    {
+    NSMutableSet<NSNumber*>* slots = [NSMutableSet set];
+    for (XTIRPinnedLocal* pl in fn.frameInfo.pinnedLocals)
+        if (!pl.escapesViaPointer)
+            [slots addObject:@(pl.valueId)];
+    if (slots.count == 0)
+        return;
+    NSMutableArray<XTIRInsn*>* all = [NSMutableArray array];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        [all addObjectsFromArray:bb.phiNodes];
+        [all addObjectsFromArray:bb.instructions];
+        if (bb.terminator)
+            [all addObject:bb.terminator];
+        }
+    // The slot each address value points into, AddrOf first, then the steps
+    // (a fixed point over the list, whatever the block order).
+    NSMutableDictionary<NSNumber*, NSNumber*>* slotOf = [NSMutableDictionary dictionary];
+    BOOL grew = YES;
+    while (grew)
+        {
+        grew = NO;
+        for (XTIRInsn* insn in all)
+            {
+            if (!insn.result || slotOf[@(insn.result.valueId)] || insn.operands.count < 1 ||
+                insn.operands[0].kind != XTIROperandKindUse)
+                continue;
+            NSNumber* base = @(insn.operands[0].valueId);
+            NSNumber* s = nil;
+            if (insn.opcode == XTIROpAddrOf && [slots containsObject:base])
+                s = base;
+            else if (insn.opcode == XTIROpFieldAddr || insn.opcode == XTIROpElementAddr)
+                s = slotOf[base];
+            if (s)
+                {
+                slotOf[@(insn.result.valueId)] = s;
+                grew = YES;
+                }
+            }
+        }
+    if (slotOf.count == 0)
+        return;
+    NSMutableSet<NSNumber*>* read = [NSMutableSet set];
+    NSMutableArray<XTIRInsn*>* stores = [NSMutableArray array];
+    for (XTIRInsn* insn in all)
+        {
+        BOOL step = (insn.opcode == XTIROpFieldAddr || insn.opcode == XTIROpElementAddr) && insn.result &&
+                    slotOf[@(insn.result.valueId)];
+        BOOL store = insn.opcode == XTIROpStore && insn.operands.count == 3 && insn.memoryResult;
+        for (NSUInteger k = 0; k < insn.operands.count; k++)
+            {
+            XTIROperand* o = insn.operands[k];
+            if (o.kind != XTIROperandKindUse)
+                continue;
+            if (insn.opcode != XTIROpAddrOf && [slots containsObject:@(o.valueId)])
+                {
+                [read addObject:@(o.valueId)]; // the slot itself, other than by its address
+                continue;
+                }
+            NSNumber* s = slotOf[@(o.valueId)];
+            if (!s || (k == 0 && (step || store)))
+                continue;
+            [read addObject:s];
+            }
+        if (store && insn.operands[0].kind == XTIROperandKindUse && slotOf[@(insn.operands[0].valueId)])
+            [stores addObject:insn];
+        }
+    for (XTIRInsn* st in stores)
+        {
+        if ([read containsObject:slotOf[@(st.operands[0].valueId)]])
+            continue;
+        XTIRValueId old = st.memoryResult.valueId;
+        XTIROperand* to = st.operands[2];
+        for (XTIRInsn* u in all)
+            {
+            NSMutableArray<XTIROperand*>* ops = [u.operands mutableCopy];
+            BOOL ch = NO;
+            for (NSUInteger k = 0; k < ops.count; k++)
+                if (ops[k].kind == XTIROperandKindUse && ops[k].valueId == old)
+                    {
+                    ops[k] = to;
+                    ch = YES;
+                    }
+            if (ch)
+                [u replaceOperands:ops];
+            }
+        for (XTIRBlock* bb in fn.blocks)
+            [bb.instructions removeObjectIdenticalTo:st];
+        }
+    }
+
 // A Retain and a Release of the same value that cancel, block by block: the
 // Release takes its memory token straight from the Retain and only pure
 // instructions (no memory token, no call) lie between, so nothing can drop the
@@ -256,6 +356,7 @@ static NSString* XTIRDSEKey(XTIROperand* p, NSDictionary<NSNumber*, XTIRInsn*>* 
     {
     [self retainPairsIn:fn];
     [self deadStoresIn:fn];
+    [self writeOnlyLocalsIn:fn];
     BOOL changed = YES;
     while (changed)
         {

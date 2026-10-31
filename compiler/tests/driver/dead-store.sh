@@ -4,7 +4,8 @@
 # with no initialiser is zero-filled (owner, 2026-10-24) and then usually
 # assigned field by field at once: struct_copy's loop stored each field twice
 # and ran 1.5x slower than 0.86 (1.30 s against 0.86 s on the Linux host).
-# struct_copy's loop body stores each field of q once, the two compilers
+# struct_copy's loop body stores nothing (2026-10-31: p's slot is
+# write-only once bump() is inlined, write-only-local.sh), the two compilers
 # agree, and dead_store.xc (the stores that must stay: a read between, a
 # call, a store through a pointer, a variable index) gives its answer.
 #
@@ -19,7 +20,7 @@ SRC=../benchmark/src/struct_copy.xc
 if [ -f "$SRC" ]; then
     "$XC" -q -O2 -I ../benchmark/src -H . --emit-ir-opt -o "$W/sc" "$SRC" 2> "$W/sc.ir"
     n=$(awk '/function main\(/,/^  }/' "$W/sc.ir" | sed -n '/bb_1_for_body:/,/CondBranch/p' | grep -c ' = Store ')
-    [ "$n" = 2 ] || { echo "FAIL dead-store: struct_copy's loop stores $n times, want 2"; fail=1; }
+    [ "$n" = 0 ] || { echo "FAIL dead-store: struct_copy's loop stores $n times, want 0"; fail=1; }
 fi
 for c in "$REF" "$XC"; do
     [ -x "$c" ] || continue
