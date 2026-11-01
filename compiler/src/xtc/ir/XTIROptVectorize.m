@@ -4494,7 +4494,17 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         NSInteger U;
         if (constN)
             {
-            U = (!bigBody && N % (4 * vw) == 0) ? 4 : (N % (2 * vw) == 0 ? 2 : 1);
+            // The TRIP, N - S, decides how many copies divide it evenly, not
+            // the bound N: the iv runs from its start S. From 4 to 64 the bound
+            // is a multiple of 16 and the trip, 60, is not, so four copies ran
+            // 4 elements past the end and the sum was wrong at -O2 on arm64.
+            // A start that is not a constant is not unrolled. As the port.
+            int64_t S = 0;
+            XTIROperand* sOp = (ivPhi.operands[0].blockRef == B) ? ivPhi.operands[3] : ivPhi.operands[1];
+            if (!resolveConstIntExt(sOp, defOf, &S))
+                continue;
+            int64_t trip = N - S;
+            U = (!bigBody && trip % (4 * vw) == 0) ? 4 : (trip % (2 * vw) == 0 ? 2 : 1);
             }
         else
             {

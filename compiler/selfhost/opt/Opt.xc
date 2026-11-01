@@ -25860,8 +25860,17 @@ class BeFact : Object
         u32 U = (u32)1;
         if (constN)
             {
-            U = (!bigBody && (n % ((i64)4 * (i64)vw)) == (i64)0) ? (u32)4
-                                              : ((n % ((i64)2 * (i64)vw)) == (i64)0 ? (u32)2 : (u32)1);
+            // The TRIP, n - s, decides how many copies divide it evenly, not
+            // the bound n: the iv runs from its start s. From 4 to 64 the bound
+            // is a multiple of 16 and the trip, 60, is not, so four copies ran
+            // 4 elements past the end. A start that is not a constant is not
+            // unrolled. As the reference.
+            i64 s0 = (i64)0;
+            if (!vecConstWide(vecEntryOpOf(ivPhi, B), defOf, &s0))
+                return;
+            i64 trip = n - s0;
+            U = (!bigBody && (trip % ((i64)4 * (i64)vw)) == (i64)0) ? (u32)4
+                                              : ((trip % ((i64)2 * (i64)vw)) == (i64)0 ? (u32)2 : (u32)1);
             }
         else
             {
