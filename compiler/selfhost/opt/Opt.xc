@@ -19813,6 +19813,8 @@ class BeFact : Object
     u32 _esVF;
     bool _esParItems;    // the item loop of a par body: its items are independent by the language
     u32 _esJam;          // vectors side by side in this loop (escApply): 1, or the profile's escapeJam
+    IRInsn* _esJamCmp;   // the head's test that names _esVF * _esJam (operand 1)
+    IRInsn* _esJamStep;  // the latch's iv step by _esVF * _esJam (operand 1)
 
     bool vecEscape(IRFunc* fn)
         {
@@ -21059,6 +21061,127 @@ class BeFact : Object
         b.setInsns(out);
         }
 
+    // Would `jam` copies fit the back end's vector pool? VI, the inner loop,
+    // is where the copies stand together, so it is swept in order as
+    // vecInterleaveFits sweeps a reduction's body: a value that depends on the
+    // lanes (D, as escJam builds it) is held once per copy, a uniform one once.
+    // VI's phis and every vector it reads from outside are live throughout,
+    // its own values from definition to last use (to the end when a phi takes
+    // one round again); an add takes the register of an operand that dies at
+    // it. Four copies of three multiply-add chains (`a = a * k + c`) asked
+    // arm64 for more than its 14, and the back end, which does not spill a
+    // vector, stopped the build (0.89 and 0.9). As the reference's jamFits:.
+    static bool escIsVec(IRValue* v)
+        {
+        return v != (IRValue*)0 && v.ty().hasPrefix(String.withCString("Vec("));
+        }
+
+    static u32 escCopies(Set* D, IRValue* v, u32 jam)
+        {
+        return D.contains((Hashable*)v) ? jam : (u32)1;
+        }
+
+    bool escJamFits(u32 jam, IRBlock* VB, IRBlock* VI, IRValue* viv, u32 pool)
+        {
+        Set* D = new Set();
+        D.add((Hashable*)viv);
+        for (u32 i = (u32)0; i < VB.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)VB.insns().get(i);
+            if (n.res() != (IRValue*)0 && escJamUses(n, D))
+                D.add((Hashable*)n.res());
+            }
+        Set* phiRes = new Set();
+        for (u32 i = (u32)0; i < VI.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)VI.phis().get(i);
+            if (p.res() == (IRValue*)0)
+                continue;
+            phiRes.add((Hashable*)p.res());
+            if (escIsVec(p.res()) || escJamUses(p, D))
+                D.add((Hashable*)p.res());
+            }
+        for (u32 i = (u32)0; i < VI.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)VI.insns().get(i);
+            if (n.res() != (IRValue*)0 && escJamUses(n, D))
+                D.add((Hashable*)n.res());
+            }
+        u32 n = VI.insns().count();
+        Set* inVI = new Set();
+        Map* lastUse = new Map();
+        Set* outside = new Set();
+        u32 through = (u32)0;
+        for (u32 i = (u32)0; i < VI.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)VI.phis().get(i);
+            if (p.res() != (IRValue*)0 && escIsVec(p.res()))
+                through = through + escCopies(D, p.res(), jam);
+            }
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            {
+            IRInsn* insn = (IRInsn*)VI.insns().get(i);
+            for (u32 q = (u32)0; q < insn.ops().count(); q = q + (u32)1)
+                {
+                IROperand* o = (IROperand*)insn.ops().get(q);
+                if (o.kind() != (u8)OPK_USE || !escIsVec(o.val()))
+                    continue;
+                if (inVI.contains((Hashable*)o.val()))
+                    lastUse.set((Hashable*)o.val(), (Object*)Number.withU32(i));
+                else if (!phiRes.contains((Hashable*)o.val()) && !outside.contains((Hashable*)o.val()))
+                    {
+                    outside.add((Hashable*)o.val());
+                    through = through + escCopies(D, o.val(), jam);
+                    }
+                }
+            if (insn.res() != (IRValue*)0)
+                inVI.add((Hashable*)insn.res());
+            }
+        for (u32 i = (u32)0; i < VI.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)VI.phis().get(i);
+            for (u32 q = (u32)0; q < p.ops().count(); q = q + (u32)1)
+                {
+                IROperand* o = (IROperand*)p.ops().get(q);
+                if (o.kind() == (u8)OPK_USE && inVI.contains((Hashable*)o.val()))
+                    lastUse.set((Hashable*)o.val(), (Object*)Number.withU32(n));
+                }
+            }
+        u32 live = (u32)0;
+        u32 peak = (u32)0;
+        for (u32 i = (u32)0; i < n; i = i + (u32)1)
+            {
+            IRInsn* insn = (IRInsn*)VI.insns().get(i);
+            u32 dying = (u32)0;
+            for (u32 q = (u32)0; q < insn.ops().count(); q = q + (u32)1)
+                {
+                IROperand* o = (IROperand*)insn.ops().get(q);
+                if (o.kind() != (u8)OPK_USE || !inVI.contains((Hashable*)o.val()) || !escIsVec(o.val()))
+                    continue;
+                Number* lu = (Number*)lastUse.get((Hashable*)o.val());
+                if (lu == (Number*)0 || lu.asU32() != i)
+                    continue;
+                lastUse.set((Hashable*)o.val(), (Object*)Number.withU32(n + (u32)1));
+                dying = dying + escCopies(D, o.val(), jam);
+                }
+            u32 born = (insn.res() != (IRValue*)0 && escIsVec(insn.res())) ? escCopies(D, insn.res(), jam) : (u32)0;
+            if (insn.op().equals(String.withCString("VAdd")) && dying > (u32)0)
+                {
+                live = live + born - dying;
+                if (live > peak)
+                    peak = live;
+                }
+            else
+                {
+                live = live + born;
+                if (live > peak)
+                    peak = live;
+                live = live - dying;
+                }
+            }
+        return peak + through <= pool;
+        }
+
     void escJam(IRBlock* VB, IRBlock* VI, IRBlock* VE, IRValue* viv, IRValue* vivNext)
         {
         Array* maps = new Array();
@@ -21152,6 +21275,23 @@ class BeFact : Object
         escVecBody(fn, VB, VI, viv);
         escVecInner(fn, VI, VE);
         escVecLatch(VE, VH, viv, vivNext);
+        // As many copies as the vector pool holds: halved until they fit, and
+        // the head's test and the latch's step, which already name
+        // _esVF * _esJam, told. As the reference.
+        if (_esJam > (u32)1)
+            {
+            u32 j = _esJam;
+            u32 pool = vecPoolFor(fn);
+            while (j > (u32)1 && !escJamFits(j, VB, VI, viv, pool))
+                j = j / (u32)2;
+            if (j != _esJam)
+                {
+                _esJam = j;
+                _esJamCmp.ops().set((u32)1, (Object*)IROperand.immI(_esBoundConst ? _esN - (i64)(_esVF * _esJam)
+                                                                                   : (i64)(_esVF * _esJam), ivTy));
+                _esJamStep.ops().set((u32)1, (Object*)IROperand.immI((i64)(_esVF * _esJam), viv.ty()));
+                }
+            }
         if (_esJam > (u32)1)
             escJam(VB, VI, VE, viv, vivNext);
         escVecExit(VX, viv);
@@ -21217,6 +21357,7 @@ class BeFact : Object
             g.add(IROperand.useVal(viv));
             g.add(IROperand.immI(_esN - (i64)(_esVF * _esJam), ivTy));
             VH.insns().add((Object*)g);
+            _esJamCmp = g;
             }
         else
             {
@@ -21226,6 +21367,7 @@ class BeFact : Object
             ((IRInsn*)VH.insns().get(VH.insns().count() - (u32)1)).setPred(String.withCString(_esSigned ? "SLT" : "ULT"));
             IRValue* rem = escPut(VH.insns(), "Sub", ivTy, _esBoundOp, IROperand.useVal(viv));
             IRValue* c2 = escPut(VH.insns(), "ICmp", b, IROperand.useVal(rem), IROperand.immI((i64)(_esVF * _esJam), ivTy));
+            _esJamCmp = (IRInsn*)VH.insns().get(VH.insns().count() - (u32)1);
             ((IRInsn*)VH.insns().get(VH.insns().count() - (u32)1)).setPred(String.withCString(_esSigned ? "SGE" : "UGE"));
             c = escPut(VH.insns(), "And", b, IROperand.useVal(c1), IROperand.useVal(c2));
             }
@@ -21669,6 +21811,7 @@ class BeFact : Object
         inc.add(IROperand.useVal(viv));
         inc.add(IROperand.immI((i64)(_esVF * _esJam), viv.ty()));
         VE.insns().add((Object*)inc);
+        _esJamStep = inc;
         IRInsn* br = IRInsn.with(String.withCString("Branch"));
         br.add(IROperand.block(VH));
         VE.setTerm(br);

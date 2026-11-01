@@ -135,6 +135,7 @@ static NSUInteger sVecFnBytes = 0;
 @interface XTEscapeVec : NSObject
 @property(nonatomic) NSUInteger bytes;
 @property(nonatomic) NSUInteger interleave;   // the profile's escapeInterleave
+@property(nonatomic) NSUInteger pool;         // the back end's vector registers (vecPoolFor)
 - (BOOL)runOnFunction:(XTIRFunction*)fn done:(NSMutableSet<NSValue*>*)done;
 @end
 
@@ -962,6 +963,7 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
     XTEscapeVec* e = [[XTEscapeVec alloc] init];
     e.bytes = [self vectorBytes];
     e.interleave = prof.escapeInterleave;
+    e.pool = vecPoolFor(fn, prof);
     return [e runOnFunction:fn done:sEscDone];
     }
 
@@ -5852,6 +5854,8 @@ static BOOL vecInterleaveFits(XTIRFunction* fn, XTIRBlock* B, XTIRValueId vaccId
     NSMutableSet<NSNumber*>* _idxPhis;
     BOOL _counted;
     NSUInteger _jam;   // vectors side by side in this loop (apply): 1, or the profile's interleave
+    XTIRInsn* _jamCmp;   // the head's test that names _vf * _jam (operand 1)
+    XTIRInsn* _jamStep;  // the latch's iv step by _vf * _jam (operand 1)
     XTIRInsn* _tripPhi;
     NSMutableSet<NSNumber*>* _uniform;
     XTIRValue *_viv, *_tripV;
@@ -7143,6 +7147,25 @@ static BOOL escFloatPred(uint8_t p)
     [self body:VB inner:VI iv:viv];
     [self innerLoop:VI exit:VE];
     [self latch:VE head:VH iv:viv next:vivNext];
+    // As many copies as the vector pool holds: halved until they fit, and the
+    // head's test and the latch's step, which already name _vf * _jam, told.
+    if (_jam > 1)
+        {
+        NSUInteger j = _jam;
+        while (j > 1 && ![self jamFits:j body:VB inner:VI iv:viv])
+            j /= 2;
+        if (j != _jam)
+            {
+            _jam = j;
+            XTIRType* ivTy = _ivPhi.result.type;
+            NSMutableArray<XTIROperand*>* co = [_jamCmp.operands mutableCopy];
+            co[1] = [XTIROperand immIWithType:ivTy value:_boundConst ? _n - (int64_t)(_vf * _jam) : (int64_t)(_vf * _jam)];
+            [_jamCmp replaceOperands:co];
+            NSMutableArray<XTIROperand*>* so = [_jamStep.operands mutableCopy];
+            so[1] = [XTIROperand immIWithType:viv.type value:(int64_t)(_vf * _jam)];
+            [_jamStep replaceOperands:so];
+            }
+        }
     if (_jam > 1)
         [self jamBody:VB inner:VI latch:VE iv:viv next:vivNext];
     [self exitTo:VX iv:viv];
@@ -7181,10 +7204,13 @@ static BOOL escFloatPred(uint8_t p)
         }
     XTIRValue* c = nil;
     if (_boundConst)
+        {
         c = [self put:VH.instructions home:VH op:XTIROpICmp ty:[XTIRType boolType]
                     a:[XTIROperand useWithValueId:viv.valueId]
                     b:[XTIROperand immIWithType:ivTy value:_n - (int64_t)(_vf * _jam)]
                  pred:(_signed ? XTIRICmpSLE : XTIRICmpULE)];
+        _jamCmp = VH.instructions.lastObject;
+        }
     else
         {
         // A run-time bound: viv < N and N - viv >= VF (N - VF could wrap).
@@ -7198,6 +7224,7 @@ static BOOL escFloatPred(uint8_t p)
                                 a:[XTIROperand useWithValueId:rem.valueId]
                                 b:[XTIROperand immIWithType:ivTy value:(int64_t)(_vf * _jam)]
                              pred:(_signed ? XTIRICmpSGE : XTIRICmpUGE)];
+        _jamCmp = VH.instructions.lastObject;
         c = [self put:VH.instructions home:VH op:XTIROpAnd ty:b a:[XTIROperand useWithValueId:c1.valueId]
                     b:[XTIROperand useWithValueId:c2.valueId]];
         }
@@ -7485,6 +7512,7 @@ static BOOL escFloatPred(uint8_t p)
                                                        operands:@[ [XTIROperand useWithValueId:viv.valueId],
                                                                    [XTIROperand immIWithType:viv.type value:(int64_t)(_vf * _jam)] ]
                                                          dbgLoc:nil]];
+    _jamStep = VE.instructions.lastObject;
     [VE setTerminator:[[XTIRInsn alloc] initWithOpcode:XTIROpBranch
                                                 result:nil
                                               operands:@[ [XTIROperand blockWithRef:VH] ]
@@ -7533,6 +7561,102 @@ static BOOL escFloatPred(uint8_t p)
             }
     [b.instructions removeAllObjects];
     [b.instructions addObjectsFromArray:out];
+    }
+
+// Would `jam` copies fit the back end's vector pool? VI, the inner loop, is
+// where the copies stand together, so it is swept in order as
+// vecInterleaveFits sweeps a reduction's body: a value that depends on the
+// lanes (D, as jamBody: builds it) is held once per copy, a uniform one once.
+// VI's phis and every vector it reads from outside are live throughout, its own
+// values from definition to last use (to the end when a phi takes one round
+// again); an add takes the register of an operand that dies at it. Four copies
+// of three multiply-add chains (`a = a * k + c`) asked arm64 for more than its
+// 14, and the back end, which does not spill a vector, stopped the build
+// (0.89 and 0.9). As the port's escJamFits.
+- (BOOL)jamFits:(NSUInteger)jam body:(XTIRBlock*)VB inner:(XTIRBlock*)VI iv:(XTIRValue*)viv
+    {
+    NSMutableSet<NSNumber*>* D = [NSMutableSet setWithObject:@(viv.valueId)];
+    for (XTIRInsn* n in VB.instructions)
+        if (n.result && [self jamUses:n of:D])
+            [D addObject:@(n.result.valueId)];
+    NSMutableSet<NSNumber*>* phiRes = [NSMutableSet set];
+    for (XTIRInsn* p in VI.phiNodes)
+        if (p.result)
+            {
+            [phiRes addObject:@(p.result.valueId)];
+            if (p.result.type.kind == XTIRTypeKindVec || [self jamUses:p of:D])
+                [D addObject:@(p.result.valueId)];
+            }
+    for (XTIRInsn* n in VI.instructions)
+        if (n.result && [self jamUses:n of:D])
+            [D addObject:@(n.result.valueId)];
+    BOOL (^isVec)(XTIRValueId) = ^BOOL(XTIRValueId v) {
+      XTIRValue* x = [_fn valueForId:v];
+      return x && x.type.kind == XTIRTypeKindVec;
+    };
+    NSUInteger (^copies)(XTIRValueId) = ^NSUInteger(XTIRValueId v) {
+      return [D containsObject:@(v)] ? jam : 1;
+    };
+    NSUInteger n = VI.instructions.count;
+    NSMutableSet<NSNumber*>* inVI = [NSMutableSet set];
+    NSMutableDictionary<NSNumber*, NSNumber*>* lastUse = [NSMutableDictionary dictionary];
+    NSMutableSet<NSNumber*>* outside = [NSMutableSet set];
+    NSUInteger through = 0;
+    for (XTIRInsn* p in VI.phiNodes)
+        if (p.result && isVec(p.result.valueId))
+            through += copies(p.result.valueId);
+    for (NSUInteger i = 0; i < n; i++)
+        {
+        XTIRInsn* insn = VI.instructions[i];
+        for (XTIROperand* o in insn.operands)
+            {
+            if (o.kind != XTIROperandKindUse || !isVec(o.valueId))
+                continue;
+            if ([inVI containsObject:@(o.valueId)])
+                lastUse[@(o.valueId)] = @(i);
+            else if (![phiRes containsObject:@(o.valueId)] && ![outside containsObject:@(o.valueId)])
+                {
+                [outside addObject:@(o.valueId)];
+                through += copies(o.valueId);
+                }
+            }
+        if (insn.result)
+            [inVI addObject:@(insn.result.valueId)];
+        }
+    for (XTIRInsn* p in VI.phiNodes)
+        for (XTIROperand* o in p.operands)
+            if (o.kind == XTIROperandKindUse && [inVI containsObject:@(o.valueId)])
+                lastUse[@(o.valueId)] = @(n);
+    NSUInteger live = 0, peak = 0;
+    for (NSUInteger i = 0; i < n; i++)
+        {
+        XTIRInsn* insn = VI.instructions[i];
+        NSUInteger dying = 0;
+        for (XTIROperand* o in insn.operands)
+            {
+            if (o.kind != XTIROperandKindUse || ![inVI containsObject:@(o.valueId)] || !isVec(o.valueId))
+                continue;
+            if (lastUse[@(o.valueId)].unsignedIntegerValue != i)
+                continue;
+            lastUse[@(o.valueId)] = @(n + 1);
+            dying += copies(o.valueId);
+            }
+        NSUInteger born = (insn.result && isVec(insn.result.valueId)) ? copies(insn.result.valueId) : 0;
+        if (insn.opcode == XTIROpVAdd && dying > 0)
+            {
+            live = live + born - dying;
+            if (live > peak)
+                peak = live;
+            }
+        else
+            {
+            live += born;
+            if (live > peak)
+                peak = live;
+            live -= dying;
+            }
+        }
+    return peak + through <= self.pool;
     }
 
 - (void)jamBody:(XTIRBlock*)VB inner:(XTIRBlock*)VI latch:(XTIRBlock*)VE iv:(XTIRValue*)viv next:(XTIRValue*)vivNext
