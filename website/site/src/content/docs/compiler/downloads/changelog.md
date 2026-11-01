@@ -3,7 +3,50 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
-## Version 0.9 — smaller objects, and a block's own device
+## Version 0.9.1 — faster x86-64, and a fix for summed loops
+
+Everything since 0.9.
+
+### Fixed
+
+- **A summing loop could get the wrong answer at -O2 and -O3 on arm64.** A
+  reduction that starts from a non-zero constant, with a bound that is a
+  multiple of four vectors but a trip count that is not, was unrolled from the
+  wrong count. Every release since 0.86 at least had it.
+- **The escape-loop vectoriser on arm64 no longer runs out of vector
+  registers.** 0.89 interleaved four copies of an escape-time loop (mandelbrot)
+  without checking they fit, and some failed to build; it now halves the copies
+  until they fit.
+- **`XC_PAR_REPORT` says a block stays on the CPU only when it does.**
+
+### Faster
+
+- **x86-64.** On a Ryzen 9 9955HX, xc's benchmarks went from 1.01 times clang's
+  time to 0.97 (the geometric mean of the 19 in the suite), so xc is now ahead
+  of clang on x86-64 as well as arm64:
+  - a vector division by a constant takes five instructions where it took
+    eight (int_muldiv 1.31 times faster);
+  - a conditional branch is one jump, with the other edge falling through
+    (sieve 1.10 times faster);
+  - an unrolled vector loop builds its lane indices once per iteration, not
+    once per copy (call_depth 1.10 times faster).
+- **GPU kernels come in two forms, and each GPU runs the one it does best.** A
+  `par` block whose loop exits early (an escape-time test, as in mandelbrot)
+  carries a second kernel that runs eight trips of the loop per exit test. The
+  Raspberry Pi 5's GPU and NVIDIA GPUs run it (the Pi's mandelbrot 1.8 times
+  faster, NVIDIA's up to 1.16); AMD and Apple GPUs keep the plain kernel, which
+  they run faster. `XC_PAR_VARIANT=plain|trips` picks one.
+- **`gpus` on a machine with one GPU** runs a bandwidth-bound block in a single
+  launch rather than splitting it with the CPU.
+
+### Other
+
+- **A category's `final` and `static` methods reach the modules that import
+  it**, so one class can be spread over files compiled separately. A
+  category method that can be overridden stays private to its module.
+- **Each compiler archive carries the TLS library** in its own `3p`, so
+  `#use <tls>` works from a download with nothing else installed.
+
 
 Everything since 0.89.
 
