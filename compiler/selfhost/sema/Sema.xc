@@ -7889,6 +7889,16 @@ class Sema
                             spentParts.add((Object*)d);
                             continue;
                             }
+                        // A category that arrived through an INTERFACE is another
+                        // module's (2026-11-01: its final methods, called
+                        // directly): nothing of it is this compilation's to number
+                        // or anchor. As the reference.
+                        if (d.hasFlag((u32)NF_EXTERNAL))
+                            {
+                            mergeCategory(host, d);
+                            spentParts.add((Object*)d);
+                            continue;
+                            }
                         for (u32 mj = (u32)0; mj < d.kidCount(); mj = mj + (u32)1)
                             {
                             Node* nm = d.kid(mj);

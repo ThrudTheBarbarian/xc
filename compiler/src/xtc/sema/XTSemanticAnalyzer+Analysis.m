@@ -176,6 +176,16 @@
                         [spentParts addObject:cls];
                         continue;
                         }
+                    // A category that arrived through an INTERFACE is another
+                    // module's (2026-11-01: its final methods, called directly):
+                    // nothing of it is this compilation's to number or anchor.
+                    if (cls.isExternal)
+                        {
+                        for (XTMethodDeclNode* m in cls.methods)
+                            [prev appendSynthesisedMethod:m];
+                        [spentParts addObject:cls];
+                        continue;
+                        }
                     for (XTMethodDeclNode* m in cls.methods)
                         m.importedCategoryHost = cls.className;
                     // §4.3b: the category NAMES on each host feed the owner

@@ -168,6 +168,7 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
                      defines:(NSArray<NSString *> *)defines {
     if (!program) return nil;
     NSMutableArray *classes   = [NSMutableArray array];
+    NSMutableArray *categories = [NSMutableArray array]; // methods added to imported classes
     NSMutableArray *protocols = [NSMutableArray array];
     NSMutableArray *enums     = [NSMutableArray array];
     NSMutableArray *structs   = [NSMutableArray array];
@@ -211,7 +212,25 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
             // method list, where a client would read them as plain methods
             // and direct-call the base body past every override (§4.3b).
             // A client that wants the type imports the library that owns it.
-            if (c.isExternal) continue;
+            if (c.isExternal) {
+                // …but what THIS module added to it is (2026-11-01): a
+                // category's `final` and `static` methods, which no client can
+                // override and which therefore need no chain slot — a client
+                // calls their symbols directly, as this module does. A
+                // category method that can be overridden stays private to the
+                // module, as before: its chain shape is not in the interface.
+                NSMutableArray *added = [NSMutableArray array];
+                for (XTMethodDeclNode *m in c.methods) {
+                    if (![m.importedCategoryHost isEqualToString:c.className]) continue;
+                    if (!m.body || !(m.isFinal || m.isStatic)) continue;
+                    NSMutableDictionary *md = [[self dictForMethod:m inClass:c.className] mutableCopy];
+                    md[@"final"] = @YES;
+                    [added addObject:md];
+                }
+                if (added.count)
+                    [categories addObject:@{ @"host": c.className ?: @"", @"methods": added }];
+                continue;
+            }
             // A COMPILER-GENERATED class: `BlkImpl$N`, the `Blk$…` shapes.
             // `$` is the hex-literal prefix in this language, so it cannot
             // appear in a name anybody wrote — the test is exact, not a
@@ -448,6 +467,13 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
                             @"methodSlots":   prunedMethodSlots,
                             @"ambientSlots":  ambientSlots,
                             @"cImports":      cImports      ?: @[] };
+    // Categories on imported classes, only when there are any, so an
+    // interface without them reads exactly as before.
+    if (categories.count) {
+        NSMutableDictionary *withCats = [root mutableCopy];
+        withCats[@"categories"] = categories;
+        root = withCats;
+    }
     // The module's class table (`Object.newInstanceOfClass`). Only when there
     // is one, so an interface without it reads exactly as before.
     if (classTable.length) {

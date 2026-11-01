@@ -525,6 +525,9 @@ static NSUInteger sUnderPointer = 0;
     // §4.3b: a chain-dispatched method stays marked, so a client subclass
     // trying to override it is refused rather than silently mis-slotted.
     md.isChainMethod = [m[@"chain"] boolValue];
+    // A category's method on an imported class (2026-11-01): exported only
+    // when final, so a client calls its symbol directly and cannot override it.
+    md.isFinal = [m[@"final"] boolValue];
     // The serialised `symbol` is the full export Class$method; lowering re-adds
     // the `Class$` prefix, so store only the bare (possibly overload-mangled)
     // method part here.
@@ -767,6 +770,25 @@ static NSMutableSet<NSString*>* sUnresolved = nil;
         // Instantiated where it is defined: no static-init guard for it here.
         if ([c[@"instantiated"] boolValue])
             cd.usedByNew = YES;
+        [decls addObject:cd];
+        }
+    // What the module added to classes it imported (2026-11-01): each record
+    // becomes an external category on its host, merged by sema like any
+    // other — so the host's own module must be imported too, which sema says
+    // in so many words when it is not.
+    for (NSDictionary* g in (root[@"categories"] ?: @[]))
+        {
+        NSMutableArray<XTMethodDeclNode*>* methods = [NSMutableArray array];
+        for (NSDictionary* m in (g[@"methods"] ?: @[]))
+            [methods addObject:[self methodFrom:m tt:tt protos:protos location:loc]];
+        XTClassDeclNode* cd = [[XTClassDeclNode alloc] initWithName:(g[@"host"] ?: @"")
+                                                         parentName:nil
+                                                      protocolNames:@[]
+                                                      ivars:@[]
+                                                            methods:methods
+                                                           location:loc];
+        cd.categoryName = @"";
+        cd.isExternal = YES;
         [decls addObject:cd];
         }
     return decls;

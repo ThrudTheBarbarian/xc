@@ -327,6 +327,33 @@ class IfaceWrite
     }
 
     // ── one class (or protocol — same shape, the reader reads both) ──────
+    // The record of what this module's categories added to an imported class
+    // `c`: its final and static methods with a body here, each marked final.
+    static void categoryOf(String* cats, Node* c)
+    {
+        String* ms = new String();
+        for (u32 i = (u32)0; i < c.kidCount(); i = i + (u32)1) {
+            Node* m = c.kid(i);
+            if (m == (Node*)0 || m.kind() != (u16)nkMethodDecl) continue;
+            if (m.importedCatHost() == (String*)0 || !m.importedCatHost().equals(IfaceWrite.nm(c.name()))) continue;
+            if (!IfaceWrite.hasBody(m)) continue;
+            if (!m.hasFlag((u32)NF_FINAL) && !m.hasFlag((u32)NF_STATIC)) continue;
+            if (ms.byteLength() > (u32)0) ms.appendCString(", ");
+            ms.appendCString("{\"final\": true, ");
+            String* one = new String();
+            IfaceWrite.method(one, m, c.name());
+            // method() writes a whole record; "final" goes in after its brace.
+            ms.append(one.substringFromByte((u32)1));
+        }
+        if (ms.byteLength() == (u32)0) return;
+        if (cats.byteLength() > (u32)0) cats.appendCString(", ");
+        cats.appendCString("{");
+        IfaceWrite.kv(cats, "host", IfaceWrite.nm(c.name()), true);
+        cats.appendCString("\"methods\": [");
+        cats.append(ms);
+        cats.appendCString("]}");
+    }
+
     static void classDecl(String* out, Node* c, bool wantIvars)
     {
         out.appendCString("{");
@@ -574,6 +601,7 @@ class IfaceWrite
         Array* keptDecls  = new Array();     // the class NODES, for their slots
         Array* keptProtos = new Array();
 
+        String* cats = new String();   // the `categories` records, comma-joined
         out.appendCString("\"classes\": [");
         bool first = true;
         for (u32 i = (u32)0; program != (Node*)0 && i < program.kidCount(); i = i + (u32)1) {
@@ -582,7 +610,15 @@ class IfaceWrite
             // Arrived through an IMPORT: it belongs to the library that owns
             // it. Re-exporting collides with that library's own record in any
             // client importing both.
-            if (d.hasFlag((u32)NF_EXTERNAL)) continue;
+            if (d.hasFlag((u32)NF_EXTERNAL)) {
+                // …but what THIS module added to it is (2026-11-01): a
+                // category's `final` and `static` methods, which no client can
+                // override and so need no chain slot — a client calls their
+                // symbols directly, as this module does. One that can be
+                // overridden stays private: its chain shape is not in here.
+                IfaceWrite.categoryOf(cats, d);
+                continue;
+            }
             if (IfaceWrite.ambient(d, prelude)) continue;
             if (!first) out.appendCString(",\n  ");
             first = false;
@@ -976,6 +1012,13 @@ class IfaceWrite
             out.appendFormat("\"%s\"", IfaceWrite.esc((String*)cImports.get(i)).cString());
         }
         out.appendCString("]");
+        // Categories on imported classes, only when there are any, so an
+        // interface without them reads exactly as before.
+        if (cats.byteLength() > (u32)0) {
+            out.appendCString(", \"categories\": [");
+            out.append(cats);
+            out.appendCString("]");
+        }
         if (classTable != (String*)0 && classTable.byteLength() > (u32)0)
             out.appendFormat(", \"classTable\": \"%s\"", IfaceWrite.esc(classTable).cString());
         if (stdImports != (Array*)0 && stdImports.count() > (u32)0) {

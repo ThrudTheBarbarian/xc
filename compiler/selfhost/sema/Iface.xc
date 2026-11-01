@@ -954,6 +954,7 @@ class JsonVal
         im.readEnums(root.member((u8*)"enums"));
         im.readStructs(root.member((u8*)"structs"));
         im.readClasses(root.member((u8*)"classes"));
+        im.readCategories(root.member((u8*)"categories"));
         im.readProtocols(root.member((u8*)"protocols"));
         im.readFunctions(root.member((u8*)"functions"));
         im.readSlots(root);
@@ -977,6 +978,10 @@ class JsonVal
             md.addFlag((u32)NF_OPTIONAL);
         if (m.memberBool((u8*)"chain"))
             md.addFlag((u32)NF_CHAINM);
+        // A category's method on an imported class (2026-11-01): exported only
+        // when final, so a client calls its symbol directly and cannot override it.
+        if (m.memberBool((u8*)"final"))
+            md.addFlag((u32)NF_FINAL);
         md.addFlag((u32)NF_EXTERNAL);
         JsonVal* ps = m.member((u8*)"params");
         if (ps != 0)
@@ -1036,6 +1041,30 @@ class JsonVal
                     }
                 }
             JsonVal* ms = c.member((u8*)"methods");
+            if (ms != 0)
+                for (u32 j = (u32)0; j < ms.count(); j = j + (u32)1)
+                    cd.add(methodNode(ms.at(j)));
+            _decls.add((Object*)cd);
+            }
+        }
+
+    // What the module added to classes it imported (2026-11-01): each record
+    // becomes an external category on its host, merged by sema like any other
+    // — so the host's own module must be imported too, which sema says when it
+    // is not. As the reference.
+    void readCategories(JsonVal* gs)
+        {
+        if (gs == 0)
+            return;
+        for (u32 i = (u32)0; i < gs.count(); i = i + (u32)1)
+            {
+            JsonVal* g = gs.at(i);
+            Node* cd = Node.withName((u16)nkClassDecl, g.memberStr((u8*)"host"));
+            cd.setOp(String.withCString("-"));
+            cd.setExtra(String.withCString("-"));
+            cd.setCategory(String.withCString(""));
+            cd.addFlag((u32)NF_EXTERNAL);
+            JsonVal* ms = g.member((u8*)"methods");
             if (ms != 0)
                 for (u32 j = (u32)0; j < ms.count(); j = j + (u32)1)
                     cd.add(methodNode(ms.at(j)));
