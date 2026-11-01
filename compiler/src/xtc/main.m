@@ -207,275 +207,9 @@ static NSString *renameArm9MainSymbol(NSString *asmText) {
     return [out componentsJoinedByString:@"\n"];
 }
 
-// Host runtime stub the arm64 Stdio/Math expect (console primitive, float
-// formatters, libm wrappers) plus a C `main` calling the renamed xtc entry.
-// The ARC/heap helpers (`_xtc_new_<T>`, `_xtc_dealloc`, weak slots, bank) are
-// program-specific, so they're synthesised from the symbols the generated asm
-// actually references — mirroring the corpus harness's host stub, so a program
-// that uses `new`/containers/ARC links and runs end-to-end. `asmText` is the
-// (already main-renamed) assembly. Unused float/libm helpers are harmless.
-static NSString *arm64StubSourceEx(NSString *asmText, BOOL forLibrary) {
-    NSMutableString *s = [NSMutableString stringWithString:
-        @"#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <math.h>\n"];
-    // An executable wraps the program's `xt_main` in a real `main`; a shared
-    // library has no entry point, so it omits both (a `main` referencing a
-    // non-existent `xt_main` would leave an undefined symbol in the dylib).
-    // xtc's main() returns an i32 exit code (a void main is normalised to
-    // return 0), so pass it straight through as the process exit status.
-    if (!forLibrary) {
-        [s appendString:
-            @"extern int xt_main(void);\n"
-            "int main(void){ return xt_main(); }\n"];
-    }
-    [s appendString:
-        @"void _putc(uint8_t c){ putchar((int)c); }\n"
-        "static void _xtc_truncf(double v,uint8_t p){char b[64];snprintf(b,sizeof b,\"%.*f\",(int)(p+1),v);size_t L=strlen(b);if(L)b[L-1]=0;fputs(b,stdout);}\n"
-        "void _xtc_pf(float f){printf(\"%.6f\",(double)f);}\n"
-        "void _xtc_pd(double d){printf(\"%.10f\",d);}\n"
-        "void _xtc_pfp(float f,uint8_t p){ if(!p)printf(\"%.6f\",(double)f); else _xtc_truncf((double)f,p);}\n"
-        "void _xtc_pdp(double d,uint8_t p){ if(!p)printf(\"%.10f\",d); else _xtc_truncf(d,p);}\n"
-        "float  _xm_sqrtf(float x){return sqrtf(x);} double _xm_sqrt(double x){return sqrt(x);}\n"
-        "float  _xm_sinf(float x){return sinf(x);} double _xm_sin(double x){return sin(x);}\n"
-        "float  _xm_cosf(float x){return cosf(x);} double _xm_cos(double x){return cos(x);}\n"
-        "float  _xm_tanf(float x){return tanf(x);} double _xm_tan(double x){return tan(x);}\n"
-        "float  _xm_atanf(float x){return atanf(x);} double _xm_atan(double x){return atan(x);}\n"
-        "float  _xm_lnf(float x){return logf(x);} double _xm_ln(double x){return log(x);}\n"
-        "float  _xm_expf(float x){return expf(x);} double _xm_exp(double x){return exp(x);}\n"
-        "float  _xm_powf(float a,float b){return powf(a,b);} double _xm_pow(double a,double b){return pow(a,b);}\n"];
-    if (!asmText) return s;
-
-    // `.length` of a runtime-sized heap array (private:docs/bugs/045): the count from
-    // the allocation header this stub's allocators write (u64 at payload-26).
-    if ([asmText containsString:@"_xtc_count"]) {
-        [s appendString:
-            @"unsigned long _xtc_count(void*o){return *(unsigned long*)((uint8_t*)o-26);}\n"];
-    }
-    // par's runtime sizes a captured pointer from the page-aligned block it
-    // points into (rt.c keeps a registry of them). This stub has no registry:
-    // a pointer that IS a `simd:` block's start answers from the header, as
-    // the shipped runtime did before the registry; any other pointer is in no
-    // block. Mirrored byte for byte in the port (External.xc).
-    if ([asmText containsString:@"_xtc_simd_"]) {
-        [s appendString:
-            @"void *_xtc_simd_base(void*p){uint8_t*q=(uint8_t*)p;return (q&&((unsigned long)q&16383UL)==0&&*(uint32_t*)(q-38)==0x58544F43U)?p:0;}\n"
-            @"long _xtc_simd_span(void*p){return _xtc_simd_base(p)?(long)(*(unsigned long*)((uint8_t*)p-34)**(unsigned long*)((uint8_t*)p-26)):-1;}\n"];
-    }
-    // Per-class / per-type heap allocators, one per `_xtc_new_<T>` the asm calls.
-    // Object header [stride:8][count:8][dealloc-fnptr:8][refcount:1]; the returned
-    // pointer is base+25, refcount at obj-1 (matching the backend's [obj,#-1]).
-    NSRegularExpression *re = [NSRegularExpression
-        regularExpressionWithPattern:@"__xtc_new_([A-Za-z_][A-Za-z0-9_]*)" options:0 error:NULL];
-    NSMutableSet<NSString *> *seen = [NSMutableSet set];
-    for (NSTextCheckingResult *m in [re matchesInString:asmText options:0
-                                                  range:NSMakeRange(0, asmText.length)]) {
-        NSString *suffix = [asmText substringWithRange:[m rangeAtIndex:1]];
-        if ([seen containsObject:suffix]) continue;
-        [seen addObject:suffix];
-        // `simd:` — `new T[n]` into a page-aligned pointer (par-blocks.md): the
-        // primitive helper again, but the PAYLOAD lands on a 16 KB page so a
-        // unified-memory GPU wraps it in place with no copy. The header sits at
-        // payload-38 as any block's (so .length and release read it unchanged),
-        // the allocator's own base is kept 8 bytes before it, and a distinct
-        // magic (0x58544F43) tells _xtc_dealloc to free that base.
-        if ([suffix hasPrefix:@"simd_"] && XTIRIsPrimitiveElemName([suffix substringFromIndex:5])) {
-            NSString *elem = [suffix substringFromIndex:5];
-            NSDictionary<NSString *, NSNumber *> *simdStride = @{
-                @"u8": @1, @"i8": @1, @"bool": @1,
-                @"u16": @2, @"i16": @2,
-                @"u32": @4, @"i32": @4, @"float": @4,
-                @"i64": @8, @"u64": @8,
-                @"double": @8, @"pointer": @8, @"string": @8,
-            };
-            NSUInteger sst = simdStride[elem] ? simdStride[elem].unsignedIntegerValue : 8;
-            [s appendFormat:
-                @"void *_xtc_new_simd_%@(unsigned long n){unsigned long b=n*%luUL; if(b<256)b=256;b=(b+16383UL)&~16383UL;"
-                @"uint8_t*raw=(uint8_t*)calloc(1,b+38+16384+8);"
-                @"if(!raw){fprintf(stderr,\"xcc: out of memory (%%lu elements)\\n\",n);abort();}"
-                @"uint8_t*q=(uint8_t*)(((unsigned long)(raw+46)+16383UL)&~16383UL);uint8_t*p=q-38;"
-                @"*(uint32_t*)(p+0)=0x58544F43U;*(unsigned long*)(p+4)=%luUL;*(unsigned long*)(p+12)=n;"
-                @"*(void(**)(void*))(p+20)=0;*(void**)(p+28)=0;*(uint16_t*)(p+36)=1;*(void**)(p-8)=raw;return q;}\n",
-                elem, (unsigned long)sst, (unsigned long)sst];
-            continue;
-        }
-        if (XTIRIsPrimitiveElemName(suffix)) {
-            // One element is its own WIDTH, not eight. Every primitive array
-            // allocated 8 bytes per element — an 8x waste that also hit the
-            // size ceiling below eight times sooner than the element count
-            // suggested.
-            NSDictionary<NSString *, NSNumber *> *primStride = @{
-                @"u8": @1, @"i8": @1, @"bool": @1,
-                @"u16": @2, @"i16": @2,
-                @"u32": @4, @"i32": @4, @"float": @4,
-                @"i64": @8, @"u64": @8,
-                @"double": @8, @"pointer": @8, @"string": @8,
-            };
-            NSUInteger st = primStride[suffix] ? primStride[suffix].unsignedIntegerValue : 8;
-            [s appendFormat:
-                @"void *_xtc_new_%@(unsigned long n){unsigned long b=n*%luUL; if(b<256)b=256;"
-                @"uint8_t*p=(uint8_t*)calloc(1,b+38);"
-                @"if(!p){fprintf(stderr,\"xcc: out of memory (%%lu elements)\\n\",n);abort();}"
-                @"*(uint32_t*)(p+0)=0x58544F42U;*(unsigned long*)(p+4)=%luUL;*(unsigned long*)(p+12)=n;"
-                @"*(void(**)(void*))(p+20)=0;*(void**)(p+28)=0;*(uint16_t*)(p+36)=1;return p+38;}\n",
-                suffix, (unsigned long)st, (unsigned long)st];
-            continue;
-        }
-        BOOL hasDealloc = [asmText containsString:
-            [NSString stringWithFormat:@"_%@$dealloc:", suffix]];
-        if (hasDealloc) {
-            [s appendFormat:
-                @"extern void %@$dealloc(void*);\n"
-                @"void *_xtc_new_%@(unsigned long count,unsigned long stride){"
-                @"unsigned long b=count*stride; if(b<256)b=256;"
-                @"uint8_t*p=(uint8_t*)calloc(1,b+38);"
-            @"if(!p){fprintf(stderr,\"xcc: out of memory (%%lu x %%lu bytes)\\n\",count,stride);abort();}"
-            @"*(uint32_t*)(p+0)=0x58544F42U;*(unsigned long*)(p+4)=stride;*(unsigned long*)(p+12)=count;"
-                @"*(void(**)(void*))(p+20)=(void(*)(void*))&%@$dealloc;*(void**)(p+28)=0;*(uint16_t*)(p+36)=1;return p+38;}\n",
-                suffix, suffix, suffix];
-        } else {
-            [s appendFormat:
-                @"void *_xtc_new_%@(unsigned long count,unsigned long stride){"
-                @"unsigned long b=count*stride; if(b<256)b=256;"
-                @"uint8_t*p=(uint8_t*)calloc(1,b+38);"
-            @"if(!p){fprintf(stderr,\"xcc: out of memory (%%lu x %%lu bytes)\\n\",count,stride);abort();}"
-            @"*(uint32_t*)(p+0)=0x58544F42U;*(unsigned long*)(p+4)=stride;*(unsigned long*)(p+12)=count;"
-                @"*(void(**)(void*))(p+20)=0;*(void**)(p+28)=0;*(uint16_t*)(p+36)=1;return p+38;}\n", suffix];
-        }
-    }
-    // B1: the single generic class allocator (see arm9StubSource). `new T` lowers
-    // to `_xtc_alloc(count, stride, &T$dealloc)` — one allocator for every class,
-    // dealloc fnptr passed by the caller. Same header the per-class version wrote.
-    if ([asmText containsString:@"__xtc_alloc"]) {
-        [s appendString:
-            @"void *_xtc_alloc(unsigned long count,unsigned long stride,void(*dealloc)(void*)){"
-            @"unsigned long b=count*stride; if(b<256)b=256;"
-            @"uint8_t*p=(uint8_t*)calloc(1,b+38);"
-            @"if(!p){fprintf(stderr,\"xcc: out of memory (%lu x %lu bytes)\\n\",count,stride);abort();}"
-            @"*(uint32_t*)(p+0)=0x58544F42U;*(unsigned long*)(p+4)=stride;*(unsigned long*)(p+12)=count;"
-            @"*(void(**)(void*))(p+20)=dealloc;*(void**)(p+28)=0;*(uint16_t*)(p+36)=1;return p+38;}\n"];
-    }
-    // ALWAYS on, for the three backends that can be linked as multiple modules.
-    // The lazy-link gate used to ask "does MY module reference _xtc_weak_*?" — but
-    // that is the wrong question. A LIBRARY can register a weak reference to an
-    // object the APPLICATION allocated (`b.setAction(&obj.method)` — the slot lives
-    // in the lib, the object in the app), and then the app's _xtc_dealloc, seeing no
-    // weak use of its own, would free the object WITHOUT zeroing the lib's slot,
-    // leaving it dangling. The only thing that knows whether an object is weakly
-    // referenced is the object's own header, so every dealloc must ask it.
-    //
-    // The cost is one null test per dealloc (weak_head == 0 for the overwhelming
-    // majority of objects) plus ~40 lines of runtime the linker keeps. On a hosted
-    // target that is nothing. The 6502's gate stays as it is — it has no dynamic
-    // linking, so its module IS the whole program, and there the saving is real.
-    BOOL usesWeak = YES;
-    if ([asmText containsString:@"__xtc_dealloc"]) {
-        // When the program uses weak refs, zero every weak slot pointing at
-        // the dying object BEFORE running its dealloc / freeing it, so weak
-        // back-pointers read nil rather than dangling (private:docs/bugs/011 #6).
-        [s appendString:usesWeak ? @"void _xtc_weak_zero_for(void*);\n" : @""];
-        [s appendString:
-            @"void _xtc_dealloc(void *o){"];
-        if (usesWeak) [s appendString:@"_xtc_weak_zero_for(o);"];
-        [s appendString:
-            @"uint8_t*base=(uint8_t*)o-38;"
-            @"unsigned long stride=*(unsigned long*)(base+4);unsigned long count=*(unsigned long*)(base+12);"
-            @"void(*d)(void*)=*(void(**)(void*))(base+20);"
-            // Non-re-entrant: bump the refcount (u16 @ obj-2) to a high sentinel
-            // before running dealloc, so a balanced retain/release inside the body
-            // (the self-retain bracket a method keeps around an opaque call) can't
-            // fall back to 0 and re-dispatch dealloc on the object being freed.
-            @"if(d){*(unsigned short*)((uint8_t*)o-2)=0x8000u;"
-            // A `simd:` block (magic 0x58544F43, _xtc_new_simd_<T>) keeps its
-            // allocator base 8 bytes before the header: free that, not the header.
-            @"for(unsigned long i=0;i<count;i++)d((uint8_t*)o+i*stride);}"
-            @"if(*(uint32_t*)(base+0)==0x58544F43U)free(*(void**)(base-8));else free(base);}\n"];
-    }
-    if (usesWeak) {
-        // Real weak side-table: register records (obj → slot-address) so the
-        // pointee's dealloc can zero `slot`. The lowering already stored the
-        // pointer into the slot, so register/unregister only touch the
-        // table; zero_for nulls the slots and clears their entries.
-        [s appendString:
-            // Intrusive doubly-linked list — no table, no cap, no scan.
-            // See private:docs/Design/weak-refs-intrusive.md.
-            //
-            //   slot[-2] = pprev   slot[-1] = next   slot[0] = referent
-            //   obj's chain head lives in its header at obj-10.
-            //
-            // `pprev` is the ADDRESS OF THE POINTER THAT POINTS AT THIS SLOT (the
-            // Linux hlist idiom), not the previous slot. Two things fall out, and
-            // both are load-bearing:
-            //
-            //   - unlink is O(1) and never needs the object. A first attempt
-            //     recovered it by reading *slot — which is fine for a weak
-            //     pointer, but a WIDENED `^` holds a FUNCTION pointer there, so it
-            //     dereferenced `.text - 10` as an object header and crashed.
-            //   - `pprev != 0` is an unambiguous "am I linked?" test. With a plain
-            //     prev pointer, prev==0 means EITHER unlinked OR head-of-chain, and
-            //     unregistering an unlinked slot would corrupt whatever it aliased.
-            @"#define _XT_WH(o) (*(void***)((uint8_t*)(o)-10))\n"
-            // Threading: the intrusive list is shared mutable state, so every
-            // splice runs under the runtime lock (libxt.c's _xt_rt_lock, a
-            // no-op until the program's first Thread.spawn). The inner
-            // `_xt_weak_unreg` is the unlocked body, so register can unlink and
-            // relink without releasing the lock in between.
-            // private:docs/Design/threading.md §4.4.
-            @"void _xt_rt_lock(void); void _xt_rt_unlock(void);\n"
-            @"static void _xt_weak_unreg(void **slot){"
-            @"void ***pp=(void***)slot[-2]; if(!pp) return;"        // not linked
-            @"void **nx=(void**)slot[-1];"
-            @"*pp=nx; if(nx) nx[-2]=(void*)pp;"
-            @"slot[-2]=0; slot[-1]=0;}\n"
-            @"void _xtc_weak_unregister(void **slot){"
-            @"_xt_rt_lock(); _xt_weak_unreg(slot); _xt_rt_unlock();}\n"
-            @"void _xtc_weak_register(void **slot,void *obj){"
-            @"_xt_rt_lock();"
-            @"_xt_weak_unreg(slot);"                                // drop any prior link
-            @"if(!obj) { _xt_rt_unlock(); return; }"                // nothing to track
-            // NOT-AN-OBJECT GUARD. `obj` here is the RECV word of a `^`, and for a
-            // WIDENED `^` that word is a FUNCTION POINTER, not an object. The IR
-            // emits a compare against __bm_tramp_<sig> to catch that — but a .so
-            // has its OWN copy of the trampoline, and the loader binds a defined
-            // symbol to the module that defines it (no interposition), so a `^`
-            // widened in the app and stored by the library FAILS the library's
-            // compare. We would then take the app's function pointer for an object
-            // and write the chain head to *(void***)(fn - N) — into .text. That is
-            // a real DATA-ABORT, reproduced on the XTOS loader, not a theory.
-            //
-            // The magic makes the test value-based instead of address-based, so it
-            // cannot be fooled by a foreign module's trampoline, a stale `^`, or
-            // any other non-object. Failing it means "not one of ours" — skip.
-            // A `simd:` block carries magic 0x58544F43 (see _xtc_new_simd_<T>).
-            @"if(*(uint32_t*)((uint8_t*)obj-38)!=0x58544F42U&&*(uint32_t*)((uint8_t*)obj-38)!=0x58544F43U) { _xt_rt_unlock(); return; }"
-            @"void **nx=_XT_WH(obj);"
-            @"slot[-2]=(void*)&_XT_WH(obj); slot[-1]=(void*)nx;"
-            @"if(nx) nx[-2]=(void*)&slot[-1];"
-            @"_XT_WH(obj)=slot; _xt_rt_unlock();}\n"
-            @"void *_xtc_weak_load(void **slot){return *slot;}\n"
-            @"void _xtc_weak_zero_for(void *obj){if(!obj)return;"
-            @"_xt_rt_lock();"
-            @"void **s=_XT_WH(obj);"                                // no weak refs -> one test
-            @"while(s){void **nx=(void**)s[-1];"
-            @"*s=0; s[-2]=0; s[-1]=0; s=nx;}"
-            @"_XT_WH(obj)=0; _xt_rt_unlock();}\n"];
-    }
-    if ([asmText containsString:@"__xtc_bank"]) {
-        [s appendString:
-            @"static void *_xtc_bank_regions[3][256]={{0}};\n"
-            @"void *_xtc_bank(uint8_t type,uint8_t idx){if(type>1)return 0;"
-            @"if(!_xtc_bank_regions[type][idx])_xtc_bank_regions[type][idx]=calloc(1,12288);"
-            @"return _xtc_bank_regions[type][idx];}\n"];
-    }
-    return s;
-}
-
-// The executable form (with the `main`/`xt_main` wrapper) — unchanged callers.
-static NSString *arm64StubSource(NSString *asmText) {
-    return arm64StubSourceEx(asmText, NO);
-}
-
 // Program-specific ARC/heap allocators for the arm9 target, synthesised from the
 // `_xtc_new_<T>` symbols the generated asm references (the A32 analogue of the
-// arm64 path above). Differences from arm64: ELF symbols are BARE (the C name
+// arm64 runtime). Differences from arm64: ELF symbols are BARE (the C name
 // `_xtc_new_X` is the symbol — no Mach-O `_` prefix, so the asm/regex use a
 // single underscore), and the object header uses 4-byte fields:
 //   [stride:u32 @0][count:u32 @4][dealloc-fnptr:u32 @8][pad @12][refcount:u16 @14]
@@ -1087,6 +821,9 @@ static BOOL x86SelfHostCanIgnoreLinkFlags(XTCommandLineOptions *opts) {
 }
 
 static NSString *arm64ClassAllocStubs(NSString *prog);   // defined below (shared exec/dylib)
+static int androidClangRefused(void);                     // defined below
+static NSArray<NSString *> *_Nullable arm64ClangRuntime(XTCommandLineOptions *opts, NSString *support,
+                                                        NSString *prog, BOOL forLibrary);
 
 // arm64 self-hosting is the DEFAULT: the in-house assembler + Mach-O writer +
 // ad-hoc signer produce the binary with no clang, no system as, no codesign.
@@ -1643,38 +1380,6 @@ static NSString *stripSymbolUnderscoreArm64(NSString *asm_) {
 // and a second copy of it would be free to drift from this one.
 
 
-// The NDK's aarch64-linux-android clang, discovered under $ANDROID_NDK_HOME /
-// $ANDROID_HOME/ndk/<ver>. Returns the newest per-API wrapper (API 24 — a broad
-// floor that still runs on the emulator), or nil with a diagnostic.
-static NSString *_Nullable androidNdkClangEx(NSString *_Nonnull *_Nullable ndkOut) {
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSMutableArray<NSString *> *ndks = [NSMutableArray array];
-    const char *nh = getenv("ANDROID_NDK_HOME");
-    if (nh && *nh) [ndks addObject:@(nh)];
-    for (NSString *var in @[@"ANDROID_HOME", @"ANDROID_SDK_ROOT"]) {
-        const char *v = getenv(var.UTF8String);
-        NSString *root = (v && *v) ? @(v)
-            : [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Android/sdk"];
-        NSString *nd = [root stringByAppendingPathComponent:@"ndk"];
-        for (NSString *e in [[fm contentsOfDirectoryAtPath:nd error:NULL]
-                             sortedArrayUsingSelector:@selector(compare:)])
-            [ndks addObject:[nd stringByAppendingPathComponent:e]];
-    }
-    for (NSString *ndk in [ndks reverseObjectEnumerator]) {   // newest first
-        NSString *tc = [ndk stringByAppendingPathComponent:@"toolchains/llvm/prebuilt"];
-        for (NSString *host in [fm contentsOfDirectoryAtPath:tc error:NULL]) {
-            NSString *cc = [tc stringByAppendingPathComponent:
-                [host stringByAppendingPathComponent:@"bin/aarch64-linux-android24-clang"]];
-            if ([fm isExecutableFileAtPath:cc]) { if (ndkOut) *ndkOut = ndk; return cc; }
-        }
-    }
-    fprintf(stderr, "xcc: error: Android NDK not found. Set $ANDROID_NDK_HOME (or "
-                    "$ANDROID_HOME with an ndk/<ver> under it).\n");
-    return nil;
-}
-
-static NSString *_Nullable androidNdkClang(void) { return androidNdkClangEx(NULL); }
-
 // The NativeActivity entry point lives in support/arm64/runtime/android-glue.c,
 // with a checked-in assembly translation beside it (glue-android.s, generated by
 // gen-glue-android.sh). The clang path compiles the .c; the in-house path
@@ -1934,30 +1639,8 @@ static int linkAndroidExecutable(const char *argv0, XTCommandLineOptions *opts,
         warnToolchainFallback(opts, "this android executable",
                               "the in-house link failed and XTC_ALLOW_CLANG_FALLBACK is set");
     }
-    NSString *cc = androidNdkClang();
-    if (!cc || !support) return 1;
-    NSString *libxt = [support stringByAppendingPathComponent:@"arm64/runtime/libxt.c"];
-    if (![fm fileExistsAtPath:libxt]) {
-        fprintf(stderr, "xcc: error: arm64 runtime not found at '%s'\n", libxt.UTF8String);
-        return 1;
-    }
-    NSString *asmText = [NSString stringWithContentsOfFile:asmPath encoding:NSUTF8StringEncoding error:NULL];
-    // Same rename the macOS path does: the user's `main` becomes `xt_main`, and
-    // the stub supplies the real `main` that wraps it (arg capture + exit code).
-    NSString *renamed = asmText ? renameMainSymbol(asmText) : @"";
-    NSString *elf = XTMachOToElfArm64(renamed);
-    NSString *elfPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-android.s"];
-    [elf writeToFile:elfPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
-    NSString *stubPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-android-stub.c"];
-    [arm64StubSource(renamed) writeToFile:stubPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
-    NSMutableArray<NSString *> *a = [@[cc, @"-fPIC", @"-pie", @"-O2",
-        elfPath, stubPath, libxt, @"-lm", @"-o", outPath] mutableCopy];
-    int rc = runChild(@"/usr/bin/env", a);
-    if (!opts.verbose) { [fm removeItemAtPath:stubPath error:NULL];
-                         [fm removeItemAtPath:elfPath error:NULL]; }
-    if (rc == 0 && !opts.quiet)
-        fprintf(stderr, "xcc: android aarch64 ELF -> '%s'  (adb push; run)\n", outPath.UTF8String);
-    return rc;
+    (void)fm; (void)neededLibs;
+    return androidClangRefused();
 }
 
 
@@ -2082,9 +1765,6 @@ static int linkAndroidApk(const char *argv0, XTCommandLineOptions *opts,
     // this compiler — which is what THE RULE asks for. The glue
     // and the runtime are checked in; only the CLANG FALLBACK below still wants
     // an NDK, and only when the in-house link is refused.
-    NSString *libxt = [support stringByAppendingPathComponent:@"arm64/runtime/libxt.c"];
-    NSString *glueC = [support stringByAppendingPathComponent:@"arm64/runtime/android-glue.c"];
-
     NSString *base  = [outPath.lastPathComponent stringByDeletingPathExtension];
     NSString *name  = androidSafeName(base);
     NSString *pkg   = [@"org.compile_xc." stringByAppendingString:name];
@@ -2141,20 +1821,7 @@ static int linkAndroidApk(const char *argv0, XTCommandLineOptions *opts,
         if (rc != 0 && !clangFallbackAllowed())
             return clangFallbackRefused("android in-house --emit-apk link");
     }
-    if (rc != 0) {
-        NSString *cc = androidNdkClang();
-        if (!cc) return 1;
-        elfPath = [tmp stringByAppendingPathComponent:@"xtc-android-pic.s"];
-        [XTMachOToElfArm64Ex(renamed, YES) writeToFile:elfPath atomically:YES
-                                            encoding:NSUTF8StringEncoding error:NULL];
-        stubPath = [tmp stringByAppendingPathComponent:@"xtc-android-libstub.c"];
-        [arm64StubSourceEx(renamed, YES) writeToFile:stubPath atomically:YES
-                                            encoding:NSUTF8StringEncoding error:NULL];
-        rc = runChild(@"/usr/bin/env", @[cc, @"-shared", @"-fPIC", @"-O2",
-            elfPath, stubPath, libxt, glueC,
-            @"-llog", @"-landroid", @"-lm", @"-o", soPath]);
-        if (rc != 0) return rc;
-    }
+    if (rc != 0) return androidClangRefused();
 
     // ── the package ───────────────────────────────────────────────────────
     // Built here rather than shelled out to aapt2 / zip / zipalign: an APK is
@@ -2410,22 +2077,15 @@ static int linkArm64Executable(const char *argv0, XTCommandLineOptions *opts,
                               "it links system libraries the in-house linker cannot yet resolve");
     }
 
-    NSString *libxt = [support stringByAppendingPathComponent:@"arm64/runtime/libxt.c"];
-    if (![fm fileExistsAtPath:libxt]) {
-        fprintf(stderr, "xcc: error: arm64 runtime not found at '%s'\n", libxt.UTF8String);
-        return 1;
-    }
+    // clang links the program against the same runtime as the in-house link,
+    // entered at crt-macos.s's _xtc_start (which calls the program's _main).
     NSString *asmText = [NSString stringWithContentsOfFile:asmPath
                                                   encoding:NSUTF8StringEncoding error:NULL];
-    NSString *renamed = asmText ? renameMainSymbol(asmText) : nil;
-    if (renamed)
-        [renamed writeToFile:asmPath atomically:YES
-                    encoding:NSUTF8StringEncoding error:NULL];
-    NSString *stubPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-stub.c"];
-    [arm64StubSource(renamed) writeToFile:stubPath atomically:YES
-                                 encoding:NSUTF8StringEncoding error:NULL];
+    NSArray<NSString *> *rtFiles = arm64ClangRuntime(opts, support, asmText, NO);
+    if (!rtFiles) return 1;
     NSMutableArray<NSString *> *a = [@[@"clang", @"-arch", @"arm64", @"-O2"] mutableCopy];
-    [a addObjectsFromArray:@[asmPath, stubPath, libxt]];
+    [a addObjectsFromArray:rtFiles];
+    [a addObjectsFromArray:@[asmPath, @"-Wl,-e,_xtc_start"]];
     // Link against every `#import <Lib>` dylib the front end recorded. Each is
     // an absolute path to a lib<name>.dylib; clang takes the path verbatim, and
     // an `@loader_path` rpath lets the produced binary find the dylib beside it
@@ -2445,7 +2105,6 @@ static int linkArm64Executable(const char *argv0, XTCommandLineOptions *opts,
     [a addObjectsFromArray:appendLinkerFlags(opts, NO)];   // -L/-l/-framework/-Xlinker/$XTC_LDFLAGS
     [a addObjectsFromArray:@[@"-o", outPath]];
     int rc = runChild(@"/usr/bin/env", a);
-    if (!opts.verbose) [fm removeItemAtPath:stubPath error:NULL];
     if (rc == 0 && !opts.quiet)
         fprintf(stderr, "xcc: arm64 executable -> '%s'\n", outPath.UTF8String);
     if (rc == 0) return signIfRequested(opts, argv0, outPath);
@@ -2485,6 +2144,56 @@ static NSString *arm64ClassAllocStubs(NSString *prog) {
         else [out appendString:@"    mov x2, #0\n    b __xtc_alloc\n"];
     }
     return out;
+}
+
+// An android build through the NDK's clang (--no-self-host, or the fallback
+// after a failed in-house link): refused. That path compiled a generated C
+// runtime that no longer matched the object layout the back ends emit (the
+// 32-bit refcount, then the compact header); the in-house link, the default,
+// uses the generated rt-android.s. To come back the way the macOS path did
+// (arm64ClangRuntime), once a machine with the NDK can test it.
+static int androidClangRefused(void) {
+    fprintf(stderr, "xcc: error: android builds do not go through the NDK's clang at present: "
+                    "use the in-house link (the default, without --no-self-host)\n");
+    return 1;
+}
+
+// The runtime the in-house link uses, as clang's inputs: crt-macos.s (an
+// executable's entry, _xtc_start), rt-macos.s, a checked build's reporter, the
+// iOS shim, and the per-class allocators. Each is its own file: rt-macos.s
+// marks .subsections_via_symbols, and the program's branches to its own local
+// labels must not fall under it. One runtime for both links, so the clang path
+// cannot drift from the object layout the back ends emit (it had: the C stub it
+// used to generate still wrote the header from before the 32-bit refcount).
+// Nil, after saying why, when a piece is missing.
+static NSArray<NSString *> *_Nullable arm64ClangRuntime(XTCommandLineOptions *opts, NSString *support,
+                                                        NSString *prog, BOOL forLibrary) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSMutableArray<NSString *> *files = [NSMutableArray array];
+    NSMutableArray<NSString *> *want = [NSMutableArray array];
+    if (!forLibrary) [want addObject:@"arm64/runtime/crt-macos.s"];
+    [want addObject:@"arm64/runtime/rt-macos.s"];
+    if (opts.boundsReport)
+        [want addObject:[@"arm64/runtime" stringByAppendingPathComponent:opts.effectiveTarget.checkedRuntime]];
+    if (opts.applePlatform)
+        [want addObject:[opts.applePlatform isEqualToString:@"ios-sim"]
+                            ? @"ios/runtime/xtios-sim.s" : @"ios/runtime/xtios.s"];
+    for (NSString *rel in want) {
+        NSString *f = [support stringByAppendingPathComponent:rel];
+        if (![fm fileExistsAtPath:f]) {
+            fprintf(stderr, "xcc: error: the arm64 runtime piece %s is missing\n", f.UTF8String);
+            return nil;
+        }
+        [files addObject:f];
+    }
+    NSString *stubs = arm64ClassAllocStubs(prog);
+    if (stubs.length) {
+        NSString *sp = [xtcTempDir() stringByAppendingPathComponent:
+                        forLibrary ? @"xtc-lib-allocators.s" : @"xtc-allocators.s"];
+        [stubs writeToFile:sp atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+        [files addObject:sp];
+    }
+    return files;
 }
 
 // The x86-64 counterpart of arm64ClassAllocStubs: `new Class` lowers to a call
@@ -2636,12 +2345,25 @@ static int linkArm64Shared(const char *argv0, XTCommandLineOptions *opts,
             fprintf(stderr, "xcc: note: --self-host shared-lib tools missing, using clang\n");
     }
 
-    // The library's own ARC/heap/print runtime — same synthesised stub the
-    // executable links, minus the `main`/`xt_main` wrapper (a dylib has no
-    // entry point).
-    NSString *stubPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-lib-stub.c"];
-    [arm64StubSourceEx(asmText, YES) writeToFile:stubPath atomically:YES
-                                        encoding:NSUTF8StringEncoding error:NULL];
+    // The library carries its own copy of the runtime, as the in-house link
+    // gives it (rt-macos.s, no crt: a dylib has no entry point), and exports
+    // only its own .globl'd symbols, so the runtime's stay private to it.
+    NSString *support = resolveSupportRoot(argv0, opts);
+    if (!support) {
+        fprintf(stderr, "xcc: error: cannot locate support/ (set XTC_HOME) — "
+                "needed for the arm64 runtime\n");
+        return 1;
+    }
+    NSArray<NSString *> *rtFiles = arm64ClangRuntime(opts, support, asmText, YES);
+    if (!rtFiles) return 1;
+    NSMutableString *exportList = [NSMutableString string];
+    NSRegularExpression *globl = [NSRegularExpression
+        regularExpressionWithPattern:@"(?m)^\\s*\\.globl\\s+(\\S+)" options:0 error:NULL];
+    for (NSTextCheckingResult *m in [globl matchesInString:asmText ?: @"" options:0
+                                                     range:NSMakeRange(0, asmText.length)])
+        [exportList appendFormat:@"%@\n", [asmText substringWithRange:[m rangeAtIndex:1]]];
+    NSString *exportsListPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-lib-exports.txt"];
+    [exportList writeToFile:exportsListPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
 
     // Embed the interface JSON as a Mach-O section the importer reads back.
     // Section names are `SEGMENT,SECTION`, each ≤ 16 chars: `__XTC,__iface`.
@@ -2662,15 +2384,15 @@ static int linkArm64Shared(const char *argv0, XTCommandLineOptions *opts,
     // finds the dylib next to itself (an app links with -rpath @loader_path).
     [a addObjectsFromArray:@[@"-install_name",
         [@"@rpath/" stringByAppendingString:outPath.lastPathComponent]]];
-    [a addObjectsFromArray:@[asmPath, stubPath]];
+    [a addObjectsFromArray:rtFiles];
+    [a addObjectsFromArray:@[asmPath, [@"-Wl,-exported_symbols_list," stringByAppendingString:exportsListPath]]];
     if (ifaceAsmPath) [a addObject:ifaceAsmPath];
     [a addObjectsFromArray:appendLinkerFlags(opts, NO)];   // -L/-l/-framework/-Xlinker/$XTC_LDFLAGS
     [a addObjectsFromArray:@[@"-o", outPath]];
     int rc = runChild(@"/usr/bin/env", a);
-    if (!opts.verbose) [fm removeItemAtPath:stubPath error:NULL];
+    if (!opts.verbose) [fm removeItemAtPath:exportsListPath error:NULL];
     if (rc == 0 && !opts.quiet)
         fprintf(stderr, "xcc: arm64 shared library -> '%s'\n", outPath.UTF8String);
-    (void)argv0;
     return rc;
 }
 

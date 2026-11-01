@@ -5253,32 +5253,10 @@ void emitModule(DriverOptions* d, IRModule* mod)
 //
 // The in-house path is the default and needs nothing installed. This is the
 // opt-in the other way: the same compiler output handed to the platform's own
-// tools, for comparing a program's behaviour against them. The program's `main`
-// becomes `xt_main` and a generated C stub owns the real `main` and the
-// program-specific ARC/heap helpers; the vendor compiler builds the stub and
-// the checked-in C runtime beside the assembly.
-
-// `\b_main\b` → `_xt_main`, the reference's rename for the C stub's sake.
-String* renameMainForStub(String* asmText)
-{
-    String* out = new String();
-    u32 n = asmText.byteLength();
-    u32 i = (u32)0;
-    while (i < n) {
-        if (i + (u32)5 <= n && asmText.byteAt(i) == (u8)'_' && asmText.byteAt(i + (u32)1) == (u8)'m'
-            && asmText.byteAt(i + (u32)2) == (u8)'a' && asmText.byteAt(i + (u32)3) == (u8)'i'
-            && asmText.byteAt(i + (u32)4) == (u8)'n'
-            && (i == (u32)0 || !External.wordByte(asmText.byteAt(i - (u32)1)))
-            && (i + (u32)5 == n || !External.wordByte(asmText.byteAt(i + (u32)5)))) {
-            out.appendCString("_xt_main");
-            i = i + (u32)5;
-            continue;
-        }
-        out.appendByte(asmText.byteAt(i));
-        i = i + (u32)1;
-    }
-    return out;
-}
+// tools, for comparing a program's behaviour against them. On arm64 macOS clang
+// links it against the generated runtime the in-house link uses; on arm9 the
+// program's `main` becomes `xt_main` and a generated C stub owns the real
+// `main` and the program-specific ARC/heap helpers.
 
 String* supportFile(DriverOptions* d, string rel)
 {
@@ -5345,166 +5323,107 @@ void runOrDie(Array* argv, bool keep)
     }
 }
 
-// The NDK's aarch64-linux-android24-clang: $ANDROID_NDK_HOME, then every
-// ndk/<version> under $ANDROID_HOME and $ANDROID_SDK_ROOT (each defaulting to
-// ~/Library/Android/sdk), the newest tried first. 0 when there is none.
-String* androidNdkClang(void)
+// A support-tree file, sub/name, by path (for a vendor tool's command line).
+String* supportPath(DriverOptions* d, string sub, String* name)
 {
-    Array* ndks = new Array();
-    String* nh = Platform.env(String.withCString("ANDROID_NDK_HOME"));
-    if (nh != (String*)0 && nh.byteLength() > (u32)0) ndks.add((Object*)nh);
-    Array* vars = new Array();
-    vars.add((Object*)String.withCString("ANDROID_HOME"));
-    vars.add((Object*)String.withCString("ANDROID_SDK_ROOT"));
-    for (u32 v = (u32)0; v < vars.count(); v = v + (u32)1) {
-        String* root = Platform.env((String*)vars.get(v));
-        if (root == (String*)0 || root.byteLength() == (u32)0) {
-            root = String.withString(Platform.home());
-            root.appendCString("/Library/Android/sdk");
-        }
-        String* nd = String.withString(root);
-        nd.appendCString("/ndk");
-        String* cmd = String.withCString("ls -1 ");
-        cmd.append(External.quote(nd));
-        cmd.appendCString(" | LC_ALL=C sort");
-        Array* lines = External.captureAll(cmd).splitOnByte((u8)'\n');
-        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
-            String* e = ((String*)lines.get(i)).trimmed();
-            if (e.byteLength() == (u32)0) continue;
-            String* p = String.withString(nd);
-            p.appendByte((u8)'/');
-            p.append(e);
-            ndks.add((Object*)p);
-        }
-    }
-    u32 k = ndks.count();
-    while (k > (u32)0) {
-        k = k - (u32)1;
-        String* tc = String.withString((String*)ndks.get(k));
-        tc.appendCString("/toolchains/llvm/prebuilt");
-        String* cmd = String.withCString("ls -1 ");
-        cmd.append(External.quote(tc));
-        Array* hosts = External.captureAll(cmd).splitOnByte((u8)'\n');
-        for (u32 h = (u32)0; h < hosts.count(); h = h + (u32)1) {
-            String* host = ((String*)hosts.get(h)).trimmed();
-            if (host.byteLength() == (u32)0) continue;
-            String* cc = String.withString(tc);
-            cc.appendByte((u8)'/');
-            cc.append(host);
-            cc.appendCString("/bin/aarch64-linux-android24-clang");
-            if (Files.exists(cc)) return cc;
-        }
-    }
-    Stdio.printf("xcc: error: Android NDK not found. Set $ANDROID_NDK_HOME (or "
-                 "$ANDROID_HOME with an ndk/<ver> under it).\n");
-    return (String*)0;
+    String* root = supportRoot(d.fe());
+    if (root == (String*)0) return (String*)0;
+    String* p = String.withString(root);
+    p.appendByte((u8)'/');
+    p.appendCString(sub);
+    p.appendByte((u8)'/');
+    p.append(name);
+    return p;
 }
 
-// arm64 macOS, android and the APK through the vendor clang. False when this
-// shape has no external path and the in-house link should run instead.
+// arm64 macOS through the vendor clang. False when this shape has no external
+// path and the in-house link should run instead: a library, which links
+// in-house either way. Android is refused: its NDK path compiled a generated C
+// runtime that no longer matched the object layout the back ends emit (the
+// 32-bit refcount, then the compact header); it comes back the way the macOS
+// path did once a machine with the NDK can test it. As the reference.
 bool externalArm64(DriverOptions* d, String* prog)
 {
-    bool android = isAndroid(d);
-    // An android LIBRARY is linked in-house either way: there is no NDK path
-    // for it to switch to.
-    if (android && d.emitLib()) return false;
-    String* libxt = supportFile(d, "arm64/runtime/libxt.c");
-    if (libxt == (String*)0 || !Files.exists(libxt)) {
-        Stdio.printf("xcc: error: arm64 runtime not found at '%s'\n",
-                     libxt == (String*)0 ? "(no support tree)" : libxt.cString());
+    if (d.emitLib()) return false;
+    if (isAndroid(d)) {
+        Stdio.printf("xcc: error: android builds do not go through the NDK's clang at present: "
+                     "use the in-house link (the default, without --no-self-host)\n");
         Process.exit((i32)1); return true;
     }
     String* out = d.fe().output();
-    String* renamed = renameMainForStub(prog);
     bool keep = d.fe().verbose();
-
-    if (android && d.emitApk()) {
-        String* cc = androidNdkClang();
-        if (cc == (String*)0) { Process.exit((i32)1); return true; }
-        String* glueC = supportFile(d, "arm64/runtime/android-glue.c");
-        String* name = out.lastPathComponent().deletingPathExtension();
-        String* soname = String.withCString("lib");
-        soname.append(name); soname.appendCString(".so");
-        String* elfPath = External.tempPath("xtc-android-pic.s");
-        String* stubPath = External.tempPath("xtc-android-libstub.c");
-        String* soPath = External.tempPath("android-payload.so");
-        writeTempOrDie(elfPath, External.machoToElfArm64(renamed, true));
-        writeTempOrDie(stubPath, External.arm64StubSource(renamed, true));
-        Array* a = new Array();
-        a.add((Object*)cc);
-        a.add((Object*)String.withCString("-shared"));
-        a.add((Object*)String.withCString("-fPIC"));
-        a.add((Object*)String.withCString("-O2"));
-        a.add((Object*)elfPath); a.add((Object*)stubPath);
-        a.add((Object*)libxt);   a.add((Object*)glueC);
-        a.add((Object*)String.withCString("-llog"));
-        a.add((Object*)String.withCString("-landroid"));
-        a.add((Object*)String.withCString("-lm"));
-        a.add((Object*)String.withCString("-o")); a.add((Object*)soPath);
-        runOrDie(a, keep);
-        Array* so = fileBytes(soPath);
-        if (!keep) External.cleanup();
-        if (so == (Array*)0) {
-            Stdio.printf("xcc: error: cannot read the linked payload\n");
+    // clang links the program against the same runtime as the in-house link,
+    // entered at crt-macos.s's _xtc_start (which calls the program's _main).
+    // Each piece is its own file: rt-macos.s marks .subsections_via_symbols,
+    // and the program's branches to its own local labels must not fall under
+    // it. One runtime for both links, so this path cannot drift from the
+    // object layout (it had: the C stub it used to generate still wrote the
+    // header from before the 32-bit refcount).
+    TargetRow* row = d.targetRow();
+    Array* files = new Array();
+    files.add((Object*)supportPath(d, "arm64/runtime", row.crt()));
+    files.add((Object*)supportPath(d, "arm64/runtime", row.runtime()));
+    if (d.fe().boundsReport())
+        files.add((Object*)supportPath(d, "arm64/runtime", row.checkedRuntime()));
+    if (isIos(d))
+        files.add((Object*)supportPath(d, "ios/runtime",
+            String.withCString(d.arch().equals(String.withCString("ios-sim")) ? "xtios-sim.s" : "xtios.s")));
+    for (u32 i = (u32)0; i < files.count(); i = i + (u32)1) {
+        String* f = (String*)files.get(i);
+        if (f == (String*)0 || !Files.exists(f)) {
+            Stdio.printf("xcc: error: the arm64 runtime piece %s is missing\n",
+                         f == (String*)0 ? "(no support tree)" : f.cString());
             Process.exit((i32)1); return true;
         }
-        packageApk(d, name, soname, so);
-        return true;
     }
-
-    String* asmPath = External.tempPath(android ? "xtc-android.s" : "xtc-prog.s");
-    String* stubPath = External.tempPath(android ? "xtc-android-stub.c" : "xtc-stub.c");
-    writeTempOrDie(asmPath, android ? External.machoToElfArm64(renamed, false) : renamed);
-    writeTempOrDie(stubPath, External.arm64StubSource(renamed, false));
+    String* stubs = classAllocStubs(prog);
+    if (stubs.byteLength() > (u32)0) {
+        String* sp = External.tempPath("xtc-allocators.s");
+        writeTempOrDie(sp, stubs);
+        files.add((Object*)sp);
+    }
+    String* asmPath = External.tempPath("xtc-prog.s");
+    writeTempOrDie(asmPath, prog);
     Array* a = new Array();
-    if (android) {
-        String* cc = androidNdkClang();
-        if (cc == (String*)0) { Process.exit((i32)1); return true; }
-        a.add((Object*)cc);
-        a.add((Object*)String.withCString("-fPIC"));
-        a.add((Object*)String.withCString("-pie"));
-        a.add((Object*)String.withCString("-O2"));
-        a.add((Object*)asmPath); a.add((Object*)stubPath); a.add((Object*)libxt);
-        a.add((Object*)String.withCString("-lm"));
-    } else {
-        a.add((Object*)String.withCString("clang"));
-        a.add((Object*)String.withCString("-arch"));
-        a.add((Object*)String.withCString("arm64"));
-        a.add((Object*)String.withCString("-O2"));
-        a.add((Object*)asmPath); a.add((Object*)stubPath); a.add((Object*)libxt);
-        // Each `#import <Lib>` dylib by path, and an rpath to its directory so
-        // the program finds it at run time.
-        Array* nl = d.fe().neededLibs();
-        Array* rpaths = new Array();
-        for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
-            String* lib = (String*)nl.get(i);
-            if (lib.hasPrefix(String.withCString("framework:"))) {
-                a.add((Object*)String.withCString("-framework"));
-                a.add((Object*)lib.substringFromByte((u32)10));
-                continue;
-            }
-            a.add((Object*)lib);
-            String* dir = lib.deletingLastPathComponent();
-            bool seen = false;
-            for (u32 k = (u32)0; k < rpaths.count(); k = k + (u32)1)
-                if (((String*)rpaths.get(k)).equals(dir)) seen = true;
-            if (!seen && dir.byteLength() > (u32)0) rpaths.add((Object*)dir);
+    a.add((Object*)String.withCString("clang"));
+    a.add((Object*)String.withCString("-arch"));
+    a.add((Object*)String.withCString("arm64"));
+    a.add((Object*)String.withCString("-O2"));
+    for (u32 i = (u32)0; i < files.count(); i = i + (u32)1)
+        a.add(files.get(i));
+    a.add((Object*)asmPath);
+    a.add((Object*)String.withCString("-Wl,-e,_xtc_start"));
+    // Each `#import <Lib>` dylib by path, and an rpath to its directory so
+    // the program finds it at run time.
+    Array* nl = d.fe().neededLibs();
+    Array* rpaths = new Array();
+    for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
+        String* lib = (String*)nl.get(i);
+        if (lib.hasPrefix(String.withCString("framework:"))) {
+            a.add((Object*)String.withCString("-framework"));
+            a.add((Object*)lib.substringFromByte((u32)10));
+            continue;
         }
-        for (u32 k = (u32)0; k < rpaths.count(); k = k + (u32)1) {
-            a.add((Object*)String.withCString("-Wl,-rpath"));
-            String* r = String.withCString("-Wl,");
-            r.append((String*)rpaths.get(k));
-            a.add((Object*)r);
-        }
-        addLinkerFlags(d, a);
+        a.add((Object*)lib);
+        String* dir = lib.deletingLastPathComponent();
+        bool seen = false;
+        for (u32 k = (u32)0; k < rpaths.count(); k = k + (u32)1)
+            if (((String*)rpaths.get(k)).equals(dir)) seen = true;
+        if (!seen && dir.byteLength() > (u32)0) rpaths.add((Object*)dir);
     }
+    for (u32 k = (u32)0; k < rpaths.count(); k = k + (u32)1) {
+        a.add((Object*)String.withCString("-Wl,-rpath"));
+        String* r = String.withCString("-Wl,");
+        r.append((String*)rpaths.get(k));
+        a.add((Object*)r);
+    }
+    addLinkerFlags(d, a);
     a.add((Object*)String.withCString("-o")); a.add((Object*)out);
     runOrDie(a, keep);
     if (!keep) External.cleanup();
     if (!d.quiet())
-        Stdio.printf("xcc: %s -> '%s'\n",
-                     android ? "android aarch64 ELF" : "arm64 executable", out.cString());
-    if (!android) signIfRequested(d, out);
+        Stdio.printf("xcc: arm64 executable -> '%s'\n", out.cString());
+    signIfRequested(d, out);
     return true;
 }
 

@@ -57,6 +57,11 @@ Everything since 0.89.
   does.
 - `new C[n]`, for a class whose `init` takes arguments, called that `init` on
   the first element with no arguments.
+- `--no-self-host` on macOS links through clang against the same runtime as the
+  in-house link. It used to compile a C runtime the driver generated, which had
+  fallen behind the object layout: a program's reference count was read at a
+  different place from where it was kept. Android builds no longer go through
+  the NDK's clang: they link in-house, as they do by default.
 
 ## Version 0.89 — Raspberry Pi 5, and its GPU
 

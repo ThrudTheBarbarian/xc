@@ -5,15 +5,15 @@
 // The default path needs nothing installed: every target assembles, links and
 // (on macOS) signs in-house. `--no-self-host` is the opt-in the other way, for
 // checking a program against the platform toolchain: the host clang for arm64
-// macOS, the NDK clang for android, arm-none-eabi-gcc for arm9. What it needs
+// macOS, arm-none-eabi-gcc for arm9. What it needs
 // from this file:
 //
 //   * a way to run a program — `system()`, with every argument quoted, since
 //     xtc has no process-spawning primitive of its own;
-//   * the per-program C runtime stub each toolchain compiles beside the
-//     assembly (the ARC/heap helpers are program-specific, so they are
-//     generated from the symbols the assembly references);
-//   * the Mach-O-to-ELF assembly rewrite the NDK assembler needs.
+//   * the per-program C runtime stub arm-none-eabi-gcc compiles beside the
+//     assembly for arm9 (the ARC/heap helpers are program-specific, so they
+//     are generated from the symbols the assembly references). arm64 macOS
+//     hands clang the generated runtime the in-house link uses instead.
 //
 // Each generator mirrors its counterpart in the reference driver, so the two
 // drivers hand the vendor tools the same inputs.
@@ -208,150 +208,6 @@ class External
         return (u32)8;
     }
 
-    // The host runtime stub for arm64 (macOS, and android through the NDK):
-    // console and float primitives, the libm wrappers, the program's `main`
-    // around the renamed `xt_main` (not for a library), and the ARC/heap
-    // helpers the assembly references. `asmText` is already main-renamed.
-    static String* arm64StubSource(String* asmText, bool forLibrary)
-    {
-        String* s = String.withCString(
-            "#include <stdint.h>\n#include <stdio.h>\n#include <stdlib.h>\n#include <string.h>\n#include <math.h>\n");
-        if (!forLibrary)
-            s.appendCString("extern int xt_main(void);\nint main(void){ return xt_main(); }\n");
-        s.appendCString("void _putc(uint8_t c){ putchar((int)c); }\n");
-        s.appendCString("static void _xtc_truncf(double v,uint8_t p){char b[64];snprintf(b,sizeof b,\"%.*f\",(int)(p+1),v);size_t L=strlen(b);if(L)b[L-1]=0;fputs(b,stdout);}\n");
-        s.appendCString("void _xtc_pf(float f){printf(\"%.6f\",(double)f);}\n");
-        s.appendCString("void _xtc_pd(double d){printf(\"%.10f\",d);}\n");
-        s.appendCString("void _xtc_pfp(float f,uint8_t p){ if(!p)printf(\"%.6f\",(double)f); else _xtc_truncf((double)f,p);}\n");
-        s.appendCString("void _xtc_pdp(double d,uint8_t p){ if(!p)printf(\"%.10f\",d); else _xtc_truncf(d,p);}\n");
-        s.appendCString("float  _xm_sqrtf(float x){return sqrtf(x);} double _xm_sqrt(double x){return sqrt(x);}\n");
-        s.appendCString("float  _xm_sinf(float x){return sinf(x);} double _xm_sin(double x){return sin(x);}\n");
-        s.appendCString("float  _xm_cosf(float x){return cosf(x);} double _xm_cos(double x){return cos(x);}\n");
-        s.appendCString("float  _xm_tanf(float x){return tanf(x);} double _xm_tan(double x){return tan(x);}\n");
-        s.appendCString("float  _xm_atanf(float x){return atanf(x);} double _xm_atan(double x){return atan(x);}\n");
-        s.appendCString("float  _xm_lnf(float x){return logf(x);} double _xm_ln(double x){return log(x);}\n");
-        s.appendCString("float  _xm_expf(float x){return expf(x);} double _xm_exp(double x){return exp(x);}\n");
-        s.appendCString("float  _xm_powf(float a,float b){return powf(a,b);} double _xm_pow(double a,double b){return pow(a,b);}\n");
-        if (asmText == (String*)0) return s;
-
-        if (asmText.contains(String.withCString("_xtc_count")))
-            s.appendCString("unsigned long _xtc_count(void*o){return *(unsigned long*)((uint8_t*)o-26);}\n");
-        // par's runtime sizes a captured pointer from the page-aligned block
-        // it points into; this stub has no registry and answers from the
-        // header for a block's start only. As the reference, byte for byte.
-        if (asmText.contains(String.withCString("_xtc_simd_"))) {
-            s.appendCString("void *_xtc_simd_base(void*p){uint8_t*q=(uint8_t*)p;return (q&&((unsigned long)q&16383UL)==0&&*(uint32_t*)(q-38)==0x58544F43U)?p:0;}\n");
-            s.appendCString("long _xtc_simd_span(void*p){return _xtc_simd_base(p)?(long)(*(unsigned long*)((uint8_t*)p-34)**(unsigned long*)((uint8_t*)p-26)):-1;}\n");
-        }
-        Array* sufs = suffixesAfter(asmText, "__xtc_new_", false);
-        for (u32 i = (u32)0; i < sufs.count(); i = i + (u32)1) {
-            String* suf = (String*)sufs.get(i);
-            // `simd:` — `new T[n]` into a page-aligned pointer (par-blocks.md):
-            // the primitive helper again, but the PAYLOAD lands on a 16 KB page
-            // so a unified-memory GPU wraps it in place with no copy. The header
-            // sits at payload-38 as any block's (so .length and release read it
-            // unchanged), the allocator's own base is kept 8 bytes before it,
-            // and a distinct magic (0x58544F43) tells _xtc_dealloc to free that
-            // base. Mirrors the reference byte for byte.
-            if (suf.byteLength() > (u32)5 && suf.substringBytes((u32)0, (u32)5).equals(String.withCString("simd_"))
-                && isPrimitive(suf.substringBytes((u32)5, suf.byteLength() - (u32)5))) {
-                String* elem = suf.substringBytes((u32)5, suf.byteLength() - (u32)5);
-                u32 sst = primStride(elem);
-                s.appendCString("void *_xtc_new_simd_"); s.append(elem);
-                s.appendFormat("(unsigned long n){unsigned long b=n*%luUL; if(b<256)b=256;b=(b+16383UL)&~16383UL;", sst);
-                s.appendCString("uint8_t*raw=(uint8_t*)calloc(1,b+38+16384+8);");
-                s.appendCString("if(!raw){fprintf(stderr,\"xcc: out of memory (%lu elements)\\n\",n);abort();}");
-                s.appendCString("uint8_t*q=(uint8_t*)(((unsigned long)(raw+46)+16383UL)&~16383UL);uint8_t*p=q-38;");
-                s.appendFormat("*(uint32_t*)(p+0)=0x58544F43U;*(unsigned long*)(p+4)=%luUL;*(unsigned long*)(p+12)=n;", sst);
-                s.appendCString("*(void(**)(void*))(p+20)=0;*(void**)(p+28)=0;*(uint16_t*)(p+36)=1;*(void**)(p-8)=raw;return q;}\n");
-                continue;
-            }
-            if (isPrimitive(suf)) {
-                u32 st = primStride(suf);
-                s.appendCString("void *_xtc_new_"); s.append(suf);
-                s.appendFormat("(unsigned long n){unsigned long b=n*%luUL; if(b<256)b=256;", st);
-                s.appendCString("uint8_t*p=(uint8_t*)calloc(1,b+38);");
-                s.appendCString("if(!p){fprintf(stderr,\"xcc: out of memory (%lu elements)\\n\",n);abort();}");
-                s.appendFormat("*(uint32_t*)(p+0)=0x58544F42U;*(unsigned long*)(p+4)=%luUL;*(unsigned long*)(p+12)=n;", st);
-                s.appendCString("*(void(**)(void*))(p+20)=0;*(void**)(p+28)=0;*(uint16_t*)(p+36)=1;return p+38;}\n");
-                continue;
-            }
-            String* deName = String.withCString("_");
-            deName.append(suf); deName.appendCString("$dealloc:");
-            bool hasDe = asmText.contains(deName);
-            if (hasDe) { s.appendCString("extern void "); s.append(suf); s.appendCString("$dealloc(void*);\n"); }
-            s.appendCString("void *_xtc_new_"); s.append(suf);
-            s.appendCString("(unsigned long count,unsigned long stride){");
-            s.appendCString("unsigned long b=count*stride; if(b<256)b=256;");
-            s.appendCString("uint8_t*p=(uint8_t*)calloc(1,b+38);");
-            s.appendCString("if(!p){fprintf(stderr,\"xcc: out of memory (%lu x %lu bytes)\\n\",count,stride);abort();}");
-            s.appendCString("*(uint32_t*)(p+0)=0x58544F42U;*(unsigned long*)(p+4)=stride;*(unsigned long*)(p+12)=count;");
-            if (hasDe) {
-                s.appendCString("*(void(**)(void*))(p+20)=(void(*)(void*))&"); s.append(suf);
-                s.appendCString("$dealloc;");
-            } else {
-                s.appendCString("*(void(**)(void*))(p+20)=0;");
-            }
-            s.appendCString("*(void**)(p+28)=0;*(uint16_t*)(p+36)=1;return p+38;}\n");
-        }
-        if (asmText.contains(String.withCString("__xtc_alloc"))) {
-            s.appendCString("void *_xtc_alloc(unsigned long count,unsigned long stride,void(*dealloc)(void*)){");
-            s.appendCString("unsigned long b=count*stride; if(b<256)b=256;");
-            s.appendCString("uint8_t*p=(uint8_t*)calloc(1,b+38);");
-            s.appendCString("if(!p){fprintf(stderr,\"xcc: out of memory (%lu x %lu bytes)\\n\",count,stride);abort();}");
-            s.appendCString("*(uint32_t*)(p+0)=0x58544F42U;*(unsigned long*)(p+4)=stride;*(unsigned long*)(p+12)=count;");
-            s.appendCString("*(void(**)(void*))(p+20)=dealloc;*(void**)(p+28)=0;*(uint16_t*)(p+36)=1;return p+38;}\n");
-        }
-        // Weak references are always supported: a library can hold a weak
-        // slot to an object the application allocated, so every dealloc asks
-        // the object's own header.
-        if (asmText.contains(String.withCString("__xtc_dealloc"))) {
-            s.appendCString("void _xtc_weak_zero_for(void*);\n");
-            s.appendCString("void _xtc_dealloc(void *o){_xtc_weak_zero_for(o);");
-            s.appendCString("uint8_t*base=(uint8_t*)o-38;");
-            s.appendCString("unsigned long stride=*(unsigned long*)(base+4);unsigned long count=*(unsigned long*)(base+12);");
-            s.appendCString("void(*d)(void*)=*(void(**)(void*))(base+20);");
-            s.appendCString("if(d){*(unsigned short*)((uint8_t*)o-2)=0x8000u;");
-            // A `simd:` block (magic 0x58544F43, _xtc_new_simd_<T>) keeps its
-            // allocator base 8 bytes before the header: free that, not the header.
-            s.appendCString("for(unsigned long i=0;i<count;i++)d((uint8_t*)o+i*stride);}");
-            s.appendCString("if(*(uint32_t*)(base+0)==0x58544F43U)free(*(void**)(base-8));else free(base);}\n");
-        }
-        s.appendCString("#define _XT_WH(o) (*(void***)((uint8_t*)(o)-10))\n");
-        s.appendCString("void _xt_rt_lock(void); void _xt_rt_unlock(void);\n");
-        s.appendCString("static void _xt_weak_unreg(void **slot){");
-        s.appendCString("void ***pp=(void***)slot[-2]; if(!pp) return;");
-        s.appendCString("void **nx=(void**)slot[-1];");
-        s.appendCString("*pp=nx; if(nx) nx[-2]=(void*)pp;");
-        s.appendCString("slot[-2]=0; slot[-1]=0;}\n");
-        s.appendCString("void _xtc_weak_unregister(void **slot){");
-        s.appendCString("_xt_rt_lock(); _xt_weak_unreg(slot); _xt_rt_unlock();}\n");
-        s.appendCString("void _xtc_weak_register(void **slot,void *obj){");
-        s.appendCString("_xt_rt_lock();");
-        s.appendCString("_xt_weak_unreg(slot);");
-        s.appendCString("if(!obj) { _xt_rt_unlock(); return; }");
-        // A `simd:` block carries magic 0x58544F43 (see _xtc_new_simd_<T>).
-        s.appendCString("if(*(uint32_t*)((uint8_t*)obj-38)!=0x58544F42U&&*(uint32_t*)((uint8_t*)obj-38)!=0x58544F43U) { _xt_rt_unlock(); return; }");
-        s.appendCString("void **nx=_XT_WH(obj);");
-        s.appendCString("slot[-2]=(void*)&_XT_WH(obj); slot[-1]=(void*)nx;");
-        s.appendCString("if(nx) nx[-2]=(void*)&slot[-1];");
-        s.appendCString("_XT_WH(obj)=slot; _xt_rt_unlock();}\n");
-        s.appendCString("void *_xtc_weak_load(void **slot){return *slot;}\n");
-        s.appendCString("void _xtc_weak_zero_for(void *obj){if(!obj)return;");
-        s.appendCString("_xt_rt_lock();");
-        s.appendCString("void **s=_XT_WH(obj);");
-        s.appendCString("while(s){void **nx=(void**)s[-1];");
-        s.appendCString("*s=0; s[-2]=0; s[-1]=0; s=nx;}");
-        s.appendCString("_XT_WH(obj)=0; _xt_rt_unlock();}\n");
-        if (asmText.contains(String.withCString("__xtc_bank"))) {
-            s.appendCString("static void *_xtc_bank_regions[3][256]={{0}};\n");
-            s.appendCString("void *_xtc_bank(uint8_t type,uint8_t idx){if(type>1)return 0;");
-            s.appendCString("if(!_xtc_bank_regions[type][idx])_xtc_bank_regions[type][idx]=calloc(1,12288);");
-            s.appendCString("return _xtc_bank_regions[type][idx];}\n");
-        }
-        return s;
-    }
-
     // The arm9 (XTOS loader) runtime stub: the loader calls `main(argc, argv)`,
     // so the stub owns `main`, records the arguments for Process.xc and calls
     // the renamed `xt_main`. ELF symbols are bare, and the object header uses
@@ -537,84 +393,5 @@ class External
             out.add((Object*)((String*)parts.get(i)).trimmed());
         if (out.count() < (u32)2 || out.count() > (u32)3) return (Array*)0;
         return out;
-    }
-
-    static String* machoToElfArm64(String* asmText, bool shared)
-    {
-        if (asmText == (String*)0) return String.withCString("");
-        Array* out = new Array();
-        String* section = String.withCString("    .text");
-        Array* lines = asmText.splitOnByte((u8)'\n');
-        for (u32 li = (u32)0; li < lines.count(); li = li + (u32)1) {
-            String* l = (String*)lines.get(li);
-            if (l.contains(String.withCString(".section"))) {
-                if (l.contains(String.withCString("__TEXT,__cstring"))
-                    || l.contains(String.withCString("__TEXT,__const"))
-                    || l.contains(String.withCString("__DATA,__const")))
-                    l = String.withCString("    .section .rodata");
-                else if (l.contains(String.withCString("__DATA,__data")))
-                    l = String.withCString("    .data");
-                else if (l.contains(String.withCString("__mod_init_func")))
-                    l = String.withCString("    .section .init_array,\"aw\",%init_array");
-                else if (l.contains(String.withCString("__TEXT,__text")))
-                    l = String.withCString("    .text");
-            }
-            l = stripUnderscore(l);
-            l = reloc(l, "@GOTPAGEOFF", ":got_lo12:", "");
-            l = reloc(l, "@GOTPAGE", ":got:", "");
-            l = reloc(l, "@PAGEOFF", ":lo12:", "");
-            l = reloc(l, "@PAGE", "", "");
-            String* t = l.trimmed();
-            Array* cm = commOperands(t);
-            if (!shared) {
-                if (cm != (Array*)0 && cm.count() == (u32)3) {
-                    u32 lg = decimal((String*)cm.get((u32)2));
-                    String* c = String.withCString("    .comm ");
-                    c.append((String*)cm.get((u32)0)); c.appendByte((u8)',');
-                    c.append((String*)cm.get((u32)1));
-                    c.appendFormat(",%lu", (u32)1 << lg);
-                    out.add((Object*)c);
-                    continue;
-                }
-                out.add((Object*)l);
-                continue;
-            }
-            if (t.hasPrefix(String.withCString(".text"))) section = String.withCString("    .text");
-            else if (t.hasPrefix(String.withCString(".data"))) section = String.withCString("    .data");
-            else if (t.hasPrefix(String.withCString(".section"))) section = l;
-            if (cm != (Array*)0) {
-                String* nm = (String*)cm.get((u32)0);
-                u32 lg = (u32)3;
-                if (cm.count() == (u32)3) lg = decimal((String*)cm.get((u32)2));
-                String* g = String.withCString("    .globl "); g.append(nm); out.add((Object*)g);
-                String* h = String.withCString("    .hidden "); h.append(nm); out.add((Object*)h);
-                out.add((Object*)String.withCString("    .bss"));
-                out.add((Object*)String.withFormat("    .p2align %lu", lg));
-                String* lb = String.withString(nm); lb.appendByte((u8)':'); out.add((Object*)lb);
-                String* z = String.withCString("    .zero "); z.append((String*)cm.get((u32)1)); out.add((Object*)z);
-                out.add((Object*)section);
-                continue;
-            }
-            out.add((Object*)l);
-            if (t.hasPrefix(String.withCString(".globl"))) {
-                String* rest = t.substringFromByte((u32)6);
-                if (rest.byteLength() > (u32)0 && (rest.byteAt((u32)0) == (u8)' ' || rest.byteAt((u32)0) == (u8)'\t')) {
-                    rest = rest.trimmed();
-                    u32 e = (u32)0;
-                    while (e < rest.byteLength() && symByte(rest.byteAt(e))) e = e + (u32)1;
-                    if (e > (u32)0) {
-                        String* h = String.withCString("    .hidden ");
-                        h.append(rest.substringBytes((u32)0, e));
-                        out.add((Object*)h);
-                    }
-                }
-            }
-        }
-        String* joined = new String();
-        for (u32 i = (u32)0; i < out.count(); i = i + (u32)1) {
-            if (i > (u32)0) joined.appendByte((u8)'\n');
-            joined.append((String*)out.get(i));
-        }
-        return joined;
     }
 }
