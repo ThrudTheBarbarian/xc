@@ -762,7 +762,7 @@ class OptProfile
         _epiM = (i32)0;
         _rtTrip = false;
         _bound = (IROperand*)0;
-        _ivStart = (i32)0;
+        _ivStart = (i64)0;
         _ivStartOp = (IROperand*)0;
         }
 
@@ -843,8 +843,9 @@ class OptProfile
     IROperand* _bound;
     // The iv's (constant) entry value. The runtime-trip limit M must be
     // computed from the trip LENGTH (n - ivStart), not the bound: see
-    // vecRuntimeLimit.
-    i32 _ivStart;
+    // vecRuntimeLimit. 64-bit: a u32 start of 2^31 or more is a constant, as
+    // the reference's int64_t reads it, not a negative number.
+    i64 _ivStart;
     // A RUNTIME iv entry value (a par chunk's `lo`): the loop does not start at
     // a literal, which used to refuse it outright. When set, the vector loop
     // begins at this value and the runtime limit is computed from
@@ -858,7 +859,7 @@ class OptProfile
         {
         return _bound;
         }
-    i32 ivStart(void)
+    i64 ivStart(void)
         {
         return _ivStart;
         }
@@ -875,7 +876,7 @@ class OptProfile
         _rtTrip = r;
         _bound = b;
         }
-    void setIvStart(i32 s)
+    void setIvStart(i64 s)
         {
         _ivStart = s;
         }
@@ -22513,7 +22514,9 @@ class BeFact : Object
         // A NON-ZERO start is refused (#1125), and refusing it is also what
         // stops the REMAINDER being re-recognised and re-cloned: the clone's
         // induction phi enters at M, so it fails this test by construction.
-        i32 mapStart = vecIvStart(ivPhi, B, defOf);
+        // The map path's arithmetic is 32-bit: a start of 2^31 or more narrows
+        // to a negative number and takes the runtime-start path, as before.
+        i32 mapStart = (i32)vecIvStart(ivPhi, B, defOf);
         if (vw < (u32)2)
             return (VecCand*)0;
         // A RUNTIME start (`for (i = lo; …)`: a loop resumed, or a benchmark's
@@ -22565,7 +22568,7 @@ class BeFact : Object
         c.setPre(PH);
         c.setEpi(rt || epiM != n, epiM);
         c.setRuntime(rt, boundOp);
-        c.setIvStart(mapStart);
+        c.setIvStart((i64)mapStart);
         c.setIvStartOp(rtStart);
         return c;
         }
@@ -22924,7 +22927,7 @@ class BeFact : Object
         // passed on `64 % 4 == 0` with a real trip count of 63 and returned 1956
         // for a sum that is 2016, at -O2 and above, on every vectorising back
         // end. tests/fixtures/vectorize_const_tail.xc pins it.
-        if (_vrIvStart < (i32)0)
+        if (_vrIvStart < (i64)0)
             return (VecCand*)0;
         if (!_vrRuntime && _vrIvStart >= n)
             return (VecCand*)0;
@@ -22973,20 +22976,23 @@ class BeFact : Object
     // expression each — #1126 found that adding a separate branch pushed
     // Opt$vecWideningAt 80 bytes past the 16 KB arm64 frame budget, and that
     // constraint has not gone away.
-    i32 vecIvStart(IRInsn* ivPhi, IRBlock* latch, Map* defOf)
+    // 64-bit, read with vecConstWide: a u32 start of 2^31 or more is a
+    // constant there too (the narrow read made it negative, and the loop took
+    // the runtime-start path, where the reference took the constant one).
+    i64 vecIvStart(IRInsn* ivPhi, IRBlock* latch, Map* defOf)
         {
         if (ivPhi == (IRInsn*)0 || ivPhi.ops().count() != (u32)4)
-            return (i32)-1;
+            return (i64)-1;
         IROperand* entry = ((IROperand*)ivPhi.ops().get((u32)0)).blk() == latch
                                ? (IROperand*)ivPhi.ops().get((u32)3)
                                : (IROperand*)ivPhi.ops().get((u32)1);
         if (entry == (IROperand*)0)
-            return (i32)-1;
-        i32 start = (i32)0;
-        if (!vecConst(entry, defOf, &start))
-            return (i32)-1;
-        if (start < (i32)0)
-            return (i32)-1;
+            return (i64)-1;
+        i64 start = (i64)0;
+        if (!vecConstWide(entry, defOf, &start))
+            return (i64)-1;
+        if (start < (i64)0)
+            return (i64)-1;
         return start;
         }
 
@@ -24949,7 +24955,7 @@ class BeFact : Object
         u32 vw = wvb / lw;
         // No epilogue for this shape yet, matching the original: the trip must be
         // a whole number of vectors.
-        i32 dpStart = vecIvStart(ivPhi, L, defOf);
+        i32 dpStart = (i32)vecIvStart(ivPhi, L, defOf);   // 32-bit path, as before
         if (dpStart < (i32)0 || dpStart >= n)
             return (VecCand*)0;
         if (vw < (u32)2 || (((n - dpStart) % (i32)vw) != (i32)0))
@@ -26487,8 +26493,8 @@ class BeFact : Object
         // The start is an operand: a runtime one (a par chunk's `lo`) when the
         // recogniser accepted it, else the constant seed as an immediate.
         IROperand* start = c.ivStartOp();
-        if (start == (IROperand*)0 && c.ivStart() != (i32)0)
-            start = IROperand.immI((i64)c.ivStart(), ivTy);
+        if (start == (IROperand*)0 && c.ivStart() != (i64)0)
+            start = IROperand.immI(c.ivStart(), ivTy);
         IROperand* tl = c.bound();
         if (start != (IROperand*)0)
             {
