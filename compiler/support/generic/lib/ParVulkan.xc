@@ -935,6 +935,13 @@ class ParVulkan
         return ParDevice.sectionOf(src, "spirv", false);
         }
 
+    // The SPIR-V module a device runs best, where the block carries a variant
+    // (ParDevice.wantsTrips).
+    static u8* spirvFor(u8* src, String* dev)
+        {
+        return ParDevice.sectionFor(src, "spirv", false, dev);
+        }
+
     // The threads one dispatch may launch: 65535 workgroups (the most every
     // Vulkan device takes in x) of the kernel's size (ParLayout.maxThreads).
     static i64 maxThreads(i32 slot)
@@ -977,6 +984,7 @@ class ParVulkan
 
     static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
+        u8* whole = src;
         src = spirvOf(src);
         if (src == (u8*)0)
             return ParDevice.cpu("it has no Vulkan version");
@@ -995,6 +1003,8 @@ class ParVulkan
             }
         else if (!_int64)
             return ParDevice.cpu("its GPU version needs 64-bit integers, which this Vulkan device does not have");
+        // The device is known now: its variant of the module, where the block has one.
+        src = spirvFor(whole, ParVulkan.identity());
         i32 slot = pipeline(src);
         if (slot < (i32)0)
             return ParDevice.cpu("its GPU version did not build");
@@ -1463,7 +1473,7 @@ class ParVulkanWorker : ParWorker
         {
         if (l == (ParLayout*)0)
             return false;
-        u8* spv = ParVulkan.spirvOf(src);
+        u8* spv = ParVulkan.spirvFor(src, identity());
         if (spv == (u8*)0 || !ParVulkan.start())
             return false;
         // The block laid out from this worker's own section (its header may
@@ -1551,7 +1561,7 @@ class ParVulkanWorker : ParWorker
 
     bool prepare(ParChunk* proto, u8* src, ParLayout* l, i64 tile)
         {
-        u8* spv = ParVulkan.spirvOf(src);
+        u8* spv = ParVulkan.spirvFor(src, identity());
         _slot = spv != (u8*)0 ? ParVulkan.pipeline(spv) : (i32)-1;
         if (_slot < (i32)0)
             return false;

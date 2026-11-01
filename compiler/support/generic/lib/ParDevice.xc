@@ -1638,6 +1638,77 @@ class ParDevice
     // says `spirv=<words>` instead). A program built by an earlier compiler
     // has no kind words: its first section is its target's own form, which
     // `native` takes; the SPIR-V behind a PTX section is still found.
+    // A block can carry a second kernel per form, its header line marked
+    // ` trips=<n>`: the copy whose escape loop runs several trips per exit
+    // test (gpu-kernel-variants.md). sectionOf takes the plain one unless
+    // gParWantTrips is set (sectionFor sets it for a device), and then the
+    // variant where the block has one, the plain one where it has not.
+    static bool headerHasTrips(u8* s)
+        {
+        for (u32 h = (u32)0; s[h] != (u8)0 && s[h] != (u8)10; h = h + (u32)1)
+            if (s[h] == (u8)' ' && s[h + (u32)1] == (u8)'t' && s[h + (u32)2] == (u8)'r' && s[h + (u32)3] == (u8)'i'
+                && s[h + (u32)4] == (u8)'p' && s[h + (u32)5] == (u8)'s' && s[h + (u32)6] == (u8)'=')
+                return true;
+        return false;
+        }
+
+    // The SPIR-V module after the one at s (its header's `spirv=<words>`
+    // words, after the header line's NUL and padding), or 0.
+    static u8* nextSpirv(u8* s)
+        {
+        u32 h = (u32)0;
+        i64 words = (i64)-1;
+        while (s[h] != (u8)0 && s[h] != (u8)10)
+            {
+            if (s[h] == (u8)' ' && s[h + (u32)1] == (u8)'s' && s[h + (u32)2] == (u8)'p' && s[h + (u32)3] == (u8)'i'
+                && s[h + (u32)4] == (u8)'r' && s[h + (u32)5] == (u8)'v' && s[h + (u32)6] == (u8)'=')
+                {
+                u32 at = h + (u32)7;
+                words = ParDevice.num(s, &at);
+                }
+            h = h + (u32)1;
+            }
+        if (words <= (i64)0)
+            return (u8*)0;
+        u32 e = h;
+        while (s[e] != (u8)0)
+            e = e + (u32)1;
+        u8* n = s + ((e + (u32)4) & ~(u32)3) + (u32)(words * (i64)4);
+        return n[0] == (u8)'/' && n[1] == (u8)'/' ? n : (u8*)0;
+        }
+
+    // Which kernel a device runs when a block carries both
+    // (gpu-kernel-variants.md): XC_PAR_VARIANT=plain|trips first; then the
+    // variant where it measured faster, 1 -> 8 trips on mandelbrot and
+    // mandel_deep: the Pi 5's V3D 1.8x / 2.1x, NVIDIA through CUDA 1.08-1.16x,
+    // the 3090 through Vulkan 1.03x; the plain kernel elsewhere (an AMD iGPU
+    // through RADV 0.73x / 0.81x, an M3 Max 0.81x / 1.13x, anything not measured).
+    // `dev` is the device's identity as its runtime names it, or 0.
+    static bool wantsTrips(u8* kind, String* dev)
+        {
+        String* e = Platform.env(String.withCString("XC_PAR_VARIANT"));
+        if (e.equals(String.withCString("trips")))
+            return true;
+        if (e.equals(String.withCString("plain")))
+            return false;
+        if (kind[0] == (u8)'p')
+            return true;
+        if (kind[0] != (u8)'s' || dev == (String*)0)
+            return false;
+        return dev.contains(String.withCString("V3D")) || dev.contains(String.withCString("NVIDIA"));
+        }
+
+    static bool gParWantTrips;
+
+    // sectionOf for a device: the variant it runs best where the block has one.
+    static u8* sectionFor(u8* src, u8* kind, bool native, String* dev)
+        {
+        gParWantTrips = ParDevice.wantsTrips(kind, dev);
+        u8* r = ParDevice.sectionOf(src, kind, native);
+        gParWantTrips = false;
+        return r;
+        }
+
     static u8* sectionOf(u8* src, u8* kind, bool native)
         {
         if (src == (u8*)0 || src[0] != (u8)'/')
@@ -1648,6 +1719,9 @@ class ParDevice
             return (u8*)0;
         bool wantSpv = kind[0] == (u8)'s';
         u8* s = src;
+        // The plain section of the kind, where a variant was asked for and the
+        // block carries none.
+        u8* fallback = (u8*)0;
         while (true)
             {
             u32 h = (u32)0;
@@ -1678,11 +1752,29 @@ class ParDevice
                 h = h + (u32)1;
                 }
             if (spv)
-                return wantSpv ? s : (u8*)0;
+                {
+                if (!wantSpv)
+                    return fallback;
+                // The plain module first, the variant after it.
+                if (headerHasTrips(s) == gParWantTrips)
+                    return s;
+                if (!headerHasTrips(s) && fallback == (u8*)0)
+                    fallback = s;
+                u8* nx = ParDevice.nextSpirv(s);
+                if (nx == (u8*)0)
+                    return fallback;
+                s = nx;
+                continue;
+                }
             if (hasKind)
                 {
                 if (isKind)
-                    return s;
+                    {
+                    if (headerHasTrips(s) == gParWantTrips)
+                        return s;
+                    if (!headerHasTrips(s) && fallback == (u8*)0)
+                        fallback = s;
+                    }
                 }
             else if (!wantSpv)
                 return native ? s : (u8*)0;
@@ -1692,10 +1784,10 @@ class ParDevice
                 e = e + (u32)1;
             u8* n = s + ((e + (u32)4) & ~(u32)3);
             if (!(n[0] == (u8)'/' && n[1] == (u8)'/'))
-                return (u8*)0;
+                return fallback;
             s = n;
             }
-        return (u8*)0;
+        return fallback;
         }
 
     // Where each block's last run went (Par.ranOn): its name -> the devices

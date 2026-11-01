@@ -1175,7 +1175,7 @@ class ParCuda
         {
         // The PTX section, or none (SPIR-V alone, say: that is for Vulkan,
         // which Par tries next).
-        src = ParDevice.sectionOf(src, "ptx", true);
+        src = ParDevice.sectionFor(src, "ptx", true, (String*)0);
         if (src == (u8*)0)
             return false;
         if (!start())
@@ -1473,7 +1473,7 @@ class ParCudaWorker : ParWorker
         }
     u8* section(u8* src)
         {
-        return ParDevice.sectionOf(src, "ptx", true);
+        return ParDevice.sectionFor(src, "ptx", true, (String*)0);
         }
     i64 floor(void)
         {
@@ -1521,7 +1521,7 @@ class ParCudaWorker : ParWorker
         {
         if (!_ready || l == (ParLayout*)0)
             return false;
-        src = ParDevice.sectionOf(src, "ptx", true);
+        src = ParDevice.sectionFor(src, "ptx", true, (String*)0);
         if (src == (u8*)0)
             return false;   // no PTX printed (SPIR-V alone, say)
         for (u32 i = (u32)0; i < _nrefused; i = i + (u32)1)
@@ -1615,7 +1615,7 @@ class ParCudaWorker : ParWorker
     bool prepare(ParChunk* proto, u8* src, ParLayout* l, i64 tile)
         {
         gCu_ctxSetCurrent(_ctx);
-        src = ParDevice.sectionOf(src, "ptx", true);
+        src = ParDevice.sectionFor(src, "ptx", true, (String*)0);
         if (src == (u8*)0)
             return false;
         _proto = proto;

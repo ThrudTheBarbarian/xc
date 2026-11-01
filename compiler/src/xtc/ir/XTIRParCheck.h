@@ -18,7 +18,6 @@ NS_ASSUME_NONNULL_BEGIN
 
 // Whether blocks also get their GPU source (§6), set by the driver: Metal for
 // an Apple arm64 target, PTX for win64. Elsewhere each block's gpuSource() is "".
-+ (void)setGpuEscTrips:(NSInteger)trips;
 + (void)setEmitsMetal:(BOOL)on;
 + (void)setEmitsPTX:(BOOL)on;
 + (void)setEmitsSPIRV:(BOOL)on;

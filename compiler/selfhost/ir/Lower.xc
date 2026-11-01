@@ -22130,8 +22130,6 @@ class ClassInfo
     // ── WGSL (wasm32 / WebGPU): the reference's XTIRParWGSL.m, text for text ──
     bool _parWGSL;    // wasm32: blocks get their WGSL
     void setParWGSL(bool b) { _parWGSL = b; }
-    u32 _gpuEscTrips; // the target row's trips per escape test for the kernels (0: off)
-    void setGpuEscTrips(u32 n) { _gpuEscTrips = n; }
     WgFn* _wf;
     Map* _wgHelpers;      // callee -> WGSL function name
     String* _wgHelperText;
@@ -23657,6 +23655,18 @@ class ClassInfo
     // exact or a pass fails.
     IRModule* parKernelModule()
         {
+        _kPrinted = (String*)0;
+        return parKernelModuleV((u32)0);
+        }
+
+    // The module printed once (a second copy, the variant's, is a parse of it),
+    // and the functions the variant's copy changed. As the reference's
+    // kernelModuleFrom:printed:trips:changed:.
+    String* _kPrinted;
+    Array* _kChanged;
+
+    IRModule* parKernelModuleV(u32 trips)
+        {
         // Nothing to render without a block: the round trip prints and
         // reparses the whole module, and a program with a 64M-element global
         // took two minutes and 23 GB in it for no kernel at all.
@@ -23668,9 +23678,11 @@ class ClassInfo
                 any = true;
             }
         if (!any) return (IRModule*)0;
-        String* printed = _m.text();
+        bool again = _kPrinted != (String*)0;
+        String* printed = again ? _kPrinted : _m.text();
         IRModule* copy = IrParser.parseText(printed, new IrParser());
-        if (copy == (IRModule*)0 || !copy.text().equals(printed)) return (IRModule*)0;
+        if (copy == (IRModule*)0 || (!again && !copy.text().equals(printed))) return (IRModule*)0;
+        _kPrinted = printed;
         Map* byName = new Map();
         for (u32 i = (u32)0; i < copy.funcs().count(); i = i + (u32)1)
             byName.set((Hashable*)((IRFunc*)copy.funcs().get(i)).name(), copy.funcs().get(i));
@@ -23716,9 +23728,10 @@ class ClassInfo
         for (u32 i = (u32)0; i < keep.count(); i = i + (u32)1)
             copy.funcs().add(keep.get(i));
         Opt* opt = Opt.atLevel((u32)3, OptProfile.forTarget(String.withCString("arm64")));
-        opt.setEscTrips(_gpuEscTrips);
+        opt.setEscTrips(trips);
         opt.parKernels(copy);
         if (opt.failed()) return (IRModule*)0;
+        _kChanged = opt.escChanged();
         return copy;
         }
 
@@ -23777,6 +23790,12 @@ class ClassInfo
         return parWgsl(f) ? _wgOut : (String*)0;
         }
 
+    // A block's variant kernel, carried beside the plain one (the reference's
+    // fillSourcesIn explains): the copy, the trips and its run functions.
+    IRModule* _kvMod;
+    u32 _kvTrips;
+    Map* _kvFns;
+
     void parFillSources()
         {
         IRModule* kmod = parKernelModule();
@@ -23784,6 +23803,31 @@ class ClassInfo
         if (kmod != (IRModule*)0)
             for (u32 i = (u32)0; i < kmod.funcs().count(); i = i + (u32)1)
                 kfns.set((Hashable*)((IRFunc*)kmod.funcs().get(i)).name(), kmod.funcs().get(i));
+        // XTGPU_ESC_TRIPS=<n> sets the variant's trips, 0 or 1 for none; not
+        // for a module whose printed text is past 64 MB.
+        _kvTrips = (u32)8;
+        u8* et = _xt_getenv("XTGPU_ESC_TRIPS");
+        if (et != (u8*)0 && et[0] != (u8)0)
+            {
+            _kvTrips = (u32)0;
+            for (u32 k = (u32)0; et[k] >= (u8)'0' && et[k] <= (u8)'9'; k = k + (u32)1)
+                _kvTrips = _kvTrips * (u32)10 + (u32)(et[k] - (u8)'0');
+            }
+        _kvMod = (IRModule*)0;
+        _kvFns = new Map();
+        if (kmod != (IRModule*)0 && _kvTrips >= (u32)2 && _kPrinted != (String*)0
+            && _kPrinted.byteLength() <= ((u32)64 << (u32)20))
+            {
+            _kvMod = parKernelModuleV(_kvTrips);
+            if (_kvMod != (IRModule*)0)
+                for (u32 i = (u32)0; i < _kvMod.funcs().count(); i = i + (u32)1)
+                    {
+                    IRFunc* g = (IRFunc*)_kvMod.funcs().get(i);
+                    for (u32 k = (u32)0; k < _kChanged.count(); k = k + (u32)1)
+                        if (((String*)_kChanged.get(k)).equals(g.name()))
+                            _kvFns.set((Hashable*)g.name(), (Object*)g);
+                    }
+            }
         for (u32 i = (u32)0; i < _m.funcs().count(); i = i + (u32)1)
             {
             IRFunc* f = (IRFunc*)_m.funcs().get(i);
@@ -23791,6 +23835,8 @@ class ClassInfo
                 continue;
             parFillBlock(f, (IRFunc*)kfns.get((Hashable*)f.name()), kmod);
             }
+        _kvMod = (IRModule*)0;
+        _kvFns = (Map*)0;
         }
 
     // The IR outliner's blocks (stage 4): each made after lowering, in the
@@ -24268,6 +24314,34 @@ class ClassInfo
         _mWhy = lostWhy;
         Array* spv = _parSPIRV && !noForms ? parSpirvK(f, kfUse, kmod) : (Array*)0;
         spvWhy = _mWhy;
+        // The variant of each form there is (`trips=<n>` on its header line),
+        // printed from the variant copy with no fallback. As the reference.
+        IRFunc* kvf = noForms || _kvFns == (Map*)0 ? (IRFunc*)0 : (IRFunc*)_kvFns.get((Hashable*)f.name());
+        String* vmsl = (String*)0;
+        String* vptx = (String*)0;
+        String* vwgsl = (String*)0;
+        Array* vspv = (Array*)0;
+        if (kvf != (IRFunc*)0)
+            {
+            String* meta = _parExtraMeta;
+            String* vmeta = String.withString(meta);
+            vmeta.appendFormat(" trips=%ld", (i64)_kvTrips);
+            _parExtraMeta = vmeta;
+            String* keepWhy = _mWhy;
+            IRModule* sm = _m;
+            _m = _kvMod;
+            if (mslText != (String*)0)
+                vmsl = parMsl(kvf);
+            if (ptx != (String*)0)
+                vptx = parPtx(kvf);
+            if (wgsl != (String*)0)
+                vwgsl = parWgsl(kvf) ? _wgOut : (String*)0;
+            if (spv != (Array*)0)
+                vspv = parSpirv(kvf) ? _sOut : (Array*)0;
+            _m = sm;
+            _mWhy = keepWhy;
+            _parExtraMeta = meta;
+            }
         Array* all = new Array();
         if (serialBlock)
             {
@@ -24275,9 +24349,12 @@ class ClassInfo
             for (u32 q = (u32)0; q < marker.byteLength(); q = q + (u32)1)
                 all.add((Object*)Number.withU8(marker.byteAt(q)));
             }
-        for (u32 t = (u32)0; t < (u32)3; t = t + (u32)1)
+        // The plain forms' text, then the variants', then the SPIR-V modules
+        // in the same order (the reference explains).
+        for (u32 t = (u32)0; t < (u32)6; t = t + (u32)1)
             {
-            String* text = t == (u32)0 ? mslText : t == (u32)1 ? ptx : wgsl;
+            String* text = t == (u32)0 ? mslText : t == (u32)1 ? ptx : t == (u32)2 ? wgsl
+                         : t == (u32)3 ? vmsl : t == (u32)4 ? vptx : vwgsl;
             if (text == (String*)0 || text.byteLength() == (u32)0)
                 continue;
             while (all.count() % (u32)4 != (u32)0)
@@ -24286,12 +24363,15 @@ class ClassInfo
                 all.add((Object*)Number.withU8(text.byteAt(q)));
             all.add((Object*)Number.withU8((u8)0));
             }
-        if (spv != (Array*)0)
+        for (u32 t = (u32)0; t < (u32)2; t = t + (u32)1)
             {
+            Array* mod = t == (u32)0 ? spv : vspv;
+            if (mod == (Array*)0 || mod.count() == (u32)0)
+                continue;
             while (all.count() % (u32)4 != (u32)0)
                 all.add((Object*)Number.withU8((u8)0));
-            for (u32 q = (u32)0; q < spv.count(); q = q + (u32)1)
-                all.add(spv.get(q));
+            for (u32 q = (u32)0; q < mod.count(); q = q + (u32)1)
+                all.add(mod.get(q));
             }
         // A block the run must check and no form to carry the check runs
         // serially (as the reference).

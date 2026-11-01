@@ -2176,7 +2176,6 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     [XTIRParCheck setEmitsPTX:(allK || [kinds containsObject:@"ptx"])];
     [XTIRParCheck setEmitsSPIRV:(allK || [kinds containsObject:@"spirv"])];
     [XTIRParCheck setEmitsWGSL:(allK || [kinds containsObject:@"wgsl"])];
-    [XTIRParCheck setGpuEscTrips:_options.effectiveTarget.gpuEscTrips];
     [XTIRLowering setDebugInfo:_options.debugInfo];
     [XTIRDbgLoc resetFiles];
     // -g: the program's own source is file 1, which names the compile unit

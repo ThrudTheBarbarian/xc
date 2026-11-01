@@ -222,7 +222,7 @@ class ParMetal
     // runs it on the CPU, which gives the same answer.
     static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
-        src = ParDevice.sectionOf(src, "msl", true);
+        src = ParDevice.sectionFor(src, "msl", true, (String*)0);
         if (src == (u8*)0)
             return ParDevice.cpu("it has no Metal version");
         if (!start())
@@ -433,7 +433,7 @@ class ParMetalWorker : ParWorker
         }
     u8* section(u8* src)
         {
-        return ParDevice.sectionOf(src, "msl", true);
+        return ParDevice.sectionFor(src, "msl", true, (String*)0);
         }
     i64 floor(void)
         {
@@ -441,7 +441,7 @@ class ParMetalWorker : ParWorker
         }
     bool holds(ParChunk* proto, u8* src, ParLayout* l)
         {
-        src = ParDevice.sectionOf(src, "msl", true);
+        src = ParDevice.sectionFor(src, "msl", true, (String*)0);
         if (src == (u8*)0 || l == (ParLayout*)0 || !ParMetal.start())
             return false;
         // The block laid out from this worker's own section.
@@ -470,7 +470,7 @@ class ParMetalWorker : ParWorker
         {
         parMsgBytes_t* withBytes = (parMsgBytes_t*)gMtlSend;
         parMsgLen_t* withLen = (parMsgLen_t*)gMtlSend;
-        src = ParDevice.sectionOf(src, "msl", true);
+        src = ParDevice.sectionFor(src, "msl", true, (String*)0);
         if (src == (u8*)0)
             return false;
         _proto = proto;

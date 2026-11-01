@@ -1086,7 +1086,6 @@ class FeOptions
         lower.setParPTX(allK || (kr != (TargetRow*)0 && kr.hasParKernel("ptx")));
         lower.setParSPIRV(allK || (kr != (TargetRow*)0 && kr.hasParKernel("spirv")));
         lower.setParWGSL(allK || (kr != (TargetRow*)0 && kr.hasParKernel("wgsl")));
-        lower.setGpuEscTrips(kr != (TargetRow*)0 ? kr.gpuEscTrips() : (u32)0);
         lower.setVtable(sema.vtable());
         IRModule* mod = lower.run(program, moduleNameOf(o.input()));
         if (mod != (IRModule*)0)

@@ -157,12 +157,21 @@ static int64_t gParGridH = 0;
 |* port's gpuEscapeTrips.
 \****************************************************************************/
 @interface XTIROptGpuEscapeTrips : NSObject <XTIROptPass>
+@property(nonatomic) NSInteger trips;
+// The functions whose loops it changed: a block's variant kernel is carried
+// only when its run function is one of them.
+@property(nonatomic, readonly) NSMutableSet<NSString*>* changed;
 @end
 
-// The target row's trips per escape test (XTIRParCheck setGpuEscTrips:).
-static NSInteger gGpuEscTrips = 0;
 
 @implementation XTIROptGpuEscapeTrips
+
+- (instancetype)init
+    {
+    if ((self = [super init]))
+        _changed = [NSMutableSet set];
+    return self;
+    }
 
 - (NSString*)passName
     {
@@ -225,12 +234,7 @@ static void escTripsClone(XTIRInsn* i, XTIRBlock* B, XTIRFunction* fn, NSMutable
 - (BOOL)runOnModule:(XTIRModule*)mod errors:(NSMutableArray<NSString*>* _Nullable* _Nullable)outErrors
     {
     (void)outErrors;
-    // The target row's trips (XTTarget gpuEscTrips); XTGPU_ESC_TRIPS=<n>
-    // overrides it, for measuring.
-    NSInteger trips = gGpuEscTrips;
-    const char* e = getenv("XTGPU_ESC_TRIPS");
-    if (e && *e)
-        trips = atoi(e);
+    NSInteger trips = self.trips;
     if (trips < 2)
         return YES;
     for (XTIRFunction* fn in mod.functions)
@@ -321,6 +325,7 @@ static void escTripsClone(XTIRInsn* i, XTIRBlock* B, XTIRFunction* fn, NSMutable
                 ops[p.operands[0].blockRef == B ? 1 : 3] = cur[q];
                 [p replaceOperands:ops];
                 }
+            [_changed addObject:fn.name];
             }
     return YES;
     }
@@ -333,12 +338,6 @@ static BOOL gEmitsMetal = NO;
 static BOOL gEmitsPTX = NO;
 static BOOL gEmitsSPIRV = NO;
 static BOOL gEmitsWGSL = NO;
-
-// The target row's trips per escape test for the kernels (0: off).
-+ (void)setGpuEscTrips:(NSInteger)trips
-    {
-    gGpuEscTrips = trips;
-    }
 
 + (void)setEmitsMetal:(BOOL)on
     {
@@ -376,6 +375,9 @@ static BOOL gEmitsWGSL = NO;
 |* the round trip is not exact or a pass fails: the kernels print as before.
 \****************************************************************************/
 + (nullable XTIRModule*)kernelModuleFrom:(XTIRModule*)module
+                                  printed:(NSString* _Nullable* _Nullable)printedIO
+                                    trips:(NSInteger)trips
+                                  changed:(NSSet<NSString*>* _Nullable* _Nullable)changed
     {
     // Nothing to render without a block: the round trip prints and reparses
     // the whole module, and a program with a 64M-element global took two
@@ -389,10 +391,14 @@ static BOOL gEmitsWGSL = NO;
             }
     if (!any)
         return nil;
-    NSString* printed = [XTIRPrinter stringFromModule:module];
+    // The module printed once: a second copy (the variant's) is a parse only.
+    BOOL again = printedIO && *printedIO;
+    NSString* printed = again ? *printedIO : [XTIRPrinter stringFromModule:module];
     XTIRModule* copy = [XTIRParser moduleFromString:printed sharingLayoutsOf:module error:NULL];
-    if (!copy || ![[XTIRPrinter stringFromModule:copy] isEqualToString:printed])
+    if (!copy || (!again && ![[XTIRPrinter stringFromModule:copy] isEqualToString:printed]))
         return nil;
+    if (printedIO)
+        *printedIO = printed;
     NSMutableDictionary<NSString*, XTIRFunction*>* byName = [NSMutableDictionary dictionary];
     for (XTIRFunction* f in copy.functions)
         byName[f.name] = f;
@@ -452,13 +458,22 @@ static BOOL gEmitsWGSL = NO;
     cse2.late = YES;
     [p addPass:cse2];
     [p addPass:[XTIROptBlockMerge new]];
-    [p addPass:[XTIROptGpuEscapeTrips new]];
+    // The variant's copy only: several trips of an escape loop per exit test.
+    XTIROptGpuEscapeTrips* esc = nil;
+    if (trips >= 2)
+        {
+        esc = [XTIROptGpuEscapeTrips new];
+        esc.trips = trips;
+        [p addPass:esc];
+        }
     XTIROptLoopRotate* rot = [XTIROptLoopRotate new];
     rot.profile = prof;
     [p addPass:rot];
     [p addPass:[XTIROptDeadCode new]];
     if (![p runOnModule:copy errors:NULL])
         return nil;
+    if (changed)
+        *changed = esc ? [esc.changed copy] : [NSSet set];
     return copy;
     }
 
@@ -467,10 +482,29 @@ static BOOL gEmitsWGSL = NO;
              diagnostics:(XTDiagnosticEngine*)diag
                   serial:(NSSet<NSString*>*)serial
     {
-    XTIRModule* kmod = [self kernelModuleFrom:module];
+    NSString* printedModule = nil;
+    XTIRModule* kmod = [self kernelModuleFrom:module printed:&printedModule trips:0 changed:NULL];
     NSMutableDictionary<NSString*, XTIRFunction*>* kfns = [NSMutableDictionary dictionary];
     for (XTIRFunction* g in kmod.functions)
         kfns[g.name] = g;
+    // A second kernel per form, carried beside the plain one, for a block whose
+    // escape loop runs several trips per exit test (XTIROptGpuEscapeTrips):
+    // the runtime picks one per device (ParDevice.variantFor), since it helps
+    // one GPU and hurts another (gpu-kernel-variants.md). XTGPU_ESC_TRIPS=<n>
+    // sets the trips, 0 or 1 for none. Not for a module whose printed text is
+    // past 64 MB: the copy is a parse of it.
+    NSInteger vtrips = 8;
+    const char* et = getenv("XTGPU_ESC_TRIPS");
+    if (et && *et)
+        vtrips = atoi(et);
+    NSSet<NSString*>* vchanged = nil;
+    XTIRModule* kvmod = nil;
+    if (kmod && vtrips >= 2 && printedModule.length <= (NSUInteger)64 << 20)
+        kvmod = [self kernelModuleFrom:module printed:&printedModule trips:vtrips changed:&vchanged];
+    NSMutableDictionary<NSString*, XTIRFunction*>* kvfns = [NSMutableDictionary dictionary];
+    for (XTIRFunction* g in kvmod.functions)
+        if ([vchanged containsObject:g.name])
+            kvfns[g.name] = g;
     for (XTIRFunction* f in module.functions)
         {
         if (![f.name hasPrefix:@"ParImpl$"] || ![f.name hasSuffix:@"$run"])
@@ -546,10 +580,11 @@ static BOOL gEmitsWGSL = NO;
         // its helper says why it stays on the CPU.
         if (kf && unlocatedGlobal(kf, kmod, module, fcls))
             kf = nil;
-        [XTIRParMSL setExtraMeta:[[[fc footprintWordsIn:f ivarNames:[fc ivarNamesOf:classDecls[fcls] in:classDecls]]
-                                   stringByAppendingString:[fc costWordsIn:f]]
-                                   stringByAppendingString:[[fc guardWordsIn:f guards:gParGuards[fcls]]
-                                                               stringByAppendingString:[fc mergeWordsIn:f redOps:redOps fast:fast]]]];
+        NSString* meta = [[[fc footprintWordsIn:f ivarNames:[fc ivarNamesOf:classDecls[fcls] in:classDecls]]
+                            stringByAppendingString:[fc costWordsIn:f]]
+                            stringByAppendingString:[[fc guardWordsIn:f guards:gParGuards[fcls]]
+                                                        stringByAppendingString:[fc mergeWordsIn:f redOps:redOps fast:fast]]];
+        [XTIRParMSL setExtraMeta:meta];
         NSString* (^ptxOf)(NSString* _Nullable* _Nullable) = ^NSString*(NSString* _Nullable* _Nullable w) {
             NSString* t = kf ? [XTIRParMSL ptxForKernel:kf module:kmod fast:fast redOps:redOps why:NULL] : nil;
             return t ?: [XTIRParMSL ptxForKernel:f module:module fast:fast redOps:redOps why:w];
@@ -591,11 +626,34 @@ static BOOL gEmitsWGSL = NO;
         NSString* ptx = gEmitsPTX && !noForms ? ptxOf(&ptxWhy) : nil;
         NSString* wgsl = gEmitsWGSL && !noForms ? wgslOf(&wgslWhy) : nil;
         NSData* spv = gEmitsSPIRV && !noForms ? spirvOf(&spvWhy) : nil;
+        // The variant of each form there is (`trips=<n>` on its header line),
+        // from the copy whose escape loop runs several trips per exit test, for
+        // the runtime to choose (gpu-kernel-variants.md). Only where the plain
+        // form exists and the variant's printer takes the kernel too.
+        XTIRFunction* kvf = noForms ? nil : kvfns[f.name];
+        NSString *vmsl = nil, *vptx = nil, *vwgsl = nil;
+        NSData* vspv = nil;
+        if (kvf)
+            {
+            [XTIRParMSL setExtraMeta:[meta stringByAppendingFormat:@" trips=%ld", (long)vtrips]];
+            if (msl)
+                vmsl = [XTIRParMSL sourceForKernel:kvf module:kvmod fast:fast redOps:redOps why:NULL];
+            if (ptx)
+                vptx = [XTIRParMSL ptxForKernel:kvf module:kvmod fast:fast redOps:redOps why:NULL];
+            if (wgsl)
+                vwgsl = [XTIRParMSL wgslForKernel:kvf module:kvmod fast:fast redOps:redOps why:NULL];
+            if (spv)
+                vspv = [XTIRParMSL spirvForKernel:kvf module:kvmod fast:fast redOps:redOps why:NULL];
+            [XTIRParMSL setExtraMeta:meta];
+            }
         NSMutableData* all = [NSMutableData data];
         if (serialBlock)
             [all appendData:[@"// xcpar serial\n" dataUsingEncoding:NSUTF8StringEncoding]];
         uint8_t zero = 0;
-        for (NSString* text in @[ msl ?: @"", ptx ?: @"", wgsl ?: @"" ])
+        // The plain forms' text, then the variants', then the SPIR-V modules
+        // in the same order: a runtime that knows no variant stops at the first
+        // module it finds, the plain one.
+        for (NSString* text in @[ msl ?: @"", ptx ?: @"", wgsl ?: @"", vmsl ?: @"", vptx ?: @"", vwgsl ?: @"" ])
             {
             if (!text.length)
                 continue;
@@ -604,11 +662,13 @@ static BOOL gEmitsWGSL = NO;
             [all appendData:[text dataUsingEncoding:NSUTF8StringEncoding]];
             [all appendBytes:&zero length:1];
             }
-        if (spv)
+        for (NSData* mod in @[ spv ?: [NSData data], vspv ?: [NSData data] ])
             {
+            if (!mod.length)
+                continue;
             while (all.length % 4)
                 [all appendBytes:&zero length:1];
-            [all appendData:spv];
+            [all appendData:mod];
             }
         // A block the run must check (guard= words) and no form to carry the
         // check runs serially: its threads could otherwise meet.

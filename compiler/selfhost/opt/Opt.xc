@@ -1427,25 +1427,24 @@ class BeFact : Object
         B.insns().add((Object*)c);
         }
 
-    u32 _escTrips;  // the target row's trips per escape test (Lower.setGpuEscTrips), 0: off
+    u32 _escTrips;     // the variant copy's trips per escape test (Lower.parKernelModule), 0: off
+    Array* _escChanged; // of String*: the functions whose loops gpuEscapeTrips changed
     void setEscTrips(u32 n)
         {
         _escTrips = n;
         }
+    Array* escChanged(void)
+        {
+        return _escChanged == (Array*)0 ? new Array() : _escChanged;
+        }
 
     void gpuEscapeTrips(IRModule* mod)
         {
-        // The target row's trips; XTGPU_ESC_TRIPS=<n> overrides it, for measuring.
         i64 trips = (i64)_escTrips;
-        u8* e = _xt_getenv("XTGPU_ESC_TRIPS");
-        if (e != (u8*)0 && e[0] != (u8)0)
-            {
-            trips = (i64)0;
-            for (u32 k = (u32)0; e[k] >= (u8)'0' && e[k] <= (u8)'9'; k = k + (u32)1)
-                trips = trips * (i64)10 + (i64)(e[k] - (u8)'0');
-            }
         if (trips < (i64)2)
             return;
+        if (_escChanged == (Array*)0)
+            _escChanged = new Array();
         for (u32 fi = (u32)0; fi < mod.funcs().count(); fi = fi + (u32)1)
             {
             IRFunc* fn = (IRFunc*)mod.funcs().get(fi);
@@ -1545,6 +1544,12 @@ class BeFact : Object
                     IRInsn* p = (IRInsn*)H.phis().get(q);
                     p.ops().set(((IROperand*)p.ops().get((u32)0)).blk() == B ? (u32)1 : (u32)3, cur.get(q));
                     }
+                bool listed = false;
+                for (u32 k = (u32)0; k < _escChanged.count(); k = k + (u32)1)
+                    if (((String*)_escChanged.get(k)).equals(fn.name()))
+                        listed = true;
+                if (!listed)
+                    _escChanged.add((Object*)fn.name());
                 }
             }
         }

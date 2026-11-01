@@ -47,7 +47,7 @@ class ParWebGpu
 
     static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
-        src = ParDevice.sectionOf(src, "wgsl", true);
+        src = ParDevice.sectionFor(src, "wgsl", true, (String*)0);
         if (src == (u8*)0)
             return ParDevice.cpu("it has no WebGPU version");
         i64 started = ParDevice.nowUs();
