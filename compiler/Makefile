@@ -1531,6 +1531,17 @@ done
 @# The GPLv3 text travels with the binaries. The runtime exception,
 @# lib/xc/COPYING.RUNTIME, is already there via SUPPORT_SRCS.
 @$(CP) ../COPYING $(DIST_STAGE)/xcc-$(1)-$(VERSION)/COPYING
+@# The TLS library for every target, as `make install` builds it into the
+@# compiler's own 3p (not the host shim, which only a source build uses): an
+@# unpacked archive's `xcc --print-3p-dir` is its own 3p/, so `#use <tls>`
+@# (Http's https, wss) works from a download as from an install. Mbed TLS's
+@# notice and licence go with it, as in the xcd archives.
+@if [ -d "$(THIRDPARTY)/tls/x86_64" ]; then \
+	mkdir -p $(DIST_STAGE)/xcc-$(1)-$(VERSION)/3p/tls; \
+	for d in $(THIRDPARTY)/tls/*; do [ "$$(basename $$d)" = host ] && continue; \
+		cp -R $$d $(DIST_STAGE)/xcc-$(1)-$(VERSION)/3p/tls/ || exit 1; done; \
+	$(CP) $(TLS_SRC)/NOTICE-mbedtls.md $(TLS_SRC)/LICENSE-mbedtls.txt $(DIST_STAGE)/xcc-$(1)-$(VERSION)/3p/tls/; \
+else echo "dist: no TLS in $(THIRDPARTY)/tls — run make install first"; exit 1; fi
 @if [ -d "$(X86_64_POOL)" ]; then \
 	mkdir -p $(DIST_STAGE)/xcc-$(1)-$(VERSION)/lib/xc/x86_64-sysroot; \
 	for f in $(X86_64_POOL_FILES); do \
