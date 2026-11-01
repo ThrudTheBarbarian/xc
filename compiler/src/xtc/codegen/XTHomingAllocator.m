@@ -531,6 +531,7 @@
           NSMutableArray<NSString*>* pool = [NSMutableArray arrayWithArray:caller];
           [pool addObjectsFromArray:callee];
           NSSet<NSString*>* callerSet = [NSSet setWithArray:caller];
+          NSSet<NSNumber*>* candSet = [NSSet setWithArray:cands];
           NSUInteger nr = pool.count;
           NSMutableArray<NSMutableArray<NSNumber*>*>* regVals = [NSMutableArray array];
           for (NSUInteger i = 0; i < nr; i++)
@@ -556,6 +557,34 @@
                       chosen = (NSInteger)r;
                       break;
                       }
+                  }
+              // No partner homed yet: take a register its partners will fit
+              // too (the ones still to come, in this class, that it does not
+              // conflict with), so the phi's copy can still disappear when
+              // they come. Greedy order alone gave a loop's `i` and `i + 1`
+              // two registers and a copy on every back edge (sieve, array_map,
+              // 2026-11-01). As the port.
+              NSMutableArray<NSNumber*>* waiting = [NSMutableArray array];
+              for (NSNumber* rv in related[v])
+                  if (!homeReg[rv] && [candSet containsObject:rv] && !conflict(v, rv) && ![waiting containsObject:rv])
+                      [waiting addObject:rv];
+              for (NSUInteger r = 0; chosen < 0 && waiting.count && r < nr; r++)
+                  {
+                  if (!fits(r))
+                      continue;
+                  BOOL all = YES;
+                  for (NSNumber* w in waiting)
+                      {
+                      if ([crossesCall containsObject:w] && [callerSet containsObject:pool[r]])
+                          all = NO;
+                      for (NSNumber* y in regVals[r])
+                          if (all && conflict(w, y))
+                              all = NO;
+                      if (!all)
+                          break;
+                      }
+                  if (all)
+                      chosen = (NSInteger)r;
                   }
               for (NSUInteger r = 0; chosen < 0 && r < nr; r++)
                   if (fits(r))

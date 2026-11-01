@@ -916,6 +916,9 @@ class BitSet
         Array* regVals = new Array();
         for (u32 i = (u32)0; i < nr; i = i + (u32)1)
             regVals.add((Object*)new Array());
+        BitSet* candSet = BitSet.withCapacity(_nv);
+        for (u32 ci = (u32)0; ci < cands.count(); ci = ci + (u32)1)
+            candSet.add(((Number*)cands.get(ci)).asU32());
         for (u32 ci = (u32)0; ci < cands.count(); ci = ci + (u32)1)
             {
             u32 v = ((Number*)cands.get(ci)).asU32();
@@ -934,6 +937,43 @@ class BitSet
                             chosen = (i32)r;
                         r = nr;
                         }
+                }
+            // No partner homed yet: take a register its partners will fit too
+            // (the ones still to come, in this class, that it does not
+            // conflict with), so the phi's copy can still disappear when they
+            // come. Greedy order alone gave a loop's `i` and `i + 1` two
+            // registers and a copy on every back edge (sieve, array_map,
+            // 2026-11-01). Mirrors the original.
+            Array* waiting = new Array();
+            for (u32 k = (u32)0; rel != (Array*)0 && k < rel.count(); k = k + (u32)1)
+                {
+                u32 w = ((Number*)rel.get(k)).asU32();
+                if (homeOf(w) != (String*)0 || !candSet.has(w) || conflict(v, w))
+                    continue;
+                bool seen = false;
+                for (u32 q = (u32)0; q < waiting.count(); q = q + (u32)1)
+                    if (((Number*)waiting.get(q)).asU32() == w)
+                        seen = true;
+                if (!seen)
+                    waiting.add((Object*)Number.with(w));
+                }
+            for (u32 r = (u32)0; r < nr && chosen < (i32)0 && waiting.count() > (u32)0; r = r + (u32)1)
+                {
+                if (!fits(v, r, regVals, mayUseCaller, caller.count()))
+                    continue;
+                bool all = true;
+                for (u32 q = (u32)0; q < waiting.count() && all; q = q + (u32)1)
+                    {
+                    u32 w = ((Number*)waiting.get(q)).asU32();
+                    if (_crossesCall.has(w) && r < caller.count())
+                        all = false;
+                    Array* occ = (Array*)regVals.get(r);
+                    for (u32 y = (u32)0; y < occ.count() && all; y = y + (u32)1)
+                        if (conflict(w, ((Number*)occ.get(y)).asU32()))
+                            all = false;
+                    }
+                if (all)
+                    chosen = (i32)r;
                 }
             for (u32 r = (u32)0; r < nr && chosen < (i32)0; r = r + (u32)1)
                 if (fits(v, r, regVals, mayUseCaller, caller.count()))

@@ -7256,6 +7256,35 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
     return @"cmovne";
     }
 
+// The jump taken when the ICmp predicate is TRUE.
++ (NSString*)jccForICmp:(uint8_t)p
+    {
+    switch (p)
+        {
+    case XTIRICmpEQ:
+        return @"je";
+    case XTIRICmpNE:
+        return @"jne";
+    case XTIRICmpSLT:
+        return @"jl";
+    case XTIRICmpSGT:
+        return @"jg";
+    case XTIRICmpSLE:
+        return @"jle";
+    case XTIRICmpSGE:
+        return @"jge";
+    case XTIRICmpULT:
+        return @"jb";
+    case XTIRICmpUGT:
+        return @"ja";
+    case XTIRICmpULE:
+        return @"jbe";
+    case XTIRICmpUGE:
+        return @"jae";
+        }
+    return @"jne";
+    }
+
 + (NSString*)jccForNegatedICmp:(uint8_t)p
     {
     switch (p)
@@ -7501,15 +7530,66 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             else if (!cond)
                 cond = o;
             }
-        NSString* flab = [NSString stringWithFormat:@".Lf_%@_%@", fn.name, blk.name ?: @"b"];
-        XTIRInsn* fcmp = blk.instructions.lastObject;
-        if (cond && cond.kind == XTIROperandKindUse && sFusedCmp && [sFusedCmp containsObject:@(cond.valueId)] && fcmp && fcmp.opcode == XTIROpICmp && fcmp.result && fcmp.result.valueId == cond.valueId)
-            {
-            // The ICmp already emitted `cmp` and left the flags set: branch to
-            // the false target on the NEGATED predicate. No boolean/test.
-            [out appendFormat:@"\t%@\t%@\n", [self jccForNegatedICmp:fcmp.predicate], flab];
-            }
+        // Phi copies per edge first: they decide where each edge may go.
+        NSMutableString* tcopies = [NSMutableString string];
+        NSMutableString* fcopies = [NSMutableString string];
+        if (tb)
+            [self phiEdgesFrom:blk to:tb fn:fn slot:slot out:tcopies];
+        if (fb)
+            [self phiEdgesFrom:blk to:fb fn:fn slot:slot out:fcopies];
+        // ONE conditional jump, straight to its block (2026-11-01, sieve). It
+        // was `jcc .Lf; jmp T; .Lf: jmp F`, so the path into the next block
+        // took a branch either way. Which edge jumps:
+        //   1. a BACK edge with copies (a loop latch) is the hot one: jump to
+        //      the other edge, and the copies go inline before the jmp back
+        //      (one taken branch per iteration, as before);
+        //   2. otherwise, an edge to the NEXT block falls through with its
+        //      copies inline, and the jump goes to the other (sort_small's
+        //      inner while: the exit's copies must not put a jump on the
+        //      way into the loop body);
+        //   3. neither next: jump to the edge with no copies, the other's
+        //      copies inline, then a jmp.
+        // A jumped edge with copies goes through a stub after the function.
+        // As the port.
+        NSUInteger bi = [fn.blocks indexOfObjectIdenticalTo:blk];
+        XTIRBlock* nxt = (bi != NSNotFound && bi + 1 < fn.blocks.count) ? fn.blocks[bi + 1] : nil;
+        BOOL tc = tcopies.length > 0, fc = fcopies.length > 0;
+        NSUInteger ti = tb ? [fn.blocks indexOfObjectIdenticalTo:tb] : NSNotFound;
+        NSUInteger fi = fb ? [fn.blocks indexOfObjectIdenticalTo:fb] : NSNotFound;
+        BOOL tBack = tc && ti != NSNotFound && bi != NSNotFound && ti <= bi;
+        BOOL fBack = fc && fi != NSNotFound && bi != NSNotFound && fi <= bi;
+        BOOL jumpToFalse;
+        if (tBack != fBack)
+            jumpToFalse = tBack;            // 1: the back edge's copies go inline
+        else if (nxt == tb && tb != fb)
+            jumpToFalse = YES;              // 2: fall into the true target
+        else if (nxt == fb)
+            jumpToFalse = NO;               // 2: fall into the false target
         else
+            jumpToFalse = tc && !fc;        // 3: jump to the edge without copies
+        if (!tb || !fb)
+            jumpToFalse = NO;
+        XTIRBlock* jb = jumpToFalse ? fb : tb;                  // the jump's target
+        XTIRBlock* lb = jumpToFalse ? tb : fb;                  // the rest's
+        NSString* jcopies = jumpToFalse ? fcopies : tcopies;
+        NSString* lcopies = jumpToFalse ? tcopies : fcopies;
+        NSString* jlab = jb ? [self blockLabel:jb fn:fn] : nil;
+        if (jb && jcopies.length > 0)
+            {
+            NSString* stub = [NSString stringWithFormat:@".Le_%@_%@", fn.name, blk.name ?: @"b"];
+            if (sEdgeStubs)
+                [sEdgeStubs appendFormat:@"%@:\n%@\tjmp\t%@\n", stub, jcopies, jlab];
+            jlab = stub;
+            }
+        XTIRInsn* fcmp = blk.instructions.lastObject;
+        if (jb && cond && cond.kind == XTIROperandKindUse && sFusedCmp && [sFusedCmp containsObject:@(cond.valueId)] && fcmp && fcmp.opcode == XTIROpICmp && fcmp.result && fcmp.result.valueId == cond.valueId)
+            {
+            // The ICmp already emitted `cmp` and left the flags set: no
+            // boolean, no test.
+            NSString* j = jumpToFalse ? [self jccForNegatedICmp:fcmp.predicate] : [self jccForICmp:fcmp.predicate];
+            [out appendFormat:@"\t%@\t%@\n", j, jlab];
+            }
+        else if (jb)
             {
             // Zero-extend the condition: a narrow (bool/u8) cond loaded as `mov al`
             // leaves stale high bits, and `test eax,eax` would then see a false
@@ -7521,35 +7601,13 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
                 cw = [self condWidth:cond fn:fn];
                 }
             [out appendFormat:@"\ttest\t%@, %@\n", [self reg:'a' width:cw], [self reg:'a' width:cw]];
-            [out appendFormat:@"\tje\t%@\n", flab]; // false → flab
+            [out appendFormat:@"\t%@\t%@\n", jumpToFalse ? @"je" : @"jne", jlab];
             }
-        NSMutableString* tcopies = [NSMutableString string];
-        NSMutableString* fcopies = [NSMutableString string];
-        if (tb)
-            [self phiEdgesFrom:blk to:tb fn:fn slot:slot out:tcopies];
-        if (fb)
-            [self phiEdgesFrom:blk to:fb fn:fn slot:slot out:fcopies];
-        // The true target is the next block and only the false edge has copies
-        // (a rotated loop's back edge, whose exit feeds a phi): fall into the
-        // true target, and put the false edge's copies after the function, so
-        // the loop does not take a branch every iteration to skip them.
-        NSUInteger bi = [fn.blocks indexOfObjectIdenticalTo:blk];
-        if (tb && fb && sEdgeStubs && tcopies.length == 0 && fcopies.length > 0 && bi != NSNotFound &&
-            bi + 1 < fn.blocks.count && fn.blocks[bi + 1] == tb)
+        if (lb)
             {
-            [sEdgeStubs appendFormat:@"%@:\n%@\tjmp\t%@\n", flab, fcopies, [self blockLabel:fb fn:fn]];
-            return;
-            }
-        if (tb)
-            {
-            [out appendString:tcopies];
-            [out appendFormat:@"\tjmp\t%@\n", [self blockLabel:tb fn:fn]];
-            }
-        [out appendFormat:@"%@:\n", flab];
-        if (fb)
-            {
-            [out appendString:fcopies];
-            [out appendFormat:@"\tjmp\t%@\n", [self blockLabel:fb fn:fn]];
+            [out appendString:lcopies];
+            // The fall-through peephole drops this when lb is next.
+            [out appendFormat:@"\tjmp\t%@\n", [self blockLabel:lb fn:fn]];
             }
         return;
         }

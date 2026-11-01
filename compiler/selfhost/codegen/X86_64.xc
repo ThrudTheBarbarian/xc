@@ -6582,34 +6582,7 @@ class X86_64
                 cond = o;
                 }
             }
-        String* flab = String.withCString(".Lf_");
-        flab.append(fn.name());
-        flab.appendCString("_");
-        flab.append(bb.name());
-        IRInsn* fcmp = bb.insns().count() > (u32)0
-                           ? (IRInsn*)bb.insns().get(bb.insns().count() - (u32)1)
-                           : (IRInsn*)0;
-        bool fused = cond != (IROperand*)0 && cond.kind() == (u8)OPK_USE && inFused(cond.val()) && fcmp != (IRInsn*)0 && fcmp.res() == cond.val();
-        if (fused)
-            {
-            // The ICmp already emitted its cmp and the flags are still set:
-            // branch to the FALSE target on the negated predicate.
-            _out.appendFormat("\t%s\t%s\n", jccForNegated(fcmp.pred()).cString(), flab.cString());
-            }
-        else
-            {
-            // The condition ZERO-extends: a narrow bool loaded as `mov al` leaves
-            // stale high bits, and `test eax, eax` would then read a false
-            // condition as non-zero.
-            u32 cw = (u32)4;
-            if (cond != (IROperand*)0)
-                {
-                loadZX(cond, (u8)'a');
-                cw = condWidth(cond);
-                }
-            _out.appendFormat("\ttest\t%s, %s\n", reg((u8)'a', cw).cString(), reg((u8)'a', cw).cString());
-            _out.appendFormat("\tje\t%s\n", flab.cString());
-            }
+        // Phi copies per edge first: they decide where each edge may go.
         String* saved = _out;
         String* tcopies = new String();
         String* fcopies = new String();
@@ -6624,33 +6597,128 @@ class X86_64
             phiEdges(fn, bb, fb);
             }
         _out = saved;
-        // The true target is the next block and only the false edge has copies
-        // (a rotated loop's back edge, whose exit feeds a phi): fall into the
-        // true target, and put the false edge's copies after the function, so
-        // the loop does not take a branch every iteration to skip them.
-        // Mirrors the original.
+        // ONE conditional jump, straight to its block (2026-11-01, sieve). It
+        // was `jcc .Lf; jmp T; .Lf: jmp F`, so the path into the next block
+        // took a branch either way. Which edge jumps:
+        //   1. a BACK edge with copies (a loop latch) is the hot one: jump to
+        //      the other edge, and the copies go inline before the jmp back
+        //      (one taken branch per iteration, as before);
+        //   2. otherwise, an edge to the NEXT block falls through with its
+        //      copies inline, and the jump goes to the other (sort_small's
+        //      inner while: the exit's copies must not put a jump on the
+        //      way into the loop body);
+        //   3. neither next: jump to the edge with no copies, the other's
+        //      copies inline, then a jmp.
+        // A jumped edge with copies goes through a stub after the function.
+        // As the reference.
         u32 bi = (u32)0;
         while (bi < fn.blocks().count() && (IRBlock*)fn.blocks().get(bi) != bb)
             bi = bi + (u32)1;
-        if (tb != (IRBlock*)0 && fb != (IRBlock*)0 && _edgeStubs != (String*)0 && tcopies.byteLength() == (u32)0 &&
-            fcopies.byteLength() > (u32)0 && bi + (u32)1 < fn.blocks().count() && (IRBlock*)fn.blocks().get(bi + (u32)1) == tb)
+        IRBlock* nxt = bi + (u32)1 < fn.blocks().count() ? (IRBlock*)fn.blocks().get(bi + (u32)1) : (IRBlock*)0;
+        bool tc = tcopies.byteLength() > (u32)0;
+        bool fc = fcopies.byteLength() > (u32)0;
+        u32 nbk = fn.blocks().count();
+        u32 ti = nbk;
+        u32 fi = nbk;
+        for (u32 q = (u32)0; q < nbk; q = q + (u32)1)
             {
-            _edgeStubs.appendFormat("%s:\n", flab.cString());
-            _edgeStubs.append(fcopies);
-            _edgeStubs.appendFormat("\tjmp\t%s\n", blockLabel(fn, fb).cString());
-            return;
+            IRBlock* qb = (IRBlock*)fn.blocks().get(q);
+            if (qb == tb && ti == nbk)
+                ti = q;
+            if (qb == fb && fi == nbk)
+                fi = q;
             }
-        if (tb != (IRBlock*)0)
+        bool tBack = tc && ti < nbk && bi < nbk && ti <= bi;
+        bool fBack = fc && fi < nbk && bi < nbk && fi <= bi;
+        bool jumpToFalse = false;
+        if (tBack != fBack)
+            jumpToFalse = tBack;
+        else if (nxt == tb && tb != fb)
+            jumpToFalse = true;
+        else if (nxt == fb)
+            jumpToFalse = false;
+        else
+            jumpToFalse = tc && !fc;
+        if (tb == (IRBlock*)0 || fb == (IRBlock*)0)
+            jumpToFalse = false;
+        IRBlock* jb = jumpToFalse ? fb : tb;
+        IRBlock* lb = jumpToFalse ? tb : fb;
+        String* jcopies = jumpToFalse ? fcopies : tcopies;
+        String* lcopies = jumpToFalse ? tcopies : fcopies;
+        String* jlab = jb != (IRBlock*)0 ? blockLabel(fn, jb) : (String*)0;
+        if (jb != (IRBlock*)0 && jcopies.byteLength() > (u32)0)
             {
-            _out.append(tcopies);
-            _out.appendFormat("\tjmp\t%s\n", blockLabel(fn, tb).cString());
+            String* stub = String.withCString(".Le_");
+            stub.append(fn.name());
+            stub.appendCString("_");
+            stub.append(bb.name());
+            if (_edgeStubs != (String*)0)
+                {
+                _edgeStubs.appendFormat("%s:\n", stub.cString());
+                _edgeStubs.append(jcopies);
+                _edgeStubs.appendFormat("\tjmp\t%s\n", jlab.cString());
+                }
+            jlab = stub;
             }
-        _out.appendFormat("%s:\n", flab.cString());
-        if (fb != (IRBlock*)0)
+        IRInsn* fcmp = bb.insns().count() > (u32)0
+                           ? (IRInsn*)bb.insns().get(bb.insns().count() - (u32)1)
+                           : (IRInsn*)0;
+        bool fused = cond != (IROperand*)0 && cond.kind() == (u8)OPK_USE && inFused(cond.val()) && fcmp != (IRInsn*)0 && fcmp.res() == cond.val();
+        if (jb != (IRBlock*)0 && fused)
             {
-            _out.append(fcopies);
-            _out.appendFormat("\tjmp\t%s\n", blockLabel(fn, fb).cString());
+            // The ICmp already emitted its cmp and the flags are still set: no
+            // boolean, no test.
+            String* j = jumpToFalse ? jccForNegated(fcmp.pred()) : jccFor(fcmp.pred());
+            _out.appendFormat("\t%s\t%s\n", j.cString(), jlab.cString());
             }
+        else if (jb != (IRBlock*)0)
+            {
+            // The condition ZERO-extends: a narrow bool loaded as `mov al` leaves
+            // stale high bits, and `test eax, eax` would then read a false
+            // condition as non-zero.
+            u32 cw = (u32)4;
+            if (cond != (IROperand*)0)
+                {
+                loadZX(cond, (u8)'a');
+                cw = condWidth(cond);
+                }
+            _out.appendFormat("\ttest\t%s, %s\n", reg((u8)'a', cw).cString(), reg((u8)'a', cw).cString());
+            _out.appendFormat("\t%s\t%s\n", jumpToFalse ? "je" : "jne", jlab.cString());
+            }
+        if (lb != (IRBlock*)0)
+            {
+            _out.append(lcopies);
+            // The fall-through peephole drops this when lb is next.
+            _out.appendFormat("\tjmp\t%s\n", blockLabel(fn, lb).cString());
+            }
+        }
+
+    // The jump taken when the ICmp predicate is TRUE.
+    static String* jccFor(String* p)
+        {
+        if (p == (String*)0)
+            return String.withCString("jne");
+        if (p.equals(String.withCString("EQ")))
+            return String.withCString("je");
+        if (p.equals(String.withCString("NE")))
+            return String.withCString("jne");
+        if (p.equals(String.withCString("SLT")))
+            return String.withCString("jl");
+        if (p.equals(String.withCString("SLE")))
+            return String.withCString("jle");
+        if (p.equals(String.withCString("SGT")))
+            return String.withCString("jg");
+        if (p.equals(String.withCString("SGE")))
+            return String.withCString("jge");
+        if (p.equals(String.withCString("ULT")))
+            return String.withCString("jb");
+        if (p.equals(String.withCString("ULE")))
+            return String.withCString("jbe");
+        if (p.equals(String.withCString("UGT")))
+            return String.withCString("ja");
+        if (p.equals(String.withCString("UGE")))
+            return String.withCString("jae");
+        return String.withCString("jne");
         }
 
     static String* jccForNegated(String* p)
