@@ -39,8 +39,11 @@ i32 main(void)
             }
         }
     // Lanes that leave on the first trip (0), part-way (615, 679: not on a
-    // multiple of eight) and at the cap (2080).
-    Stdio.printf("total %u k %u %u %u %u x %.4f %.4f\n", total, counts[(u32)0], counts[(u32)615],
+    // multiple of eight) and at the cap (2080). Three decimals: lane 615 ends
+    // at -0.33995, where a device's contracted multiply-adds land either side
+    // of a fourth one (-0.3399 on llvmpipe and the Mac, -0.3400 on RADV and
+    // the x86-64 CPU).
+    Stdio.printf("total %u k %u %u %u %u x %.3f %.3f\n", total, counts[(u32)0], counts[(u32)615],
                  counts[(u32)679], counts[(u32)2080], (double)ends[(u32)615], (double)ends[(u32)2080]);
     return (i32)0;
     }
