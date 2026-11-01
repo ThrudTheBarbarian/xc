@@ -2083,14 +2083,16 @@ class X86_64
     // multiplies the EVEN lanes (0 and 2) into two 64-bit results, so the four
     // high halves take two products and a re-interleave:
     //
-    //   xmm0 = hi(a0*b0), hi(a2*b2)   in lanes 0 and 2
-    //   xmm1 = hi(a1*b1), hi(a3*b3)   in lanes 0 and 2   (operands swapped
-    //                                  within each pair by pshufd 0xB1)
-    //   shufps 0x88 gathers <h0,h2,h1,h3>, pshufd 0xD8 puts it back in order.
+    //   r0 = a0*b0, a2*b2             (64-bit; the high halves are dwords 1, 3)
+    //   r1 = a1*b1, a3*b3             (pshufd 0xF5 moves lanes 1 and 3 down)
+    //   shufps 0xDD gathers the odd dwords <h0,h2,h1,h3>, pshufd 0xD8 orders them.
     //
-    // The operand order matters for aliasing: `a` is dead once both shuffles
-    // have read it, and `b` is read into the DESTINATION last, so d may alias
-    // either input without losing a value that is still needed.
+    // Taking the odd dwords is what makes the two psrlq of the first form
+    // unneeded, and a splat `b` (a constant divisor's magic number, every
+    // lane the same) is its own odd-lane shuffle: 5 instructions where there
+    // were 8 (int_muldiv, 2026-11-01). The operand order matters for
+    // aliasing: `a` is dead once both products have read it, and `b` is read
+    // into the DESTINATION last, so d may alias either input.
     void emitVMulHi(IRInsn* n)
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
@@ -2104,6 +2106,7 @@ class X86_64
         String* b = vecOf(o1.val());
         if (d == (String*)0 || a == (String*)0 || b == (String*)0)
             return;
+        bool bSplat = _splatVec != (Map*)0 && _splatVec.get((Hashable*)Number.withU32(o1.val().pid())) != (Object*)0;
         if (isYmm(d) || isZmm(d))
             {
             // The same sequence in VEX.256 or EVEX.512: pmuludq / pshufd /
@@ -2111,24 +2114,30 @@ class X86_64
             // per-pair shape. Register 0 and 1 at the same width are scratch.
             String* w = d.substringBytes((u32)0, (u32)1);
             _out.appendFormat("\tvpmuludq\t%smm0, %s, %s\n", w.cString(), a.cString(), b.cString());
-            _out.appendFormat("\tvpsrlq\t%smm0, %smm0, 32\n", w.cString(), w.cString());
-            _out.appendFormat("\tvpshufd\t%smm1, %s, 0xB1\n", w.cString(), a.cString());
-            _out.appendFormat("\tvpshufd\t%s, %s, 0xB1\n", d.cString(), b.cString());
-            _out.appendFormat("\tvpmuludq\t%smm1, %smm1, %s\n", w.cString(), w.cString(), d.cString());
-            _out.appendFormat("\tvpsrlq\t%smm1, %smm1, 32\n", w.cString(), w.cString());
-            _out.appendFormat("\tvshufps\t%s, %smm0, %smm1, 0x88\n", d.cString(), w.cString(), w.cString());
+            _out.appendFormat("\tvpshufd\t%smm1, %s, 0xF5\n", w.cString(), a.cString());
+            if (bSplat)
+                _out.appendFormat("\tvpmuludq\t%smm1, %smm1, %s\n", w.cString(), w.cString(), b.cString());
+            else
+                {
+                _out.appendFormat("\tvpshufd\t%s, %s, 0xF5\n", d.cString(), b.cString());
+                _out.appendFormat("\tvpmuludq\t%smm1, %smm1, %s\n", w.cString(), w.cString(), d.cString());
+                }
+            _out.appendFormat("\tvshufps\t%s, %smm0, %smm1, 0xDD\n", d.cString(), w.cString(), w.cString());
             _out.appendFormat("\tvpshufd\t%s, %s, 0xD8\n", d.cString(), d.cString());
             return;
             }
         _out.appendFormat("\tmovdqa\txmm0, %s\n", a.cString());
         _out.appendFormat("\tpmuludq\txmm0, %s\n", b.cString());
-        _out.appendCString("\tpsrlq\txmm0, 32\n");
-        _out.appendFormat("\tpshufd\txmm1, %s, 0xB1\n", a.cString());
-        _out.appendFormat("\tpshufd\t%s, %s, 0xB1\n", d.cString(), b.cString());
-        _out.appendFormat("\tpmuludq\txmm1, %s\n", d.cString());
-        _out.appendCString("\tpsrlq\txmm1, 32\n");
+        _out.appendFormat("\tpshufd\txmm1, %s, 0xF5\n", a.cString());
+        if (bSplat)
+            _out.appendFormat("\tpmuludq\txmm1, %s\n", b.cString());
+        else
+            {
+            _out.appendFormat("\tpshufd\t%s, %s, 0xF5\n", d.cString(), b.cString());
+            _out.appendFormat("\tpmuludq\txmm1, %s\n", d.cString());
+            }
         _out.appendFormat("\tmovdqa\t%s, xmm0\n", d.cString());
-        _out.appendFormat("\tshufps\t%s, xmm1, 0x88\n", d.cString());
+        _out.appendFormat("\tshufps\t%s, xmm1, 0xDD\n", d.cString());
         _out.appendFormat("\tpshufd\t%s, %s, 0xD8\n", d.cString(), d.cString());
         }
 
@@ -5227,6 +5236,20 @@ class X86_64
         // ms against 83.5). On by the owner, 2026-10-28.
         _fmaOk = fn.simdLevel() != (String*)0;
         _vexOk = fn.simdLevel() != (String*)0;
+        // The vectors whose lanes are all one value: VMulHi's odd-lane shuffle
+        // of one is the same register, so it is not made (2026-11-01). As the
+        // reference.
+        _splatVec = new Map();
+        for (u32 sbi = (u32)0; sbi < fn.blocks().count(); sbi = sbi + (u32)1)
+            {
+            IRBlock* sb = (IRBlock*)fn.blocks().get(sbi);
+            for (u32 sni = (u32)0; sni < sb.insns().count(); sni = sni + (u32)1)
+                {
+                IRInsn* sn = (IRInsn*)sb.insns().get(sni);
+                if (sn.op().equals(String.withCString("VSplat")) && sn.res() != (IRValue*)0)
+                    _splatVec.set((Hashable*)Number.withU32(sn.res().pid()), (Object*)Number.withU32((u32)1));
+                }
+            }
         if (_hasAsm)
             return;
         Map* uc = new Map();
@@ -8055,6 +8078,7 @@ class X86_64
     Map* _aligned;   // pinned large arrays placed on a 64-byte boundary
     Map* _fmaPhi;    // value -> its phi: a loop-carried addend stays unfused
     bool _fmaOk;     // this function's code has FMA (an avx2/avx512 copy)
+    Map* _splatVec;  // this function's VSplat results (every lane the same)
     bool _vexOk;     // this function is an avx2/avx512 copy: three-operand forms
     // A signed 32-bit value known to be non-negative: an And with a mask from
     // 0 to 2^31 - 1, or such a value plus a constant that keeps it under 2^31

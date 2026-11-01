@@ -55,6 +55,7 @@ static NSDictionary<NSNumber*, XTIRInsn*>* sSelSink = nil; // Select id -> its t
 static NSDictionary<NSNumber*, NSNumber*>* sFmaUc = nil; // value id -> its use count, for fmaPair
 static BOOL sFmaOk = NO;                                  // this function's code has FMA (avx2/avx512 copy)
 static BOOL sVexOk = NO;                                  // this function is an avx2/avx512 copy: three-operand forms
+static NSSet<NSNumber*>* sSplatVec = nil;                // this function's VSplat results (every lane the same)
 static NSSet<NSNumber*>* sAligned = nil;                  // pinned large arrays placed on a 64-byte boundary
 static NSSet<NSNumber*>* sFmaPhi = nil;                   // phi results: a loop-carried addend stays unfused
 // A signed 32-bit value known to be non-negative: an And with a mask from 0 to
@@ -3250,6 +3251,14 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
     // On by the owner, 2026-10-28. As the port.
     sFmaOk = fn.simdLevel != nil;
     sVexOk = fn.simdLevel != nil;
+    // The vectors whose lanes are all one value: VMulHi's odd-lane shuffle of
+    // one is the same register, so it is not made (2026-11-01). As the port.
+    NSMutableSet<NSNumber*>* splats = [NSMutableSet set];
+    for (XTIRBlock* sb in fn.blocks)
+        for (XTIRInsn* sn in sb.instructions)
+            if (sn.opcode == XTIROpVSplat && sn.result)
+                [splats addObject:@(sn.result.valueId)];
+    sSplatVec = splats;
     sNonNeg = nonNeg;
     // The given-up vector values are THIS function's: assignVectorRegsFor:
     // returns before it resets them when the function has no vector values
@@ -6131,14 +6140,16 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
     // multiplies the EVEN lanes (0 and 2) into two 64-bit results, so the four
     // high halves take two products and a re-interleave:
     //
-    //   xmm0 = hi(a0*b0), hi(a2*b2)   in lanes 0 and 2
-    //   xmm1 = hi(a1*b1), hi(a3*b3)   in lanes 0 and 2   (operands swapped
-    //                                  within each pair by pshufd 0xB1)
-    //   shufps 0x88 gathers <h0,h2,h1,h3>, pshufd 0xD8 puts it back in order.
+    //   r0 = a0*b0, a2*b2             (64-bit; the high halves are dwords 1, 3)
+    //   r1 = a1*b1, a3*b3             (pshufd 0xF5 moves lanes 1 and 3 down)
+    //   shufps 0xDD gathers the odd dwords <h0,h2,h1,h3>, pshufd 0xD8 orders them.
     //
-    // The operand order matters for aliasing: `a` is dead once both shuffles
-    // have read it, and `b` is read into the DESTINATION last, so d may alias
-    // either input without losing a value that is still needed.
+    // Taking the odd dwords is what makes the two psrlq of the first form
+    // unneeded, and a splat `b` (a constant divisor's magic number, every
+    // lane the same) is its own odd-lane shuffle: 5 instructions where there
+    // were 8 (int_muldiv, 2026-11-01). The operand order matters for
+    // aliasing: `a` is dead once both products have read it, and `b` is read
+    // into the DESTINATION last, so d may alias either input.
     case XTIROpVMulHi:
         {
         if (!res || ops.count < 2 || ops[0].kind != XTIROperandKindUse || ops[1].kind != XTIROperandKindUse)
@@ -6146,6 +6157,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
         NSString *d = sVec[@(res.valueId)], *a = sVec[@(ops[0].valueId)], *b = sVec[@(ops[1].valueId)];
         if (!d || !a || !b)
             return;
+        BOOL bSplat = [sSplatVec containsObject:@(ops[1].valueId)];
         if ([d hasPrefix:@"ymm"] || [d hasPrefix:@"zmm"])
             {
             // The same sequence in VEX.256 or EVEX.512: pmuludq / pshufd /
@@ -6153,24 +6165,30 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             // per-pair shape. Register 0 and 1 at the same width are scratch.
             NSString* w = [d substringToIndex:1];
             [out appendFormat:@"\tvpmuludq\t%@mm0, %@, %@\n", w, a, b];
-            [out appendFormat:@"\tvpsrlq\t%@mm0, %@mm0, 32\n", w, w];
-            [out appendFormat:@"\tvpshufd\t%@mm1, %@, 0xB1\n", w, a];
-            [out appendFormat:@"\tvpshufd\t%@, %@, 0xB1\n", d, b];
-            [out appendFormat:@"\tvpmuludq\t%@mm1, %@mm1, %@\n", w, w, d];
-            [out appendFormat:@"\tvpsrlq\t%@mm1, %@mm1, 32\n", w, w];
-            [out appendFormat:@"\tvshufps\t%@, %@mm0, %@mm1, 0x88\n", d, w, w];
+            [out appendFormat:@"\tvpshufd\t%@mm1, %@, 0xF5\n", w, a];
+            if (bSplat)
+                [out appendFormat:@"\tvpmuludq\t%@mm1, %@mm1, %@\n", w, w, b];
+            else
+                {
+                [out appendFormat:@"\tvpshufd\t%@, %@, 0xF5\n", d, b];
+                [out appendFormat:@"\tvpmuludq\t%@mm1, %@mm1, %@\n", w, w, d];
+                }
+            [out appendFormat:@"\tvshufps\t%@, %@mm0, %@mm1, 0xDD\n", d, w, w];
             [out appendFormat:@"\tvpshufd\t%@, %@, 0xD8\n", d, d];
             return;
             }
         [out appendFormat:@"\tmovdqa\txmm0, %@\n", a];
         [out appendFormat:@"\tpmuludq\txmm0, %@\n", b];
-        [out appendString:@"\tpsrlq\txmm0, 32\n"];
-        [out appendFormat:@"\tpshufd\txmm1, %@, 0xB1\n", a];
-        [out appendFormat:@"\tpshufd\t%@, %@, 0xB1\n", d, b];
-        [out appendFormat:@"\tpmuludq\txmm1, %@\n", d];
-        [out appendString:@"\tpsrlq\txmm1, 32\n"];
+        [out appendFormat:@"\tpshufd\txmm1, %@, 0xF5\n", a];
+        if (bSplat)
+            [out appendFormat:@"\tpmuludq\txmm1, %@\n", b];
+        else
+            {
+            [out appendFormat:@"\tpshufd\t%@, %@, 0xF5\n", d, b];
+            [out appendFormat:@"\tpmuludq\txmm1, %@\n", d];
+            }
         [out appendFormat:@"\tmovdqa\t%@, xmm0\n", d];
-        [out appendFormat:@"\tshufps\t%@, xmm1, 0x88\n", d];
+        [out appendFormat:@"\tshufps\t%@, xmm1, 0xDD\n", d];
         [out appendFormat:@"\tpshufd\t%@, %@, 0xD8\n", d, d];
         return;
         }
