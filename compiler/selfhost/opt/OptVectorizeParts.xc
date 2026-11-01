@@ -1694,12 +1694,29 @@
         return mask;
         }
 
+    // The lane of a vector type, `Vec(L)` or `Vec(L, bytes)`; null for any other.
+    final String* vuLaneOf(String* t)
+        {
+        if (t == (String*)0 || !t.hasPrefix(String.withCString("Vec(")) || !t.hasSuffix(String.withCString(")")))
+            return (String*)0;
+        String* inner = t.substringFromByte((u32)4);
+        String* lane = inner.substringToByte(inner.byteLength() - (u32)1);
+        for (u32 i = (u32)0; i < lane.byteLength(); i = i + (u32)1)
+            {
+            if (lane.byteAt(i) == (u8)'(')
+                return (String*)0;
+            if (lane.byteAt(i) == (u8)',')
+                return lane.substringToByte(i);
+            }
+        return lane;
+        }
+
     // One extra accumulator: its zeroed init in the preheader, its own iv offset,
     // and a clone of the iv-dependent chain with iv → iv+k*vw and vacc → vacc_k.
     final void vecUnrollCopy(u32 k, i32 vw, String* ivTy, String* vecTy,
                        IRValue* iv, IRValue* vacc, IRBlock* B, IRBlock* PH,
                        IRInsn* initInsn, IRInsn* vnextInsn, Array* ivDep,
-                       Array* appended, Array* newPhis, Array* accs)
+                       Array* appended, Array* newPhis, Array* accs, bool bigBody)
         {
         IRValue* vaccK = new IRValue(vecTy);
         // All U accumulators start from the SAME preheader broadcast — reuse
@@ -1712,18 +1729,141 @@
         ia.add(IROperand.useVal(iv));
         ia.add(IROperand.immI((i32)k * vw, ivTy));
         appended.add((Object*)ia);
+        u32 copyStart = appended.count() - (u32)1; // iv_k's index
+        IRValue* offK = (IRValue*)0;    // copy k's k*vw splat, once made
+        Map* offVals = new Map();         // copy 0 values whose copy k is them + k*vw
 
         Map* remap = new Map();
         remap.set((Hashable*)iv, (Object*)ivK);
         remap.set((Hashable*)vacc, (Object*)vaccK);
         IRValue* vnextK = (IRValue*)0;
+        // The values that depend on iv: iv itself and every result in ivDep.
+        Map* dep = new Map();
+        dep.set((Hashable*)iv, (Object*)iv);
+        for (u32 i = (u32)0; i < ivDep.count(); i = i + (u32)1)
+            {
+            IRInsn* dn = (IRInsn*)ivDep.get(i);
+            if (dn.res() != (IRValue*)0)
+                dep.set((Hashable*)dn.res(), (Object*)dn);
+            }
+        // A VSplat(iv) whose one use is the lane-index VAdd rewritten below is
+        // not cloned at all, outside a big body (whose clones pair with their
+        // originals by position): left in, it was still emitted, a broadcast
+        // nothing reads, every block. Mirrors the original.
+        Map* skipSplat = new Map();
+        if (!bigBody)
+            {
+            Map* uses = new Map();
+            for (u32 i = (u32)0; i < ivDep.count(); i = i + (u32)1)
+                {
+                IRInsn* u = (IRInsn*)ivDep.get(i);
+                for (u32 j = (u32)0; j < u.ops().count(); j = j + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)u.ops().get(j);
+                    if (o.kind() != (u8)OPK_USE)
+                        continue;
+                    Number* c = (Number*)uses.get((Hashable*)o.val());
+                    uses.set((Hashable*)o.val(), (Object*)Number.with(c == (Number*)0 ? (u32)1 : c.asU32() + (u32)1));
+                    }
+                }
+            for (u32 i = (u32)0; i < ivDep.count(); i = i + (u32)1)
+                {
+                IRInsn* u = (IRInsn*)ivDep.get(i);
+                if (!u.op().equals(String.withCString("VAdd")) || u.res() == (IRValue*)0 || u.ops().count() != (u32)2)
+                    continue;
+                for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1)
+                    {
+                    IROperand* sOp = (IROperand*)u.ops().get(q);
+                    IROperand* oOp = (IROperand*)u.ops().get((u32)1 - q);
+                    if (sOp.kind() != (u8)OPK_USE || oOp.kind() != (u8)OPK_USE)
+                        continue;
+                    Object* sdo = dep.get((Hashable*)sOp.val());
+                    if (sdo == (Object*)0 || sdo == (Object*)iv)
+                        continue;
+                    IRInsn* sd = (IRInsn*)sdo;
+                    if (!sd.op().equals(String.withCString("VSplat")) || sd.ops().count() < (u32)1)
+                        continue;
+                    IROperand* so = (IROperand*)sd.ops().get((u32)0);
+                    if (so.kind() != (u8)OPK_USE || so.val() != iv)
+                        continue;
+                    if (dep.get((Hashable*)oOp.val()) != (Object*)0 || vuLaneOf(u.res().ty()) == (String*)0)
+                        continue;
+                    Number* c = (Number*)uses.get((Hashable*)sOp.val());
+                    if (c != (Number*)0 && c.asU32() == (u32)1)
+                        skipSplat.set((Hashable*)sOp.val(), (Object*)sOp.val());
+                    }
+                }
+            }
         for (u32 i = (u32)0; i < ivDep.count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)ivDep.get(i);
+            if (n.res() != (IRValue*)0 && skipSplat.get((Hashable*)n.res()) != (Object*)0)
+                continue;
             IRInsn* cl = IRInsn.with(n.op());
             cl.copyDbg(n);
             cl.setPred(n.pred());
             cl.setCc(n.cc());
+            // The lane-index vector, VAdd(VSplat(iv), iota): copy k's is copy
+            // 0's plus a constant k*vw splat made once in the preheader, not a
+            // broadcast of iv+k*vw rebuilt every block (call_depth, 2026-11-01:
+            // zero, move, broadcast, two adds per block). Copy k's own VSplat
+            // is still cloned, so the clones stay in step with their originals,
+            // and dead-code drops it. Mirrors the original.
+            IRValue* ivSplatK = (IRValue*)0;
+            // Further along the same chain: VAdd(a value that is copy 0's plus
+            // k*vw, an invariant) is copy 0's result plus k*vw too, so the
+            // seed's add is folded into copy 0's and copy k pays one add, not
+            // two (as clang's base + 16k vectors). Mirrors the original.
+            if (offK != (IRValue*)0 && n.op().equals(String.withCString("VAdd")) && n.res() != (IRValue*)0 && n.ops().count() == (u32)2)
+                for (u32 q = (u32)0; q < (u32)2 && ivSplatK == (IRValue*)0; q = q + (u32)1)
+                    {
+                    IROperand* aOp = (IROperand*)n.ops().get(q);
+                    IROperand* oOp = (IROperand*)n.ops().get((u32)1 - q);
+                    if (aOp.kind() == (u8)OPK_USE && offVals.get((Hashable*)aOp.val()) != (Object*)0
+                        && oOp.kind() == (u8)OPK_USE && dep.get((Hashable*)oOp.val()) == (Object*)0
+                        && n.res().ty().equals(offK.ty()))
+                        ivSplatK = offK;
+                    }
+            if (ivSplatK == (IRValue*)0 && n.op().equals(String.withCString("VAdd")) && n.res() != (IRValue*)0 && n.ops().count() == (u32)2)
+                for (u32 q = (u32)0; q < (u32)2 && ivSplatK == (IRValue*)0; q = q + (u32)1)
+                    {
+                    IROperand* sOp = (IROperand*)n.ops().get(q);
+                    IROperand* oOp = (IROperand*)n.ops().get((u32)1 - q);
+                    if (sOp.kind() != (u8)OPK_USE || oOp.kind() != (u8)OPK_USE)
+                        continue;
+                    Object* sdo = dep.get((Hashable*)sOp.val());
+                    if (sdo == (Object*)0 || sdo == (Object*)iv)
+                        continue;
+                    IRInsn* sd = (IRInsn*)sdo;
+                    if (!sd.op().equals(String.withCString("VSplat")) || sd.ops().count() < (u32)1)
+                        continue;
+                    IROperand* so = (IROperand*)sd.ops().get((u32)0);
+                    if (so.kind() != (u8)OPK_USE || so.val() != iv)
+                        continue;
+                    if (dep.get((Hashable*)oOp.val()) != (Object*)0)
+                        continue;
+                    String* lane = vuLaneOf(n.res().ty());
+                    if (lane == (String*)0)
+                        continue;
+                    IRValue* kc = new IRValue(lane);
+                    IRInsn* kci = IRInsn.with(String.withCString("Const"));
+                    kci.setRes(kc);
+                    kci.add(IROperand.immI((i32)k * vw, lane));
+                    PH.insns().add((Object*)kci);
+                    ivSplatK = new IRValue(n.res().ty());
+                    IRInsn* ksp = IRInsn.with(String.withCString("VSplat"));
+                    ksp.setRes(ivSplatK);
+                    ksp.add(IROperand.useVal(kc));
+                    PH.insns().add((Object*)ksp);
+                    }
+            if (ivSplatK != (IRValue*)0)
+                {
+                cl.add(IROperand.useVal(n.res()));
+                cl.add(IROperand.useVal(ivSplatK));
+                offK = ivSplatK;
+                offVals.set((Hashable*)n.res(), (Object*)n.res());
+                }
+            else
             for (u32 j = (u32)0; j < n.ops().count(); j = j + (u32)1)
                 {
                 IROperand* o = (IROperand*)n.ops().get(j);
@@ -1742,6 +1882,55 @@
             appended.add((Object*)cl);
             if (n == vnextInsn)
                 vnextK = cl.res();
+            }
+        if (!bigBody)
+            {
+            // This copy's clones nothing reads, the VAdds the fold above
+            // bypassed: dead-code keeps vector ops, so they go here.
+            bool again = true;
+            while (again)
+                {
+                again = false;
+                for (u32 q = appended.count(); q > copyStart + (u32)1; q = q - (u32)1)
+                    {
+                    IRInsn* cn = (IRInsn*)appended.get(q - (u32)1);
+                    if (cn.res() == (IRValue*)0 || cn.res() == vnextK
+                        || !(cn.op().equals(String.withCString("VAdd")) || cn.op().equals(String.withCString("VSplat"))))
+                        continue;
+                    bool read = false;
+                    for (u32 r = copyStart; r < appended.count() && !read; r = r + (u32)1)
+                        {
+                        IRInsn* rn = (IRInsn*)appended.get(r);
+                        for (u32 j = (u32)0; j < rn.ops().count(); j = j + (u32)1)
+                            {
+                            IROperand* o = (IROperand*)rn.ops().get(j);
+                            if (o.kind() == (u8)OPK_USE && o.val() == cn.res())
+                                read = true;
+                            }
+                        }
+                    if (!read)
+                        {
+                        appended.removeAt(q - (u32)1);
+                        again = true;
+                        }
+                    }
+                }
+            }
+        if (!bigBody)
+            {
+            bool ivkRead = false;
+            for (u32 q = copyStart + (u32)1; q < appended.count() && !ivkRead; q = q + (u32)1)
+                {
+                IRInsn* an = (IRInsn*)appended.get(q);
+                for (u32 j = (u32)0; j < an.ops().count(); j = j + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)an.ops().get(j);
+                    if (o.kind() == (u8)OPK_USE && o.val() == ivK)
+                        ivkRead = true;
+                    }
+                }
+            if (!ivkRead)
+                appended.removeAt(copyStart);
             }
         IRInsn* ph = IRInsn.with(String.withCString("Phi"));
         ph.setRes(vaccK);

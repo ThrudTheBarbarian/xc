@@ -4615,9 +4615,95 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
             remap[@(ivId)] = @(iv_k.valueId);
             remap[@(vaccId)] = @(vacc_k.valueId);
             XTIRValueId vnext_k = 0;
+            NSUInteger copyStart = appended.count - 1; // iv_k's index
+            XTIRValue* offK = nil;                       // copy k's k*vw splat, once made
+            NSMutableSet<NSNumber*>* offVals = [NSMutableSet set]; // copy 0 values whose copy k is them + k*vw
+            // A VSplat(iv) whose one use is the lane-index VAdd rewritten below
+            // is not cloned at all, outside a big body (whose clones pair with
+            // their originals by position): left in, it was still emitted,
+            // a broadcast nothing reads, every block.
+            NSMutableSet<NSNumber*>* skipSplat = [NSMutableSet set];
+            if (!bigBody)
+                {
+                NSMutableDictionary<NSNumber*, NSNumber*>* uses = [NSMutableDictionary dictionary];
+                for (XTIRInsn* u in ivDep)
+                    for (XTIROperand* o in u.operands)
+                        if (o.kind == XTIROperandKindUse)
+                            uses[@(o.valueId)] = @(uses[@(o.valueId)].integerValue + 1);
+                for (XTIRInsn* u in ivDep)
+                    {
+                    if (u.opcode != XTIROpVAdd || !u.result || u.operands.count != 2)
+                        continue;
+                    for (NSUInteger q = 0; q < 2; q++)
+                        {
+                        XTIROperand *sOp = u.operands[q], *oOp = u.operands[1 - q];
+                        XTIRInsn* sd = sOp.kind == XTIROperandKindUse ? defOf[@(sOp.valueId)] : nil;
+                        if (sd && sd.opcode == XTIROpVSplat && defBlk[@(sOp.valueId)] == B && sd.operands.count >= 1
+                            && sd.operands[0].kind == XTIROperandKindUse && sd.operands[0].valueId == ivId
+                            && oOp.kind == XTIROperandKindUse && ![dep containsObject:@(oOp.valueId)]
+                            && u.result.type.pointeeType && uses[@(sOp.valueId)].integerValue == 1)
+                            [skipSplat addObject:@(sOp.valueId)];
+                        }
+                    }
+                }
             for (XTIRInsn* insn in ivDep)
                 {
+                if (insn.result && [skipSplat containsObject:@(insn.result.valueId)])
+                    continue;
                 NSMutableArray<XTIROperand*>* ops = [NSMutableArray array];
+                // The lane-index vector, VAdd(VSplat(iv), iota): copy k's is
+                // copy 0's plus a constant k*vw splat made once in the
+                // preheader, not a broadcast of iv+k*vw rebuilt every block
+                // (call_depth, 2026-11-01: zero, move, broadcast, two adds per
+                // block). Copy k's own VSplat is still cloned, so the clones
+                // stay in step with their originals, and dead-code drops it.
+                // As the port.
+                XTIRValue* ivSplatK = nil;
+                // Further along the same chain: VAdd(a value that is copy 0's
+                // plus k*vw, an invariant) is copy 0's result plus k*vw too,
+                // so the seed's add is folded into copy 0's and copy k pays
+                // one add, not two (as clang's base + 16k vectors).
+                if (offK && insn.opcode == XTIROpVAdd && insn.result && insn.operands.count == 2)
+                    for (NSUInteger q = 0; q < 2 && !ivSplatK; q++)
+                        {
+                        XTIROperand *aOp = insn.operands[q], *oOp = insn.operands[1 - q];
+                        if (aOp.kind == XTIROperandKindUse && [offVals containsObject:@(aOp.valueId)]
+                            && oOp.kind == XTIROperandKindUse && ![dep containsObject:@(oOp.valueId)]
+                            && [insn.result.type isEqual:offK.type])
+                            ivSplatK = offK;
+                        }
+                if (!ivSplatK && insn.opcode == XTIROpVAdd && insn.result && insn.operands.count == 2)
+                    for (NSUInteger q = 0; q < 2 && !ivSplatK; q++)
+                        {
+                        XTIROperand *sOp = insn.operands[q], *oOp = insn.operands[1 - q];
+                        XTIRInsn* sd = sOp.kind == XTIROperandKindUse ? defOf[@(sOp.valueId)] : nil;
+                        if (!sd || sd.opcode != XTIROpVSplat || defBlk[@(sOp.valueId)] != B || sd.operands.count < 1
+                            || sd.operands[0].kind != XTIROperandKindUse || sd.operands[0].valueId != ivId)
+                            continue;
+                        if (oOp.kind != XTIROperandKindUse || [dep containsObject:@(oOp.valueId)])
+                            continue;
+                        XTIRType* lane = insn.result.type.pointeeType;
+                        if (!lane)
+                            continue;
+                        XTIRValue* kc = newVal(lane);
+                        [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                                             result:kc
+                                                                           operands:@[ [XTIROperand immIWithType:lane value:k * vw] ]
+                                                                             dbgLoc:nil]];
+                        ivSplatK = newVal(insn.result.type);
+                        [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVSplat
+                                                                             result:ivSplatK
+                                                                           operands:@[ [XTIROperand useWithValueId:kc.valueId] ]
+                                                                             dbgLoc:nil]];
+                        }
+                if (ivSplatK)
+                    {
+                    [ops addObject:[XTIROperand useWithValueId:insn.result.valueId]];
+                    [ops addObject:[XTIROperand useWithValueId:ivSplatK.valueId]];
+                    offK = ivSplatK;
+                    [offVals addObject:@(insn.result.valueId)];
+                    }
+                else
                 for (XTIROperand* o in insn.operands)
                     {
                     if (o.kind == XTIROperandKindUse && remap[@(o.valueId)])
@@ -4638,6 +4724,43 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                 [appended addObject:clone];
                 if (insn == vnextInsn)
                     vnext_k = r.valueId;
+                }
+            if (!bigBody)
+                {
+                // This copy's clones nothing reads, the VAdds the fold above
+                // bypassed: dead-code keeps vector ops, so they go here.
+                BOOL again = YES;
+                while (again)
+                    {
+                    again = NO;
+                    for (NSUInteger q = appended.count; q > copyStart + 1; q--)
+                        {
+                        XTIRInsn* cn = appended[q - 1];
+                        if (!cn.result || cn.result.valueId == vnext_k
+                            || !(cn.opcode == XTIROpVAdd || cn.opcode == XTIROpVSplat))
+                            continue;
+                        BOOL read = NO;
+                        for (NSUInteger r = copyStart; r < appended.count && !read; r++)
+                            for (XTIROperand* o in appended[r].operands)
+                                if (o.kind == XTIROperandKindUse && o.valueId == cn.result.valueId)
+                                    read = YES;
+                        if (!read)
+                            {
+                            [appended removeObjectAtIndex:q - 1];
+                            again = YES;
+                            }
+                        }
+                    }
+                }
+            if (!bigBody)
+                {
+                BOOL ivkRead = NO;
+                for (NSUInteger q = copyStart + 1; q < appended.count && !ivkRead; q++)
+                    for (XTIROperand* o in appended[q].operands)
+                        if (o.kind == XTIROperandKindUse && o.valueId == iv_k.valueId)
+                            ivkRead = YES;
+                if (!ivkRead)
+                    [appended removeObjectAtIndex:copyStart];
                 }
             [newPhis addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpPhi
                                                          result:vacc_k

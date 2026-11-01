@@ -1975,7 +1975,7 @@
         accs.add((Object*)vacc); // copy 0 is the original
         for (u32 k = (u32)1; k < U; k = k + (u32)1)
             self.vecUnrollCopy(k, vw, ivTy, vecTy, iv, vacc, B, PH, initInsn, vnextInsn,
-                          ivDep, appended, newPhis, accs);
+                          ivDep, appended, newPhis, accs, bigBody);
 
         self.vecUnrollSplice(fn, H, B, E, iv, vacc, vecTy, ivNextInsn, vnextInsn,
                         ivTy, vw, U, appended, newPhis, accs, bigBody ? ivDep : (Array*)0);
