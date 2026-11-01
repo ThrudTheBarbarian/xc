@@ -645,6 +645,20 @@ class ParTiles
             }
         if (ws.count() == (u32)0)
             return false;
+        // `gpus` with one local GPU in it: tiles only add their fixed costs and
+        // copies to a block that moves more bytes than it computes, so the
+        // single-GPU path runs it in one launch (Pi 5 saxpy: 12 tiles 200 ms,
+        // one launch 132). A compute-bound block keeps its tiles, which give a
+        // thread one item where one launch's cap gives it several (mandel_deep
+        // 19.2 s against 22.8), and so does a lone remote worker.
+        if (set == (i32)3 && _probeWorker == (ParWorker*)0 && ws.count() == (u32)1 && l != (ParLayout*)0
+            && !((ParWorker*)ws.get((u32)0)).identity().hasPrefix(String.withCString("remote:"))
+            && !ParDevice.computeBound(l))
+            {
+            if (ParDevice.reporting())
+                Log.info("par: %s: one GPU in the set and the block is bandwidth-bound, so it runs in one launch", proto.parName());
+            return false;
+            }
         i64 n = hi - lo;
         // Tiles: the smallest size a GPU worker prefers (its bytes moved per
         // tile), else enough for every worker to hold its depth twice over;
