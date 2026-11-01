@@ -751,7 +751,9 @@ def vulkan_notes(version):
     faster, level, slower = [], [], []
     for b, r in rows:
         c, v = r["gpu"]["best_us"], r["vulkan"]["best_us"]
-        pair = "`%s` (%s ms against %s)" % (b, ms(v), ms(c))
+        # ms() names microseconds itself; a millisecond figure gets its unit once.
+        mv = ms(v) if ms(v).endswith("µs") else ms(v) + " ms"
+        pair = "`%s` (%s against %s)" % (b, mv, ms(c))
         if v < c * 0.95:
             faster.append(pair)
         elif v > c * 1.05:
