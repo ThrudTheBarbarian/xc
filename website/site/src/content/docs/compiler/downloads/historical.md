@@ -5,6 +5,108 @@ description: Previous xcc and xtc toolchain releases, kept for archival referenc
 
 These archives are kept so that an existing build can be reproduced byte-for-byte with the version it was compiled with. For new work, use the [most recent release](/compiler/downloads/). The [ChangeLog](/compiler/downloads/changelog/) lists what has changed since.
 
+## xcc 0.89
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.89.tar.bz2](/downloads/xcc-osx-0.89.tar.bz2) | 10.5 MB |
+| Linux (x86_64) | [xcc-linux-0.89.tar.bz2](/downloads/xcc-linux-0.89.tar.bz2) | 6.9 MB |
+| Windows (x64) | [xcc-win64-0.89.zip](/downloads/xcc-win64-0.89.zip) | 8.5 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.89.tar.bz2](/downloads/xcc-arm9-sysroot-0.89.tar.bz2) | 830 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-0.89.tar.bz2](/downloads/xcd-osx-0.89.tar.bz2) | 858 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.89.tar.bz2](/downloads/xcd-linux-0.89.tar.bz2) | 818 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-0.89.zip](/downloads/xcd-win64-0.89.zip) | 926 KB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.89.tar.bz2](/downloads/xcc-uxgtk-linux-0.89.tar.bz2) | 112 KB |
+| UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.89.tar.bz2](/downloads/xcc-uxkit-0.89.tar.bz2) | 2.9 MB |
+
+## xcc 0.88
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.88.tar.bz2](/downloads/xcc-osx-0.88.tar.bz2) | 10.5 MB |
+| Linux (x86_64) | [xcc-linux-0.88.tar.bz2](/downloads/xcc-linux-0.88.tar.bz2) | 6.9 MB |
+| Windows (x64) | [xcc-win64-0.88.zip](/downloads/xcc-win64-0.88.zip) | 8.5 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.88.tar.bz2](/downloads/xcc-arm9-sysroot-0.88.tar.bz2) | 830 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-0.88.tar.bz2](/downloads/xcd-osx-0.88.tar.bz2) | 858 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.88.tar.bz2](/downloads/xcd-linux-0.88.tar.bz2) | 816 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-0.88.zip](/downloads/xcd-win64-0.88.zip) | 924 KB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.88.tar.bz2](/downloads/xcc-uxgtk-linux-0.88.tar.bz2) | 112 KB |
+| UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.88.tar.bz2](/downloads/xcc-uxkit-0.88.tar.bz2) | 2.9 MB |
+
+## xcc 0.87.3
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.87.3.tar.bz2](/downloads/xcc-osx-0.87.3.tar.bz2) | 10.4 MB |
+| Linux (x86_64) | [xcc-linux-0.87.3.tar.bz2](/downloads/xcc-linux-0.87.3.tar.bz2) | 6.9 MB |
+| Windows (x64) | [xcc-win64-0.87.3.zip](/downloads/xcc-win64-0.87.3.zip) | 8.5 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.87.3.tar.bz2](/downloads/xcc-arm9-sysroot-0.87.3.tar.bz2) | 831 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-0.87.3.tar.bz2](/downloads/xcd-osx-0.87.3.tar.bz2) | 857 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.87.3.tar.bz2](/downloads/xcd-linux-0.87.3.tar.bz2) | 800 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-0.87.3.zip](/downloads/xcd-win64-0.87.3.zip) | 923 KB |
+
+## xcc 0.87.2
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.87.2.tar.bz2](/downloads/xcc-osx-0.87.2.tar.bz2) | 10.4 MB |
+| Linux (x86_64) | [xcc-linux-0.87.2.tar.bz2](/downloads/xcc-linux-0.87.2.tar.bz2) | 6.9 MB |
+| Windows (x64) | [xcc-win64-0.87.2.zip](/downloads/xcc-win64-0.87.2.zip) | 8.5 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.87.2.tar.bz2](/downloads/xcc-arm9-sysroot-0.87.2.tar.bz2) | 830 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-0.87.2.tar.bz2](/downloads/xcd-osx-0.87.2.tar.bz2) | 857 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.87.2.tar.bz2](/downloads/xcd-linux-0.87.2.tar.bz2) | 799 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-0.87.2.zip](/downloads/xcd-win64-0.87.2.zip) | 923 KB |
+
+## xcc 0.87.1
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.87.1.tar.bz2](/downloads/xcc-osx-0.87.1.tar.bz2) | 10.4 MB |
+| Linux (x86_64) | [xcc-linux-0.87.1.tar.bz2](/downloads/xcc-linux-0.87.1.tar.bz2) | 6.9 MB |
+| Windows (x64) | [xcc-win64-0.87.1.zip](/downloads/xcc-win64-0.87.1.zip) | 8.5 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.87.1.tar.bz2](/downloads/xcc-arm9-sysroot-0.87.1.tar.bz2) | 831 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-0.87.1.tar.bz2](/downloads/xcd-osx-0.87.1.tar.bz2) | 858 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.87.1.tar.bz2](/downloads/xcd-linux-0.87.1.tar.bz2) | 799 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-0.87.1.zip](/downloads/xcd-win64-0.87.1.zip) | 923 KB |
+
+## xcc 0.87
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.87.tar.bz2](/downloads/xcc-osx-0.87.tar.bz2) | 10.4 MB |
+| Linux (x86_64) | [xcc-linux-0.87.tar.bz2](/downloads/xcc-linux-0.87.tar.bz2) | 6.9 MB |
+| Windows (x64) | [xcc-win64-0.87.zip](/downloads/xcc-win64-0.87.zip) | 8.5 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.87.tar.bz2](/downloads/xcc-arm9-sysroot-0.87.tar.bz2) | 830 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-0.87.tar.bz2](/downloads/xcd-osx-0.87.tar.bz2) | 857 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.87.tar.bz2](/downloads/xcd-linux-0.87.tar.bz2) | 799 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-0.87.zip](/downloads/xcd-win64-0.87.zip) | 923 KB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.87.tar.bz2](/downloads/xcc-uxgtk-linux-0.87.tar.bz2) | 112 KB |
+| UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.87.tar.bz2](/downloads/xcc-uxkit-0.87.tar.bz2) | 2.9 MB |
+
+## xcc 0.86
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.86.tar.bz2](/downloads/xcc-osx-0.86.tar.bz2) | 10.0 MB |
+| Linux (x86_64) | [xcc-linux-0.86.tar.bz2](/downloads/xcc-linux-0.86.tar.bz2) | 7.1 MB |
+| Windows (x64) | [xcc-win64-0.86.zip](/downloads/xcc-win64-0.86.zip) | 8.4 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.86.tar.bz2](/downloads/xcc-arm9-sysroot-0.86.tar.bz2) | 830 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-0.86.tar.bz2](/downloads/xcd-osx-0.86.tar.bz2) | 856 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.86.tar.bz2](/downloads/xcd-linux-0.86.tar.bz2) | 796 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-0.86.zip](/downloads/xcd-win64-0.86.zip) | 918 KB |
+
+## xcc 0.85
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.85.tar.bz2](/downloads/xcc-osx-0.85.tar.bz2) | 9.4 MB |
+| Linux (x86_64) | [xcc-linux-0.85.tar.bz2](/downloads/xcc-linux-0.85.tar.bz2) | 6.8 MB |
+| Windows (x64) | [xcc-win64-0.85.zip](/downloads/xcc-win64-0.85.zip) | 8.0 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.85.tar.bz2](/downloads/xcc-arm9-sysroot-0.85.tar.bz2) | 830 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-0.85.tar.bz2](/downloads/xcd-osx-0.85.tar.bz2) | 844 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.85.tar.bz2](/downloads/xcd-linux-0.85.tar.bz2) | 790 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-0.85.zip](/downloads/xcd-win64-0.85.zip) | 897 KB |
+
 ## xcc 0.8
 
 | Platform | Download | Size |
