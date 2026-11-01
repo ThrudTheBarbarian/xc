@@ -22130,6 +22130,8 @@ class ClassInfo
     // ── WGSL (wasm32 / WebGPU): the reference's XTIRParWGSL.m, text for text ──
     bool _parWGSL;    // wasm32: blocks get their WGSL
     void setParWGSL(bool b) { _parWGSL = b; }
+    u32 _gpuEscTrips; // the target row's trips per escape test for the kernels (0: off)
+    void setGpuEscTrips(u32 n) { _gpuEscTrips = n; }
     WgFn* _wf;
     Map* _wgHelpers;      // callee -> WGSL function name
     String* _wgHelperText;
@@ -23714,6 +23716,7 @@ class ClassInfo
         for (u32 i = (u32)0; i < keep.count(); i = i + (u32)1)
             copy.funcs().add(keep.get(i));
         Opt* opt = Opt.atLevel((u32)3, OptProfile.forTarget(String.withCString("arm64")));
+        opt.setEscTrips(_gpuEscTrips);
         opt.parKernels(copy);
         if (opt.failed()) return (IRModule*)0;
         return copy;

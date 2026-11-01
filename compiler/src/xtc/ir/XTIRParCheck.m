@@ -142,12 +142,203 @@ static NSString* _Nullable unlocatedGlobal(XTIRFunction* run, XTIRModule* runMod
 static int64_t gParGridW = 0;
 static int64_t gParGridH = 0;
 
+/****************************************************************************\
+|* Several trips of a GPU kernel's `while` per exit test (2026-11-01). A GPU
+|* runs a group of lanes in step, and a loop whose lanes leave at different
+|* trips (mandelbrot's escape test) pays for its per-lane control on every
+|* trip: on the Pi 5's V3D some 25 of 33 instruction slots a trip. Here the
+|* body is followed by trips-1 more trips, each the test and the body over
+|* the values so far, a lane whose test fails keeping its values by a select:
+|* the loop then tests once per `trips` trips and every lane ends with exactly
+|* the values the plain loop gives it. Only a loop of one test block (phis and
+|* pure work) and one body block, with no memory access or call in either: a
+|* lane that has left still runs the copies. The kernel copy only; the CPU's
+|* code is not touched. XTGPU_ESC_TRIPS=<n> sets the trips (1: off). As the
+|* port's gpuEscapeTrips.
+\****************************************************************************/
+@interface XTIROptGpuEscapeTrips : NSObject <XTIROptPass>
+@end
+
+// The target row's trips per escape test (XTIRParCheck setGpuEscTrips:).
+static NSInteger gGpuEscTrips = 0;
+
+@implementation XTIROptGpuEscapeTrips
+
+- (NSString*)passName
+    {
+    return @"gpu-escape-trips";
+    }
+
+- (NSInteger)minOptLevel
+    {
+    return 0;
+    }
+
+static BOOL escTripsPure(XTIRInsn* i)
+    {
+    if (i.memoryResult)
+        return NO;
+    switch (i.opcode)
+        {
+    case XTIROpConst: case XTIROpCopy: case XTIROpAdd: case XTIROpSub: case XTIROpMul: case XTIROpNeg:
+    case XTIROpAnd: case XTIROpOr: case XTIROpXor: case XTIROpNot: case XTIROpShl: case XTIROpLShr:
+    case XTIROpAShr: case XTIROpFAdd: case XTIROpFSub: case XTIROpFMul: case XTIROpFNeg: case XTIROpICmp:
+    case XTIROpFCmp: case XTIROpSelect: case XTIROpSExt: case XTIROpZExt: case XTIROpTrunc: case XTIROpBitcast:
+    case XTIROpFpToSI: case XTIROpFpToUI: case XTIROpSIToFp: case XTIROpUIToFp: case XTIROpFpExt: case XTIROpFpTrunc:
+        return YES;
+    default:
+        return NO;
+        }
+    }
+
+static XTIROperand* escTripsMap(XTIROperand* o, NSDictionary<NSNumber*, NSNumber*>* m)
+    {
+    if (o.kind != XTIROperandKindUse)
+        return o;
+    NSNumber* n = m[@(o.valueId)];
+    return n ? [XTIROperand useWithValueId:(XTIRValueId)n.unsignedLongLongValue] : o;
+    }
+
+static XTIRValue* escTripsVal(XTIRFunction* fn, XTIRType* t, XTIRBlock* b)
+    {
+    XTIRValue* v = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                 type:t
+                                              defSite:[[XTIRDefSite alloc] initWithBlock:b insnIndex:b.instructions.count]];
+    [fn registerValue:v];
+    return v;
+    }
+
+static void escTripsClone(XTIRInsn* i, XTIRBlock* B, XTIRFunction* fn, NSMutableDictionary<NSNumber*, NSNumber*>* m)
+    {
+    NSMutableArray<XTIROperand*>* ops = [NSMutableArray array];
+    for (XTIROperand* o in i.operands)
+        [ops addObject:escTripsMap(o, m)];
+    XTIRValue* r = i.result ? escTripsVal(fn, i.result.type, B) : nil;
+    XTIRInsn* c = XTIROpCarriesPredicate(i.opcode)
+                      ? [[XTIRInsn alloc] initWithOpcode:i.opcode result:r operands:ops predicate:i.predicate dbgLoc:i.dbgLoc]
+                      : [[XTIRInsn alloc] initWithOpcode:i.opcode result:r operands:ops dbgLoc:i.dbgLoc];
+    [B.instructions addObject:c];
+    if (i.result)
+        m[@(i.result.valueId)] = @(r.valueId);
+    }
+
+- (BOOL)runOnModule:(XTIRModule*)mod errors:(NSMutableArray<NSString*>* _Nullable* _Nullable)outErrors
+    {
+    (void)outErrors;
+    // The target row's trips (XTTarget gpuEscTrips); XTGPU_ESC_TRIPS=<n>
+    // overrides it, for measuring.
+    NSInteger trips = gGpuEscTrips;
+    const char* e = getenv("XTGPU_ESC_TRIPS");
+    if (e && *e)
+        trips = atoi(e);
+    if (trips < 2)
+        return YES;
+    for (XTIRFunction* fn in mod.functions)
+        for (XTIRBlock* H in fn.blocks)
+            {
+            XTIRInsn* t = H.terminator;
+            if (H.phiNodes.count == 0 || !t || t.opcode != XTIROpCondBranch || t.operands.count < 3)
+                continue;
+            XTIRBlock* B = nil;
+            for (NSUInteger k = 1; k <= 2; k++)
+                {
+                XTIRBlock* c = t.operands[k].blockRef;
+                if (c && c != H && c.phiNodes.count == 0 && c.terminator && c.terminator.opcode == XTIROpBranch
+                    && c.terminator.operands.count >= 1 && c.terminator.operands[0].blockRef == H)
+                    B = c;
+                }
+            if (!B || t.operands[1].blockRef == t.operands[2].blockRef)
+                continue;
+            // B has H alone before it, and H is entered from one block besides B.
+            NSUInteger toB = 0;
+            for (XTIRBlock* b in fn.blocks)
+                for (XTIROperand* o in b.terminator.operands)
+                    if (o.kind == XTIROperandKindBlock && o.blockRef == B)
+                        toB++;
+            BOOL ok = toB == 1 && H.instructions.count + B.instructions.count <= 64;
+            NSMutableArray<XTIROperand*>* back = [NSMutableArray array];
+            for (XTIRInsn* p in H.phiNodes)
+                {
+                if (!ok)
+                    break;
+                if (!p.result || p.operands.count != 4 || p.result.type.kind == XTIRTypeKindMemory
+                    || p.result.type.kind == XTIRTypeKindPtr)
+                    {
+                    ok = NO;
+                    break;
+                    }
+                XTIROperand* bv = p.operands[0].blockRef == B ? p.operands[1] : p.operands[2].blockRef == B ? p.operands[3] : nil;
+                if (!bv)
+                    ok = NO;
+                else
+                    [back addObject:bv];
+                }
+            for (XTIRInsn* i in H.instructions)
+                if (!escTripsPure(i))
+                    ok = NO;
+            for (XTIRInsn* i in B.instructions)
+                if (!escTripsPure(i))
+                    ok = NO;
+            if (!ok || t.operands[0].kind != XTIROperandKindUse)
+                continue;
+            BOOL stayOnTrue = t.operands[1].blockRef == B;
+            NSMutableArray<XTIROperand*>* cur = [back mutableCopy];
+            NSArray<XTIRInsn*>* hIns = [H.instructions copy];
+            NSArray<XTIRInsn*>* bIns = [B.instructions copy];
+            for (NSInteger j = 1; j < trips; j++)
+                {
+                NSMutableDictionary<NSNumber*, NSNumber*>* m = [NSMutableDictionary dictionary];
+                for (NSUInteger q = 0; q < H.phiNodes.count; q++)
+                    if (cur[q].kind == XTIROperandKindUse)
+                        m[@(H.phiNodes[q].result.valueId)] = @(cur[q].valueId);
+                    // A constant on the back edge: the phi is that constant now.
+                NSMutableDictionary<NSNumber*, XTIROperand*>* imm = [NSMutableDictionary dictionary];
+                for (NSUInteger q = 0; q < H.phiNodes.count; q++)
+                    if (cur[q].kind != XTIROperandKindUse)
+                        imm[@(H.phiNodes[q].result.valueId)] = cur[q];
+                if (imm.count)
+                    break;
+                for (XTIRInsn* i in hIns)
+                    escTripsClone(i, B, fn, m);
+                for (XTIRInsn* i in bIns)
+                    escTripsClone(i, B, fn, m);
+                XTIROperand* cond = escTripsMap(t.operands[0], m);
+                for (NSUInteger q = 0; q < H.phiNodes.count; q++)
+                    {
+                    XTIROperand* nv = escTripsMap(back[q], m);
+                    XTIROperand* yes = stayOnTrue ? nv : cur[q];
+                    XTIROperand* no = stayOnTrue ? cur[q] : nv;
+                    XTIRValue* r = escTripsVal(fn, H.phiNodes[q].result.type, B);
+                    [B.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpSelect result:r
+                                                                      operands:@[ cond, yes, no ] dbgLoc:nil]];
+                    cur[q] = [XTIROperand useWithValueId:r.valueId];
+                    }
+                }
+            for (NSUInteger q = 0; q < H.phiNodes.count; q++)
+                {
+                XTIRInsn* p = H.phiNodes[q];
+                NSMutableArray<XTIROperand*>* ops = [p.operands mutableCopy];
+                ops[p.operands[0].blockRef == B ? 1 : 3] = cur[q];
+                [p replaceOperands:ops];
+                }
+            }
+    return YES;
+    }
+
+@end
+
 @implementation XTIRParCheck
 
 static BOOL gEmitsMetal = NO;
 static BOOL gEmitsPTX = NO;
 static BOOL gEmitsSPIRV = NO;
 static BOOL gEmitsWGSL = NO;
+
+// The target row's trips per escape test for the kernels (0: off).
++ (void)setGpuEscTrips:(NSInteger)trips
+    {
+    gGpuEscTrips = trips;
+    }
 
 + (void)setEmitsMetal:(BOOL)on
     {
@@ -261,6 +452,7 @@ static BOOL gEmitsWGSL = NO;
     cse2.late = YES;
     [p addPass:cse2];
     [p addPass:[XTIROptBlockMerge new]];
+    [p addPass:[XTIROptGpuEscapeTrips new]];
     XTIROptLoopRotate* rot = [XTIROptLoopRotate new];
     rot.profile = prof;
     [p addPass:rot];

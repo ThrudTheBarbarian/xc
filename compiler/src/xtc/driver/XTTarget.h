@@ -65,6 +65,11 @@ NS_ASSUME_NONNULL_BEGIN
 // The clang target a C program is compiled for when it is not the host's
 // (the C path), or "" where a C program builds only on the host.
 @property(nonatomic, readonly, copy) NSString* cTriple;
+// Trips of a GPU kernel's escape loop per exit test (XTIROptGpuEscapeTrips),
+// or 0 to leave the kernels' loops as they are: 8 for arm64 Linux, whose
+// Raspberry Pi 5 V3D gains about 2x (mandel_deep 22.9 -> 11.0 s); the desktop
+// GPUs measured gain little or lose (an AMD iGPU through RADV: 0.8x).
+@property(nonatomic, readonly) NSInteger gpuEscTrips;
 
 // Every row, in the order both compilers list them.
 + (NSArray<XTTarget*>*)rows;

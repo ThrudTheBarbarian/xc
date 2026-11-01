@@ -1370,8 +1370,183 @@ class BeFact : Object
         _cseCrossBlock = false;
         _cseLate = false;
         blockMerge(m);
+        gpuEscapeTrips(m);
         loopRotate(m);
         deadCode(m);
+        }
+
+    // Several trips of a GPU kernel's `while` per exit test (2026-11-01). A
+    // GPU runs a group of lanes in step, and a loop whose lanes leave at
+    // different trips (mandelbrot's escape test) pays for its per-lane control
+    // on every trip: on the Pi 5's V3D some 25 of 33 instruction slots a trip.
+    // Here the body is followed by trips-1 more trips, each the test and the
+    // body over the values so far, a lane whose test fails keeping its values
+    // by a select: the loop then tests once per `trips` trips and every lane
+    // ends with exactly the values the plain loop gives it. Only a loop of one
+    // test block (phis and pure work) and one body block, with no memory
+    // access or call in either: a lane that has left still runs the copies.
+    // The kernel copy only. XTGPU_ESC_TRIPS=<n> sets the trips (1: off). As
+    // the reference's XTIROptGpuEscapeTrips.
+    static bool escTripsPure(IRInsn* i)
+        {
+        if (i.memRes() != (IRValue*)0)
+            return false;
+        String* o = i.op();
+        return o.equals(String.withCString("Const")) || o.equals(String.withCString("Copy")) || o.equals(String.withCString("Add"))
+            || o.equals(String.withCString("Sub")) || o.equals(String.withCString("Mul")) || o.equals(String.withCString("Neg"))
+            || o.equals(String.withCString("And")) || o.equals(String.withCString("Or")) || o.equals(String.withCString("Xor"))
+            || o.equals(String.withCString("Not")) || o.equals(String.withCString("Shl")) || o.equals(String.withCString("LShr"))
+            || o.equals(String.withCString("AShr")) || o.equals(String.withCString("FAdd")) || o.equals(String.withCString("FSub"))
+            || o.equals(String.withCString("FMul")) || o.equals(String.withCString("FNeg")) || o.equals(String.withCString("ICmp"))
+            || o.equals(String.withCString("FCmp")) || o.equals(String.withCString("Select")) || o.equals(String.withCString("SExt"))
+            || o.equals(String.withCString("ZExt")) || o.equals(String.withCString("Trunc")) || o.equals(String.withCString("Bitcast"))
+            || o.equals(String.withCString("FpToSI")) || o.equals(String.withCString("FpToUI")) || o.equals(String.withCString("SIToFp"))
+            || o.equals(String.withCString("UIToFp")) || o.equals(String.withCString("FpExt")) || o.equals(String.withCString("FpTrunc"));
+        }
+
+    static IROperand* escTripsMap(IROperand* o, Map* m)
+        {
+        if (o.kind() != (u8)OPK_USE)
+            return o;
+        Object* v = m.get((Hashable*)o.val());
+        return v == (Object*)0 ? o : IROperand.useVal((IRValue*)v);
+        }
+
+    static void escTripsClone(IRInsn* i, IRBlock* B, Map* m)
+        {
+        IRInsn* c = IRInsn.with(i.op());
+        c.copyDbg(i);
+        c.setPred(i.pred());
+        for (u32 k = (u32)0; k < i.ops().count(); k = k + (u32)1)
+            c.add(escTripsMap((IROperand*)i.ops().get(k), m));
+        if (i.res() != (IRValue*)0)
+            {
+            c.setRes(new IRValue(i.res().ty()));
+            m.set((Hashable*)i.res(), (Object*)c.res());
+            }
+        B.insns().add((Object*)c);
+        }
+
+    u32 _escTrips;  // the target row's trips per escape test (Lower.setGpuEscTrips), 0: off
+    void setEscTrips(u32 n)
+        {
+        _escTrips = n;
+        }
+
+    void gpuEscapeTrips(IRModule* mod)
+        {
+        // The target row's trips; XTGPU_ESC_TRIPS=<n> overrides it, for measuring.
+        i64 trips = (i64)_escTrips;
+        u8* e = _xt_getenv("XTGPU_ESC_TRIPS");
+        if (e != (u8*)0 && e[0] != (u8)0)
+            {
+            trips = (i64)0;
+            for (u32 k = (u32)0; e[k] >= (u8)'0' && e[k] <= (u8)'9'; k = k + (u32)1)
+                trips = trips * (i64)10 + (i64)(e[k] - (u8)'0');
+            }
+        if (trips < (i64)2)
+            return;
+        for (u32 fi = (u32)0; fi < mod.funcs().count(); fi = fi + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)mod.funcs().get(fi);
+            for (u32 hi = (u32)0; hi < fn.blocks().count(); hi = hi + (u32)1)
+                {
+                IRBlock* H = (IRBlock*)fn.blocks().get(hi);
+                IRInsn* t = H.term();
+                if (H.phis().count() == (u32)0 || t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch"))
+                    || t.ops().count() < (u32)3)
+                    continue;
+                IRBlock* B = (IRBlock*)0;
+                for (u32 k = (u32)1; k <= (u32)2; k = k + (u32)1)
+                    {
+                    IRBlock* c = ((IROperand*)t.ops().get(k)).blk();
+                    if (c != (IRBlock*)0 && c != H && c.phis().count() == (u32)0 && c.term() != (IRInsn*)0
+                        && c.term().op().equals(String.withCString("Branch")) && c.term().ops().count() >= (u32)1
+                        && ((IROperand*)c.term().ops().get((u32)0)).blk() == H)
+                        B = c;
+                    }
+                if (B == (IRBlock*)0 || ((IROperand*)t.ops().get((u32)1)).blk() == ((IROperand*)t.ops().get((u32)2)).blk())
+                    continue;
+                // B has H alone before it.
+                u32 toB = (u32)0;
+                for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1)
+                    {
+                    IRInsn* bt = ((IRBlock*)fn.blocks().get(bi)).term();
+                    for (u32 k = (u32)0; bt != (IRInsn*)0 && k < bt.ops().count(); k = k + (u32)1)
+                        {
+                        IROperand* o = (IROperand*)bt.ops().get(k);
+                        if (o.kind() == (u8)OPK_BLOCK && o.blk() == B)
+                            toB = toB + (u32)1;
+                        }
+                    }
+                bool ok = toB == (u32)1 && H.insns().count() + B.insns().count() <= (u32)64;
+                Array* back = new Array();
+                for (u32 q = (u32)0; ok && q < H.phis().count(); q = q + (u32)1)
+                    {
+                    IRInsn* p = (IRInsn*)H.phis().get(q);
+                    if (p.res() == (IRValue*)0 || p.ops().count() != (u32)4 || p.res().ty().equals(String.withCString("Mem"))
+                        || p.res().ty().hasPrefix(String.withCString("Ptr")))
+                        {
+                        ok = false;
+                        continue;
+                        }
+                    IROperand* bv = ((IROperand*)p.ops().get((u32)0)).blk() == B ? (IROperand*)p.ops().get((u32)1)
+                                  : ((IROperand*)p.ops().get((u32)2)).blk() == B ? (IROperand*)p.ops().get((u32)3) : (IROperand*)0;
+                    // A value on the back edge (a constant there is not handled).
+                    if (bv == (IROperand*)0 || bv.kind() != (u8)OPK_USE)
+                        ok = false;
+                    else
+                        back.add((Object*)bv);
+                    }
+                for (u32 k = (u32)0; k < H.insns().count(); k = k + (u32)1)
+                    if (!escTripsPure((IRInsn*)H.insns().get(k)))
+                        ok = false;
+                for (u32 k = (u32)0; k < B.insns().count(); k = k + (u32)1)
+                    if (!escTripsPure((IRInsn*)B.insns().get(k)))
+                        ok = false;
+                if (!ok || ((IROperand*)t.ops().get((u32)0)).kind() != (u8)OPK_USE)
+                    continue;
+                bool stayOnTrue = ((IROperand*)t.ops().get((u32)1)).blk() == B;
+                Array* cur = new Array();
+                for (u32 q = (u32)0; q < back.count(); q = q + (u32)1)
+                    cur.add(back.get(q));
+                Array* hIns = new Array();
+                for (u32 k = (u32)0; k < H.insns().count(); k = k + (u32)1)
+                    hIns.add(H.insns().get(k));
+                Array* bIns = new Array();
+                for (u32 k = (u32)0; k < B.insns().count(); k = k + (u32)1)
+                    bIns.add(B.insns().get(k));
+                for (i64 j = (i64)1; j < trips; j = j + (i64)1)
+                    {
+                    Map* m = new Map();
+                    for (u32 q = (u32)0; q < H.phis().count(); q = q + (u32)1)
+                        m.set((Hashable*)((IRInsn*)H.phis().get(q)).res(), (Object*)((IROperand*)cur.get(q)).val());
+                    for (u32 k = (u32)0; k < hIns.count(); k = k + (u32)1)
+                        escTripsClone((IRInsn*)hIns.get(k), B, m);
+                    for (u32 k = (u32)0; k < bIns.count(); k = k + (u32)1)
+                        escTripsClone((IRInsn*)bIns.get(k), B, m);
+                    IROperand* cond = escTripsMap((IROperand*)t.ops().get((u32)0), m);
+                    for (u32 q = (u32)0; q < H.phis().count(); q = q + (u32)1)
+                        {
+                        IROperand* nv = escTripsMap((IROperand*)back.get(q), m);
+                        IROperand* yes = stayOnTrue ? nv : (IROperand*)cur.get(q);
+                        IROperand* no = stayOnTrue ? (IROperand*)cur.get(q) : nv;
+                        IRInsn* sel = IRInsn.with(String.withCString("Select"));
+                        sel.add(cond);
+                        sel.add(yes);
+                        sel.add(no);
+                        sel.setRes(new IRValue(((IRInsn*)H.phis().get(q)).res().ty()));
+                        B.insns().add((Object*)sel);
+                        cur.set(q, (Object*)IROperand.useVal(sel.res()));
+                        }
+                    }
+                for (u32 q = (u32)0; q < H.phis().count(); q = q + (u32)1)
+                    {
+                    IRInsn* p = (IRInsn*)H.phis().get(q);
+                    p.ops().set(((IROperand*)p.ops().get((u32)0)).blk() == B ? (u32)1 : (u32)3, cur.get(q));
+                    }
+                }
+            }
         }
 
     bool failed(void)
