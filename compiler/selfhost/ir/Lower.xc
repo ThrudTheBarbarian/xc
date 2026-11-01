@@ -34,6 +34,7 @@
 #import <ParWgsl>
 #import <Overload>
 #import "Process.xc"
+#import <OptBase>
 #import <Opt>
 #import "OptDefs.xc"
 #import <IrParse>

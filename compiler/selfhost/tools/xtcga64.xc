@@ -15,6 +15,7 @@
 #import <Ir>
 #import "IrDefs.xc"
 #import <IrParse>
+#import <OptBase>
 #import <Opt>
 #import "OptDefs.xc"
 #import <Arm64>

@@ -18,7 +18,9 @@ selfhost/
   parser/      Node.xc  Parser.xc  AstDump.xc
   sema/        Analyze.xc  Sema.xc  Mangle.xc  Overload.xc  Iface.xc  Dwarf.xc …
   ir/          Ir.xc  IrParse.xc  Lower.xc
-  opt/         Opt.xc
+  opt/         Opt.xc (the pipeline)  OptBase.xc (class Opt's state)
+               Opt<Pass>.xc  OptVectorize{Parts,Shapes,Rewrite}.xc: one class
+               in categories, layered so the files build side by side
   codegen/     Arm64.xc  Arm9.xc  M68k.xc  X86_64.xc  Xt6502.xc  Layout.xc …
   asm/         Arm64Asm.xc  X86Asm.xc  Arm32.xc  ElfObject.xc  CoffObject.xc …
   link/        Apk.xc  ApkSign.xc  CodeSign.xc  RsaKeygen.xc  Bignum.xc

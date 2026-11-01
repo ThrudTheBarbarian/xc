@@ -39,6 +39,7 @@
 #import "IrDefs.xc"
 #import <Lower>
 #import <Designable>
+#import <OptBase>
 #import <Opt>
 #import "OptDefs.xc"
 

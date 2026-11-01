@@ -31,6 +31,7 @@
 #import "Process.xc"
 #import <Frontend>
 #import <IrParse>
+#import <OptBase>
 #import <Opt>
 #import "OptDefs.xc"
 #import <Arm64>          // the BACK END
