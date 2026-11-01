@@ -385,12 +385,15 @@ class Par
             // is missing): auto measures both where both work and keeps the
             // faster; XC_PAR_GPU=cuda|vulkan picks one. If the one tried
             // cannot run the block, the other may.
+            // Why one interface refused is said only if neither runs it.
             i32 api = ParDevice.gpuApi(proto);
+            ParDevice.holdReasons();
             if (api == (i32)1)
                 {
                 ParDevice.useApi((i32)1);
                 if (ParCuda.run(proto, proto.gpuSource(), lo, hi))
                     {
+                    ParDevice.dropHeld();
                     ParDevice.ranAdd(proto, ParCuda.identity());
                     return;
                     }
@@ -399,6 +402,7 @@ class Par
             ParDevice.useApi((i32)2);
             if (ParVulkan.run(proto, proto.gpuSource(), lo, hi))
                 {
+                ParDevice.dropHeld();
                 ParDevice.ranAdd(proto, ParVulkan.identity());
                 return;
                 }
@@ -408,11 +412,13 @@ class Par
                 ParDevice.useApi((i32)1);
                 if (ParCuda.run(proto, proto.gpuSource(), lo, hi))
                     {
+                    ParDevice.dropHeld();
                     ParDevice.ranAdd(proto, ParCuda.identity());
                     return;
                     }
                 ParDevice.cannotRun(proto, (i32)1);
                 }
+            ParDevice.sayHeld();
 #elif ARCH_x86_64 || OS_linux || OS_android
             if (ParVulkan.run(proto, proto.gpuSource(), lo, hi))
                 {

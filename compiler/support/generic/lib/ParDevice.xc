@@ -158,6 +158,13 @@ i64 gParVkUs[64];
 i32 gParRanApi;
 #endif
 
+// Why a GPU interface did not take a block, held while another one still may
+// (CUDA, then Vulkan): said only if the block then runs on the CPU, so that a
+// block Vulkan runs is not reported as staying on the CPU for want of CUDA.
+bool gParHolding;
+u8* gParHeld[2];
+u32 gParHeldN;
+
 // A kernel's header line, read, and the run planned over [lo, hi): one item
 // per thread, unless the range is huge — or the block has reductions, whose
 // per-thread partials the host folds: then at most 65536 threads, each
@@ -1544,9 +1551,42 @@ class ParDevice
     // XC_PAR_REPORT=1: why a block stays on the CPU. False, for `return`.
     static bool cpu(u8* why)
         {
+        if (gParHolding)
+            {
+            if (gParHeldN < (u32)2)
+                {
+                gParHeld[gParHeldN] = why;
+                gParHeldN = gParHeldN + (u32)1;
+                }
+            return false;
+            }
         if (reporting())
             Log.info("par: a block stays on the CPU: %s", why);
         return false;
+        }
+
+    // Hold the reasons cpu() is given until sayHeld() or dropHeld(): the
+    // interfaces about to be tried in turn may yet take the block.
+    static void holdReasons()
+        {
+        gParHolding = true;
+        gParHeldN = (u32)0;
+        }
+
+    // The block stays on the CPU after all: say why each interface left it.
+    static void sayHeld()
+        {
+        gParHolding = false;
+        for (u32 i = (u32)0; i < gParHeldN; i = i + (u32)1)
+            cpu(gParHeld[i]);
+        gParHeldN = (u32)0;
+        }
+
+    // An interface took the block: what the others said does not matter.
+    static void dropHeld()
+        {
+        gParHolding = false;
+        gParHeldN = (u32)0;
         }
 
     // Whether a kernel's header line ends in ` fast`: a block whose goal is
