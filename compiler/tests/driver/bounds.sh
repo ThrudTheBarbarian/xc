@@ -72,7 +72,12 @@ i32 main(i32 argc, u8** argv)
 XC
 "$XC" -q -O2 -fbounds-check -H . -o "$W/e" "$W/e.xc" > "$W/e.b" 2>&1 || { echo "FAIL bounds: the elision program does not build"; head -3 "$W/e.b"; fail=1; }
 "$XC" -q -O2 -fbounds-check -H . -S -o "$W/e.s" "$W/e.xc" > /dev/null 2>&1
-n=$(awk '/^_?fill:/{f=1; next} f && /^_?[A-Za-z_][A-Za-z0-9_$]*:$/ && !/^L|^\./{exit} f' "$W/e.s" | grep -cE '(bl|call)[[:space:]]+_?_xt_check_bounds')
+# A function with SIMD clones (x86-64, once a loop in it vectorises) is a
+# dispatch stub at `fill:`; its code, checks and all, is `fill$base:` and the
+# clones. Count the base version's.
+lab='fill'
+grep -q '^_\{0,1\}fill\$base:$' "$W/e.s" && lab='fill[$]base'
+n=$(awk -v L="^_?$lab:\$" '$0 ~ L {f=1; next} f && /^_?[A-Za-z_][A-Za-z0-9_$]*:$/ && !/^L|^\./{exit} f' "$W/e.s" | grep -cE '(bl|call)[[:space:]]+_?_xt_check_bounds')
 [ "$n" = 1 ] || { echo "FAIL bounds: fill keeps $n checks, wanted 1 (the 0..n loop's; the 0..N one elided)"; fail=1; }
 [ "$("$W/e" < /dev/null 2>&1)" = "1571328" ] || { echo "FAIL bounds: the elided loop gives '$("$W/e" 2>&1 | head -1)'"; fail=1; }
 "$W/e" x < /dev/null > "$W/e.out" 2>&1; rc=$?
