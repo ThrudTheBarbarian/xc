@@ -21,15 +21,24 @@ Everything since 0.9.
 
 ### Faster
 
-- **x86-64.** On a Ryzen 9 9955HX, xc's benchmarks went from 1.01 times clang's
-  time to 0.97 (the geometric mean of the 19 in the suite), so xc is now ahead
-  of clang on x86-64 as well as arm64:
+- **x86-64**, on a Ryzen 9 9955HX:
   - a vector division by a constant takes five instructions where it took
     eight (int_muldiv 1.31 times faster);
   - a conditional branch is one jump, with the other edge falling through
     (sieve 1.10 times faster);
   - an unrolled vector loop builds its lane indices once per iteration, not
-    once per copy (call_depth 1.10 times faster).
+    once per copy (call_depth 1.10 times faster);
+  - a loop's counter and its next value share a register, so a vectorised
+    loop closes with one branch and no copy (matrix_mul 1.06 times faster,
+    struct_copy 1.05);
+  - a loop that stores a value computed from its own index (`a[i] = i * k`)
+    is vectorised, as one that loads `a[i]` was (sort_small 1.02 times
+    faster).
+- **Big modules compile much faster for arm64.** Two lookups in the arm64
+  back end searched every symbol in the module, one of them for every virtual
+  call: the compiler's own driver, which imports most of the tree, took 160
+  seconds where it now takes 23. An object with thousands of classes no
+  longer slows down with the square of their number.
 - **GPU kernels come in two forms, and each GPU runs the one it does best.** A
   `par` block whose loop exits early (an escape-time test, as in mandelbrot)
   carries a second kernel that runs eight trips of the loop per exit test. The
