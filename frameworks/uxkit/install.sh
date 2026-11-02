@@ -15,6 +15,8 @@
 #     x86_64   GTK 4 on Linux: the C shim libUXGtk.so is built on a Linux machine (here, or
 #              UX_LINUX_HOST from build.env, by tools/build_libuxgtk.sh) and installed beside
 #              libUXKit.so, which names it, libgtk-4 and libGL as its dependencies
+#     arm64-linux  GTK 4 on 64-bit Linux on ARM (the Raspberry Pi 5): as x86_64, with libUXGtk.so
+#              built on UX_PI_HOST (an arm64 Linux machine with libgtk-4-dev); skipped without one
 #     wasm32   the web: libUXKit.wasm and its .json, with the page scripts a web app ships beside
 #              them (ux_web_browser.js, ux_web_page.js)
 #     ios-sim  UIKit, with its shim bundled in, against the simulator's SDK
@@ -57,6 +59,13 @@ for t in $targets; do
       "$xcc" -A x86_64 --emit-lib -I "$here" "$here/UXKit.xc" -o "$work/libUXKit.so" -L "$work/linux" -lUXGtk -lgtk-4 -lGL
       mkdir -p "$dest/$t"
       cp "$work/linux/libUXGtk.so" "$dest/$t/"
+      ext=so ;;
+    arm64-linux)
+      [ -n "${UX_PI_HOST:-}" ] && UX_LINUX_HOST=$UX_PI_HOST sh "$here/tools/build_libuxgtk.sh" "$work/pi" --with-link-inputs >/dev/null \
+          || { echo "install: no UX_PI_HOST for the arm64 GTK shim; skipped $t"; continue; }
+      "$xcc" -A arm64-linux --emit-lib -I "$here" "$here/UXKit.xc" -o "$work/libUXKit.so" -L "$work/pi" -lUXGtk -lgtk-4 -lGL
+      mkdir -p "$dest/$t"
+      cp "$work/pi/libUXGtk.so" "$dest/$t/"
       ext=so ;;
     wasm32)
       "$xcc" -A wasm32 --emit-lib -I "$here" "$here/UXKit.xc" -o "$work/libUXKit.wasm"

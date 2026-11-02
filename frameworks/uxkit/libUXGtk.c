@@ -742,6 +742,35 @@ int ux_gtk_gl_test_corner(int handle, int node)
     return (handle >= 0 && handle < UXGTK_MAXW && node >= 0 && node < UXGTK_MAXN) ? gClamp[handle][node].cornerRGB : -1;
     }
 
+/* The GL a GtkGLArea gets here: 2 = desktop GL 3.2 or later (UX_GL_GL33), 1 = OpenGL ES 3.0
+ * (UX_GL_GLES3).  Desktop GL when the display gives a 3.2 context; otherwise ES, which is all
+ * the Raspberry Pi 5's V3D offers (its desktop GL stops at 3.1).  Asked once, of a throwaway
+ * context, so glKind answers before any GL view exists.  No GL at all keeps the old answer. */
+static int gGlKind = -1;
+int ux_gtk_gl_kind(void)
+    {
+    if (gGlKind >= 0)
+        return gGlKind;
+    gGlKind = 2;
+    GdkDisplay* dpy = gdk_display_get_default();
+    GError* err = NULL;
+    GdkGLContext* c = dpy ? gdk_display_create_gl_context(dpy, &err) : NULL;
+    if (c)
+        {
+        gdk_gl_context_set_allowed_apis(c, GDK_GL_API_GL);
+        gdk_gl_context_set_required_version(c, 3, 2);
+        int maj = 0, min = 0;
+        if (gdk_gl_context_realize(c, &err))
+            gdk_gl_context_get_version(c, &maj, &min);
+        if (gdk_gl_context_get_api(c) != GDK_GL_API_GL || maj * 10 + min < 32)
+            gGlKind = 1;
+        g_object_unref(c);
+        }
+    if (err)
+        g_error_free(err);
+    return gGlKind;
+    }
+
 void ux_gtk_make_gl(int handle, int node, int x, int y, int w, int h, int hidden)
     {
     if (!gFix[handle] || node < 0 || node >= UXGTK_MAXN)
@@ -749,11 +778,19 @@ void ux_gtk_make_gl(int handle, int node, int x, int y, int w, int h, int hidden
     if (!gGlA[handle][node])
         {
         GtkWidget* gl = gtk_gl_area_new();
-        /* Desktop GL, 3.2 or later: what glKind promises (UX_GL_GL33).  Left to choose, GTK takes
-         * OpenGL ES where it prefers it (Mesa under Xvfb did), and a renderer told GL 3.3 then
-         * compiles "#version 150" against a GLES context and fails. */
-        gtk_gl_area_set_allowed_apis(GTK_GL_AREA(gl), GDK_GL_API_GL);
-        gtk_gl_area_set_required_version(GTK_GL_AREA(gl), 3, 2);
+        /* Exactly the API glKind promises.  Left to choose, GTK takes OpenGL ES where it
+         * prefers it (Mesa under Xvfb did), and a renderer told GL 3.3 then compiles
+         * "#version 150" against a GLES context and fails -- and the other way round on the Pi. */
+        if (ux_gtk_gl_kind() == 2)
+            {
+            gtk_gl_area_set_allowed_apis(GTK_GL_AREA(gl), GDK_GL_API_GL);
+            gtk_gl_area_set_required_version(GTK_GL_AREA(gl), 3, 2);
+            }
+        else
+            {
+            gtk_gl_area_set_allowed_apis(GTK_GL_AREA(gl), GDK_GL_API_GLES);
+            gtk_gl_area_set_required_version(GTK_GL_AREA(gl), 3, 0);
+            }
         g_signal_connect(gl, "render", G_CALLBACK(gl_render_cb), GINT_TO_POINTER((handle << 8) | node));
         /* BELOW the cairo drawing area, so the toolkit's 2D lands over the map. */
         gtk_widget_insert_before(gl, GTK_WIDGET(gFix[handle]), gArea[handle]);
@@ -3200,8 +3237,10 @@ static GdkRGBA gDlgAutoRGBA;
 static char gDlgAutoFont[256];
 static int gDlgAutoCancel;
 static int gDlgAutoSeen;
+static int gDlgAutoTries; /* font-chooser ticks spent waiting for the font to take */
 void ux_gtk_dialog_auto(int ms, const char* path, int r, int g, int b, const char* font, int cancel)
     {
+    gDlgAutoTries = 0;
     gDlgAutoMs = ms;
     g_strlcpy(gDlgAutoPath, path ? path : "", sizeof gDlgAutoPath);
     gDlgAutoRGBA = (GdkRGBA){ r / 255.0f, g / 255.0f, b / 255.0f, 1.0f };
@@ -3256,7 +3295,21 @@ static gboolean dlg_auto_cb(gpointer unused)
             {
             gDlgAutoSeen = 1;
             if (!gDlgAutoCancel)
+                {
+                /* The chooser fills its font list on frame-clock ticks, and until then the font
+                 * set here selects nothing.  Look again for a while before pressing OK; with no
+                 * ticks at all (a Wayland output switched off) it never takes, and the hook then
+                 * answers no font rather than hanging. */
                 gtk_font_chooser_set_font(GTK_FONT_CHOOSER(w), gDlgAutoFont);
+                char* held = gtk_font_chooser_get_font(GTK_FONT_CHOOSER(w));
+                int took = held != NULL;
+                g_free(held);
+                if (!took && ++gDlgAutoTries < 20)
+                    {
+                    g_object_unref(w);
+                    return G_SOURCE_CONTINUE;
+                    }
+                }
             handled = 1;
             }
         /* ONE response: a file chooser's OK is ACCEPT, the colour and font dialogs' is OK */

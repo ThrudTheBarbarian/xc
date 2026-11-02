@@ -31,6 +31,7 @@ void ux_gtk_pump(void);
 void ux_gtk_wait_event(void);
 void ux_gtk_wait_event_ms(i32 ms);
 void ux_gtk_set_posted_hook(pointer fn);
+i32 ux_gtk_gl_kind(void); // 2 = desktop GL 3.2+, 1 = OpenGL ES 3.0
 void ux_gtk_wake_posted(void); // any thread
 i32 ux_gtk_alert(i32 parent, u8* lines, u8* buttons, i32 defBtn);
 void ux_gtk_clip(i32 x, i32 y, i32 w, i32 h);
@@ -617,9 +618,11 @@ class UXGtkDriver : Object<UXViewDriver>
         return (i32)-1;
         }
 
+    // Desktop GL 3.2+ where the display has it, else OpenGL ES 3.0 (the Raspberry Pi 5):
+    // libUXGtk asks once and makes every GL view with the same API.
     i32 glKind(void)
         {
-        return (i32)UX_GL_GL33;
+        return ux_gtk_gl_kind() == (i32)2 ? (i32)UX_GL_GL33 : (i32)UX_GL_GLES3;
         }
     // GtkGLArea is an ordinary widget, composited with its siblings in one step.
     bool compositesWithGL(void)

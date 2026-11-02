@@ -90,6 +90,7 @@ void main(void)
     ck((u8*)"the colour dialog answers the colour chosen", okc == (i32)1 && r == (i32)10 && g == (i32)200 && b == (i32)30);
 
     u8 fam[64];
+    fam[(i32)0] = (u8)0; // printed even when no font comes back
     i32 size = (i32)0;
     i32 bold = (i32)0;
     i32 italic = (i32)0;
