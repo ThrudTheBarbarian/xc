@@ -74,7 +74,7 @@ _HASHCAT = os.path.join(common.REPO, "apps", "hashcat")
 SRC_DIRS = {"md5": _HASHCAT, "md5_mask": _HASHCAT}
 
 
-AUTO_BENCHES = ["mandelbrot", "perlin", "nbody", "saxpy"]
+AUTO_BENCHES = ["mandelbrot", "perlin", "nbody", "saxpy", "md5", "md5_mask", "mandel_deep"]
 
 
 def build_auto(name, arch, out, autopar):
