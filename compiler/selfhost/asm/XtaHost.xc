@@ -94,7 +94,12 @@ class XaDir
             pointer e = readdir(d);
             if (e == (pointer)0)
                 break;
+#if OS_linux
+            // glibc's dirent: the name at 19 (macOS's 64-bit-inode one: 21).
+            XaDir.addName(out, String.withCString((u8*)e + 19));
+#else
             XaDir.addName(out, String.withCString((u8*)e + 21));
+#endif
             }
         closedir(d);
         return out;

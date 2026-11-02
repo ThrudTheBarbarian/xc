@@ -197,8 +197,9 @@ class Arm64Asm
             dataBytes.add(as.modInitBytes().get(i));
         for (u32 i = (u32)0; i < as.modInitFixups().count(); i = i + (u32)1) {
             Arm64Fixup* f = (Arm64Fixup*)as.modInitFixups().get(i);
-            fixups.add((Object*)Arm64Fixup.make(base + f.offset(), f.kind(),
-                                                f.symbol(), f.scale()));
+            Arm64Fixup* g = Arm64Fixup.make(base + f.offset(), f.kind(), f.symbol(), f.scale());
+            g.setAddend(f.addend());
+            fixups.add((Object*)g);
         }
         return miLen;
     }

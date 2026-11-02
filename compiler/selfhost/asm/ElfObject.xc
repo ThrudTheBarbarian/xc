@@ -197,7 +197,9 @@ class ElfSymDef
     Array* _relocs;     // ElfReloc@ against text
     Array* _dataRelocs; // ElfReloc@ against data
     Array* _tlsRelocs;  // ElfReloc@ against the TLS image
+    Array* _initRelocs; // ElfReloc@ against the constructors' pointers
     Data* _text;
+    Data* _init;        // .init_array: the load-time constructors' pointers
     Data* _data;
     Data* _tls;
     u32 _dataAlign;
@@ -209,6 +211,7 @@ class ElfSymDef
     Map* _textOffOf;
     Map* _dataOffOf;
     Map* _tlsOffOf;
+    Map* _initOffOf;
 
     void init(void)
         {
@@ -217,6 +220,9 @@ class ElfSymDef
         _relocs = new Array();
         _dataRelocs = new Array();
         _tlsRelocs = new Array();
+        _initRelocs = new Array();
+        _init = new Data();
+        _initOffOf = new Map();
         _text = new Data();
         _data = new Data();
         _tls = new Data();
@@ -263,6 +269,17 @@ class ElfSymDef
     Data* tls(void)
         {
         return _tls;
+        }
+    // The constructors an object asks the loader to run (.init_array, 8-byte
+    // pointers) and their relocations: xcc's own -c objects carry a module's
+    // load-time constructors this way. A link that ignores them drops them.
+    Data* initArray(void)
+        {
+        return _init;
+        }
+    Array* initRelocs(void)
+        {
+        return _initRelocs;
         }
     u32 dataAlign(void)
         {
@@ -377,6 +394,14 @@ class ElfSymDef
                 continue;
             if ((s.flags() & (u64)2) == (u64)0)
                 continue; // SHF_ALLOC
+            if (s.type() == (u32)14)
+                {
+                // SHT_INIT_ARRAY: kept apart, for the link to run.
+                _padTo(_init, (u32)8);
+                _initOffOf.set((Hashable*)Number.with(i), (Object*)Number.with(_init.length() + (u32)1));
+                _copyInto(_init, s.off(), s.size());
+                continue;
+                }
             if (s.type() != (u32)1 && s.type() != (u32)8)
                 continue; // PROGBITS / NOBITS
             if ((s.flags() & (u64)4) != (u64)0)
@@ -497,10 +522,11 @@ class ElfSymDef
             u32 t = _in(_textOffOf, applies);
             u32 dd = _in(_dataOffOf, applies);
             u32 l = _in(_tlsOffOf, applies);
-            if (t == (u32)0 && dd == (u32)0 && l == (u32)0)
+            u32 ia = _in(_initOffOf, applies);
+            if (t == (u32)0 && dd == (u32)0 && l == (u32)0 && ia == (u32)0)
                 continue; // e.g. .rela.eh_frame
-            u32 base = (t != (u32)0 ? t : (dd != (u32)0 ? dd : l)) - (u32)1;
-            Array* into = t != (u32)0 ? _relocs : (dd != (u32)0 ? _dataRelocs : _tlsRelocs);
+            u32 base = (t != (u32)0 ? t : (dd != (u32)0 ? dd : (l != (u32)0 ? l : ia))) - (u32)1;
+            Array* into = t != (u32)0 ? _relocs : (dd != (u32)0 ? _dataRelocs : (l != (u32)0 ? _tlsRelocs : _initRelocs));
             u32 n = s.size() / (u32)24;
             for (u32 r = (u32)0; r < n; r = r + (u32)1)
                 {

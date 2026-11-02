@@ -43,12 +43,22 @@ class ElfLinkArm64
     String* _why;
     u32 _rc;            // 0 merged; 1 error (reported in why)
     Array* _gotFixups;  // Arm64Fixup@ — GOT refs, relaxed after the pull settles
+    // The pulled objects' load-time constructors (their .init_array), in the
+    // order the objects joined: pointer bytes (Number@) and their Pointer64
+    // fixups, for the caller to put after the program's own (appendModInit),
+    // as MachOLink hands over the __mod_init_func of Mach-O objects.
+    Array* _objModInit;
+    Array* _objModInitFix;
 
     void init(void)
         {
         _rc = (u32)0;
         _gotFixups = new Array();
+        _objModInit = new Array();
+        _objModInitFix = new Array();
         }
+    Array* objModInit(void)    { return _objModInit; }
+    Array* objModInitFix(void) { return _objModInitFix; }
     u32 rc(void)
         {
         return _rc;
@@ -219,6 +229,7 @@ class ElfLinkArm64
                     continue;
                 ElfObject* obj = (ElfObject*)allObjs.get(oi);
                 bool defines = forced.get((Hashable*)key) != (Object*)0;
+                bool named = defines;   // on the command line, not an archive member
                 if (!defines)
                     defines = ElfLinkArm64.definesAny(obj, needed, msyms);
                 if (!defines)
@@ -255,6 +266,13 @@ class ElfLinkArm64
                         {
                         if (sd.weak())
                             continue;                                   // a definition stands already
+                        // xcc's own objects (a split build's modules) each
+                        // carry a copy of the standard library: the first
+                        // definition stands, as in the x86-64 and Mach-O
+                        // links. A class's category table twice is still the
+                        // class compiled into two modules.
+                        if (named && strongDefs.get((Hashable*)nm) != (Object*)0 && !nm.contains(String.withCString("$cat$")))
+                            continue;
                         if (strongDefs.get((Hashable*)nm) != (Object*)0)
                             {
                             fail(String.withCString("'").appending(nm).appending(String.withCString("' is defined twice, the second time in ")).appending(label));
@@ -360,6 +378,27 @@ class ElfLinkArm64
                         }
                     fail(m);
                     return;
+                    }
+                // The object's constructors: each pointer word a Pointer64
+                // fixup at its place in the list.
+                Data* ia = obj.initArray();
+                u32 ibase = _objModInit.count();
+                for (u32 b = (u32)0; b < ia.length(); b = b + (u32)1)
+                    _objModInit.add((Object*)Number.withU32((u32)ia.byteAt(b)));
+                Array* il = obj.initRelocs();
+                for (u32 k = (u32)0; k < il.count(); k = k + (u32)1)
+                    {
+                    ElfReloc* r = (ElfReloc*)il.get(k);
+                    if (r.type() != (u32)RA64_ABS64 || r.sym() >= sdefs.count())
+                        {
+                        fail(String.withCString("an .init_array entry that is not a pointer in ").appending(label));
+                        return;
+                        }
+                    ElfSymDef* sd = (ElfSymDef*)sdefs.get(r.sym());
+                    Arm64Fixup* f = Arm64Fixup.make(ibase + r.off(), (u32)FIXUP_POINTER64,
+                                                    ElfLinkArm64.taggedSym(sd, oi, r.sym()), (u32)0);
+                    f.setAddend((i32)r.addend());
+                    _objModInitFix.add((Object*)f);
                     }
                 progress = true;
                 }

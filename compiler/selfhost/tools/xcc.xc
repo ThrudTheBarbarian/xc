@@ -274,6 +274,9 @@ class DriverOptions
         _arch = String.withCString("x86_64");
 #elif ARCH_armv7
         _arch = String.withCString("arm9");
+#elif OS_linux
+        // A Raspberry Pi and the other arm64 Linux machines: their own row.
+        _arch = String.withCString("arm64-linux");
 #else
         _arch = String.withCString("arm64");
 #endif
@@ -1886,6 +1889,8 @@ String* cPathTargetFlags(DriverOptions* d)
     String* host = String.withCString("x86_64");
 #elif ARCH_armv7
     String* host = String.withCString("arm9");
+#elif OS_linux
+    String* host = String.withCString("arm64-linux");
 #else
     String* host = String.withCString("arm64");
 #endif
@@ -3909,7 +3914,7 @@ Array* mergeLinkObjects(DriverOptions* d, Array* mtext, Array* mdata, Map* msyms
 // them without a word, so a library bundling C code came out with that code
 // undefined.
 void mergeElfLinkObjects(DriverOptions* d, Array* mtext, Array* mdata, Map* msyms,
-                         Array* mdataSyms, Array* mfix, Array* extra)
+                         Array* mdataSyms, Array* mfix, Array* extra, Arm64Asm* as)
 {
     Array* objs = new Array();
     Array* ars = new Array();
@@ -3930,6 +3935,18 @@ void mergeElfLinkObjects(DriverOptions* d, Array* mtext, Array* mdata, Map* msym
     if (el.rc() != (u32)0) {
         Stdio.printf("xcc: error: %s link: %s\n", d.targetRow().name().cString(), el.why() == 0 ? "?" : el.why().cString());
         Process.exit((i32)1); return;
+    }
+    // The objects' load-time constructors after the program's own, in the
+    // list appendModInit ends the data with: xcc's own -c objects carry a
+    // module's this way, and a C object's .init_array runs as well.
+    u32 mb = as.modInitBytes().count();
+    for (u32 i = (u32)0; i < el.objModInit().count(); i = i + (u32)1)
+        as.modInitBytes().add(el.objModInit().get(i));
+    for (u32 i = (u32)0; i < el.objModInitFix().count(); i = i + (u32)1) {
+        Arm64Fixup* f = (Arm64Fixup*)el.objModInitFix().get(i);
+        Arm64Fixup* g = Arm64Fixup.make(mb + f.offset(), f.kind(), f.symbol(), f.scale());
+        g.setAddend(f.addend());
+        as.modInitFixups().add((Object*)g);
     }
 }
 
@@ -3962,6 +3979,71 @@ Array* objectNeeds(Array* objectInputs)
 // `xcc a.o b.o -o prog` for arm64 / ios / ios-sim: the runtime (crt + rt) is
 // assembled as the primary input, the objects merge in forced, the archives
 // on demand, and the image is written exactly as the source path writes it.
+// An object link for the aarch64 ELF rows (arm64 Linux, android): the row's
+// crt and runtime assembled as the image path does, the objects and archives
+// merged into that model (ElfLinkArm64), their constructors after it, and the
+// image written by ElfArm64. The split build links the compiler for an arm64
+// Linux host this way.
+void linkObjectsArm64Elf(DriverOptions* d)
+{
+    TargetRow* lrow = d.targetRow();
+    String* crt = readRuntime(d.fe(), lrow.crt());
+    String* rt  = readRuntime(d.fe(), lrow.runtime());
+    if (crt == 0 || rt == 0) {
+        Stdio.printf("xcc: error: cannot read the %s runtime from the support tree\n", lrow.name().cString());
+        Process.exit((i32)1); return;
+    }
+    String* combined = new String();
+    // Already in the ELF spelling, as the image path takes them.
+    combined.append(crt); combined.appendByte((u8)'\n');
+    combined.append(rt);  combined.appendByte((u8)'\n');
+    Arm64Asm* as = new Arm64Asm();
+    as.assemble(Arm64Asm.machoDialectFromElf(combined));
+    as.demoteCommonsToLocalData();
+    if (as.failed()) {
+        Stdio.printf("xcc: assembly failed: %s\n", as.why().cString());
+        Process.exit((i32)1); return;
+    }
+    // The libraries the objects imported (their .xtc.needs sidecars) are
+    // needed as an #import <X> in one source would make them.
+    Array* needs = objectNeeds(d.objectInputs());
+    for (u32 i = (u32)0; i < needs.count(); i = i + (u32)1) {
+        bool have = false;
+        for (u32 k = (u32)0; k < d.fe().neededLibs().count(); k = k + (u32)1)
+            if (((String*)d.fe().neededLibs().get(k)).equals((String*)needs.get(i))) have = true;
+        if (!have) d.fe().neededLibs().add(needs.get(i));
+    }
+    Array* aData = as.dataBytes();
+    Array* aFix  = as.fixups();
+    mergeElfLinkObjects(d, as.textBytes(), aData, as.symbols(), as.dataSyms(), aFix, d.objectInputs(), as);
+    u32 aMi = Arm64Asm.appendModInit(as, aData, aFix);
+    String* baseNeeded = new String();
+    for (u32 ni = (u32)0; ni < lrow.needed().count(); ni = ni + (u32)1) {
+        if (ni > (u32)0) baseNeeded.appendCString(",");
+        baseNeeded.append((String*)lrow.needed().get(ni));
+    }
+    ElfArm64* w = new ElfArm64();
+    w.setInterp(lrow.interp());
+    w.setRunpath(arm64ElfRunpath(d, lrow));
+    if (lrow.os().equals(String.withCString("linux")))
+        w.setKnownImports(arm64KnownImports(d));
+    w.image(as.textBytes(), aData, as.symbols(), as.dataSyms(), new Array(), aFix, (String*)0,
+            androidNeededWithImports(d, baseNeeded.cString()), String.withCString("_start"), aMi);
+    if (w.failed()) {
+        Stdio.printf("xcc: %s link failed: %s\n", lrow.name().cString(), w.why().cString());
+        Process.exit((i32)1); return;
+    }
+    Array* image = w.bytes();
+    Data* od = Data.withCapacity(image.count());
+    for (u32 i = (u32)0; i < image.count(); i = i + (u32)1)
+        od.appendByte((u8)((Number*)image.get(i)).asU32());
+    if (!Files.writeData(d.fe().output(), od)) {
+        Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
+        Process.exit((i32)1); return;
+    }
+    Files.setExecutable(d.fe().output());
+}
+
 void linkObjectsArm64(DriverOptions* d)
 {
     String* crt = readRuntime(d.fe(), String.withCString("crt-macos.s"));
@@ -4316,6 +4398,9 @@ void linkObjects(DriverOptions* d)
         emitModule(d, mod);
         return;
     }
+    if (d.targetRow() != (TargetRow*)0 && d.targetRow().exeFormat().equals(String.withCString("elf-pie"))) {
+        linkObjectsArm64Elf(d); return;
+    }
     if (d.arch().equals(String.withCString("arm64")) || isIos(d)) { linkObjectsArm64(d); return; }
     // An object-only link is the static musl one, as the reference's (which has
     // no glibc object link yet), unless -dynamic asks for glibc.
@@ -4489,7 +4574,8 @@ void main(void)
     // tried to link it.
     if (d.compileOnly() && !isX86_64(d) && !isArm9(d) && !isIos(d)
         && !d.arch().equals(String.withCString("win64"))
-        && !d.arch().equals(String.withCString("arm64"))) {
+        && !d.arch().equals(String.withCString("arm64"))
+        && !d.targetRow().exeFormat().equals(String.withCString("elf-pie"))) {
         Stdio.printf("xcc: error: -c is implemented for arm64, ios, ios-sim, x86_64, win64 and arm9 "
                      "in this driver (task #63); '%s' needs its object writer "
                      "ported first.\n", d.arch().cString());
@@ -4551,18 +4637,17 @@ void main(void)
         Array* cDefs = new Array();
         cDefs.addAll(d.fe().defs());
         optSetPromoteScalars(true);
-        // The arm64 ELF rows (arm64 Linux, android) write no object of xcc's
-        // yet: their program links from source, and clang's half joins the
-        // image through the ELF object merge, as a -Wl object does.
+        // The arm64 ELF rows (arm64 Linux, android): xcc's half is an
+        // aarch64 ELF object, and clang's joins it (one step, through the ELF
+        // object merge as a -Wl object does; -c, through clang -r).
         TargetRow* crow = d.targetRow();
         bool cElfArm64 = crow != (TargetRow*)0 && crow.cpu().equals(String.withCString("arm64"))
                          && crow.exeFormat().hasPrefix(String.withCString("elf"));
         // -c: one object, xcc's and clang's halves together (cSplitLink).
-        // win64's link has no relocatable form, nor yet the arm64 ELF rows':
-        // there, build in one step.
+        // win64's link has no relocatable form: there, build in one step.
         if (d.compileOnly() && !d.keepAsm())
             {
-            if (d.arch().equals(String.withCString("win64")) || cElfArm64)
+            if (d.arch().equals(String.withCString("win64")))
                 {
                 Stdio.printf("xcc: error: -c of a C file is not done for %s: build the program in one step\n",
                              crow != (TargetRow*)0 ? crow.name().cString() : d.arch().cString());
@@ -4595,7 +4680,7 @@ void main(void)
         // and nothing was written where asked.
         if (mod != (IRModule*)0 && d.keepAsm())
             d.setCompileOnly(true);
-        else if (mod != (IRModule*)0 && cElfArm64)
+        else if (mod != (IRModule*)0 && cElfArm64 && !gCSplitRelocatable)
             d.linkInputs().add((Object*)cRestObject());
         else if (mod != (IRModule*)0)
             {
@@ -4967,6 +5052,42 @@ void emitModule(DriverOptions* d, IRModule* mod)
     // per-class allocators, deliberately NOT the crt or the runtime. Those
     // belong to the final link and baking them into every object would collide
     // the moment two of them met.
+    if (d.compileOnly() && d.targetRow() != (TargetRow*)0
+        && d.targetRow().exeFormat().equals(String.withCString("elf-pie"))) {
+        // The aarch64 ELF rows (arm64 Linux, android): an ET_REL object, with
+        // the ELF spelling of the names (no leading underscore), as the image
+        // path assembles them; ElfLinkArm64 reads it back at the link.
+        String* one = new String();
+        one.append(stripLeadingUnderscore(classAllocStubs(prog)));
+        one.appendByte((u8)'\n');
+        one.append(stripLeadingUnderscore(prog));
+        Arm64Asm* oas = new Arm64Asm();
+        oas.assemble(Arm64Asm.machoDialectFromElf(one));
+        if (oas.failed()) {
+            Stdio.printf("xcc: assembly failed: %s\n", oas.why().cString());
+            Process.exit((i32)1); return;
+        }
+        ElfArm64* eo = new ElfArm64();
+        Array* img = eo.objectFromText(oas.textBytes(), oas.dataBytes(), oas.symbols(), oas.dataSyms(),
+                                       oas.fixups(), oas.globals(), oas.commonSyms(),
+                                       oas.modInitBytes(), oas.modInitFixups());
+        if (img == (Array*)0 || eo.failed()) {
+            Stdio.printf("xcc: error: %s object write failed: %s\n", d.targetRow().name().cString(),
+                         eo.why() == (String*)0 ? "?" : eo.why().cString());
+            Process.exit((i32)1); return;
+        }
+        Data* od = Data.withCapacity(img.count());
+        for (u32 i = (u32)0; i < img.count(); i = i + (u32)1)
+            od.appendByte((u8)((Number*)img.get(i)).asU32());
+        if (!Files.writeData(d.fe().output(), od)) {
+            Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
+            Process.exit((i32)1); return;
+        }
+        writeObjectSidecars(d);
+        if (gCSplitOut != (String*)0)
+            cSplitLink(d);
+        return;
+    }
     if (d.compileOnly()) {
         String* one = new String();
         one.append(classAllocStubs(prog));
@@ -5111,7 +5232,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         // and the C objects and archives of the command line before that.
         Array* aData = as.dataBytes();
         Array* aFix  = as.fixups();
-        mergeElfLinkObjects(d, as.textBytes(), aData, as.symbols(), as.dataSyms(), aFix, new Array());
+        mergeElfLinkObjects(d, as.textBytes(), aData, as.symbols(), as.dataSyms(), aFix, new Array(), as);
         u32 aMi = Arm64Asm.appendModInit(as, aData, aFix);
         ElfArm64* w = new ElfArm64();
         w.setInterp(lrow.interp());
@@ -5909,7 +6030,8 @@ Array* listDirectory(String* dir)
     // No host C library to ask on this target.
     return out;
 #else
-#if ARCH_x86_64
+#if ARCH_x86_64 || OS_linux
+    // glibc's dirent (both arches): d_type at 18, the name at 19.
     u32 typeAt = (u32)18;
     u32 nameAt = (u32)19;
 #else

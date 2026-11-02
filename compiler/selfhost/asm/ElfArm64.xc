@@ -29,6 +29,7 @@
 // 4 KB-aligned segment; 16 KB is accepted on 4 KB devices too, so there is one
 // right answer and this is it.
 #import "ElfArm64Defs.xc"
+#import "ElfLinkArm64Defs.xc"
 
 class ElfArm64
     {
@@ -144,6 +145,351 @@ class ElfArm64
         while (n > (u32)0 && ((Number*)d.get(n - (u32)1)).asU32() == (u32)0)
             n = n - (u32)1;
         return n;
+        }
+
+    // ── ET_REL: the object `-c` writes (arm64 Linux, android) ──────────
+    //
+    // Separate compilation on the aarch64 ELF rows: what ElfLinkArm64 reads
+    // back at the link, and what a GNU or LLVM linker accepts. The sections
+    // are the assembler's two blobs, .text and .data, and, when the module
+    // has load-time constructors, an .init_array of their pointers (the link
+    // runs them, as it runs a Mach-O object's __mod_init_func); then a RELA
+    // table per patched section, the symbols and their strings.
+    //
+    // Every fixup naming a symbol becomes a relocation, whether this object
+    // defines the symbol or not: the link places the sections. The kinds map
+    // back the way ElfLinkArm64.kindOf reads them: a branch is CALL26, an adrp
+    // page ADR_PREL_PG_HI21, a lo12 offset ADD_ABS_LO12_NC or the LDST type of
+    // its access size, a GOT page and offset ADR_GOT_PAGE and LD64_GOT_LO12_NC,
+    // a pointer word ABS64.
+    Array* objectFromText(Array* text, Array* data, Map* symbols, Array* dataSyms,
+                          Array* fixups, Array* exports, Map* commons,
+                          Array* modInit, Array* modInitFix)
+        {
+        _out = new Array();
+        _failed = false;
+        if (data == (Array*)0)
+            data = new Array();
+        if (commons == (Map*)0)
+            commons = new Map();
+        if (modInit == (Array*)0)
+            modInit = new Array();
+        if (modInitFix == (Array*)0)
+            modInitFix = new Array();
+
+        // Locals first (ELF wants every STB_LOCAL before the globals, and
+        // .symtab's sh_info at the first global), then defined globals, text
+        // then data, then commons, then undefined. Sorted in each group, so two
+        // builds of one input are the same bytes.
+        Array* names = symbols.allKeys();
+        ElfArm64.sortStrings(names);
+        Array* locals = new Array();
+        Array* defText = new Array();
+        Array* defData = new Array();
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            {
+            String* n = (String*)names.get(i);
+            // No `L…` skip as in the Mach-O object: in the ELF spelling a
+            // class named Lower is `Lower$init`, as an assembler label is
+            // `L…`. A label nothing exports is a local symbol, which is right
+            // for both.
+            if (commons.get((Hashable*)n) != (Object*)0)
+                continue;
+            if (exports != (Array*)0 && !ElfArm64.inArray(exports, n))
+                {
+                locals.add((Object*)n);
+                continue;
+                }
+            if (ElfArm64.inArray(dataSyms, n))
+                defData.add((Object*)n);
+            else
+                defText.add((Object*)n);
+            }
+        Array* undef = new Array();
+        for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1)
+            {
+            Array* fl = pass == (u32)0 ? fixups : modInitFix;
+            for (u32 i = (u32)0; i < fl.count(); i = i + (u32)1)
+                {
+                Arm64Fixup* f = (Arm64Fixup*)fl.get(i);
+                if (f.symbol() == (String*)0 || f.symbol().byteLength() == (u32)0)
+                    continue;
+                if (symbols.get((Hashable*)f.symbol()) != (Object*)0 || commons.get((Hashable*)f.symbol()) != (Object*)0)
+                    continue;
+                if (!ElfArm64.inArray(undef, f.symbol()))
+                    undef.add((Object*)f.symbol());
+                }
+            }
+        ElfArm64.sortStrings(undef);
+        Array* commonNames = commons.allKeys();
+        ElfArm64.sortStrings(commonNames);
+
+        Array* order = new Array();
+        for (u32 i = (u32)0; i < locals.count(); i = i + (u32)1)
+            order.add(locals.get(i));
+        u32 firstGlobal = order.count() + (u32)1;   // after the null symbol
+        for (u32 i = (u32)0; i < defText.count(); i = i + (u32)1)
+            order.add(defText.get(i));
+        for (u32 i = (u32)0; i < defData.count(); i = i + (u32)1)
+            order.add(defData.get(i));
+        for (u32 i = (u32)0; i < commonNames.count(); i = i + (u32)1)
+            order.add(commonNames.get(i));
+        for (u32 i = (u32)0; i < undef.count(); i = i + (u32)1)
+            order.add(undef.get(i));
+        Map* symIndex = new Map();
+        for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
+            symIndex.set((Hashable*)(String*)order.get(i), (Object*)Number.withU32(i + (u32)1));
+
+        bool hasInit = modInit.count() > (u32)0;
+        // Section indices: 1 .text, 2 .data, then .init_array when there is one.
+        u32 secInit = hasInit ? (u32)3 : (u32)0;
+
+        Array* strtab = new Array();
+        strtab.add((Object*)Number.withU32((u32)0));
+        Array* symtab = new Array();
+        for (u32 i = (u32)0; i < (u32)24; i = i + (u32)1)
+            symtab.add((Object*)Number.withU32((u32)0));
+        for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
+            {
+            String* n = (String*)order.get(i);
+            ElfArm64.put32Into(symtab, strtab.count());
+            for (u32 k = (u32)0; k < n.byteLength(); k = k + (u32)1)
+                strtab.add((Object*)Number.withU32((u32)n.byteAt(k)));
+            strtab.add((Object*)Number.withU32((u32)0));
+            Array* com = (Array*)commons.get((Hashable*)n);
+            if (com != (Array*)0)
+                {
+                // SHN_COMMON: st_value is the alignment, st_size the size.
+                symtab.add((Object*)Number.withU32(((u32)1 << (u32)4) | (u32)1));   // GLOBAL OBJECT
+                symtab.add((Object*)Number.withU32((u32)0));
+                ElfArm64.put16Into(symtab, (u32)$FFF2);
+                ElfArm64.put64Into(symtab, (u32)1 << ((Number*)com.get((u32)1)).asU32());
+                ElfArm64.put64Into(symtab, ((Number*)com.get((u32)0)).asU32());
+                continue;
+                }
+            Object* at = symbols.get((Hashable*)n);
+            bool isUndef = at == (Object*)0;
+            bool inData = ElfArm64.inArray(dataSyms, n);
+            bool isGlobal = isUndef || exports == (Array*)0 || ElfArm64.inArray(exports, n);
+            u32 type = isUndef ? (u32)0 : (inData ? (u32)1 : (u32)2);   // NOTYPE / OBJECT / FUNC
+            symtab.add((Object*)Number.withU32(((isGlobal ? (u32)1 : (u32)0) << (u32)4) | type));
+            symtab.add((Object*)Number.withU32((u32)0));
+            ElfArm64.put16Into(symtab, isUndef ? (u32)0 : (inData ? (u32)2 : (u32)1));
+            ElfArm64.put64Into(symtab, isUndef ? (u32)0 : ((Number*)at).asU32());
+            ElfArm64.put64Into(symtab, (u32)0);
+            }
+
+        Array* textRel = new Array();
+        Array* dataRel = new Array();
+        Array* initRel = new Array();
+        for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1)
+            {
+            Array* fl = pass == (u32)0 ? fixups : modInitFix;
+            for (u32 i = (u32)0; i < fl.count(); i = i + (u32)1)
+                {
+                Arm64Fixup* f = (Arm64Fixup*)fl.get(i);
+                if (f.symbol() == (String*)0)
+                    continue;
+                Object* si = symIndex.get((Hashable*)f.symbol());
+                if (si == (Object*)0)
+                    continue;
+                u32 k = f.kind();
+                u32 rt = (u32)0;
+                Array* into = textRel;
+                if (pass == (u32)1)
+                    {
+                    rt = (u32)RA64_ABS64;
+                    into = initRel;
+                    }
+                else if (k == (u32)FIXUP_BRANCH26)
+                    rt = (u32)RA64_CALL26;
+                else if (k == (u32)FIXUP_PAGE21)
+                    rt = (u32)RA64_ADR_PREL_PG_HI21;
+                else if (k == (u32)FIXUP_PAGEOFF12)
+                    {
+                    u32 sc = f.scale();
+                    rt = sc == (u32)1 ? (u32)RA64_LDST16_ABS_LO12_NC
+                       : sc == (u32)2 ? (u32)RA64_LDST32_ABS_LO12_NC
+                       : sc == (u32)3 ? (u32)RA64_LDST64_ABS_LO12_NC
+                       : sc == (u32)4 ? (u32)RA64_LDST128_ABS_LO12_NC
+                       : (u32)RA64_ADD_ABS_LO12_NC;
+                    }
+                else if (k == (u32)FIXUP_GOTPAGE21)
+                    rt = (u32)RA64_ADR_GOT_PAGE;
+                else if (k == (u32)FIXUP_GOTPAGEOFF12)
+                    rt = (u32)RA64_LD64_GOT_LO12_NC;
+                else if (k == (u32)FIXUP_POINTER64)
+                    {
+                    rt = (u32)RA64_ABS64;
+                    into = dataRel;
+                    }
+                else if (k == (u32)FIXUP_PREL32)
+                    {
+                    rt = (u32)RA64_PREL32;
+                    into = dataRel;
+                    }
+                else
+                    {
+                    fail(String.withFormat("an object cannot carry fixup kind %u (symbol %s)", k, f.symbol().cString()));
+                    return (Array*)0;
+                    }
+                ElfArm64.put64Into(into, f.offset());
+                ElfArm64.put32Into(into, rt);
+                ElfArm64.put32Into(into, ((Number*)si).asU32());
+                i32 ad = f.addend();
+                ElfArm64.put32Into(into, (u32)ad);
+                ElfArm64.put32Into(into, ad < (i32)0 ? (u32)$FFFFFFFF : (u32)0);
+                }
+            }
+
+        Array* secNames = new Array();
+        secNames.add((Object*)String.withCString(""));
+        secNames.add((Object*)String.withCString(".text"));
+        secNames.add((Object*)String.withCString(".data"));
+        if (hasInit)
+            secNames.add((Object*)String.withCString(".init_array"));
+        u32 secRelText = secNames.count();
+        secNames.add((Object*)String.withCString(".rela.text"));
+        u32 secRelData = secNames.count();
+        secNames.add((Object*)String.withCString(".rela.data"));
+        u32 secRelInit = secNames.count();
+        if (hasInit)
+            secNames.add((Object*)String.withCString(".rela.init_array"));
+        u32 secSym = secNames.count();
+        secNames.add((Object*)String.withCString(".symtab"));
+        u32 secStr = secNames.count();
+        secNames.add((Object*)String.withCString(".strtab"));
+        u32 secShstr = secNames.count();
+        secNames.add((Object*)String.withCString(".shstrtab"));
+        Array* shstr = new Array();
+        shstr.add((Object*)Number.withU32((u32)0));
+        Array* shName = new Array();
+        for (u32 i = (u32)0; i < secNames.count(); i = i + (u32)1)
+            {
+            String* n = (String*)secNames.get(i);
+            shName.add((Object*)Number.withU32(n.byteLength() == (u32)0 ? (u32)0 : shstr.count()));
+            for (u32 k = (u32)0; k < n.byteLength(); k = k + (u32)1)
+                shstr.add((Object*)Number.withU32((u32)n.byteAt(k)));
+            if (n.byteLength() != (u32)0)
+                shstr.add((Object*)Number.withU32((u32)0));
+            }
+
+        u32 textOff = (u32)64;
+        u32 dataOff = ElfArm64.roundUp(textOff + text.count(), (u32)16);
+        u32 initOff = ElfArm64.roundUp(dataOff + data.count(), (u32)8);
+        u32 trelOff = ElfArm64.roundUp(initOff + modInit.count(), (u32)8);
+        u32 drelOff = trelOff + textRel.count();
+        u32 irelOff = drelOff + dataRel.count();
+        u32 symOff = irelOff + initRel.count();
+        u32 strOff = symOff + symtab.count();
+        u32 shstrOff = strOff + strtab.count();
+        u32 shOff = ElfArm64.roundUp(shstrOff + shstr.count(), (u32)8);
+
+        p8((u32)$7F); p8((u32)'E'); p8((u32)'L'); p8((u32)'F');
+        p8((u32)2); p8((u32)1); p8((u32)1);
+        for (u32 i = (u32)0; i < (u32)9; i = i + (u32)1)
+            p8((u32)0);
+        p16((u32)1);        // ET_REL
+        p16((u32)183);      // EM_AARCH64
+        p32((u32)1);
+        p64((u32)0);
+        p64((u32)0);
+        p64(shOff);
+        p32((u32)0);
+        p16((u32)64);
+        p16((u32)0);
+        p16((u32)0);
+        p16((u32)64);
+        p16(secNames.count());
+        p16(secShstr);
+
+        padTo(textOff);
+        ElfArm64.appendBytes(_out, text);
+        padTo(dataOff);
+        ElfArm64.appendBytes(_out, data);
+        if (hasInit)
+            {
+            padTo(initOff);
+            ElfArm64.appendBytes(_out, modInit);
+            }
+        padTo(trelOff);
+        ElfArm64.appendBytes(_out, textRel);
+        ElfArm64.appendBytes(_out, dataRel);
+        ElfArm64.appendBytes(_out, initRel);
+        ElfArm64.appendBytes(_out, symtab);
+        ElfArm64.appendBytes(_out, strtab);
+        ElfArm64.appendBytes(_out, shstr);
+        padTo(shOff);
+
+        // The section headers: name, type, flags, addr, offset, size, link,
+        // info, addralign, entsize.
+        for (u32 i = (u32)0; i < (u32)64; i = i + (u32)1)
+            p8((u32)0);
+        objSection(((Number*)shName.get((u32)1)).asU32(), (u32)1, (u32)6, textOff, text.count(), (u32)0, (u32)0, (u32)16, (u32)0);
+        objSection(((Number*)shName.get((u32)2)).asU32(), (u32)1, (u32)3, dataOff, data.count(), (u32)0, (u32)0, (u32)16, (u32)0);
+        if (hasInit)
+            objSection(((Number*)shName.get(secInit)).asU32(), (u32)14, (u32)3, initOff, modInit.count(), (u32)0, (u32)0, (u32)8, (u32)8);
+        objSection(((Number*)shName.get(secRelText)).asU32(), (u32)4, (u32)$40, trelOff, textRel.count(), secSym, (u32)1, (u32)8, (u32)24);
+        objSection(((Number*)shName.get(secRelData)).asU32(), (u32)4, (u32)$40, drelOff, dataRel.count(), secSym, (u32)2, (u32)8, (u32)24);
+        if (hasInit)
+            objSection(((Number*)shName.get(secRelInit)).asU32(), (u32)4, (u32)$40, irelOff, initRel.count(), secSym, secInit, (u32)8, (u32)24);
+        objSection(((Number*)shName.get(secSym)).asU32(), (u32)2, (u32)0, symOff, symtab.count(), secStr, firstGlobal, (u32)8, (u32)24);
+        objSection(((Number*)shName.get(secStr)).asU32(), (u32)3, (u32)0, strOff, strtab.count(), (u32)0, (u32)0, (u32)1, (u32)0);
+        objSection(((Number*)shName.get(secShstr)).asU32(), (u32)3, (u32)0, shstrOff, shstr.count(), (u32)0, (u32)0, (u32)1, (u32)0);
+        return _out;
+        }
+
+    void objSection(u32 name, u32 type, u32 flags, u32 off, u32 size, u32 link, u32 info, u32 align, u32 entsize)
+        {
+        p32(name);
+        p32(type);
+        p64(flags);
+        p64((u32)0);
+        p64(off);
+        p64(size);
+        p32(link);
+        p32(info);
+        p64(align);
+        p64(entsize);
+        }
+
+    static void appendBytes(Array* out, Array* bytes)
+        {
+        for (u32 i = (u32)0; i < bytes.count(); i = i + (u32)1)
+            out.add(bytes.get(i));
+        }
+    static u32 roundUp(u32 v, u32 a)
+        {
+        return (v + a - (u32)1) & ~(a - (u32)1);
+        }
+    static void put16Into(Array* b, u32 v)
+        {
+        b.add((Object*)Number.withU32(v & (u32)$FF));
+        b.add((Object*)Number.withU32((v >> (u32)8) & (u32)$FF));
+        }
+    static void put32Into(Array* b, u32 v)
+        {
+        ElfArm64.put16Into(b, v & (u32)$FFFF);
+        ElfArm64.put16Into(b, v >> (u32)16);
+        }
+    static void put64Into(Array* b, u32 v)
+        {
+        ElfArm64.put32Into(b, v);
+        ElfArm64.put32Into(b, (u32)0);
+        }
+    static void sortStrings(Array* a)
+        {
+        for (u32 i = (u32)1; i < a.count(); i = i + (u32)1)
+            {
+            Object* cur = a.get(i);
+            u32 j = i;
+            while (j > (u32)0 && ((String*)a.get(j - (u32)1)).compare((String*)cur) > (i32)0)
+                {
+                a.set(j, a.get(j - (u32)1));
+                j = j - (u32)1;
+                }
+            a.set(j, cur);
+            }
         }
 
     static bool inArray(Array* a, String* nm)

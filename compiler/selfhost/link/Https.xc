@@ -126,7 +126,8 @@ class Https
         while (ai != (pointer)0)
             {
             AddrInfo* a = (AddrInfo*)ai;
-#if ARCH_x86_64
+#if ARCH_x86_64 || OS_linux
+            // glibc's addrinfo has ai_addr before ai_canonname; Darwin's after.
             pointer addr = a.first;
 #else
             pointer addr = a.second;
