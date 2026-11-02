@@ -1903,14 +1903,22 @@ class BeFact : Object
         return e != (u8*)0 && e[0] != (u8)0;
         }
 
+    // dead-function-elim's indexes, for the length of one run of the pass (the
+    // module does not change until its end): name -> the first function of that
+    // name, and the names kept. Linear searches made the pass quadratic in the
+    // number of functions (2026-11-02); the reference uses a dictionary and a set.
+    Map* _dfeFns;
+    Map* _dfeReach;
+
     void seed(IRModule* m, Array* reachable, Array* work, String* name)
         {
         if (name == 0)
             return;
-        if (funcNamed(m, name) == 0)
+        if (_dfeFns.get((Hashable*)name) == (Object*)0)
             return; // no body here to keep
-        if (has(reachable, name))
+        if (_dfeReach.get((Hashable*)name) != (Object*)0)
             return;
+        _dfeReach.set((Hashable*)name, (Object*)name);
         reachable.add((Object*)name);
         work.add((Object*)name);
         }

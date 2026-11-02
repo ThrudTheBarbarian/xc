@@ -32,9 +32,93 @@
 #import "IrDefs.xc"
 #import <Homing>
 
+// A set of values that keeps the order they were added in (the allocator's
+// candidate order reads it), with a map for membership. The liveness sets were
+// plain Arrays, searched linearly on every add: quadratic in a function's value
+// count, and a module's class-table function grows with its classes (an object
+// of 1,600 classes took four minutes, 2026-11-02).
+class LiveSet
+    {
+    Array* _items;
+    Map* _in;
+
+    void init(void)
+        {
+        _items = new Array();
+        _in = new Map();
+        }
+    u32 count(void)
+        {
+        return _items.count();
+        }
+    IRValue* get(u32 i)
+        {
+        return (IRValue*)_items.get(i);
+        }
+    bool has(IRValue* v)
+        {
+        return v != (IRValue*)0 && _in.get((Hashable*)v) != (Object*)0;
+        }
+    void add(IRValue* v)
+        {
+        if (v == (IRValue*)0 || has(v))
+            return;
+        _items.add((Object*)v);
+        _in.set((Hashable*)v, (Object*)v);
+        }
+    LiveSet* copy(void)
+        {
+        LiveSet* o = new LiveSet();
+        for (u32 i = (u32)0; i < _items.count(); i = i + (u32)1)
+            o.add((IRValue*)_items.get(i));
+        return o;
+        }
+    void unionWith(LiveSet* b)
+        {
+        for (u32 i = (u32)0; i < b.count(); i = i + (u32)1)
+            add(b.get(i));
+        }
+    // Removes b's members, keeping the order of what stays.
+    void minus(LiveSet* b)
+        {
+        if (b.count() == (u32)0)
+            return;
+        Array* kept = new Array();
+        for (u32 i = (u32)0; i < _items.count(); i = i + (u32)1)
+            {
+            IRValue* v = (IRValue*)_items.get(i);
+            if (b.has(v))
+                _in.remove((Hashable*)v);
+            else
+                kept.add((Object*)v);
+            }
+        _items = kept;
+        }
+    bool same(LiveSet* b)
+        {
+        if (count() != b.count())
+            return false;
+        for (u32 i = (u32)0; i < _items.count(); i = i + (u32)1)
+            if (!b.has((IRValue*)_items.get(i)))
+                return false;
+        return true;
+        }
+    }
+
 class Arm64
 {
     IRModule* _m;
+    // name -> the FIRST symbol of that name (symbolNamed), built on first use
+    // and rebuilt if the module's table grew; a linear scan per call was
+    // quadratic in a module that imports most of the tree (2026-11-02).
+    Map* _symIdx;
+    u32 _symIdxN;
+    IRModule* _symIdxM;
+    // receiver type -> the vtable virtualCallee reads, or _vcNone (2026-11-02)
+    Map* _vcIdx;
+    u32 _vcIdxN;
+    IRModule* _vcIdxM;
+    String* _vcNone;
     // Thread-safe ARC (private:docs/Design/threading.md §4.1): the refcount update as an
     // ATOMIC read-modify-write. Decided per module in assembly(), on exactly
     // when the module spawns a thread — two threads sharing an object race on a
@@ -5300,36 +5384,55 @@ class Arm64
         if (recv.kind() != (u8)OPK_USE || recv.val() == (IRValue*)0 || slot.kind() != (u8)OPK_IMMI) return (IRSymbol*)0;
         String* rt = recv.val().ty();
         if (rt == (String*)0 || !rt.hasPrefix(String.withCString("Ptr(Agg("))) return (IRSymbol*)0;
-        String* lead = String.withCString("(");
-        lead.append(rt);
-        for (u32 i = (u32)0; i < _m.syms().count(); i = i + (u32)1) {
-            IRSymbol* s = (IRSymbol*)_m.syms().get(i);
-            if (s.kind() != (u8)SYM_FUNCTION || s.signature() == (String*)0) continue;
-            u32 d = s.name().indexOfByte((u8)'$');
-            if (d == String.notFound() || d == (u32)0) continue;
-            String* sig = s.signature();
-            // `(Ptr(Agg(70), unbanked)` then `,` or `)`: the whole first
-            // parameter, not a prefix of a longer type.
-            if (!sig.hasPrefix(lead) || sig.byteLength() <= lead.byteLength()) continue;
-            u8 after = sig.byteAt(lead.byteLength());
-            if (after != (u8)',' && after != (u8)')') continue;
-            String* vtName = s.name().substringBytes((u32)0, d);
-            vtName.appendCString("$vtbl");
-            IRSymbol* vt = symbolNamed(vtName);
-            if (vt == (IRSymbol*)0 || vt.kind() != (u8)SYM_VTABLE) continue;
-            // An INSTANCE method of the class: one its vtable lists. A static
-            // method whose first parameter happens to be the same class (a
-            // `Log.warning(String*)`) is not one.
-            bool listed = false;
-            for (u32 j = (u32)0; j < vt.slots().count() && !listed; j = j + (u32)1)
-                if (((String*)vt.slots().get(j)).equals(s.name()))
-                    listed = true;
-            if (!listed) continue;
-            i64 k = slot.imm();
-            if (k < (i64)0 || (u64)k >= (u64)vt.slots().count()) return (IRSymbol*)0;
-            return symbolNamed((String*)vt.slots().get((u32)k));
+        // The vtable depends only on rt: the first instance method (in symbol
+        // order) whose self is that type names it. Found once per type and
+        // module; the scan per virtual call was most of a big module's compile
+        // (xcc.xc, 2026-11-02). As the original.
+        u32 nsyms = _m.syms().count();
+        if (_vcIdx == (Map*)0 || _vcIdxM != _m || _vcIdxN != nsyms) {
+            _vcIdx = Map.withCapacity((u32)64);
+            _vcIdxM = _m;
+            _vcIdxN = nsyms;
         }
-        return (IRSymbol*)0;
+        if (_vcNone == (String*)0) _vcNone = new String();
+        Object* hit = _vcIdx.get((Hashable*)rt);
+        if (hit == (Object*)0) {
+            hit = (Object*)_vcNone;
+            String* lead = String.withCString("(");
+            lead.append(rt);
+            for (u32 i = (u32)0; i < nsyms; i = i + (u32)1) {
+                IRSymbol* s = (IRSymbol*)_m.syms().get(i);
+                if (s.kind() != (u8)SYM_FUNCTION || s.signature() == (String*)0) continue;
+                u32 d = s.name().indexOfByte((u8)'$');
+                if (d == String.notFound() || d == (u32)0) continue;
+                String* sig = s.signature();
+                // `(Ptr(Agg(70), unbanked)` then `,` or `)`: the whole first
+                // parameter, not a prefix of a longer type.
+                if (!sig.hasPrefix(lead) || sig.byteLength() <= lead.byteLength()) continue;
+                u8 after = sig.byteAt(lead.byteLength());
+                if (after != (u8)',' && after != (u8)')') continue;
+                String* vtName = s.name().substringBytes((u32)0, d);
+                vtName.appendCString("$vtbl");
+                IRSymbol* vt = symbolNamed(vtName);
+                if (vt == (IRSymbol*)0 || vt.kind() != (u8)SYM_VTABLE) continue;
+                // An INSTANCE method of the class: one its vtable lists. A static
+                // method whose first parameter happens to be the same class (a
+                // `Log.warning(String*)`) is not one.
+                bool listed = false;
+                for (u32 j = (u32)0; j < vt.slots().count() && !listed; j = j + (u32)1)
+                    if (((String*)vt.slots().get(j)).equals(s.name()))
+                        listed = true;
+                if (!listed) continue;
+                hit = (Object*)vt;
+                break;
+            }
+            _vcIdx.set((Hashable*)rt, hit);
+        }
+        if (hit == (Object*)_vcNone) return (IRSymbol*)0;
+        IRSymbol* vt = (IRSymbol*)hit;
+        i64 k = slot.imm();
+        if (k < (i64)0 || (u64)k >= (u64)vt.slots().count()) return (IRSymbol*)0;
+        return symbolNamed((String*)vt.slots().get((u32)k));
     }
 
     void emitCall(IRInsn* n)
@@ -6721,11 +6824,18 @@ class Arm64
     IRSymbol* symbolNamed(String* name)
     {
         if (_m == (IRModule*)0) return (IRSymbol*)0;
-        for (u32 i = (u32)0; i < _m.syms().count(); i = i + (u32)1) {
-            IRSymbol* s = (IRSymbol*)_m.syms().get(i);
-            if (s.name().equals(name)) return s;
+        u32 n = _m.syms().count();
+        if (_symIdx == (Map*)0 || _symIdxM != _m || _symIdxN != n) {
+            _symIdx = Map.withCapacity(n + (u32)1);
+            for (u32 i = (u32)0; i < n; i = i + (u32)1) {
+                IRSymbol* s = (IRSymbol*)_m.syms().get(i);
+                if (_symIdx.get((Hashable*)s.name()) == (Object*)0)
+                    _symIdx.set((Hashable*)s.name(), (Object*)s);
+            }
+            _symIdxN = n;
+            _symIdxM = _m;
         }
-        return (IRSymbol*)0;
+        return (IRSymbol*)_symIdx.get((Hashable*)name);
     }
 
     void emitFieldAddr(IRInsn* n)
@@ -8429,8 +8539,8 @@ class Arm64
         Array* phiEdge = new Array();
         Array* blkEnd = new Array();
         for (u32 i = (u32)0; i < nb; i = i + (u32)1) {
-            defSet.add((Object*)new Array());   ueUse.add((Object*)new Array());
-            phiResAt.add((Object*)new Array()); phiEdge.add((Object*)new Array());
+            defSet.add((Object*)new LiveSet());   ueUse.add((Object*)new LiveSet());
+            phiResAt.add((Object*)new LiveSet()); phiEdge.add((Object*)new LiveSet());
             blkEnd.add((Object*)Number.withI32((i32)0));
         }
         _defPos = new Map();
@@ -8457,14 +8567,14 @@ class Arm64
         i32 pos = (i32)0;
         for (u32 bi = (u32)0; bi < nb; bi = bi + (u32)1) {
             IRBlock* b = (IRBlock*)fn.blocks().get(bi);
-            Array* defs = (Array*)defSet.get(bi);
-            Array* ue = (Array*)ueUse.get(bi);
+            LiveSet* defs = (LiveSet*)defSet.get(bi);
+            LiveSet* ue = (LiveSet*)ueUse.get(bi);
             for (u32 i = (u32)0; i < b.phis().count(); i = i + (u32)1) {
                 IRInsn* p = (IRInsn*)b.phis().get(i);
                 if (p.res() != (IRValue*)0) {
                     defPos.set((Hashable*)p.res(), (Object*)Number.withI32(pos));
-                    addVal(defs, p.res());
-                    addVal((Array*)phiResAt.get(bi), p.res());
+                    defs.add(p.res());
+                    ((LiveSet*)phiResAt.get(bi)).add(p.res());
                     addVal(_phiRes, p.res());
                 }
                 pos = pos + (i32)1;      // a phi's operands are EDGE uses, below
@@ -8475,7 +8585,7 @@ class Arm64
                 if (emitsCall(n.op())) _callPos.add((Object*)Number.withI32(pos));
                 if (n.res() != (IRValue*)0) {
                     defPos.set((Hashable*)n.res(), (Object*)Number.withI32(pos));
-                    addVal(defs, n.res());
+                    defs.add(n.res());
                 }
                 pos = pos + (i32)1;
             }
@@ -8521,7 +8631,7 @@ class Arm64
                     if (bo.kind() != (u8)OPK_BLOCK || bo.blk() == (IRBlock*)0) continue;
                     if (vo.kind() != (u8)OPK_USE) continue;
                     u32 pb = blockIndexOf(fn, bo.blk());
-                    if (pb < nb) addVal((Array*)phiEdge.get(pb), vo.val());
+                    if (pb < nb) ((LiveSet*)phiEdge.get(pb)).add(vo.val());
                 }
             }
         }
@@ -8534,28 +8644,28 @@ class Arm64
         Array* liveIn = new Array();
         Array* liveOut = new Array();
         for (u32 i = (u32)0; i < nb; i = i + (u32)1) {
-            liveIn.add((Object*)new Array());
-            liveOut.add((Object*)new Array());
+            liveIn.add((Object*)new LiveSet());
+            liveOut.add((Object*)new LiveSet());
         }
         bool changed = true;
         while (changed) {
             changed = false;
             for (u32 r = nb; r > (u32)0; r = r - (u32)1) {
                 u32 bi = r - (u32)1;
-                Array* out = copyVals((Array*)phiEdge.get(bi));
+                LiveSet* out = ((LiveSet*)phiEdge.get(bi)).copy();
                 Array* ss = (Array*)succIdx.get(bi);
                 for (u32 k = (u32)0; k < ss.count(); k = k + (u32)1) {
                     u32 sn = ((Number*)ss.get(k)).asU32();
-                    Array* sin = copyVals((Array*)liveIn.get(sn));
-                    minusVals(sin, (Array*)phiResAt.get(sn));
-                    unionVals(out, sin);
+                    LiveSet* sin = ((LiveSet*)liveIn.get(sn)).copy();
+                    sin.minus((LiveSet*)phiResAt.get(sn));
+                    out.unionWith(sin);
                 }
-                Array* inn = copyVals((Array*)ueUse.get(bi));
-                Array* od = copyVals(out);
-                minusVals(od, (Array*)defSet.get(bi));
-                unionVals(inn, od);
-                if (!sameVals(out, (Array*)liveOut.get(bi))
-                 || !sameVals(inn, (Array*)liveIn.get(bi))) {
+                LiveSet* inn = ((LiveSet*)ueUse.get(bi)).copy();
+                LiveSet* od = out.copy();
+                od.minus((LiveSet*)defSet.get(bi));
+                inn.unionWith(od);
+                if (!out.same((LiveSet*)liveOut.get(bi))
+                 || !inn.same((LiveSet*)liveIn.get(bi))) {
                     liveOut.set(bi, (Object*)out);
                     liveIn.set(bi, (Object*)inn);
                     changed = true;
@@ -8573,18 +8683,21 @@ class Arm64
         Map* defPos = _defPos;
         Map* lastUse = _lastUse;
         Map* endByVal = new Map();
-        Array* all = new Array();
+        LiveSet* allSet = new LiveSet();
         for (u32 bi = (u32)0; bi < nb; bi = bi + (u32)1) {
             i32 be = (i32)2 * ((Number*)blkEnd.get(bi)).asI32() + (i32)2;
-            Array* lo = (Array*)liveOut.get(bi);
+            LiveSet* lo = (LiveSet*)liveOut.get(bi);
             for (u32 k = (u32)0; k < lo.count(); k = k + (u32)1) {
-                IRValue* v = (IRValue*)lo.get(k);
+                IRValue* v = lo.get(k);
                 Object* cur = endByVal.get((Hashable*)v);
                 if (cur == (Object*)0 || be > ((Number*)cur).asI32())
                     endByVal.set((Hashable*)v, (Object*)Number.withI32(be));
-                addVal(all, v);
+                allSet.add(v);
             }
         }
+        Array* all = new Array();
+        for (u32 k = (u32)0; k < allSet.count(); k = k + (u32)1)
+            all.add((Object*)allSet.get(k));
         collectKeys(all, fn);
 
         for (u32 i = (u32)0; i < all.count(); i = i + (u32)1) {
@@ -8703,7 +8816,7 @@ class Arm64
         }
     }
 
-    void noteUses(IRInsn* n, Array* defs, Array* ue, Map* lastUse, i32 pos)
+    void noteUses(IRInsn* n, LiveSet* defs, LiveSet* ue, Map* lastUse, i32 pos)
     {
         noteOperands(n, defs, ue, lastUse, pos);
         if (n.ops().count() < (u32)1) return;
@@ -8738,12 +8851,12 @@ class Arm64
         }
     }
 
-    void noteOperands(IRInsn* n, Array* defs, Array* ue, Map* lastUse, i32 pos)
+    void noteOperands(IRInsn* n, LiveSet* defs, LiveSet* ue, Map* lastUse, i32 pos)
     {
         for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
             IROperand* o = (IROperand*)n.ops().get(k);
             if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
-            if (!hasVal(defs, o.val())) addVal(ue, o.val());
+            if (!defs.has(o.val())) ue.add(o.val());
             lastUse.set((Hashable*)o.val(), (Object*)Number.withI32(pos));
         }
     }

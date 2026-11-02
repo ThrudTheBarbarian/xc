@@ -14,6 +14,14 @@
 @end
 
 @implementation XTIRModule
+    {
+    // name -> index of the FIRST symbol of that name, as the linear scan
+    // found it. A module that imports most of the tree (xcc.xc: thousands of
+    // symbols) spent 160 s of its 2m40 arm64 compile in that scan
+    // (2026-11-02). _indexedCount catches an append that bypassed addSymbol.
+    NSMutableDictionary<NSString*, NSNumber*>* _nameIndex;
+    NSUInteger _indexedCount;
+    }
 
 - (instancetype)initWithName:(NSString*)name
     {
@@ -35,7 +43,14 @@
     {
     NSParameterAssert(symbol != nil);
     [self.symbols addObject:symbol];
-    return self.symbols.count - 1;
+    NSUInteger idx = self.symbols.count - 1;
+    if (_nameIndex && _indexedCount == idx)
+        {
+        if (symbol.name && !_nameIndex[symbol.name])
+            _nameIndex[symbol.name] = @(idx);
+        _indexedCount = idx + 1;
+        }
+    return idx;
     }
 
 - (nullable XTIRSymbol*)symbolForId:(XTIRSymbolId)symbolId
@@ -47,12 +62,22 @@
 
 - (nullable XTIRSymbol*)symbolForName:(NSString*)name
     {
-    for (XTIRSymbol* sym in self.symbols)
+    if (!name)
+        return nil;
+    NSArray<XTIRSymbol*>* syms = self.symbols;
+    if (!_nameIndex || _indexedCount != syms.count)
         {
-        if ([sym.name isEqualToString:name])
-            return sym;
+        _nameIndex = [NSMutableDictionary dictionaryWithCapacity:syms.count];
+        for (NSUInteger i = 0; i < syms.count; i++)
+            {
+            NSString* n = syms[i].name;
+            if (n && !_nameIndex[n])
+                _nameIndex[n] = @(i);
+            }
+        _indexedCount = syms.count;
         }
-    return nil;
+    NSNumber* at = _nameIndex[name];
+    return at ? syms[at.unsignedIntegerValue] : nil;
     }
 
 - (XTIRLayoutId)addLayout:(XTIRLayout*)layout

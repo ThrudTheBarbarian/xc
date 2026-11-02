@@ -22,6 +22,7 @@
 //   - x29/x30 are FP/LR; standard prologue stp's them.
 //   - w16/w17 (x16/x17) are caller-saved scratch (IP0/IP1) —
 //     safe to clobber.
+#import <objc/runtime.h>
 #import "XTArm64Backend.h"
 #import "XTAggInitRelay.h"
 #import "XTIR.h"
@@ -1250,6 +1251,7 @@ static const NSUInteger kArm64VaForwardWords = 16;
 // has its shape, so the static class's entry answers whether the call is
 // variadic and how many arguments are fixed (bug 572: a variadic method called
 // virtually had its tail left in registers, where its va_start never looks).
+static char kArm64VtblForSelfKey, kArm64VtblForSelfCountKey;
 + (nullable XTIRSymbol *)arm64VirtualCalleeForInsn:(XTIRInsn *)insn ctx:(XTArm64FnCtx *)ctx {
     if (insn.opcode != XTIROpVTblDispatch || insn.operands.count < 2) return nil;
     XTIROperand *recv = insn.operands[0], *slot = insn.operands[1];
@@ -1259,23 +1261,44 @@ static const NSUInteger kArm64VaForwardWords = 16;
     // Types compare by their printed spelling, which is what the xc compiler's
     // back end reads — the two must pick the same method.
     NSString *want = [XTIRPrinter stringFromType:rt module:ctx.module];
-    for (XTIRSymbol *s in ctx.module.symbols) {
-        if (s.kind != XTIRSymbolKindFunction || s.function.paramTypes.count == 0) continue;
-        NSRange d = [s.name rangeOfString:@"$"];
-        if (d.location == NSNotFound || d.location == 0) continue;
-        XTIRType *self0 = s.function.paramTypes.firstObject;
-        if (![[XTIRPrinter stringFromType:self0 module:ctx.module] isEqualToString:want]) continue;
-        // An INSTANCE method of the class: one its vtable lists. A static
-        // method whose first parameter happens to be the same class (a
-        // `Log.warning(String*)`) is not one.
-        NSString *cls = [s.name substringToIndex:d.location];
-        XTIRSymbol *vt = [ctx.module symbolForName:[cls stringByAppendingString:@"$vtbl"]];
-        if (!vt || vt.kind != XTIRSymbolKindVTable || ![vt.vtableEntryNames containsObject:s.name]) continue;
-        int64_t k = slot.intValue;
-        if (k < 0 || (NSUInteger)k >= vt.vtableEntryNames.count) return nil;
-        return [ctx.module symbolForName:vt.vtableEntryNames[(NSUInteger)k]];
+    // The vtable depends only on `want`: the first instance method (in symbol
+    // order) whose self is that type names it. Found once per type and module:
+    // the scan below, run for every virtual call and printing every function's
+    // first parameter type, was most of a big module's arm64 compile
+    // (xcc.xc, 2026-11-02).
+    NSMutableDictionary *cache = objc_getAssociatedObject(ctx.module, &kArm64VtblForSelfKey);
+    NSNumber *cachedN = objc_getAssociatedObject(ctx.module, &kArm64VtblForSelfCountKey);
+    if (!cache || cachedN.unsignedIntegerValue != ctx.module.symbols.count) {
+        cache = [NSMutableDictionary dictionary];
+        objc_setAssociatedObject(ctx.module, &kArm64VtblForSelfKey, cache, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(ctx.module, &kArm64VtblForSelfCountKey, @(ctx.module.symbols.count),
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    return nil;
+    id hit = cache[want];
+    if (!hit) {
+        hit = [NSNull null];
+        for (XTIRSymbol *s in ctx.module.symbols) {
+            if (s.kind != XTIRSymbolKindFunction || s.function.paramTypes.count == 0) continue;
+            NSRange d = [s.name rangeOfString:@"$"];
+            if (d.location == NSNotFound || d.location == 0) continue;
+            XTIRType *self0 = s.function.paramTypes.firstObject;
+            if (![[XTIRPrinter stringFromType:self0 module:ctx.module] isEqualToString:want]) continue;
+            // An INSTANCE method of the class: one its vtable lists. A static
+            // method whose first parameter happens to be the same class (a
+            // `Log.warning(String*)`) is not one.
+            NSString *cls = [s.name substringToIndex:d.location];
+            XTIRSymbol *vt = [ctx.module symbolForName:[cls stringByAppendingString:@"$vtbl"]];
+            if (!vt || vt.kind != XTIRSymbolKindVTable || ![vt.vtableEntryNames containsObject:s.name]) continue;
+            hit = vt;
+            break;
+        }
+        cache[want] = hit;
+    }
+    if (hit == [NSNull null]) return nil;
+    XTIRSymbol *vt = hit;
+    int64_t k = slot.intValue;
+    if (k < 0 || (NSUInteger)k >= vt.vtableEntryNames.count) return nil;
+    return [ctx.module symbolForName:vt.vtableEntryNames[(NSUInteger)k]];
 }
 
 // The arg IR types of a call insn, in order — NSNull for an untyped immediate.

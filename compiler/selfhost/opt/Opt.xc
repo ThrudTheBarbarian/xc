@@ -814,6 +814,15 @@
         {
         Array* reachable = new Array(); // String@ — names kept
         Array* work = new Array();
+        _dfeFns = Map.withCapacity(m.funcs().count() + (u32)1);
+        for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
+            {
+            IRFunc* f = (IRFunc*)m.funcs().get(i);
+            String* fname = f.name();
+            if (fname != 0 && _dfeFns.get((Hashable*)fname) == (Object*)0)
+                _dfeFns.set((Hashable*)fname, (Object*)f);
+            }
+        _dfeReach = Map.withCapacity((u32)64);
 
         // `main` is the canonical entry, and a load-time constructor is a root
         // even though nothing calls it: the backend emits the constructor list
@@ -868,7 +877,7 @@
             {
             String* name = (String*)work.get(work.count() - (u32)1);
             work.removeAt(work.count() - (u32)1);
-            IRFunc* fn = self.funcNamed(m, name);
+            IRFunc* fn = (IRFunc*)_dfeFns.get((Hashable*)name);
             if (fn == 0)
                 continue;
             for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
@@ -887,12 +896,14 @@
         for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(i);
-            if (has(reachable, fn.name()))
+            if (fn.name() != 0 && _dfeReach.get((Hashable*)fn.name()) != (Object*)0)
                 survivors.add((Object*)fn);
             else if (_profile != (OptProfile*)0 && _profile.dceTrace())
                 Stdio.error(String.withFormat("xcc: dce: removed unreachable function '%s'\n",
                                               fn.name().cString()));
             }
+        _dfeFns = (Map*)0;
+        _dfeReach = (Map*)0;
         if (survivors.count() == m.funcs().count())
             return;
         m.setFuncs(survivors);
