@@ -32,14 +32,14 @@ for c in "$REF" "$XC"; do
     [ -x "$c" ] || continue
     for a in arm64 x86_64; do
         s="$W/$(basename "$c")-$a.s"
-        "$c" -q -A $a -O2 -H . -S -o "$s" "$W/s.xc" || { echo "FAIL $c $a: no assembly"; fail=1; continue; }
+        "$c" -q --par-style=cpu -A $a -O2 -H . -S -o "$s" "$W/s.xc" || { echo "FAIL $c $a: no assembly"; fail=1; continue; }
         # main up to the next function (arm64's local labels start with L).
         n=$(awk '/^_?main:/{f=1;next} f && /^_?[A-Za-z_][A-Za-z0-9_$]*:$/ && !/^L/{f=0} f' "$s" | grep -c '__sinit_Math')
         [ "$n" = 0 ] || { echo "FAIL $c $a: main still tests __sinit_Math ($n references)"; fail=1; }
     done
 done
 if [ "$(uname -s)" = Darwin ]; then
-    "$XC" -q -O2 -H . -o "$W/s" "$W/s.xc" && "$XC" -q -O0 -H . -o "$W/s0" "$W/s.xc" || { echo "FAIL: build"; fail=1; }
+    "$XC" -q --par-style=cpu -O2 -H . -o "$W/s" "$W/s.xc" && "$XC" -q --par-style=cpu -O0 -H . -o "$W/s0" "$W/s.xc" || { echo "FAIL: build"; fail=1; }
     [ "$("$W/s")" = "$("$W/s0")" ] || { echo "FAIL: -O2 and -O0 differ"; fail=1; }
 fi
 [ $fail = 0 ] && echo "sinit-trivial: ok"

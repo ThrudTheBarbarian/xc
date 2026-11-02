@@ -1329,7 +1329,7 @@ static NSString* parRootName(XTASTNode* n)
     XTBinaryExprNode* cond = [loop.condition isKindOfClass:[XTBinaryExprNode class]]
                                  ? (XTBinaryExprNode*)loop.condition : nil;
     // The step: `i += 1` (what a range loop desugars to), and from 0.8.1 the
-    // C-style spellings too — `i++`, `++i`, `i = i + 1` — so --par-auto can
+    // C-style spellings too — `i++`, `++i`, `i = i + 1` — so --par-style=auto can
     // take a C-style loop as it takes a range loop.
     BOOL stepOk = NO;
     XTASTNode* inc = loop.increment;
@@ -1944,11 +1944,13 @@ static NSString* parRootName(XTASTNode* n)
         }
     // defaultDevice(): the block's :device(…), its developer's default device
     // (ParDevice's code), only when it has one; ParChunk's own returns 0.
-    if (frame[@"device"])
+    // A block with no :device takes --par-style's (threads: the CPU, gpu: the GPU).
+    NSNumber* devCode = frame[@"device"] ?: (self.parDeviceDefault > 0 ? @(self.parDeviceDefault) : nil);
+    if (devCode)
         {
         XTBlockNode* b = [[XTBlockNode alloc]
             initWithStatements:@[ [[XTReturnNode alloc]
-                                     initWithValues:@[ [[XTLiteralIntNode alloc] initWithValue:[frame[@"device"] longLongValue]
+                                     initWithValues:@[ [[XTLiteralIntNode alloc] initWithValue:[devCode longLongValue]
                                                                                    location:loc] ]
                                            location:loc] ]
                       location:loc];
@@ -1966,7 +1968,7 @@ static NSString* parRootName(XTASTNode* n)
         // lo and hi, then the captures, then the reductions in order.
         NSMutableString* tagText = [NSMutableString stringWithFormat:frame[@"fast"] ? @"__XC_PAR_FAST_%lu__" : @"__XC_PAR_MSL_%lu__",
                                                                     (unsigned long)counter];
-        // …and `auto;` for a block --par-auto made from a plain loop: par-check
+        // …and `auto;` for a block --par-style=auto made from a plain loop: par-check
         // then demotes it to a serial run where it would have refused a
         // written one.
         if (frame[@"auto"])

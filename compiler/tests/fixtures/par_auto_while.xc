@@ -1,5 +1,5 @@
-//xtc-flags: target=arm64 --par-auto
-// par_auto_while.xc — --par-auto takes a counted while loop as the `for` it
+//xtc-flags: target=arm64 --par-style=auto
+// par_auto_while.xc — --par-style=auto takes a counted while loop as the `for` it
 // amounts to: `while (v < B) { …; v++; }` with v written nowhere else. After
 // it, v holds what the loop left in it. A map, an inclusive reduction, a loop
 // that never runs, and one with a `break` that stays as written.

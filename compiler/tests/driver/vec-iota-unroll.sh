@@ -26,8 +26,8 @@ W=$(mktemp -d); trap 'rm -rf "${W:?}"' EXIT
 F=tests/fixtures/vec_iota_unroll.xc
 fail=0
 for l in avx2 avx512; do
-    "$REF" -q -H . -A x86_64 -O3 -msimd=$l -S -o "$W/r.s" "$F" > "$W/e" 2>&1 || { echo "FAIL vec-iota-unroll: $l: $(basename "$REF") does not build it"; fail=1; continue; }
-    "$XC" -q -H . -A x86_64 -O3 -msimd=$l -S -o "$W/x.s" "$F" > "$W/e" 2>&1 || { echo "FAIL vec-iota-unroll: $l: $(basename "$XC") does not build it"; fail=1; continue; }
+    "$REF" -q --par-style=cpu -H . -A x86_64 -O3 -msimd=$l -S -o "$W/r.s" "$F" > "$W/e" 2>&1 || { echo "FAIL vec-iota-unroll: $l: $(basename "$REF") does not build it"; fail=1; continue; }
+    "$XC" -q --par-style=cpu -H . -A x86_64 -O3 -msimd=$l -S -o "$W/x.s" "$F" > "$W/e" 2>&1 || { echo "FAIL vec-iota-unroll: $l: $(basename "$XC") does not build it"; fail=1; continue; }
     cmp -s "$W/r.s" "$W/x.s" || { echo "FAIL vec-iota-unroll: $l: the two compilers' assembly differs"; fail=1; }
     # Broadcasts from the first loop's body label to its back branch, at
     # avx512: avx2's 16 registers re-splat constants inside the loop, which
@@ -36,7 +36,7 @@ for l in avx2 avx512; do
     n=$(awk '/^main:/{f=1} f' "$W/x.s" | awk '/^\.L_main_bb_1_for_body:/{f=1} f && /vpbroadcastd/{n++} f && /(jb|jmp)	\.L_main_bb_1_for_body$/{print n+0; exit}')
     [ "$n" = 0 ] || { echo "FAIL vec-iota-unroll: $l: $n broadcasts in the unrolled loop (want 0)"; fail=1; }
 done
-"$XC" -q -H . -O3 -o "$W/p" "$F" > "$W/e" 2>&1 || { echo "FAIL vec-iota-unroll: no host build"; exit 1; }
+"$XC" -q --par-style=cpu -H . -O3 -o "$W/p" "$F" > "$W/e" 2>&1 || { echo "FAIL vec-iota-unroll: no host build"; exit 1; }
 got=$("$W/p")
 [ "$got" = "$(cat tests/fixtures/vec_iota_unroll.expected.out)" ] || { echo "FAIL vec-iota-unroll: prints '$got'"; fail=1; }
 [ $fail = 0 ] && echo "vec-iota-unroll: ok"

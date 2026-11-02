@@ -1,6 +1,6 @@
-//xtc-flags: target=arm64 --par-auto
+//xtc-flags: target=arm64 --par-style=auto
 //xtc-na: xt6502, m68k, arm9, wasm32 — par runs on the native hosts
-// par_auto_nest3.xc — --par-auto takes a perfect three-deep nest as one 3-D
+// par_auto_nest3.xc — --par-style=auto takes a perfect three-deep nest as one 3-D
 // grid (par$z the outer index, par$y the middle, par$x the inner), so all
 // D*H*W points are work items rather than D items each running the rest
 // serially. Bounds that do not start at zero, and a <= bound, check the

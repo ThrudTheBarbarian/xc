@@ -67,8 +67,9 @@ class FeOptions
     bool _debugInfo;   // -g: source locations on the IR, for the line tables
     i32 _threadSafeArc; // -f[no-]thread-safe-arc: 1 on, 0 off, -1 decide per module
     bool _parKernelsAll; // -fpar-kernels=all: every GPU kernel form in every par block
-    bool _parAuto;       // --par-auto: a plain range loop becomes a par block where its shape allows
-    bool _parAutoImport; // --par-auto wraps a loop in a program without Par.xc: import it
+    bool _parAuto;       // --par-style auto|threads|gpu (the default auto): a plain range loop becomes a par block where its shape allows
+    u32 _parDeviceDefault; // --par-style's device for a block with no :device: 1 the CPU, 2 the GPU, 0 the run's choice
+    bool _parAutoImport; // --par-style=auto wraps a loop in a program without Par.xc: import it
     u32 _goalDefault;    // -fgoal=: the unit's default goal (0 built-in, 1 speed, 2 accuracy); a #goal overrides it
     bool _emitIface;   // compute the module interface (--emit-lib, -c, --emit-iface)
     // …and, SEPARATELY, whether this is a LIBRARY build. The two used to be one
@@ -126,10 +127,11 @@ class FeOptions
         _debugInfo = false;
         _threadSafeArc = (i32)-1;
         _parKernelsAll = false;
-        _parAuto = false;
+        _parAuto = true;
+        _parDeviceDefault = (u32)0;
         _parAutoImport = false;
         _goalDefault = (u32)0;
-        // par-auto is opt-in (-Wpar-auto): what --par-auto wrapped or demoted
+        // par-auto is opt-in (-Wpar-auto): what --par-style=auto wrapped or demoted
         // is useful to see once, and noise in every build after.
         suppressWarning(String.withCString("par-auto"));
         }
@@ -392,6 +394,14 @@ class FeOptions
         {
         return _parAuto;
         }
+    u32 parDeviceDefault(void)
+        {
+        return _parDeviceDefault;
+        }
+    void setParDeviceDefault(u32 d)
+        {
+        _parDeviceDefault = d;
+        }
     void setParAuto(bool b)
         {
         _parAuto = b;
@@ -436,7 +446,7 @@ class FeOptions
         {
         resolveIncludePaths(o);
         // The optimiser tells the library's code from the program's by where
-        // its source is (--par-auto leaves the library alone).
+        // its source is (--par-style=auto leaves the library alone).
         String* libRoot = supportRoot(o);
         if (libRoot != (String*)0)
             IRDbg.setLibRoot(libRoot);
@@ -521,6 +531,7 @@ class FeOptions
             }
         Parser* parser = Parser.with(tokens);
         parser.setParAuto(o.parAuto());
+        parser.setParDeviceDefault(o.parDeviceDefault());
         parser.setWebModules(platformOf(o).equals(String.withCString("wasm32")));
         parser.setGoalDefault(pp.goal() != (u32)0 ? pp.goal() : o.goalDefault());
         parser.setLibraryFiles(pp.libraryFiles());
@@ -700,7 +711,7 @@ class FeOptions
             }
 
         Node* program = parser.parse();
-        // --par-auto found a loop to make a block of in a program that did not
+        // --par-style=auto found a loop to make a block of in a program that did not
         // import the par runtime: import it, and start again. Only then, so a
         // program with nothing to wrap does not pay for the runtime (3 s and
         // 380 KB for a small one), and only where the target has it.
@@ -1992,7 +2003,7 @@ void addLibDir(FeOptions* o, String* support, String* plat)
     d.appendCString("/");
     d.append(plat);
     d.appendCString("/lib");
-    // Once: lower() runs again when --par-auto imports the runtime.
+    // Once: lower() runs again when --par-style=auto imports the runtime.
     for (u32 i = (u32)0; i < o.incs().count(); i = i + (u32)1)
         if (((String*)o.incs().get(i)).equals(d))
             return;

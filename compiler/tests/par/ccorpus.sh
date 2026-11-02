@@ -1,6 +1,6 @@
 #!/bin/bash
 # ccorpus.sh — the C path's corpus: PolyBench-style kernels in tests/par/c/,
-# each built by clang -O2 alone and by xcc --par-auto (the IR outliner makes
+# each built by clang -O2 alone and by xcc --par-style=auto (the IR outliner makes
 # par blocks of its loops). Each xcc build gives clang's output on the
 # CPU and the GPU (Metal, or Vulkan on Linux), and makes at least as many blocks as
 # tests/par/c/blocks.txt lists for it (a loop that stops being a block is a
@@ -26,7 +26,7 @@ for f in tests/par/c/${1:-}*.c; do
     nogpu=$(awk -v n="$b" '$1 == n { print $3 }' tests/par/c/blocks.txt)
     clang -O2 -w -o "$W/$b.ref" "$f" || { echo "FAIL ccorpus: $b: clang does not build it"; fail=1; continue; }
     ref=$("$W/$b.ref")
-    XC_PAR_OUTLINE_TRACE=1 "$XC" -q -O3 --par-auto -H . -o "$W/$b" "$f" > "$W/$b.log" 2>&1 \
+    XC_PAR_OUTLINE_TRACE=1 "$XC" -q -O3 --par-style=auto -H . -o "$W/$b" "$f" > "$W/$b.log" 2>&1 \
         || { echo "FAIL ccorpus: $b does not build"; sed -n 1,5p "$W/$b.log"; fail=1; continue; }
     n=$(grep -v 'support/' "$W/$b.log" | grep -c 'outlined, a block')
     if [ -n "$nogpu" ]; then

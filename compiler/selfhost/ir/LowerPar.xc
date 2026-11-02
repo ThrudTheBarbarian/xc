@@ -53,7 +53,7 @@
             if (!f.name().hasPrefix(String.withCString("ParImpl$")) || !f.name().hasSuffix(String.withCString("$run")))
                 continue;
             String* cls = f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4);
-            // An auto block (--par-auto made it from a plain loop) the check
+            // An auto block (--par-style=auto made it from a plain loop) the check
             // would refuse is demoted to a serial run instead, with a warning.
             bool isAuto = parIsAutoBlock(cls.substringBytes((u32)8, cls.byteLength() - (u32)8));
             parReadGridWords(cls.substringBytes((u32)8, cls.byteLength() - (u32)8));
@@ -77,6 +77,15 @@
                 _parScatter = (String*)0;
                 _parGuardList = new Array();
                 String* dep = parDependence(f, parIvarNames(cls));
+                // A loop the compiler lifted by itself is a block only when its
+                // items are proved apart: a scatter keeps it serial (a written
+                // block's stays a warning). As the reference.
+                if (dep == (String*)0 && isAuto && _parScatter != (String*)0)
+                    {
+                    dep = String.withCString("writes ");
+                    dep.append(_parScatter);
+                    dep.appendCString(", and two of them could write the same element");
+                    }
                 if (dep == (String*)0 && _parGuardList.count() > (u32)0)
                     _parGuards.set((Hashable*)cls, (Object*)_parGuardList);
                 _parGuardList = (Array*)0;
@@ -91,7 +100,7 @@
                         }
                     // -Wpar-auto says what was wrapped as well as what was demoted.
                     if (isAuto)
-                        self.warnAtNode(String.withCString("par-auto"), String.withCString("this loop became a 'par' block (--par-auto)"),
+                        self.warnAtNode(String.withCString("par-auto"), String.withCString("this loop became a 'par' block (--par-style)"),
                                    (Node*)_classDecls.get((Hashable*)cls));
                     continue;
                     }
@@ -99,7 +108,7 @@
                     {
                     if (_parSerial == (Set*)0) _parSerial = new Set();
                     _parSerial.add((Hashable*)cls);
-                    String* w2 = String.withCString("this loop runs serially, not as a 'par' block (--par-auto): its work items are not independent, since it ");
+                    String* w2 = String.withCString("this loop runs serially, not as a 'par' block (--par-style): its work items are not independent, since it ");
                     w2.append(dep);
                     self.warnAtNode(String.withCString("par-auto"), w2, (Node*)_classDecls.get((Hashable*)cls));
                     continue;
@@ -113,7 +122,7 @@
                 {
                 if (_parSerial == (Set*)0) _parSerial = new Set();
                 _parSerial.add((Hashable*)cls);
-                String* w3 = String.withCString("this loop runs serially, not as a 'par' block (--par-auto): a GPU could not run it, since it ");
+                String* w3 = String.withCString("this loop runs serially, not as a 'par' block (--par-style): a GPU could not run it, since it ");
                 w3.append(why);
                 self.warnAtNode(String.withCString("par-auto"), w3, (Node*)_classDecls.get((Hashable*)cls));
                 continue;
@@ -125,7 +134,7 @@
             }
         }
 
-    // Whether block <n> (its class ParImpl$<n>) is one --par-auto made from a
+    // Whether block <n> (its class ParImpl$<n>) is one --par-style=auto made from a
     // plain loop: its GPU placeholder literal carries `auto;` after the tag.
     // Mirrors the reference's isAutoBlock.
     // The grid's constant width and height for block n, from its placeholder's
@@ -2397,10 +2406,15 @@
         if (msl == (String*)0 && (_parMetal || _parPTX || _parSPIRV || _parWGSL))
             {
             // On a target with a GPU, say why this block stays on the CPU.
-            String* w = String.withCString("this 'par' block runs on the CPU only, because ");
-            w.append(_mWhy != (String*)0 ? _mWhy : String.withCString("its GPU version cannot express something it uses yet"));
             String* cls = f.name().substringBytes((u32)0, f.name().byteLength() - (u32)4);
-            self.warnAtNode(String.withCString("par-gpu"), w, (Node*)_classDecls.get((Hashable*)cls));
+            // A loop the compiler lifted by itself says so only under
+            // -Wpar-auto: a plain program is not told about a block it never
+            // wrote. As the reference.
+            bool lifted = parIsAutoBlock(cls.substringBytes((u32)8, cls.byteLength() - (u32)8));
+            String* w = String.withCString(lifted ? "this loop runs on the CPU only (--par-style), because "
+                                                  : "this 'par' block runs on the CPU only, because ");
+            w.append(_mWhy != (String*)0 ? _mWhy : String.withCString("its GPU version cannot express something it uses yet"));
+            self.warnAtNode(String.withCString(lifted ? "par-auto" : "par-gpu"), w, (Node*)_classDecls.get((Hashable*)cls));
             }
         // No form to run, but the run still checks the block's arrays against
         // each other (ParDevice.bufferOverlap) from the header line: a block

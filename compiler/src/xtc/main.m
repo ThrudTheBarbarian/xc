@@ -4648,7 +4648,10 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     if (opts.threadSafeARC == 1)      [feArgs addObject:@"-fthread-safe-arc"];
     else if (opts.threadSafeARC == 0) [feArgs addObject:@"-fno-thread-safe-arc"];
     if (opts.parKernelsAll)           [feArgs addObject:@"-fpar-kernels=all"];
-    if (opts.parAuto)                 [feArgs addObject:@"--par-auto"];
+    // The style, spelled out: the front end's own default is auto.
+    if (!opts.parAuto)                [feArgs addObject:@"--par-style=cpu"];
+    else if (opts.parDeviceDefault == 1) [feArgs addObject:@"--par-style=threads"];
+    else if (opts.parDeviceDefault == 2) [feArgs addObject:@"--par-style=gpu"];
     if (opts.goalDefault == 1)        [feArgs addObject:@"-fgoal=speed"];
     if (opts.goalDefault == 2)        [feArgs addObject:@"-fgoal=accuracy"];
     if (opts.warnParAuto)             [feArgs addObject:@"-Wpar-auto"];

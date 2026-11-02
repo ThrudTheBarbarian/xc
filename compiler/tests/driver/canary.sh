@@ -31,7 +31,7 @@ i32 main(i32 argc, u8** argv)
     return 0;
     }
 XC
-"$XC" -q -O2 -H . -o "$W/s" "$W/s.xc" > "$W/s.b" 2>&1 || { echo "FAIL canary: does not build"; head -3 "$W/s.b"; exit 1; }
+"$XC" -q --par-style=cpu -O2 -H . -o "$W/s" "$W/s.xc" > "$W/s.b" 2>&1 || { echo "FAIL canary: does not build"; head -3 "$W/s.b"; exit 1; }
 [ "$("$W/s" 2>&1)" = "fill 65" ] || { echo "FAIL canary: the in-range run gives '$("$W/s" 2>&1 | head -1)'"; fail=1; }
 "$W/s" x > "$W/o" 2>&1; rc=$?
 [ $rc = 134 ] && grep -q 'stack smashing detected' "$W/o" \
@@ -55,7 +55,7 @@ int main(int argc, char **argv)
     return 0;
 }
 C
-    if "$XC" -q -O2 -H . -o "$W/c" "$W/c.c" > "$W/c.b" 2>&1; then
+    if "$XC" -q --par-style=cpu -O2 -H . -o "$W/c" "$W/c.c" > "$W/c.b" 2>&1; then
         [ "$("$W/c" 2>&1)" = "65" ] || { echo "FAIL canary: the C program's in-range run gives '$("$W/c" 2>&1 | head -1)'"; fail=1; }
         "$W/c" x > "$W/co" 2>&1; rc=$?
         [ $rc -ge 128 ] && ! grep -q '^65' "$W/co" \
@@ -66,7 +66,7 @@ C
 fi
 if [ "$PLAT" = osx ]; then
     for A in x86_64 win64; do
-        "$XC" -q -O2 -A $A -H . -o "$W/s.$A" "$W/s.xc" > "$W/$A.out" 2>&1 \
+        "$XC" -q --par-style=cpu -O2 -A $A -H . -o "$W/s.$A" "$W/s.xc" > "$W/$A.out" 2>&1 \
             || { echo "FAIL canary: does not link for $A"; head -3 "$W/$A.out"; fail=1; }
     done
 fi

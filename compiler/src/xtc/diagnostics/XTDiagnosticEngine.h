@@ -87,7 +87,7 @@ typedef NS_ENUM(NSInteger, XTWarningCategory) {
                              // the compiler cannot prove two items never write
                              // the same element. If they can, the result
                              // depends on which item runs last.
-    XTWarnParAuto,           // -Wno-par-auto — a loop --par-auto made a `par`
+    XTWarnParAuto,           // -Wno-par-auto — a loop --par-style=auto made a `par`
                              // block of runs serially after all: its work items
                              // are not independent, or a GPU could not run it,
                              // and an auto block is demoted rather than refused.
@@ -214,7 +214,7 @@ NSArray<NSString*>* XTWarningCategoryAllNames(void);
 
 /****************************************************************************\
 |* Drop every diagnostic after the first `count` (the front end starting a
-|* unit again: --par-auto importing the par runtime).
+|* unit again: --par-style=auto importing the par runtime).
 \****************************************************************************/
 - (void)truncateToCount:(NSUInteger)count;
 

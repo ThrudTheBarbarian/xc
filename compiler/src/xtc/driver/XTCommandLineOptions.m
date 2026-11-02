@@ -66,6 +66,7 @@
 @property(nonatomic, readwrite) NSInteger threadSafeARC;
 @property(nonatomic, readwrite) BOOL parKernelsAll;
 @property(nonatomic, readwrite) BOOL parAuto;
+@property(nonatomic, readwrite) NSInteger parDeviceDefault;
 @property(nonatomic, readwrite) NSUInteger goalDefault;
 @property(nonatomic, readwrite) BOOL warnParAuto;
 @property(nonatomic, readwrite, nullable) NSString* migrateVersions;
@@ -507,6 +508,9 @@ static NSString* sExecutablePath = nil;
 + (nullable instancetype)parseArgc:(int)argc argv:(const char*[])argv
     {
     XTCommandLineOptions* opts = [[XTCommandLineOptions alloc] init];
+    // --par-style=auto is the default: a plain loop that can be a par block
+    // becomes one, so compiling a program uses the machine.
+    opts.parAuto = YES;
     // Did the user actually NAME a target? `cc -o x x.c` builds for the host,
     // and xcc follows that: with neither -A nor -m, the default is this
     // machine. Historically the default was 6502, which made the simplest
@@ -1157,9 +1161,21 @@ static NSString* sExecutablePath = nil;
             {
             opts.parKernelsAll = YES;
             }
-        else if ([arg isEqualToString:@"--par-auto"])
+        else if ([arg hasPrefix:@"--par-style="])
             {
-            opts.parAuto = YES;
+            // auto: loops become par blocks, each choosing its devices at run
+            // time; threads: the CPU's threads only; gpu: the GPU first; cpu:
+            // nothing is lifted (plain loops stay serial, vectorised as ever).
+            NSString* v = [arg substringFromIndex:12];
+            if ([v isEqualToString:@"auto"]) { opts.parAuto = YES; opts.parDeviceDefault = 0; }
+            else if ([v isEqualToString:@"threads"]) { opts.parAuto = YES; opts.parDeviceDefault = 1; }
+            else if ([v isEqualToString:@"gpu"]) { opts.parAuto = YES; opts.parDeviceDefault = 2; }
+            else if ([v isEqualToString:@"cpu"]) { opts.parAuto = NO; opts.parDeviceDefault = 0; }
+            else
+                {
+                fprintf(stderr, "xcc: --par-style= expects auto, threads, gpu or cpu, got '%s'\n", v.UTF8String);
+                return nil;
+                }
             }
         else if ([arg hasPrefix:@"-fgoal="])
             {
@@ -1683,11 +1699,17 @@ static NSString* sExecutablePath = nil;
             "  -fpar-kernels=all          Every par block carries every GPU kernel\n"
             "                             form, for workers on other machines (xcd);\n"
             "                             on by itself where XC_PAR_REMOTE is set.\n"
-            "  --par-auto                 A plain for (i in a..b) loop becomes a par\n"
-            "                             block where its shape allows (see -Wpar-auto).\n"
+            "  --par-style=auto|threads|gpu|cpu\n"
+            "                             How plain loops run. auto (the default): a\n"
+            "                             for (i in a..b) loop becomes a par block where\n"
+            "                             its shape allows, and each block picks CPU\n"
+            "                             threads, the GPU or both as it runs; threads:\n"
+            "                             the CPU's threads only; gpu: the GPU first;\n"
+            "                             cpu: no loop changes (one thread, vectorised).\n"
+            "                             -Wpar-auto says what was lifted and why not.\n"
             "  -fgoal=speed|accuracy      The default goal of loops and par blocks\n"
             "                             (#goal in a file overrides it, :goal(...) both)\n"
-            "  -Wpar-auto                 Say what --par-auto wrapped and what it demoted\n"
+            "  -Wpar-auto                 Say what --par-style lifted and what it left\n"
             "  -fmalloc=system|mimalloc   Host malloc behind the runtime (hosted\n"
             "                             targets only; mimalloc must link FIRST to\n"
             "                             override, so it is passed as an object)\n"

@@ -716,9 +716,14 @@ static BOOL gEmitsWGSL = NO;
             {
             // On a target with a GPU, say why this block stays on the CPU.
             NSString* cls = [f.name substringToIndex:f.name.length - 4];
-            [diag emitWarning:[NSString stringWithFormat:@"this 'par' block runs on the CPU only, because %@",
+            // A loop the compiler lifted by itself says so only under
+            // -Wpar-auto: a plain program is not told about a block it never
+            // wrote. Mirrored in the port.
+            BOOL lifted = [self isAutoBlock:module number:[cls substringFromIndex:8]];
+            [diag emitWarning:[NSString stringWithFormat:lifted ? @"this loop runs on the CPU only (--par-style), because %@"
+                                                                : @"this 'par' block runs on the CPU only, because %@",
                                                          why ?: @"its GPU version cannot express something it uses yet"]
-                     category:XTWarnParGpu
+                     category:lifted ? XTWarnParAuto : XTWarnParGpu
                            at:classDecls[cls].location];
             // No form to run, but the run still checks the block's arrays
             // against each other (ParDevice.bufferOverlap): two captured
@@ -776,7 +781,7 @@ static BOOL gEmitsWGSL = NO;
 
     BOOL ok = YES;
     gParGuards = [NSMutableDictionary dictionary];
-    // The auto blocks (--par-auto made them from plain loops) par-check would
+    // The auto blocks (--par-style=auto made them from plain loops) par-check would
     // refuse: demoted to a serial run instead, with a warning (par-auto).
     NSMutableSet<NSString*>* serial = [NSMutableSet set];
     for (XTIRFunction* f in module.functions)
@@ -806,6 +811,13 @@ static BOOL gEmitsWGSL = NO;
             NSString* scatter = nil;
             NSMutableArray<NSString*>* guards = [NSMutableArray array];
             NSString* dep = [c dependenceIn:f ivarNames:[c ivarNamesOf:decl in:classDecls] scatter:&scatter guards:guards];
+            // A loop the compiler lifted by itself is a block only when its
+            // items are PROVED apart: a write the shapes do not cover (every
+            // item writing one element, or an index from data) keeps it serial.
+            // A written block's scatter stays a warning, the developer's call.
+            // for (r) { for (i) c[i] = … } wrote all of c from every r at once.
+            if (!dep && isAuto && scatter)
+                dep = [NSString stringWithFormat:@"writes %@, and two of them could write the same element", scatter];
             if (!dep && guards.count)
                 gParGuards[cls] = guards;
             if (!dep)
@@ -819,7 +831,7 @@ static BOOL gEmitsWGSL = NO;
                                    at:decl.location];
                 // -Wpar-auto says what was wrapped as well as what was demoted.
                 if (isAuto)
-                    [diag emitWarning:@"this loop became a 'par' block (--par-auto)"
+                    [diag emitWarning:@"this loop became a 'par' block (--par-style)"
                              category:XTWarnParAuto
                                    at:decl.location];
                 continue;
@@ -827,7 +839,7 @@ static BOOL gEmitsWGSL = NO;
             if (isAuto)
                 {
                 [serial addObject:cls];
-                [diag emitWarning:[NSString stringWithFormat:@"this loop runs serially, not as a 'par' block (--par-auto): "
+                [diag emitWarning:[NSString stringWithFormat:@"this loop runs serially, not as a 'par' block (--par-style): "
                                                              @"its work items are not independent, since it %@", dep]
                          category:XTWarnParAuto
                                at:decl.location];
@@ -842,7 +854,7 @@ static BOOL gEmitsWGSL = NO;
         if (isAuto)
             {
             [serial addObject:cls];
-            [diag emitWarning:[NSString stringWithFormat:@"this loop runs serially, not as a 'par' block (--par-auto): "
+            [diag emitWarning:[NSString stringWithFormat:@"this loop runs serially, not as a 'par' block (--par-style): "
                                                          @"a GPU could not run it, since it %@", why]
                      category:XTWarnParAuto
                            at:decl.location];
@@ -894,7 +906,7 @@ static BOOL gEmitsWGSL = NO;
         }
     }
 
-// Whether block <n> (its class ParImpl$<n>) is one --par-auto made from a
+// Whether block <n> (its class ParImpl$<n>) is one --par-style=auto made from a
 // plain loop: its GPU placeholder literal carries `auto;` after the tag.
 + (BOOL)isAutoBlock:(XTIRModule*)module number:(NSString*)n
     {

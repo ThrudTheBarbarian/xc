@@ -221,14 +221,17 @@ NS_ASSUME_NONNULL_BEGIN
 // PTX, SPIR-V, WGSL), not only its target's, so a worker on another machine
 // (xcd) finds the one its GPU takes.
 @property(nonatomic, readonly) BOOL parKernelsAll;
-// --par-auto — an outermost `for (T i in a..b)` loop in plain code becomes a
+// --par-style=auto — an outermost `for (T i in a..b)` loop in plain code becomes a
 // `par` block when its shape allows; one par-check cannot prove independent,
 // or a GPU cannot run, is demoted to a serial run (warning par-auto).
 @property(nonatomic, readonly) BOOL parAuto;
+// --par-style's default device for a par block with no :device (ParDevice's
+// code: 1 the CPU's threads, 2 the GPU), 0 to leave it to the run.
+@property(nonatomic, readonly) NSInteger parDeviceDefault;
 // -fgoal=speed|accuracy: the default goal for loops and par blocks (0 none,
 // 1 speed, 2 accuracy); a #goal directive overrides it, a :goal(...) both.
 @property(nonatomic, readonly) NSUInteger goalDefault;
-// -Wpar-auto: report what --par-auto wrapped and what it demoted (off by
+// -Wpar-auto: report what --par-style=auto wrapped and what it demoted (off by
 // default: the warnings are useful once, then noise).
 @property(nonatomic, readonly) BOOL warnParAuto;
 // --migrate=<base>:<to> — compile as if the library were still <base>:

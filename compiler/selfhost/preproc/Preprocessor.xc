@@ -102,7 +102,7 @@ class IfFrame
     bool _appleFrameworks;   // macOS/iOS: `#import <F>` may name a system framework
     String* _appleSdk;       // the SDK root, or 0 (then the frameworks on this machine)
     String* _prelude;        // the target's implicit platform header, if any
-    String* _autoImport;     // a file imported ahead of the entry file's own text (--par-auto: Par.xc), or 0
+    String* _autoImport;     // a file imported ahead of the entry file's own text (--par-style=auto: Par.xc), or 0
     Array* _errors;
     // `#package <ns>` — the host import namespace in force for subsequent
     // BODYLESS declarations (wasm-target.md §6). A STATE directive: it holds
@@ -562,7 +562,7 @@ class IfFrame
         _prelude = p;
         }
     // A standard-library file the entry file imports as if its first line
-    // named it: --par-auto's runtime, when the program wraps a loop and did
+    // named it: --par-style=auto's runtime, when the program wraps a loop and did
     // not import it. An ordinary import, not the prelude: nothing ambient.
     void setAutoImport(String* p)
         {
@@ -582,7 +582,7 @@ class IfFrame
         }
     // Every standard-library and prelude file this unit imported, in both
     // spellings (the canonical key and the #line form the tokens carry):
-    // --par-auto leaves loops in these alone. As the reference's libraryFiles.
+    // --par-style=auto leaves loops in these alone. As the reference's libraryFiles.
     Set* libraryFiles(void)
         {
         Set* all = new Set();
@@ -951,7 +951,7 @@ class IfFrame
             }
         // The auto-import, once, at the head of the entry file (cleared first:
         // the imported file is preprocessed through here too).
-        // Several, separated by `;` (--par-auto's Par.xc, a checked build's
+        // Several, separated by `;` (--par-style=auto's Par.xc, a checked build's
         // Checked.xc), each in turn.
         if (_autoImport != (String*)0 && _sourceDepth == (u32)1)
             {

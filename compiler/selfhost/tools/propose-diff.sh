@@ -1,7 +1,7 @@
 #!/bin/bash
-# propose-diff.sh — IR Propose against the parser's --par-auto scan.
+# propose-diff.sh — IR Propose against the parser's --par-style=auto scan.
 #
-# --par-auto finds its candidate loops in the parser's tokens today. IR
+# --par-style=auto finds its candidate loops in the parser's tokens today. IR
 # Propose (cpp-front-end.md, step 1) finds them in the IR instead, so loops
 # from C and C++ can be found the same way; it replaces the scan only once
 # both choose the same loops on the xc corpus. Per fixture, this compares
@@ -28,7 +28,7 @@ for f in tests/fixtures/*.xc; do
     [ -n "$PATTERN" ] && [[ "$f" != *"$PATTERN"* ]] && continue
     grep -q '^//xtc-flags:.*target=xt6502' "$f" && continue
     files=$((files + 1))
-    "$XC" -q --par-auto -Wpar-auto -H . -o "$W/p" "$f" > "$W/p.out" 2>&1
+    "$XC" -q --par-style=auto -Wpar-auto -H . -o "$W/p" "$f" > "$W/p.out" 2>&1
     grep -E "became a 'par' block" "$W/p.out" \
         | sed -E 's/^[^:]*:([0-9]+):.*/\1/' | sort -n -u > "$W/p.lines"
     grep -E "runs serially, not as a 'par' block" "$W/p.out" \

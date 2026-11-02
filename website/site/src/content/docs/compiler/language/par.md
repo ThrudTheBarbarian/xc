@@ -511,21 +511,36 @@ Array* on = Par.ranOn("frame");      // ["cuda:NVIDIA GeForce RTX 5080"], say
 ```
 
 A block is named as for `Par.device`: by its name, or `file:line` for an
-unnamed block or a loop `--par-auto` made a block of. `XC_PAR_REPORT=1` logs
-every run under the same names. A C program built with `--par-auto` asks with
+unnamed block or a loop `--par-style=auto` made a block of. `XC_PAR_REPORT=1` logs
+every run under the same names. A C program built with `--par-style=auto` asks with
 `xc_par_ran_on("file.c:line")`, which returns the list as one string
 (`"cuda:…, cpu"`, or `""` before the block has run); declare it as
 `const char *xc_par_ran_on(const char *block);`.
 
-### Loops that become blocks: `--par-auto`
+### Loops that become blocks: `--par-style`
 
-With `--par-auto`, a `for (T i in a..b) { … }`
+By default a `for (T i in a..b) { … }`
 loop in plain code — or `a...b`, or the C-style `for (T i = a; i < b; i++)`
 with `<=`, `++i`, `i += 1` or `i = i + 1` — becomes a `par` block when its
-shape allows, so an existing program takes the GPU and every core without
-being rewritten. The program need not import `Par.xc`: when a loop becomes a
-block, `--par-auto` imports the runtime itself, and a program with nothing to
-wrap is built without it.
+iterations are independent, so an existing program takes the GPU and every
+core without being rewritten. The program need not import `Par.xc`: when a
+loop becomes a block, the compiler imports the runtime itself, and a program
+with nothing to wrap is built without it.
+
+`--par-style` says how plain loops run:
+
+| `--par-style=` | Plain loops | `par` blocks |
+|---|---|---|
+| `auto` (the default) | become `par` blocks where they can | each picks CPU threads, the GPU or both as it runs |
+| `threads` | become `par` blocks where they can | on the CPU's threads |
+| `gpu` | become `par` blocks where they can | on the GPU first |
+| `cpu` | stay as written, on one thread (still vectorised) | as written |
+
+A block's own `:device(…)` and `XC_PAR` at run time still decide over the
+style. A loop becomes a block only when the compiler can prove that no two
+iterations write the same element and none reads what another writes; a sum of
+floating-point values stays serial under the default `:goal(accuracy)`, so the
+answer is the one the serial loop gives.
 
 ```c
 for (u32 i in 0..N)

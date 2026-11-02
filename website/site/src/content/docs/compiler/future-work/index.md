@@ -61,7 +61,7 @@ machine or several, the way a `par` block's tiles are today.
 
 `xcc` compiling C++ files directly, through the path [C programs](/compiler/usage/c-programs/)
 take: `clang` turns the source into LLVM IR, `xcc` compiles what it reads of it, and
-`--par-auto` finds its loops in the IR as it finds C's.
+`--par-style=auto` finds its loops in the IR as it finds C's.
 
 ### A generic LLVM back end
 

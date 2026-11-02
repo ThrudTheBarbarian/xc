@@ -82,7 +82,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 /****************************************************************************\
 |* A standard-library file the entry file imports as if its first line named
-|* it: --par-auto's runtime, when the program wraps a loop and did not import
+|* it: --par-style=auto's runtime, when the program wraps a loop and did not import
 |* it. An ordinary import, not the prelude: nothing ambient. nil = none.
 \****************************************************************************/
 @property(nonatomic, nullable) NSString* autoImport;
@@ -112,7 +112,7 @@ NS_ASSUME_NONNULL_BEGIN
 /****************************************************************************\
 |* Every file of the standard library and the prelude this unit imported, in
 |* both spellings: the standardised absolute path and the path as the #line
-|* directives (and so the tokens) name it. --par-auto leaves loops in these
+|* directives (and so the tokens) name it. --par-style=auto leaves loops in these
 |* files alone: the runtime's own loops wrapped in blocks re-entered it.
 \****************************************************************************/
 @property(nonatomic, readonly) NSSet<NSString*>* libraryFiles;

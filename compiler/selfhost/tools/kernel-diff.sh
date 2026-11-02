@@ -1,6 +1,6 @@
 #!/bin/bash
 # kernel-diff.sh — IR outlining's GPU kernels against the parser's: for each
-# par fixture, the Metal kernels a --par-auto build carries (the scan's blocks)
+# par fixture, the Metal kernels a --par-style=auto build carries (the scan's blocks)
 # and those an XC_PAR_PROPOSE=outline build carries (the IR outliner's), how
 # many of the scan's the outliner produced byte for byte (block numbers and
 # the ops= cost word aside), and whether the outlined program gives its
@@ -31,7 +31,7 @@ scan=0; outl=0; same=0; bad=0
 for f in tests/fixtures/${PATTERN}*.xc; do
     [ -f "${f%.xc}.expected.out" ] || continue
     b=$(basename "$f" .xc)
-    "$XC" -q -O3 -H . --par-auto -o "$W/s" "$f" >/dev/null 2>&1 || continue
+    "$XC" -q -O3 -H . --par-style=auto -o "$W/s" "$f" >/dev/null 2>&1 || continue
     XC_PAR_PROPOSE=outline "$XC" -q -O3 -H . -o "$W/o" "$f" >/dev/null 2>&1 || { echo "  $b: the outlined build FAILED"; bad=$((bad + 1)); continue; }
     read ns no nm < <(python3 "$W/k.py" "$W/s" "$W/o")
     cpu=$( (cd "$W" && timeout 60 ./o 2>/dev/null) | cmp -s - "${f%.xc}.expected.out" && echo ok || echo DIFF)

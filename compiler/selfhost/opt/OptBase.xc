@@ -36,7 +36,7 @@ ParKernelHook* gParKernelHook;
 bool gOptPromoteScalars;
 
 // The IR outliner on for this compile without XC_PAR_PROPOSE: a C file
-// built with --par-auto (the C path has no parser scan; the outliner is
+// built with --par-style=auto (the C path has no parser scan; the outliner is
 // how its loops become blocks).
 bool gOptOutline;
 
@@ -1506,7 +1506,7 @@ class BeFact : Object
     // ── par-propose (report) ─────────────────────────────────────────────
     //
     // IR Propose, step 1 (cpp-front-end.md, c-and-cpp-one-path.md): find the
-    // loops --par-auto would make blocks of, in the IR rather than the
+    // loops --par-style=auto would make blocks of, in the IR rather than the
     // parser's tokens, so loops from C and C++ are found the same way. For
     // now a REPORT only, beside the parser's scan, until the two choose the
     // same loops on the xc corpus: XC_PAR_PROPOSE=report lowers with source

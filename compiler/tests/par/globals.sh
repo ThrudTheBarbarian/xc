@@ -93,7 +93,7 @@ int main(void)
     return 0;
 }
 C
-    "$XC" -q -O3 --par-auto -H . -o "$W/c" "$W/c.c" > "$W/c.b" 2>&1 || { echo "FAIL globals: the C program does not build"; head -3 "$W/c.b"; fail=1; }
+    "$XC" -q -O3 --par-style=auto -H . -o "$W/c" "$W/c.c" > "$W/c.b" 2>&1 || { echo "FAIL globals: the C program does not build"; head -3 "$W/c.b"; fail=1; }
     if [ -x "$W/c" ]; then
         for d in cpu gpu; do
             got=$(XC_PAR=$d "$W/c" 2>/dev/null)

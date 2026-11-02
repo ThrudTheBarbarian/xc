@@ -20,7 +20,7 @@ XC=${XC:-bin/$PLAT/xcc-xc}
 fail=0
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 # x86-64, where it stayed scalar (the arm64 form vectorised already).
-"$XC" -q -A x86_64 -O2 --par-auto --emit-ir-opt -H . -o "$W/nb" "$SRC" 2> "$W/ir" || { echo "FAIL coutline-vec: build"; tail -3 "$W/ir"; exit 1; }
+"$XC" -q -A x86_64 -O2 --par-style=auto --emit-ir-opt -H . -o "$W/nb" "$SRC" 2> "$W/ir" || { echo "FAIL coutline-vec: build"; tail -3 "$W/ir"; exit 1; }
 n=$(awk '/function ParImpl\$o[0-9]*\$run(\$base)?\(/,/^  }/' "$W/ir" | grep -c 'Vec(')
 [ "${n:-0}" -gt 0 ] || { echo "FAIL coutline-vec: the outlined block has no vector code"; fail=1; }
 if [ "$(uname -s)-$(uname -m)" = Linux-x86_64 ]; then

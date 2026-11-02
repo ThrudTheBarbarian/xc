@@ -33,7 +33,7 @@ i32 main(i32 argc, u8** argv)
     return 0;
     }
 XC
-"$XC" -q -O2 -fbounds-check -H . -o "$W/b" "$W/b.xc" > "$W/b.out" 2>&1 \
+"$XC" -q --par-style=cpu -O2 -fbounds-check -H . -o "$W/b" "$W/b.xc" > "$W/b.out" 2>&1 \
     || { echo "FAIL bounds: the checked build does not build"; head -3 "$W/b.out"; exit 1; }
 got=$("$W/b" < /dev/null 2>&1 | head -1)
 [ "$got" = "in range 5 1" ] || { echo "FAIL bounds: in-range run gives '$got'"; fail=1; }
@@ -70,8 +70,8 @@ i32 main(i32 argc, u8** argv)
     return 0;
     }
 XC
-"$XC" -q -O2 -fbounds-check -H . -o "$W/e" "$W/e.xc" > "$W/e.b" 2>&1 || { echo "FAIL bounds: the elision program does not build"; head -3 "$W/e.b"; fail=1; }
-"$XC" -q -O2 -fbounds-check -H . -S -o "$W/e.s" "$W/e.xc" > /dev/null 2>&1
+"$XC" -q --par-style=cpu -O2 -fbounds-check -H . -o "$W/e" "$W/e.xc" > "$W/e.b" 2>&1 || { echo "FAIL bounds: the elision program does not build"; head -3 "$W/e.b"; fail=1; }
+"$XC" -q --par-style=cpu -O2 -fbounds-check -H . -S -o "$W/e.s" "$W/e.xc" > /dev/null 2>&1
 # A function with SIMD clones (x86-64, once a loop in it vectorises) is a
 # dispatch stub at `fill:`; its code, checks and all, is `fill$base:` and the
 # clones. Count the base version's.
@@ -126,7 +126,7 @@ i32 main(i32 argc, u8** argv)
     return 0;
     }
 XC
-"$XC" -q -O2 -fbounds-check -H . -o "$W/n" "$W/n.xc" > "$W/n.b" 2>&1 || { echo "FAIL bounds: the must-check program does not build"; head -3 "$W/n.b"; fail=1; }
+"$XC" -q --par-style=cpu -O2 -fbounds-check -H . -o "$W/n" "$W/n.xc" > "$W/n.b" 2>&1 || { echo "FAIL bounds: the must-check program does not build"; head -3 "$W/n.b"; fail=1; }
 [ "$("$W/n" < /dev/null 2>&1)" = "0" ] || { echo "FAIL bounds: the must-check program's in-range run gives '$("$W/n" 2>&1 | head -1)'"; fail=1; }
 args=""
 for want in 2:9 3:14 4:21 5:28; do
@@ -163,7 +163,7 @@ i32 main(i32 argc, u8** argv)
     return 0;
     }
 XC
-"$XC" -q -O2 -fbounds-check -H . -o "$W/c" "$W/c.xc" > "$W/c.b" 2>&1 || { echo "FAIL bounds: the cast program does not build"; head -3 "$W/c.b"; fail=1; }
+"$XC" -q --par-style=cpu -O2 -fbounds-check -H . -o "$W/c" "$W/c.xc" > "$W/c.b" 2>&1 || { echo "FAIL bounds: the cast program does not build"; head -3 "$W/c.b"; fail=1; }
 [ "$("$W/c" < /dev/null 2>&1)" = "legs 4" ] || { echo "FAIL bounds: a cast back to the object's own class gives '$("$W/c" 2>&1 | head -1)'"; fail=1; }
 "$W/c" x < /dev/null > "$W/c1.out" 2>&1; rc=$?
 [ $rc -ge 128 ] && ! grep -q '^legs' "$W/c1.out" || { echo "FAIL bounds: a Cat cast to Dog through a raw pointer was not stopped (exit $rc)"; head -2 "$W/c1.out"; fail=1; }
@@ -185,14 +185,14 @@ i32 main(i32 argc, u8** argv)
     }
 XC
 for flag in "" -fbounds-check; do
-    "$XC" -q -O2 $flag -H . -o "$W/o" "$W/o.xc" > "$W/o.b" 2>&1 || { echo "FAIL bounds: the overflow program does not build ($flag)"; head -3 "$W/o.b"; fail=1; continue; }
+    "$XC" -q --par-style=cpu -O2 $flag -H . -o "$W/o" "$W/o.xc" > "$W/o.b" 2>&1 || { echo "FAIL bounds: the overflow program does not build ($flag)"; head -3 "$W/o.b"; fail=1; continue; }
     "$W/o" < /dev/null > "$W/o.out" 2>&1; rc=$?
     grep -q 'allocation.*overflows' "$W/o.out" && [ $rc = 134 ] \
         || { echo "FAIL bounds: a wrapping allocation size was not stopped ($flag: exit $rc)"; head -2 "$W/o.out"; fail=1; }
 done
 if [ "$PLAT" = osx ]; then
     for A in x86_64 win64; do
-        "$XC" -q -O2 -A $A -fbounds-check -H . -o "$W/b.$A" "$W/b.xc" > "$W/$A.out" 2>&1 \
+        "$XC" -q --par-style=cpu -O2 -A $A -fbounds-check -H . -o "$W/b.$A" "$W/b.xc" > "$W/$A.out" 2>&1 \
             || { echo "FAIL bounds: the checked build does not link for $A"; head -3 "$W/$A.out"; fail=1; }
     done
 fi

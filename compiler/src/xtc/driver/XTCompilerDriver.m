@@ -43,8 +43,8 @@
 @implementation XTCompilerDriver
     {
     NSUInteger _goalDirective;   // the unit's #goal, read after preprocessing
-    NSSet<NSString*>* _libraryFiles;   // the library's files, which --par-auto leaves alone
-    BOOL _parAutoImport;               // --par-auto wraps a loop in a program without Par.xc: import it
+    NSSet<NSString*>* _libraryFiles;   // the library's files, which --par-style=auto leaves alone
+    BOOL _parAutoImport;               // --par-style=auto wraps a loop in a program without Par.xc: import it
     NSArray<NSString*>* _stdlibDirs;   // the preprocessor's standard-library directories
     }
 
@@ -299,7 +299,7 @@ static NSSet<NSString*>* stdStateNamesIn(XTProgramNode* ast, NSSet<NSString*>* f
             if (c != XTWarnNone)
                 [_diagnostics suppressWarningCategory:c];
             }
-        // par-auto is opt-in (-Wpar-auto): what --par-auto wrapped or
+        // par-auto is opt-in (-Wpar-auto): what --par-style=auto wrapped or
         // demoted is useful to see once, and noise in every build after.
         if (!options.warnParAuto)
             [_diagnostics suppressWarningCategory:XTWarnParAuto];
@@ -866,6 +866,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     XTParser* parser = [[XTParser alloc] initWithTokens:toks typeTable:tt diagnostics:_diagnostics];
     parser.defaultPointerPlacement = arm64 ? XTPointerPlacementMain : XTPointerPlacementHeap;
     parser.parAuto = _options.parAuto;
+    parser.parDeviceDefault = _options.parDeviceDefault;
     parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
     parser.libraryFiles = _libraryFiles;
@@ -1049,6 +1050,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     XTParser* parser = [[XTParser alloc] initWithTokens:toks typeTable:tt diagnostics:_diagnostics];
     parser.defaultPointerPlacement = arm64 ? XTPointerPlacementMain : XTPointerPlacementHeap;
     parser.parAuto = _options.parAuto;
+    parser.parDeviceDefault = _options.parDeviceDefault;
     parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
     parser.libraryFiles = _libraryFiles;
@@ -1307,7 +1309,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         return nil;
         }
     [_diagnostics registerSource:rawSource forFile:inputFile];
-    // Where this unit's diagnostics start: a --par-auto restart drops the first
+    // Where this unit's diagnostics start: a --par-style=auto restart drops the first
     // pass's.
     NSUInteger diagMark = _diagnostics.diagnostics.count;
 
@@ -1745,6 +1747,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                                               typeTable:tt
                                             diagnostics:_diagnostics];
     parser.parAuto = _options.parAuto;
+    parser.parDeviceDefault = _options.parDeviceDefault;
     parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
     parser.libraryFiles = _libraryFiles;
@@ -1753,7 +1756,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                                          : XTPointerPlacementHeap;
     XTProgramNode* ast = nil;
     ast = [parser parse];
-    // --par-auto found a loop to make a block of in a program that did not
+    // --par-style=auto found a loop to make a block of in a program that did not
     // import the par runtime: import it, and start again. Only then, so a
     // program with nothing to wrap does not pay for the runtime (3 s and
     // 380 KB for a small one), and only where the target has it.

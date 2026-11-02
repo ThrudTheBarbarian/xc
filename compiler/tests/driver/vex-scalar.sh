@@ -11,15 +11,14 @@
 #   bash tests/driver/vex-scalar.sh
 set -u
 cd "$(dirname "$0")/../.." || exit 1
-SRC=../benchmark/par/perlin.xc
-[ -f "$SRC" ] || { echo "vex-scalar: no benchmark/par/perlin.xc, skipped"; exit 0; }
+SRC=tests/fixtures/par_perlin.xc
 PLAT=$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )
 REF=bin/$PLAT/xcc; XC=${XC:-bin/$PLAT/xcc-xc}
 fail=0
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 for c in "$REF" "$XC"; do
     [ -x "$c" ] || continue
-    "$c" -q -A x86_64 -O2 -H . -S -o "$W/$(basename "$c").s" "$SRC" || { echo "FAIL $c: no assembly"; fail=1; }
+    "$c" -q --par-style=cpu -A x86_64 -O2 -H . -S -o "$W/$(basename "$c").s" "$SRC" || { echo "FAIL $c: no assembly"; fail=1; }
 done
 S="$W/$(basename "$XC").s"
 fnbody() { awk -v f="$1" '$0 == f":" {p=1; next} p && /^[A-Za-z_][A-Za-z0-9_$]*:$/ {p=0} p' "$S"; }

@@ -19,7 +19,7 @@
 #   bash tests/driver/x86-peep.sh
 set -u
 cd "$(dirname "$0")/../.." || exit 1
-SRC=../benchmark/par/perlin.xc
+SRC=tests/fixtures/par_perlin.xc
 PLAT=$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )
 REF=bin/$PLAT/xcc; XC=${XC:-bin/$PLAT/xcc-xc}
 fail=0
@@ -27,7 +27,7 @@ W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 if [ -f "$SRC" ]; then
     for c in "$REF" "$XC"; do
         [ -x "$c" ] || continue
-        "$c" -q -A x86_64 -O2 -H . -S -o "$W/$(basename "$c").s" "$SRC" || { echo "FAIL $c: no assembly"; fail=1; }
+        "$c" -q --par-style=cpu -A x86_64 -O2 -H . -S -o "$W/$(basename "$c").s" "$SRC" || { echo "FAIL $c: no assembly"; fail=1; }
     done
     if [ -s "$W/xcc.s" ] && [ -s "$W/xcc-xc.s" ] && ! cmp -s "$W/xcc.s" "$W/xcc-xc.s"; then
         echo "FAIL: the two compilers' code differs"; fail=1
@@ -83,13 +83,13 @@ fi
 # A signed index known non-negative (`t[h & 255]`, `t[(h & 255) + 1]`) is
 # its own 64-bit register: index_nonneg.xc's main (lookups inlined) had 7
 # movsxd and has 4, the top-bit mask and the negative index among them.
-"$XC" -q -A x86_64 -O2 -H . -S -o "$W/in.s" tests/fixtures/index_nonneg.xc || { echo "FAIL: no assembly for index_nonneg"; fail=1; }
+"$XC" -q --par-style=cpu -A x86_64 -O2 -H . -S -o "$W/in.s" tests/fixtures/index_nonneg.xc || { echo "FAIL: no assembly for index_nonneg"; fail=1; }
 n=$(awk '$0 == "main:" {p=1; next} p && /^[A-Za-z_][A-Za-z0-9_$]*:$/ {p=0} p' "$W/in.s" | grep -c movsxd)
 [ "$n" -le 4 ] || { echo "FAIL: index_nonneg's main sign-extends $n indices, want 4 or fewer"; fail=1; }
 H=${XC_LINUX_HOST:-}
 native=$( [ "$(uname -s)-$(uname -m)" = Linux-x86_64 ] && echo 1 || echo 0 )
 if [ -n "$H" ] || [ $native = 1 ]; then
-    "$XC" -q -A x86_64 -O2 -H . -o "$W/lp" tests/fixtures/lea_peep.xc || { echo "FAIL: no x86-64 lea_peep"; fail=1; }
+    "$XC" -q --par-style=cpu -A x86_64 -O2 -H . -o "$W/lp" tests/fixtures/lea_peep.xc || { echo "FAIL: no x86-64 lea_peep"; fail=1; }
     got=
     if [ -f "$W/lp" ] && [ $native = 1 ]; then
         got=$("$W/lp"); H=$(uname -n)
@@ -97,7 +97,7 @@ if [ -n "$H" ] || [ $native = 1 ]; then
         scp -q "$W/lp" "$H:/tmp/lea-peep.$$" && got=$(ssh "$H" "/tmp/lea-peep.$$; rm -f /tmp/lea-peep.$$")
     fi
     [ "$got" = "$(cat tests/fixtures/lea_peep.expected.out)" ] || { echo "FAIL: lea_peep on $H printed '$got'"; fail=1; }
-    "$XC" -q -A x86_64 -O2 -H . -o "$W/ix" tests/fixtures/index_nonneg.xc || { echo "FAIL: no x86-64 index_nonneg"; fail=1; }
+    "$XC" -q --par-style=cpu -A x86_64 -O2 -H . -o "$W/ix" tests/fixtures/index_nonneg.xc || { echo "FAIL: no x86-64 index_nonneg"; fail=1; }
     got=
     if [ -f "$W/ix" ] && [ $native = 1 ]; then
         got=$("$W/ix")

@@ -158,7 +158,7 @@ n=$(cat "$W/scale.pb" "$W/saxpy.pb" 2>/dev/null | grep -c ': outlined, a block')
 if [ "$(uname -s)" = Darwin ]; then
     XC_PAR=gpu XC_PAR_REPORT=1 "$W/saxpy.par" 2>&1 | grep -q 'items on the GPU' || { echo "FAIL cpath: no C loop ran on the GPU"; fail=1; }
 fi
-# --par-auto on a C file is the IR outliner (there is no parser scan for C),
+# --par-style=auto on a C file is the IR outliner (there is no parser scan for C),
 # and -I / -D reach clang.
 mkdir -p "$W/inc"
 printf '#define SCALE_K 4\n' > "$W/inc/k.h"
@@ -180,10 +180,10 @@ int main(void)
     return 0;
 }
 C
-"$XC" -q -O3 --par-auto -H . -I "$W/inc" -DN=1000000 -o "$W/defs" "$W/defs.c" > "$W/defs.b" 2>&1 || { echo "FAIL cpath: --par-auto with -I/-D does not build"; head -3 "$W/defs.b"; fail=1; }
+"$XC" -q -O3 --par-style=auto -H . -I "$W/inc" -DN=1000000 -o "$W/defs" "$W/defs.c" > "$W/defs.b" 2>&1 || { echo "FAIL cpath: --par-style=auto with -I/-D does not build"; head -3 "$W/defs.b"; fail=1; }
 if [ -x "$W/defs" ]; then
-    [ "$("$W/defs")" = "1999998000000" ] || { echo "FAIL cpath: --par-auto -DN=1000000 gives $("$W/defs")"; fail=1; }
-    XC_PAR_REPORT=1 "$W/defs" 2>&1 | grep -q 'items on the' || { echo "FAIL cpath: --par-auto made no block of a C loop"; fail=1; }
+    [ "$("$W/defs")" = "1999998000000" ] || { echo "FAIL cpath: --par-style=auto -DN=1000000 gives $("$W/defs")"; fail=1; }
+    XC_PAR_REPORT=1 "$W/defs" 2>&1 | grep -q 'items on the' || { echo "FAIL cpath: --par-style=auto made no block of a C loop"; fail=1; }
 fi
 # The IR other clangs write (XC_C_LL hands the reader a file): CRLF lines, as
 # clang on Windows ends them (the reader once found no `}` and left every
@@ -216,7 +216,7 @@ else
 fi
 # An INSTALLED compiler (<prefix>/bin/xcc beside <prefix>/lib/xc) must know the
 # library it found as the library: only a path under `support/` was, so an
-# install's --par-auto outlined String's and Data's own loops and a C program
+# install's --par-style=auto outlined String's and Data's own loops and a C program
 # built with it crashed at -O3 (the 0.85 re-issue's smoke test). The layout,
 # with this tree's library linked in.
 mkdir -p "$W/inst/bin" "$W/inst/lib"
@@ -236,10 +236,10 @@ int main(void)
     return 0;
 }
 C
-( cd "$W/inst" && XC_PAR_OUTLINE_TRACE=1 ./bin/xcc -q -O3 --par-auto -o "$W/inst.out" "$W/inst.c" ) > "$W/inst.b" 2>&1 \
-    || { echo "FAIL cpath: the installed layout does not build a C program with --par-auto"; head -3 "$W/inst.b"; fail=1; }
+( cd "$W/inst" && XC_PAR_OUTLINE_TRACE=1 ./bin/xcc -q -O3 --par-style=auto -o "$W/inst.out" "$W/inst.c" ) > "$W/inst.b" 2>&1 \
+    || { echo "FAIL cpath: the installed layout does not build a C program with --par-style=auto"; head -3 "$W/inst.b"; fail=1; }
 grep -E '^outline: [A-Za-z_]+\$[A-Za-z_$]*(:[0-9]+)?: outlined' "$W/inst.b" | head -3 | sed 's/^/FAIL cpath: the installed layout outlined library code: /' | grep . && fail=1
 [ -x "$W/inst.out" ] && [ "$("$W/inst.out")" = "22898104320" ] \
-    || { echo "FAIL cpath: the installed layout's --par-auto C program gives '$("$W/inst.out" 2>&1)'"; fail=1; }
+    || { echo "FAIL cpath: the installed layout's --par-style=auto C program gives '$("$W/inst.out" 2>&1)'"; fail=1; }
 [ $fail = 0 ] && echo "--- cpath: pass ---" || echo "--- cpath: FAIL ---"
 exit $fail

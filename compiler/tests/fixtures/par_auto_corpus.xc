@@ -1,5 +1,5 @@
-//xtc-flags: target=arm64 --par-auto
-// par_auto_corpus.xc — the corpus's own --par-auto fixture (the sweeps pass
+//xtc-flags: target=arm64 --par-style=auto
+// par_auto_corpus.xc — the corpus's own --par-style=auto fixture (the sweeps pass
 // the flag a fixture names in its //xtc-flags: line). An element map and an
 // integer reduction become `par` blocks; a scan is wrapped and then demoted
 // to a serial run; a loop writing an outer scalar is left alone. The output

@@ -1,6 +1,9 @@
 #!/bin/bash
 # split-build.sh — build xcc from one object per source file, in parallel.
 #
+# The compiler is built with --par-style=cpu: its own loops stay as written
+# (the default, auto, would make par blocks of the ones that qualify).
+#
 # The compiler's files import each other as <Name>, which finds the source
 # through -I in the one-unit build and the module's interface (.xtc.iface)
 # through -L here. So each object holds its own file's code (and a copy of the
@@ -73,7 +76,7 @@ step() { echo "[$(date +%H:%M:%S)] $*"; }
 step "interfaces: $n files, in dependency order"
 for f in $FILES; do
     b=$(basename "$f" .xc)
-    "$XCC" -q -A "$ARCH" -H . -D XCC_VERSION="\"$V\"" "${SRC_I[@]}" -L "$W/if" --emit-iface \
+    "$XCC" -q -A "$ARCH" -H . --par-style=cpu -D XCC_VERSION="\"$V\"" "${SRC_I[@]}" -L "$W/if" --emit-iface \
         -o "$W/if/$b.xtc.iface" "$f" > "$W/if/$b.log" 2>&1 || echo "FAIL iface $f"
 done
 step "objects"
@@ -84,7 +87,7 @@ BYSIZE=$(for f in $FILES; do wc -c "$f"; done | sort -rn | awk '{print $2}')
 echo "$BYSIZE" | xargs -P "$JOBS" -I{} sh -c '
     f="$1"; shift; b=$(basename "$f" .xc)
     "$@" -c -o "'"$W"'/obj/$b.o" "$f" > "'"$W"'/obj/$b.log" 2>&1 || echo "FAIL object $f"' _ {} \
-    "$XCC" -q -O2 -A "$ARCH" -H . -D XCC_VERSION="\"$V\"" "${SRC_I[@]}" -L "$W/if" ${EXTRA[@]+"${EXTRA[@]}"}
+    "$XCC" -q -O2 -A "$ARCH" -H . --par-style=cpu -D XCC_VERSION="\"$V\"" "${SRC_I[@]}" -L "$W/if" ${EXTRA[@]+"${EXTRA[@]}"}
 fail=$(grep -l -E 'error' "$W"/if/*.log "$W"/obj/*.log 2>/dev/null)
 if [ -n "$fail" ]; then echo "split-build: errors in:"; echo "$fail" | head -10; exit 1; fi
 step "link"

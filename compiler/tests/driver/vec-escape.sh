@@ -108,12 +108,12 @@ C
 clang -O2 -o "$W/s.ref" "$W/s.c" 2> /dev/null || { echo "FAIL vec-escape: clang does not build it"; exit 1; }
 "$W/s.ref" > "$W/exp"
 for O in -O2 -O3; do
-    "$XC" -q $O -H . -o "$W/s" "$W/s.c" > "$W/b" 2>&1 || { echo "FAIL vec-escape: $O does not build"; head -3 "$W/b"; fail=1; continue; }
+    "$XC" -q --par-style=cpu $O -H . -o "$W/s" "$W/s.c" > "$W/b" 2>&1 || { echo "FAIL vec-escape: $O does not build"; head -3 "$W/b"; fail=1; continue; }
     "$W/s" > "$W/out" 2>&1
     cmp -s "$W/out" "$W/exp" || { echo "FAIL vec-escape: $O answers differ from clang's"; diff "$W/out" "$W/exp" | head -6; fail=1; }
 done
 if [ "$PLAT" = osx ] && command -v otool > /dev/null; then
-    "$XC" -q -O2 -H . -o "$W/s" "$W/s.c" > /dev/null 2>&1
+    "$XC" -q --par-style=cpu -O2 -H . -o "$W/s" "$W/s.c" > /dev/null 2>&1
     n=$(otool -tv "$W/s" | awk '/^_mand:/{f=1;next} f&&/^_[A-Za-z_][A-Za-z0-9_$]*:$/{exit} f' | grep -cE 'fcmgt|fcmge')
     [ "$n" -ge 1 ] || { echo "FAIL vec-escape: mand's escape loop is not vectorised"; fail=1; }
 fi
@@ -121,7 +121,7 @@ fi
 # form: a legacy-SSE phaddd there merges with the live upper halves, and on a
 # Zen 3 the AVX2 mandelbrot ran 10x slower than its SSE build.
 for A in "-mavx2" "-mavx512"; do
-    "$XC" -q -O2 -A x86_64 $A -H . -S -o "$W/x.s" "$(ls tests/fixtures/vec_escape.xc)" > "$W/b" 2>&1 \
+    "$XC" -q --par-style=cpu -O2 -A x86_64 $A -H . -S -o "$W/x.s" "$(ls tests/fixtures/vec_escape.xc)" > "$W/b" 2>&1 \
         || { echo "FAIL vec-escape: -A x86_64 $A -S does not build"; head -3 "$W/b"; fail=1; continue; }
     grep -qE 'ymm|zmm' "$W/x.s" || { echo "FAIL vec-escape: $A made no AVX code"; fail=1; continue; }
     grep -qE '^[[:space:]]+(phaddd|pshufd)[[:space:]]' "$W/x.s" \

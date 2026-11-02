@@ -2,7 +2,7 @@
 # ran-on.sh — which hardware ran a block (2026-10-27, owner: float results can
 # differ between devices, so a program can ask which made them). On this
 # machine's GPU, Par.ranOn names its runtime (metal: on a Mac, vulkan: on
-# Linux); a loop --par-auto lifted is asked for by file:line, as XC_PAR_REPORT
+# Linux); a loop --par-style=auto lifted is asked for by file:line, as XC_PAR_REPORT
 # names it; and a C program asks with xc_par_ran_on("file.c:line").
 #
 #   bash tests/par/ran-on.sh
@@ -41,7 +41,7 @@ elif [ "$(printf '%s\n' "$got" | head -1 | cut -c1-${#GPU})" != "$GPU" ] && [ "$
 fi
 got=$(XC_PAR=cpu XCC_SETTINGS_DIR="$W/s2" "$W/named" 2>/dev/null)
 [ "$got" = cpu ] || { echo "FAIL ran-on: XC_PAR=cpu gives '$got'"; fail=1; }
-# 2. A loop --par-auto lifted, named file:line.
+# 2. A loop --par-style=auto lifted, named file:line.
 cat > "$W/lifted.xc" <<'XC'
 #import "Stdio.xc"
 #import "Par.xc"
@@ -55,7 +55,7 @@ i32 main(void)
     return 0;
 }
 XC
-"$XC" -q -O2 -H . --par-auto -o "$W/lifted" "$W/lifted.xc" || { echo "FAIL ran-on: the lifted loop does not build"; exit 1; }
+"$XC" -q -O2 -H . --par-style=auto -o "$W/lifted" "$W/lifted.xc" || { echo "FAIL ran-on: the lifted loop does not build"; exit 1; }
 got=$(XC_PAR=cpu XCC_SETTINGS_DIR="$W/s3" "$W/lifted" 2>/dev/null)
 [ "$got" = 1 ] || { echo "FAIL ran-on: lifted.xc:7 has '$got' devices"; XC_PAR_REPORT=1 XC_PAR=cpu XCC_SETTINGS_DIR="$W/s3" "$W/lifted" 2>&1 | grep 'par:' | head -3; fail=1; }
 # 3. From C.
@@ -73,7 +73,7 @@ int main(void)
     return a[5] > 1.0f ? 0 : 1;
 }
 C
-    "$XC" -q -O2 --par-auto -o "$W/c" "$W/c.c" || { echo "FAIL ran-on: the C program does not build"; fail=1; }
+    "$XC" -q -O2 --par-style=auto -o "$W/c" "$W/c.c" || { echo "FAIL ran-on: the C program does not build"; fail=1; }
     if [ -x "$W/c" ]; then
         got=$(XC_PAR=cpu XCC_SETTINGS_DIR="$W/s4" "$W/c" 2>/dev/null | tr '\n' ' ')
         [ "$got" = "cpu [] " ] || { echo "FAIL ran-on: from C, '$got'"; XC_PAR_REPORT=1 XC_PAR=cpu XCC_SETTINGS_DIR="$W/s4" "$W/c" 2>&1 | grep 'par:' | head -3; fail=1; }

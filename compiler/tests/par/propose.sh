@@ -1,6 +1,6 @@
 #!/bin/bash
 # propose.sh — IR Propose's report (XC_PAR_PROPOSE=report, step 1 of moving
-# --par-auto's search into the IR): the loops it names, and the shapes.
+# --par-style=auto's search into the IR): the loops it names, and the shapes.
 # Self-hosted compiler only while the report is experimental; the corpus
 # comparison with the parser's scan is selfhost/tools/propose-diff.sh.
 #

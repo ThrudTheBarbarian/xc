@@ -22,12 +22,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) XTPointerPlacement defaultPointerPlacement;
 
 /****************************************************************************\
-|* --par-auto: an outermost `for (T i in a..b) { … }` in plain code becomes
+|* --par-style=auto: an outermost `for (T i in a..b) { … }` in plain code becomes
 |* a `par` block when its shape allows (parAutoFor); par-check later demotes
 |* an auto block it would refuse to a serial run.
 \****************************************************************************/
 @property(nonatomic) BOOL parAuto;
-/// --par-auto found a loop to wrap, but Par.xc was not imported: the driver
+/// --par-style=auto found a loop to wrap, but Par.xc was not imported: the driver
 /// parses the unit again with the runtime imported.
 @property(nonatomic, readonly) BOOL parAutoWantsRuntime;
 // wasm32: a module's memory is its own, so a protocol's static members are
@@ -36,10 +36,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic) BOOL webModules;
 // The unit's default goal for loops and par blocks without a :goal(…) of
 // their own: 0 the built-in (loops accuracy, par blocks speed), 1 speed, 2
-// accuracy — from #goal, else -fgoal=. Under an explicit speed, --par-auto
+// accuracy — from #goal, else -fgoal=. Under an explicit speed, --par-style=auto
 // also wraps float reductions (their sum may reassociate).
 @property(nonatomic) NSUInteger goalDefault;
-// The files --par-auto leaves alone: the standard library's and the
+// --par-style's device for a par block with no :device (1 cpu, 2 gpu), or 0.
+@property(nonatomic) NSInteger parDeviceDefault;
+// The files --par-style=auto leaves alone: the standard library's and the
 // prelude's, as the preprocessor names them (XTPreprocessor.libraryFiles).
 // The runtime's own loops wrapped in blocks re-entered it.
 @property(nonatomic, nullable) NSSet<NSString*>* libraryFiles;

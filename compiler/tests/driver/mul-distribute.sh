@@ -19,17 +19,17 @@ XC=${XC:-bin/$PLAT/xcc-xc}
 W=$(mktemp -d); trap 'rm -rf "${W:?}"' EXIT
 F=tests/fixtures/mul_distribute.xc
 fail=0
-"$XC" -q -O2 --emit-ir-opt -o "$W/p" "$F" 2> "$W/ir" > /dev/null
+"$XC" -q --par-style=cpu -O2 --emit-ir-opt -o "$W/p" "$F" 2> "$W/ir" > /dev/null
 n=$(awk '/function main\(/,/^  }/' "$W/ir" | grep -cE ' = V?Mul ')
 [ "$n" = 4 ] || { echo "FAIL mul-distribute: main multiplies $n times, want 4"; fail=1; }
 for s in r x; do
     c=$REF; [ $s = x ] && c=$XC
-    "$c" -q -O2 -S -o "$W/$s.s" "$F" > "$W/e" 2>&1 || { echo "FAIL mul-distribute: $(basename "$c") does not compile it"; fail=1; }
+    "$c" -q --par-style=cpu -O2 -S -o "$W/$s.s" "$F" > "$W/e" 2>&1 || { echo "FAIL mul-distribute: $(basename "$c") does not compile it"; fail=1; }
 done
 [ $fail = 0 ] && { cmp -s "$W/r.s" "$W/x.s" || { echo "FAIL mul-distribute: the two compilers' assembly differs"; fail=1; }; }
 if [ $fail = 0 ] && [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
     for o in O0 O2 O3; do
-        "$XC" -q -$o -o "$W/p$o" "$F" && "$W/p$o" > "$W/out$o" || { echo "FAIL mul-distribute: -$o build fails"; fail=1; }
+        "$XC" -q --par-style=cpu -$o -o "$W/p$o" "$F" && "$W/p$o" > "$W/out$o" || { echo "FAIL mul-distribute: -$o build fails"; fail=1; }
     done
     for o in O0 O2 O3; do
         cmp -s "$W/out$o" tests/fixtures/mul_distribute.expected.out || { echo "FAIL mul-distribute: -$o prints $(cat "$W/out$o")"; fail=1; }

@@ -65,13 +65,14 @@ class Parser
     Array*  _blkFrames;     // capture frames for literals being parsed
     Array*  _blkClasses;    // synthesised impl ClassDecl nodes, creation order
     u32     _parCounter;    // ParImpl$N numbering (par blocks)
-    bool    _parAuto;       // --par-auto: a plain loop becomes a par block where its shape allows
+    bool    _parAuto;       // --par-style=auto: a plain loop becomes a par block where its shape allows
     u32     _parAutoCounter; // lifted loops so far
     Map*    _parAutoLabels;  // a lifted loop's file:line -> how many had it
-    bool    _parAutoWantsRuntime; // --par-auto found a loop to wrap, but Par.xc was not imported
+    bool    _parAutoWantsRuntime; // --par-style=auto found a loop to wrap, but Par.xc was not imported
     u32     _loopDepth;     // loops open in the code being parsed (an auto par wraps an outermost one)
     u32     _goalDefault;   // the unit's default goal: 0 built-in, 1 speed, 2 accuracy (#goal, else -fgoal=)
-    Set*    _libFiles;      // the standard library's and prelude's files, which --par-auto leaves alone
+    u32     _parDeviceDefault; // --par-style's device for a block with no :device (1 cpu, 2 gpu), or 0
+    Set*    _libFiles;      // the standard library's and prelude's files, which --par-style=auto leaves alone
     Token*  _parTok;        // the `par` being desugared: where its errors point
     // While set, every node mk/mkNamed builds takes THIS token's position: a
     // block literal's synthesised class is built at the literal, as the
@@ -925,6 +926,7 @@ class Parser
     void setWebModules(bool b) { _webModules = b; }
     String* _webBad;
     void setGoalDefault(u32 g) { _goalDefault = g; }
+    void setParDeviceDefault(u32 d) { _parDeviceDefault = d; }
     void setLibraryFiles(Set* files) { _libFiles = files; }
 
     void _error(String* msg)
@@ -2522,7 +2524,7 @@ class Parser
     }
 
     // `par [name] (:reduce(op var))* [:goal(speed|accuracy)] { body }`, the data-parallel block.
-    // --par-auto: a `for` loop in plain code becomes a `par` block when its
+    // --par-style=auto: a `for` loop in plain code becomes a `par` block when its
     // shape allows — `for (T i in a..b) { … }` whose body writes only its
     // own locals, array elements, and integer reductions (`acc = acc + e` or
     // `acc += e`, with acc used nowhere else in the body), with no break of
@@ -2645,7 +2647,7 @@ class Parser
         return body;
     }
 
-    // --par-auto's `while` form (the reference's parAutoWhileToFor explains):
+    // --par-style=auto's `while` form (the reference's parAutoWhileToFor explains):
     // `while (v < B) { …; v++; }` becomes, in the token stream,
     //     for (T __autopar_w = v; __autopar_w < B; __autopar_w += 1)
     //         { T v = __autopar_w; …the body without the increment… }
@@ -2804,7 +2806,7 @@ class Parser
         Array* reds = new Array();
         u32 goal = (u32)0;
         // Without the par runtime the loop stays a loop, and the front end is
-        // told: it parses again with Par.xc imported (--par-auto imports it).
+        // told: it parses again with Par.xc imported (--par-style=auto imports it).
         bool scanned = parAutoScan(reds, &goal);
         if (scanned && !isTypeName(String.withCString("ParChunk")))
             _parAutoWantsRuntime = true;
@@ -2883,6 +2885,30 @@ class Parser
         if (i >= _tokens.count()) return (u16)tokEOF;
         return ((Token*)_tokens.get(i)).type();
     }
+    // An integer literal's value, decimal or 0x hex, as strtoull reads it.
+    static u64 parLiteralValue(String* t)
+        {
+        u64 v = (u64)0;
+        u32 i = (u32)0;
+        u32 base = (u32)10;
+        if (t.byteLength() > (u32)2 && t.byteAt((u32)0) == (u8)'0' && (t.byteAt((u32)1) == (u8)'x' || t.byteAt((u32)1) == (u8)'X'))
+            {
+            base = (u32)16;
+            i = (u32)2;
+            }
+        for (; i < t.byteLength(); i = i + (u32)1)
+            {
+            u8 c = t.byteAt(i);
+            u32 d = c >= (u8)'0' && c <= (u8)'9' ? (u32)(c - (u8)'0')
+                  : c >= (u8)'a' && c <= (u8)'f' ? (u32)(c - (u8)'a') + (u32)10
+                  : c >= (u8)'A' && c <= (u8)'F' ? (u32)(c - (u8)'A') + (u32)10 : (u32)99;
+            if (d >= base)
+                break;
+            v = v * (u64)base + (u64)d;
+            }
+        return v;
+        }
+
     String* parTokValue(u32 i)
     {
         if (i >= _tokens.count()) return String.withCString("");
@@ -3060,6 +3086,15 @@ class Parser
             if (!stepOk) return false;
         } else if (!sawDots || var == (String*)0 || semi1 != (u32)0)
             return false;
+        // `in 10..0`: a range whose literal bounds descend counts down, and a
+        // block's range ascends. As the reference.
+        for (u32 i = at + (u32)2; sawIn && i + (u32)1 < pe; i = i + (u32)1)
+            if ((parTokType(i) == (u16)tokDotDot || parTokType(i) == (u16)tokEllipsis)
+                && parTokType(i - (u32)1) == (u16)tokIntLiteral && parTokType(i - (u32)2) == (u16)tokIn
+                && parTokType(i + (u32)1) == (u16)tokIntLiteral) {
+                if (Parser.parLiteralValue(parTokValue(i - (u32)1)) > Parser.parLiteralValue(parTokValue(i + (u32)1)))
+                    return false;
+            }
         // The loop's annotations after the header: `serial` keeps the loop as
         // it is, a `goal` is the block's goal over the unit's default.
         if (parTokType(pe + (u32)1) == (u16)tokColon) {
@@ -3103,6 +3138,12 @@ class Parser
             be = end;
         }
         if (be == (u32)0) return false;
+        // A body that reads its function's variadic arguments (va_arg_…,
+        // va_start, va_end) stays where it is: a block's body runs in a frame of
+        // its own, where the function's va_list is not. As the reference.
+        for (u32 t = bs; t < be; t = t + (u32)1)
+            if (parTokType(t) == (u16)tokIdentifier && parTokValue(t).hasPrefix(String.withCString("va_")))
+                return false;
         Set* declared = new Set();
         declared.add((Hashable*)var);
         Map* accOps = new Map();
@@ -3197,7 +3238,7 @@ class Parser
                     // `acc = acc op e` only when op joins all of e: in
                     // `h = h * C + x` the + binds outside the *, and the
                     // iterations depend on each other (a Horner hash came
-                    // out 0 under --par-auto, par_gpu_wide, 2026-10-17).
+                    // out 0 under --par-style=auto, par_gpu_wide, 2026-10-17).
                     if (sym != (String*)0 && !parAutoTailIsOp(i + (u32)4, be, o)) sym = (String*)0;
                     want = (u32)2;
                 }
@@ -4048,7 +4089,7 @@ class Parser
         bool stepOk = false;
         // Only a loop that declares its variable: `for (i = 0; …)` on an
         // outer `i` has no name to compare with (the reference's nil compare
-        // is false; here it crashed --par-auto, arc_inert_elide, 2026-10-17).
+        // is false; here it crashed --par-style=auto, arc_inert_elide, 2026-10-17).
         if (step != 0 && iv != 0 && iv.kind() == (u16)nkVariableDecl && iv.name() != 0) {
             if (step.kind() == (u16)nkAssign && Parser._same(step.op(), "+=")
                 && step.kid((u32)1).kind() == (u16)nkInt && step.kid((u32)1).num() == (i64)1)
@@ -4615,12 +4656,14 @@ class Parser
         // ParChunk's own returns 0. As the reference.
         {
             Number* dv = (Number*)frame.get((Hashable*)String.withCString("device"));
-            if (dv != (Number*)0) {
+            // A block with no :device takes --par-style's (threads: the CPU, gpu: the GPU).
+            u32 dcode = dv != (Number*)0 ? dv.asU32() : _parDeviceDefault;
+            if (dcode != (u32)0) {
                 Node* m = mkNamed((u16)nkMethodDecl, String.withCString("defaultDevice"));
                 m.setOp(String.withCString("i32"));
                 Node* b = mk((u16)nkBlock);
                 Node* ret = mk((u16)nkReturn);
-                ret.add(parInt((i64)dv.asU32()));
+                ret.add(parInt((i64)dcode));
                 b.add(ret);
                 m.add(b);
                 cls.add(m);
@@ -4641,7 +4684,7 @@ class Parser
             // …then each reduction as `<field>=<op>;` (bug 645), so the kernel
             // can combine them on the device: field 0 is the object header, 1
             // and 2 lo and hi, then the captures, then the reductions in order.
-            // …and `auto;` for a block --par-auto made from a plain loop:
+            // …and `auto;` for a block --par-style=auto made from a plain loop:
             // par-check then demotes it to a serial run where it would have
             // refused a written one.
             if (frame.get((Hashable*)String.withCString("auto")) != 0)
@@ -4774,7 +4817,7 @@ class Parser
                     && (checkAt((u32)2, (u16)tokLBrace) || checkAt((u32)2, (u16)tokColon)))))
             return parsePar();
         if (check((u16)tokIf))       return parseIf();
-        // --par-auto: a counted while loop becomes the `for` it amounts to,
+        // --par-style=auto: a counted while loop becomes the `for` it amounts to,
         // which parAutoFor then takes or leaves (parAutoWhileToFor).
         // Without the par runtime parAutoFor leaves the loop and asks for
         // Par.xc to be imported (the front end parses again).
@@ -4785,7 +4828,7 @@ class Parser
             return parAutoFor();
         if (check((u16)tokWhile))    { parGridEnter("loops", true); _loopDepth = _loopDepth + (u32)1; Node* n = parseWhile(); _loopDepth = _loopDepth - (u32)1; parGridEnter("loops", false); return n; }
         if (check((u16)tokFor)) {
-            // --par-auto: an outermost loop in plain code may become a par block —
+            // --par-style=auto: an outermost loop in plain code may become a par block —
             // inside a block literal too, but not inside a par body (the reference explains).
             if (_parAuto && _loopDepth == (u32)0
                 && (_blkFrames.count() == (u32)0
@@ -5352,7 +5395,7 @@ class Parser
             if (tok != (Token*)0 && Parser._same(tok.value(), "unroll")) {
                 annots = annots | (u32)1;
             } else if (tok != (Token*)0 && Parser._same(tok.value(), "serial")) {
-                annots = annots | (u32)8;    // --par-auto leaves the loop alone (parAutoScan reads it)
+                annots = annots | (u32)8;    // --par-style=auto leaves the loop alone (parAutoScan reads it)
             } else if (tok != (Token*)0 && Parser._same(tok.value(), "goal")) {
                 expect((u16)tokLParen);
                 Token* g = check((u16)tokIdentifier) ? advance() : (Token*)0;

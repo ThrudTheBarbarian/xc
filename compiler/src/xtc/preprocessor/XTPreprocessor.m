@@ -418,7 +418,7 @@
         }
     // The auto-import, once, at the head of the entry file (cleared first:
     // the imported file is preprocessed through here too).
-    // Several, separated by `;` (--par-auto's Par.xc, a checked build's
+    // Several, separated by `;` (--par-style=auto's Par.xc, a checked build's
     // Checked.xc), each in turn.
     if (_autoImport.length && _sourceDepth == 1)
         {

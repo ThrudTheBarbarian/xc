@@ -11,7 +11,7 @@ XC=${XC:-bin/osx/xcc-xc}
 L=$(mktemp -d "${TMPDIR:-/tmp}/par-guard.XXXX")
 f=par_guard_offset
 rc=0
-if ! $XC -q -O2 -H . -o "$L/$f" "tests/fixtures/$f.xc" > "$L/build" 2>&1; then
+if ! $XC -q --par-style=cpu -O2 -H . -o "$L/$f" "tests/fixtures/$f.xc" > "$L/build" 2>&1; then
     echo "FAIL guard: $f does not build"; head -3 "$L/build"; exit 1
 fi
 mkdir -p "$L/st"

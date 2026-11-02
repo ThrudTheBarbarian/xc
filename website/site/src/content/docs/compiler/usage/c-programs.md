@@ -7,13 +7,13 @@ description: Building a C program with xcc, what it needs installed, which parts
 
 ```bash
 xcc -o mandel mandel.c
-xcc --par-auto -o mandel mandel.c
 ```
 
-The second form turns the program's loops into `par` blocks wherever their shape
-allows, so the same unchanged C runs on every core and on the GPU. The source
-needs no pragmas or annotations. See [par blocks](/compiler/language/par/) for how
-a block chooses its devices.
+The program's loops become `par` blocks wherever their iterations are
+independent, so the same unchanged C runs on every core and on the GPU. The
+source needs no pragmas or annotations. `--par-style=cpu` builds it as written,
+on one thread. See [par blocks](/compiler/language/par/) for how a block chooses
+its devices.
 
 ## What it needs
 
@@ -58,7 +58,7 @@ xcc: C path:   because of a parameter of a type not read (in log_line: ...)
 
 `-I <dir>` and `-D<name>[=<value>]` are passed to `clang`; the optimisation level
 (`-O0` to `-O3`, `-O3` by default) and every code-generation option are `xcc`'s, as
-for an xc program. `--par-auto` and the `par` environment variables (`XC_PAR`,
+for an xc program. `--par-style=auto` and the `par` environment variables (`XC_PAR`,
 `XC_PAR_THREADS` and the rest) behave as they do for xc.
 
 ## Floating point

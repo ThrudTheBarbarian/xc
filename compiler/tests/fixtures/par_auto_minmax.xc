@@ -1,4 +1,4 @@
-// par_auto_minmax — with --par-auto, a loop that keeps the smallest or the
+// par_auto_minmax — with --par-style=auto, a loop that keeps the smallest or the
 // largest value seen, `if (x < least) least = x;`, becomes a par block with a min
 // (or max) reduction; each shape of the test, with the accumulator on either
 // side, gives the serial loop's answer. Under plain compilation the loops

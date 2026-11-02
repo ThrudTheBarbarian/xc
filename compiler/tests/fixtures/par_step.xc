@@ -1,8 +1,8 @@
-//xtc-flags: target=arm64 --par-auto
+//xtc-flags: target=arm64 --par-style=auto
 // par_step.xc — a `par` loop with a stride (`step s`, a literal above 1):
 // the work items are its iterations, counted from 0, with i = a + k*s. A
 // written block, an inclusive range, an empty range, and a plain step loop
-// that --par-auto makes a block. The answers are a serial loop's.
+// that --par-style=auto makes a block. The answers are a serial loop's.
 #import "Stdio.xc"
 #import "Par.xc"
 #define N 100003

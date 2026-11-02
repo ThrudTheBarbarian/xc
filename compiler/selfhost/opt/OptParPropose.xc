@@ -16,7 +16,7 @@
 
     final void parProposeReport(IRModule* m)
         {
-        // Every program: --par-auto imports the runtime where a loop needs it.
+        // Every program: --par-style=auto imports the runtime where a loop needs it.
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);

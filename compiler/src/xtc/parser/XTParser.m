@@ -2742,7 +2742,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         return [self parseIf];
     case XTTokenWhile:
         {
-        // --par-auto: a counted while loop becomes the `for` it amounts to,
+        // --par-style=auto: a counted while loop becomes the `for` it amounts to,
         // which parAutoFor then takes or leaves (parAutoWhileToFor).
         // Without the par runtime parAutoFor leaves the loop and asks for
         // Par.xc to be imported (the driver parses again).
@@ -2759,7 +2759,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         }
     case XTTokenFor:
         {
-        // --par-auto: an outermost loop in plain code may become a par block —
+        // --par-style=auto: an outermost loop in plain code may become a par block —
         // inside a block literal too (its captures are captured again), but
         // not inside a par body, which is a block already.
         if (self.parAuto && ![[self blkFrames].lastObject[@"par"] boolValue] &&
@@ -3352,7 +3352,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
 |* Parse `par [name] (:reduce(op var))* [:goal(speed|accuracy)] { body }`, the data-parallel
 |* block. The reduction operator is one of + * & | ^ min max.
 \****************************************************************************/
-// --par-auto: a `for` loop in plain code becomes a `par` block when its shape
+// --par-style=auto: a `for` loop in plain code becomes a `par` block when its shape
 // allows — `for (T i in a..b) { … }` whose body writes only its own locals,
 // array elements, and integer reductions (`acc = acc + e` or `acc += e`, with
 // acc used nowhere else in the body), with no break of its own, return, goto,
@@ -3545,6 +3545,18 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         }
     else if (!sawDots || !var || semi1 != 0)
         return NO;
+    // `in 10..0`: a range whose literal bounds descend counts down, and a
+    // block's range ascends. Mirrored in the port.
+    for (NSUInteger i = at + 2; sawIn && i + 1 < pe; i++)
+        if (([self parTokType:i] == XTTokenDotDot || [self parTokType:i] == XTTokenEllipsis)
+            && [self parTokType:i - 1] == XTTokenIntLiteral && [self parTokType:i - 2] == XTTokenIn
+            && [self parTokType:i + 1] == XTTokenIntLiteral)
+            {
+            unsigned long long a0 = strtoull([self parTokValue:i - 1].UTF8String, NULL, 0);
+            unsigned long long b0 = strtoull([self parTokValue:i + 1].UTF8String, NULL, 0);
+            if (a0 > b0)
+                return NO;
+            }
     // The loop's annotations, `: a, goal(speed), …` after the header: `serial`
     // keeps the loop as it is, and a `goal` is the block's goal, over the
     // unit's default.
@@ -3609,6 +3621,13 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
         }
     if (be == 0)
         return NO;
+    // A body that reads its function's variadic arguments (va_arg_…, va_start,
+    // va_end) stays where it is: a block's body runs in a frame of its own,
+    // where the function's va_list is not. Even a demoted block runs there,
+    // and a varargs loop crashed. Mirrored in the port.
+    for (NSUInteger t = bs; t < be; t++)
+        if ([self parTokType:t] == XTTokenIdentifier && [[self parTokValue:t] hasPrefix:@"va_"])
+            return NO;
     NSMutableSet<NSString*>* declared = [NSMutableSet setWithObject:var];
     NSMutableDictionary<NSString*, NSString*>* accOps = [NSMutableDictionary dictionary];
     NSMutableDictionary<NSString*, NSNumber*>* accWant = [NSMutableDictionary dictionary];
@@ -3735,7 +3754,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
                 // `acc = acc op e` only when op joins all of e: in
                 // `h = h * C + x` the + binds outside the *, and the
                 // iterations depend on each other (a Horner hash came out 0
-                // under --par-auto, par_gpu_wide, 2026-10-17).
+                // under --par-style=auto, par_gpu_wide, 2026-10-17).
                 if (sym && ![self parAutoTailFrom:i + 4 limit:be isOp:o]) sym = nil;
                 want = 2;
                 }
@@ -4067,7 +4086,7 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
     }
 
 /****************************************************************************\
-|* --par-auto's `while` form: `while (v < B) { …; v++; }`, v a local of an
+|* --par-style=auto's `while` form: `while (v < B) { …; v++; }`, v a local of an
 |* integer type, B names and integer literals only, the increment the body's
 |* last statement and v written nowhere else, no break, continue, return or
 |* goto. The tokens become
@@ -4209,7 +4228,7 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
     NSMutableArray<NSArray<NSString*>*>* reds = [NSMutableArray array];
     NSUInteger goal = 0;
     // Without the par runtime the loop stays a loop, and the driver is told:
-    // it parses again with Par.xc imported (--par-auto imports it).
+    // it parses again with Par.xc imported (--par-style=auto imports it).
     BOOL scanned = [self parAutoScan:reds goal:&goal];
     BOOL haveRuntime = [self.typeTable typeForName:@"ParChunk"] != nil;
     if (scanned && !haveRuntime)
@@ -4638,7 +4657,7 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
             }
         else if ([annotName isEqualToString:@"serial"])
             {
-            // --par-auto leaves this loop alone (parAutoScan reads it from
+            // --par-style=auto leaves this loop alone (parAutoScan reads it from
             // the tokens); otherwise it means nothing.
             annots |= 8;
             }

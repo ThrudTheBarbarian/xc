@@ -280,7 +280,7 @@ $(XCC_XC_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
 .PHONY: split-check
 split-check: $(XCC_XC2_BIN)
 	@echo "  xc   stage 2 again, as one unit"
-	@$(XCC_XC_BIN) -q -O2 -A arm64 -H . -D XCC_VERSION='"$(VERSION)"' -o build/xcc-xc2-mono $(XCC_XC_SRC) $(XCC_XC_INCS)
+	@$(XCC_XC_BIN) -q -O2 --par-style=cpu -A arm64 -H . -D XCC_VERSION='"$(VERSION)"' -o build/xcc-xc2-mono $(XCC_XC_SRC) $(XCC_XC_INCS)
 	@echo "  xc   stage 3 by each"
 	@XCC=$(XCC_XC2_BIN) SPLIT_DIR=build/split-check-s SPLIT_VERSION=$(VERSION) bash $(SPLIT_BUILD) build/xcc-xc3-by-split -A arm64 -j $(SPLIT_JOBS) > build/split-check-s.log 2>&1 \
 	    || { tail -15 build/split-check-s.log; exit 1; }
@@ -347,7 +347,7 @@ $(XCC_XC_WIN64_BIN): $(XCC_XC2_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
 	@mkdir -p $(dir $@) build
 	@# One unit: a split-built xcc.exe does not work yet (6502 code reaches
 	@# its x86 assembler; a link misses __xt_ctors_start).
-	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -D XCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) \
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A win64 -H . -D XCC_VERSION='"$(VERSION)"' -o $@ $(XCC_XC_SRC) \
 	            $(call XCC_XC_TARGET_INCS,win64)
 
 # For a contributor with no toolchain but an installed release: the shipped
@@ -436,15 +436,15 @@ XCD_DEPS = $(XCC_XC2_BIN) selfhost/tools/xcd.xc $(wildcard support/generic/lib/*
            $(wildcard support/arm64/lib/*.xc) $(wildcard support/win64/lib/*.xc)
 $(XCD_BIN): $(XCD_DEPS)
 	@echo "  xc   building xcd (the par worker daemon)"
-	@$(XCC_XC2_BIN) -q -O2 -A arm64 -H . -o $@ selfhost/tools/xcd.xc
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A arm64 -H . -o $@ selfhost/tools/xcd.xc
 $(XCD_LINUX_BIN): $(XCD_DEPS)
 	@echo "  xc   building xcd for linux"
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -H . -o $@ selfhost/tools/xcd.xc
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A x86_64 -H . -o $@ selfhost/tools/xcd.xc
 $(XCD_WIN64_BIN): $(XCD_DEPS)
 	@echo "  xc   building xcd for win64"
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -o $@ selfhost/tools/xcd.xc
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A win64 -H . -o $@ selfhost/tools/xcd.xc
 # xcmon — the par monitor (the daemons on the subnet and the programs that
 # trace to it, drawn in a browser page: tools/xcmon.html beside it).
 XCMON_BIN       = $(BIN_DIR)/xcmon
@@ -452,35 +452,35 @@ XCMON_LINUX_BIN = bin/linux/xcmon
 XCMON_WIN64_BIN = bin/win64/xcmon.exe
 $(XCMON_BIN): $(XCD_DEPS) selfhost/tools/xcmon.xc
 	@echo "  xc   building xcmon (the par monitor)"
-	@$(XCC_XC2_BIN) -q -O2 -A arm64 -H . -o $@ selfhost/tools/xcmon.xc
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A arm64 -H . -o $@ selfhost/tools/xcmon.xc
 $(XCMON_LINUX_BIN): $(XCD_DEPS) selfhost/tools/xcmon.xc
 	@echo "  xc   building xcmon for linux"
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -H . -o $@ selfhost/tools/xcmon.xc
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A x86_64 -H . -o $@ selfhost/tools/xcmon.xc
 $(XCMON_WIN64_BIN): $(XCD_DEPS) selfhost/tools/xcmon.xc
 	@echo "  xc   building xcmon for win64"
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -o $@ selfhost/tools/xcmon.xc
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A win64 -H . -o $@ selfhost/tools/xcmon.xc
 .PHONY: xcd
 xcd: $(XCD_BIN) $(XCD_LINUX_BIN) $(XCD_WIN64_BIN) $(XCMON_BIN) $(XCMON_LINUX_BIN) $(XCMON_WIN64_BIN)
 
 XCC_SIGN_XC_BIN = $(BIN_DIR)/xcc-sign-xc
 $(XCC_SIGN_XC_BIN): $(XCC_SIGN_XC_DEPS) $(XCC_SIGN_XC_TLS_DEPS)
 	@echo "  xc   building the production signer (stage 2)"
-	@$(XCC_XC2_BIN) -q -O2 -A arm64 -H . $(XCC_SIGN_XC_HOST) $(XCC_SIGN_XC_TLS) -o $@ selfhost/tools/xtsign.xc \
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A arm64 -H . $(XCC_SIGN_XC_HOST) $(XCC_SIGN_XC_TLS) -o $@ selfhost/tools/xtsign.xc \
 	            $(XCC_SIGN_XC_INCS)
 
 # ...and for the cross hosts.
 $(XCC_SIGN_XC_LINUX_BIN): $(XCC_SIGN_XC_DEPS) $(XCC_SIGN_XC_LINUX_TLS_DEPS)
 	@echo "  xc   building the production signer for linux"
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -static -H . $(XCC_SIGN_XC_LINUX_TLS) -o $@ selfhost/tools/xtsign.xc \
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A x86_64 -static -H . $(XCC_SIGN_XC_LINUX_TLS) -o $@ selfhost/tools/xtsign.xc \
 	            $(XCC_SIGN_XC_INCS)
 
 $(XCC_SIGN_XC_WIN64_BIN): $(XCC_SIGN_XC_DEPS)
 	@echo "  xc   building the production signer for win64"
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -o $@ selfhost/tools/xtsign.xc $(XCC_SIGN_XC_INCS)
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A win64 -H . -o $@ selfhost/tools/xtsign.xc $(XCC_SIGN_XC_INCS)
 
 # The self-hosted 6502 assembler, xcc-as: selfhost/tools/xta6502.xc over the
 # assembler in selfhost/asm, for each host. xccas-diff compares its command
@@ -490,18 +490,18 @@ XCC_AS_XC_SRCS = selfhost/tools/xta6502.xc selfhost/asm/Xta.xc selfhost/asm/Xa65
 XCC_AS_XC_BIN = $(BIN_DIR)/xcc-as-xc
 $(XCC_AS_XC_BIN): $(XCC_XC2_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/arm64/lib/*.xc)
 	@echo "  xc   building the production assembler (stage 2)"
-	@$(XCC_XC2_BIN) -q -O2 -A arm64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm -I selfhost/defs
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A arm64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm -I selfhost/defs
 
 $(XCC_AS_XC_LINUX_BIN): $(XCC_XC2_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/x86_64/lib/*.xc) \
                         support/x86_64/runtime/sys-linux.s
 	@echo "  xc   building the production assembler for linux"
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A x86_64 -static -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm -I selfhost/defs
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A x86_64 -static -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm -I selfhost/defs
 
 $(XCC_AS_XC_WIN64_BIN): $(XCC_XC2_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/win64/lib/*.xc)
 	@echo "  xc   building the production assembler for win64"
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A win64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm -I selfhost/defs
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A win64 -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm -I selfhost/defs
 
 .PHONY: production
 production: $(XCC_XC_BIN) $(XCC_XC2_BIN) $(XCC_SIGN_XC_BIN) $(XCC_AS_XC_BIN)
@@ -1590,23 +1590,31 @@ $(XCC_XC_LINUXA64_BIN): $(XCC_XC2_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc)
 $(XCC_AS_XC_LINUXA64_BIN): $(XCC_XC2_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/arm64/lib/*.xc)
 	@echo "  xc   building the production assembler for arm64 linux"
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A arm64-linux -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm -I selfhost/defs
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A arm64-linux -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm -I selfhost/defs
 
-# The signer without TLS: the signer and Route 2 (the offline upload), as
-# on a host with no Mbed TLS. The vendored aarch64 Mbed TLS needs libgcc's
-# 128-bit division (__udivti3), which no library this link has defines.
-$(XCC_SIGN_XC_LINUXA64_BIN): $(XCC_SIGN_XC_DEPS)
+# The signer with TLS, as on x86-64: the shim compiled for aarch64 glibc and
+# the vendored Mbed TLS, statically, with gcc's libgcc.a (from the sysroot,
+# copied from an arm64 Linux machine's gcc) for the 128-bit division
+# (__udivti3) Mbed TLS calls, as gcc links it.
+LINUXA64_LIBGCC ?= $(LINUXA64_SYSROOT)/usr/lib/gcc/aarch64-linux-gnu/14/libgcc.a
+build/linux-arm64/tls/tlsshim.o: $(TLS_SRC)/tlsshim.c
+	@mkdir -p $(dir $@)
+	@/opt/homebrew/opt/llvm/bin/clang --target=aarch64-linux-gnu --sysroot=$(LINUXA64_SYSROOT) -O2 -fPIC \
+	    -DXT_HAVE_TLS=1 -I$(MBEDTLS_PREFIX)/include -I$(TLS_SRC) -c -o $@ $<
+$(XCC_SIGN_XC_LINUXA64_BIN): $(XCC_SIGN_XC_DEPS) build/linux-arm64/tls/tlsshim.o
 	@echo "  xc   building the production signer for arm64 linux"
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A arm64-linux -H . -o $@ selfhost/tools/xtsign.xc $(XCC_SIGN_XC_INCS)
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A arm64-linux -H . -DXT_HAVE_TLS=1 -Wl,build/linux-arm64/tls/tlsshim.o \
+	    $(foreach l,$(MBEDTLS_LIBS),-Wl,$(TLS_SRC)/mbedtls-linux-arm64/lib$(l).a) -Wl,$(LINUXA64_LIBGCC) \
+	    -o $@ selfhost/tools/xtsign.xc $(XCC_SIGN_XC_INCS)
 
 bin/linux-arm64/xcc-sim-6502: src/xts/sim6502.c VERSION $(XCC_XC2_BIN)
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A arm64-linux -H . $(VERSION_DEF) -o $@ $< -Wno-unknown-escape-sequence 2>&1 | grep -v warning || true
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A arm64-linux -H . $(VERSION_DEF) -o $@ $< -Wno-unknown-escape-sequence 2>&1 | grep -v warning || true
 	@test -x $@
 bin/linux-arm64/xcc-sim-68k: src/xst/sim68k.c VERSION $(XCC_XC2_BIN)
 	@mkdir -p $(dir $@)
-	@$(XCC_XC2_BIN) -q -O2 -A arm64-linux -H . $(VERSION_DEF) -o $@ $< -Wno-unknown-escape-sequence 2>&1 | grep -v warning || true
+	@$(XCC_XC2_BIN) -q -O2 --par-style=cpu -A arm64-linux -H . $(VERSION_DEF) -o $@ $< -Wno-unknown-escape-sequence 2>&1 | grep -v warning || true
 	@test -x $@
 
 $(LINUXA64_ARCHIVE): $(SHIP_LINUXA64)

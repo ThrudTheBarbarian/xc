@@ -308,7 +308,7 @@ class Par
         if (hi <= lo)
             return;
         ParDevice.ranClear(proto);
-        // A block --par-auto made from a plain loop that par-check could not
+        // A block --par-style=auto made from a plain loop that par-check could not
         // prove independent, or that a GPU could not run: its kernel is the
         // marker `// xcpar serial`, and it runs as its source reads, one item
         // after another, on this thread. First, before anything asks the
@@ -561,7 +561,7 @@ class Par
 
 // From C: the hardware a block's last run used, as Par.ranOn gives it, joined
 // with ", " ("cuda:…, cpu"); "" when it has not run. The block is named as
-// XC_PAR_REPORT names it: file:line for a loop --par-auto made a block of.
+// XC_PAR_REPORT names it: file:line for a loop --par-style=auto made a block of.
 // The text stays valid until the next call for the same block.
 u8* xc_par_ran_on(u8* block)
 {

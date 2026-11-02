@@ -53,7 +53,7 @@ class IRDbg
     // Is this source file the standard library's? Both layouts: a path under
     // a `support/` directory, or under the root the library was found in.
     // Only `/support/` was tested, so an INSTALLED xcc took its own library
-    // for the program's code: --par-auto outlined the library's loops and a
+    // for the program's code: --par-style=auto outlined the library's loops and a
     // C program built with it crashed at -O3.
     static bool isLibraryPath(String* path)
         {

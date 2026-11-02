@@ -1,6 +1,6 @@
 #!/bin/bash
 # outline.sh — IR outlining (XC_PAR_PROPOSE=outline, stages 1-3 of moving
-# --par-auto into the IR; cpp-front-end.md): every loop Propose would wrap
+# --par-style=auto into the IR; cpp-front-end.md): every loop Propose would wrap
 # becomes a function of its own, called once in its place; in a program with
 # the par runtime, one whose shape allows becomes a block the runtime runs on
 # every core (ParFnChunk). Either way the program gives the output it gives
@@ -47,8 +47,8 @@ i32 main(void)
     return 0;
     }
 XC
-"$XC" -q -O3 -H . "$W/o.xc" -o "$W/plain" >"$W/b1" 2>&1 || { echo "FAIL outline: the plain build"; head -3 "$W/b1"; fail=1; }
-XC_PAR_OUTLINE_TRACE=1 XC_PAR_PROPOSE=outline "$XC" -q -O3 -H . "$W/o.xc" -o "$W/out" >"$W/b2" 2>&1 || { echo "FAIL outline: the outlined build"; head -3 "$W/b2"; fail=1; }
+"$XC" -q --par-style=cpu -O3 -H . "$W/o.xc" -o "$W/plain" >"$W/b1" 2>&1 || { echo "FAIL outline: the plain build"; head -3 "$W/b1"; fail=1; }
+XC_PAR_OUTLINE_TRACE=1 XC_PAR_PROPOSE=outline "$XC" -q --par-style=cpu -O3 -H . "$W/o.xc" -o "$W/out" >"$W/b2" 2>&1 || { echo "FAIL outline: the outlined build"; head -3 "$W/b2"; fail=1; }
 if [ $fail = 0 ]; then
     [ "$("$W/plain")" = "$("$W/out")" ] || { echo "FAIL outline: the outlined program's output differs: $("$W/out")"; fail=1; }
     [ "$("$W/plain")" = "999000 999 250" ] || { echo "FAIL outline: the plain program's output: $("$W/plain")"; fail=1; }
@@ -93,8 +93,8 @@ i32 main(void)
     return 0;
     }
 XC
-"$XC" -q -O3 -H . "$W/b.xc" -o "$W/bplain" >"$W/b3" 2>&1 || { echo "FAIL outline: the plain block program"; head -3 "$W/b3"; fail=1; }
-XC_PAR_OUTLINE_TRACE=1 XC_PAR_PROPOSE=outline "$XC" -q -O3 -H . "$W/b.xc" -o "$W/bout" >"$W/b4" 2>&1 || { echo "FAIL outline: the outlined block program"; head -3 "$W/b4"; fail=1; }
+"$XC" -q --par-style=cpu -O3 -H . "$W/b.xc" -o "$W/bplain" >"$W/b3" 2>&1 || { echo "FAIL outline: the plain block program"; head -3 "$W/b3"; fail=1; }
+XC_PAR_OUTLINE_TRACE=1 XC_PAR_PROPOSE=outline "$XC" -q --par-style=cpu -O3 -H . "$W/b.xc" -o "$W/bout" >"$W/b4" 2>&1 || { echo "FAIL outline: the outlined block program"; head -3 "$W/b4"; fail=1; }
 if [ -x "$W/bplain" ] && [ -x "$W/bout" ]; then
     want=$("$W/bplain")
     for t in 1 3 8; do
@@ -128,7 +128,7 @@ i32 main(void)
     return 0;
     }
 XC
-XC_PAR_OUTLINE_TRACE=1 XC_PAR_PROPOSE=outline "$XC" -q -O3 -H . "$W/g.xc" -o "$W/gout" >"$W/b5" 2>&1 || { echo "FAIL outline: the overlap program"; head -3 "$W/b5"; fail=1; }
+XC_PAR_OUTLINE_TRACE=1 XC_PAR_PROPOSE=outline "$XC" -q --par-style=cpu -O3 -H . "$W/g.xc" -o "$W/gout" >"$W/b5" 2>&1 || { echo "FAIL outline: the overlap program"; head -3 "$W/b5"; fail=1; }
 if [ -x "$W/gout" ]; then
     grep -q 'scale:[0-9]*: outlined, a block' "$W/b5" || { echo "FAIL outline: scale's loop is not a block"; fail=1; }
     for t in 1 8; do
@@ -161,7 +161,7 @@ i32 main(void)
     return 0;
     }
 XC
-XC_PAR_PROPOSE=outline "$XC" -q -O3 -H . "$W/k.xc" -o "$W/kout" >"$W/b6" 2>&1 || { echo "FAIL outline: the kernel program"; head -3 "$W/b6"; fail=1; }
+XC_PAR_PROPOSE=outline "$XC" -q --par-style=cpu -O3 -H . "$W/k.xc" -o "$W/kout" >"$W/b6" 2>&1 || { echo "FAIL outline: the kernel program"; head -3 "$W/b6"; fail=1; }
 if [ -x "$W/kout" ]; then
     kcpu=$(XC_PAR=cpu "$W/kout")
     XC_PAR=gpu XC_PAR_REPORT=1 "$W/kout" > "$W/kgpu.err" 2>&1

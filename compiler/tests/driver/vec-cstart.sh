@@ -55,7 +55,7 @@ int main(int argc, char **argv)
 C
 for p in a b; do
     clang -O2 -o "$W/$p.ref" "$W/$p.c" 2> /dev/null || { echo "FAIL vec-cstart: clang does not build $p.c"; exit 1; }
-    "$XC" -q -O2 -H . -o "$W/$p" "$W/$p.c" > "$W/$p.b" 2>&1 || { echo "FAIL vec-cstart: $p.c does not build"; head -3 "$W/$p.b"; fail=1; continue; }
+    "$XC" -q --par-style=cpu -O2 -H . -o "$W/$p" "$W/$p.c" > "$W/$p.b" 2>&1 || { echo "FAIL vec-cstart: $p.c does not build"; head -3 "$W/$p.b"; fail=1; continue; }
     [ "$("$W/$p")" = "$("$W/$p.ref")" ] || { echo "FAIL vec-cstart: $p gives $("$W/$p"), clang $("$W/$p.ref")"; fail=1; }
 done
 if [ "$PLAT" = osx ] && command -v otool > /dev/null; then

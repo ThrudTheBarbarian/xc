@@ -4626,7 +4626,7 @@ void main(void)
     IRModule* mod = (IRModule*)0;
     if (d.fe().input().hasSuffix(String.withCString(".c")))
         {
-        // With the IR outliner on (--par-auto, or XC_PAR_PROPOSE=outline),
+        // With the IR outliner on (--par-style=auto, or XC_PAR_PROPOSE=outline),
         // the par runtime comes too, lowered from a stub, so loops can
         // become blocks. The user's -I and -D go to clang.
         String* cin = d.fe().input();
@@ -5896,11 +5896,17 @@ void capabilityUsage(void)
     Stdio.printf("  -fpar-kernels=all          Every par block carries every GPU kernel form,\n");
     Stdio.printf("                             for workers on other machines (xcd); on by\n");
     Stdio.printf("                             itself where XC_PAR_REMOTE is set\n");
-    Stdio.printf("  --par-auto                 A plain for (i in a..b) loop becomes a par\n");
-    Stdio.printf("                             block where its shape allows (see -Wpar-auto)\n");
+    Stdio.printf("  --par-style=auto|threads|gpu|cpu\n");
+    Stdio.printf("                             How plain loops run. auto (the default): a\n");
+    Stdio.printf("                             for (i in a..b) loop becomes a par block where\n");
+    Stdio.printf("                             its shape allows, and each block picks CPU\n");
+    Stdio.printf("                             threads, the GPU or both as it runs; threads:\n");
+    Stdio.printf("                             the CPU's threads only; gpu: the GPU first;\n");
+    Stdio.printf("                             cpu: no loop changes (one thread, vectorised).\n");
+    Stdio.printf("                             -Wpar-auto says what was lifted and why not.\n");
     Stdio.printf("  -fgoal=speed|accuracy      The default goal of loops and par blocks\n");
     Stdio.printf("                             (#goal in a file overrides it, :goal(...) both)\n");
-    Stdio.printf("  -Wpar-auto                 Say what --par-auto wrapped and what it demoted\n");
+    Stdio.printf("  -Wpar-auto                 Say what --par-style lifted and what it left\n");
     Stdio.printf("  -falloc=bump|heap          Allocator. Every current target uses heap\n");
     Stdio.printf("  -fmalloc=system|mimalloc   The C heap behind the runtime. mimalloc is\n");
     Stdio.printf("                             -A x86_64 only, linked ahead of libc\n");
@@ -6396,8 +6402,21 @@ bool parseCapabilityFlag(DriverOptions* d, u32* ip, u32 argc)
         d.fe().setParKernelsAll(true);
         *ip = i + (u32)1; return true;
     }
-    if (a.equals(String.withCString("--par-auto"))) {
-        d.fe().setParAuto(true);
+    if (a.hasPrefix(String.withCString("--par-style="))) {
+        // auto (the default): loops become par blocks, each choosing its
+        // devices at run time; threads: the CPU's threads only; gpu: the GPU
+        // first; cpu: nothing is lifted (plain loops stay serial, vectorised
+        // as ever). As the reference.
+        String* v = a.substringFromByte((u32)12);
+        if (v.equals(String.withCString("auto"))) { d.fe().setParAuto(true); d.fe().setParDeviceDefault((u32)0); }
+        else if (v.equals(String.withCString("threads"))) { d.fe().setParAuto(true); d.fe().setParDeviceDefault((u32)1); }
+        else if (v.equals(String.withCString("gpu"))) { d.fe().setParAuto(true); d.fe().setParDeviceDefault((u32)2); }
+        else if (v.equals(String.withCString("cpu"))) { d.fe().setParAuto(false); d.fe().setParDeviceDefault((u32)0); }
+        else {
+            Stdio.printf("xcc: --par-style= expects auto, threads, gpu or cpu, got '%s'\n", v.cString());
+            Process.exit((i32)1);
+            return false;
+        }
         *ip = i + (u32)1; return true;
     }
     if (a.hasPrefix(String.withCString("-fgoal="))) {
