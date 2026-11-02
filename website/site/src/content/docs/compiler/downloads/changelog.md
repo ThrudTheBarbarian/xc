@@ -31,6 +31,9 @@ Everything since 0.9.
   - a loop's counter and its next value share a register, so a vectorised
     loop closes with one branch and no copy (matrix_mul 1.06 times faster,
     struct_copy 1.05).
+  - a byte or 16-bit load goes straight into its register, zero-extended,
+    and every function starts on a 16-byte boundary (arc_array 1.05 times
+    faster).
 - **Big modules compile much faster for arm64.** Two lookups in the arm64
   back end searched every symbol in the module, one of them for every virtual
   call: the compiler's own driver, which imports most of the tree, took 160
@@ -52,7 +55,11 @@ Everything since 0.9.
   category method that can be overridden stays private to its module.
 - **Each compiler archive carries the TLS library** in its own `3p`, so
   `#use <tls>` works from a download with nothing else installed.
+- **A library found in a format this xcc cannot read is skipped.** xcc warns
+  that the copy it found is incompatible, names it by its full path, and keeps
+  searching the other library directories for one it can use.
 
+## Version 0.9 — smaller objects, and a block's own device
 
 Everything since 0.89.
 
