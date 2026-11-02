@@ -418,17 +418,34 @@ def separate(cur):
     out = []
     # The M4 Max's own run of these (benchmark/m4max-<v>/, 0.87): the matrix
     # unit the M3 Max the other arm64 figures come from does not have.
+    # The release's own run when there is one, else the latest earlier one,
+    # carried and labelled with its release: a release that had no M4 run of
+    # its own dropped the row silently (0.88 to 0.9, 2026-11-02).
     m4 = {}
-    mp = os.path.join(ROOT, "m4max-%s" % CURRENT, "results.json") if CURRENT else ""
-    if MAC_TREE and mp and os.path.exists(mp):
-        with open(mp) as fh:
-            m4 = json.load(fh).get("net", {})
+    m4ver = None
+    if MAC_TREE and CURRENT:
+        def vkey(v):
+            # Releases read as decimals: 0.9 follows 0.89, and 0.9.1 follows 0.9.
+            p = [x for x in v.lstrip("v").split(".")]
+            if not all(x.isdigit() for x in p):
+                return (-1, 0.0, 0)
+            return (int(p[0]), float("0." + p[1]) if len(p) > 1 else 0.0, int(p[2]) if len(p) > 2 else 0)
+        have = sorted((d[len("m4max-"):] for d in os.listdir(ROOT)
+                       if d.startswith("m4max-v") and os.path.exists(os.path.join(ROOT, d, "results.json"))),
+                      key=vkey)
+        older = [v for v in have if vkey(v) <= vkey(CURRENT)]
+        if older:
+            m4ver = older[-1]
+            with open(os.path.join(ROOT, "m4max-%s" % m4ver, "results.json")) as fh:
+                m4 = json.load(fh).get("net", {})
     for b in SEPARATE:
         d = cur.get(b, {}).get("O3", {})
         rows = ["| `%s` | xc | Objective-C | C++ (clang) | C++ (GCC) | Swift |" % b, "|---|---|---|---|---|---|"]
         e = m4.get(b, {}).get("O3", {})
         if e.get("xc"):
-            rows.append("| arm64, Apple M4 Max (SME) | %s | %s |" % (secs(e["xc"]),
+            m4lab = "arm64, Apple M4 Max (SME)" if m4ver == CURRENT else \
+                    "arm64, Apple M4 Max (SME, measured with %s)" % m4ver.lstrip("v")
+            rows.append("| %s | %s | %s |" % (m4lab, secs(e["xc"]),
                         " | ".join(secs(e[l]) if e.get(l) else "–" for l, _, _ in LANGS)))
             rows.append("| xc is | | %s |" % " | ".join(("**%s**" % speed(e["xc"] / e[l])) if e.get(l) else "–"
                                                     for l, _, _ in LANGS))
