@@ -678,7 +678,13 @@ class BitSet
                     pl.add((Object*)Seg.with(c, c, allow));
                     if (allow >= (i64)0)
                         {
-                        relate(pv, (u32)allow);
+                        // A back edge's value first: its copy runs on every
+                        // trip, the entry's once (array_map, 2026-11-02). As
+                        // the original.
+                        if (pbi >= (i32)bi)
+                            relateFirst(pv, (u32)allow);
+                        else
+                            relate(pv, (u32)allow);
                         relate((u32)allow, pv);
                         }
                     }
@@ -728,6 +734,19 @@ class BitSet
             _segLo.set(v, (Object*)Number.with(lo));
             _segHi.set(v, (Object*)Number.with(hi));
             }
+        }
+
+    void relateFirst(u32 a, u32 b)
+        {
+        if (a >= _nv)
+            return;
+        Array* l = (Array*)_related.get(a);
+        if (l == (Array*)0)
+            {
+            l = new Array();
+            _related.set(a, (Object*)l);
+            }
+        l.insert((u32)0, (Object*)Number.with(b));
         }
 
     void relate(u32 a, u32 b)
@@ -903,6 +922,22 @@ class BitSet
         return true;
         }
 
+    // fits, and keeps out of a register held for partners still to come that v
+    // would conflict with (array_map, 2026-11-02). Mirrors the original.
+    bool fitsHeld(u32 v, u32 r, Array* regVals, Array* heldFor, bool mayUseCaller, u32 nCaller)
+        {
+        if (!fits(v, r, regVals, mayUseCaller, nCaller))
+            return false;
+        Array* held = (Array*)heldFor.get(r);
+        for (u32 k = (u32)0; k < held.count(); k = k + (u32)1)
+            {
+            u32 w = ((Number*)held.get(k)).asU32();
+            if (w != v && homeOf(w) == (String*)0 && conflict(v, w))
+                return false;
+            }
+        return true;
+        }
+
     void assign(Array* cands, Array* callee, Array* caller)
         {
         Array* pool = new Array();
@@ -914,8 +949,14 @@ class BitSet
         if (nr == (u32)0)
             return;
         Array* regVals = new Array();
+        // A register taken for partners still to come is held for them (see
+        // fitsHeld).
+        Array* heldFor = new Array();
         for (u32 i = (u32)0; i < nr; i = i + (u32)1)
+            {
             regVals.add((Object*)new Array());
+            heldFor.add((Object*)new Array());
+            }
         BitSet* candSet = BitSet.withCapacity(_nv);
         for (u32 ci = (u32)0; ci < cands.count(); ci = ci + (u32)1)
             candSet.add(((Number*)cands.get(ci)).asU32());
@@ -933,7 +974,7 @@ class BitSet
                 for (u32 r = (u32)0; r < nr; r = r + (u32)1)
                     if (((String*)pool.get(r)).equals(hr))
                         {
-                        if (fits(v, r, regVals, mayUseCaller, caller.count()))
+                        if (fitsHeld(v, r, regVals, heldFor, mayUseCaller, caller.count()))
                             chosen = (i32)r;
                         r = nr;
                         }
@@ -959,7 +1000,7 @@ class BitSet
                 }
             for (u32 r = (u32)0; r < nr && chosen < (i32)0 && waiting.count() > (u32)0; r = r + (u32)1)
                 {
-                if (!fits(v, r, regVals, mayUseCaller, caller.count()))
+                if (!fitsHeld(v, r, regVals, heldFor, mayUseCaller, caller.count()))
                     continue;
                 bool all = true;
                 for (u32 q = (u32)0; q < waiting.count() && all; q = q + (u32)1)
@@ -973,8 +1014,14 @@ class BitSet
                             all = false;
                     }
                 if (all)
+                    {
                     chosen = (i32)r;
+                    ((Array*)heldFor.get(r)).addAll(waiting);
+                    }
                 }
+            for (u32 r = (u32)0; r < nr && chosen < (i32)0; r = r + (u32)1)
+                if (fitsHeld(v, r, regVals, heldFor, mayUseCaller, caller.count()))
+                    chosen = (i32)r;
             for (u32 r = (u32)0; r < nr && chosen < (i32)0; r = r + (u32)1)
                 if (fits(v, r, regVals, mayUseCaller, caller.count()))
                     chosen = (i32)r;

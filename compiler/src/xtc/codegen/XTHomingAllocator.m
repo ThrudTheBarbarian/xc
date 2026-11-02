@@ -359,7 +359,14 @@
                     {
                     if (!related[pv])
                         related[pv] = [NSMutableArray array];
-                    [related[pv] addObject:@(allow)];
+                    // A back edge's value first: its copy runs on every trip,
+                    // the entry's once. In operand order the phi took the
+                    // entry value's register and left `i + 64` a copy on the
+                    // back edge (array_map's vector loop, 2026-11-02).
+                    if (predBi >= bi)
+                        [related[pv] insertObject:@(allow) atIndex:0];
+                    else
+                        [related[pv] addObject:@(allow)];
                     if (!related[@(allow)])
                         related[@(allow)] = [NSMutableArray array];
                     [related[@(allow)] addObject:pv];
@@ -534,16 +541,33 @@
           NSSet<NSNumber*>* candSet = [NSSet setWithArray:cands];
           NSUInteger nr = pool.count;
           NSMutableArray<NSMutableArray<NSNumber*>*>* regVals = [NSMutableArray array];
+          // A register taken for partners still to come is held for them: a
+          // later value that would conflict with one keeps out unless no
+          // other register fits. Without it, values allocated between `i + 64`
+          // and its phi filled the register the two were to share, and the
+          // copy stayed on the back edge (array_map, 2026-11-02).
+          NSMutableArray<NSMutableArray<NSNumber*>*>* heldFor = [NSMutableArray array];
           for (NSUInteger i = 0; i < nr; i++)
+              {
               [regVals addObject:[NSMutableArray array]];
+              [heldFor addObject:[NSMutableArray array]];
+              }
           for (NSNumber* v in cands)
               {
               BOOL mayUseCaller = ![crossesCall containsObject:v];
-              BOOL (^fits)(NSUInteger) = ^BOOL(NSUInteger r) {
+              BOOL (^fitsAny)(NSUInteger) = ^BOOL(NSUInteger r) {
                 if (!mayUseCaller && [callerSet containsObject:pool[r]])
                     return NO; // needs callee-saved
                 for (NSNumber* y in regVals[r])
                     if (conflict(v, y))
+                        return NO;
+                return YES;
+              };
+              BOOL (^fits)(NSUInteger) = ^BOOL(NSUInteger r) {
+                if (!fitsAny(r))
+                    return NO;
+                for (NSNumber* w in heldFor[r])
+                    if (![w isEqual:v] && !homeReg[w] && conflict(v, w))
                         return NO;
                 return YES;
               };
@@ -584,10 +608,16 @@
                           break;
                       }
                   if (all)
+                      {
                       chosen = (NSInteger)r;
+                      [heldFor[r] addObjectsFromArray:waiting];
+                      }
                   }
               for (NSUInteger r = 0; chosen < 0 && r < nr; r++)
                   if (fits(r))
+                      chosen = (NSInteger)r;
+              for (NSUInteger r = 0; chosen < 0 && r < nr; r++)
+                  if (fitsAny(r))
                       chosen = (NSInteger)r;
               if (chosen < 0)
                   continue; // unhomed → stays in its slot
