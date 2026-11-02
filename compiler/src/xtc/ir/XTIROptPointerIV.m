@@ -465,7 +465,12 @@ static BOOL pivAffineIndex(XTIROperand* o, XTIRValueId ivId, XTIRType* ivTy, XTI
             }
         BOOL initIsZero = (iok && initConst == 0);
 
-        NSMutableArray<XTIRInsn*>* newBodyHead = [NSMutableArray array];                       // pointer steps + offset EAs
+        NSMutableArray<XTIRInsn*>* newBodyHead = [NSMutableArray array];                       // offset EAs
+        // The pointer steps go LAST: p_next is read only by p's back-edge phi,
+        // so defined after p's last use the two share a register and the step
+        // is one add in place. First, p_next lived across the whole body
+        // beside p, and int_muldiv's spilled to the stack (2026-11-02).
+        NSMutableArray<XTIRInsn*>* newBodyTail = [NSMutableArray array];
         NSMutableDictionary<NSNumber*, NSNumber*>* replace = [NSMutableDictionary dictionary]; // old EA result → new value
         NSMutableSet<XTIRInsn*>* removeEAs = [NSMutableSet set];
 
@@ -580,7 +585,7 @@ static BOOL pivAffineIndex(XTIROperand* o, XTIRValueId ivId, XTIRType* ivTy, XTI
                                                                      [XTIROperand immIWithType:ivTy
                                                                                          value:step * gs] ]
                                                            dbgLoc:nil];
-            [newBodyHead addObject:stepInsn];
+            [newBodyTail addObject:stepInsn];
             XTIRInsn* pPhi = [[XTIRInsn alloc] initWithOpcode:XTIROpPhi
                                                        result:p
                                                      operands:@[ [XTIROperand blockWithRef:PH], [XTIROperand useWithValueId:phIncoming],
@@ -610,12 +615,13 @@ static BOOL pivAffineIndex(XTIROperand* o, XTIRValueId ivId, XTIRType* ivTy, XTI
                 }
             }
 
-        // Rebuild B: pointer steps + offset EAs first (they depend only on the
-        // new phis / each other), then the surviving body with old EAs dropped.
+        // Rebuild B: the offset EAs first (they depend only on the new phis),
+        // then the surviving body with old EAs dropped, then the pointer steps.
         NSMutableArray<XTIRInsn*>* nb = [newBodyHead mutableCopy];
         for (XTIRInsn* insn in B.instructions)
             if (![removeEAs containsObject:insn])
                 [nb addObject:insn];
+        [nb addObjectsFromArray:newBodyTail];
         [B.instructions setArray:nb];
 
         // Rewire every use of a replaced ElementAddr result across the function.

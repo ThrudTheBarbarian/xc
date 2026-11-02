@@ -585,7 +585,11 @@
         // `a` — correct at -O0/-O1, wrong at -O2+ (#1125).
         i64 pivInitV = (i64)0;
         bool pivInitZero = self.constValue(defOf, ivInit, &pivInitV) && pivInitV == (i64)0;
-        Array* head = new Array();    // pointer steps + offset ElementAddrs
+        Array* head = new Array();    // offset ElementAddrs
+        // The pointer steps go LAST: p_next is read only by p's back-edge phi,
+        // so defined after p's last use the two share a register (int_muldiv's
+        // spilled, 2026-11-02). As the original.
+        Array* tail = new Array();
         Array* deadEAs = new Array(); // the originals they replace
         Map* replace = new Map();     // old ElementAddr result → new value
 
@@ -618,7 +622,7 @@
             stepInsn.setRes(pNext);
             stepInsn.add(IROperand.useVal(p));
             stepInsn.add(IROperand.immI((i32)((i64)_pivStep * gs), ivTy));
-            head.add((Object*)stepInsn);
+            tail.add((Object*)stepInsn);
 
             // `base + ivInit`, materialised in the PREHEADER when the loop does
             // not start at zero. In a HELPER, not inline: pivRewrite is already
@@ -664,9 +668,9 @@
                 }
             }
 
-        // Rebuild the latch: the pointer steps and offset addresses first (they
-        // depend only on the new phis and each other), then the surviving body
-        // with the old ElementAddrs dropped.
+        // Rebuild the latch: the offset addresses first (they depend only on
+        // the new phis), then the surviving body with the old ElementAddrs
+        // dropped, then the pointer steps.
         Array* nb = new Array();
         for (u32 i = (u32)0; i < head.count(); i = i + (u32)1)
             nb.add(head.get(i));
@@ -677,6 +681,8 @@
                 continue;
             nb.add((Object*)n);
             }
+        for (u32 i = (u32)0; i < tail.count(); i = i + (u32)1)
+            nb.add(tail.get(i));
         B.setInsns(nb);
 
         // Every use of a replaced address, across the whole function.
