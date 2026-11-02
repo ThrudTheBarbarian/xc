@@ -1567,6 +1567,54 @@ $(LINUX_ARCHIVE): $(SHIP_LINUX)
 	tar -cjf $@ -C $(DIST_STAGE) xcc-linux-$(VERSION)
 	@echo "dist -> $@"
 
+# arm64 Linux, glibc (a Raspberry Pi 5 on Debian trixie, and any aarch64
+# glibc Linux): every tool cross-built here by the stage-2 compiler, the two
+# simulators through its C path (clang's half against the aarch64 sysroot,
+# /opt/clang/linux/aarch64-linux-gnu, with the kernel's headers in it).
+LINUXA64_SYSROOT        ?= /opt/clang/linux/aarch64-linux-gnu
+XCC_XC_LINUXA64_BIN      = bin/linux-arm64/xcc-xc
+XCC_SIGN_XC_LINUXA64_BIN = bin/linux-arm64/xcc-sign-xc
+XCC_AS_XC_LINUXA64_BIN   = bin/linux-arm64/xcc-as-xc
+LINUXA64_SIM_BINS        = bin/linux-arm64/xcc-sim-6502 bin/linux-arm64/xcc-sim-68k
+SHIP_LINUXA64 = $(XCC_XC_LINUXA64_BIN) $(XCC_SIGN_XC_LINUXA64_BIN) $(XCC_AS_XC_LINUXA64_BIN) \
+                $(LINUXA64_SIM_BINS)
+LINUXA64_ARCHIVE = $(DIST_DIR)/xcc-linux-arm64-$(VERSION).tar.bz2
+
+$(XCC_XC_LINUXA64_BIN): $(XCC_XC2_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
+                        $(wildcard support/generic/lib/*.xc) $(wildcard support/arm64/lib/*.xc)
+	@echo "  xc   building the production compiler for arm64 linux (split)"
+	@mkdir -p $(dir $@) build
+	@XCC=$(XCC_XC2_BIN) SPLIT_DIR=build/split-linux-arm64 SPLIT_VERSION=$(VERSION) bash $(SPLIT_BUILD) $@ -A arm64-linux -j $(SPLIT_JOBS) > build/split-linux-arm64.log 2>&1 \
+	    || { tail -15 build/split-linux-arm64.log; exit 1; }
+
+$(XCC_AS_XC_LINUXA64_BIN): $(XCC_XC2_BIN) $(XCC_AS_XC_SRCS) $(wildcard support/arm64/lib/*.xc)
+	@echo "  xc   building the production assembler for arm64 linux"
+	@mkdir -p $(dir $@)
+	@$(XCC_XC2_BIN) -q -O2 -A arm64-linux -H . -DXCC_VERSION='"$(VERSION)"' -o $@ selfhost/tools/xta6502.xc -I selfhost/asm -I selfhost/defs
+
+# The signer without TLS: the signer and Route 2 (the offline upload), as
+# on a host with no Mbed TLS. The vendored aarch64 Mbed TLS needs libgcc's
+# 128-bit division (__udivti3), which no library this link has defines.
+$(XCC_SIGN_XC_LINUXA64_BIN): $(XCC_SIGN_XC_DEPS)
+	@echo "  xc   building the production signer for arm64 linux"
+	@mkdir -p $(dir $@)
+	@$(XCC_XC2_BIN) -q -O2 -A arm64-linux -H . -o $@ selfhost/tools/xtsign.xc $(XCC_SIGN_XC_INCS)
+
+bin/linux-arm64/xcc-sim-6502: src/xts/sim6502.c VERSION $(XCC_XC2_BIN)
+	@mkdir -p $(dir $@)
+	@$(XCC_XC2_BIN) -q -O2 -A arm64-linux -H . $(VERSION_DEF) -o $@ $< -Wno-unknown-escape-sequence 2>&1 | grep -v warning || true
+	@test -x $@
+bin/linux-arm64/xcc-sim-68k: src/xst/sim68k.c VERSION $(XCC_XC2_BIN)
+	@mkdir -p $(dir $@)
+	@$(XCC_XC2_BIN) -q -O2 -A arm64-linux -H . $(VERSION_DEF) -o $@ $< -Wno-unknown-escape-sequence 2>&1 | grep -v warning || true
+	@test -x $@
+
+$(LINUXA64_ARCHIVE): $(SHIP_LINUXA64)
+	$(call STAGE_DIST,linux-arm64,,/opt/homebrew/opt/llvm/bin/llvm-strip,$(SHIP_LINUXA64),)
+	@rm -f $@
+	tar -cjf $@ -C $(DIST_STAGE) xcc-linux-arm64-$(VERSION)
+	@echo "dist -> $@"
+
 $(WIN64_ARCHIVE): $(SHIP_WIN64)
 	$(call STAGE_DIST,win64,.exe,/opt/homebrew/opt/llvm/bin/llvm-strip,$(SHIP_WIN64),$(WIN64_BINS))
 	@rm -f $@
@@ -1609,12 +1657,13 @@ $(XCD_WIN64_ARCHIVE): $(XCD_WIN64_BIN) $(XCMON_WIN64_BIN) tools/xcmon.html
 	@rm -f $@
 	cd $(DIST_STAGE) && zip -qr $(abspath $@) xcd-win64-$(VERSION)
 	@echo "dist -> $@"
-.PHONY: dist dist-osx dist-linux dist-win64 dist-xcd
+.PHONY: dist dist-osx dist-linux dist-linux-arm64 dist-win64 dist-xcd
 dist-osx:   $(OSX_ARCHIVE)
 dist-linux: $(LINUX_ARCHIVE)
+dist-linux-arm64: $(LINUXA64_ARCHIVE)
 dist-win64: $(WIN64_ARCHIVE)
 dist-xcd:   $(XCD_OSX_ARCHIVE) $(XCD_LINUX_ARCHIVE) $(XCD_WIN64_ARCHIVE)
-dist:       dist-osx dist-linux dist-win64 dist-xcd
+dist:       dist-osx dist-linux dist-linux-arm64 dist-win64 dist-xcd
 
 endif   # macOS-only cross-builds + distribution archives
 
