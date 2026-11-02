@@ -3,7 +3,7 @@ title: Downloads
 description: Prebuilt xcc toolchain archives for macOS, Linux and Windows, the arm9 sysroot, and UXKit's GTK 4 library.
 ---
 
-The current release line is **xcc 0.9**. One install contains the whole toolchain: the
+The current release line is **xcc 0.9.1**. One install contains the whole toolchain: the
 compiler (`xcc`, which runs every stage itself, from parsing through code generation
 for all seven targets to assembly and linking), the signing tool (`xcc-sign`), the
 6502 assembler (`xcc-as`), the simulators (`xcc-sim-6502`, `xcc-sim-68k`), the
@@ -12,15 +12,15 @@ cross-build native binaries for every target with **no other toolchain installed
 
 | Platform | Download | Size |
 | --- | --- | --- |
-| macOS (Apple silicon) | [xcc-osx-0.9.tar.bz2](/downloads/xcc-osx-0.9.tar.bz2) | 10.5 MB |
-| Linux (x86_64) | [xcc-linux-0.9.tar.bz2](/downloads/xcc-linux-0.9.tar.bz2) | 7.0 MB |
-| Windows (x64) | [xcc-win64-0.9.zip](/downloads/xcc-win64-0.9.zip) | 8.5 MB |
-| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.9.tar.bz2](/downloads/xcc-arm9-sysroot-0.9.tar.bz2) | 830 KB |
-| xcd, the par daemon (macOS) | [xcd-osx-0.9.tar.bz2](/downloads/xcd-osx-0.9.tar.bz2) | 861 KB |
-| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.9.tar.bz2](/downloads/xcd-linux-0.9.tar.bz2) | 819 KB |
-| xcd, the par daemon (Windows x64) | [xcd-win64-0.9.zip](/downloads/xcd-win64-0.9.zip) | 926 KB |
-| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.9.tar.bz2](/downloads/xcc-uxgtk-linux-0.9.tar.bz2) | 112 KB |
-| UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.9.tar.bz2](/downloads/xcc-uxkit-0.9.tar.bz2) | 2.9 MB |
+| macOS (Apple silicon) | [xcc-osx-0.9.1.tar.bz2](/downloads/xcc-osx-0.9.1.tar.bz2) | 15.5 MB |
+| Linux (x86_64) | [xcc-linux-0.9.1.tar.bz2](/downloads/xcc-linux-0.9.1.tar.bz2) | 10.2 MB |
+| Windows (x64) | [xcc-win64-0.9.1.zip](/downloads/xcc-win64-0.9.1.zip) | 13.8 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.9.1.tar.bz2](/downloads/xcc-arm9-sysroot-0.9.1.tar.bz2) | 830 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-0.9.1.tar.bz2](/downloads/xcd-osx-0.9.1.tar.bz2) | 864 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.9.1.tar.bz2](/downloads/xcd-linux-0.9.1.tar.bz2) | 808 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-0.9.1.zip](/downloads/xcd-win64-0.9.1.zip) | 926 KB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.9.1.tar.bz2](/downloads/xcc-uxgtk-linux-0.9.1.tar.bz2) | 112 KB |
+| UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.9.1.tar.bz2](/downloads/xcc-uxkit-0.9.1.tar.bz2) | 3.0 MB |
 
 Every archive contains the same compiler. Each host build cross-compiles to **all**
 targets, so the platform you download for decides only where the compiler runs. That
@@ -35,23 +35,23 @@ in the host archive.
 ## macOS
 
 ```bash
-tar xjf xcc-osx-0.9.tar.bz2
-export PATH="$PWD/xcc-osx-0.9/bin:$PATH"
+tar xjf xcc-osx-0.9.1.tar.bz2
+export PATH="$PWD/xcc-osx-0.9.1/bin:$PATH"
 xcc -v
 ```
 
 The compiler finds its libraries **relative to its own binary**, with no flags,
 environment variables or fixed install path, so you can move the directory anywhere.
 The binaries are not notarised, so the first run on a fresh macOS install may need a
-one-time Gatekeeper override (`xattr -dr com.apple.quarantine xcc-osx-0.9/`).
+one-time Gatekeeper override (`xattr -dr com.apple.quarantine xcc-osx-0.9.1/`).
 
 ## arm9 sysroot
 
 Needed only for `-A arm9`. Unpack it anywhere and point `-L` at it:
 
 ```bash
-tar xjf xcc-arm9-sysroot-0.9.tar.bz2
-xcc -A arm9 -L path/to/xcc-arm9-sysroot-0.9 -o prog.so prog.xc
+tar xjf xcc-arm9-sysroot-0.9.1.tar.bz2
+xcc -A arm9 -L path/to/xcc-arm9-sysroot-0.9.1 -o prog.so prog.xc
 ```
 
 It holds one file: `libc.so`, newlib 4.4.0.20231231 rebuilt as position-independent
@@ -72,8 +72,8 @@ program is a glibc executable that loads GTK 4, which is how `-A x86_64` links
 by default:
 
 ```bash
-tar xjf xcc-uxgtk-linux-0.9.tar.bz2
-xcc -A x86_64 app.xc -L xcc-uxgtk-linux-0.9 -lUXGtk -lgtk-4 -o app
+tar xjf xcc-uxgtk-linux-0.9.1.tar.bz2
+xcc -A x86_64 app.xc -L xcc-uxgtk-linux-0.9.1 -lUXGtk -lgtk-4 -o app
 ```
 
 The machine that runs the program needs glibc 2.34 or later and GTK 4; this
@@ -85,14 +85,14 @@ rebuilds it against any machine's GTK 4.
 ## UXKit library
 
 UXKit built as a library for macOS (arm64), Windows (x64), Linux (x86_64) and the
-web, for xcc 0.9. Each compiler has its own third-party tree, which
-`xcc --print-3p-dir` names: `3p/` inside the unpacked archive, or `/opt/xcc/0.9/3p`
+web, for xcc 0.9.1. Each compiler has its own third-party tree, which
+`xcc --print-3p-dir` names: `3p/` inside the unpacked archive, or `/opt/xcc/0.9.1/3p`
 after `make install`. Copy UXKit into it (with `sudo` for `/opt`):
 
 ```bash
-tar xjf xcc-uxkit-0.9.tar.bz2
+tar xjf xcc-uxkit-0.9.1.tar.bz2
 mkdir -p "$(xcc --print-3p-dir)"
-cp -R xcc-uxkit-0.9/3p/uxkit "$(xcc --print-3p-dir)/"
+cp -R xcc-uxkit-0.9.1/3p/uxkit "$(xcc --print-3p-dir)/"
 ```
 
 Use the UXKit archive of the same version as the compiler: 0.9 changed the object
@@ -111,8 +111,8 @@ have. If `tar` says it cannot run `bzip2`, install it first (on Ubuntu,
 `sudo apt-get install -y bzip2`).
 
 ```bash
-tar xjf xcc-linux-0.9.tar.bz2
-export PATH="$PWD/xcc-linux-0.9/bin:$PATH"
+tar xjf xcc-linux-0.9.1.tar.bz2
+export PATH="$PWD/xcc-linux-0.9.1/bin:$PATH"
 xcc -v
 ```
 
@@ -126,7 +126,7 @@ covers a minimal install, NVIDIA, and access over ssh.
 
 ## Windows
 
-Unzip `xcc-win64-0.9.zip` anywhere and add its `bin` folder to `PATH` (or
+Unzip `xcc-win64-0.9.1.zip` anywhere and add its `bin` folder to `PATH` (or
 invoke `bin\xcc.exe` by path). The binaries are self-contained; no runtime installer is
 needed.
 
