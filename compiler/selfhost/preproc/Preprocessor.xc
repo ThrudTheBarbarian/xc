@@ -130,6 +130,11 @@ class IfFrame
     Map* _stdSpellings;   // String@ -> Array@ of String@
     Array* _preludeNames; // of String@, first-seen order
     callback _stdImportsOf Array*(String* lib);
+    // The interface format of a library this compiler cannot read, else -1
+    // (the front end supplies it); a library it names is skipped and the
+    // search goes on, as the reference's probeLibDirs (owner, 2026-11-02).
+    callback _ifaceUnreadable i64(String* lib);
+    Array* _skippedLibs;   // of Array@ [path, Number@ format], this search's
     // A library's own #defines (its interface's `defines`), read through
     // `_definesOf` as `_stdImportsOf` is, defined after its stdImports. The
     // file each macro came from decides which a library's interface carries
@@ -321,7 +326,7 @@ class IfFrame
                     cand.appendCString(".");
                     cand.append((String*)exts.get(e));
                     String* p = ((String*)dirs.get(di)).appendingPathComponent(cand);
-                    if (Files.existsExact(p))
+                    if (Files.existsExact(p) && libUsable(p))
                         found = p;
                     }
                 if (found != (String*)0)
@@ -354,7 +359,7 @@ class IfFrame
             }
         if (hits.count() == (u32)1)
             {
-            noteMetadataImport((String*)hits.get((u32)0));
+            takeLib((String*)hits.get((u32)0), filename, line);
             String* xc = ((String*)hitDirs.get((u32)0)).appendingPathComponent(String.withCString("xc"));
             if (Files.exists(xc))
                 {
@@ -487,6 +492,48 @@ class IfFrame
     void setStdImportsReader(callback f Array*(String* lib))
         {
         _stdImportsOf = f;
+        }
+    void setIfaceVersionReader(callback f i64(String* lib))
+        {
+        _ifaceUnreadable = f;
+        }
+
+    // A library found at p is usable unless its interface is in a format this
+    // compiler does not read; then it is noted, for the warning, and skipped.
+    bool libUsable(String* p)
+        {
+        callback f i64(String* lib) = _ifaceUnreadable;
+        if (!f)
+            return true;
+        i64 v = f(p);
+        if (v < (i64)0)
+            return true;
+        if (_skippedLibs == (Array*)0)
+            _skippedLibs = new Array();
+        Array* e = new Array();
+        e.add((Object*)p);
+        e.add((Object*)Number.withI64(v));
+        _skippedLibs.add((Object*)e);
+        return false;
+        }
+
+    // The library a search settled on, with a warning for each copy it passed
+    // over. As the reference.
+    void takeLib(String* p, String* filename, u32 line)
+        {
+        for (u32 i = (u32)0; _skippedLibs != (Array*)0 && i < _skippedLibs.count(); i = i + (u32)1)
+            {
+            Array* e = (Array*)_skippedLibs.get(i);
+            String* m = String.withCString("'");
+            m.append((String*)e.get((u32)0));
+            m.appendFormat("' carries interface format v%lld, which this compiler does not read: skipped, using '",
+                           ((Number*)e.get((u32)1)).asI64());
+            m.append(p);
+            m.appendCString("'");
+            _warn("", Preprocessor.positionedAs(filename, line, "warning", m));
+            }
+        _skippedLibs = (Array*)0;
+        noteMetadataImport(p);
         }
     // The prelude's files and the standard library's: what the interface
     // does not export (bug 637).
@@ -1848,6 +1895,7 @@ class IfFrame
             // mingw IMPORT LIBRARIES (`libuser32.a`), matched nothing at all,
             // so a program naming any Win32 library beyond the three bundled
             // stubs could not be compiled (bug 120).
+            _skippedLibs = (Array*)0;
             Array* exts = new Array();
             // The target row's order when the driver gave one (the reference's
             // sharedLibExtensions); else decided by the arch, as before.
@@ -1892,31 +1940,40 @@ class IfFrame
                     cand.appendCString(".");
                     cand.append((String*)exts.get(e));
                     String* p = dir.appendingPathComponent(cand);
-                    if (Files.existsExact(p))
+                    if (Files.existsExact(p) && libUsable(p))
                         {
-                        noteMetadataImport(p);
+                        takeLib(p, filename, line);
                         return;
                         }
                     }
                 // Already a lib name? The reference tries the bare stem too,
                 // so `#use <libfoo.a>` and the like resolve.
                 String* pbare = dir.appendingPathComponent(target);
-                if (Files.existsExact(pbare))
+                if (Files.existsExact(pbare) && libUsable(pbare))
                     {
-                    noteMetadataImport(pbare);
+                    takeLib(pbare, filename, line);
                     return;
                     }
                 String* cand3 = String.withString(target);
                 cand3.appendCString(".xtc.iface");
                 String* p3 = dir.appendingPathComponent(cand3);
-                if (Files.existsExact(p3))
+                if (Files.existsExact(p3) && libUsable(p3))
                     {
-                    noteMetadataImport(p3);
+                    takeLib(p3, filename, line);
                     return;
                     }
                 }
             if (_arch != 0 && probeThirdParty(target, isSystemForm, exts, filename, line))
                 return;
+            // Every copy found unreadable: take the first, and the import
+            // refuses it by path as before.
+            if (_skippedLibs != (Array*)0 && _skippedLibs.count() > (u32)0)
+                {
+                String* first = (String*)((Array*)_skippedLibs.get((u32)0)).get((u32)0);
+                _skippedLibs = (Array*)0;
+                noteMetadataImport(first);
+                return;
+                }
             }
         if (foundPath == 0 && _appleFrameworks && probeAppleFramework(target))
             return;

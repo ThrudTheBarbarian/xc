@@ -46,6 +46,10 @@ NS_ASSUME_NONNULL_BEGIN
 // The target's own directory in the third-party tree, tried before the arch
 // one: ios, ios-sim or android (each the arm64 back end, each its own library).
 @property(nonatomic, copy, nullable) NSString* targetPlatformName;
+// The target reads only interface format v2 (the compact object header): a
+// library found with an older or a newer format is skipped with a warning and
+// the search goes on (owner, 2026-11-02).
+@property(nonatomic) BOOL ifaceNeedsV2;
 
 /****************************************************************************\
 |* macOS and iOS: a name that is no source file and no library may be a

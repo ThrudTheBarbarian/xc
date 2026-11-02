@@ -2349,6 +2349,11 @@ String* appleSdkFor(FeOptions* o)
     }
 
 // The `stdImports` of a library the preprocessor has just recorded (bug 637).
+i64 ifaceUnreadableOf(String* lib)
+{
+    return IfaceImport.unreadableVersion(lib);
+}
+
 Array* stdImportsOfLibrary(String* lib)
     {
     return IfaceImport.stdImportsOf(lib);
@@ -2391,6 +2396,8 @@ Preprocessor* buildPP(FeOptions* o)
     for (u32 i = (u32)0; i < o.stdlibs().count(); i = i + (u32)1)
         pp.addStdlibDir((String*)o.stdlibs().get(i));
     pp.setStdImportsReader(&stdImportsOfLibrary);
+    IfaceImport.setNeedsV2(o.targetRow() != (TargetRow*)0 && o.targetRow().compactObjects());
+    pp.setIfaceVersionReader(&ifaceUnreadableOf);
     pp.setDefinesReader(&definesOfLibrary);
     // macOS and iOS: `#import <F>` may name a system framework.
     // On exactly when the row names an Apple SDK (the reference says why).

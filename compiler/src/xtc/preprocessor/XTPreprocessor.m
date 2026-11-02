@@ -58,6 +58,9 @@
 @property(nonatomic) NSMutableSet<NSString*>* metadataImportSet;
 @property(nonatomic) NSMutableDictionary<NSString*, NSString*>* mutableStdlibFiles;
 @property(nonatomic) NSMutableSet<NSString*>* mutableLibraryFiles;
+// Libraries the current search found and passed over for their interface
+// format: path -> the format they carry, in the order found.
+@property(nonatomic) NSMutableArray<NSArray*>* skippedLibraries;
 /****************************************************************************\
 |* Recursion depth of preprocessSource: (0 = the top-level file). Used to
 |* register the ENTRY file in importedFiles, so an import cycle that leads
@@ -1232,11 +1235,42 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
         for (NSString* cand in candidates)
             {
             NSString* p = [dir stringByAppendingPathComponent:cand];
-            if (fileExistsCaseSensitive(fm, p))
-                return p;
+            if (!fileExistsCaseSensitive(fm, p))
+                continue;
+            // A library whose interface this compiler cannot read is passed
+            // over, and the search goes on: one 3p tree serves every installed
+            // compiler, so the global /opt/xcc/3p can hold an older build of
+            // a library the release's own 3p lacks (owner, 2026-11-02).
+            NSInteger v = [self unreadableIfaceVersionOf:p];
+            if (v >= 0)
+                {
+                if (!self.skippedLibraries)
+                    self.skippedLibraries = [NSMutableArray array];
+                [self.skippedLibraries addObject:@[ p, @(v) ]];
+                continue;
+                }
+            return p;
             }
         }
     return nil;
+    }
+
+// The interface format a library carries when this compiler cannot read it,
+// else -1 (readable, or no xtc interface at all: a C library). As the
+// driver's gate: v2 on a compact-objects target, at most v2 anywhere; an
+// absent field is v1.
+- (NSInteger)unreadableIfaceVersionOf:(NSString*)path
+    {
+    NSString* json = [XTInterfaceImporter interfaceJSONFromLibrary:path];
+    if (!json.length)
+        return -1;
+    NSDictionary* hdr = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding]
+                                                        options:0
+                                                          error:NULL];
+    NSInteger v = [hdr isKindOfClass:[NSDictionary class]] ? [hdr[@"ifaceVersion"] integerValue] : 0;
+    if (v > 2 || (self.ifaceNeedsV2 && v < 2))
+        return v < 1 ? 1 : v;
+    return -1;
     }
 
 /****************************************************************************\
@@ -1466,6 +1500,7 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
         // appended defaults (the vendored sysroot) — so an explicit -L wins
         // over /opt/xcc/3p, and 3p wins over a possibly-stale sysroot copy.
         NSUInteger nExplicit = MIN(_explicitLibraryPathCount, _libraryPaths.count);
+        self.skippedLibraries = nil;
         NSString* hit = vendorQual ? nil
                                    : [self probeLibDirs:[_libraryPaths subarrayWithRange:
                                                                            NSMakeRange(0, nExplicit)]
@@ -1547,6 +1582,18 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
                           candidates:libCandidates
                                   fm:fm];
             }
+        // Every copy found unreadable: take the first, and the driver refuses
+        // it by path as before. Otherwise each passed-over copy is a warning.
+        if (!hit && self.skippedLibraries.count)
+            hit = self.skippedLibraries.firstObject[0];
+        else if (hit)
+            for (NSArray* sk in self.skippedLibraries)
+                [_diagnostics emitWarning:[NSString stringWithFormat:
+                                              @"'%@' carries interface format v%@, which this compiler does not "
+                                              @"read: skipped, using '%@'",
+                                              sk[0], sk[1], hit]
+                                       at:loc];
+        self.skippedLibraries = nil;
         if (hit)
             {
             NSString* abs = [hit stringByStandardizingPath];

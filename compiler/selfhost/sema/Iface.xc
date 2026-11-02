@@ -854,6 +854,25 @@ class JsonVal
         return text;
         }
 
+    // The interface format a library carries when this compiler cannot read
+    // it, else -1 (readable, or no xc interface: a C library). As the import
+    // gate below; the preprocessor skips such a library and keeps looking
+    // (owner, 2026-11-02). As the reference's unreadableIfaceVersionOf.
+    static i64 unreadableVersion(String* path)
+        {
+        String* text = IfaceImport.ifaceText(path);
+        if (text == 0)
+            return (i64)-1;
+        JsonVal* root = JsonParser.parse(text);
+        if (root == 0 || root.kind() != (u8)5)
+            return (i64)-1;
+        JsonVal* ver = root.member((u8*)"ifaceVersion");
+        i64 v = ver == 0 ? (i64)0 : ver.asNum();
+        if (v > (i64)2 || (gIfaceNeedsV2 && v < (i64)2))
+            return v < (i64)1 ? (i64)1 : v;
+        return (i64)-1;
+        }
+
     // The standard-library files a library's interface names (`stdImports`,
     // bug 637), which a client imports as source. Empty when there are none.
     static Array* stdImportsOf(String* path)

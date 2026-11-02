@@ -9,7 +9,10 @@
 #
 # Checked: a library built here with its interface's "ifaceVersion":2 patched
 # to 9 (a newer format, same length) is refused by both compilers when a
-# client imports it, and the message names the library's directory.
+# client imports it, and the message names the library's directory; and with
+# a readable copy in a later -L directory, the v9 one is skipped with a
+# warning naming both and the client builds (owner, 2026-11-02: a found but
+# incompatible library is a warning, and the search goes on).
 #
 #   bash tests/driver/iface-refused-path.sh
 set -u
@@ -47,6 +50,18 @@ for c in "$REF" "$XC"; do
         echo "FAIL iface-refused-path: $n's refusal does not name $d/libAdder.so: $(grep 'interface format' "$W/e" | head -1)"; fail=1
     else
         echo "ok: $n names $d/libAdder.so"
+    fi
+    # A readable copy further along the search: the unreadable one is skipped
+    # with a warning naming both, and the client builds against the good one.
+    g="$W/good-$n"; mkdir -p "$g"
+    "$c" -q -A arm64-linux --emit-lib -o "$g/libAdder.so" "$W/Adder.xc" > "$W/e" 2>&1 \
+        || { echo "FAIL iface-refused-path: $n does not build the second library"; fail=1; continue; }
+    if ! "$c" -A arm64-linux -L "$d" -L "$g" -o "$W/use2" "$W/use.xc" > "$W/e" 2>&1; then
+        echo "FAIL iface-refused-path: $n did not go on to the readable copy: $(grep -i 'error' "$W/e" | head -1)"; fail=1
+    elif ! grep -q "warning:.*'$d/libAdder.so' carries interface format v9.*skipped, using '$g/libAdder.so'" "$W/e"; then
+        echo "FAIL iface-refused-path: $n took the readable copy without the warning: $(head -c 300 "$W/e")"; fail=1
+    else
+        echo "ok: $n skips the v9 copy with a warning and uses $g/libAdder.so"
     fi
 done
 [ $fail -eq 0 ] && echo "iface-refused-path: ok"

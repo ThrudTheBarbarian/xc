@@ -1360,6 +1360,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                                                     : (_options.memoryModel.platform ?: nil);
     // The row's platform layer (the target table): ios, ios-sim, android.
     pp.targetPlatformName = _options.effectiveTarget.platformLayer;
+    pp.ifaceNeedsV2 = [_options effectiveTarget].compactObjects;
     pp.explicitLibraryPathCount = _options.explicitLibraryPathCount;
     // macOS and iOS: `#import <F>` may name a system framework.
     // On exactly when the row names an Apple SDK (the target table): android
