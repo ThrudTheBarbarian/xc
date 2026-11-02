@@ -100,8 +100,16 @@ def measure_auto(runner, plain, auto, gpus):
     runs = [("written", plain, {}), ("cpu", auto, {"XC_PAR": "cpu"})]
     if "gpu" in gpus:
         runs.append(("gpu", auto, {"XC_PAR": "gpu"}))
-    runs.append(("auto", auto, {}))
+    runs.append(("auto", auto, None))
     for mode, binary, env in runs:
+        # auto starts from an empty settings store, shared by its repeats, as
+        # the written blocks' auto does (below): it ran on the default store,
+        # so it acted on whatever an earlier run of anything had learned
+        # (2026-11-02).
+        if env is None:
+            global _AUTO_STORES
+            _AUTO_STORES += 1
+            env = {"XCC_SETTINGS_DIR": "%s-%d-%d" % (AUTO_STORE_BASE, os.getpid(), _AUTO_STORES)}
         best = None
         for _ in range(REPEATS):
             got = runner(binary, env)
