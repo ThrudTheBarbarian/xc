@@ -2386,7 +2386,9 @@
                     && ((IROperand*)ct.ops().get((u32)0)).blk() == H)
                     B = c;
                 }
-            if (B == (IRBlock*)0)
+            // Not a big body: the phi and its step splat stay live through it
+            // (vec_interleave ran out of arm64's pool). As the reference.
+            if (B == (IRBlock*)0 || B.insns().count() > (u32)VEC_SPLAT_BIG_BODY)
                 continue;
             Array* phis = new Array();
             for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)

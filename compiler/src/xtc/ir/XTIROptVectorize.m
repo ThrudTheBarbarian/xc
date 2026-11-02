@@ -1020,7 +1020,11 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
                 && c.terminator.operands[0].blockRef == H)
                 B = c;
             }
-        if (!B)
+        // Not a big body (MD5's rounds): the phi and its step splat stay live
+        // through it, two vector registers its interleaved copies were sized
+        // without (vec_interleave ran out of arm64's pool), and its per-trip
+        // broadcast is a small part of it anyway.
+        if (!B || B.instructions.count > XTIR_VEC_SPLAT_BIG_BODY)
             continue;
         for (XTIRInsn* ivPhi in [H.phiNodes copy])
             {
