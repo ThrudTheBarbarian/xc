@@ -4,7 +4,7 @@
 #
 # A `par` block carries its kernel INSIDE the program: for x86-64 and win64 a
 # SPIR-V module (and, on win64, the PTX before it). The module is built by the
-# ported printer in selfhost/ir/Lower.xc and by the original's in
+# ported printer in selfhost/ir/LowerParSpirv.xc and by the original's in
 # src/xtc/ir/XTIRParSPIRV.m, and the two must be the same module — byte for
 # byte — or the two compilers disagree about what runs on a Vulkan GPU.
 #

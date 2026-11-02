@@ -7,7 +7,7 @@
 # oracle. So this compares `xtir <file>` against `xcc-fe <file> -o -`,
 # byte for byte.
 #
-# The port lowers a SLICE of the language (see selfhost/ir/Lower.xc). A file it
+# The port lowers a SLICE of the language (see selfhost/ir/LowerBase.xc). A file it
 # does not yet handle exits 3 and is counted as `unsupported`, NOT as a pass —
 # a harness that scores untested files as agreement is worse than no harness.
 #

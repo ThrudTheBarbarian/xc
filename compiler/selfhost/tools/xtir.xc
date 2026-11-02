@@ -36,6 +36,7 @@
 #import <Vtable>
 #import <Ir>
 #import "IrDefs.xc"
+#import <LowerBase>
 #import <Lower>
 #import <Designable>
 
