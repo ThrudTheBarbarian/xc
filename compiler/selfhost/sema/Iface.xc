@@ -938,11 +938,11 @@ class JsonVal
             if (v > (i64)2)
                 Stdio.printf("xcc: error: '%s' carries interface format v%lld, serialised by a newer "
                              "xcc than this one (reads v2) — upgrade the compiler or rebuild the "
-                             "library with this one\n", path.lastPathComponent().cString(), v);
+                             "library with this one\n", path.cString(), v);
             else
                 Stdio.printf("xcc: error: '%s' carries interface format v%lld, from an xcc before the "
                              "compact object header (this one reads v2) — rebuild the library with "
-                             "this compiler\n", path.lastPathComponent().cString(), v < (i64)1 ? (i64)1 : v);
+                             "this compiler\n", path.cString(), v < (i64)1 ? (i64)1 : v);
             Process.exit((i32)1);
             return (IfaceImport*)0;
             }

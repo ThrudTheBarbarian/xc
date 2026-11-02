@@ -1573,11 +1573,11 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
                     ? [NSString stringWithFormat:@"'%@' carries interface format v%ld, serialised by a newer "
                                                  @"xcc than this one (reads v2) — upgrade the compiler or "
                                                  @"rebuild the library with this one",
-                                                 p.lastPathComponent, (long)v]
+                                                 p, (long)v]
                     : [NSString stringWithFormat:@"'%@' carries interface format v%ld, from an xcc before the "
                                                  @"compact object header (this one reads v2) — rebuild the "
                                                  @"library with this compiler",
-                                                 p.lastPathComponent, (long)(v < 1 ? 1 : v)];
+                                                 p, (long)(v < 1 ? 1 : v)];
                 [_diagnostics emitError:why
                                      at:[XTSourceLocation locationWithFilename:@"<import>" line:0 column:0]];
                 continue;
