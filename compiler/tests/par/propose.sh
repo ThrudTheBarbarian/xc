@@ -46,7 +46,7 @@ i32 main(void)
     return 0;
     }
 XC
-XC_PAR_PROPOSE=report "$XC" -q -H . -o "$W/p" "$W/p.xc" > "$W/out" 2>&1 || { echo "FAIL propose: the build"; head -3 "$W/out"; exit 1; }
+XC_PAR_PROPOSE=report "$XC" -q --par-style=cpu -H . -o "$W/p" "$W/p.xc" > "$W/out" 2>&1 || { echo "FAIL propose: the build"; head -3 "$W/out"; exit 1; }
 want() { grep -q "p.xc:$1: $2" "$W/out" || { echo "FAIL propose: line $1 should say '$2'"; grep 'propose:' "$W/out"; fail=1; }; }
 want 8 'wrap'
 want 8 'shape triangular'
@@ -57,6 +57,6 @@ want 22 'no (a carried value that is not an accumulator)'
 want 25 'no (a way out of the loop besides its test'
 grep -q 'p.xc:11: shape' "$W/out" && { echo "FAIL propose: the square nest is not triangular"; fail=1; }
 # The report changes nothing: the program's output is the plain build's.
-"$XC" -q -H . -o "$W/q" "$W/p.xc" >/dev/null 2>&1
+"$XC" -q --par-style=cpu -H . -o "$W/q" "$W/p.xc" >/dev/null 2>&1
 [ "$("$W/p")" = "$("$W/q")" ] || { echo "FAIL propose: the report build's output differs"; fail=1; }
 [ $fail = 0 ] && echo "--- propose: pass ---"

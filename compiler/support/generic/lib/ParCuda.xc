@@ -1146,7 +1146,11 @@ class ParCuda
         if (!ok)
             {
             _sync();
-            Log.error("par: the GPU run failed, running on the CPU");
+            // The run itself is right (the CPU does the work); saying so is
+            // XC_PAR_REPORT's, since a block the compiler made of a plain loop
+            // is not the program's to explain.
+            if (ParDevice.reporting())
+                Log.error("par: the GPU run failed, running on the CPU");
             }
         for (u32 d = (u32)0; d < (u32)PAR_CU_DEPTH; d = d + (u32)1)
             {
@@ -1328,7 +1332,11 @@ class ParCuda
         // The device memory stays for the next run (gParCuDev).
         if (!ok)
             {
-            Log.error("par: the GPU run failed, running on the CPU");
+            // The run itself is right (the CPU does the work); saying so is
+            // XC_PAR_REPORT's, since a block the compiler made of a plain loop
+            // is not the program's to explain.
+            if (ParDevice.reporting())
+                Log.error("par: the GPU run failed, running on the CPU");
             return false;
             }
         ParDevice.ranOnGpu(proto, l, ParDevice.nowUs() - started, gpuUs);

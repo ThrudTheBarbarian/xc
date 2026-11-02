@@ -1369,7 +1369,11 @@ class ParVulkan
                 drop(i);
         if (!ok)
             {
-            Log.error("par: the GPU run failed, running on the CPU");
+            // The run itself is right (the CPU does the work); saying so is
+            // XC_PAR_REPORT's, since a block the compiler made of a plain loop
+            // is not the program's to explain.
+            if (ParDevice.reporting())
+                Log.error("par: the GPU run failed, running on the CPU");
             return false;
             }
         ParDevice.ranOnGpu(proto, l, ParDevice.nowUs() - started, gpuUs);

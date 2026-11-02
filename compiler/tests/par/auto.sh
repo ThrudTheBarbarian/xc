@@ -99,7 +99,7 @@ XC
 export XCC_SETTINGS_DIR="$W/st"; mkdir -p "$XCC_SETTINGS_DIR"   # a fresh learned store
 fail=0
 [ -s "$W/b0" ] && { echo "FAIL auto: a build without -Wpar-auto printed:"; cat "$W/b0"; fail=1; }
-grep -q "par-auto" "$W/b2" || { echo "FAIL auto: no par-auto warning for the scan"; cat "$W/b2"; fail=1; }
+grep -q "par-style" "$W/b2" || { echo "FAIL auto: no --par-style warning for the scan"; cat "$W/b2"; fail=1; }
 [ "$(grep -c 'runs serially' "$W/b2")" = 1 ] || { echo "FAIL auto: expected one demoted loop"; cat "$W/b2"; fail=1; }
 want=$("$W/plain")
 XC_PAR_REPORT=1 "$W/auto" > "$W/rep" 2>&1      # the report shares stdout with the result

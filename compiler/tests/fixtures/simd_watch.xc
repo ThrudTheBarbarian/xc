@@ -42,7 +42,9 @@ i32 main(void)
     i32 d4 = _xtc_simd_dirty((pointer)b);         // 1: not watched
     b[0] = (u32)1;                                // writable, no fault
     u32 sum = (u32)0;
-    for (u32 i in 0..65536)
+    // Kept a loop: `a` is watched (its pages write-protected), and a GPU that
+    // maps host memory directly refuses such a buffer.
+    for (u32 i in 0..65536) : serial
         sum = sum + a[i];
     delete a;                                     // watched: let go before the allocator touches it
     delete b;
