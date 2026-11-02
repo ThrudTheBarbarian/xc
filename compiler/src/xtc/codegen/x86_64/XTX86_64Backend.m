@@ -1522,9 +1522,17 @@ static BOOL x86LeaFlagsRead(NSArray<NSString*>* lines, NSUInteger from)
     NSString* home = sHome[@(res.valueId)];
     if (!home || [self isXmmHome:home])
         return NO;
-    if (x86Mentions(memop, [self regView:home width:8]))
-        return NO;
-    [out appendFormat:@"\tmov\t%@, %@\n", [self regView:home width:w], memop];
+    // A home the address itself names is fine too: one mov reads its address
+    // before it writes the destination (`mov edi, [r9 + rdi*4]`). Refusing it
+    // staged sort_small's inner-loop load through edx and a copy, once its
+    // index and the loaded value were given one register (2026-11-02).
+    // A byte or a halfword is zero-extended into the whole register, as
+    // clang loads one: `mov dil, [..]` writes part of rdi and merges with the
+    // rest, a dependency on whatever rdi held (sieve, mem_copy).
+    if (w == 1 || w == 2)
+        [out appendFormat:@"\tmovzx\t%@, %@ ptr %@\n", [self regView:home width:4], w == 1 ? @"byte" : @"word", memop];
+    else
+        [out appendFormat:@"\tmov\t%@, %@\n", [self regView:home width:w], memop];
     return YES;
     }
 
@@ -2947,6 +2955,11 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
     // data symbol is: the assembler reads `call si` as an indirect call
     // through the register, and the program jumps into whatever it held.
     NSString* name = [self safeSym:fn.name];
+    // Every function starts on 16 bytes, as clang's and GCC's do on x86-64:
+    // unaligned, where each one began depended on the size of all the code
+    // before it, so any change moved every later call target across fetch
+    // blocks (method_call 6% either way, 2026-11-02).
+    [out appendString:@"\t.p2align\t4, 0x90\n"];
     // `.type … @function` is ELF-only; PE/COFF (Win64) rejects it.
     if (sWin64)
         [out appendFormat:@"\t.globl\t%@\n%@:\n", name, name];

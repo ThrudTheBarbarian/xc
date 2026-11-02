@@ -633,6 +633,9 @@ class X86_64
         // data symbol is: the assembler reads `call si` as an indirect call
         // through the register, and the program jumps into whatever it held.
         String* fname = safeSym(fn.name());
+        // Every function starts on 16 bytes, as clang's and GCC's (method_call,
+        // 2026-11-02). As the original.
+        _out.appendCString("\t.p2align\t4, 0x90\n");
         // `.type … @function` is ELF-only; PE/COFF rejects it.
         if (_win64)
             _out.appendFormat("\t.globl\t%s\n%s:\n", fname.cString(), fname.cString());
@@ -1378,9 +1381,14 @@ class X86_64
             return false;
         if (isXmmHome(home))
             return false;
-        if (mentions(memop, regView(home, (u32)8)))
-            return false;
-        _out.appendFormat("\tmov\t%s, %s\n", regView(home, w).cString(), memop.cString());
+        // A home the address names is fine: one mov reads its address before
+        // it writes (sort_small, 2026-11-02). A byte or halfword is
+        // zero-extended into the whole register (no partial-register merge).
+        // As the original.
+        if (w == (u32)1 || w == (u32)2)
+            _out.appendFormat("\tmovzx\t%s, %s ptr %s\n", regView(home, (u32)4).cString(), w == (u32)1 ? "byte" : "word", memop.cString());
+        else
+            _out.appendFormat("\tmov\t%s, %s\n", regView(home, w).cString(), memop.cString());
         return true;
         }
 
