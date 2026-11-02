@@ -77,7 +77,11 @@ for f in $FILES; do
         -o "$W/if/$b.xtc.iface" "$f" > "$W/if/$b.log" 2>&1 || echo "FAIL iface $f"
 done
 step "objects"
-echo "$FILES" | xargs -P "$JOBS" -I{} sh -c '
+# Largest first: objects do not depend on each other once the interfaces are
+# written, and in dependency order the 7,000-line driver (xcc.xc) came last
+# and ran alone for two minutes after everything else had finished.
+BYSIZE=$(for f in $FILES; do wc -c "$f"; done | sort -rn | awk '{print $2}')
+echo "$BYSIZE" | xargs -P "$JOBS" -I{} sh -c '
     f="$1"; shift; b=$(basename "$f" .xc)
     "$@" -c -o "'"$W"'/obj/$b.o" "$f" > "'"$W"'/obj/$b.log" 2>&1 || echo "FAIL object $f"' _ {} \
     "$XCC" -q -O2 -A "$ARCH" -H . -D XCC_VERSION="\"$V\"" "${SRC_I[@]}" -L "$W/if" ${EXTRA[@]+"${EXTRA[@]}"}
