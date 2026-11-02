@@ -172,5 +172,20 @@ check "kept per publisher"    "bundle\.[0-9a-f]\{64\}\.props\.note = hello" cat 
 check "a bad key refused"     "is not a property name"          "$XC" --bundle "$L/pbad" --bundle-key "$L/key" -o "$L/pbad.$EXT" tests/bundle/spice.xc --property a.b=x
 check "a key in both refused" "both readonly and writeable"     "$XC" --bundle "$L/pbad" --bundle-key "$L/key" -o "$L/pbad.$EXT" tests/bundle/spice.xc --property k=1 --setting k=2
 
+# The object ABI (#39): the manifest records it per platform with the xcc
+# that built the code, and code built for another ABI, or by an xcc that did
+# not record it, is refused before it is loaded. Each copy is re-signed with
+# the same key after the edit, so only the ABI check can refuse it.
+check "manifest records the ABI" '"abi": {"' cat "$L/spice/bundle.json"
+check "manifest records the xcc" '"xcc": {"' cat "$L/spice/bundle.json"
+cp -R "$L/spice" "$L/abi1"
+sed -E 's/("abi": \{[^}]*": ")[0-9]+"/\19"/' "$L/spice/bundle.json" > "$L/abi1/bundle.json"
+"$XC" --sign-bundle "$L/abi1" --bundle-key "$L/key" > /dev/null
+check "another ABI refused"   "(ABI 9); this program needs ABI"  "$L/host" "$L/abi1" yes
+cp -R "$L/spice" "$L/abi0"
+grep -v '^  "abi": ' "$L/spice/bundle.json" > "$L/abi0/bundle.json"
+"$XC" --sign-bundle "$L/abi0" --bundle-key "$L/key" > /dev/null
+check "no ABI refused"        "does not say which object ABI"    "$L/host" "$L/abi0" yes
+
 [ $rc = 0 ] && echo "--- plugin: pass ---" || echo "--- plugin: FAIL ---"
 exit $rc

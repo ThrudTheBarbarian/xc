@@ -143,6 +143,9 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
         [m addObject:[@"LIBC_" stringByAppendingString:self.libc]];
     if (self.env)
         [m addObject:[@"ENV_" stringByAppendingString:self.env]];
+    // The 8-byte instance header: object ABI 2 in a plugin's manifest.
+    if (self.compactObjects)
+        [m addObject:@"OBJECTS_compact"];
     return m;
     }
 

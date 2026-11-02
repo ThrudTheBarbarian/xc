@@ -41,6 +41,10 @@
 // signed by the same key, so each target is one run.
 //
 //     Data* seed = BundleSign.publisherKey(path);   // made on first use, 0600
+//
+// The manifest records, per platform, the object ABI the code was built for
+// ("abi": 2 with the 8-byte instance header, 1 before it) and the xcc that
+// built it ("xcc"); Plugin refuses code built for another ABI.
 #import "Foundation.xc"
 #import "Files.xc"
 #import "Directory.xc"
@@ -221,7 +225,19 @@ class BundleSign
                         String* resourcesDir, Data* seed, String* publisher, String* domain, Map* provides, Map* requires)
         {
         return BundleSign.makeWith(dir, name, version, platform, codeFile, resourcesDir, seed, publisher, domain,
-                                   provides, requires, (Map*)0, (Map*)0, (Data*)0, (Array*)0);
+                                   provides, requires, (Map*)0, (Map*)0, (Data*)0, (Array*)0,
+                                   BundleSign.objectAbi(), (String*)0);
+        }
+
+    // The object ABI this code is built for: "2" with the 8-byte instance
+    // header (every 64-bit target from 0.9), "1" with the 40-byte one.
+    static String* objectAbi(void)
+        {
+#if OBJECTS_compact
+        return String.withCString("2");
+#else
+        return String.withCString("1");
+#endif
         }
 
     // What the old key signs to hand its plugins over to the new one.
@@ -241,9 +257,13 @@ class BundleSign
     // Exec/<platform>/ (the loader loads them first, from the verified copy).
     static String* makeWith(String* dir, String* name, String* version, String* platform, String* codeFile,
                             String* resourcesDir, Data* seed, String* publisher, String* domain, Map* provides,
-                            Map* requires, Map* readonly, Map* writeable, Data* previousSeed, Array* libs)
+                            Map* requires, Map* readonly, Map* writeable, Data* previousSeed, Array* libs,
+                            String* abi, String* xccVersion)
         {
         Map* rotation = (Map*)0;
+        // Per platform: the code's object ABI and the xcc that built it.
+        Map* abis = new Map();
+        Map* xccs = new Map();
         if (!BundleRules.validName(name))
             return String.withFormat("'%s' is not a bundle name: letters, digits, '_' and '-'", name.cString());
         // seed 0: laid out UNSIGNED, for `xcc --sign-bundle` on the machine
@@ -314,6 +334,8 @@ class BundleSign
                     for (u32 i = (u32)0; op != (Array*)0 && i < op.count(); i = i + (u32)1)
                         if (!((String*)op.get(i)).equals(platform))
                             platforms.add(op.get(i));
+                    BundleSign._carry((Map* ?)old.get((Hashable*)String.withCString("abi")), abis, platform);
+                    BundleSign._carry((Map* ?)old.get((Hashable*)String.withCString("xcc")), xccs, platform);
                     }
                 }
             catch (JSONError e)
@@ -336,6 +358,10 @@ class BundleSign
             }
         platforms.add((Object*)platform);
         BundleSign._sort(platforms);
+        if (abi != (String*)0)
+            abis.set((Hashable*)platform, (Object*)abi);
+        if (xccVersion != (String*)0)
+            xccs.set((Hashable*)platform, (Object*)xccVersion);
         // The code.
         String* execDir = BundleSign._join(BundleSign._join(dir, String.withCString("Exec")), platform);
         BundleSign._mkdirs(execDir);
@@ -395,13 +421,24 @@ class BundleSign
                 }
             }
         return BundleSign._emit(dir, name, version, files, platforms, props, provides, requires, publisher, domain, seed,
-                                previousSeed, rotation);
+                                previousSeed, rotation, abis, xccs);
+        }
+
+    // The other platforms' entries of an old manifest's per-platform map.
+    static void _carry(Map* from, Map* to, String* platform)
+        {
+        if (from == (Map*)0)
+            return;
+        Array* ks = from.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            if (!((String*)ks.get(i)).equals(platform))
+                to.set((Hashable*)ks.get(i), from.get((Hashable*)ks.get(i)));
         }
 
     // The manifest, keys sorted, then its signature (none when seed is 0).
     static String* _emit(String* dir, String* name, String* version, Map* files, Array* platforms, Map* props,
                          Map* provides, Map* requires, String* publisher, String* domain, Data* seed, Data* previousSeed,
-                         Map* rotation)
+                         Map* rotation, Map* abis, Map* xccs)
         {
         String* keyHex = seed == (Data*)0 ? String.withCString("")
                                           : BundleSign._hex(Ed25519.publicKey(seed.bytes()).bytes(), (u32)32);
@@ -432,7 +469,14 @@ class BundleSign
             for (u32 i = (u32)0; i < rk.count(); i = i + (u32)1)
                 pm.set((Hashable*)rk.get(i), rotation.get((Hashable*)rk.get(i)));
             }
-        String* m = String.withCString("{\n  \"code\": ");
+        String* m = String.withCString("{\n  ");
+        if (abis != (Map*)0 && abis.count() > (u32)0)
+            {
+            m.appendCString("\"abi\": ");
+            m.append(BundleSign._object(abis));
+            m.appendCString(",\n  ");
+            }
+        m.appendCString("\"code\": ");
         m.append(BundleSign._quoted(name));
         m.appendCString(",\n  \"files\": ");
         m.append(BundleSign._object(files));
@@ -473,6 +517,11 @@ class BundleSign
         m.append(BundleSign._object(requires));
         m.appendCString(",\n  \"version\": ");
         m.append(BundleSign._quoted(version));
+        if (xccs != (Map*)0 && xccs.count() > (u32)0)
+            {
+            m.appendCString(",\n  \"xcc\": ");
+            m.append(BundleSign._object(xccs));
+            }
         m.appendCString("\n}\n");
         if (!Files.writeText(BundleSign._join(dir, String.withCString("bundle.json")), m))
             return String.withCString("cannot write bundle.json");
@@ -585,7 +634,8 @@ class BundleSign
                                 (Array*)m.get((Hashable*)String.withCString("platforms")), props,
                                 (Map* ?)m.get((Hashable*)String.withCString("provides")),
                                 (Map* ?)m.get((Hashable*)String.withCString("requires")), publisher, domain, seed,
-                                previousSeed, rotation);
+                                previousSeed, rotation, (Map* ?)m.get((Hashable*)String.withCString("abi")),
+                                (Map* ?)m.get((Hashable*)String.withCString("xcc")));
         }
 
     // Every check §4 steps 1-3 make before anything in the bundle is used:

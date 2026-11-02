@@ -174,6 +174,10 @@ class TargetRow
             e.append(_env);
             m.add((Object*)e);
             }
+        // The 8-byte instance header: what a plugin's manifest records as
+        // object ABI 2 (BundleSign.objectAbi).
+        if (_compact)
+            m.add((Object*)String.withCString("OBJECTS_compact"));
         return m;
         }
 

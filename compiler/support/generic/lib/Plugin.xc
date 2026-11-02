@@ -440,6 +440,29 @@ class Plugin : Object
         }
 
     // The platform's code file in the manifest, or why there is none.
+    // The object ABI the manifest says this platform's code was built for,
+    // against this program's: before 1.0 there is no compatibility, so code
+    // built for another one (or by an xcc that did not record it, before
+    // 0.9.1) is refused with what to do, rather than loaded to misdispatch.
+    static String* _checkAbi(Map* m)
+        {
+        String* name = (String*)m.get((Hashable*)String.withCString("name"));
+        String* plat = Plugin._platform();
+        Map* abis = (Map* ?)m.get((Hashable*)String.withCString("abi"));
+        Map* xccs = (Map* ?)m.get((Hashable*)String.withCString("xcc"));
+        String* abi = abis == (Map*)0 ? (String*)0 : (String* ?)abis.get((Hashable*)plat);
+        String* by = xccs == (Map*)0 ? (String*)0 : (String* ?)xccs.get((Hashable*)plat);
+        String* mine = BundleSign.objectAbi();
+        if (abi != (String*)0 && abi.equals(mine))
+            return (String*)0;
+        if (abi == (String*)0)
+            return String.withFormat("%s: its %s code does not say which object ABI it was built for (an xcc before "
+                                     "0.9.1 built it); this program needs ABI %s: rebuild it",
+                                     name.cString(), plat.cString(), mine.cString());
+        return String.withFormat("%s: built by xcc %s (ABI %s); this program needs ABI %s: rebuild it", name.cString(),
+                                 by != (String*)0 ? by.cString() : "(unknown)", abi.cString(), mine.cString());
+        }
+
     static String* _codeFor(Map* m, String** why)
         {
         String* name = (String*)m.get((Hashable*)String.withCString("name"));
@@ -738,6 +761,9 @@ class Plugin : Object
             return Plugin._fail(err);
         String* code = Plugin._codeFor(m, &err);
         if (code == (String*)0)
+            return Plugin._fail(err);
+        err = Plugin._checkAbi(m);
+        if (err != (String*)0)
             return Plugin._fail(err);
         err = Plugin._checkRequires(m);
         if (err != (String*)0)

@@ -4704,6 +4704,10 @@ String* bundlePlatform(DriverOptions* d)
     return String.withCString("macos-arm64");
 }
 
+#ifndef XCC_VERSION
+#define XCC_VERSION "unversioned"
+#endif
+
 // --bundle: the library just written goes into the signed bundle
 // (BundleSign.xc), with what the protocols say it provides and requires.
 void makeBundle(DriverOptions* d)
@@ -4776,7 +4780,10 @@ void makeBundle(DriverOptions* d)
                                       d._bundleVersion,
                                       bundlePlatform(d), out, d._bundleResources, seed,
                                       d._publisher, d._publisherDomain, provides, requires,
-                                      d._bundleReadonly, d._bundleWriteable, previous, d._bundleLibs);
+                                      d._bundleReadonly, d._bundleWriteable, previous, d._bundleLibs,
+                                      String.withCString(d.targetRow() != (TargetRow*)0 && d.targetRow().compactObjects()
+                                                         ? "2" : "1"),
+                                      String.withCString(XCC_VERSION));
     if (err != (String*)0) {
         Stdio.printf("xcc: error: --bundle: %s\n", err.cString());
         Process.exit((i32)1); return;
