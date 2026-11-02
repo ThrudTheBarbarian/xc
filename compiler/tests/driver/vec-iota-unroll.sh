@@ -6,11 +6,14 @@
 # and the seed again, every copy: zero, move, broadcast and two adds per
 # block (call_depth). Copy k now takes copy 0's index vector, the seed's add
 # folded in, plus a constant k*vw splat made once in the preheader: one add.
+# And copy 0's index vector is a vector phi now (2026-11-02): the preheader
+# builds it from i's entry value, the body adds splat(step) once, and no lane
+# index is broadcast from i at all (call_depth 0.230 -> 0.206 s).
 #
 # Checked, for tests/fixtures/vec_iota_unroll.xc: the two compilers' x86-64
 # assembly is the same at avx2 and avx512; at avx512 the first loop
-# (unrolled twice) broadcasts once per iteration, not once per copy (the 0.9
-# build: twice);
+# (unrolled twice) broadcasts nothing per iteration (the 0.9 build: twice, a
+# broadcast per copy; 0.9.1's first build: once);
 # and the program built for this host prints the right sums.
 #
 #   bash tests/driver/vec-iota-unroll.sh
@@ -31,7 +34,7 @@ for l in avx2 avx512; do
     # this count would take for index broadcasts.
     [ $l = avx512 ] || continue
     n=$(awk '/^main:/{f=1} f' "$W/x.s" | awk '/^\.L_main_bb_1_for_body:/{f=1} f && /vpbroadcastd/{n++} f && /(jb|jmp)	\.L_main_bb_1_for_body$/{print n+0; exit}')
-    [ "$n" = 1 ] || { echo "FAIL vec-iota-unroll: $l: $n broadcasts in the unrolled loop (want 1)"; fail=1; }
+    [ "$n" = 0 ] || { echo "FAIL vec-iota-unroll: $l: $n broadcasts in the unrolled loop (want 0)"; fail=1; }
 done
 "$XC" -q -H . -O3 -o "$W/p" "$F" > "$W/e" 2>&1 || { echo "FAIL vec-iota-unroll: no host build"; exit 1; }
 got=$("$W/p")

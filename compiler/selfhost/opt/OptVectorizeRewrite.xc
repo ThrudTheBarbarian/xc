@@ -828,6 +828,7 @@
             if (vcWanted(fn))
                 self.vecCombineFn(fn);
             vecUnrollReductions(fn);
+            vecIVs(fn);
             }
         }
 
@@ -2340,6 +2341,281 @@
     // latency per iteration. The copies are combined at the exit with the same
     // op the reduction used, and the existing horizontal reduce then reads the
     // combined vector.
+    // A vector loop's lane indices as an induction variable of their own
+    // (2026-11-02): VSplat(i), VAdd of the iota, VAdd of any loop invariant,
+    // rebuilt every trip, become a phi -- the same chain over i's entry value
+    // in the preheader, and one VAdd of splat(step) at the end of the body.
+    // call_depth 0.230 -> 0.206 s. A single-block body, a constant step, each
+    // link read once. As the reference's vectorIVsInFunction.
+    final void vecIVs(IRFunc* fn)
+        {
+        Map* defOf = new Map();
+        Map* defBlk = new Map();
+        Map* uses = new Map();      // IRValue -> Number@ count
+        Map* useBlk = new Map();    // IRValue -> the block reading it
+        Map* manyBlocks = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            vecIvNote(bb.phis(), bb, defOf, defBlk, uses, useBlk, manyBlocks);
+            vecIvNote(bb.insns(), bb, defOf, defBlk, uses, useBlk, manyBlocks);
+            if (bb.term() != (IRInsn*)0)
+                {
+                Array* t = new Array();
+                t.add((Object*)bb.term());
+                vecIvNote(t, bb, defOf, defBlk, uses, useBlk, manyBlocks);
+                }
+            }
+        Array* blocks = new Array();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            blocks.add(fn.blocks().get(b));
+        for (u32 hb = (u32)0; hb < blocks.count(); hb = hb + (u32)1)
+            {
+            IRBlock* H = (IRBlock*)blocks.get(hb);
+            IRInsn* term = H.term();
+            if (term == (IRInsn*)0 || !term.op().equals(String.withCString("CondBranch")) || term.ops().count() < (u32)3)
+                continue;
+            IRBlock* B = (IRBlock*)0;
+            for (u32 k = (u32)1; k < (u32)3 && B == (IRBlock*)0; k = k + (u32)1)
+                {
+                IRBlock* c = ((IROperand*)term.ops().get(k)).blk();
+                if (c == (IRBlock*)0 || c == H || c.term() == (IRInsn*)0)
+                    continue;
+                IRInsn* ct = c.term();
+                if (ct.op().equals(String.withCString("Branch")) && ct.ops().count() >= (u32)1
+                    && ((IROperand*)ct.ops().get((u32)0)).blk() == H)
+                    B = c;
+                }
+            if (B == (IRBlock*)0)
+                continue;
+            Array* phis = new Array();
+            for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+                phis.add(H.phis().get(i));
+            for (u32 pi = (u32)0; pi < phis.count(); pi = pi + (u32)1)
+                {
+                IRInsn* ivPhi = (IRInsn*)phis.get(pi);
+                if (ivPhi.res() == (IRValue*)0 || ivPhi.ops().count() != (u32)4 || !isIntType(ivPhi.res().ty()))
+                    continue;
+                u32 bi = (u32)9;
+                if (((IROperand*)ivPhi.ops().get((u32)0)).blk() == B)
+                    bi = (u32)0;
+                else if (((IROperand*)ivPhi.ops().get((u32)2)).blk() == B)
+                    bi = (u32)2;
+                if (bi == (u32)9)
+                    continue;
+                IRBlock* PH = ((IROperand*)ivPhi.ops().get((u32)2 - bi)).blk();
+                IROperand* initOp = (IROperand*)ivPhi.ops().get((u32)3 - bi);
+                IROperand* nextOp = (IROperand*)ivPhi.ops().get(bi + (u32)1);
+                if (PH == (IRBlock*)0 || PH == B || PH == H || nextOp.kind() != (u8)OPK_USE)
+                    continue;
+                Object* nxo = defOf.get((Hashable*)nextOp.val());
+                if (nxo == (Object*)0 || (IRBlock*)defBlk.get((Hashable*)nextOp.val()) != B)
+                    continue;
+                IRInsn* nx = (IRInsn*)nxo;
+                if (!nx.op().equals(String.withCString("Add")) || nx.ops().count() != (u32)2)
+                    continue;
+                IROperand* n0 = (IROperand*)nx.ops().get((u32)0);
+                IROperand* n1 = (IROperand*)nx.ops().get((u32)1);
+                IROperand* stepOp = (IROperand*)0;
+                if (n0.kind() == (u8)OPK_USE && n0.val() == ivPhi.res())
+                    stepOp = n1;
+                else if (n1.kind() == (u8)OPK_USE && n1.val() == ivPhi.res())
+                    stepOp = n0;
+                if (stepOp == (IROperand*)0 || stepOp.kind() != (u8)OPK_IMMI)
+                    continue;
+                i64 step = stepOp.imm();
+                Array* body = new Array();
+                for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+                    body.add(B.insns().get(i));
+                for (u32 si = (u32)0; si < body.count(); si = si + (u32)1)
+                    {
+                    IRInsn* sp = (IRInsn*)body.get(si);
+                    if (!sp.op().equals(String.withCString("VSplat")) || sp.res() == (IRValue*)0 || sp.ops().count() < (u32)1)
+                        continue;
+                    IROperand* s0op = (IROperand*)sp.ops().get((u32)0);
+                    if (s0op.kind() != (u8)OPK_USE || s0op.val() != ivPhi.res())
+                        continue;
+                    Array* chain = new Array();
+                    chain.add((Object*)sp);
+                    Array* bodySplats = new Array();
+                    IRInsn* cur = sp;
+                    while (vecIvCount(uses, cur.res()) == (u32)1)
+                        {
+                        IRInsn* nextL = (IRInsn*)0;
+                        for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+                            {
+                            IRInsn* u = (IRInsn*)B.insns().get(i);
+                            for (u32 k = (u32)0; k < u.ops().count(); k = k + (u32)1)
+                                {
+                                IROperand* o = (IROperand*)u.ops().get(k);
+                                if (o.kind() == (u8)OPK_USE && o.val() == cur.res())
+                                    nextL = u;
+                                }
+                            }
+                        if (nextL == (IRInsn*)0 || !nextL.op().equals(String.withCString("VAdd")) || nextL.res() == (IRValue*)0
+                            || nextL.ops().count() != (u32)2)
+                            break;
+                        IROperand* a0 = (IROperand*)nextL.ops().get((u32)0);
+                        IROperand* other = (a0.kind() == (u8)OPK_USE && a0.val() == cur.res())
+                                               ? (IROperand*)nextL.ops().get((u32)1) : a0;
+                        if (other.kind() != (u8)OPK_USE)
+                            break;
+                        IRBlock* ob = (IRBlock*)defBlk.get((Hashable*)other.val());
+                        if (ob == H)
+                            break;
+                        if (ob == B)
+                            {
+                            // A splat of an invariant still in the body: the
+                            // preheader makes its own. As the reference.
+                            IRInsn* od = (IRInsn*)defOf.get((Hashable*)other.val());
+                            if (od == (IRInsn*)0 || !od.op().equals(String.withCString("VSplat")) || od.ops().count() < (u32)1
+                                || vecIvCount(uses, other.val()) != (u32)1)
+                                break;
+                            IROperand* so = (IROperand*)od.ops().get((u32)0);
+                            IRBlock* sb = so.kind() == (u8)OPK_USE ? (IRBlock*)defBlk.get((Hashable*)so.val()) : (IRBlock*)0;
+                            if (!(so.kind() == (u8)OPK_IMMI || (so.kind() == (u8)OPK_USE && (sb == (IRBlock*)0 || (sb != H && sb != B)))))
+                                break;
+                            bodySplats.add((Object*)od);
+                            }
+                        chain.add((Object*)nextL);
+                        cur = nextL;
+                        }
+                    if (manyBlocks.get((Hashable*)cur.res()) != (Object*)0)
+                        continue;
+                    Object* ubo = useBlk.get((Hashable*)cur.res());
+                    if (ubo != (Object*)0 && (IRBlock*)ubo != B)
+                        continue;
+                    String* vt = cur.res().ty();
+                    String* lane = vuLaneOf(vt);
+                    if (lane == (String*)0)
+                        continue;
+                    IRValue* s0 = new IRValue(sp.res().ty());
+                    IRInsn* i0 = IRInsn.with(String.withCString("VSplat"));
+                    i0.setRes(s0);
+                    i0.add(initOp);
+                    PH.insns().add((Object*)i0);
+                    IRValue* acc = s0;
+                    for (u32 q = (u32)1; q < chain.count(); q = q + (u32)1)
+                        {
+                        IRInsn* L = (IRInsn*)chain.get(q);
+                        IRInsn* prevL = (IRInsn*)chain.get(q - (u32)1);
+                        IROperand* l0 = (IROperand*)L.ops().get((u32)0);
+                        bool left = l0.kind() == (u8)OPK_USE && l0.val() == prevL.res();
+                        IROperand* other = left ? (IROperand*)L.ops().get((u32)1) : l0;
+                        Object* odo = defOf.get((Hashable*)other.val());
+                        if (odo != (Object*)0 && hasInsn(bodySplats, (IRInsn*)odo))
+                            {
+                            IRInsn* od = (IRInsn*)odo;
+                            IRValue* cs = new IRValue(od.res().ty());
+                            IRInsn* ic = IRInsn.with(String.withCString("VSplat"));
+                            ic.setRes(cs);
+                            ic.add((IROperand*)od.ops().get((u32)0));
+                            PH.insns().add((Object*)ic);
+                            other = IROperand.useVal(cs);
+                            }
+                        IRValue* nv = new IRValue(L.res().ty());
+                        IRInsn* ia = IRInsn.with(String.withCString("VAdd"));
+                        ia.setRes(nv);
+                        if (left)
+                            {
+                            ia.add(IROperand.useVal(acc));
+                            ia.add(other);
+                            }
+                        else
+                            {
+                            ia.add(other);
+                            ia.add(IROperand.useVal(acc));
+                            }
+                        PH.insns().add((Object*)ia);
+                        acc = nv;
+                        }
+                    IRValue* kc = new IRValue(lane);
+                    IRInsn* ik = IRInsn.with(String.withCString("Const"));
+                    ik.setRes(kc);
+                    ik.add(IROperand.immI(step, lane));
+                    PH.insns().add((Object*)ik);
+                    IRValue* ks = new IRValue(vt);
+                    IRInsn* isp = IRInsn.with(String.withCString("VSplat"));
+                    isp.setRes(ks);
+                    isp.add(IROperand.useVal(kc));
+                    PH.insns().add((Object*)isp);
+                    IRValue* pv = new IRValue(vt);
+                    IRValue* pn = new IRValue(vt);
+                    IRInsn* phi = IRInsn.with(String.withCString("Phi"));
+                    phi.setRes(pv);
+                    if (bi == (u32)0)
+                        {
+                        phi.add(IROperand.block(B));
+                        phi.add(IROperand.useVal(pn));
+                        phi.add(IROperand.block(PH));
+                        phi.add(IROperand.useVal(acc));
+                        }
+                    else
+                        {
+                        phi.add(IROperand.block(PH));
+                        phi.add(IROperand.useVal(acc));
+                        phi.add(IROperand.block(B));
+                        phi.add(IROperand.useVal(pn));
+                        }
+                    H.phis().add((Object*)phi);
+                    IRInsn* st = IRInsn.with(String.withCString("VAdd"));
+                    st.setRes(pn);
+                    st.add(IROperand.useVal(pv));
+                    st.add(IROperand.useVal(ks));
+                    B.insns().add((Object*)st);
+                    for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+                        {
+                        IRInsn* u = (IRInsn*)B.insns().get(i);
+                        for (u32 k = (u32)0; k < u.ops().count(); k = k + (u32)1)
+                            {
+                            IROperand* o = (IROperand*)u.ops().get(k);
+                            if (o.kind() == (u8)OPK_USE && o.val() == cur.res())
+                                u.ops().set(k, (Object*)IROperand.useVal(pv));
+                            }
+                        }
+                    Array* kept = new Array();
+                    for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+                        {
+                        IRInsn* u = (IRInsn*)B.insns().get(i);
+                        if (!hasInsn(chain, u) && !hasInsn(bodySplats, u))
+                            kept.add((Object*)u);
+                        }
+                    B.setInsns(kept);
+                    }
+                }
+            }
+        }
+
+    final void vecIvNote(Array* list, IRBlock* bb, Map* defOf, Map* defBlk, Map* uses, Map* useBlk, Map* manyBlocks)
+        {
+        for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)list.get(i);
+            if (n.res() != (IRValue*)0)
+                {
+                defOf.set((Hashable*)n.res(), (Object*)n);
+                defBlk.set((Hashable*)n.res(), (Object*)bb);
+                }
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)n.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                    continue;
+                uses.set((Hashable*)o.val(), (Object*)Number.with(vecIvCount(uses, o.val()) + (u32)1));
+                Object* ub = useBlk.get((Hashable*)o.val());
+                if (ub != (Object*)0 && (IRBlock*)ub != bb)
+                    manyBlocks.set((Hashable*)o.val(), (Object*)o.val());
+                useBlk.set((Hashable*)o.val(), (Object*)bb);
+                }
+            }
+        }
+
+    static u32 vecIvCount(Map* uses, IRValue* v)
+        {
+        Object* c = uses.get((Hashable*)v);
+        return c == (Object*)0 ? (u32)0 : ((Number*)c).asU32();
+        }
+
     final void vecUnrollReductions(IRFunc* fn)
         {
         for (u32 hi = (u32)0; hi < fn.blocks().count(); hi = hi + (u32)1)
