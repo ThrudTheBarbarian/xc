@@ -658,7 +658,7 @@ class OptProfile
     IRBlock* _p;
     IRInsn* _phi;
     String* _ivTy;
-    i32 _start;
+    i64 _start;   // 64-bit, as the reference's startVal: a u32 start of 2^31 or more stays positive
     i32 _step;
     u32 _trip;
     Array* _carried;
@@ -695,7 +695,7 @@ class OptProfile
         {
         return _ivTy;
         }
-    i32 start(void)
+    i64 start(void)
         {
         return _start;
         }
@@ -719,7 +719,7 @@ class OptProfile
         _e = e;
         _p = p;
         }
-    void setIv(IRInsn* phi, String* ty, i32 s, i32 st, u32 t)
+    void setIv(IRInsn* phi, String* ty, i64 s, i32 st, u32 t)
         {
         _phi = phi;
         _ivTy = ty;
@@ -757,7 +757,10 @@ class OptProfile
     // Epilogue: when the trip count is not a whole number of vectors, the vector
     // loop stops at _epiM and a CLONE of the scalar loop runs the tail.
     bool _needEpi;
-    i32 _epiM;
+    // 64-bit, as the reference's int64_t: a u32 limit of 2^31 or more (a loop
+    // to 2,200,000,000) truncated to a negative immediate, which the unroller
+    // then read as "no positive bound" and left the loop alone (2026-11-01).
+    i64 _epiM;
 
     void init(void)
         {
@@ -832,11 +835,11 @@ class OptProfile
         {
         return _isIota;
         }
-    i32 epiM(void)
+    i64 epiM(void)
         {
         return _epiM;
         }
-    void setEpi(bool need, i32 m)
+    void setEpi(bool need, i64 m)
         {
         _needEpi = need;
         _epiM = m;
@@ -1586,7 +1589,7 @@ class BeFact : Object
     bool _luBodyHasCall;
     IRInsn* _luIvPhi;
     IRBlock* _luPre;
-    i32 _luInit;
+    i64 _luInit;
     i32 _luStep;
     u32 _luTrip;
     Array* _luCarried;

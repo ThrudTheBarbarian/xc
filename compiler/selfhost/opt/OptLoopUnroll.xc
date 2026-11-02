@@ -315,7 +315,7 @@
         {
         _luIvPhi = (IRInsn*)0;
         _luPre = (IRBlock*)0;
-        _luInit = (i32)0;
+        _luInit = (i64)0;
         _luStep = (i32)0;
         _luTrip = (u32)0;
         _luCarried = new Array();
@@ -816,7 +816,9 @@
         IRBlock* C = new IRBlock(nm);
 
         // The induction variable is a fresh Const of its value for this copy.
-        i32 ivVal = c.start() + (i32)j * c.step();
+        // 64-bit, as the reference: a u32 iv at 2^31 or more (the vectoriser's
+        // remainder loop from 2,199,999,992) printed as a negative constant.
+        i64 ivVal = c.start() + (i64)j * (i64)c.step();
         IRInsn* ivConst = IRInsn.with(String.withCString("Const"));
         ivConst.setRes(new IRValue(c.ivTy()));
         ivConst.add(IROperand.immI(ivVal, c.ivTy()));
