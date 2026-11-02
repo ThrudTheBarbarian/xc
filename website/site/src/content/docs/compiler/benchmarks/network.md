@@ -17,24 +17,7 @@ GPU among its choices. Each run starts from empty settings, so `auto`
 measures afresh, and a remote-only figure counts only if every block ran on
 the remote GPU. Every mode's checksum must agree.
 
-**Apple M3 Max (Metal), using the remote RTX 5080** (ms; best of eight runs)
-
-| benchmark | this machine | the remote GPU | every GPU | `auto` |
-|---|---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 50.3 | 638 | 336 | 49.7 |
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 1.2 | 2.8 | 1.5 | 1.4 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 5.3 | 232 | 119 | 5.6 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 1.1 | 695 | 212 | 1.3 |
-
-**AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080** (ms; best of eight runs)
-
-| benchmark | this machine | the remote GPU | every GPU | `auto` |
-|---|---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 928 | 300 | 246 | 295 |
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 2.5 | 836 µs | 2.8 | 972 µs |
-| [`md5`](/compiler/benchmark-sources/#md5) | 9.8 | 43.6 | 32.9 | 30.9 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 2.4 | 356 | 127 | 3.3 |
-
+*(not measured for this release)*
 
 What the tables show:
 

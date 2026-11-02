@@ -61,6 +61,9 @@ def main():
     ap.add_argument("--version", default=common.COMPILER_VERSION)
     ap.add_argument("--machine", choices=["linux", "pi"], default="linux")
     ap.add_argument("--xcc", help="the compiler to measure (default: the installed release)")
+    ap.add_argument("--carry-from", metavar="VERSION",
+                    help="time xcc only, and carry GCC's and clang's figures (and toolchains) from that "
+                         "version's file: a point release re-times the compiler that changed")
     a = ap.parse_args()
     env = common.build_env()
     if a.machine == "pi":
@@ -101,17 +104,33 @@ def main():
     probe = "echo 'int main(void){return 0;}' > %s/omp.c && clang -fopenmp -o %s/omp %s/omp.c" % (rdir, rdir, rdir)
     clang_omp = subprocess.run(["ssh", host, probe], capture_output=True).returncode == 0
     missing = [] if clang_omp else ["all/clang: no OpenMP runtime (libomp) for clang on that machine"]
+    carried = None
+    if a.carry_from:
+        cp = os.path.join(HERE, "v" + a.carry_from, name)
+        if not os.path.exists(cp):
+            sys.exit("par/c_run.py: --carry-from %s: no %s" % (a.carry_from, os.path.relpath(cp, common.REPO)))
+        with open(cp) as fh:
+            carried = json.load(fh)
     builds = []
     for b in benches:
+        if carried:
+            continue
         builds.append("gcc -O3 -march=native -w -o {b}.gcc-one {b}.c -lm".format(b=b))
         builds.append("clang -O3 -march=native -w -o {b}.clang-one {b}.c -lm".format(b=b))
         builds.append("gcc -O3 -march=native -fopenmp -w -o {b}.gcc-all openmp/{b}.c -lm".format(b=b))
         if clang_omp:
             builds.append("clang -O3 -march=native -fopenmp -w -o {b}.clang-all openmp/{b}.c -lm".format(b=b))
-    sh(host, "cd %s && %s" % (rdir, " && ".join(builds)))
-    toolchains = {"xcc": a.version,
-                  "gcc": sh(host, "gcc --version").splitlines()[0],
-                  "clang": sh(host, "clang --version").splitlines()[0]}
+    if builds:
+        sh(host, "cd %s && %s" % (rdir, " && ".join(builds)))
+    if carried:
+        toolchains = dict(carried.get("toolchains", {}))
+        toolchains["xcc"] = a.version
+        toolchains["carried"] = a.carry_from
+        missing = carried.get("missing", [])
+    else:
+        toolchains = {"xcc": a.version,
+                      "gcc": sh(host, "gcc --version").splitlines()[0],
+                      "clang": sh(host, "clang --version").splitlines()[0]}
     # x86 names its CPU in /proc/cpuinfo; arm64 Linux does not, but lscpu does,
     # and a Raspberry Pi names the board in its device tree.
     cpu = sh(host, "grep -m1 '^model name' /proc/cpuinfo | cut -d: -f2-", check=False).strip() \
@@ -130,6 +149,8 @@ def main():
     for b in benches:
         results[b] = {"one": {}, "all": {}}
         times = {(m, c): [] for m in MODES for c in MODES[m] if clang_omp or (m, c) != ("all", "clang")}
+        if carried:
+            times = {k: v for k, v in times.items() if k[1] == "xcc"}
         sums = {}
         # The first round sets each build's number of runs from its time.
         common.wait_quiet(host)
@@ -146,6 +167,15 @@ def main():
                     if s != sums[key]:
                         sys.exit("par/c_run.py: %s %s-%s gave checksum %s, then %s" % (b, key[1], key[0], sums[key], s))
                     times[key].append(t)
+        if carried:
+            # The carried compilers' answer is the one xcc's must give.
+            want = carried.get("results", {}).get(b, {}).get("checksum")
+            if want is not None and set(sums.values()) != {want}:
+                sys.exit("par/c_run.py: %s: xcc gave %s, the carried figures %s" % (b, set(sums.values()), want))
+            for m in ("one", "all"):
+                for c, v in carried.get("results", {}).get(b, {}).get(m, {}).items():
+                    if c != "xcc":
+                        results[b][m][c] = v
         if len(set(sums.values())) != 1:
             sys.exit("par/c_run.py: %s: the builds disagree: %s" % (b, sums))
         for (m, c), ts in times.items():
