@@ -4663,7 +4663,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                 // plus k*vw, an invariant) is copy 0's result plus k*vw too,
                 // so the seed's add is folded into copy 0's and copy k pays
                 // one add, not two (as clang's base + 16k vectors).
-                if (offK && insn.opcode == XTIROpVAdd && insn.result && insn.operands.count == 2)
+                if (!bigBody && offK && insn.opcode == XTIROpVAdd && insn.result && insn.operands.count == 2)
                     for (NSUInteger q = 0; q < 2 && !ivSplatK; q++)
                         {
                         XTIROperand *aOp = insn.operands[q], *oOp = insn.operands[1 - q];
@@ -4672,7 +4672,10 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                             && [insn.result.type isEqual:offK.type])
                             ivSplatK = offK;
                         }
-                if (!ivSplatK && insn.opcode == XTIROpVAdd && insn.result && insn.operands.count == 2)
+                // Not in a big body (MD5's rounds): it rebuilds its lane values
+                // next to their uses on purpose, to keep its vector registers
+                // for its own values (vecRematLanes). As the port.
+                if (!bigBody && !ivSplatK && insn.opcode == XTIROpVAdd && insn.result && insn.operands.count == 2)
                     for (NSUInteger q = 0; q < 2 && !ivSplatK; q++)
                         {
                         XTIROperand *sOp = insn.operands[q], *oOp = insn.operands[1 - q];

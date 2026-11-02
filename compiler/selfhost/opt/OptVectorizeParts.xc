@@ -1814,7 +1814,7 @@
             // k*vw, an invariant) is copy 0's result plus k*vw too, so the
             // seed's add is folded into copy 0's and copy k pays one add, not
             // two (as clang's base + 16k vectors). Mirrors the original.
-            if (offK != (IRValue*)0 && n.op().equals(String.withCString("VAdd")) && n.res() != (IRValue*)0 && n.ops().count() == (u32)2)
+            if (!bigBody && offK != (IRValue*)0 && n.op().equals(String.withCString("VAdd")) && n.res() != (IRValue*)0 && n.ops().count() == (u32)2)
                 for (u32 q = (u32)0; q < (u32)2 && ivSplatK == (IRValue*)0; q = q + (u32)1)
                     {
                     IROperand* aOp = (IROperand*)n.ops().get(q);
@@ -1824,7 +1824,10 @@
                         && n.res().ty().equals(offK.ty()))
                         ivSplatK = offK;
                     }
-            if (ivSplatK == (IRValue*)0 && n.op().equals(String.withCString("VAdd")) && n.res() != (IRValue*)0 && n.ops().count() == (u32)2)
+            // Not in a big body (MD5's rounds): it rebuilds its lane values next
+            // to their uses on purpose, to keep its vector registers for its own
+            // values (vecRematLanes). Mirrors the original.
+            if (!bigBody && ivSplatK == (IRValue*)0 && n.op().equals(String.withCString("VAdd")) && n.res() != (IRValue*)0 && n.ops().count() == (u32)2)
                 for (u32 q = (u32)0; q < (u32)2 && ivSplatK == (IRValue*)0; q = q + (u32)1)
                     {
                     IROperand* sOp = (IROperand*)n.ops().get(q);
