@@ -1778,6 +1778,8 @@ class BeFact : Object
     // Set by vecClassifyReduxBody: the body read the induction variable as a
     // per-lane VALUE, so the applier must map it to <i, i+1, i+2, i+3>.
     bool _vrUsesIv;
+    // The map recogniser's: the body read the iv as a value (an iota map).
+    bool _vrMapUsesIv;
     IRModule* _vecModule; // for the lane-index global
     IRFunc* _vecFn;       // the function being rewritten (names that global)
     bool _vrAllowRT;       // one-shot: the NEXT vecReduxShape may accept one

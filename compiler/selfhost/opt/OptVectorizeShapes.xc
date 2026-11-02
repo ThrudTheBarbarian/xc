@@ -845,6 +845,15 @@
         // loop-invariant scalar that is safe to broadcast — which is what
         // rejects `b[i] * i`, where the multiplier differs per lane.
         Array* elems = new Array();
+        // IOTA, as the reduction's: the value stored may be computed from the
+        // iv itself (`a[i] = (i * K) ^ x`, sort_small's fill), with or without
+        // a load. The iv is then a lane value, lane l holding i + l. As the
+        // original's mapUsesIv.
+        bool wantIota = _profile != (OptProfile*)0 && _profile.iota();
+        bool ivLaneOK = iv.ty().equals(String.withCString("I32")) || iv.ty().equals(String.withCString("U32"));
+        _vrMapUsesIv = false;
+        if (wantIota && ivLaneOK)
+            elems.add((Object*)iv);
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
@@ -897,6 +906,8 @@
                     return (String*)0;
                 if (!vecOperandOK((IROperand*)n.ops().get((u32)1), elems, B, (IRBlock*)defBlk.get((Hashable*)iv), defOf, defBlk))
                     return (String*)0;
+                if (wantIota && ivLaneOK && vecIsIvUse((IROperand*)n.ops().get((u32)1), iv))
+                    _vrMapUsesIv = true;
                 sawStore = true;
                 continue;
                 }
@@ -914,14 +925,28 @@
                     return (String*)0;
                 if (!vecOperandOK((IROperand*)n.ops().get((u32)1), elems, B, (IRBlock*)defBlk.get((Hashable*)iv), defOf, defBlk))
                     return (String*)0;
+                if (wantIota && ivLaneOK
+                    && (vecIsIvUse((IROperand*)n.ops().get((u32)0), iv) || vecIsIvUse((IROperand*)n.ops().get((u32)1), iv)))
+                    _vrMapUsesIv = true;
                 elems.add((Object*)n.res());
                 continue;
                 }
             return (String*)0;
             }
-        if (!sawLoad || !sawStore)
+        // With no load, the elements ARE the iv and its type is the lane type;
+        // with loads, the iv's lanes must be theirs.
+        if (laneTy == (String*)0 && _vrMapUsesIv)
+            laneTy = iv.ty();
+        if (_vrMapUsesIv && !laneTy.equals(iv.ty()))
+            return (String*)0;
+        if (!(sawLoad || _vrMapUsesIv) || !sawStore)
             return (String*)0;
         return laneTy;
+        }
+
+    static bool vecIsIvUse(IROperand* o, IRValue* iv)
+        {
+        return o.kind() == (u8)OPK_USE && o.val() == iv;
         }
 
     // Usable in the elementwise computation: an already-elementwise value (one
@@ -2708,13 +2733,20 @@
         {
         if (entry == (IRBlock*)0 || entry == B || entry == c.h())
             return (IROperand*)0;
-        i32 kv = (i32)0;
-        bool isConst = vecConst(op, defOf, &kv);
+        i32 kv32 = (i32)0;
+        bool isConst = vecConst(op, defOf, &kv32);
+        // The value 64-bit where it is a plain constant, as the reference's
+        // int64_t: a u32 lane constant of 2^31 or more (sort_small's 2654435761)
+        // was rematerialised as a negative immediate (2026-11-02).
+        i64 kv = (i64)kv32;
+        i64 kw = (i64)0;
+        if (isConst && vecConstWide(op, defOf, &kw))
+            kv = kw;
         String* ck = (String*)0;
         if (isConst)
             {
             ck = new String();
-            ck.appendFormat("c%ld", kv);
+            ck.appendFormat("c%lld", kv);
             }
         else if (op.kind() == (u8)OPK_USE)
             {
