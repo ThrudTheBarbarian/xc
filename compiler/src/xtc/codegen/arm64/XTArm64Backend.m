@@ -32,6 +32,9 @@
 
 // The module's stack-canary check labels, numbered from 1 (reset per module).
 static NSUInteger sArm64CanaryN = 0;
+// Loop heads aligned to 2^n bytes, 0 none: the target row's loop-align (5 on
+// Apple's cores), from --loop-align.
+static NSUInteger sArm64LoopAlign = 0;
 
 @interface XTArm64FnCtx : NSObject
 @property (nonatomic) XTIRFunction *fn;
@@ -8856,7 +8859,21 @@ static BOOL arm64NamesFrameReg(NSString *t) {
         [out appendFormat:@"    .loc %u %u %u\n", d.fileId + 1, d.line, d.column];
         lastLoc = d;
     };
+    // A loop head is a block some later (or the same) block branches back
+    // to, as the x86-64 back end finds it; each is aligned when the row says.
+    NSMutableSet<NSValue *> *loopHeads = [NSMutableSet set];
+    for (NSUInteger bi = 0; sArm64LoopAlign && bi < fn.blocks.count; bi++) {
+        XTIRInsn *t = fn.blocks[bi].terminator;
+        for (XTIROperand *o in t.operands) {
+            if (o.kind != XTIROperandKindBlock || !o.blockRef) continue;
+            NSUInteger hb = [fn.blocks indexOfObjectIdenticalTo:o.blockRef];
+            if (hb != NSNotFound && hb <= bi)
+                [loopHeads addObject:[NSValue valueWithNonretainedObject:o.blockRef]];
+        }
+    }
     for (XTIRBlock *block in fn.blocks) {
+        if ([loopHeads containsObject:[NSValue valueWithNonretainedObject:block]])
+            [out appendFormat:@"    .p2align %lu\n", (unsigned long)sArm64LoopAlign];
         [out appendFormat:@"%@:\n", [self blockLabelForFn:fn block:block]];
         for (XTIRInsn *phi in block.phiNodes) {
             [self emitInsn:phi inBlock:block ctx:ctx];
@@ -8896,6 +8913,7 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
 + (void)setThreadSafeARCOverride:(NSInteger)mode { sArm64ThreadSafeARCOverride = mode; }
 + (void)setAapcs64Abi:(BOOL)on { sArm64Aapcs64Abi = on; }
 + (void)setLseAtomics:(BOOL)on { sArm64LseAtomics = on; }
++ (void)setLoopAlign:(NSUInteger)p2 { sArm64LoopAlign = p2; }
 + (BOOL)threadSafeARC { return sArm64ThreadSafeARC; }
 
 + (NSString *)assemblyFromModule:(XTIRModule *)mod {

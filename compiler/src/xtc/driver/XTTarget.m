@@ -17,6 +17,7 @@
 @property(nonatomic, readwrite, copy) NSString* abi;
 @property(nonatomic, readwrite) BOOL lseAtomics;
 @property(nonatomic, readwrite) BOOL compactObjects;
+@property(nonatomic, readwrite) NSUInteger loopAlign;
 @property(nonatomic, readwrite, copy, nullable) NSString* appleSdk;
 @property(nonatomic, readwrite, copy) NSArray<NSString*>* parKernels;
 @property(nonatomic, readwrite, copy, nullable) NSString* matmul;
@@ -85,18 +86,24 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
     return r;
     }
 
+- (XTTarget*)withLoopAlign:(NSUInteger)p2
+    {
+    self.loopAlign = p2;
+    return self;
+    }
+
 + (NSArray<XTTarget*>*)rows
     {
     static NSArray<XTTarget*>* t;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         t = @[
-            row(@"arm64-macos", @"arm64", 0, @"macos", @"", @"darwin", @"arm64", @"arm64", @"arm64", @"arm64", @"", @"darwin64", YES, @"macosx", @"metal", @"sme", @"macho", @"crt-macos.s", @"rt-macos.s", @"", @"", @"macos-arm64", @"dylib so", @"rt-checked-macos.s", @"", YES,
-                @"arm64 aarch64-apple-darwin arm64-apple-macos arm64-apple-darwin"),
-            row(@"arm64-ios", @"arm64", 0, @"ios", @"", @"darwin", @"ios", @"arm64", @"arm64", @"ios arm64", @"ios", @"darwin64", YES, @"iphoneos", @"", @"", @"macho", @"crt-macos.s", @"rt-macos.s", @"", @"", @"ios-arm64", @"dylib so", @"rt-checked-macos.s", @"", YES,
-                @"ios arm64-apple-ios"),
-            row(@"arm64-ios-sim", @"arm64", 0, @"ios", @"simulator", @"darwin", @"ios-sim", @"arm64", @"arm64", @"ios arm64", @"ios-sim", @"darwin64", YES, @"iphonesimulator", @"", @"", @"macho", @"crt-macos.s", @"rt-macos.s", @"", @"", @"ios-arm64", @"dylib so", @"rt-checked-macos.s", @"", YES,
-                @"ios-sim arm64-apple-ios-simulator"),
+            [row(@"arm64-macos", @"arm64", 0, @"macos", @"", @"darwin", @"arm64", @"arm64", @"arm64", @"arm64", @"", @"darwin64", YES, @"macosx", @"metal", @"sme", @"macho", @"crt-macos.s", @"rt-macos.s", @"", @"", @"macos-arm64", @"dylib so", @"rt-checked-macos.s", @"", YES,
+                @"arm64 aarch64-apple-darwin arm64-apple-macos arm64-apple-darwin") withLoopAlign:5],
+            [row(@"arm64-ios", @"arm64", 0, @"ios", @"", @"darwin", @"ios", @"arm64", @"arm64", @"ios arm64", @"ios", @"darwin64", YES, @"iphoneos", @"", @"", @"macho", @"crt-macos.s", @"rt-macos.s", @"", @"", @"ios-arm64", @"dylib so", @"rt-checked-macos.s", @"", YES,
+                @"ios arm64-apple-ios") withLoopAlign:5],
+            [row(@"arm64-ios-sim", @"arm64", 0, @"ios", @"simulator", @"darwin", @"ios-sim", @"arm64", @"arm64", @"ios arm64", @"ios-sim", @"darwin64", YES, @"iphonesimulator", @"", @"", @"macho", @"crt-macos.s", @"rt-macos.s", @"", @"", @"ios-arm64", @"dylib so", @"rt-checked-macos.s", @"", YES,
+                @"ios-sim arm64-apple-ios-simulator") withLoopAlign:5],
             row(@"arm64-android", @"arm64", 0, @"android", @"", @"bionic", @"android", @"arm64", @"arm64", @"arm64", @"android", @"aapcs64", NO, @"", @"spirv", @"", @"elf-pie", @"crt-android.s", @"rt-android.s", @"/system/bin/linker64", @"libc.so libm.so libdl.so", @"android-arm64", @"so", @"", @"", YES,
                 @"android aarch64-linux-android"),
             row(@"arm64-linux", @"arm64", 0, @"linux", @"", @"glibc", @"arm64-linux", @"arm64", @"arm64", @"arm64", @"linux-arm64", @"aapcs64", NO, @"", @"spirv", @"", @"elf-pie", @"crt-glibc.s", @"rt-glibc.s", @"/lib/ld-linux-aarch64.so.1", @"libc.so.6 libm.so.6", @"linux-arm64", @"so", @"", @"aarch64-linux-gnu", YES,
@@ -170,6 +177,8 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
         [s appendString:@"lse-atomics\n"];
     if (self.compactObjects)
         [s appendString:@"compact-objects\n"];
+    if (self.loopAlign)
+        [s appendFormat:@"loop-align %lu\n", (unsigned long)self.loopAlign];
     if (self.appleSdk)
         [s appendFormat:@"apple-sdk %@\n", self.appleSdk];
     if (self.matmul)

@@ -29,6 +29,7 @@ class TargetRow
     String* _abi;       // the calling convention (the reference's abi says which)
     bool _lse;          // arm64: the baseline has the LSE atomics
     bool _compact;      // `new C` gets the 8-byte instance header (compact-object-header.md)
+    u32 _loopAlign;     // arm64: loop heads on 2^n bytes, 0 none (5 on Apple's cores; as the reference)
     String* _appleSdk;  // macosx, iphoneos, iphonesimulator, or 0: frameworks are on exactly when set
     Array* _parKernels; // of String*: the par kernel forms its runtime runs (metal, ptx, spirv, wgsl)
     String* _matmul;    // the matrix-multiply kernels: sme, x86, or 0
@@ -64,6 +65,8 @@ class TargetRow
     String* abi(void) { return _abi; }
     bool lseAtomics(void) { return _lse; }
     bool compactObjects(void) { return _compact; }
+    u32 loopAlign(void) { return _loopAlign; }
+    TargetRow* withLoopAlign(u32 p2) { _loopAlign = p2; return self; }
     String* appleSdk(void) { return _appleSdk; }
     Array* parKernels(void) { return _parKernels; }
     String* matmul(void) { return _matmul; }
@@ -204,6 +207,8 @@ class TargetRow
             s.appendCString("lse-atomics\n");
         if (_compact)
             s.appendCString("compact-objects\n");
+        if (_loopAlign != (u32)0)
+            s.appendFormat("loop-align %u\n", _loopAlign);
         if (_appleSdk != (String*)0)
             s.appendFormat("apple-sdk %s\n", _appleSdk.cString());
         if (_matmul != (String*)0)
@@ -255,11 +260,11 @@ class Targets
         {
         Array* t = new Array();
         t.add((Object*)TargetRow.make("arm64-macos", "arm64", (u32)0, "macos", "", "darwin", "arm64", "arm64", "arm64", "arm64", "", "darwin64", true, "macosx", "metal", "sme", "macho", "crt-macos.s", "rt-macos.s", "", "", "macos-arm64", "dylib so", "rt-checked-macos.s", "", true,
-                                      "arm64 aarch64-apple-darwin arm64-apple-macos arm64-apple-darwin"));
+                                      "arm64 aarch64-apple-darwin arm64-apple-macos arm64-apple-darwin").withLoopAlign((u32)5));
         t.add((Object*)TargetRow.make("arm64-ios", "arm64", (u32)0, "ios", "", "darwin", "ios", "arm64", "arm64", "ios arm64", "ios", "darwin64", true, "iphoneos", "", "", "macho", "crt-macos.s", "rt-macos.s", "", "", "ios-arm64", "dylib so", "rt-checked-macos.s", "", true,
-                                      "ios arm64-apple-ios"));
+                                      "ios arm64-apple-ios").withLoopAlign((u32)5));
         t.add((Object*)TargetRow.make("arm64-ios-sim", "arm64", (u32)0, "ios", "simulator", "darwin", "ios-sim", "arm64", "arm64", "ios arm64", "ios-sim", "darwin64", true, "iphonesimulator", "", "", "macho", "crt-macos.s", "rt-macos.s", "", "", "ios-arm64", "dylib so", "rt-checked-macos.s", "", true,
-                                      "ios-sim arm64-apple-ios-simulator"));
+                                      "ios-sim arm64-apple-ios-simulator").withLoopAlign((u32)5));
         t.add((Object*)TargetRow.make("arm64-android", "arm64", (u32)0, "android", "", "bionic", "android", "arm64", "arm64", "arm64", "android", "aapcs64", false, "", "spirv", "", "elf-pie", "crt-android.s", "rt-android.s", "/system/bin/linker64", "libc.so libm.so libdl.so", "android-arm64", "so", "", "", true,
                                       "android aarch64-linux-android"));
         t.add((Object*)TargetRow.make("arm64-linux", "arm64", (u32)0, "linux", "", "glibc", "arm64-linux", "arm64", "arm64", "arm64", "linux-arm64", "aapcs64", false, "", "spirv", "", "elf-pie", "crt-glibc.s", "rt-glibc.s", "/lib/ld-linux-aarch64.so.1", "libc.so.6 libm.so.6", "linux-arm64", "so", "", "aarch64-linux-gnu", true,

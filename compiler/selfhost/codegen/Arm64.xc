@@ -135,6 +135,7 @@ class Arm64
     // minSdk floor is plain armv8-a, where `ldaddl`/`ldaddal` do not exist —
     // the NDK assembler refuses them and a device without them takes SIGILL.
     bool       _lseAtomics;
+    u32        _loopAlign;      // loop heads on 2^n bytes, 0 none (the row's loop-align)
     IRFunc*   _fn;
     String*   _out;
     Map*      _slot;            // value -> byte offset in the frame
@@ -170,6 +171,7 @@ class Arm64
 
     void setAapcs64Abi(bool on) { _aapcs64Abi = on; }
     void setLseAtomics(bool on) { _lseAtomics = on; }
+    void setLoopAlign(u32 p2) { _loopAlign = p2; }
     void setThreadSafeArcOverride(i32 mode) { _arcOverride = mode; }
 
     bool   failed(void)  { return _failed; }
@@ -931,8 +933,33 @@ class Arm64
         collectMsFn(fn);        // after allocation: homes and saves are decided,
                                 //   and _saveAreaOffset is assigned just above
         emitPrologue(fn);
+        // A loop head is a block some later (or the same) block branches
+        // back to, as the x86-64 back end finds it; each is aligned to
+        // 2^_loopAlign bytes when the row says (5 on Apple's cores).
+        Array* head = new Array();
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            head.add((Object*)Number.with((u32)0));
+        for (u32 bi = (u32)0; _loopAlign != (u32)0 && bi < fn.blocks().count(); bi = bi + (u32)1)
+            {
+            IRBlock* pb = (IRBlock*)fn.blocks().get(bi);
+            if (pb.term() == (IRInsn*)0)
+                continue;
+            for (u32 q = (u32)0; q < pb.term().ops().count(); q = q + (u32)1)
+                {
+                IROperand* o = (IROperand*)pb.term().ops().get(q);
+                if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
+                    continue;
+                for (u32 hb = (u32)0; hb <= bi; hb = hb + (u32)1)
+                    if ((IRBlock*)fn.blocks().get(hb) == o.blk())
+                        head.set(hb, (Object*)Number.with((u32)1));
+                }
+            }
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            if (((Number*)head.get(b)).asU32() != (u32)0)
+                _out.appendFormat("    .p2align %u\n", _loopAlign);
             emitBlock(fn, (IRBlock*)fn.blocks().get(b));
+            }
     }
 
     // The checked-build parameter map (private:docs/Design/memory-safety.md). Collected

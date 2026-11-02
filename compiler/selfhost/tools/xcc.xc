@@ -4944,6 +4944,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
     // The row's calling convention and atomics (the reference says why).
     be.setAapcs64Abi(d.targetRow().abi().equals(String.withCString("aapcs64")));
     be.setLseAtomics(d.targetRow().lseAtomics());
+    be.setLoopAlign(d.targetRow().loopAlign());
     be.setThreadSafeArcOverride(d.fe().threadSafeArc());
     String* prog = be.assembly(mod);
     if (be.failed()) {

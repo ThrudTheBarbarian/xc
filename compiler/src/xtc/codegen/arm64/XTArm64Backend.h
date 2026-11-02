@@ -61,6 +61,7 @@ NS_ASSUME_NONNULL_BEGIN
 // SIGILL — which an emulator running on an ARMv8.5 host would never show. Off,
 // the same atomic becomes an ldaxrh/stlxrh loop.
 + (void)setLseAtomics:(BOOL)on;
++ (void)setLoopAlign:(NSUInteger)p2;
 
 /// What the last `assemblyFromModule:` actually decided. For tests.
 + (BOOL)threadSafeARC;

@@ -4877,6 +4877,11 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         [cgArgs addObject:@"--aapcs64-abi"];
     if ([cgRow.cpu isEqualToString:@"arm64"] && !cgRow.lseAtomics)
         [cgArgs addObject:@"--no-lse-atomics"];
+    if ([cgRow.cpu isEqualToString:@"arm64"] && cgRow.loopAlign)
+        {
+        [cgArgs addObject:@"--loop-align"];
+        [cgArgs addObject:[NSString stringWithFormat:@"%lu", (unsigned long)cgRow.loopAlign]];
+        }
     // The x86-64 vector level. With no -m flag it is `auto`: runtime SIMD
     // dispatch, base code plus AVX2 clones picked at load, so one binary runs
     // the widest unit the machine has and still runs everywhere.

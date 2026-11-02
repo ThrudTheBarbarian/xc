@@ -37,6 +37,7 @@ static void usage(void)
             "  -O0..-O3              IR opt-pass level.\n"
             "  -q, --quiet           Suppress informational stderr.\n"
             "  --dump-opt-ir         Print the IR after the opt pipeline and stop.\n"
+            "  --loop-align <n>      Align loop heads to 2^n bytes (the target row's)\n"
             "  --no-lse-atomics      The target has no ARMv8.1 LSE: emit atomic ARC\n"
             "                        as an ldaxrh/stlxrh loop (Android).\n"
             "  --aapcs64-abi         Use plain AAPCS64 argument placement (Android)\n"
@@ -70,6 +71,7 @@ int main(int argc, const char* argv[])
         BOOL matMul = NO;
         BOOL inlineChecks = NO;         // --inline-checks: -fbounds-check=light
         BOOL lseAtomics = YES;
+        NSUInteger loopAlign = 0;       // --loop-align <n>: loop heads on 2^n bytes
 
         for (int i = 1; i < argc; i++)
             {
@@ -128,6 +130,10 @@ int main(int argc, const char* argv[])
                 // for each, so they export). Same arch-neutral switch the arm9
                 // codegen uses.
                 [XTIROptDeadFunctionElim setKeepAllFunctions:YES];
+                }
+            else if ([arg isEqualToString:@"--loop-align"] && i + 1 < argc)
+                {
+                loopAlign = (NSUInteger)atoi(argv[++i]);
                 }
             else if ([arg isEqualToString:@"--no-lse-atomics"])
                 {
@@ -274,6 +280,7 @@ int main(int argc, const char* argv[])
         [XTArm64Backend setThreadSafeARCOverride:threadSafeARC];
         [XTArm64Backend setAapcs64Abi:aapcs64Abi];
         [XTArm64Backend setLseAtomics:lseAtomics];
+        [XTArm64Backend setLoopAlign:loopAlign];
 
         NSString* asmText = nil;
         @try

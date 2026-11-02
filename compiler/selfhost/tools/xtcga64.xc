@@ -34,6 +34,7 @@ void main(void)
     bool partial = false;
     bool aapcs64 = false;
     bool lse = true;
+    u32 loopAlign = (u32)0;
     u32 argc = Process.argumentCount();
     u32 i = (u32)1;
     while (i < argc)
@@ -63,6 +64,15 @@ void main(void)
             {
             aapcs64 = true;
             i = i + (u32)1;
+            continue;
+            }
+        if (a.equals(String.withCString("--loop-align")) && i + (u32)1 < argc)
+            {
+            String* v = Process.argument(i + (u32)1);
+            loopAlign = (u32)0;
+            for (u32 k = (u32)0; k < v.byteLength(); k = k + (u32)1)
+                loopAlign = loopAlign * (u32)10 + (u32)(v.byteAt(k) - (u8)'0');
+            i = i + (u32)2;
             continue;
             }
         if (a.equals(String.withCString("--no-lse-atomics")))
@@ -160,6 +170,7 @@ void main(void)
     Arm64* be = new Arm64();
     be.setAapcs64Abi(aapcs64);
     be.setLseAtomics(lse);
+    be.setLoopAlign(loopAlign);
     if (dumpHomes)
         {
         be.dumpHomes(m);

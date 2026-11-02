@@ -38,6 +38,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// _xtc_alloc_object, and vtables carry the dealloc as a fourth header word
 /// (private:docs/Design/compact-object-header.md).
 @property(nonatomic, readonly) BOOL compactObjects;
+/// arm64: loop heads aligned to 2^loopAlign bytes (0: none). 5 on Apple's
+/// cores, where a 32-byte boundary took sort_small 14% and sieve 4.5% faster
+/// on an M3 Max; 0 on a Pi 5's A76, where the suite came out even.
+@property(nonatomic, readonly) NSUInteger loopAlign;
+- (XTTarget*)withLoopAlign:(NSUInteger)p2;
 // The Apple SDK whose frameworks `#import <F>` may name (macosx, iphoneos,
 // iphonesimulator), or nil: frameworks are on exactly when it is set.
 @property(nonatomic, readonly, copy, nullable) NSString* appleSdk;
