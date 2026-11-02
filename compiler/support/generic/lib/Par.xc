@@ -37,6 +37,13 @@
 #import "ParWebGpu.xc"
 #endif
 
+#if !(ARCH_6502 || ARCH_m68k)
+i32 _xt_atomic_cas_i32(pointer slot, i32 expected, i32 desired);
+void _xt_atomic_store_i32(pointer slot, i32 v);
+#endif
+// 1 while a thread's block holds the runtime (Par.run).
+i32 gParActive;
+
 #if ARCH_arm64 || ARCH_x86_64 || OS_windows
 // The bytes from p to the end of the page-aligned heap block it points into,
 // or -1 outside every such block (the runtime's registry, rt.c).
@@ -222,8 +229,17 @@ class ParFnChunk : ParChunk
             c.lo = from;
             c.hi = to;
             c.run();
+            // The record is the runtime's: kept only by the thread that holds
+            // it (Par.run), so two threads' blocks never meet in its map.
+#if !(ARCH_6502 || ARCH_m68k)
+            if (_xt_atomic_cas_i32((pointer)&gParActive, (i32)0, (i32)1) == (i32)0)
+                return;
+#endif
             ParDevice.ranClear((ParChunk*)c);
             ParDevice.ranAdd((ParChunk*)c, String.withCString("cpu"));
+#if !(ARCH_6502 || ARCH_m68k)
+            _xt_atomic_store_i32((pointer)&gParActive, (i32)0);
+#endif
             return;
             }
         // The record holds each accumulator's value from before the loop,
@@ -303,10 +319,34 @@ class Par
 
     // Run a block over [lo, hi), on the device chosen for it: the GPU or the
     // CPU, by XC_PAR, Par.device, or (auto) by measuring both (ParDevice.xc).
+    // One run at a time drives the runtime: its device choice, the learned
+    // table, the lanes and Par.ranOn's record are the process's, not a
+    // thread's. A block that starts while another thread's block runs (a
+    // loop --par-style made a block of, in a function several threads call)
+    // runs on its own thread, serially, as its source reads, and touches none
+    // of that state: three threads in one ran into each other's map and the
+    // program crashed now and then.
     static void run(ParChunk* proto, i64 lo, i64 hi)
         {
         if (hi <= lo)
             return;
+#if !(ARCH_6502 || ARCH_m68k)
+        if (_xt_atomic_cas_i32((pointer)&gParActive, (i32)0, (i32)1) == (i32)0)
+            {
+            proto.lo = lo;
+            proto.hi = hi;
+            proto.run();
+            return;
+            }
+        Par._runOwned(proto, lo, hi);
+        _xt_atomic_store_i32((pointer)&gParActive, (i32)0);
+#else
+        Par._runOwned(proto, lo, hi);
+#endif
+        }
+
+    static void _runOwned(ParChunk* proto, i64 lo, i64 hi)
+        {
         ParDevice.ranClear(proto);
         // A block --par-style=auto made from a plain loop that par-check could not
         // prove independent, or that a GPU could not run: its kernel is the

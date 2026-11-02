@@ -5548,7 +5548,15 @@ class Arm64
         }
         if (sretUsed) return;        // the callee already filled the slot via x8
         u32 sz = aggSize(l);
-        emitSpAddr(slotOf(n.res()), String.withCString("x16"));
+        // Past #4095 straight to [sp, #off] while it encodes, as the
+        // reference (whose staged form lost the second store's base).
+        u32 base = slotOf(n.res());
+        if (base > (u32)4095 && base + (u32)8 <= (u32)32760) {
+            _out.appendFormat("    str x0, [sp, #%lu]\n", base);
+            if (sz > (u32)8) _out.appendFormat("    str x1, [sp, #%lu]\n", base + (u32)8);
+            return;
+        }
+        emitSpAddr(base, String.withCString("x16"));
         _out.appendCString("    str x0, [x16]\n");
         if (sz > (u32)8) _out.appendCString("    str x1, [x16, #8]\n");
     }

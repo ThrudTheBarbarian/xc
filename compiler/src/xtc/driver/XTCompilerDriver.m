@@ -865,7 +865,12 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     toks = [lexer tokenise];
     XTParser* parser = [[XTParser alloc] initWithTokens:toks typeTable:tt diagnostics:_diagnostics];
     parser.defaultPointerPlacement = arm64 ? XTPointerPlacementMain : XTPointerPlacementHeap;
-    parser.parAuto = _options.parAuto;
+    // Loops become blocks only where a block has threads to run on: the
+    // arm64, x86-64, win64 and wasm32 back ends. On xt6502, the Atari and
+    // arm9 a block runs serially, and the lifting only moves the loop's code.
+    // Mirrored in the port (Frontend).
+    parser.parAuto = _options.parAuto && (_options.useArm64Backend || _options.useX86_64Backend
+                                          || _options.useWin64Backend || _options.useWasm32Backend);
     parser.parDeviceDefault = _options.parDeviceDefault;
     parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
@@ -1049,7 +1054,12 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     NSArray<XTToken*>* toks = [lexer tokenise];
     XTParser* parser = [[XTParser alloc] initWithTokens:toks typeTable:tt diagnostics:_diagnostics];
     parser.defaultPointerPlacement = arm64 ? XTPointerPlacementMain : XTPointerPlacementHeap;
-    parser.parAuto = _options.parAuto;
+    // Loops become blocks only where a block has threads to run on: the
+    // arm64, x86-64, win64 and wasm32 back ends. On xt6502, the Atari and
+    // arm9 a block runs serially, and the lifting only moves the loop's code.
+    // Mirrored in the port (Frontend).
+    parser.parAuto = _options.parAuto && (_options.useArm64Backend || _options.useX86_64Backend
+                                          || _options.useWin64Backend || _options.useWasm32Backend);
     parser.parDeviceDefault = _options.parDeviceDefault;
     parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
@@ -1746,7 +1756,12 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     XTParser* parser = [[XTParser alloc] initWithTokens:tokens
                                               typeTable:tt
                                             diagnostics:_diagnostics];
-    parser.parAuto = _options.parAuto;
+    // Loops become blocks only where a block has threads to run on: the
+    // arm64, x86-64, win64 and wasm32 back ends. On xt6502, the Atari and
+    // arm9 a block runs serially, and the lifting only moves the loop's code.
+    // Mirrored in the port (Frontend).
+    parser.parAuto = _options.parAuto && (_options.useArm64Backend || _options.useX86_64Backend
+                                          || _options.useWin64Backend || _options.useWasm32Backend);
     parser.parDeviceDefault = _options.parDeviceDefault;
     parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;

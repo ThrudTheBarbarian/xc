@@ -530,7 +530,12 @@ class FeOptions
             return (IRModule*)0;
             }
         Parser* parser = Parser.with(tokens);
-        parser.setParAuto(o.parAuto());
+        // Loops become blocks only where a block has threads to run on: the
+        // arm64, x86-64, win64 and wasm32 back ends (xt6502, the Atari and
+        // arm9 run a block serially). As the reference.
+        String* pp0 = platformOf(o);
+        parser.setParAuto(o.parAuto() && (pp0.equals(String.withCString("arm64")) || pp0.equals(String.withCString("x86_64"))
+                                          || pp0.equals(String.withCString("win64")) || pp0.equals(String.withCString("wasm32"))));
         parser.setParDeviceDefault(o.parDeviceDefault());
         parser.setWebModules(platformOf(o).equals(String.withCString("wasm32")));
         parser.setGoalDefault(pp.goal() != (u32)0 ? pp.goal() : o.goalDefault());

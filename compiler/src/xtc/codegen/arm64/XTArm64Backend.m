@@ -3063,6 +3063,15 @@ static BOOL arm64LogicalImm(uint64_t v, int width) {
     if (sretUsed) return;   // >16-byte non-HFA: callee filled the slot via x8.
     NSUInteger base = [self slotOffsetForValue:insn.result.valueId ctx:ctx];
     NSUInteger sz = [self arm64AggSize:insn.result.type.layout];
+    // Past #4095 straight to [sp, #off] while it encodes: the staged form
+    // (mov/add x16, then [x16]) was folded back by canonicaliseStagedSlots for
+    // its FIRST store only, leaving `str x1, [x16, #8]` on an x16 nothing set.
+    // Mirrored in the port.
+    if (base > 4095 && base + 8 <= 32760) {
+        [ctx.out appendFormat:@"    str x0, [sp, #%lu]\n", (unsigned long)base];
+        if (sz > 8) [ctx.out appendFormat:@"    str x1, [sp, #%lu]\n", (unsigned long)(base + 8)];
+        return;
+    }
     [self emitSpAddr:base into:@"x16" ctx:ctx];
     [ctx.out appendString:@"    str x0, [x16]\n"];
     if (sz > 8) [ctx.out appendString:@"    str x1, [x16, #8]\n"];
