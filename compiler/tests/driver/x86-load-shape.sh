@@ -37,14 +37,14 @@ staged=$(awk '{ l[NR] = $0 } END { for (i = 1; i < NR; i++)
     if (l[i] ~ /^\tmov\t(edx|rdx|dl|dx), [a-z]* ?(ptr )?\[/ && l[i+1] ~ /^\tmov\t[a-z0-9]+, (edx|rdx|dl|dx)$/) n++
     print n + 0 }' "$W/own.s")
 [ "$staged" -eq 0 ] && echo "ok: no load is staged through rdx into its home" \
-    || { echo "FAIL: $staged loads go through rdx and a copy:"; grep -B0 -A1 -E '^\tmov\t(edx|rdx|dl|dx), .*\[' "$W/own.s" | head -6; fail=1; }
-part=$(grep -cE '^\tmov\t(bl|[sd]il|r[0-9]+b|bx|[sd]i|r[0-9]+w), (byte |word )?(ptr )?\[' "$W/own.s")
+    || { echo "FAIL: $staged loads go through rdx and a copy:"; awk '/^\tmov\t(edx|rdx|dl|dx), .*\[/ { print; getline; print }' "$W/own.s" | head -6; fail=1; }
+part=$(awk '/^\tmov\t(bl|[sd]il|r[0-9]+b|bx|[sd]i|r[0-9]+w), (byte |word )?(ptr )?\[/ { n++ } END { print n + 0 }' "$W/own.s")
 [ "$part" -eq 0 ] && echo "ok: bytes and halfwords are zero-extended into the whole register" \
-    || { echo "FAIL: $part partial-register loads:"; grep -E '^\tmov\t(bl|[sd]il|r[0-9]+b|bx|[sd]i|r[0-9]+w), (byte |word )?(ptr )?\[' "$W/own.s" | head -3; fail=1; }
+    || { echo "FAIL: $part partial-register loads:"; awk '/^\tmov\t(bl|[sd]il|r[0-9]+b|bx|[sd]i|r[0-9]+w), (byte |word )?(ptr )?\[/' "$W/own.s" | head -3; fail=1; }
 nfun=$(grep -c '@function$' "$W/ref.s")
 unal=$(awk '/^\t\.p2align\t4, 0x90$/ { a = NR } /^\t\.globl\t/ { g = NR } /@function$/ { if (!(a && a == g - 1)) n++ } END { print n + 0 }' "$W/ref.s")
 # The SIMD dispatch stubs (one jmp each) are not aligned.
-stubs=$(grep -c '^\tjmp\tqword ptr \[rip + __simd_' "$W/ref.s")
+stubs=$(awk '/^\tjmp\tqword ptr \[rip \+ __simd_/ { n++ } END { print n + 0 }' "$W/ref.s")
 [ "$unal" -le "$stubs" ] && echo "ok: $((nfun - unal)) of $nfun functions start on 16 bytes (the rest are $stubs dispatch stubs)" \
     || { echo "FAIL: $unal of $nfun functions are not preceded by .p2align 4 ($stubs dispatch stubs)"; fail=1; }
 cmp -s "$W/ref.s" "$W/xc.s" && echo "ok: the two compilers' assembly is the same" \
