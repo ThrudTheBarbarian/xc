@@ -9,6 +9,8 @@
 // and the same whatever the thread count.
 //
 // XC_PAR_THREADS=<n> sets the thread count for one run (1: no threads at all).
+// On Linux the threads are pinned, one a CPU of the process's allowed set;
+// XC_PAR_PIN=0 leaves them unpinned (ParCpuLanes.pinCpus).
 // Targets without threads (xt6502, m68k, wasm32) run the whole range on the
 // calling thread: a `par` block compiles everywhere and is sequential there.
 #import "Foundation.xc"

@@ -243,8 +243,13 @@ class ParCpuJob : Object
 // One of the CPU worker's threads: made once, it waits for a tile, runs the
 // chunk over the tile's range on its own, and flags it done. The pool is not
 // used: its fan-out and join per tile cost more than a small tile's work.
+#if OS_linux
+i32 sched_getaffinity(i32 pid, u64 size, u8* mask);
+i32 sched_setaffinity(i32 pid, u64 size, u8* mask);
+#endif
 class ParCpuLane : Object
     {
+    i32 _cpu;           // the CPU it is pinned to (Linux), or -1
     Thread* _thread;
     Sem* _go;
     Atomic* _done;      // 1 once the tile's chunk has run
@@ -265,6 +270,20 @@ class ParCpuLane : Object
         }
     void loop(void)
         {
+#if OS_linux
+        // Pinned, so two lanes never share a hardware thread: unpinned, Linux
+        // now and then put two on one CPU of a 32-thread Zen 5 until its load
+        // balancer moved one, and an even block's one piece a lane waited for
+        // the slow one (md5 at 9.5 or 14 ms from run to run; pinned 9.5-9.9).
+        if (_cpu >= (i32)0)
+            {
+            u8 mask[128];
+            for (u32 i = (u32)0; i < (u32)128; i = i + (u32)1)
+                mask[i] = (u8)0;
+            mask[_cpu / (i32)8] = (u8)((u32)1 << (u32)(_cpu % (i32)8));
+            sched_setaffinity((i32)0, (u64)128, &mask[0]);
+            }
+#endif
         while (true)
             {
             _go.wait();
@@ -293,6 +312,7 @@ class ParCpuLane : Object
 Array* gParLanes;
 u32 gParLanesBusy;
 Mutex* gParLanesLock;   // held by whoever runs on the lanes; a loser spawns
+i32 gParLanesFirstCpu;  // the calling thread's CPU during a run when the lanes are pinned, else -1
 
 class ParCpuLanes
     {
@@ -323,6 +343,30 @@ class ParCpuLanes
         return sized;
         }
 
+    // The CPUs the lanes are pinned to: the process's allowed set (so
+    // taskset and cgroups hold), or 0 to leave them unpinned: not Linux,
+    // XC_PAR_PIN=0, or more lanes than allowed CPUs (pinning would stack
+    // them).
+    static Array* pinCpus(i32 lanes)
+        {
+#if OS_linux
+        if (Platform.env(String.withCString("XC_PAR_PIN")).equals(String.withCString("0")))
+            return (Array*)0;
+        u8 mask[128];
+        if (sched_getaffinity((i32)0, (u64)128, &mask[0]) != (i32)0)
+            return (Array*)0;
+        Array* cpus = new Array();
+        for (u32 c = (u32)0; c < (u32)1024; c = c + (u32)1)
+            if ((mask[c / (u32)8] & (u8)((u32)1 << (c % (u32)8))) != (u8)0)
+                cpus.add((Object*)Number.with(c));
+        if (cpus.count() < (u32)lanes)
+            return (Array*)0;
+        return cpus;
+#else
+        return (Array*)0;
+#endif
+        }
+
     static Mutex* lock(void)
         {
         if (gParLanesLock == (Mutex*)0)
@@ -335,9 +379,15 @@ class ParCpuLanes
             {
             gParLanes = new Array();
             i32 n = Par.threads();
+            Array* cpus = ParCpuLanes.pinCpus(n);
+            gParLanesFirstCpu = cpus == (Array*)0 ? (i32)-1 : (i32)((Number*)cpus.get((u32)0)).asU32();
             for (i32 i = (i32)0; i < n; i = i + (i32)1)
                 {
                 ParCpuLane* lane = new ParCpuLane();
+                // Lane i on the (i + 1)th allowed CPU: the calling thread,
+                // which runs piece 0 and is not pinned, has the first.
+                lane._cpu = cpus == (Array*)0 ? (i32)-1
+                          : (i32)((Number*)cpus.get((u32)(i + (i32)1) % cpus.count())).asU32();
                 lane.start();
                 gParLanes.add((Object*)lane);
                 }
@@ -396,6 +446,21 @@ class ParCpuLanes
             lane._done.store((i32)0);
             lane._go.post();
             }
+#if OS_linux
+        // The calling thread on the one allowed CPU no lane has, for the run
+        // only (its own mask restored after): unpinned, it shared a lane's CPU
+        // now and then, and piece 0 was the slow one.
+        u8 saved[128];
+        bool pinned = gParLanesFirstCpu >= (i32)0 && sched_getaffinity((i32)0, (u64)128, &saved[0]) == (i32)0;
+        if (pinned)
+            {
+            u8 mask[128];
+            for (u32 i = (u32)0; i < (u32)128; i = i + (u32)1)
+                mask[i] = (u8)0;
+            mask[gParLanesFirstCpu / (i32)8] = (u8)((u32)1 << (u32)(gParLanesFirstCpu % (i32)8));
+            sched_setaffinity((i32)0, (u64)128, &mask[0]);
+            }
+#endif
         // Piece 0 on the block itself, then whatever is left.
         proto.lo = lo;
         proto.hi = lo + n / pieces;
@@ -409,6 +474,10 @@ class ParCpuLanes
             lane._busy = false;
             lane._job = (ParCpuJob*)0;
             }
+#if OS_linux
+        if (pinned)
+            sched_setaffinity((i32)0, (u64)128, &saved[0]);
+#endif
         gParLanesBusy = (u32)0;
         ParCpuLanes.lock().unlock();
         for (u32 j = (u32)1; j < job._parts.count(); j = j + (u32)1)

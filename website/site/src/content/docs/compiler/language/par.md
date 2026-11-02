@@ -135,6 +135,10 @@ targets without threads (`xt6502`, `m68k`), and on `wasm32`, where threads
 would make the page need cross-origin isolation, the whole range runs on the
 calling thread (or on the GPU through WebGPU).
 
+On Linux each of the block's threads is pinned to its own CPU, taken from the
+CPUs the process may use, so `taskset` and container limits still apply.
+`XC_PAR_PIN=0` leaves the threads unpinned.
+
 ## Running on the GPU
 
 **macOS on Apple silicon, and Windows with an NVIDIA GPU. Also Linux, Windows with any GPU, Android, and the browser.** A block that can
