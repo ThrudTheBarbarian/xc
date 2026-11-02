@@ -1,7 +1,9 @@
-// vec_map_iota.xc — a map loop that stores a value computed from its own
+// vec_map_iota.xc — map loops that store a value computed from their own
 // induction variable (sort_small's fill, 2026-11-02): `a[i] = ((i * K) ^ x) + s`
 // with no load, `b[i] = a[i] + i` with one, and a trip that leaves a scalar
-// remainder. Lane l of the vectorised iv holds i + l.
+// remainder; and a constant of 2^31 or more in a vectorised map. Not
+// vectorised yet: a vector in a function costs the x86-64 back end every float
+// home, so the map path keeps the iv out of its lanes for now.
 #import "Stdio.xc"
 
 #define N 64
@@ -9,6 +11,7 @@
 u32 a[N];
 u32 b[N];
 u32 c[M];
+u32 d[N];
 
 i32 main(i32 argc, u8** argv)
     {
@@ -23,7 +26,9 @@ i32 main(i32 argc, u8** argv)
         for (u32 i = (u32)0; i < (u32)M; i++)
             c[i] = i * (u32)7 + r;
         for (u32 i = (u32)0; i < (u32)N; i++)
-            acc = acc + (a[i] ^ b[i]);
+            d[i] = a[i] * (u32)2654435761;
+        for (u32 i = (u32)0; i < (u32)N; i++)
+            acc = acc + (a[i] ^ b[i]) + d[i];
         for (u32 i = (u32)0; i < (u32)M; i++)
             acc = acc + c[i];
         }

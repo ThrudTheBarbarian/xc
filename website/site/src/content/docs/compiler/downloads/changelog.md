@@ -30,10 +30,7 @@ Everything since 0.9.
     once per copy (call_depth 1.10 times faster);
   - a loop's counter and its next value share a register, so a vectorised
     loop closes with one branch and no copy (matrix_mul 1.06 times faster,
-    struct_copy 1.05);
-  - a loop that stores a value computed from its own index (`a[i] = i * k`)
-    is vectorised, as one that loads `a[i]` was (sort_small 1.02 times
-    faster).
+    struct_copy 1.05).
 - **Big modules compile much faster for arm64.** Two lookups in the arm64
   back end searched every symbol in the module, one of them for every virtual
   call: the compiler's own driver, which imports most of the tree, took 160

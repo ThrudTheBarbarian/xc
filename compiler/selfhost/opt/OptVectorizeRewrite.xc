@@ -1345,7 +1345,6 @@
         c.setRuntime(rt, boundOp);
         c.setIvStart((i64)mapStart);
         c.setIvStartOp(rtStart);
-        c.setIota(_vrMapUsesIv);
         return c;
         }
 
@@ -1848,38 +1847,6 @@
         IRBlock* entry = c.pre();
         if (entry == (IRBlock*)0)
             entry = (IRBlock*)fn.blocks().get((u32)0);
-        // IOTA (vecClassifyBody's _vrMapUsesIv): lane l of the iv is i + l, as
-        // in the reduction's applier. viota is loaded once in the preheader,
-        // viv built at the top of the body, and the iv maps to it. As the
-        // original.
-        if (c.isIota())
-            {
-            String* nm = self.vecIotaSymbol(c.laneTy(), c.vecBytes(), fn);
-            String* pty = new String();
-            pty.appendFormat("Ptr(%s, unbanked)", c.laneTy().cString());
-            IRValue* iotaPtr = new IRValue(pty);
-            IRInsn* ao = IRInsn.with(String.withCString("AddrOf"));
-            ao.setRes(iotaPtr);
-            ao.add(IROperand.sym(nm));
-            entry.insns().add((Object*)ao);
-            IRValue* viota = new IRValue(_vecTy);
-            IRInsn* vl = IRInsn.with(String.withCString("VLoad"));
-            vl.setRes(viota);
-            vl.add(IROperand.useVal(iotaPtr));
-            entry.insns().add((Object*)vl);
-            IRValue* vsp = new IRValue(_vecTy);
-            IRInsn* sp = IRInsn.with(String.withCString("VSplat"));
-            sp.setRes(vsp);
-            sp.add(IROperand.useVal(c.iv()));
-            _vecBody.add((Object*)sp);
-            IRValue* viv = new IRValue(_vecTy);
-            IRInsn* va = IRInsn.with(String.withCString("VAdd"));
-            va.setRes(viv);
-            va.add(IROperand.useVal(vsp));
-            va.add(IROperand.useVal(viota));
-            _vecBody.add((Object*)va);
-            _vecMap.set((Hashable*)c.iv(), (Object*)viv);
-            }
 
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
