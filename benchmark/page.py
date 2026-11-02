@@ -592,11 +592,28 @@ def c_tables(version, fname="c.json"):
 
 def remote_tables(version):
     """A remote GPU through xcd (benchmark/par/remote.py)."""
-    path = os.path.join(ROOT, "par", version, "remote.json")
-    if not os.path.exists(path):
-        return "*(not measured for this release)*"
-    with open(path) as fh:
+    # A release with no remote run carries the latest earlier one, each row
+    # labelled with the release that measured it (owner, 2026-11-02: no "not
+    # measured" placeholder on the page).
+    def vkey(v):
+        p = v.lstrip("v").split(".")
+        if not all(x.isdigit() for x in p):
+            return (-1, 0.0, 0)
+        return (int(p[0]), float("0." + p[1]) if len(p) > 1 else 0.0, int(p[2]) if len(p) > 2 else 0)
+    have = sorted((d for d in os.listdir(os.path.join(ROOT, "par"))
+                   if d.startswith("v") and vkey(d) <= vkey(version)
+                   and os.path.exists(os.path.join(ROOT, "par", d, "remote.json"))), key=vkey)
+    if not have:
+        return ""
+    src = have[-1]
+    with open(os.path.join(ROOT, "par", src, "remote.json")) as fh:
         res = json.load(fh)
+    if src != version:
+        for r in res.values():
+            if isinstance(r, dict):
+                for m in r.values():
+                    if isinstance(m, dict) and "local" in m:
+                        m.setdefault("measured_with", src.lstrip("v"))
     names = {"mac": "Apple %s (Metal), using the remote RTX 5080" % (par_mac().split(",")[0] if MAC_TREE else "M4 Max"),
              "linux": "AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080"}
     out = []
