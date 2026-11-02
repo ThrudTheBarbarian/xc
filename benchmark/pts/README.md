@@ -5,8 +5,8 @@ its `downloads.xml`. The current versions are for xcc 0.9:
 
 | profile | runs | pins |
 |---|---|---|
-| `xc-par-1.2.0` | the par suite, written in xc | `xcc-linux-0.9`, `xcc-bench-sources-0.9` |
-| `xc-c-1.2.0` | plain C programs, xcc against GCC and Clang | `xcc-linux-0.9`, `xcc-c-bench-sources-0.9` |
+| `xc-par-1.3.0` | the par suite, written in xc | `xcc-linux-0.9.1`, `xcc-bench-sources-0.9.1` |
+| `xc-c-1.3.0` | plain C programs, xcc against GCC and Clang | `xcc-linux-0.9.1`, `xcc-c-bench-sources-0.9.1` |
 
 The older versions (`xc-par-1.0.0` for 0.8, `xc-c-1.0.0` for 0.87.3, both 1.1.0s
 for 0.89) stay, and so do the archives they pin, so a result made with them can
@@ -26,7 +26,7 @@ or "tiles across" the devices of a set.
 
     mkdir -p ~/.phoronix-test-suite/test-profiles/local
     cp -R xc-par-1.2.0 ~/.phoronix-test-suite/test-profiles/local/
-    phoronix-test-suite benchmark local/xc-par-1.2.0
+    phoronix-test-suite benchmark local/xc-par-1.3.0
 
 ## xc-c: the C programs
 
@@ -47,7 +47,7 @@ builds. The sources archive holds only the C files (the OpenMP copies in
 
     mkdir -p ~/.phoronix-test-suite/test-profiles/local
     cp -R xc-c-1.2.0 ~/.phoronix-test-suite/test-profiles/local/
-    phoronix-test-suite benchmark local/xc-c-1.2.0
+    phoronix-test-suite benchmark local/xc-c-1.3.0
 
 ## One combination, unattended
 
@@ -55,9 +55,9 @@ builds. The sources archive holds only the C files (the OpenMP copies in
 without its version:
 
     PRESET_OPTIONS_VALUES="xc-par.bench=mandel_deep;xc-par.device=gpu" \
-        phoronix-test-suite batch-run local/xc-par-1.2.0
+        phoronix-test-suite batch-run local/xc-par-1.3.0
     PRESET_OPTIONS_VALUES="xc-c.bench=mandelbrot;xc-c.build=xcc-par-gpu;xc-c.size=16" \
-        phoronix-test-suite batch-run local/xc-c-1.2.0
+        phoronix-test-suite batch-run local/xc-c-1.3.0
 
 ## A new release
 
