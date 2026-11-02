@@ -59,7 +59,7 @@ class Tree : Object<UXOutlineDataSource>
         }
     void drawRect(UXGraphics* g, UXRect dirty)
         {
-        g.fillRect(UXGeom.make((i16)0, (i16)0, dirty.w, dirty.h), (i32)8);
+        g.fillRect(dirty, (i32)8);
         }
     }
 

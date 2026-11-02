@@ -123,7 +123,7 @@ class KSTree : Object<UXOutlineDataSource>
         }
     void drawRect(UXGraphics* g, UXRect dirty)
         {
-        g.fillRect(UXGeom.make((i16)0, (i16)0, dirty.w, dirty.h), tint);
+        g.fillRect(dirty, tint);
         g.drawText(name, (i16)10, (i16)12, (i32)1, (i32)16);
         }
     }
@@ -137,7 +137,7 @@ class KSTree : Object<UXOutlineDataSource>
         }
     void drawRect(UXGraphics* g, UXRect dirty)
         {
-        g.fillRect(UXGeom.make((i16)0, (i16)0, dirty.w, dirty.h), (i32)8); // grey backdrop
+        g.fillRect(dirty, (i32)8); // grey backdrop
         g.fillRect(UXGeom.make((i16)0, (i16)0, dirty.w, (i16)6), (i32)2);  // red accent bar
         }
     }

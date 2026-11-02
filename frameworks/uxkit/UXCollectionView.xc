@@ -239,6 +239,12 @@ class UXCollectionItem : Object
         for (i32 i = (i32)0; i < self.count(); i = i + (i32)1)
             {
             UXCollectionItem* it = self.itemAt(i);
+            // only the items in the dirty rect: a long collection scrolled shows a screenful of
+            // hundreds, and drawing the rest cost a whole frame per scroll step on Win32
+            if (!UXGeom.intersects(UXGeom.make(it.x, it.y, it.w, it.h), dirty))
+                {
+                continue;
+                }
             if (self.isSelected(i))
                 {
                 g.fillRect(UXGeom.make(it.x, it.y, it.w, it.h), (i32)250); // UX_PEN_SELECT

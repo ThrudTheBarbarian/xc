@@ -106,6 +106,14 @@ pointer gW32UserFn;     // the per-view draw callback (ux_userdraw)
 pointer gW32UserUd;
 pointer gW32CurHdc; // the DC of the paint in flight
 i32 gW32DrawOX;     // draw-origin offset for a scroll child's subtree paint (else 0)
+// The clip treeDraw was handed, in the DC's coordinates (absolute minus the draw offset): drawOne
+// skips the drawing of a node wholly outside it.  Without this a scroll container repainted its
+// entire document on every step -- 400 cards for a 12px scroll, a full frame each (bench_win32_scroll).
+i32 gW32ClipOn;
+i32 gW32ClipX0;
+i32 gW32ClipY0;
+i32 gW32ClipX1;
+i32 gW32ClipY1;
 i32 gW32DrawOY;
 W32Tree* gW32DrawTree;   // the tree being painted (so the recursion can reach nodes)
 pointer gW32Menu;        // the app menu bar (an HMENU), attached to every window
@@ -4447,6 +4455,12 @@ class UXWin32Driver : Object<UXViewDriver>
         i32 hh = r.bottom - r.top;
         return hh > (i32)0 ? hh : (i32)0;
         }
+    // A SysTreeView32's item height (TVM_GETITEMHEIGHT), 0 for any other control.
+    i32 treeItemHeight(pointer c)
+        {
+        i32 ih = (i32)SendMessageA(c, (u32)$111C, (pointer)0, (pointer)0); // TVM_GETITEMHEIGHT
+        return ih > (i32)0 ? ih : (i32)0;
+        }
     void nativeScrollTo(pointer h, i32 node, i32 px)
         {
         i32 isList = (i32)0;
@@ -4463,6 +4477,31 @@ class UXWin32Driver : Object<UXViewDriver>
             i32 rh = self.listRowHeight(c);
             if (rh <= (i32)0)
                 {
+                // Not a ListView: an outline's SysTreeView32, which ignores LVM_* (and a ListView
+                // ignores TVM_*, so each probe answers 0 on the other).  A tree scrolls in items.
+                // It ignores a thumb position in WM_VSCROLL, so make the item `px / ih` rows down
+                // the first visible one: walk TVGN_NEXTVISIBLE from the first root item, then
+                // TVM_SELECTITEM(TVGN_FIRSTVISIBLE), which scrolls without changing the selection.
+                i32 ih = self.treeItemHeight(c);
+                if (ih > (i32)0)
+                    {
+                    pointer it = SendMessageA(c, (u32)TVM_GETNEXTITEM, (pointer)0, (pointer)0); // TVGN_ROOT
+                    i32 n = px / ih;
+                    while (n > (i32)0 && it != (pointer)0)
+                        {
+                        pointer nx = SendMessageA(c, (u32)TVM_GETNEXTITEM, (pointer)6, it); // TVGN_NEXTVISIBLE
+                        if (nx == (pointer)0)
+                            {
+                            break;
+                            }
+                        it = nx;
+                        n = n - (i32)1;
+                        }
+                    if (it != (pointer)0)
+                        {
+                        SendMessageA(c, (u32)TVM_SELECTITEM, (pointer)5, it); // TVGN_FIRSTVISIBLE
+                        }
+                    }
                 return;
                 }
             i32 want = px / rh;
@@ -4489,8 +4528,12 @@ class UXWin32Driver : Object<UXViewDriver>
         if (isList != (i32)0)
             {
             i32 rh = self.listRowHeight(c);
-            return rh <= (i32)0 ? (i32)0
-                                : (i32)SendMessageA(c, (u32)LVM_GETTOPINDEX, (pointer)0, (pointer)0) * rh;
+            if (rh <= (i32)0)
+                {
+                i32 ih = self.treeItemHeight(c); // a tree: its bar counts items
+                return ih > (i32)0 ? GetScrollPos(c, (i32)SB_VERT) * ih : (i32)0;
+                }
+            return (i32)SendMessageA(c, (u32)LVM_GETTOPINDEX, (pointer)0, (pointer)0) * rh;
             }
         return GetScrollPos(c, (i32)SB_VERT);
         }
@@ -5644,6 +5687,26 @@ class UXWin32Driver : Object<UXViewDriver>
             {
             return;
             }
+        // Wholly outside the clip: nothing of this node would reach the DC, so skip its drawing.
+        // Its children are still walked -- a child may lie outside its parent's frame.
+        if (gW32ClipOn != (i32)0)
+            {
+            i32 cx = (i32)0;
+            i32 cy = (i32)0;
+            i32 cw = (i32)0;
+            i32 ch = (i32)0;
+            self.structAbsFrame((pointer)t, i, &cx, &cy, &cw, &ch);
+            cx = cx - gW32DrawOX;
+            cy = cy - gW32DrawOY;
+            if (cx >= gW32ClipX1 || cy >= gW32ClipY1 || cx + cw <= gW32ClipX0 || cy + ch <= gW32ClipY0)
+                {
+                if (!self.paintsOwnSubtree(t, i))
+                    {
+                    self.drawChildren(t, i);
+                    }
+                return;
+                }
+            }
         i32 k = t.nodes[i].kind;
         // native trackbar/combo/updown/progress/toolbar/segmented paint themselves — don't self-draw under them
         if ((k == (i32)UXKindSlider || k == (i32)UXKindPopup || k == (i32)UXKindStepper || k == (i32)UXKindProgress || k == (i32)UXKindSegmented || k == (i32)UXKindToolbar || k == (i32)UXKindTextView) && t.nodes[i].ctrl != (pointer)0)
@@ -5798,6 +5861,22 @@ class UXWin32Driver : Object<UXViewDriver>
             SetTextColor(gW32CurHdc, (u32)0);
             w32DrawText(gW32CurHdc, ax + (i32)2, ay + gW32LabelDY, (u8*)t.nodes[i].spec);
             }
+        self.drawChildren(t, i);
+        }
+    // A node whose native control draws its whole subtree itself (a scroll container, a list, the
+    // self-painting controls): drawOne returns at it without walking the children, so the clip test
+    // must too.
+    bool paintsOwnSubtree(W32Tree* t, i32 i)
+        {
+        if (t.nodes[i].ctrl == (pointer)0)
+            {
+            return false;
+            }
+        i32 k = t.nodes[i].kind;
+        return k == (i32)UXKindScroll || k == (i32)UXKindTable || k == (i32)UXKindSlider || k == (i32)UXKindPopup || k == (i32)UXKindStepper || k == (i32)UXKindProgress || k == (i32)UXKindSegmented || k == (i32)UXKindToolbar || k == (i32)UXKindTextView;
+        }
+    void drawChildren(W32Tree* t, i32 i)
+        {
         i16 c = t.nodes[i].head;
         while (c >= (i16)0)
             {
@@ -5808,7 +5887,13 @@ class UXWin32Driver : Object<UXViewDriver>
     void treeDraw(pointer tree, i32 start, i32 clx, i32 cly, i32 clw, i32 clh)
         {
         gW32DrawTree = (W32Tree*)tree;
+        gW32ClipOn = clw > (i32)0 && clh > (i32)0 ? (i32)1 : (i32)0;
+        gW32ClipX0 = clx;
+        gW32ClipY0 = cly;
+        gW32ClipX1 = clx + clw;
+        gW32ClipY1 = cly + clh;
         self.drawOne((W32Tree*)tree, start);
+        gW32ClipOn = (i32)0;
         }
     // the view is clipped to its frame by this driver's own tree walk
     void endViewDraw(void)
@@ -5818,6 +5903,19 @@ class UXWin32Driver : Object<UXViewDriver>
         {
         gW32Gfx.bind(gW32CurHdc, UXGeom.make((i16)(ax - gW32DrawOX), (i16)(ay - gW32DrawOY), (i16)aw, (i16)ah));
         return gW32Gfx;
+        }
+    // The clip treeDraw was handed, back in absolute coordinates (UXViewDriver.drawClip).
+    bool drawClip(i32* x, i32* y, i32* w, i32* h)
+        {
+        if (gW32ClipOn == (i32)0)
+            {
+            return false;
+            }
+        x[(i32)0] = gW32ClipX0 + gW32DrawOX;
+        y[(i32)0] = gW32ClipY0 + gW32DrawOY;
+        w[(i32)0] = gW32ClipX1 - gW32ClipX0;
+        h[(i32)0] = gW32ClipY1 - gW32ClipY0;
+        return true;
         }
     void setDrawOffset(i32 x, i32 y)
         {

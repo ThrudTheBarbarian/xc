@@ -201,7 +201,7 @@ class UXScrollbar : UXView
             {
             i32 top = (y - barAbsY) - self.trackTop() - grabDY;
             i32 off = span > (i32)0 ? mo * top / span : (i32)0;
-            scroll.scrollTo((i16)off);
+            scroll.scrollTo(off);
             if (gApp != (UXApplication*)0)
                 {
                 gApp.displayIfNeeded();
@@ -210,13 +210,20 @@ class UXScrollbar : UXView
         }
     }
 
+// The document's y where the toolkit moves it itself: view geometry is 16-bit, so an offset past
+// 32767 px stops there rather than wrapping.  (Native containers keep the full offset.)
+i16 ux_scroll_y(i32 off)
+    {
+    return off > (i32)32767 ? (i16)-32767 : (i16)(-off);
+    }
+
     class UXScrollView : UXView
     {
     UXView* clip;              // the clipped viewport
     UXView* doc;               // the document, moved by -scrollOffset inside the clip
     UXScrollbar* vbar;         // the vertical bar (right edge; hidden when the document fits)
     weak : UXView* headerView; // an optional strip pinned above the viewport (a table's column header)
-    i16 scrollOffset;          // px scrolled down (0 = top)
+    i32 scrollOffset;          // px scrolled down (0 = top); 32-bit: a long table passes 32767 px
     i16 sbWidth;               // bar column width
     i16 headerH;               // pinned header height (0 = none)
     i16 lineHeight;            // arrow/wheel step
@@ -238,7 +245,7 @@ class UXScrollbar : UXView
         doc = (UXView*)0;
         vbar = (UXScrollbar*)0;
         headerView = (UXView*)0;
-        scrollOffset = (i16)0;
+        scrollOffset = (i32)0;
         sbWidth = (i16)14;
         headerH = (i16)0;
         lineHeight = (i16)16;
@@ -385,7 +392,7 @@ class UXScrollbar : UXView
             {
             return gDriver.nativeScrollPx(owner.objects(), (i32)self.index);
             }
-        return (i32)scrollOffset;
+        return scrollOffset;
         }
     i32 maxScroll(void)
         {
@@ -417,14 +424,14 @@ class UXScrollbar : UXView
         owner.setFrameOf(vbar.index, UXGeom.make((i16)((i32)f.w - (i32)sbWidth - e), (i16)((i32)headerH + ri), sbWidth,
                                                  (i16)((i32)vh - ri * (i32)2)));
         owner.setHiddenOf(vbar.index, !bar);
-        i16 mo = (i16)self.maxScroll();
+        i32 mo = self.maxScroll();
         if (scrollOffset > mo)
             {
             scrollOffset = mo;
             }
         // Only shift the document where the TOOLKIT owns the offset.  A native container scrolls its
         // own document view, so shifting this one too would move the content twice.
-        i16 docY = gDriver.scrollsNatively() ? (i16)0 : (i16)(-(i32)scrollOffset);
+        i16 docY = gDriver.scrollsNatively() ? (i16)0 : ux_scroll_y(scrollOffset);
         owner.setFrameOf(doc.index, UXGeom.make((i16)0, docY, vw, (i16)docHeight));
         }
 
@@ -452,12 +459,14 @@ class UXScrollbar : UXView
         return doc != (UXView*)0 ? (i32)doc.index : (i32)-1;
         }
 
-    void scrollTo(i16 off)
+    // `off` is 32-bit: a 16-bit maximum wrapped negative past 32767 px (about 1,800 table rows), and
+    // every scroll of such a view clamped to the top.
+    void scrollTo(i32 off)
         {
-        i16 mo = (i16)self.maxScroll();
-        if (off < (i16)0)
+        i32 mo = self.maxScroll();
+        if (off < (i32)0)
             {
-            off = (i16)0;
+            off = (i32)0;
             }
         if (off > mo)
             {
@@ -478,7 +487,7 @@ class UXScrollbar : UXView
             }
         else
             {
-            owner.setFrameOf(doc.index, UXGeom.make((i16)0, (i16)(-(i32)off), doc.frame().w, (i16)docHeight));
+            owner.setFrameOf(doc.index, UXGeom.make((i16)0, ux_scroll_y(off), doc.frame().w, (i16)docHeight));
             clip.setNeedsDisplay();
             if (vbar != (UXScrollbar*)0)
                 {
@@ -494,13 +503,13 @@ class UXScrollbar : UXView
             UXEvent* ev = new UXEvent();
             ev.kind = (u8)UXEventScrolled;
             ev.a = (i32)self.index;
-            ev.b = (i32)off;
+            ev.b = off;
             gEventTap(ev);
             }
         }
     void scrollByLines(i32 lines)
         {
-        self.scrollTo((i16)((i32)scrollOffset + lines * (i32)lineHeight));
+        self.scrollTo(scrollOffset + lines * (i32)lineHeight);
         }
     void scrollPage(i32 dir)
         {
@@ -509,7 +518,7 @@ class UXScrollbar : UXView
             {
             page = (i32)lineHeight;
             }
-        self.scrollTo((i16)((i32)scrollOffset + dir * page));
+        self.scrollTo(scrollOffset + dir * page);
         }
     // A wheel that climbed the responder chain to here (gemd: notches > 0 = wheel up = toward the top).
     void scrollWheel(UXEvent* e)
@@ -535,7 +544,7 @@ class UXScrollbar : UXView
         {
         panning = true;
         panStartY = y;
-        panStartOff = (i32)scrollOffset;
+        panStartOff = scrollOffset;
         }
     void mouseDragged(UXEvent* e)
         {
@@ -549,7 +558,7 @@ class UXScrollbar : UXView
             // the press went to content (a row); the drag is ours, measured from where it went down
             self.beginPan(owner != (UXViewTree*)0 ? owner.pressY : (i32)e.y);
             }
-        self.scrollTo((i16)(panStartOff - ((i32)e.y - panStartY)));
+        self.scrollTo(panStartOff - ((i32)e.y - panStartY));
         }
     void mouseUp(UXEvent* e)
         {

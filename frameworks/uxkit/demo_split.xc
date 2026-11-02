@@ -27,7 +27,7 @@ class Pane : UXView
         }
     void drawRect(UXGraphics* g, UXRect dirty)
         {
-        g.fillRect(UXGeom.make((i16)0, (i16)0, dirty.w, dirty.h), tint);
+        g.fillRect(dirty, tint);
         g.drawText(name, (i16)10, (i16)12, (i32)1, (i32)16);
         }
     }

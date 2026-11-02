@@ -353,7 +353,10 @@ class UXView : UXResponder
     // ---- drawing -------------------------------------------------------------
 
     // Override this.  It is called BY THE AES, during objc_draw's own traversal,
-    // inside the AES's clip — see objc_set_userdraw.  Coordinates are absolute.
+    // inside the AES's clip — see objc_set_userdraw.  `dirty` is the part of the view
+    // this paint will show, in the view's own coordinates: the whole view, or less
+    // where the backend knows its clip (Win32's scroll containers).  Draw at least that;
+    // a view of many items can skip the ones outside it.
     void drawRect(UXGraphics* g, UXRect dirty)
         {
         }
@@ -585,6 +588,27 @@ class UXGLView : UXView
 // pointed at the node whose subtree is the picture and the draw offset is set to that node's
 // absolute position, so every view in the subtree lands at surface-local coordinates.  Both the
 // scroll document and the self-surface go through here; they differ only in which node they name.
+// The part of a view at `abs` that the walk in progress will show, in the view's own coordinates:
+// the whole view unless the backend reports a narrower clip (drawClip).  drawRect's `dirty`.
+UXRect ux_view_dirty(UXRect abs)
+    {
+    UXRect all = UXGeom.make((i16)0, (i16)0, abs.w, abs.h);
+    callback f bool(i32* x, i32* y, i32* w, i32* h) = &gDriver.drawClip;
+    if (!f)
+        {
+        return all;
+        }
+    i32 cx = (i32)0;
+    i32 cy = (i32)0;
+    i32 cw = (i32)0;
+    i32 ch = (i32)0;
+    if (!f(&cx, &cy, &cw, &ch))
+        {
+        return all;
+        }
+    UXRect clip = UXGeom.make((i16)(cx - (i32)abs.x), (i16)(cy - (i32)abs.y), (i16)cw, (i16)ch);
+    return UXGeom.intersection(all, clip);
+    }
 i32 ux_surface_userdraw(pointer tree, i32 obj, pointer ud)
     {
     UXViewTree* vt = (UXViewTree*)ud;
@@ -595,7 +619,7 @@ i32 ux_surface_userdraw(pointer tree, i32 obj, pointer ud)
         }
     UXRect abs = vt.absoluteFrame((u16)obj);
     UXGraphics* g = gDriver.beginViewDraw((i32)abs.x, (i32)abs.y, (i32)abs.w, (i32)abs.h);
-    v.drawRect(g, UXGeom.make((i16)0, (i16)0, abs.w, abs.h));
+    v.drawRect(g, ux_view_dirty(abs));
     gDriver.endViewDraw();
     return (i32)0;
     }
