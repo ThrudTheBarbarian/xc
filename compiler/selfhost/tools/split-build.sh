@@ -90,6 +90,10 @@ if [ -n "$fail" ]; then echo "split-build: errors in:"; echo "$fail" | head -10;
 step "link"
 # To a new name, then moved: a Mach-O rewritten in place at a path that is
 # running (or was, and is cached) dies with SIGKILL.
-"$XCC" -q -A "$ARCH" -H . ${EXTRA[@]+"${EXTRA[@]}"} -o "$OUT.new.$$" "$W"/obj/*.o || { echo "split-build: the link failed"; exit 1; }
+# The objects in the C locale's order: a glob sorts by the locale, and the
+# link's layout follows the order, so a Pi (en_GB.UTF-8) and a Mac linked the
+# same objects into different bytes.
+OBJS=$(cd "$W/obj" && LC_ALL=C ls *.o | sed "s|^|$W/obj/|")
+"$XCC" -q -A "$ARCH" -H . ${EXTRA[@]+"${EXTRA[@]}"} -o "$OUT.new.$$" $OBJS || { echo "split-build: the link failed"; exit 1; }
 mv -f "$OUT.new.$$" "$OUT"
 step "done: $OUT"
