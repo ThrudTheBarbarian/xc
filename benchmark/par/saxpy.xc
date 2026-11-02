@@ -3,7 +3,6 @@
 // copies in and out cost more than the work: this is the block auto keeps on
 // the CPU. Prints "<checksum> <best_us> <first_us>"; the checksum is exact.
 #import "Stdio.xc"
-#import "Par.xc"
 #import "../src/include/bench_time.xc"
 
 #define SIZE (16 * 1024 * 1024)
@@ -28,14 +27,11 @@ i32 main(void)
     {
         total = (u32)0;
         i64 t0 = bench_now_us();
-        par saxpy :reduce(+ total)
+        for (u32 i in 0..SIZE)
         {
-            for (u32 i in 0..SIZE)
-            {
-                u32 v = (u32)3 * xs[i] + ys[i];
-                ys[i] = v;
-                total = total + v;
-            }
+            u32 v = (u32)3 * xs[i] + ys[i];
+            ys[i] = v;
+            total = total + v;
         }
         i64 t1 = bench_now_us();
         if (rep == (u32)0)

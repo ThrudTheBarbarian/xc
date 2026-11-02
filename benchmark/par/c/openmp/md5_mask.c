@@ -1,7 +1,7 @@
 /* md5_mask: the par benchmark (apps/hashcat/md5_mask.xc, hashcat's mask
    attack: a fixed prefix hashed once per outer item, the last word varied
    in the inner loop) in C, for the C path: built by clang alone, and by xcc
-   --par-auto. Prints "<checksum> <best_us> <first_us>". */
+   --par-style=auto. Prints "<checksum> <best_us> <first_us>". */
 #include <stdio.h>
 #include "bench_time.h"
 #define OUTER (1024 * 1024 * BENCH_SCALE)

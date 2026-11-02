@@ -1,5 +1,5 @@
 /* saxpy — the par benchmark (benchmark/par/auto/saxpy.xc) in C, for the C
-   path: built by clang alone, and by xcc --par-auto, which makes par blocks
+   path: built by clang alone, and by xcc --par-style=auto, which makes par blocks
    of its loops. y = 3*x + y over 16M integers, a checksum; prints
    "<checksum> <best_us> <first_us>". */
 #include <stdio.h>

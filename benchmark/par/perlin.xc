@@ -3,7 +3,6 @@
 // and one store per pixel. Prints "<checksum> <best_us> <first_us>"; the checksum is
 // the mean grey level to a tenth.
 #import "Stdio.xc"
-#import "Par.xc"
 #import "../src/include/bench_time.xc"
 
 #define SIZE (2048 * 2048)
@@ -49,46 +48,43 @@ i32 main(void)
     {
         total = (u32)0;
         i64 t0 = bench_now_us();
-        par perlin :reduce(+ total)
+        for (u32 i in 0..SIZE)
         {
-            for (u32 i in 0..SIZE)
+            float x = (float)(i % (u32)2048) / 256.0f;
+            float y = (float)(i / (u32)2048) / 256.0f;
+            float sum = 0.0f;
+            float amp = 1.0f;
+            float norm = 0.0f;
+            for (u32 o in 0..4)
             {
-                float x = (float)(i % (u32)2048) / 256.0f;
-                float y = (float)(i / (u32)2048) / 256.0f;
-                float sum = 0.0f;
-                float amp = 1.0f;
-                float norm = 0.0f;
-                for (u32 o in 0..4)
-                {
-                    u32 xi = (u32)x;
-                    u32 yi = (u32)y;
-                    float xf = x - (float)xi;
-                    float yf = y - (float)yi;
-                    u32 X = xi & (u32)255;
-                    u32 Y = yi & (u32)255;
-                    u32 aa = perm[perm[X] + Y];
-                    u32 ab = perm[perm[X] + Y + (u32)1];
-                    u32 ba = perm[perm[X + (u32)1] + Y];
-                    u32 bb = perm[perm[X + (u32)1] + Y + (u32)1];
-                    float u = fade(xf);
-                    float v = fade(yf);
-                    float n = lerp(v, lerp(u, grad(aa, xf, yf), grad(ba, xf - 1.0f, yf)),
-                                   lerp(u, grad(ab, xf, yf - 1.0f), grad(bb, xf - 1.0f, yf - 1.0f)));
-                    sum = sum + n * amp;
-                    norm = norm + amp;
-                    amp = amp * 0.5f;
-                    x = x * 2.0f;
-                    y = y * 2.0f;
-                }
-                float s = (sum / norm) * 0.5f + 0.5f;
-                if (s < 0.0f)
-                    s = 0.0f;
-                if (s > 1.0f)
-                    s = 1.0f;
-                u32 p = (u32)(s * 255.0f);
-                img[i] = (u8)p;
-                total = total + p;
+                u32 xi = (u32)x;
+                u32 yi = (u32)y;
+                float xf = x - (float)xi;
+                float yf = y - (float)yi;
+                u32 X = xi & (u32)255;
+                u32 Y = yi & (u32)255;
+                u32 aa = perm[perm[X] + Y];
+                u32 ab = perm[perm[X] + Y + (u32)1];
+                u32 ba = perm[perm[X + (u32)1] + Y];
+                u32 bb = perm[perm[X + (u32)1] + Y + (u32)1];
+                float u = fade(xf);
+                float v = fade(yf);
+                float n = lerp(v, lerp(u, grad(aa, xf, yf), grad(ba, xf - 1.0f, yf)),
+                               lerp(u, grad(ab, xf, yf - 1.0f), grad(bb, xf - 1.0f, yf - 1.0f)));
+                sum = sum + n * amp;
+                norm = norm + amp;
+                amp = amp * 0.5f;
+                x = x * 2.0f;
+                y = y * 2.0f;
             }
+            float s = (sum / norm) * 0.5f + 0.5f;
+            if (s < 0.0f)
+                s = 0.0f;
+            if (s > 1.0f)
+                s = 1.0f;
+            u32 p = (u32)(s * 255.0f);
+            img[i] = (u8)p;
+            total = total + p;
         }
         i64 t1 = bench_now_us();
         if (rep == (u32)0)

@@ -1,5 +1,5 @@
 /* mandelbrot — the par benchmark (benchmark/par/auto/mandelbrot.xc) in C,
-   for the C path: built by clang alone, and by xcc --par-auto. A 2048x2048
+   for the C path: built by clang alone, and by xcc --par-style=auto. A 2048x2048
    set, 256 iterations at most; prints "<checksum> <best_us> <first_us>". */
 #include <stdio.h>
 #include "bench_time.h"

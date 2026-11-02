@@ -1,5 +1,5 @@
 /* perlin — the par benchmark (benchmark/par/auto/perlin.xc) in C, for the C
-   path: built by clang alone, and by xcc --par-auto. Four octaves of 2D
+   path: built by clang alone, and by xcc --par-style=auto. Four octaves of 2D
    Perlin noise over a 2048x2048 image; prints "<tenths> <best_us> <first_us>". */
 #include <stdio.h>
 #include "bench_time.h"

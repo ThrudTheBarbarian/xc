@@ -4,7 +4,6 @@
 // (positive x force), a coarse figure fast GPU maths does not move.
 #import "Stdio.xc"
 #import "Math.xc"
-#import "Par.xc"
 #import "../src/include/bench_time.xc"
 
 #define N 8192
@@ -35,22 +34,19 @@ i32 main(void)
     {
         right = (u32)0;
         i64 t0 = bench_now_us();
-        par forces :reduce(+ right)
+        for (u32 i in 0..N)
         {
-            for (u32 i in 0..N)
+            float ax = 0.0f;
+            for (u32 j in 0..N)
             {
-                float ax = 0.0f;
-                for (u32 j in 0..N)
-                {
-                    float dx = px[j] - px[i];
-                    float dy = py[j] - py[i];
-                    float d2 = dx * dx + dy * dy + 0.0001f;
-                    ax = ax + mass[j] * dx / (d2 * Math.sqrt(d2));
-                }
-                fx[i] = ax;
-                if (ax > 0.0f)
-                    right = right + (u32)1;
+                float dx = px[j] - px[i];
+                float dy = py[j] - py[i];
+                float d2 = dx * dx + dy * dy + 0.0001f;
+                ax = ax + mass[j] * dx / (d2 * Math.sqrt(d2));
             }
+            fx[i] = ax;
+            if (ax > 0.0f)
+                right = right + (u32)1;
         }
         i64 t1 = bench_now_us();
         if (rep == (u32)0)

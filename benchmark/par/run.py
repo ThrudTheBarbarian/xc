@@ -28,17 +28,10 @@ timed only when idle (as ../run.py does). The best of three runs is kept.
   python3 benchmark/par/run.py --bench nbody    # one benchmark
   python3 benchmark/par/run.py --machines mac   # one machine
   python3 benchmark/par/run.py --xcc compiler/bin/osx/xcc-xc   # a build-tree compiler
-  python3 benchmark/par/run.py --autopar        # the same programs as plain loops, with --par-auto
   python3 benchmark/par/run.py --c --xcc compiler/bin/osx/xcc-xc   # the C forms in c/, against clang
 
---autopar measures the programs in auto/: each par benchmark with its `par`
-block taken out, so its loop is a plain one. It builds each twice, as written
-(one thread: there is no block) and with --par-auto, and runs the second on
-all threads, on the GPU and with `auto`; the table sets those beside the
-hand-written block's `auto` from this version's results.json.
-
 --c measures the programs in c/: each par benchmark as a plain C program,
-built by clang -O2 and by xcc --par-auto (xcc reads clang's IR and makes par
+built by clang -O2 and by xcc --par-style=auto (xcc reads clang's IR and makes par
 blocks of its loops), run as clang built it, by xcc on one thread, on all
 threads, on the GPU and with `auto`; every checksum must agree. The C path
 builds for the machine it runs on, so on the Linux host it builds there:
@@ -68,100 +61,10 @@ GPU_BENCHES = ["mandel_deep"]
 REPEATS = 3
 XCC = None   # --xcc: a compiler other than the shipped one (development runs)
 
-# Most benchmarks live beside this script; md5 and md5_mask are the hashcat
-# workloads in apps/hashcat, so run.py builds them from there.
-_HASHCAT = os.path.join(common.REPO, "apps", "hashcat")
-SRC_DIRS = {"md5": _HASHCAT, "md5_mask": _HASHCAT}
-
-
-AUTO_BENCHES = ["mandelbrot", "perlin", "nbody", "saxpy", "md5", "md5_mask", "mandel_deep"]
-
-
-def build_auto(name, arch, out, autopar):
-    """auto/<name>.xc, as written or with --par-auto."""
-    if XCC:
-        cmd = [XCC, "-H", os.path.join(common.REPO, "compiler"), "-O3"] + common.bench_flags(XCC)
-    else:
-        cmd = [common.xcc_path()] + common.xcc_home_args() + ["-O3"] + common.bench_flags()
-    if arch:
-        cmd += ["-A", arch]
-    if autopar:
-        cmd += ["--par-auto"]
-    cmd += ["-o", out, os.path.join(HERE, "auto", name + ".xc")]
-    r = subprocess.run(cmd, capture_output=True, text=True)
-    if r.returncode != 0:
-        sys.exit("par/run.py: auto/%s (%s) does not build:\n%s" % (name, arch or "arm64", r.stderr))
-
-
-def measure_auto(runner, plain, auto, gpus):
-    """As written (one run mode), then the --par-auto build on all threads,
-    the GPU (where there is one) and auto; the checksums must agree."""
-    out, sums = {}, set()
-    runs = [("written", plain, {}), ("cpu", auto, {"XC_PAR": "cpu"})]
-    if "gpu" in gpus:
-        runs.append(("gpu", auto, {"XC_PAR": "gpu"}))
-    runs.append(("auto", auto, None))
-    for mode, binary, env in runs:
-        # auto starts from an empty settings store, shared by its repeats, as
-        # the written blocks' auto does (below): it ran on the default store,
-        # so it acted on whatever an earlier run of anything had learned
-        # (2026-11-02).
-        if env is None:
-            global _AUTO_STORES
-            _AUTO_STORES += 1
-            env = {"XCC_SETTINGS_DIR": "%s-%d-%d" % (AUTO_STORE_BASE, os.getpid(), _AUTO_STORES)}
-        best = None
-        for _ in range(REPEATS):
-            got = runner(binary, env)
-            if got is None:
-                sys.exit("par/run.py: %s (%s) printed nothing usable" % (binary, mode))
-            sums.add(got[0])
-            if best is None or got[1] < best["best_us"]:
-                best = {"best_us": got[1], "first_us": got[2]}
-        out[mode] = best
-    if len(sums) != 1:
-        sys.exit("par/run.py: %s: the checksums differ: %s" % (plain, sorted(sums)))
-    out["checksum"] = sums.pop()
-    return out
-
-
-def autopar(a, machines, env, work):
-    results = {}
-    for name in a.bench or AUTO_BENCHES:
-        results[name] = {}
-        if "mac" in machines:
-            p, q = os.path.join(work, name + ".plain"), os.path.join(work, name + ".autopar")
-            build_auto(name, None, p, False)
-            build_auto(name, None, q, True)
-            results[name]["mac"] = measure_auto(run_mac, p, q, ["gpu"])
-        if "linux" in machines and env.get("XTC_LINUX_HOST"):
-            host = env["XTC_LINUX_HOST"]
-            for tag, ap_ in (("plain", False), ("autopar", True)):
-                exe = os.path.join(work, "%s.%s.x86" % (name, tag))
-                build_auto(name, "x86_64", exe, ap_)
-                subprocess.run(["scp", "-q", exe, "%s:/tmp/par-%s-%s" % (host, tag, name)], check=True)
-            results[name]["linux"] = measure_auto(lambda b, e: run_linux(host, b, e), "/tmp/par-plain-" + name,
-                                                  "/tmp/par-autopar-" + name, ["gpu"])
-        if "windows" in machines and env.get("XTC_WIN_GPU_HOST"):
-            host = env["XTC_WIN_GPU_HOST"]
-            for tag, ap_ in (("plain", False), ("autopar", True)):
-                exe = os.path.join(work, "%s.%s.exe" % (name, tag))
-                build_auto(name, "win64", exe, ap_)
-                subprocess.run(["scp", "-q", exe, "%s:par-%s-%s.exe" % (host, tag, name)], check=True)
-            results[name]["windows"] = measure_auto(lambda b, e: run_windows(host, b, e),
-                                                    ".\\par-plain-%s.exe" % name, ".\\par-autopar-%s.exe" % name,
-                                                    ["gpu"])
-        print(name, json.dumps(results[name]), flush=True)
-    outdir = os.path.join(HERE, "v" + a.version)
-    os.makedirs(outdir, exist_ok=True)
-    with open(os.path.join(outdir, "autopar.json"), "w") as fh:
-        json.dump(results, fh, indent=1, sort_keys=True)
-    hand = {}
-    hp = os.path.join(outdir, "results.json")
-    if os.path.isfile(hp):
-        with open(hp) as fh:
-            hand = json.load(fh)
-    print(table_auto(results, hand))
+# Every benchmark lives beside this script, a plain-loop program built with no
+# flags (--par-style=auto, the default, makes its par blocks); apps/hashcat
+# keeps its own par-block forms of md5 and md5_mask.
+SRC_DIRS = {}
 
 
 def table_auto(results, hand):
@@ -173,7 +76,7 @@ def table_auto(results, hand):
         if not rows:
             continue
         lines.append("\n**%s** (ms, best of eight runs)\n" % names[m])
-        lines.append("| benchmark | as written | --par-auto, all threads | --par-auto, GPU | --par-auto, `auto` "
+        lines.append("| benchmark | as written | --par-style=auto, all threads | --par-style=auto, GPU | --par-style=auto, `auto` "
                      "| hand-written `par`, `auto` |")
         lines.append("|---|---|---|---|---|---|")
         for n, r in rows:
@@ -194,7 +97,7 @@ C_DIR = os.path.join(HERE, "c")
 
 
 def build_c_mac(name, work):
-    """c/<name>.c by clang -O2 and by xcc --par-auto, here."""
+    """c/<name>.c by clang -O2 and by xcc --par-style=auto, here."""
     src = os.path.join(C_DIR, name + ".c")
     ref, xc = os.path.join(work, name + ".clang"), os.path.join(work, name + ".xcc")
     r = subprocess.run(["clang", "-O2", "-w", "-o", ref, src], capture_output=True, text=True)
@@ -204,7 +107,7 @@ def build_c_mac(name, work):
         cmd = [XCC, "-H", os.path.join(common.REPO, "compiler")]
     else:
         cmd = [common.xcc_path()] + common.xcc_home_args()
-    r = subprocess.run(cmd + ["-q", "-O3", "--par-auto", "-o", xc, src], capture_output=True, text=True)
+    r = subprocess.run(cmd + ["-q", "-O3", "--par-style=auto", "-o", xc, src], capture_output=True, text=True)
     if r.returncode != 0:
         sys.exit("par/run.py: c/%s.c: xcc does not build it:\n%s" % (name, r.stderr))
     return ref, xc
@@ -216,7 +119,7 @@ def build_c_linux(host, name, xcc, home):
     subprocess.run(["ssh", host, "mkdir -p " + d], check=True)
     subprocess.run(["scp", "-q", os.path.join(C_DIR, name + ".c"), os.path.join(C_DIR, "bench_time.h"),
                     "%s:%s/" % (host, d)], check=True)
-    cmd = ("cd %s && clang -O2 -w -o %s.clang %s.c && %s -H %s -q -O3 --par-auto -o %s.xcc %s.c"
+    cmd = ("cd %s && clang -O2 -w -o %s.clang %s.c && %s -H %s -q -O3 --par-style=auto -o %s.xcc %s.c"
            % (d, name, name, xcc, home, name, name))
     r = subprocess.run(["ssh", host, cmd], capture_output=True, text=True)
     if r.returncode != 0:
@@ -286,8 +189,8 @@ def table_c(results):
         if not rows:
             continue
         lines.append("\n**%s** (ms, best of eight runs)\n" % names[m])
-        lines.append("| benchmark | clang -O2 | xcc, one thread | xcc --par-auto, all threads | xcc --par-auto, GPU "
-                     "| xcc --par-auto, `auto` | `auto` against clang |")
+        lines.append("| benchmark | clang -O2 | xcc, one thread | xcc --par-style=auto, all threads | xcc --par-style=auto, GPU "
+                     "| xcc --par-style=auto, `auto` | `auto` against clang |")
         lines.append("|---|---|---|---|---|---|---|")
         for n, r in rows:
             sp = r["clang"]["best_us"] / max(1, r["auto"]["best_us"])
@@ -468,8 +371,7 @@ def main():
                     help="any of mac, linux, linuxgpu, pi, windows, browser")
     ap.add_argument("--version", default=common.COMPILER_VERSION)
     ap.add_argument("--xcc", help="measure this compiler instead of the shipped one")
-    ap.add_argument("--autopar", action="store_true", help="the plain-loop programs in auto/, with --par-auto")
-    ap.add_argument("--c", action="store_true", help="the C programs in c/: clang -O2 against xcc --par-auto")
+    ap.add_argument("--c", action="store_true", help="the C programs in c/: clang -O2 against xcc --par-style=auto")
     ap.add_argument("--linux-xcc", help="with --c: an xcc on the Linux host that has the C path")
     ap.add_argument("--linux-home", help="with --c: that xcc's compiler tree on the host (its -H)")
     a = ap.parse_args()
@@ -482,9 +384,6 @@ def main():
     os.makedirs(work, exist_ok=True)
     if a.c:
         c_mode(a, [m for m in machines if m in ("mac", "linux")], env, work)
-        return
-    if a.autopar:
-        autopar(a, [m for m in machines if m != "browser"], env, work)
         return
     results = {}
     browser = None

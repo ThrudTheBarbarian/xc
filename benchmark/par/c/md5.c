@@ -1,6 +1,6 @@
 /* md5: the par benchmark (apps/hashcat/md5.xc, hashcat's -a 3 inner loop
    on one block of each candidate) in C, for the C path: built by clang
-   alone, and by xcc --par-auto. Prints "<checksum> <best_us> <first_us>". */
+   alone, and by xcc --par-style=auto. Prints "<checksum> <best_us> <first_us>". */
 #include <stdio.h>
 #include "bench_time.h"
 #define BATCH (64 * 1024 * 1024 * BENCH_SCALE)

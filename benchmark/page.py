@@ -517,40 +517,6 @@ def ms(us):
     return "%.1f" % (us / 1000.0) if us < 100000 else "%.0f" % (us / 1000.0)
 
 
-def autopar_tables(version):
-    """--par-auto (benchmark/par/run.py --autopar): each plain-loop program as
-    written and with --par-auto, beside the hand-written par version's auto."""
-    path = os.path.join(ROOT, "par", version, "autopar.json")
-    if not os.path.exists(path):
-        return "*(not measured for this release)*"
-    with open(path) as fh:
-        res = json.load(fh)
-    hand = {}
-    hp = os.path.join(ROOT, "par", version, "results.json")
-    if os.path.exists(hp):
-        with open(hp) as fh:
-            hand = json.load(fh)
-    names = {"mac": "Apple %s, Metal" % par_mac().split(",")[0], "linux": "AMD Ryzen 9 9955HX, its integrated Radeon through Vulkan",
-             "windows": "Windows, RTX 5080 through CUDA"}
-    out = []
-    for m in ("mac", "linux", "windows"):
-        rows = [(b, r[m]) for b, r in res.items() if m in r]
-        if not rows:
-            continue
-        out.append("**%s** (ms; best of eight runs)\n" % names[m])
-        out.append("| benchmark | as written | `--par-auto`, all threads | `--par-auto`, GPU | `--par-auto`, `auto` "
-                   "| hand-written `par`, `auto` |")
-        out.append("|---|---|---|---|---|---|")
-        for b, r in rows:
-            h = hand.get(b, {}).get(m, {}).get("auto")
-            out.append("| [`%s`](%s#%s) | %s | %s | %s | %s | %s |" % (
-                b, SOURCES_URL, b, ms(r["written"]["best_us"]), ms(r["cpu"]["best_us"]),
-                ms(r["gpu"]["best_us"]) if "gpu" in r else "–", ms(r["auto"]["best_us"]),
-                ms(h["best_us"]) if h else "–"))
-        out.append("")
-    return "\n".join(out)
-
-
 def c_tables(version, fname="c.json"):
     """benchmark/par/c_run.py's results: one thread and every thread, each its
     own table and mean, never mixed (owner, 2026-10-25). fname c-pi.json is
@@ -845,13 +811,9 @@ def sources_page(names):
     # The par benchmarks: xc only (each is one program, its blocks run on the
     # CPU's threads or the GPU as the runtime chooses).
     o.append(PAR_SOURCES_HEAD)
-    # Beside par/run.py, and md5 and md5_mask from apps/hashcat, where run.py
-    # builds them (SRC_DIRS there): the GPU page links both here.
+    # Beside par/run.py, the plain-loop programs it builds: the GPU page links
+    # each here.
     srcs = {f[:-3]: os.path.join(ROOT, "par", f) for f in os.listdir(os.path.join(ROOT, "par")) if f.endswith(".xc")}
-    for b in ("md5", "md5_mask"):
-        hp = os.path.join(REPO, "apps", "hashcat", b + ".xc")
-        if os.path.exists(hp):
-            srcs[b] = hp
     for b in sorted(srcs):
         with open(srcs[b]) as fh:
             text = fh.read().rstrip("\n")
@@ -938,7 +900,6 @@ def main():
         multigpu=multigpu(a.current),
         gpu_saturation=gpu_saturation(a.current),
         vulkan=vulkan_notes(a.current),
-        autopar=autopar_tables(a.current),
     )
     with open(GPU_PAGE, "w") as fh:
         fh.write(gpu_page)
@@ -999,18 +960,18 @@ count.
 
 PAR_SOURCES_HEAD = """## Parallel blocks and the GPU
 
-The programs behind the performance page's GPU tables. Each is one xc program:
-its work is a `par` block, a loop whose iterations are independent, and the
-runtime runs it on the CPU's threads or on the GPU (Metal on a Mac, CUDA or
-Vulkan on Windows, Vulkan on Linux and Android, WebGPU in the browser),
-whichever it finds faster. Nothing in the source
-names a device, a kernel language or a thread.
+The programs behind the performance page's GPU tables. Each is one xc program
+of plain loops: xcc makes a `par` block of each loop whose iterations are
+independent, and the runtime runs it on the CPU's threads or on the GPU (Metal
+on a Mac, CUDA or Vulkan on Windows, Vulkan on Linux and Android, WebGPU in the
+browser), whichever it finds faster. Nothing in the source says `par` or names
+a device, a kernel language or a thread.
 """
 
 
 GPU_PAGE_TEMPLATE = """---
 title: "Performance: GPU"
-description: How xc's par blocks run on every CPU thread and on GPUs through Metal, CUDA, Vulkan and WebGPU, and what --par-auto makes of plain loops, measured with the released xcc.
+description: How plain loops, which xcc makes par blocks of, run on every CPU thread and on GPUs through Metal, CUDA, Vulkan and WebGPU, measured with the released xcc.
 ---
 
 Each figure is measured with the released {release} `xcc`, on an Apple
@@ -1032,14 +993,18 @@ has, and to the CPU, together. The GPU is reached through:
 - **Vulkan** on Linux, Windows and Android;
 - **WebGPU** in a browser.
 
-Six programs in `benchmark/par` measure it:
+The programs in `benchmark/par` are plain loops: none of them says `par`.
+xcc turns each loop whose iterations are independent into a `par` block by
+itself (`--par-style=auto`, the default), so they are built with no flags.
+They are:
 
 - `mandelbrot`: a 2048×2048 escape-time image, at most 256 iterations a pixel;
 - `perlin`: 2048×2048 improved noise, four octaves;
 - `nbody`: the force on each of 8192 bodies from all the others;
 - `saxpy`: `y = a·x + y` over 16 million integers, with a sum;
 - `md5`, `md5_mask`: the hashcat MD5 workload, hashing 64 million candidates
-  through the full 64-round compression and summing the digests.
+  through the full 64-round compression and summing the digests;
+- `mandel_deep`: the mandelbrot image at up to 65,536 iterations a pixel.
 
 Each runs its block eight times and reports the best run. The single-device
 modes are *one thread* (`XC_PAR=cpu XC_PAR_THREADS=1`), *all threads*
@@ -1089,20 +1054,10 @@ What the tables show:
   `nbody` and `saxpy`, where `auto` keeps the CPU.
 {vulkan}
 
-## Plain loops: `--par-auto`
-
-`--par-auto` turns a loop whose iterations are independent into a `par`
-block. Four of the programs above, written again as plain loops with no `par`
-in them, are built as written and with `--par-auto`, and each mode's checksum
-must agree. The last column is the hand-written `par` version's `auto`.
-
-{autopar}
-
 ## Reproducing
 
 ```
 python3 benchmark/par/run.py              # the par tables
-python3 benchmark/par/run.py --autopar    # the --par-auto tables
 python3 benchmark/page.py
 ```
 """
@@ -1144,7 +1099,7 @@ difference is a large part of its gap.
 
 The same C, run across all {threads} threads:
 
-- **xcc:** `xcc -O3 --par-auto` on the unchanged files. `--par-auto` finds
+- **xcc:** `xcc -O3 --par-style=auto` on the unchanged files. `--par-style=auto` finds
   the loops that can run in parallel and runs them as `par` blocks; here they
   are kept on the CPU (`XC_PAR=cpu`), so this is CPU against CPU.
 - **GCC and clang:** `-O3 -march=native -fopenmp`, on a copy of each file
@@ -1157,7 +1112,7 @@ Milliseconds; the median of up to fifteen runs. xcc is ahead of both on
 
 {all}
 
-The same programs on GPUs, where `--par-auto` sends them by default, are on
+The same programs on GPUs, where `--par-style=auto` sends them by default, are on
 [Performance: GPU](/compiler/benchmarks/gpu/).
 {pi_section}
 ## How they were measured
@@ -1189,7 +1144,7 @@ One thread, milliseconds; the median of up to fifteen runs:
 
 {one}
 
-Every thread (xcc `--par-auto`, GCC and clang with OpenMP), milliseconds. xcc
+Every thread (xcc `--par-style=auto`, GCC and clang with OpenMP), milliseconds. xcc
 is ahead of both on {all_wins} of the {n}:
 
 {all}
@@ -1358,7 +1313,7 @@ it stays a vectorised loop.)
 
 `par` blocks, which run on every CPU thread, on GPUs and across machines, have
 pages of their own: [Performance: GPU](/compiler/benchmarks/gpu/) (including
-plain loops made parallel by `--par-auto`) and
+plain loops made parallel by `--par-style=auto`) and
 [Performance: networked](/compiler/benchmarks/network/). Plain C built by xcc,
 against GCC and clang on one thread and with OpenMP on every thread, is on
 [Performance: C](/compiler/benchmarks/c/).

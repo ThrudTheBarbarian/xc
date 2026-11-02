@@ -1,5 +1,5 @@
 /* mandel_deep — the par benchmark (benchmark/par/auto/mandel_deep.xc) in C,
-   for the C path: built by clang alone, and by xcc --par-auto. A 4096x4096
+   for the C path: built by clang alone, and by xcc --par-style=auto. A 4096x4096
    window mostly inside the set, up to 4096 iterations a pixel; prints
    "<checksum> <best_us> <first_us>". */
 #include <stdio.h>

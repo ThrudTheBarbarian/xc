@@ -1,5 +1,5 @@
 /* nbody — the par benchmark (benchmark/par/auto/nbody.xc) in C, for the C
-   path: built by clang alone, and by xcc --par-auto. The x force on each of
+   path: built by clang alone, and by xcc --par-style=auto. The x force on each of
    8192 bodies from every other, O(N^2); prints
    "<right/100> <best_us> <first_us>". */
 #include <stdio.h>

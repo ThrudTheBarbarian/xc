@@ -11,7 +11,6 @@
 // "<checksum> <best_us> <first_us>"; the checksum is the total iteration count
 // to the nearest million, coarse enough that fast GPU maths cannot move it.
 #import "Stdio.xc"
-#import "Par.xc"
 #import "../src/include/bench_time.xc"
 
 #ifndef W
@@ -33,27 +32,24 @@ i32 main(void)
     {
         total = (u32)0;
         i64 t0 = bench_now_us();
-        par mandel :reduce(+ total)
+        for (u32 i in 0..SIZE)
         {
-            for (u32 i in 0..SIZE)
+            // The window [-1.5, 0.0] x [-0.75, 0.75]: most pixels are inside
+            // the set and so run the full iteration count.
+            float cx = (float)(i % (u32)W) * (1.5f / (float)W) - 1.5f;
+            float cy = (float)(i / (u32)W) * (1.5f / (float)W) - 0.75f;
+            float x = 0.0f;
+            float y = 0.0f;
+            u32 k = (u32)0;
+            while (k < (u32)MAXITER && x * x + y * y < 4.0f)
             {
-                // The window [-1.5, 0.0] x [-0.75, 0.75]: most pixels are inside
-                // the set and so run the full iteration count.
-                float cx = (float)(i % (u32)W) * (1.5f / (float)W) - 1.5f;
-                float cy = (float)(i / (u32)W) * (1.5f / (float)W) - 0.75f;
-                float x = 0.0f;
-                float y = 0.0f;
-                u32 k = (u32)0;
-                while (k < (u32)MAXITER && x * x + y * y < 4.0f)
-                {
-                    float xt = x * x - y * y + cx;
-                    y = 2.0f * x * y + cy;
-                    x = xt;
-                    k = k + (u32)1;
-                }
-                counts[i] = k;
-                total = total + k;
+                float xt = x * x - y * y + cx;
+                y = 2.0f * x * y + cy;
+                x = xt;
+                k = k + (u32)1;
             }
+            counts[i] = k;
+            total = total + k;
         }
         i64 t1 = bench_now_us();
         if (rep == (u32)0)
