@@ -224,6 +224,7 @@ void main(void)
         {
         o.setExpanded(gTree.node(i, (i32)0), true);
         }
+    o.reloadData(); // expansion takes effect on a reload
     w.tree.finalise();
     w.displayAll();
     measure((u8*)"outline (1100 rows)", w, o.scroll);

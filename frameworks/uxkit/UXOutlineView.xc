@@ -211,6 +211,12 @@ class UXOutlineNode : Object
             {
             self.flatten((Object*)0, (i32)0);
             }
+        // The rows changed under the native tree, so the scroll height must follow, or a scroll
+        // from code after the user opens a group still clamps to the old, shorter list.
+        if (scroll != (UXScrollView*)0)
+            {
+            scroll.setDocumentHeight((i32)nodes.count() * (i32)rowHeight);
+            }
         }
     u8* nativeDragText(pointer item)
         {
