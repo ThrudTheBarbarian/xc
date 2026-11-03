@@ -2197,30 +2197,75 @@
             PH.add(sb);
             tl = IROperand.useVal(tv);
             }
-        // max(tl, 0): tl & ~(tl >> (bits-1)) — the sign fills the mask when
-        // tl is negative, so the And zeroes it.
-        IRValue* sv = new IRValue(ivTy);
-        IRInsn* sh = IRInsn.with(String.withCString("AShr"));
-        sh.setRes(sv);
-        sh.add(tl);
-        sh.add(IROperand.immI((i64)(self.irWidth(ivTy) * (u32)8 - (u32)1),
-                              String.withCString("U8")));
-        PH.add(sh);
-        IRValue* nv = new IRValue(ivTy);
-        IRInsn* nt = IRInsn.with(String.withCString("Not"));
-        nt.setRes(nv);
-        nt.add(IROperand.useVal(sv));
-        PH.add(nt);
-        IRValue* cv = new IRValue(ivTy);
-        IRInsn* an0 = IRInsn.with(String.withCString("And"));
-        an0.setRes(cv);
-        an0.add(tl);
-        an0.add(IROperand.useVal(nv));
-        PH.add(an0);
+        IROperand* ctl = tl;
+        IRInsn* g = c.guard();
+        bool uns = g != (IRInsn*)0 && g.pred() != (String*)0
+            && (g.pred().equals(String.withCString("ULT")) || g.pred().equals(String.withCString("ULE")));
+        if (uns)
+            {
+            // An unsigned loop: the trip length is bound - start when the
+            // bound is not below the start, else 0. Read as signed, a length
+            // of 2^31 or more was negative and the clamp made it 0, so a par
+            // block of 2.8e9 items ran all of them in the scalar remainder
+            // (call_depth, 3x slower on one thread). The mask is
+            // 0 - (bound >= start). As the reference.
+            if (start != (IROperand*)0)
+                {
+                IRValue* okv = new IRValue(String.withCString("Bool"));
+                IRInsn* ok = IRInsn.with(String.withCString("ICmp"));
+                ok.setRes(okv);
+                ok.setPred(String.withCString("UGE"));
+                ok.add(c.bound());
+                ok.add(start);
+                PH.add(ok);
+                IRValue* wv = new IRValue(ivTy);
+                IRInsn* zx = IRInsn.with(String.withCString("ZExt"));
+                zx.setRes(wv);
+                zx.add(IROperand.useVal(okv));
+                PH.add(zx);
+                IRValue* mkv = new IRValue(ivTy);
+                IRInsn* mk = IRInsn.with(String.withCString("Sub"));
+                mk.setRes(mkv);
+                mk.add(IROperand.immI((i64)0, ivTy));
+                mk.add(IROperand.useVal(wv));
+                PH.add(mk);
+                IRValue* cv0 = new IRValue(ivTy);
+                IRInsn* an1 = IRInsn.with(String.withCString("And"));
+                an1.setRes(cv0);
+                an1.add(tl);
+                an1.add(IROperand.useVal(mkv));
+                PH.add(an1);
+                ctl = IROperand.useVal(cv0);
+                }
+            }
+        else
+            {
+            // max(tl, 0): tl & ~(tl >> (bits-1)) — the sign fills the mask
+            // when tl is negative, so the And zeroes it.
+            IRValue* sv = new IRValue(ivTy);
+            IRInsn* sh = IRInsn.with(String.withCString("AShr"));
+            sh.setRes(sv);
+            sh.add(tl);
+            sh.add(IROperand.immI((i64)(self.irWidth(ivTy) * (u32)8 - (u32)1),
+                                  String.withCString("U8")));
+            PH.add(sh);
+            IRValue* nv = new IRValue(ivTy);
+            IRInsn* nt = IRInsn.with(String.withCString("Not"));
+            nt.setRes(nv);
+            nt.add(IROperand.useVal(sv));
+            PH.add(nt);
+            IRValue* cv = new IRValue(ivTy);
+            IRInsn* an0 = IRInsn.with(String.withCString("And"));
+            an0.setRes(cv);
+            an0.add(tl);
+            an0.add(IROperand.useVal(nv));
+            PH.add(an0);
+            ctl = IROperand.useVal(cv);
+            }
         IRValue* mv = new IRValue(ivTy);
         IRInsn* an = IRInsn.with(String.withCString("And"));
         an.setRes(mv);
-        an.add(IROperand.useVal(cv));
+        an.add(ctl);
         an.add(IROperand.immI((i64) ~((i32)c.vw() - (i32)1), ivTy));
         PH.add(an);
         if (start == (IROperand*)0)

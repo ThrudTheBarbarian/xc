@@ -1808,7 +1808,7 @@ static void xtvCloneLoop(XTIRFunction* fn, XTIRBlock* H, XTIRBlock* B,
 static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
                                    XTIROperand* boundOp, int64_t ivStart,
                                    XTIROperand* startOp,
-                                   NSUInteger vw, XTIRType* ivTy)
+                                   NSUInteger vw, XTIRType* ivTy, uint8_t guardPred)
     {
     XTIROperand* (^emit)(XTIROpcode, NSArray<XTIROperand*>*) =
         ^XTIROperand*(XTIROpcode op, NSArray<XTIROperand*>* ops) {
@@ -1827,13 +1827,41 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     if (!start && ivStart != 0)
         start = [XTIROperand immIWithType:ivTy value:ivStart];
     XTIROperand* tl = start ? emit(XTIROpSub, @[ boundOp, start ]) : boundOp;
-    // max(tl, 0): tl & ~(tl >> (bits-1)) — the sign fills the mask when tl is
-    // negative, so the And zeroes it; a non-negative tl is left alone.
-    XTIROperand* sgn = emit(XTIROpAShr,
-                            @[ tl, [XTIROperand immIWithType:[XTIRType u8Type]
-                                                       value:(int64_t)(ivTy.byteWidth * 8 - 1)] ]);
-    XTIROperand* inv = emit(XTIROpNot, @[ sgn ]);
-    XTIROperand* ctl = emit(XTIROpAnd, @[ tl, inv ]);
+    XTIROperand* ctl = tl;
+    if (guardPred == XTIRICmpULT || guardPred == XTIRICmpULE)
+        {
+        // An unsigned loop: the trip length is bound - start when the bound
+        // is not below the start, else 0. Read as signed, a length of 2^31 or
+        // more was negative and the clamp made it 0, so a par block of 2.8e9
+        // items ran all of them in the scalar remainder (call_depth, 3x
+        // slower on one thread). The mask is 0 - (bound >= start).
+        if (start)
+            {
+            XTIRValueId okId = [fn allocateValueId];
+            XTIRValue* okv = [[XTIRValue alloc] initWithValueId:okId
+                                                           type:[XTIRType boolType]
+                                                        defSite:[[XTIRDefSite alloc] initWithBlock:PH insnIndex:0]];
+            [fn registerValue:okv];
+            [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpICmp
+                                                                 result:okv
+                                                               operands:@[ boundOp, start ]
+                                                              predicate:(uint8_t)XTIRICmpUGE
+                                                                 dbgLoc:nil]];
+            XTIROperand* okw = emit(XTIROpZExt, @[ [XTIROperand useWithValueId:okId] ]);
+            XTIROperand* mask = emit(XTIROpSub, @[ [XTIROperand immIWithType:ivTy value:0], okw ]);
+            ctl = emit(XTIROpAnd, @[ tl, mask ]);
+            }
+        }
+    else
+        {
+        // max(tl, 0): tl & ~(tl >> (bits-1)) — the sign fills the mask when tl
+        // is negative, so the And zeroes it; a non-negative tl is left alone.
+        XTIROperand* sgn = emit(XTIROpAShr,
+                                @[ tl, [XTIROperand immIWithType:[XTIRType u8Type]
+                                                           value:(int64_t)(ivTy.byteWidth * 8 - 1)] ]);
+        XTIROperand* inv = emit(XTIROpNot, @[ sgn ]);
+        ctl = emit(XTIROpAnd, @[ tl, inv ]);
+        }
     XTIROperand* steps = emit(XTIROpAnd,
                               @[ ctl, [XTIROperand immIWithType:ivTy value:~((int64_t)vw - 1)] ]);
     XTIROperand* m = steps;
@@ -1876,7 +1904,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
             {
             XTIRValueId mid = xtvEmitRuntimeM(fn, c.preheader, c.boundOp,
                                               c.ivStart, c.ivStartOp, c.vw,
-                                              c.ivPhi.result.type);
+                                              c.ivPhi.result.type, c.guard.predicate);
             runtimeMId = mid;
             gops[1] = [XTIROperand useWithValueId:mid];
             }
@@ -2871,7 +2899,7 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
         if (c.runtimeTrip)
             {
             XTIRValueId mid = xtvEmitRuntimeM(fn, PH, c.boundOp, c.ivStart,
-                                              c.ivStartOp, c.vw, c.ivPhi.result.type);
+                                              c.ivStartOp, c.vw, c.ivPhi.result.type, c.guard.predicate);
             runtimeMId = mid;
             gops[1] = [XTIROperand useWithValueId:mid];
             }
@@ -5927,7 +5955,7 @@ static BOOL vecInterleaveFits(XTIRFunction* fn, XTIRBlock* B, XTIRValueId vaccId
         if (c.runtimeTrip)
             {
             XTIRValueId mid = xtvEmitRuntimeM(fn, PH, c.boundOp, c.ivStart,
-                                              c.ivStartOp, c.vw, c.ivPhi.result.type);
+                                              c.ivStartOp, c.vw, c.ivPhi.result.type, c.guard.predicate);
             runtimeMId = mid;
             gops[1] = [XTIROperand useWithValueId:mid];
             }
