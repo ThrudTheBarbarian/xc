@@ -20,7 +20,19 @@
         if (!_profile.initGuardElim())
             return;
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
-            initGuardsInFunc(m, (IRFunc*)m.funcs().get(f));
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            initGuardsInFunc(m, fn);
+            // Every function's straight-line chains, guards or none: an if
+            // that if-conversion made a Select leaves its body and join two
+            // blocks, which neither vectoriser takes. Coalescing ran only
+            // where a guard was folded, and in 0.9.1 nearly every function
+            // had Stdio's; with libRuntime the library's classes have none,
+            // and string_scan's loop stopped vectorising (11 s against
+            // 0.47). As the reference.
+            if (fn.blocks().count() >= (u32)2)
+                coalesceStraightLine(fn);
+            }
         }
 
     final void sgCountOps(Array* used, Array* ops)
