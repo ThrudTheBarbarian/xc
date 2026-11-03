@@ -2461,71 +2461,105 @@ class BeFact : Object
         }
 
     // Iterative dominators over the CFG, entry = the first block. A block maps
-    // to the ARRAY of blocks that dominate it.
+    // to the ARRAY of blocks that dominate it, in the function's block order.
+    //
+    // The sets are bit rows indexed by block position and each block's
+    // predecessors are found once: rebuilt per block per pass (a scan of every
+    // terminator) and intersected by search, this was cubic in the blocks, and
+    // the par runtime a lifted loop brings in spent half its compile here (33 s
+    // for a one-loop program on x86-64 Linux). The passes, their order and the
+    // in-place update are as before, so the fixed point is the same.
     Map* dominators(IRFunc* fn)
         {
         Map* dom = new Map();
-        IRBlock* entry = (IRBlock*)fn.blocks().get((u32)0);
-        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+        u32 n = fn.blocks().count();
+        if (n == (u32)0)
+            return dom;
+        Map* index = new Map();
+        for (u32 b = (u32)0; b < n; b = b + (u32)1)
+            index.set((Hashable*)(IRBlock*)fn.blocks().get(b), (Object*)Number.with(b));
+        // preds[b]: the positions of the blocks whose terminator names b, each once.
+        Array* preds = new Array();
+        for (u32 b = (u32)0; b < n; b = b + (u32)1)
+            preds.add((Object*)new Array());
+        for (u32 b = (u32)0; b < n; b = b + (u32)1)
             {
-            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-            Array* init = new Array();
-            if (bb == entry)
-                init.add((Object*)entry);
-            else
-                for (u32 k = (u32)0; k < fn.blocks().count(); k = k + (u32)1)
-                    init.add(fn.blocks().get(k));
-            dom.set((Hashable*)bb, (Object*)init);
+            IRInsn* t = ((IRBlock*)fn.blocks().get(b)).term();
+            if (t == 0)
+                continue;
+            for (u32 i = (u32)0; i < t.ops().count(); i = i + (u32)1)
+                {
+                IROperand* o = (IROperand*)t.ops().get(i);
+                if (o.kind() != (u8)OPK_BLOCK || o.blk() == 0)
+                    continue;
+                Number* at = (Number*)index.get((Hashable*)o.blk());
+                if (at == (Number*)0)
+                    continue;
+                Array* ps = (Array*)preds.get(at.asU32());
+                bool seen = false;
+                for (u32 k = (u32)0; k < ps.count(); k = k + (u32)1)
+                    if (((Number*)ps.get(k)).asU32() == b)
+                        seen = true;
+                if (!seen)
+                    ps.add((Object*)Number.with(b));
+                }
+            }
+        u32 w = (n >> (u32)3) + (u32)1;
+        Data* store = Data.withLength(n * w);
+        u8* rows = store.bytes();
+        Data* scratch = Data.withLength(w);
+        u8* nd = scratch.bytes();
+        u32* counts = (u32*)0;
+        Data* countStore = Data.withLength(n * (u32)4);
+        counts = (u32*)countStore.bytes();
+        // The entry dominates itself only; every other block starts as all.
+        rows[0] = (u8)1;
+        counts[0] = (u32)1;
+        for (u32 b = (u32)1; b < n; b = b + (u32)1)
+            {
+            for (u32 k = (u32)0; k < n; k = k + (u32)1)
+                rows[b * w + (k >> (u32)3)] = rows[b * w + (k >> (u32)3)] | ((u8)1 << (u8)(k & (u32)7));
+            counts[b] = n;
             }
         bool changed = true;
         while (changed)
             {
             changed = false;
-            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            for (u32 b = (u32)1; b < n; b = b + (u32)1)
                 {
-                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-                if (bb == entry)
+                // The intersection of its predecessors' sets, plus itself.
+                Array* ps = (Array*)preds.get(b);
+                for (u32 k = (u32)0; k < w; k = k + (u32)1)
+                    nd[k] = ps.count() == (u32)0 ? (u8)0 : (u8)255;
+                for (u32 p = (u32)0; p < ps.count(); p = p + (u32)1)
+                    {
+                    u32 q = ((Number*)ps.get(p)).asU32();
+                    for (u32 k = (u32)0; k < w; k = k + (u32)1)
+                        nd[k] = nd[k] & rows[q * w + k];
+                    }
+                nd[b >> (u32)3] = nd[b >> (u32)3] | ((u8)1 << (u8)(b & (u32)7));
+                u32 c = (u32)0;
+                for (u32 k = (u32)0; k < n; k = k + (u32)1)
+                    if ((nd[k >> (u32)3] & ((u8)1 << (u8)(k & (u32)7))) != (u8)0)
+                        c = c + (u32)1;
+                // Sets only shrink, so a count that held is a set that held.
+                if (c == counts[b])
                     continue;
-                if (refineDominators(fn, dom, bb))
-                    changed = true;
+                for (u32 k = (u32)0; k < w; k = k + (u32)1)
+                    rows[b * w + k] = nd[k];
+                counts[b] = c;
+                changed = true;
                 }
+            }
+        for (u32 b = (u32)0; b < n; b = b + (u32)1)
+            {
+            Array* ds = new Array();
+            for (u32 k = (u32)0; k < n; k = k + (u32)1)
+                if ((rows[b * w + (k >> (u32)3)] & ((u8)1 << (u8)(k & (u32)7))) != (u8)0)
+                    ds.add(fn.blocks().get(k));
+            dom.set((Hashable*)(IRBlock*)fn.blocks().get(b), (Object*)ds);
             }
         return dom;
-        }
-
-    // One block's dominator set: the intersection of its predecessors' sets,
-    // plus itself. True when it shrank.
-    bool refineDominators(IRFunc* fn, Map* dom, IRBlock* bb)
-        {
-        Array* preds = predsOfBlock(fn, bb);
-        Array* nd = (Array*)0;
-        for (u32 p = (u32)0; p < preds.count(); p = p + (u32)1)
-            {
-            Array* dp = (Array*)dom.get((Hashable*)(IRBlock*)preds.get(p));
-            if (dp == 0)
-                continue;
-            if (nd == 0)
-                {
-                nd = new Array();
-                for (u32 k = (u32)0; k < dp.count(); k = k + (u32)1)
-                    nd.add(dp.get(k));
-                continue;
-                }
-            Array* keep = new Array();
-            for (u32 k = (u32)0; k < nd.count(); k = k + (u32)1)
-                if (hasBlock(dp, (IRBlock*)nd.get(k)))
-                    keep.add(nd.get(k));
-            nd = keep;
-            }
-        if (nd == 0)
-            nd = new Array();
-        if (!hasBlock(nd, bb))
-            nd.add((Object*)bb);
-        Array* old = (Array*)dom.get((Hashable*)bb);
-        if (old != 0 && old.count() == nd.count())
-            return false;
-        dom.set((Hashable*)bb, (Object*)nd);
-        return true;
         }
 
     // A compile-time integer, seen through the ZExt a `(u16)0` lowers to.

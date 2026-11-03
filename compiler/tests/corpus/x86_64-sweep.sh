@@ -62,7 +62,14 @@ companion_for() { grep -hoE '//[ ]*xtc-link:[ ]*[A-Za-z0-9_]+' "$1" | head -1 | 
 strip_protos() { grep -vE '^[A-Za-z_][A-Za-z0-9_@]*[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\([^){}]*\)[[:space:]]*;' "$1"; }
 
 # ---- 1. build applicable fixtures ----------------------------------------------
-NAMES=(); NA=0; CFAIL=0; NOORACLE=0; CFAILS=""
+# In parallel (SWEEP_JOBS, default the host's CPUs over 4, since the gate runs
+# several legs on one host): a fixture whose loop the compiler lifts brings
+# the par runtime in, which takes seconds to compile, and 160 of them one
+# after another outran the gate's two hours. Results are read back in fixture
+# order, so the counts and the run order are what a serial build gives.
+JOBS="${SWEEP_JOBS:-$(( $( (nproc || sysctl -n hw.ncpu) 2>/dev/null || echo 4) / 4 ))}"
+[ "$JOBS" -ge 1 ] 2>/dev/null || JOBS=1
+NAMES=(); NA=0; CFAIL=0; NOORACLE=0; CFAILS=""; TRIED=()
 for f in tests/fixtures/*.xc; do
   b="$(basename "$f" .xc)"
   [ -n "$ONLY" ] && [[ "$b" != *"$ONLY"* ]] && continue
@@ -76,11 +83,17 @@ for f in tests/fixtures/*.xc; do
     src="$BUILD/$b.merged.xc"
     { strip_protos "$f"; echo; cat "tests/fixtures/$comp.xc"; } > "$src"
   fi
-  if "$XTC" -A x86_64 "-O$OPT" $(flags_for "$f") "${INC[@]}" "$src" \
-       -o "$BUILD/bin/$b" 2>"$BUILD/$b.err"; then
+  TRIED+=("$b")
+  while [ "$(jobs -rp | wc -l)" -ge "$JOBS" ]; do wait -n 2>/dev/null || sleep 0.1; done
+  ( if "$XTC" -A x86_64 "-O$OPT" $(flags_for "$f") "${INC[@]}" "$src" \
+         -o "$BUILD/bin/$b" 2>"$BUILD/$b.err"; then : > "$BUILD/$b.built"; fi ) &
+done
+wait
+for b in ${TRIED[@]+"${TRIED[@]}"}; do
+  if [ -f "$BUILD/$b.built" ]; then
     NAMES+=("$b")
   else
-    CFAIL=$((CFAIL+1)); CFAILS="$CFAILS $b"
+    rm -f "$BUILD/bin/$b"; CFAIL=$((CFAIL+1)); CFAILS="$CFAILS $b"
   fi
 done
 echo "built ${#NAMES[@]}  |  N/A $NA  |  no-oracle $NOORACLE  |  compile-fail $CFAIL"
