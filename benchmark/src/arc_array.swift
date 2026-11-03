@@ -16,8 +16,8 @@ struct ArcArray {
         for i in 0..<n { cells.append(Cell(UInt32(i) &+ seed)) }
         var acc: UInt32 = 0
         let t0 = bench_now_us()
-        for _ in 0..<UInt32(3_000_000) {
-            for i in 0..<n { acc = acc &+ cells[i].get() }
+        for r in 0..<UInt32(3_000_000) {
+            for i in 0..<n { acc = acc &+ (cells[i].get() ^ r) }
         }
         let t1 = bench_now_us()
         print("\(acc) \(t1 - t0)")

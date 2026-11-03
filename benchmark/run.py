@@ -285,13 +285,21 @@ def build_remote(name, opt, tag, host, lang):
     return out, None
 
 
+# The suite compares one thread with one thread: an xc program runs its par
+# blocks (the loops --par-style=auto lifts, the default) on the CPU's one
+# thread, as the C++ and Swift it is set beside do (owner, 2026-11-03).
+# Other languages' programs do not read these.
+ONE_THREAD = {"XC_PAR": "cpu", "XC_PAR_THREADS": "1"}
+ONE_THREAD_SH = "".join("%s=%s " % kv for kv in sorted(ONE_THREAD.items()))
+
+
 def run_remote(remote_path, repeats, host, env_prefix=""):
     """Run an already-present remote binary and take the fastest report."""
     best, checksum = None, None
     for _ in range(repeats):
         wait_quiet(host)
         r = subprocess.run(["ssh", "-o", "ConnectTimeout=10", host,
-                            "%schmod +x %s && %s x" % (env_prefix, remote_path, remote_path)],
+                            "%schmod +x %s && %s%s x" % (env_prefix, remote_path, ONE_THREAD_SH, remote_path)],
                            capture_output=True, text=True)
         if r.returncode != 0:
             return None, "remote exit %d" % r.returncode
@@ -307,16 +315,44 @@ def run_remote(remote_path, repeats, host, env_prefix=""):
     return best, checksum
 
 
+def runtime_lib_for(binary):
+    """The libRuntime an ELF program links (0.9.2), from the measured xcc's
+    install: x86-64 or arm64 Linux by the ELF machine field. None for a
+    program that carries its runtime, or another format."""
+    try:
+        with open(binary, "rb") as f:
+            head = f.read(20)
+            body = head + f.read()
+    except OSError:
+        return None
+    if head[:4] != b"\x7fELF" or b"libRuntime.so" not in body:
+        return None
+    row = {0x3e: "x86_64-linux", 0xb7: "arm64-linux"}.get(head[18] | (head[19] << 8))
+    if row is None:
+        return None
+    root = os.path.dirname(os.path.dirname(xcc_path()))
+    for base in (os.path.join(root, "lib", "xc"), os.path.join(root, "support")):
+        lib = os.path.join(base, "runtime-lib", row, "libRuntime.so")
+        if os.path.isfile(lib):
+            return lib
+    return None
+
+
 def measure_remote(binary, repeats, host):
-    """Copy once, then run there. Same self-reported timing as the local path."""
+    """Copy once, then run there. Same self-reported timing as the local path.
+    A program that links libRuntime finds it beside itself ($ORIGIN), as a
+    program a user copies to another machine does."""
     if subprocess.run(["scp", "-q", binary, "%s:/tmp/" % host]).returncode != 0:
         return None, "scp failed"
+    lib = runtime_lib_for(binary)
+    if lib is not None and subprocess.run(["scp", "-q", lib, "%s:/tmp/" % host]).returncode != 0:
+        return None, "scp of libRuntime failed"
     remote = "/tmp/" + os.path.basename(binary)
     best, checksum = None, None
     for _ in range(repeats):
         wait_quiet(host)
         r = subprocess.run(["ssh", "-o", "ConnectTimeout=10", host,
-                            "chmod +x %s && %s x" % (remote, remote)],
+                            "chmod +x %s && %s%s x" % (remote, ONE_THREAD_SH, remote)],
                            capture_output=True, text=True)
         if r.returncode != 0:
             return None, "remote exit %d" % r.returncode
@@ -393,7 +429,8 @@ def measure(binary, repeats):
     best, checksum = None, None
     for _ in range(repeats):
         wait_quiet()
-        r = subprocess.run([binary, "x"], capture_output=True, text=True)
+        r = subprocess.run([binary, "x"], capture_output=True, text=True,
+                           env=dict(os.environ, **ONE_THREAD))
         if r.returncode != 0:
             return None, "exit %d" % r.returncode
         parts = r.stdout.split()

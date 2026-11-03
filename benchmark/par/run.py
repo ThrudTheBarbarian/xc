@@ -234,6 +234,14 @@ def run_mac(binary, env):
     return parse(r.stdout)
 
 
+def copy_runtime(exe, host):
+    """A program that links libRuntime (0.9.2) finds it beside itself, in
+    /tmp on the host, as one a user copies to another machine does."""
+    lib = common.runtime_lib_for(exe)
+    if lib is not None:
+        subprocess.run(["scp", "-q", lib, "%s:/tmp/" % host], check=True)
+
+
 def run_linux(host, binary, env):
     common.wait_quiet(host)
     pre = " ".join("%s=%s" % kv for kv in env.items())
@@ -403,6 +411,7 @@ def main():
             exe = os.path.join(work, name + ".x86")
             build(name, "x86_64", exe)
             subprocess.run(["scp", "-q", exe, "%s:/tmp/par-%s" % (host, name)], check=True)
+            copy_runtime(exe, host)
             results[name]["linux"] = measure(lambda b, e: run_linux(host, b, e), "/tmp/par-" + name,
                                              ["gpu"] if a.version >= "0.72" else [], gpu_only=gpu_only)
         if "linuxgpu" in machines and env.get("XTC_LINUX_GPU_HOST"):
@@ -410,6 +419,7 @@ def main():
             exe = os.path.join(work, name + ".x86gpu")
             build(name, "x86_64", exe)
             subprocess.run(["scp", "-q", exe, "%s:/tmp/par-%s" % (host, name)], check=True)
+            copy_runtime(exe, host)
             results[name]["linuxgpu"] = measure(lambda b, e: run_linux(host, b, e), "/tmp/par-" + name,
                                                 ["gpu", "vulkan"], gpu_only=gpu_only)
         # A Raspberry Pi 5 (arm64 Linux): its four A76 cores and the V3D
@@ -420,6 +430,7 @@ def main():
             exe = os.path.join(work, name + ".pi")
             build(name, "arm64-linux", exe)
             subprocess.run(["scp", "-q", exe, "%s:/tmp/par-%s" % (host, name)], check=True)
+            copy_runtime(exe, host)
             results[name]["pi"] = measure(lambda b, e: run_linux(host, b, e), "/tmp/par-" + name,
                                           ["gpu"], gpu_only=False)
         if "windows" in machines and env.get("XTC_WIN_GPU_HOST"):
