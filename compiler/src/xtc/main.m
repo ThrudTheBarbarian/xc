@@ -4770,6 +4770,9 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         if (sr) [feArgs addObjectsFromArray:@[@"--runtime-members", [sr stringByAppendingPathComponent:@"generic/lib/Runtime.list"]]];
     } else if (runtimeLibFile(argv0, opts)) {
         [feArgs addObjectsFromArray:@[@"--runtime-lib", runtimeLibFile(argv0, opts)]];
+        // The program knows it shares the library, and which (a plugin built
+        // to share it loads only into a program that does). As the port.
+        [feArgs addObject:[NSString stringWithFormat:@"-DXC_RUNTIME_LIB=\"%s\"", XTC_VERSION]];
     }
     if (opts.emitIface) [feArgs addObject:@"--emit-iface"];  // same sidecar, without becoming a library build
     // -c wants the same sidecar (stage 3): the front end is a separate process,

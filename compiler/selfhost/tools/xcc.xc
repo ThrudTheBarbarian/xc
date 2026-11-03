@@ -733,8 +733,26 @@ void resolveRuntimeLib(DriverOptions* d)
         file.appendCString("/libRuntime.");
         file.append((String*)exts.get(i));
         d.fe().setRuntimeLibFile(file);
+        // The program knows it shares the library, and which: a plugin built
+        // to share it is loaded only into a program that does, by this xcc
+        // (Plugin._checkAbi).
+        String* def = String.withCString("XC_RUNTIME_LIB=\"");
+        def.appendCString(XCC_VERSION);
+        def.appendCString("\"");
+        d.fe().defs().add((Object*)def);
         return;
     }
+}
+
+// A plugin's object ABI for its bundle.json: "2" with the 8-byte instance
+// header, "1" with the 40-byte one, and "+rt" when it shares the program's
+// libRuntime, which only a program that links the same one loads it into
+// (an older loader sees an ABI it does not know, and refuses it).
+String* bundleAbiOf(DriverOptions* d)
+{
+    String* a = String.withCString(d.targetRow() != (TargetRow*)0 && d.targetRow().compactObjects() ? "2" : "1");
+    if (d.fe().runtimeLibFile() != (String*)0) a.appendCString("+rt");
+    return a;
 }
 
 // Whether this image takes its object runtime from the target's libRuntime
@@ -5008,6 +5026,12 @@ void makeBundle(DriverOptions* d)
         while (sl > (u32)0 && dep.byteAt(sl - (u32)1) != (u8)'/' && dep.byteAt(sl - (u32)1) != (u8)92)
             sl = sl - (u32)1;
         String* base = dep.substringFromByte(sl);
+        // libRuntime is the program's: loaded before any plugin, so the
+        // plugin's need binds to that copy and no file is searched for. The
+        // loader takes the plugin only into a program that shares the same
+        // one (its ABI says "+rt"; Plugin._checkAbi).
+        if (base.hasPrefix(String.withCString("libRuntime.")) && d.fe().runtimeLibFile() != (String*)0)
+            continue;
         bool shipped = false;
         for (u32 j = (u32)0; d._bundleLibs != (Array*)0 && j < d._bundleLibs.count(); j = j + (u32)1) {
             String* lib = (String*)d._bundleLibs.get(j);
@@ -5032,8 +5056,7 @@ void makeBundle(DriverOptions* d)
                                       bundlePlatform(d), out, d._bundleResources, seed,
                                       d._publisher, d._publisherDomain, provides, requires,
                                       d._bundleReadonly, d._bundleWriteable, previous, d._bundleLibs,
-                                      String.withCString(d.targetRow() != (TargetRow*)0 && d.targetRow().compactObjects()
-                                                         ? "2" : "1"),
+                                      bundleAbiOf(d),
                                       String.withCString(XCC_VERSION));
     if (err != (String*)0) {
         Stdio.printf("xcc: error: --bundle: %s\n", err.cString());

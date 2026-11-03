@@ -455,6 +455,26 @@ class Plugin : Object
         String* mine = BundleSign.objectAbi();
         if (abi != (String*)0 && abi.equals(mine))
             return (String*)0;
+        // Built to share the program's libRuntime ("+rt"): this program must
+        // link one, from the xcc that built the plugin (two releases' libraries
+        // share a name, not their insides).
+        String* shared = String.withString(mine);
+        shared.appendCString("+rt");
+        if (abi != (String*)0 && abi.equals(shared))
+            {
+#if defined(XC_RUNTIME_LIB)
+            String* ours = String.withCString(XC_RUNTIME_LIB);
+            if (by != (String*)0 && by.equals(ours))
+                return (String*)0;
+            return String.withFormat("%s: built by xcc %s to share its libRuntime; this program has xcc %s's: "
+                                     "rebuild one with the other's xcc", name.cString(),
+                                     by != (String*)0 ? by.cString() : "(unknown)", ours.cString());
+#else
+            return String.withFormat("%s: built to share the program's libRuntime, which this program does not "
+                                     "link (built -static or --no-runtime-lib); rebuild the plugin with "
+                                     "--no-runtime-lib", name.cString());
+#endif
+            }
         if (abi == (String*)0)
             return String.withFormat("%s: its %s code does not say which object ABI it was built for (an xcc before "
                                      "0.9.1 built it); this program needs ABI %s: rebuild it",

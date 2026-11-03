@@ -179,13 +179,22 @@ check "a key in both refused" "both readonly and writeable"     "$XC" --bundle "
 check "manifest records the ABI" '"abi": {"' cat "$L/spice/bundle.json"
 check "manifest records the xcc" '"xcc": {"' cat "$L/spice/bundle.json"
 cp -R "$L/spice" "$L/abi1"
-sed -E 's/("abi": \{[^}]*": ")[0-9]+"/\19"/' "$L/spice/bundle.json" > "$L/abi1/bundle.json"
+sed -E 's/("abi": \{[^}]*": ")[0-9]+(\+rt)?"/\19"/' "$L/spice/bundle.json" > "$L/abi1/bundle.json"
 "$XC" --sign-bundle "$L/abi1" --bundle-key "$L/key" > /dev/null
 check "another ABI refused"   "(ABI 9); this program needs ABI"  "$L/host" "$L/abi1" yes
 cp -R "$L/spice" "$L/abi0"
 grep -v '^  "abi": ' "$L/spice/bundle.json" > "$L/abi0/bundle.json"
 "$XC" --sign-bundle "$L/abi0" --bundle-key "$L/key" > /dev/null
 check "no ABI refused"        "does not say which object ABI"    "$L/host" "$L/abi0" yes
+
+# libRuntime (2026-11-03): a plugin that shares the program's libRuntime says
+# so in its ABI ("+rt"), and a program that does not link libRuntime refuses
+# it before it is loaded (its need would otherwise be searched for on disk).
+if grep -qE '"abi": \{[^}]*\+rt"' "$L/spice/bundle.json"; then
+    "$XC" -q -H . --no-runtime-lib -o "$L/hoststatic" tests/bundle/plughost.xc \
+        || { echo "FAIL plugin --no-runtime-lib host build"; rc=1; }
+    check "a host without libRuntime refuses it" "which this program does not link" "$L/hoststatic" "$L/spice" yes
+fi
 
 [ $rc = 0 ] && echo "--- plugin: pass ---" || echo "--- plugin: FAIL ---"
 exit $rc
