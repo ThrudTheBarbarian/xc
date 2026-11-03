@@ -123,6 +123,14 @@ u32 gParGpuWorkers;     // GPU workers in the default set (ParTiles tells)
 i64 gParRemUs[64];
 u32 gParRemRuns[64];
 i64 gParRemFrom[64];
+// The CPU on one thread (issue 9): a bandwidth-bound block can be faster on
+// one thread than on all of them (saxpy on a Pi 5: 24.5 ms against 30.7).
+// Auto times it after the CPU's own timed run; the CPU's figure is the better
+// of the two, and gParCpuOne says the one thread won (saved as `,one` in the
+// learned record). gParOneNow: the run in progress is that one-thread run.
+i64 gParCpu1Us[64];
+bool gParCpuOne[64];
+bool gParOneNow[64];
 u32 gParRemoteWorkers;  // remote GPU workers in the default set (ParTiles tells)
 // Measurements in progress, kept across processes of the program: up to four
 // size bands a block, each the size measured and the four candidates' times.
@@ -420,6 +428,9 @@ class ParDevice
         gParSet[i] = (i32)-1;
         gParGpuUs[i] = (i64)-1;
         gParCpuUs[i] = (i64)-1;
+        gParCpu1Us[i] = (i64)-1;
+        gParCpuOne[i] = false;
+        gParOneNow[i] = false;
         gParGpuRuns[i] = (u32)0;
         gParCpuRuns[i] = (u32)0;
         gParUser[i] = (i32)0;
@@ -963,6 +974,27 @@ class ParDevice
         if (c[at] == (u8)',' && gParApi[i] == (i32)0)
             gParApi[i] = c[at + (u32)1] == (u8)'v' ? (i32)2 : c[at + (u32)1] == (u8)'c' ? (i32)1 : (i32)0;
 #endif
+        // ,one: the CPU runs the block on one thread (from 0.9.3).
+        for (; c[at] != (u8)0 && c[at] != (u8)';'; at = at + (u32)1)
+            if (c[at] == (u8)',' && c[at + (u32)1] == (u8)'o' && c[at + (u32)2] == (u8)'n' && c[at + (u32)3] == (u8)'e')
+                gParCpuOne[i] = true;
+        }
+
+    // The CPU's time: all its threads, or one when that was faster.
+    static i64 cpuBestUs(u32 i)
+        {
+        if (gParCpu1Us[i] >= (i64)0 && (gParCpuUs[i] < (i64)0 || gParCpu1Us[i] < gParCpuUs[i]))
+            return gParCpu1Us[i];
+        return gParCpuUs[i];
+        }
+
+    // Whether this CPU run of the block takes one thread: auto's one-thread
+    // trial, or a block auto learned runs faster so (not while it measures
+    // the CPU's threads at a new size).
+    static bool oneThread(ParChunk* proto)
+        {
+        u32 i = slot(proto.parName());
+        return gParOneNow[i] || (!gParMeasuring[i] && gParCpuOne[i]);
         }
 
     static u8* choiceName(i32 c)
@@ -1006,6 +1038,8 @@ class ParDevice
         if (gParApi[i] != (i32)0)
             v.appendCString(gParApi[i] == (i32)2 ? ",vulkan" : ",cuda");
 #endif
+        if (gParCpuOne[i])
+            v.appendCString(",one");
 #if !ARCH_wasm32
         // When it was learned, in epoch seconds, in its own `;` segment so the
         // field parser (which stops at the fields it knows) never sees it.
@@ -1085,7 +1119,7 @@ class ParDevice
     // workers (two for "GPUs": one is the GPU again, tiled).
     static void decide(u32 i, ParChunk* proto)
         {
-        bool pending = gParCpuUs[i] < (i64)0 || gParGpuUs[i] < (i64)0 ||
+        bool pending = gParCpuUs[i] < (i64)0 || gParCpu1Us[i] < (i64)0 || gParGpuUs[i] < (i64)0 ||
                        (gParGpuWorkers >= (u32)2 && gParGpusUs[i] < (i64)0) ||
                        (gParGpuWorkers >= (u32)1 && gParAllUs[i] < (i64)0) ||
                        (gParRemoteWorkers >= (u32)1 && gParRemUs[i] < (i64)0);
@@ -1094,14 +1128,16 @@ class ParDevice
             saveProgress(i, proto);
             return;
             }
-        i32 winner = gParGpuUs[i] <= gParCpuUs[i] ? (i32)2 : (i32)1;
-        i64 best = gParGpuUs[i] <= gParCpuUs[i] ? gParGpuUs[i] : gParCpuUs[i];
+        i64 cpu = cpuBestUs(i);
+        i32 winner = gParGpuUs[i] <= cpu ? (i32)2 : (i32)1;
+        i64 best = gParGpuUs[i] <= cpu ? gParGpuUs[i] : cpu;
         if (gParGpusUs[i] >= (i64)0 && gParGpusUs[i] < best) { winner = (i32)3; best = gParGpusUs[i]; }
         if (gParAllUs[i] >= (i64)0 && gParAllUs[i] < best) { winner = (i32)4; best = gParAllUs[i]; }
         if (gParRemUs[i] >= (i64)0 && gParRemUs[i] < best) { winner = (i32)5; best = gParRemUs[i]; }
         if (reporting())
-            Log.info("par: %s: auto picks the %s (CPU %ld us, GPU %ld us, GPUs %ld us, all %ld us, remote %ld us)", gParBlock[i],
-                     choiceName(winner), gParCpuUs[i], gParGpuUs[i], gParGpusUs[i], gParAllUs[i], gParRemUs[i]);
+            Log.info("par: %s: auto picks the %s%s (CPU %ld us, one thread %ld us, GPU %ld us, GPUs %ld us, all %ld us, remote %ld us)",
+                     gParBlock[i], choiceName(winner), winner == (i32)1 && gParCpuOne[i] ? " on one thread" : "",
+                     gParCpuUs[i], gParCpu1Us[i], gParGpuUs[i], gParGpusUs[i], gParAllUs[i], gParRemUs[i]);
         learn(i, proto, gParMeasN[i], winner);
         }
 
@@ -1172,6 +1208,7 @@ class ParDevice
             return _mode - (i32)2;
         u32 i = slot(proto.parName());
         gParMeasuring[i] = false;
+        gParOneNow[i] = false;
         // With no XC_PAR, in order (owner 2026-10-31): the user's setting
         // (par.<name>, par), then the program's Par.device, then the block's
         // own :device default, then auto. A user's explicit `auto` outranks
@@ -1222,6 +1259,7 @@ class ParDevice
         if (gParMeasN[i] > (i64)0 && (n > gParMeasN[i] * (i64)2 || n * (i64)2 < gParMeasN[i]))
             {
             gParCpuUs[i] = (i64)-1;
+            gParCpu1Us[i] = (i64)-1;
             gParGpuUs[i] = (i64)-1;
             gParGpusUs[i] = (i64)-1;
             gParAllUs[i] = (i64)-1;
@@ -1281,6 +1319,11 @@ class ParDevice
         // (22.9 s) tiles, and "all" came out as the GPU alone (19.2 s).
         if (gParCpuUs[i] < (i64)0)
             return (i32)1;
+        if (gParCpu1Us[i] < (i64)0)
+            {
+            gParOneNow[i] = true;
+            return (i32)1;
+            }
         if (gParGpuWorkers >= (u32)1 && gParAllUs[i] < (i64)0)
             {
             // The CPU and a GPU that is not across a bus draw on ONE memory
@@ -1303,8 +1346,14 @@ class ParDevice
             }
         if (gParCpuUs[i] < (i64)0)
             return (i32)1;
-        i32 best = gParGpuUs[i] <= gParCpuUs[i] ? (i32)2 : (i32)1;
-        i64 bestUs = gParGpuUs[i] <= gParCpuUs[i] ? gParGpuUs[i] : gParCpuUs[i];
+        if (gParCpu1Us[i] < (i64)0)
+            {
+            gParOneNow[i] = true;
+            return (i32)1;
+            }
+        i64 cpu = cpuBestUs(i);
+        i32 best = gParGpuUs[i] <= cpu ? (i32)2 : (i32)1;
+        i64 bestUs = gParGpuUs[i] <= cpu ? gParGpuUs[i] : cpu;
         if (gParGpusUs[i] >= (i64)0 && gParGpusUs[i] < bestUs) { best = (i32)3; bestUs = gParGpusUs[i]; }
         if (gParAllUs[i] >= (i64)0 && gParAllUs[i] < bestUs) { best = (i32)4; bestUs = gParAllUs[i]; }
         if (gParRemUs[i] >= (i64)0 && gParRemUs[i] < bestUs) { best = (i32)5; bestUs = gParRemUs[i]; }
@@ -1319,6 +1368,23 @@ class ParDevice
     static void ranOnCpu(ParChunk* proto, i64 us)
         {
         u32 i = slot(proto.parName());
+        if (gParOneNow[i])
+            {
+            gParOneNow[i] = false;
+            bool timed = gParMeasuring[i] && gParCpu1Us[i] < (i64)0;
+            if (timed)
+                {
+                gParCpu1Us[i] = us;
+                gParCpuOne[i] = gParCpuUs[i] >= (i64)0 && us < gParCpuUs[i];
+                }
+            if (reporting())
+                Log.info("par: %s: %ld items on one CPU thread, %ld us", gParBlock[i], gParLastN[i], us);
+            if (timed && cpuBestUs(i) < (i64)1000 && hasKernel(proto.gpuSource()) && gParGpuUs[i] < (i64)0)
+                learn(i, proto, gParLastN[i], (i32)1);
+            else if (timed)
+                decide(i, proto);
+            return;
+            }
         // Only a run auto measures counts: one a setting or the learned bounds
         // decided was not compared with anything, and may be another size.
         if (gParMeasuring[i])
@@ -1335,9 +1401,14 @@ class ParDevice
             }
         // Under a millisecond the CPU keeps the block without a GPU trial
         // where none has been made (the GPU's fixed costs alone are more);
-        // once the GPU is measured, the faster wins as usual.
+        // once the GPU is measured, the faster wins as usual. The one-thread
+        // run comes first: a short block is where threads cost the most.
         if (measured && us < (i64)1000 && gpuable && gParGpuUs[i] < (i64)0)
-            learn(i, proto, gParLastN[i], (i32)1);
+            {
+            // (else the one-thread run, which choose gives next, learns it)
+            if (gParCpu1Us[i] >= (i64)0)
+                learn(i, proto, gParLastN[i], (i32)1);
+            }
         else if (measured)
             decide(i, proto);
         }

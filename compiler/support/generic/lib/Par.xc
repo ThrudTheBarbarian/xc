@@ -548,6 +548,9 @@ class Par
 #else
         i64 n = hi - lo;
         i32 k = Par.threads();
+        // A block auto finds faster on one thread (issue 9) runs on one.
+        if (ParDevice.oneThread(proto))
+            k = (i32)1;
         if ((i64)k > n)
             k = (i32)n;
         if (k <= (i32)1)
