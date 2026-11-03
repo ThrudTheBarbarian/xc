@@ -871,6 +871,13 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // Mirrored in the port (Frontend).
     parser.parAuto = _options.parAuto && (_options.useArm64Backend || _options.useX86_64Backend
                                           || _options.useWin64Backend || _options.useWasm32Backend);
+#ifndef __APPLE__
+    // An Apple target from another host: the par runtime it would import
+    // needs the SDK's frameworks (Metal, CoreFoundation), which this host has
+    // not, so its loops stay loops. Mirrored in the port.
+    if ([_options.effectiveTarget.os isEqualToString:@"macos"] || [_options.effectiveTarget.os isEqualToString:@"ios"])
+        parser.parAuto = NO;
+#endif
     parser.parDeviceDefault = _options.parDeviceDefault;
     parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
@@ -1060,6 +1067,13 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // Mirrored in the port (Frontend).
     parser.parAuto = _options.parAuto && (_options.useArm64Backend || _options.useX86_64Backend
                                           || _options.useWin64Backend || _options.useWasm32Backend);
+#ifndef __APPLE__
+    // An Apple target from another host: the par runtime it would import
+    // needs the SDK's frameworks (Metal, CoreFoundation), which this host has
+    // not, so its loops stay loops. Mirrored in the port.
+    if ([_options.effectiveTarget.os isEqualToString:@"macos"] || [_options.effectiveTarget.os isEqualToString:@"ios"])
+        parser.parAuto = NO;
+#endif
     parser.parDeviceDefault = _options.parDeviceDefault;
     parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;
@@ -1762,6 +1776,13 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // Mirrored in the port (Frontend).
     parser.parAuto = _options.parAuto && (_options.useArm64Backend || _options.useX86_64Backend
                                           || _options.useWin64Backend || _options.useWasm32Backend);
+#ifndef __APPLE__
+    // An Apple target from another host: the par runtime it would import
+    // needs the SDK's frameworks (Metal, CoreFoundation), which this host has
+    // not, so its loops stay loops. Mirrored in the port.
+    if ([_options.effectiveTarget.os isEqualToString:@"macos"] || [_options.effectiveTarget.os isEqualToString:@"ios"])
+        parser.parAuto = NO;
+#endif
     parser.parDeviceDefault = _options.parDeviceDefault;
     parser.webModules = _options.useWasm32Backend;
     parser.goalDefault = _goalDirective ? _goalDirective : _options.goalDefault;

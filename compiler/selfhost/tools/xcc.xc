@@ -7156,6 +7156,14 @@ DriverOptions* parseDriverArgs(void)
     // here, before the front end is told, as the reference settles it while
     // reading the options. checkCapabilities refuses the bad combinations.
     d.caps().resolveDynamic(isX86_64(d));
+#if !OS_darwin
+    // An Apple target from another host: the par runtime it would import
+    // needs the SDK's frameworks (Metal, CoreFoundation), which this host has
+    // not, so its loops stay loops. As the reference.
+    if (d.targetRow() != (TargetRow*)0
+        && (d.targetRow().os().equals(String.withCString("macos")) || d.targetRow().os().equals(String.withCString("ios"))))
+        d.fe().setParAuto(false);
+#endif
     finishDriverArgs(d);
     return d;
 }

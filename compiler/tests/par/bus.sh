@@ -44,7 +44,7 @@ i32 main(void)
     return (i32)0;
     }
 XC
-"$XC" -q -H . -O2 "$W/bus.xc" -o "$W/bus" >"$W/build" 2>&1 || { echo "FAIL bus: build"; head -3 "$W/build"; exit 1; }
+"$XC" -q --par-style=cpu -H . -O2 "$W/bus.xc" -o "$W/bus" >"$W/build" 2>&1 || { echo "FAIL bus: build"; head -3 "$W/build"; exit 1; }
 export XCC_SETTINGS_DIR="$W/st"; mkdir -p "$XCC_SETTINGS_DIR"
 XC_PAR_REPORT=1 "$W/bus" > "$W/r1" 2>&1
 if ! grep -q "hardware key" "$W/r1" || grep -q "hardware key [0-9a-f]* (|" "$W/r1"; then
