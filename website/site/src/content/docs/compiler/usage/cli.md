@@ -124,6 +124,31 @@ header to fall out of sync. It also works on a plain **C** `.so`, whose DWARF
 supplies its functions, types and enum constants. See
 [Modules & shared libraries](/compiler/language/modules/).
 
+## The runtime library
+
+Every program links its runtime from **libRuntime**, a shared library built
+once for each target and installed with the compiler, in
+`lib/xc/runtime-lib/<target>/` (`libRuntime.dylib` on macOS, `libRuntime.so` on
+Linux and the Raspberry Pi). It holds the object runtime (allocation, reference
+counting, threads) and the `par` runtime (CPU threads, Metal, Vulkan, CUDA and
+the network devices). A program that uses `par`, written or made of a loop by
+`--par-style`, takes the runtime's declarations from the library instead of
+compiling its source, so it builds in a few seconds rather than half a minute
+on a Raspberry Pi, and is less than half the size. This is so on macOS,
+x86-64 Linux and arm64 Linux; on the other targets (Windows, Android, iOS,
+WebAssembly, the 6502 and m68k) the runtime is still compiled into each
+program.
+
+A program finds the library beside itself first, then where the compiler
+that built it keeps it. **To run a program on another machine, copy
+`libRuntime` from the same compiler next to it**, or build it with
+`--no-runtime-lib`.
+
+| Flag | Effect |
+|------|--------|
+| `--no-runtime-lib` | Compile the runtime into the program instead, as releases before 0.9.2 did: one file that runs without `libRuntime`, larger, and slower to build when it uses `par`. `XCC_NO_RUNTIME_LIB=1` does the same. A `-static` link, and a link that brings object files or archives (`-Wl,x.o`), always do. |
+| `--emit-runtime` | Build a target's `libRuntime` from its root file, `support/generic/lib/Par.xc`, as `make runtime-libs` does. |
+
 ## Support tree and memory model
 
 | Flag | Effect |
@@ -335,6 +360,7 @@ page.
 | `XCC_HOME` | Override the support-tree search. `-H` beats it. |
 | `XTC_HOME` | The older spelling of `XCC_HOME`, still read. |
 | `XTC_LDFLAGS` | Extra arguments appended to the native link. |
+| `XCC_NO_RUNTIME_LIB` | `1`: as `--no-runtime-lib`, for every compile. |
 
 ## Combined examples
 

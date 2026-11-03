@@ -119,6 +119,19 @@ NS_ASSUME_NONNULL_BEGIN
 
 @property(nonatomic, copy) NSArray<NSString*>* stdlibDirs;
 @property(nonatomic, readonly) NSDictionary<NSString*, NSString*>* stdlibFiles;
+/****************************************************************************\
+|* libRuntime (owner, 2026-11-03). Building it: the standard-library files it
+|* is made of (Runtime.list's names), the module's own — exported, neither
+|* ambient nor stdImports. A program: what the target's prebuilt libRuntime
+|* provides; at the first #import of one of those files the library is
+|* imported instead (once), and every file it provides is skipped. As the port.
+\****************************************************************************/
+@property(nonatomic, copy, nullable) NSSet<NSString*>* runtimeMembers;
+@property(nonatomic, copy, nullable) NSSet<NSString*>* runtimeOffer;
+// The members this unit took in, sorted: the interface's `provides`.
+- (NSArray<NSString*>*)providedFiles;
+// What a library provides (its interface's `provides`), empty for any other.
+- (NSArray<NSString*>*)providesOfLibrary:(NSString*)path;
 // The macros this unit's own files define, as `#define` text, sorted: a
 // library's interface carries them (`defines`).
 - (NSArray<NSString*>*)ownDefines;

@@ -611,6 +611,20 @@ int main(int argc, const char* argv[])
                                                            stdlibFiles:driver.stdlibFiles
                                                               stdState:(opts.emitLib ? driver.stdStateHash : nil)
                                                                defines:(opts.emitLib ? driver.ownDefines : nil)];
+                // libRuntime: what it provides, its root file included.
+                if (json.length && opts.runtimeMembersFile.length)
+                    {
+                    NSMutableArray* pv = [(driver.providedFiles ?: @[]) mutableCopy];
+                    NSString* root = [opts.inputFiles.firstObject lastPathComponent];
+                    NSString* list = [NSString stringWithContentsOfFile:opts.runtimeMembersFile encoding:NSUTF8StringEncoding error:NULL];
+                    BOOL member = NO;
+                    for (NSString* raw in [list componentsSeparatedByString:@"\n"])
+                        if ([[raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]] isEqualToString:root])
+                            member = YES;
+                    if (member && ![pv containsObject:root])
+                        [pv addObject:root];
+                    json = [XTInterfaceSerializer json:json withProvides:pv];
+                    }
                 if (json.length)
                     {
                     [json writeToFile:ifacePath

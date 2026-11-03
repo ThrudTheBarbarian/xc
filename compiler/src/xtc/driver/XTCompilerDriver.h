@@ -47,6 +47,8 @@ NS_ASSUME_NONNULL_BEGIN
 // The macros the unit's own files define (XTPreprocessor.ownDefines), which a
 // library's interface carries as `defines`.
 @property (nonatomic, readonly, nullable) NSArray<NSString *> *ownDefines;
+// Building libRuntime: the runtime files the unit took in (its `provides`).
+@property (nonatomic, readonly, nullable) NSArray<NSString *> *providedFiles;
 /****************************************************************************\
 |* The vtable slot indices this build committed to — serialised into the
 |* library's interface under --emit-lib so a client adopts them rather than

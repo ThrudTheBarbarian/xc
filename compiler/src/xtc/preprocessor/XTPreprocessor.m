@@ -58,6 +58,11 @@
 @property(nonatomic) NSMutableSet<NSString*>* metadataImportSet;
 @property(nonatomic) NSMutableDictionary<NSString*, NSString*>* mutableStdlibFiles;
 @property(nonatomic) NSMutableSet<NSString*>* mutableLibraryFiles;
+// libRuntime: the member files taken in (absolute path -> name), the names an
+// imported library provides, and whether the offered runtime was taken.
+@property(nonatomic) NSMutableDictionary<NSString*, NSString*>* runtimeFiles;
+@property(nonatomic) NSMutableSet<NSString*>* provided;
+@property(nonatomic) BOOL runtimeTaken;
 // Libraries the current search found and passed over for their interface
 // format: path -> the format they carry, in the order found.
 @property(nonatomic) NSMutableArray<NSArray*>* skippedLibraries;
@@ -97,8 +102,30 @@
         _mutableStdlibFiles = [NSMutableDictionary dictionary];
         _mutableLibraryFiles = [NSMutableSet set];
         _stdlibDirs = @[];
+        _runtimeFiles = [NSMutableDictionary dictionary];
+        _provided = [NSMutableSet set];
         }
     return self;
+    }
+
+- (NSArray<NSString*>*)providedFiles
+    {
+    return [[NSSet setWithArray:_runtimeFiles.allValues].allObjects sortedArrayUsingSelector:@selector(compare:)];
+    }
+
+/****************************************************************************\
+|* The standard-library files a library provides (libRuntime's `provides`).
+\****************************************************************************/
+- (NSArray<NSString*>*)providesOfLibrary:(NSString*)path
+    {
+    NSString* json = [XTInterfaceImporter interfaceJSONFromLibrary:path];
+    if (!json.length)
+        return @[];
+    NSDictionary* root = [NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding]
+                                                         options:0
+                                                           error:NULL];
+    NSArray* a = [root isKindOfClass:[NSDictionary class]] ? root[@"provides"] : nil;
+    return [a isKindOfClass:[NSArray class]] ? a : @[];
     }
 
 - (NSSet<NSString*>*)preludeFiles
@@ -1602,6 +1629,10 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
                 {
                 [_metadataImportSet addObject:abs];
                 [_mutableMetadataImports addObject:abs];
+                // The standard-library files it provides (libRuntime), whose
+                // source this unit then skips — before its stdImports, one
+                // of which could import one of them.
+                [_provided addObjectsFromArray:[self providesOfLibrary:abs]];
                 // The standard-library files the library was built with
                 // (bug 637). Its interface does not carry their classes, as
                 // it does not carry the prelude's; the client imports the
@@ -1728,7 +1759,26 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
             NSString* pre = [dir stringByAppendingString:@"/"];
             if ([absPath hasPrefix:pre])
                 {
-                _mutableStdlibFiles[absPath] = [absPath substringFromIndex:pre.length];
+                NSString* nm = [absPath substringFromIndex:pre.length];
+                // The first file the target's libRuntime provides: the
+                // library instead, once.
+                if (!_runtimeTaken && [_runtimeOffer containsObject:nm])
+                    {
+                    _runtimeTaken = YES;
+                    [self handleInclude:@"import <Runtime>" location:loc output:output onceOnly:YES];
+                    }
+                // Provided by an imported library: its interface declared it.
+                if ([_provided containsObject:nm])
+                    return;
+                // Building libRuntime: one of its own files.
+                if ([_runtimeMembers containsObject:nm])
+                    {
+                    _runtimeFiles[absPath] = nm;
+                    [_mutableLibraryFiles addObject:absPath];
+                    [_mutableLibraryFiles addObject:foundPath];
+                    break;
+                    }
+                _mutableStdlibFiles[absPath] = nm;
                 [_mutableLibraryFiles addObject:absPath];
                 [_mutableLibraryFiles addObject:foundPath];
                 break;

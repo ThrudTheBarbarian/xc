@@ -195,6 +195,8 @@ class DriverOptions
     u32        _opt;
     bool       _keepAsm;     // -S: stop after the back end
     bool       _emitLib;     // --emit-lib: a SHARED LIBRARY, not an executable
+    bool       _emitRuntime; // --emit-runtime: libRuntime itself (an --emit-lib build of Runtime.list's files)
+    bool       _noRuntimeLib; // --no-runtime-lib: compile the runtime's files in, as source
     // --bundle <dir> (bundles-and-plugins.md §2): the library goes into a
     // signed bundle there; name, version, resources, key and publisher.
     String*    _bundleDir;
@@ -310,6 +312,8 @@ class DriverOptions
         _linkLibs = false;
         _rawLinkFlags = new Array();
         _rpaths = new Array();
+        _emitRuntime = false;
+        _noRuntimeLib = false;
         _rpathPending = false;
         _ldDirs = new Array();
         _inlineMax = (i32)-1;
@@ -391,6 +395,8 @@ class DriverOptions
     void setLinkLibs(bool b)        { _linkLibs = b; }
     Array* rawLinkFlags(void)       { return _rawLinkFlags; }
     Array* rpaths(void)             { return _rpaths; }
+    bool emitRuntime(void)          { return _emitRuntime; }
+    bool noRuntimeLib(void)         { return _noRuntimeLib; }
     Array* ldDirs(void)             { return _ldDirs; }
     i32 inlineMax(void)             { return _inlineMax; }
     void setInlineMax(i32 n)        { _inlineMax = n; }
@@ -654,6 +660,137 @@ String* stripLeadingUnderscore(String* asmText)
         out.append(o);
     }
     return out;
+}
+
+// libRuntime (owner, 2026-11-03): the runtime's files, prebuilt per target
+// as one shared library, at <support>/runtime-lib/<row>/libRuntime.<ext>
+// (lib/xc/runtime-lib/... in an install). Building it (--emit-runtime): the
+// files are Runtime.list's. A program or library: that library, when the
+// target has one built and it is wanted — not --no-runtime-lib, not -static
+// (no dynamic loader) — imported where the program first imports a file of
+// it, and found at run time by the runpath the link writes for any imported
+// library (Mach-O: an LC_RPATH to its directory). A program that imports
+// none of them is as before; with no library built, the runtime's files are
+// compiled in as source.
+void resolveRuntimeLib(DriverOptions* d)
+{
+    String* root = supportRoot(d.fe());
+    if (root == (String*)0) return;
+    if (d.emitRuntime()) {
+        String* lp = String.withString(root);
+        lp.appendCString("/generic/lib/Runtime.list");
+        String* text = Files.readText(lp);
+        if (text == (String*)0) {
+            Stdio.printf("xcc: error: --emit-runtime: no %s\n", lp.cString());
+            Process.exit((i32)1); return;
+        }
+        Array* names = new Array();
+        Array* lines = text.splitOnByte((u8)'\n');
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+            String* l = ((String*)lines.get(i)).trimmed();
+            if (l.byteLength() == (u32)0 || l.byteAt((u32)0) == (u8)'#') continue;
+            names.add((Object*)l);
+        }
+        d.fe().setRuntimeMembers(names);
+        return;
+    }
+    // XCC_NO_RUNTIME_LIB=1 as --no-runtime-lib: the build of the tools an
+    // archive ships, which must not name this tree's libRuntime.
+    if (Platform.env(String.withCString("XCC_NO_RUNTIME_LIB")).equals(String.withCString("1"))) return;
+    if (d.noRuntimeLib() || d.caps().staticLink() || d.targetRow() == (TargetRow*)0) return;
+    // An image that links objects or archives (-Wl,x.o, -Xlinker liby.a,
+    // $XTC_LDFLAGS) keeps the runtime its own, as before: an xcc -c object
+    // reads the canary guard and the runtime's data directly, which the
+    // rewrite of the program's text cannot reach. As the reference.
+    Array* li = d.linkInputs();
+    for (u32 i = (u32)0; li != (Array*)0 && i < li.count(); i = i + (u32)1) {
+        String* t = (String*)li.get(i);
+        if (t.hasSuffix(String.withCString(".o")) || t.hasSuffix(String.withCString(".a"))) return;
+    }
+    String* dir = String.withString(root);
+    dir.appendCString("/runtime-lib/");
+    dir.append(d.targetRow().name());
+    Array* exts = d.targetRow().libExts();
+    for (u32 i = (u32)0; exts != (Array*)0 && i < exts.count(); i = i + (u32)1) {
+        String* f = String.withString(dir);
+        f.appendCString("/libRuntime.");
+        f.append((String*)exts.get(i));
+        if (!Files.exists(f)) continue;
+        // Absolute (the runpath and LC_RPATH are read from wherever the
+        // program runs), from this compile's working directory.
+        String* abs = dir;
+        if (dir.byteAt((u32)0) != (u8)'/') {
+            abs = String.withString(Frontend.workingDirectory());
+            abs.appendCString("/");
+            abs.append(dir);
+        }
+        IRDbg.setWorkingDirectory(Frontend.workingDirectory());
+        abs = IRDbg.canonicalPath(abs);
+        d.fe().setRuntimeLibDir(abs);
+        String* file = String.withString(abs);
+        file.appendCString("/libRuntime.");
+        file.append((String*)exts.get(i));
+        d.fe().setRuntimeLibFile(file);
+        return;
+    }
+}
+
+// Whether this image takes its object runtime from the target's libRuntime
+// (owner, 2026-11-03: every program and library, par or not, when one is
+// built and the link is not -static). It then carries none of its own: one
+// copy per process, the library's — two kept apart what each other set (the
+// threads flag that makes ARC atomic, the simd: span table). The library is
+// then a load-time dependency, whether or not the program imported its
+// interface (only a par program does).
+bool runtimeTaken(DriverOptions* d)
+{
+    String* f = d.fe().runtimeLibFile();
+    if (f == (String*)0 || d.emitRuntime()) return false;
+    Array* nl = d.fe().neededLibs();
+    for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1)
+        if (((String*)nl.get(i)).equals(f)) return true;
+    nl.add((Object*)f);
+    return true;
+}
+
+// The stack canary's guard word is the runtime's: a program that takes
+// libRuntime reads the library's through the GOT, as any imported data.
+String* guardThroughGot(String* prog)
+{
+    String* a = prog.replacing(String.withCString("    adrp x16, ___xt_stack_guard@PAGE\n    ldr x16, [x16, ___xt_stack_guard@PAGEOFF]\n"),
+                               String.withCString("    adrp x16, ___xt_stack_guard@GOTPAGE\n    ldr x16, [x16, ___xt_stack_guard@GOTPAGEOFF]\n    ldr x16, [x16]\n"));
+    return a.replacing(String.withCString("    adrp x17, ___xt_stack_guard@PAGE\n    ldr x17, [x17, ___xt_stack_guard@PAGEOFF]\n"),
+                       String.withCString("    adrp x17, ___xt_stack_guard@GOTPAGE\n    ldr x17, [x17, ___xt_stack_guard@GOTPAGEOFF]\n    ldr x17, [x17]\n"));
+}
+
+// …and on x86-64 (r10 holds the address at the check: volatile, and no
+// return value is in it on either ABI).
+String* guardThroughGotX86(String* prog)
+{
+    String* a = prog.replacing(String.withCString("\tmov\tr11, qword ptr [rip + __xt_stack_guard]\n"),
+                               String.withCString("\tmov\tr11, qword ptr [rip + __xt_stack_guard@GOTPCREL]\n\tmov\tr11, qword ptr [r11]\n"));
+    return a.replacing(String.withCString("\tmov\tr11, qword ptr [rbp-8]\n\tcmp\tr11, qword ptr [rip + __xt_stack_guard]\n"),
+                       String.withCString("\tmov\tr10, qword ptr [rip + __xt_stack_guard@GOTPCREL]\n\tmov\tr11, qword ptr [rbp-8]\n\tcmp\tr11, qword ptr [r10]\n"));
+}
+
+// The glibc crt keeps argc and argv for Process.arguments() in the runtime's
+// variables: through the GOT when the runtime is libRuntime's (rax is free
+// there: the entry has stored nothing in it).
+String* crtArgsThroughGot(String* crt)
+{
+    String* a = crt.replacing(String.withCString("\tmov\t[rip + _xt_saved_argc], edi"),
+                              String.withCString("\tmov\trax, [rip + _xt_saved_argc@GOTPCREL]\n\tmov\t[rax], edi"));
+    return a.replacing(String.withCString("\tmov\t[rip + _xt_saved_argv], rsi"),
+                       String.withCString("\tmov\trax, [rip + _xt_saved_argv@GOTPCREL]\n\tmov\t[rax], rsi"));
+}
+
+// libRuntime exports the object runtime: its guard word too, which every
+// image's canaries read (Mach-O private_extern; ELF hidden).
+String* runtimeForLibRuntime(String* rt)
+{
+    String* a = rt.replacing(String.withCString(".private_extern\t___xt_stack_guard"),
+                             String.withCString(".globl\t___xt_stack_guard"));
+    return a.replacing(String.withCString("\t.hidden\t__xt_stack_guard"), String.withCString("\t.globl\t__xt_stack_guard"));
 }
 
 // A runtime or startup file from the support tree. The SUBDIRECTORY is the
@@ -2505,20 +2642,36 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
     // constructors registered with the program (libinit), its own API
     // exported. As the reference's linkX86_64GlibcShared.
     bool shared = d.emitLib();
+    // libRuntime (owner, 2026-11-03): an image that takes it keeps the crt
+    // (and a library's constructor glue) and links the object runtime from it.
+    bool rtFromLib = runtimeTaken(d);
+    if (rtFromLib) prog = guardThroughGotX86(prog);
     Array* srcs = new Array();
     Array* rtNames = new Array();
     if (!shared) rtNames.add((Object*)String.withCString("crt-glibc.s"));
-    rtNames.add((Object*)String.withCString("rtgen-glibc.s"));
-    rtNames.add((Object*)String.withCString("rtfiles-linux.s"));
-    rtNames.add((Object*)String.withCString("libmgen-linux.s"));
+    if (!rtFromLib) {
+        rtNames.add((Object*)String.withCString("rtgen-glibc.s"));
+        rtNames.add((Object*)String.withCString("rtfiles-linux.s"));
+        rtNames.add((Object*)String.withCString("libmgen-linux.s"));
+    }
     if (shared && prog.contains(String.withCString("\n__xt_ctors_start:")))
         rtNames.add((Object*)String.withCString("libinit-linux.s"));
+    Array* rtExports = new Array();
     for (u32 k = (u32)0; k < rtNames.count(); k = k + (u32)1) {
         String* t = readRuntimeIn(d.fe(), "x86_64/runtime", (String*)rtNames.get(k));
         if (t == 0) {
             Stdio.printf("xcc: error: -dynamic: cannot read %s from the support tree\n",
                          ((String*)rtNames.get(k)).cString());
             Process.exit((i32)1); return;
+        }
+        // libRuntime exports the runtime it carries (not the crt or glue).
+        String* rn = (String*)rtNames.get(k);
+        if (rtFromLib && rn.hasPrefix(String.withCString("crt-"))) t = crtArgsThroughGot(t);
+        if (d.emitRuntime() && !rn.hasPrefix(String.withCString("crt-")) && !rn.hasPrefix(String.withCString("libinit-"))) {
+            t = runtimeForLibRuntime(t);
+            Array* g = globlNames(t);
+            for (u32 j = (u32)0; j < g.count(); j = j + (u32)1)
+                if (!Elf64.hasName(rtExports, (String*)g.get(j))) rtExports.add(g.get(j));
         }
         srcs.add((Object*)t);
     }
@@ -2625,8 +2778,12 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
         if (ij != (String*)0)
             for (u32 i = (u32)0; i < ij.byteLength(); i = i + (u32)1)
                 iface.add((Object*)Number.withU32((u32)ij.byteAt(i)));
+        Array* exports = globlNames(prog);
+        for (u32 j = (u32)0; j < rtExports.count(); j = j + (u32)1)
+            if (!Elf64.hasName(exports, (String*)rtExports.get(j))) exports.add(rtExports.get(j));
+        Elf64.sortStrings(exports);
         img = ln.linkGlibcShared(srcs, objs, ars, sos, mapText, baseNameOf(d.fe().output()),
-                                 globlNames(prog), String.withCString("$ORIGIN"), iface);
+                                 exports, String.withCString("$ORIGIN"), iface);
     } else {
         img = ln.linkGlibc(srcs, objs, ars, String.withCString("_start"), sos, mapText,
                            haveDeps ? runpath : (String*)0);
@@ -3850,6 +4007,12 @@ Array* globlNames(String* asmText, Map* symbols)
         String* ln = ((String*)lines.get(i)).trimmed();
         if (!ln.hasPrefix(String.withCString(".globl"))) continue;
         String* nm = ln.substringFromByte((u32)6).trimmed();
+        // The name alone: clang's runtime files follow it with a comment
+        // (`; -- Begin function`), which the program's text never has.
+        u32 e = (u32)0;
+        while (e < nm.byteLength() && nm.byteAt(e) != (u8)' ' && nm.byteAt(e) != (u8)'\t' && nm.byteAt(e) != (u8)';')
+            e = e + (u32)1;
+        nm = nm.substringBytes((u32)0, e);
         if (nm.byteLength() == (u32)0) continue;
         // The back end emits ELF-flavoured names; the Mach-O dialect adds the
         // leading underscore, so look for both rather than guessing which
@@ -4603,6 +4766,7 @@ void main(void)
     d.fe().setTarget(backendTargetOf(d));
     if (isIos(d)) d.fe().setLibPlatform(d.arch());
     d.fe().setTargetRow(d.targetRow());
+    resolveRuntimeLib(d);
 
     // Objects as inputs: the link step. No front end runs — the runtime is
     // the primary input and the objects ride as extras, exactly the shape the
@@ -5153,6 +5317,12 @@ void emitModule(DriverOptions* d, IRModule* mod)
     }
     String* stubs = classAllocStubs(prog);
     String* combined = new String();
+    // libRuntime (owner, 2026-11-03): a program that took it links the crt and
+    // not the runtime, which the library carries and exports.
+    // Not Android yet (no device to prove it on); arm64 Linux, macOS and iOS.
+    bool rtFromLib = !isAndroid(d) && runtimeTaken(d);
+    if (rtFromLib) prog = guardThroughGot(prog);
+    if (d.emitRuntime()) rt = runtimeForLibRuntime(rt);
     // A LIBRARY gets the runtime but NOT the crt. The crt is the program
     // entry — it calls `_main` — so bundling it into a library leaves the
     // library importing a symbol only a PROGRAM defines, and the load fails
@@ -5160,7 +5330,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
     // library nor the crt. Mirrors the reference, which concatenates
     // rt + stubs + program for a dylib and crt + rt + … for an executable.
     if (!d.emitLib()) { combined.append(crt); combined.appendByte((u8)'\n'); }
-    combined.append(rt);        combined.appendByte((u8)'\n');
+    if (!rtFromLib) { combined.append(rt); combined.appendByte((u8)'\n'); }
     // The iOS shim rides after the runtime in a LIBRARY too: its code calls
     // `_xt_ios_log` and the fetch functions through Platform.xc, and the app
     // that loads it does not export its own copy, so a dylib without the shim
@@ -5245,6 +5415,14 @@ void emitModule(DriverOptions* d, IRModule* mod)
             // module's `.globl`s, read before the runtime was prepended so the
             // runtime's globals stay private — and a soname naming the file.
             Array* exports = globlNames(stripLeadingUnderscore(prog), as.symbols());
+            // …and libRuntime the runtime's: it is the one copy.
+            if (d.emitRuntime()) {
+                // The runtime is ELF-flavoured already: its names as they are.
+                Array* rx = globlNames(rt, as.symbols());
+                for (u32 i = (u32)0; i < rx.count(); i = i + (u32)1)
+                    if (!Elf64.hasName(exports, (String*)rx.get(i))) exports.add(rx.get(i));
+                Elf64.sortStrings(exports);
+            }
             // The interface rides in a `.xtc.iface` section, as on the other
             // ELF targets, so a client's `#import <Lib>` reads it (bug 460).
             Array* iface = new Array();
@@ -5329,6 +5507,13 @@ void emitModule(DriverOptions* d, IRModule* mod)
             // every library would have two definitions of `_xtc_alloc` racing
             // for a client's binds. Mirrors the reference's rule exactly.
             Array* exports = globlNames(prog, as.symbols());
+            // …and libRuntime the runtime's as well: it is the one copy.
+            if (d.emitRuntime()) {
+                Array* rx = globlNames(rt, as.symbols());
+                for (u32 i = (u32)0; i < rx.count(); i = i + (u32)1)
+                    if (!Elf64.hasName(exports, (String*)rx.get(i))) exports.add(rx.get(i));
+                Elf64.sortStrings(exports);
+            }
             Array* iface = new Array();
             String* ij = d.fe().ifaceJson();
             if (ij != (String*)0)
@@ -5714,6 +5899,9 @@ void usage(void)
     Stdio.printf("                             stdout with no -o, and stop\n");
     Stdio.printf("  --emit-lib                 Build a shared library, with its interface\n");
     Stdio.printf("                             embedded (arm64, x86_64, arm9, wasm32)\n");
+    Stdio.printf("  --emit-runtime             Build the target's libRuntime from its root file\n");
+    Stdio.printf("  --no-runtime-lib           Compile the runtime in as source, not linking the\n");
+    Stdio.printf("                             target's prebuilt libRuntime\n");
     Stdio.printf("  -dynamic                   (-A x86_64) Link against glibc and the -l\n");
     Stdio.printf("                             libraries (GTK 4, libGL, ...) instead of\n");
     Stdio.printf("                             statically over musl\n");
@@ -6915,6 +7103,21 @@ DriverOptions* parseDriverArgs(void)
         }
         if (a.equals(String.withCString("--publisher-domain")) && i + (u32)1 < argc) {
             d._publisherDomain = Process.argument(i + (u32)1); i = i + (u32)2; continue;
+        }
+        // --emit-runtime: libRuntime (owner, 2026-11-03), a library build of
+        // the runtime's files, which then export their classes; the input is
+        // the runtime's root file (Par.xc).
+        if (a.equals(String.withCString("--emit-runtime"))) {
+            d._emitRuntime = true;
+            d.setEmitLib(true);
+            o.setEmitIface(true);
+            o.setLibraryBuild(true);
+            o.setEmitLib(true);
+            i = i + (u32)1;
+            continue;
+        }
+        if (a.equals(String.withCString("--no-runtime-lib"))) {
+            d._noRuntimeLib = true; i = i + (u32)1; continue;
         }
         if (a.equals(String.withCString("--emit-lib"))) {
             d.setEmitLib(true);

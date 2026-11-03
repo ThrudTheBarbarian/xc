@@ -26,6 +26,10 @@
 @property(nonatomic, readwrite, nullable) NSString* preprocessedOutputPath;
 @property(nonatomic, readwrite) BOOL quiet;
 @property(nonatomic, readwrite) BOOL emitLib;
+@property(nonatomic, readwrite) BOOL emitRuntime;
+@property(nonatomic, readwrite) BOOL noRuntimeLib;
+@property(nonatomic, readwrite, copy, nullable) NSString* runtimeMembersFile;
+@property(nonatomic, readwrite, copy, nullable) NSString* runtimeLibFile;
 @property(nonatomic, readwrite) BOOL emitIface;
 @property(nonatomic, readwrite) NSArray<NSString*>* withLibs;
 @property(nonatomic, readwrite, nullable) NSString* libName;
@@ -1007,6 +1011,23 @@ static NSString* sExecutablePath = nil;
             {
             opts.emitLib = YES;
             }
+        else if ([arg isEqualToString:@"--emit-runtime"])
+            {
+            opts.emitLib = YES;
+            opts.emitRuntime = YES;
+            }
+        else if ([arg isEqualToString:@"--no-runtime-lib"])
+            {
+            opts.noRuntimeLib = YES;
+            }
+        else if ([arg isEqualToString:@"--runtime-members"] && i + 1 < argc)
+            {
+            opts.runtimeMembersFile = [NSString stringWithUTF8String:argv[++i]];
+            }
+        else if ([arg isEqualToString:@"--runtime-lib"] && i + 1 < argc)
+            {
+            opts.runtimeLibFile = [NSString stringWithUTF8String:argv[++i]];
+            }
         else if ([arg isEqualToString:@"--with-lib"] && i + 1 < argc)
             {
             // uxkit/032: a prebuilt .so to ride beside the payload; each one
@@ -1809,6 +1830,9 @@ static NSString* sExecutablePath = nil;
             "                             exports, which is what `#import <Lib>`\n"
             "                             type-checks a client against. -fpic is\n"
             "                             implied.\n"
+            "  --emit-runtime             Build the target's libRuntime from its root file\n"
+            "  --no-runtime-lib           Compile the runtime in as source, not linking the\n"
+            "                             target's prebuilt libRuntime\n"
             "                             On wasm32 it writes lib<Name>.wasm plus\n"
             "                             lib<Name>.json (dataSize/tableSize/deps); the\n"
             "                             loader needs BOTH before it can place the\n"

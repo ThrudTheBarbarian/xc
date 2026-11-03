@@ -39,7 +39,8 @@ fi
 LH=${XTC_LINUX_CUDA_HOST:-}
 if [ -n "$LH" ]; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
-    "$XC" -q -A x86_64 -O2 -H . -o "$W/p.lx" "$F" || { echo "FAIL slices: x86-64 build"; exit 1; }
+    # Its runtime compiled in: it runs on another machine (no libRuntime there).
+    "$XC" -q --no-runtime-lib -A x86_64 -O2 -H . -o "$W/p.lx" "$F" || { echo "FAIL slices: x86-64 build"; exit 1; }
     scp $SSHO -q "$W/p.lx" "$LH:slices.bin" || { echo "FAIL slices: copy to $LH"; exit 1; }
     ssh $SSHO "$LH" 'XC_PAR=gpu XC_PAR_REPORT=1 ./slices.bin 2>&1; rm -f slices.bin' > "$W/lout" 2>&1
     if grep -q 'par: CUDA device' "$W/lout"; then

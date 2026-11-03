@@ -77,7 +77,8 @@ check "$W/r" "this host" || fail=1
 H=${XTC_LINUX_ARM64_HOST:-}
 if [ -n "$H" ]; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR"
-    "$XC" -q -O2 -A arm64-linux -o "$W/order-a" "$W/order.xc" > "$W/e" 2>&1 || { echo "FAIL auto-order: no arm64 Linux build: $(head -c 200 "$W/e")"; exit 1; }
+    # Its runtime compiled in: it runs on another machine (no libRuntime there).
+    "$XC" -q -O2 --no-runtime-lib -A arm64-linux -o "$W/order-a" "$W/order.xc" > "$W/e" 2>&1 || { echo "FAIL auto-order: no arm64 Linux build: $(head -c 200 "$W/e")"; exit 1; }
     scp $SSHO -q "$W/order-a" "$H:auto-order.bin" || { echo "FAIL: copy to the host"; exit 1; }
     ssh $SSHO "$H" 'rm -rf auto-order.st && mkdir auto-order.st && XCC_SETTINGS_DIR=auto-order.st XC_PAR=auto XC_PAR_REPORT=1 ./auto-order.bin 2>&1; rm -rf auto-order.bin auto-order.st' > "$W/ra"
     check "$W/ra" "$H" || fail=1

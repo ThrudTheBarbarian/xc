@@ -124,6 +124,17 @@ class IfFrame
     Set* _stdlibFiles;    // of String@ — canonical keys and #line spellings
     Array* _stdNames;     // of String@ — names within their directory, first-seen order
     Array* _pendingStd;   // of String@ — a newly named library's stdImports, to import
+    // libRuntime (owner, 2026-11-03): the standard-library files the runtime
+    // library is made of (support/generic/lib/Runtime.list). Building it, they
+    // are this module's own, exported, not ambient; a client that imported a
+    // library PROVIDING them skips their source (the library's interface has
+    // their declarations, its code their bodies).
+    Set* _runtimeMembers; // of String@ — names within the directory, while building libRuntime, else empty
+    Set* _runtimeFiles;   // of String@ — those files' keys and #line spellings (library code all the same)
+    Set* _provided;       // of String@ — names an imported library provides
+    Set* _runtimeOffer;   // of String@ — what the target's prebuilt libRuntime provides, before it is taken
+    bool _runtimeTaken;   // …and whether this unit has imported it (at the first file it provides)
+    callback _providesOf Array*(String* lib);
     // Each standard-library file's name within its directory -> both of its
     // spellings, prelude or not, and the prelude's names: a library's state
     // is shared with its clients by file (stdStateNames in Frontend.xc).
@@ -164,6 +175,12 @@ class IfFrame
         _stdNames = new Array();
         _pendingStd = new Array();
         _stdImportsOf = (callback Array*(String* lib))0;
+        _runtimeMembers = new Set();
+        _runtimeFiles = new Set();
+        _provided = new Set();
+        _runtimeOffer = new Set();
+        _runtimeTaken = false;
+        _providesOf = (callback Array*(String* lib))0;
         _definesOf = (callback Array*(String* lib))0;
         _pendingDefines = new Array();
         _macroFiles = new Map();
@@ -429,6 +446,15 @@ class IfFrame
             for (u32 i = (u32)0; names != (Array*)0 && i < names.count(); i = i + (u32)1)
                 _pendingStd.add(names.get(i));
             }
+        // …and the standard-library files it provides, whose source this unit
+        // then skips (libRuntime).
+        callback pv Array*(String* lib) = _providesOf;
+        if (pv)
+            {
+            Array* names = pv(p);
+            for (u32 i = (u32)0; names != (Array*)0 && i < names.count(); i = i + (u32)1)
+                _provided.add((Hashable*)names.get(i));
+            }
         // …and its own #defines, after them.
         callback g Array*(String* lib) = _definesOf;
         if (g)
@@ -442,6 +468,52 @@ class IfFrame
     void setDefinesReader(callback f Array*(String* lib))
         {
         _definesOf = f;
+        }
+
+    void setProvidesReader(callback f Array*(String* lib))
+        {
+        _providesOf = f;
+        }
+
+    // A program: the target's prebuilt libRuntime (on a library path) and
+    // what it provides. It is imported where the unit first imports one of
+    // those files — a par block's Par.xc, auto or written — and a unit that
+    // never does neither reads its interface nor links it.
+    void offerRuntime(Array* names)
+        {
+        for (u32 i = (u32)0; names != (Array*)0 && i < names.count(); i = i + (u32)1)
+            _runtimeOffer.add((Hashable*)names.get(i));
+        }
+
+    // Building libRuntime: these standard-library files are the module's own.
+    void setRuntimeMembers(Array* names)
+        {
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
+            _runtimeMembers.add((Hashable*)names.get(i));
+        }
+
+    // The runtime members this unit took in, sorted: the interface's `provides`.
+    Array* providedFiles(void)
+        {
+        Array* out = new Array();
+        Array* all = _runtimeMembers.allObjects();
+        for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+            {
+            String* nm = (String*)all.get(i);
+            for (u32 d = (u32)0; d < _stdlibDirs.count(); d = d + (u32)1)
+                {
+                String* key = String.withString((String*)_stdlibDirs.get(d));
+                key.appendCString("/");
+                key.append(nm);
+                if (_runtimeFiles.contains((Hashable*)key))
+                    {
+                    out.add((Object*)nm);
+                    break;
+                    }
+                }
+            }
+        out.sort();
+        return out;
         }
 
     // The macros this unit's own files define, each as the text of its
@@ -592,6 +664,9 @@ class IfFrame
         Array* l = _stdlibFiles.allObjects();
         for (u32 i = (u32)0; i < l.count(); i = i + (u32)1)
             all.add((Hashable*)l.get(i));
+        Array* r = _runtimeFiles.allObjects();
+        for (u32 i = (u32)0; i < r.count(); i = i + (u32)1)
+            all.add((Hashable*)r.get(i));
         return all;
         }
     Set* preludeFiles(void)
@@ -2061,9 +2136,27 @@ class IfFrame
                     pre.appendCString("/");
                     if (key.hasPrefix(pre))
                         {
+                        String* nm = key.substringFromByte(pre.byteLength());
+                        // The first file the target's libRuntime provides:
+                        // the library instead, once.
+                        if (!_runtimeTaken && _runtimeOffer.contains((Hashable*)nm))
+                            {
+                            _runtimeTaken = true;
+                            handleInclude(String.withCString("import <Runtime>"), filename, line, output, true);
+                            }
+                        // Provided by an imported library (libRuntime): its
+                        // declarations came with that library's interface.
+                        if (_provided.contains((Hashable*)nm))
+                            return;
+                        // Building libRuntime: one of its own files.
+                        if (_runtimeMembers.contains((Hashable*)nm))
+                            {
+                            _runtimeFiles.add((Hashable*)key);
+                            _runtimeFiles.add((Hashable*)String.withString(foundPath));
+                            break;
+                            }
                         _stdlibFiles.add((Hashable*)key);
                         _stdlibFiles.add((Hashable*)String.withString(foundPath));
-                        String* nm = key.substringFromByte(pre.byteLength());
                         noteSpellings(nm, key, foundPath);
                         bool seen = false;
                         for (u32 j = (u32)0; j < _stdNames.count() && !seen; j = j + (u32)1)

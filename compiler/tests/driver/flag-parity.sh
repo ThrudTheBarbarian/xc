@@ -215,6 +215,11 @@ cover --emit-iface
 same "--emit-iface"         $A --emit-iface -o @OUT@.json hello.xc
 cover --emit-lib
 same "--emit-lib (arm64)"   $A --emit-lib -o @OUT@.dylib ret.xc
+# libRuntime (2026-11-03): the library itself, and a program that compiles
+# the runtime in rather than linking the tree's.
+cover --emit-runtime --no-runtime-lib
+same "--emit-runtime (arm64)" $A --par-style=cpu --emit-runtime -o @OUT@.dylib "$ROOT/support/generic/lib/Par.xc"
+same "--no-runtime-lib"       $A --no-runtime-lib -o @OUT@ ret.xc
 cover --emit-apk
 same "--emit-apk"           -q -A android --emit-apk -o @OUT@.apk ret.xc
 cover --emit-ir --emit-ir-opt

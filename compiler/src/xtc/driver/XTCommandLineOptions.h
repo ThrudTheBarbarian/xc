@@ -36,6 +36,16 @@ NS_ASSUME_NONNULL_BEGIN
 // output, so a debugger can break on a line, step and backtrace.
 @property(nonatomic, readwrite) BOOL debugInfo;
 @property(nonatomic, readonly) BOOL emitLib; // --emit-lib: build a shared library (export public class API, keep it all, no app main)
+// libRuntime (owner, 2026-11-03). --emit-runtime: the target's libRuntime, a
+// library build of Runtime.list's files (sets emitLib). --no-runtime-lib (or
+// XCC_NO_RUNTIME_LIB=1): no prebuilt libRuntime — the runtime compiled in and
+// linked into the image, as before. The front end's own: --runtime-members
+// <Runtime.list> (building it) and --runtime-lib <libRuntime file> (a program,
+// offered it), as the dispatcher resolves them. As the port.
+@property(nonatomic, readonly) BOOL emitRuntime;
+@property(nonatomic, readonly) BOOL noRuntimeLib;
+@property(nonatomic, readonly, copy, nullable) NSString* runtimeMembersFile;
+@property(nonatomic, readonly, copy, nullable) NSString* runtimeLibFile;
 // --emit-iface: write the module INTERFACE and stop — no codegen, no link.
 // The designer (Rocks) lists a class's outlets and actions to draw the wiring
 // UI, and its input is an APP source, not a library; without this the only way

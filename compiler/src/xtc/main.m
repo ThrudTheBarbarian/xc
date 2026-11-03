@@ -175,6 +175,61 @@ static NSString *resolveSupportRoot(const char *argv0, XTCommandLineOptions *opt
     return nil;
 }
 
+// libRuntime (owner, 2026-11-03), as the port's resolveRuntimeLib: the
+// target's prebuilt library at <support>/runtime-lib/<row>/libRuntime.<ext>,
+// when one is built and wanted (not --no-runtime-lib or XCC_NO_RUNTIME_LIB=1,
+// not -static, not the build of libRuntime itself). Absolute: the runpath and
+// LC_RPATH are read wherever the program runs. nil = none.
+static NSArray<NSString *> *appendLinkerFlags(XTCommandLineOptions *opts, BOOL directLd);
+static NSString *runtimeLibFile(const char *argv0, XTCommandLineOptions *opts) {
+    XTTarget *row = opts.effectiveTarget;
+    if (opts.emitRuntime || opts.noRuntimeLib || opts.staticLink || !row) return nil;
+    // An image that links objects or archives keeps the runtime its own: an
+    // xcc -c object reads the canary guard and the runtime's data directly,
+    // which the rewrite of the program's text cannot reach. As the port.
+    for (NSString *t in appendLinkerFlags(opts, NO))
+        if ([t hasSuffix:@".o"] || [t hasSuffix:@".a"]) return nil;
+    const char *e = getenv("XCC_NO_RUNTIME_LIB");
+    if (e && !strcmp(e, "1")) return nil;
+    NSString *support = resolveSupportRoot(argv0, opts);
+    if (!support) return nil;
+    if (!support.isAbsolutePath)
+        support = [[[NSFileManager defaultManager] currentDirectoryPath] stringByAppendingPathComponent:support];
+    NSString *dir = [[support stringByAppendingPathComponent:@"runtime-lib"] stringByAppendingPathComponent:row.name];
+    for (NSString *ext in row.libExts) {
+        NSString *f = [dir stringByAppendingPathComponent:[@"libRuntime." stringByAppendingString:ext]];
+        if ([[NSFileManager defaultManager] fileExistsAtPath:f]) return f.stringByStandardizingPath;
+    }
+    return nil;
+}
+
+// The stack canary's guard word and the glibc crt's argc/argv are the
+// runtime's: an image that takes libRuntime reaches them through the GOT.
+// The same rewrites as the port's (guardThroughGot, guardThroughGotX86,
+// crtArgsThroughGot), and libRuntime exports what it otherwise hides.
+static NSString *guardThroughGot(NSString *prog) {
+    NSString *a = [prog stringByReplacingOccurrencesOfString:@"    adrp x16, ___xt_stack_guard@PAGE\n    ldr x16, [x16, ___xt_stack_guard@PAGEOFF]\n"
+                                                  withString:@"    adrp x16, ___xt_stack_guard@GOTPAGE\n    ldr x16, [x16, ___xt_stack_guard@GOTPAGEOFF]\n    ldr x16, [x16]\n"];
+    return [a stringByReplacingOccurrencesOfString:@"    adrp x17, ___xt_stack_guard@PAGE\n    ldr x17, [x17, ___xt_stack_guard@PAGEOFF]\n"
+                                        withString:@"    adrp x17, ___xt_stack_guard@GOTPAGE\n    ldr x17, [x17, ___xt_stack_guard@GOTPAGEOFF]\n    ldr x17, [x17]\n"];
+}
+static NSString *guardThroughGotX86(NSString *prog) {
+    NSString *a = [prog stringByReplacingOccurrencesOfString:@"\tmov\tr11, qword ptr [rip + __xt_stack_guard]\n"
+                                                  withString:@"\tmov\tr11, qword ptr [rip + __xt_stack_guard@GOTPCREL]\n\tmov\tr11, qword ptr [r11]\n"];
+    return [a stringByReplacingOccurrencesOfString:@"\tmov\tr11, qword ptr [rbp-8]\n\tcmp\tr11, qword ptr [rip + __xt_stack_guard]\n"
+                                        withString:@"\tmov\tr10, qword ptr [rip + __xt_stack_guard@GOTPCREL]\n\tmov\tr11, qword ptr [rbp-8]\n\tcmp\tr11, qword ptr [r10]\n"];
+}
+static NSString *crtArgsThroughGot(NSString *crt) {
+    NSString *a = [crt stringByReplacingOccurrencesOfString:@"\tmov\t[rip + _xt_saved_argc], edi"
+                                                 withString:@"\tmov\trax, [rip + _xt_saved_argc@GOTPCREL]\n\tmov\t[rax], edi"];
+    return [a stringByReplacingOccurrencesOfString:@"\tmov\t[rip + _xt_saved_argv], rsi"
+                                        withString:@"\tmov\trax, [rip + _xt_saved_argv@GOTPCREL]\n\tmov\t[rax], rsi"];
+}
+static NSString *runtimeForLibRuntime(NSString *rt) {
+    NSString *a = [rt stringByReplacingOccurrencesOfString:@".private_extern\t___xt_stack_guard" withString:@".globl\t___xt_stack_guard"];
+    return [a stringByReplacingOccurrencesOfString:@"\t.hidden\t__xt_stack_guard" withString:@"\t.globl\t__xt_stack_guard"];
+}
+
 // Rename the xtc entry `_main` → `_xt_main` so the C stub owns the real `main`
 // (a clean `int` exit status). Word-bounded so inner labels
 // (`L_main__bb_entry`) stay put.
@@ -1518,6 +1573,14 @@ static int linkAndroidSelfHost(const char *argv0, XTCommandLineOptions *opts,
     NSString *stubs   = arm64ClassAllocStubs(prog);   // built from the Mach-O names…
     NSString *crtsrc  = [NSString stringWithContentsOfFile:crt encoding:NSUTF8StringEncoding error:NULL];
     NSString *rtsrc   = [NSString stringWithContentsOfFile:rt  encoding:NSUTF8StringEncoding error:NULL];
+    // libRuntime (owner, 2026-11-03): arm64 Linux takes the object runtime
+    // from it (not Android yet: no device to prove it on). As the port.
+    NSString *rtLibF = [lrow.os isEqualToString:@"android"] ? nil : runtimeLibFile(argv0, opts);
+    if (rtLibF) {
+        prog = guardThroughGot(prog);
+        rtsrc = @"";
+        if (![neededLibs containsObject:rtLibF]) neededLibs = [neededLibs arrayByAddingObject:rtLibF];
+    }
     NSString *combined = [NSString stringWithFormat:@"%@\n%@\n%@\n%@",
         crtsrc, rtsrc,
         stripSymbolUnderscoreArm64(stubs),            // …then stripped with the program
@@ -1582,6 +1645,20 @@ static int linkAndroidShared(const char *argv0, XTCommandLineOptions *opts,
         [exports addObject:stripSymbolUnderscoreArm64([asmText substringWithRange:[m rangeAtIndex:1]])];
 
     NSString *rtsrc = [NSString stringWithContentsOfFile:rt encoding:NSUTF8StringEncoding error:NULL] ?: @"";
+    // libRuntime: built, it exports the runtime it carries (ELF names as they
+    // are); a library that takes it links none of its own. As the port.
+    if (opts.emitRuntime) {
+        rtsrc = runtimeForLibRuntime(rtsrc);
+        for (NSTextCheckingResult *m in [ge matchesInString:rtsrc options:0 range:NSMakeRange(0, rtsrc.length)])
+            [exports addObject:[rtsrc substringWithRange:[m rangeAtIndex:1]]];
+    } else if (![lrow.os isEqualToString:@"android"]) {
+        NSString *rtLibF = runtimeLibFile(argv0, opts);
+        if (rtLibF) {
+            asmText = guardThroughGot(asmText);
+            rtsrc = @"";
+            if (![neededLibs containsObject:rtLibF]) neededLibs = [neededLibs arrayByAddingObject:rtLibF];
+        }
+    }
     NSString *combined = [NSString stringWithFormat:@"%@\n%@\n%@",
         rtsrc,
         stripSymbolUnderscoreArm64(arm64ClassAllocStubs(asmText)),
@@ -2023,6 +2100,14 @@ static int linkArm64Executable(const char *argv0, XTCommandLineOptions *opts,
         NSString *prog   = [NSString stringWithContentsOfFile:asmPath encoding:NSUTF8StringEncoding error:NULL];
         NSString *crtsrc = [NSString stringWithContentsOfFile:crt     encoding:NSUTF8StringEncoding error:NULL];
         NSString *rtsrc  = [NSString stringWithContentsOfFile:rt      encoding:NSUTF8StringEncoding error:NULL];
+        // libRuntime (owner, 2026-11-03): the object runtime from the
+        // target's library, none of the program's own. As the port.
+        NSString *rtLibF = runtimeLibFile(argv0, opts);
+        if (rtLibF) {
+            rtsrc = @"";
+            if (prog) prog = guardThroughGot(prog);
+            if (![neededLibs containsObject:rtLibF]) neededLibs = [neededLibs arrayByAddingObject:rtLibF];
+        }
         // The iOS platform shim (support/ios/runtime, iOS.md stage 4) rides
         // after the runtime, in the simulator or device flavour.
         if (opts.applePlatform) {
@@ -2248,6 +2333,20 @@ static int linkArm64Shared(const char *argv0, XTCommandLineOptions *opts,
                 [exports addObject:[asmText substringWithRange:[m rangeAtIndex:1]]];
 
             NSString *rtsrc = [NSString stringWithContentsOfFile:rt encoding:NSUTF8StringEncoding error:NULL];
+            // libRuntime: built, it exports the runtime it carries; a library
+            // that takes it links none of its own. As the port.
+            if (opts.emitRuntime) {
+                rtsrc = runtimeForLibRuntime(rtsrc);
+                for (NSTextCheckingResult *m in [ge matchesInString:rtsrc options:0 range:NSMakeRange(0, rtsrc.length)])
+                    [exports addObject:[rtsrc substringWithRange:[m rangeAtIndex:1]]];
+            } else {
+                NSString *rtLibF = runtimeLibFile(argv0, opts);
+                if (rtLibF) {
+                    rtsrc = @"";
+                    asmText = guardThroughGot(asmText);
+                    if (![neededLibs containsObject:rtLibF]) neededLibs = [neededLibs arrayByAddingObject:rtLibF];
+                }
+            }
             // The iOS platform shim rides after the runtime here as it does in
             // an executable: a library's code calls `_xt_ios_log` and the fetch
             // functions through Platform.xc, and the app that loads it does not
@@ -2529,16 +2628,32 @@ static int linkX86_64Glibc(const char *argv0, XTCommandLineOptions *opts, NSStri
     }
     NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObjects:@"--glibc", @"-importmap",
         [support stringByAppendingPathComponent:@"x86_64/glibc-imports.map"], nil];
+    // libRuntime (owner, 2026-11-03): the crt only, its argc/argv stores and
+    // the program's canaries through the GOT, the runtime the library's. As
+    // the port.
+    NSString *rtLibF = runtimeLibFile(argv0, opts);
     for (NSString *n in @[@"crt-glibc.s", @"rtgen-glibc.s", @"rtfiles-linux.s", @"libmgen-linux.s"]) {
+        if (rtLibF && ![n isEqualToString:@"crt-glibc.s"]) continue;
         NSString *pth = [support stringByAppendingPathComponent:
                          [@"x86_64/runtime/" stringByAppendingString:n]];
         if (![fm fileExistsAtPath:pth]) {
             fprintf(stderr, "xcc: error: -dynamic: missing runtime file '%s'\n", pth.UTF8String);
             return 1;
         }
+        if (rtLibF) {
+            NSString *crt = crtArgsThroughGot([NSString stringWithContentsOfFile:pth encoding:NSUTF8StringEncoding error:NULL] ?: @"");
+            pth = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-glibc-crt.s"];
+            [crt writeToFile:pth atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+        }
         [args addObject:pth];
     }
     NSString *prog = [NSString stringWithContentsOfFile:asmPath encoding:NSUTF8StringEncoding error:NULL];
+    if (rtLibF) {
+        prog = guardThroughGotX86(prog ?: @"");
+        asmPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-glibc-prog.s"];
+        [prog writeToFile:asmPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+        if (![neededLibs containsObject:rtLibF]) neededLibs = [neededLibs arrayByAddingObject:rtLibF];
+    }
     NSString *stubPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-glibc-newstubs.s"];
     [x86_64ClassAllocStubs(prog, NO) writeToFile:stubPath atomically:YES
                                         encoding:NSUTF8StringEncoding error:NULL];
@@ -2709,16 +2824,36 @@ static int linkX86_64GlibcShared(const char *argv0, XTCommandLineOptions *opts, 
     }
     NSMutableArray<NSString *> *args = [NSMutableArray arrayWithObjects:@"--glibc", @"-shared",
         @"-importmap", [support stringByAppendingPathComponent:@"x86_64/glibc-imports.map"], nil];
+    // libRuntime (owner, 2026-11-03): built, it carries and exports the
+    // runtime; a library that takes it carries none. As the port.
+    NSString *rtLibF = runtimeLibFile(argv0, opts);
+    NSMutableSet<NSString *> *rtExports = [NSMutableSet set];
+    NSRegularExpression *rge = [NSRegularExpression
+        regularExpressionWithPattern:@"(?m)^\\s*\\.globl\\s+(\\S+)" options:0 error:NULL];
     for (NSString *n in @[@"rtgen-glibc.s", @"rtfiles-linux.s", @"libmgen-linux.s"]) {
+        if (rtLibF) continue;
         NSString *pth = [support stringByAppendingPathComponent:
                          [@"x86_64/runtime/" stringByAppendingString:n]];
         if (![fm fileExistsAtPath:pth]) {
             fprintf(stderr, "xcc: error: --emit-lib: missing runtime file '%s'\n", pth.UTF8String);
             return 1;
         }
+        if (opts.emitRuntime) {
+            NSString *t = runtimeForLibRuntime([NSString stringWithContentsOfFile:pth encoding:NSUTF8StringEncoding error:NULL] ?: @"");
+            for (NSTextCheckingResult *m in [rge matchesInString:t options:0 range:NSMakeRange(0, t.length)])
+                [rtExports addObject:[t substringWithRange:[m rangeAtIndex:1]]];
+            pth = [xtcTempDir() stringByAppendingPathComponent:[@"xtc-libruntime-" stringByAppendingString:n]];
+            [t writeToFile:pth atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+        }
         [args addObject:pth];
     }
     NSString *prog = [NSString stringWithContentsOfFile:asmPath encoding:NSUTF8StringEncoding error:NULL];
+    if (rtLibF) {
+        prog = guardThroughGotX86(prog ?: @"");
+        asmPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-glibc-so-prog.s"];
+        [prog writeToFile:asmPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+        if (![neededLibs containsObject:rtLibF]) neededLibs = [neededLibs arrayByAddingObject:rtLibF];
+    }
     // Load-time constructors register with the program, which runs them before
     // main (crt-glibc.s), as a musl library's do.
     if ([prog containsString:@"\n__xt_ctors_start:"]) {
@@ -2748,6 +2883,7 @@ static int linkX86_64GlibcShared(const char *argv0, XTCommandLineOptions *opts, 
         regularExpressionWithPattern:@"(?m)^\\s*\\.globl\\s+(\\S+)" options:0 error:NULL];
     for (NSTextCheckingResult *m in [ge matchesInString:prog options:0 range:NSMakeRange(0, prog.length)])
         [exports addObject:[prog substringWithRange:[m rangeAtIndex:1]]];
+    [exports unionSet:rtExports];
     NSString *exportsPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-glibc-so-exports.txt"];
     [[[exports.allObjects sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@"\n"]
         writeToFile:exportsPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
@@ -4626,6 +4762,13 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
     // the back end turns them into line tables, so both processes are told.
     if (opts.debugInfo) [feArgs addObject:@"-g"];
     if (opts.emitLib) [feArgs addObject:@"--emit-lib"];  // L2: write the .xtc.iface sidecar
+    // libRuntime: building it, its member list; a program, the target's library.
+    if (opts.emitRuntime) {
+        NSString *sr = resolveSupportRoot(argv0, opts);
+        if (sr) [feArgs addObjectsFromArray:@[@"--runtime-members", [sr stringByAppendingPathComponent:@"generic/lib/Runtime.list"]]];
+    } else if (runtimeLibFile(argv0, opts)) {
+        [feArgs addObjectsFromArray:@[@"--runtime-lib", runtimeLibFile(argv0, opts)]];
+    }
     if (opts.emitIface) [feArgs addObject:@"--emit-iface"];  // same sidecar, without becoming a library build
     // -c wants the same sidecar (stage 3): the front end is a separate process,
     // so it has to be told, or compileOnly is simply false over there.

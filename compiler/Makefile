@@ -2,6 +2,11 @@ CC  = clang
 CP  = cp -f
 
 UNAME_S := $(shell uname -s)
+# What this Makefile builds with xcc ships (the compiler, its tools, the
+# archives' programs): each carries its own object runtime, never a link to
+# this tree's support/runtime-lib (owner, 2026-11-03: programs a user builds
+# link libRuntime). The libRuntime builds themselves are --emit-runtime.
+export XCC_NO_RUNTIME_LIB = 1
 VERSION := $(shell cat VERSION 2>/dev/null || echo 0.0)
 
 ifeq ($(UNAME_S),Darwin)
@@ -273,6 +278,28 @@ $(XCC_XC_BIN): $(XTC_BIN) $(XCC_XC_SRC) $(wildcard selfhost/*/*.xc) \
 	@mkdir -p $(dir $@) build
 	@XCC=$(XTC_BIN) SPLIT_DIR=build/split-stage1 SPLIT_VERSION=$(VERSION) bash $(SPLIT_BUILD) $@ -A arm64 -j $(SPLIT_JOBS) > build/split-stage1.log 2>&1 \
 	    || { tail -15 build/split-stage1.log; exit 1; }
+
+# libRuntime (owner, 2026-11-03): the par runtime and the object runtime as
+# one shared library per target, which every program the target's xcc builds
+# links: support/runtime-lib/<row>/libRuntime.<ext> here, lib/xc/runtime-lib/
+# in an install. Built by this tree's compiler from support/generic/lib/Par.xc
+# with Runtime.list's files. RUNTIME_ROWS: the targets — on a Mac its own and
+# the Linux rows (cross-built); elsewhere the Linux rows (a macOS libRuntime
+# needs the SDK's Metal and CoreFoundation).
+ifeq ($(UNAME_S),Darwin)
+RUNTIME_ROWS ?= arm64-macos x86_64-linux arm64-linux
+else
+RUNTIME_ROWS ?= x86_64-linux arm64-linux
+endif
+.PHONY: runtime-libs
+runtime-libs: $(XCC_XC_BIN)
+	@for r in $(RUNTIME_ROWS); do \
+	    case $$r in *-macos|*-ios*) e=dylib ;; win64*|*-windows*) e=dll ;; *) e=so ;; esac; \
+	    mkdir -p support/runtime-lib/$$r; \
+	    echo "  xc   libRuntime for $$r"; \
+	    $(XCC_XC_BIN) -q -O2 -A $$r -H . --par-style=cpu --emit-runtime support/generic/lib/Par.xc \
+	        -o support/runtime-lib/$$r/libRuntime.$$e || exit 1; \
+	done
 
 # The one-unit build of stage 2, kept as a check on the split one. The two are
 # not the same FILE (each split object carries the library it uses), so each
@@ -607,6 +634,18 @@ install: $(SHIP_OSX)
 		mkdir -p "$$(dirname "$$dst")"; \
 		if ! cmp -s $$src "$$dst" 2>/dev/null; then $(CP) $$src "$$dst"; n=$$((n+1)); fi; \
 	done; echo "  xc   $$n file(s) updated"
+	@# libRuntime for each target built (make runtime-libs): to a new name,
+	@# then moved, since a Mach-O rewritten in place where it is loaded (or was,
+	@# and is cached) kills the next process with SIGKILL.
+	@for d in support/runtime-lib/*/; do [ -d "$$d" ] || continue; r=$$(basename $$d); \
+		mkdir -p "$(XCDIR)/runtime-lib/$$r"; \
+		for f in $$d/libRuntime.*; do \
+			b=$$(basename $$f); \
+			if ! cmp -s $$f "$(XCDIR)/runtime-lib/$$r/$$b" 2>/dev/null; then \
+				$(CP) $$f "$(XCDIR)/runtime-lib/$$r/$$b.new" && mv -f "$(XCDIR)/runtime-lib/$$r/$$b.new" "$(XCDIR)/runtime-lib/$$r/$$b"; \
+				echo "  xc   libRuntime $$r"; fi; \
+		done; \
+	done
 	@# Prune what the tree no longer has. A copy-only sync leaves a MOVED file
 	@# at its old path, where it still shadows — exactly how #767's win64 stubs
 	@# survived #770 and kept killing the gdi32 auto-link for every build run
@@ -1528,6 +1567,14 @@ done
 @for src in $(SUPPORT_SRCS); do \
 	dst=$(DIST_STAGE)/xcc-$(1)-$(VERSION)/lib/xc/$${src#support/}; \
 	mkdir -p $$(dirname $$dst); $(CP) $$src $$dst; done
+@# libRuntime for every target built (make runtime-libs), which every
+@# program an installed xcc builds links: an archive without it would build
+@# programs with the runtime compiled in, slowly, and say nothing.
+@if ! ls support/runtime-lib/*/libRuntime.* > /dev/null 2>&1; then \
+	echo "dist($(1)): no libRuntime in support/runtime-lib — run make runtime-libs first"; exit 1; fi
+@for d in support/runtime-lib/*/; do r=$$(basename $$d); \
+	mkdir -p $(DIST_STAGE)/xcc-$(1)-$(VERSION)/lib/xc/runtime-lib/$$r; \
+	$(CP) $$d/libRuntime.* $(DIST_STAGE)/xcc-$(1)-$(VERSION)/lib/xc/runtime-lib/$$r/ || exit 1; done
 @# The GPLv3 text travels with the binaries. The runtime exception,
 @# lib/xc/COPYING.RUNTIME, is already there via SUPPORT_SRCS.
 @$(CP) ../COPYING $(DIST_STAGE)/xcc-$(1)-$(VERSION)/COPYING

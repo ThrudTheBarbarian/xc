@@ -75,6 +75,21 @@ static void appendCanonicalJSON(NSMutableString *out, id v) {
 
 @implementation XTInterfaceSerializer
 
++ (NSString*)json:(NSString*)json withProvides:(NSArray<NSString*>*)names
+{
+    if (!names.count || !json.length)
+        return json;
+    NSMutableDictionary *root = [[NSJSONSerialization JSONObjectWithData:[json dataUsingEncoding:NSUTF8StringEncoding]
+                                                                  options:NSJSONReadingMutableContainers
+                                                                    error:NULL] mutableCopy];
+    if (![root isKindOfClass:[NSDictionary class]])
+        return json;
+    root[@"provides"] = [names sortedArrayUsingSelector:@selector(compare:)];
+    NSMutableString *out = [NSMutableString string];
+    appendCanonicalJSON(out, root);
+    return out;
+}
+
 // One method signature → dict {name, static, varargs, symbol, params[], returns[]}.
 // `symbol` is the body's exported name in the .so. For a class method that's the
 // lowering convention `Class$method` (matches .dynsym); protocol methods carry no

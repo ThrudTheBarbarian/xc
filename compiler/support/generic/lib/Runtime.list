@@ -1,0 +1,15 @@
+# The standard-library files libRuntime is made of (owner, 2026-11-03):
+# built once per target with `xcc --emit-runtime Par.xc` and linked
+# dynamically by every program for that target; a program then skips their
+# source. One name per line, as it appears in an #import.
+Par.xc
+ParDevice.xc
+ParWorker.xc
+ParMetal.xc
+ParSoftFloat.xc
+ParVulkan.xc
+ParCuda.xc
+ParRemote.xc
+ParTiles.xc
+ParWebGpu.xc
+Mdns.xc

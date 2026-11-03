@@ -558,6 +558,24 @@ class IfaceWrite
         return prelude.contains((Hashable*)f);
     }
 
+    // libRuntime's interface: the standard-library files it provides
+    // (`provides`, sorted), whose source a client then skips. Added to an
+    // interface already written; absent, a library provides none.
+    static String* withProvides(String* json, Array* names)
+    {
+        if (names == (Array*)0 || names.count() == (u32)0 || !json.hasPrefix(String.withCString("{")))
+            return json;
+        String* out = String.withCString("{\"provides\": [");
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1) {
+            if (i > (u32)0) out.appendCString(", ");
+            out.appendFormat("\"%s\"", IfaceWrite.esc((String*)names.get(i)).cString());
+        }
+        out.appendCString("],");
+        out.append(json.substringFromByte((u32)1));
+        // Canonical again (the key sorted into place), as the rest is.
+        return JsonVal.canonical(out);
+    }
+
     static String* json(Node* program, Vtable* vt, Set* prelude, Array* cImports)
     {
         return IfaceWrite.jsonWithTable(program, vt, prelude, cImports, (String*)0);

@@ -90,3 +90,5 @@ keys/
 # Vendored Mbed TLS static archives (large, reproducible) — not tracked
 3p/tls/mbedtls-linux/*.a
 
+# libRuntime, built per target (make runtime-libs)
+support/runtime-lib/

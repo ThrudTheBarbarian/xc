@@ -84,6 +84,10 @@ NS_ASSUME_NONNULL_BEGIN
                         excludeFiles:(nullable NSSet<NSString*>*)excludeFiles
                           classTable:(nullable NSString*)classTable
                          stdlibFiles:(nullable NSDictionary<NSString*, NSString*>*)stdlibFiles;
+// libRuntime's interface: `provides` (the standard-library files it is made
+// of, sorted) added to an interface already written, canonical again. As the
+// port's IfaceWrite.withProvides.
++ (NSString*)json:(NSString*)json withProvides:(NSArray<NSString*>*)names;
 // …and a library's standard-library state hash, written as `stdState`.
 + (nullable NSString*)jsonForProgram:(XTProgramNode*)program
                        protocolSlots:(nullable NSDictionary*)protocolSlots

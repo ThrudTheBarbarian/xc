@@ -122,6 +122,12 @@ static NSSet<NSString*>* stdStateNamesIn(XTProgramNode* ast, NSSet<NSString*>* f
             NSString* cn = ((XTClassDeclNode*)d).className;
             [out addObject:[@"__sdata_" stringByAppendingString:cn]];
             [out addObject:[@"__sinit_" stringByAppendingString:cn]];
+            // …and its vtable (2026-11-03): an object one side made is the
+            // other's class too, or a checked downcast of a String the library
+            // returned missed. Not an instantiation (`Blk$u32$u32`): each image
+            // makes the ones it uses. As the port.
+            if ([cn rangeOfString:@"$"].location == NSNotFound)
+                [out addObject:[cn stringByAppendingString:@"$vtbl"]];
             }
         }
     return out;
@@ -227,6 +233,10 @@ static NSSet<NSString*>* stdStateNamesIn(XTProgramNode* ast, NSSet<NSString*>* f
         break;
         }
     NSSet<NSString*>* boundNames = bound.count ? stdStateNamesIn(ast, bound) : [NSSet set];
+    // …and the vararg marshalling area: a bound client calls the library's
+    // String code through the shared vtable, which reads the library's buffer.
+    if (bound.count)
+        boundNames = [boundNames setByAddingObject:@"__xtc_va_buf"];
     // The library side: every other standard-library file it was built with.
     NSSet<NSString*>* exportNames = [NSSet set];
     if (libraryBuild)
@@ -248,16 +258,18 @@ static NSSet<NSString*>* stdStateNamesIn(XTProgramNode* ast, NSSet<NSString*>* f
         // that library too and binds to it (importsWithStateOwners). Without
         // this such a client kept its own copy. As the port.
         _stdStateHash = bound.count ? [@"@" stringByAppendingString:boundLib ?: @""] : stdStateHashOf(names, dirs);
-        exportNames = stdStateNamesIn(ast, own);
+        exportNames = [stdStateNamesIn(ast, own) setByAddingObject:@"__xtc_va_buf"];
         }
     for (XTIRSymbol* sym in mod.symbols)
         {
-        if (sym.kind != XTIRSymbolKindDataGlobal || sym.taskLocal)
+        BOOL vtab = sym.kind == XTIRSymbolKindVTable;
+        if ((sym.kind != XTIRSymbolKindDataGlobal && !vtab) || sym.taskLocal)
             continue;
         if ([boundNames containsObject:sym.name])
             {
             sym.isExternalGlobal = YES;
-            sym.initialBytes = nil;
+            if (!vtab)
+                sym.initialBytes = nil;
             // wasm32 reaches it through the library's __addr_ getter, imported
             // from the library's package, as an imported class's vtable is.
             if (boundPkg.length)
@@ -1431,6 +1443,28 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // checked runtime (macOS and iOS link rt-checked's backtracing reporter).
     if (_options.boundsCheck && (!_options.boundsReport || _options.effectiveTarget.checkedRuntime.length == 0))
         pp.autoImport = pp.autoImport.length ? [pp.autoImport stringByAppendingString:@";Checked.xc"] : @"Checked.xc";
+    // libRuntime (owner, 2026-11-03), as the port's buildPP: building it, its
+    // files are the module's own; a program is offered the target's prebuilt
+    // one, imported at the first file of it the unit imports.
+    if (_options.runtimeMembersFile.length)
+        {
+        NSString* list = [NSString stringWithContentsOfFile:_options.runtimeMembersFile
+                                                   encoding:NSUTF8StringEncoding
+                                                      error:NULL];
+        NSMutableSet<NSString*>* names = [NSMutableSet set];
+        for (NSString* raw in [list componentsSeparatedByString:@"\n"])
+            {
+            NSString* l = [raw stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            if (l.length && ![l hasPrefix:@"#"])
+                [names addObject:l];
+            }
+        pp.runtimeMembers = names;
+        }
+    else if (_options.runtimeLibFile.length)
+        {
+        pp.libraryPaths = [pp.libraryPaths arrayByAddingObject:_options.runtimeLibFile.stringByDeletingLastPathComponent];
+        pp.runtimeOffer = [NSSet setWithArray:[pp providesOfLibrary:_options.runtimeLibFile]];
+        }
     [self setupPreprocessor:pp arm64:arm64];
     [self setupObjectFmtGateOnto:pp
                       fromSource:rawSource
@@ -1446,6 +1480,7 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     _stdlibFiles = pp.stdlibFiles;
     _stdlibDirs = pp.stdlibDirs;
     _ownDefines = pp.ownDefines;
+    _providedFiles = pp.providedFiles;
     if (!expanded || _diagnostics.hasFatalError)
         {
         [_diagnostics printAll];

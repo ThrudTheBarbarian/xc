@@ -80,6 +80,13 @@ class FeOptions
     // a question.
     bool _libraryBuild;
     bool _emitLib;
+    // libRuntime (owner, 2026-11-03). Building it: the standard-library files
+    // it is made of (Runtime.list), else 0. A program: the directory holding
+    // the target's prebuilt libRuntime, imported ahead of everything, else 0
+    // (the runtime's files are then compiled in as source).
+    Array* _runtimeMembers;
+    String* _runtimeLibDir;
+    String* _runtimeLibFile;
     // …and whether it is `-c` in particular: an object without `main` leaves
     // the class-name root (`_xtc_class_new`) to the module that has it.
     bool _compileOnly;
@@ -106,6 +113,9 @@ class FeOptions
         _ppOut = (String*)0;
         _emitIface = false;
         _libraryBuild = false;
+        _runtimeMembers = (Array*)0;
+        _runtimeLibDir = (String*)0;
+        _runtimeLibFile = (String*)0;
         _emitLib = false;
         _compileOnly = false;
         _classTable = (String*)0;
@@ -259,6 +269,31 @@ class FeOptions
     void setLibraryBuild(bool b)
         {
         _libraryBuild = b;
+        }
+    Array* runtimeMembers(void)
+        {
+        return _runtimeMembers;
+        }
+    void setRuntimeMembers(Array* a)
+        {
+        _runtimeMembers = a;
+        }
+    String* runtimeLibDir(void)
+        {
+        return _runtimeLibDir;
+        }
+    void setRuntimeLibDir(String* d)
+        {
+        _runtimeLibDir = d;
+        }
+    // The library itself, in that directory.
+    String* runtimeLibFile(void)
+        {
+        return _runtimeLibFile;
+        }
+    void setRuntimeLibFile(String* f)
+        {
+        _runtimeLibFile = f;
         }
     bool compileOnly(void)
         {
@@ -1011,6 +1046,12 @@ class FeOptions
             break;
             }
         Set* stdBound = stdStateNames(program, boundFiles);
+        // …and the vararg marshalling area (x86-64 and win64 pass a printf's
+        // arguments through it): a client bound to a library calls the
+        // library's String code through the shared vtable, which reads the
+        // library's buffer, so the client must fill that one.
+        if (boundFiles.count() > (u32)0)
+            stdBound.add((Hashable*)String.withCString("__xtc_va_buf"));
         Set* stdExport = new Set();
         String* stdState = (String*)0;
         if (o.emitLib())
@@ -1046,11 +1087,34 @@ class FeOptions
                         ownFiles.add((Hashable*)sp.get(j));
                 }
             stdExport = stdStateNames(program, ownFiles);
+            stdExport.add((Hashable*)String.withCString("__xtc_va_buf"));
             }
         if (o.emitIface())
-            o.setIfaceJson(IfaceWrite.jsonWithState(program, sema.vtable(), pp.ambientFiles(), cImports,
-                                                    o.classTable(), pp.stdImports(), stdState,
-                                                    o.emitLib() ? pp.ownDefines() : (Array*)0));
+            {
+            String* j = IfaceWrite.jsonWithState(program, sema.vtable(), pp.ambientFiles(), cImports,
+                                                 o.classTable(), pp.stdImports(), stdState,
+                                                 o.emitLib() ? pp.ownDefines() : (Array*)0);
+            if (o.runtimeMembers() != (Array*)0)
+                {
+                // …and the root file itself, which no #import named.
+                Array* pv = pp.providedFiles();
+                String* root = o.input() == (String*)0 ? (String*)0 : o.input().lastPathComponent();
+                bool member = false, listed = false;
+                for (u32 k = (u32)0; root != (String*)0 && k < o.runtimeMembers().count(); k = k + (u32)1)
+                    if (((String*)o.runtimeMembers().get(k)).equals(root))
+                        member = true;
+                for (u32 k = (u32)0; member && k < pv.count(); k = k + (u32)1)
+                    if (((String*)pv.get(k)).equals(root))
+                        listed = true;
+                if (member && !listed)
+                    {
+                    pv.add((Object*)root);
+                    pv.sort();
+                    }
+                j = IfaceWrite.withProvides(j, pv);
+                }
+            o.setIfaceJson(j);
+            }
 
         Lower* lower = Lower.make();
         // IR outlining (XC_PAR_PROPOSE=outline): the optimiser's blocks get
@@ -1112,12 +1176,14 @@ class FeOptions
             for (u32 k = (u32)0; k < syms.count(); k = k + (u32)1)
                 {
                 IRSymbol* sym = (IRSymbol*)syms.get(k);
-                if (sym.kind() != (u8)SYM_DATAGLOBAL || sym.isTaskLocal())
+                bool vtab = sym.kind() == (u8)SYM_VTABLE;
+                if ((sym.kind() != (u8)SYM_DATAGLOBAL && !vtab) || sym.isTaskLocal())
                     continue;
                 if (stdBound.contains((Hashable*)sym.name()))
                     {
                     sym.setAttr(String.withCString("extern"), true);
-                    sym.setBytes((Array*)0);
+                    if (!vtab)
+                        sym.setBytes((Array*)0);
                     // wasm32 reaches it through the library's __addr_ getter,
                     // imported from the library's package, as an imported
                     // class's vtable is.
@@ -2312,6 +2378,18 @@ Set* stdStateNames(Node* program, Set* files)
             String* si = String.withCString("__sinit_");
             si.append(d.name());
             out.add((Hashable*)si);
+            // …and its vtable (2026-11-03): an object one side made is the
+            // other's class too, or a checked downcast of a String the
+            // library returned missed (the vtables were two). The slots
+            // agree already: a client adopts the library's numbering.
+            // Not an instantiation (`Blk$u32$u32`): each image makes the ones
+            // it uses, so the library has only its own.
+            if (d.name().indexOfByte((u8)'$') == (u32)$FFFFFFFF)
+                {
+                String* vt = String.withString(d.name());
+                vt.appendCString("$vtbl");
+                out.add((Hashable*)vt);
+                }
             }
         }
     return out;
@@ -2381,6 +2459,12 @@ Array* definesOfLibrary(String* lib)
     return IfaceImport.definesOf(lib);
     }
 
+// …and the standard-library files it provides (libRuntime).
+Array* providesOfLibrary(String* lib)
+    {
+    return IfaceImport.providesOf(lib);
+    }
+
 Preprocessor* buildPP(FeOptions* o)
     {
     Preprocessor* pp = new Preprocessor();
@@ -2415,6 +2499,17 @@ Preprocessor* buildPP(FeOptions* o)
     IfaceImport.setNeedsV2(o.targetRow() != (TargetRow*)0 && o.targetRow().compactObjects());
     pp.setIfaceVersionReader(&ifaceUnreadableOf);
     pp.setDefinesReader(&definesOfLibrary);
+    pp.setProvidesReader(&providesOfLibrary);
+    // libRuntime: building it, its files are the module's own; a program
+    // imports the target's prebuilt one first of all, so what it provides is
+    // never read as source after it (an explicit #import "Par.xc" included).
+    if (o.runtimeMembers() != (Array*)0)
+        pp.setRuntimeMembers(o.runtimeMembers());
+    else if (o.runtimeLibDir() != (String*)0)
+        {
+        pp.addLibraryPath(o.runtimeLibDir());
+        pp.offerRuntime(IfaceImport.providesOf(o.runtimeLibFile()));
+        }
     // macOS and iOS: `#import <F>` may name a system framework.
     // On exactly when the row names an Apple SDK (the reference says why).
     if (o.targetRow() != (TargetRow*)0 && o.targetRow().appleSdk() != (String*)0)

@@ -892,6 +892,25 @@ class JsonVal
         return out;
         }
 
+    // The standard-library files a library provides (libRuntime's
+    // `provides`): a client skips their source. Empty for any other library.
+    static Array* providesOf(String* path)
+        {
+        Array* out = new Array();
+        String* text = IfaceImport.ifaceText(path);
+        if (text == 0)
+            return out;
+        JsonVal* root = JsonParser.parse(text);
+        JsonVal* a = root == (JsonVal*)0 ? (JsonVal*)0 : root.member("provides");
+        for (u32 i = (u32)0; a != (JsonVal*)0 && i < a.count(); i = i + (u32)1)
+            {
+            String* nm = a.at(i).asStr();
+            if (nm != (String*)0)
+                out.add((Object*)nm);
+            }
+        return out;
+        }
+
     // A library's own #defines (`defines`), which a client defines on
     // importing it. Empty when there are none.
     static Array* definesOf(String* path)

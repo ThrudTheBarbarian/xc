@@ -37,7 +37,9 @@ if [ -n "$WH" ]; then
     check "$WH" "$W/out"
 fi
 if [ -n "$LH" ]; then
-    "$XC" -q --par-style=cpu -A x86_64 -O2 -H . -o "$W/pab" tests/fixtures/par_alternate_blocks.xc || { echo "FAIL cuda-park: x86-64 build"; exit 1; }
+    # Its runtime compiled in: the program runs on another machine, which has
+    # no copy of this tree's libRuntime.
+    "$XC" -q --par-style=cpu --no-runtime-lib -A x86_64 -O2 -H . -o "$W/pab" tests/fixtures/par_alternate_blocks.xc || { echo "FAIL cuda-park: x86-64 build"; exit 1; }
     scp $SSHO -q "$W/pab" "$LH:cuda-park.bin" || { echo "FAIL cuda-park: copy to $LH"; exit 1; }
     ssh $SSHO "$LH" 'XC_PAR=gpu XC_PAR_REPORT=1 ./cuda-park.bin 2>&1; rm -f cuda-park.bin' > "$W/lout" 2>&1
     nv=0; ssh $SSHO "$LH" 'nvidia-smi -L' 2>/dev/null | grep -q '^GPU ' && nv=1
