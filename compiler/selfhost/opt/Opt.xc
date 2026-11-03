@@ -416,6 +416,12 @@
         self.gpuGlobals(m);
         if (stopHere(String.withCString("gpu-globals")))
             return;
+        // Before dead-function elimination, so a block whose site's branch
+        // goes takes its functions with it.
+        if (_level >= (u32)1)
+            self.constBranches(m);
+        if (stopHere(String.withCString("const-branches")))
+            return;
         if (_level >= (u32)1)
             deadFunctionElim(m);
         if (stopHere(String.withCString("dead-function-elim")))

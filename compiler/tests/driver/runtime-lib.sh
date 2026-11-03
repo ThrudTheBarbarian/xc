@@ -3,7 +3,7 @@
 # runtime, prebuilt per target (make runtime-libs), which every program links.
 #
 #   1. Both compilers build the same libRuntime from Par.xc (--emit-runtime).
-#   2. A lifted loop, a written par block and a plain program each link the
+#   2. A lifted loop, a written par block and plain programs each link the
 #      tree's libRuntime and print what a --no-runtime-lib build of the same
 #      source prints; the lifted one compiles in under half the time.
 #   3. A link that brings an object (-Wl,x.o) keeps its runtime its own.
@@ -43,16 +43,31 @@ if [ -f "$W/xcc/libRuntime.$EXT" ] && [ -f "$W/xcc-xc/libRuntime.$EXT" ] \
 fi
 
 # 2. Programs against the tree's library, and the same built without it.
-for f in vec_map_iota par_device_default addr_of_ivar; do
-    s=$(ms); "$XC" -q -O2 -H . -o "$W/$f.lib" tests/fixtures/$f.xc || { echo "FAIL runtime-lib: $f does not build"; fail=1; continue; }
+# lifted: a loop --par-style=auto makes a block of (the fixtures' loops are
+# small enough to stay loops).
+cat > "$W/lifted.xc" <<'EOF'
+#import "Stdio.xc"
+#define N 1048576
+float a[N];
+i32 main(void)
+    {
+    for (u32 i = (u32)0; i < (u32)N; i++)
+        a[i] = (float)i * 0.5f;
+    Stdio.printf("%.1f\n", (double)a[N - 1]);
+    return 0;
+    }
+EOF
+for f in lifted vec_map_iota par_device_default addr_of_ivar; do
+    src=tests/fixtures/$f.xc; [ "$f" = lifted ] && src=$W/lifted.xc
+    s=$(ms); "$XC" -q -O2 -H . -o "$W/$f.lib" "$src" || { echo "FAIL runtime-lib: $f does not build"; fail=1; continue; }
     tl=$(( $(ms) - s ))
-    s=$(ms); "$XC" -q -O2 -H . --no-runtime-lib -o "$W/$f.src" tests/fixtures/$f.xc || { echo "FAIL runtime-lib: $f --no-runtime-lib"; fail=1; continue; }
+    s=$(ms); "$XC" -q -O2 -H . --no-runtime-lib -o "$W/$f.src" "$src" || { echo "FAIL runtime-lib: $f --no-runtime-lib"; fail=1; continue; }
     ts=$(( $(ms) - s ))
     [ "$(needs "$W/$f.lib")" -ge 1 ] || { echo "FAIL runtime-lib: $f does not link libRuntime"; fail=1; }
     [ "$(needs "$W/$f.src")" = 0 ] || { echo "FAIL runtime-lib: $f --no-runtime-lib links libRuntime"; fail=1; }
     a=$(cd /tmp && XC_PAR_THREADS=2 "$W/$f.lib" 2>&1); b=$(XC_PAR_THREADS=2 "$W/$f.src" 2>&1)
     [ "$a" = "$b" ] || { echo "FAIL runtime-lib: $f prints '$a' with libRuntime, '$b' without"; fail=1; }
-    if [ "$f" = vec_map_iota ] && [ $(( tl * 2 )) -ge "$ts" ]; then
+    if [ "$f" = lifted ] && [ $(( tl * 2 )) -ge "$ts" ]; then
         echo "FAIL runtime-lib: the lifted loop took $tl ms with libRuntime, $ts ms without"; fail=1
     fi
 done

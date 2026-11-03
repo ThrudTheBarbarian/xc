@@ -72,6 +72,9 @@
     [p addPass:gpuGlobals];
     if (level >= 1)
         {
+        // Before dead-function elimination, so a block whose site's branch
+        // goes takes its functions with it.
+        [p addPass:[[XTIROptConstBranches alloc] init]];
         [p addPass:[[XTIROptDeadFunctionElim alloc] init]];
         // Canonicalise a library sqrt call → the FSqrt op, so the backend
         // instruction-selects it (fsqrt/vsqrt) instead of name-matching the call.

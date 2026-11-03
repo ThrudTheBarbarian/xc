@@ -132,6 +132,108 @@
             self.errorAtNode(msg, (Node*)_classDecls.get((Hashable*)cls));
             return;
             }
+        self.parResolveKept();
+        }
+
+    // Each `Par.kept(n)` the parser put at a lifted loop's site becomes the
+    // answer: true where block n stays a block, false where par-check demoted
+    // it, so the branch not taken is dead code and goes. The call's memory
+    // result is its memory input. As the reference.
+    final void parResolveKept(void)
+        {
+        for (u32 fi = (u32)0; fi < _m.funcs().count(); fi = fi + (u32)1)
+            {
+            IRFunc* f = (IRFunc*)_m.funcs().get(fi);
+            for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)f.blocks().get(b);
+                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                    {
+                    IRInsn* c = (IRInsn*)bb.insns().get(i);
+                    if (!c.op().equals(String.withCString("Call")) || c.ops().count() != (u32)3)
+                        continue;
+                    IROperand* callee = (IROperand*)c.ops().get((u32)0);
+                    if (callee.kind() != (u8)OPK_SYM || !callee.name().equals(String.withCString("Par$kept")))
+                        continue;
+                    i64 n = parConstOperand(f, (IROperand*)c.ops().get((u32)1));
+                    if (n < (i64)0)
+                        continue;
+                    String* cls = String.withCString("ParImpl$");
+                    cls.append(String.withI64(n));
+                    bool keep = _parSerial == (Set*)0 || !_parSerial.contains((Hashable*)cls);
+                    IRInsn* k = IRInsn.with(String.withCString("Const"));
+                    k.add(IROperand.immI(keep ? (i64)1 : (i64)0, String.withCString("Bool")));
+                    k.setRes(c.res());
+                    if (c.hasDbg())
+                        k.setDbg(c.dbgFile(), c.dbgLine(), c.dbgCol());
+                    bb.insns().set(i, (Object*)k);
+                    if (c.memRes() != (IRValue*)0)
+                        parRewriteUses(f, c.memRes(), (IROperand*)c.ops().get((u32)2));
+                    }
+                }
+            }
+        }
+
+    // An integer operand's value: an immediate, or a Const through any
+    // width changes. -1 when it is not one.
+    final i64 parConstOperand(IRFunc* f, IROperand* o)
+        {
+        for (u32 depth = (u32)0; depth < (u32)8; depth = depth + (u32)1)
+            {
+            if (o.kind() == (u8)OPK_IMMI)
+                return o.imm();
+            if (o.kind() != (u8)OPK_USE)
+                return (i64)-1;
+            IRInsn* d = parDefOf(f, o.val());
+            if (d == (IRInsn*)0 || d.ops().count() != (u32)1)
+                return (i64)-1;
+            String* op = d.op();
+            if (!op.equals(String.withCString("Const")) && !op.equals(String.withCString("ZExt"))
+                && !op.equals(String.withCString("SExt")) && !op.equals(String.withCString("Trunc")))
+                return (i64)-1;
+            o = (IROperand*)d.ops().get((u32)0);
+            }
+        return (i64)-1;
+        }
+
+    final IRInsn* parDefOf(IRFunc* f, IRValue* v)
+        {
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* d = (IRInsn*)bb.insns().get(i);
+                if (d.res() == v)
+                    return d;
+                }
+            }
+        return (IRInsn*)0;
+        }
+
+    // Every use of `old` in f becomes `to`.
+    final void parRewriteUses(IRFunc* f, IRValue* old, IROperand* to)
+        {
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                parReplaceUse((IRInsn*)bb.phis().get(i), old, to);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                parReplaceUse((IRInsn*)bb.insns().get(i), old, to);
+            if (bb.term() != (IRInsn*)0)
+                parReplaceUse(bb.term(), old, to);
+            }
+        }
+
+    final void parReplaceUse(IRInsn* n, IRValue* old, IROperand* to)
+        {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && o.val() == old)
+                n.ops().set(k, (Object*)to);
+            }
         }
 
     // Whether block <n> (its class ParImpl$<n>) is one --par-style=auto made from a

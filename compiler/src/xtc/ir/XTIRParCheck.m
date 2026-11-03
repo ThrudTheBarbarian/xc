@@ -139,6 +139,94 @@ static NSString* _Nullable unlocatedGlobal(XTIRFunction* run, XTIRModule* runMod
 
 // A grid's constant width and height for the block being checked (its
 // placeholder's `gw=`/`gh=` words), read by readGridWords: below.
+// An integer operand's value: an immediate, or a Const through any width
+// changes. -1 when it is not one. As the port's parConstOperand.
+static int64_t parConstOperand(XTIROperand* o, NSDictionary<NSNumber*, XTIRInsn*>* defs)
+    {
+    for (int depth = 0; depth < 8; depth++)
+        {
+        if (o.kind == XTIROperandKindImmI)
+            return o.intValue;
+        if (o.kind != XTIROperandKindUse)
+            return -1;
+        XTIRInsn* d = defs[@(o.valueId)];
+        if (!d || d.operands.count != 1)
+            return -1;
+        if (d.opcode != XTIROpConst && d.opcode != XTIROpZExt && d.opcode != XTIROpSExt && d.opcode != XTIROpTrunc)
+            return -1;
+        o = d.operands[0];
+        }
+    return -1;
+    }
+
+// Every use of value `old` in fn becomes `to`.
+static void parRewriteUses(XTIRFunction* fn, XTIRValueId old, XTIROperand* to)
+    {
+    void (^fix)(XTIRInsn*) = ^(XTIRInsn* n) {
+      BOOL hit = NO;
+      NSMutableArray<XTIROperand*>* ops = [NSMutableArray arrayWithCapacity:n.operands.count];
+      for (XTIROperand* o in n.operands)
+          {
+          BOOL use = o.kind == XTIROperandKindUse && o.valueId == old;
+          hit = hit || use;
+          [ops addObject:use ? to : o];
+          }
+      if (hit)
+          [n replaceOperands:ops];
+    };
+    for (XTIRBlock* b in fn.blocks)
+        {
+        for (XTIRInsn* n in b.phiNodes)
+            fix(n);
+        for (XTIRInsn* n in b.instructions)
+            fix(n);
+        if (b.terminator)
+            fix(b.terminator);
+        }
+    }
+
+// Each `Par.kept(n)` the parser put at a lifted loop's site becomes the
+// answer: true where block n stays a block, false where par-check demoted it,
+// so the branch not taken is dead code and goes. The call's memory result is
+// its memory input. As the port's parResolveKept.
+static void parResolveKept(XTIRModule* module, NSSet<NSString*>* serial)
+    {
+    for (XTIRFunction* fn in module.functions)
+        {
+        NSMutableDictionary<NSNumber*, XTIRInsn*>* defs = nil;
+        for (XTIRBlock* b in fn.blocks)
+            for (NSUInteger i = 0; i < b.instructions.count; i++)
+                {
+                XTIRInsn* c = b.instructions[i];
+                if (c.opcode != XTIROpCall || c.operands.count != 3 || c.operands[0].kind != XTIROperandKindSym)
+                    continue;
+                if (![[module symbolForId:c.operands[0].symbolId].name isEqualToString:@"Par$kept"])
+                    continue;
+                if (!defs)
+                    {
+                    defs = [NSMutableDictionary dictionary];
+                    for (XTIRBlock* db in fn.blocks)
+                        for (XTIRInsn* d in db.instructions)
+                            if (d.result)
+                                defs[@(d.result.valueId)] = d;
+                    }
+                int64_t n = parConstOperand(c.operands[1], defs);
+                if (n < 0)
+                    continue;
+                BOOL keep = ![serial containsObject:[NSString stringWithFormat:@"ParImpl$%lld", n]];
+                XTIRInsn* k = [[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                        result:c.result
+                                                      operands:@[ [XTIROperand immIWithType:[XTIRType boolType] value:keep ? 1 : 0] ]
+                                                        dbgLoc:c.dbgLoc];
+                b.instructions[i] = k;
+                if (c.result)
+                    defs[@(c.result.valueId)] = k;
+                if (c.memoryResult)
+                    parRewriteUses(fn, c.memoryResult.valueId, c.operands[2]);
+                }
+        }
+    }
+
 static int64_t gParGridW = 0;
 static int64_t gParGridH = 0;
 
@@ -866,7 +954,10 @@ static BOOL gEmitsWGSL = NO;
         [diag emitError:msg at:decl.location];
         }
     if (ok)
+        {
+        parResolveKept(module, serial);
         [self fillSourcesIn:module classDecls:classDecls diagnostics:diag serial:serial];
+        }
     return ok;
     }
 

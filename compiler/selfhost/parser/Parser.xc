@@ -2801,6 +2801,36 @@ class Parser
         return t;
     }
 
+    // A loop threads cannot pay for: a constant count of under 65536
+    // iterations whose tokens (from..to) hold no loop, goto, `new` or call.
+    // Waking the threads costs more than the work (4096 element stores took
+    // 923 us as a block, a few as a loop), and the block's code in the
+    // function crowds the loops after it. As the reference.
+    bool parAutoSmall(Node* loop, u32 from, u32 to)
+    {
+        Node* iv = (Node*)0;
+        Node* cond = (Node*)0;
+        if (!Parser.parAutoAscending(loop, &iv, &cond)) return false;
+        i64 lo = Parser.parAutoConst(iv.kid((u32)0));
+        i64 hi = Parser.parAutoConst(cond.kid((u32)1));
+        if (lo < (i64)0 || hi < (i64)0 || hi - lo >= (i64)65536) return false;
+        // The `for` itself is the first token.
+        for (u32 i = from + (u32)1; i < to; i = i + (u32)1) {
+            u16 t = parTokType(i);
+            if (t == (u16)tokFor || t == (u16)tokWhile || t == (u16)tokGoto || t == (u16)tokNew) return false;
+            if (t == (u16)tokIdentifier && parTokType(i + (u32)1) == (u16)tokLParen) return false;
+        }
+        return true;
+    }
+
+    // A constant bound (literals, casts, + - *): its value, or -1.
+    static i64 parAutoConst(Node* e)
+    {
+        bool ok = false;
+        i64 v = Parser.parFoldConstant(e, &ok);
+        return ok && v >= (i64)0 ? v : (i64)-1;
+    }
+
     Node* parAutoFor(void)
     {
         Array* reds = new Array();
@@ -2818,8 +2848,22 @@ class Parser
             parGridEnter("loops", false);
             return plain;
         }
+        // The loop as written first, as --par-style=cpu parses it (nothing in
+        // it lifted): the site falls back to it when par-check demotes the
+        // block, and a small loop stays that loop. Then the same tokens
+        // again, as the block. As the reference.
+        u32 forPos = _pos;
+        parGridEnter("loops", true);
+        _loopDepth = _loopDepth + (u32)1;
+        Node* plain = parseFor();
+        _loopDepth = _loopDepth - (u32)1;
+        parGridEnter("loops", false);
+        if (plain == (Node*)0 || parAutoSmall(plain, forPos, _pos))
+            return plain;
+        _pos = forPos;
         Token* forTok = cur();
         Map* frame = new Map();
+        frame.set((Hashable*)String.withCString("plain"), (Object*)plain);
         frame.set((Hashable*)String.withCString("depth"), (Object*)Number.with(_blkScopes.count()));
         frame.set((Hashable*)String.withCString("names"), (Object*)new Array());
         frame.set((Hashable*)String.withCString("types"), (Object*)new Map());
@@ -4760,6 +4804,16 @@ class Parser
         pv.append(String.withU32(counter));
         Node* site = mk((u16)nkBlock);
         for (u32 i = (u32)0; i < gridDecls.count(); i = i + (u32)1) site.add((Node*)gridDecls.get(i));
+        // A loop --par-style made a block of keeps the loop as written beside
+        // it: the site runs `if (Par.kept(n)) { the block } else { the loop }`,
+        // and par-check, which decides, puts its answer in place of the call,
+        // so a demoted block costs nothing and its loop is built as
+        // --par-style=cpu builds it. A grid of more points than its u32 index
+        // counts runs the loop too. As the reference.
+        Node* plain = (Node*)frame.get((Hashable*)String.withCString("plain"));
+        Node* outer = site;
+        if (plain != (Node*)0)
+            site = mk((u16)nkBlock);
         Node* pd = mkNamed((u16)nkVariableDecl, pv);
         pd.setOp(implPtr);
         Node* nw = mkNamed((u16)nkNew, implName);
@@ -4802,7 +4856,27 @@ class Parser
             if (parIdem(r.op())) site.add(parAssign(parIdent(r.name()), parMember(pv, Parser.parFieldOf(r.name()))));
             else site.add(parFold(r.op(), parIdent(r.name()), parIdent(r.name()), parMember(pv, Parser.parFieldOf(r.name()))));
         }
-        return site;
+        if (plain == (Node*)0)
+            return site;
+        Node* kept = mkNamed((u16)nkMethodCall, String.withCString("kept"));
+        kept.add(parIdent(String.withCString("Par")));
+        kept.add(parCast(String.withCString("u32"), parInt((i64)counter)));
+        kept.setNum((i64)1);
+        Array* grid = (Array*)frame.get((Hashable*)String.withCString("grid"));
+        if (grid != (Array*)0) {
+            String* i64T = String.withCString("i64");
+            Node* points = parBin("*", parCast(i64T, parIdent(String.withCString("par$w"))),
+                                  parCast(i64T, parIdent(String.withCString("par$h"))));
+            if (grid.count() == (u32)3)
+                points = parBin("*", points, parCast(i64T, parIdent(String.withCString("par$d"))));
+            kept = parBin("&&", kept, parBin("<=", points, parInt((i64)4294967295)));
+        }
+        Node* pick = mk((u16)nkIf);
+        pick.add(kept);
+        pick.add(site);
+        pick.add(plain);
+        outer.add(pick);
+        return outer;
     }
 
     Node* parseStatementInner(void)

@@ -225,3 +225,174 @@ static NSArray<XTIRInsn*>* allInsns(XTIRBlock* b)
     }
 
 @end
+
+@implementation XTIROptConstBranches
+
+- (NSString*)passName
+    {
+    return @"const-branches";
+    }
+- (NSInteger)minOptLevel
+    {
+    return 1;
+    }
+
+- (BOOL)runOnModule:(XTIRModule*)mod
+             errors:(NSMutableArray<NSString*>* _Nullable* _Nullable)outErrors
+    {
+    (void)outErrors;
+    XTIROptBlockMerge* bm = [[XTIROptBlockMerge alloc] init];
+    for (XTIRFunction* fn in mod.functions)
+        while ([self foldOnce:fn])
+            {
+            [self dropUnreachable:fn];
+            [bm pruneStaleIncomings:fn];
+            }
+    return YES;
+    }
+
+- (BOOL)foldOnce:(XTIRFunction*)fn
+    {
+    BOOL changed = NO;
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* defs = nil;
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        XTIRInsn* t = bb.terminator;
+        if (!t || t.opcode != XTIROpCondBranch || t.operands.count != 3)
+            continue;
+        XTIROperand* c = t.operands[0];
+        int64_t k = -1;
+        if (c.kind == XTIROperandKindImmI)
+            k = c.intValue;
+        else if (c.kind == XTIROperandKindUse)
+            {
+            if (!defs)
+                {
+                defs = [NSMutableDictionary dictionary];
+                for (XTIRBlock* db in fn.blocks)
+                    {
+                    for (XTIRInsn* d in db.phiNodes)
+                        if (d.result)
+                            defs[@(d.result.valueId)] = d;
+                    for (XTIRInsn* d in db.instructions)
+                        if (d.result)
+                            defs[@(d.result.valueId)] = d;
+                    }
+                }
+            XTIRInsn* d = defs[@(c.valueId)];
+            if (d && d.opcode == XTIROpConst && d.operands.count == 1 && d.operands[0].kind == XTIROperandKindImmI)
+                k = d.operands[0].intValue;
+            }
+        if (k < 0)
+            continue;
+        XTIRInsn* br = [[XTIRInsn alloc] initWithOpcode:XTIROpBranch result:nil
+                                               operands:@[ t.operands[k != 0 ? 1 : 2] ] dbgLoc:t.dbgLoc];
+        [bb resetTerminator];
+        [bb setTerminator:br];
+        changed = YES;
+        }
+    return changed;
+    }
+
+// The blocks a path from the entry reaches, in the function's order.
+- (void)dropUnreachable:(XTIRFunction*)fn
+    {
+    if (fn.blocks.count == 0)
+        return;
+    NSHashTable<XTIRBlock*>* seen = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
+    NSMutableArray<XTIRBlock*>* work = [NSMutableArray arrayWithObject:fn.blocks[0]];
+    [seen addObject:fn.blocks[0]];
+    while (work.count)
+        {
+        XTIRBlock* bb = work.lastObject;
+        [work removeLastObject];
+        for (XTIROperand* o in bb.terminator.operands)
+            {
+            if (o.kind != XTIROperandKindBlock || !o.blockRef || [seen containsObject:o.blockRef])
+                continue;
+            [seen addObject:o.blockRef];
+            [work addObject:o.blockRef];
+            }
+        }
+    // The memory tokens the dropped blocks made. Lowering does not merge
+    // memory at a join (after `if (c) A else B` it carries on from B's), so a
+    // kept block may name one: it takes the last token on its own path
+    // instead (memBefore:).
+    NSMutableSet<NSNumber*>* dead = [NSMutableSet set];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        if ([seen containsObject:bb])
+            continue;
+        for (XTIRInsn* x in bb.phiNodes)
+            if (x.memoryResult)
+                [dead addObject:@(x.memoryResult.valueId)];
+        for (XTIRInsn* x in bb.instructions)
+            if (x.memoryResult)
+                [dead addObject:@(x.memoryResult.valueId)];
+        }
+    for (NSUInteger k = fn.blocks.count; k > 1; k--)
+        if (![seen containsObject:fn.blocks[k - 1]])
+            [fn.blocks removeObjectAtIndex:k - 1];
+    if (dead.count == 0)
+        return;
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        XTIRValueId cur = 0;
+        BOOL haveCur = NO;
+        NSMutableArray<XTIRInsn*>* xs = [NSMutableArray arrayWithArray:bb.instructions];
+        if (bb.terminator)
+            [xs addObject:bb.terminator];
+        for (XTIRInsn* x in xs)
+            {
+            NSMutableArray<XTIROperand*>* ops = [x.operands mutableCopy];
+            BOOL hit = NO;
+            for (NSUInteger q = 0; q < ops.count; q++)
+                {
+                if (ops[q].kind != XTIROperandKindUse || ![dead containsObject:@(ops[q].valueId)])
+                    continue;
+                ops[q] = [XTIROperand useWithValueId:haveCur ? cur : [self memBefore:bb in:fn depth:0]];
+                hit = YES;
+                }
+            if (hit)
+                [x replaceOperands:ops];
+            if (x.memoryResult)
+                {
+                cur = x.memoryResult.valueId;
+                haveCur = YES;
+                }
+            }
+        }
+    }
+
+// The memory token in effect where block bb starts: the last one its one
+// predecessor made (or had in effect), else the function's own.
+- (XTIRValueId)memBefore:(XTIRBlock*)bb in:(XTIRFunction*)fn depth:(NSUInteger)depth
+    {
+    XTIRBlock* pred = nil;
+    NSUInteger preds = 0;
+    for (NSUInteger j = 0; j < fn.blocks.count && depth < 64; j++)
+        {
+        XTIRBlock* p = fn.blocks[j];
+        for (XTIROperand* o in p.terminator.operands)
+            if (o.kind == XTIROperandKindBlock && o.blockRef == bb)
+                {
+                if (pred != p)
+                    preds++;
+                pred = p;
+                break;
+                }
+        }
+    if (preds == 1)
+        {
+        for (NSUInteger i = pred.instructions.count; i > 0; i--)
+            if (pred.instructions[i - 1].memoryResult)
+                return pred.instructions[i - 1].memoryResult.valueId;
+        for (XTIRInsn* x in pred.phiNodes)
+            if (x.memoryResult)
+                return x.memoryResult.valueId;
+        return [self memBefore:pred in:fn depth:depth + 1];
+        }
+    return [fn valuesInPrintOrder][fn.paramTypes.count - 1].valueId;
+    }
+
+@end

@@ -4223,6 +4223,66 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
     return YES;
     }
 
+// A constant bound (literals, casts, + - *): its value, or -1. As the port's
+// parAutoConst, which folds as parFoldConstant does.
+static int64_t parAutoFold(XTASTNode* e, BOOL* ok)
+    {
+    if ([e isKindOfClass:[XTLiteralIntNode class]])
+        {
+        *ok = YES;
+        return ((XTLiteralIntNode*)e).intValue;
+        }
+    if ([e isKindOfClass:[XTCastExprNode class]])
+        return parAutoFold(((XTCastExprNode*)e).operand, ok);
+    if ([e isKindOfClass:[XTBinaryExprNode class]])
+        {
+        XTBinaryExprNode* b = (XTBinaryExprNode*)e;
+        BOOL okl = NO, okr = NO;
+        int64_t l = parAutoFold(b.left, &okl);
+        int64_t r = parAutoFold(b.right, &okr);
+        if (okl && okr && (b.op == XTBinaryOpAdd || b.op == XTBinaryOpSub || b.op == XTBinaryOpMul))
+            {
+            *ok = YES;
+            return b.op == XTBinaryOpAdd ? l + r : b.op == XTBinaryOpSub ? l - r : l * r;
+            }
+        }
+    *ok = NO;
+    return 0;
+    }
+static int64_t parAutoConst(XTASTNode* e)
+    {
+    BOOL ok = NO;
+    int64_t v = parAutoFold(e, &ok);
+    return ok && v >= 0 ? v : -1;
+    }
+
+// A loop threads cannot pay for: a constant count of under 65536 iterations
+// whose tokens (from..to) hold no loop, goto, `new` or call. Waking the
+// threads costs more than the work (4096 element stores took 923 us as a
+// block, a few as a loop), and the block's code in the function crowds the
+// loops after it. As the port.
+- (BOOL)parAutoSmall:(XTASTNode*)loop from:(NSUInteger)from to:(NSUInteger)to
+    {
+    XTVariableDeclNode* iv = nil;
+    XTBinaryExprNode* cond = nil;
+    if (!parAutoAscending(loop, &iv, &cond))
+        return NO;
+    int64_t lo = parAutoConst(iv.initialiser);
+    int64_t hi = parAutoConst(cond.right);
+    if (lo < 0 || hi < 0 || hi - lo >= 65536)
+        return NO;
+    // The `for` itself is the first token.
+    for (NSUInteger i = from + 1; i < to && i < _tokens.count; i++)
+        {
+        XTTokenType t = _tokens[i].type;
+        if (t == XTTokenFor || t == XTTokenWhile || t == XTTokenGoto || t == XTTokenNew)
+            return NO;
+        if (t == XTTokenIdentifier && i + 1 < _tokens.count && _tokens[i + 1].type == XTTokenLParen)
+            return NO;
+        }
+    return YES;
+    }
+
 - (nullable XTASTNode*)parAutoFor
     {
     NSMutableArray<NSArray<NSString*>*>* reds = [NSMutableArray array];
@@ -4244,8 +4304,22 @@ static XTForCStyleNode* _Nullable parAutoAscending(XTASTNode* node, XTVariableDe
         [self parGridLoop:-1];
         return plain;
         }
+    // The loop as written first, as --par-style=cpu parses it (nothing in it
+    // lifted): the site falls back to it when par-check demotes the block,
+    // and a small loop stays that loop. Then the same tokens again, as the
+    // block. As the port.
+    NSUInteger forPos = _pos;
+    [self parGridLoop:1];
+    [self parAutoLoop:1];
+    XTASTNode* plain = [self parseFor];
+    [self parAutoLoop:-1];
+    [self parGridLoop:-1];
+    if (!plain || [self parAutoSmall:plain from:forPos to:_pos])
+        return plain;
+    _pos = forPos;
     XTSourceLocation* loc = [self currentLocation];
     NSMutableDictionary* frame = [NSMutableDictionary dictionary];
+    frame[@"plain"] = plain;
     frame[@"depth"] = @([self blkScopes].count);
     frame[@"names"] = [NSMutableArray array];
     frame[@"types"] = [NSMutableDictionary dictionary];

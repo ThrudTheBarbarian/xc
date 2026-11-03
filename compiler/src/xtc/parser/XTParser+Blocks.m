@@ -2027,6 +2027,16 @@ static NSString* parRootName(XTASTNode* n)
     // ── the site ──
     NSString* pv = [NSString stringWithFormat:@"$par%lu", (unsigned long)counter];
     NSMutableArray<XTASTNode*>* site = [NSMutableArray arrayWithArray:gridDecls];
+    // A loop --par-style made a block of keeps the loop as written beside it:
+    // the site runs `if (Par.kept(n)) { the block } else { the loop }`, and
+    // par-check, which decides, puts its answer in place of the call, so a
+    // demoted block costs nothing and its loop is built as --par-style=cpu
+    // builds it. A grid of more points than its u32 index counts runs the
+    // loop too. As the port.
+    XTASTNode* plain = frame[@"plain"];
+    NSMutableArray<XTASTNode*>* outer = site;
+    if (plain)
+        site = [NSMutableArray array];
     [site addObject:[[XTVariableDeclNode alloc] initWithName:pv type:implPtr
                                                  initialiser:[[XTNewExprNode alloc] initWithClassName:implName
                                                                                             arguments:@[]
@@ -2066,7 +2076,28 @@ static NSString* parRootName(XTASTNode* n)
         [site addObject:idem ? assign(ident(r[1]), member(pv, fieldOf(r[1])))
                              : fold(op, ident(r[1]), ident(r[1]), member(pv, fieldOf(r[1])))];
         }
-    return [[XTBlockNode alloc] initWithStatements:site location:loc];
+    if (!plain)
+        return [[XTBlockNode alloc] initWithStatements:site location:loc];
+    XTASTNode* kept = [[XTMethodCallExprNode alloc] initWithReceiver:ident(@"Par")
+                                                          methodName:@"kept"
+                                                           arguments:@[ cast([self.typeTable typeForName:@"u32"],
+                                                                             [[XTLiteralIntNode alloc] initWithValue:(int64_t)counter location:loc]) ]
+                                                            location:loc];
+    NSArray<XTASTNode*>* gridSizes = frame[@"grid"];
+    if (gridSizes)
+        {
+        XTASTNode* points = [[XTBinaryExprNode alloc] initWithOp:XTBinaryOpMul left:cast(i64T, ident(@"par$w"))
+                                                           right:cast(i64T, ident(@"par$h")) location:loc];
+        if (gridSizes.count == 3)
+            points = [[XTBinaryExprNode alloc] initWithOp:XTBinaryOpMul left:points right:cast(i64T, ident(@"par$d")) location:loc];
+        XTASTNode* fits = [[XTBinaryExprNode alloc] initWithOp:XTBinaryOpLe left:points
+                                                         right:[[XTLiteralIntNode alloc] initWithValue:4294967295LL location:loc]
+                                                      location:loc];
+        kept = [[XTBinaryExprNode alloc] initWithOp:XTBinaryOpLogAnd left:kept right:fits location:loc];
+        }
+    XTBlockNode* blockSide = [[XTBlockNode alloc] initWithStatements:site location:loc];
+    [outer addObject:[[XTIfNode alloc] initWithCondition:kept thenBlock:blockSide elseBlock:plain location:loc]];
+    return [[XTBlockNode alloc] initWithStatements:outer location:loc];
     }
 
 @end

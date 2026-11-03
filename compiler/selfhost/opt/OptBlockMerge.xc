@@ -45,6 +45,176 @@
             }
         }
 
+    // A CondBranch on a constant becomes a Branch, and the blocks no path from
+    // the entry reaches any more go, with their phi incomings; then again,
+    // for a branch on a phi those incomings left one value. `Par.kept(n)`,
+    // which par-check answers, is what makes these: the side of a lifted
+    // loop's site it does not take (the block, or the loop as written)
+    // must not stay in the function. As the reference.
+    final void constBranches(IRModule* m)
+        {
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            while (cbFoldOnce(fn))
+                {
+                cbDropUnreachable(fn);
+                pruneStaleIncomings(fn);
+                }
+            }
+        }
+
+    final bool cbFoldOnce(IRFunc* fn)
+        {
+        bool changed = false;
+        Map* defOf = (Map*)0;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            IRInsn* t = bb.term();
+            if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() != (u32)3)
+                continue;
+            IROperand* c = (IROperand*)t.ops().get((u32)0);
+            i64 k = (i64)-1;
+            if (c.kind() == (u8)OPK_IMMI)
+                k = c.imm();
+            else if (c.kind() == (u8)OPK_USE)
+                {
+                if (defOf == (Map*)0)
+                    defOf = self.defMapAll(fn);
+                IRInsn* d = (IRInsn*)defOf.get((Hashable*)c.val());
+                if (d != (IRInsn*)0 && d.op().equals(String.withCString("Const")) && d.ops().count() == (u32)1
+                    && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_IMMI)
+                    k = ((IROperand*)d.ops().get((u32)0)).imm();
+                }
+            if (k < (i64)0)
+                continue;
+            IRInsn* br = IRInsn.with(String.withCString("Branch"));
+            br.copyDbg(t);
+            br.add((IROperand*)t.ops().get(k != (i64)0 ? (u32)1 : (u32)2));
+            bb.setTerm(br);
+            changed = true;
+            }
+        return changed;
+        }
+
+    // The blocks a path from the entry reaches, in the function's order.
+    final void cbDropUnreachable(IRFunc* fn)
+        {
+        if (fn.blocks().count() == (u32)0)
+            return;
+        Set* seen = new Set();
+        Array* work = new Array();
+        IRBlock* entry = (IRBlock*)fn.blocks().get((u32)0);
+        seen.add((Hashable*)entry);
+        work.add((Object*)entry);
+        while (work.count() > (u32)0)
+            {
+            IRBlock* bb = (IRBlock*)work.get(work.count() - (u32)1);
+            work.removeAt(work.count() - (u32)1);
+            IRInsn* t = bb.term();
+            if (t == (IRInsn*)0)
+                continue;
+            for (u32 q = (u32)0; q < t.ops().count(); q = q + (u32)1)
+                {
+                IROperand* o = (IROperand*)t.ops().get(q);
+                if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0 || seen.contains((Hashable*)o.blk()))
+                    continue;
+                seen.add((Hashable*)o.blk());
+                work.add((Object*)o.blk());
+                }
+            }
+        // The memory tokens the dropped blocks made. Lowering does not merge
+        // memory at a join (after `if (c) A else B` it carries on from B's),
+        // so a kept block may name one: it takes the last token on its own
+        // path instead (cbMemBefore).
+        Set* dead = new Set();
+        for (u32 j = (u32)0; j < fn.blocks().count(); j = j + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(j);
+            if (seen.contains((Hashable*)bb))
+                continue;
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                if (((IRInsn*)bb.phis().get(i)).memRes() != (IRValue*)0)
+                    dead.add((Hashable*)((IRInsn*)bb.phis().get(i)).memRes());
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                if (((IRInsn*)bb.insns().get(i)).memRes() != (IRValue*)0)
+                    dead.add((Hashable*)((IRInsn*)bb.insns().get(i)).memRes());
+            }
+        u32 k = fn.blocks().count();
+        while (k > (u32)1)
+            {
+            k = k - (u32)1;
+            if (!seen.contains((Hashable*)fn.blocks().get(k)))
+                fn.blocks().removeAt(k);
+            }
+        if (dead.count() == (u32)0)
+            return;
+        for (u32 j = (u32)0; j < fn.blocks().count(); j = j + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(j);
+            IRValue* cur = (IRValue*)0;
+            for (u32 i = (u32)0; i <= bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* x = i < bb.insns().count() ? (IRInsn*)bb.insns().get(i) : bb.term();
+                if (x == (IRInsn*)0)
+                    continue;
+                for (u32 q = (u32)0; q < x.ops().count(); q = q + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)x.ops().get(q);
+                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0 || !dead.contains((Hashable*)o.val()))
+                        continue;
+                    IRValue* to = cur != (IRValue*)0 ? cur : cbMemBefore(fn, bb, (u32)0);
+                    x.ops().set(q, (Object*)IROperand.useVal(to));
+                    }
+                if (x.memRes() != (IRValue*)0)
+                    cur = x.memRes();
+                }
+            }
+        }
+
+    // The memory token in effect where block bb starts: the last one its one
+    // predecessor made (or had in effect), else the function's own.
+    final IRValue* cbMemBefore(IRFunc* fn, IRBlock* bb, u32 depth)
+        {
+        IRBlock* pred = (IRBlock*)0;
+        u32 preds = (u32)0;
+        for (u32 j = (u32)0; j < fn.blocks().count() && depth < (u32)64; j = j + (u32)1)
+            {
+            IRBlock* p = (IRBlock*)fn.blocks().get(j);
+            IRInsn* t = p.term();
+            if (t == (IRInsn*)0)
+                continue;
+            for (u32 q = (u32)0; q < t.ops().count(); q = q + (u32)1)
+                {
+                IROperand* o = (IROperand*)t.ops().get(q);
+                if (o.kind() == (u8)OPK_BLOCK && o.blk() == bb)
+                    {
+                    if (pred != p)
+                        preds = preds + (u32)1;
+                    pred = p;
+                    break;
+                    }
+                }
+            }
+        if (preds == (u32)1)
+            {
+            u32 i = pred.insns().count();
+            while (i > (u32)0)
+                {
+                i = i - (u32)1;
+                IRValue* mr = ((IRInsn*)pred.insns().get(i)).memRes();
+                if (mr != (IRValue*)0)
+                    return mr;
+                }
+            for (u32 i2 = (u32)0; i2 < pred.phis().count(); i2 = i2 + (u32)1)
+                if (((IRInsn*)pred.phis().get(i2)).memRes() != (IRValue*)0)
+                    return ((IRInsn*)pred.phis().get(i2)).memRes();
+            return cbMemBefore(fn, pred, depth + (u32)1);
+            }
+        return (IRValue*)fn.params().get(fn.params().count() - (u32)1);
+        }
+
     // Every block's count of references from an instruction or terminator —
     // anything but a phi's incoming list. One scan for all the blocks: counted
     // a block at a time (a scan of the function for each candidate) this was

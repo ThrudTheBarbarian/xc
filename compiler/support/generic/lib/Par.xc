@@ -317,6 +317,16 @@ class Par
 #endif
         }
 
+    // Whether the block --par-style made of a loop (ParImpl$<n>) runs as a
+    // block: the loop's site is `if (Par.kept(n)) <the block> else <the loop
+    // as written>`, and par-check, which decides, puts the answer in place of
+    // the call, so the branch it does not take is dead code. A build that
+    // leaves the call keeps the block, as before.
+    static bool kept(u32 n)
+        {
+        return true;
+        }
+
     // Run a block over [lo, hi), on the device chosen for it: the GPU or the
     // CPU, by XC_PAR, Par.device, or (auto) by measuring both (ParDevice.xc).
     // One run at a time drives the runtime: its device choice, the learned
