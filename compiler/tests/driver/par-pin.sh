@@ -13,6 +13,10 @@ W=$(mktemp -d /tmp/par-pin.XXXX)
 trap 'rm -rf "$W"' EXIT
 if [ "$(uname -s)" = Linux ]; then RUN() { bash -c "$1"; }; ARCH=""
 elif [ -n "${XTC_X86_64_HOST:-}" ]; then RUN() { ssh "$XTC_X86_64_HOST" "$1"; }; ARCH="-A x86_64"
+    # The Linux legs run this natively; from a Mac that cannot log in to the
+    # host (no key there), say so rather than fail on the copy.
+    ssh -o BatchMode=yes -o ConnectTimeout=10 "$XTC_X86_64_HOST" true 2>/dev/null \
+        || { echo "par-pin: skipped (cannot log in to $XTC_X86_64_HOST)"; exit 0; }
 else echo "par-pin: skipped (no Linux host)"; exit 0; fi
 "$XC" -q -H . -O2 $ARCH -o "$W/pin" tests/fixtures/par_pin_cpus.xc || { echo "FAIL par-pin: build"; exit 1; }
 R=/tmp/par-pin-$$
