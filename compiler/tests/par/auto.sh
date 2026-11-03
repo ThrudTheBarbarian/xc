@@ -159,21 +159,22 @@ grep -q "became a 'par' block" "$W/b6" && { echo "FAIL auto: a loop on an outer 
 # itself when a loop becomes a block (the build failed with "a 'par' block
 # needs its runtime" in 0.85), and only then — a program with nothing to wrap
 # does not carry the runtime.
+# (65536 items: a smaller constant loop that calls nothing stays a loop.)
 cat > "$W/noruntime.xc" <<'XC'
 #import "Stdio.xc"
+i32 a[65536];
 i32 main(void)
     {
-    i32 a[64];
-    for (i32 i = 0; i < 64; i = i + 1) a[i] = i;
+    for (i32 i = 0; i < 65536; i = i + 1) a[i] = i;
     i32 s = 0;
-    for (i32 i = 0; i < 64; i = i + 1) s = s + a[i];
+    for (i32 i = 0; i < 65536; i = i + 1) s = s + a[i];
     Stdio.printf("%ld\n", s);
     return 0;
     }
 XC
 "$XC" -q -H . -O2 --par-style=auto -Wpar-auto "$W/noruntime.xc" -o "$W/noruntime" >"$W/b7" 2>&1 || { echo "FAIL auto: --par-style=auto broke a program without the par runtime"; head -3 "$W/b7"; fail=1; }
 grep -q "became a 'par' block" "$W/b7" || { echo "FAIL auto: --par-style=auto did not import the runtime for a program without it"; fail=1; }
-[ -x "$W/noruntime" ] && [ "$("$W/noruntime")" = "2016" ] || { echo "FAIL auto: the no-runtime program's output"; fail=1; }
+[ -x "$W/noruntime" ] && [ "$("$W/noruntime")" = "2147450880" ] || { echo "FAIL auto: the no-runtime program's output"; fail=1; }
 cat > "$W/nothing.xc" <<'XC'
 #import "Stdio.xc"
 i32 main(void)
@@ -193,7 +194,7 @@ nm "$W/nothing" 2>/dev/null | grep -q 'ParChunk' && { echo "FAIL auto: a program
 cat > "$W/horner.xc" <<'XC'
 #import "Stdio.xc"
 #import "Par.xc"
-#define N 4096
+#define N 65536
 u64 xs[N];
 i32 main(void)
     {
