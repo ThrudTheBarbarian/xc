@@ -295,12 +295,26 @@ class ParLayout : Object
 // link from objects, and none at all in a program without a par block.
 void __xt_gpu_globals(void);
 bool gParGlobalsDone;
+// A program that links this runtime from libRuntime (2026-11-03) has its own
+// __xt_gpu_globals for its own arrays, which the library cannot name: the
+// program's main hands over its address first (the gpu-globals pass makes
+// that call). A plain function address, not a callback (which carries a
+// context too).
+typedef void parGlobalsFn_t(void);
+pointer gParProgramGlobals;
+void parRegisterGlobals(pointer fn)
+{
+    gParProgramGlobals = fn;
+}
 void parGlobals(void)
 {
     if (!gParGlobalsDone)
         {
         gParGlobalsDone = true;
         __xt_gpu_globals();
+        pointer g = gParProgramGlobals;
+        if (g != (pointer)0)
+            ((parGlobalsFn_t*)g)();
         }
 }
 // The start of the page-aligned heap block p points into, or 0 (rt.c).

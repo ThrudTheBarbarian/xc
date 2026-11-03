@@ -707,6 +707,8 @@ void resolveRuntimeLib(DriverOptions* d)
         String* t = (String*)li.get(i);
         if (t.hasSuffix(String.withCString(".o")) || t.hasSuffix(String.withCString(".a"))) return;
     }
+    // …and so does a C program: its xc half is linked as an object, with clang's.
+    if (d.fe().input() != (String*)0 && d.fe().input().hasSuffix(String.withCString(".c"))) return;
     String* dir = String.withString(root);
     dir.appendCString("/runtime-lib/");
     dir.append(d.targetRow().name());

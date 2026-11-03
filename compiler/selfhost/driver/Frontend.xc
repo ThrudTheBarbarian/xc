@@ -1792,10 +1792,12 @@ void injectClassNames(Node* program, FeOptions* o, Array* tokens, Array* ifaces,
             }
         if (imported.count() > (u32)0)
             {
-            body.appendCString("Object* o = (Object*)0;\n");
+            // The first library's answer is `o`'s first value: an initialiser
+            // overwritten at once was a dead store, warned in every program
+            // that imports libRuntime (2026-11-03). As the reference.
             for (u32 i = (u32)0; i < imported.count(); i = i + (u32)1)
                 {
-                body.appendCString("o = ");
+                body.appendCString(i == (u32)0 ? "Object* o = " : "o = ");
                 body.append((String*)imported.get(i));
                 body.appendCString("(name);\nif (o != (Object*)0) return o;\n");
                 }

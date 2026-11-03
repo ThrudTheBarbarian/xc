@@ -61,6 +61,7 @@
 // libRuntime: the member files taken in (absolute path -> name), the names an
 // imported library provides, and whether the offered runtime was taken.
 @property(nonatomic) NSMutableDictionary<NSString*, NSString*>* runtimeFiles;
+@property(nonatomic) NSMutableSet<NSString*>* runtimeSpellings;  // …both spellings, for ownDefines
 @property(nonatomic) NSMutableSet<NSString*>* provided;
 @property(nonatomic) BOOL runtimeTaken;
 // Libraries the current search found and passed over for their interface
@@ -103,6 +104,7 @@
         _mutableLibraryFiles = [NSMutableSet set];
         _stdlibDirs = @[];
         _runtimeFiles = [NSMutableDictionary dictionary];
+        _runtimeSpellings = [NSMutableSet set];
         _provided = [NSMutableSet set];
         }
     return self;
@@ -1774,6 +1776,8 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
                 if ([_runtimeMembers containsObject:nm])
                     {
                     _runtimeFiles[absPath] = nm;
+                    [_runtimeSpellings addObject:absPath];
+                    [_runtimeSpellings addObject:foundPath];
                     [_mutableLibraryFiles addObject:absPath];
                     [_mutableLibraryFiles addObject:foundPath];
                     break;
@@ -1926,7 +1930,9 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
     for (NSString* name in _macros)
         {
         NSString* f = _macroFiles[name];
-        if (!f.length || [f isEqualToString:@"<iface>"] || [_mutableLibraryFiles containsObject:f])
+        // libRuntime's own files are the module's: their macros go with it.
+        if (!f.length || [f isEqualToString:@"<iface>"]
+            || ([_mutableLibraryFiles containsObject:f] && ![_runtimeSpellings containsObject:f]))
             continue;
         XTMacroDefinition* d = _macros[name];
         NSMutableString* t = [NSMutableString stringWithString:name];

@@ -1253,18 +1253,38 @@
     //     or two different globals (pointers that may overlap need a check at
     //     run time, which is the next piece).
     // Anything else stays the serial outline (stages 1-2).
+    // A function symbol's return type: what follows `-> ` in its signature,
+    // or 0.
+    static String* ppSigRet(IRSymbol* s)
+        {
+        if (s == (IRSymbol*)0 || s.signature() == (String*)0)
+            return (String*)0;
+        String* g = s.signature();
+        u32 at = g.byteIndexOf(String.withCString("-> "));
+        if (at == String.notFound())
+            return (String*)0;
+        return g.substringFromByte(at + (u32)3).trimmed();
+        }
+
     final bool ppOutlinePar(IRModule* m, IRFunc* fn, LRCLoop* L, IRInsn* at, IRBlock* E,
                       Array* liveIns, IRValue* memIn, IRValue* memLast, Array* liveOuts)
         {
         if (_profile == (OptProfile*)0 || !_profile.ptr64())
             return ppNo("ppOutlinePar 1");
+        // The runtime in the program, or its declarations from libRuntime
+        // (2026-11-03): a method of an imported class is a symbol with its
+        // signature, not a function with a body; its return type is the
+        // signature's.
         IRFunc* makeF = self.funcNamed(m, String.withCString("ParFnChunk$make"));
         IRSymbol* baseVt = self.symNamed(m, String.withCString("ParFnChunk$vtbl"));
-        if (makeF == (IRFunc*)0)
+        String* makeRet = makeF != (IRFunc*)0 ? makeF.ret() : ppSigRet(self.symNamed(m, String.withCString("ParFnChunk$make")));
+        if (makeRet == (String*)0)
             return ppNo("no ParFnChunk.make");
-        if (funcNamed(m, String.withCString("ParFnChunk$runOn")) == (IRFunc*)0)
+        if (funcNamed(m, String.withCString("ParFnChunk$runOn")) == (IRFunc*)0
+            && symNamed(m, String.withCString("ParFnChunk$runOn")) == (IRSymbol*)0)
             return ppNo("no ParFnChunk.runOn");
-        if (funcNamed(m, String.withCString("ParFnChunk$ctx")) == (IRFunc*)0)
+        if (funcNamed(m, String.withCString("ParFnChunk$ctx")) == (IRFunc*)0
+            && symNamed(m, String.withCString("ParFnChunk$ctx")) == (IRSymbol*)0)
             return ppNo("no ParFnChunk.ctx");
         if (baseVt == (IRSymbol*)0 || baseVt.slots() == 0)
             return ppNo("no ParFnChunk vtable");
@@ -1494,7 +1514,7 @@
         String* recT = String.withFormat("Ptr(Agg(%u), unbanked)", m.addLayout(recL));
         _ppOutN = _ppOutN + (u32)1;
         String* stem = String.withFormat("ParOut$%u", _ppOutN);
-        String* objT = makeF.ret();
+        String* objT = makeRet;
         String* u8p = String.withCString("Ptr(U8, unbanked)");
         String* ivT = iv.res().ty();
 

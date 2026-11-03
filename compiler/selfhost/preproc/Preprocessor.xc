@@ -530,8 +530,9 @@ class IfFrame
             {
             String* name = (String*)names.get(i);
             String* f = (String*)_macroFiles.get((Hashable*)name);
+            // libRuntime's own files are the module's: their macros go with it.
             if (f == (String*)0 || f.byteLength() == (u32)0 || f.equals(String.withCString("<iface>"))
-                || lib.contains((Hashable*)f))
+                || (lib.contains((Hashable*)f) && !_runtimeFiles.contains((Hashable*)f)))
                 continue;
             MacroDef* d = (MacroDef*)_macros.get((Hashable*)name);
             String* t = String.withString(name);

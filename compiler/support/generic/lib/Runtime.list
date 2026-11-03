@@ -2,11 +2,15 @@
 # built once per target with `xcc --emit-runtime Par.xc` and linked
 # dynamically by every program for that target; a program then skips their
 # source. One name per line, as it appears in an #import.
+#
+# Not ParSoftFloat.xc: a GPU kernel inlines its functions' bodies (the
+# correctly rounded division and square root of an accuracy block), so a
+# program compiles it as source — it comes as one of the library's
+# stdImports.
 Par.xc
 ParDevice.xc
 ParWorker.xc
 ParMetal.xc
-ParSoftFloat.xc
 ParVulkan.xc
 ParCuda.xc
 ParRemote.xc

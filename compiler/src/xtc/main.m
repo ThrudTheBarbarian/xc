@@ -189,6 +189,8 @@ static NSString *runtimeLibFile(const char *argv0, XTCommandLineOptions *opts) {
     // which the rewrite of the program's text cannot reach. As the port.
     for (NSString *t in appendLinkerFlags(opts, NO))
         if ([t hasSuffix:@".o"] || [t hasSuffix:@".a"]) return nil;
+    // …and so does a C program: its xc half is linked as an object, with clang's.
+    if ([opts.inputFiles.firstObject hasSuffix:@".c"]) return nil;
     const char *e = getenv("XCC_NO_RUNTIME_LIB");
     if (e && !strcmp(e, "1")) return nil;
     NSString *support = resolveSupportRoot(argv0, opts);

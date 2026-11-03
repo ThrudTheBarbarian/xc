@@ -1011,9 +1011,15 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
             }
         if (imported.count)
             {
-            [body appendString:@"Object* o = (Object*)0;\n"];
+            // The first library's answer is `o`'s first value: an initialiser
+            // overwritten at once was a dead store, warned in every program
+            // that imports libRuntime (2026-11-03). As the port.
+            BOOL first = YES;
             for (NSString* t in imported)
-                [body appendFormat:@"o = %@(name);\nif (o != (Object*)0) return o;\n", t];
+                {
+                [body appendFormat:@"%@o = %@(name);\nif (o != (Object*)0) return o;\n", first ? @"Object* " : @"", t];
+                first = NO;
+                }
             }
         [body appendString:@"return (Object*)0;\n}\n"];
         uint32_t h = 2166136261u;

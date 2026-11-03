@@ -44,7 +44,20 @@
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             if (((IRFunc*)m.funcs().get(f)).name().equals(fnName))
                 return;
-        if (!declared)
+        // libRuntime (2026-11-03): a program whose par runtime is the
+        // library's has parRegisterGlobals as an import, not a body, and no
+        // declaration of its own. It defines the function for its own arrays
+        // and hands it to the runtime at the top of main, which the library
+        // cannot name. Only when it has arrays to register.
+        String* hook = String.withCString("parRegisterGlobals");
+        bool hookIn = false;
+        for (u32 i = (u32)0; i < m.syms().count() && !hookIn; i = i + (u32)1)
+            hookIn = ((IRSymbol*)m.syms().get(i)).name().equals(hook);
+        for (u32 f = (u32)0; f < m.funcs().count() && hookIn; f = f + (u32)1)
+            if (((IRFunc*)m.funcs().get(f)).name().equals(hook))
+                hookIn = false;
+        bool fromLib = hookIn && !declared;
+        if (!declared && !fromLib)
             return;
         Array* regs = new Array();
         for (u32 i = (u32)0; i < m.syms().count(); i = i + (u32)1)
@@ -63,6 +76,8 @@
             sym.setAttr(String.withCString("gpupage"), true);
             regs.add((Object*)sym);
             }
+        if (fromLib && regs.count() == (u32)0)
+            return;
         String* rn = String.withCString("_xtc_simd_register");
         bool have = false;
         for (u32 i = (u32)0; i < m.syms().count(); i = i + (u32)1)
@@ -100,6 +115,45 @@
         b.setTerm(r);
         ctor.addBlock(b);
         m.addFunc(ctor);
+        if (fromLib)
+            gpuGlobalsHandOver(m, fnName, hook);
+        }
+
+    // main's first act: parRegisterGlobals(&__xt_gpu_globals), on main's
+    // entry memory token (every later use moves to the call's).
+    final void gpuGlobalsHandOver(IRModule* m, String* fnName, String* hook)
+        {
+        m.addSym(IRSymbol.func(fnName, String.withCString("() -> Void"), false, false));
+        IRFunc* mainF = (IRFunc*)0;
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            if (((IRFunc*)m.funcs().get(f)).name().equals(String.withCString("main")))
+                mainF = (IRFunc*)m.funcs().get(f);
+        if (mainF == (IRFunc*)0 || mainF.blocks().count() == (u32)0)
+            return;
+        IRValue* m0 = (IRValue*)0;
+        for (u32 i = (u32)0; i < mainF.params().count() && m0 == (IRValue*)0; i = i + (u32)1)
+            {
+            IRValue* p = (IRValue*)mainF.params().get(i);
+            if (p.ty() != (String*)0 && p.ty().equals(String.withCString("Mem")))
+                m0 = p;
+            }
+        if (m0 == (IRValue*)0)
+            return;
+        IRValue* m1 = new IRValue(String.withCString("Mem"));
+        forwardMem(mainF, m0, m1);
+        IRBlock* e = (IRBlock*)mainF.blocks().get((u32)0);
+        IRValue* a = new IRValue(String.withCString("Ptr(U8, unbanked)"));
+        IRInsn* ao = IRInsn.with(String.withCString("AddrOf"));
+        ao.setRes(a);
+        ao.add(IROperand.sym(fnName));
+        IRInsn* c = IRInsn.with(String.withCString("Call"));
+        c.setCc(String.withCString("CallConv::Standard"));
+        c.add(IROperand.sym(hook));
+        c.add(IROperand.useVal(a));
+        c.add(IROperand.useVal(m0));
+        c.setMemRes(m1);
+        e.insns().insert((u32)0, (Object*)c);
+        e.insns().insert((u32)0, (Object*)ao);
         }
 
     // A global's bytes when it is an array of a numeric type, else 0.
