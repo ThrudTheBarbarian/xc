@@ -21,7 +21,7 @@ W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 for f in float_select_homes select_mask select_sink; do
     for c in "$REF" "$XC"; do
         [ -x "$c" ] || continue
-        "$c" -q -A x86_64 -O2 -H . -S -o "$W/$f.$(basename "$c").s" tests/fixtures/$f.xc \
+        "$c" -q --par-style=cpu -A x86_64 -O2 -H . -S -o "$W/$f.$(basename "$c").s" tests/fixtures/$f.xc \
             || { echo "FAIL $c: no assembly for $f"; fail=1; }
     done
     if [ -s "$W/$f.xcc.s" ] && [ -s "$W/$f.xcc-xc.s" ] && ! cmp -s "$W/$f.xcc.s" "$W/$f.xcc-xc.s"; then
@@ -57,7 +57,7 @@ native=$( [ "$(uname -s)-$(uname -m)" = Linux-x86_64 ] && echo 1 || echo 0 )
 if [ -n "$H" ] || [ $native = 1 ]; then
     [ $native = 1 ] && H=$(uname -n)
     for f in select_mask float_select_homes select_sink; do
-        "$XC" -q -A x86_64 -O2 -H . -o "$W/$f" tests/fixtures/$f.xc || { echo "FAIL: no x86-64 $f"; fail=1; continue; }
+        "$XC" -q --par-style=cpu -A x86_64 -O2 -H . -o "$W/$f" tests/fixtures/$f.xc || { echo "FAIL: no x86-64 $f"; fail=1; continue; }
         got=
         if [ $native = 1 ]; then
             got=$("$W/$f")

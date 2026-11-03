@@ -24,8 +24,8 @@ XC=${XC:-bin/$PLAT/xcc-xc}
 W=$(mktemp -d); trap 'rm -rf "${W:?}"' EXIT
 F=tests/fixtures/piv_step_tail.xc
 fail=0
-"$REF" -q -H . -A x86_64 -O3 -S -o "$W/ref.s" "$F" || { echo "FAIL: $REF did not build $F"; exit 1; }
-"$XC" -q -H . -A x86_64 -O3 -S -o "$W/xc.s" "$F" || { echo "FAIL: $XC did not build $F"; exit 1; }
+"$REF" -q --par-style=cpu -H . -A x86_64 -O3 -S -o "$W/ref.s" "$F" || { echo "FAIL: $REF did not build $F"; exit 1; }
+"$XC" -q --par-style=cpu -H . -A x86_64 -O3 -S -o "$W/xc.s" "$F" || { echo "FAIL: $XC did not build $F"; exit 1; }
 # Each innermost loop (a label to the jump back to it, holding no other such
 # span): the ones with a 512-bit load through a pointer, whether they touch
 # [rbp-..], and whether they close with jmp.
@@ -60,7 +60,7 @@ else
 fi
 cmp -s "$W/ref.s" "$W/xc.s" && echo "ok: the two compilers' assembly is the same" \
     || { echo "FAIL: the two compilers' x86-64 assembly differs"; fail=1; }
-"$XC" -q -H . -O3 -o "$W/run" "$F" && out=$("$W/run") || out="(no run)"
+"$XC" -q --par-style=cpu -H . -O3 -o "$W/run" "$F" && out=$("$W/run") || out="(no run)"
 want=$(cat tests/fixtures/piv_step_tail.expected.out)
 [ "$out" = "$want" ] && echo "ok: prints $out" || { echo "FAIL: printed '$out', want '$want'"; fail=1; }
 [ $fail -eq 0 ] && echo "x86-piv-step: ok"
