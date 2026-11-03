@@ -1909,8 +1909,12 @@ class BeFact : Object
     // module does not change until its end): name -> the first function of that
     // name, and the names kept. Linear searches made the pass quadratic in the
     // number of functions (2026-11-02); the reference uses a dictionary and a set.
+    // _dfeSyms is symNamed's answer by name (the first symbol of that name) for
+    // the same run: the par runtime's thousands of symbol operands each searched
+    // the module's symbols.
     Map* _dfeFns;
     Map* _dfeReach;
+    Map* _dfeSyms;
 
     void seed(IRModule* m, Array* reachable, Array* work, String* name)
         {
@@ -2707,6 +2711,46 @@ class BeFact : Object
                 }
             }
         return out;
+        }
+
+    // lrcPreds for every block at once: block -> the blocks whose terminator
+    // names it, once per mention, in the same order; a block that is not one
+    // of fn's has none, as lrcPreds says. For a walk that asks of many blocks
+    // while the function stands still (LICM's loop bodies: one scan of the
+    // function per body block was a tenth of a long function's LICM).
+    Map* lrcPredMap(IRFunc* fn)
+        {
+        Map* inFn = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            inFn.set((Hashable*)(IRBlock*)fn.blocks().get(b), (Object*)fn.blocks().get(b));
+        Map* out = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* src = (IRBlock*)fn.blocks().get(b);
+            IRInsn* t = src.term();
+            if (t == (IRInsn*)0)
+                continue;
+            for (u32 i = (u32)0; i < t.ops().count(); i = i + (u32)1)
+                {
+                IROperand* o = (IROperand*)t.ops().get(i);
+                if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0 || inFn.get((Hashable*)o.blk()) == (Object*)0)
+                    continue;
+                Array* ps = (Array*)out.get((Hashable*)o.blk());
+                if (ps == (Array*)0)
+                    {
+                    ps = new Array();
+                    out.set((Hashable*)o.blk(), (Object*)ps);
+                    }
+                ps.add((Object*)src);
+                }
+            }
+        return out;
+        }
+
+    Array* lrcPredsIn(Map* preds, IRBlock* target)
+        {
+        Array* ps = target == (IRBlock*)0 ? (Array*)0 : (Array*)preds.get((Hashable*)target);
+        return ps == (Array*)0 ? new Array() : ps;
         }
 
     bool lrcWritesMemory(String* op)

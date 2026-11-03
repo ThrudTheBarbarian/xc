@@ -822,6 +822,14 @@
             if (fname != 0 && _dfeFns.get((Hashable*)fname) == (Object*)0)
                 _dfeFns.set((Hashable*)fname, (Object*)f);
             }
+        _dfeSyms = Map.withCapacity(m.syms().count() + (u32)1);
+        for (u32 i = (u32)0; i < m.syms().count(); i = i + (u32)1)
+            {
+            IRSymbol* s = (IRSymbol*)m.syms().get(i);
+            String* sn = s.name();
+            if (sn != 0 && _dfeSyms.get((Hashable*)sn) == (Object*)0)
+                _dfeSyms.set((Hashable*)sn, (Object*)s);
+            }
         _dfeReach = Map.withCapacity((u32)64);
 
         // `main` is the canonical entry, and a load-time constructor is a root
@@ -904,6 +912,7 @@
             }
         _dfeFns = (Map*)0;
         _dfeReach = (Map*)0;
+        _dfeSyms = (Map*)0;
         if (survivors.count() == m.funcs().count())
             return;
         m.setFuncs(survivors);
@@ -919,7 +928,7 @@
             IROperand* o = (IROperand*)n.ops().get(k);
             if (o.kind() != (u8)OPK_SYM || o.name() == 0)
                 continue;
-            IRSymbol* s = self.symNamed(m, o.name());
+            IRSymbol* s = _dfeSyms != (Map*)0 ? (IRSymbol*)_dfeSyms.get((Hashable*)o.name()) : self.symNamed(m, o.name());
             if (s == 0)
                 {
                 self.seed(m, reachable, work, o.name());

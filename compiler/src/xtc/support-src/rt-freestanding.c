@@ -356,16 +356,29 @@ void _xt_free(void* q)
 #endif // XT_WIN64 (the process-heap allocator)
 
 // ───────────────────────────── memset ─────────────────────────────
-// The backend lowers XTIROpMemSet to a `call memset`, so one has to exist. The
-// destination is volatile so clang cannot recognise the loop as the memset idiom
-// and emit a call to the function it is compiling. A glibc program uses glibc's,
-// many times faster on a large fill.
+// The backend lowers XTIROpMemSet to a `call memset`, so one has to exist. A
+// glibc program uses glibc's.
+//
+// `rep stosb` past a few words: every x86-64 since 2012 has the fast string
+// fill (ERMSB), as quick as a vector loop on a large block. The byte loop it
+// replaces was a tenth of a static compiler's time (the allocator zeroes every
+// block through here). A short fill stays a loop, as `rep` costs a few dozen
+// cycles to start; the destination is volatile so clang cannot recognise the
+// loop as the memset idiom and emit a call to the function it is compiling.
 #if !defined(XT_GLIBC)
 void* memset(void* dst, int c, uint64_t n)
     {
-    volatile uint8_t* p = (volatile uint8_t*)dst;
-    for (uint64_t i = 0; i < n; i++)
-        p[i] = (uint8_t)c;
+    if (n < 32)
+        {
+        volatile uint8_t* p = (volatile uint8_t*)dst;
+        for (uint64_t i = 0; i < n; i++)
+            p[i] = (uint8_t)c;
+        return dst;
+        }
+    // As its bytes (f3 aa): the in-house assemblers that read the .s know no
+    // `rep` prefix, and this is the one instruction that needs it.
+    void* d = dst;
+    __asm__ volatile(".byte 0xf3, 0xaa  # rep stosb" : "+D"(d), "+c"(n) : "a"(c) : "memory");
     return dst;
     }
 #endif

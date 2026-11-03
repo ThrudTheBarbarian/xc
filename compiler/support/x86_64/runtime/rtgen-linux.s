@@ -226,18 +226,34 @@ _xt_free:                               # @_xt_free
 	.type	memset,@function
 memset:                                 # @memset
 # %bb.0:
-	mov	rax, rdi
-	test	rdx, rdx
-	je	.LBB4_3
+	mov	rcx, rdx
+	mov	rdx, rdi
+	cmp	rcx, 31
+	ja	.LBB4_5
 # %bb.1:
-	xor	ecx, ecx
+	test	rcx, rcx
+	je	.LBB4_4
+# %bb.2:
+	xor	eax, eax
 	.p2align	4, 0x90
-.LBB4_2:                                # =>This Inner Loop Header: Depth=1
-	mov	byte ptr [rax + rcx], sil
-	inc	rcx
-	cmp	rdx, rcx
-	jne	.LBB4_2
-.LBB4_3:
+.LBB4_3:                                # =>This Inner Loop Header: Depth=1
+	mov	byte ptr [rdx + rax], sil
+	inc	rax
+	cmp	rcx, rax
+	jne	.LBB4_3
+.LBB4_4:
+	mov	rax, rdx
+	ret
+.LBB4_5:
+	mov	eax, esi
+	mov	rdi, rdx
+	#APP
+
+	.byte	243
+	.byte	170
+	# rep stosb
+	#NO_APP
+	mov	rax, rdx
 	ret
 .Lfunc_end4:
 	.size	memset, .Lfunc_end4-memset

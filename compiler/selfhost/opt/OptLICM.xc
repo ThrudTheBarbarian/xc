@@ -111,27 +111,34 @@
         {
         // Natural loop body: every block reaching the latch without passing
         // through the header, plus the header itself.
+        // The predecessors are found once for the walk (nothing changes the
+        // function until the hoisting below) and the body is a set as well as
+        // a list.
+        Map* preds = self.lrcPredMap(fn);
         Array* body = new Array();
+        Map* inBody = new Map();
         body.add((Object*)H);
+        inBody.set((Hashable*)H, (Object*)H);
         Array* wl = new Array();
         wl.add((Object*)latch);
         while (wl.count() > (u32)0)
             {
             IRBlock* n = (IRBlock*)wl.get(wl.count() - (u32)1);
             wl.removeLast();
-            if (hasBlock(body, n))
+            if (inBody.get((Hashable*)n) != (Object*)0)
                 continue;
             body.add((Object*)n);
+            inBody.set((Hashable*)n, (Object*)n);
             if (n == H)
                 continue;
-            Array* ps = self.lrcPreds(fn, n);
+            Array* ps = self.lrcPredsIn(preds, n);
             for (u32 p = (u32)0; p < ps.count(); p = p + (u32)1)
                 wl.add(ps.get(p));
             }
 
         // A unique preheader — the header's one predecessor outside the loop —
         // which, being the sole entry to a natural loop, dominates the header.
-        Array* hp = self.lrcPreds(fn, H);
+        Array* hp = self.lrcPredsIn(preds, H);
         IRBlock* pre = (IRBlock*)0;
         u32 outside = (u32)0;
         for (u32 p = (u32)0; p < hp.count(); p = p + (u32)1)

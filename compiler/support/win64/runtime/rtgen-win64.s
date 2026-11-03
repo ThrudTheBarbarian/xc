@@ -140,18 +140,35 @@ _xt_free:                               # @_xt_free
 	.p2align	4, 0x90
 memset:                                 # @memset
 # %bb.0:
-	mov	rax, rcx
-	test	r8, r8
-	je	.LBB4_3
+	push	rdi
+	mov	eax, edx
+	mov	rdx, rcx
+	cmp	r8, 31
+	ja	.LBB4_4
 # %bb.1:
+	test	r8, r8
+	je	.LBB4_5
+# %bb.2:
 	xor	ecx, ecx
 	.p2align	4, 0x90
-.LBB4_2:                                # =>This Inner Loop Header: Depth=1
-	mov	byte ptr [rax + rcx], dl
+.LBB4_3:                                # =>This Inner Loop Header: Depth=1
+	mov	byte ptr [rdx + rcx], al
 	inc	rcx
 	cmp	r8, rcx
-	jne	.LBB4_2
-.LBB4_3:
+	jne	.LBB4_3
+	jmp	.LBB4_5
+.LBB4_4:
+	mov	rcx, r8
+	mov	rdi, rdx
+	#APP
+
+	.byte	243
+	.byte	170
+	# rep stosb
+	#NO_APP
+.LBB4_5:
+	mov	rax, rdx
+	pop	rdi
 	ret
                                         # -- End function
 	.def	_xt_fmt_f;
