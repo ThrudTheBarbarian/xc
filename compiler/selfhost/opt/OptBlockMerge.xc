@@ -45,11 +45,14 @@
             }
         }
 
-    // Every reference to `b` from an instruction or terminator — anything but
-    // a phi's incoming list.
-    final u32 bmRefs(IRFunc* fn, IRBlock* b)
+    // Every block's count of references from an instruction or terminator —
+    // anything but a phi's incoming list. One scan for all the blocks: counted
+    // a block at a time (a scan of the function for each candidate) this was
+    // blocks x instructions per merge, and the par runtime's large functions
+    // spent a tenth of a lifted loop's compile here.
+    final Map* bmRefCounts(IRFunc* fn)
         {
-        u32 n = (u32)0;
+        Map* counts = new Map();
         for (u32 k = (u32)0; k < fn.blocks().count(); k = k + (u32)1)
             {
             IRBlock* bb = (IRBlock*)fn.blocks().get(k);
@@ -61,12 +64,21 @@
                 for (u32 q = (u32)0; q < x.ops().count(); q = q + (u32)1)
                     {
                     IROperand* o = (IROperand*)x.ops().get(q);
-                    if (o.kind() == (u8)OPK_BLOCK && o.blk() == b)
-                        n = n + (u32)1;
+                    if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
+                        continue;
+                    Number* c = (Number*)counts.get((Hashable*)o.blk());
+                    u32 n = c == (Number*)0 ? (u32)0 : c.asU32();
+                    counts.set((Hashable*)o.blk(), (Object*)Number.with(n + (u32)1));
                     }
                 }
             }
-        return n;
+        return counts;
+        }
+
+    final u32 bmRefs(Map* counts, IRBlock* b)
+        {
+        Number* c = (Number*)counts.get((Hashable*)b);
+        return c == (Number*)0 ? (u32)0 : c.asU32();
         }
 
     // Replace every use of `from` with `to` (any operand), outside `skip`.
@@ -203,6 +215,9 @@
     final bool blockMergeOnce(IRFunc* fn)
         {
         IRBlock* entry = fn.blocks().count() > (u32)0 ? (IRBlock*)fn.blocks().get((u32)0) : (IRBlock*)0;
+        // Taken once: nothing changes the function until the one merge this
+        // call makes, and it returns straight after.
+        Map* refs = bmRefCounts(fn);
         for (u32 a = (u32)0; a < fn.blocks().count(); a = a + (u32)1)
             {
             IRBlock* A = (IRBlock*)fn.blocks().get(a);
@@ -210,7 +225,7 @@
             if (term == (IRInsn*)0 || !term.op().equals(String.withCString("Branch")) || term.ops().count() != (u32)1)
                 continue;
             IRBlock* B = ((IROperand*)term.ops().get((u32)0)).blk();
-            if (B == (IRBlock*)0 || B == A || B == entry || bmRefs(fn, B) != (u32)1)
+            if (B == (IRBlock*)0 || B == A || B == entry || bmRefs(refs, B) != (u32)1)
                 continue;
             // B's phis each have one incoming, from A: each IS that value.
             bool ok = true;

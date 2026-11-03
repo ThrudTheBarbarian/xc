@@ -26,6 +26,7 @@
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            _raUses = (Map*)0;
             for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
                 {
                 bool more = true;
@@ -69,7 +70,8 @@
         return p;
         }
 
-    final bool reassocOnce(IRFunc* fn, IRBlock* bb)
+    // The use count of every value in `fn` and its phi results.
+    final void raCount(IRFunc* fn)
         {
         Map* uses = new Map();
         Array* phiVals = new Array();
@@ -105,6 +107,20 @@
                     phiVals.add((Object*)p.res());
                 }
             }
+        _raUses = uses;
+        _raPhis = phiVals;
+        }
+
+    final bool reassocOnce(IRFunc* fn, IRBlock* bb)
+        {
+        // The function's use counts and phi results, kept while nothing is
+        // rewritten (a call that returns false changes nothing): counted for
+        // every block, they made the pass blocks x instructions in a function
+        // with no chain to shorten at all.
+        if (_raUses == (Map*)0)
+            raCount(fn);
+        Map* uses = _raUses;
+        Array* phiVals = _raPhis;
 
         _raDefIn = new Map();
         for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
@@ -218,6 +234,7 @@
             T.ops().set((u32)1, rest.get((u32)0));
             for (u32 k = (u32)1; k < links.count(); k = k + (u32)1)
                 self.removeInsn(bb, (IRInsn*)links.get(k));
+            _raUses = (Map*)0;
             return true;
             }
         return false;

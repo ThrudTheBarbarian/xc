@@ -1236,6 +1236,8 @@ class BeFact : Object
     u32 _level;
     Map* _vecRemainders;   // vectorize: the remainder loops it made, this function
     Map* _raDefIn;   // reassociate: the current block's defining insn per value
+    Map* _raUses;    // reassociate: the function's use count per value, 0 after a rewrite
+    Array* _raPhis;  // reassociate: the function's phi results, with _raUses
     u32 _vecFnBytes; // the vectorised function's own width (a dispatch clone), else 0
     OptProfile* _profile;
     bool _inlineChecks; // inline: only the subscript checks (after bounds-elide)

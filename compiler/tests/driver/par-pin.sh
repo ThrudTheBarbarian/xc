@@ -16,7 +16,7 @@ elif [ -n "${XTC_X86_64_HOST:-}" ]; then RUN() { ssh "$XTC_X86_64_HOST" "$1"; };
 else echo "par-pin: skipped (no Linux host)"; exit 0; fi
 "$XC" -q -H . -O2 $ARCH -o "$W/pin" tests/fixtures/par_pin_cpus.xc || { echo "FAIL par-pin: build"; exit 1; }
 R=/tmp/par-pin-$$
-if [ -n "$ARCH" ]; then scp -q "$W/pin" "$XTC_X86_64_HOST:$R" || exit 1; else cp "$W/pin" "$R"; fi
+if [ -n "$ARCH" ]; then scp -q "$W/pin" "$XTC_X86_64_HOST:$R" || { echo "FAIL par-pin: the copy to $XTC_X86_64_HOST"; exit 1; }; else cp "$W/pin" "$R"; fi
 E="XC_PAR=cpu XC_PAR_THREADS=4 XC_SETTINGS_DIR=$R.s"
 out=$(RUN "$E taskset -c 2,3,4,5 $R; echo ---; XC_PAR_PIN=0 $E taskset -c 2,3,4,5 $R; rm -rf $R $R.s")
 want=$'2\n2-5\n3\n4\n5\nsum 12288\n---\n2-5\n2-5\n2-5\n2-5\n2-5\nsum 12288'
