@@ -3,6 +3,66 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.9.2 — plain loops in parallel, and xcc on the Raspberry Pi
+
+Everything since 0.9.1.
+
+### New
+
+- **Plain loops run in parallel.** `--par-style=auto`, the default, makes a
+  `par` block of each loop whose iterations are independent, and each block
+  picks the CPU's threads, the GPU or both as it runs. `--par-style=threads`
+  keeps them on the CPU's threads, `gpu` starts them on the GPU, and `cpu`
+  leaves every loop as written. It replaces `--par-auto`. A loop that cannot
+  gain is left as written: one whose iterations are not independent, or that
+  a GPU could not run, compiles exactly as `--par-style=cpu` builds it, and a
+  loop with a small constant count that calls nothing (under 65,536
+  iterations) is not lifted at all. `-Wpar-auto` says what was lifted and
+  why the rest was not.
+- **xcc runs on a Raspberry Pi 5** (64-bit Raspberry Pi OS, Trixie), from its
+  own download, `xcc-linux-arm64`.
+- **libRuntime.** Every program links its runtime from a shared library
+  built once for each target and installed with the compiler, instead of
+  compiling it in. A program that uses `par` builds in a few seconds: a
+  one-loop program took 54 seconds on a Raspberry Pi 5 with 0.9.1 and takes
+  6.7 now (2.9 on x86-64 Linux, 2.3 on a Mac), and is about half the size. To
+  run a program on another machine, copy `libRuntime` beside it, or build it
+  with `--no-runtime-lib`. See
+  [the runtime library](/compiler/usage/cli/#the-runtime-library).
+- **A plugin built for another ABI is refused** when it is loaded, rather
+  than crashing: `bundle.json` records each platform's ABI and xcc version.
+- **CPU threads are pinned to CPUs on Linux**, so a block's pieces do not
+  wait on one another when the scheduler moves one. `XC_PAR_PIN=0` turns it
+  off.
+
+### Faster
+
+- **Compiling is faster**, most of all for big functions: the optimiser's
+  dominator, block-merge, reassociation, LICM and dead-function passes no
+  longer rescan the whole function for every block or symbol, and a static
+  Linux or Windows program fills memory with `rep stosb`, not a byte at a time.
+- **arm64 loops start on 32-byte boundaries on Apple CPUs.**
+- **Long vectorised loops stay vectorised.** An unsigned loop of 2^31
+  iterations or more, its count known only when it runs, ran entirely in its
+  scalar remainder: a `par` block of 2.8 billion items took three times as
+  long on one thread as it should.
+
+### Fixed
+
+- **Only one thread drives the `par` runtime at a time**: another thread's
+  block runs serially on that thread instead of racing it.
+- **A block whose GPU run fails and falls back to the CPU says so only under
+  `XC_PAR_REPORT`**; the answer was right either way.
+
+### Benchmarks
+
+- **The language benchmarks compare one thread with one thread**: an xc
+  program runs its `par` blocks on one CPU thread (`XC_PAR=cpu
+  XC_PAR_THREADS=1`), as the C++ and Swift beside it do.
+- **`arc_array` adds `get() ^ r`** in every language, so no compiler can take
+  one pass's sum for all of them. Its figures are not comparable with earlier
+  releases'.
+
 ## Version 0.9.1 — faster x86-64, and a fix for summed loops
 
 Everything since 0.9.
