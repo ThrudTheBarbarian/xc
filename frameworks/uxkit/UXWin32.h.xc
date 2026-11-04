@@ -295,7 +295,7 @@ struct SYSTEMTIME
     u16 millis;
     } void GetSystemTime(pointer st);
 // Local time as well, so the difference gives the offset in force (DST included) with no tz struct.
-void GetLocalTime(pointer st);
+void GetLocalTime(u16* st); // a SYSTEMTIME; spelled as the par runtime declares it
 // The profile (.ini) API, which IS a (section, key) -> string store with the read-modify-write of a
 // single key already done for us — so persistent settings need no file parsing of our own.  Passing
 // a null value DELETES the key.  Ancient, and still the shortest honest way to keep a preference in

@@ -3801,7 +3801,7 @@ class UXWin32Driver : Object<UXViewDriver>
         SYSTEMTIME u;
         SYSTEMTIME l;
         GetSystemTime((pointer)&u);
-        GetLocalTime((pointer)&l);
+        GetLocalTime((u16*)&l);
         i32 du = UXDate.make((i32)u.year, (i32)u.month, (i32)u.day).dayNumber();
         i32 dl = UXDate.make((i32)l.year, (i32)l.month, (i32)l.day).dayNumber();
         i32 mu = (i32)u.hour * (i32)60 + (i32)u.minute;

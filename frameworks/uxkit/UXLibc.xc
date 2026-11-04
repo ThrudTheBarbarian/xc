@@ -51,9 +51,17 @@ pointer realloc(pointer p, u32 n)
     _xtc_dealloc(p);
     return np;
     }
-#else
+#elif ARCH_armv7
+// 32-bit ARM (GEM/XTOS): C's size_t is 32 bits.
 pointer malloc(u32 n);
 pointer calloc(u32 nmemb, u32 size);
 pointer realloc(pointer p, u32 n);
+void free(pointer p);
+#else
+// size_t is 64 bits on every other target, and the par runtime (which --par-style=auto imports
+// into a unit with a liftable loop) declares malloc and calloc so; the spellings must agree.
+pointer malloc(u64 n);
+pointer calloc(u64 nmemb, u64 size);
+pointer realloc(pointer p, u64 n);
 void free(pointer p);
 #endif

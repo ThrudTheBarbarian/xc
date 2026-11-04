@@ -63,7 +63,10 @@ for t in arm64 win64 x86_64 wasm32; do
     x86_64)
       [ -n "$lhost" ] || { echo "  $t: skipped (no UX_LINUX_HOST)"; continue; }
       rdir=$(ssh -o BatchMode=yes "$lhost" 'mktemp -d')
-      scp -q "$work/$out" "$tp/uxkit/$t/libUXKit.so" "$tp/uxkit/$t/libUXGtk.so" "$lhost:$rdir/"
+      # From 0.9.2 a Linux program (and libUXKit.so) needs xcc's libRuntime.so beside it, as a user ships it.
+      rt=$(dirname "$("$xcc" --print-3p-dir 2>/dev/null)")/lib/xc/runtime-lib/x86_64-linux/libRuntime.so
+      [ -f "$rt" ] || rt=
+      scp -q "$work/$out" "$tp/uxkit/$t/libUXKit.so" "$tp/uxkit/$t/libUXGtk.so" $rt "$lhost:$rdir/"
       got=$(timeout 120 ssh -o BatchMode=yes "$lhost" "cd $rdir && xvfb-run -a ./$out 2>&1; rm -rf $rdir") || true ;;
     wasm32)
       chrome="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
