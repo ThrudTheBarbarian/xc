@@ -9,8 +9,8 @@ struct IntMulDiv {
         for i in 0..<n { a[i] = (UInt32(i) &* 2654435761) &+ seed }
         var acc: UInt32 = 0
         let t0 = bench_now_us()
-        for _ in 0..<UInt32(6_800_000) {
-            for i in 0..<n { acc = acc &+ ((a[i] &* 7) / 3) &+ (a[i] / 11) }
+        for r in 0..<UInt32(6_800_000) {
+            for i in 0..<n { let v = a[i] &+ r; acc = acc &+ ((v &* 7) / 3) &+ (v / 11) }
         }
         let t1 = bench_now_us()
         print("\(acc) \(t1 - t0)")

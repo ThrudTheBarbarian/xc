@@ -13,7 +13,7 @@ int main(int argc, char **argv)
         int64_t t0 = bench_now_us();
         for (uint32_t r = 0; r < 6800000; r++)
             for (uint32_t i = 0; i < N; i++)
-                acc = acc + ((a[i] * 7u) / 3u) + (a[i] / 11u);
+                { uint32_t v = a[i] + r; acc = acc + ((v * 7u) / 3u) + (v / 11u); }
         int64_t t1 = bench_now_us();
         printf("%u %lld\n", acc, (long long)(t1 - t0));
     }
