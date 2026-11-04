@@ -34,6 +34,9 @@
 #import "Foundation.xc"
 #import "Files.xc"
 #import "Directory.xc"
+
+// The working directory, for import identity (Preprocessor.absPath).
+u8* getcwd(u8* buf, u64 size);
 #import <MacroDef>
 
 // One open #if / #ifdef / #ifndef.
@@ -560,7 +563,8 @@ class IfFrame
 
     void addStdlibDir(String* d)
         {
-        _stdlibDirs.add((Object*)Preprocessor.canonPath(d));
+        // Anchored like the import keys it is a prefix of (absPath).
+        _stdlibDirs.add((Object*)Preprocessor.canonPath(Preprocessor.absPath(d)));
         }
     void setStdImportsReader(callback f Array*(String* lib))
         {
@@ -725,6 +729,30 @@ class IfFrame
     // nothing else. (The original standardises the path; this handles the
     // leading `./`, an embedded `/./`, a doubled `/` and a trailing one, which
     // is every spelling the driver can produce.)
+    // A relative path anchored at the working directory, so a file reached as
+    // `support/generic/lib/Coder.xc` (an -I path) and as
+    // `/home/.../support/generic/lib/Coder.xc` (the library root, which the
+    // driver now finds from the binary's own absolute path) is ONE file for
+    // the once-only check. Compared as spelled, Coder.xc was imported twice
+    // and its second copy failed to compile (#61's gate, 2026-11-04). As the
+    // reference, which anchors at the cwd before standardising.
+    static String* absPath(String* p)
+        {
+        if (p == 0 || p.byteLength() == (u32)0)
+            return p;
+        if (p.byteAt((u32)0) == (u8)'/' || p.byteAt((u32)0) == (u8)'\\')
+            return p;
+        if (p.byteLength() > (u32)1 && p.byteAt((u32)1) == (u8)':')
+            return p;   // C:\... on Windows
+        u8 buf[4096];
+        if (getcwd(&buf[0], (u64)4096) == (u8*)0)
+            return p;
+        String* d = String.withCString(&buf[0]);
+        d.appendByte((u8)'/');
+        d.append(p);
+        return d;
+        }
+
     static String* canonPath(String* p)
         {
         if (p == 0)
@@ -946,7 +974,7 @@ class IfFrame
         // Depth-guarded: included files are registered at their import site,
         // and a plain #include must stay re-includable.
         if (_sourceDepth == (u32)0 && filename != (String*)0 && filename.byteLength() > (u32)0)
-            _imported.add((Hashable*)Preprocessor.canonPath(filename));
+            _imported.add((Hashable*)Preprocessor.canonPath(Preprocessor.absPath(filename)));
         _sourceDepth = _sourceDepth + (u32)1;
 
         String* stripped = stripComments(source, filename);
@@ -2092,7 +2120,7 @@ class IfFrame
 
         if (onceOnly)
             {
-            String* key = Preprocessor.canonPath(foundPath);
+            String* key = Preprocessor.canonPath(Preprocessor.absPath(foundPath));
             // The already-imported check comes FIRST, and the prelude record
             // after it — the order the reference uses (XTPreprocessor.m, the
             // `_importedFiles` early return above `_mutablePreludeFiles`).
