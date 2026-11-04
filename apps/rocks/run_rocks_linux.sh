@@ -6,11 +6,9 @@
 # build.env). The gate prints which host it used, so a skipped Linux leg is
 # never read as a pass.
 #
-# The hybrid link (shared with run_gtk_linux.sh): xcc
-# emits gas-clean Intel .s; gcc assembles it, clang builds the runtime's rt.c
-# against glibc, rtgen-linux.s fills the xtc-specific holes with its symbols
-# weakened so glibc keeps the common ones, and the GTK shim links it all into an
-# ordinary dynamic PIE.
+# xcc builds and links Rocks itself (glibc, dynamic) against libUXGtk.so and the
+# host's GTK 4, as a user's program is built; the program, libUXGtk.so and xcc's
+# libRuntime.so (0.9.2 on) go to the host together.
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -e
@@ -18,10 +16,6 @@ here=$(cd "$(dirname "$0")" && pwd)
 ux="$here/../../frameworks/uxkit"
 xcc=${XCC:-xcc}
 host=${UX_LINUX_HOST:-${XTC_LINUX_HOST:-}}
-rtdir=$(dirname "$(command -v "$xcc")")/../lib/xc/x86_64/runtime
-# an in-tree compiler (XCC_HOME=<repo>/compiler) keeps it in its support tree instead
-[ -f "$rtdir/rtgen-linux.s" ] || { [ -n "${XCC_HOME:-}" ] && rtdir="$XCC_HOME/support/x86_64/runtime"; }
-rtsrc=${XT_RT_SRC:-"$here/../../compiler"}
 
 command -v "$xcc" >/dev/null 2>&1 || { echo "== rocks-linux: no compiler ('$xcc'); set XCC =="; exit 2; }
 ssh -o ConnectTimeout=8 -o BatchMode=yes "$host" true 2>/dev/null \
@@ -30,26 +24,19 @@ ssh "$host" 'bash -lc "pkg-config --exists gtk4 && which xvfb-run >/dev/null"' 2
     || { echo "== rocks-linux: skipped ($host has no gtk4/xvfb — apt install libgtk-4-dev xvfb) =="; exit 0; }
 
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
-echo "== rocks-linux: emitting x86_64 asm =="
-"$xcc" -A x86_64 -I "$ux" -I "$here/xc" "$here/xc/rocks_main.xc" -o "$work/rocks.s" -q
-
-echo "== rocks-linux: hybrid link on $host =="
+echo "== rocks-linux: building for x86_64 (xcc links it, against the host's GTK 4) =="
+sh "$ux/tools/build_libuxgtk.sh" "$work/lib" --with-link-inputs >/dev/null
+"$xcc" -A x86_64 -I "$ux" -I "$here/xc" "$here/xc/rocks_main.xc" -L "$work/lib" -lUXGtk -lgtk-4 -lGL -o "$work/rocks" -q
+# From 0.9.2 a Linux program needs xcc's libRuntime.so beside it on a machine without xcc.
+rt=$(dirname "$("$xcc" --print-3p-dir 2>/dev/null)")/lib/xc/runtime-lib/x86_64-linux/libRuntime.so
+[ -f "$rt" ] || rt=
 R=$(ssh "$host" 'mktemp -d')
-ssh "$host" "mkdir -p $R/src/xtc/support-src $R/support/generic/runtime"
-scp -q "$work/rocks.s" "$rtdir/rtgen-linux.s" "$ux/libUXGtk.c" "$ux/ux_posix_fs.h" "$host:$R/"
-scp -q "$rtsrc/src/xtc/support-src/rt.c" "$host:$R/src/xtc/support-src/"
-scp -q "$rtsrc"/support/generic/runtime/*.c "$host:$R/support/generic/runtime/"
-ssh "$host" "cd $R && bash -lc '
-  clang -c -O1 src/xtc/support-src/rt.c -o rt.o && objcopy --weaken-symbol=_putc rt.o &&
-  sed \"/\.addrsig/d\" rtgen-linux.s > rtgen2.s && gcc -c rtgen2.s -o rtgen.o && objcopy --weaken rtgen.o &&
-  gcc -c rocks.s -o rocks.o &&
-  cc -c libUXGtk.c \$(pkg-config --cflags gtk4) -o shim.o &&
-  gcc rocks.o shim.o rt.o rtgen.o \$(pkg-config --libs gtk4) -lm -o rocks'"
+scp -q "$work/rocks" "$work/lib/libUXGtk.so" $rt "$host:$R/"
 
 echo "== rocks-linux: running under Xvfb =="
 # The GUI loop never returns, so the gate is the startup banner: the window was
 # built and every wiring name resolved.  timeout is the exit, not a failure.
-out=$(ssh "$host" "cd $R && bash -lc 'timeout 25 xvfb-run -a ./rocks 2>&1 | grep -v Warning | grep -v libEGL'") || true
+out=$(ssh "$host" "cd $R && bash -lc 'LD_LIBRARY_PATH=$R timeout 25 xvfb-run -a ./rocks 2>&1 | grep -v Warning | grep -v libEGL'") || true
 ssh "$host" "rm -rf $R"
 echo "$out" | tail -3
 echo "$out" | grep -q "^PASS" || { echo "== rocks-linux: FAILED =="; exit 1; }

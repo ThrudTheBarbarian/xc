@@ -3,14 +3,9 @@
 # test_gtk_real.xc, cross-built for x86_64 and run on a Linux host under
 # Xvfb.  Skips cleanly when the host is unreachable.
 #
-# The hybrid link (proven while filing bug 033): xcc emits gas-clean Intel
-# .s; on the Linux host gcc assembles it, clang compiles the runtime's
-# rt.c against glibc, rtgen-linux.s (addrsig stripped, symbols weakened)
-# fills the xtc-specific holes while glibc keeps the common ones, and the
-# GTK shim links it all into an ordinary dynamic PIE.  Needs the compiler
-# fixed for 033 (x86_64 vtable calls dropped stack args) — before that fix
-# the first draw dies in structAbsFrame, which is exactly what the gate
-# proves fixed.
+# xcc builds and links the test itself (glibc, dynamic) against libUXGtk.so and the
+# host's GTK 4, as a user's program is built; the binary, libUXGtk.so and xcc's
+# libRuntime.so (0.9.2 on) go to the host together.
 _root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
 set -e
@@ -21,32 +16,22 @@ test=${1:-test_gtk_real} # another GTK test to run on the Linux host, e.g. test_
 # (both in build.env).  UX_LINUX_XCFLAGS adds xcc options (a test's -D), UX_LINUX_LIBS adds libraries to the link (a test's -lGL, say), UX_LINUX_FILES
 # files to copy beside the binary, and UX_LINUX_SETUP a command run in that directory before it.
 host=${UX_LINUX_HOST:-${XTC_LINUX_HOST:-}}
-rtdir=$(dirname "$(command -v "$xcc")")/../lib/xc/x86_64/runtime
-# an in-tree compiler (XCC_HOME=<repo>/compiler) keeps it in its support tree instead
-[ -f "$rtdir/rtgen-linux.s" ] || { [ -n "${XCC_HOME:-}" ] && rtdir="$XCC_HOME/support/x86_64/runtime"; }
-rtsrc=${XT_RT_SRC:-"$here/../../compiler"}
 ssh -o ConnectTimeout=8 -o BatchMode=yes "$host" true 2>/dev/null || { echo "== gtk-linux: skipped (no $host) =="; exit 0; }
 ssh "$host" 'pkg-config --exists gtk4 && which xvfb-run' >/dev/null 2>&1 || { echo "== gtk-linux: skipped (no gtk4/xvfb on $host) =="; exit 0; }
 
 work=$(mktemp -d); trap 'rm -rf "$work"' EXIT
-echo "== gtk-linux: emitting x86_64 asm =="
-"$xcc" -A x86_64 -I "$here" ${UX_LINUX_XCFLAGS:-} "$here/$test.xc" -o "$work/test.s" -q 2>/dev/null
-
-echo "== gtk-linux: building the hybrid on $host =="
+echo "== gtk-linux: building $test for x86_64 (xcc links it, against the host's GTK 4) =="
+sh "$here/tools/build_libuxgtk.sh" "$work/lib" --with-link-inputs >/dev/null
+"$xcc" -A x86_64 -I "$here" ${UX_LINUX_XCFLAGS:-} "$here/$test.xc" -L "$work/lib" -lUXGtk -lgtk-4 ${UX_LINUX_LIBS:-} \
+    -o "$work/gtk_real" -q 2>/dev/null
+# From 0.9.2 a Linux program needs xcc's libRuntime.so beside it on a machine without xcc.
+rt=$(dirname "$("$xcc" --print-3p-dir 2>/dev/null)")/lib/xc/runtime-lib/x86_64-linux/libRuntime.so
+[ -f "$rt" ] || rt=
 rdir=$(ssh "$host" 'mktemp -d')
-ssh "$host" "mkdir -p $rdir/src/xtc/support-src $rdir/support/generic/runtime"
-scp -q "$work/test.s" "$here/libUXGtk.c" "$here/ux_posix_fs.h" "$rtdir/rtgen-linux.s" ${UX_LINUX_FILES:-} "$host:$rdir/"
-scp -q "$rtsrc/src/xtc/support-src/rt.c" "$host:$rdir/src/xtc/support-src/"
-scp -q "$rtsrc"/support/generic/runtime/*.c "$host:$rdir/support/generic/runtime/"
-ssh "$host" "cd $rdir && \
-    clang -c -O1 src/xtc/support-src/rt.c -o rt.o && objcopy --weaken-symbol=_putc rt.o && \
-    sed '/\\.addrsig/d' rtgen-linux.s > rtgen2.s && gcc -c rtgen2.s -o rtgen.o && objcopy --weaken rtgen.o && \
-    gcc -c test.s -o test.o && \
-    cc -c libUXGtk.c \$(pkg-config --cflags gtk4) -o shim.o && \
-    gcc test.o shim.o rt.o rtgen.o \$(pkg-config --libs gtk4) -lm ${UX_LINUX_LIBS:-} -o gtk_real"
+scp -q "$work/gtk_real" "$work/lib/libUXGtk.so" $rt ${UX_LINUX_FILES:-} "$host:$rdir/"
 
 echo "== gtk-linux: running under Xvfb =="
-out=$(ssh "$host" "cd $rdir && ${UX_LINUX_SETUP:-true} && xvfb-run -a ./gtk_real 2>&1 | grep -v Warning") || true
+out=$(ssh "$host" "cd $rdir && ${UX_LINUX_SETUP:-true} && LD_LIBRARY_PATH=$rdir xvfb-run -a ./gtk_real 2>&1 | grep -v Warning") || true
 ssh "$host" "rm -rf $rdir"
 echo "$out"
 echo "$out" | grep -q "^PASS\|^SKIP" || { echo "== gtk-linux: FAILED =="; exit 1; }

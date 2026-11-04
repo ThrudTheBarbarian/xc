@@ -56,7 +56,10 @@ for leg in $legs; do
         "$xcc" -A x86_64 -dynamic -I "$here" "$here/test_posted.xc" -L "$work/lib" -lUXGtk -lgtk-4 \
             -o "$work/posted_linux" -q 2>/dev/null
         rdir=$(ssh -o BatchMode=yes "$host" 'mktemp -d')
-        scp -q "$work/lib/libUXGtk.so" "$work/posted_linux" "$host:$rdir/"
+        # From 0.9.2 a Linux program needs xcc's libRuntime.so beside it on a machine without xcc.
+        rt=$(dirname "$("$xcc" --print-3p-dir 2>/dev/null)")/lib/xc/runtime-lib/x86_64-linux/libRuntime.so
+        [ -f "$rt" ] || rt=
+        scp -q "$work/lib/libUXGtk.so" "$work/posted_linux" $rt "$host:$rdir/"
         out=$(ssh -o BatchMode=yes "$host" "cd $rdir && LD_LIBRARY_PATH=$rdir UX_AUTOQUIT=10000 \
             timeout 40 xvfb-run -a ./posted_linux 2>&1 | grep -a '^posted:\|^PASS\|^FAIL'") || true
         ssh -o BatchMode=yes "$host" "rm -rf $rdir"
