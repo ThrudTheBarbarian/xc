@@ -1585,6 +1585,7 @@ class BeFact : Object
     i32 _lrcStep;         // …and its step
     IRValue* _lrcAccNext; // the accumulator's latch-incoming
     IRValue* _lrcAccSeed; // …and its preheader-incoming
+    Map* _lrcUses;        // the function's use counts (lrcAddLeaves)
 
     // What the induction analysis found. Ivars, not locals: the arm64 backend
     // budgets 16 KB of frame per function and the recogniser is over it whole.

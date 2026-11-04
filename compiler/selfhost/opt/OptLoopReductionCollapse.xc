@@ -580,6 +580,7 @@
 
         if (!lrcClassifyHeader(O, defOf))
             return false;
+        _lrcUses = self.useCounts(fn);
         if (!lrcInnerReduction(O, loops, defOf, defPhi, defBlk))
             return false;
 
@@ -639,6 +640,11 @@
             IRValue* next = lrcIncoming(phi, O.latch());
             if (seed == (IRValue*)0 || next == (IRValue*)0)
                 return false;
+            // A value the loop carries unchanged (an earlier loop's counter,
+            // phi(x, itself)) is the same after one pass as after T; the
+            // live-out check below still refuses it if it is read after.
+            if (next == phi.res())
+                continue;
 
             if (_lrcIv == (IRInsn*)0 && lrcTryInductionVar(O, phi, next, defOf))
                 continue;
@@ -737,27 +743,52 @@
         if (innerSeed != _lrcAcc.res())
             return false; // must chain the outer acc
 
-        Object* ind = defOf.get((Hashable*)innerNext);
-        if (ind == (Object*)0)
-            return false;
-        IRInsn* innerNextDef = (IRInsn*)ind;
-        if (!innerNextDef.op().equals(String.withCString("Add")) || innerNextDef.ops().count() != (u32)2)
-            return false;
-        IROperand* ia = (IROperand*)innerNextDef.ops().get((u32)0);
-        IROperand* ib = (IROperand*)innerNextDef.ops().get((u32)1);
-        IRValue* delta = (IRValue*)0;
-        if (ia.kind() == (u8)OPK_USE && ia.val() == innerAcc.res() && ib.kind() == (u8)OPK_USE)
-            delta = ib.val();
-        else if (ib.kind() == (u8)OPK_USE && ib.val() == innerAcc.res() && ia.kind() == (u8)OPK_USE)
-            delta = ia.val();
-        else
+        // The next value is a tree of integer Adds with the accumulator at
+        // exactly one leaf: simplify turns acc + (x + y) into x + (acc + y),
+        // and int_muldiv_hoist's inner loop arrives that way. The other
+        // leaves are the per-step delta.
+        Array* deltas = new Array();
+        if (lrcAddLeaves(innerNext, true, innerAcc.res(), L.body(), deltas, defOf, defBlk) != (u32)1
+            || deltas.count() == (u32)0)
             return false;
 
         Array* taboo = new Array();
         taboo.add((Object*)_lrcAcc.res());
         taboo.add((Object*)_lrcIv.res());
         taboo.add((Object*)innerAcc.res());
-        return !lrcConeReaches(delta, taboo, O.body(), defOf, defPhi, defBlk);
+        for (u32 i = (u32)0; i < deltas.count(); i = i + (u32)1)
+            if (lrcConeReaches((IRValue*)deltas.get(i), taboo, O.body(), defOf, defPhi, defBlk))
+                return false;
+        return true;
+        }
+
+    // The leaves of the Add tree at v, the accumulator's own counted. An Add
+    // below the top is part of the tree only if it is in the inner loop and
+    // has no other use, so no partial sum holding the accumulator escapes it;
+    // anything else is a leaf, and goes to `deltas` (a constant operand adds
+    // the same each step and needs no check). Exact mod 2^w for integers;
+    // FAdd is another op and never matches.
+    final u32 lrcAddLeaves(IRValue* v, bool top, IRValue* acc, Array* region, Array* deltas, Map* defOf, Map* defBlk)
+        {
+        if (v == acc)
+            return (u32)1;
+        Object* d = defOf.get((Hashable*)v);
+        Object* db = defBlk.get((Hashable*)v);
+        if (d != (Object*)0 && db != (Object*)0 && ((IRInsn*)d).op().equals(String.withCString("Add"))
+            && ((IRInsn*)d).ops().count() == (u32)2 && self.hasBlock(region, (IRBlock*)db)
+            && (top || self.countOf(_lrcUses, v) == (u32)1))
+            {
+            u32 c = (u32)0;
+            for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)((IRInsn*)d).ops().get(k);
+                if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                    c = c + lrcAddLeaves(o.val(), false, acc, region, deltas, defOf, defBlk);
+                }
+            return c;
+            }
+        deltas.add((Object*)v);
+        return (u32)0;
         }
 
     // Run the outer loop exactly ONCE (acc₁ = init + Σδ), then rescale its

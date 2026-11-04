@@ -708,6 +708,11 @@ static NSNumber* lrcAddrBaseSym(XTIROperand* addr,
             }
         if (!haveSeed || !haveNext)
             return NO;
+        // A value the loop carries unchanged (an earlier loop's counter,
+        // phi(x, itself)) is the same after one pass as after T; the live-out
+        // check below still refuses it if it is read after. As the port.
+        if (next == phi.result.valueId)
+            continue;
 
         // Induction variable: next = Add(phi, constStep), header compares it to a
         // const bound with an SLT/ULT-family predicate.
@@ -810,23 +815,60 @@ static NSNumber* lrcAddrBaseSym(XTIROperand* addr,
     if (innerSeed != accPhi.result.valueId)
         return NO; // inner reduction chains the outer acc
 
-    XTIRInsn* innerNextDef = defOf[@(innerNext)];
-    if (!innerNextDef || innerNextDef.opcode != XTIROpAdd || innerNextDef.operands.count != 2)
+    // The next value is a tree of integer Adds with the accumulator at exactly
+    // one leaf: simplify turns acc + (x + y) into x + (acc + y), and
+    // int_muldiv_hoist's inner loop arrives that way. The other leaves are the
+    // per-step delta. As the port's lrcAddLeaves.
+    NSMutableDictionary<NSNumber*, NSNumber*>* uses = [NSMutableDictionary dictionary];
+    void (^count)(XTIRInsn*) = ^(XTIRInsn* n) {
+        for (XTIROperand* o in n.operands)
+            if (o.kind == XTIROperandKindUse)
+                uses[@(o.valueId)] = @(uses[@(o.valueId)].unsignedIntegerValue + 1);
+    };
+    for (XTIRBlock* b in blocks)
+        {
+        for (XTIRInsn* n in b.phiNodes)
+            count(n);
+        for (XTIRInsn* n in b.instructions)
+            count(n);
+        if (b.terminator)
+            count(b.terminator);
+        }
+    NSMutableArray<NSNumber*>* deltas = [NSMutableArray array];
+    // The leaves of the Add tree at v, the accumulator's own counted. An Add
+    // below the top is part of the tree only if it is in the inner loop and
+    // has no other use, so no partial sum holding the accumulator escapes it;
+    // anything else is a leaf (a constant operand needs no check). Exact mod
+    // 2^w for integers; FAdd is another opcode and never matches.
+    __block NSUInteger (^leaves)(XTIRValueId, BOOL);
+    NSUInteger (^leavesImpl)(XTIRValueId, BOOL) = ^NSUInteger(XTIRValueId v, BOOL top) {
+        if (v == innerAcc.result.valueId)
+            return 1;
+        XTIRInsn* d = defOf[@(v)];
+        NSNumber* db = defBlk[@(v)];
+        if (d && db && d.opcode == XTIROpAdd && d.operands.count == 2 && [L.body containsObject:db]
+            && (top || uses[@(v)].unsignedIntegerValue == 1))
+            {
+            NSUInteger c = 0;
+            for (XTIROperand* o in d.operands)
+                if (o.kind == XTIROperandKindUse)
+                    c += leaves(o.valueId, NO);
+            return c;
+            }
+        [deltas addObject:@(v)];
+        return 0;
+    };
+    leaves = leavesImpl;
+    if (leaves(innerNext, YES) != 1 || deltas.count == 0)
         return NO;
-    XTIROperand *ia = innerNextDef.operands[0], *ib = innerNextDef.operands[1];
-    XTIRValueId deltaVid;
-    if (ia.kind == XTIROperandKindUse && ia.valueId == innerAcc.result.valueId && ib.kind == XTIROperandKindUse)
-        deltaVid = ib.valueId;
-    else if (ib.kind == XTIROperandKindUse && ib.valueId == innerAcc.result.valueId && ia.kind == XTIROperandKindUse)
-        deltaVid = ia.valueId;
-    else
-        return NO;
+    leaves = nil;
 
     NSMutableSet<NSNumber*>* taboo = [NSMutableSet setWithObjects:
                                                        @(accPhi.result.valueId), @(ivPhi.result.valueId),
                                                        @(innerAcc.result.valueId), nil];
-    if (defConeReaches(deltaVid, taboo, O.body, defOf, defPhi, defBlk))
-        return NO;
+    for (NSNumber* dv in deltas)
+        if (defConeReaches(dv.unsignedIntegerValue, taboo, O.body, defOf, defPhi, defBlk))
+            return NO;
 
     // ── Safety: the outer loop's iteration count must leak ONLY through the
     // accumulator. Any other value defined inside the outer body that is used
@@ -949,10 +991,10 @@ static NSNumber* lrcAddrBaseSym(XTIROperand* addr,
     if (lrcTrace())
         fprintf(stderr,
                 "xcc: loop-reduction-collapse: collapsed '%s' — outer trip %lu → 1, "
-                "acc v%llu rescaled ×%lu (delta v%llu)\n",
+                "acc v%llu rescaled ×%lu (delta v%llu, %lu terms)\n",
                 fn.name.UTF8String, (unsigned long)trip,
                 (unsigned long long)accPhi.result.valueId, (unsigned long)trip,
-                (unsigned long long)deltaVid);
+                deltas.firstObject.unsignedLongLongValue, (unsigned long)deltas.count);
     return YES;
     }
 
