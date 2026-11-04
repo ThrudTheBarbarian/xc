@@ -8,6 +8,9 @@
 #   2. A two-deep nest of more points than a u32 counts (4097 x 1048576)
 #      prints what --par-style=cpu prints: it runs as the loop.
 #   3. A small constant loop with no call is not lifted at all.
+#   4. A method's loop the block form refuses (it names self, here only in
+#      its bound) is the loop as written, and the program builds (UXKit,
+#      2026-11-03: 25 such loops failed with "cannot capture 'self'").
 #
 # Both compilers, the same code from each.
 #
@@ -59,6 +62,36 @@ EOF
 
 # main's code: from its label to the next function's .globl (local labels,
 # Lfoo: on Mach-O, do not end it).
+cat > "$W/self.xc" <<'EOF'
+#import "Stdio.xc"
+class T : Object
+    {
+    i32 n;
+    i32 count(void)
+        {
+        i32 c = (i32)0;
+        for (i32 r = (i32)0; r < n; r++)
+            if (r > (i32)1)
+                c = c + (i32)1;
+        return c;
+        }
+    i32 viaSelf(void)
+        {
+        i32 c = (i32)0;
+        for (i32 r = (i32)0; r < self.n; r++)
+            c = c + (i32)1;
+        return c;
+        }
+    }
+i32 main(void)
+    {
+    T* t = new T();
+    t.n = (i32)100000;
+    Stdio.printf("%d %d\n", t.count(), t.viaSelf());
+    return 0;
+    }
+EOF
+
 main_of() { awk '/^_?main:$/{p=1;next} /\.globl/{p=0} p' "$1"; }
 for c in "$REF" "$XC"; do
     [ -x "$c" ] || continue
@@ -73,6 +106,9 @@ for c in "$REF" "$XC"; do
         || { echo "FAIL par-auto-fallback: $n wide.xc"; fail=1; continue; }
     a=$(XC_PAR_THREADS=2 "$W/wide.$n"); b=$("$W/wide.$n.cpu")
     [ "$a" = "$b" ] || { echo "FAIL par-auto-fallback: $n wide nest prints $a, the loop $b"; fail=1; }
+    # 4. self in a method's loop: the loop as written.
+    "$c" -q -H . -O2 --no-runtime-lib -o "$W/self.$n" "$W/self.xc" || { echo "FAIL par-auto-fallback: $n refused a method loop that names self"; fail=1; }
+    [ -x "$W/self.$n" ] && [ "$("$W/self.$n")" = "99998 100000" ] || { echo "FAIL par-auto-fallback: $n's self program printed '$("$W/self.$n" 2>&1)'"; fail=1; }
     # 3. Small and call-free: not lifted.
     w=$("$c" -O2 -H . --no-runtime-lib -Wpar-auto -o "$W/small.$n" "$W/small.xc" 2>&1 | grep -c "par-style")
     [ "$w" = 0 ] || { echo "FAIL par-auto-fallback: $n lifted a small loop"; fail=1; }

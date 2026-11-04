@@ -4316,6 +4316,13 @@ static int64_t parAutoConst(XTASTNode* e)
     [self parGridLoop:-1];
     if (!plain || [self parAutoSmall:plain from:forPos to:_pos])
         return plain;
+    // A loop the block form refuses stays the loop: an error the block's parse
+    // or its desugaring reports (a capture of self or of an ivar, say) is
+    // taken back, and the loop as parsed above is the statement. A loop of a
+    // method that reads self.n failed to compile (UXKit had 25). As the port.
+    NSUInteger plainEnd = _pos;
+    NSUInteger diagMark = _diagnostics.diagnostics.count;
+    NSUInteger errMark = _diagnostics.errorCount;
     _pos = forPos;
     XTSourceLocation* loc = [self currentLocation];
     NSMutableDictionary* frame = [NSMutableDictionary dictionary];
@@ -4342,8 +4349,12 @@ static int64_t parAutoConst(XTASTNode* e)
     [self parGridLoop:-1];
     [self blkPopScope];
     [[self blkFrames] removeLastObject];
-    if (!loop)
-        return nil;
+    if (!loop || _diagnostics.errorCount > errMark)
+        {
+        [_diagnostics truncateToCount:diagMark];
+        _pos = plainEnd;
+        return plain;
+        }
     // A perfect two-deep nest becomes one block over the W*H grid (the
     // :grid form): W*H work items in one dispatch rather than H items each
     // running W serially, which matters when H is small.
@@ -4366,7 +4377,14 @@ static int64_t parAutoConst(XTASTNode* e)
     labels[name] = @(nth);
     if (nth > 1)
         name = [NSString stringWithFormat:@"%@#%lu", name, (unsigned long)nth];
-    return [self parDesugarBody:body frame:frame name:name reductions:reds at:loc];
+    XTASTNode* out = [self parDesugarBody:body frame:frame name:name reductions:reds at:loc];
+    if (!out || _diagnostics.errorCount > errMark)
+        {
+        [_diagnostics truncateToCount:diagMark];
+        _pos = plainEnd;
+        return plain;
+        }
+    return out;
     }
 
 - (nullable XTASTNode*)parsePar

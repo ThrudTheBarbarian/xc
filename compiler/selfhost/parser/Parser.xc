@@ -2860,6 +2860,14 @@ class Parser
         parGridEnter("loops", false);
         if (plain == (Node*)0 || parAutoSmall(plain, forPos, _pos))
             return plain;
+        // A loop the block form refuses stays the loop: an error the block's
+        // parse or its desugaring reports (a capture of self or of an ivar,
+        // say) is taken back, and the loop as parsed above is the statement.
+        // A loop of a method that reads self.n failed to compile (UXKit had
+        // 25). As the reference.
+        u32 plainEnd = _pos;
+        u32 errMark = _errors.count();
+        bool fatalMark = _fatal;
         _pos = forPos;
         Token* forTok = cur();
         Map* frame = new Map();
@@ -2885,7 +2893,11 @@ class Parser
         parGridEnter("loops", false);
         blkPopScope();
         _blkFrames.removeAt(_blkFrames.count() - (u32)1);
-        if (loop == (Node*)0) { _parTok = savedParTok; return (Node*)0; }
+        if (loop == (Node*)0 || _errors.count() > errMark) {
+            parAutoTakeBack(errMark, fatalMark, plainEnd);
+            _parTok = savedParTok;
+            return plain;
+        }
         // A perfect two-deep nest becomes one block over the W*H grid (the
         // reference explains).
         Token* savedMkAt0 = _mkAt;
@@ -2921,7 +2933,21 @@ class Parser
         Node* out = parDesugar(body, frame, name, reds);
         _mkAt = savedMkAt;
         _parTok = savedParTok;
+        if (out == (Node*)0 || _errors.count() > errMark) {
+            parAutoTakeBack(errMark, fatalMark, plainEnd);
+            return plain;
+        }
         return out;
+    }
+
+    // The block form of a loop failed: its errors go, and parsing goes on
+    // after the loop as written.
+    void parAutoTakeBack(u32 errMark, bool fatalMark, u32 plainEnd)
+    {
+        while (_errors.count() > errMark)
+            _errors.removeAt(_errors.count() - (u32)1);
+        _fatal = fatalMark;
+        _pos = plainEnd;
     }
 
     u16 parTokType(u32 i)
