@@ -146,7 +146,7 @@ that built it keeps it. **To run a program on another machine, copy
 
 | Flag | Effect |
 |------|--------|
-| `--no-runtime-lib` | Compile the runtime into the program instead, as releases before 0.9.2 did: one file that runs without `libRuntime`, larger, and slower to build when it uses `par`. `XCC_NO_RUNTIME_LIB=1` does the same. A `-static` link, and a link that brings object files or archives (`-Wl,x.o`), always do. |
+| `--no-runtime-lib` | Compile the runtime into the program instead: one file that runs without `libRuntime`, larger, and slower to build when it uses `par`. `XCC_NO_RUNTIME_LIB=1` does the same. A `-static` link, and a link that brings object files or archives (`-Wl,x.o`), always do. |
 | `--emit-runtime` | Build a target's `libRuntime` from its root file, `support/generic/lib/Par.xc`, as `make runtime-libs` does. |
 
 ## Support tree and memory model
