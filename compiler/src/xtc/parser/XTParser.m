@@ -1273,6 +1273,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                         ((XTVariableDeclNode*)inner).isStatic = isStaticMethod;
                         [ivars addObject:(XTVariableDeclNode*)inner];
                         [[self blkIvarNames] addObject:((XTVariableDeclNode*)inner).varName];
+                        [self blkMarkIvar:((XTVariableDeclNode*)inner).varName]; // parSelfIvar
                         }
                     }
                 }

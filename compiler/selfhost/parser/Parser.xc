@@ -2217,6 +2217,15 @@ class Parser
             Node* extra = mkNamed((u16)nkVariableDecl, more.value());
             extra.setOp(memberTypeSuffix(ty));
             extra.setFlags(ivarFlags);
+            // Bound and marked like the first: `u32 a, b;` made only `a`
+            // visible to the capture analysis, so a bare `b` in a par body
+            // was refused here and captured by the reference.
+            blkBind(more.value(), extra.op(), _lastBlkParams);
+            if (_blkScopes.count() > (u32)0) {
+                Object* bi = ((Map*)_blkScopes.get(_blkScopes.count() - (u32)1)).get((Hashable*)more.value());
+                if (bi != 0) ((Map*)bi).set((Hashable*)String.withCString("ivar"), (Object*)Number.with((u32)1));
+            }
+            _blkIvarNames.add((Hashable*)String.withString(more.value()));
             if (match((u16)tokAssign)) extra.add(parseExpression());
             _pendingMembers.add((Object*)extra);
         }

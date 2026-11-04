@@ -12,7 +12,8 @@
 #      parallel automatically), same answer.
 #   3. A local of the field's name: self.n is left alone, same answer.
 #   4. A write to self's field in the loop: not lifted, same answer.
-#   5. An explicit par block reading self's fields builds and runs.
+#   5. An explicit par block reading self's fields builds and runs, one of
+#      them the second name of a comma-list declaration (`float scale, bias;`).
 #
 # Both compilers, the same warnings and output from each.
 #
@@ -86,10 +87,10 @@ class Grid : Object
 {
     u32 n;
     float* a;
-    float scale;
+    float scale, bias;
     void run(void)
     {
-        par { for (u32 i in 0..self.n) { self.a[i] = (float)(i) * self.scale; } }
+        par { for (u32 i in 0..self.n) { self.a[i] = (float)(i) * self.scale + self.bias; } }
     }
 }
 i32 main(void)
@@ -97,6 +98,7 @@ i32 main(void)
     Grid* g = new Grid();
     g.n = 100000;
     g.scale = 0.5;
+    g.bias = 1.0;
     g.a = new float[100000];
     g.run();
     Stdio.printf("%.1f %.1f\n", (double)(g.a[3]), (double)(g.a[99999]));
@@ -118,7 +120,7 @@ for c in "$REF" "$XC"; do
         grep -q "f.xc:$l:.*became a 'par' block" "$W/warn" && { echo "FAIL $cn: $m's loop (line $l) was lifted"; fail=1; }
     done
     "$c" -H "$ROOT" -q -O2 -o "$W/p" "$W/p.xc" 2> "$W/perr" || { echo "FAIL $cn: an explicit par block reading self's fields does not build:"; head -3 "$W/perr"; fail=1; continue; }
-    [ "$("$W/p")" = "1.5 49999.5" ] || { echo "FAIL $cn: the explicit par block printed '$("$W/p")'"; fail=1; }
+    [ "$("$W/p")" = "2.5 50000.5" ] || { echo "FAIL $cn: the explicit par block printed '$("$W/p")'"; fail=1; }
     grep 'warning:' "$W/warn" | sed $'s/\x1b\\[[0-9;]*m//g' > "$W/warn.$cn"   # the warning lines (the reference also prints the source line)
 done
 cmp -s "$W/warn.$(basename "$REF")" "$W/warn.$(basename "$XC")" 2>/dev/null || { echo "FAIL: the two compilers' -Wpar-auto warnings differ"; fail=1; }
