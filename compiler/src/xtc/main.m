@@ -1,5 +1,9 @@
 #import <Foundation/Foundation.h>
+#if defined(__APPLE__)
 #include <mach-o/dyld.h>
+#else
+#include <unistd.h>
+#endif
 #import "XTMachOToElfArm64.h"
 #import "XTRegexCompat.h"
 // getpid — implicit via Foundation on macOS, explicit under GNUstep, and spelled
@@ -5170,12 +5174,22 @@ int main(int argc, const char *argv[]) {
     // Record where THIS binary is so the support tree is found relative to
     // it — an installed compiler must not need the current directory to
     // locate its own libraries. argv[0] is only what the caller typed (plain
-    // `xcc` from PATH names no directory), so the OS is asked. As the port's
-    // selfPath (#61).
+    // `xcc` from PATH names no directory), so the OS is asked (_NSGetExecutablePath, /proc/self/exe). As the
+    // port's selfPath (#61).
     static char selfBuf[4096];
+#if defined(__APPLE__)
     uint32_t selfSize = (uint32_t)sizeof selfBuf;
     if (_NSGetExecutablePath(selfBuf, &selfSize) == 0)
         argv[0] = selfBuf;
+#else
+    // Linux (the GNUstep build): the kernel's answer.
+    ssize_t selfLen = readlink("/proc/self/exe", selfBuf, sizeof selfBuf - 1);
+    if (selfLen > 0)
+        {
+        selfBuf[selfLen] = 0;
+        argv[0] = selfBuf;
+        }
+#endif
     [XTCommandLineOptions setExecutablePath:argv[0]];
         for (int i = 1; i < argc; i++) {
             if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
