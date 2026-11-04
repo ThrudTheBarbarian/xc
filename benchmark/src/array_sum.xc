@@ -1,5 +1,7 @@
 // array_sum — sum an array. Exercises: reduction loop, array addressing.
-// This is the shape the arm64 reduction vectoriser recognises.
+// This is the shape the arm64 reduction vectoriser recognises. Each pass adds
+// a[i] ^ r, so no pass can be skipped; the version that adds the same total
+// every pass is array_sum_hoist.
 #import "Stdio.xc"
 #import "include/bench_time.xc"
 #define N 4096
@@ -11,7 +13,7 @@ i32 main(i32 argc, u8** argv)
     u32 sum = (u32)0;
     i64 t0 = bench_now_us();
     for (u32 r = (u32)0; r < (u32)7000000; r++)
-        for (u32 i = (u32)0; i < (u32)N; i++) sum = sum + a[i];
+        for (u32 i = (u32)0; i < (u32)N; i++) sum = sum + (a[i] ^ r);
     i64 t1 = bench_now_us();
     Stdio.printf("%lu %lld\n", sum, t1 - t0);
     return 0;

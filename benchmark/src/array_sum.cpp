@@ -14,7 +14,7 @@ int main(int argc, char **argv)
     uint32_t sum = 0;
     int64_t t0 = bench_now_us();
     for (uint32_t r = 0; r < 7000000u; r++)
-        for (uint32_t v : a) sum = sum + v;
+        for (uint32_t v : a) sum = sum + (v ^ r);
     int64_t t1 = bench_now_us();
     std::printf("%u %lld\n", sum, static_cast<long long>(t1 - t0));
     return 0;

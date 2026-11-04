@@ -9,8 +9,8 @@ struct ArraySum {
         for i in 0..<n { a[i] = (UInt32(i) &* 2654435761) &+ seed }
         var sum: UInt32 = 0
         let t0 = bench_now_us()
-        for _ in 0..<UInt32(7_000_000) {
-            for i in 0..<n { sum = sum &+ a[i] }
+        for r in 0..<UInt32(7_000_000) {
+            for i in 0..<n { sum = sum &+ (a[i] ^ r) }
         }
         let t1 = bench_now_us()
         print("\(sum) \(t1 - t0)")
