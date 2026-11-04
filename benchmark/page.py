@@ -1303,8 +1303,9 @@ gain:
 - **x86-64 loops and calls.** `sieve` and `sort_small`, where clang's loops
   are still tighter (in 0.74 `sort_small` was 2.6× behind; 0.75 rotates its
   inner loop), `call_depth`, where clang's call sequence is shorter, and
-  `int_muldiv`, where GCC hoists the arithmetic that does not depend on the
-  repetition out of it.
+  `int_muldiv_hoist`, where GCC moves the arithmetic that does not depend on
+  the repetition out of it (`int_muldiv` changes the value every pass, so
+  nothing can be moved).
 
 ## Matrix multiplies
 

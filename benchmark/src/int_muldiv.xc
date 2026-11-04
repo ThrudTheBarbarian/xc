@@ -1,5 +1,7 @@
 // int_muldiv — integer multiply and divide by compile-time constants.
-// Exercises: strength reduction, magic-number division.
+// Exercises: strength reduction, magic-number division. The divided value
+// changes every pass (a[i] + r), so no pass can be skipped; the version where
+// it does not is int_muldiv_hoist.
 #import "Stdio.xc"
 #import "include/bench_time.xc"
 #define N 1024
