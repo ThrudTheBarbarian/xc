@@ -1044,6 +1044,7 @@ static BOOL namesHighZmm(NSString *s) {
                 // 10: three operands and an immediate
                 @"vshufps":@[@10,@1,@0,@0,@0xC6,@64], @"vshufpd":@[@10,@1,@1,@1,@0xC6,@64],
                 @"vpternlogd":@[@10,@3,@1,@0,@0x25,@64], @"vpternlogq":@[@10,@3,@1,@1,@0x25,@64],
+                @"vpermi2d":@[@1,@2,@1,@0,@0x76,@64], // VMulHi's merge: idx/dst, table 1, table 2
                 @"vinserti64x4":@[@10,@3,@1,@1,@0x3A,@32], @"vinsertf64x4":@[@10,@3,@1,@1,@0x1A,@32],
                 // 12: unary
                 @"vpabsb":@[@12,@2,@1,@0,@0x1C,@64], @"vpabsw":@[@12,@2,@1,@0,@0x1D,@64],
@@ -1261,6 +1262,23 @@ static BOOL namesHighZmm(NSString *s) {
             emit8(out, 0x70);
             emitModRM(out, rr, b);
             emit8(out, (uint8_t)opv[2].imm);
+            CLEANUP(); return out;
+        }
+        if ([mn isEqualToString:@"vpblendd"] && opCount == 4 && a && b && opv[2].kind != OpImm && opv[3].kind == OpImm) {
+            // VEX.NDS.66.0F3A.W0 02 /r ib (AVX2), VMulHi's AVX2 merge. Map
+            // 0F3A needs the three-byte prefix. As the port.
+            XOperand *s2 = &opv[2];
+            int L = (a->size == 32 || b->size == 32) ? 0x04 : 0;
+            int rr = a->reg, vvvv = (~b->reg) & 0x0F;
+            int bb = s2->kind == OpReg ? s2->reg : s2->base;
+            int xx = s2->kind == OpReg ? 0 : s2->index;
+            bb = bb < 0 ? 0 : bb; xx = xx < 0 ? 0 : xx;
+            emit8(out, 0xC4);
+            emit8(out, (uint8_t)(((rr & 8) ? 0 : 0x80) | ((xx & 8) ? 0 : 0x40) | ((bb & 8) ? 0 : 0x20) | 3));
+            emit8(out, (uint8_t)((vvvv << 3) | L | 1));
+            emit8(out, 0x02);
+            emitModRM(out, rr, s2);
+            emit8(out, (uint8_t)opv[3].imm);
             CLEANUP(); return out;
         }
         if ([mn isEqualToString:@"vshufps"] && opCount == 4 && a && b && opv[2].kind != OpImm && opv[3].kind == OpImm) {

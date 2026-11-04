@@ -2291,6 +2291,8 @@ class X86Fixup
         evAdd(m, String.withCString("vshufps"), (u32)10, (u32)1, (u32)0, (u32)0, (u32)$C6, (u32)64);
         evAdd(m, String.withCString("vshufpd"), (u32)10, (u32)1, (u32)1, (u32)1, (u32)$C6, (u32)64);
         evAdd(m, String.withCString("vpternlogd"), (u32)10, (u32)3, (u32)1, (u32)0, (u32)$25, (u32)64);
+        // vpermi2d zmm(idx, dst), zmm(table 1), zmm(table 2): VMulHi's merge.
+        evAdd(m, String.withCString("vpermi2d"), (u32)1, (u32)2, (u32)1, (u32)0, (u32)$76, (u32)64);
         evAdd(m, String.withCString("vpternlogq"), (u32)10, (u32)3, (u32)1, (u32)1, (u32)$25, (u32)64);
         evAdd(m, String.withCString("vinserti64x4"), (u32)10, (u32)3, (u32)1, (u32)1, (u32)$3A, (u32)32);
         evAdd(m, String.withCString("vinsertf64x4"), (u32)10, (u32)3, (u32)1, (u32)1, (u32)$1A, (u32)32);
@@ -2666,6 +2668,27 @@ class X86Fixup
                 if (xx < (i32)0) xx = (i32)0;
                 eVex(a.reg(), xx, bb, (u32)1, (~b.reg()) & (u32)$0F, L, (u32)0);
                 e8((u32)$C6);
+                eModRM(a.reg(), s2);
+                e8((u32)im.disp() & (u32)$FF);
+                _hit = true;
+                return true;
+                }
+            }
+        // vpblendd dst, src1, src2/m, imm8: VEX.66.0F3A.W0 02 (AVX2), the
+        // same operand shape as vshufps. VMulHi's AVX2 merge.
+        if (mn.equals(String.withCString("vpblendd")) && _ops.count() == (u32)4 && a != (XOperand*)0 && b != (XOperand*)0)
+            {
+            XOperand* s2 = (XOperand*)_ops.get((u32)2);
+            XOperand* im = (XOperand*)_ops.get((u32)3);
+            if (s2.kind() != (u32)OP_IMM && im.kind() == (u32)OP_IMM)
+                {
+                u32 L = (a.size() == (u32)32 || b.size() == (u32)32) ? (u32)4 : (u32)0;
+                i32 bb = s2.kind() == (u32)OP_REG ? (i32)s2.reg() : s2.rmReg();
+                i32 xx = s2.kind() == (u32)OP_REG ? (i32)0 : s2.index();
+                if (bb < (i32)0) bb = (i32)0;
+                if (xx < (i32)0) xx = (i32)0;
+                eVex(a.reg(), xx, bb, (u32)3, (~b.reg()) & (u32)$0F, L, (u32)1);
+                e8((u32)$02);
                 eModRM(a.reg(), s2);
                 e8((u32)im.disp() & (u32)$FF);
                 _hit = true;
