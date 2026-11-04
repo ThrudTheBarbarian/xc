@@ -1,15 +1,15 @@
 # Phoronix Test Suite profiles
 
 Two profiles, each pinned to one release's published archives by SHA-256 in
-its `downloads.xml`. The current versions are for xcc 0.9:
+its `downloads.xml`. The current versions are for xcc 0.9.2:
 
 | profile | runs | pins |
 |---|---|---|
-| `xc-par-1.3.0` | the par suite, written in xc | `xcc-linux-0.9.1`, `xcc-bench-sources-0.9.1` |
-| `xc-c-1.3.0` | plain C programs, xcc against GCC and Clang | `xcc-linux-0.9.1`, `xcc-c-bench-sources-0.9.1` |
+| `xc-par-1.4.0` | the par suite, written in xc | `xcc-linux-0.9.2`, `xcc-bench-sources-0.9.2` |
+| `xc-c-1.4.0` | plain C programs, xcc against GCC and Clang | `xcc-linux-0.9.2`, `xcc-c-bench-sources-0.9.2` |
 
 The older versions (`xc-par-1.0.0` for 0.8, `xc-c-1.0.0` for 0.87.3, both 1.1.0s
-for 0.89) stay, and so do the archives they pin, so a result made with them can
+for 0.89, both 1.2.0s for 0.9, both 1.3.0s for 0.9.1) stay, and so do the archives they pin, so a result made with them can
 still be checked.
 
 ## xc-par: the par suite
@@ -25,14 +25,14 @@ A run is refused when the checksum is wrong, or when a GPU mode ran on the CPU
 or "tiles across" the devices of a set.
 
     mkdir -p ~/.phoronix-test-suite/test-profiles/local
-    cp -R xc-par-1.2.0 ~/.phoronix-test-suite/test-profiles/local/
-    phoronix-test-suite benchmark local/xc-par-1.3.0
+    cp -R xc-par-1.4.0 ~/.phoronix-test-suite/test-profiles/local/
+    phoronix-test-suite benchmark local/xc-par-1.4.0
 
 ## xc-c: the C programs
 
 Seven plain C programs (no pragmas or annotations) built by GCC and by Clang
-at `-O2` and at `-O3 -march=native`, and by xcc, plain (one thread) and with
-`--par-auto` (every CPU thread, the GPU, every GPU, or `auto`). For comparison
+at `-O2` and at `-O3 -march=native`, and by xcc, plain (one thread, `--par-style=cpu`) and with
+`--par-style=auto` (every CPU thread, the GPU, every GPU, or `auto`). For comparison
 it also builds OpenMP copies, the same files with one `#pragma omp parallel
 for` on the timed loop, with GCC and Clang at `-O3 -march=native -fopenmp`. It
 needs `gcc` and `clang` (xcc's C path uses clang's front end); Clang's OpenMP
@@ -46,8 +46,8 @@ builds. The sources archive holds only the C files (the OpenMP copies in
 `openmp/`).
 
     mkdir -p ~/.phoronix-test-suite/test-profiles/local
-    cp -R xc-c-1.2.0 ~/.phoronix-test-suite/test-profiles/local/
-    phoronix-test-suite benchmark local/xc-c-1.3.0
+    cp -R xc-c-1.4.0 ~/.phoronix-test-suite/test-profiles/local/
+    phoronix-test-suite benchmark local/xc-c-1.4.0
 
 ## One combination, unattended
 
@@ -55,9 +55,9 @@ builds. The sources archive holds only the C files (the OpenMP copies in
 without its version:
 
     PRESET_OPTIONS_VALUES="xc-par.bench=mandel_deep;xc-par.device=gpu" \
-        phoronix-test-suite batch-run local/xc-par-1.3.0
+        phoronix-test-suite batch-run local/xc-par-1.4.0
     PRESET_OPTIONS_VALUES="xc-c.bench=mandelbrot;xc-c.build=xcc-par-gpu;xc-c.size=16" \
-        phoronix-test-suite batch-run local/xc-c-1.3.0
+        phoronix-test-suite batch-run local/xc-c-1.4.0
 
 ## A new release
 
