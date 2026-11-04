@@ -15,6 +15,7 @@
 #import "Stdio.xc"
 #import "Files.xc"
 #import "Process.xc"
+#import "Bundle.xc"
 #import <TokenType>
 #import "TokenTypeDefs.xc"
 #import <Token>
@@ -2147,8 +2148,12 @@ u32 GetModuleFileNameA(pointer module, u8* buf, u32 size);
 #endif
 
 // The compiler's own path. argv[0] is only what the caller typed: plain `xcc`
-// when it came from PATH, which names no directory. Windows says where the
-// image really is; elsewhere argv[0] stays (and /opt/xcc is a fallback).
+// when it came from PATH, which names no directory, so the search fell
+// through to /opt/xcc. An install anywhere else (an archive unpacked in a
+// home directory, as the downloads page says to) could not find its own
+// library: on a Raspberry Pi 5, hello.xc failed with "searched:" and an
+// empty list (#61). The OS says where the image is (GetModuleFileNameA,
+// _NSGetExecutablePath, /proc/self/exe), and Bundle asks it.
 String* selfPath(void)
     {
 #if OS_windows
@@ -2157,6 +2162,9 @@ String* selfPath(void)
     if (n > (u32)0 && n < (u32)1024)
         return String.withBytes(&buf[0], n);
 #endif
+    String* exe = Bundle.executablePath();
+    if (exe != 0 && exe.byteLength() > (u32)0)
+        return exe;
     return Process.argument((u32)0);
     }
 

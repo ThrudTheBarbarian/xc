@@ -1,4 +1,5 @@
 #import <Foundation/Foundation.h>
+#include <mach-o/dyld.h>
 #import "XTMachOToElfArm64.h"
 #import "XTRegexCompat.h"
 // getpid — implicit via Foundation on macOS, explicit under GNUstep, and spelled
@@ -5166,9 +5167,15 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
-    // Record argv[0] so the support tree is found relative to THIS binary —
-    // an installed compiler must not need the current directory to locate
-    // its own libraries.
+    // Record where THIS binary is so the support tree is found relative to
+    // it — an installed compiler must not need the current directory to
+    // locate its own libraries. argv[0] is only what the caller typed (plain
+    // `xcc` from PATH names no directory), so the OS is asked. As the port's
+    // selfPath (#61).
+    static char selfBuf[4096];
+    uint32_t selfSize = (uint32_t)sizeof selfBuf;
+    if (_NSGetExecutablePath(selfBuf, &selfSize) == 0)
+        argv[0] = selfBuf;
     [XTCommandLineOptions setExecutablePath:argv[0]];
         for (int i = 1; i < argc; i++) {
             if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
