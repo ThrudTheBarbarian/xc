@@ -263,10 +263,7 @@ void main(void)
         Process.exit((i32)1);
         return;
         }
-    Array* image = pe.bytes();
-    Data* d = Data.withCapacity((u32)0);
-    for (u32 k = (u32)0; k < image.count(); k = k + (u32)1)
-        d.appendByte((u8)((Number*)image.get(k)).asU32());
+    Data* d = pe.bytes();
     if (!Files.writeData(outPath, d))
         {
         Stdio.printf("xtldwin: cannot write '%s'\n", outPath.cString());

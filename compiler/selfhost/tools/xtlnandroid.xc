@@ -18,6 +18,7 @@
 #import "Process.xc"
 #import <U64>
 #import <Arm64Asm>
+#import <SectionBytes>
 #import "Arm64AsmDefs.xc"
 #import <ElfArm64>
 #import "ElfArm64Defs.xc"
@@ -112,7 +113,7 @@ void main(void)
 
     // Bug 124: the constructor array lives outside dataBytes; append it or the
     // link silently drops every load-time constructor.
-    Array* lnData = a.dataBytes();
+    SectionBytes* lnData = a.dataBytes();
     Array* lnFix  = a.fixups();
     u32 lnMi = Arm64Asm.appendModInit(a, lnData, lnFix);
     ElfArm64* w = new ElfArm64();
@@ -141,10 +142,7 @@ void main(void)
         Process.exit((i32)1); return;
     }
 
-    Array* image = w.bytes();
-    Data* d = Data.withCapacity((u32)0);
-    for (u32 i = (u32)0; i < image.count(); i = i + (u32)1)
-        d.appendByte((u8)((Number*)image.get(i)).asU32());
+    Data* d = w.bytes();
     if (!Files.writeData(outPath, d)) {
         Stdio.printf("xtlnandroid: cannot write '%s'\n", outPath.cString());
         Process.exit((i32)1); return;

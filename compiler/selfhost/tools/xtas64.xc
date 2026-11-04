@@ -15,6 +15,7 @@
 #import "Process.xc"
 #import <U64>
 #import <Arm64Asm>
+#import <SectionBytes>
 #import "Arm64AsmDefs.xc"
 
 // printf has no zero-padded hex, and the listing's whole value is that it is
@@ -32,18 +33,18 @@ String* hexPad(u32 v, u32 digits)
     return o;
     }
 
-void dumpBytes(String* tag, Array* bytes)
+void dumpBytes(String* tag, SectionBytes* bytes)
     {
-    Stdio.printf("%s %ld\n", tag.cString(), (i32)bytes.count());
+    Stdio.printf("%s %ld\n", tag.cString(), (i32)bytes.length());
     u32 i = (u32)0;
-    while (i < bytes.count())
+    while (i < bytes.length())
         {
         String* line = hexPad(i, (u32)8);
         line.appendCString(" ");
         u32 j = i;
-        while (j < bytes.count() && j < i + (u32)16)
+        while (j < bytes.length() && j < i + (u32)16)
             {
-            line.append(hexPad(((Number*)bytes.get(j)).asU32(), (u32)2));
+            line.append(hexPad((u32)bytes.byteAt(j), (u32)2));
             j = j + (u32)1;
             }
         Stdio.printf("%s\n", line.cString());

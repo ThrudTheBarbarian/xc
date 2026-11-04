@@ -57,17 +57,14 @@ void main(void)
         return;
         }
     MachO* m = new MachO();
-    Array* img = m.objectFromText(as.textBytes(), as.dataBytes(), as.symbols(),
-                                  as.dataSyms(), as.fixups(), as.globals(), as.commonSyms());
-    if (img == (Array*)0)
+    Data* d = m.objectFromText(as.textBytes(), as.dataBytes(), as.symbols(),
+                               as.dataSyms(), as.fixups(), as.globals(), as.commonSyms());
+    if (d == (Data*)0)
         {
         Stdio.printf("xtobj64: object write failed\n");
         Process.exit((i32)1);
         return;
         }
-    Data* d = Data.withCapacity(img.count());
-    for (u32 i = (u32)0; i < img.count(); i = i + (u32)1)
-        d.appendByte((u8)((Number*)img.get(i)).asU32());
     if (!Files.writeData(out, d))
         {
         Stdio.printf("xtobj64: cannot write '%s'\n", out.cString());

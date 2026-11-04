@@ -30,6 +30,7 @@
 
 #import "Foundation.xc"
 #import <Arm64Asm>
+#import <SectionBytes>
 #import "Arm64AsmDefs.xc"
 #import <ElfObject>
 #import <ArArchive>
@@ -47,17 +48,17 @@ class ElfLinkArm64
     // order the objects joined: pointer bytes (Number@) and their Pointer64
     // fixups, for the caller to put after the program's own (appendModInit),
     // as MachOLink hands over the __mod_init_func of Mach-O objects.
-    Array* _objModInit;
+    SectionBytes* _objModInit;
     Array* _objModInitFix;
 
     void init(void)
         {
         _rc = (u32)0;
         _gotFixups = new Array();
-        _objModInit = new Array();
+        _objModInit = new SectionBytes();
         _objModInitFix = new Array();
         }
-    Array* objModInit(void)    { return _objModInit; }
+    SectionBytes* objModInit(void) { return _objModInit; }
     Array* objModInitFix(void) { return _objModInitFix; }
     u32 rc(void)
         {
@@ -94,15 +95,14 @@ class ElfLinkArm64
         return t;
         }
 
-    static void padArray(Array* a, u32 mask)
+    static void padArray(SectionBytes* a, u32 mask)
         {
-        while ((a.count() & mask) != (u32)0)
-            a.add((Object*)Number.withU32((u32)0));
+        while ((a.length() & mask) != (u32)0)
+            a.appendByte((u8)0);
         }
-    static void appendData(Array* a, Data* d)
+    static void appendData(SectionBytes* a, Data* d)
         {
-        for (u32 i = (u32)0; i < d.length(); i = i + (u32)1)
-            a.add((Object*)Number.withU32((u32)d.byteAt(i)));
+        a.appendData(d);
         }
     // Whether the object defines something still wanted: wanted at the
     // start of this pass AND not defined by a member pulled earlier in it,
@@ -148,7 +148,7 @@ class ElfLinkArm64
     // as something needs them. Symbols land in `msyms` (data ones also in
     // `mdataSyms`), fixups in `mfix`.
     void merge(Array* objectFiles, Array* archives,
-               Array* mtext, Array* mdata, Map* msyms, Array* mdataSyms, Array* mfix)
+               SectionBytes* mtext, SectionBytes* mdata, Map* msyms, Array* mdataSyms, Array* mfix)
         {
         _rc = (u32)0;
         if (objectFiles.count() == (u32)0 && archives.count() == (u32)0)
@@ -245,11 +245,11 @@ class ElfLinkArm64
                 // The blobs: text 16-aligned, data at the largest alignment
                 // any of its sections asked for.
                 ElfLinkArm64.padArray(mtext, (u32)15);
-                u32 base = mtext.count();
+                u32 base = mtext.length();
                 ElfLinkArm64.appendData(mtext, obj.text());
                 u32 dalign = obj.dataAlign() < (u32)16 ? (u32)16 : obj.dataAlign();
                 ElfLinkArm64.padArray(mdata, dalign - (u32)1);
-                u32 dbase = mdata.count();
+                u32 dbase = mdata.length();
                 ElfLinkArm64.appendData(mdata, obj.data());
                 // Every definition at its merged offset.
                 Array* sdefs = obj.symdefs();
@@ -288,9 +288,8 @@ class ElfLinkArm64
                             continue;
                         u32 al = sd.align() < (u32)1 ? (u32)1 : sd.align();
                         ElfLinkArm64.padArray(mdata, al - (u32)1);
-                        msyms.set((Hashable*)nm, (Object*)Number.withU32(mdata.count()));
-                        for (u32 z = (u32)0; z < sd.size(); z = z + (u32)1)
-                            mdata.add((Object*)Number.withU32((u32)0));
+                        msyms.set((Hashable*)nm, (Object*)Number.withU32(mdata.length()));
+                        mdata.appendZeros(sd.size());
                         mdataSyms.add((Object*)nm);
                         weakDefs.set((Hashable*)nm, (Object*)Number.withU32((u32)1));
                         continue;
@@ -382,9 +381,9 @@ class ElfLinkArm64
                 // The object's constructors: each pointer word a Pointer64
                 // fixup at its place in the list.
                 Data* ia = obj.initArray();
-                u32 ibase = _objModInit.count();
+                u32 ibase = _objModInit.length();
                 for (u32 b = (u32)0; b < ia.length(); b = b + (u32)1)
-                    _objModInit.add((Object*)Number.withU32((u32)ia.byteAt(b)));
+                    _objModInit.appendByte(ia.byteAt(b));
                 Array* il = obj.initRelocs();
                 for (u32 k = (u32)0; k < il.count(); k = k + (u32)1)
                     {
@@ -417,12 +416,12 @@ class ElfLinkArm64
             gf.setKind((u32)FIXUP_PAGEOFF12);
             gf.setScale((u32)0);
             u32 o = gf.offset();
-            u32 insn = ((Number*)mtext.get(o)).asU32() | (((Number*)mtext.get(o + (u32)1)).asU32() << (u32)8) | (((Number*)mtext.get(o + (u32)2)).asU32() << (u32)16) | (((Number*)mtext.get(o + (u32)3)).asU32() << (u32)24);
+            u32 insn = (u32)mtext.byteAt(o) | ((u32)mtext.byteAt(o + (u32)1) << (u32)8) | ((u32)mtext.byteAt(o + (u32)2) << (u32)16) | ((u32)mtext.byteAt(o + (u32)3) << (u32)24);
             u32 add = (u32)$91000000 | (((insn >> (u32)5) & (u32)$1F) << (u32)5) | (insn & (u32)$1F);
-            mtext.set(o, (Object*)Number.withU32(add & (u32)$FF));
-            mtext.set(o + (u32)1, (Object*)Number.withU32((add >> (u32)8) & (u32)$FF));
-            mtext.set(o + (u32)2, (Object*)Number.withU32((add >> (u32)16) & (u32)$FF));
-            mtext.set(o + (u32)3, (Object*)Number.withU32((add >> (u32)24) & (u32)$FF));
+            mtext.setByteAt(o, (u8)(add & (u32)$FF));
+            mtext.setByteAt(o + (u32)1, (u8)((add >> (u32)8) & (u32)$FF));
+            mtext.setByteAt(o + (u32)2, (u8)((add >> (u32)16) & (u32)$FF));
+            mtext.setByteAt(o + (u32)3, (u8)((add >> (u32)24) & (u32)$FF));
             }
         }
     }

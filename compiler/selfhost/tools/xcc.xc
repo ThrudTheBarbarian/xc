@@ -36,6 +36,7 @@
 #import "OptDefs.xc"
 #import <Arm64>          // the BACK END
 #import <Arm64Asm>       // the ASSEMBLER — different class, different dir
+#import <SectionBytes>
 #import "Arm64AsmDefs.xc"
 #import <MachO>
 #import "MachODefs.xc"
@@ -1483,7 +1484,7 @@ void emitApkPackage(DriverOptions* d, String* prog)
 
     // Bug 124: the constructor array is kept OUT of dataBytes by the assembler,
     // so it has to be appended here or every load-time constructor is dropped.
-    Array* apkData = a.dataBytes();
+    SectionBytes* apkData = a.dataBytes();
     Array* apkFix  = a.fixups();
     u32 apkMi = Arm64Asm.appendModInit(a, apkData, apkFix);
     ElfArm64* w = new ElfArm64();
@@ -1493,12 +1494,21 @@ void emitApkPackage(DriverOptions* d, String* prog)
         Stdio.printf("xcc: apk: link failed: %s\n", w.why().cString());
         Process.exit((i32)1); return;
     }
-    packageApk(d, name, soname, w.bytes());
+    packageApk(d, name, soname, numbersOfData(w.bytes()));
 }
 
 // The package around a linked payload: manifest, the payload and any
 // --with-lib/--with-dex extras, zipped, signed (APK Signature Scheme v2) and
 // written. Shared by the in-house link and the --no-self-host NDK one.
+// One Number per byte, for the APK writer, which takes its payload so.
+Array* numbersOfData(Data* d)
+{
+    Array* a = new Array();
+    for (u32 i = (u32)0; i < d.length(); i = i + (u32)1)
+        a.add((Object*)Number.withU32((u32)d.byteAt(i)));
+    return a;
+}
+
 void packageApk(DriverOptions* d, String* name, String* soname, Array* soBytes)
 {
     String* out = d.fe().output();
@@ -2158,15 +2168,12 @@ void emitWin64(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         Pe* pw = new Pe();
-        Array* img = pw.objectFromText(oa.text(), oa.data(), oa.symbols(), oa.dataSyms(),
-                                       oa.globalSyms(), oa.fixups());
-        if (pw.failed() || img == (Array*)0) {
+        Data* od = pw.objectFromText(oa.text(), oa.data(), oa.symbols(), oa.dataSyms(),
+                                     oa.globalSyms(), oa.fixups());
+        if (pw.failed() || od == (Data*)0) {
             Stdio.printf("xcc: %s\n", pw.failed() ? pw.why().cString() : "object write failed");
             Process.exit((i32)1); return;
         }
-        Data* od = Data.withCapacity(img.count());
-        for (u32 i = (u32)0; i < img.count(); i = i + (u32)1)
-            od.appendByte((u8)((Number*)img.get(i)).asU32());
         if (!Files.writeData(d.fe().output(), od)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
             Process.exit((i32)1); return;
@@ -2415,10 +2422,7 @@ void linkWin64(DriverOptions* d, String* prog)
         Stdio.printf("xcc: %s\n", pe.why().cString());
         Process.exit((i32)1); return;
     }
-    Array* image = pe.bytes();
-    Data* out = Data.withCapacity(image.count());
-    for (u32 k = (u32)0; k < image.count(); k = k + (u32)1)
-        out.appendByte((u8)((Number*)image.get(k)).asU32());
+    Data* out = pe.bytes();
     if (!Files.writeData(d.fe().output(), out)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
         Process.exit((i32)1); return;
@@ -4054,7 +4058,7 @@ Array* globlNames(String* asmText, Map* symbols)
 // (the objects named as inputs in an object-only link) — into the
 // assembler's model, then give the ObjC metadata its section identity back.
 // Returns the ObjC section table for the writer (empty when there is none).
-Array* mergeLinkObjects(DriverOptions* d, Array* mtext, Array* mdata, Map* msyms,
+Array* mergeLinkObjects(DriverOptions* d, SectionBytes* mtext, SectionBytes* mdata, Map* msyms,
                         Array* mdataSyms, Array* mfix, Array* extra, Arm64Asm* as)
 {
     Array* objs = new Array();
@@ -4080,9 +4084,8 @@ Array* mergeLinkObjects(DriverOptions* d, Array* mtext, Array* mdata, Map* msyms
         }
         // The objects' load-time constructors after the program's own, in the
         // list the writer ends __data with (appendModInit).
-        u32 mb = as.modInitBytes().count();
-        for (u32 i = (u32)0; i < ml.objModInit().count(); i = i + (u32)1)
-            as.modInitBytes().add(ml.objModInit().get(i));
+        u32 mb = as.modInitBytes().length();
+        as.modInitBytes().append(ml.objModInit());
         for (u32 i = (u32)0; i < ml.objModInitFix().count(); i = i + (u32)1) {
             Arm64Fixup* f = (Arm64Fixup*)ml.objModInitFix().get(i);
             as.modInitFixups().add((Object*)Arm64Fixup.make(mb + f.offset(), f.kind(), f.symbol(), f.scale()));
@@ -4096,7 +4099,7 @@ Array* mergeLinkObjects(DriverOptions* d, Array* mtext, Array* mdata, Map* msyms
 // into the assembler's model before the image is written. It used to drop
 // them without a word, so a library bundling C code came out with that code
 // undefined.
-void mergeElfLinkObjects(DriverOptions* d, Array* mtext, Array* mdata, Map* msyms,
+void mergeElfLinkObjects(DriverOptions* d, SectionBytes* mtext, SectionBytes* mdata, Map* msyms,
                          Array* mdataSyms, Array* mfix, Array* extra, Arm64Asm* as)
 {
     Array* objs = new Array();
@@ -4122,9 +4125,8 @@ void mergeElfLinkObjects(DriverOptions* d, Array* mtext, Array* mdata, Map* msym
     // The objects' load-time constructors after the program's own, in the
     // list appendModInit ends the data with: xcc's own -c objects carry a
     // module's this way, and a C object's .init_array runs as well.
-    u32 mb = as.modInitBytes().count();
-    for (u32 i = (u32)0; i < el.objModInit().count(); i = i + (u32)1)
-        as.modInitBytes().add(el.objModInit().get(i));
+    u32 mb = as.modInitBytes().length();
+    as.modInitBytes().append(el.objModInit());
     for (u32 i = (u32)0; i < el.objModInitFix().count(); i = i + (u32)1) {
         Arm64Fixup* f = (Arm64Fixup*)el.objModInitFix().get(i);
         Arm64Fixup* g = Arm64Fixup.make(mb + f.offset(), f.kind(), f.symbol(), f.scale());
@@ -4196,7 +4198,7 @@ void linkObjectsArm64Elf(DriverOptions* d)
             if (((String*)d.fe().neededLibs().get(k)).equals((String*)needs.get(i))) have = true;
         if (!have) d.fe().neededLibs().add(needs.get(i));
     }
-    Array* aData = as.dataBytes();
+    SectionBytes* aData = as.dataBytes();
     Array* aFix  = as.fixups();
     mergeElfLinkObjects(d, as.textBytes(), aData, as.symbols(), as.dataSyms(), aFix, d.objectInputs(), as);
     u32 aMi = Arm64Asm.appendModInit(as, aData, aFix);
@@ -4216,10 +4218,7 @@ void linkObjectsArm64Elf(DriverOptions* d)
         Stdio.printf("xcc: %s link failed: %s\n", lrow.name().cString(), w.why().cString());
         Process.exit((i32)1); return;
     }
-    Array* image = w.bytes();
-    Data* od = Data.withCapacity(image.count());
-    for (u32 i = (u32)0; i < image.count(); i = i + (u32)1)
-        od.appendByte((u8)((Number*)image.get(i)).asU32());
+    Data* od = w.bytes();
     if (!Files.writeData(d.fe().output(), od)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
         Process.exit((i32)1); return;
@@ -4251,7 +4250,7 @@ void linkObjectsArm64(DriverOptions* d)
         Stdio.printf("xcc: no entry symbol (_xtc_start / _main)\n");
         Process.exit((i32)1); return;
     }
-    Array* dataBytes = as.dataBytes();
+    SectionBytes* dataBytes = as.dataBytes();
     Array* fixups    = as.fixups();
     Array* objcSects = mergeLinkObjects(d, as.textBytes(), dataBytes, as.symbols(),
                                         as.dataSyms(), fixups, d.objectInputs(), as);
@@ -4269,10 +4268,7 @@ void linkObjectsArm64(DriverOptions* d)
     m.executable(as.textBytes(), ((Number*)entry).asU32(), as.symbols(),
                  dataBytes, as.dataSyms(), fixups, miLen, objcSects, bssLen);
     checkSystemImports(d, m);
-    Array* image = m.bytes();
-    Data* out = Data.withCapacity(image.count());
-    for (u32 i = (u32)0; i < image.count(); i = i + (u32)1)
-        out.appendByte((u8)((Number*)image.get(i)).asU32());
+    Data* out = m.bytes();
     if (!Files.writeData(d.fe().output(), out)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
         Process.exit((i32)1); return;
@@ -5257,17 +5253,14 @@ void emitModule(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         ElfArm64* eo = new ElfArm64();
-        Array* img = eo.objectFromText(oas.textBytes(), oas.dataBytes(), oas.symbols(), oas.dataSyms(),
-                                       oas.fixups(), oas.globals(), oas.commonSyms(),
-                                       oas.modInitBytes(), oas.modInitFixups());
-        if (img == (Array*)0 || eo.failed()) {
+        Data* od = eo.objectFromText(oas.textBytes(), oas.dataBytes(), oas.symbols(), oas.dataSyms(),
+                                     oas.fixups(), oas.globals(), oas.commonSyms(),
+                                     oas.modInitBytes(), oas.modInitFixups());
+        if (od == (Data*)0 || eo.failed()) {
             Stdio.printf("xcc: error: %s object write failed: %s\n", d.targetRow().name().cString(),
                          eo.why() == (String*)0 ? "?" : eo.why().cString());
             Process.exit((i32)1); return;
         }
-        Data* od = Data.withCapacity(img.count());
-        for (u32 i = (u32)0; i < img.count(); i = i + (u32)1)
-            od.appendByte((u8)((Number*)img.get(i)).asU32());
         if (!Files.writeData(d.fe().output(), od)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
             Process.exit((i32)1); return;
@@ -5295,15 +5288,12 @@ void emitModule(DriverOptions* d, IRModule* mod)
         // The module's load-time constructors (XG-NIB registration) travel in
         // the object as its __mod_init_func, for the link to run.
         mo.setModInit(oas.modInitBytes(), oas.modInitFixups());
-        Array* img = mo.objectFromText(oas.textBytes(), oas.dataBytes(), oas.symbols(),
-                                       oas.dataSyms(), oas.fixups(), oas.globals(), oas.commonSyms());
-        if (img == (Array*)0) {
+        Data* od = mo.objectFromText(oas.textBytes(), oas.dataBytes(), oas.symbols(),
+                                     oas.dataSyms(), oas.fixups(), oas.globals(), oas.commonSyms());
+        if (od == (Data*)0) {
             Stdio.printf("xcc: error: arm64 object write failed\n");
             Process.exit((i32)1); return;
         }
-        Data* od = Data.withCapacity(img.count());
-        for (u32 i = (u32)0; i < img.count(); i = i + (u32)1)
-            od.appendByte((u8)((Number*)img.get(i)).asU32());
         if (!Files.writeData(d.fe().output(), od)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
             Process.exit((i32)1); return;
@@ -5388,7 +5378,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         return;
     }
 
-    Array* image = (Array*)0;
+    Data* image = (Data*)0;
     if (android) {
         // A shared library on the link line (-l<name>, -Wl,x.so) is needed as
         // an #import <X> is: named by its soname and, on Linux, found through
@@ -5425,7 +5415,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         Array* needed = androidNeededWithImports(d, baseNeeded.cString());
         // Bug 124: as above — append the constructor array before linking,
         // and the C objects and archives of the command line before that.
-        Array* aData = as.dataBytes();
+        SectionBytes* aData = as.dataBytes();
         Array* aFix  = as.fixups();
         mergeElfLinkObjects(d, as.textBytes(), aData, as.symbols(), as.dataSyms(), aFix, new Array(), as);
         u32 aMi = Arm64Asm.appendModInit(as, aData, aFix);
@@ -5483,7 +5473,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         // to load — they used to become an LC_LOAD_DYLIB naming a .o, which
         // dyld refused at launch. Merged into the assembler's own model,
         // exactly as xcc-ln-arm64 does, BEFORE the mod-init tail is appended.
-        Array* dataBytes = as.dataBytes();
+        SectionBytes* dataBytes = as.dataBytes();
         Array* fixups    = as.fixups();
         Array* objcSects = mergeLinkObjects(d, as.textBytes(), dataBytes, as.symbols(),
                                             as.dataSyms(), fixups, new Array(), as);
@@ -5492,13 +5482,11 @@ void emitModule(DriverOptions* d, IRModule* mod)
         // S_MOD_INIT_FUNC_POINTERS section. Without it dyld sees inert data and
         // no load-time constructor runs. Same placement as xtld64, because the
         // two must produce the same bytes.
-        u32 miLen = as.modInitBytes().count();
+        u32 miLen = as.modInitBytes().length();
         if (miLen > (u32)0) {
-            while (dataBytes.count() % (u32)8 != (u32)0)
-                dataBytes.add((Object*)Number.withU32((u32)0));
-            u32 base = dataBytes.count();
-            for (u32 i = (u32)0; i < as.modInitBytes().count(); i = i + (u32)1)
-                dataBytes.add(as.modInitBytes().get(i));
+            dataBytes.padTo((u32)8);
+            u32 base = dataBytes.length();
+            dataBytes.append(as.modInitBytes());
             for (u32 i = (u32)0; i < as.modInitFixups().count(); i = i + (u32)1) {
                 Arm64Fixup* f = (Arm64Fixup*)as.modInitFixups().get(i);
                 fixups.add((Object*)Arm64Fixup.make(base + f.offset(), f.kind(),
@@ -5578,10 +5566,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         image = m.bytes();
     }
 
-    Data* out = Data.withCapacity((u32)0);
-    for (u32 i = (u32)0; i < image.count(); i = i + (u32)1)
-        out.appendByte((u8)((Number*)image.get(i)).asU32());
-    if (!Files.writeData(d.fe().output(), out)) {
+    if (!Files.writeData(d.fe().output(), image)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
         Process.exit((i32)1); return;
     }

@@ -21,6 +21,7 @@
 #import "Foundation.xc"
 #import <U64>
 #import <DwarfWriter>
+#import <SectionBytes>
 
 #import "Arm64AsmDefs.xc"
 
@@ -136,11 +137,11 @@ class Arm64Asm
 {
     Array*  _fixups;        // Arm64Fixup@
     Map*    _symbols;       // name -> offset within its own section
-    Array*  _dataBytes;     // Number@, the __data image
+    SectionBytes* _dataBytes; // the __data image
     Array*  _dataSyms;      // String@, names that live in __data
     Array*  _globals;       // `.globl` names, in order
     Map*    _commonSyms;    // `.comm` COMMON: name -> [size, log2align] (bug 169)
-    Array*  _textBytes;     // Number@, the __text image
+    SectionBytes* _textBytes; // the __text image
     // Bug 066: the __DATA,__mod_init_func pointer array — the load-time
     // constructors — kept SEPARATE from _dataBytes, with its fixups' offsets
     // relative to itself. The linker appends it after every other contribution
@@ -152,31 +153,22 @@ class Arm64Asm
     // Separate rather than "the tail of __data" because every object and
     // archive appends its own data during the link, so a range recorded here
     // would stop being the tail the moment anything else contributed.
-    Array*  _modInitBytes;  // Number@
+    SectionBytes* _modInitBytes;
     Array*  _modInitFixups; // Arm64Fixup@
     bool    _failed;
     String* _why;
-    Array*  _byteNums;      // Number@, the 256 byte values, shared (byteNum)
 
     void init(void)
     {
         _fixups = new Array(); _symbols = new Map();
-        _dataBytes = new Array(); _dataSyms = new Array(); _globals = new Array(); _textBytes = new Array();
+        _dataBytes = new SectionBytes(); _dataSyms = new Array(); _globals = new Array(); _textBytes = new SectionBytes();
         _commonSyms = new Map();
-        _modInitBytes = new Array(); _modInitFixups = new Array();
+        _modInitBytes = new SectionBytes(); _modInitFixups = new Array();
         _failed = false;
-        _byteNums = new Array();
-        for (u32 b = (u32)0; b < (u32)256; b = b + (u32)1)
-            _byteNums.add((Object*)Number.withU32(b));
     }
 
-    // One shared Number per byte value. The images are arrays of Number, and
-    // a fresh one per byte cost the self-hosted build some eight million
-    // objects; a Number is never changed, so sharing them is invisible.
-    Object* byteNum(u32 b) { return _byteNums.get(b & (u32)$FF); }
-
     Array*  fixups(void)     { return _fixups; }
-    Array*  modInitBytes(void)  { return _modInitBytes; }
+    SectionBytes* modInitBytes(void) { return _modInitBytes; }
     Array*  modInitFixups(void) { return _modInitFixups; }
 
     // Bug 066 / bug 124: append the constructor pointer array to the END of
@@ -186,15 +178,13 @@ class Arm64Asm
     // that forgets to append it silently drops every load-time constructor,
     // with nothing to diagnose. One copy, because the android link, the APK
     // link and xtlnandroid must all produce the same bytes.
-    static u32 appendModInit(Arm64Asm* as, Array* dataBytes, Array* fixups)
+    static u32 appendModInit(Arm64Asm* as, SectionBytes* dataBytes, Array* fixups)
     {
-        u32 miLen = as.modInitBytes().count();
+        u32 miLen = as.modInitBytes().length();
         if (miLen == (u32)0) return (u32)0;
-        while (dataBytes.count() % (u32)8 != (u32)0)
-            dataBytes.add((Object*)Number.withU32((u32)0));
-        u32 base = dataBytes.count();
-        for (u32 i = (u32)0; i < miLen; i = i + (u32)1)
-            dataBytes.add(as.modInitBytes().get(i));
+        dataBytes.padTo((u32)8);
+        u32 base = dataBytes.length();
+        dataBytes.append(as.modInitBytes());
         for (u32 i = (u32)0; i < as.modInitFixups().count(); i = i + (u32)1) {
             Arm64Fixup* f = (Arm64Fixup*)as.modInitFixups().get(i);
             Arm64Fixup* g = Arm64Fixup.make(base + f.offset(), f.kind(), f.symbol(), f.scale());
@@ -204,8 +194,8 @@ class Arm64Asm
         return miLen;
     }
     Map*    symbols(void)    { return _symbols; }
-    Array*  dataBytes(void)  { return _dataBytes; }
-    Array*  textBytes(void)  { return _textBytes; }
+    SectionBytes* dataBytes(void) { return _dataBytes; }
+    SectionBytes* textBytes(void) { return _textBytes; }
     Array*  dataSyms(void)   { return _dataSyms; }
     Array*  globals(void)    { return _globals; }     // names under .globl — the object's exports
     Map*    commonSyms(void) { return _commonSyms; }  // `.comm` commons: name -> [size, log2align]
@@ -234,10 +224,10 @@ class Arm64Asm
             u32 sz = ((Number*)info.get((u32)0)).asU32();
             u32 alg = ((Number*)info.get((u32)1)).asU32();
             u32 al = (u32)1 << alg;
-            while (_dataBytes.count() % al != (u32)0) _dataBytes.add((Object*)Number.withU32((u32)0));
-            _symbols.set((Hashable*)nm, (Object*)Number.withU32(_dataBytes.count()));
+            _dataBytes.padTo(al);
+            _symbols.set((Hashable*)nm, (Object*)Number.withU32(_dataBytes.length()));
             _dataSyms.add((Object*)nm);
-            for (u32 i = (u32)0; i < sz; i = i + (u32)1) _dataBytes.add((Object*)Number.withU32((u32)0));
+            _dataBytes.appendZeros(sz);
         }
         _commonSyms = new Map();
     }
@@ -273,7 +263,7 @@ class Arm64Asm
     // of `data`, aligned as declared (at least 8), in list order. A name the
     // symbol table already defines keeps that definition (a strong def beats a
     // common). Returns the run's length. Mirrors the reference's allocateBss.
-    static u32 allocateBss(Array* commons, Array* data, Map* symbols, Array* dataSyms)
+    static u32 allocateBss(Array* commons, SectionBytes* data, Map* symbols, Array* dataSyms)
     {
         u32 cursor = (u32)0;
         for (u32 i = (u32)0; i < commons.count(); i = i + (u32)1) {
@@ -284,7 +274,7 @@ class Arm64Asm
             u32 al = (u32)1 << ((Number*)c.get((u32)2)).asU32();
             if (al < (u32)8) al = (u32)8;
             while (cursor % al != (u32)0) cursor = cursor + (u32)1;
-            symbols.set((Hashable*)nm, (Object*)Number.withU32(data.count() + cursor));
+            symbols.set((Hashable*)nm, (Object*)Number.withU32(data.length() + cursor));
             dataSyms.add((Object*)nm);
             cursor = cursor + sz;
         }
@@ -3129,7 +3119,7 @@ class Arm64Asm
     // of a guess.
     bool _wasDirective;
 
-    bool emitDataDirective(String* l, Array* into)
+    bool emitDataDirective(String* l, SectionBytes* into)
     {
         _wasDirective = false;
         u32 sp = firstSpace(l);
@@ -3163,10 +3153,10 @@ class Arm64Asm
                     else if (n == (u8)'0') c = (u8)0;
                     else c = n;
                 }
-                into.add(byteNum((u32)c));
+                into.appendByte(c);
                 i = i + (u32)1;
             }
-            if (!mn.equals(String.withCString(".ascii"))) into.add((Object*)Number.withU32((u32)0));
+            if (!mn.equals(String.withCString(".ascii"))) into.appendByte((u8)0);
             _wasDirective = true;
             return true;
         }
@@ -3175,8 +3165,11 @@ class Arm64Asm
             U64* n = parseImm((String*)a.get((u32)0));
             u32 fill = (u32)0;
             if (a.count() > (u32)1) { U64* f = parseImm((String*)a.get((u32)1)); if (_immOk) fill = f.lo(); }
-            for (u32 i = (u32)0; i < n.lo(); i = i + (u32)1)
-                into.add(byteNum(fill));
+            if ((fill & (u32)$FF) == (u32)0)
+                into.appendZeros(n.lo());
+            else
+                for (u32 i = (u32)0; i < n.lo(); i = i + (u32)1)
+                    into.appendByte((u8)(fill & (u32)$FF));
             _wasDirective = true;
             return true;
         }
@@ -3187,7 +3180,7 @@ class Arm64Asm
             U64* v = parseImm((String*)toks.get(i));
             if (!_immOk) { fail(String.withCString("bad data value")); return true; }
             for (u32 b = (u32)0; b < width; b = b + (u32)1)
-                into.add(byteNum((u32)v.byteAt(b)));
+                into.appendByte((u8)v.byteAt(b));
         }
         _wasDirective = true;
         return true;
@@ -3293,7 +3286,7 @@ class Arm64Asm
                     }
                     else {
                         while (dataAddr % al != (u32)0) {
-                            _dataBytes.add((Object*)Number.withU32((u32)0));
+                            _dataBytes.appendByte((u8)0);
                             dataAddr = dataAddr + (u32)1;
                         }
                     }
@@ -3325,13 +3318,12 @@ class Arm64Asm
                         } else {
                             u32 al = (u32)1 << alg;
                             while (dataAddr % al != (u32)0) {
-                                _dataBytes.add((Object*)Number.withU32((u32)0));
+                                _dataBytes.appendByte((u8)0);
                                 dataAddr = dataAddr + (u32)1;
                             }
                             _symbols.set((Hashable*)nm, (Object*)Number.withU32(dataAddr));
                             _dataSyms.add((Object*)nm);
-                            for (u32 i = (u32)0; i < sz.lo(); i = i + (u32)1)
-                                _dataBytes.add((Object*)Number.withU32((u32)0));
+                            _dataBytes.appendZeros(sz.lo());
                             dataAddr = dataAddr + sz.lo();
                         }
                     }
@@ -3372,20 +3364,19 @@ class Arm64Asm
                         // Bug 066: a constructor pointer goes to its own buffer,
                         // its fixup offset relative to that buffer; the linker
                         // places both once it knows where the array lands.
-                        Array* dst = inModInit ? _modInitBytes : _dataBytes;
-                        u32 at = inModInit ? dst.count() : dataAddr;
+                        SectionBytes* dst = inModInit ? _modInitBytes : _dataBytes;
+                        u32 at = inModInit ? dst.length() : dataAddr;
                         Arm64Fixup* f = Arm64Fixup.make(at, (u32)FIXUP_POINTER64, qsym, (u32)0);
                         if (inModInit) { _modInitFixups.add((Object*)f); }
                         else           { _fixups.add((Object*)f); }
-                        for (u32 i = (u32)0; i < (u32)8; i = i + (u32)1)
-                            dst.add((Object*)Number.withU32((u32)0));
+                        dst.appendZeros((u32)8);
                         if (!inModInit) dataAddr = dataAddr + (u32)8;
                         continue;
                     }
-                    u32 before = _dataBytes.count();
+                    u32 before = _dataBytes.length();
                     if (emitDataDirective(l, _dataBytes)) {
                         if (_failed) return;
-                        dataAddr = dataAddr + (_dataBytes.count() - before);
+                        dataAddr = dataAddr + (_dataBytes.length() - before);
                         continue;
                     }
                 }
@@ -3425,10 +3416,10 @@ class Arm64Asm
                 }
             }
             else {
-                u32 before = _dataBytes.count();
+                u32 before = _dataBytes.length();
                 if (emitDataDirective(l, _dataBytes)) {
                     if (_failed) return;
-                    dataAddr = dataAddr + (_dataBytes.count() - before);
+                    dataAddr = dataAddr + (_dataBytes.length() - before);
                 }
             }
         }
@@ -3455,10 +3446,7 @@ class Arm64Asm
                 _why = m;
                 return;
             }
-            _textBytes.add(byteNum(w));
-            _textBytes.add(byteNum(w >> (u32)8));
-            _textBytes.add(byteNum(w >> (u32)16));
-            _textBytes.add(byteNum(w >> (u32)24));
+            _textBytes.appendLE(w, (u32)4);
             // Each line is read once; letting it go now keeps pass 2 from
             // holding every instruction's text until the image is done.
             insns.set(i, (Object*)0);

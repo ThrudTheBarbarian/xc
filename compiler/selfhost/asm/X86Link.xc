@@ -14,6 +14,7 @@
 #import "Foundation.xc"
 #import "Files.xc"
 #import <X86Asm>
+#import <SectionBytes>
 #import "X86AsmDefs.xc"
 #import <Elf64>
 #import "Elf64Defs.xc"
@@ -81,24 +82,6 @@ class X86Link
         return out;
         }
 
-    // X86Asm carries bytes as an Array of boxed Numbers, ElfObject/ElfMerge
-    // carry Data. The two meet HERE and nowhere else.
-    static Data* bytesToData(Array* a)
-        {
-        Data* d = Data.withCapacity(a.count());
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            d.appendByte((u8)((Number*)a.get(i)).asU32());
-        return d;
-        }
-
-    static Array* dataToBytes(Data* d)
-        {
-        Array* a = new Array();
-        for (u32 i = (u32)0; i < d.length(); i = i + (u32)1)
-            a.add((Object*)Number.withU32((u32)d.byteAt(i)));
-        return a;
-        }
-
     // srcs: assembly texts, in order. objs/ars: paths.
     // A SHARED OBJECT rather than an executable: the same assembly, laid out
     // as ET_DYN with a soname, an export list and the module interface. Kept
@@ -151,11 +134,11 @@ class X86Link
                 if (needed == (Array*)0)
                     return (Data*)0;
                 }
-            e.sharedObject(X86Link.bytesToData(a.text()), X86Link.bytesToData(a.data()),
+            e.sharedObject(a.text().toData(), a.data(),
                            a.symbols(), a.dataSyms(),
                            pub, a.fixups(), soname, needed,
                            (String*)0, runpath, iface, new Array(),
-                           new Data(), new Array(), (u32)1);
+                           new SectionBytes(), new Array(), (u32)1);
             }
         else
             {
@@ -268,11 +251,11 @@ class X86Link
                 if (needed == (Array*)0)
                     return (Data*)0;
                 }
-            e.sharedObject(X86Link.bytesToData(a.text()), X86Link.bytesToData(a.data()),
+            e.sharedObject(a.text().toData(), a.data(),
                            a.symbols(), a.dataSyms(),
                            pub, a.fixups(), (String*)0, needed,
                            entry, runpath, new Array(), new Array(),
-                           new Data(), new Array(), (u32)1);
+                           new SectionBytes(), new Array(), (u32)1);
             }
         else
             {
@@ -698,8 +681,8 @@ class X86Link
     MergedImage* seedFrom(X86Asm* a)
         {
         MergedImage* im = new MergedImage();
-        im.text().append(X86Link.bytesToData(a.text()));
-        im.data().append(X86Link.bytesToData(a.data()));
+        im.text().append(a.text().toData());
+        im.data().append(a.data());
         Array* keys = a.symbols().allKeys();
         for (u32 i = (u32)0; i < keys.count(); i = i + (u32)1)
             {

@@ -23,6 +23,7 @@
 
 #import "Foundation.xc"
 #import <Arm64Asm>
+#import <SectionBytes>
 #import "Arm64AsmDefs.xc"
 
 // 16 KB, not 4. Android 15 runs on devices with 16 KB pages and will not map a
@@ -33,7 +34,7 @@
 
 class ElfArm64
     {
-    Array* _out;
+    Data* _out;
     bool _failed;
     String* _why;
     String* _interp;   // an executable's PT_INTERP (the reference's setInterpreter:)
@@ -42,7 +43,7 @@ class ElfArm64
 
     void init(void)
         {
-        _out = new Array();
+        _out = new Data();
         _failed = false;
         _interp = String.withCString("/system/bin/linker64");
         _runpath = (String*)0;
@@ -69,7 +70,7 @@ class ElfArm64
         _runpath = (path != (String*)0 && path.byteLength() > (u32)0) ? path : (String*)0;
         }
 
-    Array* bytes(void)
+    Data* bytes(void)
         {
         return _out;
         }
@@ -106,7 +107,7 @@ class ElfArm64
 
     void p8(u32 v)
         {
-        _out.add((Object*)Number.withU32(v & (u32)$FF));
+        _out.appendByte((u8)(v & (u32)$FF));
         }
     void p16(u32 v)
         {
@@ -127,8 +128,8 @@ class ElfArm64
         }
     void padTo(u32 off)
         {
-        while (_out.count() < off)
-            p8((u32)0);
+        if (_out.length() < off)
+            _out.increaseLengthBy(off - _out.length());
         }
 
     static u32 roundUpTo(u32 v, u32 a)
@@ -139,12 +140,9 @@ class ElfArm64
     // Trailing zeros need not be stored: a PT_LOAD whose p_memsz exceeds its
     // p_filesz is zero-filled by the kernel, which is what .bss and a
     // zero-initialised array are.
-    static u32 fileSizeOf(Array* d)
+    static u32 fileSizeOf(SectionBytes* d)
         {
-        u32 n = d.count();
-        while (n > (u32)0 && ((Number*)d.get(n - (u32)1)).asU32() == (u32)0)
-            n = n - (u32)1;
-        return n;
+        return d.fileLength();
         }
 
     // ── ET_REL: the object `-c` writes (arm64 Linux, android) ──────────
@@ -162,18 +160,18 @@ class ElfArm64
     // page ADR_PREL_PG_HI21, a lo12 offset ADD_ABS_LO12_NC or the LDST type of
     // its access size, a GOT page and offset ADR_GOT_PAGE and LD64_GOT_LO12_NC,
     // a pointer word ABS64.
-    Array* objectFromText(Array* text, Array* data, Map* symbols, Array* dataSyms,
-                          Array* fixups, Array* exports, Map* commons,
-                          Array* modInit, Array* modInitFix)
+    Data* objectFromText(SectionBytes* text, SectionBytes* data, Map* symbols, Array* dataSyms,
+                         Array* fixups, Array* exports, Map* commons,
+                         SectionBytes* modInit, Array* modInitFix)
         {
-        _out = new Array();
+        _out = new Data();
         _failed = false;
-        if (data == (Array*)0)
-            data = new Array();
+        if (data == (SectionBytes*)0)
+            data = new SectionBytes();
         if (commons == (Map*)0)
             commons = new Map();
-        if (modInit == (Array*)0)
-            modInit = new Array();
+        if (modInit == (SectionBytes*)0)
+            modInit = new SectionBytes();
         if (modInitFix == (Array*)0)
             modInitFix = new Array();
 
@@ -240,7 +238,7 @@ class ElfArm64
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             symIndex.set((Hashable*)(String*)order.get(i), (Object*)Number.withU32(i + (u32)1));
 
-        bool hasInit = modInit.count() > (u32)0;
+        bool hasInit = modInit.length() > (u32)0;
         // Section indices: 1 .text, 2 .data, then .init_array when there is one.
         u32 secInit = hasInit ? (u32)3 : (u32)0;
 
@@ -331,7 +329,7 @@ class ElfArm64
                 else
                     {
                     fail(String.withFormat("an object cannot carry fixup kind %u (symbol %s)", k, f.symbol().cString()));
-                    return (Array*)0;
+                    return (Data*)0;
                     }
                 ElfArm64.put64Into(into, f.offset());
                 ElfArm64.put32Into(into, rt);
@@ -375,9 +373,9 @@ class ElfArm64
             }
 
         u32 textOff = (u32)64;
-        u32 dataOff = ElfArm64.roundUp(textOff + text.count(), (u32)16);
-        u32 initOff = ElfArm64.roundUp(dataOff + data.count(), (u32)8);
-        u32 trelOff = ElfArm64.roundUp(initOff + modInit.count(), (u32)8);
+        u32 dataOff = ElfArm64.roundUp(textOff + text.length(), (u32)16);
+        u32 initOff = ElfArm64.roundUp(dataOff + data.length(), (u32)8);
+        u32 trelOff = ElfArm64.roundUp(initOff + modInit.length(), (u32)8);
         u32 drelOff = trelOff + textRel.count();
         u32 irelOff = drelOff + dataRel.count();
         u32 symOff = irelOff + initRel.count();
@@ -404,13 +402,13 @@ class ElfArm64
         p16(secShstr);
 
         padTo(textOff);
-        ElfArm64.appendBytes(_out, text);
+        text.appendRangeTo(_out, (u32)0, text.length());
         padTo(dataOff);
-        ElfArm64.appendBytes(_out, data);
+        data.appendRangeTo(_out, (u32)0, data.length());
         if (hasInit)
             {
             padTo(initOff);
-            ElfArm64.appendBytes(_out, modInit);
+            modInit.appendRangeTo(_out, (u32)0, modInit.length());
             }
         padTo(trelOff);
         ElfArm64.appendBytes(_out, textRel);
@@ -425,10 +423,10 @@ class ElfArm64
         // info, addralign, entsize.
         for (u32 i = (u32)0; i < (u32)64; i = i + (u32)1)
             p8((u32)0);
-        objSection(((Number*)shName.get((u32)1)).asU32(), (u32)1, (u32)6, textOff, text.count(), (u32)0, (u32)0, (u32)16, (u32)0);
-        objSection(((Number*)shName.get((u32)2)).asU32(), (u32)1, (u32)3, dataOff, data.count(), (u32)0, (u32)0, (u32)16, (u32)0);
+        objSection(((Number*)shName.get((u32)1)).asU32(), (u32)1, (u32)6, textOff, text.length(), (u32)0, (u32)0, (u32)16, (u32)0);
+        objSection(((Number*)shName.get((u32)2)).asU32(), (u32)1, (u32)3, dataOff, data.length(), (u32)0, (u32)0, (u32)16, (u32)0);
         if (hasInit)
-            objSection(((Number*)shName.get(secInit)).asU32(), (u32)14, (u32)3, initOff, modInit.count(), (u32)0, (u32)0, (u32)8, (u32)8);
+            objSection(((Number*)shName.get(secInit)).asU32(), (u32)14, (u32)3, initOff, modInit.length(), (u32)0, (u32)0, (u32)8, (u32)8);
         objSection(((Number*)shName.get(secRelText)).asU32(), (u32)4, (u32)$40, trelOff, textRel.count(), secSym, (u32)1, (u32)8, (u32)24);
         objSection(((Number*)shName.get(secRelData)).asU32(), (u32)4, (u32)$40, drelOff, dataRel.count(), secSym, (u32)2, (u32)8, (u32)24);
         if (hasInit)
@@ -453,10 +451,10 @@ class ElfArm64
         p64(entsize);
         }
 
-    static void appendBytes(Array* out, Array* bytes)
+    static void appendBytes(Data* out, Array* bytes)
         {
         for (u32 i = (u32)0; i < bytes.count(); i = i + (u32)1)
-            out.add(bytes.get(i));
+            out.appendByte((u8)((Number*)bytes.get(i)).asU32());
         }
     static u32 roundUp(u32 v, u32 a)
         {
@@ -528,19 +526,19 @@ class ElfArm64
     // AArch64 relocations do not overwrite a whole word the way x86's disp32
     // does; each splices a field into an already-encoded instruction. Read,
     // modify, write — so the register operands the assembler chose survive.
-    static u32 rdw(Array* b, u32 o)
+    static u32 rdw(SectionBytes* b, u32 o)
         {
-        return ((Number*)b.get(o)).asU32() | (((Number*)b.get(o + (u32)1)).asU32() << (u32)8) | (((Number*)b.get(o + (u32)2)).asU32() << (u32)16) | (((Number*)b.get(o + (u32)3)).asU32() << (u32)24);
+        return (u32)b.byteAt(o) | ((u32)b.byteAt(o + (u32)1) << (u32)8) | ((u32)b.byteAt(o + (u32)2) << (u32)16) | ((u32)b.byteAt(o + (u32)3) << (u32)24);
         }
 
-    static void wrw(Array* b, u32 o, u32 w)
+    static void wrw(SectionBytes* b, u32 o, u32 w)
         {
         for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
-            b.set(o + i, (Object*)Number.withU32((w >> ((u32)8 * i)) & (u32)$FF));
+            b.setByteAt(o + i, (u8)((w >> ((u32)8 * i)) & (u32)$FF));
         }
 
     // bl / b: imm26 = (target - pc) >> 2, signed, ±128 MB.
-    void patchBranch26(Array* t, u32 off, u32 target, u32 site, String* sym)
+    void patchBranch26(SectionBytes* t, u32 off, u32 target, u32 site, String* sym)
         {
         i32 d = (i32)target - (i32)site;
         if ((d & (i32)3) != (i32)0)
@@ -558,7 +556,7 @@ class ElfArm64
         }
 
     // adrp: the 21-bit page delta splits across immlo (30:29) and immhi (23:5).
-    void patchAdrp(Array* t, u32 off, u32 target, u32 site, String* sym)
+    void patchAdrp(SectionBytes* t, u32 off, u32 target, u32 site, String* sym)
         {
         i32 pages = (i32)(target >> (u32)12) - (i32)(site >> (u32)12);
         if (pages < (i32)-1048576 || pages >= (i32)1048576)
@@ -573,7 +571,7 @@ class ElfArm64
     // add / ldr / str immediate: imm12 at 21:10, scaled by the access size.
     // The assembler records log2(size); an unscaled offset is a hard error
     // rather than a silently truncated one.
-    void patchLo12(Array* t, u32 off, u32 target, u32 scale, String* sym)
+    void patchLo12(SectionBytes* t, u32 off, u32 target, u32 scale, String* sym)
         {
         u32 lo = target & (u32)$FFF;
         if (scale != (u32)0 && (lo & (((u32)1 << scale) - (u32)1)) != (u32)0)
@@ -596,7 +594,7 @@ class ElfArm64
     // shifted) with Arm64Asm.appendModInit. It becomes DT_INIT_ARRAY /
     // DT_INIT_ARRAYSZ. Zero means the program has no constructors; without the
     // tags the pointers are inert words the loader never walks (bug 124).
-    void image(Array* textIn, Array* dataIn, Map* symbols, Array* dataSyms,
+    void image(SectionBytes* textIn, SectionBytes* dataIn, Map* symbols, Array* dataSyms,
                Array* exportsIn, Array* fixups, String* soname, Array* needed,
                String* entry, u32 modInitLength)
         {
@@ -608,7 +606,7 @@ class ElfArm64
     // `iface` becomes a `.xtc.iface` section after everything addressable,
     // the one the arm9 and x86_64 `.so` files carry, so `#import <Lib>` reads
     // the library's declarations out of the file (bug 460).
-    void image(Array* textIn, Array* dataIn, Map* symbols, Array* dataSyms,
+    void image(SectionBytes* textIn, SectionBytes* dataIn, Map* symbols, Array* dataSyms,
                Array* exportsIn, Array* fixups, String* soname, Array* needed,
                String* entry, u32 modInitLength, Array* iface)
         {
@@ -708,16 +706,12 @@ class ElfArm64
         exports.sort();
 
         // ── 3. sizes, then addresses ─────────────────────────────────────
-        Array* text = new Array();
-        for (u32 i = (u32)0; i < textIn.count(); i = i + (u32)1)
-            text.add(textIn.get(i));
-        Array* data = new Array();
-        for (u32 i = (u32)0; i < dataIn.count(); i = i + (u32)1)
-            data.add(dataIn.get(i));
+        SectionBytes* text = textIn.copy();
+        SectionBytes* data = dataIn.copy();
 
-        u32 thunkOff = roundUpTo(text.count(), (u32)16);
+        u32 thunkOff = roundUpTo(text.length(), (u32)16);
         // nop padding
-        while (text.count() < thunkOff)
+        while (text.length() < thunkOff)
             {
             wrwAppend(text, (u32)$D503201F);
             }
@@ -751,7 +745,7 @@ class ElfArm64
         u32 nbucket = nsym < (u32)4 ? (u32)1 : nsym / (u32)4 + (u32)1;
         u32 hashSz = ((u32)2 + nbucket + nsym) * (u32)4;
         // The constructor array cannot be longer than the data it sits in.
-        u32 miLen = modInitLength <= dataIn.count() ? modInitLength : (u32)0;
+        u32 miLen = modInitLength <= dataIn.length() ? modInitLength : (u32)0;
         u32 nDyn = (u32)8 + (isExec ? (u32)0 : (u32)1) + (_runpath != (String*)0 ? (u32)1 : (u32)0)
                  + neededOff.count() + (u32)1 + (miLen > (u32)0 ? (u32)2 : (u32)0);
 
@@ -783,7 +777,7 @@ class ElfArm64
         u32 gotOff = rwOff;
         u32 dynOff = gotOff + imports.count() * (u32)8;
         u32 dataAddr = roundUpTo(dynOff + nDyn * (u32)ADYN_SZ, (u32)16);
-        u32 rwEnd = dataAddr + data.count();
+        u32 rwEnd = dataAddr + data.length();
 
         // ET_DYN vaddrs are file-relative: the loader picks the base and adds it.
         u32 textAddr = textOff;
@@ -827,7 +821,7 @@ class ElfArm64
 
             if (f.kind() == (u32)FIXUP_POINTER64)
                 {
-                if (f.offset() + (u32)8 > data.count())
+                if (f.offset() + (u32)8 > data.length())
                     {
                     failWith(String.withCString("pointer64 fixup past end of data:"), f.symbol());
                     return;
@@ -837,8 +831,7 @@ class ElfArm64
                 // import is 0 until the loader writes S + A.
                 u32 v = off != (Object*)0 ? target : (u32)0;
                 for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
-                    data.set(f.offset() + b,
-                             (Object*)Number.withU32(b < (u32)4
+                    data.setByteAt(f.offset() + b, (u8)(b < (u32)4
                                                          ? ((v >> ((u32)8 * b)) & (u32)$FF)
                                                          : (u32)0));
                 continue;
@@ -846,17 +839,17 @@ class ElfArm64
             if (f.kind() == (u32)FIXUP_PREL32)
                 {
                 // A relative word in data: settled here, no dynamic relocation.
-                if (f.offset() + (u32)4 > data.count())
+                if (f.offset() + (u32)4 > data.length())
                     {
                     failWith(String.withCString("prel32 fixup past end of data:"), f.symbol());
                     return;
                     }
                 u32 v = target - (dataAddr + f.offset());
                 for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
-                    data.set(f.offset() + b, (Object*)Number.withU32((v >> ((u32)8 * b)) & (u32)$FF));
+                    data.setByteAt(f.offset() + b, (u8)((v >> ((u32)8 * b)) & (u32)$FF));
                 continue;
                 }
-            if (f.offset() + (u32)4 > text.count())
+            if (f.offset() + (u32)4 > text.length())
                 {
                 failWith(String.withCString("fixup past end of text:"), f.symbol());
                 return;
@@ -899,7 +892,7 @@ class ElfArm64
         p32((u32)1);   // e_version
         p64(isExec ? textAddr + ((Number*)symbols.get((Hashable*)entry)).asU32() : (u32)0);
         p64((u32)AEHDR_SZ); // e_phoff
-        u32 shoffField = _out.count();
+        u32 shoffField = _out.length();
         p64((u32)0); // e_shoff — patched below
         p32((u32)0); // e_flags
         p16((u32)AEHDR_SZ);
@@ -1029,8 +1022,7 @@ class ElfArm64
             }
 
         padTo(textOff);
-        for (u32 i = (u32)0; i < text.count(); i = i + (u32)1)
-            p8(((Number*)text.get(i)).asU32());
+        text.appendRangeTo(_out, (u32)0, text.length());
         padTo(gotOff);
         for (u32 i = (u32)0; i < imports.count(); i = i + (u32)1)
             p64((u32)0); // loader fills
@@ -1058,14 +1050,13 @@ class ElfArm64
         // their Pointer64 fixups, so they survive a PIE's random base.
         if (miLen > (u32)0)
             {
-            dyn((u32)25, dataAddr + (data.count() - miLen)); // DT_INIT_ARRAY
+            dyn((u32)25, dataAddr + (data.length() - miLen)); // DT_INIT_ARRAY
             dyn((u32)27, miLen);                             // DT_INIT_ARRAYSZ
             }
         dyn((u32)0, (u32)0); // DT_NULL
 
         padTo(dataAddr);
-        for (u32 i = (u32)0; i < dataFileSz; i = i + (u32)1)
-            p8(((Number*)data.get(i)).asU32());
+        data.appendRangeTo(_out, (u32)0, dataFileSz);
 
         // ── the section header table ─────────────────────────────────────
         // The kernel's exec path reads program headers only, so a PIE runs with
@@ -1086,15 +1077,15 @@ class ElfArm64
         // A library's interface (bug 460): not loaded, so it goes after the
         // data with the other non-allocated contents and moves no address.
         u32 nIface = hasIface ? internStr(shstr, shOff, String.withCString(".xtc.iface")) : (u32)0;
-        u32 ifaceOff = _out.count();
+        u32 ifaceOff = _out.length();
         for (u32 i = (u32)0; hasIface && i < iface.count(); i = i + (u32)1)
             p8(((Number*)iface.get(i)).asU32());
-        u32 shstrOff = _out.count();
+        u32 shstrOff = _out.length();
         for (u32 i = (u32)0; i < shstr.count(); i = i + (u32)1)
             p8(((Number*)shstr.get(i)).asU32());
-        while (_out.count() % (u32)8 != (u32)0)
+        while (_out.length() % (u32)8 != (u32)0)
             p8((u32)0);
-        u32 shoff = _out.count();
+        u32 shoff = _out.length();
         shdr((u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0);
         // .dynamic — sh_link names [2], where its strings live.
         shdr(nDynamic, (u32)6, (u32)3, dynOff, dynOff, nDyn * (u32)ADYN_SZ,
@@ -1105,8 +1096,7 @@ class ElfArm64
             shdr(nIface, (u32)1, (u32)0, (u32)0, ifaceOff, iface.count(), (u32)0, (u32)1, (u32)0);
 
         for (u32 i = (u32)0; i < (u32)8; i = i + (u32)1)
-            _out.set(shoffField + i,
-                     (Object*)Number.withU32(i < (u32)4
+            _out.setByteAt(shoffField + i, (u8)(i < (u32)4
                                                  ? ((shoff >> ((u32)8 * i)) & (u32)$FF)
                                                  : (u32)0));
         }
@@ -1145,10 +1135,9 @@ class ElfArm64
         p64(entsize);
         }
 
-    static void wrwAppend(Array* b, u32 w)
+    static void wrwAppend(SectionBytes* b, u32 w)
         {
-        for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
-            b.add((Object*)Number.withU32((w >> ((u32)8 * i)) & (u32)$FF));
+        b.appendLE(w, (u32)4);
         }
 
     static u32 internStr(Array* blob, Map* off, String* s)

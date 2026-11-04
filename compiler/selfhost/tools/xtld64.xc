@@ -14,6 +14,7 @@
 #import "Process.xc"
 #import <U64>
 #import <Arm64Asm>
+#import <SectionBytes>
 #import "Arm64AsmDefs.xc"
 #import <MachO>
 #import "MachODefs.xc"
@@ -70,16 +71,14 @@ void main(void)
     // S_MOD_INIT_FUNC_POINTERS section. It goes last because the reference
     // linker also appends every object's and archive's data before it, and the
     // two have to agree byte for byte.
-    Array* dataBytes = a.dataBytes();
+    SectionBytes* dataBytes = a.dataBytes();
     Array* fixups = a.fixups();
-    u32 miLen = a.modInitBytes().count();
+    u32 miLen = a.modInitBytes().length();
     if (miLen > (u32)0)
         {
-        while (dataBytes.count() % (u32)8 != (u32)0)
-            dataBytes.add((Object*)Number.withU32((u32)0));
-        u32 base = dataBytes.count();
-        for (u32 i = (u32)0; i < a.modInitBytes().count(); i = i + (u32)1)
-            dataBytes.add(a.modInitBytes().get(i));
+        dataBytes.padTo((u32)8);
+        u32 base = dataBytes.length();
+        dataBytes.append(a.modInitBytes());
         for (u32 i = (u32)0; i < a.modInitFixups().count(); i = i + (u32)1)
             {
             Arm64Fixup* f = (Arm64Fixup*)a.modInitFixups().get(i);
@@ -96,10 +95,7 @@ void main(void)
     m.executable(a.textBytes(), ((Number*)entry).asU32(), a.symbols(),
                  dataBytes, a.dataSyms(), fixups, miLen, (Array*)0, bssLen);
 
-    Array* image = m.bytes();
-    Data* d = Data.withCapacity((u32)0);
-    for (u32 i = (u32)0; i < image.count(); i = i + (u32)1)
-        d.appendByte((u8)((Number*)image.get(i)).asU32());
+    Data* d = m.bytes();
     if (!Files.writeData(outPath, d))
         {
         Stdio.printf("xtld64: cannot write '%s'\n", outPath.cString());

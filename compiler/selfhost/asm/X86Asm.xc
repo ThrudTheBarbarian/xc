@@ -19,6 +19,7 @@
 
 #import "Foundation.xc"
 #import <DwarfWriter>
+#import <SectionBytes>
 
 #import "X86AsmDefs.xc"
 // The four below are never produced by THIS assembler. They exist because the
@@ -225,14 +226,14 @@ class X86Fixup
 
     class X86Asm
     {
-    Array* _text; // Number@ per byte
-    Array* _data;
+    SectionBytes* _text;
+    SectionBytes* _data;
     Array* _fixups;     // X86Fixup@
     Map* _symbols;      // name -> offset within its own section
     Array* _dataSyms;   // String@
     Array* _globalSyms; // String@
     Map* _commonSyms;   // `.comm` COMMON: name -> [size, byteAlign] (bug 36 x-obj)
-    Array* _bss;        // `.bss` bytes, appended after all the data once the pass is done (bug 642)
+    SectionBytes* _bss; // `.bss`, appended after all the data once the pass is done (bug 642)
     u32 _bssAlign;      // the largest alignment a `.bss` .p2align asked for (at least 16)
     Array* _bssLabels;  // the labels defined in it, rebased then
     bool _failed;
@@ -249,25 +250,25 @@ class X86Fixup
 
     void init(void)
         {
-        _text = new Array();
-        _data = new Array();
+        _text = new SectionBytes();
+        _data = new SectionBytes();
         _fixups = new Array();
         _symbols = new Map();
         _dataSyms = new Array();
         _globalSyms = new Array();
         _commonSyms = new Map();
-        _bss = new Array();
+        _bss = new SectionBytes();
         _bssAlign = (u32)16;
         _bssLabels = new Array();
         _failed = false;
         _skipSect = false;
         }
 
-    Array* text(void)
+    SectionBytes* text(void)
         {
         return _text;
         }
-    Array* data(void)
+    SectionBytes* data(void)
         {
         return _data;
         }
@@ -320,12 +321,10 @@ class X86Fixup
             u32 al = ((Number*)info.get((u32)1)).asU32();
             if (al < (u32)1)
                 al = (u32)1;
-            while (_data.count() % al != (u32)0)
-                _data.add((Object*)Number.withU32((u32)0));
-            _symbols.set((Hashable*)nm, (Object*)Number.withU32(_data.count()));
+            _data.padTo(al);
+            _symbols.set((Hashable*)nm, (Object*)Number.withU32(_data.length()));
             _dataSyms.add((Object*)nm);
-            for (u32 i = (u32)0; i < sz; i = i + (u32)1)
-                _data.add((Object*)Number.withU32((u32)0));
+            _data.appendZeros(sz);
             }
         _commonSyms = new Map();
         }
@@ -3348,16 +3347,16 @@ class X86Fixup
                     return;
                     }
                 if (section == (u32)0)
-                    _symbols.set((Hashable*)lbl, (Object*)Number.withU32(_text.count()));
+                    _symbols.set((Hashable*)lbl, (Object*)Number.withU32(_text.length()));
                 else if (section == (u32)2)
                     {
                     // bss-relative for now; rebased after the pass (bug 642)
-                    _symbols.set((Hashable*)lbl, (Object*)Number.withU32(_bss.count()));
+                    _symbols.set((Hashable*)lbl, (Object*)Number.withU32(_bss.length()));
                     _bssLabels.add((Object*)lbl);
                     }
                 else
                     {
-                    _symbols.set((Hashable*)lbl, (Object*)Number.withU32(_data.count()));
+                    _symbols.set((Hashable*)lbl, (Object*)Number.withU32(_data.length()));
                     _dataSyms.add((Object*)lbl);
                     }
                 continue;
@@ -3390,7 +3389,7 @@ class X86Fixup
                 failWith(String.withCString("unexpected line in the data section"), l);
                 return;
                 }
-            _insnBase = _text.count();
+            _insnBase = _text.length();
             Array* bytes = encodeOne(l);
             if (bytes == (Array*)0)
                 {
@@ -3404,14 +3403,14 @@ class X86Fixup
                 return;
                 }
             for (u32 i = (u32)0; i < bytes.count(); i = i + (u32)1)
-                _text.add(bytes.get(i));
+                _text.appendByte((u8)((Number*)bytes.get(i)).asU32());
             // -g: rbp now addresses the saved rbp and the return address above
             // it, so the call frame is rbp + 16 from here.
             if (l.hasPrefix(String.withCString("mov")) && l.hasSuffix(String.withCString("rbp, rsp")))
                 {
                 if (_dwarf == (DwarfWriter*)0)
                     _dwarf = new DwarfWriter();
-                _dwarf.addFrameSetup(_text.count(), (u32)16);
+                _dwarf.addFrameSetup(_text.length(), (u32)16);
                 }
             }
         if (_dwarf != (DwarfWriter*)0 && _dwarf.hasRows())
@@ -3419,15 +3418,13 @@ class X86Fixup
         // The bss, after all the data (bug 642): its labels become data symbols
         // at their final offsets. Before the branch resolution, which must see
         // them as data. Mirrors the reference assembler.
-        if (_bss.count() > (u32)0)
+        if (_bss.length() > (u32)0)
             {
             // At the largest alignment inside it, so a 16 KB-aligned array
             // (gpu-globals) keeps its alignment once appended.
-            while (_data.count() % _bssAlign != (u32)0)
-                _data.add((Object*)Number.withU32((u32)0));
-            u32 base = _data.count();
-            for (u32 i = (u32)0; i < _bss.count(); i = i + (u32)1)
-                _data.add(_bss.get(i));
+            _data.padTo(_bssAlign);
+            u32 base = _data.length();
+            _data.append(_bss);
             for (u32 i = (u32)0; i < _bssLabels.count(); i = i + (u32)1)
                 {
                 String* lbl = (String*)_bssLabels.get(i);
@@ -3458,13 +3455,13 @@ class X86Fixup
         if (d.equals(String.withCString(".xc_var")) || d.equals(String.withCString(".xc_param")))
             {
             _dwarf = DwarfWriter.variableDirective(_dwarf, rest, d.equals(String.withCString(".xc_param")),
-                                                   _text.count());
+                                                   _text.length());
             return section;
             }
         if (d.equals(String.withCString(".file")) || d.equals(String.withCString(".loc")))
             {
             _dwarf = DwarfWriter.directive(_dwarf, rest, (u32)0, d.equals(String.withCString(".file")),
-                                           section == (u32)0, _text.count());
+                                           section == (u32)0, _text.length());
             return section;
             }
         if (d.equals(String.withCString(".section")))
@@ -3517,12 +3514,11 @@ class X86Fixup
                 return section;
                 }
             if (alg > (i32)1)
-                while (_data.count() % (u32)alg != (u32)0)
-                    _data.add((Object*)Number.withU32((u32)0));
-            _symbols.set((Hashable*)nm, (Object*)Number.withU32(_data.count()));
+                _data.padTo((u32)alg);
+            _symbols.set((Hashable*)nm, (Object*)Number.withU32(_data.length()));
             _dataSyms.add((Object*)nm);
-            for (i32 i = (i32)0; i < sz; i = i + (i32)1)
-                _data.add((Object*)Number.withU32((u32)0));
+            if (sz > (i32)0)
+                _data.appendZeros((u32)sz);
             return section;
             }
         // Debug and type annotations carry no bytes at all.
@@ -3536,18 +3532,16 @@ class X86Fixup
             u32 al = (u32)1 << (u32)n;
             // Code pads with NOPs, data with zeros.
             if (section == (u32)0)
-                while (_text.count() % al != (u32)0)
-                    _text.add((Object*)Number.withU32((u32)$90));
+                while (_text.length() % al != (u32)0)
+                    _text.appendByte((u8)$90);
             else if (section == (u32)2)
                 {
-                while (_bss.count() % al != (u32)0)
-                    _bss.add((Object*)Number.withU32((u32)0));
+                _bss.padTo(al);
                 if (al > _bssAlign)
                     _bssAlign = al;
                 }
             else
-                while (_data.count() % al != (u32)0)
-                    _data.add((Object*)Number.withU32((u32)0));
+                _data.padTo(al);
             return section;
             }
 
@@ -3558,7 +3552,7 @@ class X86Fixup
     // comparisons builds more temporaries than one frame can hold.
     u32 handleDataDirective(String* d, String* rest, String* l, u32 section)
         {
-        Array* sec = section == (u32)0 ? _text : (section == (u32)2 ? _bss : _data);
+        SectionBytes* sec = section == (u32)0 ? _text : (section == (u32)2 ? _bss : _data);
         Array* ops = splitDirectiveOps(rest);
         if (d.equals(String.withCString(".zero")) || d.equals(String.withCString(".space")))
             {
@@ -3570,8 +3564,14 @@ class X86Fixup
                 if (_numOk)
                     fill = f;
                 }
-            for (i32 i = (i32)0; i < n; i = i + (i32)1)
-                sec.add((Object*)Number.withU32((u32)fill & (u32)$FF));
+            if (((u32)fill & (u32)$FF) == (u32)0)
+                {
+                if (n > (i32)0)
+                    sec.appendZeros((u32)n);
+                }
+            else
+                for (i32 i = (i32)0; i < n; i = i + (i32)1)
+                    sec.appendByte((u8)((u32)fill & (u32)$FF));
             return section;
             }
         if (d.equals(String.withCString(".ascii")) || d.equals(String.withCString(".asciz")) || d.equals(String.withCString(".string")))
@@ -3603,11 +3603,11 @@ class X86Fixup
                     else
                         c = n;
                     }
-                sec.add((Object*)Number.withU32((u32)c));
+                sec.appendByte(c);
                 i = i + (u32)1;
                 }
             if (!d.equals(String.withCString(".ascii")))
-                sec.add((Object*)Number.withU32((u32)0));
+                sec.appendByte((u8)0);
             return section;
             }
         u32 width = dataWidth(d);
@@ -3628,9 +3628,8 @@ class X86Fixup
                     failWith(String.withCString("a symbolic .quad is only supported in data"), l);
                     return section;
                     }
-                _fixups.add((Object*)X86Fixup.make(sec.count(), (u32)X86FIX_ABS64, t, (i32)0));
-                for (u32 k = (u32)0; k < (u32)8; k = k + (u32)1)
-                    sec.add((Object*)Number.withU32((u32)0));
+                _fixups.add((Object*)X86Fixup.make(sec.length(), (u32)X86FIX_ABS64, t, (i32)0));
+                sec.appendZeros((u32)8);
                 continue;
                 }
             i32 v = parseNum(t);
@@ -3644,7 +3643,7 @@ class X86Fixup
                 {
                 u32 byte = k < (u32)4 ? (((u32)v >> ((u32)8 * k)) & (u32)$FF)
                                       : ((hi >> ((u32)8 * (k - (u32)4))) & (u32)$FF);
-                sec.add((Object*)Number.withU32(byte));
+                sec.appendByte((u8)byte);
                 }
             }
         return section;
@@ -3736,7 +3735,7 @@ class X86Fixup
                 {
                 i32 rel = (i32)((Number*)target).asU32() - (i32)f.offset() + f.addend();
                 for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
-                    _text.set(f.offset() + k, (Object*)Number.withU32(((u32)rel >> ((u32)8 * k)) & (u32)$FF));
+                    _text.setByteAt(f.offset() + k, (u8)(((u32)rel >> ((u32)8 * k)) & (u32)$FF));
                 continue;
                 }
             unresolved.add((Object*)f);

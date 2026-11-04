@@ -32,20 +32,21 @@
 
 #import "PeDefs.xc"
 #import <DwarfWriter>
+#import <SectionBytes>
 
 class Pe
     {
-    Array* _out;
+    Data* _out;
     bool _failed;
     String* _why;
 
     void init(void)
         {
-        _out = new Array();
+        _out = new Data();
         _failed = false;
         }
 
-    Array* bytes(void)
+    Data* bytes(void)
         {
         return _out;
         }
@@ -82,7 +83,7 @@ class Pe
 
     void p8(u32 v)
         {
-        _out.add((Object*)Number.withU32(v & (u32)$FF));
+        _out.appendByte((u8)(v & (u32)$FF));
         }
     void p16(u32 v)
         {
@@ -103,8 +104,8 @@ class Pe
         }
     void padTo(u32 off)
         {
-        while (_out.count() < off)
-            p8((u32)0);
+        if (_out.length() < off)
+            _out.increaseLengthBy(off - _out.length());
         }
 
     static u32 alignUp(u32 v, u32 a)
@@ -114,12 +115,9 @@ class Pe
 
     // Trailing zeros need no file bytes: a section whose VirtualSize exceeds its
     // SizeOfRawData is zero-filled by the loader.
-    static u32 rawSizeOf(Array* d)
+    static u32 rawSizeOf(SectionBytes* d)
         {
-        u32 n = d.count();
-        while (n > (u32)0 && ((Number*)d.get(n - (u32)1)).asU32() == (u32)0)
-            n = n - (u32)1;
-        return n;
+        return d.fileLength();
         }
 
     static bool inArray(Array* a, String* nm)
@@ -128,14 +126,6 @@ class Pe
             if (((String*)a.get(i)).equals(nm))
                 return true;
         return false;
-        }
-
-    static Array* copyBytes(Array* a)
-        {
-        Array* o = new Array();
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            o.add(a.get(i));
-        return o;
         }
 
     // ── Import collection ────────────────────────────────────────────────
@@ -170,11 +160,11 @@ class Pe
             a.set(j, v);
             }
         }
-    Array* objectFromText(Array* text, Array* data, Map* symbols, Array* dataSyms,
-                          Array* globalSyms, Array* fixups)
+    Data* objectFromText(SectionBytes* text, SectionBytes* data, Map* symbols, Array* dataSyms,
+                         Array* globalSyms, Array* fixups)
         {
-        Array* mtext = Pe.copyBytes(text);
-        Array* mdata = Pe.copyBytes(data);
+        SectionBytes* mtext = text.copy();
+        SectionBytes* mdata = data.copy();
         Array* defText = new Array();
         Array* defData = new Array();
         Array* names = symbols.allKeys();
@@ -225,29 +215,29 @@ class Pe
             u32 sidx = ((Number*)si).asU32() - (u32)1;
             if (f.kind() == (u32)X86FIX_ABS64)
                 {
-                if (f.offset() + (u32)8 > mdata.count())
+                if (f.offset() + (u32)8 > mdata.length())
                     {
                     failWith(String.withCString("abs64 fixup past end of data"), f.symbol());
-                    return (Array*)0;
+                    return (Data*)0;
                     }
                 u32 v = (u32)f.addend();
                 u32 hi = f.addend() < (i32)0 ? (u32)$FFFFFFFF : (u32)0;
                 for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
-                    mdata.set(f.offset() + b, (Object*)Number.withU32((v >> (b * (u32)8)) & (u32)$FF));
+                    mdata.setByteAt(f.offset() + b, (u8)((v >> (b * (u32)8)) & (u32)$FF));
                 for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
-                    mdata.set(f.offset() + (u32)4 + b, (Object*)Number.withU32((hi >> (b * (u32)8)) & (u32)$FF));
+                    mdata.setByteAt(f.offset() + (u32)4 + b, (u8)((hi >> (b * (u32)8)) & (u32)$FF));
                 Pe.rel(dataRel, f.offset(), sidx, (u32)COFF_REL_ADDR64);
                 nDataRel = nDataRel + (u32)1;
                 continue;
                 }
-            if (f.offset() + (u32)4 > mtext.count())
+            if (f.offset() + (u32)4 > mtext.length())
                 {
                 failWith(String.withCString("rel32 fixup past end of text"), f.symbol());
-                return (Array*)0;
+                return (Data*)0;
                 }
             u32 inl = (u32)(f.addend() + (i32)4);
             for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
-                mtext.set(f.offset() + b, (Object*)Number.withU32((inl >> (b * (u32)8)) & (u32)$FF));
+                mtext.setByteAt(f.offset() + b, (u8)((inl >> (b * (u32)8)) & (u32)$FF));
             Pe.rel(textRel, f.offset(), sidx, (u32)COFF_REL_REL32);
             nTextRel = nTextRel + (u32)1;
             }
@@ -274,15 +264,15 @@ class Pe
             strtab.set(b, (Object*)Number.withU32((stsz >> (b * (u32)8)) & (u32)$FF));
         u32 off = (u32)20 + (u32)2 * (u32)PE_SECT_HDR_SIZE;
         u32 textOff = off;
-        off = off + mtext.count();
+        off = off + mtext.length();
         u32 dataOff = off;
-        off = off + mdata.count();
+        off = off + mdata.length();
         u32 trelOff = off;
         off = off + textRel.count();
         u32 drelOff = off;
         off = off + dataRel.count();
         u32 symOff = off;
-        _out = new Array();
+        _out = new Data();
         p16((u32)COFF_MACHINE_AMD64);
         p16((u32)2);
         p32((u32)0); // TimeDateStamp: zero keeps it reproducible
@@ -290,18 +280,14 @@ class Pe
         p32(order.count());
         p16((u32)0);
         p16((u32)0);
-        Pe.sectHdr(self, String.withCString(".text"), mtext.count(), textOff, trelOff, nTextRel,
+        Pe.sectHdr(self, String.withCString(".text"), mtext.length(), textOff, trelOff, nTextRel,
                    (u32)COFF_SCN_CODE | (u32)$20000000 | (u32)$40000000 | (u32)$00500000);
-        Pe.sectHdr(self, String.withCString(".data"), mdata.count(), dataOff, drelOff, nDataRel,
+        Pe.sectHdr(self, String.withCString(".data"), mdata.length(), dataOff, drelOff, nDataRel,
                    (u32)COFF_SCN_INIT_DATA | (u32)$40000000 | (u32)$80000000 | (u32)$00400000);
-        for (u32 i = (u32)0; i < mtext.count(); i = i + (u32)1)
-            _out.add(mtext.get(i));
-        for (u32 i = (u32)0; i < mdata.count(); i = i + (u32)1)
-            _out.add(mdata.get(i));
-        for (u32 i = (u32)0; i < textRel.count(); i = i + (u32)1)
-            _out.add(textRel.get(i));
-        for (u32 i = (u32)0; i < dataRel.count(); i = i + (u32)1)
-            _out.add(dataRel.get(i));
+        appendSection(mtext);
+        appendSection(mdata);
+        appendAll(textRel);
+        appendAll(dataRel);
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             {
             String* n = (String*)order.get(i);
@@ -325,8 +311,7 @@ class Pe
             p8((isUndef || Pe.inArray(globalSyms, n)) ? (u32)2 : (u32)3);
             p8((u32)0);
             }
-        for (u32 i = (u32)0; i < strtab.count(); i = i + (u32)1)
-            _out.add(strtab.get(i));
+        appendAll(strtab);
         return _out;
         }
     static void rel(Array* into, u32 off, u32 si, u32 type)
@@ -353,7 +338,7 @@ class Pe
         w.p32(chars);
         }
 
-    void executable(Array* textIn, Array* dataIn, Map* symbols, Array* dataSyms,
+    void executable(SectionBytes* textIn, SectionBytes* dataIn, Map* symbols, Array* dataSyms,
                     Array* fixups, String* entrySymbol,
                     Array* importDlls, Array* importSyms)
         {
@@ -368,7 +353,7 @@ class Pe
     // `.globl` names), and the interface, when there is one, in an `xtciface`
     // section. `entrySymbol` is the DllMain the loader calls. Mirrors
     // XTPEWriter's dllFromText.
-    void dll(Array* textIn, Array* dataIn, Map* symbols, Array* dataSyms,
+    void dll(SectionBytes* textIn, SectionBytes* dataIn, Map* symbols, Array* dataSyms,
              Array* fixups, String* entrySymbol,
              Array* importDlls, Array* importSyms,
              String* dllName, Array* globals, Data* iface)
@@ -404,7 +389,7 @@ class Pe
     Data* _iface;
     Array* _exports;
 
-    void link(Array* textIn, Array* dataIn, Map* symbols, Array* dataSyms,
+    void link(SectionBytes* textIn, SectionBytes* dataIn, Map* symbols, Array* dataSyms,
               Array* fixups, String* entrySymbol,
               Array* importDlls, Array* importSyms)
         {
@@ -496,7 +481,7 @@ class Pe
                 slotNo = slotNo + (u32)1; // this DLL's terminator
                 }
             }
-        buildImage(copyBytes(textIn), copyBytes(dataIn), symbols, dataSyms, fixups,
+        buildImage(textIn.copy(), dataIn.copy(), symbols, dataSyms, fixups,
                    ((Number*)entry).asU32());
         }
 
@@ -647,7 +632,7 @@ class Pe
     // out after everything the loader maps; their long names live in the
     // string table that follows the symbols. `afterRaw` is where the file's
     // mapped sections end.
-    void layoutDebugAndSymbols(Map* symbols, Array* dataSyms, Array* data, u32 afterRaw0)
+    void layoutDebugAndSymbols(Map* symbols, Array* dataSyms, SectionBytes* data, u32 afterRaw0)
         {
         u32 afterRaw = afterRaw0;
         _coffStr = new Array();
@@ -687,7 +672,7 @@ class Pe
             {
             String* nm = (String*)names.get(i);
             bool inData = dataSet.get((Hashable*)nm) != (Object*)0;
-            if (nm.hasPrefix(String.withCString(".")) || (inData && data.count() == (u32)0))
+            if (nm.hasPrefix(String.withCString(".")) || (inData && data.length() == (u32)0))
                 continue;
             if (nm.byteLength() <= (u32)8)
                 {
@@ -712,7 +697,7 @@ class Pe
         _symTabRaw = afterRaw;
         }
 
-    void buildImage(Array* text, Array* data, Map* symbols, Array* dataSyms,
+    void buildImage(SectionBytes* text, SectionBytes* data, Map* symbols, Array* dataSyms,
                     Array* fixups, u32 entryOffset)
         {
         // Data words naming an import: each is filled at startup from the
@@ -725,7 +710,7 @@ class Pe
                 && Pe.impTarget(f.symbol()) == (String*)0)
                 _pseudo.add((Object*)f);
             }
-        _thunkOff = text.count(); // the stubs append to .text
+        _thunkOff = text.length(); // the stubs append to .text
         // The pseudo-relocation stub: in a DLL `cmp edx, 1; jne entry` first
         // (the loader calls the entry again for every thread and at unload),
         // then per word `mov rax, [rip + slot]; add [rip + word], rax`, then
@@ -734,7 +719,7 @@ class Pe
         _stubSz = (u32)0;
         if (_pseudo.count() > (u32)0)
             _stubSz = (_isDll ? (u32)9 : (u32)0) + _pseudo.count() * (u32)14 + (u32)5;
-        _textLen = text.count() + _nImports * (u32)PE_THUNK_SZ + _stubSz;
+        _textLen = text.length() + _nImports * (u32)PE_THUNK_SZ + _stubSz;
 
         // .rdata holds the import machinery: descriptors, then per-DLL ILT and
         // IAT (two identical arrays — the loader overwrites the IAT), then the
@@ -770,7 +755,7 @@ class Pe
         _dwarf = _isDll ? (DwarfWriter*)0 : DwarfWriter.pending();
         if (_dwarf != (DwarfWriter*)0)
             DwarfWriter.setPending((DwarfWriter*)0);
-        _nSect = (data.count() > (u32)0 ? (u32)3 : (u32)2) + (_hasIface ? (u32)1 : (u32)0)
+        _nSect = (data.length() > (u32)0 ? (u32)3 : (u32)2) + (_hasIface ? (u32)1 : (u32)0)
                  + (_relocOffs.count() > (u32)0 ? (u32)1 : (u32)0)
                  + (_dwarf != (DwarfWriter*)0 ? (u32)5 : (u32)0);
         _hdrSz = alignUp((u32)$40 + (u32)$40 + (u32)4 + (u32)20 + (u32)PE_OPT_HDR_SIZE + _nSect * (u32)PE_SECT_HDR_SIZE, (u32)PE_FILE_ALIGN);
@@ -834,10 +819,10 @@ class Pe
             u32 here = _thunkRVA + i * (u32)PE_THUNK_SZ;
             u32 slotNo = ((Number*)_iatSlot.get((Hashable*)(String*)_stubSym.get(i))).asU32();
             i32 rel = (i32)(_iatRVA + slotNo * (u32)8) - (i32)(here + (u32)PE_THUNK_SZ);
-            text.add((Object*)Number.withU32((u32)$FF));
-            text.add((Object*)Number.withU32((u32)$25));
+            text.appendByte((u8)((u32)$FF));
+            text.appendByte((u8)((u32)$25));
             for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
-                text.add((Object*)Number.withU32(((u32)rel >> ((u32)8 * k)) & (u32)$FF));
+                text.appendByte((u8)(((u32)rel >> ((u32)8 * k)) & (u32)$FF));
             }
 
         // The pseudo-relocation stub.
@@ -847,8 +832,8 @@ class Pe
             if (_isDll)
                 {
                 Pe.b3(text, (u32)$83, (u32)$FA, (u32)$01); // cmp edx, 1 (DLL_PROCESS_ATTACH)
-                text.add((Object*)Number.withU32((u32)$0F));
-                text.add((Object*)Number.withU32((u32)$85)); // jne entry
+                text.appendByte((u8)((u32)$0F));
+                text.appendByte((u8)((u32)$85)); // jne entry
                 ripRel(text, _entryRVA);
                 }
             for (u32 i = (u32)0; i < _pseudo.count(); i = i + (u32)1)
@@ -859,7 +844,7 @@ class Pe
                 Pe.b3(text, (u32)$48, (u32)$01, (u32)$05); // add [rip + word], rax
                 ripRel(text, _dataRVA + f.offset());
                 }
-            text.add((Object*)Number.withU32((u32)$E9)); // jmp entry
+            text.appendByte((u8)((u32)$E9)); // jmp entry
             ripRel(text, _entryRVA);
             }
 
@@ -874,8 +859,8 @@ class Pe
 
         // The DLL-only sections after .data: the interface, then the
         // relocations.
-        _afterRVA = data.count() > (u32)0 ? _dataRVA + data.count() : _rdataRVA + _rdataLen;
-        u32 afterRaw = data.count() > (u32)0 ? _dataRaw + alignUp(_dataFileSz, (u32)PE_FILE_ALIGN)
+        _afterRVA = data.length() > (u32)0 ? _dataRVA + data.length() : _rdataRVA + _rdataLen;
+        u32 afterRaw = data.length() > (u32)0 ? _dataRaw + alignUp(_dataFileSz, (u32)PE_FILE_ALIGN)
                                              : _rdataRaw + alignUp(_rdataLen, (u32)PE_FILE_ALIGN);
         if (_hasIface)
             {
@@ -924,11 +909,11 @@ class Pe
         emitFile(text, data, symbols, dataSyms);
         }
 
-    static void b3(Array* a, u32 x, u32 y, u32 z)
+    static void b3(SectionBytes* a, u32 x, u32 y, u32 z)
         {
-        a.add((Object*)Number.withU32(x));
-        a.add((Object*)Number.withU32(y));
-        a.add((Object*)Number.withU32(z));
+        a.appendByte((u8)x);
+        a.appendByte((u8)y);
+        a.appendByte((u8)z);
         }
     static void put32(Array* a, u32 v)
         {
@@ -937,13 +922,13 @@ class Pe
         }
     // The rel32 of an instruction whose displacement is its last four bytes,
     // appended at the end of `text`.
-    void ripRel(Array* text, u32 targetRVA)
+    void ripRel(SectionBytes* text, u32 targetRVA)
         {
-        i32 r = (i32)targetRVA - (i32)(_textRVA + text.count() + (u32)4);
-        Pe.put32(text, (u32)r);
+        i32 r = (i32)targetRVA - (i32)(_textRVA + text.length() + (u32)4);
+        text.appendLE((u32)r, (u32)4);
         }
 
-    bool resolveFixups(Array* text, Array* data, Map* symbols, Array* dataSyms, Array* fixups)
+    bool resolveFixups(SectionBytes* text, SectionBytes* data, Map* symbols, Array* dataSyms, Array* fixups)
         {
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
@@ -959,7 +944,7 @@ class Pe
                 {
                 // A pseudo-relocation: the word holds the addend until the stub
                 // adds the import's address to it.
-                if (f.offset() + (u32)8 > data.count())
+                if (f.offset() + (u32)8 > data.length())
                     {
                     failWith(String.withCString("abs64 fixup past the end of data"), f.symbol());
                     return false;
@@ -967,10 +952,9 @@ class Pe
                 u32 lo = (u32)f.addend();
                 u32 hi = f.addend() < (i32)0 ? (u32)$FFFF_FFFF : (u32)0;
                 for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
-                    data.set(f.offset() + k, (Object*)Number.withU32((lo >> ((u32)8 * k)) & (u32)$FF));
+                    data.setByteAt(f.offset() + k, (u8)((lo >> ((u32)8 * k)) & (u32)$FF));
                 for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
-                    data.set(f.offset() + (u32)4 + k,
-                             (Object*)Number.withU32((hi >> ((u32)8 * k)) & (u32)$FF));
+                    data.setByteAt(f.offset() + (u32)4 + k, (u8)((hi >> ((u32)8 * k)) & (u32)$FF));
                 continue;
                 }
             else if (f.kind() == (u32)X86FIX_PC32)
@@ -979,10 +963,10 @@ class Pe
                 // REX.W, 8D -> 8B, and a ModRM of [rip + disp32]. Anything else
                 // would need a longer instruction.
                 u32 o = f.offset();
-                bool isLea = o >= (u32)3 && o + (u32)4 <= text.count()
-                             && (((Number*)text.get(o - (u32)3)).asU32() & (u32)$F8) == (u32)$48
-                             && ((Number*)text.get(o - (u32)2)).asU32() == (u32)$8D
-                             && (((Number*)text.get(o - (u32)1)).asU32() & (u32)$C7) == (u32)$05
+                bool isLea = o >= (u32)3 && o + (u32)4 <= text.length()
+                             && ((u32)text.byteAt(o - (u32)3) & (u32)$F8) == (u32)$48
+                             && (u32)text.byteAt(o - (u32)2) == (u32)$8D
+                             && ((u32)text.byteAt(o - (u32)1) & (u32)$C7) == (u32)$05
                              && f.addend() == (i32)-4;
                 if (!isLea)
                     {
@@ -990,7 +974,7 @@ class Pe
                              f.symbol());
                     return false;
                     }
-                text.set(o - (u32)2, (Object*)Number.withU32((u32)$8B));
+                text.setByteAt(o - (u32)2, (u8)((u32)$8B));
                 target = _iatRVA + ((Number*)_iatSlot.get((Hashable*)f.symbol())).asU32() * (u32)8;
                 }
             else
@@ -998,7 +982,7 @@ class Pe
 
             if (f.kind() == (u32)X86FIX_ABS64)
                 {
-                if (f.offset() + (u32)8 > data.count())
+                if (f.offset() + (u32)8 > data.length())
                     {
                     failWith(String.withCString("abs64 fixup past the end of data"), f.symbol());
                     return false;
@@ -1010,10 +994,9 @@ class Pe
                 if (lo < target)
                     hi = hi + (u32)1; // carry out of the low half
                 for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
-                    data.set(f.offset() + k, (Object*)Number.withU32((lo >> ((u32)8 * k)) & (u32)$FF));
+                    data.setByteAt(f.offset() + k, (u8)((lo >> ((u32)8 * k)) & (u32)$FF));
                 for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
-                    data.set(f.offset() + (u32)4 + k,
-                             (Object*)Number.withU32((hi >> ((u32)8 * k)) & (u32)$FF));
+                    data.setByteAt(f.offset() + (u32)4 + k, (u8)((hi >> ((u32)8 * k)) & (u32)$FF));
                 continue;
                 }
             // A slot in data holding the distance from itself to the target
@@ -1021,17 +1004,17 @@ class Pe
             // relocation for it.
             if (f.kind() == (u32)X86FIX_PC32DATA)
                 {
-                if (f.offset() + (u32)4 > data.count())
+                if (f.offset() + (u32)4 > data.length())
                     {
                     failWith(String.withCString("pc32 fixup past the end of data"), f.symbol());
                     return false;
                     }
                 i32 drel = (i32)target - (i32)(_dataRVA + f.offset()) + f.addend();
                 for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
-                    data.set(f.offset() + k, (Object*)Number.withU32(((u32)drel >> ((u32)8 * k)) & (u32)$FF));
+                    data.setByteAt(f.offset() + k, (u8)(((u32)drel >> ((u32)8 * k)) & (u32)$FF));
                 continue;
                 }
-            if (f.offset() + (u32)4 > text.count())
+            if (f.offset() + (u32)4 > text.length())
                 {
                 failWith(String.withCString("pc32 fixup past the end of text"), f.symbol());
                 return false;
@@ -1040,12 +1023,12 @@ class Pe
             // arithmetic.
             i32 rel = (i32)target - (i32)(_textRVA + f.offset()) + f.addend();
             for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
-                text.set(f.offset() + k, (Object*)Number.withU32(((u32)rel >> ((u32)8 * k)) & (u32)$FF));
+                text.setByteAt(f.offset() + k, (u8)(((u32)rel >> ((u32)8 * k)) & (u32)$FF));
             }
         return true;
         }
 
-    void emitFile(Array* text, Array* data, Map* symbols, Array* dataSyms)
+    void emitFile(SectionBytes* text, SectionBytes* data, Map* symbols, Array* dataSyms)
         {
         // DOS header. Windows does not care about the stub, but it must be
         // there and e_lfanew must point PAST it — pointing at 0x40 puts the
@@ -1134,8 +1117,8 @@ class Pe
              (u32)$20 | (u32)$20000000 | (u32)$40000000);
         sect(String.withCString(".rdata"), _rdataLen, _rdataRVA, _rdataLen, _rdataRaw,
              (u32)$40 | (u32)$40000000);
-        if (data.count() > (u32)0)
-            sect(String.withCString(".data"), data.count(), _dataRVA, _dataFileSz, _dataRaw,
+        if (data.length() > (u32)0)
+            sect(String.withCString(".data"), data.length(), _dataRVA, _dataFileSz, _dataRaw,
                  (u32)$40 | (u32)$40000000 | (u32)$80000000);
         // The interface is read out of the FILE by a compiler, never by the
         // program, so the loader may discard it.
@@ -1156,16 +1139,15 @@ class Pe
             }
 
         padTo(_textRaw);
-        appendAll(text);
+        appendSection(text);
         padTo(_rdataRaw);
         emitImportTables();
         if (_isDll)
             emitExports(symbols, dataSyms);
-        if (data.count() > (u32)0)
+        if (data.length() > (u32)0)
             {
             padTo(_dataRaw);
-            for (u32 i = (u32)0; i < _dataFileSz; i = i + (u32)1)
-                _out.add(data.get(i));
+            data.appendRangeTo(_out, (u32)0, _dataFileSz);
             }
         if (_hasIface)
             {
@@ -1185,7 +1167,7 @@ class Pe
             }
         // Every section's raw data is FileAlignment-padded; a short final
         // section makes some loaders reject the image.
-        while (_out.count() % (u32)PE_FILE_ALIGN != (u32)0)
+        while (_out.length() % (u32)PE_FILE_ALIGN != (u32)0)
             p8((u32)0);
         if (_nCoffSyms > (u32)0)
             {
@@ -1390,7 +1372,7 @@ class Pe
                 for (u32 c = (u32)0; c < sym.byteLength(); c = c + (u32)1)
                     p8((u32)sym.byteAt(c));
                 p8((u32)0);
-                if ((_out.count() & (u32)1) != (u32)0)
+                if ((_out.length() & (u32)1) != (u32)0)
                     p8((u32)0); // 2-byte aligned
                 }
             }
@@ -1406,6 +1388,10 @@ class Pe
     void appendAll(Array* a)
         {
         for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            _out.add(a.get(i));
+            _out.appendByte((u8)((Number*)a.get(i)).asU32());
+        }
+    void appendSection(SectionBytes* s)
+        {
+        s.appendRangeTo(_out, (u32)0, s.length());
         }
     }

@@ -21,6 +21,7 @@
 
 #import "MachODefs.xc"
 #import <DwarfWriter>
+#import <SectionBytes>
 
 // Bug 642: a data symbol whose offset is at or past gMachOBssFrom lives in the
 // __bss zero-fill section, at gMachOBssBase + (offset - gMachOBssFrom), and
@@ -175,6 +176,22 @@ class MachOSha256
         _s[5] = _s[5] + f;
         _s[6] = _s[6] + g;
         _s[7] = _s[7] + h;
+        }
+
+    void updateData(Data* bytes, u32 from, u32 len)
+        {
+        _len = _len + len;
+        u8* p = bytes.bytes();
+        for (u32 i = (u32)0; i < len; i = i + (u32)1)
+            {
+            _buf[_n] = (u32)p[from + i];
+            _n = _n + (u32)1;
+            if (_n == (u32)64)
+                {
+                block();
+                _n = (u32)0;
+                }
+            }
         }
 
     void update(Array* bytes, u32 from, u32 len)
@@ -587,7 +604,7 @@ class MachOSha256
 
     class MachO
     {
-    Array* _out; // Number@ per byte
+    Data* _out;
     // LC_BUILD_VERSION stamp — mirrors XTMachOWriter's sPlatform* statics:
     // macos (1, 11.0) by default; setApplePlatform("ios"/"ios-sim") switches
     // to 2/7 with minos 15.0. One image per process, exactly as in the ref.
@@ -615,7 +632,7 @@ class MachOSha256
         {
         _rpaths = new Array();
         _objcSects = (Array*)0;
-        _out = new Array();
+        _out = new Data();
         _dataSegIdx = (u32)2;
         _baseHi = (u32)1;
         _flatBind = false;
@@ -722,7 +739,7 @@ class MachOSha256
         return (String*)_names.get(idx);
         }
 
-    Array* bytes(void)
+    Data* bytes(void)
         {
         return _out;
         }
@@ -730,7 +747,7 @@ class MachOSha256
     // ── Byte emission ────────────────────────────────────────────────────
     void put8(u32 v)
         {
-        _out.add((Object*)Number.withU32(v & (u32)$FF));
+        _out.appendByte((u8)(v & (u32)$FF));
         }
 
     void put32(u32 v)
@@ -809,8 +826,8 @@ class MachOSha256
 
     void padTo(u32 off)
         {
-        while (_out.count() < off)
-            put8((u32)0);
+        if (_out.length() < off)
+            _out.increaseLengthBy(off - _out.length());
         }
 
     // ── MH_OBJECT: the object `-c` writes ────────────────────────────────
@@ -821,23 +838,23 @@ class MachOSha256
     // warns "no platform load command found, assuming: macOS"; it is assuming
     // correctly, but a real object says so).
     // The module's load-time constructors for the next objectFromText: bytes
-    // (Number@) and their Pointer64 fixups, written as a __mod_init_func
+    // and their Pointer64 fixups, written as a __mod_init_func
     // section the linker runs. Unset, the object is as it always was.
-    Array* _objModInit;
+    SectionBytes* _objModInit;
     Array* _objModInitFix;
 
-    void setModInit(Array* bytes, Array* fixups)
+    void setModInit(SectionBytes* bytes, Array* fixups)
         {
         _objModInit = bytes;
         _objModInitFix = fixups;
         }
 
-    Array* objectFromText(Array* text, Array* data, Map* symbols, Array* dataSyms,
-                          Array* fixups, Array* exports, Map* commons)
+    Data* objectFromText(SectionBytes* text, SectionBytes* data, Map* symbols, Array* dataSyms,
+                         Array* fixups, Array* exports, Map* commons)
         {
-        if (data == (Array*)0)
-            data = new Array();
-        Array* mi = _objModInit != (Array*)0 ? _objModInit : new Array();
+        if (data == (SectionBytes*)0)
+            data = new SectionBytes();
+        SectionBytes* mi = _objModInit != (SectionBytes*)0 ? _objModInit : new SectionBytes();
         if (commons == (Map*)0)
             commons = new Map();
         // [locals][externs][undefs], as LC_DYSYMTAB requires. `exports` (the
@@ -999,7 +1016,7 @@ class MachOSha256
 
         // A __mod_init_func section (S_MOD_INIT_FUNC_POINTERS) after __data
         // when there are constructors; without them the object is as before.
-        bool hasMi = mi.count() > (u32)0;
+        bool hasMi = mi.length() > (u32)0;
         u32 nsects = hasMi ? (u32)3 : (u32)2;
         u32 hdrSize = (u32)32;
         u32 segCmd = (u32)72 + (u32)80 * nsects;
@@ -1008,14 +1025,14 @@ class MachOSha256
         u32 buildCmd = (u32)24;
         u32 sizeofcmds = segCmd + symCmd + dysymCmd + buildCmd;
         u32 textOff = MachO.roundUp(hdrSize + sizeofcmds, (u32)16);
-        u32 dataOff = MachO.roundUp(textOff + text.count(), (u32)16);
-        u32 miOff = MachO.roundUp(dataOff + data.count(), (u32)8);
-        u32 miAddr = MachO.roundUp(text.count() + data.count(), (u32)8);
-        u32 textRelOff = hasMi ? miOff + mi.count() : dataOff + data.count();
+        u32 dataOff = MachO.roundUp(textOff + text.length(), (u32)16);
+        u32 miOff = MachO.roundUp(dataOff + data.length(), (u32)8);
+        u32 miAddr = MachO.roundUp(text.length() + data.length(), (u32)8);
+        u32 textRelOff = hasMi ? miOff + mi.length() : dataOff + data.length();
         u32 dataRelOff = textRelOff + textRel.count();
         u32 miRelOff = dataRelOff + dataRel.count();
         u32 symOff = MachO.roundUp(miRelOff + miRel.count(), (u32)8);
-        u32 segSize = hasMi ? miAddr + mi.count() : text.count() + data.count();
+        u32 segSize = hasMi ? miAddr + mi.length() : text.length() + data.length();
         u32 strOff = symOff + order.count() * (u32)16;
 
         Array* strtab = new Array();
@@ -1032,7 +1049,7 @@ class MachOSha256
         while ((strtab.count() & (u32)7) != (u32)0)
             strtab.add((Object*)Number.withU32((u32)0));
 
-        _out = new Array();
+        _out = new Data();
         put32(MachO.MH_MAGIC_64());
         put32(MachO.CPU_TYPE_ARM64());
         put32((u32)0);
@@ -1057,7 +1074,7 @@ class MachOSha256
         putFixed(String.withCString("__text"), (u32)16);
         putFixed(String.withCString("__TEXT"), (u32)16);
         put64((u32)0, (u32)0);
-        put64(text.count(), (u32)0);
+        put64(text.length(), (u32)0);
         put32(textOff);
         put32((u32)2); // align 4
         put32(nTextRel != (u32)0 ? textRelOff : (u32)0);
@@ -1069,9 +1086,9 @@ class MachOSha256
 
         putFixed(String.withCString("__data"), (u32)16);
         putFixed(String.withCString("__DATA"), (u32)16);
-        put64(text.count(), (u32)0);
-        put64(data.count(), (u32)0);
-        put32(data.count() != (u32)0 ? dataOff : (u32)0);
+        put64(text.length(), (u32)0);
+        put64(data.length(), (u32)0);
+        put32(data.length() != (u32)0 ? dataOff : (u32)0);
         put32((u32)3); // align 8
         put32(nDataRel != (u32)0 ? dataRelOff : (u32)0);
         put32(nDataRel);
@@ -1085,7 +1102,7 @@ class MachOSha256
             putFixed(String.withCString("__mod_init_func"), (u32)16);
             putFixed(String.withCString("__DATA"), (u32)16);
             put64(miAddr, (u32)0);
-            put64(mi.count(), (u32)0);
+            put64(mi.length(), (u32)0);
             put32(miOff);
             put32((u32)3); // align 8
             put32(nMiRel != (u32)0 ? miRelOff : (u32)0);
@@ -1133,16 +1150,13 @@ class MachOSha256
             put32((u32)0);
 
         padTo(textOff);
-        for (u32 i = (u32)0; i < text.count(); i = i + (u32)1)
-            put8(((Number*)text.get(i)).asU32());
+        appendSection(text);
         padTo(dataOff);
-        for (u32 i = (u32)0; i < data.count(); i = i + (u32)1)
-            put8(((Number*)data.get(i)).asU32());
+        appendSection(data);
         if (hasMi)
             {
             padTo(miOff);
-            for (u32 i = (u32)0; i < mi.count(); i = i + (u32)1)
-                put8(((Number*)mi.get(i)).asU32());
+            appendSection(mi);
             }
         for (u32 i = (u32)0; i < textRel.count(); i = i + (u32)1)
             put8(((Number*)textRel.get(i)).asU32());
@@ -1178,7 +1192,7 @@ class MachOSha256
                 // A __data symbol's value is an offset into the SEGMENT, and
                 // __data follows __text in it.
                 if (inData)
-                    value = value + text.count();
+                    value = value + text.length();
                 }
             put64(value, (u32)0);
             }
@@ -1261,13 +1275,13 @@ class MachOSha256
     // identity. Empty for a link with no ObjC content — nothing changes.
     Array* _objcSects;
 
-    void executable(Array* text, u32 entryOffset, Map* symbols,
-                    Array* data, Array* dataSyms, Array* fixups)
+    void executable(SectionBytes* text, u32 entryOffset, Map* symbols,
+                    SectionBytes* data, Array* dataSyms, Array* fixups)
         {
         executable(text, entryOffset, symbols, data, dataSyms, fixups, (u32)0, (Array*)0);
         }
-    void executable(Array* text, u32 entryOffset, Map* symbols,
-                    Array* data, Array* dataSyms, Array* fixups, u32 modInitLength)
+    void executable(SectionBytes* text, u32 entryOffset, Map* symbols,
+                    SectionBytes* data, Array* dataSyms, Array* fixups, u32 modInitLength)
         {
         executable(text, entryOffset, symbols, data, dataSyms, fixups, modInitLength, (Array*)0);
         }
@@ -1318,25 +1332,25 @@ class MachOSha256
     // S_MOD_INIT_FUNC_POINTERS section: the bytes and addresses do not move,
     // but without that section type dyld treats them as inert data and no
     // load-time constructor ever runs.
-    void executable(Array* text, u32 entryOffset, Map* symbols,
-                    Array* data, Array* dataSyms, Array* fixups, u32 modInitLength,
+    void executable(SectionBytes* text, u32 entryOffset, Map* symbols,
+                    SectionBytes* data, Array* dataSyms, Array* fixups, u32 modInitLength,
                     Array* objcSects)
         {
         executable(text, entryOffset, symbols, data, dataSyms, fixups, modInitLength, objcSects, (u32)0);
         }
     // bssLength (bug 642): bytes of zero-initialised storage (the COMMON
     // symbols) that take no room in the file — a __bss zero-fill section after
-    // __got. Its symbols are data symbols whose offsets lie past data.count().
-    void executable(Array* text, u32 entryOffset, Map* symbols,
-                    Array* data, Array* dataSyms, Array* fixups, u32 modInitLength,
+    // __got. Its symbols are data symbols whose offsets lie past data.length().
+    void executable(SectionBytes* text, u32 entryOffset, Map* symbols,
+                    SectionBytes* data, Array* dataSyms, Array* fixups, u32 modInitLength,
                     Array* objcSects, u32 bssLength)
         {
         _objcSects = objcSects;
-        bool hasData = data.count() > (u32)0;
+        bool hasData = data.length() > (u32)0;
         bool hasBss = bssLength > (u32)0;
-        gMachOBssFrom = hasBss ? data.count() : (u32)$FFFFFFFF;
-        u32 miLen = modInitLength <= data.count() ? modInitLength : (u32)0;
-        u32 dOnly = dataOnlyBefore(data.count() - miLen);
+        gMachOBssFrom = hasBss ? data.length() : (u32)$FFFFFFFF;
+        u32 miLen = modInitLength <= data.length() ? modInitLength : (u32)0;
+        u32 dOnly = dataOnlyBefore(data.length() - miLen);
         bool hasModInit = miLen > (u32)0;
         bool hasDataSect = dOnly > (u32)0;
 
@@ -1366,12 +1380,12 @@ class MachOSha256
         // 2. Layout. The vmaddr of everything is VMBASE + its file offset, so
         //    a single set of offsets describes both.
         u32 textOffset = (u32)MACHO_PAGE; // header slack for the signature
-        u32 stubsOffset = roundUp(textOffset + text.count(), (u32)4);
+        u32 stubsOffset = roundUp(textOffset + text.length(), (u32)4);
         u32 stubsSize = nimp * (u32)STUB_SZ;
         u32 textSegEnd = roundUp(stubsOffset + stubsSize, (u32)MACHO_PAGE);
         u32 dataSegFileOff = textSegEnd;
         u32 dataProgOffset = dataSegFileOff;
-        u32 gotOffset = roundUp(dataProgOffset + (hasData ? data.count() : (u32)0), (u32)8);
+        u32 gotOffset = roundUp(dataProgOffset + (hasData ? data.length() : (u32)0), (u32)8);
         u32 gotSize = nimp * (u32)GOT_SZ;
         u32 dataSegEnd = hasDataSeg ? roundUp(gotOffset + gotSize, (u32)MACHO_PAGE) : textSegEnd;
         u32 gotOffInSeg = gotOffset - dataSegFileOff;
@@ -1401,7 +1415,7 @@ class MachOSha256
             Array* fnOffs = new Array();
             DwarfWriter.functionsOf(symbols, dataSyms, String.withCString("_"), (u32)$FFFF_FFFF,
                                     fnNames, fnOffs);
-            dwarf.build(((u64)1 << (u64)32) + (u64)textOffset, text.count(), fnNames, fnOffs,
+            dwarf.build(((u64)1 << (u64)32) + (u64)textOffset, text.length(), fnNames, fnOffs,
                         (u32)4, (u32)29);
             dwarfSize = dwarf.totalSize();
             }
@@ -1409,8 +1423,8 @@ class MachOSha256
 
         // 3. Patch the fixups. Both the target and the reference site carry the
         //    same VMBASE, so page deltas cancel it and this is all 32-bit.
-        Array* txt = copyBytes(text);
-        Array* dat = copyBytes(data);
+        SectionBytes* txt = text.copy();
+        SectionBytes* dat = data.copy();
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
@@ -1471,10 +1485,10 @@ class MachOSha256
                 }
             u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend();
             for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
-                dat.set(f.offset() + b, (Object*)Number.withU32((s >> ((u32)8 * b)) & (u32)$FF));
-            dat.set(f.offset() + (u32)4, (Object*)Number.withU32((u32)1)); // VMBASE high half
+                dat.setByteAt(f.offset() + b, (u8)((s >> ((u32)8 * b)) & (u32)$FF));
+            dat.setByteAt(f.offset() + (u32)4, (u8)((u32)1)); // VMBASE high half
             for (u32 b = (u32)5; b < (u32)8; b = b + (u32)1)
-                dat.set(f.offset() + b, (Object*)Number.withU32((u32)0));
+                dat.setByteAt(f.offset() + b, (u8)((u32)0));
             rebaseOffs.add((Object*)Number.withU32(f.offset()));
             }
         bool hasRebase = rebaseOffs.count() > (u32)0;
@@ -1529,23 +1543,23 @@ class MachOSha256
     // …and the point: an EXPORT TRIE. dyld resolves a client's import by
     // walking it, so a name missing from it does not exist however many nlist
     // entries mention it.
-    void dylib(Array* text, String* installName, Array* exports, Array* iface,
-               Map* symbols, Array* data, Array* dataSyms, Array* fixups,
+    void dylib(SectionBytes* text, String* installName, Array* exports, Array* iface,
+               Map* symbols, SectionBytes* data, Array* dataSyms, Array* fixups,
                u32 modInitLength)
         {
         dylib(text, installName, exports, iface, symbols, data, dataSyms, fixups,
               modInitLength, (Array*)0);
         }
-    void dylib(Array* text, String* installName, Array* exports, Array* iface,
-               Map* symbols, Array* data, Array* dataSyms, Array* fixups,
+    void dylib(SectionBytes* text, String* installName, Array* exports, Array* iface,
+               Map* symbols, SectionBytes* data, Array* dataSyms, Array* fixups,
                u32 modInitLength, Array* objcSects)
         {
         dylib(text, installName, exports, iface, symbols, data, dataSyms, fixups,
               modInitLength, objcSects, (u32)0);
         }
     // bssLength: as the executable's (bug 642).
-    void dylib(Array* text, String* installName, Array* exports, Array* iface,
-               Map* symbols, Array* data, Array* dataSyms, Array* fixups,
+    void dylib(SectionBytes* text, String* installName, Array* exports, Array* iface,
+               Map* symbols, SectionBytes* data, Array* dataSyms, Array* fixups,
                u32 modInitLength, Array* objcSects, u32 bssLength)
         {
         _objcSects = objcSects;
@@ -1553,11 +1567,11 @@ class MachOSha256
         _baseHi = (u32)0;     // based at 0; the loader slides it
         _flatBind = true;
 
-        bool hasData = data.count() > (u32)0;
+        bool hasData = data.length() > (u32)0;
         bool hasBss = bssLength > (u32)0;
-        gMachOBssFrom = hasBss ? data.count() : (u32)$FFFFFFFF;
-        u32 miLen = modInitLength <= data.count() ? modInitLength : (u32)0;
-        u32 dOnly = dataOnlyBefore(data.count() - miLen);
+        gMachOBssFrom = hasBss ? data.length() : (u32)$FFFFFFFF;
+        u32 miLen = modInitLength <= data.length() ? modInitLength : (u32)0;
+        u32 dOnly = dataOnlyBefore(data.length() - miLen);
         bool hasModInit = miLen > (u32)0;
         bool hasDataSect = dOnly > (u32)0;
         bool hasIface = iface != (Array*)0 && iface.count() > (u32)0;
@@ -1584,12 +1598,12 @@ class MachOSha256
 
         // 2. Layout — base 0, so vmaddr == file offset throughout.
         u32 textOffset = (u32)MACHO_PAGE;
-        u32 stubsOffset = roundUp(textOffset + text.count(), (u32)4);
+        u32 stubsOffset = roundUp(textOffset + text.length(), (u32)4);
         u32 stubsSize = nimp * (u32)STUB_SZ;
         u32 textSegEnd = roundUp(stubsOffset + stubsSize, (u32)MACHO_PAGE);
         u32 dataSegFileOff = textSegEnd;
         u32 dataProgOffset = dataSegFileOff;
-        u32 gotOffset = roundUp(dataProgOffset + (hasData ? data.count() : (u32)0), (u32)8);
+        u32 gotOffset = roundUp(dataProgOffset + (hasData ? data.length() : (u32)0), (u32)8);
         u32 gotSize = nimp * (u32)GOT_SZ;
         u32 dataSegEnd = hasDataSeg ? roundUp(gotOffset + gotSize, (u32)MACHO_PAGE) : textSegEnd;
         u32 gotOffInSeg = gotOffset - dataSegFileOff;
@@ -1610,8 +1624,8 @@ class MachOSha256
         u32 linkeditOff = xtcSegEnd;
 
         // 3. Patch the fixups — the same maths as the executable, base 0.
-        Array* txt = copyBytes(text);
-        Array* dat = copyBytes(data);
+        SectionBytes* txt = text.copy();
+        SectionBytes* dat = data.copy();
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
@@ -1670,7 +1684,7 @@ class MachOSha256
                 }
             u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset);
             for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
-                dat.set(f.offset() + b, (Object*)Number.withU32(b < (u32)4
+                dat.setByteAt(f.offset() + b, (u8)(b < (u32)4
                                                                     ? ((s >> ((u32)8 * b)) & (u32)$FF)
                                                                     : (u32)0));
             rebaseOffs.add((Object*)Number.withU32(f.offset()));
@@ -1802,7 +1816,7 @@ class MachOSha256
         putName((u32)2, (u32)16);
         putName((u32)1, (u32)16); // __text, __TEXT
         put64(textOffset, (u32)0);
-        put64(txt.count(), (u32)0);
+        put64(txt.length(), (u32)0);
         put32(textOffset);
         put32((u32)2);
         put32((u32)0);
@@ -2042,14 +2056,14 @@ class MachOSha256
 
         // 7. The body.
         padTo(textOffset);
-        appendAll(txt);
+        appendSection(txt);
         padTo(stubsOffset);
         for (u32 i = (u32)0; i < nimp; i = i + (u32)1)
             emitStub(stubsOffset + i * (u32)STUB_SZ, gotOffset + i * (u32)GOT_SZ);
         if (hasData)
             {
             padTo(dataProgOffset);
-            appendAll(dat);
+            appendSection(dat);
             }
         if (hasImp)
             {
@@ -2124,28 +2138,20 @@ class MachOSha256
             u32Into(indirect, ndef + i);
         }
 
-    static Array* copyBytes(Array* a)
+    static u32 rdw(SectionBytes* b, u32 o)
         {
-        Array* o = new Array();
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            o.add(a.get(i));
-        return o;
+        return (u32)b.byteAt(o) | ((u32)b.byteAt(o + (u32)1) << (u32)8) | ((u32)b.byteAt(o + (u32)2) << (u32)16) | ((u32)b.byteAt(o + (u32)3) << (u32)24);
         }
 
-    static u32 rdw(Array* b, u32 o)
-        {
-        return ((Number*)b.get(o)).asU32() | (((Number*)b.get(o + (u32)1)).asU32() << (u32)8) | (((Number*)b.get(o + (u32)2)).asU32() << (u32)16) | (((Number*)b.get(o + (u32)3)).asU32() << (u32)24);
-        }
-
-    static void wrw(Array* b, u32 o, u32 w)
+    static void wrw(SectionBytes* b, u32 o, u32 w)
         {
         for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
-            b.set(o + i, (Object*)Number.withU32((w >> ((u32)8 * i)) & (u32)$FF));
+            b.setByteAt(o + i, (u8)((w >> ((u32)8 * i)) & (u32)$FF));
         }
 
     // The page-relative displacement an adrp encodes. VMBASE is page-aligned,
     // so masking file offsets gives the same answer as masking addresses.
-    static void patchAdrp(Array* txt, u32 off, u32 target, u32 site)
+    static void patchAdrp(SectionBytes* txt, u32 off, u32 target, u32 site)
         {
         i32 d = (i32)(target & ~(u32)$FFF) - (i32)(site & ~(u32)$FFF);
         i32 imm = d >> (i32)12;
@@ -2188,7 +2194,7 @@ class MachOSha256
         }
 
     // ── The image ────────────────────────────────────────────────────────
-    void buildImage(Array* txt, Array* dat, Map* symbols, Array* dataSyms,
+    void buildImage(SectionBytes* txt, SectionBytes* dat, Map* symbols, Array* dataSyms,
                     Array* rebaseOffs, MachOLayout* L)
         {
         u32 nimp = _imports.count();
@@ -2215,8 +2221,8 @@ class MachOSha256
         L.strsizeRaw = roundUp(strtab.count(), (u32)8); // the PADDED size is what LC_SYMTAB states
         L.ndef = ndef;
         L.nimp = nimp;
-        L.textLen = txt.count();
-        L.dataLen = dat.count();
+        L.textLen = txt.length();
+        L.dataLen = dat.length();
         while (strtab.count() < L.strsizeRaw)
             strtab.add((Object*)Number.withU32((u32)0));
 
@@ -2233,14 +2239,14 @@ class MachOSha256
         emitHeaderAndCommands(L);
 
         padTo(L.textOffset);
-        appendAll(txt);
+        appendSection(txt);
         padTo(L.stubsOffset);
         for (u32 i = (u32)0; i < nimp; i = i + (u32)1)
             emitStub(L.stubsOffset + i * (u32)STUB_SZ, L.gotOffset + i * (u32)GOT_SZ);
         if (L.hasData)
             {
             padTo(L.dataProgOffset);
-            appendAll(dat);
+            appendSection(dat);
             }
         if (L.hasImp)
             {
@@ -2831,7 +2837,7 @@ class MachOSha256
             if (len > CS_PAGE)
                 len = CS_PAGE;
             MachOSha256* h = new MachOSha256();
-            h.update(_out, off, len);
+            h.updateData(_out, off, len);
             h.finalise(cd);
             }
         Array* sb = new Array(); // SuperBlob { CodeDirectory }
@@ -2848,7 +2854,11 @@ class MachOSha256
     void appendAll(Array* a)
         {
         for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            _out.add(a.get(i));
+            _out.appendByte((u8)((Number*)a.get(i)).asU32());
+        }
+    void appendSection(SectionBytes* s)
+        {
+        s.appendRangeTo(_out, (u32)0, s.length());
         }
 
     static void ulebInto(Array* a, u32 v)

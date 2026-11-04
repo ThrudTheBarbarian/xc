@@ -9,6 +9,7 @@
 
 #import "Foundation.xc"
 #import <Arm64Asm>
+#import <SectionBytes>
 #import "Arm64AsmDefs.xc"
 #import <MachOObject>
 #import "MachOObjectDefs.xc"
@@ -19,18 +20,18 @@ class MachOLink
     u32 _rc;           // 0 merged; 1 error (reported in why); 2 a reloc the in-house link cannot express
     Array* _gotFixups; // Arm64Fixup@ — GOT refs, resolved after the pull settles
 
-    Array* _objModInit;    // Number@: the objects' constructor lists, one after another
+    SectionBytes* _objModInit; // the objects' constructor lists, one after another
     Array* _objModInitFix; // Arm64Fixup@ against _objModInit
 
     void init(void)
         {
         _rc = (u32)0;
         _gotFixups = new Array();
-        _objModInit = new Array();
+        _objModInit = new SectionBytes();
         _objModInitFix = new Array();
         }
 
-    Array* objModInit(void)
+    SectionBytes* objModInit(void)
         {
         return _objModInit;
         }
@@ -46,11 +47,11 @@ class MachOLink
         Data* mi = obj.modInit();
         if (mi.length() == (u32)0)
             return true;
-        while ((_objModInit.count() & (u32)7) != (u32)0)
-            _objModInit.add((Object*)Number.withU32((u32)0));
-        u32 mbase = _objModInit.count();
+        while ((_objModInit.length() & (u32)7) != (u32)0)
+            _objModInit.appendByte((u8)0);
+        u32 mbase = _objModInit.length();
         for (u32 k = (u32)0; k < mi.length(); k = k + (u32)1)
-            _objModInit.add((Object*)Number.withU32((u32)mi.byteAt(k)));
+            _objModInit.appendByte(mi.byteAt(k));
         Array* ml = obj.modInitRelocs();
         for (u32 k = (u32)0; k < ml.count(); k = k + (u32)1)
             {
@@ -133,15 +134,14 @@ class MachOLink
         return Arm64Fixup.make(base + r.off(), kind, MachOLink.taggedSym(sd, oi), scale);
         }
 
-    static void padArray(Array* a, u32 mask)
+    static void padArray(SectionBytes* a, u32 mask)
         {
-        while ((a.count() & mask) != (u32)0)
-            a.add((Object*)Number.withU32((u32)0));
+        while ((a.length() & mask) != (u32)0)
+            a.appendByte((u8)0);
         }
-    static void appendData(Array* a, Data* d)
+    static void appendData(SectionBytes* a, Data* d)
         {
-        for (u32 i = (u32)0; i < d.length(); i = i + (u32)1)
-            a.add((Object*)Number.withU32((u32)d.byteAt(i)));
+        a.appendData(d);
         }
 
     // The merge. `objectFiles` (paths) go in FIRST and forced — a .o on the
@@ -150,7 +150,7 @@ class MachOLink
     // fixpoint. Symbols land in `msyms` (data ones also in `mdataSyms`),
     // fixups in `mfix`, ObjC runs (image coordinates) in `mObjc`.
     void merge(Array* objectFiles, Array* archives,
-               Array* mtext, Array* mdata, Map* msyms, Array* mdataSyms,
+               SectionBytes* mtext, SectionBytes* mdata, Map* msyms, Array* mdataSyms,
                Array* mfix, Array* mObjc)
         {
         _rc = (u32)0;
@@ -222,13 +222,13 @@ class MachOLink
                 // 16-byte literal inside the blob is only 16-aligned if the
                 // blob itself starts so).
                 MachOLink.padArray(mtext, (u32)3);
-                u32 base = mtext.count();
+                u32 base = mtext.length();
                 MachOLink.appendData(mtext, obj.text());
-                u32 dbase = mdata.count();
+                u32 dbase = mdata.length();
                 if (obj.data().length() > (u32)0)
                     {
                     MachOLink.padArray(mdata, obj.dataPageMask() > (u32)15 ? obj.dataPageMask() : (u32)15);
-                    dbase = mdata.count();
+                    dbase = mdata.length();
                     MachOLink.appendData(mdata, obj.data());
                     }
                 Array* rs = obj.objcRanges();
@@ -408,12 +408,12 @@ class MachOLink
             gf.setKind((u32)FIXUP_PAGEOFF12);
             gf.setScale((u32)0);
             u32 o = gf.offset();
-            u32 insn = ((Number*)mtext.get(o)).asU32() | (((Number*)mtext.get(o + (u32)1)).asU32() << (u32)8) | (((Number*)mtext.get(o + (u32)2)).asU32() << (u32)16) | (((Number*)mtext.get(o + (u32)3)).asU32() << (u32)24);
+            u32 insn = (u32)mtext.byteAt(o) | ((u32)mtext.byteAt(o + (u32)1) << (u32)8) | ((u32)mtext.byteAt(o + (u32)2) << (u32)16) | ((u32)mtext.byteAt(o + (u32)3) << (u32)24);
             u32 add = (u32)$91000000 | (((insn >> (u32)5) & (u32)$1F) << (u32)5) | (insn & (u32)$1F);
-            mtext.set(o, (Object*)Number.withU32(add & (u32)$FF));
-            mtext.set(o + (u32)1, (Object*)Number.withU32((add >> (u32)8) & (u32)$FF));
-            mtext.set(o + (u32)2, (Object*)Number.withU32((add >> (u32)16) & (u32)$FF));
-            mtext.set(o + (u32)3, (Object*)Number.withU32((add >> (u32)24) & (u32)$FF));
+            mtext.setByteAt(o, (u8)(add & (u32)$FF));
+            mtext.setByteAt(o + (u32)1, (u8)((add >> (u32)8) & (u32)$FF));
+            mtext.setByteAt(o + (u32)2, (u8)((add >> (u32)16) & (u32)$FF));
+            mtext.setByteAt(o + (u32)3, (u8)((add >> (u32)24) & (u32)$FF));
             }
         }
 
@@ -441,7 +441,7 @@ class MachOLink
     // position (data symbols, Pointer64 fixups) moves with it. Returns the
     // section table for the writer, in FINAL blob coordinates; empty when
     // there is no ObjC content, in which case nothing moves.
-    static Array* repartitionObjc(Array* mdata, Array* ranges, Map* msyms, Array* mdataSyms, Array* mfix)
+    static Array* repartitionObjc(SectionBytes* mdata, Array* ranges, Map* msyms, Array* mdataSyms, Array* mfix)
         {
         Array* sections = new Array();
         if (ranges.count() == (u32)0)
@@ -460,7 +460,7 @@ class MachOLink
                     }
             sorted.insert(at, (Object*)r);
             }
-        u32 total = mdata.count();
+        u32 total = mdata.length();
         Array* owned = new Array(); // Number(0/1) per byte
         for (u32 i = (u32)0; i < total; i = i + (u32)1)
             owned.add((Object*)Number.withU32((u32)0));
@@ -473,7 +473,7 @@ class MachOLink
                 owned.set(k, (Object*)Number.withU32((u32)1));
             }
         // 2. Lay the new blob out. moves: (oldStart, len, newStart) triples.
-        Array* out = new Array();
+        SectionBytes* out = new SectionBytes();
         Array* moves = new Array();
         u32 i = (u32)0;
         while (i < total)
@@ -489,11 +489,11 @@ class MachOLink
             // Bug 140: a run is re-laid at the same offset modulo 16 it had,
             // so nothing inside it loses its alignment when an odd-sized
             // ObjC run before it is pulled out (the reference's rule).
-            while ((out.count() & (u32)15) != (run & (u32)15))
-                out.add((Object*)Number.withU32((u32)0));
-            MachOLink.addMove(moves, run, i - run, out.count());
+            while ((out.length() & (u32)15) != (run & (u32)15))
+                out.appendByte((u8)((u32)0));
+            MachOLink.addMove(moves, run, i - run, out.length());
             for (u32 k = run; k < i; k = k + (u32)1)
-                out.add(mdata.get(k));
+                out.appendByte(mdata.byteAt(k));
             }
         Array* order = new Array(); // first-seen names
         Map* byName = new Map();
@@ -513,7 +513,7 @@ class MachOLink
             {
             String* nm = (String*)order.get(k);
             MachOLink.padArray(out, (u32)7);
-            u32 start = out.count();
+            u32 start = out.length();
             Array* runs = (Array*)byName.get((Hashable*)nm);
             MachOObjcRange* first = (MachOObjcRange*)runs.get((u32)0);
             for (u32 q = (u32)0; q < runs.count(); q = q + (u32)1)
@@ -521,11 +521,11 @@ class MachOLink
                 MachOObjcRange* r = (MachOObjcRange*)runs.get(q);
                 if (r.size() == (u32)0)
                     continue;
-                MachOLink.addMove(moves, r.off(), r.size(), out.count());
+                MachOLink.addMove(moves, r.off(), r.size(), out.length());
                 for (u32 b = r.off(); b < r.off() + r.size(); b = b + (u32)1)
-                    out.add(mdata.get(b));
+                    out.appendByte(mdata.byteAt(b));
                 }
-            sections.add((Object*)MachOObjcRange.with(nm, first.seg(), first.flags(), start, out.count() - start));
+            sections.add((Object*)MachOObjcRange.with(nm, first.seg(), first.flags(), start, out.length() - start));
             }
         // 3. Move everything that names a byte position.
         for (u32 k = (u32)0; k < mdataSyms.count(); k = k + (u32)1)
@@ -547,9 +547,7 @@ class MachOLink
             if (nv != (u32)$FFFFFFFF)
                 f.setOffset(nv);
             }
-        mdata.removeAll();
-        for (u32 k = (u32)0; k < out.count(); k = k + (u32)1)
-            mdata.add(out.get(k));
+        mdata.setContents(out);
         return sections;
         }
 

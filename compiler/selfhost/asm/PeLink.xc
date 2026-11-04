@@ -7,6 +7,7 @@
 
 #import "Foundation.xc"
 #import <X86Asm>
+#import <SectionBytes>
 #import "X86AsmDefs.xc"
 #import <CoffObject>
 #import "CoffObjectDefs.xc"
@@ -52,31 +53,30 @@ class PeLink
         return t;
         }
 
-    static void padArray(Array* a, u32 mask)
+    static void padArray(SectionBytes* a, u32 mask)
         {
-        while ((a.count() & mask) != (u32)0)
-            a.add((Object*)Number.withU32((u32)0));
+        while ((a.length() & mask) != (u32)0)
+            a.appendByte((u8)0);
         }
-    static void appendData(Array* a, Data* d)
+    static void appendData(SectionBytes* a, Data* d)
         {
-        for (u32 i = (u32)0; i < d.length(); i = i + (u32)1)
-            a.add((Object*)Number.withU32((u32)d.byteAt(i)));
+        a.appendData(d);
         }
 
     // One object into the image. Text 16-aligned, data 8-aligned; first
     // definition wins except for the category-chain tables (§4.3b), where a
     // duplicate is a wrong CALL and is refused.
     bool mergeOne(CoffObject* obj, String* whence, u32 oi,
-                  Array* mtext, Array* mdata, Map* msyms, Array* mdataSyms, Array* mfix)
+                  SectionBytes* mtext, SectionBytes* mdata, Map* msyms, Array* mdataSyms, Array* mfix)
         {
         PeLink.padArray(mtext, (u32)15);
-        u32 tbase = mtext.count();
+        u32 tbase = mtext.length();
         PeLink.appendData(mtext, obj.text());
-        u32 dbase = mdata.count();
+        u32 dbase = mdata.length();
         if (obj.data().length() > (u32)0)
             {
             PeLink.padArray(mdata, obj.dataAlign() - (u32)1);
-            dbase = mdata.count();
+            dbase = mdata.length();
             PeLink.appendData(mdata, obj.data());
             }
         Array* sdefs = obj.symdefs();
@@ -162,7 +162,7 @@ class PeLink
     // order taking every untaken member that defines one of them — the
     // reference's loop, and 133's rule.
     void merge(Array* objectFiles, Array* archives,
-               Array* mtext, Array* mdata, Map* msyms, Array* mdataSyms, Array* mfix)
+               SectionBytes* mtext, SectionBytes* mdata, Map* msyms, Array* mdataSyms, Array* mfix)
         {
         for (u32 oi = (u32)0; oi < objectFiles.count(); oi = oi + (u32)1)
             {

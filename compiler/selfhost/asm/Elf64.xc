@@ -14,6 +14,7 @@
 
 #import "Foundation.xc"
 #import <X86Asm>
+#import <SectionBytes>
 #import "X86AsmDefs.xc"
 #import "Files.xc" // sharedInfo reads a .so back off disk
 
@@ -135,12 +136,9 @@ class ElfSharedInfo
     // The trailing zeros of a data section are not stored in the file — the
     // kernel zero-fills to p_memsz — so p_filesz stops at the last non-zero
     // byte.
-    static u32 fileSizeOf(Data* d)
+    static u32 fileSizeOf(SectionBytes* d)
         {
-        u32 n = d.length();
-        while (n > (u32)0 && d.byteAt(n - (u32)1) == (u8)0)
-            n = n - (u32)1;
-        return n;
+        return d.fileLength();
         }
 
     static u32 phdrCountFor(bool hasData)
@@ -174,20 +172,12 @@ class ElfSharedInfo
     // fixups — so one pass resolves everything.
     // The original entry point: no ABSOLUTE symbols, which is every link that
     // uses only our own objects.
-    void staticExecutable(Array* textIn, Array* dataIn, Map* symbols,
+    void staticExecutable(SectionBytes* textIn, SectionBytes* dataIn, Map* symbols,
                           Array* dataSyms, Array* fixups, String* entrySymbol)
         {
-        // The assembler-direct path hands Array<Number> byte lists; the linked
-        // path hands Data. Convert once here (a single assembled unit is small).
-        Data* t = new Data();
-        for (u32 i = (u32)0; i < textIn.count(); i = i + (u32)1)
-            t.appendByte((u8)((Number*)textIn.get(i)).asU32());
-        Data* d = new Data();
-        for (u32 i = (u32)0; i < dataIn.count(); i = i + (u32)1)
-            d.appendByte((u8)((Number*)dataIn.get(i)).asU32());
-        staticExecutableAbs(t, d, symbols, dataSyms, new Array(),
+        staticExecutableAbs(textIn.toData(), dataIn, symbols, dataSyms, new Array(),
                             fixups, entrySymbol,
-                            new Data(), new Array(), (u32)1);
+                            new SectionBytes(), new Array(), (u32)1);
         }
 
     // `absSyms` are names whose recorded value is the WHOLE answer rather than
@@ -195,10 +185,10 @@ class ElfSharedInfo
     // defined, resolved to absolute 0. They only arise when foreign objects are
     // merged (task #47), which is also where the GOT and TLS kinds below come
     // from; nothing this assembler emits needs any of it.
-    void staticExecutableAbs(Data* textIn, Data* dataIn, Map* symbols,
+    void staticExecutableAbs(Data* textIn, SectionBytes* dataIn, Map* symbols,
                              Array* dataSyms, Array* absSyms,
                              Array* fixups, String* entrySymbol,
-                             Data* bss, Array* bssSyms, u32 bssAlign)
+                             SectionBytes* bss, Array* bssSyms, u32 bssAlign)
         {
         Map* dataSet = Elf64.setOf(dataSyms);
         Map* absSet = Elf64.setOf(absSyms);
@@ -210,7 +200,7 @@ class ElfSharedInfo
             return;
             }
         Data* text = Data.withData(textIn);
-        Data* data = Data.withData(dataIn);
+        SectionBytes* data = dataIn.copy();
 
         // ── link-time GOT ──
         // A GOTPCREL (type 9) reads its slot's 8 bytes AS DATA, so the mov→lea
@@ -394,13 +384,6 @@ class ElfSharedInfo
         emitExec(text, data, symbols, dataSyms, ((Number*)entry).asU32());
         }
 
-    static Array* copyBytes(Array* a)
-        {
-        Array* o = new Array();
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            o.add(a.get(i));
-        return o;
-        }
 
     // ── Reading a shared object back ─────────────────────────────────────
     //
@@ -601,10 +584,10 @@ class ElfSharedInfo
     // bounds, and weak undefineds that resolved to absolute zero. They only
     // arise on the dynamic-EXECUTABLE path, where foreign objects are merged;
     // a library link passes none and the output is unchanged.
-    void sharedObject(Data* textIn, Data* dataIn, Map* symbols, Array* dataSyms,
+    void sharedObject(Data* textIn, SectionBytes* dataIn, Map* symbols, Array* dataSyms,
                       Array* exportsIn, Array* fixups, String* soname,
                       Array* needed, String* entry, String* runpath, Array* iface,
-                      Array* absSyms, Data* bss, Array* bssSyms, u32 bssAlign)
+                      Array* absSyms, SectionBytes* bss, Array* bssSyms, u32 bssAlign)
         {
         // O(1) membership sets for the per-fixup / per-symbol loops below
         // (were O(n^2) linear scans of dataSyms/absSyms per fixup).
@@ -699,7 +682,7 @@ class ElfSharedInfo
 
         // ── 3. sizes, then addresses ─────────────────────────────────────
         Data* text = Data.withData(textIn);
-        Data* data = Data.withData(dataIn);
+        SectionBytes* data = dataIn.copy();
 
         // Fold COMMON (NOBITS) storage onto the END of data. Here .got/.dynamic
         // precede .data in the RW segment, so .data stays last and its trailing
@@ -1134,8 +1117,7 @@ class ElfSharedInfo
         dyn((u32)DT_NULL, (u32)0);
 
         padTo(dataAddr);
-        for (u32 i = (u32)0; i < dataFileSz; i = i + (u32)1)
-            p8((u32)data.byteAt(i));
+        data.appendRangeTo(_out, (u32)0, dataFileSz);
 
         // ── section headers ──────────────────────────────────────────────
         // ld.so reads program headers only and never looks at these, but
@@ -1414,11 +1396,11 @@ class ElfSharedInfo
     // the assembler produces. Everything else is bookkeeping: two relocation
     // tables (one per patched section), the symbol table, and two string
     // tables.
-    Data* objectFromText(Array* text, Array* data, Map* symbols, Array* dataSyms,
+    Data* objectFromText(SectionBytes* text, SectionBytes* data, Map* symbols, Array* dataSyms,
                          Array* globalSyms, Map* commons, Array* fixups)
         {
-        if (data == (Array*)0)
-            data = new Array();
+        if (data == (SectionBytes*)0)
+            data = new SectionBytes();
         if (commons == (Map*)0)
             commons = new Map();
 
@@ -1523,7 +1505,7 @@ class ElfSharedInfo
         for (u32 i = (u32)0; i < fsOff.count(); i = i + (u32)1)
             {
             u32 o0 = ((Number*)fsOff.get(i)).asU32();
-            u32 o1 = (u32)text.count();
+            u32 o1 = (u32)text.length();
             for (u32 j = i + (u32)1; j < fsOff.count(); j = j + (u32)1) // next DISTINCT offset (aliases share one)
                 if (((Number*)fsOff.get(j)).asU32() > o0)
                     {
@@ -1565,7 +1547,7 @@ class ElfSharedInfo
         for (u32 i = (u32)0; i < dsOff.count(); i = i + (u32)1)
             {
             u32 o0 = ((Number*)dsOff.get(i)).asU32();
-            u32 o1 = (u32)data.count();
+            u32 o1 = (u32)data.length();
             for (u32 j = i + (u32)1; j < dsOff.count(); j = j + (u32)1)
                 if (((Number*)dsOff.get(j)).asU32() > o0)
                     {
@@ -1629,7 +1611,7 @@ class ElfSharedInfo
             u32 idx = ((Number*)si).asU32();
             if (f.kind() == (u32)X86FIX_ABS64)
                 {
-                if (f.offset() + (u32)8 > data.count())
+                if (f.offset() + (u32)8 > data.length())
                     {
                     fail(String.withCString("abs64 fixup past the end of .data: ")
                              .appending(f.symbol()));
@@ -1641,7 +1623,7 @@ class ElfSharedInfo
                 Elf64.putI64In(dataRel, f.addend());
                 continue;
                 }
-            if (f.offset() + (u32)4 > text.count())
+            if (f.offset() + (u32)4 > text.length())
                 {
                 fail(String.withCString("pc32 fixup past the end of .text: ")
                          .appending(f.symbol()));
@@ -1690,9 +1672,9 @@ class ElfSharedInfo
 
         u32 off = (u32)EHDR_SZ;
         u32 textOff = Elf64.roundUpTo(off, (u32)16);
-        off = textOff + text.count();
+        off = textOff + text.length();
         u32 dataOff = Elf64.roundUpTo(off, (u32)8);
-        off = dataOff + data.count();
+        off = dataOff + data.length();
         u32 trelOff = Elf64.roundUpTo(off, (u32)8);
         off = trelOff + textRel.count();
         u32 drelOff = Elf64.roundUpTo(off, (u32)8);
@@ -1730,9 +1712,9 @@ class ElfSharedInfo
         p16(secNames.count() - (u32)1);
 
         padTo(textOff);
-        Elf64.appendAll(_out, text);
+        text.appendRangeTo(_out, (u32)0, text.length());
         padTo(dataOff);
-        Elf64.appendAll(_out, data);
+        data.appendRangeTo(_out, (u32)0, data.length());
         padTo(trelOff);
         Elf64.appendAll(_out, textRel);
         padTo(drelOff);
@@ -1747,8 +1729,8 @@ class ElfSharedInfo
 
         objShdr(shName, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0);
         // SHF_ALLOC|SHF_EXECINSTR, SHF_ALLOC|SHF_WRITE
-        objShdr(shName, (u32)1, (u32)1, (u32)6, textOff, text.count(), (u32)0, (u32)0, (u32)16, (u32)0);
-        objShdr(shName, (u32)2, (u32)1, (u32)3, dataOff, data.count(), (u32)0, (u32)0, (u32)8, (u32)0);
+        objShdr(shName, (u32)1, (u32)1, (u32)6, textOff, text.length(), (u32)0, (u32)0, (u32)16, (u32)0);
+        objShdr(shName, (u32)2, (u32)1, (u32)3, dataOff, data.length(), (u32)0, (u32)0, (u32)8, (u32)0);
         objShdr(shName, (u32)3, (u32)4, (u32)0, trelOff, textRel.count(),
                 (u32)5, (u32)1, (u32)8, (u32)RELA_SZ);
         objShdr(shName, (u32)4, (u32)4, (u32)0, drelOff, dataRel.count(),
@@ -1856,7 +1838,7 @@ class ElfSharedInfo
         }
 
     // ── The image ────────────────────────────────────────────────────────
-    void emitExec(Data* text, Data* data, Map* symbols, Array* dataSyms, u32 entryOffset)
+    void emitExec(Data* text, SectionBytes* data, Map* symbols, Array* dataSyms, u32 entryOffset)
         {
         bool hasData = data.length() > (u32)0;
         u32 nphdr = phdrCountFor(hasData);
@@ -1929,8 +1911,7 @@ class ElfSharedInfo
         if (hasData)
             {
             padTo(dataOff);
-            for (u32 i = (u32)0; i < dataFileSz; i = i + (u32)1)
-                _out.appendByte(data.byteAt(i));
+            data.appendRangeTo(_out, (u32)0, dataFileSz);
             }
         if (symbols.allKeys().count() == (u32)0)
             return;
@@ -1940,7 +1921,7 @@ class ElfSharedInfo
 
     // Split out for the arm64 frame budget: the section-name temporaries and
     // the table building together want more stack than one frame can address.
-    void emitSymbolSections(Data* text, Data* data, Map* symbols, Array* dataSyms,
+    void emitSymbolSections(Data* text, SectionBytes* data, Map* symbols, Array* dataSyms,
                             u32 textAddr, u32 dataAddr, u32 textOff, u32 dataOff)
         {
         // .symtab lists every defined symbol. Neither the kernel nor ld.so

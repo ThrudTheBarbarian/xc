@@ -24,6 +24,7 @@
 //     it goes in its own table and never into the ordinary symbol map.
 #import "Foundation.xc"
 #import <X86Asm>
+#import <SectionBytes>
 #import "X86AsmDefs.xc"
 #import <ElfObject>
 
@@ -147,7 +148,7 @@ i8 _gcNumberAsc(Object* a, Object* b)
 class MergedImage
     {
     Data* _text;
-    Data* _data;
+    SectionBytes* _data;
     Data* _tls;
     Map* _syms;        // name -> Number(offset into text, or into data)
     Array* _dataSyms;  // String@ — names whose offset is a DATA offset
@@ -156,7 +157,7 @@ class MergedImage
     Array* _weakUndef; // String@ — weak references, may end up absolute 0
     Array* _weakDef;   // String@ — weak definitions, may be replaced
     Map* _tlsSyms;     // name -> Number(offset in the thread block)
-    Data* _bss;        // zero-init (COMMON) storage — NOBITS, not file-stored
+    SectionBytes* _bss; // zero-init (COMMON) storage — NOBITS, a size only
     Array* _bssSyms;   // String@ — names whose offset is a BSS offset
     u32 _bssAlign;
     Map* _funcSizes;      // name -> byte extent (st_size) of a TEXT function (bug 196 GC)
@@ -173,7 +174,7 @@ class MergedImage
     void init(void)
         {
         _text = new Data();
-        _data = new Data();
+        _data = new SectionBytes();
         _tls = new Data();
         _syms = new Map();
         _dataSyms = new Array();
@@ -183,7 +184,7 @@ class MergedImage
         _weakDef = new Array();
         _tlsSyms = new Map();
         _tlsAbs = new Array();
-        _bss = new Data();
+        _bss = new SectionBytes();
         _bssSyms = new Array();
         _bssAlign = (u32)1;
         _funcSizes = new Map();
@@ -201,7 +202,7 @@ class MergedImage
         {
         return _text;
         }
-    Data* data(void)
+    SectionBytes* data(void)
         {
         return _data;
         }
@@ -237,7 +238,7 @@ class MergedImage
         {
         return _tlsAbs;
         }
-    Data* bss(void)
+    SectionBytes* bss(void)
         {
         return _bss;
         }
@@ -1426,8 +1427,8 @@ class MergedImage
             tBase.set((Hashable*)Number.withU32(st), (Object*)Number.withU32(nt.length()));
             nt.append(_text.subdata(st, en - st));
             }
-        Data* nd = Data.withCapacity(dataEnd);
-        nd.append(_data.subdata((u32)0, dPrefix));
+        SectionBytes* nd = new SectionBytes();
+        nd.append(_data.subrange((u32)0, dPrefix));
         Map* dBase = new Map();
         for (u32 j = (u32)0; j < _ndu; j = j + (u32)1)
             {
@@ -1445,7 +1446,7 @@ class MergedImage
                     nd.appendByte((u8)0);
                 }
             dBase.set((Hashable*)Number.withU32(st), (Object*)Number.withU32(nd.length()));
-            nd.append(_data.subdata(st, en - st));
+            nd.append(_data.subrange(st, en - st));
             }
 
         // 6. Remap symbols (drop the dead); bss/TLS/seed symbols unchanged.
@@ -1719,9 +1720,9 @@ class MergedImage
         u32 da = o.dataAlign() < (u32)8 ? (u32)8 : o.dataAlign();
         if (o.data().length() > (u32)0)
             {
-            ElfMerge._padTo(im.data(), da);
+            im.data().padTo(da);
             dbase = im.data().length();
-            im.data().append(o.data());
+            im.data().appendData(o.data());
             }
         // GC unit boundaries (bug 196): every section start and object start,
         // and every defined symbol — recorded BEFORE the duplicate check below,
@@ -1800,12 +1801,12 @@ class MergedImage
                 // One slot per name (im.defines above already dropped dup defs,
                 // first-def-wins; our codegen emits one COMMON def + externs).
                 u32 cal = s.align() < (u32)1 ? (u32)1 : s.align();
-                ElfMerge._padTo(im.bss(), cal);
+                im.bss().padTo(cal);
                 im.syms().set((Hashable*)nm, (Object*)Number.withU32(im.bss().length()));
                 im.bssSyms().add((Object*)nm);
                 im.dataSyms().add((Object*)nm); // resolves as a data address
 
-                ElfMerge._zeros(im.bss(), s.size() != (u32)0 ? s.size() : (u32)8);
+                im.bss().appendZeros(s.size() != (u32)0 ? s.size() : (u32)8);
                 if (cal > im.bssAlign())
                     im.setBssAlign(cal);
                 if (s.ext())
@@ -1948,12 +1949,6 @@ class MergedImage
         if (a < (u32)1)
             a = (u32)1;
         while (d.length() % a != (u32)0)
-            d.appendByte((u8)0);
-        }
-
-    static void _zeros(Data* d, u32 n)
-        {
-        for (u32 i = (u32)0; i < n; i = i + (u32)1)
             d.appendByte((u8)0);
         }
     }
