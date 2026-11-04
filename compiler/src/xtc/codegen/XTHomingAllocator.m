@@ -461,7 +461,13 @@
         XTIRType* t = val.type;
         if (!t)
             continue;
-        if (t.kind == XTIRTypeKindMemory || t.kind == XTIRTypeKindVoid || t.kind == XTIRTypeKindAgg)
+        // A vector value lives in the back end's own vector registers and never
+        // reads a GP home. Offered one, a vectorised loop's splats and lanes
+        // (dense, short, heavily weighted) took every GP register, and the
+        // loop's counter went to a frame slot: int_muldiv loaded, added and
+        // stored it every pass (5% on Zen 5). As the port.
+        if (t.kind == XTIRTypeKindMemory || t.kind == XTIRTypeKindVoid || t.kind == XTIRTypeKindAgg
+            || t.kind == XTIRTypeKindVec)
             continue;
         if ([self isFloatType:t])
             [fp addObject:v];

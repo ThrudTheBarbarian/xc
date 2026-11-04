@@ -806,7 +806,13 @@ class BitSet
             if (val == 0 || val.ty() == 0)
                 continue;
             String* t = val.ty();
-            if (t.equals(String.withCString("Mem")) || t.equals(String.withCString("Void")) || t.hasPrefix(String.withCString("Agg(")))
+            // A vector value lives in the back end's own vector registers and
+            // never reads a GP home. Offered one, a vectorised loop's splats
+            // and lanes (dense, short, heavily weighted) took every GP
+            // register, and the loop's counter went to a frame slot:
+            // int_muldiv loaded, added and stored it every pass (5% on Zen 5).
+            if (t.equals(String.withCString("Mem")) || t.equals(String.withCString("Void")) || t.hasPrefix(String.withCString("Agg("))
+                || t.hasPrefix(String.withCString("Vec(")))
                 continue;
             if (Homing.isFloatTy(t))
                 fp.add((Object*)Number.with(v));
