@@ -1256,6 +1256,7 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
                 ((XTVariableDeclNode*)decl).isStatic = isStaticMethod;
                 [ivars addObject:(XTVariableDeclNode*)decl];
                 [[self blkIvarNames] addObject:((XTVariableDeclNode*)decl).varName];
+                [self blkMarkIvar:((XTVariableDeclNode*)decl).varName]; // parSelfIvar
                 }
             else if ([decl isKindOfClass:[XTBlockNode class]] &&
                      ((XTBlockNode*)decl).isDeclList)

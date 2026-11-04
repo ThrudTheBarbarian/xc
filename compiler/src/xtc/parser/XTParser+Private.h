@@ -72,6 +72,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)blkPopScope;
 - (void)blkBind:(NSString*)name type:(nullable XTType*)type;
 - (nullable NSDictionary*)blkLookup:(NSString*)name depth:(NSUInteger*)outDepth;
+- (nullable NSString*)parSelfIvar;
+- (void)blkMarkIvar:(NSString*)name;
 - (void)blkNoteIdentifierUse:(NSString*)name at:(XTSourceLocation*)loc;
 - (void)blkMarkWb:(NSString*)name;
 - (BOOL)blkIsWbValue:(nullable XTASTNode*)e;

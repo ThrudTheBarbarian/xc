@@ -192,6 +192,28 @@ class Parser
         return (Map*)0;
     }
 
+    // In a par body, `self.f` (not a call) where `f` resolves to this class's
+    // own ivar binding is read as that ivar: what a bare `f` already means
+    // there, a capture of its value, which a GPU can take. Writing it then
+    // gets par's own-copy error (auto keeps the loop), and `self.m()` or a
+    // bare `self` stay refused: a block cannot hold the object, and running
+    // methods in parallel is not safe to do automatically. A local or
+    // parameter named `f` binds in an inner scope without the ivar mark, so
+    // `self.f` is left alone there. The field's name, or 0.
+    String* parSelfIvar(void)
+    {
+        if (_blkFrames.count() == (u32)0) return (String*)0;
+        Map* fr = (Map*)_blkFrames.get(_blkFrames.count() - (u32)1);
+        if (fr.get((Hashable*)String.withCString("par")) == (Object*)0) return (String*)0;
+        if (!Parser._same(peek((u32)0).value(), "self")) return (String*)0;
+        if (peek((u32)1).type() != (u16)tokDot || peek((u32)2).type() != (u16)tokIdentifier) return (String*)0;
+        if (peek((u32)3).type() == (u16)tokLParen) return (String*)0;
+        String* f = peek((u32)2).value();
+        Map* info = blkLookup(f, (u32*)0);
+        if (info == 0 || info.get((Hashable*)String.withCString("ivar")) == (Object*)0) return (String*)0;
+        return f;
+    }
+
     String* blkTyOf(Map* info)
     {
         if (info == 0) return (String*)0;
@@ -2180,6 +2202,13 @@ class Parser
         v.setFlags(ivarFlags);
         v.setStmtPos(memberTok.fileId(), memberTok.line(), memberTok.col());
         blkBind(name, v.op(), _lastBlkParams);       // class scope (task #26)
+        // Marked as the class's own, so a par body's `self.<name>` can be
+        // read as this binding (parSelfIvar). A local of the same name binds
+        // in an inner scope, without the mark.
+        if (_blkScopes.count() > (u32)0) {
+            Object* bi = ((Map*)_blkScopes.get(_blkScopes.count() - (u32)1)).get((Hashable*)name);
+            if (bi != 0) ((Map*)bi).set((Hashable*)String.withCString("ivar"), (Object*)Number.with((u32)1));
+        }
         _blkIvarNames.add((Hashable*)String.withString(name));
         if (match((u16)tokAssign)) v.add(parseExpression());
         while (match((u16)tokComma)) {
@@ -6163,6 +6192,12 @@ class Parser
                 }
                 expect((u16)tokRParen);
                 return call;
+            }
+            String* selfIvar = parSelfIvar();
+            if (selfIvar != 0) {
+                advance(); advance(); advance();        // self . f
+                blkNoteUse(selfIvar);
+                return mkNamed((u16)nkIdent, selfIvar);
             }
             Token* tok = advance();
             // A name about to be CALLED is noted by the call, after its

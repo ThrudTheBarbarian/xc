@@ -800,6 +800,19 @@ static XTOpInfo operatorInfo(XTTokenType type)
         XTASTNode* gridName = [self parGridMemberAt:loc];
         if (gridName)
             return gridName;
+        // In a par body, `self.f` (not a call) where `f` resolves to this
+        // class's own ivar binding is read as that ivar: what a bare `f`
+        // already means there, a capture of its value. As the port's
+        // parSelfIvar, which says why.
+        {
+        NSString* selfIvar = [self parSelfIvar];
+        if (selfIvar)
+            {
+            [self advance]; [self advance]; [self advance]; // self . f
+            [self blkNoteIdentifierUse:selfIvar at:loc];
+            return [[XTIdentifierNode alloc] initWithName:selfIvar location:loc];
+            }
+        }
         [self advance];
         // If followed by '(' it's a function call. Use match: so a merged
         // (( token splits — otherwise f((x)) loses its opening paren.

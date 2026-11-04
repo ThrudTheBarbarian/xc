@@ -236,6 +236,35 @@ NS_ASSUME_NONNULL_BEGIN
     }
 
 // Innermost binding for `name`, plus (out) the scope index it lives at.
+/****************************************************************************\
+|* In a par body, `self.f` (not a call) where `f` resolves to this class's
+|* own ivar binding: the field's name, else nil. A local or parameter named
+|* `f` binds in an inner scope without the ivar mark. As the port.
+\****************************************************************************/
+- (nullable NSString*)parSelfIvar
+    {
+    NSDictionary* frame = [self blkFrames].lastObject;
+    if (![frame[@"par"] boolValue])
+        return nil;
+    if (![[self peekToken:0].value isEqualToString:@"self"] || [self peekToken:1].type != XTTokenDot
+        || [self peekToken:2].type != XTTokenIdentifier || [self peekToken:3].type == XTTokenLParen)
+        return nil;
+    NSString* f = [self peekToken:2].value;
+    NSDictionary* info = [self blkLookup:f depth:NULL];
+    return [info[@"ivar"] boolValue] ? f : nil;
+    }
+
+/****************************************************************************\
+|* Mark the class-scope binding of an ivar as the class's own (parSelfIvar).
+\****************************************************************************/
+- (void)blkMarkIvar:(NSString*)name
+    {
+    NSMutableDictionary* top = [[self blkScopes] lastObject];
+    NSMutableDictionary* info = top[name];
+    if ([info isKindOfClass:[NSMutableDictionary class]])
+        info[@"ivar"] = @YES;
+    }
+
 - (nullable NSDictionary*)blkLookup:(NSString*)name depth:(NSUInteger*)outDepth
     {
     NSArray* scopes = [self blkScopes];
