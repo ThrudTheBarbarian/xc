@@ -231,10 +231,32 @@ def ratio_chart(cur, suffix, title, order=None):
             xs = [px(r) for r in rs.values()]
             o.append('<line x1="%.1f" y1="%.1f" x2="%.1f" y2="%.1f" stroke="currentColor" stroke-opacity="0.3"/>'
                      % (min(xs), y, max(xs), y))
-        for l, name, col in LANGS:
-            if l in rs:
-                o.append('<circle cx="%.1f" cy="%.1f" r="4.5" fill="%s"><title>%s: xc is %s than %s</title></circle>'
-                         % (px(rs[l]), y, col, esc(b), speed(rs[l]), esc(name)))
+        # Dots closer than a dot's width are one dot cut into a wedge per
+        # language, so a language whose figure equals another's (clang, Swift
+        # and Objective-C often compile a loop alike) is not hidden under it.
+        dots = sorted((px(rs[l]), l, name, col) for l, name, col in LANGS if l in rs)
+        groups = []
+        for d in dots:
+            if groups and d[0] - groups[-1][-1][0] < 5.0:
+                groups[-1].append(d)
+            else:
+                groups.append([d])
+        for g in groups:
+            tip = "; ".join("xc is %s than %s" % (speed(rs[l]), name) for _, l, name, _ in g)
+            if len(g) == 1:
+                x, l, name, col = g[0]
+                o.append('<circle cx="%.1f" cy="%.1f" r="4.5" fill="%s"><title>%s: %s</title></circle>'
+                         % (x, y, col, esc(b), esc(tip)))
+                continue
+            cx = sum(d[0] for d in g) / len(g)
+            o.append('<g><title>%s: %s</title>' % (esc(b), esc(tip)))
+            for k, (_, l, name, col) in enumerate(g):
+                a0 = 2 * math.pi * k / len(g) - math.pi / 2
+                a1 = 2 * math.pi * (k + 1) / len(g) - math.pi / 2
+                o.append('<path d="M%.1f %.1fL%.2f %.2fA4.5 4.5 0 0 1 %.2f %.2fZ" fill="%s"/>'
+                         % (cx, y, cx + 4.5 * math.cos(a0), y + 4.5 * math.sin(a0),
+                            cx + 4.5 * math.cos(a1), y + 4.5 * math.sin(a1), col))
+            o.append('</g>')
     o.append('</svg><figcaption>%s</figcaption></figure>' % esc(title))
     return "".join(o)
 
