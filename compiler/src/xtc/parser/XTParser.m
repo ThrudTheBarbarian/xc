@@ -5058,6 +5058,15 @@ static int64_t parAutoConst(XTASTNode* e)
             }
         }
     [self expect:XTTokenSemicolon];
+    // The loop variable is a local of the loop, from its condition on: bound
+    // before the condition and the step are parsed, so `t < n` and `t++` name
+    // it and not an outer `t` it shadows (a `par` made of the loop took the
+    // outer String t for a captured scalar the loop assigned). A block
+    // literal or a `par` inside the body captures it like any other. As the
+    // port, which binds a declaration where it is parsed.
+    [self blkPushScope];
+    if ([init isKindOfClass:[XTVariableDeclNode class]])
+        [self blkBind:((XTVariableDeclNode*)init).varName type:((XTVariableDeclNode*)init).declaredType];
     XTASTNode* cond = [self check:XTTokenSemicolon] ? nil : [self parseExpression];
     [self expect:XTTokenSemicolon];
     XTASTNode* incr = [self check:XTTokenRParen] ? nil : [self parseExpression];
@@ -5065,11 +5074,6 @@ static int64_t parAutoConst(XTASTNode* e)
 
     NSUInteger annots = [self parseLoopAnnotations];
 
-    // The loop variable is a local of the body: a block literal or a
-    // `par` inside it captures it like any other.
-    [self blkPushScope];
-    if ([init isKindOfClass:[XTVariableDeclNode class]])
-        [self blkBind:((XTVariableDeclNode*)init).varName type:((XTVariableDeclNode*)init).declaredType];
     XTASTNode* body = [self checkBlockOpen] ? [self parseBlock] : [self parseStatement];
     [self blkPopScope];
 
