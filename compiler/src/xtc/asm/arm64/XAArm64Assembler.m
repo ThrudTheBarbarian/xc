@@ -235,7 +235,7 @@ static int condCode(NSString *cc) {
         uint64_t al = 1ull << alg;
         while (_data.length % al) { uint8_t z = 0; [_data appendBytes:&z length:1]; }
         _symbols[nm] = @(_data.length); [_dataSymbolNames addObject:nm];
-        for (uint64_t i = 0; i < sz; i++) { uint8_t z = 0; [_data appendBytes:&z length:1]; }
+        [_data increaseLengthBy:(NSUInteger)sz];
     }
     [_commonSymbols removeAllObjects];
 }
@@ -1874,6 +1874,8 @@ static BOOL emitDataDirective(NSString *l, NSMutableData *out, NSError **err) {
     else if ([mn isEqualToString:@".space"]||[mn isEqualToString:@".zero"]) {
         NSArray *a=splitOperands(rest); int64_t n=0,fill=0; parseImm(a[0],&n);
         if (a.count>1) parseImm(a[1],&fill);
+        // A zero run is one length change, not one append per byte.
+        if ((uint8_t)fill == 0) { if (n > 0) [out increaseLengthBy:(NSUInteger)n]; return YES; }
         for (int64_t i=0;i<n;i++){ uint8_t b=(uint8_t)fill; [out appendBytes:&b length:1]; } return YES;
     }
     else return NO;
@@ -2026,7 +2028,7 @@ static NSString *quadSymbolOperand(NSString *l) {
                     } else {
                         uint64_t al=1ull<<alg; while(dataAddr%al){ uint8_t z=0;[_data appendBytes:&z length:1]; dataAddr++; }
                         _symbols[nm]=@(dataAddr); [_dataSymbolNames addObject:nm];
-                        for(int64_t i=0;i<sz;i++){ uint8_t z=0;[_data appendBytes:&z length:1]; } dataAddr+=sz;
+                        if(sz>0) [_data increaseLengthBy:(NSUInteger)sz]; dataAddr+=sz;
                     }
                 }
                 continue;

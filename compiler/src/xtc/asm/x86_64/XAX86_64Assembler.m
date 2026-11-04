@@ -204,6 +204,9 @@ static int ccCode(NSString *suffix) {
 
 // ───────────────────────────── encoding helpers ─────────────────────────────
 static void emit8(NSMutableData *d, uint8_t b) { [d appendBytes:&b length:1]; }
+// A run of zero bytes in one call: a large zero-filled global (`.zero`, `.comm`,
+// `.lcomm`) is one length change, not one append per byte.
+static void emitZeros(NSMutableData *d, int64_t n) { if (n > 0) [d increaseLengthBy:(NSUInteger)n]; }
 static void emit16(NSMutableData *d, uint16_t v) { for (int i=0;i<2;i++) emit8(d,(uint8_t)(v>>(8*i))); }
 static void emit32(NSMutableData *d, uint32_t v) { for (int i=0;i<4;i++) emit8(d,(uint8_t)(v>>(8*i))); }
 static void emit64(NSMutableData *d, uint64_t v) { for (int i=0;i<8;i++) emit8(d,(uint8_t)(v>>(8*i))); }
@@ -394,7 +397,7 @@ static BOOL namesHighZmm(NSString *s) {
         if (al < 1) al = 1;
         while (_data.length % al) emit8(_data, 0);
         _symbols[nm] = @(_data.length); [_dataSymbolNames addObject:nm];
-        for (uint64_t i = 0; i < sz; i++) emit8(_data, 0);
+        emitZeros(_data, (int64_t)sz);
     }
     [_commonSymbols removeAllObjects];
 }
@@ -1826,7 +1829,7 @@ static BOOL isPlainIntLiteral(NSString *s) {
                 if (alg > 1) { while (_data.length % (uint64_t)alg) emit8(_data, 0); }
                 _symbols[cops[0]] = @(_data.length);
                 [_dataSymbolNames addObject:cops[0]];
-                for (int64_t i = 0; i < sz; i++) emit8(_data, 0);
+                emitZeros(_data, sz);
                 continue;
             }
             // Debug and type annotations carry no bytes at all.
@@ -1851,7 +1854,8 @@ static BOOL isPlainIntLiteral(NSString *s) {
                 int64_t n = 0, fill = 0;
                 if (ops.count) parseNum(ops[0], &n);
                 if (ops.count > 1) parseNum(ops[1], &fill);
-                for (int64_t i = 0; i < n; i++) emit8(sec, (uint8_t)fill);
+                if ((uint8_t)fill == 0) emitZeros(sec, n);
+                else for (int64_t i = 0; i < n; i++) emit8(sec, (uint8_t)fill);
                 continue;
             }
             int width = 0;
