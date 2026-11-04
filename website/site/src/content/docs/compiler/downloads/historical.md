@@ -5,6 +5,20 @@ description: Previous xcc and xtc toolchain releases, kept for archival referenc
 
 These archives are kept so that an existing build can be reproduced byte-for-byte with the version it was compiled with. For new work, use the [most recent release](/compiler/downloads/). The [ChangeLog](/compiler/downloads/changelog/) lists what has changed since.
 
+## xcc 0.9.1
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.9.1.tar.bz2](/downloads/xcc-osx-0.9.1.tar.bz2) | 15.5 MB |
+| Linux (x86_64) | [xcc-linux-0.9.1.tar.bz2](/downloads/xcc-linux-0.9.1.tar.bz2) | 10.2 MB |
+| Windows (x64) | [xcc-win64-0.9.1.zip](/downloads/xcc-win64-0.9.1.zip) | 13.8 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.9.1.tar.bz2](/downloads/xcc-arm9-sysroot-0.9.1.tar.bz2) | 830 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-0.9.1.tar.bz2](/downloads/xcd-osx-0.9.1.tar.bz2) | 864 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.9.1.tar.bz2](/downloads/xcd-linux-0.9.1.tar.bz2) | 808 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-0.9.1.zip](/downloads/xcd-win64-0.9.1.zip) | 926 KB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.9.1.tar.bz2](/downloads/xcc-uxgtk-linux-0.9.1.tar.bz2) | 112 KB |
+| UXKit library (macOS arm64, Windows x64, Linux x86_64, web) | [xcc-uxkit-0.9.1.tar.bz2](/downloads/xcc-uxkit-0.9.1.tar.bz2) | 3.0 MB |
+
 ## xcc 0.9
 
 | Platform | Download | Size |
