@@ -3302,8 +3302,10 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
         // keeps anything live across a call out of them by itself.
         //
         // xmm0/xmm1 are emission scratch and xmm2-xmm15 are the vectoriser's
-        // pool, so this is gated on the function having no Vec value at all,
-        // exactly as arm64 gates d18-d31 on fnHasVector.
+        // pool. Its registers are given out before this (assignVectorRegsFor:),
+        // so in a function with vector values the floats take the ones it
+        // left: a `perm[i] = i` loop that vectorised used to put every float
+        // in main in a slot (15 slot accesses became 145). As the port.
         BOOL fnHasVector = NO;
         for (XTIRBlock* vb in fn.blocks)
             {
@@ -3321,11 +3323,28 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
         // is already kept out of this tier. Eight homes left C perlin's five
         // loop-carried floats in slots, written through movd/mov every octave.
         // Win64 makes xmm6/xmm7 callee-saved.
-        NSArray<NSString*>* fpPool = fnHasVector ? @[]
-            : sWin64 ? @[ @"xmm8", @"xmm9", @"xmm10", @"xmm11", @"xmm12", @"xmm13",
+        NSArray<NSString*>* fpPool = sWin64 ? @[ @"xmm8", @"xmm9", @"xmm10", @"xmm11", @"xmm12", @"xmm13",
                           @"xmm14", @"xmm15", @"xmm2", @"xmm3", @"xmm4", @"xmm5" ]
             : @[ @"xmm8", @"xmm9", @"xmm10", @"xmm11", @"xmm12", @"xmm13",
                  @"xmm14", @"xmm15", @"xmm2", @"xmm3", @"xmm4", @"xmm5", @"xmm6", @"xmm7" ];
+        if (fnHasVector)
+            {
+            // The vector values' registers, and the remat and spill scratch
+            // xmm12-xmm15 once anything was given up.
+            BOOL scratch = sVRemat.count > 0 || sVSpill.count > 0;
+            NSMutableArray<NSString*>* left = [NSMutableArray array];
+            for (NSString* x in fpPool)
+                {
+                NSInteger r = [[x substringFromIndex:3] integerValue];
+                BOOL taken = scratch && r >= 12 && r <= 15;
+                for (NSString* g in sVec.allValues)
+                    if (g.length >= 4 && [[g substringFromIndex:3] integerValue] == r)
+                        taken = YES;
+                if (!taken)
+                    [left addObject:x];
+                }
+            fpPool = left;
+            }
         // GP caller tier. SysV leaves only five callee-saved registers, so a
         // function with more than five hot values put the rest in slots and the
         // hot loop became store/reload traffic — call_depth spent 25 of its 60

@@ -805,8 +805,10 @@ class X86_64
         // test keeps anything live across a call out of them by itself.
         //
         // xmm0/xmm1 are emission scratch and xmm2-xmm15 are the vectoriser's
-        // pool, so this is gated on the function having no Vec value at all,
-        // exactly as arm64 gates d18-d31.
+        // pool. Its registers are given out before this (assignVectorRegs), so
+        // in a function with vector values the floats take the ones it left:
+        // a `perm[i] = i` loop that vectorised used to put every float in
+        // main in a slot (15 slot accesses became 145).
         bool fnHasVector = false;
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
@@ -825,7 +827,6 @@ class X86_64
                 }
             }
         Array* fpCaller = new Array();
-        if (!fnHasVector)
             {
             fpCaller.add((Object*)String.withCString("xmm8"));
             fpCaller.add((Object*)String.withCString("xmm9"));
@@ -849,6 +850,21 @@ class X86_64
                 fpCaller.add((Object*)String.withCString("xmm6"));
                 fpCaller.add((Object*)String.withCString("xmm7"));
                 }
+            }
+        if (fnHasVector)
+            {
+            Array* left = new Array();
+            for (u32 i = (u32)0; i < fpCaller.count(); i = i + (u32)1)
+                {
+                String* x = (String*)fpCaller.get(i);
+                bool taken = false;
+                for (u32 r = (u32)2; r <= (u32)15; r = r + (u32)1)
+                    if (x.equals(String.withFormat("xmm%lu", r)) && vecTakesXmm(r))
+                        taken = true;
+                if (!taken)
+                    left.add((Object*)x);
+                }
+            fpCaller = left;
             }
         // GP caller tier. SysV leaves only five callee-saved registers, so a
         // function with more than five hot values put the rest in slots and the
@@ -6473,6 +6489,27 @@ class X86_64
 
     // Does any float home or vector register here use register number r
     // (xmmR, ymmR or zmmR)?
+    // Whether vector code in this function uses register r: a vector value's
+    // own, or the remat and spill scratch xmm12-xmm15 once anything was given
+    // up. Not the homes, which assignHomes has yet to make (as the reference).
+    bool vecTakesXmm(u32 r)
+        {
+        if (r >= (u32)12 && r <= (u32)15
+            && ((_vRemat != (Map*)0 && _vRemat.count() > (u32)0) || (_vSpill != (Map*)0 && _vSpill.count() > (u32)0)))
+            return true;
+        if (_vec == (Map*)0)
+            return false;
+        String* want = String.withU32(r);
+        Array* vk = _vec.allKeys();
+        for (u32 i = (u32)0; i < vk.count(); i = i + (u32)1)
+            {
+            String* g = (String*)_vec.get((Hashable*)vk.get(i));
+            if (g != (String*)0 && g.byteLength() >= (u32)4 && g.substringFromByte((u32)3).equals(want))
+                return true;
+            }
+        return false;
+        }
+
     bool usesVecRegNumber(u32 r)
         {
         // The remat and spill scratch, named only while an instruction is
