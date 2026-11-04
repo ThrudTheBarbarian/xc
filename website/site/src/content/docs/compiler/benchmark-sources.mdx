@@ -179,7 +179,7 @@ struct ArcAlloc {
 
 Hold objects in an array and walk them.
 
-Lines: xc 21, Objective-C 31, C++ 34, Swift 25.
+Lines: xc 25, Objective-C 31, C++ 34, Swift 25.
 
 <Tabs syncKey="bench-lang">
 <TabItem label="xc">
@@ -187,6 +187,10 @@ Lines: xc 21, Objective-C 31, C++ 34, Swift 25.
 ```c
 // arc_array — hold objects in an array and walk them.
 // Exercises: retain/release on stored references, field access through a pointer.
+//
+// Each pass's sum depends on r (`^ r`), so no compiler can take one pass's
+// sum for all of them: a loop that can be collapsed measures nothing (0.9.2's
+// --par-style=auto collapsed the plain form to one pass times 3000000).
 #import "Stdio.xc"
 #import "include/bench_time.xc"
 #define N 1024
@@ -201,7 +205,7 @@ i32 main(i32 argc, u8** argv)
     u32 acc = (u32)0;
     i64 t0 = bench_now_us();
     for (u32 r = (u32)0; r < (u32)3000000; r++)
-        for (u32 i = (u32)0; i < (u32)N; i++) acc = acc + cells[i].get();
+        for (u32 i = (u32)0; i < (u32)N; i++) acc = acc + (cells[i].get() ^ r);
     i64 t1 = bench_now_us();
     Stdio.printf("%lu %lld\n", acc, t1 - t0);
     return 0;
@@ -237,7 +241,7 @@ int main(int argc, char **argv)
         uint32_t acc = 0;
         int64_t t0 = bench_now_us();
         for (uint32_t r = 0; r < 3000000; r++)
-            for (uint32_t i = 0; i < N; i++) acc = acc + [cells[i] get];
+            for (uint32_t i = 0; i < N; i++) acc = acc + ([cells[i] get] ^ r);
         int64_t t1 = bench_now_us();
         printf("%u %lld\n", acc, (long long)(t1 - t0));
     }
@@ -278,7 +282,7 @@ int main(int argc, char **argv)
     uint32_t acc = 0;
     int64_t t0 = bench_now_us();
     for (uint32_t r = 0; r < 3000000u; r++)
-        for (const auto &cell : cells) acc = acc + cell->get();
+        for (const auto &cell : cells) acc = acc + (cell->get() ^ r);
     int64_t t1 = bench_now_us();
     std::printf("%u %lld\n", acc, static_cast<long long>(t1 - t0));
     return 0;
@@ -307,8 +311,8 @@ struct ArcArray {
         for i in 0..<n { cells.append(Cell(UInt32(i) &+ seed)) }
         var acc: UInt32 = 0
         let t0 = bench_now_us()
-        for _ in 0..<UInt32(3_000_000) {
-            for i in 0..<n { acc = acc &+ cells[i].get() }
+        for r in 0..<UInt32(3_000_000) {
+            for i in 0..<n { acc = acc &+ (cells[i].get() ^ r) }
         }
         let t1 = bench_now_us()
         print("\(acc) \(t1 - t0)")
@@ -2705,18 +2709,18 @@ struct StructCopy {
 
 ## Parallel blocks and the GPU
 
-The programs behind the performance page's GPU tables. Each is one xc program:
-its work is a `par` block, a loop whose iterations are independent, and the
-runtime runs it on the CPU's threads or on the GPU (Metal on a Mac, CUDA or
-Vulkan on Windows, Vulkan on Linux and Android, WebGPU in the browser),
-whichever it finds faster. Nothing in the source
-names a device, a kernel language or a thread.
+The programs behind the performance page's GPU tables. Each is one xc program
+of plain loops: xcc makes a `par` block of each loop whose iterations are
+independent, and the runtime runs it on the CPU's threads or on the GPU (Metal
+on a Mac, CUDA or Vulkan on Windows, Vulkan on Linux and Android, WebGPU in the
+browser), whichever it finds faster. Nothing in the source says `par` or names
+a device, a kernel language or a thread.
 
 ### mandel_deep
 
 A deliberately compute-heavy escape-time iteration that also
 
-Lines: 66.
+Lines: 62.
 
 ```c
 // mandel_deep — a deliberately compute-heavy escape-time iteration that also
@@ -2732,7 +2736,6 @@ Lines: 66.
 // "<checksum> <best_us> <first_us>"; the checksum is the total iteration count
 // to the nearest million, coarse enough that fast GPU maths cannot move it.
 #import "Stdio.xc"
-#import "Par.xc"
 #import "../src/include/bench_time.xc"
 
 #ifndef W
@@ -2754,27 +2757,24 @@ i32 main(void)
     {
         total = (u32)0;
         i64 t0 = bench_now_us();
-        par mandel :reduce(+ total)
+        for (u32 i in 0..SIZE)
         {
-            for (u32 i in 0..SIZE)
+            // The window [-1.5, 0.0] x [-0.75, 0.75]: most pixels are inside
+            // the set and so run the full iteration count.
+            float cx = (float)(i % (u32)W) * (1.5f / (float)W) - 1.5f;
+            float cy = (float)(i / (u32)W) * (1.5f / (float)W) - 0.75f;
+            float x = 0.0f;
+            float y = 0.0f;
+            u32 k = (u32)0;
+            while (k < (u32)MAXITER && x * x + y * y < 4.0f)
             {
-                // The window [-1.5, 0.0] x [-0.75, 0.75]: most pixels are inside
-                // the set and so run the full iteration count.
-                float cx = (float)(i % (u32)W) * (1.5f / (float)W) - 1.5f;
-                float cy = (float)(i / (u32)W) * (1.5f / (float)W) - 0.75f;
-                float x = 0.0f;
-                float y = 0.0f;
-                u32 k = (u32)0;
-                while (k < (u32)MAXITER && x * x + y * y < 4.0f)
-                {
-                    float xt = x * x - y * y + cx;
-                    y = 2.0f * x * y + cy;
-                    x = xt;
-                    k = k + (u32)1;
-                }
-                counts[i] = k;
-                total = total + k;
+                float xt = x * x - y * y + cx;
+                y = 2.0f * x * y + cy;
+                x = xt;
+                k = k + (u32)1;
             }
+            counts[i] = k;
+            total = total + k;
         }
         i64 t1 = bench_now_us();
         if (rep == (u32)0)
@@ -2791,7 +2791,7 @@ i32 main(void)
 
 Escape-time iteration counts over a 2048x2048 grid, one item
 
-Lines: 51.
+Lines: 47.
 
 ```c
 // mandelbrot — escape-time iteration counts over a 2048x2048 grid, one item
@@ -2799,7 +2799,6 @@ Lines: 51.
 // "<checksum> <best_us> <first_us>"; the checksum is the total iteration count to
 // the nearest million, coarse enough that fast GPU maths cannot move it.
 #import "Stdio.xc"
-#import "Par.xc"
 #import "../src/include/bench_time.xc"
 
 #define W 2048
@@ -2817,24 +2816,21 @@ i32 main(void)
     {
         total = (u32)0;
         i64 t0 = bench_now_us();
-        par mandel :reduce(+ total)
+        for (u32 i in 0..SIZE)
         {
-            for (u32 i in 0..SIZE)
+            float cx = (float)(i % (u32)W) * (3.0f / 2048.0f) - 2.0f;
+            float cy = (float)(i / (u32)W) * (3.0f / 2048.0f) - 1.5f;
+            float x = 0.0f;
+            float y = 0.0f;
+            u32 k = (u32)0;
+            while (k < (u32)256 && x * x + y * y < 4.0f)
             {
-                float cx = (float)(i % (u32)W) * (3.0f / 2048.0f) - 2.0f;
-                float cy = (float)(i / (u32)W) * (3.0f / 2048.0f) - 1.5f;
-                float x = 0.0f;
-                float y = 0.0f;
-                u32 k = (u32)0;
-                while (k < (u32)256 && x * x + y * y < 4.0f)
-                {
-                    float xt = x * x - y * y + cx;
-                    y = 2.0f * x * y + cy;
-                    x = xt;
-                    k = k + (u32)1;
-                }
-                total = total + k;
+                float xt = x * x - y * y + cx;
+                y = 2.0f * x * y + cy;
+                x = xt;
+                k = k + (u32)1;
             }
+            total = total + k;
         }
         i64 t1 = bench_now_us();
         if (rep == (u32)0)
@@ -2851,7 +2847,7 @@ i32 main(void)
 
 Hashcat's MD5 workload in xc. Each item hashes one 8-byte candidate
 
-Lines: 308.
+Lines: 305.
 
 ```c
 // md5 — hashcat's MD5 workload in xc. Each item hashes one 8-byte candidate
@@ -2859,8 +2855,8 @@ Lines: 308.
 // the way hashcat's -m 0 kernel does: short candidates, one block, raw
 // throughput measured in hashes per second.
 //
-// The hash runs inside a `par` block, so the device is the compiler's to
-// choose: XC_PAR=cpu one CPU thread or all of them, XC_PAR=gpu the GPU
+// The candidate loop is a plain loop, which xcc makes a `par` block of, so
+// the device is the compiler's to choose: XC_PAR=cpu one CPU thread or all of them, XC_PAR=gpu the GPU
 // (Metal, Vulkan or CUDA), the default auto measures both and keeps the
 // faster. `md5 -t` runs the RFC 1321 known-answer tests on the CPU; the same
 // MD5_ROUNDS drives the test and the kernel, so passing the test proves the
@@ -2871,7 +2867,6 @@ Lines: 308.
 // of eight runs, and the first run (which carries the one-off cost of a GPU
 // building its kernel). A hashes-per-second line goes to stderr.
 #import "Stdio.xc"
-#import "Par.xc"
 
 // Headline numbers go to stderr, so stdout stays the three-token line the par
 // benchmarks share. write() is the libSystem call Stdio itself uses. The
@@ -3115,31 +3110,29 @@ i32 main(i32 argc, u8** argv)
         {
         total = 0;
         i64 t0 = hc_now_us();
-        par md5 :reduce(+ total)
+        for (u32 i in 0..BATCH)
             {
-            for (u32 i in 0..BATCH)
-                {
-                // The candidate: word 0 is the item index, word 1 the tag,
-                // then MD5 padding for an 8-byte message (0x80, then zeros,
-                // then the 64-bit length).
-                u32 m0 = i;
-                u32 m1 = TAG;
-                u32 m2 = 0x80;
-                u32 m3 = 0;  u32 m4 = 0;  u32 m5 = 0;
-                u32 m6 = 0;  u32 m7 = 0;  u32 m8 = 0;
-                u32 m9 = 0;  u32 m10 = 0; u32 m11 = 0;
-                u32 m12 = 0; u32 m13 = 0; u32 m14 = 64;
-                u32 m15 = 0;
+            // The candidate: word 0 is the item index, word 1 the tag,
+            // then MD5 padding for an 8-byte message (0x80, then zeros,
+            // then the 64-bit length).
+            u32 m0 = i;
+            u32 m1 = TAG;
+            u32 m2 = 0x80;
+            u32 m3 = 0;  u32 m4 = 0;  u32 m5 = 0;
+            u32 m6 = 0;  u32 m7 = 0;  u32 m8 = 0;
+            u32 m9 = 0;  u32 m10 = 0; u32 m11 = 0;
+            u32 m12 = 0; u32 m13 = 0; u32 m14 = 64;
+            u32 m15 = 0;
 
-                u32 a = 0x67452301;
-                u32 b = 0xefcdab89;
-                u32 c = 0x98badcfe;
-                u32 d = 0x10325476;
-                MD5_ROUNDS;
-                total = total + (a + 0x67452301) + (b + 0xefcdab89)
-                      + (c + 0x98badcfe) + (d + 0x10325476);
-                }
+            u32 a = 0x67452301;
+            u32 b = 0xefcdab89;
+            u32 c = 0x98badcfe;
+            u32 d = 0x10325476;
+            MD5_ROUNDS;
+            total = total + (a + 0x67452301) + (b + 0xefcdab89)
+                  + (c + 0x98badcfe) + (d + 0x10325476);
             }
+
         i64 t1 = hc_now_us();
         if (rep == 0)
             first = t1 - t0;
@@ -3168,7 +3161,7 @@ i32 main(i32 argc, u8** argv)
 
 Hashcat's MASK-ATTACK MD5 workload in xc. Unlike md5.xc (which
 
-Lines: 300.
+Lines: 297.
 
 ```c
 // md5_mask — hashcat's MASK-ATTACK MD5 workload in xc. Unlike md5.xc (which
@@ -3178,12 +3171,11 @@ Lines: 300.
 // optimisation behind hashcat's faster optimized kernel.
 //
 // Each candidate is 52 bytes: m0..m11 the prefix (m0 = the outer index, the
-// rest fixed), m12 the mask word (the inner sweep), then MD5 padding. The par
-// block runs the outer loop over prefixes; for each it computes steps 0..11
+// rest fixed), m12 the mask word (the inner sweep), then MD5 padding. The
+// outer loop over prefixes becomes the par block; for each it computes steps 0..11
 // once, then the inner loop runs steps 12..63 per candidate. `md5_mask -t`
 // checks one candidate's full digest against a known value.
 #import "Stdio.xc"
-#import "Par.xc"
 
 i32 write(i32 fd, u8* buf, i32 len);
 
@@ -3435,28 +3427,26 @@ i32 main(i32 argc, u8** argv)
         {
         total = 0;
         i64 t0 = hc_now_us();
-        par md5mask :reduce(+ total)
+        for (u32 p in 0..OUTER)
             {
-            for (u32 p in 0..OUTER)
+            u32 m0 = p;   u32 m1 = P1;  u32 m2 = P2;  u32 m3 = P3;
+            u32 m4 = P4;  u32 m5 = P5;  u32 m6 = P6;  u32 m7 = P7;
+            u32 m8 = P8;  u32 m9 = P9;  u32 m10 = P10; u32 m11 = P11;
+            u32 m13 = 0x80; u32 m14 = 416; u32 m15 = 0;
+            // The invariant prefix: steps 0..11, once per outer item.
+            u32 A = 0x67452301; u32 B = 0xefcdab89;
+            u32 C = 0x98badcfe; u32 D = 0x10325476;
+            MD5_PREFIX(A, B, C, D);
+            for (u32 j in 0..INNER)
                 {
-                u32 m0 = p;   u32 m1 = P1;  u32 m2 = P2;  u32 m3 = P3;
-                u32 m4 = P4;  u32 m5 = P5;  u32 m6 = P6;  u32 m7 = P7;
-                u32 m8 = P8;  u32 m9 = P9;  u32 m10 = P10; u32 m11 = P11;
-                u32 m13 = 0x80; u32 m14 = 416; u32 m15 = 0;
-                // The invariant prefix: steps 0..11, once per outer item.
-                u32 A = 0x67452301; u32 B = 0xefcdab89;
-                u32 C = 0x98badcfe; u32 D = 0x10325476;
-                MD5_PREFIX(A, B, C, D);
-                for (u32 j in 0..INNER)
-                    {
-                    u32 m12 = p * INNER + j;
-                    u32 a = A; u32 b = B; u32 c = C; u32 d = D;
-                    MD5_REST(a, b, c, d);
-                    total = total + (a + 0x67452301) + (b + 0xefcdab89)
-                          + (c + 0x98badcfe) + (d + 0x10325476);
-                    }
+                u32 m12 = p * INNER + j;
+                u32 a = A; u32 b = B; u32 c = C; u32 d = D;
+                MD5_REST(a, b, c, d);
+                total = total + (a + 0x67452301) + (b + 0xefcdab89)
+                      + (c + 0x98badcfe) + (d + 0x10325476);
                 }
             }
+
         i64 t1 = hc_now_us();
         if (rep == 0) first = t1 - t0;
         if (rep == 0 || t1 - t0 < best) best = t1 - t0;
@@ -3477,7 +3467,7 @@ i32 main(i32 argc, u8** argv)
 
 The gravitational force on each of 8192 bodies from all the others:
 
-Lines: 63.
+Lines: 59.
 
 ```c
 // nbody — the gravitational force on each of 8192 bodies from all the others:
@@ -3486,7 +3476,6 @@ Lines: 63.
 // (positive x force), a coarse figure fast GPU maths does not move.
 #import "Stdio.xc"
 #import "Math.xc"
-#import "Par.xc"
 #import "../src/include/bench_time.xc"
 
 #define N 8192
@@ -3517,22 +3506,19 @@ i32 main(void)
     {
         right = (u32)0;
         i64 t0 = bench_now_us();
-        par forces :reduce(+ right)
+        for (u32 i in 0..N)
         {
-            for (u32 i in 0..N)
+            float ax = 0.0f;
+            for (u32 j in 0..N)
             {
-                float ax = 0.0f;
-                for (u32 j in 0..N)
-                {
-                    float dx = px[j] - px[i];
-                    float dy = py[j] - py[i];
-                    float d2 = dx * dx + dy * dy + 0.0001f;
-                    ax = ax + mass[j] * dx / (d2 * Math.sqrt(d2));
-                }
-                fx[i] = ax;
-                if (ax > 0.0f)
-                    right = right + (u32)1;
+                float dx = px[j] - px[i];
+                float dy = py[j] - py[i];
+                float d2 = dx * dx + dy * dy + 0.0001f;
+                ax = ax + mass[j] * dx / (d2 * Math.sqrt(d2));
             }
+            fx[i] = ax;
+            if (ax > 0.0f)
+                right = right + (u32)1;
         }
         i64 t1 = bench_now_us();
         if (rep == (u32)0)
@@ -3549,7 +3535,7 @@ i32 main(void)
 
 Ken Perlin's improved noise, 2D, four octaves, over a 2048x2048
 
-Lines: 102.
+Lines: 98.
 
 ```c
 // perlin — Ken Perlin's improved noise, 2D, four octaves, over a 2048x2048
@@ -3557,7 +3543,6 @@ Lines: 102.
 // and one store per pixel. Prints "<checksum> <best_us> <first_us>"; the checksum is
 // the mean grey level to a tenth.
 #import "Stdio.xc"
-#import "Par.xc"
 #import "../src/include/bench_time.xc"
 
 #define SIZE (2048 * 2048)
@@ -3603,46 +3588,43 @@ i32 main(void)
     {
         total = (u32)0;
         i64 t0 = bench_now_us();
-        par perlin :reduce(+ total)
+        for (u32 i in 0..SIZE)
         {
-            for (u32 i in 0..SIZE)
+            float x = (float)(i % (u32)2048) / 256.0f;
+            float y = (float)(i / (u32)2048) / 256.0f;
+            float sum = 0.0f;
+            float amp = 1.0f;
+            float norm = 0.0f;
+            for (u32 o in 0..4)
             {
-                float x = (float)(i % (u32)2048) / 256.0f;
-                float y = (float)(i / (u32)2048) / 256.0f;
-                float sum = 0.0f;
-                float amp = 1.0f;
-                float norm = 0.0f;
-                for (u32 o in 0..4)
-                {
-                    u32 xi = (u32)x;
-                    u32 yi = (u32)y;
-                    float xf = x - (float)xi;
-                    float yf = y - (float)yi;
-                    u32 X = xi & (u32)255;
-                    u32 Y = yi & (u32)255;
-                    u32 aa = perm[perm[X] + Y];
-                    u32 ab = perm[perm[X] + Y + (u32)1];
-                    u32 ba = perm[perm[X + (u32)1] + Y];
-                    u32 bb = perm[perm[X + (u32)1] + Y + (u32)1];
-                    float u = fade(xf);
-                    float v = fade(yf);
-                    float n = lerp(v, lerp(u, grad(aa, xf, yf), grad(ba, xf - 1.0f, yf)),
-                                   lerp(u, grad(ab, xf, yf - 1.0f), grad(bb, xf - 1.0f, yf - 1.0f)));
-                    sum = sum + n * amp;
-                    norm = norm + amp;
-                    amp = amp * 0.5f;
-                    x = x * 2.0f;
-                    y = y * 2.0f;
-                }
-                float s = (sum / norm) * 0.5f + 0.5f;
-                if (s < 0.0f)
-                    s = 0.0f;
-                if (s > 1.0f)
-                    s = 1.0f;
-                u32 p = (u32)(s * 255.0f);
-                img[i] = (u8)p;
-                total = total + p;
+                u32 xi = (u32)x;
+                u32 yi = (u32)y;
+                float xf = x - (float)xi;
+                float yf = y - (float)yi;
+                u32 X = xi & (u32)255;
+                u32 Y = yi & (u32)255;
+                u32 aa = perm[perm[X] + Y];
+                u32 ab = perm[perm[X] + Y + (u32)1];
+                u32 ba = perm[perm[X + (u32)1] + Y];
+                u32 bb = perm[perm[X + (u32)1] + Y + (u32)1];
+                float u = fade(xf);
+                float v = fade(yf);
+                float n = lerp(v, lerp(u, grad(aa, xf, yf), grad(ba, xf - 1.0f, yf)),
+                               lerp(u, grad(ab, xf, yf - 1.0f), grad(bb, xf - 1.0f, yf - 1.0f)));
+                sum = sum + n * amp;
+                norm = norm + amp;
+                amp = amp * 0.5f;
+                x = x * 2.0f;
+                y = y * 2.0f;
             }
+            float s = (sum / norm) * 0.5f + 0.5f;
+            if (s < 0.0f)
+                s = 0.0f;
+            if (s > 1.0f)
+                s = 1.0f;
+            u32 p = (u32)(s * 255.0f);
+            img[i] = (u8)p;
+            total = total + p;
         }
         i64 t1 = bench_now_us();
         if (rep == (u32)0)
@@ -3660,7 +3642,7 @@ i32 main(void)
 
 Y = a*x + y over 16M integers: one multiply-add per element and
 
-Lines: 48.
+Lines: 44.
 
 ```c
 // saxpy — y = a*x + y over 16M integers: one multiply-add per element and
@@ -3668,7 +3650,6 @@ Lines: 48.
 // copies in and out cost more than the work: this is the block auto keeps on
 // the CPU. Prints "<checksum> <best_us> <first_us>"; the checksum is exact.
 #import "Stdio.xc"
-#import "Par.xc"
 #import "../src/include/bench_time.xc"
 
 #define SIZE (16 * 1024 * 1024)
@@ -3693,14 +3674,11 @@ i32 main(void)
     {
         total = (u32)0;
         i64 t0 = bench_now_us();
-        par saxpy :reduce(+ total)
+        for (u32 i in 0..SIZE)
         {
-            for (u32 i in 0..SIZE)
-            {
-                u32 v = (u32)3 * xs[i] + ys[i];
-                ys[i] = v;
-                total = total + v;
-            }
+            u32 v = (u32)3 * xs[i] + ys[i];
+            ys[i] = v;
+            total = total + v;
         }
         i64 t1 = bench_now_us();
         if (rep == (u32)0)
