@@ -1040,19 +1040,19 @@ class MachOSha256
         u32 segSize = hasMi ? miAddr + mi.length() : text.length() + data.length();
         u32 strOff = symOff + order.count() * (u32)16;
 
-        Array* strtab = new Array();
-        strtab.add((Object*)Number.withU32((u32)0)); // index 0 is the empty string
+        Data* strtab = new Data();
+        strtab.appendByte((u8)0); // index 0 is the empty string
         Array* strx = new Array();
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             {
-            strx.add((Object*)Number.withU32(strtab.count()));
+            strx.add((Object*)Number.withU32(strtab.length()));
             String* n = (String*)order.get(i);
             for (u32 k = (u32)0; k < n.byteLength(); k = k + (u32)1)
-                strtab.add((Object*)Number.withU32((u32)n.byteAt(k)));
-            strtab.add((Object*)Number.withU32((u32)0));
+                strtab.appendByte(n.byteAt(k));
+            strtab.appendByte((u8)0);
             }
-        while ((strtab.count() & (u32)7) != (u32)0)
-            strtab.add((Object*)Number.withU32((u32)0));
+        while ((strtab.length() & (u32)7) != (u32)0)
+            strtab.appendByte((u8)0);
 
         _out = new Data();
         put32(MachO.MH_MAGIC_64());
@@ -1123,7 +1123,7 @@ class MachOSha256
         put32(symOff);
         put32(order.count());
         put32(strOff);
-        put32(strtab.count());
+        put32(strtab.length());
 
         put32((u32)$32);
         put32(buildCmd); // LC_BUILD_VERSION
@@ -1201,8 +1201,8 @@ class MachOSha256
                 }
             put64(value, (u32)0);
             }
-        for (u32 i = (u32)0; i < strtab.count(); i = i + (u32)1)
-            put8(((Number*)strtab.get(i)).asU32());
+        for (u32 i = (u32)0; i < strtab.length(); i = i + (u32)1)
+            put8((u32)strtab.byteAt(i));
         return _out;
         }
 
@@ -1717,8 +1717,8 @@ class MachOSha256
             else
                 locals.add((Object*)nm);
             }
-        Array* strtab = new Array();
-        Array* nlist = new Array();
+        Data* strtab = new Data();
+        Data* nlist = new Data();
         Array* indirect = new Array();
         dylibSymbolTables(symbols, dataSyms, locals, externs, exports,
                           strtab, nlist, indirect, textOffset, dataProgOffset, hasImp);
@@ -1746,14 +1746,14 @@ class MachOSha256
         u32 bindOff = rebaseOff + rebase.count();
         u32 exportOff = bindOff + bind.count();
         u32 symoff = exportOff + trie.count();
-        u32 indOff = symoff + nlist.count();
+        u32 indOff = symoff + nlist.length();
         u32 stroff = indOff + indirect.count();
         // LC_SYMTAB states the PADDED size — the padding is part of the table
         // as far as the loader is concerned, and stating the unpadded length
         // leaves the last few names outside what dyld will read.
-        u32 strsize = roundUp(strtab.count(), (u32)8);
-        while (strtab.count() < strsize)
-            strtab.add((Object*)Number.withU32((u32)0));
+        u32 strsize = roundUp(strtab.length(), (u32)8);
+        while (strtab.length() < strsize)
+            strtab.appendByte((u8)0);
 
         String* sigIdent = installName.lastPathComponent();
         if (sigIdent == (String*)0 || sigIdent.byteLength() == (u32)0)
@@ -2089,9 +2089,9 @@ class MachOSha256
         appendAll(rebase);
         appendAll(bind);
         appendAll(trie);
-        appendAll(nlist);
+        _out.append(nlist);
         appendAll(indirect);
-        appendAll(strtab);
+        _out.append(strtab);
         padTo(sigOffset);
         appendAll(adhocSignature(sigOffset, sigIdent, textSegEnd));
         padTo(linkeditOff + linkeditFilesz);
@@ -2104,11 +2104,11 @@ class MachOSha256
     // of the flat binding the bind stream asks for — or the ordinal of the
     // imported library that exports it.
     void dylibSymbolTables(Map* symbols, Array* dataSyms, Array* locals,
-                           Array* externs, Array* exports, Array* strtab,
-                           Array* nlist, Array* indirect,
+                           Array* externs, Array* exports, Data* strtab,
+                           Data* nlist, Array* indirect,
                            u32 textOffset, u32 dataProgOffset, bool hasImp)
         {
-        strtab.add((Object*)Number.withU32((u32)0));
+        strtab.appendByte((u8)0);
         u32 dataSect = (u32)1 + (hasImp ? (u32)1 : (u32)0) + (u32)1;
         for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1)
             {
@@ -2116,31 +2116,31 @@ class MachOSha256
             for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
                 {
                 String* nm = (String*)list.get(i);
-                u32 strx = strtab.count();
-                strInto(strtab, nm);
-                u32Into(nlist, strx);
-                nlist.add((Object*)Number.withU32(
+                u32 strx = strtab.length();
+                strIntoD(strtab, nm);
+                u32IntoD(nlist, strx);
+                nlist.appendByte((u8)(
                     (u32)$0E | (gMachOExportSet.contains((Hashable*)nm) ? (u32)$01 : (u32)0))); // N_SECT [| N_EXT]
-                nlist.add((Object*)Number.withU32(gMachODataSet.contains((Hashable*)nm)
+                nlist.appendByte((u8)(gMachODataSet.contains((Hashable*)nm)
                     ? (((Number*)symbols.get((Hashable*)nm)).asU32() >= gMachOBssFrom ? gMachOBssSect : dataSect)
                     : (u32)1));
-                nlist.add((Object*)Number.withU32((u32)0));
-                nlist.add((Object*)Number.withU32((u32)0));
-                u32Into(nlist, symOffset(symbols, dataSyms, nm, textOffset, dataProgOffset));
-                u32Into(nlist, (u32)0); // base 0
+                nlist.appendByte((u8)((u32)0));
+                nlist.appendByte((u8)((u32)0));
+                u32IntoD(nlist, symOffset(symbols, dataSyms, nm, textOffset, dataProgOffset));
+                u32IntoD(nlist, (u32)0); // base 0
                 }
             }
         for (u32 i = (u32)0; i < _imports.count(); i = i + (u32)1)
             {
-            u32 strx = strtab.count();
-            strInto(strtab, (String*)_imports.get(i));
-            u32Into(nlist, strx);
-            nlist.add((Object*)Number.withU32((u32)$01)); // N_UNDF | N_EXT
-            nlist.add((Object*)Number.withU32((u32)0));
-            nlist.add((Object*)Number.withU32((u32)0));
-            nlist.add((Object*)Number.withU32(ordinalFor((String*)_imports.get(i)))); // $FE: DYNAMIC_LOOKUP
-            u32Into(nlist, (u32)0);
-            u32Into(nlist, (u32)0);
+            u32 strx = strtab.length();
+            strIntoD(strtab, (String*)_imports.get(i));
+            u32IntoD(nlist, strx);
+            nlist.appendByte((u8)((u32)$01)); // N_UNDF | N_EXT
+            nlist.appendByte((u8)((u32)0));
+            nlist.appendByte((u8)((u32)0));
+            nlist.appendByte((u8)(ordinalFor((String*)_imports.get(i)))); // $FE: DYNAMIC_LOOKUP
+            u32IntoD(nlist, (u32)0);
+            u32IntoD(nlist, (u32)0);
             }
         u32 ndef = locals.count() + externs.count();
         for (u32 i = (u32)0; i < _imports.count(); i = i + (u32)1)
@@ -2211,8 +2211,8 @@ class MachOSha256
         Array* rebase = buildRebase(rebaseOffs, L.hasRebase);
         Array* bind = buildBind(L.gotOffInSeg, L.hasImp);
         Array* defNames = sortedByOffsetThenName(symbols);
-        Array* strtab = new Array();
-        Array* nlist = new Array();
+        Data* strtab = new Data();
+        Data* nlist = new Data();
         Array* indirect = new Array();
         buildSymbolTables(symbols, dataSyms, defNames, strtab, nlist, indirect,
                           L.textOffset, L.dataProgOffset, L.hasImp);
@@ -2225,15 +2225,15 @@ class MachOSha256
         L.bindLen = bind.count();
         L.symoff = L.bindOff + L.bindLen;
         L.nsyms = ndef + nimp;
-        L.indOff = L.symoff + nlist.count();
+        L.indOff = L.symoff + nlist.length();
         L.stroff = L.indOff + indirect.count();
-        L.strsizeRaw = roundUp(strtab.count(), (u32)8); // the PADDED size is what LC_SYMTAB states
+        L.strsizeRaw = roundUp(strtab.length(), (u32)8); // the PADDED size is what LC_SYMTAB states
         L.ndef = ndef;
         L.nimp = nimp;
         L.textLen = txt.length();
         L.dataLen = dat.length();
-        while (strtab.count() < L.strsizeRaw)
-            strtab.add((Object*)Number.withU32((u32)0));
+        while (strtab.length() < L.strsizeRaw)
+            strtab.appendByte((u8)0);
 
         // The signature sits at the end of __LINKEDIT and everything before it
         // is hashed, so its size has to be known BEFORE it is built.
@@ -2272,9 +2272,9 @@ class MachOSha256
         padTo(L.linkeditOff);
         appendAll(rebase);
         appendAll(bind);
-        appendAll(nlist);
+        _out.append(nlist);
         appendAll(indirect);
-        appendAll(strtab);
+        _out.append(strtab);
 
         // The ad-hoc signature hashes [0, sigOffset) a page at a time.
         padTo(L.sigOffset);
@@ -2753,41 +2753,41 @@ class MachOSha256
     // that tie to the table's own order would make the output depend on how the
     // map happened to hash.
     void buildSymbolTables(Map* symbols, Array* dataSyms, Array* defNames,
-                           Array* strtab, Array* nlist, Array* indirect,
+                           Data* strtab, Data* nlist, Array* indirect,
                            u32 textOffset, u32 dataProgOffset, bool hasImp)
         {
-        strtab.add((Object*)Number.withU32((u32)0));
+        strtab.appendByte((u8)0);
         u32 dataSect = (u32)1 + (hasImp ? (u32)1 : (u32)0) + (u32)1;
         for (u32 i = (u32)0; i < defNames.count(); i = i + (u32)1)
             {
             String* nm = (String*)defNames.get(i);
-            u32 strx = strtab.count();
-            strInto(strtab, nm);
-            u32Into(nlist, strx);
-            nlist.add((Object*)Number.withU32((u32)$0E)); // N_SECT
-            nlist.add((Object*)Number.withU32(gMachODataSet.contains((Hashable*)nm)
+            u32 strx = strtab.length();
+            strIntoD(strtab, nm);
+            u32IntoD(nlist, strx);
+            nlist.appendByte((u8)((u32)$0E)); // N_SECT
+            nlist.appendByte((u8)(gMachODataSet.contains((Hashable*)nm)
                 ? (((Number*)symbols.get((Hashable*)nm)).asU32() >= gMachOBssFrom ? gMachOBssSect : dataSect)
                 : (u32)1));
-            nlist.add((Object*)Number.withU32((u32)0));
-            nlist.add((Object*)Number.withU32((u32)0));
-            u32Into(nlist, symOffset(symbols, dataSyms, nm, textOffset, dataProgOffset));
-            u32Into(nlist, (u32)1); // VMBASE high half
+            nlist.appendByte((u8)((u32)0));
+            nlist.appendByte((u8)((u32)0));
+            u32IntoD(nlist, symOffset(symbols, dataSyms, nm, textOffset, dataProgOffset));
+            u32IntoD(nlist, (u32)1); // VMBASE high half
             }
         for (u32 i = (u32)0; i < _imports.count(); i = i + (u32)1)
             {
-            u32 strx = strtab.count();
-            strInto(strtab, (String*)_imports.get(i));
-            u32Into(nlist, strx);
-            nlist.add((Object*)Number.withU32((u32)$01)); // N_UNDF | N_EXT
-            nlist.add((Object*)Number.withU32((u32)0));
-            nlist.add((Object*)Number.withU32((u32)0));
+            u32 strx = strtab.length();
+            strIntoD(strtab, (String*)_imports.get(i));
+            u32IntoD(nlist, strx);
+            nlist.appendByte((u8)((u32)$01)); // N_UNDF | N_EXT
+            nlist.appendByte((u8)((u32)0));
+            nlist.appendByte((u8)((u32)0));
             // n_desc's high byte: the library ordinal — the one the bind
             // stream names for this symbol (ordinalFor), not always libSystem's
             // 1. The two disagreed for a GOT-reached import from libobjc; the
             // reference stamps the exporting dylib's ordinal here as well.
-            nlist.add((Object*)Number.withU32(ordinalFor((String*)_imports.get(i))));
-            u32Into(nlist, (u32)0);
-            u32Into(nlist, (u32)0);
+            nlist.appendByte((u8)(ordinalFor((String*)_imports.get(i))));
+            u32IntoD(nlist, (u32)0);
+            u32IntoD(nlist, (u32)0);
             }
         for (u32 i = (u32)0; i < _imports.count(); i = i + (u32)1)
             u32Into(indirect, defNames.count() + i);
@@ -2882,6 +2882,21 @@ class MachOSha256
             if (v == (u32)0)
                 return;
             }
+        }
+
+    // strInto and u32Into into a byte buffer: the symbol and string tables,
+    // which held a Number object per byte (some 50 MB of names linking xcc
+    // itself; #63).
+    static void strIntoD(Data* a, String* s)
+        {
+        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
+            a.appendByte(s.byteAt(i));
+        a.appendByte((u8)0);
+        }
+    static void u32IntoD(Data* a, u32 v)
+        {
+        for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
+            a.appendByte((u8)((v >> ((u32)8 * i)) & (u32)$FF));
         }
 
     static void strInto(Array* a, String* s)
