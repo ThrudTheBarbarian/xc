@@ -137,6 +137,7 @@ class Arm64
     bool       _lseAtomics;
     u32        _loopAlign;      // loop heads on 2^n bytes, 0 none (the row's loop-align)
     IRFunc*   _fn;
+    Array*    _innerBody;       // per block index: its innermost loop's body (indices), empty outside loops
     String*   _out;
     // The block emitted after the current one, for a branch that can fall
     // into it; and the out-of-line stubs of the function being emitted,
@@ -960,6 +961,7 @@ class Arm64
                 }
             }
         _coldStubs = String.withCString("");
+        _innerBody = innermostLoopBodies(fn);
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             if (((Number*)head.get(b)).asU32() != (u32)0)
@@ -3260,6 +3262,46 @@ class Arm64
                 ((Array*)preds.get((u32)ti)).add((Object*)Number.with((i32)si));
             }
         }
+    }
+
+    // For each block, the body of the innermost loop holding it (the smallest
+    // natural loop; the earliest header on a tie), or an empty array.
+    Array* innermostLoopBodies(IRFunc* fn)
+    {
+        u32 nb = fn.blocks().count();
+        Array* succs = new Array();
+        Array* preds = new Array();
+        buildCFG(fn, succs, preds);
+        Array* inner = new Array();
+        for (u32 i = (u32)0; i < nb; i = i + (u32)1)
+            inner.add((Object*)new Array());
+        for (u32 hi = (u32)0; hi < nb; hi = hi + (u32)1) {
+            Array* body = loopBodyOf(fn, succs, preds, hi);
+            if (body == (Array*)0) continue;
+            for (u32 k = (u32)0; k < body.count(); k = k + (u32)1) {
+                u32 b = (u32)((Number*)body.get(k)).asI32();
+                Array* had = (Array*)inner.get(b);
+                if (had.count() == (u32)0 || body.count() < had.count())
+                    inner.set(b, (Object*)body);
+            }
+        }
+        return inner;
+    }
+
+    // Does the edge from b to t leave b's innermost loop? On Apple's cores a
+    // cold stub is for a loop's exit, taken once: on an edge within the loop
+    // (an if-else's join) its jump out and back runs every pass (sieve on an
+    // M3 Max: 1.23 s to 1.58 s). A Cortex-A76 (the Pi 5) gains from the stub
+    // there too (sieve 4.59 s to 4.39 s), so arm64 Linux and Android keep it
+    // on every edge. An edge from outside any loop: yes.
+    bool edgeLeavesLoop(IRBlock* b, IRBlock* t)
+    {
+        i32 bi = blockIndexOf(_fn, b);
+        i32 ti = blockIndexOf(_fn, t);
+        if (bi < (i32)0 || ti < (i32)0 || _innerBody == (Array*)0)
+            return true;
+        Array* body = (Array*)_innerBody.get((u32)bi);
+        return body.count() == (u32)0 || !hasIdx(body, (u32)ti);
     }
 
     // A back edge L->H makes H a loop header; the body is H plus every block
@@ -7907,7 +7949,8 @@ class Arm64
             // edge does: branch out on the inverse to a stub that makes them,
             // and fall through. A rotated loop's back edge is then the only
             // branch it takes (sort_small's insertion loop on the Pi 5).
-            if (t == _nextBB && t != (IRBlock*)0 && !phiCopiesNeeded(t, _bb) && phiCopiesNeeded(f, _bb)) {
+            if (t == _nextBB && t != (IRBlock*)0 && !phiCopiesNeeded(t, _bb) && phiCopiesNeeded(f, _bb)
+                && (_aapcs64Abi || edgeLeavesLoop(_bb, f))) {
                 String* ls = labelFor(String.withCString("cold"), _labelCounter);
                 _labelCounter = _labelCounter + (u32)1;
                 _out.appendFormat("    b.%s %s\n", condString(negatePred(icmp.pred())).cString(), ls.cString());

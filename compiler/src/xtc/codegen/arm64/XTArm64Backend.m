@@ -45,6 +45,7 @@ static NSUInteger sArm64LoopAlign = 0;
 // its last block.
 @property (nonatomic, nullable) XTIRBlock *nextBlock;
 @property (nonatomic) NSMutableString *coldStubs;
+@property (nonatomic) NSArray<NSSet<NSNumber *> *> *innerBody;   // per block: its innermost loop's body
 @property (nonatomic) NSUInteger frameSize;   // bytes, multiple of 16
 @property (nonatomic) NSUInteger labelCounter;
 @property (nonatomic) NSArray<NSNumber *> *slotOffsets;  // valueId → sp offset
@@ -163,6 +164,59 @@ static NSString *XTArm64FpImmText(BOOL neg, uint32_t m, int e) {
     NSUInteger len = frac.length;
     while (len > 1 && [frac characterAtIndex:len - 1] == '0') len--;
     return [NSString stringWithFormat:@"%@%u.%@", neg ? @"-" : @"", n / 128u, [frac substringToIndex:len]];
+}
+
+// The port's innermostLoopBodies and edgeLeavesLoop: for each block, the body
+// of the innermost natural loop holding it (the smallest; the earliest header
+// on a tie), and whether an edge leaves it. A cold stub is for a loop's exit:
+// on an edge within the loop (an if-else's join) its jump out and back runs
+// every pass (sieve on an M3 Max: 1.23 s to 1.58 s).
+static NSArray<NSSet<NSNumber *> *> *innermostLoopBodies(XTIRFunction *fn) {
+    NSUInteger nb = fn.blocks.count;
+    NSMutableArray<NSMutableArray<NSNumber *> *> *preds = [NSMutableArray arrayWithCapacity:nb];
+    NSMutableArray<NSMutableArray<NSNumber *> *> *succs = [NSMutableArray arrayWithCapacity:nb];
+    for (NSUInteger i = 0; i < nb; i++) { [preds addObject:[NSMutableArray array]]; [succs addObject:[NSMutableArray array]]; }
+    for (NSUInteger si = 0; si < nb; si++) {
+        XTIRInsn *t = fn.blocks[si].terminator;
+        for (XTIROperand *o in t.operands) {
+            if (o.kind != XTIROperandKindBlock || !o.blockRef) continue;
+            NSUInteger ti = [fn.blocks indexOfObjectIdenticalTo:o.blockRef];
+            if (ti == NSNotFound) continue;
+            [succs[si] addObject:@(ti)];
+            [preds[ti] addObject:@(si)];
+        }
+    }
+    NSMutableArray<NSSet<NSNumber *> *> *inner = [NSMutableArray arrayWithCapacity:nb];
+    for (NSUInteger i = 0; i < nb; i++) [inner addObject:[NSSet set]];
+    for (NSUInteger hi = 0; hi < nb; hi++) {
+        NSMutableSet<NSNumber *> *body = nil;
+        for (NSUInteger li = 0; li < nb; li++) {
+            if (hi > li || ![succs[li] containsObject:@(hi)]) continue;
+            if (!body) body = [NSMutableSet setWithObject:@(hi)];
+            NSMutableArray<NSNumber *> *wl = [NSMutableArray arrayWithObject:@(li)];
+            while (wl.count) {
+                NSNumber *n = wl.lastObject; [wl removeLastObject];
+                if ([body containsObject:n]) continue;
+                [body addObject:n];
+                if (n.unsignedIntegerValue == hi) continue;
+                [wl addObjectsFromArray:preds[n.unsignedIntegerValue]];
+            }
+        }
+        if (!body) continue;
+        for (NSNumber *b in body) {
+            NSSet *had = inner[b.unsignedIntegerValue];
+            if (had.count == 0 || body.count < had.count) inner[b.unsignedIntegerValue] = [body copy];
+        }
+    }
+    return inner;
+}
+
+static BOOL edgeLeavesLoop(XTIRFunction *fn, NSArray<NSSet<NSNumber *> *> *inner, XTIRBlock *b, XTIRBlock *t) {
+    NSUInteger bi = [fn.blocks indexOfObjectIdenticalTo:b];
+    NSUInteger ti = [fn.blocks indexOfObjectIdenticalTo:t];
+    if (bi == NSNotFound || ti == NSNotFound || !inner) return YES;
+    NSSet *body = inner[bi];
+    return body.count == 0 || ![body containsObject:@(ti)];
 }
 
 @implementation XTArm64FnCtx
@@ -5827,7 +5881,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 // then the only branch it takes (sort_small's insertion loop
                 // on the Pi 5).
                 if (t.blockRef && t.blockRef == ctx.nextBlock &&
-                    !phiCopiesNeeded(t.blockRef, block) && phiCopiesNeeded(f.blockRef, block)) {
+                    !phiCopiesNeeded(t.blockRef, block) && phiCopiesNeeded(f.blockRef, block)
+                    && (sArm64Aapcs64Abi || edgeLeavesLoop(ctx.fn, ctx.innerBody, block, f.blockRef))) {
                     NSString *fnl = [ctx.fn.name stringByReplacingOccurrencesOfString:@"$" withString:@"_"];
                     NSString *Ls = [NSString stringWithFormat:@".L%@_cold_%lu", fnl, (unsigned long)ctx.labelCounter++];
                     XTIRICmpPredicate invp =
@@ -9188,6 +9243,7 @@ static BOOL arm64NamesFrameReg(NSString *t) {
         }
     }
     ctx.coldStubs = [NSMutableString string];
+    ctx.innerBody = innermostLoopBodies(fn);
     for (NSUInteger bix = 0; bix < fn.blocks.count; bix++) {
         XTIRBlock *block = fn.blocks[bix];
         ctx.nextBlock = bix + 1 < fn.blocks.count ? fn.blocks[bix + 1] : nil;
