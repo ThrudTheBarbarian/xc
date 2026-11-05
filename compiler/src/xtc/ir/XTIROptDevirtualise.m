@@ -707,6 +707,17 @@ static XTIROperand* memAtEnd(XTIRBlock* P, XTIRBlock* H)
         up = ups[0];
         memP = memAtEnd(up, H);
         }
+    // Up to the entry with nothing touching memory: the function's own memory
+    // parameter (its last) is the token.
+    if (!memP && predsIn(preds, up).count == 0)
+        {
+        // Values print parameters first, the memory token last of them.
+        NSArray<XTIRValue*>* vals = [_fn valuesInPrintOrder];
+        NSUInteger np = _fn.paramTypes.count;
+        XTIRValue* lp = np > 0 && np <= vals.count ? vals[np - 1] : nil;
+        if (lp && lp.type.kind == XTIRTypeKindMemory)
+            memP = [XTIROperand useWithValueId:lp.valueId];
+        }
     if (!memP)
         return NO;
     [_done addObject:d];

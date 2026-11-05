@@ -511,6 +511,14 @@
             up = (IRBlock*)ups.get((u32)0);
             memP = dvMemAtEnd(up, H);
             }
+        // Up to the entry with nothing touching memory: the function's own
+        // memory parameter (its last) is the token.
+        if (memP == (IROperand*)0 && self.lrcPredsIn(preds, up).count() == (u32)0 && fn.params().count() > (u32)0)
+            {
+            IRValue* lp = (IRValue*)fn.params().get(fn.params().count() - (u32)1);
+            if (lp.ty() != (String*)0 && lp.ty().equals(String.withCString("Mem")))
+                memP = IROperand.useVal(lp);
+            }
         if (memP == (IROperand*)0)
             return false;
         _dvDone.add((Object*)d);

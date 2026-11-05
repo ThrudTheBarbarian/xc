@@ -11,6 +11,8 @@
 #   (c) the four classes there include OpKeep, which inherits OpMul's method:
 #       its own vtable is a candidate (`_c3`) and it prints the right value;
 #   (d) runD: a method with a loop is not a small leaf: no `_dv` block.
+#   (e) runE: (a) with the loop at the function's very entry, where the memory
+#       token is the function's own parameter.
 #
 # Both compilers write the same assembly (arm64 Linux and x86-64 Linux; macOS
 # on a Mac), and built for this machine with -O0 (no devirtualisation) and
@@ -40,11 +42,19 @@ class Bigger : Big { void init(u32 x) { super.init(x); } u32 work(u32 v) { retur
 
 u32 gCalls;
 
-// (a) The store gives the block before the loop a memory token: a loop at the
-// very entry of a function is not versioned yet.
+// (a) A store before the loop: the token comes from it.
 u32 runA(Shape* s, u32 n)
     {
     gCalls = gCalls + (u32)1;
+    u32 acc = (u32)0;
+    for (u32 r = (u32)0; r < n; r++)
+        acc = acc + s.score(r);
+    return acc;
+    }
+
+// (e) The loop at the very entry: the token is the function's own.
+u32 runE(Shape* s, u32 n)
+    {
     u32 acc = (u32)0;
     for (u32 r = (u32)0; r < n; r++)
         acc = acc + s.score(r);
@@ -86,12 +96,14 @@ i32 main(i32 argc, u8** argv)
     Big* b1 = new Big(seed + (u32)3);
     Big* b2 = new Bigger(seed + (u32)4);
     Stdio.printf("a %lu %lu\n", runA(s1, (u32)1000), runA(s2, (u32)1000));
+    Stdio.printf("e %lu %lu\n", runE(s1, (u32)1000), runE(s2, (u32)1000));
     Stdio.printf("b %lu\n", runB((Op**)ops, (u32)100));
     Stdio.printf("d %lu %lu\n", runD(b1, (u32)100), runD(b2, (u32)100));
     return 0;
     }
 EOF
 WANT='a 499500 500564
+e 499500 500564
 b 1051777601
 d 404950 5450'
 
@@ -115,12 +127,14 @@ for A in $TARGETS; do
         echo "FAIL -A $A: the two compilers write different assembly"; fail=1
     fi
     s="$W/d.$A.xcc-xc.s"
-    body "$s" runA > "$W/a"; body "$s" runB > "$W/b"; body "$s" runD > "$W/d"
+    body "$s" runA > "$W/a"; body "$s" runB > "$W/b"; body "$s" runD > "$W/d"; body "$s" runE > "$W/e"
     # (a) copies exist, and none makes an indirect call.
     nv=$(grep -cE '_dv[0-9]+_v[0-9]+[^:]*:$' "$W/a")
     ind=$(awk '/:$/ { c = ($0 ~ /_dv[0-9]+_v[0-9]+/) } c && /(^|[[:space:]])blr[[:space:]]|call[[:space:]]+(r[0-9a-z]+|qword|\*)/ { n++ } END { print n + 0 }' "$W/a")
     [ "$nv" -ge 2 ] || { echo "FAIL -A $A: runA is not versioned ($nv copy blocks)"; fail=1; }
     [ "$ind" = 0 ] || { echo "FAIL -A $A: $ind indirect calls in runA's class copies"; fail=1; }
+    ne=$(grep -cE '_dv[0-9]+_v[0-9]+[^:]*:$' "$W/e")
+    [ "$ne" -ge 2 ] || { echo "FAIL -A $A: runE (a loop at the function's entry) is not versioned ($ne copy blocks)"; fail=1; }
     # (b), (c) the test chain over four classes and the fallback.
     grep -qE '_dv[0-9]+_c3:$' "$W/b" || { echo "FAIL -A $A: runB has no test for a fourth class (OpKeep)"; fail=1; }
     grep -qE '_dv[0-9]+_virt:$' "$W/b" || { echo "FAIL -A $A: runB has no fallback dispatch"; fail=1; }
