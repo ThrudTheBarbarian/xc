@@ -5,7 +5,7 @@ The same C files (benchmark/par/c/*.c, undecorated) built by xcc, and, for
 OpenMP, the copies in benchmark/par/c/openmp/ with one `#pragma omp` line each,
 built by GCC and clang. Two comparisons, never mixed:
 
-  one thread     xcc -O3 (no --par-style=auto)  against  gcc / clang -O3 -march=native
+  one thread     xcc -O3 --par-style=cpu (no lifting)  against  gcc / clang -O3 -march=native
   every thread   xcc -O3 --par-style=auto, on the CPU (XC_PAR=cpu)
                                           against  gcc / clang -O3 -march=native -fopenmp
 
@@ -85,7 +85,10 @@ def main():
         xcc = [common.xcc_path()] + common.xcc_home_args() + common.bench_flags()
     for b in benches:
         src = os.path.join(CDIR, b + ".c")
-        for tag, extra in (("xcc-one", []), ("xcc-all", ["--par-style=auto"])):
+        # One thread is --par-style=cpu: since 0.9.2 lifting is the default,
+        # so a build with no flag ran its loops on every thread (or the GPU)
+        # and the "one thread" column compared that with gcc's single thread.
+        for tag, extra in (("xcc-one", ["--par-style=cpu"]), ("xcc-all", ["--par-style=auto"])):
             out = os.path.join(work, "%s.%s" % (b, tag))
             r = subprocess.run(xcc + ["-q", "-A", arch, "-O3"] + extra + ["-o", out, src],
                                capture_output=True, text=True)

@@ -42,10 +42,20 @@ CHANGED_IN = {"arc_alloc": "v0.64-langs", "method_call": "v0.64-langs"}
 # compiler recognises and replaces would otherwise swing a mean that stands
 # for general code.
 SEPARATE = ("matrix_mul_f32",)
+# Benchmarks that measure whether a compiler finds that an outer loop repeats
+# the same work (int_muldiv_hoist, array_sum_hoist): a compiler that does
+# runs them in microseconds, so a ratio says nothing and they are kept out of
+# every mean; the tables say the repetition was removed.
+ANALYSIS = ("int_muldiv_hoist", "array_sum_hoist")
 
 
 def general(cur):
-    return {b: d for b, d in cur.items() if b not in SEPARATE}
+    return {b: d for b, d in cur.items() if b not in SEPARATE and b not in ANALYSIS}
+
+
+def removed(x):
+    """An analysis benchmark's xc time, when the compiler removed the repetition."""
+    return x is not None and x < 0.001
 
 
 # --mac m3max: the arm64 figures come from benchmark/m3max-<v>/ (measured on
@@ -307,7 +317,8 @@ def history_chart(hist, suffix, title, versions):
         if vals[0]:
             # Speed relative to the first release: above 1 is faster.
             series[b] = [None if not x else vals[0] / x for x in vals]
-    geo = [gmean([s[i] for b, s in series.items() if s[i] and b not in SEPARATE]) for i in range(len(versions))]
+    geo = [gmean([s[i] for b, s in series.items() if s[i] and b not in SEPARATE and b not in ANALYSIS])
+           for i in range(len(versions))]
     w, h, left, right, top, bottom = 720, 300, 60, 560, 24, 262
     # The y range fits the data, kept at least 0.8..1.25 so a quiet history
     # still reads as quiet rather than being stretched into drama.
@@ -373,7 +384,11 @@ def table(cur, suffix):
            "|---|---|---|---|---|---|---|"]
     for r, b, d in rows:
         cells = ["%.2f" % d[k + suffix] if d.get(k + suffix) else "–" for k in ("xc", "objc", "cpp", "gcc", "swift")]
-        out.append("| [`%s`](%s#%s) | %s | **%s** |" % (b, SOURCES_URL, b, " | ".join(cells), speed(r)))
+        verdict = "**%s**" % speed(r)
+        if b in ANALYSIS and removed(d.get("xc" + suffix)):
+            cells[0] = "< 0.001"
+            verdict = "repetition removed"
+        out.append("| [`%s`](%s#%s) | %s | %s |" % (b, SOURCES_URL, b, " | ".join(cells), verdict))
     return "\n".join(out)
 
 
@@ -392,7 +407,7 @@ def pi_section(version):
         r = by_opt.get("O3") or {}
         x = r.get("xc_pi")
         others = [r[k] for k in ("cpp_pi", "gcc_pi") if r.get(k)]
-        if x and others:
+        if (x or (b in ANALYSIS and x is not None)) and others:
             rows.append((x / min(others), b, r))
     if not rows:
         return ""
@@ -409,13 +424,17 @@ def pi_section(version):
            "|---|---|---|---|---|"]
     for r, b, v in rows:
         cells = ["%.2f" % v[k] if v.get(k) else "–" for k in ("xc_pi", "cpp_pi", "gcc_pi")]
-        out.append("| [`%s`](%s#%s) | %s | **%s** |" % (b, SOURCES_URL, b, " | ".join(cells), speed(r)))
+        verdict = "**%s**" % speed(r)
+        if b in ANALYSIS and removed(v.get("xc_pi")):
+            cells[0] = "< 0.001"
+            verdict = "repetition removed"
+        out.append("| [`%s`](%s#%s) | %s | %s |" % (b, SOURCES_URL, b, " | ".join(cells), verdict))
     # The means are per compiler, as the summary above gives them for the
     # other machines: xc against clang++, and against g++ (a mean against
     # "the faster of the two" per benchmark is a harder measure, and not the
     # one the other platforms are given).
     def mean_vs(k):
-        rs = [v["xc_pi"] / v[k] for _, _, v in rows if v.get(k)]
+        rs = [v["xc_pi"] / v[k] for _, b, v in rows if v.get(k) and b not in ANALYSIS]
         return speed(gmean(rs)) if rs else "–"
     out.append("")
     out.append("Geometric mean of xc's times against each: **%s** than clang++, **%s** than g++." % (
@@ -1257,17 +1276,21 @@ until the machine is otherwise idle.
 ## Summary
 
 How much faster xc's code runs than each language's, as the geometric mean
-over nineteen of the twenty benchmarks:
+over nineteen of the twenty-two benchmarks:
 
 {summary}
 
 {standing}
 
-The twentieth benchmark, `matrix_mul_f32`, is kept out of those means. xcc
-recognises its loop nest and replaces it with a matrix kernel of its own, which
-makes xc tens to hundreds of times faster at that one operation; counted in, it would
+Three benchmarks are kept out of those means. xcc recognises the loop nest of
+`matrix_mul_f32` and replaces it with a matrix kernel of its own, which makes xc
+tens to hundreds of times faster at that one operation; counted in, it would
 dominate means that stand for ordinary code, and most programs do not multiply
 matrices. Its figures are under [Matrix multiplies](#matrix-multiplies).
+`int_muldiv_hoist` and `array_sum_hoist` measure whether a compiler notices that
+an outer loop repeats the same work on every pass. xcc does, and runs both in
+microseconds, so their ratios say nothing about ordinary code; the tables show
+them as "repetition removed".
 
 ## Per benchmark
 
@@ -1302,10 +1325,7 @@ gain:
   without retaining them.
 - **x86-64 loops and calls.** `sieve` and `sort_small`, where clang's loops
   are still tighter (in 0.74 `sort_small` was 2.6× behind; 0.75 rotates its
-  inner loop), `call_depth`, where clang's call sequence is shorter, and
-  `int_muldiv_hoist`, where GCC moves the arithmetic that does not depend on
-  the repetition out of it (`int_muldiv` changes the value every pass, so
-  nothing can be moved).
+  inner loop), and `call_depth`, where clang's call sequence is shorter.
 
 ## Matrix multiplies
 
