@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<PhoronixTestSuite>
+  <ResultsParser>
+    <OutputTemplate>Best run: #_RESULT_# ms</OutputTemplate>
+    <LineHint>Best run</LineHint>
+  </ResultsParser>
+  <ResultsParser>
+    <OutputTemplate>First run: #_RESULT_# ms</OutputTemplate>
+    <LineHint>First run</LineHint>
+    <AppendToArgumentsDescription>First Run</AppendToArgumentsDescription>
+    <ResultScale>ms</ResultScale>
+    <ResultProportion>LIB</ResultProportion>
+  </ResultsParser>
+</PhoronixTestSuite>
