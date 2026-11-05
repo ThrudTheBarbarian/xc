@@ -350,6 +350,23 @@ i64 gParDevGenNext(void)
     return gParDevGenClock;
 }
 
+// A page-aligned heap block's once hook (rt-freestanding.c, _xtc_dealloc)
+// is shared by every GPU runtime that holds the block (CUDA registers it,
+// Vulkan imports it in place): each names what to drop when it goes, and the
+// one hook the header carries calls them all.
+typedef void parFreeHook_t(pointer payload);
+#define PAR_DEV_FREE_HOOKS 4
+parFreeHook_t* gParDevFreeHook[PAR_DEV_FREE_HOOKS];
+void parDeviceBlockFreed(pointer payload)
+{
+    for (u32 i = (u32)0; i < (u32)PAR_DEV_FREE_HOOKS; i = i + (u32)1)
+    {
+        parFreeHook_t* h = gParDevFreeHook[i];
+        if (h != (parFreeHook_t*)0)
+            h(payload);
+    }
+}
+
 class ParDevice
     {
     static i32 _mode;            // XC_PAR: 0 unread, 1 cpu, 2 gpu, 3 auto, 4 unset
@@ -1433,6 +1450,31 @@ class ParDevice
     static bool simdBlock(pointer host)
         {
         return host != (pointer)0 && simdBase(host) == host;
+        }
+
+    // drop hears when the block at base goes, if it is a heap block of its
+    // own pages: a global with pages of its own has no header (the bytes
+    // before it are the previous global's) and is never freed.
+    static void onFree(pointer base, parFreeHook_t* drop)
+        {
+        if (base == (pointer)0 || *(u32*)(pointer)((u8*)base - (u64)8) != (u32)$58544F43)
+            return;
+        u32 at = (u32)PAR_DEV_FREE_HOOKS;
+        for (u32 i = (u32)0; i < (u32)PAR_DEV_FREE_HOOKS; i = i + (u32)1)
+            {
+            if (gParDevFreeHook[i] == drop)
+                {
+                at = i;
+                break;
+                }
+            if (gParDevFreeHook[i] == (parFreeHook_t*)0 && at == (u32)PAR_DEV_FREE_HOOKS)
+                at = i;
+            }
+        if (at == (u32)PAR_DEV_FREE_HOOKS)
+            return;
+        gParDevFreeHook[at] = drop;
+        parFreeHook_t* h = &parDeviceBlockFreed;
+        *(pointer*)((u8*)base - (u64)24) = (pointer)h;
         }
 
     // The block at host's generation, watched from here on: -1 when it

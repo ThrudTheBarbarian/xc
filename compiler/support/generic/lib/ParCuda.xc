@@ -85,7 +85,6 @@ i64 gParCuRegClock;
 // registration never outlives the memory, where a range held only by this
 // cache did. The single-shot path pins its arrays the same way, so its
 // copies are DMA rather than a copy into the driver's staging first.
-typedef void parUnpin_t(pointer payload);
 void parCudaUnpin(pointer payload);
 // Resident data (par-blocks.md §3): after an upload the runtime WATCHES the
 // block — its pages read-only, the first host write faulting and absorbed —
@@ -688,10 +687,7 @@ class ParCuda
         gParCuRegLen[slot] = bytes;
         gParCuRegUsed[slot] = gParCuRegClock;
         if (base != (pointer)0)
-            {
-            parUnpin_t* hook = &parCudaUnpin;
-            *(pointer*)((u8*)base - (u64)24) = (pointer)hook;
-            }
+            ParDevice.onFree(base, &parCudaUnpin);
         return true;
         }
 
