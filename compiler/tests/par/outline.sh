@@ -84,7 +84,7 @@ i32 main(void)
     for (u32 i in 0..N)
         mix = mix ^ a[i];
     u32 odd = (u32)1;
-    for (u32 i in 0..64)
+    for (u32 i in 0..4096)
         odd = odd * ((a[i] | (u32)1) & (u32)7);
     b[0] = (u32)1;
     for (u32 i in 1..N)
