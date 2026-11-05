@@ -41,6 +41,13 @@ ux_mac_run() {
     _dir=$(dirname "$_bin")
     _rdir=$(ssh -o BatchMode=yes "$UX_MAC_GUI_HOST" 'mktemp -d') || { echo "FAIL: $UX_MAC_GUI_HOST unreachable"; return 1; }
     scp -qr "$_dir/." "$UX_MAC_GUI_HOST:$_rdir/"
+    # From xcc 0.9.2 a program loads @rpath/libRuntime.dylib, found beside it or in the xcc that built
+    # it; the other Mac may not have that xcc, so the runtime goes with the program, as a user ships it.
+    if [ ! -f "$_dir/libRuntime.dylib" ]; then
+        _rt=$(otool -l "$_bin" 2>/dev/null | awk '/LC_RPATH/ { r = 1 } r && $1 == "path" { print $2; r = 0 }' |
+            while read -r _p; do [ -f "$_p/libRuntime.dylib" ] && { echo "$_p/libRuntime.dylib"; break; }; done)
+        [ -n "$_rt" ] && scp -q "$_rt" "$UX_MAC_GUI_HOST:$_rdir/"
+    fi
     _envs=$( (env | grep '^UX_' | grep -v '^UX_MAC_GUI_HOST=' || true; for _v in $_vars; do echo "$_v"; done) |
         sed -e "s|$_dir|$_rdir|g" -e "s/'/'\\\\''/g" -e "s/^\([^=]*\)=\(.*\)$/\1='\2'/" | tr '\n' ' ')
     _run="env $_envs DYLD_LIBRARY_PATH=$_rdir ./$(basename "$_bin") $*"
