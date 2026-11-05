@@ -28,6 +28,11 @@
 // its nlist names section gMachOBssSect. The writers set these per image; with
 // no bss gMachOBssFrom is $FFFFFFFF and nothing maps.
 u32 gMachOBssFrom;
+// The image's data symbols and exports as sets, made when executable() or
+// dylib() starts: a link asks about them once per fixup and once per symbol,
+// and scanning the lists each time made linking xcc itself quadratic (#63).
+Set* gMachODataSet;
+Set* gMachOExportSet;
 u32 gMachOBssBase;
 u32 gMachOBssSect;
 
@@ -1346,6 +1351,8 @@ class MachOSha256
                     Array* objcSects, u32 bssLength)
         {
         _objcSects = objcSects;
+        gMachODataSet = Set.withArray(dataSyms);
+        gMachOExportSet = new Set();
         bool hasData = data.length() > (u32)0;
         bool hasBss = bssLength > (u32)0;
         gMachOBssFrom = hasBss ? data.length() : (u32)$FFFFFFFF;
@@ -1563,6 +1570,8 @@ class MachOSha256
                u32 modInitLength, Array* objcSects, u32 bssLength)
         {
         _objcSects = objcSects;
+        gMachODataSet = Set.withArray(dataSyms);
+        gMachOExportSet = Set.withArray(exports);
         _dataSegIdx = (u32)1; // no __PAGEZERO: __TEXT=0, __DATA=1
         _baseHi = (u32)0;     // based at 0; the loader slides it
         _flatBind = true;
@@ -1703,7 +1712,7 @@ class MachOSha256
         for (u32 i = (u32)0; i < defNames.count(); i = i + (u32)1)
             {
             String* nm = (String*)defNames.get(i);
-            if (inArray(exports, nm))
+            if (gMachOExportSet.contains((Hashable*)nm))
                 externs.add((Object*)nm);
             else
                 locals.add((Object*)nm);
@@ -2111,8 +2120,8 @@ class MachOSha256
                 strInto(strtab, nm);
                 u32Into(nlist, strx);
                 nlist.add((Object*)Number.withU32(
-                    (u32)$0E | (inArray(exports, nm) ? (u32)$01 : (u32)0))); // N_SECT [| N_EXT]
-                nlist.add((Object*)Number.withU32(inArray(dataSyms, nm)
+                    (u32)$0E | (gMachOExportSet.contains((Hashable*)nm) ? (u32)$01 : (u32)0))); // N_SECT [| N_EXT]
+                nlist.add((Object*)Number.withU32(gMachODataSet.contains((Hashable*)nm)
                     ? (((Number*)symbols.get((Hashable*)nm)).asU32() >= gMachOBssFrom ? gMachOBssSect : dataSect)
                     : (u32)1));
                 nlist.add((Object*)Number.withU32((u32)0));
@@ -2164,7 +2173,7 @@ class MachOSha256
         {
         Object* o = symbols.get((Hashable*)nm);
         u32 off = o == (Object*)0 ? (u32)0 : ((Number*)o).asU32();
-        if (!inArray(dataSyms, nm))
+        if (!gMachODataSet.contains((Hashable*)nm))
             return textOffset + off;
         // past the data blob: a __bss symbol (bug 642)
         return off >= gMachOBssFrom ? gMachOBssBase + (off - gMachOBssFrom) : dataProgOffset + off;
@@ -2756,7 +2765,7 @@ class MachOSha256
             strInto(strtab, nm);
             u32Into(nlist, strx);
             nlist.add((Object*)Number.withU32((u32)$0E)); // N_SECT
-            nlist.add((Object*)Number.withU32(inArray(dataSyms, nm)
+            nlist.add((Object*)Number.withU32(gMachODataSet.contains((Hashable*)nm)
                 ? (((Number*)symbols.get((Hashable*)nm)).asU32() >= gMachOBssFrom ? gMachOBssSect : dataSect)
                 : (u32)1));
             nlist.add((Object*)Number.withU32((u32)0));
@@ -2900,26 +2909,28 @@ class MachOSha256
         be32Into(a, lo);
         }
 
+    // The names by offset, then by name. Each is sorted as its offset in
+    // eight hex digits followed by the name, whose plain order is that order;
+    // an insertion sort over the names, two map lookups a comparison, took
+    // minutes linking xcc itself (#63).
     static Array* sortedByOffsetThenName(Map* symbols)
         {
-        Array* keys = symbols.allKeys();
-        for (u32 i = (u32)1; i < keys.count(); i = i + (u32)1)
+        Array* names = symbols.allKeys();
+        Array* keyed = new Array();
+        Map* nameOf = new Map();
+        for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
             {
-            Object* v = keys.get(i);
-            u32 vo = ((Number*)symbols.get((Hashable*)(String*)v)).asU32();
-            u32 j = i;
-            while (j > (u32)0)
-                {
-                String* p = (String*)keys.get(j - (u32)1);
-                u32 po = ((Number*)symbols.get((Hashable*)p)).asU32();
-                bool after = po > vo || (po == vo && p.compare((String*)v) > (i32)0);
-                if (!after)
-                    break;
-                keys.set(j, keys.get(j - (u32)1));
-                j = j - (u32)1;
-                }
-            keys.set(j, v);
+            String* nm = (String*)names.get(i);
+            String* k = new String();
+            k.appendFormat("%08x", ((Number*)symbols.get((Hashable*)nm)).asU32());
+            k.append(nm);
+            keyed.add((Object*)k);
+            nameOf.set((Hashable*)k, (Object*)nm);
             }
-        return keys;
+        keyed.sort();
+        Array* out = new Array();
+        for (u32 i = (u32)0; i < keyed.count(); i = i + (u32)1)
+            out.add(nameOf.get((Hashable*)keyed.get(i)));
+        return out;
         }
     }
