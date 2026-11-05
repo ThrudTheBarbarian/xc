@@ -779,6 +779,20 @@ class LlvmReader
         if (have != (String*)0)
             return have;
         String* n = llName.substringFromByte((u32)1);
+        // An assembler label (`@"\01_fwrite"`: a macOS header's __DARWIN_ALIAS
+        // or asm("...")) is that symbol exactly: on Mach-O its leading
+        // underscore is the one every C name has, which the back end adds.
+        if (n.hasPrefix(String.withCString("\"\\01")) && n.byteLength() > (u32)5 && n.byteAt(n.byteLength() - (u32)1) == (u8)'"')
+            {
+            String* lit = n.substringBytes((u32)4, n.byteLength() - (u32)5);
+            if (lit.hasPrefix(String.withCString("_")))
+                lit = lit.substringFromByte((u32)1);
+            if (lit.byteLength() > (u32)0 && lit.indexOfByte((u8)'.') == (u32)$FFFFFFFF && lit.indexOfByte((u8)'"') == (u32)$FFFFFFFF)
+                {
+                _globals.set((Hashable*)llName, (Object*)lit);
+                return lit;
+                }
+            }
         if (n.hasPrefix(String.withCString("\"")) || n.indexOfByte((u8)'.') != (u32)$FFFFFFFF)
             {
             _strN = _strN + (u32)1;
