@@ -103,6 +103,7 @@ class OptProfile
     bool _pointerIV;       // loop array addressing becomes an advancing phi
     bool _unrollVarTrip;   // …and a variable-trip loop partially unrolls
     bool _unrollChains;    // …and so does a loop of independent vector chains (#8)
+    bool _devirtualise;    // a virtual call in a loop tests the receiver's class (OptDevirt)
     bool _licm;            // loop-invariant code moves to the preheader
     bool _hoistGlobalAddr; // …and a repeated AddrOf @sym dedupes to the entry
     bool _hoistLocalAddr;  // …and a repeated AddrOf of a pinned LOCAL (arm64)
@@ -372,6 +373,8 @@ class OptProfile
         // instructions a step instead of three (#8: 8 chains on a Pi 5,
         // 42.5 GFLOPS bound by the moves).
         p._unrollChains = t.equals(String.withCString("arm64"));
+        // Guarded devirtualisation on the 64-bit targets (OptDevirt).
+        p._devirtualise = t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
         // LICM is on for every live target, and so now is the global-address
         // hoist. It was off on wasm32 because a data address IS an i32 const —
         // true, and it still pays, just not in the column that was watched:
@@ -537,6 +540,11 @@ class OptProfile
     bool unrollChains(void)
         {
         return _unrollChains;
+        }
+
+    bool devirtualise(void)
+        {
+        return _devirtualise;
         }
     bool licm(void)
         {
@@ -1636,6 +1644,9 @@ class BeFact : Object
     IRInsn* _ucIv;         // unrollChainLoops: the counter phi, its add and its compare
     IRInsn* _ucNext;
     IRInsn* _ucCmp;
+    Array* _dvDone;        // devirtualise: the sites already rewritten (each keeps its dispatch)
+    u32 _dvSeq;            // its block names' counter
+    IRModule* _dvModule;
 
     IRInsn* _vtIvPhi;
     IRInsn* _vtGuard;

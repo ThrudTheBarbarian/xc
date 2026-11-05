@@ -5,3 +5,9 @@
 #define VEC_SPLAT_BIG_BODY 96
 #define GPU_GLOBAL_MIN 65536
 #define GPU_GLOBAL_PAGE 16384
+
+// OptDevirt: at most this many candidate classes at a site, each method at
+// most this many instructions.
+#define DV_MAX 4
+#define DV_BODY 24
+#define DV_LOOP 64

@@ -33,6 +33,7 @@
 #import <OptBlockLayout>
 #import <OptBlockMerge>
 #import <OptDeadCode>
+#import <OptDevirt>
 #import <OptReassociate>
 #import <OptRedundantLoadCSE>
 #import <OptVectorizeParts>
@@ -567,6 +568,13 @@
         // the classic `a < b ? a : b`. Once if-conversion + mem2reg have turned
         // those diamonds into Selects the helper is a single-block leaf and
         // inlines here. perlin's grad() is exactly this shape.
+        //
+        // Devirtualisation first, so the direct calls it makes are inlined
+        // here; the methods are single-block leaves by now.
+        if (_level >= (u32)2)
+            self.devirtualise(m);
+        if (stopHere(String.withCString("devirtualise")))
+            return;
         if (_level >= (u32)2)
             self.inlineLeaves(m);
         if (_failed)

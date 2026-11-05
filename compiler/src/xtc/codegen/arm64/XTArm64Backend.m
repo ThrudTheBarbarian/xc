@@ -3342,6 +3342,9 @@ static BOOL arm64LogicalImm(uint64_t v, int width) {
     NSMutableArray<XTIROperand *> *srcs = [NSMutableArray array];
     for (XTIRInsn *phi in successor.phiNodes) {
         if (phi.opcode != XTIROpPhi) continue;
+        // A memory token orders effects and holds no value: no copy (a
+        // devirtualised call's join had one, copied through the frame).
+        if (phi.result && phi.result.type.kind == XTIRTypeKindMemory) continue;
         // Vector phis (reduction accumulators) are usually coalesced onto one
         // v-register at function-emit start (same register ⇒ no-op), and must
         // never route through the w16 scalar scratch below. But a SHARED
@@ -3482,6 +3485,7 @@ static BOOL phiCopiesNeeded(XTIRBlock *target, XTIRBlock *from) {
     if (!target) return NO;
     for (XTIRInsn *phi in target.phiNodes) {
         if (phi.opcode != XTIROpPhi) continue;
+        if (phi.result && phi.result.type.kind == XTIRTypeKindMemory) continue;
         for (NSUInteger k = 0; k + 1 < phi.operands.count; k += 2)
             if (phi.operands[k].kind == XTIROperandKindBlock &&
                 phi.operands[k].blockRef == from) return YES;

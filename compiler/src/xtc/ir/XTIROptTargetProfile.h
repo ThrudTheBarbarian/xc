@@ -211,6 +211,10 @@ NS_ASSUME_NONNULL_BEGIN
 // SLOWER: its allocator gives the threaded values fresh registers and the back
 // edge becomes a run of moves, so it stays off there until that is fixed.
 - (BOOL)rotatesChainLoops;
+// YES to devirtualise a virtual call in a loop: test the receiver's class
+// against the few classes with a method in the slot, call that method
+// directly where one matches (XTIROptDevirtualise). The 64-bit targets.
+- (BOOL)devirtualises;
 
 // YES to if-convert a short-circuit / predicate diamond into branchless
 // straight-line boolean algebra. A header CondBranch whose taken arm is a

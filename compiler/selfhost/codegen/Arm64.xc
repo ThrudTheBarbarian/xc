@@ -7624,6 +7624,9 @@ class Arm64
         for (u32 i = (u32)0; i < to.phis().count(); i = i + (u32)1) {
             IRInsn* phi = (IRInsn*)to.phis().get(i);
             if (!phi.op().equals(String.withCString("Phi"))) continue;
+            // A memory token orders effects and holds no value: no copy (a
+            // devirtualised call's join had one, copied through the frame).
+            if (phi.res() != (IRValue*)0 && isMemTy(phi.res().ty())) continue;
             // A vector phi is usually a reduction accumulator coalesced onto
             // one v-register at function-emit start (same register ⇒ no-op),
             // and must never route through the w16 scalar scratch below. But a
@@ -7859,6 +7862,7 @@ class Arm64
         for (u32 i = (u32)0; i < target.phis().count(); i = i + (u32)1) {
             IRInsn* phi = (IRInsn*)target.phis().get(i);
             if (!phi.op().equals(String.withCString("Phi"))) continue;
+            if (phi.res() != (IRValue*)0 && isMemTy(phi.res().ty())) continue;
             if (phiSourceFrom(phi, from) != (IROperand*)0) return true;
         }
         return false;

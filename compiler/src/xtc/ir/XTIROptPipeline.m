@@ -14,6 +14,7 @@
 #import "XTIROptRedundantLoadCSE.h"
 #import "XTIROptDeadCode.h"
 #import "XTIROptStaticInitGuard.h"
+#import "XTIROptDevirtualise.h"
 #import "XTIROptPowSquare.h"
 #import "XTIROptSqrtIntrinsic.h"
 #import "XTIROptConstHoist.h"
@@ -158,6 +159,11 @@
         // and inlines here. perlin's grad() is exactly this shape: four
         // ternaries, called sixteen times per pixel, and it stayed a real call
         // through the whole pipeline, which is most of perlin's gap to clang.
+        // A virtual call in a loop with few implementations becomes class
+        // tests and direct calls, which the late inliner below then inlines.
+        XTIROptDevirtualise* devirt = [[XTIROptDevirtualise alloc] init];
+        devirt.profile = profile;
+        [p addPass:devirt];
         XTIROptInline* inlLate = [[XTIROptInline alloc] init];
         inlLate.profile = profile;
         [p addPass:inlLate];

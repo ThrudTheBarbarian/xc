@@ -131,6 +131,10 @@
     {
     return NO;
     }
+- (BOOL)devirtualises
+    {
+    return NO;
+    }
 - (BOOL)vectorizesLoops
     {
     return NO;
@@ -373,6 +377,10 @@
     return YES;
     }
 
+- (BOOL)devirtualises
+    {
+    return YES;
+    }
 @end
 
 @implementation XTIRXt6502TargetProfile
@@ -935,6 +943,10 @@
 // Byte-fill loop → memset call (musl provides memset; backend lowers MemSet/
 // MemCopy to System V call memset/memcpy).
 - (BOOL)recognisesMemsetIdiom
+    {
+    return YES;
+    }
+- (BOOL)devirtualises
     {
     return YES;
     }
