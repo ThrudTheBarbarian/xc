@@ -389,14 +389,19 @@ static BOOL smallLeaf(XTIRFunction* f)
                                              [XTIROperand symWithSymbolId:[self symbolIdOf:impl]], recv, nil];
         for (NSUInteger k = 2; k < d.operands.count; k++)
             [ops addObject:d.operands[k]];
+        // The result at the method's own return type, cast to the site's (the
+        // port's dvResultAs explains).
         XTIRValue* res = d.result ? [self value:d.result.type in:T] : nil;
+        XTIRValue* cres = res ? [self resultOf:body as:res in:T] : nil;
         XTIRInsn* call = [[XTIRInsn alloc] initWithOpcode:XTIROpCall
-                                                   result:res
+                                                   result:cres
                                                  operands:ops
                                                  callConv:[XTIRCallConv standard]
                                                    dbgLoc:d.dbgLoc];
         call.memoryResult = [self value:[XTIRType memoryType] in:T];
         [T.instructions addObject:call];
+        if (cres != res)
+            [self cast:cres to:res site:d in:T];
         [T setTerminator:[self branchTo:J]];
         [calls addObject:call];
         [callBlocks addObject:T];
@@ -760,7 +765,7 @@ static XTIROperand* memAtEnd(XTIRBlock* P, XTIRBlock* H)
                                               dbgLoc:nil]);
         [entries addObject:tb];
         [copies addObject:bmap];
-        [self cloneLoop:body blocks:bmap values:vmap site:d impl:vt.vtableEntryNames[(NSUInteger)slot] from:P entry:pre];
+        [self cloneLoop:body blocks:bmap values:vmap site:d vtable:vt impl:vt.vtableEntryNames[(NSUInteger)slot] from:P entry:pre];
         [vmaps addObject:vmap];
         if (next != preOrig)
             tb = next;
@@ -836,6 +841,7 @@ static XTIRInsn* cloneInsn(XTIRInsn* n, NSDictionary<NSNumber*, XTIRValue*>* vma
            blocks:(NSMapTable<XTIRBlock*, XTIRBlock*>*)bmap
            values:(NSMutableDictionary<NSNumber*, XTIRValue*>*)vmap
              site:(XTIRInsn*)d
+           vtable:(XTIRSymbol*)vt
              impl:(NSString*)impl
              from:(XTIRBlock*)P
             entry:(XTIRBlock*)entry
@@ -868,6 +874,22 @@ static XTIRInsn* cloneInsn(XTIRInsn* n, NSDictionary<NSNumber*, XTIRValue*>* vma
                 [self directCall:n values:vmap impl:impl in:nb];
                 continue;
                 }
+            // Another dispatch on the same receiver is direct in this copy; one
+            // on anything else is done with (the port's dvCloneLoop explains).
+            if (n.opcode == XTIROpVTblDispatch && n.operands.count >= 2)
+                {
+                XTIROperand* r0 = n.operands[0];
+                if (r0.kind == XTIROperandKindUse && r0.valueId == d.operands[0].valueId
+                    && hasSlot(vt, n.operands[1].intValue))
+                    {
+                    [self directCall:n values:vmap impl:vt.vtableEntryNames[(NSUInteger)n.operands[1].intValue] in:nb];
+                    continue;
+                    }
+                XTIRInsn* nc = cloneInsn(n, vmap, bmap);
+                [_done addObject:nc];
+                [nb.instructions addObject:nc];
+                continue;
+                }
             [nb.instructions addObject:cloneInsn(n, vmap, bmap)];
             }
         if (ob.terminator)
@@ -898,13 +920,33 @@ static XTIRInsn* cloneInsn(XTIRInsn* n, NSDictionary<NSNumber*, XTIRValue*>* vma
                                          [XTIROperand symWithSymbolId:[self symbolIdOf:impl]], recv, nil];
     for (NSUInteger k = 2; k < d.operands.count; k++)
         [ops addObject:mapOp(d.operands[k], vmap, nil)];
+    XTIRValue* want = d.result ? vmap[@(d.result.valueId)] : nil;
+    XTIRValue* cres = want ? [self resultOf:body as:want in:nb] : nil;
     XTIRInsn* call = [[XTIRInsn alloc] initWithOpcode:XTIROpCall
-                                               result:d.result ? vmap[@(d.result.valueId)] : nil
+                                               result:cres
                                              operands:ops
                                              callConv:[XTIRCallConv standard]
                                                dbgLoc:d.dbgLoc];
     call.memoryResult = vmap[@(d.memoryResult.valueId)];
     [nb.instructions addObject:call];
+    if (cres != want)
+        [self cast:cres to:want site:d in:nb];
+    }
+
+// The port's dvResultAs and dvCastResult.
+- (XTIRValue*)resultOf:(XTIRFunction*)body as:(XTIRValue*)want in:(XTIRBlock*)b
+    {
+    if (!body || !body.returnType || !want.type || [body.returnType isEqual:want.type])
+        return want;
+    return [self value:body.returnType in:b];
+    }
+
+- (void)cast:(XTIRValue*)from to:(XTIRValue*)to site:(XTIRInsn*)d in:(XTIRBlock*)b
+    {
+    [b.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpBitcast
+                                                        result:to
+                                                      operands:@[ [XTIROperand useWithValueId:from.valueId] ]
+                                                        dbgLoc:d.dbgLoc]];
     }
 
 // Each version leaves through an exit block of its own (see the port's

@@ -32,6 +32,24 @@
         {
         if (!_profile.devirtualise())
             return;
+        // Indexes for the run, each keeping the FIRST match the scans they
+        // replace found (a whole-module build: 1.7 s became 5.6 s without).
+        _dvVt = new Map();
+        _dvFn = new Map();
+        _dvLay = new Map();
+        _dvCand = new Map();
+        for (u32 i = (u32)0; i < m.syms().count(); i = i + (u32)1)
+            {
+            IRSymbol* s = (IRSymbol*)m.syms().get(i);
+            if (s.kind() == (u8)SYM_VTABLE && _dvVt.get((Hashable*)s.name()) == (Object*)0)
+                _dvVt.set((Hashable*)s.name(), (Object*)s);
+            }
+        for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
+            {
+            IRFunc* f = (IRFunc*)m.funcs().get(i);
+            if (_dvFn.get((Hashable*)f.name()) == (Object*)0)
+                _dvFn.set((Hashable*)f.name(), (Object*)f);
+            }
         for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
             {
             IRFunc* fn = (IRFunc*)m.funcs().get(f);
@@ -49,9 +67,22 @@
     // defines, or when there are more than DV_MAX.
     final Array* dvCandidates(IRModule* m, i64 slot, String* recvTy)
         {
-        Array* out = new Array();
         if (slot < (i64)0 || recvTy == (String*)0)
-            return out;
+            return new Array();
+        // A leaf method has no call for this pass to rewrite, so the answer
+        // for a slot and type holds for the whole run.
+        String* key = String.withFormat("%ld|%s", slot, recvTy.cString());
+        Array* had = (Array*)_dvCand.get((Hashable*)key);
+        if (had != (Array*)0)
+            return had;
+        Array* got = dvCandidatesOf(m, slot, recvTy);
+        _dvCand.set((Hashable*)key, (Object*)got);
+        return got;
+        }
+
+    final Array* dvCandidatesOf(IRModule* m, i64 slot, String* recvTy)
+        {
+        Array* out = new Array();
         IRSymbol* c0 = dvVtableOfLayout(m, recvTy);
         if (c0 == (IRSymbol*)0 || !dvHasSlot(c0, slot))
             return out;
@@ -100,13 +131,7 @@
 
     final IRSymbol* dvVtableNamed(IRModule* m, String* name)
         {
-        for (u32 i = (u32)0; i < m.syms().count(); i = i + (u32)1)
-            {
-            IRSymbol* s = (IRSymbol*)m.syms().get(i);
-            if (s.kind() == (u8)SYM_VTABLE && s.name().equals(name))
-                return s;
-            }
-        return (IRSymbol*)0;
+        return (IRSymbol*)_dvVt.get((Hashable*)name);
         }
 
     // A vtable's superclass: its slot 0 names the parent's vtable.
@@ -136,6 +161,16 @@
     // a self of this type.
     final IRSymbol* dvVtableOfLayout(IRModule* m, String* ty)
         {
+        Object* had = _dvLay.get((Hashable*)ty);
+        if (had != (Object*)0)
+            return had == (Object*)m ? (IRSymbol*)0 : (IRSymbol*)had;   // the module: none
+        IRSymbol* v = dvVtableOfLayoutScan(m, ty);
+        _dvLay.set((Hashable*)ty, v != (IRSymbol*)0 ? (Object*)v : (Object*)m);
+        return v;
+        }
+
+    final IRSymbol* dvVtableOfLayoutScan(IRModule* m, String* ty)
+        {
         for (u32 i = (u32)0; i < m.syms().count(); i = i + (u32)1)
             {
             IRSymbol* v = (IRSymbol*)m.syms().get(i);
@@ -161,13 +196,7 @@
 
     final IRFunc* dvFunc(IRModule* m, String* name)
         {
-        for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
-            {
-            IRFunc* f = (IRFunc*)m.funcs().get(i);
-            if (f.name().equals(name))
-                return f;
-            }
-        return (IRFunc*)0;
+        return (IRFunc*)_dvFn.get((Hashable*)name);
         }
 
     // One block, no call, at most DV_BODY instructions: worth inlining.
@@ -347,10 +376,21 @@
             call.add(recv);
             for (u32 k = (u32)2; k < d.ops().count(); k = k + (u32)1)
                 call.add((IROperand*)d.ops().get(k));
+            // The result at the method's own return type, cast to the site's:
+            // the inliner hands its uses the method's value (a subclass's
+            // Array$get returns Object*; its reader keeps Number's layout).
+            IRValue* cres = (IRValue*)0;
+            IRValue* want = (IRValue*)0;
             if (d.res() != (IRValue*)0)
-                call.setRes(new IRValue(d.res().ty()));
+                {
+                want = new IRValue(d.res().ty());
+                cres = dvResultAs(body, want);
+                call.setRes(cres);
+                }
             call.setMemRes(new IRValue(String.withCString("Mem")));
             T.add(call);
+            if (cres != want)
+                dvCastResult(T, d, cres, want);
             IRInsn* tbr = IRInsn.with(String.withCString("Branch"));
             tbr.add(IROperand.block(J));
             T.setTerm(tbr);
@@ -602,7 +642,7 @@
                 tb.setTerm(cb);
             entries.add((Object*)tb);
             copies.add((Object*)bmap);
-            dvCloneLoop(body, bmap, vmap, d, (String*)vt.slots().get((u32)slot), P, pre);
+            dvCloneLoop(body, bmap, vmap, d, vt, (String*)vt.slots().get((u32)slot), P, pre);
             vmaps.add((Object*)vmap);
             if (next != preOrig)
                 tb = next;
@@ -728,7 +768,7 @@
 
     // The copy of the loop for one class: every block, its values renamed,
     // the site a direct call; H's incomings from P come from `entry`.
-    final void dvCloneLoop(Array* body, Map* bmap, Map* vmap, IRInsn* d, String* impl, IRBlock* P, IRBlock* entry)
+    final void dvCloneLoop(Array* body, Map* bmap, Map* vmap, IRInsn* d, IRSymbol* vt, String* impl, IRBlock* P, IRBlock* entry)
         {
         // Names first: a phi can read a value defined later in the loop.
         for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
@@ -758,6 +798,25 @@
                 if (n == d)
                     {
                     dvDirectCall(nb, n, vmap, impl);
+                    continue;
+                    }
+                // Another dispatch on the same receiver: its class is known
+                // in this copy, so the call is direct. A dispatch on anything
+                // else is done with here: versioned again, each copy would
+                // copy the loop again (BinaryHeap$_siftDown: 448 copies).
+                if (n.op().equals(String.withCString("VTblDispatch")) && n.ops().count() >= (u32)2)
+                    {
+                    IROperand* r0 = (IROperand*)n.ops().get((u32)0);
+                    IROperand* s0 = (IROperand*)n.ops().get((u32)1);
+                    IROperand* dr = (IROperand*)d.ops().get((u32)0);
+                    if (r0.kind() == (u8)OPK_USE && r0.val() == dr.val() && dvHasSlot(vt, (i64)s0.imm()))
+                        {
+                        dvDirectCall(nb, n, vmap, (String*)vt.slots().get((u32)s0.imm()));
+                        continue;
+                        }
+                    IRInsn* nc = dvCloneInsn(n, vmap, bmap);
+                    _dvDone.add((Object*)nc);
+                    nb.add(nc);
                     continue;
                     }
                 nb.add(dvCloneInsn(n, vmap, bmap));
@@ -831,10 +890,33 @@
         call.add(recv);
         for (u32 k = (u32)2; k < d.ops().count(); k = k + (u32)1)
             call.add(dvMapOp((IROperand*)d.ops().get(k), vmap, new Map()));
-        if (d.res() != (IRValue*)0)
-            call.setRes((IRValue*)vmap.get((Hashable*)d.res()));
+        IRValue* want = d.res() != (IRValue*)0 ? (IRValue*)vmap.get((Hashable*)d.res()) : (IRValue*)0;
+        IRValue* cres = want != (IRValue*)0 ? dvResultAs(body, want) : (IRValue*)0;
+        if (cres != (IRValue*)0)
+            call.setRes(cres);
         call.setMemRes((IRValue*)vmap.get((Hashable*)d.memRes()));
         nb.add(call);
+        if (cres != want)
+            dvCastResult(nb, d, cres, want);
+        }
+
+    // The value a direct call to body yields for a site whose result is want:
+    // want itself when the method returns its type, else a new value of the
+    // method's return type (dvCastResult casts it to want after the call).
+    final IRValue* dvResultAs(IRFunc* body, IRValue* want)
+        {
+        if (body == (IRFunc*)0 || body.ret() == (String*)0 || want.ty() == (String*)0 || body.ret().equals(want.ty()))
+            return want;
+        return new IRValue(body.ret());
+        }
+
+    final void dvCastResult(IRBlock* b, IRInsn* d, IRValue* from, IRValue* to)
+        {
+        IRInsn* bc = IRInsn.with(String.withCString("Bitcast"));
+        bc.copyDbg(d);
+        bc.setRes(to);
+        bc.add(IROperand.useVal(from));
+        b.add(bc);
         }
 
     final void dvRetargetPhiPred(IRBlock* H, IRBlock* from, IRBlock* to)
