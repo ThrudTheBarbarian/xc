@@ -268,8 +268,8 @@ class Arm64
             emitFunction((IRFunc*)m.funcs().get(f));
             _out.appendCString("\n");   // the blank line before the next function
             module.append(elideLeafFrame(expandStagedSlots(
-                peepholeFallthrough(peepholeRedundantCmp(peepholeAndsFold(peepholeCopyProp(
-                    peepholeRedundantReloads(peepholeSpills(_out)))))))));
+                peepholeFallthrough(peepholeUsra(peepholeRedundantCmp(peepholeAndsFold(peepholeCopyProp(
+                    peepholeRedundantReloads(peepholeSpills(_out))))))))));
             _out = module;
         }
         // The SME matrix kernels the module calls (idiom-matmul), and the state
@@ -6150,6 +6150,173 @@ class Arm64
                 out.add((Object*)ln);
         }
         return joinLines(out);
+    }
+
+    // ── usra: a shifted term folded into its accumulator (#25) ─────────
+    //
+    // A vector reduction `acc + ((x >> k1) + (y >> k2))` is emitted as two
+    // shifts, an add of the two and an add into acc; NEON's usra/ssra shift
+    // and accumulate in one. Integer lanes wrap, so the order of the adds is
+    // free: each shift becomes an accumulate into acc where it stands, and the
+    // two adds go, when acc is not touched in between, each shifted value is
+    // read only by the first add, and the shifted values and their sum are
+    // dead after (int_muldiv on a Pi 5 core: 4 instructions of 13 become 2).
+    // The SIMD register a NEON/FP operand names (v22.4s, q22, d22, s22), or -1.
+    static i32 simdRegNum(String* op)
+    {
+        String* t = op.trimmed();
+        if (t.byteLength() < (u32)2)
+            return (i32)-1;
+        u8 c = t.byteAt((u32)0);
+        if (c != (u8)'v' && c != (u8)'q' && c != (u8)'d' && c != (u8)'s' && c != (u8)'h' && c != (u8)'b')
+            return (i32)-1;
+        i32 n = (i32)0;
+        u32 i = (u32)1;
+        while (i < t.byteLength() && t.byteAt(i) >= (u8)'0' && t.byteAt(i) <= (u8)'9') {
+            n = n * (i32)10 + (i32)(t.byteAt(i) - (u8)'0');
+            i = i + (u32)1;
+        }
+        if (i == (u32)1)
+            return (i32)-1;
+        if (i < t.byteLength() && t.byteAt(i) != (u8)'.' && t.byteAt(i) != (u8)'[')
+            return (i32)-1;
+        return n;
+    }
+    // Instructions whose first operand is read as well as written.
+    static bool accumulates(String* m)
+    {
+        return m.equals(String.withCString("usra")) || m.equals(String.withCString("ssra"))
+            || m.equals(String.withCString("mla")) || m.equals(String.withCString("mls"))
+            || m.equals(String.withCString("fmla")) || m.equals(String.withCString("fmls"))
+            || m.equals(String.withCString("bsl")) || m.equals(String.withCString("bit"))
+            || m.equals(String.withCString("bif")) || m.equals(String.withCString("ins"))
+            || m.equals(String.withCString("sli")) || m.equals(String.withCString("sri"))
+            || m.equals(String.withCString("umlal")) || m.equals(String.withCString("umlal2"))
+            || m.equals(String.withCString("smlal")) || m.equals(String.withCString("smlal2"));
+    }
+    // 1: the line reads SIMD register r; 2: it writes r without reading it; 0: neither.
+    static u32 simdUse(Array* ops, String* m, i32 r)
+    {
+        if (ops == (Array*)0)
+            return (u32)1;
+        bool w0 = mnemWritesReg0(m) && !accumulates(m) && ops.count() >= (u32)1
+                  && ((String*)ops.get((u32)0)).indexOfByte((u8)'[') == (u32)$FFFF_FFFF;
+        for (u32 k = (u32)0; k < ops.count(); k = k + (u32)1) {
+            if (k == (u32)0 && w0)
+                continue;
+            if (simdRegNum((String*)ops.get(k)) == r)
+                return (u32)1;
+        }
+        if (w0 && simdRegNum((String*)ops.get((u32)0)) == r)
+            return (u32)2;
+        return (u32)0;
+    }
+    // r is dead after line j: written before any read, within the block.
+    static bool simdDeadAfter(Array* lines, u32 j, i32 r)
+    {
+        for (u32 k = j + (u32)1; k < lines.count(); k = k + (u32)1) {
+            String* l = (String*)lines.get(k);
+            if (isAsmBarrier(l.trimmed()))
+                return false;
+            Array* o = parseAsmLine(l);
+            String* m = takeMnem(o);
+            if (m == (String*)0 || isBranchy(m))
+                return false;
+            u32 u = simdUse(o, m, r);
+            if (u == (u32)1)
+                return false;
+            if (u == (u32)2)
+                return true;
+        }
+        return false;
+    }
+    String* peepholeUsra(String* text)
+    {
+        Array* lines = linesOf(text);
+        for (u32 i = (u32)0; i + (u32)1 < lines.count(); i = i + (u32)1) {
+            Array* o3 = parseAsmLine((String*)lines.get(i));
+            String* m3 = takeMnem(o3);
+            Array* o4 = parseAsmLine((String*)lines.get(i + (u32)1));
+            String* m4 = takeMnem(o4);
+            if (m3 == (String*)0 || m4 == (String*)0 || !m3.equals(String.withCString("add")) || !m4.equals(String.withCString("add"))
+                || o3.count() != (u32)3 || o4.count() != (u32)3)
+                continue;
+            String* arr = (String*)o3.get((u32)0);
+            u32 dot = arr.indexOfByte((u8)'.');
+            if (!arr.hasPrefix(String.withCString("v")) || dot == (u32)$FFFF_FFFF)
+                continue;
+            String* lanes = arr.substringFromByte(dot);
+            i32 rc = simdRegNum((String*)o3.get((u32)0));
+            i32 rp = simdRegNum((String*)o3.get((u32)1));
+            i32 rq = simdRegNum((String*)o3.get((u32)2));
+            i32 rd = simdRegNum((String*)o4.get((u32)0));
+            i32 r41 = simdRegNum((String*)o4.get((u32)1));
+            i32 r42 = simdRegNum((String*)o4.get((u32)2));
+            if (rc < (i32)0 || rp < (i32)0 || rq < (i32)0 || rd < (i32)0 || rp == rq)
+                continue;
+            if (!((r41 == rd && r42 == rc) || (r42 == rd && r41 == rc)) || rd == rc || rd == rp || rd == rq)
+                continue;
+            if (!((String*)o4.get((u32)0)).hasSuffix(lanes))
+                continue;
+            // The two shifts, found walking back within the block.
+            i32 at[2];
+            at[0] = (i32)-1;
+            at[1] = (i32)-1;
+            i32 want[2];
+            want[0] = rp;
+            want[1] = rq;
+            bool ok = true;
+            for (u32 s = (u32)0; s < (u32)2 && ok; s = s + (u32)1) {
+                for (i32 k = (i32)i - (i32)1; k >= (i32)0; k = k - (i32)1) {
+                    String* l = (String*)lines.get((u32)k);
+                    if (isAsmBarrier(l.trimmed())) { ok = false; break; }
+                    Array* o = parseAsmLine(l);
+                    String* m = takeMnem(o);
+                    if (m == (String*)0 || isBranchy(m)) { ok = false; break; }
+                    u32 u = simdUse(o, m, want[s]);
+                    if (u == (u32)2) {
+                        if ((m.equals(String.withCString("ushr")) || m.equals(String.withCString("sshr"))) && o.count() == (u32)3
+                            && ((String*)o.get((u32)0)).hasSuffix(lanes) && ((String*)o.get((u32)1)).hasSuffix(lanes))
+                            at[s] = k;
+                        else
+                            ok = false;
+                        break;
+                    }
+                    if (u == (u32)1) { ok = false; break; }    // read before the add
+                }
+                if (at[s] < (i32)0)
+                    ok = false;
+            }
+            if (!ok)
+                continue;
+            i32 first = at[0] < at[1] ? at[0] : at[1];
+            // acc untouched from the first shift to the adds; a shift's source
+            // is read where the shift stands, so nothing else moves.
+            for (u32 k = (u32)first + (u32)1; k < i && ok; k = k + (u32)1) {
+                if ((i32)k == at[0] || (i32)k == at[1])
+                    continue;
+                Array* o = parseAsmLine((String*)lines.get(k));
+                String* m = takeMnem(o);
+                if (m == (String*)0 || simdUse(o, m, rd) != (u32)0)
+                    ok = false;
+            }
+            if (!ok || !simdDeadAfter(lines, i + (u32)1, rc) || !simdDeadAfter(lines, i + (u32)1, rp)
+                || !simdDeadAfter(lines, i + (u32)1, rq))
+                continue;
+            String* dn = (String*)o4.get((u32)0);
+            for (u32 s = (u32)0; s < (u32)2; s = s + (u32)1) {
+                String* l = (String*)lines.get((u32)at[s]);
+                Array* o = parseAsmLine(l);
+                String* m = takeMnem(o);
+                String* nl = String.withFormat("    %s %s, %s, %s", m.equals(String.withCString("ushr")) ? "usra" : "ssra",
+                                               dn.cString(), ((String*)o.get((u32)1)).cString(), ((String*)o.get((u32)2)).cString());
+                lines.set((u32)at[s], (Object*)nl);
+            }
+            lines.removeAt(i + (u32)1);
+            lines.removeAt(i);
+            i = (u32)first;
+        }
+        return joinLines(lines);
     }
 
     String* peepholeRedundantReloads(String* text)

@@ -7915,6 +7915,131 @@ static BOOL sameArm64Reg(NSString *a, NSString *b) {
     return [[a substringFromIndex:1] isEqualToString:[b substringFromIndex:1]];
 }
 
+// ── usra: a shifted term folded into its accumulator (#25) ─────────────
+// The port's peepholeUsra explains: `acc + ((x >> k1) + (y >> k2))` in
+// integer lanes becomes two usra/ssra into acc where the shifts stand.
+static NSInteger simdRegNum(NSString *op) {
+    NSString *t = [op stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    if (t.length < 2) return -1;
+    unichar c = [t characterAtIndex:0];
+    if (c != 'v' && c != 'q' && c != 'd' && c != 's' && c != 'h' && c != 'b') return -1;
+    NSInteger n = 0;
+    NSUInteger i = 1;
+    while (i < t.length && [t characterAtIndex:i] >= '0' && [t characterAtIndex:i] <= '9') {
+        n = n * 10 + ([t characterAtIndex:i] - '0');
+        i++;
+    }
+    if (i == 1) return -1;
+    if (i < t.length && [t characterAtIndex:i] != '.' && [t characterAtIndex:i] != '[') return -1;
+    return n;
+}
+static BOOL simdAccumulates(NSString *m) {
+    static NSSet<NSString *> *acc = nil;
+    if (!acc)
+        acc = [NSSet setWithArray:@[@"usra", @"ssra", @"mla", @"mls", @"fmla", @"fmls", @"bsl", @"bit", @"bif",
+                                    @"ins", @"sli", @"sri", @"umlal", @"umlal2", @"smlal", @"smlal2"]];
+    return [acc containsObject:m];
+}
+static BOOL simdBranchy(NSString *m) {
+    if ([m hasPrefix:@"b."]) return YES;
+    return [@[@"b", @"bl", @"br", @"blr", @"ret", @"cbz", @"cbnz", @"tbz", @"tbnz"] containsObject:m];
+}
+static BOOL simdBarrier(NSString *ln) {
+    NSString *t = [ln stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    return t.length == 0 || [t hasSuffix:@":"] || [t hasPrefix:@"."] || [t hasPrefix:@"//"];
+}
+// 1: the line reads SIMD register r; 2: it writes r without reading it; 0: neither.
+static NSUInteger simdUse(NSArray *ops, NSString *m, NSInteger r) {
+    if (!ops) return 1;
+    BOOL w0 = mnemWritesReg0(m) && !simdAccumulates(m) && ops.count >= 1
+              && [ops[0] rangeOfString:@"["].location == NSNotFound;
+    for (NSUInteger k = 0; k < ops.count; k++) {
+        if (k == 0 && w0) continue;
+        if (simdRegNum(ops[k]) == r) return 1;
+    }
+    if (w0 && simdRegNum(ops[0]) == r) return 2;
+    return 0;
+}
+
++ (BOOL)simdDead:(NSArray<NSString *> *)lines after:(NSUInteger)j reg:(NSInteger)r {
+    for (NSUInteger k = j + 1; k < lines.count; k++) {
+        NSString *l = lines[k];
+        if (simdBarrier(l)) return NO;
+        NSString *m = nil;
+        NSArray *o = [self parseAsmLine:l mnem:&m];
+        if (!m || simdBranchy(m)) return NO;
+        NSUInteger u = simdUse(o, m, r);
+        if (u == 1) return NO;
+        if (u == 2) return YES;
+    }
+    return NO;
+}
+
++ (NSString *)peepholeUsra:(NSString *)text {
+    NSMutableArray<NSString *> *lines = [[text componentsSeparatedByString:@"\n"] mutableCopy];
+    for (NSUInteger i = 0; i + 1 < lines.count; i++) {
+        NSString *m3 = nil, *m4 = nil;
+        NSArray *o3 = simdBarrier(lines[i]) ? nil : [self parseAsmLine:lines[i] mnem:&m3];
+        NSArray *o4 = simdBarrier(lines[i + 1]) ? nil : [self parseAsmLine:lines[i + 1] mnem:&m4];
+        if (!o3 || !o4 || ![m3 isEqualToString:@"add"] || ![m4 isEqualToString:@"add"] || o3.count != 3 || o4.count != 3)
+            continue;
+        NSString *arr = o3[0];
+        NSRange dot = [arr rangeOfString:@"."];
+        if (![arr hasPrefix:@"v"] || dot.location == NSNotFound) continue;
+        NSString *lanes = [arr substringFromIndex:dot.location];
+        NSInteger rc = simdRegNum(o3[0]), rp = simdRegNum(o3[1]), rq = simdRegNum(o3[2]);
+        NSInteger rd = simdRegNum(o4[0]), r41 = simdRegNum(o4[1]), r42 = simdRegNum(o4[2]);
+        if (rc < 0 || rp < 0 || rq < 0 || rd < 0 || rp == rq) continue;
+        if (!((r41 == rd && r42 == rc) || (r42 == rd && r41 == rc)) || rd == rc || rd == rp || rd == rq) continue;
+        if (![o4[0] hasSuffix:lanes]) continue;
+        NSInteger at[2] = {-1, -1};
+        NSInteger want[2] = {rp, rq};
+        BOOL ok = YES;
+        for (NSUInteger s = 0; s < 2 && ok; s++) {
+            for (NSInteger k = (NSInteger)i - 1; k >= 0; k--) {
+                NSString *l = lines[(NSUInteger)k];
+                if (simdBarrier(l)) { ok = NO; break; }
+                NSString *m = nil;
+                NSArray *o = [self parseAsmLine:l mnem:&m];
+                if (!m || simdBranchy(m)) { ok = NO; break; }
+                NSUInteger u = simdUse(o, m, want[s]);
+                if (u == 2) {
+                    if (([m isEqualToString:@"ushr"] || [m isEqualToString:@"sshr"]) && o.count == 3
+                        && [o[0] hasSuffix:lanes] && [o[1] hasSuffix:lanes])
+                        at[s] = k;
+                    else
+                        ok = NO;
+                    break;
+                }
+                if (u == 1) { ok = NO; break; }
+            }
+            if (at[s] < 0) ok = NO;
+        }
+        if (!ok) continue;
+        NSInteger first = at[0] < at[1] ? at[0] : at[1];
+        for (NSUInteger k = (NSUInteger)first + 1; k < i && ok; k++) {
+            if ((NSInteger)k == at[0] || (NSInteger)k == at[1]) continue;
+            NSString *m = nil;
+            NSArray *o = [self parseAsmLine:lines[k] mnem:&m];
+            if (!m || simdUse(o, m, rd) != 0) ok = NO;
+        }
+        if (!ok || ![self simdDead:lines after:i + 1 reg:rc] || ![self simdDead:lines after:i + 1 reg:rp]
+            || ![self simdDead:lines after:i + 1 reg:rq])
+            continue;
+        NSString *dn = o4[0];
+        for (NSUInteger s = 0; s < 2; s++) {
+            NSString *m = nil;
+            NSArray *o = [self parseAsmLine:lines[(NSUInteger)at[s]] mnem:&m];
+            lines[(NSUInteger)at[s]] = [NSString stringWithFormat:@"    %@ %@, %@, %@",
+                                        [m isEqualToString:@"ushr"] ? @"usra" : @"ssra", dn, o[1], o[2]];
+        }
+        [lines removeObjectAtIndex:i + 1];
+        [lines removeObjectAtIndex:i];
+        i = (NSUInteger)first;
+    }
+    return [lines componentsJoinedByString:@"\n"];
+}
+
 // `and D, S, #c` then `cmp D, #0` is `ands D, S, #c`, and a later
 // `cmp D, #0` while D holds goes too, when every flag reader up to the next
 // flag write reads Z alone (eq/ne): ands clears C where cmp #0 sets it (#22:
@@ -9089,11 +9214,11 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     [self aliasableRangeForCtx:ctx lo:&aliasLo hi:&aliasHi];
     [moduleOut appendString:
         [self elideLeafFrame:[self expandStagedSlots:
-            [self peepholeFallthrough:[self peepholeRedundantCmp:[self peepholeAndsFold:[self peepholeCopyProp:
+            [self peepholeFallthrough:[self peepholeUsra:[self peepholeRedundantCmp:[self peepholeAndsFold:[self peepholeCopyProp:
              [self peepholeRedundantReloads:
               [self peepholeSpills:[self canonicaliseStagedSlots:body]
                                   aliasLo:aliasLo aliasHi:aliasHi
-                                  argArea:ctx.maxOutStack]]]]]]
+                                  argArea:ctx.maxOutStack]]]]]]]
                        frameBase:ctx.frameBase
                     saveAreaFrom:ctx.saveAreaOffset
                               to:ctx.saveAreaOffset + 8 * ctx.savedRegs.count]]];
