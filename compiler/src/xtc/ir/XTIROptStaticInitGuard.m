@@ -324,6 +324,15 @@ static BOOL guardIsTrivial(XTSinitGuard* g)
     NSArray<XTSinitGuard*>* guards = [self recogniseAllIn:fn module:mod preds:&preds];
     if (guards.count < 1)
         return;
+    if (self.foldAll)
+        {
+        for (XTSinitGuard* g in guards)
+            [self fold:g inFunction:fn];
+        [self coalesceStraightLineIn:fn];
+        for (XTIRBlock* bb in fn.blocks)
+            [self deadStripBlock:bb inFunction:fn];
+        return;
+        }
 
     // Hoist each class's guard to the function entry: it then dominates every
     // in-body guard for that class, which the fold below removes — running

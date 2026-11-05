@@ -22,8 +22,11 @@
 #import "XTIROptStrengthReduce.h"
 #import "XTIROptConstOperandFold.h"
 #import "XTIROptLICM.h"
+#import "XTIROptStaticInitGuard.h"
+#import "XTIROptSqrtIntrinsic.h"
 #import "XTIROptBlockMerge.h"
 #import "XTIROptLoopRotate.h"
+#import "XTIROptLoopUnrollVarTrip.h"
 
 @interface XTIROptPipeline (ParKernels)
 - (instancetype)initAtLevel:(NSInteger)level;
@@ -524,9 +527,23 @@ static BOOL gEmitsWGSL = NO;
     [copy.functions setArray:keep];
     XTIROptTargetProfile* prof = [XTIRArm64TargetProfile new];
     XTIROptPipeline* p = [[XTIROptPipeline alloc] initAtLevel:3];
+    // A sqrt call becomes the pure FSqrt first, as the main pipeline does
+    // before it inlines: a call writes memory as far as LICM knows, so a
+    // kernel calling Math.sqrt kept every load in its loops (nbody's px[i]
+    // reloaded per inner iteration on the GPU, issue #7).
+    XTIROptSqrtIntrinsic* sqrtIn = [XTIROptSqrtIntrinsic new];
+    sqrtIn.profile = prof;
+    [p addPass:sqrtIn];
     XTIROptInline* inl = [XTIROptInline new];
     inl.profile = prof;
     [p addPass:inl];
+    // An inlined Math.sqrt brings its class's init guard into the loop, a call
+    // that kept every load there and the body two blocks. A kernel never runs
+    // an initialiser (the printers skip those calls), so every guard folds.
+    XTIROptStaticInitGuard* sig = [XTIROptStaticInitGuard new];
+    sig.profile = prof;
+    sig.foldAll = YES;
+    [p addPass:sig];
     XTIROptRedundantLoadCSE* cse1 = [XTIROptRedundantLoadCSE new];
     cse1.crossBlock = YES;
     [p addPass:cse1];
@@ -554,6 +571,17 @@ static BOOL gEmitsWGSL = NO;
         esc.trips = trips;
         [p addPass:esc];
         }
+    // A counted inner loop whose constant trip is a whole number of groups of
+    // four runs as four copies per back edge (issue #7): no copy needs a
+    // guard, and a GPU pays for guards more than for the back edge they save.
+    // Before the rotate, whose shape it does not take.
+    XTIROptLoopUnrollVarTrip* unr = [XTIROptLoopUnrollVarTrip new];
+    unr.profile = prof;
+    unr.exactOnly = YES;
+    [p addPass:unr];
+    // The copies are a chain of blocks; one block again, so the rotate below
+    // takes the loop.
+    [p addPass:[XTIROptBlockMerge new]];
     XTIROptLoopRotate* rot = [XTIROptLoopRotate new];
     rot.profile = prof;
     [p addPass:rot];

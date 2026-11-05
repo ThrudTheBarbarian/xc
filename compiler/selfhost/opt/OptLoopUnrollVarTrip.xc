@@ -330,6 +330,8 @@
                 }
             }
         c.setExactTrip(exact);
+        if (_vtExactOnly && !exact)
+            return (VTCand*)0;
         if (!vtCarried(fn, H, B, c, defOf, defBlk, uses))
             return (VTCand*)0;
 
@@ -452,6 +454,137 @@
             prevIv = vtCopy(fn, c, j, U, prevIv, prevRed);
 
         self.vtWire(fn, c, U);
+        vtCountGroups(fn, c, U);
+        }
+
+    // In a par kernel the unrolled loop counts its groups by one, and each
+    // copy's induction value is start + g*U*step (issue #7). Mesa's compiler
+    // for the Pi 5's V3D runs a loop counted by one far faster than the same
+    // loop counted by four: nbody's inner loop 32.5 ms against 66.2 ms, the
+    // bodies otherwise the same. Only an exact trip (constant start and
+    // bound), with the induction value read in the header by the guard alone.
+    final void vtCountGroups(IRFunc* fn, VTCand* c, u32 U)
+        {
+        if (!_vtExactOnly || !c.exactTrip() || !c.stepIsConst() || _vtClones.count() == (u32)0)
+            return;
+        IRBlock* H = c.h();
+        IRInsn* ivPhi = c.ivPhi();
+        IRInsn* guard = c.guard();
+        IRValue* iv = c.iv();
+        IRBlock* first = (IRBlock*)_vtClones.get((u32)0);
+        IRBlock* last = (IRBlock*)_vtClones.get(_vtClones.count() - (u32)1);
+        String* ty = iv.ty();
+        for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)H.insns().get(i);
+            if (n != guard && insnUsesValue(n, iv))
+                return;
+            }
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)H.phis().get(i);
+            if (n != ivPhi && insnUsesValue(n, iv))
+                return;
+            }
+        IRBlock* pre = (IRBlock*)0;
+        IROperand* initOp = (IROperand*)0;
+        for (u32 k = (u32)0; k + (u32)1 < ivPhi.ops().count(); k = k + (u32)2)
+            {
+            IROperand* bo = (IROperand*)ivPhi.ops().get(k);
+            if (bo.blk() != last)
+                {
+                pre = bo.blk();
+                initOp = (IROperand*)ivPhi.ops().get(k + (u32)1);
+                }
+            }
+        if (pre == (IRBlock*)0 || initOp == (IROperand*)0 || guard.ops().count() < (u32)2)
+            return;
+        Map* defOf = self.defMapAll(fn);
+        i64 startK = (i64)0;
+        i64 boundK = (i64)0;
+        if (!self.vecConstWide(initOp, defOf, &startK) || !self.vecConstWide((IROperand*)guard.ops().get((u32)1), defOf, &boundK))
+            return;
+        i64 group = c.stepK() * (i64)U;
+        if (group <= (i64)0)
+            return;
+        i64 groups = (boundK - startK) / group;
+        if (groups <= (i64)0 || groups > (i64)2147483647)
+            return;
+
+        // g: 0 from the preheader, g + 1 round the back edge.
+        IRInsn* z = IRInsn.with(String.withCString("Const"));
+        z.setRes(new IRValue(ty));
+        z.add(IROperand.immI((i32)0, ty));
+        pre.add(z);
+        IRValue* g = new IRValue(ty);
+        IRInsn* gNext = IRInsn.with(String.withCString("Add"));
+        gNext.setRes(new IRValue(ty));
+        gNext.add(IROperand.useVal(g));
+        gNext.add(IROperand.immI((i32)1, ty));
+        last.add(gNext);
+        IRInsn* gPhi = IRInsn.with(String.withCString("Phi"));
+        gPhi.setRes(g);
+        gPhi.add(IROperand.block(pre));
+        gPhi.add(IROperand.useVal(z.res()));
+        gPhi.add(IROperand.block(last));
+        gPhi.add(IROperand.useVal(gNext.res()));
+        H.phis().add(gPhi);
+        guard.ops().set((u32)0, (Object*)IROperand.useVal(g));
+        guard.ops().set((u32)1, (Object*)IROperand.immI((i32)groups, ty));
+
+        // The copies' induction value, from g at the top of the first.
+        IRInsn* mul = IRInsn.with(String.withCString("Mul"));
+        mul.copyDbg(c.ivNext());
+        mul.setRes(new IRValue(ty));
+        mul.add(IROperand.useVal(g));
+        mul.add(IROperand.immI((i32)group, ty));
+        IRInsn* add = IRInsn.with(String.withCString("Add"));
+        add.copyDbg(c.ivNext());
+        add.setRes(new IRValue(ty));
+        add.add(IROperand.useVal(mul.res()));
+        add.add(initOp);
+        first.insns().insert((u32)0, (Object*)add);
+        first.insns().insert((u32)0, (Object*)mul);
+        for (u32 j = (u32)0; j < _vtClones.count(); j = j + (u32)1)
+            {
+            IRBlock* C = (IRBlock*)_vtClones.get(j);
+            for (u32 i = (u32)0; i < C.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)C.insns().get(i);
+                if (n == mul || n == add)
+                    continue;
+                vtReplaceUse(n, iv, add.res());
+                }
+            if (C.term() != (IRInsn*)0)
+                vtReplaceUse(C.term(), iv, add.res());
+            }
+
+        // The old induction is dead: its phi, and the back-edge add.
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            if ((IRInsn*)H.phis().get(i) == ivPhi)
+                {
+                H.phis().removeAt(i);
+                break;
+                }
+        for (u32 i = (u32)0; i < last.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)last.insns().get(i);
+            if (n.res() == _vtLastIvNext)
+                {
+                last.insns().removeAt(i);
+                break;
+                }
+            }
+        }
+
+    final void vtReplaceUse(IRInsn* n, IRValue* from, IRValue* to)
+        {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && o.val() == from)
+                n.ops().set(k, (Object*)IROperand.useVal(to));
+            }
         }
 
     // Invariant iff pure (VSplat / Const / a cast) and every Use operand is
@@ -498,6 +631,21 @@
 
         Map* map = new Map();
         map.set((Hashable*)c.iv(), (Object*)prevIv);
+        // In a par kernel each copy's induction value is copy 0's plus j
+        // steps, not the previous copy's plus one: the GPU's compiler folds a
+        // constant offset from one base into each load, and does not fold a
+        // chain (nbody on the Pi 5's V3D: 66.3 ms chained, 32.5 ms re-based;
+        // issue #7).
+        if (_vtExactOnly && j > (u32)0 && c.stepIsConst())
+            {
+            IRInsn* ivj = IRInsn.with(String.withCString("Add"));
+            ivj.copyDbg(c.ivNext());
+            ivj.setRes(new IRValue(c.iv().ty()));
+            ivj.add(IROperand.useVal(c.iv()));
+            ivj.add(IROperand.immI((i32)(c.stepK() * (i64)j), c.iv().ty()));
+            C.add(ivj);
+            map.set((Hashable*)c.iv(), (Object*)ivj.res());
+            }
         for (u32 i = (u32)0; i < c.redVals().count(); i = i + (u32)1)
             map.set((Hashable*)(IRValue*)c.redVals().get(i), prevRed.get(i));
 

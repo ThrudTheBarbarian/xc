@@ -93,6 +93,15 @@
         recogniseGuards(m, fn);
         if (_sgGuards.count() < (u32)1)
             return;
+        if (_sgFoldAll)
+            {
+            for (u32 k = (u32)0; k < _sgGuards.count(); k = k + (u32)1)
+                foldGuard(fn, k);
+            coalesceStraightLine(fn);
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                sgDeadStripBlock((IRBlock*)fn.blocks().get(b), fn);
+            return;
+            }
 
         if (_profile.initGuardHoist())
             {

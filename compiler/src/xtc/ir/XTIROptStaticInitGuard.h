@@ -17,6 +17,12 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface XTIROptStaticInitGuard : NSObject <XTIROptPass>
 @property(nonatomic, strong, nullable) XTIROptTargetProfile* profile;
+// Par kernels only: fold EVERY guard. A GPU kernel never initialises a class
+// (each kernel printer skips _xtc_sinit_run and $init calls), so in the
+// kernel copy a guard is only a branch and a call that stop licm and the
+// unroller; library classes take the threaded form, which the hoist and the
+// trivial fold leave in place (nbody's Math.sqrt, issue #7).
+@property(nonatomic) BOOL foldAll;
 @end
 
 NS_ASSUME_NONNULL_END

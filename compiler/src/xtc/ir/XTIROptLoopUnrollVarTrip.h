@@ -14,6 +14,11 @@ NS_ASSUME_NONNULL_BEGIN
 // Profile-gated (unrollsVariableTrip); arm64 only. -O2+.
 @interface XTIROptLoopUnrollVarTrip : NSObject <XTIROptPass>
 @property(nonatomic, strong, nullable) XTIROptTargetProfile* profile;
+// Par kernels only: unroll a loop only when its constant trip is a whole
+// number of groups, so no copy needs a guard. A GPU pays for the guards more
+// than for the back edge they save (nbody's inner loop on the Pi 5's V3D:
+// 110.7 ms rolled, 32.5 ms in exact groups, 270.8 ms guarded; issue #7).
+@property(nonatomic) BOOL exactOnly;
 @end
 
 NS_ASSUME_NONNULL_END

@@ -1612,6 +1612,16 @@ class BeFact : Object
 
     bool _srFloatMul; // the float multiply rewrites (set for the main pipeline)
 
+    // Set for par kernels only: unroll a loop only when its constant trip is
+    // a whole number of groups, so no copy needs a guard. A GPU pays for the
+    // guards more than for the back edge they save (nbody's inner loop on the
+    // Pi 5's V3D: 110.7 ms rolled, 32.5 ms in exact groups, 270.8 ms guarded).
+    bool _vtExactOnly;
+
+    // Par kernels only: fold EVERY static-init guard (the reference's
+    // foldAll explains).
+    bool _sgFoldAll;
+
     IRInsn* _vtIvPhi;
     IRInsn* _vtGuard;
     IRValue* _vtIv;

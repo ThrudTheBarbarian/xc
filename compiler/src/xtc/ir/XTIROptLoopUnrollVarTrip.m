@@ -552,9 +552,158 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
                     c.exactTrip = YES;
                 }
             }
+        if (self.exactOnly && !c.exactTrip)
+            continue;
         return c;
         }
     return nil;
+    }
+
+// In a par kernel the unrolled loop counts its groups by one, and each copy's
+// induction value is start + g*U*step (issue #7). Mesa's compiler for the Pi
+// 5's V3D runs a loop counted by one far faster than the same loop counted by
+// four: nbody's inner loop 32.5 ms against 66.2 ms, the bodies otherwise the
+// same. Only an exact trip (constant start and bound), with the induction value
+// read in the header by the guard alone.
+- (void)countGroups:(XTVarTripCand*)c
+         inFunction:(XTIRFunction*)fn
+             clones:(NSArray<XTIRBlock*>*)clones
+         lastIvNext:(XTIRValueId)lastIvNext
+    {
+    if (!self.exactOnly || !c.exactTrip || !c.stepIsConst || clones.count == 0)
+        return;
+    XTIRBlock* H = c.header;
+    XTIRValueId ivId = c.ivId;
+    XTIRBlock* first = clones.firstObject;
+    XTIRBlock* last = clones.lastObject;
+    XTIRInsn* ivPhi = nil;
+    for (XTIRInsn* p in H.phiNodes)
+        if (p.result && p.result.valueId == ivId)
+            {
+            ivPhi = p;
+            break;
+            }
+    if (!ivPhi || !H.terminator || H.terminator.operands.count < 1 ||
+        H.terminator.operands[0].kind != XTIROperandKindUse)
+        return;
+    XTIRInsn* guard = nil;
+    for (XTIRInsn* n in H.instructions)
+        if (n.result && n.result.valueId == H.terminator.operands[0].valueId)
+            guard = n;
+    if (!guard || guard.opcode != XTIROpICmp || guard.operands.count < 2)
+        return;
+    BOOL (^usesIv)(XTIRInsn*) = ^BOOL(XTIRInsn* n) {
+        for (XTIROperand* o in n.operands)
+            if (o.kind == XTIROperandKindUse && o.valueId == ivId)
+                return YES;
+        return NO;
+    };
+    for (XTIRInsn* n in H.instructions)
+        if (n != guard && usesIv(n))
+            return;
+    for (XTIRInsn* n in H.phiNodes)
+        if (n != ivPhi && usesIv(n))
+            return;
+    XTIRBlock* pre = nil;
+    XTIROperand* initOp = nil;
+    for (NSUInteger k = 0; k + 1 < ivPhi.operands.count; k += 2)
+        if (ivPhi.operands[k].blockRef != last)
+            {
+            pre = ivPhi.operands[k].blockRef;
+            initOp = ivPhi.operands[k + 1];
+            }
+    if (!pre || !initOp)
+        return;
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* defOf = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        for (XTIRInsn* n in bb.phiNodes)
+            if (n.result)
+                defOf[@(n.result.valueId)] = n;
+        for (XTIRInsn* n in bb.instructions)
+            if (n.result)
+                defOf[@(n.result.valueId)] = n;
+        }
+    int64_t startK = 0, boundK = 0;
+    if (!resolveConstInt(initOp, defOf, &startK) || !resolveConstInt(guard.operands[1], defOf, &boundK))
+        return;
+    int64_t group = c.stepConstVal * (int64_t)kUnrollFactor;
+    if (group <= 0)
+        return;
+    int64_t groups = (boundK - startK) / group;
+    if (groups <= 0 || groups > INT32_MAX)
+        return;
+    XTIRType* ty = ivPhi.result.type;
+    XTIRValue* (^fresh)(XTIRBlock*, NSUInteger) = ^XTIRValue*(XTIRBlock* blk, NSUInteger at) {
+        XTIRValue* v = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                     type:ty
+                                                  defSite:[[XTIRDefSite alloc] initWithBlock:blk insnIndex:at]];
+        [fn registerValue:v];
+        return v;
+    };
+
+    // g: 0 from the preheader, g + 1 round the back edge.
+    XTIRValue* z = fresh(pre, pre.instructions.count);
+    [pre.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                     result:z
+                                                   operands:@[ [XTIROperand immIWithType:ty value:0] ]
+                                                     dbgLoc:nil]];
+    XTIRValue* g = fresh(H, 0);
+    XTIRValue* gn = fresh(last, last.instructions.count);
+    [last.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpAdd
+                                                      result:gn
+                                                    operands:@[ [XTIROperand useWithValueId:g.valueId],
+                                                                [XTIROperand immIWithType:ty value:1] ]
+                                                      dbgLoc:nil]];
+    [H.phiNodes addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpPhi
+                                                    result:g
+                                                  operands:@[ [XTIROperand blockWithRef:pre], [XTIROperand useWithValueId:z.valueId],
+                                                              [XTIROperand blockWithRef:last], [XTIROperand useWithValueId:gn.valueId] ]
+                                                    dbgLoc:nil]];
+    NSMutableArray<XTIROperand*>* gops = [guard.operands mutableCopy];
+    gops[0] = [XTIROperand useWithValueId:g.valueId];
+    gops[1] = [XTIROperand immIWithType:ty value:groups];
+    [guard replaceOperands:gops];
+
+    // The copies' induction value, from g at the top of the first.
+    XTIRValue* mv = fresh(first, 0);
+    XTIRInsn* mul = [[XTIRInsn alloc] initWithOpcode:XTIROpMul
+                                              result:mv
+                                            operands:@[ [XTIROperand useWithValueId:g.valueId],
+                                                        [XTIROperand immIWithType:ty value:group] ]
+                                              dbgLoc:c.ivNext.dbgLoc];
+    XTIRValue* av = fresh(first, 1);
+    XTIRInsn* add = [[XTIRInsn alloc] initWithOpcode:XTIROpAdd
+                                              result:av
+                                            operands:@[ [XTIROperand useWithValueId:mv.valueId], initOp ]
+                                              dbgLoc:c.ivNext.dbgLoc];
+    [first.instructions insertObject:add atIndex:0];
+    [first.instructions insertObject:mul atIndex:0];
+    for (XTIRBlock* C in clones)
+        {
+        NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:C.instructions];
+        if (C.terminator)
+            [all addObject:C.terminator];
+        for (XTIRInsn* n in all)
+            {
+            if (n == mul || n == add || !usesIv(n))
+                continue;
+            NSMutableArray<XTIROperand*>* ops = [n.operands mutableCopy];
+            for (NSUInteger k = 0; k < ops.count; k++)
+                if (ops[k].kind == XTIROperandKindUse && ops[k].valueId == ivId)
+                    ops[k] = [XTIROperand useWithValueId:av.valueId];
+            [n replaceOperands:ops];
+            }
+        }
+
+    // The old induction is dead: its phi, and the back-edge add.
+    [H.phiNodes removeObjectIdenticalTo:ivPhi];
+    for (NSUInteger i = 0; i < last.instructions.count; i++)
+        if (last.instructions[i].result && last.instructions[i].result.valueId == lastIvNext)
+            {
+            [last.instructions removeObjectAtIndex:i];
+            break;
+            }
     }
 
 - (void)apply:(XTVarTripCand*)c inFunction:(XTIRFunction*)fn
@@ -604,6 +753,27 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
         map[@(ivId)] = @(prevIv); // remap iv → this copy's incoming value
         for (NSUInteger i = 0; i < nred; i++)
             map[c.redIds[i]] = prevRed[i];
+        // In a par kernel each copy's induction value is copy 0's plus j steps,
+        // not the previous copy's plus one: the GPU's compiler folds a constant
+        // offset from one base into each load, and does not fold a chain
+        // (nbody on the Pi 5's V3D: 66.3 ms chained, 32.5 ms re-based; issue
+        // #7).
+        if (self.exactOnly && j > 0 && c.stepIsConst)
+            {
+            XTIRType* ivTy = c.ivNext.result.type;
+            XTIRValueId vid = [fn allocateValueId];
+            XTIRValue* v = [[XTIRValue alloc] initWithValueId:vid
+                                                         type:ivTy
+                                                      defSite:[[XTIRDefSite alloc] initWithBlock:C insnIndex:idx]];
+            [fn registerValue:v];
+            [C appendInstruction:[[XTIRInsn alloc] initWithOpcode:XTIROpAdd
+                                                           result:v
+                                                         operands:@[ [XTIROperand useWithValueId:ivId],
+                                                                     [XTIROperand immIWithType:ivTy value:c.stepConstVal * (int64_t)j] ]
+                                                           dbgLoc:c.ivNext.dbgLoc]];
+            idx++;
+            map[@(ivId)] = @(vid);
+            }
 
         // A POINTER carried by a constant stride is re-based on copy 0 rather
         // than chained. The chain `p -> p+16 -> p+32 -> p+48` costs one `add`
@@ -1040,6 +1210,7 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
                 }
             }
         }
+    [self countGroups:c inFunction:fn clones:clones lastIvNext:lastIvNext];
     }
 
 @end

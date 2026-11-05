@@ -172,8 +172,20 @@
     // reference: XTIRParCheck kernelModuleFrom, bug 645), in its order.
     final void parKernels(IRModule* m)
         {
+        // A sqrt call becomes the pure FSqrt first, as the main pipeline does
+        // before it inlines: a call writes memory as far as licm knows, so a
+        // kernel calling Math.sqrt kept every load in its loops (nbody's px[i]
+        // reloaded per inner iteration on the GPU, issue #7).
+        self.sqrtIntrinsic(m);
         self.inlineLeaves(m);
         if (_failed) return;
+        // An inlined Math.sqrt brings its class's init guard into the loop,
+        // a Call that kept every load there and the body two blocks. A kernel
+        // never runs an initialiser (the printers skip those calls), so every
+        // guard folds (the reference's foldAll explains).
+        _sgFoldAll = true;
+        self.staticInitGuard(m);
+        _sgFoldAll = false;
         _cseCrossBlock = true;
         self.redundantLoadCSE(m);
         _cseCrossBlock = false;
@@ -191,6 +203,16 @@
         _cseLate = false;
         self.blockMerge(m);
         gpuEscapeTrips(m);
+        // A counted inner loop whose constant trip is a whole number of
+        // groups of four runs as four copies per back edge (issue #7): no
+        // copy needs a guard, and a GPU pays for guards more than for the back
+        // edge they save. Before loopRotate, whose shape it does not take.
+        _vtExactOnly = true;
+        self.loopUnrollVarTrip(m);
+        _vtExactOnly = false;
+        // The copies are a chain of blocks; one block again, so the rotate
+        // below takes the loop.
+        self.blockMerge(m);
         self.loopRotate(m);
         self.deadCode(m);
         }
