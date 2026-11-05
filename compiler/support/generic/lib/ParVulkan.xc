@@ -68,6 +68,7 @@ typedef i32 vkEnumeratePhysicalDevices_t(pointer inst, u32* count, pointer* devi
 typedef void vkGetPhysicalDeviceProperties_t(pointer pd, pointer props);
 typedef void vkGetPhysicalDeviceProperties2_t(pointer pd, pointer props);
 typedef void vkGetPhysicalDeviceFeatures_t(pointer pd, pointer feats);
+typedef void vkGetPhysicalDeviceFeatures2_t(pointer pd, pointer feats);
 typedef void vkGetPhysicalDeviceMemoryProperties_t(pointer pd, pointer props);
 typedef void vkGetPhysicalDeviceMemoryProperties2_t(pointer pd, pointer props);
 typedef void vkGetPhysicalDeviceQueueFamilyProperties_t(pointer pd, u32* count, pointer props);
@@ -244,6 +245,7 @@ class ParVulkan
     static vkCmdPipelineBarrier_t* _barrier;
     static bool _discrete;      // the kernel's buffers in the GPU's memory, copied through staging
     static bool _int64;         // the device has 64-bit integers (shaderInt64); V3D has not
+    static bool _int8Storage;   // the device writes 8-bit integers in storage buffers (storageBuffer8BitAccess)
     static String* _identity;   // the chosen device, for auto's hardware key (ParDevice)
     static vkCreateFence_t* _createFence;
     static vkDestroyFence_t* _destroyFence;
@@ -443,6 +445,30 @@ class ParVulkan
         _vk32(on, (u32)160, *(u32*)(pointer)(has + 160));
         _vk32(on, (u32)156, *(u32*)(pointer)(has + 156));
         free((pointer)has);
+        // 8-bit storage (core since Vulkan 1.2), enabled where the device has
+        // it: a kernel then writes a byte array with plain byte stores, not
+        // two atomics on each byte's word (#7). A kernel that needs it runs on
+        // the CPU where the device has none (run, below).
+        // VkPhysicalDeviceFeatures2 (sType 1000059000) chaining
+        // VkPhysicalDevice8BitStorageFeatures (sType 1000177000).
+        _int8Storage = false;
+        u8 f8[32];
+        u8 f2[240];
+        memset((pointer)&f8[0], (i32)0, (u64)32);
+        memset((pointer)&f2[0], (i32)0, (u64)240);
+        vkGetPhysicalDeviceFeatures2_t* feats2 = (vkGetPhysicalDeviceFeatures2_t*)fn("vkGetPhysicalDeviceFeatures2");
+        if (feats2 != (vkGetPhysicalDeviceFeatures2_t*)0)
+            {
+            _vk32(&f8[0], (u32)0, (u32)1000177000);
+            _vk32(&f2[0], (u32)0, (u32)1000059000);
+            _vkp(&f2[0], (u32)8, (pointer)&f8[0]);
+            feats2(pd, (pointer)&f2[0]);
+            _int8Storage = *(u32*)(pointer)(&f8[0] + 16) != (u32)0;
+            }
+        u8 on8[32];
+        memset((pointer)&on8[0], (i32)0, (u64)32);
+        _vk32(&on8[0], (u32)0, (u32)1000177000);
+        _vk32(&on8[0], (u32)16, (u32)1);
 
         // A queue family with compute.
         u32 nf = (u32)0;
@@ -470,6 +496,8 @@ class ParVulkan
         _vk32(&dci[0], (u32)20, (u32)1);
         _vkp(&dci[0], (u32)24, (pointer)&dq[0]);
         _vkp(&dci[0], (u32)64, (pointer)on);
+        if (_int8Storage)
+            _vkp(&dci[0], (u32)8, (pointer)&on8[0]);
         // An integrated GPU works in host memory already: with
         // VK_EXT_external_memory_host its driver binds a `simd:` block where
         // it lies (importBuffer), so the block is never copied. Asked for
@@ -982,6 +1010,17 @@ class ParVulkan
         return false;
         }
 
+    // The header says ` bytes8`: a byte array's buffer is 8-bit storage.
+    static bool bytes8(u8* src)
+        {
+        for (u32 at = (u32)0; src[at] != (u8)0 && src[at] != (u8)10; at = at + (u32)1)
+            if (src[at] == (u8)' ' && src[at + (u32)1] == (u8)'b' && src[at + (u32)2] == (u8)'y' &&
+                src[at + (u32)3] == (u8)'t' && src[at + (u32)4] == (u8)'e' && src[at + (u32)5] == (u8)'s' &&
+                src[at + (u32)6] == (u8)'8')
+                return true;
+        return false;
+        }
+
     static bool run(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
         u8* whole = src;
@@ -1003,6 +1042,8 @@ class ParVulkan
             }
         else if (!_int64)
             return ParDevice.cpu("its GPU version needs 64-bit integers, which this Vulkan device does not have");
+        if (ParVulkan.bytes8(src) && !_int8Storage)
+            return ParDevice.cpu("its GPU version writes bytes, which this Vulkan device cannot (no 8-bit storage)");
         // The device is known now: its variant of the module, where the block has one.
         src = spirvFor(whole, ParVulkan.identity());
         i32 slot = pipeline(src);

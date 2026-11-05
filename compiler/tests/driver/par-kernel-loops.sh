@@ -7,7 +7,10 @@
 #      loads that do not change in the loop (px[i]) leave it, and
 #   2. the loop, a constant trip of whole groups of four, runs as four copies
 #      counted by one: its test compares with the number of groups (1024 / 4
-#      = 256), not with the trip, and the module has four sqrts.
+#      = 256), not with the trip, and the module has four sqrts;
+#   3. a kernel writing a byte array declares it 8-bit storage
+#      (StorageBuffer8BitAccess) and stores each byte plainly, with no atomics
+#      on its word, and its header says so (` bytes8`) for the runtime.
 #
 # Read from the SPIR-V module the arm64-linux build carries; both compilers
 # must write the same module, and spirv-val (when installed) must accept it.
@@ -58,6 +61,25 @@ i32 main(void)
     }
 EOF
 
+cat > "$W/b.xc" <<'EOF'
+#import "Stdio.xc"
+#import "Par.xc"
+#define N 65536
+u8 img[N];
+i32 main(void)
+    {
+    par
+        {
+        for (u32 i in 0..N)
+            img[i] = (u8)((i * (u32)2654435761) >> (u32)24);
+        }
+    u32 s = (u32)0;
+    for (u32 i in 0..N) s = s + (u32)img[i];
+    Stdio.printf("%u\n", s);
+    return 0;
+    }
+EOF
+
 cat > "$W/spv.py" <<'EOF'
 import struct, sys
 b = open(sys.argv[1], 'rb').read()
@@ -67,10 +89,15 @@ if i < 0:
 w = lambda o: struct.unpack_from('<I', b, o)[0]
 o = i + 20
 consts, ults, sqrts = {}, [], 0
+caps8, atomics = False, 0
 while o + 4 <= len(b):
     x = w(o); n = x >> 16; op = x & 0xffff
     if n == 0 or (op > 400 and op not in (4446, 4447, 5341)):
         break
+    if op == 17 and w(o + 4) == 4448:  # OpCapability StorageBuffer8BitAccess
+        caps8 = True
+    if op in (240, 241, 242):          # OpAtomicAnd / Or / Xor... (atomics)
+        atomics += 1
     if op == 43 and n == 4:            # OpConstant type id value
         consts[w(o + 8)] = w(o + 12)
     elif op == 176:                    # OpULessThan type res a b
@@ -80,7 +107,7 @@ while o + 4 <= len(b):
     o += 4 * n
 open(sys.argv[2], 'wb').write(b[i:o])
 bounds = sorted(set(consts[c] for c in ults if c in consts))
-print('bounds', ' '.join(str(v) for v in bounds), 'sqrts', sqrts)
+print('bounds', ' '.join(str(v) for v in bounds), 'sqrts', sqrts, 'caps8', int(caps8), 'atomics', atomics)
 EOF
 
 for C in "$REF" "$XC"; do
@@ -97,7 +124,7 @@ for C in "$REF" "$XC"; do
         *" 1024 "*) echo "FAIL $n: a loop still compares with the trip ($r)"; fail=1;;
     esac
     case "$r" in
-        *"sqrts 4") ;;
+        *"sqrts 4 "*) ;;
         *) echo "FAIL $n: not four copies of the body ($r)"; fail=1;;
     esac
     if command -v spirv-val >/dev/null 2>&1 && ! spirv-val "$W/k.$n.spv"; then
@@ -106,6 +133,22 @@ for C in "$REF" "$XC"; do
 done
 if [ -f "$W/k.xcc.spv" ] && [ -f "$W/k.xcc-xc.spv" ] && ! cmp -s "$W/k.xcc.spv" "$W/k.xcc-xc.spv"; then
     echo "FAIL: the two compilers write different SPIR-V"; fail=1
+fi
+
+for C in "$REF" "$XC"; do
+    n=$(basename "$C")
+    if ! "$C" -q -O2 -A arm64-linux -o "$W/b.$n" "$W/b.xc" 2> "$W/err.$n"; then
+        echo "FAIL $n: byte kernel build"; head -5 "$W/err.$n"; fail=1; continue
+    fi
+    r=$(python3 "$W/spv.py" "$W/b.$n" "$W/b.$n.spv")
+    case "$r" in *"caps8 1 atomics 0") ;; *) echo "FAIL $n: the byte array is not plain 8-bit storage ($r)"; fail=1;; esac
+    strings "$W/b.$n" | grep -q 'xcpar size=.* bytes8' || { echo "FAIL $n: the header does not say bytes8"; fail=1; }
+    if command -v spirv-val >/dev/null 2>&1 && ! spirv-val --target-env vulkan1.3 "$W/b.$n.spv"; then
+        echo "FAIL $n: spirv-val (byte kernel)"; fail=1
+    fi
+done
+if [ -f "$W/b.xcc.spv" ] && [ -f "$W/b.xcc-xc.spv" ] && ! cmp -s "$W/b.xcc.spv" "$W/b.xcc-xc.spv"; then
+    echo "FAIL: the two compilers write different SPIR-V for the byte kernel"; fail=1
 fi
 [ $fail = 0 ] && echo "par-kernel-loops: ok"
 exit $fail

@@ -69,7 +69,7 @@ enum
     SpvDecBlock = 2, SpvDecArrayStride = 6, SpvDecNonWritable = 24, SpvDecBuiltIn = 11, SpvDecBinding = 33,
     SpvDecDescriptorSet = 34, SpvDecOffset = 35, SpvBuiltInGlobalInvocationId = 28,
     SpvStorageWorkgroup = 4, SpvBuiltInWorkgroupId = 26, SpvBuiltInLocalInvocationId = 27,
-    SpvCapShader = 1, SpvCapFloat64 = 10, SpvCapInt64 = 11,
+    SpvCapShader = 1, SpvCapFloat64 = 10, SpvCapInt64 = 11, SpvCapStorageBuffer8BitAccess = 4448,
     // GLSL.std.450
     GlslFAbs = 4, GlslSAbs = 5, GlslFloor = 8, GlslSin = 13, GlslCos = 14, GlslPow = 26, GlslExp = 27,
     GlslLog = 28, GlslSqrt = 31, GlslFMin = 37, GlslUMin = 38, GlslSMin = 39, GlslFMax = 40, GlslUMax = 41,
@@ -93,6 +93,7 @@ static const uint32_t kExit = 0xffffffffu;
 @property(nonatomic) NSMutableDictionary<NSString*, NSNumber*>* cache;
 @property(nonatomic) BOOL usesInt64;
 @property(nonatomic) BOOL usesFloat64;
+@property(nonatomic) BOOL uses8BitStorage;                  // a byte array is a buffer of 8-bit integers
 @property(nonatomic) uint32_t glsl;                         // the GLSL.std.450 import, 0 until used
 @end
 
@@ -168,6 +169,15 @@ static NSArray<NSNumber*>* spvString(NSString* s)
     if (w == 64)
         self.usesInt64 = YES;
     return [self cached:[NSString stringWithFormat:@"i%u", w] op:SpvOpTypeInt words:@[ @(w), @0 ] resultFirst:YES];
+    }
+
+// The 8-bit integer a byte array's buffer holds. Only loads, stores and
+// conversions use it, which StorageBuffer8BitAccess allows without Int8 (#7: a
+// byte store was two atomics on its word).
+- (uint32_t)typeInt8Storage
+    {
+    self.uses8BitStorage = YES;
+    return [self cached:@"i8" op:SpvOpTypeInt words:@[ @8, @0 ] resultFirst:YES];
     }
 
 // The signed type of the same width. The module holds one integer type a width
@@ -255,6 +265,8 @@ static NSArray<NSNumber*>* spvString(NSString* s)
         spvOp(caps, SpvOpCapability, @[ @(SpvCapInt64) ]);
     if (self.usesFloat64)
         spvOp(caps, SpvOpCapability, @[ @(SpvCapFloat64) ]);
+    if (self.uses8BitStorage)
+        spvOp(caps, SpvOpCapability, @[ @(SpvCapStorageBuffer8BitAccess) ]);
     [all addObjectsFromArray:caps];
     [all addObjectsFromArray:self.head];
     [all addObjectsFromArray:self.decos];
@@ -289,6 +301,7 @@ static NSArray<NSNumber*>* spvString(NSString* s)
 @property(nonatomic) XTIRType* pointee;
 @property(nonatomic) BOOL readOnly;
 @property(nonatomic) BOOL words;            // a narrow element of a buffer of 32-bit words
+@property(nonatomic) BOOL bytes;            // an element of a buffer of 8-bit integers
 @property(nonatomic) uint32_t wordShift;    // a narrow captured value: its bit offset in its word, + 1 (0: none)
 @property(nonatomic) BOOL local;            // a work item's own array (a Function array variable)
 @end
@@ -388,6 +401,7 @@ static BOOL spvNarrowSigned(XTIRType* t)
 @property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* memberOf;     // object field -> member index
 @property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* narrowShiftOf; // narrow field -> bit offset in its word
 @property(nonatomic) NSMutableSet<NSNumber*>* wordBufs;                         // buffer variables of 32-bit words
+@property(nonatomic) NSMutableSet<NSNumber*>* byteBufs;                         // buffer variables of 8-bit integers
 @property(nonatomic) uint32_t localObj;            // the kernel's Function copy of the object
 @property(nonatomic) uint32_t localObjType;
 @property(nonatomic) NSMutableDictionary<NSNumber*, NSNumber*>* bufVar;       // field / global index -> variable
@@ -401,7 +415,7 @@ static BOOL spvNarrowSigned(XTIRType* t)
 
 @implementation XTIRParMSL (SPIRVState)
 
-static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift, kWordBufs, kSpan32, kNarrowVals, kFullCmps, kFullC;
+static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift, kWordBufs, kByteBufs, kSpan32, kNarrowVals, kFullCmps, kFullC;
 
 - (NSDictionary*)fullCmps { return objc_getAssociatedObject(self, &kFullCmps); }
 - (void)setFullCmps:(NSDictionary*)v { objc_setAssociatedObject(self, &kFullCmps, v, OBJC_ASSOCIATION_RETAIN); }
@@ -417,6 +431,8 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
 - (void)setNarrowShiftOf:(NSMutableDictionary*)v { objc_setAssociatedObject(self, &kNarrowShift, v, OBJC_ASSOCIATION_RETAIN); }
 - (NSMutableSet*)wordBufs { return objc_getAssociatedObject(self, &kWordBufs); }
 - (void)setWordBufs:(NSMutableSet*)v { objc_setAssociatedObject(self, &kWordBufs, v, OBJC_ASSOCIATION_RETAIN); }
+- (NSMutableSet*)byteBufs { return objc_getAssociatedObject(self, &kByteBufs); }
+- (void)setByteBufs:(NSMutableSet*)v { objc_setAssociatedObject(self, &kByteBufs, v, OBJC_ASSOCIATION_RETAIN); }
 
 - (XTSpvModule*)spv { return objc_getAssociatedObject(self, &kSpv); }
 - (void)setSpv:(XTSpvModule*)v { objc_setAssociatedObject(self, &kSpv, v, OBJC_ASSOCIATION_RETAIN); }
@@ -719,6 +735,55 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     [self emit:SpvOpAtomicAnd type:u32t args:@[ @(p), @(scope), @(sem), @(keep) ]];
     [self emit:SpvOpAtomicOr type:u32t
           args:@[ @(p), @(scope), @(sem), @([self emit:SpvOpShiftLeftLogical type:u32t args:@[ @(bits), @(shift) ]]) ]];
+    return YES;
+    }
+
+// An element of a buffer of 8-bit integers (#7): its address, a plain load
+// widened to the value's 32-bit form (sign-extended for I8, compared with 0 for
+// Bool), and a plain store of the low byte. As the port.
+- (uint32_t)byteAddress:(XTSpvRecipe*)r
+    {
+    if (!r.indexVar)
+        return 0;
+    NSMutableArray* a = [NSMutableArray arrayWithObject:@(r.base)];
+    [a addObjectsFromArray:r.members];
+    [a addObject:@([self emit:SpvOpLoad type:r.indexType args:@[ @(r.indexVar) ]])];
+    uint32_t pt = [self.spv pointer:r.storage to:[self.spv typeInt8Storage]];
+    return [self emit:SpvOpAccessChain type:pt args:a];
+    }
+
+- (uint32_t)byteLoad:(XTSpvRecipe*)r
+    {
+    uint32_t p = [self byteAddress:r];
+    if (!p)
+        return 0;
+    uint32_t u32t = [self.spv typeInt:32];
+    uint32_t b = [self emit:SpvOpLoad type:[self.spv typeInt8Storage] args:@[ @(p) ]];
+    if (r.pointee.kind == XTIRTypeKindBool)
+        {
+        uint32_t wv = [self emit:SpvOpUConvert type:u32t args:@[ @(b) ]];
+        uint32_t bt = [self.spv typeBool];
+        return [self emit:SpvOpINotEqual type:bt args:@[ @(wv), @([self.spv u32:0]) ]];
+        }
+    uint32_t wv = [self emit:SpvOpUConvert type:u32t args:@[ @(b) ]];
+    return spvNarrowSigned(r.pointee) ? [self spvCanon:wv type:r.pointee] : wv;
+    }
+
+- (BOOL)byteStore:(XTSpvRecipe*)r value:(uint32_t)v
+    {
+    uint32_t p = [self byteAddress:r];
+    if (!p)
+        return NO;
+    uint32_t u32t = [self.spv typeInt:32];
+    uint32_t wv = v;
+    if (r.pointee.kind == XTIRTypeKindBool)
+        {
+        uint32_t one = [self.spv u32:1];
+        uint32_t zero = [self.spv u32:0];
+        wv = [self emit:SpvOpSelect type:u32t args:@[ @(v), @(one), @(zero) ]];
+        }
+    uint32_t i8t = [self.spv typeInt8Storage];
+    [self emit:SpvOpStore words:@[ @(p), @([self emit:SpvOpUConvert type:i8t args:@[ @(wv) ]]) ]];
     return YES;
     }
 
@@ -1103,6 +1168,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     r.pointee = b.pointee;
     r.readOnly = b.readOnly;
     r.words = b.words;
+    r.bytes = b.bytes;
     r.wordShift = b.wordShift;
     r.local = b.local;
     return r;
@@ -1283,6 +1349,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
                 r.members = @[ @([self.spv u32:0]) ];
                 r.pointee = rt.pointeeType;
                 r.words = [self.wordBufs containsObject:@(r.base)];
+                r.bytes = [self.byteBufs containsObject:@(r.base)];
                 self.sf.recipeOf[@(i.result.valueId)] = r;
                 return YES;
                 }
@@ -1297,6 +1364,14 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
             uint32_t ty = [self spvType:[self spvValType:i.result.valueId type:rt]];
             if (!r || !ty || [self spvType:r.pointee] != ty)
                 return NO;
+            if (r.bytes)
+                {
+                uint32_t bv = [self byteLoad:r];
+                if (!bv)
+                    return NO;
+                [self setResult:i to:bv];
+                return YES;
+                }
             if (r.words || r.wordShift)
                 {
                 uint32_t v = [self narrowLoad:r];
@@ -1321,6 +1396,8 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
             uint32_t v = [self value:i.operands[1] type:r.pointee];
             if (r.wordShift)
                 return v && [self fieldStore:r value:v];
+            if (r.bytes)
+                return v && [self byteStore:r value:v];
             if (r.words)
                 return v && [self narrowStore:r value:v];
             uint32_t p = [self address:r];
@@ -1376,6 +1453,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
             r.members = @[ @([self.spv u32:0]) ];
             r.pointee = rt.pointeeType;
             r.words = [self.wordBufs containsObject:@(r.base)];
+            r.bytes = [self.byteBufs containsObject:@(r.base)];
             self.sf.recipeOf[@(i.result.valueId)] = r;
             return YES;
             }
@@ -2106,6 +2184,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     self.memberOf = [NSMutableDictionary dictionary];
     self.narrowShiftOf = [NSMutableDictionary dictionary];
     self.wordBufs = [NSMutableSet set];
+    self.byteBufs = [NSMutableSet set];
     self.narrowVals = self.span32 ? [self spvNarrowLoHi] : [NSMutableSet set];
 
     // The object's fields the kernel reads or writes (other than captured
@@ -2265,11 +2344,17 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
             return;
             }
         [meta appendFormat:@" buf=%u:%lu:%u", fl[k].byteOffset, (unsigned long)(k - 3), et.byteWidth];
-        BOOL narrow = spvNarrowBytes(et) != 0;
-        uint32_t v = [self spvBuffer:narrow ? [self.spv typeInt:32] : t stride:narrow ? 4 : et.byteWidth
-                             binding:binding++ readOnly:NO];
+        // A byte array is a buffer of 8-bit integers (#7); a 16-bit one lives
+        // in 32-bit words.
+        BOOL bytes = spvNarrowBytes(et) == 1;
+        BOOL narrow = !bytes && spvNarrowBytes(et) != 0;
+        uint32_t v = bytes ? [self spvBuffer:[self.spv typeInt8Storage] stride:1 binding:binding++ readOnly:NO]
+                           : [self spvBuffer:narrow ? [self.spv typeInt:32] : t stride:narrow ? 4 : et.byteWidth
+                                     binding:binding++ readOnly:NO];
         if (narrow)
             [self.wordBufs addObject:@(v)];
+        if (bytes)
+            [self.byteBufs addObject:@(v)];
         self.bufVar[@(k)] = @(v);
         [interface addObject:@(v)];
     }];
@@ -2288,14 +2373,22 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
             return nil;
             }
         [meta appendFormat:@" glob=%@:%u", self.globals[gi], et.byteWidth];
-        BOOL narrowG = spvNarrowBytes(et) != 0;
-        uint32_t v = [self spvBuffer:narrowG ? [self.spv typeInt:32] : t stride:narrowG ? 4 : et.byteWidth
-                             binding:binding++ readOnly:NO];
+        BOOL bytesG = spvNarrowBytes(et) == 1;
+        BOOL narrowG = !bytesG && spvNarrowBytes(et) != 0;
+        uint32_t v = bytesG ? [self spvBuffer:[self.spv typeInt8Storage] stride:1 binding:binding++ readOnly:NO]
+                            : [self spvBuffer:narrowG ? [self.spv typeInt:32] : t stride:narrowG ? 4 : et.byteWidth
+                                      binding:binding++ readOnly:NO];
         if (narrowG)
             [self.wordBufs addObject:@(v)];
+        if (bytesG)
+            [self.byteBufs addObject:@(v)];
         self.bufVar[@(-1 - (NSInteger)gi)] = @(v);
         [interface addObject:@(v)];
         }
+    // A byte array's buffer needs 8-bit storage: the runtime runs the block
+    // on the CPU where the device has none (#7).
+    if (self.spv.uses8BitStorage)
+        [meta appendString:@" bytes8"];
     [meta appendString:[XTIRParMSL extraMeta]];
     NSMutableArray<NSNumber*>* redVars = [NSMutableArray array];
     NSMutableArray<NSNumber*>* shVars = [NSMutableArray array];

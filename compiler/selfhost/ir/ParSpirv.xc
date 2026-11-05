@@ -62,6 +62,7 @@ class SpvMod
     Map* cache;
     bool usesInt64;
     bool usesFloat64;
+    bool uses8BitStorage;  // a byte array is a buffer of 8-bit integers
     u32 glsl;          // the GLSL.std.450 import, 0 until used
 
     void init(void)
@@ -74,6 +75,7 @@ class SpvMod
         cache = new Map();
         usesInt64 = false;
         usesFloat64 = false;
+        uses8BitStorage = false;
         glsl = (u32)0;
         }
 
@@ -118,6 +120,15 @@ class SpvMod
         String* k = String.withCString("i");
         k.append(String.withU32(w));
         return cached(k, (u32)SPV_TYPEINT, spvW((u32)2, w, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0), true);
+        }
+
+    // The 8-bit integer a byte array's buffer holds. Only loads, stores and
+    // conversions use it, which StorageBuffer8BitAccess allows without Int8
+    // (#7: a byte store was two atomics on its word).
+    u32 typeInt8Storage(void)
+        {
+        uses8BitStorage = true;
+        return cached(String.withCString("i8"), (u32)SPV_TYPEINT, spvW((u32)2, (u32)8, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0), true);
         }
 
     // The signed type of the same width. The module holds one integer type a
@@ -222,6 +233,8 @@ class SpvMod
             spvOp(all, (u32)SPV_CAPABILITY, spvW((u32)1, (u32)SPV_CAP_INT64, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0));
         if (usesFloat64)
             spvOp(all, (u32)SPV_CAPABILITY, spvW((u32)1, (u32)SPV_CAP_FLOAT64, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0));
+        if (uses8BitStorage)
+            spvOp(all, (u32)SPV_CAPABILITY, spvW((u32)1, (u32)SPV_CAP_STORAGEBUFFER8BITACCESS, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0));
         Array* secs[5];
         secs[0] = head;
         secs[1] = decos;
@@ -255,6 +268,7 @@ class SpvRecipe
     u32 indexType;
     String* pointee;   // the IR type pointed at
     bool words;        // a narrow element of a buffer of 32-bit words
+    bool bytes;        // an element of a buffer of 8-bit integers
     u32 wordShift;     // a narrow captured value: its bit offset in its word, + 1 (0: none)
     bool local;        // a work item's own array (a Function array variable)
 
@@ -268,6 +282,7 @@ class SpvRecipe
         r.indexType = indexType;
         r.pointee = pointee;
         r.words = words;
+        r.bytes = bytes;
         r.wordShift = wordShift;
         r.local = local;
         return r;

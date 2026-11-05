@@ -743,6 +743,7 @@ class ClassInfo
     Map* _sNarrowVals;  // in it, the loads of lo/hi that are only truncated: held as u32
     Map* _sFullCmps;    // the "full" form's compares against hi: "h" the item loop's entry, "l" its latch; or 0
     u32 _sFullC;        // the "full" specialization constant (SpecId 0), or 0 when the kernel has none
+    Map* _sByteBufs;  // buffer variable (String) -> 1: a buffer of 8-bit integers
     Map* _sWordBufs;  // buffer variable (String) -> 1: a buffer of 32-bit words
     u32 _sLocalObj;
     Map* _sBufVar;    // "f<k>" for a captured array field, "g<i>" for a global -> variable (Number)

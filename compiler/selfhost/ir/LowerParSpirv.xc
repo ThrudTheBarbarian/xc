@@ -335,6 +335,48 @@
         return true;
         }
 
+    // An element of a buffer of 8-bit integers (#7): its address, a plain
+    // load widened to the value's 32-bit form (sign-extended for I8, 0 or 1
+    // compared for Bool), and a plain store of the low byte.
+    final u32 spvByteAddress(SpvRecipe* r)
+        {
+        if (r.indexVar == (u32)0)
+            return (u32)0;
+        Array* a = new Array();
+        a.add((Object*)Number.withU32(r.base));
+        for (u32 i = (u32)0; i < r.members.count(); i = i + (u32)1)
+            a.add(r.members.get(i));
+        a.add((Object*)Number.withU32(spvEmitR((u32)SPV_LOAD, r.indexType, spvA1(r.indexVar))));
+        return spvEmitR((u32)SPV_ACCESSCHAIN, _sMod.ptrType(r.storage, _sMod.typeInt8Storage()), a);
+        }
+    final u32 spvByteLoad(SpvRecipe* r)
+        {
+        u32 p = spvByteAddress(r);
+        if (p == (u32)0)
+            return (u32)0;
+        u32 w32 = _sMod.typeInt((u32)32);
+        u32 b = spvEmitR((u32)SPV_LOAD, _sMod.typeInt8Storage(), spvA1(p));
+        if (ptxIs(r.pointee, "Bool"))
+            {
+            u32 wv = spvEmitR((u32)SPV_UCONVERT, w32, spvA1(b));
+            return spvEmitR((u32)SPV_INOTEQUAL, _sMod.typeBool(), spvA2(wv, _sMod.u32c((u32)0)));
+            }
+        u32 wv = spvEmitR((u32)SPV_UCONVERT, w32, spvA1(b));
+        return spvNarrowSigned(r.pointee) ? spvCanon(wv, r.pointee) : wv;
+        }
+    final bool spvByteStore(SpvRecipe* r, u32 v)
+        {
+        u32 p = spvByteAddress(r);
+        if (p == (u32)0)
+            return false;
+        u32 w32 = _sMod.typeInt((u32)32);
+        u32 wv = v;
+        if (ptxIs(r.pointee, "Bool"))
+            wv = spvEmitR((u32)SPV_SELECT, w32, spvA3(v, _sMod.u32c((u32)1), _sMod.u32c((u32)0)));
+        spvEmit((u32)SPV_STORE, spvA2(p, spvEmitR((u32)SPV_UCONVERT, _sMod.typeInt8Storage(), spvA1(wv))));
+        return true;
+        }
+
     final bool spvBinary(IRInsn* ip)
         {
         String* t = ip.res().ty();
@@ -844,6 +886,8 @@
                 r.members.add((Object*)Number.withU32(_sMod.u32c((u32)0)));
                 r.pointee = self.mslPointee(rt);
                 r.words = _sWordBufs.get((Hashable*)String.withU32(r.base)) != (Object*)0;
+                r.bytes = _sByteBufs.get((Hashable*)String.withU32(r.base)) != (Object*)0;
+            r.bytes = _sByteBufs.get((Hashable*)String.withU32(r.base)) != (Object*)0;
                 _spvFn.recipeOf.set((Hashable*)self.mslKey(res), (Object*)r);
                 return true;
                 }
@@ -856,6 +900,13 @@
             SpvRecipe* r = o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0 ? (SpvRecipe*)_spvFn.recipeOf.get((Hashable*)self.mslKey(o0.val())) : (SpvRecipe*)0;
             u32 ty = spvType(spvValType(res));
             if (r == (SpvRecipe*)0 || ty == (u32)0 || spvType(r.pointee) != ty) return false;
+            if (r.bytes)
+                {
+                u32 bv = spvByteLoad(r);
+                if (bv == (u32)0) return false;
+                spvSetResult(ip, bv);
+                return true;
+                }
             if (r.words || r.wordShift != (u32)0)
                 {
                 u32 nv = spvNarrowLoad(r);
@@ -876,6 +927,8 @@
             u32 v = spvValue((IROperand*)ip.ops().get((u32)1), r.pointee);
             if (r.wordShift != (u32)0)
                 return v != (u32)0 && spvFieldStore(r, v);
+            if (r.bytes)
+                return v != (u32)0 && spvByteStore(r, v);
             if (r.words)
                 return v != (u32)0 && spvNarrowStore(r, v);
             u32 p = spvAddress(r);
@@ -940,6 +993,7 @@
             r.members.add((Object*)Number.withU32(_sMod.u32c((u32)0)));
             r.pointee = self.mslPointee(rt);
             r.words = _sWordBufs.get((Hashable*)String.withU32(r.base)) != (Object*)0;
+            r.bytes = _sByteBufs.get((Hashable*)String.withU32(r.base)) != (Object*)0;
             _spvFn.recipeOf.set((Hashable*)self.mslKey(res), (Object*)r);
             return true;
             }
@@ -1646,6 +1700,7 @@
         _sMember = new Map();
         _sNarrowShift = new Map();
         _sWordBufs = new Map();
+        _sByteBufs = new Map();
         _sNarrowVals = _sSpan32 ? spvNarrowLoHi(f) : new Map();
 
         // The object's fields the kernel uses (other than captured arrays).
@@ -1815,10 +1870,16 @@
                 }
             meta.appendCString(" buf="); meta.append(String.withU32(_mObj.offsetAt(k))); meta.appendCString(":");
             meta.append(String.withU32(k - (u32)3)); meta.appendCString(":"); meta.append(String.withU32(spvWidth(et)));
-            bool narrow = spvNarrowBytes(et) != (u32)0;
-            u32 v = spvBuffer(narrow ? m.typeInt((u32)32) : t, narrow ? (u32)4 : spvWidth(et), binding);
+            // A byte array is a buffer of 8-bit integers (#7); a 16-bit one
+            // lives in 32-bit words.
+            bool bytes = spvNarrowBytes(et) == (u32)1;
+            bool narrow = !bytes && spvNarrowBytes(et) != (u32)0;
+            u32 v = bytes ? spvBuffer(m.typeInt8Storage(), (u32)1, binding)
+                          : spvBuffer(narrow ? m.typeInt((u32)32) : t, narrow ? (u32)4 : spvWidth(et), binding);
             if (narrow)
                 _sWordBufs.set((Hashable*)String.withU32(v), (Object*)spvS("1"));
+            if (bytes)
+                _sByteBufs.set((Hashable*)String.withU32(v), (Object*)spvS("1"));
             binding = binding + (u32)1;
             String* key = spvS("f");
             key.append(String.withI64((i64)k));
@@ -1847,16 +1908,24 @@
                 return false;
                 }
             meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(spvWidth(et)));
-            bool narrowG = spvNarrowBytes(et) != (u32)0;
-            u32 v = spvBuffer(narrowG ? m.typeInt((u32)32) : t, narrowG ? (u32)4 : spvWidth(et), binding);
+            bool bytesG = spvNarrowBytes(et) == (u32)1;
+            bool narrowG = !bytesG && spvNarrowBytes(et) != (u32)0;
+            u32 v = bytesG ? spvBuffer(m.typeInt8Storage(), (u32)1, binding)
+                           : spvBuffer(narrowG ? m.typeInt((u32)32) : t, narrowG ? (u32)4 : spvWidth(et), binding);
             if (narrowG)
                 _sWordBufs.set((Hashable*)String.withU32(v), (Object*)spvS("1"));
+            if (bytesG)
+                _sByteBufs.set((Hashable*)String.withU32(v), (Object*)spvS("1"));
             binding = binding + (u32)1;
             String* key = spvS("g");
             key.append(String.withU32(gi));
             _sBufVar.set((Hashable*)key, (Object*)Number.withU32(v));
             iface.add((Object*)Number.withU32(v));
             }
+        // A byte array's buffer needs 8-bit storage: the runtime runs the
+        // block on the CPU where the device has none (#7).
+        if (m.uses8BitStorage)
+            meta.appendCString(" bytes8");
         if (_parExtraMeta != (String*)0) meta.append(_parExtraMeta);
         Array* redVars = new Array();
         Array* redFields = new Array();
