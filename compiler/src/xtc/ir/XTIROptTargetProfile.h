@@ -103,6 +103,11 @@ NS_ASSUME_NONNULL_BEGIN
 // of a short body (arm64); the 6502 keeps loops rolled to save code space.
 - (BOOL)unrollsVariableTrip;
 
+// YES to unroll, twice, a rotated loop of independent vector chains (v = v*k +
+// c per chain) with a constant even trip, its copies ordered chain by chain:
+// each fmla then writes a register other than its multiplicand (#8). arm64.
+- (BOOL)unrollsChainLoops;
+
 // YES to rewrite a byte-fill loop `for(i=0; i<cmp>bound; i++) arr[i] = C` into a
 // single MemSet (→ `bl _memset`, internally vectorised) instead of a scalar
 // store loop. arm64 only: the xt6502 memset runtime caps a *runtime* count at

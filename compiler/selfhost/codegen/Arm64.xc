@@ -3866,7 +3866,18 @@ class Arm64
             String* name = String.withCString("v");
             name.appendFormat("%lu", scratch);
             _vecReg.set((Hashable*)o.val(), (Object*)name);
-            if (rm) {
+            IROperand* ko = rm ? (IROperand*)_vRemat.get((Hashable*)o.val()) : (IROperand*)0;
+            String* rl = rm ? laneOf(o.val().ty()) : (String*)0;
+            if (rm && ko.kind() == (u8)OPK_IMMF && rl != (String*)0 && rl.equals(String.withCString("F32"))) {
+                // An f32 constant is its float's own 32 bits: the immediate
+                // holds a double's, whose low half a `dup .4s` would take
+                // (0.0001 came out as 0xE0000000).
+                u32 fb = f32BitsOfDoubleHex(ko.fpHex());
+                _out.appendFormat("    movz w16, #%lu\n", fb & (u32)$FFFF);
+                if ((fb >> (u32)16) != (u32)0)
+                    _out.appendFormat("    movk w16, #%lu, lsl #16\n", (fb >> (u32)16) & (u32)$FFFF);
+                _out.appendFormat("    dup v%lu.4s, w16\n", scratch);
+            } else if (rm) {
                 IRInsn* spl = IRInsn.with(String.withCString("VSplat"));
                 spl.setRes(o.val());
                 spl.add((IROperand*)_vRemat.get((Hashable*)o.val()));

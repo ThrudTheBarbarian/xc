@@ -675,6 +675,10 @@
         if (stopHere(String.withCString("loop-unroll-vartrip")))
             return;
         if (_level >= (u32)2)
+            self.unrollChainLoops(m);
+        if (stopHere(String.withCString("unroll-chain-loops")))
+            return;
+        if (_level >= (u32)2)
             {
             _srFloatMul = _profile.floatMulToAdd();
             self.strengthReduce(m);

@@ -99,6 +99,10 @@
     {
     return NO;
     }
+- (BOOL)unrollsChainLoops
+    {
+    return NO;
+    }
 - (BOOL)recognisesMemsetIdiom
     {
     return NO;
@@ -267,6 +271,10 @@
     return YES;
     }
 - (BOOL)unrollsVariableTrip
+    {
+    return YES;
+    }
+- (BOOL)unrollsChainLoops
     {
     return YES;
     }

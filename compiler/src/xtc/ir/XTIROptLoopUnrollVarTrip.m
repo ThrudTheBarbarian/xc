@@ -1214,3 +1214,275 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
     }
 
 @end
+
+// ── chain loops (#8) ────────────────────────────────────────────────────────
+
+static BOOL ucUsesValue(XTIRInsn* n, XTIRValueId v)
+    {
+    for (XTIROperand* o in n.operands)
+        if (o.kind == XTIROperandKindUse && o.valueId == v)
+            return YES;
+    return NO;
+    }
+
+// No memory access or call in the body, and no body value combines two vector
+// phis' chains (a value's chain is the vector phi it derives from, if any).
+static BOOL ucChainsIndependent(XTIRBlock* H, XTIRBlock* B)
+    {
+    NSMutableDictionary<NSNumber*, NSNumber*>* chainOf = [NSMutableDictionary dictionary];
+    NSUInteger i = 0;
+    for (XTIRInsn* p in H.phiNodes)
+        {
+        if (p.result && p.result.type.kind == XTIRTypeKindVec)
+            chainOf[@(p.result.valueId)] = @(i);
+        i++;
+        }
+    for (XTIRInsn* n in B.instructions)
+        {
+        if (n.memoryResult || isCallOpcode(n.opcode))
+            return NO;
+        NSNumber* ch = nil;
+        for (XTIROperand* o in n.operands)
+            {
+            if (o.kind != XTIROperandKindUse)
+                continue;
+            NSNumber* oc = chainOf[@(o.valueId)];
+            if (!oc)
+                continue;
+            if (ch && ch.unsignedIntegerValue != oc.unsignedIntegerValue)
+                return NO;
+            ch = oc;
+            }
+        if (ch && n.result)
+            chainOf[@(n.result.valueId)] = ch;
+        }
+    return YES;
+    }
+
+@implementation XTIROptChainUnroll
+    {
+    XTIRInsn* _iv;
+    XTIRInsn* _next;
+    XTIRInsn* _cmp;
+    }
+
+- (NSString*)passName
+    {
+    return @"unroll-chain-loops";
+    }
+
+- (NSInteger)minOptLevel
+    {
+    return 2;
+    }
+
+- (BOOL)runOnModule:(XTIRModule*)mod
+             errors:(NSMutableArray<NSString*>* _Nullable* _Nullable)outErrors
+    {
+    (void)outErrors;
+    XTIROptTargetProfile* prof = self.profile ?: [XTIROptTargetProfile conservativeProfile];
+    if (!prof.unrollsChainLoops)
+        return YES;
+    for (XTIRFunction* fn in mod.functions)
+        for (XTIRBlock* L in [fn.blocks copy])
+            if ([self recognise:L])
+                {
+                [self apply:L inFunction:fn];
+                [self regroup:L body:L];
+                }
+    return YES;
+    }
+
+- (BOOL)recognise:(XTIRBlock*)L
+    {
+    XTIRInsn* t = L.terminator;
+    if (!t || t.opcode != XTIROpCondBranch || t.operands.count < 3)
+        return NO;
+    if (t.operands[1].blockRef != L || t.operands[2].blockRef == L)
+        return NO;
+    if (t.operands[0].kind != XTIROperandKindUse)
+        return NO;
+    NSUInteger vecPhis = 0;
+    _iv = nil;
+    for (XTIRInsn* p in L.phiNodes)
+        {
+        if (!p.result || p.memoryResult || p.operands.count != 4)
+            return NO;
+        if (p.result.type.kind == XTIRTypeKindVec)
+            vecPhis++;
+        else if (!_iv && XTIRTypeKindIsInteger(p.result.type.kind))
+            _iv = p;
+        else
+            return NO;
+        }
+    if (vecPhis < 2 || !_iv || L.instructions.count > 64)
+        return NO;
+    _next = nil;
+    _cmp = nil;
+    for (XTIRInsn* n in L.instructions)
+        {
+        if (n.result && n.result.valueId == t.operands[0].valueId)
+            _cmp = n;
+        if (n.opcode == XTIROpAdd && n.operands.count == 2 &&
+            n.operands[0].kind == XTIROperandKindUse && n.operands[0].valueId == _iv.result.valueId &&
+            n.operands[1].kind == XTIROperandKindImmI && n.operands[1].intValue == 1)
+            _next = n;
+        }
+    if (!_next || !_cmp || _cmp.opcode != XTIROpICmp || _cmp.predicate != XTIRICmpULT || _cmp.operands.count < 2)
+        return NO;
+    XTIROperand *ca = _cmp.operands[0], *cb = _cmp.operands[1];
+    if (ca.kind != XTIROperandKindUse || ca.valueId != _next.result.valueId || cb.kind != XTIROperandKindImmI)
+        return NO;
+    int64_t initK = -1;
+    for (NSUInteger k = 0; k + 1 < _iv.operands.count; k += 2)
+        {
+        XTIROperand *bo = _iv.operands[k], *vo = _iv.operands[k + 1];
+        if (bo.blockRef == L)
+            {
+            if (vo.kind != XTIROperandKindUse || vo.valueId != _next.result.valueId)
+                return NO;
+            }
+        else if (vo.kind == XTIROperandKindImmI)
+            initK = vo.intValue;
+        }
+    int64_t trip = (int64_t)(int32_t)cb.intValue - initK;
+    if (initK < 0 || trip < 2 || (trip & 1) != 0)
+        return NO;
+    for (XTIRInsn* n in L.instructions)
+        {
+        if (n == _next || n == _cmp)
+            continue;
+        if (ucUsesValue(n, _iv.result.valueId) || ucUsesValue(n, _next.result.valueId) ||
+            ucUsesValue(n, _cmp.result.valueId))
+            return NO;
+        }
+    return ucChainsIndependent(L, L);
+    }
+
+- (void)apply:(XTIRBlock*)L inFunction:(XTIRFunction*)fn
+    {
+    NSMutableDictionary<NSNumber*, NSNumber*>* map = [NSMutableDictionary dictionary];
+    // Copy 1 reads copy 0's results where copy 0 read the phis.
+    for (XTIRInsn* p in L.phiNodes)
+        for (NSUInteger k = 0; k + 1 < p.operands.count; k += 2)
+            if (p.operands[k].blockRef == L && p.operands[k + 1].kind == XTIROperandKindUse)
+                map[@(p.result.valueId)] = @(p.operands[k + 1].valueId);
+    NSUInteger n0 = L.instructions.count;
+    for (NSUInteger i = 0; i < n0; i++)
+        {
+        XTIRInsn* n = L.instructions[i];
+        if (n == _cmp)
+            continue;
+        NSMutableArray<XTIROperand*>* ops = [NSMutableArray arrayWithCapacity:n.operands.count];
+        for (XTIROperand* o in n.operands)
+            [ops addObject:remapOp(o, map)];
+        XTIRValue* r = nil;
+        if (n.result)
+            {
+            XTIRValueId vid = [fn allocateValueId];
+            r = [[XTIRValue alloc] initWithValueId:vid
+                                              type:n.result.type
+                                           defSite:[[XTIRDefSite alloc] initWithBlock:L insnIndex:L.instructions.count]];
+            [fn registerValue:r];
+            map[@(n.result.valueId)] = @(vid);
+            }
+        [L.instructions addObject:buildLike(n, r, ops, nil)];
+        }
+    // The compare tests copy 1's counter; the phis take copy 1's values.
+    NSMutableArray<XTIROperand*>* cops = [_cmp.operands mutableCopy];
+    cops[0] = [XTIROperand useWithValueId:(XTIRValueId)[map[@(_cmp.operands[0].valueId)] unsignedLongLongValue]];
+    [_cmp replaceOperands:cops];
+    [L.instructions removeObjectIdenticalTo:_cmp];
+    [L.instructions addObject:_cmp];
+    // The loop is rotated: what follows it reads the last step's values, which
+    // are copy 1's now.
+    NSMutableSet<NSNumber*>* phiIds = [NSMutableSet set];
+    for (XTIRInsn* p in L.phiNodes)
+        [phiIds addObject:@(p.result.valueId)];
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        if (bb == L)
+            continue;
+        NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:bb.phiNodes];
+        [all addObjectsFromArray:bb.instructions];
+        if (bb.terminator)
+            [all addObject:bb.terminator];
+        for (XTIRInsn* u in all)
+            {
+            BOOL changed = NO;
+            NSMutableArray<XTIROperand*>* ops = [u.operands mutableCopy];
+            for (NSUInteger k = 0; k < ops.count; k++)
+                {
+                XTIROperand* o = ops[k];
+                if (o.kind != XTIROperandKindUse || [phiIds containsObject:@(o.valueId)])
+                    continue;
+                NSNumber* nv = map[@(o.valueId)];
+                if (nv)
+                    {
+                    ops[k] = [XTIROperand useWithValueId:(XTIRValueId)nv.unsignedLongLongValue];
+                    changed = YES;
+                    }
+                }
+            if (changed)
+                [u replaceOperands:ops];
+            }
+        }
+    for (XTIRInsn* p in L.phiNodes)
+        {
+        BOOL changed = NO;
+        NSMutableArray<XTIROperand*>* ops = [p.operands mutableCopy];
+        for (NSUInteger k = 0; k + 1 < ops.count; k += 2)
+            if (ops[k].blockRef == L && ops[k + 1].kind == XTIROperandKindUse && map[@(ops[k + 1].valueId)])
+                {
+                ops[k + 1] = [XTIROperand useWithValueId:(XTIRValueId)[map[@(ops[k + 1].valueId)] unsignedLongLongValue]];
+                changed = YES;
+                }
+        if (changed)
+            [p replaceOperands:ops];
+        }
+    }
+
+// Chain by chain, each chain's instructions in their order; the instructions of
+// no chain (the induction, the compare) first, which read no chain value.
+- (void)regroup:(XTIRBlock*)H body:(XTIRBlock*)B
+    {
+    NSMutableDictionary<NSNumber*, NSNumber*>* chainOf = [NSMutableDictionary dictionary];
+    NSUInteger nchains = 0;
+    for (XTIRInsn* p in H.phiNodes)
+        if (p.result && p.result.type.kind == XTIRTypeKindVec)
+            chainOf[@(p.result.valueId)] = @(nchains++);
+    NSMutableArray<NSNumber*>* chainOfInsn = [NSMutableArray array];
+    for (XTIRInsn* n in B.instructions)
+        {
+        if (n.memoryResult)
+            return;
+        NSInteger ch = -1;
+        for (XTIROperand* o in n.operands)
+            {
+            if (o.kind != XTIROperandKindUse)
+                continue;
+            NSNumber* oc = chainOf[@(o.valueId)];
+            if (!oc)
+                continue;
+            if (ch >= 0 && ch != oc.integerValue)
+                return;
+            ch = oc.integerValue;
+            }
+        if (ch >= 0 && n.result)
+            chainOf[@(n.result.valueId)] = @(ch);
+        [chainOfInsn addObject:@(ch)];
+        }
+    NSMutableArray<XTIRInsn*>* order = [NSMutableArray array];
+    for (NSUInteger i = 0; i < B.instructions.count; i++)
+        if (chainOfInsn[i].integerValue < 0)
+            [order addObject:B.instructions[i]];
+    for (NSUInteger c = 0; c < nchains; c++)
+        for (NSUInteger i = 0; i < B.instructions.count; i++)
+            if (chainOfInsn[i].integerValue == (NSInteger)c)
+                [order addObject:B.instructions[i]];
+    if (order.count != B.instructions.count)
+        return;
+    [B.instructions setArray:order];
+    }
+
+@end

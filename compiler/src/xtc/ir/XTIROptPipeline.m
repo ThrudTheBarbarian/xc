@@ -270,6 +270,10 @@
         XTIROptLoopUnrollVarTrip* unrollVT = [[XTIROptLoopUnrollVarTrip alloc] init];
         unrollVT.profile = profile;
         [p addPass:unrollVT];
+        // A rotated loop of independent vector chains, twice, chain by chain (#8).
+        XTIROptChainUnroll* chainU = [[XTIROptChainUnroll alloc] init];
+        chainU.profile = profile;
+        [p addPass:chainU];
         XTIROptStrengthReduce* sr = [[XTIROptStrengthReduce alloc] init];
         sr.profile = profile;
         [p addPass:sr];

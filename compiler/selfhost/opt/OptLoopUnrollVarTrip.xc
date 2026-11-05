@@ -372,6 +372,298 @@
         return c;
         }
 
+    // A loop of independent vector chains: no memory access or call in the
+    // body, and no body value combines two vector phis' chains (a value's
+    // chain is the vector phi it derives from in the body, if any).
+    final bool vtChainsIndependent(IRBlock* H, IRBlock* B)
+        {
+        Map* chainOf = new Map();
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)H.phis().get(i);
+            if (p.res() != (IRValue*)0 && self.isVectorType(p.res().ty()))
+                chainOf.set((Hashable*)p.res(), (Object*)Number.with(i));
+            }
+        for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)B.insns().get(i);
+            if (n.memRes() != (IRValue*)0 || vtIsCall(n.op()))
+                return false;
+            Object* ch = (Object*)0;
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)n.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                    continue;
+                Object* oc = chainOf.get((Hashable*)o.val());
+                if (oc == (Object*)0)
+                    continue;
+                if (ch != (Object*)0 && ((Number*)ch).asU32() != ((Number*)oc).asU32())
+                    return false;
+                ch = oc;
+                }
+            if (ch != (Object*)0 && n.res() != (IRValue*)0)
+                chainOf.set((Hashable*)n.res(), ch);
+            }
+        return true;
+        }
+
+    // A loop the vectoriser leaves rotated, one block that branches back to
+    // itself: several independent vector chains (v = v*k + c) and a counter
+    // from a constant to a constant bound by one. Unrolled twice when the
+    // trip is even, the second copy reading the first's results; only its
+    // test drives the back edge. rcRegroup then orders the block chain by
+    // chain, so each fmla writes a register other than its multiplicand
+    // (#8: orr + fmla a step, not orr + fmla + orr).
+    final void unrollChainLoops(IRModule* m)
+        {
+        if (!_profile.unrollChains())
+            return;
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* L = (IRBlock*)fn.blocks().get(b);
+                if (ucRecognise(L))
+                    {
+                    ucApply(fn, L);
+                    rcRegroup(L, L);
+                    }
+                }
+            }
+        }
+
+    final bool ucRecognise(IRBlock* L)
+        {
+        IRInsn* t = L.term();
+        if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() < (u32)3)
+            return false;
+        if (((IROperand*)t.ops().get((u32)1)).blk() != L || ((IROperand*)t.ops().get((u32)2)).blk() == L)
+            return false;
+        IROperand* c0 = (IROperand*)t.ops().get((u32)0);
+        if (c0.kind() != (u8)OPK_USE || c0.val() == (IRValue*)0)
+            return false;
+        u32 vecPhis = (u32)0;
+        _ucIv = (IRInsn*)0;
+        for (u32 i = (u32)0; i < L.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)L.phis().get(i);
+            if (p.res() == (IRValue*)0 || p.memRes() != (IRValue*)0 || p.ops().count() != (u32)4)
+                return false;
+            if (self.isVectorType(p.res().ty()))
+                vecPhis = vecPhis + (u32)1;
+            else if (_ucIv == (IRInsn*)0 && self.isIntType(p.res().ty()))
+                _ucIv = p;
+            else
+                return false;
+            }
+        if (vecPhis < (u32)2 || _ucIv == (IRInsn*)0 || L.insns().count() > (u32)64)
+            return false;
+        // The counter: Add(iv, #1) read only by the compare and the phi, the
+        // compare ULT against a constant, the phi starting at a constant.
+        _ucNext = (IRInsn*)0;
+        _ucCmp = (IRInsn*)0;
+        for (u32 i = (u32)0; i < L.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)L.insns().get(i);
+            if (n.res() == c0.val())
+                _ucCmp = n;
+            if (n.op().equals(String.withCString("Add")) && n.ops().count() == (u32)2
+                && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE
+                && ((IROperand*)n.ops().get((u32)0)).val() == _ucIv.res()
+                && ((IROperand*)n.ops().get((u32)1)).kind() == (u8)OPK_IMMI
+                && ((IROperand*)n.ops().get((u32)1)).imm() == (i32)1)
+                _ucNext = n;
+            }
+        if (_ucNext == (IRInsn*)0 || _ucCmp == (IRInsn*)0 || !_ucCmp.op().equals(String.withCString("ICmp"))
+            || _ucCmp.pred() == (String*)0 || !_ucCmp.pred().equals(String.withCString("ULT")) || _ucCmp.ops().count() < (u32)2)
+            return false;
+        IROperand* ca = (IROperand*)_ucCmp.ops().get((u32)0);
+        IROperand* cb = (IROperand*)_ucCmp.ops().get((u32)1);
+        if (ca.kind() != (u8)OPK_USE || ca.val() != _ucNext.res() || cb.kind() != (u8)OPK_IMMI)
+            return false;
+        i64 initK = (i64)-1;
+        for (u32 k = (u32)0; k + (u32)1 < _ucIv.ops().count(); k = k + (u32)2)
+            {
+            IROperand* bo = (IROperand*)_ucIv.ops().get(k);
+            IROperand* vo = (IROperand*)_ucIv.ops().get(k + (u32)1);
+            if (bo.blk() == L)
+                {
+                if (vo.kind() != (u8)OPK_USE || vo.val() != _ucNext.res())
+                    return false;
+                }
+            else if (vo.kind() == (u8)OPK_IMMI)
+                initK = (i64)vo.imm();
+            }
+        i64 trip = (i64)cb.imm() - initK;
+        if (initK < (i64)0 || trip < (i64)2 || (trip & (i64)1) != (i64)0)
+            return false;
+        // The counter's values read nowhere else in the block.
+        for (u32 i = (u32)0; i < L.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)L.insns().get(i);
+            if (n == _ucNext || n == _ucCmp)
+                continue;
+            if (insnUsesValue(n, _ucIv.res()) || insnUsesValue(n, _ucNext.res()) || insnUsesValue(n, _ucCmp.res()))
+                return false;
+            }
+        // Each vector phi's chain its own, no memory access, no call.
+        return vtChainsIndependent(L, L);
+        }
+
+    final void ucApply(IRFunc* fn, IRBlock* L)
+        {
+        Map* map = new Map();
+        // Copy 1 reads copy 0's results where copy 0 read the phis.
+        for (u32 i = (u32)0; i < L.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)L.phis().get(i);
+            for (u32 k = (u32)0; k + (u32)1 < p.ops().count(); k = k + (u32)2)
+                if (((IROperand*)p.ops().get(k)).blk() == L)
+                    {
+                    IROperand* bv = (IROperand*)p.ops().get(k + (u32)1);
+                    if (bv.kind() == (u8)OPK_USE)
+                        map.set((Hashable*)p.res(), (Object*)bv.val());
+                    }
+            }
+        u32 n0 = L.insns().count();
+        for (u32 i = (u32)0; i < n0; i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)L.insns().get(i);
+            if (n == _ucCmp)
+                continue;
+            IRInsn* cl = IRInsn.with(n.op());
+            cl.copyDbg(n);
+            cl.setPred(n.pred());
+            cl.setCc(n.cc());
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                cl.add(self.unrollSubstMap(map, (IROperand*)n.ops().get(k)));
+            if (n.res() != (IRValue*)0)
+                {
+                cl.setRes(new IRValue(n.res().ty()));
+                map.set((Hashable*)n.res(), (Object*)cl.res());
+                }
+            L.add(cl);
+            }
+        // The compare tests copy 1's counter; the phis take copy 1's values.
+        IROperand* ca = (IROperand*)_ucCmp.ops().get((u32)0);
+        _ucCmp.ops().set((u32)0, (Object*)IROperand.useVal((IRValue*)map.get((Hashable*)ca.val())));
+        u32 at = (u32)0;
+        for (u32 i = (u32)0; i < L.insns().count(); i = i + (u32)1)
+            if ((IRInsn*)L.insns().get(i) == _ucCmp)
+                at = i;
+        L.insns().removeAt(at);
+        L.add(_ucCmp);
+        // The loop is rotated: what follows it reads the last step's values,
+        // which are copy 1's now.
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            if (bb == L)
+                continue;
+            Array* all = new Array();
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1) all.add(bb.phis().get(i));
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) all.add(bb.insns().get(i));
+            if (bb.term() != (IRInsn*)0) all.add((Object*)bb.term());
+            for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                {
+                IRInsn* u = (IRInsn*)all.get(i);
+                for (u32 k = (u32)0; k < u.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)u.ops().get(k);
+                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0 || inPhiOf(L, o.val()))
+                        continue;
+                    Object* nv = map.get((Hashable*)o.val());
+                    if (nv != (Object*)0)
+                        u.ops().set(k, (Object*)IROperand.useVal((IRValue*)nv));
+                    }
+                }
+            }
+        for (u32 i = (u32)0; i < L.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)L.phis().get(i);
+            for (u32 k = (u32)0; k + (u32)1 < p.ops().count(); k = k + (u32)2)
+                if (((IROperand*)p.ops().get(k)).blk() == L)
+                    {
+                    IROperand* bv = (IROperand*)p.ops().get(k + (u32)1);
+                    if (bv.kind() == (u8)OPK_USE && map.get((Hashable*)bv.val()) != (Object*)0)
+                        p.ops().set(k + (u32)1, (Object*)IROperand.useVal((IRValue*)map.get((Hashable*)bv.val())));
+                    }
+            }
+        }
+
+    // Is v one of L's phis? (The map also sends each phi to copy 0's value,
+    // which a reader after the loop must not take.)
+    final bool inPhiOf(IRBlock* L, IRValue* v)
+        {
+        for (u32 i = (u32)0; i < L.phis().count(); i = i + (u32)1)
+            if (((IRInsn*)L.phis().get(i)).res() == v)
+                return true;
+        return false;
+        }
+
+    // An unrolled chain loop's body is in copy order: copy 0 of every chain,
+    // then copy 1 of every chain, which keeps every chain's copy-0 value live
+    // at once (8 chains need 8 + 8 vector registers and the arm64 pool has
+    // 14). H holds the vector phis; B is the body (H itself for a rotated
+    // loop). Reorder it chain by chain, each chain's instructions in their
+    // order; the instructions of no chain (the induction, the compare) first,
+    // which read no chain value. Every instruction moves only past ones it
+    // does not depend on.
+    final void rcRegroup(IRBlock* H, IRBlock* B)
+        {
+        Map* chainOf = new Map();
+        u32 nchains = (u32)0;
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)H.phis().get(i);
+            if (p.res() != (IRValue*)0 && self.isVectorType(p.res().ty()))
+                {
+                chainOf.set((Hashable*)p.res(), (Object*)Number.with(nchains));
+                nchains = nchains + (u32)1;
+                }
+            }
+        Array* chainOfInsn = new Array();
+        for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)B.insns().get(i);
+            if (n.memRes() != (IRValue*)0)
+                return;
+            i32 ch = (i32)-1;
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)n.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                    continue;
+                Object* oc = chainOf.get((Hashable*)o.val());
+                if (oc == (Object*)0)
+                    continue;
+                i32 c = (i32)((Number*)oc).asU32();
+                if (ch >= (i32)0 && ch != c)
+                    return;
+                ch = c;
+                }
+            if (ch >= (i32)0 && n.res() != (IRValue*)0)
+                chainOf.set((Hashable*)n.res(), (Object*)Number.with((u32)ch));
+            chainOfInsn.add((Object*)Number.withI32(ch));
+            }
+        Array* order = new Array();
+        for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+            if (((Number*)chainOfInsn.get(i)).asI32() < (i32)0)
+                order.add(B.insns().get(i));
+        for (u32 c = (u32)0; c < nchains; c = c + (u32)1)
+            for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+                if (((Number*)chainOfInsn.get(i)).asI32() == (i32)c)
+                    order.add(B.insns().get(i));
+        if (order.count() != B.insns().count())
+            return;
+        // A chain-free instruction that reads a chain value cannot move first;
+        // there is none in an independent-chain body, but keep the order then.
+        for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
+            B.insns().set(i, order.get(i));
+        }
+
     // Is `v` read anywhere outside the header and the body?
     final bool vtEscapes(IRFunc* fn, IRBlock* H, IRBlock* B, IRValue* v)
         {

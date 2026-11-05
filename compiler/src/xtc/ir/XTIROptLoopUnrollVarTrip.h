@@ -12,6 +12,17 @@ NS_ASSUME_NONNULL_BEGIN
 // original body / increment / compare in the original order, just regrouped, so
 // the back-edge (and its branch/increment overhead) fires once per N bodies.
 // Profile-gated (unrollsVariableTrip); arm64 only. -O2+.
+// A loop the vectoriser leaves rotated — one block that branches back to itself
+// — of several independent vector chains (v = v*k + c) and a counter from a
+// constant to a constant bound by one, unrolled twice when the trip is even:
+// the second copy reads the first's results and only its test drives the back
+// edge. The block is then ordered chain by chain, so each fmla writes a
+// register other than its multiplicand (#8: orr + fmla a step, not orr + fmla +
+// orr). Profile-gated (unrollsChainLoops); arm64. As the port.
+@interface XTIROptChainUnroll : NSObject <XTIROptPass>
+@property(nonatomic, strong, nullable) XTIROptTargetProfile* profile;
+@end
+
 @interface XTIROptLoopUnrollVarTrip : NSObject <XTIROptPass>
 @property(nonatomic, strong, nullable) XTIROptTargetProfile* profile;
 // Par kernels only: unroll a loop only when its constant trip is a whole

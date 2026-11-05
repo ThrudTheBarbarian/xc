@@ -102,6 +102,7 @@ class OptProfile
     u32 _unrollFrameIds;
     bool _pointerIV;       // loop array addressing becomes an advancing phi
     bool _unrollVarTrip;   // …and a variable-trip loop partially unrolls
+    bool _unrollChains;    // …and so does a loop of independent vector chains (#8)
     bool _licm;            // loop-invariant code moves to the preheader
     bool _hoistGlobalAddr; // …and a repeated AddrOf @sym dedupes to the entry
     bool _hoistLocalAddr;  // …and a repeated AddrOf of a pinned LOCAL (arm64)
@@ -365,6 +366,12 @@ class OptProfile
         // unroll for us, and a loop whose trip count it cannot see pays the
         // branch every iteration. private:docs/bugs/238.
         p._unrollVarTrip = t.equals(String.withCString("arm64")) || t.equals(String.withCString("arm9")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64")) || t.equals(String.withCString("wasm32"));
+        // A loop of several independent vector chains (v = v*k + c per chain)
+        // unrolls on arm64, the copies regrouped chain by chain: each copy's
+        // fmla then writes a register other than its multiplicand, two
+        // instructions a step instead of three (#8: 8 chains on a Pi 5,
+        // 42.5 GFLOPS bound by the moves).
+        p._unrollChains = t.equals(String.withCString("arm64"));
         // LICM is on for every live target, and so now is the global-address
         // hoist. It was off on wasm32 because a data address IS an i32 const —
         // true, and it still pays, just not in the column that was watched:
@@ -526,6 +533,10 @@ class OptProfile
     bool unrollVarTrip(void)
         {
         return _unrollVarTrip;
+        }
+    bool unrollChains(void)
+        {
+        return _unrollChains;
         }
     bool licm(void)
         {
@@ -1621,6 +1632,10 @@ class BeFact : Object
     // Par kernels only: fold EVERY static-init guard (the reference's
     // foldAll explains).
     bool _sgFoldAll;
+
+    IRInsn* _ucIv;         // unrollChainLoops: the counter phi, its add and its compare
+    IRInsn* _ucNext;
+    IRInsn* _ucCmp;
 
     IRInsn* _vtIvPhi;
     IRInsn* _vtGuard;

@@ -4877,7 +4877,23 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             exit(1);
         }
         ctx.vecReg[@(o.valueId)] = [NSString stringWithFormat:@"v%lu", (unsigned long)scratch];
-        if (rm) {
+        XTIROperand *ko = rm ? ctx.vRemat[@(o.valueId)] : nil;
+        XTIRValue *rv = rm ? [ctx.fn valueForId:o.valueId] : nil;
+        if (rm && ko.kind == XTIROperandKindImmF && rv.type.pointeeType.kind == XTIRTypeKindF32) {
+            // An f32 constant is its float's own 32 bits: the immediate holds a
+            // double's, whose low half a `dup .4s` would take (0.0001 came out
+            // as 0xE0000000).
+            uint64_t raw = ko.floatRawBytes;
+            double dv;
+            memcpy(&dv, &raw, sizeof dv);
+            float fv = (float)dv;
+            uint32_t fb;
+            memcpy(&fb, &fv, sizeof fb);
+            [ctx.out appendFormat:@"    movz w16, #%u\n", fb & 0xFFFFu];
+            if (fb >> 16)
+                [ctx.out appendFormat:@"    movk w16, #%u, lsl #16\n", (fb >> 16) & 0xFFFFu];
+            [ctx.out appendFormat:@"    dup v%lu.4s, w16\n", (unsigned long)scratch];
+        } else if (rm) {
             XTIRValue *v = [ctx.fn valueForId:o.valueId];
             XTIRInsn *spl = [[XTIRInsn alloc] initWithOpcode:XTIROpVSplat result:v operands:@[ ctx.vRemat[@(o.valueId)] ] dbgLoc:nil];
             [self emitInsn1:spl inBlock:block ctx:ctx];
