@@ -56,7 +56,8 @@ sed -e 's/for (u32 k in 0..ROUNDS)/for (u32 k in 0..ROUNDS - 1)/' \
             out[i] = v0 + v1 + v2 + v3;|' "$W/c.xc" > "$W/odd.xc"
 grep -q 'ROUNDS - 1' "$W/odd.xc" || { echo "FAIL: could not make the odd-trip variant"; exit 1; }
 
-for A in arm64-linux arm64; do
+TARGETS="arm64-linux"; [ "$PLAT" = osx ] && TARGETS="arm64-linux arm64"   # macOS needs its SDK frameworks
+for A in $TARGETS; do
     for C in "$REF" "$XC"; do
         n=$(basename "$C")
         if ! "$C" -q -O2 -A "$A" -S -o "$W/c.$A.$n.s" "$W/c.xc" 2> "$W/err"; then

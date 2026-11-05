@@ -6,7 +6,7 @@ int main(void)
 {
     for (int i = 0; i < W * W; i++)
         img[i] = (unsigned char)((i * 7 + (i >> 10) * 13) & 255);
-    for (int i = W; i < W * W - W; i++) {
+    for (int i = W + 1; i < W * W - W - 1; i++) {   /* the stencil stays inside img */
         unsigned s = 0;
         for (int dy = -1; dy <= 1; dy++)
             for (int dx = -1; dx <= 1; dx++)
