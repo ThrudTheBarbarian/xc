@@ -5195,6 +5195,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
     if (isWasm(d))   { emitWasm(d, mod);   return; }
 
     OptProfile* prof = OptProfile.forTarget(backendTargetOf(d));
+    if (d.targetRow().rotateChain()) prof.setLoopRotateChain(true);
     Opt.setUnrollOverride(prof, d.unroll());
     applyOptFlags(d, prof);
     Opt* opt = Opt.atLevel(d.opt(), prof);

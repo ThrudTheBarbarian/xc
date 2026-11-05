@@ -380,9 +380,11 @@ class OptProfile
         p._narrowIV = t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")) || t.equals(String.withCString("atarist"));
         // Every live target rotates except the 6502.
         p._loopRotate = !(t.equals(String.withCString("xt")) || t.equals(String.withCString("xt6502")));
-        // A test that is a short-circuit chain rotates on x86-64 only: on
-        // arm64 the threaded values cost a run of moves on the back edge, and
-        // the loop measured 1.9x slower.
+        // A test that is a short-circuit chain rotates on x86-64; on arm64
+        // where the target row says (rotateChain: not on Apple's cores, where
+        // the unrotated loop is as fast, measured on an M4 Max and an M3 Max;
+        // on the Pi 5 sort_small's insertion loop goes 4.50 s -> 3.54 s, its
+        // exit copies in an out-of-line stub).
         p._loopRotateChain = t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
         return p;
         }
@@ -567,6 +569,7 @@ class OptProfile
         {
         return _loopRotateChain;
         }
+    void setLoopRotateChain(bool b) { _loopRotateChain = b; }
     }
 
     // A natural loop discovered from a back edge, for loop-reduction-collapse.

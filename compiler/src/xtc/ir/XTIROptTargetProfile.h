@@ -295,6 +295,9 @@ NS_ASSUME_NONNULL_BEGIN
 // arm64 has 31 registers, a clean ISA and no 16 KB code-bank limit, so it
 // relaxes every unroll knob the 6502 keeps tight.
 @interface XTIRArm64TargetProfile : XTIROptTargetProfile
+// Loops whose test is a short-circuit chain rotate: the target row's
+// rotateChain (arm64 Linux and Android; not Apple's cores).
+@property(nonatomic) BOOL rotateChains;
 @end
 
 // m68k (Atari ST/TT) has 16 registers and no 16 KB code-bank limit, so it can

@@ -43,6 +43,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// on an M3 Max; 0 on a Pi 5's A76, where the suite came out even.
 @property(nonatomic, readonly) NSUInteger loopAlign;
 - (XTTarget*)withLoopAlign:(NSUInteger)p2;
+/// arm64: loops whose test is a short-circuit chain rotate (not on Apple's
+/// cores, where the unrotated loop is as fast; on the Pi 5 sort_small's
+/// insertion loop goes 4.50 s -> 3.54 s).
+@property(nonatomic, readonly) BOOL rotateChain;
+- (XTTarget*)withRotateChain;
 // The Apple SDK whose frameworks `#import <F>` may name (macosx, iphoneos,
 // iphonesimulator), or nil: frameworks are on exactly when it is set.
 @property(nonatomic, readonly, copy, nullable) NSString* appleSdk;

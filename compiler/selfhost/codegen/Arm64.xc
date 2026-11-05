@@ -138,6 +138,11 @@ class Arm64
     u32        _loopAlign;      // loop heads on 2^n bytes, 0 none (the row's loop-align)
     IRFunc*   _fn;
     String*   _out;
+    // The block emitted after the current one, for a branch that can fall
+    // into it; and the out-of-line stubs of the function being emitted,
+    // written after its last block.
+    IRBlock*  _nextBB;
+    String*   _coldStubs;
     Map*      _slot;            // value -> byte offset in the frame
     Map*      _defOf;           // value -> the instruction that defines it
     Map*      _defSeq;          // value -> its place in definition order (1, 2, ...)
@@ -954,12 +959,17 @@ class Arm64
                         head.set(hb, (Object*)Number.with((u32)1));
                 }
             }
+        _coldStubs = String.withCString("");
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
             if (((Number*)head.get(b)).asU32() != (u32)0)
                 _out.appendFormat("    .p2align %u\n", _loopAlign);
+            _nextBB = b + (u32)1 < fn.blocks().count() ? (IRBlock*)fn.blocks().get(b + (u32)1) : (IRBlock*)0;
             emitBlock(fn, (IRBlock*)fn.blocks().get(b));
             }
+        _nextBB = (IRBlock*)0;
+        _out.append(_coldStubs);
+        _coldStubs = String.withCString("");
     }
 
     // The checked-build parameter map (private:docs/Design/memory-safety.md). Collected
@@ -7518,8 +7528,7 @@ class Arm64
              && !phiCopiesNeeded(t, _bb) && !phiCopiesNeeded(f, _bb)) {
                 String* vt = opType(zval);
                 String* reg = operandReg(zval, String.withCString(needsXReg(vt) ? "x16" : "w16"));
-                bool eq = icmp.pred() != (String*)0
-                       && icmp.pred().equals(String.withCString("EQ"));
+                bool eq = icmpZeroIsEq(icmp);
                 _out.appendFormat("    %s %s, %s\n", eq ? "cbz" : "cbnz", reg.cString(),
                                   blockLabel(t).cString());
                 _out.appendFormat("    b %s\n", blockLabel(f).cString());
@@ -7540,6 +7549,23 @@ class Arm64
                 _out.appendFormat("%s:\n", lf.cString());
                 emitPhiCopies(_bb, f);
                 _out.appendFormat("    b %s\n", blockLabel(f).cString());
+                return;
+            }
+            // The taken edge is the next block and needs no copies, the other
+            // edge does: branch out on the inverse to a stub that makes them,
+            // and fall through. A rotated loop's back edge is then the only
+            // branch it takes (sort_small's insertion loop on the Pi 5).
+            if (t == _nextBB && t != (IRBlock*)0 && !phiCopiesNeeded(t, _bb) && phiCopiesNeeded(f, _bb)) {
+                String* ls = labelFor(String.withCString("cold"), _labelCounter);
+                _labelCounter = _labelCounter + (u32)1;
+                _out.appendFormat("    b.%s %s\n", condString(negatePred(icmp.pred())).cString(), ls.cString());
+                String* hot = _out;
+                _out = String.withCString("");
+                _out.appendFormat("%s:\n", ls.cString());
+                emitPhiCopies(_bb, f);
+                _out.appendFormat("    b %s\n", blockLabel(f).cString());
+                _coldStubs.append(_out);
+                _out = hot;
                 return;
             }
             emitPhiCopies(_bb, t);
@@ -7785,18 +7811,28 @@ class Arm64
         if (icmp == (IRInsn*)0 || icmp.ops().count() < (u32)2) return (IROperand*)0;
         String* pr = icmp.pred();
         if (pr == (String*)0) return (IROperand*)0;
-        if (!pr.equals(String.withCString("EQ")) && !pr.equals(String.withCString("NE")))
-            return (IROperand*)0;
         IROperand* o0 = (IROperand*)icmp.ops().get((u32)0);
         IROperand* o1 = (IROperand*)icmp.ops().get((u32)1);
         IROperand* val = (IROperand*)0;
-        if (isZeroOperand(o1))      val = o0;
-        else if (isZeroOperand(o0)) val = o1;
+        bool eqne = pr.equals(String.withCString("EQ")) || pr.equals(String.withCString("NE"));
+        // An unsigned test against zero is one too: x > 0 and 0 < x are
+        // x != 0, x <= 0 and 0 >= x are x == 0 (sort_small's `j > 0`).
+        if (isZeroOperand(o1) && (eqne || pr.equals(String.withCString("UGT")) || pr.equals(String.withCString("ULE"))))
+            val = o0;
+        else if (isZeroOperand(o0) && (eqne || pr.equals(String.withCString("ULT")) || pr.equals(String.withCString("UGE"))))
+            val = o1;
         if (val == (IROperand*)0) return (IROperand*)0;
         // cbz/cbnz are GP-register only. An ICmp never has float operands, but
         // guard anyway.
         if (isFloatTy(opType(val))) return (IROperand*)0;
         return val;
+    }
+
+    // The zero test icmpZeroTestValue accepted is x == 0 (cbz), not x != 0.
+    bool icmpZeroIsEq(IRInsn* icmp)
+    {
+        String* pr = icmp.pred();
+        return pr.equals(String.withCString("EQ")) || pr.equals(String.withCString("ULE")) || pr.equals(String.withCString("UGE"));
     }
 
     bool isZeroOperand(IROperand* o)

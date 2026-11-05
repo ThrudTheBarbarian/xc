@@ -38,6 +38,7 @@ static void usage(void)
             "  -q, --quiet           Suppress informational stderr.\n"
             "  --dump-opt-ir         Print the IR after the opt pipeline and stop.\n"
             "  --loop-align <n>      Align loop heads to 2^n bytes (the target row's)\n"
+            "  --rotate-chains       Rotate loops whose test is a short-circuit chain (the target row's)\n"
             "  --no-lse-atomics      The target has no ARMv8.1 LSE: emit atomic ARC\n"
             "                        as an ldaxrh/stlxrh loop (Android).\n"
             "  --aapcs64-abi         Use plain AAPCS64 argument placement (Android)\n"
@@ -72,6 +73,7 @@ int main(int argc, const char* argv[])
         BOOL inlineChecks = NO;         // --inline-checks: -fbounds-check=light
         BOOL lseAtomics = YES;
         NSUInteger loopAlign = 0;       // --loop-align <n>: loop heads on 2^n bytes
+        BOOL rotateChains = NO;         // --rotate-chains: the row's rotateChain
 
         for (int i = 1; i < argc; i++)
             {
@@ -130,6 +132,10 @@ int main(int argc, const char* argv[])
                 // for each, so they export). Same arch-neutral switch the arm9
                 // codegen uses.
                 [XTIROptDeadFunctionElim setKeepAllFunctions:YES];
+                }
+            else if ([arg isEqualToString:@"--rotate-chains"])
+                {
+                rotateChains = YES;
                 }
             else if ([arg isEqualToString:@"--loop-align"] && i + 1 < argc)
                 {
@@ -228,6 +234,7 @@ int main(int argc, const char* argv[])
             armProfile.matMulFastSuffix = matMul ? @"_fast" : nil;
             armProfile.matMulInts = matMul;
             armProfile.inlineChecks = inlineChecks;
+            armProfile.rotateChains = rotateChains;
             XTIROptPipeline* pipe =
                 [XTIROptPipeline standardPipelineAtLevel:optLevel
                                                  profile:armProfile];

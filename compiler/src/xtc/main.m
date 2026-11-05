@@ -5033,6 +5033,8 @@ static int dispatchIRPipeline(const char *argv0, XTCommandLineOptions *opts) {
         [cgArgs addObject:@"--aapcs64-abi"];
     if ([cgRow.cpu isEqualToString:@"arm64"] && !cgRow.lseAtomics)
         [cgArgs addObject:@"--no-lse-atomics"];
+    if ([cgRow.cpu isEqualToString:@"arm64"] && cgRow.rotateChain)
+        [cgArgs addObject:@"--rotate-chains"];
     if ([cgRow.cpu isEqualToString:@"arm64"] && cgRow.loopAlign)
         {
         [cgArgs addObject:@"--loop-align"];

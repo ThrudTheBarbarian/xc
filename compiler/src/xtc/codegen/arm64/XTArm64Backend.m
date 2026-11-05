@@ -40,6 +40,11 @@ static NSUInteger sArm64LoopAlign = 0;
 @property (nonatomic) XTIRFunction *fn;
 @property (nonatomic) XTIRModule *module;
 @property (nonatomic) NSMutableString *out;
+// The block emitted after the current one, for a branch that can fall into
+// it; and the out-of-line stubs of the function being emitted, written after
+// its last block.
+@property (nonatomic, nullable) XTIRBlock *nextBlock;
+@property (nonatomic) NSMutableString *coldStubs;
 @property (nonatomic) NSUInteger frameSize;   // bytes, multiple of 16
 @property (nonatomic) NSUInteger labelCounter;
 @property (nonatomic) NSArray<NSNumber *> *slotOffsets;  // valueId → sp offset
@@ -3520,7 +3525,6 @@ static BOOL takenPhiClobbersFallSrc(XTIRBlock *t, XTIRBlock *f, XTIRBlock *from)
 // non-zero operand `x` (suitable for `cbz`/`cbnz`); otherwise nil.
 static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
     if (!icmp || icmp.opcode != XTIROpICmp || icmp.operands.count < 2) return nil;
-    if (icmp.predicate != 0 && icmp.predicate != 1) return nil;   // EQ=0, NE=1
     BOOL (^isZero)(XTIROperand *) = ^BOOL(XTIROperand *o) {
         if (o.kind == XTIROperandKindImmI) return o.intValue == 0;
         if (o.kind == XTIROperandKindUse) {
@@ -3531,7 +3535,13 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
         return NO;
     };
     XTIROperand *o0 = icmp.operands[0], *o1 = icmp.operands[1];
-    XTIROperand *val = isZero(o1) ? o0 : (isZero(o0) ? o1 : nil);
+    // An unsigned test against zero is one too: x > 0 and 0 < x are x != 0,
+    // x <= 0 and 0 >= x are x == 0 (sort_small's `j > 0`).
+    XTIRICmpPredicate pr = icmp.predicate;
+    BOOL eqne = pr == XTIRICmpEQ || pr == XTIRICmpNE;
+    XTIROperand *val = nil;
+    if (isZero(o1) && (eqne || pr == XTIRICmpUGT || pr == XTIRICmpULE)) val = o0;
+    else if (isZero(o0) && (eqne || pr == XTIRICmpULT || pr == XTIRICmpUGE)) val = o1;
     if (!val) return nil;
     // cbz/cbnz are GP-register only; ICmp never has float operands, but guard.
     XTIRType *vt = (val.kind == XTIROperandKindUse) ? [ctx.fn valueForId:val.valueId].type
@@ -5760,7 +5770,9 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                         ? [ctx.fn valueForId:zval.valueId].type : zval.type;
                     NSString *reg = [self operandReg:zval
                         intoScratch:([self irTypeNeedsXReg:vt] ? @"x16" : @"w16") ctx:ctx];
-                    NSString *mnem = (icmp.predicate == 0) ? @"cbz" : @"cbnz";  // EQ→cbz
+                    XTIRICmpPredicate zp = icmp.predicate;
+                    BOOL zeq = zp == XTIRICmpEQ || zp == XTIRICmpULE || zp == XTIRICmpUGE;
+                    NSString *mnem = zeq ? @"cbz" : @"cbnz";  // x == 0 → cbz
                     [ctx.out appendFormat:@"    %@ %@, %@\n", mnem, reg,
                      [self blockLabelForFn:ctx.fn block:t.blockRef]];
                     [ctx.out appendFormat:@"    b %@\n",
@@ -5784,6 +5796,29 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                     [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
                     [ctx.out appendFormat:@"    b %@\n",
                      [self blockLabelForFn:ctx.fn block:f.blockRef]];
+                    break;
+                }
+                // The taken edge is the next block and needs no copies, the
+                // other edge does: branch out on the inverse to a stub that
+                // makes them, and fall through. A rotated loop's back edge is
+                // then the only branch it takes (sort_small's insertion loop
+                // on the Pi 5).
+                if (t.blockRef && t.blockRef == ctx.nextBlock &&
+                    !phiCopiesNeeded(t.blockRef, block) && phiCopiesNeeded(f.blockRef, block)) {
+                    NSString *fnl = [ctx.fn.name stringByReplacingOccurrencesOfString:@"$" withString:@"_"];
+                    NSString *Ls = [NSString stringWithFormat:@".L%@_cold_%lu", fnl, (unsigned long)ctx.labelCounter++];
+                    XTIRICmpPredicate invp =
+                        [self negateICmpPredicate:(XTIRICmpPredicate)icmp.predicate];
+                    [ctx.out appendFormat:@"    b.%@ %@\n",
+                     [self condStringForICmpPredicate:(uint8_t)invp], Ls];
+                    NSMutableString *hot = ctx.out;
+                    ctx.out = [NSMutableString string];
+                    [ctx.out appendFormat:@"%@:\n", Ls];
+                    [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
+                    [ctx.out appendFormat:@"    b %@\n",
+                     [self blockLabelForFn:ctx.fn block:f.blockRef]];
+                    [ctx.coldStubs appendString:ctx.out];
+                    ctx.out = hot;
                     break;
                 }
                 [self emitPhiCopiesFrom:block to:t.blockRef ctx:ctx];
@@ -8880,7 +8915,10 @@ static BOOL arm64NamesFrameReg(NSString *t) {
                 [loopHeads addObject:[NSValue valueWithNonretainedObject:o.blockRef]];
         }
     }
-    for (XTIRBlock *block in fn.blocks) {
+    ctx.coldStubs = [NSMutableString string];
+    for (NSUInteger bix = 0; bix < fn.blocks.count; bix++) {
+        XTIRBlock *block = fn.blocks[bix];
+        ctx.nextBlock = bix + 1 < fn.blocks.count ? fn.blocks[bix + 1] : nil;
         if ([loopHeads containsObject:[NSValue valueWithNonretainedObject:block]])
             [out appendFormat:@"    .p2align %lu\n", (unsigned long)sArm64LoopAlign];
         [out appendFormat:@"%@:\n", [self blockLabelForFn:fn block:block]];
@@ -8896,6 +8934,9 @@ static BOOL arm64NamesFrameReg(NSString *t) {
             [self emitInsn:block.terminator inBlock:block ctx:ctx];
         }
     }
+    ctx.nextBlock = nil;
+    [out appendString:ctx.coldStubs];
+    ctx.coldStubs = [NSMutableString string];
     [out appendString:@"\n"];
     NSUInteger aliasLo = 0, aliasHi = NSUIntegerMax;
     [self aliasableRangeForCtx:ctx lo:&aliasLo hi:&aliasHi];

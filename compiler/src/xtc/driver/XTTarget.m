@@ -18,6 +18,7 @@
 @property(nonatomic, readwrite) BOOL lseAtomics;
 @property(nonatomic, readwrite) BOOL compactObjects;
 @property(nonatomic, readwrite) NSUInteger loopAlign;
+@property(nonatomic, readwrite) BOOL rotateChain;
 @property(nonatomic, readwrite, copy, nullable) NSString* appleSdk;
 @property(nonatomic, readwrite, copy) NSArray<NSString*>* parKernels;
 @property(nonatomic, readwrite, copy, nullable) NSString* matmul;
@@ -92,6 +93,12 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
     return self;
     }
 
+- (XTTarget*)withRotateChain
+    {
+    self.rotateChain = YES;
+    return self;
+    }
+
 + (NSArray<XTTarget*>*)rows
     {
     static NSArray<XTTarget*>* t;
@@ -104,10 +111,10 @@ static XTTarget* row(NSString* name, NSString* cpu, NSInteger variant, NSString*
                 @"ios arm64-apple-ios") withLoopAlign:5],
             [row(@"arm64-ios-sim", @"arm64", 0, @"ios", @"simulator", @"darwin", @"ios-sim", @"arm64", @"arm64", @"ios arm64", @"ios-sim", @"darwin64", YES, @"iphonesimulator", @"", @"", @"macho", @"crt-macos.s", @"rt-macos.s", @"", @"", @"ios-arm64", @"dylib so", @"rt-checked-macos.s", @"", YES,
                 @"ios-sim arm64-apple-ios-simulator") withLoopAlign:5],
-            row(@"arm64-android", @"arm64", 0, @"android", @"", @"bionic", @"android", @"arm64", @"arm64", @"arm64", @"android", @"aapcs64", NO, @"", @"spirv", @"", @"elf-pie", @"crt-android.s", @"rt-android.s", @"/system/bin/linker64", @"libc.so libm.so libdl.so", @"android-arm64", @"so", @"", @"", YES,
-                @"android aarch64-linux-android"),
-            row(@"arm64-linux", @"arm64", 0, @"linux", @"", @"glibc", @"arm64-linux", @"arm64", @"arm64", @"arm64", @"linux-arm64", @"aapcs64", NO, @"", @"spirv", @"", @"elf-pie", @"crt-glibc.s", @"rt-glibc.s", @"/lib/ld-linux-aarch64.so.1", @"libc.so.6 libm.so.6", @"linux-arm64", @"so", @"", @"aarch64-linux-gnu", YES,
-                @"aarch64-linux-gnu arm64-linux-gnu aarch64-unknown-linux-gnu"),
+            [row(@"arm64-android", @"arm64", 0, @"android", @"", @"bionic", @"android", @"arm64", @"arm64", @"arm64", @"android", @"aapcs64", NO, @"", @"spirv", @"", @"elf-pie", @"crt-android.s", @"rt-android.s", @"/system/bin/linker64", @"libc.so libm.so libdl.so", @"android-arm64", @"so", @"", @"", YES,
+                @"android aarch64-linux-android") withRotateChain],
+            [row(@"arm64-linux", @"arm64", 0, @"linux", @"", @"glibc", @"arm64-linux", @"arm64", @"arm64", @"arm64", @"linux-arm64", @"aapcs64", NO, @"", @"spirv", @"", @"elf-pie", @"crt-glibc.s", @"rt-glibc.s", @"/lib/ld-linux-aarch64.so.1", @"libc.so.6 libm.so.6", @"linux-arm64", @"so", @"", @"aarch64-linux-gnu", YES,
+                @"aarch64-linux-gnu arm64-linux-gnu aarch64-unknown-linux-gnu") withRotateChain],
             row(@"x86_64-linux", @"x86_64", 0, @"linux", @"", @"glibc", @"x86_64", @"x86_64", @"x86_64", @"x86_64", @"", @"sysv", NO, @"", @"ptx spirv", @"x86", @"elf-dyn", @"", @"", @"", @"", @"linux-x86_64", @"so dylib", @"", @"x86_64-linux-gnu", YES,
                 @"x86_64 x86-64 amd64 x86_64-linux-gnu x86_64-pc-linux-gnu"),
             row(@"x86_64-linux-musl", @"x86_64", 0, @"linux", @"", @"musl", @"x86_64", @"x86_64", @"x86_64", @"x86_64", @"", @"sysv", NO, @"", @"", @"x86", @"elf-static", @"", @"", @"", @"", @"linux-x86_64", @"so dylib", @"", @"x86_64-linux-musl", YES,

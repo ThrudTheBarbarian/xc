@@ -296,6 +296,14 @@
     {
     return YES;
     }
+// A test that is a short-circuit chain rotates where the target row says
+// (rotateChain): its exit copies go to an out-of-line stub and the loop falls
+// into its rotated test (sort_small's insertion loop on the Pi 5, 4.50 s ->
+// 3.54 s; level or slower on Apple's cores).
+- (BOOL)rotatesChainLoops
+    {
+    return self.rotateChains;
+    }
 - (BOOL)vectorizesLoops
     {
     return YES;
