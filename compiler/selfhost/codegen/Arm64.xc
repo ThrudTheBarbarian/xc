@@ -268,8 +268,8 @@ class Arm64
             emitFunction((IRFunc*)m.funcs().get(f));
             _out.appendCString("\n");   // the blank line before the next function
             module.append(elideLeafFrame(expandStagedSlots(
-                peepholeFallthrough(peepholeCopyProp(
-                    peepholeRedundantReloads(peepholeSpills(_out)))))));
+                peepholeFallthrough(peepholeRedundantCmp(peepholeAndsFold(peepholeCopyProp(
+                    peepholeRedundantReloads(peepholeSpills(_out)))))))));
             _out = module;
         }
         // The SME matrix kernels the module calls (idiom-matmul), and the state
@@ -5131,8 +5131,18 @@ class Arm64
         String* at = opType((IROperand*)n.ops().get((u32)0));
         String* src = operandReg((IROperand*)n.ops().get((u32)0), fregName((u32)0, at));
         bool sgn = n.op().equals(String.withCString("FpToSI"));
-        _out.appendFormat("    %s x16, %s\n", sgn ? "fcvtzs" : "fcvtzu", src.cString());
         u32 w = width(n.res().ty());
+        // UNCHECKED (C's casts): out of range is undefined, so the convert
+        // writes the result's own register at its width, saturating as it
+        // likes (#22: perlin's (unsigned)x was fcvtzu x16 then a copy).
+        if (n.pred() != (String*)0 && n.pred().equals(String.withCString("unchecked"))) {
+            String* d = resultReg(n.res(), String.withCString(w >= (u32)8 ? "x16" : "w16"));
+            _out.appendFormat("    %s %s, %s\n", sgn ? "fcvtzs" : "fcvtzu", d.cString(), src.cString());
+            canonicalise(d, n.res().ty());
+            storeReg(d, n.res());
+            return;
+        }
+        _out.appendFormat("    %s x16, %s\n", sgn ? "fcvtzs" : "fcvtzu", src.cString());
         // The re-extend-and-compare fit check only applies to a destination
         // NARROWER than the 64-bit fcvtz result. For a 64-bit destination the
         // fcvtz value IS the result; the old `else` branch re-extended the low
@@ -5978,6 +5988,170 @@ class Arm64
     // (ldp/stp writes TWO registers and only the first is named), or a store
     // through any base other than sp — which could land anywhere in the frame,
     // as `c[i] = …` does — drops everything known.
+    // A compare the flags already hold: `cmp w2, #0` again, after only
+    // instructions that leave the flags and both its registers alone (the
+    // fcsels of one condition, each re-testing it: #22, perlin's grad).
+    static bool flagsNeutral(String* m)
+    {
+        return m.equals(String.withCString("fcsel")) || m.equals(String.withCString("csel")) || m.equals(String.withCString("csinc")) || m.equals(String.withCString("csinv")) || m.equals(String.withCString("csneg")) || m.equals(String.withCString("cset")) || m.equals(String.withCString("csetm")) || m.equals(String.withCString("fadd")) || m.equals(String.withCString("fsub")) || m.equals(String.withCString("fmul")) || m.equals(String.withCString("fdiv")) || m.equals(String.withCString("fmadd")) || m.equals(String.withCString("fmsub")) || m.equals(String.withCString("fnmadd")) || m.equals(String.withCString("fnmsub")) || m.equals(String.withCString("fnmul")) || m.equals(String.withCString("fneg")) || m.equals(String.withCString("fabs")) || m.equals(String.withCString("fmov")) || m.equals(String.withCString("mov")) || m.equals(String.withCString("movz")) || m.equals(String.withCString("movk")) || m.equals(String.withCString("and")) || m.equals(String.withCString("orr")) || m.equals(String.withCString("eor")) || m.equals(String.withCString("add")) || m.equals(String.withCString("sub")) || m.equals(String.withCString("lsl")) || m.equals(String.withCString("lsr")) || m.equals(String.withCString("asr")) || m.equals(String.withCString("mul")) || m.equals(String.withCString("madd")) || m.equals(String.withCString("msub")) || m.equals(String.withCString("ldr")) || m.equals(String.withCString("ldrb")) || m.equals(String.withCString("ldrh")) || m.equals(String.withCString("ldrsw")) || m.equals(String.withCString("str")) || m.equals(String.withCString("strb")) || m.equals(String.withCString("strh")) || m.equals(String.withCString("ucvtf")) || m.equals(String.withCString("scvtf")) || m.equals(String.withCString("fcvtzu")) || m.equals(String.withCString("fcvtzs")) || m.equals(String.withCString("fcvt")) || m.equals(String.withCString("sxtw")) || m.equals(String.withCString("uxtw")) || m.equals(String.withCString("ubfx")) || m.equals(String.withCString("sbfx"));
+    }
+    String* peepholeRedundantCmp(String* text)
+    {
+        Array* lines = linesOf(text);
+        Array* out = new Array();
+        String* last = (String*)0;      // the compare the flags hold, trimmed
+        String* ra = (String*)0;
+        String* rb = (String*)0;
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+            String* ln = (String*)lines.get(i);
+            String* t = ln.trimmed();
+            if (t.isEmpty() || t.hasSuffix(String.withCString(":")) || t.hasPrefix(String.withCString("."))
+                || t.hasPrefix(String.withCString("//"))) {
+                last = (String*)0;
+                out.add((Object*)ln);
+                continue;
+            }
+            Array* jo = parseAsmLine(ln);
+            String* jm = takeMnem(jo);
+            if (jo == (Array*)0 || jm == (String*)0) {
+                last = (String*)0;
+                out.add((Object*)ln);
+                continue;
+            }
+            if (jm.equals(String.withCString("cmp")) && jo.count() == (u32)2) {
+                if (last != (String*)0 && last.equals(t))
+                    continue;                       // the flags hold it already
+                last = t;
+                ra = (String*)jo.get((u32)0);
+                rb = (String*)jo.get((u32)1);
+                out.add((Object*)ln);
+                continue;
+            }
+            if (last != (String*)0) {
+                if (!flagsNeutral(jm))
+                    last = (String*)0;
+                else if (jo.count() >= (u32)1 && mnemWritesReg0(jm)) {
+                    String* w = (String*)jo.get((u32)0);
+                    if (sameArm64Reg(w, ra) || sameArm64Reg(w, rb))
+                        last = (String*)0;
+                }
+            }
+            out.add((Object*)ln);
+        }
+        return joinLines(out);
+    }
+
+    // `and D, S, #c` then `cmp D, #0` is `ands D, S, #c`, and a later
+    // `cmp D, #0` while D holds goes too, when every flag reader up to the
+    // next flag write reads Z alone (eq/ne): ands clears C where cmp #0 sets
+    // it (#22: perlin's grad tests three bits of a hash, each per fcsel).
+    static bool eqNe(String* c)
+    {
+        return c.equals(String.withCString("eq")) || c.equals(String.withCString("ne"));
+    }
+    static bool condSelect(String* m)
+    {
+        return m.equals(String.withCString("fcsel")) || m.equals(String.withCString("csel"))
+            || m.equals(String.withCString("csinc")) || m.equals(String.withCString("csinv"))
+            || m.equals(String.withCString("csneg")) || m.equals(String.withCString("cset"))
+            || m.equals(String.withCString("csetm")) || m.equals(String.withCString("cinc"))
+            || m.equals(String.withCString("cneg"));
+    }
+    static bool flagsWriter(String* m)
+    {
+        return m.equals(String.withCString("cmn")) || m.equals(String.withCString("tst"))
+            || m.equals(String.withCString("adds")) || m.equals(String.withCString("subs"))
+            || m.equals(String.withCString("ands")) || m.equals(String.withCString("bics"))
+            || m.equals(String.withCString("negs")) || m.equals(String.withCString("fcmp"))
+            || m.equals(String.withCString("fcmpe")) || m.equals(String.withCString("ccmp"))
+            || m.equals(String.withCString("ccmn")) || m.equals(String.withCString("fccmp"))
+            || m.equals(String.withCString("bl")) || m.equals(String.withCString("blr"))
+            || m.equals(String.withCString("b")) || m.equals(String.withCString("ret"))
+            || m.equals(String.withCString("br"));
+    }
+    static bool isAsmBarrier(String* t)
+    {
+        return t.isEmpty() || t.hasSuffix(String.withCString(":")) || t.hasPrefix(String.withCString("."))
+            || t.hasPrefix(String.withCString("//"));
+    }
+    String* peepholeAndsFold(String* text)
+    {
+        Array* lines = linesOf(text);
+        Array* skip = new Array();
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
+            skip.add((Object*)Number.withU32((u32)0));
+        Array* out = new Array();
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+            String* ln = (String*)lines.get(i);
+            if (((Number*)skip.get(i)).asU32() != (u32)0)
+                continue;
+            Array* jo = parseAsmLine(ln);
+            String* jm = takeMnem(jo);
+            bool done = false;
+            if (jm != (String*)0 && jm.equals(String.withCString("and")) && jo.count() == (u32)3
+                && ((String*)jo.get((u32)2)).hasPrefix(String.withCString("#")) && i + (u32)1 < lines.count()) {
+                String* D = (String*)jo.get((u32)0);
+                Array* co = parseAsmLine((String*)lines.get(i + (u32)1));
+                String* cm = takeMnem(co);
+                if (cm != (String*)0 && cm.equals(String.withCString("cmp")) && co.count() == (u32)2
+                    && ((String*)co.get((u32)0)).equals(D) && ((String*)co.get((u32)1)).equals(String.withCString("#0"))) {
+                    Array* drop = new Array();
+                    bool ok = true;
+                    bool dHeld = true;
+                    for (u32 j = i + (u32)2; j < lines.count(); j = j + (u32)1) {
+                        String* l2 = (String*)lines.get(j);
+                        if (isAsmBarrier(l2.trimmed()))
+                            break;
+                        Array* o2 = parseAsmLine(l2);
+                        String* m2 = takeMnem(o2);
+                        if (o2 == (Array*)0 || m2 == (String*)0) { ok = false; break; }
+                        if (m2.equals(String.withCString("cmp"))) {
+                            if (dHeld && o2.count() == (u32)2 && ((String*)o2.get((u32)0)).equals(D)
+                                && ((String*)o2.get((u32)1)).equals(String.withCString("#0"))) {
+                                drop.add((Object*)Number.withU32(j));
+                                continue;
+                            }
+                            break;
+                        }
+                        if (m2.hasPrefix(String.withCString("b."))) {
+                            if (!eqNe(m2.substringFromByte((u32)2))) { ok = false; break; }
+                            continue;
+                        }
+                        if (condSelect(m2)) {
+                            if (o2.count() < (u32)1 || !eqNe((String*)o2.get(o2.count() - (u32)1))) { ok = false; break; }
+                            if (sameArm64Reg((String*)o2.get((u32)0), D))
+                                dHeld = false;
+                            continue;
+                        }
+                        if (flagsWriter(m2))
+                            break;
+                        if (!flagsNeutral(m2)) { ok = false; break; }
+                        if (o2.count() >= (u32)1 && mnemWritesReg0(m2) && sameArm64Reg((String*)o2.get((u32)0), D))
+                            dHeld = false;
+                    }
+                    if (ok) {
+                        // The mnemonic is the first word: keep the indent before it.
+                        u32 at = (u32)0;
+                        while (at < ln.byteLength() && (ln.byteAt(at) == (u8)' ' || ln.byteAt(at) == (u8)'\t'))
+                            at = at + (u32)1;
+                        String* nl = new String();
+                        nl.append(ln.substringBytes((u32)0, at));
+                        nl.appendCString("ands ");
+                        nl.append(ln.substringFromByte(at + (u32)4));
+                        out.add((Object*)nl);
+                        skip.set(i + (u32)1, (Object*)Number.withU32((u32)1));
+                        for (u32 k = (u32)0; k < drop.count(); k = k + (u32)1)
+                            skip.set(((Number*)drop.get(k)).asU32(), (Object*)Number.withU32((u32)1));
+                        done = true;
+                    }
+                }
+            }
+            if (!done)
+                out.add((Object*)ln);
+        }
+        return joinLines(out);
+    }
+
     String* peepholeRedundantReloads(String* text)
     {
         Array* lines = linesOf(text);
@@ -9101,6 +9275,15 @@ class Arm64
             fpCaller.add((Object*)String.withCString("d29"));
             fpCaller.add((Object*)String.withCString("d30"));
             fpCaller.add((Object*)String.withCString("d31"));
+            // ...and the float argument registers, as x0-x7 above: dead
+            // between calls, barred by _crossCall from anything live at one,
+            // tried last. d0-d2 are the float scratch and d7 the phi-cycle
+            // scratch, so d3-d6 (#22: perlin's octave loop spilled around its
+            // fcsels with these four free).
+            fpCaller.add((Object*)String.withCString("d3"));
+            fpCaller.add((Object*)String.withCString("d4"));
+            fpCaller.add((Object*)String.withCString("d5"));
+            fpCaller.add((Object*)String.withCString("d6"));
             }
 
         assignTier(fn, gp, gpCallee, gpCaller);
@@ -9405,10 +9588,13 @@ class Arm64
     // overlap — which is what lets an unrolled serial chain, each link dead
     // once the next is computed, pack onto one or two registers instead of
     // spilling around the calls between them.
-    // x0-x7: the argument registers, which a PARAMETER may not be homed in.
+    // x0-x7 and d0-d7: the argument registers, which a PARAMETER may not be
+    // homed in.
     static bool isArgReg(String* r)
     {
-        return r.equals(String.withCString("x0")) || r.equals(String.withCString("x1"))
+        return r.equals(String.withCString("d3")) || r.equals(String.withCString("d4"))
+            || r.equals(String.withCString("d5")) || r.equals(String.withCString("d6"))
+            || r.equals(String.withCString("x0")) || r.equals(String.withCString("x1"))
             || r.equals(String.withCString("x2")) || r.equals(String.withCString("x3"))
             || r.equals(String.withCString("x4")) || r.equals(String.withCString("x5"))
             || r.equals(String.withCString("x6")) || r.equals(String.withCString("x7"));

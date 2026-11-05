@@ -2326,7 +2326,10 @@ static BOOL a64InsnReads(XTIRInsn *n, XTIRValueId x) {
     };
     if (getenv("XTREGDBG")) fprintf(stderr, "== %s\n", ctx.fn.name.UTF8String);
     assign(gp, gpRegs, gpCallerRegs, gpArgTier);
-    assign(fp, fpRegs, fpCallerRegs, @[]);
+    // The float argument registers, as x0-x7: d0-d2 are the float scratch
+    // and d7 the phi-cycle scratch, so d3-d6, in a function with no vectors
+    // (#22: perlin's octave loop spilled around its fcsels with these free).
+    assign(fp, fpRegs, fpCallerRegs, fnHasVector ? @[] : @[@"d3", @"d4", @"d5", @"d6"]);
     // Stable callee-save order (prologue/epilogue iterate this array together).
     [saved sortUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
         NSUInteger ia = [gpRegs indexOfObject:a]; if (ia == NSNotFound) ia = 100 + [fpRegs indexOfObject:a];
@@ -7912,6 +7915,130 @@ static BOOL sameArm64Reg(NSString *a, NSString *b) {
     return [[a substringFromIndex:1] isEqualToString:[b substringFromIndex:1]];
 }
 
+// `and D, S, #c` then `cmp D, #0` is `ands D, S, #c`, and a later
+// `cmp D, #0` while D holds goes too, when every flag reader up to the next
+// flag write reads Z alone (eq/ne): ands clears C where cmp #0 sets it (#22:
+// perlin's grad tests three bits of a hash, each per fcsel).
++ (NSString *)peepholeAndsFold:(NSString *)text {
+    static NSSet<NSString *> *condSel = nil, *writers = nil, *neutral = nil;
+    if (!condSel) {
+        condSel = [NSSet setWithArray:@[@"fcsel", @"csel", @"csinc", @"csinv", @"csneg", @"cset", @"csetm", @"cinc", @"cneg"]];
+        writers = [NSSet setWithArray:@[@"cmn", @"tst", @"adds", @"subs", @"ands", @"bics", @"negs", @"fcmp", @"fcmpe",
+                                        @"ccmp", @"ccmn", @"fccmp", @"bl", @"blr", @"b", @"ret", @"br"]];
+        neutral = [NSSet setWithArray:@[@"fcsel", @"csel", @"csinc", @"csinv", @"csneg", @"cset", @"csetm", @"fadd", @"fsub", @"fmul", @"fdiv", @"fmadd", @"fmsub", @"fnmadd", @"fnmsub", @"fnmul", @"fneg", @"fabs", @"fmov", @"mov", @"movz", @"movk", @"and", @"orr", @"eor", @"add", @"sub", @"lsl", @"lsr", @"asr", @"mul", @"madd", @"msub", @"ldr", @"ldrb", @"ldrh", @"ldrsw", @"str", @"strb", @"strh", @"ucvtf", @"scvtf", @"fcvtzu", @"fcvtzs", @"fcvt", @"sxtw", @"uxtw", @"ubfx", @"sbfx"]];
+    }
+    BOOL (^eqNe)(NSString *) = ^BOOL(NSString *c) { return [c isEqualToString:@"eq"] || [c isEqualToString:@"ne"]; };
+    BOOL (^barrier)(NSString *) = ^BOOL(NSString *t) {
+        return t.length == 0 || [t hasSuffix:@":"] || [t hasPrefix:@"."] || [t hasPrefix:@"//"];
+    };
+    NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
+    NSMutableIndexSet *skip = [NSMutableIndexSet indexSet];
+    NSMutableArray<NSString *> *out = [NSMutableArray arrayWithCapacity:lines.count];
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    for (NSUInteger i = 0; i < lines.count; i++) {
+        NSString *ln = lines[i];
+        if ([skip containsIndex:i]) continue;
+        NSString *jm = nil;
+        NSArray *jo = barrier([ln stringByTrimmingCharactersInSet:ws]) ? nil : [self parseAsmLine:ln mnem:&jm];
+        BOOL done = NO;
+        if (jo && [jm isEqualToString:@"and"] && jo.count == 3 && [jo[2] hasPrefix:@"#"] && i + 1 < lines.count) {
+            NSString *D = jo[0];
+            NSString *cm = nil;
+            NSString *l1 = lines[i + 1];
+            NSArray *co = barrier([l1 stringByTrimmingCharactersInSet:ws]) ? nil : [self parseAsmLine:l1 mnem:&cm];
+            if (co && [cm isEqualToString:@"cmp"] && co.count == 2 && [co[0] isEqualToString:D] && [co[1] isEqualToString:@"#0"]) {
+                NSMutableArray<NSNumber *> *drop = [NSMutableArray array];
+                BOOL ok = YES, dHeld = YES;
+                for (NSUInteger j = i + 2; j < lines.count; j++) {
+                    NSString *l2 = lines[j];
+                    if (barrier([l2 stringByTrimmingCharactersInSet:ws])) break;
+                    NSString *m2 = nil;
+                    NSArray *o2 = [self parseAsmLine:l2 mnem:&m2];
+                    if (!o2 || !m2) { ok = NO; break; }
+                    if ([m2 isEqualToString:@"cmp"]) {
+                        if (dHeld && o2.count == 2 && [o2[0] isEqualToString:D] && [o2[1] isEqualToString:@"#0"]) {
+                            [drop addObject:@(j)];
+                            continue;
+                        }
+                        break;
+                    }
+                    if ([m2 hasPrefix:@"b."]) {
+                        if (!eqNe([m2 substringFromIndex:2])) { ok = NO; break; }
+                        continue;
+                    }
+                    if ([condSel containsObject:m2]) {
+                        if (o2.count < 1 || !eqNe(o2.lastObject)) { ok = NO; break; }
+                        if (sameArm64Reg(o2[0], D)) dHeld = NO;
+                        continue;
+                    }
+                    if ([writers containsObject:m2]) break;
+                    if (![neutral containsObject:m2]) { ok = NO; break; }
+                    if (o2.count >= 1 && mnemWritesReg0(m2) && sameArm64Reg(o2[0], D)) dHeld = NO;
+                }
+                if (ok) {
+                    // The mnemonic is the first word: keep the indent before it.
+                    NSUInteger at = 0;
+                    while (at < ln.length && ([ln characterAtIndex:at] == ' ' || [ln characterAtIndex:at] == '\t')) at++;
+                    [out addObject:[NSString stringWithFormat:@"%@ands %@", [ln substringToIndex:at],
+                                    [ln substringFromIndex:at + 4]]];
+                    [skip addIndex:i + 1];
+                    for (NSNumber *k in drop) [skip addIndex:k.unsignedIntegerValue];
+                    done = YES;
+                }
+            }
+        }
+        if (!done) [out addObject:ln];
+    }
+    return [out componentsJoinedByString:@"\n"];
+}
+
+// A compare the flags already hold: `cmp w2, #0` again, after only
+// instructions that leave the flags and both its registers alone (the fcsels
+// of one condition, each re-testing it: #22, perlin's grad).
++ (NSString *)peepholeRedundantCmp:(NSString *)text {
+    static NSSet<NSString *> *neutral = nil;
+    if (!neutral)
+        neutral = [NSSet setWithArray:@[@"fcsel", @"csel", @"csinc", @"csinv", @"csneg", @"cset", @"csetm", @"fadd", @"fsub", @"fmul", @"fdiv", @"fmadd", @"fmsub", @"fnmadd", @"fnmsub", @"fnmul", @"fneg", @"fabs", @"fmov", @"mov", @"movz", @"movk", @"and", @"orr", @"eor", @"add", @"sub", @"lsl", @"lsr", @"asr", @"mul", @"madd", @"msub", @"ldr", @"ldrb", @"ldrh", @"ldrsw", @"str", @"strb", @"strh", @"ucvtf", @"scvtf", @"fcvtzu", @"fcvtzs", @"fcvt", @"sxtw", @"uxtw", @"ubfx", @"sbfx"]];
+    NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
+    NSMutableArray<NSString *> *out = [NSMutableArray arrayWithCapacity:lines.count];
+    NSString *last = nil, *ra = nil, *rb = nil;
+    for (NSString *ln in lines) {
+        NSString *t = [ln stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        if (t.length == 0 || [t hasSuffix:@":"] || [t hasPrefix:@"."] || [t hasPrefix:@"//"]) {
+            last = nil;
+            [out addObject:ln];
+            continue;
+        }
+        NSString *jm = nil;
+        NSArray *jo = [self parseAsmLine:ln mnem:&jm];
+        if (!jo || !jm) {
+            last = nil;
+            [out addObject:ln];
+            continue;
+        }
+        if ([jm isEqualToString:@"cmp"] && jo.count == 2) {
+            if (last && [last isEqualToString:t])
+                continue;                           // the flags hold it already
+            last = t;
+            ra = jo[0];
+            rb = jo[1];
+            [out addObject:ln];
+            continue;
+        }
+        if (last) {
+            if (![neutral containsObject:jm])
+                last = nil;
+            else if (jo.count >= 1 && mnemWritesReg0(jm)) {
+                NSString *w = jo[0];
+                if (sameArm64Reg(w, ra) || sameArm64Reg(w, rb))
+                    last = nil;
+            }
+        }
+        [out addObject:ln];
+    }
+    return [out componentsJoinedByString:@"\n"];
+}
+
 + (NSString *)peepholeRedundantReloads:(NSString *)text {
     NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
     NSMutableArray<NSString *> *out = [NSMutableArray arrayWithCapacity:lines.count];
@@ -8962,11 +9089,11 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     [self aliasableRangeForCtx:ctx lo:&aliasLo hi:&aliasHi];
     [moduleOut appendString:
         [self elideLeafFrame:[self expandStagedSlots:
-            [self peepholeFallthrough:[self peepholeCopyProp:
+            [self peepholeFallthrough:[self peepholeRedundantCmp:[self peepholeAndsFold:[self peepholeCopyProp:
              [self peepholeRedundantReloads:
               [self peepholeSpills:[self canonicaliseStagedSlots:body]
                                   aliasLo:aliasLo aliasHi:aliasHi
-                                  argArea:ctx.maxOutStack]]]]
+                                  argArea:ctx.maxOutStack]]]]]]
                        frameBase:ctx.frameBase
                     saveAreaFrom:ctx.saveAreaOffset
                               to:ctx.saveAreaOffset + 8 * ctx.savedRegs.count]]];
