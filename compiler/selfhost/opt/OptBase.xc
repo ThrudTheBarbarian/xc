@@ -1644,6 +1644,7 @@ class BeFact : Object
     IRInsn* _ucIv;         // unrollChainLoops: the counter phi, its add and its compare
     IRInsn* _ucNext;
     IRInsn* _ucCmp;
+    bool _ppStayPut;       // ppOutlinePar: the loop is too small to outline at all
     Array* _dvDone;        // devirtualise: the sites already rewritten (each keeps its dispatch)
     u32 _dvSeq;            // its block names' counter
     IRModule* _dvModule;

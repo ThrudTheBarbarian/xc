@@ -319,6 +319,13 @@
             ppTrace("a block");
             return true;
             }
+        // Too small to be a block, and no loop inside it to judge: it stays,
+        // not outlined serially.
+        if (_ppStayPut)
+            {
+            _ppStayPut = false;
+            return false;
+            }
         if (liveOuts.count() > (u32)1)
             return ppNo("cut 10");
         IRValue* outV = liveOuts.count() == (u32)1 ? (IRValue*)liveOuts.get((u32)0) : (IRValue*)0;
@@ -1407,6 +1414,23 @@
         bool remat = bb != (IRBlock*)0 && self.hasBlock(body, bb);
         if (remat && !ppConstChain(bound, defOf, (u32)0))
             return ppNo("ppOutlinePar 14");
+        // An innermost loop of a few items known here (a 3x3 stencil's row) is no block:
+        // a block costs a launch, which a GPU pays per run of the outer loop.
+        IRValue* start = ppPhiIn(iv, L, false);
+        i64 klo = (i64)0;
+        i64 khi = (i64)0;
+        // Innermost only: a short loop around inner loops (gemm's rows) is
+        // work enough. An inner loop shows as phis in a block past the header.
+        bool innermost = true;
+        for (u32 b = (u32)0; b < body.count() && innermost; b = b + (u32)1)
+            if ((IRBlock*)body.get(b) != H && ((IRBlock*)body.get(b)).phis().count() > (u32)0)
+                innermost = false;
+        if (innermost && start != (IRValue*)0 && constValue(defOf, IROperand.useVal(start), &klo) && constValue(defOf, c1, &khi)
+            && khi + (le ? (i64)1 : (i64)0) - klo < (i64)PP_MIN_TRIP)
+            {
+            _ppStayPut = true;
+            return ppNo("a constant trip below PP_MIN_TRIP items");
+            }
         // Only accumulators are read after the loop.
         for (u32 i = (u32)0; i < liveOuts.count(); i = i + (u32)1)
             {

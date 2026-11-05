@@ -4,7 +4,7 @@ dot 1
 gemm 3
 jacobi1d 3
 jacobi2d 4
-narrow 2
+narrow 0
 particles 3
 prefix 1
 redstart 3

@@ -11,3 +11,5 @@
 #define DV_MAX 4
 #define DV_BODY 24
 #define DV_LOOP 64
+// The fewest items a loop of constant trip needs to be outlined as a par block.
+#define PP_MIN_TRIP 256
