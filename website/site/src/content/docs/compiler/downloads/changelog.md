@@ -3,6 +3,77 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.9.3 — xcc on the Raspberry Pi, for real, and far less memory
+
+Everything since 0.9.2.
+
+### New
+
+- **A `par` body reads `self`'s fields.** In a method, `self.n`, `self.v[i]`
+  and other fields of the class can be read inside a `par` block. They are
+  captured by value, as a bare field name already was. So a method's loop
+  that only reads its object's fields is now lifted by `--par-style=auto`.
+  A loop that calls a method on `self`, or writes a field, stays as written:
+  methods are not run in parallel automatically.
+- **A repeated reduction runs once.** An outer loop around an inner loop
+  that adds the same total on every pass is computed as one pass and a
+  multiply, whatever order the additions are written in. It is exact for
+  integers. Floating point is left alone.
+
+### Faster
+
+- **Compiling a program with large global arrays takes a fraction of the
+  memory.** On Linux and Windows a zero-filled global cost about 80 bytes of
+  compiler memory per byte of array. A program with two 64 MB arrays needed
+  10 GB, more than a Raspberry Pi 5 has. The same program now compiles in
+  under 600 MB, and xcc links itself in 1.4 GB instead of 4.7.
+- **x86-64: dividing vectors by a constant is quicker.** The two halves of
+  each product are merged with one permute (AVX-512) or a shift and a blend
+  (AVX2), not two shuffles. int_muldiv on a Ryzen 9 9955HX: 0.419 s to
+  0.377 s.
+- **x86-64: loop counters stay in registers in vectorised loops.** Vector
+  values no longer use up the general registers. Floats outside the vector
+  registers a function uses get registers of their own.
+- **`par` auto can choose one thread** when that is fastest for a block. On
+  a Raspberry Pi 5, the `par` saxpy benchmark goes from 34.4 ms to 26.9 ms.
+
+### Fixed
+
+- **xcc unpacked anywhere finds its own library.** Run from PATH, it looked
+  for its library in /opt/xcc. So an archive unpacked anywhere else, as the
+  downloads page says to, could not build hello-world on any Linux or macOS
+  machine. That includes the Raspberry Pi 5, which 0.9.2 said it supported.
+- **A class's ivars declared in one list** (`float scale, bias;`) can all be
+  named in a `par` body.
+
+### Benchmarks
+
+- **Two benchmarks can no longer be skipped.** `int_muldiv` and `array_sum`
+  added the same total on every one of their millions of passes, so a
+  compiler could do the passes once. GCC did, partly, which made it look 2x
+  faster than xc on int_muldiv. Each pass now adds a value that depends on
+  the pass. The old forms stay as `int_muldiv_hoist` and `array_sum_hoist`,
+  which measure whether a compiler finds the repetition: xc runs both in
+  microseconds.
+- **Every language is measured on every machine.** The 0.9.2 page compared
+  arm64 with the other languages on one benchmark only. The corrected
+  figures went up the same day.
+- **The C suite's "one thread" xcc figures are one thread again.** Since
+  0.9.2 lifting is the default, and the benchmark built its one-thread xcc
+  program with no flag, so in 0.9.2 that program ran its loops on every
+  thread or the GPU. The 0.9.2 figures in that column were wrong; it is now
+  built with `--par-style=cpu`.
+- **Where xc stands.** Over the nineteen benchmarks in the means, xc's code
+  runs 1.07x faster than clang's C++ on a Ryzen 9 9955HX (0.9.2: 1.01x
+  slower) and 1.10x faster on an M3 Max (0.9.2: 1.12x). `int_muldiv` and
+  `array_sum` changed, so the two releases are not timed on quite the same
+  programs. On a Raspberry Pi 5 xc is 1.16x faster than clang++ and 1.21x
+  faster than g++. The [performance page](/compiler/performance/) has every
+  figure.
+- **The C suite runs on the Raspberry Pi 5** as well, every benchmark
+  included: xcc's single-thread code is 1.29x faster than clang's there, and
+  1.48x faster than GCC's.
+
 ## Version 0.9.2 — plain loops in parallel, and xcc on the Raspberry Pi
 
 Everything since 0.9.1.
