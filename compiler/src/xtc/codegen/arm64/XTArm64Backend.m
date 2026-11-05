@@ -170,7 +170,7 @@ static NSString *XTArm64FpImmText(BOOL neg, uint32_t m, int e) {
 // of the innermost natural loop holding it (the smallest; the earliest header
 // on a tie), and whether an edge leaves it. A cold stub is for a loop's exit:
 // on an edge within the loop (an if-else's join) its jump out and back runs
-// every pass (sieve on an M3 Max: 1.23 s to 1.58 s).
+// every pass (sieve on an M3 Max: 1.23 s to 1.58 s; on a Pi 5 4.40 s to 4.76 s).
 static NSArray<NSSet<NSNumber *> *> *innermostLoopBodies(XTIRFunction *fn) {
     NSUInteger nb = fn.blocks.count;
     NSMutableArray<NSMutableArray<NSNumber *> *> *preds = [NSMutableArray arrayWithCapacity:nb];
@@ -5882,7 +5882,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 // on the Pi 5).
                 if (t.blockRef && t.blockRef == ctx.nextBlock &&
                     !phiCopiesNeeded(t.blockRef, block) && phiCopiesNeeded(f.blockRef, block)
-                    && (sArm64Aapcs64Abi || edgeLeavesLoop(ctx.fn, ctx.innerBody, block, f.blockRef))) {
+                    && edgeLeavesLoop(ctx.fn, ctx.innerBody, block, f.blockRef)) {
                     NSString *fnl = [ctx.fn.name stringByReplacingOccurrencesOfString:@"$" withString:@"_"];
                     NSString *Ls = [NSString stringWithFormat:@".L%@_cold_%lu", fnl, (unsigned long)ctx.labelCounter++];
                     XTIRICmpPredicate invp =

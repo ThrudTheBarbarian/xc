@@ -3288,12 +3288,11 @@ class Arm64
         return inner;
     }
 
-    // Does the edge from b to t leave b's innermost loop? On Apple's cores a
-    // cold stub is for a loop's exit, taken once: on an edge within the loop
-    // (an if-else's join) its jump out and back runs every pass (sieve on an
-    // M3 Max: 1.23 s to 1.58 s). A Cortex-A76 (the Pi 5) gains from the stub
-    // there too (sieve 4.59 s to 4.39 s), so arm64 Linux and Android keep it
-    // on every edge. An edge from outside any loop: yes.
+    // Does the edge from b to t leave b's innermost loop? A cold stub is for a
+    // loop's exit, taken once: on an edge within the loop (an if-else's join)
+    // its jump out and back runs every pass (sieve on an M3 Max: 1.23 s to
+    // 1.58 s; on a Pi 5, linked against libRuntime as programs are, 4.40 s
+    // to 4.76 s). An edge from outside any loop: yes.
     bool edgeLeavesLoop(IRBlock* b, IRBlock* t)
     {
         i32 bi = blockIndexOf(_fn, b);
@@ -7950,7 +7949,7 @@ class Arm64
             // and fall through. A rotated loop's back edge is then the only
             // branch it takes (sort_small's insertion loop on the Pi 5).
             if (t == _nextBB && t != (IRBlock*)0 && !phiCopiesNeeded(t, _bb) && phiCopiesNeeded(f, _bb)
-                && (_aapcs64Abi || edgeLeavesLoop(_bb, f))) {
+                && edgeLeavesLoop(_bb, f)) {
                 String* ls = labelFor(String.withCString("cold"), _labelCounter);
                 _labelCounter = _labelCounter + (u32)1;
                 _out.appendFormat("    b.%s %s\n", condString(negatePred(icmp.pred())).cString(), ls.cString());

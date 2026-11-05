@@ -271,7 +271,7 @@ class Targets
         t.add((Object*)TargetRow.make("arm64-android", "arm64", (u32)0, "android", "", "bionic", "android", "arm64", "arm64", "arm64", "android", "aapcs64", false, "", "spirv", "", "elf-pie", "crt-android.s", "rt-android.s", "/system/bin/linker64", "libc.so libm.so libdl.so", "android-arm64", "so", "", "", true,
                                       "android aarch64-linux-android").withRotateChain());
         t.add((Object*)TargetRow.make("arm64-linux", "arm64", (u32)0, "linux", "", "glibc", "arm64-linux", "arm64", "arm64", "arm64", "linux-arm64", "aapcs64", false, "", "spirv", "", "elf-pie", "crt-glibc.s", "rt-glibc.s", "/lib/ld-linux-aarch64.so.1", "libc.so.6 libm.so.6", "linux-arm64", "so", "", "aarch64-linux-gnu", true,
-                                      "aarch64-linux-gnu arm64-linux-gnu aarch64-unknown-linux-gnu").withRotateChain());
+                                      "aarch64-linux-gnu arm64-linux-gnu aarch64-unknown-linux-gnu").withRotateChain().withLoopAlign((u32)5));
         t.add((Object*)TargetRow.make("x86_64-linux", "x86_64", (u32)0, "linux", "", "glibc", "x86_64", "x86_64", "x86_64", "x86_64", "", "sysv", false, "", "ptx spirv", "x86", "elf-dyn", "", "", "", "", "linux-x86_64", "so dylib", "", "x86_64-linux-gnu", true,
                                       "x86_64 x86-64 amd64 x86_64-linux-gnu x86_64-pc-linux-gnu"));
         t.add((Object*)TargetRow.make("x86_64-linux-musl", "x86_64", (u32)0, "linux", "", "musl", "x86_64", "x86_64", "x86_64", "x86_64", "", "sysv", false, "", "", "x86", "elf-static", "", "", "", "", "linux-x86_64", "so dylib", "", "x86_64-linux-musl", true,
