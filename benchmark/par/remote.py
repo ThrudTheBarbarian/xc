@@ -3,7 +3,9 @@
 
 Starts `xcd`, the par worker daemon, on the Windows host (XTC_WIN_GPU_HOST in
 build.env: its NVIDIA cards through CUDA), then runs benchmarks on this Mac
-and on the Linux host (XTC_LINUX_HOST), each four ways:
+on the Linux host (XTC_LINUX_HOST) and on the Raspberry Pi 5
+(XTC_LINUX_ARM64_HOST: --clients pi, its V3D GPU through Vulkan), each four
+ways:
 
   local    the machine on its own (XC_PAR_REMOTE=none), as `auto` chooses
   remote   the other machine's GPU alone (XC_PAR_WORKERS=remote)
@@ -183,6 +185,27 @@ def run_linux(host, binary, env):
     return with_remote(parse(r.stdout), r.stdout + r.stderr)
 
 
+def run_pi(host, binary, env, tls):
+    """As run_linux, on the Pi, with the toolchain's arm64 Linux libtls copied
+    beside the program."""
+    common.wait_quiet(host)
+    _settings_n[0] += 1
+    pre = " ".join("%s=%s" % kv for kv in env.items())
+    sd = "/tmp/par-remote-settings-%d" % _settings_n[0]
+    pre = "rm -rf %s; %s XCC_SETTINGS_DIR=%s XC_TLS_LIB=%s" % (sd, pre, sd, tls)
+    r = subprocess.run(["ssh", host, "%s %s" % (pre, binary)], capture_output=True, text=True)
+    return with_remote(parse(r.stdout), r.stdout + r.stderr)
+
+
+def tls_lib(target):
+    """The libtls the compiler under test ships for a target (its 3p tree)."""
+    r = subprocess.run(xcc_cmd()[:1] + ["--print-3p-dir"], capture_output=True, text=True)
+    p = os.path.join(r.stdout.strip(), "tls", target, "libtls.so")
+    if r.returncode != 0 or not os.path.exists(p):
+        sys.exit("par/remote.py: no %s libtls in the compiler's 3p tree (%s)" % (target, p))
+    return p
+
+
 def with_remote(got, text):
     """(checksum, best, first, reached, why, local): reached is whether the
     report shows the daemon as a worker; why, its complaint when not; local,
@@ -215,6 +238,11 @@ def main():
     remote_env = {"XC_PAR_REMOTE": "%s:%d" % (ssh_hostname(gpu_host), daemon.port), "XC_PAR_SECRET": daemon.secret}
     clients = a.clients.split(",")
     results = {}
+    pi = env.get("XTC_LINUX_ARM64_HOST") if "pi" in clients else None
+    if "pi" in clients and not pi:
+        sys.exit("par/remote.py: --clients pi needs XTC_LINUX_ARM64_HOST in build.env")
+    if pi:
+        subprocess.run(["scp", "-q", tls_lib("linux-arm64"), "%s:/tmp/par-remote-libtls.so" % pi], check=True)
     try:
         for name in a.bench or BENCHES:
             src = os.path.join(SRC_DIRS.get(name, HERE), name + ".xc")
@@ -230,13 +258,28 @@ def main():
                 subprocess.run(["scp", "-q", exe, "%s:/tmp/par-remote-%s" % (host, name)], check=True)
                 results[name]["linux"] = measure(lambda b, e: run_linux(host, b, e), "/tmp/par-remote-" + name,
                                                  remote_env)
+            if pi:
+                exe = os.path.join(work, name + ".remote.pi")
+                build(src, "arm64-linux", exe, ["-fpar-kernels=all"])
+                subprocess.run(["scp", "-q", exe, "%s:/tmp/par-remote-%s" % (pi, name)], check=True)
+                results[name]["pi"] = measure(lambda b, e: run_pi(pi, b, e, "/tmp/par-remote-libtls.so"),
+                                              "/tmp/par-remote-" + name, remote_env)
             print(name, json.dumps(results[name]), flush=True)
     finally:
         daemon.close()
     outdir = os.path.join(HERE, "v" + a.version)
     os.makedirs(outdir, exist_ok=True)
-    with open(os.path.join(outdir, "remote.json"), "w") as fh:
-        json.dump(results, fh, indent=1, sort_keys=True)
+    # A run of some clients (--clients pi) adds to the file rather than
+    # replacing the others' figures.
+    path = os.path.join(outdir, "remote.json")
+    merged = {}
+    if os.path.exists(path):
+        with open(path) as fh:
+            merged = json.load(fh)
+    for name, by_client in results.items():
+        merged.setdefault(name, {}).update(by_client)
+    with open(path, "w") as fh:
+        json.dump(merged, fh, indent=1, sort_keys=True)
     print(table(results))
 
 
@@ -246,9 +289,10 @@ def ms(us):
 
 def table(results):
     names = {"mac": "Apple M4 Max (Metal) using the Windows host's RTX 5080 over the network",
-             "linux": "Ryzen 9 9955HX with its integrated Radeon (Vulkan) using the Windows host's RTX 5080"}
+             "linux": "Ryzen 9 9955HX with its integrated Radeon (Vulkan) using the Windows host's RTX 5080",
+             "pi": "Raspberry Pi 5 with its V3D GPU (Vulkan) using the Windows host's RTX 5080"}
     lines = []
-    for m in ("mac", "linux"):
+    for m in ("mac", "linux", "pi"):
         rows = [(n, r[m]) for n, r in results.items() if m in r]
         if not rows:
             continue

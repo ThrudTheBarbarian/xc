@@ -674,19 +674,29 @@ def remote_tables(version):
                    and os.path.exists(os.path.join(ROOT, "par", d, "remote.json"))), key=vkey)
     if not have:
         return ""
-    src = have[-1]
-    with open(os.path.join(ROOT, "par", src, "remote.json")) as fh:
-        res = json.load(fh)
-    if src != version:
-        for r in res.values():
-            if isinstance(r, dict):
-                for m in r.values():
-                    if isinstance(m, dict) and "local" in m:
-                        m.setdefault("measured_with", src.lstrip("v"))
+    # Per machine, the latest release that measured it: a release that adds
+    # one machine's run (the Pi, 0.9.4) keeps the others' latest figures.
+    files = {}
+    for d in have:
+        with open(os.path.join(ROOT, "par", d, "remote.json")) as fh:
+            files[d] = json.load(fh)
+    res = {}
+    for m in ("mac", "linux", "pi"):
+        src = next((d for d in reversed(have)
+                    if any(isinstance(r, dict) and m in r for r in files[d].values())), None)
+        if src is None:
+            continue
+        for b, r in files[src].items():
+            if isinstance(r, dict) and m in r:
+                row = dict(r[m])
+                if src != version:
+                    row["measured_with"] = src.lstrip("v")
+                res.setdefault(b, {})[m] = row
     names = {"mac": "Apple %s (Metal), using the remote RTX 5080" % (par_mac().split(",")[0] if MAC_TREE else "M4 Max"),
-             "linux": "AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080"}
+             "linux": "AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080",
+             "pi": "Raspberry Pi 5 with its V3D GPU (Vulkan), using the remote RTX 5080"}
     out = []
-    for m in ("mac", "linux"):
+    for m in ("mac", "linux", "pi"):
         rows = [(b, r[m]) for b, r in res.items() if m in r]
         if not rows:
             continue
