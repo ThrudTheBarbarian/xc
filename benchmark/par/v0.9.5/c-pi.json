@@ -2,6 +2,37 @@
  "cpu": "Raspberry Pi 5 Model B Rev 1.0 (Cortex-A76)",
  "missing": [],
  "results": {
+  "mandel_deep": {
+   "all": {
+    "clang": {
+     "median_us": 34008023,
+     "runs": 3
+    },
+    "gcc": {
+     "median_us": 31949081,
+     "runs": 3
+    },
+    "xcc": {
+     "median_us": 13568871,
+     "runs": 3
+    }
+   },
+   "checksum": "2738",
+   "one": {
+    "clang": {
+     "median_us": 132471916,
+     "runs": 3
+    },
+    "gcc": {
+     "median_us": 127671967,
+     "runs": 3
+    },
+    "xcc": {
+     "median_us": 50872418,
+     "runs": 3
+    }
+   }
+  },
   "mandelbrot": {
    "all": {
     "clang": {

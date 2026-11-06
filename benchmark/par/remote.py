@@ -118,7 +118,13 @@ class Daemon:
 MODES = [("local", {"XC_PAR_REMOTE": "none"}),
          ("remote", {"XC_PAR_WORKERS": "remote"}),
          ("all", {"XC_PAR": "gpus"}),
-         ("auto", {})]
+         ("auto", {}),
+         ("learned", {})]
+
+# A settings directory the runners keep between processes, for "learned":
+# auto's choice once one run of the program has measured, not its first run
+# (which spends its runs measuring every candidate). Set per call by measure.
+_keep = {"dir": None, "fresh": False}
 
 
 def measure(runner, binary, remote_env):
@@ -133,6 +139,14 @@ def measure(runner, binary, remote_env):
         if mode != "local":
             e["XC_PAR_REPORT"] = "1"
         best = None
+        if mode == "learned":
+            # One run of the program measures and learns; it is not counted.
+            _keep["dir"] = "learned-%d" % len(_learned_seen)
+            _learned_seen.append(binary)
+            _keep["fresh"] = True
+            if runner(binary, e) is None:
+                sys.exit("par/remote.py: %s (learned) printed nothing usable" % binary)
+            _keep["fresh"] = False
         for _ in range(REPEATS):
             got = runner(binary, e)
             if got is None:
@@ -148,6 +162,7 @@ def measure(runner, binary, remote_env):
             sums.add(got[0])
             if best is None or got[1] < best["best_us"]:
                 best = {"best_us": got[1], "first_us": got[2]}
+        _keep["dir"] = None
         out[mode] = best
     if len(sums) != 1:
         sys.exit("par/remote.py: %s: the checksums differ between modes: %s" % (binary, sorted(sums)))
@@ -159,12 +174,35 @@ def run_mac(binary, env):
     common.wait_quiet()
     e = dict(os.environ)
     e.update(env)
-    e["XCC_SETTINGS_DIR"] = fresh_settings()
+    e["XCC_SETTINGS_DIR"] = kept_settings() or fresh_settings()
     r = subprocess.run([binary], capture_output=True, text=True, env=e)
     return with_remote(parse(r.stdout), r.stdout + r.stderr)
 
 
 _settings_n = [0]
+_learned_seen = []
+
+
+def kept_settings():
+    """The "learned" mode's directory on this Mac, or None for a fresh one."""
+    if _keep["dir"] is None:
+        return None
+    d = os.path.join(HERE, "build", "remote-settings", _keep["dir"])
+    if _keep["fresh"]:
+        shutil.rmtree(d, ignore_errors=True)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def remote_settings(prefix):
+    """The settings directory a run on another host uses, and the shell that
+    empties it first: a fresh one per run, or the "learned" mode's kept one."""
+    if _keep["dir"] is not None:
+        sd = "%s-%s" % (prefix, _keep["dir"])
+        return sd, ("rm -rf %s; " % sd) if _keep["fresh"] else ""
+    _settings_n[0] += 1
+    sd = "%s-%d" % (prefix, _settings_n[0])
+    return sd, "rm -rf %s; " % sd
 
 
 def fresh_settings():
@@ -179,10 +217,9 @@ def fresh_settings():
 
 def run_linux(host, binary, env):
     common.wait_quiet(host)
-    _settings_n[0] += 1
     pre = " ".join("%s=%s" % kv for kv in env.items())
-    sd = "/tmp/par-remote-settings-%d" % _settings_n[0]
-    pre = "rm -rf %s; %s XCC_SETTINGS_DIR=%s" % (sd, pre, sd)
+    sd, rm = remote_settings("/tmp/par-remote-settings")
+    pre = "%s%s XCC_SETTINGS_DIR=%s" % (rm, pre, sd)
     pre += " XC_TLS_LIB=$HOME/ci/3p/tls/x86_64/libtls.so"
     r = subprocess.run(["ssh", host, "%s %s" % (pre, binary)], capture_output=True, text=True)
     return with_remote(parse(r.stdout), r.stdout + r.stderr)
@@ -192,10 +229,9 @@ def run_pi(host, binary, env, tls):
     """As run_linux, on the Pi, with the toolchain's arm64 Linux libtls copied
     beside the program."""
     common.wait_quiet(host)
-    _settings_n[0] += 1
     pre = " ".join("%s=%s" % kv for kv in env.items())
-    sd = "/tmp/par-remote-settings-%d" % _settings_n[0]
-    pre = "rm -rf %s; %s XCC_SETTINGS_DIR=%s XC_TLS_LIB=%s" % (sd, pre, sd, tls)
+    sd, rm = remote_settings("/tmp/par-remote-settings")
+    pre = "%s%s XCC_SETTINGS_DIR=%s XC_TLS_LIB=%s" % (rm, pre, sd, tls)
     r = subprocess.run(["ssh", host, "%s %s" % (pre, binary)], capture_output=True, text=True)
     return with_remote(parse(r.stdout), r.stdout + r.stderr)
 
@@ -300,11 +336,12 @@ def table(results):
         if not rows:
             continue
         lines.append("\n**%s** (ms, best of eight runs)\n" % names[m])
-        lines.append("| benchmark | this machine | the remote GPU | every GPU | `auto` |")
-        lines.append("|---|---|---|---|---|")
+        lines.append("| benchmark | this machine | the remote GPU | every GPU | `auto`, first run | `auto`, once learned |")
+        lines.append("|---|---|---|---|---|---|")
         for n, r in rows:
-            lines.append("| %s | %s | %s | %s | %s |" % (n, ms(r["local"]["best_us"]), ms(r["remote"]["best_us"]),
-                                                    ms(r["all"]["best_us"]), ms(r["auto"]["best_us"])))
+            lines.append("| %s | %s | %s | %s | %s | %s |" % (n, ms(r["local"]["best_us"]), ms(r["remote"]["best_us"]),
+                                                         ms(r["all"]["best_us"]), ms(r["auto"]["best_us"]),
+                                                         ms(r["learned"]["best_us"]) if "learned" in r else "–"))
     return "\n".join(lines)
 
 

@@ -704,12 +704,13 @@ def remote_tables(version):
         older = sorted({r.get("measured_with") for _, r in rows} - {None})
         note = "; measured with %s" % ", ".join(older) if older else ""
         out.append("**%s** (ms; best of eight runs%s)\n" % (names[m], note))
-        out.append("| benchmark | this machine | the remote GPU | every GPU | `auto` |")
-        out.append("|---|---|---|---|---|")
+        out.append("| benchmark | this machine | the remote GPU | every GPU | `auto`, first run | `auto`, once learned |")
+        out.append("|---|---|---|---|---|---|")
         for b, r in rows:
-            out.append("| [`%s`](%s#%s) | %s | %s | %s | %s |" % (
+            learned = ms(r["learned"]["best_us"]) if "learned" in r else "–"
+            out.append("| [`%s`](%s#%s) | %s | %s | %s | %s | %s |" % (
                 b, SOURCES_URL, b, ms(r["local"]["best_us"]), ms(r["remote"]["best_us"]),
-                ms(r["all"]["best_us"]), ms(r["auto"]["best_us"])))
+                ms(r["all"]["best_us"]), ms(r["auto"]["best_us"]), learned))
         out.append("")
     return "\n".join(out)
 
@@ -1289,11 +1290,14 @@ with an {net_mac}, whose own GPU is fast; a Linux machine with an AMD Ryzen 9
 it reaches over gigabit Ethernet. Each table gives the `xcc` release it was
 measured with.
 
-Each program runs four ways: on the machine alone (`XC_PAR_REMOTE=none`), on
+Each program runs five ways: on the machine alone (`XC_PAR_REMOTE=none`), on
 the remote GPU alone (`XC_PAR_WORKERS=remote`), on every GPU, the machine's
-own and the remote one (`XC_PAR=gpus`), and as `auto` chooses with the remote
-GPU among its choices. Each run starts from empty settings, so `auto`
-measures afresh, and a remote-only figure counts only if every block ran on
+own and the remote one (`XC_PAR=gpus`), and twice as `auto` chooses with the
+remote GPU among its choices. **`auto`, first run** starts from empty
+settings, so the program spends its runs measuring each candidate, and its
+best is the best run while it measures. **`auto`, once learned** is a later
+run of the program, after one run has measured and kept its choice: what a
+program settles on. A remote-only figure counts only if every block ran on
 the remote GPU. Every mode's checksum must agree.
 
 {remote}
@@ -1303,21 +1307,22 @@ What the tables show:
 - **A remote GPU pays where a block computes much from little data.** From
   the Raspberry Pi, `mandel_deep` runs about ten times faster on the remote RTX
   5080 than on the Pi's own CPU and GPU, and `mandelbrot` some sixty times
-  faster. From the Linux machine, `mandelbrot` runs three and a half times
-  faster on the remote card, and `mandel_deep`, which its own sixteen cores
-  run well, a fifth faster. `auto` finds the remote card in each case.
+  faster. From the Linux machine, `mandelbrot` runs three times faster on the
+  remote card, and `mandel_deep` half as fast again on its own GPU and the
+  remote card together.
 - **It does not pay where the machine's own GPU is already fast**, as on the
   {net_mac_short}, or where a block moves more than it computes: `saxpy` crosses
-  the network for every element, and on every machine `auto` keeps it local.
-- **Every GPU together is fastest only sometimes.** For `md5` from the Pi,
-  its own GPU and the remote card together take half the remote card's time
+  the network for every element.
+- **Every GPU together is fastest only sometimes.** For `md5` from the Pi, its
+  own GPU and the remote card together take half the remote card's time
   alone, and for `mandel_deep` from the Linux machine a fifth less. More often
   a slow GPU's share holds the fast one back.
-- **`auto` does not yet choose best everywhere.** For `md5` from the Pi and
-  `mandel_deep` from the Linux machine it keeps the remote card alone where
-  every GPU together is faster. For `md5` on the {net_mac_short} it runs 1.6
-  times slower than the Mac alone, and for `saxpy` 36% slower than the Pi alone
-  and 12% slower than the Linux machine alone.
+- **`auto` settles on the best choice.** Once learned, `auto` is as fast as
+  the best of the other columns, or within a few percent of it, on the
+  {net_mac_short}, on the Linux machine, and on the Pi for all but `md5`, where
+  it takes 319 ms against 254 ms for both GPUs together. Its first run is
+  slower where it has several candidates to measure, the remote GPU among
+  them: it runs each twice, and keeps the fastest for every run after.
 
 ## Reproducing
 
