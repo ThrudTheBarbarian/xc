@@ -29,7 +29,11 @@ ships none of its own. `clang` must be on the `PATH`:
 Without `clang`, building a `.c` file stops with
 `a C file needs clang, which compiles it`. xc programs never need it.
 
-A C program is built for the machine `xcc` runs on; `-A` does not cross-compile C.
+A C program is built for the machine `xcc` runs on by default. `-A x86_64`,
+`-A win64` and `-A arm64-linux` cross-compile it, given that target's C headers:
+musl's for x86-64 Linux (`XTC_MUSL_ROOT`), mingw's for win64, and glibc's for arm64
+Linux (`XTC_ARM64_LINUX_ROOT`, a copy of an arm64 Linux machine's `usr/include`).
+Without them `xcc` says which headers it needs. Other targets do not build C.
 
 ## What xcc compiles
 

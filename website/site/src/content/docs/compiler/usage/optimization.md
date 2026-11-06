@@ -15,11 +15,11 @@ Optimisation happens on the compiler's intermediate representation, before code 
 
 ### `-O0`: no optimisation
 
-Straight code generation. Every variable gets a stable home and every expression is evaluated as written. The output corresponds closely to the source, which makes single-stepping and reasoning about code paths easier.
+Straight code generation: the optimiser does not run, and every expression is evaluated as written. The back end still keeps values in registers between their uses. The output corresponds closely to the source, which makes single-stepping and reasoning about code paths easier.
 
-### `-O1`: unreachable functions removed
+### `-O1`: a few cheap passes
 
-Functions that nothing calls are dropped from the program. The code inside each function is left as `-O0` produces it.
+Functions that nothing calls are dropped, branches on constants are folded and the blocks they leave unreachable removed, and `sqrt` calls become the instruction. The code is otherwise left as `-O0` produces it.
 
 ### `-O2`: the optimiser
 
@@ -33,7 +33,8 @@ The full pass pipeline, including:
 - **Loop unrolling**: counted loops with a small constant trip count are unrolled fully. See [`-Flu`](#-flu--loop-unroll-cap).
 - **Vectorisation** of simple loops on the targets that support it.
 - **Strength reduction**, **loop-invariant code motion** and **loop rotation**.
-- **Block layout**, so the hot path falls through.
+- **Block layout** on arm64, so the hot path falls through.
+- **Devirtualisation** on arm64, x86-64 and win64: a virtual call becomes a class test and a direct call that can be inlined.
 
 ### `-O3`: the default
 
@@ -77,7 +78,7 @@ Main RAM also holds the runtime and the program's data. If the functions kept th
 | Target | Vectorises loops | Unrolls loops with a run-time trip count |
 |---|---|---|
 | `arm64` | yes (NEON) | yes |
-| `x86_64`, `win64` | yes (SSE) | yes |
+| `x86_64`, `win64` | yes: SSE2, AVX2 and AVX-512, each widened function built for all three and chosen at load ([`-msimd`](/compiler/usage/cli/)) | yes |
 | `arm9` | yes (NEON) | yes |
 | `wasm32` | yes (SIMD128) | yes |
 | `m68k` | no | no |

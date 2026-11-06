@@ -1,4 +1,4 @@
-// OptOutline.xc — IR outlining: a loop par-propose would wrap becomes a function of its own, and a block the par runtime runs (selfhost only, XC_PAR_PROPOSE=outline).
+// OptOutline.xc — IR outlining: a loop par-propose would wrap becomes a function of its own, and a block the par runtime runs (selfhost only: on for a C file under --par-style=auto, which has no parser scan; for xc with XC_PAR_PROPOSE=outline).
 // One of the files class Opt is split into (2026-11-01), so the split build
 // compiles the optimiser side by side; Opt.xc says how the files layer.
 

@@ -34,7 +34,7 @@
 //                     stands a chunk in for the class it has no code for,
 //                     and runs the tiles on its own GPU workers.
 //
-// The frames: u32 type, u32 length, payload, little-endian throughout, over
+// The frames: an 8-byte tag, a u32 length, tagged fields, little-endian, over
 // TLS (ParTls, ParLink: the daemon's certificate, pinned by the program on
 // first sight). A program holds two links to a daemon: it writes tiles on
 // the first and the daemon writes finished tiles on the second, from a
@@ -60,9 +60,9 @@
 // worker: a tile's transfer is at least twenty round trips long, so the
 // latency costs five percent at most.
 //
-// Not yet: the GPU-RAM cache, a load check at tile acceptance (GPU
-// utilisation, free VRAM) and a refusal of tiles that would run past the
-// window's end. An array whose footprint the compiler knows travels as the
+// Each tile is checked against the card's free memory when it arrives,
+// and the slices are cached in the daemon's host RAM. Not yet: a cache in
+// GPU memory, and a refusal of tiles that would run past the window's end. An array whose footprint the compiler knows travels as the
 // slices each tile reads, with the tile (as to a discrete card); the rest go
 // over whole once per run at PREPARE.
 #import "Par.xc"
@@ -1903,9 +1903,9 @@ class ParRemoteWorker : ParWorker
             if (!readResult())
                 break;
             }
-        // Tiles a dead connection never returned are not done: the queue's
-        // loop ends with them pending and the run fails on, which is the
-        // honest outcome until tiles are re-issued (idempotent tiles, step 3).
+        // Tiles a dead connection never returned are not done: the queue
+        // finds them in the worker's lost() and re-issues them to the
+        // other workers (a tile is idempotent).
         }
     }
 
