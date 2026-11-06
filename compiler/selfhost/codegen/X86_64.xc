@@ -4276,7 +4276,9 @@ class X86_64
             return;
         String* text = resolveAsmLocals(bytesToString((Array*)_m.consts().get(cid)));
         _out.appendCString("\t# inline asm\n");
-        Array* lines = text.splitOnByte((u8)'\n');
+        // A `;` ends a statement, as the 6502's asm blocks write them, and the
+        // x86-64 assembler takes none.
+        Array* lines = asmStatements(text);
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
             {
             String* t = ((String*)lines.get(i)).trimmed();
@@ -4284,6 +4286,29 @@ class X86_64
                 _out.appendFormat("\t%s\n", t.cString());
             }
         }
+
+    // An asm block's lines, each cut at a `;` outside a string literal: a `;`
+    // ends the statement, as on the 6502, and the rest of the line is a
+    // comment (bindAsmNames leaves it unbound). A line with no `;` stays as
+    // it is.
+    static Array* asmStatements(String* text)
+    {
+        Array* out = new Array();
+        Array* lines = text.splitOnByte((u8)'\n');
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+            String* l = (String*)lines.get(i);
+            if (l.byteIndexOf(String.withCString(";")) == (u32)$FFFF_FFFF) { out.add((Object*)l); continue; }
+            bool quoted = false;
+            u32 k = (u32)0;
+            while (k < l.byteLength() && (quoted || l.byteAt(k) != (u8)';')) {
+                if (l.byteAt(k) == (u8)'"') quoted = !quoted;
+                k = k + (u32)1;
+            }
+            String* part = l.substringBytes((u32)0, k).trimmed();
+            if (part.byteLength() > (u32)0) out.add((Object*)part);
+        }
+        return out;
+    }
 
     String* resolveAsmLocals(String* text)
         {

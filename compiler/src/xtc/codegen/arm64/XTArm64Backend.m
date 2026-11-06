@@ -225,6 +225,26 @@ static BOOL edgeLeavesLoop(XTIRFunction *fn, NSArray<NSSet<NSNumber *> *> *inner
     return body.count == 0 || ![body containsObject:@(ti)];
 }
 
+
+// An asm block's lines, each cut at a `;` outside a string literal: a `;`
+// ends the statement and the rest of the line is a comment (the port's
+// asmStatements). A line with no `;` stays as it is.
+static NSArray<NSString *> *XTAsmStatements(NSString *text) {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    for (NSString *l in [text componentsSeparatedByString:@"\n"]) {
+        if ([l rangeOfString:@";"].location == NSNotFound) { [out addObject:l]; continue; }
+        BOOL quoted = NO; NSUInteger k = 0;
+        while (k < l.length && (quoted || [l characterAtIndex:k] != ';')) {
+            if ([l characterAtIndex:k] == '"') quoted = !quoted;
+            k++;
+        }
+        NSString *part = [[l substringToIndex:k] stringByTrimmingCharactersInSet:ws];
+        if (part.length) [out addObject:part];
+    }
+    return out;
+}
+
 @implementation XTArm64FnCtx
 @end
 
@@ -7187,7 +7207,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 text = resolved;
             }
             [ctx.out appendString:@"    // inline asm\n"];
-            for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
+            // A `;` ends a statement (XTAsmStatements); the rest of its line is a comment.
+            for (NSString *line in XTAsmStatements(text)) {
                 if (line.length == 0) continue;
                 [ctx.out appendFormat:@"    %@\n", line];
             }

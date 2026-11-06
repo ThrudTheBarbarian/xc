@@ -2500,7 +2500,8 @@ class Arm64
          || cid >= _m.consts().count()) { unsupported(String.withCString("Asm:body")); return; }
         String* text = resolveAsmLocals(bytesToString((Array*)_m.consts().get(cid)));
         _out.appendCString("    // inline asm\n");
-        Array* lines = text.splitOnByte((u8)'\n');
+        // A `;` ends a statement (asmStatements); the rest of its line is a comment.
+        Array* lines = asmStatements(text);
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
             String* l = (String*)lines.get(i);
             if (l.byteLength() == (u32)0) continue;
@@ -2511,6 +2512,29 @@ class Arm64
     // `{{XTLOCAL:<vid>}}` becomes the local's sp-relative slot WITHOUT enclosing
     // brackets, so the user's `str w0, [result]` reads `str w0, [sp, #N]` —
     // the natural memory-operand syntax on this target.
+    // An asm block's lines, each cut at a `;` outside a string literal: a `;`
+    // ends the statement, as on the 6502, and the rest of the line is a
+    // comment (bindAsmNames leaves it unbound). A line with no `;` stays as
+    // it is.
+    static Array* asmStatements(String* text)
+    {
+        Array* out = new Array();
+        Array* lines = text.splitOnByte((u8)'\n');
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+            String* l = (String*)lines.get(i);
+            if (l.byteIndexOf(String.withCString(";")) == (u32)$FFFF_FFFF) { out.add((Object*)l); continue; }
+            bool quoted = false;
+            u32 k = (u32)0;
+            while (k < l.byteLength() && (quoted || l.byteAt(k) != (u8)';')) {
+                if (l.byteAt(k) == (u8)'"') quoted = !quoted;
+                k = k + (u32)1;
+            }
+            String* part = l.substringBytes((u32)0, k).trimmed();
+            if (part.byteLength() > (u32)0) out.add((Object*)part);
+        }
+        return out;
+    }
+
     String* resolveAsmLocals(String* text)
     {
         String* marker = String.withCString("{{XTLOCAL:");

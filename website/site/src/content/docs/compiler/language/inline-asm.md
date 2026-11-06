@@ -98,6 +98,42 @@ Instruction lines end with `;`, like xcc statements. Labels are bare identifiers
 
 Platform memory-map symbols are predefined for the active target. On xt6502 these are `POKMSK`, `SDMCTL`, `AUDF1` and the other OS shadow and hardware register names, so you can use them without declaring constants. The assembler loads the symbol table from `support/<platform>/symbols/*.sym`; look there for the set available on a platform, or to add your own. Each `.sym` file is a list of `NAME = $hex` lines (anything after `;` on a line is a comment), so adding a symbol takes one line.
 
+## On arm64 and x86-64
+
+The same `asm { ... }` block works on the 64-bit targets, in each one's own assembly: arm64's, and x86-64's in Intel syntax. Write one statement per line. As on the 6502, a `;` ends a statement and the rest of its line is a comment, and a line without one is a statement too. A local variable or parameter named in brackets is its frame slot: `[result]` becomes `[sp, #N]` on arm64 and `[rbp-N]` on x86-64.
+
+On arm64:
+
+```c
+u32 addOne(u32 x) {
+    u32 result = x;
+    asm {
+        ldr w9, [result];
+        add w9, w9, #1;
+        str w9, [result];
+    }
+    return result;
+}
+```
+
+On x86-64:
+
+```c
+u32 addOne(u32 x) {
+    u32 result = x;
+    asm {
+        mov eax, dword ptr [result];
+        add eax, 1;
+        mov dword ptr [result], eax;
+    }
+    return result;
+}
+```
+
+On x86-64 a global is addressed relative to the instruction pointer, as `[rip + total]`.
+
+A function that contains an `asm` block keeps every one of its values in its frame slot, because the block may read or write any of them. None of them is kept in a register, so a loop in that function runs slower than the same loop elsewhere. Keep a loop you care about in a function of its own, apart from the `asm`.
+
 ## A complete example
 
 This helper disables NMI generation around a critical section and then restores it. It shows variable access, control flow and the `clobbers` annotation:

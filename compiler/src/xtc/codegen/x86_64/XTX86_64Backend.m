@@ -112,6 +112,26 @@ static NSUInteger sCanaryN = 0;
 // copy the result through it. 0 = this function has no hidden sret.
 static NSInteger sWin64SretOff = 0;
 
+
+// An asm block's lines, each cut at a `;` outside a string literal: a `;`
+// ends the statement and the rest of the line is a comment (the port's
+// asmStatements). A line with no `;` stays as it is.
+static NSArray<NSString *> *XTAsmStatements(NSString *text) {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    for (NSString *l in [text componentsSeparatedByString:@"\n"]) {
+        if ([l rangeOfString:@";"].location == NSNotFound) { [out addObject:l]; continue; }
+        BOOL quoted = NO; NSUInteger k = 0;
+        while (k < l.length && (quoted || [l characterAtIndex:k] != ';')) {
+            if ([l characterAtIndex:k] == '"') quoted = !quoted;
+            k++;
+        }
+        NSString *part = [[l substringToIndex:k] stringByTrimmingCharactersInSet:ws];
+        if (part.length) [out addObject:part];
+    }
+    return out;
+}
+
 @implementation XTX86_64Backend
 
 + (void)setWin64ABI:(BOOL)win64
@@ -6829,7 +6849,8 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             text = resolved;
             }
         [out appendString:@"\t# inline asm\n"];
-        for (NSString* line in [text componentsSeparatedByString:@"\n"])
+        // A `;` ends a statement (XTAsmStatements); the rest of its line is a comment.
+        for (NSString* line in XTAsmStatements(text))
             {
             NSString* t = [line stringByTrimmingCharactersInSet:
                                     [NSCharacterSet whitespaceCharacterSet]];
