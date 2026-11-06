@@ -2,8 +2,8 @@
 # array-cast.sh — a cast of a decayed array to a pointer (`(u8*)got`) is a
 # Bitcast in both compilers, never an IntToPtr, which treats the live pointer
 # as an integer: so the two write the same assembly for it (arm64 Linux and
-# x86-64 Linux; macOS on a Mac), with no self-move left on arm64, and the
-# program prints the array.
+# x86-64 Linux; macOS on a Mac), with no self-move left in show() on arm64,
+# and the program prints the array.
 #
 #   bash tests/driver/array-cast.sh
 set -u
@@ -35,7 +35,13 @@ for A in $TARGETS; do
         "$C" -q -O2 -A "$A" -H . -S -o "$W/c.$A.$(basename "$C").s" "$W/c.xc" 2> "$W/err" || { echo "FAIL $(basename "$C") -A $A: build"; head -3 "$W/err"; fail=1; }
     done
     cmp -s "$W/c.$A.xcc.s" "$W/c.$A.xcc-xc.s" || { echo "FAIL -A $A: the two compilers write different assembly"; diff "$W/c.$A.xcc.s" "$W/c.$A.xcc-xc.s" | head -6; fail=1; }
-    case "$A" in arm64*) grep -qE '^[[:space:]]+mov (x[0-9]+), \1$' "$W/c.$A.xcc.s" && { echo "FAIL -A $A: a self-move is left"; fail=1; } ;; esac
+    # In show() alone: the rest of the module (the par runtime, compiled in
+    # where no prebuilt one is found) has self-moves of its own.
+    case "$A" in arm64*)
+        awk '{ l = $0; sub(/^_/, "", l) } l == "show:" { p = 1; next } p && /\.globl/ { exit } p' "$W/c.$A.xcc.s" > "$W/show.s"
+        [ -s "$W/show.s" ] || { echo "FAIL -A $A: no show() in the assembly"; fail=1; }
+        grep -qE '^[[:space:]]+mov (x[0-9]+), \1$' "$W/show.s" && { echo "FAIL -A $A: a self-move is left in show()"; fail=1; } ;;
+    esac
 done
 case "$PLAT-$(uname -m)" in
     osx-arm64) NATIVE=arm64 ;; linux-x86_64) NATIVE=x86_64-linux ;; linux-aarch64|linux-arm64) NATIVE=arm64-linux ;; *) NATIVE= ;;
