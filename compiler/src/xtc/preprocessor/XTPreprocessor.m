@@ -1235,8 +1235,12 @@ static BOOL fileExistsCaseSensitive(NSFileManager* fm, NSString* path)
     {
     NSString* parent = [path stringByDeletingLastPathComponent];
     NSString* name = [path lastPathComponent];
-    if (parent.length == 0 || name.length == 0)
+    if (name.length == 0)
         return NO;
+    // A bare name (a source given without a directory, importing its
+    // sibling) lives in the working directory.
+    if (parent.length == 0)
+        parent = @".";
     NSError* err = nil;
     NSArray<NSString*>* entries =
         [fm contentsOfDirectoryAtPath:parent
