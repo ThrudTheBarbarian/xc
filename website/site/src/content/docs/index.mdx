@@ -20,6 +20,10 @@ hero:
       link: /compiler/
       icon: right-arrow
       variant: minimal
+    - text: Source on GitHub
+      link: https://github.com/ThrudTheBarbarian/xc
+      icon: github
+      variant: minimal
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
@@ -64,14 +68,14 @@ Every figure is measured with the released compiler on machines you can buy,
 and the [sources are published](/compiler/benchmark-sources/).
 
 <CardGrid>
-	<Card title="22× faster on the GPU" icon="rocket">
-		`md5` on an Apple M3 Max runs 22 times faster on its GPU than on all
+	<Card title="23× faster on the GPU" icon="rocket">
+		`md5` on an Apple M3 Max runs 23 times faster on its GPU than on all
 		sixteen CPU cores, from the same plain loop.
 		[GPU results →](/compiler/benchmarks/gpu/)
 	</Card>
 	<Card title="Plain C, 2.1× faster than OpenMP" icon="star">
 		Unchanged C files built by xcc, on all 32 threads of a Ryzen 9 9955HX,
-		against GCC with a hand-written `#pragma omp parallel for` (2.8× against
+		against GCC with a hand-written `#pragma omp parallel for` (3.0× against
 		clang), as a geometric mean.
 		[C results →](/compiler/benchmarks/c/)
 	</Card>
@@ -89,7 +93,7 @@ and the [sources are published](/compiler/benchmark-sources/).
 </CardGrid>
 
 The CPU code is fast too. On one thread xc is ahead of C++ built by clang
-(1.13× on an M3 Max, 1.04× on a Ryzen 9 9955HX), and of C++ built by GCC,
+(1.14× on an M3 Max, 1.07× on a Ryzen 9 9955HX), and of C++ built by GCC,
 Objective-C and Swift, as a geometric mean over the
 [CPU benchmarks](/compiler/performance/).
 
@@ -123,6 +127,15 @@ inheritance and protocols, automatic reference counting with weak references,
 closures and bound methods, checked errors, typed collections, threads and a
 Foundation-style standard library, with C's syntax, C's types and inline
 assembly. The compiler is self-hosting: xcc is written in xc.
+
+## Open source
+
+xc is developed in the open on GitHub, at
+**[github.com/ThrudTheBarbarian/xc](https://github.com/ThrudTheBarbarian/xc)**: the compiler,
+the runtime, the standard library, the benchmarks and these pages. The compiler is GPLv3,
+and the programs you compile with it are yours, with no obligation of any kind
+([licensing](https://github.com/ThrudTheBarbarian/xc/blob/main/LICENSING.md)). Issues and
+pull requests are welcome; [Contributing](/contributing/) says how.
 
 ## From big iron down to 8 bits
 

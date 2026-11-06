@@ -245,10 +245,9 @@ export default defineConfig({
 					attrs: { rel: 'apple-touch-icon', sizes: '180x180', href: '/apple-touch-icon.png' },
 				},
 			],
-			// Starlight 0.38's preprocess-wrapped schema treats `social` as
-			// required even though the underlying type is optional; pass an
-			// empty array to satisfy validation.
-			social: [],
+			// The header's link to the repository (Starlight 0.38 requires
+			// `social` to be present in any case).
+			social: [{ icon: 'github', label: 'xc on GitHub', href: 'https://github.com/ThrudTheBarbarian/xc' }],
 			sidebar: withVersions(SIDEBAR),
 		}),
 	],

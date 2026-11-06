@@ -3,6 +3,85 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.9.5 — the Raspberry Pi 5, and branches on one bit
+
+Everything since 0.9.4.
+
+### Faster
+
+- **arm64: a float choice on one bit is a branch.** A loop that picks a
+  float by one bit of a value, `(h & 1) ? -u : u` as perlin's gradient
+  does, now branches around the arithmetic only that side needs, tested
+  with `tbz`/`tbnz`, instead of computing both sides and choosing. The
+  values that meet after such a branch share registers, so the loop keeps
+  them out of memory. C perlin on one Raspberry Pi 5 core: 358 ms to 324 ms
+  (clang: 339 ms, GCC: 282 ms); on an M4 Max, 73.5 ms to 66.6 ms, and the xc
+  perlin 76.0 ms to 63.7 ms.
+- **`par` auto on a GPU that cannot run a block.** Where the GPU cannot run
+  a block, such as the Raspberry Pi 5's V3D with a block whose GPU version
+  needs 64-bit integers, `auto` compares the CPU's threads with one thread
+  and keeps the faster. The Pi's C saxpy: 34.4 ms to 27.8 ms.
+- **A few small loops stay where they are.** `--par-style=auto` leaves a
+  nest of small loops whose total work is known and small (a 4×4 tile) in
+  place, rather than making it a `par` block that is launched every time the
+  code around it runs.
+
+### Fixed
+
+- **`par` on the Raspberry Pi 5: no crash in `auto`.** A block whose GPU
+  version needs 64-bit integers could reach the Pi's GPU through the tile
+  queue while `auto` measured every device, and the driver stopped the
+  program.
+- **`asm` blocks on arm64 and x86-64: a `;` ends a statement**, as on the
+  6502, and the rest of the line is a comment. The x86-64 assembler rejected
+  the `;` before.
+- **`XC_PAR_VULKAN_DEVICE` and `XC_PAR_CUDA_DEVICES` take whole numbers**:
+  `XC_PAR_CUDA_DEVICES=10` chose cards 1 and 0.
+
+### Changed
+
+- **xcd checks the machines' data layout.** A program and a daemon must now
+  agree on byte order and pointer width as well as the xcc version, and
+  either refuses the other otherwise, saying why. Every machine `par` runs on
+  is little-endian with 8-byte pointers, so all of them work together as
+  before; a 0.9.4 daemon and a 0.9.5 program refuse each other, as any two
+  versions do.
+
+### Documentation
+
+- **A new [home page](/) and an [Architecture](/compiler/architecture/) section**: how
+  xcc finds, validates and measures data-parallel loops, generates GPU kernels, tiles work
+  across devices and the network, and what it optimises, with diagrams.
+- **[Parallel blocks](/compiler/language/par/)** lists the Raspberry Pi 5's
+  GPU, and what a GPU without 64-bit integers runs.
+- **[Inline assembly](/compiler/language/inline-asm/)** has arm64 and x86-64
+  examples.
+- **[Performance](/compiler/performance/)**: `method_call` is out of the
+  geometric means, beside `matrix_mul_f32`, and in every table and chart.
+  **[Networked](/compiler/benchmarks/network/)** has a Raspberry Pi 5 table.
+
+### Benchmarks
+
+- **Where xc stands.** Over the eighteen benchmarks in the means, xc's code
+  runs 1.14x faster than clang's C++ on an M3 Max and 1.07x faster on a Ryzen
+  9 9955HX (0.9.4: 1.13x and 1.04x), and 1.29x faster than GCC's on both. The
+  [performance page](/compiler/performance/) has every figure.
+- **perlin on a Raspberry Pi 5**: the xc version on one core 386 ms to
+  325 ms, and 65.4 ms to 63.9 ms with `par` auto choosing; the C version on
+  one core 358 ms to 324 ms, ahead of clang (339 ms).
+- **The C suite** on the Ryzen: xcc's single-thread code is 2.5x faster than
+  clang's and 2.3x faster than GCC's, and on every thread 3.0x faster than
+  clang with OpenMP and 2.1x faster than GCC with OpenMP.
+- **The GPU**: on the M3 Max, `md5` runs 23x faster on its GPU than on all
+  sixteen CPU cores.
+- **GPUs over the network**, every client measured again with 0.9.5: from
+  a Raspberry Pi 5, `mandel_deep` runs about ten times faster on a remote RTX
+  5080 than on the Pi's own CPU and GPU, and `md5` takes half the remote
+  card's time on both GPUs together. From the Linux machine, `auto` now
+  matches the machine alone for `md5` (it was three times slower). The
+  [networked page](/compiler/benchmarks/network/) says where `auto` still
+  misses.
+
 ## Version 0.9.4 — virtual calls in loops, and the Raspberry Pi's GPU and CPU code
 
 Everything since 0.9.3.

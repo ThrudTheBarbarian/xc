@@ -7,6 +7,9 @@ Thank you for helping. This file says how a change gets from your fork into
 `main`: what to agree to first, where changes go, how to test them, and what
 happens after you open a pull request.
 
+The source is on GitHub: **[github.com/ThrudTheBarbarian/xc](https://github.com/ThrudTheBarbarian/xc)**.
+Fork it there, and open issues and pull requests against it.
+
 ## Before you start
 
 - **Look for an issue first.** Work that is already under way has an issue
