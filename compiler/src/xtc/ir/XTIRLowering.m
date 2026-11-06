@@ -7220,6 +7220,19 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         self.bitcastSource[@(bc.valueId)] = src;
         return bc;
         }
+    // A decayed array (its TYPE is an array, its VALUE already a pointer)
+    // reaching a pointer is a reinterpret too: a Bitcast, never an IntToPtr,
+    // which treats the live pointer as an integer. On arm64 that only cost a
+    // move through a scratch register (md5_mask's `(u8*)got`); on a target
+    // whose pointer is wider than its integers it can lose the address's top
+    // byte. The port's coercion makes the same choice (c2xc 03).
+    if (!srcIsPtr && dstIsPtr && srcType && srcType.kind == XTTypeKindArray
+        && src.type && src.type.kind == XTIRTypeKindPtr)
+        {
+        return [self emitInsnOpcode:XTIROpBitcast
+                             result:dstIR
+                           operands:@[ [XTIROperand useWithValueId:src.valueId] ]];
+        }
     // IntToPtr / PtrToInt cover the integer ↔ pointer conversions.
     if (!srcIsPtr && dstIsPtr)
         {
