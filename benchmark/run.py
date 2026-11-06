@@ -59,21 +59,42 @@ COMPILER_VERSION = os.environ.get("XC_BENCH_XCC_VERSION") or COMPILER_VERSION
 OPTS = ["O0", "O1", "O2", "O3"]
 BASELINE = "baseline"
 
-MAX_LOAD = 0.25          # per core; --max-load overrides
+MAX_LOAD = 0.25          # the share of the CPUs busy; --max-load overrides
 LOAD_POLL = 15           # seconds between checks
 LOAD_GIVE_UP = 3600      # seconds before the run stops rather than time a busy machine
 _load_ok = {}            # host -> time of the last passing check
 
 
 def load_per_core(host=None):
-    """1-minute load average divided by core count, here or on `host`."""
+    """How busy the CPUs are NOW, as a fraction of all of them, over about a
+    second, here or on `host`.
+
+    This was the 1-minute load average per core. A run on every thread drove
+    that to 17 on a 32-thread machine, and the next run then waited minutes
+    for the average of the last one to decay, with the machine idle the whole
+    time. What the CPUs are doing now is what a timing needs to know.
+    """
     if host is None:
+        if sys.platform == "darwin":
+            # top's second sample is the CPU use over the interval between them.
+            r = subprocess.run(["top", "-l", "2", "-n", "0", "-s", "1"], capture_output=True, text=True)
+            idle = [l for l in r.stdout.splitlines() if l.startswith("CPU usage:")]
+            if idle:
+                pct = idle[-1].split(",")[-1].strip().split("%")[0]
+                return max(0.0, 1.0 - float(pct) / 100.0)
         return os.getloadavg()[0] / (os.cpu_count() or 1)
     r = subprocess.run(["ssh", "-o", "ConnectTimeout=10", host,
-                        "cut -d' ' -f1 /proc/loadavg; nproc"],
+                        "head -1 /proc/stat; sleep 1; head -1 /proc/stat"],
                        capture_output=True, text=True)
-    load, cores = r.stdout.split()
-    return float(load) / int(cores)
+    rows = [l.split()[1:] for l in r.stdout.splitlines() if l.startswith("cpu ")]
+    if len(rows) != 2:
+        return 1.0
+    a0 = [int(x) for x in rows[0]]
+    a1 = [int(x) for x in rows[1]]
+    total = sum(a1) - sum(a0)
+    # idle and iowait are the 4th and 5th columns.
+    idle = (a1[3] - a0[3]) + (a1[4] - a0[4] if len(a1) > 4 else 0)
+    return (total - idle) / total if total > 0 else 1.0
 
 
 def wait_quiet(host=None):
@@ -91,15 +112,15 @@ def wait_quiet(host=None):
         if lpc <= MAX_LOAD:
             _load_ok[host] = time.time()
             if said:
-                print("  load on %s is %.2f per core: continuing" % (host or "this host", lpc),
+                print("  %s is %.0f%% busy: continuing" % (host or "this host", lpc * 100),
                       flush=True)
             return
         if time.time() - start > LOAD_GIVE_UP:
-            sys.exit("run.py: %s stayed above %.2f load per core for %d s; not timing a busy machine"
-                     % (host or "this host", MAX_LOAD, LOAD_GIVE_UP))
+            sys.exit("run.py: %s stayed over %.0f%% busy for %d s; not timing a busy machine"
+                     % (host or "this host", MAX_LOAD * 100, LOAD_GIVE_UP))
         if not said:
-            print("  load on %s is %.2f per core (limit %.2f): waiting"
-                  % (host or "this host", lpc, MAX_LOAD), flush=True)
+            print("  %s is %.0f%% busy (limit %.0f%%): waiting"
+                  % (host or "this host", lpc * 100, MAX_LOAD * 100), flush=True)
             said = True
         time.sleep(LOAD_POLL)
 
