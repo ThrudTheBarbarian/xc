@@ -55,10 +55,20 @@ SEPARATE = ("matrix_mul_f32",)
 # runs them in microseconds, so a ratio says nothing and they are kept out of
 # every mean; the tables say the repetition was removed.
 ANALYSIS = ("int_muldiv_hoist", "array_sum_hoist")
+# Benchmarks kept out of the means because one ratio that large would move a
+# mean that stands for ordinary code (owner, 2026-11-06): method_call, whose
+# virtual call xc makes direct and inlines (0.9.4: 9x clang's on arm64, 49x
+# on x86-64). A valid result, shown in every table and chart like the rest
+# and named beside matrix_mul_f32 in the summary; only the means leave it out.
+SKEW = ("method_call",)
 
 
 def general(cur):
-    return {b: d for b, d in cur.items() if b not in SEPARATE and b not in ANALYSIS}
+    return {b: d for b, d in cur.items() if b not in SEPARATE and b not in ANALYSIS and b not in SKEW}
+
+
+def in_means(b):
+    return b not in SEPARATE and b not in ANALYSIS and b not in SKEW
 
 
 def removed(x):
@@ -325,7 +335,7 @@ def history_chart(hist, suffix, title, versions):
         if vals[0]:
             # Speed relative to the first release: above 1 is faster.
             series[b] = [None if not x else vals[0] / x for x in vals]
-    geo = [gmean([s[i] for b, s in series.items() if s[i] and b not in SEPARATE and b not in ANALYSIS])
+    geo = [gmean([s[i] for b, s in series.items() if s[i] and in_means(b)])
            for i in range(len(versions))]
     w, h, left, right, top, bottom = 720, 300, 60, 560, 24, 262
     # The y range fits the data, kept at least 0.8..1.25 so a quiet history
@@ -442,7 +452,7 @@ def pi_section(version):
     # "the faster of the two" per benchmark is a harder measure, and not the
     # one the other platforms are given).
     def mean_vs(k):
-        rs = [v["xc_pi"] / v[k] for _, b, v in rows if v.get(k) and b not in ANALYSIS]
+        rs = [v["xc_pi"] / v[k] for _, b, v in rows if v.get(k) and in_means(b)]
         return speed(gmean(rs)) if rs else "–"
     out.append("")
     out.append("Geometric mean of xc's times against each: **%s** than clang++, **%s** than g++." % (
@@ -461,29 +471,34 @@ def summary(cur):
     return "\n".join(out)
 
 
-def weight(cur):
-    """When one benchmark moves the clang mean by more than 5% on either
-    target, say which and give the means without it, so a reader can tell a
-    gain across the board from one large one (0.9.4: method_call, a virtual
-    call in a loop made direct, 9x on arm64 and 49x on x86-64, carried most
-    of the clang mean's gain)."""
-    g = general(cur)
-    def mean(suf, drop=None):
-        return gmean([d["O3"]["xc" + suf] / d["O3"]["cpp" + suf] for b, d in g.items()
-                      if b != drop and d["O3"].get("xc" + suf) and d["O3"].get("cpp" + suf)])
-    worst = None
-    for b in g:
-        shift = max(abs(1 - mean(suf, b) / mean(suf)) for _, suf in PLATFORMS)
-        if worst is None or shift > worst[1]:
-            worst = (b, shift)
-    if worst is None or worst[1] <= 0.05:
-        return ""
-    b = worst[0]
-    each = [speed(g[b]["O3"]["xc" + suf] / g[b]["O3"]["cpp" + suf]) for _, suf in PLATFORMS]
-    without = [speed(mean(suf, b)) for _, suf in PLATFORMS]
-    return ("One benchmark weighs heavily in the C++ (clang) means: xc runs `%s` %s than clang's "
-            "on arm64 and %s on x86-64. Without it, over the other %d, xc's code is %s than "
-            "clang's on arm64 and %s on x86-64." % (b, each[0], each[1], len(g) - 1, without[0], without[1]))
+def skew_note(cur):
+    """The sentence on method_call (SKEW) beside matrix_mul_f32's: what xc
+    does there, its ratio against clang's on each target, and that it is in
+    the tables but not the means."""
+    out = []
+    for b in SKEW:
+        d = cur.get(b, {}).get("O3", {})
+        each = []
+        for name, suf in PLATFORMS:
+            if d.get("xc" + suf) and d.get("cpp" + suf):
+                each.append("%s on %s" % (speed(d["xc" + suf] / d["cpp" + suf]), name))
+        if each:
+            out.append("`%s` makes a virtual call in a loop, which xcc turns into a class test and a "
+                       "direct call it can inline, so xc runs it %s than C++ (clang). The result is "
+                       "real, and it is in every table and chart below, but one ratio that large would "
+                       "move a mean of ordinary code by itself." % (b, " and ".join(each)))
+    return " ".join(out)
+
+
+def mean_count(cur):
+    """'eighteen of the twenty-two': how many benchmarks the means cover."""
+    words = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+             "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+             "nineteen", "twenty", "twenty-one", "twenty-two", "twenty-three", "twenty-four",
+             "twenty-five", "twenty-six", "twenty-seven", "twenty-eight", "twenty-nine", "thirty"]
+    n, all_ = len(general(cur)), len(cur)
+    say = lambda k: words[k] if k < len(words) else str(k)
+    return "%s of the %s" % (say(n), say(all_)), say(all_ - n).capitalize()
 
 
 def separate(cur):
@@ -960,7 +975,9 @@ def main():
         tc_x86=tc.get("x86_64", ""),
         summary=summary(cur),
         standing=standing(cur),
-        weight=weight(cur),
+        skew=skew_note(cur),
+        mean_count=mean_count(cur)[0],
+        kept_out=mean_count(cur)[1],
         separate=separate(cur),
         history_note=(
             "On arm64 every release's xc was timed again on the %s with today's programs, and is "
@@ -1328,19 +1345,18 @@ until the machine is otherwise idle.
 ## Summary
 
 How much faster xc's code runs than each language's, as the geometric mean
-over nineteen of the twenty-two benchmarks:
+over {mean_count} benchmarks:
 
 {summary}
 
 {standing}
 
-{weight}
-
-Three benchmarks are kept out of those means. xcc recognises the loop nest of
+{kept_out} benchmarks are kept out of those means. xcc recognises the loop nest of
 `matrix_mul_f32` and replaces it with a matrix kernel of its own, which makes xc
 tens to hundreds of times faster at that one operation; counted in, it would
 dominate means that stand for ordinary code, and most programs do not multiply
 matrices. Its figures are under [Matrix multiplies](#matrix-multiplies).
+{skew}
 `int_muldiv_hoist` and `array_sum_hoist` measure whether a compiler notices that
 an outer loop repeats the same work on every pass. xcc does, and runs both in
 microseconds, so their ratios say nothing about ordinary code; the tables show
@@ -1419,7 +1435,7 @@ against GCC and clang on one thread and with OpenMP on every thread, is on
 
 How fast xc's code is in each release, relative to {first}: above 1× is faster.
 The thin lines are single benchmarks (labelled where they moved by more than
-twelve percent), the thick line the geometric mean (without `matrix_mul_f32`). Releases shown: {hist_list}. {changed} changed in
+twelve percent), the thick line the geometric mean (over the benchmarks the means cover, as in the [summary](#summary)). Releases shown: {hist_list}. {changed} changed in
 0.64's benchmark set and are left out of this history.
 
 {hist_arm}
