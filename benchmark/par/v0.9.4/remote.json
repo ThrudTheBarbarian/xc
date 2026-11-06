@@ -1,0 +1,86 @@
+{
+ "mandel_deep": {
+  "pi": {
+   "all": {
+    "best_us": 1739529,
+    "first_us": 1837340
+   },
+   "auto": {
+    "best_us": 636544,
+    "first_us": 11114753
+   },
+   "checksum": "2738",
+   "local": {
+    "best_us": 6131566,
+    "first_us": 11090622
+   },
+   "remote": {
+    "best_us": 633689,
+    "first_us": 735424
+   }
+  }
+ },
+ "mandelbrot": {
+  "pi": {
+   "all": {
+    "best_us": 23078,
+    "first_us": 92620
+   },
+   "auto": {
+    "best_us": 1450,
+    "first_us": 185372
+   },
+   "checksum": "199",
+   "local": {
+    "best_us": 59867,
+    "first_us": 161923
+   },
+   "remote": {
+    "best_us": 927,
+    "first_us": 77955
+   }
+  }
+ },
+ "md5": {
+  "pi": {
+   "all": {
+    "best_us": 253764,
+    "first_us": 329226
+   },
+   "auto": {
+    "best_us": 417605,
+    "first_us": 732734
+   },
+   "checksum": "2573682417",
+   "local": {
+    "best_us": 627825,
+    "first_us": 708096
+   },
+   "remote": {
+    "best_us": 487856,
+    "first_us": 560785
+   }
+  }
+ },
+ "saxpy": {
+  "pi": {
+   "all": {
+    "best_us": 419171,
+    "first_us": 818234
+   },
+   "auto": {
+    "best_us": 34535,
+    "first_us": 135880
+   },
+   "checksum": "3011510272",
+   "local": {
+    "best_us": 26585,
+    "first_us": 133761
+   },
+   "remote": {
+    "best_us": 892212,
+    "first_us": 2398059
+   }
+  }
+ }
+}

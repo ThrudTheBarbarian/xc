@@ -689,8 +689,7 @@ def remote_tables(version):
         for b, r in files[src].items():
             if isinstance(r, dict) and m in r:
                 row = dict(r[m])
-                if src != version:
-                    row["measured_with"] = src.lstrip("v")
+                row["measured_with"] = src.lstrip("v")
                 res.setdefault(b, {})[m] = row
     names = {"mac": "Apple %s (Metal), using the remote RTX 5080" % (par_mac().split(",")[0] if MAC_TREE else "M4 Max"),
              "linux": "AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080",
@@ -1282,10 +1281,11 @@ description: A par block's tiles on a GPU in another machine, served by xcd, bes
 
 `xcd`, the par daemon, serves a machine's GPUs to programs on others (see
 [par](/compiler/language/par/)). Here it runs on a Windows machine with an
-RTX 5080, on the local network, and two machines use it: an Apple MacBook Pro
-with an {net_mac}, whose own GPU is fast, and a Linux machine with an AMD Ryzen 9
-9955HX, whose only GPU is integrated. Each figure is measured with the
-released {release} `xcc`.
+RTX 5080, on the local network, and three machines use it: an Apple MacBook Pro
+with an {net_mac}, whose own GPU is fast; a Linux machine with an AMD Ryzen 9
+9955HX, whose only GPU is integrated; and a Raspberry Pi 5, whose small V3D GPU
+it reaches over gigabit Ethernet. Each table gives the `xcc` release it was
+measured with.
 
 Each program runs four ways: on the machine alone (`XC_PAR_REMOTE=none`), on
 the remote GPU alone (`XC_PAR_WORKERS=remote`), on every GPU, the machine's
@@ -1298,16 +1298,22 @@ the remote GPU. Every mode's checksum must agree.
 
 What the tables show:
 
-- **A remote GPU pays where a block computes much from little data.** The
-  hashcat MD5 workload sends almost nothing and hashes 64 million candidates:
-  from the Linux machine it runs on the remote RTX 5080 many times faster than
-  on its own devices, and `auto` picks the remote card.
+- **A remote GPU pays where a block computes much from little data.**
+  `mandel_deep` runs about three times faster from the Linux machine on the
+  remote RTX 5080 than on its own devices, and about ten times faster from the
+  Raspberry Pi; `mandelbrot` runs some sixty times faster from the Pi. `auto`
+  finds the remote card in each case.
 - **It does not pay where the machine's own GPU is already fast**, as on the
-  {net_mac_short}, or where a block moves more than it computes (`saxpy`): `auto` keeps
-  those local.
-- **Every GPU together is not always faster.** Beside a remote card many times
-  faster, a slow integrated GPU's share holds the fast one back; `auto`
-  measures the remote card alone too and keeps whichever is fastest.
+  {net_mac_short}, or where a block moves more than it computes: `saxpy` crosses
+  the network for every element, and on the Mac `auto` keeps it local.
+- **Every GPU together is fastest only sometimes.** For `md5` on the Pi, its
+  own GPU and the remote card together beat the remote card alone. More often a
+  slow GPU's share holds the fast one back.
+- **`auto` does not yet choose best everywhere.** For `md5` from the Linux
+  machine it runs about three times slower than that machine on its own, and
+  for `saxpy` about a third slower from the Linux machine and 30% slower from
+  the Pi. For `md5` from the Pi it keeps the remote card alone where both GPUs
+  together are faster.
 
 ## Reproducing
 
@@ -1317,7 +1323,8 @@ python3 benchmark/page.py
 ```
 
 `remote.py` starts `xcd` on the configured GPU machine and measures from this
-machine and the configured Linux host.
+machine and the configured Linux host; `--clients pi` measures from the
+configured Raspberry Pi.
 """
 
 

@@ -30,7 +30,6 @@ prints the tables for the performance page.
 import argparse
 import json
 import os
-import random
 import re
 import secrets
 import shutil
@@ -81,11 +80,15 @@ def ssh_hostname(alias):
 
 
 class Daemon:
-    """xcd on the Windows host, on a port of its own, with a fresh secret."""
+    """xcd on the Windows host, on its default port, with a fresh secret."""
 
     def __init__(self, host, work):
         self.host = host
-        self.port = random.randint(47300, 47900)
+        # xcd's own port, 7227: the Windows host admits it on any network
+        # profile, where an arbitrary port is admitted only for xcd.exe on a
+        # Private network (2026-11-06: its LAN came back as Public, and the
+        # Pi's connections were refused).
+        self.port = 7227
         self.secret = secrets.token_hex(16)
         exe = os.path.join(work, "xcd.exe")
         build(os.path.join(common.REPO, "compiler", "selfhost", "tools", "xcd.xc"), "win64", exe)
