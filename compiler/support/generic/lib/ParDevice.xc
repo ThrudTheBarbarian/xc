@@ -1160,6 +1160,23 @@ class ParDevice
         learn(i, proto, gParMeasN[i], winner);
         }
 
+    // No GPU would run the block (the Pi's V3D and a GPU version that needs
+    // 64-bit integers, say): while auto measures, the GPU is out of the
+    // comparison, as a declined set is. Its time used to stay unknown, so
+    // every run went back to the GPU, fell to the CPU on every thread, and
+    // the one-thread trial never came (the Pi's C saxpy: 34.5 ms where one
+    // thread takes 26).
+    static void gpuDeclined(ParChunk* proto)
+        {
+        u32 i = slot(proto.parName());
+        if (!gParMeasuring[i] || gParGpuUs[i] >= (i64)0)
+            return;
+        gParGpuUs[i] = (i64)1 << (i64)50;
+        gParGpuRuns[i] = (u32)2;
+        if (reporting())
+            Log.info("par: %s: auto leaves the GPU out (it cannot run this block)", gParBlock[i]);
+        }
+
     // The queue would not run a set for the block (one tile, or no worker
     // holds it): the set is out of the comparison, as if it never ended.
     static void setDeclined(ParChunk* proto, i32 set)

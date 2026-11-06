@@ -484,6 +484,8 @@ class Par
                 return;
                 }
 #endif
+            // No GPU took it: auto's measuring moves on to the CPU.
+            ParDevice.gpuDeclined(proto);
             }
         i64 t0 = ParDevice.nowUs();
         Par.runCpu(proto, lo, hi);

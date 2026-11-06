@@ -1021,6 +1021,25 @@ class ParVulkan
         }
 
     // Whether a kernel's header marks the 32-bit span form (" span=32").
+    // Why this device cannot run the block's kernel, or 0 when it can. A
+    // kernel in the 32-bit span form declares no 64-bit integer; its range
+    // must keep lo + per within a signed 32-bit value. Any other kernel needs
+    // a device with 64-bit integers. A kernel that writes bytes needs 8-bit
+    // storage. Asked by run() and by the tile queue's worker (holds()).
+    static u8* cannotTake(u8* src, i64 lo, i64 hi)
+        {
+        if (ParVulkan.span32(src))
+            {
+            if (lo < (i64)-2147483648 || hi + (hi - lo) > (i64)2147483647)
+                return "its range is too large for its 32-bit GPU version";
+            }
+        else if (!_int64)
+            return "its GPU version needs 64-bit integers, which this Vulkan device does not have";
+        if (ParVulkan.bytes8(src) && !_int8Storage)
+            return "its GPU version writes bytes, which this Vulkan device cannot (no 8-bit storage)";
+        return (u8*)0;
+        }
+
     static bool span32(u8* src)
         {
         for (u32 at = (u32)0; src[at] != (u8)0 && src[at] != (u8)10; at = at + (u32)1)
@@ -1053,18 +1072,9 @@ class ParVulkan
 #else
         if (!start())
             return ParDevice.cpu("there is no Vulkan device");
-        // A kernel in the 32-bit span form declares no 64-bit integer; its
-        // range must keep lo + per within a signed 32-bit value. Any other
-        // kernel needs a device with 64-bit integers.
-        if (ParVulkan.span32(src))
-            {
-            if (lo < (i64)-2147483648 || hi + (hi - lo) > (i64)2147483647)
-                return ParDevice.cpu("its range is too large for its 32-bit GPU version");
-            }
-        else if (!_int64)
-            return ParDevice.cpu("its GPU version needs 64-bit integers, which this Vulkan device does not have");
-        if (ParVulkan.bytes8(src) && !_int8Storage)
-            return ParDevice.cpu("its GPU version writes bytes, which this Vulkan device cannot (no 8-bit storage)");
+        u8* why = ParVulkan.cannotTake(src, lo, hi);
+        if (why != (u8*)0)
+            return ParDevice.cpu(why);
         // The device is known now: its variant of the module, where the block has one.
         src = spirvFor(whole, ParVulkan.identity());
         i32 slot = pipeline(src);
@@ -1545,6 +1555,12 @@ class ParVulkanWorker : ParWorker
             return false;
         u8* spv = ParVulkan.spirvFor(src, identity());
         if (spv == (u8*)0 || !ParVulkan.start())
+            return false;
+        // What the device cannot run, as ParVulkan.run refuses it: on the
+        // Pi's V3D a kernel that needs 64-bit integers made Mesa abort the
+        // program ("Unknown NIR ALU inst ... u2u64") when auto tried every
+        // device for it.
+        if (ParVulkan.cannotTake(src, (i64)0, l.n) != (u8*)0)
             return false;
         // The block laid out from this worker's own section (its header may
         // differ from the first section's in what the kernel form needs).
