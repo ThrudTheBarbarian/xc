@@ -9257,7 +9257,7 @@ class Arm64
         _start = new Map();
         _end = new Map();
         _phiRes = new Array();
-        _fwdPhi = new Array();
+        _fwdPhi = new Map();
         _crossCall = new Array();
         _callPos = new Array();
         u32 nb = fn.blocks().count();
@@ -9285,7 +9285,8 @@ class Arm64
 
     Map* _defPos;
     Map* _lastUse;
-    Array* _fwdPhi;      // phis of forward joins: ordinary intervals (finishIntervals)
+    Map* _phiOf;         // phi value -> its Phi (finishIntervals), for lookups that must not search
+    Map* _fwdPhi;        // phis of forward joins: ordinary intervals (finishIntervals); a map, as a function may hold thousands
     Array* _blkEnd;      // each block's LAST undoubled position
 
     // Walk the blocks once, numbering every instruction and recording defs,
@@ -9431,6 +9432,21 @@ class Arm64
             all.add((Object*)allSet.get(k));
         collectKeys(all, fn);
 
+        // Block -> index, and phi value -> its Phi and its block's index, so a
+        // forward phi's start is found without a search per value.
+        Map* fwdIdx = new Map();
+        Map* fwdPhiBlk = new Map();
+        _phiOf = new Map();
+        for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1) {
+            IRBlock* b = (IRBlock*)fn.blocks().get(bi);
+            fwdIdx.set((Hashable*)b, (Object*)Number.withU32(bi));
+            for (u32 q = (u32)0; q < b.phis().count(); q = q + (u32)1) {
+                IRInsn* pq = (IRInsn*)b.phis().get(q);
+                if (pq.res() == (IRValue*)0) continue;
+                _phiOf.set((Hashable*)pq.res(), (Object*)pq);
+                fwdPhiBlk.set((Hashable*)pq.res(), (Object*)Number.withU32(bi));
+            }
+        }
         for (u32 i = (u32)0; i < all.count(); i = i + (u32)1) {
             IRValue* v = (IRValue*)all.get(i);
             Object* dp = defPos.get((Hashable*)v);
@@ -9459,9 +9475,9 @@ class Arm64
             // blocks between are not on the path from an earlier
             // predecessor (a devirtualised call's join kept its w1).
             i32 cst = st;
-            if (dp != (Object*)0 && hasVal(_phiRes, v)) {
-                i32 fs = forwardPhiStart(fn, v, blkEnd);
-                if (fs >= (i32)0) { st = fs; addVal(_fwdPhi, v); }
+            if (dp != (Object*)0 && inMap(_phiOf, v)) {
+                i32 fs = forwardPhiStart(v, blkEnd, fwdIdx, _phiOf, fwdPhiBlk);
+                if (fs >= (i32)0) { st = fs; _fwdPhi.set((Hashable*)v, (Object*)v); }
             }
             _start.set((Hashable*)v, (Object*)Number.withI32(st));
             _end.set((Hashable*)v, (Object*)Number.withI32(en));
@@ -9477,30 +9493,25 @@ class Arm64
     // before the block; else -1. At the terminator's reads and not after
     // them: a branch whose taken edge has copies makes them before it reads
     // its condition, so the phi must not share the condition's register.
-    i32 forwardPhiStart(IRFunc* fn, IRValue* v, Array* blkEnd)
+    i32 forwardPhiStart(IRValue* v, Array* blkEnd, Map* idx, Map* phiOf, Map* phiBlk)
     {
-        for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1) {
-            IRBlock* b = (IRBlock*)fn.blocks().get(bi);
-            IRInsn* ph = (IRInsn*)0;
-            for (u32 i = (u32)0; i < b.phis().count(); i = i + (u32)1)
-                if (((IRInsn*)b.phis().get(i)).res() == v) ph = (IRInsn*)b.phis().get(i);
-            if (ph == (IRInsn*)0) continue;
-            if (isMemTy(v.ty())) return (i32)-1;
-            i32 first = (i32)-1;
-            for (u32 q = (u32)0; q + (u32)1 < ph.ops().count(); q = q + (u32)2) {
-                IRBlock* pb = ((IROperand*)ph.ops().get(q)).blk();
-                u32 pi = fn.blocks().count();
-                for (u32 j = (u32)0; j < fn.blocks().count(); j = j + (u32)1)
-                    if ((IRBlock*)fn.blocks().get(j) == pb) { pi = j; break; }
-                if (pi >= bi) return (i32)-1;
-                // The terminator's own reads (2p): a branch may make its
-                // copies before it reads its condition.
-                i32 at = (i32)2 * ((Number*)blkEnd.get(pi)).asI32();
-                if (first < (i32)0 || at < first) first = at;
-            }
-            return first;
+        Object* po = phiOf.get((Hashable*)v);
+        if (po == (Object*)0 || isMemTy(v.ty())) return (i32)-1;
+        IRInsn* ph = (IRInsn*)po;
+        u32 bi = ((Number*)phiBlk.get((Hashable*)v)).asU32();
+        i32 first = (i32)-1;
+        for (u32 q = (u32)0; q + (u32)1 < ph.ops().count(); q = q + (u32)2) {
+            IRBlock* pb = ((IROperand*)ph.ops().get(q)).blk();
+            Object* pio = pb == (IRBlock*)0 ? (Object*)0 : idx.get((Hashable*)pb);
+            if (pio == (Object*)0) return (i32)-1;
+            u32 pi = ((Number*)pio).asU32();
+            if (pi >= bi) return (i32)-1;
+            // The terminator's own reads (2p): a branch may make its
+            // copies before it reads its condition.
+            i32 at = (i32)2 * ((Number*)blkEnd.get(pi)).asI32();
+            if (first < (i32)0 || at < first) first = at;
         }
-        return (i32)-1;
+        return first;
     }
 
     // Every value the function mentions, so a value whose ONLY consumer is a
@@ -9823,13 +9834,35 @@ class Arm64
     // homed in R overlaps any of the three.
     void coalesceArmPhis(IRFunc* fn, Array* gpCallee, Array* fpCallee)
     {
-        if (_fwdPhi == (Array*)0 || _fwdPhi.count() == (u32)0) return;
+        if (_fwdPhi == (Map*)0 || _fwdPhi.count() == (u32)0) return;
+        // Once per function, so the test per phi is linear in its blocks: how
+        // many operands read each value, and the values homed in each register.
+        Map* cnt = new Map();
+        Map* refs = new Map();       // block -> the terminator operands that branch to it
+        for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1) {
+            IRBlock* o = (IRBlock*)fn.blocks().get(bi);
+            countUses(cnt, o.phis());
+            countUses(cnt, o.insns());
+            IRInsn* ot = o.term();
+            if (ot == (IRInsn*)0) continue;
+            countUsesIn(cnt, ot);
+            for (u32 k = (u32)0; k < ot.ops().count(); k = k + (u32)1) {
+                IRBlock* tb = ((IROperand*)ot.ops().get(k)).blk();
+                if (tb == (IRBlock*)0) continue;
+                Object* c = refs.get((Hashable*)tb);
+                refs.set((Hashable*)tb, (Object*)Number.withU32((c == (Object*)0 ? (u32)0 : ((Number*)c).asU32()) + (u32)1));
+            }
+        }
+        Map* byReg = new Map();
+        Array* hk = _home.allKeys();
+        for (u32 i = (u32)0; i < hk.count(); i = i + (u32)1)
+            regListAdd(byReg, (String*)_home.get((Hashable*)hk.get(i)), (IRValue*)hk.get(i));
         for (u32 ji = (u32)0; ji < fn.blocks().count(); ji = ji + (u32)1) {
             IRBlock* J = (IRBlock*)fn.blocks().get(ji);
             for (u32 pi = (u32)0; pi < J.phis().count(); pi = pi + (u32)1) {
                 IRInsn* P = (IRInsn*)J.phis().get(pi);
                 IRValue* pv = P.res();
-                if (pv == (IRValue*)0 || !hasVal(_fwdPhi, pv) || P.ops().count() != (u32)4) continue;
+                if (pv == (IRValue*)0 || !inMap(_fwdPhi, pv) || P.ops().count() != (u32)4) continue;
                 Object* rh = _home.get((Hashable*)pv);
                 if (rh == (Object*)0) continue;
                 String* R = (String*)rh;
@@ -9845,9 +9878,14 @@ class Arm64
                     IRValue* w = wo.val();
                     IRValue* u = uo.val();
                     if (w == (IRValue*)0 || u == (IRValue*)0 || w == u || u == pv || w == pv) continue;
-                    if (armPhiOk(fn, J, A, B, P, u, w, R, gpCallee, fpCallee)) {
-                        _home.set((Hashable*)u, (Object*)R);
-                        _home.set((Hashable*)w, (Object*)R);
+                    if (armPhiOk(fn, J, A, B, P, u, w, R, gpCallee, fpCallee, cnt, byReg, refs)) {
+                        for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1) {
+                            IRValue* v = q == (u32)0 ? u : w;
+                            Object* old = _home.get((Hashable*)v);
+                            if (old != (Object*)0) regListRemove(byReg, (String*)old, v);
+                            _home.set((Hashable*)v, (Object*)R);
+                            regListAdd(byReg, R, v);
+                        }
                     }
                     break;
                 }
@@ -9855,8 +9893,69 @@ class Arm64
         }
     }
 
+    static void countUses(Map* cnt, Array* list)
+    {
+        for (u32 i = (u32)0; i < list.count(); i = i + (u32)1)
+            countUsesIn(cnt, (IRInsn*)list.get(i));
+    }
+
+    static void countUsesIn(Map* cnt, IRInsn* n)
+    {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0) continue;
+            Object* c = cnt.get((Hashable*)o.val());
+            cnt.set((Hashable*)o.val(), (Object*)Number.withU32((c == (Object*)0 ? (u32)0 : ((Number*)c).asU32()) + (u32)1));
+        }
+    }
+
+    static u32 blockRefs(IRInsn* t, IRBlock* b)
+    {
+        u32 c = (u32)0;
+        if (t != (IRInsn*)0)
+            for (u32 k = (u32)0; k < t.ops().count(); k = k + (u32)1)
+                if (((IROperand*)t.ops().get(k)).blk() == b) c = c + (u32)1;
+        return c;
+    }
+
+    static u32 usesOf(IRInsn* n, IRValue* v)
+    {
+        u32 c = (u32)0;
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1) {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && o.val() == v) c = c + (u32)1;
+        }
+        return c;
+    }
+
+    // The register a home names, whatever its view: `w19` and `x19` are one,
+    // `s8`, `d8` and `v8` another (sameArm64Reg).
+    static String* regKey(String* r)
+    {
+        u8 c = r.byteAt((u32)0);
+        String* k = String.withCString((c == (u8)'w' || c == (u8)'x') ? "g" : "f");
+        k.append(r.substringFromByte((u32)1));
+        return k;
+    }
+
+    static void regListAdd(Map* byReg, String* r, IRValue* v)
+    {
+        String* k = regKey(r);
+        Array* l = (Array*)byReg.get((Hashable*)k);
+        if (l == (Array*)0) { l = new Array(); byReg.set((Hashable*)k, (Object*)l); }
+        l.add((Object*)v);
+    }
+
+    static void regListRemove(Map* byReg, String* r, IRValue* v)
+    {
+        Array* l = (Array*)byReg.get((Hashable*)regKey(r));
+        if (l == (Array*)0) return;
+        for (u32 i = (u32)0; i < l.count(); i = i + (u32)1)
+            if ((IRValue*)l.get(i) == v) { l.removeAt(i); return; }
+    }
+
     bool armPhiOk(IRFunc* fn, IRBlock* J, IRBlock* A, IRBlock* B, IRInsn* P, IRValue* u, IRValue* w,
-                  String* R, Array* gpCallee, Array* fpCallee)
+                  String* R, Array* gpCallee, Array* fpCallee, Map* cnt, Map* byReg, Map* refs)
     {
         // A: B's only successor-arm, a single block straight to J.
         IRInsn* at = A.term();
@@ -9868,21 +9967,16 @@ class Arm64
         for (u32 k = (u32)1; k < bt.ops().count(); k = k + (u32)1)
             if (((IROperand*)bt.ops().get(k)).blk() == A) bToA = true;
         if (!bToA) return false;
-        for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1) {
-            IRBlock* o = (IRBlock*)fn.blocks().get(bi);
-            if (o == A || o == B) continue;
-            IRInsn* ot = o.term();
-            if (ot != (IRInsn*)0)
-                for (u32 k = (u32)0; k < ot.ops().count(); k = k + (u32)1)
-                    if (((IROperand*)ot.ops().get(k)).blk() == A) return false;   // A has one predecessor
-        }
+        // A has one predecessor: every branch to it is B's (or A's own).
+        Object* ra = refs.get((Hashable*)A);
+        if ((ra == (Object*)0 ? (u32)0 : ((Number*)ra).asU32()) != blockRefs(bt, A) + blockRefs(at, A)) return false;
         // Types and kinds.
         for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1) {
             IRValue* v = q == (u32)0 ? u : w;
             String* vt = v.ty();
             if (vt == (String*)0 || isMemTy(vt) || isAggTy(vt) || isVecTy(vt)) return false;
             if (isFPReg(R) != isFloatTy(vt)) return false;
-            if (hasVal(_phiRes, v) || hasVal(_addrTaken, v) || !hasIvl(v)) return false;
+            if (inMap(_phiOf, v) || hasVal(_addrTaken, v) || !hasIvl(v)) return false;
             if (hasVal(_crossCall, v) && !(hasStr(gpCallee, R) || hasStr(fpCallee, R))) return false;
         }
         // w is made in A; u is read only in B, in A up to w's def, and by P.
@@ -9890,28 +9984,22 @@ class Arm64
         for (u32 i = (u32)0; i < A.insns().count(); i = i + (u32)1)
             if (((IRInsn*)A.insns().get(i)).res() == w) wAt = (i32)i;
         if (wAt < (i32)0) return false;
-        for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1) {
-            IRBlock* o = (IRBlock*)fn.blocks().get(bi);
-            for (u32 i = (u32)0; i < o.phis().count(); i = i + (u32)1) {
-                IRInsn* ph = (IRInsn*)o.phis().get(i);
-                for (u32 k = (u32)0; k < ph.ops().count(); k = k + (u32)1) {
-                    IROperand* op = (IROperand*)ph.ops().get(k);
-                    if (op.kind() != (u8)OPK_USE) continue;
-                    if ((op.val() == u || op.val() == w) && ph != P) return false;
-                }
-            }
-            u32 n = o.insns().count();
-            for (u32 i = (u32)0; i <= n; i = i + (u32)1) {
-                IRInsn* ins = i < n ? (IRInsn*)o.insns().get(i) : o.term();
-                if (ins == (IRInsn*)0) continue;
-                for (u32 k = (u32)0; k < ins.ops().count(); k = k + (u32)1) {
-                    IROperand* op = (IROperand*)ins.ops().get(k);
-                    if (op.kind() != (u8)OPK_USE) continue;
-                    if (op.val() == u && o != B && !(o == A && (i32)i <= wAt)) return false;
-                    if (op.val() == w && o != A) return false;
-                }
-            }
+        // Counted, not searched: every read of u is in B, in A up to w's
+        // def, or P's; every read of w is in A or P's.
+        u32 uIn = usesOf(P, u);
+        u32 wIn = usesOf(P, w);
+        for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+            uIn = uIn + usesOf((IRInsn*)B.insns().get(i), u);
+        if (B.term() != (IRInsn*)0) uIn = uIn + usesOf(B.term(), u);
+        for (u32 i = (u32)0; i < A.insns().count(); i = i + (u32)1) {
+            if ((i32)i <= wAt) uIn = uIn + usesOf((IRInsn*)A.insns().get(i), u);
+            wIn = wIn + usesOf((IRInsn*)A.insns().get(i), w);
         }
+        if (A.term() != (IRInsn*)0) wIn = wIn + usesOf(A.term(), w);
+        Object* cu = cnt.get((Hashable*)u);
+        Object* cw = cnt.get((Hashable*)w);
+        if ((cu == (Object*)0 ? (u32)0 : ((Number*)cu).asU32()) != uIn) return false;
+        if ((cw == (Object*)0 ? (u32)0 : ((Number*)cw).asU32()) != wIn) return false;
         // Nothing else in R over the hull of u, w and P.
         i32 lo = ivlStart(u);
         i32 hi = ivlEnd(u);
@@ -9920,11 +10008,10 @@ class Arm64
         if (ivlEnd(w) > hi) hi = ivlEnd(w);
         if (ivlStart(pv) < lo) lo = ivlStart(pv);
         if (ivlEnd(pv) > hi) hi = ivlEnd(pv);
-        Array* ks = _home.allKeys();
-        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1) {
+        Array* ks = (Array*)byReg.get((Hashable*)regKey(R));
+        for (u32 i = (u32)0; ks != (Array*)0 && i < ks.count(); i = i + (u32)1) {
             IRValue* v = (IRValue*)ks.get(i);
             if (v == u || v == w || v == pv) continue;
-            if (!sameArm64Reg((String*)_home.get((Hashable*)v), R)) continue;
             if (!hasIvl(v)) return false;
             if (ivlStart(v) <= hi && lo <= ivlEnd(v)) return false;
         }
@@ -10325,7 +10412,7 @@ class Arm64
             IRValue* v = (IRValue*)cands.get(c);
             i32 s = startOf(v);
             i32 e = endOf(v);
-            bool isPhi = hasVal(_phiRes, v) && !hasVal(_fwdPhi, v);
+            bool isPhi = hasVal(_phiRes, v) && !inMap(_fwdPhi, v);
             bool mayCaller = !hasVal(_crossCall, v);
             bool isParam = isParamValue(fn, v);
             u32 chosen = regs.count();

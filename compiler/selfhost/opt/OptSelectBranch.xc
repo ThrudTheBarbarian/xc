@@ -101,6 +101,51 @@
         return (k & (k - (i64)1)) == (i64)0;
         }
 
+    // Per block index, 1 when the block is inside a loop: between the target
+    // and the source of a branch back to it, inclusive (dvInLoop's question,
+    // asked of every block at once; asking it per block was quadratic in a
+    // function of many blocks, the class table of a module of many classes).
+    final Array* sbLoopBlocks(IRFunc* fn)
+        {
+        u32 nb = fn.blocks().count();
+        Map* idx = new Map();
+        Array* cov = new Array();
+        for (u32 b = (u32)0; b < nb; b = b + (u32)1)
+            {
+            idx.set((Hashable*)fn.blocks().get(b), (Object*)Number.withU32(b));
+            cov.add((Object*)Number.withI32((i32)0));
+            }
+        cov.add((Object*)Number.withI32((i32)0));
+        for (u32 u = (u32)0; u < nb; u = u + (u32)1)
+            {
+            IRInsn* t = ((IRBlock*)fn.blocks().get(u)).term();
+            if (t == (IRInsn*)0)
+                continue;
+            for (u32 k = (u32)0; k < t.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)t.ops().get(k);
+                if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
+                    continue;
+                Object* ho = idx.get((Hashable*)o.blk());
+                if (ho == (Object*)0)
+                    continue;
+                u32 h = ((Number*)ho).asU32();
+                if (h > u)
+                    continue;
+                cov.set(h, (Object*)Number.withI32(((Number*)cov.get(h)).asI32() + (i32)1));
+                cov.set(u + (u32)1, (Object*)Number.withI32(((Number*)cov.get(u + (u32)1)).asI32() - (i32)1));
+                }
+            }
+        Array* out = new Array();
+        i32 run = (i32)0;
+        for (u32 b = (u32)0; b < nb; b = b + (u32)1)
+            {
+            run = run + ((Number*)cov.get(b)).asI32();
+            out.add((Object*)Number.withU32(run > (i32)0 ? (u32)1 : (u32)0));
+            }
+        return out;
+        }
+
     // The index in B of the instruction defining v, or -1.
     final i32 sbIndexIn(IRBlock* B, IRValue* v)
         {
@@ -113,10 +158,11 @@
     final bool sbOne(IRFunc* fn)
         {
         Map* defOf = self.defMapAll(fn);
+        Array* inLoop = sbLoopBlocks(fn);
         for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1)
             {
             IRBlock* B = (IRBlock*)fn.blocks().get(bi);
-            if (!self.dvInLoop(fn, bi))
+            if (((Number*)inLoop.get(bi)).asU32() == (u32)0)
                 continue;
             for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
                 {

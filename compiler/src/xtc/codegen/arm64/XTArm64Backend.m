@@ -1657,11 +1657,20 @@ static char kArm64VtblForSelfKey, kArm64VtblForSelfCountKey;
 
 static BOOL sameArm64Reg(NSString *a, NSString *b);
 
+// The register a home names, whatever its view (sameArm64Reg): w19 and x19
+// are one, s8, d8 and v8 another.
+static NSString *armRegKey(NSString *r) {
+    unichar c = [r characterAtIndex:0];
+    return [NSString stringWithFormat:@"%@%@", (c == 'w' || c == 'x') ? @"g" : @"f", [r substringFromIndex:1]];
+}
+
 + (BOOL)armPhiOkFn:(XTIRFunction *)fn join:(XTIRBlock *)J arm:(XTIRBlock *)A from:(XTIRBlock *)B
                phi:(XTIRInsn *)P u:(XTIRValueId)u w:(XTIRValueId)w reg:(NSString *)R
               phis:(NSSet<NSNumber *> *)phiResults addrTaken:(NSSet<NSNumber *> *)addrTaken
        crossesCall:(NSSet<NSNumber *> *)crossesCall gp:(NSArray<NSString *> *)gpRegs fp:(NSArray<NSString *> *)fpRegs
            startOf:(NSDictionary<NSNumber *, NSNumber *> *)startOf endOf:(NSDictionary<NSNumber *, NSNumber *> *)endOf
+              uses:(NSCountedSet *)cnt refs:(NSCountedSet *)refs
+             byReg:(NSDictionary<NSString *, NSMutableArray<NSNumber *> *> *)byReg
                ctx:(XTArm64FnCtx *)ctx {
     // A: one predecessor, B, and one successor, J.
     XTIRInsn *at = A.terminator;
@@ -1673,11 +1682,11 @@ static BOOL sameArm64Reg(NSString *a, NSString *b);
     for (NSUInteger k = 1; k < bt.operands.count; k++)
         if (bt.operands[k].blockRef == A) bToA = YES;
     if (!bToA) return NO;
-    for (XTIRBlock *o in fn.blocks) {
-        if (o == A || o == B) continue;
-        for (XTIROperand *op in o.terminator.operands)
-            if (op.blockRef == A) return NO;
-    }
+    // A has one predecessor: every branch to it is B's (or A's own).
+    NSUInteger toA = 0;
+    for (XTIROperand *op in bt.operands) if (op.blockRef == A) toA++;
+    for (XTIROperand *op in at.operands) if (op.blockRef == A) toA++;
+    if ([refs countForObject:[NSValue valueWithNonretainedObject:A]] != toA) return NO;
     BOOL homeFP = [R hasPrefix:@"d"] || [R hasPrefix:@"s"];
     for (NSUInteger q = 0; q < 2; q++) {
         XTIRValueId vid = q == 0 ? u : w;
@@ -1695,31 +1704,31 @@ static BOOL sameArm64Reg(NSString *a, NSString *b);
     for (NSUInteger i = 0; i < A.instructions.count; i++)
         if (A.instructions[i].result && A.instructions[i].result.valueId == w) wAt = (NSInteger)i;
     if (wAt < 0) return NO;
-    for (XTIRBlock *o in fn.blocks) {
-        for (XTIRInsn *ph in o.phiNodes)
-            for (XTIROperand *op in ph.operands)
-                if (op.kind == XTIROperandKindUse && (op.valueId == u || op.valueId == w) && ph != P) return NO;
-        NSUInteger n = o.instructions.count;
-        for (NSUInteger i = 0; i <= n; i++) {
-            XTIRInsn *ins = i < n ? o.instructions[i] : o.terminator;
-            if (!ins) continue;
-            for (XTIROperand *op in ins.operands) {
-                if (op.kind != XTIROperandKindUse) continue;
-                if (op.valueId == u && o != B && !(o == A && (NSInteger)i <= wAt)) return NO;
-                if (op.valueId == w && o != A) return NO;
-            }
-        }
+    // Counted, not searched: every read of u is in B, in A up to w's def,
+    // or P's; every read of w is in A or P's.
+    NSUInteger (^usesOf)(XTIRInsn *, XTIRValueId) = ^NSUInteger(XTIRInsn *n, XTIRValueId v) {
+        NSUInteger c = 0;
+        for (XTIROperand *op in n.operands) if (op.kind == XTIROperandKindUse && op.valueId == v) c++;
+        return c;
+    };
+    NSUInteger uIn = usesOf(P, u), wIn = usesOf(P, w);
+    for (XTIRInsn *n in B.instructions) uIn += usesOf(n, u);
+    if (B.terminator) uIn += usesOf(B.terminator, u);
+    for (NSUInteger i = 0; i < A.instructions.count; i++) {
+        if ((NSInteger)i <= wAt) uIn += usesOf(A.instructions[i], u);
+        wIn += usesOf(A.instructions[i], w);
     }
+    if (A.terminator) wIn += usesOf(A.terminator, w);
+    if ([cnt countForObject:@(u)] != uIn || [cnt countForObject:@(w)] != wIn) return NO;
     // Nothing else in R over the hull of u, w and P.
     XTIRValueId pv = P.result.valueId;
     if (!startOf[@(pv)] || !endOf[@(pv)]) return NO;
     NSInteger lo = startOf[@(u)].integerValue, hi = endOf[@(u)].integerValue;
     lo = MIN(lo, MIN(startOf[@(w)].integerValue, startOf[@(pv)].integerValue));
     hi = MAX(hi, MAX(endOf[@(w)].integerValue, endOf[@(pv)].integerValue));
-    for (NSNumber *v in ctx.homeReg) {
+    for (NSNumber *v in byReg[armRegKey(R)]) {
         XTIRValueId vid = (XTIRValueId)v.unsignedIntegerValue;
         if (vid == u || vid == w || vid == pv) continue;
-        if (!sameArm64Reg(ctx.homeReg[v], R)) continue;
         if (!startOf[v] || !endOf[v]) return NO;
         if (startOf[v].integerValue <= hi && lo <= endOf[v].integerValue) return NO;
     }
@@ -1920,6 +1929,8 @@ static BOOL sameArm64Reg(NSString *a, NSString *b);
     // It crosses a call only from its own block on (the port's
     // finishIntervals explains), so the call test below keeps its own start.
     NSMutableDictionary<NSNumber *, NSNumber *> *callStart = [NSMutableDictionary dictionary];
+    NSMapTable<XTIRBlock *, NSNumber *> *blkIdx = [NSMapTable strongToStrongObjectsMapTable];
+    for (NSUInteger bi = 0; bi < nb; bi++) [blkIdx setObject:@(bi) forKey:blocks[bi]];
     for (NSUInteger bi = 0; bi < nb; bi++) {
         for (XTIRInsn *ph in blocks[bi].phiNodes) {
             if (!ph.result || ph.result.type.kind == XTIRTypeKindMemory) continue;
@@ -1927,7 +1938,9 @@ static BOOL sameArm64Reg(NSString *a, NSString *b);
             if (!startOf[v] || !defPos[v]) continue;
             NSInteger first = -1; BOOL fwd = YES;
             for (NSUInteger k = 0; k + 1 < ph.operands.count; k += 2) {
-                NSUInteger pi = [blocks indexOfObjectIdenticalTo:ph.operands[k].blockRef];
+                XTIRBlock *pb = ph.operands[k].blockRef;
+                NSNumber *pio = pb ? [blkIdx objectForKey:pb] : nil;
+                NSUInteger pi = pio ? pio.unsignedIntegerValue : NSNotFound;
                 if (pi == NSNotFound || pi >= bi) { fwd = NO; break; }
                 NSInteger at = 2 * blkEnd[pi].integerValue;
                 if (first < 0 || at < first) first = at;
@@ -2662,6 +2675,27 @@ static BOOL a64InsnReads(XTIRInsn *n, XTIRValueId x) {
     // B: ...; branch to A or J. A: w = f(u); J. J: P = phi(u from B, w from A)
     // -> u and w take P's register, and both copies go.
     if (ctx.fwdPhis.count) {
+        // Once per function, so the test per phi is linear in its blocks (the
+        // port's coalesceArmPhis): the reads of each value, the branches to
+        // each block, and the values homed in each register.
+        NSCountedSet *cnt = [NSCountedSet set];
+        NSCountedSet *refs = [NSCountedSet set];
+        for (XTIRBlock *o in blocks) {
+            NSMutableArray<XTIRInsn *> *all = [NSMutableArray arrayWithArray:o.phiNodes];
+            [all addObjectsFromArray:o.instructions];
+            if (o.terminator) [all addObject:o.terminator];
+            for (XTIRInsn *n in all)
+                for (XTIROperand *op in n.operands)
+                    if (op.kind == XTIROperandKindUse) [cnt addObject:@(op.valueId)];
+            for (XTIROperand *op in o.terminator.operands)
+                if (op.blockRef) [refs addObject:[NSValue valueWithNonretainedObject:op.blockRef]];
+        }
+        NSMutableDictionary<NSString *, NSMutableArray<NSNumber *> *> *byReg = [NSMutableDictionary dictionary];
+        for (NSNumber *v in ctx.homeReg) {
+            NSString *k = armRegKey(ctx.homeReg[v]);
+            if (!byReg[k]) byReg[k] = [NSMutableArray array];
+            [byReg[k] addObject:v];
+        }
         for (XTIRBlock *J in blocks) {
             for (XTIRInsn *P in J.phiNodes) {
                 if (!P.result || ![ctx.fwdPhis containsObject:@(P.result.valueId)] || P.operands.count != 4) continue;
@@ -2676,9 +2710,15 @@ static BOOL a64InsnReads(XTIRInsn *n, XTIRValueId x) {
                     if (w == u || u == pv || w == pv) continue;
                     if ([self armPhiOkFn:fn join:J arm:A from:B phi:P u:u w:w reg:R phis:phiResults
                                addrTaken:addrTaken crossesCall:crossesCall gp:gpRegs fp:fpRegs
-                                 startOf:startOf endOf:endOf ctx:ctx]) {
-                        ctx.homeReg[@(u)] = R;
-                        ctx.homeReg[@(w)] = R;
+                                 startOf:startOf endOf:endOf uses:cnt refs:refs byReg:byReg ctx:ctx]) {
+                        for (NSNumber *v in @[@(u), @(w)]) {
+                            NSString *old = ctx.homeReg[v];
+                            if (old) [byReg[armRegKey(old)] removeObject:v];
+                            ctx.homeReg[v] = R;
+                            NSString *k = armRegKey(R);
+                            if (!byReg[k]) byReg[k] = [NSMutableArray array];
+                            [byReg[k] addObject:v];
+                        }
                     }
                     break;
                 }

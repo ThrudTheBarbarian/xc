@@ -108,28 +108,6 @@ static BOOL sbArith(XTIROpcode op)
     return (k & (k - 1)) == 0;
     }
 
-// Is block index bi inside a loop: a branch from a block at or after it back
-// to one at or before it (the port's dvInLoop).
-- (BOOL)inLoop:(NSUInteger)bi
-    {
-    NSArray<XTIRBlock*>* bs = _fn.blocks;
-    for (NSUInteger u = bi; u < bs.count; u++)
-        {
-        XTIRInsn* t = bs[u].terminator;
-        if (!t)
-            continue;
-        for (XTIROperand* o in t.operands)
-            {
-            if (o.kind != XTIROperandKindBlock || !o.blockRef)
-                continue;
-            for (NSUInteger h = 0; h <= bi; h++)
-                if (bs[h] == o.blockRef)
-                    return YES;
-            }
-        }
-    return NO;
-    }
-
 static NSInteger indexIn(XTIRBlock* B, XTIRValueId v)
     {
     for (NSUInteger i = 0; i < B.instructions.count; i++)
@@ -150,10 +128,36 @@ static NSInteger indexIn(XTIRBlock* B, XTIRValueId v)
             if (n.result)
                 _defOf[@(n.result.valueId)] = n;
         }
+    // Which blocks lie inside a loop, for every block at once (the port's
+    // sbLoopBlocks): between a back edge's target and its source.
+    NSUInteger nb = _fn.blocks.count;
+    NSMapTable<XTIRBlock*, NSNumber*>* idx = [NSMapTable strongToStrongObjectsMapTable];
+    for (NSUInteger b = 0; b < nb; b++)
+        [idx setObject:@(b) forKey:_fn.blocks[b]];
+    NSInteger* cov = calloc(nb + 1, sizeof(NSInteger));
+    for (NSUInteger u = 0; u < nb; u++)
+        for (XTIROperand* o in _fn.blocks[u].terminator.operands)
+            {
+            if (o.kind != XTIROperandKindBlock || !o.blockRef)
+                continue;
+            NSNumber* h = [idx objectForKey:o.blockRef];
+            if (!h || h.unsignedIntegerValue > u)
+                continue;
+            cov[h.unsignedIntegerValue]++;
+            cov[u + 1]--;
+            }
+    NSMutableArray<NSNumber*>* inLoop = [NSMutableArray arrayWithCapacity:nb];
+    NSInteger run = 0;
+    for (NSUInteger b = 0; b < nb; b++)
+        {
+        run += cov[b];
+        [inLoop addObject:@(run > 0)];
+        }
+    free(cov);
     for (NSUInteger bi = 0; bi < _fn.blocks.count; bi++)
         {
         XTIRBlock* B = _fn.blocks[bi];
-        if (![self inLoop:bi])
+        if (![inLoop[bi] boolValue])
             continue;
         for (NSUInteger i = 0; i < B.instructions.count; i++)
             {
