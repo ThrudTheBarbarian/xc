@@ -259,8 +259,19 @@ class ParLayout : Object
         {
         n = hi - lo;
         per = (i64)1;
-        i64 most = nred > (u32)0 && devred == (i64)0 ? (i64)65536 : (i64)1 << (i64)22;
-        if (maxThreads > (i64)0 && most > maxThreads)
+        bool hostFold = nred > (u32)0 && devred == (i64)0;
+        i64 most = hostFold ? (i64)65536 : (i64)1 << (i64)22;
+        // A block whose items loop inside (an escape loop: items of very
+        // different cost) runs one item a thread up to what the device allows
+        // in one launch (a Vulkan dispatch: 65535 workgroups of the kernel's
+        // size), so its threads stay balanced (issue #14). mandel_deep, 16M
+        // items: 9.7% faster on the Pi's V3D, 5.3% on a Radeon 610M, 2.8% on
+        // an RTX 5070. A block without an inner loop keeps 2^22 threads: md5
+        // was 15% and saxpy 26% slower on the V3D with more. A host-folded
+        // reduction keeps its own cap: each thread is a partial the host folds.
+        if (maxThreads > (i64)0 && hasLoop != (i64)0 && !hostFold)
+            most = maxThreads;
+        else if (maxThreads > (i64)0 && most > maxThreads)
             most = maxThreads;
         if (n > most)
             per = (n + most - (i64)1) / most;
