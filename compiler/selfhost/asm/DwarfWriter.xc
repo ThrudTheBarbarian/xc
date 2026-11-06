@@ -278,28 +278,28 @@ class DwarfWriter
     }
 
     // Section `i` of order(), after build().
-    Array* section(u32 i) { return (Array*)_secs.get(i); }
+    Data* section(u32 i) { return (Data*)_secs.get(i); }
 
     // ── byte helpers ──────────────────────────────────────────────────
-    static void putU8(Array* d, u32 v) { d.add((Object*)Number.withU32(v & (u32)$FF)); }
-    static void putU16(Array* d, u32 v)
+    static void putU8(Data* d, u32 v) { d.appendByte((u8)(v & (u32)$FF)); }
+    static void putU16(Data* d, u32 v)
     {
         DwarfWriter.putU8(d, v);
         DwarfWriter.putU8(d, v >> (u32)8);
     }
-    static void putU32(Array* d, u32 v)
+    static void putU32(Data* d, u32 v)
     {
         DwarfWriter.putU8(d, v);
         DwarfWriter.putU8(d, v >> (u32)8);
         DwarfWriter.putU8(d, v >> (u32)16);
         DwarfWriter.putU8(d, v >> (u32)24);
     }
-    static void putU64(Array* d, u64 v)
+    static void putU64(Data* d, u64 v)
     {
         DwarfWriter.putU32(d, (u32)(v & (u64)$FFFF_FFFF));
         DwarfWriter.putU32(d, (u32)(v >> (u64)32));
     }
-    static void putULEB(Array* d, u64 v0)
+    static void putULEB(Data* d, u64 v0)
     {
         u64 v = v0;
         bool more = true;
@@ -311,7 +311,7 @@ class DwarfWriter
             DwarfWriter.putU8(d, b);
         }
     }
-    static void putSLEB(Array* d, i64 v0)
+    static void putSLEB(Data* d, i64 v0)
     {
         i64 v = v0;
         bool more = true;
@@ -325,29 +325,29 @@ class DwarfWriter
             DwarfWriter.putU8(d, b);
         }
     }
-    static void putCString(Array* d, String* s)
+    static void putCString(Data* d, String* s)
     {
         for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
             DwarfWriter.putU8(d, (u32)s.byteAt(i));
         DwarfWriter.putU8(d, (u32)0);
     }
-    static void patchU32(Array* d, u32 at, u32 v)
+    static void patchU32(Data* d, u32 at, u32 v)
     {
-        d.set(at, (Object*)Number.withU32(v & (u32)$FF));
-        d.set(at + (u32)1, (Object*)Number.withU32((v >> (u32)8) & (u32)$FF));
-        d.set(at + (u32)2, (Object*)Number.withU32((v >> (u32)16) & (u32)$FF));
-        d.set(at + (u32)3, (Object*)Number.withU32((v >> (u32)24) & (u32)$FF));
+        d.setByteAt(at, (u8)(v & (u32)$FF));
+        d.setByteAt(at + (u32)1, (u8)((v >> (u32)8) & (u32)$FF));
+        d.setByteAt(at + (u32)2, (u8)((v >> (u32)16) & (u32)$FF));
+        d.setByteAt(at + (u32)3, (u8)((v >> (u32)24) & (u32)$FF));
     }
 
     // ── .debug_str ────────────────────────────────────────────────────
-    Array* _str;
+    Data* _str;
     Map*   _strOffsets;  // String -> Number@ offset
 
     u32 strp(String* s)
     {
         Object* have = _strOffsets.get((Hashable*)s);
         if (have != (Object*)0) return ((Number*)have).asU32();
-        u32 at = _str.count();
+        u32 at = _str.length();
         DwarfWriter.putCString(_str, s);
         _strOffsets.set((Hashable*)s, (Object*)Number.withU32(at));
         return at;
@@ -419,14 +419,14 @@ class DwarfWriter
     void build(u64 textAddress, u32 textSize, Array* names, Array* offs,
                u32 minInsnLength, u32 frameRegister)
     {
-        _str = new Array();
+        _str = new Data();
         _strOffsets = new Map();
         _secs = new Array();
         DwarfWriter.sortByOffset(names, offs);
-        Array* line = buildLine(textAddress, textSize, minInsnLength);
-        Array* abbrev = buildAbbrev();
-        Array* info = buildInfo(textAddress, textSize, names, offs, frameRegister);
-        Array* frame = buildFrame(textAddress, textSize, names, offs, minInsnLength);
+        Data* line = buildLine(textAddress, textSize, minInsnLength);
+        Data* abbrev = buildAbbrev();
+        Data* info = buildInfo(textAddress, textSize, names, offs, frameRegister);
+        Data* frame = buildFrame(textAddress, textSize, names, offs, minInsnLength);
         _secs.add((Object*)line);
         _secs.add((Object*)info);
         _secs.add((Object*)abbrev);
@@ -435,19 +435,19 @@ class DwarfWriter
     }
 
     // ---- .debug_line ----
-    Array* buildLine(u64 textAddress, u32 textSize, u32 minInsnLength)
+    Data* buildLine(u64 textAddress, u32 textSize, u32 minInsnLength)
     {
         // File numbers as `.file` gave them; the line table numbers files from 1.
         u32 maxFile = (u32)0;
         for (u32 f = (u32)0; f < _files.count(); f = f + (u32)1)
             if (_files.get(f) != (Object*)0 && f > maxFile) maxFile = f;
 
-        Array* line = new Array();
+        Data* line = new Data();
         DwarfWriter.putU32(line, (u32)0); // unit_length, patched
         DwarfWriter.putU16(line, (u32)4);
-        u32 headerLengthAt = line.count();
+        u32 headerLengthAt = line.length();
         DwarfWriter.putU32(line, (u32)0); // header_length, patched
-        u32 headerStart = line.count();
+        u32 headerStart = line.length();
         DwarfWriter.putU8(line, minInsnLength);
         DwarfWriter.putU8(line, (u32)1);    // maximum_operations_per_instruction
         DwarfWriter.putU8(line, (u32)1);    // default_is_stmt
@@ -468,7 +468,7 @@ class DwarfWriter
             DwarfWriter.putULEB(line, (u64)0);
         }
         DwarfWriter.putU8(line, (u32)0);
-        DwarfWriter.patchU32(line, headerLengthAt, line.count() - headerStart);
+        DwarfWriter.patchU32(line, headerLengthAt, line.length() - headerStart);
 
         DwarfWriter.putU8(line, (u32)0);
         DwarfWriter.putULEB(line, (u64)9);
@@ -512,14 +512,14 @@ class DwarfWriter
         DwarfWriter.putU8(line, (u32)0);
         DwarfWriter.putULEB(line, (u64)1);
         DwarfWriter.putU8(line, (u32)1); // DW_LNE_end_sequence
-        DwarfWriter.patchU32(line, (u32)0, line.count() - (u32)4);
+        DwarfWriter.patchU32(line, (u32)0, line.length() - (u32)4);
         return line;
     }
 
     // ---- .debug_abbrev ----
-    static Array* buildAbbrev(void)
+    static Data* buildAbbrev(void)
     {
-        Array* a = new Array();
+        Data* a = new Data();
         DwarfWriter.putULEB(a, (u64)1);
         DwarfWriter.putULEB(a, (u64)$11); // DW_TAG_compile_unit
         DwarfWriter.putU8(a, (u32)1);     // has children
@@ -599,11 +599,11 @@ class DwarfWriter
     }
 
     // ---- .debug_info ----
-    Array* buildInfo(u64 textAddress, u32 textSize, Array* names, Array* offs, u32 frameRegister)
+    Data* buildInfo(u64 textAddress, u32 textSize, Array* names, Array* offs, u32 frameRegister)
     {
         String* mainFile = fileAt((u32)1);
         if (mainFile == (String*)0) mainFile = String.withCString("<unknown>");
-        Array* info = new Array();
+        Data* info = new Data();
         DwarfWriter.putU32(info, (u32)0); // unit_length, patched
         DwarfWriter.putU16(info, (u32)4);
         DwarfWriter.putU32(info, (u32)0); // abbrev offset
@@ -649,18 +649,17 @@ class DwarfWriter
                     DwarfWriter.putULEB(info, v.param() ? (u64)8 : (u64)4);
                     DwarfWriter.putU32(info, strp(v.name()));
                     DwarfWriter.putU32(info, ((Number*)_typeDie.get((Hashable*)v.type())).asU32());
-                    Array* loc = new Array();
+                    Data* loc = new Data();
                     DwarfWriter.putU8(loc, (u32)$70 + v.reg()); // DW_OP_breg0 + n
                     DwarfWriter.putSLEB(loc, v.off());
-                    DwarfWriter.putULEB(info, (u64)loc.count());
-                    for (u32 b = (u32)0; b < loc.count(); b = b + (u32)1)
-                        info.add(loc.get(b));
+                    DwarfWriter.putULEB(info, (u64)loc.length());
+                    info.append(loc);
                 }
                 DwarfWriter.putU8(info, (u32)0); // end of the subprogram's children
             }
         }
         DwarfWriter.putU8(info, (u32)0); // end of the compile unit's children
-        DwarfWriter.patchU32(info, (u32)0, info.count() - (u32)4);
+        DwarfWriter.patchU32(info, (u32)0, info.length() - (u32)4);
         return info;
     }
 
@@ -668,7 +667,7 @@ class DwarfWriter
     // for: scalars become base types, Ptr(T, ...) a pointer to T's DIE
     // (Ptr(Void) a bare pointer). A type with no DWARF form here (an
     // aggregate) has none: 0. Offsets are from the start of the unit.
-    u32 typeRef(Array* info, String* t)
+    u32 typeRef(Data* info, String* t)
     {
         Object* have = _typeDie.get((Hashable*)t);
         if (have != (Object*)0) return ((Number*)have).asU32();
@@ -689,7 +688,7 @@ class DwarfWriter
         else if (t.equals(String.withCString("Bool")) || t.equals(String.withCString("I1")))
                                                       { bn = String.withCString("bool");   enc = (u32)2; size = (u32)1; }
         if (bn != (String*)0) {
-            at = info.count();
+            at = info.length();
             DwarfWriter.putULEB(info, (u64)5);
             DwarfWriter.putU32(info, strp(bn));
             DwarfWriter.putU8(info, enc);
@@ -707,7 +706,7 @@ class DwarfWriter
             }
             String* pointee = inner.substringBytes((u32)0, cut);
             u32 to = pointee.equals(String.withCString("Void")) ? (u32)0 : typeRef(info, pointee);
-            at = info.count();
+            at = info.length();
             if (to != (u32)0) {
                 DwarfWriter.putULEB(info, (u64)6);
                 DwarfWriter.putU32(info, to);
@@ -724,10 +723,10 @@ class DwarfWriter
     // address is in the link register. Then one FDE per function, which moves
     // the frame to fp + 16 once the frame record is set up (where fp and lr
     // are saved at -16 and -8).
-    Array* buildFrame(u64 textAddress, u32 textSize, Array* names, Array* offs, u32 minInsnLength)
+    Data* buildFrame(u64 textAddress, u32 textSize, Array* names, Array* offs, u32 minInsnLength)
     {
         bool a64 = minInsnLength == (u32)4;
-        Array* frame = new Array();
+        Data* frame = new Data();
         u32 spReg = a64 ? (u32)31 : (u32)7;  // arm64 sp / x86-64 rsp
         u32 raReg = a64 ? (u32)30 : (u32)16; // arm64 lr / x86-64 return address column
         u32 fpReg = a64 ? (u32)29 : (u32)6;
@@ -745,9 +744,9 @@ class DwarfWriter
             DwarfWriter.putU8(frame, (u32)$80 | raReg); // DW_CFA_offset: return address at cfa-8
             DwarfWriter.putULEB(frame, (u64)1);
         }
-        while (frame.count() % (u32)8 != (u32)0)
+        while (frame.length() % (u32)8 != (u32)0)
             DwarfWriter.putU8(frame, (u32)0); // DW_CFA_nop
-        DwarfWriter.patchU32(frame, (u32)0, frame.count() - (u32)4);
+        DwarfWriter.patchU32(frame, (u32)0, frame.length() - (u32)4);
 
         // The frame setups in offset order.
         Array* setups = new Array();
@@ -762,7 +761,7 @@ class DwarfWriter
             u32 start = ((Number*)offs.get(i)).asU32();
             u32 end = (i + (u32)1 < names.count()) ? ((Number*)offs.get(i + (u32)1)).asU32() : textSize;
             if (end <= start) continue;
-            u32 fdeAt = frame.count();
+            u32 fdeAt = frame.length();
             DwarfWriter.putU32(frame, (u32)0); // length, patched
             DwarfWriter.putU32(frame, (u32)0); // CIE at offset 0
             DwarfWriter.putU64(frame, textAddress + (u64)start);
@@ -783,9 +782,9 @@ class DwarfWriter
                 DwarfWriter.putULEB(frame, (u64)(size / (u32)8 - (u32)1));
                 break;
             }
-            while ((frame.count() - fdeAt) % (u32)8 != (u32)0)
+            while ((frame.length() - fdeAt) % (u32)8 != (u32)0)
                 DwarfWriter.putU8(frame, (u32)0);
-            DwarfWriter.patchU32(frame, fdeAt, frame.count() - fdeAt - (u32)4);
+            DwarfWriter.patchU32(frame, fdeAt, frame.length() - fdeAt - (u32)4);
         }
         return frame;
     }
@@ -795,7 +794,7 @@ class DwarfWriter
     {
         u32 t = (u32)0;
         for (u32 i = (u32)0; i < _secs.count(); i = i + (u32)1)
-            t = t + section(i).count();
+            t = t + section(i).length();
         return t;
     }
 }

@@ -2267,7 +2267,7 @@ class MachOSha256
             {
             padTo(L.dwarfOff);
             for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
-                appendAll(L.dwarf.section(k));
+                _out.append(L.dwarf.section(k));
             }
         padTo(L.linkeditOff);
         appendAll(rebase);
@@ -2496,7 +2496,7 @@ class MachOSha256
                 putFixed(sn, (u32)16);
                 putFixed(String.withCString("__DWARF"), (u32)16);
                 putAddr(at + L.vmShift);
-                put64(L.dwarf.section(k).count(), (u32)0);
+                put64(L.dwarf.section(k).length(), (u32)0);
                 put32(at);
                 put32((u32)0); // align
                 put32((u32)0); // reloff
@@ -2505,7 +2505,7 @@ class MachOSha256
                 put32((u32)0);
                 put32((u32)0);
                 put32((u32)0);
-                at = at + L.dwarf.section(k).count();
+                at = at + L.dwarf.section(k).length();
                 }
             }
 

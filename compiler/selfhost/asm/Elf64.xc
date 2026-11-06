@@ -1180,7 +1180,7 @@ class ElfSharedInfo
             for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
                 {
                 dwarfOffs.add((Object*)Number.withU32(_out.length()));
-                appendAll(_out, dwarf.section(k));
+                _out.append(dwarf.section(k));
                 }
 
         // The section-name table, then the headers themselves.
@@ -1262,7 +1262,7 @@ class ElfSharedInfo
         if (dwarf != (DwarfWriter*)0)
             for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
                 shdrE(Elf64.lookupStr(shName, (String*)names.get(dwarfIdx + k)), (u32)1, (u32)0,
-                      (u32)0, ((Number*)dwarfOffs.get(k)).asU32(), dwarf.section(k).count(),
+                      (u32)0, ((Number*)dwarfOffs.get(k)).asU32(), dwarf.section(k).length(),
                       (u32)0, (u32)0, (u32)1, (u32)0);
         shdrE(Elf64.lookupStr(shName, (String*)names.get(shstrIdx)), (u32)3, (u32)0,
               (u32)0, shstrOff, shstr.count(), (u32)0, (u32)0, (u32)1, (u32)0);
@@ -1993,7 +1993,7 @@ class ElfSharedInfo
             for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
                 {
                 dwarfOffs.add((Object*)Number.withU32(_out.length()));
-                appendAll(dwarf.section(k));
+                _out.append(dwarf.section(k));
                 }
         u32 shOff = roundUpTo(_out.length(), (u32)8);
         padTo(shOff);
@@ -2027,7 +2027,7 @@ class ElfSharedInfo
             for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
                 {
                 shdr(((Number*)dwarfNames.get(k)).asU32(), (u32)1, (u32)0, (u32)0,
-                     ((Number*)dwarfOffs.get(k)).asU32(), dwarf.section(k).count(),
+                     ((Number*)dwarfOffs.get(k)).asU32(), dwarf.section(k).length(),
                      (u32)0, (u32)0, (u32)1, (u32)0);
                 di = di + (u32)1;
                 }

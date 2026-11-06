@@ -650,7 +650,7 @@ class Pe
             Array* order = DwarfWriter.order();
             for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
                 {
-                u32 len = _dwarf.section(k).count();
+                u32 len = _dwarf.section(k).length();
                 u32 rva = alignUp(_afterRVA, (u32)PE_SECT_ALIGN);
                 _dwarfRVA.add((Object*)Number.withU32(rva));
                 _dwarfRaw.add((Object*)Number.withU32(afterRaw));
@@ -1132,7 +1132,7 @@ class Pe
             {
             String* nm = String.withCString("/");
             nm.appendFormat("%lu", ((Number*)_dwarfNameOff.get(di)).asU32());
-            u32 len = _dwarf.section(di).count();
+            u32 len = _dwarf.section(di).length();
             sect(nm, len, ((Number*)_dwarfRVA.get(di)).asU32(), len,
                  ((Number*)_dwarfRaw.get(di)).asU32(),
                  (u32)$40 | (u32)$40000000 | (u32)$02000000);
@@ -1163,7 +1163,7 @@ class Pe
         for (u32 di = (u32)0; _dwarf != (DwarfWriter*)0 && di < (u32)5; di = di + (u32)1)
             {
             padTo(((Number*)_dwarfRaw.get(di)).asU32());
-            appendAll(_dwarf.section(di));
+            _out.append(_dwarf.section(di));
             }
         // Every section's raw data is FileAlignment-padded; a short final
         // section makes some loaders reject the image.
