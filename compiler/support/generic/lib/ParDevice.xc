@@ -25,8 +25,9 @@
 // hashes the block's GPU version, so a changed block learns afresh. A size
 // outside the learned bounds is decided without measuring; one between them
 // is measured (sizes within a factor of two count as one) and narrows them.
-// The order: XC_PAR, then Par.device, then the user's table, then the learned
-// one, then measuring.
+// The order (owner 2026-10-31): XC_PAR, then the user's settings (par.<block>,
+// then par), then the program's Par.device, then the block's :device, then
+// auto: the learned table, then measuring.
 #import "Settings.xc"
 #import "Process.xc"
 // The compiler version, which keys the learned-choice cache below so a new
@@ -591,8 +592,9 @@ class ParDevice
         return Platform.env(String.withCString("XC_PAR_REPORT")).equals(String.withCString("2"));
         }
 
-    // 1 CPU, 2 GPU. XC_PAR first, then the block's own setting, then the one
-    // for every block, then auto, by time rather than by size (a few thousand
+    // 1 CPU, 2 GPU. XC_PAR first, then the user's settings, then the
+    // program's and the block's own choice (choose()), then auto, by time
+    // rather than by size (a few thousand
     // items can each be heavy): the CPU is measured first; a block it runs in
     // under a millisecond stays there, since the GPU's fixed costs alone are
     // more; otherwise the GPU is measured too, and the faster kept. Each

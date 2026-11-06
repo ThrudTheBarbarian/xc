@@ -1354,10 +1354,21 @@ class ParCuda
             {
             if (only.byteLength() > (u32)0)
                 {
+                // A comma-separated list of whole ordinals (`0,1`, `10`).
                 bool named = false;
-                for (u32 i = (u32)0; i < only.byteLength(); i = i + (u32)1)
-                    if (only.byteAt(i) == (u8)('0' + ord))
-                        named = true;
+                i32 cur = (i32)-1;
+                for (u32 i = (u32)0; i <= only.byteLength(); i = i + (u32)1)
+                    {
+                    u8 c = i < only.byteLength() ? only.byteAt(i) : (u8)',';
+                    if (c >= (u8)'0' && c <= (u8)'9')
+                        cur = (cur < (i32)0 ? (i32)0 : cur * (i32)10) + (i32)(c - (u8)'0');
+                    else
+                        {
+                        if (cur == ord)
+                            named = true;
+                        cur = (i32)-1;
+                        }
+                    }
                 if (!named)
                     continue;
                 }

@@ -189,8 +189,8 @@ empty value is the same as an unset one.
 | `XC_PAR_REPORT` | `1`, or `2` | off | prints where each block ran, how long it took, why it stayed on the CPU, and what `auto` measured and learned. `2` adds each tile's worker and time |
 | `XC_PAR_FORGET` | `1` | off | removes the program's `par.learned` and `par.measuring` records when it starts, so `auto` measures again |
 | `XC_PAR_GPU` | `cuda`, `vulkan` | CUDA where there is a CUDA card, else Vulkan | which GPU interface is used where both exist (Windows, Linux on x86-64) |
-| `XC_PAR_VULKAN_DEVICE` | a digit, `0`–`9` | a discrete GPU, else an integrated one, else the first | which Vulkan device, by its index in the driver's list |
-| `XC_PAR_CUDA_DEVICES` | digits, e.g. `0,1` | every CUDA card | which CUDA cards take tiles, by ordinal (`0`–`9`) |
+| `XC_PAR_VULKAN_DEVICE` | a number, `0` up | a discrete GPU, else an integrated one, else the first | which Vulkan device, by its index in the driver's list |
+| `XC_PAR_CUDA_DEVICES` | numbers, e.g. `0,1` | every CUDA card | which CUDA cards take tiles, by ordinal |
 | `XC_PAR_WORKERS` | a list of `cpu`, `cuda`, `metal`, `vulkan`, `remote` | every GPU and the CPU | the devices that share a block's tiles; every block then runs on that set |
 | `XC_PAR_TILES` | `0` | on | `0` runs each block in one piece instead of tiles, for comparison |
 | `XC_PAR_TILE_MB` | a number, `1`–`1024` | `8` | how many megabytes a tile moves each way |

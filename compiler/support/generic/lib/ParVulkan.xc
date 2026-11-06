@@ -413,7 +413,10 @@ class ParVulkan
         u8* want = wantS.cString();
         if (want != (u8*)0 && want[0] >= (u8)'0' && want[0] <= (u8)'9')
             {
-            i32 w = (i32)(want[0] - (u8)'0');
+            // The whole number: a machine may list ten devices or more.
+            i32 w = (i32)0;
+            for (u32 i = (u32)0; want[i] >= (u8)'0' && want[i] <= (u8)'9' && w < (i32)100000; i = i + (u32)1)
+                w = w * (i32)10 + (i32)(want[i] - (u8)'0');
             if (w < (i32)n)
                 pick = w;
             }
