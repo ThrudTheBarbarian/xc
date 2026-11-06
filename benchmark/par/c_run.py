@@ -57,6 +57,9 @@ def sh(host, cmd, check=True):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bench", action="append")
+    ap.add_argument("--skip", action="append", default=[],
+                    help="leave a benchmark out of this run (a release runs the Pi's mandel_deep last, "
+                         "on its own, and publishes without waiting for it; owner 2026-11-06)")
     ap.add_argument("--runs", type=int, default=15, help="the most runs of a build")
     ap.add_argument("--version", default=common.COMPILER_VERSION)
     ap.add_argument("--machine", choices=["linux", "pi"], default="linux")
@@ -74,7 +77,7 @@ def main():
         host, arch, name = env.get("XTC_C_HOST") or env.get("XTC_LINUX_HOST"), "x86_64", "c.json"
         if not host:
             sys.exit("par/c_run.py: no XTC_C_HOST or XTC_LINUX_HOST in build.env")
-    benches = a.bench or BENCHES
+    benches = [b for b in (a.bench or BENCHES) if b not in a.skip]
     work = os.path.join(HERE, "build", "c-" + a.machine)
     os.makedirs(work, exist_ok=True)
     if a.xcc:

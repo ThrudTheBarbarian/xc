@@ -591,6 +591,14 @@ def ms(us):
     return "%.1f" % (us / 1000.0) if us < 100000 else "%.0f" % (us / 1000.0)
 
 
+def c_benches():
+    """The C suite's benchmarks, in c_run.py's order (read from its BENCHES
+    line, so the page needs no import of the runner)."""
+    with open(os.path.join(ROOT, "par", "c_run.py")) as fh:
+        m = re.search(r"^BENCHES = \[(.*)\]$", fh.read(), re.M)
+    return re.findall(r'"([^"]+)"', m.group(1)) if m else []
+
+
 def c_tables(version, fname="c.json"):
     """benchmark/par/c_run.py's results: one thread and every thread, each its
     own table and mean, never mixed (owner, 2026-10-25). fname c-pi.json is
@@ -601,6 +609,10 @@ def c_tables(version, fname="c.json"):
     with open(path) as fh:
         d = json.load(fh)
     res = d["results"]
+    # A benchmark c_run.py lists but whose figures are not in yet (the Pi's
+    # mandel_deep, run last and on its own) is shown as pending, out of the
+    # means, and the page is regenerated when it lands (owner 2026-11-06).
+    pending = [b for b in c_benches() if b not in res]
     def ver(line, name):
         m = re.search(r"(\d+\.\d+)(\.\d+)?(?:\s|$|-)", line.split(")")[-1] if name == "GCC" else line)
         return "%s %s" % (name, m.group(1)) if m else line
@@ -622,6 +634,8 @@ def c_tables(version, fname="c.json"):
                 cells.append("**%s**" % speed(x / r[c]["median_us"]))
             rows.append("| `%s` | %s | %s | %s | %s |" % (
                 b, msec(x), msec(r["gcc"]["median_us"]), msec(r["clang"]["median_us"]), " | ".join(cells)))
+        for b in pending:
+            rows.append("| `%s` | pending | | | | |" % b)
         rows.append("| geometric mean | | | | **%s** | **%s** |" % tuple(speed(gmean(ratios[c])) for c, _ in C_NAMES))
         out[mode] = "\n".join(rows)
         out[mode + "_wins"] = sum(1 for i in range(len(res))
