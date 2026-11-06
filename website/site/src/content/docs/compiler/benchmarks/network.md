@@ -6,7 +6,7 @@ description: A par block's tiles on a GPU in another machine, served by xcd, bes
 `xcd`, the par daemon, serves a machine's GPUs to programs on others (see
 [par](/compiler/language/par/)). Here it runs on a Windows machine with an
 RTX 5080, on the local network, and three machines use it: an Apple MacBook Pro
-with an M3 Max, whose own GPU is fast; a Linux machine with an AMD Ryzen 9
+with an M4 Max, whose own GPU is fast; a Linux machine with an AMD Ryzen 9
 9955HX, whose only GPU is integrated; and a Raspberry Pi 5, whose small V3D GPU
 it reaches over gigabit Ethernet. Each table gives the `xcc` release it was
 measured with.
@@ -18,52 +18,54 @@ GPU among its choices. Each run starts from empty settings, so `auto`
 measures afresh, and a remote-only figure counts only if every block ran on
 the remote GPU. Every mode's checksum must agree.
 
-**Apple M3 Max (Metal), using the remote RTX 5080** (ms; best of eight runs; measured with 0.9)
+**Apple M4 Max (Metal), using the remote RTX 5080** (ms; best of eight runs; measured with 0.9.5)
 
 | benchmark | this machine | the remote GPU | every GPU | `auto` |
 |---|---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 50.3 | 638 | 336 | 49.7 |
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 1.2 | 2.8 | 1.5 | 1.4 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 5.3 | 232 | 119 | 5.6 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 1.1 | 695 | 212 | 1.3 |
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 43.9 | 221 | 97.2 | 44.7 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 1.9 | 2.0 | 1.9 | 1.4 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 6.2 | 202 | 115 | 10.1 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 496 µs | 242 | 96.9 | 892 µs |
 
-**AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080** (ms; best of eight runs; measured with 0.9)
-
-| benchmark | this machine | the remote GPU | every GPU | `auto` |
-|---|---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 928 | 300 | 246 | 295 |
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 2.5 | 836 µs | 2.8 | 972 µs |
-| [`md5`](/compiler/benchmark-sources/#md5) | 9.8 | 43.6 | 32.9 | 30.9 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 2.4 | 356 | 127 | 3.3 |
-
-**Raspberry Pi 5 with its V3D GPU (Vulkan), using the remote RTX 5080** (ms; best of eight runs; measured with 0.9.4)
+**AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080** (ms; best of eight runs; measured with 0.9.5)
 
 | benchmark | this machine | the remote GPU | every GPU | `auto` |
 |---|---|---|---|---|
-| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 6132 | 634 | 1740 | 637 |
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 59.9 | 927 µs | 23.1 | 1.4 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 628 | 488 | 254 | 418 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 26.6 | 892 | 419 | 34.5 |
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 348 | 293 | 239 | 289 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 2.8 | 812 µs | 2.9 | 956 µs |
+| [`md5`](/compiler/benchmark-sources/#md5) | 9.6 | 44.0 | 32.9 | 9.5 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 2.6 | 342 | 119 | 2.9 |
+
+**Raspberry Pi 5 with its V3D GPU (Vulkan), using the remote RTX 5080** (ms; best of eight runs; measured with 0.9.5)
+
+| benchmark | this machine | the remote GPU | every GPU | `auto` |
+|---|---|---|---|---|
+| [`mandel_deep`](/compiler/benchmark-sources/#mandel_deep) | 6129 | 634 | 1740 | 637 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 62.2 | 1.0 | 23.1 | 1.4 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 624 | 488 | 254 | 417 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 25.3 | 890 | 437 | 34.4 |
 
 
 What the tables show:
 
-- **A remote GPU pays where a block computes much from little data.**
-  `mandel_deep` runs about three times faster from the Linux machine on the
-  remote RTX 5080 than on its own devices, and about ten times faster from the
-  Raspberry Pi; `mandelbrot` runs some sixty times faster from the Pi. `auto`
-  finds the remote card in each case.
+- **A remote GPU pays where a block computes much from little data.** From
+  the Raspberry Pi, `mandel_deep` runs about ten times faster on the remote RTX
+  5080 than on the Pi's own CPU and GPU, and `mandelbrot` some sixty times
+  faster. From the Linux machine, `mandelbrot` runs three and a half times
+  faster on the remote card, and `mandel_deep`, which its own sixteen cores
+  run well, a fifth faster. `auto` finds the remote card in each case.
 - **It does not pay where the machine's own GPU is already fast**, as on the
-  M3 Max, or where a block moves more than it computes: `saxpy` crosses
-  the network for every element, and on the Mac `auto` keeps it local.
-- **Every GPU together is fastest only sometimes.** For `md5` on the Pi, its
-  own GPU and the remote card together beat the remote card alone. More often a
-  slow GPU's share holds the fast one back.
-- **`auto` does not yet choose best everywhere.** For `md5` from the Linux
-  machine it runs about three times slower than that machine on its own, and
-  for `saxpy` about a third slower from the Linux machine and 30% slower from
-  the Pi. For `md5` from the Pi it keeps the remote card alone where both GPUs
-  together are faster.
+  M4 Max, or where a block moves more than it computes: `saxpy` crosses
+  the network for every element, and on every machine `auto` keeps it local.
+- **Every GPU together is fastest only sometimes.** For `md5` from the Pi,
+  its own GPU and the remote card together take half the remote card's time
+  alone, and for `mandel_deep` from the Linux machine a fifth less. More often
+  a slow GPU's share holds the fast one back.
+- **`auto` does not yet choose best everywhere.** For `md5` from the Pi and
+  `mandel_deep` from the Linux machine it keeps the remote card alone where
+  every GPU together is faster. For `md5` on the M4 Max it runs 1.6
+  times slower than the Mac alone, and for `saxpy` 36% slower than the Pi alone
+  and 12% slower than the Linux machine alone.
 
 ## Reproducing
 

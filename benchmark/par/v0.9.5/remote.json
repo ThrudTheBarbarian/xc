@@ -1,0 +1,238 @@
+{
+ "mandel_deep": {
+  "linux": {
+   "all": {
+    "best_us": 238830,
+    "first_us": 306261
+   },
+   "auto": {
+    "best_us": 288625,
+    "first_us": 1390666
+   },
+   "checksum": "2738",
+   "local": {
+    "best_us": 347867,
+    "first_us": 1380495
+   },
+   "remote": {
+    "best_us": 293373,
+    "first_us": 366070
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 97164,
+    "first_us": 183494
+   },
+   "auto": {
+    "best_us": 44666,
+    "first_us": 111001
+   },
+   "checksum": "2738",
+   "local": {
+    "best_us": 43860,
+    "first_us": 136129
+   },
+   "remote": {
+    "best_us": 221013,
+    "first_us": 304199
+   }
+  },
+  "pi": {
+   "all": {
+    "best_us": 1739679,
+    "first_us": 1837475
+   },
+   "auto": {
+    "best_us": 636608,
+    "first_us": 11114988
+   },
+   "checksum": "2738",
+   "local": {
+    "best_us": 6128780,
+    "first_us": 11091024
+   },
+   "remote": {
+    "best_us": 634019,
+    "first_us": 728585
+   }
+  }
+ },
+ "mandelbrot": {
+  "linux": {
+   "all": {
+    "best_us": 2911,
+    "first_us": 44638
+   },
+   "auto": {
+    "best_us": 956,
+    "first_us": 47252
+   },
+   "checksum": "199",
+   "local": {
+    "best_us": 2750,
+    "first_us": 34554
+   },
+   "remote": {
+    "best_us": 812,
+    "first_us": 39687
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 1930,
+    "first_us": 54183
+   },
+   "auto": {
+    "best_us": 1364,
+    "first_us": 48944
+   },
+   "checksum": "199",
+   "local": {
+    "best_us": 1902,
+    "first_us": 31554
+   },
+   "remote": {
+    "best_us": 1997,
+    "first_us": 49742
+   }
+  },
+  "pi": {
+   "all": {
+    "best_us": 23087,
+    "first_us": 93116
+   },
+   "auto": {
+    "best_us": 1361,
+    "first_us": 186115
+   },
+   "checksum": "199",
+   "local": {
+    "best_us": 62212,
+    "first_us": 161053
+   },
+   "remote": {
+    "best_us": 1017,
+    "first_us": 72841
+   }
+  }
+ },
+ "md5": {
+  "linux": {
+   "all": {
+    "best_us": 32853,
+    "first_us": 68543
+   },
+   "auto": {
+    "best_us": 9549,
+    "first_us": 148884
+   },
+   "checksum": "2573682417",
+   "local": {
+    "best_us": 9633,
+    "first_us": 136235
+   },
+   "remote": {
+    "best_us": 44003,
+    "first_us": 81004
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 115460,
+    "first_us": 154700
+   },
+   "auto": {
+    "best_us": 10138,
+    "first_us": 55507
+   },
+   "checksum": "2573682417",
+   "local": {
+    "best_us": 6234,
+    "first_us": 36018
+   },
+   "remote": {
+    "best_us": 202382,
+    "first_us": 249146
+   }
+  },
+  "pi": {
+   "all": {
+    "best_us": 253803,
+    "first_us": 442648
+   },
+   "auto": {
+    "best_us": 417346,
+    "first_us": 733451
+   },
+   "checksum": "2573682417",
+   "local": {
+    "best_us": 623856,
+    "first_us": 708091
+   },
+   "remote": {
+    "best_us": 487603,
+    "first_us": 560623
+   }
+  }
+ },
+ "saxpy": {
+  "linux": {
+   "all": {
+    "best_us": 119002,
+    "first_us": 273777
+   },
+   "auto": {
+    "best_us": 2921,
+    "first_us": 10029
+   },
+   "checksum": "3011510272",
+   "local": {
+    "best_us": 2552,
+    "first_us": 9979
+   },
+   "remote": {
+    "best_us": 341951,
+    "first_us": 830676
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 96878,
+    "first_us": 241622
+   },
+   "auto": {
+    "best_us": 892,
+    "first_us": 2427
+   },
+   "checksum": "3011510272",
+   "local": {
+    "best_us": 496,
+    "first_us": 3337
+   },
+   "remote": {
+    "best_us": 241832,
+    "first_us": 943172
+   }
+  },
+  "pi": {
+   "all": {
+    "best_us": 436523,
+    "first_us": 816663
+   },
+   "auto": {
+    "best_us": 34385,
+    "first_us": 133802
+   },
+   "checksum": "3011510272",
+   "local": {
+    "best_us": 25283,
+    "first_us": 134706
+   },
+   "remote": {
+    "best_us": 889837,
+    "first_us": 2427476
+   }
+  }
+ }
+}

@@ -1,0 +1,1044 @@
+{
+ "mandel_deep": {
+  "linuxgpu": {
+   "auto": {
+    "best_us": 20363,
+    "first_us": 309210
+   },
+   "checksum": "2738",
+   "gpu": {
+    "best_us": 20425,
+    "first_us": 170467
+   },
+   "gpus": {
+    "best_us": 20249,
+    "first_us": 305456
+   },
+   "vulkan": {
+    "best_us": 33589,
+    "first_us": 156988
+   }
+  },
+  "mac": {
+   "auto": {
+    "best_us": 50286,
+    "first_us": 79928
+   },
+   "checksum": "2738",
+   "gpu": {
+    "best_us": 50346,
+    "first_us": 80445
+   },
+   "gpus": {
+    "best_us": 49847,
+    "first_us": 81401
+   }
+  },
+  "pi": {
+   "all": {
+    "best_us": 9287550,
+    "first_us": 9341897
+   },
+   "auto": {
+    "best_us": 6137589,
+    "first_us": 11089232
+   },
+   "checksum": "2738",
+   "cpu": {
+    "best_us": 13813620,
+    "first_us": 13826355
+   },
+   "gpu": {
+    "best_us": 11016838,
+    "first_us": 11089777
+   },
+   "gpus": {
+    "best_us": 9288354,
+    "first_us": 9342935
+   },
+   "serial": {
+    "best_us": 51867033,
+    "first_us": 51874854
+   }
+  },
+  "windows": {
+   "auto": {
+    "best_us": 10571,
+    "first_us": 368215
+   },
+   "checksum": "2738",
+   "gpu": {
+    "best_us": 17508,
+    "first_us": 117885
+   },
+   "gpus": {
+    "best_us": 10257,
+    "first_us": 373945
+   },
+   "vulkan": {
+    "best_us": 33254,
+    "first_us": 207558
+   }
+  }
+ },
+ "mandelbrot": {
+  "browser": {
+   "auto": {
+    "best_us": 1900,
+    "first_us": 11800
+   },
+   "checksum": "199",
+   "gpu": {
+    "best_us": 2200,
+    "first_us": 133000
+   },
+   "serial": {
+    "best_us": 477500,
+    "first_us": 1130200
+   }
+  },
+  "linux": {
+   "all": {
+    "best_us": 9471,
+    "first_us": 30038
+   },
+   "auto": {
+    "best_us": 2428,
+    "first_us": 24824
+   },
+   "checksum": "199",
+   "cpu": {
+    "best_us": 2374,
+    "first_us": 5435
+   },
+   "gpu": {
+    "best_us": 9469,
+    "first_us": 31074
+   },
+   "gpus": {
+    "best_us": 9414,
+    "first_us": 31540
+   },
+   "serial": {
+    "best_us": 56098,
+    "first_us": 61485
+   }
+  },
+  "linuxgpu": {
+   "all": {
+    "best_us": 216,
+    "first_us": 302331
+   },
+   "auto": {
+    "best_us": 194,
+    "first_us": 292340
+   },
+   "checksum": "199",
+   "cpu": {
+    "best_us": 8399,
+    "first_us": 8958
+   },
+   "gpu": {
+    "best_us": 194,
+    "first_us": 207223
+   },
+   "gpus": {
+    "best_us": 215,
+    "first_us": 293266
+   },
+   "serial": {
+    "best_us": 95652,
+    "first_us": 99968
+   },
+   "vulkan": {
+    "best_us": 242,
+    "first_us": 109042
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 1167,
+    "first_us": 25447
+   },
+   "auto": {
+    "best_us": 1322,
+    "first_us": 24622
+   },
+   "checksum": "199",
+   "cpu": {
+    "best_us": 13524,
+    "first_us": 14378
+   },
+   "gpu": {
+    "best_us": 1155,
+    "first_us": 27392
+   },
+   "gpus": {
+    "best_us": 1031,
+    "first_us": 27428
+   },
+   "serial": {
+    "best_us": 164207,
+    "first_us": 164440
+   }
+  },
+  "pi": {
+   "all": {
+    "best_us": 114923,
+    "first_us": 157887
+   },
+   "auto": {
+    "best_us": 59604,
+    "first_us": 160403
+   },
+   "checksum": "199",
+   "cpu": {
+    "best_us": 89541,
+    "first_us": 89822
+   },
+   "gpu": {
+    "best_us": 114231,
+    "first_us": 160734
+   },
+   "gpus": {
+    "best_us": 114740,
+    "first_us": 157631
+   },
+   "serial": {
+    "best_us": 335995,
+    "first_us": 336166
+   }
+  },
+  "windows": {
+   "all": {
+    "best_us": 173,
+    "first_us": 348362
+   },
+   "auto": {
+    "best_us": 137,
+    "first_us": 342847
+   },
+   "checksum": "199",
+   "cpu": {
+    "best_us": 4246,
+    "first_us": 4614
+   },
+   "gpu": {
+    "best_us": 136,
+    "first_us": 82977
+   },
+   "gpus": {
+    "best_us": 172,
+    "first_us": 348119
+   },
+   "serial": {
+    "best_us": 83773,
+    "first_us": 84029
+   },
+   "vulkan": {
+    "best_us": 284,
+    "first_us": 152921
+   }
+  }
+ },
+ "md5": {
+  "browser": {
+   "auto": {
+    "best_us": 5400,
+    "first_us": 17500
+   },
+   "checksum": "2573682417",
+   "gpu": {
+    "best_us": 5400,
+    "first_us": 56400
+   },
+   "serial": {
+    "best_us": 4226900,
+    "first_us": 6720900
+   }
+  },
+  "linux": {
+   "all": {
+    "best_us": 109581,
+    "first_us": 137870
+   },
+   "auto": {
+    "best_us": 9452,
+    "first_us": 29858
+   },
+   "checksum": "2573682417",
+   "cpu": {
+    "best_us": 9408,
+    "first_us": 12675
+   },
+   "gpu": {
+    "best_us": 108058,
+    "first_us": 137979
+   },
+   "gpus": {
+    "best_us": 107751,
+    "first_us": 138718
+   },
+   "serial": {
+    "best_us": 228431,
+    "first_us": 276479
+   }
+  },
+  "linuxgpu": {
+   "all": {
+    "best_us": 1714,
+    "first_us": 297351
+   },
+   "auto": {
+    "best_us": 1481,
+    "first_us": 291388
+   },
+   "checksum": "2573682417",
+   "cpu": {
+    "best_us": 71981,
+    "first_us": 76162
+   },
+   "gpu": {
+    "best_us": 1481,
+    "first_us": 210305
+   },
+   "gpus": {
+    "best_us": 1682,
+    "first_us": 299295
+   },
+   "serial": {
+    "best_us": 765991,
+    "first_us": 775222
+   },
+   "vulkan": {
+    "best_us": 2693,
+    "first_us": 108666
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 5478,
+    "first_us": 33139
+   },
+   "auto": {
+    "best_us": 4867,
+    "first_us": 32608
+   },
+   "checksum": "2573682417",
+   "cpu": {
+    "best_us": 108872,
+    "first_us": 114024
+   },
+   "gpu": {
+    "best_us": 4822,
+    "first_us": 26610
+   },
+   "gpus": {
+    "best_us": 5442,
+    "first_us": 33330
+   },
+   "serial": {
+    "best_us": 1348573,
+    "first_us": 1370628
+   }
+  },
+  "pi": {
+   "all": {
+    "best_us": 1164833,
+    "first_us": 1211060
+   },
+   "auto": {
+    "best_us": 623933,
+    "first_us": 706157
+   },
+   "checksum": "2573682417",
+   "cpu": {
+    "best_us": 717097,
+    "first_us": 720217
+   },
+   "gpu": {
+    "best_us": 659867,
+    "first_us": 706546
+   },
+   "gpus": {
+    "best_us": 920465,
+    "first_us": 965914
+   },
+   "serial": {
+    "best_us": 2868236,
+    "first_us": 2868448
+   }
+  },
+  "windows": {
+   "all": {
+    "best_us": 763,
+    "first_us": 345226
+   },
+   "auto": {
+    "best_us": 848,
+    "first_us": 1172774
+   },
+   "checksum": "2573682417",
+   "cpu": {
+    "best_us": 39685,
+    "first_us": 39876
+   },
+   "gpu": {
+    "best_us": 894,
+    "first_us": 81937
+   },
+   "gpus": {
+    "best_us": 761,
+    "first_us": 347878
+   },
+   "serial": {
+    "best_us": 816298,
+    "first_us": 820768
+   },
+   "vulkan": {
+    "best_us": 1639,
+    "first_us": 174471
+   }
+  }
+ },
+ "md5_mask": {
+  "browser": {
+   "auto": {
+    "best_us": 4300,
+    "first_us": 15100
+   },
+   "checksum": "1683609514",
+   "gpu": {
+    "best_us": 4400,
+    "first_us": 61600
+   },
+   "serial": {
+    "best_us": 3394300,
+    "first_us": 5448400
+   }
+  },
+  "linux": {
+   "all": {
+    "best_us": 87419,
+    "first_us": 114495
+   },
+   "auto": {
+    "best_us": 8342,
+    "first_us": 30121
+   },
+   "checksum": "1683609514",
+   "cpu": {
+    "best_us": 8308,
+    "first_us": 17598
+   },
+   "gpu": {
+    "best_us": 88734,
+    "first_us": 114898
+   },
+   "gpus": {
+    "best_us": 87387,
+    "first_us": 119893
+   },
+   "serial": {
+    "best_us": 199232,
+    "first_us": 199232
+   }
+  },
+  "linuxgpu": {
+   "all": {
+    "best_us": 1320,
+    "first_us": 294542
+   },
+   "auto": {
+    "best_us": 1236,
+    "first_us": 294929
+   },
+   "checksum": "1683609514",
+   "cpu": {
+    "best_us": 60116,
+    "first_us": 61665
+   },
+   "gpu": {
+    "best_us": 1236,
+    "first_us": 211459
+   },
+   "gpus": {
+    "best_us": 1339,
+    "first_us": 292333
+   },
+   "serial": {
+    "best_us": 621412,
+    "first_us": 624489
+   },
+   "vulkan": {
+    "best_us": 2256,
+    "first_us": 107392
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 4229,
+    "first_us": 32618
+   },
+   "auto": {
+    "best_us": 4105,
+    "first_us": 30996
+   },
+   "checksum": "1683609514",
+   "cpu": {
+    "best_us": 85153,
+    "first_us": 88786
+   },
+   "gpu": {
+    "best_us": 4135,
+    "first_us": 32305
+   },
+   "gpus": {
+    "best_us": 4169,
+    "first_us": 32582
+   },
+   "serial": {
+    "best_us": 1063875,
+    "first_us": 1064746
+   }
+  },
+  "pi": {
+   "all": {
+    "best_us": 496134,
+    "first_us": 539355
+   },
+   "auto": {
+    "best_us": 345835,
+    "first_us": 538975
+   },
+   "checksum": "1683609514",
+   "cpu": {
+    "best_us": 580122,
+    "first_us": 583849
+   },
+   "gpu": {
+    "best_us": 495420,
+    "first_us": 539804
+   },
+   "gpus": {
+    "best_us": 495942,
+    "first_us": 538532
+   },
+   "serial": {
+    "best_us": 2320397,
+    "first_us": 2320577
+   }
+  },
+  "windows": {
+   "all": {
+    "best_us": 721,
+    "first_us": 345442
+   },
+   "auto": {
+    "best_us": 747,
+    "first_us": 1011177
+   },
+   "checksum": "1683609514",
+   "cpu": {
+    "best_us": 32438,
+    "first_us": 32754
+   },
+   "gpu": {
+    "best_us": 745,
+    "first_us": 81317
+   },
+   "gpus": {
+    "best_us": 743,
+    "first_us": 341425
+   },
+   "serial": {
+    "best_us": 650125,
+    "first_us": 651865
+   },
+   "vulkan": {
+    "best_us": 1363,
+    "first_us": 157145
+   }
+  }
+ },
+ "nbody": {
+  "browser": {
+   "auto": {
+    "best_us": 1600,
+    "first_us": 11500
+   },
+   "checksum": "42",
+   "gpu": {
+    "best_us": 1600,
+    "first_us": 6600
+   },
+   "serial": {
+    "best_us": 56500,
+    "first_us": 265500
+   }
+  },
+  "linux": {
+   "all": {
+    "best_us": 3395,
+    "first_us": 27232
+   },
+   "auto": {
+    "best_us": 522,
+    "first_us": 23105
+   },
+   "checksum": "42",
+   "cpu": {
+    "best_us": 528,
+    "first_us": 2872
+   },
+   "gpu": {
+    "best_us": 3319,
+    "first_us": 28220
+   },
+   "gpus": {
+    "best_us": 3392,
+    "first_us": 25560
+   },
+   "serial": {
+    "best_us": 7413,
+    "first_us": 7458
+   }
+  },
+  "linuxgpu": {
+   "all": {
+    "best_us": 385,
+    "first_us": 292587
+   },
+   "auto": {
+    "best_us": 363,
+    "first_us": 294374
+   },
+   "checksum": "42",
+   "cpu": {
+    "best_us": 3390,
+    "first_us": 5133
+   },
+   "gpu": {
+    "best_us": 363,
+    "first_us": 123041
+   },
+   "gpus": {
+    "best_us": 385,
+    "first_us": 292902
+   },
+   "serial": {
+    "best_us": 18512,
+    "first_us": 20008
+   },
+   "vulkan": {
+    "best_us": 410,
+    "first_us": 110104
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 978,
+    "first_us": 28486
+   },
+   "auto": {
+    "best_us": 1121,
+    "first_us": 27506
+   },
+   "checksum": "42",
+   "cpu": {
+    "best_us": 1817,
+    "first_us": 1941
+   },
+   "gpu": {
+    "best_us": 569,
+    "first_us": 33024
+   },
+   "gpus": {
+    "best_us": 1000,
+    "first_us": 29886
+   },
+   "serial": {
+    "best_us": 17543,
+    "first_us": 27399
+   }
+  },
+  "pi": {
+   "all": {
+    "best_us": 32636,
+    "first_us": 76790
+   },
+   "auto": {
+    "best_us": 19960,
+    "first_us": 75159
+   },
+   "checksum": "42",
+   "cpu": {
+    "best_us": 23806,
+    "first_us": 24945
+   },
+   "gpu": {
+    "best_us": 32545,
+    "first_us": 75459
+   },
+   "gpus": {
+    "best_us": 32663,
+    "first_us": 76786
+   },
+   "serial": {
+    "best_us": 96018,
+    "first_us": 96090
+   }
+  },
+  "windows": {
+   "all": {
+    "best_us": 430,
+    "first_us": 345949
+   },
+   "auto": {
+    "best_us": 392,
+    "first_us": 339590
+   },
+   "checksum": "42",
+   "cpu": {
+    "best_us": 1055,
+    "first_us": 1799
+   },
+   "gpu": {
+    "best_us": 394,
+    "first_us": 80589
+   },
+   "gpus": {
+    "best_us": 432,
+    "first_us": 373137
+   },
+   "serial": {
+    "best_us": 14946,
+    "first_us": 15016
+   },
+   "vulkan": {
+    "best_us": 734,
+    "first_us": 163330
+   }
+  }
+ },
+ "perlin": {
+  "browser": {
+   "auto": {
+    "best_us": 2200,
+    "first_us": 10600
+   },
+   "checksum": "243",
+   "gpu": {
+    "best_us": 2400,
+    "first_us": 9800
+   },
+   "serial": {
+    "best_us": 102400,
+    "first_us": 477200
+   }
+  },
+  "linux": {
+   "all": {
+    "best_us": 5369,
+    "first_us": 31714
+   },
+   "auto": {
+    "best_us": 4138,
+    "first_us": 29718
+   },
+   "checksum": "243",
+   "cpu": {
+    "best_us": 5952,
+    "first_us": 9223
+   },
+   "gpu": {
+    "best_us": 5322,
+    "first_us": 28988
+   },
+   "gpus": {
+    "best_us": 5347,
+    "first_us": 28464
+   },
+   "serial": {
+    "best_us": 83700,
+    "first_us": 84259
+   }
+  },
+  "linuxgpu": {
+   "all": {
+    "best_us": 401,
+    "first_us": 293782
+   },
+   "auto": {
+    "best_us": 374,
+    "first_us": 290738
+   },
+   "checksum": "243",
+   "cpu": {
+    "best_us": 10572,
+    "first_us": 11224
+   },
+   "gpu": {
+    "best_us": 367,
+    "first_us": 208470
+   },
+   "gpus": {
+    "best_us": 397,
+    "first_us": 292613
+   },
+   "serial": {
+    "best_us": 111225,
+    "first_us": 123472
+   },
+   "vulkan": {
+    "best_us": 1114,
+    "first_us": 112683
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 1220,
+    "first_us": 26132
+   },
+   "auto": {
+    "best_us": 1273,
+    "first_us": 30087
+   },
+   "checksum": "243",
+   "cpu": {
+    "best_us": 6051,
+    "first_us": 6358
+   },
+   "gpu": {
+    "best_us": 1201,
+    "first_us": 24386
+   },
+   "gpus": {
+    "best_us": 1267,
+    "first_us": 23479
+   },
+   "serial": {
+    "best_us": 70145,
+    "first_us": 86294
+   }
+  },
+  "pi": {
+   "all": {
+    "best_us": 95564,
+    "first_us": 139411
+   },
+   "auto": {
+    "best_us": 63851,
+    "first_us": 144031
+   },
+   "checksum": "243",
+   "cpu": {
+    "best_us": 81368,
+    "first_us": 81778
+   },
+   "gpu": {
+    "best_us": 96687,
+    "first_us": 145353
+   },
+   "gpus": {
+    "best_us": 95430,
+    "first_us": 140537
+   },
+   "serial": {
+    "best_us": 324529,
+    "first_us": 325072
+   }
+  },
+  "windows": {
+   "all": {
+    "best_us": 370,
+    "first_us": 349175
+   },
+   "auto": {
+    "best_us": 441,
+    "first_us": 340090
+   },
+   "checksum": "243",
+   "cpu": {
+    "best_us": 8320,
+    "first_us": 9600
+   },
+   "gpu": {
+    "best_us": 446,
+    "first_us": 78152
+   },
+   "gpus": {
+    "best_us": 477,
+    "first_us": 378224
+   },
+   "serial": {
+    "best_us": 132374,
+    "first_us": 136470
+   },
+   "vulkan": {
+    "best_us": 1042,
+    "first_us": 156561
+   }
+  }
+ },
+ "saxpy": {
+  "browser": {
+   "auto": {
+    "best_us": 1900,
+    "first_us": 9400
+   },
+   "checksum": "3011510272",
+   "gpu": {
+    "best_us": 29600,
+    "first_us": 50100
+   },
+   "serial": {
+    "best_us": 1900,
+    "first_us": 9500
+   }
+  },
+  "linux": {
+   "all": {
+    "best_us": 3045,
+    "first_us": 4747
+   },
+   "auto": {
+    "best_us": 2302,
+    "first_us": 4495
+   },
+   "checksum": "3011510272",
+   "cpu": {
+    "best_us": 2212,
+    "first_us": 4067
+   },
+   "gpu": {
+    "best_us": 9869,
+    "first_us": 9869
+   },
+   "gpus": {
+    "best_us": 9653,
+    "first_us": 9876
+   },
+   "serial": {
+    "best_us": 3290,
+    "first_us": 5223
+   }
+  },
+  "linuxgpu": {
+   "all": {
+    "best_us": 3591,
+    "first_us": 8589
+   },
+   "auto": {
+    "best_us": 2419,
+    "first_us": 2693
+   },
+   "checksum": "3011510272",
+   "cpu": {
+    "best_us": 2510,
+    "first_us": 2644
+   },
+   "gpu": {
+    "best_us": 6338,
+    "first_us": 10623
+   },
+   "gpus": {
+    "best_us": 6372,
+    "first_us": 11223
+   },
+   "serial": {
+    "best_us": 4459,
+    "first_us": 4752
+   },
+   "vulkan": {
+    "best_us": 25863,
+    "first_us": 31593
+   }
+  },
+  "mac": {
+   "all": {
+    "best_us": 4612,
+    "first_us": 11060
+   },
+   "auto": {
+    "best_us": 1080,
+    "first_us": 3879
+   },
+   "checksum": "3011510272",
+   "cpu": {
+    "best_us": 1082,
+    "first_us": 1156
+   },
+   "gpu": {
+    "best_us": 3837,
+    "first_us": 3837
+   },
+   "gpus": {
+    "best_us": 6554,
+    "first_us": 7031
+   },
+   "serial": {
+    "best_us": 1472,
+    "first_us": 1656
+   }
+  },
+  "pi": {
+   "all": {
+    "best_us": 103738,
+    "first_us": 107103
+   },
+   "auto": {
+    "best_us": 26227,
+    "first_us": 137918
+   },
+   "checksum": "3011510272",
+   "cpu": {
+    "best_us": 34505,
+    "first_us": 35308
+   },
+   "gpu": {
+    "best_us": 130016,
+    "first_us": 134162
+   },
+   "gpus": {
+    "best_us": 130062,
+    "first_us": 134035
+   },
+   "serial": {
+    "best_us": 25930,
+    "first_us": 29014
+   }
+  },
+  "windows": {
+   "all": {
+    "best_us": 3341,
+    "first_us": 8515
+   },
+   "auto": {
+    "best_us": 3046,
+    "first_us": 5529
+   },
+   "checksum": "3011510272",
+   "cpu": {
+    "best_us": 3069,
+    "first_us": 5556
+   },
+   "gpu": {
+    "best_us": 5408,
+    "first_us": 16015
+   },
+   "gpus": {
+    "best_us": 5393,
+    "first_us": 10275
+   },
+   "serial": {
+    "best_us": 4811,
+    "first_us": 5823
+   },
+   "vulkan": {
+    "best_us": 29647,
+    "first_us": 31017
+   }
+  }
+ }
+}

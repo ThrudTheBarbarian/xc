@@ -691,7 +691,9 @@ def remote_tables(version):
                 row = dict(r[m])
                 row["measured_with"] = src.lstrip("v")
                 res.setdefault(b, {})[m] = row
-    names = {"mac": "Apple %s (Metal), using the remote RTX 5080" % (par_mac().split(",")[0] if MAC_TREE else "M4 Max"),
+    # The Mac client is the machine par/remote.py runs on (the M4 Max), not
+    # the Mac whose CPU figures --mac names.
+    names = {"mac": "Apple M4 Max (Metal), using the remote RTX 5080",
              "linux": "AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080",
              "pi": "Raspberry Pi 5 with its V3D GPU (Vulkan), using the remote RTX 5080"}
     out = []
@@ -1025,7 +1027,7 @@ def main():
     print("wrote", os.path.relpath(GPU_PAGE, REPO))
     with open(NET_PAGE, "w") as fh:
         fh.write(NET_PAGE_TEMPLATE.format(release=a.net_release or a.release, remote=remote_tables(a.current),
-                                          net_mac=par_mac().split(",")[0], net_mac_short=par_mac().split(",")[0]))
+                                          net_mac="M4 Max", net_mac_short="M4 Max"))
     print("wrote", os.path.relpath(NET_PAGE, REPO))
     ct = c_tables(a.current)
     if ct:
@@ -1298,22 +1300,24 @@ the remote GPU. Every mode's checksum must agree.
 
 What the tables show:
 
-- **A remote GPU pays where a block computes much from little data.**
-  `mandel_deep` runs about three times faster from the Linux machine on the
-  remote RTX 5080 than on its own devices, and about ten times faster from the
-  Raspberry Pi; `mandelbrot` runs some sixty times faster from the Pi. `auto`
-  finds the remote card in each case.
+- **A remote GPU pays where a block computes much from little data.** From
+  the Raspberry Pi, `mandel_deep` runs about ten times faster on the remote RTX
+  5080 than on the Pi's own CPU and GPU, and `mandelbrot` some sixty times
+  faster. From the Linux machine, `mandelbrot` runs three and a half times
+  faster on the remote card, and `mandel_deep`, which its own sixteen cores
+  run well, a fifth faster. `auto` finds the remote card in each case.
 - **It does not pay where the machine's own GPU is already fast**, as on the
   {net_mac_short}, or where a block moves more than it computes: `saxpy` crosses
-  the network for every element, and on the Mac `auto` keeps it local.
-- **Every GPU together is fastest only sometimes.** For `md5` on the Pi, its
-  own GPU and the remote card together beat the remote card alone. More often a
-  slow GPU's share holds the fast one back.
-- **`auto` does not yet choose best everywhere.** For `md5` from the Linux
-  machine it runs about three times slower than that machine on its own, and
-  for `saxpy` about a third slower from the Linux machine and 30% slower from
-  the Pi. For `md5` from the Pi it keeps the remote card alone where both GPUs
-  together are faster.
+  the network for every element, and on every machine `auto` keeps it local.
+- **Every GPU together is fastest only sometimes.** For `md5` from the Pi,
+  its own GPU and the remote card together take half the remote card's time
+  alone, and for `mandel_deep` from the Linux machine a fifth less. More often
+  a slow GPU's share holds the fast one back.
+- **`auto` does not yet choose best everywhere.** For `md5` from the Pi and
+  `mandel_deep` from the Linux machine it keeps the remote card alone where
+  every GPU together is faster. For `md5` on the {net_mac_short} it runs 1.6
+  times slower than the Mac alone, and for `saxpy` 36% slower than the Pi alone
+  and 12% slower than the Linux machine alone.
 
 ## Reproducing
 

@@ -1,0 +1,198 @@
+{
+ "cpu": "Raspberry Pi 5 Model B Rev 1.0 (Cortex-A76)",
+ "missing": [],
+ "results": {
+  "mandelbrot": {
+   "all": {
+    "clang": {
+     "median_us": 202899,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 192979,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 87379,
+     "runs": 15
+    }
+   },
+   "checksum": "199",
+   "one": {
+    "clang": {
+     "median_us": 809192,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 769936,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 323375,
+     "runs": 15
+    }
+   }
+  },
+  "md5": {
+   "all": {
+    "clang": {
+     "median_us": 731946,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 1295542,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 715140,
+     "runs": 15
+    }
+   },
+   "checksum": "2573682417",
+   "one": {
+    "clang": {
+     "median_us": 2912810.0,
+     "runs": 10
+    },
+    "gcc": {
+     "median_us": 5154295,
+     "runs": 5
+    },
+    "xcc": {
+     "median_us": 2860358.5,
+     "runs": 10
+    }
+   }
+  },
+  "md5_mask": {
+   "all": {
+    "clang": {
+     "median_us": 597635,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 1026664,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 585209,
+     "runs": 15
+    }
+   },
+   "checksum": "1683609514",
+   "one": {
+    "clang": {
+     "median_us": 2385869.5,
+     "runs": 12
+    },
+    "gcc": {
+     "median_us": 4106699,
+     "runs": 7
+    },
+    "xcc": {
+     "median_us": 2345863.0,
+     "runs": 12
+    }
+   }
+  },
+  "nbody": {
+   "all": {
+    "clang": {
+     "median_us": 24084,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 26933,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 23740,
+     "runs": 15
+    }
+   },
+   "checksum": "42",
+   "one": {
+    "clang": {
+     "median_us": 97214,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 107722,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 94936,
+     "runs": 15
+    }
+   }
+  },
+  "perlin": {
+   "all": {
+    "clang": {
+     "median_us": 88192,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 71570,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 81348,
+     "runs": 15
+    }
+   },
+   "checksum": "243",
+   "one": {
+    "clang": {
+     "median_us": 339360,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 285543,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 324276,
+     "runs": 15
+    }
+   }
+  },
+  "saxpy": {
+   "all": {
+    "clang": {
+     "median_us": 34398,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 34619,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 34821,
+     "runs": 15
+    }
+   },
+   "checksum": "3011510272",
+   "one": {
+    "clang": {
+     "median_us": 29784,
+     "runs": 15
+    },
+    "gcc": {
+     "median_us": 30463,
+     "runs": 15
+    },
+    "xcc": {
+     "median_us": 30804,
+     "runs": 15
+    }
+   }
+  }
+ },
+ "threads": 4,
+ "toolchains": {
+  "clang": "Debian clang version 19.1.7 (3+b1)",
+  "gcc": "gcc (Debian 14.2.0-19) 14.2.0",
+  "xcc": "0.9.5"
+ }
+}
