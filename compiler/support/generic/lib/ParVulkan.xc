@@ -1560,7 +1560,7 @@ class ParVulkanWorker : ParWorker
         // Pi's V3D a kernel that needs 64-bit integers made Mesa abort the
         // program ("Unknown NIR ALU inst ... u2u64") when auto tried every
         // device for it.
-        if (ParVulkan.cannotTake(src, (i64)0, l.n) != (u8*)0)
+        if (ParVulkan.cannotTake(spv, (i64)0, l.n) != (u8*)0)
             return false;
         // The block laid out from this worker's own section (its header may
         // differ from the first section's in what the kernel form needs).
