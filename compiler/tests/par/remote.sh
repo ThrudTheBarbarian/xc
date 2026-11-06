@@ -106,6 +106,23 @@ else
 fi
 kill $XCDL 2> /dev/null
 wait $XCDL 2> /dev/null
+# A daemon of another data layout (XCD_TEST_LAYOUT: 2 + 8*256, a big-endian
+# machine with 8-byte pointers) is refused at the handshake, as a block's data
+# travels as the program's own bytes: the program says why and runs here.
+PORTY=$((PORT + 10))
+XCD_HOME="$L/home1" XCD_TEST_LAYOUT=2050 XC_PAR_REPORT=1 "$L/xcd" -port $PORTY -no-mdns > "$L/xcdy.log" 2>&1 &
+XCDY=$!
+up "$L/xcdy.log"
+mkdir -p "$L/st_lay"
+XCC_SETTINGS_DIR="$L/st_lay" XC_PAR_REMOTE=127.0.0.1:$PORTY XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/lay.out" 2> "$L/lay.err"
+if grep -v '^par:' "$L/lay.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null \
+   && grep -q 'another data layout (big-endian, 8-byte pointers' "$L/lay.out" && ! grep -q 'remote worker remote:' "$L/lay.out"; then
+    echo "PASS remote layout mismatch refused"
+else
+    echo "FAIL remote layout mismatch refused"; grep -v '^par:' "$L/lay.out" | diff - "tests/fixtures/$f.expected.out" | head -3; grep -i 'remote' "$L/lay.out" | head -4; rc=1
+fi
+kill $XCDY 2> /dev/null
+wait $XCDY 2> /dev/null
 grep -q 'declined (nimby)' "$L/xcd2.log" || { echo "FAIL remote: the nimby daemon did not decline"; head -4 "$L/xcd2.log"; rc=1; }
 # Discovery: a daemon advertising in a pool is found by XC_PAR_REMOTE=mdns
 # with that pool, and not by another pool. It says it is another machine

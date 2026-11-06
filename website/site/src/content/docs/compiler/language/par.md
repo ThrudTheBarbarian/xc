@@ -647,7 +647,7 @@ The daemon runs GPU kernels only (it has none of the program's compiled code),
 and it needs the kernel form its GPU takes: build the program with
 `-fpar-kernels=all`, which puts every form — Metal, PTX, SPIR-V, WGSL — in
 every block, so a Mac program's blocks can run on an NVIDIA card across the
-room; a build made where `XC_PAR_REMOTE` is set does this by itself. Both sides must be the same xcc version. `XC_PAR_SECRET` is a pool
+room; a build made where `XC_PAR_REMOTE` is set does this by itself. Both sides must be the same xcc version, and the same byte order and pointer width: a block's arrays travel as the program's own bytes, so a daemon on a machine laid out otherwise is refused, and the report says why. `XC_PAR_SECRET` is a pool
 secret the program proves to the daemon (SHA-256 over a nonce); a daemon
 started without one takes any program on its network. `XC_PAR_REPORT=1` on
 either side says what is sent and run.

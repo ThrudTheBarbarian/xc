@@ -40,8 +40,11 @@
 // the first and the daemon writes finished tiles on the second, from a
 // thread of its own, so neither side ever waits on a write the other is
 // not reading (both writing a large frame at once would wait for ever). The
-// handshake carries the protocol version and the runtime's version (the
-// par.learned lesson: never act on a mismatched peer) and proves a pool
+// handshake carries the protocol version, the runtime's version (the
+// par.learned lesson: never act on a mismatched peer) and the machine's data
+// layout, its byte order and pointer width (protocol 8: a block's arrays,
+// globals and object travel as the program's own bytes, which a peer of
+// another layout would misread), and proves a pool
 // secret (XC_PAR_SECRET on both sides) by SHA-256 over a nonce the daemon
 // chose; a daemon with no secret takes anyone on its subnet. Only the GPU
 // runs a tile on the far side: the CPU would need the block's compiled
@@ -76,7 +79,7 @@
 #import "Base64.xc"
 #import "Bundle.xc"
 
-#define PAR_REMOTE_PROTO 7
+#define PAR_REMOTE_PROTO 8
 
 // This machine's own identity, the same for every process on it: the
 // daemon sends it in HELLO, and a program skips a daemon it found through
@@ -137,8 +140,8 @@ class ParMachine
 // length and a body of fields of the same shape, read by tag (ParWire).
 //   HELLO    daemon -> program: PROTO, NONCE, VERSION, IDENT, DEPTH, FLOOR,
 //            VRAMTOT, VRAMFREE, RAMTOT, RAMFREE, MACHINE (ParMachine.id; a
-//            daemon from before it sends none)
-//   AUTH     program -> daemon: PROTO, VERSION, PROOF; reply OK (TOKEN) or BYE (WHY)
+//            daemon from before it sends none), LAYOUT (ParWire.layout)
+//   AUTH     program -> daemon: PROTO, VERSION, LAYOUT, PROOF; reply OK (TOKEN) or BYE (WHY)
 //   RESULTS  program -> daemon, first on its second link: TOKEN; reply OK
 //   HOLDS    program -> daemon: BLOCK (no data); reply ANSWER (TAKEN: 1 yes, 0 no, 2 busy)
 //   PREPARE  program -> daemon: BLOCK (with data), TILE, N, HASHES, SRCHASH;
@@ -537,6 +540,33 @@ class ParWire
         h = h * (u64)0xBF58476D1CE4E5B9;
         return h ^ (h >> (u64)32);
         }
+    // This machine's data layout: 1 for little-endian or 2 for big-endian in
+    // the low byte, the pointer's width in bytes in the next. Both ends of a
+    // link must agree, as a block's data travels as the program's own bytes.
+    static u32 layout(void)
+        {
+        // XCD_TEST_LAYOUT: a daemon (or program) that claims another layout,
+        // so a test can see the refusal without a big-endian machine.
+        String* fake = Platform.env(String.withCString("XCD_TEST_LAYOUT"));
+        if (fake.byteLength() > (u32)0)
+            {
+            u32 v = (u32)0;
+            for (u32 i = (u32)0; i < fake.byteLength() && fake.byteAt(i) >= (u8)'0' && fake.byteAt(i) <= (u8)'9'; i = i + (u32)1)
+                v = v * (u32)10 + (u32)(fake.byteAt(i) - (u8)'0');
+            return v;
+            }
+        u32 one = (u32)1;
+        u32 order = ((u8*)&one)[0] == (u8)1 ? (u32)1 : (u32)2;
+        pointer two[2];
+        u32 width = (u32)((u64)(&two[1]) - (u64)(&two[0]));
+        return order | (width << (u32)8);
+        }
+
+    static String* layoutName(u32 v)
+        {
+        return String.withFormat("%s-endian, %lu-byte pointers", (v & (u32)$FF) == (u32)1 ? "little" : "big", (v >> (u32)8) & (u32)$FF);
+        }
+
     static void putU8(Data* d, u8 v) { d.appendByte(v); }
     static void putU32(Data* d, u32 v)
         {
@@ -1045,9 +1075,14 @@ class ParRemoteWorker : ParWorker
             return fail("another protocol version");
         if (version == (String*)0 || ident == (String*)0 || !version.equals(String.withCString(PAR_CACHE_VER)))
             return fail("another xcc version");
+        u32 lay = ParWire.getU32(hello, "LAYOUT", (u32)0);
+        if (lay != ParWire.layout())
+            return fail(String.withFormat("another data layout (%s, here %s)", ParWire.layoutName(lay).cString(),
+                                          ParWire.layoutName(ParWire.layout()).cString()).cString());
         Data* auth = new Data();
         ParWire.fieldU32(auth, "PROTO", (u32)PAR_REMOTE_PROTO);
         ParWire.fieldStr(auth, "VERSION", PAR_CACHE_VER);
+        ParWire.fieldU32(auth, "LAYOUT", ParWire.layout());
         Data* proof = ParRemote.proof(nonce);
         ParWire.field(auth, "PROOF", proof.bytes(), (u32)32);
         if (!ParWire.send(_s, "AUTH", auth))
@@ -2767,6 +2802,7 @@ class ParRemoteServe
         ParWire.fieldI64(hello, "VRAMFREE", (i64)vf);
         ParWire.fieldI64(hello, "RAMTOT", (i64)rt);
         ParWire.fieldI64(hello, "RAMFREE", (i64)rf);
+        ParWire.fieldU32(hello, "LAYOUT", ParWire.layout());
         if (!ParWire.send(s, "HELLO", hello))
             return;
         u8 tag[8];
@@ -2787,6 +2823,16 @@ class ParRemoteServe
         u8* proof = (u8*)0;
         u32 pn = (u32)0;
         Data* want = ParRemote.proof(&nonce[0]);
+        u32 lay = ParWire.getU32(auth, "LAYOUT", (u32)0);
+        if (proto == (u32)PAR_REMOTE_PROTO && lay != ParWire.layout())
+            {
+            Data* why = new Data();
+            ParWire.fieldStr(why, "WHY", "another data layout");
+            ParWire.send(s, "BYE", why);
+            Log.info("xcd: a program declined: %s, here %s", ParWire.layoutName(lay).cString(),
+                     ParWire.layoutName(ParWire.layout()).cString());
+            return;
+            }
         bool ok = proto == (u32)PAR_REMOTE_PROTO && version != (String*)0 && version.equals(String.withCString(PAR_CACHE_VER))
                && ParWire.find(auth, "PROOF", &proof, &pn) && pn == (u32)32;
         for (u32 i = (u32)0; ok && i < (u32)32; i = i + (u32)1)
