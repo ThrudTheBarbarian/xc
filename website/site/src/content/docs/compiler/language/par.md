@@ -190,8 +190,8 @@ On Windows and Linux with an NVIDIA GPU, a block can reach it through CUDA or
 Vulkan. Both need only NVIDIA's driver; on Linux the program has to be linked
 dynamically (the default), since it loads the driver's `libcuda.so.1` and
 Vulkan's loader at run time, and a `-static` one runs every block on the CPU.
-`auto` measures both and keeps the faster for each block (see
-[Which device](#which-device)).
+`auto` tries CUDA first: where CUDA runs a block it is used, and Vulkan is
+measured only for a block CUDA cannot run (see [Which device](#which-device)).
 `XC_PAR_GPU=vulkan` or `XC_PAR_GPU=cuda` in the environment picks one
 interface where both work, and `XC_PAR=gpu` uses CUDA unless
 `XC_PAR_GPU=vulkan` is set. Where a machine has more than one Vulkan GPU,
@@ -347,21 +347,24 @@ does.
 ### Which device
 
 By default each block's device is chosen automatically, by measuring it. A block
-without a GPU version runs on the CPU. Otherwise it runs on the CPU first, and a
-block the CPU finishes in under a millisecond stays there: the GPU's fixed costs
-alone are more. A longer block then runs on the GPU too, and from then on wherever
-it was faster. So a block that does little work per item, where copying its
-arrays to the GPU costs more than the work, settles on the CPU, and a heavy one on
-the GPU, however few items it has. Each device's first run of a block is a
-warm-up and is not counted: it pays one-off costs, such as building the GPU
-version and starting threads, that later runs do not.
+without a GPU version runs on the CPU. Otherwise the block's first runs are
+measured on each candidate in turn: the GPU first, while the card is still at
+speed, then the CPU's threads, then one CPU thread, and, where the machine has
+them, the GPUs together and every device together. A block that does little
+work per item, where copying its arrays to a GPU across a bus costs more than
+the work, is known from its cost figures and settles on the CPU without being
+timed on that GPU; a heavy one settles on the GPU, however few items it has.
+Each device's first run of a block is a warm-up and is not counted: it pays
+one-off costs, such as building the GPU version and starting threads, that
+later runs do not. Every one of these runs is a real run of the program's
+block.
 
 What `auto` measures is kept, so a program measures once on a machine
 rather than on every run. It is kept in the program's own settings store (see
 [Settings](/compiler/api/settings/): the system's store on macOS, Windows and
-the web, else `~/.config/<program>.conf`), under `par.learned.…` keys, as a
-size threshold for each block: the largest number of items the CPU won at and
-the smallest the GPU won at. A run whose size falls outside those is decided
+the web, else `~/.config/<program>.conf`), under `par.learned.…` keys, as size
+thresholds for each block: the largest number of items the CPU won at, and the
+smallest each other arrangement won from. A run whose size falls outside those is decided
 without measuring; one between them is measured once and narrows them. The keys
 include a hash of the machine's GPU and CPU, so a new GPU is measured afresh
 (and the old one's values wait for it to come back), and a hash of the block's
@@ -371,26 +374,26 @@ chose (`…,cuda` or `…,vulkan`).
 
 #### How `auto` learns across runs of different sizes
 
-For each block, `auto` keeps two numbers: the largest number of items the CPU
-has won at, and the smallest the GPU has won at. Either may be unknown. Each
-time the block starts, its number of items (`n`) is compared with them:
+For each block, `auto` keeps the largest number of items the CPU has won at,
+and the smallest number each other arrangement (the GPU, the GPUs together,
+every device, remote GPUs) has won from. Any of them may be unknown. Each time
+the block starts, its number of items (`n`) is compared with them:
 
 | `n` is… | the block runs on | and `auto`… |
 |---|---|---|
-| at least the GPU's smallest win | the GPU | measures nothing |
+| at least an arrangement's smallest win | that arrangement | measures nothing |
 | at most the CPU's largest win | the CPU | measures nothing |
-| between the two, or either is unknown | the CPU first, then the GPU | measures this size and learns from it |
+| between them, or they are unknown | each candidate in turn, GPUs first | measures this size and learns from it |
 
 Measuring a size takes several runs of the block in one run of the program,
-because each device's first run is a warm-up. The block runs on the CPU, and
-the second CPU run is timed. If it took under a millisecond, the CPU wins at
-`n` and the block stays there. Otherwise the block runs on the GPU, its second
-GPU run is timed, and the faster device wins at `n`. A size the block meets once
-and never again is not measured to the end; one it meets repeatedly is.
+because each device's first run is a warm-up: each candidate runs twice and
+its second run is timed. If the CPU finishes in under a millisecond before any
+GPU has been timed, the CPU wins at `n`. A size the block meets once and never
+again is not measured to the end; one it meets repeatedly is, and partial
+measurements carry over to the program's next run.
 
 The win moves the matching number: a CPU win at `n` raises the CPU's largest
-win to `n`, a GPU win lowers the GPU's smallest win to `n`. The two always
-leave a gap between them. A win that contradicts the other number (the GPU
+win to `n`, another arrangement's win lowers its smallest win to `n`. A win that contradicts the other number (the GPU
 winning at a size the CPU had won at, say) drops that number, so the newer
 measurement is the one kept. Both numbers are saved straight away.
 
@@ -425,9 +428,11 @@ the two numbers as it happens.
 A block can run on every device the machine has at once: each GPU
 (an NVIDIA card through CUDA, another vendor's through Vulkan, Apple's through
 Metal) and the CPU's cores together. The range is cut into tiles of a few
-megabytes each way, and each device takes the next tile when it has room —
-three in flight on a GPU, so a tile's copies overlap another's kernel — until
-the range is done; a device that finishes sooner takes more. The tiles'
+megabytes each way, and each tile goes to the device that would finish it
+soonest, from the rate it has shown so far — three in flight on a local GPU, so
+a tile's copies overlap another's kernel, the daemon's depth on a remote one,
+and one at a time on the CPU's cores — until the range is done; a faster
+device does more of the work. The tiles'
 reductions fold in tile order whichever device ran them, so the answer does
 not depend on which device took what. Two cards split a memory-bound block
 as the sum of their links (on a machine with an RTX 5080 and an RTX 3090,
@@ -444,14 +449,15 @@ the copies do not drown the work. A device across the network gets a smallest
 tile sized from its link's round trip and bandwidth, so the latency stays under
 a twentieth of a tile's time. Whether to use a device at all is not worked out
 from these numbers: `auto` times the devices alone and together and keeps the
-fastest arrangement, and in a shared run each device takes the next tile when
-it has room, so a faster one simply does more of the work.
+fastest arrangement, and in a shared run each tile goes to the device that
+would finish it soonest, so a faster one simply does more of the work.
 
-`auto` treats the two sets as two more candidates after the CPU and the one
-GPU: the GPUs together, and the GPUs with the CPU. Each is measured twice
-(the first run a warm-up, as above), and the fastest of the four wins at that
-size. The learned record grows to four numbers — the CPU's largest win and
-the smallest size each of the other three won from — and the hardware key
+`auto` treats the sets as more candidates beside the one GPU, the CPU's
+threads and one CPU thread: the GPUs together, the GPUs with the CPU, and
+remote GPUs where a daemon serves them. Each is measured twice (the first run
+a warm-up, as above), and the fastest wins at that size. The learned record
+keeps the CPU's largest win and the smallest size each other arrangement won
+from, and the hardware key
 takes in every device, so a machine that gains a card is measured afresh. A
 block that would make a single tile, or that no second device can hold, is
 not tried on a set. Neither is the CPU with a GPU that shares its
@@ -653,7 +659,8 @@ and it needs the kernel form its GPU takes: build the program with
 every block, so a Mac program's blocks can run on an NVIDIA card across the
 room; a build made where `XC_PAR_REMOTE` is set does this by itself. Both sides must be the same xcc version, and the same byte order and pointer width: a block's arrays travel as the program's own bytes, so a daemon on a machine laid out otherwise is refused, and the report says why. `XC_PAR_SECRET` is a pool
 secret the program proves to the daemon (SHA-256 over a nonce); a daemon
-started without one takes any program on its network. `XC_PAR_REPORT=1` on
+started without one takes any program that has none either, from any address,
+and one started with a secret refuses a program without it. `XC_PAR_REPORT=1` on
 either side says what is sent and run.
 
 Every connection is TLS. The daemon makes itself a certificate the first

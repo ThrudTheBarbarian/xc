@@ -171,7 +171,7 @@ See [Memory models](/compiler/usage/memory-models/).
 | `-O2` | The full optimiser: inlining, constant folding, dead-code elimination, if-conversion, loop unrolling, vectorisation on `arm64`, `x86_64`, `win64`, `arm9` and `wasm32`, strength reduction, loop-invariant code motion and block layout. |
 | `-O3` | **The default.** Currently the same pipeline as `-O2`. |
 | `-Flu <n>`, `--fn-loop-unroll <n>` | Fully unroll counted loops whose constant trip count is at most `n`. The default depends on the target; see [Optimisation](/compiler/usage/optimization/#-flu--loop-unroll-cap). |
-| `-Fli <n>`, `--fn-leaf-inline <n>` | Max leaf-function size (instructions) eligible for inlining. Default 100; needs `-O2+`. |
+| `-Fli <n>`, `--fn-leaf-inline <n>` | Max leaf-function size (instructions) eligible for inlining. Default 64; needs `-O2+`. |
 | `--par-style=auto\|threads\|gpu\|cpu` | How plain loops run. `auto`, the default, makes a `par` block of each loop whose iterations are independent, and each block picks CPU threads, the GPU or both as it runs; `threads` keeps the blocks on the CPU's threads; `gpu` starts them on the GPU; `cpu` leaves every loop as written, on one thread. See [Loops that become blocks](/compiler/language/par/#loops-that-become-blocks---par-style). |
 | `-Fmb <n>`, `--fn-min-banked <n>` | xt6502: keep a function of fewer than `n` instructions in main RAM instead of a code bank, so a call to it needs no bank switch. The default, 0, banks every function except the entry point and the interrupt handlers. See [Optimisation](/compiler/usage/optimization/#-fmb--small-functions-in-main-ram-xt6502). |
 

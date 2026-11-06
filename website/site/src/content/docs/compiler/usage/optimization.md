@@ -58,7 +58,7 @@ The cap trades binary size for cycle count. A loop with 12 iterations unrolls in
 
 To unroll a specific loop past the cap, use the `:unroll` annotation. See [Statements & control flow → Manual unrolling](/compiler/language/statements/#manual-unrolling-unroll).
 
-`-Fli <n>` sets the leaf-function inlining cap (default 100, at `-O2` and above). See the [CLI flag reference](/compiler/usage/cli/#optimisation).
+`-Fli <n>` sets the leaf-function inlining cap (default 64, at `-O2` and above). See the [CLI flag reference](/compiler/usage/cli/#optimisation).
 
 ## `-Fmb` — small functions in main RAM (xt6502)
 

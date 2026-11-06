@@ -1,91 +1,159 @@
 ---
-title: xc
-description: The xc compiler and toolchain. A typed, class-based C-like language compiled through a shared SSA IR to native arm64, x86-64, arm9, win64 and m68k, WebAssembly, and a banked-6502 target. Ships as xcc.
+title: "xc: heterogeneous data-parallel programming for every CPU and GPU"
+description: xc is a heterogeneous data-parallel language and compiler. xcc turns ordinary loops, in xc or in plain C, into parallel blocks that run across every CPU core, on GPUs through Metal, CUDA, Vulkan and WebGPU, across several GPUs from different vendors at once, or on a GPU on another machine, and measures which is fastest.
 template: splash
 hero:
+  title: One loop. Every core, every GPU.
   image:
     file: ../../assets/jigsaw.png
     alt: A jigsaw of white pieces with a single golden piece dropped into place.
-  tagline: A typed, class-based C-like language and its multi-backend toolchain, for targets from native 64-bit hosts down to a banked 6502.
+  tagline: Heterogeneous data-parallel programming. Write an ordinary loop in xc or C, and xcc runs it across every CPU core, on the GPU through Metal, CUDA, Vulkan or WebGPU, across several GPUs at once, or on a GPU on another machine, then keeps whichever is fastest.
   actions:
-    - text: Read the compiler docs
-      link: /compiler/
-      icon: right-arrow
-    - text: Get the toolchain
+    - text: Get xcc
       link: /compiler/downloads/
       icon: down-arrow
+    - text: See the benchmarks
+      link: /compiler/benchmarks/
+      icon: right-arrow
+      variant: minimal
+    - text: Read the docs
+      link: /compiler/
+      icon: right-arrow
       variant: minimal
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-## What is xc?
+## Write the loop, not the kernel
 
-**xc** (repo: [`xc`](https://github.com/ThrudTheBarbarian/xc)) is a
-compiler and toolchain for the **xc language**, a typed, class-based take on C.
-It provides `auto` type inference, classes with inheritance and protocols,
-automatic reference counting (ARC) with weak references, a heap with `new` /
-`delete`, closures and bound methods, multiple return values with tuple
-unpacking, exceptions (`throws` / `try` / `catch`), threading primitives, and a
-Foundation-style standard library. It stays close enough to C to keep a familiar
-syntax and inline assembly.
+```c
+#import "Stdio.xc"
 
-The compiler is built around a **shared SSA-style intermediate representation**.
-The front end lowers source to IR once. A shared optimiser runs on that IR: CSE,
-strength reduction, inlining, loop unrolling and rotation, if-conversion,
-tail-recursion elimination, and auto-vectorisation on capable targets. A
-per-architecture back end turns the optimised IR into native code, so a new
-target needs only a new back end.
+#define W 4096
+#define H 4096
 
-The driver ships as **`xcc`** and behaves like a C compiler: `xcc -o prog
-file.xc` builds a native binary for the host, and `-A <arch>` cross-compiles to
-another target. The compiler is also **self-hosting**: a second implementation
-written in the xc language is byte-identical through every stage.
+float pixels[W * H];
 
-## Targets
+i32 main(void)
+{
+    for (u32 i in 0..W * H)
+        pixels[i] = (float)(i % 251) / 250.0;
 
-The toolchain drives several back ends from one language and one IR:
+    // An ordinary loop. Its iterations are independent, so xcc makes it a
+    // par block: every CPU core, the GPU, or both, whichever is faster.
+    for (u32 i in 0..W * H)
+        pixels[i] = pixels[i] * pixels[i] * 0.8 + 0.1;
 
-- **arm64**: native Mach-O executables for Apple silicon (and the default host).
-- **x86-64**: native Linux executables, linked dynamically against glibc, as a C compiler's are, so they can load GTK 4, libGL and other system libraries; `-static` links them over musl instead, so they run on any distribution. (Up to 0.71 the static link is the default and `-dynamic` asks for glibc.)
-- **arm9 (AArch32)**: position-independent ELF.
-- **win64**: native PE executables with full C interop.
-- **m68k**: Motorola 68000/68030 (`-A m68k` for the 68000, `-A 68030` for
-  the 030). GEMDOS `.prg` executables, run with `xcc-sim-68k`.
-- **WebAssembly**: WAT / `.wasm` output.
-- **xt6502**: a **banked 6502** target. The CPU has a hardware stack and
-  memory-mapped bank selectors, and a linker script describes its code and data
-  windows. The back end emits assembly that the in-house assembler turns into a
-  banked binary.
+    Stdio.printf("%f\n", pixels[12345]);
+    return 0;
+}
+```
 
-## What this site covers
+`xcc -O3 -o brighten brighten.xc` is the whole build. There are no kernels to
+write, no device code, no annotations and no separate build for the GPU. xcc
+finds the loops whose iterations are independent and compiles each one for
+the CPU's threads and vector units and for every GPU back end. The program
+measures the devices on the machine it runs on and keeps the fastest choice
+for later runs. A loop can also ask for this itself, as a
+[`par` block](/compiler/language/par/) with reductions, grids and a choice of
+device.
+
+## Measured, not promised
+
+Every figure is measured with the released compiler on machines you can buy,
+and the [sources are published](/compiler/benchmark-sources/).
 
 <CardGrid>
+	<Card title="22× faster on the GPU" icon="rocket">
+		`md5` on an Apple M3 Max runs 22 times faster on its GPU than on all
+		sixteen CPU cores, from the same plain loop.
+		[GPU results →](/compiler/benchmarks/gpu/)
+	</Card>
+	<Card title="Plain C, 2.1× faster than OpenMP" icon="star">
+		Unchanged C files built by xcc, on all 32 threads of a Ryzen 9 9955HX,
+		against GCC with a hand-written `#pragma omp parallel for` (2.8× against
+		clang), as a geometric mean.
+		[C results →](/compiler/benchmarks/c/)
+	</Card>
+	<Card title="GPUs from different vendors, together" icon="puzzle">
+		One block is cut into tiles and run on an NVIDIA RTX 5080 through CUDA
+		and an RTX 3090 through Vulkan at once, with the CPU taking tiles too.
+		[Parallel blocks →](/compiler/language/par/)
+	</Card>
+	<Card title="A GPU on another machine" icon="laptop">
+		`xcd` serves a machine's GPUs to programs elsewhere on the network:
+		`mandel_deep` runs about ten times faster from a Raspberry Pi 5 on a
+		remote RTX 5080 than on the Pi's own CPU and GPU.
+		[Networked results →](/compiler/benchmarks/network/)
+	</Card>
+</CardGrid>
+
+The CPU code is fast too. On one thread xc is ahead of C++ built by clang
+(1.13× on an M3 Max, 1.04× on a Ryzen 9 9955HX), and of C++ built by GCC,
+Objective-C and Swift, as a geometric mean over the
+[CPU benchmarks](/compiler/performance/).
+
+## Heterogeneous by default
+
+One executable carries code for the CPU and kernels for every GPU API, and decides at run time which of the devices it finds to use.
+
+
+- **GPUs:** Metal on Apple silicon; CUDA on NVIDIA GPUs under Windows and
+  Linux; Vulkan on Linux, Windows, Android and the Raspberry Pi 5; WebGPU in
+  a browser.
+- **CPUs:** arm64 macOS and Linux, x86-64 Linux and Windows, with the vector
+  units (NEON, SME, AVX2 and AVX-512) used where the machine has them.
+- **The browser:** WebAssembly, with WebGPU for `par` blocks.
+
+The native targets assemble and link in-house: xcc carries its own
+assemblers, linkers and executable writers, so a build needs no system
+toolchain.
+
+## Bring your C
+
+xcc also compiles C. It reads a `.c` file through clang's front end and
+generates the code itself, through the same optimiser and the same parallel
+runtime, so an existing C loop gets the CPU's threads and the GPU with no
+change to the source. See [C programs](/compiler/usage/c-programs/).
+
+## The language
+
+xc is a typed, class-based language that stays close to C: classes with
+inheritance and protocols, automatic reference counting with weak references,
+closures and bound methods, checked errors, typed collections, threads and a
+Foundation-style standard library, with C's syntax, C's types and inline
+assembly. The compiler is self-hosting: xcc is written in xc.
+
+## From big iron down to 8 bits
+
+The same compiler and standard library also reach much smaller machines: the
+Motorola 68000, 32-bit ARM, and a banked 6502 whose code and data the
+compiler spreads across paged memory windows. xc started there, and every
+target still passes the full test corpus. See the
+[targets](/compiler/#targets).
+
+<CardGrid>
+	<Card title="Parallel blocks" icon="random">
+		How a loop becomes a `par` block: reductions, grids, choosing a device,
+		and running on several devices at once.
+
+		[Read about par →](/compiler/language/par/)
+	</Card>
 	<Card title="The language" icon="open-book">
-		The xc language reference: types, operators, control flow, classes,
-		inheritance and protocols, ARC and the heap, closures and bound methods,
-		threading, modules and shared libraries, and inline assembly.
+		Types, classes, protocols, ARC, closures, errors, threads, modules and
+		inline assembly.
 
 		[Read the language docs →](/compiler/language/)
 	</Card>
-	<Card title="Standard library" icon="list-format">
-		The Foundation-style class library: Number / String / Data / Array,
-		Stdio, Math, Time, the Heap, sorting, and the lower-level system and
-		memory helpers.
-
-		[Browse the API →](/compiler/api/)
-	</Card>
 	<Card title="Using the compiler" icon="setting">
-		Installing the toolchain, the full `xcc` CLI flag reference, optimisation
-		levels, per-target memory models, the allocator and ARC, linker scripts,
-		and migrating between releases.
+		Installing, the `xcc` flags, C programs, environment variables and the
+		networked daemon.
 
 		[See compiler usage →](/compiler/usage/)
 	</Card>
 	<Card title="Downloads" icon="download">
-		Get the latest `xcc` release, browse the historical archive, and read the
-		changelog.
+		macOS, Linux (x86-64 and arm64), Windows, and the `xcd` daemon.
 
-		[Get the toolchain →](/compiler/downloads/)
+		[Get xcc →](/compiler/downloads/)
 	</Card>
 </CardGrid>

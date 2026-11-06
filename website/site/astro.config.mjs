@@ -13,10 +13,21 @@ const SIDEBAR = [
 			items: [
 				{ label: 'Overview', slug: 'compiler' },
 				{
+					label: 'Architecture',
+					items: [
+						{ label: 'Overview', slug: 'compiler/architecture' },
+						{ label: 'Data-parallel extraction', slug: 'compiler/architecture/extraction' },
+						{ label: 'GPU kernels', slug: 'compiler/architecture/gpu-kernels' },
+						{ label: 'Tiles, devices and the network', slug: 'compiler/architecture/tiling' },
+						{ label: 'Optimisations', slug: 'compiler/architecture/optimisations' },
+					],
+				},
+				{
 					label: 'Language',
 					collapsed: true,
 					items: [
 						{ label: 'Overview', slug: 'compiler/language' },
+						{ label: 'Parallel blocks (par)', slug: 'compiler/language/par' },
 						{ label: 'Lexical structure', slug: 'compiler/language/lexical' },
 						{ label: 'Preprocessor', slug: 'compiler/language/preprocessor' },
 						{ label: 'Types', slug: 'compiler/language/types' },
@@ -31,7 +42,6 @@ const SIDEBAR = [
 						{ label: 'Heap, ARC & weak refs', slug: 'compiler/language/memory' },
 						{ label: 'Collections & strings', slug: 'compiler/language/collections' },
 						{ label: 'Threading', slug: 'compiler/language/threading' },
-						{ label: 'Parallel blocks (par)', slug: 'compiler/language/par' },
 						{ label: 'Modules & shared libraries', slug: 'compiler/language/modules' },
 						{ label: 'Inline assembly', slug: 'compiler/language/inline-asm' },
 						{ label: 'Grammar', slug: 'compiler/language/grammar' },
@@ -220,7 +230,7 @@ export default defineConfig({
 		starlight({
 			title: 'xc',
 			description:
-				'xcc, the compiler and toolchain for xc — a modern, typed, class-based C-like language — compiled through a shared SSA intermediate representation to multiple backends: native arm64, x86-64, arm9 and win64, WebAssembly, and a banked-6502 target.',
+				'xc, a heterogeneous data-parallel language, and xcc, its compiler: ordinary loops in xc or C run across every CPU core and on GPUs through Metal, CUDA, Vulkan and WebGPU, on several GPUs at once or over the network, with no GPU toolkit.',
 			customCss: ['./src/styles/xtc.css'],
 			// The grammar pages' `bnf` blocks: Shiki has no grammar language,
 			// so plain text, without a warning for every copy of the page.

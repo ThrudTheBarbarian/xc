@@ -1,27 +1,29 @@
 ---
 title: xcc
-description: A statically-typed, ObjC-like language with classes, protocols, ARC and bound methods, compiling through one architecture-neutral IR to seven targets, from a banked 6502 to native arm64, x86-64, Windows, ARM32 and 68000, plus WebAssembly.
+description: xcc compiles xc and C into programs that run their loops across every CPU core and on GPUs through Metal, CUDA, Vulkan and WebGPU, on several devices at once or on a GPU elsewhere on the network, from one source and with no GPU toolkit.
 ---
 
-**xcc** is a small, statically-typed, ObjC-like language with classes, single inheritance,
-protocols and automatic reference counting. It compiles through one architecture-neutral
-SSA intermediate representation to **seven live backends**, from an 8-bit banked 6502 to
-64-bit macOS, Linux and Windows, and to WebAssembly.
+**xcc** is the compiler for **xc**, a data-parallel language for machines with many cores and
+one or more GPUs. A loop whose iterations are independent becomes a
+[`par` block](/compiler/language/par/), and the same block runs across every CPU thread with
+the vector units, on a GPU, on several GPUs from different vendors at once, or on a GPU on
+another machine. The program measures the devices it finds and keeps the fastest choice.
+xcc does this for C too: it compiles `.c` files, and their loops get the same treatment.
 
-The same source and the same standard library run on all of them. On a machine with
-bank-switched RAM, banking is a first-class resource: programs spread code and data across
-paged windows and grow beyond normal RAM limits, and the compiler decides what lives where.
-On other machines the same program is an ordinary native executable.
-
-The compiler is called `xcc`, and it behaves like a C compiler:
+xc itself is a statically-typed language close to C, with classes, protocols, automatic
+reference counting and closures. The compiler is self-hosting, and it behaves like a C
+compiler:
 
 ```bash
-xcc -o hello hello.xc                 # a native binary for THIS machine
-xcc -A 6502 -o hello.xex hello.xc     # the same source, for the banked 6502
+xcc -o brighten brighten.xc     # a native binary for this machine, GPU kernels included
+xcc -o saxpy saxpy.c            # the same for a C file
+xcc -A win64 -o app.exe app.xc  # cross-compile, here for Windows
 ```
 
-A simple program needs nothing more. No flag selects the host, no environment variable
-points at the libraries, and the standard library is linked automatically.
+A program needs nothing more. No flag selects the host or the GPU, no environment variable
+points at libraries or SDKs, and the standard library and the parallel runtime are linked
+automatically. How it works is in [Architecture](/compiler/architecture/), and how fast it is
+in [Benchmarks](/compiler/benchmarks/).
 
 ## Targets
 
@@ -30,21 +32,39 @@ With no `-A`, `xcc` builds for the machine it is running on. Pass `-A` to cross-
 | `-A` | Target | Output | Run with |
 |---|---|---|---|
 | *(none)* | the host you are on | native executable | run it |
-| `arm64` | macOS / Linux on 64-bit ARM | Mach-O / ELF | run it |
+| `arm64` | macOS / Linux on 64-bit ARM, including the Raspberry Pi 5 | Mach-O / ELF | run it |
 | `x86_64` | Linux | a glibc ELF that loads system libraries; with `-static`, a static ELF over musl | run it |
 | `win64` | Windows | PE/COFF `.exe`, or a DLL (`--emit-lib`) | run it, or Wine |
+| `wasm32` | WebAssembly | `.wasm` / WAT | a browser or a WASM runtime |
+
+Every executable carries its `par` blocks' GPU kernels, which xcc generates itself:
+
+| GPU API | Where | Kernel form |
+|---|---|---|
+| Metal | Apple silicon | Metal Shading Language |
+| CUDA | NVIDIA GPUs, Windows and Linux | PTX |
+| Vulkan | Linux, Windows, Android, the Raspberry Pi 5 | SPIR-V |
+| WebGPU | a browser | WGSL |
+
+The native targets assemble and link **in-house**: `xcc` carries its own assemblers, linkers
+and Mach-O / ELF / PE writers, so a build needs no system toolchain.
+
+### Smaller machines
+
+The same language and standard library reach down to machines without a GPU or an
+operating system to speak of. Every target passes the full fixture corpus.
+
+| `-A` | Target | Output | Run with |
+|---|---|---|---|
 | `arm9` | AArch32, the **XTOS** loader | ELF, or a shared library (`--emit-lib`) | the board, or QEMU |
 | `m68k` (`68000`) / `68030` | Motorola 68000/68030 | GEMDOS `.prg`/`.tos` | `xcc-sim-68k` |
-| `wasm32` | WebAssembly | `.wasm` / WAT | a WASM runtime |
 | `6502` | banked **xt6502**, a custom FPGA 6502 with a 4 KB hidden hardware stack and SP-relative addressing | banked 6502 executable (`.xex`) | `xcc-sim-6502` |
 
-Every target passes the full fixture corpus. The native targets assemble and link
-**in-house**: `xcc` carries its own assemblers, linkers and Mach-O / ELF / PE writers, so
-a build needs no system toolchain.
-
-The 6502 path has two more pieces: **`xcc-as`**, a two-pass assembler that emits XEX with
-RUNAD/INITAD and banked preload, and **`xcc-sim-6502`**, a headless simulator that runs
-`.xex` files with the memory-model semantics the code generator targets. The `m68k` path
+On a machine with bank-switched RAM, banking is a first-class resource: programs spread code
+and data across paged windows and grow beyond normal RAM limits, and the compiler decides what
+lives where. The 6502 path has two more pieces: **`xcc-as`**, a two-pass assembler that emits
+XEX with RUNAD/INITAD and banked preload, and **`xcc-sim-6502`**, a headless simulator that
+runs `.xex` files with the memory-model semantics the code generator targets. The `m68k` path
 has its own simulator, **`xcc-sim-68k`**.
 
 ## What the language gives you

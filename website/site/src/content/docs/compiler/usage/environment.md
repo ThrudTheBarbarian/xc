@@ -217,7 +217,7 @@ empty value is the same as an unset one.
 | `XDG_CONFIG_HOME` | a directory | `~/.config` | where the text stores are kept on Linux and Android |
 | `XCC_BUNDLE_ROOT` | a directory | the program's own directory | the root [Bundle](/compiler/api/bundle/) resources are found from |
 | `XCC_PLUGIN_STORE` | a directory | `~/.xcc/plugins` | where [plugins](/compiler/api/plugin/) are kept |
-| `XCD_HOME` | a directory | the home directory | xcd: where the daemon keeps its certificate |
+| `XCD_HOME` | a directory | `~/.xcc/xcd` | xcd: where the daemon keeps its certificate |
 
 In a browser (wasm32), a program reads these from `globalThis.xccEnv`, an
 object of strings the page sets before it starts the program.

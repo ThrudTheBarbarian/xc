@@ -92,3 +92,13 @@ a[aria-current='page']:focus {
 	border-left: 1px solid var(--sl-color-hairline, #8884);
 	padding-left: 1rem;
 }
+
+/* Architecture diagrams (inline SVG): boxes and arrows follow the theme. */
+.xc-diagram { display: block; width: 100%; height: auto; margin: 1.5rem auto; font: 13px system-ui, sans-serif; }
+.xc-diagram text { fill: var(--sl-color-text); }
+.xc-diagram .muted { fill: var(--sl-color-gray-3); font-size: 11.5px; }
+.xc-diagram .head { font-weight: 600; }
+.xc-diagram .box { fill: var(--sl-color-gray-6); stroke: var(--sl-color-gray-4); stroke-width: 1; }
+.xc-diagram .key { fill: var(--sl-color-accent-low); stroke: var(--sl-color-accent); stroke-width: 1.5; }
+.xc-diagram .line { stroke: var(--sl-color-gray-3); stroke-width: 1.5; fill: none; }
+.xc-diagram .arrow { fill: var(--sl-color-gray-3); }
