@@ -86,6 +86,12 @@ class BitSet
             _bits[i] = _bits[i] & ~o._bits[i];
         }
 
+    void intersectWith(BitSet* o)
+        {
+        for (u32 i = (u32)0; i < (_n >> 3) + (u32)1; i = i + (u32)1)
+            _bits[i] = _bits[i] & o._bits[i];
+        }
+
     void copyFrom(BitSet* o)
         {
         for (u32 i = (u32)0; i < (_n >> 3) + (u32)1; i = i + (u32)1)

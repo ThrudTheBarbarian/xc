@@ -1992,32 +1992,71 @@ class BeFact : Object
         return false;
         }
 
+    // Name indexes for funcNamed and symNamed: a scan per lookup made the
+    // inliner, which looks up every call's callee, quadratic in a module's
+    // functions (issue #18). An index holds while its module, list and
+    // count are the ones it was built from; any other state (a function
+    // added, the list replaced by dead-function elimination) rebuilds it on
+    // the next lookup. Every name is set before its function joins the
+    // module, and a hit is checked against the name all the same.
+    Map* _fnIdx;
+    IRModule* _fnIdxMod;
+    Array* _fnIdxArr;
+    u32 _fnIdxCount;
+    Map* _symIdx;
+    IRModule* _symIdxMod;
+    Array* _symIdxArr;
+    u32 _symIdxCount;
+
     IRFunc* funcNamed(IRModule* m, String* name)
         {
-        for (u32 i = (u32)0; i < m.funcs().count(); i = i + (u32)1)
+        Array* fs = m.funcs();
+        if (_fnIdx == (Map*)0 || _fnIdxMod != m || _fnIdxArr != fs || _fnIdxCount != fs.count())
             {
-            IRFunc* f = (IRFunc*)m.funcs().get(i);
-            // The accessor is read ONCE deliberately — see private:docs/bugs/025.
-            String* fn = f.name();
-            if (fn == 0)
-                continue;
-            if (fn.equals(name))
-                return f;
+            _fnIdx = new Map();
+            for (u32 i = (u32)0; i < fs.count(); i = i + (u32)1)
+                {
+                IRFunc* f = (IRFunc*)fs.get(i);
+                // The accessor is read ONCE deliberately — see private:docs/bugs/025.
+                String* fn = f.name();
+                // The first of a name, as the scan this replaces found.
+                if (fn != 0 && _fnIdx.get((Hashable*)fn) == (Object*)0)
+                    _fnIdx.set((Hashable*)fn, (Object*)f);
+                }
+            _fnIdxMod = m;
+            _fnIdxArr = fs;
+            _fnIdxCount = fs.count();
             }
-        return (IRFunc*)0;
+        IRFunc* f = (IRFunc*)_fnIdx.get((Hashable*)name);
+        if (f == (IRFunc*)0)
+            return (IRFunc*)0;
+        String* fn = f.name();
+        return fn != 0 && fn.equals(name) ? f : (IRFunc*)0;
         }
 
     IRSymbol* symNamed(IRModule* m, String* name)
         {
-        for (u32 i = (u32)0; i < m.syms().count(); i = i + (u32)1)
+        Array* ss = m.syms();
+        if (_symIdx == (Map*)0 || _symIdxMod != m || _symIdxArr != ss || _symIdxCount != ss.count())
             {
-            IRSymbol* s = (IRSymbol*)m.syms().get(i);
-            // Cached for the same reason funcNamed's is — private:docs/bugs/025.
-            String* sn = s.name();
-            if (sn != 0 && sn.equals(name))
-                return s;
+            _symIdx = new Map();
+            for (u32 i = (u32)0; i < ss.count(); i = i + (u32)1)
+                {
+                IRSymbol* s = (IRSymbol*)ss.get(i);
+                // Read once, as funcNamed's is — private:docs/bugs/025.
+                String* sn = s.name();
+                if (sn != 0 && _symIdx.get((Hashable*)sn) == (Object*)0)
+                    _symIdx.set((Hashable*)sn, (Object*)s);
+                }
+            _symIdxMod = m;
+            _symIdxArr = ss;
+            _symIdxCount = ss.count();
             }
-        return (IRSymbol*)0;
+        IRSymbol* s = (IRSymbol*)_symIdx.get((Hashable*)name);
+        if (s == (IRSymbol*)0)
+            return (IRSymbol*)0;
+        String* sn = s.name();
+        return sn != 0 && sn.equals(name) ? s : (IRSymbol*)0;
         }
 
     // Every use of `oldMem` in the function becomes a use of `newMem`.

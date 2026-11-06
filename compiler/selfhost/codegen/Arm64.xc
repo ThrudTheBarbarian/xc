@@ -3523,7 +3523,7 @@ class Arm64
         for (u32 u = (u32)0; u < blocks.count(); u = u + (u32)1) {
             if ((IRInsn*)insns.get(u) == cmp) continue;       // the guard test itself
             u32 bi = (u32)((Number*)blocks.get(u)).asI32();
-            if (!hasIdx((Array*)dom.get(bi), ct)) return false;
+            if (!((BitSet*)dom.get(bi)).has(ct)) return false;
         }
         return true;
     }
@@ -3566,57 +3566,41 @@ class Arm64
     }
 
     // Iterative dominators: dom[n] = {n} union the intersection of its
-    // predecessors' sets, block 0 the entry.
+    // predecessors' sets, block 0 the entry. Bit sets: as arrays of block
+    // numbers, each intersection scanned one array per element of the other,
+    // cubic in the blocks, and a function of a few thousand blocks (a module
+    // of 1,600 classes calls them all from main) spent most of its compile
+    // here (issue #18).
     Array* computeDominators(IRFunc* fn, Array* preds)
     {
         u32 nb = fn.blocks().count();
         Array* dom = new Array();
         for (u32 i = (u32)0; i < nb; i = i + (u32)1) {
-            Array* set = new Array();
-            if (i == (u32)0) set.add((Object*)Number.with((i32)0));
-            else for (u32 k = (u32)0; k < nb; k = k + (u32)1) set.add((Object*)Number.with((i32)k));
+            BitSet* set = BitSet.withCapacity(nb);
+            if (i == (u32)0) set.add((u32)0);
+            else for (u32 k = (u32)0; k < nb; k = k + (u32)1) set.add(k);
             dom.add((Object*)set);
         }
+        BitSet* it = BitSet.withCapacity(nb);
         bool changed = true;
         while (changed) {
             changed = false;
             for (u32 n = (u32)1; n < nb; n = n + (u32)1) {
                 Array* ps = (Array*)preds.get(n);
-                Array* it = (Array*)0;
+                bool first = true;
                 for (u32 k = (u32)0; k < ps.count(); k = k + (u32)1) {
                     u32 pi = (u32)((Number*)ps.get(k)).asI32();
-                    if (it == (Array*)0) it = copyIdx((Array*)dom.get(pi));
-                    else it = intersectIdx(it, (Array*)dom.get(pi));
+                    if (first) it.copyFrom((BitSet*)dom.get(pi));
+                    else it.intersectWith((BitSet*)dom.get(pi));
+                    first = false;
                 }
-                if (it == (Array*)0) it = new Array();
-                if (!hasIdx(it, n)) it.add((Object*)Number.with((i32)n));
-                if (!sameIdx(it, (Array*)dom.get(n))) { dom.set(n, (Object*)it); changed = true; }
+                if (first) it.minusWith(it);   // no predecessors: the empty set
+                it.add(n);
+                BitSet* cur = (BitSet*)dom.get(n);
+                if (!it.sameAs(cur)) { cur.copyFrom(it); changed = true; }
             }
         }
         return dom;
-    }
-
-    static Array* copyIdx(Array* a)
-    {
-        Array* o = new Array();
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1) o.add(a.get(i));
-        return o;
-    }
-
-    static Array* intersectIdx(Array* a, Array* b)
-    {
-        Array* o = new Array();
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            if (hasIdx(b, (u32)((Number*)a.get(i)).asI32())) o.add(a.get(i));
-        return o;
-    }
-
-    static bool sameIdx(Array* a, Array* b)
-    {
-        if (a.count() != b.count()) return false;
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            if (!hasIdx(b, (u32)((Number*)a.get(i)).asI32())) return false;
-        return true;
     }
 
     void decideNoCanon(IRFunc* fn)
@@ -6893,76 +6877,102 @@ class Arm64
         return joinLines(kept);
     }
 
+    // After a rewrite the scan steps back two real lines rather than starting
+    // over: a pattern reads at most three consecutive real lines, so only one
+    // starting at most two real lines before the rewrite can see a change, and
+    // every earlier line was already found to match nothing. The rewrites are
+    // the ones a scan from the top would make, in the same order, without the
+    // rescan per rewrite that made a function of thousands of lines quadratic
+    // (issue #18).
+    static u32 rescanFrom(Array* lines, u32 i)
+    {
+        u32 back = (u32)0;
+        u32 at = i;
+        while (at > (u32)0 && back < (u32)2) {
+            at = at - (u32)1;
+            if (((String*)lines.get(at)).trimmed().byteLength() > (u32)0)
+                back = back + (u32)1;
+        }
+        return at;
+    }
+
     String* peepholeFallthrough(String* text)
     {
         Array* lines = linesOf(text);
-        bool again = true;
-        while (again) {
-            again = false;
-            for (u32 i = (u32)0; i < lines.count() && !again; i = i + (u32)1) {
-                String* t = ((String*)lines.get(i)).trimmed();
-                // A lone `b L` immediately before `L:` falls through.
-                if (t.hasPrefix(String.withCString("b "))) {
-                    String* tgt = t.substringFromByte((u32)2).trimmed();
-                    i32 j = nextRealLine(lines, i);
-                    if (j >= (i32)0) {
-                        String* lbl = labelOf((String*)lines.get((u32)j));
-                        if (lbl != (String*)0 && lbl.equals(tgt)) {
-                            lines.removeAt(i);
-                            again = true;
-                        }
-                    }
-                    continue;
-                }
-                bool isDot = t.hasPrefix(String.withCString("b."));
-                bool isTb = t.hasPrefix(String.withCString("tbz "))
-                         || t.hasPrefix(String.withCString("tbnz "));
-                bool isCb = isTb || t.hasPrefix(String.withCString("cbz "))
-                         || t.hasPrefix(String.withCString("cbnz "));
-                if (!isDot && !isCb) continue;
-                i32 j = nextRealLine(lines, i);
-                if (j < (i32)0) continue;
-                String* jt = ((String*)lines.get((u32)j)).trimmed();
-                if (!jt.hasPrefix(String.withCString("b "))) continue;   // need the pair
-                String* lf = jt.substringFromByte((u32)2).trimmed();
-                i32 k = nextRealLine(lines, (u32)j);
-                if (k < (i32)0) continue;
-                String* nextLbl = labelOf((String*)lines.get((u32)k));
-                if (nextLbl == (String*)0) continue;
-                u32 sp = t.indexOfByte((u8)' ');
-                if (sp == (u32)$FFFF_FFFF) continue;
-                String* mnem = t.substringBytes((u32)0, sp);
-                String* reg = (String*)0;
-                String* lt = (String*)0;
-                if (isDot) {
-                    lt = t.substringFromByte(sp + (u32)1).trimmed();
-                } else {
-                    Array* ops = t.substringFromByte(sp + (u32)1).splitOnByte((u8)',');
-                    if (ops.count() != (isTb ? (u32)3 : (u32)2)) continue;
-                    // tbz/tbnz: the register and the bit, which stay as they are.
-                    reg = ((String*)ops.get((u32)0)).trimmed();
-                    if (isTb) { reg.appendCString(", "); reg.append(((String*)ops.get((u32)1)).trimmed()); }
-                    lt = ((String*)ops.get(ops.count() - (u32)1)).trimmed();
-                }
-                if (nextLbl.equals(lf)) {
-                    lines.removeAt((u32)j);           // fall through to LF
-                    again = true;
-                    continue;
-                }
-                if (nextLbl.equals(lt)) {
-                    String* cc = isDot ? mnem.substringFromByte((u32)2) : mnem;
-                    String* ic = invertCC(cc);
-                    if (ic == (String*)0) continue;
-                    String* rep = String.withCString("    ");
-                    if (isDot) { rep.appendCString("b."); rep.append(ic); rep.appendCString(" "); rep.append(lf); }
-                    else { rep.append(ic); rep.appendCString(" "); rep.append(reg); rep.appendCString(", "); rep.append(lf); }
-                    lines.set(i, (Object*)rep);
-                    lines.removeAt((u32)j);
-                    again = true;
-                }
-            }
+        u32 i = (u32)0;
+        while (i < lines.count()) {
+            if (fallthroughAt(lines, i))
+                i = rescanFrom(lines, i);
+            else
+                i = i + (u32)1;
         }
         return joinLines(lines);
+    }
+
+    // One fallthrough rewrite of the branch at line i, if it has one: true
+    // when the lines changed.
+    static bool fallthroughAt(Array* lines, u32 i)
+    {
+        String* t = ((String*)lines.get(i)).trimmed();
+        // A lone `b L` immediately before `L:` falls through.
+        if (t.hasPrefix(String.withCString("b "))) {
+            String* tgt = t.substringFromByte((u32)2).trimmed();
+            i32 j = nextRealLine(lines, i);
+            if (j >= (i32)0) {
+                String* lbl = labelOf((String*)lines.get((u32)j));
+                if (lbl != (String*)0 && lbl.equals(tgt)) {
+                    lines.removeAt(i);
+                    return true;
+                }
+            }
+            return false;
+        }
+        bool isDot = t.hasPrefix(String.withCString("b."));
+        bool isTb = t.hasPrefix(String.withCString("tbz "))
+                 || t.hasPrefix(String.withCString("tbnz "));
+        bool isCb = isTb || t.hasPrefix(String.withCString("cbz "))
+                 || t.hasPrefix(String.withCString("cbnz "));
+        if (!isDot && !isCb) return false;
+        i32 j = nextRealLine(lines, i);
+        if (j < (i32)0) return false;
+        String* jt = ((String*)lines.get((u32)j)).trimmed();
+        if (!jt.hasPrefix(String.withCString("b "))) return false;   // need the pair
+        String* lf = jt.substringFromByte((u32)2).trimmed();
+        i32 k = nextRealLine(lines, (u32)j);
+        if (k < (i32)0) return false;
+        String* nextLbl = labelOf((String*)lines.get((u32)k));
+        if (nextLbl == (String*)0) return false;
+        u32 sp = t.indexOfByte((u8)' ');
+        if (sp == (u32)$FFFF_FFFF) return false;
+        String* mnem = t.substringBytes((u32)0, sp);
+        String* reg = (String*)0;
+        String* lt = (String*)0;
+        if (isDot) {
+            lt = t.substringFromByte(sp + (u32)1).trimmed();
+        } else {
+            Array* ops = t.substringFromByte(sp + (u32)1).splitOnByte((u8)',');
+            if (ops.count() != (isTb ? (u32)3 : (u32)2)) return false;
+            // tbz/tbnz: the register and the bit, which stay as they are.
+            reg = ((String*)ops.get((u32)0)).trimmed();
+            if (isTb) { reg.appendCString(", "); reg.append(((String*)ops.get((u32)1)).trimmed()); }
+            lt = ((String*)ops.get(ops.count() - (u32)1)).trimmed();
+        }
+        if (nextLbl.equals(lf)) {
+            lines.removeAt((u32)j);           // fall through to LF
+            return true;
+        }
+        if (nextLbl.equals(lt)) {
+            String* cc = isDot ? mnem.substringFromByte((u32)2) : mnem;
+            String* ic = invertCC(cc);
+            if (ic == (String*)0) return false;
+            String* rep = String.withCString("    ");
+            if (isDot) { rep.appendCString("b."); rep.append(ic); rep.appendCString(" "); rep.append(lf); }
+            else { rep.append(ic); rep.appendCString(" "); rep.append(reg); rep.appendCString(", "); rep.append(lf); }
+            lines.set(i, (Object*)rep);
+            lines.removeAt((u32)j);
+            return true;
+        }
+        return false;
     }
 
     // ── tbz/tbnz reach ───────────────────────────────────────────────────
