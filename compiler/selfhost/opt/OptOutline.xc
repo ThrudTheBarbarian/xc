@@ -1273,6 +1273,81 @@
         return g.substringFromByte(at + (u32)3).trimmed();
         }
 
+    // The product of the trips of the loops inside a loop's body (each inner
+    // header: a block past H with phis, ending in a counted test against a
+    // constant from a constant start, by one), or -1 when one is not known.
+    // Sibling inner loops multiply too, which only overstates the work, and
+    // the product stops growing at PP_MIN_TRIP.
+    final i64 ppInnerTrips(Array* body, IRBlock* H, Map* defOf)
+        {
+        i64 work = (i64)1;
+        for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
+            {
+            IRBlock* ib = (IRBlock*)body.get(b);
+            if (ib == H || ib.phis().count() == (u32)0)
+                continue;
+            IRInsn* t = ib.term();
+            if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() < (u32)1)
+                return (i64)-1;
+            IROperand* c = (IROperand*)t.ops().get((u32)0);
+            if (c.kind() != (u8)OPK_USE || c.val() == (IRValue*)0)
+                return (i64)-1;
+            IRInsn* cmp = (IRInsn*)defOf.get((Hashable*)c.val());
+            if (cmp == (IRInsn*)0 || !cmp.op().equals(String.withCString("ICmp")) || cmp.ops().count() != (u32)2)
+                return (i64)-1;
+            String* pr = cmp.pred();
+            bool le = pr.equals(String.withCString("SLE")) || pr.equals(String.withCString("ULE"));
+            if (!le && !pr.equals(String.withCString("SLT")) && !pr.equals(String.withCString("ULT")))
+                return (i64)-1;
+            IROperand* c0 = (IROperand*)cmp.ops().get((u32)0);
+            i64 hi = (i64)0;
+            if (c0.kind() != (u8)OPK_USE || !constValue(defOf, (IROperand*)cmp.ops().get((u32)1), &hi))
+                return (i64)-1;
+            // The counter: a phi of this block, a constant on one edge and
+            // itself plus one on the other.
+            IRInsn* ph = (IRInsn*)0;
+            for (u32 i = (u32)0; i < ib.phis().count(); i = i + (u32)1)
+                if (((IRInsn*)ib.phis().get(i)).res() == c0.val())
+                    ph = (IRInsn*)ib.phis().get(i);
+            if (ph == (IRInsn*)0 || ph.ops().count() != (u32)4)
+                return (i64)-1;
+            i64 lo = (i64)0;
+            bool haveLo = false;
+            bool stepOne = false;
+            for (u32 q = (u32)1; q < (u32)4; q = q + (u32)2)
+                {
+                IROperand* o = (IROperand*)ph.ops().get(q);
+                i64 k = (i64)0;
+                if (constValue(defOf, o, &k))
+                    {
+                    lo = k;
+                    haveLo = true;
+                    continue;
+                    }
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                    return (i64)-1;
+                IRInsn* st = (IRInsn*)defOf.get((Hashable*)o.val());
+                if (st == (IRInsn*)0 || !st.op().equals(String.withCString("Add")) || st.ops().count() != (u32)2)
+                    return (i64)-1;
+                IROperand* s0 = (IROperand*)st.ops().get((u32)0);
+                IROperand* s1 = (IROperand*)st.ops().get((u32)1);
+                i64 one = (i64)0;
+                if ((s0.kind() == (u8)OPK_USE && s0.val() == ph.res() && constValue(defOf, s1, &one) && one == (i64)1)
+                    || (s1.kind() == (u8)OPK_USE && s1.val() == ph.res() && constValue(defOf, s0, &one) && one == (i64)1))
+                    stepOne = true;
+                }
+            if (!haveLo || !stepOne)
+                return (i64)-1;
+            i64 trip = hi + (le ? (i64)1 : (i64)0) - lo;
+            if (trip < (i64)0)
+                trip = (i64)0;
+            work = work * trip;
+            if (work >= (i64)PP_MIN_TRIP)
+                return (i64)PP_MIN_TRIP;
+            }
+        return work;
+        }
+
     final bool ppOutlinePar(IRModule* m, IRFunc* fn, LRCLoop* L, IRInsn* at, IRBlock* E,
                       Array* liveIns, IRValue* memIn, IRValue* memLast, Array* liveOuts)
         {
@@ -1425,11 +1500,23 @@
         for (u32 b = (u32)0; b < body.count() && innermost; b = b + (u32)1)
             if ((IRBlock*)body.get(b) != H && ((IRBlock*)body.get(b)).phis().count() > (u32)0)
                 innermost = false;
-        if (innermost && start != (IRValue*)0 && constValue(defOf, IROperand.useVal(start), &klo) && constValue(defOf, c1, &khi)
-            && khi + (le ? (i64)1 : (i64)0) - klo < (i64)PP_MIN_TRIP)
+        // A nest of such loops (a 3x3 stencil: dy around dx) is judged by its
+        // whole work: the product of the trips, when every inner loop's is
+        // known too. An inner trip not known here (gemm's columns) leaves the
+        // nest a block.
+        if (start != (IRValue*)0 && constValue(defOf, IROperand.useVal(start), &klo) && constValue(defOf, c1, &khi))
             {
-            _ppStayPut = true;
-            return ppNo("a constant trip below PP_MIN_TRIP items");
+            i64 work = khi + (le ? (i64)1 : (i64)0) - klo;
+            if (!innermost)
+                {
+                i64 inner = ppInnerTrips(body, H, defOf);
+                work = inner < (i64)0 ? (i64)PP_MIN_TRIP : work * inner;
+                }
+            if (work < (i64)PP_MIN_TRIP)
+                {
+                _ppStayPut = true;
+                return ppNo("a constant trip below PP_MIN_TRIP items");
+                }
             }
         // Only accumulators are read after the loop.
         for (u32 i = (u32)0; i < liveOuts.count(); i = i + (u32)1)
