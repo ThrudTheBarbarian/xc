@@ -151,6 +151,7 @@ the driver that comes with the GPU:
 | `arm64` (macOS) | Metal | Apple silicon |
 | `win64` | NVIDIA's driver (CUDA), else Vulkan | an NVIDIA GPU, or any GPU with a Vulkan driver |
 | `x86_64` (Linux) | Vulkan | a Vulkan driver (`libvulkan.so.1`); a program linked with `-static` stays on the CPU |
+| `arm64-linux` (a Raspberry Pi 5) | Vulkan | the V3D driver (Mesa's, installed with Raspberry Pi OS's desktop image) |
 | `android` | Vulkan | a device whose Vulkan driver has 64-bit integers |
 | `wasm32` | WebGPU | a browser with WebGPU and JavaScript promise integration (JSPI), such as Chrome |
 
@@ -172,8 +173,11 @@ uses a global itself, runs on the CPU. What else each GPU can hold:
   `double` runs on the CPU.
 - On an NVIDIA GPU through CUDA, `double` values are fine, but an array of them
   still keeps the block on the CPU.
-- Through Vulkan the GPU must have 64-bit integers, which desktop GPUs have;
-  `double` is used where the GPU has it. 8- and 16-bit values and `bool`s,
+- Through Vulkan, `double` is used where the GPU has it. A GPU without 64-bit
+  integers, such as the Raspberry Pi 5's V3D, runs each block in a 32-bit
+  form: a block whose GPU version needs 64-bit integers, or whose range of
+  items does not fit in a signed 32-bit number, stays on the CPU, and
+  `XC_PAR_REPORT=1` says why. Desktop GPUs have 64-bit integers. 8- and 16-bit values and `bool`s,
   alone or in arrays, are exact on every Vulkan GPU, and they can be reduced
   there and through WebGPU too.
 - Through WebGPU, which has only 32-bit numbers, 64-bit integers are worked in
