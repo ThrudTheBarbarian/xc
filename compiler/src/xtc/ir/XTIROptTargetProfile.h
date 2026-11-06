@@ -216,6 +216,10 @@ NS_ASSUME_NONNULL_BEGIN
 // directly where one matches (XTIROptDevirtualise). The 64-bit targets.
 - (BOOL)devirtualises;
 
+// YES to turn a float Select whose arm computes, on one bit, back into a
+// branch (XTIROptSelectBranch, #22). arm64.
+- (BOOL)selectsBranch;
+
 // YES to if-convert a short-circuit / predicate diamond into branchless
 // straight-line boolean algebra. A header CondBranch whose taken arm is a
 // single, provably side-effect-free block that only computes values and falls

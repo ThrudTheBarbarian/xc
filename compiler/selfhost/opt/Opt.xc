@@ -61,6 +61,7 @@
 #import <OptPointerIV>
 #import <OptPowSquare>
 #import <OptSimdClone>
+#import <OptSelectBranch>
 #import <OptSimplify>
 #import <OptSqrtIntrinsic>
 #import <OptStaticInitGuard>
@@ -757,6 +758,12 @@
         if (_level >= (u32)2)
             self.fpContract(m);
         if (stopHere(String.withCString("fp-contract")))
+            return;
+        // A float Select whose arm computes, on one bit, becomes a branch
+        // again (#22); before the layout, which orders the blocks it makes.
+        if (_level >= (u32)2)
+            self.selectBranch(m);
+        if (stopHere(String.withCString("select-branch")))
             return;
         // LAST: order the blocks so a conditional branch's expected successor
         // falls through. Nothing after this may reorder or add blocks, and

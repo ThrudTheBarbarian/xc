@@ -152,6 +152,8 @@ class Arm64
     Map*      _foldedAddr;      // values whose def is folded away (never emitted)
     Map*      _foldInfo;        // a Load/Store's pointer -> the addr insn to inline
     Map*      _fusedCmps;       // ICmps emitted as part of their block's branch
+    Map*      _bitTests;        // a fused ICmp of (x & 2^k) against 0 -> its And: tbz/tbnz (#22)
+    Map*      _btAnds;          // those Ands, which are not emitted
     Map*      _fusedAnds;       // a short-circuit And's value -> its two comparisons
     Map*      _fusedOrs;        // the same for a short-circuit Or
     u32       _frame;           // the frame size the prologue reserves
@@ -268,9 +270,9 @@ class Arm64
             _out = new String();
             emitFunction((IRFunc*)m.funcs().get(f));
             _out.appendCString("\n");   // the blank line before the next function
-            module.append(elideLeafFrame(expandStagedSlots(
+            module.append(tbzInRange(elideLeafFrame(expandStagedSlots(
                 peepholeFallthrough(peepholeUsra(peepholeRedundantCmp(peepholeAndsFold(peepholeCopyProp(
-                    peepholeRedundantReloads(peepholeSpills(_out))))))))));
+                    peepholeRedundantReloads(peepholeSpills(_out)))))))))));
             _out = module;
         }
         // The SME matrix kernels the module calls (idiom-matmul), and the state
@@ -1288,6 +1290,13 @@ class Arm64
         if (n.res() != (IRValue*)0 && inMap(_foldedAddr, n.res())) return;
         // An ICmp fused into its block's CondBranch is emitted there instead.
         if (n.res() != (IRValue*)0 && inMap(_fusedCmps, n.res())) return;
+        // A bit test's And is tbz/tbnz at the branch, unless the fusions made
+        // the And a site or subsumed its x: then it is emitted, and the branch
+        // compares as before.
+        if (n.res() != (IRValue*)0 && inMap(_btAnds, n.res())) {
+            if (btStillValid(n)) return;
+            dropBitTest(n);
+        }
         // A def subsumed by a fused consumer is never emitted; a fusion SITE
         // emits the combined form in place of its own opcode.
         if (n.res() != (IRValue*)0 && inMap(_fusedAway, n.res())) return;
@@ -6034,7 +6043,8 @@ class Arm64
     // fcsels of one condition, each re-testing it: #22, perlin's grad).
     static bool flagsNeutral(String* m)
     {
-        return m.equals(String.withCString("fcsel")) || m.equals(String.withCString("csel")) || m.equals(String.withCString("csinc")) || m.equals(String.withCString("csinv")) || m.equals(String.withCString("csneg")) || m.equals(String.withCString("cset")) || m.equals(String.withCString("csetm")) || m.equals(String.withCString("fadd")) || m.equals(String.withCString("fsub")) || m.equals(String.withCString("fmul")) || m.equals(String.withCString("fdiv")) || m.equals(String.withCString("fmadd")) || m.equals(String.withCString("fmsub")) || m.equals(String.withCString("fnmadd")) || m.equals(String.withCString("fnmsub")) || m.equals(String.withCString("fnmul")) || m.equals(String.withCString("fneg")) || m.equals(String.withCString("fabs")) || m.equals(String.withCString("fmov")) || m.equals(String.withCString("mov")) || m.equals(String.withCString("movz")) || m.equals(String.withCString("movk")) || m.equals(String.withCString("and")) || m.equals(String.withCString("orr")) || m.equals(String.withCString("eor")) || m.equals(String.withCString("add")) || m.equals(String.withCString("sub")) || m.equals(String.withCString("lsl")) || m.equals(String.withCString("lsr")) || m.equals(String.withCString("asr")) || m.equals(String.withCString("mul")) || m.equals(String.withCString("madd")) || m.equals(String.withCString("msub")) || m.equals(String.withCString("ldr")) || m.equals(String.withCString("ldrb")) || m.equals(String.withCString("ldrh")) || m.equals(String.withCString("ldrsw")) || m.equals(String.withCString("str")) || m.equals(String.withCString("strb")) || m.equals(String.withCString("strh")) || m.equals(String.withCString("ucvtf")) || m.equals(String.withCString("scvtf")) || m.equals(String.withCString("fcvtzu")) || m.equals(String.withCString("fcvtzs")) || m.equals(String.withCString("fcvt")) || m.equals(String.withCString("sxtw")) || m.equals(String.withCString("uxtw")) || m.equals(String.withCString("ubfx")) || m.equals(String.withCString("sbfx"));
+        return m.equals(String.withCString("fcsel")) || m.equals(String.withCString("csel")) || m.equals(String.withCString("csinc")) || m.equals(String.withCString("csinv")) || m.equals(String.withCString("csneg")) || m.equals(String.withCString("cset")) || m.equals(String.withCString("csetm")) || m.equals(String.withCString("fadd")) || m.equals(String.withCString("fsub")) || m.equals(String.withCString("fmul")) || m.equals(String.withCString("fdiv")) || m.equals(String.withCString("fmadd")) || m.equals(String.withCString("fmsub")) || m.equals(String.withCString("fnmadd")) || m.equals(String.withCString("fnmsub")) || m.equals(String.withCString("fnmul")) || m.equals(String.withCString("fneg")) || m.equals(String.withCString("fabs")) || m.equals(String.withCString("fmov")) || m.equals(String.withCString("mov")) || m.equals(String.withCString("movz")) || m.equals(String.withCString("movk")) || m.equals(String.withCString("and")) || m.equals(String.withCString("orr")) || m.equals(String.withCString("eor")) || m.equals(String.withCString("add")) || m.equals(String.withCString("sub")) || m.equals(String.withCString("lsl")) || m.equals(String.withCString("lsr")) || m.equals(String.withCString("asr")) || m.equals(String.withCString("mul")) || m.equals(String.withCString("madd")) || m.equals(String.withCString("msub")) || m.equals(String.withCString("ldr")) || m.equals(String.withCString("ldrb")) || m.equals(String.withCString("ldrh")) || m.equals(String.withCString("ldrsw")) || m.equals(String.withCString("str")) || m.equals(String.withCString("strb")) || m.equals(String.withCString("strh")) || m.equals(String.withCString("ucvtf")) || m.equals(String.withCString("scvtf")) || m.equals(String.withCString("fcvtzu")) || m.equals(String.withCString("fcvtzs")) || m.equals(String.withCString("fcvt")) || m.equals(String.withCString("sxtw")) || m.equals(String.withCString("uxtw")) || m.equals(String.withCString("ubfx")) || m.equals(String.withCString("sbfx"))
+            || m.equals(String.withCString("tbz")) || m.equals(String.withCString("tbnz"));
     }
     String* peepholeRedundantCmp(String* text)
     {
@@ -6881,7 +6891,9 @@ class Arm64
                     continue;
                 }
                 bool isDot = t.hasPrefix(String.withCString("b."));
-                bool isCb = t.hasPrefix(String.withCString("cbz "))
+                bool isTb = t.hasPrefix(String.withCString("tbz "))
+                         || t.hasPrefix(String.withCString("tbnz "));
+                bool isCb = isTb || t.hasPrefix(String.withCString("cbz "))
                          || t.hasPrefix(String.withCString("cbnz "));
                 if (!isDot && !isCb) continue;
                 i32 j = nextRealLine(lines, i);
@@ -6902,9 +6914,11 @@ class Arm64
                     lt = t.substringFromByte(sp + (u32)1).trimmed();
                 } else {
                     Array* ops = t.substringFromByte(sp + (u32)1).splitOnByte((u8)',');
-                    if (ops.count() != (u32)2) continue;
+                    if (ops.count() != (isTb ? (u32)3 : (u32)2)) continue;
+                    // tbz/tbnz: the register and the bit, which stay as they are.
                     reg = ((String*)ops.get((u32)0)).trimmed();
-                    lt = ((String*)ops.get((u32)1)).trimmed();
+                    if (isTb) { reg.appendCString(", "); reg.append(((String*)ops.get((u32)1)).trimmed()); }
+                    lt = ((String*)ops.get(ops.count() - (u32)1)).trimmed();
                 }
                 if (nextLbl.equals(lf)) {
                     lines.removeAt((u32)j);           // fall through to LF
@@ -6925,6 +6939,90 @@ class Arm64
             }
         }
         return joinLines(lines);
+    }
+
+    // ── tbz/tbnz reach ───────────────────────────────────────────────────
+    //
+    // tbz/tbnz reach +/-32 KB and the assembler does not relax them, so a test
+    // whose target may lie further than 24 KB away (the bound is generous:
+    // every instruction counts 4 bytes, every alignment its largest padding)
+    // becomes the inverse test over a `b`, which reaches 128 MB.
+    static u32 asmLineBytes(String* t)
+    {
+        if (t.isEmpty() || t.hasSuffix(String.withCString(":")) || t.hasPrefix(String.withCString("//"))) return (u32)0;
+        if (!t.hasPrefix(String.withCString("."))) return (u32)4;
+        Array* w = t.splitOnByte((u8)' ');
+        String* d = ((String*)w.get((u32)0)).trimmed();
+        String* rest = t.substringFromByte(d.byteLength()).trimmed();
+        u32 n = (u32)0;
+        for (u32 i = (u32)0; i < rest.byteLength(); i = i + (u32)1) {
+            u8 c = rest.byteAt(i);
+            if (c < (u8)'0' || c > (u8)'9') break;
+            n = n * (u32)10 + (u32)(c - (u8)'0');
+        }
+        if (d.equals(String.withCString(".p2align")) || d.equals(String.withCString(".align")))
+            return n < (u32)16 ? ((u32)1 << n) : (u32)65536;
+        if (d.equals(String.withCString(".balign"))) return n;
+        if (d.equals(String.withCString(".space")) || d.equals(String.withCString(".zero"))
+         || d.equals(String.withCString(".skip"))) return n;
+        u32 items = rest.splitOnByte((u8)',').count();
+        if (d.equals(String.withCString(".quad")) || d.equals(String.withCString(".xword"))
+         || d.equals(String.withCString(".8byte")) || d.equals(String.withCString(".double"))) return items * (u32)8;
+        if (d.equals(String.withCString(".word")) || d.equals(String.withCString(".long"))
+         || d.equals(String.withCString(".4byte")) || d.equals(String.withCString(".inst"))
+         || d.equals(String.withCString(".float")) || d.equals(String.withCString(".int"))) return items * (u32)4;
+        if (d.equals(String.withCString(".hword")) || d.equals(String.withCString(".short"))
+         || d.equals(String.withCString(".2byte"))) return items * (u32)2;
+        if (d.equals(String.withCString(".byte"))) return items;
+        if (d.hasPrefix(String.withCString(".asci")) || d.equals(String.withCString(".string"))) return rest.byteLength();
+        return (u32)0;
+    }
+
+    String* tbzInRange(String* text)
+    {
+        if (!text.contains(String.withCString("tbz ")) && !text.contains(String.withCString("tbnz ")))
+            return text;
+        Array* lines = linesOf(text);
+        Map* at = new Map();
+        Array* off = new Array();
+        u32 pos = (u32)0;
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+            String* t = ((String*)lines.get(i)).trimmed();
+            off.add((Object*)Number.withU32(pos));
+            String* l = labelOf(t);
+            if (l != (String*)0) at.set((Hashable*)l, (Object*)Number.withU32(pos));
+            pos = pos + asmLineBytes(t);
+        }
+        Array* out = new Array();
+        for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1) {
+            String* ln = (String*)lines.get(i);
+            String* t = ln.trimmed();
+            bool tb = t.hasPrefix(String.withCString("tbz ")) || t.hasPrefix(String.withCString("tbnz "));
+            if (tb) {
+                u32 sp = t.indexOfByte((u8)' ');
+                Array* ops = t.substringFromByte(sp + (u32)1).splitOnByte((u8)',');
+                if (ops.count() == (u32)3) {
+                    String* L = ((String*)ops.get((u32)2)).trimmed();
+                    Number* to = (Number*)at.get((Hashable*)L);
+                    u32 here = ((Number*)off.get(i)).asU32();
+                    bool near = to != (Number*)0
+                        && (to.asU32() > here ? to.asU32() - here : here - to.asU32()) <= (u32)24576;
+                    if (!near) {
+                        String* inv = invertCC(t.substringBytes((u32)0, sp));
+                        String* skip = labelFor(String.withCString("tbr"), _labelCounter);
+                        _labelCounter = _labelCounter + (u32)1;
+                        out.add((Object*)String.withFormat("    %s %s, %s, %s", inv.cString(),
+                            ((String*)ops.get((u32)0)).trimmed().cString(), ((String*)ops.get((u32)1)).trimmed().cString(),
+                            skip.cString()));
+                        out.add((Object*)String.withFormat("    b %s", L.cString()));
+                        out.add((Object*)String.withFormat("%s:", skip.cString()));
+                        continue;
+                    }
+                }
+            }
+            out.add((Object*)ln);
+        }
+        return joinLines(out);
     }
 
     static i32 nextRealLine(Array* lines, u32 i)
@@ -6962,6 +7060,8 @@ class Arm64
         if (cc.equals(String.withCString("vc")))   return String.withCString("vs");
         if (cc.equals(String.withCString("cbz")))  return String.withCString("cbnz");
         if (cc.equals(String.withCString("cbnz"))) return String.withCString("cbz");
+        if (cc.equals(String.withCString("tbz")))  return String.withCString("tbnz");
+        if (cc.equals(String.withCString("tbnz"))) return String.withCString("tbz");
         return (String*)0;
     }
 
@@ -7911,12 +8011,45 @@ class Arm64
                 _out.appendFormat("    b %s\n", blockLabel(f).cString());
                 return;
             }
+            String* btCond = (String*)0;
+            if (_bitTests != (Map*)0 && inMap(_bitTests, c.val())) {
+                IRInsn* an = (IRInsn*)_bitTests.get((Hashable*)c.val());
+                i32 k = (i32)-1;
+                IROperand* x = (IROperand*)0;
+                for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1) {
+                    i32 kk = powerOfTwoBit((IROperand*)an.ops().get(q));
+                    if (kk >= (i32)0 && k < (i32)0) { k = kk; x = (IROperand*)an.ops().get((u32)1 - q); }
+                }
+                bool eq = icmp.pred().equals(String.withCString("EQ"));
+                if (!phiCopiesNeeded(t, _bb) && !phiCopiesNeeded(f, _bb)) {
+                    String* reg = operandReg(x, String.withCString(needsXReg(opType(x)) ? "x16" : "w16"));
+                    _out.appendFormat("    %s %s, #%d, %s\n", eq ? "tbz" : "tbnz", reg.cString(), k,
+                                      blockLabel(t).cString());
+                    _out.appendFormat("    b %s\n", blockLabel(f).cString());
+                    return;
+                }
+                // An arm that rejoins: the join's copies go first, then the
+                // inverse test to the join, when x has a register those copies
+                // do not write.
+                Object* xh = _home.get((Hashable*)x.val());
+                if (xh != (Object*)0 && t == _nextBB && t != (IRBlock*)0 && !phiCopiesNeeded(t, _bb)
+                    && armRejoins(t, f, _bb) && !copiesWrite(f, (String*)xh)) {
+                    emitPhiCopies(_bb, f);
+                    _out.appendFormat("    %s %s, #%d, %s\n", eq ? "tbnz" : "tbz",
+                                      homeView((String*)xh, opType(x)).cString(), k, blockLabel(f).cString());
+                    return;
+                }
+                // Otherwise the flags: tst, and the branch below as for a cmp.
+                String* tr = operandReg(x, String.withCString(needsXReg(opType(x)) ? "x16" : "w16"));
+                _out.appendFormat("    tst %s, #%lu\n", tr.cString(), (u64)1 << (u64)k);
+                btCond = condString(icmp.pred());
+            }
             // `x == 0` / `x != 0` becomes cbz/cbnz directly, eliding the cmp #0
             // that gates the branch — the hot loop-control and null-check path.
             // Only when NEITHER out-edge needs phi copies: cbz reads a register
             // rather than the flags, so an intervening copy could clobber the
             // operand.
-            IROperand* zval = icmpZeroTestValue(icmp);
+            IROperand* zval = btCond != (String*)0 ? (IROperand*)0 : icmpZeroTestValue(icmp);
             if (zval != (IROperand*)0
              && !phiCopiesNeeded(t, _bb) && !phiCopiesNeeded(f, _bb)) {
                 String* vt = opType(zval);
@@ -7927,7 +8060,7 @@ class Arm64
                 _out.appendFormat("    b %s\n", blockLabel(f).cString());
                 return;
             }
-            String* cond = emitCompare(icmp);
+            String* cond = btCond != (String*)0 ? btCond : emitCompare(icmp);
             if (cond == (String*)0) { unsupported(String.withCString("ICmp:pred")); return; }
             if (takenPhiClobbersFallSrc(t, f, _bb)) {
                 // The taken copies would clobber a value the fall copies read,
@@ -7942,6 +8075,16 @@ class Arm64
                 _out.appendFormat("%s:\n", lf.cString());
                 emitPhiCopies(_bb, f);
                 _out.appendFormat("    b %s\n", blockLabel(f).cString());
+                return;
+            }
+            // The next block is an arm that rejoins the other edge's target
+            // (a Select made a branch again, #22): the other edge's copies go
+            // before the branch. The phi's register is its own, and the arm's
+            // own copy rewrites it, so the arm falls through with no stub.
+            if (t == _nextBB && t != (IRBlock*)0 && !phiCopiesNeeded(t, _bb) && phiCopiesNeeded(f, _bb)
+                && armRejoins(t, f, _bb)) {
+                emitPhiCopies(_bb, f);
+                _out.appendFormat("    b.%s %s\n", condString(negatePred(icmp.pred())).cString(), blockLabel(f).cString());
                 return;
             }
             // The taken edge is the next block and needs no copies, the other
@@ -7993,6 +8136,30 @@ class Arm64
         _out.appendFormat("    cbnz %s, %s\n", cr.cString(), blockLabel(t).cString());
         emitPhiCopies(_bb, f);
         _out.appendFormat("    b %s\n", blockLabel(f).cString());
+    }
+
+    // A goes only to J, has no phis, and every phi of J taking a value from
+    // B takes one from A: so J's copies from B may run before B's branch, as
+    // the path through A writes each of them again.
+    bool armRejoins(IRBlock* a, IRBlock* j, IRBlock* b)
+    {
+        IRInsn* at = a.term();
+        if (at == (IRInsn*)0 || !at.op().equals(String.withCString("Branch")) || at.ops().count() < (u32)1
+            || ((IROperand*)at.ops().get((u32)0)).blk() != j || a.phis().count() != (u32)0)
+            return false;
+        for (u32 i = (u32)0; i < j.phis().count(); i = i + (u32)1) {
+            IRInsn* ph = (IRInsn*)j.phis().get(i);
+            bool fromB = false;
+            bool fromA = false;
+            for (u32 q = (u32)0; q + (u32)1 < ph.ops().count(); q = q + (u32)2) {
+                IRBlock* pb = ((IROperand*)ph.ops().get(q)).blk();
+                if (pb == b) fromB = true;
+                if (pb == a) fromA = true;
+            }
+            if (fromB && !fromA)
+                return false;
+        }
+        return true;
     }
 
     // ── Phi-edge copies ──────────────────────────────────────────────────
@@ -8198,6 +8365,75 @@ class Arm64
             : String.withCString(needsXReg(pty) ? "x16" : "w16");
         String* src = operandReg(vop, scratch);
         storeReg(src, phi.res());
+    }
+
+    // Whether the copies on the edge from this block to `to` write the
+    // register `home`.
+    bool copiesWrite(IRBlock* to, String* home)
+    {
+        for (u32 i = (u32)0; i < to.phis().count(); i = i + (u32)1) {
+            IRInsn* phi = (IRInsn*)to.phis().get(i);
+            if (phi.res() == (IRValue*)0 || isMemTy(phi.res().ty())) continue;
+            if (phiSourceFrom(phi, _bb) == (IROperand*)0) continue;
+            Object* h = _home.get((Hashable*)phi.res());
+            if (h != (Object*)0 && sameArm64Reg((String*)h, home)) return true;
+        }
+        return false;
+    }
+
+    // The bit width tbz/tbnz may test in a value of this integer type, or 0.
+    static u32 bitTestWidth(String* ty)
+    {
+        if (ty == (String*)0) return (u32)0;
+        if (ty.equals(String.withCString("I8")) || ty.equals(String.withCString("U8"))) return (u32)8;
+        if (ty.equals(String.withCString("I16")) || ty.equals(String.withCString("U16"))) return (u32)16;
+        if (ty.equals(String.withCString("I32")) || ty.equals(String.withCString("U32"))) return (u32)32;
+        if (ty.equals(String.withCString("I64")) || ty.equals(String.withCString("U64"))) return (u32)64;
+        return (u32)0;
+    }
+
+    // The bit an integer constant 2^k sets (an immediate or a Const), or -1.
+    i32 powerOfTwoBit(IROperand* o)
+    {
+        i32 v = (i32)0;
+        if (o.kind() == (u8)OPK_IMMI) v = o.imm();
+        else if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0) {
+            Object* d = _defOf.get((Hashable*)o.val());
+            if (d == (Object*)0) return (i32)-1;
+            IRInsn* n = (IRInsn*)d;
+            if (!n.op().equals(String.withCString("Const")) || n.res() == (IRValue*)0 || isFloatTy(n.res().ty())
+             || n.ops().count() < (u32)1) return (i32)-1;
+            IROperand* a0 = (IROperand*)n.ops().get((u32)0);
+            if (a0.kind() != (u8)OPK_IMMI) return (i32)-1;
+            v = a0.imm();
+        } else return (i32)-1;
+        if (v <= (i32)0 || (v & (v - (i32)1)) != (i32)0) return (i32)-1;
+        i32 k = (i32)0;
+        while (v > (i32)1) { v = v >> (i32)1; k = k + (i32)1; }
+        return k;
+    }
+
+    // A bit test survives the fusions: its And is no fusion site, and its x
+    // is computed (not subsumed into another instruction). The 2^k is not
+    // asked: a constant folded into an immediate is never read.
+    bool btStillValid(IRInsn* an)
+    {
+        if (_fuseKind != (Map*)0 && _fuseKind.get((Hashable*)an.res()) != (Object*)0) return false;
+        for (u32 q = (u32)0; q < an.ops().count(); q = q + (u32)1) {
+            IROperand* o = (IROperand*)an.ops().get(q);
+            if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0 || powerOfTwoBit(o) >= (i32)0) continue;
+            if (inMap(_fusedAway, o.val()) || inMap(_foldedAddr, o.val()) || inMap(_laneSkip, o.val())) return false;
+        }
+        return true;
+    }
+
+    void dropBitTest(IRInsn* an)
+    {
+        _btAnds.remove((Hashable*)an.res());
+        Array* ks = _bitTests.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            if (_bitTests.get((Hashable*)ks.get(i)) == (Object*)an)
+                _bitTests.remove((Hashable*)ks.get(i));
     }
 
     // An `x == 0` / `x != 0` test (EQ/NE against an integer or pointer zero,
@@ -8997,6 +9233,7 @@ class Arm64
         _start = new Map();
         _end = new Map();
         _phiRes = new Array();
+        _fwdPhi = new Array();
         _crossCall = new Array();
         _callPos = new Array();
         u32 nb = fn.blocks().count();
@@ -9024,6 +9261,7 @@ class Arm64
 
     Map* _defPos;
     Map* _lastUse;
+    Array* _fwdPhi;      // phis of forward joins: ordinary intervals (finishIntervals)
     Array* _blkEnd;      // each block's LAST undoubled position
 
     // Walk the blocks once, numbering every instruction and recording defs,
@@ -9187,13 +9425,58 @@ class Arm64
                 i32 e3 = ((Number*)eb).asI32();
                 if (e3 > en) en = e3;
             }
+            // A phi whose predecessors all come before its block is written by
+            // their edge copies, at their ends and no later: its interval
+            // starts at the first of them, and it shares registers like any
+            // other value (#22: a Select made a branch adds one per Select).
+            // A loop header's keeps its register to itself (assignTier).
+            // It crosses a call only from its own block on: each copy is
+            // made at its predecessor's end, after any call there, and the
+            // blocks between are not on the path from an earlier
+            // predecessor (a devirtualised call's join kept its w1).
+            i32 cst = st;
+            if (dp != (Object*)0 && hasVal(_phiRes, v)) {
+                i32 fs = forwardPhiStart(fn, v, blkEnd);
+                if (fs >= (i32)0) { st = fs; addVal(_fwdPhi, v); }
+            }
             _start.set((Hashable*)v, (Object*)Number.withI32(st));
             _end.set((Hashable*)v, (Object*)Number.withI32(en));
             for (u32 c = (u32)0; c < _callPos.count(); c = c + (u32)1) {
                 i32 cp = (i32)2 * ((Number*)_callPos.get(c)).asI32();
-                if (st <= cp && cp <= en) { addVal(_crossCall, v); break; }
+                if (cst <= cp && cp <= en) { addVal(_crossCall, v); break; }
             }
         }
+    }
+
+    // The doubled position of the earliest predecessor's terminator, where
+    // its edge copies are made, when every predecessor of v's block lies
+    // before the block; else -1. At the terminator's reads and not after
+    // them: a branch whose taken edge has copies makes them before it reads
+    // its condition, so the phi must not share the condition's register.
+    i32 forwardPhiStart(IRFunc* fn, IRValue* v, Array* blkEnd)
+    {
+        for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1) {
+            IRBlock* b = (IRBlock*)fn.blocks().get(bi);
+            IRInsn* ph = (IRInsn*)0;
+            for (u32 i = (u32)0; i < b.phis().count(); i = i + (u32)1)
+                if (((IRInsn*)b.phis().get(i)).res() == v) ph = (IRInsn*)b.phis().get(i);
+            if (ph == (IRInsn*)0) continue;
+            if (isMemTy(v.ty())) return (i32)-1;
+            i32 first = (i32)-1;
+            for (u32 q = (u32)0; q + (u32)1 < ph.ops().count(); q = q + (u32)2) {
+                IRBlock* pb = ((IROperand*)ph.ops().get(q)).blk();
+                u32 pi = fn.blocks().count();
+                for (u32 j = (u32)0; j < fn.blocks().count(); j = j + (u32)1)
+                    if ((IRBlock*)fn.blocks().get(j) == pb) { pi = j; break; }
+                if (pi >= bi) return (i32)-1;
+                // The terminator's own reads (2p): a branch may make its
+                // copies before it reads its condition.
+                i32 at = (i32)2 * ((Number*)blkEnd.get(pi)).asI32();
+                if (first < (i32)0 || at < first) first = at;
+            }
+            return first;
+        }
+        return (i32)-1;
     }
 
     // Every value the function mentions, so a value whose ONLY consumer is a
@@ -9305,6 +9588,9 @@ class Arm64
         if ((n.op().equals(String.withCString("CondBranch")) || n.op().equals(String.withCString("Select")))
          && inMap(_fusedCmps, p0.val()))
             noteOperands((IRInsn*)_fusedCmps.get((Hashable*)p0.val()), defs, ue, lastUse, pos);
+        // A bit test reads the And's x at the branch (tbz/tbnz).
+        if (n.op().equals(String.withCString("CondBranch")) && _bitTests != (Map*)0 && inMap(_bitTests, p0.val()))
+            noteOperands((IRInsn*)_bitTests.get((Hashable*)p0.val()), defs, ue, lastUse, pos);
         // And the same for a fused short-circuit &&: both comparisons are emitted
         // at the branch, so THEIR operands are read there too.
         if (n.op().equals(String.withCString("CondBranch")) && inMap(_fusedAnds, p0.val())) {
@@ -9499,6 +9785,126 @@ class Arm64
         assignTier(fn, fp, fpCallee, fpCaller);
         sortSaved(gpCallee, fpCallee);
         coalescePhiInputs(fn, gpCallee, fpCallee);
+        coalesceArmPhis(fn, gpCallee, fpCallee);
+    }
+
+    // ── An arm's phi, coalesced (#22) ────────────────────────────────────
+    //
+    // A Select made a branch is B: ...; branch to A or J. A: w = f(u); J. J:
+    // P = phi(u from B, w from A). Its copies are `mov P, u` before B's branch
+    // and `mov P, w` at A's end. When u and w both take P's register R, both
+    // go: R holds u from its def, A overwrites it with w, J reads R. Sound
+    // when nothing reads u after A writes w (u is read only in B, in A up to
+    // w's def, and by P), w is read only in A and by P, and no other value
+    // homed in R overlaps any of the three.
+    void coalesceArmPhis(IRFunc* fn, Array* gpCallee, Array* fpCallee)
+    {
+        if (_fwdPhi == (Array*)0 || _fwdPhi.count() == (u32)0) return;
+        for (u32 ji = (u32)0; ji < fn.blocks().count(); ji = ji + (u32)1) {
+            IRBlock* J = (IRBlock*)fn.blocks().get(ji);
+            for (u32 pi = (u32)0; pi < J.phis().count(); pi = pi + (u32)1) {
+                IRInsn* P = (IRInsn*)J.phis().get(pi);
+                IRValue* pv = P.res();
+                if (pv == (IRValue*)0 || !hasVal(_fwdPhi, pv) || P.ops().count() != (u32)4) continue;
+                Object* rh = _home.get((Hashable*)pv);
+                if (rh == (Object*)0) continue;
+                String* R = (String*)rh;
+                // Which incoming block is the arm: one predecessor, B, and
+                // one successor, J.
+                for (u32 side = (u32)0; side < (u32)2; side = side + (u32)1) {
+                    IRBlock* A = ((IROperand*)P.ops().get((u32)2 * side)).blk();
+                    IRBlock* B = ((IROperand*)P.ops().get((u32)2 * ((u32)1 - side))).blk();
+                    IROperand* wo = (IROperand*)P.ops().get((u32)2 * side + (u32)1);
+                    IROperand* uo = (IROperand*)P.ops().get((u32)2 * ((u32)1 - side) + (u32)1);
+                    if (A == (IRBlock*)0 || B == (IRBlock*)0 || A == B) continue;
+                    if (wo.kind() != (u8)OPK_USE || uo.kind() != (u8)OPK_USE) continue;
+                    IRValue* w = wo.val();
+                    IRValue* u = uo.val();
+                    if (w == (IRValue*)0 || u == (IRValue*)0 || w == u || u == pv || w == pv) continue;
+                    if (armPhiOk(fn, J, A, B, P, u, w, R, gpCallee, fpCallee)) {
+                        _home.set((Hashable*)u, (Object*)R);
+                        _home.set((Hashable*)w, (Object*)R);
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    bool armPhiOk(IRFunc* fn, IRBlock* J, IRBlock* A, IRBlock* B, IRInsn* P, IRValue* u, IRValue* w,
+                  String* R, Array* gpCallee, Array* fpCallee)
+    {
+        // A: B's only successor-arm, a single block straight to J.
+        IRInsn* at = A.term();
+        if (at == (IRInsn*)0 || !at.op().equals(String.withCString("Branch")) || at.ops().count() < (u32)1
+            || ((IROperand*)at.ops().get((u32)0)).blk() != J || A.phis().count() != (u32)0) return false;
+        IRInsn* bt = B.term();
+        if (bt == (IRInsn*)0 || !bt.op().equals(String.withCString("CondBranch"))) return false;
+        bool bToA = false;
+        for (u32 k = (u32)1; k < bt.ops().count(); k = k + (u32)1)
+            if (((IROperand*)bt.ops().get(k)).blk() == A) bToA = true;
+        if (!bToA) return false;
+        for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1) {
+            IRBlock* o = (IRBlock*)fn.blocks().get(bi);
+            if (o == A || o == B) continue;
+            IRInsn* ot = o.term();
+            if (ot != (IRInsn*)0)
+                for (u32 k = (u32)0; k < ot.ops().count(); k = k + (u32)1)
+                    if (((IROperand*)ot.ops().get(k)).blk() == A) return false;   // A has one predecessor
+        }
+        // Types and kinds.
+        for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1) {
+            IRValue* v = q == (u32)0 ? u : w;
+            String* vt = v.ty();
+            if (vt == (String*)0 || isMemTy(vt) || isAggTy(vt) || isVecTy(vt)) return false;
+            if (isFPReg(R) != isFloatTy(vt)) return false;
+            if (hasVal(_phiRes, v) || hasVal(_addrTaken, v) || !hasIvl(v)) return false;
+            if (hasVal(_crossCall, v) && !(hasStr(gpCallee, R) || hasStr(fpCallee, R))) return false;
+        }
+        // w is made in A; u is read only in B, in A up to w's def, and by P.
+        i32 wAt = (i32)-1;
+        for (u32 i = (u32)0; i < A.insns().count(); i = i + (u32)1)
+            if (((IRInsn*)A.insns().get(i)).res() == w) wAt = (i32)i;
+        if (wAt < (i32)0) return false;
+        for (u32 bi = (u32)0; bi < fn.blocks().count(); bi = bi + (u32)1) {
+            IRBlock* o = (IRBlock*)fn.blocks().get(bi);
+            for (u32 i = (u32)0; i < o.phis().count(); i = i + (u32)1) {
+                IRInsn* ph = (IRInsn*)o.phis().get(i);
+                for (u32 k = (u32)0; k < ph.ops().count(); k = k + (u32)1) {
+                    IROperand* op = (IROperand*)ph.ops().get(k);
+                    if (op.kind() != (u8)OPK_USE) continue;
+                    if ((op.val() == u || op.val() == w) && ph != P) return false;
+                }
+            }
+            u32 n = o.insns().count();
+            for (u32 i = (u32)0; i <= n; i = i + (u32)1) {
+                IRInsn* ins = i < n ? (IRInsn*)o.insns().get(i) : o.term();
+                if (ins == (IRInsn*)0) continue;
+                for (u32 k = (u32)0; k < ins.ops().count(); k = k + (u32)1) {
+                    IROperand* op = (IROperand*)ins.ops().get(k);
+                    if (op.kind() != (u8)OPK_USE) continue;
+                    if (op.val() == u && o != B && !(o == A && (i32)i <= wAt)) return false;
+                    if (op.val() == w && o != A) return false;
+                }
+            }
+        }
+        // Nothing else in R over the hull of u, w and P.
+        i32 lo = ivlStart(u);
+        i32 hi = ivlEnd(u);
+        IRValue* pv = P.res();
+        if (ivlStart(w) < lo) lo = ivlStart(w);
+        if (ivlEnd(w) > hi) hi = ivlEnd(w);
+        if (ivlStart(pv) < lo) lo = ivlStart(pv);
+        if (ivlEnd(pv) > hi) hi = ivlEnd(pv);
+        Array* ks = _home.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1) {
+            IRValue* v = (IRValue*)ks.get(i);
+            if (v == u || v == w || v == pv) continue;
+            if (!sameArm64Reg((String*)_home.get((Hashable*)v), R)) continue;
+            if (!hasIvl(v)) return false;
+            if (ivlStart(v) <= hi && lo <= ivlEnd(v)) return false;
+        }
+        return true;
     }
 
     // ── Phi-input coalescing ─────────────────────────────────────────────
@@ -9895,7 +10301,7 @@ class Arm64
             IRValue* v = (IRValue*)cands.get(c);
             i32 s = startOf(v);
             i32 e = endOf(v);
-            bool isPhi = hasVal(_phiRes, v);
+            bool isPhi = hasVal(_phiRes, v) && !hasVal(_fwdPhi, v);
             bool mayCaller = !hasVal(_crossCall, v);
             bool isParam = isParamValue(fn, v);
             u32 chosen = regs.count();
@@ -10428,6 +10834,44 @@ class Arm64
                 // zero test, and its inverse by condition code (invertCond),
                 // not by negating the predicate.
             }
+        }
+
+        // A branch on one bit, `(x & 2^k) == 0` or `!= 0`, is tbz/tbnz on x: the
+        // And and its compare go (gcc's form for perlin's hash bits, #22). x is
+        // read at the branch, so the liveness pass extends it there
+        // (noteOperands below); where phi copies stand in the way the branch
+        // is `tst` and a flag test instead (emitCondBranch).
+        _bitTests = new Map();
+        _btAnds = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            IRInsn* bt = bb.term();
+            if (bt == (IRInsn*)0 || !bt.op().equals(String.withCString("CondBranch")) || bt.ops().count() < (u32)3) continue;
+            IROperand* bc = (IROperand*)bt.ops().get((u32)0);
+            if (bc.kind() != (u8)OPK_USE || bc.val() == (IRValue*)0 || !inMap(_fusedCmps, bc.val())) continue;
+            IRInsn* cmp = (IRInsn*)_fusedCmps.get((Hashable*)bc.val());
+            if (!cmp.op().equals(String.withCString("ICmp")) || cmp.pred() == (String*)0) continue;
+            if (!cmp.pred().equals(String.withCString("EQ")) && !cmp.pred().equals(String.withCString("NE"))) continue;
+            IROperand* zv = icmpZeroTestValue(cmp);
+            if (zv == (IROperand*)0 || zv.kind() != (u8)OPK_USE || zv.val() == (IRValue*)0) continue;
+            if (useCountOf(zv.val()) != (u32)1) continue;
+            Object* ad = _defOf.get((Hashable*)zv.val());
+            if (ad == (Object*)0) continue;
+            IRInsn* an = (IRInsn*)ad;
+            if (!an.op().equals(String.withCString("And")) || an.ops().count() != (u32)2 || an.res() == (IRValue*)0) continue;
+            if (!listContains(bb.insns(), an)) continue;
+            u32 w = bitTestWidth(an.res().ty());
+            if (w == (u32)0) continue;
+            i32 k = (i32)-1;
+            IROperand* x = (IROperand*)0;
+            for (u32 q = (u32)0; q < (u32)2; q = q + (u32)1) {
+                i32 kk = powerOfTwoBit((IROperand*)an.ops().get(q));
+                if (kk >= (i32)0 && k < (i32)0) { k = kk; x = (IROperand*)an.ops().get((u32)1 - q); }
+            }
+            if (k < (i32)0 || (u32)k >= w || x == (IROperand*)0 || x.kind() != (u8)OPK_USE || x.val() == (IRValue*)0) continue;
+            if (isFloatTy(opType(x))) continue;
+            _bitTests.set((Hashable*)bc.val(), (Object*)an);
+            _btAnds.set((Hashable*)an.res(), (Object*)an);
         }
 
         // A short-circuit `&&` fuses as well. If-conversion turns `if (a && b)`

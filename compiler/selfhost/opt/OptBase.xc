@@ -104,6 +104,7 @@ class OptProfile
     bool _unrollVarTrip;   // …and a variable-trip loop partially unrolls
     bool _unrollChains;    // …and so does a loop of independent vector chains (#8)
     bool _devirtualise;    // a virtual call in a loop tests the receiver's class (OptDevirt)
+    bool _selectBranch;    // a float Select whose arm computes, on one bit, is a branch (arm64)
     bool _licm;            // loop-invariant code moves to the preheader
     bool _hoistGlobalAddr; // …and a repeated AddrOf @sym dedupes to the entry
     bool _hoistLocalAddr;  // …and a repeated AddrOf of a pinned LOCAL (arm64)
@@ -373,6 +374,9 @@ class OptProfile
         // instructions a step instead of three (#8: 8 chains on a Pi 5,
         // 42.5 GFLOPS bound by the moves).
         p._unrollChains = t.equals(String.withCString("arm64"));
+        // Float Selects back to branches where an arm computes (#22: faster on
+        // a Pi 5 and an M4 Max, OptSelectBranch.xc).
+        p._selectBranch = t.equals(String.withCString("arm64"));
         // Guarded devirtualisation on the 64-bit targets (OptDevirt).
         p._devirtualise = t.equals(String.withCString("arm64")) || t.equals(String.withCString("x86_64")) || t.equals(String.withCString("win64"));
         // LICM is on for every live target, and so now is the global-address
@@ -545,6 +549,11 @@ class OptProfile
     bool devirtualise(void)
         {
         return _devirtualise;
+        }
+
+    bool selectBranch(void)
+        {
+        return _selectBranch;
         }
     bool licm(void)
         {
@@ -1644,6 +1653,7 @@ class BeFact : Object
     IRInsn* _ucIv;         // unrollChainLoops: the counter phi, its add and its compare
     IRInsn* _ucNext;
     IRInsn* _ucCmp;
+    u32 _sbSeq;            // selectBranch: its block names' counter
     bool _ppStayPut;       // ppOutlinePar: the loop is too small to outline at all
     Map* _dvVt;            // devirtualise's indexes for one run: vtables and functions by name,
     Map* _dvFn;

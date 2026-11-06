@@ -121,6 +121,12 @@ static NSUInteger sArm64LoopAlign = 0;
 // the ICmp's emit is skipped and the branch emits `cmp …; b.<cond>` directly
 // (instead of materialising a 0/1 bool and a `cbnz`).
 @property (nonatomic) NSMutableSet<NSNumber *> *fusedCmps;
+// A fused ICmp of (x & 2^k) against 0 -> its And: tbz/tbnz on x (#22), and
+// those Ands, which are not emitted.
+@property (nonatomic) NSMutableDictionary<NSNumber *, XTIRInsn *> *bitTests;
+@property (nonatomic) NSMutableSet<NSNumber *> *btAnds;
+// Phis of forward joins, whose intervals are ordinary (computeLiveIntervals).
+@property (nonatomic) NSMutableSet<NSNumber *> *fwdPhis;
 // A short-circuit `&&`: the And's result value -> its two comparisons. The And
 // and both comparisons are never materialised; the branch emits each comparison
 // and jumps to the FALSE edge on its inverse.
@@ -1629,6 +1635,77 @@ static char kArm64VtblForSelfKey, kArm64VtblForSelfCountKey;
     }
 }
 
+static BOOL sameArm64Reg(NSString *a, NSString *b);
+
++ (BOOL)armPhiOkFn:(XTIRFunction *)fn join:(XTIRBlock *)J arm:(XTIRBlock *)A from:(XTIRBlock *)B
+               phi:(XTIRInsn *)P u:(XTIRValueId)u w:(XTIRValueId)w reg:(NSString *)R
+              phis:(NSSet<NSNumber *> *)phiResults addrTaken:(NSSet<NSNumber *> *)addrTaken
+       crossesCall:(NSSet<NSNumber *> *)crossesCall gp:(NSArray<NSString *> *)gpRegs fp:(NSArray<NSString *> *)fpRegs
+           startOf:(NSDictionary<NSNumber *, NSNumber *> *)startOf endOf:(NSDictionary<NSNumber *, NSNumber *> *)endOf
+               ctx:(XTArm64FnCtx *)ctx {
+    // A: one predecessor, B, and one successor, J.
+    XTIRInsn *at = A.terminator;
+    if (!at || at.opcode != XTIROpBranch || at.operands.count < 1 || at.operands[0].blockRef != J
+        || A.phiNodes.count != 0) return NO;
+    XTIRInsn *bt = B.terminator;
+    if (!bt || bt.opcode != XTIROpCondBranch) return NO;
+    BOOL bToA = NO;
+    for (NSUInteger k = 1; k < bt.operands.count; k++)
+        if (bt.operands[k].blockRef == A) bToA = YES;
+    if (!bToA) return NO;
+    for (XTIRBlock *o in fn.blocks) {
+        if (o == A || o == B) continue;
+        for (XTIROperand *op in o.terminator.operands)
+            if (op.blockRef == A) return NO;
+    }
+    BOOL homeFP = [R hasPrefix:@"d"] || [R hasPrefix:@"s"];
+    for (NSUInteger q = 0; q < 2; q++) {
+        XTIRValueId vid = q == 0 ? u : w;
+        XTIRValue *vv = [fn valueForId:vid];
+        if (!vv || !vv.type) return NO;
+        XTIRTypeKind vk = vv.type.kind;
+        if (vk == XTIRTypeKindMemory || vk == XTIRTypeKindAgg || vk == XTIRTypeKindVec) return NO;
+        if (homeFP != XTIRTypeKindIsFloating(vk)) return NO;
+        if ([phiResults containsObject:@(vid)] || [addrTaken containsObject:@(vid)]
+            || !startOf[@(vid)] || !endOf[@(vid)]) return NO;
+        if ([crossesCall containsObject:@(vid)] && !([gpRegs containsObject:R] || [fpRegs containsObject:R])) return NO;
+    }
+    // w is made in A; u is read only in B, in A up to w's def, and by P.
+    NSInteger wAt = -1;
+    for (NSUInteger i = 0; i < A.instructions.count; i++)
+        if (A.instructions[i].result && A.instructions[i].result.valueId == w) wAt = (NSInteger)i;
+    if (wAt < 0) return NO;
+    for (XTIRBlock *o in fn.blocks) {
+        for (XTIRInsn *ph in o.phiNodes)
+            for (XTIROperand *op in ph.operands)
+                if (op.kind == XTIROperandKindUse && (op.valueId == u || op.valueId == w) && ph != P) return NO;
+        NSUInteger n = o.instructions.count;
+        for (NSUInteger i = 0; i <= n; i++) {
+            XTIRInsn *ins = i < n ? o.instructions[i] : o.terminator;
+            if (!ins) continue;
+            for (XTIROperand *op in ins.operands) {
+                if (op.kind != XTIROperandKindUse) continue;
+                if (op.valueId == u && o != B && !(o == A && (NSInteger)i <= wAt)) return NO;
+                if (op.valueId == w && o != A) return NO;
+            }
+        }
+    }
+    // Nothing else in R over the hull of u, w and P.
+    XTIRValueId pv = P.result.valueId;
+    if (!startOf[@(pv)] || !endOf[@(pv)]) return NO;
+    NSInteger lo = startOf[@(u)].integerValue, hi = endOf[@(u)].integerValue;
+    lo = MIN(lo, MIN(startOf[@(w)].integerValue, startOf[@(pv)].integerValue));
+    hi = MAX(hi, MAX(endOf[@(w)].integerValue, endOf[@(pv)].integerValue));
+    for (NSNumber *v in ctx.homeReg) {
+        XTIRValueId vid = (XTIRValueId)v.unsignedIntegerValue;
+        if (vid == u || vid == w || vid == pv) continue;
+        if (!sameArm64Reg(ctx.homeReg[v], R)) continue;
+        if (!startOf[v] || !endOf[v]) return NO;
+        if (startOf[v].integerValue <= hi && lo <= endOf[v].integerValue) return NO;
+    }
+    return YES;
+}
+
 // `blockEnds` (optional) receives each block's LAST undoubled position, which is
 // what slot colouring needs to find loop spans. Passing nil keeps the previous
 // behaviour exactly, so the register allocator is unaffected.
@@ -1703,6 +1780,12 @@ static char kArm64VtblForSelfKey, kArm64VtblForSelfCountKey;
                 [ctx.fusedCmps containsObject:@(insn.operands[0].valueId)]) {
                 XTIRInsn *icmp = ctx.defOf[@(insn.operands[0].valueId)];
                 if (icmp) for (XTIROperand *o in icmp.operands) recordUse(o);
+            }
+            // A bit test reads the And's x at the branch (tbz/tbnz).
+            if (insn.opcode == XTIROpCondBranch && insn.operands.count >= 1 &&
+                insn.operands[0].kind == XTIROperandKindUse &&
+                ctx.bitTests[@(insn.operands[0].valueId)]) {
+                for (XTIROperand *o in ctx.bitTests[@(insn.operands[0].valueId)].operands) recordUse(o);
             }
             // And the same for a fused short-circuit `&&`: both comparisons are
             // emitted at the branch, so THEIR operands are read there too.
@@ -1808,12 +1891,36 @@ static char kArm64VtblForSelfKey, kArm64VtblForSelfCountKey;
         if (endByVal[v]) en = MAX(en, endByVal[v].integerValue);
         startOf[v] = @(st); endOf[v] = @(en);
     }
+    // A phi whose predecessors all come before its block is written by their
+    // edge copies, at their terminators: its interval starts at the first of
+    // them and it shares registers like any other value (#22; the port's
+    // forwardPhiStart). At the terminator's reads, not after: a branch whose
+    // taken edge has copies makes them before it reads its condition.
+    ctx.fwdPhis = [NSMutableSet set];
+    // It crosses a call only from its own block on (the port's
+    // finishIntervals explains), so the call test below keeps its own start.
+    NSMutableDictionary<NSNumber *, NSNumber *> *callStart = [NSMutableDictionary dictionary];
+    for (NSUInteger bi = 0; bi < nb; bi++) {
+        for (XTIRInsn *ph in blocks[bi].phiNodes) {
+            if (!ph.result || ph.result.type.kind == XTIRTypeKindMemory) continue;
+            NSNumber *v = @(ph.result.valueId);
+            if (!startOf[v] || !defPos[v]) continue;
+            NSInteger first = -1; BOOL fwd = YES;
+            for (NSUInteger k = 0; k + 1 < ph.operands.count; k += 2) {
+                NSUInteger pi = [blocks indexOfObjectIdenticalTo:ph.operands[k].blockRef];
+                if (pi == NSNotFound || pi >= bi) { fwd = NO; break; }
+                NSInteger at = 2 * blkEnd[pi].integerValue;
+                if (first < 0 || at < first) first = at;
+            }
+            if (fwd && first >= 0) { callStart[v] = startOf[v]; startOf[v] = @(first); [ctx.fwdPhis addObject:v]; }
+        }
+    }
     // A value crosses a call when a call's doubled position lies in its interval;
     // such a value may not use a caller-saved home. Conservative (over-approx
     // intervals only push more values to callee-saved).
     if (crossesCall)
         for (NSNumber *v in allVals) {
-            NSInteger s = startOf[v].integerValue, e = endOf[v].integerValue;
+            NSInteger s = (callStart[v] ?: startOf[v]).integerValue, e = endOf[v].integerValue;
             for (NSNumber *cp in callPos) {
                 NSInteger c = 2 * cp.integerValue;
                 if (s <= c && c <= e) { [crossesCall addObject:v]; break; }
@@ -2327,7 +2434,7 @@ static BOOL a64InsnReads(XTIRInsn *n, XTIRValueId x) {
         for (NSNumber *v in cands) {
             NSInteger s = startOf[v] ? startOf[v].integerValue : 0;
             NSInteger e = endOf[v]   ? endOf[v].integerValue   : s;
-            BOOL isPhi = [phiResults containsObject:v];
+            BOOL isPhi = [phiResults containsObject:v] && ![ctx.fwdPhis containsObject:v];
             BOOL mayUseCaller = ![crossesCall containsObject:v];
             BOOL isParam = v.integerValue >= 0 && (NSUInteger)v.integerValue < nParams;
             NSInteger chosen = -1;
@@ -2528,6 +2635,33 @@ static BOOL a64InsnReads(XTIRInsn *n, XTIRValueId x) {
                     && !([gpRegs containsObject:R] || [fpRegs containsObject:R])) continue;
                 ctx.homeReg[@(vIn)] = R;                       // coalesce
                 [coalesced addObject:@(phi.result.valueId)];
+            }
+        }
+    }
+    // An arm's phi, coalesced (#22; the port's coalesceArmPhis explains):
+    // B: ...; branch to A or J. A: w = f(u); J. J: P = phi(u from B, w from A)
+    // -> u and w take P's register, and both copies go.
+    if (ctx.fwdPhis.count) {
+        for (XTIRBlock *J in blocks) {
+            for (XTIRInsn *P in J.phiNodes) {
+                if (!P.result || ![ctx.fwdPhis containsObject:@(P.result.valueId)] || P.operands.count != 4) continue;
+                NSString *R = ctx.homeReg[@(P.result.valueId)];
+                if (!R) continue;
+                for (NSUInteger side = 0; side < 2; side++) {
+                    XTIRBlock *A = P.operands[2 * side].blockRef, *B = P.operands[2 * (1 - side)].blockRef;
+                    XTIROperand *wo = P.operands[2 * side + 1], *uo = P.operands[2 * (1 - side) + 1];
+                    if (!A || !B || A == B) continue;
+                    if (wo.kind != XTIROperandKindUse || uo.kind != XTIROperandKindUse) continue;
+                    XTIRValueId w = wo.valueId, u = uo.valueId, pv = P.result.valueId;
+                    if (w == u || u == pv || w == pv) continue;
+                    if ([self armPhiOkFn:fn join:J arm:A from:B phi:P u:u w:w reg:R phis:phiResults
+                               addrTaken:addrTaken crossesCall:crossesCall gp:gpRegs fp:fpRegs
+                                 startOf:startOf endOf:endOf ctx:ctx]) {
+                        ctx.homeReg[@(u)] = R;
+                        ctx.homeReg[@(w)] = R;
+                    }
+                    break;
+                }
             }
         }
     }
@@ -3538,6 +3672,40 @@ static BOOL arm64LogicalImm(uint64_t v, int width) {
 // YES if `target` has a phi with an incoming edge from `from` — i.e. branching
 // from `from` to `target` requires edge copies. Used to gate the `cbz`/`cbnz`
 // fusion (which reads a register, not flags) to edges with no intervening copy.
+// A goes only to J, has no phis, and every phi of J taking a value from B
+// takes one from A: so J's copies from B may run before B's branch, as the
+// path through A writes each of them again.
+static BOOL armRejoins(XTIRBlock *a, XTIRBlock *j, XTIRBlock *b) {
+    XTIRInsn *at = a.terminator;
+    if (!at || at.opcode != XTIROpBranch || at.operands.count < 1 || at.operands[0].blockRef != j
+        || a.phiNodes.count != 0) return NO;
+    for (XTIRInsn *ph in j.phiNodes) {
+        BOOL fromB = NO, fromA = NO;
+        for (NSUInteger q = 0; q + 1 < ph.operands.count; q += 2) {
+            if (ph.operands[q].blockRef == b) fromB = YES;
+            if (ph.operands[q].blockRef == a) fromA = YES;
+        }
+        if (fromB && !fromA) return NO;
+    }
+    return YES;
+}
+
+static BOOL sameArm64Reg(NSString *a, NSString *b);
+
+// Whether the copies on the edge from `from` to `to` write the register `home`.
+static BOOL copiesWrite(XTIRBlock *to, XTIRBlock *from, NSString *home, XTArm64FnCtx *ctx) {
+    for (XTIRInsn *phi in to.phiNodes) {
+        if (!phi.result || phi.result.type.kind == XTIRTypeKindMemory) continue;
+        BOOL fromHere = NO;
+        for (NSUInteger k = 0; k + 1 < phi.operands.count; k += 2)
+            if (phi.operands[k].kind == XTIROperandKindBlock && phi.operands[k].blockRef == from) fromHere = YES;
+        if (!fromHere) continue;
+        NSString *h = ctx.homeReg[@(phi.result.valueId)];
+        if (h && sameArm64Reg(h, home)) return YES;
+    }
+    return NO;
+}
+
 static BOOL phiCopiesNeeded(XTIRBlock *target, XTIRBlock *from) {
     if (!target) return NO;
     for (XTIRInsn *phi in target.phiNodes) {
@@ -3579,6 +3747,34 @@ static BOOL takenPhiClobbersFallSrc(XTIRBlock *t, XTIRBlock *f, XTIRBlock *from)
             }
     }
     return NO;
+}
+
+// The bit width tbz/tbnz may test in a value of this integer type, or 0.
+static NSUInteger bitTestWidth(XTIRType *t) {
+    if (!t) return 0;
+    switch (t.kind) {
+        case XTIRTypeKindI8: case XTIRTypeKindU8: return 8;
+        case XTIRTypeKindI16: case XTIRTypeKindU16: return 16;
+        case XTIRTypeKindI32: case XTIRTypeKindU32: return 32;
+        case XTIRTypeKindI64: case XTIRTypeKindU64: return 64;
+        default: return 0;
+    }
+}
+
+// The bit an integer constant 2^k sets (an immediate or a Const), or -1.
+static NSInteger powerOfTwoBit(XTIROperand *o, XTArm64FnCtx *ctx) {
+    int32_t v;
+    if (o.kind == XTIROperandKindImmI) v = (int32_t)o.intValue;
+    else if (o.kind == XTIROperandKindUse) {
+        XTIRInsn *d = ctx.defOf[@(o.valueId)];
+        if (!d || d.opcode != XTIROpConst || !d.result || XTIRTypeKindIsFloating(d.result.type.kind)
+            || d.operands.count < 1 || d.operands[0].kind != XTIROperandKindImmI) return -1;
+        v = (int32_t)d.operands[0].intValue;
+    } else return -1;
+    if (v <= 0 || (v & (v - 1)) != 0) return -1;
+    NSInteger k = 0;
+    while (v > 1) { v >>= 1; k++; }
+    return k;
 }
 
 // If `icmp` is an `x == 0` / `x != 0` test (EQ/NE predicate against an
@@ -4201,6 +4397,38 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
             // negating the predicate. An FCmp fuses into a SELECT, where the flags are read
             // directly and none of it applies.
         }
+    }
+    // A branch on one bit, `(x & 2^k) == 0` or `!= 0`, is tbz/tbnz on x (the
+    // port's computeAddrFold explains).
+    ctx.bitTests = [NSMutableDictionary dictionary];
+    ctx.btAnds = [NSMutableSet set];
+    for (XTIRBlock *bb in fn.blocks) {
+        XTIRInsn *bt = bb.terminator;
+        if (!bt || bt.opcode != XTIROpCondBranch || bt.operands.count < 3) continue;
+        XTIROperand *bc = bt.operands[0];
+        if (bc.kind != XTIROperandKindUse) continue;
+        if (![ctx.fusedCmps containsObject:@(bc.valueId)]) continue;
+        XTIRInsn *cmp = defOf[@(bc.valueId)];
+        if (!cmp || cmp.opcode != XTIROpICmp) continue;
+        if (cmp.predicate != XTIRICmpEQ && cmp.predicate != XTIRICmpNE) continue;
+        XTIROperand *zv = icmpZeroTestValue(cmp, ctx);
+        if (!zv || zv.kind != XTIROperandKindUse) continue;
+        if ([uses countForObject:@(zv.valueId)] != 1) continue;
+        XTIRInsn *an = defOf[@(zv.valueId)];
+        if (!an || an.opcode != XTIROpAnd || an.operands.count != 2 || !an.result) continue;
+        if (![bb.instructions containsObject:an]) continue;
+        NSUInteger w = bitTestWidth(an.result.type);
+        if (w == 0) continue;
+        NSInteger k = -1; XTIROperand *x = nil;
+        for (NSUInteger q = 0; q < 2; q++) {
+            NSInteger kk = powerOfTwoBit(an.operands[q], ctx);
+            if (kk >= 0 && k < 0) { k = kk; x = an.operands[1 - q]; }
+        }
+        if (k < 0 || (NSUInteger)k >= w || !x || x.kind != XTIROperandKindUse) continue;
+        XTIRType *xt = [fn valueForId:x.valueId].type;
+        if (xt && XTIRTypeKindIsFloating(xt.kind)) continue;
+        ctx.bitTests[@(bc.valueId)] = an;
+        [ctx.btAnds addObject:@(an.result.valueId)];
     }
 
     for (XTIRBlock *bb in fn.blocks) {
@@ -4993,6 +5221,19 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
     if (insn.result && [ctx.foldedAddr containsObject:@(insn.result.valueId)]) return;
     // Skip an ICmp fused into its block's CondBranch (emitted there as cmp+b.cond).
     if (insn.result && [ctx.fusedCmps containsObject:@(insn.result.valueId)]) return;
+    // A bit test's And is tbz/tbnz at the branch, unless the fusions made the
+    // And a site or subsumed its x: then it is emitted, and the branch
+    // compares as before.
+    if (insn.result && [ctx.btAnds containsObject:@(insn.result.valueId)]) {
+        BOOL ok = ctx.fuseAt[@(insn.result.valueId)] == nil;
+        for (XTIROperand *o in insn.operands)
+            if (o.kind == XTIROperandKindUse && powerOfTwoBit(o, ctx) < 0 && ([ctx.fusedAway containsObject:@(o.valueId)]
+                || [ctx.foldedAddr containsObject:@(o.valueId)] || [ctx.laneSkip containsObject:@(o.valueId)])) ok = NO;
+        if (ok) return;
+        [ctx.btAnds removeObject:@(insn.result.valueId)];
+        for (NSNumber *key in [ctx.bitTests allKeys])
+            if (ctx.bitTests[key] == insn) [ctx.bitTests removeObjectForKey:key];
+    }
     // Emit the fused form in place of the normal op at a fusion site.
     if (insn.result && ctx.fuseAt[@(insn.result.valueId)]) {
         [self emitFused:ctx.fuseAt[@(insn.result.valueId)] forInsn:insn ctx:ctx];
@@ -5839,7 +6080,43 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 // (not flags), so an intervening copy could clobber the operand,
                 // and the absence also lets the fall-through/inversion peephole
                 // collapse it cleanly. Other edges keep the flags-based path.
-                XTIROperand *zval = icmpZeroTestValue(icmp, ctx);
+                NSString *btCond = nil;
+                if (ctx.bitTests[@(c.valueId)]) {
+                    XTIRInsn *an = ctx.bitTests[@(c.valueId)];
+                    NSInteger k = -1; XTIROperand *x = nil;
+                    for (NSUInteger q = 0; q < 2; q++) {
+                        NSInteger kk = powerOfTwoBit(an.operands[q], ctx);
+                        if (kk >= 0 && k < 0) { k = kk; x = an.operands[1 - q]; }
+                    }
+                    XTIRType *xt = [ctx.fn valueForId:x.valueId].type;
+                    BOOL eq = icmp.predicate == XTIRICmpEQ;
+                    if (!phiCopiesNeeded(t.blockRef, block) && !phiCopiesNeeded(f.blockRef, block)) {
+                        NSString *reg = [self operandReg:x
+                            intoScratch:([self irTypeNeedsXReg:xt] ? @"x16" : @"w16") ctx:ctx];
+                        [ctx.out appendFormat:@"    %@ %@, #%ld, %@\n", eq ? @"tbz" : @"tbnz", reg, (long)k,
+                         [self blockLabelForFn:ctx.fn block:t.blockRef]];
+                        [ctx.out appendFormat:@"    b %@\n",
+                         [self blockLabelForFn:ctx.fn block:f.blockRef]];
+                        break;
+                    }
+                    // An arm that rejoins: the join's copies first, then the
+                    // inverse test to the join, when x has a register those
+                    // copies do not write.
+                    NSString *xh = ctx.homeReg[@(x.valueId)];
+                    if (xh && t.blockRef && t.blockRef == ctx.nextBlock && !phiCopiesNeeded(t.blockRef, block)
+                        && armRejoins(t.blockRef, f.blockRef, block) && !copiesWrite(f.blockRef, block, xh, ctx)) {
+                        [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
+                        [ctx.out appendFormat:@"    %@ %@, #%ld, %@\n", eq ? @"tbnz" : @"tbz",
+                         [self homeView:xh forType:xt], (long)k, [self blockLabelForFn:ctx.fn block:f.blockRef]];
+                        break;
+                    }
+                    // Otherwise the flags: tst, and the branch below as for a cmp.
+                    NSString *tr = [self operandReg:x
+                        intoScratch:([self irTypeNeedsXReg:xt] ? @"x16" : @"w16") ctx:ctx];
+                    [ctx.out appendFormat:@"    tst %@, #%llu\n", tr, (unsigned long long)1 << k];
+                    btCond = [self condStringForICmpPredicate:icmp.predicate];
+                }
+                XTIROperand *zval = btCond ? nil : icmpZeroTestValue(icmp, ctx);
                 if (zval &&
                     !phiCopiesNeeded(t.blockRef, block) &&
                     !phiCopiesNeeded(f.blockRef, block)) {
@@ -5856,7 +6133,7 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                      [self blockLabelForFn:ctx.fn block:f.blockRef]];
                     break;
                 }
-                NSString *cond = [self emitCompareForICmp:icmp ctx:ctx];
+                NSString *cond = btCond ?: [self emitCompareForICmp:icmp ctx:ctx];
                 if (takenPhiClobbersFallSrc(t.blockRef, f.blockRef, block)) {
                     // Taken copies would clobber a value the fall copies read;
                     // emit them on the taken path only (invert to skip to fall).
@@ -5872,6 +6149,21 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                     [ctx.out appendFormat:@"%@:\n", Lf];
                     [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
                     [ctx.out appendFormat:@"    b %@\n",
+                     [self blockLabelForFn:ctx.fn block:f.blockRef]];
+                    break;
+                }
+                // The next block is an arm that rejoins the other edge's
+                // target (a Select made a branch again, #22): the other
+                // edge's copies go before the branch. The phi's register is
+                // its own, and the arm's own copy rewrites it, so the arm
+                // falls through with no stub.
+                if (t.blockRef && t.blockRef == ctx.nextBlock && !phiCopiesNeeded(t.blockRef, block)
+                    && phiCopiesNeeded(f.blockRef, block) && armRejoins(t.blockRef, f.blockRef, block)) {
+                    [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
+                    XTIRICmpPredicate invp =
+                        [self negateICmpPredicate:(XTIRICmpPredicate)icmp.predicate];
+                    [ctx.out appendFormat:@"    b.%@ %@\n",
+                     [self condStringForICmpPredicate:(uint8_t)invp],
                      [self blockLabelForFn:ctx.fn block:f.blockRef]];
                     break;
                 }
@@ -8105,7 +8397,7 @@ static NSUInteger simdUse(NSArray *ops, NSString *m, NSInteger r) {
         condSel = [NSSet setWithArray:@[@"fcsel", @"csel", @"csinc", @"csinv", @"csneg", @"cset", @"csetm", @"cinc", @"cneg"]];
         writers = [NSSet setWithArray:@[@"cmn", @"tst", @"adds", @"subs", @"ands", @"bics", @"negs", @"fcmp", @"fcmpe",
                                         @"ccmp", @"ccmn", @"fccmp", @"bl", @"blr", @"b", @"ret", @"br"]];
-        neutral = [NSSet setWithArray:@[@"fcsel", @"csel", @"csinc", @"csinv", @"csneg", @"cset", @"csetm", @"fadd", @"fsub", @"fmul", @"fdiv", @"fmadd", @"fmsub", @"fnmadd", @"fnmsub", @"fnmul", @"fneg", @"fabs", @"fmov", @"mov", @"movz", @"movk", @"and", @"orr", @"eor", @"add", @"sub", @"lsl", @"lsr", @"asr", @"mul", @"madd", @"msub", @"ldr", @"ldrb", @"ldrh", @"ldrsw", @"str", @"strb", @"strh", @"ucvtf", @"scvtf", @"fcvtzu", @"fcvtzs", @"fcvt", @"sxtw", @"uxtw", @"ubfx", @"sbfx"]];
+        neutral = [NSSet setWithArray:@[@"fcsel", @"csel", @"csinc", @"csinv", @"csneg", @"cset", @"csetm", @"fadd", @"fsub", @"fmul", @"fdiv", @"fmadd", @"fmsub", @"fnmadd", @"fnmsub", @"fnmul", @"fneg", @"fabs", @"fmov", @"mov", @"movz", @"movk", @"and", @"orr", @"eor", @"add", @"sub", @"lsl", @"lsr", @"asr", @"mul", @"madd", @"msub", @"ldr", @"ldrb", @"ldrh", @"ldrsw", @"str", @"strb", @"strh", @"ucvtf", @"scvtf", @"fcvtzu", @"fcvtzs", @"fcvt", @"sxtw", @"uxtw", @"ubfx", @"sbfx", @"tbz", @"tbnz"]];
     }
     BOOL (^eqNe)(NSString *) = ^BOOL(NSString *c) { return [c isEqualToString:@"eq"] || [c isEqualToString:@"ne"]; };
     BOOL (^barrier)(NSString *) = ^BOOL(NSString *t) {
@@ -8178,7 +8470,7 @@ static NSUInteger simdUse(NSArray *ops, NSString *m, NSInteger r) {
 + (NSString *)peepholeRedundantCmp:(NSString *)text {
     static NSSet<NSString *> *neutral = nil;
     if (!neutral)
-        neutral = [NSSet setWithArray:@[@"fcsel", @"csel", @"csinc", @"csinv", @"csneg", @"cset", @"csetm", @"fadd", @"fsub", @"fmul", @"fdiv", @"fmadd", @"fmsub", @"fnmadd", @"fnmsub", @"fnmul", @"fneg", @"fabs", @"fmov", @"mov", @"movz", @"movk", @"and", @"orr", @"eor", @"add", @"sub", @"lsl", @"lsr", @"asr", @"mul", @"madd", @"msub", @"ldr", @"ldrb", @"ldrh", @"ldrsw", @"str", @"strb", @"strh", @"ucvtf", @"scvtf", @"fcvtzu", @"fcvtzs", @"fcvt", @"sxtw", @"uxtw", @"ubfx", @"sbfx"]];
+        neutral = [NSSet setWithArray:@[@"fcsel", @"csel", @"csinc", @"csinv", @"csneg", @"cset", @"csetm", @"fadd", @"fsub", @"fmul", @"fdiv", @"fmadd", @"fmsub", @"fnmadd", @"fnmsub", @"fnmul", @"fneg", @"fabs", @"fmov", @"mov", @"movz", @"movk", @"and", @"orr", @"eor", @"add", @"sub", @"lsl", @"lsr", @"asr", @"mul", @"madd", @"msub", @"ldr", @"ldrb", @"ldrh", @"ldrsw", @"str", @"strb", @"strh", @"ucvtf", @"scvtf", @"fcvtzu", @"fcvtzs", @"fcvt", @"sxtw", @"uxtw", @"ubfx", @"sbfx", @"tbz", @"tbnz"]];
     NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
     NSMutableArray<NSString *> *out = [NSMutableArray arrayWithCapacity:lines.count];
     NSString *last = nil, *ra = nil, *rb = nil;
@@ -8368,7 +8660,7 @@ static BOOL arm64NamesFrameReg(NSString *t) {
                       @"ls":@"hi",@"hi":@"ls",@"lt":@"ge",@"ge":@"lt",
                       @"le":@"gt",@"gt":@"le",@"mi":@"pl",@"pl":@"mi",
                       @"cc":@"cs",@"cs":@"cc",@"vs":@"vc",@"vc":@"vs",
-                      @"cbz":@"cbnz",@"cbnz":@"cbz"};
+                      @"cbz":@"cbnz",@"cbnz":@"cbz",@"tbz":@"tbnz",@"tbnz":@"tbz"};
     NSMutableArray<NSString *> *lines = [[text componentsSeparatedByString:@"\n"] mutableCopy];
     NSString *(^labelOf)(NSString *) = ^NSString *(NSString *ln){
         NSString *t = [ln stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
@@ -8396,7 +8688,8 @@ static BOOL arm64NamesFrameReg(NSString *t) {
             }
             // Conditional `b.<c> LT` or `cb(n)z reg, LT`, then `b LF`, then a label.
             BOOL isDot = [t hasPrefix:@"b."];
-            BOOL isCb  = [t hasPrefix:@"cbz "] || [t hasPrefix:@"cbnz "];
+            BOOL isTb  = [t hasPrefix:@"tbz "] || [t hasPrefix:@"tbnz "];
+            BOOL isCb  = isTb || [t hasPrefix:@"cbz "] || [t hasPrefix:@"cbnz "];
             if (!isDot && !isCb) continue;
             NSInteger j = nextReal(i);
             if (j < 0) continue;
@@ -8418,9 +8711,12 @@ static BOOL arm64NamesFrameReg(NSString *t) {
                 NSRange sp = [t rangeOfString:@" "];
                 mnem = [t substringToIndex:sp.location];               // "cbz"/"cbnz"
                 NSArray *ops = [[t substringFromIndex:sp.location + 1] componentsSeparatedByString:@","];
-                if (ops.count != 2) continue;
+                if (ops.count != (isTb ? 3 : 2)) continue;
+                // tbz/tbnz: the register and the bit, which stay as they are.
                 reg = [ops[0] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
-                LT  = [ops[1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+                if (isTb) reg = [NSString stringWithFormat:@"%@, %@", reg,
+                    [ops[1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]]];
+                LT  = [ops.lastObject stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
             }
             if ([nextLbl isEqualToString:LF]) {
                 // Uncond target is laid out next → drop the `b LF`.
@@ -9268,7 +9564,7 @@ static BOOL arm64NamesFrameReg(NSString *t) {
     [out appendString:@"\n"];
     NSUInteger aliasLo = 0, aliasHi = NSUIntegerMax;
     [self aliasableRangeForCtx:ctx lo:&aliasLo hi:&aliasHi];
-    [moduleOut appendString:
+    [moduleOut appendString:[self tbzInRange:
         [self elideLeafFrame:[self expandStagedSlots:
             [self peepholeFallthrough:[self peepholeUsra:[self peepholeRedundantCmp:[self peepholeAndsFold:[self peepholeCopyProp:
              [self peepholeRedundantReloads:
@@ -9277,7 +9573,79 @@ static BOOL arm64NamesFrameReg(NSString *t) {
                                   argArea:ctx.maxOutStack]]]]]]]
                        frameBase:ctx.frameBase
                     saveAreaFrom:ctx.saveAreaOffset
-                              to:ctx.saveAreaOffset + 8 * ctx.savedRegs.count]]];
+                              to:ctx.saveAreaOffset + 8 * ctx.savedRegs.count]] ctx:ctx]];
+}
+
+// tbz/tbnz reach +/-32 KB and the assembler does not relax them (the port's
+// tbzInRange explains): a test whose target may lie further than 24 KB away
+// becomes the inverse test over a `b`.
+static NSUInteger asmLineBytes(NSString *t) {
+    if (!t.length || [t hasSuffix:@":"] || [t hasPrefix:@"//"]) return 0;
+    if (![t hasPrefix:@"."]) return 4;
+    NSString *d = [[t componentsSeparatedByString:@" "][0]
+                   stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    NSString *rest = [[t substringFromIndex:d.length]
+                      stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+    NSUInteger n = 0;
+    for (NSUInteger i = 0; i < rest.length; i++) {
+        unichar c = [rest characterAtIndex:i];
+        if (c < '0' || c > '9') break;
+        n = n * 10 + (NSUInteger)(c - '0');
+    }
+    if ([d isEqualToString:@".p2align"] || [d isEqualToString:@".align"]) return n < 16 ? ((NSUInteger)1 << n) : 65536;
+    if ([d isEqualToString:@".balign"]) return n;
+    if ([d isEqualToString:@".space"] || [d isEqualToString:@".zero"] || [d isEqualToString:@".skip"]) return n;
+    NSUInteger items = [rest componentsSeparatedByString:@","].count;
+    if ([@[@".quad", @".xword", @".8byte", @".double"] containsObject:d]) return items * 8;
+    if ([@[@".word", @".long", @".4byte", @".inst", @".float", @".int"] containsObject:d]) return items * 4;
+    if ([@[@".hword", @".short", @".2byte"] containsObject:d]) return items * 2;
+    if ([d isEqualToString:@".byte"]) return items;
+    if ([d hasPrefix:@".asci"] || [d isEqualToString:@".string"]) return rest.length;
+    return 0;
+}
+
++ (NSString *)tbzInRange:(NSString *)text ctx:(XTArm64FnCtx *)ctx {
+    if ([text rangeOfString:@"tbz "].location == NSNotFound && [text rangeOfString:@"tbnz "].location == NSNotFound)
+        return text;
+    NSCharacterSet *ws = [NSCharacterSet whitespaceCharacterSet];
+    NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
+    NSMutableDictionary<NSString *, NSNumber *> *at = [NSMutableDictionary dictionary];
+    NSMutableArray<NSNumber *> *off = [NSMutableArray array];
+    NSUInteger pos = 0;
+    for (NSString *ln in lines) {
+        NSString *t = [ln stringByTrimmingCharactersInSet:ws];
+        [off addObject:@(pos)];
+        if (t.length > 1 && [t hasSuffix:@":"]) at[[t substringToIndex:t.length - 1]] = @(pos);
+        pos += asmLineBytes(t);
+    }
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (NSUInteger i = 0; i < lines.count; i++) {
+        NSString *t = [lines[i] stringByTrimmingCharactersInSet:ws];
+        if ([t hasPrefix:@"tbz "] || [t hasPrefix:@"tbnz "]) {
+            NSRange sp = [t rangeOfString:@" "];
+            NSArray<NSString *> *ops = [[t substringFromIndex:sp.location + 1] componentsSeparatedByString:@","];
+            if (ops.count == 3) {
+                NSString *L = [ops[2] stringByTrimmingCharactersInSet:ws];
+                NSNumber *to = at[L];
+                NSUInteger here = off[i].unsignedIntegerValue;
+                BOOL near = to && (to.unsignedIntegerValue > here ? to.unsignedIntegerValue - here
+                                                                  : here - to.unsignedIntegerValue) <= 24576;
+                if (!near) {
+                    NSString *mn = [t substringToIndex:sp.location];
+                    NSString *inv = [mn isEqualToString:@"tbz"] ? @"tbnz" : @"tbz";
+                    NSString *fnl = [ctx.fn.name stringByReplacingOccurrencesOfString:@"$" withString:@"_"];
+                    NSString *skip = [NSString stringWithFormat:@".L%@_tbr_%lu", fnl, (unsigned long)ctx.labelCounter++];
+                    [out addObject:[NSString stringWithFormat:@"    %@ %@, %@, %@", inv,
+                        [ops[0] stringByTrimmingCharactersInSet:ws], [ops[1] stringByTrimmingCharactersInSet:ws], skip]];
+                    [out addObject:[NSString stringWithFormat:@"    b %@", L]];
+                    [out addObject:[NSString stringWithFormat:@"%@:", skip]];
+                    continue;
+                }
+            }
+        }
+        [out addObject:lines[i]];
+    }
+    return [out componentsJoinedByString:@"\n"];
 }
 
 #pragma mark - Public

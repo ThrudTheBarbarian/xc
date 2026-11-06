@@ -135,6 +135,10 @@
     {
     return NO;
     }
+- (BOOL)selectsBranch
+    {
+    return NO;
+    }
 - (BOOL)vectorizesLoops
     {
     return NO;
@@ -378,6 +382,11 @@
     }
 
 - (BOOL)devirtualises
+    {
+    return YES;
+    }
+
+- (BOOL)selectsBranch
     {
     return YES;
     }

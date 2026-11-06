@@ -28,6 +28,7 @@
 #import "XTIROptSimplify.h"
 #import "XTIROptVecCombine.h"
 #import "XTIROptFpContract.h"
+#import "XTIROptSelectBranch.h"
 #import "XTIROptBlockLayout.h"
 #import "XTIROptLoopRotate.h"
 #import "XTIROptBlockMerge.h"
@@ -335,6 +336,11 @@
         // may round once (owner, 2026-10-26). After everything that rebuilds
         // instructions, so the mark is not lost on the way.
         [p addPass:[[XTIROptFpContract alloc] init]];
+        // A float Select whose arm computes, on one bit, becomes a branch
+        // again (#22); before the layout, which orders the blocks it makes.
+        XTIROptSelectBranch* sb = [[XTIROptSelectBranch alloc] init];
+        sb.profile = profile;
+        [p addPass:sb];
         // LAST: order the blocks so a conditional branch's expected successor
         // falls through. Nothing after this may reorder or add blocks, and
         // nothing before it is affected — the pass rewrites no instruction,
