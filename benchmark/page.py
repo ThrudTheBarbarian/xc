@@ -1442,7 +1442,7 @@ twelve percent), the thick line the geometric mean (over the benchmarks the mean
 
 {hist_x86}
 
-## What is being compared, and what is not
+## What is being compared
 
 **The compiler that ships.** The xc numbers come from the `xcc` in the download{arm_note}.
 
