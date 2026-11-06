@@ -139,6 +139,7 @@ const SIDEBAR = [
 						{ label: 'C programs', slug: 'compiler/usage/c-programs' },
 						{ label: 'CLI flag reference', slug: 'compiler/usage/cli' },
 						{ label: 'Debugging', slug: 'compiler/usage/debugging' },
+						{ label: 'Environment & settings', slug: 'compiler/usage/environment' },
 						{ label: 'Install', slug: 'compiler/usage/install' },
 						{ label: 'Linker scripts (.lnk)', slug: 'compiler/usage/linker-scripts' },
 						{ label: 'Memory models', slug: 'compiler/usage/memory-models' },

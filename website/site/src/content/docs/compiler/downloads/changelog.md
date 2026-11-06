@@ -3,6 +3,108 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.9.4 — virtual calls in loops, and the Raspberry Pi's GPU and CPU code
+
+Everything since 0.9.3.
+
+### Faster
+
+- **A virtual call in a loop can become a direct call.** When the
+  receiver's class has at most four small methods for the call in the
+  program, the loop tests the class and calls the method directly, so it can
+  be inlined; any other class still dispatches. When the receiver does not
+  change in the loop, the test runs once before it, and each class gets its
+  own copy of the loop, which can then be unrolled and vectorised like any
+  other. `method_call`: 0.92 s to 0.10 s on an M4 Max, 1.41 s to 0.060 s on
+  an x86-64 Core i5-14500. `poly_dispatch`, whose receivers change with every
+  element: 1.04 s to 0.51 s on that Core i5, 1.51 s to 0.94 s on an M3 Max.
+  On an M4 Max, where indirect calls are cheap, it is slower (0.53 s to
+  0.60 s).
+- **Raspberry Pi 5 GPU: loops inside a `par` block run well.** A `par` body
+  with an inner loop of a fixed trip is unrolled so the V3D GPU counts it in
+  one group, and `sqrt` is the GPU's own instruction. The nbody benchmark on
+  the Pi's GPU: 110.7 ms to 32.6 ms.
+- **Vulkan: byte arrays are byte buffers.** A store to an array of bytes was
+  two atomic operations on its word; with Vulkan's 8-bit storage it is one
+  store. perlin on the Pi's GPU: 119.8 ms to 96.7 ms, and 80 ms to 68 ms
+  with `par` auto. A GPU without 8-bit storage runs such a block on the CPU.
+- **arm64: loops of independent vector chains are unrolled twice.** A loop
+  that updates several independent vectors (`v = v * k + c` for each) now
+  writes each result to a register other than its input. On one Pi 5 core:
+  10.6 to 15.5 GFLOPS, and 42.5 to 62.2 GFLOPS on four.
+- **arm64: a loop's exit leaves it out of line, and arm64 Linux aligns its
+  loops.** A loop whose exit needs copies jumps out to them instead of
+  jumping over them on every pass, and `x == 0` against an unsigned value is
+  one `cbz`. Loop heads on arm64 Linux are aligned to 32 bytes, as they
+  already were on macOS: without it, the same loop ran at whatever speed its
+  address gave it (poly_dispatch on a Pi 5 core took 1.94 s or 2.68 s by
+  where the link put it). On a Pi 5 core: sort_small 4.50 s to 3.50 s
+  (clang: 3.25 s), sieve 4.40 s to 4.25 s.
+- **arm64: more registers for floats, and fewer compares.** Four more float
+  registers hold values between calls, a C cast from float to integer
+  converts straight into its result, and a compare the flags already hold is
+  not repeated. C perlin on one Pi 5 core: 403 ms to 358 ms (clang: 339 ms,
+  GCC: 282 ms).
+- **arm64: a shifted term adds into its vector total in one instruction**
+  (`usra`). int_muldiv on one Pi 5 core: 5.99 s to 5.46 s, level with
+  clang; on an M4 Max 1.31 s to 1.15 s.
+- **Linking on macOS is much faster.** The Mach-O writer sorted and searched
+  its symbols in quadratic time. Linking xcc itself took 299 s and 1.52 GB;
+  it now takes 3.3 s and 702 MB, with byte-identical output.
+- **A loop of a few items stays where it is.** `--par-style=auto` no longer
+  makes an innermost loop of under 256 items, known at compile time, into a
+  `par` block, which cost a launch every time the code around it ran.
+
+### Fixed
+
+- **C on macOS: programs using `fopen`, `fputs` or `fwrite` link.** The
+  SDK declares them under assembler names, which xcc read as private
+  constants, so the link failed with undefined `cg_` symbols.
+- **Vulkan on an integrated GPU: freeing an array the GPU shared is safe.**
+  An array an integrated GPU (Radeon, the Pi's V3D) used in place stayed
+  mapped in the runtime after it was freed, so a later array at the same
+  address could be handed to the GPU with stale pages; RADV rejected the
+  work. The runtime now lets go of the array when it is freed, as the CUDA
+  runtime already did.
+
+### Documentation
+
+- **[Environment & settings](/compiler/usage/environment/)**, a new page:
+  every environment variable a program or xcc reads, in one place, and the
+  settings store each program keeps on macOS (`defaults`), Windows (the
+  registry, `HKEY_CURRENT_USER\Software\<program>`), Linux, Android and the
+  Raspberry Pi (`~/.config/<program>.conf`) and in a browser, with the
+  commands to read, set and remove what is there, and what `par` keeps in
+  it.
+
+### Benchmarks
+
+- **Where xc stands.** Over the nineteen benchmarks in the means, xc's code
+  runs 1.28x faster than clang's C++ on an M3 Max (0.9.3: 1.10x), 1.29x on
+  a Ryzen 9 9955HX (0.9.3: 1.07x) and 1.21x on a Raspberry Pi 5 (0.9.3:
+  1.08x). One benchmark carries much of that: `method_call`, whose virtual
+  call is now direct, runs 9x faster than in 0.9.3 on the M3 Max and 49x on
+  the Ryzen. Without it, xc is 1.13x faster than clang on the M3 Max, 1.04x
+  on the Ryzen and 1.09x on the Pi. On the Ryzen that is a little below
+  0.9.3's 1.06x without it: xc's times are unchanged there, and clang's
+  `array_map` and `array_sum` ran faster in this run (the same clang 21.1.8
+  gives them two different speeds from run to run). The
+  [performance page](/compiler/performance/) has every figure and says
+  which benchmark weighs most.
+- **Against GCC** xc is 1.32x faster on the M3 Max, 1.58x on the Ryzen and
+  1.36x on the Pi (0.9.3: 1.13x, 1.23x, 1.21x).
+- **The Pi 5's GPU**: nbody 110.7 ms to 32.5 ms, perlin 119.2 ms to
+  96.7 ms (and 80.0 ms to 65.4 ms with `par` auto choosing).
+- **The C suite** on the Ryzen is unchanged from 0.9.3: xcc's single-thread
+  code is 2.47x faster than clang's and 2.30x faster than GCC's. On the
+  Raspberry Pi 5 it is 1.31x faster than clang's and 1.50x faster than GCC's
+  (0.9.3: 1.29x and 1.48x), with perlin 1.13x faster than in 0.9.3.
+- **Measured twice where it had to be.** The release was re-cut once: its
+  first build made `sieve` 28% slower on macOS, which the benchmarks caught.
+  The x86 C suite and the Linux and Windows `par` CPU figures were measured
+  again on idle machines, because CI work had shared those machines during
+  the first run.
+
 ## Version 0.9.3 — xcc on the Raspberry Pi, for real, and far less memory
 
 Everything since 0.9.2.

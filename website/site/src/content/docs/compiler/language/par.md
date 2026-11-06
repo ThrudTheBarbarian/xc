@@ -464,7 +464,8 @@ the same memory. That is why the sets are measured rather than assumed, and
 why on an Apple-silicon Mac or a machine with an integrated GPU `auto`
 usually keeps a memory-bound block on the CPU.
 
-To choose instead, in order of precedence:
+To choose instead, in order of precedence (every variable and settings key is
+listed in [Environment & settings](/compiler/usage/environment/)):
 
 - `XC_PAR=cpu`, `XC_PAR=gpu`, `XC_PAR=gpus` (every GPU, tiled),
   `XC_PAR=all` (every GPU and the CPU) or `XC_PAR=auto` in the

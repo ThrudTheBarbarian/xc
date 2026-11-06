@@ -67,6 +67,9 @@ store is the platform's:
 | arm9, m68k | the same text file when the target gives a home directory (`$HOME`); else a [`memory`](#memory) store | the file |
 | xt6502 | none: a [`memory`](#memory) store, whose [`save`](#save) returns `false` | — |
 
+[Environment & settings](/compiler/usage/environment/) shows how to read, set
+and remove values in each of these stores by hand, and what `par` keeps there.
+
 [`path`](#path) is `0` for the three native stores and names the file for the
 others. On macOS a reverse-DNS name such as `com.example.demo` is the
 convention, as it is for any app's preferences.
