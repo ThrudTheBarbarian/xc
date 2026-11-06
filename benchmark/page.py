@@ -38,6 +38,14 @@ PLATFORMS = (("arm64", ""), ("x86-64", "_x86_64"))
 # Benchmarks whose sources changed in a way that makes their earlier times
 # incomparable, and the release from which their times are comparable again.
 CHANGED_IN = {"arc_alloc": "v0.64-langs", "method_call": "v0.64-langs"}
+
+
+def release_key(v):
+    """Releases read as decimals: 0.9 follows 0.89, and 0.9.1 follows 0.9."""
+    p = v.lstrip("v").split(".")
+    if not all(x.isdigit() for x in p):
+        return (-1, 0.0, 0)
+    return (int(p[0]), float("0." + p[1]) if len(p) > 1 else 0.0, int(p[2]) if len(p) > 2 else 0)
 # Benchmarks quoted on their own, outside the geometric means: one kernel the
 # compiler recognises and replaces would otherwise swing a mean that stands
 # for general code.
@@ -451,6 +459,31 @@ def summary(cur):
                                if d["O3"].get("xc" + suf) and d["O3"].get(l + suf)]))
         out.append("| %s | **%s** | **%s** |" % (name, speed(vals[0]), speed(vals[1])))
     return "\n".join(out)
+
+
+def weight(cur):
+    """When one benchmark moves the clang mean by more than 5% on either
+    target, say which and give the means without it, so a reader can tell a
+    gain across the board from one large one (0.9.4: method_call, a virtual
+    call in a loop made direct, 9x on arm64 and 49x on x86-64, carried most
+    of the clang mean's gain)."""
+    g = general(cur)
+    def mean(suf, drop=None):
+        return gmean([d["O3"]["xc" + suf] / d["O3"]["cpp" + suf] for b, d in g.items()
+                      if b != drop and d["O3"].get("xc" + suf) and d["O3"].get("cpp" + suf)])
+    worst = None
+    for b in g:
+        shift = max(abs(1 - mean(suf, b) / mean(suf)) for _, suf in PLATFORMS)
+        if worst is None or shift > worst[1]:
+            worst = (b, shift)
+    if worst is None or worst[1] <= 0.05:
+        return ""
+    b = worst[0]
+    each = [speed(g[b]["O3"]["xc" + suf] / g[b]["O3"]["cpp" + suf]) for _, suf in PLATFORMS]
+    without = [speed(mean(suf, b)) for _, suf in PLATFORMS]
+    return ("One benchmark weighs heavily in the C++ (clang) means: xc runs `%s` %s than clang's "
+            "on arm64 and %s on x86-64. Without it, over the other %d, xc's code is %s than "
+            "clang's on arm64 and %s on x86-64." % (b, each[0], each[1], len(g) - 1, without[0], without[1]))
 
 
 def separate(cur):
@@ -893,9 +926,13 @@ def main():
     cur = load(a.current)
     versions = a.history.split(",")
     hist = {v: load(v) for v in versions}
+    # A benchmark whose program changed is left out of the releases before
+    # the change only; it was left out of every release (the current one
+    # too), because the test asked for "v0.64-langs" among the versions.
     for b, since in CHANGED_IN.items():
-        if since not in versions:
-            for v in versions:
+        first = since.split("-")[0]
+        for v in versions:
+            if release_key(v) < release_key(first):
                 hist[v].pop(b, None)
 
     tc = toolchain_notes(a.current)
@@ -909,6 +946,7 @@ def main():
         tc_x86=tc.get("x86_64", ""),
         summary=summary(cur),
         standing=standing(cur),
+        weight=weight(cur),
         separate=separate(cur),
         history_note=(
             "On arm64 every release's xc was timed again on the %s with today's programs, and is "
@@ -1281,6 +1319,8 @@ over nineteen of the twenty-two benchmarks:
 {summary}
 
 {standing}
+
+{weight}
 
 Three benchmarks are kept out of those means. xcc recognises the loop nest of
 `matrix_mul_f32` and replaces it with a matrix kernel of its own, which makes xc

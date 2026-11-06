@@ -8,7 +8,7 @@ description: A par block's tiles on a GPU in another machine, served by xcd, bes
 RTX 5080, on the local network, and two machines use it: an Apple MacBook Pro
 with an M3 Max, whose own GPU is fast, and a Linux machine with an AMD Ryzen 9
 9955HX, whose only GPU is integrated. Each figure is measured with the
-released 0.9.3 `xcc`.
+released 0.9.4 `xcc`.
 
 Each program runs four ways: on the machine alone (`XC_PAR_REMOTE=none`), on
 the remote GPU alone (`XC_PAR_WORKERS=remote`), on every GPU, the machine's
