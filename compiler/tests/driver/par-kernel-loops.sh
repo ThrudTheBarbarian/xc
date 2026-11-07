@@ -87,10 +87,22 @@ i = b.find(struct.pack('<I', 0x07230203))
 if i < 0:
     print('no SPIR-V module'); sys.exit(1)
 w = lambda o: struct.unpack_from('<I', b, o)[0]
+# The module's length in words is on the metadata line before it
+# (`... spirv=<words> ...`). Walking until something stops looking like an
+# instruction ran on into whatever the linker put after the module, which
+# then failed spirv-val as a file that is not whole words (2026-11-07).
+end = len(b)
+j = b.rfind(b'spirv=', max(0, i - 256), i)
+if j >= 0:
+    k = j + 6
+    while k < i and 48 <= b[k] <= 57:
+        k += 1
+    if k > j + 6:
+        end = min(end, i + 4 * int(b[j + 6:k]))
 o = i + 20
 consts, ults, sqrts = {}, [], 0
 caps8, atomics = False, 0
-while o + 4 <= len(b):
+while o + 4 <= end:
     x = w(o); n = x >> 16; op = x & 0xffff
     if n == 0 or (op > 400 and op not in (4446, 4447, 5341)):
         break
