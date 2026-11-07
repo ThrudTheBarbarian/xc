@@ -459,8 +459,21 @@ class ParTiles
     // size of the best. The findings are saved as priors (ParDevice.
     // saveProbe, learn) and reported; the caller then runs the block for
     // real, from them. Owner 2026-10-16: boundaries found, not evolved.
+    // What the probe leaves for probeDecide: its best CPU and GPU times, and
+    // the arrays as they were before it ran, to put back after Par's
+    // whole-block CPU run.
+    static i64 _probeCpuUs;
+    static i64 _probeGpuUs;
+    static ParLayout* _probeL;
+    static u8* _probeObj;
+    static Array* _probeKeptBuf;
+    static Array* _probeKeptGlob;
+
     static bool probe(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
+        _probeCpuUs = (i64)-1;
+        _probeGpuUs = (i64)-1;
+        _probeL = (ParLayout*)0;
         ParDevice.setProbed(proto);
         ParTiles.ready();
         if (_workers.count() == (u32)0 || !ParDevice.hasKernel(src))
@@ -558,11 +571,41 @@ class ParTiles
         ParTiles.restore(l, obj, keptBuf, keptGlob);
         if (record.byteLength() > (u32)0)
             ParDevice.saveProbe(proto, record);
-        // The device crossover at this size, as a prior for auto: the CPU
-        // pool against the best single GPU.
-        if (bestCpuUs >= (i64)0 && bestGpuUs >= (i64)0)
-            ParDevice.learn(ParDevice.slot(proto.parName()), proto, n, bestCpuUs <= bestGpuUs ? (i32)1 : (i32)2);
+        _probeCpuUs = bestCpuUs;
+        _probeGpuUs = bestGpuUs;
+        _probeL = l;
+        _probeObj = obj;
+        _probeKeptBuf = keptBuf;
+        _probeKeptGlob = keptGlob;
         return true;
+        }
+
+    // The arrays as they were before the probe, again (after Par's CPU run).
+    static void probeRestore()
+        {
+        if (_probeL != (ParLayout*)0)
+            ParTiles.restore(_probeL, _probeObj, _probeKeptBuf, _probeKeptGlob);
+        }
+
+    // The device crossover at this size, as a prior for auto: the CPU against
+    // the best single GPU. The CPU's time is the faster of the pool's tiles
+    // and cpuWholeUs, the CPU path's own run of the whole block (Par), which
+    // is how a run on the CPU goes: the pool runs each tile on one lane, and
+    // on a Raspberry Pi 5 that rated the cores at 29.8k items a ms where the
+    // CPU path does 46.7k, so the probe learned the V3D for a Mandelbrot the
+    // cores run 1.3x as fast (2026-11-07).
+    static void probeDecide(ParChunk* proto, i64 n, i64 cpuWholeUs)
+        {
+        i64 cpu = _probeCpuUs;
+        if (cpuWholeUs > (i64)0 && (cpu < (i64)0 || cpuWholeUs < cpu))
+            cpu = cpuWholeUs;
+        if (ParDevice.reporting() && cpuWholeUs > (i64)0)
+            Log.info("par: probe: %s: the CPU path, whole: %ld us", proto.parName(), cpuWholeUs);
+        if (cpu >= (i64)0 && _probeGpuUs >= (i64)0)
+            ParDevice.learn(ParDevice.slot(proto.parName()), proto, n, cpu <= _probeGpuUs ? (i32)1 : (i32)2);
+        _probeL = (ParLayout*)0;
+        _probeKeptBuf = (Array*)0;
+        _probeKeptGlob = (Array*)0;
         }
     static void restore(ParLayout* l, u8* obj, Array* keptBuf, Array* keptGlob)
         {

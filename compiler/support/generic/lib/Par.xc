@@ -412,8 +412,18 @@ class Par
 #if !ARCH_wasm32
         // XC_PAR_PROBE=1: the block's first run is a sweep of tile sizes per
         // worker, written as priors (ParTiles.probe); the run itself follows.
-        if (ParDevice.probing() && !ParDevice.probed(proto))
-            ParTiles.probe(proto, proto.gpuSource(), lo, hi);
+        // Then one run of the whole block on the CPU path, as auto would time
+        // it, on a scratch copy, and the arrays put back: the probe's choice
+        // of CPU or GPU compares that with the GPU (ParTiles.probeDecide).
+        if (ParDevice.probing() && !ParDevice.probed(proto) && ParTiles.probe(proto, proto.gpuSource(), lo, hi))
+            {
+            ParChunk* scratch = proto.copyChunk();
+            i64 t0 = ParDevice.nowUs();
+            Par.runCpu(scratch, lo, hi);
+            i64 us = ParDevice.nowUs() - t0;
+            ParTiles.probeRestore();
+            ParTiles.probeDecide(proto, hi - lo, us);
+            }
 #endif
         i32 choice = ParDevice.choose(proto, hi - lo);
 #if !ARCH_wasm32
