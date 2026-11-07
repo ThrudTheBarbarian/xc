@@ -604,6 +604,9 @@
             _inlineChecks = true;
             self.inlineLeaves(m);
             _inlineChecks = false;
+            // The inlined checks' trap paths end where the trap is called, so
+            // a loop holds no call for them (trapCut).
+            self.trapCut(m);
             if (stopHere(String.withCString("inline-checks")))
                 return;
             }

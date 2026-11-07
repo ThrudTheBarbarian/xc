@@ -263,6 +263,12 @@
             if (b == other || chHas(seen, b)) continue;
             if (b.term() == (IRInsn*)0) return (Array*)0;
             seen.add((Object*)b);
+            // A block that leaves without a branch (a Return) escapes the loop;
+            // one that ends in Unreachable (a failed check's trap, trapCut)
+            // does not take anything out of it. As the reference.
+            if (b.term().ops().count() == (u32)0 && !b.term().op().equals(String.withCString("Branch"))
+                && !b.term().op().equals(String.withCString("Unreachable")))
+                return (Array*)0;
             if (seen.count() > (u32)8) return (Array*)0;
             for (u32 q = (u32)0; q < b.term().ops().count(); q = q + (u32)1)
                 {

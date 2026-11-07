@@ -30,6 +30,7 @@
 #import "XTIROptFpContract.h"
 #import "XTIROptSelectBranch.h"
 #import "XTIROptBlockLayout.h"
+#import "XTIROptTrapCut.h"
 #import "XTIROptLoopRotate.h"
 #import "XTIROptBlockMerge.h"
 #import "XTIROptReassociate.h"
@@ -189,6 +190,9 @@
             checks.profile = profile;
             checks.checksOnly = YES;
             [p addPass:checks];
+            // The inlined checks' trap paths end where the trap is called, so
+            // a loop holds no call for them.
+            [p addPass:[[XTIROptTrapCut alloc] init]];
         }
         // Recognise byte-fill loops as memset BEFORE unrolling (else the fill
         // loop gets unrolled instead of collapsed to a call).

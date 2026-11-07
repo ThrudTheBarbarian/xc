@@ -164,8 +164,12 @@ static BOOL chOnCycle(XTIRBlock* b)
                 if (b == other || [seen containsObject:b]) continue;
                 [seen addObject:b];
                 if (!b.terminator) { escaped = YES; break; }
+                // A block that leaves without a branch (a Return) escapes the
+                // loop; one that ends in Unreachable (a failed check's trap,
+                // XTIROptTrapCut) does not take anything out of it.
                 if (b.terminator.operands.count == 0 &&
-                    b.terminator.opcode != XTIROpBranch) { escaped = YES; break; }
+                    b.terminator.opcode != XTIROpBranch &&
+                    b.terminator.opcode != XTIROpUnreachable) { escaped = YES; break; }
                 for (XTIROperand* o in b.terminator.operands)
                     if (o.kind == XTIROperandKindBlock && o.blockRef)
                         [work addObject:o.blockRef];

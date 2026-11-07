@@ -22,6 +22,9 @@ NS_ASSUME_NONNULL_BEGIN
 // par-check answers, is what makes these: the side of a lifted loop's site it
 // does not take must not stay in the function. As the port's constBranches.
 @interface XTIROptConstBranches : NSObject <XTIROptPass>
+/// Drops the blocks no path from the entry reaches, and their memory tokens
+/// (XTIROptTrapCut uses it too).
+- (void)dropUnreachable:(XTIRFunction*)fn;
 @end
 
 NS_ASSUME_NONNULL_END

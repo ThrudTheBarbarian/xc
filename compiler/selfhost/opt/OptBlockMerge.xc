@@ -98,6 +98,109 @@
         return changed;
         }
 
+    // A check that fails calls a trap that never returns (_xt_check_trap,
+    // _xt_check_cast_trap). Ending its block there, with Unreachable, takes
+    // the trap's path out of the loop it sits in: the loop's body then holds
+    // no call, and the loads the check made of an array's header (its magic
+    // and its count) are loop-invariant and hoist (issue #28). Lowering
+    // carries a join on from one side's memory token rather than merging
+    // them, so a token the trap made may be named after the join: it is
+    // renamed to the token the trap call took, which is the state on every
+    // path that does not trap.
+    final bool trapCutIsTrap(IRInsn* n)
+        {
+        if (!n.op().equals(String.withCString("Call")) || n.ops().count() < (u32)1)
+            return false;
+        IROperand* c = (IROperand*)n.ops().get((u32)0);
+        if (c.kind() != (u8)OPK_SYM || c.name() == 0)
+            return false;
+        return c.name().equals(String.withCString("_xt_check_trap"))
+            || c.name().equals(String.withCString("_xt_check_cast_trap"));
+        }
+
+    final void trapCut(IRModule* m)
+        {
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            Map* rename = new Map();   // a dropped memory token -> the trap's own input
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                    {
+                    IRInsn* n = (IRInsn*)bb.insns().get(i);
+                    if (!trapCutIsTrap(n))
+                        continue;
+                    IRValue* memIn = (IRValue*)0;
+                    for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                        {
+                        IROperand* o = (IROperand*)n.ops().get(k);
+                        if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && o.val().ty() != (String*)0
+                            && o.val().ty().equals(String.withCString("Mem")))
+                            memIn = o.val();
+                        }
+                    if (memIn == (IRValue*)0)
+                        continue;
+                    // Already cut: nothing after the trap, and Unreachable.
+                    if (i + (u32)1 == bb.insns().count() && bb.term() != (IRInsn*)0
+                        && bb.term().op().equals(String.withCString("Unreachable")))
+                        break;
+                    if (n.memRes() != (IRValue*)0)
+                        rename.set((Hashable*)n.memRes(), (Object*)memIn);
+                    while (bb.insns().count() > i + (u32)1)
+                        {
+                        IRInsn* d = (IRInsn*)bb.insns().get(bb.insns().count() - (u32)1);
+                        if (d.memRes() != (IRValue*)0)
+                            rename.set((Hashable*)d.memRes(), (Object*)memIn);
+                        bb.insns().removeAt(bb.insns().count() - (u32)1);
+                        }
+                    IRInsn* u = IRInsn.with(String.withCString("Unreachable"));
+                    if (bb.term() != (IRInsn*)0)
+                        u.copyDbg(bb.term());
+                    bb.setTerm(u);
+                    break;
+                    }
+                }
+            if (rename.count() == (u32)0)
+                continue;
+            // A renamed token may itself map on (one trap's input made by
+            // another cut block's call): follow the chain to its end.
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                    trapCutRename((IRInsn*)bb.phis().get(i), rename);
+                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                    trapCutRename((IRInsn*)bb.insns().get(i), rename);
+                if (bb.term() != (IRInsn*)0)
+                    trapCutRename(bb.term(), rename);
+                }
+            cbDropUnreachable(fn);
+            pruneStaleIncomings(fn);
+            }
+        }
+
+    final void trapCutRename(IRInsn* n, Map* rename)
+        {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                continue;
+            IRValue* to = o.val();
+            for (u32 hop = (u32)0; hop < (u32)64; hop = hop + (u32)1)
+                {
+                Object* next = rename.get((Hashable*)to);
+                if (next == (Object*)0)
+                    break;
+                to = (IRValue*)next;
+                }
+            if (to != o.val())
+                n.ops().set(k, (Object*)IROperand.useVal(to));
+            }
+        }
+
     // The blocks a path from the entry reaches, in the function's order.
     final void cbDropUnreachable(IRFunc* fn)
         {
