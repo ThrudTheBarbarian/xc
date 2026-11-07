@@ -45,7 +45,9 @@ remembers the choice, per program and per machine, so later runs do not measure
 again. Every mode's checksum must agree. On Windows *GPU* is CUDA and *Vulkan*
 the same work through Vulkan (`XC_PAR_GPU=vulkan`).
 
-**Apple MacBook Pro, M3 Max, a 40-core GPU (12 performance and 4 efficiency cores), its GPU through Metal** (ms; best of eight runs)
+### Apple M3 Max
+
+Apple MacBook Pro, M3 Max, a 40-core GPU (12 performance and 4 efficiency cores), its GPU through Metal (ms; best of eight runs)
 
 | benchmark | one thread | all threads | GPU | all devices | `auto` | GPU vs all threads | GPU's first run |
 |---|---|---|---|---|---|---|---|
@@ -56,7 +58,9 @@ the same work through Vulkan (`XC_PAR_GPU=vulkan`).
 | [`perlin`](/compiler/benchmark-sources/#perlin) | 70.1 | 6.1 | 1.2 | 1.2 | 1.3 | 5.0× faster | 24.4 |
 | [`saxpy`](/compiler/benchmark-sources/#saxpy) | 1.5 | 1.1 | 3.8 | 4.6 | 1.1 | 3.5× slower | 3.8 |
 
-**AMD Ryzen 9 9955HX (16 cores, 32 threads), Linux, its integrated Radeon 610M (2 compute units, 128 shader lanes) through Vulkan** (ms; best of eight runs)
+### AMD Ryzen 9 9955HX
+
+AMD Ryzen 9 9955HX (16 cores, 32 threads), Linux, its integrated Radeon 610M (2 compute units, 128 shader lanes) through Vulkan (ms; best of eight runs)
 
 | benchmark | one thread | all threads | GPU | all devices | `auto` | GPU vs all threads | GPU's first run |
 |---|---|---|---|---|---|---|---|
@@ -67,7 +71,9 @@ the same work through Vulkan (`XC_PAR_GPU=vulkan`).
 | [`perlin`](/compiler/benchmark-sources/#perlin) | 83.7 | 6.0 | 5.3 | 5.4 | 4.1 | 1.12× faster | 29.0 |
 | [`saxpy`](/compiler/benchmark-sources/#saxpy) | 3.3 | 2.2 | 9.9 | 3.0 | 2.3 | 4.5× slower | 9.9 |
 
-**Intel Core i5-14500 (14 cores, 20 threads), Linux, an NVIDIA RTX 5070 through CUDA and Vulkan (from 0.88)** (ms; best of eight runs)
+### Intel Core i5-14500 with an RTX 5070
+
+Intel Core i5-14500 (14 cores, 20 threads), Linux, an NVIDIA RTX 5070 through CUDA and Vulkan (from 0.88) (ms; best of eight runs)
 
 | benchmark | one thread | all threads | GPU | Vulkan | all devices | `auto` | GPU vs all threads | GPU's first run | Vulkan's first run |
 |---|---|---|---|---|---|---|---|---|---|
@@ -78,7 +84,9 @@ the same work through Vulkan (`XC_PAR_GPU=vulkan`).
 | [`perlin`](/compiler/benchmark-sources/#perlin) | 111 | 10.6 | 367 µs | 1.1 | 401 µs | 374 µs | 29× faster | 208 | 113 |
 | [`saxpy`](/compiler/benchmark-sources/#saxpy) | 4.5 | 2.5 | 6.3 | 25.9 | 3.6 | 2.4 | 2.5× slower | 10.6 | 31.6 |
 
-**Raspberry Pi 5 (four Cortex-A76 cores at 2.4 GHz), Raspberry Pi OS, its VideoCore VII GPU (V3D 7.1) through Vulkan (from 0.89)** (ms; best of eight runs)
+### Raspberry Pi 5
+
+Raspberry Pi 5 (four Cortex-A76 cores at 2.4 GHz), Raspberry Pi OS, its VideoCore VII GPU (V3D 7.1) through Vulkan (from 0.89) (ms; best of eight runs)
 
 | benchmark | one thread | all threads | GPU | all devices | `auto` | GPU vs all threads | GPU's first run |
 |---|---|---|---|---|---|---|---|
@@ -90,7 +98,9 @@ the same work through Vulkan (`XC_PAR_GPU=vulkan`).
 | [`perlin`](/compiler/benchmark-sources/#perlin) | 325 | 81.4 | 96.7 | 95.6 | 63.9 | 1.19× slower | 145 |
 | [`saxpy`](/compiler/benchmark-sources/#saxpy) | 25.9 | 34.5 | 130 | 104 | 26.2 | 3.8× slower | 134 |
 
-**AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 through CUDA and an RTX 3090 through Vulkan** (ms; best of eight runs)
+### AMD Ryzen 9 5950X with an RTX 5080 and an RTX 3090
+
+AMD Ryzen 9 5950X (16 cores, 32 threads), Windows, an NVIDIA RTX 5080 through CUDA and an RTX 3090 through Vulkan (ms; best of eight runs)
 
 | benchmark | one thread | all threads | GPU | all GPUs | Vulkan | all devices | `auto` | GPU vs all threads | GPU's first run | Vulkan's first run |
 |---|---|---|---|---|---|---|---|---|---|---|
@@ -101,7 +111,9 @@ the same work through Vulkan (`XC_PAR_GPU=vulkan`).
 | [`perlin`](/compiler/benchmark-sources/#perlin) | 132 | 8.3 | 446 µs | 477 µs | 1.0 | 370 µs | 441 µs | 18.7× faster | 78.2 | 157 |
 | [`saxpy`](/compiler/benchmark-sources/#saxpy) | 4.8 | 3.1 | 5.4 | 5.4 | 29.6 | 3.3 | 3.0 | 1.76× slower | 16.0 | 31.0 |
 
-**Chrome on the Apple M4 Max: wasm32 (one thread) and WebGPU (from 0.73); measured with 0.86, as the M3 Max has no Chrome** (ms; best of eight runs)
+### Chrome: wasm32 and WebGPU
+
+Chrome on the Apple M4 Max: wasm32 (one thread) and WebGPU (from 0.73); measured with 0.86, as the M3 Max has no Chrome (ms; best of eight runs)
 
 | benchmark | one thread | all threads | GPU | `auto` | GPU vs one thread | GPU's first run |
 |---|---|---|---|---|---|---|

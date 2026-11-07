@@ -21,7 +21,9 @@ run of the program, after one run has measured and kept its choice: what a
 program settles on. A remote-only figure counts only if every block ran on
 the remote GPU. Every mode's checksum must agree.
 
-**Apple M4 Max (Metal), using the remote RTX 5080** (ms; best of eight runs; measured with 0.9.5)
+## From an Apple M4 Max
+
+Apple M4 Max (Metal), using the remote RTX 5080 (ms; best of eight runs; measured with 0.9.5)
 
 | benchmark | this machine | the remote GPU | every GPU | `auto`, first run | `auto`, once learned |
 |---|---|---|---|---|---|
@@ -30,7 +32,9 @@ the remote GPU. Every mode's checksum must agree.
 | [`md5`](/compiler/benchmark-sources/#md5) | 4.5 | 202 | 105 | 4.6 | 4.2 |
 | [`saxpy`](/compiler/benchmark-sources/#saxpy) | 520 µs | 245 | 97.7 | 896 µs | 523 µs |
 
-**AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080** (ms; best of eight runs; measured with 0.9.5)
+## From an AMD Ryzen 9 9955HX
+
+AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080 (ms; best of eight runs; measured with 0.9.5)
 
 | benchmark | this machine | the remote GPU | every GPU | `auto`, first run | `auto`, once learned |
 |---|---|---|---|---|---|
@@ -39,7 +43,9 @@ the remote GPU. Every mode's checksum must agree.
 | [`md5`](/compiler/benchmark-sources/#md5) | 9.4 | 43.9 | 33.2 | 9.6 | 9.4 |
 | [`saxpy`](/compiler/benchmark-sources/#saxpy) | 2.5 | 342 | 112 | 3.4 | 2.3 |
 
-**Raspberry Pi 5 with its V3D GPU (Vulkan), using the remote RTX 5080** (ms; best of eight runs; measured with 0.9.5)
+## From a Raspberry Pi 5
+
+Raspberry Pi 5 with its V3D GPU (Vulkan), using the remote RTX 5080 (ms; best of eight runs; measured with 0.9.5)
 
 | benchmark | this machine | the remote GPU | every GPU | `auto`, first run | `auto`, once learned |
 |---|---|---|---|---|---|
@@ -49,7 +55,7 @@ the remote GPU. Every mode's checksum must agree.
 | [`saxpy`](/compiler/benchmark-sources/#saxpy) | 26.8 | 891 | 420 | 34.4 | 26.7 |
 
 
-What the tables show:
+## What the tables show
 
 - **A remote GPU pays where a block computes much from little data.** From
   the Raspberry Pi, `mandel_deep` runs about ten times faster on the remote RTX

@@ -6,14 +6,16 @@ description: Plain C built by xcc, against the same C built by GCC and clang, on
 xcc compiles C ([C programs](/compiler/usage/c-programs/)): it reads a `.c`
 file through clang's front end and generates the code itself. These are the
 seven par benchmarks as plain C, the same files for every compiler, timed on
-one machine: an AMD Ryzen 9 9955HX (32 hardware threads) running Linux, with xcc
-0.9.5, GCC 15.2 and clang 21.1.
+an AMD Ryzen 9 9955HX (32 hardware threads) running Linux, with xcc 0.9.5,
+GCC 15.2 and clang 21.1, and on a Raspberry Pi 5.
 
-The two sections below measure different things and are never mixed: one
-thread is the code each core runs; every thread adds how a compiler spreads
-a loop across the cores.
+Each machine has two tables, which measure different things and are never
+mixed: one thread is the code each core runs; every thread adds how a
+compiler spreads a loop across the cores.
 
-## One thread
+## AMD Ryzen 9 9955HX
+
+### One thread
 
 Each compiler builds the plain C with no parallel code: `xcc -O3` against
 `gcc -O3 -march=native` and `clang -O3 -march=native`.
@@ -39,7 +41,7 @@ each multiply and each add on its own, as ISO C describes it, so its results
 are the ones the C standard gives. `perlin` is mostly multiply-adds, and that
 difference is a large part of its gap.
 
-## Every thread
+### Every thread
 
 The same C, run across all 32 threads:
 
@@ -68,13 +70,15 @@ Milliseconds; the median of up to fifteen runs. xcc is ahead of both on
 The same programs on GPUs, where `--par-style=auto` sends them by default, are on
 [Performance: GPU](/compiler/benchmarks/gpu/).
 
-## A Raspberry Pi 5
+## Raspberry Pi 5
 
 The same seven programs on a Raspberry Pi 5 Model B Rev 1.0 (Cortex-A76), its 4 cores, under Raspberry Pi
 OS: xcc 0.9.5 cross-built them with `-A arm64-linux`; GCC 14.2 and clang 19.1
 built them on the Pi, with the same flags as above.
 
-One thread, milliseconds; the median of up to fifteen runs:
+### One thread
+
+Milliseconds; the median of up to fifteen runs:
 
 | benchmark | xcc | GCC | clang | xcc against GCC | xcc against clang |
 |---|---|---|---|---|---|
@@ -87,8 +91,10 @@ One thread, milliseconds; the median of up to fifteen runs:
 | `saxpy` | 30.8 | 30.5 | 29.8 | **1.01× slower** | **1.03× slower** |
 | geometric mean | | | | **1.52× faster** | **1.32× faster** |
 
-Every thread (xcc `--par-style=auto`, GCC and clang with OpenMP), milliseconds. xcc
-is ahead of both on 5 of the 7:
+### Every thread
+
+xcc `--par-style=auto`, GCC and clang with OpenMP, milliseconds. xcc is ahead
+of both on 5 of the 7:
 
 | benchmark | xcc | GCC | clang | xcc against GCC | xcc against clang |
 |---|---|---|---|---|---|

@@ -498,7 +498,7 @@ def mean_count(cur):
              "twenty-five", "twenty-six", "twenty-seven", "twenty-eight", "twenty-nine", "thirty"]
     n, all_ = len(general(cur)), len(cur)
     say = lambda k: words[k] if k < len(words) else str(k)
-    return "%s of the %s" % (say(n), say(all_)), say(all_ - n).capitalize()
+    return "%s of the %s" % (say(n), say(all_)), say(all_ - n).capitalize(), say(all_)
 
 
 def separate(cur):
@@ -591,6 +591,15 @@ PAR_MACHINES = (("mac", "Apple MacBook Pro, %s (12 performance and 4 efficiency 
                             "and an RTX 3090 through Vulkan", True),
                 ("browser", "Chrome on the Apple M4 Max: wasm32 (one thread) and WebGPU (from 0.73); "
                             "measured with 0.86, as the M3 Max has no Chrome", False))
+
+# Each machine's heading on the GPU page, so the page's contents list names
+# the machines as the CPU page's does.
+PAR_HEADINGS = {"mac": "Apple %s",
+                "linux": "AMD Ryzen 9 9955HX",
+                "linuxgpu": "Intel Core i5-14500 with an RTX 5070",
+                "pi": "Raspberry Pi 5",
+                "windows": "AMD Ryzen 9 5950X with an RTX 5080 and an RTX 3090",
+                "browser": "Chrome: wasm32 and WebGPU"}
 
 
 def par_mac():
@@ -693,6 +702,7 @@ def remote_tables(version):
                 res.setdefault(b, {})[m] = row
     # The Mac client is the machine par/remote.py runs on (the M4 Max), not
     # the Mac whose CPU figures --mac names.
+    heads = {"mac": "From an Apple M4 Max", "linux": "From an AMD Ryzen 9 9955HX", "pi": "From a Raspberry Pi 5"}
     names = {"mac": "Apple M4 Max (Metal), using the remote RTX 5080",
              "linux": "AMD Ryzen 9 9955HX with its integrated Radeon (Vulkan), using the remote RTX 5080",
              "pi": "Raspberry Pi 5 with its V3D GPU (Vulkan), using the remote RTX 5080"}
@@ -703,7 +713,8 @@ def remote_tables(version):
             continue
         older = sorted({r.get("measured_with") for _, r in rows} - {None})
         note = "; measured with %s" % ", ".join(older) if older else ""
-        out.append("**%s** (ms; best of eight runs%s)\n" % (names[m], note))
+        out.append("## %s\n" % heads[m])
+        out.append("%s (ms; best of eight runs%s)\n" % (names[m], note))
         out.append("| benchmark | this machine | the remote GPU | every GPU | `auto`, first run | `auto`, once learned |")
         out.append("|---|---|---|---|---|---|")
         for b, r in rows:
@@ -732,7 +743,9 @@ def par_tables(version):
             continue
         gpu = any("gpu" in r for _, r in rows)
         vk = any("vulkan" in r for _, r in rows)   # Windows from 0.72: CUDA and Vulkan
-        out.append("**%s** (ms; best of eight runs)\n" % name)
+        head = PAR_HEADINGS[m] % par_mac().split(",")[0] if "%s" in PAR_HEADINGS[m] else PAR_HEADINGS[m]
+        out.append("### %s\n" % head)
+        out.append("%s (ms; best of eight runs)\n" % name)
         # "all GPUs" only where there are two or more to combine (0.8).
         gpus_m = multi_gpu and any("gpus" in r for _, r in rows)
         alldev = any("all" in r for _, r in rows)     # all devices (from 0.8)
@@ -989,6 +1002,7 @@ def main():
         standing=standing(cur),
         skew=skew_note(cur),
         mean_count=mean_count(cur)[0],
+        n_bench=mean_count(cur)[2],
         kept_out=mean_count(cur)[1],
         separate=separate(cur),
         history_note=(
@@ -1193,14 +1207,16 @@ description: Plain C built by xcc, against the same C built by GCC and clang, on
 xcc compiles C ([C programs](/compiler/usage/c-programs/)): it reads a `.c`
 file through clang's front end and generates the code itself. These are the
 seven par benchmarks as plain C, the same files for every compiler, timed on
-one machine: an {cpu} ({threads} hardware threads) running Linux, with xcc
-{release}, {gcc} and {clang}.
+an {cpu} ({threads} hardware threads) running Linux, with xcc {release},
+{gcc} and {clang}, and on a Raspberry Pi 5.
 
-The two sections below measure different things and are never mixed: one
-thread is the code each core runs; every thread adds how a compiler spreads
-a loop across the cores.
+Each machine has two tables, which measure different things and are never
+mixed: one thread is the code each core runs; every thread adds how a
+compiler spreads a loop across the cores.
 
-## One thread
+## {cpu}
+
+### One thread
 
 Each compiler builds the plain C with no parallel code: `xcc -O3` against
 `gcc -O3 -march=native` and `clang -O3 -march=native`.
@@ -1217,7 +1233,7 @@ each multiply and each add on its own, as ISO C describes it, so its results
 are the ones the C standard gives. `perlin` is mostly multiply-adds, and that
 difference is a large part of its gap.
 
-## Every thread
+### Every thread
 
 The same C, run across all {threads} threads:
 
@@ -1256,18 +1272,22 @@ and in the repository's `benchmark/par/c/` and `benchmark/par/c/openmp/`;
 # The Raspberry Pi's section of the C page (c_run.py --machine pi, from 0.89):
 # xcc builds there from another host (-A arm64-linux), GCC and clang on the Pi.
 C_PI_TEMPLATE = """
-## A Raspberry Pi 5
+## Raspberry Pi 5
 
 The same seven programs on a {cpu}, its {threads} cores, under Raspberry Pi
 OS: xcc {release} cross-built them with `-A arm64-linux`; {gcc} and {clang}
 built them on the Pi, with the same flags as above.
 
-One thread, milliseconds; the median of up to fifteen runs:
+### One thread
+
+Milliseconds; the median of up to fifteen runs:
 
 {one}
 
-Every thread (xcc `--par-style=auto`, GCC and clang with OpenMP), milliseconds. xcc
-is ahead of both on {all_wins} of the {n}:
+### Every thread
+
+xcc `--par-style=auto`, GCC and clang with OpenMP, milliseconds. xcc is ahead
+of both on {all_wins} of the {n}:
 
 {all}
 
@@ -1302,7 +1322,7 @@ the remote GPU. Every mode's checksum must agree.
 
 {remote}
 
-What the tables show:
+## What the tables show
 
 - **A remote GPU pays where a block computes much from little data.** From
   the Raspberry Pi, `mandel_deep` runs about ten times faster on the remote RTX
@@ -1339,10 +1359,10 @@ configured Raspberry Pi.
 
 PAGE_TEMPLATE = """---
 title: "Performance: CPU"
-description: How xcc-compiled code compares with clang's Objective-C and C++, with GCC's C++ and with Swift on the same programs, measured on twenty benchmarks across arm64 and x86-64.
+description: How xcc-compiled code compares with clang's Objective-C and C++, with GCC's C++ and with Swift on the same programs, measured on {n_bench} benchmarks across arm64 and x86-64.
 ---
 
-The compiler is measured on twenty programs, each written four times: in the
+The compiler is measured on {n_bench} programs, each written four times: in the
 xc language, in Objective-C with ARC, in C++ and in Swift, doing the same work
 with the same algorithm and the same data. All are built with optimisation
 (`-O3` for xc, Objective-C and C++, `-O` for Swift), every version prints a
@@ -1364,6 +1384,10 @@ Swift. xc needs no flag for that: with its default `-msimd=auto`, xcc builds
 each vectorised function for SSE2, AVX2 and AVX-512 and the program picks one
 when it starts. Nothing else is set: no link-time optimisation, no
 profile-guided build, no `-ffast-math`, on any side.
+
+Every program runs on one thread: xc's `par` blocks, and the loops xcc lifts
+into them, are held to one CPU thread for this suite, and the other
+languages' builds use no threading. SIMD is used on every side.
 
 Times are seconds for the timed region, the best of five runs, each run waiting
 until the machine is otherwise idle.

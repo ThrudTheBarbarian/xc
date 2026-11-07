@@ -1,9 +1,9 @@
 ---
 title: "Performance: CPU"
-description: How xcc-compiled code compares with clang's Objective-C and C++, with GCC's C++ and with Swift on the same programs, measured on twenty benchmarks across arm64 and x86-64.
+description: How xcc-compiled code compares with clang's Objective-C and C++, with GCC's C++ and with Swift on the same programs, measured on twenty-two benchmarks across arm64 and x86-64.
 ---
 
-The compiler is measured on twenty programs, each written four times: in the
+The compiler is measured on twenty-two programs, each written four times: in the
 xc language, in Objective-C with ARC, in C++ and in Swift, doing the same work
 with the same algorithm and the same data. All are built with optimisation
 (`-O3` for xc, Objective-C and C++, `-O` for Swift), every version prints a
@@ -26,6 +26,10 @@ Swift. xc needs no flag for that: with its default `-msimd=auto`, xcc builds
 each vectorised function for SSE2, AVX2 and AVX-512 and the program picks one
 when it starts. Nothing else is set: no link-time optimisation, no
 profile-guided build, no `-ffast-math`, on any side.
+
+Every program runs on one thread: xc's `par` blocks, and the loops xcc lifts
+into them, are held to one CPU thread for this suite, and the other
+languages' builds use no threading. SIMD is used on every side.
 
 Times are seconds for the timed region, the best of five runs, each run waiting
 until the machine is otherwise idle.
