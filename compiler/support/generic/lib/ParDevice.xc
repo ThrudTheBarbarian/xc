@@ -140,6 +140,15 @@ i64 gParProgUs[1280];   // five candidates an entry: cpu, gpu, gpus, all, remote
 i64 gParProgCpu1[256];  // and the one-thread run's, which the record carries last
 u32 gParProgCount[64];
 bool gParLearned[64];
+// A block's two GPU kernels (#6): which one auto keeps per block and device
+// (0 not known, 1 plain, 2 trips), which one a measuring run is timing (0
+// none), and the two times (-1 not yet; [i*2] plain, [i*2+1] trips). The
+// slot of the block being run, for wantsTrips, which sees only its source.
+u32 gParVarKept[64];
+u32 gParVarNow[64];
+i64 gParVarUs[128];
+bool gParVarRead[64];
+i32 gParRunSlot = (i32)-1;
 bool gParProbed[64];    // XC_PAR_PROBE: the block's first run was the sweep
 i64 gParMeasN[64];
 i64 gParLastN[64];
@@ -825,6 +834,93 @@ class ParDevice
         return key;
         }
 
+    // The kernel a block keeps on this device, or the times measured so far:
+    // `plain`, `trips`, or `<plain us>,<trips us>` while auto measures (so a
+    // program that runs the block once per process still finishes).
+    static String* variantKey(u32 i, ParChunk* proto)
+        {
+        String* key = keyHead("variant");
+        key.append(_hw);
+        key.appendCString(".");
+        key.appendCString(gParBlock[i]);
+        key.appendFormat(".%08x", hash(proto.gpuSource(), (u32)2166136261));
+        return key;
+        }
+
+    static void readVariant(u32 i, ParChunk* proto)
+        {
+        if (gParVarRead[i] || _hw == (String*)0)
+            return;
+        gParVarRead[i] = true;
+        gParVarUs[i * (u32)2] = (i64)-1;
+        gParVarUs[i * (u32)2 + (u32)1] = (i64)-1;
+        String* v = store().get(variantKey(i, proto));
+        if (v == (String*)0)
+            return;
+        if (v.equals(String.withCString("plain")))
+            gParVarKept[i] = (u32)1;
+        else if (v.equals(String.withCString("trips")))
+            gParVarKept[i] = (u32)2;
+        else
+            {
+            u8* c = v.cString();
+            u32 at = (u32)0;
+            for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1)
+                {
+                bool ng = c[at] == (u8)'-';
+                if (ng) at = at + (u32)1;
+                i64 x = num(c, &at);
+                gParVarUs[i * (u32)2 + k] = ng ? (i64)-1 : x;
+                if (c[at] == (u8)',') at = at + (u32)1;
+                }
+            }
+        }
+
+    static void saveVariant(u32 i, ParChunk* proto)
+        {
+        if (_hw == (String*)0)
+            return;
+        String* v = gParVarKept[i] == (u32)1 ? String.withCString("plain")
+                  : gParVarKept[i] == (u32)2 ? String.withCString("trips")
+                  : String.withFormat("%ld,%ld", gParVarUs[i * (u32)2], gParVarUs[i * (u32)2 + (u32)1]);
+        Settings* st = store();
+        st.set(variantKey(i, proto), v);
+        st.save();
+        }
+
+    // A GPU candidate's timed run, for a block with two kernels: true while
+    // the other kernel still has to be timed (the next run takes it; the GPU
+    // is not settled yet), false once both are, with *best the faster time and
+    // the faster kernel kept. A block with one kernel, or one whose kernel is
+    // already kept, settles at once.
+    static bool variantPending(u32 i, ParChunk* proto, i64 t, i64* best)
+        {
+        *best = t;
+        if (gParVarNow[i] == (u32)0 || gParVarKept[i] != (u32)0)
+            return false;
+        u32 cur = gParVarNow[i] - (u32)1;
+        gParVarUs[i * (u32)2 + cur] = t;
+        i64 other = gParVarUs[i * (u32)2 + ((u32)1 - cur)];
+        if (other < (i64)0)
+            {
+            gParVarNow[i] = (u32)2 - cur;           // the other kernel, next
+            gParWarmRuns[i * (u32)5] = (u32)0;      // which warms up again
+            saveVariant(i, proto);
+            if (reporting())
+                Log.info("par: %s: auto times the %s kernel next", gParBlock[i], cur == (u32)0 ? "trips" : "plain");
+            return true;
+            }
+        i64 p = gParVarUs[i * (u32)2];
+        i64 q = gParVarUs[i * (u32)2 + (u32)1];
+        gParVarKept[i] = q < p ? (u32)2 : (u32)1;
+        *best = q < p ? q : p;
+        saveVariant(i, proto);
+        if (reporting())
+            Log.info("par: %s: auto keeps the %s kernel (plain %ld us, trips %ld us)", gParBlock[i],
+                     gParVarKept[i] == (u32)2 ? "trips" : "plain", p, q);
+        return false;
+        }
+
     // ── the probe (XC_PAR_PROBE=1) ─────────────────────────────────────
     // A block's first run sweeps tile sizes per worker and writes what it
     // found as PRIORS: the device crossover into the learned record, the
@@ -1312,6 +1408,8 @@ class ParDevice
 
     static i32 choose(ParChunk* proto, i64 n)
         {
+        gParRunSlot = (i32)slot(proto.parName());
+        readVariant((u32)gParRunSlot, proto);
         if (_mode == (i32)0)
             {
             String* v = Platform.env(String.withCString("XC_PAR"));
@@ -1778,11 +1876,10 @@ class ParDevice
             measured = warm;
             }
 #else
-        if (gParMeasuring[bi] && gParGpuUs[bi] < (i64)0 && warmTime(bi, (u32)0, took, &warm))
-            {
+        // A block with two kernels times both before the GPU is settled (#6).
+        if (gParMeasuring[bi] && gParGpuUs[bi] < (i64)0 && warmTime(bi, (u32)0, took, &warm)
+            && !variantPending(bi, proto, warm, &measured))
             decided = true;
-            measured = warm;
-            }
 #endif
         if (decided)
             {
@@ -1897,6 +1994,17 @@ class ParDevice
     // test (gpu-kernel-variants.md). sectionOf takes the plain one unless
     // gParWantTrips is set (sectionFor sets it for a device), and then the
     // variant where the block has one, the plain one where it has not.
+    // Whether the block carries a trips variant of this kind: sectionOf
+    // asked for the variant returns it, or the plain kernel where there is none.
+    static bool hasTripsVariant(u8* src, u8* kind, bool native)
+        {
+        bool w = gParWantTrips;
+        gParWantTrips = true;
+        u8* r = ParDevice.sectionOf(src, kind, native);
+        gParWantTrips = w;
+        return r != (u8*)0 && headerHasTrips(r);
+        }
+
     static bool headerHasTrips(u8* s)
         {
         for (u32 h = (u32)0; s[h] != (u8)0 && s[h] != (u8)10; h = h + (u32)1)
@@ -1945,6 +2053,29 @@ class ParDevice
             return true;
         if (e.equals(String.withCString("plain")))
             return false;
+#if !PAR_CUDA
+        // The kernel auto kept for this block on this device, or the one a
+        // measuring run is timing (#6): each starts from the rule below.
+        if (gParRunSlot >= (i32)0)
+            {
+            u32 i = (u32)gParRunSlot;
+            if (gParVarKept[i] != (u32)0)
+                return gParVarKept[i] == (u32)2;
+            if (gParMeasuring[i] && gParVarNow[i] == (u32)0 && gParVarUs[i * (u32)2] < (i64)0
+                && gParVarUs[i * (u32)2 + (u32)1] < (i64)0)
+                gParVarNow[i] = ruleTrips(kind, dev) ? (u32)2 : (u32)1;
+            else if (gParMeasuring[i] && gParVarNow[i] == (u32)0)
+                gParVarNow[i] = gParVarUs[i * (u32)2] < (i64)0 ? (u32)1 : (u32)2;   // the one not timed yet
+            if (gParVarNow[i] != (u32)0)
+                return gParVarNow[i] == (u32)2;
+            }
+#endif
+        return ruleTrips(kind, dev);
+        }
+
+    // The fixed rule, for a device auto has not measured and for forced modes.
+    static bool ruleTrips(u8* kind, String* dev)
+        {
         if (kind[0] == (u8)'p')
             return true;
         if (kind[0] != (u8)'s' || dev == (String*)0)
@@ -1957,6 +2088,12 @@ class ParDevice
     // sectionOf for a device: the variant it runs best where the block has one.
     static u8* sectionFor(u8* src, u8* kind, bool native, String* dev)
         {
+        // A block that carries one kernel has nothing to choose between.
+        if (gParRunSlot >= (i32)0 && !hasTripsVariant(src, kind, native))
+            {
+            gParVarNow[(u32)gParRunSlot] = (u32)0;
+            gParVarKept[(u32)gParRunSlot] = (u32)1;
+            }
         gParWantTrips = ParDevice.wantsTrips(kind, dev);
         u8* r = ParDevice.sectionOf(src, kind, native);
         gParWantTrips = false;
