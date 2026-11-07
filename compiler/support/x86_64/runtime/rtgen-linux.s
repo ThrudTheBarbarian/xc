@@ -370,7 +370,75 @@ _xt_fmt_f:                              # @_xt_fmt_f
 	.type	_xt_stack_guard_init,@function
 _xt_stack_guard_init:                   # @_xt_stack_guard_init
 # %bb.0:
+	push	rbx
 	mov	qword ptr [rsp - 8], 0
+	lea	rdi, [rsp - 8]
+	mov	eax, 318
+	mov	esi, 8
+	xor	edx, edx
+	#APP
+
+	syscall
+
+	#NO_APP
+	cmp	rax, 8
+	jne	.LBB6_1
+# %bb.2:
+	cmp	qword ptr [rsp - 8], 0
+	je	.LBB6_3
+.LBB6_9:
+	cmp	qword ptr [rsp - 8], 0
+	je	.LBB6_10
+.LBB6_11:
+	mov	rax, -256
+	and	rax, qword ptr [rsp - 8]
+	movabs	rcx, 6364786164175470592
+	cmovne	rcx, rax
+	mov	qword ptr [rip + __xt_stack_guard], rcx
+	pop	rbx
+	ret
+.LBB6_1:
+	mov	qword ptr [rsp - 8], 0
+	cmp	qword ptr [rsp - 8], 0
+	jne	.LBB6_9
+.LBB6_3:
+	xor	esi, esi
+	mov	eax, 1
+	xor	ecx, ecx
+	#APP
+
+	.byte	15
+	.byte	162
+
+	#NO_APP
+	test	ecx, 1073741824
+	je	.LBB6_8
+# %bb.4:
+	mov	ecx, 10
+                                        # implicit-def: $rsi
+	.p2align	4, 0x90
+.LBB6_5:                                # =>This Inner Loop Header: Depth=1
+	#APP
+
+	.byte	72
+	.byte	15
+	.byte	199
+	.byte	240
+
+	#NO_APP
+	test	rax, rax
+	cmovne	rsi, rax
+	jne	.LBB6_8
+# %bb.6:                                #   in Loop: Header=BB6_5 Depth=1
+	dec	ecx
+	jne	.LBB6_5
+# %bb.7:
+	xor	esi, esi
+.LBB6_8:
+	mov	qword ptr [rsp - 8], rsi
+	cmp	qword ptr [rsp - 8], 0
+	jne	.LBB6_11
+.LBB6_10:
 	#APP
 
 	.byte	15
@@ -383,29 +451,25 @@ _xt_stack_guard_init:                   # @_xt_stack_guard_init
 	or	rax, rdx
 	movabs	rcx, -7046029254386353131
 	imul	rcx, rax
-	lea	rax, [rsp - 8]
-	mov	rdx, rax
-	shl	rdx, 17
-	shr	rax, 13
-	xor	rax, rdx
-	lea	rdx, [rip + _xt_stack_guard_init]
-	movabs	rsi, -4417276706812531889
-	imul	rsi, rdx
-	xor	rsi, rax
-	xor	rsi, rcx
-	mov	rax, rsi
+	mov	rax, rdi
+	shl	rax, 17
+	shr	rdi, 13
+	xor	rdi, rax
+	lea	rax, [rip + _xt_stack_guard_init]
+	movabs	rdx, -4417276706812531889
+	imul	rdx, rax
+	xor	rdx, rdi
+	xor	rdx, rcx
+	mov	rax, rdx
 	shr	rax, 31
-	xor	rax, rsi
+	xor	rax, rdx
 	movabs	rcx, -7723592293110705685
 	imul	rcx, rax
 	mov	rax, rcx
 	shr	rax, 29
 	xor	rax, rcx
-	and	rax, -256
-	movabs	rcx, 6364786164175470592
-	cmovne	rcx, rax
-	mov	qword ptr [rip + __xt_stack_guard], rcx
-	ret
+	mov	qword ptr [rsp - 8], rax
+	jmp	.LBB6_11
 .Lfunc_end6:
 	.size	_xt_stack_guard_init, .Lfunc_end6-_xt_stack_guard_init
                                         # -- End function

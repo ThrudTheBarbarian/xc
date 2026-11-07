@@ -508,22 +508,75 @@ _xt_fmt_f:                              # @_xt_fmt_f
 	.type	_xt_stack_guard_init,@function
 _xt_stack_guard_init:                   # @_xt_stack_guard_init
 # %bb.0:
+	push	r14
 	push	rbx
-	sub	rsp, 16
-	mov	qword ptr [rsp + 8], 0
-	lea	rbx, [rsp + 8]
+	push	rax
+	mov	qword ptr [rsp], 0
+	mov	r14, rsp
 	mov	esi, 8
-	mov	rdi, rbx
+	mov	rdi, r14
 	xor	edx, edx
 	call	getrandom@PLT
 	cmp	rax, 8
-	je	.LBB13_2
-# %bb.1:
-	mov	qword ptr [rsp + 8], 0
-.LBB13_2:
-	cmp	qword ptr [rsp + 8], 0
-	jne	.LBB13_4
-# %bb.3:
+	jne	.LBB13_1
+# %bb.2:
+	cmp	qword ptr [rsp], 0
+	je	.LBB13_3
+.LBB13_9:
+	cmp	qword ptr [rsp], 0
+	je	.LBB13_10
+.LBB13_11:
+	mov	rax, -256
+	and	rax, qword ptr [rsp]
+	movabs	rcx, 6364786164175470592
+	cmovne	rcx, rax
+	mov	qword ptr [rip + __xt_stack_guard], rcx
+	add	rsp, 8
+	pop	rbx
+	pop	r14
+	ret
+.LBB13_1:
+	mov	qword ptr [rsp], 0
+	cmp	qword ptr [rsp], 0
+	jne	.LBB13_9
+.LBB13_3:
+	xor	esi, esi
+	mov	eax, 1
+	xor	ecx, ecx
+	#APP
+
+	.byte	15
+	.byte	162
+
+	#NO_APP
+	test	ecx, 1073741824
+	je	.LBB13_8
+# %bb.4:
+	mov	ecx, 10
+                                        # implicit-def: $rsi
+	.p2align	4, 0x90
+.LBB13_5:                               # =>This Inner Loop Header: Depth=1
+	#APP
+
+	.byte	72
+	.byte	15
+	.byte	199
+	.byte	240
+
+	#NO_APP
+	test	rax, rax
+	cmovne	rsi, rax
+	jne	.LBB13_8
+# %bb.6:                                #   in Loop: Header=BB13_5 Depth=1
+	dec	ecx
+	jne	.LBB13_5
+# %bb.7:
+	xor	esi, esi
+.LBB13_8:
+	mov	qword ptr [rsp], rsi
+	cmp	qword ptr [rsp], 0
+	jne	.LBB13_11
+.LBB13_10:
 	#APP
 
 	.byte	15
@@ -536,14 +589,14 @@ _xt_stack_guard_init:                   # @_xt_stack_guard_init
 	or	rax, rdx
 	movabs	rcx, -7046029254386353131
 	imul	rcx, rax
-	mov	rax, rbx
+	mov	rax, r14
 	shl	rax, 17
-	shr	rbx, 13
-	xor	rbx, rax
-	xor	rbx, rcx
+	shr	r14, 13
+	xor	r14, rax
+	xor	r14, rcx
 	movabs	rax, -4417276706812531889
 	imul	rax, qword ptr [rip + _xt_stack_guard_init@GOTPCREL]
-	xor	rax, rbx
+	xor	rax, r14
 	mov	rcx, rax
 	shr	rcx, 31
 	xor	rcx, rax
@@ -552,16 +605,8 @@ _xt_stack_guard_init:                   # @_xt_stack_guard_init
 	mov	rcx, rax
 	shr	rcx, 29
 	xor	rcx, rax
-	mov	qword ptr [rsp + 8], rcx
-.LBB13_4:
-	mov	rax, -256
-	and	rax, qword ptr [rsp + 8]
-	movabs	rcx, 6364786164175470592
-	cmovne	rcx, rax
-	mov	qword ptr [rip + __xt_stack_guard], rcx
-	add	rsp, 16
-	pop	rbx
-	ret
+	mov	qword ptr [rsp], rcx
+	jmp	.LBB13_11
 .Lfunc_end13:
 	.size	_xt_stack_guard_init, .Lfunc_end13-_xt_stack_guard_init
                                         # -- End function

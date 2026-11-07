@@ -292,8 +292,46 @@ _xt_fmt_f:                              # @_xt_fmt_f
 	.p2align	4, 0x90
 _xt_stack_guard_init:                   # @_xt_stack_guard_init
 # %bb.0:
+	push	rbx
 	push	rax
 	mov	qword ptr [rsp], 0
+	xor	r8d, r8d
+	mov	eax, 1
+	xor	ecx, ecx
+	#APP
+
+	.byte	15
+	.byte	162
+
+	#NO_APP
+	test	ecx, 1073741824
+	je	.LBB6_5
+# %bb.1:
+	mov	ecx, 10
+                                        # implicit-def: $r8
+	.p2align	4, 0x90
+.LBB6_2:                                # =>This Inner Loop Header: Depth=1
+	#APP
+
+	.byte	72
+	.byte	15
+	.byte	199
+	.byte	240
+
+	#NO_APP
+	test	rax, rax
+	cmovne	r8, rax
+	jne	.LBB6_5
+# %bb.3:                                #   in Loop: Header=BB6_2 Depth=1
+	dec	ecx
+	jne	.LBB6_2
+# %bb.4:
+	xor	r8d, r8d
+.LBB6_5:
+	mov	qword ptr [rsp], r8
+	test	r8, r8
+	jne	.LBB6_7
+# %bb.6:
 	#APP
 
 	.byte	15
@@ -324,11 +362,15 @@ _xt_stack_guard_init:                   # @_xt_stack_guard_init
 	mov	rax, rcx
 	shr	rax, 29
 	xor	rax, rcx
-	and	rax, -256
+	mov	qword ptr [rsp], rax
+.LBB6_7:
+	mov	rax, -256
+	and	rax, qword ptr [rsp]
 	movabs	rcx, 6364786164175470592
 	cmovne	rcx, rax
 	mov	qword ptr [rip + __xt_stack_guard], rcx
-	pop	rax
+	add	rsp, 8
+	pop	rbx
 	ret
                                         # -- End function
 	.def	__xt_stack_fail;

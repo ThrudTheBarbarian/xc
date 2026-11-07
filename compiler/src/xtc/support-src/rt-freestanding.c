@@ -455,23 +455,51 @@ int _xt_fmt_f(char* buf, uint32_t size, const char* fmt, int prec, double v)
 // address): a random word stored between those locals and the saved registers
 // on entry and compared on every return. Its low byte is zero, as glibc's is,
 // so a string copy cannot write the whole of it back. The crt calls
-// _xt_stack_guard_init before the constructors and main. glibc has getrandom;
-// elsewhere the word mixes the cycle counter with the stack's and the image's
-// addresses (both randomised by the loader), which is weaker (TODO: AT_RANDOM on
-// Linux, the system RNG on Windows).
+// _xt_stack_guard_init before the constructors and main. The word comes from
+// the kernel's getrandom (glibc's, or the raw syscall in a static Linux
+// program), else from the CPU's RDRAND (win64, and any CPU where the kernel
+// had none), and only where neither gives one from the cycle counter mixed
+// with the stack's and the image's addresses (both randomised by the loader),
+// which is weaker (#35).
 // Hidden: clang otherwise reaches it through the GOT under -fPIC (the glibc
 // build), and the in-house linker gives a local symbol no GOT entry.
 __attribute__((visibility("hidden"))) uint64_t __xt_stack_guard;
 #ifdef XT_GLIBC
 extern long getrandom(void* buf, uint64_t n, unsigned int flags);
 #endif
+// A word from RDRAND, or 0 where the CPU has none (CPUID leaf 1, ECX bit 30)
+// or it fails ten times. RDRAND writes 0 when it fails. Both instructions as
+// bytes, as rdtsc below: an older in-house assembler has no mnemonics for them.
+static uint64_t xt_rdrand(void)
+    {
+    uint32_t a, b, c, d;
+    __asm__ volatile(".byte 0x0f, 0xa2" : "=a"(a), "=b"(b), "=c"(c), "=d"(d) : "a"(1), "c"(0));
+    if (!(c & (1u << 30)))
+        return 0;
+    for (int k = 0; k < 10; k++)
+        {
+        uint64_t v;
+        __asm__ volatile(".byte 0x48, 0x0f, 0xc7, 0xf0" : "=a"(v) : : "cc");
+        if (v != 0)
+            return v;
+        }
+    return 0;
+    }
 void _xt_stack_guard_init(void)
     {
     uint64_t g = 0;
 #ifdef XT_GLIBC
     if (getrandom(&g, sizeof g, 0) != (long)sizeof g)
         g = 0;
+#elif !defined(XT_WIN64)
+    // A static Linux program: the kernel's getrandom (318), directly.
+    long r;
+    __asm__ volatile("syscall" : "=a"(r) : "a"(318L), "D"(&g), "S"((uint64_t)sizeof g), "d"(0L) : "rcx", "r11", "memory");
+    if (r != (long)sizeof g)
+        g = 0;
 #endif
+    if (g == 0)
+        g = xt_rdrand();
     if (g == 0)
         {
         uint32_t lo, hi;
