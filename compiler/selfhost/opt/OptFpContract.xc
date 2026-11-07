@@ -51,7 +51,7 @@
             for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
                 {
                 IRBlock* H = (IRBlock*)fn.blocks().get(b);
-                if (H.name() == (String*)0 || !fn.isSpeedHeader(H.name()))
+                if (H.name() == (String*)0 || !fpcSpeedName(fn, H.name()))
                     continue;
                 Map* fwd = fpcReach(H, pred, true);
                 Map* bwd = fpcReach(H, pred, false);
@@ -85,6 +85,20 @@
                     }
                 }
             }
+        }
+
+    // A speed loop's header, or a copy of one (`<header>_esc`): the reference
+    // explains.
+    final bool fpcSpeedName(IRFunc* fn, String* name)
+        {
+        Array* hs = fn.speedHeaders();
+        for (u32 k = (u32)0; k < hs.count(); k = k + (u32)1)
+            {
+            String* h = (String*)hs.get(k);
+            if (name.hasPrefix(h) && (name.byteLength() == h.byteLength() || name.byteAt(h.byteLength()) == (u8)'_'))
+                return true;
+            }
+        return false;
         }
 
     // The blocks reachable from H (forward) or reaching it (backward), H's

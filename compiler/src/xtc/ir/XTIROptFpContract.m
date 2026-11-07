@@ -10,6 +10,18 @@
 #import "XTIRType.h"
 #import "XTIRSupport.h"
 
+// A speed loop's header, or a copy of one: the vectorisers and unrollers name
+// the loops they build after the one they came from (`<header>_esc`), and the
+// copy runs the same code under the same goal. Without this an escape-
+// vectorised loop in a par block lost its fused multiply-adds on arm64.
+static BOOL speedName(XTIRFunction* fn, NSString* name)
+    {
+    for (NSString* h in fn.speedLoopHeaders)
+        if ([name hasPrefix:h] && (name.length == h.length || [name characterAtIndex:h.length] == '_'))
+            return YES;
+    return NO;
+    }
+
 @implementation XTIROptFpContract
 
 - (NSString*)passName
@@ -74,7 +86,7 @@ static NSSet<NSValue*>* reach(XTIRBlock* H, NSDictionary<NSValue*, NSArray<XTIRB
         NSMutableSet<NSValue*>* speed = [NSMutableSet set];
         for (XTIRBlock* H in fn.blocks)
             {
-            if (!H.name || ![fn.speedLoopHeaders containsObject:H.name])
+            if (!H.name || !speedName(fn, H.name))
                 continue;
             NSSet<NSValue*>* fwd = reach(H, pred, YES);
             NSSet<NSValue*>* bwd = reach(H, pred, NO);

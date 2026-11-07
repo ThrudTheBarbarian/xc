@@ -17,6 +17,8 @@
 @property(nonatomic) XTIRBlock* preheader; // Pi: branches to Hi
 @property(nonatomic) XTIRBlock* header;    // Hi
 @property(nonatomic) XTIRBlock* exit;      // Ei
+// The k loop's FAdd (nil for an integer nest): marked `contract` by apply.
+@property(nonatomic) XTIRInsn* acc;
 @property(nonatomic) BOOL f64;
 // "f32", "f64", "u32" or "i32": the element type, and the kernel's name.
 @property(nonatomic, copy) NSString* elem;
@@ -711,6 +713,7 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
             continue;
 
         XTMatMulCand* c = [XTMatMulCand new];
+        c.acc = fadd && fadd.opcode == XTIROpFAdd ? fadd : nil;
         c.preheader = Pi;
         c.header = Hi;
         c.exit = Ei;
@@ -784,6 +787,13 @@ static BOOL onlyConstsBesides(XTIRBlock* b, NSArray<XTIRInsn*>* allowed, XTMatMu
 - (void)apply:(XTMatMulCand*)c inFunction:(XTIRFunction*)fn module:(XTIRModule*)mod
     {
     XTIRBlock* P = c.preheader;
+    // The kernel fuses each multiply into its add (FMOPA, fmla), whatever the
+    // goal, and the nest it stands in for is its fallback (no SME, a NaN in
+    // C): the nest fuses too, so the two give one answer, the documented
+    // exception to :goal(accuracy) (owner, 2026-11-07).
+    // arm64's kernels only: x86-64's multiplies then adds, as its loop does.
+    if (c.acc && [self.profile.matMulPrefix hasPrefix:@"__xt_sme_"])
+        c.acc.predicate = XTIRFpContract;
     XTIRType* u64 = [XTIRType u64Type];
     NSString* name = [NSString stringWithFormat:@"%@%@%@", self.profile.matMulPrefix, c.elem,
                                                  self.profile.matMulSuffix ?: @""];

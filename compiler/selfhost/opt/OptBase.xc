@@ -1496,6 +1496,7 @@ class BeFact : Object
     bool _mxTakeStart;   // mmCountedHeader may accept a nonzero start (into _mxStartOf)
     IROperand* _mxStartOf;
     IRValue* _mxMem;
+    IRInsn* _mxAcc;      // the k loop's FAdd, marked `contract` (0 for an integer nest)
     // The constant value of each of M, N, K, lda, ldb, ldc, or -1 (a value).
     i64* _mxConsts;
     // countedHeader's outputs

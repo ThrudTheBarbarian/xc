@@ -391,6 +391,7 @@
                       : !mmPlusZero(mmIncoming(sPhi, Pk), defOf, fty))
                 continue;
             IRInsn* fadd = mmDefWith(mmIncoming(sPhi, Bk), String.withCString(isInt ? "Add" : "FAdd"), defOf);
+            _mxAcc = fadd != (IRInsn*)0 && fadd.op().equals(String.withCString("FAdd")) ? fadd : (IRInsn*)0;
             // An unsigned sum of a mixed-signedness product is added in the
             // signed type: s' = Bitcast(Add(Bitcast(s), Mul)). As the reference.
             IRInsn* sumOut = (IRInsn*)0;
@@ -745,6 +746,9 @@
 
     final void applyMatMul(IRModule* m, IRFunc* fn)
         {
+        // The nest fuses as the kernel does (the reference explains).
+        if (_mxAcc != (IRInsn*)0 && _profile.matMulPrefix().hasPrefix(String.withCString("__xt_sme_")))
+            _mxAcc.setPred(String.withCString("contract"));
         String* name = new String();
         name.append(_profile.matMulPrefix());
         name.append(_mmElem);
