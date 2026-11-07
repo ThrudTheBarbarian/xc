@@ -1653,6 +1653,7 @@ class BeFact : Object
     IRInsn* _ucIv;         // unrollChainLoops: the counter phi, its add and its compare
     IRInsn* _ucNext;
     IRInsn* _ucCmp;
+    IRBlock* _ucPre;       // …and, for an odd trip, the block that runs one step first
     u32 _sbSeq;            // selectBranch: its block names' counter
     bool _ppStayPut;       // ppOutlinePar: the loop is too small to outline at all
     Map* _dvVt;            // devirtualise's indexes for one run: vtables and functions by name,

@@ -1264,6 +1264,7 @@ static BOOL ucChainsIndependent(XTIRBlock* H, XTIRBlock* B)
     XTIRInsn* _iv;
     XTIRInsn* _next;
     XTIRInsn* _cmp;
+    XTIRBlock* _pre;   // for an odd trip, the block that runs one step first
     }
 
 - (NSString*)passName
@@ -1346,8 +1347,23 @@ static BOOL ucChainsIndependent(XTIRBlock* H, XTIRBlock* B)
             initK = vo.intValue;
         }
     int64_t trip = (int64_t)(int32_t)cb.intValue - initK;
-    if (initK < 0 || trip < 2 || (trip & 1) != 0)
+    if (initK < 0 || trip < 2)
         return NO;
+    // An odd trip runs one step before the loop, in the block that enters it,
+    // and the loop the rest, an even number. That block must do nothing but
+    // enter. The port's ucRecognise.
+    _pre = nil;
+    if ((trip & 1) != 0)
+        {
+        if (trip < 3)
+            return NO;
+        for (NSUInteger k = 0; k + 1 < _iv.operands.count; k += 2)
+            if (_iv.operands[k].blockRef != L)
+                _pre = _iv.operands[k].blockRef;
+        XTIRInsn* pt = _pre.terminator;
+        if (!_pre || !pt || pt.opcode != XTIROpBranch || pt.operands.count != 1 || pt.operands[0].blockRef != L)
+            return NO;
+        }
     for (XTIRInsn* n in L.instructions)
         {
         if (n == _next || n == _cmp)
@@ -1359,8 +1375,74 @@ static BOOL ucChainsIndependent(XTIRBlock* H, XTIRBlock* B)
     return ucChainsIndependent(L, L);
     }
 
+// One step of the loop in the block before it: each instruction but the
+// counter's, reading the phis' entry values, and the phis then start from that
+// step's results (the counter from one on). The port's ucPeel.
+- (void)peel:(XTIRBlock*)L inFunction:(XTIRFunction*)fn
+    {
+    NSMutableDictionary<NSNumber*, XTIROperand*>* entry = [NSMutableDictionary dictionary];
+    for (XTIRInsn* p in L.phiNodes)
+        for (NSUInteger k = 0; k + 1 < p.operands.count; k += 2)
+            if (p.operands[k].blockRef == _pre)
+                entry[@(p.result.valueId)] = p.operands[k + 1];
+    NSMutableDictionary<NSNumber*, NSNumber*>* step = [NSMutableDictionary dictionary];
+    for (XTIRInsn* n in [L.instructions copy])
+        {
+        if (n == _next || n == _cmp)
+            continue;
+        NSMutableArray<XTIROperand*>* ops = [NSMutableArray arrayWithCapacity:n.operands.count];
+        for (XTIROperand* o in n.operands)
+            {
+            XTIROperand* use = o;
+            if (o.kind == XTIROperandKindUse)
+                {
+                if (entry[@(o.valueId)])
+                    use = entry[@(o.valueId)];
+                else if (step[@(o.valueId)])
+                    use = [XTIROperand useWithValueId:(XTIRValueId)step[@(o.valueId)].unsignedLongLongValue];
+                }
+            [ops addObject:use];
+            }
+        XTIRValue* r = nil;
+        if (n.result)
+            {
+            XTIRValueId vid = [fn allocateValueId];
+            r = [[XTIRValue alloc] initWithValueId:vid
+                                              type:n.result.type
+                                           defSite:[[XTIRDefSite alloc] initWithBlock:_pre insnIndex:_pre.instructions.count]];
+            [fn registerValue:r];
+            step[@(n.result.valueId)] = @(vid);
+            }
+        [_pre.instructions addObject:buildLike(n, r, ops, nil)];
+        }
+    for (XTIRInsn* p in L.phiNodes)
+        {
+        XTIROperand* back = nil;
+        NSUInteger at = NSNotFound;
+        for (NSUInteger k = 0; k + 1 < p.operands.count; k += 2)
+            {
+            if (p.operands[k].blockRef == L && p.operands[k + 1].kind == XTIROperandKindUse)
+                back = p.operands[k + 1];
+            if (p.operands[k].blockRef == _pre)
+                at = k + 1;
+            }
+        if (at == NSNotFound)
+            continue;
+        NSMutableArray<XTIROperand*>* ops = [p.operands mutableCopy];
+        if (p == _iv)
+            ops[at] = [XTIROperand immIWithType:p.operands[at].type value:p.operands[at].intValue + 1];
+        else if (back && step[@(back.valueId)])
+            ops[at] = [XTIROperand useWithValueId:(XTIRValueId)step[@(back.valueId)].unsignedLongLongValue];
+        else
+            continue;
+        [p replaceOperands:ops];
+        }
+    }
+
 - (void)apply:(XTIRBlock*)L inFunction:(XTIRFunction*)fn
     {
+    if (_pre)
+        [self peel:L inFunction:fn];
     NSMutableDictionary<NSNumber*, NSNumber*>* map = [NSMutableDictionary dictionary];
     // Copy 1 reads copy 0's results where copy 0 read the phis.
     for (XTIRInsn* p in L.phiNodes)

@@ -497,8 +497,24 @@
                 initK = (i64)vo.imm();
             }
         i64 trip = (i64)cb.imm() - initK;
-        if (initK < (i64)0 || trip < (i64)2 || (trip & (i64)1) != (i64)0)
+        if (initK < (i64)0 || trip < (i64)2)
             return false;
+        // An odd trip runs one step before the loop, in the block that enters
+        // it, and the loop the rest, an even number (#26: par_vec_chain's 37
+        // rounds kept orr + fmla + orr). That block must do nothing but enter.
+        _ucPre = (IRBlock*)0;
+        if ((trip & (i64)1) != (i64)0)
+            {
+            if (trip < (i64)3)
+                return false;
+            for (u32 k = (u32)0; k + (u32)1 < _ucIv.ops().count(); k = k + (u32)2)
+                if (((IROperand*)_ucIv.ops().get(k)).blk() != L)
+                    _ucPre = ((IROperand*)_ucIv.ops().get(k)).blk();
+            if (_ucPre == (IRBlock*)0 || _ucPre.term() == (IRInsn*)0
+                || !_ucPre.term().op().equals(String.withCString("Branch")) || _ucPre.term().ops().count() != (u32)1
+                || ((IROperand*)_ucPre.term().ops().get((u32)0)).blk() != L)
+                return false;
+            }
         // The counter's values read nowhere else in the block.
         for (u32 i = (u32)0; i < L.insns().count(); i = i + (u32)1)
             {
@@ -512,8 +528,81 @@
         return vtChainsIndependent(L, L);
         }
 
+    // One step of the loop in the block before it: each instruction but the
+    // counter's, reading the phis' entry values, and the phis then start from
+    // that step's results (the counter from one on). The chains hold no memory
+    // access and no call (ucRecognise), so the step may run there.
+    final void ucPeel(IRBlock* L)
+        {
+        Map* entry = new Map();   // a phi -> its operand from the block before
+        for (u32 i = (u32)0; i < L.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)L.phis().get(i);
+            for (u32 k = (u32)0; k + (u32)1 < p.ops().count(); k = k + (u32)2)
+                if (((IROperand*)p.ops().get(k)).blk() == _ucPre)
+                    entry.set((Hashable*)p.res(), p.ops().get(k + (u32)1));
+            }
+        Map* step = new Map();    // a loop value -> the step's copy of it
+        for (u32 i = (u32)0; i < L.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)L.insns().get(i);
+            if (n == _ucNext || n == _ucCmp)
+                continue;
+            IRInsn* cl = IRInsn.with(n.op());
+            cl.copyDbg(n);
+            cl.setPred(n.pred());
+            cl.setCc(n.cc());
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)n.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                    {
+                    Object* e = entry.get((Hashable*)o.val());
+                    Object* c = step.get((Hashable*)o.val());
+                    if (e != (Object*)0)
+                        o = (IROperand*)e;
+                    else if (c != (Object*)0)
+                        o = IROperand.useVal((IRValue*)c);
+                    }
+                cl.add(o);
+                }
+            if (n.res() != (IRValue*)0)
+                {
+                cl.setRes(new IRValue(n.res().ty()));
+                step.set((Hashable*)n.res(), (Object*)cl.res());
+                }
+            _ucPre.add(cl);
+            }
+        for (u32 i = (u32)0; i < L.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)L.phis().get(i);
+            IRValue* back = (IRValue*)0;
+            u32 at = (u32)$FFFF_FFFF;
+            for (u32 k = (u32)0; k + (u32)1 < p.ops().count(); k = k + (u32)2)
+                {
+                IROperand* bo = (IROperand*)p.ops().get(k);
+                IROperand* vo = (IROperand*)p.ops().get(k + (u32)1);
+                if (bo.blk() == L && vo.kind() == (u8)OPK_USE)
+                    back = vo.val();
+                if (bo.blk() == _ucPre)
+                    at = k + (u32)1;
+                }
+            if (at == (u32)$FFFF_FFFF)
+                continue;
+            if (p == _ucIv)
+                {
+                IROperand* vo = (IROperand*)p.ops().get(at);
+                p.ops().set(at, (Object*)IROperand.immI(vo.imm() + (i64)1, vo.ty()));
+                }
+            else if (back != (IRValue*)0 && step.get((Hashable*)back) != (Object*)0)
+                p.ops().set(at, (Object*)IROperand.useVal((IRValue*)step.get((Hashable*)back)));
+            }
+        }
+
     final void ucApply(IRFunc* fn, IRBlock* L)
         {
+        if (_ucPre != (IRBlock*)0)
+            ucPeel(L);
         Map* map = new Map();
         // Copy 1 reads copy 0's results where copy 0 read the phis.
         for (u32 i = (u32)0; i < L.phis().count(); i = i + (u32)1)
