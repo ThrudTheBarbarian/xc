@@ -610,6 +610,12 @@
             if (stopHere(String.withCString("inline-checks")))
                 return;
             }
+        // A retain and its release with nothing between them that can free
+        // or write anything go, pair by pair (arcPairElide).
+        if (_level >= (u32)2)
+            self.arcPairElide(m);
+        if (stopHere(String.withCString("arc-pair")))
+            return;
         if (_level >= (u32)2)
             self.idiomMemset(m);
         if (stopHere(String.withCString("idiom-memset")))

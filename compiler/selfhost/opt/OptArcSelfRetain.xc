@@ -240,4 +240,282 @@
                 return true;
         return false;
         }
+
+    // ── arc-pair ─────────────────────────────────────────────────────────
+    //
+    // A value retained and then released, with nothing between them that can
+    // free or change anything (no call, no store, no other release), keeps
+    // the count it had: the pair does nothing and both go. Lowering makes this
+    // for a temporary that is only looked at: `(Number*)a.get(i) == v` retains
+    // the element, checks the cast, compares, and releases it. With the pair
+    // gone, a loop like that writes no memory, and LICM can hoist the loads a
+    // bounds check makes of the array's header (issue #28).
+    //
+    // The release may name the value through casts, or through the phi a
+    // downcast leaves: the cast value where it held, null where the value was
+    // null (on the edge taken when it tests null). Every path from the retain
+    // must reach the release, or end in Unreachable (a failed check's trap),
+    // without a Return and without coming round to the retain again. The
+    // memory tokens the pair made become the ones it took.
+    final void arcPairElide(IRModule* m)
+        {
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            // The definitions, once a function (a pair's removal takes out
+            // only its own two instructions, which define no value but their
+            // memory tokens).
+            _apDefs = new Map();
+            _apPhiBlock = new Map();
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* q = (IRBlock*)fn.blocks().get(b);
+                for (u32 i = (u32)0; i < q.phis().count(); i = i + (u32)1)
+                    {
+                    IRInsn* p = (IRInsn*)q.phis().get(i);
+                    if (p.res() != (IRValue*)0)
+                        {
+                        _apDefs.set((Hashable*)p.res(), (Object*)p);
+                        _apPhiBlock.set((Hashable*)p.res(), (Object*)q);
+                        }
+                    }
+                for (u32 i = (u32)0; i < q.insns().count(); i = i + (u32)1)
+                    {
+                    IRInsn* n = (IRInsn*)q.insns().get(i);
+                    if (n.res() != (IRValue*)0)
+                        _apDefs.set((Hashable*)n.res(), (Object*)n);
+                    }
+                }
+            Map* rename = new Map();
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                u32 i = (u32)0;
+                while (i < bb.insns().count())
+                    {
+                    IRInsn* r = (IRInsn*)bb.insns().get(i);
+                    IROperand* xo = r.ops().count() >= (u32)2 ? (IROperand*)r.ops().get((u32)0) : (IROperand*)0;
+                    if (!r.op().equals(String.withCString("Retain")) || xo == (IROperand*)0
+                        || xo.kind() != (u8)OPK_USE || xo.val() == (IRValue*)0 || r.memRes() == (IRValue*)0)
+                        {
+                        i = i + (u32)1;
+                        continue;
+                        }
+                    IRInsn* rel = apFindRelease(bb, i, xo.val());
+                    if (rel == (IRInsn*)0)
+                        {
+                        i = i + (u32)1;
+                        continue;
+                        }
+                    IROperand* rm = (IROperand*)r.ops().get(r.ops().count() - (u32)1);
+                    IROperand* lm = (IROperand*)rel.ops().get(rel.ops().count() - (u32)1);
+                    rename.set((Hashable*)r.memRes(), (Object*)rm.val());
+                    if (rel.memRes() != (IRValue*)0)
+                        rename.set((Hashable*)rel.memRes(), (Object*)lm.val());
+                    for (u32 k = (u32)0; k < _apRelBlock.insns().count(); k = k + (u32)1)
+                        if ((IRInsn*)_apRelBlock.insns().get(k) == rel)
+                            {
+                            _apRelBlock.insns().removeAt(k);
+                            break;
+                            }
+                    bb.insns().removeAt(i);   // the next instruction is at i now
+                    }
+                }
+            if (rename.count() > (u32)0)
+                apRenameAll(fn, rename);
+            }
+        }
+
+    final void apRenameAll(IRFunc* fn, Map* rename)
+        {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                apRename((IRInsn*)bb.phis().get(i), rename);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                apRename((IRInsn*)bb.insns().get(i), rename);
+            if (bb.term() != (IRInsn*)0)
+                apRename(bb.term(), rename);
+            }
+        }
+
+    // A memory token the pair made becomes the one it took (followed through
+    // a chain of them).
+    final void apRename(IRInsn* n, Map* rename)
+        {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                continue;
+            IRValue* to = o.val();
+            for (u32 hop = (u32)0; hop < (u32)64; hop = hop + (u32)1)
+                {
+                Object* next = rename.get((Hashable*)to);
+                if (next == (Object*)0)
+                    break;
+                to = (IRValue*)next;
+                }
+            if (to != o.val())
+                n.ops().set(k, (Object*)IROperand.useVal(to));
+            }
+        }
+
+    // Does an instruction stop the pair: may it free, write or change a count?
+    final bool apBlocks(IRInsn* n)
+        {
+        String* op = n.op();
+        if (op.equals(String.withCString("Retain")))
+            return false;    // another count going up frees nothing
+        // Every call, an indirect one too (lrcWritesMemory leaves those out).
+        return self.lrcWritesMemory(op) || op.hasPrefix(String.withCString("Call"))
+            || op.equals(String.withCString("LoadVolatile")) || op.equals(String.withCString("Return"));
+        }
+
+    // Is v the retained value x, through casts?
+    final bool apSameObject(IRFunc* fn, IRValue* v, IRValue* x, Map* defs)
+        {
+        for (u32 hop = (u32)0; hop < (u32)8 && v != (IRValue*)0; hop = hop + (u32)1)
+            {
+            if (v == x)
+                return true;
+            IRInsn* d = (IRInsn*)defs.get((Hashable*)v);
+            if (d == (IRInsn*)0 || !d.op().equals(String.withCString("Bitcast")) || d.ops().count() < (u32)1)
+                return false;
+            IROperand* o = (IROperand*)d.ops().get((u32)0);
+            if (o.kind() != (u8)OPK_USE)
+                return false;
+            v = o.val();
+            }
+        return false;
+        }
+
+    // Is v a null pointer constant (IntToPtr of a zero Const or immediate)?
+    final bool apIsNull(IRValue* v, Map* defs)
+        {
+        IRInsn* d = (IRInsn*)defs.get((Hashable*)v);
+        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("IntToPtr")) || d.ops().count() < (u32)1)
+            return false;
+        IROperand* o = (IROperand*)d.ops().get((u32)0);
+        if (o.kind() == (u8)OPK_IMMI)
+            return o.imm() == (i64)0;
+        if (o.kind() != (u8)OPK_USE)
+            return false;
+        IRInsn* c = (IRInsn*)defs.get((Hashable*)o.val());
+        return c != (IRInsn*)0 && c.op().equals(String.withCString("Const")) && c.ops().count() == (u32)1
+            && ((IROperand*)c.ops().get((u32)0)).kind() == (u8)OPK_IMMI && ((IROperand*)c.ops().get((u32)0)).imm() == (i64)0;
+        }
+
+    // Does block p reach s only when x is null: p ends in CondBranch on
+    // ICmp EQ (x, null) with s as its true target (and not its false one)?
+    final bool apNullEdge(IRBlock* p, IRBlock* s, IRValue* x, Map* defs)
+        {
+        IRInsn* t = p.term();
+        if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() < (u32)3)
+            return false;
+        if (((IROperand*)t.ops().get((u32)1)).blk() != s || ((IROperand*)t.ops().get((u32)2)).blk() == s)
+            return false;
+        IROperand* c = (IROperand*)t.ops().get((u32)0);
+        if (c.kind() != (u8)OPK_USE)
+            return false;
+        IRInsn* cmp = (IRInsn*)defs.get((Hashable*)c.val());
+        if (cmp == (IRInsn*)0 || !cmp.op().equals(String.withCString("ICmp")) || cmp.pred() == (String*)0
+            || !cmp.pred().equals(String.withCString("EQ")) || cmp.ops().count() < (u32)2)
+            return false;
+        IROperand* a = (IROperand*)cmp.ops().get((u32)0);
+        IROperand* bnull = (IROperand*)cmp.ops().get((u32)1);
+        if (a.kind() != (u8)OPK_USE || bnull.kind() != (u8)OPK_USE)
+            return false;
+        return apSameObject((IRFunc*)0, a.val(), x, defs) && apIsNull(bnull.val(), defs);
+        }
+
+    // Does Release operand v name x: x through casts, or a phi of casts of x
+    // and nulls, each null on an edge taken only when x is null?
+    final bool apNames(IRValue* v, IRValue* x, Map* defs, Map* phiBlock)
+        {
+        if (apSameObject((IRFunc*)0, v, x, defs))
+            return true;
+        IRInsn* d = (IRInsn*)defs.get((Hashable*)v);
+        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("Phi")))
+            return false;
+        IRBlock* s = (IRBlock*)phiBlock.get((Hashable*)v);
+        for (u32 k = (u32)0; k + (u32)1 < d.ops().count(); k = k + (u32)2)
+            {
+            IRBlock* p = ((IROperand*)d.ops().get(k)).blk();
+            IROperand* o = (IROperand*)d.ops().get(k + (u32)1);
+            if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                return false;
+            if (apSameObject((IRFunc*)0, o.val(), x, defs))
+                continue;
+            if (apIsNull(o.val(), defs) && s != (IRBlock*)0 && apNullEdge(p, s, x, defs))
+                continue;
+            return false;
+            }
+        return true;
+        }
+
+    // The Release that ends x's Retain at (bb, at), if every path from it
+    // reaches that Release, or Unreachable, with nothing in between that
+    // stops the pair; else 0.
+    final IRInsn* apFindRelease(IRBlock* bb, u32 at, IRValue* x)
+        {
+        Map* defs = _apDefs;
+        Map* phiBlock = _apPhiBlock;
+        IRInsn* found = (IRInsn*)0;
+        Array* work = new Array();
+        Array* seen = new Array();
+        Array* from = new Array();      // where each block's scan starts
+        work.add((Object*)bb);
+        from.add((Object*)Number.withU32(at + (u32)1));
+        while (work.count() > (u32)0)
+            {
+            IRBlock* q = (IRBlock*)work.get(work.count() - (u32)1);
+            u32 start = ((Number*)from.get(from.count() - (u32)1)).asU32();
+            work.removeAt(work.count() - (u32)1);
+            from.removeAt(from.count() - (u32)1);
+            bool stopped = false;
+            for (u32 i = start; i < q.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)q.insns().get(i);
+                if (n.op().equals(String.withCString("Release")) && n.ops().count() >= (u32)2
+                    && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_USE
+                    && apNames(((IROperand*)n.ops().get((u32)0)).val(), x, defs, phiBlock))
+                    {
+                    if (found != (IRInsn*)0 && found != n)
+                        return (IRInsn*)0;          // two releases: not one pair
+                    found = n;
+                    _apRelBlock = q;
+                    stopped = true;
+                    break;
+                    }
+                if (apBlocks(n))
+                    return (IRInsn*)0;
+                }
+            if (stopped)
+                continue;
+            IRInsn* t = q.term();
+            if (t == (IRInsn*)0)
+                return (IRInsn*)0;
+            if (t.op().equals(String.withCString("Unreachable")))
+                continue;
+            if (!t.op().equals(String.withCString("Branch")) && !t.op().equals(String.withCString("CondBranch")))
+                return (IRInsn*)0;         // a Return, or anything else, before the release
+            for (u32 k = (u32)0; k < t.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)t.ops().get(k);
+                if (o.kind() != (u8)OPK_BLOCK || o.blk() == (IRBlock*)0)
+                    continue;
+                IRBlock* s = o.blk();
+                if (s == bb)
+                    return (IRInsn*)0;     // round to the retain again
+                if (self.hasBlock(seen, s))
+                    continue;
+                seen.add((Object*)s);
+                work.add((Object*)s);
+                from.add((Object*)Number.withU32((u32)0));
+                }
+            }
+        return found;
+        }
     }

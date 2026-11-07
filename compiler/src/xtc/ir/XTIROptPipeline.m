@@ -31,6 +31,7 @@
 #import "XTIROptSelectBranch.h"
 #import "XTIROptBlockLayout.h"
 #import "XTIROptTrapCut.h"
+#import "XTIROptArcPair.h"
 #import "XTIROptLoopRotate.h"
 #import "XTIROptBlockMerge.h"
 #import "XTIROptReassociate.h"
@@ -194,6 +195,9 @@
             // a loop holds no call for them.
             [p addPass:[[XTIROptTrapCut alloc] init]];
         }
+        // A retain and its release with nothing between them that can free or
+        // write anything go, pair by pair.
+        [p addPass:[[XTIROptArcPair alloc] init]];
         // Recognise byte-fill loops as memset BEFORE unrolling (else the fill
         // loop gets unrolled instead of collapsed to a call).
         XTIROptIdiomMemset* memset = [[XTIROptIdiomMemset alloc] init];
