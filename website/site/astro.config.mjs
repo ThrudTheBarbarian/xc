@@ -197,6 +197,7 @@ const SIDEBAR = [
 				{ label: 'One program, six platforms (Windows)', slug: 'tutorials/cross-build-windows' },
 				{ label: 'Hello UX: a window on every platform', slug: 'tutorials/hello-ux' },
 				{ label: 'A GPU Mandelbrot you can zoom', slug: 'tutorials/mandelbrot' },
+				{ label: 'A GPU on another machine', slug: 'tutorials/remote-gpu' },
 				{ label: 'A music player in Rocks', slug: 'rocks/tutorial' },
 			],
 		},
