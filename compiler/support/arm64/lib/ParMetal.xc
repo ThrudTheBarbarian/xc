@@ -235,6 +235,12 @@ class ParMetal
         ParLayout* l = ParDevice.layout(proto, src, lo, hi);
         if (l == (ParLayout*)0)
             return false;
+        // What one dispatch may launch: Metal's dispatchThreads takes a grid
+        // far past any block's size, so a block whose items loop inside runs
+        // one item a thread, as on Vulkan (ParLayout.plan, issue #14). 2^30
+        // keeps the thread index well inside the kernel's 32 bits.
+        l.maxThreads = (i64)1 << (i64)30;
+        l.plan(lo, hi);
         // A kernel that reduces on the device runs in threadgroups of 256
         // (bug 645); a pipeline that cannot hold that many stays on the CPU.
         if (l.devred != (i64)0 && ((parMsgU_t*)_send)(pso, sel("maxTotalThreadsPerThreadgroup")) < (u64)256)
