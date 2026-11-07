@@ -4045,15 +4045,17 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
 
     // ── Fused multiply-add: FAdd/FSub with a single-use FMul operand ──
     // a*b+c → fmadd, c-a*b → fmsub, a*b-c → fnmsub. One IEEE rounding instead
-    // of two, so NOT bit-identical to separate fmul+fadd — but it matches what
-    // clang emits under default FP contraction.
+    // of two, so only where the IR marks the add `contract` (fp-contract: code
+    // under :goal(speed), and C built with -ffp-contract=fast), as on x86-64:
+    // code whose goal is accuracy rounds each operation on its own, on every
+    // CPU and GPU (owner, 2026-11-07).
     NSCountedSet<NSNumber *> *sharedFused = [NSCountedSet set];
     NSMutableArray<NSNumber *> *sharedMuls = [NSMutableArray array];
     for (XTIRBlock *bb in fn.blocks) {
         XTIRInsn *prevInsn = nil;   // the instruction immediately before `insn`
         for (XTIRInsn *insn in bb.instructions) {
             if ((insn.opcode != XTIROpFAdd && insn.opcode != XTIROpFSub)
-                || !insn.result || insn.operands.count < 2) { prevInsn = insn; continue; }
+                || !insn.result || insn.operands.count < 2 || insn.predicate != XTIRFpContract) { prevInsn = insn; continue; }
             XTIROperand *o0 = insn.operands[0], *o1 = insn.operands[1];
             // The fused FMul must be the instruction IMMEDIATELY before the
             // FAdd/FSub. Register allocation runs BEFORE fusion and ends the
@@ -4208,6 +4210,9 @@ static XTIROperand *icmpZeroTestValue(XTIRInsn *icmp, XTArm64FnCtx *ctx) {
             BOOL flt = lane && (lane.kind == XTIRTypeKindF32 || lane.kind == XTIRTypeKindF64);
             if (!lane || !(flt || XTIRTypeKindIsInteger(lane.kind))) continue;
             if (insn.opcode == XTIROpVSub && !flt) continue;
+            // Float lanes fuse only where the add is marked `contract`, as
+            // scalar code; integer lanes are exact either way.
+            if (flt && insn.predicate != XTIRFpContract) continue;
             if (ctx.fuseAt[@(insn.result.valueId)]) continue;
             XTIROperand *o0 = insn.operands[0], *o1 = insn.operands[1];
             if (o0.kind != XTIROperandKindUse || o1.kind != XTIROperandKindUse) continue;

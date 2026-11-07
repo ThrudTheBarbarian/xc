@@ -11339,6 +11339,8 @@ static const NSUInteger kVarargSlotBytes = 8;
     NSString* prefix = [NSString stringWithFormat:@"bb_%lu",
                                                   (unsigned long)self.currentFunction.blocks.count];
     XTIRBlock* headerBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_forin_header"]];
+    if (self.loopGoal == 1 && headerBlock.name)
+        [self.currentFunction.speedLoopHeaders addObject:headerBlock.name];
     XTIRBlock* bodyBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_forin_body"]];
     XTIRBlock* exitBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_forin_exit"]];
 
@@ -16082,6 +16084,12 @@ static NSString* XTIRTypeKindName(XTIRTypeKind k)
     NSString* prefix = [NSString stringWithFormat:@"bb_%lu",
                                                   (unsigned long)self.currentFunction.blocks.count];
     XTIRBlock* headerBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_header"]];
+    // Under `:goal(speed)` (a loop's around it, or a par block's) a while
+    // loop is a speed loop too: fp-contract finds the loops it may fuse in
+    // by these headers, and the escape vectoriser's rebuilt loop is found
+    // only through its own (2026-11-07).
+    if (self.loopGoal == 1 && headerBlock.name)
+        [self.currentFunction.speedLoopHeaders addObject:headerBlock.name];
     XTIRBlock* bodyBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_body"]];
     XTIRBlock* exitBlock = [self addBlockWithName:[prefix stringByAppendingString:@"_exit"]];
 

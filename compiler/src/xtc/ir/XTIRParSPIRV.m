@@ -22,7 +22,9 @@
 // Pointers are not values in logical addressing: each pointer SSA value is a
 // recipe (a base variable and an access chain), resolved at its load or store.
 //
-// Exactness: Vulkan rounds OpFAdd, OpFSub and OpFMul correctly but not
+// Exactness: Vulkan rounds OpFAdd, OpFSub and OpFMul correctly (and, in a
+// block whose goal is accuracy, each carries NoContraction, so no driver fuses
+// a multiply into the add after it) but not
 // OpFDiv or square roots, and has no precise sin, cos, exp, log or pow. A
 // block whose goal is accuracy and that uses one stays on the CPU; one whose
 // goal is speed takes the GPU's version.
@@ -66,7 +68,7 @@ enum
 enum
 {
     SpvStorageInput = 1, SpvStoragePushConstant = 9, SpvStorageStorageBuffer = 12, SpvStorageFunction = 7,
-    SpvDecBlock = 2, SpvDecArrayStride = 6, SpvDecNonWritable = 24, SpvDecBuiltIn = 11, SpvDecBinding = 33,
+    SpvDecBlock = 2, SpvDecNoContraction = 42, SpvDecArrayStride = 6, SpvDecNonWritable = 24, SpvDecBuiltIn = 11, SpvDecBinding = 33,
     SpvDecDescriptorSet = 34, SpvDecOffset = 35, SpvBuiltInGlobalInvocationId = 28,
     SpvStorageWorkgroup = 4, SpvBuiltInWorkgroupId = 26, SpvBuiltInLocalInvocationId = 27,
     SpvCapShader = 1, SpvCapFloat64 = 10, SpvCapInt64 = 11, SpvCapStorageBuffer8BitAccess = 4448,
@@ -886,7 +888,14 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         [self setResult:i to:[self spvCanon:[self emit:SpvOpISub type:ty args:@[ @(a), @(p) ]] type:t]];
         return YES;
         }
-    [self setResult:i to:[self spvCanon:[self emit:op type:ty args:@[ @(a), @(b) ]] type:t]];
+    uint32_t r = [self emit:op type:ty args:@[ @(a), @(b) ]];
+    // Correctly rounded, but a driver may still fuse a multiply and the add
+    // after it into one rounding unless the result says NoContraction: the
+    // Raspberry Pi 5's V3D did, and a Mandelbrot whose goal is accuracy
+    // counted 882 more iterations than the CPU (2026-11-07).
+    if (!self.fast && (op == SpvOpFAdd || op == SpvOpFSub || op == SpvOpFMul))
+        spvOp(self.spv.decos, SpvOpDecorate, @[ @(r), @(SpvDecNoContraction) ]);
+    [self setResult:i to:[self spvCanon:r type:t]];
     return YES;
     }
 

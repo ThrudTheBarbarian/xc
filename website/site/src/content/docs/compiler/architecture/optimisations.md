@@ -41,7 +41,7 @@ cheapest passes, and `-O0` only the mandatory ones.
 | Guarded devirtualisation | A virtual call becomes a class test and a direct call that can be inlined. |
 | Idiom recognition | `memset` loops, and matrix multiplication replaced by kernels xcc emits for **SME** on Apple silicon and AVX2 and AVX-512 on x86-64. |
 | Bounds-check elimination | Range analysis removes checks it can prove, when checks are on. |
-| Floating-point contraction | Fused multiply-add: on arm64 an adjacent multiply and add, as clang does; on x86-64 only in `:goal(speed)` loops, so a result does not depend on which CPU runs it. |
+| Floating-point contraction | Fused multiply-add only in `:goal(speed)` code, on arm64 and x86-64, so an exact loop's result does not depend on which CPU or GPU runs it; C on arm64 fuses within an expression, as GCC and clang do there. |
 | Select-to-branch | A float select on one bit becomes a branch when one arm is costly (arm64). |
 | Hot-path block placement | arm64. |
 

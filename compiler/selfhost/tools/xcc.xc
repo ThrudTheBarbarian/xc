@@ -4849,6 +4849,7 @@ void main(void)
             Process.exit((i32)1); return;
             }
         cPathSetTarget(tgt);
+        cPathSetFuseMulAdd(d.arch().equals(String.withCString("arm64")));
         if (optOutline() || Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
             mod = CPath.lowerWith(cin, CPath.scratch(), cIncs, cDefs, d.fe());
         else
