@@ -454,6 +454,10 @@
             self.sqrtIntrinsic(m);
         if (stopHere(String.withCString("sqrt-intrinsic")))
             return;
+        // Below -O2 a check on a pointer made by `a + k` becomes one on a here;
+        // at -O2 it does just before bounds-elide.
+        if (_level < (u32)2)
+            self.boundsOrigin(m);
         if (_level >= (u32)2)
             self.powSquare(m);
         if (stopHere(String.withCString("pow-square")))
@@ -589,6 +593,10 @@
         if (_level >= (u32)2)
             self.staticInitGuard(m);
         if (stopHere(String.withCString("static-init-guard-elim")))
+            return;
+        if (_level >= (u32)2)
+            self.boundsOrigin(m);
+        if (stopHere(String.withCString("bounds-origin")))
             return;
         if (_level >= (u32)2)
             self.boundsElide(m);

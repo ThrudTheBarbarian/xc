@@ -10,6 +10,7 @@
 #import "XTIROptLoopUnrollVarTrip.h"
 #import "XTIROptIdiomMemset.h"
 #import "XTIROptBoundsElide.h"
+#import "XTIROptBoundsOrigin.h"
 #import "XTIROptIdiomMatMul.h"
 #import "XTIROptRedundantLoadCSE.h"
 #import "XTIROptDeadCode.h"
@@ -88,6 +89,10 @@
         sqrtIn.profile = profile;
         [p addPass:sqrtIn];
         }
+    // Below -O2 a check on a pointer made by `a + k` becomes one on a here; at
+    // -O2 it does just before bounds-elide.
+    if (level < 2)
+        [p addPass:[[XTIROptBoundsOrigin alloc] init]];
     if (level >= 2)
         {
         // Strength-reduce pow(x,2)→x*x before inlining (matches the library
@@ -178,6 +183,8 @@
         [p addPass:guards];
         // A checked build's subscript checks that cannot fail come out, before
         // the idioms and the vectoriser look at the loops.
+        // A check on a pointer made by `a + k` is a check on a (every level).
+        [p addPass:[[XTIROptBoundsOrigin alloc] init]];
         XTIROptBoundsElide* belide = [[XTIROptBoundsElide alloc] init];
         belide.profile = profile;
         [p addPass:belide];

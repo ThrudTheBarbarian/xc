@@ -17,6 +17,98 @@
     class Opt (BoundsElide)
     {
 
+    // ── bounds-origin ────────────────────────────────────────────────────
+    //
+    // `p[i]` with p = `a + k` (ElementAddr a, k: the same element type) is
+    // checked as `a[k + i]`. The heap check reads the block header at p, and a
+    // pointer into the middle of an array has none there, so before this a
+    // pointer made by arithmetic was not checked at all (issue #28). Followed
+    // through a chain of such additions. The sum is a u64: a negative step
+    // (p[-1] after p = a + 5) wraps back into range, as it must. A report then
+    // names the index into a. Runs at every level: a debug build (-O0) is
+    // where a check matters most.
+    final void boundsOrigin(IRModule* m)
+        {
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            Map* defs = (Map*)0;
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                u32 i = (u32)0;
+                while (i < bb.insns().count())
+                    {
+                    IRInsn* n = (IRInsn*)bb.insns().get(i);
+                    i = i + (u32)1;
+                    if (!beIsHeapCheck(n))
+                        continue;
+                    IROperand* po = (IROperand*)n.ops().get((u32)1);
+                    IROperand* io = (IROperand*)n.ops().get((u32)2);
+                    if (po.kind() != (u8)OPK_USE || po.val() == (IRValue*)0 || io.kind() != (u8)OPK_USE)
+                        continue;
+                    if (defs == (Map*)0)
+                        defs = self.defMap(fn);
+                    IRValue* p = po.val();
+                    IRValue* idx = io.val();
+                    u32 hops = (u32)0;
+                    while (hops < (u32)16)
+                        {
+                        IRInsn* d = (IRInsn*)defs.get((Hashable*)p);
+                        if (d == (IRInsn*)0 || !d.op().equals(String.withCString("ElementAddr")) || d.ops().count() != (u32)2
+                            || d.res() == (IRValue*)0)
+                            break;
+                        IROperand* bo = (IROperand*)d.ops().get((u32)0);
+                        IROperand* ko = (IROperand*)d.ops().get((u32)1);
+                        if (bo.kind() != (u8)OPK_USE || bo.val() == (IRValue*)0 || !bo.val().ty().equals(d.res().ty()))
+                            break;
+                        IROperand* k64 = boWiden(ko, bb, &i);
+                        if (k64 == (IROperand*)0)
+                            break;
+                        IRInsn* add = IRInsn.with(String.withCString("Add"));
+                        add.copyDbg(n);
+                        add.setRes(new IRValue(String.withCString("U64")));
+                        add.add(k64);
+                        add.add(IROperand.useVal(idx));
+                        bb.insns().insert(i - (u32)1, (Object*)add);
+                        i = i + (u32)1;
+                        idx = add.res();
+                        p = bo.val();
+                        hops = hops + (u32)1;
+                        }
+                    if (hops == (u32)0)
+                        continue;
+                    n.ops().set((u32)1, (Object*)IROperand.useVal(p));
+                    n.ops().set((u32)2, (Object*)IROperand.useVal(idx));
+                    }
+                }
+            }
+        }
+
+    // An ElementAddr index as a u64 operand: an immediate as it is, a value
+    // widened (sign-extended if it is signed) by an instruction placed before
+    // the check, which sits at *at - 1 (and moves on by one).
+    final IROperand* boWiden(IROperand* k, IRBlock* bb, u32* at)
+        {
+        if (k.kind() == (u8)OPK_IMMI)
+            return IROperand.immI(k.imm(), String.withCString("U64"));
+        if (k.kind() != (u8)OPK_USE || k.val() == (IRValue*)0)
+            return (IROperand*)0;
+        String* t = k.val().ty();
+        if (t.equals(String.withCString("U64")) || t.equals(String.withCString("I64")))
+            return IROperand.useVal(k.val());
+        bool sgn = t.equals(String.withCString("I8")) || t.equals(String.withCString("I16")) || t.equals(String.withCString("I32"));
+        bool uns = t.equals(String.withCString("U8")) || t.equals(String.withCString("U16")) || t.equals(String.withCString("U32"));
+        if (!sgn && !uns)
+            return (IROperand*)0;
+        IRInsn* x = IRInsn.with(sgn ? String.withCString("SExt") : String.withCString("ZExt"));
+        x.setRes(new IRValue(String.withCString("U64")));
+        x.add(IROperand.useVal(k.val()));
+        bb.insns().insert(*at - (u32)1, (Object*)x);
+        *at = *at + (u32)1;
+        return IROperand.useVal(x.res());
+        }
+
     final void boundsElide(IRModule* m)
         {
         String* chk = String.withCString("_xt_check_bounds_n");
