@@ -407,6 +407,9 @@ class ClassInfo
     // header before the address is used. Off by default; an ordinary build emits
     // none of this and links none of the runtime.
     bool _boundsCheck;
+    Map* _symSeen;          // symbolExists: the names of _m's symbols seen so far
+    IRModule* _symSeenM;
+    u32 _symSeenN;
     bool _tupleWanted;    // lowerTupleAssign: the method call it lowers returns several values
     String* _tupleIrRet;  // …and that call's aggregate IR type, while it is emitted
     Array* _tupleParts;   // …and its return types, one per value
@@ -11595,12 +11598,28 @@ class ClassInfo
         return emit(String.withCString("Const"), ty, ops);
         }
 
+    // Whether the module has a symbol of this name, through an index that
+    // takes in the symbols added since the last call (and starts again when
+    // the table shrank or the module changed). A scan of every symbol per
+    // call made lowering quadratic in a module's size: on the scale test's
+    // 1,600 classes it was the front end's largest cost (#18).
     bool symbolExists(String* name)
         {
-        for (u32 i = (u32)0; i < _m.syms().count(); i = i + (u32)1)
-            if (((IRSymbol*)_m.syms().get(i)).name().equals(name))
-                return true;
-        return false;
+        Array* syms = _m.syms();
+        if (_symSeen == (Map*)0 || _symSeenM != _m || syms.count() < _symSeenN)
+            {
+            _symSeen = new Map();
+            _symSeenM = _m;
+            _symSeenN = (u32)0;
+            }
+        while (_symSeenN < syms.count())
+            {
+            String* n = ((IRSymbol*)syms.get(_symSeenN)).name();
+            if (n != (String*)0)
+                _symSeen.set((Hashable*)n, (Object*)n);
+            _symSeenN = _symSeenN + (u32)1;
+            }
+        return name != (String*)0 && _symSeen.get((Hashable*)name) != (Object*)0;
         }
 
     String* runtimeHelper(String* name)
