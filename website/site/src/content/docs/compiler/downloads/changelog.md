@@ -3,6 +3,29 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.9.5.1 — `auto` for a block run once
+
+One fix to 0.9.5.
+
+### Fixed
+
+- **`par` auto now measures a block the program runs once.** `auto` timed
+  each choice from its second run in a process, so a block that a program
+  runs once per run was never timed, and stayed on its first guess for
+  good. On a Raspberry Pi 5 that guess was the GPU, 118 ms for a 2048×2048
+  Mandelbrot whose four cores take 90 ms. The program now notes that the
+  block ran once, times each choice on a later run in turn, and after a few
+  runs keeps the fastest. On the Pi that's the cores and the GPU together,
+  68 ms, for the xc version, and the cores alone, 88 ms, for the C version.
+- **A learned split between devices keeps its rates.** A run that went
+  straight to a learned "every device" choice split the block between the
+  CPU and the GPU without their measured speeds, so the split was a guess:
+  the same Mandelbrot took 116 ms where it had been measured at 68.
+- The settings `auto` keeps are re-learned for 0.9.5.1.
+
+Programs that run a block several times in a process, the benchmarks among
+them, measure as before, so 0.9.5's figures stand.
+
 ## Version 0.9.5 — the Raspberry Pi 5, and branches on one bit
 
 Everything since 0.9.4.
