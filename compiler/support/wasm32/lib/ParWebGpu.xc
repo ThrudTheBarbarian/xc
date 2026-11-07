@@ -54,6 +54,11 @@ class ParWebGpu
         ParLayout* l = ParDevice.layout(proto, src, lo, hi);
         if (l == (ParLayout*)0)
             return false;
+        // The loader dispatches rows of 65535 workgroups, which the kernel's
+        // thread index takes in, so a block that loops inside runs one item a
+        // thread (ParLayout.plan, issue #14); 2^30 keeps the index inside 32 bits.
+        l.maxThreads = (i64)1 << (i64)30;
+        l.plan(lo, hi);
         u8* obj = proto.objBytes();
         u32 nb = (u32)2 + l.nbuf + l.nglob + l.nred;
         if (nb > (u32)50)

@@ -1191,6 +1191,11 @@ class ParCuda
         ParLayout* l = ParDevice.layout(proto, src, lo, hi);
         if (l == (ParLayout*)0)
             return false;
+        // A launch's grid takes 2^31 - 1 blocks, far past any block's size, so
+        // a block that loops inside runs one item a thread (ParLayout.plan,
+        // issue #14); 2^30 keeps the thread index well inside 32 bits.
+        l.maxThreads = (i64)1 << (i64)30;
+        l.plan(lo, hi);
         if (tileable(l) && ParDevice.tilesWanted() && runTiled(proto, fn, l, lo, hi, started))
             return true;
         u8* obj = proto.objBytes();
