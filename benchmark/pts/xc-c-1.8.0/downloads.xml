@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<PhoronixTestSuite>
+  <Downloads>
+    <Package>
+      <URL>https://compile-xc.org/downloads/xcc-linux-0.9.5.1.tar.bz2</URL>
+      <SHA256>33e7ba260c4b68f3fe547d644720200929c5cbdd95ac46160f37c1f10d85fc43</SHA256>
+      <FileName>xcc-linux-0.9.5.1.tar.bz2</FileName>
+      <FileSize>11574907</FileSize>
+      <PlatformSpecific>Linux</PlatformSpecific>
+      <ArchitectureSpecific>x86_64</ArchitectureSpecific>
+    </Package>
+    <Package>
+      <URL>https://compile-xc.org/downloads/xcc-linux-arm64-0.9.5.1.tar.bz2</URL>
+      <SHA256>932fafbbb2ee26aad9a448d935d1d0b345c112447b1c8592389bce4585ff1530</SHA256>
+      <FileName>xcc-linux-arm64-0.9.5.1.tar.bz2</FileName>
+      <FileSize>14786762</FileSize>
+      <PlatformSpecific>Linux</PlatformSpecific>
+      <ArchitectureSpecific>aarch64</ArchitectureSpecific>
+    </Package>
+    <Package>
+      <URL>https://compile-xc.org/downloads/xcc-c-bench-sources-0.9.5.tar.bz2</URL>
+      <SHA256>0899bb7fcb4545d7ef2c1ace964b7feacb6575ddac9e55ef676edd99eb5416ab</SHA256>
+      <FileName>xcc-c-bench-sources-0.9.5.tar.bz2</FileName>
+      <FileSize>6182</FileSize>
+    </Package>
+  </Downloads>
+</PhoronixTestSuite>
