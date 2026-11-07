@@ -15,6 +15,32 @@
 // (Math$step ~30, the sqrt/pow wrappers ~3) sit comfortably under it.
 static const NSUInteger kMaxInlineInsns = 64;
 
+// Every call in fn is to a check (_xt_check_*) and no virtual or protocol
+// dispatch: an accessor, which inline-checks treats as a loop body.
+static BOOL checksOnlyCalls(XTIRModule* mod, XTIRFunction* fn)
+    {
+    for (XTIRBlock* b in fn.blocks)
+        for (XTIRInsn* n in b.instructions)
+            switch (n.opcode)
+                {
+            case XTIROpCall:
+                {
+                if (n.operands.count == 0 || n.operands[0].kind != XTIROperandKindSym)
+                    return NO;
+                XTIRSymbol* sym = [mod symbolForId:n.operands[0].symbolId];
+                if (!sym || ![sym.name hasPrefix:@"_xt_check"])
+                    return NO;
+                break;
+                }
+            case XTIROpCallIndirect: case XTIROpCallBanked: case XTIROpCallBankedIndirect: case XTIROpCallCloaked:
+            case XTIROpVTblDispatch: case XTIROpProtoDispatch:
+                return NO;
+            default:
+                break;
+                }
+    return YES;
+    }
+
 @implementation XTIROptInline
 
 - (NSString*)passName
@@ -641,6 +667,12 @@ static NSSet<NSValue*>* XTIRCyclicBlocks(XTIRFunction* fn)
             // (inlined everywhere, binaries grew 1.93x, cold code included).
             // Recomputed on each rescan, as an inline splits blocks.
             NSSet<NSValue*>* loops = self.checksOnly ? XTIRCyclicBlocks(caller) : nil;
+            // An accessor (no loop, and no call but its checks: Array.get,
+            // Map._readKey) is what a loop calls once an element: its checks
+            // inline everywhere in it. Out of line they were most of what a
+            // checked xcc spent its checking on (2026-11-07).
+            if (loops && loops.count == 0 && checksOnlyCalls(mod, caller))
+                loops = nil;
             for (NSUInteger bi = 0; bi < caller.blocks.count && !again; bi++)
                 {
                 XTIRBlock* bb = caller.blocks[bi];

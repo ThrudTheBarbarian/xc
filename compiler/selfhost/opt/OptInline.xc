@@ -33,6 +33,31 @@
     // more than one block, or branching to themselves (Kosaraju, iterative,
     // linear). A set, so the order blocks are visited in does not matter; the
     // reference's +cyclicBlocksOf: is the same.
+    // Every call in fn is to a check (_xt_check_*), with no dispatch.
+    final bool checksOnlyCalls(IRModule* m, IRFunc* fn)
+        {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                String* op = n.op();
+                if (op.equals(String.withCString("Call")))
+                    {
+                    IROperand* o = n.ops().count() > (u32)0 ? (IROperand*)n.ops().get((u32)0) : (IROperand*)0;
+                    if (o == (IROperand*)0 || o.kind() != (u8)OPK_SYM || o.name() == (String*)0
+                        || !o.name().hasPrefix(String.withCString("_xt_check")))
+                        return false;
+                    }
+                else if (op.hasPrefix(String.withCString("Call")) || op.equals(String.withCString("VTblDispatch"))
+                         || op.equals(String.withCString("ProtoDispatch")))
+                    return false;
+                }
+            }
+        return true;
+        }
+
     final Map* cyclicBlocks(IRFunc* fn)
         {
         Array* bs = fn.blocks();
@@ -147,6 +172,10 @@
             // (inlined everywhere, binaries grew 1.93x, cold code included).
             // Recomputed on each rescan, as an inline splits blocks.
             Map* loops = _inlineChecks ? cyclicBlocks(caller) : (Map*)0;
+            // An accessor's checks inline everywhere in it (the reference
+            // explains).
+            if (loops != (Map*)0 && loops.count() == (u32)0 && checksOnlyCalls(m, caller))
+                loops = (Map*)0;
             for (u32 b = (u32)0; b < caller.blocks().count(); b = b + (u32)1)
                 {
                 if (again)
