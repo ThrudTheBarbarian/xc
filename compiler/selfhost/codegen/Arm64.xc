@@ -39,13 +39,37 @@
 // of 1,600 classes took four minutes, 2026-11-02).
 class LiveSet
     {
+    // The members in the order they were added (which the allocation that
+    // follows depends on), and a bit per member for has(). The bit is the
+    // value's number in this liveness run (index): a Map here made the
+    // solver's has, add and copy hash every member, and on a module of 1,600
+    // classes liveness was most of the arm64 back end's time (#18).
     Array* _items;
-    Map* _in;
+    u8* _bits;
+    u32 _cap;               // bytes in _bits
+    static u32 _run;        // the run values are numbered in (newRun)
+    static u32 _next;       // the next number in it
 
     void init(void)
         {
         _items = new Array();
-        _in = new Map();
+        _cap = (u32)0;
+        }
+    // A new liveness run: numbers start again from 0. Every LiveSet lives in
+    // one run (Arm64.computeIntervals), so none sees another's numbers.
+    static void newRun(void)
+        {
+        _run = _run + (u32)1;
+        _next = (u32)0;
+        }
+    static u32 index(IRValue* v)
+        {
+        if (v.lsRun() != _run)
+            {
+            v.setLs(_run, _next);
+            _next = _next + (u32)1;
+            }
+        return v.lsIndex();
         }
     u32 count(void)
         {
@@ -57,20 +81,47 @@ class LiveSet
         }
     bool has(IRValue* v)
         {
-        return v != (IRValue*)0 && _in.get((Hashable*)v) != (Object*)0;
+        if (v == (IRValue*)0)
+            return false;
+        u32 i = index(v);
+        return (i >> 3) < _cap && (_bits[i >> 3] & ((u8)1 << (u8)(i & (u32)7))) != (u8)0;
+        }
+    void grow(u32 bytes)
+        {
+        u32 c = _cap == (u32)0 ? (u32)16 : _cap;
+        while (c < bytes)
+            c = c * (u32)2;
+        u8* nb = new u8[c];
+        for (u32 k = (u32)0; k < c; k = k + (u32)1)
+            nb[k] = k < _cap ? _bits[k] : (u8)0;
+        _bits = nb;
+        _cap = c;
         }
     void add(IRValue* v)
         {
-        if (v == (IRValue*)0 || has(v))
+        if (v == (IRValue*)0)
             return;
+        u32 i = index(v);
+        if ((i >> 3) >= _cap)
+            grow((i >> 3) + (u32)1);
+        u8 m = (u8)1 << (u8)(i & (u32)7);
+        if ((_bits[i >> 3] & m) != (u8)0)
+            return;
+        _bits[i >> 3] = _bits[i >> 3] | m;
         _items.add((Object*)v);
-        _in.set((Hashable*)v, (Object*)v);
         }
     LiveSet* copy(void)
         {
         LiveSet* o = new LiveSet();
         for (u32 i = (u32)0; i < _items.count(); i = i + (u32)1)
-            o.add((IRValue*)_items.get(i));
+            o._items.add(_items.get(i));
+        if (_cap > (u32)0)
+            {
+            o._bits = new u8[_cap];
+            for (u32 k = (u32)0; k < _cap; k = k + (u32)1)
+                o._bits[k] = _bits[k];
+            o._cap = _cap;
+            }
         return o;
         }
     void unionWith(LiveSet* b)
@@ -88,7 +139,10 @@ class LiveSet
             {
             IRValue* v = (IRValue*)_items.get(i);
             if (b.has(v))
-                _in.remove((Hashable*)v);
+                {
+                u32 x = index(v);
+                _bits[x >> 3] = _bits[x >> 3] & ~((u8)1 << (u8)(x & (u32)7));
+                }
             else
                 kept.add((Object*)v);
             }
@@ -9267,6 +9321,7 @@ class Arm64
     // a fixpoint, and one interval per value.
     void computeIntervals(IRFunc* fn)
     {
+        LiveSet.newRun();
         _start = new Map();
         _end = new Map();
         _phiRes = new Array();

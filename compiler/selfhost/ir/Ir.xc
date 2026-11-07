@@ -207,6 +207,10 @@ class IRValue
     // reproduce the same frame.
     u32 _seq;
     static u32 _nextSeq;
+    // The arm64 back end's liveness numbers values densely per run (LiveSet):
+    // the run, and the number in it.
+    u32 _lsRun;
+    u32 _lsIndex;
 
     void init(void)
         {
@@ -224,6 +228,19 @@ class IRValue
         {
         _nextSeq = _nextSeq + (u32)1;
         _seq = _nextSeq;
+        }
+    u32 lsRun(void)
+        {
+        return _lsRun;
+        }
+    u32 lsIndex(void)
+        {
+        return _lsIndex;
+        }
+    void setLs(u32 run, u32 i)
+        {
+        _lsRun = run;
+        _lsIndex = i;
         }
     u32 seq(void)
         {
