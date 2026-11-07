@@ -331,7 +331,9 @@ the CPU's in the last few bits; integer results are the same either way.
 With accuracy, the maths is precise and float results land within about one
 ULP of the CPU's. NVIDIA GPUs have no precise `sin`, `cos`, `exp`, `ln` or
 `pow`, so there a block that calls them runs on the CPU. Vulkan and WebGPU
-round `+`, `-` and `*` exactly but not division or square roots; a
+round `+`, `-` and `*` exactly, and through Vulkan a block whose goal is
+accuracy forbids the driver to fuse a multiply into the add after it, but not
+division or square roots; a
 block whose goal is accuracy divides and takes square roots of `float`s there
 in integer arithmetic, correctly rounded, so its results are the CPU's. They have no precise `sin`, `cos`, `exp`,
 `ln` or `pow`, so a block whose goal is accuracy and that calls them runs on

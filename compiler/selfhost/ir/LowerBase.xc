@@ -7600,8 +7600,10 @@ class ClassInfo
         // annotation syntax, which is why this sits under isFor's blocks.
         if (isFor && n.hasFlag((u32)NF_UNROLL))
             _fn.addUnrollHeader(hn);
-        // `:goal(speed)` on this loop or one around it.
-        if (isFor && _loopGoal == (u32)1)
+        // `:goal(speed)` on this loop or one around it (a par block's
+        // included), for a while loop as for a for loop (the reference
+        // explains).
+        if (_loopGoal == (u32)1)
             _fn.addSpeedHeader(hn);
 
         IRBlock* preheader = _blk;
@@ -7989,6 +7991,8 @@ class ClassInfo
         String* xn = String.withString(prefix);
         xn.appendCString("_forin_exit");
         IRBlock* header = addBlock(hn);
+        if (_loopGoal == (u32)1)
+            _fn.addSpeedHeader(hn);
         IRBlock* bodyB = addBlock(bn);
         IRBlock* exitB = addBlock(xn);
 

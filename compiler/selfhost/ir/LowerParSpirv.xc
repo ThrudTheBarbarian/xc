@@ -458,7 +458,12 @@
             spvSetResult(ip, spvCanon(spvEmitR((u32)SPV_ISUB, ty, spvA2(a, p)), t));
             return true;
             }
-        spvSetResult(ip, spvCanon(spvEmitR(op, ty, spvA2(a, b)), t));
+        u32 r = spvEmitR(op, ty, spvA2(a, b));
+        // NoContraction in an accuracy block, so no driver fuses a multiply
+        // into the add after it (the reference explains).
+        if (!_mFast && (op == (u32)SPV_FADD || op == (u32)SPV_FSUB || op == (u32)SPV_FMUL))
+            spvOp(_sMod.decos, (u32)SPV_DECORATE, spvA2(r, (u32)SPV_DEC_NOCONTRACTION));
+        spvSetResult(ip, spvCanon(r, t));
         return true;
         }
 

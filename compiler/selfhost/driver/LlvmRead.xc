@@ -44,6 +44,7 @@ class LlvmReader
     Map* _structs;          // "%struct.X" -> "Agg(<layout id>)"
     bool _cabiAll;          // every function through the C ABI (clang's object calls them, or they its)
     bool _split;            // clang compiles the rest: globals are its, and a function not read stays its
+    bool _fuseMulAdd;       // llvm.fmuladd is fused (arm64), as GCC and clang fuse C there
     Map* _declOf;           // "@name" -> the `declare` line for a function this file defined
     Array* _readFns;        // "@name"s of the functions read (xcc compiles them)
     Array* _unread;         // "@name"s of the functions not read (clang compiles them)
@@ -98,6 +99,14 @@ class LlvmReader
     // goes through the C ABI, the globals are clang's (here, references to
     // its), and a function that is not read is left to clang rather than
     // stopping the build.
+    // C on arm64 fuses the multiply-adds clang marks (llvm.fmuladd, its
+    // default -ffp-contract=on), as GCC and clang do there; on x86-64 C stays
+    // exact unless asked (owner, 2026-10-26 and 2026-11-07).
+    void setFuseMulAdd(bool b)
+        {
+        _fuseMulAdd = b;
+        }
+
     void setSplit(bool b)
         {
         _split = b;
@@ -2048,18 +2057,20 @@ class LlvmReader
                 eat(",");
                 }
             }
-        // a * b + c, fused or not as the target likes: a multiply and an add.
+        // a * b + c: a multiply and an add, the add marked `contract` where C
+        // fuses it (setFuseMulAdd).
         if (callee.hasPrefix(String.withCString("@llvm.fmuladd.")) && args.count() == (u32)3)
             {
+            String* fpred = _fuseMulAdd ? String.withCString("contract") : (String*)0;
             IRValue* p = emit(String.withCString("FMul"), rt, IROperand.useVal((IRValue*)args.get((u32)0)),
                               IROperand.useVal((IRValue*)args.get((u32)1)), (IROperand*)0);
             IRValue* addend = (IRValue*)args.get((u32)2);
             IRValue* nc = (IRValue*)_negOf.get((Hashable*)addend);
             if (nc != (IRValue*)0)
-                define(res, String.withCString("FSub"), rt, IROperand.useVal(p), IROperand.useVal(nc), (IROperand*)0, (String*)0);
+                define(res, String.withCString("FSub"), rt, IROperand.useVal(p), IROperand.useVal(nc), (IROperand*)0, fpred);
             else
                 define(res, String.withCString("FAdd"), rt, IROperand.useVal(p), IROperand.useVal(addend),
-                       (IROperand*)0, (String*)0);
+                       (IROperand*)0, fpred);
             return;
             }
         if (callee.hasPrefix(String.withCString("@llvm.")))

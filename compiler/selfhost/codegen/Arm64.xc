@@ -2679,8 +2679,8 @@ class Arm64
     }
 
     // a*b+c becomes fmadd, c-a*b fmsub, a*b-c fnmsub. One IEEE rounding instead
-    // of two, so NOT bit-identical to a separate fmul and fadd — but it is what
-    // clang emits under default FP contraction.
+    // of two, so only where the IR marks the add `contract`, as on x86-64 (the
+    // reference explains; owner, 2026-11-07).
     void fuseMultiplyAdds(IRFunc* fn)
     {
         Map* sharedFused = new Map();   // a shared FMul's result -> its fused uses
@@ -2693,6 +2693,7 @@ class Arm64
                 bool isSub = n.op().equals(String.withCString("FSub"));
                 if (!isAdd && !isSub) continue;
                 if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2) continue;
+                if (n.pred() == (String*)0 || !n.pred().equals(String.withCString("contract"))) continue;
                 IROperand* o0 = (IROperand*)n.ops().get((u32)0);
                 IROperand* o1 = (IROperand*)n.ops().get((u32)1);
                 // The fused FMul must be the instruction IMMEDIATELY before the
@@ -2844,6 +2845,8 @@ class Arm64
                 if (lane == (String*)0) continue;
                 bool flt = isFloatTy(lane);
                 if (isSub && !flt) continue;
+                // Float lanes fuse only where the add is marked `contract`.
+                if (flt && (n.pred() == (String*)0 || !n.pred().equals(String.withCString("contract")))) continue;
                 if (_fuseKind.get((Hashable*)n.res()) != (Object*)0) continue;
                 IROperand* o0 = (IROperand*)n.ops().get((u32)0);
                 IROperand* o1 = (IROperand*)n.ops().get((u32)1);

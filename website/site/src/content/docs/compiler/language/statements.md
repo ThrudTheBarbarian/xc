@@ -383,13 +383,16 @@ for (u32 i = 0; i < M; i++) :goal(speed)
         }
 ```
 
-Today the goal changes two things. On x86-64, a multiply whose product is
-added straight away (`s + a * b`, `a * b - c`) becomes one fused multiply-add
-under `speed`, rounding once instead of twice, in vectorised loops as in
-scalar code, wherever the processor has FMA (the compiler's AVX2 and AVX-512
-code); an exact loop keeps the two operations, so its answer does not depend
-on the processor. arm64 fuses these everywhere, as C compilers do there, so
-there `speed` and exact loops give the same answer.
+Today the goal changes two things. A multiply whose product is added straight
+away (`s + a * b`, `a * b - c`) becomes one fused multiply-add under `speed`,
+rounding once instead of twice, in vectorised loops as in scalar code: on
+arm64, and on x86-64 wherever the processor has FMA (the compiler's AVX2 and
+AVX-512 code). An exact loop keeps the two operations, on every CPU and every
+GPU, so its answer does not depend on the machine. The matrix kernels that
+stand in for a matrix-multiply nest (on the SME unit, and in NEON) fuse
+whatever the goal, as the hardware's outer-product and multiply-add
+instructions do: such a nest's result can differ from the separately rounded
+loop's in its last bits.
 
 On a Mac with SME, the compiler runs a
 matrix multiply like the one above on the SME unit, then checks the result for

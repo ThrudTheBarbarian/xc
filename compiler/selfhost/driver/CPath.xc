@@ -61,6 +61,10 @@ i32 cPathRelocatable(String* xo, String* out)
 // The two above, as functions, for a file compiled against this interface.
 String* cRestObject(void) { return gCRestObject; }
 void cPathSetProtect(bool b) { gCPathProtect = b; }
+// C on arm64 fuses clang's llvm.fmuladd, as GCC and clang do there (the
+// driver says so per target; LlvmReader.setFuseMulAdd).
+bool gCPathFuseMulAdd;
+void cPathSetFuseMulAdd(bool b) { gCPathFuseMulAdd = b; }
 void cPathSetTarget(String* t) { gCPathTarget = t; }
 void cPathSetFpContract(String* v) { gCPathFpContract = v; }
 
@@ -189,6 +193,7 @@ class CPath
         // clang compiles what xcc does not take, and the globals: their
         // objects are linked (CPath.restObject).
         r.setSplit(true);
+        r.setFuseMulAdd(gCPathFuseMulAdd);
         if (Platform.env(String.withCString("XC_C_CABI")).byteLength() > (u32)0)
             r.setCabiAll(true);
         IRModule* m = (IRModule*)0;
