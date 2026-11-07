@@ -101,21 +101,58 @@ void _xt_check_bounds_n(pointer ptr, u64 index, u64 count, u8* site)
         _xt_check_trap(site, index, count, true);
 }
 
+#if XT_CHECK_FULL
+// The runtime's table of array blocks (rt.c, rt-freestanding.c).
+void _xtc_block_note(pointer p);
+pointer _xtc_block_find(pointer p);
+
+// A pointer with no header in front of it, in the debug build: if it points
+// into a block a check has seen, check it there, as an index from the block's
+// start in the block's own elements. A pointer it cannot place (on the stack,
+// in a global, in memory C made, or into a block no check has seen) is not
+// checked.
+void _xt_check_interior(pointer ptr, u64 index, u8* site)
+{
+    u8* s = (u8*)_xtc_block_find(ptr);
+    if (s == (u8*)0)
+        return;
+    u8* h = s - 40;
+    u32 magic = *(u32*)(pointer)(h + 32);
+    u64 stride = *(u64*)(pointer)h;
+    if ((magic | (u32)1) != (u32)XT_CHECK_MAGIC_ALIGNED || stride == (u64)0)
+        return;
+    u64 off = (u64)((u8*)ptr - s);
+    if (off % stride != (u64)0)
+        return;
+    u64 at = off / stride + index;
+    if (at >= *(u64*)(pointer)(h + 8))
+        _xt_check_trap(site, at, *(u64*)(pointer)(h + 8), true);
+}
+#endif
+
 void _xt_check_bounds(pointer ptr, u64 index, u8* site)
 {
     if (ptr == (pointer)0)
         _xt_check_trap(site, index, (u64)0, false);
     else
         {
-        // Not a heap block (a pointer into a stack or global array, or into
-        // memory C made): its extent is unknown, so nothing is checked.
+        // Not a block's start (a pointer into a stack or global array, into
+        // memory C made, or into the middle of a block): -fbounds-check=light
+        // checks nothing, the debug build looks it up.
         u8* h = (u8*)ptr - 40;
         u32 magic = *(u32*)(pointer)(h + 32);
         // The two magics differ only in bit 0: one compare, and no merge.
         if ((magic | (u32)1) == (u32)XT_CHECK_MAGIC_ALIGNED)
             {
+#if XT_CHECK_FULL
+            _xtc_block_note(ptr);
+#endif
             if (index >= *(u64*)(pointer)(h + 8))
                 _xt_check_trap(site, index, *(u64*)(pointer)(h + 8), true);
             }
+#if XT_CHECK_FULL
+        else
+            _xt_check_interior(ptr, index, site);
+#endif
         }
 }

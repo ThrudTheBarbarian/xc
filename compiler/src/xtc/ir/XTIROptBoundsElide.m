@@ -728,10 +728,14 @@ static NSMapTable* dominators(XTIRFunction* fn)
                 self.visiting = [NSMutableSet set];
                 // A fixed-size array's check carries its count; a heap
                 // pointer's has one when the pointer is `new T[c]`'s own
-                // result, c a constant.
+                // result, c a constant. A heap check stays in the debug build
+                // (its checks are not inlined): it is where the runtime's
+                // table learns the block, for pointers into it that reach a
+                // callee.
                 BOOL fixed = chk && isCall(n, chkId, 6);
                 BOOL known = fixed ? constWide(n.operands[3], self.defOf, &count)
-                                   : (hchk && isCall(n, hchkId, 5) && [self newCount:n.operands[1] count:&count]);
+                                   : (self.profile.inlineChecks && hchk && isCall(n, hchkId, 5) &&
+                                      [self newCount:n.operands[1] count:&count]);
                 if (known && [self range:n.operands[2] lo:&lo hi:&hi depth:0] && lo >= 0 && hi < count && n.memoryResult)
                     {
                     // The call's memory goes to whatever it came from.

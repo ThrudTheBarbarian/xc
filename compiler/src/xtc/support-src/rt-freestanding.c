@@ -998,6 +998,44 @@ uint32_t _xtc_count(void* o)
     return (uint32_t)*(uint64_t*)((uint8_t*)o - XT_HDR + XT_COUNT_OFF);
     }
 
+#define XT_BTAB_CALLOC(n) _xt_calloc(n)
+#define XT_BTAB_FREE(p) _xt_free(p)
+/* -fbounds-check's table of array blocks (Checked.xc's checks, rt-checked.c's
+   on macOS). A pointer into the middle of a block has no header in front of
+   it, so a debug build's check finds the block here. Keyed by 64 KB granule,
+   one slot each: a block notes every granule it spans (up to XT_BTAB_SPAN), a
+   slot another block took since is a miss, and a miss is no check, never a
+   wrong one. The table is made on the first note, so a program that is not
+   checked never has one, and a block leaves it as it is freed
+   (_xtc_dealloc), so it never names freed memory. Lock-free: every slot is
+   one word, read and written whole. */
+#define XT_BTAB_BITS 16
+#define XT_BTAB_SPAN 4096
+static uint64_t* xt_btab;
+static uint64_t xt_btab_slot(uint64_t g){return (g*0x9E3779B97F4A7C15ULL)>>(64-XT_BTAB_BITS);}
+static uint64_t xt_btab_bytes(uint8_t* o){uint8_t* h=o-XT_HDR;return *(uint64_t*)(h+XT_COUNT_OFF)**(uint64_t*)(h+XT_STRIDE_OFF);}
+static void xt_btab_span(uint8_t* o,uint64_t* g0,uint64_t* g1){
+    uint64_t a=(uint64_t)o,b=xt_btab_bytes(o);
+    *g0=a>>16;*g1=(a+(b?b-1:0))>>16;if(*g1-*g0>=XT_BTAB_SPAN)*g1=*g0+XT_BTAB_SPAN-1;}
+void _xtc_block_note(void* o){
+    uint64_t* t=__atomic_load_n(&xt_btab,__ATOMIC_SEQ_CST);
+    if(!t){uint64_t* n=(uint64_t*)XT_BTAB_CALLOC((uint64_t)8<<XT_BTAB_BITS);if(!n)return;uint64_t* e=0;
+        if(__atomic_compare_exchange_n(&xt_btab,&e,n,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE))t=n;else{XT_BTAB_FREE(n);t=e;}}
+    uint64_t a=(uint64_t)o,g0,g1;xt_btab_span((uint8_t*)o,&g0,&g1);
+    if(__atomic_load_n(&t[xt_btab_slot(g0)],__ATOMIC_RELAXED)==a)return;   /* noted already */
+    for(uint64_t g=g0;g<=g1;g++)__atomic_store_n(&t[xt_btab_slot(g)],a,__ATOMIC_RELAXED);}
+/* The block p points into, or 0: one noted, live, whose bytes (or its end)
+   hold p. */
+void* _xtc_block_find(void* p){
+    uint64_t* t=__atomic_load_n(&xt_btab,__ATOMIC_SEQ_CST);if(!t)return 0;
+    uint64_t a=(uint64_t)p,s=__atomic_load_n(&t[xt_btab_slot(a>>16)],__ATOMIC_RELAXED);
+    if(!s||s>a||a-s>xt_btab_bytes((uint8_t*)s))return 0;
+    return (void*)s;}
+static void xt_btab_forget(uint8_t* o){
+    uint64_t* t=__atomic_load_n(&xt_btab,__ATOMIC_SEQ_CST);if(!t)return;
+    uint64_t a=(uint64_t)o,g0,g1;xt_btab_span(o,&g0,&g1);
+    for(uint64_t g=g0;g<=g1;g++){uint64_t e=a;__atomic_compare_exchange_n(&t[xt_btab_slot(g)],&e,0,0,__ATOMIC_ACQ_REL,__ATOMIC_ACQUIRE);}}
+
 void _xtc_dealloc(void* o)
     {
     uint32_t m0 = XT_MAGIC_AT(o);
@@ -1015,6 +1053,7 @@ void _xtc_dealloc(void* o)
         return;
         }
     _xtc_weak_zero_for(o);
+    xt_btab_forget((uint8_t*)o);
     uint8_t* base = (uint8_t*)o - XT_HDR;
     uint64_t stride = *(uint64_t*)(base + XT_STRIDE_OFF);
     uint64_t count = *(uint64_t*)(base + XT_COUNT_OFF);

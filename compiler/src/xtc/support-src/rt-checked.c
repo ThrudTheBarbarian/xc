@@ -401,17 +401,41 @@ void _xt_check_object(void *ptr, const char *site){
     abort();
 }
 
+/* rt.c's table of array blocks: a check notes each block it sees, and a
+ * pointer with no header in front of it is looked up there. */
+void _xtc_block_note(void *o);
+void *_xtc_block_find(void *p);
+
 void _xt_check_bounds(void *ptr, unsigned long index, const char *site){
     if (!ptr) { XT_MS_CAPTURE(); _xt_trap_bounds(site, ptr, index); return; }
     unsigned char *h = (unsigned char *)ptr - 40;   /* XT_HDR; magic +32, stride +0, count +8 — see rt.c */
-    /* Not a heap block. A block of 64 KB and more is page-aligned and carries
-     * the second magic (rt.c's XT_MAGIC_ALIGNED), with the same header: it
-     * used to be skipped, so no large array was ever checked. */
+    /* A block of 64 KB and more is page-aligned and carries the second magic
+     * (rt.c's XT_MAGIC_ALIGNED), with the same header: it used to be skipped,
+     * so no large array was ever checked. */
     unsigned int magic = *(unsigned int *)(h + 32);
-    if (magic != 0x58544F42U && magic != 0x58544F43U) return;
-    if (index >= *(unsigned long *)(h + 8)) {
+    if (magic == 0x58544F42U || magic == 0x58544F43U) {
+        _xtc_block_note(ptr);
+        if (index >= *(unsigned long *)(h + 8)) {
+            XT_MS_CAPTURE();
+            _xt_trap_bounds(site, ptr, index);
+        }
+        return;
+    }
+    /* Not a block's start: a pointer into the middle of a block a check has
+     * seen is checked there, as an index from the block's start in its own
+     * elements. Anything else (the stack, a global, memory C made) is not. */
+    unsigned char *s = (unsigned char *)_xtc_block_find(ptr);
+    if (!s) return;
+    h = s - 40;
+    magic = *(unsigned int *)(h + 32);
+    unsigned long stride = *(unsigned long *)h;
+    if ((magic != 0x58544F42U && magic != 0x58544F43U) || !stride) return;
+    unsigned long off = (unsigned long)((unsigned char *)ptr - s);
+    if (off % stride) return;
+    unsigned long at = off / stride + index;
+    if (at >= *(unsigned long *)(h + 8)) {
         XT_MS_CAPTURE();
-        _xt_trap_bounds(site, ptr, index);
+        _xt_trap_bounds(site, s, at);
     }
 }
 

@@ -170,8 +170,13 @@
                     // pointer's has one when the pointer is `new T[c]`'s
                     // own result, c a constant.
                     bool fixed = beIsCheck(n, chk);
+                    // A heap check stays in the debug build (-fbounds-check,
+                    // whose checks are not inlined): it is where the runtime's
+                    // table learns the block, for the pointers into it that
+                    // reach a callee (`f(a + 3)`).
+                    bool keepHeap = _profile == (OptProfile*)0 || !_profile.inlineChecks();
                     bool known = fixed ? self.vecConstWide((IROperand*)n.ops().get((u32)3), _beDef, &count)
-                                       : beIsHeapCheck(n) && beNewCount((IROperand*)n.ops().get((u32)1), &count);
+                                       : !keepHeap && beIsHeapCheck(n) && beNewCount((IROperand*)n.ops().get((u32)1), &count);
                     if (known && beRange((IROperand*)n.ops().get((u32)2), &lo, &hi, (u32)0)
                         && lo >= (i64)0 && hi < count && n.memRes() != (IRValue*)0)
                         {

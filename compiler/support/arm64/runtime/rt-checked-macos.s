@@ -571,15 +571,15 @@ Lchk_BB4_8:
 __xt_check_bounds:                      ; @_xt_check_bounds
 	.cfi_startproc
 ; %bb.0:
-	sub	sp, sp, #64
-	stp	x29, x30, [sp, #48]             ; 16-byte Folded Spill
-	add	x29, sp, #48
+	sub	sp, sp, #112
+	stp	x29, x30, [sp, #96]             ; 16-byte Folded Spill
+	add	x29, sp, #96
 	.cfi_def_cfa w29, 16
 	.cfi_offset w30, -8
 	.cfi_offset w29, -16
 	stur	x0, [x29, #-8]
 	stur	x1, [x29, #-16]
-	str	x2, [sp, #24]
+	stur	x2, [x29, #-24]
 	ldur	x8, [x29, #-8]
 	cbnz	x8, Lchk_BB5_8
 	b	Lchk_BB5_1
@@ -597,15 +597,15 @@ Lchk_BB5_2:
 
 	; InlineAsm End
 	mov	w8, #19                         ; =0x13
-	str	w8, [sp, #20]
+	stur	w8, [x29, #-28]
 	b	Lchk_BB5_3
 Lchk_BB5_3:                                 ; =>This Inner Loop Header: Depth=1
-	ldr	w8, [sp, #20]
+	ldur	w8, [x29, #-28]
 	subs	w8, w8, #28
 	b.gt	Lchk_BB5_6
 	b	Lchk_BB5_4
 Lchk_BB5_4:                                 ;   in Loop: Header=BB5_3 Depth=1
-	ldrsw	x9, [sp, #20]
+	ldursw	x9, [x29, #-28]
 	adrp	x8, ___xt_ms_regKnown@PAGE
 	add	x8, x8, ___xt_ms_regKnown@PAGEOFF
 	add	x9, x8, x9
@@ -613,50 +613,50 @@ Lchk_BB5_4:                                 ;   in Loop: Header=BB5_3 Depth=1
 	strb	w8, [x9]
 	b	Lchk_BB5_5
 Lchk_BB5_5:                                 ;   in Loop: Header=BB5_3 Depth=1
-	ldr	w8, [sp, #20]
+	ldur	w8, [x29, #-28]
 	add	w8, w8, #1
-	str	w8, [sp, #20]
+	stur	w8, [x29, #-28]
 	b	Lchk_BB5_3
 Lchk_BB5_6:
 	b	Lchk_BB5_7
 Lchk_BB5_7:
-	ldr	x0, [sp, #24]
+	ldur	x0, [x29, #-24]
 	ldur	x1, [x29, #-8]
 	ldur	x2, [x29, #-16]
 	bl	__xt_trap_bounds
-	b	Lchk_BB5_19
+	b	Lchk_BB5_35
 Lchk_BB5_8:
 	ldur	x8, [x29, #-8]
 	subs	x8, x8, #40
-	str	x8, [sp, #8]
-	ldr	x8, [sp, #8]
+	stur	x8, [x29, #-40]
+	ldur	x8, [x29, #-40]
 	ldr	w8, [x8, #32]
-	str	w8, [sp, #4]
-	ldr	w8, [sp, #4]
+	stur	w8, [x29, #-44]
+	ldur	w8, [x29, #-44]
 	mov	w9, #20290                      ; =0x4f42
 	movk	w9, #22612, lsl #16
 	subs	w8, w8, w9
-	b.eq	Lchk_BB5_11
+	b.eq	Lchk_BB5_10
 	b	Lchk_BB5_9
 Lchk_BB5_9:
-	ldr	w8, [sp, #4]
+	ldur	w8, [x29, #-44]
 	mov	w9, #20291                      ; =0x4f43
 	movk	w9, #22612, lsl #16
 	subs	w8, w8, w9
-	b.eq	Lchk_BB5_11
+	b.ne	Lchk_BB5_19
 	b	Lchk_BB5_10
 Lchk_BB5_10:
-	b	Lchk_BB5_19
-Lchk_BB5_11:
+	ldur	x0, [x29, #-8]
+	bl	__xtc_block_note
 	ldur	x8, [x29, #-16]
-	ldr	x9, [sp, #8]
+	ldur	x9, [x29, #-40]
 	ldr	x9, [x9, #8]
 	subs	x8, x8, x9
-	b.lo	Lchk_BB5_19
+	b.lo	Lchk_BB5_18
+	b	Lchk_BB5_11
+Lchk_BB5_11:
 	b	Lchk_BB5_12
 Lchk_BB5_12:
-	b	Lchk_BB5_13
-Lchk_BB5_13:
 	adrp	x8, ___xt_ms_reg@PAGE
 	add	x8, x8, ___xt_ms_reg@PAGEOFF
 	; InlineAsm Start
@@ -668,37 +668,146 @@ Lchk_BB5_13:
 
 	; InlineAsm End
 	mov	w8, #19                         ; =0x13
-	str	w8, [sp]
-	b	Lchk_BB5_14
-Lchk_BB5_14:                                ; =>This Inner Loop Header: Depth=1
-	ldr	w8, [sp]
+	str	w8, [sp, #48]
+	b	Lchk_BB5_13
+Lchk_BB5_13:                                ; =>This Inner Loop Header: Depth=1
+	ldr	w8, [sp, #48]
 	subs	w8, w8, #28
-	b.gt	Lchk_BB5_17
-	b	Lchk_BB5_15
-Lchk_BB5_15:                                ;   in Loop: Header=BB5_14 Depth=1
-	ldrsw	x9, [sp]
+	b.gt	Lchk_BB5_16
+	b	Lchk_BB5_14
+Lchk_BB5_14:                                ;   in Loop: Header=BB5_13 Depth=1
+	ldrsw	x9, [sp, #48]
 	adrp	x8, ___xt_ms_regKnown@PAGE
 	add	x8, x8, ___xt_ms_regKnown@PAGEOFF
 	add	x9, x8, x9
 	mov	w8, #1                          ; =0x1
 	strb	w8, [x9]
-	b	Lchk_BB5_16
-Lchk_BB5_16:                                ;   in Loop: Header=BB5_14 Depth=1
-	ldr	w8, [sp]
+	b	Lchk_BB5_15
+Lchk_BB5_15:                                ;   in Loop: Header=BB5_13 Depth=1
+	ldr	w8, [sp, #48]
 	add	w8, w8, #1
-	str	w8, [sp]
-	b	Lchk_BB5_14
+	str	w8, [sp, #48]
+	b	Lchk_BB5_13
+Lchk_BB5_16:
+	b	Lchk_BB5_17
 Lchk_BB5_17:
-	b	Lchk_BB5_18
-Lchk_BB5_18:
-	ldr	x0, [sp, #24]
+	ldur	x0, [x29, #-24]
 	ldur	x1, [x29, #-8]
 	ldur	x2, [x29, #-16]
 	bl	__xt_trap_bounds
-	b	Lchk_BB5_19
+	b	Lchk_BB5_18
+Lchk_BB5_18:
+	b	Lchk_BB5_35
 Lchk_BB5_19:
-	ldp	x29, x30, [sp, #48]             ; 16-byte Folded Reload
-	add	sp, sp, #64
+	ldur	x0, [x29, #-8]
+	bl	__xtc_block_find
+	str	x0, [sp, #40]
+	ldr	x8, [sp, #40]
+	cbnz	x8, Lchk_BB5_21
+	b	Lchk_BB5_20
+Lchk_BB5_20:
+	b	Lchk_BB5_35
+Lchk_BB5_21:
+	ldr	x8, [sp, #40]
+	subs	x8, x8, #40
+	stur	x8, [x29, #-40]
+	ldur	x8, [x29, #-40]
+	ldr	w8, [x8, #32]
+	stur	w8, [x29, #-44]
+	ldur	x8, [x29, #-40]
+	ldr	x8, [x8]
+	str	x8, [sp, #32]
+	ldur	w8, [x29, #-44]
+	mov	w9, #20290                      ; =0x4f42
+	movk	w9, #22612, lsl #16
+	subs	w8, w8, w9
+	b.eq	Lchk_BB5_23
+	b	Lchk_BB5_22
+Lchk_BB5_22:
+	ldur	w8, [x29, #-44]
+	mov	w9, #20291                      ; =0x4f43
+	movk	w9, #22612, lsl #16
+	subs	w8, w8, w9
+	b.ne	Lchk_BB5_24
+	b	Lchk_BB5_23
+Lchk_BB5_23:
+	ldr	x8, [sp, #32]
+	cbnz	x8, Lchk_BB5_25
+	b	Lchk_BB5_24
+Lchk_BB5_24:
+	b	Lchk_BB5_35
+Lchk_BB5_25:
+	ldur	x8, [x29, #-8]
+	ldr	x9, [sp, #40]
+	subs	x8, x8, x9
+	str	x8, [sp, #24]
+	ldr	x8, [sp, #24]
+	ldr	x10, [sp, #32]
+	udiv	x9, x8, x10
+	mul	x9, x9, x10
+	subs	x8, x8, x9
+	cbz	x8, Lchk_BB5_27
+	b	Lchk_BB5_26
+Lchk_BB5_26:
+	b	Lchk_BB5_35
+Lchk_BB5_27:
+	ldr	x8, [sp, #24]
+	ldr	x9, [sp, #32]
+	udiv	x8, x8, x9
+	ldur	x9, [x29, #-16]
+	add	x8, x8, x9
+	str	x8, [sp, #16]
+	ldr	x8, [sp, #16]
+	ldur	x9, [x29, #-40]
+	ldr	x9, [x9, #8]
+	subs	x8, x8, x9
+	b.lo	Lchk_BB5_35
+	b	Lchk_BB5_28
+Lchk_BB5_28:
+	b	Lchk_BB5_29
+Lchk_BB5_29:
+	adrp	x8, ___xt_ms_reg@PAGE
+	add	x8, x8, ___xt_ms_reg@PAGEOFF
+	; InlineAsm Start
+	stp	x19, x20, [x8, #152]
+	stp	x21, x22, [x8, #168]
+	stp	x23, x24, [x8, #184]
+	stp	x25, x26, [x8, #200]
+	stp	x27, x28, [x8, #216]
+
+	; InlineAsm End
+	mov	w8, #19                         ; =0x13
+	str	w8, [sp, #12]
+	b	Lchk_BB5_30
+Lchk_BB5_30:                                ; =>This Inner Loop Header: Depth=1
+	ldr	w8, [sp, #12]
+	subs	w8, w8, #28
+	b.gt	Lchk_BB5_33
+	b	Lchk_BB5_31
+Lchk_BB5_31:                                ;   in Loop: Header=BB5_30 Depth=1
+	ldrsw	x9, [sp, #12]
+	adrp	x8, ___xt_ms_regKnown@PAGE
+	add	x8, x8, ___xt_ms_regKnown@PAGEOFF
+	add	x9, x8, x9
+	mov	w8, #1                          ; =0x1
+	strb	w8, [x9]
+	b	Lchk_BB5_32
+Lchk_BB5_32:                                ;   in Loop: Header=BB5_30 Depth=1
+	ldr	w8, [sp, #12]
+	add	w8, w8, #1
+	str	w8, [sp, #12]
+	b	Lchk_BB5_30
+Lchk_BB5_33:
+	b	Lchk_BB5_34
+Lchk_BB5_34:
+	ldur	x0, [x29, #-24]
+	ldr	x1, [sp, #40]
+	ldr	x2, [sp, #16]
+	bl	__xt_trap_bounds
+	b	Lchk_BB5_35
+Lchk_BB5_35:
+	ldp	x29, x30, [sp, #96]             ; 16-byte Folded Reload
+	add	sp, sp, #112
 	ret
 	.cfi_endproc
                                         ; -- End function

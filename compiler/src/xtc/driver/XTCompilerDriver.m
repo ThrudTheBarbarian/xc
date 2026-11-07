@@ -1262,6 +1262,9 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
         [pp defineMacro:m value:@"1"];
 
     [pp defineMacro:@"XTC_POINTER_WIDTH" value:@"4"];
+    // Checked.xc's interior-pointer lookup is the debug build's alone: under
+    // =light its checks inline into loops, which must hold no call.
+    [pp defineMacro:@"XT_CHECK_FULL" value:(_options.boundsCheck && _options.boundsReport) ? @"1" : @"0"];
 
     // Target-shape macros mirrored from the legacy driver. Inline asm
     // in the runtime library / library classes references these because

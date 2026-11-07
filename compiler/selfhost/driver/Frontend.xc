@@ -2635,6 +2635,10 @@ void predefine(Preprocessor* pp, FeOptions* o)
     // eyes, not the target's.
     pp.define(String.withCString("XTC_POINTER_WIDTH"), String.withCString("4"));
 
+    // Checked.xc's interior-pointer lookup is the debug build's alone: under
+    // =light its checks inline into loops, which must hold no call.
+    pp.define(String.withCString("XT_CHECK_FULL"), String.withCString(o.boundsCheck() && o.boundsReport() ? "1" : "0"));
+
     // The xtc SOFTWARE stack exists only where the hardware one is too shallow
     // for the runtime's recursion frames. xt has a 4 KB hidden hardware stack
     // and drops XTC_SP entirely; defining it there would alias the backend's
