@@ -137,12 +137,20 @@ u32 gParRemoteWorkers;  // remote GPU workers in the default set (ParTiles tells
 // size bands a block, each the size measured and the four candidates' times.
 i64 gParProgN[256];
 i64 gParProgUs[1280];   // five candidates an entry: cpu, gpu, gpus, all, remote
+i64 gParProgCpu1[256];  // and the one-thread run's, which the record carries last
 u32 gParProgCount[64];
 bool gParLearned[64];
 bool gParProbed[64];    // XC_PAR_PROBE: the block's first run was the sweep
 i64 gParMeasN[64];
 i64 gParLastN[64];
 bool gParMeasuring[64]; // this run is one auto measures (not decided by a setting or the bounds)
+// A block the program's last process ran only once while auto measured it: its
+// candidates' first runs are then their timings (warmTime), since a warm-up
+// would be all such a program ever runs. Read from the settings once, and
+// kept there by noteRun.
+bool gParOnce[64];
+bool gParOnceRead[64];
+u32 gParProcRuns[64];   // measured runs of the block in this process
 // Warm measurement of a GPU candidate (warmTime below), per block and
 // candidate: 0 the GPU (through CUDA on Windows), 1 the GPU through Vulkan,
 // 2 the GPUs set, 3 the all-devices set, 4 the remote set.
@@ -632,7 +640,7 @@ class ParDevice
         return _store;
         }
 
-    // Once per process, on first open: drop learned/measuring records that are
+    // Once per process, on first open: drop learned/measuring/runs records that are
     // not this compiler's (a different version prefix), so a release upgrade
     // re-learns rather than acting on another code generator's crossover, and
     // the old records do not pile up. XC_PAR_FORGET=1 drops ALL of them, for a
@@ -642,15 +650,17 @@ class ParDevice
         bool forget = Platform.env(String.withCString("XC_PAR_FORGET")).byteLength() > (u32)0;
         String* curL = keyHead("learned");
         String* curM = keyHead("measuring");
+        String* curR = keyHead("runs");
         String* anyL = String.withCString("par.learned.");
         String* anyM = String.withCString("par.measuring.");
+        String* anyR = String.withCString("par.runs.");
         Array* ks = st.keys();
         bool changed = false;
         for (u32 j = (u32)0; j < ks.count(); j = j + (u32)1)
             {
             String* k = (String*)ks.get(j);
-            bool mine = k.hasPrefix(curL) || k.hasPrefix(curM);
-            bool ours = k.hasPrefix(anyL) || k.hasPrefix(anyM);
+            bool mine = k.hasPrefix(curL) || k.hasPrefix(curM) || k.hasPrefix(curR);
+            bool ours = k.hasPrefix(anyL) || k.hasPrefix(anyM) || k.hasPrefix(anyR);
             if (ours && (forget || !mine))
                 {
                 st.remove(k);
@@ -901,7 +911,8 @@ class ParDevice
         }
 
     // The measurements an earlier process of this program left unfinished
-    // (<n>,<cpu us>,<gpu us>,<gpus us>,<all us>,<remote us>; entries separated by ';'):
+    // (<n>,<cpu us>,<gpu us>,<gpus us>,<all us>,<remote us>,<one thread us>;
+    // entries separated by ';'):
     // a block run a few times a process still learns in the end. Each
     // candidate still warms up once in every process.
     static void readProgress(u32 i, ParChunk* proto)
@@ -914,11 +925,12 @@ class ParDevice
         u32 at = (u32)0;
         while (c[at] != (u8)0 && gParProgCount[i] < (u32)4)
             {
-            i64 f[6];
+            i64 f[7];
             f[5] = (i64)-1;                 // a record from before the remote set has five fields
-            for (u32 k = (u32)0; k < (u32)6; k = k + (u32)1)
+            f[6] = (i64)-1;                 // one from before the one-thread run, six
+            for (u32 k = (u32)0; k < (u32)7; k = k + (u32)1)
                 {
-                if (k == (u32)5 && !(c[at] == (u8)'-' || (c[at] >= (u8)'0' && c[at] <= (u8)'9')))
+                if (k >= (u32)5 && !(c[at] == (u8)'-' || (c[at] >= (u8)'0' && c[at] <= (u8)'9')))
                     break;
                 bool ng = c[at] == (u8)'-';
                 if (ng) at = at + (u32)1;
@@ -932,6 +944,7 @@ class ParDevice
                 gParProgN[e] = f[0];
                 for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
                     gParProgUs[e * (u32)5 + k] = f[k + (u32)1];
+                gParProgCpu1[e] = f[6];
                 gParProgCount[i] = gParProgCount[i] + (u32)1;
                 }
             if (c[at] == (u8)';') at = at + (u32)1;
@@ -1103,6 +1116,7 @@ class ParDevice
                 for (u32 j = (u32)1; j < (u32)4; j = j + (u32)1)
                     {
                     gParProgN[i * (u32)4 + j - (u32)1] = gParProgN[i * (u32)4 + j];
+                    gParProgCpu1[i * (u32)4 + j - (u32)1] = gParProgCpu1[i * (u32)4 + j];
                     for (u32 q = (u32)0; q < (u32)5; q = q + (u32)1)
                         gParProgUs[(i * (u32)4 + j - (u32)1) * (u32)5 + q] = gParProgUs[(i * (u32)4 + j) * (u32)5 + q];
                     }
@@ -1116,16 +1130,53 @@ class ParDevice
         gParProgUs[e * (u32)5 + (u32)2] = gParGpusUs[i];
         gParProgUs[e * (u32)5 + (u32)3] = gParAllUs[i];
         gParProgUs[e * (u32)5 + (u32)4] = gParRemUs[i];
+        gParProgCpu1[e] = gParCpu1Us[i];
         String* v = new String();
         for (u32 j = (u32)0; j < gParProgCount[i]; j = j + (u32)1)
             {
             u32 f = i * (u32)4 + j;
             if (j > (u32)0) v.appendCString(";");
-            v.appendFormat("%ld,%ld,%ld,%ld,%ld,%ld", gParProgN[f], gParProgUs[f * (u32)5], gParProgUs[f * (u32)5 + (u32)1],
-                           gParProgUs[f * (u32)5 + (u32)2], gParProgUs[f * (u32)5 + (u32)3], gParProgUs[f * (u32)5 + (u32)4]);
+            v.appendFormat("%ld,%ld,%ld,%ld,%ld,%ld,%ld", gParProgN[f], gParProgUs[f * (u32)5], gParProgUs[f * (u32)5 + (u32)1],
+                           gParProgUs[f * (u32)5 + (u32)2], gParProgUs[f * (u32)5 + (u32)3], gParProgUs[f * (u32)5 + (u32)4],
+                           gParProgCpu1[f]);
             }
         Settings* st = store();
         st.set(progressKey(i, proto), v);
+        st.save();
+        }
+
+    static String* onceKey(u32 i, ParChunk* proto)
+        {
+        String* key = keyHead("runs");
+        key.append(_hw);
+        key.appendCString(".");
+        key.appendCString(gParBlock[i]);
+        return key;
+        }
+
+    // Whether the last process ran the block once while auto measured it.
+    static void readOnce(u32 i, ParChunk* proto)
+        {
+        if (gParOnceRead[i] || _hw == (String*)0)
+            return;
+        gParOnceRead[i] = true;
+        String* v = store().get(onceKey(i, proto));
+        gParOnce[i] = v != (String*)0 && v.equals(String.withCString("1"));
+        }
+
+    // A measured run of the block: the first and the second of a process
+    // are written down (once, then more than once), so the next process
+    // knows which kind of program this is. A block a program runs once per
+    // process used to be measured never: each candidate's only run was its
+    // warm-up, and auto kept its first guess for good (the Raspberry Pi 5's
+    // V3D, 222 ms, where the four cores take 88; 2026-11-07).
+    static void noteRun(u32 i, ParChunk* proto)
+        {
+        if (!gParMeasuring[i] || _hw == (String*)0 || gParProcRuns[i] >= (u32)2)
+            return;
+        gParProcRuns[i] = gParProcRuns[i] + (u32)1;
+        Settings* st = store();
+        st.set(onceKey(i, proto), String.withCString(gParProcRuns[i] == (u32)1 ? "1" : "2"));
         st.save();
         }
 
@@ -1141,6 +1192,30 @@ class ParDevice
         gParGpuUs[i] = gParProgUs[e * (u32)5 + (u32)1];
         gParGpusUs[i] = gParProgUs[e * (u32)5 + (u32)2];
         gParAllUs[i] = gParProgUs[e * (u32)5 + (u32)3];
+        gParRemUs[i] = gParProgUs[e * (u32)5 + (u32)4];
+        gParCpu1Us[i] = gParProgCpu1[e];
+        if (gParCpu1Us[i] >= (i64)0 && gParCpuUs[i] >= (i64)0)
+            gParCpuOne[i] = gParCpu1Us[i] < gParCpuUs[i];
+        }
+
+    // A set the learned bounds chose splits the block between its workers by
+    // their rates, which the tile queue seeds from auto's times at this size
+    // (ParTiles). A process that measured nothing had none, so its split
+    // was a guess: on a Raspberry Pi 5 a Mandelbrot auto learned at 68 ms on
+    // the four cores and the V3D together took 116 ms on every later run,
+    // where the cores alone take 90 (2026-11-07). The times the measuring
+    // left are loaded instead, once a process.
+    static void seedRates(u32 i, i64 n)
+        {
+        if (gParMeasN[i] > (i64)0)
+            return;
+        i32 k = progressFor(i, n);
+        if (k < (i32)0)
+            return;
+        u32 e = i * (u32)4 + (u32)k;
+        gParMeasN[i] = gParProgN[e];
+        gParCpuUs[i] = gParProgUs[e * (u32)5 + (u32)0];
+        gParGpuUs[i] = gParProgUs[e * (u32)5 + (u32)1];
         gParRemUs[i] = gParProgUs[e * (u32)5 + (u32)4];
         }
 
@@ -1212,6 +1287,7 @@ class ParDevice
             Log.info("par: %s: %ld us on %s", gParBlock[i], us, choiceName(set));
         if (!gParMeasuring[i])
             return;
+        noteRun(i, proto);
         i64 warm = (i64)0;
         if (set == (i32)3)
             {
@@ -1291,11 +1367,20 @@ class ParDevice
         // The learned bounds decide a size outside them, with no measuring.
         readLearned(i, proto);
         if (gParRemoteWorkers >= (u32)1 && gParRemFrom[i] >= (i64)0 && n >= gParRemFrom[i])
+            {
+            seedRates(i, n);
             return (i32)5;
+            }
         if (gParAllFrom[i] >= (i64)0 && n >= gParAllFrom[i])
+            {
+            seedRates(i, n);
             return (i32)4;
+            }
         if (gParGpusFrom[i] >= (i64)0 && n >= gParGpusFrom[i])
+            {
+            seedRates(i, n);
             return (i32)3;
+            }
         if (gParGpuFrom[i] >= (i64)0 && n >= gParGpuFrom[i])
             return (i32)2;
         if (gParCpuUpTo[i] >= (i64)0 && n <= gParCpuUpTo[i])
@@ -1326,6 +1411,7 @@ class ParDevice
             loadProgress(i, n);
             }
         gParMeasuring[i] = true;
+        readOnce(i, proto);
         // A bandwidth-bound block (computeBound: few operations per byte it
         // moves, and no loop per item) cannot win on a GPU across a bus,
         // where every byte goes there and back around the run; auto does not
@@ -1415,6 +1501,7 @@ class ParDevice
     static void ranOnCpu(ParChunk* proto, i64 us)
         {
         u32 i = slot(proto.parName());
+        noteRun(i, proto);
         if (gParOneNow[i])
             {
             gParOneNow[i] = false;
@@ -1436,7 +1523,9 @@ class ParDevice
         // decided was not compared with anything, and may be another size.
         if (gParMeasuring[i])
             gParCpuRuns[i] = gParCpuRuns[i] + (u32)1;
-        bool measured = gParMeasuring[i] && gParCpuUs[i] < (i64)0 && gParCpuRuns[i] >= (u32)2;
+        // The first run counts too for a block run once a process (warmTime).
+        bool measured = gParMeasuring[i] && gParCpuUs[i] < (i64)0
+                        && (gParCpuRuns[i] >= (u32)2 || (gParOnce[i] && gParCpuRuns[i] == (u32)1));
         if (measured)
             gParCpuUs[i] = us;
         bool gpuable = hasKernel(proto.gpuSource());
@@ -1601,6 +1690,13 @@ class ParDevice
             {
             gParWarmFirst[e] = nowUs();
             gParWarmPrev[e] = (i64)-1;
+            // A block run once a process: its first run is all there is, so
+            // it is the time compared (the one-off kernel build is not in it).
+            if (gParOnce[i] && cand != (u32)1)
+                {
+                *out = us;
+                return true;
+                }
             return false;
             }
         gParWarmPrev[e] = us;
@@ -1627,6 +1723,7 @@ class ParDevice
     static void ranOnGpu(ParChunk* proto, ParLayout* l, i64 took, i64 gpuUs)
         {
         u32 bi = slot(proto.parName());
+        noteRun(bi, proto);
         if (gParMeasuring[bi])
             gParGpuRuns[bi] = gParGpuRuns[bi] + (u32)1;
         bool decided = false;
