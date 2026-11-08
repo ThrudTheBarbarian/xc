@@ -5,6 +5,36 @@ description: Previous xcc and xtc toolchain releases, kept for archival referenc
 
 These archives are kept so that an existing build can be reproduced byte-for-byte with the version it was compiled with. For new work, use the [most recent release](/compiler/downloads/). The [ChangeLog](/compiler/downloads/changelog/) lists what has changed since.
 
+## xcc 0.9.5.1
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.9.5.1.tar.bz2](/downloads/xcc-osx-0.9.5.1.tar.bz2) | 17.7 MB |
+| Linux (x86_64) | [xcc-linux-0.9.5.1.tar.bz2](/downloads/xcc-linux-0.9.5.1.tar.bz2) | 11.6 MB |
+| Linux (arm64, Raspberry Pi 5) | [xcc-linux-arm64-0.9.5.1.tar.bz2](/downloads/xcc-linux-arm64-0.9.5.1.tar.bz2) | 14.8 MB |
+| Windows (x64) | [xcc-win64-0.9.5.1.zip](/downloads/xcc-win64-0.9.5.1.zip) | 15.1 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.9.5.tar.bz2](/downloads/xcc-arm9-sysroot-0.9.5.tar.bz2) | 830 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-0.9.5.1.tar.bz2](/downloads/xcd-osx-0.9.5.1.tar.bz2) | 885 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.9.5.1.tar.bz2](/downloads/xcd-linux-0.9.5.1.tar.bz2) | 827 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-0.9.5.1.zip](/downloads/xcd-win64-0.9.5.1.zip) | 937 KB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.9.5.tar.bz2](/downloads/xcc-uxgtk-linux-0.9.5.tar.bz2) | 113 KB |
+| UXKit library (macOS arm64, Windows x64, Linux x86_64 and arm64, web) | [xcc-uxkit-0.9.5.tar.bz2](/downloads/xcc-uxkit-0.9.5.tar.bz2) | 4.0 MB |
+
+## xcc 0.9.5
+
+| Platform | Download | Size |
+| --- | --- | --- |
+| macOS (Apple silicon) | [xcc-osx-0.9.5.tar.bz2](/downloads/xcc-osx-0.9.5.tar.bz2) | 17.7 MB |
+| Linux (x86_64) | [xcc-linux-0.9.5.tar.bz2](/downloads/xcc-linux-0.9.5.tar.bz2) | 11.6 MB |
+| Linux (arm64, Raspberry Pi 5) | [xcc-linux-arm64-0.9.5.tar.bz2](/downloads/xcc-linux-arm64-0.9.5.tar.bz2) | 14.8 MB |
+| Windows (x64) | [xcc-win64-0.9.5.zip](/downloads/xcc-win64-0.9.5.zip) | 15.1 MB |
+| arm9 sysroot (any host) | [xcc-arm9-sysroot-0.9.5.tar.bz2](/downloads/xcc-arm9-sysroot-0.9.5.tar.bz2) | 830 KB |
+| xcd, the par daemon (macOS) | [xcd-osx-0.9.5.tar.bz2](/downloads/xcd-osx-0.9.5.tar.bz2) | 884 KB |
+| xcd, the par daemon (Linux x86_64) | [xcd-linux-0.9.5.tar.bz2](/downloads/xcd-linux-0.9.5.tar.bz2) | 827 KB |
+| xcd, the par daemon (Windows x64) | [xcd-win64-0.9.5.zip](/downloads/xcd-win64-0.9.5.zip) | 937 KB |
+| UXKit GTK 4 library (Linux x86_64) | [xcc-uxgtk-linux-0.9.5.tar.bz2](/downloads/xcc-uxgtk-linux-0.9.5.tar.bz2) | 113 KB |
+| UXKit library (macOS arm64, Windows x64, Linux x86_64 and arm64, web) | [xcc-uxkit-0.9.5.tar.bz2](/downloads/xcc-uxkit-0.9.5.tar.bz2) | 4.0 MB |
+
 ## xcc 0.9.4
 
 | Platform | Download | Size |
