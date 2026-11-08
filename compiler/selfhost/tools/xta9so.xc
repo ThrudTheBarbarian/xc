@@ -118,7 +118,7 @@ void main(void)
         }
 
     Arm32* as = new Arm32();
-    Array* text = as.assemble(all);
+    Data* text = as.assemble(all);
     if (as.failed())
         {
         // An unsupported mnemonic is NAMED, not counted: the point of the
@@ -128,34 +128,29 @@ void main(void)
         return;
         }
 
-    Array* iface = new Array();
+    Data* iface = new Data();
     if (ifacePath != (String*)0 && !ifacePath.equals(String.withCString("-")))
         {
-        Data* d = Files.readData(ifacePath);
-        if (d == (Data*)0)
+        iface = Files.readData(ifacePath);
+        if (iface == (Data*)0)
             {
             Stdio.printf("xta9so: cannot read interface '%s'\n", ifacePath.cString());
             Process.exit((i32)1);
             return;
             }
-        for (u32 i = (u32)0; i < d.length(); i = i + (u32)1)
-            iface.add((Object*)Number.withU32((u32)d.byteAt(i)));
         }
 
     Elf32* w = new Elf32();
     w.setCtorTable(as.ctorTable());
-    Array* img = w.sharedObject(text, as.data(), as.symbols(), as.relocations(),
+    Data* img = w.sharedObject(text, as.data(), as.symbols(), as.relocations(),
                                 needed, soname, iface);
-    if (w.failed() || img == (Array*)0)
+    if (w.failed() || img == (Data*)0)
         {
         Stdio.printf("xta9so: %s\n", w.failed() ? w.why().cString() : "link failed");
         Process.exit((i32)1);
         return;
         }
-    Data* d = Data.withCapacity(img.count());
-    for (u32 i = (u32)0; i < img.count(); i = i + (u32)1)
-        d.appendByte((u8)((Number*)img.get(i)).asU32());
-    if (!Files.writeData(out, d))
+    if (!Files.writeData(out, img))
         {
         Stdio.printf("xta9so: cannot write '%s'\n", out.cString());
         Process.exit((i32)1);

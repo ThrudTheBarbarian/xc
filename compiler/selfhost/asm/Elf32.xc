@@ -67,24 +67,24 @@ class Elf32DynRel
 
     class Elf32
     {
-    Array* _out; // Number@ per byte
+    Data* _out; // the image
     bool _failed;
     String* _why;
-    Array* _ctors; // the load-time constructor table (section 4), or empty
+    Data* _ctors; // the load-time constructor table (section 4), or empty
 
     void init(void)
         {
         _failed = false;
         _why = (String*)0;
-        _ctors = new Array();
+        _ctors = new Data();
         }
 
     // The words assembled under `.section .init_array`. An object writes
     // them as an `.init_array` section; a shared object puts them after
     // .data and gives the loader their bounds (DT_INIT_ARRAY).
-    void setCtorTable(Array* c)
+    void setCtorTable(Data* c)
         {
-        _ctors = c == (Array*)0 ? new Array() : c;
+        _ctors = c == (Data*)0 ? new Data() : c;
         }
 
     bool failed(void)
@@ -98,7 +98,7 @@ class Elf32DynRel
 
     void byte(u32 v)
         {
-        _out.add((Object*)Number.with(v & (u32)$FF));
+        _out.appendByte((u8)(v & (u32)$FF));
         }
     void half(u32 v)
         {
@@ -113,15 +113,15 @@ class Elf32DynRel
         byte(v >> 24);
         }
 
-    void bytesFrom(Array* src)
+    void bytesFrom(Data* src)
         {
-        for (u32 i = (u32)0; i < src.count(); i = i + (u32)1)
-            byte(((Number*)src.get(i)).asU32());
+        for (u32 i = (u32)0; i < src.length(); i = i + (u32)1)
+            byte((u32)src.byteAt(i));
         }
 
     void padTo(u32 n)
         {
-        while (_out.count() < n)
+        while (_out.length() < n)
             byte((u32)0);
         }
 
@@ -134,14 +134,14 @@ class Elf32DynRel
     // Names are stored once, NUL-separated, and referred to by byte offset.
     // Index 0 is always the empty string, which is what a nameless symbol or
     // section points at.
-    Array* _strBytes;
+    Data* _strBytes;
     Map* _strOffsets;
 
     void strTableInit(void)
         {
-        _strBytes = new Array();
+        _strBytes = new Data();
         _strOffsets = new Map();
-        _strBytes.add((Object*)Number.with((u32)0));
+        _strBytes.appendByte((u8)0);
         }
 
     u32 strAdd(String* s)
@@ -151,10 +151,10 @@ class Elf32DynRel
         Object* have = _strOffsets.get((Hashable*)s);
         if (have != 0)
             return ((Number*)have).asU32();
-        u32 at = _strBytes.count();
+        u32 at = _strBytes.length();
         for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            _strBytes.add((Object*)Number.with((u32)s.byteAt(i)));
-        _strBytes.add((Object*)Number.with((u32)0));
+            _strBytes.appendByte(s.byteAt(i));
+        _strBytes.appendByte((u8)0);
         _strOffsets.set((Hashable*)s, (Object*)Number.with(at));
         return at;
         }
@@ -172,15 +172,15 @@ class Elf32DynRel
     // metadata; one R+W segment holding .data and .bss. Both mapped 1:1, so a
     // file offset IS a virtual address and the two never have to be tracked
     // separately.
-    Array* sharedObject(Array* textIn, Array* dataIn, Array* syms, Array* relocs,
-                        Array* needed, String* soname, Array* iface)
+    Data* sharedObject(Data* textIn, Data* dataIn, Array* syms, Array* relocs,
+                        Array* needed, String* soname, Data* iface)
         {
-        Array* text = new Array();
-        for (u32 i = (u32)0; i < textIn.count(); i = i + (u32)1)
-            text.add(textIn.get(i));
-        Array* data = new Array();
-        for (u32 i = (u32)0; i < dataIn.count(); i = i + (u32)1)
-            data.add(dataIn.get(i));
+        Data* text = new Data();
+        for (u32 i = (u32)0; i < textIn.length(); i = i + (u32)1)
+            text.appendByte(textIn.byteAt(i));
+        Data* data = new Data();
+        for (u32 i = (u32)0; i < dataIn.length(); i = i + (u32)1)
+            data.appendByte(dataIn.byteAt(i));
         // The load-time constructor table goes at the END of .data,
         // word-aligned, and becomes plain data from here on: its words are
         // ordinary absolute references (R_ARM_RELATIVE once laid out), and
@@ -189,14 +189,14 @@ class Elf32DynRel
         // and a program's before its entry, each after that object's own
         // DT_NEEDED (bug 500).
         u32 ctorOff = (u32)0;
-        u32 ctorLen = _ctors.count();
+        u32 ctorLen = _ctors.length();
         if (ctorLen > (u32)0)
             {
-            while ((data.count() & (u32)3) != (u32)0)
-                data.add((Object*)Number.with((u32)0));
-            ctorOff = data.count();
+            while ((data.length() & (u32)3) != (u32)0)
+                data.appendByte((u8)0);
+            ctorOff = data.length();
             for (u32 i = (u32)0; i < ctorLen; i = i + (u32)1)
-                data.add(_ctors.get(i));
+                data.appendByte(_ctors.byteAt(i));
             Array* rs = new Array();
             for (u32 i = (u32)0; i < relocs.count(); i = i + (u32)1)
                 {
@@ -224,7 +224,7 @@ class Elf32DynRel
         // it is a contract spelled in two places, and deduplicating at the
         // point of writing means neither caller has to remember.
         Array* uniq = new Array();
-        for (u32 i = (u32)0; needed != (Array*)0 && i < needed.count(); i = i + (u32)1)
+        for (u32 i = (u32)0; needed != (Data*)0 && i < needed.count(); i = i + (u32)1)
             {
             String* n = (String*)needed.get(i);
             if (n != (String*)0 && n.byteLength() > (u32)0 && !Elf32.hasString(uniq, n))
@@ -233,7 +233,7 @@ class Elf32DynRel
         needed = uniq;
 
         u32 textBase = (u32)ELF32_PAGE; // leave the header page
-        u32 codeSize = text.count();
+        u32 codeSize = text.length();
 
         // COMMON symbols get storage of their own, after .data. Their `value`
         // is an ALIGNMENT until here and an offset afterwards — the one place
@@ -277,25 +277,25 @@ class Elf32DynRel
         for (u32 i = (u32)0; i < imports.count(); i = i + (u32)1)
             dyn.add((Object*)AsmSymbol.named((String*)imports.get(i)));
 
-        Array* dynstr = new Array();
-        dynstr.add((Object*)Number.with((u32)0));
+        Data* dynstr = new Data();
+        dynstr.appendByte((u8)0);
         Array* neededOff = new Array();
         for (u32 i = (u32)0; i < needed.count(); i = i + (u32)1)
             {
-            neededOff.add((Object*)Number.with(dynstr.count()));
+            neededOff.add((Object*)Number.with(dynstr.length()));
             Elf32.strInto(dynstr, (String*)needed.get(i));
             }
         u32 sonameOff = (u32)0;
         bool hasSoname = soname != (String*)0 && soname.byteLength() > (u32)0;
         if (hasSoname)
             {
-            sonameOff = dynstr.count();
+            sonameOff = dynstr.length();
             Elf32.strInto(dynstr, soname);
             }
         Array* nameOff = new Array();
         for (u32 i = (u32)0; i < dyn.count(); i = i + (u32)1)
             {
-            nameOff.add((Object*)Number.with(dynstr.count()));
+            nameOff.add((Object*)Number.with(dynstr.length()));
             Elf32.strInto(dynstr, ((AsmSymbol*)dyn.get(i)).name());
             }
 
@@ -310,7 +310,7 @@ class Elf32DynRel
         u32 symAddr = align4(off);
         off = symAddr + symCount * (u32)16;
         u32 strAddr = off;
-        off = off + dynstr.count();
+        off = off + dynstr.length();
 
         // The relocation COUNT has to be known before the layout that holds
         // them, and the relocations depend on the layout — so they are applied
@@ -318,12 +318,12 @@ class Elf32DynRel
         // against the final one. Patching the image twice would be cheaper and
         // far easier to get wrong.
         u32 provisional = alignPage(off + (u32)64);
-        Array* t0 = Elf32.copyBytes(text);
-        Array* d0 = Elf32.copyBytes(data);
+        Data* t0 = Elf32.copyBytes(text);
+        Data* d0 = Elf32.copyBytes(data);
         Array* count0 = new Array();
         if (!applyRelocs(relocs, syms, t0, d0, textBase, provisional, provisional,
                          imports, veneerBase, count0))
-            return (Array*)0;
+            return (Data*)0;
         u32 nDynRel = count0.count() + imports.count();
 
         u32 relAddr = align4(off);
@@ -331,14 +331,14 @@ class Elf32DynRel
         u32 dynAddr = align4(off);
         u32 dynEnd = dynAddr + dynCount * (u32)8;
         u32 dataBase = alignPage(dynEnd);
-        u32 bssBase = align4(dataBase + data.count());
+        u32 bssBase = align4(dataBase + data.length());
 
-        Array* textOut = Elf32.copyBytes(text);
-        Array* dataOut = Elf32.copyBytes(data);
+        Data* textOut = Elf32.copyBytes(text);
+        Data* dataOut = Elf32.copyBytes(data);
         Array* dynRel = new Array();
         if (!applyRelocs(relocs, syms, textOut, dataOut, textBase, dataBase, bssBase,
                          imports, veneerBase, dynRel))
-            return (Array*)0;
+            return (Data*)0;
         // Each veneer's word is resolved by the loader against its symbol.
         for (u32 i = (u32)0; i < imports.count(); i = i + (u32)1)
             dynRel.add((Object*)Elf32DynRel.with(
@@ -349,11 +349,11 @@ class Elf32DynRel
             _failed = true;
             _why = String.withCString(
                 "relocation count moved between the sizing and emitting passes");
-            return (Array*)0;
+            return (Data*)0;
             }
 
         // ── Emit ─────────────────────────────────────────────────────────
-        _out = new Array();
+        _out = new Data();
         byte((u32)$7F);
         byte((u32)'E');
         byte((u32)'L');
@@ -379,7 +379,7 @@ class Elf32DynRel
 
         phdr32((u32)1, textBase, dynEnd - textBase, dynEnd - textBase, (u32)5,
                (u32)ELF32_PAGE);
-        phdr32((u32)1, dataBase, data.count(), bssSize + data.count(), (u32)6,
+        phdr32((u32)1, dataBase, data.length(), bssSize + data.length(), (u32)6,
                (u32)ELF32_PAGE);
         phdr32((u32)2, dynAddr, dynCount * (u32)8, dynCount * (u32)8, (u32)6, (u32)4);
 
@@ -419,8 +419,8 @@ class Elf32DynRel
             }
 
         padTo(strAddr);
-        for (u32 i = (u32)0; i < dynstr.count(); i = i + (u32)1)
-            byte(((Number*)dynstr.get(i)).asU32());
+        for (u32 i = (u32)0; i < dynstr.length(); i = i + (u32)1)
+            byte((u32)dynstr.byteAt(i));
 
         padTo(relAddr);
         for (u32 i = (u32)0; i < dynRel.count(); i = i + (u32)1)
@@ -462,7 +462,7 @@ class Elf32DynRel
         word((u32)DT_STRTAB_T);
         word(strAddr);
         word((u32)DT_STRSZ_T);
-        word(dynstr.count());
+        word(dynstr.length());
         word((u32)DT_SYMENT_T);
         word((u32)16);
         word((u32)DT_REL_T);
@@ -485,8 +485,8 @@ class Elf32DynRel
         bytesFrom(dataOut);
 
         emitSections(textBase, textSize, hashAddr, nbucket, symCount, symAddr,
-                     strAddr, dynstr.count(), relAddr, nDynRel, dynAddr, dynCount,
-                     dataBase, data.count(), bssBase, bssSize, iface);
+                     strAddr, dynstr.length(), relAddr, nDynRel, dynAddr, dynCount,
+                     dataBase, data.length(), bssBase, bssSize, iface);
         return _out;
         }
 
@@ -500,18 +500,18 @@ class Elf32DynRel
                       u32 symCount, u32 symAddr, u32 strAddr, u32 strSize,
                       u32 relAddr, u32 nDynRel, u32 dynAddr, u32 dynCount,
                       u32 dataBase, u32 dataSize, u32 bssBase, u32 bssSize,
-                      Array* iface)
+                      Data* iface)
         {
         u32 ifaceOff = (u32)0;
-        u32 ifaceLen = iface == (Array*)0 ? (u32)0 : iface.count();
+        u32 ifaceLen = iface == (Data*)0 ? (u32)0 : iface.length();
         if (ifaceLen > (u32)0)
             {
-            while ((_out.count() & (u32)3) != (u32)0)
+            while ((_out.length() & (u32)3) != (u32)0)
                 byte((u32)0);
-            ifaceOff = _out.count();
+            ifaceOff = _out.length();
             bytesFrom(iface);
             byte((u32)0); // NUL-terminated, as the .incbin form was
-            ifaceLen = _out.count() - ifaceOff;
+            ifaceLen = _out.length() - ifaceOff;
             }
         Array* names = new Array();
         names.add((Object*)String.withCString(""));
@@ -525,20 +525,20 @@ class Elf32DynRel
         names.add((Object*)String.withCString(".bss"));
         names.add((Object*)String.withCString(".xtc.iface"));
         names.add((Object*)String.withCString(".shstrtab"));
-        Array* shstr = new Array();
+        Data* shstr = new Data();
         Array* nameOff = new Array();
         for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
             {
-            nameOff.add((Object*)Number.with(shstr.count()));
+            nameOff.add((Object*)Number.with(shstr.length()));
             Elf32.strInto(shstr, (String*)names.get(i));
             }
-        while ((_out.count() & (u32)3) != (u32)0)
+        while ((_out.length() & (u32)3) != (u32)0)
             byte((u32)0);
-        u32 shstrOff = _out.count();
+        u32 shstrOff = _out.length();
         bytesFrom(shstr);
-        while ((_out.count() & (u32)3) != (u32)0)
+        while ((_out.length() & (u32)3) != (u32)0)
             byte((u32)0);
-        u32 shoff = _out.count();
+        u32 shoff = _out.length();
 
         shdr32(nameOff, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0);
         shdr32(nameOff, (u32)1, (u32)1, (u32)6, textBase, textBase, textSize, (u32)0, (u32)0, (u32)4);
@@ -556,12 +556,12 @@ class Elf32DynRel
         // NOT SHF_ALLOC: the interface is build-time metadata, read from the
         // FILE by the compiler and never mapped at run time.
         shdr32(nameOff, (u32)9, (u32)1, (u32)0, (u32)0, ifaceOff, ifaceLen, (u32)0, (u32)0, (u32)4);
-        shdr32(nameOff, (u32)10, (u32)3, (u32)0, (u32)0, shstrOff, shstr.count(), (u32)0, (u32)0, (u32)4);
+        shdr32(nameOff, (u32)10, (u32)3, (u32)0, (u32)0, shstrOff, shstr.length(), (u32)0, (u32)0, (u32)4);
 
         patchWord32((u32)32, shoff);
-        _out.set((u32)46, (Object*)Number.with((u32)40));
-        _out.set((u32)48, (Object*)Number.with(names.count() & (u32)$FF));
-        _out.set((u32)50, (Object*)Number.with((names.count() - (u32)1) & (u32)$FF));
+        _out.setByteAt((u32)46, (u8)((u32)40));
+        _out.setByteAt((u32)48, (u8)(names.count() & (u32)$FF));
+        _out.setByteAt((u32)50, (u8)((names.count() - (u32)1) & (u32)$FF));
         }
 
     void phdr32(u32 kind, u32 vaddr, u32 filesz, u32 memsz, u32 flags, u32 palign)
@@ -600,12 +600,12 @@ class Elf32DynRel
     void patchWord32(u32 at, u32 v)
         {
         for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
-            _out.set(at + i, (Object*)Number.with((v >> ((u32)8 * i)) & (u32)$FF));
+            _out.setByteAt(at + i, (u8)((v >> ((u32)8 * i)) & (u32)$FF));
         }
 
     // Resolve every relocation into the image, recording the ones the LOADER
     // must finish. REL semantics throughout: the addend is in the word.
-    bool applyRelocs(Array* relocs, Array* syms, Array* textOut, Array* dataOut,
+    bool applyRelocs(Array* relocs, Array* syms, Data* textOut, Data* dataOut,
                      u32 textBase, u32 dataBase, u32 bssBase, Array* imports,
                      u32 veneerBase, Array* dynRel)
         {
@@ -613,7 +613,7 @@ class Elf32DynRel
             {
             AsmReloc* r = (AsmReloc*)relocs.get(i);
             AsmSymbol* sy = Elf32.findSym(syms, r.symbol());
-            Array* sec = r.section() == (u32)1 ? textOut : dataOut;
+            Data* sec = r.section() == (u32)1 ? textOut : dataOut;
             u32 base = r.section() == (u32)1 ? textBase : dataBase;
             u32 target = (u32)0;
             if (sy == (AsmSymbol*)0 || sy.section() == (u32)0)
@@ -665,19 +665,16 @@ class Elf32DynRel
         return (v + (u32)ELF32_PAGE - (u32)1) & ~((u32)ELF32_PAGE - (u32)1);
         }
 
-    static Array* copyBytes(Array* a)
+    static Data* copyBytes(Data* a)
         {
-        Array* o = new Array();
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            o.add(a.get(i));
-        return o;
+        return Data.withData(a);
         }
 
-    static void strInto(Array* blob, String* s)
+    static void strInto(Data* blob, String* s)
         {
         for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            blob.add((Object*)Number.with((u32)s.byteAt(i)));
-        blob.add((Object*)Number.with((u32)0));
+            blob.appendByte(s.byteAt(i));
+        blob.appendByte((u8)0);
         }
 
     static AsmSymbol* findSym(Array* syms, String* name)
@@ -716,28 +713,28 @@ class Elf32DynRel
         return (u32)0;
         }
 
-    static u32 readWord(Array* sec, u32 at)
+    static u32 readWord(Data* sec, u32 at)
         {
-        if (at + (u32)4 > sec.count())
+        if (at + (u32)4 > sec.length())
             return (u32)0;
-        return ((Number*)sec.get(at)).asU32() | (((Number*)sec.get(at + (u32)1)).asU32() << (u32)8) | (((Number*)sec.get(at + (u32)2)).asU32() << (u32)16) | (((Number*)sec.get(at + (u32)3)).asU32() << (u32)24);
+        return (u32)sec.byteAt(at) | ((u32)sec.byteAt(at + (u32)1) << (u32)8) | ((u32)sec.byteAt(at + (u32)2) << (u32)16) | ((u32)sec.byteAt(at + (u32)3) << (u32)24);
         }
 
     // `keepTop` preserves the condition and opcode bits a branch's displacement
     // shares its word with.
-    static void patchWord(Array* sec, u32 at, u32 value, bool keepTop)
+    static void patchWord(Data* sec, u32 at, u32 value, bool keepTop)
         {
-        if (at + (u32)4 > sec.count())
+        if (at + (u32)4 > sec.length())
             return;
         u32 old = Elf32.readWord(sec, at);
         u32 w = keepTop ? ((old & (u32)$FF000000) | (value & (u32)$FFFFFF)) : value;
         for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
-            sec.set(at + i, (Object*)Number.with((w >> ((u32)8 * i)) & (u32)$FF));
+            sec.setByteAt(at + i, (u8)((w >> ((u32)8 * i)) & (u32)$FF));
         }
 
-    Array* write(Array* text, Array* data, Array* syms, Array* relocs)
+    Data* write(Data* text, Data* data, Array* syms, Array* relocs)
         {
-        _out = new Array();
+        _out = new Data();
 
         // Symbols are ordered locals-first: the ELF symbol table requires it,
         // and `sh_info` on .symtab is the index of the first global.
@@ -790,8 +787,8 @@ class Elf32DynRel
         // The constructor table and its relocations are sections only when
         // there is one, so an object without constructors is laid out as it
         // always was.
-        Array* ctors = _ctors;
-        bool hasCtors = ctors.count() > (u32)0;
+        Data* ctors = _ctors;
+        bool hasCtors = ctors.length() > (u32)0;
         bool hasCtorRel = hasCtors && ctorRel.count() > (u32)0;
 
         strTableInit();
@@ -823,27 +820,27 @@ class Elf32DynRel
         shNames.add((Object*)String.withCString(".strtab"));
         shNames.add((Object*)String.withCString(".shstrtab"));
 
-        Array* shstr = new Array();
+        Data* shstr = new Data();
         Map* shstrOff = new Map();
-        shstr.add((Object*)Number.with((u32)0));
+        shstr.appendByte((u8)0);
         for (u32 i = (u32)1; i < shNames.count(); i = i + (u32)1)
             {
             String* n = (String*)shNames.get(i);
-            shstrOff.set((Hashable*)n, (Object*)Number.with(shstr.count()));
+            shstrOff.set((Hashable*)n, (Object*)Number.with(shstr.length()));
             for (u32 k = (u32)0; k < n.byteLength(); k = k + (u32)1)
-                shstr.add((Object*)Number.with((u32)n.byteAt(k)));
-            shstr.add((Object*)Number.with((u32)0));
+                shstr.appendByte(n.byteAt(k));
+            shstr.appendByte((u8)0);
             }
 
         // ── Offsets. The header is 52 bytes; everything else follows in the
         // order it is written, each aligned to four.
         u32 off = (u32)52;
         u32 textOff = off;
-        off = Elf32.align4(off + text.count());
+        off = Elf32.align4(off + text.length());
         u32 dataOff = off;
-        off = Elf32.align4(off + data.count());
+        off = Elf32.align4(off + data.length());
         u32 ctorOff = off;
-        off = Elf32.align4(off + ctors.count());
+        off = Elf32.align4(off + ctors.length());
         u32 textRelOff = off;
         off = Elf32.align4(off + textRel.count() * (u32)8);
         u32 dataRelOff = off;
@@ -853,9 +850,9 @@ class Elf32DynRel
         u32 symOff = off;
         off = Elf32.align4(off + (ordered.count() + (u32)1) * (u32)16);
         u32 strOff = off;
-        off = Elf32.align4(off + _strBytes.count());
+        off = Elf32.align4(off + _strBytes.length());
         u32 shstrOffset = off;
-        off = Elf32.align4(off + shstr.count());
+        off = Elf32.align4(off + shstr.length());
         u32 shOff = off;
 
         // Section indices, in the order the headers are written.
@@ -945,17 +942,17 @@ class Elf32DynRel
         sectionHeader((u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0, (u32)0);
         // .text — allocated, executable.
         sectionHeader(shstrIndexOf(shstrOff, ".text"), (u32)1, (u32)6, (u32)0,
-                      textOff, text.count(), (u32)0, (u32)0, (u32)4);
+                      textOff, text.length(), (u32)0, (u32)0, (u32)4);
         // .data — allocated, writable.
         sectionHeader(shstrIndexOf(shstrOff, ".data"), (u32)1, (u32)3, (u32)0,
-                      dataOff, data.count(), (u32)0, (u32)0, (u32)4);
+                      dataOff, data.length(), (u32)0, (u32)0, (u32)4);
         // .bss — allocated, writable, occupies no file space.
         sectionHeader(shstrIndexOf(shstrOff, ".bss"), (u32)8, (u32)3, (u32)0,
-                      dataOff + data.count(), (u32)0, (u32)0, (u32)0, (u32)4);
+                      dataOff + data.length(), (u32)0, (u32)0, (u32)0, (u32)4);
         // .init_array — SHT_INIT_ARRAY, allocated, writable.
         if (hasCtors)
             sectionHeader(shstrIndexOf(shstrOff, ".init_array"), (u32)14, (u32)3, (u32)0,
-                          ctorOff, ctors.count(), (u32)0, (u32)0, (u32)4);
+                          ctorOff, ctors.length(), (u32)0, (u32)0, (u32)4);
         if (textRel.count() > (u32)0)
             sectionHeader(shstrIndexOf(shstrOff, ".rel.text"), (u32)9, (u32)0, (u32)0,
                           textRelOff, textRel.count() * (u32)8, symIdx, textIdx, (u32)4);
@@ -969,9 +966,9 @@ class Elf32DynRel
         sectionHeader(shstrIndexOf(shstrOff, ".symtab"), (u32)2, (u32)0, (u32)0,
                       symOff, (ordered.count() + (u32)1) * (u32)16, strIdx, firstGlobal, (u32)4);
         sectionHeader(shstrIndexOf(shstrOff, ".strtab"), (u32)3, (u32)0, (u32)0,
-                      strOff, _strBytes.count(), (u32)0, (u32)0, (u32)1);
+                      strOff, _strBytes.length(), (u32)0, (u32)0, (u32)1);
         sectionHeader(shstrIndexOf(shstrOff, ".shstrtab"), (u32)3, (u32)0, (u32)0,
-                      shstrOffset, shstr.count(), (u32)0, (u32)0, (u32)1);
+                      shstrOffset, shstr.length(), (u32)0, (u32)0, (u32)1);
         return _out;
         }
 
@@ -1079,29 +1076,29 @@ class Elf32DynRel
 // guessed at. Mirrors the reference's `objectFromData:`.
 class Elf32Object
     {
-    Array* _text;   // Number@ per byte
-    Array* _data;
-    Array* _ctors;  // `.init_array`: the load-time constructor table
+    Data* _text;   // the section's bytes
+    Data* _data;
+    Data* _ctors;  // `.init_array`: the load-time constructor table
     Array* _syms;   // AsmSymbol@
     Array* _relocs; // AsmReloc@
 
     void init(void)
         {
-        _text = new Array();
-        _data = new Array();
-        _ctors = new Array();
+        _text = new Data();
+        _data = new Data();
+        _ctors = new Data();
         _syms = new Array();
         _relocs = new Array();
         }
-    Array* ctorTable(void)
+    Data* ctorTable(void)
         {
         return _ctors;
         }
-    Array* text(void)
+    Data* text(void)
         {
         return _text;
         }
-    Array* data(void)
+    Data* data(void)
         {
         return _data;
         }
@@ -1134,10 +1131,10 @@ class Elf32Object
             }
         return s;
         }
-    static void slice(Data* d, u32 off, u32 len, Array* into)
+    static void slice(Data* d, u32 off, u32 len, Data* into)
         {
         for (u32 i = (u32)0; i < len && off + i < d.length(); i = i + (u32)1)
-            into.add((Object*)Number.with((u32)d.byteAt(off + i)));
+            into.appendByte(d.byteAt(off + i));
         }
 
     // 0 when `d` is not an ARM ELF32 little-endian relocatable this reads.

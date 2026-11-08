@@ -64,7 +64,7 @@ void main(void)
         }
 
     Arm32* a = new Arm32();
-    Array* bytes = a.assemble(text);
+    Data* bytes = a.assemble(text);
     if (a.failed())
         {
         String* list = String.withCString("");
@@ -82,16 +82,16 @@ void main(void)
         {
         string digits = "0123456789abcdef";
         String* hex = String.withCString("");
-        for (u32 k = (u32)0; k < bytes.count(); k = k + (u32)1)
+        for (u32 k = (u32)0; k < bytes.length(); k = k + (u32)1)
             {
-            u32 b = ((Number*)bytes.get(k)).asU32();
+            u32 b = (u32)bytes.byteAt(k);
             hex.appendByte(digits[(b >> 4) & (u32)$F]);
             hex.appendByte(digits[b & (u32)$F]);
             }
         Stdio.printf("%s\n", hex.cString());
         return;
         }
-    Array* payload = bytes;
+    Data* payload = bytes;
     if (shared)
         {
         // Link it: the ET_DYN image the loader takes. This used to go through
@@ -102,8 +102,8 @@ void main(void)
         Elf32* w = new Elf32();
         w.setCtorTable(a.ctorTable());
         payload = w.sharedObject(a.bytes(), a.data(), a.symbols(), a.relocations(),
-                                 new Array(), (String*)0, new Array());
-        if (w.failed() || payload == (Array*)0)
+                                 new Array(), (String*)0, new Data());
+        if (w.failed() || payload == (Data*)0)
             {
             Stdio.printf("xtas9: %s: cannot link: %s\n", input.cString(),
                          w.failed() ? w.why().cString() : "?");
@@ -117,10 +117,7 @@ void main(void)
         elf.setCtorTable(a.ctorTable());
         payload = elf.write(a.bytes(), a.data(), a.symbols(), a.relocations());
         }
-    Data* d = Data.withCapacity((u32)0);
-    for (u32 k = (u32)0; k < payload.count(); k = k + (u32)1)
-        d.appendByte((u8)((Number*)payload.get(k)).asU32());
-    if (!Files.writeData(output, d))
+    if (!Files.writeData(output, payload))
         {
         Stdio.printf("xtas9: cannot write '%s'\n", output.cString());
         Process.exit((i32)1);

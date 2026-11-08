@@ -153,9 +153,9 @@ class AsmSymbol
 
     class Arm32
     {
-    Array* _bytes;     // Number@ per emitted byte — the .text payload
-    Array* _data;      // …and the .data one
-    Array* _ctors;     // …and `.section .init_array`, the load-time constructors
+    Data* _bytes;     // the emitted bytes — the .text payload
+    Data* _data;      // …and the .data one
+    Data* _ctors;     // …and `.section .init_array`, the load-time constructors
     u32 _secUsed;      // bit N: a relocation is relative to section N
     Array* _syms;      // AsmSymbol@
     Array* _relocs;    // AsmReloc@
@@ -170,18 +170,18 @@ class AsmSymbol
         {
         }
 
-    Array* bytes(void)
+    Data* bytes(void)
         {
         return _bytes;
         }
-    Array* data(void)
+    Data* data(void)
         {
         return _data;
         }
     // The load-time constructor table, kept apart from .data so a link can
     // give the loader its bounds (DT_INIT_ARRAY). Its relocations carry
     // section 4.
-    Array* ctorTable(void)
+    Data* ctorTable(void)
         {
         return _ctors;
         }
@@ -348,16 +348,16 @@ class AsmSymbol
     void word(u32 w)
         {
         if (_bytes == 0)
-            _bytes = new Array();
-        _bytes.add((Object*)Number.with(w & (u32)$FF));
-        _bytes.add((Object*)Number.with((w >> 8) & (u32)$FF));
-        _bytes.add((Object*)Number.with((w >> 16) & (u32)$FF));
-        _bytes.add((Object*)Number.with((w >> 24) & (u32)$FF));
+            _bytes = new Data();
+        _bytes.appendByte((u8)(w & (u32)$FF));
+        _bytes.appendByte((u8)((w >> 8) & (u32)$FF));
+        _bytes.appendByte((u8)((w >> 16) & (u32)$FF));
+        _bytes.appendByte((u8)((w >> 24) & (u32)$FF));
         }
 
     u32 here(void)
         {
-        return _bytes == 0 ? (u32)0 : _bytes.count();
+        return _bytes == 0 ? (u32)0 : _bytes.length();
         }
 
     // ── Instructions ─────────────────────────────────────────────────────
@@ -471,7 +471,7 @@ class AsmSymbol
     u32 _pc;      // the byte offset being emitted at
     bool _inText; // .text vs .data — only .text is assembled here
 
-    Array* assemble(String* text)
+    Data* assemble(String* text)
         {
         _lines = text.splitOnByte((u8)10);
         _labels = new Map();
@@ -539,9 +539,9 @@ class AsmSymbol
 
     void run(void)
         {
-        _bytes = new Array();
-        _data = new Array();
-        _ctors = new Array();
+        _bytes = new Data();
+        _data = new Data();
+        _ctors = new Data();
         _section = (u32)1;
         _pc = (u32)0;
         _dataPc = (u32)0;
@@ -966,19 +966,19 @@ class AsmSymbol
         if (_section == (u32)1)
             {
             if (_pass == (u32)2)
-                _bytes.add((Object*)Number.with(b & (u32)$FF));
+                _bytes.appendByte((u8)(b & (u32)$FF));
             _pc = _pc + (u32)1;
             return;
             }
         if (_section == (u32)4)
             {
             if (_pass == (u32)2)
-                _ctors.add((Object*)Number.with(b & (u32)$FF));
+                _ctors.appendByte((u8)(b & (u32)$FF));
             _ctorPc = _ctorPc + (u32)1;
             return;
             }
         if (_pass == (u32)2)
-            _data.add((Object*)Number.with(b & (u32)$FF));
+            _data.appendByte((u8)(b & (u32)$FF));
         _dataPc = _dataPc + (u32)1;
         }
 
@@ -1115,12 +1115,12 @@ class AsmSymbol
                 // Patch the ldr's 12-bit offset: pool word minus (site + 8).
                 u32 disp = wordAt - (site + (u32)8);
                 u32 idx = site;
-                u32 w = ((Number*)_bytes.get(idx)).asU32() | (((Number*)_bytes.get(idx + (u32)1)).asU32() << 8) | (((Number*)_bytes.get(idx + (u32)2)).asU32() << 16) | (((Number*)_bytes.get(idx + (u32)3)).asU32() << 24);
+                u32 w = (u32)_bytes.byteAt(idx) | ((u32)_bytes.byteAt(idx + (u32)1) << 8) | ((u32)_bytes.byteAt(idx + (u32)2) << 16) | ((u32)_bytes.byteAt(idx + (u32)3) << 24);
                 w = (w & ~(u32)$FFF) | (disp & (u32)$FFF);
-                _bytes.set(idx, (Object*)Number.with(w & (u32)$FF));
-                _bytes.set(idx + (u32)1, (Object*)Number.with((w >> 8) & (u32)$FF));
-                _bytes.set(idx + (u32)2, (Object*)Number.with((w >> 16) & (u32)$FF));
-                _bytes.set(idx + (u32)3, (Object*)Number.with((w >> 24) & (u32)$FF));
+                _bytes.setByteAt(idx, (u8)(w & (u32)$FF));
+                _bytes.setByteAt(idx + (u32)1, (u8)((w >> 8) & (u32)$FF));
+                _bytes.setByteAt(idx + (u32)2, (u8)((w >> 16) & (u32)$FF));
+                _bytes.setByteAt(idx + (u32)3, (u8)((w >> 24) & (u32)$FF));
                 }
             if (prior != (Number*)0)
                 continue; // reuses the word; nothing more to emit for this load

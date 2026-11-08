@@ -3175,22 +3175,19 @@ void emitArm9(DriverOptions* d, IRModule* mod)
         one.appendCString("\n");
         one.append(prog);
         Arm32* oas = new Arm32();
-        Array* otext = oas.assemble(one);
+        Data* otext = oas.assemble(one);
         if (oas.failed()) {
             Stdio.printf("xcc: %s\n", oas.why().cString());
             Process.exit((i32)1); return;
         }
         Elf32* ow = new Elf32();
         ow.setCtorTable(oas.ctorTable());
-        Array* img = ow.write(otext, oas.data(), oas.symbols(), oas.relocations());
-        if (img == (Array*)0) {
+        Data* img = ow.write(otext, oas.data(), oas.symbols(), oas.relocations());
+        if (img == (Data*)0) {
             Stdio.printf("xcc: error: arm9 object write failed\n");
             Process.exit((i32)1); return;
         }
-        Data* od = Data.withCapacity(img.count());
-        for (u32 i = (u32)0; i < img.count(); i = i + (u32)1)
-            od.appendByte((u8)((Number*)img.get(i)).asU32());
-        if (!Files.writeData(d.fe().output(), od)) {
+        if (!Files.writeData(d.fe().output(), img)) {
             Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
             Process.exit((i32)1); return;
         }
@@ -3227,7 +3224,7 @@ void emitArm9(DriverOptions* d, IRModule* mod)
         all.appendCString("\n");
     }
     Arm32* as = new Arm32();
-    Array* text = as.assemble(all);
+    Data* text = as.assemble(all);
     if (as.failed()) {
         Stdio.printf("xcc: %s\n", as.why().cString());
         Process.exit((i32)1); return;
@@ -3263,26 +3260,23 @@ void emitArm9(DriverOptions* d, IRModule* mod)
         if (!seen) needed.add((Object*)n);
     }
 
-    Array* iface = new Array();
+    Data* iface = new Data();
     String* ij = d.fe().ifaceJson();
     if (ij != (String*)0)
         for (u32 i = (u32)0; i < ij.byteLength(); i = i + (u32)1)
-            iface.add((Object*)Number.withU32((u32)ij.byteAt(i)));
+            iface.appendByte(ij.byteAt(i));
 
     Elf32* w = new Elf32();
     w.setCtorTable(as.ctorTable());
-    Array* img = w.sharedObject(text, as.data(), as.symbols(), as.relocations(),
+    Data* img = w.sharedObject(text, as.data(), as.symbols(), as.relocations(),
                                 needed,
                                 d.emitLib() ? baseNameOf(d.fe().output()) : (String*)0,
                                 iface);
-    if (w.failed() || img == (Array*)0) {
+    if (w.failed() || img == (Data*)0) {
         Stdio.printf("xcc: %s\n", w.failed() ? w.why().cString() : "arm9 link failed");
         Process.exit((i32)1); return;
     }
-    Data* out = Data.withCapacity(img.count());
-    for (u32 i = (u32)0; i < img.count(); i = i + (u32)1)
-        out.appendByte((u8)((Number*)img.get(i)).asU32());
-    if (!Files.writeData(d.fe().output(), out)) {
+    if (!Files.writeData(d.fe().output(), img)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
         Process.exit((i32)1); return;
     }
@@ -3336,21 +3330,19 @@ void linkObjectsArm9(DriverOptions* d)
         src.appendCString("\n");
     }
     Arm32* as = new Arm32();
-    Array* text = as.assemble(src);
+    Data* text = as.assemble(src);
     if (as.failed()) {
         Stdio.printf("xcc: %s\n", as.why().cString());
         Process.exit((i32)1); return;
     }
-    Array* mdata = new Array();
-    for (u32 i = (u32)0; i < as.data().count(); i = i + (u32)1) mdata.add(as.data().get(i));
+    Data* mdata = Data.withData(as.data());
     Array* msyms = new Array();
     for (u32 i = (u32)0; i < as.symbols().count(); i = i + (u32)1) msyms.add(as.symbols().get(i));
     Array* mrels = new Array();
     for (u32 i = (u32)0; i < as.relocations().count(); i = i + (u32)1) mrels.add(as.relocations().get(i));
     // The constructor tables are concatenated, so the image has ONE, whose
     // bounds the loader is given.
-    Array* mctors = new Array();
-    for (u32 i = (u32)0; i < as.ctorTable().count(); i = i + (u32)1) mctors.add(as.ctorTable().get(i));
+    Data* mctors = Data.withData(as.ctorTable());
 
     Map* defined = new Map();
     for (u32 i = (u32)0; i < msyms.count(); i = i + (u32)1) {
@@ -3435,14 +3427,12 @@ void linkObjectsArm9(DriverOptions* d)
 
     Elf32* w = new Elf32();
     w.setCtorTable(mctors);
-    Array* img = w.sharedObject(text, mdata, msyms, mrels, needed, (String*)0, new Array());
-    if (w.failed() || img == (Array*)0) {
+    Data* img = w.sharedObject(text, mdata, msyms, mrels, needed, (String*)0, new Data());
+    if (w.failed() || img == (Data*)0) {
         Stdio.printf("xcc: %s\n", w.failed() ? w.why().cString() : "arm9 link failed");
         Process.exit((i32)1); return;
     }
-    Data* out = Data.withCapacity(img.count());
-    for (u32 i = (u32)0; i < img.count(); i = i + (u32)1)
-        out.appendByte((u8)((Number*)img.get(i)).asU32());
+    Data* out = img;
     if (!Files.writeData(d.fe().output(), out)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
         Process.exit((i32)1); return;
@@ -3457,7 +3447,7 @@ void linkObjectsArm9(DriverOptions* d)
 // except the category-chain anchors (§4.3b), where first-wins would run one
 // module's category method as another's body. False (having said why) on
 // one of those.
-bool mergeArm9Object(Elf32Object* o, Array* mtext, Array* mdata, Array* mctors,
+bool mergeArm9Object(Elf32Object* o, Data* mtext, Data* mdata, Data* mctors,
                      Array* msyms, Array* mrels, Map* defined, u32 seq)
 {
     // A LOCAL symbol is private to its object, so it is tagged per object
@@ -3484,15 +3474,15 @@ bool mergeArm9Object(Elf32Object* o, Array* mtext, Array* mdata, Array* mctors,
         rels.add((Object*)(t == (Object*)0 ? r
                            : AsmReloc.with(r.section(), r.offset(), (String*)t, r.type())));
     }
-    while ((mtext.count() & (u32)3) != (u32)0) mtext.add((Object*)Number.withU32((u32)0));
-    u32 tbase = mtext.count();
-    for (u32 i = (u32)0; i < o.text().count(); i = i + (u32)1) mtext.add(o.text().get(i));
-    while ((mdata.count() & (u32)3) != (u32)0) mdata.add((Object*)Number.withU32((u32)0));
-    u32 dbase = mdata.count();
-    for (u32 i = (u32)0; i < o.data().count(); i = i + (u32)1) mdata.add(o.data().get(i));
-    while ((mctors.count() & (u32)3) != (u32)0) mctors.add((Object*)Number.withU32((u32)0));
-    u32 cbase = mctors.count();
-    for (u32 i = (u32)0; i < o.ctorTable().count(); i = i + (u32)1) mctors.add(o.ctorTable().get(i));
+    while ((mtext.length() & (u32)3) != (u32)0) mtext.appendByte((u8)0);
+    u32 tbase = mtext.length();
+    mtext.append(o.text());
+    while ((mdata.length() & (u32)3) != (u32)0) mdata.appendByte((u8)0);
+    u32 dbase = mdata.length();
+    mdata.append(o.data());
+    while ((mctors.length() & (u32)3) != (u32)0) mctors.appendByte((u8)0);
+    u32 cbase = mctors.length();
+    mctors.append(o.ctorTable());
     for (u32 i = (u32)0; i < o.symbols().count(); i = i + (u32)1) {
         AsmSymbol* sy = (AsmSymbol*)o.symbols().get(i);
         if (sy.section() == (u32)0) continue; // undefined: the link resolves it
