@@ -202,8 +202,8 @@ class Pe
         Map* symIndex = new Map();
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             symIndex.set((Hashable*)order.get(i), (Object*)Number.withU32(i + (u32)1)); // +1: 0 = absent
-        Array* textRel = new Array();
-        Array* dataRel = new Array();
+        Data* textRel = new Data();
+        Data* dataRel = new Data();
         u32 nTextRel = (u32)0;
         u32 nDataRel = (u32)0;
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
@@ -242,9 +242,9 @@ class Pe
             nTextRel = nTextRel + (u32)1;
             }
         // String table: names of 8 bytes or fewer are inlined, longer ones live here.
-        Array* strtab = new Array();
+        Data* strtab = new Data();
         for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
-            strtab.add((Object*)Number.withU32((u32)0));
+            strtab.appendByte((u8)0);
         Array* strx = new Array();
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             {
@@ -254,23 +254,23 @@ class Pe
                 strx.add((Object*)Number.withU32((u32)0));
                 continue;
                 }
-            strx.add((Object*)Number.withU32(strtab.count()));
+            strx.add((Object*)Number.withU32(strtab.length()));
             for (u32 b = (u32)0; b < n.byteLength(); b = b + (u32)1)
-                strtab.add((Object*)Number.withU32((u32)n.byteAt(b)));
-            strtab.add((Object*)Number.withU32((u32)0));
+                strtab.appendByte(n.byteAt(b));
+            strtab.appendByte((u8)0);
             }
-        u32 stsz = strtab.count();
+        u32 stsz = strtab.length();
         for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
-            strtab.set(b, (Object*)Number.withU32((stsz >> (b * (u32)8)) & (u32)$FF));
+            strtab.setByteAt(b, (u8)((stsz >> (b * (u32)8)) & (u32)$FF));
         u32 off = (u32)20 + (u32)2 * (u32)PE_SECT_HDR_SIZE;
         u32 textOff = off;
         off = off + mtext.length();
         u32 dataOff = off;
         off = off + mdata.length();
         u32 trelOff = off;
-        off = off + textRel.count();
+        off = off + textRel.length();
         u32 drelOff = off;
-        off = off + dataRel.count();
+        off = off + dataRel.length();
         u32 symOff = off;
         _out = new Data();
         p16((u32)COFF_MACHINE_AMD64);
@@ -314,14 +314,14 @@ class Pe
         appendAll(strtab);
         return _out;
         }
-    static void rel(Array* into, u32 off, u32 si, u32 type)
+    static void rel(Data* into, u32 off, u32 si, u32 type)
         {
         for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
-            into.add((Object*)Number.withU32((off >> (b * (u32)8)) & (u32)$FF));
+            into.appendByte((u8)((off >> (b * (u32)8)) & (u32)$FF));
         for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
-            into.add((Object*)Number.withU32((si >> (b * (u32)8)) & (u32)$FF));
-        into.add((Object*)Number.withU32(type & (u32)$FF));
-        into.add((Object*)Number.withU32((type >> (u32)8) & (u32)$FF));
+            into.appendByte((u8)((si >> (b * (u32)8)) & (u32)$FF));
+        into.appendByte((u8)(type & (u32)$FF));
+        into.appendByte((u8)((type >> (u32)8) & (u32)$FF));
         }
     static void sectHdr(Pe* w, String* nm, u32 sz, u32 raw, u32 rl, u32 nrel, u32 chars)
         {
@@ -598,7 +598,7 @@ class Pe
     u32 _expNamesRVA;
     u32 _expDllNameRVA;
     Array* _relocOffs; // Number@: data offsets of words needing a base relocation
-    Array* _reloc;     // Number@: the .reloc bytes
+    Data* _reloc;     // the .reloc bytes
     bool _hasIface;
     u32 _ifaceRVA;
     u32 _ifaceRaw;
@@ -611,8 +611,8 @@ class Pe
     Array* _dwarfRVA;     // Number@
     Array* _dwarfRaw;     // Number@
     Array* _dwarfNameOff; // Number@
-    Array* _coffStr;      // Number@: the string table's strings (its size word excluded)
-    Array* _coffSyms;     // Number@: the 18-byte symbol records
+    Data* _coffStr;      // the string table's strings (its size word excluded)
+    Data* _coffSyms;     // the 18-byte symbol records
     u32 _nCoffSyms;
     u32 _symTabRaw;
 
@@ -620,10 +620,10 @@ class Pe
     // table's own 4-byte size word.
     u32 coffName(String* n)
         {
-        u32 at = (u32)4 + _coffStr.count();
+        u32 at = (u32)4 + _coffStr.length();
         for (u32 i = (u32)0; i < n.byteLength(); i = i + (u32)1)
-            _coffStr.add((Object*)Number.withU32((u32)n.byteAt(i)));
-        _coffStr.add((Object*)Number.withU32((u32)0));
+            _coffStr.appendByte(n.byteAt(i));
+        _coffStr.appendByte((u8)0);
         return at;
         }
 
@@ -635,7 +635,7 @@ class Pe
     void layoutDebugAndSymbols(Map* symbols, Array* dataSyms, SectionBytes* data, u32 afterRaw0)
         {
         u32 afterRaw = afterRaw0;
-        _coffStr = new Array();
+        _coffStr = new Data();
         _dwarfRVA = new Array();
         _dwarfRaw = new Array();
         _dwarfNameOff = new Array();
@@ -664,7 +664,7 @@ class Pe
         Map* dataSet = new Map();
         for (u32 i = (u32)0; i < dataSyms.count(); i = i + (u32)1)
             dataSet.set((Hashable*)dataSyms.get(i), (Object*)Number.withU32((u32)1));
-        _coffSyms = new Array();
+        _coffSyms = new Data();
         _nCoffSyms = (u32)0;
         Array* names = symbols.allKeys();
         names.sort();
@@ -677,7 +677,7 @@ class Pe
             if (nm.byteLength() <= (u32)8)
                 {
                 for (u32 k = (u32)0; k < (u32)8; k = k + (u32)1)
-                    _coffSyms.add((Object*)Number.withU32(k < nm.byteLength() ? (u32)nm.byteAt(k) : (u32)0));
+                    _coffSyms.appendByte((u8)(k < nm.byteLength() ? (u32)nm.byteAt(k) : (u32)0));
                 }
             else
                 {
@@ -686,12 +686,12 @@ class Pe
                 }
             Pe.put32(_coffSyms, ((Number*)symbols.get((Hashable*)nm)).asU32());
             u32 secNo = inData ? (u32)3 : (u32)1;   // .data is the third section when present
-            _coffSyms.add((Object*)Number.withU32(secNo));
-            _coffSyms.add((Object*)Number.withU32((u32)0));
-            _coffSyms.add((Object*)Number.withU32(inData ? (u32)0 : (u32)$20)); // DT_FUNCTION
-            _coffSyms.add((Object*)Number.withU32((u32)0));
-            _coffSyms.add((Object*)Number.withU32((u32)2)); // IMAGE_SYM_CLASS_EXTERNAL
-            _coffSyms.add((Object*)Number.withU32((u32)0));
+            _coffSyms.appendByte((u8)(secNo));
+            _coffSyms.appendByte((u8)0);
+            _coffSyms.appendByte((u8)(inData ? (u32)0 : (u32)$20)); // DT_FUNCTION
+            _coffSyms.appendByte((u8)0);
+            _coffSyms.appendByte((u8)2); // IMAGE_SYM_CLASS_EXTERNAL
+            _coffSyms.appendByte((u8)0);
             _nCoffSyms = _nCoffSyms + (u32)1;
             }
         _symTabRaw = afterRaw;
@@ -872,7 +872,7 @@ class Pe
         // One block per 4 KB page: {page RVA, block size}, then a u16 per word
         // — type 10 (DIR64) in the top four bits, the offset in the page below
         // — padded to a multiple of four with an absolute (type 0) entry.
-        _reloc = new Array();
+        _reloc = new Data();
         u32 i = (u32)0;
         while (i < _relocOffs.count())
             {
@@ -887,22 +887,22 @@ class Pe
             for (u32 k = i; k < j; k = k + (u32)1)
                 {
                 u32 e = (u32)$A000 | ((_dataRVA + ((Number*)_relocOffs.get(k)).asU32()) & (u32)$FFF);
-                _reloc.add((Object*)Number.withU32(e & (u32)$FF));
-                _reloc.add((Object*)Number.withU32((e >> (u32)8) & (u32)$FF));
+                _reloc.appendByte((u8)(e & (u32)$FF));
+                _reloc.appendByte((u8)((e >> (u32)8) & (u32)$FF));
                 }
             if ((n & (u32)1) != (u32)0)
                 {
-                _reloc.add((Object*)Number.withU32((u32)0));
-                _reloc.add((Object*)Number.withU32((u32)0));
+                _reloc.appendByte((u8)0);
+                _reloc.appendByte((u8)0);
                 }
             i = j;
             }
-        if (_reloc.count() > (u32)0)
+        if (_reloc.length() > (u32)0)
             {
             _relocRVA = alignUp(_afterRVA, (u32)PE_SECT_ALIGN);
             _relocRaw = afterRaw;
-            _afterRVA = _relocRVA + _reloc.count();
-            afterRaw = _relocRaw + alignUp(_reloc.count(), (u32)PE_FILE_ALIGN);
+            _afterRVA = _relocRVA + _reloc.length();
+            afterRaw = _relocRaw + alignUp(_reloc.length(), (u32)PE_FILE_ALIGN);
             }
         layoutDebugAndSymbols(symbols, dataSyms, data, afterRaw);
 
@@ -915,10 +915,10 @@ class Pe
         a.appendByte((u8)y);
         a.appendByte((u8)z);
         }
-    static void put32(Array* a, u32 v)
+    static void put32(Data* a, u32 v)
         {
         for (u32 k = (u32)0; k < (u32)4; k = k + (u32)1)
-            a.add((Object*)Number.withU32((v >> ((u32)8 * k)) & (u32)$FF));
+            a.appendByte((u8)((v >> ((u32)8 * k)) & (u32)$FF));
         }
     // The rel32 of an instruction whose displacement is its last four bytes,
     // appended at the end of `text`.
@@ -1057,7 +1057,7 @@ class Pe
         p8((u32)14);
         p8((u32)0);                                 // linker version
         p32(alignUp(_textLen, (u32)PE_FILE_ALIGN)); // SizeOfCode
-        p32(alignUp(_rdataLen + _dataFileSz + ifaceLen + _reloc.count(), (u32)PE_FILE_ALIGN));
+        p32(alignUp(_rdataLen + _dataFileSz + ifaceLen + _reloc.length(), (u32)PE_FILE_ALIGN));
         p32((u32)0);                           // SizeOfUninitializedData
         p32(_pseudo.count() > (u32)0 ? _textRVA + _stubOff : _entryRVA); // AddressOfEntryPoint
         p32(_textRVA);                         // BaseOfCode
@@ -1096,10 +1096,10 @@ class Pe
                 p32(_descRVA);
                 p32(_descSz);
                 }
-            else if (i == (u32)5 && _reloc.count() > (u32)0)
+            else if (i == (u32)5 && _reloc.length() > (u32)0)
                 {
                 p32(_relocRVA);
-                p32(_reloc.count());
+                p32(_reloc.length());
                 }
             else if (i == (u32)12 && _nImports != (u32)0)
                 {
@@ -1125,8 +1125,8 @@ class Pe
         if (_hasIface)
             sect(String.withCString("xtciface"), ifaceLen, _ifaceRVA, ifaceLen, _ifaceRaw,
                  (u32)$40 | (u32)$40000000 | (u32)$02000000);
-        if (_reloc.count() > (u32)0)
-            sect(String.withCString(".reloc"), _reloc.count(), _relocRVA, _reloc.count(), _relocRaw,
+        if (_reloc.length() > (u32)0)
+            sect(String.withCString(".reloc"), _reloc.length(), _relocRVA, _reloc.length(), _relocRaw,
                  (u32)$40 | (u32)$40000000 | (u32)$02000000);
         for (u32 di = (u32)0; _dwarf != (DwarfWriter*)0 && di < (u32)5; di = di + (u32)1)
             {
@@ -1155,7 +1155,7 @@ class Pe
             for (u32 i = (u32)0; i < ifaceLen; i = i + (u32)1)
                 p8((u32)_iface.byteAt(i));
             }
-        if (_reloc.count() > (u32)0)
+        if (_reloc.length() > (u32)0)
             {
             padTo(_relocRaw);
             appendAll(_reloc);
@@ -1173,7 +1173,7 @@ class Pe
             {
             padTo(_symTabRaw);
             appendAll(_coffSyms);
-            p32((u32)4 + _coffStr.count());
+            p32((u32)4 + _coffStr.length());
             appendAll(_coffStr);
             }
         }
@@ -1385,10 +1385,9 @@ class Pe
             }
         }
 
-    void appendAll(Array* a)
+    void appendAll(Data* a)
         {
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            _out.appendByte((u8)((Number*)a.get(i)).asU32());
+        _out.append(a);
         }
     void appendSection(SectionBytes* s)
         {
