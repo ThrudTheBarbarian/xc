@@ -901,7 +901,7 @@
                     return (String*)0;
                 if (!self.vecIsElemAddr((IROperand*)n.ops().get((u32)0), iv, defOf))
                     return (String*)0;
-                if (!vecOperandOK((IROperand*)n.ops().get((u32)1), elems, B, (IRBlock*)defBlk.get((Hashable*)iv), defOf, defBlk))
+                if (!vecMapOperandOK((IROperand*)n.ops().get((u32)1), elems, B, (IRBlock*)defBlk.get((Hashable*)iv), defOf, defBlk))
                     return (String*)0;
                 sawStore = true;
                 stBases.add((Object*)self.vecElemBase((IROperand*)n.ops().get((u32)0), defOf));
@@ -917,9 +917,9 @@
                     return (String*)0;
                 if (n.ops().count() < (u32)2)
                     return (String*)0;
-                if (!vecOperandOK((IROperand*)n.ops().get((u32)0), elems, B, (IRBlock*)defBlk.get((Hashable*)iv), defOf, defBlk))
+                if (!vecMapOperandOK((IROperand*)n.ops().get((u32)0), elems, B, (IRBlock*)defBlk.get((Hashable*)iv), defOf, defBlk))
                     return (String*)0;
-                if (!vecOperandOK((IROperand*)n.ops().get((u32)1), elems, B, (IRBlock*)defBlk.get((Hashable*)iv), defOf, defBlk))
+                if (!vecMapOperandOK((IROperand*)n.ops().get((u32)1), elems, B, (IRBlock*)defBlk.get((Hashable*)iv), defOf, defBlk))
                     return (String*)0;
                 elems.add((Object*)n.res());
                 continue;
@@ -1077,6 +1077,23 @@
             return true;
         Object* db = defBlk.get((Hashable*)o.val());
         return db != (Object*)0 && (IRBlock*)db != B && (IRBlock*)db != H;
+        }
+
+    // A map's operand: as vecOperandOK, and also a constant of any type (a
+    // float's stays in the body, where its splat is made) and a parameter (it
+    // has no defining block, being defined before every one). `fa[i] =
+    // fb[i] * 2.0f` and `a[i] = b[i] + k` were left scalar for want of these.
+    final bool vecMapOperandOK(IROperand* o, Array* elems, IRBlock* B, IRBlock* H, Map* defOf, Map* defBlk)
+        {
+        if (o.kind() == (u8)OPK_USE)
+            {
+            Object* cd = defOf.get((Hashable*)o.val());
+            if (cd != 0 && ((IRInsn*)cd).op().equals(String.withCString("Const")))
+                return true;
+            if (cd == 0 && defBlk.get((Hashable*)o.val()) == 0)
+                return true;
+            }
+        return vecOperandOK(o, elems, B, H, defOf, defBlk);
         }
 
     final bool vecReduxOperandOK(IROperand* o, Array* elems, IRBlock* B, IRBlock* H, Map* defOf, Map* defBlk)

@@ -1462,6 +1462,14 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
           int64_t kk;
           if (resolveConstInt(o, defOf, &kk))
               return YES; // (widened) constant
+          // A constant of any type (a float's stays in the body, where its
+          // splat is made) and a parameter (no defining block: it is defined
+          // before every one). As the port's vecMapOperandOK.
+          XTIRInsn* cd = defOf[@(o.valueId)];
+          if (cd && cd.opcode == XTIROpConst)
+              return YES;
+          if (!cd && !defBlk[@(o.valueId)])
+              return YES;
           XTIRBlock* db = defBlk[@(o.valueId)];
           return db != nil && db != B && db != H; // loop-invariant
         };
