@@ -59,6 +59,9 @@ for f in acc spd; do grep -q '^_dot:' "$W/$f.s" || { echo "FAIL fp-accuracy: no 
 if command -v clang > /dev/null && [ "${XC##*/}" = xcc-xc ]; then
     "$XC" -q -O2 -A arm64 -S -o "$W/c.s" "$W/c.c" || { echo "FAIL build C"; exit 1; }
     [ "$(fused "$W/c.s")" -gt 0 ] || { echo "FAIL C on arm64 did not fuse"; fail=1; }
+    # arm64 Linux too: every arm64 target fuses C, by its CPU, not its name.
+    "$XC" -q -O2 -A arm64-linux -S -o "$W/cl.s" "$W/c.c" || { echo "FAIL build C for arm64-linux"; exit 1; }
+    [ "$(fused "$W/cl.s")" -gt 0 ] || { echo "FAIL C on arm64 Linux did not fuse"; fail=1; }
 fi
 [ $fail = 0 ] && echo "fp-accuracy: ok"
 exit $fail
