@@ -28,11 +28,28 @@ for s in r x; do
 done
 [ $fail = 0 ] && { cmp -s "$W/r.s" "$W/x.s" || { echo "FAIL par-vec-chain: the two compilers' assembly differs"; fail=1; }; }
 fn() { awk -v f="_ParImpl\$$1\$run:" '$0 == f {p=1; next} p && /^_ParImpl\$[0-9]+\$[a-zA-Z]+:/ {exit} p' "$W/x.s"; }
+# A block's number, found by its name (parName's string): --par-style=auto
+# lifts the program's plain loops into blocks too, and they come first.
+blk() {
+    awk -v want="$1" '
+        function hex(h,   v, i, c) { v = 0; h = tolower(h); sub(/^0x/, "", h)
+            for (i = 1; i <= length(h); i++) { c = index("0123456789abcdef", substr(h, i, 1)) - 1; v = v * 16 + c }
+            return v }
+        /^_ParImpl\$[0-9]+\$parName:/ { split($0, q, "$"); k = q[2]; inN = 1; next }
+        inN && /_str_[0-9]+@PAGE$/ { s = $NF; sub(/@PAGE$/, "", s); str[k] = s; inN = 0 }
+        /^_str_[0-9]+:$/ { cur = substr($0, 1, length($0) - 1); txt[cur] = ""; inS = 1; next }
+        inS && $1 == ".byte" { v = hex($2); if (v == 0) inS = 0; else txt[cur] = txt[cur] sprintf("%c", v); next }
+        { inS = 0 }
+        END { for (k in str) if (txt[str[k]] == want) { print k; exit } }' "$W/x.s"
+}
 if [ $fail = 0 ]; then
-    n=$(fn 0 | grep -cE '^\s+mul v[0-9]+\.4s')
+    m=$(blk mulchain)
+    [ -n "$m" ] || { echo "FAIL par-vec-chain: no block named mulchain"; fail=1; }
+    n=$(fn "$m" | grep -cE '^\s+mul v[0-9]+\.4s')
     [ "$n" -ge 4 ] || { echo "FAIL par-vec-chain: the multiply chain has $n lane multiplies, not four interleaved"; fail=1; }
-    for k in 1 2 3; do
-        fn $k | grep -qE '\bv[0-9]+\.4s\b' || { echo "FAIL par-vec-chain: block $k has no lane code"; fail=1; }
+    for b in shiftchain floatchain narrowchain; do
+        k=$(blk $b)
+        [ -n "$k" ] && fn "$k" | grep -qE '\bv[0-9]+\.4s\b' || { echo "FAIL par-vec-chain: block $b has no lane code"; fail=1; }
     done
 fi
 if [ $fail = 0 ] && [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
