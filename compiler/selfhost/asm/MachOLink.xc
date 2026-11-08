@@ -392,6 +392,7 @@ class MachOLink
                 progress = true;
                 }
             }
+        MachOLink.selectorStubs(mtext, mdata, msyms, mdataSyms, mfix, mObjc);
         // GOT references, now that the pull has settled: a target DEFINED here
         // needs no GOT — relax `adrp x,s@GOTPAGE; ldr x,[x,s@GOTPAGEOFF]` to
         // `adrp x,s@PAGE; add x,x,s@PAGEOFF` (rewriting the ldr into an add).
@@ -414,6 +415,87 @@ class MachOLink
             mtext.setByteAt(o + (u32)1, (u8)((add >> (u32)8) & (u32)$FF));
             mtext.setByteAt(o + (u32)2, (u8)((add >> (u32)16) & (u32)$FF));
             mtext.setByteAt(o + (u32)3, (u8)((add >> (u32)24) & (u32)$FF));
+            }
+        }
+
+    static void appendWord(SectionBytes* t, u32 w)
+        {
+        t.appendByte((u8)(w & (u32)$FF));
+        t.appendByte((u8)((w >> (u32)8) & (u32)$FF));
+        t.appendByte((u8)((w >> (u32)16) & (u32)$FF));
+        t.appendByte((u8)((w >> (u32)24) & (u32)$FF));
+        }
+
+    // clang's Objective-C selector stubs (#40): a call to `_objc_msgSend$sel`
+    // that nothing defines is a stub Apple's linker makes, so this one makes
+    // it too. Each selector gets its name in __objc_methname, a slot in
+    // __objc_selrefs pointing at the name (the runtime registers it at load
+    // and writes the selector back), and a stub under the call's name:
+    // `adrp x1, ref@PAGE; ldr x1, [x1, ref@PAGEOFF]; b _objc_msgSend`.
+    // Selectors go in the order their first call appears among the fixups;
+    // the reference linker makes the same bytes.
+    static void selectorStubs(SectionBytes* mtext, SectionBytes* mdata, Map* msyms, Array* mdataSyms,
+                              Array* mfix, Array* mObjc)
+        {
+        String* pre = String.withCString("_objc_msgSend$");
+        Array* stubs = new Array();
+        Map* seen = new Map();
+        for (u32 i = (u32)0; i < mfix.count(); i = i + (u32)1)
+            {
+            String* s = ((Arm64Fixup*)mfix.get(i)).symbol();
+            if (s == (String*)0 || s.byteLength() <= pre.byteLength() || !s.hasPrefix(pre))
+                continue;
+            if (msyms.get((Hashable*)s) != (Object*)0 || seen.get((Hashable*)s) != (Object*)0)
+                continue;
+            seen.set((Hashable*)s, (Object*)Number.withU32((u32)1));
+            stubs.add((Object*)s);
+            }
+        if (stubs.count() == (u32)0)
+            return;
+        Array* names = new Array();
+        Array* refs = new Array();
+        MachOLink.padArray(mdata, (u32)15);
+        u32 nbase = mdata.length();
+        for (u32 k = (u32)0; k < stubs.count(); k = k + (u32)1)
+            {
+            String* sel = ((String*)stubs.get(k)).substringFromByte(pre.byteLength());
+            String* nm = String.withCString("__xc_selname$").appending(sel);
+            msyms.set((Hashable*)nm, (Object*)Number.withU32(mdata.length()));
+            mdataSyms.add((Object*)nm);
+            names.add((Object*)nm);
+            for (u32 b = (u32)0; b < sel.byteLength(); b = b + (u32)1)
+                mdata.appendByte(sel.byteAt(b));
+            mdata.appendByte((u8)0);
+            refs.add((Object*)String.withCString("__xc_selref$").appending(sel));
+            }
+        mObjc.add((Object*)MachOObjcRange.with(String.withCString("__objc_methname"), String.withCString("__TEXT"),
+                                               (u32)2, nbase, mdata.length() - nbase));
+        MachOLink.padArray(mdata, (u32)7);
+        u32 rbase = mdata.length();
+        for (u32 k = (u32)0; k < stubs.count(); k = k + (u32)1)
+            {
+            String* ref = (String*)refs.get(k);
+            msyms.set((Hashable*)ref, (Object*)Number.withU32(mdata.length()));
+            mdataSyms.add((Object*)ref);
+            mfix.add((Object*)Arm64Fixup.make(mdata.length(), (u32)FIXUP_POINTER64, (String*)names.get(k), (u32)0));
+            for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
+                mdata.appendByte((u8)0);
+            }
+        // S_LITERAL_POINTERS, no dead strip: what clang gives its own selrefs.
+        mObjc.add((Object*)MachOObjcRange.with(String.withCString("__objc_selrefs"), String.withCString("__DATA"),
+                                               (u32)$10000005, rbase, mdata.length() - rbase));
+        MachOLink.padArray(mtext, (u32)3);
+        for (u32 k = (u32)0; k < stubs.count(); k = k + (u32)1)
+            {
+            String* ref = (String*)refs.get(k);
+            u32 at = mtext.length();
+            msyms.set((Hashable*)stubs.get(k), (Object*)Number.withU32(at));
+            mfix.add((Object*)Arm64Fixup.make(at, (u32)FIXUP_PAGE21, ref, (u32)0));
+            mfix.add((Object*)Arm64Fixup.make(at + (u32)4, (u32)FIXUP_PAGEOFF12, ref, (u32)3));
+            mfix.add((Object*)Arm64Fixup.make(at + (u32)8, (u32)FIXUP_BRANCH26, String.withCString("_objc_msgSend"), (u32)0));
+            MachOLink.appendWord(mtext, (u32)$90000001);  // adrp x1, ref@PAGE
+            MachOLink.appendWord(mtext, (u32)$F9400021);  // ldr x1, [x1, ref@PAGEOFF]
+            MachOLink.appendWord(mtext, (u32)$14000000);  // b _objc_msgSend
             }
         }
 

@@ -238,6 +238,77 @@ static NSUInteger appendModInit(XAArm64Assembler *as, NSMutableData *mdata,
     return mi.length + objMi.length;
 }
 
+static XAArm64Fixup *stubFixup(uint64_t off, XAArm64FixupKind kind, NSString *sym, uint32_t scale) {
+    XAArm64Fixup *f = [XAArm64Fixup new];
+    f.offset = off; f.kind = kind; f.symbol = sym; f.scale = scale;
+    return f;
+}
+
+static void appendWord(NSMutableData *t, uint32_t w) {
+    uint8_t b[4] = { (uint8_t)w, (uint8_t)(w >> 8), (uint8_t)(w >> 16), (uint8_t)(w >> 24) };
+    [t appendBytes:b length:4];
+}
+
+// clang's Objective-C selector stubs (#40): a call to `_objc_msgSend$sel` that
+// nothing defines is a stub Apple's linker makes, so this one makes it too.
+// Each selector gets its name in __objc_methname, a slot in __objc_selrefs
+// pointing at the name (the runtime registers it at load and writes the
+// selector back), and a stub under the call's name: `adrp x1, ref@PAGE;
+// ldr x1, [x1, ref@PAGEOFF]; b _objc_msgSend`. Selectors go in the order their
+// first call appears among the fixups (the port's MachOLink.selectorStubs).
+static void makeSelectorStubs(NSMutableData *mtext, NSMutableData *mdata,
+                              NSMutableDictionary<NSString *, NSNumber *> *msyms,
+                              NSMutableSet<NSString *> *mdataSyms,
+                              NSMutableArray<XAArm64Fixup *> *mfix,
+                              NSMutableArray<NSDictionary *> *mObjc) {
+    NSString *pre = @"_objc_msgSend$";
+    NSMutableArray<NSString *> *stubs = [NSMutableArray array];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    for (XAArm64Fixup *f in mfix) {
+        NSString *s = f.symbol;
+        if (!s || s.length <= pre.length || ![s hasPrefix:pre]) continue;
+        if (msyms[s] || [seen containsObject:s]) continue;
+        [seen addObject:s]; [stubs addObject:s];
+    }
+    if (!stubs.count) return;
+    uint8_t z = 0;
+    NSMutableArray<NSString *> *names = [NSMutableArray array], *refs = [NSMutableArray array];
+    while (mdata.length & 15) [mdata appendBytes:&z length:1];
+    uint64_t nbase = mdata.length;
+    for (NSString *s in stubs) {
+        NSString *sel = [s substringFromIndex:pre.length];
+        NSString *nm = [@"__xc_selname$" stringByAppendingString:sel];
+        msyms[nm] = @(mdata.length); [mdataSyms addObject:nm]; [names addObject:nm];
+        const char *c = sel.UTF8String;
+        [mdata appendBytes:c length:strlen(c) + 1];
+        [refs addObject:[@"__xc_selref$" stringByAppendingString:sel]];
+    }
+    [mObjc addObject:@{@"name":@"__objc_methname", @"seg":@"__TEXT", @"flags":@(2),
+                       @"off":@(nbase), @"size":@(mdata.length - nbase)}];
+    while (mdata.length & 7) [mdata appendBytes:&z length:1];
+    uint64_t rbase = mdata.length;
+    for (NSUInteger k = 0; k < stubs.count; k++) {
+        msyms[refs[k]] = @(mdata.length); [mdataSyms addObject:refs[k]];
+        [mfix addObject:stubFixup(mdata.length, XAArm64FixupPointer64, names[k], 0)];
+        uint8_t slot[8] = {0};
+        [mdata appendBytes:slot length:8];
+    }
+    // S_LITERAL_POINTERS, no dead strip: what clang gives its own selrefs.
+    [mObjc addObject:@{@"name":@"__objc_selrefs", @"seg":@"__DATA", @"flags":@(0x10000005),
+                       @"off":@(rbase), @"size":@(mdata.length - rbase)}];
+    while (mtext.length & 3) [mtext appendBytes:&z length:1];
+    for (NSUInteger k = 0; k < stubs.count; k++) {
+        uint64_t at = mtext.length;
+        msyms[stubs[k]] = @(at);
+        [mfix addObject:stubFixup(at, XAArm64FixupPage21, refs[k], 0)];
+        [mfix addObject:stubFixup(at + 4, XAArm64FixupPageOff12, refs[k], 3)];
+        [mfix addObject:stubFixup(at + 8, XAArm64FixupBranch26, @"_objc_msgSend", 0)];
+        appendWord(mtext, 0x90000001u);   // adrp x1, ref@PAGE
+        appendWord(mtext, 0xF9400021u);   // ldr x1, [x1, ref@PAGEOFF]
+        appendWord(mtext, 0x14000000u);   // b _objc_msgSend
+    }
+}
+
 static int mergeMachOInputs(NSArray<NSString *> *objectFiles,
                             NSArray<NSString *> *archives,
                             NSMutableData *mtext, NSMutableData *mdata,
@@ -481,6 +552,7 @@ static int mergeMachOInputs(NSArray<NSString *> *objectFiles,
             }
             refresh();
         }
+        makeSelectorStubs(mtext, mdata, msyms, mdataSyms, mfix, mObjc);
         // GOT references: now that the fixpoint has settled we know what ended up
         // in the image. A target DEFINED here needs no GOT indirection — relax
         // `adrp x,s@GOTPAGE; ldr x,[x,s@GOTPAGEOFF]` to `adrp x,s@PAGE;
@@ -981,23 +1053,12 @@ int main(int argc, const char *argv[]) {
         // have, is a link error rather than a launch-time `Symbol not found`.
         NSArray<NSString *> *unexported = [XTMachOWriter lastUnexportedSystemImports];
         if (unexported.count) {
-            BOOL stubs = NO;
             for (NSString *s in unexported) {
                 NSString *shown = [s hasPrefix:@"_"] ? [s substringFromIndex:1] : s;
-                // clang's Objective-C selector stubs (objc_msgSend$<selector>)
-                // are made by Apple's linker, which this one is not.
-                if ([shown hasPrefix:@"objc_msgSend$"]) {
-                    fprintf(stderr, "xcc: error: undefined symbol '%s': a selector stub, which clang leaves "
-                                    "for the linker to make and xcc's linker does not\n", shown.UTF8String);
-                    stubs = YES;
-                    continue;
-                }
                 fprintf(stderr, "xcc: error: undefined symbol '%s': no linked library exports it, and "
                                 "libSystem does not have it. If it lives in a framework, #import <Framework> "
                                 "or pass -framework <Framework>\n", shown.UTF8String);
             }
-            if (stubs)
-                fprintf(stderr, "xcc: note: build Objective-C objects with clang -fno-objc-msgsend-selector-stubs\n");
             return 1;
         }
         if (![macho writeToFile:outPath atomically:YES]) {

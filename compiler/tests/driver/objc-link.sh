@@ -21,8 +21,8 @@ i32 main(void)
     return 0;
     }
 XC
-# A real reference: an Objective-C object linked in (plain objc_msgSend
-# calls; the selector stubs clang emits by default are ld64's to make).
+# A real reference: an Objective-C object linked in, built with plain
+# objc_msgSend calls and with clang's default selector stubs.
 cat > "$W/probe.m" <<'M'
 #import <Foundation/Foundation.h>
 int objc_probe(void) { return (int)[[NSString stringWithUTF8String:"four"] length]; }
@@ -57,13 +57,12 @@ for XC in ${XC:-bin/osx/xcc bin/osx/xcc-xc}; do
     got=$("$d/oo" 2>&1)
     [ "$got" = "4" ] || { echo "FAIL $XC: the object-only ObjC program gives '$got'"; fail=1; }
     # Built with clang's default selector stubs (objc_msgSend$<sel>), which
-    # only Apple's linker makes: the error names them and the clang flag,
-    # rather than sending the user to look for a framework.
+    # the linker makes (#40), as Apple's does.
     if [ -s "$W/stubs.o" ]; then
         "$XC" -q -H . -framework Foundation -o "$d/st" "$d/main.o" "$W/stubs.o" > "$d/out4" 2>&1 \
-            && { echo "FAIL $XC: an object with selector stubs linked"; fail=1; }
-        grep -q "objc_msgSend\$length': a selector stub" "$d/out4" && grep -q 'fno-objc-msgsend-selector-stubs' "$d/out4" \
-            || { echo "FAIL $XC: selector stubs not named in the error"; head -3 "$d/out4"; fail=1; }
+            || { echo "FAIL $XC: an object with selector stubs did not link"; head -3 "$d/out4"; fail=1; continue; }
+        got=$("$d/st" 2>&1)
+        [ "$got" = "4" ] || { echo "FAIL $XC: the program with selector stubs gives '$got'"; fail=1; }
     fi
 done
 [ $fail = 0 ] && echo "objc-link: ok"
