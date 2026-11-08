@@ -2580,6 +2580,25 @@ class X86_64
             _out.appendFormat("\tcvtdq2ps\t%s, %s\n", d.cString(), a.cString());
         }
 
+    // Float lanes to signed 32-bit ones, truncating (#27): 2^31 out of range,
+    // which the vectoriser masks where xc gives 0.
+    void emitVFpToSI(IRInsn* n)
+        {
+        if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
+            return;
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        if (o0.kind() != (u8)OPK_USE)
+            return;
+        String* d = vecOf(n.res());
+        String* a = vecOf(o0.val());
+        if (d == (String*)0 || a == (String*)0)
+            return;
+        if (isYmm(d) || isZmm(d))
+            _out.appendFormat("\tvcvttps2dq\t%s, %s\n", d.cString(), a.cString());
+        else
+            _out.appendFormat("\tcvttps2dq\t%s, %s\n", d.cString(), a.cString());
+        }
+
     void emitVICmp(IRInsn* n)
         {
         if (n.res() == (IRValue*)0 || n.ops().count() < (u32)2)
@@ -7744,6 +7763,11 @@ class X86_64
         if (op.equals(String.withCString("VSIToFp")))
             {
             emitVSIToFp(n);
+            return true;
+            }
+        if (op.equals(String.withCString("VFpToSI")))
+            {
+            emitVFpToSI(n);
             return true;
             }
         if (op.equals(String.withCString("VAddLP")))

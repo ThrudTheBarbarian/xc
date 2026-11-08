@@ -1879,6 +1879,7 @@ class BeFact : Object
     Map* _vecEntryCache; // key → a broadcast hoisted to the entry block
     Array* _vecBody;     // the body being built
     String* _vecTy;      // Vec(lane)
+    String* _vecLane;    // the map value's own lane, when the loop mixes them (#27); 0 else
 
     // The diamond's blocks and phis, found from the header.
     IRInsn* _mmIvPhi;

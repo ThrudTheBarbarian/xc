@@ -893,6 +893,8 @@ static BOOL namesHighZmm(NSString *s) {
                   @"cvtps2pd":@[@0x00,@0x5A],  @"cvtpd2ps":@[@0x66,@0x5A],
                   @"punpckldq":@[@0x66,@0x62], @"punpcklqdq":@[@0x66,@0x6C],
                   @"pand":@[@0x66,@0xDB],   @"por":@[@0x66,@0xEB],
+                  // VBsl's select below 64 bytes: ~mask & b (#27).
+                  @"pandn":@[@0x66,@0xDF],
                   @"pxor":@[@0x66,@0xEF],   @"psrld":@[@0x66,@0xD2],
                   @"pslld":@[@0x66,@0xF2],  @"psrlq":@[@0x66,@0xD3],
                   @"psllq":@[@0x66,@0xF3],
@@ -1169,8 +1171,8 @@ static BOOL namesHighZmm(NSString *s) {
                      @"vpabsd":@[@1,@2,@0x1E,@0],
                      // 2-operand VEX arithmetic: `vsqrtps ymm, ymm` (vvvv=1111).
                      @"vsqrtps":@[@0,@1,@0x51,@0], @"vsqrtpd":@[@1,@1,@0x51,@0],
-                     // and the int-to-float lane conversion.
-                     @"vcvtdq2ps":@[@0,@1,@0x5B,@0],
+                     // and the lane conversions, int to float and float to int (#27).
+                     @"vcvtdq2ps":@[@0,@1,@0x5B,@0], @"vcvttps2dq":@[@2,@1,@0x5B,@0],
                      // The scalar compares, and the scalar moves to or from
                      // memory (a register-to-register vmovss takes three
                      // operands, below): what an AVX function's scalar float

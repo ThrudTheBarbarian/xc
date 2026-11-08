@@ -2554,8 +2554,9 @@ class X86Fixup
         // 2-operand VEX arithmetic (vvvv = 1111): the float square root.
         else if (mn.equals(String.withCString("vsqrtps"))) { pp = (u32)0; map = (u32)1; ld = (u32)$51; }
         else if (mn.equals(String.withCString("vsqrtpd"))) { pp = (u32)1; map = (u32)1; ld = (u32)$51; }
-        // and the int-to-float lane conversion.
+        // and the lane conversions, int to float and float to int (#27).
         else if (mn.equals(String.withCString("vcvtdq2ps"))) { pp = (u32)0; map = (u32)1; ld = (u32)$5B; }
+        else if (mn.equals(String.withCString("vcvttps2dq"))) { pp = (u32)2; map = (u32)1; ld = (u32)$5B; }
         // The scalar compares, and the scalar moves to or from memory (a
         // register-to-register vmovss takes three operands, encVex128): what an
         // AVX function's scalar float code uses. As the reference.
@@ -3046,6 +3047,9 @@ class X86Fixup
             return (u32)$666C;
         if (m.equals(String.withCString("pand")))
             return (u32)$66DB;
+        // VBsl's select below 64 bytes: ~mask & b (#27).
+        if (m.equals(String.withCString("pandn")))
+            return (u32)$66DF;
         if (m.equals(String.withCString("por")))
             return (u32)$66EB;
         if (m.equals(String.withCString("pxor")))

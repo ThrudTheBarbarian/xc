@@ -850,6 +850,10 @@
         // The bases the body loads from and stores to (vecBasesApart).
         Array* ldBases = new Array();
         Array* stBases = new Array();
+        // Each conversion keeps up to four broadcast constants live across the
+        // loop and expands to several lane ops: two keep a body well inside
+        // the vector register pool (#27).
+        u32 convs = (u32)0;
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
@@ -887,9 +891,12 @@
                 String* lt = n.res().ty();
                 if (!self.vecLaneOK(lt))
                     return (String*)0;
-                if (laneTy != (String*)0 && !laneTy.equals(lt))
+                // Lanes of one width may differ in type where the back end
+                // converts between them (#27): the loop's lane is the first.
+                if (laneTy != (String*)0 && !laneTy.equals(lt) && !self.vecLanesMix(laneTy, lt))
                     return (String*)0;
-                laneTy = lt;
+                if (laneTy == (String*)0)
+                    laneTy = lt;
                 sawLoad = true;
                 elems.add((Object*)n.res());
                 ldBases.add((Object*)self.vecElemBase((IROperand*)n.ops().get((u32)0), defOf));
@@ -903,6 +910,12 @@
                     return (String*)0;
                 if (!vecMapOperandOK((IROperand*)n.ops().get((u32)1), elems, B, (IRBlock*)defBlk.get((Hashable*)iv), defOf, defBlk))
                     return (String*)0;
+                // The stored lanes are as wide as the loop's, or the vector
+                // store writes a different number of elements than it steps.
+                String* sty = Opt.vecOperandTy((IROperand*)n.ops().get((u32)1));
+                if (laneTy != (String*)0 && sty != (String*)0 && self.vecLaneOK(sty)
+                    && self.irWidth(sty) != self.irWidth(laneTy))
+                    return (String*)0;
                 sawStore = true;
                 stBases.add((Object*)self.vecElemBase((IROperand*)n.ops().get((u32)0), defOf));
                 continue;
@@ -911,6 +924,20 @@
             // of the step or of an invariant operand.
             if (op.equals(String.withCString("Const")) || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc")))
                 continue;
+            // A conversion between 32-bit integer and float lanes (#27), of a
+            // lane value.
+            if (Opt.vecConvOp(op))
+                {
+                if (!self.vecMapConvOK(n) || laneTy == (String*)0 || self.irWidth(laneTy) != (u32)4)
+                    return (String*)0;
+                if (!hasValue(elems, ((IROperand*)n.ops().get((u32)0)).val()))
+                    return (String*)0;
+                convs = convs + (u32)1;
+                if (convs > (u32)2)
+                    return (String*)0;
+                elems.add((Object*)n.res());
+                continue;
+                }
             if (vecElementwise(op))
                 {
                 if (n.res() == (IRValue*)0 || !self.vecLaneOK(n.res().ty()))
@@ -931,6 +958,52 @@
         if (!self.vecBasesApart(stBases, ldBases, B, defOf, defBlk))
             return (String*)0;
         return laneTy;
+        }
+
+    // Two lane types one map loop may hold (#27): the same width, on a back
+    // end with the lane conversions.
+    final bool vecLanesMix(String* a, String* b)
+        {
+        return _profile != (OptProfile*)0 && _profile.escapeVec() && self.irWidth(a) == self.irWidth(b);
+        }
+
+    static bool vecConvOp(String* op)
+        {
+        return op.equals(String.withCString("SIToFp")) || op.equals(String.withCString("UIToFp"))
+            || op.equals(String.withCString("FpToSI")) || op.equals(String.withCString("FpToUI"));
+        }
+
+    // The conversions the map vectoriser rewrites (#27): I32 or U32 to F32 and
+    // back, on a back end with the lane conversions.
+    final bool vecMapConvOK(IRInsn* n)
+        {
+        if (_profile == (OptProfile*)0 || !_profile.escapeVec())
+            return false;
+        if (n.res() == (IRValue*)0 || n.ops().count() < (u32)1)
+            return false;
+        IROperand* a = (IROperand*)n.ops().get((u32)0);
+        if (a.kind() != (u8)OPK_USE || a.val() == (IRValue*)0)
+            return false;
+        String* s = a.val().ty();
+        String* r = n.res().ty();
+        String* op = n.op();
+        if (op.equals(String.withCString("SIToFp")))
+            return s.equals(String.withCString("I32")) && r.equals(String.withCString("F32"));
+        if (op.equals(String.withCString("UIToFp")))
+            return s.equals(String.withCString("U32")) && r.equals(String.withCString("F32"));
+        if (op.equals(String.withCString("FpToSI")))
+            return s.equals(String.withCString("F32")) && r.equals(String.withCString("I32"));
+        if (op.equals(String.withCString("FpToUI")))
+            return s.equals(String.withCString("F32")) && r.equals(String.withCString("U32"));
+        return false;
+        }
+
+    // A value operand's scalar type: a use's value's, or an immediate's own.
+    static String* vecOperandTy(IROperand* o)
+        {
+        if (o.kind() == (u8)OPK_USE)
+            return o.val() == (IRValue*)0 ? (String*)0 : o.val().ty();
+        return o.ty();
         }
 
     // The base of the ElementAddr an access goes through.
@@ -2867,10 +2940,15 @@
         if (isConst && vecConstWide(op, defOf, &kw))
             kv = kw;
         String* ck = (String*)0;
+        // A loop that mixes lanes (#27) broadcasts a constant in the lane of
+        // the value it meets, and keeps one per lane.
+        String* lane = _vecLane != (String*)0 ? _vecLane : c.laneTy();
         if (isConst)
             {
             ck = new String();
             ck.appendFormat("c%lld", kv);
+            if (_vecLane != (String*)0)
+                ck.appendFormat(":%s", lane.cString());
             }
         else if (op.kind() == (u8)OPK_USE)
             {
@@ -2885,10 +2963,10 @@
         IROperand* scalar = (IROperand*)0;
         if (isConst)
             {
-            IRValue* cst = new IRValue(c.laneTy());
+            IRValue* cst = new IRValue(lane);
             IRInsn* ci = IRInsn.with(String.withCString("Const"));
             ci.setRes(cst);
-            ci.add(IROperand.immI(kv, c.laneTy()));
+            ci.add(IROperand.immI(kv, lane));
             entry.insns().add((Object*)ci);
             scalar = IROperand.useVal(cst);
             }

@@ -652,6 +652,7 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
           @"VICmp" : @(XTIROpVICmp),
           @"VFCmp" : @(XTIROpVFCmp),
           @"VSIToFp" : @(XTIROpVSIToFp),
+          @"VFpToSI" : @(XTIROpVFpToSI),
           @"FCmp" : @(XTIROpFCmp),
           @"Select" : @(XTIROpSelect),
           @"Load" : @(XTIROpLoad),

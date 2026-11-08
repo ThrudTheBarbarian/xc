@@ -465,6 +465,8 @@ static NSString* dbgSuffix(XTIRInsn* insn)
         return @"VFCmp";
     case XTIROpVSIToFp:
         return @"VSIToFp";
+    case XTIROpVFpToSI:
+        return @"VFpToSI";
         }
     return @"?";
     }

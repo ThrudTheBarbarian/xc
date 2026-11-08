@@ -4041,6 +4041,7 @@ class Arm64
         if (op.equals(String.withCString("VICmp")))  { emitVICmp(n);  return true; }
         if (op.equals(String.withCString("VFCmp")))  { emitVFCmp(n);  return true; }
         if (op.equals(String.withCString("VSIToFp"))) { emitVSIToFp(n); return true; }
+        if (op.equals(String.withCString("VFpToSI"))) { emitVFpToSI(n); return true; }
         if (op.equals(String.withCString("VReduceAdd")) || op.equals(String.withCString("VReduceMax"))
          || op.equals(String.withCString("VReduceMin"))) { emitVReduce(n); return true; }
         return false;
@@ -4451,6 +4452,16 @@ class Arm64
         IROperand* o0 = (IROperand*)n.ops().get((u32)0);
         if (o0.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
         _out.appendFormat("    scvtf v%lu.4s, v%lu.4s\n", vecIndex(n.res()), vecIndex(o0.val()));
+    }
+
+    // Float lanes to signed 32-bit ones, truncating (#27); saturating out of
+    // range, which the vectoriser masks where xc gives 0.
+    void emitVFpToSI(IRInsn* n)
+    {
+        if (n.ops().count() < (u32)1 || n.res() == (IRValue*)0) { unsupported(n.op()); return; }
+        IROperand* o0 = (IROperand*)n.ops().get((u32)0);
+        if (o0.kind() != (u8)OPK_USE) { unsupported(n.op()); return; }
+        _out.appendFormat("    fcvtzs v%lu.4s, v%lu.4s\n", vecIndex(n.res()), vecIndex(o0.val()));
     }
 
     // A horizontal reduction. Only i32/u32 lanes reach here — the reduction

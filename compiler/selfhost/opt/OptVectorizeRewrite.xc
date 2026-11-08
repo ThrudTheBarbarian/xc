@@ -1880,7 +1880,7 @@
                 }
             if (op.equals(String.withCString("Load")))
                 {
-                IRValue* vr = new IRValue(_vecTy);
+                IRValue* vr = new IRValue(self.vecTyOf(n.res().ty(), c.vecBytes()));
                 IRInsn* vl = IRInsn.with(String.withCString("VLoad"));
                 vl.copyDbg(n);
                 vl.setRes(vr);
@@ -1893,6 +1893,7 @@
                 }
             if (op.equals(String.withCString("Store")))
                 {
+                self.vecSetLane(Opt.vecOperandTy((IROperand*)n.ops().get((u32)1)), c);
                 IROperand* vval = self.vecOperandFor((IROperand*)n.ops().get((u32)1),
                                                 fn, entry, B, c, defOf, defBlk);
                 IRInsn* vs = IRInsn.with(String.withCString("VStore"));
@@ -1903,7 +1904,13 @@
                 _vecBody.add((Object*)vs);
                 continue;
                 }
+            if (Opt.vecConvOp(op))
+                {
+                self.vecApplyConv(n, c, entry);
+                continue;
+                }
             // Elementwise arithmetic.
+            self.vecSetLane(n.res().ty(), c);
             IROperand* va = self.vecOperandFor((IROperand*)n.ops().get((u32)0),
                                           fn, entry, B, c, defOf, defBlk);
             IROperand* vb = self.vecOperandFor((IROperand*)n.ops().get((u32)1),
@@ -1918,8 +1925,142 @@
             _vecMap.set((Hashable*)n.res(), (Object*)vr);
             }
         B.setInsns(_vecBody);
+        _vecLane = (String*)0;
+        _vecTy = self.vecTyOf(c.laneTy(), c.vecBytes());
         if (c.needEpi())
             self.vecMapEpilogue(fn, c, mH2, mB2, mcmap);
+        }
+
+    // The lane the next map values are built in (#27): splats and results
+    // take it. The loop's own lane leaves _vecLane 0, as before mixing.
+    final void vecSetLane(String* lane, VecCand* c)
+        {
+        if (lane == (String*)0 || !self.vecLaneOK(lane) || lane.equals(c.laneTy()))
+            {
+            _vecLane = (String*)0;
+            _vecTy = self.vecTyOf(c.laneTy(), c.vecBytes());
+            return;
+            }
+        _vecLane = lane;
+        _vecTy = self.vecTyOf(lane, c.vecBytes());
+        }
+
+    // A constant broadcast in the preheader, once per lane and bits (#27).
+    final IROperand* vecConstSplat(IRBlock* entry, String* lane, IROperand* imm, VecCand* c)
+        {
+        String* ck = String.withCString("k");
+        ck.append(lane);
+        ck.appendCString(":");
+        if (imm.kind() == (u8)OPK_IMMF)
+            ck.append(imm.fpHex());
+        else
+            ck.appendFormat("%lld", imm.imm());
+        Object* hit = _vecEntryCache.get((Hashable*)ck);
+        if (hit != (Object*)0)
+            return IROperand.useVal((IRValue*)hit);
+        IRValue* cst = new IRValue(lane);
+        IRInsn* ci = IRInsn.with(String.withCString("Const"));
+        ci.setRes(cst);
+        ci.add(imm);
+        entry.insns().add((Object*)ci);
+        IRValue* sp = new IRValue(self.vecTyOf(lane, c.vecBytes()));
+        IRInsn* s = IRInsn.with(String.withCString("VSplat"));
+        s.setRes(sp);
+        s.add(IROperand.useVal(cst));
+        entry.insns().add((Object*)s);
+        _vecEntryCache.set((Hashable*)ck, (Object*)sp);
+        return IROperand.useVal(sp);
+        }
+
+    final IRValue* vecPut1(string op, String* ty, IROperand* a, IROperand* b, IRInsn* dbg)
+        {
+        IRValue* r = new IRValue(ty);
+        IRInsn* n = IRInsn.with(String.withCString(op));
+        n.copyDbg(dbg);
+        n.setRes(r);
+        n.add(a);
+        if (b != (IROperand*)0)
+            n.add(b);
+        _vecBody.add((Object*)n);
+        return r;
+        }
+
+    final IRValue* vecPutCmp(string pred, String* ty, IRValue* a, IROperand* b, IRInsn* dbg)
+        {
+        IRValue* r = self.vecPut1("VFCmp", ty, IROperand.useVal(a), b, dbg);
+        ((IRInsn*)_vecBody.get(_vecBody.count() - (u32)1)).setPred(String.withCString(pred));
+        return r;
+        }
+
+    // A conversion between 32-bit integer and float lanes (#27). The back ends
+    // convert signed lanes both ways (scvtf/fcvtzs, cvtdq2ps/cvttps2dq); the
+    // unsigned forms and xc's rule that an out-of-range float converts to 0
+    // (spec 3.1, where the lane instruction saturates or gives 2^31) are
+    // built here from lane ops every such back end has:
+    //   UIToFp: the high and low 16 bits converted apart, hi * 65536 + lo,
+    //           one rounding of an exact sum, as ucvtf rounds;
+    //   FpToSI: the result kept where -2^31 <= x < 2^31 (NaN fails both);
+    //   FpToUI: x >= 2^31 converts x - 2^31 and sets the top bit back, the
+    //           rest converts as signed; kept where -1 < x < 2^32.
+    // An unchecked conversion (C's casts) leaves the range test out.
+    final void vecApplyConv(IRInsn* n, VecCand* c, IRBlock* entry)
+        {
+        String* op = n.op();
+        IRValue* a = (IRValue*)_vecMap.get((Hashable*)((IROperand*)n.ops().get((u32)0)).val());
+        String* rl = n.res().ty();
+        String* sl = ((IROperand*)n.ops().get((u32)0)).val().ty();
+        String* rty = self.vecTyOf(rl, c.vecBytes());
+        String* sty = self.vecTyOf(sl, c.vecBytes());
+        bool unchecked = n.pred() != (String*)0 && n.pred().equals(String.withCString("unchecked"));
+        IRValue* r = (IRValue*)0;
+        if (op.equals(String.withCString("SIToFp")))
+            r = self.vecPut1("VSIToFp", rty, IROperand.useVal(a), (IROperand*)0, n);
+        else if (op.equals(String.withCString("UIToFp")))
+            {
+            IRValue* hi = self.vecPut1("VLShr", sty, IROperand.useVal(a), IROperand.immI((i64)16, sl), n);
+            IROperand* m16 = self.vecConstSplat(entry, sl, IROperand.immI((i64)65535, sl), c);
+            IRValue* lo = self.vecPut1("VAnd", sty, IROperand.useVal(a), m16, n);
+            IRValue* fh = self.vecPut1("VSIToFp", rty, IROperand.useVal(hi), (IROperand*)0, n);
+            IRValue* fl = self.vecPut1("VSIToFp", rty, IROperand.useVal(lo), (IROperand*)0, n);
+            IROperand* k16 = self.vecConstSplat(entry, rl, IROperand.immF(String.withCString("40f0000000000000"), rl), c);
+            IRValue* sh = self.vecPut1("VMul", rty, IROperand.useVal(fh), k16, n);
+            r = self.vecPut1("VAdd", rty, IROperand.useVal(sh), IROperand.useVal(fl), n);
+            }
+        else if (op.equals(String.withCString("FpToSI")))
+            {
+            r = self.vecPut1("VFpToSI", rty, IROperand.useVal(a), (IROperand*)0, n);
+            if (!unchecked)
+                {
+                IROperand* lo = self.vecConstSplat(entry, sl, IROperand.immF(String.withCString("c1e0000000000000"), sl), c);
+                IROperand* hi = self.vecConstSplat(entry, sl, IROperand.immF(String.withCString("41e0000000000000"), sl), c);
+                IRValue* m1 = self.vecPutCmp("OGE", rty, a, lo, n);
+                IRValue* m2 = self.vecPutCmp("OLT", rty, a, hi, n);
+                IRValue* m = self.vecPut1("VAnd", rty, IROperand.useVal(m1), IROperand.useVal(m2), n);
+                r = self.vecPut1("VAnd", rty, IROperand.useVal(r), IROperand.useVal(m), n);
+                }
+            }
+        else
+            {
+            IROperand* t31 = self.vecConstSplat(entry, sl, IROperand.immF(String.withCString("41e0000000000000"), sl), c);
+            IRValue* lo = self.vecPut1("VFpToSI", rty, IROperand.useVal(a), (IROperand*)0, n);
+            IRValue* s = self.vecPut1("VSub", sty, IROperand.useVal(a), t31, n);
+            IRValue* h0 = self.vecPut1("VFpToSI", rty, IROperand.useVal(s), (IROperand*)0, n);
+            IROperand* top = self.vecConstSplat(entry, rl, IROperand.immI((i64)2147483648, rl), c);
+            IRValue* h = self.vecPut1("VXor", rty, IROperand.useVal(h0), top, n);
+            IRValue* sel = self.vecPutCmp("OGE", rty, a, t31, n);
+            r = self.vecPut1("VBsl", rty, IROperand.useVal(sel), IROperand.useVal(h), n);
+            ((IRInsn*)_vecBody.get(_vecBody.count() - (u32)1)).add(IROperand.useVal(lo));
+            if (!unchecked)
+                {
+                IROperand* m1k = self.vecConstSplat(entry, sl, IROperand.immF(String.withCString("bff0000000000000"), sl), c);
+                IROperand* t32 = self.vecConstSplat(entry, sl, IROperand.immF(String.withCString("41f0000000000000"), sl), c);
+                IRValue* m1 = self.vecPutCmp("OGT", rty, a, m1k, n);
+                IRValue* m2 = self.vecPutCmp("OLT", rty, a, t32, n);
+                IRValue* m = self.vecPut1("VAnd", rty, IROperand.useVal(m1), IROperand.useVal(m2), n);
+                r = self.vecPut1("VAnd", rty, IROperand.useVal(r), IROperand.useVal(m), n);
+                }
+            }
+        _vecMap.set((Hashable*)n.res(), (Object*)r);
         }
 
     // `acc:u32 += (u32)a[i]` over a u8/u16 array cannot accumulate in narrow

@@ -7779,6 +7779,14 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
             [ctx.out appendFormat:@"    scvtf v%lu.4s, v%lu.4s\n", (unsigned long)d, (unsigned long)a];
             break;
         }
+        case XTIROpVFpToSI: {     // float lanes to signed 32-bit ones, truncating (#27)
+            if (insn.operands.count < 1 || !insn.result ||
+                insn.operands[0].kind != XTIROperandKindUse) break;
+            NSUInteger a = [self vecIndexForValue:insn.operands[0].valueId ctx:ctx];
+            NSUInteger d = [self vecIndexForValue:insn.result.valueId ctx:ctx];
+            [ctx.out appendFormat:@"    fcvtzs v%lu.4s, v%lu.4s\n", (unsigned long)d, (unsigned long)a];
+            break;
+        }
         case XTIROpVReduceMax: case XTIROpVReduceMin: {  // horizontal max/min
             // .4s-only (i32/u32 lanes) by construction, like VReduceAdd.
             if (insn.operands.count < 1 || insn.operands[0].kind != XTIROperandKindUse ||

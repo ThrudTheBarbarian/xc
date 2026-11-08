@@ -250,6 +250,39 @@ static XTIROpcode vectorOpFor(XTIROpcode op)
 // Lane types the map vectoriser handles: 8/16/32-bit integer (same-width
 // wrapping arithmetic — 16×i8 / 8×i16 / 4×i32 per vector), or 32-bit float
 // (float maps; float reductions need associativity the source doesn't grant).
+// A value operand's scalar type: a use's value's, or an immediate's own.
+static XTIRType* xtvOperandType(XTIRFunction* fn, XTIROperand* o)
+    {
+    if (o.kind == XTIROperandKindUse)
+        return [fn valueForId:o.valueId].type;
+    return o.type;
+    }
+
+static BOOL xtvConvOp(XTIROpcode op)
+    {
+    return op == XTIROpSIToFp || op == XTIROpUIToFp || op == XTIROpFpToSI || op == XTIROpFpToUI;
+    }
+
+// The conversions the map vectoriser rewrites (#27): I32 or U32 to F32 and
+// back. As the port's vecMapConvOK.
+static BOOL xtvMapConvOK(XTIRFunction* fn, XTIRInsn* insn)
+    {
+    if (!insn.result || insn.operands.count < 1 || insn.operands[0].kind != XTIROperandKindUse)
+        return NO;
+    XTIRType* st = [fn valueForId:insn.operands[0].valueId].type;
+    if (!st)
+        return NO;
+    XTIRTypeKind s = st.kind, r = insn.result.type.kind;
+    switch (insn.opcode)
+        {
+    case XTIROpSIToFp: return s == XTIRTypeKindI32 && r == XTIRTypeKindF32;
+    case XTIROpUIToFp: return s == XTIRTypeKindU32 && r == XTIRTypeKindF32;
+    case XTIROpFpToSI: return s == XTIRTypeKindF32 && r == XTIRTypeKindI32;
+    case XTIROpFpToUI: return s == XTIRTypeKindF32 && r == XTIRTypeKindU32;
+    default: return NO;
+        }
+    }
+
 static BOOL vectorisableLane(XTIRTypeKind k)
     {
     return k == XTIRTypeKindI8 || k == XTIRTypeKindU8 ||
@@ -1428,6 +1461,11 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
         // the lane type from the loads/stores (must be a consistent i32/u32).
         XTIRType* laneType = nil;
         BOOL ok = YES, sawLoad = NO, sawStore = NO;
+        // Each conversion keeps up to four broadcast constants live across the
+        // loop and expands to several lane ops: two keep a body well inside
+        // the vector register pool (#27). As the port's vecClassifyBody.
+        NSUInteger convs = 0;
+        BOOL convLanes = self.profile.vectorizesEscapeLoops;
         // The bases the body loads from and stores to (xtvBasesApart).
         NSMutableArray<XTIROperand*>* ldBases = [NSMutableArray array];
         NSMutableArray<XTIROperand*>* stBases = [NSMutableArray array];
@@ -1515,12 +1553,16 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
                     ok = NO;
                     break;
                     }
-                if (laneType && laneType.kind != lt.kind)
+                // Lanes of one width may differ in type where the back end
+                // converts between them (#27): the loop's lane is the first.
+                if (laneType && laneType.kind != lt.kind &&
+                    !(convLanes && laneType.byteWidth == lt.byteWidth))
                     {
                     ok = NO;
                     break;
                     }
-                laneType = lt;
+                if (!laneType)
+                    laneType = lt;
                 sawLoad = YES;
                 [elemIds addObject:@(insn.result.valueId)];
                 [ldBases addObject:defOf[@(insn.operands[0].valueId)].operands[0]];
@@ -1534,6 +1576,14 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
                     ok = NO;
                     break;
                     }
+                // The stored lanes are as wide as the loop's, or the vector
+                // store writes a different number of elements than it steps.
+                XTIRType* sty = xtvOperandType(fn, insn.operands[1]);
+                if (laneType && sty && vectorisableLane(sty.kind) && sty.byteWidth != laneType.byteWidth)
+                    {
+                    ok = NO;
+                    break;
+                    }
                 sawStore = YES;
                 [stBases addObject:defOf[@(insn.operands[0].valueId)].operands[0]];
                 continue;
@@ -1543,6 +1593,19 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
             if (op == XTIROpConst || op == XTIROpZExt || op == XTIROpSExt ||
                 op == XTIROpTrunc)
                 continue;
+            // A conversion between 32-bit integer and float lanes (#27), of a
+            // lane value.
+            if (xtvConvOp(op))
+                {
+                if (!convLanes || !xtvMapConvOK(fn, insn) || !laneType || laneType.byteWidth != 4 ||
+                    ![elemIds containsObject:@(insn.operands[0].valueId)] || ++convs > 2)
+                    {
+                    ok = NO;
+                    break;
+                    }
+                [elemIds addObject:@(insn.result.valueId)];
+                continue;
+                }
             if (elementwiseArith(op))
                 {
                 if (!insn.result || !vectorisableLane(insn.result.type.kind))
@@ -2001,6 +2064,122 @@ static XTIRValueId xtvEmitOverlapGuard(XTIRFunction* fn, XTIRBlock* PH, XTIRValu
     return b == 64 ? 64 : b == 32 ? 32 : 16;
     }
 
+// One lane op in the map body (#27): its result, after the port's vecPut1.
+static XTIRValue* xtvPut1(XTIRFunction* fn, XTIRBlock* B, NSMutableArray<XTIRInsn*>* body, XTIROpcode op,
+                          XTIRType* ty, NSArray<XTIROperand*>* ops, uint8_t pred, XTIRInsn* dbg)
+    {
+    XTIRValue* r = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                 type:ty
+                                              defSite:[[XTIRDefSite alloc] initWithBlock:B insnIndex:0]];
+    [fn registerValue:r];
+    [body addObject:[[XTIRInsn alloc] initWithOpcode:op result:r operands:ops predicate:pred dbgLoc:dbg.dbgLoc]];
+    return r;
+    }
+
+// A constant broadcast in the preheader, once per lane and bits (#27). As the
+// port's vecConstSplat.
+static XTIROperand* xtvConstSplat(XTIRFunction* fn, XTIRBlock* entry, XTIRType* lane, XTIROperand* imm,
+                                  XTVecCand* c, NSMutableDictionary<NSString*, XTIRValue*>* cache)
+    {
+    NSString* ck = imm.kind == XTIROperandKindImmF
+                       ? [NSString stringWithFormat:@"k%d:%016llx", (int)lane.kind, (unsigned long long)imm.floatRawBytes]
+                       : [NSString stringWithFormat:@"k%d:%lld", (int)lane.kind, (long long)imm.intValue];
+    if (cache[ck])
+        return [XTIROperand useWithValueId:cache[ck].valueId];
+    XTIRValue* cst = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                   type:lane
+                                                defSite:[[XTIRDefSite alloc] initWithBlock:entry insnIndex:0]];
+    [fn registerValue:cst];
+    [entry.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst result:cst operands:@[ imm ] dbgLoc:nil]];
+    XTIRValue* sp = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                  type:[XTIRType vecWithLane:lane bytes:(uint32_t)c.vecBytes]
+                                               defSite:[[XTIRDefSite alloc] initWithBlock:entry insnIndex:0]];
+    [fn registerValue:sp];
+    [entry.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVSplat
+                                                            result:sp
+                                                          operands:@[ [XTIROperand useWithValueId:cst.valueId] ]
+                                                            dbgLoc:nil]];
+    cache[ck] = sp;
+    return [XTIROperand useWithValueId:sp.valueId];
+    }
+
+// A conversion between 32-bit integer and float lanes (#27). The back ends
+// convert signed lanes both ways (scvtf/fcvtzs, cvtdq2ps/cvttps2dq); the
+// unsigned forms and xc's out-of-range-is-0 rule are built from lane ops, as
+// the port's vecApplyConv explains, in the same order.
+static XTIRValue* xtvApplyConv(XTIRFunction* fn, XTIRInsn* n, XTVecCand* c, XTIRBlock* entry, XTIRBlock* B,
+                               XTIRValue* a, NSMutableArray<XTIRInsn*>* body,
+                               NSMutableDictionary<NSString*, XTIRValue*>* cache)
+    {
+    XTIRType* rl = n.result.type;
+    XTIRType* sl = [fn valueForId:n.operands[0].valueId].type;
+    XTIRType* rty = [XTIRType vecWithLane:rl bytes:(uint32_t)c.vecBytes];
+    XTIRType* sty = [XTIRType vecWithLane:sl bytes:(uint32_t)c.vecBytes];
+    BOOL unchecked = n.predicate == XTIRConvUnchecked;
+    XTIROperand* (^use)(XTIRValue*) = ^XTIROperand*(XTIRValue* v) {
+      return [XTIROperand useWithValueId:v.valueId];
+    };
+    XTIROperand* (^fk)(XTIRType*, uint64_t) = ^XTIROperand*(XTIRType* t, uint64_t bits) {
+      return xtvConstSplat(fn, entry, t, [XTIROperand immFWithType:t rawBytes:bits], c, cache);
+    };
+    XTIRValue* (^cmp)(uint8_t, XTIRValue*, XTIROperand*) = ^XTIRValue*(uint8_t p, XTIRValue* x, XTIROperand* k) {
+      return xtvPut1(fn, B, body, XTIROpVFCmp, rty, @[ use(x), k ], p, n);
+    };
+    XTIRValue* r = nil;
+    switch (n.opcode)
+        {
+    case XTIROpSIToFp:
+        r = xtvPut1(fn, B, body, XTIROpVSIToFp, rty, @[ use(a) ], 0, n);
+        break;
+    case XTIROpUIToFp:
+        {
+        XTIRValue* hi = xtvPut1(fn, B, body, XTIROpVLShr, sty, @[ use(a), [XTIROperand immIWithType:sl value:16] ], 0, n);
+        XTIROperand* m16 = xtvConstSplat(fn, entry, sl, [XTIROperand immIWithType:sl value:65535], c, cache);
+        XTIRValue* lo = xtvPut1(fn, B, body, XTIROpVAnd, sty, @[ use(a), m16 ], 0, n);
+        XTIRValue* fh = xtvPut1(fn, B, body, XTIROpVSIToFp, rty, @[ use(hi) ], 0, n);
+        XTIRValue* fl = xtvPut1(fn, B, body, XTIROpVSIToFp, rty, @[ use(lo) ], 0, n);
+        XTIROperand* k16 = fk(rl, 0x40f0000000000000ULL);
+        XTIRValue* sh = xtvPut1(fn, B, body, XTIROpVMul, rty, @[ use(fh), k16 ], 0, n);
+        r = xtvPut1(fn, B, body, XTIROpVAdd, rty, @[ use(sh), use(fl) ], 0, n);
+        break;
+        }
+    case XTIROpFpToSI:
+        r = xtvPut1(fn, B, body, XTIROpVFpToSI, rty, @[ use(a) ], 0, n);
+        if (!unchecked)
+            {
+            XTIROperand* lo = fk(sl, 0xc1e0000000000000ULL);
+            XTIROperand* hi = fk(sl, 0x41e0000000000000ULL);
+            XTIRValue* m1 = cmp((uint8_t)XTIRFCmpOGE, a, lo);
+            XTIRValue* m2 = cmp((uint8_t)XTIRFCmpOLT, a, hi);
+            XTIRValue* m = xtvPut1(fn, B, body, XTIROpVAnd, rty, @[ use(m1), use(m2) ], 0, n);
+            r = xtvPut1(fn, B, body, XTIROpVAnd, rty, @[ use(r), use(m) ], 0, n);
+            }
+        break;
+    default:
+        {
+        XTIROperand* t31 = fk(sl, 0x41e0000000000000ULL);
+        XTIRValue* lo = xtvPut1(fn, B, body, XTIROpVFpToSI, rty, @[ use(a) ], 0, n);
+        XTIRValue* s = xtvPut1(fn, B, body, XTIROpVSub, sty, @[ use(a), t31 ], 0, n);
+        XTIRValue* h0 = xtvPut1(fn, B, body, XTIROpVFpToSI, rty, @[ use(s) ], 0, n);
+        XTIROperand* top = xtvConstSplat(fn, entry, rl, [XTIROperand immIWithType:rl value:2147483648LL], c, cache);
+        XTIRValue* h = xtvPut1(fn, B, body, XTIROpVXor, rty, @[ use(h0), top ], 0, n);
+        XTIRValue* sel = cmp((uint8_t)XTIRFCmpOGE, a, t31);
+        r = xtvPut1(fn, B, body, XTIROpVBsl, rty, @[ use(sel), use(h), use(lo) ], 0, n);
+        if (!unchecked)
+            {
+            XTIROperand* m1k = fk(sl, 0xbff0000000000000ULL);
+            XTIROperand* t32 = fk(sl, 0x41f0000000000000ULL);
+            XTIRValue* m1 = cmp((uint8_t)XTIRFCmpOGT, a, m1k);
+            XTIRValue* m2 = cmp((uint8_t)XTIRFCmpOLT, a, t32);
+            XTIRValue* m = xtvPut1(fn, B, body, XTIROpVAnd, rty, @[ use(m1), use(m2) ], 0, n);
+            r = xtvPut1(fn, B, body, XTIROpVAnd, rty, @[ use(r), use(m) ], 0, n);
+            }
+        break;
+        }
+        }
+    return r;
+    }
+
 - (void)apply:(XTVecCand*)c inFunction:(XTIRFunction*)fn
     {
     XTIRBlock* B = c.B;
@@ -2072,14 +2251,31 @@ static XTIRValueId xtvEmitOverlapGuard(XTIRFunction* fn, XTIRBlock* PH, XTIRValu
     // preheader, so anything that dominated entry dominates it too.
     XTIRBlock* entry = c.preheader ?: fn.blocks.firstObject;
     NSMutableDictionary<NSString*, XTIRValue*>* entrySplatCache = [NSMutableDictionary dictionary];
+    // The lane the next map values are built in (#27): splats and results take
+    // it. The loop's own lane leaves curLane nil. As the port's vecSetLane.
+    __block XTIRType* curTy = vecTy;
+    __block XTIRType* curLane = nil;
+    void (^setLane)(XTIRType*) = ^(XTIRType* t) {
+      if (!t || !vectorisableLane(t.kind) || t.kind == c.laneType.kind)
+          {
+          curLane = nil;
+          curTy = vecTy;
+          return;
+          }
+      curLane = t;
+      curTy = [XTIRType vecWithLane:t bytes:(uint32_t)c.vecBytes];
+    };
 
-    XTIRValue* (^newVecIn)(XTIRBlock*) = ^XTIRValue*(XTIRBlock* home) {
+    XTIRValue* (^newValIn)(XTIRBlock*, XTIRType*) = ^XTIRValue*(XTIRBlock* home, XTIRType* ty) {
       XTIRValueId rid = [fn allocateValueId];
       XTIRValue* v = [[XTIRValue alloc] initWithValueId:rid
-                                                   type:vecTy
+                                                   type:ty
                                                 defSite:[[XTIRDefSite alloc] initWithBlock:home insnIndex:0]];
       [fn registerValue:v];
       return v;
+    };
+    XTIRValue* (^newVecIn)(XTIRBlock*) = ^XTIRValue*(XTIRBlock* home) {
+      return newValIn(home, curTy);
     };
     XTIRValue* (^newVec)(void) = ^XTIRValue* {
       return newVecIn(B);
@@ -2098,22 +2294,27 @@ static XTIRValueId xtvEmitOverlapGuard(XTIRFunction* fn, XTIRBlock* PH, XTIRValu
           return nil; // no distinct entry
       int64_t kv;
       BOOL isConst = resolveConstInt(op, defOf, &kv);
+      // A loop that mixes lanes (#27) broadcasts a constant in the lane of the
+      // value it meets, and keeps one per lane.
+      XTIRType* lane = curLane ?: c.laneType;
       NSString* ck = isConst ? [NSString stringWithFormat:@"c%lld", (long long)kv]
                              : (op.kind == XTIROperandKindUse ? [NSString stringWithFormat:@"v%llu",
                                                                                            (unsigned long long)op.valueId]
                                                               : nil);
+      if (isConst && curLane)
+          ck = [ck stringByAppendingFormat:@":%d", (int)lane.kind];
       if (ck && entrySplatCache[ck])
           return [XTIROperand useWithValueId:entrySplatCache[ck].valueId];
       XTIROperand* scalar;
       if (isConst)
           {
           XTIRValue* cst = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
-                                                         type:c.laneType
+                                                         type:lane
                                                       defSite:[[XTIRDefSite alloc] initWithBlock:entry insnIndex:0]];
           [fn registerValue:cst];
           [entry.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
                                                                   result:cst
-                                                                operands:@[ [XTIROperand immIWithType:c.laneType value:kv] ]
+                                                                operands:@[ [XTIROperand immIWithType:lane value:kv] ]
                                                                   dbgLoc:nil]];
           scalar = [XTIROperand useWithValueId:cst.valueId];
           }
@@ -2213,7 +2414,7 @@ static XTIRValueId xtvEmitOverlapGuard(XTIRFunction* fn, XTIRBlock* PH, XTIRValu
             break;
         case XTIROpLoad:
             {
-            XTIRValue* vr = newVec();
+            XTIRValue* vr = newValIn(B, [XTIRType vecWithLane:insn.result.type bytes:(uint32_t)c.vecBytes]);
             XTIRInsn* vl = [[XTIRInsn alloc] initWithOpcode:XTIROpVLoad
                                                      result:vr
                                                    operands:insn.operands
@@ -2225,6 +2426,7 @@ static XTIRValueId xtvEmitOverlapGuard(XTIRFunction* fn, XTIRBlock* PH, XTIRValu
             }
         case XTIROpStore:
             {
+            setLane(xtvOperandType(fn, insn.operands[1]));
             XTIROperand* vval = vecOperand(insn.operands[1]);
             NSMutableArray<XTIROperand*>* ops = [insn.operands mutableCopy];
             ops[1] = vval;
@@ -2236,9 +2438,17 @@ static XTIRValueId xtvEmitOverlapGuard(XTIRFunction* fn, XTIRBlock* PH, XTIRValu
             [newBody addObject:vs];
             break;
             }
+        case XTIROpSIToFp:
+        case XTIROpUIToFp:
+        case XTIROpFpToSI:
+        case XTIROpFpToUI:
+            vmap[@(insn.result.valueId)] = xtvApplyConv(fn, insn, c, entry, B, vmap[@(insn.operands[0].valueId)],
+                                                       newBody, entrySplatCache);
+            break;
         // elementwise arith
         default:
             {
+            setLane(insn.result.type);
             XTIROperand* va = vecOperand(insn.operands[0]);
             XTIROperand* vb = vecOperand(insn.operands[1]);
             XTIRValue* vr = newVec();

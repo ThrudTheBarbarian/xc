@@ -6586,6 +6586,20 @@ static void xtMagicS(int64_t dIn, int W, int64_t* Mout, int* sout)
             [out appendFormat:@"\tcvtdq2ps\t%@, %@\n", d, a];
         return;
         }
+    // %v:Vec(I32) <- float lanes to signed 32-bit ones, truncating (#27)
+    case XTIROpVFpToSI:
+        {
+        if (!res || ops.count < 1 || ops[0].kind != XTIROperandKindUse)
+            return;
+        NSString *d = sVec[@(res.valueId)], *a = sVec[@(ops[0].valueId)];
+        if (!d || !a)
+            return;
+        if ([d hasPrefix:@"ymm"] || [d hasPrefix:@"zmm"])
+            [out appendFormat:@"\tvcvttps2dq\t%@, %@\n", d, a];
+        else
+            [out appendFormat:@"\tcvttps2dq\t%@, %@\n", d, a];
+        return;
+        }
     // %v:Vec <- lane-wise compare → 0/-1 mask (i32 lanes)
     case XTIROpVICmp:
         {
