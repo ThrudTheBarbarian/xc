@@ -46,7 +46,7 @@ cheapest passes, and `-O0` only the mandatory ones.
 | Hot-path block placement | arm64. |
 
 A float reduction is reassociated, and multiply-adds are fused, only under [`:goal(speed)`](/compiler/language/par/#which-goal-applies), which
-`par` blocks written in the source use by default; a plain loop, and a loop `--par-style` makes a block of, is exact unless its file or build asks for speed.
+`par` blocks use by default, written in the source or made from a loop by `--par-style`, though a float sum in such a loop is reassociated only when speed is asked for explicitly; a plain loop is exact unless its file or build asks for speed.
 
 ## Code generation
 

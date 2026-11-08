@@ -4356,10 +4356,10 @@ static int64_t parAutoConst(XTASTNode* e)
     frame[@"par"] = @YES;
     frame[@"written"] = [NSMutableSet set];
     // The block's goal: the loop's own, else the goal of the loop or block it
-    // sits in, else the file's or the build's, else a plain loop's, accuracy:
-    // a loop gives the answer it gives unlifted unless something asks for
-    // speed. As the port.
-    if (goal == 1)
+    // sits in, else the file's or the build's, else speed, as a written
+    // block's. A float sum still lifts only under an explicit speed goal.
+    // As the port.
+    if (goal != 2)
         frame[@"fast"] = @YES;
     frame[@"auto"] = @YES;
     [[self blkFrames] addObject:frame];
@@ -4367,7 +4367,7 @@ static int64_t parAutoConst(XTASTNode* e)
     [self parGridLoop:1];
     [self parAutoLoop:1];
     NSUInteger savedGoal = self.goalNow;
-    self.goalNow = goal == 1 ? 1 : 2;
+    self.goalNow = goal == 2 ? 2 : 1;
     XTASTNode* loop = [self parseFor];
     self.goalNow = savedGoal;
     [self parAutoLoop:-1];

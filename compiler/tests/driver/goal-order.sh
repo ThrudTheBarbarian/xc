@@ -3,8 +3,8 @@
 #
 # A loop's or block's goal is its own :goal, else the goal of the loop or
 # block it sits in, else the file's #goal, else the build's -fgoal=, else the
-# built-in default: speed for a par block written in the source, accuracy for
-# a plain loop and for a loop --par-style makes a block of. Read here from
+# built-in default: speed for a par block written in the source and for a
+# loop --par-style makes a block of, accuracy for a plain loop. Read here from
 # arm64 code, where speed fuses a multiply into the add after it and accuracy
 # does not: each case is a function (or a block's run function) whose loop is
 # `s = s + a[i] * b[i]`, and fuses or not as its goal says. Both compilers.
@@ -73,11 +73,12 @@ case_ block          speed    ""               "$CPU"             "$PB" '_ParImp
 case_ block-file     accuracy "#goal accuracy" "$CPU"             "$PB" '_ParImpl$0$run'
 case_ block-own      speed    "#goal accuracy" "$CPU"             "par blk :reduce(+ s) :goal(speed) { for (u32 i in 0..n) s = s + a[i] * b[i]; }" '_ParImpl$0$run'
 case_ block-outer    accuracy ""               "$CPU"             "for (u32 r = 0; r < 2; r++) :goal(accuracy) { $PB }" '_ParImpl$0$run'
-# A loop --par-style makes a block of: accuracy unless something says speed.
+# A loop --par-style makes a block of: speed unless something says accuracy.
 # An escape loop over the items (the shape a Mandelbrot is), which the
 # compiler lifts whatever the goal.
 LO='for (u32 i in 0..n) { float x = 0.0; float y = 0.0; u32 k = 0; while (k < 64 && x * x + y * y < 4.0) { float t = x * x - y * y + a[i]; y = 2.0 * x * y + b[i]; x = t; k = k + 1; } o[i] = (float)k; }'
-case_ lifted         accuracy ""               ""                 "$LO" '_ParImpl$0$run'
-case_ lifted-build   speed    ""               "-fgoal=speed"     "$LO" '_ParImpl$0$run'
+case_ lifted         speed    ""               ""                 "$LO" '_ParImpl$0$run'
+case_ lifted-build   accuracy ""               "-fgoal=accuracy"  "$LO" '_ParImpl$0$run'
+case_ lifted-file    accuracy "#goal accuracy" ""                 "$LO" '_ParImpl$0$run'
 [ $fail = 0 ] && echo "goal-order: ok"
 exit $fail

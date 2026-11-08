@@ -369,11 +369,12 @@ The goal of a block or a loop is the first of these that gives one:
    sets its own.
 3. The file's `#goal speed` or `#goal accuracy` line.
 4. The build's `-fgoal=speed` or `-fgoal=accuracy`.
-5. The built-in default: speed for a `par` block written in the source, and
-   accuracy for a plain loop and for a loop `--par-style` makes a block of.
+5. The built-in default: speed for a `par` block written in the source and for
+   a loop `--par-style` makes a block of, and accuracy for a plain loop.
 
-So without any setting a plain loop gives the answer its C reading gives,
-whether or not it becomes a block, and a written block favours speed.
+So without any setting a plain loop that stays a loop gives the answer its C
+reading gives, and a block, written or made from a loop, favours speed.
+`-fgoal=accuracy` gives the C reading's answer everywhere.
 
 ```c
 #goal accuracy                                  // this file's default
@@ -591,11 +592,12 @@ with nothing to wrap is built without it.
 A block's own `:device(…)` and `XC_PAR` at run time still decide over the
 style. A loop becomes a block only when the compiler can prove that no two
 iterations write the same element and none reads what another writes. The block
-keeps the loop's goal, `:goal(accuracy)` by default: every float operation rounds
-as the serial loop's does and a sum of floating-point values stays serial, so the
-answer is the one the serial loop gives. A `:goal(speed)` on the loop, a
-`#goal speed` line or `-fgoal=speed` lets the block reorder a float sum and fuse
-a multiply into the add after it.
+takes the loop's goal, and without one it favours speed, as a written block does:
+it may fuse a multiply into the add after it, and its GPU version uses the GPU's
+fast maths. A sum of floating-point values still stays serial unless speed is
+asked for explicitly (see **The goal** below). A `:goal(accuracy)` on the loop,
+a `#goal accuracy` line or `-fgoal=accuracy` makes every float operation round
+as the serial loop's does, so the answer is the one the serial loop gives.
 
 ```c
 for (u32 i in 0..N)

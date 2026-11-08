@@ -2918,10 +2918,10 @@ class Parser
         frame.set((Hashable*)String.withCString("par"), (Object*)Number.with((u32)1));
         frame.set((Hashable*)String.withCString("written"), (Object*)new Set());
         // The block's goal: the loop's own, else the goal of the loop or block
-        // it sits in, else the file's or the build's, else a plain loop's,
-        // accuracy: a loop gives the answer it gives unlifted unless something
-        // asks for speed. As the reference.
-        if (goal == (u32)1)
+        // it sits in, else the file's or the build's, else speed, as a written
+        // block's. A float sum still lifts only under an explicit speed goal
+        // (parAutoScan). As the reference.
+        if (goal != (u32)2)
             frame.set((Hashable*)String.withCString("fast"), (Object*)Number.with((u32)1));
         frame.set((Hashable*)String.withCString("auto"), (Object*)Number.with((u32)1));
         Token* savedParTok = _parTok;
@@ -2931,7 +2931,7 @@ class Parser
         parGridEnter("loops", true);
         _loopDepth = _loopDepth + (u32)1;
         u32 savedGoal = _goalNow;
-        _goalNow = goal == (u32)1 ? (u32)1 : (u32)2;
+        _goalNow = goal == (u32)2 ? (u32)2 : (u32)1;
         Node* loop = parseFor();
         _goalNow = savedGoal;
         _loopDepth = _loopDepth - (u32)1;

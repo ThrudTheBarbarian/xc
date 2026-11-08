@@ -408,8 +408,8 @@ the check costs less.
 
 A [`par` block](/compiler/language/par/#speed-or-accuracy) has the same goal,
 with `speed` as its default when it is written in the source, and the loops in
-its body follow it. A loop that `--par-style` makes a block of keeps the
-loop's goal, so without any setting it stays exact.
+its body follow it. A loop that `--par-style` makes a block of takes the
+loop's goal, and without any setting favours speed, as a written block does.
 
 ## Program entry: `main`
 
