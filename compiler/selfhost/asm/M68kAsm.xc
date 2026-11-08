@@ -427,13 +427,13 @@ class MOp
         }
 
     // ── Emission ─────────────────────────────────────────────────────────
-    Array* _d;  // the instruction being built
+    Data* _d;  // the instruction being built
     Array* _rr; // relocation offsets within _d, or null in pass 1
 
     void a16(u32 w)
         {
-        _d.add((Object*)Number.withU32((w >> (u32)8) & (u32)$FF));
-        _d.add((Object*)Number.withU32(w & (u32)$FF));
+        _d.appendByte((u8)((w >> (u32)8) & (u32)$FF));
+        _d.appendByte((u8)(w & (u32)$FF));
         }
 
     void a32(u32 l)
@@ -499,7 +499,7 @@ class MOp
         if (k == (u32)MOP_ABS)
             {
             if (_rr != (Array*)0 && o.isSym() && !symIsDiff(o))
-                _rr.add((Object*)Number.withU32(_d.count()));
+                _rr.add((Object*)Number.withU32(_d.length()));
             a32((u32)symVal(syms, o));
             return;
             }
@@ -508,7 +508,7 @@ class MOp
             if (size == (u32)4)
                 {
                 if (o.isSym() && !symIsDiff(o) && _rr != (Array*)0)
-                    _rr.add((Object*)Number.withU32(_d.count()));
+                    _rr.add((Object*)Number.withU32(_d.length()));
                 a32((u32)symVal(syms, o));
                 }
             else
@@ -610,9 +610,9 @@ class MOp
     // displacement whose target is still an unresolved forward reference.
     bool _hit;
 
-    Array* encode(String* mnem, u32 size, Array* ops, Map* syms, u32 curOff, Array* rr)
+    Data* encode(String* mnem, u32 size, Array* ops, Map* syms, u32 curOff, Array* rr)
         {
-        _d = new Array();
+        _d = new Data();
         _rr = rr;
         _hit = false;
 
@@ -622,7 +622,7 @@ class MOp
         MOp* o0 = ops.count() > (u32)0 ? parseOperand((String*)ops.get((u32)0)) : new MOp();
         MOp* o1 = ops.count() > (u32)1 ? parseOperand((String*)ops.get((u32)1)) : new MOp();
         if (_failed)
-            return (Array*)0;
+            return (Data*)0;
 
         u32 sb = size == (u32)1 ? (u32)0 : size == (u32)2 ? (u32)1
                                                           : (u32)2;
@@ -635,13 +635,13 @@ class MOp
             return _d;
         encMoves(mnem, size, sb, o0, o1, syms);
         if (_hit || _failed)
-            return _failed ? (Array*)0 : _d;
+            return _failed ? (Data*)0 : _d;
         encAlu(mnem, size, sb, o0, o1, syms);
         if (_hit || _failed)
-            return _failed ? (Array*)0 : _d;
+            return _failed ? (Data*)0 : _d;
         encUnary(mnem, size, sb, o0, o1, syms);
         if (_hit || _failed)
-            return _failed ? (Array*)0 : _d;
+            return _failed ? (Data*)0 : _d;
         encMulDiv(mnem, size, o0, o1, syms);
         if (_hit)
             return _d;
@@ -650,18 +650,18 @@ class MOp
             return _d;
         encControl(mnem, size, o0, o1, syms, curOff);
         if (_hit || _failed)
-            return _failed ? (Array*)0 : _d;
+            return _failed ? (Data*)0 : _d;
 
         String* m = String.withCString("unsupported mnemonic '");
         m.append(mnem);
         m.appendCString("'");
         fail(m);
-        return (Array*)0;
+        return (Data*)0;
         }
 
     // `.dc.l` of a symbol emits a relocated four-byte pointer; `symA-symB` is a
     // relocation-free difference (a PIC vtable slot holding method - base).
-    Array* encodeDc(String* mnem, Array* ops, Map* syms)
+    Data* encodeDc(String* mnem, Array* ops, Map* syms)
         {
         bool isLong = mnem.equals(String.withCString(".dc.l"));
         for (u32 i = (u32)0; i < ops.count(); i = i + (u32)1)
@@ -683,8 +683,8 @@ class MOp
             u32 v = (u32)symVal(syms, e);
             if (isLong)
                 {
-                if (e.kind() == (u32)MOP_ABS && e.isSym() && _rr != (Array*)0)
-                    _rr.add((Object*)Number.withU32(_d.count()));
+                if (e.kind() == (u32)MOP_ABS && e.isSym() && _rr != (Data*)0)
+                    _rr.add((Object*)Number.withU32(_d.length()));
                 a32(v);
                 }
             else
@@ -1527,13 +1527,13 @@ class MOp
         }
 
     // The bytes a plain data directive contributes, in both passes.
-    Array* dataForDir(String* dir, String* args, u32 curOff)
+    Data* dataForDir(String* dir, String* args, u32 curOff)
         {
-        Array* d = new Array();
+        Data* d = new Data();
         if (dir.equals(String.withCString(".even")))
             {
             if ((curOff & (u32)1) != (u32)0)
-                d.add((Object*)Number.withU32((u32)0));
+                d.appendByte((u8)0);
             return d;
             }
         if (dir.equals(String.withCString(".ascii")) || dir.equals(String.withCString(".asciz")))
@@ -1552,29 +1552,29 @@ class MOp
                         u8 n = str.byteAt(i + (u32)1);
                         if (n == (u8)'n')
                             {
-                            d.add((Object*)Number.withU32((u32)10));
+                            d.appendByte((u8)10);
                             i = i + (u32)2;
                             continue;
                             }
                         if (n == (u8)'r')
                             {
-                            d.add((Object*)Number.withU32((u32)13));
+                            d.appendByte((u8)13);
                             i = i + (u32)2;
                             continue;
                             }
                         if (n == (u8)'0')
                             {
-                            d.add((Object*)Number.withU32((u32)0));
+                            d.appendByte((u8)0);
                             i = i + (u32)2;
                             continue;
                             }
                         }
-                    d.add((Object*)Number.withU32((u32)c));
+                    d.appendByte((u8)((u32)c));
                     i = i + (u32)1;
                     }
                 }
             if (dir.equals(String.withCString(".asciz")))
-                d.add((Object*)Number.withU32((u32)0));
+                d.appendByte((u8)0);
             return d;
             }
         if (dir.equals(String.withCString(".space")) || dir.equals(String.withCString(".ds.b")))
@@ -1582,7 +1582,7 @@ class MOp
             i32 n = parseNum(args);
             if (_numOk)
                 for (i32 k = (i32)0; k < n; k = k + (i32)1)
-                    d.add((Object*)Number.withU32((u32)0));
+                    d.appendByte((u8)0);
             return d;
             }
         if (dir.equals(String.withCString(".dc.b")) || dir.equals(String.withCString(".byte")))
@@ -1592,7 +1592,7 @@ class MOp
                 {
                 i32 v = parseNum((String*)toks.get(i));
                 if (_numOk)
-                    d.add((Object*)Number.withU32((u32)v & (u32)$FF));
+                    d.appendByte((u8)((u32)v & (u32)$FF));
                 }
             return d;
             }
@@ -1613,9 +1613,9 @@ class MOp
     // Segments lie contiguously — GEMDOS loads text and data adjacently and
     // zeroes bss after — so offsets run sequentially across all three and the
     // pass only records where .data and .bss begin, to split the sizes.
-    Array* _image; // the finished executable
+    Data* _image; // the finished executable
 
-    Array* image(void)
+    Data* image(void)
         {
         return _image;
         }
@@ -1670,10 +1670,10 @@ class MOp
                     }
                 if (dir.equals(String.withCString(".text")) || dir.equals(String.withCString(".globl")))
                     continue;
-                off = off + dataForDir(dir, (String*)_itemB.get(i), off).count();
+                off = off + dataForDir(dir, (String*)_itemB.get(i), off).length();
                 continue;
                 }
-            Array* enc = encode((String*)_itemA.get(i), ((Number*)_itemSize.get(i)).asU32(),
+            Data* enc = encode((String*)_itemA.get(i), ((Number*)_itemSize.get(i)).asU32(),
                                 (Array*)_itemB.get(i), syms, off, (Array*)0);
             if (enc == (Array*)0)
                 {
@@ -1681,7 +1681,7 @@ class MOp
                     fail(String.withCString("encode error (pass 1)"));
                 return;
                 }
-            off = off + enc.count();
+            off = off + enc.length();
             }
         // The GOT lives at the end of the in-file image. In GOT mode the back
         // end folds bss into .data, so no separate bss segment is displaced.
@@ -1700,7 +1700,7 @@ class MOp
         // Pass 2. The image is text plus data — everything before .bss; bss
         // reserves no file bytes, its labels were assigned in pass 1 and the
         // loader zeroes it.
-        Array* text = new Array();
+        Data* text = new Data();
         Array* relocs = new Array();
         bool inBss = false;
         for (u32 i = (u32)0; i < _itemKind.count(); i = i + (u32)1)
@@ -1720,17 +1720,16 @@ class MOp
                     continue;
                 if (inBss)
                     continue;
-                Array* dd = dataForDir(dir, (String*)_itemB.get(i), text.count());
-                for (u32 k = (u32)0; k < dd.count(); k = k + (u32)1)
-                    text.add(dd.get(k));
+                Data* dd = dataForDir(dir, (String*)_itemB.get(i), text.length());
+                text.append(dd);
                 continue;
                 }
             if (inBss)
                 continue;
             Array* rr = new Array();
-            u32 base = text.count();
+            u32 base = text.length();
             _missingSym = (String*)0;
-            Array* enc = encode((String*)_itemA.get(i), ((Number*)_itemSize.get(i)).asU32(),
+            Data* enc = encode((String*)_itemA.get(i), ((Number*)_itemSize.get(i)).asU32(),
                                 (Array*)_itemB.get(i), syms, base, rr);
             if (enc == (Array*)0)
                 {
@@ -1750,8 +1749,7 @@ class MOp
                 }
             for (u32 k = (u32)0; k < rr.count(); k = k + (u32)1)
                 relocs.add((Object*)Number.withU32(base + ((Number*)rr.get(k)).asU32()));
-            for (u32 k = (u32)0; k < enc.count(); k = k + (u32)1)
-                text.add(enc.get(k));
+            text.append(enc);
             }
         // The GOT: one relocated longword per referenced symbol, in slot order.
         if (_gotMode)
@@ -1759,7 +1757,7 @@ class MOp
             for (u32 i = (u32)0; i < _gotOrder.count(); i = i + (u32)1)
                 {
                 String* sym = (String*)_gotOrder.get(i);
-                relocs.add((Object*)Number.withU32(text.count()));
+                relocs.add((Object*)Number.withU32(text.length()));
                 _missingSym = (String*)0;
                 u32 v = (u32)symLookup(syms, sym);
                 if (_missingSym != (String*)0)
@@ -1770,18 +1768,18 @@ class MOp
                     fail(m);
                     return;
                     }
-                text.add((Object*)Number.withU32((v >> (u32)24) & (u32)$FF));
-                text.add((Object*)Number.withU32((v >> (u32)16) & (u32)$FF));
-                text.add((Object*)Number.withU32((v >> (u32)8) & (u32)$FF));
-                text.add((Object*)Number.withU32(v & (u32)$FF));
+                text.appendByte((u8)((v >> (u32)24) & (u32)$FF));
+                text.appendByte((u8)((v >> (u32)16) & (u32)$FF));
+                text.appendByte((u8)((v >> (u32)8) & (u32)$FF));
+                text.appendByte((u8)(v & (u32)$FF));
                 }
             }
         emit601A(text, relocs, tsize, dsize, bsize);
         }
 
-    void emit601A(Array* text, Array* relocs, u32 tsize, u32 dsize, u32 bsize)
+    void emit601A(Data* text, Array* relocs, u32 tsize, u32 dsize, u32 bsize)
         {
-        _d = new Array();
+        _d = new Data();
         a16((u32)$601A); // magic
         a32(tsize);
         a32(dsize);
@@ -1794,11 +1792,9 @@ class MOp
         // runtime does not pre-zero it.
         a32((u32)$06); // PF_TTRAMLOAD | PF_TTRAMMEM
         a16((u32)0);   // absflag 0 -> a relocation table follows
-        _image = new Array();
-        for (u32 i = (u32)0; i < _d.count(); i = i + (u32)1)
-            _image.add(_d.get(i));
-        for (u32 i = (u32)0; i < text.count(); i = i + (u32)1)
-            _image.add(text.get(i));
+        _image = new Data();
+        _image.append(_d);
+        _image.append(text);
 
         // The DRI relocation stream: the first fixup as a longword, then one
         // advance byte per subsequent fixup, where 1 means "skip 254".
@@ -1806,27 +1802,27 @@ class MOp
         if (relocs.count() == (u32)0)
             {
             for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
-                _image.add((Object*)Number.withU32((u32)0));
+                _image.appendByte((u8)0);
             return;
             }
         u32 prev = ((Number*)relocs.get((u32)0)).asU32();
-        _image.add((Object*)Number.withU32((prev >> (u32)24) & (u32)$FF));
-        _image.add((Object*)Number.withU32((prev >> (u32)16) & (u32)$FF));
-        _image.add((Object*)Number.withU32((prev >> (u32)8) & (u32)$FF));
-        _image.add((Object*)Number.withU32(prev & (u32)$FF));
+        _image.appendByte((u8)((prev >> (u32)24) & (u32)$FF));
+        _image.appendByte((u8)((prev >> (u32)16) & (u32)$FF));
+        _image.appendByte((u8)((prev >> (u32)8) & (u32)$FF));
+        _image.appendByte((u8)(prev & (u32)$FF));
         for (u32 i = (u32)1; i < relocs.count(); i = i + (u32)1)
             {
             u32 cur = ((Number*)relocs.get(i)).asU32();
             u32 delta = cur - prev;
             while (delta > (u32)254)
                 {
-                _image.add((Object*)Number.withU32((u32)1));
+                _image.appendByte((u8)1);
                 delta = delta - (u32)254;
                 }
-            _image.add((Object*)Number.withU32(delta & (u32)$FF));
+            _image.appendByte((u8)(delta & (u32)$FF));
             prev = cur;
             }
-        _image.add((Object*)Number.withU32((u32)0));
+        _image.appendByte((u8)0);
         }
 
     static void sortNumbers(Array* a)

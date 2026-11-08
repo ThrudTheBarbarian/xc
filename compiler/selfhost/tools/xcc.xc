@@ -3587,11 +3587,7 @@ void emitM68k(DriverOptions* d, IRModule* mod)
         Stdio.printf("xcc: assembly failed: %s\n", as.why().cString());
         Process.exit((i32)1); return;
     }
-    Array* image = as.image();
-    Data* out = Data.withCapacity((u32)0);
-    for (u32 k = (u32)0; k < image.count(); k = k + (u32)1)
-        out.appendByte((u8)((Number*)image.get(k)).asU32());
-    if (!Files.writeData(d.fe().output(), out)) {
+    if (!Files.writeData(d.fe().output(), as.image())) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
         Process.exit((i32)1); return;
     }
