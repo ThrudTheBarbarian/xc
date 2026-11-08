@@ -45,8 +45,8 @@ cheapest passes, and `-O0` only the mandatory ones.
 | Select-to-branch | A float select on one bit becomes a branch when one arm is costly (arm64). |
 | Hot-path block placement | arm64. |
 
-A float reduction is reassociated, and x86-64 contracts multiply-adds, only under [`:goal(speed)`](/compiler/language/par/), which
-`par` blocks use by default.
+A float reduction is reassociated, and multiply-adds are fused, only under [`:goal(speed)`](/compiler/language/par/#which-goal-applies), which
+`par` blocks written in the source use by default; a plain loop, and a loop `--par-style` makes a block of, is exact unless its file or build asks for speed.
 
 ## Code generation
 

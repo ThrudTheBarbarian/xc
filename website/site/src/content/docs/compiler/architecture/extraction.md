@@ -77,8 +77,8 @@ where it must.
 - **Reductions.** Every value carried from one iteration to the next must be a reduction
   with an associative operator: integer `+`, `*`, `&`, `|`, `^`, minimum and maximum,
   including if-converted conditional updates and chains like `t = t + x1 + x2`. A float sum
-  is reassociated only under [`:goal(speed)`](/compiler/language/par/), so the default
-  result matches the plain loop's.
+  is reassociated only under [`:goal(speed)`](/compiler/language/par/#which-goal-applies),
+  as are its multiply-adds fused, so the default result matches the plain loop's.
 - **Dependence analysis.** Each array index is reduced to an affine form `k·i + c`, or a
   symbolic one over captured integers, and every read is tested against every write to the
   same array with the **GCD test**. Pairs the compiler cannot settle become **run-time

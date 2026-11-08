@@ -365,12 +365,15 @@ The annotation goes after the closing `)` of the `for` clause and before the bod
 
 ## Speed or accuracy: `:goal`
 
- A `for` loop can say whether the compiler may
-trade exactness for speed in it: `:goal(speed)` or `:goal(accuracy)`, after the
-closing `)` like `:unroll` (the two can be combined: `:unroll, goal(speed)`).
-The goal holds for the loop and every loop inside it, down to one that sets its
-own. A loop without one is exact: it gives the same bits as the loop written in
-C.
+A `for` loop can say whether the compiler may trade exactness for speed in it:
+`:goal(speed)` or `:goal(accuracy)`, after the closing `)` like `:unroll` (the
+two can be combined: `:unroll, goal(speed)`). The goal holds for the loop and
+every loop inside it, `while` loops included, down to one that sets its own. A
+loop that sets none takes the goal of the loop or block around it, else the
+file's `#goal speed` or `#goal accuracy` line, else the build's `-fgoal=`, and
+without any of them it is exact: it gives the same bits as the loop written in
+C. [Which goal applies](/compiler/language/par/#which-goal-applies) sets the
+order out with an example.
 
 ```c
 for (u32 i = 0; i < M; i++) :goal(speed)
@@ -404,7 +407,9 @@ check out makes a 128×128 multiply about a fifth faster; for larger matrices
 the check costs less.
 
 A [`par` block](/compiler/language/par/#speed-or-accuracy) has the same goal,
-with `speed` as its default, and the loops in its body follow it.
+with `speed` as its default when it is written in the source, and the loops in
+its body follow it. A loop that `--par-style` makes a block of keeps the
+loop's goal, so without any setting it stays exact.
 
 ## Program entry: `main`
 

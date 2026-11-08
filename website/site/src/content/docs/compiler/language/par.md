@@ -312,8 +312,9 @@ cast says that is meant; `nil` is fine. The 8-,
 
 ### Speed or accuracy
 
-A block's goal says what its GPU version favours: `:goal(speed)`, the default,
-or `:goal(accuracy)`.
+A block's goal says whether the compiler may trade exactness for speed in it:
+`:goal(speed)`, the default for a block written in the source, or
+`:goal(accuracy)`.
 
 ```c
 par waves :reduce(+ high)                       // the goal is speed
@@ -322,14 +323,27 @@ par measure :reduce(+ total) :goal(accuracy)    // precise maths
     { … }
 ```
 
-With speed, the GPU uses its fast maths. On a Mac that is Metal's fast mode,
-which also lets the GPU reorder float arithmetic and assume there are no NaNs
-or infinities. On an NVIDIA GPU, and through Vulkan and WebGPU, `sin`, `cos`,
-`exp`, `ln` and `pow` of `float` values use the hardware's approximations. Float results can then differ from
-the CPU's in the last few bits; integer results are the same either way.
+Under speed:
 
-With accuracy, the maths is precise and float results land within about one
-ULP of the CPU's. NVIDIA GPUs have no precise `sin`, `cos`, `exp`, `ln` or
+- A multiply whose product is added straight away (`s + a * b`, `a * b - c`)
+  may become one fused multiply-add, rounding once instead of twice. The CPU
+  code does this on arm64, and on x86-64 wherever the processor has FMA (the
+  compiler's AVX2 and AVX-512 code); a GPU's driver may do it too.
+- The GPU uses its fast maths. On a Mac that is Metal's fast mode,
+  which also lets the GPU reorder float arithmetic and assume there are no NaNs
+  or infinities. On an NVIDIA GPU, and through Vulkan and WebGPU, `sin`, `cos`,
+  `exp`, `ln` and `pow` of `float` values use the hardware's approximations. Float results can then differ from
+  the CPU's in the last few bits; integer results are the same either way.
+- A loop that `--par-style` makes a block of may add up `float` and `double`
+  values in any order (see [Loops that become blocks](#loops-that-become-blocks---par-style)).
+- The SME kernel that stands in for a matrix multiply leaves out its NaN check
+  ([`:goal` on a loop](/compiler/language/statements/#speed-or-accuracy-goal)
+  explains).
+
+Under accuracy, every `float` and `double` `+`, `-` and `*` is rounded on its
+own, on the CPU and on the GPU, so those give the same bits whichever device
+runs the block. The maths functions are precise, and their float results land
+within about one ULP of the CPU's. NVIDIA GPUs have no precise `sin`, `cos`, `exp`, `ln` or
 `pow`, so there a block that calls them runs on the CPU. Vulkan and WebGPU
 round `+`, `-` and `*` exactly, and through Vulkan a block whose goal is
 accuracy forbids the driver to fuse a multiply into the add after it, but not
@@ -342,9 +356,34 @@ results that pass through them can differ from the CPU's there. Choose
 accuracy for a block that depends on NaN or infinity, or on exact float
 results.
 
-On the CPU, both goals run the same code, except that the block's goal also holds for the loops in its body, as
-[`:goal` on a `for` loop](/compiler/language/statements/#speed-or-accuracy-goal)
-does.
+A block's `:reduce` over `float` or `double` values combines partial results,
+whatever the goal (see [Reductions](#reductions)).
+
+#### Which goal applies
+
+The goal of a block or a loop is the first of these that gives one:
+
+1. Its own `:goal(speed)` or `:goal(accuracy)`.
+2. The goal of the block or loop it sits in: a block's goal holds for the
+   loops in its body, and a loop's for the loops inside it, down to one that
+   sets its own.
+3. The file's `#goal speed` or `#goal accuracy` line.
+4. The build's `-fgoal=speed` or `-fgoal=accuracy`.
+5. The built-in default: speed for a `par` block written in the source, and
+   accuracy for a plain loop and for a loop `--par-style` makes a block of.
+
+So without any setting a plain loop gives the answer its C reading gives,
+whether or not it becomes a block, and a written block favours speed.
+
+```c
+#goal accuracy                                  // this file's default
+par waves { … }                                 // accuracy, from the file
+par fast :goal(speed)                           // speed, its own
+    {
+    for (u32 k in 0..K) { … }                   // speed, from the block
+    for (u32 k in 0..K) :goal(accuracy) { … }   // accuracy, its own
+    }
+```
 
 ### Which device
 
@@ -551,9 +590,12 @@ with nothing to wrap is built without it.
 
 A block's own `:device(…)` and `XC_PAR` at run time still decide over the
 style. A loop becomes a block only when the compiler can prove that no two
-iterations write the same element and none reads what another writes; a sum of
-floating-point values stays serial under the default `:goal(accuracy)`, so the
-answer is the one the serial loop gives.
+iterations write the same element and none reads what another writes. The block
+keeps the loop's goal, `:goal(accuracy)` by default: every float operation rounds
+as the serial loop's does and a sum of floating-point values stays serial, so the
+answer is the one the serial loop gives. A `:goal(speed)` on the loop, a
+`#goal speed` line or `-fgoal=speed` lets the block reorder a float sum and fuse
+a multiply into the add after it.
 
 ```c
 for (u32 i in 0..N)

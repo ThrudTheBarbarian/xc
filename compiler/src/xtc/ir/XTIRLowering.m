@@ -10256,8 +10256,16 @@ static const NSUInteger kVarargSlotBytes = 8;
         [self lowerIfStmt:(XTIfNode*)node];
         break;
     case XTASTNodeKindWhile:
+        {
+        // The goal the parser gave it: the one around it, else the file's or
+        // the build's. As the port.
+        NSInteger savedGoal = self.loopGoal;
+        if (((XTWhileNode*)node).goal)
+            self.loopGoal = ((XTWhileNode*)node).goal;
         [self lowerWhileStmt:(XTWhileNode*)node];
+        self.loopGoal = savedGoal;
         break;
+        }
     case XTASTNodeKindExprStatement:
         [self lowerExprStmt:(XTExpressionStatementNode*)node];
         break;
@@ -10279,8 +10287,14 @@ static const NSUInteger kVarargSlotBytes = 8;
         break;
         }
     case XTASTNodeKindForIn:
+        {
+        NSInteger savedGoal = self.loopGoal;
+        if (((XTForInNode*)node).goal)
+            self.loopGoal = ((XTForInNode*)node).goal;
         [self lowerForInStmt:(XTForInNode*)node];
+        self.loopGoal = savedGoal;
         break;
+        }
     case XTASTNodeKindBreak:
         [self lowerBreakStmt:(XTBreakNode*)node];
         break;

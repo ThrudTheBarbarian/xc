@@ -22,10 +22,7 @@ cat > "$W/once.xc" <<'XC'
 i32 main(void)
 {
     u32 total = 0;
-    // Accuracy: the runs land on different devices and kernels as auto
-    // measures, and a lifted loop's default goal is speed, under which a
-    // CPU that fuses and a GPU that does not count differently.
-    for (u32 i in 0..W * W) :goal(accuracy)
+    for (u32 i in 0..W * W)
         {
         float cx = (float)(i % W) * (3.0f / W) - 2.0f;
         float cy = (float)(i / W) * (3.0f / W) - 1.5f;

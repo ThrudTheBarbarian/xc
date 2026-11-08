@@ -3248,7 +3248,25 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
     XTASTNode* cond = [self parseExpression];
     [self expect:XTTokenRParen];
     XTASTNode* body = [self checkBlockOpen] ? [self parseBlock] : [self parseStatement];
-    return [[XTWhileNode alloc] initWithCondition:cond body:body location:loc];
+    XTWhileNode* w = [[XTWhileNode alloc] initWithCondition:cond body:body location:loc];
+    // The goal of the loop or block around it, else the file's or the build's:
+    // a while loop has no annotation of its own. As the port.
+    w.goal = [self loopGoal:0];
+    return w;
+    }
+
+/****************************************************************************\
+|* A loop's goal: its own (annotation bits 2 speed, 4 accuracy), else the goal
+|* of the loop or block it sits in, else the file's #goal, else -fgoal=; 0 for
+|* none (the built-in default, accuracy).
+\****************************************************************************/
+- (NSUInteger)loopGoal:(NSUInteger)annots
+    {
+    if (annots & 2)
+        return 1;
+    if (annots & 4)
+        return 2;
+    return self.goalNow ?: self.goalDefault;
     }
 
 /****************************************************************************\
@@ -3450,7 +3468,7 @@ static BOOL parAutoAnyAssignOp(XTTokenType t)
     {
     NSUInteger at = _pos;
     NSUInteger n = _tokens.count;
-    *goalOut = self.goalDefault;
+    *goalOut = self.goalNow ?: self.goalDefault;
     if ([self parTokType:at + 1] != XTTokenLParen)
         return NO;
     // Not in the standard library or the prelude: a loop of the par runtime
@@ -4337,16 +4355,21 @@ static int64_t parAutoConst(XTASTNode* e)
     frame[@"selfName"] = [NSNull null];
     frame[@"par"] = @YES;
     frame[@"written"] = [NSMutableSet set];
-    // The block's goal: the loop's own, else the unit's, else speed as a
-    // written block's.
-    if (goal != 2)
+    // The block's goal: the loop's own, else the goal of the loop or block it
+    // sits in, else the file's or the build's, else a plain loop's, accuracy:
+    // a loop gives the answer it gives unlifted unless something asks for
+    // speed. As the port.
+    if (goal == 1)
         frame[@"fast"] = @YES;
     frame[@"auto"] = @YES;
     [[self blkFrames] addObject:frame];
     [self blkPushScope];
     [self parGridLoop:1];
     [self parAutoLoop:1];
+    NSUInteger savedGoal = self.goalNow;
+    self.goalNow = goal == 1 ? 1 : 2;
     XTASTNode* loop = [self parseFor];
+    self.goalNow = savedGoal;
     [self parAutoLoop:-1];
     [self parGridLoop:-1];
     [self blkPopScope];
@@ -4401,9 +4424,9 @@ static int64_t parAutoConst(XTASTNode* e)
         }
     NSMutableArray<NSArray<NSString*>*>* reductions = [NSMutableArray array];
     NSMutableArray<NSString*>* constants = [NSMutableArray array];   // :constant(a, b): captured arrays the GPU reads as constants
-    // :goal(speed) (the default) or :goal(accuracy): what the block's GPU
-    // version favours; the unit's #goal / -fgoal= sets the default.
-    BOOL accuracy = self.goalDefault == 2;
+    // :goal(speed) (the default) or :goal(accuracy): its own, else the goal of
+    // the loop or block it sits in, else the file's #goal or -fgoal=, else speed.
+    BOOL accuracy = (self.goalNow ?: self.goalDefault) == 2;
     // :grid(w, h[, d]): the work items are the points of a 2-D or 3-D grid,
     // and the body is any code, run once per point.
     NSMutableArray<XTASTNode*>* grid = nil;
@@ -4574,7 +4597,10 @@ static int64_t parAutoConst(XTASTNode* e)
         }
     [[self blkFrames] addObject:frame];
     [self blkPushScope];
+    NSUInteger savedGoal = self.goalNow;
+    self.goalNow = accuracy ? 2 : 1;
     XTBlockNode* body = (XTBlockNode*)[self parseBlock];
+    self.goalNow = savedGoal;
     [self blkPopScope];
     [[self blkFrames] removeLastObject];
     if (!body)
@@ -4895,12 +4921,16 @@ static int64_t parAutoConst(XTASTNode* e)
                 }
             [self expect:XTTokenRParen];
             NSUInteger rangeAnnots = [self parseLoopAnnotations];
+            NSUInteger rangeGoal = [self loopGoal:rangeAnnots];
             // The loop variable is a local of the body: a block literal or a
             // `par` inside it captures it like any other.
             [self blkPushScope];
             if (loopVarName)
                 [self blkBind:loopVarName.value type:loopType];
+            NSUInteger savedGoal = self.goalNow;
+            self.goalNow = rangeGoal;
             XTASTNode* body = [self checkBlockOpen] ? [self parseBlock] : [self parseStatement];
+            self.goalNow = savedGoal;
             [self blkPopScope];
 
             // Direction decision. Resolve the four cases:
@@ -5021,7 +5051,7 @@ static int64_t parAutoConst(XTASTNode* e)
                                                                               body:body
                                                                           location:loc];
             rangeNode.forceUnroll = (rangeAnnots & 1) != 0;
-            rangeNode.goal = (rangeAnnots & 2) ? 1 : (rangeAnnots & 4) ? 2 : (NSUInteger)self.goalDefault;
+            rangeNode.goal = rangeGoal;
             return rangeNode;
             }
 
@@ -5038,7 +5068,9 @@ static int64_t parAutoConst(XTASTNode* e)
                                                                           type:loopType
                                                                    initialiser:nil
                                                                       location:loc];
-        return [[XTForInNode alloc] initWithLoopVar:loopVar collection:collection body:body location:loc];
+        XTForInNode* fi = [[XTForInNode alloc] initWithLoopVar:loopVar collection:collection body:body location:loc];
+        fi.goal = [self loopGoal:0];
+        return fi;
         }
 
     // C-style for
@@ -5075,13 +5107,17 @@ static int64_t parAutoConst(XTASTNode* e)
     [self expect:XTTokenRParen];
 
     NSUInteger annots = [self parseLoopAnnotations];
+    NSUInteger goal = [self loopGoal:annots];
 
+    NSUInteger savedGoal = self.goalNow;
+    self.goalNow = goal;
     XTASTNode* body = [self checkBlockOpen] ? [self parseBlock] : [self parseStatement];
+    self.goalNow = savedGoal;
     [self blkPopScope];
 
     XTForCStyleNode* node = [[XTForCStyleNode alloc] initWithLoopInit:init condition:cond increment:incr body:body location:loc];
     node.forceUnroll = (annots & 1) != 0;
-    node.goal = (annots & 2) ? 1 : (annots & 4) ? 2 : (NSUInteger)self.goalDefault;
+    node.goal = goal;
     return node;
     }
 

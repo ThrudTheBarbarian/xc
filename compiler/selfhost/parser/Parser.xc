@@ -71,6 +71,7 @@ class Parser
     bool    _parAutoWantsRuntime; // --par-style=auto found a loop to wrap, but Par.xc was not imported
     u32     _loopDepth;     // loops open in the code being parsed (an auto par wraps an outermost one)
     u32     _goalDefault;   // the unit's default goal: 0 built-in, 1 speed, 2 accuracy (#goal, else -fgoal=)
+    u32     _goalNow;       // the goal of the loop or block being parsed: 0 none yet, 1 speed, 2 accuracy
     u32     _parDeviceDefault; // --par-style's device for a block with no :device (1 cpu, 2 gpu), or 0
     Set*    _libFiles;      // the standard library's and prelude's files, which --par-style=auto leaves alone
     Token*  _parTok;        // the `par` being desugared: where its errors point
@@ -2916,8 +2917,11 @@ class Parser
         frame.set((Hashable*)String.withCString("wbnames"), (Object*)new Array());
         frame.set((Hashable*)String.withCString("par"), (Object*)Number.with((u32)1));
         frame.set((Hashable*)String.withCString("written"), (Object*)new Set());
-        // The block's goal: the loop's own, else the unit's, else speed.
-        if (goal != (u32)2)
+        // The block's goal: the loop's own, else the goal of the loop or block
+        // it sits in, else the file's or the build's, else a plain loop's,
+        // accuracy: a loop gives the answer it gives unlifted unless something
+        // asks for speed. As the reference.
+        if (goal == (u32)1)
             frame.set((Hashable*)String.withCString("fast"), (Object*)Number.with((u32)1));
         frame.set((Hashable*)String.withCString("auto"), (Object*)Number.with((u32)1));
         Token* savedParTok = _parTok;
@@ -2926,7 +2930,10 @@ class Parser
         blkPushScope();
         parGridEnter("loops", true);
         _loopDepth = _loopDepth + (u32)1;
+        u32 savedGoal = _goalNow;
+        _goalNow = goal == (u32)1 ? (u32)1 : (u32)2;
         Node* loop = parseFor();
+        _goalNow = savedGoal;
         _loopDepth = _loopDepth - (u32)1;
         parGridEnter("loops", false);
         blkPopScope();
@@ -3129,7 +3136,7 @@ class Parser
     {
         u32 at = _pos;
         u32 n = _tokens.count();
-        *goalOut = _goalDefault;
+        *goalOut = _goalNow != (u32)0 ? _goalNow : _goalDefault;
         if (parTokType(at + (u32)1) != (u16)tokLParen) return false;
         // Not in the standard library or the prelude (the reference explains).
         if (_libFiles != (Set*)0 && _libFiles.contains((Hashable*)cur().file())) return false;
@@ -3458,7 +3465,10 @@ class Parser
             p.setName(cur().value());
             advance();
         }
-        u32 flags = _goalDefault == (u32)2 ? (u32)1 : (u32)0;   // the unit's #goal / -fgoal= sets the default
+        // The block's goal: its own, else the goal of the loop or block it
+        // sits in, else the file's #goal or -fgoal=, else speed.
+        u32 inherited = _goalNow != (u32)0 ? _goalNow : _goalDefault;
+        u32 flags = inherited == (u32)2 ? (u32)1 : (u32)0;
         // :grid(w, h[, d]): the work items are the points of a 2-D or 3-D
         // grid, and the body is any code, run once per point.
         Array* grid = (Array*)0;
@@ -3539,6 +3549,7 @@ class Parser
                 }
                 advance();
                 if (g.equals(String.withCString("accuracy"))) flags = flags | (u32)1;
+                else flags = flags & ~(u32)1;
                 expect((u16)tokRParen);
                 continue;
             }
@@ -3623,7 +3634,10 @@ class Parser
             frame.set((Hashable*)String.withCString("device"), (Object*)Number.with((u32)device));
         _blkFrames.add((Object*)frame);
         blkPushScope();
+        u32 savedGoal = _goalNow;
+        _goalNow = (flags & (u32)1) != (u32)0 ? (u32)2 : (u32)1;
         Node* body = parseBlock();
+        _goalNow = savedGoal;
         blkPopScope();
         _blkFrames.removeAt(_blkFrames.count() - (u32)1);
         if (body == 0) return (Node*)0;
@@ -5347,6 +5361,9 @@ class Parser
     {
         advance();
         Node* n = mk((u16)nkWhile);
+        // The goal of the loop or block around it, else the file's or the
+        // build's: a while loop has no annotation of its own.
+        goalFlags(n, loopGoal((u32)0));
         expect((u16)tokLParen);
         n.add(parseExpression());
         expect((u16)tokRParen);
@@ -5417,11 +5434,15 @@ class Parser
 
                 expect((u16)tokRParen);
                 u32 rangeAnnots = parseLoopAnnotations();
+                u32 rangeGoal = loopGoal(rangeAnnots);
                 // The loop variable is a local of the body: a block literal or
                 // a `par` inside it captures it like any other.
                 blkPushScope();
                 blkBind(vname, ty.equals(String.withCString("-")) ? (String*)0 : ty, (Array*)0);
+                u32 savedGoal = _goalNow;
+                _goalNow = rangeGoal;
                 Node* body = parseBlockOrStatement();
+                _goalNow = savedGoal;
                 blkPopScope();
 
                 Node* n = mk((u16)nkForCStyle);
@@ -5455,11 +5476,12 @@ class Parser
                 n.add(stepMark);
 
                 n.add(body);
-                loopAnnotationFlags(n, rangeAnnots);
+                loopAnnotationFlags(n, rangeAnnots, rangeGoal);
                 return n;
             }
 
             Node* n = mk((u16)nkForIn);
+            goalFlags(n, loopGoal((u32)0));
             Node* loopVar = mkNamed((u16)nkVariableDecl, vname);
             loopVar.setOp(ty);
             n.add(loopVar);
@@ -5501,8 +5523,13 @@ class Parser
         expect((u16)tokRParen);
         n.add(stepMark);
 
-        loopAnnotationFlags(n, parseLoopAnnotations());
+        u32 annots = parseLoopAnnotations();
+        u32 goal = loopGoal(annots);
+        loopAnnotationFlags(n, annots, goal);
+        u32 savedGoal = _goalNow;
+        _goalNow = goal;
         n.add(parseBlockOrStatement());
+        _goalNow = savedGoal;
         return n;
     }
 
@@ -5559,13 +5586,26 @@ class Parser
         return annots;
     }
 
-    void loopAnnotationFlags(Node* n, u32 annots)
+    // A loop's goal: its own, else the goal of the loop or block it sits in,
+    // else the file's #goal, else -fgoal=; 0 for none (the built-in default,
+    // accuracy). As the reference.
+    u32 loopGoal(u32 annots)
+    {
+        if ((annots & (u32)2) != (u32)0) return (u32)1;
+        if ((annots & (u32)4) != (u32)0) return (u32)2;
+        return _goalNow != (u32)0 ? _goalNow : _goalDefault;
+    }
+
+    void loopAnnotationFlags(Node* n, u32 annots, u32 goal)
     {
         if ((annots & (u32)1) != (u32)0) n.addFlag((u32)NF_UNROLL);
-        if ((annots & (u32)2) != (u32)0) n.addFlag((u32)NF_GOAL_SPEED);
-        else if ((annots & (u32)4) != (u32)0) n.addFlag((u32)NF_GOAL_ACCURACY);
-        else if (_goalDefault == (u32)1) n.addFlag((u32)NF_GOAL_SPEED);
-        else if (_goalDefault == (u32)2) n.addFlag((u32)NF_GOAL_ACCURACY);
+        goalFlags(n, goal);
+    }
+
+    void goalFlags(Node* n, u32 goal)
+    {
+        if (goal == (u32)1) n.addFlag((u32)NF_GOAL_SPEED);
+        else if (goal == (u32)2) n.addFlag((u32)NF_GOAL_ACCURACY);
     }
 
     Node* parseReturn(void)

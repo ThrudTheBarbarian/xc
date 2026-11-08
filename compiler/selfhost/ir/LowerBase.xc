@@ -9054,7 +9054,11 @@ class ClassInfo
             }
         if (k == (u16)nkForIn)
             {
+            u32 savedGoal = _loopGoal;
+            if (n.hasFlag((u32)NF_GOAL_SPEED)) _loopGoal = (u32)1;
+            else if (n.hasFlag((u32)NF_GOAL_ACCURACY)) _loopGoal = (u32)2;
             lowerForIn(n);
+            _loopGoal = savedGoal;
             return;
             }
         if (k == (u16)nkIf)
@@ -9064,7 +9068,13 @@ class ClassInfo
             }
         if (k == (u16)nkWhile)
             {
+            // The goal the parser gave it: the one around it, else the
+            // file's or the build's.
+            u32 savedGoal = _loopGoal;
+            if (n.hasFlag((u32)NF_GOAL_SPEED)) _loopGoal = (u32)1;
+            else if (n.hasFlag((u32)NF_GOAL_ACCURACY)) _loopGoal = (u32)2;
             lowerLoop(n, false);
+            _loopGoal = savedGoal;
             return;
             }
         if (k == (u16)nkForCStyle)

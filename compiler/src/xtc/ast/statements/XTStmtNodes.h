@@ -46,6 +46,11 @@ NS_ASSUME_NONNULL_BEGIN
 |* XTWhileNode
 \****************************************************************************/
 @interface XTWhileNode : XTASTNode
+/****************************************************************************\
+|* The loop's goal (1 speed, 2 accuracy, 0 none): the one around it, else the
+|* file's or the build's, as the parser found it.
+\****************************************************************************/
+@property(nonatomic) NSInteger goal;
 @property(nonatomic, readonly) XTASTNode* condition;
 @property(nonatomic, readonly) XTASTNode* body;
 /****************************************************************************\
@@ -97,6 +102,11 @@ NS_ASSUME_NONNULL_BEGIN
 |* XTForInNode
 \****************************************************************************/
 @interface XTForInNode : XTASTNode
+/****************************************************************************\
+|* The loop's goal (1 speed, 2 accuracy, 0 none): the one around it, else the
+|* file's or the build's, as the parser found it.
+\****************************************************************************/
+@property(nonatomic) NSInteger goal;
 /****************************************************************************\
 |* loopVar and body are WRITABLE because sema rewrites them for a collection
 |* with a PRIMITIVE element type: the element arrives boxed, so the loop binds

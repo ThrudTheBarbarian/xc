@@ -185,7 +185,7 @@ Full discussion on [Optimisation](/compiler/usage/optimization/).
 | `-falloc=bump` | Accepted for older build scripts. No supported target uses the bump allocator, so `xcc` warns and builds with the heap. |
 | `-farc[=on\|off]` | Retired. ARC is always on. `xcc` accepts the flag and warns that it does nothing. |
 | `-fthread-safe-arc` | Force atomic ARC refcounts, so two threads can share an object. |
-| `-fgoal=speed\|accuracy` | The default goal of every loop and `par` block in the build. A `#goal speed` or `#goal accuracy` line in a file overrides it for that file, and a `:goal(…)` on a loop or block overrides both. Without any, loops favour accuracy and `par` blocks speed. |
+| `-fgoal=speed\|accuracy` | The default goal of every loop and `par` block in the build. A `#goal speed` or `#goal accuracy` line in a file overrides it for that file, and a `:goal(…)` on a loop or block, or on the loop or block around it, overrides both. Without any, loops are exact and `par` blocks written in the source favour speed; a loop `--par-style` makes a block of stays exact. See [Which goal applies](/compiler/language/par/#which-goal-applies). |
 | `-fno-thread-safe-arc` | Force plain, non-atomic refcounts. |
 | `-fpar-kernels=all` | Every `par` block carries every GPU kernel form (Metal, PTX, SPIR-V, WGSL), for workers on other machines (see [Across machines](/compiler/language/par/#across-machines-xcd)). A build made where `XC_PAR_REMOTE` is set does this by itself. |
 
