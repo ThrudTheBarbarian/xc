@@ -182,7 +182,11 @@ u32 gParVkRuns[64];
 i64 gParCudaUs[64];
 i64 gParVkUs[64];
 i32 gParRanApi;
+// The kernel each interface ran while auto chose between them (#6), [i*2]
+// CUDA and [i*2+1] Vulkan: true the trips variant.
+bool gParApiTrips[128];
 #endif
+bool gParLastTrips;     // the kernel wantsTrips last chose
 
 // Why a GPU interface did not take a block, held while another one still may
 // (CUDA, then Vulkan): said only if the block then runs on the CPU, so that a
@@ -1832,6 +1836,7 @@ class ParDevice
         // and the GPU's time is the faster one's once both are known.
         if (gParMeasuring[bi] && gParApi[bi] == (i32)0 && forcedApi() == (i32)0)
             {
+            gParApiTrips[bi * (u32)2 + (gParRanApi == (i32)1 ? (u32)0 : (u32)1)] = gParLastTrips;
             if (gParRanApi == (i32)1)
                 {
                 gParCudaRuns[bi] = gParCudaRuns[bi] + (u32)1;
@@ -1869,18 +1874,21 @@ class ParDevice
                 else if (reporting())
                     Log.info("par: %s: the GPU is reached through %s only", gParBlock[bi], useVk ? "Vulkan" : "CUDA");
                 }
+            // With the interface kept, its time is the kernel it ran; a block
+            // with two kernels times the other one on it next (#6).
+            if (decided && gParVarKept[bi] == (u32)0)
+                {
+                gParVarNow[bi] = gParApiTrips[bi * (u32)2 + (u32)(gParApi[bi] - (i32)1)] ? (u32)2 : (u32)1;
+                if (variantPending(bi, proto, measured, &measured))
+                    decided = false;
+                }
             }
-        else if (gParMeasuring[bi] && gParGpuUs[bi] < (i64)0 && warmTime(bi, (u32)0, took, &warm))
-            {
-            decided = true;
-            measured = warm;
-            }
-#else
+        else
+#endif
         // A block with two kernels times both before the GPU is settled (#6).
         if (gParMeasuring[bi] && gParGpuUs[bi] < (i64)0 && warmTime(bi, (u32)0, took, &warm)
             && !variantPending(bi, proto, warm, &measured))
             decided = true;
-#endif
         if (decided)
             {
             gParGpuUs[bi] = measured;
@@ -2048,12 +2056,17 @@ class ParDevice
     // `dev` is the device's identity as its runtime names it, or 0.
     static bool wantsTrips(u8* kind, String* dev)
         {
+        gParLastTrips = chooseTrips(kind, dev);
+        return gParLastTrips;
+        }
+
+    static bool chooseTrips(u8* kind, String* dev)
+        {
         String* e = Platform.env(String.withCString("XC_PAR_VARIANT"));
         if (e.equals(String.withCString("trips")))
             return true;
         if (e.equals(String.withCString("plain")))
             return false;
-#if !PAR_CUDA
         // The kernel auto kept for this block on this device, or the one a
         // measuring run is timing (#6): each starts from the rule below.
         if (gParRunSlot >= (i32)0)
@@ -2061,6 +2074,12 @@ class ParDevice
             u32 i = (u32)gParRunSlot;
             if (gParVarKept[i] != (u32)0)
                 return gParVarKept[i] == (u32)2;
+#if PAR_CUDA
+            // While auto chooses between CUDA and Vulkan, each runs the rule's
+            // kernel; the kernels are timed on the interface it keeps.
+            if (gParMeasuring[i] && gParApi[i] == (i32)0 && forcedApi() == (i32)0)
+                return ruleTrips(kind, dev);
+#endif
             if (gParMeasuring[i] && gParVarNow[i] == (u32)0 && gParVarUs[i * (u32)2] < (i64)0
                 && gParVarUs[i * (u32)2 + (u32)1] < (i64)0)
                 gParVarNow[i] = ruleTrips(kind, dev) ? (u32)2 : (u32)1;
@@ -2069,7 +2088,6 @@ class ParDevice
             if (gParVarNow[i] != (u32)0)
                 return gParVarNow[i] == (u32)2;
             }
-#endif
         return ruleTrips(kind, dev);
         }
 

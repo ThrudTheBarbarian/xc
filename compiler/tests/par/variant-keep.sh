@@ -8,8 +8,10 @@
 # the variant is 0.81x on mandelbrot and 1.13x on mandel_deep. Now auto times
 # both while it measures the GPU, keeps the faster in the program's settings
 # (par.variant.<hw>.<block>.<code>), and a later run uses it without timing
-# again. Builds without CUDA (macOS, arm64 Linux, Android); where the host has
-# no GPU, or the block carries one kernel, there is nothing to check.
+# again. Where the program can reach the GPU through CUDA and Vulkan (x86-64
+# Linux and Windows), auto keeps the interface first and times the kernels on
+# it. Where the host has no GPU, or the block carries one kernel, there is
+# nothing to check.
 #
 #   bash tests/par/variant-keep.sh
 set -u
@@ -17,7 +19,6 @@ export XC_PAR_REMOTE=none
 cd "$(dirname "$0")/../.." || exit 1
 PLAT=$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )
 XC=${XC:-bin/$PLAT/xcc-xc}
-case "$(uname -m)" in x86_64) echo "SKIP variant-keep: x86-64 builds choose their kernel through the CUDA path"; exit 0 ;; esac
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
 "$XC" -q -H . -O3 -o "$W/m" ../benchmark/par/mandelbrot.xc > "$W/build" 2>&1 || { echo "FAIL variant-keep: build"; head -3 "$W/build"; exit 1; }
 export XCC_SETTINGS_DIR="$W/st"; mkdir -p "$XCC_SETTINGS_DIR"
