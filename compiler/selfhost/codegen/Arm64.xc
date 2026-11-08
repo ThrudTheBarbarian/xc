@@ -8151,6 +8151,28 @@ class Arm64
                 _out.appendFormat("    b %s\n", blockLabel(f).cString());
                 return;
             }
+            // A zero test whose other edge leaves the loop through a cold stub
+            // (below): cbz/cbnz to the stub, which makes the copies after the
+            // branch has read the register, so no cmp #0 (sort_small's
+            // rotated `j > 0` on the Pi 5, 8 instructions an iteration to 7).
+            if (zval != (IROperand*)0 && t == _nextBB && t != (IRBlock*)0 && !phiCopiesNeeded(t, _bb)
+                && phiCopiesNeeded(f, _bb) && !takenPhiClobbersFallSrc(t, f, _bb) && !armRejoins(t, f, _bb)
+                && edgeLeavesLoop(_bb, f)) {
+                String* vt = opType(zval);
+                String* reg = operandReg(zval, String.withCString(needsXReg(vt) ? "x16" : "w16"));
+                String* ls = labelFor(String.withCString("cold"), _labelCounter);
+                _labelCounter = _labelCounter + (u32)1;
+                // The branch is to f, taken when the test fails.
+                _out.appendFormat("    %s %s, %s\n", icmpZeroIsEq(icmp) ? "cbnz" : "cbz", reg.cString(), ls.cString());
+                String* hot = _out;
+                _out = String.withCString("");
+                _out.appendFormat("%s:\n", ls.cString());
+                emitPhiCopies(_bb, f);
+                _out.appendFormat("    b %s\n", blockLabel(f).cString());
+                _coldStubs.append(_out);
+                _out = hot;
+                return;
+            }
             String* cond = btCond != (String*)0 ? btCond : emitCompare(icmp);
             if (cond == (String*)0) { unsupported(String.withCString("ICmp:pred")); return; }
             if (takenPhiClobbersFallSrc(t, f, _bb)) {

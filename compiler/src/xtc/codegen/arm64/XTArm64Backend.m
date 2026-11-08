@@ -6198,6 +6198,34 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                      [self blockLabelForFn:ctx.fn block:f.blockRef]];
                     break;
                 }
+                // A zero test whose other edge leaves the loop through a cold
+                // stub: cbz/cbnz to the stub, which makes the copies after the
+                // branch has read the register, so no cmp #0 (sort_small's
+                // rotated `j > 0` on the Pi 5, 8 instructions an iteration to 7).
+                if (zval && t.blockRef && t.blockRef == ctx.nextBlock && !phiCopiesNeeded(t.blockRef, block)
+                    && phiCopiesNeeded(f.blockRef, block) && !takenPhiClobbersFallSrc(t.blockRef, f.blockRef, block)
+                    && !armRejoins(t.blockRef, f.blockRef, block)
+                    && edgeLeavesLoop(ctx.fn, ctx.innerBody, block, f.blockRef)) {
+                    XTIRType *vt = (zval.kind == XTIROperandKindUse)
+                        ? [ctx.fn valueForId:zval.valueId].type : zval.type;
+                    NSString *reg = [self operandReg:zval
+                        intoScratch:([self irTypeNeedsXReg:vt] ? @"x16" : @"w16") ctx:ctx];
+                    XTIRICmpPredicate zp = icmp.predicate;
+                    BOOL zeq = zp == XTIRICmpEQ || zp == XTIRICmpULE || zp == XTIRICmpUGE;
+                    NSString *fnl = [ctx.fn.name stringByReplacingOccurrencesOfString:@"$" withString:@"_"];
+                    NSString *Ls = [NSString stringWithFormat:@".L%@_cold_%lu", fnl, (unsigned long)ctx.labelCounter++];
+                    // The branch is to f, taken when the test fails.
+                    [ctx.out appendFormat:@"    %@ %@, %@\n", zeq ? @"cbnz" : @"cbz", reg, Ls];
+                    NSMutableString *hot = ctx.out;
+                    ctx.out = [NSMutableString string];
+                    [ctx.out appendFormat:@"%@:\n", Ls];
+                    [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
+                    [ctx.out appendFormat:@"    b %@\n",
+                     [self blockLabelForFn:ctx.fn block:f.blockRef]];
+                    [ctx.coldStubs appendString:ctx.out];
+                    ctx.out = hot;
+                    break;
+                }
                 NSString *cond = btCond ?: [self emitCompareForICmp:icmp ctx:ctx];
                 if (takenPhiClobbersFallSrc(t.blockRef, f.blockRef, block)) {
                     // Taken copies would clobber a value the fall copies read;
