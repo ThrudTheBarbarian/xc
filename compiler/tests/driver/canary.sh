@@ -3,7 +3,8 @@
 # aggregate or a taken address keeps a random guard word between its locals and
 # the frame above, set on entry and compared on every return. A write past a
 # local array that reaches it stops the program (status 134) before the return
-# uses whatever it overwrote. Unchecked builds included: this is the line a
+# uses whatever it overwrote; arrays lie next to the guard, so even a short
+# overrun reaches it (#35). Unchecked builds included: this is the line a
 # bounds check does not cover (a pointer walking off an array). On a Mac the
 # x86-64 and win64 builds are linked too, though not run.
 #
@@ -37,6 +38,36 @@ XC
 [ $rc = 134 ] && grep -q 'stack smashing detected' "$W/o" \
     || { echo "FAIL canary: a write 192 bytes past a local array was not stopped (exit $rc)"; head -2 "$W/o"; fail=1; }
 grep -q '^fill' "$W/o" && { echo "FAIL canary: fill returned through a smashed frame"; fail=1; }
+# Arrays lie next to the canary (#35): a write just 16 bytes past a local
+# array reaches the guard, not another local (here a scalar whose address is
+# taken, which the overrun would have changed unseen).
+cat > "$W/n.xc" <<'XC'
+#import "Stdio.xc"
+u32 fill2(u32 n)
+    {
+    u32 keep = (u32)7;
+    u32* kp = &keep;
+    u8 buf[16];
+    u8* p = &buf[0];
+    for (u32 i in 0..n)
+        p[i] = (u8)$42;
+    return *kp + (u32)buf[0];
+    }
+i32 main(i32 argc, u8** argv)
+    {
+    Stdio.printf("fill2 %u\n", fill2(argc > 1 ? (u32)32 : (u32)16));
+    return 0;
+    }
+XC
+for A in host x86_64; do
+    [ $A = x86_64 ] && [ "$PLAT" != linux ] && continue
+    flags=; [ $A = x86_64 ] && flags="-A x86_64 -static"
+    "$XC" -q --par-style=cpu -O2 $flags -H . -o "$W/n" "$W/n.xc" > "$W/n.b" 2>&1 || { echo "FAIL canary: the near overrun does not build ($A)"; head -3 "$W/n.b"; fail=1; continue; }
+    [ "$("$W/n" 2>&1)" = "fill2 73" ] || { echo "FAIL canary: the near program's in-range run gives '$("$W/n" 2>&1 | head -1)' ($A)"; fail=1; }
+    "$W/n" x > "$W/no" 2>&1; rc=$?
+    [ $rc = 134 ] && grep -q 'stack smashing detected' "$W/no" \
+        || { echo "FAIL canary: a write 16 bytes past a local array missed the canary ($A, exit $rc: $(head -1 "$W/no"))"; fail=1; }
+done
 # A C program's overrun is stopped too, whichever half compiled the function:
 # xcc's canary, or clang's own stack protector for a function left to clang.
 if clang --version >/dev/null 2>&1; then

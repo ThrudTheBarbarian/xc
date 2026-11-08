@@ -10852,9 +10852,12 @@ class Arm64
 
         // Pass 1: everything that cannot share keeps its own slot, in sequence
         // order, so a function with nothing colourable lays out exactly as before.
+        // The aggregates wait for the top of the frame (below).
+        Array* aggs = new Array();
         for (u32 i = (u32)0; i < ordered.count(); i = i + (u32)1) {
             IRValue* v = (IRValue*)ordered.get(i);
             if (slotShareable(v, hasAsm, noShare)) continue;
+            if (v != (IRValue*)0 && isAggTy(v.ty())) { aggs.add((Object*)v); continue; }
             u32 w = slotWidthOf(v);
             // An aggregate of 16 bytes or more starts on a 16-byte boundary
             // (sp is 16-aligned), so a 16-byte access to it never straddles a
@@ -10910,6 +10913,27 @@ class Arm64
                 cur = cur + (u32)8;
             }
         }
+        // The spilled vectors' 16-byte slots (allocateVectorRegisters), in the
+        // order they were given up, after the value slots. As the reference.
+        if (_vSpillOrder != (Array*)0 && _vSpillOrder.count() > (u32)0) {
+            cur = (cur + (u32)15) & ~(u32)15;
+            for (u32 i = (u32)0; i < _vSpillOrder.count(); i = i + (u32)1) {
+                _vSpill.set((Hashable*)_vSpillOrder.get(i), (Object*)Number.withU32(cur));
+                cur = cur + (u32)16;
+            }
+        }
+        // The aggregates last (#35), just under the canary: a write that runs
+        // off the end of a local array meets the guard before it meets another
+        // value, a spilled vector or the saved result pointer, as GCC lays its
+        // arrays out. A frame with an aggregate always has the canary.
+        for (u32 i = (u32)0; i < aggs.count(); i = i + (u32)1) {
+            IRValue* v = (IRValue*)aggs.get(i);
+            u32 w = slotWidthOf(v);
+            if (w >= (u32)16)
+                cur = (cur + (u32)15) & ~(u32)15;
+            _slot.set((Hashable*)v, (Object*)Number.with((i32)cur));
+            cur = cur + w;
+        }
         // The frame byte RANGE a taken address could reach: for every
         // address-taken value and every aggregate — which is only ever touched
         // through one — the span from its slot to slot + size. An aggregate
@@ -10928,15 +10952,6 @@ class Arm64
         }
         if (_aliasLo == (u32)$FFFF_FFFF) { _aliasLo = (u32)0; _aliasHi = (u32)0; }
 
-        // The spilled vectors' 16-byte slots (allocateVectorRegisters), in the
-        // order they were given up, after the value slots. As the reference.
-        if (_vSpillOrder != (Array*)0 && _vSpillOrder.count() > (u32)0) {
-            cur = (cur + (u32)15) & ~(u32)15;
-            for (u32 i = (u32)0; i < _vSpillOrder.count(); i = i + (u32)1) {
-                _vSpill.set((Hashable*)_vSpillOrder.get(i), (Object*)Number.withU32(cur));
-                cur = cur + (u32)16;
-            }
-        }
         // The stack canary: a frame with an aggregate or a taken address (what
         // a write can run along) gets a guard word just above its value slots,
         // under the save area and the caller's frame that such a write would

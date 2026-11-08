@@ -1053,11 +1053,14 @@ static unsigned xtArm64GlobalP2Align(uint32_t size) {
     // other order lays the frame out differently for the same program.
     NSArray<NSNumber *> *pass1 = [[presentVals allObjects] sortedArrayUsingComparator:
         ^NSComparisonResult(NSNumber *a, NSNumber *b) { return byDense(a, b); }];
+    // The aggregates wait for the top of the frame (below).
+    NSMutableArray<NSNumber *> *aggs = [NSMutableArray array];
     for (NSNumber *vidN in pass1) {
         NSUInteger vid = vidN.unsignedIntegerValue;
         if (vid >= n) continue;
         if ([shared containsObject:@(vid)]) continue;
         XTIRValue *v = [ctx.fn valueForId:vid];
+        if (v && v.type && v.type.kind == XTIRTypeKindAgg) { [aggs addObject:vidN]; continue; }
         NSUInteger w = 8;
         if (v && v.type && v.type.kind == XTIRTypeKindAgg) {
             NSUInteger agg = [self arm64AggSize:v.type.layout];
@@ -1118,6 +1121,20 @@ static unsigned xtArm64GlobalP2Align(uint32_t size) {
             ctx.vSpill[v] = @(cur);
             cur += 16;
         }
+    }
+    // The aggregates last (#35), just under the canary: a write that runs off
+    // the end of a local array meets the guard before it meets another value, a
+    // spilled vector or the saved result pointer, as GCC lays its arrays out. A
+    // frame with an aggregate always has the canary. As the port.
+    for (NSNumber *vidN in aggs) {
+        XTIRValue *v = [ctx.fn valueForId:vidN.unsignedIntegerValue];
+        NSUInteger agg = [self arm64AggSize:v.type.layout];
+        NSUInteger w = (agg + 7) & ~(NSUInteger)7;
+        if (w < 8) w = 8;
+        if (w >= 16)
+            cur = (cur + 15) & ~(NSUInteger)15;
+        offs[vidN.unsignedIntegerValue] = @(cur);
+        cur += w;
     }
     // The stack canary: a frame with an aggregate or a taken address (what a
     // write can run along) gets a guard word just above its value slots, under

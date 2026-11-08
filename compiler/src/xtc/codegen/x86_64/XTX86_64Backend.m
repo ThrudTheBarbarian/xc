@@ -3458,9 +3458,15 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
             }
     sAligned = aligned;
     }
-    for (XTIRValue* v in [fn valuesInPrintOrder])
+    // The aggregates first (#35): the slots nearest the canary, so a write that
+    // runs off the end of a local array meets the guard before any other value,
+    // as GCC lays its arrays out. A frame with an aggregate always has the
+    // canary; one without lays out as before. As the port.
+    NSArray<XTIRValue*>* printOrder = [fn valuesInPrintOrder];
+    for (NSUInteger pass = 0; pass < 2; pass++)
+    for (XTIRValue* v in printOrder)
         {
-        if ([self isMem:v])
+        if ([self isMem:v] || ((v.type && v.type.kind == XTIRTypeKindAgg) != (pass == 0)))
             continue;
         NSUInteger sz = [self slotSizeOf:v]; // aggregates (pinned locals) get full size
         if ([sAligned containsObject:@(v.valueId)])

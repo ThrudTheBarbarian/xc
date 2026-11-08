@@ -8900,12 +8900,16 @@ class X86_64
         _canary = needsCanary(fn);
         if (_canary)
             cur = (u32)16;
-        // PRINT order, not id order — mirrors the reference (bug 090).
+        // PRINT order, not id order — mirrors the reference (bug 090). The
+        // aggregates first (#35): the slots nearest the canary, so a write that
+        // runs off the end of a local array meets the guard before any other
+        // value, as GCC lays its arrays out. A frame with an aggregate always
+        // has the canary; one without lays out as before.
         Array* order = fn.valuesInPrintOrder();
-        for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
+        for (u32 i = (u32)0; i < order.count() * (u32)2; i = i + (u32)1)
             {
-            IRValue* v = (IRValue*)order.get(i);
-            if (isMemTy(v.ty()))
+            IRValue* v = (IRValue*)order.get(i % order.count());
+            if (isMemTy(v.ty()) || isAggTy(v.ty()) != (i < order.count()))
                 continue;
             u32 sz = slotSizeOf(v);
             if (_aligned.get((Hashable*)v) != (Object*)0)
