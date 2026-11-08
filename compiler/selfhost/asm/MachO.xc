@@ -254,6 +254,15 @@ class MachOSha256
             for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
                 out.add((Object*)Number.withU32((_s[i] >> ((u32)8 * ((u32)3 - b))) & (u32)$FF));
         }
+
+    // The same digest, appended to a byte buffer.
+    void finaliseInto(Data* out)
+        {
+        Array* d = new Array();
+        finalise(d);
+        for (u32 i = (u32)0; i < d.count(); i = i + (u32)1)
+            out.appendByte((u8)((Number*)d.get(i)).asU32());
+        }
     }
 
     // ── The dyld EXPORT TRIE ─────────────────────────────────────────────────
@@ -412,9 +421,9 @@ class MachOSha256
         }
 
     // The trie's bytes, or an empty array when nothing is exported.
-    static Array* build(Array* names, Array* addrs)
+    static Data* build(Array* names, Array* addrs)
         {
-        Array* out = new Array();
+        Data* out = new Data();
         if (names.count() == (u32)0)
             return out;
         Array* all = new Array();
@@ -460,27 +469,27 @@ class MachOSha256
                 {
                 u32 term = (u32)1 + MachO.ulebLen(nd.addr());
                 ExportTrie.putULEB(out, term);
-                out.add((Object*)Number.withU32((u32)0)); // flags = REGULAR
+                out.appendByte((u8)0); // flags = REGULAR
                 ExportTrie.putULEB(out, nd.addr());
                 }
             else
                 {
-                out.add((Object*)Number.withU32((u32)0)); // terminalSize = 0
+                out.appendByte((u8)0); // terminalSize = 0
                 }
-            out.add((Object*)Number.withU32(nd.kids().count()));
+            out.appendByte((u8)(nd.kids().count()));
             for (u32 k = (u32)0; k < nd.kids().count(); k = k + (u32)1)
                 {
                 String* e = (String*)nd.edges().get(k);
                 for (u32 b = (u32)0; b < e.byteLength(); b = b + (u32)1)
-                    out.add((Object*)Number.withU32((u32)e.byteAt(b)));
-                out.add((Object*)Number.withU32((u32)0)); // NUL
+                    out.appendByte(e.byteAt(b));
+                out.appendByte((u8)0); // NUL
                 ExportTrie.putULEB(out, ((ExportTrieNode*)nd.kids().get(k)).offset());
                 }
             }
         return out;
         }
 
-    static void putULEB(Array* out, u32 v)
+    static void putULEB(Data* out, u32 v)
         {
         while (true)
             {
@@ -488,7 +497,7 @@ class MachOSha256
             v = v >> (u32)7;
             if (v != (u32)0)
                 b = b | (u32)$80;
-            out.add((Object*)Number.withU32(b));
+            out.appendByte((u8)(b));
             if (v == (u32)0)
                 return;
             }
@@ -936,8 +945,8 @@ class MachOSha256
         // Relocations, split by the section the fixup lives in. A Pointer64
         // fixup patches a `.quad sym` inside __data; every other kind patches
         // an instruction in __text.
-        Array* textRel = new Array();
-        Array* dataRel = new Array();
+        Data* textRel = new Data();
+        Data* dataRel = new Data();
         u32 nTextRel = (u32)0;
         u32 nDataRel = (u32)0;
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
@@ -986,7 +995,7 @@ class MachOSha256
             else
                 continue;
             bool inData = kind == (u32)FIXUP_POINTER64;
-            Array* into = inData ? dataRel : textRel;
+            Data* into = inData ? dataRel : textRel;
             // An ARM64_RELOC_ADDEND must PRECEDE the pair it applies to, and
             // its "symbolnum" field carries the addend VALUE, not an index.
             if (f.addend() != (i32)0 && !inData)
@@ -1004,7 +1013,7 @@ class MachOSha256
             }
         // The load-time constructors' pointers: ARM64_RELOC_UNSIGNED, 8 bytes,
         // each against its function's symbol.
-        Array* miRel = new Array();
+        Data* miRel = new Data();
         u32 nMiRel = (u32)0;
         for (u32 i = (u32)0; _objModInitFix != (Array*)0 && i < _objModInitFix.count(); i = i + (u32)1)
             {
@@ -1034,9 +1043,9 @@ class MachOSha256
         u32 miOff = MachO.roundUp(dataOff + data.length(), (u32)8);
         u32 miAddr = MachO.roundUp(text.length() + data.length(), (u32)8);
         u32 textRelOff = hasMi ? miOff + mi.length() : dataOff + data.length();
-        u32 dataRelOff = textRelOff + textRel.count();
-        u32 miRelOff = dataRelOff + dataRel.count();
-        u32 symOff = MachO.roundUp(miRelOff + miRel.count(), (u32)8);
+        u32 dataRelOff = textRelOff + textRel.length();
+        u32 miRelOff = dataRelOff + dataRel.length();
+        u32 symOff = MachO.roundUp(miRelOff + miRel.length(), (u32)8);
         u32 segSize = hasMi ? miAddr + mi.length() : text.length() + data.length();
         u32 strOff = symOff + order.count() * (u32)16;
 
@@ -1163,12 +1172,9 @@ class MachOSha256
             padTo(miOff);
             appendSection(mi);
             }
-        for (u32 i = (u32)0; i < textRel.count(); i = i + (u32)1)
-            put8(((Number*)textRel.get(i)).asU32());
-        for (u32 i = (u32)0; i < dataRel.count(); i = i + (u32)1)
-            put8(((Number*)dataRel.get(i)).asU32());
-        for (u32 i = (u32)0; i < miRel.count(); i = i + (u32)1)
-            put8(((Number*)miRel.get(i)).asU32());
+        _out.append(textRel);
+        _out.append(dataRel);
+        _out.append(miRel);
         padTo(symOff);
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             {
@@ -1201,17 +1207,16 @@ class MachOSha256
                 }
             put64(value, (u32)0);
             }
-        for (u32 i = (u32)0; i < strtab.length(); i = i + (u32)1)
-            put8((u32)strtab.byteAt(i));
+        _out.append(strtab);
         return _out;
         }
 
-    static void put32In(Array* b, u32 v)
+    static void put32In(Data* b, u32 v)
         {
-        b.add((Object*)Number.withU32(v & (u32)$FF));
-        b.add((Object*)Number.withU32((v >> (u32)8) & (u32)$FF));
-        b.add((Object*)Number.withU32((v >> (u32)16) & (u32)$FF));
-        b.add((Object*)Number.withU32((v >> (u32)24) & (u32)$FF));
+        b.appendByte((u8)(v & (u32)$FF));
+        b.appendByte((u8)((v >> (u32)8) & (u32)$FF));
+        b.appendByte((u8)((v >> (u32)16) & (u32)$FF));
+        b.appendByte((u8)((v >> (u32)24) & (u32)$FF));
         }
 
     static bool hasName(Array* a, String* n)
@@ -1703,8 +1708,8 @@ class MachOSha256
         sortBindsByOffset(_dataBinds);
 
         // 4. __LINKEDIT: rebase | bind | export trie | nlist | indirect | strtab
-        Array* rebase = buildRebase(rebaseOffs, hasRebase);
-        Array* bind = buildBind(gotOffInSeg, hasImp);
+        Data* rebase = buildRebase(rebaseOffs, hasRebase);
+        Data* bind = buildBind(gotOffInSeg, hasImp);
 
         Array* defNames = sortedByOffsetThenName(symbols);
         Array* locals = new Array();
@@ -1719,7 +1724,7 @@ class MachOSha256
             }
         Data* strtab = new Data();
         Data* nlist = new Data();
-        Array* indirect = new Array();
+        Data* indirect = new Data();
         dylibSymbolTables(symbols, dataSyms, locals, externs, exports,
                           strtab, nlist, indirect, textOffset, dataProgOffset, hasImp);
 
@@ -1732,22 +1737,22 @@ class MachOSha256
             expAddrs.add((Object*)Number.withU32(
                 symOffset(symbols, dataSyms, nm, textOffset, dataProgOffset)));
             }
-        Array* trie = ExportTrie.build(expNames, expAddrs);
-        bool hasExport = trie.count() > (u32)0;
+        Data* trie = ExportTrie.build(expNames, expAddrs);
+        bool hasExport = trie.length() > (u32)0;
         // 8-aligned so the symbol table that follows it is aligned.
-        while ((trie.count() & (u32)7) != (u32)0)
-            trie.add((Object*)Number.withU32((u32)0));
+        while ((trie.length() & (u32)7) != (u32)0)
+            trie.appendByte((u8)0);
 
         u32 nloc = locals.count();
         u32 nexp = externs.count();
         u32 nsyms = defNames.count() + nimp;
 
         u32 rebaseOff = linkeditOff;
-        u32 bindOff = rebaseOff + rebase.count();
-        u32 exportOff = bindOff + bind.count();
-        u32 symoff = exportOff + trie.count();
+        u32 bindOff = rebaseOff + rebase.length();
+        u32 exportOff = bindOff + bind.length();
+        u32 symoff = exportOff + trie.length();
         u32 indOff = symoff + nlist.length();
-        u32 stroff = indOff + indirect.count();
+        u32 stroff = indOff + indirect.length();
         // LC_SYMTAB states the PADDED size — the padding is part of the table
         // as far as the loader is concerned, and stating the unpadded length
         // leaves the last few names outside what dyld will read.
@@ -1975,15 +1980,15 @@ class MachOSha256
             put32((u32)$80000022);
             put32(szDyldInfo); // LC_DYLD_INFO_ONLY
             put32(hasRebase ? rebaseOff : (u32)0);
-            put32(rebase.count());
+            put32(rebase.length());
             put32(hasImp ? bindOff : (u32)0);
-            put32(bind.count());
+            put32(bind.length());
             put32((u32)0);
             put32((u32)0); // weak bind
             put32((u32)0);
             put32((u32)0); // lazy bind
             put32(hasExport ? exportOff : (u32)0);
-            put32(trie.count());
+            put32(trie.length());
             }
         put32((u32)$0E);
         put32(szDyld);
@@ -2083,7 +2088,7 @@ class MachOSha256
         if (hasIface)
             {
             padTo(xtcSegFileOff);
-            appendAll(iface);
+            appendArray(iface);
             }
         padTo(linkeditOff);
         appendAll(rebase);
@@ -2105,7 +2110,7 @@ class MachOSha256
     // imported library that exports it.
     void dylibSymbolTables(Map* symbols, Array* dataSyms, Array* locals,
                            Array* externs, Array* exports, Data* strtab,
-                           Data* nlist, Array* indirect,
+                           Data* nlist, Data* indirect,
                            u32 textOffset, u32 dataProgOffset, bool hasImp)
         {
         strtab.appendByte((u8)0);
@@ -2117,8 +2122,8 @@ class MachOSha256
                 {
                 String* nm = (String*)list.get(i);
                 u32 strx = strtab.length();
-                strIntoD(strtab, nm);
-                u32IntoD(nlist, strx);
+                strInto(strtab, nm);
+                u32Into(nlist, strx);
                 nlist.appendByte((u8)(
                     (u32)$0E | (gMachOExportSet.contains((Hashable*)nm) ? (u32)$01 : (u32)0))); // N_SECT [| N_EXT]
                 nlist.appendByte((u8)(gMachODataSet.contains((Hashable*)nm)
@@ -2126,21 +2131,21 @@ class MachOSha256
                     : (u32)1));
                 nlist.appendByte((u8)((u32)0));
                 nlist.appendByte((u8)((u32)0));
-                u32IntoD(nlist, symOffset(symbols, dataSyms, nm, textOffset, dataProgOffset));
-                u32IntoD(nlist, (u32)0); // base 0
+                u32Into(nlist, symOffset(symbols, dataSyms, nm, textOffset, dataProgOffset));
+                u32Into(nlist, (u32)0); // base 0
                 }
             }
         for (u32 i = (u32)0; i < _imports.count(); i = i + (u32)1)
             {
             u32 strx = strtab.length();
-            strIntoD(strtab, (String*)_imports.get(i));
-            u32IntoD(nlist, strx);
+            strInto(strtab, (String*)_imports.get(i));
+            u32Into(nlist, strx);
             nlist.appendByte((u8)((u32)$01)); // N_UNDF | N_EXT
             nlist.appendByte((u8)((u32)0));
             nlist.appendByte((u8)((u32)0));
             nlist.appendByte((u8)(ordinalFor((String*)_imports.get(i)))); // $FE: DYNAMIC_LOOKUP
-            u32IntoD(nlist, (u32)0);
-            u32IntoD(nlist, (u32)0);
+            u32Into(nlist, (u32)0);
+            u32Into(nlist, (u32)0);
             }
         u32 ndef = locals.count() + externs.count();
         for (u32 i = (u32)0; i < _imports.count(); i = i + (u32)1)
@@ -2208,25 +2213,25 @@ class MachOSha256
         {
         u32 nimp = _imports.count();
 
-        Array* rebase = buildRebase(rebaseOffs, L.hasRebase);
-        Array* bind = buildBind(L.gotOffInSeg, L.hasImp);
+        Data* rebase = buildRebase(rebaseOffs, L.hasRebase);
+        Data* bind = buildBind(L.gotOffInSeg, L.hasImp);
         Array* defNames = sortedByOffsetThenName(symbols);
         Data* strtab = new Data();
         Data* nlist = new Data();
-        Array* indirect = new Array();
+        Data* indirect = new Data();
         buildSymbolTables(symbols, dataSyms, defNames, strtab, nlist, indirect,
                           L.textOffset, L.dataProgOffset, L.hasImp);
         u32 ndef = defNames.count();
         u32 nsyms = ndef + nimp;
 
         L.rebaseOff = L.linkeditOff;
-        L.rebaseLen = rebase.count();
+        L.rebaseLen = rebase.length();
         L.bindOff = L.rebaseOff + L.rebaseLen;
-        L.bindLen = bind.count();
+        L.bindLen = bind.length();
         L.symoff = L.bindOff + L.bindLen;
         L.nsyms = ndef + nimp;
         L.indOff = L.symoff + nlist.length();
-        L.stroff = L.indOff + indirect.count();
+        L.stroff = L.indOff + indirect.length();
         L.strsizeRaw = roundUp(strtab.length(), (u32)8); // the PADDED size is what LC_SYMTAB states
         L.ndef = ndef;
         L.nimp = nimp;
@@ -2633,30 +2638,30 @@ class MachOSha256
     // The rebase stream: each `.quad <symbol>` slot in __data is a pointer dyld
     // slides for the PIE. __data is the first section of __DATA, so its section
     // offset IS its segment offset.
-    Array* buildRebase(Array* rebaseOffs, bool hasRebase)
+    Data* buildRebase(Array* rebaseOffs, bool hasRebase)
         {
-        Array* rebase = new Array();
+        Data* rebase = new Data();
         if (!hasRebase)
             return rebase;
-        rebase.add((Object*)Number.withU32((u32)$10 | (u32)1)); // SET_TYPE pointer
+        rebase.appendByte((u8)((u32)$10 | (u32)1)); // SET_TYPE pointer
         for (u32 i = (u32)0; i < rebaseOffs.count(); i = i + (u32)1)
             {
-            rebase.add((Object*)Number.withU32((u32)$20 | _dataSegIdx)); // SET_SEG_OFF
+            rebase.appendByte((u8)((u32)$20 | _dataSegIdx)); // SET_SEG_OFF
             ulebInto(rebase, ((Number*)rebaseOffs.get(i)).asU32());
-            rebase.add((Object*)Number.withU32((u32)$50 | (u32)1)); // DO_IMM_TIMES 1
+            rebase.appendByte((u8)((u32)$50 | (u32)1)); // DO_IMM_TIMES 1
             }
-        rebase.add((Object*)Number.withU32((u32)0)); // DONE
-        while ((rebase.count() & (u32)7) != (u32)0)
-            rebase.add((Object*)Number.withU32((u32)0));
+        rebase.appendByte((u8)0); // DONE
+        while ((rebase.length() & (u32)7) != (u32)0)
+            rebase.appendByte((u8)0);
         return rebase;
         }
 
     // The bind stream: one GOT slot per import, all from libSystem (ordinal
     // 1) — then the __data pointer-slot binds (finding #7), each bound in
     // place at its own segment offset, addend via SET_ADDEND when non-zero.
-    Array* buildBind(u32 gotOffInSeg, bool hasImp)
+    Data* buildBind(u32 gotOffInSeg, bool hasImp)
         {
-        Array* bind = new Array();
+        Data* bind = new Data();
         if (!hasImp)
             return bind;
         // Both name the ordinal whenever it changes. A dylib's is FLAT
@@ -2672,15 +2677,15 @@ class MachOSha256
             u32 ord = ordinalFor((String*)_imports.get(i));
             if (ord != curOrd)
                 {
-                bind.add((Object*)Number.withU32(setDylibOp(ord)));
+                bind.appendByte((u8)(setDylibOp(ord)));
                 curOrd = ord;
                 }
-            bind.add((Object*)Number.withU32((u32)$40)); // SET_SYMBOL_FLAGS
+            bind.appendByte((u8)$40); // SET_SYMBOL_FLAGS
             strInto(bind, (String*)_imports.get(i));
-            bind.add((Object*)Number.withU32((u32)$50 | (u32)1));      // SET_TYPE pointer
-            bind.add((Object*)Number.withU32((u32)$70 | _dataSegIdx)); // SET_SEG_OFF
+            bind.appendByte((u8)((u32)$50 | (u32)1));      // SET_TYPE pointer
+            bind.appendByte((u8)((u32)$70 | _dataSegIdx)); // SET_SEG_OFF
             ulebInto(bind, gotOffInSeg + i * (u32)GOT_SZ);
-            bind.add((Object*)Number.withU32((u32)$90)); // DO_BIND
+            bind.appendByte((u8)$90); // DO_BIND
             }
         for (u32 k = (u32)0; k < _dataBinds.count(); k = k + (u32)1)
             {
@@ -2690,34 +2695,34 @@ class MachOSha256
             u32 ord = ordinalFor(f.symbol());
             if (!_flatBind || ord != curOrd)
                 {
-                bind.add((Object*)Number.withU32(setDylibOp(ord)));
+                bind.appendByte((u8)(setDylibOp(ord)));
                 curOrd = ord;
                 }
-            bind.add((Object*)Number.withU32((u32)$40)); // SET_SYMBOL_FLAGS
+            bind.appendByte((u8)$40); // SET_SYMBOL_FLAGS
             strInto(bind, f.symbol());
-            bind.add((Object*)Number.withU32((u32)$50 | (u32)1)); // SET_TYPE pointer
+            bind.appendByte((u8)((u32)$50 | (u32)1)); // SET_TYPE pointer
             if (f.addend() != (i32)0)
                 {
-                bind.add((Object*)Number.withU32((u32)$60)); // SET_ADDEND_SLEB
+                bind.appendByte((u8)$60); // SET_ADDEND_SLEB
                 slebInto(bind, f.addend());
                 }
-            bind.add((Object*)Number.withU32((u32)$70 | _dataSegIdx)); // SET_SEG_OFF
+            bind.appendByte((u8)((u32)$70 | _dataSegIdx)); // SET_SEG_OFF
             ulebInto(bind, f.offset());
-            bind.add((Object*)Number.withU32((u32)$90)); // DO_BIND
+            bind.appendByte((u8)$90); // DO_BIND
             if (f.addend() != (i32)0)
                 {
-                bind.add((Object*)Number.withU32((u32)$60)); // addend is sticky: reset
+                bind.appendByte((u8)$60); // addend is sticky: reset
                 slebInto(bind, (i32)0);
                 }
             }
-        bind.add((Object*)Number.withU32((u32)0)); // DONE
-        while ((bind.count() & (u32)7) != (u32)0)
-            bind.add((Object*)Number.withU32((u32)0));
+        bind.appendByte((u8)0); // DONE
+        while ((bind.length() & (u32)7) != (u32)0)
+            bind.appendByte((u8)0);
         return bind;
         }
 
     // Signed LEB128 (the bind stream's addend form).
-    static void slebInto(Array* out, i32 v)
+    static void slebInto(Data* out, i32 v)
         {
         bool more = true;
         while (more)
@@ -2728,7 +2733,7 @@ class MachOSha256
                 more = false;
             else
                 b = b | (u32)$80;
-            out.add((Object*)Number.withU32(b));
+            out.appendByte((u8)(b));
             }
         }
 
@@ -2753,7 +2758,7 @@ class MachOSha256
     // that tie to the table's own order would make the output depend on how the
     // map happened to hash.
     void buildSymbolTables(Map* symbols, Array* dataSyms, Array* defNames,
-                           Data* strtab, Data* nlist, Array* indirect,
+                           Data* strtab, Data* nlist, Data* indirect,
                            u32 textOffset, u32 dataProgOffset, bool hasImp)
         {
         strtab.appendByte((u8)0);
@@ -2762,22 +2767,22 @@ class MachOSha256
             {
             String* nm = (String*)defNames.get(i);
             u32 strx = strtab.length();
-            strIntoD(strtab, nm);
-            u32IntoD(nlist, strx);
+            strInto(strtab, nm);
+            u32Into(nlist, strx);
             nlist.appendByte((u8)((u32)$0E)); // N_SECT
             nlist.appendByte((u8)(gMachODataSet.contains((Hashable*)nm)
                 ? (((Number*)symbols.get((Hashable*)nm)).asU32() >= gMachOBssFrom ? gMachOBssSect : dataSect)
                 : (u32)1));
             nlist.appendByte((u8)((u32)0));
             nlist.appendByte((u8)((u32)0));
-            u32IntoD(nlist, symOffset(symbols, dataSyms, nm, textOffset, dataProgOffset));
-            u32IntoD(nlist, (u32)1); // VMBASE high half
+            u32Into(nlist, symOffset(symbols, dataSyms, nm, textOffset, dataProgOffset));
+            u32Into(nlist, (u32)1); // VMBASE high half
             }
         for (u32 i = (u32)0; i < _imports.count(); i = i + (u32)1)
             {
             u32 strx = strtab.length();
-            strIntoD(strtab, (String*)_imports.get(i));
-            u32IntoD(nlist, strx);
+            strInto(strtab, (String*)_imports.get(i));
+            u32Into(nlist, strx);
             nlist.appendByte((u8)((u32)$01)); // N_UNDF | N_EXT
             nlist.appendByte((u8)((u32)0));
             nlist.appendByte((u8)((u32)0));
@@ -2786,8 +2791,8 @@ class MachOSha256
             // 1. The two disagreed for a GOT-reached import from libobjc; the
             // reference stamps the exporting dylib's ordinal here as well.
             nlist.appendByte((u8)(ordinalFor((String*)_imports.get(i))));
-            u32IntoD(nlist, (u32)0);
-            u32IntoD(nlist, (u32)0);
+            u32Into(nlist, (u32)0);
+            u32Into(nlist, (u32)0);
             }
         for (u32 i = (u32)0; i < _imports.count(); i = i + (u32)1)
             u32Into(indirect, defNames.count() + i);
@@ -2806,7 +2811,7 @@ class MachOSha256
         }
 
     // The code-signing blobs are BIG-endian, unlike everything else in the file.
-    Array* adhocSignature(u32 codeLimit, String* ident, u32 execSegLimit)
+    Data* adhocSignature(u32 codeLimit, String* ident, u32 execSegLimit)
         {
         u32 CS_PAGE = (u32)4096;
         u32 idLen = ident.byteLength();
@@ -2816,7 +2821,7 @@ class MachOSha256
         u32 hashOffset = identOffset + idLen + (u32)1;
         u32 cdLength = hashOffset + nCodeSlots * (u32)32;
 
-        Array* cd = new Array();
+        Data* cd = new Data();
         be32Into(cd, (u32)$fade0c02); // CSMAGIC_CODEDIRECTORY
         be32Into(cd, cdLength);
         be32Into(cd, (u32)$20400);
@@ -2826,10 +2831,10 @@ class MachOSha256
         be32Into(cd, (u32)0);
         be32Into(cd, nCodeSlots);
         be32Into(cd, codeLimit);
-        cd.add((Object*)Number.withU32((u32)32)); // hashSize
-        cd.add((Object*)Number.withU32((u32)2));  // hashType = SHA-256
-        cd.add((Object*)Number.withU32((u32)0));  // platform
-        cd.add((Object*)Number.withU32((u32)12)); // pageSize = log2(4096)
+        cd.appendByte((u8)32); // hashSize
+        cd.appendByte((u8)2);  // hashType = SHA-256
+        cd.appendByte((u8)0);  // platform
+        cd.appendByte((u8)12); // pageSize = log2(4096)
         be32Into(cd, (u32)0);                     // spare2
         be32Into(cd, (u32)0);                     // scatterOffset
         be32Into(cd, (u32)0);                     // teamOffset
@@ -2847,20 +2852,23 @@ class MachOSha256
                 len = CS_PAGE;
             MachOSha256* h = new MachOSha256();
             h.updateData(_out, off, len);
-            h.finalise(cd);
+            h.finaliseInto(cd);
             }
-        Array* sb = new Array(); // SuperBlob { CodeDirectory }
+        Data* sb = new Data(); // SuperBlob { CodeDirectory }
         be32Into(sb, (u32)$fade0cc0);
         be32Into(sb, (u32)12 + (u32)8 + cdLength);
         be32Into(sb, (u32)1);
         be32Into(sb, (u32)0);  // slot type = CodeDirectory
         be32Into(sb, (u32)20); // offset
-        for (u32 i = (u32)0; i < cd.count(); i = i + (u32)1)
-            sb.add(cd.get(i));
+        sb.append(cd);
         return sb;
         }
 
-    void appendAll(Array* a)
+    void appendAll(Data* a)
+        {
+        _out.append(a);
+        }
+    void appendArray(Array* a)
         {
         for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
             _out.appendByte((u8)((Number*)a.get(i)).asU32());
@@ -2870,7 +2878,7 @@ class MachOSha256
         s.appendRangeTo(_out, (u32)0, s.length());
         }
 
-    static void ulebInto(Array* a, u32 v)
+    static void ulebInto(Data* a, u32 v)
         {
         while (true)
             {
@@ -2878,47 +2886,32 @@ class MachOSha256
             v = v >> (u32)7;
             if (v != (u32)0)
                 b = b | (u32)$80;
-            a.add((Object*)Number.withU32(b));
+            a.appendByte((u8)(b));
             if (v == (u32)0)
                 return;
             }
         }
 
-    // strInto and u32Into into a byte buffer: the symbol and string tables,
-    // which held a Number object per byte (some 50 MB of names linking xcc
-    // itself; #63).
-    static void strIntoD(Data* a, String* s)
+    static void strInto(Data* a, String* s)
         {
         for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
             a.appendByte(s.byteAt(i));
         a.appendByte((u8)0);
         }
-    static void u32IntoD(Data* a, u32 v)
+
+    static void u32Into(Data* a, u32 v)
         {
         for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
             a.appendByte((u8)((v >> ((u32)8 * i)) & (u32)$FF));
         }
 
-    static void strInto(Array* a, String* s)
-        {
-        for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            a.add((Object*)Number.withU32((u32)s.byteAt(i)));
-        a.add((Object*)Number.withU32((u32)0));
-        }
-
-    static void u32Into(Array* a, u32 v)
+    static void be32Into(Data* a, u32 v)
         {
         for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
-            a.add((Object*)Number.withU32((v >> ((u32)8 * i)) & (u32)$FF));
+            a.appendByte((u8)((v >> ((u32)8 * ((u32)3 - i))) & (u32)$FF));
         }
 
-    static void be32Into(Array* a, u32 v)
-        {
-        for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
-            a.add((Object*)Number.withU32((v >> ((u32)8 * ((u32)3 - i))) & (u32)$FF));
-        }
-
-    static void be64Into(Array* a, u32 lo, u32 hi)
+    static void be64Into(Data* a, u32 lo, u32 hi)
         {
         be32Into(a, hi);
         be32Into(a, lo);
