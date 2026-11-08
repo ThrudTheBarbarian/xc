@@ -371,6 +371,29 @@ class Par
             ParDevice.ranAdd(proto, String.withCString("cpu"));
             return;
             }
+        // Two captured arrays that overlap, one written, run serially too
+        // (the alias guard). Before the tile queue, which would split the
+        // range across devices as well (#96).
+        if (!ParDevice.guardsHold(proto, proto.gpuSource(), lo, hi))
+            {
+            if (ParDevice.reporting())
+                Log.info("par: %s: at this run's offset two work items touch the same element, so it runs serially", proto.parName());
+            proto.lo = lo;
+            proto.hi = hi;
+            proto.run();
+            ParDevice.ranAdd(proto, String.withCString("cpu"));
+            return;
+            }
+        if (ParDevice.bufferOverlap(proto, proto.gpuSource(), lo, hi))
+            {
+            if (ParDevice.reporting())
+                Log.info("par: %s: two of its arrays overlap and one is written, so it runs serially", proto.parName());
+            proto.lo = lo;
+            proto.hi = hi;
+            proto.run();
+            ParDevice.ranAdd(proto, String.withCString("cpu"));
+            return;
+            }
 #if (ARCH_arm64 && !OS_ios) || ARCH_x86_64 || ARCH_wasm32
         // The GPU's identity, for the hardware key auto keeps its choices
         // under, asked of the runtime only when choose() will look them up.
@@ -387,28 +410,6 @@ class Par
         if (ParTiles.explicit() && ParTiles.run(proto, proto.gpuSource(), lo, hi, (i32)0))
             return;
 #endif
-        // Two captured arrays that overlap, one written, run serially too
-        // (the alias guard).
-        if (!ParDevice.guardsHold(proto, proto.gpuSource(), lo, hi))
-            {
-            if (ParDevice.reporting())
-                Log.info("par: %s: at this run's offset two work items touch the same element, so it runs serially", proto.parName());
-            proto.lo = lo;
-            proto.hi = hi;
-            proto.run();
-            ParDevice.ranAdd(proto, String.withCString("cpu"));
-            return;
-            }
-        if (ParDevice.bufferOverlap(proto, proto.gpuSource()))
-            {
-            if (ParDevice.reporting())
-                Log.info("par: %s: two of its arrays overlap and one is written, so it runs serially", proto.parName());
-            proto.lo = lo;
-            proto.hi = hi;
-            proto.run();
-            ParDevice.ranAdd(proto, String.withCString("cpu"));
-            return;
-            }
 #if !ARCH_wasm32
         // XC_PAR_PROBE=1: the block's first run is a sweep of tile sizes per
         // worker, written as priors (ParTiles.probe); the run itself follows.

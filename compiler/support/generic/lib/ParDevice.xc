@@ -2402,15 +2402,32 @@ class ParDevice
         return false;
         }
 
-    static bool bufferOverlap(ParChunk* proto, u8* src)
+    // Whether two of the block's arrays overlap over [lo, hi), one of them
+    // written. An array's bytes are the elements its footprint
+    // (fp=<array>:<k>:<lo>:<hi>: k * i + [lo, hi)) reaches over [lo, hi), else
+    // those from its pointer to the end of its heap block where the runtime
+    // knows the block (gpuLength). An array with neither cannot be bounded, and
+    // counts as overlapping any other one written: a plain new array's
+    // length is not known, and two pointers into one passed a loop's items
+    // to threads that read what an earlier item had already overwritten
+    // (#96). One array passed twice is apart where both footprints are one
+    // element, the same one, at each item.
+    static bool bufferOverlap(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
         if (src == (u8*)0 || src[0] == (u8)0)
             return false;
         u8* obj = proto.objBytes();
         pointer ptr[16];
         i64 len[16];
+        i64 ivr[16];
+        i64 wid[16];
         bool ro[16];
         u32 nbuf = (u32)0;
+        i64 fpId[16];
+        i64 fpK[16];
+        i64 fpLo[16];
+        i64 fpHi[16];
+        u32 nfp = (u32)0;
         u32 at = (u32)0;
         while (src[at] != (u8)0 && src[at] != (u8)10)
             {
@@ -2421,7 +2438,7 @@ class ParDevice
                 at = at + (u32)1;
                 i64 ivar = num(src, &at);
                 at = at + (u32)1;
-                num(src, &at);
+                i64 w = num(src, &at);
                 // The field at off, through an integer address: the block's
                 // bytes are one object, and a checked build (which runs this
                 // guard for a block that stays on the CPU) read `obj + off` as
@@ -2429,23 +2446,80 @@ class ParDevice
                 ptr[nbuf] = *(pointer*)((pointer)((u64)obj + (u64)off));
                 len[nbuf] = proto.gpuLength((i32)ivar);
                 ro[nbuf] = proto.gpuReadsOnly((i32)ivar);
+                ivr[nbuf] = ivar;
+                wid[nbuf] = w;
                 nbuf = nbuf + (u32)1;
+                continue;
+                }
+            // fp=, not gfp= (a global's): the word starts after a space.
+            if (src[at] == (u8)'f' && src[at + (u32)1] == (u8)'p' && src[at + (u32)2] == (u8)'='
+                && at > (u32)0 && src[at - (u32)1] == (u8)' ' && nfp < (u32)16)
+                {
+                at = at + (u32)3;
+                fpId[nfp] = num(src, &at);
+                at = at + (u32)1;
+                fpK[nfp] = snum(src, &at);
+                at = at + (u32)1;
+                fpLo[nfp] = snum(src, &at);
+                at = at + (u32)1;
+                fpHi[nfp] = snum(src, &at);
+                nfp = nfp + (u32)1;
                 continue;
                 }
             at = at + (u32)1;
             }
+        u64 a0s[16];
+        u64 a1s[16];
+        bool bounded[16];
+        i64 fpOf[16];
+        for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
+            {
+            fpOf[i] = (i64)-1;
+            for (u32 q = (u32)0; q < nfp; q = q + (u32)1)
+                if (fpId[q] == ivr[i])
+                    fpOf[i] = (i64)q;
+            bounded[i] = true;
+            if (fpOf[i] >= (i64)0 && hi > lo)
+                {
+                u32 q = (u32)fpOf[i];
+                i64 e0 = fpK[q] * lo;
+                i64 e1 = fpK[q] * (hi - (i64)1);
+                if (e1 < e0)
+                    {
+                    i64 t = e0;
+                    e0 = e1;
+                    e1 = t;
+                    }
+                a0s[i] = (u64)((i64)(u64)ptr[i] + (e0 + fpLo[q]) * wid[i]);
+                a1s[i] = (u64)((i64)(u64)ptr[i] + (e1 + fpHi[q]) * wid[i]);
+                }
+            else if (len[i] > (i64)0)
+                {
+                a0s[i] = (u64)ptr[i];
+                a1s[i] = (u64)ptr[i] + (u64)len[i];
+                }
+            else
+                bounded[i] = false;
+            }
         for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
             for (u32 j = i + (u32)1; j < nbuf; j = j + (u32)1)
                 {
-                if (ptr[i] == (pointer)0 || ptr[j] == (pointer)0 || len[i] <= (i64)0 || len[j] <= (i64)0)
+                if (ptr[i] == (pointer)0 || ptr[j] == (pointer)0)
                     continue;
                 if (ro[i] && ro[j])
                     continue;
-                u64 a0 = (u64)ptr[i];
-                u64 a1 = a0 + (u64)len[i];
-                u64 b0 = (u64)ptr[j];
-                u64 b1 = b0 + (u64)len[j];
-                if (a0 < b1 && b0 < a1)
+                // One array, each item touching its own element in both.
+                if (ptr[i] == ptr[j] && wid[i] == wid[j] && fpOf[i] >= (i64)0 && fpOf[j] >= (i64)0)
+                    {
+                    u32 p = (u32)fpOf[i];
+                    u32 q = (u32)fpOf[j];
+                    if (fpK[p] != (i64)0 && fpK[p] == fpK[q] && fpLo[p] == fpLo[q] && fpHi[p] == fpHi[q]
+                        && fpHi[p] == fpLo[p] + (i64)1)
+                        continue;
+                    }
+                if (!bounded[i] || !bounded[j])
+                    return true;
+                if (a0s[i] < a1s[j] && a0s[j] < a1s[i])
                     return true;
                 }
         return false;
