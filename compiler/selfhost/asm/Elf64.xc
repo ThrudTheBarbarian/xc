@@ -760,9 +760,9 @@ class ElfSharedInfo
         for (u32 i = (u32)0; i < wordImports.count(); i = i + (u32)1)
             symOrder.add(wordImports.get(i));
 
-        Array* dynstr = new Array();
+        Data* dynstr = new Data();
         Map* strOff = new Map();
-        dynstr.add((Object*)Number.withU32((u32)0)); // index 0 = ""
+        dynstr.appendByte((u8)0); // index 0 = ""
         for (u32 i = (u32)1; i < symOrder.count(); i = i + (u32)1)
             Elf64.internStr(dynstr, strOff, (String*)symOrder.get(i));
         u32 sonameOff = (u32)0;
@@ -818,7 +818,7 @@ class ElfSharedInfo
         u32 roOff = roundUpTo(interpOff + interpSz, (u32)8);
         u32 symOffB = roOff;
         u32 strOffB = symOffB + nsym * (u32)SYM_SZ;
-        u32 hashOff = roundUpTo(strOffB + dynstr.count(), (u32)8);
+        u32 hashOff = roundUpTo(strOffB + dynstr.length(), (u32)8);
         u32 relaOff = hashOff + hashSz;
         u32 roEnd = relaOff + nRela * (u32)RELA_SZ;
 
@@ -1014,8 +1014,7 @@ class ElfSharedInfo
             p64((u32)0);
             }
         padTo(strOffB);
-        for (u32 i = (u32)0; i < dynstr.count(); i = i + (u32)1)
-            p8(((Number*)dynstr.get(i)).asU32());
+        _out.append(dynstr);
 
         padTo(hashOff);
         Array* bucket = new Array();
@@ -1080,8 +1079,7 @@ class ElfSharedInfo
             }
 
         padTo(textOff);
-        for (u32 i = (u32)0; i < text.length(); i = i + (u32)1)
-            p8((u32)text.byteAt(i));
+        _out.append(text);
         padTo(gotOff);
         for (u32 i = (u32)0; i < imports.count(); i = i + (u32)1)
             p64((u32)0);
@@ -1103,7 +1101,7 @@ class ElfSharedInfo
         dyn((u32)DT_HASH, hashOff);
         dyn((u32)DT_STRTAB, strOffB);
         dyn((u32)DT_SYMTAB, symOffB);
-        dyn((u32)DT_STRSZ, dynstr.count());
+        dyn((u32)DT_STRSZ, dynstr.length());
         dyn((u32)DT_SYMENT, (u32)SYM_SZ);
         dyn((u32)DT_RELA, relaOff);
         dyn((u32)DT_RELASZ, nRela * (u32)RELA_SZ);
@@ -1132,27 +1130,27 @@ class ElfSharedInfo
         for (u32 i = (u32)0; i < dk.count(); i = i + (u32)1)
             defNames.add(dk.get(i));
         Elf64.sortStrings(defNames);
-        Array* strtab = new Array();
-        strtab.add((Object*)Number.withU32((u32)0));
-        Array* symtab = new Array();
+        Data* strtab = new Data();
+        strtab.appendByte((u8)0);
+        Data* symtab = new Data();
         for (u32 i = (u32)0; i < (u32)SYM_SZ; i = i + (u32)1)
-            symtab.add((Object*)Number.withU32((u32)0)); // the null symbol
+            symtab.appendByte((u8)0); // the null symbol
         for (u32 i = (u32)0; i < defNames.count(); i = i + (u32)1)
             {
             String* n = (String*)defNames.get(i);
             bool inData = Elf64.inSet(dataSet, n);
-            Elf64.u32Into(symtab, strtab.count());
+            Elf64.u32Into(symtab, strtab.length());
             for (u32 b = (u32)0; b < n.byteLength(); b = b + (u32)1)
-                strtab.add((Object*)Number.withU32((u32)n.byteAt(b)));
-            strtab.add((Object*)Number.withU32((u32)0));
-            symtab.add((Object*)Number.withU32(((u32)STB_GLOBAL << (u32)4) | (inData ? (u32)STT_OBJECT : (u32)STT_FUNC)));
-            symtab.add((Object*)Number.withU32((u32)0));
+                strtab.appendByte(n.byteAt(b));
+            strtab.appendByte((u8)0);
+            symtab.appendByte((u8)(((u32)STB_GLOBAL << (u32)4) | (inData ? (u32)STT_OBJECT : (u32)STT_FUNC)));
+            symtab.appendByte((u8)0);
             // .text and .data are sections 5 and 6 in the list built below; the
             // two are named together rather than left as bare numbers in two
             // places that have to be kept in step.
             u32 sect = inData ? (u32)6 : (u32)5;
-            symtab.add((Object*)Number.withU32(sect & (u32)$FF));
-            symtab.add((Object*)Number.withU32(sect >> (u32)8));
+            symtab.appendByte((u8)(sect & (u32)$FF));
+            symtab.appendByte((u8)(sect >> (u32)8));
             Elf64.u32Into(symtab, (inData ? dataAddr : textAddr) + ((Number*)symbols.get((Hashable*)n)).asU32());
             Elf64.u32Into(symtab, (u32)0);
             Elf64.u32Into(symtab, (u32)0);
@@ -1162,11 +1160,9 @@ class ElfSharedInfo
         // The non-allocated section CONTENTS, then their offsets.
         u32 symtabOff = roundUpTo(_out.length(), (u32)8);
         padTo(symtabOff);
-        for (u32 i = (u32)0; i < symtab.count(); i = i + (u32)1)
-            p8(((Number*)symtab.get(i)).asU32());
+        _out.append(symtab);
         u32 strtabOff = _out.length();
-        for (u32 i = (u32)0; i < strtab.count(); i = i + (u32)1)
-            p8(((Number*)strtab.get(i)).asU32());
+        _out.append(strtab);
         u32 ifaceOff = _out.length();
         if (hasIface)
             for (u32 i = (u32)0; i < iface.count(); i = i + (u32)1)
@@ -1209,14 +1205,13 @@ class ElfSharedInfo
                 names.add((Object*)sn);
                 }
         names.add((Object*)String.withCString(".shstrtab"));
-        Array* shstr = new Array();
-        shstr.add((Object*)Number.withU32((u32)0));
+        Data* shstr = new Data();
+        shstr.appendByte((u8)0);
         Map* shName = new Map();
         for (u32 i = (u32)1; i < names.count(); i = i + (u32)1)
             Elf64.internStr(shstr, shName, (String*)names.get(i));
         u32 shstrOff = _out.length();
-        for (u32 i = (u32)0; i < shstr.count(); i = i + (u32)1)
-            p8(((Number*)shstr.get(i)).asU32());
+        _out.append(shstr);
 
         u32 shOff = roundUpTo(_out.length(), (u32)8);
         padTo(shOff);
@@ -1229,7 +1224,7 @@ class ElfSharedInfo
         shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)1)), (u32)11, (u32)2,
               symOffB, symOffB, nsym * (u32)SYM_SZ, (u32)2, (u32)1, (u32)8, (u32)SYM_SZ);
         shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)2)), (u32)3, (u32)2,
-              strOffB, strOffB, dynstr.count(), (u32)0, (u32)0, (u32)1, (u32)0);
+              strOffB, strOffB, dynstr.length(), (u32)0, (u32)0, (u32)1, (u32)0);
         shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)3)), (u32)5, (u32)2,
               hashOff, hashOff, hashSz, (u32)1, (u32)0, (u32)8, (u32)4);
         shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)4)), (u32)4, (u32)2,
@@ -1253,9 +1248,9 @@ class ElfSharedInfo
               dynOff, dynOff, nDyn * (u32)DYN_SZ, (u32)2, (u32)0, (u32)8, (u32)DYN_SZ);
         u32 strtabIdx = (u32)11;
         shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)10)), (u32)2, (u32)0,
-              (u32)0, symtabOff, symtab.count(), strtabIdx, (u32)1, (u32)8, (u32)SYM_SZ);
+              (u32)0, symtabOff, symtab.length(), strtabIdx, (u32)1, (u32)8, (u32)SYM_SZ);
         shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)11)), (u32)3, (u32)0,
-              (u32)0, strtabOff, strtab.count(), (u32)0, (u32)0, (u32)1, (u32)0);
+              (u32)0, strtabOff, strtab.length(), (u32)0, (u32)0, (u32)1, (u32)0);
         if (hasIface)
             shdrE(Elf64.lookupStr(shName, (String*)names.get((u32)12)), (u32)1, (u32)0,
                   (u32)0, ifaceOff, iface.count(), (u32)0, (u32)0, (u32)1, (u32)0);
@@ -1265,7 +1260,7 @@ class ElfSharedInfo
                       (u32)0, ((Number*)dwarfOffs.get(k)).asU32(), dwarf.section(k).length(),
                       (u32)0, (u32)0, (u32)1, (u32)0);
         shdrE(Elf64.lookupStr(shName, (String*)names.get(shstrIdx)), (u32)3, (u32)0,
-              (u32)0, shstrOff, shstr.count(), (u32)0, (u32)0, (u32)1, (u32)0);
+              (u32)0, shstrOff, shstr.length(), (u32)0, (u32)0, (u32)1, (u32)0);
 
         // Patch the header fields that could only be known at the end.
         if (isExec)
@@ -1367,16 +1362,16 @@ class ElfSharedInfo
         return h;
         }
 
-    static u32 internStr(Array* blob, Map* off, String* s)
+    static u32 internStr(Data* blob, Map* off, String* s)
         {
         Object* have = off.get((Hashable*)s);
         if (have != (Object*)0)
             return ((Number*)have).asU32();
-        u32 at = blob.count();
+        u32 at = blob.length();
         off.set((Hashable*)s, (Object*)Number.withU32(at));
         for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            blob.add((Object*)Number.withU32((u32)s.byteAt(i)));
-        blob.add((Object*)Number.withU32((u32)0));
+            blob.appendByte(s.byteAt(i));
+        blob.appendByte((u8)0);
         return at;
         }
 
@@ -1457,8 +1452,8 @@ class ElfSharedInfo
         for (u32 i = (u32)0; i < undef.count(); i = i + (u32)1)
             order.add(undef.get(i));
 
-        Array* strtab = new Array();
-        strtab.add((Object*)Number.withU32((u32)0));
+        Data* strtab = new Data();
+        strtab.appendByte((u8)0);
         // Function sizes (st_size) for defined TEXT symbols, so the linker can
         // GC unreferenced functions (bug 196 Stage B). Functions are the non-.L
         // text symbols; sorted by offset they delimit one another, and the last
@@ -1557,14 +1552,14 @@ class ElfSharedInfo
             funcSize.set((Hashable*)(String*)dsName.get(i), (Object*)Number.withU32(o1 >= o0 ? o1 - o0 : (u32)0));
             }
 
-        Array* symtab = new Array();
+        Data* symtab = new Data();
         for (u32 i = (u32)0; i < (u32)SYM_SZ; i = i + (u32)1)
-            symtab.add((Object*)Number.withU32((u32)0)); // the null symbol
+            symtab.appendByte((u8)0); // the null symbol
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             {
             String* n = (String*)order.get(i);
             Object* com = commons.get((Hashable*)n);
-            Elf64.put32In(symtab, strtab.count());
+            Elf64.put32In(symtab, strtab.length());
             Elf64.putStr(strtab, n);
             if (com != (Object*)0)
                 {
@@ -1572,8 +1567,8 @@ class ElfSharedInfo
                 // required alignment, st_size = byte size; GLOBAL / OBJECT. The
                 // linker allocates one slot and every unit binds to it.
                 Array* info = (Array*)com;
-                symtab.add((Object*)Number.withU32(((u32)1 << (u32)4) | (u32)1)); // GLOBAL|OBJECT
-                symtab.add((Object*)Number.withU32((u32)0));                      // st_other
+                symtab.appendByte((u8)(((u32)1 << (u32)4) | (u32)1)); // GLOBAL|OBJECT
+                symtab.appendByte((u8)0);                      // st_other
                 Elf64.put16In(symtab, (u32)$FFF2);                                // SHN_COMMON
                 Elf64.put64In(symtab, ((Number*)info.get((u32)1)).asU32());       // st_value = align
                 Elf64.put64In(symtab, ((Number*)info.get((u32)0)).asU32());       // st_size  = size
@@ -1584,8 +1579,8 @@ class ElfSharedInfo
             bool inData = Elf64.hasName(dataSyms, n);
             u32 bind = (isUndef || Elf64.hasName(globalSyms, n)) ? (u32)1 : (u32)0;
             u32 kind = isUndef ? (u32)0 : (inData ? (u32)1 : (u32)2); // NOTYPE/OBJECT/FUNC
-            symtab.add((Object*)Number.withU32((bind << (u32)4) | kind));
-            symtab.add((Object*)Number.withU32((u32)0)); // st_other
+            symtab.appendByte((u8)((bind << (u32)4) | kind));
+            symtab.appendByte((u8)0); // st_other
             Elf64.put16In(symtab, isUndef ? (u32)0 : (inData ? (u32)2 : (u32)1));
             Elf64.put64In(symtab, isUndef ? (u32)0 : ((Number*)defAt).asU32());
             Object* fsz = isUndef ? (Object*)0 : funcSize.get((Hashable*)n);
@@ -1598,8 +1593,8 @@ class ElfSharedInfo
         // Relocations, split by the section the fixup patches. An Abs64 fixup
         // is a `.quad <symbol>` inside .data; the PC-relative kinds patch an
         // instruction in .text.
-        Array* textRel = new Array();
-        Array* dataRel = new Array();
+        Data* textRel = new Data();
+        Data* dataRel = new Data();
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             X86Fixup* f = (X86Fixup*)fixups.get(i);
@@ -1655,8 +1650,8 @@ class ElfSharedInfo
         secNames.add((Object*)String.withCString(".symtab"));
         secNames.add((Object*)String.withCString(".strtab"));
         secNames.add((Object*)String.withCString(".shstrtab"));
-        Array* shstr = new Array();
-        shstr.add((Object*)Number.withU32((u32)0));
+        Data* shstr = new Data();
+        shstr.appendByte((u8)0);
         Array* shName = new Array();
         for (u32 i = (u32)0; i < secNames.count(); i = i + (u32)1)
             {
@@ -1666,7 +1661,7 @@ class ElfSharedInfo
                 shName.add((Object*)Number.withU32((u32)0));
                 continue;
                 }
-            shName.add((Object*)Number.withU32(shstr.count()));
+            shName.add((Object*)Number.withU32(shstr.length()));
             Elf64.putStr(shstr, n);
             }
 
@@ -1676,15 +1671,15 @@ class ElfSharedInfo
         u32 dataOff = Elf64.roundUpTo(off, (u32)8);
         off = dataOff + data.length();
         u32 trelOff = Elf64.roundUpTo(off, (u32)8);
-        off = trelOff + textRel.count();
+        off = trelOff + textRel.length();
         u32 drelOff = Elf64.roundUpTo(off, (u32)8);
-        off = drelOff + dataRel.count();
+        off = drelOff + dataRel.length();
         u32 symOff = Elf64.roundUpTo(off, (u32)8);
-        off = symOff + symtab.count();
+        off = symOff + symtab.length();
         u32 strOff = off;
-        off = strOff + strtab.count();
+        off = strOff + strtab.length();
         u32 shstOff = off;
-        off = shstOff + shstr.count();
+        off = shstOff + shstr.length();
         u32 shOff = Elf64.roundUpTo(off, (u32)8);
 
         _out = new Data();
@@ -1731,14 +1726,14 @@ class ElfSharedInfo
         // SHF_ALLOC|SHF_EXECINSTR, SHF_ALLOC|SHF_WRITE
         objShdr(shName, (u32)1, (u32)1, (u32)6, textOff, text.length(), (u32)0, (u32)0, (u32)16, (u32)0);
         objShdr(shName, (u32)2, (u32)1, (u32)3, dataOff, data.length(), (u32)0, (u32)0, (u32)8, (u32)0);
-        objShdr(shName, (u32)3, (u32)4, (u32)0, trelOff, textRel.count(),
+        objShdr(shName, (u32)3, (u32)4, (u32)0, trelOff, textRel.length(),
                 (u32)5, (u32)1, (u32)8, (u32)RELA_SZ);
-        objShdr(shName, (u32)4, (u32)4, (u32)0, drelOff, dataRel.count(),
+        objShdr(shName, (u32)4, (u32)4, (u32)0, drelOff, dataRel.length(),
                 (u32)5, (u32)2, (u32)8, (u32)RELA_SZ);
-        objShdr(shName, (u32)5, (u32)2, (u32)0, symOff, symtab.count(),
+        objShdr(shName, (u32)5, (u32)2, (u32)0, symOff, symtab.length(),
                 (u32)6, firstGlobal, (u32)8, (u32)SYM_SZ);
-        objShdr(shName, (u32)6, (u32)3, (u32)0, strOff, strtab.count(), (u32)0, (u32)0, (u32)1, (u32)0);
-        objShdr(shName, (u32)7, (u32)3, (u32)0, shstOff, shstr.count(), (u32)0, (u32)0, (u32)1, (u32)0);
+        objShdr(shName, (u32)6, (u32)3, (u32)0, strOff, strtab.length(), (u32)0, (u32)0, (u32)1, (u32)0);
+        objShdr(shName, (u32)7, (u32)3, (u32)0, shstOff, shstr.length(), (u32)0, (u32)0, (u32)1, (u32)0);
         return _out;
         }
 
@@ -1767,32 +1762,31 @@ class ElfSharedInfo
         return false;
         }
 
-    static void appendAll(Data* dst, Array* src)
+    static void appendAll(Data* dst, Data* src)
         {
-        for (u32 i = (u32)0; i < src.count(); i = i + (u32)1)
-            dst.appendByte((u8)((Number*)src.get(i)).asU32());
+        dst.append(src);
         }
 
-    static void putStr(Array* blob, String* s)
+    static void putStr(Data* blob, String* s)
         {
         for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            blob.add((Object*)Number.withU32((u32)s.byteAt(i)));
-        blob.add((Object*)Number.withU32((u32)0));
+            blob.appendByte(s.byteAt(i));
+        blob.appendByte((u8)0);
         }
 
-    static void put16In(Array* b, u32 v)
+    static void put16In(Data* b, u32 v)
         {
-        b.add((Object*)Number.withU32(v & (u32)$FF));
-        b.add((Object*)Number.withU32((v >> (u32)8) & (u32)$FF));
+        b.appendByte((u8)(v & (u32)$FF));
+        b.appendByte((u8)((v >> (u32)8) & (u32)$FF));
         }
 
-    static void put32In(Array* b, u32 v)
+    static void put32In(Data* b, u32 v)
         {
         Elf64.put16In(b, v);
         Elf64.put16In(b, v >> (u32)16);
         }
 
-    static void put64In(Array* b, u32 v)
+    static void put64In(Data* b, u32 v)
         {
         Elf64.put32In(b, v);
         Elf64.put32In(b, (u32)0);
@@ -1801,7 +1795,7 @@ class ElfSharedInfo
     // A SIGNED 64-bit addend: an r_addend of -4 is 0xFFFFFFFFFFFFFFFC, so the
     // high word is all ones rather than zero. Writing it as an unsigned 32 and
     // padding turned every PC-relative relocation into +4294967292.
-    static void putI64In(Array* b, i32 v)
+    static void putI64In(Data* b, i32 v)
         {
         Elf64.put32In(b, (u32)v);
         Elf64.put32In(b, v < (i32)0 ? (u32)$FFFF_FFFF : (u32)0);
@@ -1930,22 +1924,22 @@ class ElfSharedInfo
         // to find.
         Array* names = sortedNames(symbols);
         Map* dataSet = Elf64.setOf(dataSyms); // O(1) membership, was O(n^2)
-        Array* strtab = new Array();
-        strtab.add((Object*)Number.withU32((u32)0));
-        Array* symtab = new Array();
+        Data* strtab = new Data();
+        strtab.appendByte((u8)0);
+        Data* symtab = new Data();
         for (u32 i = (u32)0; i < (u32)24; i = i + (u32)1)
-            symtab.add((Object*)Number.withU32((u32)0)); // the null symbol
+            symtab.appendByte((u8)0); // the null symbol
         for (u32 i = (u32)0; i < names.count(); i = i + (u32)1)
             {
             String* n = (String*)names.get(i);
             bool inData = Elf64.inSet(dataSet, n);
-            u32 nameOff = strtab.count();
+            u32 nameOff = strtab.length();
             strInto(strtab, n);
             u32Into(symtab, nameOff);
-            symtab.add((Object*)Number.withU32(((u32)1 << (u32)4) | (inData ? (u32)1 : (u32)2)));
-            symtab.add((Object*)Number.withU32((u32)0));
-            symtab.add((Object*)Number.withU32(inData ? (u32)2 : (u32)1)); // .data : .text
-            symtab.add((Object*)Number.withU32((u32)0));
+            symtab.appendByte((u8)(((u32)1 << (u32)4) | (inData ? (u32)1 : (u32)2)));
+            symtab.appendByte((u8)0);
+            symtab.appendByte((u8)(inData ? (u32)2 : (u32)1)); // .data : .text
+            symtab.appendByte((u8)0);
             u32 addr = (inData ? dataAddr : textAddr) + ((Number*)symbols.get((Hashable*)n)).asU32();
             u32Into(symtab, addr);
             u32Into(symtab, (u32)0);
@@ -1953,19 +1947,19 @@ class ElfSharedInfo
             u32Into(symtab, (u32)0);
             }
 
-        Array* shstr = new Array();
-        shstr.add((Object*)Number.withU32((u32)0));
-        u32 nText = shstr.count();
+        Data* shstr = new Data();
+        shstr.appendByte((u8)0);
+        u32 nText = shstr.length();
         strInto(shstr, String.withCString(".text"));
-        u32 nData = shstr.count();
+        u32 nData = shstr.length();
         strInto(shstr, String.withCString(".data"));
-        u32 nBss = shstr.count();
+        u32 nBss = shstr.length();
         strInto(shstr, String.withCString(".bss"));
-        u32 nSymtab = shstr.count();
+        u32 nSymtab = shstr.length();
         strInto(shstr, String.withCString(".symtab"));
-        u32 nStrtab = shstr.count();
+        u32 nStrtab = shstr.length();
         strInto(shstr, String.withCString(".strtab"));
-        u32 nShstr = shstr.count();
+        u32 nShstr = shstr.length();
         strInto(shstr, String.withCString(".shstrtab"));
         // -g: the DWARF the assembler recorded, as non-allocated sections gdb
         // and lldb read from the executable.
@@ -1976,7 +1970,7 @@ class ElfSharedInfo
         if (dwarf != (DwarfWriter*)0)
             for (u32 k = (u32)0; k < (u32)5; k = k + (u32)1)
                 {
-                dwarfNames.add((Object*)Number.withU32(shstr.count()));
+                dwarfNames.add((Object*)Number.withU32(shstr.length()));
                 String* sn = String.withCString(".");
                 sn.append((String*)order.get(k));
                 strInto(shstr, sn);
@@ -2015,11 +2009,11 @@ class ElfSharedInfo
         // is global, so that is 1 — the entry straight after the null one. The
         // shdr call order is the section index, so .bss shifts .symtab's own
         // link (its .strtab) from 4 to 5.
-        shdr(nSymtab, (u32)2, (u32)0, (u32)0, symOff, symtab.count(),
+        shdr(nSymtab, (u32)2, (u32)0, (u32)0, symOff, symtab.length(),
              bssSzS > (u32)0 ? (u32)5 : (u32)4, (u32)1, (u32)8, (u32)24);
-        shdr(nStrtab, (u32)3, (u32)0, (u32)0, strOff, strtab.count(),
+        shdr(nStrtab, (u32)3, (u32)0, (u32)0, strOff, strtab.length(),
              (u32)0, (u32)0, (u32)1, (u32)0);
-        shdr(nShstr, (u32)3, (u32)0, (u32)0, shstrOff, shstr.count(),
+        shdr(nShstr, (u32)3, (u32)0, (u32)0, shstrOff, shstr.length(),
              (u32)0, (u32)0, (u32)1, (u32)0);
         // 6..: -g's debug sections.
         u32 di = (u32)0;
@@ -2056,23 +2050,22 @@ class ElfSharedInfo
         p64(entsz);
         }
 
-    void appendAll(Array* a)
+    void appendAll(Data* a)
         {
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            _out.appendByte((u8)((Number*)a.get(i)).asU32());
+        _out.append(a);
         }
 
-    static void strInto(Array* a, String* s)
+    static void strInto(Data* a, String* s)
         {
         for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            a.add((Object*)Number.withU32((u32)s.byteAt(i)));
-        a.add((Object*)Number.withU32((u32)0));
+            a.appendByte(s.byteAt(i));
+        a.appendByte((u8)0);
         }
 
-    static void u32Into(Array* a, u32 v)
+    static void u32Into(Data* a, u32 v)
         {
         for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
-            a.add((Object*)Number.withU32((v >> ((u32)8 * i)) & (u32)$FF));
+            a.appendByte((u8)((v >> ((u32)8 * i)) & (u32)$FF));
         }
 
     // -g: the debug sections of an executable, from the DWARF the assembler
