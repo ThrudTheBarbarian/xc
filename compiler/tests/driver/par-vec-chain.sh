@@ -16,6 +16,9 @@
 #   bash tests/driver/par-vec-chain.sh
 set -u
 cd "$(dirname "$0")/../.." || exit 1
+# arm64 macOS code, which the Mac legs check: a Linux host builds -A arm64
+# without the SDK, and the gate ran this there.
+[ "$(uname -s)" = Darwin ] || { echo "par-vec-chain: skipped (not macOS)"; exit 0; }
 PLAT=$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )
 REF=${REF:-bin/$PLAT/xcc}
 XC=${XC:-bin/$PLAT/xcc-xc}
