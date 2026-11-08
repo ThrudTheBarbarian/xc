@@ -11,8 +11,9 @@
 # _xtc_start. Checked: a program with classes, a destructor, an array of
 # objects, a weak reference and strings builds through clang with both
 # compilers and prints what the in-house build prints, and a -fbounds-check
-# build does too. Android through the NDK's clang is refused with a pointer to
-# the in-house link. macOS only (clang is the host's).
+# build does too. Android goes through the NDK's clang in the shipped compiler
+# (#31; the reference refuses it): an executable and an APK, run where a
+# device or emulator is attached. macOS only (clang is the host's).
 #
 #   bash tests/driver/no-self-host.sh
 set -u
@@ -23,6 +24,8 @@ REF=${REF:-bin/osx/xcc}
 XC=${XC:-bin/osx/xcc-xc}
 W=$(mktemp -d); trap 'rm -rf "${W:?}"' EXIT
 fail=0
+NDK=$(ls -d "${ANDROID_NDK_HOME:-/nonexistent}" "${ANDROID_HOME:-$HOME/Library/Android/sdk}"/ndk/* 2>/dev/null | tail -1)
+ADB=$(command -v adb || ls "${ANDROID_HOME:-$HOME/Library/Android/sdk}"/platform-tools/adb 2>/dev/null)
 cat > "$W/p.xc" <<'XC'
 #import "Stdio.xc"
 u32 gGone;
@@ -63,8 +66,38 @@ for s in r x; do
         got=$("$W/$s-clang" 2>&1)
         [ "$got" = "$want" ] || { echo "FAIL no-self-host: $n $f through clang prints '$got' (want '$want')"; fail=1; }
     done
-    "$c" -q --no-self-host -A android -o "$W/$s-and" "$W/p.xc" > "$W/e" 2>&1 && { echo "FAIL no-self-host: $n linked android through the NDK"; fail=1; }
-    grep -q 'do not go through the NDK' "$W/e" || { echo "FAIL no-self-host: $n android: $(head -c 200 "$W/e")"; fail=1; }
+    if [ $s = r ]; then
+        "$c" -q --no-self-host -A android -o "$W/$s-and" "$W/p.xc" > "$W/e" 2>&1 && { echo "FAIL no-self-host: $n linked android through the NDK"; fail=1; }
+        grep -q 'do not go through the NDK' "$W/e" || { echo "FAIL no-self-host: $n android: $(head -c 200 "$W/e")"; fail=1; }
+        continue
+    fi
+    # Android through the NDK's clang (#31): the in-house unit as one object,
+    # an executable and an APK. Run where a device or emulator is attached.
+    [ -n "$NDK" ] || { echo "no-self-host: android skipped (no NDK)"; continue; }
+    "$c" -q -O2 --no-self-host -A android -o "$W/and" "$W/p.xc" > "$W/e" 2>&1 \
+        || { echo "FAIL no-self-host: $n android does not link through the NDK: $(head -c 300 "$W/e")"; fail=1; continue; }
+    "$c" -q -O2 --no-self-host -A android --emit-apk -o "$W/nshapk.apk" "$W/p.xc" > "$W/e" 2>&1 \
+        || { echo "FAIL no-self-host: $n android APK does not link through the NDK: $(head -c 300 "$W/e")"; fail=1; continue; }
+    if [ -n "$ADB" ] && [ "$("$ADB" get-state 2>/dev/null)" = device ]; then
+        "$ADB" push -q "$W/and" /data/local/tmp/xc-nsh > /dev/null
+        got=$("$ADB" shell 'chmod 755 /data/local/tmp/xc-nsh; /data/local/tmp/xc-nsh; rm -f /data/local/tmp/xc-nsh' | tr -d '\r')
+        [ "$got" = "$want" ] || { echo "FAIL no-self-host: $n android through the NDK prints '$got' (want '$want')"; fail=1; }
+        PKG=org.compile_xc.nshapk
+        "$ADB" uninstall $PKG > /dev/null 2>&1
+        if "$ADB" install -r "$W/nshapk.apk" > /dev/null 2>&1; then
+            "$ADB" logcat -c
+            "$ADB" shell am start -n "$PKG/android.app.NativeActivity" > /dev/null 2>&1
+            sleep 3
+            got=$("$ADB" logcat -s xcapp -d | sed 's/^.*xcapp *: //' | grep -v '^=== xc \(start\|finished\) ===$' \
+                  | grep -v '^--------- beginning' | tr -d '\r' | sed '/^$/d')
+            "$ADB" uninstall $PKG > /dev/null 2>&1
+            [ "$got" = "$want" ] || { echo "FAIL no-self-host: $n the NDK-linked APK logs '$got' (want '$want')"; fail=1; }
+        else
+            echo "FAIL no-self-host: $n the NDK-linked APK does not install"; fail=1
+        fi
+    else
+        echo "no-self-host: android built, not run (no device)"
+    fi
 done
 [ $fail = 0 ] && echo "no-self-host: ok"
 exit $fail

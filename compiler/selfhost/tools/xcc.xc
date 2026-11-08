@@ -1471,6 +1471,20 @@ void emitApkPackage(DriverOptions* d, String* prog)
     String* soname = String.withCString("lib");
     soname.append(name); soname.appendCString(".so");
 
+    // --no-self-host: the same unit, linked by the NDK's clang (#31).
+    if (d.caps().noSelfHost()) {
+        String* so = External.tempPath(soname.cString());
+        ndkLink(d, a, so, soname);
+        Data* sb = Files.readData(so);
+        if (sb == (Data*)0) {
+            Stdio.printf("xcc: apk: cannot read the payload the NDK linked\n");
+            Process.exit((i32)1); return;
+        }
+        packageApk(d, name, soname, numbersOfData(sb));
+        if (!d.fe().verbose()) External.cleanup();
+        return;
+    }
+
     // Bug 124: the constructor array is kept OUT of dataBytes by the assembler,
     // so it has to be appended here or every load-time constructor is dropped.
     SectionBytes* apkData = a.dataBytes();
@@ -5369,6 +5383,14 @@ void emitModule(DriverOptions* d, IRModule* mod)
         emitApkPackage(d, prog);
         return;
     }
+    // --no-self-host: the same unit, linked by the NDK's clang (#31).
+    if (isAndroid(d) && d.caps().noSelfHost() && !d.emitLib()) {
+        ndkLink(d, as, d.fe().output(), (String*)0);
+        if (!d.fe().verbose()) External.cleanup();
+        if (!d.quiet())
+            Stdio.printf("xcc: android executable -> '%s'\n", d.fe().output().cString());
+        return;
+    }
 
     Data* image = (Data*)0;
     if (android) {
@@ -5653,20 +5675,90 @@ String* supportPath(DriverOptions* d, string sub, String* name)
     return p;
 }
 
+// The NDK's clang (#31): under $ANDROID_NDK_HOME, or in the newest NDK in
+// $ANDROID_HOME, $ANDROID_SDK_ROOT or the SDK's default place on a Mac; 0 when
+// there is none.
+String* ndkClang(void)
+{
+    String* t = External.captureAll(String.withCString(
+        "for n in \"$ANDROID_NDK_HOME\" $(ls -d \"$ANDROID_HOME\"/ndk/* \"$ANDROID_SDK_ROOT\"/ndk/* "
+        "\"$HOME\"/Library/Android/sdk/ndk/* 2>/dev/null | sort -rV); do "
+        "for c in \"$n\"/toolchains/llvm/prebuilt/*/bin/clang; do "
+        "[ -x \"$c\" ] && { echo \"$c\"; exit 0; }; done; done")).trimmed();
+    return t.byteLength() == (u32)0 ? (String*)0 : t;
+}
+
+// An android image through the NDK's clang (--no-self-host, #31). The unit is
+// the one the in-house link assembles (the crt or the APK's glue, the runtime,
+// the allocators, the program), written as one ET_REL object, which clang
+// links against bionic. clang's own start files stay out: crt-android.s's
+// _start is the entry, as in the in-house image. A NativeActivity payload is a
+// shared object, linked -Bsymbolic: the code reaches its own symbols
+// pc-relative, which lld refuses against a symbol a .so leaves preemptible.
+void ndkLink(DriverOptions* d, Arm64Asm* as, String* out, String* soname)
+{
+    String* cc = ndkClang();
+    if (cc == (String*)0) {
+        Stdio.printf("xcc: error: --no-self-host -A android needs the NDK: set $ANDROID_NDK_HOME, "
+                     "or $ANDROID_HOME to an SDK with one\n");
+        Process.exit((i32)1); return;
+    }
+    ElfArm64* eo = new ElfArm64();
+    Data* od = eo.objectFromText(as.textBytes(), as.dataBytes(), as.symbols(), as.dataSyms(),
+                                 as.fixups(), as.globals(), as.commonSyms(),
+                                 as.modInitBytes(), as.modInitFixups());
+    if (od == (Data*)0 || eo.failed()) {
+        Stdio.printf("xcc: error: android object write failed: %s\n",
+                     eo.why() == (String*)0 ? "?" : eo.why().cString());
+        Process.exit((i32)1); return;
+    }
+    String* obj = External.tempPath("xtc-android.o");
+    if (!Files.writeData(obj, od)) {
+        Stdio.printf("xcc: error: cannot write '%s'\n", obj.cString());
+        Process.exit((i32)1); return;
+    }
+    bool keep = d.fe().verbose();
+    Array* a = new Array();
+    a.add((Object*)cc);
+    a.add((Object*)String.withCString("--target=aarch64-linux-android24"));
+    a.add((Object*)String.withCString("-nostartfiles"));
+    if (soname != (String*)0) {
+        a.add((Object*)String.withCString("-shared"));
+        a.add((Object*)String.withCString("-Wl,-Bsymbolic"));
+        a.add((Object*)String.withCString("-Wl,-soname,").appending(soname));
+    } else {
+        a.add((Object*)String.withCString("-Wl,-e,_start"));
+    }
+    a.add((Object*)obj);
+    addLinkerFlags(d, a);
+    // The libraries the program imports, by path (lld records their sonames),
+    // then the system ones the in-house image names.
+    Array* nl = d.fe().neededLibs();
+    for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1)
+        if (((String*)nl.get(i)).hasSuffix(String.withCString(".so"))) a.add(nl.get(i));
+    a.add((Object*)String.withCString("-lm"));
+    a.add((Object*)String.withCString("-ldl"));
+    if (soname != (String*)0) {
+        a.add((Object*)String.withCString("-llog"));
+        a.add((Object*)String.withCString("-landroid"));
+    }
+    Array* sys = d.caps().needed();
+    for (u32 i = (u32)0; i < sys.count(); i = i + (u32)1) {
+        String* n = (String*)sys.get(i);
+        if (n.hasPrefix(String.withCString("lib")) && n.hasSuffix(String.withCString(".so")))
+            a.add((Object*)String.withCString("-l").appending(n.substringBytes((u32)3, n.byteLength() - (u32)6)));
+    }
+    a.add((Object*)String.withCString("-o")); a.add((Object*)out);
+    runOrDie(a, keep);
+}
+
 // arm64 macOS through the vendor clang. False when this shape has no external
 // path and the in-house link should run instead: a library, which links
-// in-house either way. Android is refused: its NDK path compiled a generated C
-// runtime that no longer matched the object layout the back ends emit (the
-// 32-bit refcount, then the compact header); it comes back the way the macOS
-// path did once a machine with the NDK can test it. As the reference.
+// in-house either way, and android, which goes to the NDK's clang once its
+// unit is assembled (ndkLink).
 bool externalArm64(DriverOptions* d, String* prog)
 {
-    if (d.emitLib()) return false;
-    if (isAndroid(d)) {
-        Stdio.printf("xcc: error: android builds do not go through the NDK's clang at present: "
-                     "use the in-house link (the default, without --no-self-host)\n");
-        Process.exit((i32)1); return true;
-    }
+    if (d.emitLib() || isAndroid(d)) return false;
     String* out = d.fe().output();
     bool keep = d.fe().verbose();
     // clang links the program against the same runtime as the in-house link,
