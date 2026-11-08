@@ -13,6 +13,7 @@
 // next.
 
 #import "Foundation.xc"
+#import "Directory.xc"
 #import <Ir>
 #import "IrDefs.xc"
 #import <LlvmRead>
@@ -67,6 +68,28 @@ bool gCPathFuseMulAdd;
 void cPathSetFuseMulAdd(bool b) { gCPathFuseMulAdd = b; }
 void cPathSetTarget(String* t) { gCPathTarget = t; }
 void cPathSetFpContract(String* v) { gCPathFpContract = v; }
+
+// The scratch files a C compile leaves once the program is linked: clang's
+// object, xcc's and its sidecars. Each run's names carry its pid, so nothing
+// else removed them, and a build host's /tmp filled (12 GB on one gate host).
+void cPathCleanup(void)
+    {
+    if (gCRestObject == (String*)0)
+        return;
+    String* s = CPath.scratch();
+    u8* tails[5];
+    tails[0] = ".rest.o";
+    tails[1] = ".x.o";
+    tails[2] = ".x.xtc.ir";
+    tails[3] = ".x.xtc.needs";
+    tails[4] = ".x.xtc.iface";
+    for (u32 i = (u32)0; i < (u32)5; i = i + (u32)1)
+        {
+        String* p = String.withString(s);
+        p.appendCString(tails[i]);
+        Directory._unlink(p);
+        }
+    }
 
 // The C library's: the shell runs clang, with this process's environment.
 i32 system(u8* command);
@@ -183,6 +206,8 @@ class CPath
             Stdio.error(String.withFormat("xcc: error: cannot read clang's output '%s'\n", ll.cString()));
             return (IRModule*)0;
             }
+        if (given.byteLength() == (u32)0)
+            Directory._unlink(ll);
         // clang on Windows ends its lines CRLF. The reader finds a function's
         // end as a line that is `}`, and with a `\r` on every line it found
         // none: the first function ran to the end of the file and every one
@@ -208,6 +233,7 @@ class CPath
                 }
             fe.setInput(stub);
             IRModule* base = Frontend.lower(fe);
+            Directory._unlink(stub);
             if (base == (IRModule*)0)
                 return (IRModule*)0;
             m = r.readInto(text, base);
@@ -277,6 +303,7 @@ class CPath
                                           input.cString(), restLl.cString()));
             return (IRModule*)0;
             }
+        Directory._unlink(restLl);
         gCRestObject = restO;
         return m;
         }

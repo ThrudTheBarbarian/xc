@@ -32,6 +32,16 @@
 |* build. Uniqueness has to live SOMEWHERE, but it belongs in the directory (which
 |* nothing records) rather than the filename (which does).
 \****************************************************************************/
+static NSString *xtcTempDirPath = nil;
+
+// The scratch directory is this process's alone (its name is unique), so it
+// goes when the process does. Left behind, every run's stayed: 21 GB of them
+// on a Linux gate host, whose /tmp is a RAM disk.
+static void xtcRemoveTempDir(void) {
+    if (xtcTempDirPath)
+        [[NSFileManager defaultManager] removeItemAtPath:xtcTempDirPath error:NULL];
+}
+
 static NSString *xtcTempDir(void) {
     static NSString *dir = nil;
     static dispatch_once_t once;
@@ -46,6 +56,8 @@ static NSString *xtcTempDir(void) {
                                   withIntermediateDirectories:YES
                                                    attributes:nil error:NULL];
         dir = t;
+        xtcTempDirPath = t;
+        atexit(xtcRemoveTempDir);
     });
     return dir;
 }

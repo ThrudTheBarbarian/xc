@@ -4960,6 +4960,7 @@ void main(void)
     emitModule(d, mod);
     if (d.bundleDir() != (String*)0)
         makeBundle(d);
+    cPathCleanup();
 }
 
 // The bundle's platform directory for the target: <os>-<arch>.
