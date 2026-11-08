@@ -13,21 +13,21 @@
 #import <CodeSign>
 #import <RsaKeygen>
 
-String* pemBlock(String* label, Array* der)
+String* pemBlock(String* label, Data* der)
     {
     String* b64 = String.withCString("");
     String* alpha = String.withCString("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/");
     u32 col = (u32)0;
-    for (u32 i = (u32)0; i < der.count(); i = i + (u32)3)
+    for (u32 i = (u32)0; i < der.length(); i = i + (u32)3)
         {
         u32 b0 = Bytes.at(der, i);
-        u32 b1 = i + (u32)1 < der.count() ? Bytes.at(der, i + (u32)1) : (u32)0;
-        u32 b2 = i + (u32)2 < der.count() ? Bytes.at(der, i + (u32)2) : (u32)0;
+        u32 b1 = i + (u32)1 < der.length() ? Bytes.at(der, i + (u32)1) : (u32)0;
+        u32 b2 = i + (u32)2 < der.length() ? Bytes.at(der, i + (u32)2) : (u32)0;
         u32 v = (b0 << (u32)16) | (b1 << (u32)8) | b2;
         b64.appendByte(alpha.byteAt((v >> (u32)18) & (u32)63));
         b64.appendByte(alpha.byteAt((v >> (u32)12) & (u32)63));
-        b64.appendByte(i + (u32)1 < der.count() ? alpha.byteAt((v >> (u32)6) & (u32)63) : (u8)'=');
-        b64.appendByte(i + (u32)2 < der.count() ? alpha.byteAt(v & (u32)63) : (u8)'=');
+        b64.appendByte(i + (u32)1 < der.length() ? alpha.byteAt((v >> (u32)6) & (u32)63) : (u8)'=');
+        b64.appendByte(i + (u32)2 < der.length() ? alpha.byteAt(v & (u32)63) : (u8)'=');
         col = col + (u32)4;
         if (col >= (u32)64)
             {
@@ -64,10 +64,10 @@ void main(void)
         Process.exit((i32)1);
         return;
         }
-    Array* n = (Array*)key.get((u32)0);
-    Array* e = (Array*)key.get((u32)1);
-    Array* d = (Array*)key.get((u32)2);
-    Array* cert = ApkSign.selfSignedCert(n, e, d, cn);
+    Data* n = (Data*)key.get((u32)0);
+    Data* e = (Data*)key.get((u32)1);
+    Data* d = (Data*)key.get((u32)2);
+    Data* cert = ApkSign.selfSignedCert(n, e, d, cn);
     // RSAPrivateKey ::= SEQUENCE { version 0, n, e, d } — the fields both
     // readers consume (the CRT parameters are not needed to sign).
     Array* fields = new Array();
@@ -75,7 +75,7 @@ void main(void)
     fields.add((Object*)Der.integer(n));
     fields.add((Object*)Der.integer(e));
     fields.add((Object*)Der.integer(d));
-    Array* keyDer = Der.sequence(fields);
+    Data* keyDer = Der.sequence(fields);
     String* pem = pemBlock(String.withCString("CERTIFICATE"), cert);
     pem.append(pemBlock(String.withCString("RSA PRIVATE KEY"), keyDer));
     if (!Files.writeText(out, pem))

@@ -55,7 +55,7 @@ class P256
     static Bignum* hex(string s)
         {
         String* h = String.withCString(s);
-        Array* b = new Array();
+        Data* b = new Data();
         for (u32 i = (u32)0; i + (u32)1 < h.byteLength(); i = i + (u32)2)
             Bytes.add(b, (P256.nib(h.byteAt(i)) << (u32)4) | P256.nib(h.byteAt(i + (u32)1)));
         return Bignum.fromBytes(b);
@@ -217,27 +217,27 @@ class P256
         }
 
     // ── RFC 6979 nonce (HMAC-SHA256) ────────────────────────────────────────
-    static Array* cat3(Array* a, u32 mid, bool hasMid, Array* b, Array* c)
+    static Data* cat3(Data* a, u32 mid, bool hasMid, Data* b, Data* c)
         {
-        Array* o = Bytes.copy(a);
+        Data* o = Bytes.copy(a);
         if (hasMid)
             Bytes.add(o, mid);
-        if (b != (Array*)0)
-            for (u32 i = (u32)0; i < b.count(); i = i + (u32)1)
-                o.add(b.get(i));
-        if (c != (Array*)0)
-            for (u32 i = (u32)0; i < c.count(); i = i + (u32)1)
-                o.add(c.get(i));
+        if (b != (Data*)0)
+            for (u32 i = (u32)0; i < b.length(); i = i + (u32)1)
+                o.appendByte(b.byteAt(i));
+        if (c != (Data*)0)
+            for (u32 i = (u32)0; i < c.length(); i = i + (u32)1)
+                o.appendByte(c.byteAt(i));
         return o;
         }
-    Bignum* nonce(Array* x32, Array* h1)
+    Bignum* nonce(Data* x32, Data* h1)
         {
         Bignum* hz = Bignum.fromBytes(h1);
         if (Bignum.cmp(hz, _n) >= (i32)0)
             Bignum.subInto(hz, _n);
-        Array* h = hz.toBytes((u32)32);
-        Array* v = Bytes.of((u32)32, (u32)1);
-        Array* k = Bytes.of((u32)32, (u32)0);
+        Data* h = hz.toBytes((u32)32);
+        Data* v = Bytes.of((u32)32, (u32)1);
+        Data* k = Bytes.of((u32)32, (u32)0);
         k = Kdf.hmac(true, k, P256.cat3(v, (u32)0, true, x32, h));
         v = Kdf.hmac(true, k, v);
         k = Kdf.hmac(true, k, P256.cat3(v, (u32)1, true, x32, h));
@@ -248,7 +248,7 @@ class P256
             Bignum* c = Bignum.fromBytes(v);
             if (!c.isZero() && Bignum.cmp(c, _n) < (i32)0)
                 return c;
-            k = Kdf.hmac(true, k, P256.cat3(v, (u32)0, true, (Array*)0, (Array*)0));
+            k = Kdf.hmac(true, k, P256.cat3(v, (u32)0, true, (Data*)0, (Data*)0));
             v = Kdf.hmac(true, k, v);
             }
         return (Bignum*)0;
@@ -256,17 +256,17 @@ class P256
 
     // The 64-byte JOSE signature (r || s) of SHA-256(msg) under private key
     // d (32 bytes, big-endian), or null.
-    Array* sign(Array* d32, Array* msg)
+    Data* sign(Data* d32, Data* msg)
         {
-        Array* h1 = Bytes.sha256(msg);
+        Data* h1 = Bytes.sha256(msg);
         Bignum* d = Bignum.fromBytes(d32);
         Bignum* k = nonce(d.toBytes((u32)32), h1);
         Bignum* x = baseMulX(k);
         if (x == (Bignum*)0)
-            return (Array*)0;
+            return (Data*)0;
         Bignum* r = Bignum.mod(x, _n);
         if (r.isZero())
-            return (Array*)0;
+            return (Data*)0;
         Bignum* z = Bignum.fromBytes(h1);
         if (Bignum.cmp(z, _n) >= (i32)0)
             Bignum.subInto(z, _n);
@@ -279,24 +279,24 @@ class P256
             Bignum.subInto(sum, _n);
         Bignum* s = Bignum.modmul(kinv, sum, _n);
         if (s.isZero())
-            return (Array*)0;
-        Array* out = r.toBytes((u32)32);
-        Array* sb = s.toBytes((u32)32);
+            return (Data*)0;
+        Data* out = r.toBytes((u32)32);
+        Data* sb = s.toBytes((u32)32);
         for (u32 i = (u32)0; i < (u32)32; i = i + (u32)1)
-            out.add(sb.get(i));
+            out.appendByte(sb.byteAt(i));
         return out;
         }
 
     // The 32-byte private scalar of a P-256 key in PEM: PKCS#8 PrivateKeyInfo
     // ("PRIVATE KEY", what an AuthKey_*.p8 holds) or SEC1 ("EC PRIVATE KEY").
     // Null with why() set when it is neither.
-    Array* privateKeyFromPEM(String* text)
+    Data* privateKeyFromPEM(String* text)
         {
         Array* blocks = Pem.blocks(text);
         for (u32 i = (u32)0; i < blocks.count(); i = i + (u32)1)
             {
             PemBlock* b = (PemBlock*)blocks.get(i);
-            Array* der = b.der();
+            Data* der = b.der();
             if (b.label().equals(String.withCString("PRIVATE KEY")))
                 {
                 // SEQ { version, AlgorithmIdentifier, OCTET STRING { ECPrivateKey } }
@@ -307,15 +307,15 @@ class P256
                 DerReader* alg = seq.readConstructed();
                 if (alg == (DerReader*)0)
                     break;
-                Array* oid = alg.readTLV();
+                Data* oid = alg.readTLV();
                 u32 ecPub[7] = {0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01};
                 if (!Pkcs8.oidIs(oid, ecPub, (u32)7))
                     {
                     _why = String.withCString("the key is not an EC key");
-                    return (Array*)0;
+                    return (Data*)0;
                     }
-                Array* inner = seq.readTLV();
-                if (inner == (Array*)0 || seq.lastTag() != (u32)$04)
+                Data* inner = seq.readTLV();
+                if (inner == (Data*)0 || seq.lastTag() != (u32)$04)
                     break;
                 der = inner;
                 }
@@ -326,14 +326,19 @@ class P256
             if (ec == (DerReader*)0)
                 break;
             ec.readTLV();
-            Array* d = ec.readTLV();
-            if (d == (Array*)0 || ec.lastTag() != (u32)$04 || d.count() > (u32)32)
+            Data* d = ec.readTLV();
+            if (d == (Data*)0 || ec.lastTag() != (u32)$04 || d.length() > (u32)32)
                 break;
-            while (d.count() < (u32)32)
-                d.insert((u32)0, (Object*)Number.withU32((u32)0));
+            while (d.length() < (u32)32)
+                {
+                Data* p = new Data();
+                p.appendByte((u8)0);
+                p.append(d);
+                d = p;
+                }
             return d;
             }
         _why = String.withCString("could not parse the .p8 key");
-        return (Array*)0;
+        return (Data*)0;
         }
     }

@@ -199,24 +199,9 @@ class MachOSha256
             }
         }
 
-    void update(Array* bytes, u32 from, u32 len)
-        {
-        _len = _len + len;
-        for (u32 i = (u32)0; i < len; i = i + (u32)1)
-            {
-            _buf[_n] = ((Number*)bytes.get(from + i)).asU32() & (u32)$FF;
-            _n = _n + (u32)1;
-            if (_n == (u32)64)
-                {
-                block();
-                _n = (u32)0;
-                }
-            }
-        }
-
     // The length is appended as a 64-bit BIT count. Only the low 35 bits can be
     // non-zero for anything this writes, but the field is still eight bytes.
-    void finalise(Array* out)
+    void finaliseInto(Data* out)
         {
         u32 bitsLo = _len << (u32)3;
         u32 bitsHi = _len >> (u32)29;
@@ -252,16 +237,7 @@ class MachOSha256
         block();
         for (u32 i = (u32)0; i < (u32)8; i = i + (u32)1)
             for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
-                out.add((Object*)Number.withU32((_s[i] >> ((u32)8 * ((u32)3 - b))) & (u32)$FF));
-        }
-
-    // The same digest, appended to a byte buffer.
-    void finaliseInto(Data* out)
-        {
-        Array* d = new Array();
-        finalise(d);
-        for (u32 i = (u32)0; i < d.count(); i = i + (u32)1)
-            out.appendByte((u8)((Number*)d.get(i)).asU32());
+                out.appendByte((u8)((_s[i] >> ((u32)8 * ((u32)3 - b))) & (u32)$FF));
         }
     }
 

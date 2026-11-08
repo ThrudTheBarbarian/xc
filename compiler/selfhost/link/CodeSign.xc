@@ -6,7 +6,7 @@
 // replaces an ad-hoc signature with the identity's. Byte-identical to the
 // reference for the same identity and signing time — that is the harness.
 //
-// Bytes are Array@ of Number (the port's convention for images).
+// Bytes are Data buffers.
 
 #import "Foundation.xc"
 #import "Files.xc"
@@ -22,48 +22,45 @@ class Bytes
     void init(void)
         {
         }
-    static Array* of(u32 n, u32 v)
+    static Data* of(u32 n, u32 v)
         {
-        Array* a = new Array();
+        Data* a = new Data();
         for (u32 i = (u32)0; i < n; i = i + (u32)1)
-            a.add((Object*)Number.withU32(v));
+            a.appendByte((u8)(v));
         return a;
         }
-    static u32 at(Array* a, u32 i)
+    static u32 at(Data* a, u32 i)
         {
-        return ((Number*)a.get(i)).asU32();
+        return (u32)a.byteAt(i);
         }
-    static void put(Array* a, u32 i, u32 v)
+    static void put(Data* a, u32 i, u32 v)
         {
-        a.set(i, (Object*)Number.withU32(v & (u32)$FF));
+        a.setByteAt(i, (u8)(v & (u32)$FF));
         }
-    static void add(Array* a, u32 v)
+    static void add(Data* a, u32 v)
         {
-        a.add((Object*)Number.withU32(v & (u32)$FF));
+        a.appendByte((u8)(v & (u32)$FF));
         }
-    static Array* slice(Array* a, u32 from, u32 len)
+    static Data* slice(Data* a, u32 from, u32 len)
         {
-        Array* o = new Array();
-        for (u32 i = (u32)0; i < len; i = i + (u32)1)
-            o.add(a.get(from + i));
-        return o;
+        return Data.withBytes(a.bytes() + from, len);
         }
-    static Array* copy(Array* a)
+    static Data* copy(Data* a)
         {
-        return Bytes.slice(a, (u32)0, a.count());
+        return Bytes.slice(a, (u32)0, a.length());
         }
-    static bool equal(Array* a, Array* b)
+    static bool equal(Data* a, Data* b)
         {
-        if (a.count() != b.count())
+        if (a.length() != b.length())
             return false;
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
+        for (u32 i = (u32)0; i < a.length(); i = i + (u32)1)
             if (Bytes.at(a, i) != Bytes.at(b, i))
                 return false;
         return true;
         }
-    static i32 compare(Array* a, Array* b)
+    static i32 compare(Data* a, Data* b)
         {
-        u32 m = a.count() < b.count() ? a.count() : b.count();
+        u32 m = a.length() < b.length() ? a.length() : b.length();
         for (u32 i = (u32)0; i < m; i = i + (u32)1)
             {
             if (Bytes.at(a, i) < Bytes.at(b, i))
@@ -71,60 +68,54 @@ class Bytes
             if (Bytes.at(a, i) > Bytes.at(b, i))
                 return (i32)1;
             }
-        if (a.count() < b.count())
+        if (a.length() < b.length())
             return (i32)-1;
-        if (a.count() > b.count())
+        if (a.length() > b.length())
             return (i32)1;
         return (i32)0;
         }
-    static Array* fromString(String* s)
+    static Data* fromString(String* s)
         {
-        Array* o = new Array();
+        Data* o = new Data();
         for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
             Bytes.add(o, (u32)s.byteAt(i));
         return o;
         }
-    static Array* fromData(Data* d)
+    static Data* fromData(Data* d)
         {
-        Array* o = new Array();
-        for (u32 i = (u32)0; i < d.length(); i = i + (u32)1)
-            Bytes.add(o, (u32)d.byteAt(i));
-        return o;
+        return Data.withData(d);
         }
-    static Data* toData(Array* a)
+    static Data* toData(Data* a)
         {
-        Data* d = Data.withCapacity(a.count());
-        for (u32 i = (u32)0; i < a.count(); i = i + (u32)1)
-            d.appendByte((u8)Bytes.at(a, i));
-        return d;
+        return Data.withData(a);
         }
-    static u32 rd32le(Array* a, u32 o)
+    static u32 rd32le(Data* a, u32 o)
         {
         return Bytes.at(a, o) | (Bytes.at(a, o + (u32)1) << (u32)8) | (Bytes.at(a, o + (u32)2) << (u32)16) | (Bytes.at(a, o + (u32)3) << (u32)24);
         }
-    static void wr32le(Array* a, u32 o, u32 v)
+    static void wr32le(Data* a, u32 o, u32 v)
         {
         for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
             Bytes.put(a, o + i, v >> (i * (u32)8));
         }
-    static void put32be(Array* a, u32 v)
+    static void put32be(Data* a, u32 v)
         {
         Bytes.add(a, v >> (u32)24);
         Bytes.add(a, v >> (u32)16);
         Bytes.add(a, v >> (u32)8);
         Bytes.add(a, v);
         }
-    static void put64be(Array* a, u32 hi, u32 lo)
+    static void put64be(Data* a, u32 hi, u32 lo)
         {
         Bytes.put32be(a, hi);
         Bytes.put32be(a, lo);
         }
-    static Array* sha256(Array* a)
+    static Data* sha256(Data* a)
         {
         MachOSha256* h = new MachOSha256();
-        h.update(a, (u32)0, a.count());
-        Array* out = new Array();
-        h.finalise(out);
+        h.updateData(a, (u32)0, a.length());
+        Data* out = new Data();
+        h.finaliseInto(out);
         return out;
         }
     }
@@ -139,17 +130,17 @@ class Bytes
         {
         return (x << r) | (x >> ((u32)32 - r));
         }
-    static Array* digest(Array* msg)
+    static Data* digest(Data* msg)
         {
         u32 h0 = (u32)$67452301;
         u32 h1 = (u32)$EFCDAB89;
         u32 h2 = (u32)$98BADCFE;
         u32 h3 = (u32)$10325476;
         u32 h4 = (u32)$C3D2E1F0;
-        Array* m = Bytes.copy(msg);
-        u32 ml = msg.count();
+        Data* m = Bytes.copy(msg);
+        u32 ml = msg.length();
         Bytes.add(m, (u32)$80);
-        while ((m.count() % (u32)64) != (u32)56)
+        while ((m.length() % (u32)64) != (u32)56)
             Bytes.add(m, (u32)0);
         u32 bits = ml * (u32)8;
         Bytes.add(m, (u32)0);
@@ -161,7 +152,7 @@ class Bytes
         Bytes.add(m, bits >> (u32)8);
         Bytes.add(m, bits);
         u32 w[80];
-        for (u32 off = (u32)0; off < m.count(); off = off + (u32)64)
+        for (u32 off = (u32)0; off < m.length(); off = off + (u32)64)
             {
             for (u32 i = (u32)0; i < (u32)16; i = i + (u32)1)
                 w[i] = (Bytes.at(m, off + i * (u32)4) << (u32)24) | (Bytes.at(m, off + i * (u32)4 + (u32)1) << (u32)16) | (Bytes.at(m, off + i * (u32)4 + (u32)2) << (u32)8) | Bytes.at(m, off + i * (u32)4 + (u32)3);
@@ -209,7 +200,7 @@ class Bytes
             h3 = h3 + d;
             h4 = h4 + e;
             }
-        Array* out = new Array();
+        Data* out = new Data();
         Bytes.put32be(out, h0);
         Bytes.put32be(out, h1);
         Bytes.put32be(out, h2);
@@ -225,20 +216,20 @@ class Bytes
     void init(void)
         {
         }
-    static Array* hash(bool sha256, Array* m)
+    static Data* hash(bool sha256, Data* m)
         {
         return sha256 ? Bytes.sha256(m) : Sha1.digest(m);
         }
-    static Array* hmac(bool sha256, Array* key, Array* msg)
+    static Data* hmac(bool sha256, Data* key, Data* msg)
         {
         u32 bs = (u32)64;
-        Array* k = Bytes.copy(key);
-        if (k.count() > bs)
+        Data* k = Bytes.copy(key);
+        if (k.length() > bs)
             k = Kdf.hash(sha256, k);
-        while (k.count() < bs)
+        while (k.length() < bs)
             Bytes.add(k, (u32)0);
-        Array* inner = new Array();
-        Array* outer = new Array();
+        Data* inner = new Data();
+        Data* outer = new Data();
         for (u32 i = (u32)0; i < bs; i = i + (u32)1)
             {
             Bytes.add(inner, Bytes.at(k, i) ^ (u32)$36);
@@ -248,17 +239,17 @@ class Bytes
         apkAppend(outer, Kdf.hash(sha256, inner));
         return Kdf.hash(sha256, outer);
         }
-    static Array* pbkdf2(bool sha256, Array* pw, Array* salt, u32 iters, u32 dkLen)
+    static Data* pbkdf2(bool sha256, Data* pw, Data* salt, u32 iters, u32 dkLen)
         {
         u32 hLen = sha256 ? (u32)32 : (u32)20;
-        Array* dk = new Array();
+        Data* dk = new Data();
         u32 block = (u32)1;
-        while (dk.count() < dkLen)
+        while (dk.length() < dkLen)
             {
-            Array* t = Bytes.copy(salt);
+            Data* t = Bytes.copy(salt);
             Bytes.put32be(t, block);
-            Array* u = Kdf.hmac(sha256, pw, t);
-            Array* acc = Bytes.copy(u);
+            Data* u = Kdf.hmac(sha256, pw, t);
+            Data* acc = Bytes.copy(u);
             for (u32 i = (u32)1; i < iters; i = i + (u32)1)
                 {
                 u = Kdf.hmac(sha256, pw, u);
@@ -376,7 +367,7 @@ class Bytes
         out[1] = olo;
         }
     // 16 round keys, each 48 bits as (hi, lo)
-    static void keys(Array* k, u32 off, u32* rhi, u32* rlo)
+    static void keys(Data* k, u32 off, u32* rhi, u32* rlo)
         {
         u32 khi = (Bytes.at(k, off) << (u32)24) | (Bytes.at(k, off + (u32)1) << (u32)16) | (Bytes.at(k, off + (u32)2) << (u32)8) | Bytes.at(k, off + (u32)3);
         u32 klo = (Bytes.at(k, off + (u32)4) << (u32)24) | (Bytes.at(k, off + (u32)5) << (u32)16) | (Bytes.at(k, off + (u32)6) << (u32)8) | Bytes.at(k, off + (u32)7);
@@ -435,10 +426,10 @@ class Bytes
             }
         Des.permute(r, l, (u32)1, (u32)64, (u32)64, out);
         }
-    static Array* cbcDecrypt3(Array* key24, Array* iv, Array* ct)
+    static Data* cbcDecrypt3(Data* key24, Data* iv, Data* ct)
         {
-        if (key24.count() != (u32)24 || iv.count() != (u32)8 || (ct.count() % (u32)8) != (u32)0)
-            return (Array*)0;
+        if (key24.length() != (u32)24 || iv.length() != (u32)8 || (ct.length() % (u32)8) != (u32)0)
+            return (Data*)0;
         u32 h1[16];
         u32 l1[16];
         u32 h2[16];
@@ -450,8 +441,8 @@ class Bytes
         Des.keys(key24, (u32)16, h3, l3);
         u32 phi = (Bytes.at(iv, (u32)0) << (u32)24) | (Bytes.at(iv, (u32)1) << (u32)16) | (Bytes.at(iv, (u32)2) << (u32)8) | Bytes.at(iv, (u32)3);
         u32 plo = (Bytes.at(iv, (u32)4) << (u32)24) | (Bytes.at(iv, (u32)5) << (u32)16) | (Bytes.at(iv, (u32)6) << (u32)8) | Bytes.at(iv, (u32)7);
-        Array* out = new Array();
-        for (u32 off = (u32)0; off < ct.count(); off = off + (u32)8)
+        Data* out = new Data();
+        for (u32 off = (u32)0; off < ct.length(); off = off + (u32)8)
             {
             u32 chi = (Bytes.at(ct, off) << (u32)24) | (Bytes.at(ct, off + (u32)1) << (u32)16) | (Bytes.at(ct, off + (u32)2) << (u32)8) | Bytes.at(ct, off + (u32)3);
             u32 clo = (Bytes.at(ct, off + (u32)4) << (u32)24) | (Bytes.at(ct, off + (u32)5) << (u32)16) | (Bytes.at(ct, off + (u32)6) << (u32)8) | Bytes.at(ct, off + (u32)7);
@@ -475,10 +466,10 @@ class Bytes
         return out;
         }
     // EDE encrypt, E(k1) D(k2) E(k3), chained. `pt` is already padded to 8.
-    static Array* cbcEncrypt3(Array* key24, Array* iv, Array* pt)
+    static Data* cbcEncrypt3(Data* key24, Data* iv, Data* pt)
         {
-        if (key24.count() != (u32)24 || iv.count() != (u32)8 || (pt.count() % (u32)8) != (u32)0)
-            return (Array*)0;
+        if (key24.length() != (u32)24 || iv.length() != (u32)8 || (pt.length() % (u32)8) != (u32)0)
+            return (Data*)0;
         u32 h1[16];
         u32 l1[16];
         u32 h2[16];
@@ -490,8 +481,8 @@ class Bytes
         Des.keys(key24, (u32)16, h3, l3);
         u32 phi = (Bytes.at(iv, (u32)0) << (u32)24) | (Bytes.at(iv, (u32)1) << (u32)16) | (Bytes.at(iv, (u32)2) << (u32)8) | Bytes.at(iv, (u32)3);
         u32 plo = (Bytes.at(iv, (u32)4) << (u32)24) | (Bytes.at(iv, (u32)5) << (u32)16) | (Bytes.at(iv, (u32)6) << (u32)8) | Bytes.at(iv, (u32)7);
-        Array* out = new Array();
-        for (u32 off = (u32)0; off < pt.count(); off = off + (u32)8)
+        Data* out = new Data();
+        for (u32 off = (u32)0; off < pt.length(); off = off + (u32)8)
             {
             u32 bhi = (Bytes.at(pt, off) << (u32)24) | (Bytes.at(pt, off + (u32)1) << (u32)16) | (Bytes.at(pt, off + (u32)2) << (u32)8) | Bytes.at(pt, off + (u32)3);
             u32 blo = (Bytes.at(pt, off + (u32)4) << (u32)24) | (Bytes.at(pt, off + (u32)5) << (u32)16) | (Bytes.at(pt, off + (u32)6) << (u32)8) | Bytes.at(pt, off + (u32)7);
@@ -520,17 +511,17 @@ class Bytes
     void init(void)
         {
         }
-    static Array* tlv(u32 tag, Array* content)
+    static Data* tlv(u32 tag, Data* content)
         {
         return ApkSign.derTagged(tag, content);
         }
-    static Array* integer(Array* mag)
+    static Data* integer(Data* mag)
         {
         return ApkSign.derInteger(mag);
         }
-    static Array* integerU32(u32 v)
+    static Data* integerU32(u32 v)
         {
-        Array* be = new Array();
+        Data* be = new Data();
         Bytes.add(be, (u32)0);
         Bytes.add(be, (u32)0);
         Bytes.add(be, (u32)0);
@@ -538,18 +529,18 @@ class Bytes
         Bytes.put32be(be, v);
         return Der.integer(be);
         }
-    static Array* null(void)
+    static Data* null(void)
         {
-        return Der.tlv((u32)$05, new Array());
+        return Der.tlv((u32)$05, new Data());
         }
-    static Array* octetString(Array* b)
+    static Data* octetString(Data* b)
         {
         return Der.tlv((u32)$04, b);
         }
-    static Array* oid(String* dotted)
+    static Data* oid(String* dotted)
         {
         Array* parts = dotted.splitOnByte((u8)'.');
-        Array* content = new Array();
+        Data* content = new Data();
         u32 a1 = Der.dec((String*)parts.get((u32)0));
         u32 a2 = Der.dec((String*)parts.get((u32)1));
         Der.emitArc(content, (u32)40 * a1 + a2);
@@ -564,7 +555,7 @@ class Bytes
             v = v * (u32)10 + (u32)(s.byteAt(i) - (u8)'0');
         return v;
         }
-    static void emitArc(Array* content, u32 v)
+    static void emitArc(Data* content, u32 v)
         {
         u32 st[10];
         u32 n = (u32)0;
@@ -583,34 +574,34 @@ class Bytes
             Bytes.add(content, st[n]);
             }
         }
-    static Array* stringOf(u32 tag, String* s)
+    static Data* stringOf(u32 tag, String* s)
         {
         return Der.tlv(tag, Bytes.fromString(s));
         }
-    static Array* generalizedTime(String* s)
+    static Data* generalizedTime(String* s)
         {
         return Der.stringOf((u32)$18, s);
         }
-    static Array* concat(Array* elems)
+    static Data* concat(Array* elems)
         {
-        Array* o = new Array();
+        Data* o = new Data();
         for (u32 i = (u32)0; i < elems.count(); i = i + (u32)1)
-            apkAppend(o, (Array*)elems.get(i));
+            apkAppend(o, (Data*)elems.get(i));
         return o;
         }
-    static Array* sequence(Array* elems)
+    static Data* sequence(Array* elems)
         {
         return Der.tlv((u32)$30, Der.concat(elems));
         }
-    static Array* setOf(Array* elems)
+    static Data* setOf(Array* elems)
         {
         Array* sorted = new Array();
         for (u32 i = (u32)0; i < elems.count(); i = i + (u32)1)
             {
-            Array* e = (Array*)elems.get(i);
+            Data* e = (Data*)elems.get(i);
             u32 at = sorted.count();
             for (u32 k = (u32)0; k < sorted.count(); k = k + (u32)1)
-                if (Bytes.compare((Array*)sorted.get(k), e) > (i32)0)
+                if (Bytes.compare((Data*)sorted.get(k), e) > (i32)0)
                     {
                     at = k;
                     break;
@@ -619,11 +610,11 @@ class Bytes
             }
         return Der.tlv((u32)$31, Der.concat(sorted));
         }
-    static Array* explicitTag(u32 n, Array* contentTLV)
+    static Data* explicitTag(u32 n, Data* contentTLV)
         {
         return Der.tlv((u32)$A0 | n, contentTLV);
         }
-    static Array* implicitTag(u32 n, bool constructed, Array* contentTLV)
+    static Data* implicitTag(u32 n, bool constructed, Data* contentTLV)
         {
         u32 i = (u32)1;
         u32 l0 = Bytes.at(contentTLV, i);
@@ -641,17 +632,17 @@ class Bytes
                 i = i + (u32)1;
                 }
             }
-        Array* value = Bytes.slice(contentTLV, i, vlen);
+        Data* value = Bytes.slice(contentTLV, i, vlen);
         return Der.tlv((u32)$80 | n | (constructed ? (u32)$20 : (u32)0), value);
         }
-    static Array* two(Array* a, Array* b)
+    static Array* two(Data* a, Data* b)
         {
         Array* l = new Array();
         l.add((Object*)a);
         l.add((Object*)b);
         return l;
         }
-    static Array* one(Array* a)
+    static Array* one(Data* a)
         {
         Array* l = new Array();
         l.add((Object*)a);
@@ -662,7 +653,7 @@ class Bytes
     // ── DER: reader ─────────────────────────────────────────────────────────
     class DerReader
     {
-    Array* _b;
+    Data* _b;
     u32 _start;
     u32 _end;
     u32 _pos;
@@ -672,7 +663,7 @@ class Bytes
         _pos = (u32)0;
         _lastTag = (u32)0;
         }
-    static DerReader* over(Array* b, u32 start, u32 end)
+    static DerReader* over(Data* b, u32 start, u32 end)
         {
         DerReader* r = new DerReader();
         r._b = b;
@@ -681,9 +672,9 @@ class Bytes
         r._pos = start;
         return r;
         }
-    static DerReader* of(Array* b)
+    static DerReader* of(Data* b)
         {
-        return DerReader.over(b, (u32)0, b.count());
+        return DerReader.over(b, (u32)0, b.length());
         }
     bool atEnd(void)
         {
@@ -736,22 +727,22 @@ class Bytes
         return p[0];
         }
     // the VALUE bytes; tag via lastTag()
-    Array* readTLV(void)
+    Data* readTLV(void)
         {
         u32 p[4];
         if (!peek(p))
-            return (Array*)0;
+            return (Data*)0;
         _pos = p[3];
         _lastTag = p[0];
         return Bytes.slice(_b, p[1], p[2]);
         }
     // the whole element (tag + length + value)
-    Array* readElement(void)
+    Data* readElement(void)
         {
         u32 p[4];
         if (!peek(p))
-            return (Array*)0;
-        Array* whole = Bytes.slice(_b, _pos, p[3] - _pos);
+            return (Data*)0;
+        Data* whole = Bytes.slice(_b, _pos, p[3] - _pos);
         _pos = p[3];
         _lastTag = p[0];
         return whole;
@@ -768,7 +759,7 @@ class Bytes
         return DerReader.over(_b, p[1], p[3]);
         }
     // issuer Name (verbatim TLV) and serialNumber (value) of an X.509 cert
-    static bool certificate(Array* certDer, Array** issuerOut, Array** serialOut)
+    static bool certificate(Data* certDer, Data** issuerOut, Data** serialOut)
         {
         DerReader* top = DerReader.of(certDer);
         DerReader* cert = top.readConstructed();
@@ -779,19 +770,19 @@ class Bytes
             return false;
         if (tbs.peekTag() == (u32)$A0)
             tbs.readElement(); // version
-        Array* serial = tbs.readTLV();
-        if (serial == (Array*)0 || tbs.lastTag() != (u32)$02)
+        Data* serial = tbs.readTLV();
+        if (serial == (Data*)0 || tbs.lastTag() != (u32)$02)
             return false;
         tbs.readElement(); // signatureAlg
-        Array* issuer = tbs.readElement();
-        if (issuer == (Array*)0)
+        Data* issuer = tbs.readElement();
+        if (issuer == (Data*)0)
             return false;
         *serialOut = serial;
         *issuerOut = issuer;
         return true;
         }
     // subject organizationalUnit (2.5.4.11) — Apple's Team ID
-    static String* teamId(Array* certDer)
+    static String* teamId(Data* certDer)
         {
         DerReader* top = DerReader.of(certDer);
         DerReader* cert = top.readConstructed();
@@ -819,12 +810,12 @@ class Bytes
                 DerReader* atv = rdn.readConstructed();
                 if (atv == (DerReader*)0)
                     break;
-                Array* oid = atv.readTLV();
-                Array* val = atv.readTLV();
-                if (oid != (Array*)0 && val != (Array*)0 && oid.count() == (u32)3 && Bytes.at(oid, (u32)0) == (u32)$55 && Bytes.at(oid, (u32)1) == (u32)$04 && Bytes.at(oid, (u32)2) == (u32)$0b)
+                Data* oid = atv.readTLV();
+                Data* val = atv.readTLV();
+                if (oid != (Data*)0 && val != (Data*)0 && oid.length() == (u32)3 && Bytes.at(oid, (u32)0) == (u32)$55 && Bytes.at(oid, (u32)1) == (u32)$04 && Bytes.at(oid, (u32)2) == (u32)$0b)
                     {
                     String* s = new String();
-                    for (u32 i = (u32)0; i < val.count(); i = i + (u32)1)
+                    for (u32 i = (u32)0; i < val.length(); i = i + (u32)1)
                         s.appendByte((u8)Bytes.at(val, i));
                     return s;
                     }
@@ -838,7 +829,7 @@ class Bytes
     class PemBlock
     {
     String* _label;
-    Array* _der;
+    Data* _der;
     void init(void)
         {
         }
@@ -846,7 +837,7 @@ class Bytes
         {
         return _label;
         }
-    Array* der(void)
+    Data* der(void)
         {
         return _der;
         }
@@ -869,9 +860,9 @@ class Bytes
             return (u32)63;
         return (u32)$FFFFFFFF;
         }
-    static Array* base64Decode(String* s)
+    static Data* base64Decode(String* s)
         {
-        Array* out = new Array();
+        Data* out = new Data();
         u32 acc = (u32)0;
         u32 nbits = (u32)0;
         for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
@@ -894,11 +885,11 @@ class Bytes
         }
     // Standard base64 (A-Za-z0-9+/, '=' padded). Deterministic, so it matches
     // NSData's encoder byte for byte — used for the CodeResources hashes.
-    static String* base64Encode(Array* bytes)
+    static String* base64Encode(Data* bytes)
         {
         String* A = String.withCString("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/");
         String* out = String.withCString("");
-        u32 n = bytes.count();
+        u32 n = bytes.length();
         u32 i = (u32)0;
         while (i + (u32)3 <= n)
             {
@@ -931,7 +922,7 @@ class Bytes
     // base64 in 64-column lines joined by CR LF — NSData's
     // NSDataBase64Encoding64CharacterLineLength with no line-ending option,
     // which is what the identity bundles have always been written with.
-    static String* base64Lines(Array* bytes)
+    static String* base64Lines(Data* bytes)
         {
         String* flat = Pem.base64Encode(bytes);
         String* out = String.withCString("");
@@ -946,7 +937,7 @@ class Bytes
         return out;
         }
     // One PEM block: -----BEGIN L-----\n<base64 lines>\n-----END L-----\n
-    static String* block(String* label, Array* der)
+    static String* block(String* label, Data* der)
         {
         String* s = String.withCString("-----BEGIN ");
         s.append(label);
@@ -993,7 +984,7 @@ class Bytes
     // ── CodeResources sealer (docs/ios/bundle-signing.md, gate 1/3) ──────────
     // Byte-identical to Apple codesign's _CodeSignature/CodeResources. The caller
     // (which has Files) passes parallel arrays: `names` (String* relative paths)
-    // and `contents` (Array* raw bytes). rules/rules2 are the constant default set,
+    // and `contents` (Data* raw bytes). rules/rules2 are the constant default set,
     // embedded verbatim from the golden; only files/files2 are dynamic. Keys are
     // emitted ascending by byte value, matching CoreFoundation's plist writer.
     class CodeRes
@@ -1055,7 +1046,7 @@ class Bytes
             {
             u32 i = ((Number*)idx.get(t)).asU32();
             String* nm = (String*)names.get(i);
-            Array* by = (Array*)contents.get(i);
+            Data* by = (Data*)contents.get(i);
             String* h = Pem.base64Encode(Sha1.digest(by));
             out.appendCString("\t\t<key>");
             out.append(nm);
@@ -1070,7 +1061,7 @@ class Bytes
             String* nm = (String*)names.get(i);
             if (CodeRes.omit2(nm))
                 continue;
-            Array* by = (Array*)contents.get(i);
+            Data* by = (Data*)contents.get(i);
             String* h = Pem.base64Encode(Bytes.sha256(by));
             out.appendCString("\t\t<key>");
             out.append(nm);
@@ -1095,21 +1086,21 @@ class Bytes
         {
         return _why;
         }
-    Array* fail(string m)
+    Data* fail(string m)
         {
         _why = String.withCString(m);
-        return (Array*)0;
+        return (Data*)0;
         }
-    static bool oidIs(Array* got, u32* want, u32 n)
+    static bool oidIs(Data* got, u32* want, u32 n)
         {
-        if (got == (Array*)0 || got.count() != n)
+        if (got == (Data*)0 || got.length() != n)
             return false;
         for (u32 i = (u32)0; i < n; i = i + (u32)1)
             if (Bytes.at(got, i) != want[i])
                 return false;
         return true;
         }
-    Array* decrypt(Array* der, String* passphrase)
+    Data* decrypt(Data* der, String* passphrase)
         {
         DerReader* top = DerReader.of(der);
         DerReader* epki = top.readConstructed();
@@ -1118,8 +1109,8 @@ class Bytes
         DerReader* alg = epki.readConstructed();
         if (alg == (DerReader*)0)
             return fail("no encryptionAlgorithm");
-        Array* algOid = alg.readTLV();
-        if (algOid == (Array*)0 || alg.lastTag() != (u32)$06)
+        Data* algOid = alg.readTLV();
+        if (algOid == (Data*)0 || alg.lastTag() != (u32)$06)
             return fail("no alg OID");
         u32 pbes2[9] = {0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x05, 0x0d};
         if (!Pkcs8.oidIs(algOid, pbes2, (u32)9))
@@ -1130,27 +1121,27 @@ class Bytes
         DerReader* kdf = params.readConstructed();
         if (kdf == (DerReader*)0)
             return fail("no KDF");
-        Array* kdfOid = kdf.readTLV();
+        Data* kdfOid = kdf.readTLV();
         u32 pbkdf2[9] = {0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x05, 0x0c};
         if (!Pkcs8.oidIs(kdfOid, pbkdf2, (u32)9))
             return fail("only PBKDF2 key derivation is supported");
         DerReader* kdfp = kdf.readConstructed();
         if (kdfp == (DerReader*)0)
             return fail("no PBKDF2 params");
-        Array* salt = kdfp.readTLV();
-        if (salt == (Array*)0 || kdfp.lastTag() != (u32)$04)
+        Data* salt = kdfp.readTLV();
+        if (salt == (Data*)0 || kdfp.lastTag() != (u32)$04)
             return fail("bad PBKDF2 salt");
-        Array* iterData = kdfp.readTLV();
-        if (iterData == (Array*)0 || kdfp.lastTag() != (u32)$02)
+        Data* iterData = kdfp.readTLV();
+        if (iterData == (Data*)0 || kdfp.lastTag() != (u32)$02)
             return fail("bad PBKDF2 iterations");
         u32 iters = (u32)0;
-        for (u32 i = (u32)0; i < iterData.count(); i = i + (u32)1)
+        for (u32 i = (u32)0; i < iterData.length(); i = i + (u32)1)
             iters = (iters << (u32)8) | Bytes.at(iterData, i);
         bool prfSha256 = false;
         if (kdfp.peekTag() == (u32)$30)
             {
             DerReader* prf = kdfp.readConstructed();
-            Array* prfOid = prf.readTLV();
+            Data* prfOid = prf.readTLV();
             u32 hmacSha256[8] = {0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x02, 0x09};
             if (Pkcs8.oidIs(prfOid, hmacSha256, (u32)8))
                 prfSha256 = true;
@@ -1158,48 +1149,48 @@ class Bytes
         DerReader* enc = params.readConstructed();
         if (enc == (DerReader*)0)
             return fail("no encryption scheme");
-        Array* cipherOid = enc.readTLV();
-        Array* iv = enc.readTLV();
-        if (iv == (Array*)0 || enc.lastTag() != (u32)$04)
+        Data* cipherOid = enc.readTLV();
+        Data* iv = enc.readTLV();
+        if (iv == (Data*)0 || enc.lastTag() != (u32)$04)
             return fail("bad cipher IV");
         u32 des3[8] = {0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x03, 0x07};
         if (!Pkcs8.oidIs(cipherOid, des3, (u32)8))
             return fail("only des-ede3-cbc is supported");
-        Array* ct = epki.readTLV();
-        if (ct == (Array*)0 || epki.lastTag() != (u32)$04)
+        Data* ct = epki.readTLV();
+        if (ct == (Data*)0 || epki.lastTag() != (u32)$04)
             return fail("no encryptedData");
-        Array* dk = Kdf.pbkdf2(prfSha256, Bytes.fromString(passphrase), salt, iters, (u32)24);
-        Array* plain = Des.cbcDecrypt3(dk, iv, ct);
-        if (plain == (Array*)0 || plain.count() == (u32)0)
+        Data* dk = Kdf.pbkdf2(prfSha256, Bytes.fromString(passphrase), salt, iters, (u32)24);
+        Data* plain = Des.cbcDecrypt3(dk, iv, ct);
+        if (plain == (Data*)0 || plain.length() == (u32)0)
             return fail("decryption failed");
-        u32 pad = Bytes.at(plain, plain.count() - (u32)1);
-        if (pad == (u32)0 || pad > (u32)8 || pad > plain.count())
+        u32 pad = Bytes.at(plain, plain.length() - (u32)1);
+        if (pad == (u32)0 || pad > (u32)8 || pad > plain.length())
             return fail("bad passphrase (padding)");
-        for (u32 i = plain.count() - pad; i < plain.count(); i = i + (u32)1)
+        for (u32 i = plain.length() - pad; i < plain.length(); i = i + (u32)1)
             if (Bytes.at(plain, i) != pad)
                 return fail("bad passphrase (padding)");
-        return Bytes.slice(plain, (u32)0, plain.count() - pad);
+        return Bytes.slice(plain, (u32)0, plain.length() - pad);
         }
     // The inverse: wrap `keyDer` as an EncryptedPrivateKeyInfo under PBES2
     // (PBKDF2-HMAC-SHA1, 2048 rounds, des-ede3-cbc) — the form macOS exports,
     // so `decrypt` reads both. The caller supplies 8 bytes each of salt and IV
     // from the OS; this class has no entropy of its own.
-    static Array* encrypt(Array* keyDer, String* passphrase, Array* salt, Array* iv)
+    static Data* encrypt(Data* keyDer, String* passphrase, Data* salt, Data* iv)
         {
         u32 iters = (u32)2048;
-        Array* dk = Kdf.pbkdf2(false, Bytes.fromString(passphrase), salt, iters, (u32)24);
-        Array* padded = Bytes.copy(keyDer);
-        u32 pad = (u32)8 - (keyDer.count() % (u32)8);
+        Data* dk = Kdf.pbkdf2(false, Bytes.fromString(passphrase), salt, iters, (u32)24);
+        Data* padded = Bytes.copy(keyDer);
+        u32 pad = (u32)8 - (keyDer.length() % (u32)8);
         for (u32 i = (u32)0; i < pad; i = i + (u32)1)
             Bytes.add(padded, pad);
-        Array* ct = Des.cbcEncrypt3(dk, iv, padded);
-        if (ct == (Array*)0)
-            return (Array*)0;
-        Array* kdf = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.5.12")),
+        Data* ct = Des.cbcEncrypt3(dk, iv, padded);
+        if (ct == (Data*)0)
+            return (Data*)0;
+        Data* kdf = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.5.12")),
                                           Der.sequence(Der.two(Der.octetString(salt), Der.integerU32(iters)))));
-        Array* enc = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.3.7")),
+        Data* enc = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.3.7")),
                                           Der.octetString(iv)));
-        Array* algid = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.5.13")),
+        Data* algid = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.5.13")),
                                             Der.sequence(Der.two(kdf, enc))));
         return Der.sequence(Der.two(algid, Der.octetString(ct)));
         }
@@ -1208,17 +1199,17 @@ class Bytes
     // ── the identity bundle ─────────────────────────────────────────────────
     class Identity
     {
-    Array* _leaf;  // leaf certificate DER
+    Data* _leaf;  // leaf certificate DER
     Array* _chain; // Array@ of DER
-    Array* _modulus;
-    Array* _privExp;
-    Array* _entitlements; // XML bytes or nil
+    Data* _modulus;
+    Data* _privExp;
+    Data* _entitlements; // XML bytes or nil
     String* _why;
     void init(void)
         {
         _chain = new Array();
         }
-    Array* leaf(void)
+    Data* leaf(void)
         {
         return _leaf;
         }
@@ -1226,15 +1217,15 @@ class Bytes
         {
         return _chain;
         }
-    Array* modulus(void)
+    Data* modulus(void)
         {
         return _modulus;
         }
-    Array* privateExponent(void)
+    Data* privateExponent(void)
         {
         return _privExp;
         }
-    Array* entitlements(void)
+    Data* entitlements(void)
         {
         return _entitlements;
         }
@@ -1244,30 +1235,30 @@ class Bytes
         }
 
     // RSAPrivateKey (PKCS#1) or PrivateKeyInfo (PKCS#8) wrapping one
-    static bool rsaKey(Array* der, Array** nOut, Array** dOut)
+    static bool rsaKey(Data* der, Data** nOut, Data** dOut)
         {
         DerReader* top = DerReader.of(der);
         DerReader* seq = top.readConstructed();
         if (seq == (DerReader*)0)
             return false;
-        Array* first = seq.readTLV();
-        if (first == (Array*)0 || seq.lastTag() != (u32)$02)
+        Data* first = seq.readTLV();
+        if (first == (Data*)0 || seq.lastTag() != (u32)$02)
             return false;
         u32 nt = seq.peekTag();
         if (nt == (u32)$30)
             {
             seq.readElement(); // algorithm
-            Array* inner = seq.readTLV();
-            if (inner == (Array*)0 || seq.lastTag() != (u32)$04)
+            Data* inner = seq.readTLV();
+            if (inner == (Data*)0 || seq.lastTag() != (u32)$04)
                 return false;
             return Identity.rsaKey(inner, nOut, dOut);
             }
-        Array* n = seq.readTLV();
-        if (n == (Array*)0 || seq.lastTag() != (u32)$02)
+        Data* n = seq.readTLV();
+        if (n == (Data*)0 || seq.lastTag() != (u32)$02)
             return false;
         seq.readTLV(); // e
-        Array* d = seq.readTLV();
-        if (d == (Array*)0 || seq.lastTag() != (u32)$02)
+        Data* d = seq.readTLV();
+        if (d == (Data*)0 || seq.lastTag() != (u32)$02)
             return false;
         *nOut = n;
         *dOut = d;
@@ -1278,7 +1269,7 @@ class Bytes
         Identity* id = new Identity();
         Array* blocks = Pem.blocks(text);
         Array* certs = new Array();
-        Array* keyDer = (Array*)0;
+        Data* keyDer = (Data*)0;
         bool keyEncrypted = false;
         for (u32 i = (u32)0; i < blocks.count(); i = i + (u32)1)
             {
@@ -1300,7 +1291,7 @@ class Bytes
             id._why = String.withCString("no CERTIFICATE in the identity bundle");
             return id;
             }
-        if (keyDer == (Array*)0)
+        if (keyDer == (Data*)0)
             {
             id._why = String.withCString("no PRIVATE KEY in the identity bundle");
             return id;
@@ -1313,22 +1304,22 @@ class Bytes
                 return id;
                 }
             Pkcs8* p8 = new Pkcs8();
-            Array* plain = p8.decrypt(keyDer, passphrase);
-            if (plain == (Array*)0)
+            Data* plain = p8.decrypt(keyDer, passphrase);
+            if (plain == (Data*)0)
                 {
                 id._why = p8.why();
                 return id;
                 }
             keyDer = plain;
             }
-        Array* n = (Array*)0;
-        Array* d = (Array*)0;
+        Data* n = (Data*)0;
+        Data* d = (Data*)0;
         if (!Identity.rsaKey(keyDer, &n, &d))
             {
             id._why = String.withCString("private key is not a parseable RSA key");
             return id;
             }
-        id._leaf = (Array*)certs.get((u32)0);
+        id._leaf = (Data*)certs.get((u32)0);
         for (u32 i = (u32)1; i < certs.count(); i = i + (u32)1)
             id._chain.add(certs.get(i));
         id._modulus = n;
@@ -1337,13 +1328,13 @@ class Bytes
         }
     // The bundle `fromPEM` reads: the leaf, its chain, the key block under
     // `keyLabel`, and the entitlements XML when there is one.
-    static String* pemBundle(Array* leaf, Array* chain, Array* keyBlock, String* keyLabel, Array* entitlementsXml)
+    static String* pemBundle(Data* leaf, Array* chain, Data* keyBlock, String* keyLabel, Data* entitlementsXml)
         {
         String* s = Pem.block(String.withCString("CERTIFICATE"), leaf);
         for (u32 i = (u32)0; i < chain.count(); i = i + (u32)1)
-            s.append(Pem.block(String.withCString("CERTIFICATE"), (Array*)chain.get(i)));
+            s.append(Pem.block(String.withCString("CERTIFICATE"), (Data*)chain.get(i)));
         s.append(Pem.block(keyLabel, keyBlock));
-        if (entitlementsXml != (Array*)0)
+        if (entitlementsXml != (Data*)0)
             s.append(Pem.block(String.withCString("XCC ENTITLEMENTS"), entitlementsXml));
         return s;
         }
@@ -1355,19 +1346,19 @@ class Bytes
     void init(void)
         {
         }
-    static Array* rsaSignPKCS1(Array* digestInfo, Array* modulus, Array* privExp)
+    static Data* rsaSignPKCS1(Data* digestInfo, Data* modulus, Data* privExp)
         {
         u32 s = (u32)0;
-        while (s < modulus.count() && Bytes.at(modulus, s) == (u32)0)
+        while (s < modulus.length() && Bytes.at(modulus, s) == (u32)0)
             s = s + (u32)1;
-        Array* mod = Bytes.slice(modulus, s, modulus.count() - s);
-        u32 mlen = mod.count();
-        if (mlen < digestInfo.count() + (u32)11)
-            return (Array*)0;
-        Array* em = new Array();
+        Data* mod = Bytes.slice(modulus, s, modulus.length() - s);
+        u32 mlen = mod.length();
+        if (mlen < digestInfo.length() + (u32)11)
+            return (Data*)0;
+        Data* em = new Data();
         Bytes.add(em, (u32)0);
         Bytes.add(em, (u32)1);
-        u32 psLen = mlen - digestInfo.count() - (u32)3;
+        u32 psLen = mlen - digestInfo.length() - (u32)3;
         for (u32 i = (u32)0; i < psLen; i = i + (u32)1)
             Bytes.add(em, (u32)$FF);
         Bytes.add(em, (u32)0);
@@ -1378,34 +1369,34 @@ class Bytes
         Bignum* sig = Bignum.modexp(m, d, n);
         return sig.toBytes(mlen);
         }
-    static Array* sha256DigestInfo(Array* digest)
+    static Data* sha256DigestInfo(Data* digest)
         {
-        Array* algo = Der.sequence(Der.two(Der.oid(String.withCString("2.16.840.1.101.3.4.2.1")), Der.null()));
+        Data* algo = Der.sequence(Der.two(Der.oid(String.withCString("2.16.840.1.101.3.4.2.1")), Der.null()));
         return Der.sequence(Der.two(algo, Der.octetString(digest)));
         }
     // A detached SignedData over the CodeDirectory hash, one RSA/SHA-256 signer.
-    static Array* signedData(Array* cdHash, Array* leaf, Array* chain, Array* modulus, Array* privExp, String* signingTime)
+    static Data* signedData(Data* cdHash, Data* leaf, Array* chain, Data* modulus, Data* privExp, String* signingTime)
         {
-        Array* issuer = (Array*)0;
-        Array* serial = (Array*)0;
+        Data* issuer = (Data*)0;
+        Data* serial = (Data*)0;
         if (!DerReader.certificate(leaf, &issuer, &serial))
-            return (Array*)0;
+            return (Data*)0;
         String* oidData = String.withCString("1.2.840.113549.1.7.1");
-        Array* attrContentType = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.9.3")), Der.setOf(Der.one(Der.oid(oidData)))));
-        Array* attrMsgDigest = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.9.4")), Der.setOf(Der.one(Der.octetString(cdHash)))));
-        Array* attrSigningTime = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.9.5")), Der.setOf(Der.one(Der.generalizedTime(signingTime)))));
+        Data* attrContentType = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.9.3")), Der.setOf(Der.one(Der.oid(oidData)))));
+        Data* attrMsgDigest = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.9.4")), Der.setOf(Der.one(Der.octetString(cdHash)))));
+        Data* attrSigningTime = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.9.5")), Der.setOf(Der.one(Der.generalizedTime(signingTime)))));
         Array* attrs = new Array();
         attrs.add((Object*)attrContentType);
         attrs.add((Object*)attrMsgDigest);
         attrs.add((Object*)attrSigningTime);
-        Array* attrsForSigning = Der.setOf(attrs);
-        Array* signature = Cms.rsaSignPKCS1(Cms.sha256DigestInfo(Bytes.sha256(attrsForSigning)), modulus, privExp);
-        if (signature == (Array*)0)
-            return (Array*)0;
-        Array* signedAttrsImplicit = Der.implicitTag((u32)0, true, attrsForSigning);
-        Array* sid = Der.sequence(Der.two(issuer, Der.tlv((u32)$02, serial)));
-        Array* digAlg = Der.sequence(Der.two(Der.oid(String.withCString("2.16.840.1.101.3.4.2.1")), Der.null()));
-        Array* sigAlg = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.1.1")), Der.null()));
+        Data* attrsForSigning = Der.setOf(attrs);
+        Data* signature = Cms.rsaSignPKCS1(Cms.sha256DigestInfo(Bytes.sha256(attrsForSigning)), modulus, privExp);
+        if (signature == (Data*)0)
+            return (Data*)0;
+        Data* signedAttrsImplicit = Der.implicitTag((u32)0, true, attrsForSigning);
+        Data* sid = Der.sequence(Der.two(issuer, Der.tlv((u32)$02, serial)));
+        Data* digAlg = Der.sequence(Der.two(Der.oid(String.withCString("2.16.840.1.101.3.4.2.1")), Der.null()));
+        Data* sigAlg = Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.1.1")), Der.null()));
         Array* si = new Array();
         si.add((Object*)Der.integerU32((u32)1));
         si.add((Object*)sid);
@@ -1413,21 +1404,21 @@ class Bytes
         si.add((Object*)signedAttrsImplicit);
         si.add((Object*)sigAlg);
         si.add((Object*)Der.octetString(signature));
-        Array* signerInfo = Der.sequence(si);
+        Data* signerInfo = Der.sequence(si);
         Array* certs = new Array();
         certs.add((Object*)leaf);
         for (u32 i = (u32)0; i < chain.count(); i = i + (u32)1)
             certs.add(chain.get(i));
-        Array* certSet = Der.implicitTag((u32)0, true, Der.sequence(certs));
-        Array* digAlgs = Der.setOf(Der.one(Der.sequence(Der.two(Der.oid(String.withCString("2.16.840.1.101.3.4.2.1")), Der.null()))));
-        Array* encap = Der.sequence(Der.one(Der.oid(oidData)));
+        Data* certSet = Der.implicitTag((u32)0, true, Der.sequence(certs));
+        Data* digAlgs = Der.setOf(Der.one(Der.sequence(Der.two(Der.oid(String.withCString("2.16.840.1.101.3.4.2.1")), Der.null()))));
+        Data* encap = Der.sequence(Der.one(Der.oid(oidData)));
         Array* sd = new Array();
         sd.add((Object*)Der.integerU32((u32)1));
         sd.add((Object*)digAlgs);
         sd.add((Object*)encap);
         sd.add((Object*)certSet);
         sd.add((Object*)Der.setOf(Der.one(signerInfo)));
-        Array* signedData = Der.sequence(sd);
+        Data* signedData = Der.sequence(sd);
         return Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.7.2")), Der.explicitTag((u32)0, signedData)));
         }
     }
@@ -1444,13 +1435,13 @@ class Bytes
     void init(void)
         {
         }
-    static Array* utf8(String* s)
+    static Data* utf8(String* s)
         {
         return Der.stringOf((u32)$0c, s);
         }
-    static Array* boolean(bool v)
+    static Data* boolean(bool v)
         {
-        Array* b = new Array();
+        Data* b = new Data();
         Bytes.add(b, v ? (u32)$FF : (u32)0);
         return Der.tlv((u32)$01, b);
         }
@@ -1479,7 +1470,7 @@ class Bytes
     // is unsupported), and write the position just past the value into end[0].
     // string -> UTF8String, <true/>/<false/> -> BOOLEAN, <array> -> SEQUENCE of
     // its elements in order (recursive).
-    static Array* parseValue(String* xml, u32 vp, Array* end)
+    static Data* parseValue(String* xml, u32 vp, Array* end)
         {
         vp = DerEnt.skipWs(xml, vp);
         if (DerEnt.startsAt(xml, vp, String.withCString("<string>")))
@@ -1487,7 +1478,7 @@ class Bytes
             u32 vs = vp + (u32)8;
             u32 ve = xml.byteIndexOf(String.withCString("</string>"), vs);
             if (ve == String.notFound())
-                return (Array*)0;
+                return (Data*)0;
             end.set((u32)0, (Object*)Number.withU32(ve + (u32)9));
             return DerEnt.utf8(xml.substringBytes(vs, ve - vs));
             }
@@ -1504,7 +1495,7 @@ class Bytes
         if (DerEnt.startsAt(xml, vp, String.withCString("<array>")))
             {
             u32 p = vp + (u32)7;
-            Array* content = new Array();
+            Data* content = new Data();
             while (true)
                 {
                 p = DerEnt.skipWs(xml, p);
@@ -1514,23 +1505,23 @@ class Bytes
                     break;
                     }
                 if (p >= xml.byteLength())
-                    return (Array*)0;
-                Array* ed = DerEnt.parseValue(xml, p, end);
-                if (ed == (Array*)0)
-                    return (Array*)0;
+                    return (Data*)0;
+                Data* ed = DerEnt.parseValue(xml, p, end);
+                if (ed == (Data*)0)
+                    return (Data*)0;
                 p = ((Number*)end.get((u32)0)).asU32();
                 apkAppend(content, ed);
                 }
             end.set((u32)0, (Object*)Number.withU32(p));
             return Der.tlv((u32)$30, content); // SEQUENCE
             }
-        return (Array*)0;
+        return (Data*)0;
         }
     // Build the slot-7 DER from entitlements XML bytes; 0 if a value type is unsupported.
-    static Array* build(Array* xmlBytes)
+    static Data* build(Data* xmlBytes)
         {
         String* xml = String.withCString("");
-        for (u32 i = (u32)0; i < xmlBytes.count(); i = i + (u32)1)
+        for (u32 i = (u32)0; i < xmlBytes.length(); i = i + (u32)1)
             xml.appendByte((u8)Bytes.at(xmlBytes, i));
         Array* keys = new Array();
         Array* vals = new Array();
@@ -1549,9 +1540,9 @@ class Bytes
             if (ke == String.notFound())
                 break;
             String* key = xml.substringBytes(ks, ke - ks);
-            Array* vd = DerEnt.parseValue(xml, ke + KEYC.byteLength(), end);
-            if (vd == (Array*)0)
-                return (Array*)0;
+            Data* vd = DerEnt.parseValue(xml, ke + KEYC.byteLength(), end);
+            if (vd == (Data*)0)
+                return (Data*)0;
             pos = ((Number*)end.get((u32)0)).asU32();
             keys.add((Object*)key);
             vals.add((Object*)vd);
@@ -1576,14 +1567,14 @@ class Bytes
         for (u32 t = (u32)0; t < idx.count(); t = t + (u32)1)
             {
             u32 i = ((Number*)idx.get(t)).asU32();
-            Array* kv = new Array();
+            Data* kv = new Data();
             apkAppend(kv, DerEnt.utf8((String*)keys.get(i)));
-            apkAppend(kv, (Array*)vals.get(i));
+            apkAppend(kv, (Data*)vals.get(i));
             pairs.add((Object*)Der.tlv((u32)$30, kv));
             }
-        Array* pairsContent = Der.concat(pairs);
-        Array* ctx = Der.tlv((u32)$B0, pairsContent);
-        Array* inner = new Array();
+        Data* pairsContent = Der.concat(pairs);
+        Data* ctx = Der.tlv((u32)$B0, pairsContent);
+        Data* inner = new Data();
         apkAppend(inner, Der.integerU32((u32)1));
         apkAppend(inner, ctx);
         return Der.tlv((u32)$70, inner);
@@ -1600,24 +1591,24 @@ class Bytes
         {
         return _why;
         }
-    Array* fail(string m)
+    Data* fail(string m)
         {
         _why = String.withCString(m);
-        return (Array*)0;
+        return (Data*)0;
         }
 
-    static Array* wrapBlob(u32 magic, Array* body)
+    static Data* wrapBlob(u32 magic, Data* body)
         {
-        Array* d = new Array();
+        Data* d = new Data();
         Bytes.put32be(d, magic);
-        Bytes.put32be(d, (u32)8 + body.count());
+        Bytes.put32be(d, (u32)8 + body.length());
         apkAppend(d, body);
         return d;
         }
 
     // CodeDirectory v0x20400. `specialSlots`/`specialHashes` are parallel arrays.
-    static Array* codeDirectory(String* ident, u32 codeLimit, u32 nCodeSlots, u32 execSegLimit,
-                                Array* specialSlots, Array* specialHashes, Array* codeHashes, String* teamId)
+    static Data* codeDirectory(String* ident, u32 codeLimit, u32 nCodeSlots, u32 execSegLimit,
+                                Array* specialSlots, Array* specialHashes, Data* codeHashes, String* teamId)
         {
         u32 hashSize = (u32)32;
         u32 idLen = ident.byteLength();
@@ -1626,7 +1617,7 @@ class Bytes
         u32 nSpecial = (u32)0;
         for (u32 i = (u32)0; i < specialSlots.count(); i = i + (u32)1)
             {
-            u32 s = Bytes.at(specialSlots, i);
+            u32 s = ((Number*)specialSlots.get(i)).asU32();
             if (s > nSpecial)
                 nSpecial = s;
             }
@@ -1636,7 +1627,7 @@ class Bytes
         u32 afterStrings = identOffset + idLen + (u32)1 + (team ? teamLen + (u32)1 : (u32)0);
         u32 hashOffset = afterStrings + nSpecial * hashSize;
         u32 cdLength = hashOffset + nCodeSlots * hashSize;
-        Array* cd = new Array();
+        Data* cd = new Data();
         Bytes.put32be(cd, (u32)$fade0c02);
         Bytes.put32be(cd, cdLength);
         Bytes.put32be(cd, (u32)$20400);
@@ -1667,11 +1658,11 @@ class Bytes
             }
         for (u32 i = nSpecial; i >= (u32)1; i = i - (u32)1)
             {
-            Array* h = (Array*)0;
+            Data* h = (Data*)0;
             for (u32 k = (u32)0; k < specialSlots.count(); k = k + (u32)1)
-                if (Bytes.at(specialSlots, k) == i)
-                    h = (Array*)specialHashes.get(k);
-            if (h != (Array*)0)
+                if (((Number*)specialSlots.get(k)).asU32() == i)
+                    h = (Data*)specialHashes.get(k);
+            if (h != (Data*)0)
                 apkAppend(cd, h);
             else
                 apkAppend(cd, Bytes.of((u32)32, (u32)0));
@@ -1681,26 +1672,26 @@ class Bytes
         apkAppend(cd, codeHashes);
         return cd;
         }
-    static Array* superBlob(Array* slots, Array* datas)
+    static Data* superBlob(Array* slots, Array* datas)
         {
         u32 count = slots.count();
         u32 headerAndIndex = (u32)12 + count * (u32)8;
         u32 total = headerAndIndex;
         for (u32 i = (u32)0; i < count; i = i + (u32)1)
-            total = total + ((Array*)datas.get(i)).count();
-        Array* sb = new Array();
+            total = total + ((Data*)datas.get(i)).length();
+        Data* sb = new Data();
         Bytes.put32be(sb, (u32)$fade0cc0);
         Bytes.put32be(sb, total);
         Bytes.put32be(sb, count);
         u32 off = headerAndIndex;
         for (u32 i = (u32)0; i < count; i = i + (u32)1)
             {
-            Bytes.put32be(sb, Bytes.at(slots, i));
+            Bytes.put32be(sb, ((Number*)slots.get(i)).asU32());
             Bytes.put32be(sb, off);
-            off = off + ((Array*)datas.get(i)).count();
+            off = off + ((Data*)datas.get(i)).length();
             }
         for (u32 i = (u32)0; i < count; i = i + (u32)1)
-            apkAppend(sb, (Array*)datas.get(i));
+            apkAppend(sb, (Data*)datas.get(i));
         return sb;
         }
     static u32 roundUp(u32 v, u32 a)
@@ -1708,9 +1699,9 @@ class Bytes
         return (v + a - (u32)1) & ~(a - (u32)1);
         }
 
-    Array* resign(Array* macho, String* identifier, Identity* id, Array* entitlementsXml, Array* infoPlist, Array* codeResources, String* signingTime)
+    Data* resign(Data* macho, String* identifier, Identity* id, Data* entitlementsXml, Data* infoPlist, Data* codeResources, String* signingTime)
         {
-        u32 flen = macho.count();
+        u32 flen = macho.length();
         if (flen < (u32)32)
             return fail("file too small");
         if (Bytes.rd32le(macho, (u32)0) != (u32)$FEEDFACF)
@@ -1762,83 +1753,83 @@ class Bytes
             return fail("bad code-signature offset");
         u32 nCodeSlots = (codeLimit + (u32)4095) / (u32)4096;
         String* teamId = DerReader.teamId(id.leaf());
-        Array* reqBody = new Array();
+        Data* reqBody = new Data();
         Bytes.put32be(reqBody, (u32)0);
-        Array* reqBlob = CodeSign.wrapBlob((u32)$fade0c01, reqBody);
+        Data* reqBlob = CodeSign.wrapBlob((u32)$fade0c01, reqBody);
         Array* specialSlots = new Array();
         Array* specialBlobs = new Array();
-        Bytes.add(specialSlots, (u32)2);
+        specialSlots.add((Object*)Number.withU32((u32)2));
         specialBlobs.add((Object*)reqBlob);
-        Array* entBlob = (Array*)0;
-        Array* derBlob = (Array*)0;
-        if (entitlementsXml != (Array*)0)
+        Data* entBlob = (Data*)0;
+        Data* derBlob = (Data*)0;
+        if (entitlementsXml != (Data*)0)
             {
             entBlob = CodeSign.wrapBlob((u32)$fade7171, entitlementsXml);
-            Bytes.add(specialSlots, (u32)5);
+            specialSlots.add((Object*)Number.withU32((u32)5));
             specialBlobs.add((Object*)entBlob);
             // DER entitlements (slot 7): iOS installd requires it (macOS
             // codesign --verify does not — a device rejects the app 0xe8008029).
-            Array* der = DerEnt.build(entitlementsXml);
-            if (der != (Array*)0)
+            Data* der = DerEnt.build(entitlementsXml);
+            if (der != (Data*)0)
                 {
                 derBlob = CodeSign.wrapBlob((u32)$fade7172, der);
-                Bytes.add(specialSlots, (u32)7);
+                specialSlots.add((Object*)Number.withU32((u32)7));
                 specialBlobs.add((Object*)derBlob);
                 }
             }
         Array* specialHashes = new Array();
         for (u32 i = (u32)0; i < specialBlobs.count(); i = i + (u32)1)
-            specialHashes.add((Object*)Bytes.sha256((Array*)specialBlobs.get(i)));
+            specialHashes.add((Object*)Bytes.sha256((Data*)specialBlobs.get(i)));
         // Bundle-mode hash-only slots: Info.plist (slot 1) and CodeResources
         // (slot 3). Appended to the parallel slot/hash arrays AFTER the blob
         // hashes so indices stay aligned; NO SuperBlob entry (docs/ios/bundle-signing.md).
-        if (infoPlist != (Array*)0)
+        if (infoPlist != (Data*)0)
             {
-            Bytes.add(specialSlots, (u32)1);
+            specialSlots.add((Object*)Number.withU32((u32)1));
             specialHashes.add((Object*)Bytes.sha256(infoPlist));
             }
-        if (codeResources != (Array*)0)
+        if (codeResources != (Data*)0)
             {
-            Bytes.add(specialSlots, (u32)3);
+            specialSlots.add((Object*)Number.withU32((u32)3));
             specialHashes.add((Object*)Bytes.sha256(codeResources));
             }
         // size the signature with a placeholder CMS and CD
-        Array* cmsProbe = Cms.signedData(Bytes.of((u32)32, (u32)0), id.leaf(), id.chain(), id.modulus(), id.privateExponent(), signingTime);
-        if (cmsProbe == (Array*)0)
+        Data* cmsProbe = Cms.signedData(Bytes.of((u32)32, (u32)0), id.leaf(), id.chain(), id.modulus(), id.privateExponent(), signingTime);
+        if (cmsProbe == (Data*)0)
             return fail("CMS build failed (bad cert/key?)");
-        Array* cmsProbeBlob = CodeSign.wrapBlob((u32)$fade0b01, cmsProbe);
-        Array* cdProbe = CodeSign.codeDirectory(identifier, codeLimit, nCodeSlots, textFilesize, specialSlots, specialHashes,
+        Data* cmsProbeBlob = CodeSign.wrapBlob((u32)$fade0b01, cmsProbe);
+        Data* cdProbe = CodeSign.codeDirectory(identifier, codeLimit, nCodeSlots, textFilesize, specialSlots, specialHashes,
                                                 Bytes.of(nCodeSlots * (u32)32, (u32)0), teamId);
         Array* slots = new Array();
         Array* datas = new Array();
-        Bytes.add(slots, (u32)0);
+        slots.add((Object*)Number.withU32((u32)0));
         datas.add((Object*)cdProbe);
-        Bytes.add(slots, (u32)2);
+        slots.add((Object*)Number.withU32((u32)2));
         datas.add((Object*)reqBlob);
-        if (entBlob != (Array*)0)
+        if (entBlob != (Data*)0)
             {
-            Bytes.add(slots, (u32)5);
+            slots.add((Object*)Number.withU32((u32)5));
             datas.add((Object*)entBlob);
             }
-        if (derBlob != (Array*)0)
+        if (derBlob != (Data*)0)
             {
-            Bytes.add(slots, (u32)7);
+            slots.add((Object*)Number.withU32((u32)7));
             datas.add((Object*)derBlob);
             }
         slots.add((Object*)Number.withU32((u32)$10000));
         datas.add((Object*)cmsProbeBlob); // not Bytes.add: a slot is not a byte
-        u32 sigSize = CodeSign.superBlob(slots, datas).count();
+        u32 sigSize = CodeSign.superBlob(slots, datas).length();
         // The signature is the file's LAST bytes: exact filesize, page-rounded
         // vmsize (iOS/codesign reject trailing padding — bug 148).
         u32 newLinkeditFilesz = (codeLimit + sigSize) - linkeditFileoff;
         u32 newLinkeditVmsz = CodeSign.roundUp(newLinkeditFilesz, (u32)$4000);
-        Array* work = Bytes.slice(macho, (u32)0, codeLimit);
+        Data* work = Bytes.slice(macho, (u32)0, codeLimit);
         Bytes.wr32le(work, csCmdOff + (u32)12, sigSize);
         Bytes.wr32le(work, linkeditCmdOff + (u32)32, newLinkeditVmsz);
         Bytes.wr32le(work, linkeditCmdOff + (u32)36, (u32)0);
         Bytes.wr32le(work, linkeditCmdOff + (u32)48, newLinkeditFilesz);
         Bytes.wr32le(work, linkeditCmdOff + (u32)52, (u32)0);
-        Array* codeHashes = new Array();
+        Data* codeHashes = new Data();
         for (u32 i = (u32)0; i < nCodeSlots; i = i + (u32)1)
             {
             u32 off = i * (u32)4096;
@@ -1846,19 +1837,19 @@ class Bytes
             if (len > (u32)4096)
                 len = (u32)4096;
             MachOSha256* h = new MachOSha256();
-            h.update(work, off, len);
-            h.finalise(codeHashes);
+            h.updateData(work, off, len);
+            h.finaliseInto(codeHashes);
             }
-        Array* cd = CodeSign.codeDirectory(identifier, codeLimit, nCodeSlots, textFilesize, specialSlots, specialHashes, codeHashes, teamId);
-        Array* cms = Cms.signedData(Bytes.sha256(cd), id.leaf(), id.chain(), id.modulus(), id.privateExponent(), signingTime);
-        if (cms == (Array*)0)
+        Data* cd = CodeSign.codeDirectory(identifier, codeLimit, nCodeSlots, textFilesize, specialSlots, specialHashes, codeHashes, teamId);
+        Data* cms = Cms.signedData(Bytes.sha256(cd), id.leaf(), id.chain(), id.modulus(), id.privateExponent(), signingTime);
+        if (cms == (Data*)0)
             return fail("CMS build failed");
         datas.set((u32)0, (Object*)cd);
         datas.set(datas.count() - (u32)1, (Object*)CodeSign.wrapBlob((u32)$fade0b01, cms));
-        Array* sb = CodeSign.superBlob(slots, datas);
-        if (sb.count() != sigSize)
+        Data* sb = CodeSign.superBlob(slots, datas);
+        if (sb.length() != sigSize)
             return fail("sig size drift");
-        Array* out = work;
+        Data* out = work;
         apkAppend(out, sb);
         // No trailing pad: the file ends at the signature (148).
         return out;

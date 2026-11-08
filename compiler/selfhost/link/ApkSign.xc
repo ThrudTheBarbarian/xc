@@ -23,28 +23,28 @@
 #import <Apk> // apkW8/16/32, apkAppend
 #import <RsaKeygen>
 
-u32 apkR32(Array* d, u32 at)
+u32 apkR32(Data* d, u32 at)
     {
-    return ((Number*)d.get(at)).asU32() | (((Number*)d.get(at + (u32)1)).asU32() << (u32)8) | (((Number*)d.get(at + (u32)2)).asU32() << (u32)16) | (((Number*)d.get(at + (u32)3)).asU32() << (u32)24);
+    return (u32)d.byteAt(at) | ((u32)d.byteAt(at + (u32)1) << (u32)8) | ((u32)d.byteAt(at + (u32)2) << (u32)16) | ((u32)d.byteAt(at + (u32)3) << (u32)24);
     }
-void apkW64(Array* d, u64 v)
+void apkW64(Data* d, u64 v)
     {
     for (u32 i = (u32)0; i < (u32)8; i = i + (u32)1)
         apkW8(d, (u32)((v >> ((u64)8 * (u64)i)) & (u64)$FF));
     }
-Array* apkLenPrefixed(Array* d)
+Data* apkLenPrefixed(Data* d)
     {
-    Array* o = new Array();
-    apkW32(o, d.count());
+    Data* o = new Data();
+    apkW32(o, d.length());
     apkAppend(o, d);
     return o;
     }
-Array* apkSha256(Array* d, u32 from, u32 len)
+Data* apkSha256(Data* d, u32 from, u32 len)
     {
     MachOSha256* h = new MachOSha256();
-    h.update(d, from, len);
-    Array* out = new Array();
-    h.finalise(out);
+    h.updateData(d, from, len);
+    Data* out = new Data();
+    h.finaliseInto(out);
     return out;
     }
 
@@ -61,7 +61,7 @@ class ApkSign
         }
 
     // Each chunk is digested with a 0xa5 tag and its length in front.
-    static void appendChunkDigests(Array* out, Array* src, u32 base, u32 len)
+    static void appendChunkDigests(Data* out, Data* src, u32 base, u32 len)
         {
         u32 n = ApkSign.chunkCount(len);
         for (u32 i = (u32)0; i < n; i = i + (u32)1)
@@ -70,21 +70,21 @@ class ApkSign
             u32 sz = ApkSign.chunkSize();
             if (len - off < sz)
                 sz = len - off;
-            Array* pre = new Array();
+            Data* pre = new Data();
             apkW8(pre, (u32)$A5);
             apkW32(pre, sz);
             for (u32 k = (u32)0; k < sz; k = k + (u32)1)
-                pre.add(src.get(base + off + k));
-            apkAppend(out, apkSha256(pre, (u32)0, pre.count()));
+                pre.appendByte(src.byteAt(base + off + k));
+            apkAppend(out, apkSha256(pre, (u32)0, pre.length()));
             }
         }
 
     // PKCS#1 v1.5 over a SHA-256 DigestInfo. The DigestInfo for SHA-256 is a
     // FIXED 19-byte DER prefix, so no DER writer is needed to sign — the only
     // varying part is the digest itself.
-    static Array* rsaSignSha256(Array* digest, Bignum* n, Bignum* d, u32 modLen)
+    static Data* rsaSignSha256(Data* digest, Bignum* n, Bignum* d, u32 modLen)
         {
-        Array* t = new Array();
+        Data* t = new Data();
         u32 pre[19];
         pre[0] = (u32)$30;
         pre[1] = (u32)$31;
@@ -106,17 +106,17 @@ class ApkSign
         pre[17] = (u32)$04;
         pre[18] = (u32)$20;
         for (u32 i = (u32)0; i < (u32)19; i = i + (u32)1)
-            t.add((Object*)Number.withU32(pre[i]));
+            t.appendByte((u8)(pre[i]));
         apkAppend(t, digest);
 
         // EM = 0x00 01 FF..FF 00 T
-        Array* em = new Array();
-        em.add((Object*)Number.withU32((u32)0));
-        em.add((Object*)Number.withU32((u32)1));
-        u32 padLen = modLen - t.count() - (u32)3;
+        Data* em = new Data();
+        em.appendByte((u8)0);
+        em.appendByte((u8)1);
+        u32 padLen = modLen - t.length() - (u32)3;
         for (u32 i = (u32)0; i < padLen; i = i + (u32)1)
-            em.add((Object*)Number.withU32((u32)$FF));
-        em.add((Object*)Number.withU32((u32)0));
+            em.appendByte((u8)$FF);
+        em.appendByte((u8)0);
         apkAppend(em, t);
 
         Bignum* m = Bignum.fromBytes(em);
@@ -125,9 +125,9 @@ class ApkSign
         }
 
     // Returns the signed APK bytes, or an empty array on failure.
-    static Array* sign(Array* apk, Array* certDer, Array* nBytes, Array* eBytes, Array* dBytes)
+    static Data* sign(Data* apk, Data* certDer, Data* nBytes, Data* eBytes, Data* dBytes)
         {
-        u32 len = apk.count();
+        u32 len = apk.length();
         // Find the end-of-central-directory record, scanning back from the end.
         i64 eocd = (i64)-1;
         u32 i = len >= (u32)22 ? len - (u32)22 : (u32)0;
@@ -143,65 +143,65 @@ class ApkSign
             i = i - (u32)1;
             }
         if (eocd < (i64)0)
-            return new Array();
+            return new Data();
         u32 eo = (u32)eocd;
         u32 cdSize = apkR32(apk, eo + (u32)12);
         u32 cdOff = apkR32(apk, eo + (u32)16);
         if (cdOff + cdSize > len)
-            return new Array();
+            return new Data();
 
-        Array* chunks = new Array();
+        Data* chunks = new Data();
         ApkSign.appendChunkDigests(chunks, apk, (u32)0, cdOff);
         ApkSign.appendChunkDigests(chunks, apk, cdOff, cdSize);
         ApkSign.appendChunkDigests(chunks, apk, eo, len - eo);
         u32 total = ApkSign.chunkCount(cdOff) + ApkSign.chunkCount(cdSize) + ApkSign.chunkCount(len - eo);
 
-        Array* top = new Array();
+        Data* top = new Data();
         apkW8(top, (u32)$5A);
         apkW32(top, total);
         apkAppend(top, chunks);
-        Array* apkDigest = apkSha256(top, (u32)0, top.count());
+        Data* apkDigest = apkSha256(top, (u32)0, top.length());
 
         u32 SIG = (u32)$0103; // RSA PKCS#1 v1.5 with SHA-256
-        Array* one = new Array();
+        Data* one = new Data();
         apkW32(one, SIG);
         apkAppend(one, apkLenPrefixed(apkDigest));
-        Array* digests = apkLenPrefixed(one);
+        Data* digests = apkLenPrefixed(one);
 
-        Array* certs = apkLenPrefixed(certDer);
-        Array* signedData = new Array();
+        Data* certs = apkLenPrefixed(certDer);
+        Data* signedData = new Data();
         apkAppend(signedData, apkLenPrefixed(digests));
         apkAppend(signedData, apkLenPrefixed(certs));
-        apkAppend(signedData, apkLenPrefixed(new Array())); // additional attrs
+        apkAppend(signedData, apkLenPrefixed(new Data())); // additional attrs
 
-        Array* sdDigest = apkSha256(signedData, (u32)0, signedData.count());
+        Data* sdDigest = apkSha256(signedData, (u32)0, signedData.length());
         Bignum* n = Bignum.fromBytes(nBytes);
         Bignum* d = Bignum.fromBytes(dBytes);
-        Array* sig = ApkSign.rsaSignSha256(sdDigest, n, d, nBytes.count());
+        Data* sig = ApkSign.rsaSignSha256(sdDigest, n, d, nBytes.length());
 
-        Array* sone = new Array();
+        Data* sone = new Data();
         apkW32(sone, SIG);
         apkAppend(sone, apkLenPrefixed(sig));
-        Array* signatures = apkLenPrefixed(sone);
+        Data* signatures = apkLenPrefixed(sone);
 
         // The public key, as a DER SubjectPublicKeyInfo. Built here rather than
         // through a DER writer: the only variable-length pieces are n and e.
-        Array* spki = ApkSign.spki(nBytes, eBytes);
+        Data* spki = ApkSign.spki(nBytes, eBytes);
 
-        Array* signer = new Array();
+        Data* signer = new Data();
         apkAppend(signer, apkLenPrefixed(signedData));
         apkAppend(signer, apkLenPrefixed(signatures));
         apkAppend(signer, apkLenPrefixed(spki));
-        Array* signers = apkLenPrefixed(signer);
-        Array* v2Value = apkLenPrefixed(signers);
+        Data* signers = apkLenPrefixed(signer);
+        Data* v2Value = apkLenPrefixed(signers);
 
-        Array* pairs = new Array();
-        apkW64(pairs, (u64)((u32)4 + v2Value.count()));
+        Data* pairs = new Data();
+        apkW64(pairs, (u64)((u32)4 + v2Value.length()));
         apkW32(pairs, (u32)$7109871A); // the v2 block id
         apkAppend(pairs, v2Value);
 
-        Array* block = new Array();
-        u64 blockSize = (u64)(pairs.count() + (u32)8 + (u32)16);
+        Data* block = new Data();
+        u64 blockSize = (u64)(pairs.length() + (u32)8 + (u32)16);
         apkW64(block, blockSize);
         apkAppend(block, pairs);
         apkW64(block, blockSize);
@@ -209,21 +209,19 @@ class ApkSign
         for (u32 k = (u32)0; k < (u32)16; k = k + (u32)1)
             apkW8(block, (u32)magic.byteAt(k));
 
-        Array* out = new Array();
-        for (u32 k = (u32)0; k < cdOff; k = k + (u32)1)
-            out.add(apk.get(k));
+        Data* out = new Data();
+        out.appendBytes(apk.bytes(), cdOff);
         apkAppend(out, block);
-        for (u32 k = (u32)0; k < cdSize; k = k + (u32)1)
-            out.add(apk.get(cdOff + k));
+        out.appendBytes(apk.bytes() + cdOff, cdSize);
         // The EOCD, with ONLY its central-directory offset moved on by the
         // block's size. It was digested above in its original form.
-        u32 newCdOff = cdOff + block.count();
+        u32 newCdOff = cdOff + block.length();
         for (u32 k = (u32)0; k < len - eo; k = k + (u32)1)
             {
             if (k >= (u32)16 && k < (u32)20)
-                out.add((Object*)Number.withU32((newCdOff >> ((k - (u32)16) * (u32)8)) & (u32)$FF));
+                out.appendByte((u8)((newCdOff >> ((k - (u32)16) * (u32)8)) & (u32)$FF));
             else
-                out.add(apk.get(eo + k));
+                out.appendByte(apk.byteAt(eo + k));
             }
         return out;
         }
@@ -236,24 +234,24 @@ class ApkSign
     //
     // X.509 v3, self-issued: subject == issuer, serial 1, valid 2001-2099. The
     // identity is the DN alone, which is what `adb install -r` compares.
-    static Array* derBytes(Array* v, u32 tag)
+    static Data* derBytes(Data* v, u32 tag)
         {
         return ApkSign.derTagged(tag, v);
         }
-    static Array* derStr(String* s, u32 tag)
+    static Data* derStr(String* s, u32 tag)
         {
-        Array* b = new Array();
+        Data* b = new Data();
         for (u32 i = (u32)0; i < s.byteLength(); i = i + (u32)1)
-            b.add((Object*)Number.withU32((u32)s.byteAt(i)));
+            b.appendByte(s.byteAt(i));
         return ApkSign.derTagged(tag, b);
         }
-    static Array* derOid(Array* body)
+    static Data* derOid(Data* body)
         {
         return ApkSign.derTagged((u32)$06, body);
         }
-    static Array* oidRsaEncryption(void)
+    static Data* oidRsaEncryption(void)
         {
-        Array* o = new Array();
+        Data* o = new Data();
         u32 v[9];
         v[0] = (u32)$2A;
         v[1] = (u32)$86;
@@ -265,12 +263,12 @@ class ApkSign
         v[7] = (u32)$01;
         v[8] = (u32)$01;
         for (u32 i = (u32)0; i < (u32)9; i = i + (u32)1)
-            o.add((Object*)Number.withU32(v[i]));
+            o.appendByte((u8)(v[i]));
         return ApkSign.derOid(o);
         }
-    static Array* oidSha256Rsa(void)
+    static Data* oidSha256Rsa(void)
         {
-        Array* o = new Array();
+        Data* o = new Data();
         u32 v[9];
         v[0] = (u32)$2A;
         v[1] = (u32)$86;
@@ -282,48 +280,48 @@ class ApkSign
         v[7] = (u32)$01;
         v[8] = (u32)$0B;
         for (u32 i = (u32)0; i < (u32)9; i = i + (u32)1)
-            o.add((Object*)Number.withU32(v[i]));
+            o.appendByte((u8)(v[i]));
         return ApkSign.derOid(o);
         }
-    static Array* oidCommonName(void)
+    static Data* oidCommonName(void)
         {
-        Array* o = new Array();
-        o.add((Object*)Number.withU32((u32)$55));
-        o.add((Object*)Number.withU32((u32)$04));
-        o.add((Object*)Number.withU32((u32)$03));
+        Data* o = new Data();
+        o.appendByte((u8)$55);
+        o.appendByte((u8)$04);
+        o.appendByte((u8)$03);
         return ApkSign.derOid(o);
         }
 
-    static Array* selfSignedCert(Array* nBytes, Array* eBytes, Array* dBytes, String* cn)
+    static Data* selfSignedCert(Data* nBytes, Data* eBytes, Data* dBytes, String* cn)
         {
-        Array* sigAlgoInner = new Array();
+        Data* sigAlgoInner = new Data();
         apkAppend(sigAlgoInner, ApkSign.oidSha256Rsa());
-        apkAppend(sigAlgoInner, ApkSign.derTagged((u32)$05, new Array())); // NULL
-        Array* sigAlgo = ApkSign.derTagged((u32)$30, sigAlgoInner);
+        apkAppend(sigAlgoInner, ApkSign.derTagged((u32)$05, new Data())); // NULL
+        Data* sigAlgo = ApkSign.derTagged((u32)$30, sigAlgoInner);
 
         // Name ::= SEQUENCE { SET { SEQUENCE { OID commonName, UTF8String } } }
-        Array* rdnInner = new Array();
+        Data* rdnInner = new Data();
         apkAppend(rdnInner, ApkSign.oidCommonName());
         apkAppend(rdnInner, ApkSign.derStr(cn, (u32)$0C)); // UTF8String
-        Array* rdnSeq = ApkSign.derTagged((u32)$30, rdnInner);
-        Array* rdnSet = ApkSign.derTagged((u32)$31, rdnSeq);
-        Array* name = ApkSign.derTagged((u32)$30, rdnSet);
+        Data* rdnSeq = ApkSign.derTagged((u32)$30, rdnInner);
+        Data* rdnSet = ApkSign.derTagged((u32)$31, rdnSeq);
+        Data* name = ApkSign.derTagged((u32)$30, rdnSet);
 
-        Array* validInner = new Array();
+        Data* validInner = new Data();
         apkAppend(validInner, ApkSign.derStr(String.withCString("200101000000Z"), (u32)$17));
         apkAppend(validInner, ApkSign.derStr(String.withCString("20990101000000Z"), (u32)$18));
-        Array* validity = ApkSign.derTagged((u32)$30, validInner);
+        Data* validity = ApkSign.derTagged((u32)$30, validInner);
 
-        Array* verInner = new Array();
-        Array* two = new Array();
-        two.add((Object*)Number.withU32((u32)2));
+        Data* verInner = new Data();
+        Data* two = new Data();
+        two.appendByte((u8)2);
         apkAppend(verInner, ApkSign.derTagged((u32)$02, two));
-        Array* version = ApkSign.derTagged((u32)$A0, verInner); // [0] EXPLICIT
+        Data* version = ApkSign.derTagged((u32)$A0, verInner); // [0] EXPLICIT
 
-        Array* serial = new Array();
-        serial.add((Object*)Number.withU32((u32)1));
+        Data* serial = new Data();
+        serial.appendByte((u8)1);
 
-        Array* tbsInner = new Array();
+        Data* tbsInner = new Data();
         apkAppend(tbsInner, version);
         apkAppend(tbsInner, ApkSign.derTagged((u32)$02, serial));
         apkAppend(tbsInner, sigAlgo);
@@ -331,19 +329,19 @@ class ApkSign
         apkAppend(tbsInner, validity);
         apkAppend(tbsInner, name); // subject == issuer
         apkAppend(tbsInner, ApkSign.spki(nBytes, eBytes));
-        Array* tbs = ApkSign.derTagged((u32)$30, tbsInner);
+        Data* tbs = ApkSign.derTagged((u32)$30, tbsInner);
 
-        Array* digest = apkSha256(tbs, (u32)0, tbs.count());
+        Data* digest = apkSha256(tbs, (u32)0, tbs.length());
         Bignum* n = Bignum.fromBytes(nBytes);
         Bignum* d = Bignum.fromBytes(dBytes);
-        Array* sig = ApkSign.rsaSignSha256(digest, n, d, nBytes.count());
+        Data* sig = ApkSign.rsaSignSha256(digest, n, d, nBytes.length());
 
-        Array* bits = new Array();
-        bits.add((Object*)Number.withU32((u32)0));
+        Data* bits = new Data();
+        bits.appendByte((u8)0);
         apkAppend(bits, sig);
-        Array* sigBits = ApkSign.derTagged((u32)$03, bits);
+        Data* sigBits = ApkSign.derTagged((u32)$03, bits);
 
-        Array* all = new Array();
+        Data* all = new Data();
         apkAppend(all, tbs);
         apkAppend(all, sigAlgo);
         apkAppend(all, sigBits);
@@ -351,73 +349,73 @@ class ApkSign
         }
 
     // DER: SEQUENCE { SEQUENCE { OID rsaEncryption, NULL }, BIT STRING { SEQUENCE { n, e } } }
-    static Array* derLen(u32 n)
+    static Data* derLen(u32 n)
         {
-        Array* o = new Array();
+        Data* o = new Data();
         if (n < (u32)128)
             {
-            o.add((Object*)Number.withU32(n));
+            o.appendByte((u8)(n));
             return o;
             }
         if (n < (u32)256)
             {
-            o.add((Object*)Number.withU32((u32)$81));
-            o.add((Object*)Number.withU32(n));
+            o.appendByte((u8)$81);
+            o.appendByte((u8)(n));
             return o;
             }
         if (n < (u32)65536)
             {
-            o.add((Object*)Number.withU32((u32)$82));
-            o.add((Object*)Number.withU32((n >> (u32)8) & (u32)$FF));
-            o.add((Object*)Number.withU32(n & (u32)$FF));
+            o.appendByte((u8)$82);
+            o.appendByte((u8)((n >> (u32)8) & (u32)$FF));
+            o.appendByte((u8)(n & (u32)$FF));
             return o;
             }
-        o.add((Object*)Number.withU32((u32)$83));
-        o.add((Object*)Number.withU32((n >> (u32)16) & (u32)$FF));
-        o.add((Object*)Number.withU32((n >> (u32)8) & (u32)$FF));
-        o.add((Object*)Number.withU32(n & (u32)$FF));
+        o.appendByte((u8)$83);
+        o.appendByte((u8)((n >> (u32)16) & (u32)$FF));
+        o.appendByte((u8)((n >> (u32)8) & (u32)$FF));
+        o.appendByte((u8)(n & (u32)$FF));
         return o;
         }
-    static Array* derTagged(u32 tag, Array* body)
+    static Data* derTagged(u32 tag, Data* body)
         {
-        Array* o = new Array();
-        o.add((Object*)Number.withU32(tag));
-        apkAppend(o, ApkSign.derLen(body.count()));
+        Data* o = new Data();
+        o.appendByte((u8)(tag));
+        apkAppend(o, ApkSign.derLen(body.length()));
         apkAppend(o, body);
         return o;
         }
     // An INTEGER is signed, so a high top bit needs a leading zero or the value
     // reads as negative.
-    static Array* derInteger(Array* v)
+    static Data* derInteger(Data* v)
         {
-        Array* b = new Array();
+        Data* b = new Data();
         u32 s = (u32)0;
-        while (s + (u32)1 < v.count() && ((Number*)v.get(s)).asU32() == (u32)0)
+        while (s + (u32)1 < v.length() && (u32)v.byteAt(s) == (u32)0)
             s = s + (u32)1;
-        if ((((Number*)v.get(s)).asU32() & (u32)$80) != (u32)0)
-            b.add((Object*)Number.withU32((u32)0));
-        for (u32 k = s; k < v.count(); k = k + (u32)1)
-            b.add(v.get(k));
+        if (((u32)v.byteAt(s) & (u32)$80) != (u32)0)
+            b.appendByte((u8)0);
+        for (u32 k = s; k < v.length(); k = k + (u32)1)
+            b.appendByte(v.byteAt(k));
         return ApkSign.derTagged((u32)$02, b);
         }
-    static Array* spki(Array* nBytes, Array* eBytes)
+    static Data* spki(Data* nBytes, Data* eBytes)
         {
-        Array* rsaPub = new Array();
+        Data* rsaPub = new Data();
         apkAppend(rsaPub, ApkSign.derInteger(nBytes));
         apkAppend(rsaPub, ApkSign.derInteger(eBytes));
-        Array* pubSeq = ApkSign.derTagged((u32)$30, rsaPub);
+        Data* pubSeq = ApkSign.derTagged((u32)$30, rsaPub);
 
-        Array* algo = new Array();
+        Data* algo = new Data();
         apkAppend(algo, ApkSign.oidRsaEncryption());
-        apkAppend(algo, ApkSign.derTagged((u32)$05, new Array())); // NULL
-        Array* algoSeq = ApkSign.derTagged((u32)$30, algo);
+        apkAppend(algo, ApkSign.derTagged((u32)$05, new Data())); // NULL
+        Data* algoSeq = ApkSign.derTagged((u32)$30, algo);
 
-        Array* bits = new Array();
-        bits.add((Object*)Number.withU32((u32)0)); // unused bits
+        Data* bits = new Data();
+        bits.appendByte((u8)0); // unused bits
         apkAppend(bits, pubSeq);
-        Array* bitStr = ApkSign.derTagged((u32)$03, bits);
+        Data* bitStr = ApkSign.derTagged((u32)$03, bits);
 
-        Array* all = new Array();
+        Data* all = new Data();
         apkAppend(all, algoSeq);
         apkAppend(all, bitStr);
         return ApkSign.derTagged((u32)$30, all);

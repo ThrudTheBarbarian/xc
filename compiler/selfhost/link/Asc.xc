@@ -54,7 +54,7 @@ class AscApi
         return a;
         }
 
-    static String* b64url(Array* bytes)
+    static String* b64url(Data* bytes)
         {
         String* s = Pem.base64Encode(bytes);
         String* o = String.withCString("");
@@ -76,8 +76,8 @@ class AscApi
         {
         String* pem = Files.readText(_p8Path);
         P256* ec = new P256();
-        Array* d = pem == (String*)0 ? (Array*)0 : ec.privateKeyFromPEM(pem);
-        if (d == (Array*)0)
+        Data* d = pem == (String*)0 ? (Data*)0 : ec.privateKeyFromPEM(pem);
+        if (d == (Data*)0)
             {
             _why = String.withCString("could not parse the .p8 key");
             return (String*)0;
@@ -96,8 +96,8 @@ class AscApi
         String* signing = AscApi.b64url(Bytes.fromString(hdr));
         signing.appendCString(".");
         signing.append(AscApi.b64url(Bytes.fromString(claims)));
-        Array* sig = ec.sign(d, Bytes.fromString(signing));
-        if (sig == (Array*)0)
+        Data* sig = ec.sign(d, Bytes.fromString(signing));
+        if (sig == (Data*)0)
             {
             _why = String.withCString("ES256 signing failed");
             return (String*)0;
@@ -177,18 +177,18 @@ class AscApi
 
     // POST /v1/certificates: a real Apple Development certificate for the CSR
     // (it takes one of the account's certificate slots). Its DER, or null.
-    Array* createDevelopmentCertificate(String* csrPem)
+    Data* createDevelopmentCertificate(String* csrPem)
         {
         String* payload = String.withCString("{\"data\":{\"type\":\"certificates\",\"attributes\":{\"certificateType\":\"DEVELOPMENT\",\"csrContent\":");
         payload.append(Json.quote(csrPem));
         payload.appendCString("}}}");
         HttpsResponse* r = call("POST", String.withCString("/v1/certificates"), Data.withString(payload));
         if (r == (HttpsResponse*)0)
-            return (Array*)0;
+            return (Data*)0;
         if (r.status() != (i32)201 && r.status() != (i32)200)
             {
             _why = httpError("create cert HTTP ", r);
-            return (Array*)0;
+            return (Data*)0;
             }
         JsonValue* j = Json.parse(r.bodyText());
         JsonValue* data = j == (JsonValue*)0 ? (JsonValue*)0 : j.get("data");
@@ -196,24 +196,24 @@ class AscApi
         if (content == (String*)0)
             {
             _why = String.withCString("no certificateContent in response");
-            return (Array*)0;
+            return (Data*)0;
             }
-        Array* der = Pem.base64Decode(content);
-        if (der.count() == (u32)0)
+        Data* der = Pem.base64Decode(content);
+        if (der.length() == (u32)0)
             {
             _why = String.withCString("bad certificateContent base64");
-            return (Array*)0;
+            return (Data*)0;
             }
         return der;
         }
 
     // The first profile whose name contains `nameFilter` (null: the first
     // profile) as .mobileprovision bytes, or null.
-    Array* fetchProfileMatching(String* nameFilter)
+    Data* fetchProfileMatching(String* nameFilter)
         {
         String* list = listProfiles();
         if (list == (String*)0)
-            return (Array*)0;
+            return (Data*)0;
         JsonValue* j = Json.parse(list);
         JsonValue* data = j == (JsonValue*)0 ? (JsonValue*)0 : j.get("data");
         u32 n = data == (JsonValue*)0 ? (u32)0 : data.count();
@@ -239,12 +239,12 @@ class AscApi
             }
         else
             _why = String.withCString("no profiles found");
-        return (Array*)0;
+        return (Data*)0;
         }
 
     // A public Apple CA certificate (DER), e.g. AppleWWDRCAG3. The API returns
     // only the leaf, so the chain is assembled from these.
-    static Array* fetchAppleCA(String* name, String** err)
+    static Data* fetchAppleCA(String* name, String** err)
         {
         String* path = String.withCString("/certificateauthority/");
         path.append(name);
@@ -253,7 +253,7 @@ class AscApi
         if (r.status() < (i32)0)
             {
             *err = r.why();
-            return (Array*)0;
+            return (Data*)0;
             }
         if (r.status() != (i32)200)
             {
@@ -262,7 +262,7 @@ class AscApi
             m.appendCString(" HTTP ");
             m.append(String.withI32(r.status()));
             *err = m;
-            return (Array*)0;
+            return (Data*)0;
             }
         return Bytes.fromData(r.body());
         }
@@ -285,7 +285,7 @@ class AscTool
         }
 
     // A CSR (PEM) for a new RSA-2048 key, whose PKCS#1 DER goes to keyOut.
-    static String* keyAndCsr(String* cn, Array** keyOut, String** err)
+    static String* keyAndCsr(String* cn, Data** keyOut, String** err)
         {
         Array* k = Rsa.generate((u32)2048);
         if (k.count() < (u32)8)
@@ -293,43 +293,43 @@ class AscTool
             *err = String.withCString("RSA keygen failed");
             return (String*)0;
             }
-        Array* n = (Array*)k.get((u32)0);
-        Array* e = (Array*)k.get((u32)1);
-        Array* d = (Array*)k.get((u32)2);
+        Data* n = (Data*)k.get((u32)0);
+        Data* e = (Data*)k.get((u32)1);
+        Data* d = (Data*)k.get((u32)2);
         Array* fields = new Array();
         fields.add((Object*)Der.integerU32((u32)0));
         for (u32 i = (u32)0; i < (u32)8; i = i + (u32)1)
-            fields.add((Object*)Der.integer((Array*)k.get(i)));
+            fields.add((Object*)Der.integer((Data*)k.get(i)));
         *keyOut = Der.sequence(fields);
 
         // CertificationRequestInfo { version 0, subject CN, SPKI, [0] {} }
-        Array* subject = Der.sequence(Der.one(Der.setOf(Der.one(Der.sequence(Der.two(
+        Data* subject = Der.sequence(Der.one(Der.setOf(Der.one(Der.sequence(Der.two(
                              Der.oid(String.withCString("2.5.4.3")), Der.stringOf((u32)$0c, cn)))))));
-        Array* rsaPub = Der.sequence(Der.two(Der.integer(n), Der.integer(e)));
-        Array* bits = new Array();
+        Data* rsaPub = Der.sequence(Der.two(Der.integer(n), Der.integer(e)));
+        Data* bits = new Data();
         Bytes.add(bits, (u32)0);
-        for (u32 i = (u32)0; i < rsaPub.count(); i = i + (u32)1)
-            bits.add(rsaPub.get(i));
-        Array* spki = Der.sequence(Der.two(
+        for (u32 i = (u32)0; i < rsaPub.length(); i = i + (u32)1)
+            bits.appendByte(rsaPub.byteAt(i));
+        Data* spki = Der.sequence(Der.two(
             Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.1.1")), Der.null())),
             Der.tlv((u32)$03, bits)));
-        Array* attrs = Der.tlv((u32)$A0, new Array());
+        Data* attrs = Der.tlv((u32)$A0, new Data());
         Array* cri = new Array();
         cri.add((Object*)Der.integerU32((u32)0));
         cri.add((Object*)subject);
         cri.add((Object*)spki);
         cri.add((Object*)attrs);
-        Array* criDer = Der.sequence(cri);
-        Array* sig = Cms.rsaSignPKCS1(Cms.sha256DigestInfo(Bytes.sha256(criDer)), n, d);
-        if (sig == (Array*)0)
+        Data* criDer = Der.sequence(cri);
+        Data* sig = Cms.rsaSignPKCS1(Cms.sha256DigestInfo(Bytes.sha256(criDer)), n, d);
+        if (sig == (Data*)0)
             {
             *err = String.withCString("CSR self-signature failed");
             return (String*)0;
             }
-        Array* sigBits = new Array();
+        Data* sigBits = new Data();
         Bytes.add(sigBits, (u32)0);
-        for (u32 i = (u32)0; i < sig.count(); i = i + (u32)1)
-            sigBits.add(sig.get(i));
+        for (u32 i = (u32)0; i < sig.length(); i = i + (u32)1)
+            sigBits.appendByte(sig.byteAt(i));
         Array* csr = new Array();
         csr.add((Object*)criDer);
         csr.add((Object*)Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.1.11")), Der.null())));
@@ -401,7 +401,7 @@ class AscTool
             AscTool.say("", err, "");
             return (i32)1;
             }
-        Array* keyDer = (Array*)0;
+        Data* keyDer = (Data*)0;
         String* csr = AscTool.keyAndCsr(String.withCString("xcc Route 1"), &keyDer, &err);
         if (csr == (String*)0)
             {
@@ -409,8 +409,8 @@ class AscTool
             return (i32)1;
             }
         AscTool.say("creating an Apple Development certificate...", (String*)0, "");
-        Array* cert = api.createDevelopmentCertificate(csr);
-        if (cert == (Array*)0)
+        Data* cert = api.createDevelopmentCertificate(csr);
+        if (cert == (Data*)0)
             {
             AscTool.say("create cert: ", api.why(), "");
             if (api.why().contains(String.withCString("already have")))
@@ -418,26 +418,26 @@ class AscTool
                             "revoke an unused one (developer.apple.com or the API) and retry.", (String*)0, "");
             return (i32)1;
             }
-        Array* wwdr = AscApi.fetchAppleCA(String.withCString("AppleWWDRCAG3"), &err);
-        if (wwdr == (Array*)0)
+        Data* wwdr = AscApi.fetchAppleCA(String.withCString("AppleWWDRCAG3"), &err);
+        if (wwdr == (Data*)0)
             {
             AscTool.say("fetch WWDR: ", err, "");
             return (i32)1;
             }
-        Array* ent = (Array*)0;
-        Array* profile = api.fetchProfileMatching(profileName);
-        if (profile != (Array*)0)
+        Data* ent = (Data*)0;
+        Data* profile = api.fetchProfileMatching(profileName);
+        if (profile != (Data*)0)
             {
             ent = Profile.entitlements(profile);
             String* m = String.withCString("fetched provisioning profile (");
-            m.append(String.withU32(profile.count()));
+            m.append(String.withU32(profile.length()));
             m.appendCString(" bytes)");
-            if (ent != (Array*)0)
+            if (ent != (Data*)0)
                 m.appendCString(", entitlements embedded");
             AscTool.say("", m, "");
             }
-        Array* rnd = Rsa.randomBytes((u32)16);
-        if (rnd.count() != (u32)16)
+        Data* rnd = Rsa.randomBytes((u32)16);
+        if (rnd.length() != (u32)16)
             {
             AscTool.say("key encrypt: no OS randomness", (String*)0, "");
             return (i32)1;
@@ -449,8 +449,8 @@ class AscTool
         pki.add((Object*)Der.sequence(Der.two(Der.oid(String.withCString("1.2.840.113549.1.1.1")), Der.null())));
         pki.add((Object*)Der.octetString(keyDer));
         keyDer = Der.sequence(pki);
-        Array* encKey = Pkcs8.encrypt(keyDer, passphrase,Bytes.slice(rnd, (u32)0, (u32)8), Bytes.slice(rnd, (u32)8, (u32)8));
-        if (encKey == (Array*)0)
+        Data* encKey = Pkcs8.encrypt(keyDer, passphrase,Bytes.slice(rnd, (u32)0, (u32)8), Bytes.slice(rnd, (u32)8, (u32)8));
+        if (encKey == (Data*)0)
             {
             AscTool.say("key encrypt: 3DES encrypt failed", (String*)0, "");
             return (i32)1;

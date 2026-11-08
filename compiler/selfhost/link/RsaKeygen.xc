@@ -29,9 +29,9 @@ class Rsa
     {
     // Real entropy or nothing. A key from a predictable stream is worse than a
     // refusal: it looks like a key, signs like a key, and is forgeable.
-    static Array* randomBytes(u32 n)
+    static Data* randomBytes(u32 n)
         {
-        Array* out = new Array();
+        Data* out = new Data();
         u8* buf = new u8[n];
 #if OS_windows
         if (SystemFunction036(buf, n) == (u8)0)
@@ -55,7 +55,7 @@ class Rsa
             }
 #endif
         for (u32 i = (u32)0; i < n; i = i + (u32)1)
-            out.add((Object*)Number.withU32((u32)buf[i]));
+            out.appendByte((u8)((u32)buf[i]));
         delete buf;
         return out;
         }
@@ -163,8 +163,8 @@ class Rsa
             {
             // A base in [2, n-2], taken from the same entropy the key is.
             u32 nbytes = (n.bitLength() + (u32)7) / (u32)8;
-            Array* rb = Rsa.randomBytes(nbytes);
-            if (rb.count() == (u32)0)
+            Data* rb = Rsa.randomBytes(nbytes);
+            if (rb.length() == (u32)0)
                 return false; // no entropy: refuse
             Bignum* a = Bignum.fromBytes(rb);
             a = Bignum.mod(a, nm1);
@@ -200,12 +200,12 @@ class Rsa
         u32 nbytes = bits / (u32)8;
         while (true)
             {
-            Array* rb = Rsa.randomBytes(nbytes);
-            if (rb.count() == (u32)0)
+            Data* rb = Rsa.randomBytes(nbytes);
+            if (rb.length() == (u32)0)
                 return (Bignum*)0;
-            rb.set((u32)0, (Object*)Number.withU32(((Number*)rb.get((u32)0)).asU32() | (u32)$C0));
+            rb.setByteAt((u32)0, (u8)((u32)rb.byteAt((u32)0) | (u32)$C0));
             u32 last = nbytes - (u32)1;
-            rb.set(last, (Object*)Number.withU32(((Number*)rb.get(last)).asU32() | (u32)1));
+            rb.setByteAt(last, (u8)((u32)rb.byteAt(last) | (u32)1));
             Bignum* c = Bignum.fromBytes(rb);
             if (Rsa.isProbablePrime(c, (u32)24))
                 return c;
@@ -277,10 +277,10 @@ class Rsa
 
             Array* out = new Array();
             out.add((Object*)n.toBytes(bits / (u32)8));
-            Array* eb = new Array();
-            eb.add((Object*)Number.withU32((u32)1));
-            eb.add((Object*)Number.withU32((u32)0));
-            eb.add((Object*)Number.withU32((u32)1)); // 0x010001 = 65537
+            Data* eb = new Data();
+            eb.appendByte((u8)1);
+            eb.appendByte((u8)0);
+            eb.appendByte((u8)1); // 0x010001 = 65537
             out.add((Object*)eb);
             out.add((Object*)d.toBytes(bits / (u32)8));
             // The CRT parameters, for a full PKCS#1 key: p, q, d mod (p-1),

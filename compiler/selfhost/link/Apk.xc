@@ -22,37 +22,36 @@
 #import "Foundation.xc"
 
 // ── little-endian writers ────────────────────────────────────────────────
-void apkW8(Array* d, u32 v)
+void apkW8(Data* d, u32 v)
     {
-    d.add((Object*)Number.withU32(v & (u32)$FF));
+    d.appendByte((u8)(v & (u32)$FF));
     }
-void apkW16(Array* d, u32 v)
+void apkW16(Data* d, u32 v)
     {
     apkW8(d, v);
     apkW8(d, v >> (u32)8);
     }
-void apkW32(Array* d, u32 v)
+void apkW32(Data* d, u32 v)
     {
     apkW8(d, v);
     apkW8(d, v >> (u32)8);
     apkW8(d, v >> (u32)16);
     apkW8(d, v >> (u32)24);
     }
-void apkAppend(Array* d, Array* src)
+void apkAppend(Data* d, Data* src)
     {
-    for (u32 i = (u32)0; i < src.count(); i = i + (u32)1)
-        d.add(src.get(i));
+    d.append(src);
     }
 
 // ── CRC-32 (the ZIP polynomial, reflected) ───────────────────────────────
 class Crc32
     {
-    static u32 of(Array* bytes)
+    static u32 of(Data* bytes)
         {
         u32 crc = (u32)$FFFFFFFF;
-        for (u32 i = (u32)0; i < bytes.count(); i = i + (u32)1)
+        for (u32 i = (u32)0; i < bytes.length(); i = i + (u32)1)
             {
-            crc = crc ^ (((Number*)bytes.get(i)).asU32() & (u32)$FF);
+            crc = crc ^ ((u32)bytes.byteAt(i) & (u32)$FF);
             for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
                 {
                 u32 mask = (u32)0 - (crc & (u32)1);
@@ -93,28 +92,28 @@ class Crc32
 
     // UTF-16 pool. Every string is length-prefixed and NUL-terminated in
     // 16-bit units, and the whole body is padded to 4.
-    Array* chunk(void)
+    Data* chunk(void)
         {
-        Array* offsets = new Array();
-        Array* body = new Array();
+        Data* offsets = new Data();
+        Data* body = new Data();
         for (u32 i = (u32)0; i < _strings.count(); i = i + (u32)1)
             {
             String* s = (String*)_strings.get(i);
-            apkW32(offsets, body.count());
+            apkW32(offsets, body.length());
             u32 n = s.byteLength(); // ASCII throughout, so units == bytes
             apkW16(body, n);
             for (u32 c = (u32)0; c < n; c = c + (u32)1)
                 apkW16(body, (u32)s.byteAt(c));
             apkW16(body, (u32)0);
             }
-        while (body.count() % (u32)4 != (u32)0)
+        while (body.length() % (u32)4 != (u32)0)
             apkW8(body, (u32)0);
         u32 headerSize = (u32)28;
-        u32 stringsStart = headerSize + offsets.count();
-        Array* out = new Array();
+        u32 stringsStart = headerSize + offsets.length();
+        Data* out = new Data();
         apkW16(out, (u32)$0001); // RES_STRING_POOL
         apkW16(out, headerSize);
-        apkW32(out, headerSize + offsets.count() + body.count());
+        apkW32(out, headerSize + offsets.length() + body.length());
         apkW32(out, _strings.count());
         apkW32(out, (u32)0); // styleCount
         apkW32(out, (u32)0); // flags: UTF-16, unsorted
@@ -241,7 +240,7 @@ class Crc32
         return (String*)0;
         }
 
-    static void attr(Array* d, u32 ns, u32 name, u32 raw, u32 ty, u32 data)
+    static void attr(Data* d, u32 ns, u32 name, u32 raw, u32 ty, u32 data)
         {
         apkW32(d, ns);
         apkW32(d, name);
@@ -263,11 +262,11 @@ class Crc32
         return r;
         }
 
-    static void startElem(Array* out, u32 nsIdx, u32 nameIdx, Array* attrs, u32 n)
+    static void startElem(Data* out, u32 nsIdx, u32 nameIdx, Data* attrs, u32 n)
         {
         apkW16(out, (u32)$0102); // RES_XML_START_ELEM
         apkW16(out, (u32)16);
-        apkW32(out, (u32)36 + attrs.count());
+        apkW32(out, (u32)36 + attrs.length());
         apkW32(out, (u32)0);         // lineNumber
         apkW32(out, (u32)$FFFFFFFF); // comment
         apkW32(out, nsIdx);
@@ -281,7 +280,7 @@ class Crc32
         apkAppend(out, attrs);
         }
 
-    static void endElem(Array* out, u32 nsIdx, u32 nameIdx)
+    static void endElem(Data* out, u32 nsIdx, u32 nameIdx)
         {
         apkW16(out, (u32)$0103); // RES_XML_END_ELEM
         apkW16(out, (u32)16);
@@ -295,7 +294,7 @@ class Crc32
     // `hasCode` must be true whenever a classes.dex rides: ART SKIPS the dex
     // entirely when the manifest says false, which is indistinguishable from a
     // dex that failed to load (uxkit/031).
-    static Array* manifest(String* pkg, String* libName, String* label,
+    static Data* manifest(String* pkg, String* libName, String* label,
                            u32 minSdk, u32 targetSdk, bool hasCode, Array* extras)
         {
         // --manifest-attr name=value, checked by manifestAttrError (a later
@@ -372,7 +371,7 @@ class Crc32
         u32 aTgtSdk = p.intern(String.withCString("targetSdkVersion"));
         u32 aExtract = p.intern(String.withCString("extractNativeLibs"));
 
-        Array* body = new Array();
+        Data* body = new Data();
         // namespace open
         apkW16(body, (u32)$0100);
         apkW16(body, (u32)16);
@@ -382,11 +381,11 @@ class Crc32
         apkW32(body, sAndroid);
         apkW32(body, sNsUri);
 
-        Array* a = new Array();
+        Data* a = new Data();
         attr(a, NONE, sPackage, sPkg, T_STR, sPkg);
         startElem(body, NONE, sManifest, a, (u32)1);
 
-        a = new Array();
+        a = new Data();
         attr(a, sNsUri, aMinSdk, NONE, T_DEC, minSdk);
         attr(a, sNsUri, aTgtSdk, NONE, T_DEC, targetSdk);
         startElem(body, NONE, sUsesSdk, a, (u32)2);
@@ -418,7 +417,7 @@ class Crc32
                 {
                 Object* x = rows.get(j); rows.set(j, rows.get(j - (u32)1)); rows.set(j - (u32)1, x);
                 }
-        a = new Array();
+        a = new Data();
         for (u32 i = (u32)0; i < rows.count(); i = i + (u32)1)
             {
             Array* r = (Array*)rows.get(i);
@@ -427,24 +426,24 @@ class Crc32
             }
         startElem(body, NONE, sApp, a, rows.count());
 
-        a = new Array();
+        a = new Data();
         attr(a, sNsUri, aLabel, sLabel, T_STR, sLabel);
         attr(a, sNsUri, aName, sNative, T_STR, sNative);
         attr(a, sNsUri, aExported, NONE, T_BOOL, (u32)$FFFFFFFF);
         startElem(body, NONE, sActivity, a, (u32)3);
 
-        a = new Array();
+        a = new Data();
         attr(a, sNsUri, aName, sLibName, T_STR, sLibName);
         attr(a, sNsUri, aValue, sLib, T_STR, sLib);
         startElem(body, NONE, sMeta, a, (u32)2);
         endElem(body, NONE, sMeta);
 
-        startElem(body, NONE, sFilter, new Array(), (u32)0);
-        a = new Array();
+        startElem(body, NONE, sFilter, new Data(), (u32)0);
+        a = new Data();
         attr(a, sNsUri, aName, sMain, T_STR, sMain);
         startElem(body, NONE, sAction, a, (u32)1);
         endElem(body, NONE, sAction);
-        a = new Array();
+        a = new Data();
         attr(a, sNsUri, aName, sLauncher, T_STR, sLauncher);
         startElem(body, NONE, sCategory, a, (u32)1);
         endElem(body, NONE, sCategory);
@@ -462,19 +461,19 @@ class Crc32
         apkW32(body, sAndroid);
         apkW32(body, sNsUri);
 
-        Array* pool = p.chunk();
+        Data* pool = p.chunk();
         Array* ids = tIds;
-        Array* map = new Array();
+        Data* map = new Data();
         apkW16(map, (u32)$0180); // RES_XML_RESOURCE_MAP
         apkW16(map, (u32)8);
         apkW32(map, (u32)8 + (u32)4 * ids.count());
         for (u32 i = (u32)0; i < ids.count(); i = i + (u32)1)
             apkW32(map, ((Number*)ids.get(i)).asU32());
 
-        Array* out = new Array();
+        Data* out = new Data();
         apkW16(out, (u32)$0003); // RES_XML
         apkW16(out, (u32)8);
-        apkW32(out, (u32)8 + pool.count() + map.count() + body.count());
+        apkW32(out, (u32)8 + pool.length() + map.length() + body.length());
         apkAppend(out, pool);
         apkAppend(out, map);
         apkAppend(out, body);
@@ -486,8 +485,8 @@ class Crc32
     class ApkEntry
     {
     String* name;
-    Array* data; // Number@ bytes
-    static ApkEntry* with(String* n, Array* d)
+    Data* data; // the entry's bytes
+    static ApkEntry* with(String* n, Data* d)
         {
         ApkEntry* e = new ApkEntry();
         e.name = n;
@@ -509,17 +508,17 @@ class Crc32
     // still gets 4, which is what `zipalign -c -p 4` checks. Aligning only the
     // .so left the manifest and the dex at odd offsets, and every package this
     // writer produced failed that check.
-    static Array* build(Array* entries, u32 alignment, String* alignSuffix)
+    static Data* build(Array* entries, u32 alignment, String* alignSuffix)
         {
-        Array* out = new Array();
-        Array* central = new Array();
+        Data* out = new Data();
+        Data* central = new Data();
         u32 count = (u32)0;
 
         for (u32 i = (u32)0; i < entries.count(); i = i + (u32)1)
             {
             ApkEntry* e = (ApkEntry*)entries.get(i);
             u32 crc = Crc32.of(e.data);
-            u32 localOff = out.count();
+            u32 localOff = out.length();
             u32 nameLen = e.name.byteLength();
 
             u32 want = (u32)4;
@@ -540,8 +539,8 @@ class Crc32
             apkW16(out, (u32)0);
             apkW16(out, (u32)0);
             apkW32(out, crc);
-            apkW32(out, e.data.count());
-            apkW32(out, e.data.count());
+            apkW32(out, e.data.length());
+            apkW32(out, e.data.length());
             apkW16(out, nameLen);
             apkW16(out, extraLen);
             for (u32 c = (u32)0; c < nameLen; c = c + (u32)1)
@@ -558,8 +557,8 @@ class Crc32
             apkW16(central, (u32)0);
             apkW16(central, (u32)0);
             apkW32(central, crc);
-            apkW32(central, e.data.count());
-            apkW32(central, e.data.count());
+            apkW32(central, e.data.length());
+            apkW32(central, e.data.length());
             apkW16(central, nameLen);
             apkW16(central, (u32)0); // extra (central copy)
             apkW16(central, (u32)0); // comment
@@ -572,14 +571,14 @@ class Crc32
             count = count + (u32)1;
             }
 
-        u32 centralOff = out.count();
+        u32 centralOff = out.length();
         apkAppend(out, central);
         apkW32(out, (u32)$06054B50); // end of central directory
         apkW16(out, (u32)0);
         apkW16(out, (u32)0);
         apkW16(out, count);
         apkW16(out, count);
-        apkW32(out, central.count());
+        apkW32(out, central.length());
         apkW32(out, centralOff);
         apkW16(out, (u32)0); // comment length
         return out;

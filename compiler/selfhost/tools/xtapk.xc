@@ -13,24 +13,21 @@
 #import <Apk>
 #import <ApkSign>
 
-void writeBytes(String* path, Array* bytes)
+void writeBytes(String* path, Data* bytes)
     {
-    Data* d = Data.withCapacity((u32)0);
-    for (u32 i = (u32)0; i < bytes.count(); i = i + (u32)1)
-        d.appendByte((u8)((Number*)bytes.get(i)).asU32());
-    Files.writeData(path, d);
+    Files.writeData(path, bytes);
     }
 
 // The debug key, from the raw sidecar both drivers share:
 //   "XKEY1" then four little-endian length-prefixed blobs: n, e, d, cert.
-Array* readKeyField(Data* d, u32* at)
+Data* readKeyField(Data* d, u32* at)
     {
     u32 p = *at;
     u32 n = (u32)d.byteAt(p) | ((u32)d.byteAt(p + (u32)1) << (u32)8) | ((u32)d.byteAt(p + (u32)2) << (u32)16) | ((u32)d.byteAt(p + (u32)3) << (u32)24);
     p = p + (u32)4;
-    Array* out = new Array();
+    Data* out = new Data();
     for (u32 i = (u32)0; i < n; i = i + (u32)1)
-        out.add((Object*)Number.withU32((u32)d.byteAt(p + i)));
+        out.appendByte(d.byteAt(p + i));
     *at = p + n;
     return out;
     }
@@ -65,7 +62,7 @@ void main(void)
             return;
             }
         bool hasCode = Process.argument((u32)5).equals(String.withCString("1"));
-        Array* m = ApkXml.manifest(Process.argument((u32)2), Process.argument((u32)3),
+        Data* m = ApkXml.manifest(Process.argument((u32)2), Process.argument((u32)3),
                                    Process.argument((u32)4), (u32)24, (u32)35, hasCode, new Array());
         writeBytes(out, m);
         return;
@@ -93,12 +90,9 @@ void main(void)
                 Process.exit((i32)1);
                 return;
                 }
-            Array* bytes = new Array();
-            for (u32 b = (u32)0; b < d.length(); b = b + (u32)1)
-                bytes.add((Object*)Number.withU32((u32)d.byteAt(b)));
-            entries.add((Object*)ApkEntry.with(nm, bytes));
+            entries.add((Object*)ApkEntry.with(nm, d));
             }
-        Array* zip = ApkZip.build(entries, (u32)4096, String.withCString(".so"));
+        Data* zip = ApkZip.build(entries, (u32)4096, String.withCString(".so"));
         // Sign it, if the shared debug key is there. An UNSIGNED apk will not
         // install, so a missing key is a loud refusal rather than a file that
         // looks finished.
@@ -123,12 +117,12 @@ void main(void)
             return;
             }
         u32 at = (u32)5; // past "XKEY1"
-        Array* kn = readKeyField(kd, &at);
-        Array* ke = readKeyField(kd, &at);
-        Array* kdd = readKeyField(kd, &at);
-        Array* kc = readKeyField(kd, &at);
-        Array* signed_ = ApkSign.sign(zip, kc, kn, ke, kdd);
-        if (signed_.count() == (u32)0)
+        Data* kn = readKeyField(kd, &at);
+        Data* ke = readKeyField(kd, &at);
+        Data* kdd = readKeyField(kd, &at);
+        Data* kc = readKeyField(kd, &at);
+        Data* signed_ = ApkSign.sign(zip, kc, kn, ke, kdd);
+        if (signed_.length() == (u32)0)
             {
             Stdio.printf("xtapk: signing failed\n");
             Process.exit((i32)1);

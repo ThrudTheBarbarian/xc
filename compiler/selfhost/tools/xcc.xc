@@ -859,11 +859,11 @@ bool writeDebugKey(String* path)
 {
     Array* k = Rsa.generate((u32)2048);
     if (k.count() < (u32)3) return false;
-    Array* nb = (Array*)k.get((u32)0);
-    Array* eb = (Array*)k.get((u32)1);
-    Array* db = (Array*)k.get((u32)2);
-    Array* cert = ApkSign.selfSignedCert(nb, eb, db, String.withCString("xc debug"));
-    if (cert.count() == (u32)0) return false;
+    Data* nb = (Data*)k.get((u32)0);
+    Data* eb = (Data*)k.get((u32)1);
+    Data* db = (Data*)k.get((u32)2);
+    Data* cert = ApkSign.selfSignedCert(nb, eb, db, String.withCString("xc debug"));
+    if (cert.length() == (u32)0) return false;
 
     // The directory may not exist yet.
     String* dir = path.deletingLastPathComponent();
@@ -876,12 +876,11 @@ bool writeDebugKey(String* path)
     fields.add((Object*)nb); fields.add((Object*)eb);
     fields.add((Object*)db); fields.add((Object*)cert);
     for (u32 f = (u32)0; f < (u32)4; f = f + (u32)1) {
-        Array* v = (Array*)fields.get(f);
-        u32 n = v.count();
+        Data* v = (Data*)fields.get(f);
+        u32 n = v.length();
         for (u32 i = (u32)0; i < (u32)4; i = i + (u32)1)
             out.appendByte((u8)((n >> (i * (u32)8)) & (u32)$FF));
-        for (u32 i = (u32)0; i < n; i = i + (u32)1)
-            out.appendByte((u8)((Number*)v.get(i)).asU32());
+        out.append(v);
     }
     return Files.writeData(path, out);
 }
@@ -1420,16 +1419,6 @@ Array* androidNeededWithImports(DriverOptions* d, string base)
     return androidNeeded(d, all.cString());
 }
 
-// A file's bytes as the Array of Numbers the APK writer takes, or 0.
-Array* fileBytes(String* path)
-{
-    Data* dd = Files.readData(path);
-    if (dd == (Data*)0) return (Array*)0;
-    Array* out = Array.withCapacity(dd.length());
-    for (u32 i = (u32)0; i < dd.length(); i = i + (u32)1)
-        out.add((Object*)Number.withU32((u32)dd.byteAt(i)));
-    return out;
-}
 
 void emitApkPackage(DriverOptions* d, String* prog)
 {
@@ -1497,22 +1486,13 @@ void emitApkPackage(DriverOptions* d, String* prog)
         Stdio.printf("xcc: apk: link failed: %s\n", w.why().cString());
         Process.exit((i32)1); return;
     }
-    packageApk(d, name, soname, numbersOfData(w.bytes()));
+    packageApk(d, name, soname, w.bytes());
 }
 
 // The package around a linked payload: manifest, the payload and any
 // --with-lib/--with-dex extras, zipped, signed (APK Signature Scheme v2) and
 // written. Shared by the in-house link and the --no-self-host NDK one.
-// One Number per byte, for the APK writer, which takes its payload so.
-Array* numbersOfData(Data* d)
-{
-    Array* a = new Array();
-    for (u32 i = (u32)0; i < d.length(); i = i + (u32)1)
-        a.add((Object*)Number.withU32((u32)d.byteAt(i)));
-    return a;
-}
-
-void packageApk(DriverOptions* d, String* name, String* soname, Array* soBytes)
+void packageApk(DriverOptions* d, String* name, String* soname, Data* soBytes)
 {
     String* out = d.fe().output();
     // The signing key: named, or the conventional cache under $HOME/.xcc —
@@ -1539,11 +1519,11 @@ void packageApk(DriverOptions* d, String* name, String* soname, Array* soBytes)
     // An optional committed classes.dex rides at the archive root, and the
     // manifest's hasCode follows it: with hasCode="false" ART never looks at
     // classes.dex, which is indistinguishable from a dex that failed to load.
-    Array* dex = (Array*)0;
+    Data* dex = (Data*)0;
     CapOptions* c = d.caps();
     if (c.withDex() != (String*)0) {
-        dex = fileBytes(c.withDex());
-        if (dex == (Array*)0) {
+        dex = Files.readData(c.withDex());
+        if (dex == (Data*)0) {
             Stdio.printf("xcc: error: cannot read --with-dex '%s'\n", c.withDex().cString());
             Process.exit((i32)1); return;
         }
@@ -1558,8 +1538,8 @@ void packageApk(DriverOptions* d, String* name, String* soname, Array* soBytes)
     Array* extras = new Array();
     for (u32 w = (u32)0; w < c.withLibs().count(); w = w + (u32)1) {
         String* withLib = (String*)c.withLibs().get(w);
-        Array* extraLib = fileBytes(withLib);
-        if (extraLib == (Array*)0) {
+        Data* extraLib = Files.readData(withLib);
+        if (extraLib == (Data*)0) {
             Stdio.printf("xcc: error: cannot read --with-lib '%s'\n", withLib.cString());
             Process.exit((i32)1); return;
         }
@@ -1590,7 +1570,7 @@ void packageApk(DriverOptions* d, String* name, String* soname, Array* soBytes)
             Process.exit((i32)1); return;
         }
     }
-    Array* manifest = ApkXml.manifest(pkg, manifestLib, name, (u32)24, (u32)35, dex != (Array*)0, c.manifestAttrs());
+    Data* manifest = ApkXml.manifest(pkg, manifestLib, name, (u32)24, (u32)35, dex != (Data*)0, c.manifestAttrs());
 
     Array* entries = new Array();
     entries.add((Object*)ApkEntry.with(String.withCString("AndroidManifest.xml"), manifest));
@@ -1598,8 +1578,8 @@ void packageApk(DriverOptions* d, String* name, String* soname, Array* soBytes)
     libPath.append(soname);
     entries.add((Object*)ApkEntry.with(libPath, soBytes));
     for (u32 k = (u32)0; k < extras.count(); k = k + (u32)1) entries.add(extras.get(k));
-    if (dex != (Array*)0) entries.add((Object*)ApkEntry.with(String.withCString("classes.dex"), dex));
-    Array* zip = ApkZip.build(entries, (u32)4096, String.withCString(".so"));
+    if (dex != (Data*)0) entries.add((Object*)ApkEntry.with(String.withCString("classes.dex"), dex));
+    Data* zip = ApkZip.build(entries, (u32)4096, String.withCString(".so"));
 
     Data* kd = Files.readData(keyPath);
     if (kd == (Data*)0 || kd.length() < (u32)5) {
@@ -1607,34 +1587,28 @@ void packageApk(DriverOptions* d, String* name, String* soname, Array* soBytes)
         Process.exit((i32)1); return;
     }
     u32 at = (u32)5;                                 // past "XKEY1"
-    Array* kn = apkKeyField(kd, &at);
-    Array* ke = apkKeyField(kd, &at);
-    Array* kdd = apkKeyField(kd, &at);
-    Array* kc = apkKeyField(kd, &at);
-    Array* signedApk = ApkSign.sign(zip, kc, kn, ke, kdd);
-    if (signedApk.count() == (u32)0) {
+    Data* kn = apkKeyField(kd, &at);
+    Data* ke = apkKeyField(kd, &at);
+    Data* kdd = apkKeyField(kd, &at);
+    Data* kc = apkKeyField(kd, &at);
+    Data* signedApk = ApkSign.sign(zip, kc, kn, ke, kdd);
+    if (signedApk.length() == (u32)0) {
         Stdio.printf("xcc: error: apk signing failed\n");
         Process.exit((i32)1); return;
     }
-
-    Data* fileOut = Data.withCapacity((u32)0);
-    for (u32 i = (u32)0; i < signedApk.count(); i = i + (u32)1)
-        fileOut.appendByte((u8)((Number*)signedApk.get(i)).asU32());
-    Files.writeData(out, fileOut);
+    Files.writeData(out, signedApk);
     Stdio.printf("xcc: android APK -> '%s'  (adb install -r %s)\n",
                  out.cString(), out.cString());
 }
 
 // "XKEY1" then four little-endian length-prefixed blobs: n, e, d, cert.
-Array* apkKeyField(Data* dd, u32* at)
+Data* apkKeyField(Data* dd, u32* at)
 {
     u32 p = *at;
     u32 n = (u32)dd.byteAt(p) | ((u32)dd.byteAt(p + (u32)1) << (u32)8)
           | ((u32)dd.byteAt(p + (u32)2) << (u32)16) | ((u32)dd.byteAt(p + (u32)3) << (u32)24);
     p = p + (u32)4;
-    Array* out = new Array();
-    for (u32 i = (u32)0; i < n; i = i + (u32)1)
-        out.add((Object*)Number.withU32((u32)dd.byteAt(p + i)));
+    Data* out = dd.subdata(p, n);
     *at = p + n;
     return out;
 }
@@ -4462,16 +4436,16 @@ void signIfRequested(DriverOptions* d, String* outPath)
     if (id.why() != (String*)0) { Stdio.printf("xcc: error: --sign: %s\n", id.why().cString()); Process.exit((i32)1); return; }
     Data* md = Files.readData(outPath);
     if (md == (Data*)0) { Stdio.printf("xcc: error: --sign: cannot read '%s'\n", outPath.cString()); Process.exit((i32)1); return; }
-    Array* ent = id.entitlements();
+    Data* ent = id.entitlements();
     if (d.signEntitlements() != (String*)0) {
         Data* ed = Files.readData(d.signEntitlements());
         if (ed == (Data*)0) { Stdio.printf("xcc: error: --sign-entitlements: cannot read '%s'\n", d.signEntitlements().cString()); Process.exit((i32)1); return; }
         ent = Bytes.fromData(ed);
     }
     CodeSign* cs = new CodeSign();
-    Array* img = cs.resign(Bytes.fromData(md), outPath.lastPathComponent(), id, ent, (Array*)0, (Array*)0, String.withCString("20260101000000Z"));
-    if (img == (Array*)0) { Stdio.printf("xcc: error: --sign: %s\n", cs.why().cString()); Process.exit((i32)1); return; }
-    if (!Files.writeData(outPath, Bytes.toData(img))) { Stdio.printf("xcc: error: cannot write '%s'\n", outPath.cString()); Process.exit((i32)1); return; }
+    Data* img = cs.resign(md, outPath.lastPathComponent(), id, ent, (Data*)0, (Data*)0, String.withCString("20260101000000Z"));
+    if (img == (Data*)0) { Stdio.printf("xcc: error: --sign: %s\n", cs.why().cString()); Process.exit((i32)1); return; }
+    if (!Files.writeData(outPath, img)) { Stdio.printf("xcc: error: cannot write '%s'\n", outPath.cString()); Process.exit((i32)1); return; }
     Files.setExecutable(outPath);
     if (!d.quiet()) Stdio.printf("xcc: developer-signed -> '%s'\n", outPath.cString());
 }

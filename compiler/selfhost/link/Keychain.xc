@@ -85,9 +85,9 @@ class Keychain
         return false;
         }
 
-    static Array* bytesOfCFData(pointer d)
+    static Data* bytesOfCFData(pointer d)
         {
-        Array* out = new Array();
+        Data* out = new Data();
         if (d == (pointer)0)
             return out;
         i64 n = CFDataGetLength(d);
@@ -195,7 +195,7 @@ class Keychain
             }
 
         pointer leafData = SecCertificateCopyData(matchCert);
-        Array* leafDer = Keychain.bytesOfCFData(leafData);
+        Data* leafDer = Keychain.bytesOfCFData(leafData);
         if (leafData != (pointer)0)
             CFRelease(leafData);
         Array* chain = Keychain.chainAbove(matchCert);
@@ -229,10 +229,10 @@ class Keychain
             m.appendCString(")");
             return fail(m);
             }
-        Array* keyDer = Keychain.bytesOfCFData(wrapped);
+        Data* keyDer = Keychain.bytesOfCFData(wrapped);
         CFRelease(wrapped);
 
-        Array* ent = (Array*)0;
+        Data* ent = (Data*)0;
         if (profilePath != (String*)0)
             {
             Data* raw = Files.readData(profilePath);

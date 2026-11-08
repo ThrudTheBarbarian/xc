@@ -18,7 +18,7 @@ class PlistNode
     {
     u32 _kind;
     String* _text;  // string/integer/real/date: the (unescaped) text
-    Array* _bytes;  // data
+    Data* _bytes;  // data
     Array* _keys;   // dict: String*
     Array* _values; // dict values, or array elements: PlistNode*
     void init(void)
@@ -66,10 +66,10 @@ class Plist
 
     // ── reading ─────────────────────────────────────────────────────────────
     // The root value of an XML plist, or null when it does not parse.
-    static PlistNode* parse(Array* bytes)
+    static PlistNode* parse(Data* bytes)
         {
         String* s = String.withCString("");
-        for (u32 i = (u32)0; i < bytes.count(); i = i + (u32)1)
+        for (u32 i = (u32)0; i < bytes.length(); i = i + (u32)1)
             s.appendByte((u8)Bytes.at(bytes, i));
         Plist* r = new Plist();
         r._s = s;
@@ -330,7 +330,7 @@ class Plist
 
     // ── writing ─────────────────────────────────────────────────────────────
     // The CoreFoundation XML serialisation of `root`, as bytes.
-    static Array* xml(PlistNode* root)
+    static Data* xml(PlistNode* root)
         {
         String* s = String.withCString("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
                                        "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
@@ -387,12 +387,12 @@ class Plist
         }
     // CoreFoundation's base64 for <data>: 76 columns, the indent counting
     // eight per tab against the line.
-    static void data(String* s, Array* b, u32 ind)
+    static void data(String* s, Data* b, u32 ind)
         {
         String* T = String.withCString("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/");
         u32 cap = ind > (u32)8 ? (u32)8 : ind;
         String* line = String.withCString("");
-        u32 n = b.count();
+        u32 n = b.length();
         u32 i = (u32)0;
         while (i < n)
             {
@@ -440,7 +440,7 @@ class Plist
         u32 k = v._kind;
         if (k == (u32)PL_DICT)
             {
-            if (v._keys.count() == (u32)0)
+            if (v._keys.length() == (u32)0)
                 {
                 s.appendCString("<dict/>\n");
                 return;
@@ -448,7 +448,7 @@ class Plist
             s.appendCString("<dict>\n");
             // Insertion sort of the key indices, byte order.
             Array* order = new Array();
-            for (u32 i = (u32)0; i < v._keys.count(); i = i + (u32)1)
+            for (u32 i = (u32)0; i < v._keys.length(); i = i + (u32)1)
                 {
                 String* key = (String*)v._keys.get(i);
                 u32 at = order.count();
@@ -476,13 +476,13 @@ class Plist
             }
         if (k == (u32)PL_ARRAY)
             {
-            if (v._values.count() == (u32)0)
+            if (v._values.length() == (u32)0)
                 {
                 s.appendCString("<array/>\n");
                 return;
                 }
             s.appendCString("<array>\n");
-            for (u32 i = (u32)0; i < v._values.count(); i = i + (u32)1)
+            for (u32 i = (u32)0; i < v._values.length(); i = i + (u32)1)
                 Plist.write(s, (PlistNode*)v._values.get(i), ind + (u32)1);
             Plist.indent(s, ind);
             s.appendCString("</array>\n");
@@ -525,44 +525,44 @@ class Profile
     // The XML plist a .mobileprovision carries: ContentInfo { OID, [0] {
     // SignedData { version, digestAlgorithms, encapContentInfo { OID, [0] {
     // OCTET STRING } } ... } } }. Null when it is not shaped like that.
-    static Array* content(Array* mobileProvision)
+    static Data* content(Data* mobileProvision)
         {
         DerReader* ci = DerReader.of(mobileProvision).readConstructed();
         if (ci == (DerReader*)0)
-            return (Array*)0;
+            return (Data*)0;
         ci.readTLV(); // signedData OID
         DerReader* ctx0 = ci.readConstructed();
         if (ctx0 == (DerReader*)0)
-            return (Array*)0;
+            return (Data*)0;
         DerReader* sd = ctx0.readConstructed();
         if (sd == (DerReader*)0)
-            return (Array*)0;
+            return (Data*)0;
         sd.readTLV();     // version
         sd.readElement(); // digestAlgorithms
         DerReader* eci = sd.readConstructed();
         if (eci == (DerReader*)0)
-            return (Array*)0;
+            return (Data*)0;
         eci.readTLV(); // eContentType
         DerReader* ectx = eci.readConstructed();
         if (ectx == (DerReader*)0)
-            return (Array*)0;
-        Array* plist = ectx.readTLV();
-        if (plist == (Array*)0 || ectx.lastTag() != (u32)$04)
-            return (Array*)0;
+            return (Data*)0;
+        Data* plist = ectx.readTLV();
+        if (plist == (Data*)0 || ectx.lastTag() != (u32)$04)
+            return (Data*)0;
         return plist;
         }
     // The profile's Entitlements dictionary as a standalone XML plist, or null.
-    static Array* entitlements(Array* mobileProvision)
+    static Data* entitlements(Data* mobileProvision)
         {
-        Array* plist = Profile.content(mobileProvision);
-        if (plist == (Array*)0)
-            return (Array*)0;
+        Data* plist = Profile.content(mobileProvision);
+        if (plist == (Data*)0)
+            return (Data*)0;
         PlistNode* root = Plist.parse(plist);
         if (root == (PlistNode*)0 || root.kind() != (u32)PL_DICT)
-            return (Array*)0;
+            return (Data*)0;
         PlistNode* ent = root.get(String.withCString("Entitlements"));
         if (ent == (PlistNode*)0 || ent.kind() != (u32)PL_DICT)
-            return (Array*)0;
+            return (Data*)0;
         return Plist.xml(ent);
         }
     }

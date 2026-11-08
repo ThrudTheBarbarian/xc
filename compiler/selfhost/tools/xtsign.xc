@@ -316,7 +316,7 @@ void main(void)
         Process.exit((i32)1);
         return;
         }
-    Array* ent = id.entitlements();
+    Data* ent = id.entitlements();
     if (entPath != (String*)0)
         {
         Data* ed = Files.readData(entPath);
@@ -330,8 +330,8 @@ void main(void)
         }
     // Bundle-mode inputs (docs/ios/bundle-signing.md, Part B): hash the
     // Info.plist and CodeResources into CD special slots 1 and 3.
-    Array* infoPlist = (Array*)0;
-    Array* codeResources = (Array*)0;
+    Data* infoPlist = (Data*)0;
+    Data* codeResources = (Data*)0;
     if (infoPlistPath != (String*)0)
         {
         Data* ipd = Files.readData(infoPlistPath);
@@ -356,8 +356,8 @@ void main(void)
         }
     // A fixed signing time keeps a re-sign reproducible; the CMS carries it.
     CodeSign* cs = new CodeSign();
-    Array* signedImg = cs.resign(Bytes.fromData(md), identifier, id, ent, infoPlist, codeResources, String.withCString("20260101000000Z"));
-    if (signedImg == (Array*)0)
+    Data* signedImg = cs.resign(Bytes.fromData(md), identifier, id, ent, infoPlist, codeResources, String.withCString("20260101000000Z"));
+    if (signedImg == (Data*)0)
         {
         say("signing failed: ", cs.why(), "");
         Process.exit((i32)1);

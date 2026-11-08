@@ -86,13 +86,13 @@ class Bignum
         }
 
     // Big-endian bytes, as every crypto value is written.
-    static Bignum* fromBytes(Array* bytes)
+    static Bignum* fromBytes(Data* bytes)
         {
         Bignum* r = new Bignum();
-        u32 n = bytes.count();
+        u32 n = bytes.length();
         for (u32 i = (u32)0; i < n; i = i + (u32)1)
             {
-            u32 b = ((Number*)bytes.get(n - (u32)1 - i)).asU32() & (u32)$FF;
+            u32 b = (u32)bytes.byteAt(n - (u32)1 - i) & (u32)$FF;
             u32 li = i >> (u32)2;
             if (li >= (u32)160)
                 break;
@@ -103,13 +103,13 @@ class Bignum
         r.trim();
         return r;
         }
-    Array* toBytes(u32 width)
+    Data* toBytes(u32 width)
         {
-        Array* out = new Array();
+        Data* out = new Data();
         for (u32 i = (u32)0; i < width; i = i + (u32)1)
             {
             u32 idx = width - (u32)1 - i;
-            out.add((Object*)Number.withU32((limb(idx >> (u32)2) >> ((idx & (u32)3) << (u32)3)) & (u32)$FF));
+            out.appendByte((u8)((limb(idx >> (u32)2) >> ((idx & (u32)3) << (u32)3)) & (u32)$FF));
             }
         return out;
         }
