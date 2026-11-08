@@ -890,6 +890,18 @@ class OptProfile
     // begins at this value and the runtime limit is computed from
     // (bound - start). The value must be loop-invariant.
     IROperand* _ivStartOp;
+    // A map's store and load bases that may overlap (#95), in pairs: the
+    // preheader checks them and runs the whole range in the scalar clone
+    // when a store lands within the vector loop's reach of a load.
+    Array* _overlap;
+    Array* overlap(void)
+        {
+        return _overlap;
+        }
+    void setOverlap(Array* a)
+        {
+        _overlap = a;
+        }
     bool rtTrip(void)
         {
         return _rtTrip;
@@ -1829,6 +1841,7 @@ class BeFact : Object
     IROperand* _vrIvStartOp; // a RUNTIME start (a par chunk's `lo`), else 0
     bool _vrRuntime;       // the bound is a RUNTIME value, not a literal
     bool _vrMapRT;         // ... the same, for the MAP recogniser's own bound check
+    Array* _vrOverlap;     // the map body's base pairs that may overlap (#95)
     u32 _magicM;           // magic multiplier from vecMagicU32
     u32 _magicS;           // and its post-shift
     // Constant divides in the body, keyed by the UDiv result, each holding

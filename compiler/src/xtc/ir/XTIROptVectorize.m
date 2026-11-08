@@ -88,6 +88,10 @@
 // constant `ivStart` is then 0. The value must be loop-invariant.
 @property(nonatomic) XTIROperand* ivStartOp;
 @property(nonatomic) XTIRBlock* preheader; // header pred that is not the latch
+// A map's store and load bases that may overlap (#95), in pairs: the
+// preheader checks them and runs the whole range in the scalar clone when a
+// store lands within the vector loop's reach of a load.
+@property(nonatomic) NSArray<XTIROperand*>* overlap;
 // Min/max reduction (isMaxMin = YES): the loop body is a diamond
 //   body: load elem; cmp(elem,acc); CondBranch then, join
 //   then: [reload elem]; Branch join
@@ -1224,6 +1228,61 @@ static BOOL xtvIvStartConst(XTIRInsn* ivPhi, XTIRBlock* latch,
     return YES;
     }
 
+// The object a map's base points to the start of, where the IR says so: a
+// global (its name), a local array (its frame slot, which no instruction
+// defines) or a new allocation (the call's result). nil for anything else: a
+// parameter, a loaded pointer, an address computed from one. As the port's
+// vecBaseObject.
+static id _Nullable xtvBaseObject(XTIROperand* base, NSDictionary<NSNumber*, XTIRInsn*>* defOf)
+    {
+    if (base.kind != XTIROperandKindUse)
+        return nil;
+    XTIRInsn* d = defOf[@(base.valueId)];
+    if (!d || d.operands.count < 1)
+        return nil;
+    XTIROperand* o = d.operands[0];
+    if (d.opcode == XTIROpAddrOf)
+        {
+        if (o.kind == XTIROperandKindSym)
+            return sVecModule.symbols[o.symbolId].name;
+        if (o.kind == XTIROperandKindUse && !defOf[@(o.valueId)])
+            return @(o.valueId);
+        return nil;
+        }
+    if (d.opcode == XTIROpCall && o.kind == XTIROperandKindSym
+        && [sVecModule.symbols[o.symbolId].name hasPrefix:@"_xtc_new_"])
+        return @(base.valueId);
+    return nil;
+    }
+
+// A store that lands a few elements past a load (#95): the vector loop reads
+// a whole vector before it writes, so a destination one element after a
+// source read values the loop as written had already overwritten. A pair is
+// safe when its bases are one, or both are objects of known identity (the same
+// object at the same address, or two that do not overlap). Any other pair goes
+// in *pairs for the preheader to check (xtvEmitOverlapGuard), which needs both
+// bases defined before the loop; a base made in the body refuses the loop. As
+// the port's vecBasesApart.
+static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>* ldBases, XTIRBlock* B,
+                          NSDictionary<NSNumber*, XTIRInsn*>* defOf, NSDictionary<NSNumber*, XTIRBlock*>* defBlk,
+                          NSMutableArray<XTIROperand*>* pairs)
+    {
+    for (XTIROperand* st in stBases)
+        for (XTIROperand* ld in ldBases)
+            {
+            if (st.kind == XTIROperandKindUse && ld.kind == XTIROperandKindUse && st.valueId == ld.valueId)
+                continue;
+            if (xtvBaseObject(st, defOf) && xtvBaseObject(ld, defOf))
+                continue;
+            if (st.kind != XTIROperandKindUse || ld.kind != XTIROperandKindUse
+                || defBlk[@(st.valueId)] == B || defBlk[@(ld.valueId)] == B)
+                return NO;
+            [pairs addObject:st];
+            [pairs addObject:ld];
+            }
+    return YES;
+    }
+
 - (nullable XTVecCand*)recognise:(XTIRFunction*)fn
     {
     NSMutableDictionary<NSNumber*, XTIRInsn*>* defOf = [NSMutableDictionary dictionary];
@@ -1369,6 +1428,9 @@ static BOOL xtvIvStartConst(XTIRInsn* ivPhi, XTIRBlock* latch,
         // the lane type from the loads/stores (must be a consistent i32/u32).
         XTIRType* laneType = nil;
         BOOL ok = YES, sawLoad = NO, sawStore = NO;
+        // The bases the body loads from and stores to (xtvBasesApart).
+        NSMutableArray<XTIROperand*>* ldBases = [NSMutableArray array];
+        NSMutableArray<XTIROperand*>* stBases = [NSMutableArray array];
         // The elementwise value set: results of iv-indexed loads and of
         // elementwise arith. An arith/store operand must be in this set, or a
         // loop-invariant constant (splattable). This rejects a per-lane-varying
@@ -1453,6 +1515,7 @@ static BOOL xtvIvStartConst(XTIRInsn* ivPhi, XTIRBlock* latch,
                 laneType = lt;
                 sawLoad = YES;
                 [elemIds addObject:@(insn.result.valueId)];
+                [ldBases addObject:defOf[@(insn.operands[0].valueId)].operands[0]];
                 continue;
                 }
             if (op == XTIROpStore)
@@ -1464,6 +1527,7 @@ static BOOL xtvIvStartConst(XTIRInsn* ivPhi, XTIRBlock* latch,
                     break;
                     }
                 sawStore = YES;
+                [stBases addObject:defOf[@(insn.operands[0].valueId)].operands[0]];
                 continue;
                 }
             // Scalar plumbing kept verbatim (constants, and the widen/narrow of
@@ -1491,6 +1555,9 @@ static BOOL xtvIvStartConst(XTIRInsn* ivPhi, XTIRBlock* latch,
             break; // call, shifted load, per-lane-varying scalar, etc.
             }
         if (!ok || !sawLoad || !sawStore || !laneType)
+            continue;
+        NSMutableArray<XTIROperand*>* overlapPairs = [NSMutableArray array];
+        if (!xtvBasesApart(stBases, ldBases, B, defOf, defBlk, overlapPairs))
             continue;
 
         NSUInteger vb = [self vectorBytes];
@@ -1527,8 +1594,12 @@ static BOOL xtvIvStartConst(XTIRInsn* ivPhi, XTIRBlock* latch,
             ivStart = 0;
             }
         BOOL rt = runtimeTrip || rtStart != nil;
+        // Bases that may overlap are checked in the preheader (#95), against a
+        // limit computed there, as a runtime trip's is; the scalar clone takes
+        // the range when they do. As the port's vecMapAt.
+        BOOL guarded = overlapPairs.count > 0;
         XTIROperand* boundOp = guard.operands[1];
-        if (!runtimeTrip && rtStart)
+        if (!runtimeTrip && (rtStart || guarded))
             boundOp = [XTIROperand immIWithType:ivPhi.result.type value:N];
         // N is only meaningful when the bound is a CONSTANT — with a runtime
         // trip it is still 0, so an unguarded `ivStart >= N` refuses every
@@ -1566,6 +1637,7 @@ static BOOL xtvIvStartConst(XTIRInsn* ivPhi, XTIRBlock* latch,
         // CLONE, whose range is shorter than a vector by construction.
         if (!rt && (epiM_ - ivStart) < (int64_t)vw)
             continue;
+        rt = rt || guarded;
 
         XTVecCand* c = [XTVecCand new];
         c.H = H;
@@ -1586,6 +1658,7 @@ static BOOL xtvIvStartConst(XTIRInsn* ivPhi, XTIRBlock* latch,
         c.boundOp = boundOp;
         c.ivStart = ivStart;
         c.ivStartOp = rtStart;
+        c.overlap = overlapPairs;
         return c;
         }
     return nil;
@@ -1870,6 +1943,45 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
     return m.valueId;
     }
 
+// The vector loop's limit, checked against each pair of bases that may overlap
+// (#95): where a store's base lies 1 to span-1 bytes past a load's, the limit
+// is the start, so the vector loop runs no trip and the scalar clone the whole
+// range. span is eight vectors, past anything the unrolled vector loop or a
+// paired load reads ahead of a store. As the port's vecOverlapGuard.
+static XTIRValueId xtvEmitOverlapGuard(XTIRFunction* fn, XTIRBlock* PH, XTIRValueId lim, XTVecCand* c)
+    {
+    XTIRType* ivTy = c.ivPhi.result.type;
+    XTIROperand* (^emit)(XTIROpcode, XTIRType*, NSArray<XTIROperand*>*, uint8_t) =
+        ^XTIROperand*(XTIROpcode op, XTIRType* ty, NSArray<XTIROperand*>* ops, uint8_t pred) {
+          XTIRValueId rid = [fn allocateValueId];
+          XTIRValue* rv = [[XTIRValue alloc] initWithValueId:rid
+                                                        type:ty
+                                                     defSite:[[XTIRDefSite alloc] initWithBlock:PH insnIndex:0]];
+          [fn registerValue:rv];
+          [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:op
+                                                               result:rv
+                                                             operands:ops
+                                                            predicate:pred
+                                                               dbgLoc:nil]];
+          return [XTIROperand useWithValueId:rid];
+        };
+    XTIROperand* start = c.ivStartOp ?: [XTIROperand immIWithType:ivTy value:c.ivStart];
+    int64_t span = (int64_t)c.vecBytes * 8;
+    XTIRType* w = [XTIRType i64Type];
+    for (NSUInteger i = 0; i + 1 < c.overlap.count; i += 2)
+        {
+        XTIROperand* sv = emit(XTIROpPtrToInt, w, @[ c.overlap[i] ], 0);
+        XTIROperand* lv = emit(XTIROpPtrToInt, w, @[ c.overlap[i + 1] ], 0);
+        XTIROperand* dv = emit(XTIROpSub, w, @[ sv, lv ], 0);
+        XTIROperand* mv = emit(XTIROpSub, w, @[ dv, [XTIROperand immIWithType:w value:1] ], 0);
+        XTIROperand* bv = emit(XTIROpICmp, [XTIRType boolType],
+                               @[ mv, [XTIROperand immIWithType:w value:span - 1] ], (uint8_t)XTIRICmpULT);
+        XTIROperand* nv = emit(XTIROpSelect, ivTy, @[ bv, start, [XTIROperand useWithValueId:lim] ], 0);
+        lim = nv.valueId;
+        }
+    return lim;
+    }
+
 // The vector width this target's profile allows: 16 bytes, 32 under -mavx2
 // (SIMD step 1, S2), or 64 under -mavx512. Map, reduce and min/max loops take it; the
 // widening forms (u8/u16 sums and products) stay at 16 until the back ends
@@ -1905,6 +2017,8 @@ static XTIRValueId xtvEmitRuntimeM(XTIRFunction* fn, XTIRBlock* PH,
             XTIRValueId mid = xtvEmitRuntimeM(fn, c.preheader, c.boundOp,
                                               c.ivStart, c.ivStartOp, c.vw,
                                               c.ivPhi.result.type, c.guard.predicate);
+            if (c.overlap.count)
+                mid = xtvEmitOverlapGuard(fn, c.preheader, mid, c);
             runtimeMId = mid;
             gops[1] = [XTIROperand useWithValueId:mid];
             }

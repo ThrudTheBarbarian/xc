@@ -695,6 +695,8 @@
         if (c.rtTrip())
             {
             _vecMapRtM = self.vecRuntimeLimit(c, c.pre());
+            if (c.overlap() != (Array*)0 && c.overlap().count() > (u32)0)
+                _vecMapRtM = self.vecOverlapGuard(c, c.pre(), _vecMapRtM);
             c.guard().ops().set((u32)1, (Object*)IROperand.useVal(_vecMapRtM));
             }
         else
@@ -845,6 +847,9 @@
         // loop-invariant scalar that is safe to broadcast — which is what
         // rejects `b[i] * i`, where the multiplier differs per lane.
         Array* elems = new Array();
+        // The bases the body loads from and stores to (vecBasesApart).
+        Array* ldBases = new Array();
+        Array* stBases = new Array();
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
@@ -887,6 +892,7 @@
                 laneTy = lt;
                 sawLoad = true;
                 elems.add((Object*)n.res());
+                ldBases.add((Object*)self.vecElemBase((IROperand*)n.ops().get((u32)0), defOf));
                 continue;
                 }
             if (op.equals(String.withCString("Store")))
@@ -898,6 +904,7 @@
                 if (!vecOperandOK((IROperand*)n.ops().get((u32)1), elems, B, (IRBlock*)defBlk.get((Hashable*)iv), defOf, defBlk))
                     return (String*)0;
                 sawStore = true;
+                stBases.add((Object*)self.vecElemBase((IROperand*)n.ops().get((u32)0), defOf));
                 continue;
                 }
             // Scalar plumbing, kept verbatim — constants and the widen/narrow
@@ -921,7 +928,132 @@
             }
         if (!sawLoad || !sawStore)
             return (String*)0;
+        if (!self.vecBasesApart(stBases, ldBases, B, defOf, defBlk))
+            return (String*)0;
         return laneTy;
+        }
+
+    // The base of the ElementAddr an access goes through.
+    final IROperand* vecElemBase(IROperand* addr, Map* defOf)
+        {
+        IRInsn* ea = (IRInsn*)defOf.get((Hashable*)addr.val());
+        return (IROperand*)ea.ops().get((u32)0);
+        }
+
+    // The object a base points to the start of, where the IR says so: a
+    // global (its name), a local array (its frame slot) or a new allocation
+    // (the call's result). 0 for anything else: a parameter, a loaded pointer,
+    // an address computed from one, any of which may point into another.
+    final Object* vecBaseObject(IROperand* base, Map* defOf)
+        {
+        if (base.kind() != (u8)OPK_USE)
+            return (Object*)0;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)base.val());
+        if (d == (IRInsn*)0 || d.ops().count() < (u32)1)
+            return (Object*)0;
+        IROperand* o = (IROperand*)d.ops().get((u32)0);
+        if (d.op().equals(String.withCString("AddrOf")))
+            {
+            if (o.kind() == (u8)OPK_SYM)
+                return (Object*)o.name();
+            // A frame slot is defined by no instruction.
+            if (o.kind() == (u8)OPK_USE && defOf.get((Hashable*)o.val()) == (Object*)0)
+                return (Object*)o.val();
+            return (Object*)0;
+            }
+        if (d.op().equals(String.withCString("Call")) && o.kind() == (u8)OPK_SYM
+            && o.name().hasPrefix(String.withCString("_xtc_new_")))
+            return (Object*)base.val();
+        return (Object*)0;
+        }
+
+    // A store that lands a few elements past a load (#95): the vector loop
+    // reads a whole vector before it writes, so a destination that starts one
+    // element after a source read values the loop as written had already
+    // overwritten. A pair is safe when its bases are one, or both are objects
+    // of known identity (vecBaseObject: the same object at the same address,
+    // or two that do not overlap). Any other pair goes in _vrOverlap for the
+    // preheader to check (vecOverlapGuard), which needs both bases defined
+    // before the loop; a base made in the body refuses the loop.
+    final bool vecBasesApart(Array* stBases, Array* ldBases, IRBlock* B, Map* defOf, Map* defBlk)
+        {
+        _vrOverlap = new Array();
+        for (u32 i = (u32)0; i < stBases.count(); i = i + (u32)1)
+            {
+            IROperand* st = (IROperand*)stBases.get(i);
+            for (u32 j = (u32)0; j < ldBases.count(); j = j + (u32)1)
+                {
+                IROperand* ld = (IROperand*)ldBases.get(j);
+                if (st.kind() == (u8)OPK_USE && ld.kind() == (u8)OPK_USE && st.val() == ld.val())
+                    continue;
+                if (self.vecBaseObject(st, defOf) != (Object*)0 && self.vecBaseObject(ld, defOf) != (Object*)0)
+                    continue;
+                if (st.kind() != (u8)OPK_USE || ld.kind() != (u8)OPK_USE
+                    || (IRBlock*)defBlk.get((Hashable*)st.val()) == B || (IRBlock*)defBlk.get((Hashable*)ld.val()) == B)
+                    return false;
+                _vrOverlap.add((Object*)st);
+                _vrOverlap.add((Object*)ld);
+                }
+            }
+        return true;
+        }
+
+    // The vector loop's limit, checked against each pair that may overlap
+    // (#95): where a store's base lies 1 to span-1 bytes past a load's, the
+    // limit is the start, so the vector loop runs no trip and the scalar clone
+    // the whole range. span is eight vectors, past anything the unrolled
+    // vector loop or a paired load reads ahead of a store. As the reference's
+    // xtvEmitOverlapGuard.
+    final IRValue* vecOverlapGuard(VecCand* c, IRBlock* PH, IRValue* lim)
+        {
+        String* ivTy = c.iv().ty();
+        String* wty = String.withCString("I64");
+        IROperand* start = c.ivStartOp();
+        if (start == (IROperand*)0)
+            start = IROperand.immI(c.ivStart(), ivTy);
+        i64 span = (i64)c.vecBytes() * (i64)8;
+        Array* pairs = c.overlap();
+        for (u32 i = (u32)0; i + (u32)1 < pairs.count(); i = i + (u32)2)
+            {
+            IRValue* sv = new IRValue(wty);
+            IRInsn* si = IRInsn.with(String.withCString("PtrToInt"));
+            si.setRes(sv);
+            si.add((IROperand*)pairs.get(i));
+            PH.add(si);
+            IRValue* lv = new IRValue(wty);
+            IRInsn* li = IRInsn.with(String.withCString("PtrToInt"));
+            li.setRes(lv);
+            li.add((IROperand*)pairs.get(i + (u32)1));
+            PH.add(li);
+            IRValue* dv = new IRValue(wty);
+            IRInsn* di = IRInsn.with(String.withCString("Sub"));
+            di.setRes(dv);
+            di.add(IROperand.useVal(sv));
+            di.add(IROperand.useVal(lv));
+            PH.add(di);
+            IRValue* mv = new IRValue(wty);
+            IRInsn* mi = IRInsn.with(String.withCString("Sub"));
+            mi.setRes(mv);
+            mi.add(IROperand.useVal(dv));
+            mi.add(IROperand.immI((i64)1, wty));
+            PH.add(mi);
+            IRValue* bv = new IRValue(String.withCString("Bool"));
+            IRInsn* bi = IRInsn.with(String.withCString("ICmp"));
+            bi.setRes(bv);
+            bi.setPred(String.withCString("ULT"));
+            bi.add(IROperand.useVal(mv));
+            bi.add(IROperand.immI(span - (i64)1, wty));
+            PH.add(bi);
+            IRValue* nv = new IRValue(ivTy);
+            IRInsn* ni = IRInsn.with(String.withCString("Select"));
+            ni.setRes(nv);
+            ni.add(IROperand.useVal(bv));
+            ni.add(start);
+            ni.add(IROperand.useVal(lim));
+            PH.add(ni);
+            lim = nv;
+            }
+        return lim;
         }
 
     // Usable in the elementwise computation: an already-elementwise value (one

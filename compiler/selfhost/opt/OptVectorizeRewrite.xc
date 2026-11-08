@@ -1315,8 +1315,12 @@
             mapStart = (i32)0;
             }
         bool rt = _vrMapRT || rtStart != (IROperand*)0;
+        // Bases that may overlap are checked in the preheader (#95), against
+        // a limit computed there, as a runtime trip's is; the scalar clone
+        // takes the range when they do.
+        bool guarded = _vrOverlap.count() > (u32)0;
         IROperand* boundOp = (IROperand*)guard.ops().get((u32)1);
-        if (!_vrMapRT && rtStart != (IROperand*)0)
+        if (!_vrMapRT && (rtStart != (IROperand*)0 || guarded))
             boundOp = IROperand.immI((i64)n, iv.ty());
         if (!rt && mapStart >= n)
             return (VecCand*)0;
@@ -1335,6 +1339,7 @@
         // (the zero-start test used to do that job).
         if (!rt && (epiM - mapStart) < (i32)vw)
             return (VecCand*)0;
+        rt = rt || guarded;
 
         VecCand* c = new VecCand();
         c.setLoop(H, B, E);
@@ -1346,6 +1351,7 @@
         c.setRuntime(rt, boundOp);
         c.setIvStart((i64)mapStart);
         c.setIvStartOp(rtStart);
+        c.setOverlap(_vrOverlap);
         return c;
         }
 
