@@ -1794,7 +1794,10 @@ class ParDevice
             gParWarmPrev[e] = (i64)-1;
             // A block run once a process: its first run is all there is, so
             // it is the time compared (the one-off kernel build is not in it).
-            if (gParOnce[i] && cand != (u32)1)
+            // Every candidate: a CUDA-path build times Vulkan as candidate 1,
+            // and leaving it out kept auto measuring for good on a host whose
+            // GPU only Vulkan reaches.
+            if (gParOnce[i])
                 {
                 *out = us;
                 return true;
@@ -2075,10 +2078,19 @@ class ParDevice
             if (gParVarKept[i] != (u32)0)
                 return gParVarKept[i] == (u32)2;
 #if PAR_CUDA
-            // While auto chooses between CUDA and Vulkan, each runs the rule's
-            // kernel; the kernels are timed on the interface it keeps.
+            // While auto chooses between CUDA and Vulkan, each runs the same
+            // kernel: the rule's, or the one an earlier process left untimed
+            // (the interface is chosen again in each process, and a block run
+            // once a process would otherwise time the rule's kernel for good).
+            // The kernels are timed on the interface it keeps.
             if (gParMeasuring[i] && gParApi[i] == (i32)0 && forcedApi() == (i32)0)
+                {
+                bool plainT = gParVarUs[i * (u32)2] >= (i64)0;
+                bool tripsT = gParVarUs[i * (u32)2 + (u32)1] >= (i64)0;
+                if (plainT != tripsT)
+                    return plainT;
                 return ruleTrips(kind, dev);
+                }
 #endif
             if (gParMeasuring[i] && gParVarNow[i] == (u32)0 && gParVarUs[i * (u32)2] < (i64)0
                 && gParVarUs[i * (u32)2 + (u32)1] < (i64)0)
