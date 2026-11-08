@@ -7813,11 +7813,11 @@ static BOOL escFloatPred(uint8_t p)
 
 - (void)apply
     {
-    // Vectors side by side: a counted inner loop (every lane makes every trip)
-    // and nothing summed across items, so the copies share the trip and touch
-    // only their own items.
+    // Vectors side by side: a counted inner loop (every lane makes every trip),
+    // so the copies share the trip and touch only their own items; a sum takes
+    // each copy's lanes in turn (jamBody, #21).
     _jam = 1;
-    if (self.interleave > 1 && _counted && _accPhis.count == 0
+    if (self.interleave > 1 && _counted
         && !(_boundConst && _n < (int64_t)(_vf * self.interleave)))
         _jam = self.interleave;
     _map = [NSMutableDictionary dictionary];
@@ -8407,6 +8407,37 @@ static BOOL escFloatPred(uint8_t p)
     [VI.phiNodes removeAllObjects];
     [VI.phiNodes addObjectsFromArray:phis];
     [self jamInsns:VE maps:maps D:D skip:vivNext lead:@[]];
+    // The sums (#21): each copy adds its lanes' reduction to the sum the copy
+    // before it made, and the head's phi takes the last copy's. As the port.
+    XTIRBlock* VH = VE.terminator.operands[0].blockRef;
+    for (NSUInteger i = 0; i < _vsumNext.count; i++)
+        {
+        XTIRValueId last = _vsumNext[i].valueId;
+        for (NSMutableDictionary* m in maps)
+            {
+            NSNumber* cv = m[@(_vsumNext[i].valueId)];
+            if (!cv)
+                break;
+            for (XTIRInsn* c in VE.instructions)
+                if (c.result && c.result.valueId == cv.unsignedLongLongValue)
+                    {
+                    NSMutableArray<XTIROperand*>* ops = [c.operands mutableCopy];
+                    ops[0] = [XTIROperand useWithValueId:last];
+                    [c replaceOperands:ops];
+                    }
+            last = cv.unsignedLongLongValue;
+            }
+        for (XTIRInsn* p in VH.phiNodes)
+            {
+            if (!p.result || p.result.valueId != _vsum[i].valueId)
+                continue;
+            NSMutableArray<XTIROperand*>* ops = [p.operands mutableCopy];
+            for (NSUInteger q = 0; q + 1 < ops.count; q += 2)
+                if (ops[q].blockRef == VE)
+                    ops[q + 1] = [XTIROperand useWithValueId:last];
+            [p replaceOperands:ops];
+            }
+        }
     }
 
 - (void)exitTo:(XTIRBlock*)VX iv:(XTIRValue*)viv

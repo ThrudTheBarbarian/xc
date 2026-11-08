@@ -465,6 +465,35 @@
             }
         VI.setPhis(phis);
         escJamInsns(VE, maps, D, vivNext, new Array());
+        // The sums (#21): each copy adds its lanes' reduction to the sum the
+        // copy before it made, and the head's phi takes the last copy's.
+        IRBlock* VH = ((IROperand*)VE.term().ops().get((u32)0)).blk();
+        for (u32 i = (u32)0; i < _esVSumNext.count(); i = i + (u32)1)
+            {
+            IRValue* last = (IRValue*)_esVSumNext.get(i);
+            for (u32 u = (u32)0; u < maps.count(); u = u + (u32)1)
+                {
+                Object* cv = ((Map*)maps.get(u)).get((Hashable*)_esVSumNext.get(i));
+                if (cv == (Object*)0)
+                    break;
+                for (u32 k = (u32)0; k < VE.insns().count(); k = k + (u32)1)
+                    {
+                    IRInsn* c = (IRInsn*)VE.insns().get(k);
+                    if (c.res() == (IRValue*)cv)
+                        c.ops().set((u32)0, (Object*)IROperand.useVal(last));
+                    }
+                last = (IRValue*)cv;
+                }
+            for (u32 k = (u32)0; k < VH.phis().count(); k = k + (u32)1)
+                {
+                IRInsn* p = (IRInsn*)VH.phis().get(k);
+                if (p.res() != (IRValue*)_esVSum.get(i))
+                    continue;
+                for (u32 q = (u32)0; q + (u32)1 < p.ops().count(); q = q + (u32)2)
+                    if (((IROperand*)p.ops().get(q)).blk() == VE)
+                        p.ops().set(q + (u32)1, (Object*)IROperand.useVal(last));
+                }
+            }
         }
 
     final void escTripTest(void)

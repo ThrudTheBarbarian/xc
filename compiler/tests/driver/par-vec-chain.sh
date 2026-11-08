@@ -5,12 +5,13 @@
 #
 # The escape vectoriser takes a par body's item loop (its items are
 # independent by the language, so its arrays need not be proved distinct)
-# and, its inner loop counted and nothing summed across items, runs four
-# vectors of four items at once so their chains interleave. A u8 shift amount
-# no longer refuses the loop. Checked on tests/fixtures/par_vec_chain.xc: the
-# multiply chain's block has four lane multiplies in its inner loop, every
-# block has lane code, both compilers write the same assembly, and the
-# program prints what it should.
+# and, its inner loop counted, runs four vectors of four items at once so
+# their chains interleave; a block that sums adds each copy's lanes in turn
+# (#21). A u8 shift amount no longer refuses the loop. Checked on
+# tests/fixtures/par_vec_chain.xc: the multiply chain's block has four lane
+# multiplies in its inner loop, every block has lane code, both compilers
+# write the same assembly, and the program prints what it should; and on
+# par_vec_chain_sum.xc, each summing block reduces four chains.
 #
 #   bash tests/driver/par-vec-chain.sh
 set -u
@@ -56,6 +57,30 @@ if [ $fail = 0 ] && [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; the
     "$XC" -q -O2 -o "$W/p" "$F" && out=$("$W/p") \
         && [ "$out" = "$(cat tests/fixtures/par_vec_chain.expected.out)" ] \
         || { echo "FAIL par-vec-chain: the program printed: ${out:-nothing}"; fail=1; }
+fi
+# Blocks that also sum (#21, tests/fixtures/par_vec_chain_sum.xc): four
+# chains side by side too, each adding its lanes' reduction to the sum.
+F=tests/fixtures/par_vec_chain_sum.xc
+for s in r x; do
+    c=$REF; [ $s = x ] && c=$XC
+    "$c" -q -O2 -A arm64 -S -o "$W/$s.s" "$F" > "$W/e" 2>&1 \
+        || { echo "FAIL par-vec-chain: $(basename "$c") does not compile the sums: $(head -c 200 "$W/e")"; fail=1; }
+done
+[ $fail = 0 ] && { cmp -s "$W/r.s" "$W/x.s" || { echo "FAIL par-vec-chain: the two compilers' assembly for the sums differs"; fail=1; }; }
+if [ $fail = 0 ]; then
+    for b in mulsum shiftsum; do
+        k=$(blk $b)
+        [ -n "$k" ] || { echo "FAIL par-vec-chain: no block named $b"; fail=1; continue; }
+        n=$(fn "$k" | grep -cE '^\s+addv s[0-9]+, v[0-9]+\.4s')
+        [ "$n" -ge 4 ] || { echo "FAIL par-vec-chain: block $b sums $n chains, not four interleaved"; fail=1; }
+    done
+    n=$(fn "$(blk mulsum)" | grep -cE '^\s+mul v[0-9]+\.4s')
+    [ "$n" -ge 4 ] || { echo "FAIL par-vec-chain: the summed multiply chain has $n lane multiplies, not four"; fail=1; }
+fi
+if [ $fail = 0 ] && [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ]; then
+    "$XC" -q -O2 -o "$W/p" "$F" && out=$("$W/p") \
+        && [ "$out" = "$(cat tests/fixtures/par_vec_chain_sum.expected.out)" ] \
+        || { echo "FAIL par-vec-chain: the summing program printed: ${out:-nothing}"; fail=1; }
 fi
 [ $fail = 0 ] && echo "par-vec-chain: ok"
 exit $fail

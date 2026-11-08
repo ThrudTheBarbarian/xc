@@ -383,11 +383,11 @@
     final void escApply(IRFunc* fn)
         {
         // Vectors side by side: a counted inner loop (every lane makes every
-        // trip) and nothing summed across items, so the copies share the trip
-        // and touch only their own items. As the reference.
+        // trip), so the copies share the trip and touch only their own items;
+        // a sum takes each copy's lanes in turn (escJam, #21). As the reference.
         _esJam = (u32)1;
         u32 jam = _profile != (OptProfile*)0 ? _profile.escapeJam() : (u32)1;
-        if (jam > (u32)1 && _esCounted && _esAccPhis.count() == (u32)0
+        if (jam > (u32)1 && _esCounted
             && !(_esBoundConst && _esN < (i64)(_esVF * jam)))
             _esJam = jam;
         _esMap = new Map();
