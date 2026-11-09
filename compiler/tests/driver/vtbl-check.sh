@@ -146,6 +146,23 @@ i32 main(void)
     return 0;
 }
 XC
+cat > "$W/mo_a.xc" <<'XC'
+class Animal { u32 legs(void) { return (u32)4; } }
+class Bird : Animal { u32 legs(void) { return (u32)2; } }
+class Zoo { static Animal@ pick(u32 i) { return i > (u32)1 ? (Animal@)new Bird() : new Animal(); } }
+XC
+cat > "$W/mo_m.xc" <<'XC'
+#import "Stdio.xc"
+#import <mo_a>
+class Fish : Animal { u32 legs(void) { return (u32)0; } }
+i32 main(i32 argc, u8** argv)
+    {
+    Animal@ a = Zoo.pick((u32)argc + (u32)1);
+    Animal@ f = new Fish();
+    Stdio.printf("%u %u\n", a.legs(), f.legs());
+    return 0;
+    }
+XC
 want_ok="acc 959"
 for c in $XC $REF; do
     [ -x "$c" ] || continue
@@ -237,6 +254,28 @@ if [ -x "$XC" ] && [ -n "$H" ]; then
         bad "plugin build for x86-64: $(head -c 300 "$W/e")"
     fi
 fi
+
+# Objects compiled apart (-c) and linked: every object carries the standard
+# library's classes, so the link gathers many runs into one section and moves
+# each vtable once. The port moved a name once per object that defined it,
+# and its programs called through the wrong vtable.
+for c in $XC $REF; do
+    [ -x "$c" ] || continue
+    n=$(basename "$c"); d="$W/mo-$n"; mkdir -p "$d"
+    for m in "" -fbounds-check=light; do
+        ( cd "$d" && "$ROOT/$c" -q -O2 $m -H "$ROOT" --emit-iface -o mo_a.xtc.iface "$W/mo_a.xc" \
+          && "$ROOT/$c" -q -O2 $m -H "$ROOT" -c -o mo_a.o "$W/mo_a.xc" \
+          && "$ROOT/$c" -q -O2 $m -H "$ROOT" -L . -c -o mo_m.o "$W/mo_m.xc" \
+          && "$ROOT/$c" -q $m -H "$ROOT" -o "mo$m" mo_a.o mo_m.o ) > "$W/e" 2>&1 \
+            || { bad "$n $m: objects: $(head -c 300 "$W/e")"; continue; }
+        got=$( cd "$d" && "./mo$m" 2>&1 )
+        [ "$got" = "2 0" ] || bad "$n $m: a program linked from objects gives '$got'"
+    done
+done
+for m in "" -fbounds-check=light; do
+    [ -f "$W/mo-xcc/mo$m" ] && [ -f "$W/mo-xcc-xc/mo$m" ] && { cmp -s "$W/mo-xcc/mo$m" "$W/mo-xcc-xc/mo$m" \
+        || bad "objects $m: the two compilers' links differ"; }
+done
 
 # The two compilers write the same programs.
 for m in -fbounds-check=light -fbounds-check; do
