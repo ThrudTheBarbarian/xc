@@ -602,6 +602,18 @@
             self.boundsElide(m);
         if (stopHere(String.withCString("bounds-elide")))
             return;
+        // A retain and its release with nothing between them that can free
+        // or write anything go, pair by pair (arcPairElide); a check between
+        // them frees nothing. Before bounds-hoist, so that a loop which only
+        // looked at an element (`(Number*)a.get(i) == v`) is quiet.
+        if (_level >= (u32)2)
+            self.arcPairElide(m);
+        if (stopHere(String.withCString("arc-pair")))
+            return;
+        if (_level >= (u32)2)
+            self.boundsHoist(m);
+        if (stopHere(String.withCString("bounds-hoist")))
+            return;
         // The checks bounds-elide could not prove stay calls. Under
         // -fbounds-check=light they inline here, only in loops (cyclicBlocks;
         // never before bounds-elide: then no call is left for it to find):
@@ -618,12 +630,6 @@
             if (stopHere(String.withCString("inline-checks")))
                 return;
             }
-        // A retain and its release with nothing between them that can free
-        // or write anything go, pair by pair (arcPairElide).
-        if (_level >= (u32)2)
-            self.arcPairElide(m);
-        if (stopHere(String.withCString("arc-pair")))
-            return;
         if (_level >= (u32)2)
             self.idiomMemset(m);
         if (stopHere(String.withCString("idiom-memset")))
@@ -952,6 +958,10 @@
             IRFunc* fn = (IRFunc*)_dfeFns.get((Hashable*)name);
             if (fn == 0)
                 continue;
+            // The bound a hoisted check compares against (bounds-hoist, which
+            // drops it again when it hoists nothing).
+            if (name.equals(String.withCString("_xt_check_bounds")))
+                self.seed(m, reachable, work, String.withCString("_xt_check_limit"));
             for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
                 {
                 IRBlock* bb = (IRBlock*)fn.blocks().get(b);
