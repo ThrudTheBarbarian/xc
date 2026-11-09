@@ -385,6 +385,11 @@ def main():
     a = ap.parse_args()
     global XCC
     XCC = a.xcc
+    # The libRuntime copied beside a Linux program comes from the measured
+    # compiler's tree too (common.runtime_lib_for), not the installed release.
+    if XCC:
+        XCC = os.path.abspath(XCC)
+        common.XCC_OVERRIDE = XCC
     benches = a.bench or (BENCHES + GPU_BENCHES)
     machines = a.machines.split(",")
     env = common.build_env()
