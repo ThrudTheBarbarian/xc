@@ -11,6 +11,7 @@
 #import "XTIROptIdiomMemset.h"
 #import "XTIROptBoundsElide.h"
 #import "XTIROptBoundsOrigin.h"
+#import "XTIROptBoundsHoist.h"
 #import "XTIROptIdiomMatMul.h"
 #import "XTIROptRedundantLoadCSE.h"
 #import "XTIROptDeadCode.h"
@@ -188,6 +189,14 @@
         XTIROptBoundsElide* belide = [[XTIROptBoundsElide alloc] init];
         belide.profile = profile;
         [p addPass:belide];
+        // A retain and its release with nothing between them that can free or
+        // write anything go, pair by pair; a check between them frees nothing.
+        // Before bounds-hoist, so that a loop which only looked at an element
+        // is quiet.
+        [p addPass:[[XTIROptArcPair alloc] init]];
+        // A check on a pointer a quiet loop does not change compares against
+        // a bound computed before the loop, and is called only past it.
+        [p addPass:[[XTIROptBoundsHoist alloc] init]];
         // The checks it could not prove stay calls. Under -fbounds-check=light
         // they inline here, only in loops (checksOnly; never before it: then no
         // call is left for it to find): measured 2026-10-26, array_map 1.67x
@@ -202,9 +211,6 @@
             // a loop holds no call for them.
             [p addPass:[[XTIROptTrapCut alloc] init]];
         }
-        // A retain and its release with nothing between them that can free or
-        // write anything go, pair by pair.
-        [p addPass:[[XTIROptArcPair alloc] init]];
         // Recognise byte-fill loops as memset BEFORE unrolling (else the fill
         // loop gets unrolled instead of collapsed to a call).
         XTIROptIdiomMemset* memset = [[XTIROptIdiomMemset alloc] init];

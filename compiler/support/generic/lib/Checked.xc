@@ -130,6 +130,36 @@ void _xt_check_interior(pointer ptr, u64 index, u8* site)
 }
 #endif
 
+// The bound a loop's checks on ptr compare against, computed once before the
+// loop when nothing in it can change ptr's block header (the optimiser's
+// bounds-hoist): the loop calls _xt_check_bounds only for an index at or past
+// it. 0 for a null pointer, so every index goes to the check, which reports
+// the null; a block's count; for any other pointer the most there is under
+// -fbounds-check=light, which checks nothing there, and 0 in the debug build,
+// whose check looks the pointer up.
+u64 _xt_check_limit(pointer ptr)
+{
+    u64 lim = (u64)0;
+    if (ptr != (pointer)0)
+        {
+        u8* h = (u8*)ptr - 40;
+        u32 magic = *(u32*)(pointer)(h + 32);
+        if ((magic | (u32)1) == (u32)XT_CHECK_MAGIC_ALIGNED)
+            {
+#if XT_CHECK_FULL
+            _xtc_block_note(ptr);
+#endif
+            lim = *(u64*)(pointer)(h + 8);
+            }
+#if XT_CHECK_FULL
+#else
+        else
+            lim = (u64)0 - (u64)1;
+#endif
+        }
+    return lim;
+}
+
 void _xt_check_bounds(pointer ptr, u64 index, u8* site)
 {
     if (ptr == (pointer)0)

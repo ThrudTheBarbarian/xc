@@ -368,6 +368,13 @@
         String* op = n.op();
         if (op.equals(String.withCString("Retain")))
             return false;    // another count going up frees nothing
+        // A subscript check frees nothing (the reference explains).
+        if (op.equals(String.withCString("Call")) && n.ops().count() > (u32)0)
+            {
+            IROperand* c = (IROperand*)n.ops().get((u32)0);
+            if (c.kind() == (u8)OPK_SYM && c.name() != (String*)0 && c.name().hasPrefix(String.withCString("_xt_check_")))
+                return false;
+            }
         // Every call, an indirect one too (lrcWritesMemory leaves those out).
         return self.lrcWritesMemory(op) || op.hasPrefix(String.withCString("Call"))
             || op.equals(String.withCString("LoadVolatile")) || op.equals(String.withCString("Return"));

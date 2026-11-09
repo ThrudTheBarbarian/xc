@@ -10,6 +10,7 @@
 #import "OptDefs.xc"
 #import <OptBase>
 #import <OptDeadCode>
+#import <OptInline>
 #import <OptReassociate>
 #import <OptRedundantLoadCSE>
 #import <OptVectorizeParts>
@@ -81,6 +82,460 @@
                     n.ops().set((u32)1, (Object*)IROperand.useVal(p));
                     n.ops().set((u32)2, (Object*)IROperand.useVal(idx));
                     }
+                }
+            }
+        }
+
+    // ── bounds-hoist ─────────────────────────────────────────────────────
+    //
+    // A heap check on p[i] in a loop that cannot change p's block header reads
+    // the same header every time round: the null test, the magic and the count
+    // (issue #28). The header's verdict, as a bound, is computed once before
+    // the loop by Checked.xc's _xt_check_limit, and the loop calls the check
+    // itself only for an index at or past the bound. A check that would fail
+    // still runs, on the same iteration, and reports as before; one that would
+    // pass is skipped. The bound is 0 for a null pointer (every index goes to
+    // the check), the count for a block's start, and the most there is for any
+    // other pointer under -fbounds-check=light (which checks nothing there; an
+    // index that equals it goes to the check, which returns), 0 in the debug
+    // build (whose check looks the pointer up). Under -fbounds-check=light the
+    // remaining check then inlines on its cold path.
+    //
+    // The loop may store, retain and check, and nothing else that writes:
+    // a call or a release could free p's block and give its header to another.
+    // Innermost loops first; a bound computed before an inner loop moves on out
+    // while p and the next loop allow.
+    final void boundsHoist(IRModule* m)
+        {
+        String* limName = String.withCString("_xt_check_limit");
+        IRFunc* lim = self.funcNamed(m, limName);
+        if (lim == (IRFunc*)0)
+            return;
+        if (lim.blocks().count() > (u32)0)
+            for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+                {
+                IRFunc* fn = (IRFunc*)m.funcs().get(f);
+                if (fn.blocks().count() == (u32)0 || fn.name() == (String*)0
+                    || fn.name().hasPrefix(String.withCString("_xt_check")) || !bhHasCheck(fn))
+                    continue;
+                Map* done = new Map();
+                for (u32 guard = (u32)0; guard < (u32)64; guard = guard + (u32)1)
+                    if (!bhOnce(fn, done, limName))
+                        break;
+                }
+        // Nothing hoisted: the bound goes, as dead-function-elim would have
+        // taken it (it keeps it for this pass while _xt_check_bounds lives).
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            if (fn == lim)
+                continue;
+            for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                    {
+                    IRInsn* n = (IRInsn*)bb.insns().get(i);
+                    for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                        {
+                        IROperand* o = (IROperand*)n.ops().get(k);
+                        if (o.kind() == (u8)OPK_SYM && o.name() != (String*)0 && o.name().equals(limName))
+                            return;
+                        }
+                    }
+                }
+            }
+        for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+            if ((IRFunc*)m.funcs().get(f) == lim)
+                {
+                m.funcs().removeAt(f);
+                return;
+                }
+        }
+
+    final bool bhHasCheck(IRFunc* fn)
+        {
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                if (beIsHeapCheck((IRInsn*)bb.insns().get(i)))
+                    return true;
+            }
+        return false;
+        }
+
+    // A call to the bound, `_xt_check_limit(p)`.
+    static bool bhIsLimit(IRInsn* n, String* limName)
+        {
+        return n.op().equals(String.withCString("Call")) && n.ops().count() == (u32)3
+            && ((IROperand*)n.ops().get((u32)0)).kind() == (u8)OPK_SYM
+            && ((IROperand*)n.ops().get((u32)0)).name().equals(limName)
+            && ((IROperand*)n.ops().get((u32)1)).kind() == (u8)OPK_USE && n.res() != (IRValue*)0;
+        }
+
+    // Nothing in the loop writes but stores, retains and the checks.
+    final bool bhQuiet(Array* body)
+        {
+        for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)body.get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                String* op = n.op();
+                if (op.equals(String.withCString("Store")) || op.equals(String.withCString("Retain")))
+                    continue;
+                if (op.equals(String.withCString("Call")) && n.ops().count() > (u32)0)
+                    {
+                    IROperand* c = (IROperand*)n.ops().get((u32)0);
+                    if (c.kind() == (u8)OPK_SYM && c.name() != (String*)0 && c.name().hasPrefix(String.withCString("_xt_check_")))
+                        continue;
+                    return false;
+                    }
+                if (op.hasPrefix(String.withCString("Call")) || self.lrcWritesMemory(op))
+                    return false;
+                }
+            }
+        return true;
+        }
+
+    // A value the loop does not define (a parameter has no definition).
+    static bool bhOutside(IROperand* o, Map* defBlk, Map* inBody)
+        {
+        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+            return false;
+        Object* db = defBlk.get((Hashable*)o.val());
+        return db == (Object*)0 || inBody.get((Hashable*)db) == (Object*)0;
+        }
+
+    // One loop's checks guarded and its bounds moved out: the innermost loop
+    // (fewest blocks) that is quiet, has a preheader and has work. False when
+    // no loop does.
+    final bool bhOnce(IRFunc* fn, Map* done, String* limName)
+        {
+        Map* dom = self.dominators(fn);
+        Map* preds = self.lrcPredMap(fn);
+        Map* defBlk = new Map();
+        Map* defOf = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* p = (IRInsn*)bb.phis().get(i);
+                if (p.res() != (IRValue*)0)
+                    defBlk.set((Hashable*)p.res(), (Object*)bb);
+                }
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (n.res() != (IRValue*)0)
+                    {
+                    defBlk.set((Hashable*)n.res(), (Object*)bb);
+                    defOf.set((Hashable*)n.res(), (Object*)n);
+                    }
+                if (n.memRes() != (IRValue*)0)
+                    defBlk.set((Hashable*)n.memRes(), (Object*)bb);
+                }
+            }
+        // Each header's loop: the union of the natural loops of its back edges.
+        Array* heads = new Array();
+        Map* bodyOf = new Map();
+        Map* inOf = new Map();
+        for (u32 li = (u32)0; li < fn.blocks().count(); li = li + (u32)1)
+            {
+            IRBlock* latch = (IRBlock*)fn.blocks().get(li);
+            Array* ss = self.lrcSuccs(fn, latch);
+            for (u32 s = (u32)0; s < ss.count(); s = s + (u32)1)
+                {
+                IRBlock* H = (IRBlock*)ss.get(s);
+                Array* dl = (Array*)dom.get((Hashable*)latch);
+                if (dl == (Array*)0 || !self.hasBlock(dl, H))
+                    continue;
+                Array* body = (Array*)bodyOf.get((Hashable*)H);
+                Map* inBody = (Map*)inOf.get((Hashable*)H);
+                if (body == (Array*)0)
+                    {
+                    body = new Array();
+                    inBody = new Map();
+                    body.add((Object*)H);
+                    inBody.set((Hashable*)H, (Object*)H);
+                    bodyOf.set((Hashable*)H, (Object*)body);
+                    inOf.set((Hashable*)H, (Object*)inBody);
+                    heads.add((Object*)H);
+                    }
+                Array* wl = new Array();
+                wl.add((Object*)latch);
+                while (wl.count() > (u32)0)
+                    {
+                    IRBlock* n = (IRBlock*)wl.get(wl.count() - (u32)1);
+                    wl.removeLast();
+                    if (inBody.get((Hashable*)n) != (Object*)0)
+                        continue;
+                    body.add((Object*)n);
+                    inBody.set((Hashable*)n, (Object*)n);
+                    Array* ps = self.lrcPredsIn(preds, n);
+                    for (u32 p = (u32)0; p < ps.count(); p = p + (u32)1)
+                        wl.add(ps.get(p));
+                    }
+                }
+            }
+        IRBlock* bestH = (IRBlock*)0;
+        IRBlock* bestPre = (IRBlock*)0;
+        for (u32 h = (u32)0; h < heads.count(); h = h + (u32)1)
+            {
+            IRBlock* H = (IRBlock*)heads.get(h);
+            Array* body = (Array*)bodyOf.get((Hashable*)H);
+            Map* inBody = (Map*)inOf.get((Hashable*)H);
+            if (bestH != (IRBlock*)0 && body.count() >= ((Array*)bodyOf.get((Hashable*)bestH)).count())
+                continue;
+            if (!bhHasWork(body, inBody, H, defBlk, defOf, done, limName))
+                continue;
+            // A unique preheader that dominates the header.
+            Array* hp = self.lrcPredsIn(preds, H);
+            IRBlock* pre = (IRBlock*)0;
+            u32 outside = (u32)0;
+            for (u32 p = (u32)0; p < hp.count(); p = p + (u32)1)
+                {
+                IRBlock* pb = (IRBlock*)hp.get(p);
+                if (inBody.get((Hashable*)pb) != (Object*)0)
+                    continue;
+                outside = outside + (u32)1;
+                pre = pb;
+                }
+            if (outside != (u32)1)
+                continue;
+            Array* dh = (Array*)dom.get((Hashable*)H);
+            if (dh == (Array*)0 || !self.hasBlock(dh, pre) || !bhQuiet(body))
+                continue;
+            bestH = H;
+            bestPre = pre;
+            }
+        if (bestH == (IRBlock*)0)
+            return false;
+        bhHoist(fn, (Array*)bodyOf.get((Hashable*)bestH), (Map*)inOf.get((Hashable*)bestH), bestH, bestPre, defBlk, defOf, done, limName);
+        return true;
+        }
+
+    final bool bhHasWork(Array* body, Map* inBody, IRBlock* H, Map* defBlk, Map* defOf, Map* done, String* limName)
+        {
+        bool noStore = bhNoStore(body);
+        for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)body.get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (bhIsLimit(n, limName)
+                    && bhChain(((IROperand*)n.ops().get((u32)1)).val(), defBlk, defOf, inBody, H, noStore, new Array(), (u32)0))
+                    return true;
+                if (beIsHeapCheck(n) && done.get((Hashable*)n) == (Object*)0
+                    && ((IROperand*)n.ops().get((u32)2)).kind() == (u8)OPK_USE
+                    && ((IROperand*)n.ops().get((u32)1)).kind() == (u8)OPK_USE
+                    && bhChain(((IROperand*)n.ops().get((u32)1)).val(), defBlk, defOf, inBody, H, noStore, new Array(), (u32)0))
+                    return true;
+                }
+            }
+        return false;
+        }
+
+    final bool bhNoStore(Array* body)
+        {
+        for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)body.get(b);
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                if (((IRInsn*)bb.insns().get(i)).op().equals(String.withCString("Store")))
+                    return false;
+            }
+        return true;
+        }
+
+    // Can v be had before the loop? It is defined there, or it is a field the
+    // loop reads, `x.f` (a Load of a FieldAddr, through casts), of an object
+    // from before the loop that the header reads a field of too, in a loop
+    // that stores nothing: then the instructions that make it, listed in `out`
+    // in order, move to the preheader, as LICM would move them after the
+    // checks are gone (an accessor's `_slots`, inlined). The header's read
+    // means the object is one the loop reads on its every entry.
+    final bool bhChain(IRValue* v, Map* defBlk, Map* defOf, Map* inBody, IRBlock* H, bool noStore, Array* out, u32 depth)
+        {
+        if (v == (IRValue*)0)
+            return false;
+        Object* db = defBlk.get((Hashable*)v);
+        if (db == (Object*)0 || inBody.get((Hashable*)db) == (Object*)0)
+            return true;
+        IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
+        if (d == (IRInsn*)0 || depth > (u32)4 || d.ops().count() < (u32)1 || ((IROperand*)d.ops().get((u32)0)).kind() != (u8)OPK_USE)
+            return false;
+        IRValue* a = ((IROperand*)d.ops().get((u32)0)).val();
+        if (d.op().equals(String.withCString("Bitcast")))
+            {
+            if (!bhChain(a, defBlk, defOf, inBody, H, noStore, out, depth + (u32)1))
+                return false;
+            out.add((Object*)d);
+            return true;
+            }
+        if (!noStore || !d.op().equals(String.withCString("Load")))
+            return false;
+        IRInsn* fa = (IRInsn*)defOf.get((Hashable*)a);
+        if (fa == (IRInsn*)0 || !fa.op().equals(String.withCString("FieldAddr")) || fa.ops().count() < (u32)1
+            || ((IROperand*)fa.ops().get((u32)0)).kind() != (u8)OPK_USE)
+            return false;
+        IRValue* x = ((IROperand*)fa.ops().get((u32)0)).val();
+        Object* xb = defBlk.get((Hashable*)x);
+        if (xb != (Object*)0 && inBody.get((Hashable*)xb) != (Object*)0)
+            return false;
+        bool read = false;
+        for (u32 i = (u32)0; i < H.insns().count() && !read; i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)H.insns().get(i);
+            if (!n.op().equals(String.withCString("Load")) || n.ops().count() < (u32)1
+                || ((IROperand*)n.ops().get((u32)0)).kind() != (u8)OPK_USE)
+                continue;
+            IRInsn* f = (IRInsn*)defOf.get((Hashable*)((IROperand*)n.ops().get((u32)0)).val());
+            read = f != (IRInsn*)0 && f.op().equals(String.withCString("FieldAddr")) && f.ops().count() > (u32)0
+                && ((IROperand*)f.ops().get((u32)0)).kind() == (u8)OPK_USE && ((IROperand*)f.ops().get((u32)0)).val() == x;
+            }
+        if (!read)
+            return false;
+        Object* ab = defBlk.get((Hashable*)a);
+        if (ab != (Object*)0 && inBody.get((Hashable*)ab) != (Object*)0)
+            out.add((Object*)fa);
+        out.add((Object*)d);
+        return true;
+        }
+
+    // The instructions bhChain listed, moved to the end of the preheader.
+    final void bhMove(Array* out, IRBlock* pre, Map* defBlk)
+        {
+        for (u32 k = (u32)0; k < out.count(); k = k + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)out.get(k);
+            IRBlock* from = (IRBlock*)defBlk.get((Hashable*)n.res());
+            if (from == pre)
+                continue;
+            for (u32 i = (u32)0; i < from.insns().count(); i = i + (u32)1)
+                if ((IRInsn*)from.insns().get(i) == n)
+                    {
+                    from.insns().removeAt(i);
+                    break;
+                    }
+            pre.insns().add((Object*)n);
+            defBlk.set((Hashable*)n.res(), (Object*)pre);
+            if (n.memRes() != (IRValue*)0)
+                defBlk.set((Hashable*)n.memRes(), (Object*)pre);
+            }
+        }
+
+    final void bhHoist(IRFunc* fn, Array* body, Map* inBody, IRBlock* H, IRBlock* pre, Map* defBlk, Map* defOf, Map* done, String* limName)
+        {
+        bool noStore = bhNoStore(body);
+        Map* limOf = new Map();
+        // The bounds an inner loop computed, moved on out. A second for the
+        // same pointer takes the first's value.
+        for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)body.get(b);
+            u32 i = (u32)0;
+            while (i < bb.insns().count())
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                Array* chain = new Array();
+                if (!bhIsLimit(n, limName)
+                    || !bhChain(((IROperand*)n.ops().get((u32)1)).val(), defBlk, defOf, inBody, H, noStore, chain, (u32)0))
+                    {
+                    i = i + (u32)1;
+                    continue;
+                    }
+                bb.insns().removeAt(i);
+                bhMove(chain, pre, defBlk);
+                i = (u32)0;   // the move may have taken instructions before it
+                IRValue* p = ((IROperand*)n.ops().get((u32)1)).val();
+                IRValue* had = (IRValue*)limOf.get((Hashable*)p);
+                if (had != (IRValue*)0)
+                    {
+                    self.rewriteUsesTo(fn, n.res(), IROperand.useVal(had));
+                    continue;
+                    }
+                pre.insns().add((Object*)n);
+                limOf.set((Hashable*)p, (Object*)n.res());
+                }
+            }
+        // Each check on a pointer from outside: B[..i) + `i >= bound` | the
+        // check | B(i..] + B's terminator. The blocks a split makes join the
+        // body, so the checks after it are found there.
+        u32 b = (u32)0;
+        while (b < body.count())
+            {
+            IRBlock* bb = (IRBlock*)body.get(b);
+            b = b + (u32)1;
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)bb.insns().get(i);
+                if (!beIsHeapCheck(n) || done.get((Hashable*)n) != (Object*)0)
+                    continue;
+                IROperand* po = (IROperand*)n.ops().get((u32)1);
+                IROperand* io = (IROperand*)n.ops().get((u32)2);
+                Array* chain = new Array();
+                if (io.kind() != (u8)OPK_USE || po.kind() != (u8)OPK_USE
+                    || !bhChain(po.val(), defBlk, defOf, inBody, H, noStore, chain, (u32)0))
+                    continue;
+                bhMove(chain, pre, defBlk);
+                // The move may have taken instructions before it.
+                for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
+                    if ((IRInsn*)bb.insns().get(k) == n)
+                        i = k;
+                done.set((Hashable*)n, (Object*)n);
+                IRValue* lim = (IRValue*)limOf.get((Hashable*)po.val());
+                if (lim == (IRValue*)0)
+                    {
+                    // The memory the check read, if it comes from before the
+                    // loop; else the function's own (the token is advisory).
+                    IROperand* mo = (IROperand*)n.ops().get(n.ops().count() - (u32)1);
+                    if (!bhOutside(mo, defBlk, inBody))
+                        mo = IROperand.useVal((IRValue*)fn.params().get(fn.params().count() - (u32)1));
+                    lim = new IRValue(String.withCString("U64"));
+                    IRInsn* lc = IRInsn.with(String.withCString("Call"));
+                    lc.copyDbg(n);
+                    lc.setCc(String.withCString("CallConv::Standard"));
+                    lc.setRes(lim);
+                    lc.setMemRes(new IRValue(String.withCString("Mem")));
+                    lc.add(IROperand.sym(limName));
+                    lc.add(IROperand.useVal(po.val()));
+                    lc.add(mo);
+                    pre.insns().add((Object*)lc);
+                    limOf.set((Hashable*)po.val(), (Object*)lim);
+                    }
+                IRValue* past = new IRValue(String.withCString("Bool"));
+                IRInsn* cmp = IRInsn.with(String.withCString("ICmp"));
+                cmp.copyDbg(n);
+                cmp.setPred(String.withCString("UGE"));
+                cmp.setRes(past);
+                cmp.add(io);
+                cmp.add(IROperand.useVal(lim));
+                u32 tag = fn.blocks().count();
+                IRBlock* cont = new IRBlock(String.withFormat("bh%lu_cont", tag));
+                IRBlock* slow = new IRBlock(String.withFormat("bh%lu_check", tag));
+                self.splitAtCall(bb, cont, i);
+                bb.add(cmp);
+                IRInsn* cb = IRInsn.with(String.withCString("CondBranch"));
+                cb.add(IROperand.useVal(past));
+                cb.add(IROperand.block(slow));
+                cb.add(IROperand.block(cont));
+                bb.setTerm(cb);
+                // The check keeps its memory token, which what follows it
+                // reads (as the devirtualised dispatch's does).
+                slow.add(n);
+                IRInsn* br = IRInsn.with(String.withCString("Branch"));
+                br.add(IROperand.block(cont));
+                slow.setTerm(br);
+                fn.blocks().insert(self.blockIndex(fn, bb) + (u32)1, (Object*)cont);
+                fn.blocks().add((Object*)slow);
+                body.add((Object*)cont);
+                inBody.set((Hashable*)cont, (Object*)cont);
+                break;
                 }
             }
         }
