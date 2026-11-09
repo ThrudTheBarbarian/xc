@@ -1792,15 +1792,18 @@ class ParRemoteWorker : ParWorker
         // instead of being copied in.
         // A daemon already caught has tiles still in flight: each of those
         // is the CPU's too.
+        // The check runs on every CPU thread (Par.runCpu), as the CPU path
+        // runs a block: the tile queue waits for it, and on one thread a
+        // Raspberry Pi 5 took 240 ms to check md5's first remote tile of
+        // every run, where the remote GPU and the V3D together finish the
+        // whole block in 254 (#104).
         bool check = _bad || shouldVerify();
         bool same = true;
         ParChunk* cpu = (ParChunk*)0;
         if (check)
             {
             cpu = _proto.copyChunk();
-            cpu.lo = t.lo;
-            cpu.hi = t.hi;
-            cpu.run();
+            Par.runCpu(cpu, t.lo, t.hi);
             }
         u8* p = (u8*)0;
         u32 pn = (u32)0;

@@ -215,6 +215,17 @@ def fresh_settings():
     return d
 
 
+def copy_out(exe, host, dest):
+    """The program to another host, with the libRuntime it links (0.9.2)
+    beside it, where it looks ($ORIGIN): without it the run took whatever
+    libRuntime.so an earlier run had left in that directory."""
+    subprocess.run(["scp", "-q", exe, "%s:%s" % (host, dest)], check=True)
+    lib = common.runtime_lib_for(exe)
+    if lib is not None:
+        subprocess.run(["scp", "-q", lib, "%s:%s" % (host, os.path.join(os.path.dirname(dest), "libRuntime.so"))],
+                       check=True)
+
+
 def run_linux(host, binary, env):
     common.wait_quiet(host)
     pre = " ".join("%s=%s" % kv for kv in env.items())
@@ -267,6 +278,8 @@ def main():
     a = ap.parse_args()
     global XCC
     XCC = a.xcc
+    if XCC:
+        common.XCC_OVERRIDE = os.path.abspath(XCC)
     env = common.build_env()
     gpu_host = env.get("XTC_WIN_GPU_HOST")
     if not gpu_host:
@@ -294,13 +307,13 @@ def main():
                 host = env["XTC_LINUX_HOST"]
                 exe = os.path.join(work, name + ".remote.x86")
                 build(src, "x86_64", exe, ["-fpar-kernels=all"])
-                subprocess.run(["scp", "-q", exe, "%s:/tmp/par-remote-%s" % (host, name)], check=True)
+                copy_out(exe, host, "/tmp/par-remote-" + name)
                 results[name]["linux"] = measure(lambda b, e: run_linux(host, b, e), "/tmp/par-remote-" + name,
                                                  remote_env)
             if pi:
                 exe = os.path.join(work, name + ".remote.pi")
                 build(src, "arm64-linux", exe, ["-fpar-kernels=all"])
-                subprocess.run(["scp", "-q", exe, "%s:/tmp/par-remote-%s" % (pi, name)], check=True)
+                copy_out(exe, pi, "/tmp/par-remote-" + name)
                 results[name]["pi"] = measure(lambda b, e: run_pi(pi, b, e, "/tmp/par-remote-libtls.so"),
                                               "/tmp/par-remote-" + name, remote_env)
             print(name, json.dumps(results[name]), flush=True)

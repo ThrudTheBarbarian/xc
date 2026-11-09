@@ -351,8 +351,11 @@ def runtime_lib_for(binary):
     row = {0x3e: "x86_64-linux", 0xb7: "arm64-linux"}.get(head[18] | (head[19] << 8))
     if row is None:
         return None
+    # An installed xcc is <root>/bin/xcc; a build-tree one is
+    # compiler/bin/<host>/xcc-xc, its runtime in compiler/support.
     root = os.path.dirname(os.path.dirname(xcc_path()))
-    for base in (os.path.join(root, "lib", "xc"), os.path.join(root, "support")):
+    for base in (os.path.join(root, "lib", "xc"), os.path.join(root, "support"),
+                 os.path.join(os.path.dirname(root), "support")):
         lib = os.path.join(base, "runtime-lib", row, "libRuntime.so")
         if os.path.isfile(lib):
             return lib

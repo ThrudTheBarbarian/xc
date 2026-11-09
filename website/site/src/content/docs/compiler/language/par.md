@@ -822,8 +822,8 @@ runs, so the answer is the one a local run gives.
 
 A daemon's answers are checked. For a block with no floating point in it,
 whose results are the same bits on any device, the first tile each daemon
-returns and one in 16 after it are also run on the program's own CPU and
-compared, written elements and reductions both. A daemon that gets one wrong
+returns in a run and one in 16 after it are also run on the program's own CPU,
+on all its threads, and compared, written elements and reductions both. A daemon that gets one wrong
 is not used again in that run, the CPU's answer stands, and the program says
 so. `XC_PAR_VERIFY=all` checks every tile, `XC_PAR_VERIFY=0` none. A
 floating-point block is not checked, since another GPU may round differently
