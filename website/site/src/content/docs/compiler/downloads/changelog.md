@@ -3,6 +3,132 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.9.6 — overlapping pointers, GPU kernel choice, and checks that cost less
+
+Everything since 0.9.5, with 0.9.5.1's fix.
+
+### Fixed
+
+- **Vectorised loops and overlapping pointers.** A loop over two pointers
+  could be vectorised even when the destination lay just past the source,
+  so later elements read values the loop had already written, on arm64 and
+  x86-64 at the default settings. Such a loop now compares its pointers
+  before it starts and runs element by element when they overlap. Loops
+  over globals, locals and new arrays, which cannot overlap, vectorise as
+  before.
+- **Loops `--par-style=auto` lifts, with overlapping arrays.** A pointer
+  loop the compiler lifted into a `par` block ran on several threads even
+  when its arrays overlapped. The runtime now works out how much of each
+  array a run touches and runs the block on one thread when they overlap.
+  Separate arrays, a call that works in place, and disjoint halves of one
+  array still run in parallel.
+- **The stack canary guards local arrays.** A function's local arrays now
+  sit next to the canary on arm64, x86-64 and win64, so a write that runs
+  off the end of one reaches the canary before another local. In 0.9.5 a
+  16-byte overrun of a 16-byte array changed a neighbouring variable and
+  the function returned normally; now the program stops with "stack
+  smashing detected".
+- **The canary's seed.** x86-64 Linux programs built static now take it from
+  the kernel's `getrandom`, and win64 programs from the CPU's `RDRAND`.
+  Before, both mixed the cycle counter with addresses.
+- **`:goal(accuracy)` gives one answer on every device.** Each float
+  operation now rounds on its own on every CPU and GPU: arm64 fuses a
+  multiply and an add only under `:goal(speed)`, as x86-64 does, and SPIR-V
+  kernels mark their arithmetic so drivers don't fuse it. A 2048×2048
+  Mandelbrot under accuracy gave three totals across x86-64, arm64 with
+  Metal, and the Raspberry Pi 5's GPU; it now gives one. The SME and NEON
+  matrix kernels fuse whatever the goal.
+- **Which goal a loop has.** A loop or block takes its own `:goal`, else the
+  goal of the loop or block around it, else the file's `#goal`, else
+  `-fgoal=`, else the default: speed for a `par` block, whether you write it
+  or `--par-style` makes it from a loop, and accuracy for a plain loop. A
+  `#goal` line no longer overrides the loop around an inner loop, a block's
+  own `:goal(speed)` now overrides `#goal accuracy`, and `while` loops take
+  the file's and the build's goal. `-fgoal=accuracy` gives a lifted loop the
+  serial loop's answer on every device. See
+  [Which goal applies](/compiler/language/par/#which-goal-applies).
+- **Bounds checks see pointers made by adding to an array.** With
+  `-fbounds-check`, `q = a + 4; q[6]` is checked against `a`; it read past
+  the end unchecked before. The debug level also checks a pointer into the
+  middle of a block that is passed to another function.
+- **macOS: Objective-C objects built by clang link.** xcc's linker makes the
+  `objc_msgSend$<selector>` stubs clang now calls by default.
+- **Android with `--no-self-host`** links through the NDK's clang again,
+  as an executable or an `--emit-apk` payload.
+- **`XC_PAR_PROBE=1` learns the right device.** The probe timed the CPU as one
+  tile worker, so it underrated the cores. On a Raspberry Pi 5 it chose the
+  GPU (118 ms a run) for a Mandelbrot the cores run in 90 ms; it now
+  chooses the cores.
+- **The compiler removes its scratch files.** A C compile left seven files
+  in `/tmp`.
+
+### Faster
+
+- **`par` auto chooses between a block's two GPU kernels.** A block whose
+  inner loop has a known trip count carries two GPU kernels, and xcc picked
+  one by a fixed rule per device. `auto` now times both on the GPU it uses
+  and keeps the faster in the program's settings. On an M4 Max's Metal,
+  mandel_deep goes from 45.5 ms to 38.0 ms. On an RTX 5070 and an RTX 5080
+  each keeps the kernel that measures faster. `XC_PAR_VARIANT=plain|trips`
+  still forces one.
+- **One item per GPU thread for blocks that loop inside.** Vulkan, Metal,
+  CUDA and WebGPU run each item of such a block on its own thread up to the
+  device's launch limit, so the threads finish together. mandel_deep: 9.7%
+  faster on the Pi 5's GPU, 5.3% on a Radeon 610M, 50.7 ms to 48.0 ms on an
+  M3 Max's Metal, and 100.5 ms to 98.1 ms in Chrome's WebGPU. Blocks of
+  4M items or fewer launch as before.
+- **Loops that convert between integers and floats vectorise**, in both
+  directions, keeping xc's rule that an out-of-range float converts to 0.
+- **`par` blocks that also sum** run their vector chains side by side: four
+  on arm64, two on x86-64.
+- **arm64 loops.** A chain loop with an odd number of rounds is unrolled as
+  an even one is: a 37-round float chain over 4M items, 780 µs to 469 µs on
+  an M3 Max. A zero test that leaves the loop is a `cbz`/`cbnz` to code
+  outside it: sort_small on the Pi 5, 3.50 s to 3.19 s. Loops with a
+  parameter or a float constant as an operand vectorise.
+- **Bounds checks cost less.** Under `-fbounds-check=light` a failed check's
+  trap ends its block, so an inlined check leaves no call in the loop; a
+  retain and release with nothing between them go, so a checked search loop
+  runs in 0.37 s instead of 0.50 s; and small accessors such as `Array.get`
+  have their checks inlined, 6% fewer instructions for a checked xcc
+  compiling a large program.
+- **Compile time.** A module of 1,600 classes compiles in 15.7 s, from 32.5 s,
+  and four times the classes now costs 5–6 times the time, from nearly 10.
+
+### Documentation
+
+- **[A GPU on another machine](/tutorials/remote-gpu/)**: a tutorial
+  for xcd, from installing the daemon to checking the report.
+- **[Future work](/compiler/future-work/)**: the plan for LLVM IR as an input,
+  so C++, Rust, Swift, Zig, Fortran and other languages built on LLVM get
+  xcc's optimiser, `par` extraction and back ends.
+- The GPU, C and networked benchmark pages have a heading for each machine,
+  and the CPU page says each program runs on one thread.
+- The Phoronix Test Suite profiles run on arm64 Linux as well as x86-64.
+
+## Version 0.9.5.1 — `auto` for a block run once
+
+One fix to 0.9.5.
+
+### Fixed
+
+- **`par` auto now measures a block the program runs once.** `auto` timed
+  each choice from its second run in a process, so a block that a program
+  runs once per run was never timed, and stayed on its first guess for
+  good. On a Raspberry Pi 5 that guess was the GPU, 118 ms for a 2048×2048
+  Mandelbrot whose four cores take 90 ms. The program now notes that the
+  block ran once, times each choice on a later run in turn, and after a few
+  runs keeps the fastest. On the Pi that's the cores and the GPU together,
+  68 ms, for the xc version, and the cores alone, 88 ms, for the C version.
+- **A learned split between devices keeps its rates.** A run that went
+  straight to a learned "every device" choice split the block between the
+  CPU and the GPU without their measured speeds, so the split was a guess:
+  the same Mandelbrot took 116 ms where it had been measured at 68.
+- The settings `auto` keeps are re-learned for 0.9.5.1.
+
+Programs that run a block several times in a process, the benchmarks among
+them, measure as before, so 0.9.5's figures stand.
+
 ## Version 0.9.5 — the Raspberry Pi 5, and branches on one bit
 
 Everything since 0.9.4.
