@@ -2266,8 +2266,10 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     self.localObjType = localT;
 
     // The span: four i64 push constants — lo, hi, per, and (bug 645) the
-    // number of partials the fold entry point has to combine, which the kernel
-    // itself does not read.
+    // number of partials the fold entry point has to combine, which a
+    // device-reducing kernel reads as its first partial slot (issue #12): the
+    // runtime splits one run over several dispatches of at most 65535
+    // workgroups, and pushes each dispatch the groups the earlier ones took.
     // The 32-bit span form reads the low word of each (the host writes the
     // same four i64 values either way), and has no 64-bit integer.
     uint32_t i64t = self.span32 ? [m typeInt:32] : [m typeInt:64];
@@ -2304,7 +2306,9 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
     }];
     // The full form, where the shape allows it (spvFullCmps): the
     // specialization constant the runtime sets for the whole workgroups.
-    self.fullCmps = self.span32 && self.reductionFields.count == 0 ? [self spvFullCmps] : nil;
+    // A device reduction has one too: a whole workgroup of single items
+    // reaches its barriers the same way (issue #12).
+    self.fullCmps = self.span32 && (self.reductionFields.count == 0 || devred) ? [self spvFullCmps] : nil;
     self.fullC = 0;
     if (self.fullCmps)
         {
@@ -2499,6 +2503,13 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         uint32_t lid32 = [self emit:SpvOpCompositeExtract type:u32t args:@[ @(lidv), @0 ]];
         uint32_t wgv = [self emit:SpvOpLoad type:uvec3 args:@[ @(wgV) ]];
         uint32_t wg32 = [self emit:SpvOpCompositeExtract type:u32t args:@[ @(wgv), @0 ]];
+        // The workgroup's partial slot: its index in this dispatch plus
+        // the span's fourth word, the groups the run's earlier dispatches
+        // took (header word `goff`, issue #12).
+        uint32_t goffL = [self emit:SpvOpLoad type:i64t
+                               args:@[ @([self emit:SpvOpAccessChain type:pI64 args:@[ @(spanV), @([m u32:3]) ]]) ]];
+        uint32_t goff = self.span32 ? goffL : [self emit:SpvOpUConvert type:u32t args:@[ @(goffL) ]];
+        uint32_t slot = [self emit:SpvOpIAdd type:u32t args:@[ @(wg32), @(goff) ]];
         uint32_t scope = [m u32:2];      // Workgroup
         uint32_t sem = [m u32:0x108];    // AcquireRelease | WorkgroupMemory
         __block NSUInteger di = 0;
@@ -2547,7 +2558,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
             uint32_t p0 = [self emit:SpvOpAccessChain type:pW args:@[ @(sv), @(zero) ]];
             uint32_t v0 = [self emit:SpvOpLoad type:t args:@[ @(p0) ]];
             uint32_t dst = [self emit:SpvOpAccessChain type:[m pointer:SpvStorageStorageBuffer to:t]
-                                 args:@[ redVars[di], @(zero), @(wg32) ]];
+                                 args:@[ redVars[di], @(zero), @(slot) ]];
             [self emit:SpvOpStore words:@[ @(dst), @(v0) ]];
             [self emit:SpvOpBranch words:@[ @(wmrg) ]];
             [self place:wmrg];
@@ -2721,7 +2732,7 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
 
     NSData* words = [m words];
     if (devred)
-        [meta appendString:@" devred devlast"];
+        [meta appendString:@" devred devlast goff"];
     // spirv= before fast: ParDevice.isFast reads the line's last word.
     [meta appendFormat:@" spirv=%lu", (unsigned long)(words.length / 4)];
     if (self.fast)

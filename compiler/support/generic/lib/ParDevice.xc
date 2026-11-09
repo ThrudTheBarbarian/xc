@@ -256,6 +256,14 @@ class ParLayout : Object
     // slot 0, so one partial comes back instead of `nparts` (bug 645). The
     // buffers are still `nparts` long: every workgroup writes its own first.
     i64 devlast;
+    // 1: the kernel's header says `goff`: its workgroups write their partials
+    // from the slot the span's fourth word names, so a run can be split over
+    // several dispatches, each told the groups the earlier ones took, and
+    // still have one item a thread past one dispatch's limit (issue #12).
+    i64 goff;
+    // Items a thread a device reduction asks for instead of plan's own choice
+    // (0: plan's), from the runtime's measurement of two settings (issue #13).
+    i64 wantPer;
     // 1: the kernel takes the block object and its range as launch parameters
     // (header word `byval`, bug 645), so they are not copied to the device.
     i64 byval;
@@ -290,12 +298,25 @@ class ParLayout : Object
         // an RTX 5070. A block without an inner loop keeps 2^22 threads: md5
         // was 15% and saxpy 26% slower on the V3D with more. A host-folded
         // reduction keeps its own cap: each thread is a partial the host folds.
-        if (maxThreads > (i64)0 && hasLoop != (i64)0 && !hostFold)
+        // A device reduction that can be split over dispatches (goff) has no
+        // such cap: one item a thread whatever the size, each workgroup's
+        // partial in a slot of its own (issue #12).
+        if (maxThreads > (i64)0 && hasLoop != (i64)0 && !hostFold && devred != (i64)0 && goff != (i64)0)
+            most = n;
+        else if (maxThreads > (i64)0 && hasLoop != (i64)0 && !hostFold)
             most = maxThreads;
         else if (maxThreads > (i64)0 && most > maxThreads)
             most = maxThreads;
         if (n > most)
             per = (n + most - (i64)1) / most;
+        // A device reduction run as one dispatch: no more items a thread
+        // than asked, nor more workgroups than one dispatch takes.
+        if (wantPer > (i64)0 && devred != (i64)0)
+            {
+            per = wantPer;
+            if (maxThreads > (i64)0 && (n + per - (i64)1) / per > maxThreads)
+                per = (n + maxThreads - (i64)1) / maxThreads;
+            }
         threads = (n + per - (i64)1) / per;
         nparts = devred != (i64)0 ? (threads + (i64)255) / (i64)256 : threads;
         nback = devlast != (i64)0 ? (i64)1 : nparts;
@@ -2700,6 +2721,14 @@ class ParDevice
                 {
                 l.devlast = (i64)1;
                 at = at + (u32)7;
+                continue;
+                }
+            // goff: its partial slots start at the span's fourth word (issue #12).
+            if (src[at] == (u8)' ' && src[at + (u32)1] == (u8)'g' && src[at + (u32)2] == (u8)'o' &&
+                src[at + (u32)3] == (u8)'f' && src[at + (u32)4] == (u8)'f')
+                {
+                l.goff = (i64)1;
+                at = at + (u32)5;
                 continue;
                 }
             // devred: the kernel combines its reductions on the device (bug 645).
