@@ -195,9 +195,10 @@ static NSArray<NSDictionary *> *repartitionObjcSections(
 // run becomes a range of the __xt_vtbl section, which the repartition then
 // gathers into one: a checked build's vtable check finds every loaded image's
 // tables by that section.
-static void addVtblRuns(NSDictionary<NSString *, NSNumber *> *msyms,
+static void addVtblRuns(NSMutableDictionary<NSString *, NSNumber *> *msyms,
                         NSMutableArray<NSDictionary *> *mObjc) {
     NSString *lo = @"___xt_vtbl_lo", *hi = @"___xt_vtbl_hi";
+    NSMutableDictionary<NSString *, NSNumber *> *hiFix = [NSMutableDictionary dictionary];
     for (NSString *l in msyms) {
         if (![l isEqualToString:lo] && !([l hasPrefix:@"__L"] && [l hasSuffix:[@"$" stringByAppendingString:lo]]))
             continue;
@@ -207,7 +208,12 @@ static void addVtblRuns(NSDictionary<NSString *, NSNumber *> *msyms,
         if (b <= a) continue;
         [mObjc addObject:@{@"name":@"__xt_vtbl", @"seg":@"__DATA", @"flags":@(0),
                            @"off":@(a), @"size":@(b - a)}];
+        // The end label sits just past the run, often at the very end of the
+        // data, where no move of the repartition covers it. It has done its
+        // job; put it at the run's start, which moves with the run.
+        hiFix[h] = @(a);
     }
+    [msyms addEntriesFromDictionary:hiFix];
 }
 
 // Bug 642: the program's COMMON symbols (its zero-initialised globals) get

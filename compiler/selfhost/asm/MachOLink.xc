@@ -550,6 +550,10 @@ class MachOLink
                 continue;
             mObjc.add((Object*)MachOObjcRange.with(String.withCString("__xt_vtbl"), String.withCString("__DATA"),
                                                    (u32)0, a, b - a));
+            // The end label sits just past the run, often at the very end of
+            // the data, where no move of the repartition covers it. It has
+            // done its job; put it at the run's start, which moves with it.
+            msyms.set((Hashable*)h, (Object*)Number.withU32(a));
             }
         }
 
