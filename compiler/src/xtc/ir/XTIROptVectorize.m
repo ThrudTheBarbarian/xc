@@ -1474,6 +1474,17 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
         // loop-invariant constant (splattable). This rejects a per-lane-varying
         // scalar (e.g. `b[i]*i`, where `i` differs per lane) being broadcast.
         NSMutableSet<NSNumber*>* elemIds = [NSMutableSet set];
+        // IOTA, as the reduction's: the value stored may be computed from the
+        // induction variable itself (`a[i] = i`, `a[i] = (i * K) ^ x`), with or
+        // without a load. The iv is then an elementwise value, lane l holding
+        // i + l; `mapUsesIv` records that the body read it. As the port's
+        // vecClassifyBody.
+        BOOL mapWantIota = (self.profile ?: [XTIROptTargetProfile conservativeProfile]).vectorizesIota;
+        XTIRType* mapIvTy = ivPhi.result.type;
+        BOOL mapIvLaneOK = mapIvTy && (mapIvTy.kind == XTIRTypeKindI32 || mapIvTy.kind == XTIRTypeKindU32);
+        __block BOOL mapUsesIv = NO;
+        if (mapWantIota && mapIvLaneOK)
+            [elemIds addObject:@(ivId)];
         BOOL (^isElemAddrAtIv)(XTIROperand*) = ^BOOL(XTIROperand* p) {
           if (p.kind != XTIROperandKindUse)
               return NO;
@@ -1496,7 +1507,11 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
           if (o.kind != XTIROperandKindUse)
               return NO;
           if ([elemIds containsObject:@(o.valueId)])
+              {
+              if (o.valueId == ivId)
+                  mapUsesIv = YES;
               return YES;
+              }
           int64_t kk;
           if (resolveConstInt(o, defOf, &kk))
               return YES; // (widened) constant
@@ -1603,6 +1618,8 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
                     ok = NO;
                     break;
                     }
+                if (insn.operands[0].valueId == ivId)
+                    mapUsesIv = YES;
                 [elemIds addObject:@(insn.result.valueId)];
                 continue;
                 }
@@ -1625,7 +1642,13 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
             ok = NO;
             break; // call, shifted load, per-lane-varying scalar, etc.
             }
-        if (!ok || !sawLoad || !sawStore || !laneType)
+        // With no load, the elements ARE the iv and its type is the lane type;
+        // with loads, the iv's lanes must be theirs.
+        if (!laneType && mapUsesIv)
+            laneType = mapIvTy;
+        if (ok && mapUsesIv && laneType.kind != mapIvTy.kind)
+            continue;
+        if (!ok || !(sawLoad || mapUsesIv) || !sawStore || !laneType)
             continue;
         NSMutableArray<XTIROperand*>* overlapPairs = [NSMutableArray array];
         if (!xtvBasesApart(stBases, ldBases, B, defOf, defBlk, overlapPairs))
@@ -1730,6 +1753,7 @@ static BOOL xtvBasesApart(NSArray<XTIROperand*>* stBases, NSArray<XTIROperand*>*
         c.ivStart = ivStart;
         c.ivStartOp = rtStart;
         c.overlap = overlapPairs;
+        c.isIota = mapUsesIv;
         return c;
         }
     return nil;
@@ -2385,6 +2409,37 @@ static XTIRValue* xtvApplyConv(XTIRFunction* fn, XTIRInsn* n, XTVecCand* c, XTIR
                                                    dbgLoc:nil]];
       return [XTIROperand useWithValueId:sp.valueId];
     };
+
+    // IOTA (the recogniser's mapUsesIv): lane l of the iv is i + l, as in the
+    // reduction's applier. viota is loaded once in the preheader, viv built at
+    // the top of the body, and the iv maps to it, so every rule below treats
+    // arithmetic on i as it treats arithmetic on a loaded element.
+    if (c.isIota && entry)
+        {
+        XTIRSymbolId iotaSym = xtvIotaSymbol(c.laneType, c.vecBytes, fn);
+        XTIRValue* iotaPtr = newValIn(entry, [XTIRType ptrToType:c.laneType window:0]);
+        [entry.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpAddrOf
+                                                                result:iotaPtr
+                                                              operands:@[ [XTIROperand symWithSymbolId:iotaSym] ]
+                                                                dbgLoc:nil]];
+        XTIRValue* viota = newVecIn(entry);
+        [entry.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVLoad
+                                                                result:viota
+                                                              operands:@[ [XTIROperand useWithValueId:iotaPtr.valueId] ]
+                                                                dbgLoc:nil]];
+        XTIRValue* vsp = newVec();
+        [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVSplat
+                                                     result:vsp
+                                                   operands:@[ [XTIROperand useWithValueId:c.ivId] ]
+                                                     dbgLoc:nil]];
+        XTIRValue* viv = newVec();
+        [newBody addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVAdd
+                                                     result:viv
+                                                   operands:@[ [XTIROperand useWithValueId:vsp.valueId],
+                                                               [XTIROperand useWithValueId:viota.valueId] ]
+                                                     dbgLoc:nil]];
+        vmap[@(c.ivId)] = viv;
+        }
 
     for (XTIRInsn* insn in B.instructions)
         {

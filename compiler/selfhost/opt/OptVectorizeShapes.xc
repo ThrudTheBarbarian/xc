@@ -883,6 +883,14 @@
         // loop and expands to several lane ops: two keep a body well inside
         // the vector register pool (#27).
         u32 convs = (u32)0;
+        // IOTA, as the reduction's: the value stored may be computed from the
+        // iv itself (`a[i] = i`, `a[i] = (i * K) ^ x`), with or without a
+        // load. The iv is then a lane value, lane l holding i + l.
+        bool wantIota = _profile != (OptProfile*)0 && _profile.iota();
+        bool ivLaneOK = iv.ty().equals(String.withCString("I32")) || iv.ty().equals(String.withCString("U32"));
+        _vrMapUsesIv = false;
+        if (wantIota && ivLaneOK)
+            elems.add((Object*)iv);
         for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
             {
             IRInsn* n = (IRInsn*)B.insns().get(i);
@@ -939,6 +947,8 @@
                     return (String*)0;
                 if (!vecMapOperandOK((IROperand*)n.ops().get((u32)1), elems, B, (IRBlock*)defBlk.get((Hashable*)iv), defOf, defBlk))
                     return (String*)0;
+                if (wantIota && ivLaneOK && Opt.vecIsIvUse((IROperand*)n.ops().get((u32)1), iv))
+                    _vrMapUsesIv = true;
                 // The stored lanes are as wide as the loop's, or the vector
                 // store writes a different number of elements than it steps.
                 String* sty = Opt.vecOperandTy((IROperand*)n.ops().get((u32)1));
@@ -961,6 +971,8 @@
                     return (String*)0;
                 if (!hasValue(elems, ((IROperand*)n.ops().get((u32)0)).val()))
                     return (String*)0;
+                if (wantIota && ivLaneOK && Opt.vecIsIvUse((IROperand*)n.ops().get((u32)0), iv))
+                    _vrMapUsesIv = true;
                 convs = convs + (u32)1;
                 if (convs > (u32)2)
                     return (String*)0;
@@ -977,16 +989,30 @@
                     return (String*)0;
                 if (!vecMapOperandOK((IROperand*)n.ops().get((u32)1), elems, B, (IRBlock*)defBlk.get((Hashable*)iv), defOf, defBlk))
                     return (String*)0;
+                if (wantIota && ivLaneOK
+                    && (Opt.vecIsIvUse((IROperand*)n.ops().get((u32)0), iv) || Opt.vecIsIvUse((IROperand*)n.ops().get((u32)1), iv)))
+                    _vrMapUsesIv = true;
                 elems.add((Object*)n.res());
                 continue;
                 }
             return (String*)0;
             }
-        if (!sawLoad || !sawStore)
+        // With no load, the elements ARE the iv and its type is the lane type;
+        // with loads, the iv's lanes must be theirs.
+        if (laneTy == (String*)0 && _vrMapUsesIv)
+            laneTy = iv.ty();
+        if (_vrMapUsesIv && !laneTy.equals(iv.ty()))
+            return (String*)0;
+        if (!(sawLoad || _vrMapUsesIv) || !sawStore)
             return (String*)0;
         if (!self.vecBasesApart(stBases, ldBases, B, defOf, defBlk))
             return (String*)0;
         return laneTy;
+        }
+
+    static bool vecIsIvUse(IROperand* o, IRValue* iv)
+        {
+        return o.kind() == (u8)OPK_USE && o.val() == iv;
         }
 
     // Two lane types one map loop may hold (#27): the same width, on a back
