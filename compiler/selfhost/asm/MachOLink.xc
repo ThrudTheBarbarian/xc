@@ -648,10 +648,17 @@ class MachOLink
                 }
             sections.add((Object*)MachOObjcRange.with(nm, first.seg(), first.flags(), start, out.length() - start));
             }
-        // 3. Move everything that names a byte position.
+        // 3. Move everything that names a byte position. Each name once:
+        // mdataSyms lists a name every time an object defines it (the
+        // standard library's classes are in every object of a split build),
+        // and a second move took it on from where the first put it.
+        Set* moved = new Set();
         for (u32 k = (u32)0; k < mdataSyms.count(); k = k + (u32)1)
             {
             String* nm = (String*)mdataSyms.get(k);
+            if (moved.contains((Hashable*)nm))
+                continue;
+            moved.add((Hashable*)nm);
             Object* v = msyms.get((Hashable*)nm);
             if (v == (Object*)0)
                 continue;
