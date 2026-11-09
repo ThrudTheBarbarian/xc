@@ -614,6 +614,10 @@
             self.boundsHoist(m);
         if (stopHere(String.withCString("bounds-hoist")))
             return;
+        if (_level >= (u32)2)
+            self.boundsVersion(m);
+        if (stopHere(String.withCString("bounds-version")))
+            return;
         // The checks bounds-elide could not prove stay calls. Under
         // -fbounds-check=light they inline here, only in loops (cyclicBlocks;
         // never before bounds-elide: then no call is left for it to find):

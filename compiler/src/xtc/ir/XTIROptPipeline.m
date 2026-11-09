@@ -197,6 +197,8 @@
         // A check on a pointer a quiet loop does not change compares against
         // a bound computed before the loop, and is called only past it.
         [p addPass:[[XTIROptBoundsHoist alloc] init]];
+        // A counted loop within its bounds runs an unchecked copy.
+        [p addPass:[[XTIROptBoundsVersion alloc] init]];
         // The checks it could not prove stay calls. Under -fbounds-check=light
         // they inline here, only in loops (checksOnly; never before it: then no
         // call is left for it to find): measured 2026-10-26, array_map 1.67x
