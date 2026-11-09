@@ -407,6 +407,7 @@ class ClassInfo
     // header before the address is used. Off by default; an ordinary build emits
     // none of this and links none of the runtime.
     bool _boundsCheck;
+    Node* _vtSite;          // the position a vtable check names (#34): set before each dispatch
     Map* _symSeen;          // symbolExists: the names of _m's symbols seen so far
     IRModule* _symSeenM;
     u32 _symSeenN;
@@ -800,6 +801,7 @@ class ClassInfo
         _nativeVarargs = false;
         _tssMode = (i32)-1;
         _boundsCheck = false;
+        _vtSite = (Node*)0;
         _debugInfo = false;
         _dbgPin = true;
         _threadSafeStatics = false;
@@ -3007,6 +3009,8 @@ class ClassInfo
         // in it.
         String* pn = ma.boundProto();
         i32 idx = (_itableDispatch && pn != 0) ? ma.boundPIdx() : (i32)-1;
+        if (idx < (i32)0)
+            emitVtblCheck(recv);
         IRInsn* vl = IRInsn.with(String.withCString(idx >= (i32)0 ? "ProtoLoad"
                                                                   : "VTblLoad"));
         IRValue* code = new IRValue(fnPtr);
@@ -3045,6 +3049,7 @@ class ClassInfo
         IRValue* code = (IRValue*)0;
         if (ma.boundSlot() >= (i32)0)
             {
+            _vtSite = n;
             code = emitBoundLoad(ma, recv, fnPtr);
             }
         else
@@ -4145,6 +4150,30 @@ class ClassInfo
         IRInsn* c = IRInsn.with(String.withCString("Call"));
         c.add(IROperand.sym(runtimeHelper(String.withCString("_xt_check_object"))));
         c.add(IROperand.useVal(p));
+        c.add(IROperand.useVal(sv));
+        c.add(IROperand.useVal(_mem));
+        IRValue* nm = new IRValue(String.withCString("Mem"));
+        c.setMemRes(nm);
+        c.setCc(String.withCString("CallConv::Standard"));
+        _blk.add(c);
+        _mem = nm;
+        }
+
+    // A checked build's vtable check (#34): `_xt_check_vtbl(recv, site)`
+    // before a call, or a load of a method, through the receiver's vtable. The
+    // check (CheckedVtbl.xc) passes a null receiver, then wants the vtable
+    // pointer inside the tables of a loaded image. The 64-bit targets only
+    // (the compact-objects rows), where every image describes that range.
+    void emitVtblCheck(IRValue* recv)
+        {
+        if (!_boundsCheck || !_compactObjects || recv == (IRValue*)0 || inChecker())
+            return;
+        IRValue* sv = stringAddr(boundsSite(_vtSite));
+        if (sv == 0)
+            return;
+        IRInsn* c = IRInsn.with(String.withCString("Call"));
+        c.add(IROperand.sym(runtimeHelper(String.withCString("_xt_check_vtbl"))));
+        c.add(IROperand.useVal(recv));
         c.add(IROperand.useVal(sv));
         c.add(IROperand.useVal(_mem));
         IRValue* nm = new IRValue(String.withCString("Mem"));
@@ -5890,6 +5919,7 @@ class ClassInfo
             // — and the override would never run. §4.2 first: a category
             // method on an imported class has a CHAIN slot, never a vtable one.
             i32 vs = st ? (i32)-1 : selfSlotFor(_curClass, n);
+            _vtSite = n;
             if (!st && catSlotFor(_curClass, n) >= (i32)0)
                 sres = emitCatDispatch(_self, _curClass.catAnchor(),
                                        (u32)catSlotFor(_curClass, n), args, ret);
@@ -7926,6 +7956,7 @@ class ClassInfo
         IRValue* recv = lowerExpr(coll);
         if (_failed)
             return;
+        _vtSite = coll;
         IRValue* count = emitDispatch(recv, ((Number*)lenSlot).asU32(), new Array(), idxTy);
         // A CALL as the subject hands back a +1 owned temp (private:docs/bugs/057).
         // This port used to leave it in _ownedTemps, and emitForInLoop's
@@ -7949,7 +7980,7 @@ class ClassInfo
         zops.add((Object*)IROperand.immI((i32)0, irType(idxTy)));
         IRValue* zero = emit(String.withCString("Const"), irType(idxTy), zops);
         emitForInLoop(loopVar, body, count, zero, idxTy, recv, ci,
-                      ((Number*)atSlot).asU32(), (Node*)0);
+                      ((Number*)atSlot).asU32(), coll);
         }
 
     String* declaredTypeOf(Node* e)
@@ -8048,6 +8079,7 @@ class ClassInfo
             {
             Array* ea = new Array();
             ea.add((Object*)idx);
+            _vtSite = coll;
             IRValue* e = emitDispatch(recv, atSlot, ea, loopVar.ty());
             _locals.set((Hashable*)loopVar.name(), (Object*)e);
             _localTypes.set((Hashable*)loopVar.name(), (Object*)loopVar.ty());
@@ -11706,7 +11738,10 @@ class ClassInfo
             if (_itableDispatch && n.proto() != 0 && n.protoIdx() >= (i32)0)
                 pres = emitProtoDispatch(pv, n.proto(), (u32)n.protoIdx(), pargs, pty);
             else
+                {
+                _vtSite = n;
                 pres = emitDispatch(pv, (u32)n.vslot(), pargs, pty);
+                }
             _tupleIrRet = (String*)0;
             return pres;
             }
@@ -11817,6 +11852,7 @@ class ClassInfo
         i32 vs = (i32)-1;
         if (!isStatic && catSlotFor(ci, n) < (i32)0)
             vs = slotFor(ci, n);
+        _vtSite = n;
         if (!isStatic && catSlotFor(ci, n) >= (i32)0)
             res = emitCatDispatch(recvVal, ci.catAnchor(),
                                   (u32)catSlotFor(ci, n), args, retTy);
@@ -12077,6 +12113,7 @@ class ClassInfo
     // that is not mine has the answer null always had — my own fallback.
     IRValue* emitCatMethodLoad(IRValue* recv, String* anchor, u32 slot)
         {
+        emitVtblCheck(recv);
         String* voidPtr = ptrTo(String.withCString("Void"));
         String* ppVoid = ptrTo(voidPtr);
         Array* o1 = new Array();
@@ -12194,6 +12231,7 @@ class ClassInfo
 
     IRValue* emitDispatch(IRValue* recvVal, u32 slot, Array* args, String* retTy)
         {
+        emitVtblCheck(recvVal);
         IRInsn* d = IRInsn.with(String.withCString("VTblDispatch"));
         d.add(IROperand.useVal(recvVal));
         d.add(IROperand.immI((i32)slot + (i32)vtblSlotBias(),

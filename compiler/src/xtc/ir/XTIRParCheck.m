@@ -43,7 +43,7 @@ static NSSet<NSString*>* allowedExternals(void)
     static dispatch_once_t once;
     dispatch_once(&once, ^{
         s = [NSSet setWithArray:@[
-            @"_xtc_sinit_run", @"_xt_check_bounds", @"_xt_check_bounds_n", @"_xt_check_object",
+            @"_xtc_sinit_run", @"_xt_check_bounds", @"_xt_check_bounds_n", @"_xt_check_object", @"_xt_check_vtbl",
             @"memcpy", @"memmove", @"memset",
             @"sqrt", @"sqrtf", @"sin", @"sinf", @"cos", @"cosf", @"exp", @"expf",
             @"log", @"logf", @"pow", @"powf", @"floor", @"floorf", @"fma", @"fmaf",

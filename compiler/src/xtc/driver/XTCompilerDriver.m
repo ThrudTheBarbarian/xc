@@ -1452,6 +1452,10 @@ static NSString* XTStructDeclaration(NSString* name, XTStructType* st,
     // checked runtime (macOS and iOS link rt-checked's backtracing reporter).
     if (_options.boundsCheck && (!_options.boundsReport || _options.effectiveTarget.checkedRuntime.length == 0))
         pp.autoImport = pp.autoImport.length ? [pp.autoImport stringByAppendingString:@";Checked.xc"] : @"Checked.xc";
+    // The vtable check (#34), in both modes, on the 64-bit rows (the compact
+    // objects ones), whose images describe their class tables' range.
+    if (_options.boundsCheck && _options.effectiveTarget.compactObjects)
+        pp.autoImport = pp.autoImport.length ? [pp.autoImport stringByAppendingString:@";CheckedVtbl.xc"] : @"CheckedVtbl.xc";
     // libRuntime (owner, 2026-11-03), as the port's buildPP: building it, its
     // files are the module's own; a program is offered the target's prebuilt
     // one, imported at the first file of it the unit imports.
