@@ -12,4 +12,10 @@ NS_ASSUME_NONNULL_BEGIN
 @interface XTIROptBoundsHoist : NSObject <XTIROptPass>
 @end
 
+// A counted loop whose hoisted checks are on p[i] runs an unchecked copy of
+// itself when its trip count is within every bound, the checked loop
+// otherwise. The port's Opt.boundsVersion (OptBoundsElide.xc).
+@interface XTIROptBoundsVersion : NSObject <XTIROptPass>
+@end
+
 NS_ASSUME_NONNULL_END

@@ -479,7 +479,11 @@ class String<Comparable, Hashable, Copying>
 
         u8* fresh = new u8[cap + (u32)1];
         u8* old = _bytes;
-        for (u32 i = (u32)0; i < _length; i = i + (u32)1)
+        // The length read once: a byte store could be to the field, as far
+        // as the optimiser knows, and then the loop's bound is not known
+        // before it (which a checked build needs to run it unchecked).
+        u32 len = _length;
+        for (u32 i = (u32)0; i < len; i = i + (u32)1)
             fresh[i] = old[i];
         fresh[_length] = (u8)0;
         _bytes = fresh;
@@ -511,8 +515,9 @@ class String<Comparable, Hashable, Copying>
         _reserve(_length + n);
         u8* dst = _bytes;
         u8* src = other.cString();
+        u32 len = _length;
         for (u32 i = (u32)0; i < n; i = i + (u32)1)
-            dst[_length + i] = src[i];
+            dst[len + i] = src[i];
         _length = _length + n;
         dst[_length] = (u8)0;
         }
@@ -545,8 +550,9 @@ class String<Comparable, Hashable, Copying>
             return;
         _reserve(_length + n);
         u8* dst = _bytes;
+        u32 len = _length;
         for (u32 i = (u32)0; i < n; i = i + (u32)1)
-            dst[_length + i] = src[i];
+            dst[len + i] = src[i];
         _length = _length + n;
         dst[_length] = (u8)0;
         }
