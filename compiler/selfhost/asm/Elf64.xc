@@ -141,9 +141,67 @@ class ElfSharedInfo
         return d.fileLength();
         }
 
-    static u32 phdrCountFor(bool hasData)
+    // text, [data], GNU_STACK, [the class tables' run]
+    static u32 phdrCountFor(bool hasData, bool hasVtbl)
         {
-        return hasData ? (u32)3 : (u32)2;
+        return (hasData ? (u32)3 : (u32)2) + (hasData && hasVtbl ? (u32)1 : (u32)0);
+        }
+
+    // The class tables' run (#34): the back end puts every vtable and itable
+    // of a module between `__xt_vtbl_lo` and `__xt_vtbl_hi`; a merged object's
+    // labels carry its tag (`__xt_vtbl_lo$o<n>`). The run is the span of them
+    // all, as data offsets (lo, hi), or null when the image has none. Its own
+    // program header (PT_XT_VTBL, in the PT_LOOS range) is where a checked
+    // build's vtable check reads each loaded image's run from.
+    static Array* vtblRun(Map* symbols)
+        {
+        if (symbols == (Map*)0)
+            return (Array*)0;
+        String* lo = String.withCString("__xt_vtbl_lo");
+        String* hi = String.withCString("__xt_vtbl_hi");
+        String* loP = String.withCString("__xt_vtbl_lo$");
+        String* loS = String.withCString("$__xt_vtbl_lo");
+        bool any = false;
+        u32 a = (u32)0;
+        u32 b = (u32)0;
+        Array* ks = symbols.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            {
+            String* n = (String*)ks.get(i);
+            String* h = (String*)0;
+            if (n.equals(lo))
+                h = hi;
+            else if (n.hasPrefix(loP))
+                {
+                h = String.withString(hi);
+                h.append(n.substringFromByte(lo.byteLength()));
+                }
+            else if (n.hasSuffix(loS))
+                {
+                h = n.substringBytes((u32)0, n.byteLength() - lo.byteLength());
+                h.append(hi);
+                }
+            if (h == (String*)0)
+                continue;
+            Object* hv = symbols.get((Hashable*)h);
+            if (hv == (Object*)0)
+                continue;
+            u32 x = ((Number*)symbols.get((Hashable*)n)).asU32();
+            u32 y = ((Number*)hv).asU32();
+            if (y <= x)
+                continue;
+            if (!any || x < a)
+                a = x;
+            if (!any || y > b)
+                b = y;
+            any = true;
+            }
+        if (!any)
+            return (Array*)0;
+        Array* r = new Array();
+        r.add((Object*)Number.withU32(a));
+        r.add((Object*)Number.withU32(b));
+        return r;
         }
 
     // The headers share the first page with the code, so the text segment maps
@@ -161,9 +219,9 @@ class ElfSharedInfo
         return roundUpTo((u32)EHDR_SZ + nphdr * (u32)PHDR_SZ, (u32)64);
         }
 
-    static u32 dataOffsetFor(bool hasData, u32 textLen)
+    static u32 dataOffsetFor(bool hasData, bool hasVtbl, u32 textLen)
         {
-        return roundUpTo(textOffsetFor(phdrCountFor(hasData)) + textLen, (u32)ELF_PAGE);
+        return roundUpTo(textOffsetFor(phdrCountFor(hasData, hasVtbl)) + textLen, (u32)ELF_PAGE);
         }
 
     // ── Fixup resolution ─────────────────────────────────────────────────
@@ -263,8 +321,9 @@ class ElfSharedInfo
             }
 
         bool hasData = data.length() > (u32)0;
-        u32 textAddr = (u32)ELF_VBASE + textOffsetFor(phdrCountFor(hasData));
-        u32 dataAddr = (u32)ELF_VBASE + dataOffsetFor(hasData, text.length()) + (u32)ELF_PAGE;
+        bool hasVtbl = Elf64.vtblRun(symbols) != (Array*)0;
+        u32 textAddr = (u32)ELF_VBASE + textOffsetFor(phdrCountFor(hasData, hasVtbl));
+        u32 dataAddr = (u32)ELF_VBASE + dataOffsetFor(hasData, hasVtbl, text.length()) + (u32)ELF_PAGE;
 
         // TPOFF32 first and on its own: the addend already IS the final
         // %fs-relative offset (the caller resolved it once the thread block's
@@ -812,7 +871,9 @@ class ElfSharedInfo
             }
         u32 nRela = absFixups.count() + imports.count() + localGot.count();
 
-        u32 nphdr = isExec ? (u32)7 : (u32)5;
+        // The class tables' run (#34) adds one more.
+        Array* vt = Elf64.vtblRun(symbols);
+        u32 nphdr = (isExec ? (u32)7 : (u32)5) + (vt != (Array*)0 ? (u32)1 : (u32)0);
         u32 interpOff = roundUpTo((u32)EHDR_SZ + nphdr * (u32)PHDR_SZ, (u32)8);
         u32 interpSz = isExec ? (u32)28 : (u32)0; // "/lib64/ld-linux-x86-64.so.2" + NUL
         u32 roOff = roundUpTo(interpOff + interpSz, (u32)8);
@@ -977,6 +1038,13 @@ class ElfSharedInfo
         p64((u32)0);
         p64((u32)0);
         p64((u32)$10);
+        // The class tables' run (#34), inside the RW segment.
+        if (vt != (Array*)0)
+            {
+            u32 vlo = ((Number*)vt.get((u32)0)).asU32();
+            u32 vhi = ((Number*)vt.get((u32)1)).asU32();
+            phdr((u32)$60787476, (u32)PF_R, dataAddr + vlo, vhi - vlo, (u32)8);
+            }
 
         if (isExec)
             {
@@ -1835,11 +1903,13 @@ class ElfSharedInfo
     void emitExec(Data* text, SectionBytes* data, Map* symbols, Array* dataSyms, u32 entryOffset)
         {
         bool hasData = data.length() > (u32)0;
-        u32 nphdr = phdrCountFor(hasData);
+        Array* vt = Elf64.vtblRun(symbols);
+        bool hasVtbl = vt != (Array*)0;
+        u32 nphdr = phdrCountFor(hasData, hasVtbl);
         u32 textOff = textOffsetFor(nphdr);
         u32 textAddr = (u32)ELF_VBASE + textOff;
         u32 textEnd = textOff + text.length();
-        u32 dataOff = dataOffsetFor(hasData, text.length());
+        u32 dataOff = dataOffsetFor(hasData, hasVtbl, text.length());
         u32 dataAddr = (u32)ELF_VBASE + dataOff + (u32)ELF_PAGE;
         u32 dataFileSz = fileSizeOf(data);
 
@@ -1899,6 +1969,20 @@ class ElfSharedInfo
         p64((u32)0);
         p64((u32)0);
         p64((u32)$10);
+        // The class tables' run (#34), inside the data segment.
+        if (hasData && hasVtbl)
+            {
+            u32 vlo = ((Number*)vt.get((u32)0)).asU32();
+            u32 vhi = ((Number*)vt.get((u32)1)).asU32();
+            p32((u32)$60787476);
+            p32((u32)4); // PF_R
+            p64(dataOff + vlo);
+            p64(dataAddr + vlo);
+            p64(dataAddr + vlo);
+            p64(vhi - vlo);
+            p64(vhi - vlo);
+            p64((u32)8);
+            }
 
         padTo(textOff);
         _out.append(text);

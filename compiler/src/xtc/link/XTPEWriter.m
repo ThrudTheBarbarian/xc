@@ -617,6 +617,42 @@ static NSInteger byteOrder(id x, id y, void* ctx)
 // The image writer behind both entry points. `dllName` nil means an executable,
 // and every DLL-only piece below is then skipped, so an executable's bytes do
 // not depend on any of it.
+// The class tables' run (#34): the back end puts every vtable and itable of a
+// module between `__xt_vtbl_lo` and `__xt_vtbl_hi`; a merged object's labels
+// carry its tag (`__xt_vtbl_lo$o<n>`). The run is the span of them all, as
+// data offsets; NO when the image has none. The image describes it in an
+// `.xtvt` section of two RVAs (the run's start and end inside .data), which a
+// checked build's vtable check reads. The port's Pe.vtblRun.
+static BOOL peVtblRun(NSDictionary<NSString*, NSNumber*>* symbols, uint64_t* outLo, uint64_t* outHi)
+    {
+    NSString *lo = @"__xt_vtbl_lo", *hi = @"__xt_vtbl_hi";
+    BOOL any = NO;
+    uint64_t a = 0, b = 0;
+    for (NSString* n in symbols)
+        {
+        NSString* h = nil;
+        if ([n isEqualToString:lo])
+            h = hi;
+        else if ([n hasPrefix:[lo stringByAppendingString:@"$"]])
+            h = [hi stringByAppendingString:[n substringFromIndex:lo.length]];
+        else if ([n hasSuffix:[@"$" stringByAppendingString:lo]])
+            h = [[n substringToIndex:n.length - lo.length] stringByAppendingString:hi];
+        if (!h || !symbols[h])
+            continue;
+        uint64_t x = symbols[n].unsignedLongLongValue, y = symbols[h].unsignedLongLongValue;
+        if (y <= x)
+            continue;
+        if (!any || x < a)
+            a = x;
+        if (!any || y > b)
+            b = y;
+        any = YES;
+        }
+    *outLo = a;
+    *outHi = b;
+    return any;
+    }
+
 + (nullable NSData*)imageFromText:(NSData*)textIn
                              data:(NSData*)dataIn
                           symbols:(NSDictionary<NSString*, NSNumber*>*)symbols
@@ -795,7 +831,9 @@ static NSInteger byteOrder(id x, id y, void* ctx)
     if (dwarf)
         [XTDwarfWriter setPending:nil];
     NSArray<NSString*>* dwarfOrder = @[ @"debug_line", @"debug_info", @"debug_abbrev", @"debug_str", @"debug_frame" ];
-    uint32_t nSect = (data.length ? 3 : 2) + (isDll && iface.length ? 1 : 0)
+    uint64_t vtLo = 0, vtHi = 0;
+    BOOL hasVtbl = data.length && peVtblRun(symbols, &vtLo, &vtHi);
+    uint32_t nSect = (data.length ? 3 : 2) + (hasVtbl ? 1 : 0) + (isDll && iface.length ? 1 : 0)
                      + (relocOffs.count ? 1 : 0) + (dwarf ? (uint32_t)dwarfOrder.count : 0);
     uint64_t hdrSz = alignUp(0x40 + 0x40 + 4 + 20 + PE_OPT_HDR_SIZE + (uint64_t)nSect * PE_SECT_HDR_SIZE, PE_FILE_ALIGN);
 
@@ -1003,6 +1041,15 @@ static NSInteger byteOrder(id x, id y, void* ctx)
     uint64_t afterRVA = data.length ? dataRVA + data.length : rdataRVA + rdataLen;
     uint64_t afterRaw = data.length ? dataRaw + alignUp(dataFileSz, PE_FILE_ALIGN)
                                     : rdataRaw + alignUp(rdataLen, PE_FILE_ALIGN);
+    // The class tables' run (#34), right after .data.
+    uint64_t vtRVA = 0, vtRaw = 0;
+    if (hasVtbl)
+        {
+        vtRVA = alignUp(afterRVA, PE_SECT_ALIGN);
+        vtRaw = afterRaw;
+        afterRVA = vtRVA + 8;
+        afterRaw = vtRaw + alignUp(8, PE_FILE_ALIGN);
+        }
     BOOL hasIface = isDll && iface.length;
     uint64_t ifaceRVA = 0, ifaceRaw = 0;
     if (hasIface)
@@ -1141,7 +1188,7 @@ static NSInteger byteOrder(id x, id y, void* ctx)
     p8(out, 14);
     p8(out, 0);                                          // linker version
     p32(out, (uint32_t)alignUp(textLen, PE_FILE_ALIGN)); // SizeOfCode
-    p32(out, (uint32_t)alignUp(rdataLen + dataFileSz + (hasIface ? iface.length : 0) + reloc.length,
+    p32(out, (uint32_t)alignUp(rdataLen + dataFileSz + (hasVtbl ? 8 : 0) + (hasIface ? iface.length : 0) + reloc.length,
                                PE_FILE_ALIGN));
     p32(out, 0);                                                 // SizeOfUninitializedData
     p32(out, (uint32_t)(pseudo.count ? textRVA + prStubOff : entryRVA)); // AddressOfEntryPoint
@@ -1221,6 +1268,8 @@ static NSInteger byteOrder(id x, id y, void* ctx)
     if (data.length)
         sect(".data\0\0\0", data.length, dataRVA, dataFileSz, dataRaw,
              PE_SCN_INITIALIZED_DATA | PE_SCN_MEM_READ | PE_SCN_MEM_WRITE);
+    if (hasVtbl)
+        sect(".xtvt\0\0\0", 8, vtRVA, 8, vtRaw, PE_SCN_INITIALIZED_DATA | PE_SCN_MEM_READ);
     // The interface is read out of the FILE by a compiler, never by the program,
     // so the loader may discard it.
     if (hasIface)
@@ -1324,6 +1373,13 @@ static NSInteger byteOrder(id x, id y, void* ctx)
         while (out.length < dataRaw)
             p8(out, 0);
         [out appendData:[data subdataWithRange:NSMakeRange(0, (NSUInteger)dataFileSz)]];
+        }
+    if (hasVtbl)
+        {
+        while (out.length < vtRaw)
+            p8(out, 0);
+        p32(out, (uint32_t)(dataRVA + vtLo));
+        p32(out, (uint32_t)(dataRVA + vtHi));
         }
     if (hasIface)
         {
