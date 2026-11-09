@@ -282,6 +282,34 @@
     // B[..i) | test 0 .. test n-1 | call k | the dispatch | join: B(i..] + B's
     // terminator. The result and the memory token after the site are phis in
     // the join.
+    // A checked build's vtable check (#34) on the dispatch d, in its block b:
+    // the call `_xt_check_vtbl(recv, site)` on d's receiver whose memory token
+    // d takes. Where the class test proves the class, the call is direct and
+    // reads no vtable, so the check goes with the dispatch: into the fallback
+    // (the split form), or out of a class's copy of the loop (versioning).
+    final IRInsn* dvCheckOf(IRInsn* d, IRBlock* b)
+        {
+        IROperand* ro = (IROperand*)d.ops().get((u32)0);
+        IROperand* mo = (IROperand*)d.ops().get(d.ops().count() - (u32)1);
+        if (ro.kind() != (u8)OPK_USE || mo.kind() != (u8)OPK_USE)
+            return (IRInsn*)0;
+        for (u32 i = (u32)0; i < b.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)b.insns().get(i);
+            if (n.memRes() == (IRValue*)0 || n.memRes() != mo.val())
+                continue;
+            if (!n.op().equals(String.withCString("Call")) || n.ops().count() < (u32)3)
+                return (IRInsn*)0;
+            IROperand* c0 = (IROperand*)n.ops().get((u32)0);
+            IROperand* c1 = (IROperand*)n.ops().get((u32)1);
+            if (c0.kind() != (u8)OPK_SYM || c1.kind() != (u8)OPK_USE || c1.val() != ro.val()
+                || c0.name() == (String*)0 || !c0.name().equals(String.withCString("_xt_check_vtbl")))
+                return (IRInsn*)0;
+            return n;
+            }
+        return (IRInsn*)0;
+        }
+
     final void dvApply(IRFunc* fn, IRBlock* B, u32 bi, u32 i, IRInsn* d, Array* cands)
         {
         if (_dvDone == (Array*)0)
@@ -292,6 +320,19 @@
         base.appendFormat("%s_dv%lu", B.name().cString(), _dvSeq);
         IROperand* ro = (IROperand*)d.ops().get((u32)0);
         IROperand* mo = (IROperand*)d.ops().get(d.ops().count() - (u32)1);
+        // The vtable check moves to the fallback: the tests and the direct
+        // calls take the memory it took.
+        IRInsn* chk = dvCheckOf(d, B);
+        if (chk != (IRInsn*)0)
+            {
+            u32 ci = (u32)0;
+            while (ci < B.insns().count() && (IRInsn*)B.insns().get(ci) != chk)
+                ci = ci + (u32)1;
+            B.insns().removeAt(ci);
+            if (ci < i)
+                i = i - (u32)1;
+            mo = (IROperand*)chk.ops().get(chk.ops().count() - (u32)1);
+            }
 
         // The join: what followed the site, and B's terminator.
         IRBlock* J = new IRBlock(String.withFormat("%s_join", base.cString()));
@@ -321,6 +362,8 @@
 
         // The fallback: the dispatch as it was.
         IRBlock* F = new IRBlock(String.withFormat("%s_virt", base.cString()));
+        if (chk != (IRInsn*)0)
+            F.add(chk);
         F.add(d);
         IRInsn* fbr = IRInsn.with(String.withCString("Branch"));
         fbr.add(IROperand.block(J));
@@ -375,7 +418,7 @@
             call.add(IROperand.sym(impl));
             call.add(recv);
             for (u32 k = (u32)2; k < d.ops().count(); k = k + (u32)1)
-                call.add((IROperand*)d.ops().get(k));
+                call.add(k + (u32)1 == d.ops().count() ? mo : (IROperand*)d.ops().get(k));
             // The result at the method's own return type, cast to the site's:
             // the inliner hands its uses the method's value (a subclass's
             // Array$get returns Object*; its reader keeps Number's layout).
@@ -770,6 +813,10 @@
     // the site a direct call; H's incomings from P come from `entry`.
     final void dvCloneLoop(Array* body, Map* bmap, Map* vmap, IRInsn* d, IRSymbol* vt, String* impl, IRBlock* P, IRBlock* entry)
         {
+        // The vtable checks of the dispatches this copy makes direct: the
+        // class is known here and a direct call reads no vtable, so each goes,
+        // its memory token standing for the one it took.
+        Set* drops = dvCopyDrops(body, d, vt);
         // Names first: a phi can read a value defined later in the loop.
         for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
             {
@@ -777,7 +824,21 @@
             for (u32 i = (u32)0; i < ob.phis().count(); i = i + (u32)1)
                 dvName(vmap, (IRInsn*)ob.phis().get(i));
             for (u32 i = (u32)0; i < ob.insns().count(); i = i + (u32)1)
-                dvName(vmap, (IRInsn*)ob.insns().get(i));
+                if (!drops.contains((Hashable*)ob.insns().get(i)))
+                    dvName(vmap, (IRInsn*)ob.insns().get(i));
+            }
+        for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
+            {
+            IRBlock* ob = (IRBlock*)body.get(b);
+            for (u32 i = (u32)0; i < ob.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)ob.insns().get(i);
+                if (!drops.contains((Hashable*)n))
+                    continue;
+                IRValue* src = ((IROperand*)n.ops().get(n.ops().count() - (u32)1)).val();
+                Object* m = vmap.get((Hashable*)src);
+                vmap.set((Hashable*)n.memRes(), m != (Object*)0 ? m : (Object*)src);
+                }
             }
         for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
             {
@@ -795,6 +856,8 @@
             for (u32 i = (u32)0; i < ob.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)ob.insns().get(i);
+                if (drops.contains((Hashable*)n))
+                    continue;
                 if (n == d)
                     {
                     dvDirectCall(nb, n, vmap, impl);
@@ -824,6 +887,32 @@
             if (ob.term() != (IRInsn*)0)
                 nb.setTerm(dvCloneInsn(ob.term(), vmap, bmap));
             }
+        }
+
+    // dvCloneLoop's drops: the check of each dispatch a copy makes direct —
+    // the site itself, and any other on its receiver whose slot the class has.
+    final Set* dvCopyDrops(Array* body, IRInsn* d, IRSymbol* vt)
+        {
+        Set* drops = new Set();
+        IROperand* dr = (IROperand*)d.ops().get((u32)0);
+        for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
+            {
+            IRBlock* ob = (IRBlock*)body.get(b);
+            for (u32 i = (u32)0; i < ob.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)ob.insns().get(i);
+                if (!n.op().equals(String.withCString("VTblDispatch")) || n.ops().count() < (u32)3)
+                    continue;
+                IROperand* r0 = (IROperand*)n.ops().get((u32)0);
+                IROperand* s0 = (IROperand*)n.ops().get((u32)1);
+                if (n != d && !(r0.kind() == (u8)OPK_USE && r0.val() == dr.val() && dvHasSlot(vt, (i64)s0.imm())))
+                    continue;
+                IRInsn* c = dvCheckOf(n, ob);
+                if (c != (IRInsn*)0)
+                    drops.add((Hashable*)c);
+                }
+            }
+        return drops;
         }
 
     final void dvName(Map* vmap, IRInsn* n)
