@@ -1781,8 +1781,8 @@
         spvOp(m.globals, (u32)SPV_TYPESTRUCT, lw);
 
         // The span: four i64 push constants — lo, hi, per, and (bug 645) the
-        // number of partials the fold entry point has to combine, which the
-        // kernel itself does not read (the reference explains).
+        // number of partials the fold entry point has to combine, which a
+        // device-reducing kernel reads as its first partial slot (issue #12).
         // The 32-bit span form reads the low word of each (the host writes
         // the same four i64 values either way), and has no 64-bit integer.
         u32 i64t = _sSpan32 ? m.typeInt((u32)32) : m.typeInt((u32)64);
@@ -1823,7 +1823,9 @@
             devred = false;
         // The full form, where the shape allows it (spvFullCmps): the
         // specialization constant the runtime sets for the whole workgroups.
-        _sFullCmps = _sSpan32 && !anyRed ? spvFullCmps(f) : (Map*)0;
+        // A device reduction has one too: a whole workgroup of single items
+        // reaches its barriers the same way (issue #12).
+        _sFullCmps = _sSpan32 && (!anyRed || devred) ? spvFullCmps(f) : (Map*)0;
         _sFullC = (u32)0;
         if (_sFullCmps != (Map*)0)
             {
@@ -2021,6 +2023,12 @@
             u32 lid32 = spvEmitR((u32)SPV_COMPOSITEEXTRACT, u32t, spvA2(lidv, (u32)0));
             u32 wgv = spvEmitR((u32)SPV_LOAD, uvec3, spvA1(wgV));
             u32 wg32 = spvEmitR((u32)SPV_COMPOSITEEXTRACT, u32t, spvA2(wgv, (u32)0));
+            // The workgroup's partial slot: its index in this dispatch plus
+            // the span's fourth word, the groups the run's earlier dispatches
+            // took (header word `goff`, issue #12).
+            u32 goffL = spvEmitR((u32)SPV_LOAD, i64t, spvA1(spvEmitR((u32)SPV_ACCESSCHAIN, pI64, spvA2(spanV, m.u32c((u32)3)))));
+            u32 goff = _sSpan32 ? goffL : spvEmitR((u32)SPV_UCONVERT, u32t, spvA1(goffL));
+            u32 slot = spvEmitR((u32)SPV_IADD, u32t, spvA2(wg32, goff));
             u32 scope = m.u32c((u32)2);      // Workgroup
             u32 sem = m.u32c((u32)0x108);    // AcquireRelease | WorkgroupMemory
             for (u32 di = (u32)0; di < redFields.count(); di = di + (u32)1)
@@ -2070,7 +2078,7 @@
                 u32 p0 = spvEmitR((u32)SPV_ACCESSCHAIN, pW, spvA2(sv, zero));
                 u32 v0 = spvEmitR((u32)SPV_LOAD, t, spvA1(p0));
                 u32 dst = spvEmitR((u32)SPV_ACCESSCHAIN, m.ptrType((u32)SPV_ST_STORAGEBUFFER, t),
-                                   spvA3(((Number*)redVars.get(di)).asU32(), zero, wg32));
+                                   spvA3(((Number*)redVars.get(di)).asU32(), zero, slot));
                 spvEmit((u32)SPV_STORE, spvA2(dst, v0));
                 spvEmit((u32)SPV_BRANCH, spvA1(wmrg));
                 spvPlace(wmrg);
@@ -2252,7 +2260,7 @@
             }
 
         Array* words = m.bytes();
-        if (devred) meta.appendCString(" devred devlast");
+        if (devred) meta.appendCString(" devred devlast goff");
         meta.appendCString(" spirv=");
         meta.append(String.withU32(words.count() / (u32)4));
         if (_mFast) meta.appendCString(" fast");
