@@ -352,7 +352,10 @@ def runtime_lib_for(binary):
     if row is None:
         return None
     root = os.path.dirname(os.path.dirname(xcc_path()))
-    for base in (os.path.join(root, "lib", "xc"), os.path.join(root, "support")):
+    # An installed xcc keeps it in lib/xc, a build tree's (compiler/bin/osx)
+    # in compiler/support (make runtime-libs).
+    tree = os.path.join(os.path.dirname(root), "support")
+    for base in (os.path.join(root, "lib", "xc"), os.path.join(root, "support"), tree):
         lib = os.path.join(base, "runtime-lib", row, "libRuntime.so")
         if os.path.isfile(lib):
             return lib
