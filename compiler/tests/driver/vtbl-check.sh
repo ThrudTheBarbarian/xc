@@ -27,7 +27,11 @@ set -u
 cd "$(dirname "$0")/../.." || exit 1
 _root=$(git rev-parse --show-toplevel 2>/dev/null)
 [ -f "$_root/tools/build-env.sh" ] && . "$_root/tools/build-env.sh"
-PLAT=$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )
+# Run from a Mac: it builds dylibs and Mach-O, and runs the x86-64 Linux,
+# arm64 Linux, android and win64 rows on their hosts from there. A Linux
+# gate host has nothing of its own to add.
+[ "$(uname -s)" = Darwin ] || { echo "vtbl-check: skipped (run from macOS; it drives the other hosts)"; exit 0; }
+PLAT=osx
 REF=${REF:-bin/$PLAT/xcc}
 XC=${XC:-bin/$PLAT/xcc-xc}
 ROOT=$(pwd)
