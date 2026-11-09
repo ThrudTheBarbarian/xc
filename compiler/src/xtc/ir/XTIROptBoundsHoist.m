@@ -390,17 +390,25 @@ static BOOL chain(XTIRValueId v, NSDictionary<NSNumber*, XTIRBlock*>* defBlk, NS
     return YES;
     }
 
-// The instructions chain listed, moved to the end of the preheader.
-static void move(NSArray<XTIRInsn*>* out, XTIRBlock* pre, NSMutableDictionary<NSNumber*, XTIRBlock*>* defBlk)
+// The instructions chain listed, moved to the end of the preheader. Each is
+// looked for in the body's blocks: a split may have moved it on from the block
+// that defined it.
+static void move(NSArray<XTIRInsn*>* out, NSArray<XTIRBlock*>* body, XTIRBlock* pre,
+                 NSMutableDictionary<NSNumber*, XTIRBlock*>* defBlk)
     {
     for (XTIRInsn* n in out)
         {
-        XTIRBlock* from = defBlk[@(n.result.valueId)];
-        if (from == pre)
+        if (defBlk[@(n.result.valueId)] == pre)
             continue;
-        NSUInteger at = [from.instructions indexOfObjectIdenticalTo:n];
-        if (at != NSNotFound)
-            [from.instructions removeObjectAtIndex:at];
+        for (XTIRBlock* from in body)
+            {
+            NSUInteger at = [from.instructions indexOfObjectIdenticalTo:n];
+            if (at != NSNotFound)
+                {
+                [from.instructions removeObjectAtIndex:at];
+                break;
+                }
+            }
         [pre.instructions addObject:n];
         defBlk[@(n.result.valueId)] = pre;
         if (n.memoryResult)
@@ -487,7 +495,7 @@ static void replaceUses(XTIRInsn* n, XTIRValueId old, XTIROperand* to)
                 continue;
                 }
             [bb.instructions removeObjectAtIndex:i];
-            move(ch, pre, defBlk);
+            move(ch, body, pre, defBlk);
             i = 0; // the move may have taken instructions before it
             NSNumber* p = @(n.operands[1].valueId);
             XTIRValue* had = limOf[p];
@@ -518,7 +526,7 @@ static void replaceUses(XTIRInsn* n, XTIRValueId old, XTIROperand* to)
             if (io.kind != XTIROperandKindUse || po.kind != XTIROperandKindUse
                 || !chain(po.valueId, defBlk, defOf, inBody, H, noStore, ch, 0))
                 continue;
-            move(ch, pre, defBlk);
+            move(ch, body, pre, defBlk);
             // The move may have taken instructions before it.
             i = [bb.instructions indexOfObjectIdenticalTo:n];
             [done addObject:n];

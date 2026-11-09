@@ -407,21 +407,28 @@
         return true;
         }
 
-    // The instructions bhChain listed, moved to the end of the preheader.
-    final void bhMove(Array* out, IRBlock* pre, Map* defBlk)
+    // The instructions bhChain listed, moved to the end of the preheader. Each
+    // is looked for in the body's blocks: a split may have moved it on from
+    // the block that defined it.
+    final void bhMove(Array* out, Array* body, IRBlock* pre, Map* defBlk)
         {
         for (u32 k = (u32)0; k < out.count(); k = k + (u32)1)
             {
             IRInsn* n = (IRInsn*)out.get(k);
-            IRBlock* from = (IRBlock*)defBlk.get((Hashable*)n.res());
-            if (from == pre)
+            if ((IRBlock*)defBlk.get((Hashable*)n.res()) == pre)
                 continue;
-            for (u32 i = (u32)0; i < from.insns().count(); i = i + (u32)1)
-                if ((IRInsn*)from.insns().get(i) == n)
-                    {
-                    from.insns().removeAt(i);
-                    break;
-                    }
+            bool gone = false;
+            for (u32 b = (u32)0; b < body.count() && !gone; b = b + (u32)1)
+                {
+                IRBlock* from = (IRBlock*)body.get(b);
+                for (u32 i = (u32)0; i < from.insns().count(); i = i + (u32)1)
+                    if ((IRInsn*)from.insns().get(i) == n)
+                        {
+                        from.insns().removeAt(i);
+                        gone = true;
+                        break;
+                        }
+                }
             pre.insns().add((Object*)n);
             defBlk.set((Hashable*)n.res(), (Object*)pre);
             if (n.memRes() != (IRValue*)0)
@@ -450,7 +457,7 @@
                     continue;
                     }
                 bb.insns().removeAt(i);
-                bhMove(chain, pre, defBlk);
+                bhMove(chain, body, pre, defBlk);
                 i = (u32)0;   // the move may have taken instructions before it
                 IRValue* p = ((IROperand*)n.ops().get((u32)1)).val();
                 IRValue* had = (IRValue*)limOf.get((Hashable*)p);
@@ -482,7 +489,7 @@
                 if (io.kind() != (u8)OPK_USE || po.kind() != (u8)OPK_USE
                     || !bhChain(po.val(), defBlk, defOf, inBody, H, noStore, chain, (u32)0))
                     continue;
-                bhMove(chain, pre, defBlk);
+                bhMove(chain, body, pre, defBlk);
                 // The move may have taken instructions before it.
                 for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
                     if ((IRInsn*)bb.insns().get(k) == n)
