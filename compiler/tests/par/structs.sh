@@ -5,9 +5,12 @@
 # 1-, 2-, 4- and 8-byte fields; it must print the same on the CPU and the GPU,
 # and build without a par-gpu warning (every block has a GPU form). Where the
 # GPU is Metal (macOS), the report must say each of its blocks ran there.
-# Where CUDA and Vulkan are both tried, each is run on its own. Both
-# compilers' builds are checked; tests/par/c/padded.c is the C path's case
-# (ccorpus.sh).
+# Where CUDA and Vulkan are both tried, each is run on its own.
+# tests/fixtures/par_struct_shared_word.xc has two work items write different
+# u8 fields of one element: a kernel would write each with the rest of its
+# word and lose one, so that block must stay on the CPU, say why, and give the
+# CPU's answer. Both compilers' builds are checked; tests/par/c/padded.c is
+# the C path's case (ccorpus.sh).
 #
 #   bash tests/par/structs.sh
 set -u
@@ -39,6 +42,20 @@ for C in xcc-xc xcc; do
         if [ "$PLAT" = osx ] && [ "$r" = gpu ]; then
             n=$(cat "$W/o" "$W/e" | grep -c 'items on the GPU')
             [ "$n" -ge 5 ] || { echo "FAIL structs ($C): $n blocks on the GPU, wanted 5"; cat "$W/o" "$W/e" | grep '^par:' | head -8; fail=1; }
+        fi
+    done
+    S=tests/fixtures/par_struct_shared_word.xc
+    swant=$(cat tests/fixtures/par_struct_shared_word.expected.out)
+    "$XC" -q -O2 -H . -o "$W/w.$C" "$S" > "$W/wb.$C" 2>&1 || { echo "FAIL structs ($C): shared word: no build"; fail=1; continue; }
+    grep -q "at an element another work item may write" "$W/wb.$C" \
+        || { echo "FAIL structs ($C): shared word: no warning that the block stays on the CPU"; fail=1; }
+    for r in cpu gpu; do
+        mkdir -p "$W/sw.$r"
+        XC_PAR=$r XCC_SETTINGS_DIR="$W/sw.$r" XC_PAR_REPORT=1 "$W/w.$C" > "$W/wo" 2> "$W/we"
+        got=$(grep -v '^par:' "$W/wo")
+        [ "$got" = "$swant" ] || { echo "FAIL structs ($C, $r): shared word: '$got', wanted '$swant'"; fail=1; }
+        if cat "$W/wo" "$W/we" | grep -q 'halves: .*on the GPU'; then
+            echo "FAIL structs ($C, $r): shared word: the block ran on the GPU"; fail=1
         fi
     done
 done

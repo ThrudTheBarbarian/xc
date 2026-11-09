@@ -784,19 +784,92 @@ static int64_t pwSelfField(XTIRInsn* _Nullable fa, XTIRValueId selfId)
     return fa.operands[1].intValue;
     }
 
-void XTParWordStructs(XTIRFunction* f)
+// v without the extensions and truncations around it.
+static XTIRValueId pwStripExt(XTIRValueId v, NSDictionary<NSNumber*, XTIRInsn*>* def)
+    {
+    for (int n = 0; n < 4; n++)
+        {
+        XTIRInsn* d = def[@(v)];
+        if (!d || d.operands.count != 1 || d.operands[0].kind != XTIROperandKindUse
+            || !(d.opcode == XTIROpZExt || d.opcode == XTIROpSExt || d.opcode == XTIROpTrunc))
+            return v;
+        v = d.operands[0].valueId;
+        }
+    return v;
+    }
+
+// A constant above zero (an immediate, or a Const, extended maybe).
+static BOOL pwPositive(XTIROperand* o, NSDictionary<NSNumber*, XTIRInsn*>* def)
+    {
+    if (o.kind == XTIROperandKindImmI)
+        return o.intValue > 0;
+    if (o.kind != XTIROperandKindUse)
+        return NO;
+    XTIRInsn* d = def[@(pwStripExt(o.valueId, def))];
+    return d && d.opcode == XTIROpConst && d.operands.count == 1 && d.operands[0].kind == XTIROperandKindImmI
+           && d.operands[0].intValue > 0;
+    }
+
+// Whether an element index is the work item's own: the block's loop counter,
+// from lo (field 1 of the block's object) and stepping up by a constant, so
+// no two items reach the same element. As the port's parOwnIndex.
+static BOOL pwOwnIndex(XTIROperand* o, XTIRValueId selfId, NSDictionary<NSNumber*, XTIRInsn*>* def,
+                       NSDictionary<NSNumber*, XTIRInsn*>* phiDef)
+    {
+    if (o.kind != XTIROperandKindUse)
+        return NO;
+    XTIRValueId v = pwStripExt(o.valueId, def);
+    XTIRInsn* phi = phiDef[@(v)];
+    if (!phi)
+        return NO;
+    NSUInteger uses = 0;
+    for (XTIROperand* po in phi.operands)
+        {
+        if (po.kind != XTIROperandKindUse)
+            continue;
+        uses++;
+        XTIRInsn* d = def[@(pwStripExt(po.valueId, def))];
+        if (!d)
+            return NO;
+        if (d.opcode == XTIROpLoad && d.operands[0].kind == XTIROperandKindUse)
+            {
+            XTIRInsn* fa = def[@(d.operands[0].valueId)];
+            if (fa && fa.opcode == XTIROpFieldAddr && fa.operands.count == 2 && fa.operands[0].kind == XTIROperandKindUse
+                && fa.operands[0].valueId == selfId && fa.operands[1].kind == XTIROperandKindImmI && fa.operands[1].intValue == 1)
+                continue;
+            return NO;
+            }
+        if (d.opcode != XTIROpAdd || d.operands.count != 2)
+            return NO;
+        XTIROperand* a0 = d.operands[0];
+        XTIROperand* a1 = d.operands[1];
+        BOOL step = (a0.kind == XTIROperandKindUse && a0.valueId == v && pwPositive(a1, def))
+                    || (a1.kind == XTIROperandKindUse && a1.valueId == v && pwPositive(a0, def));
+        if (!step)
+            return NO;
+        }
+    return uses > 0;
+    }
+
+NSString* _Nullable XTParWordStructs(XTIRFunction* f)
     {
     if (!f.paramTypes.count)
-        return;
+        return nil;
+    NSString* why = nil;
     // The block's object is parameter 0, value 0.
     XTIRValueId selfId = 0;
     if (![f valueForId:selfId])
-        return;
+        return why;
     NSMutableDictionary<NSNumber*, XTIRInsn*>* def = [NSMutableDictionary dictionary];
     for (XTIRBlock* bb in f.blocks)
         for (XTIRInsn* ip in bb.instructions)
             if (ip.result)
                 def[@(ip.result.valueId)] = ip;
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* phiDef = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in f.blocks)
+        for (XTIRInsn* ip in bb.phiNodes)
+            if (ip.result)
+                phiDef[@(ip.result.valueId)] = ip;
     // The arrays: a global's address, or a captured pointer loaded from the
     // block's object, whose element is a struct with a word.
     NSMutableDictionary<NSNumber*, NSString*>* baseOf = [NSMutableDictionary dictionary];
@@ -834,7 +907,7 @@ void XTParWordStructs(XTIRFunction* f)
             baseOf[@(ip.result.valueId)] = key;
             }
     if (!keys.count)
-        return;
+        return why;
     // The addresses into them: an element's (the root), and a field's or a
     // nested field's, each at a byte offset from its element.
     NSMutableDictionary<NSNumber*, NSString*>* cKey = [NSMutableDictionary dictionary];
@@ -916,6 +989,20 @@ void XTParWordStructs(XTIRFunction* f)
                 BOOL access = k == 0 && !root && (ip.opcode == XTIROpLoad || (ip.opcode == XTIROpStore && ip.operands.count >= 2));
                 if (!access || !pwHolds(wt, t, cOff[vk].unsignedIntValue))
                     [bad addObject:ck];
+                // A field narrower than its word is written with the bytes
+                // around it, which another work item writing another field of
+                // the element would lose: only at the item's own index, which
+                // no other item writes.
+                else if (ip.opcode == XTIROpStore && (pwWidth(t) < pwWidth(wt) || t.kind == XTIRTypeKindBool))
+                    {
+                    XTIRInsn* re = def[cRoot[vk]];
+                    if (!re || re.operands.count != 2 || !pwOwnIndex(re.operands[1], selfId, def, phiDef))
+                        {
+                        [bad addObject:ck];
+                        why = @"it writes a field of an array of structs narrower than the word its GPU version writes, "
+                              @"at an element another work item may write";
+                        }
+                    }
                 }
             }
     // The captured pointers: their field in the object must be loaded only,
@@ -942,7 +1029,7 @@ void XTParWordStructs(XTIRFunction* f)
         if (![bad containsObject:key])
             any = YES;
     if (!any)
-        return;
+        return why;
     // The rewrite.
     NSMutableDictionary<NSNumber*, XTIRType*>* fieldRetyped = [NSMutableDictionary dictionary];
     for (XTIRBlock* bb in f.blocks)
@@ -1034,11 +1121,11 @@ void XTParWordStructs(XTIRFunction* f)
     // The object's layout, in this copy: each captured pointer's field points
     // to words.
     if (!fieldRetyped.count)
-        return;
+        return why;
     XTIRType* selfT = f.paramTypes[0];
     XTIRLayout* ol = selfT.kind == XTIRTypeKindPtr && selfT.pointeeType.kind == XTIRTypeKindAgg ? selfT.pointeeType.layout : nil;
     if (!ol)
-        return;
+        return why;
     NSMutableArray<XTIRLayoutField*>* fields = [NSMutableArray array];
     for (NSUInteger k = 0; k < ol.fieldCount; k++)
         [fields addObject:[[XTIRLayoutField alloc] initWithOffset:[ol fieldOffsetAt:k]
@@ -1047,6 +1134,7 @@ void XTParWordStructs(XTIRFunction* f)
     XTIRType* nt = pwPtr(selfT, [XTIRType aggWithLayout:nl]);
     [f setParamType:nt atIndex:0];
     pwRetyped(f, [f valueForId:selfId], nt);
+        return why;
     }
 
 @implementation XTIRParCheck
@@ -1256,8 +1344,7 @@ static BOOL gEmitsWGSL = NO;
         XTIRFunction* kf = kfns[f.name];
         // Its arrays of structs as arrays of words, in the copies the kernels
         // are printed from (XTParWordStructs).
-        if (kf)
-            XTParWordStructs(kf);
+        NSString* wordWhy = kf ? XTParWordStructs(kf) : nil;
         if (kvfns[f.name])
             XTParWordStructs(kvfns[f.name]);
         NSString* n = [f.name substringWithRange:NSMakeRange(8, f.name.length - 12)];
@@ -1434,6 +1521,9 @@ static BOOL gEmitsWGSL = NO;
             if (!why && gEmitsSPIRV) why = spvWhy;
             if (!why && gEmitsPTX) why = ptxWhy;
             if (!why && gEmitsWGSL) why = wgslWhy;
+            // An array of structs left as it was says why itself.
+            if (wordWhy)
+                why = wordWhy;
             }
         // XC_PAR_SPIRV_DUMP=<dir>: every block's SPIR-V module, on any target,
         // as <dir>/<block>.spv (for spirv-val), or <block>.why when it has none.

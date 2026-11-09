@@ -194,7 +194,11 @@ A block that uses a field of 8 bytes needs what a value of that type needs on
 the GPU: 64-bit integers for an `i64` (so not the Raspberry Pi 5's V3D), and
 `double` for a `double`. A block that copies a whole element, or uses a field's address
 other than to read or write it, runs on the CPU, as does a block over a heap
-array of structs (`new P[n]`).
+array of structs (`new P[n]`). A field narrower than the word the GPU holds
+the struct in (a `u8` beside an `i32`, say) is written together with the rest
+of its word, so a block that writes one runs on the GPU only when it writes
+it at the work item's own element, `a[i]`; otherwise it runs on the CPU and
+the compiler says why.
 
 On Windows and Linux with an NVIDIA GPU, a block can reach it through CUDA or
 Vulkan. Both need only NVIDIA's driver; on Linux the program has to be linked

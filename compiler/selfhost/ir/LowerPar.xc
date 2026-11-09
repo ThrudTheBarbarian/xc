@@ -1981,10 +1981,11 @@
             // kernels are printed from (parWordStructs).
             IRFunc* kf = (IRFunc*)kfns.get((Hashable*)f.name());
             IRModule* sm = _m;
+            _mWordWhy = (String*)0;
             if (kf != (IRFunc*)0)
                 {
                 _m = kmod;
-                parWordStructs(kf);
+                _mWordWhy = parWordStructs(kf);
                 }
             IRFunc* kvf = _kvFns.count() > (u32)0 ? (IRFunc*)_kvFns.get((Hashable*)f.name()) : (IRFunc*)0;
             if (kvf != (IRFunc*)0)
@@ -1994,6 +1995,7 @@
                 }
             _m = sm;
             parFillBlock(f, kf, kmod);
+            _mWordWhy = (String*)0;
             }
         _kvMod = (IRModule*)0;
         _kvFns = (Map*)0;
@@ -2050,9 +2052,12 @@
                 _mMslWhy = (String*)0;
                 // Layouts the rewrite adds belong to the copy it prints from.
                 _m = copy;
-                parWordStructs(f);
+                _mWordWhy = parWordStructs(f);
                 _m = m;
                 parFillBlock(f, f, copy);
+                if (_mWordWhy != (String*)0 && _mMslWhy != (String*)0)
+                    _mMslWhy = _mWordWhy;
+                _mWordWhy = (String*)0;
                 // XC_PAR_OUTLINE_TRACE: why a block has no GPU form (the
                 // Metal form's reason, else the last form's).
                 String* why = _mMslWhy != (String*)0 ? _mMslWhy : _mWhy;
@@ -2076,10 +2081,10 @@
     // addresses are used any other way (a whole element copied, a field's
     // address passed on) stays as it is, and the kernel declines it. Nothing
     // changes outside the copy.
-    final void parWordStructs(IRFunc* f)
+    final String* parWordStructs(IRFunc* f)
         {
         if (f.params().count() == (u32)0)
-            return;
+            return (String*)0;
         IRValue* selfV = (IRValue*)f.params().get((u32)0);
         Map* def = new Map();
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
@@ -2092,6 +2097,18 @@
                     def.set((Hashable*)String.withU32(ip.res().seq()), (Object*)ip);
                 }
             }
+        Map* phiDef = new Map();
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)bb.phis().get(i);
+                if (ip.res() != (IRValue*)0)
+                    phiDef.set((Hashable*)String.withU32(ip.res().seq()), (Object*)ip);
+                }
+            }
+        String* why = (String*)0;
         // The arrays: a global's address, or a captured pointer loaded from
         // the block's object, whose element is a struct with a word.
         Map* baseOf = new Map();    // base value seq -> its array's key
@@ -2136,7 +2153,7 @@
                 }
             }
         if (keys.count() == (u32)0)
-            return;
+            return (String*)0;
         // The addresses into them: an element's (the root), and a field's or
         // a nested field's, each at a byte offset from its element.
         Map* cKey = new Map();      // value seq -> key
@@ -2231,6 +2248,22 @@
                                   || (ip.op().equals(String.withCString("Store")) && ip.ops().count() >= (u32)2));
                     if (!access || !self.parWordHolds(wt, t, ((Number*)cOff.get((Hashable*)vk)).asU32()))
                         bad.set((Hashable*)ck, (Object*)ck);
+                    // A field narrower than its word is written with the
+                    // bytes around it, which another work item writing
+                    // another field of the element would lose: only at the
+                    // item's own index, which no other item writes.
+                    else if (ip.op().equals(String.withCString("Store"))
+                             && (self.mslWidth(t) < self.mslWidth(wt) || t.equals(String.withCString("Bool"))))
+                        {
+                        IRValue* rv = (IRValue*)cRoot.get((Hashable*)vk);
+                        IRInsn* re = (IRInsn*)def.get((Hashable*)String.withU32(rv.seq()));
+                        if (re == (IRInsn*)0 || re.ops().count() != (u32)2
+                            || !parOwnIndex((IROperand*)re.ops().get((u32)1), selfV, def, phiDef))
+                            {
+                            bad.set((Hashable*)ck, (Object*)ck);
+                            why = String.withCString("it writes a field of an array of structs narrower than the word its GPU version writes, at an element another work item may write");
+                            }
+                        }
                     }
                 }
             }
@@ -2271,7 +2304,7 @@
             if (bad.get((Hashable*)keys.get(q)) == (Object*)0)
                 any = true;
         if (!any)
-            return;
+            return why;
         // The rewrite.
         Map* fieldRetyped = new Map();  // captured field k -> its new pointer type
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
@@ -2362,11 +2395,11 @@
         // The object's layout, in this copy: each captured pointer's field
         // points to words.
         if (fieldRetyped.count() == (u32)0)
-            return;
+            return why;
         String* objT = self.mslPointee(selfV.ty());
         IRLayout* ol = self.mslLayoutOf(objT);
         if (ol == (IRLayout*)0)
-            return;
+            return why;
         IRLayout* nl = IRLayout.with(ol.size(), (u32)1);
         for (u32 k = (u32)0; k < ol.fieldCount(); k = k + (u32)1)
             {
@@ -2375,6 +2408,76 @@
             }
         _m.layouts().add((Object*)nl);
         selfV.setTy(parPtrRetyped(selfV.ty(), String.withFormat("Agg(%u)", _m.layouts().count() - (u32)1)));
+        return why;
+        }
+
+    // Whether an element index is the work item's own: the block's loop
+    // counter, from lo (field 1 of the block's object) and stepping up by a
+    // constant, so no two items reach the same element.
+    final bool parOwnIndex(IROperand* o, IRValue* selfV, Map* def, Map* phiDef)
+        {
+        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+            return false;
+        IRValue* v = parStripExt(o.val(), def);
+        IRInsn* phi = (IRInsn*)phiDef.get((Hashable*)String.withU32(v.seq()));
+        if (phi == (IRInsn*)0)
+            return false;
+        u32 uses = (u32)0;
+        for (u32 k = (u32)0; k < phi.ops().count(); k = k + (u32)1)
+            {
+            IROperand* po = (IROperand*)phi.ops().get(k);
+            if (po.kind() != (u8)OPK_USE || po.val() == (IRValue*)0)
+                continue;
+            uses = uses + (u32)1;
+            IRValue* x = parStripExt(po.val(), def);
+            IRInsn* d = (IRInsn*)def.get((Hashable*)String.withU32(x.seq()));
+            if (d == (IRInsn*)0)
+                return false;
+            if (d.op().equals(String.withCString("Load")) && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_USE)
+                {
+                IRInsn* fa = (IRInsn*)def.get((Hashable*)String.withU32(((IROperand*)d.ops().get((u32)0)).val().seq()));
+                if (fa != (IRInsn*)0 && fa.op().equals(String.withCString("FieldAddr")) && fa.ops().count() == (u32)2
+                    && ((IROperand*)fa.ops().get((u32)0)).kind() == (u8)OPK_USE && ((IROperand*)fa.ops().get((u32)0)).val() == selfV
+                    && ((IROperand*)fa.ops().get((u32)1)).kind() == (u8)OPK_IMMI && ((IROperand*)fa.ops().get((u32)1)).imm() == (i64)1)
+                    continue;
+                return false;
+                }
+            if (!d.op().equals(String.withCString("Add")) || d.ops().count() != (u32)2)
+                return false;
+            IROperand* a0 = (IROperand*)d.ops().get((u32)0);
+            IROperand* a1 = (IROperand*)d.ops().get((u32)1);
+            bool step = (a0.kind() == (u8)OPK_USE && a0.val() == v && parPositive(a1, def))
+                        || (a1.kind() == (u8)OPK_USE && a1.val() == v && parPositive(a0, def));
+            if (!step)
+                return false;
+            }
+        return uses > (u32)0;
+        }
+
+    // v without the extensions and truncations around it.
+    final IRValue* parStripExt(IRValue* v, Map* def)
+        {
+        for (u32 n = (u32)0; n < (u32)4; n = n + (u32)1)
+            {
+            IRInsn* d = (IRInsn*)def.get((Hashable*)String.withU32(v.seq()));
+            if (d == (IRInsn*)0 || d.ops().count() != (u32)1 || ((IROperand*)d.ops().get((u32)0)).kind() != (u8)OPK_USE
+                || !(d.op().equals(String.withCString("ZExt")) || d.op().equals(String.withCString("SExt")) || d.op().equals(String.withCString("Trunc"))))
+                return v;
+            v = ((IROperand*)d.ops().get((u32)0)).val();
+            }
+        return v;
+        }
+
+    // A constant above zero (an immediate, or a Const, extended maybe).
+    final bool parPositive(IROperand* o, Map* def)
+        {
+        if (o.kind() == (u8)OPK_IMMI)
+            return o.imm() > (i64)0;
+        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+            return false;
+        IRInsn* d = (IRInsn*)def.get((Hashable*)String.withU32(parStripExt(o.val(), def).seq()));
+        return d != (IRInsn*)0 && d.op().equals(String.withCString("Const")) && d.ops().count() == (u32)1
+               && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_IMMI && ((IROperand*)d.ops().get((u32)0)).imm() > (i64)0;
         }
 
     // Whether a word of type wt holds a field of type t at byte offset off:
@@ -2787,6 +2890,9 @@
             if (_mWhy == (String*)0 && _parSPIRV) _mWhy = spvWhy;
             if (_mWhy == (String*)0 && _parPTX) _mWhy = ptxWhy;
             if (_mWhy == (String*)0 && _parWGSL) _mWhy = wgslWhy;
+            // An array of structs left as it was says why itself.
+            if (_mWordWhy != (String*)0)
+                _mWhy = _mWordWhy;
             }
         if (msl == (String*)0 && (_parMetal || _parPTX || _parSPIRV || _parWGSL))
             {
