@@ -599,6 +599,11 @@ class Pe
     u32 _expDllNameRVA;
     Array* _relocOffs; // Number@: data offsets of words needing a base relocation
     Data* _reloc;     // the .reloc bytes
+    // The class tables' run (#34): an `.xtvt` section of two RVAs, the run's
+    // start and end inside .data, which a checked build's vtable check reads.
+    Array* _vtRun;    // (lo, hi) data offsets, or null
+    u32 _vtRVA;
+    u32 _vtRaw;
     bool _hasIface;
     u32 _ifaceRVA;
     u32 _ifaceRaw;
@@ -632,6 +637,61 @@ class Pe
     // out after everything the loader maps; their long names live in the
     // string table that follows the symbols. `afterRaw` is where the file's
     // mapped sections end.
+    // The class tables' run (#34): the back end puts every vtable and itable
+    // of a module between `__xt_vtbl_lo` and `__xt_vtbl_hi`; a merged object's
+    // labels carry its tag (`__xt_vtbl_lo$o<n>`). The run is the span of them
+    // all, as data offsets (lo, hi), or null when the image has none.
+    static Array* vtblRun(Map* symbols)
+        {
+        if (symbols == (Map*)0)
+            return (Array*)0;
+        String* lo = String.withCString("__xt_vtbl_lo");
+        String* hi = String.withCString("__xt_vtbl_hi");
+        String* loP = String.withCString("__xt_vtbl_lo$");
+        String* loS = String.withCString("$__xt_vtbl_lo");
+        bool any = false;
+        u32 a = (u32)0;
+        u32 b = (u32)0;
+        Array* ks = symbols.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            {
+            String* n = (String*)ks.get(i);
+            String* h = (String*)0;
+            if (n.equals(lo))
+                h = hi;
+            else if (n.hasPrefix(loP))
+                {
+                h = String.withString(hi);
+                h.append(n.substringFromByte(lo.byteLength()));
+                }
+            else if (n.hasSuffix(loS))
+                {
+                h = n.substringBytes((u32)0, n.byteLength() - lo.byteLength());
+                h.append(hi);
+                }
+            if (h == (String*)0)
+                continue;
+            Object* hv = symbols.get((Hashable*)h);
+            if (hv == (Object*)0)
+                continue;
+            u32 x = ((Number*)symbols.get((Hashable*)n)).asU32();
+            u32 y = ((Number*)hv).asU32();
+            if (y <= x)
+                continue;
+            if (!any || x < a)
+                a = x;
+            if (!any || y > b)
+                b = y;
+            any = true;
+            }
+        if (!any)
+            return (Array*)0;
+        Array* r = new Array();
+        r.add((Object*)Number.withU32(a));
+        r.add((Object*)Number.withU32(b));
+        return r;
+        }
+
     void layoutDebugAndSymbols(Map* symbols, Array* dataSyms, SectionBytes* data, u32 afterRaw0)
         {
         u32 afterRaw = afterRaw0;
@@ -755,7 +815,9 @@ class Pe
         _dwarf = _isDll ? (DwarfWriter*)0 : DwarfWriter.pending();
         if (_dwarf != (DwarfWriter*)0)
             DwarfWriter.setPending((DwarfWriter*)0);
-        _nSect = (data.length() > (u32)0 ? (u32)3 : (u32)2) + (_hasIface ? (u32)1 : (u32)0)
+        _vtRun = data.length() > (u32)0 ? Pe.vtblRun(symbols) : (Array*)0;
+        _nSect = (data.length() > (u32)0 ? (u32)3 : (u32)2) + (_vtRun != (Array*)0 ? (u32)1 : (u32)0)
+                 + (_hasIface ? (u32)1 : (u32)0)
                  + (_relocOffs.count() > (u32)0 ? (u32)1 : (u32)0)
                  + (_dwarf != (DwarfWriter*)0 ? (u32)5 : (u32)0);
         _hdrSz = alignUp((u32)$40 + (u32)$40 + (u32)4 + (u32)20 + (u32)PE_OPT_HDR_SIZE + _nSect * (u32)PE_SECT_HDR_SIZE, (u32)PE_FILE_ALIGN);
@@ -862,6 +924,13 @@ class Pe
         _afterRVA = data.length() > (u32)0 ? _dataRVA + data.length() : _rdataRVA + _rdataLen;
         u32 afterRaw = data.length() > (u32)0 ? _dataRaw + alignUp(_dataFileSz, (u32)PE_FILE_ALIGN)
                                              : _rdataRaw + alignUp(_rdataLen, (u32)PE_FILE_ALIGN);
+        if (_vtRun != (Array*)0)
+            {
+            _vtRVA = alignUp(_afterRVA, (u32)PE_SECT_ALIGN);
+            _vtRaw = afterRaw;
+            _afterRVA = _vtRVA + (u32)8;
+            afterRaw = _vtRaw + alignUp((u32)8, (u32)PE_FILE_ALIGN);
+            }
         if (_hasIface)
             {
             _ifaceRVA = alignUp(_afterRVA, (u32)PE_SECT_ALIGN);
@@ -1057,7 +1126,7 @@ class Pe
         p8((u32)14);
         p8((u32)0);                                 // linker version
         p32(alignUp(_textLen, (u32)PE_FILE_ALIGN)); // SizeOfCode
-        p32(alignUp(_rdataLen + _dataFileSz + ifaceLen + _reloc.length(), (u32)PE_FILE_ALIGN));
+        p32(alignUp(_rdataLen + _dataFileSz + (_vtRun != (Array*)0 ? (u32)8 : (u32)0) + ifaceLen + _reloc.length(), (u32)PE_FILE_ALIGN));
         p32((u32)0);                           // SizeOfUninitializedData
         p32(_pseudo.count() > (u32)0 ? _textRVA + _stubOff : _entryRVA); // AddressOfEntryPoint
         p32(_textRVA);                         // BaseOfCode
@@ -1120,6 +1189,8 @@ class Pe
         if (data.length() > (u32)0)
             sect(String.withCString(".data"), data.length(), _dataRVA, _dataFileSz, _dataRaw,
                  (u32)$40 | (u32)$40000000 | (u32)$80000000);
+        if (_vtRun != (Array*)0)
+            sect(String.withCString(".xtvt"), (u32)8, _vtRVA, (u32)8, _vtRaw, (u32)$40 | (u32)$40000000);
         // The interface is read out of the FILE by a compiler, never by the
         // program, so the loader may discard it.
         if (_hasIface)
@@ -1148,6 +1219,12 @@ class Pe
             {
             padTo(_dataRaw);
             data.appendRangeTo(_out, (u32)0, _dataFileSz);
+            }
+        if (_vtRun != (Array*)0)
+            {
+            padTo(_vtRaw);
+            p32(_dataRVA + ((Number*)_vtRun.get((u32)0)).asU32());
+            p32(_dataRVA + ((Number*)_vtRun.get((u32)1)).asU32());
             }
         if (_hasIface)
             {

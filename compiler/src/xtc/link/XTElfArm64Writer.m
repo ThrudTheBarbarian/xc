@@ -71,6 +71,42 @@ static void put64v(NSMutableData* d, uint64_t v)
     for (int i = 0; i < 8; i++)
         put8v(d, (uint8_t)(v >> (8 * i)));
     }
+// The class tables' run (#34): the back end puts every vtable and itable of a
+// module between `__xt_vtbl_lo` and `__xt_vtbl_hi` (a merged object's labels
+// carry its tag). The run is the span of them all, as data offsets; NO when
+// the image has none. It gets a program header of its own (PT_XT_VTBL, in the
+// PT_LOOS range), which a checked build's vtable check reads. The port's
+// ElfArm64.vtblRun.
+static BOOL vtblRun(NSDictionary<NSString*, NSNumber*>* symbols, uint64_t* outLo, uint64_t* outHi)
+    {
+    NSString *lo = @"__xt_vtbl_lo", *hi = @"__xt_vtbl_hi";
+    BOOL any = NO;
+    uint64_t a = 0, b = 0;
+    for (NSString* n in symbols)
+        {
+        NSString* h = nil;
+        if ([n isEqualToString:lo])
+            h = hi;
+        else if ([n hasPrefix:[lo stringByAppendingString:@"$"]])
+            h = [hi stringByAppendingString:[n substringFromIndex:lo.length]];
+        else if ([n hasSuffix:[@"$" stringByAppendingString:lo]])
+            h = [[n substringToIndex:n.length - lo.length] stringByAppendingString:hi];
+        if (!h || !symbols[h])
+            continue;
+        uint64_t x = symbols[n].unsignedLongLongValue, y = symbols[h].unsignedLongLongValue;
+        if (y <= x)
+            continue;
+        if (!any || x < a)
+            a = x;
+        if (!any || y > b)
+            b = y;
+        any = YES;
+        }
+    *outLo = a;
+    *outHi = b;
+    return any;
+    }
+
 static uint64_t roundUpTo(uint64_t v, uint64_t a)
     {
     return (v + a - 1) & ~(a - 1);
@@ -377,7 +413,9 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
             [absFixups addObject:f];
     NSUInteger nRela = absFixups.count + imports.count;
 
-    uint32_t nphdr = isExec ? 7 : 5;
+    uint64_t vtLo = 0, vtHi = 0;
+    BOOL hasVtbl = vtblRun(symbols, &vtLo, &vtHi);
+    uint32_t nphdr = (isExec ? 7 : 5) + (hasVtbl ? 1 : 0);
     uint64_t interpOff = roundUpTo(EHDR_SZ + (uint64_t)nphdr * PHDR_SZ, 8);
     uint64_t interpSz = isExec ? strlen(kInterp) + 1 : 0;
     uint64_t roOff = roundUpTo(interpOff + interpSz, 8);
@@ -563,6 +601,9 @@ static BOOL patchLo12(uint8_t* p, uint64_t off, uint64_t target, uint32_t scale,
     put64v(out, 0);
     put64v(out, 0);
     put64v(out, 0x10);
+    // The class tables' run (#34), inside the RW segment.
+    if (hasVtbl)
+        phdr(0x60787476, PF_R, dataAddr + vtLo, vtHi - vtLo, 8);
 
     if (isExec)
         {
