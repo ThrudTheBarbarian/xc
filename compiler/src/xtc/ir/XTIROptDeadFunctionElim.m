@@ -119,6 +119,10 @@ static BOOL sKeepClassRoot = NO;
         XTIRFunction* fn = fnByName[fnName];
         if (!fn)
             continue;
+        // The bound a hoisted check compares against (bounds-hoist, which
+        // drops it again when it hoists nothing).
+        if ([fnName isEqualToString:@"_xt_check_bounds"])
+            seed(@"_xt_check_limit");
         for (XTIRBlock* bb in fn.blocks)
             {
             for (XTIRInsn* insn in bb.instructions)

@@ -7,12 +7,14 @@
 #import "XTIROpcode.h"
 #import "XTIRValue.h"
 #import "XTIRSupport.h"
+#import "XTIRSymbol.h"
 
 @implementation XTIROptArcPair
     {
     NSMutableDictionary<NSNumber*, XTIRInsn*>* _defs;
     NSMutableDictionary<NSNumber*, XTIRBlock*>* _phiBlock;
     XTIRBlock* _relBlock;
+    XTIRModule* _mod;
     }
 
 - (NSString*)passName
@@ -24,8 +26,14 @@
     return 2;
     }
 
-static BOOL apBlocks(XTIRInsn* n)
+static BOOL apBlocks(XTIRModule* mod, XTIRInsn* n)
     {
+    // A subscript check (Checked.xc's _xt_check_*) frees nothing and writes
+    // nothing the program reads; it may stop the program. A pair across one
+    // goes as across a compare, which an inlined check is.
+    if (n.opcode == XTIROpCall && n.operands.count > 0 && n.operands[0].kind == XTIROperandKindSym
+        && [[mod symbolForId:n.operands[0].symbolId].name hasPrefix:@"_xt_check_"])
+        return NO;
     switch (n.opcode)
         {
     case XTIROpRetain:
@@ -149,7 +157,7 @@ static BOOL apBlocks(XTIRInsn* n)
                 stopped = YES;
                 break;
                 }
-            if (apBlocks(n))
+            if (apBlocks(_mod, n))
                 return nil;
             }
         if (stopped)
@@ -182,6 +190,7 @@ static BOOL apBlocks(XTIRInsn* n)
              errors:(NSMutableArray<NSString*>* _Nullable* _Nullable)outErrors
     {
     (void)outErrors;
+    _mod = mod;
     for (XTIRFunction* fn in mod.functions)
         {
         _defs = [NSMutableDictionary dictionary];

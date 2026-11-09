@@ -1,0 +1,15 @@
+#import <Foundation/Foundation.h>
+#import "XTIROptPass.h"
+
+NS_ASSUME_NONNULL_BEGIN
+
+// A heap check on p[i] in a loop that cannot change p's block header reads the
+// same header every time round. The header's verdict, as a bound, is computed
+// once before the loop by Checked.xc's _xt_check_limit, and the loop calls the
+// check only for an index at or past it: a check that would fail still runs,
+// on the same iteration. The port's Opt.boundsHoist (OptBoundsElide.xc), which
+// explains the rest.
+@interface XTIROptBoundsHoist : NSObject <XTIROptPass>
+@end
+
+NS_ASSUME_NONNULL_END
