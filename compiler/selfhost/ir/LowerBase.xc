@@ -636,6 +636,7 @@ class ClassInfo
     // original.
     String* _parExtraMeta;
     String* _mMslWhy;   // the Metal form's reason it was not made, for the outliner's trace
+    String* _mWordWhy;  // why parWordStructs left an array of structs as it was, or 0
 
     // ── the `par` kernel as Metal source (par-blocks.md §6) ─────────────────
     // The port of XTIRParMSL: the same kernel, byte for byte. Each GPU thread
