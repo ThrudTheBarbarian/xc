@@ -153,6 +153,14 @@ bool gParProbed[64];    // XC_PAR_PROBE: the block's first run was the sweep
 i64 gParMeasN[64];
 i64 gParLastN[64];
 bool gParMeasuring[64]; // this run is one auto measures (not decided by a setting or the bounds)
+// A run the learned bounds gave to a split set (3 the GPUs, 4 all devices),
+// and that set's runs and best time so far in this process (keepSet).
+bool gParBounded[64];
+u32 gParSetRuns[64];
+i64 gParSetBest[64];
+// A split set about to win has the best single device timed once more first
+// (decide): 0 not yet, 1 that run is next, 2 done.
+u32 gParRecheck[64];
 // A block the program's last process ran only once while auto measured it: its
 // candidates' first runs are then their timings (warmTime), since a warm-up
 // would be all such a program ever runs. Read from the settings once, and
@@ -501,6 +509,10 @@ class ParDevice
         gParMeasN[i] = (i64)0;
         gParLastN[i] = (i64)0;
         gParMeasuring[i] = false;
+        gParBounded[i] = false;
+        gParSetRuns[i] = (u32)0;
+        gParSetBest[i] = (i64)-1;
+        gParRecheck[i] = (u32)0;
 #if PAR_CUDA
         gParApi[i] = (i32)0;
         gParCudaRuns[i] = (u32)0;
@@ -1319,6 +1331,68 @@ class ParDevice
         gParRemUs[i] = gParProgUs[e * (u32)5 + (u32)4];
         }
 
+    // The best single device's time: the CPU (its better of all threads and
+    // one) or the GPU, whichever is faster; -1 while neither is known.
+    static i64 singleUs(u32 i)
+        {
+        i64 cpu = cpuBestUs(i);
+        i64 gpu = gParGpuUs[i];
+        if (gpu >= (i64)0 && (cpu < (i64)0 || gpu <= cpu))
+            return gpu;
+        return cpu;
+        }
+
+    // Which single device that is: 2 the GPU, 1 the CPU.
+    static i32 singleWinner(u32 i)
+        {
+        i64 single = singleUs(i);
+        return single >= (i64)0 && single == gParGpuUs[i] ? (i32)2 : (i32)1;
+        }
+
+    // The best single device's second timed run (decide): the better of its
+    // two times is kept, and the comparison made again.
+    static void rechecked(u32 i, ParChunk* proto, i32 dev, i64 us)
+        {
+        gParRecheck[i] = (u32)2;
+        if (dev == (i32)2 && us < gParGpuUs[i])
+            gParGpuUs[i] = us;
+        if (dev == (i32)1 && gParCpuOne[i] && us < gParCpu1Us[i])
+            gParCpu1Us[i] = us;
+        if (dev == (i32)1 && !gParCpuOne[i] && us < gParCpuUs[i])
+            gParCpuUs[i] = us;
+        decide(i, proto);
+        }
+
+    // The fastest candidate from the times measured: 1 the CPU, 2 the GPU,
+    // 3 the GPUs, 4 all devices, 5 the remote GPUs. A set that splits the
+    // block between this machine's devices (3 and 4) must take under nine
+    // tenths of the best single device's time. Each candidate is timed once,
+    // and a split's gain within that is noise its later runs do not keep: on
+    // an Apple M3 Max, nbody's CPU and GPU together measured 3 to 9% under
+    // the GPU alone and then ran every later run at 1.4 ms, where the GPU
+    // alone takes 0.6 to 1.2 (its unified-memory GPU raises its clocks only
+    // under sustained work, and its share of the split is too small for that).
+    static i32 fastest(u32 i)
+        {
+        i64 cpu = cpuBestUs(i);
+        i32 winner = gParGpuUs[i] <= cpu ? (i32)2 : (i32)1;
+        i64 single = gParGpuUs[i] <= cpu ? gParGpuUs[i] : cpu;
+        i64 best = single;
+        if (gParGpusUs[i] >= (i64)0 && gParGpusUs[i] < best && gParGpusUs[i] * (i64)10 < single * (i64)9)
+            {
+            winner = (i32)3;
+            best = gParGpusUs[i];
+            }
+        if (gParAllUs[i] >= (i64)0 && gParAllUs[i] < best && gParAllUs[i] * (i64)10 < single * (i64)9)
+            {
+            winner = (i32)4;
+            best = gParAllUs[i];
+            }
+        if (gParRemUs[i] >= (i64)0 && gParRemUs[i] < best)
+            winner = (i32)5;
+        return winner;
+        }
+
     // Once every candidate is timed at the size being measured, the fastest
     // is learned. The queue's sets are candidates only where there are GPU
     // workers (two for "GPUs": one is the GPU again, tiled).
@@ -1333,12 +1407,21 @@ class ParDevice
             saveProgress(i, proto);
             return;
             }
-        i64 cpu = cpuBestUs(i);
-        i32 winner = gParGpuUs[i] <= cpu ? (i32)2 : (i32)1;
-        i64 best = gParGpuUs[i] <= cpu ? gParGpuUs[i] : cpu;
-        if (gParGpusUs[i] >= (i64)0 && gParGpusUs[i] < best) { winner = (i32)3; best = gParGpusUs[i]; }
-        if (gParAllUs[i] >= (i64)0 && gParAllUs[i] < best) { winner = (i32)4; best = gParAllUs[i]; }
-        if (gParRemUs[i] >= (i64)0 && gParRemUs[i] < best) { winner = (i32)5; best = gParRemUs[i]; }
+        i32 winner = fastest(i);
+        // A split set that wins is weighed against the best single device's
+        // second timed run as well: that device's one timed run came on its
+        // first warm run, which a unified-memory GPU makes at its idle
+        // clocks, while the split's never gets faster (keepSet's note).
+        if ((winner == (i32)3 || winner == (i32)4) && gParRecheck[i] == (u32)0)
+            {
+            gParRecheck[i] = (u32)1;
+            if (reporting())
+                Log.info("par: %s: auto times the %s again before it picks %s (%s %ld us, %s %ld us)", gParBlock[i],
+                         choiceName(singleWinner(i)), choiceName(winner), choiceName(singleWinner(i)), singleUs(i),
+                         choiceName(winner), winner == (i32)3 ? gParGpusUs[i] : gParAllUs[i]);
+            saveProgress(i, proto);
+            return;
+            }
         if (reporting())
             Log.info("par: %s: auto picks the %s%s (CPU %ld us, one thread %ld us, GPU %ld us, GPUs %ld us, all %ld us, remote %ld us)",
                      gParBlock[i], choiceName(winner), winner == (i32)1 && gParCpuOne[i] ? " on one thread" : "",
@@ -1378,6 +1461,33 @@ class ParDevice
         decide(i, proto);
         }
 
+    // A split set the learned bounds chose must stay faster than the best
+    // single device's measured time: its first run in a process is a warm-up,
+    // and if the best of the next three is no faster, the single device is
+    // learned in its place. The choice rests on one timed run of each
+    // candidate, and this catches a split whose measured gain was noise. A
+    // set a setting or XC_PAR chose is never checked.
+    static void keepSet(u32 i, ParChunk* proto, i32 set, i64 us)
+        {
+        if (!gParBounded[i] || (set != (i32)3 && set != (i32)4) || gParSetRuns[i] >= (u32)4)
+            return;
+        gParSetRuns[i] = gParSetRuns[i] + (u32)1;
+        if (gParSetRuns[i] == (u32)1)
+            return;
+        if (gParSetBest[i] < (i64)0 || us < gParSetBest[i])
+            gParSetBest[i] = us;
+        if (gParSetRuns[i] < (u32)4)
+            return;
+        i64 single = singleUs(i);
+        if (single <= (i64)0 || gParSetBest[i] < single)
+            return;
+        i32 winner = singleWinner(i);
+        if (reporting())
+            Log.info("par: %s: %s took %ld us at best, no faster than the %s alone (%ld us)", gParBlock[i], choiceName(set),
+                     gParSetBest[i], choiceName(winner), single);
+        learn(i, proto, gParLastN[i], winner);
+        }
+
     // A run on the tile queue's set (3 the GPUs, 4 every device), for auto's
     // comparison; the second run of each is the one timed, as below.
     static void ranOnSet(ParChunk* proto, i32 set, i64 us)
@@ -1386,7 +1496,10 @@ class ParDevice
         if (reporting())
             Log.info("par: %s: %ld us on %s", gParBlock[i], us, choiceName(set));
         if (!gParMeasuring[i])
+            {
+            keepSet(i, proto, set, us);
             return;
+            }
         noteRun(i, proto);
         i64 warm = (i64)0;
         if (set == (i32)3)
@@ -1433,6 +1546,7 @@ class ParDevice
             return _mode - (i32)2;
         u32 i = slot(proto.parName());
         gParMeasuring[i] = false;
+        gParBounded[i] = false;
         gParOneNow[i] = false;
         // With no XC_PAR, in order (owner 2026-10-31): the user's setting
         // (par.<name>, par), then the program's Par.device, then the block's
@@ -1476,11 +1590,13 @@ class ParDevice
         if (gParAllFrom[i] >= (i64)0 && n >= gParAllFrom[i])
             {
             seedRates(i, n);
+            gParBounded[i] = true;
             return (i32)4;
             }
         if (gParGpusFrom[i] >= (i64)0 && n >= gParGpusFrom[i])
             {
             seedRates(i, n);
+            gParBounded[i] = true;
             return (i32)3;
             }
         if (gParGpuFrom[i] >= (i64)0 && n >= gParGpuFrom[i])
@@ -1504,6 +1620,7 @@ class ParDevice
             gParGpusRuns[i] = gParGpusRuns[i] > (u32)0 ? (u32)1 : (u32)0;
             gParAllRuns[i] = gParAllRuns[i] > (u32)0 ? (u32)1 : (u32)0;
             warmReset(i);
+            gParRecheck[i] = (u32)0;
             gParMeasN[i] = n;
             loadProgress(i, n);
             }
@@ -1586,13 +1703,14 @@ class ParDevice
             gParOneNow[i] = true;
             return (i32)1;
             }
-        i64 cpu = cpuBestUs(i);
-        i32 best = gParGpuUs[i] <= cpu ? (i32)2 : (i32)1;
-        i64 bestUs = gParGpuUs[i] <= cpu ? gParGpuUs[i] : cpu;
-        if (gParGpusUs[i] >= (i64)0 && gParGpusUs[i] < bestUs) { best = (i32)3; bestUs = gParGpusUs[i]; }
-        if (gParAllUs[i] >= (i64)0 && gParAllUs[i] < bestUs) { best = (i32)4; bestUs = gParAllUs[i]; }
-        if (gParRemUs[i] >= (i64)0 && gParRemUs[i] < bestUs) { best = (i32)5; bestUs = gParRemUs[i]; }
-        return best;
+        if (gParRecheck[i] == (u32)1)
+            {
+            i32 dev = singleWinner(i);
+            if (dev == (i32)1 && gParCpuOne[i])
+                gParOneNow[i] = true;
+            return dev;
+            }
+        return fastest(i);
         }
 
     // What a run took, for auto's comparison. Each device's first run of a
@@ -1604,6 +1722,14 @@ class ParDevice
         {
         u32 i = slot(proto.parName());
         noteRun(i, proto);
+        if (gParMeasuring[i] && gParRecheck[i] == (u32)1)
+            {
+            gParOneNow[i] = false;
+            if (reporting())
+                Log.info("par: %s: %ld items on the CPU, %ld us", gParBlock[i], gParLastN[i], us);
+            rechecked(i, proto, (i32)1, us);
+            return;
+            }
         if (gParOneNow[i])
             {
             gParOneNow[i] = false;
@@ -1831,6 +1957,8 @@ class ParDevice
         noteRun(bi, proto);
         if (gParMeasuring[bi])
             gParGpuRuns[bi] = gParGpuRuns[bi] + (u32)1;
+        if (gParMeasuring[bi] && gParRecheck[bi] == (u32)1)
+            rechecked(bi, proto, (i32)2, took);
         bool decided = false;
         i64 measured = took;
         i64 warm = (i64)0;

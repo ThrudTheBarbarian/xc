@@ -497,7 +497,13 @@ would finish it soonest, so a faster one simply does more of the work.
 `auto` treats the sets as more candidates beside the one GPU, the CPU's
 threads and one CPU thread: the GPUs together, the GPUs with the CPU, and
 remote GPUs where a daemon serves them. Each is measured twice (the first run
-a warm-up, as above), and the fastest wins at that size. The learned record
+a warm-up, as above), and the fastest wins at that size. A set that splits the
+block between the GPUs, or between them and the CPU, wins only when it takes
+under nine tenths of the best single device's time, counting a second timed
+run of that device made before the choice. It is checked again in each later
+run of the program: if the best of its first three timed runs is no faster
+than that device's time, that device is learned in its place.
+The learned record
 keeps the CPU's largest win and the smallest size each other arrangement won
 from, and the hardware key
 takes in every device, so a machine that gains a card is measured afresh. A
