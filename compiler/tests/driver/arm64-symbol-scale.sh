@@ -15,9 +15,13 @@
 # the split build does: every function kept, none inlined), at N and 4N.
 # Four times the classes must cost less than a quadratic back end's 16x:
 # before the fixes the reference took 22.8x and the port 33.9x (7 s -> 237 s),
-# after them 7.1x and 10.8x on an M4 Max (12.4x for the port on a Linux host,
-# which is why the limit is not tighter). Both compilers, and their assembly the same at
-# 4N.
+# after them 7.1x and 10.8x on an M4 Max (12.4x for the port on a Linux host).
+# Since #18 (name indexes, bit-set liveness and dominators) the shipped compiler
+# takes 5.6x on an M4 Max and 5.3-7.1x on the Linux gate hosts, the reference
+# 8.6-9.1x (7.6x for the shipped compiler on a busy Mac), so the limits are
+# 10x for the shipped compiler and 12x for the reference: a slip back towards
+# quadratic fails here, a loaded machine does not. Both compilers, and their
+# assembly the same at 4N.
 #
 #   bash tests/driver/arm64-symbol-scale.sh
 set -u
@@ -65,10 +69,11 @@ for C in "$REF" "$XC"; do
     s=$(best "$W/small.xc" small) || { fail=1; continue; }
     b=$(best "$W/big.xc" big) || { fail=1; continue; }
     r=$(python3 -c "print('%.1f' % ($b / max($s, 1)))")
-    if python3 -c "import sys; sys.exit(0 if $b <= 16 * max($s, 1) else 1)"; then
-        echo "ok: $(basename "$C"): $N classes $s ms, $((N * 4)) classes $b ms (${r}x)"
+    lim=10; [ "$C" = "$REF" ] && lim=12
+    if python3 -c "import sys; sys.exit(0 if $b <= $lim * max($s, 1) else 1)"; then
+        echo "ok: $(basename "$C"): $N classes $s ms, $((N * 4)) classes $b ms (${r}x, limit ${lim}x)"
     else
-        echo "FAIL: $(basename "$C"): $N classes $s ms, $((N * 4)) classes $b ms (${r}x, more than 16x)"; fail=1
+        echo "FAIL: $(basename "$C"): $N classes $s ms, $((N * 4)) classes $b ms (${r}x, more than ${lim}x)"; fail=1
     fi
     cp "$W/big.s" "$W/big.$(basename "$C").s"
 done
