@@ -1,5 +1,6 @@
 // XTIROptSimdClone.m — runtime SIMD dispatch: the per-level clones. See the header.
 #import "XTIRInsn.h"
+#import "XTIRSupport.h"
 #import "XTIROperand.h"
 #import "XTIROpcode.h"
 #import "XTIROptSimdClone.h"
@@ -74,6 +75,30 @@ static BOOL hasFloatLoop(XTIRFunction* fn)
     return n >= 8;
     }
 
+// A float add or subtract marked contract that reads a multiply: a
+// multiply-add the back end fuses where the code has FMA (:goal(speed) code,
+// C's multiply-adds). The port's simdContractPair.
+static BOOL hasContractPair(XTIRFunction* fn)
+    {
+    NSMutableSet<NSNumber*>* muls = [NSMutableSet set];
+    for (XTIRBlock* b in fn.blocks)
+        for (XTIRInsn* x in b.instructions)
+            if (x.result && x.opcode == XTIROpFMul)
+                [muls addObject:@(x.result.valueId)];
+    if (muls.count == 0)
+        return NO;
+    for (XTIRBlock* b in fn.blocks)
+        for (XTIRInsn* x in b.instructions)
+            {
+            if ((x.opcode != XTIROpFAdd && x.opcode != XTIROpFSub) || x.predicate != XTIRFpContract)
+                continue;
+            for (XTIROperand* o in x.operands)
+                if (o.kind == XTIROperandKindUse && [muls containsObject:@(o.valueId)])
+                    return YES;
+            }
+    return NO;
+    }
+
 - (BOOL)runOnModule:(XTIRModule*)mod
              errors:(NSMutableArray<NSString*>* _Nullable* _Nullable)outErrors
     {
@@ -94,9 +119,10 @@ static BOOL hasFloatLoop(XTIRFunction* fn)
             // An avx2 clone with a scalar float loop stays too, though it did
             // not vectorise: its float code takes the three-operand VEX forms,
             // which save the copy every destructive SSE op needs (perlin,
-            // 2026-10-25). As the port.
+            // 2026-10-25). So does one with a multiply-add to fuse: only a copy
+            // with FMA fuses (owner, 2026-11-09). As the port.
             if (base && (hasWideVector(fn, (uint32_t)fn.simdLaneBytes)
-                         || ([fn.simdLevel isEqualToString:@"avx2"] && hasFloatLoop(fn))))
+                         || ([fn.simdLevel isEqualToString:@"avx2"] && (hasFloatLoop(fn) || hasContractPair(fn)))))
                 base.simdDispatch = YES;
             else
                 [drop addObject:fn];

@@ -99,9 +99,9 @@ class LlvmReader
     // goes through the C ABI, the globals are clang's (here, references to
     // its), and a function that is not read is left to clang rather than
     // stopping the build.
-    // C on arm64 fuses the multiply-adds clang marks (llvm.fmuladd, its
-    // default -ffp-contract=on), as GCC and clang do there; on x86-64 C stays
-    // exact unless asked (owner, 2026-10-26 and 2026-11-07).
+    // C fuses the multiply-adds clang marks (llvm.fmuladd, its default
+    // -ffp-contract=on) on every target, as GCC and clang do; -fgoal=accuracy
+    // asks clang for none (owner, 2026-11-09).
     void setFuseMulAdd(bool b)
         {
         _fuseMulAdd = b;

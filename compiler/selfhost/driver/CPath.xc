@@ -62,8 +62,8 @@ i32 cPathRelocatable(String* xo, String* out)
 // The two above, as functions, for a file compiled against this interface.
 String* cRestObject(void) { return gCRestObject; }
 void cPathSetProtect(bool b) { gCPathProtect = b; }
-// C on arm64 fuses clang's llvm.fmuladd, as GCC and clang do there (the
-// driver says so per target; LlvmReader.setFuseMulAdd).
+// C fuses clang's llvm.fmuladd on every target, as GCC and clang do (the
+// driver sets it; LlvmReader.setFuseMulAdd); -fgoal=accuracy asks for none.
 bool gCPathFuseMulAdd;
 void cPathSetFuseMulAdd(bool b) { gCPathFuseMulAdd = b; }
 void cPathSetTarget(String* t) { gCPathTarget = t; }

@@ -22,6 +22,10 @@ NS_ASSUME_NONNULL_BEGIN
 // assemblyFromModule: (atomic exactly when the module spawns a thread); this
 // override forces it: 1 = always, 0 = never, -1 (default) = decide.
 + (void)setThreadSafeARCOverride:(NSInteger)mode;
+// The whole build runs only on CPUs with FMA (-mavx2, -msimd=avx512): every
+// function may fuse what the IR marks contract, not only the avx2/avx512
+// copies of a dispatching build. As the port's setBuildFma.
++ (void)setBuildFma:(BOOL)fma;
 + (BOOL)threadSafeARC;
 
 @end

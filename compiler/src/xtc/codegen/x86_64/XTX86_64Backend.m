@@ -53,7 +53,8 @@ static NSDictionary<NSNumber*, XTIRInsn*>* sSelCmp = nil; // Select id -> its IC
 // allocator's selInfo hook, keyed by the arm), and its result has no home.
 static NSDictionary<NSNumber*, XTIRInsn*>* sSelSink = nil; // Select id -> its true value's insn
 static NSDictionary<NSNumber*, NSNumber*>* sFmaUc = nil; // value id -> its use count, for fmaPair
-static BOOL sFmaOk = NO;                                  // this function's code has FMA (avx2/avx512 copy)
+static BOOL sFmaOk = NO;                                  // this function's code has FMA (avx2/avx512 copy, or a build that has it)
+static BOOL sBuildFma = NO;                               // the build needs an FMA CPU (-mavx2, -msimd=avx512)
 static BOOL sVexOk = NO;                                  // this function is an avx2/avx512 copy: three-operand forms
 static NSSet<NSNumber*>* sSplatVec = nil;                // this function's VSplat results (every lane the same)
 static NSSet<NSNumber*>* sAligned = nil;                  // pinned large arrays placed on a 64-byte boundary
@@ -2107,6 +2108,10 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
     {
     sX86ThreadSafeARCOverride = mode;
     }
++ (void)setBuildFma:(BOOL)fma
+    {
+    sBuildFma = fma;
+    }
 + (BOOL)threadSafeARC
     {
     return sX86ThreadSafeARC;
@@ -3292,7 +3297,7 @@ static void vecSlotMove(XTIRFunction* fn, XTIRValueId vid, NSString* reg, BOOL l
     // perlin ran 33% slower on Zen 5; that was the cvtsi2ss false dependency,
     // fixed in 0.87.3, and fused it is now 12% faster (73.8 ms against 83.5).
     // On by the owner, 2026-10-28. As the port.
-    sFmaOk = fn.simdLevel != nil;
+    sFmaOk = fn.simdLevel != nil || sBuildFma;
     sVexOk = fn.simdLevel != nil;
     // The vectors whose lanes are all one value: VMulHi's odd-lane shuffle of
     // one is the same register, so it is not made (2026-11-01). As the port.

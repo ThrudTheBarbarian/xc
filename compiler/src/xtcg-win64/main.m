@@ -237,6 +237,7 @@ int main(int argc, const char* argv[])
         // Thread-safe ARC: the backend decides per module (threading.md §4.1);
         // this only forwards an explicit -f[no-]thread-safe-arc.
         [XTX86_64Backend setThreadSafeARCOverride:threadSafeARC];
+        [XTX86_64Backend setBuildFma:!simdDispatch && simdLaneBytes >= 32];
         NSString* asmText = [XTX86_64Backend assemblyFromModule:mod];
         if (!asmText)
             {

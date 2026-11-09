@@ -2137,6 +2137,7 @@ void emitWin64(DriverOptions* d, IRModule* mod)
     X86_64* be = new X86_64();
     be.setWin64(true);
     be.setThreadSafeArcOverride(d.fe().threadSafeArc());
+    be.setBuildFma(!pw.simdDispatch() && pw.vectorLaneBytes() >= (u32)32);
     String* prog = be.assembly(mod);
     if (be.failed()) {
         String* list = String.withCString("");
@@ -2523,6 +2524,7 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
 
     X86_64* be = new X86_64();
     be.setThreadSafeArcOverride(d.fe().threadSafeArc());
+    be.setBuildFma(!px.simdDispatch() && px.vectorLaneBytes() >= (u32)32);
     String* prog = be.assembly(mod);
     if (be.failed()) {
         String* list = String.withCString("");
@@ -4852,10 +4854,13 @@ void main(void)
             Process.exit((i32)1); return;
             }
         cPathSetTarget(tgt);
-        // Every arm64 target, by its CPU: arm64 Linux and android as well as
-        // macOS (the target's name is "arm64" only on macOS).
-        cPathSetFuseMulAdd(crow != (TargetRow*)0 ? crow.cpu().equals(String.withCString("arm64"))
-                                                 : d.arch().equals(String.withCString("arm64")));
+        // C fuses the multiply-adds clang marks (llvm.fmuladd, its default
+        // -ffp-contract=on), on every target, as GCC and clang do (owner,
+        // 2026-11-09). Under -fgoal=accuracy nothing fuses (owner: accuracy
+        // never fuses), so clang is asked for none, whatever -ffp-contract says.
+        cPathSetFuseMulAdd(true);
+        if (d.fe().goalDefault() == (u32)2)
+            cPathSetFpContract(String.withCString("off"));
         if (optOutline() || Platform.env(String.withCString("XC_PAR_PROPOSE")).equals(String.withCString("outline")))
             mod = CPath.lowerWith(cin, CPath.scratch(), cIncs, cDefs, d.fe());
         else
@@ -7000,9 +7005,9 @@ DriverOptions* parseDriverArgs(void)
         if (a.equals(String.withCString("-fbounds-check=light"))) {
             o.setBoundsCheck(true); o.setBoundsReport(false); i = i + (u32)1; continue;
         }
-        // -ffp-contract=fast|on|off: for a C file, handed to clang. `fast` asks
-        // for fused multiply-adds, which x86-64 makes only when asked (the
-        // owner, 2026-10-26; xc code asks with :goal(speed)).
+        // -ffp-contract=fast|on|off: for a C file, handed to clang. `on` (clang's
+        // default) fuses within an expression, `fast` across statements too,
+        // `off` not at all; -fgoal=accuracy means off (owner, 2026-11-09).
         if (a.hasPrefix(String.withCString("-ffp-contract="))) {
             String* v = a.substringFromByte((u32)14);
             if (!v.equals(String.withCString("fast")) && !v.equals(String.withCString("on")) && !v.equals(String.withCString("off"))) {

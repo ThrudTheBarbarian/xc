@@ -67,11 +67,19 @@ for an xc program. `--par-style=auto` and the `par` environment variables (`XC_P
 
 ## Floating point
 
-On arm64 `xcc` fuses a multiply into the add or subtract that uses it within
-an expression (one rounding instead of two), as C allows and as GCC and `clang`
-do there by default. A result can therefore differ from the separately rounded
-one in its last bits. On x86-64 each operation is rounded on its own, as ISO C
-describes, unless the file is built with `-ffp-contract=fast`.
+`xcc` fuses a multiply into the add or subtract that uses it within an
+expression (one rounding instead of two), as C allows and as `clang` does by
+default (`-ffp-contract=on`), on every target. A result can therefore differ
+from the separately rounded one in its last bits. On x86-64 the fused
+instruction needs FMA, so it is in the code built for a CPU that has it: the
+whole program under `-mavx2` or `-msimd=avx512`, and under the default
+`-msimd=auto` the AVX2 and AVX-512 copies of a function that the program picks
+at load; the baseline copy rounds each operation on its own.
+
+`-ffp-contract=fast` also fuses across statements, as GCC does by default, and
+`-ffp-contract=off` fuses nothing. Under `-fgoal=accuracy` nothing is fused on
+any target, whatever `-ffp-contract` says: each operation is rounded on its
+own, as ISO C describes.
 
 ## Not yet
 

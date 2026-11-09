@@ -1227,11 +1227,11 @@ Milliseconds; the median of up to fifteen runs.
 
 The three do not compute quite the same arithmetic. GCC fuses a multiply and
 the add that follows it into one fused multiply-add instruction by default
-(`-ffp-contract=fast`, outside strict ISO C mode), and clang does so within a
-single expression (`-ffp-contract=on`). xcc's build of the C on x86-64 rounds
-each multiply and each add on its own, as ISO C describes it, so its results
-are the ones the C standard gives. `perlin` is mostly multiply-adds, and that
-difference is a large part of its gap.
+(`-ffp-contract=fast`, outside strict ISO C mode), and clang and xcc do so
+within a single expression (`-ffp-contract=on`). xcc's fused code is in the
+AVX2 and AVX-512 copies of a function that the program picks at load, so on
+this machine its multiply-adds are fused too. `perlin` is mostly
+multiply-adds, and GCC's fusing across statements is part of its lead there.
 
 ### Every thread
 

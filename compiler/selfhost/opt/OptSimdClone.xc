@@ -93,6 +93,46 @@
         return n >= (u32)8;
         }
 
+    // A float add or subtract marked `contract` that reads a multiply: a
+    // multiply-add the back end fuses where the code has FMA (:goal(speed)
+    // code, C's multiply-adds). As the reference's hasContractPair.
+    static bool simdContractPair(IRFunc* fn)
+        {
+        Map* muls = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bl = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bl.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* x = (IRInsn*)bl.insns().get(i);
+                if (x.res() != (IRValue*)0 && x.op().equals(String.withCString("FMul")))
+                    muls.set((Hashable*)x.res(), (Object*)x);
+                }
+            }
+        if (muls.count() == (u32)0)
+            return false;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bl = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bl.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* x = (IRInsn*)bl.insns().get(i);
+                if (x.pred() == (String*)0 || !x.pred().equals(String.withCString("contract")))
+                    continue;
+                if (!x.op().equals(String.withCString("FAdd")) && !x.op().equals(String.withCString("FSub")))
+                    continue;
+                for (u32 k = (u32)0; k < x.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)x.ops().get(k);
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0
+                        && muls.get((Hashable*)o.val()) != (Object*)0)
+                        return true;
+                    }
+                }
+            }
+        return false;
+        }
+
     final void simdClone(IRModule* m)
         {
         if (!_profile.simdDispatch() || !_profile.vectorize())
@@ -162,9 +202,12 @@
             // An avx2 clone with a scalar float loop stays too, though it did
             // not vectorise: its float code takes the three-operand VEX forms
             // (the back end), which save the copy every destructive SSE op
-            // needs (perlin, 2026-10-25). As the reference.
+            // needs (perlin, 2026-10-25). So does one with a multiply-add to
+            // fuse: only a copy with FMA fuses (owner, 2026-11-09). As the
+            // reference.
             if (base != (IRFunc*)0 && (simdHasWide(fn, fn.simdLaneBytes())
-                                       || (fn.simdLevel().equals(String.withCString("avx2")) && simdFloatLoop(fn))))
+                                       || (fn.simdLevel().equals(String.withCString("avx2"))
+                                           && (simdFloatLoop(fn) || simdContractPair(fn)))))
                 {
                 base.setSimdDispatch(true);
                 keep.add((Object*)fn);

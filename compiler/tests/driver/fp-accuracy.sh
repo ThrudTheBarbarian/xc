@@ -16,6 +16,7 @@ cd "$(dirname "$0")/../.." || exit 1
 PLAT=$( [ "$(uname -s)" = Darwin ] && echo osx || echo linux )
 XC=${XC:-bin/$PLAT/xcc-xc}
 W=$(mktemp -d); trap 'rm -rf "$W"' EXIT
+xfused() { grep -cE '\bvf(n?m(add|sub))[0-9]+[sp][sd]\b' "$1"; }
 fused() { grep -cE '\bf(madd|msub|nmadd|nmsub|mla|mls)\b' "$1"; }
 cat > "$W/acc.xc" <<'XC'
 #import "Stdio.xc"
@@ -62,6 +63,23 @@ if command -v clang > /dev/null && [ "${XC##*/}" = xcc-xc ]; then
     # arm64 Linux too: every arm64 target fuses C, by its CPU, not its name.
     "$XC" -q -O2 -A arm64-linux -S -o "$W/cl.s" "$W/c.c" || { echo "FAIL build C for arm64-linux"; exit 1; }
     [ "$(fused "$W/cl.s")" -gt 0 ] || { echo "FAIL C on arm64 Linux did not fuse"; fail=1; }
+    # x86-64 C fuses as clang does (owner, 2026-11-09), where the code has
+    # FMA: an -mavx2 build throughout.
+    "$XC" -q -O2 -A x86_64 -mavx2 -S -o "$W/cx.s" "$W/c.c" || { echo "FAIL build C for x86_64"; exit 1; }
+    [ "$(xfused "$W/cx.s")" -gt 0 ] || { echo "FAIL C on x86-64 (-mavx2) did not fuse"; fail=1; }
+    # -fgoal=accuracy never fuses, on any target.
+    for t in arm64 arm64-linux; do
+        "$XC" -q -O2 -A $t -fgoal=accuracy -S -o "$W/ca.s" "$W/c.c" || { echo "FAIL build C accuracy $t"; exit 1; }
+        [ "$(fused "$W/ca.s")" = 0 ] || { echo "FAIL C on $t fused under -fgoal=accuracy"; fail=1; }
+    done
+    "$XC" -q -O2 -A x86_64 -mavx2 -fgoal=accuracy -S -o "$W/cxa.s" "$W/c.c" || { echo "FAIL build C accuracy x86_64"; exit 1; }
+    [ "$(xfused "$W/cxa.s")" = 0 ] || { echo "FAIL C on x86-64 fused under -fgoal=accuracy"; fail=1; }
 fi
+# x86-64 xc code in an -mavx2 build: a speed loop fuses, an accuracy one does
+# not (both compilers).
+"$XC" -q -O2 -A x86_64 -mavx2 --par-style=cpu -S -o "$W/xs.s" "$W/spd.xc" || { echo "FAIL build x86 speed"; exit 1; }
+"$XC" -q -O2 -A x86_64 -mavx2 --par-style=cpu -S -o "$W/xa.s" "$W/acc.xc" || { echo "FAIL build x86 accuracy"; exit 1; }
+[ "$(xfused "$W/xs.s")" -gt 0 ] || { echo "FAIL an x86-64 -mavx2 speed loop did not fuse"; fail=1; }
+[ "$(xfused "$W/xa.s")" = 0 ] || { echo "FAIL an x86-64 accuracy program fused: $(xfused "$W/xa.s")"; fail=1; }
 [ $fail = 0 ] && echo "fp-accuracy: ok"
 exit $fail

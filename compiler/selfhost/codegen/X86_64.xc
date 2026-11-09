@@ -72,6 +72,14 @@ class X86_64
         _arcOverride = mode;
         }
 
+    // The whole build runs only on CPUs with FMA (-mavx2, -msimd=avx512):
+    // every function may fuse what the IR marks `contract`, not only the
+    // avx2/avx512 copies of a dispatching build.
+    void setBuildFma(bool v)
+        {
+        _buildFma = v;
+        }
+
     bool failed(void)
         {
         return _failed;
@@ -5318,7 +5326,7 @@ class X86_64
         // fused C perlin ran 33% slower on Zen 5; that was the cvtsi2ss false
         // dependency, fixed in 0.87.3, and fused it is now 12% faster (73.8
         // ms against 83.5). On by the owner, 2026-10-28.
-        _fmaOk = fn.simdLevel() != (String*)0;
+        _fmaOk = fn.simdLevel() != (String*)0 || _buildFma;
         _vexOk = fn.simdLevel() != (String*)0;
         // The vectors whose lanes are all one value: VMulHi's odd-lane shuffle
         // of one is the same register, so it is not made (2026-11-01). As the
@@ -8255,7 +8263,8 @@ class X86_64
     Map* _fmaUc;     // value -> its use count, for fmaPair
     Map* _aligned;   // pinned large arrays placed on a 64-byte boundary
     Map* _fmaPhi;    // value -> its phi: a loop-carried addend stays unfused
-    bool _fmaOk;     // this function's code has FMA (an avx2/avx512 copy)
+    bool _fmaOk;     // this function's code has FMA (an avx2/avx512 copy, or a build that has it)
+    bool _buildFma;  // the build needs an FMA CPU (-mavx2, -msimd=avx512)
     Map* _splatVec;  // this function's VSplat results (every lane the same)
     bool _vexOk;     // this function is an avx2/avx512 copy: three-operand forms
     // A signed 32-bit value known to be non-negative: an And with a mask from
