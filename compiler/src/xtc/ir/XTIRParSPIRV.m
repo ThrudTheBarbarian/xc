@@ -1,4 +1,5 @@
 #import "XTIRParMSL_Private.h"
+#import "XTIRParCheck.h"
 #import "XTIROpcode.h"
 #import "XTIRSymbol.h"
 #import "XTIRSupport.h"
@@ -1300,8 +1301,14 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
             // an index by any other width would land elsewhere.
             if (b.local && rt.pointeeType.byteWidth != b.pointee.byteWidth)
                 return NO;
+            // A constant index is 64-bit unless it is a 32-bit one (a field's
+            // word in an array of structs): the 32-bit span form then needs
+            // no 64-bit integer for it.
             XTIRType* it = i.operands[1].kind == XTIROperandKindUse ? [self typeOf:i.operands[1].valueId]
                                                                     : [XTIRType i64Type];
+            if (i.operands[1].kind == XTIROperandKindImmI && i.operands[1].type &&
+                (i.operands[1].type.kind == XTIRTypeKindU32 || i.operands[1].type.kind == XTIRTypeKindI32))
+                it = i.operands[1].type;
             uint32_t ity = [self spvType:it];
             uint32_t idx = [self value:i.operands[1] type:it];
             if (!ity || !idx || spvIsFloat(it) || it.kind == XTIRTypeKindBool)
@@ -2374,6 +2381,9 @@ static char kSpv, kSf, kHelpers, kMember, kLocal, kLocalT, kBufVar, kNarrowShift
         XTIRSymbol* g = [self.module symbolForName:self.globals[gi]];
         XTIRType* gt = g.globalType;
         XTIRType* et = gt.kind == XTIRTypeKindAgg ? [gt.layout fieldTypeAt:0] : gt;
+        // An array of structs: the word it is held in (XTParWordStructs).
+        if (XTParWordOf(et))
+            et = XTParWordOf(et);
         uint32_t t = [self spvType:et];
         if (!t)
             {

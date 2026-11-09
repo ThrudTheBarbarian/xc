@@ -837,7 +837,12 @@
             // an index by any other width would land elsewhere. As the reference.
             if (b.local && self.mslWidth(pe) != self.mslWidth(b.pointee)) return false;
             IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
+            // A constant index is 64-bit unless it is a 32-bit one (a field's
+            // word in an array of structs): the 32-bit span form then needs
+            // no 64-bit integer for it.
             String* it = o1.kind() == (u8)OPK_USE ? self.mslTypeOf(o1) : spvS("I64");
+            if (o1.kind() == (u8)OPK_IMMI && o1.ty() != (String*)0 && (self.ptxIs(o1.ty(), "U32") || self.ptxIs(o1.ty(), "I32")))
+                it = o1.ty();
             u32 ity = spvType(it);
             u32 idx = spvValue(o1, it);
             if (ity == (u32)0 || idx == (u32)0 || spvIsFloat(it) || self.ptxIs(it, "Bool")) return false;
@@ -1901,7 +1906,7 @@
             String* gt = gs != (IRSymbol*)0 ? gs.dataType() : (String*)0;
             IRLayout* gl = self.mslLayoutOf(gt);
             String* et = gl != (IRLayout*)0 ? gl.typeAt((u32)0) : gt;
-            String* fe = self.parFlatField(et);
+            String* fe = self.parWordOf(et);
             if (fe != (String*)0) et = fe;
             u32 t = spvType(et);
             if (t == (u32)0)

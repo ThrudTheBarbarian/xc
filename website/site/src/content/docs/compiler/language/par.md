@@ -186,6 +186,16 @@ uses a global itself, runs on the CPU. What else each GPU can hold:
   converted to and from `float` there too, with the CPU's results. A block that needs more arrays, or a larger
   one, than the device can hold runs on the CPU.
 
+An array of structs is a GPU array too: a global one, or a local one the block
+captures, and in a C program a global one. Its fields are numbers or `bool`s
+of 1, 2, 4 or 8 bytes, and structs of those; the GPU sees the struct as the
+CPU lays it out, padding included, and reads and writes each field in place.
+A block that uses a field of 8 bytes needs what a value of that type needs on
+the GPU: 64-bit integers for an `i64` (so not the Raspberry Pi 5's V3D), and
+`double` for a `double`. A block that copies a whole element, or uses a field's address
+other than to read or write it, runs on the CPU, as does a block over a heap
+array of structs (`new P[n]`).
+
 On Windows and Linux with an NVIDIA GPU, a block can reach it through CUDA or
 Vulkan. Both need only NVIDIA's driver; on Linux the program has to be linked
 dynamically (the default), since it loads the driver's `libcuda.so.1` and

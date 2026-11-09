@@ -1,4 +1,5 @@
 #import "XTIRParMSL_Private.h"
+#import "XTIRParCheck.h"
 #import "XTIROpcode.h"
 #import "XTIRSymbol.h"
 #import "XTIRSupport.h"
@@ -1588,6 +1589,9 @@ static char kWf, kWgHelpers, kWgHelperText, kWgWordBufs, kWgBufName;
         XTIRSymbol* g = [self.module symbolForName:self.globals[gi]];
         XTIRType* gt = g.globalType;
         XTIRType* et = gt.kind == XTIRTypeKindAgg ? [gt.layout fieldTypeAt:0] : gt;
+        // An array of structs: the word it is held in (XTParWordStructs).
+        if (XTParWordOf(et))
+            et = XTParWordOf(et);
         NSString* n = declare([NSString stringWithFormat:@"g%lu", (unsigned long)gi], et);
         if (!n)
             {
