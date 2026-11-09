@@ -875,6 +875,11 @@ class ParTiles
         i64 mark[16];
         i64 runItems[16];
         i64 runBusy[16];
+        // The items and the first take behind gParTileRate, which sizes the
+        // next run's tiles: over the wall time since the first take, so the
+        // size settles after a few runs and the workers' buffers are kept.
+        i64 wallItems[16];
+        i64 firstTake[16];
         for (u32 i = (u32)0; i < nw; i = i + (u32)1)
             {
             inItems[i] = (i64)0;
@@ -883,6 +888,8 @@ class ParTiles
             mark[i] = (i64)0;
             runItems[i] = (i64)0;
             runBusy[i] = (i64)0;
+            wallItems[i] = (i64)0;
+            firstTake[i] = (i64)0;
             }
         // The workers' rates are seeded from auto's measurements of the block
         // at this size, where it has them (the CPU's, the single GPU's and
@@ -915,6 +922,8 @@ class ParTiles
                     {
                     doneItems[i] = gParMeasN[bi];
                     busyUs[i] = us;
+                    wallItems[i] = gParMeasN[bi];
+                    firstTake[i] = ParDevice.nowUs() - us;
                     }
                 }
         // A probed block's rates seed the workers auto never measured (every
@@ -930,6 +939,8 @@ class ParTiles
                 {
                 doneItems[i] = n;
                 busyUs[i] = (n << (i64)10) / pr;
+                wallItems[i] = n;
+                firstTake[i] = ParDevice.nowUs() - busyUs[i];
                 if (ParDevice.tracing())
                     Log.info("par: %s: %s seeded from the probe (%ld items/ms)", proto.parName(), ((ParWorker*)ws.get(i)).identity().cString(), pr * (i64)1000 >> (i64)10);
                 }
@@ -997,6 +1008,13 @@ class ParTiles
                 for (u32 i = (u32)0; i < nw; i = i + (u32)1)
                     if (doneItems[i] > (i64)0 && busyUs[i] > (i64)0 && (doneItems[i] << (i64)10) / busyUs[i] > fastest)
                         fastest = (doneItems[i] << (i64)10) / busyUs[i];
+                // A fast GPU worker that is idle is served first, so its tile
+                // is not issued after a slow one's.
+                bool idleFast = false;
+                for (u32 i = (u32)0; i < nw; i = i + (u32)1)
+                    if (!isCpuW[i] && !full[i] && inItems[i] == (i64)0 && ((ParWorker*)ws.get(i)).ready(now) &&
+                        !(doneItems[i] > (i64)0 && busyUs[i] > (i64)0 && ((doneItems[i] << (i64)10) / busyUs[i]) * (i64)2 < fastest))
+                        idleFast = true;
                 // The soonest a worker already at its depth would finish this
                 // tile: when that beats every worker with room, the tile waits
                 // for it rather than going to a slower one. Without this the
@@ -1030,6 +1048,8 @@ class ParTiles
                         continue;
                     bool fromBack = !fromAgain && doneItems[i] > (i64)0 && busyUs[i] > (i64)0 &&
                                     ((doneItems[i] << (i64)10) / busyUs[i]) * (i64)2 < fastest;
+                    if (fromBack && idleFast)
+                        continue;
                     ParTile* pt = fromBack ? ptBack : ptFront;
                     i64 items = pt.hi - pt.lo;
                     i64 at;
@@ -1107,6 +1127,8 @@ class ParTiles
                     }
                 if (inItems[best] == (i64)0)
                     mark[best] = now;
+                if (firstTake[best] == (i64)0)
+                    firstTake[best] = now;
                 ParTrace.take((u32)best, pt, bestAt);
                 if (ParDevice.tracing())
                     Log.info("par: tile %ld [%ld, %ld) -> %s (would finish in %ld us) at +%ld us",
@@ -1137,6 +1159,7 @@ class ParTiles
                     busyUs[i] = busyUs[i] + (t - mark[i]);
                     runBusy[i] = runBusy[i] + (t - mark[i]);
                     runItems[i] = runItems[i] + (d.hi - d.lo);
+                    wallItems[i] = wallItems[i] + (d.hi - d.lo);
                     mark[i] = t;
                     d = w.poll();
                     }
@@ -1206,10 +1229,11 @@ class ParTiles
         if (reissued > (i64)0 && ParDevice.reporting())
             Log.info("par: %s: %ld tile(s) re-issued after a worker was lost", proto.parName(), reissued);
         // The fastest worker's rate, for the next run's tile sizing.
+        i64 ended = ParDevice.nowUs();
         for (u32 i = (u32)0; i < nw; i = i + (u32)1)
-            if (doneItems[i] > (i64)0 && busyUs[i] > (i64)0)
+            if (wallItems[i] > (i64)0 && ended > firstTake[i])
                 {
-                i64 r = (doneItems[i] << (i64)10) / busyUs[i];
+                i64 r = (wallItems[i] << (i64)10) / (ended - firstTake[i]);
                 if (r > gParTileRate[bi])
                     gParTileRate[bi] = r;
                 }
