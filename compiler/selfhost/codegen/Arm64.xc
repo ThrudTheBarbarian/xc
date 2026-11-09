@@ -3883,8 +3883,13 @@ class Arm64
 
     // One 8-byte method pointer per slot, so the `<Class>$vtbl` symbol that a
     // `new` references resolves at link time.
+    // Every table (the vtables and the conformance itables) goes in one run, in
+    // its own section, __DATA,__xt_vtbl, between ___xt_vtbl_lo and
+    // ___xt_vtbl_hi: the in-house linkers describe that run in the image, and a
+    // checked build's vtable check reads each loaded image's range from there.
     void emitVTables(IRModule* m)
     {
+        bool run = false;
         for (u32 i = (u32)0; i < m.syms().count(); i = i + (u32)1) {
             IRSymbol* sym = (IRSymbol*)m.syms().get(i);
             if (sym.kind() != (u8)SYM_VTABLE) continue;
@@ -3893,6 +3898,10 @@ class Arm64
             // vtable addresses.
             if (sym.isExtern()) continue;
             initHeader();
+            if (!run) {
+                _out.appendCString("    .section __DATA,__xt_vtbl\n    .p2align 3\n___xt_vtbl_lo:\n");
+                run = true;
+            }
             _out.appendFormat("    .globl _%s\n", sym.name().cString());
             _out.appendFormat("    .p2align 3\n_%s:\n", sym.name().cString());
             Array* e = sym.slots();
@@ -3913,6 +3922,8 @@ class Arm64
                     _out.appendFormat("    .quad _%s\n", name.cString());
             }
         }
+        if (run)
+            _out.appendCString("___xt_vtbl_hi:\n    .section __DATA,__data\n");
     }
 
     // ── SIMD (the auto-vectoriser's output) ──────────────────────────────
