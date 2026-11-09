@@ -72,12 +72,56 @@ static NSError* elfErr(NSString* fmt, ...)
                            userInfo:@{NSLocalizedDescriptionKey : m}];
     }
 
+// The program header type of the class tables' run (#34), in the PT_LOOS
+// range: a checked build's vtable check reads each loaded image's run from it.
+enum
+    {
+    PT_XT_VTBL = 0x60787476,
+    };
+
+// The class tables' run (#34): the back end puts every vtable and itable of a
+// module between `__xt_vtbl_lo` and `__xt_vtbl_hi`; a merged object's labels
+// carry its tag (`__xt_vtbl_lo$o<n>`). The run is the span of them all, as
+// data offsets; NO when the image has none. The port's Elf64.vtblRun.
+BOOL XTElfVtblRun(NSDictionary<NSString*, NSNumber*>* symbols, NSSet<NSString*>* dataSymbols,
+                  uint64_t* outLo, uint64_t* outHi)
+    {
+    NSString *lo = @"__xt_vtbl_lo", *hi = @"__xt_vtbl_hi";
+    BOOL any = NO;
+    uint64_t a = 0, b = 0;
+    for (NSString* n in symbols)
+        {
+        NSString* h = nil;
+        if ([n isEqualToString:lo])
+            h = hi;
+        else if ([n hasPrefix:[lo stringByAppendingString:@"$"]])
+            h = [hi stringByAppendingString:[n substringFromIndex:lo.length]];
+        else if ([n hasSuffix:[@"$" stringByAppendingString:lo]])
+            h = [[n substringToIndex:n.length - lo.length] stringByAppendingString:hi];
+        if (!h || !symbols[h])
+            continue;
+        uint64_t x = symbols[n].unsignedLongLongValue, y = symbols[h].unsignedLongLongValue;
+        if (y <= x)
+            continue;
+        if (!any || x < a)
+            a = x;
+        if (!any || y > b)
+            b = y;
+        any = YES;
+        }
+    if (outLo)
+        *outLo = a;
+    if (outHi)
+        *outHi = b;
+    return any;
+    }
+
 // The layout, in one place — both the writer and the fixup pass need it, and a
 // caller that re-derives it gets the addresses subtly wrong.
-// text, [data], GNU_STACK
-static uint32_t phdrCountFor(BOOL hasData)
+// text, [data], GNU_STACK, [the class tables' run]
+static uint32_t phdrCountFor(BOOL hasData, BOOL hasVtbl)
     {
-    return hasData ? 3 : 2;
+    return (hasData ? 3 : 2) + (hasData && hasVtbl ? 1 : 0);
     }
 // File offset of the code, which shares its first page with the headers.
 static uint64_t textOffsetFor(uint32_t nphdr)
@@ -93,9 +137,9 @@ static uint64_t textOffsetFor(uint32_t nphdr)
     }
 // The data segment starts on the page after the code, so it gets its own RW
 // mapping without sharing a page with the executable one.
-static uint64_t dataOffsetFor(BOOL hasData, uint64_t textLen)
+static uint64_t dataOffsetFor(BOOL hasData, BOOL hasVtbl, uint64_t textLen)
     {
-    return roundUpTo(textOffsetFor(phdrCountFor(hasData)) + textLen, ELF_PAGE);
+    return roundUpTo(textOffsetFor(phdrCountFor(hasData, hasVtbl)) + textLen, ELF_PAGE);
     }
 
 // ─────────────────────────── ET_DYN support ───────────────────────────
@@ -169,7 +213,7 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
 
 + (uint64_t)textAddressWithDataSegment:(BOOL)hasData
     {
-    return ELF_VBASE + textOffsetFor(hasData ? 3 : 2);
+    return ELF_VBASE + textOffsetFor(phdrCountFor(hasData, NO));
     }
 
 // ── ET_REL: the write direction ───────────────────────────────────────────
@@ -1043,8 +1087,9 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     // Section bases. Both are known up front (the layout doesn't depend on the
     // fixups), so a single resolution pass suffices.
     BOOL hasData = data.length > 0;
-    uint64_t textAddr = ELF_VBASE + textOffsetFor(phdrCountFor(hasData));
-    uint64_t dataAddr = ELF_VBASE + dataOffsetFor(hasData, text.length) + ELF_PAGE;
+    BOOL hasVtbl = XTElfVtblRun(symbols, dataSymbols, NULL, NULL);
+    uint64_t textAddr = ELF_VBASE + textOffsetFor(phdrCountFor(hasData, hasVtbl));
+    uint64_t dataAddr = ELF_VBASE + dataOffsetFor(hasData, hasVtbl, text.length) + ELF_PAGE;
 
     uint8_t *tp = text.mutableBytes, *dp = data.mutableBytes;
     // TPOFF32 first: pre-resolved by the linker main (the addend IS the final
@@ -1448,7 +1493,10 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     // and PT_INTERP — and PT_PHDR is not optional: ld.so locates the main
     // executable's program headers through it, and without one it walks garbage
     // and dies before it can even print an LD_DEBUG line.
-    uint32_t nphdr = isExec ? 7 : 5;
+    // The class tables' run (#34) adds one more.
+    uint64_t vtLo = 0, vtHi = 0;
+    BOOL hasVtbl = XTElfVtblRun(symbols, dataSymbols, &vtLo, &vtHi);
+    uint32_t nphdr = (isExec ? 7 : 5) + (hasVtbl ? 1 : 0);
     uint64_t interpOff = roundUpTo(EHDR_SZ + (uint64_t)nphdr * PHDR_SZ, 8);
     uint64_t interpSz = isExec ? strlen(kInterp) + 1 : 0;
     uint64_t roOff = roundUpTo(interpOff + interpSz, 8);
@@ -1650,6 +1698,9 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     put64v(out, 0);
     put64v(out, 0);
     put64v(out, 0x10);
+    // The class tables' run (#34), inside the RW segment.
+    if (hasVtbl)
+        phdr(PT_XT_VTBL, PF_R, dataAddr + vtLo, vtHi - vtLo, 8);
 
     if (isExec)
         {
@@ -2019,7 +2070,9 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     {
     NSData* data = dataIn ?: [NSData data];
     BOOL hasData = data.length > 0;
-    uint32_t nphdr = phdrCountFor(hasData);
+    uint64_t vtLo = 0, vtHi = 0;
+    BOOL hasVtbl = symbols && XTElfVtblRun(symbols, dataSymbols ?: [NSSet set], &vtLo, &vtHi);
+    uint32_t nphdr = phdrCountFor(hasData, hasVtbl);
 
     // ── layout ──
     // The headers share the first page with the code, so the text segment maps
@@ -2029,7 +2082,7 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     uint64_t textAddr = ELF_VBASE + textOff;
     uint64_t textEnd = textOff + text.length;
     // Keep p_vaddr ≡ p_offset (mod page).
-    uint64_t dataOff = dataOffsetFor(hasData, text.length);
+    uint64_t dataOff = dataOffsetFor(hasData, hasVtbl, text.length);
     uint64_t dataAddr = ELF_VBASE + dataOff + ELF_PAGE;
     uint64_t dataFileSz = fileSizeOf(data);
 
@@ -2094,6 +2147,19 @@ static NSDictionary<NSString*, NSData*>* _Nullable XTElfDwarfSections(BOOL isExe
     put64v(out, 0);
     put64v(out, 0);
     put64v(out, 0x10);
+
+    // 4. The class tables' run (#34), inside the data segment.
+    if (hasData && hasVtbl)
+        {
+        put32v(out, PT_XT_VTBL);
+        put32v(out, PF_R);
+        put64v(out, dataOff + vtLo);
+        put64v(out, dataAddr + vtLo);
+        put64v(out, dataAddr + vtLo);
+        put64v(out, vtHi - vtLo);
+        put64v(out, vtHi - vtLo);
+        put64v(out, 8);
+        }
 
     // ── contents ──
     while (out.length < textOff)

@@ -758,7 +758,8 @@ class ElfArm64
             }
         u32 nRela = absFixups.count() + imports.count();
 
-        u32 nphdr = isExec ? (u32)7 : (u32)5;
+        Array* vt = ElfArm64.vtblRun(symbols);
+        u32 nphdr = (isExec ? (u32)7 : (u32)5) + (vt != (Array*)0 ? (u32)1 : (u32)0);
         u32 interpOff = roundUpTo((u32)AEHDR_SZ + nphdr * (u32)APHDR_SZ, (u32)8);
         u32 interpSz = isExec ? _interp.byteLength() + (u32)1 : (u32)0; // the path + NUL
         u32 roOff = roundUpTo(interpOff + interpSz, (u32)8);
@@ -932,6 +933,13 @@ class ElfArm64
         p64((u32)0);
         p64((u32)0);
         p64((u32)$10);
+        // The class tables' run (#34), inside the RW segment.
+        if (vt != (Array*)0)
+            {
+            u32 vlo = ((Number*)vt.get((u32)0)).asU32();
+            u32 vhi = ((Number*)vt.get((u32)1)).asU32();
+            phdr((u32)$60787476, (u32)4, dataAddr + vlo, vhi - vlo, (u32)8);
+            }
 
         if (isExec)
             {
@@ -1099,6 +1107,63 @@ class ElfArm64
         }
 
     // ── small emitters ───────────────────────────────────────────────────
+    // The class tables' run (#34): the back end puts every vtable and itable
+    // of a module between `__xt_vtbl_lo` and `__xt_vtbl_hi` (a merged object's
+    // labels carry its tag). The run is the span of them all, as data offsets
+    // (lo, hi), or null when the image has none. It gets a program header of
+    // its own (PT_XT_VTBL, in the PT_LOOS range), which a checked build's
+    // vtable check reads.
+    static Array* vtblRun(Map* symbols)
+        {
+        if (symbols == (Map*)0)
+            return (Array*)0;
+        String* lo = String.withCString("__xt_vtbl_lo");
+        String* hi = String.withCString("__xt_vtbl_hi");
+        String* loP = String.withCString("__xt_vtbl_lo$");
+        String* loS = String.withCString("$__xt_vtbl_lo");
+        bool any = false;
+        u32 a = (u32)0;
+        u32 b = (u32)0;
+        Array* ks = symbols.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            {
+            String* n = (String*)ks.get(i);
+            String* h = (String*)0;
+            if (n.equals(lo))
+                h = hi;
+            else if (n.hasPrefix(loP))
+                {
+                h = String.withString(hi);
+                h.append(n.substringFromByte(lo.byteLength()));
+                }
+            else if (n.hasSuffix(loS))
+                {
+                h = n.substringBytes((u32)0, n.byteLength() - lo.byteLength());
+                h.append(hi);
+                }
+            if (h == (String*)0)
+                continue;
+            Object* hv = symbols.get((Hashable*)h);
+            if (hv == (Object*)0)
+                continue;
+            u32 x = ((Number*)symbols.get((Hashable*)n)).asU32();
+            u32 y = ((Number*)hv).asU32();
+            if (y <= x)
+                continue;
+            if (!any || x < a)
+                a = x;
+            if (!any || y > b)
+                b = y;
+            any = true;
+            }
+        if (!any)
+            return (Array*)0;
+        Array* r = new Array();
+        r.add((Object*)Number.withU32(a));
+        r.add((Object*)Number.withU32(b));
+        return r;
+        }
+
     void phdr(u32 type, u32 flags, u32 off, u32 sz, u32 align)
         {
         p32(type);
