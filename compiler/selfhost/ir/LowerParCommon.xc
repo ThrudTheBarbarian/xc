@@ -511,7 +511,7 @@
                 // A struct mixing 4-byte numbers (int id; float m) is an array
                 // of 32-bit words to a kernel; each field that is not a U32
                 // is reinterpreted where it is read or written (see
-                // parFlatStructGlobals).
+                // parWordStructs).
                 if (w != (u32)4 || mslWidth(l.typeAt(k)) != (u32)4 || mslScalar(l.typeAt(k)) == (String*)0
                     || l.typeAt(k).equals(String.withCString("Bool")))
                     return (String*)0;
@@ -525,6 +525,58 @@
             return String.withCString("U32");
             }
         return ft;
+        }
+
+    // The word a kernel holds an array of structs of type t in
+    // (parWordStructs): the struct's number type (parFlatField), else an
+    // unsigned word as wide as its widest field, up to 32 bits. 0 when a
+    // field is not a number (a pointer, an object) or t is not a struct.
+    final String* parWordOf(String* t)
+        {
+        String* fe = self.parFlatField(t);
+        if (fe != (String*)0)
+            return fe;
+        IRLayout* l = self.mslLayoutOf(t);
+        if (l == (IRLayout*)0 || l.isArray() || l.fieldCount() == (u32)0)
+            return (String*)0;
+        u32 mw = self.parLeafWidth(t, (u32)0);
+        if (mw == (u32)0)
+            return (String*)0;
+        u32 w = mw > (u32)4 ? (u32)4 : mw;
+        if (l.size() % w != (u32)0)
+            return (String*)0;
+        return String.withCString(w == (u32)4 ? "U32" : w == (u32)2 ? "U16" : "U8");
+        }
+
+    // The widest number in t (a number, or a struct or array of them), 0
+    // when it holds anything else.
+    final u32 parLeafWidth(String* t, u32 depth)
+        {
+        if (t == (String*)0 || depth > (u32)8)
+            return (u32)0;
+        if (self.parLeaf(t))
+            return self.mslWidth(t);
+        IRLayout* l = self.mslLayoutOf(t);
+        if (l == (IRLayout*)0 || l.fieldCount() == (u32)0)
+            return (u32)0;
+        if (l.isArray())
+            return self.parLeafWidth(l.elemType(), depth + (u32)1);
+        u32 mw = (u32)0;
+        for (u32 k = (u32)0; k < l.fieldCount(); k = k + (u32)1)
+            {
+            u32 w = self.parLeafWidth(l.typeAt(k), depth + (u32)1);
+            if (w == (u32)0)
+                return (u32)0;
+            if (w > mw)
+                mw = w;
+            }
+        return mw;
+        }
+
+    // A number a struct's field may hold in a kernel's words.
+    final bool parLeaf(String* t)
+        {
+        return t != (String*)0 && (self.mslScalar(t) != (String*)0 || t.equals(String.withCString("F64")));
         }
 
     final void parBecause(String* why)

@@ -2417,16 +2417,19 @@
         _ppOffHi = (i64)0;
         _ppAddrTy = addr.ty();
         IRInsn* d = (IRInsn*)defOf.get((Hashable*)addr);
-        // A field of an element: the element's (its array, its index, its size).
-        if (d != (IRInsn*)0 && d.op().equals(String.withCString("FieldAddr")) && d.ops().count() >= (u32)1
-            && ((IROperand*)d.ops().get((u32)0)).kind() == (u8)OPK_USE)
+        // A field of an element, or of a struct in one: the element's (its
+        // array, its index, its size).
+        IRInsn* fd = d;
+        for (u32 dd = (u32)0; dd < (u32)8 && fd != (IRInsn*)0 && fd.op().equals(String.withCString("FieldAddr"))
+             && fd.ops().count() >= (u32)1 && ((IROperand*)fd.ops().get((u32)0)).kind() == (u8)OPK_USE; dd = dd + (u32)1)
             {
-            IRInsn* fb = (IRInsn*)defOf.get((Hashable*)((IROperand*)d.ops().get((u32)0)).val());
+            IRInsn* fb = (IRInsn*)defOf.get((Hashable*)((IROperand*)fd.ops().get((u32)0)).val());
             if (fb != (IRInsn*)0 && fb.op().equals(String.withCString("ElementAddr")) && fb.res() != (IRValue*)0)
                 {
                 d = fb;
                 _ppAddrTy = fb.res().ty();
                 }
+            fd = fb;
             }
         IRValue* base = addr;
         if (d != (IRInsn*)0 && d.op().equals(String.withCString("ElementAddr")) && d.ops().count() == (u32)2)
@@ -2896,13 +2899,15 @@
                     // bitcast, say): private, as the scan treats a body's locals.
                     bool scratch = ad != (IRInsn*)0 && ad.op().equals(String.withCString("AddrOf")) &&
                                    ppSlotOnlyIn(fn, L, ad);
-                    // A field of an element (`pts[i].x = …`) is an element's.
-                    if (ad != (IRInsn*)0 && ad.op().equals(String.withCString("FieldAddr")) && ad.ops().count() >= (u32)1
-                        && ((IROperand*)ad.ops().get((u32)0)).kind() == (u8)OPK_USE)
+                    // A field of an element (`pts[i].x = …`), or of a struct
+                    // in one (`pts[i].tag.kind`), is an element's.
+                    IRInsn* fa = ad;
+                    for (u32 dd = (u32)0; dd < (u32)8 && fa != (IRInsn*)0 && fa.op().equals(String.withCString("FieldAddr"))
+                         && fa.ops().count() >= (u32)1 && ((IROperand*)fa.ops().get((u32)0)).kind() == (u8)OPK_USE; dd = dd + (u32)1)
                         {
-                        IRInsn* fb = (IRInsn*)defOf.get((Hashable*)((IROperand*)ad.ops().get((u32)0)).val());
-                        if (fb != (IRInsn*)0 && fb.op().equals(String.withCString("ElementAddr")))
-                            ad = fb;
+                        fa = (IRInsn*)defOf.get((Hashable*)((IROperand*)fa.ops().get((u32)0)).val());
+                        if (fa != (IRInsn*)0 && fa.op().equals(String.withCString("ElementAddr")))
+                            ad = fa;
                         }
                     if (!scratch && (ad == (IRInsn*)0 || !ad.op().equals(String.withCString("ElementAddr"))))
                         return String.withCString("a store that is not to an array element");

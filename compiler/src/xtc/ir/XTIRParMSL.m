@@ -13,6 +13,7 @@
 #import "XTIRSupport.h"
 
 #import "XTIRParMSL_Private.h"
+#import "XTIRParCheck.h"
 
 
 // Per-thread lane width while emitting a vectorised body (0/1 scalar, 2 uint2);
@@ -1577,6 +1578,9 @@ static NSString* intrinsicFor(NSString* callee)
         XTIRSymbol* g = [self.module symbolForName:self.globals[gi]];
         XTIRType* gt = g.globalType;
         XTIRType* et = gt.kind == XTIRTypeKindAgg ? gt.layout.fields.firstObject.type : gt;
+        // An array of structs: the word it is held in (XTParWordStructs).
+        if (XTParWordOf(et))
+            et = XTParWordOf(et);
         NSString* en = scalarName(et);
         if (!en)
             return nil;

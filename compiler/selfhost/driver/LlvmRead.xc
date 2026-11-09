@@ -167,11 +167,27 @@ class LlvmReader
             }
         // Struct types first (a global or a function names them), then
         // globals and declarations: a function may use one defined below it.
+        // A struct may hold one that LLVM prints after it (a nested struct):
+        // the pass is repeated while it reads another.
+        Array* structLines = new Array();
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
             {
             String* l = (String*)lines.get(i);
             if (l.hasPrefix(String.withCString("%")) && l.indexOfByte((u8)'=') != (u32)$FFFFFFFF)
-                readStruct(l);
+                structLines.add((Object*)l);
+            }
+        u32 known = (u32)0 - (u32)1;
+        while (_structs.count() != known)
+            {
+            known = _structs.count();
+            for (u32 i = (u32)0; i < structLines.count(); i = i + (u32)1)
+                {
+                String* l = (String*)structLines.get(i);
+                u32 sp = l.indexOfByte((u8)' ');
+                String* nm = sp != (u32)$FFFFFFFF ? l.substringBytes((u32)0, sp) : l;
+                if (_structs.get((Hashable*)nm) == (Object*)0)
+                    readStruct(l);
+                }
             }
         for (u32 i = (u32)0; i < lines.count(); i = i + (u32)1)
             {

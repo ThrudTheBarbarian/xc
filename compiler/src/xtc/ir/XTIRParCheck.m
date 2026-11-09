@@ -423,6 +423,632 @@ static void escTripsClone(XTIRInsn* i, XTIRBlock* B, XTIRFunction* fn, NSMutable
 
 @end
 
+/****************************************************************************\
+|* Arrays of structs in a kernel copy (a global's, or a captured pointer's),
+|* as the arrays of words they are in memory, so the printers hold them as any
+|* array of numbers. The word is the struct's one number type when its fields
+|* are all that type, packed; else a 32-bit word (16- or 8-bit when no field
+|* is wider). Element i starts at word i * (size / word), and a field at byte
+|* offset o is read from word o / word: a field of the word's width
+|* reinterpreted, a narrower one shifted out of its word (and written back
+|* into it with the bytes around it kept), an 8-byte one as two 32-bit words.
+|* The host's layout is kept as it is, padding and nested structs included.
+|* An array whose element or field addresses are used any other way stays as
+|* it is, and the kernel declines it. As the port's parWordStructs, which
+|* makes the same instructions in the same order.
+\****************************************************************************/
+
+// A number a struct's field may hold in a kernel's words.
+static BOOL pwLeaf(XTIRType* t)
+    {
+    switch (t.kind)
+        {
+    case XTIRTypeKindI8: case XTIRTypeKindU8: case XTIRTypeKindI16: case XTIRTypeKindU16:
+    case XTIRTypeKindI32: case XTIRTypeKindU32: case XTIRTypeKindI64: case XTIRTypeKindU64:
+    case XTIRTypeKindF32: case XTIRTypeKindF64: case XTIRTypeKindBool:
+        return YES;
+    default:
+        return NO;
+        }
+    }
+
+static uint32_t pwWidth(XTIRType* t)
+    {
+    switch (t.kind)
+        {
+    case XTIRTypeKindI8: case XTIRTypeKindU8: case XTIRTypeKindBool: return 1;
+    case XTIRTypeKindI16: case XTIRTypeKindU16: return 2;
+    case XTIRTypeKindI32: case XTIRTypeKindU32: case XTIRTypeKindF32: return 4;
+    default: return 8;
+        }
+    }
+
+static BOOL pwSame(XTIRType* a, XTIRType* b)
+    {
+    return a.kind == b.kind && pwLeaf(a);
+    }
+
+// A struct type whose fields are all one number type, packed: that type (U32
+// for a struct of mixed 4-byte numbers), else nil. As the port's parFlatField.
+static XTIRType* _Nullable pwFlatField(XTIRType* t)
+    {
+    XTIRLayout* l = t.kind == XTIRTypeKindAgg ? t.layout : nil;
+    if (!l || !l.fieldCount)
+        return nil;
+    XTIRType* ft = [l fieldTypeAt:0];
+    uint32_t w = pwWidth(ft);
+    if (!pwLeaf(ft) || ft.kind == XTIRTypeKindF64 || l.size != w * l.fieldCount)
+        return nil;
+    BOOL mixed = NO;
+    for (NSUInteger k = 0; k < l.fieldCount; k++)
+        {
+        XTIRType* fk = [l fieldTypeAt:k];
+        if ([l fieldOffsetAt:k] != w * k)
+            return nil;
+        if (!pwSame(fk, ft))
+            {
+            if (w != 4 || pwWidth(fk) != 4 || !pwLeaf(fk) || fk.kind == XTIRTypeKindF64 || fk.kind == XTIRTypeKindBool)
+                return nil;
+            mixed = YES;
+            }
+        }
+    if (mixed)
+        return ft.kind == XTIRTypeKindBool ? nil : [XTIRType u32Type];
+    return ft;
+    }
+
+// The widest number in t (a number, or a struct or array of them), 0 when it
+// holds anything else.
+static uint32_t pwLeafWidth(XTIRType* t, unsigned depth)
+    {
+    if (!t || depth > 8)
+        return 0;
+    if (pwLeaf(t))
+        return pwWidth(t);
+    XTIRLayout* l = t.kind == XTIRTypeKindAgg ? t.layout : nil;
+    if (!l || !l.fieldCount)
+        return 0;
+    if (l.isArray)
+        return pwLeafWidth(l.elementType, depth + 1);
+    uint32_t mw = 0;
+    for (NSUInteger k = 0; k < l.fieldCount; k++)
+        {
+        uint32_t w = pwLeafWidth([l fieldTypeAt:k], depth + 1);
+        if (!w)
+            return 0;
+        if (w > mw)
+            mw = w;
+        }
+    return mw;
+    }
+
+XTIRType* _Nullable XTParWordOf(XTIRType* _Nullable t)
+    {
+    if (!t)
+        return nil;
+    XTIRType* fe = pwFlatField(t);
+    if (fe)
+        return fe;
+    XTIRLayout* l = t.kind == XTIRTypeKindAgg ? t.layout : nil;
+    if (!l || l.isArray || !l.fieldCount)
+        return nil;
+    uint32_t mw = pwLeafWidth(t, 0);
+    if (!mw)
+        return nil;
+    uint32_t w = mw > 4 ? 4 : mw;
+    if (l.size % w)
+        return nil;
+    return w == 4 ? [XTIRType u32Type] : w == 2 ? [XTIRType u16Type] : [XTIRType u8Type];
+    }
+
+// Whether a word of type wt holds a field of type t at byte offset off.
+static BOOL pwHolds(XTIRType* wt, XTIRType* t, uint32_t off)
+    {
+    if (!pwLeaf(t))
+        return NO;
+    uint32_t w = pwWidth(t);
+    uint32_t ww = pwWidth(wt);
+    if (off % w)
+        return NO;
+    if (w <= ww)
+        return off % ww + w <= ww;
+    return w == 8 && ww == 4;
+    }
+
+static XTIRType* pwPtr(XTIRType* p, XTIRType* to)
+    {
+    return [XTIRType ptrToType:to window:p.windowId];
+    }
+
+static XTIRValue* pwNew(XTIRFunction* fn, XTIRType* t, XTIRBlock* b)
+    {
+    XTIRValue* v = [[XTIRValue alloc] initWithValueId:[fn allocateValueId]
+                                                 type:t
+                                              defSite:[[XTIRDefSite alloc] initWithBlock:b insnIndex:b.instructions.count]];
+    [fn registerValue:v];
+    return v;
+    }
+
+// The same value with another type.
+static XTIRValue* pwRetyped(XTIRFunction* fn, XTIRValue* v, XTIRType* t)
+    {
+    XTIRValue* n = [[XTIRValue alloc] initWithValueId:v.valueId type:t defSite:v.defSite];
+    fn.values[@(v.valueId)] = n;
+    return n;
+    }
+
+static XTIRInsn* pwOp(XTIROpcode op, XTIRValue* _Nullable res, NSArray<XTIROperand*>* ops)
+    {
+    return [[XTIRInsn alloc] initWithOpcode:op result:res operands:ops dbgLoc:nil];
+    }
+
+// insn with another result (and the same operands, unless ops is given).
+static XTIRInsn* pwRebuilt(XTIRInsn* i, XTIRValue* _Nullable res, NSArray<XTIROperand*>* _Nullable ops)
+    {
+    NSArray<XTIROperand*>* o = ops ?: i.operands;
+    XTIRInsn* n = XTIROpCarriesPredicate(i.opcode)
+                      ? [[XTIRInsn alloc] initWithOpcode:i.opcode result:res operands:o predicate:i.predicate dbgLoc:i.dbgLoc]
+                      : [[XTIRInsn alloc] initWithOpcode:i.opcode result:res operands:o dbgLoc:i.dbgLoc];
+    n.memoryResult = i.memoryResult;
+    return n;
+    }
+
+static XTIROperand* pwUse(XTIRValue* v)
+    {
+    return [XTIROperand useWithValueId:v.valueId];
+    }
+
+static XTIROperand* pwImm(int64_t v, XTIRType* t)
+    {
+    return [XTIROperand immIWithType:t value:v];
+    }
+
+// A stored value as a value of type t: a constant gets its own Const before
+// instructions[*at].
+static XTIROperand* pwValue(XTIRFunction* fn, XTIRBlock* bb, NSUInteger* at, XTIROperand* v, XTIRType* t)
+    {
+    if (v.kind == XTIROperandKindUse)
+        return v;
+    XTIRValue* c = pwNew(fn, t, bb);
+    [bb.instructions insertObject:pwOp(XTIROpConst, c, @[ v ]) atIndex:*at];
+    *at = *at + 1;
+    return pwUse(c);
+    }
+
+// A load or store at instructions[i] of a field of type t, `off` bytes into
+// the element at `root`, through words of type wt: the instructions that do it
+// in words. The index after them.
+static NSUInteger pwAccess(XTIRFunction* fn, XTIRBlock* bb, NSUInteger i, XTIRInsn* ip, XTIRType* t, uint32_t off,
+                           XTIRType* wt, XTIRValueId root)
+    {
+    uint32_t w = pwWidth(t);
+    uint32_t ww = pwWidth(wt);
+    BOOL load = ip.opcode == XTIROpLoad;
+    XTIRType* u32 = [XTIRType u32Type];
+    XTIRType* u64 = [XTIRType u64Type];
+    XTIRType* mem = [XTIRType memoryType];
+    if (w == ww && t.kind != XTIRTypeKindBool)
+        {
+        if (pwSame(t, wt))
+            return i + 1;
+        if (load)
+            {
+            XTIRValue* orig = ip.result;
+            XTIRValue* word = pwNew(fn, wt, bb);
+            bb.instructions[i] = pwRebuilt(ip, word, nil);
+            [bb.instructions insertObject:pwOp(XTIROpBitcast, orig, @[ pwUse(word) ]) atIndex:i + 1];
+            return i + 2;
+            }
+        XTIROperand* v = pwValue(fn, bb, &i, ip.operands[1], t);
+        XTIRValue* word = pwNew(fn, wt, bb);
+        [bb.instructions insertObject:pwOp(XTIROpBitcast, word, @[ v ]) atIndex:i];
+        NSMutableArray<XTIROperand*>* ops = [ip.operands mutableCopy];
+        ops[1] = pwUse(word);
+        [ip replaceOperands:ops];
+        return i + 2;
+        }
+    XTIROperand* addr = ip.operands[0];
+    XTIROperand* memIn = ip.operands[load ? 1 : 2];
+    if (w == 8)
+        {
+        // Two 32-bit words, the low one first.
+        XTIRValue* a2 = pwNew(fn, pwPtr([fn valueForId:addr.valueId].type, u32), bb);
+        [bb.instructions insertObject:pwOp(XTIROpElementAddr, a2, @[ [XTIROperand useWithValueId:root], pwImm(off / 4 + 1, u32) ])
+                              atIndex:i];
+        i++;
+        XTIRValue* m1 = pwNew(fn, mem, bb);
+        if (load)
+            {
+            XTIRValue* orig = ip.result;
+            XTIRValue* lo = pwNew(fn, u32, bb);
+            XTIRInsn* l1 = pwOp(XTIROpLoad, lo, @[ addr, memIn ]);
+            l1.memoryResult = m1;
+            [bb.instructions insertObject:l1 atIndex:i];
+            i++;
+            XTIRValue* hi = pwNew(fn, u32, bb);
+            bb.instructions[i] = pwRebuilt(ip, hi, @[ pwUse(a2), pwUse(m1) ]);
+            i++;
+            XTIRValue* zl = pwNew(fn, u64, bb);
+            XTIRValue* zh = pwNew(fn, u64, bb);
+            XTIRValue* sh = pwNew(fn, u64, bb);
+            XTIRValue* both = t.kind == XTIRTypeKindU64 ? orig : pwNew(fn, u64, bb);
+            [bb.instructions insertObject:pwOp(XTIROpZExt, zl, @[ pwUse(lo) ]) atIndex:i];
+            [bb.instructions insertObject:pwOp(XTIROpZExt, zh, @[ pwUse(hi) ]) atIndex:i + 1];
+            [bb.instructions insertObject:pwOp(XTIROpShl, sh, @[ pwUse(zh), pwImm(32, u64) ]) atIndex:i + 2];
+            [bb.instructions insertObject:pwOp(XTIROpOr, both, @[ pwUse(zl), pwUse(sh) ]) atIndex:i + 3];
+            i += 4;
+            if (both != orig)
+                {
+                [bb.instructions insertObject:pwOp(XTIROpBitcast, orig, @[ pwUse(both) ]) atIndex:i];
+                i++;
+                }
+            return i;
+            }
+        XTIROperand* v = pwValue(fn, bb, &i, ip.operands[1], t);
+        if (t.kind != XTIRTypeKindU64)
+            {
+            XTIRValue* u = pwNew(fn, u64, bb);
+            [bb.instructions insertObject:pwOp(XTIROpBitcast, u, @[ v ]) atIndex:i];
+            i++;
+            v = pwUse(u);
+            }
+        XTIRValue* lo = pwNew(fn, u32, bb);
+        XTIRValue* s = pwNew(fn, u64, bb);
+        XTIRValue* hi = pwNew(fn, u32, bb);
+        [bb.instructions insertObject:pwOp(XTIROpTrunc, lo, @[ v ]) atIndex:i];
+        [bb.instructions insertObject:pwOp(XTIROpLShr, s, @[ v, pwImm(32, u64) ]) atIndex:i + 1];
+        [bb.instructions insertObject:pwOp(XTIROpTrunc, hi, @[ pwUse(s) ]) atIndex:i + 2];
+        i += 3;
+        XTIRInsn* s1 = pwOp(XTIROpStore, nil, @[ addr, pwUse(lo), memIn ]);
+        s1.memoryResult = m1;
+        [bb.instructions insertObject:s1 atIndex:i];
+        i++;
+        [ip replaceOperands:@[ pwUse(a2), pwUse(hi), pwUse(m1) ]];
+        return i + 1;
+        }
+    // A narrower field: its bits in the word.
+    uint32_t shift = (off % ww) * 8;
+    int64_t mask = ((int64_t)1 << (w * 8)) - 1;
+    if (load)
+        {
+        XTIRValue* orig = ip.result;
+        XTIRValue* word = pwNew(fn, wt, bb);
+        bb.instructions[i] = pwRebuilt(ip, word, nil);
+        i++;
+        XTIROperand* x = pwUse(word);
+        if (shift)
+            {
+            XTIRValue* sv = pwNew(fn, wt, bb);
+            [bb.instructions insertObject:pwOp(XTIROpLShr, sv, @[ x, pwImm(shift, wt) ]) atIndex:i];
+            i++;
+            x = pwUse(sv);
+            }
+        if (t.kind == XTIRTypeKindBool)
+            {
+            XTIRValue* bv = pwNew(fn, wt, bb);
+            [bb.instructions insertObject:pwOp(XTIROpAnd, bv, @[ x, pwImm(mask, wt) ]) atIndex:i];
+            [bb.instructions insertObject:[[XTIRInsn alloc] initWithOpcode:XTIROpICmp result:orig
+                                                                  operands:@[ pwUse(bv), pwImm(0, wt) ]
+                                                                 predicate:XTIRICmpNE dbgLoc:nil]
+                                  atIndex:i + 1];
+            return i + 2;
+            }
+        [bb.instructions insertObject:pwOp(XTIROpTrunc, orig, @[ x ]) atIndex:i];
+        return i + 1;
+        }
+    // Written back into its word with the other bytes kept.
+    XTIROperand* v = pwValue(fn, bb, &i, ip.operands[1], t);
+    XTIRValue* m1 = pwNew(fn, mem, bb);
+    XTIRValue* old = pwNew(fn, wt, bb);
+    XTIRInsn* l1 = pwOp(XTIROpLoad, old, @[ addr, memIn ]);
+    l1.memoryResult = m1;
+    XTIRValue* z = pwNew(fn, wt, bb);
+    XTIRValue* zm = pwNew(fn, wt, bb);
+    XTIRValue* kept = pwNew(fn, wt, bb);
+    XTIRValue* nw = pwNew(fn, wt, bb);
+    [bb.instructions insertObject:l1 atIndex:i];
+    [bb.instructions insertObject:pwOp(XTIROpZExt, z, @[ v ]) atIndex:i + 1];
+    [bb.instructions insertObject:pwOp(XTIROpAnd, zm, @[ pwUse(z), pwImm(mask, wt) ]) atIndex:i + 2];
+    i += 3;
+    XTIROperand* bits = pwUse(zm);
+    if (shift)
+        {
+        XTIRValue* sv = pwNew(fn, wt, bb);
+        [bb.instructions insertObject:pwOp(XTIROpShl, sv, @[ bits, pwImm(shift, wt) ]) atIndex:i];
+        i++;
+        bits = pwUse(sv);
+        }
+    int64_t wmask = ww == 4 ? (int64_t)0xFFFFFFFF : ((int64_t)1 << (ww * 8)) - 1;
+    [bb.instructions insertObject:pwOp(XTIROpAnd, kept, @[ pwUse(old), pwImm(wmask ^ (mask << shift), wt) ]) atIndex:i];
+    [bb.instructions insertObject:pwOp(XTIROpOr, nw, @[ pwUse(kept), bits ]) atIndex:i + 1];
+    i += 2;
+    [ip replaceOperands:@[ ip.operands[0], pwUse(nw), pwUse(m1) ]];
+    return i + 1;
+    }
+
+static NSArray<XTIRInsn*>* pwAll(XTIRBlock* bb)
+    {
+    NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:bb.phiNodes];
+    [all addObjectsFromArray:bb.instructions];
+    if (bb.terminator)
+        [all addObject:bb.terminator];
+    return all;
+    }
+
+// `FieldAddr self, #k`'s k, else -1.
+static int64_t pwSelfField(XTIRInsn* _Nullable fa, XTIRValueId selfId)
+    {
+    if (!fa || fa.opcode != XTIROpFieldAddr || fa.operands.count != 2 || fa.operands[0].kind != XTIROperandKindUse
+        || fa.operands[0].valueId != selfId || fa.operands[1].kind != XTIROperandKindImmI)
+        return -1;
+    return fa.operands[1].intValue;
+    }
+
+void XTParWordStructs(XTIRFunction* f)
+    {
+    if (!f.paramTypes.count)
+        return;
+    // The block's object is parameter 0, value 0.
+    XTIRValueId selfId = 0;
+    if (![f valueForId:selfId])
+        return;
+    NSMutableDictionary<NSNumber*, XTIRInsn*>* def = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in f.blocks)
+        for (XTIRInsn* ip in bb.instructions)
+            if (ip.result)
+                def[@(ip.result.valueId)] = ip;
+    // The arrays: a global's address, or a captured pointer loaded from the
+    // block's object, whose element is a struct with a word.
+    NSMutableDictionary<NSNumber*, NSString*>* baseOf = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString*, XTIRType*>* sty = [NSMutableDictionary dictionary];
+    NSMutableSet<NSString*>* bad = [NSMutableSet set];
+    NSMutableArray<NSString*>* keys = [NSMutableArray array];
+    for (XTIRBlock* bb in f.blocks)
+        for (XTIRInsn* ip in bb.instructions)
+            {
+            if (!ip.result || !ip.operands.count || ip.result.type.kind != XTIRTypeKindPtr)
+                continue;
+            XTIRType* st = ip.result.type.pointeeType;
+            XTIRLayout* sl = st.kind == XTIRTypeKindAgg ? st.layout : nil;
+            if (!sl || sl.isArray || !XTParWordOf(st))
+                continue;
+            XTIROperand* o0 = ip.operands[0];
+            NSString* key = nil;
+            if (ip.opcode == XTIROpAddrOf && ip.operands.count == 1 && o0.kind == XTIROperandKindSym)
+                key = [NSString stringWithFormat:@"g%u", (unsigned)o0.symbolId];
+            else if (ip.opcode == XTIROpLoad && o0.kind == XTIROperandKindUse)
+                {
+                int64_t k = pwSelfField(def[@(o0.valueId)], selfId);
+                if (k >= 0)
+                    key = [NSString stringWithFormat:@"b%lld", (long long)k];
+                }
+            if (!key)
+                continue;
+            if (!sty[key])
+                {
+                sty[key] = st;
+                [keys addObject:key];
+                }
+            else if (sty[key].layout != st.layout)
+                [bad addObject:key];
+            baseOf[@(ip.result.valueId)] = key;
+            }
+    if (!keys.count)
+        return;
+    // The addresses into them: an element's (the root), and a field's or a
+    // nested field's, each at a byte offset from its element.
+    NSMutableDictionary<NSNumber*, NSString*>* cKey = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber*, NSNumber*>* cOff = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber*, XTIRType*>* cTy = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSNumber*, NSNumber*>* cRoot = [NSMutableDictionary dictionary];
+    for (int pass = 0; pass < 4; pass++)
+        for (XTIRBlock* bb in f.blocks)
+            for (XTIRInsn* ip in bb.instructions)
+                {
+                if (!ip.result || ip.operands.count != 2)
+                    continue;
+                NSNumber* rk = @(ip.result.valueId);
+                if (cKey[rk])
+                    continue;
+                XTIROperand* o0 = ip.operands[0];
+                XTIROperand* o1 = ip.operands[1];
+                if (o0.kind != XTIROperandKindUse)
+                    continue;
+                NSNumber* vk = @(o0.valueId);
+                NSString* bk = baseOf[vk];
+                if (bk)
+                    {
+                    if (ip.opcode == XTIROpElementAddr)
+                        {
+                        cKey[rk] = bk;
+                        cOff[rk] = @0;
+                        cTy[rk] = sty[bk];
+                        cRoot[rk] = rk;
+                        }
+                    continue;
+                    }
+                NSString* ck = cKey[vk];
+                if (!ck || o1.kind != XTIROperandKindImmI || o1.intValue < 0)
+                    continue;
+                XTIRType* vt = cTy[vk];
+                XTIRLayout* l = vt.kind == XTIRTypeKindAgg ? vt.layout : nil;
+                uint32_t off = cOff[vk].unsignedIntValue;
+                BOOL isRoot = [cRoot[vk] isEqualToNumber:vk];
+                BOOL field = ip.opcode == XTIROpFieldAddr && l && !l.isArray;
+                BOOL inner = ip.opcode == XTIROpElementAddr && l && l.isArray && !isRoot;
+                if ((!field && !inner) || o1.intValue >= (int64_t)l.fieldCount)
+                    continue;
+                cKey[rk] = ck;
+                cOff[rk] = @(off + [l fieldOffsetAt:(NSUInteger)o1.intValue]);
+                cTy[rk] = [l fieldTypeAt:(NSUInteger)o1.intValue];
+                cRoot[rk] = cRoot[vk];
+                }
+    // Every use of them must be one of those, or a load or store of a field
+    // the word holds; a field of the word's own type is a pointer to a word
+    // and may be used as any.
+    for (XTIRBlock* bb in f.blocks)
+        for (XTIRInsn* ip in pwAll(bb))
+            {
+            BOOL resIn = ip.result && cKey[@(ip.result.valueId)];
+            for (NSUInteger k = 0; k < ip.operands.count; k++)
+                {
+                XTIROperand* o = ip.operands[k];
+                if (o.kind != XTIROperandKindUse)
+                    continue;
+                NSNumber* vk = @(o.valueId);
+                NSString* bk = baseOf[vk];
+                NSString* ck = cKey[vk];
+                if (bk)
+                    {
+                    if (!(k == 0 && resIn && ip.opcode == XTIROpElementAddr))
+                        [bad addObject:bk];
+                    continue;
+                    }
+                if (!ck)
+                    continue;
+                if (k == 0 && resIn)
+                    continue;
+                XTIRType* t = cTy[vk];
+                XTIRType* wt = XTParWordOf(sty[ck]);
+                BOOL root = [cRoot[vk] isEqualToNumber:vk];
+                if (!root && pwSame(t, wt) && cOff[vk].unsignedIntValue % pwWidth(wt) == 0)
+                    continue;
+                BOOL access = k == 0 && !root && (ip.opcode == XTIROpLoad || (ip.opcode == XTIROpStore && ip.operands.count >= 2));
+                if (!access || !pwHolds(wt, t, cOff[vk].unsignedIntValue))
+                    [bad addObject:ck];
+                }
+            }
+    // The captured pointers: their field in the object must be loaded only,
+    // so the object's layout can say it points to words.
+    for (XTIRBlock* bb in f.blocks)
+        for (XTIRInsn* ip in pwAll(bb))
+            for (NSUInteger k = 0; k < ip.operands.count; k++)
+                {
+                XTIROperand* o = ip.operands[k];
+                if (o.kind != XTIROperandKindUse)
+                    continue;
+                int64_t fk = pwSelfField(def[@(o.valueId)], selfId);
+                if (fk < 0)
+                    continue;
+                NSString* key = [NSString stringWithFormat:@"b%lld", (long long)fk];
+                if (!sty[key])
+                    continue;
+                BOOL isBase = ip.result && baseOf[@(ip.result.valueId)];
+                if (!(k == 0 && ip.opcode == XTIROpLoad && isBase))
+                    [bad addObject:key];
+                }
+    BOOL any = NO;
+    for (NSString* key in keys)
+        if (![bad containsObject:key])
+            any = YES;
+    if (!any)
+        return;
+    // The rewrite.
+    NSMutableDictionary<NSNumber*, XTIRType*>* fieldRetyped = [NSMutableDictionary dictionary];
+    for (XTIRBlock* bb in f.blocks)
+        {
+        NSUInteger i = 0;
+        while (i < bb.instructions.count)
+            {
+            XTIRInsn* ip = bb.instructions[i];
+            XTIRValue* r = ip.result;
+            XTIROperand* o0 = ip.operands.count ? ip.operands[0] : nil;
+            NSNumber* rk = r ? @(r.valueId) : nil;
+            NSString* bk = rk ? baseOf[rk] : nil;
+            NSString* ck = rk ? cKey[rk] : nil;
+            NSNumber* ak = o0 && o0.kind == XTIROperandKindUse ? @(o0.valueId) : nil;
+            NSString* lk = ak ? cKey[ak] : nil;
+            if (lk && ![bad containsObject:lk] && (ip.opcode == XTIROpLoad || ip.opcode == XTIROpStore))
+                {
+                i = pwAccess(f, bb, i, ip, cTy[ak], cOff[ak].unsignedIntValue, XTParWordOf(sty[lk]),
+                             (XTIRValueId)cRoot[ak].unsignedLongLongValue);
+                continue;
+                }
+            if (bk && ![bad containsObject:bk])
+                {
+                XTIRType* wt = XTParWordOf(sty[bk]);
+                XTIRType* pt = pwPtr(r.type, wt);
+                bb.instructions[i] = pwRebuilt(ip, pwRetyped(f, r, pt), nil);
+                if (ip.opcode == XTIROpLoad)
+                    {
+                    // Its field in the object points to words now.
+                    XTIRInsn* fa = def[ak];
+                    XTIRValue* fr = pwRetyped(f, fa.result, pwPtr(fa.result.type, pt));
+                    XTIRBlock* fb = nil;
+                    NSUInteger fi = NSNotFound;
+                    for (XTIRBlock* b2 in f.blocks)
+                        {
+                        NSUInteger q = [b2.instructions indexOfObjectIdenticalTo:fa];
+                        if (q != NSNotFound)
+                            {
+                            fb = b2;
+                            fi = q;
+                            }
+                        }
+                    XTIRInsn* nfa = pwRebuilt(fa, fr, nil);
+                    if (fb)
+                        fb.instructions[fi] = nfa;
+                    def[ak] = nfa;
+                    fieldRetyped[@(fa.operands[1].intValue)] = pt;
+                    }
+                i++;
+                continue;
+                }
+            if (!ck || [bad containsObject:ck])
+                {
+                i++;
+                continue;
+                }
+            XTIRType* wt = XTParWordOf(sty[ck]);
+            XTIRType* pt = pwPtr(r.type, wt);
+            XTIRValueId root = (XTIRValueId)cRoot[rk].unsignedLongLongValue;
+            if (root == r.valueId)
+                {
+                // [i] of the struct: [i * (size / word)] of the word.
+                uint32_t n = sty[ck].layout.size / pwWidth(wt);
+                XTIROperand* io = ip.operands[1];
+                XTIROperand* scaled = nil;
+                if (io.kind == XTIROperandKindImmI)
+                    scaled = pwImm(io.intValue * (int64_t)n, io.type);
+                else if (io.kind == XTIROperandKindUse)
+                    {
+                    XTIRType* it = [f valueForId:io.valueId].type;
+                    XTIRValue* mv = pwNew(f, it, bb);
+                    [bb.instructions insertObject:pwOp(XTIROpMul, mv, @[ pwUse([f valueForId:io.valueId]), pwImm(n, it) ])
+                                          atIndex:i];
+                    i++;
+                    scaled = pwUse(mv);
+                    }
+                bb.instructions[i] = pwRebuilt(ip, pwRetyped(f, r, pt), scaled ? @[ ip.operands[0], scaled ] : nil);
+                }
+            else
+                {
+                // A field: the word it starts in.
+                uint32_t off = cOff[rk].unsignedIntValue;
+                bb.instructions[i] = pwOp(XTIROpElementAddr, pwRetyped(f, r, pt),
+                                          @[ [XTIROperand useWithValueId:root], pwImm(off / pwWidth(wt), [XTIRType u32Type]) ]);
+                }
+            i++;
+            }
+        }
+    // The object's layout, in this copy: each captured pointer's field points
+    // to words.
+    if (!fieldRetyped.count)
+        return;
+    XTIRType* selfT = f.paramTypes[0];
+    XTIRLayout* ol = selfT.kind == XTIRTypeKindPtr && selfT.pointeeType.kind == XTIRTypeKindAgg ? selfT.pointeeType.layout : nil;
+    if (!ol)
+        return;
+    NSMutableArray<XTIRLayoutField*>* fields = [NSMutableArray array];
+    for (NSUInteger k = 0; k < ol.fieldCount; k++)
+        [fields addObject:[[XTIRLayoutField alloc] initWithOffset:[ol fieldOffsetAt:k]
+                                                             type:fieldRetyped[@(k)] ?: [ol fieldTypeAt:k]]];
+    XTIRLayout* nl = [[XTIRLayout alloc] initWithSize:ol.size alignment:1 fields:fields];
+    XTIRType* nt = pwPtr(selfT, [XTIRType aggWithLayout:nl]);
+    [f setParamType:nt atIndex:0];
+    pwRetyped(f, [f valueForId:selfId], nt);
+    }
+
 @implementation XTIRParCheck
 
 static BOOL gEmitsMetal = NO;
@@ -628,6 +1254,12 @@ static BOOL gEmitsWGSL = NO;
         // Each printer tries the optimised kernel first and the plain one if
         // that declines, so the optimiser never costs a block its GPU path.
         XTIRFunction* kf = kfns[f.name];
+        // Its arrays of structs as arrays of words, in the copies the kernels
+        // are printed from (XTParWordStructs).
+        if (kf)
+            XTParWordStructs(kf);
+        if (kvfns[f.name])
+            XTParWordStructs(kvfns[f.name]);
         NSString* n = [f.name substringWithRange:NSMakeRange(8, f.name.length - 12)];
         NSData* plain = [[NSString stringWithFormat:@"__XC_PAR_MSL_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];
         NSData* fastTag = [[NSString stringWithFormat:@"__XC_PAR_FAST_%@__", n] dataUsingEncoding:NSUTF8StringEncoding];

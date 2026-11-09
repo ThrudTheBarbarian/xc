@@ -54,6 +54,13 @@
     _name = [name copy];
     }
 
+- (void)setParamType:(XTIRType*)type atIndex:(NSUInteger)i
+    {
+    NSMutableArray<XTIRType*>* t = [_paramTypes mutableCopy];
+    t[i] = type;
+    _paramTypes = [t copy];
+    }
+
 - (instancetype)initWithName:(NSString*)name
                   returnType:(XTIRType*)returnType
                   paramTypes:(NSArray<XTIRType*>*)paramTypes

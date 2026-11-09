@@ -1,4 +1,5 @@
 #import "XTIRParMSL_Private.h"
+#import "XTIRParCheck.h"
 #import "XTIROpcode.h"
 #import "XTIRSymbol.h"
 #import "XTIRSupport.h"
@@ -611,8 +612,46 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
                 NSString* op = i.opcode == XTIROpAnd ? @"and" : i.opcode == XTIROpOr ? @"or" : @"xor";
                 return [NSString stringWithFormat:@"\t%@.pred %@, %@, %@;\n", op, r, a, b];
                 }
-            if (ptxNarrow(rt) || rt.kind == XTIRTypeKindBool)
-                return nil; // first cut: no 8/16-bit or bool arithmetic
+            if (ptxNarrow(rt))
+                {
+                // An 8- or 16-bit value sits in its 32-bit register extended
+                // by its own signedness: the operation in 32 bits, and its
+                // result put back in that form. A division, remainder or
+                // right shift whose signedness is not the type's stays
+                // refused.
+                BOOL sg = ptxSigned(rt);
+                BOOL uop = i.opcode == XTIROpUDiv || i.opcode == XTIROpURem || i.opcode == XTIROpLShr;
+                BOOL sop = i.opcode == XTIROpSDiv || i.opcode == XTIROpSRem || i.opcode == XTIROpAShr;
+                if ((uop && sg) || (sop && !sg))
+                    return nil;
+                if (o[1].kind == XTIROperandKindUse && ptxWide([self typeOf:o[1].valueId]))
+                    return nil;
+                NSString* na = [self ptxOp:o[0] type:rt];
+                NSString* nb = [self ptxOp:o[1] type:rt];
+                if (!na || !nb)
+                    return nil;
+                NSString* n32 = sg ? @"s32" : @"u32";
+                NSString* nl = nil;
+                switch (i.opcode)
+                    {
+                    case XTIROpAdd: nl = [@"add." stringByAppendingString:n32]; break;
+                    case XTIROpSub: nl = [@"sub." stringByAppendingString:n32]; break;
+                    case XTIROpMul: nl = [@"mul.lo." stringByAppendingString:n32]; break;
+                    case XTIROpUDiv: case XTIROpSDiv: nl = [@"div." stringByAppendingString:n32]; break;
+                    case XTIROpURem: case XTIROpSRem: nl = [@"rem." stringByAppendingString:n32]; break;
+                    case XTIROpAnd: nl = @"and.b32"; break;
+                    case XTIROpOr: nl = @"or.b32"; break;
+                    case XTIROpXor: nl = @"xor.b32"; break;
+                    case XTIROpShl: nl = @"shl.b32"; break;
+                    case XTIROpLShr: case XTIROpAShr: nl = [@"shr." stringByAppendingString:n32]; break;
+                    default: break;
+                    }
+                if (!nl)
+                    return nil;
+                return [[NSString stringWithFormat:@"\t%@ %@, %@, %@;\n", nl, r, na, nb] stringByAppendingString:ptxNarrowFix(rt, r)];
+                }
+            if (rt.kind == XTIRTypeKindBool)
+                return nil; // no bool arithmetic
             NSString* a = [self ptxOp:o[0] type:rt];
             NSString* b = [self ptxOp:o[1] type:rt];
             NSString* sfx = ptxArith(rt);
@@ -715,6 +754,25 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
             {
             XTIRType* t = o[0].kind == XTIROperandKindUse ? [self typeOf:o[0].valueId]
                                                           : [self typeOf:o[1].valueId];
+            // Two predicates are equal when their exclusive or is false; one
+            // against a constant is itself or its negation.
+            if (t && t.kind == XTIRTypeKindBool && i.opcode == XTIROpICmp &&
+                (i.predicate == XTIRICmpEQ || i.predicate == XTIRICmpNE))
+                {
+                BOOL eq = i.predicate == XTIRICmpEQ;
+                if (o[0].kind == XTIROperandKindUse && o[1].kind == XTIROperandKindUse)
+                    {
+                    NSString* x = [NSString stringWithFormat:@"\txor.pred %@, %@, %@;\n", r, [self ptxReg:o[0].valueId],
+                                                             [self ptxReg:o[1].valueId]];
+                    return eq ? [x stringByAppendingFormat:@"\tnot.pred %@, %@;\n", r, r] : x;
+                    }
+                XTIROperand* pv = o[0].kind == XTIROperandKindUse ? o[0] : o[1];
+                XTIROperand* pk = o[0].kind == XTIROperandKindUse ? o[1] : o[0];
+                if (pv.kind != XTIROperandKindUse || pk.kind != XTIROperandKindImmI)
+                    return nil;
+                return [NSString stringWithFormat:@"\t%@ %@, %@;\n", (pk.intValue != 0) == eq ? @"mov.pred" : @"not.pred", r,
+                                                  [self ptxReg:pv.valueId]];
+                }
             // An 8- or 16-bit value sits in its 32-bit register extended by its
             // own signedness, so it compares as a 32-bit one.
             if (!t || t.kind == XTIRTypeKindBool)
@@ -1272,6 +1330,9 @@ static NSString* ptxNarrowFix(XTIRType* t, NSString* r)
         XTIRSymbol* g = [self.module symbolForName:self.globals[gi]];
         XTIRType* gt = g.globalType;
         XTIRType* et = gt.kind == XTIRTypeKindAgg ? gt.layout.fields.firstObject.type : gt;
+        // An array of structs: the word it is held in (XTParWordStructs).
+        if (XTParWordOf(et))
+            et = XTParWordOf(et);
         if (!ptxMem(et))
             return nil;
         [meta appendFormat:@" glob=%@:%u", self.globals[gi], et.byteWidth];

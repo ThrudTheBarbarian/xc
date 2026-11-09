@@ -101,6 +101,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, strong, nullable) XTIRDbgLoc* dbgLoc;
 /// Rename, for a clone taken from a parsed copy of the module.
 - (void)renameTo:(NSString*)name;
+/// Another type for parameter i, for a kernel's copy whose object's layout
+/// changed (XTParWordStructs).
+- (void)setParamType:(XTIRType*)type atIndex:(NSUInteger)i;
 
 /// All values defined in this function, keyed by valueId.
 @property(nonatomic, readonly) NSMutableDictionary<NSNumber*, XTIRValue*>* values;

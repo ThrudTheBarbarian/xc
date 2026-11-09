@@ -1977,7 +1977,23 @@
             IRFunc* f = (IRFunc*)_m.funcs().get(i);
             if (!f.name().hasPrefix(String.withCString("ParImpl$")) || !f.name().hasSuffix(String.withCString("$run")))
                 continue;
-            parFillBlock(f, (IRFunc*)kfns.get((Hashable*)f.name()), kmod);
+            // Its arrays of structs as arrays of words, in the copies the
+            // kernels are printed from (parWordStructs).
+            IRFunc* kf = (IRFunc*)kfns.get((Hashable*)f.name());
+            IRModule* sm = _m;
+            if (kf != (IRFunc*)0)
+                {
+                _m = kmod;
+                parWordStructs(kf);
+                }
+            IRFunc* kvf = _kvFns.count() > (u32)0 ? (IRFunc*)_kvFns.get((Hashable*)f.name()) : (IRFunc*)0;
+            if (kvf != (IRFunc*)0)
+                {
+                _m = _kvMod;
+                parWordStructs(kvf);
+                }
+            _m = sm;
+            parFillBlock(f, kf, kmod);
             }
         _kvMod = (IRModule*)0;
         _kvFns = (Map*)0;
@@ -2032,7 +2048,10 @@
                 {
                 _mWhy = (String*)0;
                 _mMslWhy = (String*)0;
-                parFlatStructGlobals(f);
+                // Layouts the rewrite adds belong to the copy it prints from.
+                _m = copy;
+                parWordStructs(f);
+                _m = m;
                 parFillBlock(f, f, copy);
                 // XC_PAR_OUTLINE_TRACE: why a block has no GPU form (the
                 // Metal form's reason, else the last form's).
@@ -2044,14 +2063,24 @@
         _m = saved;
         }
 
-    // A global array of structs whose fields are all one number type (C's
-    // `struct P { int x, y; } ps[N]`, a vector's coordinates), in the kernel
-    // copy of an outlined block, as the array of that number it is in
-    // memory: its address a pointer to the number, element i's field k the
-    // number at i * fields + k. The printers then hold it as any array of
-    // numbers. Nothing changes where the struct is used otherwise.
-    final void parFlatStructGlobals(IRFunc* f)
+    // An array of structs in a kernel copy (a global's, or a captured
+    // pointer's), as the array of words it is in memory, so the printers hold
+    // it as any array of numbers. The word is the struct's one number type
+    // when its fields are all that type, packed; else a 32-bit word (16- or
+    // 8-bit when no field is wider). Element i starts at word i * (size /
+    // word), and a field at byte offset o is read from word o / word: a field
+    // of the word's width reinterpreted, a narrower one shifted out of its
+    // word (and written back into it with the bytes around it kept), an
+    // 8-byte one as two 32-bit words. The host's layout is kept as it is,
+    // padding and nested structs included. An array whose element or field
+    // addresses are used any other way (a whole element copied, a field's
+    // address passed on) stays as it is, and the kernel declines it. Nothing
+    // changes outside the copy.
+    final void parWordStructs(IRFunc* f)
         {
+        if (f.params().count() == (u32)0)
+            return;
+        IRValue* selfV = (IRValue*)f.params().get((u32)0);
         Map* def = new Map();
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
             {
@@ -2063,76 +2092,150 @@
                     def.set((Hashable*)String.withU32(ip.res().seq()), (Object*)ip);
                 }
             }
-        // The candidates: an AddrOf of a global whose pointee is such a struct.
-        Map* flat = new Map();      // value seq -> the field type
-        Map* nf = new Map();        // value seq -> the number of fields
+        // The arrays: a global's address, or a captured pointer loaded from
+        // the block's object, whose element is a struct with a word.
+        Map* baseOf = new Map();    // base value seq -> its array's key
+        Map* sty = new Map();       // key -> the struct type
+        Map* bad = new Map();       // key -> declined
+        Array* keys = new Array();
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)f.blocks().get(b);
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* ip = (IRInsn*)bb.insns().get(i);
-                if (!ip.op().equals(String.withCString("AddrOf")) || ip.res() == (IRValue*)0 || ip.ops().count() != (u32)1
-                    || ((IROperand*)ip.ops().get((u32)0)).kind() != (u8)OPK_SYM || !self.mslIsPtr(ip.res().ty()))
+                if (ip.res() == (IRValue*)0 || ip.ops().count() == (u32)0 || !self.mslIsPtr(ip.res().ty()))
                     continue;
-                String* ft = self.parFlatField(mslPointee(ip.res().ty()));
-                if (ft == (String*)0)
+                String* st = self.mslPointee(ip.res().ty());
+                IRLayout* sl = self.mslLayoutOf(st);
+                if (sl == (IRLayout*)0 || sl.isArray() || self.parWordOf(st) == (String*)0)
                     continue;
-                IRLayout* l = self.mslLayoutOf(mslPointee(ip.res().ty()));
-                flat.set((Hashable*)String.withU32(ip.res().seq()), (Object*)ft);
-                nf.set((Hashable*)String.withU32(ip.res().seq()), (Object*)Number.with(l.fieldCount()));
+                IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
+                String* key = (String*)0;
+                if (ip.op().equals(String.withCString("AddrOf")) && ip.ops().count() == (u32)1 && o0.kind() == (u8)OPK_SYM)
+                    key = String.withFormat("g%s", o0.name().cString());
+                else if (ip.op().equals(String.withCString("Load")) && o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0)
+                    {
+                    IRInsn* fa = (IRInsn*)def.get((Hashable*)String.withU32(o0.val().seq()));
+                    if (fa != (IRInsn*)0 && fa.op().equals(String.withCString("FieldAddr")) && fa.ops().count() == (u32)2
+                        && ((IROperand*)fa.ops().get((u32)0)).kind() == (u8)OPK_USE
+                        && ((IROperand*)fa.ops().get((u32)0)).val() == selfV
+                        && ((IROperand*)fa.ops().get((u32)1)).kind() == (u8)OPK_IMMI)
+                        key = String.withFormat("b%ld", ((IROperand*)fa.ops().get((u32)1)).imm());
+                    }
+                if (key == (String*)0)
+                    continue;
+                if (sty.get((Hashable*)key) == (Object*)0)
+                    {
+                    sty.set((Hashable*)key, (Object*)st);
+                    keys.add((Object*)key);
+                    }
+                else if (!((String*)sty.get((Hashable*)key)).equals(st))
+                    bad.set((Hashable*)key, (Object*)key);
+                baseOf.set((Hashable*)String.withU32(ip.res().seq()), (Object*)key);
                 }
             }
-        if (flat.count() == (u32)0)
+        if (keys.count() == (u32)0)
             return;
-        // Every use is an element's address, then only a field's; else the
-        // global stays as it is (and the kernel declines it).
-        Map* elems = new Map();     // element value seq -> its global's seq
-        for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1)
+        // The addresses into them: an element's (the root), and a field's or
+        // a nested field's, each at a byte offset from its element.
+        Map* cKey = new Map();      // value seq -> key
+        Map* cOff = new Map();      // value seq -> byte offset in the element
+        Map* cTy = new Map();       // value seq -> the type there
+        Map* cRoot = new Map();     // value seq -> the element's address
+        for (u32 pass = (u32)0; pass < (u32)4; pass = pass + (u32)1)
             for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
                 {
                 IRBlock* bb = (IRBlock*)f.blocks().get(b);
-                Array* all = new Array();
-                for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1) all.add(bb.phis().get(i));
-                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) all.add(bb.insns().get(i));
-                if (bb.term() != (IRInsn*)0) all.add((Object*)bb.term());
-                for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                     {
-                    IRInsn* ip = (IRInsn*)all.get(i);
-                    for (u32 k = (u32)0; k < ip.ops().count(); k = k + (u32)1)
+                    IRInsn* ip = (IRInsn*)bb.insns().get(i);
+                    if (ip.res() == (IRValue*)0 || ip.ops().count() != (u32)2)
+                        continue;
+                    String* rk = String.withU32(ip.res().seq());
+                    if (cKey.get((Hashable*)rk) != (Object*)0)
+                        continue;
+                    IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
+                    IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
+                    if (o0.kind() != (u8)OPK_USE || o0.val() == (IRValue*)0)
+                        continue;
+                    String* vk = String.withU32(o0.val().seq());
+                    String* bk = (String*)baseOf.get((Hashable*)vk);
+                    if (bk != (String*)0)
                         {
-                        IROperand* o = (IROperand*)ip.ops().get(k);
-                        if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
-                            continue;
-                        String* key = String.withU32(o.val().seq());
-                        bool g = flat.get((Hashable*)key) != (Object*)0;
-                        bool e = elems.get((Hashable*)key) != (Object*)0;
-                        if (!g && !e)
-                            continue;
-                        bool ok = false;
-                        if (g && k == (u32)0 && ip.op().equals(String.withCString("ElementAddr")) && ip.res() != (IRValue*)0)
+                        if (ip.op().equals(String.withCString("ElementAddr")))
                             {
-                            ok = true;
-                            if (pass == (u32)0)
-                                elems.set((Hashable*)String.withU32(ip.res().seq()), (Object*)key);
+                            cKey.set((Hashable*)rk, (Object*)bk);
+                            cOff.set((Hashable*)rk, (Object*)Number.with((u32)0));
+                            cTy.set((Hashable*)rk, sty.get((Hashable*)bk));
+                            cRoot.set((Hashable*)rk, (Object*)ip.res());
                             }
-                        if (k == (u32)0 && ip.op().equals(String.withCString("FieldAddr")) && ip.ops().count() == (u32)2
-                            && ((IROperand*)ip.ops().get((u32)1)).kind() == (u8)OPK_IMMI)
-                            ok = true;
-                        if (!ok)
-                            {
-                            if (g)
-                                flat.set((Hashable*)key, (Object*)0);
-                            else
-                                flat.set((Hashable*)elems.get((Hashable*)key), (Object*)0);
-                            }
+                        continue;
                         }
+                    String* ck = (String*)cKey.get((Hashable*)vk);
+                    if (ck == (String*)0 || o1.kind() != (u8)OPK_IMMI || o1.imm() < (i64)0)
+                        continue;
+                    IRLayout* l = self.mslLayoutOf((String*)cTy.get((Hashable*)vk));
+                    u32 off = ((Number*)cOff.get((Hashable*)vk)).asU32();
+                    bool isRoot = (IRValue*)cRoot.get((Hashable*)vk) == o0.val();
+                    // A struct's field, or an element of an array inside one
+                    // (an element's own address offset is not that).
+                    bool field = ip.op().equals(String.withCString("FieldAddr")) && l != (IRLayout*)0 && !l.isArray();
+                    bool inner = ip.op().equals(String.withCString("ElementAddr")) && l != (IRLayout*)0 && l.isArray() && !isRoot;
+                    if ((!field && !inner) || o1.imm() >= (i64)l.fieldCount())
+                        continue;
+                    cKey.set((Hashable*)rk, (Object*)ck);
+                    cOff.set((Hashable*)rk, (Object*)Number.with(off + l.offsetAt((u32)o1.imm())));
+                    cTy.set((Hashable*)rk, (Object*)l.typeAt((u32)o1.imm()));
+                    cRoot.set((Hashable*)rk, cRoot.get((Hashable*)vk));
                     }
                 }
-        // A field of a mixed struct may only be loaded or stored through:
-        // anything else (its address passed on, compared, offset) keeps the
-        // global as it is. A uniform struct's fields are plain numbers, as
-        // before.
+        // Every use of them must be one of those, or a load or store of a
+        // field the word holds; a field of the word's own type is a pointer
+        // to a word and may be used as any.
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            Array* all = new Array();
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1) all.add(bb.phis().get(i));
+            for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1) all.add(bb.insns().get(i));
+            if (bb.term() != (IRInsn*)0) all.add((Object*)bb.term());
+            for (u32 i = (u32)0; i < all.count(); i = i + (u32)1)
+                {
+                IRInsn* ip = (IRInsn*)all.get(i);
+                bool resIn = ip.res() != (IRValue*)0 && cKey.get((Hashable*)String.withU32(ip.res().seq())) != (Object*)0;
+                for (u32 k = (u32)0; k < ip.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)ip.ops().get(k);
+                    if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                        continue;
+                    String* vk = String.withU32(o.val().seq());
+                    String* bk = (String*)baseOf.get((Hashable*)vk);
+                    String* ck = (String*)cKey.get((Hashable*)vk);
+                    if (bk != (String*)0)
+                        {
+                        if (!(k == (u32)0 && resIn && ip.op().equals(String.withCString("ElementAddr"))))
+                            bad.set((Hashable*)bk, (Object*)bk);
+                        continue;
+                        }
+                    if (ck == (String*)0)
+                        continue;
+                    if (k == (u32)0 && resIn)
+                        continue;
+                    String* t = (String*)cTy.get((Hashable*)vk);
+                    String* wt = self.parWordOf((String*)sty.get((Hashable*)ck));
+                    bool root = (IRValue*)cRoot.get((Hashable*)vk) == o.val();
+                    if (!root && t.equals(wt) && ((Number*)cOff.get((Hashable*)vk)).asU32() % self.mslWidth(wt) == (u32)0)
+                        continue;
+                    bool access = k == (u32)0 && !root && (ip.op().equals(String.withCString("Load"))
+                                  || (ip.op().equals(String.withCString("Store")) && ip.ops().count() >= (u32)2));
+                    if (!access || !self.parWordHolds(wt, t, ((Number*)cOff.get((Hashable*)vk)).asU32()))
+                        bad.set((Hashable*)ck, (Object*)ck);
+                    }
+                }
+            }
+        // The captured pointers: their field in the object must be loaded
+        // only, so the object's layout can say it points to words.
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)f.blocks().get(b);
@@ -2148,30 +2251,29 @@
                     IROperand* o = (IROperand*)ip.ops().get(k);
                     if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
                         continue;
-                    IRInsn* d = (IRInsn*)def.get((Hashable*)String.withU32(o.val().seq()));
-                    if (d == (IRInsn*)0 || !d.op().equals(String.withCString("FieldAddr")) || d.ops().count() != (u32)2)
+                    IRInsn* fa = (IRInsn*)def.get((Hashable*)String.withU32(o.val().seq()));
+                    if (fa == (IRInsn*)0 || !fa.op().equals(String.withCString("FieldAddr")) || fa.ops().count() != (u32)2
+                        || ((IROperand*)fa.ops().get((u32)0)).kind() != (u8)OPK_USE
+                        || ((IROperand*)fa.ops().get((u32)0)).val() != selfV
+                        || ((IROperand*)fa.ops().get((u32)1)).kind() != (u8)OPK_IMMI)
                         continue;
-                    IROperand* eo = (IROperand*)d.ops().get((u32)0);
-                    if (eo.kind() != (u8)OPK_USE || eo.val() == (IRValue*)0)
+                    String* key = String.withFormat("b%ld", ((IROperand*)fa.ops().get((u32)1)).imm());
+                    if (sty.get((Hashable*)key) == (Object*)0)
                         continue;
-                    String* g = (String*)elems.get((Hashable*)String.withU32(eo.val().seq()));
-                    if (g == (String*)0 || flat.get((Hashable*)g) == (Object*)0
-                        || !((String*)flat.get((Hashable*)g)).equals(String.withCString("U32")))
-                        continue;
-                    bool viaLoad = ip.op().equals(String.withCString("Load")) && k == (u32)0;
-                    bool viaStore = ip.op().equals(String.withCString("Store")) && k == (u32)0;
-                    // A float literal stored there would need its bits worked
-                    // out here; rare in a kernel, so the global stays.
-                    if (viaStore && ip.ops().count() >= (u32)2
-                        && ((IROperand*)ip.ops().get((u32)1)).kind() == (u8)OPK_IMMF)
-                        viaStore = false;
-                    if (!viaLoad && !viaStore)
-                        flat.set((Hashable*)g, (Object*)0);
+                    bool isBase = ip.res() != (IRValue*)0 && baseOf.get((Hashable*)String.withU32(ip.res().seq())) != (Object*)0;
+                    if (!(k == (u32)0 && ip.op().equals(String.withCString("Load")) && isBase))
+                        bad.set((Hashable*)key, (Object*)key);
                     }
                 }
             }
+        bool any = false;
+        for (u32 q = (u32)0; q < keys.count(); q = q + (u32)1)
+            if (bad.get((Hashable*)keys.get(q)) == (Object*)0)
+                any = true;
+        if (!any)
+            return;
         // The rewrite.
-        Map* recast = new Map();    // field address seq -> the field's own type
+        Map* fieldRetyped = new Map();  // captured field k -> its new pointer type
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)f.blocks().get(b);
@@ -2181,33 +2283,49 @@
                 IRInsn* ip = (IRInsn*)bb.insns().get(i);
                 IRValue* r = ip.res();
                 String* op = ip.op();
-                if (r == (IRValue*)0 || ip.ops().count() == (u32)0)
+                IROperand* o0 = ip.ops().count() > (u32)0 ? (IROperand*)ip.ops().get((u32)0) : (IROperand*)0;
+                String* rk = r != (IRValue*)0 ? String.withU32(r.seq()) : (String*)0;
+                String* bk = rk != (String*)0 ? (String*)baseOf.get((Hashable*)rk) : (String*)0;
+                String* ck = rk != (String*)0 ? (String*)cKey.get((Hashable*)rk) : (String*)0;
+                // A load or store through a field's address.
+                String* ak = o0 != (IROperand*)0 && o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0
+                             ? String.withU32(o0.val().seq()) : (String*)0;
+                String* lk = ak != (String*)0 ? (String*)cKey.get((Hashable*)ak) : (String*)0;
+                if (lk != (String*)0 && bad.get((Hashable*)lk) == (Object*)0
+                    && (op.equals(String.withCString("Load")) || op.equals(String.withCString("Store"))))
                     {
-                    i = i + (u32)1;
+                    i = parWordAccess(bb, i, ip, (String*)cTy.get((Hashable*)ak), ((Number*)cOff.get((Hashable*)ak)).asU32(),
+                                      self.parWordOf((String*)sty.get((Hashable*)lk)), (IRValue*)cRoot.get((Hashable*)ak));
                     continue;
                     }
-                IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
-                String* gk = (String*)0;
-                if (op.equals(String.withCString("AddrOf")))
-                    gk = String.withU32(r.seq());
-                else if (o0.kind() == (u8)OPK_USE && o0.val() != (IRValue*)0)
+                if (bk != (String*)0 && bad.get((Hashable*)bk) == (Object*)0)
                     {
-                    String* ok0 = String.withU32(o0.val().seq());
-                    gk = flat.get((Hashable*)ok0) != (Object*)0 ? ok0 : (String*)elems.get((Hashable*)ok0);
-                    }
-                String* ft = gk != (String*)0 ? (String*)flat.get((Hashable*)gk) : (String*)0;
-                if (ft == (String*)0)
-                    {
-                    i = i + (u32)1;
-                    continue;
-                    }
-                String* pt = parPtrRetyped(r.ty(), ft);
-                if (op.equals(String.withCString("AddrOf")))
+                    String* wt = self.parWordOf((String*)sty.get((Hashable*)bk));
+                    String* pt = parPtrRetyped(r.ty(), wt);
                     r.setTy(pt);
-                else if (op.equals(String.withCString("ElementAddr")) && ip.ops().count() == (u32)2)
+                    if (op.equals(String.withCString("Load")))
+                        {
+                        // Its field in the object points to words now.
+                        IRInsn* fa = (IRInsn*)def.get((Hashable*)ak);
+                        fa.res().setTy(parPtrRetyped(fa.res().ty(), pt));
+                        fieldRetyped.set((Hashable*)String.withI64(((IROperand*)fa.ops().get((u32)1)).imm()), (Object*)pt);
+                        }
+                    i = i + (u32)1;
+                    continue;
+                    }
+                if (ck == (String*)0 || bad.get((Hashable*)ck) != (Object*)0)
                     {
-                    // [i] of the struct: [i * fields] of the number.
-                    u32 n = ((Number*)nf.get((Hashable*)gk)).asU32();
+                    i = i + (u32)1;
+                    continue;
+                    }
+                String* wt = self.parWordOf((String*)sty.get((Hashable*)ck));
+                String* pt = parPtrRetyped(r.ty(), wt);
+                IRValue* root = (IRValue*)cRoot.get((Hashable*)rk);
+                if (root == r)
+                    {
+                    // [i] of the struct: [i * (size / word)] of the word.
+                    IRLayout* sl = self.mslLayoutOf((String*)sty.get((Hashable*)ck));
+                    u32 n = sl.size() / self.mslWidth(wt);
                     IROperand* io = (IROperand*)ip.ops().get((u32)1);
                     IROperand* scaled = (IROperand*)0;
                     if (io.kind() == (u8)OPK_IMMI)
@@ -2224,21 +2342,16 @@
                         scaled = IROperand.useVal(mv);
                         }
                     if (scaled != (IROperand*)0)
-                        {
                         ip.ops().set((u32)1, (Object*)scaled);
-                        r.setTy(pt);
-                        }
+                    r.setTy(pt);
                     }
-                else if (op.equals(String.withCString("FieldAddr")))
+                else
                     {
-                    // Field k: the number k further on.
-                    i64 k = ((IROperand*)ip.ops().get((u32)1)).imm();
-                    String* fty = self.mslIsPtr(r.ty()) ? self.mslPointee(r.ty()) : (String*)0;
-                    if (fty != (String*)0 && !fty.equals(ft))
-                        recast.set((Hashable*)String.withU32(r.seq()), (Object*)fty);
+                    // A field: the word it starts in.
+                    u32 off = ((Number*)cOff.get((Hashable*)rk)).asU32();
                     IRInsn* ea = IRInsn.with(String.withCString("ElementAddr"));
-                    ea.add(o0);
-                    ea.add(IROperand.immI(k, String.withCString("I64")));
+                    ea.add(IROperand.useVal(root));
+                    ea.add(IROperand.immI((i64)(off / self.mslWidth(wt)), String.withCString("U32")));
                     ea.setRes(r);
                     r.setTy(pt);
                     bb.insns().set(i, (Object*)ea);
@@ -2246,53 +2359,223 @@
                 i = i + (u32)1;
                 }
             }
-        if (recast.count() == (u32)0)
+        // The object's layout, in this copy: each captured pointer's field
+        // points to words.
+        if (fieldRetyped.count() == (u32)0)
             return;
-        // A field whose type is not the word's: read the word and reinterpret
-        // it, reinterpret before writing.
-        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+        String* objT = self.mslPointee(selfV.ty());
+        IRLayout* ol = self.mslLayoutOf(objT);
+        if (ol == (IRLayout*)0)
+            return;
+        IRLayout* nl = IRLayout.with(ol.size(), (u32)1);
+        for (u32 k = (u32)0; k < ol.fieldCount(); k = k + (u32)1)
             {
-            IRBlock* bb = (IRBlock*)f.blocks().get(b);
-            u32 i = (u32)0;
-            while (i < bb.insns().count())
-                {
-                IRInsn* ip = (IRInsn*)bb.insns().get(i);
-                IROperand* a0 = ip.ops().count() > (u32)0 ? (IROperand*)ip.ops().get((u32)0) : (IROperand*)0;
-                String* fty = a0 != (IROperand*)0 && a0.kind() == (u8)OPK_USE && a0.val() != (IRValue*)0
-                              ? (String*)recast.get((Hashable*)String.withU32(a0.val().seq())) : (String*)0;
-                if (fty == (String*)0)
-                    {
-                    i = i + (u32)1;
-                    continue;
-                    }
-                if (ip.op().equals(String.withCString("Load")) && ip.res() != (IRValue*)0)
-                    {
-                    IRValue* orig = ip.res();
-                    IRValue* word = new IRValue(String.withCString("U32"));
-                    ip.setRes(word);
-                    IRInsn* bc = IRInsn.with(String.withCString("Bitcast"));
-                    bc.add(IROperand.useVal(word));
-                    bc.setRes(orig);
-                    bb.insns().insert(i + (u32)1, (Object*)bc);
-                    i = i + (u32)2;
-                    continue;
-                    }
-                if (ip.op().equals(String.withCString("Store")) && ip.ops().count() >= (u32)2
-                    && ((IROperand*)ip.ops().get((u32)1)).kind() == (u8)OPK_USE)
-                    {
-                    IROperand* vo = (IROperand*)ip.ops().get((u32)1);
-                    IRValue* word = new IRValue(String.withCString("U32"));
-                    IRInsn* bc = IRInsn.with(String.withCString("Bitcast"));
-                    bc.add(vo);
-                    bc.setRes(word);
-                    bb.insns().insert(i, (Object*)bc);
-                    ip.ops().set((u32)1, (Object*)IROperand.useVal(word));
-                    i = i + (u32)2;
-                    continue;
-                    }
-                i = i + (u32)1;
-                }
+            String* nt = (String*)fieldRetyped.get((Hashable*)String.withI64((i64)k));
+            nl.addField(ol.offsetAt(k), nt != (String*)0 ? nt : ol.typeAt(k));
             }
+        _m.layouts().add((Object*)nl);
+        selfV.setTy(parPtrRetyped(selfV.ty(), String.withFormat("Agg(%u)", _m.layouts().count() - (u32)1)));
+        }
+
+    // Whether a word of type wt holds a field of type t at byte offset off:
+    // a number on its own alignment, within one word, or an 8-byte one in
+    // two 32-bit words.
+    final bool parWordHolds(String* wt, String* t, u32 off)
+        {
+        if (!self.parLeaf(t))
+            return false;
+        u32 w = self.mslWidth(t);
+        u32 ww = self.mslWidth(wt);
+        if (off % w != (u32)0)
+            return false;
+        if (w <= ww)
+            return off % ww + w <= ww;
+        return w == (u32)8 && ww == (u32)4;
+        }
+
+    // A load or store at insns[i] of a field of type t, `off` bytes into the
+    // element at `root`, through words of type wt: the instructions that do
+    // it in words. The index after them.
+    final u32 parWordAccess(IRBlock* bb, u32 i, IRInsn* ip, String* t, u32 off, String* wt, IRValue* root)
+        {
+        u32 w = self.mslWidth(t);
+        u32 ww = self.mslWidth(wt);
+        bool load = ip.op().equals(String.withCString("Load"));
+        if (w == ww && !t.equals(String.withCString("Bool")))
+            {
+            if (t.equals(wt))
+                return i + (u32)1;
+            // Reinterpreted: read the word and cast it, cast before writing.
+            if (load)
+                {
+                IRValue* orig = ip.res();
+                IRValue* word = new IRValue(wt);
+                ip.setRes(word);
+                bb.insns().insert(i + (u32)1, (Object*)parWordOp("Bitcast", orig, IROperand.useVal(word), (IROperand*)0));
+                return i + (u32)2;
+                }
+            IROperand* v = parWordValue(bb, &i, (IROperand*)ip.ops().get((u32)1), t);
+            IRValue* word = new IRValue(wt);
+            bb.insns().insert(i, (Object*)parWordOp("Bitcast", word, v, (IROperand*)0));
+            ip.ops().set((u32)1, (Object*)IROperand.useVal(word));
+            return i + (u32)2;
+            }
+        IROperand* addr = (IROperand*)ip.ops().get((u32)0);
+        IROperand* memIn = (IROperand*)ip.ops().get(load ? (u32)1 : (u32)2);
+        if (w == (u32)8)
+            {
+            // Two 32-bit words, the low one first.
+            IRValue* a2 = new IRValue(parPtrRetyped(addr.val().ty(), String.withCString("U32")));
+            IRInsn* ea = IRInsn.with(String.withCString("ElementAddr"));
+            ea.add(IROperand.useVal(root));
+            ea.add(IROperand.immI((i64)(off / (u32)4 + (u32)1), String.withCString("U32")));
+            ea.setRes(a2);
+            bb.insns().insert(i, (Object*)ea);
+            i = i + (u32)1;
+            IRValue* m1 = new IRValue(String.withCString("Mem"));
+            if (load)
+                {
+                IRValue* orig = ip.res();
+                IRValue* lo = new IRValue(String.withCString("U32"));
+                IRInsn* l1 = IRInsn.with(String.withCString("Load"));
+                l1.add(addr);
+                l1.add(memIn);
+                l1.setRes(lo);
+                l1.setMemRes(m1);
+                bb.insns().insert(i, (Object*)l1);
+                i = i + (u32)1;
+                IRValue* hi = new IRValue(String.withCString("U32"));
+                ip.ops().set((u32)0, (Object*)IROperand.useVal(a2));
+                ip.ops().set((u32)1, (Object*)IROperand.useVal(m1));
+                ip.setRes(hi);
+                i = i + (u32)1;
+                IRValue* zl = new IRValue(String.withCString("U64"));
+                IRValue* zh = new IRValue(String.withCString("U64"));
+                IRValue* sh = new IRValue(String.withCString("U64"));
+                IRValue* both = t.equals(String.withCString("U64")) ? orig : new IRValue(String.withCString("U64"));
+                bb.insns().insert(i, (Object*)parWordOp("ZExt", zl, IROperand.useVal(lo), (IROperand*)0));
+                bb.insns().insert(i + (u32)1, (Object*)parWordOp("ZExt", zh, IROperand.useVal(hi), (IROperand*)0));
+                bb.insns().insert(i + (u32)2, (Object*)parWordOp("Shl", sh, IROperand.useVal(zh), IROperand.immI((i64)32, String.withCString("U64"))));
+                bb.insns().insert(i + (u32)3, (Object*)parWordOp("Or", both, IROperand.useVal(zl), IROperand.useVal(sh)));
+                i = i + (u32)4;
+                if (both != orig)
+                    {
+                    bb.insns().insert(i, (Object*)parWordOp("Bitcast", orig, IROperand.useVal(both), (IROperand*)0));
+                    i = i + (u32)1;
+                    }
+                return i;
+                }
+            IROperand* v = parWordValue(bb, &i, (IROperand*)ip.ops().get((u32)1), t);
+            if (!t.equals(String.withCString("U64")))
+                {
+                IRValue* u = new IRValue(String.withCString("U64"));
+                bb.insns().insert(i, (Object*)parWordOp("Bitcast", u, v, (IROperand*)0));
+                i = i + (u32)1;
+                v = IROperand.useVal(u);
+                }
+            IRValue* lo = new IRValue(String.withCString("U32"));
+            IRValue* s = new IRValue(String.withCString("U64"));
+            IRValue* hi = new IRValue(String.withCString("U32"));
+            bb.insns().insert(i, (Object*)parWordOp("Trunc", lo, v, (IROperand*)0));
+            bb.insns().insert(i + (u32)1, (Object*)parWordOp("LShr", s, v, IROperand.immI((i64)32, String.withCString("U64"))));
+            bb.insns().insert(i + (u32)2, (Object*)parWordOp("Trunc", hi, IROperand.useVal(s), (IROperand*)0));
+            i = i + (u32)3;
+            IRInsn* s1 = IRInsn.with(String.withCString("Store"));
+            s1.add(addr);
+            s1.add(IROperand.useVal(lo));
+            s1.add(memIn);
+            s1.setMemRes(m1);
+            bb.insns().insert(i, (Object*)s1);
+            i = i + (u32)1;
+            ip.ops().set((u32)0, (Object*)IROperand.useVal(a2));
+            ip.ops().set((u32)1, (Object*)IROperand.useVal(hi));
+            ip.ops().set((u32)2, (Object*)IROperand.useVal(m1));
+            return i + (u32)1;
+            }
+        // A narrower field: its bits in the word.
+        u32 shift = (off % ww) * (u32)8;
+        i64 mask = ((i64)1 << (i64)(w * (u32)8)) - (i64)1;
+        if (load)
+            {
+            IRValue* orig = ip.res();
+            IRValue* word = new IRValue(wt);
+            ip.setRes(word);
+            i = i + (u32)1;
+            IROperand* x = IROperand.useVal(word);
+            if (shift != (u32)0)
+                {
+                IRValue* sv = new IRValue(wt);
+                bb.insns().insert(i, (Object*)parWordOp("LShr", sv, x, IROperand.immI((i64)shift, wt)));
+                i = i + (u32)1;
+                x = IROperand.useVal(sv);
+                }
+            if (t.equals(String.withCString("Bool")))
+                {
+                IRValue* bv = new IRValue(wt);
+                bb.insns().insert(i, (Object*)parWordOp("And", bv, x, IROperand.immI(mask, wt)));
+                IRInsn* ne = parWordOp("ICmp", orig, IROperand.useVal(bv), IROperand.immI((i64)0, wt));
+                ne.setPred(String.withCString("NE"));
+                bb.insns().insert(i + (u32)1, (Object*)ne);
+                return i + (u32)2;
+                }
+            bb.insns().insert(i, (Object*)parWordOp("Trunc", orig, x, (IROperand*)0));
+            return i + (u32)1;
+            }
+        // Written back into its word with the other bytes kept.
+        IROperand* v = parWordValue(bb, &i, (IROperand*)ip.ops().get((u32)1), t);
+        IRValue* m1 = new IRValue(String.withCString("Mem"));
+        IRValue* old = new IRValue(wt);
+        IRInsn* l1 = IRInsn.with(String.withCString("Load"));
+        l1.add(addr);
+        l1.add(memIn);
+        l1.setRes(old);
+        l1.setMemRes(m1);
+        IRValue* z = new IRValue(wt);
+        IRValue* zm = new IRValue(wt);
+        IRValue* kept = new IRValue(wt);
+        IRValue* nw = new IRValue(wt);
+        bb.insns().insert(i, (Object*)l1);
+        bb.insns().insert(i + (u32)1, (Object*)parWordOp("ZExt", z, v, (IROperand*)0));
+        bb.insns().insert(i + (u32)2, (Object*)parWordOp("And", zm, IROperand.useVal(z), IROperand.immI(mask, wt)));
+        i = i + (u32)3;
+        IROperand* bits = IROperand.useVal(zm);
+        if (shift != (u32)0)
+            {
+            IRValue* sv = new IRValue(wt);
+            bb.insns().insert(i, (Object*)parWordOp("Shl", sv, bits, IROperand.immI((i64)shift, wt)));
+            i = i + (u32)1;
+            bits = IROperand.useVal(sv);
+            }
+        i64 wmask = ww == (u32)4 ? (i64)0xFFFFFFFF : ((i64)1 << (i64)(ww * (u32)8)) - (i64)1;
+        bb.insns().insert(i, (Object*)parWordOp("And", kept, IROperand.useVal(old), IROperand.immI(wmask ^ (mask << (i64)shift), wt)));
+        bb.insns().insert(i + (u32)1, (Object*)parWordOp("Or", nw, IROperand.useVal(kept), bits));
+        i = i + (u32)2;
+        ip.ops().set((u32)1, (Object*)IROperand.useVal(nw));
+        ip.ops().set((u32)2, (Object*)IROperand.useVal(m1));
+        return i + (u32)1;
+        }
+
+    // An instruction `res = op a[, b]`.
+    final IRInsn* parWordOp(string op, IRValue* res, IROperand* a, IROperand* b)
+        {
+        IRInsn* n = IRInsn.with(String.withCString(op));
+        n.add(a);
+        if (b != (IROperand*)0)
+            n.add(b);
+        n.setRes(res);
+        return n;
+        }
+
+    // A stored value as a value of type t: a constant gets its own Const
+    // before insns[*at].
+    final IROperand* parWordValue(IRBlock* bb, u32* at, IROperand* v, String* t)
+        {
+        if (v.kind() == (u8)OPK_USE)
+            return v;
+        IRValue* c = new IRValue(t);
+        bb.insns().insert(*at, (Object*)parWordOp("Const", c, v, (IROperand*)0));
+        *at = *at + (u32)1;
+        return IROperand.useVal(c);
         }
 
     // Ptr(T, space) as Ptr(ft, space).
