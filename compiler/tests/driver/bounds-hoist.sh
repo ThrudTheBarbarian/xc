@@ -184,7 +184,9 @@ i32 main(i32 argc, u8** argv)
 #endif
     u8* m = (u8*)mmap((pointer)0, page * (u64)2, (i32)3, flags, (i32)-1, (i64)0);
     mprotect((pointer)m, page, (i32)0);
-    u32* p = (u32*)(pointer)(m + page);
+    // Through an integer: `m + page` is itself checked against m, whose
+    // header (in the page before the mapping) is not the program's to read.
+    u32* p = (u32*)(pointer)((u64)(pointer)m + page);
     Stdio.printf("zero %u\n", sumTo(p, (u32)argc - (u32)1));
     return 0;
 }
