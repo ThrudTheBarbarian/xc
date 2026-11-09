@@ -919,6 +919,8 @@ class ParTiles
                 for (u32 k = (u32)0; k < lostT.count(); k = k + (u32)1)
                     {
                     ParTile* lt = (ParTile*)lostT.get(k);
+                    if (lt.dirty)
+                        parLostInPlace(((ParWorker*)ws.get(i)).identity());
                     lt.done = false;
                     lt.worker = (ParWorker*)0;
                     lt.partial = (ParChunk*)0;
@@ -1081,6 +1083,33 @@ class ParTiles
             ((ParWorker*)ws.get(i)).drain();
             ((ParWorker*)ws.get(i)).finish();
             }
+        // Tiles no worker finished, because every worker that could take
+        // them is gone (a lost GPU with no CPU worker in the set, say), run
+        // here on the CPU, so the block is whole.
+        i64 onCpu = (i64)0;
+        for (i64 k = folded; k < ntiles; k = k + (i64)1)
+            {
+            ParTile* pt = (ParTile*)tiles.get((u32)k);
+            if (pt.done)
+                continue;
+            if (pt.dirty && pt.worker != (ParWorker*)0)
+                parLostInPlace(pt.worker.identity());
+            ParChunk* c = proto.copyChunk();
+            Par.runCpu(c, pt.lo, pt.hi);
+            pt.partial = c;
+            pt.done = true;
+            onCpu = onCpu + (i64)1;
+            }
+        while (folded < ntiles)
+            {
+            ParTile* d = (ParTile*)tiles.get((u32)folded);
+            if (d.partial != (ParChunk*)0)
+                proto.merge(d.partial);
+            d.partial = (ParChunk*)0;
+            folded = folded + (i64)1;
+            }
+        if (onCpu > (i64)0 && ParDevice.reporting())
+            Log.info("par: %s: %ld tile(s) run on the CPU after every worker that could take them was lost", proto.parName(), onCpu);
         i64 took = ParDevice.nowUs() - started;
         ParTrace.end(took);
         if (reissued > (i64)0 && ParDevice.reporting())

@@ -264,6 +264,10 @@ class ParVulkan
     static vkResetFences_t* _resetFences;
     static u64 _fence;          // one fence, reset and reused: a create and a destroy a run was latency
     static vkResetCommandBuffer_t* _resetCmd;
+    static bool _lost;          // the device was lost: nothing more goes to it
+    static i64 _submits;        // submissions so far, for XC_PAR_VULKAN_LOSE
+    static i64 _loseAfter;      // XC_PAR_VULKAN_LOSE=<n>, or 0
+    static bool _loseRead;
 
 #if OS_windows || LIBC_glibc || OS_android
     static pointer _lib;
@@ -285,6 +289,62 @@ class ParVulkan
         if (!start() || _identity == (String*)0)
             return String.withCString("");
         return _identity;
+        }
+
+    // Whether the device was lost: a submission it refused, or a fence or a
+    // wait that answered with an error (VK_ERROR_DEVICE_LOST). A lost device
+    // never signals the fences of what it was running, so nothing waits on
+    // them again and no more work goes to it.
+    static bool lost(void)
+        {
+        return _lost;
+        }
+
+    // The device is lost (rc, the Vulkan result that said so): said once,
+    // naming it.
+    static void markLost(i32 rc)
+        {
+        if (_lost)
+            return;
+        _lost = true;
+        Log.error("par: the GPU %s was lost (Vulkan error %d); the rest of the work runs without it",
+                  _identity != (String*)0 ? _identity.cString() : (u8*)"(Vulkan)", rc);
+        }
+
+    // A submission's result: false, and the device lost, when it failed.
+    // XC_PAR_VULKAN_LOSE=<n> makes the device read as lost once its n-th
+    // submission has gone, as when the driver finds the loss after the
+    // submission returns: the test of the runtime's handling of a lost device.
+    static bool submitted(i32 rc)
+        {
+        if (rc != (i32)0)
+            {
+            markLost(rc);
+            return false;
+            }
+        if (!_loseRead)
+            {
+            _loseRead = true;
+            String* v = Platform.env(String.withCString("XC_PAR_VULKAN_LOSE"));
+            for (u32 i = (u32)0; i < v.byteLength() && v.byteAt(i) >= (u8)'0' && v.byteAt(i) <= (u8)'9'; i = i + (u32)1)
+                _loseAfter = _loseAfter * (i64)10 + (i64)(v.byteAt(i) - (u8)'0');
+            }
+        _submits = _submits + (i64)1;
+        if (_loseAfter > (i64)0 && _submits >= _loseAfter)
+            markLost((i32)-4);
+        return true;
+        }
+
+    // A fence's status or a wait's result, as the runtime reads it:
+    // VK_ERROR_DEVICE_LOST (-4) once the device is lost, and an error marks
+    // it lost.
+    static i32 fenceResult(i32 rc)
+        {
+        if (_lost)
+            return (i32)-4;
+        if (rc < (i32)0)
+            markLost(rc);
+        return rc;
         }
 
     // Whether the device lists the extension `name`.
@@ -1073,6 +1133,8 @@ class ParVulkan
 #else
         if (!start())
             return ParDevice.cpu("there is no Vulkan device");
+        if (_lost)
+            return ParDevice.cpu("its Vulkan GPU was lost");
         u8* why = ParVulkan.cannotTake(src, lo, hi);
         if (why != (u8*)0)
             return ParDevice.cpu(why);
@@ -1407,8 +1469,29 @@ class ParVulkan
                 _vk32(&si[0], (u32)0, (u32)4);
                 _vk32(&si[0], (u32)40, (u32)1);
                 _vkp(&si[0], (u32)48, (pointer)&cb);
-                ok = _submit(_queue, (u32)1, (pointer)&si[0], fence) == (i32)0 &&
-                     _wait(_dev, (u32)1, &fence, (u32)1, (u64)0xFFFFFFFFFFFFFFFF) == (i32)0;
+                ok = submitted(_submit(_queue, (u32)1, (pointer)&si[0], fence));
+                if (ok)
+                    {
+                    ok = fenceResult(_wait(_dev, (u32)1, &fence, (u32)1, (u64)0xFFFFFFFFFFFFFFFF)) == (i32)0;
+                    // Lost with the kernel sent: an array it was writing in
+                    // place holds what it wrote before the loss.
+                    if (!ok)
+                        {
+                        b = (u32)1;
+                        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+                            {
+                            if (l.bufIn[i] == (i64)0 && (pointer)maps[b] == *(pointer*)(obj + l.bufOff[i]))
+                                parLostInPlace(_identity);
+                            b = b + (u32)1;
+                            }
+                        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+                            {
+                            if (l.globIn[i] == (i64)0 && (pointer)maps[b] == l.globPtr[i])
+                                parLostInPlace(_identity);
+                            b = b + (u32)1;
+                            }
+                        }
+                    }
                 }
             gpuUs = ParDevice.nowUs() - gpuStart;
             }
@@ -1529,6 +1612,7 @@ class ParVulkanWorker : ParWorker
     u32 _nextSlot;
     u32 _oldest;
     u32 _inFlight;
+    Array* _lostTiles;      // tiles in flight when the device was lost, for lost()
 
     String* identity(void)
         {
@@ -1552,7 +1636,7 @@ class ParVulkanWorker : ParWorker
         }
     bool holds(ParChunk* proto, u8* src, ParLayout* l)
         {
-        if (l == (ParLayout*)0)
+        if (l == (ParLayout*)0 || ParVulkan.lost())
             return false;
         u8* spv = ParVulkan.spirvFor(src, identity());
         if (spv == (u8*)0 || !ParVulkan.start())
@@ -1711,6 +1795,8 @@ class ParVulkanWorker : ParWorker
 
     bool prepare(ParChunk* proto, u8* src, ParLayout* l, i64 tile)
         {
+        if (ParVulkan.lost())
+            return false;
         u8* spv = ParVulkan.spirvFor(src, identity());
         _slot = spv != (u8*)0 ? ParVulkan.pipeline(spv) : (i32)-1;
         if (_slot < (i32)0)
@@ -1973,7 +2059,7 @@ class ParVulkanWorker : ParWorker
         {
         if (!submit(d))
             return false;
-        return gVk_wait(gVkDev, (u32)1, &_fence[d], (u32)1, (u64)0xFFFFFFFFFFFFFFFF) == (i32)0;
+        return ParVulkan.fenceResult(gVk_wait(gVkDev, (u32)1, &_fence[d], (u32)1, (u64)0xFFFFFFFFFFFFFFFF)) == (i32)0;
         }
 
     bool submit(u32 d)
@@ -1985,7 +2071,7 @@ class ParVulkanWorker : ParWorker
         _vk32(&si[0], (u32)0, (u32)4);
         _vk32(&si[0], (u32)40, (u32)1);
         _vkp(&si[0], (u32)48, (pointer)&_cb[d]);
-        return gVk_submit(gVkQueue, (u32)1, (pointer)&si[0], _fence[d]) == (i32)0;
+        return ParVulkan.submitted(gVk_submit(gVkQueue, (u32)1, (pointer)&si[0], _fence[d]));
         }
 
     // A run's end: the buffers stay for the next run.
@@ -2084,7 +2170,7 @@ class ParVulkanWorker : ParWorker
         }
     bool take(ParTile* t, ParChunk* proto, u8* src, ParLayout* l)
         {
-        if (!_ready || _inFlight >= (u32)PAR_VK_DEPTH)
+        if (!_ready || _inFlight >= (u32)PAR_VK_DEPTH || ParVulkan.lost())
             return false;
         l = _l;
         u32 d = _nextSlot;
@@ -2317,8 +2403,14 @@ class ParVulkanWorker : ParWorker
         if (_inFlight == (u32)0 || gVk_fenceStatus == (vkGetFenceStatus_t*)0)
             return (ParTile*)0;
         u32 d = _oldest;
-        if (gVk_fenceStatus(gVkDev, _fence[d]) != (i32)0)
-            return (ParTile*)0;   // VK_NOT_READY (1), or a loss the drain reports
+        i32 rc = ParVulkan.fenceResult(gVk_fenceStatus(gVkDev, _fence[d]));
+        if (rc < (i32)0)
+            {
+            abandon();
+            return (ParTile*)0;
+            }
+        if (rc != (i32)0)
+            return (ParTile*)0;   // VK_NOT_READY
         return complete(d);
         }
 
@@ -2331,7 +2423,10 @@ class ParVulkanWorker : ParWorker
         for (u32 d = (u32)0; d < (u32)PAR_VK_DEPTH; d = d + (u32)1)
             if (_slotTile[d] == t)
                 {
-                gVk_wait(gVkDev, (u32)1, &_fence[d], (u32)1, (u64)0xFFFFFFFFFFFFFFFF);
+                // On a lost device the wait answers at once; poll hands the
+                // tile back.
+                if (!ParVulkan.lost())
+                    ParVulkan.fenceResult(gVk_wait(gVkDev, (u32)1, &_fence[d], (u32)1, (u64)0xFFFFFFFFFFFFFFFF));
                 return true;
                 }
         return false;
@@ -2342,10 +2437,70 @@ class ParVulkanWorker : ParWorker
         while (_inFlight > (u32)0)
             {
             u32 d = _oldest;
-            if (gVk_wait(gVkDev, (u32)1, &_fence[d], (u32)1, (u64)0xFFFFFFFFFFFFFFFF) != (i32)0)
-                Log.error("par: a Vulkan tile failed on %s", ParVulkan.identity().cString());
+            if (ParVulkan.fenceResult(gVk_wait(gVkDev, (u32)1, &_fence[d], (u32)1, (u64)0xFFFFFFFFFFFFFFFF)) != (i32)0)
+                {
+                abandon();
+                return;
+                }
             complete(d);
             }
+        }
+
+    // The device is lost: the tiles in flight will never finish, and their
+    // fences never signal. They go back to the queue (lost()) for another
+    // worker, each marked dirty when the GPU may have written part of it
+    // into the program's own arrays.
+    void abandon(void)
+        {
+        bool inPlace = writesInPlace();
+        if (_lostTiles == (Array*)0)
+            _lostTiles = new Array();
+        for (u32 k = (u32)0; k < _inFlight; k = k + (u32)1)
+            {
+            u32 d = (_oldest + k) % (u32)PAR_VK_DEPTH;
+            ParTile* t = _slotTile[d];
+            if (t != (ParTile*)0)
+                {
+                t.dirty = inPlace;
+                _lostTiles.add((Object*)t);
+                }
+            _slotTile[d] = (ParTile*)0;
+            }
+        _inFlight = (u32)0;
+        }
+
+    // Whether this run's kernel writes an array it binds in place (an
+    // imported `simd:` block or global): an integrated GPU's writes land in
+    // the program's memory as they happen.
+    bool writesInPlace(void)
+        {
+        if (gVkDiscrete || _proto == (ParChunk*)0 || _l == (ParLayout*)0)
+            return false;
+        u8* obj = _proto.objBytes();
+        for (u32 i = (u32)0; i < _l.nbuf; i = i + (u32)1)
+            if (_l.bufIn[i] == (i64)0 && _hhost[(u32)1 + i] != (pointer)0
+                && _hhost[(u32)1 + i] == *(pointer*)(obj + _l.bufOff[i]))
+                return true;
+        for (u32 i = (u32)0; i < _l.nglob; i = i + (u32)1)
+            if (_l.globIn[i] == (i64)0 && _hhost[(u32)1 + _l.nbuf + i] != (pointer)0
+                && _hhost[(u32)1 + _l.nbuf + i] == _l.globPtr[i])
+                return true;
+        return false;
+        }
+
+    Array* lost(void)
+        {
+        Array* a = _lostTiles;
+        _lostTiles = (Array*)0;
+        return a;
+        }
+    bool dead(void)
+        {
+        return ParVulkan.lost();
+        }
+    bool ready(i64 now)
+        {
+        return !ParVulkan.lost();
         }
     }
 

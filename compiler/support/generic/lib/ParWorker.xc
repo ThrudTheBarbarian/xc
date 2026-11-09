@@ -18,6 +18,9 @@ class ParTile : Object
     ParChunk* partial;  // the tile's reductions, a chunk copy, once finished
     Data* raw;          // or the partials as bytes, for a chunk that asks (rawPartials)
     bool done;
+    // Handed back by a lost device that may have written part of it into
+    // the program's own arrays (an imported `simd:` block): not run again.
+    bool dirty;
     ParWorker* worker;  // who took it
     i64 usTaken;        // on a GPU worker: from take() to completion, the daemon's "kernel time" for a tile
     // Its sliced inputs' content hashes (ParWire.hash64), one per sliced
@@ -26,6 +29,19 @@ class ParTile : Object
     u64 sliceHash[32];
     u32 sliceCount;
     bool hashed;
+    }
+
+void _xt_exit(i32 code);
+
+// A GPU was lost while its run was writing a program's array in place (an
+// imported `simd:` block). What it wrote before the loss is unknown, and
+// running the work again on the CPU is wrong for a body that reads what it
+// writes, so the program stops with the device named.
+void parLostInPlace(String* device)
+    {
+    Log.error("par: the GPU %s was lost while it was writing an array in place; the array's contents are unknown, so the program stops",
+              device.cString());
+    _xt_exit((i32)1);
     }
 
 class ParWorker : Object
