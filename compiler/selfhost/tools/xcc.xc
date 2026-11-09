@@ -1469,7 +1469,7 @@ void emitApkPackage(DriverOptions* d, String* prog)
             Stdio.printf("xcc: apk: cannot read the payload the NDK linked\n");
             Process.exit((i32)1); return;
         }
-        packageApk(d, name, soname, numbersOfData(sb));
+        packageApk(d, name, soname, sb);
         if (!d.fe().verbose()) External.cleanup();
         return;
     }
@@ -3754,15 +3754,12 @@ void emitXt6502(DriverOptions* d, IRModule* mod)
     u32 entry = (u32)$2000;
     if (a.segments().count() > (u32)0)
         entry = ((XaSegment*)a.segments().get((u32)0)).origin();
-    Array* img = a.writeBankedXex(entry);
-    if (img == (Array*)0) {
+    Data* img = a.writeBankedXex(entry);
+    if (img == (Data*)0) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
         Process.exit((i32)1); return;
     }
-    Data* img8 = Data.withCapacity((u32)0);
-    for (u32 k = (u32)0; k < img.count(); k = k + (u32)1)
-        img8.appendByte((u8)((Number*)img.get(k)).asU32());
-    if (!Files.writeData(d.fe().output(), img8)) {
+    if (!Files.writeData(d.fe().output(), img)) {
         Stdio.printf("xcc: error: cannot write '%s'\n", d.fe().output().cString());
         Process.exit((i32)1);
     }
@@ -3813,7 +3810,7 @@ u32 segBytesIn(Array* segs, u32 lo, u32 hi, u32 bwStart, u32 bwEnd)
         XaSegment* sg = (XaSegment*)segs.get(k);
         if (sg.isCloaked() || (sg.origin() >= bwStart && sg.origin() <= bwEnd)) continue;
         u32 a = sg.origin();
-        u32 b = a + sg.data().count();          // [a, b)
+        u32 b = a + sg.data().length();          // [a, b)
         if (a < lo) a = lo;
         if (b > hi + (u32)1) b = hi + (u32)1;
         if (b > a) n = n + (b - a);
@@ -3908,9 +3905,9 @@ String* usageReport6502(Array* segs, Layout* l)
             if (sg.isCloaked() || sg.origin() < bwStart || sg.origin() > bwEnd) continue;
             u32 page = sg.bankNumber() >= (i32)0 ? (u32)sg.bankNumber() : counter;
             counter = counter + (u32)1;
-            if (sg.data().count() == (u32)0) continue;
+            if (sg.data().length() == (u32)0) continue;
             pages.add((Object*)Number.withU32(page));
-            sizes.add((Object*)Number.withU32(sg.data().count()));
+            sizes.add((Object*)Number.withU32(sg.data().length()));
             if (page > highest) highest = page;
         }
         u32 winSize = bwEnd - bwStart + (u32)1;

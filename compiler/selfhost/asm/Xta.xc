@@ -176,7 +176,7 @@ class XaLine
 class XaSegment
     {
     u32 _origin;
-    Array* _data; // Number@ per byte
+    Data* _data; // the segment's bytes
     // A `.bank <id>` segment carries an EXPLICIT bank number, allocated so it
     // cannot clash with the encounter-order user banks. -1 means "use the
     // running counter" — a plain `.org` into the window.
@@ -188,7 +188,7 @@ class XaSegment
     void init(void)
         {
         _origin = (u32)0;
-        _data = new Array();
+        _data = new Data();
         _bankNumber = (i32)-1;
         _isCloaked = false;
         _cloakedBankIndex = (i32)-1;
@@ -230,7 +230,7 @@ class XaSegment
         {
         return _origin;
         }
-    Array* data(void)
+    Data* data(void)
         {
         return _data;
         }
@@ -2080,7 +2080,7 @@ class Xta
                 {
                 u32 newPc = (u32)evaluate(pl.operand()) & (u32)$FFFF;
                 bool forward = cur != (XaSegment*)0 && newPc >= _pc;
-                bool sameSlot = cur != (XaSegment*)0 && newPc == cur.origin() && cur.data().count() == (u32)0;
+                bool sameSlot = cur != (XaSegment*)0 && newPc == cur.origin() && cur.data().length() == (u32)0;
                 // A spill-rewritten `.org` moves from one declared region into
                 // the next. The addresses can be a handful of bytes apart, so
                 // the padding rule below would otherwise zero-fill across the
@@ -2097,7 +2097,7 @@ class Xta
                     {
                     while (_pc < newPc)
                         {
-                        cur.data().add((Object*)Number.withU32((u32)0));
+                        cur.data().appendByte((u8)((u32)0));
                         _pc = _pc + (u32)1;
                         }
                     continue;
@@ -2158,7 +2158,7 @@ class Xta
                 cur = ensureSegment(cur);
                 Array* vs = pl.dataValues();
                 for (u32 k = (u32)0; k < vs.count(); k = k + (u32)1)
-                    cur.data().add((Object*)Number.withU32((u32)evaluate((String*)vs.get(k)) & (u32)$FF));
+                    cur.data().appendByte((u8)((u32)evaluate((String*)vs.get(k)) & (u32)$FF));
                 _pc = (_pc + pl.byteSize()) & (u32)$FFFF;
                 continue;
                 }
@@ -2169,8 +2169,8 @@ class Xta
                 for (u32 k = (u32)0; k < vs.count(); k = k + (u32)1)
                     {
                     u32 v = (u32)evaluate((String*)vs.get(k));
-                    cur.data().add((Object*)Number.withU32(v & (u32)$FF));
-                    cur.data().add((Object*)Number.withU32((v >> (u32)8) & (u32)$FF));
+                    cur.data().appendByte((u8)(v & (u32)$FF));
+                    cur.data().appendByte((u8)((v >> (u32)8) & (u32)$FF));
                     }
                 _pc = (_pc + pl.byteSize()) & (u32)$FFFF;
                 continue;
@@ -2183,7 +2183,7 @@ class Xta
                     {
                     u32 v = (u32)evaluate((String*)vs.get(k));
                     for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
-                        cur.data().add((Object*)Number.withU32((v >> ((u32)8 * b)) & (u32)$FF));
+                        cur.data().appendByte((u8)((v >> ((u32)8 * b)) & (u32)$FF));
                     }
                 _pc = (_pc + pl.byteSize()) & (u32)$FFFF;
                 continue;
@@ -2193,8 +2193,8 @@ class Xta
                 cur = ensureSegment(cur);
                 String* v = pl.operand();
                 for (u32 k = (u32)0; k < v.byteLength(); k = k + (u32)1)
-                    cur.data().add((Object*)Number.withU32((u32)v.byteAt(k)));
-                cur.data().add((Object*)Number.withU32((u32)0));
+                    cur.data().appendByte((u8)((u32)v.byteAt(k)));
+                cur.data().appendByte((u8)((u32)0));
                 _pc = (_pc + pl.byteSize()) & (u32)$FFFF;
                 continue;
                 }
@@ -2202,7 +2202,7 @@ class Xta
                 {
                 cur = ensureSegment(cur);
                 for (u32 k = (u32)0; k < pl.byteSize(); k = k + (u32)1)
-                    cur.data().add((Object*)Number.withU32((u32)0));
+                    cur.data().appendByte((u8)((u32)0));
                 _pc = (_pc + pl.byteSize()) & (u32)$FFFF;
                 continue;
                 }
@@ -2280,7 +2280,7 @@ class Xta
             err(m);
             return;
             }
-        seg.data().add((Object*)Number.withU32((u32)opcode));
+        seg.data().appendByte((u8)((u32)opcode));
         if (pl.byteSize() == (u32)1)
             return;
 
@@ -2330,7 +2330,7 @@ class Xta
                 m.append(XaText.hex((u64)value, (u32)4));
                 err(m);
                 }
-            seg.data().add((Object*)Number.withU32((u32)offset & (u32)$FF));
+            seg.data().appendByte((u8)((u32)offset & (u32)$FF));
             return;
             }
         if (pl.mode() == (u32)AM_SPRELATIVE || pl.mode() == (u32)AM_STACKADJUST || pl.mode() == (u32)AM_SPINDIRECTINDEXEDY || pl.mode() == (u32)AM_SPINDEXEDX)
@@ -2350,7 +2350,7 @@ class Xta
                 m.appendCString("); xt SP-relative addressing only reaches ±128 bytes");
                 err(m);
                 }
-            seg.data().add((Object*)Number.withU32((u32)value & (u32)$FF));
+            seg.data().appendByte((u8)((u32)value & (u32)$FF));
             return;
             }
         if (pl.byteSize() == (u32)2 && pl.mode() == (u32)AM_IMMEDIATE && (pl.mnemonic().equals(String.withCString("PSH")) || pl.mnemonic().equals(String.withCString("PLL"))))
@@ -2366,7 +2366,7 @@ class Xta
                 m.appendCString(" — immediate out of range (0..255); larger frames must chain PSH/PLL pairs (see STACK-ABI.md §6.1)");
                 err(m);
                 }
-            seg.data().add((Object*)Number.withU32((u32)value & (u32)$FF));
+            seg.data().appendByte((u8)((u32)value & (u32)$FF));
             return;
             }
         if (pl.byteSize() == (u32)2)
@@ -2386,13 +2386,13 @@ class Xta
                 m.appendCString(" which holds unrelated bytes. Likely a codegen-side ZP-pressure issue; if this code path executes the program will misbehave.");
                 warn(m);
                 }
-            seg.data().add((Object*)Number.withU32((u32)value & (u32)$FF));
+            seg.data().appendByte((u8)((u32)value & (u32)$FF));
             return;
             }
         if (pl.byteSize() == (u32)3)
             {
-            seg.data().add((Object*)Number.withU32((u32)value & (u32)$FF));
-            seg.data().add((Object*)Number.withU32(((u32)value >> (u32)8) & (u32)$FF));
+            seg.data().appendByte((u8)((u32)value & (u32)$FF));
+            seg.data().appendByte((u8)(((u32)value >> (u32)8) & (u32)$FF));
             }
         }
 
@@ -3026,12 +3026,12 @@ class Xta
     // and finally a RUNAD block writing the entry address to $02E0 — which the
     // loader treats as "jump here when everything is in". Each writer returns
     // the image, or null after reporting why it cannot be written.
-    static void addByte(Array* xex, u32 v)
+    static void addByte(Data* xex, u32 v)
         {
-        xex.add((Object*)Number.withU32(v & (u32)$FF));
+        xex.appendByte((u8)(v & (u32)$FF));
         }
 
-    static void addBlock(Array* xex, u32 start, u32 end)
+    static void addBlock(Data* xex, u32 start, u32 end)
         {
         Xta.addByte(xex, start);
         Xta.addByte(xex, start >> (u32)8);
@@ -3039,13 +3039,13 @@ class Xta
         Xta.addByte(xex, end >> (u32)8);
         }
 
-    static void addAll(Array* dst, Array* src)
+    static void addAll(Data* dst, Data* src)
         {
-        for (u32 i = (u32)0; i < src.count(); i = i + (u32)1)
-            dst.add(src.get(i));
+        for (u32 i = (u32)0; i < src.length(); i = i + (u32)1)
+            dst.appendByte(src.byteAt(i));
         }
 
-    static void addRunad(Array* xex, u32 entry)
+    static void addRunad(Data* xex, u32 entry)
         {
         Xta.addByte(xex, (u32)$E0);
         Xta.addByte(xex, (u32)$02);
@@ -3056,7 +3056,7 @@ class Xta
         }
 
     // INITAD ($02E2) pointing at the cassette buffer.
-    static void addInitad(Array* xex)
+    static void addInitad(Data* xex)
         {
         Xta.addByte(xex, (u32)$E2);
         Xta.addByte(xex, (u32)$02);
@@ -3075,10 +3075,10 @@ class Xta
     // mainPieces, the bytes inside to shadowPieces, each as (address, bytes).
     void splitMainSegment(XaSegment* seg, Array* mainPieces, Array* shadowPieces)
         {
-        Array* data = seg.data();
+        Data* data = seg.data();
         u32 segStart = seg.origin();
-        u32 segEnd = segStart + data.count() - (u32)1;
-        if (_shadowRanges == (Array*)0 || _shadowRanges.count() == (u32)0 || _shadowStageBase == (u32)0)
+        u32 segEnd = segStart + data.length() - (u32)1;
+        if (_shadowRanges == (Data*)0 || _shadowRanges.count() == (u32)0 || _shadowStageBase == (u32)0)
             {
             mainPieces.add((Object*)Number.withU32(segStart));
             mainPieces.add((Object*)data);
@@ -3128,11 +3128,11 @@ class Xta
             }
         }
 
-    static Array* slice(Array* a, u32 from, u32 len)
+    static Data* slice(Data* a, u32 from, u32 len)
         {
-        Array* out = new Array();
+        Data* out = new Data();
         for (u32 i = (u32)0; i < len; i = i + (u32)1)
-            out.add(a.get(from + i));
+            out.appendByte(a.byteAt(from + i));
         return out;
         }
 
@@ -3140,7 +3140,7 @@ class Xta
     // then a table of (src, dst, len) entries ending in six zeros, then the
     // bytes. INITAD points at the stub, so the loader copies them into the RAM
     // under the ROM as soon as the segment lands.
-    bool appendShadowStaging(Array* xex, Array* shadowPieces)
+    bool appendShadowStaging(Data* xex, Array* shadowPieces)
         {
         u32 stageBase = _shadowStageBase;
         u32 numEntries = shadowPieces.count() / (u32)2;
@@ -3149,7 +3149,7 @@ class Xta
         u32 dataStart = stubSize + tableSize;
         u32 totalPayload = (u32)0;
         for (u32 i = (u32)0; i < numEntries; i = i + (u32)1)
-            totalPayload = totalPayload + ((Array*)shadowPieces.get(i * (u32)2 + (u32)1)).count();
+            totalPayload = totalPayload + ((Data*)shadowPieces.get(i * (u32)2 + (u32)1)).length();
         u32 stageEnd32 = stageBase + dataStart + totalPayload;
         if (stageEnd32 > (u32)$8000)
             {
@@ -3163,13 +3163,13 @@ class Xta
             Xta.report(m);
             }
 
-        Array* table = new Array();
+        Data* table = new Data();
         u32 dataOffset = (u32)0;
         for (u32 i = (u32)0; i < numEntries; i = i + (u32)1)
             {
             u32 target = ((Number*)shadowPieces.get(i * (u32)2)).asU32();
-            Array* d = (Array*)shadowPieces.get(i * (u32)2 + (u32)1);
-            u32 len = d.count() & (u32)$FFFF;
+            Data* d = (Data*)shadowPieces.get(i * (u32)2 + (u32)1);
+            u32 len = d.length() & (u32)$FFFF;
             u32 src32 = stageBase + dataStart + dataOffset;
             if (src32 > (u32)$FFFF)
                 {
@@ -3185,7 +3185,7 @@ class Xta
             Xta.addByte(table, target >> (u32)8);
             Xta.addByte(table, len);
             Xta.addByte(table, len >> (u32)8);
-            dataOffset = dataOffset + d.count();
+            dataOffset = dataOffset + d.length();
             }
         for (u32 k = (u32)0; k < (u32)6; k = k + (u32)1)
             Xta.addByte(table, (u32)0);
@@ -3194,7 +3194,7 @@ class Xta
         u32 nextEntry = (stageBase + (u32)$11) & (u32)$FFFF;
         u32 tlo = tableAddr & (u32)$FF;
         u32 thi = tableAddr >> (u32)8;
-        Array* stub = new Array();
+        Data* stub = new Data();
         Xta.addHex(stub, "08 78 A9 00 8D 0E D4 AD 01 D3 29 FE 8D 01 D3 A2 00");
         for (u32 k = (u32)0; k < (u32)6; k = k + (u32)1)
             {
@@ -3209,10 +3209,10 @@ class Xta
         Xta.addByte(stub, nextEntry);
         Xta.addByte(stub, nextEntry >> (u32)8);
         Xta.addHex(stub, "AD 01 D3 09 01 8D 01 D3 A9 40 8D 0E D4 28 60");
-        if (stub.count() != stubSize)
+        if (stub.length() != stubSize)
             {
             String* m = String.withCString("xcc-as: internal: shadow copy stub size mismatch (got ");
-            m.append(String.withU32(stub.count()));
+            m.append(String.withU32(stub.length()));
             m.appendCString(", expected ");
             m.append(String.withU32(stubSize));
             m.appendCString(")\n");
@@ -3220,18 +3220,18 @@ class Xta
             return false;
             }
 
-        Array* payload = new Array();
+        Data* payload = new Data();
         Xta.addAll(payload, stub);
         Xta.addAll(payload, table);
         for (u32 i = (u32)0; i < numEntries; i = i + (u32)1)
-            Xta.addAll(payload, (Array*)shadowPieces.get(i * (u32)2 + (u32)1));
-        u32 stageEnd = stageBase + payload.count() - (u32)1;
+            Xta.addAll(payload, (Data*)shadowPieces.get(i * (u32)2 + (u32)1));
+        u32 stageEnd = stageBase + payload.length() - (u32)1;
         if (stageEnd > (u32)$FFFF)
             {
             String* m = String.withCString("xcc-as: shadow staging payload at $");
             m.append(XaText.hex4(stageBase));
             m.appendCString(" is ");
-            m.append(String.withU32(payload.count()));
+            m.append(String.withU32(payload.length()));
             m.appendCString(" bytes, runs past $FFFF. Reduce shadow-region code size or pick a lower stage address.\n");
             Xta.report(m);
             return false;
@@ -3248,7 +3248,7 @@ class Xta
         }
 
     // Bytes spelled as hex pairs separated by spaces: "AD 01 D3".
-    static void addHex(Array* a, string text)
+    static void addHex(Data* a, string text)
         {
         String* s = String.withCString(text);
         u32 i = (u32)0;
@@ -3258,7 +3258,7 @@ class Xta
             i32 lo = XaText.hexDigit(s.byteAt(i + (u32)1));
             if (hi >= (i32)0 && lo >= (i32)0)
                 {
-                a.add((Object*)Number.withU32((u32)(hi * (i32)16 + lo)));
+                a.appendByte((u8)((u32)(hi * (i32)16 + lo)));
                 i = i + (u32)2;
                 continue;
                 }
@@ -3266,9 +3266,9 @@ class Xta
             }
         }
 
-    Array* writeXex(u32 entry)
+    Data* writeXex(u32 entry)
         {
-        Array* xex = new Array();
+        Data* xex = new Data();
         Xta.addByte(xex, (u32)$FF);
         Xta.addByte(xex, (u32)$FF);
         Array* mainPieces = new Array();
@@ -3276,32 +3276,32 @@ class Xta
         for (u32 i = (u32)0; i < _segments.count(); i = i + (u32)1)
             {
             XaSegment* seg = (XaSegment*)_segments.get(i);
-            if (seg.data().count() == (u32)0)
+            if (seg.data().length() == (u32)0)
                 continue;
             splitMainSegment(seg, mainPieces, shadowPieces);
             }
         for (u32 i = (u32)0; i + (u32)1 < mainPieces.count(); i = i + (u32)2)
             {
             u32 start = ((Number*)mainPieces.get(i)).asU32();
-            Array* d = (Array*)mainPieces.get(i + (u32)1);
-            Xta.addBlock(xex, start, start + d.count() - (u32)1);
+            Data* d = (Data*)mainPieces.get(i + (u32)1);
+            Xta.addBlock(xex, start, start + d.length() - (u32)1);
             Xta.addAll(xex, d);
             }
         if (shadowPieces.count() > (u32)0 && !appendShadowStaging(xex, shadowPieces))
-            return (Array*)0;
+            return (Data*)0;
         Xta.addRunad(xex, entry);
         return xex;
         }
 
     // A C64 PRG: the load address, then every segment flattened in address
     // order with the gaps zero-filled.
-    Array* writePrg(void)
+    Data* writePrg(void)
         {
         Array* sorted = new Array();
         for (u32 i = (u32)0; i < _segments.count(); i = i + (u32)1)
             {
             XaSegment* seg = (XaSegment*)_segments.get(i);
-            if (seg.data().count() == (u32)0)
+            if (seg.data().length() == (u32)0)
                 continue;
             u32 at = sorted.count();
             while (at > (u32)0 && ((XaSegment*)sorted.get(at - (u32)1)).origin() > seg.origin())
@@ -3309,10 +3309,10 @@ class Xta
             sorted.insert(at, (Object*)seg);
             }
         if (sorted.count() == (u32)0)
-            return (Array*)0;
+            return (Data*)0;
         u32 loadAddr = ((XaSegment*)sorted.get((u32)0)).origin();
         u32 cursor = loadAddr;
-        Array* prg = new Array();
+        Data* prg = new Data();
         Xta.addByte(prg, loadAddr);
         Xta.addByte(prg, loadAddr >> (u32)8);
         for (u32 i = (u32)0; i < sorted.count(); i = i + (u32)1)
@@ -3324,7 +3324,7 @@ class Xta
                 cursor = cursor + (u32)1;
                 }
             Xta.addAll(prg, seg.data());
-            cursor = (seg.origin() + seg.data().count()) & (u32)$FFFF;
+            cursor = (seg.origin() + seg.data().length()) & (u32)$FFFF;
             }
         return prg;
         }
@@ -3368,7 +3368,7 @@ class Xta
     // `LDA #v / STA <reg>` — zero page when the register fits, absolute
     // otherwise, because a layout may put the selector outside ZP (xt does:
     // $D5C0 and $D5C1).
-    static void emitBankRegStore(Array* out, u32 addr)
+    static void emitBankRegStore(Data* out, u32 addr)
         {
         if (addr <= (u32)$FF)
             {
@@ -3383,10 +3383,10 @@ class Xta
 
     // Load a stub at the cassette buffer, point INITAD at it, and load it
     // again so it fires.
-    static void addFiredStub(Array* xex, Array* stub)
+    static void addFiredStub(Data* xex, Data* stub)
         {
         u32 stubAddr = (u32)$03FD;
-        u32 stubEnd = stubAddr + stub.count() - (u32)1;
+        u32 stubEnd = stubAddr + stub.length() - (u32)1;
         Xta.addBlock(xex, stubAddr, stubEnd);
         Xta.addAll(xex, stub);
         Xta.addInitad(xex);
@@ -3394,9 +3394,9 @@ class Xta
         Xta.addAll(xex, stub);
         }
 
-    Array* writeBankedXex(u32 entry)
+    Data* writeBankedXex(u32 entry)
         {
-        Array* xex = new Array();
+        Data* xex = new Data();
         Xta.addByte(xex, (u32)$FF);
         Xta.addByte(xex, (u32)$FF);
 
@@ -3429,7 +3429,7 @@ class Xta
         for (u32 i = (u32)0; i < mainSegs.count(); i = i + (u32)1)
             {
             XaSegment* seg = (XaSegment*)mainSegs.get(i);
-            if (seg.data().count() == (u32)0)
+            if (seg.data().length() == (u32)0)
                 continue;
             splitMainSegment(seg, mainPieces, shadowPieces);
             }
@@ -3439,11 +3439,11 @@ class Xta
             // Banking off first (a 9-byte stub at the cassette buffer), then
             // the staging segment, a re-load that fires its copy stub, and
             // INITAD put back on the harmless banking-off stub.
-            Array* off = new Array();
+            Data* off = new Data();
             Xta.addHex(off, "AD 01 D3 09 10 8D 01 D3 60");
             Xta.addFiredStub(xex, off);
             if (!appendShadowStaging(xex, shadowPieces))
-                return (Array*)0;
+                return (Data*)0;
             Xta.addBlock(xex, (u32)$03FD, (u32)$0405);
             Xta.addAll(xex, off);
             Xta.addInitad(xex);
@@ -3477,7 +3477,7 @@ class Xta
         if (bankedSegs.count() > (u32)0 && _codeBankReg == (u32)0)
             {
             Xta.report(String.withCString("xcc-as: banked output requires a code bank register from the layout (registers = <code>, <data>); none set — there is no $82 default\n"));
-            return (Array*)0;
+            return (Data*)0;
             }
         bool hasRegCWindow = _regCWindowStart != (u32)0 && _regCBankRegLo != (u32)0;
 
@@ -3494,7 +3494,7 @@ class Xta
             // leave the `.org` behind. It emits no bytes, but it still BURNS a
             // page number, so later classes stay on the bank their call sites
             // were compiled against.
-            if (bseg.data().count() == (u32)0)
+            if (bseg.data().length() == (u32)0)
                 {
                 if (isRegCSeg)
                     regCBankPage = (regCBankPage + (u32)1) & (u32)$FFFF;
@@ -3511,17 +3511,17 @@ class Xta
                 }
 
             u32 bankPageSz = bwEnd - bwStart + (u32)1;
-            if (bseg.data().count() > bankPageSz)
+            if (bseg.data().length() > bankPageSz)
                 {
                 String* m = String.withCString("xcc-as: banked segment at $");
                 m.append(XaText.hex4(bseg.origin()));
                 m.appendCString(" is ");
-                m.append(String.withU32(bseg.data().count()));
+                m.append(String.withU32(bseg.data().length()));
                 m.appendCString(" bytes — exceeds the ");
                 m.append(String.withU32(bankPageSz));
                 m.appendCString("B bank page size\n");
                 Xta.report(m);
-                return (Array*)0;
+                return (Data*)0;
                 }
             if (_hasSplitBanking)
                 {
@@ -3530,12 +3530,12 @@ class Xta
                 if (isDataSeg)
                     {
                     u32 half = _dataWindowEnd - _dataWindowStart + (u32)1;
-                    if (bseg.data().count() > half)
+                    if (bseg.data().length() > half)
                         {
                         String* m = String.withCString("xcc-as: banked data segment at $");
                         m.append(XaText.hex4(bseg.origin()));
                         m.appendCString(" is ");
-                        m.append(String.withU32(bseg.data().count()));
+                        m.append(String.withU32(bseg.data().length()));
                         m.appendCString(" bytes — exceeds the ");
                         m.append(String.withU32(half));
                         m.appendCString("B split-bank data half ($");
@@ -3544,18 +3544,18 @@ class Xta
                         m.append(XaText.hex4(_dataWindowEnd));
                         m.appendCString("). Code likely overflowed the code half and bled into the data window; rebuild with -O3 (smaller main) or split the function across banks.\n");
                         Xta.report(m);
-                        return (Array*)0;
+                        return (Data*)0;
                         }
                     }
                 else if (!isRegCSeg)
                     {
                     u32 half = codeEnd - codeStart + (u32)1;
-                    if (bseg.data().count() > half)
+                    if (bseg.data().length() > half)
                         {
                         String* m = String.withCString("xcc-as: banked code segment at $");
                         m.append(XaText.hex4(bseg.origin()));
                         m.appendCString(" is ");
-                        m.append(String.withU32(bseg.data().count()));
+                        m.append(String.withU32(bseg.data().length()));
                         m.appendCString(" bytes — exceeds the ");
                         m.append(String.withU32(half));
                         m.appendCString("B split-bank code half ($");
@@ -3564,7 +3564,7 @@ class Xta
                         m.append(XaText.hex4(codeEnd));
                         m.appendCString("). The packer's size estimate drifted from xta's actual emit (often a long-branch rewrite inside a function); the segment overflows into the $83-selected data window where the per-bank XEX preload would put unrelated bytes at runtime, and JMP/JSR/branch into the overflow BRKs.\n");
                         Xta.report(m);
-                        return (Array*)0;
+                        return (Data*)0;
                         }
                     }
                 }
@@ -3577,7 +3577,7 @@ class Xta
                                      : (_hasSplitBanking ? (isDataSeg ? dataBankPage : codeBankPage)
                                                          : effBankPage);
 
-            Array* stub = new Array();
+            Data* stub = new Data();
             if (isRegCSeg)
                 {
                 Xta.addByte(stub, (u32)$A9);
@@ -3623,13 +3623,13 @@ class Xta
             Xta.addFiredStub(xex, stub);
 
             u32 loadStart = bseg.origin();
-            u32 loadEnd = (loadStart + bseg.data().count() - (u32)1) & (u32)$FFFF;
+            u32 loadEnd = (loadStart + bseg.data().length() - (u32)1) & (u32)$FFFF;
             Xta.addBlock(xex, loadStart, loadEnd);
             Xta.addAll(xex, bseg.data());
 
             // Reset the selector before whatever loads next, so a later
             // banked segment's stub does not run against a stale bank.
-            Array* reset = new Array();
+            Data* reset = new Data();
             if (isRegCSeg)
                 {
                 Xta.addByte(reset, (u32)$A9);
@@ -3680,14 +3680,14 @@ class Xta
         for (u32 i = (u32)0; i + (u32)1 < mainPieces.count(); i = i + (u32)2)
             {
             u32 start = ((Number*)mainPieces.get(i)).asU32();
-            Array* d = (Array*)mainPieces.get(i + (u32)1);
-            u32 end32 = start + d.count() - (u32)1;
+            Data* d = (Data*)mainPieces.get(i + (u32)1);
+            u32 end32 = start + d.length() - (u32)1;
             if (start >= mrStart && start <= mrEnd && end32 > mrEnd)
                 {
                 String* m = String.withCString("xcc-as: main code segment at $");
                 m.append(XaText.hex4(start));
                 m.appendCString(" is ");
-                m.append(String.withU32(d.count()));
+                m.append(String.withU32(d.length()));
                 m.appendCString(" bytes — overflows the ");
                 m.append(String.withU32(mrEnd - mrStart + (u32)1));
                 m.appendCString("B main region ($");
@@ -3698,7 +3698,7 @@ class Xta
                 m.append(String.withU32(end32 - mrEnd));
                 m.appendCString(" bytes. The program will load under xts (flat 64 KB) but crash on real hardware.\n");
                 Xta.report(m);
-                return (Array*)0;
+                return (Data*)0;
                 }
             Xta.addBlock(xex, start, end32);
             Xta.addAll(xex, d);

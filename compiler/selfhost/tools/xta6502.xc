@@ -221,14 +221,6 @@ bool parseDataWindow(String* v, u32* lo, u32* hi)
     return true;
     }
 
-Data* toData(Array* img)
-    {
-    Data* d = Data.withCapacity(img.count());
-    for (u32 k = (u32)0; k < img.count(); k = k + (u32)1)
-        d.appendByte((u8)((Number*)img.get(k)).asU32());
-    return d;
-    }
-
 void main(void)
     {
     Array* inputFiles = new Array();
@@ -522,14 +514,14 @@ void main(void)
 
     bool usePRG = (formatStr != (String*)0 && formatStr.equals(String.withCString("prg")))
                   || (formatStr == (String*)0 && XaPath.extension(outputPath).lowercased().equals(String.withCString("prg")));
-    Array* img = (Array*)0;
+    Data* img = (Data*)0;
     if (usePRG)
         img = a.writePrg();
     else if (banked)
         img = a.writeBankedXex(entry);
     else
         img = a.writeXex(entry);
-    if (img == (Array*)0 || outputPath == (String*)0 || !Files.writeData(outputPath, toData(img)))
+    if (img == (Data*)0 || outputPath == (String*)0 || !Files.writeData(outputPath, img))
         {
         String* m = String.withCString("xcc-as: error: cannot write '");
         m.append(outputPath == (String*)0 ? String.withCString("(null)") : outputPath);
@@ -544,7 +536,7 @@ void main(void)
 
     u32 total = (u32)0;
     for (u32 k = (u32)0; k < segs.count(); k = k + (u32)1)
-        total = total + ((XaSegment*)segs.get(k)).data().count();
+        total = total + ((XaSegment*)segs.get(k)).data().length();
     String* m = String.withCString("xcc-as: assembled '");
     m.append(firstInput);
     m.appendCString("' -> '");
