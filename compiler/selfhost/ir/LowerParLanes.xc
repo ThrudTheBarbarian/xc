@@ -281,9 +281,9 @@
             String* gt = gs != (IRSymbol*)0 ? gs.dataType() : (String*)0;
             IRLayout* gl = self.mslLayoutOf(gt);
             String* et = gl != (IRLayout*)0 ? gl.typeAt((u32)0) : gt;
-            // An array of structs of one number type: that number's
-            // (parFlatStructGlobals).
-            String* fe = self.parFlatField(et);
+            // An array of structs: the word it is held in
+            // (parWordStructs).
+            String* fe = self.parWordOf(et);
             if (fe != (String*)0)
                 et = fe;
             String* en = self.mslScalar(et);

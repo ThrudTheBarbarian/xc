@@ -3,6 +3,8 @@
 @class XTIRModule;
 @class XTClassDeclNode;
 @class XTDiagnosticEngine;
+@class XTIRType;
+@class XTIRFunction;
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -29,5 +31,15 @@ NS_ASSUME_NONNULL_BEGIN
         diagnostics:(XTDiagnosticEngine*)diag;
 
 @end
+
+// The word a kernel holds an array of structs of type t in: the struct's one
+// number type when its fields are all that type, packed; else an unsigned
+// word as wide as its widest field, up to 32 bits. nil when a field is not a
+// number or t is not a struct.
+XTIRType* _Nullable XTParWordOf(XTIRType* _Nullable t);
+
+// A kernel copy's arrays of structs (a global's, or a captured pointer's) as
+// arrays of those words, its fields read and written in words.
+void XTParWordStructs(XTIRFunction* f);
 
 NS_ASSUME_NONNULL_END

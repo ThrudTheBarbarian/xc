@@ -260,7 +260,40 @@
             pl.append(pb); pl.appendCString(";\n");
             return pl;
             }
-        if (ptxNarrow(rt) || self.ptxIs(rt, "Bool")) return (String*)0; // first cut: no 8/16-bit or bool arithmetic
+        if (ptxNarrow(rt))
+            {
+            // An 8- or 16-bit value sits in its 32-bit register extended by
+            // its own signedness: the operation in 32 bits, and its result
+            // put back in that form. A division, remainder or right shift
+            // whose signedness is not the type's stays refused.
+            String* nop = ip.op();
+            bool sg = ptxSigned(rt);
+            bool uop = nop.equals(self.ptxS("UDiv")) || nop.equals(self.ptxS("URem")) || nop.equals(self.ptxS("LShr"));
+            bool sop = nop.equals(self.ptxS("SDiv")) || nop.equals(self.ptxS("SRem")) || nop.equals(self.ptxS("AShr"));
+            if ((uop && sg) || (sop && !sg)) return (String*)0;
+            IROperand* nb = (IROperand*)ip.ops().get((u32)1);
+            if (nb.kind() == (u8)OPK_USE && ptxWide(mslTypeOf(nb))) return (String*)0;
+            String* na = ptxOp((IROperand*)ip.ops().get((u32)0), rt);
+            String* nbs = ptxOp(nb, rt);
+            if (na == (String*)0 || nbs == (String*)0) return (String*)0;
+            String* n32 = self.ptxS(sg ? "s32" : "u32");
+            String* nl = (String*)0;
+            if (nop.equals(self.ptxS("Add"))) nl = ptxCat("add.", n32);
+            else if (nop.equals(self.ptxS("Sub"))) nl = ptxCat("sub.", n32);
+            else if (nop.equals(self.ptxS("Mul"))) nl = ptxCat("mul.lo.", n32);
+            else if (nop.equals(self.ptxS("UDiv")) || nop.equals(self.ptxS("SDiv"))) nl = ptxCat("div.", n32);
+            else if (nop.equals(self.ptxS("URem")) || nop.equals(self.ptxS("SRem"))) nl = ptxCat("rem.", n32);
+            else if (nop.equals(self.ptxS("And"))) nl = self.ptxS("and.b32");
+            else if (nop.equals(self.ptxS("Or"))) nl = self.ptxS("or.b32");
+            else if (nop.equals(self.ptxS("Xor"))) nl = self.ptxS("xor.b32");
+            else if (nop.equals(self.ptxS("Shl"))) nl = self.ptxS("shl.b32");
+            else if (nop.equals(self.ptxS("LShr")) || nop.equals(self.ptxS("AShr"))) nl = ptxCat("shr.", n32);
+            if (nl == (String*)0) return (String*)0;
+            String* ns = ptx3(nl, r, na, nbs);
+            ns.append(ptxNarrowFix(rt, r));
+            return ns;
+            }
+        if (self.ptxIs(rt, "Bool")) return (String*)0; // no bool arithmetic
         String* a = ptxOp((IROperand*)ip.ops().get((u32)0), rt);
         String* b = ptxOp((IROperand*)ip.ops().get((u32)1), rt);
         String* sfx = ptxArith(rt);
@@ -313,6 +346,23 @@
         IROperand* o0 = (IROperand*)ip.ops().get((u32)0);
         IROperand* o1 = (IROperand*)ip.ops().get((u32)1);
         String* t = o0.kind() == (u8)OPK_USE ? self.mslTypeOf(o0) : self.mslTypeOf(o1);
+        // Two predicates are equal when their exclusive or is false; one
+        // against a constant is itself or its negation.
+        if (t != (String*)0 && self.ptxIs(t, "Bool") && ip.op().equals(self.ptxS("ICmp"))
+            && (ip.pred().equals(self.ptxS("EQ")) || ip.pred().equals(self.ptxS("NE"))))
+            {
+            bool eq = ip.pred().equals(self.ptxS("EQ"));
+            if (o0.kind() == (u8)OPK_USE && o1.kind() == (u8)OPK_USE)
+                {
+                String* x = ptx3(ptxS("xor.pred"), r, ptxReg(o0.val()), ptxReg(o1.val()));
+                if (eq) x.append(ptx2(ptxS("not.pred"), r, r));
+                return x;
+                }
+            IROperand* pv = o0.kind() == (u8)OPK_USE ? o0 : o1;
+            IROperand* pk = o0.kind() == (u8)OPK_USE ? o1 : o0;
+            if (pv.kind() != (u8)OPK_USE || pk.kind() != (u8)OPK_IMMI) return (String*)0;
+            return ptx2(ptxS((pk.imm() != (i64)0) == eq ? "mov.pred" : "not.pred"), r, ptxReg(pv.val()));
+            }
         // An 8- or 16-bit value sits in its 32-bit register extended by its
         // own signedness, so it compares as a 32-bit one.
         if (t == (String*)0 || self.ptxIs(t, "Bool")) return (String*)0;
@@ -1384,7 +1434,7 @@
             String* gt = gs != (IRSymbol*)0 ? gs.dataType() : (String*)0;
             IRLayout* gl = self.mslLayoutOf(gt);
             String* et = gl != (IRLayout*)0 ? gl.typeAt((u32)0) : gt;
-            String* fe = self.parFlatField(et);
+            String* fe = self.parWordOf(et);
             if (fe != (String*)0) et = fe;
             if (ptxMem(et) == (String*)0) return (String*)0;
             meta.appendCString(" glob="); meta.append(gn); meta.appendCString(":"); meta.append(String.withU32(ptxSize(et)));
