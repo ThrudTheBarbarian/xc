@@ -10002,6 +10002,13 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
     // references resolves at link time. (arm64 virtual dispatch through
     // these is a follow-up — the 2-byte instance-layout vtable slot
     // can't hold a native 8-byte pointer; see the lowering note.)
+    // Every table (the vtables and the conformance itables) goes in one run, in
+    // its own section, __DATA,__xt_vtbl, between the labels ___xt_vtbl_lo and
+    // ___xt_vtbl_hi. The in-house linkers find the run by those labels and
+    // describe it in the image (a Mach-O section, an ELF program header, a PE
+    // section); a checked build's vtable check (CheckedVtbl.xc) reads each
+    // loaded image's range from there.
+    BOOL vtblRun = NO;
     for (XTIRSymbol *sym in mod.symbols) {
         if (sym.kind != XTIRSymbolKindVTable) continue;
         // `extern` — an imported class's vtable lives in its library; emit no local
@@ -10012,6 +10019,10 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
             [out appendString:@"\n// Module data (initialised)\n"];
             [out appendString:@"    .section __DATA,__data\n"];
             emittedInitHeader = YES;
+        }
+        if (!vtblRun) {
+            [out appendString:@"    .section __DATA,__xt_vtbl\n    .p2align 3\n___xt_vtbl_lo:\n"];
+            vtblRun = YES;
         }
         [out appendFormat:@"    .globl _%@\n", sym.name];
         [out appendFormat:@"    .p2align 3\n_%@:\n", sym.name];
@@ -10030,6 +10041,8 @@ static BOOL sArm64LseAtomics = YES;  // Apple Silicon is ARMv8.5; Android's floo
                 [out appendFormat:@"    .quad _%@\n", e];
         }
     }
+    if (vtblRun)
+        [out appendString:@"___xt_vtbl_hi:\n    .section __DATA,__data\n"];
     // Load-time constructors: a pointer to each in the Mach-O __mod_init_func
     // section, which dyld (and the XTOS loader's equivalent scan) runs before
     // main. Drives XG-NIB object-factory self-registration with no per-app code.

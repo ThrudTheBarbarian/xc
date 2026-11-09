@@ -189,6 +189,27 @@ static NSArray<NSDictionary *> *repartitionObjcSections(
     return sections;
 }
 
+// The class tables' runs (#34). Each module's back end puts its vtables and
+// itables between `___xt_vtbl_lo` and `___xt_vtbl_hi`: the unit's own pair is
+// as named, a merged object's carries its tag (`__L<n>$___xt_vtbl_lo`). Each
+// run becomes a range of the __xt_vtbl section, which the repartition then
+// gathers into one: a checked build's vtable check finds every loaded image's
+// tables by that section.
+static void addVtblRuns(NSDictionary<NSString *, NSNumber *> *msyms,
+                        NSMutableArray<NSDictionary *> *mObjc) {
+    NSString *lo = @"___xt_vtbl_lo", *hi = @"___xt_vtbl_hi";
+    for (NSString *l in msyms) {
+        if (![l isEqualToString:lo] && !([l hasPrefix:@"__L"] && [l hasSuffix:[@"$" stringByAppendingString:lo]]))
+            continue;
+        NSString *h = [[l substringToIndex:l.length - lo.length] stringByAppendingString:hi];
+        if (!msyms[h]) continue;
+        NSUInteger a = msyms[l].unsignedIntegerValue, b = msyms[h].unsignedIntegerValue;
+        if (b <= a) continue;
+        [mObjc addObject:@{@"name":@"__xt_vtbl", @"seg":@"__DATA", @"flags":@(0),
+                           @"off":@(a), @"size":@(b - a)}];
+    }
+}
+
 // Bug 642: the program's COMMON symbols (its zero-initialised globals) get
 // their storage AFTER everything in `mdata`, as offsets past its end, and the
 // writer lays that run out as a __bss zero-fill section — in memory, not in
@@ -838,6 +859,7 @@ int main(int argc, const char *argv[]) {
                 if (mrc) return mrc;
                 text = mtext;
             }
+            addVtblRuns(msyms, mObjc);
             // 069 first: it MOVES data bytes, and the mod-init array must be
             // placed at the final tail, after everything else has settled.
             NSArray<NSDictionary *> *objcSects =
@@ -1017,6 +1039,7 @@ int main(int argc, const char *argv[]) {
         // first use (blewit finding #7). Calls stub-bind and pointer slots
         // data-bind, so those resolve at load; a direct page reference to a
         // missing symbol has nothing to bind and must fail HERE, by name.
+        addVtblRuns(msyms, mObjc);
         NSArray<NSDictionary *> *objcSects =
             repartitionObjcSections(mdata, mObjc, msyms, mdataSyms, mfix);
         NSUInteger miLen = appendModInit(as, mdata, mfix, objMi, objMiFix);

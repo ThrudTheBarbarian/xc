@@ -4053,6 +4053,7 @@ Array* mergeLinkObjects(DriverOptions* d, SectionBytes* mtext, SectionBytes* mda
             as.modInitFixups().add((Object*)Arm64Fixup.make(mb + f.offset(), f.kind(), f.symbol(), f.scale()));
         }
     }
+    MachOLink.addVtblRuns(msyms, mObjc);
     return MachOLink.repartitionObjc(mdata, mObjc, msyms, mdataSyms, mfix);
 }
 

@@ -9015,10 +9015,15 @@ class X86_64
             _out.appendCString("\t.section .rodata\n");
             _out.append(rodata);
             }
+        // The tables in one run, in their own section, between __xt_vtbl_lo
+        // and __xt_vtbl_hi: the in-house linkers describe that run in the
+        // image, for a checked build's vtable check.
         if (vtbl.byteLength() > (u32)0)
             {
-            _out.appendCString("\t.data\n");
+            _out.appendCString(_win64 ? "\t.section\t.xtvt,\"dw\"\n" : "\t.section\txt_vtbl,\"aw\"\n");
+            _out.appendCString("\t.p2align\t3\n__xt_vtbl_lo:\n");
             _out.append(vtbl);
+            _out.appendCString("__xt_vtbl_hi:\n");
             }
         if (data.byteLength() > (u32)0)
             {

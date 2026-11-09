@@ -2190,9 +2190,9 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             {
             putFixed(out, "__mod_init_func", 16);
             putFixed(out, "__DATA", 16);
-            put64(out, dataAddr + dOnly);
+            put64(out, dataAddr + (data.length - miLen));
             put64(out, miLen);
-            put32(out, (uint32_t)(dataProgOffset + dOnly));
+            put32(out, (uint32_t)(dataProgOffset + (data.length - miLen)));
             put32(out, 3);
             put32(out, 0);
             put32(out, 0);
@@ -2979,9 +2979,9 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
             {
             putFixed(out, "__mod_init_func", 16);
             putFixed(out, "__DATA", 16);
-            put64(out, dataAddr + dOnly);
+            put64(out, dataAddr + (data.length - miLen));
             put64(out, miLen);
-            put32(out, (uint32_t)(dataProgOffset + dOnly));
+            put32(out, (uint32_t)(dataProgOffset + (data.length - miLen)));
             put32(out, 3);
             put32(out, 0);
             put32(out, 0);

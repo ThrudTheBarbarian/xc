@@ -580,6 +580,7 @@ class MachOSha256
     u32 dwarfSize;
     u32 szDwarfSeg;
     u32 dOnly;
+    u32 miOff;  // where the __mod_init_func tail starts: after any section the blob carries
     // bug 642: the __bss zero-fill run after __got
     bool hasBss;
     u32 bssOff;
@@ -1505,6 +1506,7 @@ class MachOSha256
         L.hasDataSect = hasDataSect;
         L.miLen = miLen;
         L.dOnly = dOnly;
+        L.miOff = data.length() - miLen;
         L.hasDataSeg = hasDataSeg;
         L.hasRebase = hasRebase;
         L.hasBss = hasBss;
@@ -1868,9 +1870,9 @@ class MachOSha256
                 {
                 putName((u32)12, (u32)16);
                 putName((u32)4, (u32)16);
-                put64(dataProgOffset + dOnly, (u32)0);
+                put64(dataProgOffset + (data.length() - miLen), (u32)0);
                 put64(miLen, (u32)0);
-                put32(dataProgOffset + dOnly);
+                put32(dataProgOffset + (data.length() - miLen));
                 put32((u32)3);
                 put32((u32)0);
                 put32((u32)0);
@@ -2410,9 +2412,9 @@ class MachOSha256
                 {
                 putName((u32)12, (u32)16);
                 putName((u32)4, (u32)16);
-                putAddr(L.dataProgOffset + L.dOnly);
+                putAddr(L.dataProgOffset + L.miOff);
                 put64(L.miLen, (u32)0);
-                put32(L.dataProgOffset + L.dOnly);
+                put32(L.dataProgOffset + L.miOff);
                 put32((u32)3);
                 put32((u32)0);
                 put32((u32)0);
