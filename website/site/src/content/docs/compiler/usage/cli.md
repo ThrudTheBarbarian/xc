@@ -310,6 +310,40 @@ and the program stops with status 134:
   aborting
 ```
 
+### Virtual calls
+
+Both modes also check each virtual call. An object's first word points at its
+class's table of methods, its vtable. Before a call through that table, or
+`&obj.method`, a checked build checks that the pointer lies in the class
+tables of a loaded image: the program's own, or those of a library or plugin
+it has loaded. A write past the end of a block, or through a freed object,
+that lands on an object's first word stops at the next call through it:
+
+```
+=== xcc: a virtual call through a pointer that is not a vtable ===
+  at shapes.xc:20:30
+  the object's vtable pointer is 0x600003f0c1e8, which is in no loaded image's class tables
+  aborting
+```
+
+The program stops with status 134. Where the compiler has tested the object's
+class and calls that class's method directly (it does this in loops whose
+call has few possible methods), no vtable is read and there is nothing to
+check. The check finds a vtable pointer that points anywhere but into class
+tables. It does not find one class's vtable pointer replaced by another's.
+
+Under `-fbounds-check=light` the check costs nothing measurable on the
+`poly_dispatch` and `method_call` benchmarks, whose calls the compiler makes
+direct. A loop of 256 million calls over six classes, which stay virtual,
+took 183 ms unchecked and 326 ms checked on arm64 macOS, and 322 ms and
+411 ms on x86-64 Linux.
+
+Every image `xcc` links keeps its class tables in one run and describes it:
+a `__DATA,__xt_vtbl` section on macOS and iOS, a program header of type
+`0x60787476` on Linux and Android, and an `.xtvt` section holding the run's
+start and end addresses (as RVAs) on Windows. A library or plugin linked
+another way, without that description, fails the check.
+
 The flag is implemented for arm64, x86_64 and win64. On a target that does not
 have it `xcc` stops with an error rather than quietly building an unchecked
 program.
