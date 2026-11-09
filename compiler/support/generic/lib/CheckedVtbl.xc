@@ -15,9 +15,12 @@
 // a PE file. The check compares against this image's run, which the slow path
 // looks up once; anything outside it goes to the slow path, which finds the
 // image that holds the pointer (a library, a bundle, a plugin) through the
-// loader and accepts the pointer if it is inside that image's run. A pointer
-// into the heap, the stack or memory no image owns, or into an image but not
-// its tables, stops the program with status 134 and names the call site.
+// loader and accepts the pointer if it is inside that image's run. An image
+// that does not describe a run (one a system linker made, or one that is not
+// xc's) cannot be told apart, so a pointer anywhere in it passes. A pointer
+// into the heap, the stack or memory no image owns, or into a describing
+// image but not its tables, stops the program with status 134 and names the
+// call site.
 //
 // Like the subscript checks, nothing here allocates or takes a lock.
 
@@ -83,35 +86,54 @@ void _xt_check_vtbl_putHex(u64 v)
 
 #if !OS_darwin && !OS_windows
 // The run an ELF image's program headers describe, given where they are and
-// the image's load bias: its start, with its length through `len`.
+// the image's load bias: its start, with its length through `len`. An image
+// that holds p but describes no run gives the span of its segments.
 u64 _xt_check_vtbl_phdrs(u8* ph, u64 phnum, u64 bias, u64 p, u64* len)
 {
     u64 lo = (u64)0;
     u64 n = (u64)0;
+    u64 segLo = (u64)0xFFFFFFFFFFFFFFFF;
+    u64 segHi = (u64)0;
     bool holds = false;
+    bool described = false;
     for (u64 i = (u64)0; i < phnum; i = i + (u64)1)
         {
         u8* h = ph + i * (u64)56;
         u32 type = *(u32*)(pointer)h;
         u64 va = *(u64*)(pointer)(h + 16) + bias;
         u64 sz = *(u64*)(pointer)(h + 40);
-        if (type == (u32)1 && p - va < sz)
-            holds = true;
+        if (type == (u32)1)
+            {
+            if (p - va < sz)
+                holds = true;
+            if (va < segLo)
+                segLo = va;
+            if (va + sz > segHi)
+                segHi = va + sz;
+            }
         if (type == (u32)XT_PT_XT_VTBL)
             {
             lo = va;
             n = sz;
+            described = true;
             }
         }
-    if (holds)
-        *len = n;
+    if (!holds)
+        return (u64)0;
+    if (!described)
+        {
+        *len = segHi - segLo;
+        return segLo;
+        }
+    *len = n;
     return lo;
 }
 #endif
 
 // The class tables' run of the loaded image that holds address p: its start,
-// with its length through `len` (0 when no image holds p, or the image has no
-// tables).
+// with its length through `len` (0 when no image holds p). An image that does
+// not describe a run gives its whole span instead: nothing in it can be shown
+// not to be a vtable, so nothing in it is refused.
 u64 _xt_check_vtbl_image(u64 p, u64* len)
 {
     *len = (u64)0;
@@ -121,10 +143,39 @@ u64 _xt_check_vtbl_image(u64 p, u64* len)
         return (u64)0;
     u64 sz = (u64)0;
     u8* s = getsectiondata(info.fbase, "__DATA", "__xt_vtbl", &sz);
-    if (s == (u8*)0)
+    if (s != (u8*)0)
+        {
+        *len = sz;
+        return (u64)s;
+        }
+    // No __xt_vtbl: the span of the image's segments (LC_SEGMENT_64), slid
+    // by the image's load address less its __TEXT's (the segment at file
+    // offset 0). __PAGEZERO, which maps nothing (initprot 0), is left out.
+    u8* mh = (u8*)info.fbase;
+    u64 ncmds = (u64)*(u32*)(pointer)(mh + 16);
+    u8* c = mh + 32;
+    u64 segLo = (u64)0xFFFFFFFFFFFFFFFF;
+    u64 segHi = (u64)0;
+    u64 text = (u64)0;
+    for (u64 i = (u64)0; i < ncmds; i = i + (u64)1)
+        {
+        if (*(u32*)(pointer)c == (u32)$19 && *(u32*)(pointer)(c + 60) != (u32)0)
+            {
+            u64 va = *(u64*)(pointer)(c + 24);
+            u64 vs = *(u64*)(pointer)(c + 32);
+            if (*(u64*)(pointer)(c + 40) == (u64)0)
+                text = va;
+            if (va < segLo)
+                segLo = va;
+            if (va + vs > segHi)
+                segHi = va + vs;
+            }
+        c = c + (u64)*(u32*)(pointer)(c + 4);
+        }
+    if (segHi <= segLo)
         return (u64)0;
-    *len = sz;
-    return (u64)s;
+    *len = segHi - segLo;
+    return segLo + ((u64)mh - text);
 #elif OS_windows
     pointer base = (pointer)0;
     if (RtlPcToFileHeader((pointer)p, &base) == (pointer)0 || base == (pointer)0)
@@ -143,7 +194,9 @@ u64 _xt_check_vtbl_image(u64 p, u64* len)
             return (u64)(b + (u64)d[0]);
             }
         }
-    return (u64)0;
+    // No .xtvt: the whole image (SizeOfImage).
+    *len = (u64)*(u32*)(pointer)(nt + 80);
+    return (u64)b;
 #elif LIBC_musl
     // A static executable: the only image, its program headers where the
     // kernel says (AT_PHDR, AT_PHNUM), its bias from PT_PHDR when it has one.
