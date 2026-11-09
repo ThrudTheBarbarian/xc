@@ -415,6 +415,10 @@
 @property(nonatomic) NSMutableDictionary<NSData*, NSNumber*>* stringLiterals;
 // -fbounds-check: emit a runtime bounds check at every subscript.
 @property(nonatomic) BOOL boundsCheck;
+// The source position a vtable check names (#34): set just before each
+// dispatch through a vtable is emitted.
+@property(nonatomic, nullable) XTSourceLocation* vtblSiteLoc;
+- (void)emitVtblCheck:(XTIRValue*)recv;
 // Globals whose initialiser could not constant-fold (a string literal is an
 // ADDRESS; a float leaf; an expression). Lowered as ordinary stores at the
 // top of main instead of silently reading back zeros; a module with no main
@@ -2046,6 +2050,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         {
         // §4.2: read the code word out of the receiver's CATEGORY CHAIN — same
         // load sequence the call site uses, minus the call.
+        self.vtblSiteLoc = node.location;
         code = [self emitCatMethodLoad:recv
                                 anchor:ma.resolvedBoundChainAnchor
                                   slot:ma.resolvedBoundChainSlot.unsignedIntegerValue];
@@ -2055,6 +2060,8 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
         // Virtual: read the impl out of recv's vtable. Carries a memory token
         // (see XTIROpcodeTouchesMemory) so it can't be hoisted above the
         // `new` that installs the vtable pointer.
+        self.vtblSiteLoc = node.location;
+        [self emitVtblCheck:recv];
         NSMutableArray<XTIROperand*>* ops = [NSMutableArray array];
         [ops addObject:[XTIROperand useWithValueId:recv.valueId]];
         [ops addObject:[XTIROperand immIWithType:[XTIRType u16Type]
@@ -2190,6 +2197,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
                      argValues:(NSArray<XTIRValue*>*)args
                     resultType:(nullable XTIRType*)resultType
     {
+    [self emitVtblCheck:recv];
     NSMutableArray<XTIROperand*>* ops = [NSMutableArray array];
     [ops addObject:[XTIROperand useWithValueId:recv.valueId]];
     // The vtable's header words (parent link / itable / category chain) sit in
@@ -2267,6 +2275,7 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
                                   anchor:(NSString*)anchor
                                     slot:(NSUInteger)slot
     {
+    [self emitVtblCheck:recv];
     XTIRType* voidPtr = [XTIRType ptrToType:[XTIRType voidType] window:XTIRWindowUnbanked];
     XTIRType* ppVoid = [XTIRType ptrToType:voidPtr window:XTIRWindowUnbanked];
 
@@ -3992,6 +4001,30 @@ static NSString* XTDescribeNodeKind(XTASTNodeKind k)
     [self emitCall:sid
           callConv:[XTIRCallConv standard]
          argValues:@[ ptr, idx, siteVal ]
+        resultType:nil];
+    }
+
+/****************************************************************************\
+|* A checked build's vtable check (#34): `_xt_check_vtbl(recv, site)` before
+|* a call, or a load of a method, through the receiver's vtable. The check
+|* (CheckedVtbl.xc) passes a null receiver, then wants the receiver's vtable
+|* pointer inside the tables of a loaded image. The 64-bit targets only (the
+|* compact-objects rows), where every image describes its tables' range.
+\****************************************************************************/
+- (void)emitVtblCheck:(XTIRValue*)recv
+    {
+    if (!self.boundsCheck || !sCompactObjects || !recv || [self.currentFunction.name hasPrefix:@"_xt_check"])
+        return;
+    XTSourceLocation* loc = self.vtblSiteLoc;
+    NSString* site = [NSString stringWithFormat:@"%@:%lu:%lu",
+                                                loc.filename.lastPathComponent ?: @"?",
+                                                (unsigned long)loc.line, (unsigned long)loc.column];
+    XTIRValue* siteVal = [self internCString:site];
+    if (!siteVal)
+        return;
+    [self emitCall:[self runtimeHelperSymbolNamed:@"_xt_check_vtbl"]
+          callConv:[XTIRCallConv standard]
+         argValues:@[ recv, siteVal ]
         resultType:nil];
     }
 
@@ -8299,6 +8332,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
                                      argValues:args
                                     resultType:resultIR];
                 }
+            self.vtblSiteLoc = node.location;
             return [self emitVTblDispatch:recvVal
                                      slot:node.resolvedVirtualSlot.unsignedIntegerValue
                                 argValues:args
@@ -8499,6 +8533,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         resultIR = sym.function.returnType;
     if (cslot && !isStaticCall && recvCi.needsVtable && recvCi.catChainAnchor.length)
         {
+        self.vtblSiteLoc = node.location;
         return [self retypeErasedResult:[self emitCatDispatch:recvVal
                                                        anchor:recvCi.catChainAnchor
                                                          slot:cslot.unsignedIntegerValue
@@ -8508,6 +8543,7 @@ static XTIROpcode binaryOpcodeFor(XTBinaryOp op, XTType* resolvedType, BOOL* isC
         }
     if (vslot && !isStaticCall && recvCi.needsVtable)
         {
+        self.vtblSiteLoc = node.location;
         return [self retypeErasedResult:[self emitVTblDispatch:recvVal
                                                           slot:vslot.unsignedIntegerValue
                                                      argValues:passArgs
@@ -9917,6 +9953,7 @@ static const NSUInteger kVarargSlotBytes = 8;
                     mResult = msym.function.returnType;
                 if (cslot && canchor.length)
                     {
+                    self.vtblSiteLoc = node.location;
                     return [self emitCatDispatch:self.currentSelf
                                           anchor:canchor
                                             slot:cslot.unsignedIntegerValue
@@ -9928,6 +9965,7 @@ static const NSUInteger kVarargSlotBytes = 8;
                 NSNumber* vslot = selfCi.symbolSlot[cand] ?: ci.symbolSlot[cand];
                 if (vslot)
                     {
+                    self.vtblSiteLoc = node.location;
                     return [self emitVTblDispatch:self.currentSelf
                                              slot:vslot.unsignedIntegerValue
                                         argValues:[margs subarrayWithRange:NSMakeRange(1, margs.count - 1)]
@@ -11269,6 +11307,7 @@ static const NSUInteger kVarargSlotBytes = 8;
         XTIRType* lenIR = lenRetAST ? [self irTypeForASTTypeQuiet:lenRetAST] : nil;
         if (lenIR && XTIRTypeKindIsInteger(lenIR.kind))
             idxIR = lenIR;
+        self.vtblSiteLoc = collection.location;
         countVal = [self emitVTblDispatch:recvVal
                                      slot:lenSlot.unsignedIntegerValue
                                 argValues:@[]
@@ -11518,6 +11557,7 @@ static const NSUInteger kVarargSlotBytes = 8;
     if (isClassEnum)
         {
         // Class-instance collection: call enumAt(index) via vtable dispatch.
+        self.vtblSiteLoc = collection.location;
         elemVal = [self emitVTblDispatch:classEnumRecv
                                     slot:classEnumAtSlot
                                argValues:@[ indexVal ]
