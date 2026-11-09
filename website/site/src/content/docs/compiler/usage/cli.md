@@ -341,8 +341,12 @@ took 183 ms unchecked and 326 ms checked on arm64 macOS, and 322 ms and
 Every image `xcc` links keeps its class tables in one run and describes it:
 a `__DATA,__xt_vtbl` section on macOS and iOS, a program header of type
 `0x60787476` on Linux and Android, and an `.xtvt` section holding the run's
-start and end addresses (as RVAs) on Windows. A library or plugin linked
-another way, without that description, fails the check.
+start and end addresses (as RVAs) on Windows. A vtable pointer into an image
+that does not describe its tables, such as a C library or an image another
+linker made, passes, since nothing in that image can be shown not to be a
+vtable. So does any pointer into a program linked that way, such as an
+Android program built with `--no-self-host`, which the NDK's linker links:
+there the check stops only pointers that are in no loaded image at all.
 
 The flag is implemented for arm64, x86_64 and win64. On a target that does not
 have it `xcc` stops with an error rather than quietly building an unchecked
