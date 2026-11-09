@@ -39,7 +39,8 @@ NS_ASSUME_NONNULL_BEGIN
 XTIRType* _Nullable XTParWordOf(XTIRType* _Nullable t);
 
 // A kernel copy's arrays of structs (a global's, or a captured pointer's) as
-// arrays of those words, its fields read and written in words.
-void XTParWordStructs(XTIRFunction* f);
+// arrays of those words, its fields read and written in words. The reason an
+// array was left as it was, when one is worth a warning, else nil.
+NSString* _Nullable XTParWordStructs(XTIRFunction* f);
 
 NS_ASSUME_NONNULL_END
