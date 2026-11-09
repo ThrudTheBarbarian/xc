@@ -2487,6 +2487,10 @@ Preprocessor* buildPP(FeOptions* o)
     if (o.boundsCheck() && (!o.boundsReport() || o.targetRow() == (TargetRow*)0
                             || o.targetRow().checkedRuntime().byteLength() == (u32)0))
         pp.addAutoImport(String.withCString("Checked.xc"));
+    // The vtable check (#34), in both modes, on the 64-bit rows (the compact
+    // objects ones), whose images describe their class tables' range.
+    if (o.boundsCheck() && o.targetRow() != (TargetRow*)0 && o.targetRow().compactObjects())
+        pp.addAutoImport(String.withCString("CheckedVtbl.xc"));
     // `#package` is wasm32-only and the preprocessor has to be able to say so.
     pp.setArch(platformOf(o));
     // iOS and Android are the arm64 back end, each with its own libraries.
