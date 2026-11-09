@@ -40,6 +40,12 @@ u32 grid(u32* a, u32 rows, u32 cols)
     return s;
 }
 
+void copyBytes(u8* d, u8* s, u32 n)
+{
+    for (u32 i = (u32)0; i < n; i = i + (u32)1)
+        d[i] = s[i];
+}
+
 u32 find(Array* arr, Object* v)
 {
     for (u32 i = (u32)0; i < arr.count(); i = i + (u32)1)
@@ -61,6 +67,19 @@ i32 main(i32 argc, u8** argv)
         arr.add((Object*)Number.with((u32)1));
         arr.add(v);
         Stdio.printf("find %u\n", find(arr, v));
+        u8* b = new u8[40];
+        u8* c = new u8[40];
+        for (u32 i = (u32)0; i < (u32)40; i = i + (u32)1)
+            c[i] = (u8)i;
+        copyBytes(b, c, (u32)40);
+        Stdio.printf("copy %u %u\n", (u32)b[0], (u32)b[39]);
+        return 0;
+        }
+    if (mode == (u32)6)
+        {
+        u8* b = new u8[10];
+        u8* c = new u8[20];
+        copyBytes(b, c, (u32)11);
         return 0;
         }
     if (mode == (u32)2)
@@ -92,7 +111,7 @@ for XC in ${XC:-bin/$PLAT/xcc-xc bin/$PLAT/xcc}; do
     for m in -fbounds-check=light -fbounds-check; do
         "$XC" -q -O2 $m -H . -o "$W/t" "$W/t.xc" > "$W/o" 2>&1 || { echo "FAIL $XC $m: build"; head -3 "$W/o"; fail=1; continue; }
         got=$("$W/t" 2>&1)
-        [ "$got" = "$(printf 'ok 45 55 10\nfind 1')" ] || { echo "FAIL $XC $m: in-bounds run gives '$got'"; fail=1; }
+        [ "$got" = "$(printf 'ok 45 55 10\nfind 1\ncopy 0 39')" ] || { echo "FAIL $XC $m: in-bounds run gives '$got'"; fail=1; }
         expect() {
             local args=$1 want=$2 pre=$3
             "$W/t" $args > "$W/r" 2>&1; local rc=$?
@@ -110,6 +129,8 @@ for XC in ${XC:-bin/$PLAT/xcc-xc bin/$PLAT/xcc}; do
         expect "x y" "index 10, but the" ""
         expect "x y z" "index 10, but the" ""
         expect "x y z w" "at t.xc:6:" ""
+        # Past the end of the destination: the checked copy of the loop runs.
+        expect "x y z w v" "index 10, but the" ""
         if [ $m = -fbounds-check=light ]; then
             expect "x y z w" "index 0 through a null pointer" ""
         fi
@@ -118,6 +139,11 @@ for XC in ${XC:-bin/$PLAT/xcc-xc bin/$PLAT/xcc}; do
     # Only the self-hosted compiler prints its optimised IR.
     case "$XC" in *xcc-xc) ;; *) continue ;; esac
     "$XC" -q -O2 -fbounds-check=light -H . --emit-ir-opt -o "$W/t" "$W/t.xc" 2> "$W/ir" || { echo "FAIL $XC: IR build"; fail=1; continue; }
+    # In range, copyBytes runs an unchecked copy of its loop, which vectorises
+    # as the unchecked build's does; the checked loop is still there.
+    awk '/^  function copyBytes\(/,/^  }/' "$W/ir" > "$W/c.ir"
+    grep -q 'Vec(' "$W/c.ir" || { echo "FAIL $XC: copyBytes' in-range loop does not vectorise"; fail=1; }
+    grep -q 'Call @_xt_check_trap' "$W/c.ir" || { echo "FAIL $XC: copyBytes has no checked loop"; fail=1; }
     # The bound is computed ahead of every loop header (its phis) in fill, and
     # in grid ahead of the outer loop too.
     for f in fill grid; do

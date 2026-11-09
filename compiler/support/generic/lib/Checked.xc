@@ -177,8 +177,15 @@ void _xt_check_bounds(pointer ptr, u64 index, u8* site)
 #if XT_CHECK_FULL
             _xtc_block_note(ptr);
 #endif
+            // Past the count, it is a block only if the header holds a stride
+            // and a reference count as well: a stack array can sit just above
+            // a word that reads as the magic (a register a deeper call saved),
+            // with a zero after it where a live block's count of references is.
             if (index >= *(u64*)(pointer)(h + 8))
-                _xt_check_trap(site, index, *(u64*)(pointer)(h + 8), true);
+                {
+                if (*(u32*)(pointer)(h + 36) != (u32)0 && *(u64*)(pointer)h != (u64)0)
+                    _xt_check_trap(site, index, *(u64*)(pointer)(h + 8), true);
+                }
             }
 #if XT_CHECK_FULL
         else
