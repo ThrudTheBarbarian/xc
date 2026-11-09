@@ -523,6 +523,36 @@ class MachOLink
     // position (data symbols, Pointer64 fixups) moves with it. Returns the
     // section table for the writer, in FINAL blob coordinates; empty when
     // there is no ObjC content, in which case nothing moves.
+    // The class tables' runs (#34): each module's back end puts its vtables
+    // and itables between `___xt_vtbl_lo` and `___xt_vtbl_hi` (a merged
+    // object's pair carries its tag, `__L<n>$___xt_vtbl_lo`). Each run becomes
+    // a range of the __xt_vtbl section, which repartitionObjc gathers into one;
+    // a checked build's vtable check finds each image's tables by it.
+    static void addVtblRuns(Map* msyms, Array* mObjc)
+        {
+        String* lo = String.withCString("___xt_vtbl_lo");
+        String* lot = String.withCString("$___xt_vtbl_lo");
+        String* hi = String.withCString("___xt_vtbl_hi");
+        Array* ks = msyms.allKeys();
+        for (u32 i = (u32)0; i < ks.count(); i = i + (u32)1)
+            {
+            String* l = (String*)ks.get(i);
+            if (!l.equals(lo) && !(l.hasPrefix(String.withCString("__L")) && l.hasSuffix(lot)))
+                continue;
+            String* h = l.substringBytes((u32)0, l.byteLength() - lo.byteLength());
+            h.append(hi);
+            Object* hv = msyms.get((Hashable*)h);
+            if (hv == (Object*)0)
+                continue;
+            u32 a = ((Number*)msyms.get((Hashable*)l)).asU32();
+            u32 b = ((Number*)hv).asU32();
+            if (b <= a)
+                continue;
+            mObjc.add((Object*)MachOObjcRange.with(String.withCString("__xt_vtbl"), String.withCString("__DATA"),
+                                                   (u32)0, a, b - a));
+            }
+        }
+
     static Array* repartitionObjc(SectionBytes* mdata, Array* ranges, Map* msyms, Array* mdataSyms, Array* mfix)
         {
         Array* sections = new Array();
@@ -543,39 +573,48 @@ class MachOLink
             sorted.insert(at, (Object*)r);
             }
         u32 total = mdata.length();
-        Array* owned = new Array(); // Number(0/1) per byte
-        for (u32 i = (u32)0; i < total; i = i + (u32)1)
-            owned.add((Object*)Number.withU32((u32)0));
         for (u32 i = (u32)0; i < sorted.count(); i = i + (u32)1)
             {
             MachOObjcRange* r = (MachOObjcRange*)sorted.get(i);
             if (r.off() + r.size() > total)
                 return new Array(); // malformed; leave it alone
-            for (u32 k = r.off(); k < r.off() + r.size(); k = k + (u32)1)
-                owned.set(k, (Object*)Number.withU32((u32)1));
             }
         // 2. Lay the new blob out. moves: (oldStart, len, newStart) triples.
+        // The ordinary data is what lies between the runs, taken gap by gap
+        // (the runs are sorted and do not overlap); a byte map of the whole
+        // blob cost an object per byte once every image had a vtable run.
         SectionBytes* out = new SectionBytes();
         Array* moves = new Array();
-        u32 i = (u32)0;
-        while (i < total)
+        u32 cursor = (u32)0;
+        for (u32 g = (u32)0; g <= sorted.count(); g = g + (u32)1)
             {
-            if (((Number*)owned.get(i)).asU32() != (u32)0)
+            u32 gapEnd = total;
+            if (g < sorted.count())
                 {
-                i = i + (u32)1;
-                continue;
+                MachOObjcRange* r = (MachOObjcRange*)sorted.get(g);
+                if (r.size() == (u32)0)
+                    continue;
+                gapEnd = r.off();
                 }
-            u32 run = i;
-            while (i < total && ((Number*)owned.get(i)).asU32() == (u32)0)
-                i = i + (u32)1;
-            // Bug 140: a run is re-laid at the same offset modulo 16 it had,
-            // so nothing inside it loses its alignment when an odd-sized
-            // ObjC run before it is pulled out (the reference's rule).
-            while ((out.length() & (u32)15) != (run & (u32)15))
-                out.appendByte((u8)((u32)0));
-            MachOLink.addMove(moves, run, i - run, out.length());
-            for (u32 k = run; k < i; k = k + (u32)1)
-                out.appendByte(mdata.byteAt(k));
+            if (gapEnd > cursor)
+                {
+                u32 run = cursor;
+                // Bug 140: a run is re-laid at the same offset modulo 16 it
+                // had, so nothing inside it loses its alignment when an
+                // odd-sized ObjC run before it is pulled out (the reference's
+                // rule).
+                while ((out.length() & (u32)15) != (run & (u32)15))
+                    out.appendByte((u8)((u32)0));
+                MachOLink.addMove(moves, run, gapEnd - run, out.length());
+                for (u32 k = run; k < gapEnd; k = k + (u32)1)
+                    out.appendByte(mdata.byteAt(k));
+                }
+            if (g < sorted.count())
+                {
+                MachOObjcRange* r = (MachOObjcRange*)sorted.get(g);
+                if (r.off() + r.size() > cursor)
+                    cursor = r.off() + r.size();
+                }
             }
         Array* order = new Array(); // first-seen names
         Map* byName = new Map();

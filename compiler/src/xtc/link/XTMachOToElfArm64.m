@@ -47,6 +47,8 @@ NSString* XTMachOToElfArm64Ex(NSString* asm_, BOOL shared)
                 l = @"    .section .rodata";
             else if ([l containsString:@"__DATA,__data"])
                 l = @"    .data";
+            else if ([l containsString:@"__DATA,__xt_vtbl"])
+                l = @"    .section xt_vtbl,\"aw\"";
             else if ([l containsString:@"__mod_init_func"])
                 l = @"    .section .init_array,\"aw\",%init_array";
             else if ([l containsString:@"__TEXT,__text"])

@@ -18,6 +18,9 @@
 #import "Arm64AsmDefs.xc"
 #import <MachO>
 #import "MachODefs.xc"
+#import <MachOObject>
+#import "MachOObjectDefs.xc"
+#import <MachOLink>
 
 void main(void)
     {
@@ -73,6 +76,11 @@ void main(void)
     // two have to agree byte for byte.
     SectionBytes* dataBytes = a.dataBytes();
     Array* fixups = a.fixups();
+    // The class tables' run becomes the __xt_vtbl section (#34), as the
+    // reference linker lays it out: before the mod-init tail.
+    Array* mObjc = new Array();
+    MachOLink.addVtblRuns(a.symbols(), mObjc);
+    Array* objcSects = MachOLink.repartitionObjc(dataBytes, mObjc, a.symbols(), a.dataSyms(), fixups);
     u32 miLen = a.modInitBytes().length();
     if (miLen > (u32)0)
         {
@@ -93,7 +101,7 @@ void main(void)
     if (platform != 0)
         m.setApplePlatform(platform);
     m.executable(a.textBytes(), ((Number*)entry).asU32(), a.symbols(),
-                 dataBytes, a.dataSyms(), fixups, miLen, (Array*)0, bssLen);
+                 dataBytes, a.dataSyms(), fixups, miLen, objcSects, bssLen);
 
     Data* d = m.bytes();
     if (!Files.writeData(outPath, d))

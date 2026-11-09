@@ -2396,10 +2396,17 @@ static NSInteger sX86ThreadSafeARCOverride = -1;
         [out appendString:@"\t.section .rodata\n"];
         [out appendString:rodata];
         }
+    // The tables in one run, in their own section, between __xt_vtbl_lo and
+    // __xt_vtbl_hi: the in-house linkers find the run by those labels and
+    // describe it in the image (an ELF program header, a PE section), which is
+    // where a checked build's vtable check (CheckedVtbl.xc) reads each loaded
+    // image's range from.
     if (vtbl.length)
         {
-        [out appendString:@"\t.data\n"];
+        [out appendString:sWin64 ? @"\t.section\t.xtvt,\"dw\"\n" : @"\t.section\txt_vtbl,\"aw\"\n"];
+        [out appendString:@"\t.p2align\t3\n__xt_vtbl_lo:\n"];
         [out appendString:vtbl];
+        [out appendString:@"__xt_vtbl_hi:\n"];
         }
     if (data.length)
         {
