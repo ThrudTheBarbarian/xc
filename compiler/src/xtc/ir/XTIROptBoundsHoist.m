@@ -20,6 +20,8 @@
     XTIRFunction* _fn;
     XTIRSymbolId _chk;   // _xt_check_bounds
     XTIRSymbolId _lim;   // _xt_check_limit
+    NSArray<NSIndexSet*>* _dom;                  // a round's dominators, by block index
+    NSMapTable<XTIRBlock*, NSNumber*>* _ix;      // a round's block indices
     }
 
 - (NSString*)passName
@@ -237,6 +239,10 @@ static NSArray<XTIRBlock*>* predsIn(NSMapTable<XTIRBlock*, NSMutableArray<XTIRBl
                 }
             }
         }
+    _dom = dom;
+    _ix = [NSMapTable strongToStrongObjectsMapTable];
+    for (NSUInteger i = 0; i < nb; i++)
+        [_ix setObject:@(i) forKey:blocks[i]];
     // Each header's loop: the union of the natural loops of its back edges.
     NSMutableArray<XTIRBlock*>* heads = [NSMutableArray array];
     NSMapTable<XTIRBlock*, NSMutableArray<XTIRBlock*>*>* bodyOf = [NSMapTable strongToStrongObjectsMapTable];
@@ -285,7 +291,8 @@ static NSArray<XTIRBlock*>* predsIn(NSMapTable<XTIRBlock*, NSMutableArray<XTIRBl
         NSMutableSet<XTIRBlock*>* inBody = [inOf objectForKey:H];
         if (bestH && body.count >= [bodyOf objectForKey:bestH].count)
             continue;
-        if (![self hasWork:body in:inBody head:H defs:defBlk defOf:defOf done:done])
+        NSArray<XTIRBlock*>* exits = sureExits([self exitsOf:body in:inBody head:H], H, [self guardable:H in:inBody]);
+        if (![self hasWork:body in:inBody head:H exits:exits defs:defBlk defOf:defOf done:done])
             continue;
         XTIRBlock* pre = nil;
         NSUInteger outsideCount = 0;
@@ -307,19 +314,65 @@ static NSArray<XTIRBlock*>* predsIn(NSMapTable<XTIRBlock*, NSMutableArray<XTIRBl
         }
     if (!bestH)
         return NO;
-    [self hoist:[bodyOf objectForKey:bestH] in:[inOf objectForKey:bestH] head:bestH pre:bestPre defs:defBlk defOf:defOf done:done];
+    NSMutableArray<XTIRBlock*>* bestBody = [bodyOf objectForKey:bestH];
+    NSMutableSet<XTIRBlock*>* bestIn = [inOf objectForKey:bestH];
+    BOOL guarded = [self guardable:bestH in:bestIn];
+    [self hoist:bestBody in:bestIn head:bestH pre:bestPre
+          exits:sureExits([self exitsOf:bestBody in:bestIn head:bestH], bestH, guarded) guarded:guarded
+           defs:defBlk defOf:defOf done:done];
+    return YES;
+    }
+
+// The loop's blocks that go round it again or leave it: its latches, the
+// blocks with an edge out, and any that end otherwise (a Return).
+- (NSArray<XTIRBlock*>*)exitsOf:(NSArray<XTIRBlock*>*)body in:(NSSet<XTIRBlock*>*)inBody head:(XTIRBlock*)H
+    {
+    NSMutableArray<XTIRBlock*>* out = [NSMutableArray array];
+    for (XTIRBlock* bb in body)
+        {
+        XTIRInsn* t = bb.terminator;
+        BOOL ex = !t || !(t.opcode == XTIROpBranch || t.opcode == XTIROpCondBranch);
+        if (t)
+            for (XTIROperand* o in t.operands)
+                if (o.kind == XTIROperandKindBlock && o.blockRef && [_fn.blocks indexOfObjectIdenticalTo:o.blockRef] != NSNotFound
+                    && (o.blockRef == H || ![inBody containsObject:o.blockRef]))
+                    ex = YES;
+        if (ex)
+            [out addObject:bb];
+        }
+    return out;
+    }
+
+// Does every way round the loop and out of it pass through X? Then once the
+// loop is entered X runs, and what X reads may be read before the loop (the
+// port's bhSure explains).
+- (BOOL)sure:(XTIRBlock*)X exits:(NSArray<XTIRBlock*>*)exits
+    {
+    NSNumber* xi = [_ix objectForKey:X];
+    if (!xi)
+        return NO;
+    for (XTIRBlock* e in exits)
+        {
+        NSNumber* ei = [_ix objectForKey:e];
+        if (!ei || ![_dom[ei.unsignedIntegerValue] containsIndex:xi.unsignedIntegerValue])
+            return NO;
+        }
     return YES;
     }
 
 - (BOOL)hasWork:(NSArray<XTIRBlock*>*)body
              in:(NSSet<XTIRBlock*>*)inBody
            head:(XTIRBlock*)H
+          exits:(NSArray<XTIRBlock*>*)exits
            defs:(NSDictionary<NSNumber*, XTIRBlock*>*)defBlk
           defOf:(NSDictionary<NSNumber*, XTIRInsn*>*)defOf
            done:(NSHashTable<XTIRInsn*>*)done
     {
     BOOL noStore = noStores(body);
     for (XTIRBlock* bb in body)
+        {
+        if (![self sure:bb exits:exits])
+            continue;
         for (XTIRInsn* n in bb.instructions)
             {
             if ([self isLimit:n]
@@ -330,6 +383,7 @@ static NSArray<XTIRBlock*>* predsIn(NSMapTable<XTIRBlock*, NSMutableArray<XTIRBl
                 && chain(n.operands[1].valueId, defBlk, defOf, inBody, H, noStore, [NSMutableArray array], 0))
                 return YES;
             }
+        }
     return NO;
     }
 
@@ -352,16 +406,22 @@ static BOOL chain(XTIRValueId v, NSDictionary<NSNumber*, XTIRBlock*>* defBlk, NS
     if (!db || ![inBody containsObject:db])
         return YES;
     XTIRInsn* d = defOf[@(v)];
-    if (!d || depth > 4 || d.operands.count < 1 || d.operands[0].kind != XTIROperandKindUse)
+    if (!d || depth > 8)
         return NO;
-    XTIRValueId a = d.operands[0].valueId;
-    if (d.opcode == XTIROpBitcast)
+    // Arithmetic, casts and compares of values the loop can have (the port's
+    // bhChain explains).
+    if (pureOp(d.opcode))
         {
-        if (!chain(a, defBlk, defOf, inBody, H, noStore, out, depth + 1))
-            return NO;
-        [out addObject:d];
+        for (XTIROperand* o in d.operands)
+            if (o.kind == XTIROperandKindUse && !chain(o.valueId, defBlk, defOf, inBody, H, noStore, out, depth + 1))
+                return NO;
+        if ([out indexOfObjectIdenticalTo:d] == NSNotFound)
+            [out addObject:d];
         return YES;
         }
+    if (d.operands.count < 1 || d.operands[0].kind != XTIROperandKindUse)
+        return NO;
+    XTIRValueId a = d.operands[0].valueId;
     if (!noStore || d.opcode != XTIROpLoad)
         return NO;
     XTIRInsn* fa = defOf[@(a)];
@@ -384,10 +444,110 @@ static BOOL chain(XTIRValueId v, NSDictionary<NSNumber*, XTIRBlock*>* defBlk, NS
     if (!read)
         return NO;
     XTIRBlock* ab = defBlk[@(a)];
-    if (ab && [inBody containsObject:ab])
+    if (ab && [inBody containsObject:ab] && [out indexOfObjectIdenticalTo:fa] == NSNotFound)
         [out addObject:fa];
-    [out addObject:d];
+    if ([out indexOfObjectIdenticalTo:d] == NSNotFound)
+        [out addObject:d];
     return YES;
+    }
+
+static BOOL pureOp(XTIROpcode op)
+    {
+    switch (op)
+        {
+    case XTIROpBitcast:
+    case XTIROpSelect:
+    case XTIROpICmp:
+    case XTIROpConst:
+    case XTIROpIntToPtr:
+    case XTIROpPtrToInt:
+    case XTIROpZExt:
+    case XTIROpSExt:
+    case XTIROpTrunc:
+    case XTIROpAdd:
+    case XTIROpSub:
+    case XTIROpAnd:
+    case XTIROpOr:
+    case XTIROpXor:
+        return YES;
+    default:
+        return NO;
+        }
+    }
+
+// Does H leave the loop through a CondBranch with one edge in, holding nothing
+// that writes or calls? Then a copy of it before the loop says whether the
+// body runs at all (the guard).
+- (BOOL)guardable:(XTIRBlock*)H in:(NSSet<XTIRBlock*>*)inBody
+    {
+    XTIRInsn* t = H.terminator;
+    if (!t || t.opcode != XTIROpCondBranch || t.operands.count != 3 || t.operands[1].kind != XTIROperandKindBlock
+        || t.operands[2].kind != XTIROperandKindBlock)
+        return NO;
+    BOOL in1 = [inBody containsObject:t.operands[1].blockRef];
+    BOOL in2 = [inBody containsObject:t.operands[2].blockRef];
+    if (in1 == in2)
+        return NO;
+    for (XTIRInsn* n in H.instructions)
+        switch (n.opcode)
+            {
+        case XTIROpStore:
+        case XTIROpStoreVolatile:
+        case XTIROpLoadVolatile:
+        case XTIROpCall:
+        case XTIROpCallIndirect:
+        case XTIROpCallCloaked:
+        case XTIROpCallBanked:
+        case XTIROpCallBankedIndirect:
+        case XTIROpMemSet:
+        case XTIROpMemCopy:
+        case XTIROpRetain:
+        case XTIROpRelease:
+        case XTIROpWeakRegister:
+        case XTIROpWeakUnregister:
+        case XTIROpVTblDispatch:
+        case XTIROpProtoDispatch:
+        case XTIROpAsm:
+            return NO;
+        default:
+            break;
+            }
+    return YES;
+    }
+
+// The exits sure: asks about: with a guard, not H's own.
+static NSArray<XTIRBlock*>* sureExits(NSArray<XTIRBlock*>* exits, XTIRBlock* H, BOOL guarded)
+    {
+    if (!guarded)
+        return exits;
+    NSMutableArray<XTIRBlock*>* out = [NSMutableArray array];
+    for (XTIRBlock* b in exits)
+        if (b != H)
+            [out addObject:b];
+    return out;
+    }
+
+// `enter ? p : null` (or the other way round), at the end of e.
+- (XTIRValueId)gate:(XTIRBlock*)e enter:(XTIRValueId)enter sense:(BOOL)sense p:(XTIROperand*)p at:(XTIRInsn*)at
+    {
+    XTIRType* pt = [_fn valueForId:p.valueId].type;
+    XTIRValue* z = [self value:[XTIRType u8Type] in:e];
+    [e.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst
+                                                        result:z
+                                                      operands:@[ [XTIROperand immIWithType:[XTIRType u8Type] value:0] ]
+                                                        dbgLoc:nil]];
+    XTIRValue* np = [self value:pt in:e];
+    [e.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpIntToPtr
+                                                        result:np
+                                                      operands:@[ [XTIROperand useWithValueId:z.valueId] ]
+                                                        dbgLoc:nil]];
+    XTIRValue* g = [self value:pt in:e];
+    XTIROperand* nul = [XTIROperand useWithValueId:np.valueId];
+    [e.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpSelect
+                                                        result:g
+                                                      operands:@[ [XTIROperand useWithValueId:enter], sense ? p : nul, sense ? nul : p ]
+                                                        dbgLoc:at.dbgLoc]];
+    return g.valueId;
     }
 
 // The instructions chain listed, moved to the end of the preheader. Each is
@@ -442,6 +602,35 @@ static void retargetPhis(XTIRBlock* s, XTIRBlock* from, XTIRBlock* to)
         }
     }
 
+// A copy of insn with new operands and results (XTIROptInline's rebuildInsn).
+static XTIRInsn* rebuild(XTIRInsn* insn, XTIRValue* result, NSArray<XTIROperand*>* ops, XTIRValue* memResult)
+    {
+    XTIRInsn* out;
+    if (insn.callConv)
+        out = [[XTIRInsn alloc] initWithOpcode:insn.opcode result:result operands:ops callConv:insn.callConv dbgLoc:insn.dbgLoc];
+    else if (XTIROpCarriesPredicate(insn.opcode))
+        out = [[XTIRInsn alloc] initWithOpcode:insn.opcode result:result operands:ops predicate:insn.predicate dbgLoc:insn.dbgLoc];
+    else
+        out = [[XTIRInsn alloc] initWithOpcode:insn.opcode result:result operands:ops dbgLoc:insn.dbgLoc];
+    out.memoryResult = memResult;
+    return out;
+    }
+
+// A terminator's every edge to `from` goes to `to`.
+static void replaceBlock(XTIRInsn* t, XTIRBlock* from, XTIRBlock* to)
+    {
+    NSMutableArray<XTIROperand*>* ops = nil;
+    for (NSUInteger k = 0; k < t.operands.count; k++)
+        if (t.operands[k].kind == XTIROperandKindBlock && t.operands[k].blockRef == from)
+            {
+            if (!ops)
+                ops = [t.operands mutableCopy];
+            ops[k] = [XTIROperand blockWithRef:to];
+            }
+    if (ops)
+        [t replaceOperands:ops];
+    }
+
 static void replaceUses(XTIRInsn* n, XTIRValueId old, XTIROperand* to)
     {
     NSMutableArray<XTIROperand*>* ops = nil;
@@ -473,12 +662,75 @@ static void replaceUses(XTIRInsn* n, XTIRValueId old, XTIROperand* to)
            in:(NSMutableSet<XTIRBlock*>*)inBody
          head:(XTIRBlock*)H
           pre:(XTIRBlock*)pre
+        exits:(NSArray<XTIRBlock*>*)exits
+      guarded:(BOOL)guarded
          defs:(NSMutableDictionary<NSNumber*, XTIRBlock*>*)defBlk
         defOf:(NSDictionary<NSNumber*, XTIRInsn*>*)defOf
          done:(NSHashTable<XTIRInsn*>*)done
     {
     BOOL noStore = noStores(body);
     NSMutableDictionary<NSNumber*, XTIRValue*>* limOf = [NSMutableDictionary dictionary];
+    // What is hoisted runs only when the loop is entered: a preheader that may
+    // go elsewhere (a rotated loop's trip test) gets a block of its own on the
+    // edge into the loop.
+    if (guarded || !pre.terminator || pre.terminator.opcode != XTIROpBranch)
+        {
+        XTIRBlock* e = [[XTIRBlock alloc] init];
+        e.name = [NSString stringWithFormat:@"bh%lu_pre", (unsigned long)_fn.blocks.count];
+        [e setTerminator:[[XTIRInsn alloc] initWithOpcode:XTIROpBranch
+                                                   result:nil
+                                                 operands:@[ [XTIROperand blockWithRef:H] ]
+                                                   dbgLoc:nil]];
+        XTIRInsn* pt = pre.terminator;
+        if (pt)
+            replaceBlock(pt, H, e);
+        retargetPhis(H, pre, e);
+        [_fn.blocks insertObject:e atIndex:[_fn.blocks indexOfObjectIdenticalTo:pre] + 1];
+        pre = e;
+        }
+    // The guard: H's instructions again in the new preheader, each phi read as
+    // the value it takes on entry, and H's condition.
+    XTIRValueId enter = 0;
+    BOOL haveEnter = NO, sense = YES;
+    if (guarded)
+        {
+        NSMutableDictionary<NSNumber*, XTIROperand*>* remap = [NSMutableDictionary dictionary];
+        for (XTIRInsn* phi in H.phiNodes)
+            for (NSUInteger j = 0; j + 1 < phi.operands.count; j += 2)
+                if (phi.operands[j].kind == XTIROperandKindBlock && phi.operands[j].blockRef == pre && phi.result)
+                    remap[@(phi.result.valueId)] = phi.operands[j + 1];
+        XTIROperand* (^subst)(XTIROperand*) = ^XTIROperand*(XTIROperand* o) {
+          if (o.kind == XTIROperandKindUse && remap[@(o.valueId)])
+              return remap[@(o.valueId)];
+          return o;
+        };
+        for (XTIRInsn* n in H.instructions)
+            {
+            NSMutableArray<XTIROperand*>* ops = [NSMutableArray arrayWithCapacity:n.operands.count];
+            for (XTIROperand* o in n.operands)
+                [ops addObject:subst(o)];
+            XTIRValue* r = n.result ? [self value:n.result.type in:pre] : nil;
+            if (r)
+                remap[@(n.result.valueId)] = [XTIROperand useWithValueId:r.valueId];
+            XTIRValue* m = n.memoryResult ? [self value:n.memoryResult.type in:pre] : nil;
+            if (m)
+                remap[@(n.memoryResult.valueId)] = [XTIROperand useWithValueId:m.valueId];
+            [pre.instructions addObject:rebuild(n, r, ops, m)];
+            }
+        XTIRInsn* t = H.terminator;
+        XTIROperand* co = subst(t.operands[0]);
+        if (co.kind != XTIROperandKindUse)
+            {
+            XTIRValue* cv = [self value:[XTIRType boolType] in:pre];
+            [pre.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst result:cv operands:@[ co ] dbgLoc:nil]];
+            co = [XTIROperand useWithValueId:cv.valueId];
+            }
+        enter = co.valueId;
+        haveEnter = YES;
+        sense = [inBody containsObject:t.operands[1].blockRef];
+        }
+    // The block each of the body's blocks was split from, for sure:.
+    NSMapTable<XTIRBlock*, XTIRBlock*>* origOf = [NSMapTable strongToStrongObjectsMapTable];
     // The bounds an inner loop computed, moved on out. A second for the same
     // pointer takes the first's value.
     for (NSUInteger b = 0; b < body.count; b++)
@@ -489,7 +741,7 @@ static void replaceUses(XTIRInsn* n, XTIRValueId old, XTIROperand* to)
             {
             XTIRInsn* n = bb.instructions[i];
             NSMutableArray<XTIRInsn*>* ch = [NSMutableArray array];
-            if (![self isLimit:n] || !chain(n.operands[1].valueId, defBlk, defOf, inBody, H, noStore, ch, 0))
+            if (![self isLimit:n] || ![self sure:bb exits:exits] || !chain(n.operands[1].valueId, defBlk, defOf, inBody, H, noStore, ch, 0))
                 {
                 i++;
                 continue;
@@ -503,6 +755,12 @@ static void replaceUses(XTIRInsn* n, XTIRValueId old, XTIROperand* to)
                 {
                 [self rewriteUses:n.result.valueId to:[XTIROperand useWithValueId:had.valueId]];
                 continue;
+                }
+            if (haveEnter)
+                {
+                NSMutableArray<XTIROperand*>* ops = [n.operands mutableCopy];
+                ops[1] = [XTIROperand useWithValueId:[self gate:pre enter:enter sense:sense p:n.operands[1] at:n]];
+                [n replaceOperands:ops];
                 }
             [pre.instructions addObject:n];
             limOf[p] = n.result;
@@ -523,7 +781,8 @@ static void replaceUses(XTIRInsn* n, XTIRValueId old, XTIROperand* to)
             XTIROperand* po = n.operands[1];
             XTIROperand* io = n.operands[2];
             NSMutableArray<XTIRInsn*>* ch = [NSMutableArray array];
-            if (io.kind != XTIROperandKindUse || po.kind != XTIROperandKindUse
+            XTIRBlock* ob = [origOf objectForKey:bb];
+            if (io.kind != XTIROperandKindUse || po.kind != XTIROperandKindUse || ![self sure:(ob ?: bb) exits:exits]
                 || !chain(po.valueId, defBlk, defOf, inBody, H, noStore, ch, 0))
                 continue;
             move(ch, body, pre, defBlk);
@@ -537,13 +796,15 @@ static void replaceUses(XTIRInsn* n, XTIRValueId old, XTIROperand* to)
                 if (!outside(mo, defBlk, inBody))
                     mo = [XTIROperand useWithValueId:(XTIRValueId)(_fn.paramTypes.count - 1)];
                 lim = [self value:[XTIRType u64Type] in:pre];
+                XTIRValue* lm = [self value:[XTIRType memoryType] in:pre];
+                XTIRValueId arg = haveEnter ? [self gate:pre enter:enter sense:sense p:po at:n] : po.valueId;
                 XTIRInsn* lc = [[XTIRInsn alloc] initWithOpcode:XTIROpCall
                                                          result:lim
                                                        operands:@[ [XTIROperand symWithSymbolId:_lim],
-                                                                   [XTIROperand useWithValueId:po.valueId], mo ]
+                                                                   [XTIROperand useWithValueId:arg], mo ]
                                                        callConv:[XTIRCallConv standard]
                                                          dbgLoc:n.dbgLoc];
-                lc.memoryResult = [self value:[XTIRType memoryType] in:pre];
+                lc.memoryResult = lm;
                 [pre.instructions addObject:lc];
                 limOf[@(po.valueId)] = lim;
                 }
@@ -589,6 +850,7 @@ static void replaceUses(XTIRInsn* n, XTIRValueId old, XTIROperand* to)
             [_fn.blocks addObject:slow];
             [body addObject:cont];
             [inBody addObject:cont];
+            [origOf setObject:(ob ?: bb) forKey:cont];
             break;
             }
         }

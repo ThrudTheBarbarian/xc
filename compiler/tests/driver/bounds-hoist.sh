@@ -129,5 +129,47 @@ for XC in ${XC:-bin/$PLAT/xcc-xc bin/$PLAT/xcc}; do
         grep -q 'Call @_xt_check_trap' "$W/f.ir" || { echo "FAIL $XC: $f has no check left"; fail=1; }
     done
 done
+# A loop that runs no times reads nothing: the bound is computed only when the
+# loop is entered (the header's test again, before the loop). The pointer is
+# the start of a page whose page before is unreadable, so reading its header
+# faults; the program never reads it, and must not fault.
+cat > "$W/z.xc" <<'XC'
+#import "Foundation.xc"
+
+pointer mmap(pointer addr, u64 len, i32 prot, i32 flags, i32 fd, i64 off);
+i32 mprotect(pointer addr, u64 len, i32 prot);
+i32 getpagesize(void);
+
+u32 sumTo(u32* a, u32 n)
+{
+    u32 s = (u32)0;
+    for (u32 i = (u32)0; i < n; i = i + (u32)1)
+        s = s + a[i];
+    return s;
+}
+
+i32 main(i32 argc, u8** argv)
+{
+    u64 page = (u64)getpagesize();
+#if OS_macos
+    i32 flags = (i32)$1002;
+#else
+    i32 flags = (i32)$22;
+#endif
+    u8* m = (u8*)mmap((pointer)0, page * (u64)2, (i32)3, flags, (i32)-1, (i64)0);
+    mprotect((pointer)m, page, (i32)0);
+    u32* p = (u32*)(pointer)(m + page);
+    Stdio.printf("zero %u\n", sumTo(p, (u32)argc - (u32)1));
+    return 0;
+}
+XC
+for XC in ${XC:-bin/$PLAT/xcc-xc bin/$PLAT/xcc}; do
+    [ -x "$XC" ] || continue
+    for m in -fbounds-check=light -fbounds-check; do
+        "$XC" -q -O2 $m -H . -o "$W/z" "$W/z.xc" > "$W/o" 2>&1 || { echo "FAIL $XC $m: zero-trip build"; head -3 "$W/o"; fail=1; continue; }
+        got=$("$W/z" 2>&1); rc=$?
+        { [ $rc = 0 ] && [ "$got" = "zero 0" ]; } || { echo "FAIL $XC $m: a loop that runs no times read its array's header (status $rc)"; fail=1; }
+    done
+done
 [ $fail = 0 ] && echo "bounds-hoist: ok"
 exit $fail
