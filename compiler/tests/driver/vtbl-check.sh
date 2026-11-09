@@ -12,11 +12,15 @@
 # program with status 134 and names the call site, in both modes and in a loop
 # the compiler devirtualises; a class from an xc library built without checks
 # (another image) dispatches without a false stop, as do the program's own
-# classes; an unchecked build carries no check. The two compilers write the
+# classes, a table in an image that describes no run (one clang linked), a
+# program linked by the system linker (--no-self-host), and virtual calls
+# into and out of a plugin loaded with Plugin.load; an unchecked build carries
+# no check. The two compilers write the
 # same bytes for each, and for the other 64-bit rows (arm64 Linux, android,
 # x86-64 glibc and musl, win64). With XTC_LINUX_HOST set the x86-64 programs
 # run there, with XTC_LINUX_ARM64_HOST the arm64 Linux ones, and with wine
-# the win64 ones.
+# the win64 ones; with a device or emulator attached, the android ones (the
+# in-house link and the NDK's).
 #
 #   bash tests/driver/vtbl-check.sh
 set -u
@@ -82,6 +86,66 @@ i32 main(i32 argc, u8** argv)
     return 0;
     }
 XC
+cat > "$W/nd.xc" <<'XC'
+#import "Stdio.xc"
+pointer nd_addr(void);
+class Op       { u32 k; void init(u32 x) { k = x; } u32 apply(u32 v) { return v + k; } }
+class OpMul : Op { void init(u32 x) { super.init(x); } u32 apply(u32 v) { return v * k; } }
+i32 main(i32 argc, u8** argv)
+    {
+    Op* o = argc > 5 ? new Op((u32)4) : (Op*)new OpMul((u32)4);
+    u64* t = (u64*)nd_addr();
+    if (argc > 1)
+        t = new u64[256];
+    u64* v = *(u64**)(pointer)o;
+    for (u32 i = (u32)0; i < (u32)160; i++)
+        t[i] = v[i];
+    *(u64**)(pointer)o = t;
+    Stdio.printf("copied %u\n", o.apply((u32)4));
+    return 0;
+    }
+XC
+cat > "$W/pllib.xc" <<'XC'
+#import "Stdio.xc"
+class Shape { u32 k; u32 area(void) { return k * k; } }
+class Shapes { static u32 twice(Shape@ s) { return s.area() * (u32)2; } }
+XC
+cat > "$W/tri.xc" <<'XC'
+// The plugin: a subclass of the library's Shape, and a call through a Shape
+// the host made.
+#import <VtLib>
+class Tri : Shape { u32 area(void) { return k + (u32)100; } }
+class TriTool
+    {
+    static Shape@ make(u32 x) { Tri@ t = new Tri(); t.k = x; return t; }
+    static u32 measure(Shape@ s) { return s.area() + (u32)1; }
+    }
+XC
+cat > "$W/plhost.xc" <<'XC'
+// The host: loads the plugin, calls through the Shape it makes and hands it
+// one of its own.
+#import "Stdio.xc"
+#import "Process.xc"
+#import "Plugin.xc"
+#import <VtLib>
+class Hex : Shape { u32 area(void) { return k + (u32)200; } }
+typedef Shape@ Make_t(u32 x);
+typedef u32 Measure_t(Shape@ s);
+bool answerYes(String* name, String* publisher, String* domain, String* keyId) { return true; }
+i32 main(void)
+{
+    Plugin* p = Plugin.load(Process.argument((u32)1), &answerYes);
+    if (p == (Plugin*)0) { Stdio.printf("refused: %s\\n", Plugin.lastError().cString()); return 1; }
+    Make_t* make = (Make_t*)p.symbol(String.withCString("TriTool$make"));
+    Measure_t* measure = (Measure_t*)p.symbol(String.withCString("TriTool$measure"));
+    if (make == (Make_t*)0 || measure == (Measure_t*)0) { Stdio.printf("no TriTool\\n"); return 1; }
+    Shape@ t = make((u32)3);
+    Hex@ h = new Hex();
+    h.k = (u32)7;
+    Stdio.printf("into %u out %u lib %u\n", t.area(), measure(h), Shapes.twice(t));
+    return 0;
+}
+XC
 want_ok="acc 959"
 for c in $XC $REF; do
     [ -x "$c" ] || continue
@@ -112,7 +176,68 @@ for c in $XC $REF; do
         got=$( cd "$d" && "./app$m" 2>&1 )
         [ "$got" = "areas 10 25" ] || bad "$n $m: the library's classes give '$got'"
     done
+    # An image that describes no run (clang made it): a table copied there
+    # passes, since nothing in such an image can be shown not to be a vtable;
+    # the heap still does not.
+    if command -v clang > /dev/null; then
+        d="$W/nd-$n"; mkdir -p "$d"
+        printf 'void *nd_table[256];\nvoid **nd_addr(void) { return nd_table; }\n' > "$d/nd.c"
+        clang -dynamiclib -o "$d/libnd.dylib" "$d/nd.c" -install_name @rpath/libnd.dylib 2> "$W/e" \
+            || { bad "clang could not build the C library: $(head -c 200 "$W/e")"; }
+        for m in -fbounds-check=light -fbounds-check; do
+            ( cd "$d" && "$ROOT/$c" -q -O2 $m -H "$ROOT" -L . -lnd -o "nd$m" "$W/nd.xc" ) > "$W/e" 2>&1 \
+                || { bad "$n $m: the C library's client: $(head -c 300 "$W/e")"; continue; }
+            got=$( cd "$d" && "./nd$m" 2>&1 )
+            [ "$got" = "copied 16" ] || bad "$n $m: a table in an image with no run gives '$got'"
+            ( cd "$d" && "./nd$m" forge ) > "$W/r" 2>&1; rc=$?
+            [ $rc = 134 ] || bad "$n $m: beside an image with no run, a heap vtable ran on (status $rc)"
+        done
+    fi
+    # Linked by the system linker (--no-self-host): the section survives.
+    if command -v clang > /dev/null; then
+        "$c" -q -O2 -fbounds-check=light --no-self-host -H . -o "$W/${n}nsh" "$W/f.xc" > "$W/e" 2>&1 \
+            || bad "$n --no-self-host: $(head -c 300 "$W/e")"
+        [ "$("$W/${n}nsh" 2>&1)" = "$want_ok" ] || bad "$n --no-self-host: the program's own classes"
+        "$W/${n}nsh" forge > /dev/null 2>&1; rc=$?
+        [ $rc = 134 ] || bad "$n --no-self-host: a forged vtable pointer ran on (status $rc)"
+    fi
 done
+# A plugin (a signed bundle, Plugin.load), host and plugin both checked:
+# a virtual call from the host into the plugin's class, from the plugin into
+# the host's, and from an unchecked library into the plugin's. --bundle is the
+# shipped compiler's. With XTC_LINUX_HOST set, the x86-64 build runs there.
+want_pl="into 103 out 208 lib 206"
+plugin() { # <dir> <-A target or ""> <lib ext> <plugin ext>
+    local d=$1 a=$2 le=$3 pe=$4
+    mkdir -p "$d"
+    ( cd "$d" && export XCC_PLUGIN_STORE="$d/store" \
+      && "$ROOT/$XC" --emit-lib -q $a -H "$ROOT" -o "libVtLib.$le" "$W/pllib.xc" \
+      && "$ROOT/$XC" -q -O2 $a -fbounds-check=light -H "$ROOT" -L . --bundle tri --bundle-key key \
+             --bundle-version 1.0 --publisher Example --bundle-lib "libVtLib.$le" -o "tri.$pe" "$W/tri.xc" \
+      && "$ROOT/$XC" -q -O2 $a -fbounds-check=light -H "$ROOT" -L . -o host "$W/plhost.xc" ) > "$W/e" 2>&1
+}
+if [ -x "$XC" ] && [ "$PLAT" = osx ]; then
+    if plugin "$W/pl" "" dylib dylib; then
+        got=$( cd "$W/pl" && XCC_PLUGIN_STORE="$W/pl/store" ./host tri 2>&1 )
+        [ "$got" = "$want_pl" ] || bad "plugin: '$got'"
+    else
+        bad "plugin build: $(head -c 300 "$W/e")"
+    fi
+fi
+H=${XTC_LINUX_HOST:-}
+if [ -x "$XC" ] && [ -n "$H" ]; then
+    SSHO="-o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=10"
+    if plugin "$W/plx" "-A x86_64" so so; then
+        cp support/runtime-lib/x86_64-linux/libRuntime.so "$W/plx/"
+        tar -C "$W/plx" -czf "$W/plx.tgz" . && scp $SSHO -q "$W/plx.tgz" "$H:vtbl-plugin.tgz" \
+            || bad "plugin: copy to the Linux host"
+        got=$(ssh $SSHO "$H" 'mkdir -p vtbl-plugin && cd vtbl-plugin && tar xzf ../vtbl-plugin.tgz && XCC_PLUGIN_STORE=$PWD/store LD_LIBRARY_PATH=. ./host tri 2>&1; cd && rm -rf vtbl-plugin vtbl-plugin.tgz')
+        [ "$got" = "$want_pl" ] || bad "plugin on the Linux host: '$got'"
+    else
+        bad "plugin build for x86-64: $(head -c 300 "$W/e")"
+    fi
+fi
+
 # The two compilers write the same programs.
 for m in -fbounds-check=light -fbounds-check; do
     for o in -O0 -O2; do
@@ -169,6 +294,24 @@ if [ $fail = 0 ] && [ -n "$H" ]; then
         esac
     done
     msg="$msg, arm64 Linux run"
+fi
+# android on an attached device or emulator: the in-house link, and the NDK's
+# (--no-self-host), whose image describes no run, so its own vtables pass as
+# pointers into an undescribed image while a heap pointer still stops it.
+ADB=$(command -v adb || ls "${ANDROID_HOME:-$HOME/Library/Android/sdk}"/platform-tools/adb 2>/dev/null)
+if [ $fail = 0 ] && [ -n "$ADB" ] && "$ADB" get-state > /dev/null 2>&1; then
+    for k in in ndk; do
+        f=""; [ $k = ndk ] && f=--no-self-host
+        "$XC" -q -O2 -A android -fbounds-check=light $f -H . -o "$W/and-$k" "$W/f.xc" > "$W/e" 2>&1 \
+            || { bad "-A android $f: $(head -c 300 "$W/e")"; continue; }
+        "$ADB" push "$W/and-$k" /data/local/tmp/vtbl-check > /dev/null 2>&1 || { bad "adb push"; continue; }
+        out=$("$ADB" shell 'cd /data/local/tmp && ./vtbl-check; echo rc=$?; ./vtbl-check forge 2>&1; echo rc=$?; rm -f vtbl-check' | tr -d '\r')
+        case "$out" in
+            "$want_ok"*"rc=0"*"not a vtable"*"at f.xc:20:31"*"rc=134") ;;
+            *) bad "-A android $f on the device printed: $out" ;;
+        esac
+    done
+    msg="$msg, android run"
 fi
 # win64 under wine (no crash dialogs, the gates' hidden prefix when there is one).
 WINE=$(command -v wine64 || command -v wine || true)
