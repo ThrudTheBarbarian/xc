@@ -290,7 +290,8 @@
             Map* inBody = (Map*)inOf.get((Hashable*)H);
             if (bestH != (IRBlock*)0 && body.count() >= ((Array*)bodyOf.get((Hashable*)bestH)).count())
                 continue;
-            if (!bhHasWork(body, inBody, H, defBlk, defOf, done, limName))
+            Array* exits = bhSureExits(bhExits(fn, body, inBody, H), H, bhGuardable(H, inBody));
+            if (!bhHasWork(body, inBody, H, exits, dom, defBlk, defOf, done, limName))
                 continue;
             // A unique preheader that dominates the header.
             Array* hp = self.lrcPredsIn(preds, H);
@@ -314,16 +315,61 @@
             }
         if (bestH == (IRBlock*)0)
             return false;
-        bhHoist(fn, (Array*)bodyOf.get((Hashable*)bestH), (Map*)inOf.get((Hashable*)bestH), bestH, bestPre, defBlk, defOf, done, limName);
+        Array* bestBody = (Array*)bodyOf.get((Hashable*)bestH);
+        Map* bestIn = (Map*)inOf.get((Hashable*)bestH);
+        bool guarded = bhGuardable(bestH, bestIn);
+        bhHoist(fn, bestBody, bestIn, bestH, bestPre, bhSureExits(bhExits(fn, bestBody, bestIn, bestH), bestH, guarded), guarded,
+                dom, defBlk, defOf, done, limName);
         return true;
         }
 
-    final bool bhHasWork(Array* body, Map* inBody, IRBlock* H, Map* defBlk, Map* defOf, Map* done, String* limName)
+    // The loop's blocks that go round it again or leave it: its latches, the
+    // blocks with an edge out, and any that end otherwise (a Return).
+    final Array* bhExits(IRFunc* fn, Array* body, Map* inBody, IRBlock* H)
+        {
+        Array* out = new Array();
+        for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)body.get(b);
+            IRInsn* t = bb.term();
+            bool ex = t == (IRInsn*)0
+                || !(t.op().equals(String.withCString("Branch")) || t.op().equals(String.withCString("CondBranch")));
+            Array* ss = self.lrcSuccs(fn, bb);
+            for (u32 k = (u32)0; k < ss.count(); k = k + (u32)1)
+                {
+                IRBlock* sb = (IRBlock*)ss.get(k);
+                if (sb == H || inBody.get((Hashable*)sb) == (Object*)0)
+                    ex = true;
+                }
+            if (ex)
+                out.add((Object*)bb);
+            }
+        return out;
+        }
+
+    // Does every way round the loop and out of it pass through X? Then once
+    // the loop is entered X runs, and what X reads may be read before the loop
+    // without reading anything the program would not: a loop that runs no
+    // times reads nothing.
+    final bool bhSure(IRBlock* X, Array* exits, Map* dom)
+        {
+        for (u32 k = (u32)0; k < exits.count(); k = k + (u32)1)
+            {
+            Array* d = (Array*)dom.get((Hashable*)exits.get(k));
+            if (d == (Array*)0 || !self.hasBlock(d, X))
+                return false;
+            }
+        return true;
+        }
+
+    final bool bhHasWork(Array* body, Map* inBody, IRBlock* H, Array* exits, Map* dom, Map* defBlk, Map* defOf, Map* done, String* limName)
         {
         bool noStore = bhNoStore(body);
         for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)body.get(b);
+            if (!bhSure(bb, exits, dom))
+                continue;
             for (u32 i = (u32)0; i < bb.insns().count(); i = i + (u32)1)
                 {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
@@ -367,16 +413,25 @@
         if (db == (Object*)0 || inBody.get((Hashable*)db) == (Object*)0)
             return true;
         IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
-        if (d == (IRInsn*)0 || depth > (u32)4 || d.ops().count() < (u32)1 || ((IROperand*)d.ops().get((u32)0)).kind() != (u8)OPK_USE)
+        if (d == (IRInsn*)0 || depth > (u32)8)
             return false;
-        IRValue* a = ((IROperand*)d.ops().get((u32)0)).val();
-        if (d.op().equals(String.withCString("Bitcast")))
+        // Arithmetic, casts and compares of values the loop can have: the
+        // guard and the bound of an inner loop, moving on out.
+        if (bhPure(d.op()))
             {
-            if (!bhChain(a, defBlk, defOf, inBody, H, noStore, out, depth + (u32)1))
-                return false;
-            out.add((Object*)d);
+            for (u32 k = (u32)0; k < d.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)d.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && !bhChain(o.val(), defBlk, defOf, inBody, H, noStore, out, depth + (u32)1))
+                    return false;
+                }
+            if (!self.hasInsn(out, d))
+                out.add((Object*)d);
             return true;
             }
+        if (d.ops().count() < (u32)1 || ((IROperand*)d.ops().get((u32)0)).kind() != (u8)OPK_USE)
+            return false;
+        IRValue* a = ((IROperand*)d.ops().get((u32)0)).val();
         if (!noStore || !d.op().equals(String.withCString("Load")))
             return false;
         IRInsn* fa = (IRInsn*)defOf.get((Hashable*)a);
@@ -401,10 +456,80 @@
         if (!read)
             return false;
         Object* ab = defBlk.get((Hashable*)a);
-        if (ab != (Object*)0 && inBody.get((Hashable*)ab) != (Object*)0)
+        if (ab != (Object*)0 && inBody.get((Hashable*)ab) != (Object*)0 && !self.hasInsn(out, fa))
             out.add((Object*)fa);
-        out.add((Object*)d);
+        if (!self.hasInsn(out, d))
+            out.add((Object*)d);
         return true;
+        }
+
+    static bool bhPure(String* op)
+        {
+        return op.equals(String.withCString("Bitcast")) || op.equals(String.withCString("Select")) || op.equals(String.withCString("ICmp"))
+            || op.equals(String.withCString("Const")) || op.equals(String.withCString("IntToPtr")) || op.equals(String.withCString("PtrToInt"))
+            || op.equals(String.withCString("ZExt")) || op.equals(String.withCString("SExt")) || op.equals(String.withCString("Trunc"))
+            || op.equals(String.withCString("Add")) || op.equals(String.withCString("Sub")) || op.equals(String.withCString("And"))
+            || op.equals(String.withCString("Or")) || op.equals(String.withCString("Xor"));
+        }
+
+    // Does H leave the loop through a CondBranch with one edge in, holding
+    // nothing that writes or calls? Then a copy of it before the loop says
+    // whether the loop's body runs at all (the guard).
+    final bool bhGuardable(IRBlock* H, Map* inBody)
+        {
+        IRInsn* t = H.term();
+        if (t == (IRInsn*)0 || !t.op().equals(String.withCString("CondBranch")) || t.ops().count() != (u32)3
+            || ((IROperand*)t.ops().get((u32)1)).kind() != (u8)OPK_BLOCK || ((IROperand*)t.ops().get((u32)2)).kind() != (u8)OPK_BLOCK)
+            return false;
+        bool in1 = inBody.get((Hashable*)((IROperand*)t.ops().get((u32)1)).blk()) != (Object*)0;
+        bool in2 = inBody.get((Hashable*)((IROperand*)t.ops().get((u32)2)).blk()) != (Object*)0;
+        if (in1 == in2)
+            return false;
+        for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
+            {
+            String* op = ((IRInsn*)H.insns().get(i)).op();
+            if (self.lrcWritesMemory(op) || op.hasPrefix(String.withCString("Call")) || op.equals(String.withCString("LoadVolatile")))
+                return false;
+            }
+        return true;
+        }
+
+    // The exits bhSure asks about: with a guard, not H's own (the body only
+    // runs once H has chosen to enter it).
+    final Array* bhSureExits(Array* exits, IRBlock* H, bool guarded)
+        {
+        if (!guarded)
+            return exits;
+        Array* out = new Array();
+        for (u32 k = (u32)0; k < exits.count(); k = k + (u32)1)
+            if ((IRBlock*)exits.get(k) != H)
+                out.add(exits.get(k));
+        return out;
+        }
+
+    // `enter ? p : null` (or the other way round when H's false edge enters),
+    // at the end of e: the bound reads nothing for a loop that does not run.
+    final IRValue* bhGate(IRBlock* e, IRValue* enter, bool sense, IROperand* p, IRInsn* at)
+        {
+        IRValue* z = new IRValue(String.withCString("U8"));
+        IRInsn* zc = IRInsn.with(String.withCString("Const"));
+        zc.setRes(z);
+        zc.add(IROperand.immI((i32)0, String.withCString("U8")));
+        e.add(zc);
+        IRValue* np = new IRValue(p.val().ty());
+        IRInsn* ip = IRInsn.with(String.withCString("IntToPtr"));
+        ip.setRes(np);
+        ip.add(IROperand.useVal(z));
+        e.add(ip);
+        IRValue* g = new IRValue(p.val().ty());
+        IRInsn* sel = IRInsn.with(String.withCString("Select"));
+        sel.copyDbg(at);
+        sel.setRes(g);
+        sel.add(IROperand.useVal(enter));
+        sel.add(sense ? p : IROperand.useVal(np));
+        sel.add(sense ? IROperand.useVal(np) : p);
+        e.add(sel);
+        return g;
         }
 
     // The instructions bhChain listed, moved to the end of the preheader. Each
@@ -436,10 +561,97 @@
             }
         }
 
-    final void bhHoist(IRFunc* fn, Array* body, Map* inBody, IRBlock* H, IRBlock* pre, Map* defBlk, Map* defOf, Map* done, String* limName)
+    final void bhHoist(IRFunc* fn, Array* body, Map* inBody, IRBlock* H, IRBlock* pre, Array* exits, bool guarded, Map* dom,
+                       Map* defBlk, Map* defOf, Map* done, String* limName)
         {
         bool noStore = bhNoStore(body);
         Map* limOf = new Map();
+        // What is hoisted runs only when the loop is entered: a preheader that
+        // may go elsewhere (a rotated loop's trip test, which skips a loop that
+        // runs no times) gets a block of its own on the edge into the loop.
+        if (guarded || pre.term() == (IRInsn*)0 || !pre.term().op().equals(String.withCString("Branch")))
+            {
+            IRBlock* e = new IRBlock(String.withFormat("bh%lu_pre", fn.blocks().count()));
+            IRInsn* eb = IRInsn.with(String.withCString("Branch"));
+            eb.add(IROperand.block(H));
+            e.setTerm(eb);
+            IRInsn* pt = pre.term();
+            for (u32 k = (u32)0; pt != (IRInsn*)0 && k < pt.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)pt.ops().get(k);
+                if (o.kind() == (u8)OPK_BLOCK && o.blk() == H)
+                    pt.ops().set(k, (Object*)IROperand.block(e));
+                }
+            for (u32 pi = (u32)0; pi < H.phis().count(); pi = pi + (u32)1)
+                {
+                IRInsn* phi = (IRInsn*)H.phis().get(pi);
+                for (u32 j = (u32)0; j < phi.ops().count(); j = j + (u32)1)
+                    {
+                    IROperand* po = (IROperand*)phi.ops().get(j);
+                    if (po.kind() == (u8)OPK_BLOCK && po.blk() == pre)
+                        phi.ops().set(j, (Object*)IROperand.block(e));
+                    }
+                }
+            fn.blocks().insert(self.blockIndex(fn, pre) + (u32)1, (Object*)e);
+            pre = e;
+            }
+        // The guard: H's instructions again in the new preheader, each phi
+        // read as the value it takes on entry, and H's condition.
+        IRValue* enter = (IRValue*)0;
+        bool sense = true;
+        if (guarded)
+            {
+            Map* remap = new Map();
+            for (u32 pi = (u32)0; pi < H.phis().count(); pi = pi + (u32)1)
+                {
+                IRInsn* phi = (IRInsn*)H.phis().get(pi);
+                for (u32 j = (u32)0; j + (u32)1 < phi.ops().count(); j = j + (u32)2)
+                    {
+                    IROperand* po = (IROperand*)phi.ops().get(j);
+                    if (po.kind() == (u8)OPK_BLOCK && po.blk() == pre && phi.res() != (IRValue*)0)
+                        remap.set((Hashable*)phi.res(), phi.ops().get(j + (u32)1));
+                    }
+                }
+            for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)H.insns().get(i);
+                IRInsn* c = IRInsn.with(n.op());
+                c.setPred(n.pred());
+                c.setCc(n.cc());
+                c.copyDbg(n);
+                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                    c.add(self.substOperand(remap, (IROperand*)n.ops().get(k)));
+                if (n.res() != (IRValue*)0)
+                    {
+                    IRValue* r = new IRValue(n.res().ty());
+                    c.setRes(r);
+                    remap.set((Hashable*)n.res(), (Object*)IROperand.useVal(r));
+                    }
+                if (n.memRes() != (IRValue*)0)
+                    {
+                    IRValue* r = new IRValue(n.memRes().ty());
+                    c.setMemRes(r);
+                    remap.set((Hashable*)n.memRes(), (Object*)IROperand.useVal(r));
+                    }
+                pre.add(c);
+                }
+            IRInsn* t = H.term();
+            IROperand* co = self.substOperand(remap, (IROperand*)t.ops().get((u32)0));
+            if (co.kind() != (u8)OPK_USE)
+                {
+                // A constant condition: a Const to select on.
+                IRValue* cv = new IRValue(String.withCString("Bool"));
+                IRInsn* cc = IRInsn.with(String.withCString("Const"));
+                cc.setRes(cv);
+                cc.add(co);
+                pre.add(cc);
+                co = IROperand.useVal(cv);
+                }
+            enter = co.val();
+            sense = inBody.get((Hashable*)((IROperand*)t.ops().get((u32)1)).blk()) != (Object*)0;
+            }
+        // The block each of the body's blocks was split from, for bhSure.
+        Map* origOf = new Map();
         // The bounds an inner loop computed, moved on out. A second for the
         // same pointer takes the first's value.
         for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
@@ -450,7 +662,7 @@
                 {
                 IRInsn* n = (IRInsn*)bb.insns().get(i);
                 Array* chain = new Array();
-                if (!bhIsLimit(n, limName)
+                if (!bhIsLimit(n, limName) || !bhSure(bb, exits, dom)
                     || !bhChain(((IROperand*)n.ops().get((u32)1)).val(), defBlk, defOf, inBody, H, noStore, chain, (u32)0))
                     {
                     i = i + (u32)1;
@@ -466,6 +678,8 @@
                     self.rewriteUsesTo(fn, n.res(), IROperand.useVal(had));
                     continue;
                     }
+                if (enter != (IRValue*)0)
+                    n.ops().set((u32)1, (Object*)IROperand.useVal(bhGate(pre, enter, sense, (IROperand*)n.ops().get((u32)1), n)));
                 pre.insns().add((Object*)n);
                 limOf.set((Hashable*)p, (Object*)n.res());
                 }
@@ -486,7 +700,8 @@
                 IROperand* po = (IROperand*)n.ops().get((u32)1);
                 IROperand* io = (IROperand*)n.ops().get((u32)2);
                 Array* chain = new Array();
-                if (io.kind() != (u8)OPK_USE || po.kind() != (u8)OPK_USE
+                IRBlock* ob = (IRBlock*)origOf.get((Hashable*)bb);
+                if (io.kind() != (u8)OPK_USE || po.kind() != (u8)OPK_USE || !bhSure(ob != (IRBlock*)0 ? ob : bb, exits, dom)
                     || !bhChain(po.val(), defBlk, defOf, inBody, H, noStore, chain, (u32)0))
                     continue;
                 bhMove(chain, body, pre, defBlk);
@@ -510,7 +725,7 @@
                     lc.setRes(lim);
                     lc.setMemRes(new IRValue(String.withCString("Mem")));
                     lc.add(IROperand.sym(limName));
-                    lc.add(IROperand.useVal(po.val()));
+                    lc.add(enter != (IRValue*)0 ? IROperand.useVal(bhGate(pre, enter, sense, po, n)) : IROperand.useVal(po.val()));
                     lc.add(mo);
                     pre.insns().add((Object*)lc);
                     limOf.set((Hashable*)po.val(), (Object*)lim);
@@ -542,6 +757,7 @@
                 fn.blocks().add((Object*)slow);
                 body.add((Object*)cont);
                 inBody.set((Hashable*)cont, (Object*)cont);
+                origOf.set((Hashable*)cont, (Object*)(ob != (IRBlock*)0 ? ob : bb));
                 break;
                 }
             }
