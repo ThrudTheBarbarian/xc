@@ -206,13 +206,15 @@ bool gVkBudget;
 bool gVkHostImport;
 vkGetMemoryHostPointerPropertiesEXT_t* gVk_hostPtrProps;
 pointer gParVkHost[49];     // the `simd:` block binding slot i imports, or 0
-// The blocks freed lately, which an import must not outlive: the single-shot
-// slots drop theirs when the block goes (parVulkanFreed); a tile worker
-// checks the ring for blocks freed since it last looked (ParVulkanWorker.
-// forgetFreed). A worker that fell more than a ring behind drops every import.
-#define PAR_VK_FREED 64
-pointer gParVkFreed[PAR_VK_FREED];
-u64 gParVkFreedSeq;
+// An import must not outlive its block. RADV puts every memory object the
+// device holds in every submission, so an import whose pages have gone back
+// to the system fails the next submission of ANY kernel ("The CS has been
+// rejected", -14) and loses the device. When a block goes (parVulkanFreed,
+// called before its pages are freed) the single-shot slots and every tile
+// worker that imported it let it go at once. The workers that ever imported
+// a block are listed here (not retained: a worker leaves when it goes).
+#define PAR_VK_WORKERS 16
+pointer gParVkWorker[PAR_VK_WORKERS];
 void parVulkanFreed(pointer payload);
 
 class ParVulkan
@@ -805,11 +807,10 @@ class ParVulkan
         gParVkCap[i] = (i64)0;
         }
 
-    // The block at payload is going: a slot importing it lets it go.
+    // The block at payload is going: a single-shot slot importing it lets
+    // it go (the tile workers' imports go in parVulkanFreed).
     static void freed(pointer payload)
         {
-        gParVkFreed[(u32)(gParVkFreedSeq % (u64)PAR_VK_FREED)] = payload;
-        gParVkFreedSeq = gParVkFreedSeq + (u64)1;
         for (u32 i = (u32)0; i < (u32)49; i = i + (u32)1)
             if (gParVkHost[i] == payload)
                 drop(i);
@@ -1473,7 +1474,7 @@ class ParVulkanWorker : ParWorker
     ParChunk* _proto;
     ParLayout* _l;
     u32 _nb;                // bindings: args + buffers + globals + reductions
-    u64 _freedSeen;         // gParVkFreedSeq when this worker last looked
+    bool _listed;           // in gParVkWorker, for its imports' blocks to find
     // The buffers are kept from run to run and grown when a run needs more
     // (a host-visible allocation is pages pinned and zeroed: costly a run).
     u64 _hbuf[49];
@@ -1622,6 +1623,7 @@ class ParVulkanWorker : ParWorker
         if (want != (pointer)0 && ParVulkan.importBuffer(want, need, b, m))
             {
             ParDevice.onFree(want, &parVulkanFreed);
+            list();
             *map = (u8*)want;
             *host = want;
             *cap = need;
@@ -1648,36 +1650,67 @@ class ParVulkanWorker : ParWorker
         return true;
         }
 
-    // Imports of blocks freed since this worker last looked go.
-    void forgetFreed()
+    // Into gParVkWorker, once: a block this worker imports finds it there
+    // when it is freed. With the list full the import is not kept past the
+    // run (finish), so it cannot outlive its block either.
+    void list()
         {
-        u64 now = gParVkFreedSeq;
-        bool all = now - _freedSeen > (u64)PAR_VK_FREED;
-        for (u64 s = _freedSeen; !all && s < now; s = s + (u64)1)
-            {
-            pointer p = gParVkFreed[(u32)(s % (u64)PAR_VK_FREED)];
-            for (u32 i = (u32)0; i < (u32)49; i = i + (u32)1)
-                if (_hhost[i] == p)
-                    {
-                    freeBuf(&_hbuf[i], &_hmem[i]);
-                    _hhost[i] = (pointer)0;
-                    _hcap[i] = (i64)0;
-                    }
-            }
-        if (all)
-            for (u32 i = (u32)0; i < (u32)49; i = i + (u32)1)
-                if (_hhost[i] != (pointer)0)
-                    {
-                    freeBuf(&_hbuf[i], &_hmem[i]);
-                    _hhost[i] = (pointer)0;
-                    _hcap[i] = (i64)0;
-                    }
-        _freedSeen = now;
+        if (_listed)
+            return;
+        for (u32 k = (u32)0; k < (u32)PAR_VK_WORKERS; k = k + (u32)1)
+            if (gParVkWorker[k] == (pointer)0)
+                {
+                gParVkWorker[k] = (pointer)self;
+                _listed = true;
+                return;
+                }
+        }
+
+    // The block at payload is going: an import of it goes now, once the GPU
+    // has finished every submission of this worker's still in flight.
+    void forget(pointer payload)
+        {
+        bool held = false;
+        for (u32 i = (u32)0; i < (u32)49; i = i + (u32)1)
+            if (_hhost[i] == payload)
+                held = true;
+        if (!held)
+            return;
+        for (u32 d = (u32)0; d < (u32)PAR_VK_DEPTH; d = d + (u32)1)
+            if (_slotTile[d] != (ParTile*)0 && _fence[d] != (u64)0)
+                gVk_wait(gVkDev, (u32)1, &_fence[d], (u32)1, (u64)0xFFFFFFFFFFFFFFFF);
+        for (u32 i = (u32)0; i < (u32)49; i = i + (u32)1)
+            if (_hhost[i] == payload)
+                {
+                freeBuf(&_hbuf[i], &_hmem[i]);
+                _hhost[i] = (pointer)0;
+                _hcap[i] = (i64)0;
+                _hmap[i] = (u8*)0;
+                }
+        }
+
+    // Every import goes at the end of a run when this worker is not listed.
+    void forgetAll()
+        {
+        for (u32 i = (u32)0; i < (u32)49; i = i + (u32)1)
+            if (_hhost[i] != (pointer)0)
+                {
+                freeBuf(&_hbuf[i], &_hmem[i]);
+                _hhost[i] = (pointer)0;
+                _hcap[i] = (i64)0;
+                _hmap[i] = (u8*)0;
+                }
+        }
+
+    void dealloc(void)
+        {
+        for (u32 k = (u32)0; k < (u32)PAR_VK_WORKERS; k = k + (u32)1)
+            if (gParVkWorker[k] == (pointer)self)
+                gParVkWorker[k] = (pointer)0;
         }
 
     bool prepare(ParChunk* proto, u8* src, ParLayout* l, i64 tile)
         {
-        forgetFreed();
         u8* spv = ParVulkan.spirvFor(src, identity());
         _slot = spv != (u8*)0 ? ParVulkan.pipeline(spv) : (i32)-1;
         if (_slot < (i32)0)
@@ -1960,6 +1993,8 @@ class ParVulkanWorker : ParWorker
         {
         if (_proto != (ParChunk*)0 && _l != (ParLayout*)0)
             ParDevice.wroteAll(_proto.objBytes(), _l);
+        if (!_listed)
+            forgetAll();
         _ready = false;
         _proto = (ParChunk*)0;
         _l = (ParLayout*)0;
@@ -2314,8 +2349,12 @@ class ParVulkanWorker : ParWorker
         }
     }
 
-// The once hook an imported block's header carries (ParDevice.onFree).
+// The once hook an imported block's header carries (ParDevice.onFree),
+// called before the block's pages are freed: no import of them may be left.
 void parVulkanFreed(pointer payload)
     {
     ParVulkan.freed(payload);
+    for (u32 k = (u32)0; k < (u32)PAR_VK_WORKERS; k = k + (u32)1)
+        if (gParVkWorker[k] != (pointer)0)
+            ((ParVulkanWorker*)gParVkWorker[k]).forget(payload);
     }
