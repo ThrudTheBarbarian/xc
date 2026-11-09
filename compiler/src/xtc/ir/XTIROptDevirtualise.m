@@ -325,6 +325,31 @@ static BOOL smallLeaf(XTIRFunction* f)
     return eq;
     }
 
+// A checked build's vtable check (#34) on the dispatch d, in its block b: the
+// call `_xt_check_vtbl(recv, site)` on d's receiver whose memory token d
+// takes. Where the class test proves the class, the call is direct and reads
+// no vtable, so the check goes with the dispatch: into the fallback (the split
+// form), or out of a class's copy of the loop (versioning). The port's
+// dvCheckOf.
+- (nullable XTIRInsn*)checkOf:(XTIRInsn*)d in:(XTIRBlock*)b
+    {
+    XTIROperand* ro = d.operands[0];
+    XTIROperand* mo = d.operands.lastObject;
+    if (ro.kind != XTIROperandKindUse || mo.kind != XTIROperandKindUse)
+        return nil;
+    for (XTIRInsn* n in b.instructions)
+        {
+        if (!n.memoryResult || n.memoryResult.valueId != mo.valueId)
+            continue;
+        if (n.opcode != XTIROpCall || n.operands.count < 3 || n.operands[0].kind != XTIROperandKindSym
+            || n.operands[1].kind != XTIROperandKindUse || n.operands[1].valueId != ro.valueId)
+            return nil;
+        XTIRSymbol* cs = [_mod symbolForId:n.operands[0].symbolId];
+        return [cs.name isEqualToString:@"_xt_check_vtbl"] ? n : nil;
+        }
+    return nil;
+    }
+
 // ── the split form ──────────────────────────────────────────────────────
 
 - (void)apply:(XTIRBlock*)B index:(NSUInteger)bi at:(NSUInteger)i site:(XTIRInsn*)d candidates:(NSArray<XTIRSymbol*>*)cands
@@ -336,6 +361,17 @@ static BOOL smallLeaf(XTIRFunction* f)
     NSString* base = [NSString stringWithFormat:@"%@_dv%lu", nameOf(B), (unsigned long)_seq];
     XTIROperand* ro = d.operands[0];
     XTIROperand* mo = d.operands.lastObject;
+    // The vtable check moves to the fallback: the tests and the direct calls
+    // take the memory it took.
+    XTIRInsn* chk = [self checkOf:d in:B];
+    if (chk)
+        {
+        NSUInteger ci = [B.instructions indexOfObjectIdenticalTo:chk];
+        [B.instructions removeObjectAtIndex:ci];
+        if (ci < i)
+            i--;
+        mo = chk.operands.lastObject;
+        }
 
     // The join: what followed the site, and B's terminator.
     XTIRBlock* J = [self block:[base stringByAppendingString:@"_join"]];
@@ -354,6 +390,8 @@ static BOOL smallLeaf(XTIRFunction* f)
 
     // The fallback: the dispatch as it was.
     XTIRBlock* F = [self block:[base stringByAppendingString:@"_virt"]];
+    if (chk)
+        [F.instructions addObject:chk];
     [F.instructions addObject:d];
     [F setTerminator:[self branchTo:J]];
 
@@ -388,7 +426,7 @@ static BOOL smallLeaf(XTIRFunction* f)
         NSMutableArray<XTIROperand*>* ops = [NSMutableArray arrayWithObjects:
                                              [XTIROperand symWithSymbolId:[self symbolIdOf:impl]], recv, nil];
         for (NSUInteger k = 2; k < d.operands.count; k++)
-            [ops addObject:d.operands[k]];
+            [ops addObject:k + 1 == d.operands.count ? mo : d.operands[k]];
         // The result at the method's own return type, cast to the site's (the
         // port's dvResultAs explains).
         XTIRValue* res = d.result ? [self value:d.result.type in:T] : nil;
@@ -846,14 +884,40 @@ static XTIRInsn* cloneInsn(XTIRInsn* n, NSDictionary<NSNumber*, XTIRValue*>* vma
              from:(XTIRBlock*)P
             entry:(XTIRBlock*)entry
     {
+    // The vtable checks of the dispatches this copy makes direct: the class is
+    // known here and a direct call reads no vtable, so each goes, its memory
+    // token standing for the one it took.
+    NSMutableArray<XTIRInsn*>* drops = [NSMutableArray array];
+    for (XTIRBlock* ob in body)
+        for (XTIRInsn* n in ob.instructions)
+            {
+            if (n.opcode != XTIROpVTblDispatch || n.operands.count < 3)
+                continue;
+            XTIROperand* r0 = n.operands[0];
+            if (n != d && !(r0.kind == XTIROperandKindUse && r0.valueId == d.operands[0].valueId
+                            && hasSlot(vt, n.operands[1].intValue)))
+                continue;
+            XTIRInsn* c = [self checkOf:n in:ob];
+            if (c)
+                [drops addObject:c];
+            }
     for (XTIRBlock* ob in body)
         {
         XTIRBlock* nb = [bmap objectForKey:ob];
         for (XTIRInsn* p in ob.phiNodes)
             [self name:p values:vmap in:nb];
         for (XTIRInsn* n in ob.instructions)
-            [self name:n values:vmap in:nb];
+            if ([drops indexOfObjectIdenticalTo:n] == NSNotFound)
+                [self name:n values:vmap in:nb];
         }
+    for (XTIRBlock* ob in body)
+        for (XTIRInsn* n in ob.instructions)
+            {
+            if ([drops indexOfObjectIdenticalTo:n] == NSNotFound)
+                continue;
+            XTIRValueId src = n.operands.lastObject.valueId;
+            vmap[@(n.memoryResult.valueId)] = vmap[@(src)] ?: [_fn valueForId:src];
+            }
     for (XTIRBlock* ob in body)
         {
         XTIRBlock* nb = [bmap objectForKey:ob];
@@ -869,6 +933,8 @@ static XTIRInsn* cloneInsn(XTIRInsn* n, NSDictionary<NSNumber*, XTIRValue*>* vma
             }
         for (XTIRInsn* n in ob.instructions)
             {
+            if ([drops indexOfObjectIdenticalTo:n] != NSNotFound)
+                continue;
             if (n == d)
                 {
                 [self directCall:n values:vmap impl:impl in:nb];
