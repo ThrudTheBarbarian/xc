@@ -194,6 +194,16 @@ class ParTrace
         }
     }
 
+// Each worker's rate on the queue's last run of a block, in items per us
+// scaled by 1024, by block slot and the worker's place in the pool (16 a
+// block): the next run of the block starts from it. Without it every run of
+// a forced set (XC_PAR=gpus, which auto never measures) began with every
+// worker unrated, so each took a tile before its rate was known, and a slow
+// device's one tile outlasted the fast device's whole share (md5 on an
+// integrated GPU beside a remote RTX 5080: 30 ms, against 3.2 on the 5080
+// alone, on every run).
+i64 gParWorkerRate[1024];
+
 class ParTiles
     {
     // Element range [e0, e1) of a footprinted buffer of `count` elements
@@ -643,6 +653,15 @@ class ParTiles
                 _links.unwatch(((ParWorker*)ws.get(i)).waitFd());
         }
 
+    // A worker's place in the pool, for gParWorkerRate; 16 when it has none.
+    static u32 poolIndex(ParWorker* w)
+        {
+        for (u32 j = (u32)0; j < _workers.count() && j < (u32)16; j = j + (u32)1)
+            if ((ParWorker*)_workers.get(j) == w)
+                return j;
+        return (u32)16;
+        }
+
     static bool runLocked(ParChunk* proto, u8* src, i64 lo, i64 hi, i32 set)
         {
         i64 started = ParDevice.nowUs();
@@ -831,11 +850,12 @@ class ParTiles
                 ParDevice.setDeclined(proto, set);
             return false;
             }
-        i64 next = (i64)0;      // the next tile to hand out
+        i64 next = (i64)0;      // the next tile to hand out from the front
+        i64 back = (i64)0;      // and from the back (set below)
         i64 folded = (i64)0;    // tiles folded so far, in order
         u32 inFlight = (u32)0;
         // Each worker's throughput so far (items per us, from its finished
-        // tiles over the time since its first), and the items it holds: a
+        // tiles over the time it was busy on them), and the items it holds: a
         // tile goes to whichever worker with room would finish it first, so
         // a slow device beside a fast one takes its share and no more, and
         // is not left holding the last tiles. Until a worker has a rate it
@@ -845,13 +865,24 @@ class ParTiles
             nw = (u32)16;
         i64 inItems[16];
         i64 doneItems[16];
-        i64 firstTake[16];
         bool full[16];
+        // The time each worker was busy on its doneItems: from a tile out to
+        // an idle worker, or the last tile in, to the next tile in. Idle time
+        // is not counted, so a slow device that waited behind a fast one is
+        // not rated slower still for the waiting. The run's own share of
+        // both, for gParWorkerRate; mark is where the worker's clock runs from.
+        i64 busyUs[16];
+        i64 mark[16];
+        i64 runItems[16];
+        i64 runBusy[16];
         for (u32 i = (u32)0; i < nw; i = i + (u32)1)
             {
             inItems[i] = (i64)0;
             doneItems[i] = (i64)0;
-            firstTake[i] = (i64)0;
+            busyUs[i] = (i64)0;
+            mark[i] = (i64)0;
+            runItems[i] = (i64)0;
+            runBusy[i] = (i64)0;
             }
         // The workers' rates are seeded from auto's measurements of the block
         // at this size, where it has them (the CPU's, the single GPU's and
@@ -883,7 +914,7 @@ class ParTiles
                 if (us > (i64)0)
                     {
                     doneItems[i] = gParMeasN[bi];
-                    firstTake[i] = ParDevice.nowUs() - us;
+                    busyUs[i] = us;
                     }
                 }
         // A probed block's rates seed the workers auto never measured (every
@@ -898,11 +929,27 @@ class ParTiles
             if (ParDevice.probePrior(proto, ((ParWorker*)ws.get(i)).identity(), &pk, &ps, &pr) && pr > (i64)0)
                 {
                 doneItems[i] = n;
-                firstTake[i] = ParDevice.nowUs() - ((n << (i64)10) / pr);
+                busyUs[i] = (n << (i64)10) / pr;
                 if (ParDevice.tracing())
                     Log.info("par: %s: %s seeded from the probe (%ld items/ms)", proto.parName(), ((ParWorker*)ws.get(i)).identity().cString(), pr * (i64)1000 >> (i64)10);
                 }
             }
+        // A worker the queue has run this block on before starts from its
+        // rate then, ahead of auto's and the probe's whole-block figures:
+        // it is this worker's own rate on tiles, where auto's single GPU
+        // stands for every local card. A slow device then waits behind a
+        // fast one from the first tile of the run, and gets a tile only when
+        // it would finish it first.
+        if (_probeWorker == (ParWorker*)0)
+            for (u32 i = (u32)0; i < nw; i = i + (u32)1)
+                {
+                u32 pi = ParTiles.poolIndex((ParWorker*)ws.get(i));
+                if (pi >= (u32)16 || gParWorkerRate[bi * (u32)16 + pi] <= (i64)0)
+                    continue;
+                doneItems[i] = n;
+                busyUs[i] = (n << (i64)10) / gParWorkerRate[bi * (u32)16 + pi];
+                }
+        back = ntiles - (i64)1;
         ParTrace.begin(proto.parName(), ws, n, ntiles);
         // Tiles a worker took and lost (its connection died) go out again,
         // before the ones not yet handed out: a tile is idempotent.
@@ -929,14 +976,25 @@ class ParTiles
                     reissued = reissued + (i64)1;
                     }
                 }
-            while (next < ntiles || again.count() > (u32)0)
+            while (next <= back || again.count() > (u32)0)
                 {
                 bool fromAgain = again.count() > (u32)0;
-                ParTile* pt = fromAgain ? (ParTile*)again.get((u32)0) : (ParTile*)tiles.get((u32)next);
-                i64 items = pt.hi - pt.lo;
+                ParTile* ptFront = fromAgain ? (ParTile*)again.get((u32)0) : (ParTile*)tiles.get((u32)next);
+                ParTile* ptBack = fromAgain ? ptFront : (ParTile*)tiles.get((u32)back);
                 i64 now = ParDevice.nowUs();
                 i64 best = (i64)-1;
                 i64 bestAt = (i64)0;
+                bool bestBack = false;
+                // A measured worker under half the fastest one's rate takes
+                // its tiles from the back of the list, where the tail's tiles
+                // are the smallest: its tiles are then sized nearer its rate,
+                // and the tiles where the work starts, which a block's cheap
+                // edges often are, go to the fast one first. The tiles are
+                // the same either way and fold in list order.
+                i64 fastest = (i64)0;
+                for (u32 i = (u32)0; i < nw; i = i + (u32)1)
+                    if (doneItems[i] > (i64)0 && busyUs[i] > (i64)0 && (doneItems[i] << (i64)10) / busyUs[i] > fastest)
+                        fastest = (doneItems[i] << (i64)10) / busyUs[i];
                 // The soonest a worker already at its depth would finish this
                 // tile: when that beats every worker with room, the tile waits
                 // for it rather than going to a slower one. Without this the
@@ -949,8 +1007,7 @@ class ParTiles
                 for (u32 i = (u32)0; i < nw; i = i + (u32)1)
                     if (!isCpuW[i] && doneItems[i] != (i64)0)
                         {
-                        i64 elapsed = now - firstTake[i];
-                        if (elapsed < (i64)1) elapsed = (i64)1;
+                        i64 elapsed = busyUs[i] < (i64)1 ? (i64)1 : busyUs[i];
                         i64 r = (elapsed << (i64)20) / doneItems[i];
                         if (gpuUsPerItem < (i64)0 || r < gpuUsPerItem)
                             gpuUsPerItem = r;
@@ -969,6 +1026,10 @@ class ParTiles
                     // skipped now, offered again next round once it is ready.
                     if (!((ParWorker*)ws.get(i)).ready(now))
                         continue;
+                    bool fromBack = !fromAgain && doneItems[i] > (i64)0 && busyUs[i] > (i64)0 &&
+                                    ((doneItems[i] << (i64)10) / busyUs[i]) * (i64)2 < fastest;
+                    ParTile* pt = fromBack ? ptBack : ptFront;
+                    i64 items = pt.hi - pt.lo;
                     i64 at;
                     if (doneItems[i] == (i64)0 && isCpuW[i] && nw > (u32)1 && gpuUsable)
                         {
@@ -989,8 +1050,7 @@ class ParTiles
                         at = inItems[i] == (i64)0 ? (i64)0 : (i64)1 << (i64)60;
                     else
                         {
-                        i64 elapsed = now - firstTake[i];
-                        if (elapsed < (i64)1) elapsed = (i64)1;
+                        i64 elapsed = busyUs[i] < (i64)1 ? (i64)1 : busyUs[i];
                         at = (i64)2 + (inItems[i] + items) * elapsed / doneItems[i];
                         // A remote whose daemon holds this tile's slices
                         // already skips their upload (its cache).
@@ -1007,20 +1067,44 @@ class ParTiles
                         {
                         best = (i64)i;
                         bestAt = at;
+                        bestBack = fromBack;
                         }
                     }
                 if (best < (i64)0)
                     break;
+                ParTile* pt = bestBack ? ptBack : ptFront;
+                i64 items = pt.hi - pt.lo;
+                // A worker at its depth would finish the tile first. It
+                // waits for that worker unless the slower one would finish
+                // it, with a quarter to spare, before the measured workers
+                // could finish everything left without it: then the tile
+                // shortens the run. Comparing with the faster worker's next
+                // tile alone starved an integrated GPU beside a remote RTX
+                // 5080 on mandel_deep, where its share is a quarter.
                 if (fullAt >= (i64)0 && fullAt < bestAt)
-                    break;
+                    {
+                    i64 remain = next <= back ? ((ParTile*)tiles.get((u32)back)).hi - ((ParTile*)tiles.get((u32)next)).lo : (i64)0;
+                    for (u32 k = (u32)0; k < again.count(); k = k + (u32)1)
+                        remain = remain + (((ParTile*)again.get(k)).hi - ((ParTile*)again.get(k)).lo);
+                    i64 rateSum = (i64)0;
+                    i64 held = (i64)0;
+                    for (u32 i = (u32)0; i < nw; i = i + (u32)1)
+                        if ((i64)i != best && doneItems[i] > (i64)0 && busyUs[i] > (i64)0 && !((ParWorker*)ws.get(i)).dead())
+                            {
+                            rateSum = rateSum + (doneItems[i] << (i64)10) / busyUs[i];
+                            held = held + inItems[i];
+                            }
+                    if (rateSum <= (i64)0 || bestAt * (i64)5 > (((held + remain) << (i64)10) / rateSum) * (i64)4)
+                        break;
+                    }
                 ParWorker* w = (ParWorker*)ws.get((u32)best);
                 if (!w.take(pt, proto, src, l))
                     {
                     full[best] = true;
                     continue;
                     }
-                if (firstTake[best] == (i64)0)
-                    firstTake[best] = now;
+                if (inItems[best] == (i64)0)
+                    mark[best] = now;
                 ParTrace.take((u32)best, pt, bestAt);
                 if (ParDevice.tracing())
                     Log.info("par: tile %ld [%ld, %ld) -> %s (would finish in %ld us) at +%ld us",
@@ -1028,6 +1112,8 @@ class ParTiles
                 inItems[best] = inItems[best] + items;
                 if (fromAgain)
                     again.removeAt((u32)0);
+                else if (bestBack)
+                    back = back - (i64)1;
                 else
                     next = next + (i64)1;
                 inFlight = inFlight + (u32)1;
@@ -1045,6 +1131,11 @@ class ParTiles
                     inFlight = inFlight - (u32)1;
                     inItems[i] = inItems[i] - (d.hi - d.lo);
                     doneItems[i] = doneItems[i] + (d.hi - d.lo);
+                    i64 t = ParDevice.nowUs();
+                    busyUs[i] = busyUs[i] + (t - mark[i]);
+                    runBusy[i] = runBusy[i] + (t - mark[i]);
+                    runItems[i] = runItems[i] + (d.hi - d.lo);
+                    mark[i] = t;
                     d = w.poll();
                     }
                 }
@@ -1056,7 +1147,7 @@ class ParTiles
                 d.partial = (ParChunk*)0;
                 folded = folded + (i64)1;
                 }
-            if (!got && inFlight == (u32)0 && next >= ntiles && again.count() == (u32)0 && folded < ntiles)
+            if (!got && inFlight == (u32)0 && next > back && again.count() == (u32)0 && folded < ntiles)
                 break; // nothing in flight and nothing finishing: cannot happen, but do not spin
             // Every tile out is on another machine: wait for one of their
             // results links (or 100 ms) rather than ask again at once.
@@ -1065,7 +1156,7 @@ class ParTiles
             // Tiles remain, nothing is in flight and no worker is ready (every
             // remote in its nimby window, say): wait a little rather than
             // spin, and ask again — unless every worker is gone for good.
-            if (!got && inFlight == (u32)0 && (next < ntiles || again.count() > (u32)0))
+            if (!got && inFlight == (u32)0 && (next <= back || again.count() > (u32)0))
                 {
                 bool anyAlive = false;
                 for (u32 i = (u32)0; i < nw; i = i + (u32)1)
@@ -1086,13 +1177,28 @@ class ParTiles
         if (reissued > (i64)0 && ParDevice.reporting())
             Log.info("par: %s: %ld tile(s) re-issued after a worker was lost", proto.parName(), reissued);
         // The fastest worker's rate, for the next run's tile sizing.
-        i64 ended = ParDevice.nowUs();
         for (u32 i = (u32)0; i < nw; i = i + (u32)1)
-            if (doneItems[i] > (i64)0 && ended > firstTake[i])
+            if (doneItems[i] > (i64)0 && busyUs[i] > (i64)0)
                 {
-                i64 r = (doneItems[i] << (i64)10) / (ended - firstTake[i]);
+                i64 r = (doneItems[i] << (i64)10) / busyUs[i];
                 if (r > gParTileRate[bi])
                     gParTileRate[bi] = r;
+                }
+        // Each worker's rate over its own tiles, while it was busy, for the
+        // next run; one that ran none this time keeps the rate it had.
+        if (_probeWorker == (ParWorker*)0)
+            for (u32 i = (u32)0; i < nw; i = i + (u32)1)
+                {
+                u32 pi = ParTiles.poolIndex((ParWorker*)ws.get(i));
+                if (pi < (u32)16 && runItems[i] > (i64)0 && runBusy[i] > (i64)0)
+                    {
+                    i64 r = (runItems[i] << (i64)10) / runBusy[i];
+                    i64 old = gParWorkerRate[bi * (u32)16 + pi];
+                    gParWorkerRate[bi * (u32)16 + pi] = old > (i64)0 ? (old + r) / (i64)2 : r;
+                    if (ParDevice.tracing())
+                        Log.info("par: %s: %s: %ld items in %ld us busy (%ld items/ms)", proto.parName(), ((ParWorker*)ws.get(i)).identity().cString(),
+                                 runItems[i], runBusy[i], runItems[i] * (i64)1000 / runBusy[i]);
+                    }
                 }
         if (ParDevice.reporting())
             {
