@@ -2929,6 +2929,15 @@ class ParRemoteServe
                         d = w.poll();
                         }
                     }
+                // The GPU was lost: the tiles it held never finish, and the
+                // program gives them to its other workers once the
+                // connection drops.
+                if (w.dead())
+                    {
+                    Log.info("xcd: the GPU was lost; dropping the connection");
+                    s.close();
+                    break;
+                    }
                 }
             // A frame, when one is there: with the watcher, one wait for a
             // frame or a finished tile; else a millisecond's wait while

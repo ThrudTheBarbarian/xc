@@ -164,6 +164,13 @@ therefore differ in its last bits between the CPU and the GPU, as it can between
 two numbers of CPU threads; on one device it gives the same result every run. A block that cannot run on the GPU stays on the CPU, as do all blocks
 when there is no GPU.
 
+If a Vulkan GPU is lost while the program runs (the driver refuses a
+submission or answers `VK_ERROR_DEVICE_LOST`), the program says so once,
+naming the GPU, and the block's remaining work and every later block run
+without it, on the CPU or the other devices; if that GPU was writing an array
+it shares in place (an integrated GPU that imports host memory), the program
+stops with a message instead, since what that array holds is unknown.
+
 A block runs on the GPU when it works on arrays (captured locals or globals),
 scalars, reductions, and helper functions that take and return plain values.
 Anywhere, a block that calls a helper that takes a pointer or an array, or that
