@@ -283,6 +283,7 @@ class Languages
                 && !Languages.mayThrow(lines, i + 1, end, nounwind))
                 {
                 Languages.plainLabels(lines, i + 1, end);
+                Languages.byteCounts(lines, i + 1, end);
                 Languages.counted(lines, i + 1, end);
                 Languages.pointerLoops(lines, i + 1, end);
                 Languages.downCounts(lines, i + 1, end);
@@ -339,6 +340,164 @@ class Languages
         u32 at = l.indexOfByte((u8)'@');
         String* head = at != String.notFound() ? l.substringBytes(0, at) : l;
         return !(head.contains(String.withCString(" linkonce_odr ")) || head.contains(String.withCString(" linkonce ")));
+        }
+
+    // The read text with each zero-initialised global of a struct that is
+    // one array (`%"struct.std::__1::array" = type { [4096 x double] }`,
+    // a std::array) declared as that array: the same bytes, which the
+    // reader then takes as an array of elements.
+    static String* plainArrays(String* text)
+        {
+        Array* lines = text.splitOnByte((u8)10);
+        Map* one = new Map();
+        for (u32 i = 0; i < lines.count(); i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (!l.hasPrefix(String.withCString("%")) || !l.contains(String.withCString(" = type { [")))
+                continue;
+            u32 at = l.byteIndexOf(String.withCString(" = type { ["));
+            String* body = l.substringFromByte(at + 11);
+            u32 close = Languages.byteFrom(body, (u8)']', 0);
+            if (close == String.notFound() || !body.substringFromByte(close).equals(String.withCString("] }")))
+                continue;
+            one.set((Hashable*)l.substringBytes(0, at), (Object*)String.withFormat("[%s]", body.substringBytes(0, close).cString()));
+            }
+        if (one.count() == 0)
+            return text;
+        String* out = new String();
+        for (u32 i = 0; i < lines.count(); i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (l.hasPrefix(String.withCString("@")) && l.contains(String.withCString(" zeroinitializer")))
+                {
+                Array* ks = one.allKeys();
+                for (u32 k = 0; k < ks.count(); k = k + 1)
+                    {
+                    String* ty = (String*)ks.get(k);
+                    String* g = String.withFormat(" global %s zeroinitializer", ty.cString());
+                    if (l.contains(g))
+                        l = l.replacing(g, String.withFormat(" global %s zeroinitializer", ((String*)one.get((Hashable*)ty)).cString()));
+                    }
+                }
+            out.append(l);
+            if (i + 1 < lines.count())
+                out.appendCString("\n");
+            }
+        return out;
+        }
+
+    // Loops that count bytes (clang's passes turn an iterator over a
+    // std::array or a vector's elements into `idx += 4` and
+    // `getelementptr i8, ptr B, i64 %idx`), in a function's body lines
+    // [from, end): the header has
+    //     %idx = phi i64 [ 0, %pre ], [ %add, %latch ]
+    //     %c = icmp eq i64 %idx, E
+    // with %add = add ... i64 %idx, S (S a constant, E a constant multiple
+    // of it), %idx used otherwise only by `getelementptr inbounds i8, ptr B,
+    // i64 %idx` whose every load and store has one type of size S. Such a
+    // loop counts elements: %idx's phi counts by 1, each address is
+    // `getelementptr inbounds T, ptr B, i64 %idx`, and the test is against
+    // E / S (counted() then writes it `ult`).
+    static void byteCounts(Array* lines, u32 from, u32 end)
+        {
+        for (u32 i = from; i < end; i = i + 1)
+            {
+            String* t = ((String*)lines.get(i)).trimmed();
+            if (!t.contains(String.withCString(" = phi i64 [ 0, ")))
+                continue;
+            String* idx = t.substringBytes(0, Languages.byteFrom(t, (u8)' ', 0));
+            // Its step: `add ... i64 idx, S`.
+            Array* ins = t.substringFromByte(t.byteIndexOf(String.withCString(" = phi i64 ")) + 11).splitOnByte((u8)'[');
+            String* addv = (String*)0;
+            for (u32 q = 0; q < ins.count(); q = q + 1)
+                {
+                String* e = ((String*)ins.get(q)).trimmed();
+                u32 comma = Languages.byteFrom(e, (u8)',', 0);
+                if (e.byteLength() == 0 || comma == String.notFound())
+                    continue;
+                String* v = e.substringBytes(0, comma).trimmed();
+                if (!v.equals(String.withCString("0")))
+                    addv = v;
+                }
+            if (addv == (String*)0)
+                continue;
+            u32 addAt = String.notFound();
+            i64 step = 0;
+            for (u32 k = from; k < end && addAt == String.notFound(); k = k + 1)
+                {
+                String* m = ((String*)lines.get(k)).trimmed();
+                if (!m.hasPrefix(addv.appending(String.withCString(" = add "))))
+                    continue;
+                String* tail = String.withFormat(" i64 %s, ", idx.cString());
+                u32 p = m.byteIndexOf(tail);
+                if (p == String.notFound())
+                    break;
+                String* rest_ = m.substringFromByte(p + tail.byteLength());
+                u32 e = 0;
+                while (e < rest_.byteLength() && rest_.byteAt(e) >= (u8)'0' && rest_.byteAt(e) <= (u8)'9')
+                    e = e + 1;
+                step = Languages.intOf(rest_.substringBytes(0, e));
+                addAt = k;
+                }
+            if (addAt == String.notFound() || step <= 1)
+                continue;
+            // Every other use: the compare, the add, and i8 GEPs.
+            u32 cmpAt = String.notFound();
+            i64 bound = 0;
+            Array* geps = new Array();
+            bool ok = true;
+            for (u32 k = from; k < end && ok; k = k + 1)
+                {
+                if (k == i || k == addAt)
+                    continue;
+                String* m = ((String*)lines.get(k)).trimmed();
+                if (Languages.uses(lines, k, k + 1, idx) == 0)
+                    continue;
+                String* cmpHead = String.withFormat("= icmp eq i64 %s, ", idx.cString());
+                if (m.contains(cmpHead))
+                    {
+                    String* r = m.substringFromByte(m.byteIndexOf(cmpHead) + cmpHead.byteLength());
+                    u32 e = 0;
+                    while (e < r.byteLength() && r.byteAt(e) >= (u8)'0' && r.byteAt(e) <= (u8)'9')
+                        e = e + 1;
+                    bound = Languages.intOf(r.substringBytes(0, e));
+                    ok = bound > 0 && bound % step == 0 && cmpAt == String.notFound();
+                    cmpAt = k;
+                    }
+                else if (m.contains(String.withCString(" = getelementptr inbounds i8, ptr "))
+                         && m.contains(String.withFormat(", i64 %s", idx.cString())))
+                    geps.add((Object*)Number.with(k));
+                else
+                    ok = false;
+                }
+            if (!ok || cmpAt == String.notFound() || geps.count() == 0)
+                continue;
+            // Each address's accesses: one type, of the step's size.
+            Array* tys = new Array();
+            for (u32 g = 0; g < geps.count() && ok; g = g + 1)
+                {
+                String* m = ((String*)lines.get(((Number*)geps.get(g)).asU32())).trimmed();
+                String* pv = m.substringBytes(0, Languages.byteFrom(m, (u8)' ', 0));
+                String* ty = Languages.accessType(lines, from, end, pv);
+                ok = ty != (String*)0 && Languages.sizeOf(ty) == step;
+                tys.add((Object*)ty);
+                }
+            if (!ok)
+                continue;
+            for (u32 g = 0; g < geps.count(); g = g + 1)
+                {
+                u32 k = ((Number*)geps.get(g)).asU32();
+                String* m = (String*)lines.get(k);
+                lines.set(k, (Object*)m.replacing(String.withCString(" = getelementptr inbounds i8, ptr "),
+                                                  String.withFormat(" = getelementptr inbounds %s, ptr ", ((String*)tys.get(g)).cString())));
+                }
+            String* am = (String*)lines.get(addAt);
+            lines.set(addAt, (Object*)am.replacing(String.withFormat(" i64 %s, %ld", idx.cString(), step),
+                                                   String.withFormat(" i64 %s, 1", idx.cString())));
+            String* cm = (String*)lines.get(cmpAt);
+            lines.set(cmpAt, (Object*)cm.replacing(String.withFormat("icmp eq i64 %s, %ld", idx.cString(), bound),
+                                                   String.withFormat("icmp eq i64 %s, %ld", idx.cString(), bound / step)));
+            }
         }
 
     // Whether a define line's linkage lets another object define it too.

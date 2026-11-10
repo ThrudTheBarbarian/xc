@@ -350,6 +350,9 @@ class CPath
         String* readText = lang.loopsOnly() ? Languages.loopFunctions(readBuild != (String*)0 ? readBuild : text) : text;
         if (readBuild != (String*)0)
             readText = Languages.takeFrom(readText, text);
+        // std::array globals as their arrays, for the reader.
+        if (lang.loopsOnly())
+            readText = Languages.plainArrays(readText);
         LlvmReader* r = new LlvmReader();
         r.setPath(input);
         // clang compiles what xcc does not take, and the globals: their

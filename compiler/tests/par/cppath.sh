@@ -316,7 +316,39 @@ int main()
     return 0;
     }
 C
-for p in saxpy grid glob refs vec iter; do
+# std::array globals: a range-for (clang's passes count its bytes) and an
+# index loop become blocks.
+cat > "$W/arr.cpp" <<'C'
+#include <array>
+#include <cstdio>
+static std::array<float, 1 << 16> ga;
+std::array<double, 4096> gb;
+void arr(float k)
+    {
+    for (auto& e : ga)
+        e = e * k + 1.0f;
+    }
+void brr()
+    {
+    for (size_t i = 0; i < gb.size(); i++)
+        gb[i] = gb[i] * 0.5 + 1.0;
+    }
+int main()
+    {
+    for (size_t i = 0; i < ga.size(); i++)
+        ga[i] = (float)(i % 5);
+    arr(2.0f);
+    brr();
+    double t = 0;
+    for (float x : ga)
+        t += x;
+    for (double x : gb)
+        t += x;
+    std::printf("%.1f\n", t);
+    return 0;
+    }
+C
+for p in saxpy grid glob refs vec iter arr; do
     clang++ -std=c++17 -O2 -o "$W/$p.ref" "$W/$p.cpp" 2>/dev/null || { echo "FAIL cppath: clang++ cannot build $p"; fail=1; continue; }
     want=$("$W/$p.ref")
     "$XC" -q -O2 -H . -o "$W/$p" "$W/$p.cpp" > "$W/$p.b" 2>&1 || { echo "FAIL cppath: $p does not build"; head -3 "$W/$p.b"; fail=1; continue; }
@@ -333,6 +365,9 @@ grep -q 'Grid4step.*: outlined, a block' "$W/grid.pb" || { echo "FAIL cppath: Gr
 grep -q 'checkAll.*: outlined' "$W/grid.pb" && { echo "FAIL cppath: checkAll (a throwing call in its loop) was taken by xcc"; fail=1; }
 grep -q 'saxpy.*vector.*: outlined, a block' "$W/vec.pb" || { echo "FAIL cppath: saxpy over std::vector did not become a block"; grep outline "$W/vec.pb" | head -3; fail=1; }
 XC_PAR=cpu XC_PAR_REPORT=1 "$W/vec.par" 2>&1 | grep -q 'vec.cpp:5: .* items on the' || { echo "FAIL cppath: saxpy's block over std::vector did not run"; fail=1; }
+for f in _Z3arrf _Z3brrv; do
+    grep -q "$f.*: outlined, a block" "$W/arr.pb" || { echo "FAIL cppath: $f (a std::array global) did not become a block"; grep outline "$W/arr.pb" | grep -v '^outline: [A-Z]' | head -3; fail=1; }
+done
 for f in 'scale.*vector' addp; do
     grep -q "$f.*: outlined, a block" "$W/iter.pb" || { echo "FAIL cppath: the pointer loop in $f did not become a block"; grep outline "$W/iter.pb" | head -3; fail=1; }
 done
