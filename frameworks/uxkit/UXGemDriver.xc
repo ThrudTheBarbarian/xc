@@ -40,7 +40,11 @@ struct UXGemTree
     }
 // The AES draws a G_STRING's text centred in the object's height; a label's text sits at the top of
 // its frame on every backend, so a label's object is at most this tall and labelH keeps the frame.
-i32 GEM_LABEL_H = 16;
+// 14 rather than the font's 16-px cell, so the capitals start 3 px under the frame's top, and the
+// object starts GEM_LABEL_X right of the frame, so the text starts 3 px in: where AppKit, Win32,
+// GTK and the web draw a label's text.
+i32 GEM_LABEL_H = 14;
+i32 GEM_LABEL_X = 3;
 // A SCROLLBAR (aes.h): a G_SLIDER's ob_spec, its value in permille.
 struct UXGemBar
     {
@@ -737,6 +741,7 @@ class UXGemDriver : Object<UXViewDriver>
             self.structSide(s, i);
             s.labelH[i] = ht;
             self.gemSetHeight(s, i, ht);
+            t[i].ob_x = (i16)(x + GEM_LABEL_X);
             }
         return i;
         }
@@ -816,7 +821,7 @@ class UXGemDriver : Object<UXViewDriver>
     void structSetFrame(pointer h, i32 i, i32 x, i32 y, i32 w, i32 ht)
         {
         OBJECT* t = ((UXGemTree*)h).tree;
-        t[i].ob_x = (i16)x;
+        t[i].ob_x = (i16)(x + self.gemLabelX((UXGemTree*)h, i));
         t[i].ob_y = (i16)y;
         t[i].ob_w = (i16)w;
         self.gemSetHeight((UXGemTree*)h, i, ht);
@@ -824,7 +829,7 @@ class UXGemDriver : Object<UXViewDriver>
     void structFrame(pointer h, i32 i, i32* x, i32* y, i32* w, i32* ht)
         {
         OBJECT* t = ((UXGemTree*)h).tree;
-        x[0] = (i32)t[i].ob_x;
+        x[0] = (i32)t[i].ob_x - self.gemLabelX((UXGemTree*)h, i);
         y[0] = (i32)t[i].ob_y;
         w[0] = (i32)t[i].ob_w;
         ht[0] = self.gemHeightOf((UXGemTree*)h, i);
@@ -937,6 +942,15 @@ class UXGemDriver : Object<UXViewDriver>
         s.own = no;
         s.labelH = nl;
         s.peerCap = cap;
+        }
+    // how far right of its frame object i sits: GEM_LABEL_X for a label, else 0
+    i32 gemLabelX(UXGemTree* s, i32 i)
+        {
+        if (i < s.peerCap && s.labelH[i] >= (i32)0)
+            {
+            return GEM_LABEL_X;
+            }
+        return (i32)0;
         }
     // the height the toolkit set for object i: a label's frame, else the object's own
     i32 gemHeightOf(UXGemTree* s, i32 i)

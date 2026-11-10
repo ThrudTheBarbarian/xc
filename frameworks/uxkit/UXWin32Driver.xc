@@ -241,8 +241,9 @@ pointer w32UiFont(i32 px)
     }
 // Where a label's TextOut goes, from its frame's top: TextOut places the top of the font's cell, and
 // the cell starts with the internal leading (5 px in Segoe UI at 13, about none in MS Sans Serif).
-// Taking it off puts the capitals 1 px under the frame's top, as the other backends draw a label.
-i32 gW32LabelDY = (i32)2;
+// Taking it off and adding 3 puts the capitals 3 px under the frame's top, where AppKit, GTK and the
+// web draw them.
+i32 gW32LabelDY = (i32)4;
 i32 gW32FontH = (i32)16; // the control font's cell, set with gW32LabelDY
 i32 w32LabelDY(pointer font)
     {
@@ -254,7 +255,7 @@ i32 w32LabelDY(pointer font)
     SelectObject(dc, old);
     DeleteDC(dc);
     gW32FontH = tm.tmHeight;
-    return (i32)1 - tm.tmInternalLeading;
+    return (i32)3 - tm.tmInternalLeading;
     }
 
 // A native control's place for a frame, where the control should not just take the frame:
@@ -5859,7 +5860,7 @@ class UXWin32Driver : Object<UXViewDriver>
             self.structAbsFrame((pointer)t, i, &ax, &ay, &w, &hh);
             SetBkMode(gW32CurHdc, (i32)TRANSPARENT);
             SetTextColor(gW32CurHdc, (u32)0);
-            w32DrawText(gW32CurHdc, ax + (i32)2, ay + gW32LabelDY, (u8*)t.nodes[i].spec);
+            w32DrawText(gW32CurHdc, ax + (i32)3, ay + gW32LabelDY, (u8*)t.nodes[i].spec);
             }
         self.drawChildren(t, i);
         }
