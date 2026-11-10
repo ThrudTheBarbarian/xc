@@ -38,6 +38,10 @@
 
 // The table, read once (Languages.rows).
 Array* gLanguageRows;
+// Building a whole program (not -c): an ODR copy (`linkonce_odr`, a member
+// function defined in its class, a template) xcc takes is then the
+// program's one definition, so it may take one.
+bool gLangWholeProgram;
 
 class LanguageRow
     {
@@ -275,7 +279,7 @@ class Languages
             while (end < lines.count() && !((String*)lines.get(end)).equals(String.withCString("}")))
                 end = end + 1;
             String* fname = Languages.calleeOf(l, 0);
-            if (!Languages.isOdr(l) && (fname == (String*)0 || !Languages.isStd(fname)) && Languages.hasLoop(lines, i + 1, end)
+            if (!Languages.notOurs(l) && (fname == (String*)0 || !Languages.isStd(fname)) && Languages.hasLoop(lines, i + 1, end)
                 && !Languages.mayThrow(lines, i + 1, end, nounwind))
                 {
                 Languages.plainLabels(lines, i + 1, end);
@@ -319,6 +323,22 @@ class Languages
     static bool isLambda(String* n)
         {
         return n.contains(String.withCString("clE")) && (n.contains(String.withCString("$_")) || n.contains(String.withCString("Ul")));
+        }
+
+    static void setWholeProgram(bool b) { gLangWholeProgram = b; }
+
+    // Whether xcc leaves the function of define line l to clang for its
+    // linkage: an ODR copy outside a whole-program build, and always one
+    // defined elsewhere too (available_externally, weak, comdat any).
+    static bool notOurs(String* l)
+        {
+        if (!Languages.isOdr(l))
+            return false;
+        if (!gLangWholeProgram)
+            return true;
+        u32 at = l.indexOfByte((u8)'@');
+        String* head = at != String.notFound() ? l.substringBytes(0, at) : l;
+        return !(head.contains(String.withCString(" linkonce_odr ")) || head.contains(String.withCString(" linkonce ")));
         }
 
     // Whether a define line's linkage lets another object define it too.
@@ -490,7 +510,7 @@ class Languages
             while (end < lines.count() && !((String*)lines.get(end)).equals(String.withCString("}")))
                 end = end + 1;
             String* n = Languages.calleeOf(l, 0);
-            if (n != (String*)0 && !Languages.isOdr(l) && !Languages.isStd(n) && !Languages.isLambda(n) && Languages.hasLoop(lines, i + 1, end))
+            if (n != (String*)0 && !Languages.notOurs(l) && !Languages.isStd(n) && !Languages.isLambda(n) && Languages.hasLoop(lines, i + 1, end))
                 names.set((Hashable*)n, (Object*)l);
             i = end + 1;
             }
@@ -512,7 +532,7 @@ class Languages
             if (!l.hasPrefix(String.withCString("define ")))
                 continue;
             String* n = Languages.calleeOf(l, 0);
-            if (n != (String*)0 && !Languages.isOdr(l) && !Languages.isStd(n) && !Languages.isLambda(n)
+            if (n != (String*)0 && !Languages.notOurs(l) && !Languages.isStd(n) && !Languages.isLambda(n)
                 && inner.get((Hashable*)n) == (Object*)0)
                 names.set((Hashable*)n, (Object*)l);
             }
@@ -607,8 +627,15 @@ class Languages
                 String* d = Languages.declarationOf(l);
                 if (d != (String*)0)
                     {
-                    // After the parameter list: `define ... @f(...) noinline #0 {`.
+                    // After the parameter list and any unnamed_addr (which
+                    // LLVM wants before the attributes): `define ... @f(...)
+                    // unnamed_addr noinline #0 {`.
                     u32 q = d.byteLength() - 7 + 6;
+                    String* rest_ = l.substringFromByte(q);
+                    if (rest_.hasPrefix(String.withCString(" local_unnamed_addr")))
+                        q = q + 19;
+                    else if (rest_.hasPrefix(String.withCString(" unnamed_addr")))
+                        q = q + 13;
                     l = l.substringBytes(0, q).appending(String.withCString(" noinline")).appending(l.substringFromByte(q));
                     }
                 }
@@ -723,6 +750,9 @@ class Languages
             // makes clang drop the half's debug information, with a warning.
             String* head = LlvmReader.external(r.renamed(l)).replacing(n.appending(String.withCString("(")),
                                                                         n.appending(String.withCString("_xclib(")));
+            // Kept even where clang inlines it everywhere: xcc's half calls it.
+            head = head.replacing(String.withCString("define linkonce_odr "), String.withCString("define weak_odr "))
+                       .replacing(String.withCString("define linkonce "), String.withCString("define weak "));
             out.append(Languages.withoutDbg(head));
             out.appendCString("\n");
             i = i + 1;

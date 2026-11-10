@@ -288,6 +288,34 @@ int main()
     return 0;
     }
 C
+# A member function defined in its class (an ODR copy, linkonce_odr) is
+# taken in a whole-program build, its clang copy kept to fall back on; and
+# std::transform over doubles (`call noundef double @llvm.fmuladd.f64`).
+cat > "$W/odr.cpp" <<'C'
+#include <algorithm>
+#include <cstdio>
+#include <execution>
+#include <vector>
+struct Field
+    {
+    std::vector<double> v;
+    explicit Field(size_t n) : v(n, 2.0) {}
+    void square()
+        {
+        std::transform(std::execution::par, v.begin(), v.end(), v.begin(), [](double x) { return x * x + 1.0; });
+        }
+    };
+int main()
+    {
+    Field f(1 << 16);
+    f.square();
+    double t = 0;
+    for (double x : f.v)
+        t += x;
+    std::printf("%.1f\n", t);
+    return 0;
+    }
+C
 for p in saxpy grid glob refs vec iter; do
     clang++ -std=c++17 -O2 -o "$W/$p.ref" "$W/$p.cpp" 2>/dev/null || { echo "FAIL cppath: clang++ cannot build $p"; fail=1; continue; }
     want=$("$W/$p.ref")
@@ -363,6 +391,10 @@ if [ -x "$W/pol.ref" ]; then
             got=$(XC_PAR=$d "$W/pol")
             [ "$got" = "$("$W/pol.ref")" ] || { echo "FAIL cppath: the parallel algorithms ($d) give $got, clang++'s $("$W/pol.ref")"; fail=1; }
         done
+        clang++ -std=c++17 -fexperimental-library -O2 -o "$W/odr.ref" "$W/odr.cpp" 2>/dev/null
+        XC_PAR_OUTLINE_TRACE=1 "$XC" -q -O3 -std=c++17 -H . -o "$W/odr" "$W/odr.cpp" > "$W/odr.b" 2>&1 || { echo "FAIL cppath: odr.cpp does not build"; fail=1; }
+        [ -x "$W/odr" ] && [ "$(XC_PAR=cpu "$W/odr")" = "$("$W/odr.ref")" ] || { echo "FAIL cppath: odr.cpp gives $(XC_PAR=cpu "$W/odr" 2>&1), clang++'s $("$W/odr.ref")"; fail=1; }
+        grep -q '_ZN5Field6squareEv.*: outlined, a block' "$W/odr.b" || { echo "FAIL cppath: Field::square (a member defined in its class) did not become a block"; grep outline "$W/odr.b" | grep -v '^outline: [A-Z]' | head -3; fail=1; }
         for f in axpy halve zero; do
             grep -q "_Z[0-9]*$f.*: outlined, a block" "$W/pol.b" || { echo "FAIL cppath: $f's algorithm did not become a block"; grep outline "$W/pol.b" | grep -v '^outline: [A-Z]' | head -4; fail=1; }
         done

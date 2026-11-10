@@ -4843,6 +4843,9 @@ void main(void)
         cPathSetProtect((d.arch().equals(String.withCString("arm64")) && !isIos(d))
                         || (isX86_64(d) && d.caps().dynamic())
                         || (cElfArm64 && !isAndroid(d)));
+        // A whole program (not -c, not -S): xcc may take an ODR copy, the
+        // program's one definition of it then.
+        Languages.setWholeProgram(!gCSplitRelocatable && !d.keepAsm() && !d.compileOnly());
         // clang builds for the target, not the host: a triple, and from
         // another host the target's C headers (a sysroot with include/).
         String* tgt = cPathTargetFlags(d);

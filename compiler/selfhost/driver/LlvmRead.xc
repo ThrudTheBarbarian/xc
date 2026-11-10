@@ -2039,7 +2039,10 @@ class LlvmReader
     // `call RET [(SIG)] @f(ARGS)`.
     void readCall(String* res)
         {
-        bool zx = eatZeroExt();
+        // The result's attributes (`call noundef double @f`, `call noundef
+        // zeroext i1 @g`), zeroext among them.
+        skipAttrs();
+        bool zx = _sawZext;
         String* rt = irOf(llType());
         if (rt == (String*)0)
             {
