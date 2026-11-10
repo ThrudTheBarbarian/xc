@@ -169,6 +169,41 @@ class CPath
         return gCPathLang;
         }
 
+    // The IR after the row's passes (clang, over its own output), or 0 with
+    // the reason printed.
+    static String* passed(String* text, String* scratch, LanguageRow* lang)
+        {
+        String* feLl = String.withString(scratch);
+        feLl.appendCString(".fe.ll");
+        String* out = String.withString(scratch);
+        out.appendCString(".ll");
+        if (!Files.writeText(feLl, Languages.markNoinline(text)))
+            {
+            Stdio.error(String.withFormat("xcc: error: cannot write '%s'\n", feLl.cString()));
+            return (String*)0;
+            }
+        String* cmd = String.withCString("clang");
+        if (gCPathTarget != (String*)0)
+            cmd.append(gCPathTarget);
+        cmd.appendCString(" ");
+        cmd.append(lang.passes());
+        cmd.appendCString(" -Wno-override-module -S -emit-llvm -o ");
+        cmd.append(CPath.quoted(out));
+        cmd.appendCString(" ");
+        cmd.append(CPath.quoted(feLl));
+        if (system(cmd.cString()) != 0)
+            {
+            Stdio.error(String.withFormat("xcc: error: clang could not run the %s passes over '%s'\n", lang.name().cString(), feLl.cString()));
+            return (String*)0;
+            }
+        Directory._unlink(feLl);
+        String* r = Files.readText(out);
+        Directory._unlink(out);
+        if (r == (String*)0)
+            Stdio.error(String.withFormat("xcc: error: cannot read clang's output '%s'\n", out.cString()));
+        return r;
+        }
+
     // The C file as an IRModule, or 0 with the reason printed. `incs` and
     // `defs` are the -I directories and -D definitions, handed to clang.
     static IRModule* lower(String* input, String* scratch, Array* incs, Array* defs)
@@ -243,6 +278,15 @@ class CPath
         // none: the first function ran to the end of the file and every one
         // after it (main included) was left to clang, unread.
         text = text.replacing(String.withCString("\r\n"), String.withCString("\n"));
+        // The row's passes: clang optimises the IR before xcc reads it, the
+        // functions xcc may take kept out of their callers. XC_C_LL's file
+        // is the IR as read, after any passes.
+        if (lang.passes().byteLength() > 0 && given.byteLength() == 0)
+            {
+            text = CPath.passed(text, scratch, lang);
+            if (text == (String*)0)
+                return (IRModule*)0;
+            }
         // reads `loops`: the reader sees only the functions xcc may take.
         String* readText = lang.loopsOnly() ? Languages.loopFunctions(text) : text;
         LlvmReader* r = new LlvmReader();

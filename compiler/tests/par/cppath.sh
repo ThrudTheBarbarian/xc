@@ -214,7 +214,51 @@ int main()
     return 0;
     }
 C
-for p in saxpy grid glob refs; do
+# Loops over std::vector by index: v[i] and v.size() are calls in clang's
+# own IR; its -O1 passes (the row's) inline them into the loop and hoist the
+# vector's begin and end out of it, so the loop becomes a block. The member
+# functions stay out of main, and a function template's loop is clang's.
+cat > "$W/vec.cpp" <<'C'
+#include <cstdio>
+#include <vector>
+void saxpy(float a, const std::vector<float>& x, std::vector<float>& y)
+    {
+    for (size_t i = 0; i < y.size(); i++)
+        y[i] = a * x[i] + y[i];
+    }
+struct Field
+    {
+    std::vector<double> v;
+    explicit Field(size_t n) : v(n) {}
+    void scale(double k)
+        {
+        for (size_t i = 0; i < v.size(); i++)
+            v[i] = v[i] * k + 1.0;
+        }
+    };
+template <typename T> void fill(std::vector<T>& v, T k)
+    {
+    for (size_t i = 0; i < v.size(); i++)
+        v[i] = k * (T)i;
+    }
+int main()
+    {
+    int n = 1 << 20;
+    std::vector<float> x(n), y(n, 1.0f);
+    fill(x, 1.0f);
+    saxpy(2.0f, x, y);
+    Field f(1000);
+    for (size_t i = 0; i < f.v.size(); i++)
+        f.v[i] = (double)i;
+    f.scale(0.5);
+    double t = 0;
+    for (size_t i = 0; i < f.v.size(); i++)
+        t += f.v[i];
+    std::printf("%f %f %.1f\n", y[12345], y[n - 1], t);
+    return 0;
+    }
+C
+for p in saxpy grid glob refs vec; do
     clang++ -std=c++17 -O2 -o "$W/$p.ref" "$W/$p.cpp" 2>/dev/null || { echo "FAIL cppath: clang++ cannot build $p"; fail=1; continue; }
     want=$("$W/$p.ref")
     "$XC" -q -O2 -H . -o "$W/$p" "$W/$p.cpp" > "$W/$p.b" 2>&1 || { echo "FAIL cppath: $p does not build"; head -3 "$W/$p.b"; fail=1; continue; }
@@ -229,6 +273,8 @@ done
 grep -q 'saxpy.*: outlined, a block' "$W/saxpy.pb" || { echo "FAIL cppath: saxpy's loop did not become a block"; grep outline "$W/saxpy.pb" | head -5; fail=1; }
 grep -q 'Grid4step.*: outlined, a block' "$W/grid.pb" || { echo "FAIL cppath: Grid::step's loop did not become a block"; grep outline "$W/grid.pb" | head -5; fail=1; }
 grep -q 'checkAll.*: outlined' "$W/grid.pb" && { echo "FAIL cppath: checkAll (a throwing call in its loop) was taken by xcc"; fail=1; }
+grep -q 'saxpy.*vector.*: outlined, a block' "$W/vec.pb" || { echo "FAIL cppath: saxpy over std::vector did not become a block"; grep outline "$W/vec.pb" | head -3; fail=1; }
+XC_PAR=cpu XC_PAR_REPORT=1 "$W/vec.par" 2>&1 | grep -q 'vec.cpp:5: .* items on the' || { echo "FAIL cppath: saxpy's block over std::vector did not run"; fail=1; }
 XC_PAR=gpu XC_PAR_REPORT=1 "$W/glob.par" 2>&1 | grep -q 'items on the GPU' || { echo "FAIL cppath: no C++ loop ran on the GPU"; fail=1; }
 # .cc and .cxx are C++ too.
 cp "$W/saxpy.cpp" "$W/s2.cc"

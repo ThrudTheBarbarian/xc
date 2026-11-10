@@ -2096,6 +2096,26 @@ class LlvmReader
                        (IROperand*)0, fpred);
             return;
             }
+        // Integer min and max (clang's passes write a trip count as
+        // smax(n, 0)): a compare and a select.
+        String* mmPred = (String*)0;
+        if (callee.hasPrefix(String.withCString("@llvm.smax.i"))) mmPred = String.withCString("SGT");
+        else if (callee.hasPrefix(String.withCString("@llvm.smin.i"))) mmPred = String.withCString("SLT");
+        else if (callee.hasPrefix(String.withCString("@llvm.umax.i"))) mmPred = String.withCString("UGT");
+        else if (callee.hasPrefix(String.withCString("@llvm.umin.i"))) mmPred = String.withCString("ULT");
+        if (mmPred != (String*)0 && args.count() == 2)
+            {
+            IRInsn* cmp = IRInsn.with(String.withCString("ICmp"));
+            IRValue* cv = new IRValue(String.withCString("Bool"));
+            cmp.setRes(cv);
+            cmp.setPred(mmPred);
+            cmp.add(IROperand.useVal((IRValue*)args.get(0)));
+            cmp.add(IROperand.useVal((IRValue*)args.get(1)));
+            _blk.add(cmp);
+            define(res, String.withCString("Select"), rt, IROperand.useVal(cv), IROperand.useVal((IRValue*)args.get(0)),
+                   IROperand.useVal((IRValue*)args.get(1)), (String*)0);
+            return;
+            }
         if (callee.hasPrefix(String.withCString("@llvm.")))
             {
             // Markers that mean nothing to xc.
