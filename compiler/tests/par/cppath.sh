@@ -258,7 +258,37 @@ int main()
     return 0;
     }
 C
-for p in saxpy grid glob refs vec; do
+# Loops that count with pointers: a range-for over a vector (its iterator)
+# and two pointers stepped together to an end pointer. Both are written
+# with a counter from 0 and become blocks.
+cat > "$W/iter.cpp" <<'C'
+#include <cstdio>
+#include <vector>
+void scale(std::vector<float>& v, float k)
+    {
+    for (float& e : v)
+        e = e * k + 1.0f;
+    }
+void addp(float* y, const float* x, const float* end)
+    {
+    for (const float* p = x; p != end; ++p, ++y)
+        *y += *p;
+    }
+int main()
+    {
+    std::vector<float> v(1 << 20), w(1 << 20, 1.0f);
+    for (size_t i = 0; i < v.size(); i++)
+        v[i] = (float)(i % 100);
+    scale(v, 3.0f);
+    addp(w.data(), v.data(), v.data() + v.size());
+    double t = 0;
+    for (float e : w)
+        t += e;
+    std::printf("%f %f %f %.1f\n", v[5], w[7], w[(1 << 20) - 1], t);
+    return 0;
+    }
+C
+for p in saxpy grid glob refs vec iter; do
     clang++ -std=c++17 -O2 -o "$W/$p.ref" "$W/$p.cpp" 2>/dev/null || { echo "FAIL cppath: clang++ cannot build $p"; fail=1; continue; }
     want=$("$W/$p.ref")
     "$XC" -q -O2 -H . -o "$W/$p" "$W/$p.cpp" > "$W/$p.b" 2>&1 || { echo "FAIL cppath: $p does not build"; head -3 "$W/$p.b"; fail=1; continue; }
@@ -275,6 +305,9 @@ grep -q 'Grid4step.*: outlined, a block' "$W/grid.pb" || { echo "FAIL cppath: Gr
 grep -q 'checkAll.*: outlined' "$W/grid.pb" && { echo "FAIL cppath: checkAll (a throwing call in its loop) was taken by xcc"; fail=1; }
 grep -q 'saxpy.*vector.*: outlined, a block' "$W/vec.pb" || { echo "FAIL cppath: saxpy over std::vector did not become a block"; grep outline "$W/vec.pb" | head -3; fail=1; }
 XC_PAR=cpu XC_PAR_REPORT=1 "$W/vec.par" 2>&1 | grep -q 'vec.cpp:5: .* items on the' || { echo "FAIL cppath: saxpy's block over std::vector did not run"; fail=1; }
+for f in 'scale.*vector' addp; do
+    grep -q "$f.*: outlined, a block" "$W/iter.pb" || { echo "FAIL cppath: the pointer loop in $f did not become a block"; grep outline "$W/iter.pb" | head -3; fail=1; }
+done
 XC_PAR=gpu XC_PAR_REPORT=1 "$W/glob.par" 2>&1 | grep -q 'items on the GPU' || { echo "FAIL cppath: no C++ loop ran on the GPU"; fail=1; }
 # .cc and .cxx are C++ too.
 cp "$W/saxpy.cpp" "$W/s2.cc"

@@ -89,6 +89,28 @@ class LanguageRow
         }
     }
 
+// A pointer the header of a loop steps (Languages.pointerLoops).
+class PtrIv
+    {
+    String* _name;      // %p
+    String* _start;     // its value on entry
+    String* _pre;       // the block it enters from
+    String* _latch;     // the block it steps from
+    i64 _step;          // bytes a step
+    u32 _stepLine;      // the line of its step
+    u32 _line;          // the line of its phi
+    String* _elem;      // the type loaded and stored through it
+
+    String* name(void)   { return _name; }
+    String* start(void)  { return _start; }
+    String* pre(void)    { return _pre; }
+    String* latch(void)  { return _latch; }
+    i64 step(void)       { return _step; }
+    u32 stepLine(void)   { return _stepLine; }
+    u32 line(void)       { return _line; }
+    String* elem(void)   { return _elem; }
+    }
+
 // The characters of an LLVM value's name after its `%`.
 class LlvmName
     {
@@ -240,6 +262,7 @@ class Languages
             if (!Languages.isOdr(l) && Languages.hasLoop(lines, i + 1, end) && !Languages.mayThrow(lines, i + 1, end, nounwind))
                 {
                 Languages.counted(lines, i + 1, end);
+                Languages.pointerLoops(lines, i + 1, end);
                 for (u32 k = i; k <= end && k < lines.count(); k = k + 1)
                     {
                     out.append((String*)lines.get(k));
@@ -519,6 +542,354 @@ class Languages
                 lines.set(brAt, (Object*)nm);
                 }
             }
+        }
+
+    // Loops that count with pointers (C++'s iterators, `for (p = a; p != e;
+    // ++p)`) in the form the outliner takes, in a function's body lines
+    // [from, end). Clang's passes leave a header
+    //     %p = phi ptr [ %s, %pre ], [ %pn, %latch ]
+    //     %c = icmp eq ptr %p, %e
+    //     br i1 %c, label %exit, label %body
+    // with %pn = getelementptr ... %p, a constant step, every load and store
+    // through %p of one type T that size, and %e made before the loop. Such
+    // a loop runs (e - s) / step times (C and C++ give it no other end: p
+    // reaches e exactly), so it is written with a counter i from 0 to n
+    // (computed in %pre) and %p = getelementptr T, ptr %s, i64 %i: an element
+    // at [i]. Other pointer phis of the header that step with it by their own
+    // constant are written the same way. A line that grows is several lines
+    // joined by newlines.
+    static void pointerLoops(Array* lines, u32 from, u32 end)
+        {
+        u32 made = 0;
+        u32 blockStart = from;
+        String* blockName = (String*)0;
+        for (u32 i = from; i < end; i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (l.byteLength() > 0 && l.byteAt(0) != (u8)' ' && l.byteAt(0) != (u8)';')
+                {
+                blockStart = i + 1;
+                u32 colon = Languages.byteFrom(l, (u8)':', 0);
+                blockName = colon != String.notFound() ? l.substringBytes(0, colon) : (String*)0;
+                continue;
+                }
+            bool eq = l.contains(String.withCString(" = icmp eq ptr "));
+            if (!eq && !l.contains(String.withCString(" = icmp ne ptr ")))
+                continue;
+            String* t = l.trimmed();
+            u32 sp = Languages.byteFrom(t, (u8)' ', 0);
+            String* c = t.substringBytes(0, sp);
+            Array* parts = t.substringFromByte(t.byteIndexOf(String.withCString(" ptr ")) + 5).splitOnByte((u8)',');
+            if (parts.count() < 2 || blockName == (String*)0)
+                continue;
+            String* a = ((String*)parts.get(0)).trimmed();
+            String* b = ((String*)parts.get(1)).trimmed();
+            u32 brAt = String.notFound();
+            for (u32 k = i + 1; k < end && brAt == String.notFound(); k = k + 1)
+                {
+                String* m = (String*)lines.get(k);
+                if (m.byteLength() > 0 && m.byteAt(0) != (u8)' ')
+                    break;
+                if (m.trimmed().hasPrefix(String.withFormat("br i1 %s, label ", c.cString())))
+                    brAt = k;
+                }
+            if (brAt == String.notFound() || Languages.uses(lines, from, end, c) != 2)
+                continue;
+            // Which side is the header's pointer phi; the other is the end.
+            PtrIv* iv = Languages.ptrIv(lines, blockStart, i, from, end, a);
+            String* e = b;
+            if (iv == (PtrIv*)0)
+                {
+                iv = Languages.ptrIv(lines, blockStart, i, from, end, b);
+                e = a;
+                }
+            if (iv == (PtrIv*)0 || Languages.definedIn(lines, blockStart, brAt, e))
+                continue;
+            // Every other pointer phi of the header: one that steps too.
+            Array* others = new Array();
+            bool ok = true;
+            for (u32 k = blockStart; k < i && ok; k = k + 1)
+                {
+                String* m = ((String*)lines.get(k)).trimmed();
+                if (!m.contains(String.withCString(" = phi ptr ")) || m.hasPrefix(iv.name().appending(String.withCString(" "))))
+                    continue;
+                String* qn = m.substringBytes(0, Languages.byteFrom(m, (u8)' ', 0));
+                PtrIv* q = Languages.ptrIv(lines, blockStart, i, from, end, qn);
+                if (q == (PtrIv*)0 || !q.pre().equals(iv.pre()) || !q.latch().equals(iv.latch()))
+                    ok = false;
+                else
+                    others.add((Object*)q);
+                }
+            if (!ok)
+                continue;
+            // The rewrite. Names of our own, per loop.
+            String* tag = String.withFormat("%%xcpi%u", made);
+            made = made + 1;
+            String* idx = tag.appending(String.withCString(".i"));
+            String* nxt = tag.appending(String.withCString(".next"));
+            String* cnt = tag.appending(String.withCString(".n"));
+            // The preheader: n = (e - s) / step, before its branch.
+            u32 preBr = Languages.terminatorOf(lines, from, end, iv.pre());
+            if (preBr == String.notFound())
+                continue;
+            String* pre = String.withFormat("  %s.s = ptrtoint ptr %s to i64\n  %s.e = ptrtoint ptr %s to i64\n  %s.d = sub i64 %s.e, %s.s\n  %s = sdiv exact i64 %s.d, %ld\n",
+                                            tag.cString(), iv.start().cString(), tag.cString(), e.cString(), tag.cString(), tag.cString(), tag.cString(),
+                                            cnt.cString(), tag.cString(), iv.step());
+            lines.set(preBr, (Object*)pre.appending((String*)lines.get(preBr)));
+            // The header: the counter's phi, then each pointer as [i].
+            String* hdr = String.withFormat("  %s = phi i64 [ 0, %s ], [ %s, %s ]", idx.cString(), iv.pre().cString(), nxt.cString(), iv.latch().cString());
+            // The body: the branch's target in the loop (the false one for eq).
+            String* bodyLabel = Languages.branchTarget((String*)lines.get(brAt), c, eq ? 1 : 0);
+            u32 bodyAt = bodyLabel != (String*)0 ? Languages.labelLine(lines, from, end, bodyLabel) : String.notFound();
+            if (bodyAt == String.notFound())
+                continue;
+            Array* all = new Array();
+            all.add((Object*)iv);
+            all.addAll(others);
+            // The header's last phi, found before ours are taken out.
+            u32 lastPhi = blockStart;
+            for (u32 k = blockStart; k < i; k = k + 1)
+                if (((String*)lines.get(k)).contains(String.withCString(" = phi ")))
+                    lastPhi = k;
+            for (u32 k = 0; k < all.count(); k = k + 1)
+                {
+                PtrIv* q = (PtrIv*)all.get(k);
+                lines.set(q.line(), (Object*)String.withCString(""));
+                }
+            String* geps = new String();
+            for (u32 k = 0; k < all.count(); k = k + 1)
+                {
+                PtrIv* q = (PtrIv*)all.get(k);
+                geps.appendFormat("\n  %s = getelementptr inbounds %s, ptr %s, i64 %s", q.name().cString(), q.elem().cString(),
+                                  q.start().cString(), idx.cString());
+                }
+            // The counter's phi after the header's last phi (in its place, when
+            // it was ours). Each pointer is made at the top of the body, where
+            // its loads and stores are: made in the header, an unrolled body's
+            // copies all read the first copy's.
+            String* atPhi = (String*)lines.get(lastPhi);
+            if (atPhi.byteLength() == 0)
+                lines.set(lastPhi, (Object*)hdr);
+            else
+                lines.set(lastPhi, (Object*)atPhi.appending(String.withCString("\n")).appending(hdr));
+            lines.set(bodyAt, (Object*)((String*)lines.get(bodyAt)).appending(geps));
+            // The test and, for eq, the branch's targets swapped.
+            lines.set(i, (Object*)String.withFormat("  %s = icmp ult i64 %s, %s", c.cString(), idx.cString(), cnt.cString()));
+            if (eq)
+                Languages.swapTargets(lines, brAt, c);
+            // The latch: the counter's next value beside the pointer's.
+            String* sl = (String*)lines.get(iv.stepLine());
+            lines.set(iv.stepLine(), (Object*)sl.appending(String.withFormat("\n  %s = add nuw nsw i64 %s, 1", nxt.cString(), idx.cString())));
+            }
+        }
+
+    // Target w (0 or 1) of `br i1 c, label %a, label %b`, without its `%`; or 0.
+    static String* branchTarget(String* m, String* c, u32 w)
+        {
+        String* head = String.withFormat("br i1 %s, ", c.cString());
+        u32 hb = m.byteIndexOf(head);
+        if (hb == String.notFound())
+            return (String*)0;
+        Array* tg = m.substringFromByte(hb + head.byteLength()).splitOnByte((u8)',');
+        if (tg.count() < 2)
+            return (String*)0;
+        String* t = ((String*)tg.get(w)).trimmed();
+        if (!t.hasPrefix(String.withCString("label %")))
+            return (String*)0;
+        return t.substringFromByte(7);
+        }
+
+    // The line of the label `name:` in [from, end), or notFound.
+    static u32 labelLine(Array* lines, u32 from, u32 end, String* name)
+        {
+        for (u32 i = from; i < end; i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (l.hasPrefix(name) && l.byteLength() > name.byteLength() && l.byteAt(name.byteLength()) == (u8)':')
+                return i;
+            }
+        return String.notFound();
+        }
+
+    // The `br i1 c, label %a, label %b` at line k as `br i1 c, label %b, label %a`.
+    static void swapTargets(Array* lines, u32 k, String* c)
+        {
+        String* m = (String*)lines.get(k);
+        String* head = String.withFormat("br i1 %s, ", c.cString());
+        u32 hb = m.byteIndexOf(head);
+        Array* tg = m.substringFromByte(hb + head.byteLength()).splitOnByte((u8)',');
+        if (tg.count() < 2)
+            return;
+        String* nm = m.substringBytes(0, hb + head.byteLength());
+        nm.append(((String*)tg.get(1)).trimmed());
+        nm.appendCString(", ");
+        nm.append(((String*)tg.get(0)).trimmed());
+        for (u32 j = 2; j < tg.count(); j = j + 1)
+            {
+            nm.appendCString(",");
+            nm.append((String*)tg.get(j));
+            }
+        lines.set(k, (Object*)nm);
+        }
+
+    // The line of block `name`'s terminator (`  br ...`), or notFound.
+    static u32 terminatorOf(Array* lines, u32 from, u32 end, String* name)
+        {
+        String* label = name.hasPrefix(String.withCString("%")) ? name.substringFromByte(1) : name;
+        bool inside = false;
+        u32 last = String.notFound();
+        for (u32 i = from; i < end; i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (l.byteLength() > 0 && l.byteAt(0) != (u8)' ' && l.byteAt(0) != (u8)';')
+                {
+                if (inside)
+                    return last;
+                u32 colon = Languages.byteFrom(l, (u8)':', 0);
+                inside = colon != String.notFound() && l.substringBytes(0, colon).equals(label);
+                continue;
+                }
+            if (inside && l.trimmed().hasPrefix(String.withCString("br ")))
+                last = i;
+            }
+        return inside ? last : String.notFound();
+        }
+
+    // The pointer phi `name` of the header (lines [blockStart, upto)), with
+    // two incomings, a step by a constant in the function and every load and
+    // store through it of one type that size; or 0.
+    static PtrIv* ptrIv(Array* lines, u32 blockStart, u32 upto, u32 from, u32 end, String* name)
+        {
+        String* head = name.appending(String.withCString(" = phi ptr "));
+        for (u32 i = blockStart; i < upto; i = i + 1)
+            {
+            String* t = ((String*)lines.get(i)).trimmed();
+            if (!t.hasPrefix(head))
+                continue;
+            Array* ins = t.substringFromByte(head.byteLength()).splitOnByte((u8)'[');
+            Array* vals = new Array();
+            Array* from2 = new Array();
+            for (u32 k = 0; k < ins.count(); k = k + 1)
+                {
+                String* e = ((String*)ins.get(k)).trimmed();
+                if (e.byteLength() == 0)
+                    continue;
+                u32 close = Languages.byteFrom(e, (u8)']', 0);
+                if (close == String.notFound())
+                    return (PtrIv*)0;
+                Array* vb = e.substringBytes(0, close).splitOnByte((u8)',');
+                if (vb.count() != 2)
+                    return (PtrIv*)0;
+                vals.add((Object*)((String*)vb.get(0)).trimmed());
+                from2.add((Object*)((String*)vb.get(1)).trimmed());
+                }
+            if (vals.count() != 2)
+                return (PtrIv*)0;
+            // Which incoming steps: `%pn = getelementptr inbounds T, ptr name, i64 K`.
+            for (u32 w = 0; w < 2; w = w + 1)
+                {
+                String* pn = (String*)vals.get(w);
+                u32 sl = String.notFound();
+                i64 step = 0;
+                String* gh = pn.appending(String.withCString(" = getelementptr inbounds "));
+                for (u32 k = from; k < end; k = k + 1)
+                    {
+                    String* m = ((String*)lines.get(k)).trimmed();
+                    if (!m.hasPrefix(gh))
+                        continue;
+                    Array* gp = m.substringFromByte(gh.byteLength()).splitOnByte((u8)',');
+                    if (gp.count() < 3)
+                        break;
+                    String* gt = ((String*)gp.get(0)).trimmed();
+                    if (gt.hasPrefix(String.withCString("nuw ")))
+                        gt = gt.substringFromByte(4);
+                    if (!((String*)gp.get(1)).trimmed().equals(String.withFormat("ptr %s", name.cString())))
+                        break;
+                    Array* kw = Languages.words(((String*)gp.get(2)).trimmed());
+                    if (kw.count() != 2)
+                        break;
+                    i64 kk = Languages.intOf((String*)kw.get(1));
+                    i64 sz = Languages.sizeOf(gt);
+                    if (kk <= 0 || sz <= 0)
+                        break;
+                    step = kk * sz;
+                    sl = k;
+                    break;
+                    }
+                if (sl == String.notFound())
+                    continue;
+                String* elem = Languages.accessType(lines, from, end, name);
+                if (elem == (String*)0 || Languages.sizeOf(elem) != step)
+                    return (PtrIv*)0;
+                PtrIv* r = new PtrIv();
+                r._name = name;
+                r._start = (String*)vals.get(1 - w);
+                r._pre = (String*)from2.get(1 - w);
+                r._latch = (String*)from2.get(w);
+                r._step = step;
+                r._stepLine = sl;
+                r._line = i;
+                r._elem = elem;
+                return r;
+                }
+            return (PtrIv*)0;
+            }
+        return (PtrIv*)0;
+        }
+
+    // The one type every load and store through p has (`load T, ptr p`,
+    // `store T v, ptr p`), with p used otherwise only by its step and the
+    // test; or 0.
+    static String* accessType(Array* lines, u32 from, u32 end, String* p)
+        {
+        String* ty = (String*)0;
+        String* lk = String.withFormat(", ptr %s", p.cString());
+        for (u32 i = from; i < end; i = i + 1)
+            {
+            String* t = ((String*)lines.get(i)).trimmed();
+            u32 at = t.byteIndexOf(lk);
+            if (at == String.notFound())
+                continue;
+            u32 e = at + lk.byteLength();
+            if (e < t.byteLength() && LlvmName.isNameByte(t.byteAt(e)))
+                continue;
+            String* one = (String*)0;
+            u32 ld = t.byteIndexOf(String.withCString(" = load "));
+            if (ld != String.notFound() && ld < at)
+                one = (String*)Languages.words(t.substringBytes(ld + 8, at - ld - 8).trimmed()).get(0);
+            else if (t.hasPrefix(String.withCString("store ")))
+                one = (String*)Languages.words(t.substringFromByte(6)).get(0);
+            else
+                continue;
+            if (one == (String*)0 || (ty != (String*)0 && !ty.equals(one)))
+                return (String*)0;
+            ty = one;
+            }
+        return ty;
+        }
+
+    static i64 sizeOf(String* t)
+        {
+        if (t.equals(String.withCString("i8"))) return 1;
+        if (t.equals(String.withCString("i16")) || t.equals(String.withCString("half")) || t.equals(String.withCString("bfloat"))) return 2;
+        if (t.equals(String.withCString("i32")) || t.equals(String.withCString("float"))) return 4;
+        if (t.equals(String.withCString("i64")) || t.equals(String.withCString("double")) || t.equals(String.withCString("ptr"))) return 8;
+        return 0;
+        }
+
+    static i64 intOf(String* w)
+        {
+        i64 v = 0;
+        if (w.byteLength() == 0)
+            return 0;
+        for (u32 i = 0; i < w.byteLength(); i = i + 1)
+            {
+            u8 c = w.byteAt(i);
+            if (c < (u8)'0' || c > (u8)'9')
+                return 0;
+            v = v * 10 + (i64)(c - (u8)'0');
+            }
+        return v;
         }
 
     // How many times the value v appears in lines [from, end), as a whole name.

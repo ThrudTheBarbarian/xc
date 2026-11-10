@@ -575,14 +575,18 @@ class LlvmReader
                 || w.equals(String.withCString("writeonly")) || w.equals(String.withCString("signext"))
                 || w.equals(String.withCString("zeroext")) || w.equals(String.withCString("noalias"))
                 || w.equals(String.withCString("inreg")) || w.equals(String.withCString("returned"))
-                || w.equals(String.withCString("nofree")) || w.equals(String.withCString("immarg")))
+                || w.equals(String.withCString("nofree")) || w.equals(String.withCString("immarg"))
+                || w.equals(String.withCString("readnone")) || w.equals(String.withCString("writable"))
+                || w.equals(String.withCString("dead_on_unwind")) || w.equals(String.withCString("nonnull")))
                 {
                 if (w.equals(String.withCString("zeroext")))
                     _sawZext = true;
                 again = true;
                 }
             else if (w.equals(String.withCString("align")) || w.equals(String.withCString("dereferenceable"))
-                     || w.equals(String.withCString("dereferenceable_or_null")))
+                     || w.equals(String.withCString("dereferenceable_or_null")) || w.equals(String.withCString("captures"))
+                     || w.equals(String.withCString("initializes")) || w.equals(String.withCString("nofpclass"))
+                     || w.equals(String.withCString("range")))
                 {
                 // `align 8` takes a word, `dereferenceable(24)` its
                 // parentheses: a word after those was the parameter's name
