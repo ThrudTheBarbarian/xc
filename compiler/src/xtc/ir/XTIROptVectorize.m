@@ -2029,6 +2029,48 @@ static void xtvCloneLoop(XTIRFunction* fn, XTIRBlock* H, XTIRBlock* B,
                                                   operands:ops
                                                     dbgLoc:B.terminator.dbgLoc]];
         }
+    // The body is cloned before the header, so a body instruction reading a
+    // header value computed from a phi (clang's `getelementptr p, i` in the
+    // loop's condition block) still named the original loop's: the remainder
+    // wrote through the vector loop's last address on every trip. Each such
+    // operand becomes the clone's own value.
+    NSMutableSet<NSNumber*>* dep = [NSMutableSet set];
+    for (XTIRInsn* phi in H.phiNodes)
+        if (phi.result)
+            [dep addObject:@(phi.result.valueId)];
+    NSMutableDictionary<NSNumber*, NSNumber*>* hdrRemap = [NSMutableDictionary dictionary];
+    for (XTIRInsn* insn in H.instructions)
+        {
+        if (!insn.result)
+            continue;
+        BOOL reads = NO;
+        for (XTIROperand* o in insn.operands)
+            if (o.kind == XTIROperandKindUse && [dep containsObject:@(o.valueId)])
+                reads = YES;
+        if (!reads)
+            continue;
+        [dep addObject:@(insn.result.valueId)];
+        hdrRemap[@(insn.result.valueId)] = vmap[@(insn.result.valueId)];
+        }
+    if (hdrRemap.count > 0)
+        {
+        NSMutableArray<XTIRInsn*>* all = [NSMutableArray arrayWithArray:B2.instructions];
+        if (B2.terminator)
+            [all addObject:B2.terminator];
+        for (XTIRInsn* insn in all)
+            {
+            BOOL hit = NO;
+            NSMutableArray<XTIROperand*>* ops = [insn.operands mutableCopy];
+            for (NSUInteger k = 0; k < ops.count; k++)
+                if (ops[k].kind == XTIROperandKindUse && hdrRemap[@(ops[k].valueId)])
+                    {
+                    ops[k] = [XTIROperand useWithValueId:(XTIRValueId)hdrRemap[@(ops[k].valueId)].unsignedLongLongValue];
+                    hit = YES;
+                    }
+            if (hit)
+                [insn replaceOperands:ops];
+            }
+        }
     *outH2 = H2;
     *outB2 = B2;
     }

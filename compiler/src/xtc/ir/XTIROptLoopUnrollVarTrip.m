@@ -45,6 +45,9 @@ static const NSUInteger kMaxBodyInsns = 48;
 @property(nonatomic) NSArray<XTIRInsn*>* redNexts;   // their back-edge update insns (in B)
 @property(nonatomic) NSArray<NSNumber*>* redIds;     // redPhis[i].result.valueId
 @property(nonatomic) NSArray<NSNumber*>* redEscapes; // BOOL: result used outside H/B (needs exit phi)
+// Header instructions computed from the iv or an accumulator that the body
+// reads, in header order: each copy after the first computes its own.
+@property(nonatomic) NSArray<XTIRInsn*>* hdrDeps;
 @end
 @implementation XTVarTripCand
 @end
@@ -118,6 +121,70 @@ static XTIROperand* remapOp(XTIROperand* op, NSDictionary<NSNumber*, NSNumber*>*
         return op;
     NSNumber* n = map[@(op.valueId)];
     return n ? [XTIROperand useWithValueId:(XTIRValueId)n.unsignedLongLongValue] : op;
+    }
+
+// Header values computed from the iv or an accumulator. xc's lowering never
+// makes one, but clang's IR does: `getelementptr p, i` in the loop's condition
+// block, read by the body's load and store. In the header such a value is copy
+// 0's, so each later copy computes its own from its own iv (apply); the ones
+// the body reads are returned in header order. A loop whose guard compares
+// against one, or that reads one after the loop, cannot be given a value per
+// copy: nil, and the loop is left alone.
+static NSArray<XTIRInsn*>* _Nullable headerDeps(XTIRFunction* fn, XTIRBlock* H, XTIRBlock* B,
+                                                XTIRInsn* guard, XTIRValueId ivId,
+                                                NSArray<NSNumber*>* redIds)
+    {
+    NSMutableSet<NSNumber*>* dep = [NSMutableSet setWithObject:@(ivId)];
+    [dep addObjectsFromArray:redIds];
+    NSMutableSet<NSNumber*>* hdr = [NSMutableSet set];
+    NSMutableArray<XTIRInsn*>* hd = [NSMutableArray array];
+    BOOL (^readsAny)(XTIRInsn*, NSSet<NSNumber*>*) = ^BOOL(XTIRInsn* n, NSSet<NSNumber*>* set) {
+        for (XTIROperand* o in n.operands)
+            if (o.kind == XTIROperandKindUse && [set containsObject:@(o.valueId)])
+                return YES;
+        return NO;
+    };
+    for (XTIRInsn* n in H.instructions)
+        {
+        if (!n.result || !readsAny(n, dep))
+            continue;
+        [dep addObject:@(n.result.valueId)];
+        [hdr addObject:@(n.result.valueId)];
+        [hd addObject:n];
+        }
+    if (readsAny(guard, hdr))
+        return nil;
+    for (XTIRBlock* bb in fn.blocks)
+        {
+        if (bb == H || bb == B)
+            continue;
+        NSMutableArray<XTIRInsn*>* all = [NSMutableArray array];
+        [all addObjectsFromArray:bb.phiNodes];
+        [all addObjectsFromArray:bb.instructions];
+        if (bb.terminator)
+            [all addObject:bb.terminator];
+        for (XTIRInsn* insn in all)
+            if (readsAny(insn, hdr))
+                return nil;
+        }
+    NSMutableSet<NSNumber*>* need = [NSMutableSet set];
+    void (^mark)(XTIRInsn*) = ^(XTIRInsn* n) {
+        for (XTIROperand* o in n.operands)
+            if (o.kind == XTIROperandKindUse && [hdr containsObject:@(o.valueId)])
+                [need addObject:@(o.valueId)];
+    };
+    for (XTIRInsn* n in B.instructions)
+        mark(n);
+    if (B.terminator)
+        mark(B.terminator);
+    for (XTIRInsn* n in hd.reverseObjectEnumerator)
+        if ([need containsObject:@(n.result.valueId)])
+            mark(n);
+    NSMutableArray<XTIRInsn*>* out = [NSMutableArray array];
+    for (XTIRInsn* n in hd)
+        if ([need containsObject:@(n.result.valueId)])
+            [out addObject:n];
+    return out;
     }
 
 // Rebuild an insn with new operands/result, preserving predicate/memoryResult.
@@ -445,6 +512,9 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
             }
         if (!redOK)
             continue;
+        NSArray<XTIRInsn*>* hdrDeps = headerDeps(fn, H, B, guard, ivId, redIds);
+        if (!hdrDeps)
+            continue;
 
         // If any accumulator escapes, apply builds an exit phi in E whose
         // incomings are H + the intermediate clones. That covers all of E's
@@ -491,6 +561,7 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
         c.redNexts = redNexts;
         c.redIds = redIds;
         c.redEscapes = redEsc;
+        c.hdrDeps = hdrDeps;
         // Resolve the step to a constant when possible (ImmI, or a Const def);
         // a non-constant step is loop-invariant and defined outside B (the
         // in-B-must-be-Const check above), so it stays referenceable after B
@@ -822,6 +893,30 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
                 map[c.redIds[i]] = @(rid);
                 rebasedNext[@(rn.result.valueId)] = @[ c.redIds[i], rn.operands[1].type, @(stride * (int64_t)(j + 1)) ];
                 }
+            }
+
+        // The header values computed from the iv (headerDeps): copy 0 reads
+        // the header's, which are its own, and each later copy computes them
+        // again from its iv. Copy 0 maps them to themselves, so the sharing
+        // below never takes a body value computed from one for invariant.
+        for (XTIRInsn* n in c.hdrDeps)
+            {
+            if (j == 0)
+                {
+                map[@(n.result.valueId)] = @(n.result.valueId);
+                continue;
+                }
+            NSMutableArray<XTIROperand*>* hops = [NSMutableArray arrayWithCapacity:n.operands.count];
+            for (XTIROperand* op in n.operands)
+                [hops addObject:remapOp(op, map)];
+            XTIRValueId hid = [fn allocateValueId];
+            XTIRValue* hv = [[XTIRValue alloc] initWithValueId:hid
+                                                          type:n.result.type
+                                                       defSite:[[XTIRDefSite alloc] initWithBlock:C insnIndex:idx]];
+            [fn registerValue:hv];
+            [C appendInstruction:buildLike(n, hv, hops, nil)];
+            idx++;
+            map[@(n.result.valueId)] = @(hid);
             }
 
         XTIRValueId cloneIvNext = prevIv;

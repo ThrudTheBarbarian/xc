@@ -1130,6 +1130,9 @@ class OptProfile
     Array* _redNexts; // their back-edge updates, in the body
     Array* _redVals;  // the phi results
     Array* _redEsc;   // Number: 1 when read outside the loop
+    // Header instructions computed from the iv or an accumulator that the body
+    // reads, in header order: each copy after the first computes its own.
+    Array* _hdrDeps;
 
     void init(void)
         {
@@ -1137,6 +1140,7 @@ class OptProfile
         _redNexts = new Array();
         _redVals = new Array();
         _redEsc = new Array();
+        _hdrDeps = new Array();
         _stepIsConst = false;
         _stepK = (i64)0;
         }
@@ -1196,6 +1200,10 @@ class OptProfile
     Array* redEsc(void)
         {
         return _redEsc;
+        }
+    Array* hdrDeps(void)
+        {
+        return _hdrDeps;
         }
 
     void setLoop(IRBlock* h, IRBlock* b, IRBlock* e)
@@ -3067,11 +3075,65 @@ class BeFact : Object
             H2.setTerm(vecCloneInsn(H.term(), vmap, bmap));
         if (B.term() != (IRInsn*)0)
             B2.setTerm(vecCloneInsn(B.term(), vmap, bmap));
+        vecCloneHeaderUses(H, B2, vmap);
 
         Array* out = new Array();
         out.add((Object*)H2);
         out.add((Object*)B2);
         return out;
+        }
+
+    // The body is cloned before the header, so a body instruction reading a
+    // header value computed from a phi (clang's `getelementptr p, i` in the
+    // loop's condition block) still named the original loop's: the remainder
+    // wrote through the vector loop's last address on every trip. Each such
+    // operand becomes the clone's own value.
+    void vecCloneHeaderUses(IRBlock* H, IRBlock* B2, Map* vmap)
+        {
+        Map* dep = new Map();
+        for (u32 i = (u32)0; i < H.phis().count(); i = i + (u32)1)
+            {
+            IRInsn* p = (IRInsn*)H.phis().get(i);
+            if (p.res() != (IRValue*)0)
+                dep.set((Hashable*)p.res(), (Object*)p.res());
+            }
+        Map* remap = new Map();
+        u32 n = (u32)0;
+        for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* x = (IRInsn*)H.insns().get(i);
+            if (x.res() == (IRValue*)0)
+                continue;
+            bool reads = false;
+            for (u32 k = (u32)0; k < x.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)x.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && dep.get((Hashable*)o.val()) != (Object*)0)
+                    reads = true;
+                }
+            if (!reads)
+                continue;
+            dep.set((Hashable*)x.res(), (Object*)x.res());
+            remap.set((Hashable*)x.res(), vmap.get((Hashable*)x.res()));
+            n = n + (u32)1;
+            }
+        if (n == (u32)0)
+            return;
+        for (u32 i = (u32)0; i <= B2.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* x = i < B2.insns().count() ? (IRInsn*)B2.insns().get(i) : B2.term();
+            if (x == (IRInsn*)0)
+                continue;
+            for (u32 k = (u32)0; k < x.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)x.ops().get(k);
+                if (o.kind() != (u8)OPK_USE || o.val() == (IRValue*)0)
+                    continue;
+                Object* to = remap.get((Hashable*)o.val());
+                if (to != (Object*)0)
+                    x.ops().set(k, (Object*)IROperand.useVal((IRValue*)to));
+                }
+            }
         }
 
     // `string` (a C literal), NOT String* — the same convention hoistName uses.

@@ -334,6 +334,8 @@
             return (VTCand*)0;
         if (!vtCarried(fn, H, B, c, defOf, defBlk, uses))
             return (VTCand*)0;
+        if (!vtHeaderDeps(fn, H, B, c))
+            return (VTCand*)0;
 
         // When an accumulator escapes, the apply builds an exit phi in E whose
         // incomings are the header plus the intermediate copies. That covers all
@@ -802,6 +804,78 @@
         return true;
         }
 
+    // Does `n` read a value `set` holds?
+    final bool vtReadsAny(IRInsn* n, Map* set)
+        {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && set.get((Hashable*)o.val()) != (Object*)0)
+                return true;
+            }
+        return false;
+        }
+
+    // Header values computed from the iv or an accumulator. xc's lowering
+    // never makes one, but clang's IR does: `getelementptr p, i` in the loop's
+    // condition block, read by the body's load and store. In the header such a
+    // value is copy 0's, so each later copy computes its own from its own iv
+    // (vtCopy); the ones the body reads go to c.hdrDeps in header order. A
+    // loop whose guard compares against one, or that reads one after the
+    // loop, cannot be given a value per copy and is left alone.
+    final bool vtHeaderDeps(IRFunc* fn, IRBlock* H, IRBlock* B, VTCand* c)
+        {
+        Map* dep = new Map();
+        dep.set((Hashable*)c.iv(), (Object*)c.iv());
+        for (u32 i = (u32)0; i < c.redVals().count(); i = i + (u32)1)
+            dep.set((Hashable*)c.redVals().get(i), c.redVals().get(i));
+        Map* hdr = new Map();
+        Array* hd = new Array();
+        for (u32 i = (u32)0; i < H.insns().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)H.insns().get(i);
+            if (n.res() == (IRValue*)0 || !vtReadsAny(n, dep))
+                continue;
+            dep.set((Hashable*)n.res(), (Object*)n.res());
+            hdr.set((Hashable*)n.res(), (Object*)n.res());
+            hd.add((Object*)n);
+            }
+        if (vtReadsAny(c.guard(), hdr))
+            return false;
+        for (u32 i = (u32)0; i < hd.count(); i = i + (u32)1)
+            if (vtEscapes(fn, H, B, ((IRInsn*)hd.get(i)).res()))
+                return false;
+        Map* need = new Map();
+        for (u32 i = (u32)0; i < B.insns().count(); i = i + (u32)1)
+            vtNeedHeader((IRInsn*)B.insns().get(i), hdr, need);
+        if (B.term() != (IRInsn*)0)
+            vtNeedHeader(B.term(), hdr, need);
+        for (u32 i = hd.count(); i > (u32)0; i = i - (u32)1)
+            {
+            IRInsn* n = (IRInsn*)hd.get(i - (u32)1);
+            if (need.get((Hashable*)n.res()) != (Object*)0)
+                vtNeedHeader(n, hdr, need);
+            }
+        for (u32 i = (u32)0; i < hd.count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)hd.get(i);
+            if (need.get((Hashable*)n.res()) != (Object*)0)
+                c.hdrDeps().add((Object*)n);
+            }
+        return true;
+        }
+
+    // Mark in `need` each value of `hdr` that `n` reads.
+    final void vtNeedHeader(IRInsn* n, Map* hdr, Map* need)
+        {
+        for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+            {
+            IROperand* o = (IROperand*)n.ops().get(k);
+            if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && hdr.get((Hashable*)o.val()) != (Object*)0)
+                need.set((Hashable*)o.val(), (Object*)o.val());
+            }
+        }
+
     final void vtApply(IRFunc* fn, VTCand* c)
         {
         IRBlock* H = c.h();
@@ -1073,6 +1147,29 @@
                 nx.add(IROperand.immI((i32)(b1.imm() * (i64)(j + (u32)1)), b1.ty()));
                 rebasedNext.set((Hashable*)rn.res(), (Object*)nx);
                 }
+            }
+
+        // The header values computed from the iv (vtHeaderDeps): copy 0 reads
+        // the header's, which are its own, and each later copy computes them
+        // again from its iv. Copy 0 maps them to themselves, so vtShareable
+        // never takes a body value computed from one for loop-invariant.
+        for (u32 i = (u32)0; i < c.hdrDeps().count(); i = i + (u32)1)
+            {
+            IRInsn* n = (IRInsn*)c.hdrDeps().get(i);
+            if (j == (u32)0)
+                {
+                map.set((Hashable*)n.res(), (Object*)n.res());
+                continue;
+                }
+            IRInsn* hc = IRInsn.with(n.op());
+            hc.copyDbg(n);
+            hc.setPred(n.pred());
+            hc.setCc(n.cc());
+            for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                hc.add(self.unrollSubstMap(map, (IROperand*)n.ops().get(k)));
+            hc.setRes(new IRValue(n.res().ty()));
+            map.set((Hashable*)n.res(), (Object*)hc.res());
+            C.add(hc);
             }
 
         IRValue* cloneIvNext = prevIv;
