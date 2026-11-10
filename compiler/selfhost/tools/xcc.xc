@@ -5763,7 +5763,8 @@ void ndkLink(DriverOptions* d, Arm64Asm* as, String* out, String* soname)
 // program always has them: clang's IR carries line tables.
 String* withoutXcDirectives(String* prog)
 {
-    if (!prog.contains(String.withCString("\n    .xc_")) && !prog.contains(String.withCString("\n    .loc "))) return prog;
+    if (!prog.contains(String.withCString("\n    .xc_")) && !prog.contains(String.withCString("\n    .loc "))
+        && !prog.contains(String.withCString("\n    .file "))) return prog;
     Array* lines = prog.splitOnByte((u8)10);
     String* out = new String();
     for (u32 i = 0; i < lines.count(); i = i + 1) {
