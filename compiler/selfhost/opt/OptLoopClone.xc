@@ -31,6 +31,14 @@
         IRBlock* B = c.b();
         IRBlock* E = c.e();
         IRBlock* last = (IRBlock*)_vtClones.get(_vtClones.count() - (u32)1);
+        // The header leaves the loop when its test is false (`CondBranch c,
+        // B, E`, xc's loops) or when it is true (`CondBranch c, E, B`, the
+        // `i == n` exit clang writes at -O1): each copy's test goes the same
+        // way. Wired body-on-true always, the second kind left after one copy.
+        IRInsn* ht = H.term();
+        bool exitOnTrue = ht != (IRInsn*)0 && ht.ops().count() >= 3
+                          && ((IROperand*)ht.ops().get(2)).kind() == (u8)OPK_BLOCK
+                          && ((IROperand*)ht.ops().get(2)).blk() == B;
 
         for (u32 j = (u32)0; j < _vtClones.count(); j = j + (u32)1)
             {
@@ -45,8 +53,8 @@
                 {
                 IRInsn* cb = IRInsn.with(String.withCString("CondBranch"));
                 cb.add(IROperand.useVal((IRValue*)_vtGuards.get(j)));
-                cb.add(IROperand.block((IRBlock*)_vtClones.get(j + (u32)1)));
-                cb.add(IROperand.block(E));
+                cb.add(IROperand.block(exitOnTrue ? E : (IRBlock*)_vtClones.get(j + (u32)1)));
+                cb.add(IROperand.block(exitOnTrue ? (IRBlock*)_vtClones.get(j + (u32)1) : E));
                 C.setTerm(cb);
                 }
             else

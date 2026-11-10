@@ -1000,7 +1000,13 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
         }
 
     // Wire terminators: intermediate copy → CondBranch(guard, next copy, E);
-    // last copy → back-edge to H.
+    // last copy → back-edge to H. The header leaves the loop when its test is
+    // false (CondBranch(c, B, E), xc's loops) or when it is true
+    // (CondBranch(c, E, B), the `i == n` exit clang writes at -O1): each
+    // copy's test goes the same way.
+    XTIRInsn* ht = H.terminator;
+    BOOL exitOnTrue = ht && ht.operands.count >= 3 && ht.operands[2].kind == XTIROperandKindBlock
+                      && ht.operands[2].blockRef == B;
     for (NSUInteger j = 0; j < clones.count; j++)
         {
         if (j + 1 < clones.count)
@@ -1017,8 +1023,8 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
             XTIRInsn* cb = [[XTIRInsn alloc] initWithOpcode:XTIROpCondBranch
                                                      result:nil
                                                    operands:@[ [XTIROperand useWithValueId:g.valueId],
-                                                               [XTIROperand blockWithRef:clones[j + 1]],
-                                                               [XTIROperand blockWithRef:E] ]
+                                                               [XTIROperand blockWithRef:exitOnTrue ? E : clones[j + 1]],
+                                                               [XTIROperand blockWithRef:exitOnTrue ? clones[j + 1] : E] ]
                                                      dbgLoc:nil];
             [clones[j] setTerminator:cb];
             }
