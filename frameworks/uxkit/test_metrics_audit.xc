@@ -17,6 +17,10 @@
 //   fills    the view's ink reaches each side of its frame (within 1 px), so views placed side by
 //            side by springs and struts meet as their frames do
 //
+// With -D AUDIT_RSC the controls come from an .rsc document instead: the same grid built in the
+// rsc model, written out, read back and loaded (UXRsc.loadDocAs), so the audit measures what a form
+// designed once in an rsc file gets on the backend.
+//
 // Each check prints "ok" or "FAIL" with a key, <kind>@<height> <rule>.  The verdict is the runner's
 // (run_metrics_audit.sh): it compares the FAIL keys with the backend's known failures in
 // expected_metrics_audit.txt, so the gate catches a regression and reports a fix.
@@ -52,6 +56,10 @@ void ux_gtk_wait_allocated(i32 handle);
 #import "UXTextView.xc"
 #import "UXScrollView.xc"
 #import "UXTabView.xc"
+#if AUDIT_RSC
+#import "UXRsc.xc"
+#import "UXRscWrite.xc"
+#endif
 #import "UXSplitView.xc"
 #import "UXGroupBox.xc"
 #import "UXComboBox.xc"
@@ -204,6 +212,88 @@ UXView* makeKind(i32 k)
     return sc;
     }
 
+#if AUDIT_RSC
+// kind k as an rsc object at frame (x, y, w, h) in tree t: a GEM type where one fits, else a
+// G_USERDEF naming the UXKit class, its settings in attributes
+void rscKind(UXRscDoc* d, UXRscTree* t, i32 k, i32 x, i32 y, i32 w, i32 h)
+    {
+    i32 type = (i32)UXR_T_USERDEF;
+    u8* text = (u8*)0;
+    if (k == 0) { type = (i32)UXR_T_BUTTON; text = (u8*)"Cancel"; }
+    if (k == 1) { type = (i32)UXR_T_FIELD; text = (u8*)"Hamburg"; }
+    if (k == 2) { type = (i32)UXR_T_STRING; text = (u8*)"Hamburg"; }
+    if (k == 3) { type = (i32)UXR_T_CHECKBOX; text = (u8*)"Check"; }
+    if (k == 4) { type = (i32)UXR_T_RADIO; text = (u8*)"Radio"; }
+    if (k == 5) { type = (i32)UXR_T_POPUP; text = (u8*)"Popup"; }
+    UXRscObject* o = UXRscObject.make(type, x, y, w, h);
+    if (text != (u8*)0)
+        {
+        o.text = text;
+        if (o.ted != (UXRscTedinfo*)0)
+            {
+            o.ted.text = text;
+            }
+        }
+    if (k == 3)
+        {
+        o.state = o.state | (i32)UXR_S_CHECKED;
+        }
+    if (k == 4)
+        {
+        o.state = o.state | (i32)UXR_S_SELECTED;
+        }
+    t.root.addChild(o);
+    if (k == 6)
+        {
+        d.setClassOf(t, o, (u8*)"UXSlider");
+        d.setAttrOf(t, o, (u8*)"min", (u8*)"0");
+        d.setAttrOf(t, o, (u8*)"max", (u8*)"100");
+        d.setAttrOf(t, o, (u8*)"value", (u8*)"40");
+        }
+    if (k == 7)
+        {
+        d.setClassOf(t, o, (u8*)"UXStepper");
+        d.setAttrOf(t, o, (u8*)"min", (u8*)"0");
+        d.setAttrOf(t, o, (u8*)"max", (u8*)"10");
+        d.setAttrOf(t, o, (u8*)"value", (u8*)"3");
+        }
+    if (k == 8)
+        {
+        d.setClassOf(t, o, (u8*)"UXProgressBar");
+        d.setAttrOf(t, o, (u8*)"total", (u8*)"100");
+        d.setAttrOf(t, o, (u8*)"completed", (u8*)"50");
+        }
+    if (k == 9)
+        {
+        d.setClassOf(t, o, (u8*)"UXSegmentedControl");
+        d.setAttrOf(t, o, (u8*)"segments", (u8*)"One|Two");
+        d.setAttrOf(t, o, (u8*)"selected", (u8*)"0");
+        }
+    }
+// the grid as a form, through the file format and back, loaded into the backdrop
+void rscBuild(UXView* back, i32 w, i32 h)
+    {
+    UXRscDoc* d = UXRscDoc.emptyDialog();
+    UXRscTree* t = d.treeAt((i32)0);
+    t.root.w = w;
+    t.root.h = h;
+    for (i32 k = 0; k < NKINDS; k = k + 1)
+        {
+        for (i32 c = 0; c < 2; c = c + 1)
+            {
+            rscKind(d, t, k, frameX(k, c), frameY(k), COLW, heightOf(k, c));
+            }
+        }
+    Data* bytes = UXRscWriter.write(d);
+    UXRscDoc* r = UXRscReader.read(bytes.bytes(), bytes.length());
+    UXRscInstance* ni = r != (UXRscDoc*)0 ? UXRsc.loadDocAs(r, (i32)0, (i32)UXR_V_DESKTOP, (i32)UXR_V_ORIENT_NONE, (UXDesignable*)0, back) : (UXRscInstance*)0;
+    if (ni == (UXRscInstance*)0)
+        {
+        Stdio.printf("FAIL: the rsc form did not load\n");
+        }
+    }
+#endif
+
 void build(i32 x, i32 y)
     {
     UXView* back = new Backdrop();
@@ -214,6 +304,9 @@ void build(i32 x, i32 y)
         {
         gApp.addWindow(gWin);
         }
+#if AUDIT_RSC
+    rscBuild(back, LEFT + 4 * PITCHX, TOP + ROWS * PITCHY);
+#else
     for (i32 k = 0; k < NKINDS; k = k + 1)
         {
         for (i32 c = 0; c < 2; c = c + 1)
@@ -221,6 +314,7 @@ void build(i32 x, i32 y)
             back.addSubview(makeKind(k), UXGeom.make((i16)frameX(k, c), (i16)frameY(k), (i16)COLW, (i16)heightOf(k, c)));
             }
         }
+#endif
     gWin.displayAll();
 #if SNAP_GTK
     ux_gtk_wait_allocated(gWin.handle); // the frame clock: a headless gate has no window manager
