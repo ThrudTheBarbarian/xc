@@ -69,6 +69,9 @@ bool gCPathFuseMulAdd;
 void cPathSetFuseMulAdd(bool b) { gCPathFuseMulAdd = b; }
 void cPathSetTarget(String* t) { gCPathTarget = t; }
 void cPathSetFpContract(String* v) { gCPathFpContract = v; }
+// -std=<x>: the language standard, handed to clang; 0 for clang's default.
+String* gCPathStd;
+void cPathSetStd(String* v) { gCPathStd = v; }
 // The source's row of the language table (Language.xc): the command that
 // writes its LLVM IR, and which functions xcc takes. 0: C's.
 LanguageRow* gCPathLang;
@@ -171,13 +174,13 @@ class CPath
 
     // The IR after the row's passes (clang, over its own output), or 0 with
     // the reason printed.
-    static String* passed(String* text, String* scratch, LanguageRow* lang)
+    static String* passed(String* text, String* scratch, LanguageRow* lang, Map* names)
         {
         String* feLl = String.withString(scratch);
         feLl.appendCString(".fe.ll");
         String* out = String.withString(scratch);
         out.appendCString(".ll");
-        if (!Files.writeText(feLl, Languages.markNoinline(text)))
+        if (!Files.writeText(feLl, Languages.markNoinlineOf(text, names)))
             {
             Stdio.error(String.withFormat("xcc: error: cannot write '%s'\n", feLl.cString()));
             return (String*)0;
@@ -235,6 +238,11 @@ class CPath
             cmd.append(gCPathTarget);
         cmd.appendCString(" ");
         cmd.append(lang.irFlags());
+        if (gCPathStd != (String*)0)
+            {
+            cmd.appendCString(" -std=");
+            cmd.append(gCPathStd);
+            }
         if (gCPathFpContract != (String*)0)
             {
             cmd.appendCString(" -ffp-contract=");
@@ -281,14 +289,86 @@ class CPath
         // The row's passes: clang optimises the IR before xcc reads it, the
         // functions xcc may take kept out of their callers. XC_C_LL's file
         // is the IR as read, after any passes.
+        // The row's read flags: a second build, the one xcc reads (clang's
+        // half is still the first).
+        String* readBuild = (String*)0;
+        if (lang.readFlags().byteLength() > 0 && given.byteLength() == 0)
+            {
+            String* llB = String.withString(scratch);
+            llB.appendCString(".read.ll");
+            String* cmdB = cmd.replacing(CPath.quoted(ll), CPath.quoted(llB));
+            String* at = String.withFormat(" %s", lang.irFlags().cString());
+            cmdB = cmdB.replacing(at, at.appending(String.withCString(" ")).appending(lang.readFlags()));
+            if (system(cmdB.cString()) != 0)
+                {
+                Stdio.error(String.withFormat("xcc: error: %s could not compile '%s' with %s\n", lang.command().cString(),
+                                              input.cString(), lang.readFlags().cString()));
+                return (IRModule*)0;
+                }
+            readBuild = Files.readText(llB);
+            Directory._unlink(llB);
+            if (readBuild == (String*)0)
+                {
+                Stdio.error(String.withFormat("xcc: error: cannot read clang's output '%s'\n", llB.cString()));
+                return (IRModule*)0;
+                }
+            readBuild = readBuild.replacing(String.withCString("\r\n"), String.withCString("\n"));
+            }
         if (lang.passes().byteLength() > 0 && given.byteLength() == 0)
             {
-            text = CPath.passed(text, scratch, lang);
+            // One set of functions kept out of their callers in both builds,
+            // so a function xcc takes from the second is called in the first.
+            Map* names = Languages.loopNames(text);
+            if (readBuild != (String*)0)
+                {
+                Map* more = Languages.loopNames(readBuild);
+                Array* ks = more.allKeys();
+                for (u32 k = 0; k < ks.count(); k = k + 1)
+                    names.set((Hashable*)ks.get(k), more.get((Hashable*)ks.get(k)));
+                }
+            String* textFe = text;
+            String* readFe = readBuild;
+            text = CPath.passed(textFe, scratch, lang, names);
             if (text == (String*)0)
                 return (IRModule*)0;
+            if (readFe != (String*)0)
+                {
+                readBuild = CPath.passed(readFe, scratch, lang, names);
+                if (readBuild == (String*)0)
+                    return (IRModule*)0;
+                }
+            // A function whose loop comes from what clang inlined into it (a
+            // std::for_each, a std::fill) has none before the passes, so it
+            // was not kept out of its callers: clang may have inlined it
+            // into one xcc leaves to clang, where xcc's copy is never called.
+            // Such functions join the set, and the passes run again.
+            Map* after = Languages.loopNames(readBuild != (String*)0 ? readBuild : text);
+            Array* ak = after.allKeys();
+            u32 added = 0;
+            for (u32 k = 0; k < ak.count(); k = k + 1)
+                if (names.get((Hashable*)ak.get(k)) == (Object*)0)
+                    {
+                    names.set((Hashable*)ak.get(k), after.get((Hashable*)ak.get(k)));
+                    added = added + 1;
+                    }
+            if (added > 0)
+                {
+                text = CPath.passed(textFe, scratch, lang, names);
+                if (text == (String*)0)
+                    return (IRModule*)0;
+                if (readFe != (String*)0)
+                    {
+                    readBuild = CPath.passed(readFe, scratch, lang, names);
+                    if (readBuild == (String*)0)
+                        return (IRModule*)0;
+                    }
+                }
             }
-        // reads `loops`: the reader sees only the functions xcc may take.
-        String* readText = lang.loopsOnly() ? Languages.loopFunctions(text) : text;
+        // reads `loops`: the reader sees only the functions xcc may take,
+        // from the read build where there is one (and clang's build has them).
+        String* readText = lang.loopsOnly() ? Languages.loopFunctions(readBuild != (String*)0 ? readBuild : text) : text;
+        if (readBuild != (String*)0)
+            readText = Languages.takeFrom(readText, text);
         LlvmReader* r = new LlvmReader();
         r.setPath(input);
         // clang compiles what xcc does not take, and the globals: their

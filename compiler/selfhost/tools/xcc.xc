@@ -5819,7 +5819,12 @@ bool externalArm64(DriverOptions* d, String* prog)
     String* asmPath = External.tempPath("xtc-prog.s");
     writeTempOrDie(asmPath, withoutXcDirectives(prog));
     Array* a = new Array();
-    a.add((Object*)(gLangLinker != (String*)0 ? gLangLinker : String.withCString("clang")));
+    // The row's linker may carry flags (`clang++ -fexperimental-library`): a word each.
+    if (gLangLinker != (String*)0) {
+        Array* lw = Languages.words(gLangLinker);
+        for (u32 i = 0; i < lw.count(); i = i + 1) a.add(lw.get(i));
+    } else
+        a.add((Object*)String.withCString("clang"));
     a.add((Object*)String.withCString("-arch"));
     a.add((Object*)String.withCString("arm64"));
     a.add((Object*)String.withCString("-O2"));
@@ -7024,6 +7029,19 @@ DriverOptions* parseDriverArgs(void)
         // and backtrace — a failure names the site and the bounds and stops.
         if (a.equals(String.withCString("-fbounds-check=light"))) {
             o.setBoundsCheck(true); o.setBoundsReport(false); i = i + (u32)1; continue;
+        }
+        // -std=<standard>: for a C or C++ file, handed to clang (whose own
+        // default is otherwise used; Apple's clang++ defaults to C++14).
+        if (a.hasPrefix(String.withCString("-std=")) && a.byteLength() > (u32)5) {
+            String* v = a.substringFromByte((u32)5);
+            for (u32 k = 0; k < v.byteLength(); k = k + 1) {
+                u8 c = v.byteAt(k);
+                if (!((c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'0' && c <= (u8)'9') || c == (u8)'+')) {
+                    Stdio.printf("xcc: error: -std= takes a language standard such as c11 or c++17\n");
+                    Process.exit((i32)1);
+                }
+            }
+            cPathSetStd(v); i = i + (u32)1; continue;
         }
         // -ffp-contract=fast|on|off: for a C file, handed to clang. `on` (clang's
         // default) fuses within an expression, `fast` across statements too,

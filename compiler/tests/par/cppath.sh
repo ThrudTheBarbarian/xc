@@ -308,6 +308,67 @@ XC_PAR=cpu XC_PAR_REPORT=1 "$W/vec.par" 2>&1 | grep -q 'vec.cpp:5: .* items on t
 for f in 'scale.*vector' addp; do
     grep -q "$f.*: outlined, a block" "$W/iter.pb" || { echo "FAIL cppath: the pointer loop in $f did not become a block"; grep outline "$W/iter.pb" | head -3; fail=1; }
 done
+# The C++17 parallel algorithms (-std=c++17 handed to clang): xcc reads a
+# build with libc++'s serial backend, where std::transform and
+# std::for_each with std::execution::par are plain loops, and makes blocks
+# of them; a body it cannot lift (it calls out of the program) keeps the
+# library's own parallel backend, from the normal build. A function whose
+# loop is std::fill's (its loop only after inlining) is a block too.
+cat > "$W/pol.cpp" <<'C'
+#include <algorithm>
+#include <atomic>
+#include <cstdio>
+#include <execution>
+#include <vector>
+void axpy(float a, const std::vector<float>& x, std::vector<float>& y)
+    {
+    std::transform(std::execution::par, x.begin(), x.end(), y.begin(), y.begin(),
+                   [a](float xi, float yi) { return a * xi + yi; });
+    }
+void halve(std::vector<float>& y)
+    {
+    std::for_each(std::execution::par, y.begin(), y.end(), [](float& v) { v = v * 0.5f; });
+    }
+std::atomic<long> calls{0};
+void count(std::vector<float>& y)
+    {
+    std::for_each(std::execution::par, y.begin(), y.end(), [](float& v) { calls.fetch_add(1); v += 1.0f; });
+    }
+void zero(std::vector<float>& v)
+    {
+    std::fill(v.begin(), v.end(), 0.25f);
+    }
+int main()
+    {
+    std::vector<float> x(1 << 20), y(1 << 20, 1.0f), z(1000);
+    for (size_t i = 0; i < x.size(); i++)
+        x[i] = (float)(i % 1000);
+    axpy(2.0f, x, y);
+    halve(y);
+    count(y);
+    zero(z);
+    double t = 0;
+    for (float v : y)
+        t += v;
+    std::printf("%f %f %.1f %ld %f\n", y[12345], y[(1 << 20) - 1], t, calls.load(), z[999]);
+    return 0;
+    }
+C
+clang++ -std=c++17 -fexperimental-library -O2 -o "$W/pol.ref" "$W/pol.cpp" 2>/dev/null
+if [ -x "$W/pol.ref" ]; then
+    XC_PAR_OUTLINE_TRACE=1 "$XC" -q -O3 -std=c++17 -H . -o "$W/pol" "$W/pol.cpp" > "$W/pol.b" 2>&1 \
+        || { echo "FAIL cppath: the parallel algorithms do not build"; grep -v 'ld: warning' "$W/pol.b" | head -3; fail=1; }
+    if [ -x "$W/pol" ]; then
+        for d in cpu gpu; do
+            got=$(XC_PAR=$d "$W/pol")
+            [ "$got" = "$("$W/pol.ref")" ] || { echo "FAIL cppath: the parallel algorithms ($d) give $got, clang++'s $("$W/pol.ref")"; fail=1; }
+        done
+        for f in axpy halve zero; do
+            grep -q "_Z[0-9]*$f.*: outlined, a block" "$W/pol.b" || { echo "FAIL cppath: $f's algorithm did not become a block"; grep outline "$W/pol.b" | grep -v '^outline: [A-Z]' | head -4; fail=1; }
+        done
+        grep -q '_Z5count.*: outlined, a block' "$W/pol.b" && { echo "FAIL cppath: count's body (an atomic) became a block"; fail=1; }
+    fi
+fi
 XC_PAR=gpu XC_PAR_REPORT=1 "$W/glob.par" 2>&1 | grep -q 'items on the GPU' || { echo "FAIL cppath: no C++ loop ran on the GPU"; fail=1; }
 # .cc and .cxx are C++ too.
 cp "$W/saxpy.cpp" "$W/s2.cc"

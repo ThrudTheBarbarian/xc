@@ -8,7 +8,7 @@
 // are built in. More rows come from the file $XC_LANGUAGES names, one per
 // line:
 //
-//     name | .ext .ext | command | IR flags | libraries | reads | linker | passes
+//     name | .ext .ext | command | IR flags | libraries | reads | linker | passes | read flags
 //
 // `libraries` are `os:name` words (`macos:c++`): on macOS a name is the SDK's
 // usr/lib/lib<name>.tbd, elsewhere `-l<name>`. `reads` is `all` (every
@@ -23,6 +23,12 @@
 // the standard library's small functions into the loops and hoists what does
 // not change in them); the functions xcc may take are marked noinline first,
 // so their loops are not inlined into callers xcc leaves to clang.
+// `read flags`, when given, make a second build of the source, with these
+// flags added, the one xcc reads; clang's half is still the first build. A
+// function is taken from the second only where the first has it and
+// everything it names (C++: libc++'s parallel algorithms as plain loops,
+// -D_LIBCPP_PSTL_BACKEND_SERIAL, while what xcc does not take keeps the
+// library's own parallel backend).
 // `#` starts a comment line.
 
 #import "Foundation.xc"
@@ -42,6 +48,7 @@ class LanguageRow
     bool _loopsOnly;    // reads `loops`: xcc takes only the functions with a loop
     String* _linker;    // links the program on macOS, or "": xcc's own link
     String* _passes;    // clang's flags for a second step over the IR, or ""
+    String* _readFlags; // flags of a second build, the one xcc reads, or ""
 
     String* name(void)    { return _name; }
     Array* exts(void)     { return _exts; }
@@ -51,8 +58,9 @@ class LanguageRow
     bool loopsOnly(void)  { return _loopsOnly; }
     String* linker(void)  { return _linker; }
     String* passes(void)  { return _passes; }
+    String* readFlags(void) { return _readFlags; }
 
-    static LanguageRow* make(String* name, String* exts, String* command, String* irFlags, String* libs, String* reads, String* linker, String* passes)
+    static LanguageRow* make(String* name, String* exts, String* command, String* irFlags, String* libs, String* reads, String* linker, String* passes, String* readFlags)
         {
         LanguageRow* r = new LanguageRow();
         r._name = name;
@@ -63,6 +71,7 @@ class LanguageRow
         r._loopsOnly = reads.equals(String.withCString("loops"));
         r._linker = linker;
         r._passes = passes;
+        r._readFlags = readFlags;
         return r;
         }
 
@@ -133,10 +142,14 @@ class Languages
         Array* t = new Array();
         String* ir = String.withCString("-O1 -Xclang -disable-llvm-passes -fno-discard-value-names -gline-tables-only -S -emit-llvm");
         t.add((Object*)LanguageRow.make(String.withCString("c"), String.withCString(".c"), String.withCString("clang"),
-                                        ir, String.withCString(""), String.withCString("all"), String.withCString(""), String.withCString("")));
+                                        ir, String.withCString(""), String.withCString("all"), String.withCString(""), String.withCString(""), String.withCString("")));
+        // C++: libc++'s parallel algorithms (std::execution) are its
+        // experimental library on macOS.
         t.add((Object*)LanguageRow.make(String.withCString("c++"), String.withCString(".cpp .cc .cxx .C"), String.withCString("clang++"),
-                                        ir, String.withCString("macos:c++"), String.withCString("loops"), String.withCString("clang++"),
-                                        String.withCString("-O1 -fno-unroll-loops -fno-vectorize -fno-slp-vectorize -fno-discard-value-names -mllvm -rotation-max-header-size=0 -mllvm -indvars-widen-indvars=false")));
+                                        ir.appending(String.withCString(" -fexperimental-library")), String.withCString("macos:c++"),
+                                        String.withCString("loops"), String.withCString("clang++ -fexperimental-library"),
+                                        String.withCString("-O1 -fno-unroll-loops -fno-vectorize -fno-slp-vectorize -fno-discard-value-names -mllvm -rotation-max-header-size=0 -mllvm -indvars-widen-indvars=false"),
+                                        String.withCString("-D_LIBCPP_PSTL_BACKEND_SERIAL")));
         return t;
         }
 
@@ -180,9 +193,9 @@ class Languages
             if (l.byteLength() == 0 || l.hasPrefix(String.withCString("#")))
                 continue;
             Array* f = l.splitOnByte((u8)'|');
-            if (f.count() < 6 || f.count() > 8)
+            if (f.count() < 6 || f.count() > 9)
                 {
-                Stdio.error(String.withFormat("xcc: warning: XC_LANGUAGES line %u: want 6 to 8 fields separated by |, not %u\n",
+                Stdio.error(String.withFormat("xcc: warning: XC_LANGUAGES line %u: want 6 to 9 fields separated by |, not %u\n",
                                               i + 1, f.count()));
                 continue;
                 }
@@ -197,7 +210,8 @@ class Languages
                                             ((String*)f.get(2)).trimmed(), ((String*)f.get(3)).trimmed(),
                                             ((String*)f.get(4)).trimmed(), reads,
                                             f.count() >= 7 ? ((String*)f.get(6)).trimmed() : String.withCString(""),
-                                            f.count() == 8 ? ((String*)f.get(7)).trimmed() : String.withCString("")));
+                                            f.count() >= 8 ? ((String*)f.get(7)).trimmed() : String.withCString(""),
+                                            f.count() == 9 ? ((String*)f.get(8)).trimmed() : String.withCString("")));
             }
         }
 
@@ -259,10 +273,14 @@ class Languages
             u32 end = i + 1;
             while (end < lines.count() && !((String*)lines.get(end)).equals(String.withCString("}")))
                 end = end + 1;
-            if (!Languages.isOdr(l) && Languages.hasLoop(lines, i + 1, end) && !Languages.mayThrow(lines, i + 1, end, nounwind))
+            String* fname = Languages.calleeOf(l, 0);
+            if (!Languages.isOdr(l) && (fname == (String*)0 || !Languages.isStd(fname)) && Languages.hasLoop(lines, i + 1, end)
+                && !Languages.mayThrow(lines, i + 1, end, nounwind))
                 {
+                Languages.plainLabels(lines, i + 1, end);
                 Languages.counted(lines, i + 1, end);
                 Languages.pointerLoops(lines, i + 1, end);
+                Languages.downCounts(lines, i + 1, end);
                 for (u32 k = i; k <= end && k < lines.count(); k = k + 1)
                     {
                     out.append((String*)lines.get(k));
@@ -281,6 +299,16 @@ class Languages
             i = end + 1;
             }
         return out;
+        }
+
+    // Whether `@name` is the C++ standard library's (namespace std): a
+    // template it instantiates with a lambda has internal linkage, not an
+    // ODR copy's, yet it is the library's code, for clang's passes to inline
+    // into the caller, never xcc's to take.
+    static bool isStd(String* n)
+        {
+        String* b = n.hasPrefix(String.withCString("@\"")) ? n.substringFromByte(2) : n.substringFromByte(1);
+        return b.hasPrefix(String.withCString("_ZNSt")) || b.hasPrefix(String.withCString("_ZNKSt")) || b.hasPrefix(String.withCString("_ZSt"));
         }
 
     // Whether a define line's linkage lets another object define it too.
@@ -430,6 +458,39 @@ class Languages
     // loops into a caller xcc leaves to clang.
     static String* markNoinline(String* text)
         {
+        return Languages.markNoinlineOf(text, Languages.loopNames(text));
+        }
+
+    // The functions markNoinline marks in text: defined, not ODR copies,
+    // with a loop. A map from each `@name` to its define line.
+    static Map* loopNames(String* text)
+        {
+        Map* names = new Map();
+        Array* lines = text.splitOnByte((u8)10);
+        u32 i = 0;
+        while (i < lines.count())
+            {
+            String* l = (String*)lines.get(i);
+            if (!l.hasPrefix(String.withCString("define ")))
+                {
+                i = i + 1;
+                continue;
+                }
+            u32 end = i + 1;
+            while (end < lines.count() && !((String*)lines.get(end)).equals(String.withCString("}")))
+                end = end + 1;
+            String* n = Languages.calleeOf(l, 0);
+            if (n != (String*)0 && !Languages.isOdr(l) && !Languages.isStd(n) && Languages.hasLoop(lines, i + 1, end))
+                names.set((Hashable*)n, (Object*)l);
+            i = end + 1;
+            }
+        return names;
+        }
+
+    // text with each function of `names` marked noinline (not one already
+    // alwaysinline or noinline).
+    static String* markNoinlineOf(String* text, Map* names)
+        {
         Array* lines = text.splitOnByte((u8)10);
         Map* always = new Map();
         for (u32 i = 0; i < lines.count(); i = i + 1)
@@ -448,13 +509,11 @@ class Languages
         while (i < lines.count())
             {
             String* l = (String*)lines.get(i);
-            if (l.hasPrefix(String.withCString("define ")) && !Languages.isOdr(l) && !Languages.hasGroupIn(l, always))
+            String* ln = l.hasPrefix(String.withCString("define ")) ? Languages.calleeOf(l, 0) : (String*)0;
+            if (ln != (String*)0 && names.get((Hashable*)ln) != (Object*)0 && !Languages.hasGroupIn(l, always))
                 {
-                u32 end = i + 1;
-                while (end < lines.count() && !((String*)lines.get(end)).equals(String.withCString("}")))
-                    end = end + 1;
                 String* d = Languages.declarationOf(l);
-                if (d != (String*)0 && Languages.hasLoop(lines, i + 1, end))
+                if (d != (String*)0)
                     {
                     // After the parameter list: `define ... @f(...) noinline #0 {`.
                     u32 q = d.byteLength() - 7 + 6;
@@ -467,6 +526,156 @@ class Languages
             i = i + 1;
             }
         return out;
+        }
+
+    // The read build's IR (after loopFunctions) with each function it would
+    // give xcc kept only where clang's build has it too, with everything it
+    // names: each function it calls defined or declared there, each global it
+    // names defined there by the same line. Any other becomes a declaration,
+    // and stays clang's (as the first build compiles it).
+    static String* takeFrom(String* readText, String* clangText)
+        {
+        Map* cfuncs = new Map();
+        Map* cglobs = new Map();
+        Languages.symbolsOf(clangText, cfuncs, cglobs);
+        Map* rfuncs = new Map();
+        Map* rglobs = new Map();
+        Languages.symbolsOf(readText, rfuncs, rglobs);
+        Array* lines = readText.splitOnByte((u8)10);
+        String* out = new String();
+        u32 i = 0;
+        while (i < lines.count())
+            {
+            String* l = (String*)lines.get(i);
+            if (!l.hasPrefix(String.withCString("define ")))
+                {
+                out.append(l);
+                out.appendCString("\n");
+                i = i + 1;
+                continue;
+                }
+            u32 end = i + 1;
+            while (end < lines.count() && !((String*)lines.get(end)).equals(String.withCString("}")))
+                end = end + 1;
+            String* n = Languages.calleeOf(l, 0);
+            bool ok = n != (String*)0 && cfuncs.get((Hashable*)n) != (Object*)0
+                      && ((String*)cfuncs.get((Hashable*)n)).hasPrefix(String.withCString("define "));
+            for (u32 k = i + 1; k < end && ok; k = k + 1)
+                ok = Languages.namesAllIn((String*)lines.get(k), cfuncs, cglobs, rglobs);
+            if (ok)
+                {
+                for (u32 k = i; k <= end && k < lines.count(); k = k + 1)
+                    {
+                    out.append((String*)lines.get(k));
+                    out.appendCString("\n");
+                    }
+                }
+            else
+                {
+                String* d = Languages.declarationOf(l);
+                if (d != (String*)0)
+                    {
+                    out.append(d);
+                    out.appendCString("\n");
+                    }
+                }
+            i = end + 1;
+            }
+        return out;
+        }
+
+    // The functions (`@name` -> its define or declare line) and globals
+    // (`@name` -> its definition line) of an IR text.
+    static void symbolsOf(String* text, Map* funcs, Map* globs)
+        {
+        Array* lines = text.splitOnByte((u8)10);
+        for (u32 i = 0; i < lines.count(); i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (l.hasPrefix(String.withCString("define ")) || l.hasPrefix(String.withCString("declare ")))
+                {
+                String* n = Languages.calleeOf(l, 0);
+                if (n != (String*)0 && (funcs.get((Hashable*)n) == (Object*)0 || l.hasPrefix(String.withCString("define "))))
+                    funcs.set((Hashable*)n, (Object*)l);
+                }
+            else if (l.hasPrefix(String.withCString("@")))
+                {
+                u32 sp = Languages.byteFrom(l, (u8)' ', 0);
+                if (sp != String.notFound())
+                    globs.set((Hashable*)l.substringBytes(0, sp), (Object*)l);
+                }
+            }
+        }
+
+    // Whether every `@name` the body line l names is in clang's build: a
+    // function defined or declared there, an intrinsic, or a global defined
+    // there by the line the read build has.
+    static bool namesAllIn(String* l, Map* cfuncs, Map* cglobs, Map* rglobs)
+        {
+        u32 p = Languages.byteFrom(l, (u8)'@', 0);
+        while (p != String.notFound())
+            {
+            u32 e = p + 1;
+            if (e < l.byteLength() && l.byteAt(e) == (u8)'"')
+                {
+                e = e + 1;
+                while (e < l.byteLength() && l.byteAt(e) != (u8)'"')
+                    e = e + 1;
+                e = e + 1;
+                }
+            else
+                while (e < l.byteLength() && LlvmName.isNameByte(l.byteAt(e)))
+                    e = e + 1;
+            String* n = l.substringBytes(p, e - p);
+            if (!n.hasPrefix(String.withCString("@llvm.")) && cfuncs.get((Hashable*)n) == (Object*)0)
+                {
+                String* cg = (String*)cglobs.get((Hashable*)n);
+                String* rg = (String*)rglobs.get((Hashable*)n);
+                if (cg == (String*)0 || rg == (String*)0 || !cg.equals(rg))
+                    return false;
+                }
+            p = e < l.byteLength() ? Languages.byteFrom(l, (u8)'@', e) : String.notFound();
+            }
+        return true;
+        }
+
+    // A function's quoted block labels (`"_ZNSt3__1...exit":`, from code
+    // clang inlined, with `$` and the like in them) renamed plain (xcq0,
+    // xcq1, ...) in its body lines [from, end), each use (`label %"..."`, a
+    // phi's `%"..."`) with it: xc's own IR names a block by a plain word.
+    static void plainLabels(Array* lines, u32 from, u32 end)
+        {
+        Map* renames = new Map();
+        u32 n = 0;
+        for (u32 i = from; i < end; i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (!l.hasPrefix(String.withCString("\"")))
+                continue;
+            u32 close = Languages.byteFrom(l, (u8)'"', 1);
+            if (close == String.notFound() || close + 1 >= l.byteLength() || l.byteAt(close + 1) != (u8)':')
+                continue;
+            String* q = l.substringBytes(0, close + 1);
+            String* plain = String.withFormat("xcq%u", n);
+            n = n + 1;
+            renames.set((Hashable*)q, (Object*)plain);
+            lines.set(i, (Object*)plain.appending(l.substringFromByte(close + 1)));
+            }
+        if (n == 0)
+            return;
+        Array* ks = renames.allKeys();
+        for (u32 i = from; i < end; i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (!l.contains(String.withCString("%\"")))
+                continue;
+            for (u32 k = 0; k < ks.count(); k = k + 1)
+                {
+                String* q = (String*)ks.get(k);
+                l = l.replacing(String.withCString("%").appending(q), String.withCString("%").appending((String*)renames.get((Hashable*)q)));
+                }
+            lines.set(i, (Object*)l);
+            }
         }
 
     // Each counted loop's exit test in a function's body lines [from, end)
@@ -683,6 +892,152 @@ class Languages
             }
         }
 
+    // Loops that count down to 0 while pointers step up (libc++'s fill_n,
+    // copy_n and the like: `for (; n > 0; --n, ++p)`), in a function's body
+    // lines [from, end): the header has
+    //     %n = phi i64 [ %n0, %pre ], [ %dec, %latch ]
+    //     %c = icmp sgt i64 %n, 0
+    //     br i1 %c, label %body, label %exit
+    // with %dec = add nsw i64 %n, -1 and n used by nothing else, and every
+    // other phi of the header a pointer that steps by the size of what is
+    // loaded and stored through it. Such a loop runs max(n0, 0) times: it is
+    // written with a counter i from 0, the test `i < n0` (signed), and each
+    // pointer as `getelementptr T, ptr %s, i64 %i` at the top of the body.
+    static void downCounts(Array* lines, u32 from, u32 end)
+        {
+        u32 made = 0;
+        u32 blockStart = from;
+        for (u32 i = from; i < end; i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (l.byteLength() > 0 && l.byteAt(0) != (u8)' ' && l.byteAt(0) != (u8)';')
+                {
+                blockStart = i + 1;
+                continue;
+                }
+            if (!l.contains(String.withCString(" = icmp sgt i64 ")))
+                continue;
+            String* t = l.trimmed();
+            String* c = t.substringBytes(0, Languages.byteFrom(t, (u8)' ', 0));
+            Array* parts = t.substringFromByte(t.byteIndexOf(String.withCString(" i64 ")) + 5).splitOnByte((u8)',');
+            if (parts.count() < 2 || !((String*)parts.get(1)).trimmed().equals(String.withCString("0")))
+                continue;
+            String* n = ((String*)parts.get(0)).trimmed();
+            u32 brAt = String.notFound();
+            for (u32 k = i + 1; k < end && brAt == String.notFound(); k = k + 1)
+                {
+                String* m = (String*)lines.get(k);
+                if (m.byteLength() > 0 && m.byteAt(0) != (u8)' ')
+                    break;
+                if (m.trimmed().hasPrefix(String.withFormat("br i1 %s, label ", c.cString())))
+                    brAt = k;
+                }
+            if (brAt == String.notFound() || Languages.uses(lines, from, end, c) != 2 || Languages.uses(lines, from, end, n) != 3)
+                continue;
+            // n's phi: [ n0, pre ], [ dec, latch ], and dec = add nsw i64 n, -1.
+            u32 nAt = String.notFound();
+            String* n0 = (String*)0;
+            String* pre = (String*)0;
+            String* dec = (String*)0;
+            String* latch = (String*)0;
+            String* head = n.appending(String.withCString(" = phi i64 "));
+            for (u32 k = blockStart; k < i; k = k + 1)
+                {
+                String* m = ((String*)lines.get(k)).trimmed();
+                if (!m.hasPrefix(head))
+                    continue;
+                Array* ins = m.substringFromByte(head.byteLength()).splitOnByte((u8)'[');
+                for (u32 q = 0; q < ins.count(); q = q + 1)
+                    {
+                    String* e = ((String*)ins.get(q)).trimmed();
+                    u32 close = Languages.byteFrom(e, (u8)']', 0);
+                    if (e.byteLength() == 0 || close == String.notFound())
+                        continue;
+                    Array* vb = e.substringBytes(0, close).splitOnByte((u8)',');
+                    if (vb.count() != 2)
+                        continue;
+                    String* v = ((String*)vb.get(0)).trimmed();
+                    String* b = ((String*)vb.get(1)).trimmed();
+                    if (Languages.isDecOf(lines, from, end, v, n))
+                        {
+                        dec = v;
+                        latch = b;
+                        }
+                    else
+                        {
+                        n0 = v;
+                        pre = b;
+                        }
+                    }
+                nAt = k;
+                }
+            if (nAt == String.notFound() || n0 == (String*)0 || dec == (String*)0 || Languages.uses(lines, from, end, dec) != 2)
+                continue;
+            // Every other phi of the header: a pointer that steps.
+            Array* ivs = new Array();
+            bool ok = true;
+            for (u32 k = blockStart; k < i && ok; k = k + 1)
+                {
+                String* m = ((String*)lines.get(k)).trimmed();
+                if (k == nAt || !m.contains(String.withCString(" = phi ")))
+                    continue;
+                if (!m.contains(String.withCString(" = phi ptr ")))
+                    {
+                    ok = false;
+                    continue;
+                    }
+                PtrIv* q = Languages.ptrIv(lines, blockStart, i, from, end, m.substringBytes(0, Languages.byteFrom(m, (u8)' ', 0)));
+                if (q == (PtrIv*)0 || !q.pre().equals(pre) || !q.latch().equals(latch))
+                    ok = false;
+                else
+                    ivs.add((Object*)q);
+                }
+            if (!ok || ivs.count() == 0)
+                continue;
+            String* bodyLabel = Languages.branchTarget((String*)lines.get(brAt), c, 0);
+            u32 bodyAt = bodyLabel != (String*)0 ? Languages.labelLine(lines, from, end, bodyLabel) : String.notFound();
+            if (bodyAt == String.notFound())
+                continue;
+            String* idx = String.withFormat("%%xcdn%u.i", made);
+            String* nxt = String.withFormat("%%xcdn%u.next", made);
+            made = made + 1;
+            // The counter in n's place; n's step gone with it.
+            lines.set(nAt, (Object*)String.withFormat("  %s = phi i64 [ 0, %s ], [ %s, %s ]", idx.cString(), pre.cString(), nxt.cString(), latch.cString()));
+            for (u32 k = from; k < end; k = k + 1)
+                if (((String*)lines.get(k)).trimmed().hasPrefix(dec.appending(String.withCString(" = "))))
+                    lines.set(k, (Object*)String.withFormat("  %s = add nuw nsw i64 %s, 1", nxt.cString(), idx.cString()));
+            String* geps = new String();
+            for (u32 k = 0; k < ivs.count(); k = k + 1)
+                {
+                PtrIv* q = (PtrIv*)ivs.get(k);
+                lines.set(q.line(), (Object*)String.withCString(""));
+                geps.appendFormat("\n  %s = getelementptr inbounds %s, ptr %s, i64 %s", q.name().cString(), q.elem().cString(),
+                                  q.start().cString(), idx.cString());
+                }
+            lines.set(bodyAt, (Object*)((String*)lines.get(bodyAt)).appending(geps));
+            lines.set(i, (Object*)String.withFormat("  %s = icmp slt i64 %s, %s", c.cString(), idx.cString(), n0.cString()));
+            }
+        }
+
+    // Whether line-defined value v is `add nsw i64 n, -1` (or `add i64`).
+    static bool isDecOf(Array* lines, u32 from, u32 end, String* v, String* n)
+        {
+        String* head = v.appending(String.withCString(" = add "));
+        String* tail = String.withFormat("i64 %s, -1", n.cString());
+        for (u32 k = from; k < end; k = k + 1)
+            {
+            String* m = ((String*)lines.get(k)).trimmed();
+            if (!m.hasPrefix(head))
+                continue;
+            u32 p = m.byteIndexOf(tail);
+            if (p == String.notFound())
+                return false;
+            u32 e = p + tail.byteLength();
+            return e == m.byteLength() || m.byteAt(e) == (u8)',';
+            }
+        return false;
+        }
+
     // Target w (0 or 1) of `br i1 c, label %a, label %b`, without its `%`; or 0.
     static String* branchTarget(String* m, String* c, u32 w)
         {
@@ -791,13 +1146,24 @@ class Languages
                 String* pn = (String*)vals.get(w);
                 u32 sl = String.notFound();
                 i64 step = 0;
-                String* gh = pn.appending(String.withCString(" = getelementptr inbounds "));
+                String* gh = pn.appending(String.withCString(" = getelementptr "));
                 for (u32 k = from; k < end; k = k + 1)
                     {
                     String* m = ((String*)lines.get(k)).trimmed();
                     if (!m.hasPrefix(gh))
                         continue;
-                    Array* gp = m.substringFromByte(gh.byteLength()).splitOnByte((u8)',');
+                    // `inbounds`, `nuw` and `nusw` say nothing to the count.
+                    String* gr = m.substringFromByte(gh.byteLength());
+                    for (u32 f = 0; f < 3; f = f + 1)
+                        {
+                        if (gr.hasPrefix(String.withCString("inbounds ")))
+                            gr = gr.substringFromByte(9);
+                        else if (gr.hasPrefix(String.withCString("nuw ")))
+                            gr = gr.substringFromByte(4);
+                        else if (gr.hasPrefix(String.withCString("nusw ")))
+                            gr = gr.substringFromByte(5);
+                        }
+                    Array* gp = gr.splitOnByte((u8)',');
                     if (gp.count() < 3)
                         break;
                     String* gt = ((String*)gp.get(0)).trimmed();
