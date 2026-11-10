@@ -504,6 +504,7 @@ class Languages
     static Map* userFunctions(String* text)
         {
         Map* names = new Map();
+        Map* inner = Languages.calledInLoops(text);
         Array* lines = text.splitOnByte((u8)10);
         for (u32 i = 0; i < lines.count(); i = i + 1)
             {
@@ -511,10 +512,71 @@ class Languages
             if (!l.hasPrefix(String.withCString("define ")))
                 continue;
             String* n = Languages.calleeOf(l, 0);
-            if (n != (String*)0 && !Languages.isOdr(l) && !Languages.isStd(n) && !Languages.isLambda(n))
+            if (n != (String*)0 && !Languages.isOdr(l) && !Languages.isStd(n) && !Languages.isLambda(n)
+                && inner.get((Hashable*)n) == (Object*)0)
                 names.set((Hashable*)n, (Object*)l);
             }
         return names;
+        }
+
+    // The functions called from inside a loop of another (in clang's own
+    // IR, a loop's blocks lie between its header and the branch back to
+    // it): a helper such as perlin's shade, which belongs inlined in its
+    // caller's loop for that loop to become a block, not kept out.
+    static Map* calledInLoops(String* text)
+        {
+        Map* inner = new Map();
+        Array* lines = text.splitOnByte((u8)10);
+        u32 i = 0;
+        while (i < lines.count())
+            {
+            String* l = (String*)lines.get(i);
+            if (!l.hasPrefix(String.withCString("define ")))
+                {
+                i = i + 1;
+                continue;
+                }
+            String* self_ = Languages.calleeOf(l, 0);
+            u32 end = i + 1;
+            while (end < lines.count() && !((String*)lines.get(end)).equals(String.withCString("}")))
+                end = end + 1;
+            Map* labelAt = new Map();
+            for (u32 k = i + 1; k < end; k = k + 1)
+                {
+                String* m = (String*)lines.get(k);
+                if (m.byteLength() > 0 && m.byteAt(0) != (u8)' ' && m.byteAt(0) != (u8)';')
+                    {
+                    u32 colon = Languages.byteFrom(m, (u8)':', 0);
+                    if (colon != String.notFound())
+                        labelAt.set((Hashable*)m.substringBytes(0, colon), (Object*)Number.with(k));
+                    continue;
+                    }
+                // A branch back: lines from its target's label to here.
+                String* key = String.withCString("label %");
+                for (u32 p = m.byteIndexOf(key); p != String.notFound(); p = m.byteIndexOf(key, p + 1))
+                    {
+                    u32 s0 = p + key.byteLength();
+                    u32 e = s0;
+                    while (e < m.byteLength() && m.byteAt(e) != (u8)',' && m.byteAt(e) != (u8)' ')
+                        e = e + 1;
+                    Number* h = (Number*)labelAt.get((Hashable*)m.substringBytes(s0, e - s0));
+                    if (h == (Number*)0)
+                        continue;
+                    for (u32 q = h.asU32(); q < k; q = q + 1)
+                        {
+                        String* c = (String*)lines.get(q);
+                        u32 at = c.byteIndexOf(String.withCString(" call "));
+                        if (at == String.notFound())
+                            continue;
+                        String* callee = Languages.calleeOf(c, at);
+                        if (callee != (String*)0 && (self_ == (String*)0 || !callee.equals(self_)))
+                            inner.set((Hashable*)callee, (Object*)c);
+                        }
+                    }
+                }
+            i = end + 1;
+            }
+        return inner;
         }
 
     // text with each function of `names` marked noinline (not one already
@@ -656,21 +718,45 @@ class Languages
                 continue;
                 }
             out.appendCString("\n");
+            // Without its debug information: the function it copies keeps
+            // its subprogram, and one subprogram attached to two functions
+            // makes clang drop the half's debug information, with a warning.
             String* head = LlvmReader.external(r.renamed(l)).replacing(n.appending(String.withCString("(")),
                                                                         n.appending(String.withCString("_xclib(")));
-            out.append(head);
+            out.append(Languages.withoutDbg(head));
             out.appendCString("\n");
             i = i + 1;
             while (i < cl.count() && !((String*)cl.get(i)).equals(String.withCString("}")))
                 {
-                out.append(r.renamed((String*)cl.get(i)));
-                out.appendCString("\n");
+                String* bl = (String*)cl.get(i);
+                if (!bl.trimmed().hasPrefix(String.withCString("#dbg_")))
+                    {
+                    out.append(Languages.withoutDbg(r.renamed(bl)));
+                    out.appendCString("\n");
+                    }
                 i = i + 1;
                 }
             out.appendCString("}\n");
             i = i + 1;
             }
         return out;
+        }
+
+    // A line without its `!dbg !N` attachments.
+    static String* withoutDbg(String* l)
+        {
+        String* key = String.withCString(" !dbg !");
+        u32 p = l.byteIndexOf(key);
+        while (p != String.notFound())
+            {
+            u32 e = p + key.byteLength();
+            while (e < l.byteLength() && l.byteAt(e) >= (u8)'0' && l.byteAt(e) <= (u8)'9')
+                e = e + 1;
+            u32 b = p > 0 && l.byteAt(p - 1) == (u8)',' ? p - 1 : p;
+            l = l.substringBytes(0, b).appending(l.substringFromByte(e));
+            p = l.byteIndexOf(key);
+            }
+        return l;
         }
 
     // The functions (`@name` -> its define or declare line) and globals
