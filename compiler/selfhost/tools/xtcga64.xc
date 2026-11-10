@@ -20,6 +20,68 @@
 #import "OptDefs.xc"
 #import <Arm64>
 
+// The input is the reference's post-opt IR, so its gpu-globals pass has run
+// already, and at -O1 and up dead-function-elim may then have taken
+// __xt_gpu_globals and the par runtime's parRegisterGlobals (nothing called
+// them) and left both symbols. The level-0 run here would rebuild from those
+// symbols what the reference never emits: from the first, an empty
+// registration function (arm64-diff at -O2 had 63 files differing by it
+// alone, 2026-10-25); from the second, which then looks like the libRuntime
+// import, a registration function and its call at the top of main (a program
+// whose loops --par-style=auto lifted, which a macOS host does for an arm64
+// file). Neither symbol is live when no function has its name and no operand
+// names it, and a dead one is dropped. Pre-opt IR is untouched: there the
+// runtime's parGlobals calls __xt_gpu_globals, or (libRuntime) there is no
+// declaration of it. As xtcgx86.
+bool irSymLive(IRModule* m, String* name)
+    {
+    for (u32 f = (u32)0; f < m.funcs().count(); f = f + (u32)1)
+        {
+        IRFunc* fn = (IRFunc*)m.funcs().get(f);
+        if (fn.name().equals(name))
+            return true;
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 k = (u32)0; k < bb.insns().count(); k = k + (u32)1)
+                {
+                IRInsn* gi = (IRInsn*)bb.insns().get(k);
+                for (u32 q = (u32)0; q < gi.ops().count(); q = q + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)gi.ops().get(q);
+                    if (o.kind() == (u8)OPK_SYM && o.name() != (String*)0 && o.name().equals(name))
+                        return true;
+                    }
+                }
+            }
+        }
+    return false;
+    }
+
+bool irDropSym(IRModule* m, String* name)
+    {
+    for (u32 i = (u32)0; i < m.syms().count(); i = i + (u32)1)
+        if (((IRSymbol*)m.syms().get(i)).name().equals(name))
+            {
+            m.syms().removeAt(i);
+            return true;
+            }
+    return false;
+    }
+
+void dropDeadGpuGlobals(IRModule* m)
+    {
+    String* gg = String.withCString("__xt_gpu_globals");
+    // Only a module whose runtime declared the function: a libRuntime one
+    // (pre-opt) has the import with no declaration and no call yet, which
+    // the run below must still see.
+    if (irSymLive(m, gg) || !irDropSym(m, gg))
+        return;
+    String* hook = String.withCString("parRegisterGlobals");
+    if (!irSymLive(m, hook))
+        irDropSym(m, hook);
+    }
+
 void main(void)
     {
     String* input = (String*)0;
@@ -116,40 +178,9 @@ void main(void)
     // optimisation step, it is the same mandatory lowering, and it is what
     // makes this a comparison of the code generators alone.
     // The input is the reference's pipeline output, so gpu-globals has run on
-    // it already. At -O1 and up dead-function-elim may then have taken
-    // __xt_gpu_globals (its only caller was dead) and left the symbol, and the
-    // level-0 run here would build the function again from that symbol: a
-    // registration function the reference never emits (arm64-diff at -O2 had
-    // 63 files differing by it alone, 2026-10-25). A symbol with no function
-    // and no call is dropped first.
-    String* ggName = String.withCString("__xt_gpu_globals");
-    bool ggLive = false;
-    for (u32 f = (u32)0; f < m.funcs().count() && !ggLive; f = f + (u32)1)
-        {
-        IRFunc* fn = (IRFunc*)m.funcs().get(f);
-        if (fn.name().equals(ggName))
-            ggLive = true;
-        for (u32 b = (u32)0; b < fn.blocks().count() && !ggLive; b = b + (u32)1)
-            {
-            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
-            for (u32 k = (u32)0; k < bb.insns().count() && !ggLive; k = k + (u32)1)
-                {
-                IRInsn* gi = (IRInsn*)bb.insns().get(k);
-                for (u32 q = (u32)0; q < gi.ops().count(); q = q + (u32)1)
-                    {
-                    IROperand* o = (IROperand*)gi.ops().get(q);
-                    if (o.kind() == (u8)OPK_SYM && o.name() != (String*)0 && o.name().equals(ggName))
-                        ggLive = true;
-                    }
-                }
-            }
-        }
-    for (u32 i = (u32)0; i < m.syms().count() && !ggLive; i = i + (u32)1)
-        if (((IRSymbol*)m.syms().get(i)).name().equals(ggName))
-            {
-            m.syms().removeAt(i);
-            break;
-            }
+    // it already; the level-0 run below must not build what that run's
+    // dead-function-elim took away. See dropDeadGpuGlobals.
+    dropDeadGpuGlobals(m);
     Opt* opt = Opt.atLevel((u32)0, OptProfile.forTarget(String.withCString("arm64")));
     opt.run(m);
     if (opt.failed())
