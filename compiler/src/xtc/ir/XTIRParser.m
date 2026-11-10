@@ -1107,11 +1107,19 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
     case XTIROpVFCmp:
     case XTIROpFpToSI:
     case XTIROpFpToUI:
+    case XTIROpFAdd:
+    case XTIROpFSub:
+    case XTIROpVAdd:
+    case XTIROpVSub:
         {
         XTIRTok* predTok = [self tok:tokens at:pos];
-        if (op == XTIROpFAdd || op == XTIROpFSub)
+        BOOL addSub = op == XTIROpFAdd || op == XTIROpFSub || op == XTIROpVAdd || op == XTIROpVSub;
+        if (addSub)
             {
-            // FAdd [contract,] %a, %b (XTIRSupport.h).
+            // FAdd [contract,] %a, %b (XTIRSupport.h); a float VAdd/VSub too,
+            // as the printer writes them. Without these cases the word reached
+            // the generic operand loop, which stopped at it and kept no
+            // operands. As the port.
             if (predTok.kind == XTIRTokWord && [predTok.text isEqualToString:@"contract"])
                 {
                 hasPredicate = YES;
@@ -1133,7 +1141,7 @@ typedef NS_ENUM(NSUInteger, XTIRTokKind) {
                     pos++;
                 }
             }
-        else if (predTok.kind == XTIRTokWord)
+        else if (predTok.kind == XTIRTokWord && !addSub)
             {
             hasPredicate = YES;
             predicate = (op == XTIROpFCmp || op == XTIROpVFCmp)

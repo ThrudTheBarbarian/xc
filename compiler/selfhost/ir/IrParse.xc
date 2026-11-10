@@ -1260,8 +1260,10 @@ class IrParser
                 _ci = save;
             }
         // FAdd / FSub [contract,] %a, %b: under :goal(speed), a product feeding
-        // it may fuse (Opt's fp-contract; the reference's XTIRFpContract).
-        if (op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub")))
+        // it may fuse (Opt's fp-contract; the reference's XTIRFpContract). A
+        // float VAdd / VSub carries it too, as the printer writes it.
+        if (op.equals(String.withCString("FAdd")) || op.equals(String.withCString("FSub"))
+            || op.equals(String.withCString("VAdd")) || op.equals(String.withCString("VSub")))
             {
             skipSpace();
             u32 save = _ci;
