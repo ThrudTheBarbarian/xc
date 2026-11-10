@@ -150,7 +150,9 @@ int ux_gtk_boot(int* w, int* h)
                                       "scale { padding: 0 10px; min-height: 0; }\n"
                                       /* a progress bar is as wide as its frame (Adwaita asks 150px) */
                                       "progressbar, progressbar > trough { min-width: 0; }\n"
-                                      ".ux-stepper button { padding: 0 4px; min-width: 0; }\n");
+                                      ".ux-stepper button { padding: 0 4px; min-width: 0; }\n"
+                                      /* a label's text starts 3 px in, as on AppKit, Win32 and the web */
+                                      "label.ux-label { padding-left: 2px; }\n");
     gtk_style_context_add_provider_for_display(d, GTK_STYLE_PROVIDER(prov),
                                                GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
     g_object_unref(prov);
@@ -1718,6 +1720,7 @@ void ux_gtk_make_label(int handle, int node, int x, int y, int w, int h, const c
     GtkWidget* l = gtk_label_new(text);
     gtk_label_set_xalign(GTK_LABEL(l), 0.0f);
     gtk_label_set_yalign(GTK_LABEL(l), 0.0f); /* the text at the top of its frame, as on every backend */
+    gtk_widget_add_css_class(l, "ux-label");
     park(handle, node, l, x, y, w, h);
     }
 

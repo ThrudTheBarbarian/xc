@@ -7,7 +7,8 @@
 //   inside   the control draws within its frame (1 px of shadow allowed)
 //   centred  the space above it equals the space below (+/- 1 px), so a control that keeps its own
 //            height sits in the middle of its row, and one that fills the frame passes too
-//   top      a label's text starts at the top of its frame (ink within 5 px of it) at any height
+//   top      a label's text starts 3 px in from its frame's left and top (+/- 1 px) at any height,
+//            the same place on every backend, so labels line up with each other and their controls
 //
 // Then the controls make way for the larger views (text, scroll, tab, split, group box, combo box,
 // date picker, table, outline, collection), each in a 130 x 90 frame, checked for drawing inside it
@@ -300,7 +301,7 @@ void audit(void)
             ck(inside, kindName(k), h, (u8*)"inside", &b[0]);
             if (k == 2)
                 {
-                ck(drawn && b[1] <= 5, kindName(k), h, (u8*)"top", &b[0]);
+                ck(drawn && b[0] >= 2 && b[0] <= 4 && b[1] >= 2 && b[1] <= 4, kindName(k), h, (u8*)"top", &b[0]);
                 }
             else
                 {
