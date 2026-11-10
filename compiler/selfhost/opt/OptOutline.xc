@@ -2590,6 +2590,86 @@
             _ppGElem.set(k, (Object*)Number.with((u32)0));
         }
 
+    // A function the C++ path took from its read build (libc++'s parallel
+    // algorithms as plain loops) has a twin, `<name>_xclib`: clang's own
+    // version, with libc++'s parallel backend. Where no block was made of
+    // the function (or no loop was lifted at all, `outlined` false), its
+    // body becomes a call of the twin, so a parallel algorithm xcc cannot
+    // lift keeps the library's parallelism. A module without such a symbol
+    // (every xc and C one) is left as it is, after one look at its symbols.
+    final void libFallback(IRModule* m, bool outlined)
+        {
+        Map* twins = (Map*)0;
+        for (u32 i = 0; i < m.syms().count(); i = i + 1)
+            {
+            IRSymbol* sy = (IRSymbol*)m.syms().get(i);
+            if (sy.name().hasSuffix(String.withCString("_xclib")))
+                {
+                if (twins == (Map*)0)
+                    twins = new Map();
+                twins.set((Hashable*)sy.name().substringBytes(0, sy.name().byteLength() - 6), (Object*)sy);
+                }
+            }
+        if (twins == (Map*)0)
+            return;
+        for (u32 f = 0; f < m.funcs().count(); f = f + 1)
+            {
+            IRFunc* fn = (IRFunc*)m.funcs().get(f);
+            IRSymbol* twin = (IRSymbol*)twins.get((Hashable*)fn.name());
+            if (twin == (IRSymbol*)0 || fn.blocks().count() == 0)
+                continue;
+            if (outlined && libMadeBlock(fn))
+                continue;
+            // The body: the twin's result for the same arguments.
+            u32 np = fn.params().count();
+            IRValue* mem = np > 0 ? (IRValue*)fn.params().get(np - 1) : (IRValue*)0;
+            if (mem == (IRValue*)0 || !mem.ty().equals(String.withCString("Mem")))
+                continue;
+            IRBlock* b = new IRBlock(String.withCString("bb_entry"));
+            IRInsn* c = IRInsn.with(String.withCString("Call"));
+            c.setCc(String.withCString("CallConv::Standard"));
+            c.add(IROperand.sym(twin.name()));
+            for (u32 p = 0; p + 1 < np; p = p + 1)
+                c.add(IROperand.useVal((IRValue*)fn.params().get(p)));
+            c.add(IROperand.useVal(mem));
+            IRValue* r = (IRValue*)0;
+            if (!fn.ret().equals(String.withCString("Void")))
+                {
+                r = new IRValue(fn.ret());
+                c.setRes(r);
+                }
+            IRValue* mo = new IRValue(String.withCString("Mem"));
+            c.setMemRes(mo);
+            b.add(c);
+            IRInsn* ret = IRInsn.with(String.withCString("Return"));
+            if (r != (IRValue*)0)
+                ret.add(IROperand.useVal(r));
+            ret.add(IROperand.useVal(mo));
+            b.setTerm(ret);
+            Array* only = new Array();
+            only.add((Object*)b);
+            fn.setBlocks(only);
+            }
+        }
+
+    // Whether the outliner made a block in fn: a call of ParFnChunk$make.
+    final bool libMadeBlock(IRFunc* fn)
+        {
+        for (u32 b = 0; b < fn.blocks().count(); b = b + 1)
+            {
+            IRBlock* blk = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = 0; i < blk.insns().count(); i = i + 1)
+                {
+                IRInsn* n = (IRInsn*)blk.insns().get(i);
+                if (n.op().equals(String.withCString("Call")) && n.ops().count() > 0
+                    && ((IROperand*)n.ops().get(0)).kind() == (u8)OPK_SYM
+                    && ((IROperand*)n.ops().get(0)).name().equals(String.withCString("ParFnChunk$make")))
+                    return true;
+                }
+            }
+        return false;
+        }
+
     final bool ppParMemoryOk(IRFunc* fn, LRCLoop* L, IRValue* iv, Map* defOf, Map* defBlk)
         {
         _ppDefBlk = defBlk;

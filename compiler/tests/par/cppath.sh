@@ -368,6 +368,49 @@ if [ -x "$W/pol.ref" ]; then
         done
         grep -q '_Z5count.*: outlined, a block' "$W/pol.b" && { echo "FAIL cppath: count's body (an atomic) became a block"; fail=1; }
     fi
+    # An algorithm xcc reads but makes no block of (its body reads a heap
+    # array away from [i] while storing at [i]) calls clang's own version,
+    # `<name>_xclib`, with libc++'s parallel backend: never slower than
+    # clang++. With nothing lifted (--par-style=cpu) every such one does.
+    cat > "$W/fb.cpp" <<'C'
+#include <algorithm>
+#include <cstdio>
+#include <execution>
+#include <vector>
+void spread(const std::vector<float>& in, std::vector<float>& out)
+    {
+    const float* src = in.data();
+    float* base = out.data();
+    size_t n = in.size();
+    std::for_each(std::execution::par, out.begin(), out.end(), [=](float& o)
+        {
+        size_t i = (size_t)(&o - base);
+        float s = 0.0f;
+        for (size_t j = 0; j < n; j += 97)
+            s += src[j] * (float)(i % 13);
+        o = s;
+        });
+    }
+int main()
+    {
+    std::vector<float> in(4096), out(4096);
+    for (size_t i = 0; i < in.size(); i++)
+        in[i] = (float)(i % 31);
+    spread(in, out);
+    double t = 0;
+    for (float v : out)
+        t += v;
+    std::printf("%.1f %f\n", t, out[1234]);
+    return 0;
+    }
+C
+    clang++ -std=c++17 -fexperimental-library -O2 -o "$W/fb.ref" "$W/fb.cpp" 2>/dev/null
+    for ps in auto cpu; do
+        XC_PAR_OUTLINE_TRACE=1 "$XC" -q -O3 --par-style=$ps -std=c++17 -H . -o "$W/fb.$ps" "$W/fb.cpp" > "$W/fb.$ps.b" 2>&1 \
+            || { echo "FAIL cppath: fb.cpp ($ps) does not build"; grep -v 'ld: warning' "$W/fb.$ps.b" | head -3; fail=1; continue; }
+        [ "$("$W/fb.$ps")" = "$("$W/fb.ref")" ] || { echo "FAIL cppath: fb.cpp ($ps) gives $("$W/fb.$ps"), clang++'s $("$W/fb.ref")"; fail=1; }
+        nm "$W/fb.$ps" | grep -q '_Z6spread.*_xclib' || { echo "FAIL cppath: fb.cpp ($ps) has no clang version of spread to fall back on"; fail=1; }
+    done
 fi
 XC_PAR=gpu XC_PAR_REPORT=1 "$W/glob.par" 2>&1 | grep -q 'items on the GPU' || { echo "FAIL cppath: no C++ loop ran on the GPU"; fail=1; }
 # .cc and .cxx are C++ too.

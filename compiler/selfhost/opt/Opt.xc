@@ -544,6 +544,7 @@
             _ppMade = new Array();
             self.parProposeOutline(m);
             _ppOutlined = true;
+            self.libFallback(m, true);
             if (_ppMade.count() > (u32)0 && optParKernelHook() != (ParKernelHook*)0)
                 optParKernelHook().print(m, _ppMade);
             // XC_PAR_OUTLINE_TRACE=ir: the functions the outliner made or cut.
@@ -559,6 +560,12 @@
             u8* dp = optGetenv("XC_PAR_OUTLINE_DUMP");
             if (ppEnvSet("XC_PAR_OUTLINE_DUMP"))
                 Files.writeText(String.withCString(dp), m.text());
+            }
+        else
+            {
+            // Nothing lifted: a C++ function taken from the read build calls
+            // clang's version (libc++'s parallel algorithms keep theirs).
+            self.libFallback(m, false);
             }
         if (stopHere(String.withCString("mem2reg")))
             return;

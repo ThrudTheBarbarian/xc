@@ -420,6 +420,9 @@ class CPath
         String* restText = r.rest(text);
         if (lang.loopsOnly())
             restText = Languages.keepOdr(restText);
+        // A function taken from the read build keeps clang's own version too.
+        if (readBuild != (String*)0)
+            restText = Languages.keepClangCopies(restText, text, readText, r);
         if (!Files.writeText(restLl, restText))
             {
             Stdio.error(String.withFormat("xcc: error: cannot write '%s'\n", restLl.cString()));

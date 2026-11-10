@@ -34,6 +34,7 @@
 #import "Foundation.xc"
 #import "Files.xc"
 #import "Stdio.xc"
+#import <LlvmRead>
 
 // The table, read once (Languages.rows).
 Array* gLanguageRows;
@@ -587,7 +588,9 @@ class Languages
             while (end < lines.count() && !((String*)lines.get(end)).equals(String.withCString("}")))
                 end = end + 1;
             String* n = Languages.calleeOf(l, 0);
-            bool ok = n != (String*)0 && cfuncs.get((Hashable*)n) != (Object*)0
+            // A quoted name has no plain `_xclib` twin: not taken.
+            bool ok = n != (String*)0 && !n.hasPrefix(String.withCString("@\""))
+                      && cfuncs.get((Hashable*)n) != (Object*)0
                       && ((String*)cfuncs.get((Hashable*)n)).hasPrefix(String.withCString("define "));
             for (u32 k = i + 1; k < end && ok; k = k + 1)
                 ok = Languages.namesAllIn((String*)lines.get(k), cfuncs, cglobs, rglobs);
@@ -596,6 +599,14 @@ class Languages
                 for (u32 k = i; k <= end && k < lines.count(); k = k + 1)
                     {
                     out.append((String*)lines.get(k));
+                    out.appendCString("\n");
+                    }
+                // clang's own version, which xcc's calls if it makes no block
+                // of it (libFallback): `<name>_xclib`.
+                String* d = Languages.declarationOf(l);
+                if (d != (String*)0)
+                    {
+                    out.append(d.replacing(n.appending(String.withCString("(")), n.appending(String.withCString("_xclib("))));
                     out.appendCString("\n");
                     }
                 }
@@ -609,6 +620,55 @@ class Languages
                     }
                 }
             i = end + 1;
+            }
+        return out;
+        }
+
+    // The rest's text with clang's own definition of each function the
+    // reader took from the read build (each `@<name>_xclib` it declares)
+    // added as `@<name>_xclib`, external, its globals renamed as the rest's
+    // are: xcc's version calls it where it makes no block (libFallback).
+    static String* keepClangCopies(String* restText, String* clangText, String* readText, LlvmReader* r)
+        {
+        Array* rl = readText.splitOnByte((u8)10);
+        Map* want = new Map();
+        for (u32 i = 0; i < rl.count(); i = i + 1)
+            {
+            String* l = (String*)rl.get(i);
+            if (!l.hasPrefix(String.withCString("declare ")) || !l.contains(String.withCString("_xclib(")))
+                continue;
+            String* n = Languages.calleeOf(l, 0);
+            if (n != (String*)0 && n.hasSuffix(String.withCString("_xclib")))
+                want.set((Hashable*)n.substringBytes(0, n.byteLength() - 6), (Object*)n);
+            }
+        if (want.count() == 0)
+            return restText;
+        String* out = String.withString(restText);
+        Array* cl = clangText.splitOnByte((u8)10);
+        u32 i = 0;
+        while (i < cl.count())
+            {
+            String* l = (String*)cl.get(i);
+            String* n = l.hasPrefix(String.withCString("define ")) ? Languages.calleeOf(l, 0) : (String*)0;
+            if (n == (String*)0 || want.get((Hashable*)n) == (Object*)0)
+                {
+                i = i + 1;
+                continue;
+                }
+            out.appendCString("\n");
+            String* head = LlvmReader.external(r.renamed(l)).replacing(n.appending(String.withCString("(")),
+                                                                        n.appending(String.withCString("_xclib(")));
+            out.append(head);
+            out.appendCString("\n");
+            i = i + 1;
+            while (i < cl.count() && !((String*)cl.get(i)).equals(String.withCString("}")))
+                {
+                out.append(r.renamed((String*)cl.get(i)));
+                out.appendCString("\n");
+                i = i + 1;
+                }
+            out.appendCString("}\n");
+            i = i + 1;
             }
         return out;
         }
