@@ -101,19 +101,30 @@ echo "built ${#NAMES[@]}  |  N/A $NA  |  no-oracle $NOORACLE  |  compile-fail $C
 [ ${#NAMES[@]} -eq 0 ] && { echo "nothing to run"; exit 1; }
 
 # ---- 2. run them: here when this IS an x86-64 Linux host, else ship them -------
+# The private HOME below holds settings and par auto's learned choices. The GPU
+# drivers' compiled-shader caches stay in the user's real cache directories:
+# with an empty cache a Vulkan driver can spend seconds compiling a par block's
+# kernels before the first result (several seconds per kernel on an integrated
+# Radeon), and on a loaded host that outruns the per-fixture timeout. The
+# remote form is expanded by the remote shell, before env replaces its HOME.
+GPU_CACHES=("XDG_CACHE_HOME=${XDG_CACHE_HOME:-$HOME/.cache}"
+            "CUDA_CACHE_PATH=${CUDA_CACHE_PATH:-$HOME/.nv/ComputeCache}")
+GPU_CACHES_REMOTE='XDG_CACHE_HOME=${XDG_CACHE_HOME:-$HOME/.cache} CUDA_CACHE_PATH=${CUDA_CACHE_PATH:-$HOME/.nv/ComputeCache}'
+
 # HOST=local (or no host on an x86-64 Linux machine) runs in place, which is
 # what the CI's Linux worker does; anything else is one scp and one ssh.
 if [ "$HOST" = local ] || { [ -z "$HOST" ] && [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ]; }; then
   # A private HOME (and XDG config dir) per sweep: settings_standard keeps a
   # file there, and the gate runs several x86-64 legs on one host at once.
+  # The GPU drivers' shader caches stay the user's own (see GPU_CACHES).
   mkdir -p "$BUILD/home/.config"
-  ( cd "$BUILD/bin" && for b in *; do env HOME="$BUILD/home" XDG_CONFIG_HOME="$BUILD/home/.config" ${RUN_ENV:-} timeout "$TIMEOUT" ./"$b" > "$BUILD/out/$b.out" 2>/dev/null; echo $? > "$BUILD/out/$b.rc"; done )
+  ( cd "$BUILD/bin" && for b in *; do env HOME="$BUILD/home" XDG_CONFIG_HOME="$BUILD/home/.config" "${GPU_CACHES[@]}" ${RUN_ENV:-} timeout "$TIMEOUT" ./"$b" > "$BUILD/out/$b.out" 2>/dev/null; echo $? > "$BUILD/out/$b.rc"; done )
 else
 [ -n "$HOST" ] || { echo "no x86-64 Linux host: set XTC_X86_64_HOST (or run on one)"; exit 1; }
 ssh -o BatchMode=yes "$HOST" "rm -rf $REMOTE && mkdir -p $REMOTE/out" || { echo "ssh $HOST failed"; exit 1; }
 scp -o BatchMode=yes -q "$BUILD/bin/"* "$HOST:$REMOTE/"
 ssh -o BatchMode=yes "$HOST" \
-  "cd $REMOTE; mkdir -p .home/.config; for b in *; do env HOME=$REMOTE/.home XDG_CONFIG_HOME=$REMOTE/.home/.config ${RUN_ENV:-} timeout $TIMEOUT ./\$b > out/\$b.out 2>/dev/null; echo \$? > out/\$b.rc; done; tar cf - -C out ." \
+  "cd $REMOTE; mkdir -p .home/.config; for b in *; do env HOME=$REMOTE/.home XDG_CONFIG_HOME=$REMOTE/.home/.config $GPU_CACHES_REMOTE ${RUN_ENV:-} timeout $TIMEOUT ./\$b > out/\$b.out 2>/dev/null; echo \$? > out/\$b.rc; done; tar cf - -C out ." \
   | tar xf - -C "$BUILD/out"
 ssh -o BatchMode=yes "$HOST" "rm -rf $REMOTE" 2>/dev/null
 fi
