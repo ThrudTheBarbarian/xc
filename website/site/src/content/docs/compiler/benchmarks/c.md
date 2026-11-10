@@ -82,30 +82,30 @@ Milliseconds; the median of up to fifteen runs:
 
 | benchmark | xcc | GCC | clang | xcc against GCC | xcc against clang |
 |---|---|---|---|---|---|
+| `mandel_deep` | 50985 | 127669 | 132472 | **2.5× faster** | **2.6× faster** |
 | `mandelbrot` | 318 | 770 | 809 | **2.4× faster** | **2.5× faster** |
 | `md5` | 2860 | 5154 | 2913 | **1.80× faster** | **1.02× faster** |
 | `md5_mask` | 2346 | 4107 | 2386 | **1.75× faster** | **1.02× faster** |
 | `nbody` | 94.9 | 108 | 97.2 | **1.13× faster** | **1.02× faster** |
 | `perlin` | 325 | 286 | 339 | **1.14× slower** | **1.04× faster** |
 | `saxpy` | 30.2 | 30.5 | 30.2 | **1.01× faster** | **the same** |
-| `mandel_deep` | pending | | | | |
-| geometric mean | | | | **1.40× faster** | **1.19× faster** |
+| geometric mean | | | | **1.53× faster** | **1.33× faster** |
 
 ### Every thread
 
 xcc `--par-style=auto`, GCC and clang with OpenMP, milliseconds. xcc is ahead
-of both on 4 of the 6:
+of both on 5 of the 7:
 
 | benchmark | xcc | GCC | clang | xcc against GCC | xcc against clang |
 |---|---|---|---|---|---|
+| `mandel_deep` | 13062 | 31948 | 34009 | **2.4× faster** | **2.6× faster** |
 | `mandelbrot` | 85.0 | 193 | 203 | **2.3× faster** | **2.4× faster** |
 | `md5` | 717 | 1296 | 732 | **1.81× faster** | **1.02× faster** |
 | `md5_mask` | 580 | 1027 | 598 | **1.77× faster** | **1.03× faster** |
 | `nbody` | 23.8 | 26.9 | 24.1 | **1.13× faster** | **1.01× faster** |
 | `perlin` | 81.3 | 71.6 | 88.2 | **1.14× slower** | **1.08× faster** |
 | `saxpy` | 34.7 | 34.5 | 34.4 | **1.01× slower** | **1.01× slower** |
-| `mandel_deep` | pending | | | | |
-| geometric mean | | | | **1.39× faster** | **1.18× faster** |
+| geometric mean | | | | **1.51× faster** | **1.32× faster** |
 
 On the Pi, xcc's escape vectoriser runs `mandelbrot`'s and `mandel_deep`'s
 per-pixel loop four pixels at a time in NEON, which neither GCC nor clang
