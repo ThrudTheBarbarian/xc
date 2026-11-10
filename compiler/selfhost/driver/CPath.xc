@@ -318,17 +318,23 @@ class CPath
         if (lang.passes().byteLength() > 0 && given.byteLength() == 0)
             {
             // One set of functions kept out of their callers in both builds,
-            // so a function xcc takes from the second is called in the first.
-            Map* names = Languages.loopNames(text);
-            if (readBuild != (String*)0)
-                {
-                Map* more = Languages.loopNames(readBuild);
-                Array* ks = more.allKeys();
-                for (u32 k = 0; k < ks.count(); k = k + 1)
-                    names.set((Hashable*)ks.get(k), more.get((Hashable*)ks.get(k)));
-                }
+            // so a function xcc takes from the second is called in the first:
+            // those with a loop once clang's passes have inlined their callees
+            // (a std::fill, a parallel algorithm, a lambda). A probe run, with
+            // every function xcc might take kept out, says which; a function
+            // with a loop of its own is one already.
             String* textFe = text;
             String* readFe = readBuild;
+            String* probeFe = readFe != (String*)0 ? readFe : textFe;
+            Map* all = Languages.userFunctions(probeFe);
+            String* probe = CPath.passed(probeFe, scratch, lang, all);
+            if (probe == (String*)0)
+                return (IRModule*)0;
+            Map* names = Languages.loopNames(probe);
+            Map* own = Languages.loopNames(textFe);
+            Array* ok = own.allKeys();
+            for (u32 k = 0; k < ok.count(); k = k + 1)
+                names.set((Hashable*)ok.get(k), own.get((Hashable*)ok.get(k)));
             text = CPath.passed(textFe, scratch, lang, names);
             if (text == (String*)0)
                 return (IRModule*)0;
@@ -337,32 +343,6 @@ class CPath
                 readBuild = CPath.passed(readFe, scratch, lang, names);
                 if (readBuild == (String*)0)
                     return (IRModule*)0;
-                }
-            // A function whose loop comes from what clang inlined into it (a
-            // std::for_each, a std::fill) has none before the passes, so it
-            // was not kept out of its callers: clang may have inlined it
-            // into one xcc leaves to clang, where xcc's copy is never called.
-            // Such functions join the set, and the passes run again.
-            Map* after = Languages.loopNames(readBuild != (String*)0 ? readBuild : text);
-            Array* ak = after.allKeys();
-            u32 added = 0;
-            for (u32 k = 0; k < ak.count(); k = k + 1)
-                if (names.get((Hashable*)ak.get(k)) == (Object*)0)
-                    {
-                    names.set((Hashable*)ak.get(k), after.get((Hashable*)ak.get(k)));
-                    added = added + 1;
-                    }
-            if (added > 0)
-                {
-                text = CPath.passed(textFe, scratch, lang, names);
-                if (text == (String*)0)
-                    return (IRModule*)0;
-                if (readFe != (String*)0)
-                    {
-                    readBuild = CPath.passed(readFe, scratch, lang, names);
-                    if (readBuild == (String*)0)
-                        return (IRModule*)0;
-                    }
                 }
             }
         // reads `loops`: the reader sees only the functions xcc may take,

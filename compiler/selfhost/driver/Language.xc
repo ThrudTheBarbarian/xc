@@ -311,6 +311,15 @@ class Languages
         return b.hasPrefix(String.withCString("_ZNSt")) || b.hasPrefix(String.withCString("_ZNKSt")) || b.hasPrefix(String.withCString("_ZSt"));
         }
 
+    // Whether `@name` is a lambda's call operator (`...$_0clE...` for a
+    // named local closure type, `...UlRjE_clE...` for an unnamed one): its
+    // body belongs inside the loop that calls it (a std::for_each's), so it
+    // is never kept out of its callers.
+    static bool isLambda(String* n)
+        {
+        return n.contains(String.withCString("clE")) && (n.contains(String.withCString("$_")) || n.contains(String.withCString("Ul")));
+        }
+
     // Whether a define line's linkage lets another object define it too.
     static bool isOdr(String* l)
         {
@@ -480,9 +489,29 @@ class Languages
             while (end < lines.count() && !((String*)lines.get(end)).equals(String.withCString("}")))
                 end = end + 1;
             String* n = Languages.calleeOf(l, 0);
-            if (n != (String*)0 && !Languages.isOdr(l) && !Languages.isStd(n) && Languages.hasLoop(lines, i + 1, end))
+            if (n != (String*)0 && !Languages.isOdr(l) && !Languages.isStd(n) && !Languages.isLambda(n) && Languages.hasLoop(lines, i + 1, end))
                 names.set((Hashable*)n, (Object*)l);
             i = end + 1;
+            }
+        return names;
+        }
+
+    // Every function of text clang's passes could inline that xcc might
+    // take: defined, not an ODR copy, not the standard library's, not a
+    // lambda's call operator. The probe run keeps them all out of their
+    // callers, to see which have loops once their own callees are inlined.
+    static Map* userFunctions(String* text)
+        {
+        Map* names = new Map();
+        Array* lines = text.splitOnByte((u8)10);
+        for (u32 i = 0; i < lines.count(); i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (!l.hasPrefix(String.withCString("define ")))
+                continue;
+            String* n = Languages.calleeOf(l, 0);
+            if (n != (String*)0 && !Languages.isOdr(l) && !Languages.isStd(n) && !Languages.isLambda(n))
+                names.set((Hashable*)n, (Object*)l);
             }
         return names;
         }
@@ -726,7 +755,10 @@ class Languages
                 }
             if (brAt == String.notFound() || Languages.uses(lines, from, end, c) != 2)
                 continue;
-            // a counts from 0 by 1 in this block's phi; b is not made in it.
+            // a counts by 1 in this block's phi from a value made before the
+            // loop; b is not made in the header. Clang's passes write `i == n`
+            // for `i < n` only where the start is at most n, so the test is
+            // `i <u n`.
             if (!Languages.countsFromZero(lines, blockStart, i, from, end, a, ty) || Languages.definedIn(lines, blockStart, brAt, b))
                 continue;
             lines.set(i, (Object*)l.replacing(String.withFormat(" = icmp %s %s ", eq ? "eq" : "ne", ty.cString()),
@@ -1275,8 +1307,9 @@ class Languages
         return n;
         }
 
-    // Whether a is `phi T [ 0, %p ], [ %inc, %l ]` in the block's lines
-    // [blockStart, upto), with `%inc = add ... T a, 1` in the function.
+    // Whether a is `phi T [ s, %p ], [ %inc, %l ]` in the block's lines
+    // [blockStart, upto), s a constant or a value not made in the block, with
+    // `%inc = add ... T a, 1` in the function.
     static bool countsFromZero(Array* lines, u32 blockStart, u32 upto, u32 from, u32 end, String* a, String* ty)
         {
         String* head = String.withFormat("%s = phi %s ", a.cString(), ty.cString());
@@ -1287,7 +1320,7 @@ class Languages
                 continue;
             Array* ins = t.substringFromByte(head.byteLength()).splitOnByte((u8)'[');
             String* inc = (String*)0;
-            bool zero = false;
+            bool started = false;
             u32 n = 0;
             for (u32 k = 0; k < ins.count(); k = k + 1)
                 {
@@ -1299,12 +1332,13 @@ class Languages
                 if (comma == String.notFound())
                     return false;
                 String* v = e.substringBytes(0, comma).trimmed();
-                if (v.equals(String.withCString("0")))
-                    zero = true;
-                else
+                // The step's incoming is `add ... a, 1`; the other is the start.
+                if (Languages.isIncOf(lines, from, end, v, a, ty))
                     inc = v;
+                else if (!Languages.definedIn(lines, blockStart, upto, v))
+                    started = true;
                 }
-            if (n != 2 || !zero || inc == (String*)0)
+            if (n != 2 || !started || inc == (String*)0)
                 return false;
             String* addHead = String.withFormat("%s = add ", inc.cString());
             String* tail = String.withFormat(" %s %s, 1", ty.cString(), a.cString());
@@ -1320,6 +1354,27 @@ class Languages
                 return e == m.byteLength() || m.byteAt(e) == (u8)',';
                 }
             return false;
+            }
+        return false;
+        }
+
+    // Whether v is `add ... T a, 1` in lines [from, end).
+    static bool isIncOf(Array* lines, u32 from, u32 end, String* v, String* a, String* ty)
+        {
+        if (!v.hasPrefix(String.withCString("%")))
+            return false;
+        String* head = v.appending(String.withCString(" = add "));
+        String* tail = String.withFormat(" %s %s, 1", ty.cString(), a.cString());
+        for (u32 k = from; k < end; k = k + 1)
+            {
+            String* m = ((String*)lines.get(k)).trimmed();
+            if (!m.hasPrefix(head))
+                continue;
+            u32 p = m.byteIndexOf(tail);
+            if (p == String.notFound())
+                return false;
+            u32 e = p + tail.byteLength();
+            return e == m.byteLength() || m.byteAt(e) == (u8)',';
             }
         return false;
         }
