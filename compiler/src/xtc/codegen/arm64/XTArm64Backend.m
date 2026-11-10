@@ -2309,8 +2309,10 @@ static BOOL a64InsnReads(XTIRInsn *n, XTIRValueId x) {
     // f32 load has no FP scratch at all, so it lands in w17 and bounces through
     // the frame to reach an FP register. Three instructions for one load.
     //
-    // Gated on the function having no Vec-typed value anywhere, so the
-    // vectoriser's pool is untouched wherever it is in use. crossesCall keeps
+    // The vector registers are given out before this
+    // (allocateVectorRegistersForCtx:), so in a function with vector values the
+    // floats take the ones it left: a map loop over its index that vectorised
+    // used to put every float in C perlin's main in a slot. crossesCall keeps
     // these off anything live across a call, as it does for x0-x7.
     //
     // d16/d17 stay OUT: they are the FP scratch the load path above uses, and
@@ -2326,9 +2328,9 @@ static BOOL a64InsnReads(XTIRInsn *n, XTIRValueId x) {
             if (vp.result && vp.result.type && vp.result.type.kind == XTIRTypeKindVec) { fnHasVector = YES; break; }
         if (fnHasVector) break;
     }
-    NSArray<NSString *> *fpCallerRegs = fnHasVector ? @[]
-        : @[@"d18", @"d19", @"d20", @"d21", @"d22", @"d23",
+    NSArray<NSString *> *fpCallerRegs = @[@"d18", @"d19", @"d20", @"d21", @"d22", @"d23",
             @"d24", @"d25", @"d26", @"d27", @"d28", @"d29", @"d30", @"d31"];
+    NSArray<NSString *> *fpArgTier = @[@"d3", @"d4", @"d5", @"d6"];
     // Tried LAST, after both existing tiers. Ordering is not cosmetic: the
     // preference list is caller-then-callee, so folding these in beside
     // x10-x14 put them ahead of x19-x27 and re-shuffled every allocation the
@@ -2461,6 +2463,49 @@ static BOOL a64InsnReads(XTIRInsn *n, XTIRValueId x) {
         }
     }
 
+    // The float homes and the vector registers (#20). The vector registers are
+    // given out first (allocateVectorRegistersForCtx:); a float may then take
+    // one over any stretch where no vector value holds it. A register goes
+    // from the float pool altogether when a vector phi or anything coalesced
+    // with one holds it (written by edge copies, as a scalar phi's), a lane
+    // group fills it (its members are read past their own intervals), a value
+    // on it has no interval, or it is the remat and spill scratch v29-v31 once
+    // anything was given up. On any other the vector values' intervals are
+    // placed first (seedIvls), so the floats fit around them. As the port.
+    NSMutableDictionary<NSString *, NSMutableArray<NSValue *> *> *seedIvls = [NSMutableDictionary dictionary];
+    if (fnHasVector) {
+        NSMutableSet<NSNumber *> *phiVal = [NSMutableSet set];
+        for (XTIRBlock *bb in fn.blocks)
+            for (XTIRInsn *p in bb.phiNodes) {
+                if (!p.result || p.result.type.kind != XTIRTypeKindVec) continue;
+                [phiVal addObject:@(p.result.valueId)];
+                for (XTIROperand *o in p.operands)
+                    if (o.kind == XTIROperandKindUse) [phiVal addObject:@(o.valueId)];
+            }
+        NSMutableSet<NSString *> *bad = [NSMutableSet set];
+        if (ctx.vRemat.count > 0 || ctx.vSpill.count > 0) [bad addObjectsFromArray:@[@"d29", @"d30", @"d31"]];
+        for (NSNumber *v in ctx.vecReg) {
+            NSString *g = ctx.vecReg[v];
+            if (g.length < 2) continue;
+            NSString *d = [@"d" stringByAppendingString:[g substringFromIndex:1]];
+            if ([phiVal containsObject:v] || ctx.laneLeader[v] || [ctx.laneSkip containsObject:v]
+                || !startOf[v] || !endOf[v]) {
+                [bad addObject:d];
+                continue;
+            }
+            if (!seedIvls[d]) seedIvls[d] = [NSMutableArray array];
+            NSInteger s = startOf[v].integerValue, e = endOf[v].integerValue;
+            [seedIvls[d] addObject:[NSValue valueWithRange:NSMakeRange((NSUInteger)s, (NSUInteger)(e - s))]];
+        }
+        [seedIvls removeObjectsForKeys:bad.allObjects];
+        NSMutableArray<NSString *> *left = [NSMutableArray array];
+        for (NSString *d in fpCallerRegs) if (![bad containsObject:d]) [left addObject:d];
+        fpCallerRegs = left;
+        NSMutableArray<NSString *> *leftArg = [NSMutableArray array];
+        for (NSString *d in fpArgTier) if (![bad containsObject:d]) [leftArg addObject:d];
+        fpArgTier = leftArg;
+    }
+
     NSMutableArray<NSString *> *saved = [NSMutableArray array];
     NSMutableSet<NSString *> *savedSet = [NSMutableSet set];
     // Two tiers: caller-saved first (no prologue save), then callee-saved. A
@@ -2481,6 +2526,9 @@ static BOOL a64InsnReads(XTIRInsn *n, XTIRValueId x) {
         NSMutableArray<NSMutableArray<NSValue *> *> *regIvls = [NSMutableArray array];
         NSMutableArray<NSNumber *> *exclusive = [NSMutableArray array];
         for (NSUInteger i = 0; i < nr; i++) { [regIvls addObject:[NSMutableArray array]]; [exclusive addObject:@NO]; }
+        // The vector values on the float registers (seedIvls above).
+        for (NSUInteger i = 0; i < nr; i++)
+            if (seedIvls[regs[i]]) [regIvls[i] addObjectsFromArray:seedIvls[regs[i]]];
         for (NSNumber *v in cands) {
             NSInteger s = startOf[v] ? startOf[v].integerValue : 0;
             NSInteger e = endOf[v]   ? endOf[v].integerValue   : s;
@@ -2538,9 +2586,9 @@ static BOOL a64InsnReads(XTIRInsn *n, XTIRValueId x) {
     if (getenv("XTREGDBG")) fprintf(stderr, "== %s\n", ctx.fn.name.UTF8String);
     assign(gp, gpRegs, gpCallerRegs, gpArgTier);
     // The float argument registers, as x0-x7: d0-d2 are the float scratch
-    // and d7 the phi-cycle scratch, so d3-d6, in a function with no vectors
-    // (#22: perlin's octave loop spilled around its fcsels with these free).
-    assign(fp, fpRegs, fpCallerRegs, fnHasVector ? @[] : @[@"d3", @"d4", @"d5", @"d6"]);
+    // and d7 the phi-cycle scratch, so d3-d6 (#22: perlin's octave loop
+    // spilled around its fcsels with these free).
+    assign(fp, fpRegs, fpCallerRegs, fpArgTier);
     // Stable callee-save order (prologue/epilogue iterate this array together).
     [saved sortUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
         NSUInteger ia = [gpRegs indexOfObject:a]; if (ia == NSNotFound) ia = 100 + [fpRegs indexOfObject:a];
