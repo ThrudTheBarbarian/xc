@@ -104,6 +104,12 @@ static NSArray<NSDictionary *> *repartitionObjcSections(
         NSMutableDictionary<NSString *, NSNumber *> *msyms,
         NSSet<NSString *> *mdataSyms,
         NSMutableArray<XAArm64Fixup *> *mfix) {
+    // The merge's alignment marks are not sections: set them aside.
+    NSMutableArray<NSDictionary *> *anchors = [NSMutableArray array];
+    NSMutableArray<NSDictionary *> *real = [NSMutableArray array];
+    for (NSDictionary *r in ranges)
+        [([r[@"name"] isEqualToString:@"@align"] ? anchors : real) addObject:r];
+    ranges = real;
     if (ranges.count == 0) return @[];
 
     // 1. Sort the ObjC runs by position and mark the bytes they own.
@@ -136,7 +142,19 @@ static NSArray<NSDictionary *> *repartitionObjcSections(
         // __cfstring constant landed on an odd address and UIApplicationMain
         // died in CFStringGetLength2 with EXC_ARM_DA_ALIGN — in BOTH linkers,
         // identically. A run is re-laid at the same offset modulo 16 it had.
-        while ((out.length & 15) != (run & 15)) { uint8_t z = 0; [out appendBytes:&z length:1]; }
+        //
+        // More than 16 where an object the run holds asked for it: an object
+        // whose data holds a page-aligned global array (gpu-globals) was put
+        // on a page by the merge, and must stay on one, or Metal copies the
+        // array instead of sharing it. The merge leaves an "@align" mark at
+        // each such object's base. Every image's class tables made a run
+        // before such an object the common case (#34).
+        NSUInteger al = 16;
+        for (NSDictionary *r in anchors) {
+            NSUInteger a = [r[@"off"] unsignedIntegerValue], need = [r[@"flags"] unsignedIntegerValue];
+            if (a >= run && a < i && need > al) al = need;
+        }
+        while ((out.length & (al - 1)) != (run & (al - 1))) { uint8_t z = 0; [out appendBytes:&z length:1]; }
         [moves addObject:@[@(run), @(i - run), @(out.length)]];
         [out appendBytes:src + run length:i - run];
     }
@@ -420,6 +438,12 @@ static int mergeMachOInputs(NSArray<NSString *> *objectFiles,
                 // is the padded base actually used. The repartition below puts
                 // their section identity back; the runtime finds its metadata by
                 // that identity and does nothing without it.
+                // An object that asked for more than 16-byte alignment (a page,
+                // for a gpu-globals array): the repartition keeps its base on
+                // that boundary when it moves the data (#34).
+                if (odata.length && [obj[@"pagemask"] unsignedLongLongValue] > 15)
+                    [mObjc addObject:@{@"name":@"@align", @"seg":@"", @"flags":@([obj[@"pagemask"] unsignedLongLongValue] + 1),
+                                       @"off":@(dbase), @"size":@(0)}];
                 for (NSDictionary *r in obj[@"objcranges"])
                     [mObjc addObject:@{@"name":r[@"name"], @"seg":r[@"seg"], @"flags":r[@"flags"],
                                        @"off":@(dbase + [r[@"off"] unsignedLongLongValue]),
