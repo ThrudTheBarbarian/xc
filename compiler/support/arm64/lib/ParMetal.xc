@@ -302,6 +302,32 @@ class ParMetal
             }
         for (u32 i = (u32)0; i < nred; i = i + (u32)1)
             reds[i] = withLen(_dev, sel("newBufferWithLength:options:"), (u64)(l.nparts * l.redStride[i]), (u64)0);
+        // A buffer Metal did not make is nil, and a kernel bound to nil
+        // writes nowhere: the block runs on the CPU instead.
+        bool made = args != (pointer)0 && spanB != (pointer)0;
+        for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
+            made = made && bufs[i] != (pointer)0;
+        for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
+            made = made && globs[i] != (pointer)0;
+        for (u32 i = (u32)0; i < nred; i = i + (u32)1)
+            made = made && reds[i] != (pointer)0;
+        if (!made)
+            {
+            for (u32 i = (u32)0; i < nbuf; i = i + (u32)1)
+                if (bufs[i] != (pointer)0)
+                    send0(bufs[i], sel("release"));
+            for (u32 i = (u32)0; i < nglob; i = i + (u32)1)
+                if (globs[i] != (pointer)0)
+                    send0(globs[i], sel("release"));
+            for (u32 i = (u32)0; i < nred; i = i + (u32)1)
+                if (reds[i] != (pointer)0)
+                    send0(reds[i], sel("release"));
+            if (args != (pointer)0)
+                send0(args, sel("release"));
+            if (spanB != (pointer)0)
+                send0(spanB, sel("release"));
+            return ParDevice.cpu("Metal could not make one of its buffers");
+            }
 
         pointer cb = send0(_queue, sel("commandBuffer"));
         pointer enc = send0(cb, sel("computeCommandEncoder"));
@@ -451,7 +477,7 @@ class ParMetalWorker : ParWorker
         if (src == (u8*)0 || l == (ParLayout*)0 || !ParMetal.start())
             return false;
         // The block laid out from this worker's own section.
-        l = ParDevice.layout(proto, src, (i64)0, l.n);
+        l = ParDevice.workerLayout(proto, src, l);
         if (l == (ParLayout*)0)
             return false;
         pointer pso = ParMetal.pipeline(src);
@@ -480,7 +506,7 @@ class ParMetalWorker : ParWorker
         if (src == (u8*)0)
             return false;
         _proto = proto;
-        _l = ParDevice.layout(proto, src, (i64)0, l.n);
+        _l = ParDevice.workerLayout(proto, src, l);
         if (_l == (ParLayout*)0)
             return false;
         l = _l;
@@ -500,6 +526,27 @@ class ParMetalWorker : ParWorker
                 _globs[i] = ParMetal.bufferFor(l.globPtr[i], (u64)l.globLen[i], &_globShared[i], &_globAt[i]);
             else
                 _globs[i] = withBytes(gMtlDev, ParMetal.sel("newBufferWithBytes:length:options:"), l.globPtr[i], (u64)l.globLen[i], (u64)0);
+            }
+        // A buffer Metal did not make (nil): this worker takes no tiles.
+        bool made = _args != (pointer)0;
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            made = made && _bufs[i] != (pointer)0;
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            made = made && _globs[i] != (pointer)0;
+        if (!made)
+            {
+            parMsg0_t* send0 = (parMsg0_t*)gMtlSend;
+            for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+                if (_bufs[i] != (pointer)0)
+                    send0(_bufs[i], ParMetal.sel("release"));
+            for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+                if (_globs[i] != (pointer)0)
+                    send0(_globs[i], ParMetal.sel("release"));
+            if (_args != (pointer)0)
+                send0(_args, ParMetal.sel("release"));
+            _proto = (ParChunk*)0;
+            _l = (ParLayout*)0;
+            return false;
             }
         l.plan(0, tile);
         for (u32 d = (u32)0; d < (u32)PAR_MTL_DEPTH; d = d + (u32)1)

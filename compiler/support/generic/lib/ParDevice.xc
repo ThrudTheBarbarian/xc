@@ -237,6 +237,14 @@ class ParLayout : Object
     i64 bufFpK[16];
     i64 bufFpLo[16];
     i64 bufFpHi[16];
+    // 1: every iteration touches captured array k across its footprint (the
+    // header's whole=<k>), so where the runtime knows no block for it, its
+    // length is the footprint's over the run's range.
+    i64 bufWhole[16];
+    // The run's range, which the devices' tiles index: a worker's layout is
+    // made over [0, n), and a whole= length comes from this one.
+    i64 runLo;
+    i64 runHi;
     // 1: the body writes every element of the global in its range (the
     // raw gpuWritesAll, whatever the range), so a tile's slice of it need
     // not be uploaded when the footprint is contiguous (k = 1).
@@ -2706,7 +2714,22 @@ class ParDevice
 
     static ParLayout* layout(ParChunk* proto, u8* src, i64 lo, i64 hi)
         {
+        return layoutOver(proto, src, lo, hi, lo, hi);
+        }
+
+    // A tile worker's layout over [0, n) of the run laid out as `run`, its
+    // whole= lengths from the run's own range.
+    static ParLayout* workerLayout(ParChunk* proto, u8* src, ParLayout* run)
+        {
+        return layoutOver(proto, src, (i64)0, run.n, run.runLo, run.runHi);
+        }
+
+    // The layout over [lo, hi) of a run over [rlo, rhi).
+    static ParLayout* layoutOver(ParChunk* proto, u8* src, i64 lo, i64 hi, i64 rlo, i64 rhi)
+        {
         ParLayout* l = new ParLayout();
+        l.runLo = rlo;
+        l.runHi = rhi;
         u8 gname[128];
         u32 at = (u32)0;
         while (src[at] != (u8)0 && src[at] != (u8)10)
@@ -2730,21 +2753,22 @@ class ParDevice
                 l.bufIvar[k] = ivar;
                 l.bufLen[k] = proto.gpuLength((i32)ivar);
                 l.bufIn[k] = proto.gpuReadsOnly((i32)ivar) ? (i64)1 : (i64)0;
-                if (l.bufLen[k] < (i64)0)
-                    {
-                    cpu("it uses an array whose size is not known");
-                    return (ParLayout*)0;
-                    }
-                // Only when this run's range is the whole array: the body
-                // writes element i for each i in it, and nothing else.
+                // A length of 0 or less is decided after the header is read
+                // (a whole= word may give it).
                 l.bufOut[k] = (i64)0;
-                if (proto.gpuWritesAllOwn((i32)ivar) && lo == (i64)0 && (hi - lo) * l.bufElem[k] >= l.bufLen[k])
-                    {
-                    l.bufOut[k] = (i64)1;
-                    if (ParDevice.reporting())
-                        Log.info("par: %ld bytes written whole on the device, not sent", l.bufLen[k]);
-                    }
                 l.nbuf = k + (u32)1;
+                continue;
+                }
+            // whole=<k>: every iteration touches captured array k across its
+            // footprint (fp=), and the loop leaves only from its header.
+            if (src[at] == (u8)'w' && src[at + (u32)1] == (u8)'h' && src[at + (u32)2] == (u8)'o' && src[at + (u32)3] == (u8)'l'
+                && src[at + (u32)4] == (u8)'e' && src[at + (u32)5] == (u8)'=')
+                {
+                at = at + (u32)6;
+                i64 which = num(src, &at);
+                for (u32 q = (u32)0; q < l.nbuf; q = q + (u32)1)
+                    if (l.bufIvar[q] == which)
+                        l.bufWhole[q] = (i64)1;
                 continue;
                 }
             if (src[at] == (u8)'g' && src[at + (u32)1] == (u8)'l' && src[at + (u32)4] == (u8)'=' &&
@@ -2921,6 +2945,61 @@ class ParDevice
             {
             cpu("its GPU version has no header");
             return (ParLayout*)0;
+            }
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            {
+            // Memory the runtime did not allocate (C's malloc) has no span.
+            // Where every iteration touches the array across its footprint
+            // (whole=), the run reaches from element min(k*lo, k*(hi-1)) + c0
+            // to max(k*lo, k*(hi-1)) + c1 (exclusive), and the buffer is the
+            // bytes up to there: all of them are the program's, so the copy in
+            // reads none past the array, and the copy back returns what the
+            // kernel did not write as it was. Not when the lowest is below the
+            // pointer.
+            if (l.bufLen[i] < (i64)0 && l.bufWhole[i] != (i64)0 && l.bufFp[i] != (i64)0 && l.runHi > l.runLo)
+                {
+                i64 e0 = l.bufFpK[i] * l.runLo;
+                i64 e1 = l.bufFpK[i] * (l.runHi - (i64)1);
+                if (e1 < e0)
+                    {
+                    i64 t = e0;
+                    e0 = e1;
+                    e1 = t;
+                    }
+                if (e0 + l.bufFpLo[i] >= (i64)0 && e1 + l.bufFpHi[i] > (i64)0)
+                    l.bufLen[i] = (e1 + l.bufFpHi[i]) * l.bufElem[i];
+                }
+            // No bytes is no size too: a device buffer of length 0 is no
+            // buffer (Metal's is nil), and the kernel's writes to it were
+            // lost while the run counted as the GPU's.
+            if (l.bufLen[i] <= (i64)0)
+                {
+                cpu("it uses an array whose size is not known");
+                return (ParLayout*)0;
+                }
+            // Only when this run's range is the whole array: the body
+            // writes element i for each i in it, and nothing else.
+            if (proto.gpuWritesAllOwn((i32)l.bufIvar[i]) && lo == (i64)0 && (hi - lo) * l.bufElem[i] >= l.bufLen[i])
+                {
+                l.bufOut[i] = (i64)1;
+                if (ParDevice.reporting())
+                    Log.info("par: %ld bytes written whole on the device, not sent", l.bufLen[i]);
+                }
+            }
+        // A buffer shorter than the last element its footprint reaches over
+        // [lo, hi): the kernel would read and write past the device's copy.
+        // Only for a footprint that walks up (k >= 0), where a worker's
+        // layout over [0, n) never reaches further than the run's own.
+        for (u32 i = (u32)0; i < l.nbuf && hi > lo; i = i + (u32)1)
+            {
+            if (l.bufFp[i] == (i64)0 || l.bufFpK[i] < (i64)0)
+                continue;
+            i64 last = l.bufFpK[i] * (hi - (i64)1) + l.bufFpHi[i];
+            if (last * l.bufElem[i] > l.bufLen[i])
+                {
+                cpu("it uses an array shorter than the elements the loop reaches");
+                return (ParLayout*)0;
+                }
             }
         l.plan(lo, hi);
         if (reporting())

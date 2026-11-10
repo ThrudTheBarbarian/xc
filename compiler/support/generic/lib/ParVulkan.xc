@@ -1742,7 +1742,7 @@ class ParVulkanWorker : ParWorker
             return false;
         // The block laid out from this worker's own section (its header may
         // differ from the first section's in what the kernel form needs).
-        l = ParDevice.layout(proto, spv, (i64)0, l.n);
+        l = ParDevice.workerLayout(proto, spv, l);
         if (l == (ParLayout*)0)
             return false;
         i32 slot = ParVulkan.pipeline(spv);
@@ -1895,7 +1895,7 @@ class ParVulkanWorker : ParWorker
         if (_slot < (i32)0)
             return false;
         _proto = proto;
-        _l = ParDevice.layout(proto, spv, (i64)0, l.n);
+        _l = ParDevice.workerLayout(proto, spv, l);
         if (_l == (ParLayout*)0)
             return false;
         _l.maxThreads = ParVulkan.maxThreads(_slot);

@@ -1549,7 +1549,7 @@ class ParCudaWorker : ParWorker
                 return false;
         gCu_ctxSetCurrent(_ctx);
         // The block laid out from this worker's own section (`byval`).
-        ParLayout* ml = ParDevice.layout(proto, src, (i64)0, l.n);
+        ParLayout* ml = ParDevice.workerLayout(proto, src, l);
         bool ok = ml != (ParLayout*)0 && ParCuda.tileable(ml) && kernel(src) != (pointer)0;
         if (!ok && _nrefused < (u32)64)
             {
@@ -1639,7 +1639,7 @@ class ParCudaWorker : ParWorker
         if (src == (u8*)0)
             return false;
         _proto = proto;
-        _l = ParDevice.layout(proto, src, (i64)0, l.n);
+        _l = ParDevice.workerLayout(proto, src, l);
         if (_l == (ParLayout*)0)
             return false;
         l = _l;
