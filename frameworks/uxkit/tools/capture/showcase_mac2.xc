@@ -9,10 +9,12 @@
 #import "showcase_widgets.xc"
 
 extern i32 ux_ak_dump_ppm(u8* path);
+extern void ux_ak_set_portrait(i32 on);
 
 void main(void)
     {
     ux_ak_set_capture((i32)1); // native controls, no window shown
+    ux_ak_set_portrait((i32)1); // rendered at the screen's scale, scaled down smoothly
     gDriver = new UXAppKitDriver();
     i32 sw = (i32)0;
     i32 sh = (i32)0;

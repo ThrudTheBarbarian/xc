@@ -19,6 +19,14 @@ pointer CreateFileA(u8* name, u32 access, u32 share, pointer sa, u32 disp, u32 f
 i32 WriteFile(pointer h, pointer buf, u32 n, u32* written, pointer ov);
 i32 CloseHandle(pointer h);
 
+// Windows 10 draws a window's title bar and shadow through the compositor: a window DC holds black
+// there, and the window rectangle includes the invisible resize borders.  PrintWindow with
+// PW_RENDERFULLCONTENT renders the whole window, chrome included, into a bitmap, and the frame the
+// screen shows is DwmGetWindowAttribute(DWMWA_EXTENDED_FRAME_BOUNDS) within it.  Wine has neither:
+// there the window DC holds the whole window.
+typedef i32 DwmGetAttrFn(pointer hwnd, u32 attr, pointer out, u32 size);
+i32 PrintWindow(pointer hwnd, pointer hdc, u32 flags);
+
 pointer gHook;
 i32 gShot;
 
@@ -58,11 +66,37 @@ void timerProc(pointer hwnd, u32 msg, pointer id, u32 ticks)
     RedrawWindow(hwnd, (pointer)0, (pointer)0, (u32)$181); // INVALIDATE|ALLCHILDREN|UPDATENOW
     i32 rc[4];
     GetWindowRect(hwnd, (pointer)&rc[0]);
+    i32 x0 = (i32)0;
+    i32 y0 = (i32)0;
+    i32 ww = rc[2] - rc[0];
+    i32 wh = rc[3] - rc[1];
+    pointer mem = (pointer)0; // the PrintWindow bitmap's DC, when the compositor draws the frame
+    pointer bmp = (pointer)0;
+    pointer old = (pointer)0;
+    i32 eb[4];
+    DwmGetAttrFn* dwm = (DwmGetAttrFn*)GetProcAddress(LoadLibraryA("dwmapi.dll"), (u8*)"DwmGetWindowAttribute");
+    if (dwm != (DwmGetAttrFn*)0 && dwm(hwnd, (u32)9, (pointer)&eb[0], (u32)16) == (i32)0)
+        {
+        pointer wdc = GetWindowDC(hwnd);
+        mem = CreateCompatibleDC(wdc);
+        bmp = CreateCompatibleBitmap(wdc, ww, wh);
+        old = SelectObject(mem, bmp);
+        ReleaseDC(hwnd, wdc);
+        if (PrintWindow(hwnd, mem, (u32)2) != (i32)0) // PW_RENDERFULLCONTENT
+            {
+            x0 = eb[0] - rc[0];
+            y0 = eb[1] - rc[1];
+            rc[0] = eb[0];
+            rc[1] = eb[1];
+            rc[2] = eb[2];
+            rc[3] = eb[3];
+            }
+        }
     i32 w = rc[2] - rc[0];
     i32 h = rc[3] - rc[1];
     if (w > (i32)0 && h > (i32)0 && w < (i32)1200 && h < (i32)800)
         {
-        pointer dc = GetWindowDC(hwnd);
+        pointer dc = mem != (pointer)0 ? mem : GetWindowDC(hwnd);
         u8* buf = (u8*)malloc((u32)(w * h * 3 + 64));
         i32 n = (i32)0;
         buf[n] = (u8)80;
@@ -84,19 +118,28 @@ void timerProc(pointer hwnd, u32 msg, pointer id, u32 ticks)
             {
             for (i32 x = (i32)0; x < w; x++)
                 {
-                u32 c = GetPixel(dc, x, y);
+                u32 c = GetPixel(dc, x0 + x, y0 + y);
                 buf[n] = (u8)(c & (u32)$FF);
                 buf[n + (i32)1] = (u8)((c >> (u32)8) & (u32)$FF);
                 buf[n + (i32)2] = (u8)((c >> (u32)16) & (u32)$FF);
                 n = n + (i32)3;
                 }
             }
-        ReleaseDC(hwnd, dc);
+        if (mem == (pointer)0)
+            {
+            ReleaseDC(hwnd, dc);
+            }
         pointer f = CreateFileA((u8*)"ux-alert-win.ppm", (u32)$40000000, (u32)0, (pointer)0,
                                 (u32)2, (u32)$80, (pointer)0);
         u32 wrote = (u32)0;
         WriteFile(f, (pointer)buf, (u32)n, &wrote, (pointer)0);
         CloseHandle(f);
+        }
+    if (mem != (pointer)0)
+        {
+        SelectObject(mem, old);
+        DeleteObject(bmp);
+        DeleteDC(mem);
         }
     PostMessageA(hwnd, (u32)WM_COMMAND, (pointer)IDOK, (pointer)0);
     }
