@@ -117,9 +117,24 @@ class UXBreadcrumbSegment : Object
             }
         return n;
         }
+    // a string's width in the control font: measured by the backend once one is up, estimated
+    // from charWidth without one (the layout tests run with no window)
+    i16 textW(u8* t)
+        {
+        if (gDriver != (UXViewDriver*)0)
+            {
+            return (i16)gDriver.textWidth(t, (i32)0);
+            }
+        return (i16)((i32)charWidth * UXBreadcrumb.slen(t));
+        }
     i16 naturalWidth(UXBreadcrumbSegment* s)
         {
-        return (i16)((i32)segPad * (i32)2 + (i32)charWidth * UXBreadcrumb.slen(s.title));
+        return (i16)((i32)segPad * (i32)2 + (i32)self.textW(s.title));
+        }
+    // where a separator starts: centred between text that ends at `from` and text that starts at `to`
+    i16 sepX(i32 from, i32 to)
+        {
+        return (i16)(from + (to - from - (i32)self.textW(separator)) / (i32)2);
         }
 
     // ---- layout --------------------------------------------------------------
@@ -159,7 +174,7 @@ class UXBreadcrumbSegment : Object
         // elide the middle
         elided = true;
         showEllipsis = true;
-        i16 ellW = (i16)((i32)charWidth * (i32)3 + (i32)segPad); // "..." glyph width estimate
+        i16 ellW = (i16)((i32)self.textW((u8*)"...") + (i32)segPad);
         for (i32 i = (i32)1; i < n; i = i + (i32)1)
             {
             self.segAt(i).visible = false;
@@ -251,16 +266,21 @@ class UXBreadcrumbSegment : Object
             // a separator after this segment if something visible follows it
             if (i < last)
                 {
-                i16 sepx = (i16)(s.x + s.w + (i16)3);
+                i32 end = (i32)s.x + (i32)s.w - (i32)segPad; // where this segment's text ends
                 if (self.showEllipsis && i == (i32)0)
                     {
-                    g.drawText(separator, sepx, ty, (i32)9, (i32)0);
-                    g.drawText((u8*)"...", ellipsisX, ty, (i32)9, (i32)0);
-                    g.drawText(separator, (i16)(ellipsisX + ellipsisW + (i16)3), ty, (i32)9, (i32)0);
+                    // "..." takes ellipsisW from ellipsisX, its text half a pad in
+                    i32 ex = (i32)ellipsisX + (i32)segPad / (i32)2;
+                    i32 eEnd = ex + (i32)self.textW((u8*)"...");
+                    i32 next = (i32)ellipsisX + (i32)ellipsisW + (i32)sepWidth + (i32)segPad;
+                    g.drawText(separator, self.sepX(end, ex), ty, (i32)9, (i32)0);
+                    g.drawText((u8*)"...", (i16)ex, ty, (i32)9, (i32)0);
+                    g.drawText(separator, self.sepX(eEnd, next), ty, (i32)9, (i32)0);
                     }
                 else
                     {
-                    g.drawText(separator, sepx, ty, (i32)9, (i32)0);
+                    UXBreadcrumbSegment* nx = self.segAt(i + (i32)1);
+                    g.drawText(separator, self.sepX(end, (i32)nx.x + (i32)segPad), ty, (i32)9, (i32)0);
                     }
                 }
             }
