@@ -1259,6 +1259,9 @@ void ux_and_make_label(int handle, int node, int x, int y, int w, int h, const c
     JNIEnv *env = envNow();
     jobject l = (*env)->NewObject(env, gLabelCls, gLabelInit, gActivity);
     (*env)->CallVoidMethod(env, l, gLabelSetText, (*env)->NewStringUTF(env, text));
+    /* a bare TextView takes the theme's secondary (grey) text colour, which reads as disabled; a
+     * label is the primary on-surface colour, as the bridge's other text */
+    (*env)->CallVoidMethod(env, l, (*env)->GetMethodID(env, gLabelCls, "setTextColor", "(I)V"), (jint)0xFF1C1B1F);
     place(env, handle, node, l, x, y, w, h);
     check(env, "make_label");
 }
