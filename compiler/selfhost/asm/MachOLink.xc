@@ -231,6 +231,12 @@ class MachOLink
                     dbase = mdata.length();
                     MachOLink.appendData(mdata, obj.data());
                     }
+                // An object that asked for more than 16-byte alignment (a page,
+                // for a gpu-globals array): repartitionObjc keeps its base on
+                // that boundary when it moves the data (#34).
+                if (obj.data().length() > (u32)0 && obj.dataPageMask() > (u32)15)
+                    mObjc.add((Object*)MachOObjcRange.with(String.withCString("@align"), String.withCString(""),
+                                                           obj.dataPageMask() + (u32)1, dbase, (u32)0));
                 Array* rs = obj.objcRanges();
                 for (u32 k = (u32)0; k < rs.count(); k = k + (u32)1)
                     {
@@ -557,9 +563,20 @@ class MachOLink
             }
         }
 
-    static Array* repartitionObjc(SectionBytes* mdata, Array* ranges, Map* msyms, Array* mdataSyms, Array* mfix)
+    static Array* repartitionObjc(SectionBytes* mdata, Array* rangesIn, Map* msyms, Array* mdataSyms, Array* mfix)
         {
         Array* sections = new Array();
+        // The merge's alignment marks are not sections: set them aside.
+        Array* anchors = new Array();
+        Array* ranges = new Array();
+        for (u32 i = (u32)0; i < rangesIn.count(); i = i + (u32)1)
+            {
+            MachOObjcRange* r = (MachOObjcRange*)rangesIn.get(i);
+            if (r.name().equals(String.withCString("@align")))
+                anchors.add((Object*)r);
+            else
+                ranges.add((Object*)r);
+            }
         if (ranges.count() == (u32)0)
             return sections;
         // 1. Sort the runs by position (stable insertion — few runs).
@@ -607,7 +624,17 @@ class MachOLink
                 // had, so nothing inside it loses its alignment when an
                 // odd-sized ObjC run before it is pulled out (the reference's
                 // rule).
-                while ((out.length() & (u32)15) != (run & (u32)15))
+                // More than 16 where an object the run holds asked for it
+                // (its "@align" mark): a page-aligned global array stays on
+                // a page, or Metal copies it instead of sharing it (#34).
+                u32 al = (u32)16;
+                for (u32 q = (u32)0; q < anchors.count(); q = q + (u32)1)
+                    {
+                    MachOObjcRange* an = (MachOObjcRange*)anchors.get(q);
+                    if (an.off() >= run && an.off() < gapEnd && an.flags() > al)
+                        al = an.flags();
+                    }
+                while ((out.length() & (al - (u32)1)) != (run & (al - (u32)1)))
                     out.appendByte((u8)((u32)0));
                 MachOLink.addMove(moves, run, gapEnd - run, out.length());
                 for (u32 k = run; k < gapEnd; k = k + (u32)1)
