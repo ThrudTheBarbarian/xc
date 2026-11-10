@@ -4799,6 +4799,12 @@ void main(void)
     // LLVM IR and the C path reads that (cpp-front-end.md, "The C path").
     IRModule* mod = (IRModule*)0;
     LanguageRow* lang = Languages.forFile(d.fe().input());
+    // -std= is clang's, for a C or C++ file; xc has one language.
+    if (lang == (LanguageRow*)0 && cPathStd() != (String*)0)
+        {
+        Stdio.printf("xcc: error: -std= is for a C or C++ file, not '%s'\n", d.fe().input().cString());
+        Process.exit((i32)1); return;
+        }
     if (lang != (LanguageRow*)0)
         {
         cPathSetLanguage(lang);
@@ -7036,7 +7042,7 @@ DriverOptions* parseDriverArgs(void)
             String* v = a.substringFromByte((u32)5);
             for (u32 k = 0; k < v.byteLength(); k = k + 1) {
                 u8 c = v.byteAt(k);
-                if (!((c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'0' && c <= (u8)'9') || c == (u8)'+')) {
+                if (!((c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'0' && c <= (u8)'9') || c == (u8)'+' || c == (u8)':')) {
                     Stdio.printf("xcc: error: -std= takes a language standard such as c11 or c++17\n");
                     Process.exit((i32)1);
                 }

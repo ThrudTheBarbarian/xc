@@ -72,6 +72,7 @@ void cPathSetFpContract(String* v) { gCPathFpContract = v; }
 // -std=<x>: the language standard, handed to clang; 0 for clang's default.
 String* gCPathStd;
 void cPathSetStd(String* v) { gCPathStd = v; }
+String* cPathStd(void) { return gCPathStd; }
 // The source's row of the language table (Language.xc): the command that
 // writes its LLVM IR, and which functions xcc takes. 0: C's.
 LanguageRow* gCPathLang;
