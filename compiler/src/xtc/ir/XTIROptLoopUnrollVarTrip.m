@@ -834,11 +834,16 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
             {
             // Invariant iff every Use operand is either defined outside the
             // body (not remapped) or itself a shared invariant clone.
+            // Vector arithmetic on invariants (sort_small's splat(r) *
+            // splat(40503)) is shared the same way: one copy of it, not U
+            // copies for LICM to hoist side by side.
+            BOOL vecArith = insn.opcode == XTIROpVAdd || insn.opcode == XTIROpVSub || insn.opcode == XTIROpVMul ||
+                            insn.opcode == XTIROpVAnd || insn.opcode == XTIROpVOr || insn.opcode == XTIROpVXor;
             BOOL shareable = NO;
             if (insn.result && !insn.memoryResult && insn != c.ivNext &&
                 (insn.opcode == XTIROpVSplat || insn.opcode == XTIROpConst ||
                  insn.opcode == XTIROpZExt || insn.opcode == XTIROpSExt ||
-                 insn.opcode == XTIROpTrunc))
+                 insn.opcode == XTIROpTrunc || vecArith))
                 {
                 shareable = YES;
                 for (XTIROperand* o in insn.operands)
@@ -857,7 +862,7 @@ static XTIRInsn* buildLike(XTIRInsn* insn, XTIRValue* _Nullable result,
                     shareable = NO;
                 // In a large body none is: each is a register the copies' own
                 // values need.
-                if (insn.opcode == XTIROpVSplat && B.instructions.count > XTIR_VEC_SPLAT_BIG_BODY)
+                if ((insn.opcode == XTIROpVSplat || vecArith) && B.instructions.count > XTIR_VEC_SPLAT_BIG_BODY)
                     shareable = NO;
                 }
             if (shareable && sharedPure[@(insn.result.valueId)])

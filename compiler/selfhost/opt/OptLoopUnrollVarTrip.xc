@@ -976,7 +976,11 @@
         {
         if (n.res() == (IRValue*)0 || n.memRes() != (IRValue*)0 || n == c.ivNext())
             return false;
-        if (!n.op().equals(String.withCString("VSplat")) && !n.op().equals(String.withCString("Const")) && !n.op().equals(String.withCString("ZExt")) && !n.op().equals(String.withCString("SExt")) && !n.op().equals(String.withCString("Trunc")))
+        // Vector arithmetic on invariants (sort_small's splat(r) *
+        // splat(40503)) is shared the same way. As the reference.
+        bool vecArith = n.op().equals(String.withCString("VAdd")) || n.op().equals(String.withCString("VSub")) || n.op().equals(String.withCString("VMul"))
+                     || n.op().equals(String.withCString("VAnd")) || n.op().equals(String.withCString("VOr")) || n.op().equals(String.withCString("VXor"));
+        if (!vecArith && !n.op().equals(String.withCString("VSplat")) && !n.op().equals(String.withCString("Const")) && !n.op().equals(String.withCString("ZExt")) && !n.op().equals(String.withCString("SExt")) && !n.op().equals(String.withCString("Trunc")))
             return false;
         // A splat of a value the body defines (a constant the vectoriser left
         // in the body, past its hoisting budget) is made again in each copy:
@@ -988,7 +992,7 @@
             return false;
         // In a large body none is: each is a register the copies' own values
         // need.
-        if (n.op().equals(String.withCString("VSplat")) && c.b().insns().count() > (u32)VEC_SPLAT_BIG_BODY)
+        if ((vecArith || n.op().equals(String.withCString("VSplat"))) && c.b().insns().count() > (u32)VEC_SPLAT_BIG_BODY)
             return false;
         for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
             {

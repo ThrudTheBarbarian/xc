@@ -1005,6 +1005,32 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
 // Ryzen 9 9955HX. A single-block body only (the vectoriser's loops), the iv
 // stepping by a constant, and a chain each of whose links has one use. As the
 // port's vecIVs.
+//
+// The chain may go on through an affine function of the lane index: a VSub
+// of a loop invariant from it, and, on 32-bit integer lanes, a VMul by a
+// constant splat (`a[i] = (i * K) ^ x`). The phi then holds (i + l) * K and
+// steps by splat(step * K), so the body has an add where it had a multiply
+// (sort_small's fill). The constant is the splat's own Const or immediate of
+// the lane type, never a cast of one.
+static int64_t xtvLane32(int64_t v, BOOL isSigned)
+    {
+    uint64_t u = (uint64_t)v & 0xFFFFFFFFull;
+    if (isSigned && u >= 0x80000000ull)
+        return (int64_t)u - 0x100000000ll;
+    return (int64_t)u;
+    }
+
+// a * b modulo 2^32, both taken modulo 2^32 first, in two 16-bit halves so no
+// 64-bit product overflows.
+static int64_t xtvMul32(int64_t a, int64_t b)
+    {
+    int64_t ua = (int64_t)((uint64_t)a & 0xFFFFFFFFull);
+    int64_t ub = (int64_t)((uint64_t)b & 0xFFFFFFFFull);
+    int64_t lo = (ua * (ub & 0xFFFF)) & 0xFFFFFFFFll;
+    int64_t hi = ((ua * (ub >> 16)) & 0xFFFFll) << 16;
+    return (lo + hi) & 0xFFFFFFFFll;
+    }
+
 - (void)vectorIVsInFunction:(XTIRFunction*)fn
     {
     NSMutableDictionary<NSNumber*, XTIRInsn*>* defOf = [NSMutableDictionary dictionary];
@@ -1093,6 +1119,9 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
                 // read once (by the next).
                 NSMutableArray<XTIRInsn*>* chain = [NSMutableArray arrayWithObject:sp];
                 NSMutableArray<XTIRInsn*>* bodySplats = [NSMutableArray array];
+                NSMutableDictionary<NSNumber*, XTIROperand*>* mulK = [NSMutableDictionary dictionary]; // chain index -> K
+                int64_t stepK = 1; // the product of the VMul links' constants, modulo 2^32
+                NSMutableArray<XTIRInsn*>* mulSplats = [NSMutableArray array]; // read by their VMul alone
                 XTIRInsn* cur = sp;
                 while (uses[@(cur.result.valueId)].integerValue == 1)
                     {
@@ -1101,12 +1130,42 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
                         for (XTIROperand* o in u.operands)
                             if (o.kind == XTIROperandKindUse && o.valueId == cur.result.valueId)
                                 nextL = u;
-                    if (!nextL || nextL.opcode != XTIROpVAdd || !nextL.result || nextL.operands.count != 2)
+                    if (!nextL || !nextL.result || nextL.operands.count != 2
+                        || !(nextL.opcode == XTIROpVAdd || nextL.opcode == XTIROpVSub || nextL.opcode == XTIROpVMul))
                         break;
-                    XTIROperand* other = (nextL.operands[0].kind == XTIROperandKindUse
-                                          && nextL.operands[0].valueId == cur.result.valueId) ? nextL.operands[1] : nextL.operands[0];
+                    BOOL curLeft = nextL.operands[0].kind == XTIROperandKindUse && nextL.operands[0].valueId == cur.result.valueId;
+                    XTIROperand* other = curLeft ? nextL.operands[1] : nextL.operands[0];
                     if (other.kind != XTIROperandKindUse)
                         break;
+                    if (nextL.opcode == XTIROpVSub && !curLeft)
+                        break; // invariant - lanes runs backwards
+                    if (nextL.opcode == XTIROpVMul)
+                        {
+                        XTIRType* mlane = nextL.result.type.pointeeType;
+                        if (!mlane || !(mlane.kind == XTIRTypeKindI32 || mlane.kind == XTIRTypeKindU32))
+                            break;
+                        XTIRInsn* od = defOf[@(other.valueId)];
+                        if (!od || od.opcode != XTIROpVSplat || od.operands.count < 1)
+                            break;
+                        XTIROperand* so = od.operands[0];
+                        XTIRInsn* kd = so.kind == XTIROperandKindUse ? defOf[@(so.valueId)] : nil;
+                        XTIROperand* ko = so.kind == XTIROperandKindImmI ? so
+                                        : (kd && kd.opcode == XTIROpConst && kd.operands.count >= 1
+                                           && kd.operands[0].kind == XTIROperandKindImmI && kd.result.type.kind == mlane.kind)
+                                            ? kd.operands[0] : nil;
+                        if (!ko || !ko.type || ko.type.kind != mlane.kind)
+                            break;
+                        mulK[@(chain.count)] = ko;
+                        // Vector code outlives dead-code elimination, so the
+                        // constant's splat goes with the VMul that read it.
+                        XTIRBlock* odb = defBlk[@(other.valueId)];
+                        if (uses[@(other.valueId)].integerValue == 1 && (odb == B || odb == PH))
+                            [mulSplats addObject:od];
+                        stepK = xtvMul32(stepK, ko.intValue);
+                        [chain addObject:nextL];
+                        cur = nextL;
+                        continue;
+                        }
                     XTIRBlock* ob = defBlk[@(other.valueId)];
                     if (ob == H)
                         break;
@@ -1147,7 +1206,22 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
                     BOOL left = L.operands[0].kind == XTIROperandKindUse && L.operands[0].valueId == prevL.result.valueId;
                     XTIROperand* other = left ? L.operands[1] : L.operands[0];
                     XTIRInsn* od = defOf[@(other.valueId)];
-                    if (od && [bodySplats containsObject:od])
+                    if (mulK[@(q)])
+                        {
+                        // The constant's own splat, in the preheader: the
+                        // body's may be read elsewhere, or be a Const's.
+                        XTIRType* ml = L.result.type.pointeeType;
+                        XTIRValue* mc = newVal(ml, PH);
+                        [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst result:mc
+                                                                           operands:@[ mulK[@(q)] ]
+                                                                             dbgLoc:nil]];
+                        XTIRValue* ms = newVal(L.result.type, PH);
+                        [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVSplat result:ms
+                                                                           operands:@[ [XTIROperand useWithValueId:mc.valueId] ]
+                                                                             dbgLoc:nil]];
+                        other = [XTIROperand useWithValueId:ms.valueId];
+                        }
+                    else if (od && [bodySplats containsObject:od])
                         {
                         XTIRValue* cs = newVal(od.result.type, PH);
                         [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVSplat result:cs
@@ -1157,12 +1231,13 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
                     XTIRValue* nv = newVal(L.result.type, PH);
                     NSArray* ops = left ? @[ [XTIROperand useWithValueId:acc.valueId], other ]
                                         : @[ other, [XTIROperand useWithValueId:acc.valueId] ];
-                    [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVAdd result:nv operands:ops dbgLoc:nil]];
+                    [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:L.opcode result:nv operands:ops dbgLoc:nil]];
                     acc = nv;
                     }
+                int64_t laneStep = mulK.count ? xtvLane32(xtvMul32(step, stepK), XTIRTypeKindIsSigned(lane.kind)) : step;
                 XTIRValue* kc = newVal(lane, PH);
                 [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpConst result:kc
-                                                                   operands:@[ [XTIROperand immIWithType:lane value:step] ]
+                                                                   operands:@[ [XTIROperand immIWithType:lane value:laneStep] ]
                                                                      dbgLoc:nil]];
                 XTIRValue* ks = newVal(vt, PH);
                 [PH.instructions addObject:[[XTIRInsn alloc] initWithOpcode:XTIROpVSplat result:ks
@@ -1199,6 +1274,8 @@ static XTIRSymbolId xtvIotaSymbol(XTIRType* laneType, NSUInteger vecBytes, XTIRF
                     [B.instructions removeObjectIdenticalTo:L];
                 for (XTIRInsn* L in bodySplats)
                     [B.instructions removeObjectIdenticalTo:L];
+                for (XTIRInsn* L in mulSplats)
+                    [defBlk[@(L.result.valueId)].instructions removeObjectIdenticalTo:L];
                 }
             }
         }
