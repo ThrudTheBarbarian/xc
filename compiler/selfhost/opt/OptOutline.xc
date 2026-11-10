@@ -2618,7 +2618,7 @@
             IRSymbol* twin = (IRSymbol*)twins.get((Hashable*)fn.name());
             if (twin == (IRSymbol*)0 || fn.blocks().count() == 0)
                 continue;
-            if (outlined && libMadeBlock(fn))
+            if (outlined && self.libMadeBlock(fn))
                 continue;
             // The body: the twin's result for the same arguments.
             u32 np = fn.params().count();
