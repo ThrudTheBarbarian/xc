@@ -6,7 +6,7 @@ description: Plain C built by xcc, against the same C built by GCC and clang, on
 xcc compiles C ([C programs](/compiler/usage/c-programs/)): it reads a `.c`
 file through clang's front end and generates the code itself. These are the
 seven par benchmarks as plain C, the same files for every compiler, timed on
-an AMD Ryzen 9 9955HX (32 hardware threads) running Linux, with xcc 0.9.6,
+an AMD Ryzen 9 9955HX (32 hardware threads) running Linux, with xcc 0.9.7,
 GCC 15.2 and clang 21.1, and on a Raspberry Pi 5.
 
 Each machine has two tables, which measure different things and are never
@@ -24,22 +24,22 @@ Milliseconds; the median of up to fifteen runs.
 
 | benchmark | xcc | GCC | clang | xcc against GCC | xcc against clang |
 |---|---|---|---|---|---|
-| `mandel_deep` | 8601 | 56138 | 58389 | **6.5× faster** | **6.8× faster** |
-| `mandelbrot` | 55.9 | 326 | 334 | **5.8× faster** | **6.0× faster** |
+| `mandel_deep` | 8592 | 56137 | 58382 | **6.5× faster** | **6.8× faster** |
+| `mandelbrot` | 55.8 | 326 | 334 | **5.8× faster** | **6.0× faster** |
 | `md5` | 229 | 386 | 212 | **1.69× faster** | **1.08× slower** |
 | `md5_mask` | 188 | 277 | 176 | **1.47× faster** | **1.07× slower** |
-| `nbody` | 6.00 | 27.3 | 96.0 | **4.5× faster** | **16.0× faster** |
-| `perlin` | 81.7 | 64.3 | 74.8 | **1.27× slower** | **1.09× slower** |
-| `saxpy` | 3.32 | 3.28 | 3.57 | **1.01× slower** | **1.07× faster** |
+| `nbody` | 6.01 | 27.3 | 95.9 | **4.5× faster** | **16.0× faster** |
+| `perlin` | 75.4 | 64.4 | 74.8 | **1.17× slower** | **1.01× slower** |
+| `saxpy` | 3.32 | 3.29 | 3.57 | **1.01× slower** | **1.08× faster** |
 | geometric mean | | | | **2.3× faster** | **2.5× faster** |
 
 The three do not compute quite the same arithmetic. GCC fuses a multiply and
 the add that follows it into one fused multiply-add instruction by default
-(`-ffp-contract=fast`, outside strict ISO C mode), and clang does so within a
-single expression (`-ffp-contract=on`). xcc's build of the C on x86-64 rounds
-each multiply and each add on its own, as ISO C describes it, so its results
-are the ones the C standard gives. `perlin` is mostly multiply-adds, and that
-difference is a large part of its gap.
+(`-ffp-contract=fast`, outside strict ISO C mode), and clang and xcc do so
+within a single expression (`-ffp-contract=on`). xcc's fused code is in the
+AVX2 and AVX-512 copies of a function that the program picks at load, so on
+this machine its multiply-adds are fused too. `perlin` is mostly
+multiply-adds, and GCC's fusing across statements is part of its lead there.
 
 ### Every thread
 
@@ -58,14 +58,14 @@ Milliseconds; the median of up to fifteen runs. xcc is ahead of both on
 
 | benchmark | xcc | GCC | clang | xcc against GCC | xcc against clang |
 |---|---|---|---|---|---|
-| `mandel_deep` | 372 | 2175 | 2228 | **5.9× faster** | **6.0× faster** |
-| `mandelbrot` | 2.45 | 12.2 | 12.5 | **5.0× faster** | **5.1× faster** |
-| `md5` | 9.40 | 16.1 | 12.6 | **1.72× faster** | **1.34× faster** |
-| `md5_mask` | 8.17 | 12.1 | 13.0 | **1.48× faster** | **1.59× faster** |
-| `nbody` | 0.46 | 1.30 | 9.85 | **2.8× faster** | **22× faster** |
-| `perlin` | 5.61 | 4.38 | 6.77 | **1.28× slower** | **1.21× faster** |
-| `saxpy` | 2.24 | 2.18 | 2.35 | **1.03× slower** | **1.05× faster** |
-| geometric mean | | | | **2.1× faster** | **2.9× faster** |
+| `mandel_deep` | 369 | 2174 | 2227 | **5.9× faster** | **6.0× faster** |
+| `mandelbrot` | 2.44 | 12.2 | 12.8 | **5.0× faster** | **5.2× faster** |
+| `md5` | 9.40 | 16.1 | 14.2 | **1.72× faster** | **1.51× faster** |
+| `md5_mask` | 8.16 | 12.1 | 13.5 | **1.48× faster** | **1.65× faster** |
+| `nbody` | 0.45 | 1.29 | 12.2 | **2.9× faster** | **27× faster** |
+| `perlin` | 5.53 | 4.37 | 7.05 | **1.27× slower** | **1.27× faster** |
+| `saxpy` | 2.24 | 2.17 | 2.34 | **1.03× slower** | **1.04× faster** |
+| geometric mean | | | | **2.1× faster** | **3.1× faster** |
 
 The same programs on GPUs, where `--par-style=auto` sends them by default, are on
 [Performance: GPU](/compiler/benchmarks/gpu/).
@@ -73,7 +73,7 @@ The same programs on GPUs, where `--par-style=auto` sends them by default, are o
 ## Raspberry Pi 5
 
 The same seven programs on a Raspberry Pi 5 Model B Rev 1.0 (Cortex-A76), its 4 cores, under Raspberry Pi
-OS: xcc 0.9.6 cross-built them with `-A arm64-linux`; GCC 14.2 and clang 19.1
+OS: xcc 0.9.7 cross-built them with `-A arm64-linux`; GCC 14.2 and clang 19.1
 built them on the Pi, with the same flags as above.
 
 ### One thread
@@ -82,30 +82,30 @@ Milliseconds; the median of up to fifteen runs:
 
 | benchmark | xcc | GCC | clang | xcc against GCC | xcc against clang |
 |---|---|---|---|---|---|
-| `mandel_deep` | 50984 | 127670 | 132472 | **2.5× faster** | **2.6× faster** |
-| `mandelbrot` | 323 | 770 | 809 | **2.4× faster** | **2.5× faster** |
+| `mandelbrot` | 318 | 770 | 809 | **2.4× faster** | **2.5× faster** |
 | `md5` | 2860 | 5154 | 2913 | **1.80× faster** | **1.02× faster** |
 | `md5_mask` | 2346 | 4107 | 2386 | **1.75× faster** | **1.02× faster** |
 | `nbody` | 94.9 | 108 | 97.2 | **1.13× faster** | **1.02× faster** |
-| `perlin` | 324 | 286 | 339 | **1.14× slower** | **1.05× faster** |
-| `saxpy` | 30.0 | 30.4 | 30.2 | **1.02× faster** | **1.01× faster** |
-| geometric mean | | | | **1.52× faster** | **1.33× faster** |
+| `perlin` | 325 | 286 | 339 | **1.14× slower** | **1.04× faster** |
+| `saxpy` | 30.2 | 30.5 | 30.2 | **1.01× faster** | **the same** |
+| `mandel_deep` | pending | | | | |
+| geometric mean | | | | **1.40× faster** | **1.19× faster** |
 
 ### Every thread
 
 xcc `--par-style=auto`, GCC and clang with OpenMP, milliseconds. xcc is ahead
-of both on 5 of the 7:
+of both on 4 of the 6:
 
 | benchmark | xcc | GCC | clang | xcc against GCC | xcc against clang |
 |---|---|---|---|---|---|
-| `mandel_deep` | 13577 | 31951 | 34013 | **2.4× faster** | **2.5× faster** |
-| `mandelbrot` | 86.3 | 193 | 203 | **2.2× faster** | **2.4× faster** |
+| `mandelbrot` | 85.0 | 193 | 203 | **2.3× faster** | **2.4× faster** |
 | `md5` | 717 | 1296 | 732 | **1.81× faster** | **1.02× faster** |
 | `md5_mask` | 580 | 1027 | 598 | **1.77× faster** | **1.03× faster** |
 | `nbody` | 23.8 | 26.9 | 24.1 | **1.13× faster** | **1.01× faster** |
-| `perlin` | 81.4 | 71.6 | 88.2 | **1.14× slower** | **1.08× faster** |
-| `saxpy` | 34.8 | 34.5 | 34.3 | **1.01× slower** | **1.02× slower** |
-| geometric mean | | | | **1.49× faster** | **1.31× faster** |
+| `perlin` | 81.3 | 71.6 | 88.2 | **1.14× slower** | **1.08× faster** |
+| `saxpy` | 34.7 | 34.5 | 34.4 | **1.01× slower** | **1.01× slower** |
+| `mandel_deep` | pending | | | | |
+| geometric mean | | | | **1.39× faster** | **1.18× faster** |
 
 On the Pi, xcc's escape vectoriser runs `mandelbrot`'s and `mandel_deep`'s
 per-pixel loop four pixels at a time in NEON, which neither GCC nor clang
@@ -121,6 +121,6 @@ The spread from run to run is wide for all three compilers on this machine
 never the figure. Every build of a program gave the same checksum.
 
 The C sources and their OpenMP copies are in
-[xcc-c-bench-sources-0.9.6.tar.bz2](/downloads/xcc-c-bench-sources-0.9.6.tar.bz2),
+[xcc-c-bench-sources-0.9.7.tar.bz2](/downloads/xcc-c-bench-sources-0.9.7.tar.bz2),
 and in the repository's `benchmark/par/c/` and `benchmark/par/c/openmp/`;
 `benchmark/par/c_run.py` repeats the whole measurement.
