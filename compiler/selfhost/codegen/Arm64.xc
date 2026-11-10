@@ -4870,6 +4870,71 @@ class Arm64
         return regOf;
     }
 
+    // The float homes and the vector registers (#20). The vector registers are
+    // given out first; a float may then take one over any stretch where no
+    // vector value holds it. A register goes from fpCaller altogether when a
+    // vector phi or anything coalesced with one holds it (written by edge
+    // copies, as a scalar phi's), a lane group fills it (its members are
+    // read past their own intervals), a value on it has no interval, or it is
+    // the remat and spill scratch v29-v31 once anything was given up. On any
+    // other the vector values' intervals are placed first (_fpSeed*), so
+    // assignTier fits floats around them. As the reference.
+    Array* _fpSeedReg;
+    Array* _fpSeedLo;
+    Array* _fpSeedHi;
+    void vecHomeSeeds(IRFunc* fn, Array* fpCaller)
+    {
+        Map* phiVal = new Map();
+        for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1) {
+            IRBlock* bb = (IRBlock*)fn.blocks().get(b);
+            for (u32 i = (u32)0; i < bb.phis().count(); i = i + (u32)1) {
+                IRInsn* p = (IRInsn*)bb.phis().get(i);
+                if (p.res() == (IRValue*)0 || !isVecTy(p.res().ty())) continue;
+                phiVal.set((Hashable*)p.res(), (Object*)p.res());
+                for (u32 k = (u32)0; k < p.ops().count(); k = k + (u32)1) {
+                    IROperand* o = (IROperand*)p.ops().get(k);
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                        phiVal.set((Hashable*)o.val(), (Object*)o.val());
+                }
+            }
+        }
+        bool scratch = (_vRemat != (Map*)0 && _vRemat.count() > (u32)0) || (_vSpill != (Map*)0 && _vSpill.count() > (u32)0);
+        Map* bad = new Map();
+        if (scratch) {
+            bad.set((Hashable*)String.withCString("d29"), (Object*)String.withCString("d29"));
+            bad.set((Hashable*)String.withCString("d30"), (Object*)String.withCString("d30"));
+            bad.set((Hashable*)String.withCString("d31"), (Object*)String.withCString("d31"));
+        }
+        Array* sReg = new Array();
+        Array* sLo = new Array();
+        Array* sHi = new Array();
+        Array* vk = _vecReg == (Map*)0 ? new Array() : _vecReg.allKeys();
+        for (u32 i = (u32)0; i < vk.count(); i = i + (u32)1) {
+            IRValue* v = (IRValue*)vk.get(i);
+            String* g = (String*)_vecReg.get((Hashable*)v);
+            if (g == (String*)0 || g.byteLength() < (u32)2) continue;
+            String* d = String.withCString("d");
+            d.append(g.substringFromByte((u32)1));
+            if (inMap(phiVal, v) || _laneLeader.get((Hashable*)v) != (Object*)0 || inMap(_laneSkip, v)
+                || _start.get((Hashable*)v) == (Object*)0 || _end.get((Hashable*)v) == (Object*)0) {
+                bad.set((Hashable*)d, (Object*)d);
+                continue;
+            }
+            sReg.add((Object*)d);
+            sLo.add((Object*)Number.withI32(startOf(v)));
+            sHi.add((Object*)Number.withI32(endOf(v)));
+        }
+        for (u32 i = fpCaller.count(); i > (u32)0; i = i - (u32)1)
+            if (bad.get((Hashable*)fpCaller.get(i - (u32)1)) != (Object*)0)
+                fpCaller.removeAt(i - (u32)1);
+        for (u32 i = (u32)0; i < sReg.count(); i = i + (u32)1) {
+            if (bad.get((Hashable*)sReg.get(i)) != (Object*)0) continue;
+            _fpSeedReg.add(sReg.get(i));
+            _fpSeedLo.add(sLo.get(i));
+            _fpSeedHi.add(sHi.get(i));
+        }
+    }
+
     // No float scalar anywhere in fn: no value of type F32/F64, defined or
     // read. Then the FP allocator homes nothing and v8-v15 are the vectors'.
     static bool vecFpFree(IRFunc* fn)
@@ -9874,15 +9939,16 @@ class Arm64
         fpCallee.add((Object*)String.withCString("d13"));
         fpCallee.add((Object*)String.withCString("d14"));
         fpCallee.add((Object*)String.withCString("d15"));
-        // There is no FP caller-saved tier: v0-v15 are FP scratch and v16-v31
-        // are the auto-vectoriser's pool.
-        // d16-d31 are caller-saved and belong to the AUTO-VECTORISER's pool —
-        // but only in a function that vectorises. One that does not leaves
-        // sixteen FP registers unused while its own FP values spill: float_math
-        // unrolls four copies of `acc += (double)(a[i] * b[i])` and wants more
-        // than the eight callee-saved d8-d15. Gated on the function having no
-        // Vec-typed value anywhere; _crossCall keeps these off anything live
-        // across a call, as it does for the GP argument tier.
+        // d18-d31 are caller-saved and are the AUTO-VECTORISER's pool. A
+        // function that leaves them unused would spill its own FP values with
+        // sixteen registers free: float_math unrolls four copies of
+        // `acc += (double)(a[i] * b[i])` and wants more than the eight
+        // callee-saved d8-d15. The vector registers are given out before this
+        // (allocateVectorRegisters), so in a function with vector values the
+        // floats take the ones it left: a map loop over its index that
+        // vectorised used to put every float in C perlin's main in a slot.
+        // _crossCall keeps these off anything live across a call, as it does
+        // for the GP argument tier.
         bool fnHasVector = false;
         for (u32 b = (u32)0; b < fn.blocks().count(); b = b + (u32)1)
             {
@@ -9901,7 +9967,6 @@ class Arm64
                 }
             }
         Array* fpCaller = new Array();
-        if (!fnHasVector)
             {
             fpCaller.add((Object*)String.withCString("d18"));
             fpCaller.add((Object*)String.withCString("d19"));
@@ -9927,9 +9992,15 @@ class Arm64
             fpCaller.add((Object*)String.withCString("d5"));
             fpCaller.add((Object*)String.withCString("d6"));
             }
+        _fpSeedReg = new Array();
+        _fpSeedLo = new Array();
+        _fpSeedHi = new Array();
+        if (fnHasVector)
+            vecHomeSeeds(fn, fpCaller);
 
         assignTier(fn, gp, gpCallee, gpCaller);
         assignTier(fn, fp, fpCallee, fpCaller);
+        _fpSeedReg = (Array*)0;
         sortSaved(gpCallee, fpCallee);
         coalescePhiInputs(fn, gpCallee, fpCallee);
         coalesceArmPhis(fn, gpCallee, fpCallee);
@@ -10519,6 +10590,13 @@ class Arm64
             hi.add((Object*)new Array());
             excl.add((Object*)Number.withU32((u32)0));
         }
+        // The vector values on the float registers (vecHomeSeeds).
+        for (u32 q = (u32)0; _fpSeedReg != (Array*)0 && q < _fpSeedReg.count(); q = q + (u32)1)
+            for (u32 r = (u32)0; r < regs.count(); r = r + (u32)1)
+                if (((String*)regs.get(r)).equals((String*)_fpSeedReg.get(q))) {
+                    ((Array*)lo.get(r)).add(_fpSeedLo.get(q));
+                    ((Array*)hi.get(r)).add(_fpSeedHi.get(q));
+                }
 
         for (u32 c = (u32)0; c < cands.count(); c = c + (u32)1) {
             IRValue* v = (IRValue*)cands.get(c);
