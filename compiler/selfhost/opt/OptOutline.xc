@@ -1160,6 +1160,15 @@
     // gpuLength(self, k): for record field k a pointer capture, the bytes from
     // it to the end of its heap block (Par.spanOf, as a generated block's);
     // -1 for any other field. Its name.
+    //
+    // Memory the runtime did not allocate (C's malloc, C++'s operator new) has
+    // no span: there the length is the loop's own footprint, when it has one.
+    // A base the loop reaches only at [k*i + c] (c from c0 to c1), on every
+    // iteration, in a loop that leaves only from its header, is touched from
+    // element k*lo + c0 to k*(hi-1) + c1 (the other way round for k < 0): its
+    // length is the bytes up to and including the highest, when the lowest is
+    // not below the pointer. The GPU's buffer is copied in from it and back,
+    // so an element the loop does not write keeps its value.
     final String* ppGpuLength(IRModule* m, String* stem, String* objT, String* recT, Array* liveIns)
         {
         String* i64t = String.withCString("I64");
@@ -1177,6 +1186,12 @@
         IRValue* acc = ppEmit(b, String.withCString("Const"), i64t, IROperand.immI((i64)0 - (i64)1, i64t), (IROperand*)0, (IROperand*)0);
         IRValue* mm = mem;
         IRValue* rec = (IRValue*)0;
+        // objBytes writes lo and hi into the record (fields 1 and 2) and
+        // returns it; ctx does not.
+        bool haveObjBytes = funcNamed(m, String.withCString("ParFnChunk$objBytes")) != (IRFunc*)0
+                            || symNamed(m, String.withCString("ParFnChunk$objBytes")) != (IRSymbol*)0;
+        IRValue* lo = (IRValue*)0;
+        IRValue* hi = (IRValue*)0;
         for (u32 i = (u32)0; i < liveIns.count(); i = i + (u32)1)
             {
             String* t = ((IRValue*)liveIns.get(i)).ty();
@@ -1188,7 +1203,8 @@
                 continue;
             if (rec == (IRValue*)0)
                 {
-                IRValue* cb = ppCall(b, String.withCString("ParFnChunk$ctx"), u8p, IROperand.useVal(sv), (IROperand*)0, (IROperand*)0, mm);
+                IRValue* cb = ppCall(b, String.withCString(haveObjBytes ? "ParFnChunk$objBytes" : "ParFnChunk$ctx"), u8p,
+                                     IROperand.useVal(sv), (IROperand*)0, (IROperand*)0, mm);
                 mm = _ppLastMem;
                 rec = ppEmit(b, String.withCString("Bitcast"), recT, IROperand.useVal(cb), (IROperand*)0, (IROperand*)0);
                 }
@@ -1199,7 +1215,66 @@
             IRValue* no = ppEmit(b, String.withCString("Const"), String.withCString("Bool"), IROperand.immI((i64)0, String.withCString("Bool")), (IROperand*)0, (IROperand*)0);
             IRValue* sp = ppCall(b, String.withCString("Par$spanOf"), i64t, IROperand.useVal(pv), IROperand.useVal(esv), IROperand.useVal(no), mm);
             mm = _ppLastMem;
-            IRValue* fk = ppEmit(b, String.withCString("Const"), String.withCString("I32"), IROperand.immI((i64)((u32)3 + i), String.withCString("I32")), (IROperand*)0, (IROperand*)0);
+            u32 g = ppFootprintOf((IRValue*)liveIns.get(i));
+            if (Platform.env(String.withCString("XC_FP_DEBUG")).byteLength() > 0)
+                {
+                Stdio.error(String.withFormat("fp: %s live-in %u ty %s g=%u objBytes=%u early=%u keys=%u\n", stem.cString(), i, t.cString(), g, haveObjBytes ? 1 : 0, _ppEarlyExit ? 1 : 0, _ppGKeys == (Array*)0 ? 0 : _ppGKeys.count()));
+                for (u32 q = 0; _ppGKeys != (Array*)0 && q < _ppGKeys.count(); q = q + 1)
+                    Stdio.error(String.withFormat("fp:   k=%ld c0=%ld c1=%ld\n", ((Number*)_ppGOff.get(q)).asI64(), ((Number*)_ppGOffLo.get(q)).asI64(), ((Number*)_ppGOffHi.get(q)).asI64()));
+                for (u32 q = 0; _ppGKeys != (Array*)0 && q < _ppGKeys.count(); q = q + 1)
+                    Stdio.error(String.withFormat("fp:   key %s atIv=%u unc=%u es=%u base=%s v=%s\n", ((String*)_ppGKeys.get(q)).cString(),
+                        ((Number*)_ppGAtIv.get(q)).asU32(), ((Number*)_ppGUncond.get(q)).asU32(), ((Number*)_ppGElem.get(q)).asU32(),
+                        ((IRValue*)_ppGBase.get(q)).ty().cString(), ((IRValue*)liveIns.get(i)).ty().cString()));
+                IRInsn* dv = (IRInsn*)_ppFpDefOf.get((Hashable*)liveIns.get(i));
+                Stdio.error(String.withFormat("fp:   v def %s root-eq0=%u\n", dv == (IRInsn*)0 ? "none" : dv.op().cString(),
+                    ppCastRoot((IRValue*)_ppGBase.get(0)) == ppCastRoot((IRValue*)liveIns.get(i)) ? 1 : 0));
+                for (u32 q = 0; q < _ppGKeys.count(); q = q + 1)
+                    {
+                    IRInsn* db = (IRInsn*)_ppFpDefOf.get((Hashable*)_ppGBase.get(q));
+                    Stdio.error(String.withFormat("fp:   base %u def %s\n", q, db == (IRInsn*)0 ? "none" : db.op().cString()));
+                    }
+                }
+            if (haveObjBytes && g != $FFFFFFFF)
+                {
+                if (lo == (IRValue*)0)
+                    {
+                    lo = ppFieldLoad(b, rec, 1, i64t, mm);
+                    mm = _ppLastMem;
+                    hi = ppFieldLoad(b, rec, 2, i64t, mm);
+                    mm = _ppLastMem;
+                    }
+                i64 kk = ((Number*)_ppGOff.get(g)).asI64();
+                i64 c0 = ((Number*)_ppGOffLo.get(g)).asI64();
+                i64 c1 = ((Number*)_ppGOffHi.get(g)).asI64();
+                i64 ge = (i64)((Number*)_ppGElem.get(g)).asU32();
+                IRValue* one = ppEmit(b, String.withCString("Const"), i64t, IROperand.immI(1, i64t), (IROperand*)0, (IROperand*)0);
+                IRValue* last = ppEmit(b, String.withCString("Sub"), i64t, IROperand.useVal(hi), IROperand.useVal(one), (IROperand*)0);
+                IRValue* kv = ppEmit(b, String.withCString("Const"), i64t, IROperand.immI(kk, i64t), (IROperand*)0, (IROperand*)0);
+                // The lowest and highest element: k*lo and k*(hi-1), the
+                // smaller first, then c0 and c1 added.
+                IRValue* atLo = ppEmit(b, String.withCString("Mul"), i64t, IROperand.useVal(lo), IROperand.useVal(kv), (IROperand*)0);
+                IRValue* atHi = ppEmit(b, String.withCString("Mul"), i64t, IROperand.useVal(last), IROperand.useVal(kv), (IROperand*)0);
+                IRValue* least = kk < 0 ? atHi : atLo;
+                IRValue* most = kk < 0 ? atLo : atHi;
+                least = ppEmit(b, String.withCString("Add"), i64t, IROperand.useVal(least),
+                               IROperand.useVal(ppEmit(b, String.withCString("Const"), i64t, IROperand.immI(c0, i64t), (IROperand*)0, (IROperand*)0)), (IROperand*)0);
+                most = ppEmit(b, String.withCString("Add"), i64t, IROperand.useVal(most),
+                              IROperand.useVal(ppEmit(b, String.withCString("Const"), i64t, IROperand.immI(c1 + 1, i64t), (IROperand*)0, (IROperand*)0)), (IROperand*)0);
+                IRValue* bytes = ppEmit(b, String.withCString("Mul"), i64t, IROperand.useVal(most),
+                                        IROperand.useVal(ppEmit(b, String.withCString("Const"), i64t, IROperand.immI(ge, i64t), (IROperand*)0, (IROperand*)0)), (IROperand*)0);
+                IRValue* zero = ppEmit(b, String.withCString("Const"), i64t, IROperand.immI(0, i64t), (IROperand*)0, (IROperand*)0);
+                IRValue* below = ppCmp(b, String.withCString("SLT"), least, zero);
+                IRValue* none = ppEmit(b, String.withCString("Const"), i64t, IROperand.immI((i64)0 - (i64)1, i64t), (IROperand*)0, (IROperand*)0);
+                IRValue* fp = ppEmit(b, String.withCString("Select"), i64t, IROperand.useVal(below), IROperand.useVal(none), IROperand.useVal(bytes));
+                IRValue* unknown = ppCmp(b, String.withCString("SLT"), sp, zero);
+                sp = ppEmit(b, String.withCString("Select"), i64t, IROperand.useVal(unknown), IROperand.useVal(fp), IROperand.useVal(sp));
+                }
+            // The runtime asks by capture: the kernel printers' `buf=off:k:es`
+            // gives the field's index less the prefix (word, lo, hi), so live-in
+            // i is k = i. Compared with its field index, 3 + i, every capture
+            // had no length, and with five or more captures the fourth was
+            // given the first's.
+            IRValue* fk = ppEmit(b, String.withCString("Const"), String.withCString("I32"), IROperand.immI((i64)i, String.withCString("I32")), (IROperand*)0, (IROperand*)0);
             IRValue* is = ppCmp(b, String.withCString("EQ"), k, fk);
             acc = ppEmit(b, String.withCString("Select"), i64t, IROperand.useVal(is), IROperand.useVal(sp), IROperand.useVal(acc));
             }
@@ -1605,6 +1680,9 @@
                 continue;
             IRValue* vt = ppEmit(P, String.withCString("Bitcast"), tt, IROperand.useVal(v), (IROperand*)0, (IROperand*)0);
             liveIns.set(i, (Object*)vt);
+            // gpuLength finds the base it stands for through the cast.
+            if (_ppFpDefOf != (Map*)0)
+                _ppFpDefOf.set((Hashable*)vt, P.insns().get(P.insns().count() - 1));
             for (u32 c = (u32)0; c < casts.count(); c = c + (u32)1)
                 castTo.set((Hashable*)((IRInsn*)casts.get(c)).res(), (Object*)Number.with(i));
             }
@@ -2568,8 +2646,11 @@
             _ppGOffLo.add((Object*)Number.withI64(_ppOffLo));
             _ppGOffHi.add((Object*)Number.withI64(_ppOffHi));
             _ppGStored.add((Object*)Number.with(stored ? (u32)1 : (u32)0));
+            _ppGUncond.add((Object*)Number.with(_ppUncond ? 1 : 0));
             return;
             }
+        if (!_ppUncond)
+            _ppGUncond.set(k, (Object*)Number.with(0));
         // Every access the iteration's own at one offset, or none is.
         if (!atIv || ((Number*)_ppGOff.get(k)).asI64() != _ppOff)
             _ppGAtIv.set(k, (Object*)Number.with((u32)0));
@@ -2590,6 +2671,45 @@
             _ppGElem.set(k, (Object*)Number.with((u32)0));
         }
 
+    // The base record (ppParMemoryOk's) whose footprint gpuLength may use for
+    // the live-in pointer v, or $FFFFFFFF: v itself the base, not a global,
+    // touched only at [k*i + c] and on every iteration, its element size
+    // known, in a loop with no other exit.
+    final u32 ppFootprintOf(IRValue* v)
+        {
+        if (_ppEarlyExit || _ppGKeys == (Array*)0 || _ppGUncond == (Array*)0)
+            return $FFFFFFFF;
+        for (u32 g = 0; g < _ppGKeys.count(); g = g + 1)
+            {
+            if (((String*)_ppGKeys.get(g)).hasPrefix(String.withCString("@")))
+                continue;
+            // The base and the captured pointer the same once casts are set
+            // aside (C's `(float*)p`: a Bitcast on one side or the other).
+            if (ppCastRoot((IRValue*)_ppGBase.get(g)) != ppCastRoot(v))
+                continue;
+            if (((Number*)_ppGAtIv.get(g)).asU32() == 0 || ((Number*)_ppGUncond.get(g)).asU32() == 0
+                || ((Number*)_ppGElem.get(g)).asU32() == 0)
+                return $FFFFFFFF;
+            return g;
+            }
+        return $FFFFFFFF;
+        }
+
+    // The value under any Bitcasts of v.
+    final IRValue* ppCastRoot(IRValue* v)
+        {
+        IRValue* r = v;
+        for (u32 guard = 0; guard < 8 && r != (IRValue*)0 && _ppFpDefOf != (Map*)0; guard = guard + 1)
+            {
+            IRInsn* d = (IRInsn*)_ppFpDefOf.get((Hashable*)r);
+            if (d == (IRInsn*)0 || !d.op().equals(String.withCString("Bitcast")) || d.ops().count() < 1
+                || ((IROperand*)d.ops().get(0)).kind() != (u8)OPK_USE)
+                break;
+            r = ((IROperand*)d.ops().get(0)).val();
+            }
+        return r;
+        }
+
     final bool ppParMemoryOk(IRFunc* fn, LRCLoop* L, IRValue* iv, Map* defOf, Map* defBlk)
         {
         _ppDefBlk = defBlk;
@@ -2601,9 +2721,27 @@
         _ppGOffLo = new Array();
         _ppGOffHi = new Array();
         _ppGStored = new Array();
+        _ppGUncond = new Array();
         _ppPairA = new Array();
         _ppPairB = new Array();
         Array* body = L.body();
+        // Which accesses every iteration makes (gpuLength's footprint needs
+        // them): those in a block that dominates the latch, in a loop that
+        // leaves only from its header.
+        _ppFpDefOf = defOf;
+        Map* dom = self.dominators(fn);
+        Array* latchDom = L.latch() != (IRBlock*)0 ? (Array*)dom.get((Hashable*)L.latch()) : (Array*)0;
+        _ppEarlyExit = false;
+        for (u32 b = 0; b < body.count(); b = b + 1)
+            {
+            IRBlock* eb = (IRBlock*)body.get(b);
+            if (eb == L.header())
+                continue;
+            Array* ss = self.lrcSuccs(fn, eb);
+            for (u32 q = 0; q < ss.count(); q = q + 1)
+                if (!self.hasBlock(body, (IRBlock*)ss.get(q)))
+                    _ppEarlyExit = true;
+            }
         for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
             {
             IRBlock* blk = (IRBlock*)body.get(b);
@@ -2635,6 +2773,7 @@
                         continue;
                     if (st && !_ppAtIv)
                         return ppNo("a store not at [i]");
+                    _ppUncond = latchDom != (Array*)0 && self.hasBlock(latchDom, blk);
                     ppNoteKey(_ppBase, addr, _ppAtIv, st);
                     }
                 else if (lrcWritesMemory(op) || op.hasPrefix(String.withCString("Load")))

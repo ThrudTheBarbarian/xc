@@ -1614,6 +1614,10 @@ class BeFact : Object
     Array* _ppGOffLo;   // Number@: and the c0, c1 of k * i + [c0, c1]
     Array* _ppGOffHi;
     Array* _ppGStored;
+    Array* _ppGUncond;     // Number@: 1 while every access of the base is made on every iteration
+    bool _ppUncond;        // the access being noted is (its block dominates the loop's latch)
+    bool _ppEarlyExit;     // the loop can leave from a block other than its header
+    Map* _ppFpDefOf;       // ppParMemoryOk's defOf, for ppFootprintOf
     // The pairs that need a check at run time (indices into the above).
     Array* _ppPairA;
     Array* _ppPairB;
