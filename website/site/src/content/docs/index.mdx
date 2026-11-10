@@ -68,14 +68,14 @@ Every figure is measured with the released compiler on machines you can buy,
 and the [sources are published](/compiler/benchmark-sources/).
 
 <CardGrid>
-	<Card title="21× faster on the GPU" icon="rocket">
-		`md5` on an Apple M3 Max runs 21 times faster on its GPU than on all
+	<Card title="22× faster on the GPU" icon="rocket">
+		`md5` on an Apple M3 Max runs 22 times faster on its GPU than on all
 		sixteen CPU cores, from the same plain loop.
 		[GPU results →](/compiler/benchmarks/gpu/)
 	</Card>
 	<Card title="Plain C, 2.1× faster than OpenMP" icon="star">
 		Unchanged C files built by xcc, on all 32 threads of a Ryzen 9 9955HX,
-		against GCC with a hand-written `#pragma omp parallel for` (2.9× against
+		against GCC with a hand-written `#pragma omp parallel for` (3.1× against
 		clang), as a geometric mean.
 		[C results →](/compiler/benchmarks/c/)
 	</Card>

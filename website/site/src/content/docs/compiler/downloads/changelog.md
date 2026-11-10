@@ -3,6 +3,74 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 0.9.7 — C fuses like clang, checked virtual calls, and par's choices
+
+Everything since 0.9.6.
+
+### Changed
+
+- **C fuses its multiply-adds on every target.** A C file's multiply-adds
+  within an expression are fused, as clang does by default
+  (`-ffp-contract=on`), on x86-64 and win64 as well as arm64.
+  `-ffp-contract=fast` fuses across statements too, `-ffp-contract=off` not at
+  all. On x86-64 the fused instruction is in the code built for a CPU with FMA:
+  the whole program under `-mavx2` or `-msimd=avx512`, and under the default
+  `-msimd=auto` the AVX2 and AVX-512 copies the program picks at load. C perlin
+  on one thread of a Ryzen 9 9955HX: 81.7 ms to 75.4 ms (clang 74.8).
+- **`:goal(accuracy)` never fuses.** Under `-fgoal=accuracy` nothing is fused
+  on any target, C included; arm64 C fused before.
+- **Checked builds check virtual calls.** Under `-fbounds-check` and
+  `-fbounds-check=light`, on arm64, x86-64 and win64, a virtual call checks that
+  the object's vtable pointer lies in the class tables of a loaded image, and
+  stops with the call site and the pointer if it does not: a heap overrun or a
+  use after free that overwrote an object no longer sends its calls anywhere.
+  Libraries and plugins need no registration. See
+  [Virtual calls](/compiler/usage/cli/#virtual-calls).
+
+### Faster
+
+- **Checked loops.** Under `-fbounds-check=light` a heap check in a loop
+  compares against a bound computed once before the loop, and a counted loop
+  whose accesses all fit runs an unchecked copy, which vectorises as an
+  unchecked build does. A failing access still stops on the same iteration
+  with the same report. An xcc built with the checks compiles a large program
+  with 1.44 times the instructions of an unchecked one, from 1.82; a byte-copy
+  loop runs at the unchecked speed.
+- **par blocks over arrays of structs run on the GPU**, written in xc or lifted
+  from C, with fields of 1, 2, 4 and 8 bytes, padding, nested structs and
+  `bool`, on Metal, CUDA, Vulkan and WebGPU.
+- **Device reductions on Vulkan** run one item a thread across dispatches, and
+  the runtime times two settings and keeps the faster. On a Raspberry Pi 5's
+  GPU: perlin 96.7 ms to 55.9 ms, nbody 32.5 to 23.7, mandel_deep 9.95 s to
+  8.39.
+- **`par` auto from a machine using a remote GPU.** Checking a remote tile's
+  results ran on one thread and held up every other tile; it runs on every CPU
+  thread now. md5 from a Raspberry Pi 5 using a remote RTX 5080: 386 ms to
+  124 ms.
+- **Forced device sets.** Under `XC_PAR=gpus` or `all`, each device's measured
+  speed is kept between runs, so a slow device no longer holds a fast one back:
+  md5 on an integrated Radeon with a remote RTX 5080, 33.0 ms to 6.8 ms.
+- **`par` auto on an Apple M3 Max** no longer settles on a CPU and GPU split
+  that is slower than the GPU alone: a split must beat the best single device
+  by more than 10%.
+- **Loops that store their own index** (`a[i] = i`) vectorise: sort_small on a
+  Raspberry Pi 5, 3.19 s to 3.06 s.
+
+### Fixed
+
+- **A lost Vulkan GPU no longer hangs the program.** The loss is reported once,
+  naming the GPU, and the work it held is finished by the other devices or the
+  CPU.
+- **Freed arrays and the Vulkan runtime.** A tile worker kept a freed array's
+  memory imported until its next run, and the next submission on some drivers
+  was rejected: a program that freed arrays between `par` runs could fail on
+  an AMD integrated GPU.
+- **A false bounds-check report.** `-fbounds-check=light` could report a stack
+  buffer that sat above a saved register holding the heap marker as a heap
+  block of 0 elements.
+- The compiler's byte images (object files, executables, signatures, archives)
+  are byte buffers throughout, which cuts its memory use on large programs.
+
 ## Version 0.9.6 — overlapping pointers, GPU kernel choice, and checks that cost less
 
 Everything since 0.9.5, with 0.9.5.1's fix.
