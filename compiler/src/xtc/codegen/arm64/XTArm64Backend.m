@@ -6152,16 +6152,49 @@ static void xtMagicS(int64_t dIn, int W, int64_t *Mout, int *sout) {
                 NSString *fnl = [ctx.fn.name stringByReplacingOccurrencesOfString:@"$" withString:@"_"];
                 NSString *L1 = [NSString stringWithFormat:@".L%@_sc1_%lu", fnl, (unsigned long)lbl];
                 NSString *L2 = [NSString stringWithFormat:@".L%@_sc2_%lu", fnl, (unsigned long)lbl];
+                // The comparisons and both edges' copies are built aside
+                // first: when neither edge has a copy to make, the stubs would
+                // be bare jumps, so the first test goes straight to the FALSE
+                // block and the second straight to the TRUE one. A loop's back
+                // edge is then one conditional branch, not a conditional exit
+                // and a `b` (on a Pi 5 mandel_deep's vector loop runs 21
+                // instructions, not 22, and it no longer runs at two speeds by
+                // the code laid out before it).
+                NSMutableString *hot = ctx.out;
+                NSMutableArray<NSString *> *cmps = [NSMutableArray array];
+                NSMutableArray<NSString *> *ccs = [NSMutableArray array];
                 for (NSUInteger k = 0; k < 2; k++) {
                     XTIRInsn *d = both[k];
-                    NSString *cc = (d.opcode == XTIROpFCmp) ? [self emitCompareForFCmp:d ctx:ctx]
-                                                            : [self emitCompareForICmp:d ctx:ctx];
-                    [ctx.out appendFormat:@"    b.%@ %@\n", [self invertCond:cc], (k == 0 ? L1 : L2)];
+                    ctx.out = [NSMutableString string];
+                    [ccs addObject:(d.opcode == XTIROpFCmp) ? [self emitCompareForFCmp:d ctx:ctx]
+                                                            : [self emitCompareForICmp:d ctx:ctx]];
+                    [cmps addObject:ctx.out];
                 }
+                ctx.out = [NSMutableString string];
                 [self emitPhiCopiesFrom:block to:t.blockRef ctx:ctx];
+                NSString *tCopies = ctx.out;
+                ctx.out = [NSMutableString string];
+                [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
+                NSString *fCopies = ctx.out;
+                ctx.out = hot;
+                if (tCopies.length == 0 && fCopies.length == 0) {
+                    [ctx.out appendString:cmps[0]];
+                    [ctx.out appendFormat:@"    b.%@ %@\n", [self invertCond:ccs[0]],
+                     [self blockLabelForFn:ctx.fn block:f.blockRef]];
+                    [ctx.out appendString:cmps[1]];
+                    [ctx.out appendFormat:@"    b.%@ %@\n", ccs[1],
+                     [self blockLabelForFn:ctx.fn block:t.blockRef]];
+                    [ctx.out appendFormat:@"    b %@\n", [self blockLabelForFn:ctx.fn block:f.blockRef]];
+                    break;
+                }
+                for (NSUInteger k = 0; k < 2; k++) {
+                    [ctx.out appendString:cmps[k]];
+                    [ctx.out appendFormat:@"    b.%@ %@\n", [self invertCond:ccs[k]], (k == 0 ? L1 : L2)];
+                }
+                [ctx.out appendString:tCopies];
                 [ctx.out appendFormat:@"    b %@\n", [self blockLabelForFn:ctx.fn block:t.blockRef]];
                 [ctx.out appendFormat:@"%@:\n", L1];
-                [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];
+                [ctx.out appendString:fCopies];
                 [ctx.out appendFormat:@"    b %@\n", [self blockLabelForFn:ctx.fn block:f.blockRef]];
                 [ctx.out appendFormat:@"%@:\n", L2];
                 [self emitPhiCopiesFrom:block to:f.blockRef ctx:ctx];

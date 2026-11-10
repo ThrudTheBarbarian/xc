@@ -8142,16 +8142,48 @@ class Arm64
             // namespaced by function, which the assembler requires.
             String* L1 = labelFor(String.withCString("sc1"), lbl);
             String* L2 = labelFor(String.withCString("sc2"), lbl);
+            // The comparisons and both edges' copies are built aside first:
+            // when neither edge has a copy to make, the stubs would be bare
+            // jumps, so the first test goes straight to the FALSE block and the
+            // second straight to the TRUE one. A loop's back edge is then one
+            // conditional branch, not a conditional exit and a `b` (on a Pi 5
+            // mandel_deep's vector loop runs 21 instructions, not 22, and it
+            // no longer runs at two speeds by the code laid out before it).
+            String* hot = _out;
+            Array* cmps = new Array();
+            Array* ccs = new Array();
             for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1) {
                 IRInsn* d = (IRInsn*)both.get(k);
-                String* cc = d.op().equals(String.withCString("FCmp")) ? emitCompareF(d) : emitCompare(d);
-                _out.appendFormat("    b.%s %s\n", invertCond(cc).cString(),
+                _out = String.withCString("");
+                ccs.add((Object*)(d.op().equals(String.withCString("FCmp")) ? emitCompareF(d) : emitCompare(d)));
+                cmps.add((Object*)_out);
+            }
+            _out = String.withCString("");
+            emitPhiCopies(_bb, t);
+            String* tCopies = _out;
+            _out = String.withCString("");
+            emitPhiCopies(_bb, f);
+            String* fCopies = _out;
+            _out = hot;
+            if (tCopies.isEmpty() && fCopies.isEmpty()) {
+                _out.append((String*)cmps.get((u32)0));
+                _out.appendFormat("    b.%s %s\n", invertCond((String*)ccs.get((u32)0)).cString(),
+                                  blockLabel(f).cString());
+                _out.append((String*)cmps.get((u32)1));
+                _out.appendFormat("    b.%s %s\n", ((String*)ccs.get((u32)1)).cString(),
+                                  blockLabel(t).cString());
+                _out.appendFormat("    b %s\n", blockLabel(f).cString());
+                return;
+            }
+            for (u32 k = (u32)0; k < (u32)2; k = k + (u32)1) {
+                _out.append((String*)cmps.get(k));
+                _out.appendFormat("    b.%s %s\n", invertCond((String*)ccs.get(k)).cString(),
                                   (k == (u32)0 ? L1 : L2).cString());
             }
-            emitPhiCopies(_bb, t);
+            _out.append(tCopies);
             _out.appendFormat("    b %s\n", blockLabel(t).cString());
             _out.appendFormat("%s:\n", L1.cString());
-            emitPhiCopies(_bb, f);
+            _out.append(fCopies);
             _out.appendFormat("    b %s\n", blockLabel(f).cString());
             _out.appendFormat("%s:\n", L2.cString());
             emitPhiCopies(_bb, f);
