@@ -584,8 +584,15 @@ class LlvmReader
             else if (w.equals(String.withCString("align")) || w.equals(String.withCString("dereferenceable"))
                      || w.equals(String.withCString("dereferenceable_or_null")))
                 {
-                skipParens();
-                word();
+                // `align 8` takes a word, `dereferenceable(24)` its
+                // parentheses: a word after those was the parameter's name
+                // (every C++ reference parameter has one), and the function
+                // read its arguments into the wrong values.
+                ws();
+                if (peek() == (u8)'(')
+                    skipParens();
+                else
+                    word();
                 again = true;
                 }
             else

@@ -187,7 +187,34 @@ int main()
     return 0;
     }
 C
-for p in saxpy grid glob; do
+# Reference parameters (`dereferenceable(N)` in the IR): each argument read
+# into its own value. The reader once took the next parameter's name as the
+# attribute's operand, and `bump(k, a, n)` read k and a from one argument.
+cat > "$W/refs.cpp" <<'C'
+#include <cstdio>
+static void bump(const double& k, double* a, const int& n, long& count)
+    {
+    for (int i = 0; i < n; i++)
+        a[i] = a[i] * k + 0.5;
+    count += n;
+    }
+int main()
+    {
+    static double a[1000];
+    for (int i = 0; i < 1000; i++)
+        a[i] = i;
+    double k = 3.0;
+    int n = 1000;
+    long count = 7;
+    bump(k, a, n, count);
+    double t = 0;
+    for (int i = 0; i < 1000; i++)
+        t += a[i];
+    std::printf("%.1f %ld\n", t, count);
+    return 0;
+    }
+C
+for p in saxpy grid glob refs; do
     clang++ -std=c++17 -O2 -o "$W/$p.ref" "$W/$p.cpp" 2>/dev/null || { echo "FAIL cppath: clang++ cannot build $p"; fail=1; continue; }
     want=$("$W/$p.ref")
     "$XC" -q -O2 -H . -o "$W/$p" "$W/$p.cpp" > "$W/$p.b" 2>&1 || { echo "FAIL cppath: $p does not build"; head -3 "$W/$p.b"; fail=1; continue; }
