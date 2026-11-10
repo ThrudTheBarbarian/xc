@@ -78,6 +78,7 @@
 #import "Elf64Defs.xc"
 #import <Pe>         // the Windows PE/COFF writer, shared with xtldwin
 #import "PeDefs.xc"
+#import <Language>   // the language table: a source extension names a row
 #import <CPath>      // `xcc prog.c`: clang's LLVM IR read into a module (cpp-front-end.md)
 
 // A C program's own output while xcc's part is compiled to an object (the
@@ -85,6 +86,9 @@
 String* gCSplitOut;
 // -c of a C file: cSplitLink makes one relocatable object, not a program.
 bool gCSplitRelocatable;
+// A language whose row names a linker (C++: clang++): the program is one
+// assembly unit, as --no-self-host's, linked by it with clang's object.
+String* gLangLinker;
 #import <External>   // --no-self-host: the vendor-toolchain path
 #import <Parser>
 #import <ArArchive>
@@ -708,8 +712,8 @@ void resolveRuntimeLib(DriverOptions* d)
         String* t = (String*)li.get(i);
         if (t.hasSuffix(String.withCString(".o")) || t.hasSuffix(String.withCString(".a"))) return;
     }
-    // …and so does a C program: its xc half is linked as an object, with clang's.
-    if (d.fe().input() != (String*)0 && d.fe().input().hasSuffix(String.withCString(".c"))) return;
+    // …and so does a C or C++ program: its xc half is linked with clang's.
+    if (Languages.forFile(d.fe().input()) != (LanguageRow*)0) return;
     String* dir = String.withString(root);
     dir.appendCString("/runtime-lib/");
     dir.append(d.targetRow().name());
@@ -4483,6 +4487,33 @@ void cSplitLink(DriverOptions* d)
     linkObjects(d);
 }
 
+// The language's runtime libraries (C++: libc++), for the program's link:
+// on macOS the SDK's stub of each, elsewhere -l<name>.
+void addLanguageLibs(DriverOptions* d, LanguageRow* lang)
+{
+    TargetRow* row = d.targetRow();
+    if (row == (TargetRow*)0) return;
+    Array* libs = lang.libsFor(row.os());
+    for (u32 i = 0; i < libs.count(); i = i + 1) {
+        String* nm = (String*)libs.get(i);
+        if (row.os().equals(String.withCString("macos"))) {
+            String* sdk = appleSdkRoot(d);
+            String* tbd = sdk != (String*)0 ? String.withString(sdk) : String.withCString("");
+            tbd.appendCString("/usr/lib/lib");
+            tbd.append(nm);
+            tbd.appendCString(".tbd");
+            if (sdk == (String*)0 || !Files.exists(tbd)) {
+                Stdio.printf("xcc: error: a %s program links lib%s, and no macOS SDK has it (install the Command Line Tools)\n",
+                             lang.name().cString(), nm.cString());
+                Process.exit((i32)1); return;
+            }
+            d.linkInputs().add((Object*)tbd);
+        } else {
+            d.linkInputs().add((Object*)String.withCString("-l").appending(nm));
+        }
+    }
+}
+
 void linkObjects(DriverOptions* d)
 {
     noteLinkFlags(d);
@@ -4764,11 +4795,13 @@ void main(void)
         Process.exit((i32)1); return;
     }
 
-    // A C file: clang compiles it to LLVM IR and the C path reads that
-    // (experimental; cpp-front-end.md, "The C path").
+    // A C or C++ file (a row of the language table): clang compiles it to
+    // LLVM IR and the C path reads that (cpp-front-end.md, "The C path").
     IRModule* mod = (IRModule*)0;
-    if (d.fe().input().hasSuffix(String.withCString(".c")))
+    LanguageRow* lang = Languages.forFile(d.fe().input());
+    if (lang != (LanguageRow*)0)
         {
+        cPathSetLanguage(lang);
         // With the IR outliner on (--par-style=auto, or XC_PAR_PROPOSE=outline),
         // the par runtime comes too, lowered from a stub, so loops can
         // become blocks. The user's -I and -D go to clang.
@@ -4828,8 +4861,12 @@ void main(void)
         // -S: the assembly of xcc's part, at the user's -o (the functions
         // clang compiles are not in it). It used to go to the scratch object
         // and nothing was written where asked.
+        bool platformLink = lang.linker().byteLength() > 0 && crow != (TargetRow*)0
+                            && crow.name().equals(String.withCString("arm64-macos")) && !gCSplitRelocatable;
         if (mod != (IRModule*)0 && d.keepAsm())
             d.setCompileOnly(true);
+        else if (mod != (IRModule*)0 && platformLink)
+            gLangLinker = lang.linker();
         else if (mod != (IRModule*)0 && cElfArm64 && !gCSplitRelocatable)
             d.linkInputs().add((Object*)cRestObject());
         else if (mod != (IRModule*)0)
@@ -4838,8 +4875,7 @@ void main(void)
             if (gCSplitRelocatable && d.fe().output() == (String*)0)
                 {
                 // -c with no -o: prog.c gives prog.o, beside where it runs.
-                String* base = cin.lastPathComponent();
-                gCSplitOut = base.substringBytes((u32)0, base.byteLength() - (u32)2);
+                gCSplitOut = stripExtension(cin.lastPathComponent());
                 gCSplitOut.appendCString(".o");
                 }
             String* xo = CPath.scratch();
@@ -4848,6 +4884,8 @@ void main(void)
             d.setCompileOnly(true);
             }
         if (mod == 0) { Process.exit((i32)1); return; }
+        if (!gCSplitRelocatable && !d.keepAsm() && gLangLinker == (String*)0)
+            addLanguageLibs(d, lang);
         }
     else if (d.fe().input().hasSuffix(String.withCString(".ir")))
         {
@@ -5276,7 +5314,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
         return;
     }
 
-    if (d.caps().noSelfHost() && externalArm64(d, prog)) return;
+    if ((d.caps().noSelfHost() || gLangLinker != (String*)0) && externalArm64(d, prog)) return;
 
     // The whole image is ONE assembly unit: crt, runtime, per-class allocators,
     // then the program. That is what lets the linker resolve everything at link
@@ -5718,6 +5756,26 @@ void ndkLink(DriverOptions* d, Arm64Asm* as, String* out, String* soname)
     runOrDie(a, keep);
 }
 
+// The assembly without its debug directives, for an assembler of the
+// platform's: xcc's own (.xc_frame, .xc_var, .xc_param), which only xcc's
+// assembler reads, and the line table (.file, .loc), whose file numbers xcc
+// reuses for another file where clang's assembler refuses that. A C or C++
+// program always has them: clang's IR carries line tables.
+String* withoutXcDirectives(String* prog)
+{
+    if (!prog.contains(String.withCString("\n    .xc_")) && !prog.contains(String.withCString("\n    .loc "))) return prog;
+    Array* lines = prog.splitOnByte((u8)10);
+    String* out = new String();
+    for (u32 i = 0; i < lines.count(); i = i + 1) {
+        String* l = (String*)lines.get(i);
+        if (l.hasPrefix(String.withCString("    .xc_")) || l.hasPrefix(String.withCString("    .loc "))
+            || l.hasPrefix(String.withCString("    .file "))) continue;
+        out.append(l);
+        if (i + 1 < lines.count()) out.appendCString("\n");
+    }
+    return out;
+}
+
 // arm64 macOS through the vendor clang. False when this shape has no external
 // path and the in-house link should run instead: a library, which links
 // in-house either way, and android, which goes to the NDK's clang once its
@@ -5758,15 +5816,18 @@ bool externalArm64(DriverOptions* d, String* prog)
         files.add((Object*)sp);
     }
     String* asmPath = External.tempPath("xtc-prog.s");
-    writeTempOrDie(asmPath, prog);
+    writeTempOrDie(asmPath, withoutXcDirectives(prog));
     Array* a = new Array();
-    a.add((Object*)String.withCString("clang"));
+    a.add((Object*)(gLangLinker != (String*)0 ? gLangLinker : String.withCString("clang")));
     a.add((Object*)String.withCString("-arch"));
     a.add((Object*)String.withCString("arm64"));
     a.add((Object*)String.withCString("-O2"));
     for (u32 i = (u32)0; i < files.count(); i = i + (u32)1)
         a.add(files.get(i));
     a.add((Object*)asmPath);
+    // A C++ program's other half: clang's object (the C path's split).
+    if (gLangLinker != (String*)0)
+        a.add((Object*)cRestObject());
     a.add((Object*)String.withCString("-Wl,-e,_xtc_start"));
     // Each `#import <Lib>` dylib by path, and an rpath to its directory so
     // the program finds it at run time.

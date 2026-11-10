@@ -18,6 +18,7 @@
 #import "IrDefs.xc"
 #import <LlvmRead>
 #import <Frontend>
+#import <Language>
 
 // clang's object for the part of the C program xcc does not compile (the
 // globals, and any function the reader did not read); the link adds it.
@@ -68,6 +69,10 @@ bool gCPathFuseMulAdd;
 void cPathSetFuseMulAdd(bool b) { gCPathFuseMulAdd = b; }
 void cPathSetTarget(String* t) { gCPathTarget = t; }
 void cPathSetFpContract(String* v) { gCPathFpContract = v; }
+// The source's row of the language table (Language.xc): the command that
+// writes its LLVM IR, and which functions xcc takes. 0: C's.
+LanguageRow* gCPathLang;
+void cPathSetLanguage(LanguageRow* l) { gCPathLang = l; }
 
 // The scratch files a C compile leaves once the program is linked: clang's
 // object, xcc's and its sidecars. Each run's names carry its pid, so nothing
@@ -141,11 +146,27 @@ class CPath
     // Whether clang runs here.
     static bool haveClang(void)
         {
+        return CPath.have(String.withCString("clang"));
+        }
+
+    // Whether `command` runs here.
+    static bool have(String* command)
+        {
+        String* c = String.withString(command);
 #if OS_windows
-        return system("clang --version >NUL 2>&1") == (i32)0;
+        c.appendCString(" --version >NUL 2>&1");
 #else
-        return system("clang --version >/dev/null 2>&1") == (i32)0;
+        c.appendCString(" --version >/dev/null 2>&1");
 #endif
+        return system(c.cString()) == 0;
+        }
+
+    // The row the source is compiled by: the one set, else C's.
+    static LanguageRow* language(void)
+        {
+        if (gCPathLang == (LanguageRow*)0)
+            gCPathLang = Languages.forFile(String.withCString("x.c"));
+        return gCPathLang;
         }
 
     // The C file as an IRModule, or 0 with the reason printed. `incs` and
@@ -159,17 +180,26 @@ class CPath
     // is given: a stub importing the par runtime, for the IR outliner.
     static IRModule* lowerWith(String* input, String* scratch, Array* incs, Array* defs, FeOptions* fe)
         {
-        if (!CPath.haveClang())
+        LanguageRow* lang = CPath.language();
+        // The C file, when the row is C's: a message the tests know.
+        if (lang.name().equals(String.withCString("c")) && !CPath.haveClang())
             {
             Stdio.error(String.withCString("xcc: error: a C file needs clang, which compiles it (xcc then makes par blocks of its loops); install clang\n"));
             return (IRModule*)0;
             }
+        else if (!lang.name().equals(String.withCString("c")) && (!CPath.have(lang.command()) || !CPath.haveClang()))
+            {
+            Stdio.error(String.withFormat("xcc: error: a %s file needs %s and clang, which compile it (xcc then makes par blocks of its loops); install them\n",
+                                          lang.name().cString(), lang.command().cString()));
+            return (IRModule*)0;
+            }
         String* ll = String.withString(scratch);
         ll.appendCString(".ll");
-        String* cmd = String.withCString("clang");
+        String* cmd = String.withString(lang.command());
         if (gCPathTarget != (String*)0)
             cmd.append(gCPathTarget);
-        cmd.appendCString(" -O1 -Xclang -disable-llvm-passes -fno-discard-value-names -gline-tables-only -S -emit-llvm");
+        cmd.appendCString(" ");
+        cmd.append(lang.irFlags());
         if (gCPathFpContract != (String*)0)
             {
             cmd.appendCString(" -ffp-contract=");
@@ -197,7 +227,7 @@ class CPath
             ll = given;
         else if (system(cmd.cString()) != (i32)0)
             {
-            Stdio.error(String.withFormat("xcc: error: clang could not compile '%s'\n", input.cString()));
+            Stdio.error(String.withFormat("xcc: error: %s could not compile '%s'\n", lang.command().cString(), input.cString()));
             return (IRModule*)0;
             }
         String* text = Files.readText(ll);
@@ -213,6 +243,8 @@ class CPath
         // none: the first function ran to the end of the file and every one
         // after it (main included) was left to clang, unread.
         text = text.replacing(String.withCString("\r\n"), String.withCString("\n"));
+        // reads `loops`: the reader sees only the functions xcc may take.
+        String* readText = lang.loopsOnly() ? Languages.loopFunctions(text) : text;
         LlvmReader* r = new LlvmReader();
         r.setPath(input);
         // clang compiles what xcc does not take, and the globals: their
@@ -236,10 +268,10 @@ class CPath
             Directory._unlink(stub);
             if (base == (IRModule*)0)
                 return (IRModule*)0;
-            m = r.readInto(text, base);
+            m = r.readInto(readText, base);
             }
         else
-            m = r.read(text);
+            m = r.read(readText);
         if (m == (IRModule*)0)
             return (IRModule*)0;
         // xcc's object is the program's entry module even when main is
@@ -280,7 +312,10 @@ class CPath
         restLl.appendCString(".rest.ll");
         String* restO = String.withString(scratch);
         restO.appendCString(".rest.o");
-        if (!Files.writeText(restLl, r.rest(text)))
+        String* restText = r.rest(text);
+        if (lang.loopsOnly())
+            restText = Languages.keepOdr(restText);
+        if (!Files.writeText(restLl, restText))
             {
             Stdio.error(String.withFormat("xcc: error: cannot write '%s'\n", restLl.cString()));
             return (IRModule*)0;
@@ -291,9 +326,12 @@ class CPath
         String* cc = String.withCString("clang");
         if (gCPathTarget != (String*)0)
             cc.append(gCPathTarget);
-        cc.appendCString(gCPathProtect
-            ? " -O2 -fstack-protector-strong -fno-unwind-tables -fno-asynchronous-unwind-tables -Wno-override-module -c -o "
-            : " -O2 -fno-unwind-tables -fno-asynchronous-unwind-tables -Wno-override-module -c -o ");
+        cc.appendCString(gCPathProtect ? " -O2 -fstack-protector-strong" : " -O2");
+        // Unwind tables only where the platform's linker carries them: a
+        // language that names one (C++, whose exceptions need them).
+        if (lang.linker().byteLength() == 0)
+            cc.appendCString(" -fno-unwind-tables -fno-asynchronous-unwind-tables");
+        cc.appendCString(" -Wno-override-module -c -o ");
         cc.append(CPath.quoted(restO));
         cc.appendCString(" ");
         cc.append(CPath.quoted(restLl));

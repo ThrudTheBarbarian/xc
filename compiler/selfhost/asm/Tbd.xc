@@ -165,6 +165,18 @@ class TbdInfo
                 kind = (u32)2;
                 klen = (u32)10;
                 }
+            // A weak definition is an export too: libc++ lists operator new
+            // and delete, and the standard exceptions' type information, so.
+            else if (Tbd.startsWith(t, "weak-symbols:"))
+                {
+                kind = (u32)2;
+                klen = (u32)13;
+                }
+            else if (Tbd.startsWith(t, "- weak-symbols:"))
+                {
+                kind = (u32)2;
+                klen = (u32)15;
+                }
             else if (Tbd.startsWith(t, "objc-classes:"))
                 {
                 kind = (u32)3;
