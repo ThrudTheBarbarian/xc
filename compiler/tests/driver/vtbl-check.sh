@@ -38,6 +38,23 @@ ROOT=$(pwd)
 W=$(mktemp -d); trap 'rm -rf "${W:?}"' EXIT
 fail=0
 bad() { echo "FAIL vtbl-check: $*"; fail=1; }
+# reach <host> — the host answers ssh without a password, asked once; a host
+# that does not has its rows skipped, with a note, rather than failed.
+REACHED=" "
+UNREACHED=" "
+reach() {
+    local h=$1
+    [ -n "$h" ] || return 1
+    case "$REACHED" in *" $h "*) return 0 ;; esac
+    case "$UNREACHED" in *" $h "*) return 1 ;; esac
+    if ssh -o BatchMode=yes -o ConnectTimeout=5 "$h" true < /dev/null > /dev/null 2>&1; then
+        REACHED="$REACHED$h "
+        return 0
+    fi
+    UNREACHED="$UNREACHED$h "
+    echo "vtbl-check: $h does not answer ssh; its rows are skipped"
+    return 1
+}
 
 cat > "$W/f.xc" <<'XC'
 #import "Stdio.xc"
@@ -246,7 +263,7 @@ if [ -x "$XC" ] && [ "$PLAT" = osx ]; then
     fi
 fi
 H=${XTC_LINUX_HOST:-}
-if [ -x "$XC" ] && [ -n "$H" ]; then
+if [ -x "$XC" ] && reach "$H"; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=10"
     if plugin "$W/plx" "-A x86_64" so so; then
         cp support/runtime-lib/x86_64-linux/libRuntime.so "$W/plx/"
@@ -306,7 +323,7 @@ msg="arm64 run, other rows compared"
 
 # x86-64 on a Linux host: both libcs, both modes.
 H=${XTC_LINUX_HOST:-}
-if [ $fail = 0 ] && [ -n "$H" ]; then
+if [ $fail = 0 ] && reach "$H"; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=10"
     for t in x86_64 x86_64-linux-musl; do
         for m in -fbounds-check=light -fbounds-check; do
@@ -324,7 +341,7 @@ if [ $fail = 0 ] && [ -n "$H" ]; then
 fi
 # arm64 Linux on its host.
 H=${XTC_LINUX_ARM64_HOST:-}
-if [ $fail = 0 ] && [ -n "$H" ]; then
+if [ $fail = 0 ] && reach "$H"; then
     SSHO="-o BatchMode=yes -o LogLevel=ERROR -o ConnectTimeout=10"
     for m in -fbounds-check=light -fbounds-check; do
         scp $SSHO -q "$W/x-arm64-linux$m" support/runtime-lib/arm64-linux/libRuntime.so "$H:" \
