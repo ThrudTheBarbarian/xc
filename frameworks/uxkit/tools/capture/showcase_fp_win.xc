@@ -18,6 +18,11 @@ pointer CreateFileA(u8* name, u32 access, u32 share, pointer sa, u32 disp, u32 f
 i32 WriteFile(pointer h, pointer buf, u32 n, u32* written, pointer ov);
 i32 CloseHandle(pointer h);
 void ExitProcess(u32 code);
+// As showcase_alert_win.xc: the compositor's frame, through PrintWindow(PW_RENDERFULLCONTENT) and
+// the extended frame bounds; the window DC under Wine.
+typedef i32 DwmGetAttrFn(pointer hwnd, u32 attr, pointer out, u32 size);
+i32 PrintWindow(pointer hwnd, pointer hdc, u32 flags);
+u32 GetFileAttributesA(u8* name);
 
 i32 putDec(u8* out, i32 v)
     {
@@ -52,13 +57,36 @@ void timerProc(pointer hwnd, u32 msg, pointer id, u32 ticks)
     RedrawWindow(pw, (pointer)0, (pointer)0, (u32)$181);
     i32 rc[4];
     GetWindowRect(pw, (pointer)&rc[0]);
+    i32 x0 = (i32)0;
+    i32 y0 = (i32)0;
+    i32 ww = rc[2] - rc[0];
+    i32 wh = rc[3] - rc[1];
+    pointer mem = (pointer)0;
+    i32 eb[4];
+    DwmGetAttrFn* dwm = (DwmGetAttrFn*)GetProcAddress(LoadLibraryA("dwmapi.dll"), (u8*)"DwmGetWindowAttribute");
+    if (dwm != (DwmGetAttrFn*)0 && dwm(pw, (u32)9, (pointer)&eb[0], (u32)16) == (i32)0)
+        {
+        pointer wdc = GetWindowDC(pw);
+        mem = CreateCompatibleDC(wdc);
+        SelectObject(mem, CreateCompatibleBitmap(wdc, ww, wh));
+        ReleaseDC(pw, wdc);
+        if (PrintWindow(pw, mem, (u32)2) != (i32)0) // PW_RENDERFULLCONTENT
+            {
+            x0 = eb[0] - rc[0];
+            y0 = eb[1] - rc[1];
+            rc[0] = eb[0];
+            rc[1] = eb[1];
+            rc[2] = eb[2];
+            rc[3] = eb[3];
+            }
+        }
     i32 w = rc[2] - rc[0];
     i32 h = rc[3] - rc[1];
     if (w <= (i32)0 || h <= (i32)0 || w >= (i32)1200 || h >= (i32)900)
         {
         ExitProcess((u32)1);
         }
-    pointer dc = GetWindowDC(pw);
+    pointer dc = mem != (pointer)0 ? mem : GetWindowDC(pw);
     u8* buf = (u8*)malloc((u32)(w * h * 3 + 64));
     i32 n = (i32)0;
     buf[n] = (u8)80;
@@ -80,14 +108,17 @@ void timerProc(pointer hwnd, u32 msg, pointer id, u32 ticks)
         {
         for (i32 x = (i32)0; x < w; x++)
             {
-            u32 c = GetPixel(dc, x, y);
+            u32 c = GetPixel(dc, x0 + x, y0 + y);
             buf[n] = (u8)(c & (u32)$FF);
             buf[n + (i32)1] = (u8)((c >> (u32)8) & (u32)$FF);
             buf[n + (i32)2] = (u8)((c >> (u32)16) & (u32)$FF);
             n = n + (i32)3;
             }
         }
-    ReleaseDC(pw, dc);
+    if (mem == (pointer)0)
+        {
+        ReleaseDC(pw, dc);
+        }
     pointer f = CreateFileA((u8*)"ux-fp-win.ppm", (u32)$40000000, (u32)0, (pointer)0,
                             (u32)2, (u32)$80, (pointer)0);
     u32 wrote = (u32)0;
@@ -105,6 +136,13 @@ void main(void)
     i32 sh = (i32)0;
     d.boot(&sw, &sh);
     SetTimer((pointer)0, (pointer)7, (u32)400, (pointer)&timerProc); // thread timer: fires in the panel's pump
-    UXOpenPanel.runToolkit((u8*)"Open", (u8*)"Z:\\tmp\\ux_fp_demo");
+    // the demo folder: C:\ux_fp_demo on a Windows machine (capture.sh makes it), else the Mac's
+    // /tmp/ux_fp_demo as Wine sees it
+    u8* dir = (u8*)"C:\\ux_fp_demo";
+    if (GetFileAttributesA(dir) == (u32)$FFFFFFFF)
+        {
+        dir = (u8*)"Z:\\tmp\\ux_fp_demo";
+        }
+    UXOpenPanel.runToolkit((u8*)"Open", dir);
     Stdio.printf("FAIL: panel returned before the shot\n");
     }

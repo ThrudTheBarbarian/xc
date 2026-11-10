@@ -481,6 +481,9 @@ class SW2Stripes : UXView
         tb.addSeparator();
         tb.addFlexibleSpace();
         tb.addItem((u8*)"search", (u8*)"Find", 9, (i16)44);
+        tb.setItemIcon(1, (u8*)"new"); // each platform's own icon for these names
+        tb.setItemIcon(2, (u8*)"open");
+        tb.setItemIcon(9, (u8*)"search");
         content.addSubview(tb, UXGeom.make(10, 21, 200, 48)); // tall: icon-above-text
         }
     else if (swEq(name, (u8*)"colorpanel"))

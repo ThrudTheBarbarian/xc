@@ -14,6 +14,51 @@ ux="$here/../.."
 outdir="$ux/../../website/site/public/uxkit"
 mkdir -p "$outdir"
 xcc=${XCC:-xcc}
+# Each platform's booth runs where that platform really draws: AppKit on UX_MAC_GUI_HOST (another Mac,
+# so no windows open on this one), GTK on the Linux host UX_LINUX_HOST (Adwaita as a Linux desktop
+# draws it; on this Mac's Homebrew GTK when there is none), Windows on UX_WIN_HOST (a real Windows
+# desktop; under Wine when there is none).  All three are build.env settings.
+. "$ux/tools/mac_run.sh"
+# the files a booth wrote in /tmp on the Mac that ran it, back into this Mac's /tmp
+mac_fetch() {
+  for f; do case "${UX_MAC_GUI_HOST:-local}" in local) ;; *) scp -q "$UX_MAC_GUI_HOST:$f" "$f" 2>/dev/null || true ;; esac; done
+}
+# gtk_booth <showcase> <dump ...>: build and run a GTK booth, its dumps landing in this Mac's /tmp;
+# prints the booth's output
+gtk_booth() {
+  b=$1; shift
+  lhost=${UX_LINUX_HOST:-${XTC_LINUX_HOST:-}}
+  gw=$(mktemp -d)
+  if [ -n "$lhost" ] && ssh -o ConnectTimeout=8 -o BatchMode=yes "$lhost" 'pkg-config --exists gtk4 && which xvfb-run' >/dev/null 2>&1; then
+    sh "$ux/tools/build_libuxgtk.sh" "$gw/lib" --with-link-inputs >/dev/null
+    "$xcc" -A x86_64 -I "$ux" -I "$here" "$here/$b.xc" -L "$gw/lib" -lUXGtk -lgtk-4 -o "$gw/booth" -q 2>/dev/null
+    rt=$(dirname "$("$xcc" --print-3p-dir 2>/dev/null)")/lib/xc/runtime-lib/x86_64-linux/libRuntime.so
+    [ -f "$rt" ] || rt=
+    rdir=$(ssh "$lhost" 'mktemp -d')
+    scp -q "$gw/booth" "$gw/lib/libUXGtk.so" $rt "$lhost:$rdir/"
+    ssh "$lhost" "rm -f $*; cd $rdir && LD_LIBRARY_PATH=$rdir timeout 60 xvfb-run -a ./booth 2>&1 | grep -v Warning" || true
+    for f; do scp -q "$lhost:$f" "$f" 2>/dev/null || true; done
+    ssh "$lhost" "rm -rf $rdir $*"
+  else
+    pkg-config --exists gtk4 2>/dev/null || { echo "SKIP: no Linux host and no gtk4 here"; return; }
+    cc -dynamiclib -install_name "$gw/libUXGtk.dylib" "$ux/libUXGtk.c" $(pkg-config --cflags --libs gtk4) -o "$gw/libUXGtk.dylib"
+    "$xcc" -A arm64 -I "$ux" -I "$here" "$here/$b.xc" -Xlinker "$gw/libUXGtk.dylib" -o "$gw/booth" -q 2>/dev/null
+    timeout 60 "$gw/booth" 2>&1 | grep -v Warning || true
+  fi
+  rm -rf "$gw"
+}
+# win_booth <dir> <exe> <dump ...>: run a Windows booth, its dumps landing in <dir>; prints its output
+win_booth() {
+  d=$1; e=$2; shift 2
+  if [ -n "${UX_WIN_HOST:-}" ]; then
+    sh "$ux/tools/win_desktop_run.sh" "$d/$e" 90 2>&1 | tr -d '\r'
+    for f; do scp -q "$UX_WIN_HOST:$f" "$d/$f" 2>/dev/null || true; done
+    ssh -o BatchMode=yes "$UX_WIN_HOST" "Remove-Item $(echo "$*" | tr ' ' ',') -ErrorAction SilentlyContinue" >/dev/null 2>&1 || true
+  else
+    command -v wine >/dev/null 2>&1 || { echo "SKIP: no Windows host and no wine"; return; }
+    (cd "$d" && WINEDEBUG=-all WINEDLLOVERRIDES="winedbg.exe=d;" timeout 60 wine "$e" 2>/dev/null) || true
+  fi
+}
 WIDGETS="button checkbox radio label field slider stepper progress segmented popup"
 WIDGETS2="breadcrumb combobox datepicker groupbox collection table outline split scroll toolbar tabview nav colorpanel"
 leg="${1:-all}"
@@ -44,6 +89,15 @@ crop_sheet2() {
   done
 }
 
+# The web backend draws GEM's Aristo theme: its atlas as a PNG (gtex2png.py) and the slice
+# locations, from the GEM tree (GEM_DIR in build.env).
+web_theme() {
+  t="${UX_GEM_DIR:-${GEM_DIR:-}}/themes/Aristo2/1x"
+  [ -f "$t/artwork.tex" ] || { echo "== capture web: no GEM theme (set GEM_DIR) =="; return 1; }
+  python3 "$here/gtex2png.py" "$t/artwork.tex" "$1/aristo2.png"
+  cp "$t/locations.txt" "$1/aristo2-locations.txt"
+}
+
 web_leg() {
   command -v node >/dev/null || { echo "== capture web: skipped (no node) =="; return; }
   CHROME="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -53,7 +107,7 @@ web_leg() {
   "$xcc" -A wasm32 -I "$ux" -I "$here" -o "$work/showcase_web" "$here/showcase_web.xc" -q 2>/dev/null
   cp "$work/showcase_web.wasm" "$work/showcase_web.js" "$work/" 2>/dev/null || true
   cp "$ux/ux_web_browser.js" "$here/page.html" "$work/"
-  cp "$here/assets/aristo2.png" "$here/assets/aristo2-locations.txt" "$work/"
+  web_theme "$work"
   # exec so $SRV IS the python pid (killing a subshell orphans its child —
   # a stale server kept answering the port with the previous build's wasm).
   pkill -f "http.server 8931" 2>/dev/null || true
@@ -145,14 +199,9 @@ android_leg() {
 }
 
 gtk_leg() {
-  pkg-config --exists gtk4 2>/dev/null || { echo "== capture gtk: skipped (no gtk4) =="; return; }
-  work=$(mktemp -d)
-  echo "== capture gtk: building the booth =="
-  cc -dynamiclib -install_name "$work/libUXGtk.dylib" "$ux/libUXGtk.c" \
-      $(pkg-config --cflags --libs gtk4) -o "$work/libUXGtk.dylib"
-  "$xcc" -A arm64 -I "$ux" -I "$here" "$here/showcase_gtk.xc" \
-      -Xlinker "$work/libUXGtk.dylib" -o "$work/showcase_gtk" -q 2>/dev/null
-  out=$("$work/showcase_gtk" 2>&1 | grep -v Warning) || true
+  echo "== capture gtk: the booth =="
+  out=$(gtk_booth showcase_gtk /tmp/ux-sheet-gtk.ppm)
+  echo "$out" | grep -q "^SKIP" && { echo "== capture gtk: skipped =="; return; }
   echo "$out" | grep -q "^PASS" || { echo "== capture gtk: FAILED =="; echo "$out" | tail -3; return 1; }
   [ -f /tmp/ux-sheet-gtk.ppm ] || { echo "== capture gtk: no sheet dump =="; return 1; }
   # GTK draws its own widgets (Adwaita), so this capture IS the Linux look.
@@ -165,10 +214,11 @@ mac_leg() {
   work=$(mktemp -d)
   echo "== capture mac: building the booth =="
   cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" \
-      "$ux/libUXAppKit.m" -framework Cocoa -o "$work/libUXAppKit.dylib"
+      "$ux/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
   "$xcc" -A arm64 -I "$ux" -I "$here" "$here/showcase_mac.xc" \
-      -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/showcase_mac" -q 2>/dev/null
-  out=$("$work/showcase_mac" 2>&1 | grep -v Warning) || true
+      -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/showcase_mac" -q 2>/dev/null
+  out=$(ux_mac_run -t 60 "$work/showcase_mac" 2>&1 | grep -v Warning) || true
+  mac_fetch /tmp/ux-sheet-mac.ppm
   echo "$out" | grep -q "^PASS" || { echo "== capture mac: FAILED =="; echo "$out" | tail -3; return 1; }
   [ -f /tmp/ux-sheet-mac.ppm ] || { echo "== capture mac: no sheet dump =="; return 1; }
   sips -s format png /tmp/ux-sheet-mac.ppm --out "$outdir/sheet-macos.png" >/dev/null 2>&1
@@ -176,11 +226,11 @@ mac_leg() {
 }
 
 win_leg() {
-  command -v wine >/dev/null 2>&1 || { echo "== capture win: skipped (no wine) =="; return; }
   work=$(mktemp -d)
   echo "== capture win: building the booth for win64 =="
   "$xcc" -A win64 -I "$ux" -I "$here" "$here/showcase_win.xc" -o "$work/showcase_win.exe" -q 2>/dev/null
-  out=$(cd "$work" && WINEDEBUG=-all WINEDLLOVERRIDES="winedbg.exe=d;" timeout 60 wine showcase_win.exe 2>/dev/null) || true
+  out=$(win_booth "$work" showcase_win.exe ux-sheet-win.ppm)
+  echo "$out" | grep -q "^SKIP" && { echo "== capture win: skipped =="; return; }
   echo "$out" | grep -q "^PASS" || { echo "== capture win: FAILED =="; echo "$out" | tail -3; return 1; }
   [ -f "$work/ux-sheet-win.ppm" ] || { echo "== capture win: no sheet dump =="; return 1; }
   sips -s format png "$work/ux-sheet-win.ppm" --out "$outdir/sheet-windows.png" >/dev/null 2>&1
@@ -215,7 +265,7 @@ web_leg2() {
   echo "== capture web (sheet 2) =="
   "$xcc" -A wasm32 -I "$ux" -I "$here" -o "$work/showcase_web" "$here/showcase_web2.xc" -q 2>/dev/null
   cp "$ux/ux_web_browser.js" "$here/page.html" "$work/"
-  cp "$here/assets/aristo2.png" "$here/assets/aristo2-locations.txt" "$work/"
+  web_theme "$work"
   pkill -f "http.server 8931" 2>/dev/null || true
   ( cd "$work" && exec python3 -m http.server 8931 ) >/dev/null 2>&1 &
   SRV=$!
@@ -302,14 +352,9 @@ android_leg2() {
 }
 
 gtk_leg2() {
-  pkg-config --exists gtk4 2>/dev/null || return
-  work=$(mktemp -d)
   echo "== capture gtk (sheet 2) =="
-  cc -dynamiclib -install_name "$work/libUXGtk.dylib" "$ux/libUXGtk.c" \
-      $(pkg-config --cflags --libs gtk4) -o "$work/libUXGtk.dylib"
-  "$xcc" -A arm64 -I "$ux" -I "$here" "$here/showcase_gtk2.xc" \
-      -Xlinker "$work/libUXGtk.dylib" -o "$work/showcase_gtk2" -q 2>/dev/null
-  out=$("$work/showcase_gtk2" 2>&1 | grep -v Warning) || true
+  out=$(gtk_booth showcase_gtk2 /tmp/ux-sheet2-gtk.ppm)
+  echo "$out" | grep -q "^SKIP" && return
   echo "$out" | grep -q "^PASS" || { echo "== capture gtk 2: FAILED =="; echo "$out" | tail -3; return 1; }
   sips -s format png /tmp/ux-sheet2-gtk.ppm --out "$outdir/sheet2-linux.png" >/dev/null 2>&1
   crop_sheet2 "$outdir/sheet2-linux.png" linux
@@ -320,21 +365,22 @@ mac_leg2() {
   work=$(mktemp -d)
   echo "== capture mac (sheet 2) =="
   cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" \
-      "$ux/libUXAppKit.m" -framework Cocoa -o "$work/libUXAppKit.dylib"
+      "$ux/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
   "$xcc" -A arm64 -I "$ux" -I "$here" "$here/showcase_mac2.xc" \
-      -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/showcase_mac2" -q 2>/dev/null
-  out=$("$work/showcase_mac2" 2>&1 | grep -v Warning) || true
+      -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/showcase_mac2" -q 2>/dev/null
+  out=$(ux_mac_run -t 60 "$work/showcase_mac2" 2>&1 | grep -v Warning) || true
+  mac_fetch /tmp/ux-sheet2-mac.ppm
   echo "$out" | grep -q "^PASS" || { echo "== capture mac 2: FAILED =="; echo "$out" | tail -3; return 1; }
   sips -s format png /tmp/ux-sheet2-mac.ppm --out "$outdir/sheet2-macos.png" >/dev/null 2>&1
   crop_sheet2 "$outdir/sheet2-macos.png" macos
 }
 
 win_leg2() {
-  command -v wine >/dev/null 2>&1 || return
   work=$(mktemp -d)
   echo "== capture win (sheet 2) =="
   "$xcc" -A win64 -I "$ux" -I "$here" "$here/showcase_win2.xc" -o "$work/showcase_win2.exe" -q 2>/dev/null
-  out=$(cd "$work" && WINEDEBUG=-all WINEDLLOVERRIDES="winedbg.exe=d;" timeout 60 wine showcase_win2.exe 2>/dev/null) || true
+  out=$(win_booth "$work" showcase_win2.exe ux-sheet2-win.ppm)
+  echo "$out" | grep -q "^SKIP" && return
   echo "$out" | grep -q "^PASS" || { echo "== capture win 2: FAILED =="; echo "$out" | tail -3; return 1; }
   [ -f "$work/ux-sheet2-win.ppm" ] || { echo "== capture win 2: no dump =="; return 1; }
   sips -s format png "$work/ux-sheet2-win.ppm" --out "$outdir/sheet2-windows.png" >/dev/null 2>&1
@@ -396,10 +442,11 @@ modal_mac() {
   work=$(mktemp -d)
   echo "== capture mac (modals) =="
   cc -fobjc-arc -fno-objc-msgsend-selector-stubs -dynamiclib -install_name "$work/libUXAppKit.dylib" \
-      "$ux/libUXAppKit.m" -framework Cocoa -o "$work/libUXAppKit.dylib"
+      "$ux/libUXAppKit.m" -framework Cocoa -framework OpenGL -o "$work/libUXAppKit.dylib"
   "$xcc" -A arm64 -I "$ux" -I "$here" "$here/showcase_modal_mac.xc" \
-      -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -o "$work/showcase_modal_mac" -q 2>/dev/null
-  out=$("$work/showcase_modal_mac" 2>&1 | grep -v Warning) || true
+      -Xlinker "$work/libUXAppKit.dylib" -framework Cocoa -framework OpenGL -o "$work/showcase_modal_mac" -q 2>/dev/null
+  out=$(ux_mac_run -t 60 "$work/showcase_modal_mac" 2>&1 | grep -v Warning) || true
+  mac_fetch /tmp/ux-alert-mac.ppm /tmp/ux-toolbar-mac.ppm
   echo "$out" | grep -q "^PASS" || { echo "== capture mac modals: FAILED =="; echo "$out" | tail -3; return 1; }
   sips -s format png /tmp/ux-alert-mac.ppm --out "$outdir/alert-macos.png" >/dev/null 2>&1 && echo "  mac  alert"
   # the REAL NSToolbar: the theme frame's top band (titlebar + toolbar)
@@ -481,30 +528,29 @@ modal_android() {
 }
 
 modal_gtk() {
-  pkg-config --exists gtk4 2>/dev/null || return
-  work=$(mktemp -d)
   echo "== capture gtk (modals) =="
-  cc -dynamiclib -install_name "$work/libUXGtk.dylib" "$ux/libUXGtk.c" \
-      $(pkg-config --cflags --libs gtk4) -o "$work/libUXGtk.dylib"
-  "$xcc" -A arm64 -I "$ux" -I "$here" "$here/showcase_alert_gtk.xc" \
-      -Xlinker "$work/libUXGtk.dylib" -o "$work/showcase_alert_gtk" -q 2>/dev/null
-  out=$(timeout 60 "$work/showcase_alert_gtk" 2>&1 | grep -v Warning) || true
+  out=$(gtk_booth showcase_alert_gtk /tmp/ux-alert-gtk.ppm)
+  echo "$out" | grep -q "^SKIP" && return
   echo "$out" | grep -q "^PASS" || { echo "== capture gtk modals: FAILED =="; echo "$out" | tail -3; return 1; }
   sips -s format png /tmp/ux-alert-gtk.ppm --out "$outdir/alert-linux.png" >/dev/null 2>&1 && echo "  gtk  alert"
 }
 
 modal_win() {
-  command -v wine >/dev/null || { echo "== capture win modals: skipped (no wine) =="; return; }
   stage_fp_demo
   work=$(mktemp -d)
   echo "== capture win (modals) =="
-  for booth in alert_win fp_win; do
-    "$xcc" -A win64 -I "$ux" -I "$here" "$here/showcase_$booth.xc" -o "$work/showcase_$booth.exe" -q 2>/dev/null
-    out=$(cd "$work" && WINEDEBUG=-all WINEDLLOVERRIDES="winedbg.exe=d;" timeout 60 wine "showcase_$booth.exe" 2>/dev/null) || true
-    echo "$out" | grep -q "^PASS" || { echo "== capture win modals: FAILED ($booth) =="; echo "$out" | tail -3; return 1; }
-  done
+  "$xcc" -A win64 -I "$ux" -I "$here" "$here/showcase_alert_win.xc" -o "$work/showcase_alert_win.exe" -q 2>/dev/null
+  out=$(win_booth "$work" showcase_alert_win.exe ux-alert-win.ppm)
+  echo "$out" | grep -q "^SKIP" && return
+  echo "$out" | grep -q "^PASS" || { echo "== capture win modals: FAILED (alert) =="; echo "$out" | tail -3; return 1; }
+  # the file panel lists a demo folder: C:\ux_fp_demo on the Windows machine, else this Mac's
+  # /tmp/ux_fp_demo, which Wine sees as Z:\tmp\ux_fp_demo
+  [ -n "${UX_WIN_HOST:-}" ] && ssh -o BatchMode=yes "$UX_WIN_HOST" 'New-Item -ItemType Directory -Force C:\ux_fp_demo\Projects,C:\ux_fp_demo\Notes | Out-Null; foreach ($f in "README.md","rocks.xc","theme.png","build.sh") { New-Item -ItemType File -Force C:\ux_fp_demo\$f | Out-Null }' >/dev/null 2>&1
+  "$xcc" -A win64 -I "$ux" -I "$here" "$here/showcase_fp_win.xc" -o "$work/showcase_fp_win.exe" -q 2>/dev/null
+  out=$(win_booth "$work" showcase_fp_win.exe ux-fp-win.ppm)
+  echo "$out" | grep -q "^PASS" || { echo "== capture win modals: FAILED (file panel) =="; echo "$out" | tail -3; return 1; }
   sips -s format png "$work/ux-alert-win.ppm" --out "$outdir/alert-windows.png" >/dev/null 2>&1 && echo "  win  alert"
-  sips -s format png "$work/ux-fp-win.ppm" --out "$outdir/filechooser-windows.png" >/dev/null 2>&1 && echo "  win  filechooser"
+  [ -f "$work/ux-fp-win.ppm" ] && sips -s format png "$work/ux-fp-win.ppm" --out "$outdir/filechooser-windows.png" >/dev/null 2>&1 && echo "  win  filechooser"
 }
 
 [ "$leg" = web ] || [ "$leg" = all ] && { web_leg; web_leg2; }

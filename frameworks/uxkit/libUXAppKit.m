@@ -1423,6 +1423,15 @@ int ux_ak_capture(void)
     {
     return g_capture;
     }
+/* Portraits (the docs' widget pictures, tools/capture): on a Retina screen the 1x headless frame
+ * loses AppKit's half-point hairlines (a text field's bezel), so a portrait renders at the screen's
+ * scale and is scaled down smoothly, as the screen shows it.  The gates keep the exact 1x frame. */
+static int g_portrait = 0;
+static NSBitmapImageRep* akPortraitRep(NSView* v, NSRect b);
+void ux_ak_set_portrait(int on)
+    {
+    g_portrait = on;
+    }
 void ux_ak_set_capture(int on)
     {
     g_capture = on;
@@ -2062,6 +2071,13 @@ void ux_ak_window_invalidate(int handle)
     @autoreleasepool
         {
         NSRect b = [v bounds];
+        if (g_portrait)
+            {
+            NSBitmapImageRep* pr = akPortraitRep(v, b);
+            if (pr)
+                g_lastRep = pr;
+            return;
+            }
         NSBitmapImageRep* rep = [v bitmapImageRepForCachingDisplayInRect:b];
         /* AppKit sizes that bitmap for the main screen, 2 pixels a point on a Retina one.  Reads
          * are in points, so a headless frame is painted at 1x whatever the Mac's display. */
@@ -4590,6 +4606,31 @@ int ux_ak_dump_ppm(const char* path)
     return akWriteRepPPM(g_lastRep, path);
     }
 
+/* A view at one pixel a point: rendered at the screen's scale (2 on a Retina Mac, where a 1x
+ * render loses AppKit's half-point hairlines) and scaled down smoothly, as the screen shows it. */
+static NSBitmapImageRep* akPortraitRep(NSView* v, NSRect b)
+    {
+    NSBitmapImageRep* hi = [v bitmapImageRepForCachingDisplayInRect:b];
+    if (!hi)
+        return nil;
+    [v cacheDisplayInRect:b toBitmapImageRep:hi];
+    if ([hi pixelsWide] == (NSInteger)b.size.width)
+        return hi;
+    NSBitmapImageRep* rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
+        pixelsWide:(NSInteger)b.size.width pixelsHigh:(NSInteger)b.size.height
+        bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO
+        colorSpaceName:[hi colorSpaceName] bytesPerRow:0 bitsPerPixel:0];
+    [rep setSize:b.size];
+    [NSGraphicsContext saveGraphicsState];
+    NSGraphicsContext* gc = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
+    [NSGraphicsContext setCurrentContext:gc];
+    [gc setImageInterpolation:NSImageInterpolationHigh];
+    [hi drawInRect:NSMakeRect(0, 0, b.size.width, b.size.height) fromRect:NSZeroRect
+         operation:NSCompositingOperationCopy fraction:1.0 respectFlipped:NO hints:nil];
+    [NSGraphicsContext restoreGraphicsState];
+    return rep;
+    }
+
 /* ---- portrait rigs (capture only) -----------------------------------------------------------
  * The alert portrait builds the SAME NSAlert ux_ak_alert builds, lays it out
  * without running it, and dumps the panel's content view.  The toolbar
@@ -4615,10 +4656,9 @@ int ux_ak_alert_dump(int icon, const char* lines, const char* buttons, const cha
     [w layoutIfNeeded];
     NSView* v = [w contentView];
     NSRect b = [v bounds];
-    NSBitmapImageRep* rep = [v bitmapImageRepForCachingDisplayInRect:b];
+    NSBitmapImageRep* rep = akPortraitRep(v, b);
     if (!rep)
         return 0;
-    [v cacheDisplayInRect:b toBitmapImageRep:rep];
     return akWriteRepPPM(rep, path);
     }
 
@@ -4677,10 +4717,9 @@ int ux_ak_toolbar_dump(int w, int h, const char* path)
     [win layoutIfNeeded];
     NSView* frame = [[win contentView] superview]; // the theme frame: titlebar + toolbar + content
     NSRect b = [frame bounds];
-    NSBitmapImageRep* rep = [frame bitmapImageRepForCachingDisplayInRect:b];
+    NSBitmapImageRep* rep = akPortraitRep(frame, b);
     if (!rep)
         return 0;
-    [frame cacheDisplayInRect:b toBitmapImageRep:rep];
     return akWriteRepPPM(rep, path);
     }
 
