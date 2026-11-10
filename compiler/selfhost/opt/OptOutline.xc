@@ -1157,7 +1157,7 @@
         return F.name();
         }
 
-    // gpuLength(self, k): for record field k a pointer capture, the bytes from
+    // gpuLength(self, k): for capture k (record field 3 + k) a pointer, the bytes from
     // it to the end of its heap block (Par.spanOf, as a generated block's);
     // -1 for any other field. Its name.
     final String* ppGpuLength(IRModule* m, String* stem, String* objT, String* recT, Array* liveIns)
@@ -1199,7 +1199,10 @@
             IRValue* no = ppEmit(b, String.withCString("Const"), String.withCString("Bool"), IROperand.immI((i64)0, String.withCString("Bool")), (IROperand*)0, (IROperand*)0);
             IRValue* sp = ppCall(b, String.withCString("Par$spanOf"), i64t, IROperand.useVal(pv), IROperand.useVal(esv), IROperand.useVal(no), mm);
             mm = _ppLastMem;
-            IRValue* fk = ppEmit(b, String.withCString("Const"), String.withCString("I32"), IROperand.immI((i64)((u32)3 + i), String.withCString("I32")), (IROperand*)0, (IROperand*)0);
+            // The runtime asks by capture: the kernel printers' `buf=off:k:es`
+            // gives the field's index less the record's prefix (word, lo,
+            // hi), so live-in i is k = i, not its field index 3 + i.
+            IRValue* fk = ppEmit(b, String.withCString("Const"), String.withCString("I32"), IROperand.immI((i64)i, String.withCString("I32")), (IROperand*)0, (IROperand*)0);
             IRValue* is = ppCmp(b, String.withCString("EQ"), k, fk);
             acc = ppEmit(b, String.withCString("Select"), i64t, IROperand.useVal(is), IROperand.useVal(sp), IROperand.useVal(acc));
             }
