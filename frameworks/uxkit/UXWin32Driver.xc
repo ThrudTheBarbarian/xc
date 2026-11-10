@@ -5287,7 +5287,15 @@ class UXWin32Driver : Object<UXViewDriver>
                         {
                         MoveWindow(t.nodes[i].ctrl, ax, ay, w, hh, (i32)1);
                         }
-                    SendMessageA(t.nodes[i].ctrl, (u32)PBM_SETPOS, (pointer)pgv.nativeFractionMille(), (pointer)0);
+                    // A themed bar animates up to a higher position, so for a moment (and in a
+                    // snapshot taken then) it shows the old one; it jumps to a lower one.  Going one
+                    // past the value and back shows the value at once.
+                    i32 pm = pgv.nativeFractionMille();
+                    if (pm < (i32)1000)
+                        {
+                        SendMessageA(t.nodes[i].ctrl, (u32)PBM_SETPOS, (pointer)(pm + (i32)1), (pointer)0);
+                        }
+                    SendMessageA(t.nodes[i].ctrl, (u32)PBM_SETPOS, (pointer)pm, (pointer)0);
                     }
                 }
             else if (k == (i32)UXKindSegmented)
