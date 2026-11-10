@@ -17,7 +17,17 @@ other side: a control *fills* the frame it is given and never exceeds it.
 Theme minimums are clamped where the platform allows (Android's
 `setMinHeight(0)`, GTK's CSS floors dropped at boot). The few controls with
 a fixed intrinsic size (`UIStepper`, `UISwitch`) are centred in their
-frame, and their standard size here is large enough to hold them.
+frame, and their standard size here is large enough to hold them. A
+label's text starts 3px in from the left and top of its frame on every
+desktop backend, so labels line up with each other and with the controls
+beside them.
+
+The metrics audit (`make metrics-audit` in `frameworks/uxkit`) checks the
+drivers' side on AppKit, Win32, GTK, the web and GEM: each control at its
+standard height draws inside its frame, fills it or sits centred in it, and
+each label's text starts where the rule says. It runs twice, once with the
+controls made in code and once with the same form loaded from an `.rsc`
+file, and both must pass.
 
 Out-of-bounds areas (the notch, the status bar, the gesture bar) are **not**
 in this table. The platform handles them through window positioning: a

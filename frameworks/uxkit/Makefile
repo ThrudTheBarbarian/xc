@@ -235,7 +235,9 @@ metrics-audit-win32: ; XCC=$(XCC) sh run_metrics_audit.sh win32
 metrics-audit-gtk: ; XCC=$(XCC) sh run_metrics_audit.sh gtk
 metrics-audit-web: ; XCC=$(XCC) sh run_metrics_audit.sh web
 metrics-audit-gem: ; XCC=$(XCC) sh run_metrics_audit.sh gem
-metrics-audit: metrics-audit-appkit metrics-audit-win32 metrics-audit-gtk metrics-audit-web metrics-audit-gem
+# The same audit with the controls loaded from an .rsc document: a form designed once lands the same.
+metrics-audit-rsc: ; for b in appkit win32 gtk web gem; do XCC=$(XCC) sh run_metrics_audit.sh $$b rsc || exit 1; done
+metrics-audit: metrics-audit-appkit metrics-audit-win32 metrics-audit-gtk metrics-audit-web metrics-audit-gem metrics-audit-rsc
 
 # Bug 026 activated: outlet/:action synthesis under the UXKit names (host run).
 designable: ; XCC=$(XCC) sh run_designable.sh
