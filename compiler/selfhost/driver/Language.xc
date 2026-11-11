@@ -326,7 +326,11 @@ class Languages
     static bool isStd(String* n)
         {
         String* b = n.hasPrefix(String.withCString("@\"")) ? n.substringFromByte(2) : n.substringFromByte(1);
-        return b.hasPrefix(String.withCString("_ZNSt")) || b.hasPrefix(String.withCString("_ZNKSt")) || b.hasPrefix(String.withCString("_ZSt"));
+        // libstdc++'s own namespaces too: its parallel algorithms run in
+        // __pstl (serially, without TBB), its iterators in __gnu_cxx.
+        return b.hasPrefix(String.withCString("_ZNSt")) || b.hasPrefix(String.withCString("_ZNKSt")) || b.hasPrefix(String.withCString("_ZSt"))
+            || b.hasPrefix(String.withCString("_ZN6__pstl")) || b.hasPrefix(String.withCString("_ZNK6__pstl"))
+            || b.hasPrefix(String.withCString("_ZN9__gnu_cxx")) || b.hasPrefix(String.withCString("_ZNK9__gnu_cxx"));
         }
 
     // Whether `@name` is a lambda's call operator (`...$_0clE...` for a
