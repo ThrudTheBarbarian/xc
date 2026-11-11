@@ -6,7 +6,8 @@
 # back after each, and auto's choice is saved; the next run places it without
 # measuring. Without the probe one run cannot finish measuring it. The array
 # it writes and its reduction are the same with and without the probe, and
-# as XC_PAR=cpu gives them. Self-hosted compiler only; skipped where no
+# as XC_PAR=cpu gives them (integer arithmetic, so every device must agree
+# exactly). Self-hosted compiler only; skipped where no
 # device but the CPU is found (auto then has nothing to measure).
 #
 #   bash tests/par/probe-once.sh
@@ -22,24 +23,24 @@ cat > "$W/once.xc" <<'XC'
 #define N (1 << 22)
 i32 main(void)
 {
-    float* a = new float[N];
-    float* b = new float[N];
-    for (u32 i = 0; i < N; i++) { a[i] = (float)(i % 977); b[i] = 1.0f; }
+    u32* a = new u32[N];
+    u32* b = new u32[N];
+    for (u32 i = 0; i < N; i++) { a[i] = i % 977; b[i] = 1; }
     u64 total = 0;
     par once :reduce(+ total)
         {
         for (u32 i in 0..N)
             {
-            float x = a[i];
+            u32 x = a[i];
             u32 k = 0;
-            while (k < 64 && x < 4000.0f) { x = x * 1.01f + 1.0f; k = k + 1; }
+            while (k < 64 && x < 4000) { x = x * 3 / 2 + 7; k = k + 1; }
             b[i] = b[i] + x;
             total = total + k;
             }
         }
-    double s = 0.0;
-    for (u32 i = 0; i < N; i++) s = s + (double)b[i];
-    printf("%llu %.1f\n", total, s);
+    u64 s = 0;
+    for (u32 i = 0; i < N; i++) s = s + b[i];
+    printf("%llu %llu\n", total, s);
     return 0;
 }
 XC
