@@ -1393,6 +1393,15 @@ class LlvmReader
             eat("inbounds");
             eat("nuw");
             eat("nusw");
+            // `inrange(-24, 8)` (a vtable's address point, LLVM 19's
+            // spelling): a promise about the range, nothing to compute.
+            ws();
+            if (_s.substringFromByte(_p).hasPrefix(String.withCString("inrange(")))
+                {
+                while (_p < _s.byteLength() && _s.byteAt(_p) != (u8)')')
+                    _p = _p + (u32)1;
+                _p = _p + (u32)1;
+                }
             if (!eat("("))
                 {
                 fail("a constant expression not read");
@@ -1695,6 +1704,9 @@ class LlvmReader
         if (cast != (String*)0)
             {
             eat("nneg");
+            // trunc's `nuw` / `nsw` (LLVM 19): promises, nothing to compute.
+            eat("nuw");
+            eat("nsw");
             IRValue* a = typedOperand();
             if (!eat("to"))
                 {
@@ -1864,6 +1876,31 @@ class LlvmReader
         if (op.equals(String.withCString("unreachable")))
             {
             _blk.setTerm(IRInsn.with(String.withCString("Unreachable")));
+            return;
+            }
+        // freeze: the value itself (xcc makes nothing of poison, so there is
+        // nothing to pin down).
+        if (op.equals(String.withCString("freeze")))
+            {
+            IRValue* a = typedOperand();
+            if (a == (IRValue*)0)
+                {
+                fail("a freeze not read");
+                return;
+                }
+            // The operand under the result's name; when a phi has named the
+            // result already, an integer `or` with 0 makes it.
+            if (_vals.get((Hashable*)res) == (Object*)0)
+                {
+                _vals.set((Hashable*)res, (Object*)a);
+                return;
+                }
+            if (!a.ty().hasPrefix(String.withCString("I")) && !a.ty().hasPrefix(String.withCString("U")))
+                {
+                fail("a freeze not read (a value named before it is made)");
+                return;
+                }
+            define(res, String.withCString("Or"), a.ty(), IROperand.useVal(a), IROperand.immI((i64)0, a.ty()), (IROperand*)0, (String*)0);
             return;
             }
         fail(String.withFormat("an instruction not read: %s", op.cString()).cString());
