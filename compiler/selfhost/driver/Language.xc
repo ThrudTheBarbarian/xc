@@ -299,6 +299,7 @@ class Languages
                 && !Languages.mayThrow(lines, i + 1, end, nounwind))
                 {
                 Languages.plainLabels(lines, i + 1, end);
+                Languages.reroll(lines, i + 1, end);
                 Languages.byteCounts(lines, i + 1, end);
                 Languages.counted(lines, i + 1, end);
                 Languages.pointerLoops(lines, i + 1, end);
@@ -1326,6 +1327,549 @@ class Languages
             // The latch: the counter's next value beside the pointer's.
             String* sl = (String*)lines.get(iv.stepLine());
             lines.set(iv.stepLine(), (Object*)sl.appending(String.withFormat("\n  %s = add nuw nsw i64 %s, 1", nxt.cString(), idx.cString())));
+            }
+        }
+
+
+    // The `%names` a line mentions, in order (each as written, with its %).
+    static Array* namesIn(String* l)
+        {
+        Array* out = new Array();
+        u32 i = 0;
+        while (i < l.byteLength())
+            {
+            if (l.byteAt(i) != (u8)'%')
+                {
+                i = i + 1;
+                continue;
+                }
+            u32 e = i + 1;
+            while (e < l.byteLength() && LlvmName.isNameByte(l.byteAt(e)))
+                e = e + 1;
+            if (e > i + 1)
+                out.add((Object*)l.substringBytes(i, e - i));
+            i = e;
+            }
+        return out;
+        }
+
+    // A commutative binary instruction (`%x = add nsw i32 %a, %b`; add,
+    // mul, and, or, xor, fadd, fmul: IEEE's a + b is b + a) with its two
+    // operands in one order, so two copies that clang wrote each way round
+    // read alike. Any other line as it is.
+    static String* commutedInOrder(String* l)
+        {
+        u32 eq = l.byteIndexOf(String.withCString(" = "));
+        if (eq == String.notFound())
+            return l;
+        String* rest = l.substringFromByte(eq + 3);
+        u32 sp = Languages.byteFrom(rest, (u8)' ', 0);
+        if (sp == String.notFound())
+            return l;
+        String* op = rest.substringBytes(0, sp);
+        if (!op.equals(String.withCString("add")) && !op.equals(String.withCString("mul")) && !op.equals(String.withCString("and"))
+            && !op.equals(String.withCString("or")) && !op.equals(String.withCString("xor")) && !op.equals(String.withCString("fadd"))
+            && !op.equals(String.withCString("fmul")))
+            return l;
+        u32 comma = rest.byteIndexOf(String.withCString(", "));
+        if (comma == String.notFound() || rest.byteIndexOf(String.withCString(", "), comma + 1) != String.notFound())
+            return l;
+        String* b = rest.substringFromByte(comma + 2);
+        String* head = rest.substringBytes(0, comma);
+        u32 lastSp = String.notFound();
+        for (u32 k = 0; k < head.byteLength(); k = k + 1)
+            if (head.byteAt(k) == (u8)' ')
+                lastSp = k;
+        if (lastSp == String.notFound())
+            return l;
+        String* a = head.substringFromByte(lastSp + 1);
+        if (a.compare(b) <= (i8)0)
+            return l;
+        return l.substringBytes(0, eq + 3).appending(head.substringBytes(0, lastSp + 1)).appending(b)
+                .appending(String.withCString(", ")).appending(a);
+        }
+
+    // A line without its metadata attachments (`, !dbg !12, !tbaa !4`).
+    static String* withoutMeta(String* l)
+        {
+        u32 p = l.byteIndexOf(String.withCString(", !"));
+        return p == String.notFound() ? l : l.substringBytes(0, p);
+        }
+
+    // `l` with each whole-name occurrence of a key of `ren` replaced by its value.
+    static String* renamed(String* l, Map* ren)
+        {
+        String* out = new String();
+        u32 i = 0;
+        while (i < l.byteLength())
+            {
+            if (l.byteAt(i) != (u8)'%')
+                {
+                out.appendByte(l.byteAt(i));
+                i = i + 1;
+                continue;
+                }
+            u32 e = i + 1;
+            while (e < l.byteLength() && LlvmName.isNameByte(l.byteAt(e)))
+                e = e + 1;
+            String* n = l.substringBytes(i, e - i);
+            String* r = (String*)ren.get((Hashable*)n);
+            out.append(r != (String*)0 ? r : n);
+            i = e;
+            }
+        return out;
+        }
+
+    // A reduction unrolled by hand (libstdc++'s std::reduce and
+    // std::transform_reduce: `while (last - first >= 4)` folding first[0..3]
+    // into the sum one after another), in a function's body lines [from,
+    // end), written back as one element a pass. The header has
+    //     %p   = phi ptr [ %s, %pre ], [ %pn, %latch ]
+    //     %acc = phi T   [ %init, %pre ], [ %accN, %latch ]
+    //     %pi  = ptrtoint ptr %p to i64
+    //     %d   = sub i64 %ei, %pi             ; %ei the end, made before
+    //     %c   = icmp sgt i64 %d, K
+    //     br i1 %c, label %latch, label %exit
+    // and the latch loads N elements of size S at %p + k*S, steps %p by N*S,
+    // and is N copies of one slice, each folding its element into the value
+    // the copy before made (slice 0 into %acc). Kept: slice 0, a counter i
+    // from 0 while i < (ei - s - K + S - 1) / S (the passes the unrolled loop
+    // made, now one element each, until no more than K bytes are left), and
+    // %p = getelementptr T, %s, i in the header, where the loop after it (the
+    // rest) still finds it. The order of the folds is the same, so floats
+    // give the same sum too.
+    static void reroll(Array* lines, u32 from, u32 end)
+        {
+        u32 made = 0;
+        String* hName = (String*)0;
+        u32 hStart = from;
+        for (u32 i = from; i < end; i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (l.byteLength() > 0 && l.byteAt(0) != (u8)' ' && l.byteAt(0) != (u8)';')
+                {
+                u32 colon = Languages.byteFrom(l, (u8)':', 0);
+                hName = colon != String.notFound() ? l.substringBytes(0, colon) : (String*)0;
+                hStart = i + 1;
+                continue;
+                }
+            String* t = Languages.withoutMeta(l.trimmed());
+            if (hName == (String*)0 || !t.contains(String.withCString(" = icmp sgt i64 ")))
+                continue;
+            // %c = icmp sgt i64 %d, K
+            String* c = t.substringBytes(0, Languages.byteFrom(t, (u8)' ', 0));
+            Array* cp = t.substringFromByte(t.byteIndexOf(String.withCString(" i64 ")) + 5).splitOnByte((u8)',');
+            if (cp.count() != 2)
+                continue;
+            String* d = ((String*)cp.get(0)).trimmed();
+            i64 kBytes = Languages.intOf(((String*)cp.get(1)).trimmed());
+            if (kBytes <= 0)
+                continue;
+            // its branch, to the latch when true
+            u32 brAt = String.notFound();
+            for (u32 k = i + 1; k < end && brAt == String.notFound(); k = k + 1)
+                {
+                String* m = (String*)lines.get(k);
+                if (m.byteLength() > 0 && m.byteAt(0) != (u8)' ')
+                    break;
+                if (m.trimmed().hasPrefix(String.withFormat("br i1 %s, label ", c.cString())))
+                    brAt = k;
+                }
+            if (brAt == String.notFound() || Languages.uses(lines, from, end, c) != 2)
+                continue;
+            String* latch = Languages.branchTarget((String*)lines.get(brAt), c, 0);
+            String* exitTo = Languages.branchTarget((String*)lines.get(brAt), c, 1);
+            if (latch == (String*)0 || exitTo == (String*)0)
+                continue;
+            String* latchName = latch.hasPrefix(String.withCString("%")) ? latch.substringFromByte(1) : latch;
+            // the latch as phis and branches name it
+            latch = String.withFormat("%%%s", latchName.cString());
+            // %d = sub i64 %ei, %pi; %pi = ptrtoint ptr %p to i64, in the header
+            String* ei = (String*)0;
+            String* pi = (String*)0;
+            String* p = (String*)0;
+            for (u32 k = hStart; k < i; k = k + 1)
+                {
+                String* m = Languages.withoutMeta(((String*)lines.get(k)).trimmed());
+                if (m.hasPrefix(d.appending(String.withCString(" = sub i64 "))) || m.hasPrefix(d.appending(String.withCString(" = sub nsw i64 "))))
+                    {
+                    Array* sp = m.substringFromByte(m.byteIndexOf(String.withCString(" i64 ")) + 5).splitOnByte((u8)',');
+                    if (sp.count() == 2)
+                        {
+                        ei = ((String*)sp.get(0)).trimmed();
+                        pi = Languages.withoutMeta(((String*)sp.get(1)).trimmed());
+                        }
+                    }
+                }
+            if (ei == (String*)0 || pi == (String*)0 || Languages.definedIn(lines, hStart, end, ei))
+                continue;
+            for (u32 k = hStart; k < i; k = k + 1)
+                {
+                String* m = Languages.withoutMeta(((String*)lines.get(k)).trimmed());
+                String* ph = pi.appending(String.withCString(" = ptrtoint ptr "));
+                if (m.hasPrefix(ph))
+                    {
+                    String* rest = Languages.withoutMeta(m.substringFromByte(ph.byteLength()));
+                    u32 sp = Languages.byteFrom(rest, (u8)' ', 0);
+                    p = sp == String.notFound() ? rest : rest.substringBytes(0, sp);
+                    }
+                }
+            if (p == (String*)0)
+                continue;
+            // the header's phis: %p and one accumulator, both from the latch
+            u32 pLine = String.notFound();
+            u32 accLine = String.notFound();
+            u32 lastPhi = String.notFound();
+            String* sStart = (String*)0;
+            String* pre = (String*)0;
+            String* pn = (String*)0;
+            String* acc = (String*)0;
+            String* accTy = (String*)0;
+            String* accN = (String*)0;
+            u32 phis = 0;
+            for (u32 k = hStart; k < i; k = k + 1)
+                {
+                String* m = Languages.withoutMeta(((String*)lines.get(k)).trimmed());
+                if (!m.contains(String.withCString(" = phi ")))
+                    continue;
+                lastPhi = k;
+                phis = phis + 1;
+                String* nm = m.substringBytes(0, Languages.byteFrom(m, (u8)' ', 0));
+                u32 at = m.byteIndexOf(String.withCString(" = phi ")) + 7;
+                u32 sp1 = Languages.byteFrom(m, (u8)' ', at);
+                String* ty = m.substringBytes(at, sp1 - at);
+                // [ v, %b ], [ w, %latch ]
+                Array* ins = m.substringFromByte(sp1).splitOnByte((u8)'[');
+                String* fromPre = (String*)0;
+                String* preB = (String*)0;
+                String* fromLatch = (String*)0;
+                u32 nin = 0;
+                for (u32 q = 0; q < ins.count(); q = q + 1)
+                    {
+                    String* e = ((String*)ins.get(q)).trimmed();
+                    if (e.byteLength() == 0)
+                        continue;
+                    nin = nin + 1;
+                    u32 close = Languages.byteFrom(e, (u8)']', 0);
+                    if (close == String.notFound())
+                        continue;
+                    Array* vb = e.substringBytes(0, close).splitOnByte((u8)',');
+                    if (vb.count() != 2)
+                        continue;
+                    String* v = ((String*)vb.get(0)).trimmed();
+                    String* b = ((String*)vb.get(1)).trimmed();
+                    if (b.equals(latch))
+                        fromLatch = v;
+                    else
+                        {
+                        fromPre = v;
+                        preB = b;
+                        }
+                    }
+                if (nin != 2 || fromLatch == (String*)0 || fromPre == (String*)0)
+                    {
+                    phis = 99;
+                    continue;
+                    }
+                if (nm.equals(p) && ty.equals(String.withCString("ptr")))
+                    {
+                    pLine = k;
+                    sStart = fromPre;
+                    pre = preB;
+                    pn = fromLatch;
+                    }
+                else if (acc == (String*)0)
+                    {
+                    accLine = k;
+                    acc = nm;
+                    accTy = ty;
+                    accN = fromLatch;
+                    }
+                else
+                    phis = 99;
+                }
+            if (pLine == String.notFound() || accLine == String.notFound() || phis != 2)
+                continue;
+            // the latch: its lines [lStart, lBr)
+            u32 lLabel = Languages.labelLine(lines, from, end, latchName);
+            if (lLabel == String.notFound())
+                continue;
+            u32 lStart = lLabel + 1;
+            u32 lBr = String.notFound();
+            for (u32 k = lStart; k < end; k = k + 1)
+                {
+                String* m = (String*)lines.get(k);
+                if (m.byteLength() > 0 && m.byteAt(0) != (u8)' ')
+                    break;
+                if (m.trimmed().hasPrefix(String.withCString("br ")))
+                    {
+                    lBr = k;
+                    break;
+                    }
+                }
+            if (lBr == String.notFound() || !Languages.withoutMeta(((String*)lines.get(lBr)).trimmed()).equals(String.withFormat("br label %%%s", hName.cString())))
+                continue;
+            // Each latch line's slice: an address %p + k*S is slice k; the
+            // step is none (-2); a line takes the highest slice it uses.
+            Map* slice = new Map();
+            Map* offs = new Map();      // address -> k
+            i64 elemSize = 0;
+            String* elemTy = (String*)0;
+            i64 stepBytes = 0;
+            bool ok = true;
+            Array* body = new Array();  // line indices that compute
+            for (u32 k = lStart; k < lBr && ok; k = k + 1)
+                {
+                String* m = Languages.withoutMeta(((String*)lines.get(k)).trimmed());
+                if (m.byteLength() == 0 || m.hasPrefix(String.withCString("#dbg_")) || m.hasPrefix(String.withCString("call void @llvm.dbg.")))
+                    continue;
+                if (!m.hasPrefix(String.withCString("%")) || m.contains(String.withCString(" store ")) || m.hasPrefix(String.withCString("store "))
+                    || m.contains(String.withCString(" call ")) || m.contains(String.withCString(" invoke ")))
+                    {
+                    ok = false;
+                    continue;
+                    }
+                String* nm = m.substringBytes(0, Languages.byteFrom(m, (u8)' ', 0));
+                String* gh = String.withFormat("%s = getelementptr inbounds nuw i8, ptr %s, i64 ", nm.cString(), p.cString());
+                String* gh2 = String.withFormat("%s = getelementptr inbounds i8, ptr %s, i64 ", nm.cString(), p.cString());
+                if (m.hasPrefix(gh) || m.hasPrefix(gh2))
+                    {
+                    i64 off = Languages.intOf(m.substringFromByte(m.hasPrefix(gh) ? gh.byteLength() : gh2.byteLength()));
+                    offs.set((Hashable*)nm, (Object*)Number.withI64(off));
+                    continue;
+                    }
+                body.add((Object*)Number.withU32(k));
+                }
+            if (!ok || body.count() == 0)
+                continue;
+            // loads: through %p or an address, all one type
+            u32 nLoads = 0;
+            for (u32 b = 0; b < body.count() && ok; b = b + 1)
+                {
+                String* m = Languages.withoutMeta(((String*)lines.get(((Number*)body.get(b)).asU32())).trimmed());
+                u32 lp = m.byteIndexOf(String.withCString(" = load "));
+                if (lp == String.notFound())
+                    continue;
+                String* rest = m.substringFromByte(lp + 8);
+                String* ty = rest.substringBytes(0, Languages.byteFrom(rest, (u8)',', 0));
+                Array* ws = rest.splitOnByte((u8)',');
+                String* addr = ws.count() > 1 ? ((String*)ws.get(1)).trimmed() : (String*)0;
+                if (addr == (String*)0 || !addr.hasPrefix(String.withCString("ptr ")))
+                    {
+                    ok = false;
+                    continue;
+                    }
+                addr = addr.substringFromByte(4);
+                if (elemTy == (String*)0)
+                    elemTy = ty;
+                else if (!elemTy.equals(ty))
+                    ok = false;
+                if (!addr.equals(p) && offs.get((Hashable*)addr) == (Object*)0)
+                    ok = false;
+                nLoads = nLoads + 1;
+                }
+            if (!ok || elemTy == (String*)0)
+                continue;
+            elemSize = Languages.sizeOf(elemTy);
+            Object* pnOff = offs.get((Hashable*)pn);
+            if (elemSize <= 0 || pnOff == (Object*)0 || nLoads < 2)
+                continue;
+            stepBytes = ((Number*)pnOff).asI64();
+            i64 n = stepBytes / elemSize;
+            if (n != (i64)nLoads || stepBytes != n * elemSize || kBytes % elemSize != 0)
+                continue;
+            // addresses: exactly 1..n-1 times S
+            Array* addrs = offs.allKeys();
+            for (u32 q = 0; q < addrs.count() && ok; q = q + 1)
+                {
+                String* an = (String*)addrs.get(q);
+                if (an.equals(pn))
+                    continue;
+                i64 o = ((Number*)offs.get((Hashable*)an)).asI64();
+                if (o <= 0 || o >= stepBytes || o % elemSize != 0)
+                    ok = false;
+                else
+                    slice.set((Hashable*)an, (Object*)Number.withI64(o / elemSize));
+                }
+            if (!ok)
+                continue;
+            slice.set((Hashable*)p, (Object*)Number.withI64(0));
+            // each computing line's slice; the carry into each slice
+            Map* sliceOfLine = new Map();
+            for (u32 b = 0; b < body.count() && ok; b = b + 1)
+                {
+                u32 k = ((Number*)body.get(b)).asU32();
+                String* m = Languages.withoutMeta(((String*)lines.get(k)).trimmed());
+                String* nm = m.substringBytes(0, Languages.byteFrom(m, (u8)' ', 0));
+                Array* ns = Languages.namesIn(m.substringFromByte(nm.byteLength()));
+                i64 sl = (i64)-1;
+                for (u32 q = 0; q < ns.count(); q = q + 1)
+                    {
+                    Object* so = slice.get((Hashable*)ns.get(q));
+                    if (so != (Object*)0 && ((Number*)so).asI64() > sl)
+                        sl = ((Number*)so).asI64();
+                    if (((String*)ns.get(q)).equals(acc) && sl < (i64)0)
+                        sl = 0;
+                    }
+                if (sl < (i64)0)
+                    {
+                    ok = false;     // a loop-invariant line in the latch: not this shape
+                    continue;
+                    }
+                slice.set((Hashable*)nm, (Object*)Number.withI64(sl));
+                sliceOfLine.set((Hashable*)Number.withU32(k), (Object*)Number.withI64(sl));
+                }
+            if (!ok)
+                continue;
+            // per slice: its lines, its carry-in (acc for 0, the previous
+            // slice's carry-out), the carry-out (the one line using carry-in)
+            Array* carryOut = new Array();
+            Array* canon = new Array();
+            String* carryIn = acc;
+            for (i64 s = 0; s < n && ok; s = s + 1)
+                {
+                Map* ren = new Map();
+                ren.set((Hashable*)carryIn, (Object*)String.withCString("%CARRY"));
+                u32 vn = 0;
+                String* text = new String();
+                String* out = (String*)0;
+                for (u32 b = 0; b < body.count(); b = b + 1)
+                    {
+                    u32 k = ((Number*)body.get(b)).asU32();
+                    if (((Number*)sliceOfLine.get((Hashable*)Number.withU32(k))).asI64() != s)
+                        continue;
+                    String* m = Languages.withoutMeta(((String*)lines.get(k)).trimmed());
+                    String* nm = m.substringBytes(0, Languages.byteFrom(m, (u8)' ', 0));
+                    Array* ns = Languages.namesIn(m.substringFromByte(nm.byteLength()));
+                    for (u32 q = 0; q < ns.count(); q = q + 1)
+                        {
+                        String* x = (String*)ns.get(q);
+                        if (x.equals(carryIn))
+                            out = nm;
+                        // an address of this slice reads as %Q; any other
+                        // name of the latch must be this slice's own
+                        Object* so = slice.get((Hashable*)x);
+                        if (so != (Object*)0 && ren.get((Hashable*)x) == (Object*)0)
+                            {
+                            if ((x.equals(p) || offs.get((Hashable*)x) != (Object*)0) && ((Number*)so).asI64() == s)
+                                ren.set((Hashable*)x, (Object*)String.withCString("%Q"));
+                            else
+                                ok = false;
+                            }
+                        }
+                    ren.set((Hashable*)nm, (Object*)String.withFormat("%%v%u", vn));
+                    vn = vn + 1;
+                    text.append(Languages.commutedInOrder(Languages.renamed(m, ren)));
+                    text.appendCString("\n");
+                    }
+                if (out == (String*)0)
+                    ok = false;
+                else
+                    {
+                    carryOut.add((Object*)out);
+                    carryIn = out;
+                    }
+                canon.add((Object*)text);
+                }
+            if (!ok || !carryIn.equals(accN))
+                continue;
+            for (u32 q = 1; q < canon.count() && ok; q = q + 1)
+                if (!((String*)canon.get(q)).equals((String*)canon.get(0)))
+                    ok = false;
+            // nothing of a slice used after the loop but the last carry
+            for (u32 b = 0; b < body.count() && ok; b = b + 1)
+                {
+                u32 k = ((Number*)body.get(b)).asU32();
+                String* m = ((String*)lines.get(k)).trimmed();
+                String* nm = m.substringBytes(0, Languages.byteFrom(m, (u8)' ', 0));
+                if (nm.equals(accN))
+                    continue;
+                if (Languages.uses(lines, from, end, nm) != Languages.uses(lines, lStart, lBr, nm))
+                    ok = false;
+                }
+            if (!ok)
+                continue;
+            u32 preBr = Languages.terminatorOf(lines, from, end, pre);
+            if (preBr == String.notFound())
+                continue;
+            // The rewrite.
+            String* tag = String.withFormat("%%xrr%u", made);
+            made = made + 1;
+            String* ix = tag.appending(String.withCString(".i"));
+            String* cnt = tag.appending(String.withCString(".n"));
+            String* nxt = tag.appending(String.withCString(".next"));
+            String* pe = tag.appending(String.withCString(".pe"));
+            String* exitBlock = String.withFormat("%s.exit", tag.substringFromByte(1).cString());
+            String* preCode = String.withFormat("  %s.s = ptrtoint ptr %s to i64\n  %s.d = sub i64 %s, %s.s\n  %s.t = add i64 %s.d, %ld\n  %s = sdiv i64 %s.t, %ld\n",
+                                                tag.cString(), sStart.cString(), tag.cString(), ei.cString(), tag.cString(),
+                                                tag.cString(), tag.cString(), elemSize - (i64)1 - kBytes,
+                                                cnt.cString(), tag.cString(), elemSize);
+            preCode.append(String.withFormat("  %s.pos = icmp sgt i64 %s, 0\n  %s.m = select i1 %s.pos, i64 %s, i64 0\n",
+                                             tag.cString(), cnt.cString(), tag.cString(), tag.cString(), cnt.cString()));
+            preCode.append(String.withFormat("  %s = getelementptr inbounds %s, ptr %s, i64 %s.m\n",
+                                             pe.cString(), elemTy.cString(), sStart.cString(), tag.cString()));
+            lines.set(preBr, (Object*)preCode.appending((String*)lines.get(preBr)));
+            // After the loop %p is pe (the loop leaves when i reaches
+            // max(n, 0)): every use outside it reads pe, made before it.
+            Map* toPe = new Map();
+            toPe.set((Hashable*)p, (Object*)pe);
+            for (u32 k = from; k < end; k = k + 1)
+                {
+                if ((k >= hStart && k <= brAt) || (k >= lStart && k <= lBr))
+                    continue;
+                String* m = (String*)lines.get(k);
+                if (Languages.uses(lines, k, k + 1, p) > 0)
+                    lines.set(k, (Object*)Languages.renamed(m, toPe));
+                }
+            // The exit through a block of its own, where what follows the
+            // loop can put what it computes first (outside the loop).
+            String* brLine = (String*)lines.get(brAt);
+            lines.set(brAt, (Object*)brLine.replacing(String.withFormat("label %%%s", exitTo.cString()), String.withFormat("label %%%s", exitBlock.cString())));
+            u32 xLabel = Languages.labelLine(lines, from, end, exitTo);
+            for (u32 k = xLabel + 1; xLabel != String.notFound() && k < end; k = k + 1)
+                {
+                String* m = (String*)lines.get(k);
+                if (m.byteLength() > 0 && m.byteAt(0) != (u8)' ')
+                    break;
+                if (m.contains(String.withCString(" = phi ")))
+                    lines.set(k, (Object*)m.replacing(String.withFormat(", %%%s ]", hName.cString()), String.withFormat(", %%%s ]", exitBlock.cString())));
+                }
+            String* preLabel = pre;
+            lines.set(pLine, (Object*)String.withFormat("  %s = phi i64 [ 0, %s ], [ %s, %s ]", ix.cString(), preLabel.cString(), nxt.cString(), latch.cString()));
+            String* accLineText = (String*)lines.get(accLine);
+            lines.set(accLine, (Object*)accLineText.replacing(String.withFormat("[ %s, %s ]", accN.cString(), latch.cString()),
+                                                               String.withFormat("[ %s, %s ]", ((String*)carryOut.get(0)).cString(), latch.cString())));
+            // %p at the top of the latch, where its loads are (made in the
+            // header, xcc's unroller trips on it); the header's distance,
+            // which only the old test read, goes.
+            lines.set(lLabel, (Object*)((String*)lines.get(lLabel)).appending(
+                String.withFormat("\n  %s = getelementptr inbounds %s, ptr %s, i64 %s", p.cString(), elemTy.cString(), sStart.cString(), ix.cString())));
+            lines.set(i, (Object*)String.withFormat("  %s = icmp slt i64 %s, %s", c.cString(), ix.cString(), cnt.cString()));
+            for (u32 k = hStart; k < i; k = k + 1)
+                {
+                String* m = Languages.withoutMeta(((String*)lines.get(k)).trimmed());
+                if (m.hasPrefix(d.appending(String.withCString(" = "))) && Languages.uses(lines, from, end, d) == 1)
+                    lines.set(k, (Object*)String.withCString(""));
+                }
+            for (u32 k = hStart; k < i; k = k + 1)
+                {
+                String* m = Languages.withoutMeta(((String*)lines.get(k)).trimmed());
+                if (m.hasPrefix(pi.appending(String.withCString(" = "))) && Languages.uses(lines, from, end, pi) == 1)
+                    lines.set(k, (Object*)String.withCString(""));
+                }
+            for (u32 k = lStart; k < lBr; k = k + 1)
+                {
+                String* m = Languages.withoutMeta(((String*)lines.get(k)).trimmed());
+                if (m.byteLength() == 0)
+                    continue;
+                String* nm = m.substringBytes(0, Languages.byteFrom(m, (u8)' ', 0));
+                Object* so = sliceOfLine.get((Hashable*)Number.withU32(k));
+                bool keep = so != (Object*)0 && ((Number*)so).asI64() == (i64)0;
+                if (!keep)
+                    lines.set(k, (Object*)String.withCString(""));
+                }
+            lines.set(lBr, (Object*)String.withFormat("  %s = add nuw nsw i64 %s, 1\n", nxt.cString(), ix.cString()).appending((String*)lines.get(lBr))
+                                     .appending(String.withFormat("\n%s:\n  br label %%%s", exitBlock.cString(), exitTo.cString())));
             }
         }
 
