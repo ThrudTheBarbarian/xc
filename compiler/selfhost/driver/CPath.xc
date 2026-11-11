@@ -392,6 +392,11 @@ class CPath
         // std::array globals as their arrays, for the reader.
         if (lang.loopsOnly())
             readText = Languages.plainArrays(readText);
+        // XC_C_KEEP=<prefix>: the text xcc reads, as <prefix>.read.ll (and
+        // clang's half as <prefix>.rest.ll), to see what a refusal refers to.
+        String* keep = Platform.env(String.withCString("XC_C_KEEP"));
+        if (keep.byteLength() > (u32)0)
+            Files.writeText(keep.appending(String.withCString(".read.ll")), readText);
         LlvmReader* r = new LlvmReader();
         r.setPath(input);
         // clang compiles what xcc does not take, and the globals: their
@@ -470,6 +475,8 @@ class CPath
         // A function taken from the read build keeps clang's own version too.
         if (readBuild != (String*)0)
             restText = Languages.keepClangCopies(restText, text, readText, r);
+        if (keep.byteLength() > (u32)0)
+            Files.writeText(keep.appending(String.withCString(".rest.ll")), restText);
         if (!Files.writeText(restLl, restText))
             {
             Stdio.error(String.withFormat("xcc: error: cannot write '%s'\n", restLl.cString()));
