@@ -829,6 +829,13 @@ class LlvmReader
                 return lit;
                 }
             }
+        // LLVM's own (llvm.global_ctors, llvm.used) keep their names: their
+        // meaning is the name, and clang's half must still find it.
+        if (n.hasPrefix(String.withCString("llvm.")))
+            {
+            _globals.set((Hashable*)llName, (Object*)n);
+            return n;
+            }
         if (n.hasPrefix(String.withCString("\"")) || n.indexOfByte((u8)'.') != (u32)$FFFFFFFF)
             {
             _strN = _strN + (u32)1;
