@@ -682,6 +682,11 @@ cover -mavx2 -msimd= -mnative -mavx512 -mavx512f
 same "SME matmul (-A arm64 -O3)"              -q -A arm64 -O3 -o @OUT@ $ROOT/tests/fixtures/sme_matmul_exact.xc
 same "-fno-matmul (-A arm64 -O3)"                -q -A arm64 -O3 -fno-matmul -o @OUT@ $ROOT/tests/fixtures/sme_matmul_exact.xc
 cover -fno-matmul
+# The --xc-* options (#148): a par program takes them out of its arguments
+# before main; -fno-xc-args leaves them. Both builds, both ways.
+same "par program (--xc-* filter)"   -q -o @OUT@ $ROOT/tests/fixtures/par_simd_buffers.xc
+same "-fno-xc-args"                  -q -fno-xc-args -o @OUT@ $ROOT/tests/fixtures/par_simd_buffers.xc
+cover -fno-xc-args
 
 # par: every GPU kernel form in the binary (a remote worker's GPU may differ),
 # and a plain loop that becomes a par block where its shape allows.
