@@ -36,6 +36,7 @@ class LlvmReader
     Map* _retTy;            // "@name" -> the function's IR return type
     bool _sawZext;          // the last skipAttrs() passed a `zeroext`
     Array* _zxParams;       // a function's zeroext parameters: name, value
+    Map* _aggParams;        // a function's [N x iK] parameters: name -> Array of its N values
     Map* _defined;          // "@name" -> 1 for a function defined in this file
     u32 _strN;
     String* _path;          // the C file, for source lines (0: none)
@@ -850,6 +851,43 @@ class LlvmReader
         return n;
         }
 
+    // A decimal number's value (0 for anything else).
+    static i64 decimal(String* w)
+        {
+        i64 v = (i64)0;
+        for (u32 i = (u32)0; i < w.byteLength(); i = i + (u32)1)
+            {
+            u8 c = w.byteAt(i);
+            if (c < (u8)'0' || c > (u8)'9')
+                return (i64)0;
+            v = v * (i64)10 + (i64)(c - (u8)'0');
+            }
+        return v;
+        }
+
+    // `[N x iK]` with 2 <= N <= 4 and K one of 8, 16, 32, 64: the element
+    // type N times; otherwise 0.
+    static Array* intArrayElems(String* t)
+        {
+        if (!t.hasPrefix(String.withCString("[")) || !t.hasSuffix(String.withCString("]")))
+            return (Array*)0;
+        String* body = t.substringBytes((u32)1, t.byteLength() - (u32)2);
+        u32 x = body.byteIndexOf(String.withCString(" x "));
+        if (x == String.notFound())
+            return (Array*)0;
+        i64 n = LlvmReader.decimal(body.substringBytes((u32)0, x));
+        String* el = body.substringFromByte(x + (u32)3);
+        if (n < (i64)2 || n > (i64)4)
+            return (Array*)0;
+        if (!el.equals(String.withCString("i64")) && !el.equals(String.withCString("i32"))
+            && !el.equals(String.withCString("i16")) && !el.equals(String.withCString("i8")))
+            return (Array*)0;
+        Array* out = new Array();
+        for (i64 k = (i64)0; k < n; k = k + (i64)1)
+            out.add((Object*)el);
+        return out;
+        }
+
     // As X86_64's safeSym: the words it suffixes with `$x`.
     static bool x86Reserved(String* n)
         {
@@ -1231,12 +1269,39 @@ class LlvmReader
         _bad = false;
         _fnWhy = (String*)0;
         _zxParams = new Array();
+        _aggParams = new Map();
         u32 nParams = (u32)0;
+        u32 gprs = (u32)0;      // integer-class parameters, an aggregate's elements each
+        bool anyAgg = false;
         if (eat("("))
             {
             while (more() && peek() != (u8)')')
                 {
                 String* pt = llType();
+                // `[2 x i64] %s.coerce`: a small struct passed by value (a
+                // std::span, a string_view), its words in consecutive
+                // integer registers. Read as that many parameters, which is
+                // the same registers while every integer-class parameter is
+                // in one (counted below; x86-64 has 6).
+                Array* elems = pt != (String*)0 ? LlvmReader.intArrayElems(pt) : (Array*)0;
+                if (elems != (Array*)0)
+                    {
+                    skipAttrs();
+                    String* an = word();
+                    Array* vs = new Array();
+                    for (u32 k = (u32)0; k < elems.count(); k = k + (u32)1)
+                        {
+                        IRValue* ev = new IRValue(irOf((String*)elems.get(k)));
+                        _fn.addParam(ev);
+                        vs.add((Object*)ev);
+                        }
+                    _aggParams.set((Hashable*)an, (Object*)vs);
+                    gprs = gprs + elems.count();
+                    anyAgg = true;
+                    nParams = nParams + elems.count();
+                    eat(",");
+                    continue;
+                    }
                 if (pt == (String*)0 || irOf(pt) == (String*)0)
                     {
                     fail("a parameter of a type not read");
@@ -1248,6 +1313,8 @@ class LlvmReader
                 skipAttrs();
                 String* pn = word();
                 String* ut = _sawZext ? unsignedOf(irOf(pt)) : irOf(pt);
+                if (!ut.hasPrefix(String.withCString("F")))
+                    gprs = gprs + (u32)1;
                 IRValue* v = new IRValue(ut);
                 _fn.addParam(v);
                 _vals.set((Hashable*)pn, (Object*)v);
@@ -1260,6 +1327,14 @@ class LlvmReader
                 nParams = nParams + (u32)1;
                 eat(",");
                 }
+            }
+        if (anyAgg && gprs > (u32)6)
+            {
+            fail("a parameter of a type not read (an aggregate past the integer registers)");
+            noteUnread(name);
+            if (_split)
+                _bad = false;
+            return;
             }
         _mem = new IRValue(String.withCString("Mem"));
         _fn.addParam(_mem);
@@ -1749,6 +1824,27 @@ class LlvmReader
             define(res, cast, t, IROperand.useVal(a), (IROperand*)0, (IROperand*)0, how);
             return;
             }
+        // extractvalue of an aggregate parameter: that word.
+        if (op.equals(String.withCString("extractvalue")))
+            {
+            llType();
+            ws();
+            String* an = word();
+            eat(",");
+            ws();
+            u32 k0 = _p;
+            while (_p < _s.byteLength() && _s.byteAt(_p) >= (u8)'0' && _s.byteAt(_p) <= (u8)'9')
+                _p = _p + (u32)1;
+            Array* vs = (Array*)_aggParams.get((Hashable*)an);
+            u32 k = _p > k0 ? (u32)LlvmReader.decimal(_s.substringBytes(k0, _p - k0)) : (u32)$FFFFFFFF;
+            if (vs == (Array*)0 || k >= vs.count() || _vals.get((Hashable*)res) != (Object*)0)
+                {
+                fail("an extractvalue not read");
+                return;
+                }
+            _vals.set((Hashable*)res, vs.get(k));
+            return;
+            }
         if (op.equals(String.withCString("select")))
             {
             eatFastMath();
@@ -2175,6 +2271,61 @@ class LlvmReader
             _blk.add(cmp);
             define(res, String.withCString("Select"), rt, IROperand.useVal(cv), IROperand.useVal((IRValue*)args.get(0)),
                    IROperand.useVal((IRValue*)args.get(1)), (String*)0);
+            return;
+            }
+        // Funnel shifts (a rotate when both are one value):
+        //   fshl(a, b, s) = s' ? a << s' | b >>u (w - s') : a
+        //   fshr(a, b, s) = s' ? a << (w - s') | b >>u s' : b
+        // with s' = s mod w, w the width.
+        bool fshl = callee.hasPrefix(String.withCString("@llvm.fshl.i"));
+        bool fshr = callee.hasPrefix(String.withCString("@llvm.fshr.i"));
+        if ((fshl || fshr) && args.count() == 3)
+            {
+            i64 w = rt.equals(String.withCString("I8")) || rt.equals(String.withCString("U8")) ? (i64)8
+                  : rt.equals(String.withCString("I16")) || rt.equals(String.withCString("U16")) ? (i64)16
+                  : rt.equals(String.withCString("I32")) || rt.equals(String.withCString("U32")) ? (i64)32
+                  : rt.equals(String.withCString("I64")) || rt.equals(String.withCString("U64")) ? (i64)64 : (i64)0;
+            if (w == (i64)0)
+                {
+                fail(String.withFormat("an intrinsic not read: %s", callee.cString()).cString());
+                return;
+                }
+            // A narrow width is worked in I32 on its zero-extended bits (an
+            // I8 is kept sign-extended, so its logical shift right would not
+            // bring in zeros), then truncated.
+            String* ct = w < (i64)32 ? String.withCString("I32") : rt;
+            i64 wmask = w < (i64)32 ? ((i64)1 << w) - (i64)1 : (i64)-1;
+            IRValue* a = (IRValue*)args.get(0);
+            IRValue* b = (IRValue*)args.get(1);
+            IRValue* sv = (IRValue*)args.get(2);
+            if (w < (i64)32)
+                {
+                a = emit(String.withCString("And"), ct, IROperand.useVal(emit(String.withCString("ZExt"), ct, IROperand.useVal(a), (IROperand*)0, (IROperand*)0)), IROperand.immI(wmask, ct), (IROperand*)0);
+                b = emit(String.withCString("And"), ct, IROperand.useVal(emit(String.withCString("ZExt"), ct, IROperand.useVal(b), (IROperand*)0, (IROperand*)0)), IROperand.immI(wmask, ct), (IROperand*)0);
+                sv = emit(String.withCString("And"), ct, IROperand.useVal(emit(String.withCString("ZExt"), ct, IROperand.useVal(sv), (IROperand*)0, (IROperand*)0)), IROperand.immI(wmask, ct), (IROperand*)0);
+                }
+            IRValue* sm = emit(String.withCString("And"), ct, IROperand.useVal(sv), IROperand.immI(w - (i64)1, ct), (IROperand*)0);
+            IRValue* wc = emit(String.withCString("Const"), ct, IROperand.immI(w, ct), (IROperand*)0, (IROperand*)0);
+            IRValue* inv = emit(String.withCString("Sub"), ct, IROperand.useVal(wc), IROperand.useVal(sm), (IROperand*)0);
+            IRValue* invm = emit(String.withCString("And"), ct, IROperand.useVal(inv), IROperand.immI(w - (i64)1, ct), (IROperand*)0);
+            IRValue* hi = emit(String.withCString("Shl"), ct, IROperand.useVal(a), IROperand.useVal(fshl ? sm : invm), (IROperand*)0);
+            IRValue* lo = emit(String.withCString("LShr"), ct, IROperand.useVal(b), IROperand.useVal(fshl ? invm : sm), (IROperand*)0);
+            IRValue* both = emit(String.withCString("Or"), ct, IROperand.useVal(hi), IROperand.useVal(lo), (IROperand*)0);
+            IRInsn* z = IRInsn.with(String.withCString("ICmp"));
+            IRValue* zv = new IRValue(String.withCString("Bool"));
+            z.setRes(zv);
+            z.setPred(String.withCString("EQ"));
+            z.add(IROperand.useVal(sm));
+            z.add(IROperand.useVal(emit(String.withCString("Const"), ct, IROperand.immI((i64)0, ct), (IROperand*)0, (IROperand*)0)));
+            _blk.add(z);
+            if (w < (i64)32)
+                {
+                IRValue* wide = emit(String.withCString("Select"), ct, IROperand.useVal(zv), IROperand.useVal(fshl ? a : b), IROperand.useVal(both));
+                define(res, String.withCString("Trunc"), rt, IROperand.useVal(wide), (IROperand*)0, (IROperand*)0, (String*)0);
+                }
+            else
+                define(res, String.withCString("Select"), rt, IROperand.useVal(zv), IROperand.useVal(fshl ? a : b),
+                       IROperand.useVal(both), (String*)0);
             return;
             }
         if (callee.hasPrefix(String.withCString("@llvm.")))
