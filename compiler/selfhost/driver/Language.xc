@@ -8,7 +8,7 @@
 // are built in. More rows come from the file $XC_LANGUAGES names, one per
 // line:
 //
-//     name | .ext .ext | command | IR flags | libraries | reads | linker | passes | read flags
+//     name | .ext .ext | command | IR flags | libraries | reads | linker | passes | read flags | frames
 //
 // `libraries` are `os:name` words (`macos:c++`): on macOS a name is the SDK's
 // usr/lib/lib<name>.tbd, elsewhere `-l<name>`. `reads` is `all` (every
@@ -28,7 +28,9 @@
 // function is taken from the second only where the first has it and
 // everything it names (C++: libc++'s parallel algorithms as plain loops,
 // -D_LIBCPP_PSTL_BACKEND_SERIAL, while what xcc does not take keeps the
-// library's own parallel backend).
+// library's own parallel backend). `frames` is `eh_frame` for a language
+// whose unwinder reads clang's frame table (C++'s exceptions): on an ELF
+// target its program registers that table at start-up.
 // `#` starts a comment line.
 
 #import "Foundation.xc"
@@ -54,6 +56,7 @@ class LanguageRow
     String* _linker;    // links the program on macOS, or "": xcc's own link
     String* _passes;    // clang's flags for a second step over the IR, or ""
     String* _readFlags; // flags of a second build, the one xcc reads, or ""
+    bool _ehFrames;     // frames `eh_frame`: the program registers clang's frame table (ELF)
 
     String* name(void)    { return _name; }
     Array* exts(void)     { return _exts; }
@@ -64,8 +67,9 @@ class LanguageRow
     String* linker(void)  { return _linker; }
     String* passes(void)  { return _passes; }
     String* readFlags(void) { return _readFlags; }
+    bool ehFrames(void)   { return _ehFrames; }
 
-    static LanguageRow* make(String* name, String* exts, String* command, String* irFlags, String* libs, String* reads, String* linker, String* passes, String* readFlags)
+    static LanguageRow* make(String* name, String* exts, String* command, String* irFlags, String* libs, String* reads, String* linker, String* passes, String* readFlags, String* frames)
         {
         LanguageRow* r = new LanguageRow();
         r._name = name;
@@ -77,6 +81,7 @@ class LanguageRow
         r._linker = linker;
         r._passes = passes;
         r._readFlags = readFlags;
+        r._ehFrames = frames.equals(String.withCString("eh_frame"));
         return r;
         }
 
@@ -150,15 +155,17 @@ class Languages
         Array* t = new Array();
         String* ir = String.withCString("-O1 -funroll-loops -Xclang -disable-llvm-passes -fno-discard-value-names -gline-tables-only -S -emit-llvm");
         t.add((Object*)LanguageRow.make(String.withCString("c"), String.withCString(".c"), String.withCString("clang"),
-                                        ir, String.withCString(""), String.withCString("all"), String.withCString(""), String.withCString(""), String.withCString("")));
+                                        ir, String.withCString(""), String.withCString("all"), String.withCString(""), String.withCString(""), String.withCString(""),
+                                        String.withCString("")));
         // C++: libc++'s parallel algorithms (std::execution) are its
         // experimental library on macOS. Its passes' -fno-unroll-loops keeps
         // the IR xcc reads unrolled.
         t.add((Object*)LanguageRow.make(String.withCString("c++"), String.withCString(".cpp .cc .cxx .C"), String.withCString("clang++"),
-                                        ir.appending(String.withCString(" -fexperimental-library")), String.withCString("macos:c++"),
+                                        ir.appending(String.withCString(" -fexperimental-library")),
+                                        String.withCString("macos:c++ linux::libstdc++.so.6 linux::libgcc_s.so.1"),
                                         String.withCString("loops"), String.withCString("clang++ -fexperimental-library"),
                                         String.withCString("-O1 -fno-unroll-loops -fno-vectorize -fno-slp-vectorize -fno-discard-value-names -mllvm -rotation-max-header-size=0 -mllvm -indvars-widen-indvars=false"),
-                                        String.withCString("-D_LIBCPP_PSTL_BACKEND_SERIAL")));
+                                        String.withCString("-D_LIBCPP_PSTL_BACKEND_SERIAL"), String.withCString("eh_frame")));
         return t;
         }
 
@@ -202,9 +209,9 @@ class Languages
             if (l.byteLength() == 0 || l.hasPrefix(String.withCString("#")))
                 continue;
             Array* f = l.splitOnByte((u8)'|');
-            if (f.count() < 6 || f.count() > 9)
+            if (f.count() < 6 || f.count() > 10)
                 {
-                Stdio.error(String.withFormat("xcc: warning: XC_LANGUAGES line %u: want 6 to 9 fields separated by |, not %u\n",
+                Stdio.error(String.withFormat("xcc: warning: XC_LANGUAGES line %u: want 6 to 10 fields separated by |, not %u\n",
                                               i + 1, f.count()));
                 continue;
                 }
@@ -220,7 +227,8 @@ class Languages
                                             ((String*)f.get(4)).trimmed(), reads,
                                             f.count() >= 7 ? ((String*)f.get(6)).trimmed() : String.withCString(""),
                                             f.count() >= 8 ? ((String*)f.get(7)).trimmed() : String.withCString(""),
-                                            f.count() == 9 ? ((String*)f.get(8)).trimmed() : String.withCString("")));
+                                            f.count() >= 9 ? ((String*)f.get(8)).trimmed() : String.withCString(""),
+                                            f.count() == 10 ? ((String*)f.get(9)).trimmed() : String.withCString("")));
             }
         }
 
@@ -913,6 +921,9 @@ class Languages
             // makes clang drop the half's debug information, with a warning.
             String* head = LlvmReader.external(r.renamed(l)).replacing(n.appending(String.withCString("(")),
                                                                         n.appending(String.withCString("_xclib(")));
+            // Out of any COMDAT group: the group bears the original's name,
+            // which the copy no longer has ("use of undefined comdat").
+            head = Languages.withoutComdat(head);
             // Kept even where clang inlines it everywhere: xcc's half calls it.
             head = head.replacing(String.withCString("define linkonce_odr "), String.withCString("define weak_odr "))
                        .replacing(String.withCString("define linkonce "), String.withCString("define weak "));
@@ -933,6 +944,22 @@ class Languages
             i = i + 1;
             }
         return out;
+        }
+
+    // A define line without its ` comdat` / ` comdat($name)`.
+    static String* withoutComdat(String* l)
+        {
+        u32 p = l.byteIndexOf(String.withCString(" comdat"));
+        if (p == String.notFound())
+            return l;
+        u32 e = p + 7;
+        if (e < l.byteLength() && l.byteAt(e) == (u8)'(')
+            {
+            while (e < l.byteLength() && l.byteAt(e) != (u8)')')
+                e = e + 1;
+            e = e + 1;
+            }
+        return l.substringBytes(0, p).appending(l.substringFromByte(e));
         }
 
     // A line without its `!dbg !N` attachments.

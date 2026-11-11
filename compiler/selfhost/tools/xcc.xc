@@ -2804,6 +2804,24 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
             String* base = t.substringFromByte((u32)2);
             if (isGlibcOwnLib(base)) continue;          // glibc itself: the import map
             String* found = (String*)0;
+            // -l:<file>: that file, by its own name (ld's form), as a
+            // versioned shared object (libstdc++.so.6) is found.
+            if (base.hasPrefix(String.withCString(":"))) {
+                String* fname = base.substringFromByte((u32)1);
+                for (u32 k = (u32)0; k < dirs.count() && found == (String*)0; k = k + (u32)1) {
+                    String* p = String.withString((String*)dirs.get(k));
+                    p.appendCString("/"); p.append(fname);
+                    if (Files.exists(p)) found = p;
+                }
+                if (found == (String*)0) {
+                    Stdio.printf("xcc: error: -l%s: no %s on the -L path or in the system library directories\n",
+                                 base.cString(), fname.cString());
+                    Process.exit((i32)1); return;
+                }
+                if (found.contains(String.withCString(".so"))) sos.add((Object*)found);
+                else ars.add((Object*)found);
+                continue;
+            }
             for (u32 e = (u32)0; e < (u32)2 && found == (String*)0; e = e + (u32)1) {
                 for (u32 k = (u32)0; k < dirs.count() && found == (String*)0; k = k + (u32)1) {
                     String* p = String.withString((String*)dirs.get(k));
@@ -4944,6 +4962,7 @@ void main(void)
         // A whole program (not -c, not -S): xcc may take an ODR copy, the
         // program's one definition of it then.
         Languages.setWholeProgram(!gCSplitRelocatable && !d.keepAsm() && !d.compileOnly());
+        cPathSetElf(crow != (TargetRow*)0 && crow.exeFormat().hasPrefix(String.withCString("elf")));
         // clang builds for the target, not the host: a triple, and from
         // another host the target's C headers (a sysroot with include/).
         String* tgt = cPathTargetFlags(d);

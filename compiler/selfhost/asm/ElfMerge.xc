@@ -1839,6 +1839,16 @@ class MergedImage
                 im.noteWeakDef(nm);
             }
 
+        // The first object's frame table (clang's C++ half): what the C++
+        // start-up code hands __register_frame.
+        if (o.ehFrameOff() != (u32)0 && im.syms().get((Hashable*)String.withCString("__xc_eh_frame_start")) == (Object*)0)
+            {
+            String* eh = String.withCString("__xc_eh_frame_start");
+            im.syms().set((Hashable*)eh, (Object*)Number.withU32(dbase + o.ehFrameOff() - (u32)1));
+            im.dataSyms().add((Object*)eh);
+            im.addGlobal(eh);
+            }
+
         ElfMerge._textRelocs(im, o, label, tag, tbase);
         ElfMerge._dataRelocs(im, o, label, tag, dbase);
         ElfMerge._tlsRelocs(im, o, label, tag, lbase);
