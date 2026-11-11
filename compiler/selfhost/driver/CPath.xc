@@ -370,10 +370,15 @@ class CPath
             if (probe == (String*)0)
                 return (IRModule*)0;
             Map* names = Languages.loopNames(probe);
+            // A function with a loop of its own is one too, unless another
+            // function's loop calls it: perlin's shade belongs inlined in
+            // render's loop (as one loop in C), not kept out of it.
             Map* own = Languages.loopNames(textFe);
+            Map* inner = Languages.calledInLoops(textFe);
             Array* ok = own.allKeys();
             for (u32 k = 0; k < ok.count(); k = k + 1)
-                names.set((Hashable*)ok.get(k), own.get((Hashable*)ok.get(k)));
+                if (inner.get((Hashable*)ok.get(k)) == (Object*)0)
+                    names.set((Hashable*)ok.get(k), own.get((Hashable*)ok.get(k)));
             text = CPath.passed(textFe, scratch, lang, names);
             if (text == (String*)0)
                 return (IRModule*)0;
