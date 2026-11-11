@@ -218,6 +218,7 @@ is reported and ignored.
 | Flag | Effect |
 |------|--------|
 | `-Q <rts\|loop>`, `--quit-style <rts\|loop>` | xt6502: what the program does when `main` returns. `rts`, the default, returns to the loader (DOS) with `main`'s value in A, and `xcc-sim-6502` exits with that value as its status. `loop` makes the program jump to itself forever; the simulator stops there, also with `main`'s value as its status. |
+| `-fno-xc-args` | A program with a `par` block passes every argument to `main`. By default its start code takes out each argument that starts `--xc-` and sets the runtime variable it names ([options on the command line](/compiler/usage/environment/#options-on-the-command-line)). |
 
 ## Diagnostics
 

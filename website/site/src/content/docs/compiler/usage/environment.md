@@ -208,6 +208,36 @@ empty value is the same as an unset one.
 | `XC_PAR_VERIFY` | `0`, `all` | checks a sample | how many of a remote daemon's tiles are checked on the CPU (exact integer blocks only); a mismatch drops the daemon |
 | `XC_TLS_LIB` | a file path | beside the program, then the toolchain, then the system | the TLS library for connections to daemons |
 
+### Options on the command line
+
+A program with a `par` block also takes each variable in the two tables above
+as an option. Its start code removes every argument that starts `--xc-`
+before `main` runs and sets the variable it names, overriding the
+environment, so `main` and `Process.arguments()` see only the other
+arguments. This works the same on every platform, including Windows, where
+`GetCommandLineW` returns the command line without the options.
+
+| Option | Same as |
+|---|---|
+| `--xc-par=gpu` | `XC_PAR=gpu` |
+| `--xc-par-report` | `XC_PAR_REPORT=1` (an option without a value sets `1`) |
+| `--xc-par-tile-mb=16` | `XC_PAR_TILE_MB=16` |
+| `--xc-probe` | `XC_PAR_PROBE=1` |
+| `--xc-tls-lib=<file>` | `XC_TLS_LIB=<file>` |
+| `--xc-help` | prints the options and exits |
+
+```bash
+./game --xc-par=cpu --xc-par-report level1.map
+```
+
+Scanning stops at `--`: `./game -- --xc-par=cpu` passes both `--` and
+`--xc-par=cpu` to `main`. `XC_PAR_SECRET` has no option, because a process
+listing shows a program's arguments. An unknown `--xc-` option, or
+`--xc-par-secret`, stops the program with an error (exit status 2). A program
+built with [`-fno-xc-args`](/compiler/usage/cli/#runtime-behaviour), and a
+program without a `par` block, pass every argument through. Libraries and
+plugins read the variables only.
+
 ### Other
 
 | Variable | Values | Default | Effect |

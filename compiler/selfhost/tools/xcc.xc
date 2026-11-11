@@ -84,6 +84,7 @@
 // A C program's own output while xcc's part is compiled to an object (the
 // C path): set, the object is linked with clang's into it (cSplitLink).
 String* gCSplitOut;
+bool gHalfXcArgs;       // the C path: xcc's half has a par block (--xc-* options, #148)
 // -c of a C file: cSplitLink makes one relocatable object, not a program.
 bool gCSplitRelocatable;
 // A language whose row names a linker (C++: clang++): the program is one
@@ -202,6 +203,7 @@ class DriverOptions
     bool       _emitLib;     // --emit-lib: a SHARED LIBRARY, not an executable
     bool       _emitRuntime; // --emit-runtime: libRuntime itself (an --emit-lib build of Runtime.list's files)
     bool       _noRuntimeLib; // --no-runtime-lib: compile the runtime's files in, as source
+    bool       _noXcArgs;    // -fno-xc-args: the start code passes every argument through
     // --bundle <dir> (bundles-and-plugins.md §2): the library goes into a
     // signed bundle there; name, version, resources, key and publisher.
     String*    _bundleDir;
@@ -319,6 +321,7 @@ class DriverOptions
         _rpaths = new Array();
         _emitRuntime = false;
         _noRuntimeLib = false;
+        _noXcArgs = false;
         _rpathPending = false;
         _ldDirs = new Array();
         _inlineMax = (i32)-1;
@@ -402,6 +405,7 @@ class DriverOptions
     Array* rpaths(void)             { return _rpaths; }
     bool emitRuntime(void)          { return _emitRuntime; }
     bool noRuntimeLib(void)         { return _noRuntimeLib; }
+    bool noXcArgs(void)             { return _noXcArgs; }
     Array* ldDirs(void)             { return _ldDirs; }
     i32 inlineMax(void)             { return _inlineMax; }
     void setInlineMax(i32 n)        { _inlineMax = n; }
@@ -807,6 +811,83 @@ String* crtArgsThroughGot(String* crt)
                               String.withCString("\tmov\trax, [rip + _xt_saved_argc@GOTPCREL]\n\tmov\t[rax], edi"));
     return a.replacing(String.withCString("\tmov\t[rip + _xt_saved_argv], rsi"),
                        String.withCString("\tmov\trax, [rip + _xt_saved_argv@GOTPCREL]\n\tmov\t[rax], rsi"));
+}
+
+// The --xc-* options (#148): a program with a par block takes every argument
+// starting `--xc-` out of its arguments before main and sets the runtime
+// variable it names (rt-xcargs.c). The block's dispatch, Par.run, is the
+// signal: the program's assembly names it (a call, and in a source-runtime
+// build its definition) only when a block is left after the optimiser. A
+// library has no start code; -fno-xc-args leaves the arguments alone.
+bool xcArgsWanted(DriverOptions* d, String* prog)
+{
+    if (d.noXcArgs() || d.emitLib() || d.emitRuntime() || prog == (String*)0) return false;
+    String* run = String.withCString("Par$run");
+    u32 at = prog.byteIndexOf(run);
+    while (at != String.notFound()) {
+        u32 e = at + run.byteLength();
+        u8 c = e < prog.byteLength() ? prog.byteAt(e) : (u8)' ';
+        bool ident = (c >= (u8)'a' && c <= (u8)'z') || (c >= (u8)'A' && c <= (u8)'Z')
+                  || (c >= (u8)'0' && c <= (u8)'9') || c == (u8)'_' || c == (u8)'$';
+        if (!ident) return true;
+        at = prog.byteIndexOf(run, e);
+    }
+    return false;
+}
+
+// …or, at the link of a C program's two halves, xcc's half had one.
+bool xcArgsFor(DriverOptions* d, String* prog)
+{
+    if (d.noXcArgs() || d.emitLib() || d.emitRuntime()) return false;
+    return gHalfXcArgs || xcArgsWanted(d, prog);
+}
+
+// The crt and the filter, as one text, for an image whose crt is `crt`
+// (an arm64 row's).
+String* crtArm64WithXcArgs(DriverOptions* d, String* crt, String* crtName)
+{
+    String* xa = readRuntime(d.fe(), String.withCString(
+        crtName.equals(String.withCString("crt-macos.s")) ? "xcargs-macos.s" : "xcargs-elf.s"));
+    if (xa == 0) {
+        Stdio.printf("xcc: error: cannot read the --xc-* options' runtime from the support tree\n");
+        Process.exit((i32)1); return crt;
+    }
+    String* t = crtWithXcArgs(crt);
+    t.appendByte((u8)'\n');
+    t.append(xa);
+    return t;
+}
+
+// The crt with the call to the options' filter: before the runtime keeps
+// argc and argv, so Process.arguments() and main both get the filtered list.
+// arm64 hands the count it returns to _xt_set_args and main; x86-64 Linux
+// keeps it in r12 (main's argc) and _xt_saved_argc; Windows rewrites the
+// command line before the runtime first parses it.
+String* crtWithXcArgs(String* crt)
+{
+    if (crt.contains(String.withCString("    bl __xt_set_args\n")))
+        return crt.replacing(String.withCString("    bl __xt_set_args\n"),
+            String.withCString("    bl __xt_xcargs                     // the --xc-* options out\n"
+                               "    str x0, [sp, #16]                   // the count they leave\n"
+                               "    ldp x0, x1, [sp, #16]\n"
+                               "    bl __xt_set_args\n"));
+    if (crt.contains(String.withCString("    bl _xt_set_args\n")))
+        return crt.replacing(String.withCString("    bl _xt_set_args\n"),
+            String.withCString("    bl _xt_xcargs                      // the --xc-* options out\n"
+                               "    str x0, [sp, #16]                   // the count they leave\n"
+                               "    ldp x0, x1, [sp, #16]\n"
+                               "    bl _xt_set_args\n"));
+    String* guard = String.withCString("\tcall\t_xt_stack_guard_init\n");
+    if (crt.contains(String.withCString("\tcall\tExitProcess")))
+        return crt.replacing(guard, String.withCString("\tcall\t_xt_stack_guard_init\n"
+                                                       "\tcall\t_xt_xcargs\t\t# the --xc-* options out of the command line\n"));
+    return crt.replacing(guard, String.withCString("\tcall\t_xt_stack_guard_init\n"
+                                                   "\tmov\tedi, r12d\t\t# the --xc-* options out\n"
+                                                   "\tmov\trsi, r13\n"
+                                                   "\tcall\t_xt_xcargs\n"
+                                                   "\tmov\tr12d, eax\t\t# the count they leave, for main\n"
+                                                   "\tmov\tedi, eax\n"
+                                                   "\tmov\t[rip + _xt_saved_argc], edi\n"));
 }
 
 // libRuntime exports the object runtime: its guard word too, which every
@@ -2161,8 +2242,10 @@ void emitWin64(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         writeObjectSidecars(d);
-        if (gCSplitOut != (String*)0)
+        if (gCSplitOut != (String*)0) {
+            gHalfXcArgs = xcArgsWanted(d, prog);
             cSplitLink(d);
+        }
         return;
     }
     linkWin64(d, prog);
@@ -2228,6 +2311,8 @@ void linkWin64(DriverOptions* d, String* prog)
     Array* srcs = new Array();
     Array* rtNames = new Array();
     if (!shared) rtNames.add((Object*)String.withCString("crt-win64.s"));
+    bool xcArgs = !shared && xcArgsFor(d, prog);
+    if (xcArgs) rtNames.add((Object*)String.withCString("xcargs-win64.s"));
     rtNames.add((Object*)String.withCString("rtgen-win64.s"));
     rtNames.add((Object*)String.withCString("rtfiles-win64.s"));
     rtNames.add((Object*)String.withCString("libmgen-win64.s"));
@@ -2239,6 +2324,7 @@ void linkWin64(DriverOptions* d, String* prog)
                          ((String*)rtNames.get(k)).cString());
             Process.exit((i32)1); return;
         }
+        if (xcArgs && k == (u32)0) t = crtWithXcArgs(t);
         srcs.add((Object*)t);
     }
     srcs.add((Object*)win64StubSource(prog, shared));
@@ -2545,8 +2631,10 @@ void emitX86_64(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         writeObjectSidecars(d);
-        if (gCSplitOut != (String*)0)
+        if (gCSplitOut != (String*)0) {
+            gHalfXcArgs = xcArgsWanted(d, prog);
             cSplitLink(d);
+        }
         return;
     }
 
@@ -2656,6 +2744,8 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
     Array* srcs = new Array();
     Array* rtNames = new Array();
     if (!shared) rtNames.add((Object*)String.withCString("crt-glibc.s"));
+    bool xcArgs = !shared && xcArgsFor(d, prog);
+    if (xcArgs) rtNames.add((Object*)String.withCString("xcargs-glibc.s"));
     if (!rtFromLib) {
         rtNames.add((Object*)String.withCString("rtgen-glibc.s"));
         rtNames.add((Object*)String.withCString("rtfiles-linux.s"));
@@ -2673,6 +2763,7 @@ void linkX86_64Glibc(DriverOptions* d, String* prog)
         }
         // libRuntime exports the runtime it carries (not the crt or glue).
         String* rn = (String*)rtNames.get(k);
+        if (xcArgs && rn.hasPrefix(String.withCString("crt-"))) t = crtWithXcArgs(t);
         if (rtFromLib && rn.hasPrefix(String.withCString("crt-"))) t = crtArgsThroughGot(t);
         if (d.emitRuntime() && !rn.hasPrefix(String.withCString("crt-")) && !rn.hasPrefix(String.withCString("libinit-"))) {
             t = runtimeForLibRuntime(t);
@@ -2825,6 +2916,8 @@ void linkX86_64(DriverOptions* d, String* prog)
     // it would leave the library importing `main`, which only a program
     // defines. Same rule as the arm64 dylib.
     if (!d.emitLib()) rtNames.add((Object*)String.withCString("crt-linux.s"));
+    bool xcArgs = !d.emitLib() && xcArgsFor(d, prog);
+    if (xcArgs) rtNames.add((Object*)String.withCString("xcargs-linux.s"));
     rtNames.add((Object*)String.withCString("sys-linux.s"));
     rtNames.add((Object*)String.withCString("rtgen-linux.s"));
     rtNames.add((Object*)String.withCString("rtfiles-linux.s"));
@@ -2841,6 +2934,7 @@ void linkX86_64(DriverOptions* d, String* prog)
                          ((String*)rtNames.get(k)).cString());
             Process.exit((i32)1); return;
         }
+        if (xcArgs && k == (u32)0) t = crtWithXcArgs(t);
         srcs.add((Object*)t);
     }
     srcs.add((Object*)x86ClassAllocStubs(prog, false));
@@ -3196,8 +3290,10 @@ void emitArm9(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         writeObjectSidecars(d);
-        if (gCSplitOut != (String*)0)
+        if (gCSplitOut != (String*)0) {
+            gHalfXcArgs = xcArgsWanted(d, prog);
             cSplitLink(d);
+        }
         return;
     }
 
@@ -4146,6 +4242,7 @@ void linkObjectsArm64Elf(DriverOptions* d)
         Process.exit((i32)1); return;
     }
     String* combined = new String();
+    if (xcArgsFor(d, (String*)0)) crt = crtArm64WithXcArgs(d, crt, lrow.crt());
     // Already in the ELF spelling, as the image path takes them.
     combined.append(crt); combined.appendByte((u8)'\n');
     combined.append(rt);  combined.appendByte((u8)'\n');
@@ -4202,6 +4299,7 @@ void linkObjectsArm64(DriverOptions* d)
         Process.exit((i32)1); return;
     }
     String* combined = new String();
+    if (xcArgsFor(d, (String*)0)) crt = crtArm64WithXcArgs(d, crt, String.withCString("crt-macos.s"));
     combined.append(crt); combined.appendByte((u8)'\n'); combined.append(rt);
     if (isIos(d)) { combined.appendByte((u8)'\n'); combined.append(iosRuntimeSource(d)); }   // stage 4 shim
     Arm64Asm* as = new Arm64Asm();
@@ -5285,8 +5383,10 @@ void emitModule(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         writeObjectSidecars(d);
-        if (gCSplitOut != (String*)0)
+        if (gCSplitOut != (String*)0) {
+            gHalfXcArgs = xcArgsWanted(d, prog);
             cSplitLink(d);
+        }
         return;
     }
     if (d.compileOnly()) {
@@ -5318,8 +5418,10 @@ void emitModule(DriverOptions* d, IRModule* mod)
             Process.exit((i32)1); return;
         }
         writeObjectSidecars(d);
-        if (gCSplitOut != (String*)0)
+        if (gCSplitOut != (String*)0) {
+            gHalfXcArgs = xcArgsWanted(d, prog);
             cSplitLink(d);
+        }
         return;
     }
 
@@ -5363,7 +5465,11 @@ void emitModule(DriverOptions* d, IRModule* mod)
     // with `symbol not found in flat namespace '_main'` naming neither the
     // library nor the crt. Mirrors the reference, which concatenates
     // rt + stubs + program for a dylib and crt + rt + … for an executable.
-    if (!d.emitLib()) { combined.append(crt); combined.appendByte((u8)'\n'); }
+    if (!d.emitLib()) {
+        // The --xc-* options (#148): the filter rides after the crt that calls it.
+        if (xcArgsFor(d, prog)) crt = crtArm64WithXcArgs(d, crt, lrow.crt());
+        combined.append(crt); combined.appendByte((u8)'\n');
+    }
     if (!rtFromLib) { combined.append(rt); combined.appendByte((u8)'\n'); }
     // The iOS shim rides after the runtime in a LIBRARY too: its code calls
     // `_xt_ios_log` and the fetch functions through Platform.xc, and the app
@@ -5819,6 +5925,20 @@ bool externalArm64(DriverOptions* d, String* prog)
             Process.exit((i32)1); return true;
         }
     }
+    // The --xc-* options (#148): the crt with the call, and the filter.
+    if (xcArgsFor(d, prog)) {
+        String* crtText = Files.readText((String*)files.get((u32)0));
+        String* cp = External.tempPath("xtc-crt.s");
+        writeTempOrDie(cp, crtWithXcArgs(crtText));
+        files.set((u32)0, (Object*)cp);
+        String* xa = supportPath(d, "arm64/runtime", String.withCString(
+            row.crt().equals(String.withCString("crt-macos.s")) ? "xcargs-macos.s" : "xcargs-elf.s"));
+        if (xa == (String*)0 || !Files.exists(xa)) {
+            Stdio.printf("xcc: error: the arm64 runtime piece for the --xc-* options is missing\n");
+            Process.exit((i32)1); return true;
+        }
+        files.add((Object*)xa);
+    }
     String* stubs = classAllocStubs(prog);
     if (stubs.byteLength() > (u32)0) {
         String* sp = External.tempPath("xtc-allocators.s");
@@ -6120,6 +6240,10 @@ void usage(void)
     Stdio.printf("                             also prints a symbolised stack (arm64 macOS keeps\n");
     Stdio.printf("                             every frame for it)\n");
     Stdio.printf("  -fno-bounds-check          No subscript checks (the default)\n");
+    Stdio.printf("  -fno-xc-args               A program with a par block passes every argument\n");
+    Stdio.printf("                             to main, --xc-* options included (by default\n");
+    Stdio.printf("                             the start code takes them out and sets the\n");
+    Stdio.printf("                             runtime variables they name)\n");
     Stdio.printf("\n");
     Stdio.printf("Linking (in-house unless --no-self-host):\n");
     Stdio.printf("  -l<name>                   Link a library found on the -L path, or a system\n");
@@ -7269,6 +7393,9 @@ DriverOptions* parseDriverArgs(void)
         }
         if (a.equals(String.withCString("--no-runtime-lib"))) {
             d._noRuntimeLib = true; i = i + (u32)1; continue;
+        }
+        if (a.equals(String.withCString("-fno-xc-args"))) {
+            d._noXcArgs = true; i = i + (u32)1; continue;
         }
         if (a.equals(String.withCString("--emit-lib"))) {
             d.setEmitLib(true);

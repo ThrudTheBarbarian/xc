@@ -2,7 +2,7 @@
 """Regenerate the GENERATED runtime .s files from their C sources, or check
 that the checked-in files are what the sources and the recipes give.
 
-    python3 tools/regen-runtimes.py              # regenerate all six
+    python3 tools/regen-runtimes.py              # regenerate them all
     python3 tools/regen-runtimes.py macos win64  # some of them
     python3 tools/regen-runtimes.py --check      # regenerate to a temp dir and diff
 
@@ -27,6 +27,15 @@ RTC = "src/xtc/support-src/rt-checked.c"
 RTF = "src/xtc/support-src/rt-freestanding.c"
 COMMON = ["-fno-stack-protector", "-fomit-frame-pointer"]
 INTEL = ["-S", "-O1", "-masm=intel", "-fno-asynchronous-unwind-tables", "-fno-jump-tables"] + COMMON
+
+XA = "src/xtc/support-src/rt-xcargs.c"
+XAF = ["-ffreestanding", "-fno-builtin"] + COMMON
+
+def mach_labels(s):
+    for a, b in (("LBB", "Lxa_BB"), ("Lloh", "Lxa_loh"), ("Ltmp", "Lxa_tmp"), ("lCPI", "lxa_CPI"), ("LCPI", "Lxa_CPI"),
+                 ("l_.str", "l_xa.str"), ("L_.str", "L_xa.str")):
+        s = s.replace(a, b)
+    return s
 
 def ndk_clang():
     home = os.environ.get("ANDROID_NDK_HOME")
@@ -70,6 +79,26 @@ TARGETS = {
                  "-DXT_NO_WEAK_SEAM=1", "-fPIC", "-Wno-incompatible-library-redeclaration"], None),
     "win64":   ("support/win64/runtime/rtgen-win64.s", RTF,
                 [CLANG] + INTEL + ["-target", "x86_64-windows-gnu", "-DXT_WIN64", "-DXT_NO_WEAK_SEAM=1"], None),
+    # The --xc-* options (rt-xcargs.c), linked only into a program with a par
+    # block. Freestanding, so every row is a cross-compile here; one ELF file
+    # serves arm64 glibc and android (no variadic call, so the Darwin/AAPCS64
+    # difference does not arise). Labels are renamed apart from the runtime's,
+    # which share the program's assembly unit.
+    "xcargs-macos": ("support/arm64/runtime/xcargs-macos.s", XA,
+                [CLANG, "-S", "-O1", "-arch", "arm64"] + XAF, mach_labels),
+    "xcargs-arm64": ("support/arm64/runtime/xcargs-elf.s", XA,
+                [CLANG, "-S", "-O1", "-target", "aarch64-linux-gnu", "-fno-asynchronous-unwind-tables",
+                 "-fno-addrsig", "-mno-outline-atomics", "-mbranch-protection=none"] + XAF,
+                lambda s: s.replace(".L", ".Lxa_")),
+    "xcargs-linux": ("support/x86_64/runtime/xcargs-linux.s", XA,
+                [CLANG] + INTEL + ["-target", "x86_64-unknown-linux-gnu"] + XAF,
+                lambda s: s.replace(".L", ".Lxa_")),
+    "xcargs-glibc": ("support/x86_64/runtime/xcargs-glibc.s", XA,
+                [CLANG] + INTEL + ["-target", "x86_64-unknown-linux-gnu", "-fPIC"] + XAF,
+                lambda s: s.replace(".L", ".Lxa_")),
+    "xcargs-win64": ("support/win64/runtime/xcargs-win64.s", XA,
+                [CLANG] + INTEL + ["-target", "x86_64-windows-gnu", "-DXT_WIN64"] + XAF,
+                lambda s: s.replace(".L", ".Lxa_")),
 }
 
 def remote_host():
