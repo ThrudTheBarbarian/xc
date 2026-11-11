@@ -149,9 +149,13 @@ class Languages
         t.add((Object*)LanguageRow.make(String.withCString("c"), String.withCString(".c"), String.withCString("clang"),
                                         ir, String.withCString(""), String.withCString("all"), String.withCString(""), String.withCString(""), String.withCString("")));
         // C++: libc++'s parallel algorithms (std::execution) are its
-        // experimental library on macOS.
+        // experimental library on macOS. -funroll-loops: at -O1 clang tags
+        // every loop llvm.loop.unroll.disable, which then kept clang's half
+        // (compiled at -O2 from this IR) from unrolling and interleaving
+        // (saxpy's sum: one vector accumulator, 1.6 times slower); the
+        // passes' -fno-unroll-loops still leaves the IR xcc reads unrolled.
         t.add((Object*)LanguageRow.make(String.withCString("c++"), String.withCString(".cpp .cc .cxx .C"), String.withCString("clang++"),
-                                        ir.appending(String.withCString(" -fexperimental-library")), String.withCString("macos:c++"),
+                                        ir.appending(String.withCString(" -fexperimental-library -funroll-loops")), String.withCString("macos:c++"),
                                         String.withCString("loops"), String.withCString("clang++ -fexperimental-library"),
                                         String.withCString("-O1 -fno-unroll-loops -fno-vectorize -fno-slp-vectorize -fno-discard-value-names -mllvm -rotation-max-header-size=0 -mllvm -indvars-widen-indvars=false"),
                                         String.withCString("-D_LIBCPP_PSTL_BACKEND_SERIAL")));
