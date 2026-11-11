@@ -194,7 +194,7 @@ empty value is the same as an unset one.
 | `XC_PAR_WORKERS` | a list of `cpu`, `cuda`, `metal`, `vulkan`, `remote` | every GPU and the CPU | the devices that share a block's tiles; every block then runs on that set |
 | `XC_PAR_TILES` | `0` | on | `0` runs each block in one piece instead of tiles, for comparison |
 | `XC_PAR_TILE_MB` | a number, `1`–`1024` | `8` | how many megabytes a tile moves each way |
-| `XC_PAR_PROBE` | `1` | off | a block's first run measures every worker at each tile size and keeps the result in the store as a starting point for `auto` |
+| `XC_PAR_PROBE` | `1` | off | a block's first run measures every worker at each tile size, then has `auto` measure the block to the end and keep its choice, so the next run places it without measuring (see [`par`](/compiler/language/par/)) |
 | `XC_PAR_TRACE` | `1`, a file path, or `host:port` | off | records each run's tiles: `1` writes `par-trace.xcpt` here, a path writes there, `host:port` streams to xcmon |
 | `XC_PAR_PIN` | `0` | on | Linux: `0` leaves the CPU threads unpinned instead of pinning each to its own core |
 

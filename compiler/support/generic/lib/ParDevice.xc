@@ -1552,6 +1552,18 @@ class ParDevice
         decide(i, proto);
         }
 
+    // Whether auto is still measuring the block at this size: it chooses for
+    // it (no forced device, user setting or program default decides) and
+    // its learned bounds do not yet cover n. The probe's measurement to the
+    // end runs the block until this is false (#148).
+    static bool wouldMeasure(ParChunk* proto, i64 n)
+        {
+        u32 i = slot(proto.parName());
+        gParMeasuring[i] = false;
+        choose(proto, n);
+        return gParMeasuring[i];
+        }
+
     static i32 choose(ParChunk* proto, i64 n)
         {
         gParRunSlot = (i32)slot(proto.parName());

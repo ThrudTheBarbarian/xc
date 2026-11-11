@@ -1980,7 +1980,10 @@ static inline BOOL XTIsPointerSigil(XTTokenType t)
         [self blkPushScope];
         for (XTParamNode* p in params)
             [self blkBind:p.paramName type:p.paramType];
+        id outerFn = self.blkState[@"fn"];
+        self.blkState[@"fn"] = name ?: (id)[NSNull null];
         body = [self parseBlock];
+        self.blkState[@"fn"] = outerFn ?: (id)[NSNull null];
         [self blkPopScope];
         }
     else
@@ -4355,6 +4358,10 @@ static int64_t parAutoConst(XTASTNode* e)
     frame[@"selfName"] = [NSNull null];
     frame[@"par"] = @YES;
     frame[@"written"] = [NSMutableSet set];
+    // In main, outside every loop and block literal: it runs once per program
+    // run (runsOnce, for the probe's report).
+    if ([self.blkState[@"fn"] isEqual:@"main"] && [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0 && [self blkFrames].count == 0)
+        frame[@"once"] = @YES;
     // The block's goal: the loop's own, else the goal of the loop or block it
     // sits in, else the file's or the build's, else speed, as a written
     // block's. A float sum still lifts only under an explicit speed goal.
@@ -4589,6 +4596,10 @@ static int64_t parAutoConst(XTASTNode* e)
     frame[@"selfName"] = [NSNull null];
     frame[@"par"] = @YES;
     frame[@"written"] = [NSMutableSet set];
+    // In main, outside every loop and block literal: it runs once per program
+    // run (runsOnce, for the probe's report).
+    if ([self.blkState[@"fn"] isEqual:@"main"] && [self.blkState[@"loopDepth"] unsignedIntegerValue] == 0 && [self blkFrames].count == 0)
+        frame[@"once"] = @YES;
     if (grid)
         {
         frame[@"grid"] = grid;

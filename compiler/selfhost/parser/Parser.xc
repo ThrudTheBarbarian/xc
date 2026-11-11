@@ -70,6 +70,7 @@ class Parser
     Map*    _parAutoLabels;  // a lifted loop's file:line -> how many had it
     bool    _parAutoWantsRuntime; // --par-style=auto found a loop to wrap, but Par.xc was not imported
     u32     _loopDepth;     // loops open in the code being parsed (an auto par wraps an outermost one)
+    String* _parFn;         // the top-level function whose body is being parsed, or 0
     u32     _goalDefault;   // the unit's default goal: 0 built-in, 1 speed, 2 accuracy (#goal, else -fgoal=)
     u32     _goalNow;       // the goal of the loop or block being parsed: 0 none yet, 1 speed, 2 accuracy
     u32     _parDeviceDefault; // --par-style's device for a block with no :device (1 cpu, 2 gpu), or 0
@@ -2459,7 +2460,10 @@ class Parser
                     Node* pk = f.kid(bi);
                     if (pk.kind() == (u16)nkParam) blkBind(pk.name(), pk.op(), (Array*)0);
                 }
+                String* outerFn = _parFn;
+                _parFn = name;
                 f.add(parseBlock());
+                _parFn = outerFn;
                 blkPopScope();
             }
             else {
@@ -2917,6 +2921,10 @@ class Parser
         frame.set((Hashable*)String.withCString("wbnames"), (Object*)new Array());
         frame.set((Hashable*)String.withCString("par"), (Object*)Number.with((u32)1));
         frame.set((Hashable*)String.withCString("written"), (Object*)new Set());
+        // In main, outside every loop and block literal: it runs once per
+        // program run (runsOnce, for the probe's report). As the reference.
+        if (_parFn != (String*)0 && _parFn.equals(String.withCString("main")) && _loopDepth == (u32)0 && _blkFrames.count() == (u32)0)
+            frame.set((Hashable*)String.withCString("once"), (Object*)Number.with((u32)1));
         // The block's goal: the loop's own, else the goal of the loop or block
         // it sits in, else the file's or the build's, else speed, as a written
         // block's. A float sum still lifts only under an explicit speed goal
@@ -3618,6 +3626,10 @@ class Parser
         frame.set((Hashable*)String.withCString("wbnames"), (Object*)new Array());
         frame.set((Hashable*)String.withCString("par"), (Object*)Number.with((u32)1));
         frame.set((Hashable*)String.withCString("written"), (Object*)new Set());
+        // In main, outside every loop and block literal: it runs once per
+        // program run (runsOnce, for the probe's report). As the reference.
+        if (_parFn != (String*)0 && _parFn.equals(String.withCString("main")) && _loopDepth == (u32)0 && _blkFrames.count() == (u32)0)
+            frame.set((Hashable*)String.withCString("once"), (Object*)Number.with((u32)1));
         if (grid != (Array*)0) {
             frame.set((Hashable*)String.withCString("grid"), (Object*)grid);
             frame.set((Hashable*)String.withCString("gridUsed"), (Object*)new Set());
@@ -4115,7 +4127,7 @@ class Parser
     {
         return Parser._same(n, "run") || Parser._same(n, "go") || Parser._same(n, "lo") || Parser._same(n, "hi")
             || Parser._same(n, "merge") || Parser._same(n, "copyChunk") || Parser._same(n, "parName")
-            || Parser._same(n, "defaultDevice")
+            || Parser._same(n, "defaultDevice") || Parser._same(n, "runsOnce")
             || Parser._same(n, "gpuSource") || Parser._same(n, "gpuLength") || Parser._same(n, "gpuGlobal")
             || Parser._same(n, "gpuGlobalBytes") || Parser._same(n, "gpuReadsOnly")
             || Parser._same(n, "gpuReadsOnlyGlobal") || Parser._same(n, "gpuWritesAll")
@@ -4281,7 +4293,7 @@ class Parser
                         && !Parser.parHasLocal((String*)frameTypes.get((Hashable*)cn)))) {
                 _errorAt(String.withFormat("a '%s' block cannot capture '%s': the name is one of the block's own (%s). Rename the variable",
                                            label.cString(), cn.cString(), own ? "names beginning __par_"
-                                               : "run, go, lo, hi, merge, copyChunk, parName, defaultDevice, gpuSource, gpuLength, gpuGlobal, gpuGlobalBytes, gpuReadsOnly, gpuReadsOnlyGlobal, gpuWritesAll, for a struct"), parKeywordNode());
+                                               : "run, go, lo, hi, merge, copyChunk, parName, defaultDevice, runsOnce, gpuSource, gpuLength, gpuGlobal, gpuGlobalBytes, gpuReadsOnly, gpuReadsOnlyGlobal, gpuWritesAll, for a struct"), parKeywordNode());
                 return (Node*)0;
             }
         }
@@ -4790,6 +4802,20 @@ class Parser
                 m.add(b);
                 cls.add(m);
             }
+        }
+        // runsOnce(): true for a block that runs once per program run; only
+        // for those. As the reference.
+        if (frame.get((Hashable*)String.withCString("once")) != (Object*)0) {
+            Node* m = mkNamed((u16)nkMethodDecl, String.withCString("runsOnce"));
+            m.setOp(String.withCString("bool"));
+            Node* b = mk((u16)nkBlock);
+            Node* ret = mk((u16)nkReturn);
+            Node* t = mk((u16)nkBool);
+            t.setNum((i64)1);
+            ret.add(t);
+            b.add(ret);
+            m.add(b);
+            cls.add(m);
         }
         // gpuSource(): the kernel's GPU source. A placeholder string, unique
         // per block, that the lowering replaces with the printed kernel (or

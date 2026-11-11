@@ -452,8 +452,10 @@ Measuring a size takes several runs of the block in one run of the program,
 because each device's first run is a warm-up: each candidate runs twice and
 its second run is timed. If the CPU finishes in under a millisecond before any
 GPU has been timed, the CPU wins at `n`. A size the block meets once and never
-again is not measured to the end; one it meets repeatedly is, and partial
-measurements carry over to the program's next run.
+again is not measured to the end in one run, unless the program runs with
+`XC_PAR_PROBE=1`, which measures each block to the end on its first run (see
+below); one it meets repeatedly is, and partial measurements carry over to the
+program's next run.
 
 The win moves the matching number: a CPU win at `n` raises the CPU's largest
 win to `n`, another arrangement's win lowers its smallest win to `n`. A win that contradicts the other number (the GPU
@@ -786,9 +788,18 @@ back between passes, and the report prints each worker's curve, its knee
 (the smallest tile at nine tenths of its best rate) and where it saturates,
 and for a remote the link's share of the time. What it found is kept in the
 program's settings as a starting point: the next run begins from those tile
-sizes and rates and keeps adjusting as it goes. Use it once on a machine or
-a network to find the boundaries rather than letting them be learned over
-many runs.
+sizes and rates and keeps adjusting as it goes.
+
+The probe then carries `auto`'s own measurement to the end on that first
+run: each device and set of devices it would try, warm-up and timed runs,
+one after another on copies of the block with the arrays it writes put back
+and its reductions starting again each time, until `auto` has chosen and
+kept its choice. The program's own run of the block follows, from that
+choice, and the next run of the program places the block without measuring.
+That matters most for a block that runs once per program run, which `auto`
+would otherwise never finish measuring; the report says when a block is one
+(a `par` in `main`, outside every loop). Run a program once with the probe
+on a new machine or network, then run it normally.
 
 A daemon keeps what it is sent: every whole array and every
 tile's slice, by block, array, offset and length, with a hash of the bytes.

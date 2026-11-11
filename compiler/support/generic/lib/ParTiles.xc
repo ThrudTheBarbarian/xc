@@ -590,6 +590,58 @@ class ParTiles
         return true;
         }
 
+    // The sweep's kept arrays, let go: the probe's measurement to the end
+    // (Par.measureToEnd) decided instead of probeDecide.
+    static void probeForget()
+        {
+        _probeL = (ParLayout*)0;
+        _probeKeptBuf = (Array*)0;
+        _probeKeptGlob = (Array*)0;
+        }
+
+    // What a block writes (its written captured arrays and globals), kept
+    // aside so that Par.measureToEnd's runs can each be undone: keep, then
+    // putBack after each run, then forgetKept. False when the block's
+    // arrays are not known (no layout), so nothing could be put back.
+    static ParLayout* _keepL;
+    static u8* _keepObj;
+    static Array* _keepBuf;
+    static Array* _keepGlob;
+    static bool keep(ParChunk* proto, u8* src, i64 lo, i64 hi)
+        {
+        _keepL = (ParLayout*)0;
+        if (!ParDevice.hasKernel(src))
+            return false;
+        ParLayout* l = ParDevice.layout(proto, src, lo, hi);
+        if (l == (ParLayout*)0)
+            return false;
+        u8* obj = proto.objBytes();
+        Array* kb = new Array();
+        Array* kg = new Array();
+        for (u32 i = (u32)0; i < l.nbuf; i = i + (u32)1)
+            kb.add(l.bufIn[i] == (i64)0 && l.bufLen[i] > (i64)0
+                   ? (Object*)Data.withBytes(*(u8**)(obj + l.bufOff[i]), (u32)l.bufLen[i]) : (Object*)0);
+        for (u32 i = (u32)0; i < l.nglob; i = i + (u32)1)
+            kg.add(l.globIn[i] == (i64)0 && l.globLen[i] > (i64)0
+                   ? (Object*)Data.withBytes((u8*)l.globPtr[i], (u32)l.globLen[i]) : (Object*)0);
+        _keepL = l;
+        _keepObj = obj;
+        _keepBuf = kb;
+        _keepGlob = kg;
+        return true;
+        }
+    static void putBack()
+        {
+        if (_keepL != (ParLayout*)0)
+            ParTiles.restore(_keepL, _keepObj, _keepBuf, _keepGlob);
+        }
+    static void forgetKept()
+        {
+        _keepL = (ParLayout*)0;
+        _keepBuf = (Array*)0;
+        _keepGlob = (Array*)0;
+        }
+
     // The arrays as they were before the probe, again (after Par's CPU run).
     static void probeRestore()
         {

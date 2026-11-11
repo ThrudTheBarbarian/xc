@@ -1450,7 +1450,7 @@ static NSString* parRootName(XTASTNode* n)
     // block's own.
     static NSSet<NSString*>* reservedCapture = nil;
     if (!reservedCapture)
-        reservedCapture = [NSSet setWithArray:@[ @"run", @"go", @"lo", @"hi", @"merge", @"copyChunk", @"parName", @"defaultDevice",
+        reservedCapture = [NSSet setWithArray:@[ @"run", @"go", @"lo", @"hi", @"merge", @"copyChunk", @"parName", @"defaultDevice", @"runsOnce",
                                                  @"gpuSource", @"gpuLength", @"gpuGlobal", @"gpuGlobalBytes",
                                                  @"gpuReadsOnly", @"gpuReadsOnlyGlobal", @"gpuWritesAll",
                                                  @"gpuWritesAllOwn" ]];
@@ -1470,7 +1470,7 @@ static NSString* parRootName(XTASTNode* n)
                                                                      "of the block's own (%@). Rename "
                                                                      "the variable",
                                                                    label, cn, [cn hasPrefix:@"__par_"] ? @"names beginning __par_"
-                                                                     : @"run, go, lo, hi, merge, copyChunk, parName, defaultDevice, gpuSource, gpuLength, gpuGlobal, gpuGlobalBytes, gpuReadsOnly, gpuReadsOnlyGlobal, gpuWritesAll, for a struct"]
+                                                                     : @"run, go, lo, hi, merge, copyChunk, parName, defaultDevice, runsOnce, gpuSource, gpuLength, gpuGlobal, gpuGlobalBytes, gpuReadsOnly, gpuReadsOnlyGlobal, gpuWritesAll, for a struct"]
                                      at:loc];
             return nil;
             }
@@ -1985,6 +1985,18 @@ static NSString* parRootName(XTASTNode* n)
                       location:loc];
         [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"defaultDevice"
                                                       returnTypes:@[ [self.typeTable typeForName:@"i32"] ]
+                                                       parameters:@[] isStatic:NO isVarArgs:NO body:b location:loc]];
+        }
+    // runsOnce(): true for a block that runs once per program run; only for those.
+    if (frame[@"once"])
+        {
+        XTBlockNode* b = [[XTBlockNode alloc]
+            initWithStatements:@[ [[XTReturnNode alloc]
+                                     initWithValues:@[ [[XTLiteralBoolNode alloc] initWithBool:YES location:loc] ]
+                                           location:loc] ]
+                      location:loc];
+        [methods addObject:[[XTMethodDeclNode alloc] initWithName:@"runsOnce"
+                                                      returnTypes:@[ [self.typeTable typeForName:@"bool"] ]
                                                        parameters:@[] isStatic:NO isVarArgs:NO body:b location:loc]];
         }
     // gpuSource(): the kernel's GPU source. A placeholder string, unique per

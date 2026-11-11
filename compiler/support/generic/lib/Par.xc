@@ -96,6 +96,13 @@ class ParChunk : Object
         {
         return (i32)0;
         }
+    // True for a block that can run only once per program run (outside
+    // every loop, reached only from main); the compiler overrides it for
+    // those, so the probe can say so. Nothing else depends on it.
+    bool runsOnce(void)
+        {
+        return false;
+        }
 
     u8* parName(void)
         {
@@ -416,16 +423,77 @@ class Par
         // Then one run of the whole block on the CPU path, as auto would time
         // it, on a scratch copy, and the arrays put back: the probe's choice
         // of CPU or GPU compares that with the GPU (ParTiles.probeDecide).
-        if (ParDevice.probing() && !ParDevice.probed(proto) && ParTiles.probe(proto, proto.gpuSource(), lo, hi))
+        //
+        // Then auto's own measurement, carried to the end on this first run
+        // (#148): each candidate's warm-up and timed runs, on copies of the
+        // block with the arrays it writes put back after each, until auto
+        // has decided and saved it, so a block that runs once per program
+        // run is placed on the next run without measuring. Where that cannot
+        // run (auto is not choosing, or the block's arrays are not known),
+        // the sweep's own CPU-against-GPU choice stands as before.
+        if (ParDevice.probing() && !ParDevice.probed(proto))
             {
-            ParChunk* scratch = proto.copyChunk();
-            i64 t0 = ParDevice.nowUs();
-            Par.runCpu(scratch, lo, hi);
-            i64 us = ParDevice.nowUs() - t0;
-            ParTiles.probeRestore();
-            ParTiles.probeDecide(proto, hi - lo, us);
+            bool swept = ParTiles.probe(proto, proto.gpuSource(), lo, hi);
+            if (Par.measureToEnd(proto, lo, hi))
+                ParTiles.probeForget();
+            else if (swept)
+                {
+                ParChunk* scratch = proto.copyChunk();
+                i64 t0 = ParDevice.nowUs();
+                Par.runCpu(scratch, lo, hi);
+                i64 us = ParDevice.nowUs() - t0;
+                ParTiles.probeRestore();
+                ParTiles.probeDecide(proto, hi - lo, us);
+                }
             }
 #endif
+        Par.dispatch(proto, lo, hi);
+#else
+        Par.runCpu(proto, lo, hi);
+        ParDevice.ranAdd(proto, String.withCString("cpu"));
+#endif
+        }
+
+#if (ARCH_arm64 && !OS_ios) || ARCH_x86_64 || ARCH_wasm32
+#if !ARCH_wasm32
+    // The probe's measurement to the end (#148): auto's runs of the block,
+    // one after another on copies of it as it was before any ran (so a
+    // reduction starts from its own initial value each time), the written
+    // arrays put back after each, until auto stops measuring. True when it
+    // finished: auto's choice is saved, and the arrays are as they were.
+    static bool measureToEnd(ParChunk* proto, i64 lo, i64 hi)
+        {
+        if (!ParDevice.wouldMeasure(proto, hi - lo))
+            return false;
+        if (!ParTiles.keep(proto, proto.gpuSource(), lo, hi))
+            return false;
+        ParChunk* first = proto.copyChunk();
+        bool done = false;
+        u32 runs = (u32)0;
+        while (!done && runs < (u32)32)
+            {
+            Par.dispatch(first.copyChunk(), lo, hi);
+            ParTiles.putBack();
+            runs = runs + (u32)1;
+            done = !ParDevice.wouldMeasure(proto, hi - lo);
+            }
+        ParTiles.forgetKept();
+        if (ParDevice.reporting())
+            {
+            if (done)
+                Log.info("par: probe: %s: auto measured it to the end in %u runs%s", proto.parName(), runs,
+                         proto.runsOnce() ? " (it runs once per program run)" : "");
+            else
+                Log.info("par: probe: %s: auto had not decided after %u runs", proto.parName(), runs);
+            }
+        return done;
+        }
+#endif
+
+    // Where the block runs and the run itself: auto's choice (or the forced
+    // device), then that device, falling back to the CPU.
+    static void dispatch(ParChunk* proto, i64 lo, i64 hi)
+        {
         i32 choice = ParDevice.choose(proto, hi - lo);
 #if !ARCH_wasm32
         if (choice >= (i32)3)
@@ -501,11 +569,9 @@ class Par
         i64 t0 = ParDevice.nowUs();
         Par.runCpu(proto, lo, hi);
         ParDevice.ranOnCpu(proto, ParDevice.nowUs() - t0);
-#else
-        Par.runCpu(proto, lo, hi);
-#endif
         ParDevice.ranAdd(proto, String.withCString("cpu"));
         }
+#endif
 
 #if (ARCH_arm64 && !OS_ios) || ARCH_x86_64 || ARCH_wasm32
     // The GPU this program would run on, as its runtime names it ("" for none).
