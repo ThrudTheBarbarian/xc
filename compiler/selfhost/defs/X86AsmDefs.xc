@@ -6,6 +6,8 @@
 #define X86FIX_PC32DATA 3 // a PC-relative slot in DATA — musl's vfprintf
 #define X86FIX_GOTLOAD 4  // [REX_]GOTPCRELX: a RELAXABLE GOT load. When the
 #define X86FIX_GOTREF 5   // plain GOTPCREL: NOT relaxable, because the slot
+#define X86FIX_RVA32 7    // a 32-bit image-relative address in DATA (COFF ADDR32NB: .pdata, .xdata)
+#define X86FIX_SECREL32 8 // a thread-local's offset in the PE TLS template (COFF SECREL), in TEXT
 #define X86FIX_TPOFF32 6  // local-exec TLS: the addend IS the final
 #define OP_NONE 0
 #define OP_REG 1

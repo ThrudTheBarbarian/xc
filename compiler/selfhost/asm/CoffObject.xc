@@ -75,12 +75,20 @@ class CoffSection
     //
     //   .idata  a DLL import descriptor. We build our own from the import map,
     //           so mingw's would be a second, conflicting one.
-    //   .pdata  SEH unwind info, .xdata its payload. Nothing we emit unwinds.
+    //   .pdata  SEH unwind info, .xdata its payload: kept only for a C++
+    //           program (CoffObject.setKeepUnwind), whose exceptions unwind
+    //           through clang's and libc++'s frames by them.
     bool skippable(void)
         {
         if ((_chars & (u32)COFF_SCN_DISCARDABLE) != (u32)0)
             return true;
+        if (gCoffKeepUnwind && (self.isPdata() || _name.hasPrefix(String.withCString(".xdata"))))
+            return false;
         return _name.hasPrefix(String.withCString(".idata")) || _name.hasPrefix(String.withCString(".pdata")) || _name.hasPrefix(String.withCString(".xdata")) || _name.hasPrefix(String.withCString(".debug"));
+        }
+    bool isPdata(void)
+        {
+        return _name.hasPrefix(String.withCString(".pdata"));
         }
     void set(String* n, u32 sz, u32 rw, u32 rl, u32 nr, u32 ch)
         {
@@ -92,6 +100,9 @@ class CoffSection
         _chars = ch;
         }
     }
+
+// A C++ program's link: keep .pdata (in its own blob) and .xdata.
+bool gCoffKeepUnwind;
 
     class CoffObject
     {
@@ -106,6 +117,15 @@ class CoffSection
     Map* _textOffOf; // section index -> offset+1 in the text blob
     Map* _dataOffOf;
     u32 _dataAlign;  // the strictest alignment a data section asks for
+    Data* _tlsData;      // the .tls$ sections: the thread-local template (setKeepUnwind)
+    Map* _tlsOffOf;      // section index -> offset+1 in it
+    Array* _tlsDataRelocs; // ElfReloc@ against it
+    Data* _ctors;        // the .ctors sections: constructor pointers (setKeepUnwind)
+    Map* _ctorsOffOf;
+    Array* _ctorsRelocs;
+    Data* _pdata;        // the .pdata sections, one after another (setKeepUnwind)
+    Map* _pdataOffOf;    // section index -> offset+1 in it
+    Array* _pdataRelocs; // ElfReloc@ against it: ADDR32NB, three a function
 
     void init(void)
         {
@@ -118,7 +138,37 @@ class CoffSection
         _textOffOf = new Map();
         _dataOffOf = new Map();
         _dataAlign = (u32)8;
+        _tlsData = new Data();
+        _tlsOffOf = new Map();
+        _tlsDataRelocs = new Array();
+        _ctors = new Data();
+        _ctorsOffOf = new Map();
+        _ctorsRelocs = new Array();
+        _pdata = new Data();
+        _pdataOffOf = new Map();
+        _pdataRelocs = new Array();
         _ok = false;
+        }
+
+    static void setKeepUnwind(bool b)
+        {
+        gCoffKeepUnwind = b;
+        }
+    Data* pdata(void)
+        {
+        return _pdata;
+        }
+    Data* ctors(void)
+        {
+        return _ctors;
+        }
+    Array* ctorsRelocs(void)
+        {
+        return _ctorsRelocs;
+        }
+    Array* pdataRelocs(void)
+        {
+        return _pdataRelocs;
         }
 
     // What the data blob's start must be aligned to in the image, so each
@@ -152,19 +202,20 @@ class CoffSection
         {
         return _data;
         }
-    // COFF has no separate TLS image, so these answer the way ElfMerge
-    // expects for an object that has none (dataAlign is above).
+    // The thread-local template (.tls$ sections) when setKeepUnwind is on
+    // (C++: libc++abi's exception globals are thread_local); otherwise empty
+    // and the sections ride in data as before. Its symbols are where 3.
     Data* tls(void)
         {
-        return new Data();
+        return _tlsData;
         }
     u32 tlsAlign(void)
         {
-        return (u32)1;
+        return (u32)16;
         }
     Array* tlsRelocs(void)
         {
-        return new Array();
+        return _tlsDataRelocs;
         }
 
     static CoffObject* parse(Data* d)
@@ -233,6 +284,30 @@ class CoffSection
             if (s.isCode() || s.skippable())
                 continue;
             u32 ch = s.chars();
+            if (gCoffKeepUnwind && s.name().hasPrefix(String.withCString(".tls")))
+                {
+                _padTo(_tlsData, (u32)16);
+                _tlsOffOf.set((Hashable*)Number.withU32(i), (Object*)Number.withU32(_tlsData.length() + (u32)1));
+                if ((ch & (u32)COFF_SCN_UNINIT_DATA) != (u32)0)
+                    _zeros(_tlsData, s.size());
+                else
+                    _copyInto(_tlsData, s.raw(), s.size());
+                continue;
+                }
+            if (gCoffKeepUnwind && s.name().hasPrefix(String.withCString(".ctors")))
+                {
+                _padTo(_ctors, (u32)8);
+                _ctorsOffOf.set((Hashable*)Number.withU32(i), (Object*)Number.withU32(_ctors.length() + (u32)1));
+                _copyInto(_ctors, s.raw(), s.size());
+                continue;
+                }
+            if (s.isPdata())
+                {
+                _padTo(_pdata, (u32)4);
+                _pdataOffOf.set((Hashable*)Number.withU32(i), (Object*)Number.withU32(_pdata.length() + (u32)1));
+                _copyInto(_pdata, s.raw(), s.size());
+                continue;
+                }
             if ((ch & ((u32)COFF_SCN_INIT_DATA | (u32)COFF_SCN_UNINIT_DATA)) == (u32)0)
                 continue;
             // The header's IMAGE_SCN_ALIGN field (bits 20-23, 2^(n-1) bytes).
@@ -257,6 +332,8 @@ class CoffSection
 
     void _symbols(u32 symOff, u32 nsym, u32 strOff)
         {
+        Array* weakAt = new Array();
+        Array* weakTag = new Array();
         u32 i = (u32)0;
         while (i < nsym)
             {
@@ -277,6 +354,7 @@ class CoffSection
                 {
                 u32 t = _in(_textOffOf, (u32)sect);
                 u32 dd = _in(_dataOffOf, (u32)sect);
+                u32 tl = _in(_tlsOffOf, (u32)sect);
                 if (t != (u32)0)
                     {
                     where = (u32)1;
@@ -287,9 +365,21 @@ class CoffSection
                     where = (u32)2;
                     off = dd - (u32)1 + val;
                     }
+                else if (tl != (u32)0)
+                    {
+                    where = (u32)3;
+                    off = tl - (u32)1 + val;
+                    }
                 }
             ElfSymDef* sd = new ElfSymDef();
             sd.set(nm, ext, false, where, off);
+            // A weak external (class 105): its first aux record names the
+            // default definition, which it stands for (libc++'s operator new).
+            if (gCoffKeepUnwind && cls == (u32)105 && naux > (u32)0)
+                {
+                weakAt.add((Object*)Number.withU32(_symdefs.count()));
+                weakTag.add((Object*)Number.withU32(CoffObject._rd32(_d, e + (u32)COFF_SYM_SZ)));
+                }
             _symdefs.add((Object*)sd);
             // Auxiliary records take slots and relocations index BY SLOT, so
             // they are kept as placeholders. Skipping them renumbers every
@@ -303,6 +393,17 @@ class CoffSection
                 }
             i = i + (u32)1;
             }
+        for (u32 k = (u32)0; k < weakAt.count(); k = k + (u32)1)
+            {
+            u32 at = ((Number*)weakAt.get(k)).asU32();
+            u32 tag = ((Number*)weakTag.get(k)).asU32();
+            if (tag >= _symdefs.count())
+                continue;
+            ElfSymDef* def = (ElfSymDef*)_symdefs.get(tag);
+            ElfSymDef* w = (ElfSymDef*)_symdefs.get(at);
+            if (def.where() != (u32)0)
+                w.set(w.name(), true, true, def.where(), def.off());
+            }
         }
 
     void _relocations(void)
@@ -314,10 +415,13 @@ class CoffSection
                 continue;
             u32 t = _in(_textOffOf, i);
             u32 dd = _in(_dataOffOf, i);
-            if (t == (u32)0 && dd == (u32)0)
+            u32 pd = _in(_pdataOffOf, i);
+            u32 tl = _in(_tlsOffOf, i);
+            u32 ct = _in(_ctorsOffOf, i);
+            if (t == (u32)0 && dd == (u32)0 && pd == (u32)0 && tl == (u32)0 && ct == (u32)0)
                 continue; // a skipped section relocates nothing
-            u32 base = (t != (u32)0 ? t : dd) - (u32)1;
-            Array* into = t != (u32)0 ? _relocs : _dataRelocs;
+            u32 base = (t != (u32)0 ? t : (dd != (u32)0 ? dd : (pd != (u32)0 ? pd : (tl != (u32)0 ? tl : ct)))) - (u32)1;
+            Array* into = t != (u32)0 ? _relocs : (dd != (u32)0 ? _dataRelocs : (pd != (u32)0 ? _pdataRelocs : (tl != (u32)0 ? _tlsDataRelocs : _ctorsRelocs)));
             for (u32 r = (u32)0; r < s.nrel(); r = r + (u32)1)
                 {
                 u32 e = s.rel() + r * (u32)COFF_RELOC_SZ;
@@ -329,6 +433,8 @@ class CoffSection
                 i64 addend;
                 if (rt == (u32)COFF_REL_ADDR64)
                     addend = (i64)CoffObject._rd64(_d, s.raw() + roff);
+                else if (rt == (u32)COFF_REL_ADDR32NB || rt == (u32)COFF_REL_SECREL)
+                    addend = (i64)(i32)CoffObject._rd32(_d, s.raw() + roff);
                 else
                     addend = (i64)(i32)CoffObject._rd32(_d, s.raw() + roff) - (i64)4;
                 ElfReloc* rec = new ElfReloc();

@@ -160,11 +160,13 @@ class Languages
                                         String.withCString("")));
         // C++: libc++'s parallel algorithms (std::execution) are its
         // experimental library on macOS (libc++experimental.a), linked by
-        // xcc like any system library. Its passes' -fno-unroll-loops keeps
+        // xcc like any system library. On win64 the mingw root's libc++.a
+        // holds libc++abi and libunwind too (each also has its own archive:
+        // naming those as well would link the unwinder twice). Its passes' -fno-unroll-loops keeps
         // the IR xcc reads unrolled.
         t.add((Object*)LanguageRow.make(String.withCString("c++"), String.withCString(".cpp .cc .cxx .C"), String.withCString("clang++"),
                                         ir.appending(String.withCString(" -fexperimental-library")),
-                                        String.withCString("macos:c++ macos:c++experimental linux::libstdc++.so.6 linux::libgcc_s.so.1"),
+                                        String.withCString("macos:c++ macos:c++experimental linux::libstdc++.so.6 linux::libgcc_s.so.1 windows:c++"),
                                         String.withCString("loops"), String.withCString(""),
                                         String.withCString("-O1 -fno-unroll-loops -fno-vectorize -fno-slp-vectorize -fno-discard-value-names -mllvm -rotation-max-header-size=0 -mllvm -indvars-widen-indvars=false"),
                                         String.withCString("-D_LIBCPP_PSTL_BACKEND_SERIAL"), String.withCString("eh_frame")));

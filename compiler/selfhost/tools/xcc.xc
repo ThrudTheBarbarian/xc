@@ -43,6 +43,7 @@
 #import <MachOLink>
 #import <Tbd>
 #import <PeLink>
+#import <CoffObject>
 #import <CodeSign>
 #import <Iface>
 #import <ElfArm64>
@@ -1040,7 +1041,9 @@ String* resolveLinkInput(DriverOptions* d, String* arg)
     // to open, but the SDK ships a `.tbd` text stub naming its exports — and
     // that is what tells the bind which dylib ordinal the symbol belongs to
     // (bug 138 / uxkit 028: without it every import fell to ordinal 1).
-    String* sdk = appleSdkRoot(d);
+    // A Mach-O target's only: from a Mac, a win64 program's -lc++ is
+    // mingw's libc++.a, not macOS's stub.
+    String* sdk = machO ? appleSdkRoot(d) : (String*)0;
     if (sdk != (String*)0) {
         String* t1 = String.withString(sdk); t1.appendCString("/usr/lib/lib"); t1.append(stem); t1.appendCString(".tbd");
         if (Files.exists(t1)) return t1;
@@ -5009,12 +5012,24 @@ void main(void)
         // program's one definition of it then.
         Languages.setWholeProgram(!gCSplitRelocatable && !d.keepAsm() && !d.compileOnly());
         cPathSetElf(crow != (TargetRow*)0 && crow.exeFormat().hasPrefix(String.withCString("elf")));
+        // C++ on win64: the link keeps .pdata/.xdata, the SEH tables its
+        // exceptions unwind by.
+        CoffObject.setKeepUnwind(lang.ehFrames());
         // clang builds for the target, not the host: a triple, and from
         // another host the target's C headers (a sysroot with include/).
         String* tgt = cPathTargetFlags(d);
         if (tgt == (String*)0)
             {
             Process.exit((i32)1); return;
+            }
+        // C++ for win64 from another host: the mingw root's libc++ (its
+        // headers here, its static libraries in the link: libc++, libc++abi
+        // and libunwind, the row's windows: libraries).
+        if (lang.name().equals(String.withCString("c++")) && tgt.contains(String.withCString("mingw")))
+            {
+            u32 sr = tgt.byteIndexOf(String.withCString("--sysroot "));
+            String* root = tgt.substringFromByte(sr + (u32)10);
+            tgt = tgt.appending(String.withFormat(" -stdlib=libc++ -nostdinc++ -cxx-isystem %s/include/c++/v1", root.cString()));
             }
         cPathSetTarget(tgt);
         // C fuses the multiply-adds clang marks (llvm.fmuladd, its default
