@@ -4,8 +4,9 @@
 # inline members, the standard library's code), clang compiles the rest, and
 # the program links with libc++. Each program gives clang++'s output; with
 # --par-style=auto the plain loops over raw pointers become par blocks, on the
-# CPU and (on macOS) the GPU. Skipped where there is no clang++. macOS only
-# for now (libc++). Self-hosted compiler only.
+# CPU and (on macOS) the GPU. xcc's own link writes the program, unwind
+# tables included (exceptions). Skipped where there is no clang++. macOS
+# only for now (libc++). Self-hosted compiler only.
 #
 #   bash tests/par/cppath.sh
 set -u
@@ -363,6 +364,11 @@ done
 grep -q 'saxpy.*: outlined, a block' "$W/saxpy.pb" || { echo "FAIL cppath: saxpy's loop did not become a block"; grep outline "$W/saxpy.pb" | head -5; fail=1; }
 grep -q 'Grid4step.*: outlined, a block' "$W/grid.pb" || { echo "FAIL cppath: Grid::step's loop did not become a block"; grep outline "$W/grid.pb" | head -5; fail=1; }
 grep -q 'checkAll.*: outlined' "$W/grid.pb" && { echo "FAIL cppath: checkAll (a throwing call in its loop) was taken by xcc"; fail=1; }
+# grid's exception unwinds through tables xcc's own link wrote (Mach-O:
+# __unwind_info from clang's __compact_unwind, the personality by a slot of
+# the link's).
+nm "$W/grid" | grep -q '__xc_got\$___gxx_personality_v0' || { echo "FAIL cppath: grid was not linked by xcc (no personality slot)"; fail=1; }
+otool -l "$W/grid" | grep -q 'sectname __unwind_info' || { echo "FAIL cppath: grid has no __unwind_info"; fail=1; }
 grep -q 'saxpy.*vector.*: outlined, a block' "$W/vec.pb" || { echo "FAIL cppath: saxpy over std::vector did not become a block"; grep outline "$W/vec.pb" | head -3; fail=1; }
 XC_PAR=cpu XC_PAR_REPORT=1 "$W/vec.par" 2>&1 | grep -q 'vec.cpp:5: .* items on the' || { echo "FAIL cppath: saxpy's block over std::vector did not run"; fail=1; }
 for f in _Z3arrf _Z3brrv; do
@@ -485,7 +491,7 @@ cp "$W/saxpy.cpp" "$W/s2.cc"
 "$XC" -q -O2 -H . -o "$W/s2" "$W/s2.cc" > "$W/s2.b" 2>&1 && [ "$("$W/s2")" = "$("$W/saxpy.ref")" ] \
     || { echo "FAIL cppath: a .cc file does not build or run"; head -3 "$W/s2.b"; fail=1; }
 # A row from $XC_LANGUAGES: C++ again, under the extension .cu2.
-printf '# test row\nc++x | .cu2 | clang++ | -x c++ -O1 -Xclang -disable-llvm-passes -fno-discard-value-names -S -emit-llvm | macos:c++ | loops | clang++\n' > "$W/langs"
+printf '# test row\nc++x | .cu2 | clang++ | -x c++ -O1 -Xclang -disable-llvm-passes -fno-discard-value-names -S -emit-llvm | macos:c++ | loops\n' > "$W/langs"
 cp "$W/saxpy.cpp" "$W/s3.cu2"
 XC_LANGUAGES="$W/langs" "$XC" -q -O2 -H . -o "$W/s3" "$W/s3.cu2" > "$W/s3.b" 2>&1 && [ "$("$W/s3")" = "$("$W/saxpy.ref")" ] \
     || { echo "FAIL cppath: a row from XC_LANGUAGES does not build"; head -3 "$W/s3.b"; fail=1; }

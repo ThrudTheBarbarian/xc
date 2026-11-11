@@ -29,8 +29,9 @@
 // everything it names (C++: libc++'s parallel algorithms as plain loops,
 // -D_LIBCPP_PSTL_BACKEND_SERIAL, while what xcc does not take keeps the
 // library's own parallel backend). `frames` is `eh_frame` for a language
-// whose unwinder reads clang's frame table (C++'s exceptions): on an ELF
-// target its program registers that table at start-up.
+// whose unwinder reads clang's unwind tables (C++'s exceptions): xcc's link
+// keeps them (ELF: .eh_frame, registered at start-up; Mach-O: __unwind_info,
+// built from clang's __compact_unwind).
 // `#` starts a comment line.
 
 #import "Foundation.xc"
@@ -56,7 +57,7 @@ class LanguageRow
     String* _linker;    // links the program on macOS, or "": xcc's own link
     String* _passes;    // clang's flags for a second step over the IR, or ""
     String* _readFlags; // flags of a second build, the one xcc reads, or ""
-    bool _ehFrames;     // frames `eh_frame`: the program registers clang's frame table (ELF)
+    bool _ehFrames;     // frames `eh_frame`: the link keeps clang's unwind tables
 
     String* name(void)    { return _name; }
     Array* exts(void)     { return _exts; }
@@ -158,12 +159,13 @@ class Languages
                                         ir, String.withCString(""), String.withCString("all"), String.withCString(""), String.withCString(""), String.withCString(""),
                                         String.withCString("")));
         // C++: libc++'s parallel algorithms (std::execution) are its
-        // experimental library on macOS. Its passes' -fno-unroll-loops keeps
+        // experimental library on macOS (libc++experimental.a), linked by
+        // xcc like any system library. Its passes' -fno-unroll-loops keeps
         // the IR xcc reads unrolled.
         t.add((Object*)LanguageRow.make(String.withCString("c++"), String.withCString(".cpp .cc .cxx .C"), String.withCString("clang++"),
                                         ir.appending(String.withCString(" -fexperimental-library")),
-                                        String.withCString("macos:c++ linux::libstdc++.so.6 linux::libgcc_s.so.1"),
-                                        String.withCString("loops"), String.withCString("clang++ -fexperimental-library"),
+                                        String.withCString("macos:c++ macos:c++experimental linux::libstdc++.so.6 linux::libgcc_s.so.1"),
+                                        String.withCString("loops"), String.withCString(""),
                                         String.withCString("-O1 -fno-unroll-loops -fno-vectorize -fno-slp-vectorize -fno-discard-value-names -mllvm -rotation-max-header-size=0 -mllvm -indvars-widen-indvars=false"),
                                         String.withCString("-D_LIBCPP_PSTL_BACKEND_SERIAL"), String.withCString("eh_frame")));
         return t;

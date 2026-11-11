@@ -482,9 +482,9 @@ class CPath
         if (gCPathTarget != (String*)0)
             cc.append(gCPathTarget);
         cc.appendCString(gCPathProtect ? " -O2 -fstack-protector-strong" : " -O2");
-        // Unwind tables only where the platform's linker carries them: a
-        // language that names one (C++, whose exceptions need them).
-        if (lang.linker().byteLength() == 0)
+        // Unwind tables only for a language that needs them (C++'s
+        // exceptions): one with a frame table, or a platform linker.
+        if (lang.linker().byteLength() == 0 && !lang.ehFrames())
             cc.appendCString(" -fno-unwind-tables -fno-asynchronous-unwind-tables");
         cc.appendCString(" -Wno-override-module -c -o ");
         cc.append(CPath.quoted(restO));

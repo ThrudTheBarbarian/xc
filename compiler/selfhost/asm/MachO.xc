@@ -35,6 +35,9 @@ Set* gMachODataSet;
 Set* gMachOExportSet;
 u32 gMachOBssBase;
 u32 gMachOBssSect;
+// Sections __TEXT carries past __text and __stubs (__unwind_info), which
+// every later section's ordinal moves up by.
+u32 gMachOTextExtra;
 
 class MachOSha256
     {
@@ -518,6 +521,9 @@ class MachOSha256
     class MachOLayout
     {
     u32 textOffset;
+    u32 unwindOffset; // __TEXT,__unwind_info, after __stubs (0 size: none)
+    u32 unwindSize;
+    Data* unwindBytes;
     u32 stubsOffset;
     u32 stubsSize;
     u32 textSegEnd;
@@ -646,6 +652,7 @@ class MachOSha256
         _names.add((Object*)String.withCString("__mod_init_func"));            // 12 (bug 066)
         _names.add((Object*)String.withCString("__XTC"));                      // 13
         _names.add((Object*)String.withCString("__iface"));                    // 14
+        _names.add((Object*)String.withCString("__unwind_info"));              // 15
         }
 
     // The dylibs an EXECUTABLE links against, or the libraries a DYLIB
@@ -1365,13 +1372,21 @@ class MachOSha256
         u32 nimp = _imports.count();
         bool hasImp = nimp > (u32)0;
         bool hasDataSeg = hasData || hasImp || hasBss;
+        // The objects' unwind entries (MachOLink), which __unwind_info holds.
+        Array* uw = MachOUnwind.pending();
+        MachOUnwind.setPending((Array*)0);
+        Array* uwRows = uw != (Array*)0 ? MachO.unwindRows(uw, text.length()) : (Array*)0;
+        Array* uwPers = uw != (Array*)0 ? MachO.unwindPersonalities(uw) : (Array*)0;
+        u32 unwindSize = uwRows != (Array*)0 ? MachO.unwindInfoSize(uwRows, uwPers) : (u32)0;
+        gMachOTextExtra = unwindSize > (u32)0 ? (u32)1 : (u32)0;
 
         // 2. Layout. The vmaddr of everything is VMBASE + its file offset, so
         //    a single set of offsets describes both.
         u32 textOffset = (u32)MACHO_PAGE; // header slack for the signature
         u32 stubsOffset = roundUp(textOffset + text.length(), (u32)4);
         u32 stubsSize = nimp * (u32)STUB_SZ;
-        u32 textSegEnd = roundUp(stubsOffset + stubsSize, (u32)MACHO_PAGE);
+        u32 unwindOffset = roundUp(stubsOffset + stubsSize, (u32)4);
+        u32 textSegEnd = roundUp(unwindOffset + unwindSize, (u32)MACHO_PAGE);
         u32 dataSegFileOff = textSegEnd;
         u32 dataProgOffset = dataSegFileOff;
         u32 gotOffset = roundUp(dataProgOffset + (hasData ? data.length() : (u32)0), (u32)8);
@@ -1389,7 +1404,7 @@ class MachOSha256
         u32 vmShift = dataSegVmEnd - dataSegEnd;
         gMachOBssBase = bssOff;
         // __bss is the LAST section of __DATA, so its ordinal is the count.
-        gMachOBssSect = (u32)1 + (hasImp ? (u32)1 : (u32)0) + (hasDataSect ? (u32)1 : (u32)0) + objcSectCount()
+        gMachOBssSect = (u32)1 + (hasImp ? (u32)1 : (u32)0) + gMachOTextExtra + (hasDataSect ? (u32)1 : (u32)0) + objcSectCount()
                       + (hasModInit ? (u32)1 : (u32)0) + (hasImp ? (u32)1 : (u32)0) + (u32)1;
         // -g: the DWARF the assembler recorded goes in a __DWARF segment
         // between __DATA and __LINKEDIT, where lldb reads it from the
@@ -1464,6 +1479,16 @@ class MachOSha256
         for (u32 i = (u32)0; i < fixups.count(); i = i + (u32)1)
             {
             Arm64Fixup* f = (Arm64Fixup*)fixups.get(i);
+            if (f.kind() == (u32)FIXUP_PREL32 && symbols.get((Hashable*)f.symbol()) != (Object*)0)
+                {
+                // `target - here` in data (an exception table's type entry
+                // to its pointer slot): both in the image, no slide.
+                u32 t = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend();
+                u32 v = t - (dataProgOffset + f.offset());
+                for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
+                    dat.setByteAt(f.offset() + b, (u8)((v >> ((u32)8 * b)) & (u32)$FF));
+                continue;
+                }
             if (f.kind() != (u32)FIXUP_POINTER64)
                 continue;
             if (symbols.get((Hashable*)f.symbol()) == (Object*)0)
@@ -1485,6 +1510,11 @@ class MachOSha256
         sortBindsByOffset(_dataBinds);
 
         MachOLayout* L = new MachOLayout();
+        L.unwindOffset = unwindOffset;
+        L.unwindSize = unwindSize;
+        L.unwindBytes = unwindSize > (u32)0
+                      ? MachO.unwindInfo(uwRows, uwPers, symbols, dataSyms, textOffset, dataProgOffset, text.length())
+                      : (Data*)0;
         L.textOffset = textOffset;
         L.stubsOffset = stubsOffset;
         L.stubsSize = stubsSize;
@@ -1556,6 +1586,7 @@ class MachOSha256
         gMachODataSet = Set.withArray(dataSyms);
         gMachOExportSet = Set.withArray(exports);
         _dataSegIdx = (u32)1; // no __PAGEZERO: __TEXT=0, __DATA=1
+        gMachOTextExtra = (u32)0;
         _baseHi = (u32)0;     // based at 0; the loader slides it
         _flatBind = true;
 
@@ -1608,7 +1639,7 @@ class MachOSha256
         u32 dataSegVmEnd = hasBss ? roundUp(bssOff + bssLength, (u32)MACHO_PAGE) : dataSegEnd;
         u32 vmShift = dataSegVmEnd - dataSegEnd;
         gMachOBssBase = bssOff;
-        gMachOBssSect = (u32)1 + (hasImp ? (u32)1 : (u32)0) + (hasDataSect ? (u32)1 : (u32)0) + objcSectCount()
+        gMachOBssSect = (u32)1 + (hasImp ? (u32)1 : (u32)0) + gMachOTextExtra + (hasDataSect ? (u32)1 : (u32)0) + objcSectCount()
                       + (hasModInit ? (u32)1 : (u32)0) + (hasImp ? (u32)1 : (u32)0) + (u32)1;
         u32 xtcSegFileOff = dataSegEnd;
         u32 xtcSegEnd = hasIface ? roundUp(xtcSegFileOff + iface.count(), (u32)MACHO_PAGE)
@@ -2092,7 +2123,7 @@ class MachOSha256
                            u32 textOffset, u32 dataProgOffset, bool hasImp)
         {
         strtab.appendByte((u8)0);
-        u32 dataSect = (u32)1 + (hasImp ? (u32)1 : (u32)0) + (u32)1;
+        u32 dataSect = (u32)1 + (hasImp ? (u32)1 : (u32)0) + gMachOTextExtra + (u32)1;
         for (u32 pass = (u32)0; pass < (u32)2; pass = pass + (u32)1)
             {
             Array* list = pass == (u32)0 ? locals : externs;
@@ -2186,6 +2217,163 @@ class MachOSha256
         }
 
     // ── The image ────────────────────────────────────────────────────────
+    // ── __unwind_info ────────────────────────────────────────────────────
+    //
+    // What ld64 makes from the objects' __compact_unwind and Darwin's
+    // unwinder reads (it has no use for __compact_unwind itself): a header,
+    // the personalities (image offsets of pointer slots), a first-level
+    // index of second-level pages, the LSDA index, then the pages, each a
+    // REGULAR one of up to 511 (function, encoding) pairs. Code with no
+    // entry (xcc's own) gets encoding 0 so it never takes on the entry
+    // before it.
+
+    // The entries in address order with the gaps between them filled: an
+    // Array of MachOUnwindRec, the fillers with encoding 0 and no symbols.
+    static Array* unwindRows(Array* uw, u32 textLen)
+        {
+        Array* recs = new Array();
+        for (u32 i = (u32)0; i < uw.count(); i = i + (u32)1)
+            recs.add(uw.get(i));
+        // insertion sort by function offset: one object's entries come sorted
+        for (u32 i = (u32)1; i < recs.count(); i = i + (u32)1)
+            {
+            Object* x = recs.get(i);
+            u32 xf = ((MachOUnwindRec*)x).fn();
+            u32 j = i;
+            while (j > (u32)0 && ((MachOUnwindRec*)recs.get(j - (u32)1)).fn() > xf)
+                {
+                recs.set(j, recs.get(j - (u32)1));
+                j = j - (u32)1;
+                }
+            recs.set(j, x);
+            }
+        Array* rows = new Array();
+        u32 at = (u32)0;
+        for (u32 i = (u32)0; i < recs.count(); i = i + (u32)1)
+            {
+            MachOUnwindRec* r = (MachOUnwindRec*)recs.get(i);
+            if (r.fn() > at)
+                rows.add((Object*)MachOUnwindRec.with(at, r.fn() - at, (u32)0, (u32)0, (u32)0));
+            rows.add((Object*)r);
+            at = r.fn() + r.len();
+            }
+        if (at < textLen)
+            rows.add((Object*)MachOUnwindRec.with(at, textLen - at, (u32)0, (u32)0, (u32)0));
+        return rows;
+        }
+
+    // The distinct personality slots, in first-use order (at most three: the
+    // encoding has two bits for the index).
+    static Array* unwindPersonalities(Array* uw)
+        {
+        Array* p = new Array();
+        for (u32 i = (u32)0; i < uw.count(); i = i + (u32)1)
+            {
+            String* s = ((MachOUnwindRec*)uw.get(i)).persSym();
+            if (s == (String*)0)
+                continue;
+            bool have = false;
+            for (u32 k = (u32)0; k < p.count(); k = k + (u32)1)
+                if (((String*)p.get(k)).equals(s))
+                    have = true;
+            if (!have)
+                p.add((Object*)s);
+            }
+        return p;
+        }
+
+    static u32 unwindLsdaCount(Array* rows)
+        {
+        u32 n = (u32)0;
+        for (u32 i = (u32)0; i < rows.count(); i = i + (u32)1)
+            if (((MachOUnwindRec*)rows.get(i)).lsdaSym() != (String*)0)
+                n = n + (u32)1;
+        return n;
+        }
+
+    static u32 unwindInfoSize(Array* rows, Array* pers)
+        {
+        u32 pages = (rows.count() + (u32)510) / (u32)511;
+        return (u32)28 + (u32)4 * pers.count() + (u32)12 * (pages + (u32)1)
+             + (u32)8 * MachO.unwindLsdaCount(rows) + (u32)8 * pages + (u32)8 * rows.count();
+        }
+
+    static void put32At(Data* d, u32 v)
+        {
+        for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
+            d.appendByte((u8)((v >> ((u32)8 * b)) & (u32)$FF));
+        }
+
+    static Data* unwindInfo(Array* rows, Array* pers, Map* symbols, Array* dataSyms,
+                            u32 textOffset, u32 dataProgOffset, u32 textLen)
+        {
+        u32 pages = (rows.count() + (u32)510) / (u32)511;
+        u32 nlsda = MachO.unwindLsdaCount(rows);
+        u32 persOff = (u32)28;
+        u32 indexOff = persOff + (u32)4 * pers.count();
+        u32 lsdaOff = indexOff + (u32)12 * (pages + (u32)1);
+        u32 pagesOff = lsdaOff + (u32)8 * nlsda;
+        Data* d = new Data();
+        MachO.put32At(d, (u32)1);           // version
+        MachO.put32At(d, persOff);          // common encodings: none
+        MachO.put32At(d, (u32)0);
+        MachO.put32At(d, persOff);
+        MachO.put32At(d, pers.count());
+        MachO.put32At(d, indexOff);
+        MachO.put32At(d, pages + (u32)1);
+        for (u32 k = (u32)0; k < pers.count(); k = k + (u32)1)
+            MachO.put32At(d, symOffset(symbols, dataSyms, (String*)pers.get(k), textOffset, dataProgOffset));
+        // first-level index
+        u32 lsdaSeen = (u32)0;
+        u32 pageAt = pagesOff;
+        for (u32 p = (u32)0; p < pages; p = p + (u32)1)
+            {
+            u32 first = p * (u32)511;
+            MachO.put32At(d, textOffset + ((MachOUnwindRec*)rows.get(first)).fn());
+            MachO.put32At(d, pageAt);
+            MachO.put32At(d, lsdaOff + (u32)8 * lsdaSeen);
+            u32 n = rows.count() - first < (u32)511 ? rows.count() - first : (u32)511;
+            for (u32 i = first; i < first + n; i = i + (u32)1)
+                if (((MachOUnwindRec*)rows.get(i)).lsdaSym() != (String*)0)
+                    lsdaSeen = lsdaSeen + (u32)1;
+            pageAt = pageAt + (u32)8 + (u32)8 * n;
+            }
+        MachO.put32At(d, textOffset + textLen);
+        MachO.put32At(d, (u32)0);
+        MachO.put32At(d, lsdaOff + (u32)8 * nlsda);
+        // LSDA index
+        for (u32 i = (u32)0; i < rows.count(); i = i + (u32)1)
+            {
+            MachOUnwindRec* r = (MachOUnwindRec*)rows.get(i);
+            if (r.lsdaSym() == (String*)0)
+                continue;
+            MachO.put32At(d, textOffset + r.fn());
+            MachO.put32At(d, symOffset(symbols, dataSyms, r.lsdaSym(), textOffset, dataProgOffset));
+            }
+        // second-level pages
+        for (u32 p = (u32)0; p < pages; p = p + (u32)1)
+            {
+            u32 first = p * (u32)511;
+            u32 n = rows.count() - first < (u32)511 ? rows.count() - first : (u32)511;
+            MachO.put32At(d, (u32)2);                      // UNWIND_SECOND_LEVEL_REGULAR
+            MachO.put32At(d, (u32)8 | (n << (u32)16));     // entryPageOffset, entryCount
+            for (u32 i = first; i < first + n; i = i + (u32)1)
+                {
+                MachOUnwindRec* r = (MachOUnwindRec*)rows.get(i);
+                u32 enc = r.enc() & (u32)$0FFFFFFF;
+                if (r.persSym() != (String*)0)
+                    for (u32 k = (u32)0; k < pers.count(); k = k + (u32)1)
+                        if (((String*)pers.get(k)).equals(r.persSym()))
+                            enc = enc | ((k + (u32)1) << (u32)28);
+                if (r.lsdaSym() != (String*)0)
+                    enc = enc | (u32)$40000000;
+                MachO.put32At(d, textOffset + r.fn());
+                MachO.put32At(d, enc);
+                }
+            }
+        return d;
+        }
+
     void buildImage(SectionBytes* txt, SectionBytes* dat, Map* symbols, Array* dataSyms,
                     Array* rebaseOffs, MachOLayout* L)
         {
@@ -2235,6 +2423,11 @@ class MachOSha256
         padTo(L.stubsOffset);
         for (u32 i = (u32)0; i < nimp; i = i + (u32)1)
             emitStub(L.stubsOffset + i * (u32)STUB_SZ, L.gotOffset + i * (u32)GOT_SZ);
+        if (L.unwindSize > (u32)0)
+            {
+            padTo(L.unwindOffset);
+            appendAll(L.unwindBytes);
+            }
         if (L.hasData)
             {
             padTo(L.dataProgOffset);
@@ -2273,7 +2466,7 @@ class MachOSha256
         u32 libSysLen = (u32)26;                                                                                                              // "/usr/lib/libSystem.B.dylib"
         L.nDataSects = (L.hasDataSect ? (u32)1 : (u32)0) + (L.hasModInit ? (u32)1 : (u32)0) + (L.hasImp ? (u32)1 : (u32)0) + objcSectCount() + (L.hasBss ? (u32)1 : (u32)0); // bug 642, 069
         L.szPagezero = (u32)72;
-        L.szTextSeg = (u32)72 + (u32)80 * ((u32)1 + (L.hasImp ? (u32)1 : (u32)0));
+        L.szTextSeg = (u32)72 + (u32)80 * ((u32)1 + (L.hasImp ? (u32)1 : (u32)0) + (L.unwindSize > (u32)0 ? (u32)1 : (u32)0));
         L.szDataSeg = (u32)72 + (u32)80 * L.nDataSects;
         L.szLink = (u32)72;
         L.szDyldInfo = (u32)48;
@@ -2338,7 +2531,7 @@ class MachOSha256
         put64(L.textSegEnd, (u32)0);
         put32(VM_READ() | VM_EXEC());
         put32(VM_READ() | VM_EXEC());
-        put32(L.hasImp ? (u32)2 : (u32)1);
+        put32((L.hasImp ? (u32)2 : (u32)1) + (L.unwindSize > (u32)0 ? (u32)1 : (u32)0));
         put32((u32)0);
         putName((u32)2, (u32)16);
         putName((u32)1, (u32)16);
@@ -2363,6 +2556,21 @@ class MachOSha256
             put32((u32)0);
             put32((u32)0);
             put32((u32)$80000000 | (u32)$400);
+            put32((u32)0);
+            put32((u32)0);
+            put32((u32)0);
+            }
+        if (L.unwindSize > (u32)0)
+            {
+            putName((u32)15, (u32)16);
+            putName((u32)1, (u32)16); // __unwind_info, __TEXT
+            putAddr(L.unwindOffset);
+            put64(L.unwindSize, (u32)0);
+            put32(L.unwindOffset);
+            put32((u32)2);
+            put32((u32)0);
+            put32((u32)0);
+            put32((u32)0);
             put32((u32)0);
             put32((u32)0);
             put32((u32)0);
@@ -2740,7 +2948,7 @@ class MachOSha256
                            u32 textOffset, u32 dataProgOffset, bool hasImp)
         {
         strtab.appendByte((u8)0);
-        u32 dataSect = (u32)1 + (hasImp ? (u32)1 : (u32)0) + (u32)1;
+        u32 dataSect = (u32)1 + (hasImp ? (u32)1 : (u32)0) + gMachOTextExtra + (u32)1;
         for (u32 i = (u32)0; i < defNames.count(); i = i + (u32)1)
             {
             String* nm = (String*)defNames.get(i);

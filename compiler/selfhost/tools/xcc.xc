@@ -4654,6 +4654,16 @@ void addLanguageLibs(DriverOptions* d, LanguageRow* lang)
             tbd.appendCString("/usr/lib/lib");
             tbd.append(nm);
             tbd.appendCString(".tbd");
+            // A static library where the SDK has no stub (libc++'s
+            // experimental library: the parallel algorithms' libdispatch
+            // back end).
+            if (sdk != (String*)0 && !Files.exists(tbd)) {
+                String* ar = String.withString(sdk);
+                ar.appendCString("/usr/lib/lib");
+                ar.append(nm);
+                ar.appendCString(".a");
+                if (Files.exists(ar)) tbd = ar;
+            }
             if (sdk == (String*)0 || !Files.exists(tbd)) {
                 Stdio.printf("xcc: error: a %s program links lib%s, and no macOS SDK has it (install the Command Line Tools)\n",
                              lang.name().cString(), nm.cString());
