@@ -212,8 +212,11 @@ if "$XC" -q -O2 -H . -o "$W/whole_lo" "$W/whole_lo.xc" > "$W/whole_lo.b" 2>&1; t
 else
     echo "FAIL outlined-gpu: the whole= block from 1000 does not build"; head -3 "$W/whole_lo.b"; fail=1
 fi
-# C loops over malloc'd arrays: the runtime knows no block for them, and the
-# results are clang's wherever the block runs.
+# C loops over malloc'd arrays: the runtime knows no block for them, so the
+# outliner's whole=<k> (accesses that run for every item reach both ends of
+# the footprint) gives each its length (#145): every block runs on the GPU
+# where there is one (a conditional store, clampmax, included: its load runs
+# every item), and the results are clang's wherever the blocks run.
 if clang --version > /dev/null 2>&1; then
     cat > "$W/heap.c" <<'C'
 #include <stdio.h>
@@ -237,14 +240,21 @@ static void five(const float *a, const float *b, const float *c, float *d, float
         e[i] = a[i] + 2.0f * b[i] + c[i];
     }
 }
+static void clampmax(float *v, long n)
+{
+    for (long i = 0; i < n; i++)
+        if (v[i] > 1500.0f)
+            v[i] = 1500.0f;
+}
 int main(void)
 {
     long n = 1 << 22;
-    float *x = malloc(n * sizeof(float)), *y = malloc(n * sizeof(float));
+    float *x = malloc(n * sizeof(float)), *y = calloc(n, sizeof(float));
     float *d = malloc(n * sizeof(float)), *e = malloc(n * sizeof(float));
     init(x, y, n);
     saxpy(2.0f, x, y, n);
     five(x, y, x, d, e, n);
+    clampmax(e, n);
     double t = 0;
     for (long i = 0; i < n; i++)
         t += x[i] + y[i] + d[i] + e[i];
@@ -258,8 +268,14 @@ C
         if [ -x "$W/heap" ] && [ -n "${want:-}" ]; then
             for r in $runs; do
                 mkdir -p "$W/sh.$r"
-                got=$(env $(envFor "$r") XCC_SETTINGS_DIR="$W/sh.$r" "$W/heap" 2>/dev/null)
+                env $(envFor "$r") XCC_SETTINGS_DIR="$W/sh.$r" XC_PAR_REPORT=1 "$W/heap" > "$W/ho" 2> "$W/he"
+                got=$(grep -v '^par:' "$W/ho")
                 [ "$got" = "$want" ] || { echo "FAIL outlined-gpu: heap.c ($r) gives '$got', clang's '$want'"; fail=1; }
+                [ "$r" = cpu ] && continue
+                # Only where the run found a device (Linux hosts without one).
+                [ "$PLAT" = linux ] && ! grep -q 'par: \(CUDA\|Vulkan\) device' "$W/ho" "$W/he" && continue
+                ngpu=$(grep -h 'items on the GPU' "$W/ho" "$W/he" | grep -c 'heap.c:')
+                [ "$ngpu" -ge 4 ] || { echo "FAIL outlined-gpu: heap.c ($r): $ngpu of the 4 blocks ran on the GPU:"; grep -h '^par:.*\(heap.c\|stays\)' "$W/ho" "$W/he" | head -6; fail=1; }
             done
         fi
     fi

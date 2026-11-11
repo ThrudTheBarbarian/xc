@@ -1202,6 +1202,20 @@
         Map* fpLo = new Map();
         Map* fpHi = new Map();
         Map* fpOk = new Map();
+        // whole=<k> (an outlined block only: C's malloc'd arrays are in no
+        // registry, so the runtime sizes them from the footprint): accesses
+        // that run for every item reach both ends of the array's footprint,
+        // so the program itself touches all of it. The reference has no
+        // outliner.
+        Map* every = (Map*)0;
+        if (iv != (IRValue*)0 && f.name().hasPrefix(String.withCString("ParImpl$o")))
+            {
+            IRBlock* hb = (IRBlock*)phiBlk.get((Hashable*)String.withU32(iv.seq()));
+            if (hb != (IRBlock*)0)
+                every = parEveryItemBlocks(f, hb);
+            }
+        Map* onceLo = new Map();
+        Map* onceHi = new Map();
         for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
             {
             IRBlock* bb = (IRBlock*)f.blocks().get(b);
@@ -1268,6 +1282,18 @@
                         }
                     px = ParIdx.of(ok, rk, rlo);
                     }
+                // The accesses that run for every item, by their lowest and
+                // highest offset (with the footprint's k).
+                if (every != (Map*)0 && every.get((Hashable*)bb.name()) != (Object*)0 && px.affine && px.k != (i64)0)
+                    {
+                    String* kk = String.withFormat("%s:%ld", buf.cString(), px.k);
+                    Number* ol = (Number*)onceLo.get((Hashable*)kk);
+                    Number* oh = (Number*)onceHi.get((Hashable*)kk);
+                    if (ol == (Number*)0 || rlo < ol.asI64())
+                        onceLo.set((Hashable*)kk, (Object*)Number.withI64(rlo));
+                    if (oh == (Number*)0 || rhi > oh.asI64())
+                        onceHi.set((Hashable*)kk, (Object*)Number.withI64(rhi));
+                    }
                 if (fpOk.get((Hashable*)buf) == (Object*)0)
                     {
                     order.add((Object*)buf);
@@ -1289,6 +1315,7 @@
                 }
             }
         String* words = new String();
+        String* wholes = new String();
         for (u32 i = (u32)0; i < order.count(); i = i + (u32)1)
             {
             String* buf = (String*)order.get(i);
@@ -1311,8 +1338,140 @@
             words.appendCString(":"); words.append(String.withI64(((Number*)fpK.get((Hashable*)buf)).asI64()));
             words.appendCString(":"); words.append(String.withI64(((Number*)fpLo.get((Hashable*)buf)).asI64()));
             words.appendCString(":"); words.append(String.withI64(((Number*)fpHi.get((Hashable*)buf)).asI64() + (i64)1));
+            String* kk = String.withFormat("%s:%ld", buf.cString(), ((Number*)fpK.get((Hashable*)buf)).asI64());
+            Number* ol = (Number*)onceLo.get((Hashable*)kk);
+            Number* oh = (Number*)onceHi.get((Hashable*)kk);
+            if (found && ol != (Number*)0 && oh != (Number*)0 && ol.asI64() == ((Number*)fpLo.get((Hashable*)buf)).asI64()
+                && oh.asI64() == ((Number*)fpHi.get((Hashable*)buf)).asI64())
+                {
+                wholes.appendCString(" whole=");
+                wholes.append(String.withU32(at - (u32)2));
+                }
             }
+        words.append(wholes);
         return words;
+        }
+
+    // The blocks of f's item loop (through H, the induction phi's block) that
+    // run once for every item: those on every path from H to the loop's one
+    // back edge, when the loop is left only from H or from that back edge's
+    // block. 0 for any other shape (a break, a second back edge, a switch).
+    final Map* parEveryItemBlocks(IRFunc* f, IRBlock* H)
+        {
+        Map* fwd = new Map();
+        Array* work = new Array();
+        fwd.set((Hashable*)H.name(), (Object*)H);
+        work.add((Object*)H);
+        for (u32 w = (u32)0; w < work.count(); w = w + (u32)1)
+            {
+            IRInsn* t = ((IRBlock*)work.get(w)).term();
+            if (t == (IRInsn*)0)
+                continue;
+            for (u32 k = (u32)0; k < t.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)t.ops().get(k);
+                if (o.kind() == (u8)OPK_BLOCK && fwd.get((Hashable*)o.blk().name()) == (Object*)0)
+                    {
+                    fwd.set((Hashable*)o.blk().name(), (Object*)o.blk());
+                    work.add((Object*)o.blk());
+                    }
+                }
+            }
+        // The blocks that reach H, among those H reaches: the loop.
+        Map* loop = new Map();
+        loop.set((Hashable*)H.name(), (Object*)H);
+        bool grew = true;
+        while (grew)
+            {
+            grew = false;
+            for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+                {
+                IRBlock* bb = (IRBlock*)f.blocks().get(b);
+                if (fwd.get((Hashable*)bb.name()) == (Object*)0 || loop.get((Hashable*)bb.name()) != (Object*)0 || bb.term() == (IRInsn*)0)
+                    continue;
+                for (u32 k = (u32)0; k < bb.term().ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)bb.term().ops().get(k);
+                    if (o.kind() == (u8)OPK_BLOCK && loop.get((Hashable*)o.blk().name()) != (Object*)0)
+                        {
+                        loop.set((Hashable*)bb.name(), (Object*)bb);
+                        grew = true;
+                        break;
+                        }
+                    }
+                }
+            }
+        // One back edge (its block, the latch) and every way out from H or
+        // the latch.
+        IRBlock* latch = (IRBlock*)0;
+        u32 latches = (u32)0;
+        IRBlock* exitFrom = (IRBlock*)0;
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* bb = (IRBlock*)f.blocks().get(b);
+            if (loop.get((Hashable*)bb.name()) == (Object*)0)
+                continue;
+            IRInsn* t = bb.term();
+            if (t == (IRInsn*)0 || (!t.op().equals(String.withCString("Branch")) && !t.op().equals(String.withCString("CondBranch"))))
+                return (Map*)0;
+            for (u32 k = (u32)0; k < t.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)t.ops().get(k);
+                if (o.kind() != (u8)OPK_BLOCK)
+                    continue;
+                if (o.blk() == H)
+                    {
+                    if (latch != bb)
+                        latches = latches + (u32)1;
+                    latch = bb;
+                    }
+                else if (loop.get((Hashable*)o.blk().name()) == (Object*)0)
+                    {
+                    if (exitFrom != (IRBlock*)0 && exitFrom != bb)
+                        return (Map*)0;
+                    exitFrom = bb;
+                    }
+                }
+            }
+        if (latches != (u32)1 || exitFrom == (IRBlock*)0 || (exitFrom != H && exitFrom != latch))
+            return (Map*)0;
+        // A block runs for every item when the latch cannot be reached from
+        // H without passing through it.
+        Map* once = new Map();
+        for (u32 b = (u32)0; b < f.blocks().count(); b = b + (u32)1)
+            {
+            IRBlock* cand = (IRBlock*)f.blocks().get(b);
+            if (loop.get((Hashable*)cand.name()) == (Object*)0)
+                continue;
+            if (cand == H || cand == latch)
+                {
+                once.set((Hashable*)cand.name(), (Object*)cand);
+                continue;
+                }
+            Map* seen = new Map();
+            Array* q = new Array();
+            seen.set((Hashable*)H.name(), (Object*)H);
+            q.add((Object*)H);
+            bool reached = false;
+            for (u32 w = (u32)0; w < q.count() && !reached; w = w + (u32)1)
+                {
+                IRInsn* t = ((IRBlock*)q.get(w)).term();
+                for (u32 k = (u32)0; k < t.ops().count() && !reached; k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)t.ops().get(k);
+                    if (o.kind() != (u8)OPK_BLOCK || o.blk() == cand || o.blk() == H
+                        || loop.get((Hashable*)o.blk().name()) == (Object*)0 || seen.get((Hashable*)o.blk().name()) != (Object*)0)
+                        continue;
+                    if (o.blk() == latch)
+                        reached = true;
+                    seen.set((Hashable*)o.blk().name(), (Object*)o.blk());
+                    q.add((Object*)o.blk());
+                    }
+                }
+            if (!reached)
+                once.set((Hashable*)cand.name(), (Object*)cand);
+            }
+        return once;
         }
 
     // An index term as k * i plus a value in [lo, hi]: a constant, i, an
