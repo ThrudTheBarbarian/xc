@@ -44,6 +44,9 @@ NS_ASSUME_NONNULL_BEGIN
 // offered it), as the dispatcher resolves them. As the port.
 @property(nonatomic, readonly) BOOL emitRuntime;
 @property(nonatomic, readonly) BOOL noRuntimeLib;
+// -fno-xc-args: a program with a par block passes every argument through,
+// --xc-* options included (#148). As the port.
+@property(nonatomic, readonly) BOOL noXcArgs;
 @property(nonatomic, readonly, copy, nullable) NSString* runtimeMembersFile;
 @property(nonatomic, readonly, copy, nullable) NSString* runtimeLibFile;
 // --emit-iface: write the module INTERFACE and stop — no codegen, no link.

@@ -244,6 +244,63 @@ static NSString *crtArgsThroughGot(NSString *crt) {
     return [a stringByReplacingOccurrencesOfString:@"\tmov\t[rip + _xt_saved_argv], rsi"
                                         withString:@"\tmov\trax, [rip + _xt_saved_argv@GOTPCREL]\n\tmov\t[rax], rsi"];
 }
+// The --xc-* options (#148): a program with a par block (its assembly names
+// Par$run) links rt-xcargs.c's filter, called from the crt before the runtime
+// keeps argc and argv. The same signal and the same crt text as the port's
+// (xcArgsWanted, crtWithXcArgs), so the two compilers link the same program.
+static BOOL xcArgsWanted(XTCommandLineOptions *opts, NSString *_Nullable prog) {
+    if (opts.noXcArgs || opts.emitLib || opts.emitRuntime || !prog) return NO;
+    NSString *run = @"Par$run";
+    NSUInteger from = 0, len = prog.length;
+    while (from < len) {
+        NSRange r = [prog rangeOfString:run options:NSLiteralSearch range:NSMakeRange(from, len - from)];
+        if (r.location == NSNotFound) return NO;
+        NSUInteger e = NSMaxRange(r);
+        unichar c = e < len ? [prog characterAtIndex:e] : ' ';
+        BOOL ident = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '$';
+        if (!ident) return YES;
+        from = e;
+    }
+    return NO;
+}
+static NSString *crtWithXcArgs(NSString *crt) {
+    if ([crt containsString:@"    bl __xt_set_args\n"])
+        return [crt stringByReplacingOccurrencesOfString:@"    bl __xt_set_args\n"
+            withString:@"    bl __xt_xcargs                     // the --xc-* options out\n"
+                        "    str x0, [sp, #16]                   // the count they leave\n"
+                        "    ldp x0, x1, [sp, #16]\n"
+                        "    bl __xt_set_args\n"];
+    if ([crt containsString:@"    bl _xt_set_args\n"])
+        return [crt stringByReplacingOccurrencesOfString:@"    bl _xt_set_args\n"
+            withString:@"    bl _xt_xcargs                      // the --xc-* options out\n"
+                        "    str x0, [sp, #16]                   // the count they leave\n"
+                        "    ldp x0, x1, [sp, #16]\n"
+                        "    bl _xt_set_args\n"];
+    if ([crt containsString:@"\tcall\tExitProcess"])
+        return [crt stringByReplacingOccurrencesOfString:@"\tcall\t_xt_stack_guard_init\n"
+            withString:@"\tcall\t_xt_stack_guard_init\n"
+                        "\tcall\t_xt_xcargs\t\t# the --xc-* options out of the command line\n"];
+    return [crt stringByReplacingOccurrencesOfString:@"\tcall\t_xt_stack_guard_init\n"
+        withString:@"\tcall\t_xt_stack_guard_init\n"
+                    "\tmov\tedi, r12d\t\t# the --xc-* options out\n"
+                    "\tmov\trsi, r13\n"
+                    "\tcall\t_xt_xcargs\n"
+                    "\tmov\tr12d, eax\t\t# the count they leave, for main\n"
+                    "\tmov\tedi, eax\n"
+                    "\tmov\t[rip + _xt_saved_argc], edi\n"];
+}
+// An arm64 crt with the call and the filter after it, as one text (the port's
+// crtArm64WithXcArgs); nil when the filter is missing from the support tree.
+static NSString *_Nullable crtArm64WithXcArgs(NSString *support, NSString *crtText, NSString *crtName) {
+    NSString *xa = [NSString stringWithContentsOfFile:[support stringByAppendingPathComponent:
+                        [crtName isEqualToString:@"crt-macos.s"] ? @"arm64/runtime/xcargs-macos.s" : @"arm64/runtime/xcargs-elf.s"]
+                                             encoding:NSUTF8StringEncoding error:NULL];
+    if (!xa) {
+        fprintf(stderr, "xcc: error: cannot read the --xc-* options' runtime from the support tree\n");
+        return nil;
+    }
+    return [NSString stringWithFormat:@"%@\n%@", crtWithXcArgs(crtText), xa];
+}
 static NSString *runtimeForLibRuntime(NSString *rt) {
     NSString *a = [rt stringByReplacingOccurrencesOfString:@".private_extern\t___xt_stack_guard" withString:@".globl\t___xt_stack_guard"];
     return [a stringByReplacingOccurrencesOfString:@"\t.hidden\t__xt_stack_guard" withString:@"\t.globl\t__xt_stack_guard"];
@@ -1592,6 +1649,10 @@ static int linkAndroidSelfHost(const char *argv0, XTCommandLineOptions *opts,
     NSString *stubs   = arm64ClassAllocStubs(prog);   // built from the Mach-O names…
     NSString *crtsrc  = [NSString stringWithContentsOfFile:crt encoding:NSUTF8StringEncoding error:NULL];
     NSString *rtsrc   = [NSString stringWithContentsOfFile:rt  encoding:NSUTF8StringEncoding error:NULL];
+    if (xcArgsWanted(opts, prog)) {
+        crtsrc = crtArm64WithXcArgs(support, crtsrc ?: @"", lrow.crt);
+        if (!crtsrc) return 1;
+    }
     // libRuntime (owner, 2026-11-03): arm64 Linux takes the object runtime
     // from it (not Android yet: no device to prove it on). As the port.
     NSString *rtLibF = [lrow.os isEqualToString:@"android"] ? nil : runtimeLibFile(argv0, opts);
@@ -2119,6 +2180,10 @@ static int linkArm64Executable(const char *argv0, XTCommandLineOptions *opts,
         NSString *prog   = [NSString stringWithContentsOfFile:asmPath encoding:NSUTF8StringEncoding error:NULL];
         NSString *crtsrc = [NSString stringWithContentsOfFile:crt     encoding:NSUTF8StringEncoding error:NULL];
         NSString *rtsrc  = [NSString stringWithContentsOfFile:rt      encoding:NSUTF8StringEncoding error:NULL];
+        if (xcArgsWanted(opts, prog)) {
+            crtsrc = crtArm64WithXcArgs(support, crtsrc ?: @"", @"crt-macos.s");
+            if (!crtsrc) return 1;
+        }
         // libRuntime (owner, 2026-11-03): the object runtime from the
         // target's library, none of the program's own. As the port.
         NSString *rtLibF = runtimeLibFile(argv0, opts);
@@ -2289,6 +2354,19 @@ static NSArray<NSString *> *_Nullable arm64ClangRuntime(XTCommandLineOptions *op
             return nil;
         }
         [files addObject:f];
+    }
+    // The --xc-* options (#148): the crt with the call, and the filter.
+    if (!forLibrary && xcArgsWanted(opts, prog)) {
+        NSString *crtText = [NSString stringWithContentsOfFile:files[0] encoding:NSUTF8StringEncoding error:NULL] ?: @"";
+        NSString *cp = [xtcTempDir() stringByAppendingPathComponent:@"xtc-crt.s"];
+        [crtWithXcArgs(crtText) writeToFile:cp atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+        files[0] = cp;
+        NSString *xa = [support stringByAppendingPathComponent:@"arm64/runtime/xcargs-macos.s"];
+        if (![fm fileExistsAtPath:xa]) {
+            fprintf(stderr, "xcc: error: the arm64 runtime piece %s is missing\n", xa.UTF8String);
+            return nil;
+        }
+        [files addObject:xa];
     }
     NSString *stubs = arm64ClassAllocStubs(prog);
     if (stubs.length) {
@@ -2636,6 +2714,20 @@ static BOOL x86GlibcLinkInputs(XTCommandLineOptions *opts, NSFileManager *fm,
     return YES;
 }
 
+// The runtime inputs of an x86-64 link (musl or win64) with the --xc-*
+// options (#148): the crt with the call (a temporary copy) and the filter as
+// the next input, as the port orders them.
+static void x86XcArgsInputs(XTCommandLineOptions *opts, NSString *support, NSString *prog,
+                            NSMutableArray<NSString *> *rtPaths, NSString *filter) {
+    if (!xcArgsWanted(opts, prog) || rtPaths.count == 0) return;
+    NSString *crt = [NSString stringWithContentsOfFile:rtPaths[0] encoding:NSUTF8StringEncoding error:NULL] ?: @"";
+    NSString *cp = [xtcTempDir() stringByAppendingPathComponent:
+                    [@"xtc-xa-" stringByAppendingString:[rtPaths[0] lastPathComponent]]];
+    [crtWithXcArgs(crt) writeToFile:cp atomically:YES encoding:NSUTF8StringEncoding error:NULL];
+    rtPaths[0] = cp;
+    [rtPaths insertObject:[support stringByAppendingPathComponent:filter] atIndex:1];
+}
+
 static int linkX86_64Glibc(const char *argv0, XTCommandLineOptions *opts, NSString *asmPath,
                            NSString *outPath, NSArray<NSString *> *neededLibs) {
     NSFileManager *fm = [NSFileManager defaultManager];
@@ -2651,22 +2743,28 @@ static int linkX86_64Glibc(const char *argv0, XTCommandLineOptions *opts, NSStri
     // the program's canaries through the GOT, the runtime the library's. As
     // the port.
     NSString *rtLibF = runtimeLibFile(argv0, opts);
-    for (NSString *n in @[@"crt-glibc.s", @"rtgen-glibc.s", @"rtfiles-linux.s", @"libmgen-linux.s"]) {
-        if (rtLibF && ![n isEqualToString:@"crt-glibc.s"]) continue;
+    NSString *prog = [NSString stringWithContentsOfFile:asmPath encoding:NSUTF8StringEncoding error:NULL];
+    // The --xc-* options (#148): the filter after the crt, which calls it.
+    BOOL xcArgs = xcArgsWanted(opts, prog);
+    for (NSString *n in @[@"crt-glibc.s", @"xcargs-glibc.s", @"rtgen-glibc.s", @"rtfiles-linux.s", @"libmgen-linux.s"]) {
+        BOOL isCrt = [n isEqualToString:@"crt-glibc.s"], isXa = [n isEqualToString:@"xcargs-glibc.s"];
+        if (isXa && !xcArgs) continue;
+        if (rtLibF && !isCrt && !isXa) continue;
         NSString *pth = [support stringByAppendingPathComponent:
                          [@"x86_64/runtime/" stringByAppendingString:n]];
         if (![fm fileExistsAtPath:pth]) {
             fprintf(stderr, "xcc: error: -dynamic: missing runtime file '%s'\n", pth.UTF8String);
             return 1;
         }
-        if (rtLibF) {
-            NSString *crt = crtArgsThroughGot([NSString stringWithContentsOfFile:pth encoding:NSUTF8StringEncoding error:NULL] ?: @"");
+        if (isCrt && (rtLibF || xcArgs)) {
+            NSString *crt = [NSString stringWithContentsOfFile:pth encoding:NSUTF8StringEncoding error:NULL] ?: @"";
+            if (xcArgs) crt = crtWithXcArgs(crt);
+            if (rtLibF) crt = crtArgsThroughGot(crt);
             pth = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-glibc-crt.s"];
             [crt writeToFile:pth atomically:YES encoding:NSUTF8StringEncoding error:NULL];
         }
         [args addObject:pth];
     }
-    NSString *prog = [NSString stringWithContentsOfFile:asmPath encoding:NSUTF8StringEncoding error:NULL];
     if (rtLibF) {
         prog = guardThroughGotX86(prog ?: @"");
         asmPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-glibc-prog.s"];
@@ -2729,6 +2827,7 @@ static int linkX86_64Dynamic(const char *argv0, XTCommandLineOptions *opts, NSSt
         if (haveRt) {
             NSString *prog = [NSString stringWithContentsOfFile:asmPath
                                                        encoding:NSUTF8StringEncoding error:NULL];
+            x86XcArgsInputs(opts, support, prog, rtPaths, @"x86_64/runtime/xcargs-linux.s");
             NSString *stubPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-dyn-newstubs.s"];
             [x86_64ClassAllocStubs(prog, NO) writeToFile:stubPath atomically:YES
                                             encoding:NSUTF8StringEncoding error:NULL];
@@ -3144,6 +3243,7 @@ static int linkX86_64Executable(const char *argv0, XTCommandLineOptions *opts,
         // of separately compiled files collides on clang's .LBB numbering.
         NSString *prog = [NSString stringWithContentsOfFile:asmPath
                                                    encoding:NSUTF8StringEncoding error:NULL];
+        x86XcArgsInputs(opts, support, prog, rtPaths, @"x86_64/runtime/xcargs-linux.s");
         NSString *stubs = x86_64ClassAllocStubs(prog, NO);
         NSString *stubPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-x86_64-newstubs.s"];
         [stubs writeToFile:stubPath atomically:YES encoding:NSUTF8StringEncoding error:NULL];
@@ -3376,6 +3476,7 @@ static int linkWin64Executable(const char *argv0, XTCommandLineOptions *opts,
         if (haveRt) {
             NSString *prog = [NSString stringWithContentsOfFile:asmPath
                                                        encoding:NSUTF8StringEncoding error:NULL];
+            if (!shared) x86XcArgsInputs(opts, support, prog, rtPaths, @"win64/runtime/xcargs-win64.s");
             NSString *stubPath = [xtcTempDir() stringByAppendingPathComponent:@"xtc-win64-newstubs.s"];
             [win64StubSource(prog, shared) writeToFile:stubPath atomically:YES
                                               encoding:NSUTF8StringEncoding error:NULL];

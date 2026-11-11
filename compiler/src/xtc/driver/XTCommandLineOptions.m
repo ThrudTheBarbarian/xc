@@ -28,6 +28,7 @@
 @property(nonatomic, readwrite) BOOL emitLib;
 @property(nonatomic, readwrite) BOOL emitRuntime;
 @property(nonatomic, readwrite) BOOL noRuntimeLib;
+@property(nonatomic, readwrite) BOOL noXcArgs;
 @property(nonatomic, readwrite, copy, nullable) NSString* runtimeMembersFile;
 @property(nonatomic, readwrite, copy, nullable) NSString* runtimeLibFile;
 @property(nonatomic, readwrite) BOOL emitIface;
@@ -1020,6 +1021,10 @@ static NSString* sExecutablePath = nil;
             {
             opts.noRuntimeLib = YES;
             }
+        else if ([arg isEqualToString:@"-fno-xc-args"])
+            {
+            opts.noXcArgs = YES;
+            }
         else if ([arg isEqualToString:@"--runtime-members"] && i + 1 < argc)
             {
             opts.runtimeMembersFile = [NSString stringWithUTF8String:argv[++i]];
@@ -1752,6 +1757,8 @@ static NSString* sExecutablePath = nil;
             "                             also prints a symbolised stack (arm64 macOS keeps\n"
             "                             every frame for it)\n"
             "  -fno-bounds-check          No subscript checks (the default)\n"
+            "  -fno-xc-args               A program with a par block passes every argument\n"
+            "                             to main, --xc-* options included\n"
             "  -Fli, --fn-leaf-inline <n> Max leaf-function size to inline\n"
             "                             (default: 100, requires -O2+)\n"
             "  -Flu, --fn-loop-unroll <n> Auto-unroll counted for-loops with trip\n"
