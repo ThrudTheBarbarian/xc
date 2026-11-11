@@ -2107,7 +2107,9 @@
             hi64 = ppEmit(P, String.withCString("Add"), String.withCString("I64"), IROperand.useVal(hi64),
                           IROperand.immI((i64)1, String.withCString("I64")), (IROperand*)0);
         // Arrays that may be one: serial where their ranges overlap.
+        _ppGuardMem = pm;
         IRValue* serial = ppOverlapGuard(P, lo64, hi64);
+        pm = _ppGuardMem;
         IRInsn* runC = IRInsn.with(String.withCString("Call"));
         runC.setCc(String.withCString("CallConv::Standard"));
         if (at != (IRInsn*)0)
@@ -2314,6 +2316,35 @@
                 ov = ppEmit(P, String.withCString("And"), bt, IROperand.useVal(ov), IROperand.useVal(diff), (IROperand*)0);
                 }
             acc = ppEmit(P, String.withCString("Or"), bt, IROperand.useVal(acc), IROperand.useVal(ov), (IROperand*)0);
+            }
+        // A stored pointer beside a read-only one read anywhere: apart only
+        // in different heap blocks. Two pointers into one block share its
+        // end (base + Par.spanOf); either span unknown counts as one block.
+        String* i64t = String.withCString("I64");
+        for (u32 p = 0; _ppSpanA != (Array*)0 && p < _ppSpanA.count(); p = p + 1)
+            {
+            IRValue* ends[2];
+            IRValue* unknown = (IRValue*)0;
+            for (u32 w = 0; w < 2; w = w + 1)
+                {
+                u32 k = ((Number*)(w == 0 ? _ppSpanA : _ppSpanB).get(p)).asU32();
+                IRValue* base = (IRValue*)_ppGBase.get(k);
+                IRValue* at = self.ppEmit(P, String.withCString("PtrToInt"), i64t, IROperand.useVal(base), (IROperand*)0, (IROperand*)0);
+                IRValue* pv = self.ppEmit(P, String.withCString("Bitcast"), String.withCString("Ptr(Void, unbanked)"), IROperand.useVal(base), (IROperand*)0, (IROperand*)0);
+                u32 es = ((Number*)_ppGElem.get(k)).asU32();
+                IRValue* esv = self.ppEmit(P, String.withCString("Const"), i64t, IROperand.immI((i64)(es == 0 ? 1 : es), i64t), (IROperand*)0, (IROperand*)0);
+                IRValue* no = self.ppEmit(P, String.withCString("Const"), bt, IROperand.immI(0, bt), (IROperand*)0, (IROperand*)0);
+                IRValue* sp = self.ppCall(P, String.withCString("Par$spanOf"), i64t, IROperand.useVal(pv), IROperand.useVal(esv), IROperand.useVal(no), _ppGuardMem);
+                _ppGuardMem = _ppLastMem;
+                IRValue* zero = self.ppEmit(P, String.withCString("Const"), i64t, IROperand.immI(0, i64t), (IROperand*)0, (IROperand*)0);
+                IRValue* neg = self.ppCmp(P, String.withCString("SLT"), sp, zero);
+                unknown = unknown == (IRValue*)0 ? neg
+                          : self.ppEmit(P, String.withCString("Or"), bt, IROperand.useVal(unknown), IROperand.useVal(neg), (IROperand*)0);
+                ends[w] = self.ppEmit(P, String.withCString("Add"), i64t, IROperand.useVal(at), IROperand.useVal(sp), (IROperand*)0);
+                }
+            IRValue* same = self.ppCmp(P, String.withCString("EQ"), ends[0], ends[1]);
+            IRValue* ov = self.ppEmit(P, String.withCString("Or"), bt, IROperand.useVal(unknown), IROperand.useVal(same), (IROperand*)0);
+            acc = self.ppEmit(P, String.withCString("Or"), bt, IROperand.useVal(acc), IROperand.useVal(ov), (IROperand*)0);
             }
         return acc;
         }
@@ -2776,6 +2807,8 @@
         _ppGStored = new Array();
         _ppPairA = new Array();
         _ppPairB = new Array();
+        _ppSpanA = new Array();
+        _ppSpanB = new Array();
         Array* body = L.body();
         for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
             {
@@ -2843,7 +2876,26 @@
                 // needs both touched only at [i], their element sizes known
                 // and their bases from outside the loop.
                 if (((Number*)_ppGAtIv.get(x)).asU32() == (u32)0)
-                    return ppNo("an array that may overlap a stored one, read away from [i]");
+                    {
+                    // A read-only array read anywhere (nbody's px[j], a
+                    // table lookup) beside a stored pointer: the block runs
+                    // where the two lie in different heap blocks, which the
+                    // runtime tells by their blocks' ends (ppOverlapGuard).
+                    // Both pointers from outside the loop, neither a global.
+                    bool apart = ((Number*)_ppGStored.get(x)).asU32() == (u32)0
+                                 && !sk.hasPrefix(String.withCString("@")) && !xk.hasPrefix(String.withCString("@"));
+                    for (u32 w = (u32)0; w < (u32)2 && apart; w = w + (u32)1)
+                        {
+                        IRBlock* db = (IRBlock*)defBlk.get((Hashable*)_ppGBase.get(w == (u32)0 ? s : x));
+                        if (db != (IRBlock*)0 && self.hasBlock(body, db))
+                            apart = false;
+                        }
+                    if (!apart)
+                        return ppNo("an array that may overlap a stored one, read away from [i]");
+                    _ppSpanA.add((Object*)Number.with(s));
+                    _ppSpanB.add((Object*)Number.with(x));
+                    continue;
+                    }
                 // (The run-time check compares the elements each touches,
                 // k * lo + c0 up to k * (hi - 1) + c1: ppRangeOf.)
                 if (((Number*)_ppGElem.get(s)).asU32() == (u32)0 || ((Number*)_ppGElem.get(x)).asU32() == (u32)0)

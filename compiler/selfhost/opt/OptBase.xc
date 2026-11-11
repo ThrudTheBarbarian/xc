@@ -1623,6 +1623,9 @@ class BeFact : Object
     Array* _ppGOffHi;
     Array* _ppGStored;
     Array* _ppRO;        // per live-in of the block being made: 1 when the loop only reads through it (#156)
+    Array* _ppSpanA;       // Number@: a stored base, beside...
+    Array* _ppSpanB;       // Number@: ...a read-only one read anywhere: apart when in different heap blocks
+    IRValue* _ppGuardMem;  // ppOverlapGuard's memory token after its calls
     // The pairs that need a check at run time (indices into the above).
     Array* _ppPairA;
     Array* _ppPairB;

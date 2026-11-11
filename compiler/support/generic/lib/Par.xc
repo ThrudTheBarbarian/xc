@@ -48,6 +48,10 @@ i32 gParActive;
 // The bytes from p to the end of the page-aligned heap block it points into,
 // or -1 outside every such block (the runtime's registry, rt.c).
 i64 _xtc_simd_span(pointer p);
+#if OS_macos
+// libSystem: the usable size of a malloc block from its start, else 0.
+u64 malloc_size(pointer p);
+#endif
 #endif
 
 // Two C strings equal: how a block's generated gpuGlobal() finds a global by
@@ -311,7 +315,19 @@ class Par
             return (i64)0 - (i64)1;
 #if ARCH_arm64 || ARCH_x86_64 || OS_windows
         parGlobals();
-        return _xtc_simd_span(p);
+        i64 span = _xtc_simd_span(p);
+#if OS_macos
+        // A block the system's malloc made (a C++ program's operator new,
+        // linked by clang++): its size from its start, 0 for any other
+        // pointer, which stays unknown.
+        if (span < (i64)0)
+            {
+            u64 sz = malloc_size(p);
+            if (sz > (u64)0)
+                span = (i64)sz;
+            }
+#endif
+        return span;
 #else
 #if ARCH_6502
         // No GPU, and no element count in a primitive array's header.
