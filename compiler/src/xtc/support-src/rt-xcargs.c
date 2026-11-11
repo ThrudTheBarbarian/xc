@@ -54,7 +54,7 @@ static const char xt_xa_table[] =
     "PAR_THREADS\t" "=<n>  threads a block on the CPU uses\n"
     "PAR_REPORT\t" "[=2]  print where each block ran and what auto measured\n"
     "PAR_FORGET\t" "  remove what auto learned, so it measures again\n"
-    "PAR_PROBE\t" "  measure every worker on a block's first run (also --xc-probe)\n"
+    "PAR_PROBE\t" "  measure every block to the end on its first run (also --xc-probe)\n"
     "PAR_GPU\t" "=cuda|vulkan  the GPU interface where both exist\n"
     "PAR_VULKAN_DEVICE\t" "=<n>  the Vulkan device, by index\n"
     "PAR_CUDA_DEVICES\t" "=<n,...>  the CUDA cards that take tiles\n"
@@ -204,6 +204,16 @@ static void xt_xa_help(void)
         xt_xa_size n = xt_xa_field(t);
         const char* help = t + n + 1;
         xt_xa_size h = xt_xa_field(help);
+        // The test suite's own switches are accepted but not listed.
+        int testOnly = 0;
+        for (xt_xa_size k = 0; k + 5 <= h; k++)
+            if (help[k] == 't' && help[k + 1] == 'e' && help[k + 2] == 's' && help[k + 3] == 't' && help[k + 4] == ':')
+                testOnly = 1;
+        if (testOnly)
+            {
+            t = help + h + 1;
+            continue;
+            }
         xt_xa_size o = xt_xa_cat(line, 0, sizeof line, "  --xc-", 7);
         for (xt_xa_size k = 0; k < n && o < sizeof line - 2; k++)
             line[o++] = t[k] == '_' ? '-' : (t[k] >= 'A' && t[k] <= 'Z') ? (char)(t[k] - 'A' + 'a') : t[k];
