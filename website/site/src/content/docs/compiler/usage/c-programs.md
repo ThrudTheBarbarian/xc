@@ -60,7 +60,9 @@ xcc: C path:   because of a parameter of a type not read (in log_line: ...)
 
 ## Options
 
-`-I <dir>` and `-D<name>[=<value>]` are passed to `clang`; the optimisation level
+`-I <dir>`, `-D<name>[=<value>]` and `-std=<standard>` (such as `-std=c99`,
+`-std=c11` or `-std=c17`; without it, `clang`'s own default) are passed to
+`clang`, which also reports a standard it does not know; the optimisation level
 (`-O0` to `-O3`, `-O3` by default) and every code-generation option are `xcc`'s, as
 for an xc program. `--par-style=auto` and the `par` environment variables (`XC_PAR`,
 `XC_PAR_THREADS` and the rest) behave as they do for xc.

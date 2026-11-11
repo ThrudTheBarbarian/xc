@@ -6108,6 +6108,8 @@ void usage(void)
     Stdio.printf("  -flto                      At a link of objects, recompile the IR they\n");
     Stdio.printf("                             carry as one module\n");
     Stdio.printf("  -ffp-contract=fast|on|off  For C: clang's float contraction setting\n");
+    Stdio.printf("  -std=<standard>            For C: the language standard, such as c99, c11\n");
+    Stdio.printf("                             or c17, handed to clang (default: clang's own)\n");
     Stdio.printf("  -fbounds-check=light       Range-check subscripts (arm64 macOS, x86-64,\n");
     Stdio.printf("                             win64): an array with a declared length against\n");
     Stdio.printf("                             that length, a heap allocation against its\n");
