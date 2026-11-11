@@ -2660,7 +2660,7 @@ static NSMutableDictionary<NSString*, NSDictionary*>* sTbdCache = nil;
                 [dataBinds addObject:f]; // finding #7
             continue;
             }
-        uint64_t s = symAddr(f.symbol);
+        uint64_t s = symAddr(f.symbol) + (uint64_t)f.addend;
         for (int i = 0; i < 8; i++)
             db[f.offset + i] = (uint8_t)(s >> (8 * i));
         [rebaseOffs addObject:@(f.offset)];

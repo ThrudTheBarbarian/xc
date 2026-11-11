@@ -568,6 +568,10 @@ static int mergeMachOInputs(NSArray<NSString *> *objectFiles,
                         pf.kind = XAArm64FixupPointer64;
                         pf.symbol = taggedSym(sdefs[sn], snames[sn], oi);
                         pf.scale = 0;
+                        // The slot holds the addend (clang's `&&label` table, `buf + 4`).
+                        const uint8_t* ob = (const uint8_t*)[obj[@"data"] bytes];
+                        uint64_t ro = [r[@"off"] unsignedLongLongValue];
+                        pf.addend = (int32_t)((uint32_t)ob[ro] | ((uint32_t)ob[ro+1] << 8) | ((uint32_t)ob[ro+2] << 16) | ((uint32_t)ob[ro+3] << 24));
                         [mfix addObject:pf];
                         continue;
                     }

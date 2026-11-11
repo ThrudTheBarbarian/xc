@@ -241,5 +241,37 @@ C
 grep -E '^outline: [A-Za-z_]+\$[A-Za-z_$]*(:[0-9]+)?: outlined' "$W/inst.b" | head -3 | sed 's/^/FAIL cpath: the installed layout outlined library code: /' | grep . && fail=1
 [ -x "$W/inst.out" ] && [ "$("$W/inst.out")" = "22898104320" ] \
     || { echo "FAIL cpath: the installed layout's --par-style=auto C program gives '$("$W/inst.out" 2>&1)'"; fail=1; }
+# A pointer in clang's half at an offset from a symbol: on macOS the object
+# keeps the offset in the slot itself, and xcc's linker once wrote the bare
+# symbol, so a computed goto's label table sent both gotos to the function's
+# start (a loop that never ended) and `buf + 4` pointed at buf.
+cat > "$W/addend.c" <<'C'
+#include <stdio.h>
+char buf[16] = "abcdefghijklmno";
+char *tail = buf + 4;
+int pick(int k)
+{
+    static void *t[] = { &&even, &&odd };
+    goto *t[k & 1];
+even: return k / 2;
+odd:  return -k;
+}
+int main(void)
+{
+    int s = 0;
+    for (int k = 0; k < 10; k++)
+        s += pick(k);
+    printf("%d %s\n", s, tail);
+    return 0;
+}
+C
+clang -O2 -o "$W/addend.ref" "$W/addend.c" 2>/dev/null
+XC_C_TRACE=1 "$XC" -q -O2 -H . -o "$W/addend" "$W/addend.c" > "$W/addend.b" 2>&1 \
+    || { echo "FAIL cpath: the label-table program does not build"; head -3 "$W/addend.b"; fail=1; }
+grep -q 'left to clang: @pick' "$W/addend.b" || echo "note cpath: pick was not left to clang; the case covers less"
+if [ -x "$W/addend" ]; then
+    out=$( (perl -e 'alarm 10; exec @ARGV' "$W/addend") 2>&1 )
+    [ "$out" = "$("$W/addend.ref")" ] || { echo "FAIL cpath: the label-table program gives '$out', clang '$("$W/addend.ref")'"; fail=1; }
+fi
 [ $fail = 0 ] && echo "--- cpath: pass ---" || echo "--- cpath: FAIL ---"
 exit $fail

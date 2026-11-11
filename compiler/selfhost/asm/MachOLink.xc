@@ -372,16 +372,22 @@ class MachOLink
                     return;
                     }
                 // DATA relocations: an UNSIGNED slot is a `.quad <symbol>`
-                // pointer — the assembler's own Pointer64 fixup.
+                // pointer — the assembler's own Pointer64 fixup. The slot
+                // holds the addend (clang's `&&label` table, `buf + 4`).
                 Array* dl = obj.dataRelocs();
+                Data* od = obj.data();
                 for (u32 k = (u32)0; k < dl.count(); k = k + (u32)1)
                     {
                     MachOReloc* r = (MachOReloc*)dl.get(k);
                     if (r.type() == (u32)0 && r.ext() != (u32)0 && r.symnum() < obj.symnames().count())
                         {
                         MachOSymDef* sd = (MachOSymDef*)obj.symdefs().get(r.symnum());
-                        mfix.add((Object*)Arm64Fixup.make(dbase + r.off(), (u32)FIXUP_POINTER64,
-                                                          MachOLink.taggedSym(sd, oi), (u32)0));
+                        Arm64Fixup* pf = Arm64Fixup.make(dbase + r.off(), (u32)FIXUP_POINTER64,
+                                                         MachOLink.taggedSym(sd, oi), (u32)0);
+                        u32 ro = r.off();
+                        pf.setAddend((i32)((u32)od.byteAt(ro) | ((u32)od.byteAt(ro + (u32)1) << (u32)8)
+                                           | ((u32)od.byteAt(ro + (u32)2) << (u32)16) | ((u32)od.byteAt(ro + (u32)3) << (u32)24)));
+                        mfix.add((Object*)pf);
                         continue;
                         }
                     Stdio.printf("xcc-ln-arm64: unhandled static-archive DATA relocation (type %lu, extern %lu)\n",

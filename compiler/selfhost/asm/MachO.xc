@@ -1674,7 +1674,7 @@ class MachOSha256
                     _dataBinds.add((Object*)f);
                 continue;
                 }
-            u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset);
+            u32 s = symOffset(symbols, dataSyms, f.symbol(), textOffset, dataProgOffset) + (u32)f.addend();
             for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
                 dat.setByteAt(f.offset() + b, (u8)(b < (u32)4
                                                                     ? ((s >> ((u32)8 * b)) & (u32)$FF)
