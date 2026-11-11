@@ -209,7 +209,7 @@ class CPath
         Directory._unlink(out);
         if (r == (String*)0)
             Stdio.error(String.withFormat("xcc: error: cannot read clang's output '%s'\n", out.cString()));
-        return r;
+        return r != (String*)0 ? Languages.plainCallingConv(r) : r;
         }
 
     // A load-time function that calls __register_frame(&__xc_eh_frame_start).

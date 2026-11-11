@@ -362,6 +362,37 @@ class Languages
         return !(head.contains(String.withCString(" linkonce_odr ")) || head.contains(String.withCString(" linkonce ")));
         }
 
+    // The passed text with every function on the C calling convention:
+    // LLVM's -O1 gives each internal function `fastcc`, which the reader does
+    // not take in a call (a caller of one was left to clang, perlin's render
+    // calling shade), and both halves must agree on it. On the define and
+    // declare lines and the calls; a string constant is a global's line.
+    static String* plainCallingConv(String* text)
+        {
+        if (!text.contains(String.withCString(" fastcc ")))
+            return text;
+        Array* lines = text.splitOnByte((u8)10);
+        String* out = new String();
+        for (u32 i = 0; i < lines.count(); i = i + 1)
+            {
+            String* l = (String*)lines.get(i);
+            if (l.contains(String.withCString(" fastcc ")))
+                {
+                if (l.hasPrefix(String.withCString("define ")) || l.hasPrefix(String.withCString("declare ")))
+                    l = l.replacing(String.withCString(" fastcc "), String.withCString(" "));
+                else if (!l.hasPrefix(String.withCString("@")))
+                    {
+                    l = l.replacing(String.withCString("call fastcc "), String.withCString("call "));
+                    l = l.replacing(String.withCString("invoke fastcc "), String.withCString("invoke "));
+                    }
+                }
+            out.append(l);
+            if (i + 1 < lines.count())
+                out.appendByte((u8)10);
+            }
+        return out;
+        }
+
     // The read text with each zero-initialised global of a struct that is
     // one array (`%"struct.std::__1::array" = type { [4096 x double] }`,
     // a std::array) declared as that array: the same bytes, which the
