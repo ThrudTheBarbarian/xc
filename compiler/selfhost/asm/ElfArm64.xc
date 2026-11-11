@@ -326,6 +326,11 @@ class ElfArm64
                     rt = (u32)RA64_PREL32;
                     into = dataRel;
                     }
+                else if (k == (u32)FIXUP_PREL64)
+                    {
+                    rt = (u32)RA64_PREL64;
+                    into = dataRel;
+                    }
                 else
                     {
                     fail(String.withFormat("an object cannot carry fixup kind %u (symbol %s)", k, f.symbol().cString()));
@@ -644,7 +649,7 @@ class ElfArm64
                     wordCand.add((Object*)f.symbol());
                 continue;
                 }
-            if (f.kind() == (u32)FIXUP_PREL32)
+            if (f.kind() == (u32)FIXUP_PREL32 || f.kind() == (u32)FIXUP_PREL64)
                 {
                 failWith(String.withCString("a PC-relative data word names an undefined symbol:"), f.symbol());
                 return;
@@ -847,6 +852,21 @@ class ElfArm64
                 u32 v = target - (dataAddr + f.offset());
                 for (u32 b = (u32)0; b < (u32)4; b = b + (u32)1)
                     data.setByteAt(f.offset() + b, (u8)((v >> ((u32)8 * b)) & (u32)$FF));
+                continue;
+                }
+            if (f.kind() == (u32)FIXUP_PREL64)
+                {
+                // The same, 64 bits wide: the difference sign-extended (an
+                // image is far smaller than 4 GB).
+                if (f.offset() + (u32)8 > data.length())
+                    {
+                    failWith(String.withCString("prel64 fixup past end of data:"), f.symbol());
+                    return;
+                    }
+                u32 v = target - (dataAddr + f.offset());
+                u8 hi = (v & (u32)$80000000) != (u32)0 ? (u8)$FF : (u8)0;
+                for (u32 b = (u32)0; b < (u32)8; b = b + (u32)1)
+                    data.setByteAt(f.offset() + b, b < (u32)4 ? (u8)((v >> ((u32)8 * b)) & (u32)$FF) : hi);
                 continue;
                 }
             if (f.offset() + (u32)4 > text.length())

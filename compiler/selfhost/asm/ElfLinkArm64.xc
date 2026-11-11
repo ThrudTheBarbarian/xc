@@ -23,10 +23,11 @@
 //   * A GOT reference to a symbol the image defines is relaxed to adrp/add
 //     after the pull settles, as MachOLink does: the writer makes GOT slots
 //     for imports alone.
-//   * `.eh_frame` travels in the data blob and its PC-relative words are
-//     left as they are: nothing unwinds through C frames here. A PC-relative
-//     word anywhere else (a switch's jump table in .rodata) becomes a
-//     FIXUP_PREL32 the writer settles, both ends being in the image.
+//   * `.eh_frame` travels in the data blob, ended by a zero word, its
+//     PC-relative words settled like any other: C++'s unwinder reads it,
+//     registered at start-up (__xc_eh_frame_start). A PC-relative word
+//     anywhere else (a switch's jump table in .rodata) is a FIXUP_PREL32 the
+//     writer settles too, both ends being in the image.
 
 #import "Foundation.xc"
 #import <Arm64Asm>
@@ -251,6 +252,15 @@ class ElfLinkArm64
                 ElfLinkArm64.padArray(mdata, dalign - (u32)1);
                 u32 dbase = mdata.length();
                 ElfLinkArm64.appendData(mdata, obj.data());
+                // The first object's frame table (clang's C++ half), which the
+                // C++ start-up code hands __register_frame.
+                String* ehName = String.withCString("__xc_eh_frame_start");
+                if (obj.ehFrameOff() != (u32)0 && msyms.get((Hashable*)ehName) == (Object*)0)
+                    {
+                    msyms.set((Hashable*)ehName, (Object*)Number.withU32(dbase + obj.ehFrameOff() - (u32)1));
+                    mdataSyms.add((Object*)ehName);
+                    strongDefs.set((Hashable*)ehName, (Object*)Number.withU32((u32)1));
+                    }
                 // Every definition at its merged offset.
                 Array* sdefs = obj.symdefs();
                 for (u32 si = (u32)0; si < sdefs.count(); si = si + (u32)1)
@@ -352,13 +362,23 @@ class ElfLinkArm64
                         mfix.add((Object*)f);
                         continue;
                         }
-                    String* sec = obj.dataSectionNameAt(r.off());
-                    if (sec != (String*)0 && sec.hasPrefix(String.withCString(".eh_frame")))
+                    if (r.type() == (u32)RA64_PREL64)
+                        {
+                        // A 64-bit `target - here` word: a C++ exception
+                        // table's reference to a type's information.
+                        ElfSymDef* sd = (ElfSymDef*)sdefs.get(r.sym());
+                        Arm64Fixup* f = Arm64Fixup.make(dbase + r.off(), (u32)FIXUP_PREL64,
+                                                        ElfLinkArm64.taggedSym(sd, oi, r.sym()), (u32)0);
+                        f.setAddend((i32)r.addend());
+                        mfix.add((Object*)f);
                         continue;
+                        }
                     if (r.type() == (u32)RA64_PREL32)
                         {
-                        // A jump table's `target - here` word: both ends are
-                        // in this image, so the writer settles it.
+                        // A jump table's `target - here` word, or an
+                        // .eh_frame entry's (a function's start, an LSDA):
+                        // both ends are in this image, so the writer settles
+                        // it, and the C++ unwinder can read the table.
                         ElfSymDef* sd = (ElfSymDef*)sdefs.get(r.sym());
                         Arm64Fixup* f = Arm64Fixup.make(dbase + r.off(), (u32)FIXUP_PREL32,
                                                         ElfLinkArm64.taggedSym(sd, oi, r.sym()), (u32)0);
@@ -366,6 +386,7 @@ class ElfLinkArm64
                         mfix.add((Object*)f);
                         continue;
                         }
+                    String* sec = obj.dataSectionNameAt(r.off());
                     String* m = String.withCString("unhandled aarch64 data relocation type ");
                     m.append(Number.withU32(r.type()).description());
                     m.appendCString(" in ");

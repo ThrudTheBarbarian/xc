@@ -1,6 +1,7 @@
 // ElfLinkArm64Defs.xc — the constants of ElfLinkArm64.xc.xc, apart from its code so a file
 // compiled against its interface (the split build) can still see them.
 #define RA64_ABS64              257
+#define RA64_PREL64             260
 #define RA64_PREL32             261
 #define RA64_ADR_PREL_PG_HI21   275
 #define RA64_ADD_ABS_LO12_NC    277

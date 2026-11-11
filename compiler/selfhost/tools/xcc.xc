@@ -998,6 +998,28 @@ String* resolveLinkInput(DriverOptions* d, String* arg)
     // 0.4 skipped it (c2xc bug 37). Those targets use `.so` / `.a` instead.
     // The row's format decides (android and arm64 Linux are ELF though their
     // back end is arm64's).
+    // -l:<file>: that file by its own name (ld's form: a versioned shared
+    // object, libstdc++.so.6), on the -L path, then in the target's
+    // multiarch directories.
+    if (stem.hasPrefix(String.withCString(":"))) {
+        String* fname = stem.substringFromByte((u32)1);
+        Array* fdirs = new Array();
+        for (u32 i = (u32)0; i < dirs.count(); i = i + (u32)1) fdirs.add(dirs.get(i));
+        String* triple = d.targetRow() != (TargetRow*)0 && d.targetRow().cpu().equals(String.withCString("arm64"))
+                       ? String.withCString("aarch64-linux-gnu") : String.withCString("x86_64-linux-gnu");
+        fdirs.add((Object*)String.withCString("/usr/lib/").appending(triple));
+        fdirs.add((Object*)String.withCString("/lib/").appending(triple));
+        fdirs.add((Object*)String.withCString("/usr/lib"));
+        for (u32 i = (u32)0; i < fdirs.count(); i = i + (u32)1) {
+            String* p = String.withString((String*)fdirs.get(i));
+            p.appendCString("/"); p.append(fname);
+            if (Files.exists(p)) return p;
+        }
+        Stdio.printf("xcc: error: -l%s: no %s on the -L path or in the system library directories\n",
+                     stem.cString(), fname.cString());
+        Process.exit((i32)1);
+        return (String*)0;
+    }
     String* arch = d.arch();
     bool machO = d.targetRow() != (TargetRow*)0 ? d.targetRow().exeFormat().equals(String.withCString("macho"))
                : !(arch.equals(String.withCString("x86_64"))
@@ -1419,6 +1441,13 @@ String* androidSonameOf(String* path)
     return path.lastPathComponent();
 }
 
+// Whether a library path names a shared object: libX.so, or a versioned
+// soname (libstdc++.so.6, which a -l:<file> names).
+bool isSharedLib(String* p)
+{
+    return p.hasSuffix(String.withCString(".so")) || p.contains(String.withCString(".so."));
+}
+
 // The same list with the `.so` libraries the program or library `#import`ed
 // after the base set, each by its soname (bug 460). Without them the image had
 // no DT_NEEDED for a library it calls into, and bionic had nothing to resolve
@@ -1445,7 +1474,7 @@ Map* arm64KnownImports(DriverOptions* d)
     Array* nl = d.fe().neededLibs();
     for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
         String* lp = (String*)nl.get(i);
-        if (!lp.hasSuffix(String.withCString(".so"))) continue;
+        if (!isSharedLib(lp)) continue;
         ElfSharedInfo* info = Elf64.sharedInfo(lp);
         if (info == (ElfSharedInfo*)0) {
             Stdio.printf("xcc: error: '%s' is not a readable ELF64 shared object\n", lp.cString());
@@ -1470,7 +1499,7 @@ String* arm64ElfRunpath(DriverOptions* d, TargetRow* row)
     Array* dirs = new Array();
     for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
         String* lp = (String*)nl.get(i);
-        if (!lp.hasSuffix(String.withCString(".so"))) continue;
+        if (!isSharedLib(lp)) continue;
         String* dir = standardPath(lp.deletingLastPathComponent());
         bool seen = false;
         for (u32 k = (u32)0; k < dirs.count(); k = k + (u32)1)
@@ -1491,7 +1520,7 @@ Array* androidNeededWithImports(DriverOptions* d, string base)
     Array* nl = d.fe().neededLibs();
     for (u32 i = (u32)0; nl != (Array*)0 && i < nl.count(); i = i + (u32)1) {
         String* lp = (String*)nl.get(i);
-        if (!lp.hasSuffix(String.withCString(".so"))) continue;
+        if (!isSharedLib(lp)) continue;
         String* sn = androidSonameOf(lp);
         Array* have = all.splitOnByte((u8)',');
         bool seen = false;
@@ -4274,6 +4303,13 @@ void linkObjectsArm64Elf(DriverOptions* d)
     // The libraries the objects imported (their .xtc.needs sidecars) are
     // needed as an #import <X> in one source would make them.
     Array* needs = objectNeeds(d.objectInputs());
+    // So is each shared library a -l names (C++'s -l:libstdc++.so.6).
+    for (u32 i = (u32)0; i < d.linkInputs().count(); i = i + (u32)1) {
+        String* t = (String*)d.linkInputs().get(i);
+        if (!t.hasPrefix(String.withCString("-l"))) continue;
+        String* lp = resolveLinkInput(d, t);
+        if (lp != (String*)0 && isSharedLib(lp)) needs.add((Object*)lp);
+    }
     for (u32 i = (u32)0; i < needs.count(); i = i + (u32)1) {
         bool have = false;
         for (u32 k = (u32)0; k < d.fe().neededLibs().count(); k = k + (u32)1)
@@ -5553,7 +5589,7 @@ void emitModule(DriverOptions* d, IRModule* mod)
                 }
                 continue;
             }
-            if (!lp.hasSuffix(String.withCString(".so"))) continue;
+            if (!isSharedLib(lp)) continue;
             bool have = false;
             for (u32 k = (u32)0; k < d.fe().neededLibs().count(); k = k + (u32)1)
                 if (((String*)d.fe().neededLibs().get(k)).equals(lp)) have = true;
