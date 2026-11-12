@@ -1622,6 +1622,7 @@ class BeFact : Object
     Array* _ppGOffLo;   // Number@: and the c0, c1 of k * i + [c0, c1]
     Array* _ppGOffHi;
     Array* _ppGStored;
+    Array* _ppRO;        // per live-in of the block being made: 1 when the loop only reads through it (#156)
     // The pairs that need a check at run time (indices into the above).
     Array* _ppPairA;
     Array* _ppPairB;

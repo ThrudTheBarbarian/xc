@@ -1216,6 +1216,90 @@
         return F.name();
         }
 
+    // _ppRO for the block being made: per live-in, 1 when the loop reads
+    // through it and never stores through it. Each base ppParMemoryOk noted
+    // (_ppGBase) is followed through the casts made of it back to the value
+    // it came from; a store through a base that leads to no live-in (nor a
+    // global) makes every answer 0.
+    final void ppReadOnlyCaptures(Array* liveIns, Map* defOf)
+        {
+        _ppRO = new Array();
+        Array* read = new Array();
+        Array* stored = new Array();
+        for (u32 i = (u32)0; i < liveIns.count(); i = i + (u32)1)
+            {
+            read.add((Object*)Number.with((u32)0));
+            stored.add((Object*)Number.with((u32)0));
+            }
+        bool unknown = false;
+        for (u32 g = (u32)0; _ppGBase != (Array*)0 && g < _ppGBase.count(); g = g + (u32)1)
+            {
+            IRValue* b = (IRValue*)_ppGBase.get(g);
+            bool st = ((Number*)_ppGStored.get(g)).asU32() != (u32)0;
+            u32 at = liveIns.indexOf((Object*)b);
+            for (u32 d = (u32)0; d < (u32)8 && at == (u32)$FFFFFFFF && b != (IRValue*)0; d = d + (u32)1)
+                {
+                IRInsn* def = (IRInsn*)defOf.get((Hashable*)b);
+                if (def == (IRInsn*)0 || !def.op().equals(String.withCString("Bitcast")) || def.ops().count() != (u32)1
+                    || ((IROperand*)def.ops().get((u32)0)).kind() != (u8)OPK_USE)
+                    break;
+                b = ((IROperand*)def.ops().get((u32)0)).val();
+                at = liveIns.indexOf((Object*)b);
+                }
+            if (at == (u32)$FFFFFFFF)
+                {
+                if (st && !((String*)_ppGKeys.get(g)).hasPrefix(String.withCString("@")))
+                    unknown = true;
+                continue;
+                }
+            read.set(at, (Object*)Number.with((u32)1));
+            if (st)
+                stored.set(at, (Object*)Number.with((u32)1));
+            }
+        for (u32 i = (u32)0; i < liveIns.count(); i = i + (u32)1)
+            _ppRO.add((Object*)Number.with(!unknown && ((Number*)read.get(i)).asU32() != (u32)0
+                                           && ((Number*)stored.get(i)).asU32() == (u32)0 ? (u32)1 : (u32)0));
+        }
+
+    // gpuReadsOnly(self, k): true for capture k (a pointer) when the loop only
+    // reads through it, so a GPU run need not copy it back. Copying back an
+    // array the block never wrote is wasted traffic, and into read-only
+    // memory (a string literal, a const table) it faults (#156). The answers
+    // are _ppRO's, which ppReadOnlyCaptures works out from the loop's own
+    // memory analysis.
+    final String* ppGpuReadsOnly(IRModule* m, String* stem, String* objT, Array* liveIns)
+        {
+        String* boolT = String.withCString("Bool");
+        IRFunc* F = new IRFunc();
+        F.setName(String.withFormat("%s$gpuReadsOnly", stem.cString()));
+        F.setRet(boolT);
+        IRValue* sv = new IRValue(objT);
+        IRValue* k = new IRValue(String.withCString("I32"));
+        IRValue* mem = new IRValue(String.withCString("Mem"));
+        F.addParam(sv);
+        F.addParam(k);
+        F.addParam(mem);
+        IRBlock* b = new IRBlock(String.withCString("bb_entry"));
+        IRValue* acc = ppEmit(b, String.withCString("Const"), boolT, IROperand.immI((i64)0, boolT), (IROperand*)0, (IROperand*)0);
+        for (u32 i = (u32)0; _ppRO != (Array*)0 && i < liveIns.count() && i < _ppRO.count(); i = i + (u32)1)
+            {
+            if (((Number*)_ppRO.get(i)).asU32() == (u32)0)
+                continue;
+            IRValue* fk = ppEmit(b, String.withCString("Const"), String.withCString("I32"), IROperand.immI((i64)i, String.withCString("I32")), (IROperand*)0, (IROperand*)0);
+            IRValue* is = ppCmp(b, String.withCString("EQ"), k, fk);
+            IRValue* yes = ppEmit(b, String.withCString("Const"), boolT, IROperand.immI((i64)1, boolT), (IROperand*)0, (IROperand*)0);
+            acc = ppEmit(b, String.withCString("Select"), boolT, IROperand.useVal(is), IROperand.useVal(yes), IROperand.useVal(acc));
+            }
+        IRInsn* r = IRInsn.with(String.withCString("Return"));
+        r.add(IROperand.useVal(acc));
+        r.add(IROperand.useVal(mem));
+        b.setTerm(r);
+        F.addBlock(b);
+        m.addFunc(F);
+        m.addSym(IRSymbol.func(F.name(), String.withFormat("(%s, I32) -> Bool", objT.cString()), false, false));
+        return F.name();
+        }
+
     // A reduction's operator as the parser's placeholder words spell it.
     static String* ppRedWord(String* op)
         {
@@ -1568,6 +1652,9 @@
                 ins.add((Object*)v);
             }
         liveIns = ins;
+        // Which captures the loop only reads (before the casts below replace
+        // untyped ones in place: the positions stay).
+        ppReadOnlyCaptures(liveIns, defOf);
         // An untyped pointer (the C path's `ptr`) that the loop only ever
         // casts to one element type is captured as that type, cast once at
         // the call: a kernel cannot cast a device pointer, and the loop then
@@ -1927,6 +2014,7 @@
         String* gName = ppGpuGlobals(m, stem, objT, B, true);
         String* gbName = ppGpuGlobals(m, stem, objT, B, false);
         String* glName = ppGpuLength(m, stem, objT, recT, liveIns);
+        String* groName = ppGpuReadsOnly(m, stem, objT, liveIns);
         Array* ftys = new Array();
         for (u32 i = (u32)0; i < nIn; i = i + (u32)1)
             ftys.add((Object*)((IRValue*)liveIns.get(i)).ty());
@@ -1955,6 +2043,8 @@
                 s = gbName;
             else if (s.equals(String.withCString("ParChunk$gpuLength")))
                 s = glName;
+            else if (s.equals(String.withCString("ParChunk$gpuReadsOnly")))
+                s = groName;
             slots.add((Object*)s);
             }
         String* vtName = String.withFormat("%s$vtbl", stem.cString());
