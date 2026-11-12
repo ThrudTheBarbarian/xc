@@ -25,7 +25,7 @@ because a timing between programs that compute different things means nothing.
 
 - A 64-bit x86-64 Ubuntu. Tested on 26.04. A GPU is optional; without a
   usable one the GPU modes are skipped, and the collector says why.
-- xcc 0.8 for Linux, from the [downloads](/compiler/downloads/) page.
+- xcc 1.0 for Linux, from the [downloads](/compiler/downloads/) page.
 - Python 3, which Ubuntu ships, for the collector.
 - For the language suite only: `clang`, `clang++`, `g++`, and `swiftc`, plus
   GNUstep for the Objective-C half. A toolchain that is absent is skipped, not
@@ -38,14 +38,14 @@ with bzip2, which a minimal Ubuntu may not have; if `tar` says it cannot run
 `bzip2`, install it first with `sudo apt-get install -y bzip2`.
 
 ```bash
-tar xjf xcc-linux-0.8.tar.bz2
-export PATH="$PWD/xcc-linux-0.8/bin:$PATH"
+tar xjf xcc-linux-1.0.tar.bz2
+export PATH="$PWD/xcc-linux-1.0/bin:$PATH"
 xcc -v
 ```
 
 The compiler finds its libraries relative to its own binary, so the directory
 can be moved anywhere. Put the `export` in your shell profile to keep it. The
-collector also finds a compiler installed as `/opt/xcc/0.8/`, with no `PATH`
+collector also finds a compiler installed as `/opt/xcc/1.0/`, with no `PATH`
 change.
 
 ### Set up the GPU (optional)
@@ -150,19 +150,27 @@ timing is refused.
 ### With the Phoronix Test Suite
 
 The par suite is also a [Phoronix Test Suite](https://www.phoronix-test-suite.com/)
-test profile, `benchmark/pts/xc-par-1.9.0/`, and the C programs are another,
-`benchmark/pts/xc-c-1.9.0/`. Each downloads the published Linux compiler for
+test profile, `benchmark/pts/xc-par-2.0.0/`, and the C programs are another,
+`benchmark/pts/xc-c-2.0.0/`. Each downloads the published Linux compiler for
 the machine, x86-64 or arm64 (a Raspberry Pi 5, an Arm server), and the
 benchmark sources. The par profile builds the five programs and offers each one
 on one CPU thread, every CPU thread, the GPU, every GPU, every device, or
 `auto`. Each result is the best of the program's eight runs, and the first run
-is reported beside it. The profile checks the checksum, and it refuses a GPU
-mode that would run on the CPU.
+is reported beside it. The install step runs each program once with
+`XC_PAR_PROBE=1`, so `auto` has measured every block on the machine before the
+timed runs. The profile checks the checksum, and it refuses a GPU mode that
+would run on the CPU.
+
+Installing takes a while, most of all for the C profile, which builds every
+program at three sizes with every compiler and probes each xcc `auto` build:
+about 20 minutes on a 32-thread Ryzen 9 9955HX (a minute for the par
+profile), and over four hours on a Raspberry Pi 5 (12 minutes for the par
+profile).
 
 ```bash
 mkdir -p ~/.phoronix-test-suite/test-profiles/local
-cp -R benchmark/pts/xc-par-1.9.0 ~/.phoronix-test-suite/test-profiles/local/
-phoronix-test-suite benchmark local/xc-par-1.9.0
+cp -R benchmark/pts/xc-par-2.0.0 ~/.phoronix-test-suite/test-profiles/local/
+phoronix-test-suite benchmark local/xc-par-2.0.0
 ```
 
 ## 4. Comparing against other languages
@@ -303,7 +311,7 @@ machine and the toolchains, then one entry per run:
   "machine": { "os": "Ubuntu 26.04.1 LTS", "arch": "x86_64",
                "cpu": "Example 16-core x86-64 CPU",
                "gpu": "Example GPU (CUDA)", "memory_mb": 65536 },
-  "toolchains": { "xcc": "0.8", "clang": "...", "gcc": "...", "swiftc": "..." },
+  "toolchains": { "xcc": "1.0", "clang": "...", "gcc": "...", "swiftc": "..." },
   "repeats": 5,
   "runs": [
     { "suite": "par", "benchmark": "nbody", "target": "xc", "device": "gpu",

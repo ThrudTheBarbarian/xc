@@ -89,7 +89,7 @@ directory hides the real one.
 If nothing matches, the error names every directory searched:
 
 ```
-app.xc:3:1: error: Cannot find include file 'Xtg' (searched: '/opt/xcc/0.65/lib/xc/arm64/lib' '/opt/xcc/0.65/lib/xc/generic/lib' -L 'build')
+app.xc:3:1: error: Cannot find include file 'Xtg' (searched: '/opt/xcc/1.0/lib/xc/arm64/lib' '/opt/xcc/1.0/lib/xc/generic/lib' -L 'build')
 ```
 
 ### Spelling the name

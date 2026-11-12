@@ -19,7 +19,7 @@ When it finishes, `make install` prints the directory to add to `PATH`.
 On macOS and Linux the root is `/opt/xcc/$(VERSION)`:
 
 ```
-/opt/xcc/0.65/
+/opt/xcc/1.0/
 ├── bin/
 │   ├── xcc              the compiler; it runs every stage itself
 │   ├── xcc-sign         code signing
@@ -69,7 +69,7 @@ roots in turn for `lib/xc`, then `xc`, then `support`:
 5. `/opt/xcc/<version>`, `/opt/xcc`, `/usr/local/xcc`, `/usr/local/xtc`, `/opt/xtc`
 
 Step 3 is what lets a plain `xcc -o prog prog.xc` work. An installed
-`/opt/xcc/0.65/bin/xcc` goes up one level and finds `/opt/xcc/0.65/lib/xc`; a
+`/opt/xcc/1.0/bin/xcc` goes up one level and finds `/opt/xcc/1.0/lib/xc`; a
 Windows `xcc.exe` finds `xc\` without going up. Neither needs a flag or an
 environment variable, and two installed versions never see each other's
 libraries.
@@ -87,8 +87,8 @@ was chosen.
 The version is part of the path, so several versions can be installed together:
 
 ```bash
-/opt/xcc/0.65/bin/xcc -o prog prog.xc      # explicit
-PATH=/opt/xcc/0.61/bin:$PATH xcc -o prog prog.xc
+/opt/xcc/1.0/bin/xcc -o prog prog.xc      # explicit
+PATH=/opt/xcc/0.9.7/bin:$PATH xcc -o prog prog.xc
 ```
 
 Each binary resolves its own libraries relative to itself, so a 0.65 compiler

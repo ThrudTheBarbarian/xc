@@ -29,25 +29,25 @@ it needs (beside it in `bin/`), and `xcmon`, a monitor you can use later.
 
 ```sh
 # Linux
-tar xjf xcd-linux-0.9.5.tar.bz2
+tar xjf xcd-linux-1.0.tar.bz2
 # macOS
-tar xjf xcd-osx-0.9.5.tar.bz2
+tar xjf xcd-osx-1.0.tar.bz2
 ```
 
-On Windows, unzip `xcd-win64-0.9.5.zip`.
+On Windows, unzip `xcd-win64-1.0.zip`.
 
 ## 2. Start it with a secret
 
 Choose a secret: a program must know it to use this daemon. Start the daemon with it:
 
 ```sh
-XC_PAR_SECRET=correct-horse-battery xcd-linux-0.9.5/bin/xcd -port 7227
+XC_PAR_SECRET=correct-horse-battery xcd-linux-1.0/bin/xcd -port 7227
 ```
 
 ```powershell
 # Windows (PowerShell)
 $env:XC_PAR_SECRET = "correct-horse-battery"
-.\xcd-win64-0.9.5\bin\xcd.exe -port 7227
+.\xcd-win64-1.0\bin\xcd.exe -port 7227
 ```
 
 It prints a serving line naming the device it serves and its certificate's fingerprint:
