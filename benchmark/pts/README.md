@@ -29,6 +29,12 @@ reported beside it. The install step runs each program once with
 `XC_PAR_PROBE=1`, so `auto` has measured every block on the machine before the
 timed runs and their first run starts from its choice.
 
+The install step takes a while because of that, most of all for `xc-c` (every
+program at three sizes, every compiler, and a probe run of each xcc `auto`
+build): about 20 minutes for `xc-c` and a minute for `xc-par` on a 32-thread
+Ryzen 9 9955HX, and over four hours for `xc-c` (12 minutes for `xc-par`) on a
+Raspberry Pi 5.
+
 A run is refused when the checksum is wrong, or when a GPU mode ran on the CPU
 (no usable GPU): under `XC_PAR_REPORT=1` a GPU run reports "items on the GPU",
 or "tiles across" the devices of a set.

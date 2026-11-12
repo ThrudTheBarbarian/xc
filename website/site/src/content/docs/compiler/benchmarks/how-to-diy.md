@@ -161,6 +161,12 @@ is reported beside it. The install step runs each program once with
 timed runs. The profile checks the checksum, and it refuses a GPU mode that
 would run on the CPU.
 
+Installing takes a while, most of all for the C profile, which builds every
+program at three sizes with every compiler and probes each xcc `auto` build:
+about 20 minutes on a 32-thread Ryzen 9 9955HX (a minute for the par
+profile), and over four hours on a Raspberry Pi 5 (12 minutes for the par
+profile).
+
 ```bash
 mkdir -p ~/.phoronix-test-suite/test-profiles/local
 cp -R benchmark/pts/xc-par-2.0.0 ~/.phoronix-test-suite/test-profiles/local/

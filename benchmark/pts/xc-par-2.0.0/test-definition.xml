@@ -3,7 +3,7 @@
   <TestInformation>
     <Title>xc par</Title>
     <AppVersion>1.0</AppVersion>
-    <Description>The par benchmarks of the xc language: each program is one data-parallel par block that xcc compiles for the CPU and the GPU together, and that runs on one CPU thread, on every CPU thread, on the GPU (Vulkan on Linux), on every GPU, or on every device at once. The program runs its block eight times and the result is the best run; the first run, which carries the one-off costs such as building the GPU kernel, is reported too. Every run must print the benchmark's checksum, and a GPU mode that falls back to the CPU is refused.</Description>
+    <Description>The par benchmarks of the xc language: each program is one data-parallel par block that xcc compiles for the CPU and the GPU together, and that runs on one CPU thread, on every CPU thread, on the GPU (Vulkan on Linux), on every GPU, or on every device at once. The program runs its block eight times and the result is the best run; the first run, which carries the one-off costs such as building the GPU kernel, is reported too. Every run must print the benchmark's checksum, and a GPU mode that falls back to the CPU is refused. Installing runs each program once with the probe so that auto starts measured: about a minute on a 32-thread Ryzen 9 9955HX, and about 12 minutes on a Raspberry Pi 5.</Description>
     <ResultScale>ms</ResultScale>
     <Proportion>LIB</Proportion>
     <TimesToRun>3</TimesToRun>
