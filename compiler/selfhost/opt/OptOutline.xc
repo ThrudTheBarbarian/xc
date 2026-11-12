@@ -1300,6 +1300,60 @@
         return F.name();
         }
 
+    // Whether accumulator phi's value, or a value on its update chain (from
+    // the phi to the value carried back), is read in loop L by anything off
+    // that chain.
+    final bool ppAccReadInLoop(LRCLoop* L, IRInsn* phi, Map* defOf)
+        {
+        IRValue* nx = ppPhiIn(phi, L, true);
+        if (nx == (IRValue*)0)
+            return false;
+        // The chain: every loop value the carried value is computed from that
+        // depends on the phi.
+        Map* chain = new Map();
+        chain.set((Hashable*)phi.res(), (Object*)phi.res());
+        Array* work = new Array();
+        work.add((Object*)nx);
+        Map* seen = new Map();
+        for (u32 w = (u32)0; w < work.count(); w = w + (u32)1)
+            {
+            IRValue* v = (IRValue*)work.get(w);
+            if (seen.get((Hashable*)v) != (Object*)0)
+                continue;
+            seen.set((Hashable*)v, (Object*)v);
+            if (v != phi.res() && !ppDependsOn(v, phi.res(), defOf, (u32)0))
+                continue;
+            chain.set((Hashable*)v, (Object*)v);
+            IRInsn* d = (IRInsn*)defOf.get((Hashable*)v);
+            if (d == (IRInsn*)0 || !ppInLoop(L, d))
+                continue;
+            for (u32 k = (u32)0; k < d.ops().count(); k = k + (u32)1)
+                {
+                IROperand* o = (IROperand*)d.ops().get(k);
+                if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0)
+                    work.add((Object*)o.val());
+                }
+            }
+        Array* body = L.body();
+        for (u32 b = (u32)0; b < body.count(); b = b + (u32)1)
+            {
+            Array* all = ppAllInsns((IRBlock*)body.get(b));
+            for (u32 q = (u32)0; q < all.count(); q = q + (u32)1)
+                {
+                IRInsn* n = (IRInsn*)all.get(q);
+                if (n == phi || (n.res() != (IRValue*)0 && chain.get((Hashable*)n.res()) != (Object*)0))
+                    continue;
+                for (u32 k = (u32)0; k < n.ops().count(); k = k + (u32)1)
+                    {
+                    IROperand* o = (IROperand*)n.ops().get(k);
+                    if (o.kind() == (u8)OPK_USE && o.val() != (IRValue*)0 && chain.get((Hashable*)o.val()) != (Object*)0)
+                        return true;
+                    }
+                }
+            }
+        return false;
+        }
+
     // A reduction's operator as the parser's placeholder words spell it.
     static String* ppRedWord(String* op)
         {
@@ -1568,6 +1622,14 @@
             }
         if (iv == (IRInsn*)0 || !ppIntType(iv.res().ty()))
             return ppNo("ppOutlinePar 13");
+        // An accumulator is folded per chunk and combined at the end, so the
+        // loop may only update it: a running value read inside the loop (a
+        // prefix sum, `s += a[i]; b[i] = s`) depends on every earlier item and
+        // is no reduction. Lifted, each chunk started from the identity and
+        // b came out wrong in every mode.
+        for (u32 r = (u32)0; r < reds.count(); r = r + (u32)1)
+            if (ppAccReadInLoop(L, (IRInsn*)reds.get(r), defOf))
+                return ppNo("an accumulator read in the loop (a running value, not a reduction)");
         // The bound is from outside the loop, or constants the loop recomputes
         // (a `#define` bound, widened in the header), which the call site
         // computes again.
