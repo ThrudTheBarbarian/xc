@@ -2334,7 +2334,7 @@
                 u32 es = ((Number*)_ppGElem.get(k)).asU32();
                 IRValue* esv = self.ppEmit(P, String.withCString("Const"), i64t, IROperand.immI((i64)(es == 0 ? 1 : es), i64t), (IROperand*)0, (IROperand*)0);
                 IRValue* no = self.ppEmit(P, String.withCString("Const"), bt, IROperand.immI(0, bt), (IROperand*)0, (IROperand*)0);
-                IRValue* sp = self.ppCall(P, String.withCString("Par$spanOf"), i64t, IROperand.useVal(pv), IROperand.useVal(esv), IROperand.useVal(no), _ppGuardMem);
+                IRValue* sp = self.ppCall(P, String.withCString("Par$heapSpanOf"), i64t, IROperand.useVal(pv), IROperand.useVal(esv), IROperand.useVal(no), _ppGuardMem);
                 _ppGuardMem = _ppLastMem;
                 IRValue* zero = self.ppEmit(P, String.withCString("Const"), i64t, IROperand.immI(0, i64t), (IROperand*)0, (IROperand*)0);
                 IRValue* neg = self.ppCmp(P, String.withCString("SLT"), sp, zero);

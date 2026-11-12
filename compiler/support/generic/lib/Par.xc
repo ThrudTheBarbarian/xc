@@ -309,18 +309,17 @@ class Par
     // and the block runs on the CPU as before. On a target without the
     // aligned allocator a `simd:` pointer is trusted to be its block's start
     // and sized from the header, as it was; elem is the element's size.
-    static i64 spanOf(pointer p, i64 elem, bool simdType)
+    // spanOf, and for a block the system's malloc made (a C program's
+    // malloc, a C++ program's operator new) its usable size from its start
+    // (macOS: malloc_size; any other pointer stays unknown). For the
+    // outliner's overlap guard only, which asks where two pointers' heap
+    // blocks END: a malloc block's usable size can run past the array in it,
+    // so nothing that copies or sizes an array may use it.
+    static i64 heapSpanOf(pointer p, i64 elem, bool simdType)
         {
-        if (p == (pointer)0)
-            return (i64)0 - (i64)1;
-#if ARCH_arm64 || ARCH_x86_64 || OS_windows
-        parGlobals();
-        i64 span = _xtc_simd_span(p);
+        i64 span = Par.spanOf(p, elem, simdType);
 #if OS_macos
-        // A block the system's malloc made (a C++ program's operator new,
-        // linked by clang++): its size from its start, 0 for any other
-        // pointer, which stays unknown.
-        if (span < (i64)0)
+        if (span < (i64)0 && p != (pointer)0)
             {
             u64 sz = malloc_size(p);
             if (sz > (u64)0)
@@ -328,6 +327,15 @@ class Par
             }
 #endif
         return span;
+        }
+
+    static i64 spanOf(pointer p, i64 elem, bool simdType)
+        {
+        if (p == (pointer)0)
+            return (i64)0 - (i64)1;
+#if ARCH_arm64 || ARCH_x86_64 || OS_windows
+        parGlobals();
+        return _xtc_simd_span(p);
 #else
 #if ARCH_6502
         // No GPU, and no element count in a primitive array's header.

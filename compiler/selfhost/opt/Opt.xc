@@ -932,6 +932,7 @@
             self.seed(m, reachable, work, String.withCString("ParFnChunk$runOn"));
             self.seed(m, reachable, work, String.withCString("parSameName"));
             self.seed(m, reachable, work, String.withCString("Par$spanOf"));
+            self.seed(m, reachable, work, String.withCString("Par$heapSpanOf"));
             }
 
         // Library mode: seed EVERY function — the module IS the API surface.
