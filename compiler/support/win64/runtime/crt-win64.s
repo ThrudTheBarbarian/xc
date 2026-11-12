@@ -66,6 +66,19 @@ _start:
 	mov	rdx, rax
 	mov	ecx, edi
 	call	main
-	mov	ecx, eax		# main's return value becomes the exit status;
-	call	ExitProcess		#   arg0 is rcx under the Microsoft ABI
-	hlt				# unreachable; faults loudly if ExitProcess returns
+	# main's return value is the exit status, arg0 in ecx under the Microsoft
+	# ABI. ucrt's exit, not kernel32's ExitProcess (#151): it runs what
+	# atexit registered (C handlers, C++ static destructors) and flushes the
+	# C library's streams, then ends the process.
+	mov	ecx, eax
+	call	exit
+	hlt				# unreachable; faults loudly if exit returns
+
+# atexit for C code in a program (#151). ucrtbase exports no atexit: mingw
+# and MSVC define it in their start-up objects, which an xcc link does not
+# take. In a program it registers with the process's table through ucrt's
+# _crt_atexit, which takes and returns the same as atexit; exit runs that
+# table. A DLL's link has no crt-win64.s, so no atexit.
+	.globl	atexit
+atexit:
+	jmp	_crt_atexit

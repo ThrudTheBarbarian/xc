@@ -276,7 +276,7 @@ static NSString *crtWithXcArgs(NSString *crt) {
                         "    str x0, [sp, #16]                   // the count they leave\n"
                         "    ldp x0, x1, [sp, #16]\n"
                         "    bl _xt_set_args\n"];
-    if ([crt containsString:@"\tcall\tExitProcess"])
+    if ([crt containsString:@"\tcall\t_xt_argv_table"])   // Windows
         return [crt stringByReplacingOccurrencesOfString:@"\tcall\t_xt_stack_guard_init\n"
             withString:@"\tcall\t_xt_stack_guard_init\n"
                         "\tcall\t_xt_xcargs\t\t# the --xc-* options out of the command line\n"];

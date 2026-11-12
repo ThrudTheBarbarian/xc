@@ -879,7 +879,7 @@ String* crtWithXcArgs(String* crt)
                                "    ldp x0, x1, [sp, #16]\n"
                                "    bl _xt_set_args\n"));
     String* guard = String.withCString("\tcall\t_xt_stack_guard_init\n");
-    if (crt.contains(String.withCString("\tcall\tExitProcess")))
+    if (crt.contains(String.withCString("\tcall\t_xt_argv_table")))   // Windows
         return crt.replacing(guard, String.withCString("\tcall\t_xt_stack_guard_init\n"
                                                        "\tcall\t_xt_xcargs\t\t# the --xc-* options out of the command line\n"));
     return crt.replacing(guard, String.withCString("\tcall\t_xt_stack_guard_init\n"
