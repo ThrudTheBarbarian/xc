@@ -70,8 +70,9 @@ Everything since 0.9.7.
 ### Work towards a C++ front end
 
 - First steps of reading C++ through clang, as C is: a table of languages,
-  and loops over arrays, `std::vector` and iterators made into par blocks.
-  Not yet a supported route.
+  and loops over arrays, `std::vector`, `std::array`, iterators and the
+  parallel algorithms (`std::execution`) made into par blocks, on macOS. Not
+  yet a supported route.
 
 ## Version 0.9.7 — C fuses like clang, checked virtual calls, and par's choices
 
