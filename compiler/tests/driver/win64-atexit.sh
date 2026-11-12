@@ -88,8 +88,15 @@ if ! command -v clang >/dev/null 2>&1; then
     echo "--- win64-atexit: the C programs skipped (no clang) ---"
 else
     for p in t x; do
-        "$XC1" -q -A win64 -H . -o "$W/$p.exe" "$W/$p.c" > "$W/$p.out" 2>&1 \
-            || { echo "FAIL win64-atexit: $p.c does not link: $(head -c 300 "$W/$p.out")"; fail=1; }
+        if ! "$XC1" -q -A win64 -H . -o "$W/$p.exe" "$W/$p.c" > "$W/$p.out" 2>&1; then
+            # A host without the Windows C headers (the Linux gate hosts)
+            # cannot build C for win64 at all; the xc case below still runs.
+            if grep -q "needs that target's C headers" "$W/$p.out"; then
+                echo "--- win64-atexit: $p.c skipped (no win64 C headers on this host) ---"
+            else
+                echo "FAIL win64-atexit: $p.c does not link: $(head -c 300 "$W/$p.out")"; fail=1
+            fi
+        fi
     done
     [ -f "$W/t.exe" ] && expect "atexit, last first, status from main" t.exe "main
 two
