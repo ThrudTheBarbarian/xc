@@ -49,7 +49,7 @@ Put this beside it as `hello\build.ps1`:
 # Every knob is a parameter, so it can be set on the command line:
 #
 #   .\build.ps1 windows -Opt -O0 -Flags -g               a debuggable Windows build
-#   .\build.ps1 -Xcc C:\xcc\xcc-win64-0.75\bin\xcc.exe   a particular compiler
+#   .\build.ps1 -Xcc C:\xcc\xcc-win64-1.0\bin\xcc.exe   a particular compiler
 #   .\build.ps1 ios -Ios ios                             the iOS device, not the simulator
 #
 # If PowerShell refuses to run scripts: Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
@@ -133,16 +133,16 @@ It has the same shape as the Makefile:
 
 ```powershell
 cd hello
-.\build.ps1 -Xcc C:\xcc\xcc-win64-0.75\bin\xcc.exe
+.\build.ps1 -Xcc C:\xcc\xcc-win64-1.0\bin\xcc.exe
 ```
 
 ```
-C:\xcc\xcc-win64-0.75\bin\xcc.exe -A arm64 -O3 -o build\mac\hello hello.xc
-C:\xcc\xcc-win64-0.75\bin\xcc.exe -A x86_64 -O3 -o build\linux\hello hello.xc
-C:\xcc\xcc-win64-0.75\bin\xcc.exe -A win64 -O3 -o build\windows\hello.exe hello.xc
-C:\xcc\xcc-win64-0.75\bin\xcc.exe -A wasm32 -O3 -o build\web\hello.wasm hello.xc
-C:\xcc\xcc-win64-0.75\bin\xcc.exe -A ios-sim -O3 -o build\ios\hello hello.xc
-C:\xcc\xcc-win64-0.75\bin\xcc.exe -A android --emit-apk -O3 -o build\android\hello.apk hello.xc
+C:\xcc\xcc-win64-1.0\bin\xcc.exe -A arm64 -O3 -o build\mac\hello hello.xc
+C:\xcc\xcc-win64-1.0\bin\xcc.exe -A x86_64 -O3 -o build\linux\hello hello.xc
+C:\xcc\xcc-win64-1.0\bin\xcc.exe -A win64 -O3 -o build\windows\hello.exe hello.xc
+C:\xcc\xcc-win64-1.0\bin\xcc.exe -A wasm32 -O3 -o build\web\hello.wasm hello.xc
+C:\xcc\xcc-win64-1.0\bin\xcc.exe -A ios-sim -O3 -o build\ios\hello hello.xc
+C:\xcc\xcc-win64-1.0\bin\xcc.exe -A android --emit-apk -O3 -o build\android\hello.apk hello.xc
 ```
 
 With xcc's `bin` folder on your `PATH`, `-Xcc` can be left out. If PowerShell

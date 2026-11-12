@@ -25,7 +25,7 @@ because a timing between programs that compute different things means nothing.
 
 - A 64-bit x86-64 Ubuntu. Tested on 26.04. A GPU is optional; without a
   usable one the GPU modes are skipped, and the collector says why.
-- xcc 0.8 for Linux, from the [downloads](/compiler/downloads/) page.
+- xcc 1.0 for Linux, from the [downloads](/compiler/downloads/) page.
 - Python 3, which Ubuntu ships, for the collector.
 - For the language suite only: `clang`, `clang++`, `g++`, and `swiftc`, plus
   GNUstep for the Objective-C half. A toolchain that is absent is skipped, not
@@ -38,14 +38,14 @@ with bzip2, which a minimal Ubuntu may not have; if `tar` says it cannot run
 `bzip2`, install it first with `sudo apt-get install -y bzip2`.
 
 ```bash
-tar xjf xcc-linux-0.8.tar.bz2
-export PATH="$PWD/xcc-linux-0.8/bin:$PATH"
+tar xjf xcc-linux-1.0.tar.bz2
+export PATH="$PWD/xcc-linux-1.0/bin:$PATH"
 xcc -v
 ```
 
 The compiler finds its libraries relative to its own binary, so the directory
 can be moved anywhere. Put the `export` in your shell profile to keep it. The
-collector also finds a compiler installed as `/opt/xcc/0.8/`, with no `PATH`
+collector also finds a compiler installed as `/opt/xcc/1.0/`, with no `PATH`
 change.
 
 ### Set up the GPU (optional)
@@ -305,7 +305,7 @@ machine and the toolchains, then one entry per run:
   "machine": { "os": "Ubuntu 26.04.1 LTS", "arch": "x86_64",
                "cpu": "Example 16-core x86-64 CPU",
                "gpu": "Example GPU (CUDA)", "memory_mb": 65536 },
-  "toolchains": { "xcc": "0.8", "clang": "...", "gcc": "...", "swiftc": "..." },
+  "toolchains": { "xcc": "1.0", "clang": "...", "gcc": "...", "swiftc": "..." },
   "repeats": 5,
   "runs": [
     { "suite": "par", "benchmark": "nbody", "target": "xc", "device": "gpu",
