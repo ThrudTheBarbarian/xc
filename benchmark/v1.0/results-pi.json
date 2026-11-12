@@ -1,0 +1,333 @@
+{
+  "mismatches": [],
+  "net": {
+    "arc_alloc": {
+      "O3": {
+        "cpp_pi": 1.980201,
+        "gcc_pi": 1.966508,
+        "xc_pi": 2.147504
+      }
+    },
+    "arc_array": {
+      "O3": {
+        "cpp_pi": 1.756063,
+        "gcc_pi": 2.608135,
+        "xc_pi": 1.803855
+      }
+    },
+    "array_map": {
+      "O3": {
+        "cpp_pi": 4.348268,
+        "gcc_pi": 10.238667,
+        "xc_pi": 4.98048
+      }
+    },
+    "array_sum": {
+      "O3": {
+        "cpp_pi": 3.79053,
+        "gcc_pi": 8.375452,
+        "xc_pi": 3.018277
+      }
+    },
+    "array_sum_hoist": {
+      "O3": {
+        "cpp_pi": 3.046476,
+        "gcc_pi": 5.976096,
+        "xc_pi": 0.0
+      }
+    },
+    "bit_ops": {
+      "O3": {
+        "cpp_pi": 2.945979,
+        "gcc_pi": 2.879528,
+        "xc_pi": 2.177157
+      }
+    },
+    "branch_mix": {
+      "O3": {
+        "cpp_pi": 2.150637,
+        "gcc_pi": 2.144848,
+        "xc_pi": 1.79952
+      }
+    },
+    "call_depth": {
+      "O3": {
+        "cpp_pi": 3.209876,
+        "gcc_pi": 4.158164,
+        "xc_pi": 3.187106
+      }
+    },
+    "float_math": {
+      "O3": {
+        "cpp_pi": 1.386158,
+        "gcc_pi": 1.710506,
+        "xc_pi": 1.404904
+      }
+    },
+    "hash_mix": {
+      "O3": {
+        "cpp_pi": 1.339873,
+        "gcc_pi": 1.347529,
+        "xc_pi": 1.345518
+      }
+    },
+    "int_accum": {
+      "O3": {
+        "cpp_pi": 2.054239,
+        "gcc_pi": 2.049097,
+        "xc_pi": 2.049244
+      }
+    },
+    "int_muldiv": {
+      "O3": {
+        "cpp_pi": 5.456982,
+        "gcc_pi": 6.629163,
+        "xc_pi": 5.456503
+      }
+    },
+    "int_muldiv_hoist": {
+      "O3": {
+        "cpp_pi": 4.81539,
+        "gcc_pi": 1.451365,
+        "xc_pi": 1e-06
+      }
+    },
+    "matrix_mul": {
+      "O3": {
+        "cpp_pi": 1.320888,
+        "gcc_pi": 1.353787,
+        "xc_pi": 1.230322
+      }
+    },
+    "matrix_mul_f32": {
+      "O3": {
+        "cpp_pi": 17.841502,
+        "gcc_pi": 4.231351,
+        "xc_pi": 3.780907
+      }
+    },
+    "mem_copy": {
+      "O3": {
+        "cpp_pi": 3.683819,
+        "gcc_pi": 4.405092,
+        "xc_pi": 3.280303
+      }
+    },
+    "method_call": {
+      "O3": {
+        "cpp_pi": 2.667957,
+        "gcc_pi": 2.667985,
+        "xc_pi": 0.363109
+      }
+    },
+    "poly_dispatch": {
+      "O3": {
+        "cpp_pi": 2.391127,
+        "gcc_pi": 1.943488,
+        "xc_pi": 1.944741
+      }
+    },
+    "sieve": {
+      "O3": {
+        "cpp_pi": 4.567864,
+        "gcc_pi": 3.06223,
+        "xc_pi": 4.217615
+      }
+    },
+    "sort_small": {
+      "O3": {
+        "cpp_pi": 3.24592,
+        "gcc_pi": 2.968507,
+        "xc_pi": 3.051275
+      }
+    },
+    "string_scan": {
+      "O3": {
+        "cpp_pi": 9.554985,
+        "gcc_pi": 7.994715,
+        "xc_pi": 3.418925
+      }
+    },
+    "struct_copy": {
+      "O3": {
+        "cpp_pi": 1.834859,
+        "gcc_pi": 2.448068,
+        "xc_pi": 2.57601
+      }
+    }
+  },
+  "platform": "arm64-linux",
+  "raw": {
+    "arc_alloc": {
+      "O3": {
+        "cpp_pi": 1.980201,
+        "gcc_pi": 1.966508,
+        "xc_pi": 2.147504
+      }
+    },
+    "arc_array": {
+      "O3": {
+        "cpp_pi": 1.756063,
+        "gcc_pi": 2.608135,
+        "xc_pi": 1.803855
+      }
+    },
+    "array_map": {
+      "O3": {
+        "cpp_pi": 4.348268,
+        "gcc_pi": 10.238667,
+        "xc_pi": 4.98048
+      }
+    },
+    "array_sum": {
+      "O3": {
+        "cpp_pi": 3.79053,
+        "gcc_pi": 8.375452,
+        "xc_pi": 3.018277
+      }
+    },
+    "array_sum_hoist": {
+      "O3": {
+        "cpp_pi": 3.046476,
+        "gcc_pi": 5.976096,
+        "xc_pi": 0.0
+      }
+    },
+    "baseline": {
+      "O3": {
+        "cpp_pi": 0.0,
+        "gcc_pi": 0.0,
+        "xc_pi": 0.0
+      }
+    },
+    "bit_ops": {
+      "O3": {
+        "cpp_pi": 2.945979,
+        "gcc_pi": 2.879528,
+        "xc_pi": 2.177157
+      }
+    },
+    "branch_mix": {
+      "O3": {
+        "cpp_pi": 2.150637,
+        "gcc_pi": 2.144848,
+        "xc_pi": 1.79952
+      }
+    },
+    "call_depth": {
+      "O3": {
+        "cpp_pi": 3.209876,
+        "gcc_pi": 4.158164,
+        "xc_pi": 3.187106
+      }
+    },
+    "float_math": {
+      "O3": {
+        "cpp_pi": 1.386158,
+        "gcc_pi": 1.710506,
+        "xc_pi": 1.404904
+      }
+    },
+    "hash_mix": {
+      "O3": {
+        "cpp_pi": 1.339873,
+        "gcc_pi": 1.347529,
+        "xc_pi": 1.345518
+      }
+    },
+    "int_accum": {
+      "O3": {
+        "cpp_pi": 2.054239,
+        "gcc_pi": 2.049097,
+        "xc_pi": 2.049244
+      }
+    },
+    "int_muldiv": {
+      "O3": {
+        "cpp_pi": 5.456982,
+        "gcc_pi": 6.629163,
+        "xc_pi": 5.456503
+      }
+    },
+    "int_muldiv_hoist": {
+      "O3": {
+        "cpp_pi": 4.81539,
+        "gcc_pi": 1.451365,
+        "xc_pi": 1e-06
+      }
+    },
+    "matrix_mul": {
+      "O3": {
+        "cpp_pi": 1.320888,
+        "gcc_pi": 1.353787,
+        "xc_pi": 1.230322
+      }
+    },
+    "matrix_mul_f32": {
+      "O3": {
+        "cpp_pi": 17.841502,
+        "gcc_pi": 4.231351,
+        "xc_pi": 3.780907
+      }
+    },
+    "mem_copy": {
+      "O3": {
+        "cpp_pi": 3.683819,
+        "gcc_pi": 4.405092,
+        "xc_pi": 3.280303
+      }
+    },
+    "method_call": {
+      "O3": {
+        "cpp_pi": 2.667957,
+        "gcc_pi": 2.667985,
+        "xc_pi": 0.363109
+      }
+    },
+    "poly_dispatch": {
+      "O3": {
+        "cpp_pi": 2.391127,
+        "gcc_pi": 1.943488,
+        "xc_pi": 1.944741
+      }
+    },
+    "sieve": {
+      "O3": {
+        "cpp_pi": 4.567864,
+        "gcc_pi": 3.06223,
+        "xc_pi": 4.217615
+      }
+    },
+    "sort_small": {
+      "O3": {
+        "cpp_pi": 3.24592,
+        "gcc_pi": 2.968507,
+        "xc_pi": 3.051275
+      }
+    },
+    "string_scan": {
+      "O3": {
+        "cpp_pi": 9.554985,
+        "gcc_pi": 7.994715,
+        "xc_pi": 3.418925
+      }
+    },
+    "struct_copy": {
+      "O3": {
+        "cpp_pi": 1.834859,
+        "gcc_pi": 2.448068,
+        "xc_pi": 2.57601
+      }
+    }
+  },
+  "repeats": 5,
+  "toolchains": {
+    "arm64_linux": {
+      "clang": "Debian clang version 19.1.7 (3+b1)",
+      "cpu": "Raspberry Pi 5 Model B Rev 1.0 (Cortex-A76)",
+      "gcc": "g++ (Debian 14.2.0-19) 14.2.0"
+    },
+    "xcc": "1.0"
+  },
+  "version": "v1.0"
+}
