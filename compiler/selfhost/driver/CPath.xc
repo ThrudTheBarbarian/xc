@@ -480,11 +480,6 @@ class CPath
         // A function taken from the read build keeps clang's own version too.
         if (readBuild != (String*)0)
             restText = Languages.keepClangCopies(restText, text, readText, r);
-        // clang puts a C++ program's global constructors in a code section
-        // of their own on Mach-O (`__TEXT,__StaticInit`); xcc's link takes
-        // __text, so they go there (the constructor list still runs them).
-        restText = restText.replacing(String.withCString(" section \"__TEXT,__StaticInit,regular,pure_instructions\""),
-                                      String.withCString(""));
         if (keep.byteLength() > (u32)0)
             Files.writeText(keep.appending(String.withCString(".rest.ll")), restText);
         if (!Files.writeText(restLl, restText))
