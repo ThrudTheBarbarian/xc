@@ -150,19 +150,21 @@ timing is refused.
 ### With the Phoronix Test Suite
 
 The par suite is also a [Phoronix Test Suite](https://www.phoronix-test-suite.com/)
-test profile, `benchmark/pts/xc-par-1.9.0/`, and the C programs are another,
-`benchmark/pts/xc-c-1.9.0/`. Each downloads the published Linux compiler for
+test profile, `benchmark/pts/xc-par-2.0.0/`, and the C programs are another,
+`benchmark/pts/xc-c-2.0.0/`. Each downloads the published Linux compiler for
 the machine, x86-64 or arm64 (a Raspberry Pi 5, an Arm server), and the
 benchmark sources. The par profile builds the five programs and offers each one
 on one CPU thread, every CPU thread, the GPU, every GPU, every device, or
 `auto`. Each result is the best of the program's eight runs, and the first run
-is reported beside it. The profile checks the checksum, and it refuses a GPU
-mode that would run on the CPU.
+is reported beside it. The install step runs each program once with
+`XC_PAR_PROBE=1`, so `auto` has measured every block on the machine before the
+timed runs. The profile checks the checksum, and it refuses a GPU mode that
+would run on the CPU.
 
 ```bash
 mkdir -p ~/.phoronix-test-suite/test-profiles/local
-cp -R benchmark/pts/xc-par-1.9.0 ~/.phoronix-test-suite/test-profiles/local/
-phoronix-test-suite benchmark local/xc-par-1.9.0
+cp -R benchmark/pts/xc-par-2.0.0 ~/.phoronix-test-suite/test-profiles/local/
+phoronix-test-suite benchmark local/xc-par-2.0.0
 ```
 
 ## 4. Comparing against other languages
