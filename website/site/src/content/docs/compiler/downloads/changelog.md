@@ -3,6 +3,76 @@ title: ChangeLog
 description: Release notes for the xcc toolchain, with bug fixes and new features per version.
 ---
 
+## Version 1.0 — C arrays on the GPU, options on the command line, and a probe that finishes measuring
+
+Everything since 0.9.7.
+
+### New
+
+- **`--xc-*` options on a program's command line.** A program with a `par`
+  block takes every argument starting `--xc-` out of its arguments before
+  `main` sees them, and sets the runtime variable it names: `--xc-par=gpu` is
+  `XC_PAR=gpu`, `--xc-par-report` is `XC_PAR_REPORT=1`, `--xc-probe` is
+  `XC_PAR_PROBE=1`. Scanning stops at `--`. `--xc-help` lists the options;
+  `XC_PAR_SECRET` has none, since a process listing shows a program's
+  arguments. C programs get the same. `-fno-xc-args` builds a program that
+  passes every argument through. See
+  [Options on the command line](/compiler/usage/environment/#options-on-the-command-line).
+- **The probe measures every block to the end on its first run.** Under
+  `XC_PAR_PROBE=1` (or `--xc-probe`), after its tile sweep a block's first run
+  carries `auto`'s own measurement to the end, on copies of the block with the
+  arrays it writes put back after each run, and keeps `auto`'s choice; the next
+  run of the program places the block without measuring. A block that runs
+  once per program run, which `auto` could not finish measuring before, is
+  placed from the second run on; the report says when a block is one.
+
+### Faster
+
+- **C loops over `malloc`'d arrays run on the GPU.** A loop `--par-style`
+  lifts from C over memory from `malloc`, `calloc` or `realloc`, or over
+  pointers passed into the function, now has its length: the accesses that
+  run for every item reach both ends of the array's footprint, so the runtime
+  sizes the array from that. Such blocks stayed on the CPU before ("an array
+  whose size is not known").
+- **Loops that fill an array from its index** (`a[i] = i * K ^ x`) step the
+  lane values by an add, as clang does, not a vector multiply per group:
+  sort_small on an Apple M4 Max, 1.16 s to 1.00 s (clang 0.99).
+- **arm64: a short-circuit `&&` test with nothing to copy on either edge**
+  branches straight to its blocks, so a loop like mandel_deep's escape loop
+  ends in one conditional branch. On a Raspberry Pi 5 the old loop ran at one
+  of two speeds depending on the code before it: mandel_deep on one core,
+  54.98 s to 50.77 s (0.9.6: 51.87 s).
+- **C: functions xcc leaves to clang are unrolled and interleaved** as clang
+  builds them; they were compiled with clang's unrolling off.
+
+### Fixed
+
+- **C loops run on the GPU over `malloc`'d memory get their real length, or
+  stay on the CPU.** A lifted loop reported no size for a pointer it captured
+  (with five or more captures, another capture's size), and the runtime took
+  a length of 0 as a size: the GPU wrote nowhere and the results came back as
+  zeros, on Metal, Vulkan and CUDA. A block whose length is unknown or too
+  short for what it touches stays on the CPU.
+- **The loop unroller and vectoriser with values computed in a loop's
+  condition.** clang's IR can compute an address from the counter in the
+  condition block and use it in the body; every unrolled copy reused the first
+  copy's address, and a vectorised loop's remainder kept the vector loop's
+  last address. C programs could meet it at -O2.
+- **An unrolled loop that leaves on a true test** (clang's `icmp eq` exit)
+  left after the first element in its unrolled copies.
+- **C on macOS: a pointer at an offset from a symbol in the code clang
+  compiles** (a computed goto's label table, `char *p = buf + 4`) pointed at
+  the symbol itself after xcc's link: a computed goto went back to its
+  function's start and never returned.
+- **C: a parameter marked `dereferenceable(N)`** in clang's IR lost its name.
+- **`-std=<standard>` for C** is listed in `xcc -h` and on the C programs page.
+
+### Work towards a C++ front end
+
+- First steps of reading C++ through clang, as C is: a table of languages,
+  and loops over arrays, `std::vector` and iterators made into par blocks.
+  Not yet a supported route.
+
 ## Version 0.9.7 — C fuses like clang, checked virtual calls, and par's choices
 
 Everything since 0.9.6.
