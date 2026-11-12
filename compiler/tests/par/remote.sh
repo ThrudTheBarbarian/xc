@@ -193,9 +193,9 @@ XCD_HOME="$L/home1" XC_PAR_REPORT=1 "$L/xcd" -port $PORT5 -no-mdns > "$L/xcd5.lo
 XCD5=$!
 up "$L/xcd5.log"
 mkdir -p "$L/st_two_a" "$L/st_two_b"
-XCC_SETTINGS_DIR="$L/st_two_a" XC_PAR_REMOTE=127.0.0.1:$PORT5 XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/two_a.out" 2>&1 &
+XCC_SETTINGS_DIR="$L/st_two_a" XC_PAR_REMOTE=127.0.0.1:$PORT5 XC_PAR=all XC_PAR_REPORT=2 "$L/$f" > "$L/two_a.out" 2>&1 &
 PA=$!
-XCC_SETTINGS_DIR="$L/st_two_b" XC_PAR_REMOTE=127.0.0.1:$PORT5 XC_PAR=all XC_PAR_REPORT=1 "$L/$f" > "$L/two_b.out" 2>&1 &
+XCC_SETTINGS_DIR="$L/st_two_b" XC_PAR_REMOTE=127.0.0.1:$PORT5 XC_PAR=all XC_PAR_REPORT=2 "$L/$f" > "$L/two_b.out" 2>&1 &
 PB=$!
 wait $PA; wait $PB
 if grep -v '^par:' "$L/two_a.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null && grep -v '^par:' "$L/two_b.out" | diff -q - "tests/fixtures/$f.expected.out" > /dev/null \
@@ -204,7 +204,14 @@ if grep -v '^par:' "$L/two_a.out" | diff -q - "tests/fixtures/$f.expected.out" >
 else
     echo "FAIL remote two programs"; grep -v '^par:' "$L/two_a.out" "$L/two_b.out" | head -4; grep -c 'connected' "$L/xcd5.log"
     echo "  the daemon's log:"; tail -5 "$L/xcd5.log" | sed 's/^/    /'
-    echo "  what the programs said of it:"; grep -h 'remote' "$L/two_a.out" "$L/two_b.out" | head -6 | sed 's/^/    /'; rc=1
+    # Every report line of both programs: the case fails now and then on a
+    # busy gate host with neither program even trying the daemon (2026-11-11
+    # on), and the reason has to be in these.
+    for o in two_a two_b; do
+        echo "  $o's report:"; grep '^par:' "$L/$o.out" | head -40 | sed 's/^/    /'
+    done
+    echo "  the environment: XC_PAR_REMOTE=${XC_PAR_REMOTE-unset} XC_PAR_WORKERS=${XC_PAR_WORKERS-unset} XC_PAR_GPU=${XC_PAR_GPU-unset}"
+    rc=1
 fi
 kill $XCD5 2> /dev/null
 wait $XCD5 2> /dev/null
