@@ -1719,6 +1719,16 @@ class LlvmReader
                 define(res, String.withCString("And"), t, IROperand.useVal(w), IROperand.immI(mask, t), (IROperand*)0, (String*)0);
                 return;
                 }
+            // `trunc iN %x to i1` is the low bit: written (x & 1) != 0, the
+            // Bool every consumer reads alike (a Trunc to Bool read as x != 0).
+            if (cast.equals(String.withCString("Trunc")) && t.equals(String.withCString("Bool")))
+                {
+                IRValue* lowBit = emit(String.withCString("And"), a.ty(), IROperand.useVal(a), IROperand.immI((i64)1, a.ty()), (IROperand*)0);
+                IRValue* zero = emit(String.withCString("Const"), a.ty(), IROperand.immI((i64)0, a.ty()), (IROperand*)0, (IROperand*)0);
+                define(res, String.withCString("ICmp"), t, IROperand.useVal(lowBit), IROperand.useVal(zero), (IROperand*)0,
+                       String.withCString("NE"));
+                return;
+                }
             // C leaves a float-to-integer cast out of range undefined, so
             // the conversion needs no check of the result (xc's FpToUI gives
             // 0 there, at five instructions a conversion on x86-64).
