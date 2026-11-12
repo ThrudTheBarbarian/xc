@@ -77,12 +77,12 @@ Intel Core i5-14500 (14 cores, 20 threads), Linux, an NVIDIA RTX 5070 through CU
 
 | benchmark | one thread | all threads | GPU | Vulkan | all devices | `auto` | GPU vs all threads | GPU's first run | Vulkan's first run |
 |---|---|---|---|---|---|---|---|---|---|
-| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 96.6 | 8.3 | 200 µs | 490 µs | 243 µs | 200 µs | 42× faster | 453 | 797 |
-| [`md5`](/compiler/benchmark-sources/#md5) | 766 | 72.0 | 1.5 | 2.9 | 1.7 | 1.5 | 48× faster | 455 | 226 |
-| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 621 | 60.1 | 1.2 | 2.3 | 1.4 | 1.3 | 48× faster | 452 | 420 |
-| [`nbody`](/compiler/benchmark-sources/#nbody) | 18.5 | 3.4 | 377 µs | 539 µs | 410 µs | 379 µs | 9.0× faster | 479 | 212 |
-| [`perlin`](/compiler/benchmark-sources/#perlin) | 111 | 10.6 | 1.3 | 4.4 | 1.3 | 1.9 | 8.1× faster | 426 | 770 |
-| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 4.4 | 2.5 | 23.4 | 88.6 | 2.8 | 2.6 | 9.2× slower | 56.7 | 132 |
+| [`mandelbrot`](/compiler/benchmark-sources/#mandelbrot) | 96.6 | 8.3 | 197 µs | 280 µs | 235 µs | 198 µs | 42× faster | 214 | 111 |
+| [`md5`](/compiler/benchmark-sources/#md5) | 766 | 72.0 | 1.5 | 2.6 | 1.7 | 1.5 | 49× faster | 213 | 114 |
+| [`md5_mask`](/compiler/benchmark-sources/#md5_mask) | 621 | 60.1 | 1.2 | 2.3 | 1.3 | 1.2 | 49× faster | 125 | 108 |
+| [`nbody`](/compiler/benchmark-sources/#nbody) | 18.5 | 3.4 | 365 µs | 354 µs | 394 µs | 366 µs | 9.4× faster | 210 | 106 |
+| [`perlin`](/compiler/benchmark-sources/#perlin) | 111 | 10.6 | 374 µs | 1.1 | 406 µs | 372 µs | 28× faster | 122 | 108 |
+| [`saxpy`](/compiler/benchmark-sources/#saxpy) | 4.4 | 2.5 | 6.3 | 25.7 | 2.6 | 2.5 | 2.5× slower | 10.4 | 31.4 |
 
 ### Raspberry Pi 5
 
