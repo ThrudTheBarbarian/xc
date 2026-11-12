@@ -24,11 +24,12 @@ Rocks is in the repository under `apps/rocks`. On macOS, build and start it
 with:
 
 ```sh
-XCC=/opt/xcc/0.7/bin/xcc sh apps/rocks/run_rocks.sh [file.rsc]
+sh apps/rocks/run_rocks.sh [file.rsc]
 ```
 
-The first run builds the AppKit shim and Rocks; later runs rebuild only what
-changed. `--build-only` builds without starting it.
+The script uses the `xcc` on your `PATH`; set `XCC` to use another. The first
+run builds the AppKit shim and Rocks; later runs rebuild only what changed.
+`--build-only` builds without starting it.
 
 Rocks is an ordinary UXKit app, so it builds for the other backends too (see
 [the driver model](/versions/1.0/compiler/api/uxkit/guide-drivers/)). Everything on this
