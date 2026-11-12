@@ -486,6 +486,18 @@ C
     done
 fi
 XC_PAR=gpu XC_PAR_REPORT=1 "$W/glob.par" 2>&1 | grep -q 'items on the GPU' || { echo "FAIL cppath: no C++ loop ran on the GPU"; fail=1; }
+# A global object's constructor, which clang puts in __TEXT,__StaticInit:
+# xcc's Mach-O link reads that code section too (#166).
+cat > "$W/gctor.cpp" <<'C'
+#include <cstdio>
+#include <vector>
+struct Table { std::vector<int> v; Table() : v(1000) { for (int i = 0; i < 1000; i++) v[i] = i * 3 % 17; } };
+static Table table;
+static long sum(const std::vector<int>& v) { long s = 0; for (int x : v) s += x; return s; }
+int main() { std::printf("%ld\n", sum(table.v)); return 0; }
+C
+"$XC" -q -O3 -std=c++17 -H . -o "$W/gctor" "$W/gctor.cpp" > "$W/gctor.b" 2>&1 && [ "$("$W/gctor")" = "7991" ] \
+    || { echo "FAIL cppath: a global constructor (__StaticInit) does not link or run"; head -3 "$W/gctor.b"; fail=1; }
 # .cc and .cxx are C++ too.
 cp "$W/saxpy.cpp" "$W/s2.cc"
 "$XC" -q -O2 -H . -o "$W/s2" "$W/s2.cc" > "$W/s2.b" 2>&1 && [ "$("$W/s2")" = "$("$W/saxpy.ref")" ] \

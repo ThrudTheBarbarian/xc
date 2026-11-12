@@ -447,7 +447,26 @@ class MachOSymDef
             return o;
         MachOSectHdr* ts = (MachOSectHdr*)sects.get(textIdx);
         MachOObject.copyInto(o._text, b, ts._foff, ts._size);
-        u64 textAddr = ts._addr;
+        // Every other code section of __TEXT (S_ATTR_PURE_INSTRUCTIONS, a
+        // regular section: clang's __StaticInit for C++ global constructors,
+        // __text_* from hot/cold splitting) after __text, at its alignment.
+        Map* codeOff = new Map(); // sect index -> Number(offset in text + 1)
+        codeOff.set((Hashable*)Number.withU32(textIdx), (Object*)Number.withU32((u32)1));
+        Array* codeIdx = new Array();
+        codeIdx.add((Object*)Number.withU32(textIdx));
+        for (u32 i = (u32)1; i < sects.count(); i = i + (u32)1)
+            {
+            MachOSectHdr* cs = (MachOSectHdr*)sects.get(i);
+            if (i == textIdx || !cs._seg.equals(String.withCString("__TEXT")) || (cs._flags & (u32)$80000000) == (u32)0
+                || (cs._flags & (u32)$FF) != (u32)0)
+                continue;
+            u32 am = cs._align >= (u32)2 && cs._align <= (u32)12 ? ((u32)1 << cs._align) - (u32)1 : (u32)3;
+            while ((o._text.length() & am) != (u32)0)
+                o._text.appendByte((u8)0);
+            codeOff.set((Hashable*)Number.withU32(i), (Object*)Number.withU32(o._text.length() + (u32)1));
+            codeIdx.add((Object*)Number.withU32(i));
+            MachOObject.copyInto(o._text, b, cs._foff, cs._size);
+            }
 
         // The data blob: every __DATA / __DATA_CONST section and every __TEXT
         // literal pool (by section TYPE — clang parks float constants in
@@ -458,7 +477,7 @@ class MachOSymDef
         Array* modSectIdx = new Array();
         for (u32 i = (u32)1; i < sects.count(); i = i + (u32)1)
             {
-            if (i == textIdx)
+            if (codeOff.get((Hashable*)Number.withU32(i)) != (Object*)0)
                 continue;
             MachOSectHdr* s = (MachOSectHdr*)sects.get(i);
             u32 stype = s._flags & (u32)$FF;
@@ -543,10 +562,11 @@ class MachOSymDef
             // N_SECT
             if ((type & (u32)$E) == (u32)$E)
                 {
-                if (sect == textIdx)
+                Object* co = codeOff.get((Hashable*)Number.withU32(sect));
+                if (co != (Object*)0)
                     {
                     where = (u32)1;
-                    off = (u32)(val - textAddr);
+                    off = ((Number*)co).asU32() - (u32)1 + (u32)(val - ((MachOSectHdr*)sects.get(sect))._addr);
                     }
                 else
                     {
@@ -580,12 +600,18 @@ class MachOSymDef
 
         // __text relocations, then each data section's, the latter rebased
         // from section-relative to blob-relative.
-        for (u32 i = (u32)0; i < ts._nreloc; i = i + (u32)1)
+        for (u32 c = (u32)0; c < codeIdx.count(); c = c + (u32)1)
             {
-            u32 r = ts._reloff + i * (u32)8;
-            MachOReloc* rl = new MachOReloc();
-            rl.set(MachOObject.rd32(b, r), MachOObject.rd32(b, r + (u32)4));
-            o._relocs.add((Object*)rl);
+            u32 ci = ((Number*)codeIdx.get(c)).asU32();
+            MachOSectHdr* cs = (MachOSectHdr*)sects.get(ci);
+            u32 cb = ((Number*)codeOff.get((Hashable*)Number.withU32(ci))).asU32() - (u32)1;
+            for (u32 i = (u32)0; i < cs._nreloc; i = i + (u32)1)
+                {
+                u32 r = cs._reloff + i * (u32)8;
+                MachOReloc* rl = new MachOReloc();
+                rl.set(cb + MachOObject.rd32(b, r), MachOObject.rd32(b, r + (u32)4));
+                o._relocs.add((Object*)rl);
+                }
             }
         for (u32 k = (u32)0; k < dataSectIdx.count(); k = k + (u32)1)
             {
@@ -641,8 +667,9 @@ class MachOSymDef
                     continue;
                 u64 fv = MachOObject.rd64(b, fe);
                 u32 fn = (u32)0;
-                if (fr.ext() == (u32)0 && fr.symnum() == textIdx)
-                    fn = (u32)(fv - textAddr);
+                Object* fco = fr.ext() == (u32)0 ? codeOff.get((Hashable*)Number.withU32(fr.symnum())) : (Object*)0;
+                if (fco != (Object*)0)
+                    fn = ((Number*)fco).asU32() - (u32)1 + (u32)(fv - ((MachOSectHdr*)sects.get(fr.symnum()))._addr);
                 else if (fr.ext() != (u32)0 && fr.symnum() < o._symdefs.count()
                          && ((MachOSymDef*)o._symdefs.get(fr.symnum())).where() == (u32)1)
                     fn = ((MachOSymDef*)o._symdefs.get(fr.symnum())).off() + (u32)fv;
